@@ -14,17 +14,36 @@ POST /api/v1/ohvis/llmops/feedback             — trace 피드백 기록
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
+import uuid
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from pydantic import BaseModel, Field, field_validator, model_validator
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, status
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from app.auth import require_internal_admin
 from app.services import llmops_evaluator, llmops_store
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# 외부 발신자(GO100)가 보내는 값에만 적용하는 엄격 규칙.
+# - ID: 공백 없는 출력 가능 ASCII만 (원문 ID는 변형 없이 그대로 저장된다)
+# - 텍스트: 제어문자 금지 (NUL은 TEXT/JSONB 저장 자체가 실패한다)
+# - 라벨: 소문자 슬러그만 (원장 집계·대시보드 필터가 깨지지 않게 한다)
+_INGEST_ID_RE = re.compile(r"^[\x21-\x7e]+$")
+_INGEST_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_INGEST_LABEL_RE = re.compile(r"^[a-z][a-z0-9_.-]*$")
+_INGEST_CLIENT_ID_RE = r"^[a-z0-9][a-z0-9._-]+$"
+
+
+def _reject_control_characters(value: Optional[str], field_name: str) -> Optional[str]:
+    if value is not None and _INGEST_CONTROL_RE.search(value):
+        raise ValueError(f"{field_name} must not contain control characters")
+    return value
 
 
 class DatasetFromTraceRequest(BaseModel):
@@ -54,10 +73,14 @@ class FeedbackRequest(BaseModel):
 
 
 class TraceIngestToolCall(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     tool_name: str = Field(..., min_length=1, max_length=120)
-    risk_tier: str = Field("read", max_length=30)
-    approval_state: str = Field("not_required", max_length=30)
-    status: str = Field("success", max_length=30)
+    risk_tier: str = Field("read", min_length=1, max_length=30, pattern=_INGEST_LABEL_RE.pattern)
+    approval_state: str = Field(
+        "not_required", min_length=1, max_length=30, pattern=_INGEST_LABEL_RE.pattern
+    )
+    status: str = Field("success", min_length=1, max_length=30, pattern=_INGEST_LABEL_RE.pattern)
     sequence: int = Field(0, ge=0, le=10_000)
     input_summary: str = Field("", max_length=2000)
     output_summary: str = Field("", max_length=2000)
@@ -65,14 +88,21 @@ class TraceIngestToolCall(BaseModel):
     error: Optional[str] = Field(None, max_length=1000)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("tool_name", "input_summary", "output_summary", "error")
+    @classmethod
+    def validate_tool_call_text(cls, value: Optional[str], info) -> Optional[str]:
+        return _reject_control_characters(value, str(info.field_name))
+
 
 class TraceIngestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     schema_version: Literal["1.0"]
     project: Literal["GO100"]
     external_trace_id: str = Field(..., min_length=1, max_length=200)
-    graph_run_id: Optional[str] = Field(None, max_length=200)
+    graph_run_id: Optional[str] = Field(None, min_length=1, max_length=200)
     session_id: Optional[str] = Field(None, max_length=64)
-    run_type: str = Field("chain", max_length=60)
+    run_type: str = Field("chain", min_length=1, max_length=60, pattern=_INGEST_LABEL_RE.pattern)
     status: Literal["success", "error", "cancelled", "running"] = "success"
     model: Optional[str] = Field(None, max_length=120)
     input_summary: str = Field("", max_length=2000)
@@ -85,18 +115,43 @@ class TraceIngestRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     tool_calls: list[TraceIngestToolCall] = Field(default_factory=list, max_length=llmops_store.MAX_INGEST_TOOL_CALLS)
 
-    @field_validator("external_trace_id")
+    @field_validator("external_trace_id", "graph_run_id")
     @classmethod
-    def validate_external_trace_id(cls, value: str) -> str:
+    def validate_external_trace_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
         if value != value.strip() or any(ord(char) < 32 for char in value):
             raise ValueError("external_trace_id must be an exact printable identifier")
+        # 원문 ID는 변형 없이 저장되므로 저장 가능한 문자만 받는다. 공백·제어문자·
+        # 비ASCII를 허용하면 멱등 키와 원장 조회 키가 서로 어긋난다.
+        if not _INGEST_ID_RE.match(value):
+            raise ValueError("identifier must be printable ASCII without whitespace")
         return value
+
+    @field_validator("session_id")
+    @classmethod
+    def validate_session_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        # 저장 단계에서 조용히 버려지지 않도록 입력 시점에 거른다.
+        try:
+            uuid.UUID(value)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValueError("session_id must be a UUID") from exc
+        return value
+
+    @field_validator("model", "input_summary", "output_summary", "error")
+    @classmethod
+    def validate_text_fields(cls, value: Optional[str], info) -> Optional[str]:
+        return _reject_control_characters(value, str(info.field_name))
 
     @field_validator("tags")
     @classmethod
     def validate_tags(cls, values: list[str]) -> list[str]:
         if any(not item or len(item) > 60 for item in values):
             raise ValueError("tags must be 1..60 characters")
+        for item in values:
+            _reject_control_characters(item, "tags")
         return values
 
     @model_validator(mode="after")
@@ -154,11 +209,87 @@ async def require_trace_ingest_client(
     return client
 
 
-@router.post("/ohvis/llmops/trace-ingest", tags=["ohvis-llmops-ingest"])
-async def llmops_trace_ingest(
-    req: TraceIngestRequest,
+def _body_validation_error(errors: list[dict[str, Any]]) -> RequestValidationError:
+    """Reuse FastAPI's own 422 shape for the manually parsed ingest body."""
+    return RequestValidationError(errors)
+
+
+async def parse_trace_ingest_body(request: Request) -> TraceIngestRequest:
+    """Read and validate the body only after the credential check has passed.
+
+    FastAPI decodes a declared body parameter *before* solving dependencies, so
+    a malformed JSON body would answer 422 to an unauthenticated caller and let
+    it probe the schema. Parsing here keeps 401 strictly first.
+    """
+    declared_length = request.headers.get("content-length")
+    if declared_length and declared_length.isdigit():
+        if int(declared_length) > llmops_store.MAX_INGEST_PAYLOAD_BYTES:
+            raise _body_validation_error(
+                [
+                    {
+                        "type": "value_error",
+                        "loc": ("body",),
+                        "msg": f"payload exceeds {llmops_store.MAX_INGEST_PAYLOAD_BYTES} bytes",
+                        "input": {},
+                    }
+                ]
+            )
+    raw = await request.body()
+    if len(raw) > llmops_store.MAX_INGEST_PAYLOAD_BYTES:
+        raise _body_validation_error(
+            [
+                {
+                    "type": "value_error",
+                    "loc": ("body",),
+                    "msg": f"payload exceeds {llmops_store.MAX_INGEST_PAYLOAD_BYTES} bytes",
+                    "input": {},
+                }
+            ]
+        )
+    try:
+        parsed = json.loads(raw) if raw.strip() else None
+    except ValueError as exc:
+        raise _body_validation_error(
+            [
+                {
+                    "type": "json_invalid",
+                    "loc": ("body",),
+                    "msg": "JSON decode error",
+                    "input": {},
+                    "ctx": {"error": str(exc)},
+                }
+            ]
+        ) from exc
+    try:
+        return TraceIngestRequest.model_validate(parsed)
+    except ValidationError as exc:
+        raise _body_validation_error(
+            [{**error, "loc": ("body", *error.get("loc", ()))} for error in exc.errors()]
+        ) from exc
+
+
+@router.post(
+    "/ohvis/llmops/trace-ingest",
+    tags=["ohvis-llmops-ingest"],
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {"application/json": {"schema": TraceIngestRequest.model_json_schema()}},
+        }
+    },
+)
+async def llmops_trace_ingest_endpoint(
+    request: Request,
     client: dict[str, str] = Depends(require_trace_ingest_client),
 ):
+    return await llmops_trace_ingest(await parse_trace_ingest_body(request), client=client)
+
+
+async def llmops_trace_ingest(
+    req: TraceIngestRequest,
+    client: dict[str, str],
+):
+    """Scope-check and store one authenticated external trace."""
     if client["project"] != req.project:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="credential project scope mismatch")
     try:
@@ -197,7 +328,11 @@ async def llmops_provision_ingest_client(req: IngestClientRequest):
     tags=["ohvis-llmops-ingest"],
     dependencies=[Depends(require_internal_admin)],
 )
-async def llmops_rotate_ingest_client(client_id: str):
+async def llmops_rotate_ingest_client(
+    client_id: str = Path(..., min_length=3, max_length=80, pattern=_INGEST_CLIENT_ID_RE),
+):
+    # 경로 파라미터를 먼저 검증하지 않으면 잘못된 client_id가 모델 생성 단계에서
+    # 처리되지 않은 ValidationError(500)로 새어나간다.
     req = IngestClientRequest(client_id=client_id, project="GO100")
     return await llmops_store.provision_ingest_client(
         client_id=req.client_id,
@@ -211,7 +346,9 @@ async def llmops_rotate_ingest_client(client_id: str):
     tags=["ohvis-llmops-ingest"],
     dependencies=[Depends(require_internal_admin)],
 )
-async def llmops_revoke_ingest_client(client_id: str):
+async def llmops_revoke_ingest_client(
+    client_id: str = Path(..., min_length=3, max_length=80, pattern=_INGEST_CLIENT_ID_RE),
+):
     revoked = await llmops_store.revoke_ingest_client(client_id)
     if not revoked:
         raise HTTPException(status_code=404, detail="active ingest client not found")

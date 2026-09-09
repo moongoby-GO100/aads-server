@@ -1,5 +1,48 @@
 # AADS HANDOVER
 
+## 2026-09-09 12:10 KST — OHVIS trace-ingest 검수 지적 5건 반영
+
+검수 피드백 ①지시서 미반영(외부 입력 엄격 처리·인증 순서) ②외부 트레이스 ID 충돌
+미해결 ③허용 경로 밖 변경 ④기존 구현 삭제/대체 ⑤조사표·삭제 사유 누락을 모두 처리했다.
+
+- ② **재현된 실제 충돌 2건을 수정했다.**
+  - `llmops_traces.trace_id`는 UNIQUE인데 외부 ingest가 발신자 ID를 그대로 넣어,
+    내부 harness trace_id와 겹치면 `ON CONFLICT (trace_key)`가 잡지 못하는 unique
+    violation → 매 재시도 503으로 영구 실패했다. 이제 바운드 키로 네임스페이스를
+    분리하고 원문 ID는 `external_trace_id`에 그대로 남긴다.
+    운영 DB에서 트랜잭션 ROLLBACK으로 실측: 수정 전 insert는
+    `duplicate key value violates unique constraint "idx_llmops_traces_trace_id"`,
+    수정 후 insert는 성공, 롤백 후 잔존 행 0건.
+  - `external:{project}:sha256:{digest}` 해시 키를 흉내낸 짧은 ID가 긴 ID의 키를
+    가로챌 수 있었다. 해시 형태와 같은 원문 키도 해시 처리해 형태가 겹치지 않게 했다.
+- ① **인증 순서**: 의존성만으로는 부족했다. FastAPI는 선언된 본문을 의존성보다 먼저
+  디코딩하므로 malformed JSON은 미인증에도 422였다(실측). 라우트가 원본 `Request`를
+  받고 인증 통과 후에만 본문을 읽도록 바꿔 `{}`·잘린 JSON·비JSON·빈 본문 모두 401을
+  확인했다. 인증된 요청의 422 응답 형태는 FastAPI 기본형을 그대로 재사용한다.
+- ① **외부 입력 엄격 처리**: 미지 필드 거부, ID는 공백 없는 출력 가능 ASCII,
+  `session_id` UUID 강제, `run_type`·tool call 라벨 소문자 슬러그, 텍스트 제어문자
+  금지(NUL은 TEXT/JSONB 저장 실패로 strict 트랜잭션을 영구 실패시킨다), 본문 크기는
+  파싱 전에 검사. 저장 계층에도 sanitize를 이중으로 뒀다. rotate/revoke의 `client_id`
+  경로 검증을 추가해 기존 500(미처리 ValidationError)을 422로 바로잡았다.
+- ③ **허용 경로 밖 변경 원복**: `cfc02d62`가 지시서 허용 목록 밖 `tests/unit/
+  test_ohvis_llmops.py`를 고쳤다. 해당 파일을 `de80a95e` 상태로 원복하고, 잃지 않도록
+  테스트 2건을 허용 파일 `tests/unit/test_ohvis_trace_ingest.py`로 이관했다.
+  `app/main.py`·`migrations/163_…sql`은 지시서가 "유지하라"고 규정한 `de80a95e`
+  정본 수신기의 일부라 되돌리지 않았고 이번에 건드리지 않았다.
+- ④ **기존 구현 보존**: 삭제한 공개 함수·분기·테이블·테스트 없음. `record_trace`·
+  `record_tool_calls`는 시그니처와 비치명 동작을 유지했고 추가 인자
+  (`strict`, `trace_id_override`)는 기본값이 기존 동작이다. 내부 호출부 7곳 무변경.
+- ⑤ **조사표**: `docs/reports/20260909_ohvis_authenticated_trace_ingest_contract.md`에
+  파일별 유지/수정/신규/삭제 표와 삭제 사유를 기재했다.
+- 검증(호스트 `.venv`): `test_ohvis_trace_ingest.py`·`test_ohvis_llmops.py`·
+  `test_ohvis_harness.py`·`test_ohvis_harness_trace.py`·`test_llmops_status_scope.py`
+  **127 passed**, `test_goal_control_loop_static.py` 9 passed,
+  `ruff check --select F821,F811,F401` 통과, `py_compile` 통과, `git diff --check` 통과.
+  운영 PostgreSQL에서 신규 INSERT문 `PREPARE` 성공($21 타입 추론 확인).
+- 미완료: 배포하지 않았다. 릴리스는 `deploy.sh bluegreen`(단일 이미지, `--no-build`
+  슬롯 기동, nginx 잠금 전 후보 health, 동일 digest 대기 슬롯, 라우팅 health 실패 시
+  롤백, 5분 P0/P1 모니터링) 필요. 자격증명 발급·GO100 발신자 E2E도 미완이다.
+
 ## 2026-09-09 09:34 KST — OHVIS trace-ingest direct hardening
 
 - Terminated duplicate pre-write runner `runner-e5216af3` so direct work would not race the same canonical files; no active API process was restarted.

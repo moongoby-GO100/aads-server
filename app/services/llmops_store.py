@@ -60,6 +60,11 @@ _SENSITIVE_METADATA_KEY = re.compile(
     r"(?i)(authorization|cookie|password|passwd|secret|api[_-]?key|auth[_-]?token|access[_-]?token)"
 )
 
+# 외부 ingest 전용: 해시 형태 키와 원문 키가 겹치지 않게 하고, 저장 불가능한
+# 제어문자를 걸러낸다. 내부 호출 경로의 관대한 동작에는 영향이 없다.
+_HASHED_TRACE_KEY_RE = re.compile(r"^external:[^:]*:sha256:[0-9a-f]{64}$")
+_INGEST_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
 # 요약 저장 전 마스킹 — 원문에 섞여 들어온 시크릿이 DB나 외부 export로 새지 않게 한다.
 _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"sk-ant-[A-Za-z0-9_\-]{8,}"), "sk-ant-***"),
@@ -136,12 +141,25 @@ def ingest_token_digest(token: str) -> str:
 
 
 def external_trace_key(project: str, external_trace_id: str) -> str:
-    """Build one bounded key for locking, lookup, and storage."""
+    """Build one bounded, unambiguous key for locking, lookup, and storage."""
     raw_key = f"external:{project}:{external_trace_id}"
-    if len(raw_key) <= TRACE_KEY_LIMIT:
+    # A short key stays readable, but the hashed form is itself a legal external
+    # ID: a sender could submit "sha256:<digest>" and land on the key of a long
+    # ID it does not own.  Any raw key shaped like the hashed form is therefore
+    # hashed as well, so the two forms can never meet.
+    if len(raw_key) <= TRACE_KEY_LIMIT and not _HASHED_TRACE_KEY_RE.match(raw_key):
         return raw_key
     digest = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
     return f"external:{project}:sha256:{digest}"
+
+
+def sanitize_ingest_text(value: Any) -> str:
+    """Drop control bytes PostgreSQL cannot store from external text.
+
+    A NUL in TEXT or JSONB aborts the whole strict ingest transaction, so the
+    sender would retry a permanently failing request forever.
+    """
+    return _INGEST_CONTROL_CHARS.sub("", value if isinstance(value, str) else str(value))
 
 
 def redact_ingest_value(value: Any, *, depth: int = 0) -> Any:
@@ -150,7 +168,7 @@ def redact_ingest_value(value: Any, *, depth: int = 0) -> Any:
         return "[truncated]"
     if isinstance(value, dict):
         return {
-            str(key)[:120]: (
+            sanitize_ingest_text(key)[:120]: (
                 "[redacted]"
                 if _SENSITIVE_METADATA_KEY.search(str(key))
                 else redact_ingest_value(item, depth=depth + 1)
@@ -160,10 +178,10 @@ def redact_ingest_value(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, list):
         return [redact_ingest_value(item, depth=depth + 1) for item in value[:100]]
     if isinstance(value, str):
-        return clip(value)
+        return clip(sanitize_ingest_text(value))
     if value is None or isinstance(value, (bool, int, float)):
         return value
-    return clip(value)
+    return clip(sanitize_ingest_text(value))
 
 
 def validate_ingest_payload_size(payload: dict[str, Any]) -> None:
@@ -249,7 +267,7 @@ async def ingest_external_trace(payload: dict[str, Any], *, client_id: str) -> d
 
     validate_ingest_payload_size(payload)
     project = str(payload["project"])
-    external_trace_id = str(payload["external_trace_id"])
+    external_trace_id = sanitize_ingest_text(payload["external_trace_id"])
     trace_key = external_trace_key(project, external_trace_id)
     async with get_pool().acquire() as conn:
         async with conn.transaction(isolation="read_committed"):
@@ -273,23 +291,28 @@ async def ingest_external_trace(payload: dict[str, Any], *, client_id: str) -> d
             safe_metadata["ingest_client_id"] = client_id
             safe_metadata["ingest_schema_version"] = INGEST_SCHEMA_VERSION
             trace_id = await record_trace(
-                graph_run_id=str(payload.get("graph_run_id") or external_trace_id),
+                graph_run_id=sanitize_ingest_text(payload.get("graph_run_id") or external_trace_id),
                 project=project,
                 session_id=payload.get("session_id"),
                 source="external_ingest",
-                run_type=str(payload.get("run_type") or "chain"),
-                status=str(payload.get("status") or "success"),
-                model=payload.get("model"),
-                input_summary=payload.get("input_summary") or "",
-                output_summary=payload.get("output_summary") or "",
+                run_type=sanitize_ingest_text(payload.get("run_type") or "chain"),
+                status=sanitize_ingest_text(payload.get("status") or "success"),
+                model=sanitize_ingest_text(payload["model"]) if payload.get("model") else None,
+                input_summary=sanitize_ingest_text(payload.get("input_summary") or ""),
+                output_summary=sanitize_ingest_text(payload.get("output_summary") or ""),
                 latency_ms=payload.get("latency_ms"),
                 cost_usd=payload.get("cost_usd"),
                 quality_score=payload.get("quality_score"),
-                error=payload.get("error"),
+                error=sanitize_ingest_text(payload["error"]) if payload.get("error") else None,
                 external_trace_id=external_trace_id,
-                tags=list(payload.get("tags") or []),
+                tags=[sanitize_ingest_text(tag) for tag in (payload.get("tags") or [])],
                 metadata=safe_metadata,
                 trace_key=trace_key,
+                # The globally UNIQUE trace_id column stays in the AADS namespace:
+                # a raw GO100 ID could otherwise collide with an internal harness
+                # trace_id and make every retry of that trace fail. The original
+                # identifier is preserved verbatim in external_trace_id.
+                trace_id_override=trace_key,
                 tool_calls=redact_ingest_value(payload.get("tool_calls") or []),
                 conn=conn,
                 strict=True,
@@ -424,7 +447,7 @@ INSERT INTO {TRACE_TABLE} (
     external_trace_id, tags, metadata, ended_at
 )
 VALUES (
-    COALESCE(NULLIF($17, ''), NULLIF($1, ''), gen_random_uuid()::text),
+    COALESCE(NULLIF($21::text, ''), NULLIF($17, ''), NULLIF($1, ''), gen_random_uuid()::text),
     $1, $2, $3, $4::uuid, $5::uuid,
     $6, $7, $8, $9, $10, $11,
     $12, $13, $14, $15, $16,
@@ -467,11 +490,16 @@ async def record_trace(
     tool_calls: Optional[list[Any]] = None,
     conn: Any = None,
     strict: bool = False,
+    trace_id_override: Optional[str] = None,
 ) -> Optional[str]:
     """trace 1건을 기록하고 trace id를 돌려준다. 실패/skip이면 None (예외 없음).
 
     `trace_key`를 주면 같은 키의 재기록이 새 행을 만들지 않고 갱신된다
     (mirror/재시도 멱등성).
+
+    `trace_id_override`를 주면 UNIQUE `trace_id` 컬럼 값을 직접 지정한다.
+    외부 ingest가 발신자 ID로 내부 trace_id 네임스페이스를 점유하지 않도록
+    쓰는 선택 인자이며, 생략하면 기존 COALESCE 순서가 그대로 유지된다.
     """
     if not graph_run_id:
         return None
@@ -504,6 +532,7 @@ async def record_trace(
                 [str(tag)[:60] for tag in (tags or [])],
                 _as_json(metadata),
                 None,
+                (str(trace_id_override)[:TRACE_KEY_LIMIT] if trace_id_override else None),
             )
             if trace_id and tool_calls:
                 await record_tool_calls(target, str(trace_id), tool_calls, strict=strict)
