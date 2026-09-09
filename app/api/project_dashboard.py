@@ -33,10 +33,10 @@ PROJECTS_META = {
         "category": "project:go100",
     },
     "kis_v41": {
-        "name": "KIS-V41 자동매매",
-        "manager": "KIS_MGR",
-        "server": "211",
-        "category": "project:kis_v41",
+        "name": "GO100 자동매매 (구 KIS-V41)",
+        "manager": "GO100_MGR",
+        "server": "14",
+        "category": "project:go100",
     },
     "shortflow": {
         "name": "ShortFlow 숏폼",
@@ -1989,7 +1989,7 @@ async def get_analytics():
 # ─── (10-a) POST /dashboard/complete-running ─────────────────────────────────
 # 프로젝트 → 담당 서버 SSH 매핑
 _PROJECT_SERVER_MAP = {
-    "KIS": "root@211.188.53.126",
+    "KIS": "root@5.104.86.14",
     "GO100": "root@5.104.86.14",
     "AADS": "local",  # aads-server 자신의 호스트 마운트 없음 → SSH로 68 접근
     "SF": "root@114.203.209.93",
