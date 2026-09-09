@@ -2648,41 +2648,67 @@ async def tool_write_remote_file(project: str, file_path: str, content: str, bac
     if not content:
         return "[ERROR] content 필수 (빈 파일 쓰기 차단)"
 
-    # AADS 프로젝트: 로컬 직접 쓰기 (SSH 불필요)
+    # AADS 프로젝트: 호스트 저장소 SSH 쓰기 (git 영속) + 컨테이너 로컬 동기화
     if project == "AADS":
         file_path = _normalize_aads_path(file_path)
-        from app.core.project_config import PROJECT_MAP
-        # 컨테이너 내부 경로 사용 (호스트 /root/aads/aads-server/app → 컨테이너 /app/app)
-        workdir = _aads_local_workdir()
+        host_workdir = "/root/aads/aads-server"
+        container_workdir = _aads_local_workdir()
         content_bytes = content.encode("utf-8")
         if len(content_bytes) > _SSH_MAX_WRITE_BYTES:
             return f"[ERROR] 파일 크기 초과: {len(content_bytes):,} bytes > 1MB 제한"
-        err = _validate_ssh_path(file_path, workdir)
+        err = _validate_ssh_path(file_path, host_workdir)
         if err:
             return err
         from posixpath import normpath, join as pjoin, dirname as pdirname
-        resolved = normpath(pjoin(workdir, file_path))
-        if not resolved.startswith(workdir):
-            return f"[ERROR] 경로 탈출 차단: {resolved}"
+        host_resolved = normpath(pjoin(host_workdir, file_path))
+        if not host_resolved.startswith(host_workdir):
+            return f"[ERROR] 경로 탈출 차단: {host_resolved}"
         _write_blocked = [".env", ".ssh/", "id_rsa", "id_ed25519", "credentials",
                           "private_key", ".pem", ".key", "authorized_keys", ".netrc",
                           ".aws/", ".kube/", ".docker/"]
         for pattern in _write_blocked:
-            if pattern in resolved.lower():
+            if pattern in host_resolved.lower():
                 return f"[ERROR] 민감 파일 쓰기 차단: {file_path}"
         try:
-            import os
-            os.makedirs(pdirname(resolved), exist_ok=True)
-            if backup and os.path.exists(resolved):
-                import shutil
-                shutil.copy2(resolved, resolved + ".bak_aads")
-            with open(resolved, "w", encoding="utf-8") as f:
-                f.write(content)
-            logger.info(f"write_remote_file OK | project=AADS path={resolved} size={len(content_bytes)}")
+            backup_cmd = ""
+            if backup:
+                backup_cmd = (
+                    f"test -f {shlex.quote(host_resolved)} && "
+                    f"cp {shlex.quote(host_resolved)} {shlex.quote(host_resolved + '.bak_aads')}; "
+                )
+            mkdir_and_cat = (
+                f"{backup_cmd}"
+                f"mkdir -p {shlex.quote(pdirname(host_resolved))} && "
+                f"cat > {shlex.quote(host_resolved)}"
+            )
+            proc = await asyncio.create_subprocess_exec(
+                "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                "root@host.docker.internal", mkdir_and_cat,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=content_bytes), timeout=_SSH_WRITE_TIMEOUT
+            )
+            if proc.returncode != 0:
+                err_msg = stderr.decode("utf-8", errors="replace")[:500]
+                return f"[ERROR] 호스트 파일 쓰기 실패: {err_msg}"
+            container_resolved = normpath(pjoin(container_workdir, file_path))
+            try:
+                import os
+                os.makedirs(pdirname(container_resolved), exist_ok=True)
+                with open(container_resolved, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except Exception:
+                pass
+            logger.info(f"write_remote_file OK | project=AADS host={host_resolved} size={len(content_bytes)}")
             backup_note = " (백업: .bak_aads)" if backup else ""
-            return f"[AADS 파일 쓰기 완료 — {resolved}] {len(content_bytes):,} bytes{backup_note}"
+            return f"[AADS 파일 쓰기 완료 — {host_resolved}] {len(content_bytes):,} bytes{backup_note} (호스트+컨테이너 동기화)"
+        except asyncio.TimeoutError:
+            return f"[ERROR] SSH 쓰기 타임아웃 ({_SSH_WRITE_TIMEOUT}초)"
         except Exception as e:
-            return f"[ERROR] 로컬 파일 쓰기 실패: {e}"
+            return f"[ERROR] 호스트 쓰기 실패: {e}"
 
     mapping = _PROJECT_SERVER_MAP.get(project)
     if not mapping:
@@ -2782,18 +2808,29 @@ async def _read_raw_file(project: str, file_path: str) -> str:
     project = project.upper()
     if project == "AADS":
         file_path = _normalize_aads_path(file_path)
-        workdir = _aads_local_workdir()
+        host_workdir = "/root/aads/aads-server"
         from posixpath import normpath, join as pjoin
-        resolved = normpath(pjoin(workdir, file_path))
-        if not resolved.startswith(workdir):
+        resolved = normpath(pjoin(host_workdir, file_path))
+        if not resolved.startswith(host_workdir):
             return f"[ERROR] 경로 탈출 차단: {resolved}"
+        cmd = f"cat {shlex.quote(resolved)}"
         try:
-            with open(resolved, "r", encoding="utf-8", errors="replace") as f:
-                return f.read()
-        except FileNotFoundError:
-            return f"[ERROR] 파일 없음: {resolved}"
+            proc = await asyncio.create_subprocess_exec(
+                "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                "root@host.docker.internal", cmd,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+            if proc.returncode != 0:
+                err_msg = stderr.decode("utf-8", errors="replace")[:200]
+                if "No such file" in err_msg:
+                    return f"[ERROR] 파일 없음: {resolved}"
+                return f"[ERROR] 파일 읽기 실패: {err_msg}"
+            return stdout.decode("utf-8", errors="replace")
+        except asyncio.TimeoutError:
+            return "[ERROR] SSH 타임아웃"
         except Exception as e:
-            return f"[ERROR] 파일 읽기 실패: {e}"
+            return f"[ERROR] {e}"
 
     mapping = _PROJECT_SERVER_MAP.get(project)
     if not mapping:
