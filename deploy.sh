@@ -51,9 +51,10 @@ DEPLOY_PHASE_METADATA_JSON=""
 LAST_STREAM_RECONCILE_JSON=""
 mkdir -p "${STATE_DIR}/logs"
 
-# RC5: Auto-detach when invoked through SSH — prevents TERM/HUP from killing
-# a long-running deploy when the SSH session drops or times out.
-if [[ -n "${SSH_CONNECTION:-}" && -z "${AADS_DEPLOY_DETACHED:-}" ]]; then
+# RC5: Auto-detach ALL invocations — prevents TERM/HUP from killing deploy
+# when parent process (SSH, chat tool, pipeline, cron) terminates.
+# Opt out: AADS_DEPLOY_FOREGROUND=1 for interactive manual watching.
+if [[ -z "${AADS_DEPLOY_DETACHED:-}" && "${AADS_DEPLOY_FOREGROUND:-}" != "1" ]]; then
     export AADS_DEPLOY_DETACHED=1
     _detach_log="${STATE_DIR}/logs/deploy-detach-$(date +%Y%m%d-%H%M%S)-$$.log"
     if command -v setsid >/dev/null 2>&1; then
