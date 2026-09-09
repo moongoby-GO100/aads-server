@@ -9,6 +9,7 @@
 
 set -euo pipefail
 trap '' HUP  # RC4: ignore HUP immediately — eliminates race window before main trap block
+trap '' SIGPIPE 2>/dev/null || true  # RC9: prevent broken-pipe from killing deploy subprocesses
 
 REQUESTED_MODE="${1:-bluegreen}"
 MODE="$REQUESTED_MODE"
@@ -1759,8 +1760,7 @@ sync_standby_slot_after_drain() {
             audit_control "standby-sync" "${old_container}:${old_port}" "failed" "health failed after rebuild"
             return 1
         fi
-    } 2>&1 | tee -a "${STATE_DIR}/logs/standby-sync.log"
-    return "${PIPESTATUS[0]}"
+    } > >(tee -a "${STATE_DIR}/logs/standby-sync.log") 2>&1
 }
 
 # .env에서 텔레그램 변수 로드
@@ -2403,7 +2403,15 @@ deploy_phase_end "p0p1_monitoring" "success" "seconds=${MONITOR_SECONDS}"
 echo "[deploy.sh] ✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
 notify "✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
 stop_downtime_monitor
-deploy_observe_update "success" "completed" ""
+for _final_try in 1 2 3; do
+    deploy_observe_update "success" "completed" ""
+    _final_status="$(deploy_db_exec "SELECT status FROM deploy_runs WHERE id=${DEPLOY_RUN_ID}")"
+    if [[ "${_final_status:-}" == "success" ]]; then
+        break
+    fi
+    echo "[deploy.sh] ⚠️ final success DB update retry ${_final_try}/3 (got status=${_final_status:-empty})"
+    sleep 2
+done
 record_deploy "success" "$MODE" ""
 # RC8: ensure final success persisted — override stale_auto if deploy_db_exec failed mid-run
 for _final_retry in 1 2 3; do
