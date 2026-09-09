@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.concurrency import run_in_threadpool
@@ -24,7 +24,9 @@ async def get_kpis(
 
 @router.get("/sales-trend")
 async def get_sales_trend(
-    period: str = Query("daily", description="daily|weekly|monthly"),
+    period: Literal["daily", "weekly", "monthly"] = Query(
+        "daily", description="daily|weekly|monthly"
+    ),
     days: int = Query(30, ge=1, le=365, description="조회 일수"),
     business_id: str = Query("", description="사업자 ID 필터"),
     current_user: dict = Depends(get_current_user),

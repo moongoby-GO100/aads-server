@@ -9,6 +9,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 KST = timezone(timedelta(hours=9))
+SALES_PERIODS = {"daily", "weekly", "monthly"}
 
 
 def _db_url() -> str:
@@ -60,9 +61,59 @@ def _parse_payload(val: Any) -> dict[str, Any]:
     return val if isinstance(val, dict) else {}
 
 
+def _business_filter(business_id: str, parameter_index: int = 1) -> tuple[str, tuple[str, ...]]:
+    """Return a parameterized optional business filter."""
+    if not business_id:
+        return "", ()
+    return f"AND business_id = ${parameter_index}", (business_id,)
+
+
+def _sales_bucket(sale_date: str, period: str) -> str:
+    parsed = date.fromisoformat(sale_date)
+    if period == "weekly":
+        parsed -= timedelta(days=parsed.weekday())
+    elif period == "monthly":
+        parsed = parsed.replace(day=1)
+    return parsed.isoformat()
+
+
+def _aggregate_sales_rows(rows: list[Any], period: str) -> list[dict[str, Any]]:
+    """Aggregate daily query rows without changing the response's date contract."""
+    if period not in SALES_PERIODS:
+        raise ValueError(f"unsupported sales period: {period}")
+
+    buckets: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        sale_date = str(row["sale_date"] or "")
+        if not sale_date:
+            continue
+        bucket = _sales_bucket(sale_date, period)
+        item = buckets.setdefault(
+            bucket,
+            {
+                "date": bucket,
+                "period": period,
+                "total": 0,
+                "baemin": 0,
+                "coupangeats": 0,
+                "yogiyo": 0,
+                "ddangyo": 0,
+                "orders": 0,
+            },
+        )
+        service = str(row["service"] or "").lower()
+        amount = int(row["total"] or 0)
+        item["total"] += amount
+        item["orders"] += int(row["orders"] or 0)
+        if service in item:
+            item[service] += amount
+    return [buckets[key] for key in sorted(buckets)]
+
+
 def get_kpis(business_id: str = "") -> dict[str, Any]:
     today = _today_kst()
     today_str = today.isoformat()
+    first_of_week = (today - timedelta(days=today.weekday())).isoformat()
     first_of_month = today.replace(day=1).isoformat()
 
     async def _run() -> dict[str, Any]:
@@ -70,42 +121,55 @@ def get_kpis(business_id: str = "") -> dict[str, Any]:
         pool = await asyncpg.create_pool(_db_url(), min_size=1, max_size=3)
         try:
             async with pool.acquire() as conn:
-                biz = f"AND business_id = '{business_id}'" if business_id else ""
+                biz, biz_args = _business_filter(business_id, 4)
 
-                today_sales = await conn.fetchrow(
-                    f"SELECT COALESCE(SUM((payload->>'gross_amount')::numeric), 0) AS total "
+                sales = await conn.fetchrow(
+                    f"SELECT "
+                    f"COALESCE(SUM(COALESCE(NULLIF(payload->>'gross_amount','')::numeric, 0)) "
+                    f"FILTER (WHERE payload->>'occurred_on' = $1), 0) AS today_total, "
+                    f"COALESCE(SUM(COALESCE(NULLIF(payload->>'gross_amount','')::numeric, 0)) "
+                    f"FILTER (WHERE payload->>'occurred_on' >= $2), 0) AS week_total, "
+                    f"COALESCE(SUM(COALESCE(NULLIF(payload->>'gross_amount','')::numeric, 0)) "
+                    f"FILTER (WHERE payload->>'occurred_on' >= $3), 0) AS month_total "
                     f"FROM yeoljeong_delivery_sales "
-                    f"WHERE payload->>'occurred_on' = $1 AND deleted_at IS NULL {biz}",
+                    f"WHERE payload->>'occurred_on' <= $1 AND deleted_at IS NULL {biz}",
                     today_str,
+                    first_of_week,
+                    first_of_month,
+                    *biz_args,
                 )
-                month_sales = await conn.fetchrow(
-                    f"SELECT COALESCE(SUM((payload->>'gross_amount')::numeric), 0) AS total "
-                    f"FROM yeoljeong_delivery_sales "
-                    f"WHERE payload->>'occurred_on' >= $1 AND payload->>'occurred_on' <= $2 "
-                    f"AND deleted_at IS NULL {biz}",
-                    first_of_month, today_str,
-                )
+                settlement_biz, settlement_args = _business_filter(business_id)
                 pending_stl = await conn.fetchrow(
-                    f"SELECT COALESCE(SUM((payload->>'amount')::numeric), 0) AS total, COUNT(*) AS cnt "
+                    f"SELECT COALESCE(SUM(COALESCE(NULLIF(payload->>'settlement_amount','')::numeric, 0)), 0) AS total, "
+                    f"COUNT(*) AS cnt "
                     f"FROM yeoljeong_delivery_settlements "
-                    f"WHERE COALESCE(payload->>'status','') NOT IN ('deposited','confirmed') "
-                    f"AND deleted_at IS NULL {biz}",
+                    f"WHERE COALESCE(payload->>'settlement_status','') "
+                    f"NOT IN ('deposited','confirmed','입금완료') "
+                    f"AND deleted_at IS NULL {settlement_biz}",
+                    *settlement_args,
                 )
+                employee_biz, employee_args = _business_filter(business_id)
                 emp_cnt = await conn.fetchrow(
                     f"SELECT COUNT(*) AS cnt FROM yeoljeong_employee_join_requests "
-                    f"WHERE payload->>'status' = 'approved' AND deleted_at IS NULL {biz}",
+                    f"WHERE status = 'approved' AND deleted_at IS NULL {employee_biz}",
+                    *employee_args,
                 )
                 p_joins = await conn.fetchrow(
                     f"SELECT COUNT(*) AS cnt FROM yeoljeong_employee_join_requests "
-                    f"WHERE payload->>'status' = 'pending' AND deleted_at IS NULL {biz}",
+                    f"WHERE status = 'pending' AND deleted_at IS NULL {employee_biz}",
+                    *employee_args,
                 )
                 p_docs = await conn.fetchrow(
                     f"SELECT COUNT(*) AS cnt FROM yeoljeong_onboarding_documents "
-                    f"WHERE payload->>'review_status' = 'pending' AND deleted_at IS NULL {biz}",
+                    f"WHERE COALESCE(status, '') NOT IN ('approved','rejected') "
+                    f"AND deleted_at IS NULL {employee_biz}",
+                    *employee_args,
                 )
                 p_contracts = await conn.fetchrow(
                     f"SELECT COUNT(*) AS cnt FROM yeoljeong_contracts "
-                    f"WHERE payload->>'status' = 'pending_signature' AND deleted_at IS NULL {biz}",
+                    f"WHERE COALESCE(status, '') NOT IN ('signed','completed','cancelled','rejected') "
+                    f"AND deleted_at IS NULL {employee_biz}",
+                    *employee_args,
                 )
 
                 pj = int(p_joins["cnt"]) if p_joins else 0
@@ -113,8 +177,9 @@ def get_kpis(business_id: str = "") -> dict[str, Any]:
                 pc = int(p_contracts["cnt"]) if p_contracts else 0
 
                 return {
-                    "today_sales": int(today_sales["total"]) if today_sales else 0,
-                    "month_sales": int(month_sales["total"]) if month_sales else 0,
+                    "today_sales": int(sales["today_total"]) if sales else 0,
+                    "week_sales": int(sales["week_total"]) if sales else 0,
+                    "month_sales": int(sales["month_total"]) if sales else 0,
                     "pending_settlement_amount": int(pending_stl["total"]) if pending_stl else 0,
                     "pending_settlement_count": int(pending_stl["cnt"]) if pending_stl else 0,
                     "employee_count": int(emp_cnt["cnt"]) if emp_cnt else 0,
@@ -131,10 +196,13 @@ def get_kpis(business_id: str = "") -> dict[str, Any]:
 
 
 def get_sales_trend(period: str = "daily", days: int = 30, business_id: str = "") -> list[dict[str, Any]]:
+    if period not in SALES_PERIODS:
+        raise ValueError(f"unsupported sales period: {period}")
+    days = max(1, min(int(days), 365))
     today = _today_kst()
-    start_date = (today - timedelta(days=days)).isoformat()
+    start_date = (today - timedelta(days=days - 1)).isoformat()
     end_date = today.isoformat()
-    biz = f"AND business_id = '{business_id}'" if business_id else ""
+    biz, biz_args = _business_filter(business_id, 3)
 
     async def _run() -> list[dict[str, Any]]:
         import asyncpg
@@ -144,27 +212,16 @@ def get_sales_trend(period: str = "daily", days: int = 30, business_id: str = ""
                 rows = await conn.fetch(
                     f"SELECT payload->>'occurred_on' AS sale_date, "
                     f"payload->>'service' AS service, "
-                    f"COALESCE(SUM((payload->>'gross_amount')::numeric), 0) AS total, "
+                    f"COALESCE(SUM(COALESCE(NULLIF(payload->>'gross_amount','')::numeric, 0)), 0) AS total, "
                     f"COALESCE(SUM(NULLIF(payload->>'order_count','')::int), 0) AS orders "
                     f"FROM yeoljeong_delivery_sales "
                     f"WHERE payload->>'occurred_on' >= $1 AND payload->>'occurred_on' <= $2 "
                     f"AND deleted_at IS NULL {biz} "
                     f"GROUP BY payload->>'occurred_on', payload->>'service' "
                     f"ORDER BY 1",
-                    start_date, end_date,
+                    start_date, end_date, *biz_args,
                 )
-                date_map: dict[str, dict[str, Any]] = {}
-                for r in rows:
-                    d = r["sale_date"] or ""
-                    if d not in date_map:
-                        date_map[d] = {"date": d, "total": 0, "baemin": 0, "coupangeats": 0, "yogiyo": 0, "ddangyo": 0, "orders": 0}
-                    svc_name = r["service"] or ""
-                    amount = int(r["total"] or 0)
-                    date_map[d]["total"] += amount
-                    date_map[d]["orders"] += int(r["orders"] or 0)
-                    if svc_name in date_map[d]:
-                        date_map[d][svc_name] += amount
-                return sorted(date_map.values(), key=lambda x: x["date"])
+                return _aggregate_sales_rows(rows, period)
         finally:
             await pool.close()
 
@@ -172,7 +229,7 @@ def get_sales_trend(period: str = "daily", days: int = 30, business_id: str = ""
 
 
 def get_tasks(business_id: str = "") -> list[dict[str, Any]]:
-    biz = f"AND business_id = '{business_id}'" if business_id else ""
+    biz, biz_args = _business_filter(business_id)
 
     async def _run() -> list[dict[str, Any]]:
         import asyncpg
@@ -182,28 +239,32 @@ def get_tasks(business_id: str = "") -> list[dict[str, Any]]:
                 tasks: list[dict[str, Any]] = []
 
                 for row in await conn.fetch(
-                    f"SELECT row_id, payload FROM yeoljeong_employee_join_requests "
-                    f"WHERE payload->>'status' = 'pending' AND deleted_at IS NULL {biz} "
+                    f"SELECT id, employee_name FROM yeoljeong_employee_join_requests "
+                    f"WHERE status = 'pending' AND deleted_at IS NULL {biz} "
                     f"ORDER BY created_at DESC LIMIT 20",
+                    *biz_args,
                 ):
-                    p = _parse_payload(row["payload"])
-                    tasks.append({"type": "join_request", "title": f"{p.get('name', '직원')} 가입 신청 검토", "priority": "high", "reference_id": row["row_id"]})
+                    tasks.append({"type": "join_request", "title": f"{row['employee_name'] or '직원'} 가입 신청 검토", "priority": "high", "reference_id": row["id"]})
 
                 for row in await conn.fetch(
-                    f"SELECT row_id, payload FROM yeoljeong_onboarding_documents "
-                    f"WHERE payload->>'review_status' = 'pending' AND deleted_at IS NULL {biz} "
+                    f"SELECT id, employee_name, document_label, document_type "
+                    f"FROM yeoljeong_onboarding_documents "
+                    f"WHERE COALESCE(status, '') NOT IN ('approved','rejected') "
+                    f"AND deleted_at IS NULL {biz} "
                     f"ORDER BY created_at DESC LIMIT 20",
+                    *biz_args,
                 ):
-                    p = _parse_payload(row["payload"])
-                    tasks.append({"type": "document_review", "title": f"{p.get('employee_name', '')} {p.get('document_type', '서류')} 검토", "priority": "normal", "reference_id": row["row_id"]})
+                    label = row["document_label"] or row["document_type"] or "서류"
+                    tasks.append({"type": "document_review", "title": f"{row['employee_name'] or ''} {label} 검토".strip(), "priority": "normal", "reference_id": row["id"]})
 
                 for row in await conn.fetch(
-                    f"SELECT row_id, payload FROM yeoljeong_contracts "
-                    f"WHERE payload->>'status' = 'pending_signature' AND deleted_at IS NULL {biz} "
+                    f"SELECT id, employee_name FROM yeoljeong_contracts "
+                    f"WHERE COALESCE(status, '') NOT IN ('signed','completed','cancelled','rejected') "
+                    f"AND deleted_at IS NULL {biz} "
                     f"ORDER BY created_at DESC LIMIT 20",
+                    *biz_args,
                 ):
-                    p = _parse_payload(row["payload"])
-                    tasks.append({"type": "contract_sign", "title": f"{p.get('employee_name', '')} 계약서 서명 대기", "priority": "normal", "reference_id": row["row_id"]})
+                    tasks.append({"type": "contract_sign", "title": f"{row['employee_name'] or ''} 계약서 서명 대기".strip(), "priority": "normal", "reference_id": row["id"]})
 
                 return tasks
         finally:
@@ -213,7 +274,7 @@ def get_tasks(business_id: str = "") -> list[dict[str, Any]]:
 
 
 def get_settlement_summary(business_id: str = "") -> list[dict[str, Any]]:
-    biz = f"AND business_id = '{business_id}'" if business_id else ""
+    biz, biz_args = _business_filter(business_id)
 
     async def _run() -> list[dict[str, Any]]:
         import asyncpg
@@ -222,12 +283,13 @@ def get_settlement_summary(business_id: str = "") -> list[dict[str, Any]]:
             async with pool.acquire() as conn:
                 rows = await conn.fetch(
                     f"SELECT payload->>'service' AS service, "
-                    f"COUNT(*) FILTER (WHERE COALESCE(payload->>'status','') NOT IN ('deposited','confirmed')) AS pending_cnt, "
-                    f"COALESCE(SUM((payload->>'amount')::numeric) FILTER (WHERE COALESCE(payload->>'status','') NOT IN ('deposited','confirmed')), 0) AS pending_amount, "
-                    f"COUNT(*) FILTER (WHERE payload->>'status' IN ('deposited','confirmed')) AS done_cnt, "
-                    f"COALESCE(SUM((payload->>'amount')::numeric) FILTER (WHERE payload->>'status' IN ('deposited','confirmed')), 0) AS done_amount "
+                    f"COUNT(*) FILTER (WHERE COALESCE(payload->>'settlement_status','') NOT IN ('deposited','confirmed','입금완료')) AS pending_cnt, "
+                    f"COALESCE(SUM(COALESCE(NULLIF(payload->>'settlement_amount','')::numeric, 0)) FILTER (WHERE COALESCE(payload->>'settlement_status','') NOT IN ('deposited','confirmed','입금완료')), 0) AS pending_amount, "
+                    f"COUNT(*) FILTER (WHERE payload->>'settlement_status' IN ('deposited','confirmed','입금완료')) AS done_cnt, "
+                    f"COALESCE(SUM(COALESCE(NULLIF(payload->>'settlement_amount','')::numeric, 0)) FILTER (WHERE payload->>'settlement_status' IN ('deposited','confirmed','입금완료')), 0) AS done_amount "
                     f"FROM yeoljeong_delivery_settlements WHERE deleted_at IS NULL {biz} "
                     f"GROUP BY payload->>'service' ORDER BY 1",
+                    *biz_args,
                 )
                 return [{"service": r["service"], "pending_count": int(r["pending_cnt"]), "pending_amount": int(r["pending_amount"]),
                          "done_count": int(r["done_cnt"]), "done_amount": int(r["done_amount"])} for r in rows]
@@ -243,7 +305,7 @@ def get_expense_summary(business_id: str = "", date_from: str = "", date_to: str
         date_from = today.replace(day=1).isoformat()
     if not date_to:
         date_to = today.isoformat()
-    biz = f"AND business_id = '{business_id}'" if business_id else ""
+    biz, biz_args = _business_filter(business_id, 3)
 
     async def _run() -> list[dict[str, Any]]:
         import asyncpg
@@ -256,7 +318,7 @@ def get_expense_summary(business_id: str = "", date_from: str = "", date_to: str
                     f"FROM yeoljeong_bank_transactions "
                     f"WHERE direction = 'out' AND occurred_date >= $1::date AND occurred_date <= $2::date {biz} "
                     f"GROUP BY 1 ORDER BY total DESC",
-                    date_from, date_to,
+                    date_from, date_to, *biz_args,
                 )
                 return [{"category": r["cat"], "total": int(r["total"] or 0), "count": int(r["cnt"])} for r in rows]
         finally:
