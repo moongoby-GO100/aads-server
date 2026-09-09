@@ -2,6 +2,7 @@
 # Replace only the FOOD store-assistant API from an already-built AADS image.
 
 set -euo pipefail
+trap '' HUP TERM  # RC4: ignore HUP/TERM — prevents parent process kill from aborting deploy
 
 RELEASE_SHA="${1:-}"
 RUN_ID="${2:-0}"
