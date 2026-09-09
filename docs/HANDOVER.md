@@ -2,6 +2,7 @@
 최종 업데이트: 2026-09-09
 
 ## 2026-09-09
+- AADS-GLOBAL-HANDOVER-LEDGER-v1-20260909: 전 프로젝트 공통 핸드오버 정본을 AADS 중앙 PostgreSQL로 통합했다. `project_handover_entries` 현재 상태와 append-only `project_handover_events` 감사 이력, FTS 본문 검색과 `pg_trgm` 제목·경로 오탈자 검색, tenant/project 격리, optimistic revision, Markdown import/export, REST API, 전 세션 공통 `handover_write/search/export` 도구를 추가했다. GO100을 첫 적용 대상으로 하되 기존 핸드오버와 KIS 주문·계좌·매매 경로는 변경하지 않는다. 설계·수용·롤백 기준은 `docs/plans/PRD-GLOBAL-HANDOVER-LEDGER-v1.0.md`에 기록했다. 커밋·DB 적용·push·blue/green 배포·5분 모니터링 결과는 릴리스 완료 후 이 항목에 보강한다.
 - AADS-FOOD-PC-AGENT-QUEUE-DB-CANONICAL-P0-20260909: FOOD PC Agent 전역 수집 큐가 PostgreSQL 설정 상태에서도 실행 중 asyncio loop에서는 동기 `_run_db()`가 `None`을 반환해 JSON 파일로 조용히 분기되고, 운영 DB `pc_agent_collection_queue`는 비어 있던 결함을 수정했다. 큐 서비스에 enqueue/claim/complete/snapshot 비동기 API를 추가하고 FastAPI lifespan 및 authenticated-site-collector API 경로를 전환했다. PostgreSQL 설정 상태의 동기 API 이벤트루프 호출과 DB 오류는 JSON으로 폴백하지 않고 명시적으로 실패한다. 기존 JSON 큐는 ID·상태·시각·결과를 보존하되 비밀번호·토큰·인증정보·승인 입력값 등 민감 키를 제거한 뒤 PostgreSQL에 멱등 이관하며, 동일 job_key 또는 동일 resource의 다른 active DB 작업은 덮어쓰거나 중복 생성하지 않는다. 11:11 KST 사전 실측은 JSON 19건, 민감 키 25개(`approved_input` 19개, 로그인/계좌 secret 상태 키 각 3개), DB 0건이었다. 검증: 운영 이미지 기반 일회성 컨테이너에서 `tests/unit/test_pc_agent_collection_queue.py`, `tests/unit/test_authenticated_site_collector.py`, `tests/unit/test_yeoljeong_auto_collect.py` 합계 77 passed. 커밋·푸시·blue/green 배포·실 DB 이관·5분 모니터링 결과는 릴리스 완료 후 이 항목에 보강한다.
 
 ## 2026-09-08

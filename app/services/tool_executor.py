@@ -163,6 +163,9 @@ _DATABASE_TOOLS = frozenset({
     "query_db",
     "query_project_database",
     "list_project_databases",
+    "handover_write",
+    "handover_search",
+    "handover_export",
 })
 
 
@@ -698,6 +701,9 @@ class ToolExecutor:
         dispatch = {
             "health_check":           self._health_check,
             "todo_write":             self._todo_write,
+            "handover_write":         self._handover_write,
+            "handover_search":        self._handover_search,
+            "handover_export":        self._handover_export,
             "dashboard_query":        self._dashboard_query,
             "task_history":           self._task_history,
             "server_status":          self._server_status,
@@ -1018,6 +1024,89 @@ class ToolExecutor:
             "item": updated,
             "promoted_next": promoted,
         }
+
+    async def _handover_write(self, inp: Dict[str, Any]) -> Any:
+        """Create or update a tenant/project-scoped canonical handover entry."""
+        from app.services.handover_store import (
+            HandoverConflictError,
+            upsert_handover_entry,
+        )
+
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+        tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
+        if not tenant_id:
+            return {"error": "missing_tenant_id", "message": "handover_write requires a tenant-bound chat session"}
+        metadata = inp.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        try:
+            entry, changed = await upsert_handover_entry(
+                tenant_id=tenant_id,
+                project_key=str(inp.get("project") or ""),
+                title=str(inp.get("title") or ""),
+                body=str(inp.get("body") or ""),
+                entry_key=str(inp.get("entry_key") or "") or None,
+                entry_type=str(inp.get("entry_type") or "note"),
+                summary=str(inp.get("summary") or "") or None,
+                status=str(inp.get("status") or "active"),
+                priority=str(inp.get("priority") or "P2"),
+                source_kind="chat_tool",
+                source_session_id=session_id or None,
+                source_task_id=str(inp.get("source_task_id") or "") or None,
+                source_path=str(inp.get("source_path") or "") or None,
+                metadata=metadata,
+                changed_by=f"chat:{session_id[:8]}" if session_id else "handover_tool",
+                change_summary=str(inp.get("change_summary") or "") or None,
+                expected_revision=int(inp["expected_revision"]) if inp.get("expected_revision") is not None else None,
+            )
+        except HandoverConflictError as exc:
+            return {"error": "revision_conflict", "message": str(exc)}
+        except (ValueError, TypeError) as exc:
+            return {"error": "invalid_input", "message": str(exc)}
+        return {"entry": entry, "changed": changed}
+
+    async def _handover_search(self, inp: Dict[str, Any]) -> Any:
+        """Search the canonical handover ledger inside the current tenant."""
+        from app.services.handover_store import list_handover_entries
+
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+        tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
+        if not tenant_id:
+            return {"error": "missing_tenant_id", "message": "handover_search requires a tenant-bound chat session"}
+        try:
+            items, total = await list_handover_entries(
+                tenant_id=tenant_id,
+                project_key=str(inp.get("project") or "") or None,
+                status=str(inp.get("status") or "") or None,
+                entry_type=str(inp.get("entry_type") or "") or None,
+                query=str(inp.get("query") or "") or None,
+                limit=min(max(int(inp.get("limit") or 20), 1), 100),
+            )
+        except (ValueError, TypeError) as exc:
+            return {"error": "invalid_input", "message": str(exc)}
+        return {"items": items, "total": total}
+
+    async def _handover_export(self, inp: Dict[str, Any]) -> Any:
+        """Render current canonical entries as backward-compatible Markdown."""
+        from app.services.handover_store import list_handover_entries, render_handover_markdown
+
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+        tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
+        if not tenant_id:
+            return {"error": "missing_tenant_id", "message": "handover_export requires a tenant-bound chat session"}
+        project = str(inp.get("project") or "")
+        include_archived = _coerce_bool(inp.get("include_archived"), False)
+        try:
+            items, total = await list_handover_entries(
+                tenant_id=tenant_id,
+                project_key=project,
+                status=None if include_archived else "active",
+                limit=500,
+            )
+            markdown = render_handover_markdown(items, project_key=project)
+        except (ValueError, TypeError) as exc:
+            return {"error": "invalid_input", "message": str(exc)}
+        return {"project": project.upper(), "total": total, "markdown": markdown}
 
     async def _health_check(self, inp: Dict[str, Any]) -> Any:
         try:

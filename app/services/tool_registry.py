@@ -30,6 +30,9 @@ _DEFER_LOADING: Dict[str, bool] = {
     "query_database": False,             # DB 조회 2순위 — 상시 로드
     "query_project_database": False,     # 프로젝트 DB 조회 — 상시 로드
     "todo_write": False,                 # 채팅 하단 TODO 명시 관리 — 상시 로드
+    "handover_write": False,             # 전 프로젝트 공통 핸드오버 정본 기록
+    "handover_search": False,            # 현재 상태·과거 기록 검색
+    "handover_export": True,             # Markdown 호환 내보내기
     "list_project_databases": True,      # DB 목록 — 온디맨드
     "task_history": False,               # 작업 현황 — 빈번 조회
     "list_remote_dir": False,            # 파일 탐색 — 빈번 사용
@@ -3084,6 +3087,63 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"keyword": "비용"},
         ],
     },
+    "handover_write": {
+        "name": "handover_write",
+        "description": (
+            "현재 테넌트의 프로젝트 핸드오버 정본을 생성하거나 갱신합니다. "
+            "entry_key를 재사용하면 멱등 갱신되고 모든 리비전은 감사 이벤트로 보존됩니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "프로젝트 키(AADS/GO100/KIS/SF/NTV2 등)"},
+                "title": {"type": "string", "description": "핸드오버 항목 제목"},
+                "body": {"type": "string", "description": "검증 근거와 다음 행동을 포함한 본문"},
+                "entry_key": {"type": "string", "description": "재실행 시 동일 항목을 갱신할 안정 키"},
+                "entry_type": {"type": "string", "enum": ["status", "decision", "task", "risk", "verification", "note"], "default": "note"},
+                "status": {"type": "string", "enum": ["active", "resolved", "superseded", "archived"], "default": "active"},
+                "priority": {"type": "string", "enum": ["P0", "P1", "P2", "P3"], "default": "P2"},
+                "source_task_id": {"type": "string"},
+                "source_path": {"type": "string"},
+                "summary": {"type": "string"},
+                "change_summary": {"type": "string"},
+                "expected_revision": {"type": "integer", "minimum": 1},
+                "metadata": {"type": "object"},
+            },
+            "required": ["project", "title", "body"],
+        },
+        "input_examples": [
+            {"project": "GO100", "entry_key": "GO100-310-release", "entry_type": "verification", "title": "#310 운영 검증", "body": "API 200, 서비스 active", "status": "resolved", "priority": "P1"},
+        ],
+    },
+    "handover_search": {
+        "name": "handover_search",
+        "description": "현재 테넌트의 전 프로젝트 핸드오버를 프로젝트·상태·유형·키워드로 검색합니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string"},
+                "query": {"type": "string"},
+                "status": {"type": "string", "enum": ["active", "resolved", "superseded", "archived"]},
+                "entry_type": {"type": "string", "enum": ["status", "decision", "task", "risk", "verification", "note"]},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+            },
+        },
+        "input_examples": [{"project": "GO100", "query": "파동 엔진", "status": "active"}],
+    },
+    "handover_export": {
+        "name": "handover_export",
+        "description": "DB 정본에서 프로젝트의 현재 핸드오버 Markdown을 생성합니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string"},
+                "include_archived": {"type": "boolean", "default": False},
+            },
+            "required": ["project"],
+        },
+        "input_examples": [{"project": "GO100"}],
+    },
     "todo_write": {
         "name": "todo_write",
         "description": (
@@ -3146,7 +3206,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["directive_create", "create_design_modification_request", "todo_write", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
+    "action": ["directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
@@ -3171,6 +3231,7 @@ _GROUPS: Dict[str, List[str]] = {
 # Phase A: 인텐트별 도구 필터링 — 코어 도구 + 인텐트별 그룹 조합
 _CORE_TOOLS = [
     "todo_write",
+    "handover_write", "handover_search",
     "read_remote_file", "query_database", "query_project_database",
     "list_remote_dir", "run_remote_command", "capture_screenshot",
     "pipeline_runner_submit", "pipeline_runner_status", "pipeline_runner_approve",

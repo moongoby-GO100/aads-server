@@ -35,6 +35,7 @@ from app.api.strategy import router as strategy_router
 from app.api.plans import router as plans_router
 from app.api.debate_logs import router as debate_logs_router
 from app.api.artifacts import router as artifacts_router
+from app.api.handovers import router as handovers_router
 from app.api.task_monitor import router as task_monitor_router
 from app.api.qa import router as qa_router
 from app.api.image import router as image_router
@@ -3354,6 +3355,7 @@ app.include_router(strategy_router, prefix="/api/v1", tags=["strategy"])
 app.include_router(plans_router, prefix="/api/v1", tags=["plans"])
 app.include_router(debate_logs_router, prefix="/api/v1", tags=["debate-logs"])
 app.include_router(artifacts_router, prefix="/api/v1", tags=["artifacts"])
+app.include_router(handovers_router, prefix="/api/v1", tags=["handovers"])
 app.include_router(briefing_router, prefix="/api/v1", tags=["briefing"])
 app.include_router(governance_router, prefix="/api/v1", tags=["governance"])
 app.include_router(task_monitor_router, prefix="/api/v1", tags=["task-monitor"])
