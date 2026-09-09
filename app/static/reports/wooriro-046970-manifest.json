@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0",
+  "company": "우리로(046970)",
+  "generated_at_kst": "2026-09-09T15:44:15+09:00",
+  "baseline": {
+    "version": "1.0.0",
+    "immutable": true,
+    "path": "/static/reports/20260909_wooriro_046970_company_intelligence_baseline.html",
+    "as_of_kst": "2026-09-09T15:44:15+09:00"
+  },
+  "hub": "/static/reports/wooriro-046970-intelligence-hub.html",
+  "supplements": [
+    {
+      "version": "1.0.0",
+      "topic": "우리로의 주가 방향 관점에서 분석해줘",
+      "path": "/static/reports/20260909_wooriro_046970_stock_direction_supplement_v1.html",
+      "data_cutoff": "2026-09-09T09:23:00+09:00"
+    }
+  ],
+  "lineage": [
+    {"id": "dart-2025", "grade": "independently_verified", "url": "https://kind.krx.co.kr/external/2026/03/19/001574/20260319006491/11011.htm"},
+    {"id": "dart-2026h1", "grade": "independently_verified", "url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260812000311"},
+    {"id": "kind", "grade": "independently_verified", "url": "https://kind.krx.co.kr/"},
+    {"id": "company", "grade": "company_claim", "url": "http://www.wooriro.com/"},
+    {"id": "ohlcv", "grade": "independently_observed", "path": "/static/reports/data/wooriro-046970-ohlcv-20260810-20260908.csv", "adjusted": false, "note": "Investing.com daily table; K/M volume displays were normalized to shares, retain the source display precision, and may differ slightly from alternate vendors."}
+  ],
+  "publication_policy": {
+    "arbitrary_topic_auto_publish": false,
+    "phase": 1,
+    "workflow": "authenticated_chat_prefill_then_human_review",
+    "phase_2": "reviewed artifact approval and source-gated publication"
+  }
+}

@@ -1413,6 +1413,7 @@ export default function ChatPage() {
   const isNearBottomRef = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatInputRef = useRef<ChatInputHandle>(null);
+  const companyIntelligencePrefillAppliedRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingAttachments = useRef<Array<Record<string, any>>>([]);
   const [pendingPreviewFiles, setPendingPreviewFiles] = useState<File[]>([]);
@@ -1427,6 +1428,36 @@ export default function ChatPage() {
   useEffect(() => {
     return () => { pendingPreviewUrls.forEach((u) => u && URL.revokeObjectURL(u)); };
   }, [pendingPreviewUrls]);
+  // Company Intelligence Phase 1: 공개 보고서의 임의 주제를 인증 채팅 초안으로만
+  // 가져온다. 로그인 전환/새로고침에도 보존하되 자동 전송·공개하지 않는다.
+  useEffect(() => {
+    if (companyIntelligencePrefillAppliedRef.current) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("source") !== "company-intelligence") return;
+
+    const company = (params.get("company") || "general").replace(/[^0-9A-Za-z_-]/g, "").slice(0, 32) || "general";
+    const storageKey = `aads.company-intelligence.prefill.${company}`;
+    const queryPrefill = (params.get("prefill") || "").trim().slice(0, 4000);
+    let savedPrefill = "";
+    try {
+      savedPrefill = (window.sessionStorage.getItem(storageKey) || "").trim().slice(0, 4000);
+      if (queryPrefill) window.sessionStorage.setItem(storageKey, queryPrefill);
+    } catch {
+      // Privacy-restricted browsers may disable storage; query prefill still works.
+    }
+    const prefill = queryPrefill || savedPrefill;
+    if (!prefill) return;
+
+    companyIntelligencePrefillAppliedRef.current = true;
+    setInput(prefill);
+    setHasInput(true);
+    chatInputRef.current?.setValue(prefill);
+    if (queryPrefill) {
+      params.delete("prefill");
+      const query = params.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+    }
+  }, []);
   // P2-2: 분기 모드 활성화 시 입력창 포커스
   useEffect(() => { if (branchPoint) textareaRef.current?.focus(); }, [branchPoint]);
   const abortCtrl = useRef<AbortController | null>(null);

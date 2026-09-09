@@ -13067,3 +13067,54 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   조치가 필요하다. 유료 호출 비용은 미측정이다.
 - 후속 `origin/main`의 `24292edf`는 FOOD 수집 큐 수정으로 이 Goal 릴리스와
   무관하며, 본 인증 과정에서 재배포하지 않았다.
+# 2026-09-09 Goal Control closed-loop follow-up
+
+- Added an active-slot-only `goal_control_cycle` scheduler that periodically reconciles AADS goal links and advances the existing `GoalStateMachine` without replacing its public APIs.
+- Changed chat execution-resume ownership resolution to trust the shared `.active_container`/`.active_port` state before the container-local `/tmp` marker, preventing a stale former-active slot from claiming recovery leases after cutover.
+- Added static regression coverage for scheduler registration and active-slot ownership precedence.
+
+## 2026-09-09 14:43 KST — 코그콤·Re:Column 공개 기업분석 보고서
+
+- `app/static/reports/20260909_recolumn_cogcom_company_analysis.html`에 코그콤의
+  법인·제품 7개 영역·산업별 적용·사업모델·고객 증거·관련 생태계·경쟁기업·SWOT·
+  보안/법무/재무 실사·30일 PoC·AADS 제휴 가능성을 포함한 외부 공유용 보고서를 추가했다.
+- 회사 공개 수치와 독립 확인 사실, 공개자료로 확인하지 못한 항목을 각각
+  `회사 공개`·`독립 확인`·`미확인`으로 분리했고, 14개 원문 링크와 조사 한계를
+  보고서 안에 기록했다.
+- `docs/reports/20260909_company_research_html_template_guide.md`에 이후 기업조사에
+  재사용할 조사 순서, 근거 등급, 목차, 반응형/인쇄 디자인, 검증·갱신 규칙을 남겼다.
+- 공개 URL은
+  `https://fb.newtalk.kr/static/reports/20260909_recolumn_cogcom_company_analysis.html`이며
+  로그인 없이 HTTP 200으로 열린다. 정적 디렉터리가 운영 서버에 마운트되어 있어 API
+  이미지 빌드·컨테이너 재시작·nginx 전환 없이 반영됐다.
+- HTML 파서, JavaScript 구문, `git diff --check`, 시크릿 패턴 검사를 통과했다.
+  Playwright 실측에서 데스크톱 1,440px와 모바일 390px 모두 제목과 18개 섹션을
+  렌더링했고, 모바일 가로 오버플로를 660px에서 390px로 수정했다.
+- 외부 링크 14개 중 10개는 자동 요청 HTTP 200, 3개 경쟁사 사이트는 봇 차단 HTTP 403,
+  NICE 링크는 접근제한 안내 페이지로 리다이렉트됐다. 403은 보고서 원문 링크 자체를
+  제거하지 않고 사람 브라우저 확인 대상으로 남겼다.
+- 이번 변경은 정적 HTML·문서만 추가하므로 API blue/green 배포는 수행하지 않았다.
+
+## 2026-09-09 15:44 KST — 우리로(046970) 기업인텔리전스 확장
+
+- `app/static/reports/20260909_wooriro_046970_company_intelligence_baseline.html`에
+  DART/KIND 중심 법인·경영진·주주·사업·제품/IP·관련사·경쟁·3개년 및 2026 반기
+  연결재무·밸류에이션·희석·OHLCV·시나리오·SWOT·SNS/평판·리스크·실사질문·출처를
+  증거등급과 함께 고정한 불변 baseline v1.0.0을 추가했다.
+- `app/static/reports/20260909_wooriro_046970_stock_direction_supplement_v1.html`에 실제
+  예시 주제의 기간별 관점, 가정, 상승/기준/하락 및 무효화 조건과 위험고지를 추가하고
+  baseline·hub·manifest와 양방향 연결했다.
+- `app/static/reports/wooriro-046970-intelligence-hub.html`은 임의 주제를 URL encoding한
+  구조화 prompt로 인증 `/chat` 초안에 전달하고 제출상태·session recovery 안내를 제공한다.
+  자동 제출·자동 공개는 하지 않으며 manifest에 Phase 2로 명시했다.
+- `aads-dashboard/src/app/chat/page.tsx`는 `source=company-intelligence`인 경우에만 최대
+  4,000자의 prefill을 입력 초안으로 복구하고 URL에서 원문을 제거한다.
+- `app/static/reports/data/wooriro-046970-ohlcv-20260810-20260908.csv`와
+  `app/static/reports/wooriro-046970-manifest.json`에 무조정 가격 원천·수집시각·계산
+  lineage와 revision 정책을 보존했다.
+- 코그콤·Re:Column 보고서와 재사용 가이드에 공식 SNS, 대표 공개활동, 게시 활동성,
+  고객/시장 반응, 커뮤니티 평판, 경쟁 메시지 비교의 필수 조사 규칙을 보강했다.
+- 집중 정적 테스트는 HTML 파싱, 접근성 표식, 재무 교차합계, OHLCV 지표 결정성,
+  URL encoding/XSS 안전흐름, 양방향 링크, 표적 secret/직접 외부 LLM 호출 검사를 포함한다.
+- 사용자 지시에 따라 커밋·푸시·빌드·배포와 운영 HTTP/화면/슬롯 검증은 이 작업에서
+  수행하지 않았다. 비용이 발생하는 LLM/API 호출도 없었다.
