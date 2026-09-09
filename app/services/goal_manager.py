@@ -9,11 +9,62 @@ import logging
 import uuid
 from typing import Any, Optional
 
+from app.services.goal_binding import (
+    BIND_SOURCE_EXPLICIT_API,
+    DONE_JOB_STATUSES,
+    FAILED_JOB_STATUSES,
+    LINK_STATE_ACTIVE,
+    normalize_job_state,
+)
+
 logger = logging.getLogger(__name__)
 
 
-_DONE_TASK_STATUSES = {"completed", "done", "approved", "deployed"}
-_FAILED_TASK_STATUSES = {"failed", "error", "cancelled", "rejected_done"}
+# 정규화 어휘의 단일 출처는 goal_binding 이다. 아래 이름은 기존 호출부/테스트 호환 별칭.
+_DONE_TASK_STATUSES = set(DONE_JOB_STATUSES)
+_FAILED_TASK_STATUSES = set(FAILED_JOB_STATUSES)
+
+# migration 166 이전 이미지(블루/그린 과도기)에서도 죽지 않도록 선택 컬럼을 1회만 확인한다.
+_LINK_OPTIONAL_COLUMNS = (
+    "bind_source", "bound_by", "link_state", "detach_reason",
+    "superseded_by", "superseded_at", "last_job_status", "reconciled_at", "updated_at",
+)
+_link_columns_cache: Optional[set] = None
+
+
+async def link_optional_columns(conn) -> set:
+    """goal_task_links 에 실제로 존재하는 선택 컬럼 집합 (프로세스 수명 동안 캐시)."""
+    global _link_columns_cache
+    if _link_columns_cache is None:
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'goal_task_links'
+                """
+            )
+            present = {r["column_name"] for r in rows}
+            _link_columns_cache = {c for c in _LINK_OPTIONAL_COLUMNS if c in present}
+        except Exception as exc:  # noqa: BLE001 — 확인 실패 시 레거시 스키마로 간주
+            logger.debug("goal_link_column_probe_failed: %s", str(exc)[:200])
+            return set()
+    return _link_columns_cache
+
+
+def active_link_predicate(columns: set, alias: str = "") -> str:
+    """migration 166 적용 후에만 detached/orphan 링크를 제외하는 WHERE 절 조각."""
+    prefix = f"{alias}." if alias else ""
+    if "link_state" not in columns:
+        return ""
+    return f" AND COALESCE({prefix}link_state, '{LINK_STATE_ACTIVE}') = '{LINK_STATE_ACTIVE}'"
+
+
+def superseded_link_predicate(columns: set, alias: str = "") -> str:
+    """재시도로 승계된 실패 링크를 완료 판정에서 제외하는 WHERE 절 조각."""
+    prefix = f"{alias}." if alias else ""
+    if "superseded_by" not in columns:
+        return ""
+    return f" AND {prefix}superseded_by IS NULL"
 
 # 목표 진행이 기존 구현 보존 정책을 지키는지 스스로 감사하기 위한 기본 intent
 _GOAL_POLICY_INTENT = "goal_control"
@@ -236,7 +287,15 @@ class GoalStateMachine:
         milestone_id: Optional[str],
         task_type: str,
         task_id: str,
+        bind_source: Optional[str] = None,
+        bound_by: Optional[str] = None,
     ) -> dict[str, Any]:
+        """작업을 목표(및 마일스톤)에 연결한다.
+
+        `bind_source`/`bound_by` 는 이 연결이 **왜** 생겼는지에 대한 출처 기록이다
+        (migration 166 이후에만 저장). 기본값은 명시적 API 호출로 본다 — 이 메서드는
+        호출자가 goal_id 를 명시했을 때만 도달하기 때문이다.
+        """
         pool = await self._pool()
         link_id = str(uuid.uuid4())
         async with pool.acquire() as conn:
@@ -256,12 +315,13 @@ class GoalStateMachine:
             current_status = "pending"
             if task_type == "pipeline_job":
                 job = await conn.fetchrow(
-                    "SELECT status FROM pipeline_jobs WHERE job_id = $1",
+                    "SELECT status, phase FROM pipeline_jobs WHERE job_id = $1",
                     task_id,
                 )
                 if job:
-                    current_status = self._normalize_task_status(job["status"])
+                    current_status = self._normalize_task_status(job["status"], job["phase"])
 
+            columns = await link_optional_columns(conn)
             await conn.execute(
                 """
                 INSERT INTO goal_task_links (id, goal_id, milestone_id, task_type, task_id)
@@ -273,13 +333,30 @@ class GoalStateMachine:
                 milestone_id,
                 task_type, task_id,
             )
+            # 출처/생명주기 컬럼은 존재할 때만 갱신한다 (migration 166 미적용 이미지 호환).
+            set_parts = ["status = $4"]
+            extra_params: list[Any] = []
+            if "bind_source" in columns:
+                extra_params.append(bind_source or BIND_SOURCE_EXPLICIT_API)
+                set_parts.append(f"bind_source = ${3 + len(extra_params) + 1}")
+            if "bound_by" in columns:
+                extra_params.append(bound_by)
+                set_parts.append(f"bound_by = COALESCE(${3 + len(extra_params) + 1}, goal_task_links.bound_by)")
+            if "link_state" in columns:
+                # 명시적으로 다시 연결하면 이전 detach 결정을 되돌린다.
+                set_parts.append(f"link_state = '{LINK_STATE_ACTIVE}'")
+                set_parts.append("detach_reason = NULL")
+            if "last_job_status" in columns:
+                set_parts.append("last_job_status = $4")
+            if "updated_at" in columns:
+                set_parts.append("updated_at = NOW()")
             await conn.execute(
-                """
+                f"""
                 UPDATE goal_task_links
-                SET status = $4
+                SET {', '.join(set_parts)}
                 WHERE goal_id = $1::uuid AND task_type = $2 AND task_id = $3
                 """,
-                goal_id, task_type, task_id, current_status,
+                goal_id, task_type, task_id, current_status, *extra_params,
             )
         if milestone_id:
             await self.check_milestone_completion(milestone_id)
@@ -297,25 +374,51 @@ class GoalStateMachine:
         )
         return {"link_id": link_id, "milestone_id": milestone_id, "status": current_status}
 
-    async def update_task_status(self, task_type: str, task_id: str, status: str) -> dict[str, Any]:
+    async def update_task_status(
+        self, task_type: str, task_id: str, status: str, phase: Optional[str] = None,
+    ) -> dict[str, Any]:
         pool = await self._pool()
-        normalized = self._normalize_task_status(status)
+        normalized = self._normalize_task_status(status, phase)
         async with pool.acquire() as conn:
+            columns = await link_optional_columns(conn)
+            status_sets = ["status = $3"]
+            if "last_job_status" in columns:
+                status_sets.append("last_job_status = $3")
+            if "updated_at" in columns:
+                status_sets.append("updated_at = NOW()")
             await conn.execute(
-                "UPDATE goal_task_links SET status = $3 WHERE task_type = $1 AND task_id = $2",
+                f"""
+                UPDATE goal_task_links SET {', '.join(status_sets)}
+                WHERE task_type = $1 AND task_id = $2
+                  {active_link_predicate(columns)}
+                """,
                 task_type, task_id, normalized,
             )
             links = await conn.fetch(
-                """
+                f"""
                 SELECT DISTINCT milestone_id, goal_id
                 FROM goal_task_links
                 WHERE task_type = $1 AND task_id = $2
+                  {active_link_predicate(columns)}
+                  {superseded_link_predicate(columns)}
                 """,
                 task_type, task_id,
             )
             results = []
             for link in links:
                 if normalized == "failed" and link["milestone_id"]:
+                    # 같은 지시를 다시 돌려 이미 성공했다면 이 실패는 마일스톤을 막지 않는다.
+                    await self._mark_superseded_failures(conn, str(link["milestone_id"]))
+                    if "superseded_by" in columns and await conn.fetchval(
+                        """
+                        SELECT superseded_by IS NOT NULL FROM goal_task_links
+                        WHERE milestone_id = $1::uuid AND task_type = $2 AND task_id = $3
+                        """,
+                        str(link["milestone_id"]), task_type, task_id,
+                    ):
+                        r = await self.check_milestone_completion(str(link["milestone_id"]))
+                        results.append(r)
+                        continue
                     await conn.execute(
                         """
                         UPDATE milestones
@@ -356,8 +459,17 @@ class GoalStateMachine:
     async def check_milestone_completion(self, milestone_id: str) -> dict[str, Any]:
         pool = await self._pool()
         async with pool.acquire() as conn:
+            columns = await link_optional_columns(conn)
+            # 재시도로 대체된 과거 실패를 먼저 승계 처리한다 — 그래야 "이미 다시 돌려
+            # 성공한" 실패가 마일스톤을 영구히 blocked 로 만들지 않는다.
+            await self._mark_superseded_failures(conn, milestone_id)
             links = await conn.fetch(
-                "SELECT task_type, task_id, status FROM goal_task_links WHERE milestone_id = $1::uuid",
+                f"""
+                SELECT task_type, task_id, status FROM goal_task_links
+                WHERE milestone_id = $1::uuid
+                  {active_link_predicate(columns)}
+                  {superseded_link_predicate(columns)}
+                """,
                 milestone_id,
             )
             if not links:
@@ -388,10 +500,12 @@ class GoalStateMachine:
                         }
                     if link["task_type"] == "pipeline_job":
                         row = await conn.fetchrow(
-                            "SELECT status FROM pipeline_jobs WHERE job_id = $1",
+                            "SELECT status, phase FROM pipeline_jobs WHERE job_id = $1",
                             link["task_id"],
                         )
-                        normalized = self._normalize_task_status(row["status"]) if row else "pending"
+                        normalized = (
+                            self._normalize_task_status(row["status"], row["phase"]) if row else "pending"
+                        )
                         if normalized == "completed":
                             await conn.execute(
                                 "UPDATE goal_task_links SET status = 'completed' WHERE milestone_id = $1::uuid AND task_id = $2",
@@ -682,8 +796,15 @@ class GoalStateMachine:
                 """,
                 goal_id,
             )
+            # 회수(detached)/격리(orphan)된 링크는 목표 상태 화면에서 제외한다.
+            columns = await link_optional_columns(conn)
             tasks = await conn.fetch(
-                "SELECT id, milestone_id, task_type, task_id, status FROM goal_task_links WHERE goal_id = $1::uuid",
+                f"""
+                SELECT id, milestone_id, task_type, task_id, status
+                FROM goal_task_links
+                WHERE goal_id = $1::uuid
+                  {active_link_predicate(columns)}
+                """,
                 goal_id,
             )
             task_map: dict[str, list] = {}
@@ -770,13 +891,67 @@ class GoalStateMachine:
             await conn.execute(sql, goal_id, *updates.values())
         return {"goal_id": goal_id, "updated": list(updates.keys())}
 
-    def _normalize_task_status(self, status: str) -> str:
-        normalized = str(status or "").strip().lower()
-        if normalized in _DONE_TASK_STATUSES:
-            return "completed"
-        if normalized in _FAILED_TASK_STATUSES:
-            return "failed"
-        return normalized or "pending"
+    def _normalize_task_status(self, status: str, phase: Optional[str] = None) -> str:
+        """pipeline_jobs (status, phase) → 링크 상태.
+
+        정규화 규칙은 goal_binding.normalize_job_state 하나만 쓴다. phase 를 함께
+        받아 terminated/review_failed/blocked_dependency 같은 별칭도 failed 로 접는다.
+        """
+        return normalize_job_state(status, phase)
+
+    async def _mark_superseded_failures(self, conn, milestone_id: str) -> int:
+        """재시도로 대체된 실패 링크에 승계 근거를 기록한다 (결정론적).
+
+        승계 조건 — 같은 마일스톤 안에서
+          * 실패 링크 L 의 pipeline_job 과 **동일한 instruction_hash** 를 가진
+          * **더 나중에 만들어진** pipeline_job R 이
+          * done/approved/deployed 로 끝났을 때
+        만 L.superseded_by = R.job_id 로 기록한다. 같은 지시를 다시 돌려 성공한
+        경우만 해당하므로, 대체된 적 없는 실패는 계속 마일스톤을 blocked 로 만든다.
+        반환값은 이번 호출에서 새로 승계 표시된 링크 수.
+        """
+        columns = await link_optional_columns(conn)
+        if "superseded_by" not in columns:
+            return 0
+        try:
+            rows = await conn.fetch(
+                f"""
+                UPDATE goal_task_links l
+                SET superseded_by = r.job_id,
+                    superseded_at = NOW()
+                FROM pipeline_jobs failed_job, pipeline_jobs r
+                WHERE l.milestone_id = $1::uuid
+                  AND l.task_type = 'pipeline_job'
+                  AND l.status = 'failed'
+                  AND l.superseded_by IS NULL
+                  {active_link_predicate(columns, 'l')}
+                  AND failed_job.job_id = l.task_id
+                  AND failed_job.instruction_hash IS NOT NULL
+                  AND r.instruction_hash = failed_job.instruction_hash
+                  AND r.job_id <> failed_job.job_id
+                  AND r.created_at > failed_job.created_at
+                  AND r.status = ANY($2::text[])
+                  AND EXISTS (
+                      SELECT 1 FROM goal_task_links rl
+                      WHERE rl.milestone_id = l.milestone_id
+                        AND rl.task_type = 'pipeline_job'
+                        AND rl.task_id = r.job_id
+                        {active_link_predicate(columns, 'rl')}
+                  )
+                RETURNING l.task_id, r.job_id AS replacement
+                """,
+                milestone_id,
+                sorted(DONE_JOB_STATUSES),
+            )
+        except Exception as exc:  # noqa: BLE001 — 승계 기록 실패가 판정을 막지 않는다
+            logger.warning("goal_supersession_failed milestone=%s: %s", milestone_id, str(exc)[:200])
+            return 0
+        for row in rows:
+            logger.info(
+                "goal_link_superseded: milestone=%s failed=%s replaced_by=%s",
+                milestone_id, row["task_id"], row["replacement"],
+            )
+        return len(rows)
 
 
 goal_state_machine = GoalStateMachine()
