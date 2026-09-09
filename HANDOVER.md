@@ -1,5 +1,31 @@
 # AADS HANDOVER
 
+## 2026-09-09 13:00 KST — Goal Control stale-block recovery
+
+- Root cause: Goal link reconciliation correctly quarantined legacy/missing jobs as
+  `detached`/`orphan`, but a milestone previously set to `blocked` had no lifecycle
+  transition back to an executable state. The AADS goal "채팅 시스템 안정화 및 응답
+  가독성 개선" therefore remained at 0% even after all blocking links were removed.
+- `app/services/goal_manager.py`: added fail-closed stale-block recovery. It never
+  marks work complete; only the earliest open milestone returns to `in_progress`
+  (later milestones return to `pending`). Effective failed links, paused goals, and
+  terminal goals remain blocked/unchanged.
+- `app/services/goal_link_reconciler.py`: blocked milestones are rechecked even when
+  the link quarantine pass is already idempotent and has zero new row actions.
+- `tests/unit/test_goal_link_integrity.py`: added recovery policy and persisted state
+  regression coverage. `tests/unit/test_pipeline_runner_script_guards.py` was aligned
+  with the already-supported `gpt-6-astra` model in the runner allow-list.
+- Validation: Goal/runner focused suite **104 passed**; Python compile, focused Ruff,
+  and `git diff --check` passed. The whole `tests/unit` collection remains blocked by
+  pre-existing environment/package gaps (`aiohttp`, `websockets`, `openpyxl`, PIL,
+  `langgraph`) and a stale `_project_message_fields` test import; no failures reached
+  this change's execution path.
+- Release requirement: commit and push this isolated worktree, deploy only through
+  `deploy.sh bluegreen`, then call `/api/v1/goals/reconcile?project=AADS&dry_run=false`
+  and verify the first milestone becomes `in_progress` without being marked complete.
+  Release is not complete until same-digest standby and five-minute P0/P1 monitoring
+  pass.
+
 ## 2026-09-09 12:10 KST — OHVIS trace-ingest 검수 지적 5건 반영
 
 검수 피드백 ①지시서 미반영(외부 입력 엄격 처리·인증 순서) ②외부 트레이스 ID 충돌

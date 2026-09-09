@@ -69,11 +69,13 @@ async def _load_candidates(conn, project: Optional[str], limit: int) -> list[dic
                j.phase             AS job_phase,
                j.project           AS job_project,
                g.project           AS goal_project,
-               g.status            AS goal_status
+               g.status            AS goal_status,
+               m.status            AS milestone_status
         FROM goal_task_links l
         LEFT JOIN pipeline_jobs j
                ON l.task_type = 'pipeline_job' AND j.job_id = l.task_id
         LEFT JOIN goals g ON g.id = l.goal_id
+        LEFT JOIN milestones m ON m.id = l.milestone_id
         WHERE ($1::text IS NULL OR g.project = $1::text OR j.project = $1::text)
         ORDER BY l.created_at DESC
         LIMIT $2
@@ -203,6 +205,11 @@ async def reconcile(
             "planned": len(writable),
             "bounded_to": len(bounded),
             "repaired": 0,
+            "blocked_milestones_to_recheck": len({
+                row["milestone_id"]
+                for row in candidates
+                if row.get("milestone_id") and row.get("milestone_status") == "blocked"
+            }),
             "actions": bounded[:50],  # 응답 크기 제한 — 전체 건수는 counts 로 본다
         }
         if dry_run:
@@ -212,8 +219,19 @@ async def reconcile(
             return result
 
         repaired = 0
-        touched_milestones: set[str] = set()
-        touched_goals: set[str] = set()
+        # Even an idempotent second pass must re-evaluate milestones that were
+        # blocked by links already quarantined in an earlier pass.  Otherwise
+        # there is no new row action to trigger lifecycle recovery.
+        touched_milestones: set[str] = {
+            row["milestone_id"]
+            for row in candidates
+            if row.get("milestone_id") and row.get("milestone_status") == "blocked"
+        }
+        touched_goals: set[str] = {
+            row["goal_id"]
+            for row in candidates
+            if row.get("goal_id") and row.get("milestone_status") == "blocked"
+        }
         for action in bounded:
             try:
                 if action["kind"] == "stale":

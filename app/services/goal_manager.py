@@ -66,6 +66,27 @@ def superseded_link_predicate(columns: set, alias: str = "") -> str:
         return ""
     return f" AND {prefix}superseded_by IS NULL"
 
+
+def stale_block_recovery_status(
+    *,
+    milestone_status: str,
+    goal_status: str,
+    is_next_open: bool,
+    has_failed_links: bool,
+) -> Optional[str]:
+    """Return the safe state for a milestone whose blocking evidence disappeared.
+
+    A detached/orphaned link must no longer keep a milestone blocked.  Recovery
+    never completes work: the next open milestone becomes ``in_progress`` and a
+    later milestone becomes ``pending``.  Paused/terminal goals and milestones
+    that still have an effective failed link are intentionally left unchanged.
+    """
+    if milestone_status != "blocked" or has_failed_links:
+        return None
+    if goal_status in {"paused", "completed", "cancelled"}:
+        return None
+    return "in_progress" if is_next_open else "pending"
+
 # 목표 진행이 기존 구현 보존 정책을 지키는지 스스로 감사하기 위한 기본 intent
 _GOAL_POLICY_INTENT = "goal_control"
 
@@ -492,7 +513,19 @@ class GoalStateMachine:
                 milestone_id,
             )
             if not links:
-                return {"milestone_id": milestone_id, "completed": False, "reason": "no_linked_tasks"}
+                recovered_status = await self._recover_stale_milestone_block(
+                    conn, milestone_id, has_failed_links=False,
+                )
+                return {
+                    "milestone_id": milestone_id,
+                    "completed": False,
+                    "reason": "no_linked_tasks",
+                    **(
+                        {"status": recovered_status, "block_recovered": True}
+                        if recovered_status
+                        else {}
+                    ),
+                }
 
             all_done = all(
                 link["status"] in _DONE_TASK_STATUSES for link in links
@@ -574,7 +607,91 @@ class GoalStateMachine:
                 if ms:
                     await self._advance_after_milestone(str(ms["goal_id"]), milestone_id)
 
-            return {"milestone_id": milestone_id, "completed": all_done}
+            recovered_status = None
+            if not all_done:
+                recovered_status = await self._recover_stale_milestone_block(
+                    conn,
+                    milestone_id,
+                    has_failed_links=any(
+                        link["status"] in _FAILED_TASK_STATUSES for link in links
+                    ),
+                )
+
+            return {
+                "milestone_id": milestone_id,
+                "completed": all_done,
+                **(
+                    {"status": recovered_status, "block_recovered": True}
+                    if recovered_status
+                    else {}
+                ),
+            }
+
+    async def _recover_stale_milestone_block(
+        self,
+        conn,
+        milestone_id: str,
+        *,
+        has_failed_links: bool,
+    ) -> Optional[str]:
+        """Clear a stale blocked state without claiming that work completed."""
+        row = await conn.fetchrow(
+            """
+            SELECT m.goal_id, m.status AS milestone_status, g.status AS goal_status,
+                   NOT EXISTS (
+                       SELECT 1 FROM milestones earlier
+                       WHERE earlier.goal_id = m.goal_id
+                         AND earlier.sequence_order < m.sequence_order
+                         AND earlier.status <> 'completed'
+                   ) AS is_next_open
+            FROM milestones m
+            JOIN goals g ON g.id = m.goal_id
+            WHERE m.id = $1::uuid
+            """,
+            milestone_id,
+        )
+        if not row:
+            return None
+        target_status = stale_block_recovery_status(
+            milestone_status=row["milestone_status"],
+            goal_status=row["goal_status"],
+            is_next_open=bool(row["is_next_open"]),
+            has_failed_links=has_failed_links,
+        )
+        if not target_status:
+            return None
+
+        await conn.execute(
+            """
+            UPDATE milestones
+            SET status = $2,
+                started_at = CASE WHEN $2 = 'in_progress' THEN COALESCE(started_at, NOW()) ELSE started_at END,
+                updated_at = NOW()
+            WHERE id = $1::uuid AND status = 'blocked'
+            """,
+            milestone_id,
+            target_status,
+        )
+        await conn.execute(
+            """
+            UPDATE goals g
+            SET status = 'active', updated_at = NOW()
+            WHERE g.id = $1::uuid
+              AND g.status = 'blocked'
+              AND NOT EXISTS (
+                  SELECT 1 FROM milestones m
+                  WHERE m.goal_id = g.id AND m.status = 'blocked'
+              )
+            """,
+            row["goal_id"],
+        )
+        logger.info(
+            "goal_stale_block_recovered milestone=%s goal=%s status=%s",
+            milestone_id,
+            row["goal_id"],
+            target_status,
+        )
+        return target_status
 
     async def advance_goal(self, goal_id: str) -> dict[str, Any]:
         """Advance one goal along the goal -> milestone -> task timeline."""

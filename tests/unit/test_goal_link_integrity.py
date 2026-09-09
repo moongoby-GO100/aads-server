@@ -20,6 +20,7 @@ from app.services.goal_binding import (
     parse_goal_binding,
 )
 from app.services.goal_link_reconciler import plan_actions, summarize
+from app.services.goal_manager import GoalStateMachine, stale_block_recovery_status
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -300,6 +301,75 @@ def test_reconciliation_plan_is_idempotent_for_the_repaired_state():
     assert len(first) == 1
     row["link_status"] = first[0]["to_status"]
     assert plan_actions([row]) == []
+
+
+def test_stale_block_recovers_to_in_progress_after_quarantine():
+    assert stale_block_recovery_status(
+        milestone_status="blocked",
+        goal_status="active",
+        is_next_open=True,
+        has_failed_links=False,
+    ) == "in_progress"
+
+
+def test_stale_block_recovers_later_milestone_to_pending():
+    assert stale_block_recovery_status(
+        milestone_status="blocked",
+        goal_status="blocked",
+        is_next_open=False,
+        has_failed_links=False,
+    ) == "pending"
+
+
+@pytest.mark.parametrize("goal_status", ["paused", "completed", "cancelled"])
+def test_stale_block_does_not_reactivate_paused_or_terminal_goal(goal_status):
+    assert stale_block_recovery_status(
+        milestone_status="blocked",
+        goal_status=goal_status,
+        is_next_open=True,
+        has_failed_links=False,
+    ) is None
+
+
+def test_stale_block_remains_when_effective_failure_exists():
+    assert stale_block_recovery_status(
+        milestone_status="blocked",
+        goal_status="active",
+        is_next_open=True,
+        has_failed_links=True,
+    ) is None
+
+
+def test_stale_block_recovery_persists_milestone_and_goal_state():
+    class _RecoveryConn:
+        def __init__(self):
+            self.executed = []
+
+        async def fetchrow(self, query, *args):
+            return {
+                "goal_id": GOAL_A,
+                "milestone_status": "blocked",
+                "goal_status": "blocked",
+                "is_next_open": True,
+            }
+
+        async def execute(self, query, *args):
+            self.executed.append((query, args))
+
+    conn = _RecoveryConn()
+    result = asyncio.run(
+        GoalStateMachine()._recover_stale_milestone_block(
+            conn,
+            MILESTONE_A,
+            has_failed_links=False,
+        )
+    )
+
+    assert result == "in_progress"
+    assert len(conn.executed) == 2
+    assert "UPDATE milestones" in conn.executed[0][0]
+    assert conn.executed[0][1] == (MILESTONE_A, "in_progress")
+    assert "UPDATE goals" in conn.executed[1][0]
 
 
 def test_one_action_per_link_no_duplicate_plans():
