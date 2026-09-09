@@ -853,6 +853,7 @@ start_deploy_heartbeat() {
 }
 
 deploy_signal_trap() {
+    trap '' TERM INT HUP  # RC6: prevent re-entry during signal cleanup
     local signal_name="${1:-TERM}"
     stop_deploy_heartbeat
     stop_downtime_monitor
@@ -861,6 +862,10 @@ deploy_signal_trap() {
         deploy_phase_end "$DEPLOY_CURRENT_PHASE" "success" "post-switch ${signal_name} — deploy already live"
         deploy_observe_update "success" "completed_after_signal_recovery" "deploy interrupted by ${signal_name}; upstream already switched"
         record_deploy "success" "$MODE" "deploy interrupted by ${signal_name} post-switch; certified live"
+    elif [[ "$DEPLOY_CURRENT_PHASE" == "initializing" || "$DEPLOY_CURRENT_PHASE" == "preflight" ]]; then
+        deploy_phase_end "$DEPLOY_CURRENT_PHASE" "cancelled" "pre-build ${signal_name} — no container changes"
+        deploy_observe_update "cancelled" "$DEPLOY_CURRENT_PHASE" "deploy superseded by ${signal_name} in ${DEPLOY_CURRENT_PHASE}"
+        record_deploy "cancelled" "$MODE" "deploy superseded by ${signal_name} in ${DEPLOY_CURRENT_PHASE}"
     else
         deploy_phase_end "$DEPLOY_CURRENT_PHASE" "failed" "deploy interrupted by ${signal_name}"
         deploy_observe_update "failed" "$DEPLOY_CURRENT_PHASE" "deploy interrupted by ${signal_name}"
@@ -932,7 +937,7 @@ report_dirty_release_exclusions() {
 
 enforce_release_worktree_gate() {
     local dirty_count
-    dirty_count="$(git -C "$COMPOSE_DIR" status --porcelain | wc -l | tr -d '[:space:]' || echo 0)"
+    dirty_count="$(git -C "$COMPOSE_DIR" status --porcelain | grep -v -e '\.lock$' -e ' app/data/' | wc -l | tr -d '[:space:]' || echo 0)"
     if [[ "${dirty_count:-0}" == "0" ]]; then
         return 0
     fi
