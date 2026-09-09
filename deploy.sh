@@ -67,6 +67,11 @@ if [[ -n "${SSH_CONNECTION:-}" && -z "${AADS_DEPLOY_DETACHED:-}" ]]; then
 fi
 
 cleanup_release_context() {
+    if [[ "${AADS_DEPLOY_STASHED:-0}" == "1" ]]; then
+        echo "[deploy.sh] restoring auto-stashed worktree changes..."
+        git -C "$COMPOSE_DIR" stash pop 2>/dev/null || echo "[deploy.sh] ⚠️ stash pop failed; changes remain in git stash list"
+        export AADS_DEPLOY_STASHED=0
+    fi
     case "${RELEASE_CONTEXT_DIR:-}" in
         /tmp/aads-server-release.*)
             rm -rf -- "$RELEASE_CONTEXT_DIR"
@@ -971,9 +976,15 @@ enforce_release_worktree_gate() {
         audit_control "release-context" "$COMPOSE_DIR" "override" "dirty archive override count=${dirty_count}; reason=${override_reason}"
         return 0
     fi
-    echo "[deploy.sh] ❌ dirty worktree detected; release blocked before build."
-    echo "[deploy.sh]    Commit/stash/split unrelated files, or explicitly set AADS_DEPLOY_ALLOW_DIRTY_ARCHIVE=true after confirming dirty files must be excluded."
-    audit_control "release-context" "$COMPOSE_DIR" "blocked" "dirty worktree count=${dirty_count}"
+    echo "[deploy.sh] ⚠️ dirty worktree detected (${dirty_count} files); auto-stashing for clean release."
+    if git -C "$COMPOSE_DIR" stash -u -m "deploy-autostash-$(date +%Y%m%d-%H%M%S)" 2>/dev/null; then
+        export AADS_DEPLOY_STASHED=1
+        echo "[deploy.sh] ✅ auto-stash succeeded; will restore after deploy."
+        audit_control "release-context" "$COMPOSE_DIR" "auto-stashed" "dirty worktree count=${dirty_count}"
+        return 0
+    fi
+    echo "[deploy.sh] ❌ auto-stash failed; release blocked."
+    audit_control "release-context" "$COMPOSE_DIR" "blocked" "dirty worktree count=${dirty_count}; stash failed"
     return 1
 }
 
