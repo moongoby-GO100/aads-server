@@ -627,27 +627,32 @@ def test_due_financial_queued_item_blocks_delivery_claim_on_other_agent(tmp_path
     assert claimed["queue_type"] == "bank"
 
 
-def test_sync_db_api_releases_pool_between_asyncio_run_calls(monkeypatch):
-    """Regression: the drain CLI calls several sync queue APIs in a row. Each one
-    uses asyncio.run(), which closes its loop, so a pool cached from the previous
-    call must be released or the next call fails with 'Event loop is closed'."""
+def test_sync_db_api_reuses_private_loop_and_keeps_shared_pool(monkeypatch):
+    """Regression: the drain CLI calls several sync queue APIs in a row.
+    Each call used asyncio.run(), which closed the loop owning the shared asyncpg
+    pool, so the next call failed with 'Event loop is closed'. The sync API now
+    runs on one private loop and must never close the API server's shared pool."""
     monkeypatch.setenv("DATABASE_URL", "postgresql://configured")
 
     import app.core.db_pool as db_pool_module
     import app.services.pc_agent_collection_queue as queue_module
 
-    queue_module = importlib.reload(queue_module)
+    monkeypatch.setattr(queue_module, "_SYNC_LOOP", None)
     events: list[str] = []
 
     async def fake_close_pool():
         events.append("close_pool")
 
     monkeypatch.setattr(db_pool_module, "close_pool", fake_close_pool)
+    loops: list[object] = []
 
     async def fake_operation(tag: str):
+        loops.append(asyncio.get_running_loop())
         events.append(f"op:{tag}")
         return tag
 
     assert queue_module._run_db(fake_operation("first")) == "first"
     assert queue_module._run_db(fake_operation("second")) == "second"
-    assert events == ["op:first", "close_pool", "op:second", "close_pool"]
+    assert events == ["op:first", "op:second"]
+    assert loops[0] is loops[1]
+    assert not loops[0].is_closed()

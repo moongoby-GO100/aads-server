@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -545,24 +546,28 @@ def _run_db(coro: Any) -> Any | None:
             "PostgreSQL queue operation called through synchronous API inside an active event loop; "
             "use the *_async queue API"
         )
+    return _run_on_sync_loop(coro)
 
-    async def _run_and_release_pool() -> Any:
-        # asyncio.run() closes its event loop on exit. The shared asyncpg pool in
-        # app.core.db_pool is bound to the loop that created it, so a pool left
-        # behind by a previous synchronous call fails on the next asyncio.run()
-        # with "Event loop is closed" / "another operation is in progress".
-        # Release the pool inside the same loop so the next call builds a fresh one.
-        try:
-            return await coro
-        finally:
-            try:
-                from app.core.db_pool import close_pool
 
-                await close_pool()
-            except Exception:  # pragma: no cover - best-effort cleanup
-                pass
+_SYNC_LOOP: asyncio.AbstractEventLoop | None = None
+_SYNC_LOOP_LOCK = threading.Lock()
+_SYNC_POOL: Any = None
 
-    return asyncio.run(_run_and_release_pool())
+
+def _run_on_sync_loop(coro: Any) -> Any:
+    """Run a queue coroutine on one persistent private event loop.
+
+    ``asyncio.run()`` closes its loop after every call, but an asyncpg pool stays
+    bound to the loop that created it. Reusing that pool from the next
+    ``asyncio.run()`` raised ``Event loop is closed`` /
+    ``another operation is in progress`` and made every FOOD queue drain exit=1.
+    The private loop is serialized so threadpool callers cannot overlap.
+    """
+    global _SYNC_LOOP
+    with _SYNC_LOOP_LOCK:
+        if _SYNC_LOOP is None or _SYNC_LOOP.is_closed():
+            _SYNC_LOOP = asyncio.new_event_loop()
+        return _SYNC_LOOP.run_until_complete(coro)
 
 
 def enqueue_collection_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -1010,7 +1015,32 @@ async def _snapshot_db(*, limit: int) -> list[dict[str, Any]]:
 async def _ensure_pool() -> Any:
     from app.core.db_pool import get_pool, init_pool
 
+    if _SYNC_LOOP is not None and asyncio.get_running_loop() is _SYNC_LOOP:
+        # Synchronous callers (scripts, threadpool) must never share the API
+        # server pool: it belongs to a different event loop.
+        return await _ensure_sync_pool()
     try:
         return get_pool()
     except RuntimeError:
         return await init_pool()
+
+
+async def _ensure_sync_pool() -> Any:
+    """Small private asyncpg pool owned by the synchronous queue loop."""
+    global _SYNC_POOL
+    if _SYNC_POOL is not None and not getattr(_SYNC_POOL, "_closed", False):
+        return _SYNC_POOL
+    import asyncpg
+    from app.core.db_pool import _db_url
+
+    dsn = _db_url()
+    if not dsn:
+        raise RuntimeError("DATABASE_URL 환경변수가 설정되지 않았습니다")
+    _SYNC_POOL = await asyncpg.create_pool(
+        dsn,
+        min_size=1,
+        max_size=max(1, int(os.getenv("YEOLJEONG_QUEUE_SYNC_POOL_MAX_SIZE", "3") or 3)),
+        timeout=10,
+        command_timeout=30,
+    )
+    return _SYNC_POOL
