@@ -693,7 +693,12 @@ async def check_project_lock(conn, project: str, exclude_job_id: str | None = No
     return (row["cnt"] or 0) >= max_concurrent
 
 
-async def cascade_cleanup_orphans(conn, failed_job_id: str) -> list[str]:
+async def cascade_cleanup_orphans(conn, failed_job_id: str) -> int:
+    """기존 공개 계약대로 정리된 고아 작업 수를 반환한다."""
+    return len(await _cascade_cleanup_orphans_with_ids(conn, failed_job_id))
+
+
+async def _cascade_cleanup_orphans_with_ids(conn, failed_job_id: str) -> list[str]:
     """실패한 작업에 의존하는 모든 queued 작업을 재귀적으로 blocked 처리.
     P1-A: 고아 방지 — 의존 트리 전체를 한 번에 정리.
 
@@ -1109,8 +1114,8 @@ async def submit_job(
     # goal_id/milestone_id 필드 또는 지시서의 GOAL_ID/MILESTONE_ID 메타데이터가 없으면
     # 어떤 목표에도 붙이지 않는다 (이전의 "프로젝트 첫 active 목표" 자동연결 폐기).
     try:
-        from app.services.pipeline_runner_service import _auto_link_job_to_goal
-        linked_goal_id = await _auto_link_job_to_goal(
+        from app.services.pipeline_runner_service import _link_job_to_goal_explicit
+        linked_goal_id = await _link_job_to_goal_explicit(
             job_id, req.project,
             instruction=req.instruction,
             goal_id=req.goal_id or None,
@@ -1455,7 +1460,7 @@ async def notify_completion(job_id: str):
             async with pool.acquire() as conn:
                 # P1-A: 실패 시 재귀 고아 정리 후 승격
                 if status in ("error", "rejected", "rejected_done"):
-                    orphaned_job_ids = await cascade_cleanup_orphans(conn, job_id)
+                    orphaned_job_ids = await _cascade_cleanup_orphans_with_ids(conn, job_id)
                 promoted_job_id = await promote_next_queued(conn, project)
         except Exception as e:
             logger.warning("pipeline_runner.promote_fail", project=project, error=str(e))
@@ -1463,8 +1468,8 @@ async def notify_completion(job_id: str):
         # 이전에는 done 만 반영해서 error/rejected/cancelled 작업의 링크가
         # queued 로 남고 마일스톤이 영원히 미완료로 보였다.
         try:
-            from app.services.pipeline_runner_service import _update_linked_goal_state
-            await _update_linked_goal_state(job_id, status, row["phase"])
+            from app.services.pipeline_runner_service import _update_linked_goal_state_with_phase
+            await _update_linked_goal_state_with_phase(job_id, status, row["phase"])
         except Exception as exc:
             logger.warning("pipeline_runner.goal_state_update_fail", job_id=job_id, error=str(exc))
         # 의존성 때문에 cancelled/blocked_dependency 로 정리된 작업들도 함께 반영.
@@ -2105,10 +2110,10 @@ async def submit_batch(
                     await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
 
                     try:
-                        from app.services.pipeline_runner_service import _auto_link_job_to_goal
+                        from app.services.pipeline_runner_service import _link_job_to_goal_explicit
                         # 배치도 동일 규칙 — 지시서 GOAL_ID/MILESTONE_ID 메타데이터가
                         # 있을 때만 연결하고, 없으면 어떤 목표에도 붙이지 않는다.
-                        await _auto_link_job_to_goal(
+                        await _link_job_to_goal_explicit(
                             job_id, req.project, instruction=item.instruction,
                         )
                     except Exception as exc:

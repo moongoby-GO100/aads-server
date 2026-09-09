@@ -156,14 +156,14 @@ def _run_auto_link(monkeypatch, goal_row, **kwargs):
         async def _pool(self):
             return _FakePool(conn)
 
-        async def link_task(self, **link_kwargs):
+        async def _link_task_with_context(self, **link_kwargs):
             linked.update(link_kwargs)
             return {"link_id": "x"}
 
     import app.services.goal_manager as gm
 
     monkeypatch.setattr(gm, "goal_state_machine", _FakeMachine())
-    result = asyncio.run(prs._auto_link_job_to_goal("runner-test", "AADS", **kwargs))
+    result = asyncio.run(prs._link_job_to_goal_explicit("runner-test", "AADS", **kwargs))
     return result, linked
 
 
@@ -209,7 +209,7 @@ def test_no_explicit_context_never_touches_the_database(monkeypatch):
 
     monkeypatch.setattr(gm, "goal_state_machine", _Exploding())
     assert asyncio.run(
-        prs._auto_link_job_to_goal("runner-x", "AADS", instruction="TITLE: 무관한 작업\n")
+        prs._link_job_to_goal_explicit("runner-x", "AADS", instruction="TITLE: 무관한 작업\n")
     ) is None
 
 
@@ -330,10 +330,27 @@ def test_superseded_failures_are_excluded_from_milestone_evaluation():
 
 def test_unsuperseded_failure_still_blocks_the_milestone():
     source = (ROOT / "app" / "services" / "goal_manager.py").read_text(encoding="utf-8")
-    body = source.split("async def update_task_status", 1)[1].split("\n    async def ", 1)[0]
+    body = source.split("async def update_task_status_with_phase", 1)[1].split(
+        "\n    async def ", 1
+    )[0]
     assert "status = 'blocked'" in body
     # 승계된 경우에만 blocked 를 건너뛴다.
     assert "superseded_by IS NOT NULL" in body
+
+
+def test_existing_goal_and_runner_call_signatures_are_preserved():
+    """기존 호출자가 쓰는 공개/공용 함수 시그니처를 변경하지 않는다."""
+    goal_source = (ROOT / "app" / "services" / "goal_manager.py").read_text(encoding="utf-8")
+    runner_source = (
+        ROOT / "app" / "services" / "pipeline_runner_service.py"
+    ).read_text(encoding="utf-8")
+    api_source = (ROOT / "app" / "api" / "pipeline_runner.py").read_text(encoding="utf-8")
+
+    assert "async def update_task_status(self, task_type: str, task_id: str, status: str)" in goal_source
+    assert "def _normalize_task_status(self, status: str)" in goal_source
+    assert 'async def _update_linked_goal_state(job_id: str, status: str = "done")' in runner_source
+    assert "async def _auto_link_job_to_goal(job_id: str, project: str)" in runner_source
+    assert "async def cascade_cleanup_orphans(conn, failed_job_id: str) -> int" in api_source
 
 
 # ─── 종료 전파 배선 (요구사항 A/E) ─────────────────────────────────────────
@@ -359,7 +376,7 @@ def test_notify_endpoint_propagates_all_terminal_states_not_only_done():
     source = (ROOT / "app" / "api" / "pipeline_runner.py").read_text(encoding="utf-8")
 
     # 회귀 방지: 예전에는 done 일 때만 목표를 갱신했다.
-    assert 'await _update_linked_goal_state(job_id, status, row["phase"])' in source
+    assert 'await _update_linked_goal_state_with_phase(job_id, status, row["phase"])' in source
     assert 'if status == "done":\n            try:\n                from app.services.pipeline_runner_service import _update_linked_goal_state' not in source
     # cascade 로 취소된 의존 작업들도 반영한다.
     assert "for orphan_job_id in orphaned_job_ids:" in source

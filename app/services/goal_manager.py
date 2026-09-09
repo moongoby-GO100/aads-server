@@ -287,6 +287,21 @@ class GoalStateMachine:
         milestone_id: Optional[str],
         task_type: str,
         task_id: str,
+    ) -> dict[str, Any]:
+        """작업 연결 공개 계약을 유지하는 하위호환 래퍼."""
+        return await self._link_task_with_context(
+            goal_id=goal_id,
+            milestone_id=milestone_id,
+            task_type=task_type,
+            task_id=task_id,
+        )
+
+    async def _link_task_with_context(
+        self,
+        goal_id: str,
+        milestone_id: Optional[str],
+        task_type: str,
+        task_id: str,
         bind_source: Optional[str] = None,
         bound_by: Optional[str] = None,
     ) -> dict[str, Any]:
@@ -319,7 +334,7 @@ class GoalStateMachine:
                     task_id,
                 )
                 if job:
-                    current_status = self._normalize_task_status(job["status"], job["phase"])
+                    current_status = self._normalize_task_status_with_phase(job["status"], job["phase"])
 
             columns = await link_optional_columns(conn)
             await conn.execute(
@@ -374,11 +389,15 @@ class GoalStateMachine:
         )
         return {"link_id": link_id, "milestone_id": milestone_id, "status": current_status}
 
-    async def update_task_status(
+    async def update_task_status(self, task_type: str, task_id: str, status: str) -> dict[str, Any]:
+        """작업 상태 갱신 공개 계약을 유지하는 하위호환 래퍼."""
+        return await self.update_task_status_with_phase(task_type, task_id, status)
+
+    async def update_task_status_with_phase(
         self, task_type: str, task_id: str, status: str, phase: Optional[str] = None,
     ) -> dict[str, Any]:
         pool = await self._pool()
-        normalized = self._normalize_task_status(status, phase)
+        normalized = self._normalize_task_status_with_phase(status, phase)
         async with pool.acquire() as conn:
             columns = await link_optional_columns(conn)
             status_sets = ["status = $3"]
@@ -504,7 +523,8 @@ class GoalStateMachine:
                             link["task_id"],
                         )
                         normalized = (
-                            self._normalize_task_status(row["status"], row["phase"]) if row else "pending"
+                            self._normalize_task_status_with_phase(row["status"], row["phase"])
+                            if row else "pending"
                         )
                         if normalized == "completed":
                             await conn.execute(
@@ -891,7 +911,13 @@ class GoalStateMachine:
             await conn.execute(sql, goal_id, *updates.values())
         return {"goal_id": goal_id, "updated": list(updates.keys())}
 
-    def _normalize_task_status(self, status: str, phase: Optional[str] = None) -> str:
+    def _normalize_task_status(self, status: str) -> str:
+        """기존 단일 인자 정규화 계약을 유지한다."""
+        return self._normalize_task_status_with_phase(status)
+
+    def _normalize_task_status_with_phase(
+        self, status: str, phase: Optional[str] = None,
+    ) -> str:
         """pipeline_jobs (status, phase) → 링크 상태.
 
         정규화 규칙은 goal_binding.normalize_job_state 하나만 쓴다. phase 를 함께

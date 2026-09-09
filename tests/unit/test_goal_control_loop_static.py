@@ -29,10 +29,10 @@ def test_pipeline_runner_updates_linked_goals_for_all_terminal_states() -> None:
 
     # Goal Control P0: phase 를 함께 받도록 확장됐다 — terminated/review_failed/
     # blocked_dependency 같은 phase 별칭도 목표 링크로 전파되어야 하기 때문이다.
-    assert 'async def _update_linked_goal_state(' in source
+    assert 'async def _update_linked_goal_state_with_phase(' in source
     assert 'job_id: str, status: str = "done", phase: Optional[str] = None,' in source
     assert "self.status in _TERMINAL_JOB_STATUSES" in source
-    assert 'update_task_status("pipeline_job", job_id, status, phase)' in source
+    assert 'update_task_status_with_phase(' in source
     # DB 에 직접 종료 상태를 쓰는 경로(복구/watchdog/강제취소)도 같은 퍼널을 탄다.
     assert "async def _reconcile_job_goal_links(job_id: str) -> None:" in source
 

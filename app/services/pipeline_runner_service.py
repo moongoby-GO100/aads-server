@@ -138,7 +138,12 @@ _RESTART_CMD: Dict[str, str] = {
     "AADS":  "bash /root/aads/aads-server/deploy.sh bluegreen",  # Blue-Green 무중단 배포
 }
 
-async def _update_linked_goal_state(
+async def _update_linked_goal_state(job_id: str, status: str = "done") -> None:
+    """기존 목표 상태 갱신 호출 계약을 유지하는 하위호환 래퍼."""
+    await _update_linked_goal_state_with_phase(job_id, status)
+
+
+async def _update_linked_goal_state_with_phase(
     job_id: str, status: str = "done", phase: Optional[str] = None,
 ) -> None:
     """Best-effort goal advancement after a linked pipeline job reaches a terminal state.
@@ -150,7 +155,9 @@ async def _update_linked_goal_state(
     try:
         from app.services.goal_manager import goal_state_machine
 
-        await goal_state_machine.update_task_status("pipeline_job", job_id, status, phase)
+        await goal_state_machine.update_task_status_with_phase(
+            "pipeline_job", job_id, status, phase,
+        )
     except Exception as exc:
         logger.warning("goal_completion_check_failed job=%s: %s", job_id, exc)
 
@@ -174,12 +181,17 @@ async def _reconcile_job_goal_links(job_id: str) -> None:
             return
         if not is_terminal_job_state(row["status"], row["phase"]):
             return
-        await _update_linked_goal_state(job_id, row["status"], row["phase"])
+        await _update_linked_goal_state_with_phase(job_id, row["status"], row["phase"])
     except Exception as exc:  # noqa: BLE001 — 재조정 실패는 비치명적
         logger.warning("goal_link_reconcile_failed job=%s: %s", job_id, exc)
 
 
-async def _auto_link_job_to_goal(
+async def _auto_link_job_to_goal(job_id: str, project: str) -> None:
+    """기존 호출 계약을 유지하되, 근거 없는 암묵 연결은 생성하지 않는다."""
+    await _link_job_to_goal_explicit(job_id, project)
+
+
+async def _link_job_to_goal_explicit(
     job_id: str,
     project: str,
     instruction: Optional[str] = None,
@@ -239,7 +251,7 @@ async def _auto_link_job_to_goal(
                     )
                     resolved_milestone = None
 
-        await goal_state_machine.link_task(
+        await goal_state_machine._link_task_with_context(
             goal_id=binding.goal_id,
             milestone_id=resolved_milestone,
             task_type="pipeline_job",
@@ -625,7 +637,7 @@ class PipelineCJob:
 
             # Goal auto-link: 프로젝트 활성 목표의 진행중 마일스톤에 자동 연결
             try:
-                await _auto_link_job_to_goal(
+                await _link_job_to_goal_explicit(
                     self.job_id, self.project, instruction=self.instruction,
                 )
             except Exception:
@@ -2109,7 +2121,9 @@ class PipelineCJob:
                 except Exception:
                     pass
             if self.status in _TERMINAL_JOB_STATUSES:
-                await _update_linked_goal_state(self.job_id, self.status, self.phase)
+                await _update_linked_goal_state_with_phase(
+                    self.job_id, self.status, self.phase,
+                )
         except Exception as e:
             logger.error(f"pipeline_c_save_db_error job={self.job_id}: {e}")
 

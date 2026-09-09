@@ -148,7 +148,7 @@ async def advance_active_goals(project: Optional[str] = Query(None)):
 @router.post("/goals/task-status")
 async def update_task_status(req: TaskStatusRequest):
     from app.services.goal_manager import goal_state_machine
-    return await goal_state_machine.update_task_status(
+    return await goal_state_machine.update_task_status_with_phase(
         task_type=req.task_type,
         task_id=req.task_id,
         status=req.status,
