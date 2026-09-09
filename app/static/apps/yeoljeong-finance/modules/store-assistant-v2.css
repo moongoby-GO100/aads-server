@@ -1,0 +1,78 @@
+/* mockup-v2 additive skin. Existing ids, views, and behavior remain authoritative. */
+:root {
+  --orange-soft: #fff2ea;
+  --green-soft: #eaf8f2;
+  --red-soft: #fff0f0;
+  --blue-soft: #edf4ff;
+  --amber-soft: #fff8e5;
+  font-family: Pretendard, "Noto Sans KR", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+html { overflow-x: hidden; }
+body { overflow-x: hidden; }
+button, input, select, textarea, a.tab, .doc-link { min-height: 44px; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible,
+a:focus-visible, [role="button"]:focus-visible, [tabindex]:focus-visible {
+  outline: 3px solid rgba(55, 120, 212, .32);
+  outline-offset: 2px;
+}
+.panel { border-radius: 12px; box-shadow: var(--shadow); }
+.badge { border-radius: 999px; }
+.table-wrap { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+.table-wrap:focus-visible { outline: 3px solid rgba(55, 120, 212, .32); outline-offset: 2px; }
+
+.v2-livebar {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 7px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, .96);
+  color: var(--muted);
+  font-size: 12px;
+}
+.v2-livebar strong { color: var(--ink); }
+.v2-livebar [data-v2-state="loading"] { color: var(--blue); }
+.v2-livebar [data-v2-state="ready"] { color: var(--green); }
+.v2-livebar [data-v2-state="error"] { color: var(--red); }
+.v2-livebar button { margin-left: auto; min-height: 32px; height: 32px; }
+.v2-empty { padding: 18px; border: 1px dashed var(--line); border-radius: 9px; color: var(--muted); text-align: center; }
+.v2-api-kpi small, .v2-api-kpi strong, .v2-api-kpi span { display: block; }
+.v2-api-kpi strong { margin-top: 12px; font-size: 24px; }
+.v2-api-kpi span { margin-top: 6px; color: var(--muted); font-size: 11px; }
+
+.v2-bottom-nav { display: none; }
+@media (max-width: 760px) {
+  body.v2-enhanced { padding-bottom: 72px; }
+  .app-sidebar { display: none; }
+  .v2-livebar { top: 0; padding-inline: 12px; }
+  .v2-bottom-nav {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 70;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    padding: 5px max(5px, env(safe-area-inset-right)) max(5px, env(safe-area-inset-bottom)) max(5px, env(safe-area-inset-left));
+    border-top: 1px solid var(--line);
+    background: rgba(255, 255, 255, .98);
+    box-shadow: 0 -8px 24px rgba(16, 24, 40, .08);
+  }
+  .v2-bottom-nav button {
+    min-width: 0;
+    min-height: 52px;
+    padding: 4px 2px;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 10px;
+    white-space: normal;
+  }
+  .v2-bottom-nav button.active { color: var(--accent); background: var(--orange-soft); }
+  .kpis { grid-template-columns: 1fr; }
+  .topbar-inner { padding: 10px 12px; }
+  main { padding: 12px 12px 24px; }
+}
