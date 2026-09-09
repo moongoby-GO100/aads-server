@@ -1,25 +1,18 @@
 # AADS HANDOVER
 
-## 2026-09-09 14:53 KST — Queued blue/green active-slot TOCTOU guard
+## 2026-09-09 15:47 KST — OHVIS 논문 포트폴리오 설계·Dataset v1 PRD
 
-- Incident: queued deploy run `262` captured active port `8100` before acquiring
-  the deploy flock. While it waited, another release routed traffic to `8102`
-  and updated the canonical markers. Run `262` then treated live `8102` as its
-  standby target and waited on 9 healthy streams in `target_slot_drain`.
-- Safety action: the stale deploy exited on `TERM` before any candidate rebuild;
-  nginx remained routed to healthy `8102`, and both API containers remained up.
-- `deploy.sh`: after acquiring the deploy flock and installing cleanup handling,
-  re-read `.active_port`, derive the container and health URL, verify the pair
-  against nginx, and re-authorize the marker before creating a deploy generation
-  or selecting a blue/green target. This closes the lock-wait TOCTOU window.
-- `tests/unit/test_active_slot_state_guard.py`: added an ordering and contract
-  regression proving post-lock refresh occurs before generation/target selection.
-- Validation: `bash -n deploy.sh` passed; the active-slot test file passed 7 tests;
-  the deploy/lease focused suite passed 58 tests; `git diff --check` passed.
-- Release requirement: commit and push the isolated clean worktree, wait for the
-  already-running release `263` to finish, then deploy this SHA with
-  `deploy.sh bluegreen`. Certification still requires same-digest standby and a
-  clean five-minute P0/P1 monitoring window.
+- CEO 지시에 따라 `app/static/reports/20260909_ohvis_research_portfolio_design_prd.html`을 신규 작성했다. 대표논문 1편, 세 개 실증 트랙, 후속 논문군, 연구질문·가설·변수·연구방법, `OHVIS Research Dataset v1` PRD, 데이터·라벨·시스템 설계, 연구윤리, 10개 교육 모듈, 12주 로드맵과 완료 기준을 하나의 HTML 정본으로 통합했다.
+- DB 기준선은 문서에 조회 시각과 함께 근거 규모로만 기록했으며, 인과효과·품질 향상률·비용 절감률은 미측정으로 분리했다. 원문 대화·시크릿·개인정보는 익명화·윤리 승인 전 반출하지 않는 P0 게이트를 명시했다.
+- Python `HTMLParser` 구조 감사에서 필수 섹션·내부 앵커·중복 ID를 통과했다. Playwright Chromium으로 데스크톱 1,440×900과 모바일 390×844 전체 페이지를 렌더링했고 양쪽 모두 수평 overflow가 없었다. 상세 펼침과 체크리스트 localStorage 저장도 통과했으며 브라우저 런타임 오류는 없었다.
+- 이 항목은 정적 연구 문서와 핸드오버 기록만 추가한다. API·DB·Docker·nginx는 변경하지 않았고, 커밋·푸시·배포는 수행하지 않았다. 연구 데이터셋 구축, 체계적 문헌고찰, 신규성·투고처 확정, 효과 분석은 후속 승인 작업이다.
+
+## 2026-09-09 14:17 KST — Re:Column·코그콤 외부공개 기업분석 보고서
+
+- CEO 요청에 따라 `app/static/reports/20260909_recolumn_cogcom_company_analysis.html`을 신규 작성했다. 법인 식별, 연혁, 시장 포지셔닝, 제품 7개 영역, 산업별 솔루션, 사업모델, 고객 증거, 강점, 관련 생태계, 경쟁사 5개와 대체재, SWOT, 보안·법무·재무 리스크, 분석가 점수, PoC 기준, 실사 질문, 출처를 포함한다.
+- 회사 홍보 수치와 독립 확인을 혼동하지 않도록 `독립 확인 / 회사 공개 / 미확인` 3단계 근거 등급을 전 문서에 적용했다. 공개 재무·유지율·SLA·보안 인증이 없는 항목은 추정하지 않고 실사 공백으로 표기했다.
+- `docs/reports/20260909_company_research_html_template_guide.md`를 추가해 이후 기업보고서가 같은 조사 순서, 근거 등급, 목차, 반응형·인쇄 디자인, 검증 계약을 재사용하도록 문서화했다.
+- 공개 정적 URL은 `https://fb.newtalk.kr/static/reports/20260909_recolumn_cogcom_company_analysis.html`이다. 이 항목 작성 시점에는 파일 생성만 완료했고, HTML/JS/화면/공개 URL/커밋/푸시는 후속 검증 대상으로 남아 있다. API·DB·Docker·nginx는 변경하지 않았다.
 
 ## 2026-09-09 13:00 KST — Goal Control stale-block recovery
 
@@ -13074,30 +13067,3 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   조치가 필요하다. 유료 호출 비용은 미측정이다.
 - 후속 `origin/main`의 `24292edf`는 FOOD 수집 큐 수정으로 이 Goal 릴리스와
   무관하며, 본 인증 과정에서 재배포하지 않았다.
-# 2026-09-09 Goal Control closed-loop follow-up
-
-- Added an active-slot-only `goal_control_cycle` scheduler that periodically reconciles AADS goal links and advances the existing `GoalStateMachine` without replacing its public APIs.
-- Changed chat execution-resume ownership resolution to trust the shared `.active_container`/`.active_port` state before the container-local `/tmp` marker, preventing a stale former-active slot from claiming recovery leases after cutover.
-- Added static regression coverage for scheduler registration and active-slot ownership precedence.
-
-## 2026-09-09 14:43 KST — 코그콤·Re:Column 공개 기업분석 보고서
-
-- `app/static/reports/20260909_recolumn_cogcom_company_analysis.html`에 코그콤의
-  법인·제품 7개 영역·산업별 적용·사업모델·고객 증거·관련 생태계·경쟁기업·SWOT·
-  보안/법무/재무 실사·30일 PoC·AADS 제휴 가능성을 포함한 외부 공유용 보고서를 추가했다.
-- 회사 공개 수치와 독립 확인 사실, 공개자료로 확인하지 못한 항목을 각각
-  `회사 공개`·`독립 확인`·`미확인`으로 분리했고, 14개 원문 링크와 조사 한계를
-  보고서 안에 기록했다.
-- `docs/reports/20260909_company_research_html_template_guide.md`에 이후 기업조사에
-  재사용할 조사 순서, 근거 등급, 목차, 반응형/인쇄 디자인, 검증·갱신 규칙을 남겼다.
-- 공개 URL은
-  `https://fb.newtalk.kr/static/reports/20260909_recolumn_cogcom_company_analysis.html`이며
-  로그인 없이 HTTP 200으로 열린다. 정적 디렉터리가 운영 서버에 마운트되어 있어 API
-  이미지 빌드·컨테이너 재시작·nginx 전환 없이 반영됐다.
-- HTML 파서, JavaScript 구문, `git diff --check`, 시크릿 패턴 검사를 통과했다.
-  Playwright 실측에서 데스크톱 1,440px와 모바일 390px 모두 제목과 18개 섹션을
-  렌더링했고, 모바일 가로 오버플로를 660px에서 390px로 수정했다.
-- 외부 링크 14개 중 10개는 자동 요청 HTTP 200, 3개 경쟁사 사이트는 봇 차단 HTTP 403,
-  NICE 링크는 접근제한 안내 페이지로 리다이렉트됐다. 403은 보고서 원문 링크 자체를
-  제거하지 않고 사람 브라우저 확인 대상으로 남겼다.
-- 이번 변경은 정적 HTML·문서만 추가하므로 API blue/green 배포는 수행하지 않았다.
