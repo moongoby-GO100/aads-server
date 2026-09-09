@@ -262,9 +262,9 @@ async def upsert_handover_entry(
                         status, priority, source_kind, source_session_id, source_task_id,
                         source_path, metadata, created_by, resolved_at
                     ) VALUES (
-                        $1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $1::uuid, $2, $3, $4, $5, $6, $7, $8::varchar(24), $9, $10,
                         NULLIF($11, '')::uuid, $12, $13, $14::jsonb, $15,
-                        CASE WHEN $8 = 'resolved' THEN NOW() ELSE NULL END
+                        CASE WHEN $8::varchar(24) = 'resolved' THEN NOW() ELSE NULL END
                     )
                     RETURNING *
                     """,
@@ -278,11 +278,11 @@ async def upsert_handover_entry(
                 row = await conn.fetchrow(
                     """
                     UPDATE project_handover_entries SET
-                        entry_type=$4, title=$5, summary=$6, body=$7, status=$8,
+                        entry_type=$4, title=$5, summary=$6, body=$7, status=$8::varchar(24),
                         priority=$9, source_kind=$10, source_session_id=NULLIF($11, '')::uuid,
                         source_task_id=$12, source_path=$13, metadata=$14::jsonb,
                         revision=revision + 1, updated_at=NOW(),
-                        resolved_at=CASE WHEN $8='resolved' THEN COALESCE(resolved_at, NOW()) ELSE NULL END
+                        resolved_at=CASE WHEN $8::varchar(24)='resolved' THEN COALESCE(resolved_at, NOW()) ELSE NULL END
                     WHERE tenant_id=$1::uuid AND project_key=$2 AND entry_key=$3
                     RETURNING *
                     """,

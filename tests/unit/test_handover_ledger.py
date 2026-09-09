@@ -70,6 +70,13 @@ def test_tenant_scope_and_append_only_schema_contract():
     assert "TRUNCATE" not in migration.upper()
 
 
+def test_status_parameter_has_one_explicit_postgres_type():
+    service_source = inspect.getsource(handover_store.upsert_handover_entry)
+
+    assert "status=$8::varchar(24)" in service_source
+    assert "CASE WHEN $8::varchar(24)" in service_source
+
+
 @pytest.mark.asyncio
 async def test_write_rejects_oversized_metadata_before_database_access():
     with pytest.raises(ValueError, match="metadata exceeds"):
