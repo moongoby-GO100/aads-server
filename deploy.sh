@@ -317,7 +317,7 @@ sql_escape() {
 
 deploy_db_exec() {
     local sql="$1"
-    docker exec aads-postgres psql -U aads -d aads -qAtc "$sql" 2>/dev/null || true
+    timeout 10 docker exec aads-postgres psql -U aads -d aads -qAtc "$sql" 2>/dev/null || true
 }
 
 deploy_db_available() {
