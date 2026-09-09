@@ -13175,3 +13175,10 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 대안 설계(미채택, 보존): 전용 `_SYNC_LOOP` + `_ensure_sync_pool` 방식. `git stash@{0}`(deploy-autostash-20260909-224340) 및 `/root/aads/_parked/test_pc_agent_collection_queue_sync_loop.py.20260909-2250`에 보존. 해당 테스트 파일은 구현이 없어 suite를 깨므로 트리에서 제거.
 - 반영: 호스트 커밋 + 컨테이너(aads-server, aads-server-green) `docker cp` 핫패치 후 `--drain-global-queue` 수동 실행 exit=0 확인. 다음 이미지 빌드에 포함 필요.
 - 별도 관찰: PC Agent 62405e70-e98 1006 끊김 알림은 16:02:51 KST 이벤트(uptime 3217.5s)가 22:30:37 KST에 지연 전달된 것. 에이전트는 22:30:40 재연결 후 정상.
+
+## 2026-09-09 22:55 KST — FOOD PC Agent 큐 동기 API 전용 루프 확정 (chat 4ff0cc14, 커밋 804e39af)
+- 1ac024a7의 `close_pool()` 방식은 채택하지 않고 804e39af로 대체했다. 이유: `_run_db`는 API 서버 프로세스의 threadpool(`run_in_threadpool` → `enqueue_collection_item` 등)에서도 호출되며, 그 경로에서 `app.core.db_pool.close_pool()`을 부르면 API 서버 공용 풀이 닫혀 전체 DB 장애가 된다.
+- 확정 설계: `_run_db` → `_run_on_sync_loop`(직렬화된 전용 `_SYNC_LOOP`), `_ensure_pool`은 전용 루프에서 `_ensure_sync_pool`(min 1/max 3, `YEOLJEONG_QUEUE_SYNC_POOL_MAX_SIZE`)을 쓰고 API 서버 풀은 건드리지 않는다.
+- 검증: 격리 worktree(origin/main 기준)에서 `docker run aads-server:0e15f47f7fda` + pytest 4파일 79 passed; 컨테이너에서 `scripts/yeoljeong_auto_collect.py --drain-global-queue --queue-iterations 0` exit=0 (stderr 없음). 회귀 테스트: `tests/unit/test_pc_agent_collection_queue_sync_loop.py`(4건) + `test_sync_db_api_reuses_private_loop_and_keeps_shared_pool`.
+- 은행 자동연동 실측: `yeoljeong_bank_transactions` 0건, 계좌 6건(auto_sync=true, last_synced_at 없음, IBK 중화점 4건 중복). 큐 bank 항목은 `MISSING_CREDENTIALS`(IBK/신한 중화) · `PC_AGENT_LOGIN_REQUIRED`(신한 미아)로 action_required. `yeoljeong_platform_accounts` bank-quick-service 4행 모두 password/account_no/account_password/business_registration_no 미등록 → 코드가 아니라 자격증명 입력이 선행 조건.
+- 남은 작업: 804e39af blue/green 배포 → 3분 드레인 `exit=0` 관측 → 은행 자격증명 등록(`POST /bank-accounts/{id}/credentials`) 후 23:10 KST 스케줄 수집 결과 확인 → IBK 중복 계좌 정리.
