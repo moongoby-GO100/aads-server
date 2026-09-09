@@ -28,12 +28,19 @@ CREATE TABLE IF NOT EXISTS deploy_release_provenance (
     deploy_run_id   BIGINT NOT NULL REFERENCES deploy_runs(id) ON DELETE CASCADE,
     project         TEXT NOT NULL,
     component       TEXT NOT NULL DEFAULT 'api',
+    source_ref      TEXT NOT NULL,
     task_sha        TEXT NOT NULL,
     release_sha     TEXT NOT NULL,
     relationship    TEXT NOT NULL,
     resolved_by     TEXT NOT NULL DEFAULT 'deploy.sh',
     resolved_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- 부분 적용 후 재실행도 안전하게 복구한다. 기존 행은 full task_sha 자체를
+-- source_ref 로 사용한다.
+ALTER TABLE deploy_release_provenance ADD COLUMN IF NOT EXISTS source_ref TEXT;
+UPDATE deploy_release_provenance SET source_ref = task_sha WHERE source_ref IS NULL;
+ALTER TABLE deploy_release_provenance ALTER COLUMN source_ref SET NOT NULL;
 
 DO $$
 BEGIN
@@ -47,6 +54,11 @@ BEGIN
         ALTER TABLE deploy_release_provenance
             ADD CONSTRAINT deploy_release_provenance_task_sha_chk
             CHECK (task_sha ~ '^[0-9a-f]{40}$');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'deploy_release_provenance_source_ref_chk') THEN
+        ALTER TABLE deploy_release_provenance
+            ADD CONSTRAINT deploy_release_provenance_source_ref_chk
+            CHECK (source_ref ~ '^[0-9a-f]{7,40}$');
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'deploy_release_provenance_release_sha_chk') THEN
         ALTER TABLE deploy_release_provenance
@@ -65,10 +77,14 @@ END $$;
 -- ON CONFLICT DO NOTHING 재기록(멱등 재실행)의 충돌 대상이기도 하다.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_deploy_release_provenance_run_task
     ON deploy_release_provenance (deploy_run_id, task_sha);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_deploy_release_provenance_run_source
+    ON deploy_release_provenance (deploy_run_id, project, source_ref);
 
 -- 런타임 조회 경로: "이 커밋이 인증된 릴리스에 들어갔는가?"
 CREATE INDEX IF NOT EXISTS idx_deploy_release_provenance_task
     ON deploy_release_provenance (project, task_sha, deploy_run_id DESC);
+CREATE INDEX IF NOT EXISTS idx_deploy_release_provenance_source
+    ON deploy_release_provenance (project, source_ref, deploy_run_id DESC);
 CREATE INDEX IF NOT EXISTS idx_deploy_release_provenance_release
     ON deploy_release_provenance (project, release_sha);
 
@@ -78,6 +94,8 @@ COMMENT ON COLUMN deploy_release_provenance.relationship IS
     'exact(커밋==릴리스 HEAD) | ancestor(git merge-base --is-ancestor 로 확인)';
 COMMENT ON COLUMN deploy_release_provenance.task_sha IS
     '작업 커밋 40자 full SHA. 기록 시점에 Git 으로 해석하며 접두사는 저장하지 않는다.';
+COMMENT ON COLUMN deploy_release_provenance.source_ref IS
+    '원본 작업 참조. pipeline commit full SHA 또는 기존 release 링크의 7~40자 hex; 호스트 Git에서 task_sha로 유일 해석됨.';
 COMMENT ON COLUMN deploy_release_provenance.release_sha IS
     '릴리스 HEAD 40자 full SHA. deploy_runs.release_sha 는 12자 축약이라 여기서 정규화한다.';
 

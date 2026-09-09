@@ -13,10 +13,10 @@ Git 히스토리가 살아 있는 시점(호스트의 깨끗한 릴리스 워크
 1. **인증 배포 게이트**: deploy_runs.status='success' AND phase='completed' AND
    image_digest/standby_digest 가 둘 다 NULL 이 아니고 서로 같아야 한다.
    (blue/green 두 슬롯이 같은 이미지를 들고 있다 = 릴리스가 실제로 굳었다)
-2. **정확 일치(exact)** 또는 **조상(ancestor)** 계보만 인정한다. 둘 다 기록
+2. **정확 일치(exact)** 또는 **조상(ancestor)** 계보만 인정한다. 실제 커밋은 기록
    시점에 Git 으로 해석된 40자 full SHA 다.
-3. **접두사 금지**: 40자 소문자 hex 가 아니면 증거로 쓰지 않는다(fail closed).
-   12자 축약 SHA(deploy_runs.release_sha 의 대다수)는 여기서 절대 확장하지 않는다.
+3. **런타임 접두사 추측 금지**: 짧은 release 링크는 배포 호스트에서 Git 으로
+   유일하게 해석한 `source_ref -> task_sha` 근거가 DB 에 있을 때만 인정한다.
 4. **완료 판정은 GoalStateMachine 만 한다**. 이 모듈은 링크(goal_task_links)까지만
    만지고, 마일스톤/목표는 check_milestone_completion / _update_goal_progress 를
    통해서만 움직인다. goals/milestones 를 직접 completed 로 쓰지 않는다.
@@ -46,8 +46,9 @@ RELATIONSHIP_EXACT = "exact"
 RELATIONSHIP_ANCESTOR = "ancestor"
 VALID_RELATIONSHIPS = frozenset({RELATIONSHIP_EXACT, RELATIONSHIP_ANCESTOR})
 
-# 40자 소문자 hex 만 통과. 12자 축약/대문자 혼합/공백 포함은 전부 거부한다.
+# 실제 커밋은 40자 SHA, 원장에 이미 저장된 release 링크 참조는 7~40자 hex 다.
 _FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_SOURCE_REF_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 # migration 170 이 적용됐는지 1회만 확인한다(블루/그린 과도기 안전).
 _RELEASE_LINK_COLUMNS = (
@@ -73,6 +74,18 @@ def normalize_full_sha(value: Any) -> Optional[str]:
         return None
     candidate = value.strip().lower()
     return candidate if _FULL_SHA_RE.match(candidate) else None
+
+
+def normalize_source_ref(value: Any) -> Optional[str]:
+    """DB 링크 식별자를 정규화하되 Git 해석은 절대 수행하지 않는다.
+
+    7~39자 참조는 배포 호스트가 저장한 동일 `source_ref` 증거를 조회하는 키일
+    뿐이다. 런타임에서 full SHA 로 확장하거나 prefix 검색하지 않는다.
+    """
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip().lower()
+    return candidate if _SOURCE_REF_RE.match(candidate) else None
 
 
 def is_certified_deploy_row(row: Any) -> bool:
@@ -116,7 +129,7 @@ def build_evidence_index(
     provenance_rows: list[dict[str, Any]],
     deploy_rows: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    """task_sha → 사용 가능한 증거 1건. 인증되지 않은 배포는 여기서 탈락한다.
+    """source_ref → 사용 가능한 증거 1건. 인증되지 않은 배포는 탈락한다.
 
     계보 행 자체는 인증 전에 기록될 수 있으므로(요구사항 3의 "후보 관계"),
     **배포가 인증되기 전에는 절대 쓰이지 않도록** 이 단계에서 걸러낸다.
@@ -124,11 +137,12 @@ def build_evidence_index(
     certified = {
         int(d["id"]): d for d in deploy_rows if is_certified_deploy_row(d)
     }
-    by_sha: dict[str, list[dict[str, Any]]] = {}
+    by_ref: dict[str, list[dict[str, Any]]] = {}
     for row in provenance_rows:
+        source_ref = normalize_source_ref(row.get("source_ref") or row.get("task_sha"))
         task_sha = normalize_full_sha(row.get("task_sha"))
         release_sha = normalize_full_sha(row.get("release_sha"))
-        if not task_sha or not release_sha:
+        if not source_ref or not task_sha or not release_sha:
             # 스키마 CHECK 를 우회해 들어온 값이 있어도 여기서 fail closed.
             continue
         run_id = int(row.get("deploy_run_id") or 0)
@@ -137,15 +151,16 @@ def build_evidence_index(
         relationship = row.get("relationship")
         if relationship == RELATIONSHIP_EXACT and task_sha != release_sha:
             continue  # 위조된 exact — 무시한다
-        by_sha.setdefault(task_sha, []).append({
+        by_ref.setdefault(source_ref, []).append({
+            "source_ref": source_ref,
             "task_sha": task_sha,
             "release_sha": release_sha,
             "relationship": relationship,
             "deploy_run_id": run_id,
         })
     return {
-        sha: best
-        for sha, rows in by_sha.items()
+        source_ref: best
+        for source_ref, rows in by_ref.items()
         if (best := select_best_provenance(rows)) is not None
     }
 
@@ -179,27 +194,30 @@ def plan_release_completions(
             planned.append({**base, "action": "skip", "reason": "job_failed"})
             continue
 
-        # 3) 40자 full SHA 가 아니면 증거를 만들 수 없다 (모호한 접두사 거부).
-        task_sha = normalize_full_sha(link.get("commit_hash"))
-        if not task_sha:
+        # 3) 링크 참조는 hex 형식이어야 한다. 짧은 값은 DB 에 같은 source_ref 로
+        #    저장된 호스트 검증 증거가 있을 때만 다음 단계에서 통과한다.
+        source_ref = normalize_source_ref(link.get("commit_ref") or link.get("commit_hash"))
+        if not source_ref:
             planned.append({
                 **base,
                 "action": "skip",
                 "reason": "unresolvable_task_sha",
-                "raw_commit_hash": (str(link.get("commit_hash"))[:64] if link.get("commit_hash") else None),
+                "raw_commit_hash": (str(link.get("commit_ref") or link.get("commit_hash"))[:64]
+                                    if (link.get("commit_ref") or link.get("commit_hash")) else None),
             })
             continue
 
         # 4) 인증된 배포에 속한 계보가 있어야 한다.
-        found = evidence.get(task_sha)
+        found = evidence.get(source_ref)
         if not found:
-            planned.append({**base, "action": "skip", "reason": "no_certified_release", "task_sha": task_sha})
+            planned.append({**base, "action": "skip", "reason": "no_certified_release", "source_ref": source_ref})
             continue
 
         planned.append({
             **base,
             "action": "complete",
-            "task_sha": task_sha,
+            "source_ref": source_ref,
+            "task_sha": found["task_sha"],
             "release_sha": found["release_sha"],
             "relationship": found["relationship"],
             "deploy_run_id": found["deploy_run_id"],
@@ -236,26 +254,28 @@ async def has_release_schema(conn) -> bool:
 
 
 async def _load_links(conn, project: Optional[str], limit: int) -> list[dict[str, Any]]:
-    """완료로 승격될 수 있는 활성 링크 + 작업 커밋을 읽는다 (읽기 전용)."""
+    """완료로 승격될 수 있는 pipeline/release 링크 참조를 읽는다."""
     rows = await conn.fetch(
         """
         SELECT l.id::text            AS link_id,
                l.goal_id::text       AS goal_id,
                l.milestone_id::text  AS milestone_id,
                l.task_id,
+               l.task_type,
                l.status              AS link_status,
                l.release_deploy_run_id,
-               j.commit_hash,
-               j.status              AS job_status,
+               CASE WHEN l.task_type = 'release' THEN l.task_id ELSE j.commit_hash END AS commit_ref,
+               CASE WHEN l.task_type = 'release' THEN l.status ELSE j.status END AS job_status,
                j.phase               AS job_phase,
                COALESCE(g.project, j.project) AS project
         FROM goal_task_links l
-        JOIN pipeline_jobs j
+        LEFT JOIN pipeline_jobs j
           ON l.task_type = 'pipeline_job' AND j.job_id = l.task_id
         LEFT JOIN goals g ON g.id = l.goal_id
         WHERE COALESCE(l.link_state, 'active') = 'active'
           AND l.superseded_by IS NULL
-          AND j.commit_hash IS NOT NULL
+          AND l.task_type IN ('pipeline_job', 'release')
+          AND (CASE WHEN l.task_type = 'release' THEN l.task_id ELSE j.commit_hash END) IS NOT NULL
           AND ($1::text IS NULL OR g.project = $1::text OR j.project = $1::text)
         ORDER BY l.created_at DESC
         LIMIT $2
@@ -266,22 +286,22 @@ async def _load_links(conn, project: Optional[str], limit: int) -> list[dict[str
     return [dict(r) for r in rows]
 
 
-async def _load_evidence(conn, project: Optional[str], shas: list[str]) -> dict[str, dict[str, Any]]:
+async def _load_evidence(conn, project: Optional[str], refs: list[str]) -> dict[str, dict[str, Any]]:
     """계보 + 그 배포의 인증 컬럼을 읽어 사용 가능한 증거만 남긴다."""
-    if not shas:
+    if not refs:
         return {}
     rows = await conn.fetch(
         """
-        SELECT p.task_sha, p.release_sha, p.relationship, p.deploy_run_id,
+        SELECT p.source_ref, p.task_sha, p.release_sha, p.relationship, p.deploy_run_id,
                d.status, d.phase, d.image_digest, d.standby_digest
         FROM deploy_release_provenance p
         JOIN deploy_runs d ON d.id = p.deploy_run_id
-        WHERE p.task_sha = ANY($1::text[])
+        WHERE p.source_ref = ANY($1::text[])
           AND ($2::text IS NULL OR p.project = $2::text)
         ORDER BY p.deploy_run_id DESC
         LIMIT 5000
         """,
-        shas,
+        refs,
         project,
     )
     records = [dict(r) for r in rows]
@@ -341,16 +361,19 @@ async def reconcile_release_links(
             return result
 
         links = await _load_links(conn, project, limit)
-        shas = sorted({
-            sha for link in links
-            if (sha := normalize_full_sha(link.get("commit_hash")))
+        refs = sorted({
+            ref for link in links
+            if (ref := normalize_source_ref(link.get("commit_ref") or link.get("commit_hash")))
         })
-        evidence = await _load_evidence(conn, project, shas)
+        evidence = await _load_evidence(conn, project, refs)
         planned = plan_release_completions(links, evidence)
         completions = [p for p in planned if p["action"] == "complete"]
 
         result["scanned"] = len(links)
-        result["resolvable_shas"] = len(shas)
+        result["resolvable_refs"] = len(refs)
+        # 기존 API 소비자를 깨뜨리지 않는 호환 별칭. 이제 full SHA뿐 아니라
+        # 호스트에서 검증될 짧은 release ref도 포함한다.
+        result["resolvable_shas"] = len(refs)
         result["evidence_shas"] = len(evidence)
         result["planned"] = len(completions)
         result["counts"] = summarize_plan(planned)

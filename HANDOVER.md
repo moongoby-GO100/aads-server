@@ -1,22 +1,42 @@
 # AADS HANDOVER
 
+## 2026-09-10 00:18 KST — Goal release 링크 실데이터 호환 보강
+
+- 운영 원장 대조에서 채팅 안정화 목표의 활성 링크가 `task_type=release`,
+  `task_id=ade18cad1fd9`(12자)임을 확인했다. 최초 후보는 `pipeline_job`의 40자
+  `commit_hash`만 읽어 이 실제 링크를 영구히 건너뛰는 결함이 있었다.
+- 배포 호스트의 Git이 짧은 hex 참조를 유일한 40자 커밋으로 해석하고,
+  `deploy_release_provenance.source_ref -> task_sha`를 함께 기록하도록 보강했다.
+  런타임 컨테이너는 접두사 검색이나 Git 호출을 하지 않고 동일 `source_ref`의
+  인증된 DB 근거만 사용한다.
+- 배포 훅 후보에 `goal_task_links.task_type='release'`를 포함했고, DB 조회/INSERT
+  오류를 더 이상 성공으로 숨기지 않으며 후보 상한 환경값을 검증한다.
+- `migration 170`은 부분 적용 상태도 멱등 복구하도록 `source_ref` backfill과
+  제약/인덱스를 추가했다. 운영 DB 대상 `BEGIN ... ROLLBACK` 구문 검증을 통과했다.
+- 행동 회귀: Goal/배포 관련 141건 통과. 실제 `ade18cad1fd9`는 호스트에서
+  `ade18cad1fd965675e6e0e35c8950ff3bf5a7ec5`로 해석되고 현재 릴리스 후보의
+  `ancestor`로 SQL에 기록되는 것을 확인했다.
+- 전체 `tests/unit` 수집은 기준선과 동일한 선행 오류 6건
+  (`aiohttp`, `websockets`, `langgraph`, `PIL` 미설치 및 기존 누락 심볼 1건)으로
+  중단됐다. 이번 변경이 추가한 오류는 아니며 대상 회귀 스위트는 전건 통과했다.
+
 ## 2026-09-09 22:56 KST — Goal 릴리스 증거 다리 (runner-4747e595 재작업, P0)
 
 ### 거부 사유와 대응
 | 거부 사유 | 대응 |
 | --- | --- |
 | `.dockerignore` 가 `.git` 을 제외해 컨테이너에 `/app/.git` 이 없다. 런타임 `git rev-parse` / `merge-base` 는 절대 성립하지 않는다 | 런타임 코드에서 Git 호출을 **전부 제거**했다. `app/services/release_evidence.py` 는 `subprocess`/`git` 을 쓰지 않는다. 계보는 Git 이 살아 있는 호스트 배포 경로에서 미리 계산해 DB 에 저장한다 |
-| `deploy_runs.release_sha` 는 대부분 12자 축약이라 모호하다 | `deploy_release_provenance` 가 40자 full SHA 두 개(task/release)만 저장한다. 스키마 CHECK `~ '^[0-9a-f]{40}$'` 로 접두사 저장을 원천 차단하고, 훅은 40자가 아닌 후보를 Git 에 묻지도 않고 거부한다(fail closed) |
+| `deploy_runs.release_sha` 와 실제 release 링크는 12자 축약이라 런타임에서 모호하다 | 배포 호스트가 짧은 hex `source_ref`를 Git으로 유일 해석해 40자 `task_sha`와 함께 저장한다. 런타임은 Git/접두사 검색 없이 동일 `source_ref` DB 근거만 읽는다(fail closed) |
 | 기존 테스트가 소스 문자열만 확인하고 DB 재조정/멱등/자동전진을 행동으로 증명하지 못한다 | `tests/unit/test_goal_release_evidence.py` 57건 — 인메모리 가짜 DB 위에서 재조정을 **실제 실행**해 행 상태 변화로 검증하고, 배포 훅은 **진짜 임시 git 저장소**를 만들어 실행해 검증한다 |
 
 ### 구현
 - **`migrations/170_goal_release_evidence_provenance.sql`** (신규, 멱등)
-  `deploy_release_provenance(deploy_run_id, project, component, task_sha, release_sha, relationship, resolved_by, resolved_at)`.
-  UNIQUE `(deploy_run_id, task_sha)`, CHECK `relationship IN ('exact','ancestor')`,
+  `deploy_release_provenance(deploy_run_id, project, component, source_ref, task_sha, release_sha, relationship, resolved_by, resolved_at)`.
+  UNIQUE `(deploy_run_id, project, source_ref)`, CHECK `relationship IN ('exact','ancestor')`,
   두 SHA 모두 40자 hex 강제, `relationship='exact'` 이면 `task_sha = release_sha` 강제.
   `goal_task_links` 에 `release_deploy_run_id / release_sha / release_relationship / release_verified_at` 추가.
 - **`scripts/record-release-provenance.sh`** (신규, 배포 시점 훅)
-  깨끗한 릴리스 워크트리에서 `HEAD` 를 40자로 해석하고, 후보 커밋을 `exact` / `ancestor`
+  깨끗한 릴리스 워크트리에서 `HEAD` 와 pipeline/release 후보 참조를 40자로 해석하고 `exact` / `ancestor`
   (`git merge-base --is-ancestor`) 로 분류한다. 생성되는 INSERT 는 **인증 게이트를 SQL 안에**
   들고 다닌다 — `EXISTS (deploy_runs: status='success' AND phase='completed' AND
   image_digest IS NOT NULL AND standby_digest IS NOT NULL AND image_digest = standby_digest)`.
@@ -66,7 +86,7 @@
 ### 검증 체크리스트
 - **구현 목표**: 컨테이너에 Git 이 없어도 인증된 릴리스 계보로 목표 마일스톤이 자동 전진한다.
 - **완료 기준**: 신규 행동 테스트 전건 통과 + 전체 스위트 신규 실패 0건.
-- **실패 기준**: 런타임 코드에 git 의존이 남거나, 미인증 배포/축약 SHA 로 링크가 승격되거나,
+- **실패 기준**: 런타임 코드에 git 의존이 남거나, 미인증 배포/호스트 검증 없는 축약 SHA로 링크가 승격되거나,
   두 번째 실행이 0건이 아니거나, `goals`/`milestones` 를 직접 완료로 쓰면 실패.
 
 | 항목 | 결과 |

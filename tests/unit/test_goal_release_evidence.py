@@ -29,6 +29,7 @@ from app.services.release_evidence import (
     build_evidence_index,
     is_certified_deploy_row,
     normalize_full_sha,
+    normalize_source_ref,
     plan_release_completions,
     reconcile_release_links,
     select_best_provenance,
@@ -72,6 +73,12 @@ def test_ambiguous_or_invalid_sha_is_rejected(value):
 def test_full_sha_is_normalized_to_lowercase():
     assert normalize_full_sha("A" * 40) == "a" * 40
     assert normalize_full_sha("  " + "f" * 40 + "\n") == "f" * 40
+
+
+def test_source_ref_accepts_existing_release_link_prefix_without_expanding_it():
+    assert normalize_source_ref(" ADE18CAD1FD9 ") == "ade18cad1fd9"
+    assert normalize_source_ref("abc123") is None
+    assert normalize_source_ref("not-a-sha") is None
 
 
 @pytest.mark.parametrize(
@@ -178,29 +185,34 @@ class _FakeDB:
             for link in self.links:
                 if (link.get("link_state") or "active") != "active" or link.get("superseded_by"):
                     continue
-                job = self._job(link["task_id"])
-                if job is None or not job.get("commit_hash"):
+                is_release = link.get("task_type") == "release"
+                job = self._job(link["task_id"]) if not is_release else None
+                commit_ref = link["task_id"] if is_release else (job or {}).get("commit_hash")
+                if not commit_ref:
                     continue
                 goal = self._goal(link.get("goal_id"))
                 goal_project = goal["project"] if goal else None
-                if project and goal_project != project and job.get("project") != project:
+                job_project = (job or {}).get("project")
+                if project and goal_project != project and job_project != project:
                     continue
                 out.append({
                     "link_id": link["id"], "goal_id": link.get("goal_id"),
                     "milestone_id": link.get("milestone_id"), "task_id": link["task_id"],
+                    "task_type": link.get("task_type"),
                     "link_status": link.get("status"),
                     "release_deploy_run_id": link.get("release_deploy_run_id"),
-                    "commit_hash": job.get("commit_hash"),
-                    "job_status": job.get("status"), "job_phase": job.get("phase"),
-                    "project": goal_project or job.get("project"),
+                    "commit_ref": commit_ref,
+                    "job_status": link.get("status") if is_release else job.get("status"),
+                    "job_phase": None if is_release else job.get("phase"),
+                    "project": goal_project or job_project,
                 })
             return out[:limit]
 
         if "FROM deploy_release_provenance p" in q:
-            shas, project = args
+            refs, project = args
             out = []
             for prov in self.provenance:
-                if prov["task_sha"] not in shas:
+                if (prov.get("source_ref") or prov["task_sha"]) not in refs:
                     continue
                 if project and prov.get("project") != project:
                     continue
@@ -427,7 +439,8 @@ def _seed_release_scenario(fake, *, relationship="ancestor", certified=True, tas
         "id": 42, "project": "AADS", "status": "success" if certified else "failed",
         "phase": "completed", "image_digest": "sha256:abc", "standby_digest": "sha256:abc",
     })
-    fake.provenance.append({"deploy_run_id": 42, "project": "AADS", "task_sha": task_sha,
+    fake.provenance.append({"deploy_run_id": 42, "project": "AADS", "source_ref": task_sha,
+                            "task_sha": task_sha,
                             "release_sha": SHA_RELEASE if relationship == "ancestor" else task_sha,
                             "relationship": relationship})
     return fake
@@ -468,6 +481,21 @@ def test_exact_full_sha_completes_link(db):
     assert result["completed"] == 1
     assert db.links[0]["release_relationship"] == "exact"
     assert db.links[0]["release_sha"] == SHA_RELEASE
+
+
+def test_short_release_link_completes_only_with_host_resolved_source_ref(db):
+    short_ref = SHA_TASK_ANCESTOR[:12]
+    _seed_release_scenario(db, relationship="ancestor")
+    db.jobs.clear()
+    db.links[0].update({"task_type": "release", "task_id": short_ref, "status": "pending"})
+    db.provenance[0]["source_ref"] = short_ref
+
+    result = asyncio.run(reconcile_release_links("AADS", dry_run=False))
+
+    assert result["completed"] == 1
+    assert db.links[0]["status"] == "completed"
+    assert db.links[0]["release_sha"] == SHA_RELEASE
+    assert result["resolvable_refs"] == 1
 
 
 def test_second_pass_is_idempotent(db):
@@ -522,15 +550,15 @@ def test_uncertified_deploy_never_produces_evidence(db, mutation):
     assert db._milestone(MS1)["status"] == "in_progress"
 
 
-@pytest.mark.parametrize("bad_sha", ["0e15f47f1234", "0e15f47f", "z" * 40, "a" * 39])
+@pytest.mark.parametrize("bad_sha", ["0e15f", "z" * 40, "a" * 41])
 def test_ambiguous_commit_hash_is_never_matched(db, bad_sha):
-    """축약/불량 커밋 해시는 계보가 있어도 완료로 승격되지 않는다."""
+    """허용 범위 밖 참조는 계보가 있어도 완료로 승격되지 않는다."""
     _seed_release_scenario(db, task_sha=bad_sha)
 
     result = asyncio.run(reconcile_release_links("AADS", dry_run=False))
 
     assert result["completed"] == 0
-    assert result["resolvable_shas"] == 0
+    assert result["resolvable_refs"] == 0
     assert result["counts"].get("skip:unresolvable_task_sha") == 1
     assert db.links[0]["status"] == "running"
 
@@ -708,21 +736,22 @@ def test_hook_classifies_exact_and_ancestor_and_rejects_the_rest(release_repo, t
     assert proc.returncode == 0, proc.stderr
     sql = proc.stdout
 
-    # 릴리스 HEAD 자신 = exact, 조상 = ancestor, 둘 다 40자 full SHA 로 기록된다.
-    assert f"'{r['head']}', '{r['head']}', 'exact'" in sql
-    assert f"'{r['ancestor']}', '{r['head']}', 'ancestor'" in sql
+    # 릴리스 HEAD 자신 = exact, 조상 = ancestor. 짧은 source_ref도 호스트에서
+    # 유일한 full SHA로 해석되어 둘을 함께 기록한다.
+    assert f"'{r['head']}', '{r['head']}', '{r['head']}', 'exact'" in sql
+    assert f"'{r['ancestor']}', '{r['ancestor']}', '{r['head']}', 'ancestor'" in sql
+    assert f"'{r['head'][:12]}', '{r['head']}', '{r['head']}', 'exact'" in sql
 
-    # 릴리스에 없는 커밋 / 축약 접두사 / 문법 오류 / 존재하지 않는 객체는 전부 제외.
+    # 릴리스에 없는 커밋 / 문법 오류 / 존재하지 않는 객체는 제외.
     assert r["unrelated"] not in sql
     assert "not-a-sha" not in sql
     assert "f" * 40 not in sql
-    assert r["head"][:12] not in sql.replace(r["head"], "")
+    assert r["head"][:12] in sql
 
-    # 축약 접두사 + 문법 오류 문자열 = 2건이 40자 검사에서 걸러진다.
-    assert "rejected_ambiguous=2" in proc.stderr
+    assert "rejected_ambiguous=1" in proc.stderr
     assert "rejected_unknown=1" in proc.stderr
     assert "rejected_not_contained=1" in proc.stderr
-    assert "exact=1" in proc.stderr and "ancestor=1" in proc.stderr
+    assert "exact=2" in proc.stderr and "ancestor=1" in proc.stderr
 
 
 def test_hook_sql_carries_the_certified_deploy_gate_and_is_idempotent(release_repo, tmp_path):
@@ -734,7 +763,7 @@ def test_hook_sql_carries_the_certified_deploy_gate_and_is_idempotent(release_re
     assert "d.phase = 'completed'" in sql
     assert "d.image_digest = d.standby_digest" in sql
     assert "d.image_digest IS NOT NULL" in sql and "d.standby_digest IS NOT NULL" in sql
-    assert "ON CONFLICT (deploy_run_id, task_sha) DO NOTHING" in sql
+    assert "ON CONFLICT (deploy_run_id, project, source_ref) DO NOTHING" in sql
     # 인증 조건은 EXISTS 가드로 INSERT 안에 있다 — 인증 전 실행해도 0행이다.
     assert sql.index("WHERE EXISTS") < sql.index("ON CONFLICT")
 

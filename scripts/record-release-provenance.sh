@@ -10,7 +10,8 @@
 #
 # 안전 규칙
 # ---------
-# * 접두사 금지: 40자 소문자 hex 가 아닌 후보는 Git 에 묻지도 않고 거부한다(fail closed).
+# * 짧은 참조는 7~39자 hex 만 허용하고 호스트 Git 에서 유일하게 해석될 때만
+#   source_ref -> 40자 task_sha 로 기록한다. 런타임은 접두사를 해석하지 않는다.
 # * 릴리스 HEAD 도 40자로 해석되지 않으면 아무 것도 기록하지 않고 종료한다.
 # * 기록되는 INSERT 는 항상 deploy_runs 인증 조건(EXISTS 가드)을 SQL 안에 포함한다.
 #   따라서 인증 전에 이 스크립트가 (실수로) 돌더라도 행이 생기지 않는다 —
@@ -51,6 +52,8 @@ log() { echo "[provenance] $*" >&2; }
 [[ -n "$REPO" ]] || { log "FAIL: --repo is required"; exit 64; }
 [[ -d "$REPO/.git" || -f "$REPO/.git" ]] || { log "SKIP: ${REPO} is not a git worktree"; exit 3; }
 [[ "$DEPLOY_RUN_ID" =~ ^[0-9]+$ ]] || { log "SKIP: --deploy-run-id must be numeric (got '${DEPLOY_RUN_ID}')"; exit 3; }
+[[ "$MAX_CANDIDATES" =~ ^[1-9][0-9]*$ ]] || { log "FAIL: AADS_PROVENANCE_MAX_CANDIDATES must be a positive integer"; exit 64; }
+(( MAX_CANDIDATES <= 5000 )) || { log "FAIL: AADS_PROVENANCE_MAX_CANDIDATES exceeds 5000"; exit 64; }
 
 sql_lit() { printf "'%s'" "${1//\'/\'\'}"; }
 
@@ -63,7 +66,7 @@ fi
 log "release_sha=${RELEASE_SHA_FULL} deploy_run_id=${DEPLOY_RUN_ID} project=${PROJECT}"
 
 db_exec() {
-    timeout 20 docker exec aads-postgres psql -U aads -d aads -qAtc "$1" 2>/dev/null || true
+    timeout 20 docker exec aads-postgres psql -v ON_ERROR_STOP=1 -U aads -d aads -qAtc "$1"
 }
 
 # ── 후보 커밋 수집 ──────────────────────────────────────────────────────────
@@ -74,18 +77,31 @@ if [[ -n "$CANDIDATES_FILE" ]]; then
     [[ -r "$CANDIDATES_FILE" ]] || { log "FAIL: cannot read ${CANDIDATES_FILE}"; exit 64; }
     CANDIDATES="$(cat "$CANDIDATES_FILE")"
 else
-    CANDIDATES="$(db_exec "
-        SELECT DISTINCT j.commit_hash
-        FROM pipeline_jobs j
-        WHERE j.project = $(sql_lit "$PROJECT")
-          AND j.commit_hash IS NOT NULL
+    if ! CANDIDATES="$(db_exec "
+        SELECT DISTINCT candidate_ref
+        FROM (
+            SELECT j.commit_hash AS candidate_ref
+            FROM pipeline_jobs j
+            WHERE j.project = $(sql_lit "$PROJECT") AND j.commit_hash IS NOT NULL
+            UNION
+            SELECT l.task_id AS candidate_ref
+            FROM goal_task_links l
+            JOIN goals g ON g.id = l.goal_id
+            WHERE g.project = $(sql_lit "$PROJECT") AND l.task_type = 'release'
+        ) candidates
+        WHERE candidate_ref IS NOT NULL
           AND NOT EXISTS (
               SELECT 1 FROM deploy_release_provenance p
-              WHERE p.deploy_run_id = ${DEPLOY_RUN_ID} AND p.task_sha = j.commit_hash
+              WHERE p.deploy_run_id = ${DEPLOY_RUN_ID}
+                AND p.project = $(sql_lit "$PROJECT")
+                AND p.source_ref = candidates.candidate_ref
           )
         ORDER BY 1
         LIMIT ${MAX_CANDIDATES};
-    ")"
+    ")"; then
+        log "FAIL: could not load release provenance candidates"
+        exit 5
+    fi
 fi
 
 # ── 계보 판정 ───────────────────────────────────────────────────────────────
@@ -93,15 +109,16 @@ n_exact=0; n_ancestor=0; n_ambiguous=0; n_unknown=0; n_not_contained=0
 VALUES=""
 
 while IFS= read -r raw; do
-    sha="$(printf '%s' "$raw" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
-    [[ -n "$sha" ]] || continue
+    source_ref="$(printf '%s' "$raw" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+    [[ -n "$source_ref" ]] || continue
 
-    # 모호한 접두사는 Git 에 물어보지도 않는다 — 확장 결과를 저장하면 감사 불가.
-    if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+    if [[ ! "$source_ref" =~ ^[0-9a-f]{7,40}$ ]]; then
         n_ambiguous=$((n_ambiguous + 1))
         continue
     fi
-    if ! git -C "$REPO" cat-file -e "${sha}^{commit}" 2>/dev/null; then
+    # rev-parse --verify 는 존재하지 않거나 모호한 접두사를 모두 거부한다.
+    sha="$(git -C "$REPO" rev-parse --verify --quiet "${source_ref}^{commit}" 2>/dev/null || true)"
+    if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
         n_unknown=$((n_unknown + 1))
         continue
     fi
@@ -117,7 +134,7 @@ while IFS= read -r raw; do
         continue
     fi
 
-    VALUES+="${VALUES:+,}(${DEPLOY_RUN_ID}, $(sql_lit "$PROJECT"), $(sql_lit "$COMPONENT"), $(sql_lit "$sha"), $(sql_lit "$RELEASE_SHA_FULL"), $(sql_lit "$relationship"), 'deploy.sh')"
+    VALUES+="${VALUES:+,}(${DEPLOY_RUN_ID}, $(sql_lit "$PROJECT"), $(sql_lit "$COMPONENT"), $(sql_lit "$source_ref"), $(sql_lit "$sha"), $(sql_lit "$RELEASE_SHA_FULL"), $(sql_lit "$relationship"), 'deploy.sh')"
 done <<< "$CANDIDATES"
 
 log "resolved exact=${n_exact} ancestor=${n_ancestor} rejected_ambiguous=${n_ambiguous} rejected_unknown=${n_unknown} rejected_not_contained=${n_not_contained}"
@@ -130,9 +147,9 @@ fi
 # INSERT 는 항상 인증 게이트를 자기 안에 들고 다닌다.
 # deploy_runs 가 success/completed 이고 두 슬롯 다이제스트가 같지 않으면 0행이 들어간다.
 SQL="INSERT INTO deploy_release_provenance
-        (deploy_run_id, project, component, task_sha, release_sha, relationship, resolved_by)
-SELECT v.deploy_run_id, v.project, v.component, v.task_sha, v.release_sha, v.relationship, v.resolved_by
-FROM (VALUES ${VALUES}) AS v(deploy_run_id, project, component, task_sha, release_sha, relationship, resolved_by)
+        (deploy_run_id, project, component, source_ref, task_sha, release_sha, relationship, resolved_by)
+SELECT v.deploy_run_id, v.project, v.component, v.source_ref, v.task_sha, v.release_sha, v.relationship, v.resolved_by
+FROM (VALUES ${VALUES}) AS v(deploy_run_id, project, component, source_ref, task_sha, release_sha, relationship, resolved_by)
 WHERE EXISTS (
     SELECT 1 FROM deploy_runs d
     WHERE d.id = ${DEPLOY_RUN_ID}
@@ -142,14 +159,17 @@ WHERE EXISTS (
       AND d.standby_digest IS NOT NULL
       AND d.image_digest = d.standby_digest
 )
-ON CONFLICT (deploy_run_id, task_sha) DO NOTHING;"
+ON CONFLICT (deploy_run_id, project, source_ref) DO NOTHING;"
 
 if [[ "$EMIT_SQL_ONLY" == "true" ]]; then
     printf '%s\n' "$SQL"
     exit 0
 fi
 
-INSERTED="$(db_exec "WITH ins AS (${SQL%;} RETURNING 1) SELECT count(*) FROM ins;")"
+if ! INSERTED="$(db_exec "WITH ins AS (${SQL%;} RETURNING 1) SELECT count(*) FROM ins;")"; then
+    log "FAIL: could not persist release provenance"
+    exit 5
+fi
 log "recorded rows=${INSERTED:-0}"
 if [[ "${INSERTED:-0}" == "0" ]]; then
     log "NOTE: 0 rows — deploy_run ${DEPLOY_RUN_ID} is not certified yet, or all rows already existed"

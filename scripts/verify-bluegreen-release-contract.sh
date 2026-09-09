@@ -57,10 +57,12 @@ monitor_line="$(grep -n 'deploy_phase_end "p0p1_monitoring" "success"' "$deploy_
     || fail "release provenance must be recorded after the P0/P1 monitoring gate"
 grep -q "d.image_digest = d.standby_digest" "$provenance_hook" \
     || fail "provenance INSERT must carry the certified-deploy digest gate"
-grep -q "ON CONFLICT (deploy_run_id, task_sha) DO NOTHING" "$provenance_hook" \
+grep -q "ON CONFLICT (deploy_run_id, project, source_ref) DO NOTHING" "$provenance_hook" \
     || fail "provenance INSERT must be idempotent"
 grep -q '\^\[0-9a-f\]{40}\$' "$provenance_hook" \
-    || fail "provenance must reject anything that is not a full 40-char SHA"
+    || fail "provenance must persist resolved commits only as full 40-char SHA"
+grep -q '\^\[0-9a-f\]{7,40}\$' "$provenance_hook" \
+    || fail "provenance source refs must be bounded hex identifiers"
 grep -qx '\.git' "${root_dir}/.dockerignore" \
     || fail ".dockerignore must keep excluding .git — runtime git provenance is not a supported path"
 api_sections="$(
