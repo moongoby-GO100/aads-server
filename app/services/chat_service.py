@@ -5178,6 +5178,7 @@ def _begin_streaming_turn_state(session_id: str) -> Dict[str, Any]:
         "client_gone": False,
         "client_gone_since": None,
         "completed": False,
+        "workspace": "",
     }
     state = _streaming_state.get(session_id)
     if isinstance(state, dict):
@@ -6789,6 +6790,7 @@ async def _resume_single_stream(
         "execution_id": execution_id,
         "owner_epoch": owner_epoch,
         "last_event_id": None,
+        "workspace": workspace_name,
     }
     if _resume_task is not None:
         _active_bg_tasks[session_id] = _resume_task
@@ -7574,7 +7576,9 @@ def get_streaming_status(session_id: str, acked_completion_token: Optional[str] 
         # STUCK 방지: 도구활동 기반 max age + idle 120s 이상일 때만 만료
         if not is_completed:
             _started = s.get("started_at", 0)
-            _max_age = 1800 if s.get("tool_count", 0) > 0 else 600
+            _ws = s.get("workspace", "")
+            _proj = _ws.split("]")[0].lstrip("[") if "]" in _ws else ""
+            _max_age = _HARD_AGE_PER_PROJECT.get(_proj, 1800) if s.get("tool_count", 0) > 0 else 600
             _last_evt = s.get("last_event_at", _started)
             _idle = (_bg_time.monotonic() - _last_evt) if _last_evt else (_bg_time.monotonic() - _started) if _started else 0
             _task = _active_bg_tasks.get(session_id)

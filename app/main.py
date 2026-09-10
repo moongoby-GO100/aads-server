@@ -61,6 +61,7 @@ from app.api.llm_models import router as llm_models_router
 from app.api.llm_report import router as llm_report_router
 from app.api.user_api_keys import router as user_api_keys_router
 from app.api.user_project_servers import router as user_project_servers_router
+from app.api.directive_drafts import router as directive_drafts_router
 from app.api.braming import router as braming_router
 from app.api.project_docs import router as project_docs_router
 from app.api.files import router as files_router
@@ -3439,6 +3440,7 @@ app.include_router(strategy_router, prefix="/api/v1", tags=["strategy"])
 app.include_router(plans_router, prefix="/api/v1", tags=["plans"])
 app.include_router(debate_logs_router, prefix="/api/v1", tags=["debate-logs"])
 app.include_router(artifacts_router, prefix="/api/v1", tags=["artifacts"])
+app.include_router(directive_drafts_router, prefix="/api/v1", tags=["directive-drafts"])
 app.include_router(handovers_router, prefix="/api/v1", tags=["handovers"])
 app.include_router(briefing_router, prefix="/api/v1", tags=["briefing"])
 app.include_router(governance_router, prefix="/api/v1", tags=["governance"])

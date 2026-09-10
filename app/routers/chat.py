@@ -3326,6 +3326,31 @@ async def update_artifact(
     context: TenantContext = Depends(require_tenant_member),
 ):
     """아티팩트 수정."""
+    current = await svc.get_artifact(str(artifact_id), tenant_id=_tenant_id(context))
+    if not current:
+        raise _NOT_FOUND("artifact")
+    metadata = current.get("metadata") or {}
+    if metadata.get("subtype") == "directive_draft" and metadata.get("draft_id"):
+        from app.services.directive_draft_service import (
+            DraftConflictError,
+            DraftNotFoundError,
+            update_draft_from_artifact,
+        )
+
+        try:
+            return await update_draft_from_artifact(
+                tenant_id=_tenant_id(context),
+                user_id=_user_id(context),
+                artifact=current,
+                title=req.title,
+                content=req.content,
+            )
+        except DraftNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DraftConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     result = await svc.update_artifact(str(artifact_id), req.model_dump(exclude_none=True), tenant_id=_tenant_id(context))
     if not result:
         raise _NOT_FOUND("artifact")

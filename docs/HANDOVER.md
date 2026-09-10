@@ -1,5 +1,8 @@
 # AADS HANDOVER
-최종 업데이트: 2026-09-09
+최종 업데이트: 2026-09-10
+
+## 2026-09-10
+- AADS-OHVIS-DIRECTIVE-COPILOT-MVP-20260910: 15:30 KST 기준 CEO 지시(`PRD 작성 저장하고 즉시 구현 진행`)에 따라 `docs/plans/20260910_OHVIS_DIRECTIVE_COPILOT_PRD.md`를 정본 PRD로 저장하고 확인형 지시 코파일럿 MVP를 구현했다. 최근 세션 문답 2~16개와 workspace `project_key`를 테넌트 범위로 읽어 지시서 v2.0 초안을 생성하며, LLM 출력이 형식 검증에 실패하면 실제 사용자 요청을 근거로 결정론적 초안을 생성한다. `migrations/172_directive_draft_copilot.sql`은 초안 정본·immutable revisions·created/edited/inserted/approved/rejected/sent 이벤트를 additive 테이블로 보존한다. `app/api/directive_drafts.py`, `app/services/directive_draft_service.py`, `app/main.py`, `app/routers/chat.py`에 생성/목록/수정/event API와 아티팩트 편집 revision 동기화를 추가했다. Dashboard 입력창 액션에 `지시초안`을 추가하고 생성 즉시 보고서 아티팩트를 열며, `입력창에 넣기`는 기존 입력 교체 확인 후 자동 전송 없이 반영한다. 검증: 신규 단위 테스트 4 passed, 관련 tenant 회귀 21 passed/기존 memory-context 결함 1 failed, backend py_compile/diff-check 통과, dashboard ESLint 0 errors(기존 warning), `tsc --noEmit` 통과, production build 76 routes 성공. 운영 DB migration 적용, push, blue/green 배포, 로그인 E2E/화면 캡처는 미수행 상태다.
 
 ## 2026-09-09
 - AADS-GLOBAL-HANDOVER-AUTO-CHECKPOINT-P1-20260909: 전 프로젝트·전 세션의 정상 최종 AI 응답을 AADS 중앙 핸드오버 원장에 자동 저장하도록 `migrations/168_global_handover_session_auto_checkpoint.sql`을 추가했다. `tenant_id + project_key + session_id` 기준 현재 체크포인트 1건과 append-only 리비전 이력을 유지하며, 스트리밍 placeholder·중단 partial은 제외한다. 기존 응답 보유 세션은 최신 정상 응답으로 1회 멱등 백필한다. 원본 채팅과 기존 Markdown은 수정하지 않는다. 대시보드 `/handovers`에서 프로젝트·상태·유형·검색·리비전·원본 세션 이동을 제공한다.

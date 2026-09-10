@@ -418,6 +418,7 @@ async def _enqueue_db(item: dict[str, Any]) -> dict[str, Any]:
     pool = await _ensure_pool()
 
     tenant_uuid = uuid.UUID(item["tenant_id"]) if item.get("tenant_id") else None
+    next_run_at = _parse_dt(item.get("next_run_at")) or _now()
     async with pool.acquire() as conn:
         async with conn.transaction():
             if item["latest_only"]:
@@ -504,7 +505,7 @@ async def _enqueue_db(item: dict[str, Any]) -> dict[str, Any]:
                 item["priority"],
                 item["min_interval_seconds"],
                 item["latest_only"],
-                item["next_run_at"],
+                next_run_at,
                 json.dumps(item["payload"], ensure_ascii=False),
                 item["max_attempts"],
                 item["created_by"],
