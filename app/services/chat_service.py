@@ -3210,7 +3210,7 @@ async def cleanup_stale_streaming_placeholders(
                 SET status = 'interrupted',
                     interrupt_category = 'watchdog_timeout',
                     completed_at = COALESCE(completed_at, NOW()),
-                    error_message = f'force_interrupted_hard_age_{_HARD_AGE_MAX_SECONDS}s',
+                    error_message = $2,
                     owner_instance = NULL,
                     lease_expires_at = NULL,
                     updated_at = NOW()
@@ -3218,6 +3218,7 @@ async def cleanup_stale_streaming_placeholders(
                   AND status IN ('running', 'retrying')
                 """,
                 _haa["id"],
+                f"force_interrupted_hard_age_{_HARD_AGE_MAX_SECONDS}s",
             )
             await conn.execute(
                 """
