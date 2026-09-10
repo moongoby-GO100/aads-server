@@ -3049,6 +3049,13 @@ async def cleanup_stale_streaming_placeholders(
               AND m.is_hidden = TRUE
               AND LENGTH(COALESCE(m.content, '')) > 200
               AND m.created_at < NOW() - INTERVAL '60 seconds'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM chat_turn_executions te_live
+                  WHERE te_live.id = m.execution_id
+                    AND te_live.status IN ('running', 'retrying')
+                    AND te_live.completed_at IS NULL
+              )
             """
         )
         _stale_content_promoted = 0

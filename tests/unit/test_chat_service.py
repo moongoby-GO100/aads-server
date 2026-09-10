@@ -837,6 +837,70 @@ async def test_cleanup_stale_streaming_placeholders_skips_live_session():
 
 
 @pytest.mark.asyncio
+async def test_stale_content_safety_net_excludes_live_database_executions():
+    conn = AsyncMock()
+    stale_content_query = None
+
+    async def fetch_rows(sql, *args):
+        nonlocal stale_content_query
+        if "m.created_at < NOW() - INTERVAL '60 seconds'" in sql:
+            stale_content_query = sql
+        return []
+
+    conn.fetch = AsyncMock(side_effect=fetch_rows)
+    conn.fetchval = AsyncMock(return_value=0)
+    conn.execute = AsyncMock(return_value="UPDATE 0")
+
+    with (
+        patch("app.services.chat_service._is_local_active_api_slot", return_value=True),
+        patch("app.services.chat_service.get_pool", return_value=_Pool(conn)),
+    ):
+        await chat_service.cleanup_stale_streaming_placeholders(timeout_sec=600)
+
+    assert stale_content_query is not None
+    normalized = " ".join(stale_content_query.split())
+    assert "NOT EXISTS" in normalized
+    assert "te_live.status IN ('running', 'retrying')" in normalized
+    assert "te_live.completed_at IS NULL" in normalized
+
+
+@pytest.mark.asyncio
+async def test_hard_age_cleanup_uses_parameterized_error_message():
+    execution_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    conn = AsyncMock()
+
+    async def fetch_rows(sql, *args):
+        if "te.created_at < NOW() - ($1::int * INTERVAL '1 second')" in sql:
+            return [{"id": execution_id, "session_id": session_id}]
+        return []
+
+    conn.fetch = AsyncMock(side_effect=fetch_rows)
+    conn.fetchval = AsyncMock(return_value=0)
+    conn.execute = AsyncMock(return_value="UPDATE 1")
+
+    with (
+        patch("app.services.chat_service._is_local_active_api_slot", return_value=True),
+        patch("app.services.chat_service.get_pool", return_value=_Pool(conn)),
+    ):
+        await chat_service.cleanup_stale_streaming_placeholders(timeout_sec=600)
+
+    hard_age_calls = [
+        call
+        for call in conn.execute.await_args_list
+        if "interrupt_category = 'watchdog_timeout'" in call.args[0]
+        and "error_message" in call.args[0]
+        and len(call.args) == 3
+    ]
+    assert len(hard_age_calls) == 1
+    hard_age_sql, hard_age_execution_id, hard_age_reason = hard_age_calls[0].args
+    assert "error_message = $2" in hard_age_sql
+    assert "error_message = f'" not in hard_age_sql
+    assert hard_age_execution_id == execution_id
+    assert hard_age_reason == f"force_interrupted_hard_age_{chat_service._HARD_AGE_MAX_SECONDS}s"
+
+
+@pytest.mark.asyncio
 async def test_cleanup_overlong_running_executions_closes_live_task():
     session_id = str(uuid.uuid4())
     execution_id = str(uuid.uuid4())
