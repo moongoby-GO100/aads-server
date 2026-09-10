@@ -365,6 +365,10 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "COALESCE(request_source, 'deploy.sh_lock_busy')" in script
     assert "reconcile_inactive_target_recovery_executions \"$old_container\"" in script
     assert "DEPLOY_PHASE_METADATA_JSON" in script
+    assert "metadata_expr=\"'{}'::jsonb\"" in script
+    assert "git -C \"$COMPOSE_DIR\" stash" not in script
+    assert "clean isolated worktree required" in script
+    assert "END {print count+0}" in script
     assert "queued_for_deploy" in script
     assert "queue_pending_deploy_request" in script
     assert "start_deploy_queue_worker \"lock_busy\"" in script

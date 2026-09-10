@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -94,6 +95,11 @@ async def test_awaiting_approval_dispatches_internal_ai_trigger(monkeypatch):
     monkeypatch.setattr(db_pool, "get_pool", lambda: _Pool())
     monkeypatch.setattr(ohvis_task_manager, "create_task", _fake_create_task)
     monkeypatch.setattr(chat_service, "trigger_ai_reaction", _fake_trigger)
+    monkeypatch.setattr(
+        pipeline_runner,
+        "logger",
+        SimpleNamespace(info=lambda *_args, **_kwargs: None, warning=lambda *_args, **_kwargs: None),
+    )
 
     result = await pipeline_runner.notify_completion("runner-abcd1234")
     await asyncio.sleep(0)

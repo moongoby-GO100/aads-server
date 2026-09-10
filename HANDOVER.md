@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 2026-09-10 14:52 KST — Deploy clean-worktree and phase-metadata fail-closed fix
+
+- Live deployment run 311 exposed two release-control defects. A clean worktree was miscounted as `00` dirty files because `pipefail` appended a fallback zero; the resulting no-op stash command set a restore flag and later popped an unrelated global stash into the release worktree. Deployment phase events also attempted `metadata=NULL` against a NOT NULL column, losing phase audit rows.
+- `deploy.sh` now counts dirty paths with a single `awk` expression and blocks dirty releases with an explicit clean-isolated-worktree instruction. Automatic stash/pop was removed so a release can never consume or overwrite another session's stash.
+- Empty phase metadata now persists as `{}` JSONB, matching migration 150's NOT NULL contract. Non-empty structured stream metadata remains unchanged.
+- `tests/unit/test_deploy_observability.py` locks the no-stash fail-closed gate, numeric clean count, and non-null metadata contract. Rollback is a normal commit revert; do not restore automatic stash/pop.
+
 ## 2026-09-10 14:36 KST — Runner approval notification resumes owning chat AI
 
 - `app/api/pipeline_runner.py`: removed the `awaiting_approval` notification suppression. The runner state remains a task-panel concern, while an internal `[시스템]` action trigger now reaches the owning chat AI for diff/test/metadata review and approve-or-reject follow-up.

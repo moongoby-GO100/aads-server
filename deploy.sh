@@ -69,11 +69,6 @@ if [[ -z "${AADS_DEPLOY_DETACHED:-}" && "${AADS_DEPLOY_FOREGROUND:-}" != "1" ]];
 fi
 
 cleanup_release_context() {
-    if [[ "${AADS_DEPLOY_STASHED:-0}" == "1" ]]; then
-        echo "[deploy.sh] restoring auto-stashed worktree changes..."
-        git -C "$COMPOSE_DIR" stash pop 2>/dev/null || echo "[deploy.sh] ⚠️ stash pop failed; changes remain in git stash list"
-        export AADS_DEPLOY_STASHED=0
-    fi
     case "${RELEASE_CONTEXT_DIR:-}" in
         /tmp/aads-server-release.*)
             rm -rf -- "$RELEASE_CONTEXT_DIR"
@@ -937,7 +932,9 @@ deploy_phase_end() {
     if [[ -n "${DEPLOY_PHASE_METADATA_JSON:-}" ]]; then
         metadata_expr="NULLIF('$(sql_escape "$DEPLOY_PHASE_METADATA_JSON")', '')::jsonb"
     else
-        metadata_expr="NULL"
+        # migration 150 defines metadata NOT NULL. Empty phase metadata is a
+        # valid empty object, not SQL NULL.
+        metadata_expr="'{}'::jsonb"
     fi
     deploy_db_exec "
         INSERT INTO deploy_phase_events(deploy_run_id, phase, status, phase_started_at,
@@ -969,7 +966,10 @@ report_dirty_release_exclusions() {
 
 enforce_release_worktree_gate() {
     local dirty_count
-    dirty_count="$(git -C "$COMPOSE_DIR" status --porcelain | grep -v -e '\.lock$' -e ' app/data/' | wc -l | tr -d '[:space:]' || echo 0)"
+    dirty_count="$(
+        git -C "$COMPOSE_DIR" status --porcelain \
+            | awk '$0 !~ /\.lock$/ && $0 !~ / app\/data\// {count++} END {print count+0}'
+    )"
     if [[ "${dirty_count:-0}" == "0" ]]; then
         return 0
     fi
@@ -988,15 +988,9 @@ enforce_release_worktree_gate() {
         audit_control "release-context" "$COMPOSE_DIR" "override" "dirty archive override count=${dirty_count}; reason=${override_reason}"
         return 0
     fi
-    echo "[deploy.sh] ⚠️ dirty worktree detected (${dirty_count} files); auto-stashing for clean release."
-    if git -C "$COMPOSE_DIR" stash -u -m "deploy-autostash-$(date +%Y%m%d-%H%M%S)" 2>/dev/null; then
-        export AADS_DEPLOY_STASHED=1
-        echo "[deploy.sh] ✅ auto-stash succeeded; will restore after deploy."
-        audit_control "release-context" "$COMPOSE_DIR" "auto-stashed" "dirty worktree count=${dirty_count}"
-        return 0
-    fi
-    echo "[deploy.sh] ❌ auto-stash failed; release blocked."
-    audit_control "release-context" "$COMPOSE_DIR" "blocked" "dirty worktree count=${dirty_count}; stash failed"
+    echo "[deploy.sh] ❌ dirty worktree detected (${dirty_count} files); release blocked."
+    echo "[deploy.sh]    Use a clean isolated worktree at the committed release SHA."
+    audit_control "release-context" "$COMPOSE_DIR" "blocked" "dirty worktree count=${dirty_count}; clean isolated worktree required"
     return 1
 }
 
