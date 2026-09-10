@@ -1743,6 +1743,7 @@ async def handle_codex_stream(request):
             proc.stdin.close()
             full_text = ""
             input_tokens = output_tokens = 0
+            result_sent = False
             try:
                 async for raw_line in _iter_ndjson_lines(proc.stdout, timeout_sec=300):
                     try:
@@ -1798,6 +1799,11 @@ async def handle_codex_stream(request):
                         usage = event.get("usage", {})
                         input_tokens += usage.get("input_tokens", 0)
                         output_tokens += usage.get("output_tokens", 0)
+                await _stream_write(response, json.dumps({
+                    "type": "result", "result": full_text,
+                    "input_tokens": input_tokens, "output_tokens": output_tokens, "model": model,
+                }).encode() + b"\n")
+                result_sent = True
             except ConnectionResetError:
                 logger.info("Codex relay client disconnected: session=%s", (session_id or "default")[:8])
             except asyncio.TimeoutError:
@@ -1852,13 +1858,14 @@ async def handle_codex_stream(request):
                         transport.close()
                 except Exception:
                     pass
-            try:
-                await _stream_write(response, json.dumps({
-                    "type": "result", "result": full_text,
-                    "input_tokens": input_tokens, "output_tokens": output_tokens, "model": model,
-                }).encode() + b"\n")
-            except ConnectionResetError:
-                logger.info("Codex result write skipped: client already closed session=%s", (session_id or "default")[:8])
+            if not result_sent:
+                try:
+                    await _stream_write(response, json.dumps({
+                        "type": "result", "result": full_text,
+                        "input_tokens": input_tokens, "output_tokens": output_tokens, "model": model,
+                    }).encode() + b"\n")
+                except ConnectionResetError:
+                    logger.info("Codex result write skipped: client already closed session=%s", (session_id or "default")[:8])
             try:
                 await _stream_write_eof(response)
             except ConnectionResetError:
