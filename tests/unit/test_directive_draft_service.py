@@ -118,6 +118,22 @@ def test_artifact_revision_metadata_parameter_has_explicit_postgres_type() -> No
     assert "jsonb_build_object('revision', $5::integer)" in source
 
 
+def test_serialize_artifact_decodes_json_metadata() -> None:
+    artifact_id = uuid.uuid4()
+
+    result = service._serialize_artifact(
+        {
+            "id": artifact_id,
+            "type": "report",
+            "metadata": '{"subtype":"directive_draft","revision":2}',
+        }
+    )
+
+    assert result["id"] == str(artifact_id)
+    assert result["artifact_type"] == "report"
+    assert result["metadata"] == {"subtype": "directive_draft", "revision": 2}
+
+
 @pytest.mark.asyncio
 async def test_generation_failure_uses_deterministic_fallback(monkeypatch) -> None:
     async def fail_generation(**_kwargs):

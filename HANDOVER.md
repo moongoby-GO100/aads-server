@@ -13482,3 +13482,8 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 배포: reload-api.sh (aads-server-green, 0ms), health-check 200.
 - DB: execution 95bfbe7c retry_count 3→0 (hard cap 해제, 미응답 지시 복구용).
 - 잔여: standby 슬롯(aads-server) 이미지 미동기화, 이미지 리빌드 배포 필요.
+
+## 2026-09-11 02:40 KST — 지시 코파일럿 artifact revision 운영 검증 보강
+- `b9147c09`에서 `jsonb_build_object('revision', $5::integer)`로 SQL 파라미터 타입을 명시하고 API blue/green 배포 run 320을 완료했다. active/standby는 동일 digest `sha256:044fa7c3...04ecd48`이며 300초 P0/P1 감시를 통과했다.
+- 운영 `PUT /api/v1/chat/artifacts/{id}` 재검증에서 DB 트랜잭션은 draft revision 2와 `edited` 이벤트를 저장했지만, asyncpg JSONB codec이 반환한 문자열 metadata가 `ArtifactOut.metadata` 응답 검증에서 HTTP 500을 일으키는 후속 결함을 확인했다.
+- `directive_draft_service._serialize_row`가 `metadata`와 `classification` JSON 문자열을 안전하게 역직렬화하도록 보강하고 회귀 테스트를 추가했다. 자동 전송은 수행하지 않았으며, 후속 커밋·blue/green 배포·운영 API 200 재검증 결과를 최종 보고에 기록한다.

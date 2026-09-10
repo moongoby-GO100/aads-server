@@ -308,6 +308,11 @@ def _serialize_row(row: Any) -> dict[str, Any]:
             result[key] = str(value)
         elif isinstance(value, list):
             result[key] = [str(item) if isinstance(item, uuid.UUID) else item for item in value]
+        elif key in {"metadata", "classification"} and isinstance(value, str):
+            try:
+                result[key] = json.loads(value)
+            except (TypeError, json.JSONDecodeError):
+                pass
     return result
 
 
