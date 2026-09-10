@@ -318,7 +318,10 @@ sql_escape() {
 
 deploy_db_exec() {
     local sql="$1"
-    timeout 10 docker exec aads-postgres psql -U aads -d aads -qAtc "$sql" 2>/dev/null || true
+    local _db_out
+    if ! _db_out=$(timeout 10 docker exec aads-postgres psql -U aads -d aads -qAtc "$sql" 2>&1); then
+        echo "[deploy.sh] WARN: deploy_db_exec failed: ${_db_out:0:200}" >&2
+    fi
 }
 
 deploy_db_available() {
@@ -878,6 +881,9 @@ start_deploy_heartbeat() {
 deploy_signal_trap() {
     trap '' TERM INT HUP  # RC6: prevent re-entry during signal cleanup
     local signal_name="${1:-TERM}"
+    local _sig_ppid; _sig_ppid=$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')
+    local _sig_caller; _sig_caller=$(cat "/proc/${_sig_ppid:-1}/cmdline" 2>/dev/null | tr '\0' ' ' | head -c 120)
+    echo "[deploy.sh] signal_trap: ${signal_name} ppid=${_sig_ppid:-?} caller=[${_sig_caller:-?}] phase=${DEPLOY_CURRENT_PHASE}" >&2
     stop_deploy_heartbeat
     stop_downtime_monitor
     if [[ "${DEPLOY_UPSTREAM_SWITCHED:-false}" == "true" ]]; then
