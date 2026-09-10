@@ -78,7 +78,10 @@ def _get_anthropic_client() -> AsyncAnthropic:
     return AsyncAnthropic(
         api_key=_LITELLM_API_KEY,
         base_url=_LITELLM_URL,
-        http_client=httpx.AsyncClient(transport=_StripAuthTransport()),
+        http_client=httpx.AsyncClient(
+            transport=_StripAuthTransport(),
+            timeout=httpx.Timeout(600.0, connect=10.0),
+        ),
         max_retries=5,
     )
 

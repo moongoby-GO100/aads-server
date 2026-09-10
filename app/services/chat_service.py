@@ -39,7 +39,7 @@ _EXECUTION_OWNER_INSTANCE = os.getenv(
 ).strip() or "aads"
 _EXECUTION_LEASE_SECONDS = max(20, int(os.getenv("AADS_EXECUTION_LEASE_SECONDS", "45")))
 _EXECUTION_HEARTBEAT_SECONDS = max(2, int(os.getenv("AADS_EXECUTION_HEARTBEAT_SECONDS", "5")))
-_EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "3")))
+_EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "5")))
 _RESUME_INCOMPLETE_STREAM_MAX_RETRIES = max(
     0, int(os.getenv("AADS_RESUME_INCOMPLETE_STREAM_MAX_RETRIES", "2"))
 )
@@ -5923,7 +5923,9 @@ async def with_background_completion(
                 _content_len = len((state.get("content") or "").strip())
                 _content_text = (state.get("content") or "").strip()
                 _tail_incomplete = _looks_like_incomplete_progress_tail(_content_text) if _content_len > 0 else True
-                if _content_len > 1500 and not _tail_incomplete:
+                _tool_heavy = int(state.get("tool_count") or 0) >= 3
+                _accept_threshold = 400 if _tool_heavy else 1500
+                if _content_len > _accept_threshold and not _tail_incomplete:
                     logger.info(
                         "partial_accepted_as_completed session=%s content_len=%d — missing_done_event with substantial complete content accepted",
                         session_id[:8], _content_len,
