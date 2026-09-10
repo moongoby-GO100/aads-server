@@ -50,6 +50,7 @@ _execution_owner_epochs: Dict[str, int] = {}
 _deferred_consecutive_count: Dict[str, int] = {}
 _DEFERRED_MAX_CONSECUTIVE = max(3, int(os.getenv("AADS_DEFERRED_MAX_CONSECUTIVE", "5")))
 _HARD_AGE_MAX_SECONDS = max(600, int(os.getenv("AADS_HARD_AGE_MAX_SECONDS", "1800")))
+_HARD_AGE_PER_PROJECT: Dict[str, int] = {"GO100": 3600}
 
 
 class ResumeFencedOut(RuntimeError):
@@ -11114,6 +11115,9 @@ async def send_message_stream(
             )
             base_prompt = (sp_row["system_prompt"] if sp_row and sp_row["system_prompt"] else "")
             workspace_name = (sp_row["workspace_name"] if sp_row and sp_row["workspace_name"] else "CEO")
+            _ss = _streaming_state.get(session_id)
+            if isinstance(_ss, dict):
+                _ss["workspace"] = workspace_name
             _session_role_key = (sp_row["role_key"] if sp_row and sp_row["role_key"] else "")
             _workspace_settings_prefetched = _row_to_dict(sp_row).get("workspace_settings") if sp_row else {}
             _session_settings_prefetched = _row_to_dict(sp_row).get("session_settings") if sp_row else {}
