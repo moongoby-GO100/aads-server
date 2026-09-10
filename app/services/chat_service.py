@@ -50,6 +50,9 @@ _execution_owner_epochs: Dict[str, int] = {}
 _deferred_consecutive_count: Dict[str, int] = {}
 _DEFERRED_MAX_CONSECUTIVE = max(3, int(os.getenv("AADS_DEFERRED_MAX_CONSECUTIVE", "5")))
 _HARD_AGE_MAX_SECONDS = max(600, int(os.getenv("AADS_HARD_AGE_MAX_SECONDS", "1800")))
+_HARD_AGE_PER_PROJECT: Dict[str, int] = {
+    "GO100": max(600, int(os.getenv("AADS_HARD_AGE_GO100", "3600"))),
+}
 
 
 class ResumeFencedOut(RuntimeError):
@@ -73,6 +76,40 @@ def _strip_resume_fail_markers(text: str) -> str:
     for marker in (_RESUME_FAIL_SUFFIX, _RESUME_FAIL_SUFFIX_ALT, _INTERRUPT_MARKER):
         text = text.replace("\n\n" + marker, "").replace(marker, "")
     return text.rstrip()
+
+
+async def _notify_resume_final_failure(
+    conn,
+    session_id: str,
+    reason: str,
+) -> None:
+    """P0: Resume 최종 실패 시 채팅 알림 + 텔레그램 CEO 알림."""
+    try:
+        sid = uuid.UUID(session_id) if not isinstance(session_id, uuid.UUID) else session_id
+        await conn.execute(
+            "INSERT INTO chat_messages (session_id, role, content, model_used, intent) "
+            "VALUES ($1, 'assistant', $2, 'system', 'resume_failure_notice')",
+            sid,
+            f'⚠️ 응답 재개가 최종 실패했습니다 (사유: {reason}). 동일한 지시를 다시 보내주세요.',
+        )
+    except Exception as e:
+        logger.error('resume_failure_notice_insert_failed session=%s error=%s', str(session_id)[:8], e)
+    try:
+        from app.services.telegram_bot import get_telegram_bot
+        bot = get_telegram_bot()
+        if bot and bot.is_ready:
+            from app.services.alert_manager import Alert
+            await bot.send_alert(Alert(
+                severity='WARNING',
+                category='resume_final_failure',
+                title='Resume 최종 실패',
+                message=f'세션 {str(session_id)[:8]}... 응답 재개 실패 / 사유: {reason}',
+                server='contabo116',
+                project='AADS',
+            ))
+    except Exception as tg_err:
+        logger.warning('resume_failure_telegram_failed: %s', tg_err)
+
 
 
 def _is_local_active_api_slot() -> bool:
@@ -2951,15 +2988,7 @@ async def cleanup_overlong_running_executions(
                 session_id[:8], execution_id[:8], row_data.get("age_seconds"),
             )
             if int(row_data.get("retry_count") or 0) >= _EXECUTION_RESUME_MAX_ATTEMPTS:
-                try:
-                    await retry_conn.execute(
-                        "INSERT INTO chat_messages (session_id, role, content, model_used, intent) "
-                        "VALUES ($1, 'assistant', $2, 'system', 'resume_failure_notice')",
-                        uuid.UUID(session_id),
-                        f"⚠️ 응답 재개 {row_data.get('retry_count', '?')}회 시도 후 최종 실패 — 동일 지시를 다시 보내주세요.",
-                    )
-                except Exception:
-                    pass
+                await _notify_resume_final_failure(retry_conn, session_id, f"stale_retrying_hard_cap retry={row_data.get('retry_count')}")
 
     return {
         "scanned": len(rows),
@@ -3196,8 +3225,12 @@ async def cleanup_stale_streaming_placeholders(
             """
             SELECT te.id, te.session_id
             FROM chat_turn_executions te
+            JOIN chat_sessions cs ON cs.id = te.session_id
+            LEFT JOIN chat_workspaces cw ON cw.id = cs.workspace_id
             WHERE te.status IN ('running', 'retrying')
-              AND te.created_at < NOW() - ($1::int * INTERVAL '1 second')
+              AND te.created_at < NOW() - (
+                COALESCE((cw.settings->>'hard_age_max_seconds')::int, $1) * INTERVAL '1 second'
+              )
             """,
             _HARD_AGE_MAX_SECONDS,
         )
@@ -3230,15 +3263,7 @@ async def cleanup_stale_streaming_placeholders(
                 _haa["id"],
             )
             _hard_age_any_cleaned += 1
-            try:
-                await conn.execute(
-                    "INSERT INTO chat_messages (session_id, role, content, model_used, intent) "
-                    "VALUES ($1, 'assistant', $2, 'system', 'resume_failure_notice')",
-                    _haa["session_id"],
-                    "⚠️ 장시간 응답이 중단되었습니다. 동일한 지시를 다시 보내주세요.",
-                )
-            except Exception:
-                pass
+            await _notify_resume_final_failure(conn, str(_haa["session_id"]), f"hard_age_{_HARD_AGE_MAX_SECONDS}s")
         if _hard_age_any_cleaned:
             logger.warning("hard_age_any_zombie_cleanup cleaned=%s", _hard_age_any_cleaned)
 
@@ -6899,15 +6924,7 @@ async def _resume_single_stream(
                     )
                     if (_rc or 0) >= _EXECUTION_RESUME_MAX_ATTEMPTS:
                         logger.error(f'resume_hard_cap_exceeded: session={session_id[:8]} retry_count={_rc}')
-                        try:
-                            await _cap_conn.execute(
-                                "INSERT INTO chat_messages (session_id, role, content, model_used, intent) "
-                                "VALUES ($1, 'assistant', $2, 'system', 'resume_failure_notice')",
-                                uuid.UUID(session_id),
-                                f"⚠️ 응답 재개 {_rc}회 시도 후 최종 실패 — 동일 지시를 다시 보내주세요. (자동 재시도 한도 초과)",
-                            )
-                        except Exception:
-                            pass
+                        await _notify_resume_final_failure(_cap_conn, session_id, f"resume_hard_cap retry={_rc}")
                         _streaming_state.pop(session_id, None)
                         _active_bg_tasks.pop(session_id, None)
                         return
@@ -7384,7 +7401,17 @@ async def _resume_single_stream(
                             )
                             await _heartbeat_asyncio.sleep(_relay_delay)
                             continue
-                        if attempt >= len(retry_delays) or not _is_resume_retryable(stream_error):
+                        if attempt >= len(retry_delays):
+                            raise
+                        if not _is_resume_retryable(stream_error):
+                            _next_idx = min(attempt + 1, len(_resume_model_chain) - 1)
+                            if _resume_model_chain and _resume_model_chain[_next_idx] != _resume_model_attempt:
+                                logger.warning(
+                                    "resume_non_retryable_switching_provider session=%s from=%s to=%s",
+                                    session_id[:8], _resume_model_attempt, _resume_model_chain[_next_idx],
+                                )
+                                await _heartbeat_asyncio.sleep(retry_delays[attempt])
+                                continue
                             raise
 
                         delay = retry_delays[attempt]
@@ -7491,6 +7518,7 @@ async def _resume_single_stream(
                         placeholder_id = _fb_id
                         logger.warning(f"resume_fallback_inserted: session={session_id[:8]} new_msg={_fb_id}")
                 logger.warning(f"resume_failed_kept_recovered: session={session_id[:8]} bubble={placeholder_id} kept as recovered for retry")
+                await _notify_resume_final_failure(c, session_id, f"resume_stream_error: {str(e)[:80]}")
                 _streaming_state[session_id] = {
                     **_streaming_state.get(session_id, {}),
                     "content": final,
