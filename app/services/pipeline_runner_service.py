@@ -2544,7 +2544,7 @@ async def recover_interrupted_jobs():
                             INSERT INTO chat_messages
                                 (session_id, role, content, intent, cost,
                                  tokens_in, tokens_out, attachments, sources, tools_called)
-                            VALUES ($1::uuid, 'assistant', $2, 'pipeline_c', 0,
+                            VALUES ($1::uuid, 'assistant', $2, 'runner_notification', 0,
                                     0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
                             """,
                             sid,
@@ -2639,7 +2639,7 @@ async def recover_interrupted_jobs():
                                     INSERT INTO chat_messages
                                         (session_id, role, content, intent, cost,
                                          tokens_in, tokens_out, attachments, sources, tools_called)
-                                    VALUES ($1::uuid, 'assistant', $2, 'pipeline_c', 0,
+                                    VALUES ($1::uuid, 'assistant', $2, 'runner_notification', 0,
                                             0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
                                     """,
                                     _dsid, _chat_msg,
@@ -2815,7 +2815,7 @@ async def recover_interrupted_jobs():
                                 """INSERT INTO chat_messages
                                     (session_id, role, content, intent, cost,
                                      tokens_in, tokens_out, attachments, sources, tools_called)
-                                VALUES ($1::uuid, 'assistant', $2, 'pipeline_c', 0,
+                                VALUES ($1::uuid, 'assistant', $2, 'runner_notification', 0,
                                         0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)""",
                                 _rsid,
                                 f"🔄 **[Pipeline Runner 자동 재실행]** `{_rjob_id}` → `{result.get('job_id', '?')}`\n"
@@ -2912,7 +2912,7 @@ async def recover_interrupted_jobs():
                                 INSERT INTO chat_messages
                                     (session_id, role, content, intent, cost,
                                      tokens_in, tokens_out, attachments, sources, tools_called)
-                                VALUES ($1::uuid, 'assistant', $2, 'pipeline_c', 0,
+                                VALUES ($1::uuid, 'assistant', $2, 'runner_notification', 0,
                                         0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
                                 """,
                                 chat_sid,
@@ -2989,7 +2989,7 @@ async def _resume_detached_polling(job_id: str, project: str, chat_session_id: s
                     _emoji = "✅" if _ok else "⚠️"
                     await conn.execute(
                         """INSERT INTO chat_messages (session_id,role,content,intent,cost,tokens_in,tokens_out,attachments,sources,tools_called)
-                        VALUES($1::uuid,'assistant',$2,'pipeline_c',0,0,0,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb)""",
+                        VALUES($1::uuid,'assistant',$2,'runner_notification',0,0,0,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb)""",
                         chat_session_id,
                         f"{_emoji} **[Pipeline Runner 완료]** `{job_id}`\n프로젝트: **{project}**\n\n**결과:**\n{_result[:1500]}",
                     )
@@ -3247,7 +3247,7 @@ async def _collect_orphan_results():
                         _emoji = "✅" if _ok else "⚠️"
                         await conn.execute(
                             """INSERT INTO chat_messages (session_id,role,content,intent,cost,tokens_in,tokens_out,attachments,sources,tools_called)
-                            VALUES($1::uuid,'assistant',$2,'pipeline_c',0,0,0,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb)""",
+                            VALUES($1::uuid,'assistant',$2,'runner_notification',0,0,0,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb)""",
                             _sid,
                             f"{_emoji} **[Pipeline Runner 결과 수거]** `{_jid}`\n프로젝트: **{_proj}** | exit={_exit_str}\n\n**결과:**\n{_result[:1500]}",
                         )
