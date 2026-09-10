@@ -525,7 +525,7 @@ async def update_draft(
                     """
                     UPDATE chat_artifacts
                        SET title = $3, content = $4,
-                           metadata = metadata || jsonb_build_object('revision', $5),
+                           metadata = metadata || jsonb_build_object('revision', $5::integer),
                            updated_at = NOW()
                      WHERE id = $1 AND tenant_id = $2
                     """,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import uuid
 from unittest.mock import AsyncMock
 from pathlib import Path
@@ -109,6 +110,12 @@ def test_migration_is_additive_and_contains_audit_tables() -> None:
     assert "CREATE TABLE IF NOT EXISTS directive_draft_events" in sql
     assert "DROP TABLE" not in sql.upper()
     assert "TRUNCATE" not in sql.upper()
+
+
+def test_artifact_revision_metadata_parameter_has_explicit_postgres_type() -> None:
+    source = inspect.getsource(service.update_draft)
+
+    assert "jsonb_build_object('revision', $5::integer)" in source
 
 
 @pytest.mark.asyncio
