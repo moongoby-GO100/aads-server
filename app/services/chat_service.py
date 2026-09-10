@@ -3148,6 +3148,46 @@ async def cleanup_stale_streaming_placeholders(
         if _hard_age_cleaned:
             logger.warning("hard_age_null_model_zombie_cleanup cleaned=%s", _hard_age_cleaned)
 
+        _hard_age_any_rows = await conn.fetch(
+            """
+            SELECT te.id, te.session_id
+            FROM chat_turn_executions te
+            WHERE te.status IN ('running', 'retrying')
+              AND te.created_at < NOW() - INTERVAL '1800 seconds'
+            """,
+        )
+        _hard_age_any_cleaned = 0
+        for _haa in _hard_age_any_rows:
+            await conn.execute(
+                """
+                UPDATE chat_turn_executions
+                SET status = 'interrupted',
+                    interrupt_category = 'watchdog_timeout',
+                    completed_at = COALESCE(completed_at, NOW()),
+                    error_message = 'force_interrupted_hard_age_1800s',
+                    owner_instance = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND status IN ('running', 'retrying')
+                """,
+                _haa["id"],
+            )
+            await conn.execute(
+                """
+                UPDATE chat_sessions
+                SET current_execution_id = NULL,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND current_execution_id = $2
+                """,
+                _haa["session_id"],
+                _haa["id"],
+            )
+            _hard_age_any_cleaned += 1
+        if _hard_age_any_cleaned:
+            logger.warning("hard_age_any_zombie_cleanup cleaned=%s", _hard_age_any_cleaned)
+
         rows = await conn.fetch(
             """
             SELECT m.id,
