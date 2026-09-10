@@ -3016,6 +3016,51 @@ async def cleanup_stale_streaming_placeholders(
         if _orphan_terminal_cleaned:
             logger.info("orphan_terminal_placeholder_cleanup cleaned=%s", _orphan_terminal_cleaned)
 
+        _null_model_rows = await conn.fetch(
+            """
+            SELECT te.id, te.session_id
+            FROM chat_turn_executions te
+            WHERE te.status IN ('running', 'retrying')
+              AND te.actual_model IS NULL
+              AND te.created_at < NOW() - INTERVAL '30 seconds'
+            """,
+        )
+        _null_model_cleaned = 0
+        for _nm in _null_model_rows:
+            _nm_sid_str = str(_nm["session_id"])
+            if _nm_sid_str in live_sessions:
+                continue
+            await conn.execute(
+                """
+                UPDATE chat_turn_executions
+                SET status = 'interrupted',
+                    interrupt_category = 'watchdog_timeout',
+                    completed_at = COALESCE(completed_at, NOW()),
+                    error_message = 'force_interrupted_stale_null_model_never_started',
+                    owner_instance = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND status IN ('running', 'retrying')
+                  AND actual_model IS NULL
+                """,
+                _nm["id"],
+            )
+            await conn.execute(
+                """
+                UPDATE chat_sessions
+                SET current_execution_id = NULL,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND current_execution_id = $2
+                """,
+                _nm["session_id"],
+                _nm["id"],
+            )
+            _null_model_cleaned += 1
+        if _null_model_cleaned:
+            logger.info("null_model_zombie_cleanup cleaned=%s", _null_model_cleaned)
+
         _stale_lease_rows = await conn.fetch(
             """
             SELECT te.id, te.session_id
@@ -3180,7 +3225,7 @@ async def cleanup_stale_streaming_placeholders(
                         END,
                         status = 'interrupted',
                         interrupt_category = 'watchdog_timeout',
-                        error_message = COALESCE(error_message, $3),
+                        error_message = $3,
                         completed_at = COALESCE(completed_at, NOW()),
                         updated_at = NOW()
                     WHERE id = $1
@@ -3188,7 +3233,7 @@ async def cleanup_stale_streaming_placeholders(
                     """,
                     execution_uuid,
                     assistant_message_id,
-                    f"stale placeholder cleanup after {timeout} seconds",
+                    f"force_interrupted_stale_placeholder_cleanup after {timeout} seconds",
                 )
                 await conn.execute(
                     """
