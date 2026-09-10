@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-09-10 15:42 KST — 보고 산출물 영속 저장 경로 표준화
+
+- 운영 화면에서 파일 링크는 우측 아티팩트 패널로 정상 전환됐지만, 호스트에 존재하는 `/tmp/aads-filelink-e2e/prod_live_panel.png`는 API 슬롯에서 보이지 않아 404가 재현됐다. 이는 프런트 패널 문제가 아니라 보고 파일의 비영속 저장 경로 문제다.
+- `app/services/tool_executor.py`: `delegate_to_agent` 전체 결과를 슬롯별 `/tmp/aads_artifacts`가 아닌 공유 마운트 `/app/app/static/exports/agent-results`에 보존하고, 채팅 보고에는 `/api/v1/files/download?...&inline=1` Markdown 링크를 남긴다. 1시간 자동 삭제를 제거해 과거 세션 링크가 깨지지 않게 했다.
+- `app/api/ceo_chat_tools_export.py`: `export_data` 기본 저장소를 nginx `/exports/`와 양 API 슬롯이 공유하는 `/var/www/certbot/exports`로 정정했다.
+- 검증: 영속 경로 회귀 테스트 + 기존 파일 API 테스트 7건 통과, 두 모듈 `py_compile` 통과, 스모크 CSV의 외부 `/exports/` HTTP 200·12바이트 확인 후 시험 파일을 제거했다.
+- 롤백: 본 세 파일만 revert한다. 단, 롤백 시 장문 에이전트 결과와 `export_data` 링크가 다시 슬롯 교체 후 소실될 수 있다.
+
 ## 2026-09-10 15:10 KST — Runner 내부 알림 숨김과 AI 후속응답 표시 분리
 
 - `app/services/chat_service.py`: 내부 `system_trigger` 사용자 행은 저장 직후 `is_hidden=TRUE`로 유지하되, 그 트리거로 생성된 `runner_response`/`auto_reaction`을 메시지 조회 SQL에서 제외하던 미배포 회귀를 제거했다.

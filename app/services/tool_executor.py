@@ -4373,31 +4373,29 @@ class ToolExecutor:
             except Exception as db_err:
                 logger.error(f"delegate_to_agent DB update failed task={task_id}: {db_err}")
 
-            # M3: 전체 결과를 artifact 파일로 저장
+            # M3: 전체 결과를 양 슬롯이 공유하는 영속 artifact 파일로 저장.
+            # /tmp는 슬롯 교체·컨테이너 재생성 후 사라져 과거 채팅 링크를 깨뜨린다.
             artifact_path = ""
+            artifact_url = ""
             if result_text and len(result_text) > 1500:
                 try:
                     import pathlib
-                    artifact_dir = pathlib.Path("/tmp/aads_artifacts")
-                    artifact_dir.mkdir(exist_ok=True)
+                    from urllib.parse import quote as _url_quote
+
+                    artifact_dir = pathlib.Path(
+                        os.getenv("AADS_AGENT_ARTIFACT_DIR", "/app/app/static/exports/agent-results")
+                    )
+                    artifact_dir.mkdir(parents=True, exist_ok=True)
                     artifact_file = artifact_dir / f"{task_id}.txt"
                     artifact_file.write_text(result_text, encoding="utf-8")
                     artifact_path = str(artifact_file)
+                    artifact_url = (
+                        "/api/v1/files/download?path="
+                        f"{_url_quote(artifact_path, safe='')}&inline=1"
+                    )
                     logger.info(f"delegate_to_agent artifact saved: {artifact_path} ({len(result_text)}자)")
                 except Exception as art_err:
                     logger.warning(f"delegate_to_agent artifact save failed: {art_err}")
-
-            # 오래된 artifact 정리 (1시간 이상)
-            try:
-                import time as _time
-                import pathlib as _pathlib
-                _artifact_dir = _pathlib.Path("/tmp/aads_artifacts")
-                if _artifact_dir.exists():
-                    for old_f in _artifact_dir.iterdir():
-                        if _time.time() - old_f.stat().st_mtime > 3600:
-                            old_f.unlink(missing_ok=True)
-            except Exception:
-                pass
 
             # 4) 채팅방에 결과 보고 (캡처된 session_id 사용)
             logger.info(f"delegate_to_agent_chat_report: task_id={task_id} session_id={session_id[:8] if session_id else '(none)'} has_error={bool(error_text)}")
@@ -4417,7 +4415,11 @@ class ToolExecutor:
                     else:
                         msg += f"**결과:**\n{result_text[:1500]}"
                         if artifact_path:
-                            msg += f"\n\n📄 전체 결과: `{artifact_path}` ({len(result_text)}자)"
+                            msg += (
+                                f"\n\n📄 전체 결과: "
+                                f"[{pathlib.Path(artifact_path).name}]({artifact_url}) "
+                                f"({len(result_text)}자)"
+                            )
 
                     async with pool.acquire() as conn:
                         async with conn.transaction():

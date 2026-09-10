@@ -7,7 +7,8 @@ CEO 채팅에서 쿼리 결과를 Excel/CSV/PDF로 변환 → 다운로드 링�
 - Excel (xlsx): openpyxl 기반, 자동 열 너비 + 헤더 스타일
 - PDF: weasyprint 기반 HTML→PDF 변환
 
-파일은 /tmp/aads_exports/에 저장, nginx에서 /exports/ 경로로 서빙.
+파일은 양 API 슬롯과 nginx가 공유하는 /var/www/certbot/exports/에 저장,
+nginx에서 /exports/ 경로로 서빙.
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
-_EXPORT_DIR = Path(os.getenv("AADS_EXPORT_DIR", "/var/www/aads_exports"))
+_EXPORT_DIR = Path(os.getenv("AADS_EXPORT_DIR", "/var/www/certbot/exports"))
 _EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 # 다운로드 URL 베이스 (nginx /exports/ 경로로 서빙)
