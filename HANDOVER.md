@@ -13368,3 +13368,17 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 검증: 격리 worktree(origin/main 기준)에서 `docker run aads-server:0e15f47f7fda` + pytest 4파일 79 passed; 컨테이너에서 `scripts/yeoljeong_auto_collect.py --drain-global-queue --queue-iterations 0` exit=0 (stderr 없음). 회귀 테스트: `tests/unit/test_pc_agent_collection_queue_sync_loop.py`(4건) + `test_sync_db_api_reuses_private_loop_and_keeps_shared_pool`.
 - 은행 자동연동 실측: `yeoljeong_bank_transactions` 0건, 계좌 6건(auto_sync=true, last_synced_at 없음, IBK 중화점 4건 중복). 큐 bank 항목은 `MISSING_CREDENTIALS`(IBK/신한 중화) · `PC_AGENT_LOGIN_REQUIRED`(신한 미아)로 action_required. `yeoljeong_platform_accounts` bank-quick-service 4행 모두 password/account_no/account_password/business_registration_no 미등록 → 코드가 아니라 자격증명 입력이 선행 조건.
 - 남은 작업: 804e39af blue/green 배포 → 3분 드레인 `exit=0` 관측 → 은행 자격증명 등록(`POST /bank-accounts/{id}/credentials`) 후 23:10 KST 스케줄 수집 결과 확인 → IBK 중복 계좌 정리.
+
+## 2026-09-10 12:41 KST — AADS 채팅 응답 끊김/재개 불능 P0 수정 (78b64545)
+- 증상: 세션 5090a247 등에서 응답이 끊기고 재개도 실패, CEO 신규 지시가 영구 미응답.
+- 근인 3건 (chat_service.py):
+  1. `_resume_lease_pump`의 idle 판정 baseline이 pump 시작 시각 고정 → 무출력 실패한
+     attempt1 뒤에 시작된 정상 attempt2가 thinking 단계에서 fence-out.
+     (로그: resume_lease_idle_timeout elapsed=305s → resume_worker_fenced_out)
+  2. `_RESUME_LEASE_IDLE_TIMEOUT` 기본 180s가 도구 30~110회 재개에 과소.
+  3. `_execution_has_newer_user_message`가 `[추가 지시]`를 supersede 대상에서 제외하는데,
+     재개 컨텍스트(line ~6899)는 execution 원본 user 메시지만 사용 → `[추가 지시]` 영구 유실.
+- 조치: attempt별 baseline 리셋, 기본 300s, 재개 컨텍스트에 `[추가 지시]` 최대 5건 이어붙임.
+- 배포: reload-api.sh (aads-server-green, 0ms), health-check 200.
+- DB: execution 95bfbe7c retry_count 3→0 (hard cap 해제, 미응답 지시 복구용).
+- 잔여: standby 슬롯(aads-server) 이미지 미동기화, 이미지 리빌드 배포 필요.
