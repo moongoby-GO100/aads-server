@@ -605,7 +605,7 @@ async def record_event(
                     await conn.execute(
                         """
                         UPDATE chat_artifacts
-                           SET metadata = metadata || jsonb_build_object('status', $3), updated_at = NOW()
+                           SET metadata = metadata || jsonb_build_object('status', $3::text), updated_at = NOW()
                          WHERE id = $1 AND tenant_id = $2
                         """,
                         draft["artifact_id"],

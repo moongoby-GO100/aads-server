@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 2026-09-11 03:28 KST — 지시 초안 sent 감사 이벤트 PostgreSQL 타입 고정
+
+- `app/services/directive_draft_service.py`: `record_event()`가 아티팩트 metadata에 상태를 병합할 때 `jsonb_build_object('status', $3::text)`로 명시해 asyncpg/PostgreSQL의 unknown 파라미터 타입 추론 실패를 제거했다.
+- `tests/test_directive_draft_events.py`: `sent` 이벤트가 draft 상태, 아티팩트 metadata, 감사 이벤트를 한 트랜잭션에서 갱신하며 status 파라미터가 명시적 text 타입인지 회귀 검증한다.
+- 영향 범위는 지시 코파일럿의 `inserted/approved/rejected/sent/archived` 상태 이벤트이며, 스키마·기존 데이터·자동 생성 품질 로직은 변경하지 않는다.
+- 롤백은 본 커밋을 revert한 뒤 동일 blue/green 절차로 재배포한다. 롤백 시 status 이벤트가 다시 HTTP 500으로 실패할 수 있다.
+
 ## 2026-09-10 15:42 KST — 보고 산출물 영속 저장 경로 표준화
 
 - 운영 화면에서 파일 링크는 우측 아티팩트 패널로 정상 전환됐지만, 호스트에 존재하는 `/tmp/aads-filelink-e2e/prod_live_panel.png`는 API 슬롯에서 보이지 않아 404가 재현됐다. 이는 프런트 패널 문제가 아니라 보고 파일의 비영속 저장 경로 문제다.
