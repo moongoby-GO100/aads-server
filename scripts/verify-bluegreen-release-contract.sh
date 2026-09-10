@@ -86,8 +86,10 @@ if [[ -f "$dashboard_deploy" ]]; then
         || fail "dashboard slot starts must use --no-build"
     grep -q 'release_nginx_switch_lock' "$dashboard_deploy" \
         || fail "dashboard nginx cutover lock must be explicitly released"
-    grep -q 'git -C "$STATE_DIR" archive --format=tar HEAD' "$dashboard_deploy" \
-        || fail "dashboard image must be built from an isolated committed release context"
+    if ! grep -q 'git -C "$STATE_DIR" archive --format=tar HEAD' "$dashboard_deploy" \
+        && ! grep -q 'git -C "$STATE_DIR" archive --format=tar "$AADS_RELEASE_SHA"' "$dashboard_deploy"; then
+        fail "dashboard image must be built from an isolated committed release context"
+    fi
 fi
 
 echo "[release-contract] PASS"

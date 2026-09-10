@@ -117,6 +117,13 @@ def test_release_contract_allows_bounded_standby_sync_timeout():
     assert "standby sync must have a bounded default timeout" in verifier
 
 
+def test_release_contract_accepts_dashboard_archive_from_approved_sha():
+    verifier = (Path(__file__).parents[2] / "scripts" / "verify-bluegreen-release-contract.sh").read_text()
+
+    assert 'git -C "$STATE_DIR" archive --format=tar "$AADS_RELEASE_SHA"' in verifier
+    assert "dashboard image must be built from an isolated committed release context" in verifier
+
+
 def test_post_cutover_signal_cannot_certify_an_incomplete_release():
     deploy_script = (Path(__file__).parents[2] / "deploy.sh").read_text()
     trap_body = deploy_script.split("deploy_signal_trap()", 1)[1].split("deploy_process_alive()", 1)[0]

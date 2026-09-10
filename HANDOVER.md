@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 2026-09-10 13:50 KST — Dashboard release-SHA verifier compatibility
+
+- Fixed the global release-contract verifier so the dashboard deploy may archive the explicitly approved `AADS_RELEASE_SHA`, while retaining compatibility with the legacy committed `HEAD` form.
+- The dashboard deploy had already hardened its build context from implicit `HEAD` to `AADS_RELEASE_SHA`; the verifier still required the old literal command and blocked every safe dashboard release before build.
+- Added a regression assertion in `tests/unit/test_deploy_stream_reconcile.py`. The unrelated dirty `tests/unit/test_pc_agent_collection_queue.py` remains untouched and excluded from this change.
+- Release verification must still pass the full contract, dashboard regression checks, same-digest slot synchronization, routed health, and five-minute P0/P1 monitoring.
+
 ## 2026-09-10 13:20 KST — Dashboard runner approved-SHA deployment fencing
 
 - Incident: `runner-d68acf9c` pushed approved dashboard commit `5da0741368ba`, but the runner invoked `/root/aads/aads-dashboard/deploy.sh` without the approved SHA. The dashboard shared worktree was still on `7f916b20ef88`, so the first Docker build used stale source and was later canceled, while the job was recorded as `build_fail`.
