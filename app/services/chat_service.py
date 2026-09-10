@@ -8650,6 +8650,7 @@ async def _repair_completed_execution_message_flags(
         """
         UPDATE chat_messages m
         SET intent = NULL,
+            is_hidden = FALSE,
             model_used = COALESCE(r.final_model, NULLIF(m.model_used, 'interrupted'), m.model_used),
             content = regexp_replace(
                 regexp_replace(
@@ -8684,6 +8685,7 @@ async def _repair_completed_execution_message_flags(
             continue
         if str(msg.get("id")) in repaired_ids:
             msg["intent"] = None
+            msg["is_hidden"] = False
             msg["model_used"] = final_models.get(str(msg.get("id"))) or msg.get("model_used")
             content = str(msg.get("content") or "")
             content = re.sub(
@@ -9522,16 +9524,18 @@ async def _save_and_update_session(
                     )
                     return
                 if await _execution_has_newer_user_message(conn, str(sid), str(_execution_uuid)):
-                    _existing_content = await conn.fetchval(
-                        "SELECT content FROM chat_messages WHERE execution_id = $1 AND intent = 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
-                        str(_execution_uuid),
-                    )
+                    _final_content = content.strip() if content else ""
+                    if not _final_content:
+                        _final_content = await conn.fetchval(
+                            "SELECT content FROM chat_messages WHERE execution_id = $1 AND intent = 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
+                            str(_execution_uuid),
+                        ) or ""
                     await _mark_execution_interrupted(
                         conn,
                         str(sid),
                         str(_execution_uuid),
                         "final_save_superseded_by_newer_user_message",
-                        partial_content=_existing_content or "",
+                        partial_content=_final_content,
                         delete_empty_placeholder=True,
                     )
                     return
