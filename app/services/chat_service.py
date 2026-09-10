@@ -6006,8 +6006,8 @@ async def with_background_completion(
             _had_content = True
             try:
                 await _interim_save_streaming(session_id, _old_state, force=True)
-            except Exception:
-                pass
+            except Exception as _flush_err:
+                logger.warning("pre_supersede_partial_flush_failed session=%s error=%s", session_id[:8], str(_flush_err)[:200])
         old_task.cancel(msg="superseded_by_new_execution")
         if not _had_content and _old_state and _old_state.get("execution_id"):
             try:
@@ -6017,8 +6017,8 @@ async def with_background_completion(
                         "UPDATE chat_turn_executions SET status = 'interrupted', interrupt_category = 'superseded', completed_at = NOW() WHERE id = $1 AND status = 'running'",
                         uuid.UUID(str(_old_state["execution_id"])),
                     )
-            except Exception:
-                pass
+            except Exception as _supersede_err:
+                logger.warning("supersede_execution_mark_failed session=%s error=%s", session_id[:8], str(_supersede_err)[:200])
         logger.info(f"bg_task_replaced session={session_id} partial_flushed={_had_content}")
 
     # BUG-SESSION-MIX FIX: 새 producer 시작 전 잔류 streaming_placeholder 정리.
