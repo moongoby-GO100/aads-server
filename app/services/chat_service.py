@@ -225,6 +225,7 @@ _INTERRUPT_REASON_CATEGORIES = {
         "resume_retry_limit_exhausted",
         "resume_retry_limit_exhausted",
         "execution_resume_attempt_limit_exceeded",
+        "stale_retrying_hard_cap",
     ),
     "connection_error": (
         "connection closed",
@@ -10066,6 +10067,33 @@ async def trigger_ai_reaction(
             "deferred_queue" if _from_deferred_queue else "direct",
         )
         return None
+
+    # P0 FIX: CEO의 최근 지시에 대한 응답이 미완료(interrupted/retrying)인 경우,
+    # 시스템 자동 트리거 응답이 새 버블로 나타나 '이전 응답 복제' 현상을 유발한다.
+    # 이 경우 deferred 큐로 보내 CEO 응답이 완료된 뒤 처리한다.
+    try:
+        async with get_pool().acquire() as _chk_conn:
+            _recent_unanswered = await _chk_conn.fetchval(
+                """
+                SELECT TRUE FROM chat_turn_executions
+                WHERE session_id = $1
+                  AND status IN ('interrupted', 'retrying')
+                  AND completed_at > NOW() - INTERVAL '3 minutes'
+                  AND actual_model IS NOT NULL
+                LIMIT 1
+                """,
+                uuid.UUID(str(session_id)),
+            )
+            if _recent_unanswered:
+                if not _from_deferred_queue:
+                    await _enqueue_deferred_reaction(session_id, safe_message, ohvis_task_id)
+                logger.info(
+                    "trigger_ai_reaction_deferred_recent_interrupted session=%s",
+                    session_id[:8],
+                )
+                return None
+    except Exception as _chk_err:
+        logger.warning("trigger_ai_reaction_interrupted_check_failed session=%s: %s", session_id[:8], str(_chk_err)[:120])
 
     # 🆕 CEO의 SSE 스트리밍(with_background_completion) 실행 중이면 큐잉 (CEO 작업 중단 금지)
     if session_id in _active_bg_tasks and not _active_bg_tasks[session_id].done():
