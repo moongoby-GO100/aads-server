@@ -65,6 +65,13 @@ def test_pipeline_runner_does_not_deploy_dashboard_by_recent_commit_age():
     assert "no dashboard-targeted changes" in script
 
 
+def test_pipeline_runner_deploys_dashboard_from_approved_commit_sha():
+    script = _runner_script()
+
+    assert 'AADS_RELEASE_SHA="${current_sha:0:12}"' in script
+    assert 'bash /root/aads/aads-dashboard/deploy.sh' in script
+
+
 def test_pipeline_runner_records_masked_push_diagnostics():
     script = _runner_script()
 

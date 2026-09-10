@@ -2208,7 +2208,8 @@ deploy_job() {
             if [ "$DASHBOARD_CHANGED" = true ]; then
                 log "  BLUEGREEN aads-dashboard — deploy.sh 호출 (헬스체크+롤백)"
                 local _dash_deploy_log="/tmp/pipeline-deploy-dashboard-${job_id}.log"
-                if bash /root/aads/aads-dashboard/deploy.sh >"$_dash_deploy_log" 2>&1; then
+                if AADS_RELEASE_SHA="${current_sha:0:12}" \
+                   bash /root/aads/aads-dashboard/deploy.sh >"$_dash_deploy_log" 2>&1; then
                     tail -10 "$_dash_deploy_log" 2>/dev/null || true
                     log "  DASHBOARD DEPLOY: 완료 (무중단, 헬스체크+롤백 포함)"
                 else

@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-09-10 13:20 KST — Dashboard runner approved-SHA deployment fencing
+
+- Incident: `runner-d68acf9c` pushed approved dashboard commit `5da0741368ba`, but the runner invoked `/root/aads/aads-dashboard/deploy.sh` without the approved SHA. The dashboard shared worktree was still on `7f916b20ef88`, so the first Docker build used stale source and was later canceled, while the job was recorded as `build_fail`.
+- Change: `scripts/pipeline-runner.sh` and `.local` now pass `AADS_RELEASE_SHA="${current_sha:0:12}"` to the dashboard deploy. The paired dashboard `deploy.sh` resolves and archives that exact commit, failing closed when it is unavailable.
+- Verification: both runner scripts pass `bash -n`, remain byte-identical, and `tests/unit/test_pipeline_runner_worktree_policy.py` passes 12 tests. Dashboard deploy script passes `bash -n`.
+- Runtime note: the canonical files are changed locally in this recovery session, but a long-running runner process keeps its loaded functions until a separately fenced idle reload. Do not kill an active runner or claim runtime completion from the file change alone.
+- Rollback: revert the two runner-script lines and paired dashboard archive guard together; leaving only one side would restore an ambiguous source/SHA contract.
+
 ## 2026-09-10 — Pipeline Runner TARGET 판정 및 런타임 교체 인수인계
 
 ### 적용 범위
