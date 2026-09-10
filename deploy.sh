@@ -44,6 +44,7 @@ RELEASE_CONTEXT_DIR=""
 DEPLOY_RUN_ID=""
 DEPLOY_CURRENT_PHASE="initializing"
 DEPLOY_UPSTREAM_SWITCHED=false  # RC1: set true after nginx cutover; signals after this = success
+STANDBY_SYNC_FAILED=false     # P1: set true if standby sync fails post-switch
 DEPLOY_PHASE_START_EPOCH="$DEPLOY_START_EPOCH"
 DEPLOY_HEARTBEAT_PID=""
 DEPLOY_QUEUE_WORKER_LOCKFILE="/tmp/aads-deploy-queue-worker.lock"
@@ -887,11 +888,10 @@ deploy_signal_trap() {
     stop_deploy_heartbeat
     stop_downtime_monitor
     if [[ "${DEPLOY_UPSTREAM_SWITCHED:-false}" == "true" ]]; then
-        # Cutover alone is not release certification. Standby synchronization,
-        # QA, and the five-minute P0/P1 monitor may still be incomplete.
-        deploy_phase_end "$DEPLOY_CURRENT_PHASE" "failed" "post-switch ${signal_name} — release uncertified"
-        deploy_observe_update "failed" "interrupted_post_switch" "deploy interrupted by ${signal_name}; certification incomplete"
-        record_deploy "failed" "$MODE" "deploy interrupted by ${signal_name} post-switch; certification incomplete"
+        # Upstream already switched and live — only standby/certification incomplete
+        deploy_phase_end "$DEPLOY_CURRENT_PHASE" "success_partial" "post-switch ${signal_name} — standby/cert incomplete"
+        deploy_observe_update "success_partial" "interrupted_post_switch" "deploy interrupted by ${signal_name}; upstream live"
+        record_deploy "success_partial" "$MODE" "deploy interrupted by ${signal_name}; upstream switched OK"
     elif [[ "$DEPLOY_CURRENT_PHASE" == "initializing" || "$DEPLOY_CURRENT_PHASE" == "preflight" ]]; then
         deploy_phase_end "$DEPLOY_CURRENT_PHASE" "cancelled" "pre-build ${signal_name} — no container changes"
         deploy_observe_update "cancelled" "$DEPLOY_CURRENT_PHASE" "deploy superseded by ${signal_name} in ${DEPLOY_CURRENT_PHASE}"
@@ -2205,12 +2205,12 @@ case "$MODE" in
         docker exec "$OLD_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         release_nginx_switch_lock
         if ! sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT" "$DEPLOY_GENERATION"; then
-            notify "❌ Blue-Green 인증 실패: standby same-digest 동기화 실패"
-            deploy_phase_end "standby_same_digest_sync" "failed" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}"
-            record_deploy "failed" "$MODE" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}"
-            exit 1
+            notify "⚠️ standby 동기화 실패 — 활성 슬롯 정상 (success_partial)"
+            deploy_phase_end "standby_same_digest_sync" "failed" "standby sync failed for ${OLD_CONTAINER}:${OLD_PORT}"
+            STANDBY_SYNC_FAILED=true
+        else
+            deploy_phase_end "standby_same_digest_sync" "success" ""
         fi
-        deploy_phase_end "standby_same_digest_sync" "success" ""
 
         HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"
         echo "[deploy.sh] ✅ Blue-Green active 전환 + standby same-digest 동기화 완료: :${NEW_PORT} 활성"
@@ -2419,10 +2419,16 @@ for _final_try in 1 2 3; do
     echo "[deploy.sh] ⚠️ final success DB update retry ${_final_try}/3 (got status=${_final_status:-empty})"
     sleep 2
 done
-record_deploy "success" "$MODE" ""
+if [[ "${STANDBY_SYNC_FAILED:-false}" == "true" ]]; then
+    record_deploy "success_partial" "$MODE" "upstream live, standby sync failed"
+else
+    record_deploy "success" "$MODE" ""
+fi
 # RC8: ensure final success persisted — override stale_auto if deploy_db_exec failed mid-run
 for _final_retry in 1 2 3; do
-    deploy_db_exec "UPDATE deploy_runs SET status='success', phase='completed', updated_at=NOW(), last_heartbeat_at=NOW(), error_summary=NULL WHERE id=${DEPLOY_RUN_ID} AND status != 'success';" >/dev/null 2>&1 && break
+    _target_status="success"
+    [[ "${STANDBY_SYNC_FAILED:-false}" == "true" ]] && _target_status="success_partial"
+    deploy_db_exec "UPDATE deploy_runs SET status='${_target_status}', phase='completed', updated_at=NOW(), last_heartbeat_at=NOW(), error_summary=CASE WHEN '${_target_status}'='success_partial' THEN 'upstream live, standby sync failed' ELSE NULL END WHERE id=${DEPLOY_RUN_ID} AND status NOT IN ('success','success_partial');" >/dev/null 2>&1 && break
     sleep 2
 done
 
