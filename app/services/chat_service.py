@@ -535,6 +535,7 @@ _HISTORY_EXCLUDED_INTENTS = (
     "pipeline_c",
     "runner_notification",
     "runner_notification",
+    "runner_notification",
     "ai_review_warning",
     "interrupted_partial",
     "interruption_notice",
