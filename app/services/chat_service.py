@@ -505,6 +505,13 @@ def _looks_like_runner_notification(content: str) -> bool:
     if any(marker in head for marker in runner_headers):
         return True
 
+    # P0 FIX(20260910): 실제 자동 트리거 알림은 "[시스템] ..." 접두사로 삽입된다.
+    # 기존 마커는 "[Pipeline Runner]" 형태만 매치해서, Runner 실패/PC Agent 끊김 알림이
+    # supersede 방지 분기(_get_or_create_turn_execution)를 통과하지 못하고
+    # CEO 응답을 중단시키는 새 execution을 생성했다.
+    if text.startswith("[시스템]"):
+        return True
+
     short_runner_markers = (
         "pipeline_runner_approve",
         "검수 요청",
