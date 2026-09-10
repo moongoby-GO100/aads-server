@@ -49,6 +49,7 @@ _RESUME_LEASE_IDLE_TIMEOUT = max(60, int(os.getenv("AADS_RESUME_LEASE_IDLE_TIMEO
 _execution_owner_epochs: Dict[str, int] = {}
 _deferred_consecutive_count: Dict[str, int] = {}
 _DEFERRED_MAX_CONSECUTIVE = max(3, int(os.getenv("AADS_DEFERRED_MAX_CONSECUTIVE", "5")))
+_HARD_AGE_MAX_SECONDS = max(600, int(os.getenv("AADS_HARD_AGE_MAX_SECONDS", "1800")))
 
 
 class ResumeFencedOut(RuntimeError):
@@ -2949,6 +2950,16 @@ async def cleanup_overlong_running_executions(
                 "stale_retrying_execution_cleaned session=%s execution=%s age=%ss",
                 session_id[:8], execution_id[:8], row_data.get("age_seconds"),
             )
+            if int(row_data.get("retry_count") or 0) >= _EXECUTION_RESUME_MAX_ATTEMPTS:
+                try:
+                    await retry_conn.execute(
+                        "INSERT INTO chat_messages (session_id, role, content, model_used, intent) "
+                        "VALUES ($1, 'assistant', $2, 'system', 'resume_failure_notice')",
+                        uuid.UUID(session_id),
+                        f"⚠️ 응답 재개 {row_data.get('retry_count', '?')}회 시도 후 최종 실패 — 동일 지시를 다시 보내주세요.",
+                    )
+                except Exception:
+                    pass
 
     return {
         "scanned": len(rows),
@@ -3186,8 +3197,9 @@ async def cleanup_stale_streaming_placeholders(
             SELECT te.id, te.session_id
             FROM chat_turn_executions te
             WHERE te.status IN ('running', 'retrying')
-              AND te.created_at < NOW() - INTERVAL '1800 seconds'
+              AND te.created_at < NOW() - ($1::int * INTERVAL '1 second')
             """,
+            _HARD_AGE_MAX_SECONDS,
         )
         _hard_age_any_cleaned = 0
         for _haa in _hard_age_any_rows:
@@ -3197,7 +3209,7 @@ async def cleanup_stale_streaming_placeholders(
                 SET status = 'interrupted',
                     interrupt_category = 'watchdog_timeout',
                     completed_at = COALESCE(completed_at, NOW()),
-                    error_message = 'force_interrupted_hard_age_1800s',
+                    error_message = f'force_interrupted_hard_age_{_HARD_AGE_MAX_SECONDS}s',
                     owner_instance = NULL,
                     lease_expires_at = NULL,
                     updated_at = NOW()
@@ -3218,6 +3230,15 @@ async def cleanup_stale_streaming_placeholders(
                 _haa["id"],
             )
             _hard_age_any_cleaned += 1
+            try:
+                await conn.execute(
+                    "INSERT INTO chat_messages (session_id, role, content, model_used, intent) "
+                    "VALUES ($1, 'assistant', $2, 'system', 'resume_failure_notice')",
+                    _haa["session_id"],
+                    "⚠️ 장시간 응답이 중단되었습니다. 동일한 지시를 다시 보내주세요.",
+                )
+            except Exception:
+                pass
         if _hard_age_any_cleaned:
             logger.warning("hard_age_any_zombie_cleanup cleaned=%s", _hard_age_any_cleaned)
 
@@ -6878,6 +6899,15 @@ async def _resume_single_stream(
                     )
                     if (_rc or 0) >= _EXECUTION_RESUME_MAX_ATTEMPTS:
                         logger.error(f'resume_hard_cap_exceeded: session={session_id[:8]} retry_count={_rc}')
+                        try:
+                            await _cap_conn.execute(
+                                "INSERT INTO chat_messages (session_id, role, content, model_used, intent) "
+                                "VALUES ($1, 'assistant', $2, 'system', 'resume_failure_notice')",
+                                uuid.UUID(session_id),
+                                f"⚠️ 응답 재개 {_rc}회 시도 후 최종 실패 — 동일 지시를 다시 보내주세요. (자동 재시도 한도 초과)",
+                            )
+                        except Exception:
+                            pass
                         _streaming_state.pop(session_id, None)
                         _active_bg_tasks.pop(session_id, None)
                         return
