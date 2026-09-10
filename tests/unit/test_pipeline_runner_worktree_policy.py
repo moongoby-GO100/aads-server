@@ -99,3 +99,24 @@ def test_aads_rollback_uses_the_same_isolated_release_path():
 
     assert script.count('bash "$worktree_dir/deploy.sh" bluegreen') >= 2
     assert "ROLLBACK_DEPLOY: isolated bluegreen 성공" in script
+
+
+def test_aads_target_routing_accepts_only_one_canonical_target_row():
+    script = _runner_script()
+
+    assert "aads_instruction_target()" in script
+    assert "^[[:space:]]*TARGET[[:space:]]*:" in script
+    assert "/root/aads/aads-server) target=\"backend\"" in script
+    assert "/root/aads/aads-dashboard) target=\"dashboard\"" in script
+    assert '"$invalid" == "true" || "$target_rows" -gt 1' in script
+    assert "aads-server-other" in script
+    assert "aads-server([^A-Za-z0-9_-]" not in script
+
+
+def test_aads_target_routing_is_fail_closed_for_execution_deploy_and_rollback():
+    script = _runner_script()
+
+    assert "fail_invalid_aads_target()" in script
+    # pre-validation, execution, approved deployment, and rejection/rollback all
+    # reject the identical malformed/ambiguous TARGET decision before choosing a repo.
+    assert script.count('fail_invalid_aads_target "$job_id" "$session_id"') == 4

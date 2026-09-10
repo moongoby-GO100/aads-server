@@ -1,5 +1,33 @@
 # AADS HANDOVER
 
+## 2026-09-10 — Pipeline Runner TARGET 판정 및 런타임 교체 인수인계
+
+### 적용 범위
+
+- `scripts/pipeline-runner.sh`와 동기화 템플릿 `.local`은 AADS 작업의 저장소 판정을 본문 정규식 추측에서 단일 권위 `TARGET:` 행 파서로 변경했다.
+- 허용하는 명시 문법은 정확히 `TARGET: /root/aads/aads-server` 또는 `TARGET: /root/aads/aads-dashboard`다. 앞뒤 공백만 허용한다.
+- `TARGET:`가 없으면 기존 호환성을 위해 backend 기본값을 사용한다. 본문 속 경로·저장소명은 읽기 참고로만 취급한다.
+- 알 수 없는 TARGET, `/root/aads/aads-server-other` 같은 접두사 사칭, 같은 행 다중 대상, 또는 중복 TARGET 행은 fail-closed다. 실행 사전검증·작업 실행·승인 배포·거부 원복 모두 같은 판정을 사용한다.
+- 한 TARGET만 명시한 작업과 공통 배포파일만 언급한 지시, 다른 저장소를 읽기 참고한 지시는 허용한다. 양쪽 저장소를 실제 수정하려면 별도 단일대상 작업으로 분리해야 한다.
+
+### 장기 실행 호스트 러너의 안전한 교체 절차
+
+파일 수정이나 API 릴리스만으로 장기 실행 중인 runner 메모리는 갱신되지 않는다. 승인된 canonical 스크립트가 호스트 배포 경로에 반영된 뒤에만 다음 절차를 운영자가 수행한다.
+
+1. runner DB lease/락을 보유한 인스턴스와 `pipeline_jobs`의 `claimed`/`running` 활성 자식 수를 읽기 전용으로 확인한다. 활성 수가 0이 아니면 해당 작업이 terminal 상태가 될 때까지 기다린다. 활성 runner를 종료하거나 API를 직접 재시작하지 않는다.
+2. 활성 수가 0인 짧은 유지보수 창에 새 claim이 들어오지 않도록 runner의 claim 진입을 DB-fenced maintenance/ownership gate로 막는다. gate의 소유자·epoch를 기록하고, 기존 소유자가 gate를 우회할 수 없음을 확인한다.
+3. canonical `scripts/pipeline-runner.sh`를 배포 대상에 반영하고, 유휴 교체 메커니즘으로 다음 poll 경계에서 runner를 재기동한다. 새 프로세스의 PID, 시작시각, script SHA(또는 파일 digest), engine mode와 lock inode를 기록해 구 메모리 프로세스와 구분한다.
+4. 새 PID가 DB claim 전에 canonical digest를 보고했고 단일 runner lock을 보유한 것을 확인한 뒤 maintenance gate를 해제한다. 바로 이어 단일 무해 queued probe 또는 dry-run 판정으로 canonical TARGET·unknown·suffix·duplicate·mixed 입력이 각각 예상대로 통과/차단되는지 확인한다.
+5. 새 claim 경쟁이 없고 새 runner가 lease/lock을 정상 갱신하는 것을 확인한 뒤에만 정상 poll로 복귀한다. 첫 claim의 `owner_instance`/`owner_epoch`가 새 프로세스와 일치해야 한다.
+6. 새 runner가 판정 또는 claim 검증에 실패하면 gate를 다시 닫고, 마지막으로 검증된 canonical script digest와 유휴 교체 메커니즘으로 되돌린다. 활성 자식이 0인지 재확인한 뒤에만 gate를 해제한다. API 직접 재시작·runner kill은 롤백 수단이 아니다.
+
+API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-server/deploy.sh bluegreen`만 사용한다. SHA당 이미지 한 번, 모든 slot `--no-build`, candidate health 뒤의 짧은 nginx lock, DB fencing, drain, routed health 실패 시 즉시 rollback, standby same-digest 동기화와 5분 P0/P1 관측이 완료 기준이다.
+
+### 이번 턴의 미실행 항목
+
+- 사용자 제한에 따라 Git 상태 조회/커밋/푸시, DB의 활성 `pipeline_jobs`·`chat_workspace_change_ledger` preflight, runner 교체, API 동작, 배포는 실행하지 않았다.
+- 장기 실행 호스트 프로세스의 실제 신규 판정은 위 절차가 끝나기 전에는 완료로 간주하지 않는다.
+
 ## 2026-09-10 09:24 KST — Goal 릴리스 배포 게이트 복구
 
 - Goal 완료 판정 보정 `604b0ce9`를 원격 `main`에 푸시했다. 운영 배포 첫 시도

@@ -60,29 +60,68 @@ declare -A PROJECT_WORKDIR=(
 
 AADS_DASHBOARD_WORKDIR="${AADS_DASHBOARD_WORKDIR:-/root/aads/aads-dashboard}"
 
+# AADS에는 한 작업에 하나의 명시적 TARGET만 허용한다. 본문의 경로나 저장소 이름은
+# 읽기 참고일 수 있으므로 routing 근거가 아니다. TARGET이 없으면 기존 AADS 기본값(backend)을
+# 유지하되, dashboard 작업은 반드시 canonical TARGET 행을 명시해야 한다.
+# 허용 문법(공백만 앞뒤 허용):
+#   TARGET: /root/aads/aads-server
+#   TARGET: /root/aads/aads-dashboard
+aads_instruction_target() {
+    local project="$1" instruction="${2:-}"
+    local line payload target_rows=0 target="" invalid=false
+    [[ "$project" == "AADS" ]] || { printf '%s\n' "default"; return 0; }
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*TARGET[[:space:]]*: ]] || continue
+        target_rows=$((target_rows + 1))
+        payload="${line#*:}"
+        payload=$(printf '%s' "$payload" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        case "$payload" in
+            /root/aads/aads-server) target="backend" ;;
+            /root/aads/aads-dashboard) target="dashboard" ;;
+            *) invalid=true ;;
+        esac
+    done <<< "$instruction"
+
+    # Duplicate directives, mixed targets, unknown targets, and a same-line list
+    # are all fail-closed. Exact matching rejects /root/aads/aads-server-other.
+    if [[ "$invalid" == "true" || "$target_rows" -gt 1 ]]; then
+        return 1
+    fi
+    [[ -n "$target" ]] || target="backend"
+    printf '%s\n' "$target"
+}
+
 is_aads_backend_instruction() {
-    local project="$1" instruction="$2"
-    [[ "$project" == "AADS" ]] || return 1
-    printf '%s' "$instruction" | grep -Eiq \
-        '(/root/aads/aads-server|(^|[^A-Za-z0-9_-])aads-server([^A-Za-z0-9_-]|$)|(^|[[:space:]/])migrations/|(^|[[:space:]/])app/(api|core|models|schemas|services|main\.py)|pipeline-runner\.sh|deploy\.sh)'
+    local target
+    target=$(aads_instruction_target "$1" "${2:-}") || return 1
+    [[ "$1" == "AADS" && "$target" == "backend" ]]
 }
 
 is_aads_dashboard_instruction() {
-    local project="$1" instruction="$2"
-    [[ "$project" == "AADS" ]] || return 1
-    printf '%s' "$instruction" | grep -Eiq \
-        '(/root/aads/aads-dashboard|(^|[^A-Za-z0-9_-])aads-dashboard([^A-Za-z0-9_-]|$)|src/(app|components)/chat|DiscussionPanel\.tsx|MarkdownRenderer\.tsx|ChatArtifactPanel\.tsx|ChatInput\.tsx|Artifact(Summary)?Panel\.tsx|package(-lock)?\.json|next\.config|tailwind\.config|tsconfig\.json)'
+    local target
+    target=$(aads_instruction_target "$1" "${2:-}") || return 1
+    [[ "$1" == "AADS" && "$target" == "dashboard" ]]
 }
 
 resolve_project_workdir() {
-    local project="$1" instruction="${2:-}"
-    if is_aads_backend_instruction "$project" "$instruction"; then
-        echo "${PROJECT_WORKDIR[$project]:-}"
-    elif is_aads_dashboard_instruction "$project" "$instruction"; then
-        echo "$AADS_DASHBOARD_WORKDIR"
-    else
-        echo "${PROJECT_WORKDIR[$project]:-}"
+    local project="$1" instruction="${2:-}" target
+    if [[ "$project" != "AADS" ]]; then
+        printf '%s\n' "${PROJECT_WORKDIR[$project]:-}"
+        return 0
     fi
+    target=$(aads_instruction_target "$project" "$instruction") || return 1
+    if [[ "$target" == "dashboard" ]]; then
+        printf '%s\n' "$AADS_DASHBOARD_WORKDIR"
+    else
+        printf '%s\n' "${PROJECT_WORKDIR[$project]:-}"
+    fi
+}
+
+fail_invalid_aads_target() {
+    local job_id="$1" session_id="$2"
+    _fail_job "$job_id" "$session_id" "invalid_aads_target" \
+        "AADS TARGET은 단 하나의 canonical 행만 허용: TARGET: /root/aads/aads-server 또는 TARGET: /root/aads/aads-dashboard"
 }
 
 get_job_instruction() {
@@ -816,7 +855,10 @@ pre_validate() {
     local job_id="$1" project="$2" session_id="$3"
     local instruction="${4:-}"
     local workdir
-    workdir=$(resolve_project_workdir "$project" "$instruction")
+    if ! workdir=$(resolve_project_workdir "$project" "$instruction"); then
+        fail_invalid_aads_target "$job_id" "$session_id"
+        return 1
+    fi
 
     # 방안 A: 원격 프로젝트 판별 — workdir이 서버68에 없으므로 로컬 체크 스킵
     local is_remote=false
@@ -1155,7 +1197,10 @@ run_job() {
     local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-auto}" job_size="${7:-M}" parallel_group="${8:-}"
     local output_file="$ARTIFACT_DIR/${job_id}.out" err_file="$ARTIFACT_DIR/${job_id}.err"
     local workdir
-    workdir=$(resolve_project_workdir "$project" "$instruction")
+    if ! workdir=$(resolve_project_workdir "$project" "$instruction"); then
+        fail_invalid_aads_target "$job_id" "$session_id"
+        return 1
+    fi
     local main_workdir="$workdir"
     local target_repo="default"
     if is_aads_dashboard_instruction "$project" "$instruction"; then
@@ -1993,7 +2038,10 @@ deploy_job() {
     local _job_instruction=""
     _job_instruction=$(get_job_instruction "$job_id")
     local workdir
-    workdir=$(resolve_project_workdir "$project" "$_job_instruction")
+    if ! workdir=$(resolve_project_workdir "$project" "$_job_instruction"); then
+        fail_invalid_aads_target "$job_id" "$session_id"
+        return 1
+    fi
     local target_repo="default"
     if is_aads_dashboard_instruction "$project" "$_job_instruction"; then
         target_repo="aads-dashboard"
@@ -2540,7 +2588,10 @@ reject_job() {
     local _job_instruction=""
     _job_instruction=$(get_job_instruction "$job_id")
     local workdir
-    workdir=$(resolve_project_workdir "$project" "$_job_instruction")
+    if ! workdir=$(resolve_project_workdir "$project" "$_job_instruction"); then
+        fail_invalid_aads_target "$job_id" "$session_id"
+        return 1
+    fi
     [[ -z "$workdir" || ! -d "$workdir" ]] && return 1
 
     log "▶ REJECT job=$job_id project=$project workdir=$workdir"

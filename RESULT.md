@@ -1,5 +1,35 @@
 # PC Agent 실시간 화면 스트리밍 — 검증 결과
 
+## 2026-09-10 — Runner 저장소 판정 최종 보완
+
+### STEP 0 기존 구현 조사 및 분류
+
+| 항목 | 분류 | 결과 |
+| --- | --- | --- |
+| `is_aads_backend_instruction` / `is_aads_dashboard_instruction` | 수정 | 본문 전체 정규식 추론을 canonical TARGET 판정 결과 사용으로 축소했다. |
+| `resolve_project_workdir` | 수정 | AADS TARGET 파싱 실패를 호출자에게 반환해 임의 기본 경로 선택을 막는다. |
+| `aads_instruction_target` | 신규 | 모든 `TARGET:` 행을 검사해 두 정확한 루트만 허용하고 unknown·접두사 사칭·중복·혼합·다중대상을 fail-closed 처리한다. |
+| `pre_validate`, `run_job`, `deploy_job`, `reject_job` | 수정 | 동일한 resolver 실패 시 `invalid_aads_target`으로 종료해 실행/승인/원복 판정이 갈라지지 않게 했다. |
+| 프로젝트 락, DB `FOR UPDATE SKIP LOCKED` claim, isolated worktree/bluegreen 경로 | 유지 | 기존 락·fencing·worktree 계약은 변경하지 않았다. |
+| `tests/unit/test_pipeline_runner_worktree_policy.py` | 수정 | canonical 문법과 fail-closed 경로가 네 lifecycle 지점에 적용됨을 정적 회귀로 추가했다. |
+| 삭제 | 없음 | 삭제 대상 및 호출처 영향 없음. |
+
+### 변경 파일
+
+- `scripts/pipeline-runner.sh`
+- `scripts/pipeline-runner.sh.local` — primary와 동일하게 유지
+- `tests/unit/test_pipeline_runner_worktree_policy.py`
+- `HANDOVER.md`, `RESULT.md` — 지시된 운영 절차와 미실행 항목 기록
+
+지시서 외 파일 변경은 없다. 이전 보존 아티팩트의 범위 안에서 runner·동기화 템플릿·정책 테스트·필수 인수인계 문서만 수정했다.
+
+### 검증 및 미실행
+
+- 코드 수준 확인: primary runner와 `.local`에 동일 판정 로직 및 동일 lifecycle guard를 반영했다.
+- 실행 검증은 사용자 제한(파일 변경만 허용)에 따라 수행하지 않았다. 따라서 pytest, bash 문법 검사, Git 상태/차이 조회, DB `pipeline_jobs` 및 `chat_workspace_change_ledger` preflight도 미실행이다.
+- 커밋, push, 빌드, 배포, runner 교체 및 API 직접 재시작은 수행하지 않았다.
+- 런타임 반영 완료 여부는 `HANDOVER.md`의 안전한 유휴 교체 절차에서 canonical digest를 가진 새 PID와 첫 DB claim fencing을 실측하기 전까지 미확정이다.
+
 ## 구현 요약
 
 모든 5개 파일에 스트리밍 기능이 이미 구현 완료 상태. 서버 재시작 후 정상 동작 확인.
