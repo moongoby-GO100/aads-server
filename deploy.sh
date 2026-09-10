@@ -321,7 +321,9 @@ deploy_db_exec() {
     local _db_out
     if ! _db_out=$(timeout 10 docker exec aads-postgres psql -U aads -d aads -qAtc "$sql" 2>&1); then
         echo "[deploy.sh] WARN: deploy_db_exec failed: ${_db_out:0:200}" >&2
+        return 0
     fi
+    printf '%s' "$_db_out"
 }
 
 deploy_db_available() {

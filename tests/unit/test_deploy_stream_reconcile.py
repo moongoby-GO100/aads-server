@@ -124,3 +124,23 @@ def test_post_cutover_signal_cannot_certify_an_incomplete_release():
     assert 'deploy_observe_update "failed" "interrupted_post_switch"' in trap_body
     assert "completed_after_signal_recovery" not in trap_body
     assert "certified live" not in trap_body
+
+
+def test_deploy_db_exec_preserves_successful_query_output():
+    deploy_script = (Path(__file__).parents[2] / "deploy.sh").read_text()
+    function_body = deploy_script.split("deploy_db_exec()", 1)[1].split(
+        "deploy_db_available()", 1
+    )[0]
+
+    assert "printf '%s' \"$_db_out\"" in function_body
+
+
+def test_standby_sync_failure_cannot_be_certified_as_partial_success():
+    deploy_script = (Path(__file__).parents[2] / "deploy.sh").read_text()
+    failure_path = deploy_script.split(
+        'if ! sync_standby_slot_after_drain "$OLD_CONTAINER"', 1
+    )[1].split('HEALTH_URL="http://localhost:${NEW_PORT}', 1)[0]
+
+    assert 'record_deploy "failed" "$MODE"' in failure_path
+    assert "exit 1" in failure_path
+    assert "success_partial" not in failure_path

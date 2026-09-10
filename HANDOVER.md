@@ -1,5 +1,19 @@
 # AADS HANDOVER
 
+## 2026-09-10 09:24 KST — Goal 릴리스 배포 게이트 복구
+
+- Goal 완료 판정 보정 `604b0ce9`를 원격 `main`에 푸시했다. 운영 배포 첫 시도
+  `deploy_runs.id=304`는 다른 채팅 세션이 실행 중인 `deploy.sh`를 같은 시각에 재작성해
+  `initializing` 단계에서 종료됐으며, 라우팅·컨테이너에는 영향이 없었다.
+- standby same-digest 실패를 `success_partial`로 계속 진행시키던 `bc391056`은
+  `/root/aads/AGENTS.md`의 fail-closed 릴리스 계약과 충돌해 `0d1c86d5`로 되돌렸다.
+- `f040eab9`에서 `deploy_db_exec()` 출력이 유실되어 DB 식별자·상태 조회가 빈 값이 되는
+  회귀를 수정했다. 성공 시 캡처한 stdout을 그대로 반환하고, 실패는 기존처럼 비치명적
+  경고로 남긴다. 정적 회귀 테스트가 출력 보존 계약을 고정한다.
+- 검증: Goal/Release/stream 회귀 테스트, `bash -n deploy.sh`, 릴리스 계약 검증기를 실행한다.
+  운영 인증은 최신 안전 SHA를 `deploy.sh bluegreen`으로 배포하고 동일 digest·외부 헬스·
+  5분 P0/P1 모니터링 및 DB `success/completed`를 확인한 뒤에만 완료로 판정한다.
+
 ## 2026-09-10 01:11 KST — runner-1ee3c3b8 보존 게이트 재작업
 
 - 실패 원인은 기능 테스트가 아니라 리뷰 전 보존 하드게이트였다. DB `code_reviews` 기준
