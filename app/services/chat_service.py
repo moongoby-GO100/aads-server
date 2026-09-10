@@ -47,6 +47,8 @@ _RESUME_INCOMPLETE_STREAM_MAX_RETRIES = max(
 # baseline이 attempt별로 리셋되므로 300s 무출력만 진짜 stuck으로 판정한다.
 _RESUME_LEASE_IDLE_TIMEOUT = max(60, int(os.getenv("AADS_RESUME_LEASE_IDLE_TIMEOUT", "300")))
 _execution_owner_epochs: Dict[str, int] = {}
+_deferred_consecutive_count: Dict[str, int] = {}
+_DEFERRED_MAX_CONSECUTIVE = max(3, int(os.getenv("AADS_DEFERRED_MAX_CONSECUTIVE", "5")))
 
 
 class ResumeFencedOut(RuntimeError):
@@ -7205,19 +7207,21 @@ async def _resume_single_stream(
 
                     _raise_if_fenced_out("between_model_attempts")
                     if _execution_uuid:
-                        async with pool.acquire() as _attempt_conn:
-                            attempt_number = await _claim_resume_model_attempt(
-                                _attempt_conn,
-                                _execution_uuid,
-                                owner_epoch,
-                            )
+                        if attempt == 0:
+                            async with pool.acquire() as _attempt_conn:
+                                attempt_number = await _claim_resume_model_attempt(
+                                    _attempt_conn,
+                                    _execution_uuid,
+                                    owner_epoch,
+                                )
                         # P0-FIX: 새 모델 attempt 시작 → idle 판정 baseline 리셋
                         _pump_baseline["ts"] = _bg_time.monotonic()
                         logger.info(
-                            "resume_model_attempt_started session=%s execution=%s attempt=%s model=%s",
+                            "resume_model_attempt_started session=%s execution=%s chain_pos=%s/%s model=%s",
                             session_id[:8],
                             str(_execution_uuid)[:8],
-                            attempt_number,
+                            attempt,
+                            len(_resume_model_chain) if _resume_model_chain else 1,
                             _resume_model_attempt,
                         )
 
@@ -10137,15 +10141,39 @@ async def trigger_ai_reaction(
                 uuid.UUID(str(session_id)),
             )
             if _recent_unanswered:
+                _defer_key = str(session_id)
+                _cnt = _deferred_consecutive_count.get(_defer_key, 0) + 1
+                _deferred_consecutive_count[_defer_key] = _cnt
+                if _cnt > _DEFERRED_MAX_CONSECUTIVE:
+                    logger.warning(
+                        "deferred_loop_auto_stop session=%s consecutive=%s — needs_ceo_approval",
+                        session_id[:8], _cnt,
+                    )
+                    try:
+                        await _chk_conn.execute(
+                            """UPDATE chat_deferred_reactions
+                               SET status = 'failed',
+                                   error_message = 'deferred_loop_auto_stop_ceo_gate',
+                                   updated_at = NOW()
+                               WHERE session_id = $1
+                                 AND status IN ('pending', 'claimed')""",
+                            uuid.UUID(_defer_key),
+                        )
+                    except Exception:
+                        pass
+                    _deferred_consecutive_count.pop(_defer_key, None)
+                    return None
                 if not _from_deferred_queue:
                     await _enqueue_deferred_reaction(session_id, safe_message, ohvis_task_id)
                 logger.info(
-                    "trigger_ai_reaction_deferred_recent_interrupted session=%s",
-                    session_id[:8],
+                    "trigger_ai_reaction_deferred_recent_interrupted session=%s count=%s/%s",
+                    session_id[:8], _cnt, _DEFERRED_MAX_CONSECUTIVE,
                 )
                 return None
     except Exception as _chk_err:
         logger.warning("trigger_ai_reaction_interrupted_check_failed session=%s: %s", session_id[:8], str(_chk_err)[:120])
+
+    _deferred_consecutive_count.pop(str(session_id), None)
 
     # 🆕 CEO의 SSE 스트리밍(with_background_completion) 실행 중이면 큐잉 (CEO 작업 중단 금지)
     if session_id in _active_bg_tasks and not _active_bg_tasks[session_id].done():
