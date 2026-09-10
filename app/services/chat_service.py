@@ -43,7 +43,9 @@ _EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX
 _RESUME_INCOMPLETE_STREAM_MAX_RETRIES = max(
     0, int(os.getenv("AADS_RESUME_INCOMPLETE_STREAM_MAX_RETRIES", "2"))
 )
-_RESUME_LEASE_IDLE_TIMEOUT = max(60, int(os.getenv("AADS_RESUME_LEASE_IDLE_TIMEOUT", "180")))
+# P0-FIX: 180s는 도구 다수 호출(30~110회) 재개 시 thinking 단계에서 오탐 fence-out을 유발했다.
+# baseline이 attempt별로 리셋되므로 300s 무출력만 진짜 stuck으로 판정한다.
+_RESUME_LEASE_IDLE_TIMEOUT = max(60, int(os.getenv("AADS_RESUME_LEASE_IDLE_TIMEOUT", "300")))
 _execution_owner_epochs: Dict[str, int] = {}
 
 
@@ -6785,9 +6787,10 @@ async def _resume_single_stream(
                 return
             _streaming_state[session_id]["owner_epoch"] = owner_epoch
 
+        _pump_baseline: Dict[str, float] = {"ts": _bg_time.monotonic()}
+
         if _execution_uuid and owner_epoch is not None:
             async def _resume_lease_pump() -> None:
-                _pump_start = _bg_time.monotonic()
                 while not _resume_lease_stop.is_set():
                     try:
                         await _heartbeat_asyncio.wait_for(
@@ -6796,11 +6799,15 @@ async def _resume_single_stream(
                         )
                         return
                     except _heartbeat_asyncio.TimeoutError:
-                        _pump_elapsed = _bg_time.monotonic() - _pump_start
+                        # P0-FIX: baseline은 "현재 모델 시도 시작 시각"으로 매 attempt마다
+                        # 리셋된다. 이전 attempt가 무출력으로 실패한 뒤 이어진 정상 attempt가
+                        # thinking 단계에서 idle 오판으로 fence-out 되던 버그 수정.
+                        _pump_baseline_ts = float(_pump_baseline.get("ts") or _started_at)
+                        _pump_elapsed = _bg_time.monotonic() - _pump_baseline_ts
                         if _pump_elapsed > _RESUME_LEASE_IDLE_TIMEOUT:
                             _st = _streaming_state.get(session_id)
                             _st_updated = _st.get("updated_at", _started_at) if _st else _started_at
-                            if _st_updated <= _started_at + 10:
+                            if _st_updated <= _pump_baseline_ts + 10:
                                 logger.warning(
                                     "resume_lease_idle_timeout session=%s execution=%s elapsed=%.0fs",
                                     session_id[:8],
@@ -6897,6 +6904,47 @@ async def _resume_single_stream(
                             or ""
                         ).strip()
                 raw_messages = [{"role": "user", "content": target_user_msg}] if target_user_msg else []
+                # P0-FIX: 실행 중 들어온 '[추가 지시]'(interrupt_applied)는
+                # _execution_has_newer_user_message 필터에서 제외되므로 supersede 되지 않는다.
+                # 그 결과 재개 컨텍스트에서 누락되어 CEO의 최신 지시가 영원히 응답되지 않았다.
+                # 재개 시 해당 지시를 반드시 이어붙인다.
+                try:
+                    async with pool.acquire() as _addl_conn:
+                        _addl_rows = await _addl_conn.fetch(
+                            """
+                            SELECT m.content
+                            FROM chat_messages m
+                            JOIN chat_turn_executions te ON te.id = $1
+                            LEFT JOIN chat_messages um ON um.id = te.user_message_id
+                            WHERE m.session_id = te.session_id
+                              AND m.role = 'user'
+                              AND m.created_at > COALESCE(um.created_at, te.created_at)
+                              AND (
+                                    COALESCE(m.intent, '') = 'interrupt_applied'
+                                 OR m.content LIKE '[추가 지시]%'
+                              )
+                            ORDER BY m.created_at ASC
+                            LIMIT 5
+                            """,
+                            _execution_uuid,
+                        )
+                    for _addl in _addl_rows:
+                        _addl_text = (_addl["content"] or "").strip()
+                        if _addl_text and _addl_text != target_user_msg:
+                            raw_messages.append({"role": "user", "content": _addl_text})
+                    if _addl_rows:
+                        logger.info(
+                            "resume_context_additional_instructions session=%s execution=%s count=%s",
+                            session_id[:8],
+                            str(_execution_uuid)[:8],
+                            len(_addl_rows),
+                        )
+                except Exception as _addl_err:
+                    logger.warning(
+                        "resume_additional_instruction_load_failed session=%s error=%s",
+                        session_id[:8],
+                        str(_addl_err)[:200],
+                    )
             else:
                 async with pool.acquire() as conn:
                     hist_rows = await conn.fetch(f"""
@@ -7161,6 +7209,8 @@ async def _resume_single_stream(
                                 _execution_uuid,
                                 owner_epoch,
                             )
+                        # P0-FIX: 새 모델 attempt 시작 → idle 판정 baseline 리셋
+                        _pump_baseline["ts"] = _bg_time.monotonic()
                         logger.info(
                             "resume_model_attempt_started session=%s execution=%s attempt=%s model=%s",
                             session_id[:8],
