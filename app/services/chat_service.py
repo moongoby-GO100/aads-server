@@ -39,7 +39,7 @@ _EXECUTION_OWNER_INSTANCE = os.getenv(
 ).strip() or "aads"
 _EXECUTION_LEASE_SECONDS = max(20, int(os.getenv("AADS_EXECUTION_LEASE_SECONDS", "45")))
 _EXECUTION_HEARTBEAT_SECONDS = max(2, int(os.getenv("AADS_EXECUTION_HEARTBEAT_SECONDS", "5")))
-_EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "8")))
+_EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "3")))
 _RESUME_INCOMPLETE_STREAM_MAX_RETRIES = max(
     0, int(os.getenv("AADS_RESUME_INCOMPLETE_STREAM_MAX_RETRIES", "2"))
 )
@@ -5586,13 +5586,12 @@ async def with_background_completion(
                 if not _retried:
                     _FALLBACK_CHAIN_429 = {
                         "claude-opus-5": ["claude-fable-5-1", "gpt-5.6-sol"],
-                        "claude-opus": ["claude-fable-5-1", "gpt-5.6-sol"],
+                        "claude-opus-4-6": ["claude-opus-5", "claude-fable-5-1"],
                         "claude-fable-5-1": ["claude-opus-5", "gpt-5.6-sol"],
                         "gpt-5.6-sol": ["claude-fable-5-1", "claude-opus-5"],
-                        "gpt-6-astra": ["claude-opus-5", "gpt-5.6-sol"],
-                        "claude-sonnet": ["claude-haiku", "claude-opus-5"],
-                        "claude-haiku": ["claude-sonnet", "claude-fable-5-1"],
-                        "gpt-5.5": ["claude-opus-5", "claude-fable-5-1"],
+                        "gpt-6-astra": ["gpt-5.6-sol", "claude-opus-5"],
+                        "claude-haiku-4-5-20251001": ["claude-fable-5-1", "gpt-5.6-sol"],
+                        "claude-sonnet-5": ["claude-fable-5-1", "claude-opus-5"],
                     }
                     for _fb_model in _FALLBACK_CHAIN_429.get(_original_model, []):
                         try:
