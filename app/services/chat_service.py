@@ -1991,6 +1991,7 @@ async def _get_or_create_turn_execution(
             UPDATE chat_messages
             SET intent = 'interrupted_partial',
                 model_used = 'interrupted',
+                is_hidden = FALSE,
                 content = $2,
                 edited_at = NOW()
             WHERE id = $1
@@ -3011,9 +3012,6 @@ async def cleanup_stale_streaming_placeholders(
         )
         _orphan_terminal_cleaned = 0
         for _orow in _orphan_terminal_rows:
-            _osid = _orow["session_id"]
-            if _osid in live_sessions:
-                continue
             _oeid = uuid.UUID(str(_orow["execution_id"]))
             _has_final = await conn.fetchval(
                 "SELECT 1 FROM chat_messages WHERE execution_id = $1 AND role = 'assistant' AND intent IS DISTINCT FROM 'streaming_placeholder' LIMIT 1",
@@ -3024,12 +3022,33 @@ async def cleanup_stale_streaming_placeholders(
             else:
                 _oc = _format_stale_placeholder_content(_orow["content"] or "")
                 await conn.execute(
-                    "UPDATE chat_messages SET content = $2, intent = 'interrupted_partial', model_used = 'interrupted', edited_at = NOW() WHERE id = $1",
+                    "UPDATE chat_messages SET content = $2, intent = 'interrupted_partial', model_used = 'interrupted', is_hidden = FALSE, edited_at = NOW() WHERE id = $1",
                     _orow["id"], _oc,
                 )
             _orphan_terminal_cleaned += 1
         if _orphan_terminal_cleaned:
             logger.info("orphan_terminal_placeholder_cleanup cleaned=%s", _orphan_terminal_cleaned)
+
+        _stale_content_rows = await conn.fetch(
+            """
+            SELECT m.id, m.content
+            FROM chat_messages m
+            WHERE m.intent IN ('streaming_placeholder', '_archived_partial')
+              AND m.is_hidden = TRUE
+              AND LENGTH(COALESCE(m.content, '')) > 200
+              AND m.created_at < NOW() - INTERVAL '60 seconds'
+            """
+        )
+        _stale_content_promoted = 0
+        for _scr in _stale_content_rows:
+            _sc_content = _format_stale_placeholder_content(_scr["content"] or "")
+            await conn.execute(
+                "UPDATE chat_messages SET intent = 'interrupted_partial', model_used = 'interrupted', is_hidden = FALSE, edited_at = NOW(), content = $2 WHERE id = $1",
+                _scr["id"], _sc_content,
+            )
+            _stale_content_promoted += 1
+        if _stale_content_promoted:
+            logger.info("stale_content_placeholder_promoted count=%s", _stale_content_promoted)
 
         _null_model_rows = await conn.fetch(
             """
