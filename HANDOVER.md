@@ -13494,3 +13494,17 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - `b9147c09`에서 `jsonb_build_object('revision', $5::integer)`로 SQL 파라미터 타입을 명시하고 API blue/green 배포 run 320을 완료했다. active/standby는 동일 digest `sha256:044fa7c3...04ecd48`이며 300초 P0/P1 감시를 통과했다.
 - 운영 `PUT /api/v1/chat/artifacts/{id}` 재검증에서 DB 트랜잭션은 draft revision 2와 `edited` 이벤트를 저장했지만, asyncpg JSONB codec이 반환한 문자열 metadata가 `ArtifactOut.metadata` 응답 검증에서 HTTP 500을 일으키는 후속 결함을 확인했다.
 - `directive_draft_service._serialize_row`가 `metadata`와 `classification` JSON 문자열을 안전하게 역직렬화하도록 보강하고 회귀 테스트를 추가했다. 자동 전송은 수행하지 않았으며, 후속 커밋·blue/green 배포·운영 API 200 재검증 결과를 최종 보고에 기록한다.
+
+## 2026-09-11 05:25 KST — 선택한 AI 응답 기반 지시 초안
+
+- 기존 입력창 전역 생성은 최근 문답 모드로 유지하고, 완료된 AI 응답을 직접 선택한 경우
+  직전 사용자 질문과 선택 assistant 메시지 두 건만 정본 API에 전달하도록 계약을 확장했다.
+- `app/services/directive_draft_service.py`는 선택 assistant를 prompt의 `SELECTED_RESPONSE`로
+  표시한다. LLM 실패 시에도 마지막 사용자 질문을 되풀이하지 않고 선택 응답의 `다음 단계`·
+  `권장 조치`를 우선 추출해 실행형 폴백 지시서로 만든다.
+- 요청한 메시지가 tenant/session에 모두 존재하는지 확인하고 assistant가 둘 이상이면
+  fail-closed한다. classification에는 `source_mode`와 선택 assistant ID를 남겨 사후 검수한다.
+- PRD 정본 `docs/plans/20260910_OHVIS_DIRECTIVE_COPILOT_PRD.md`에 F-11~F-13과 API 계약을
+  추가했다. 관련 pytest 17건, Python compile, diff-check를 통과한 뒤 커밋·푸시한다.
+- 자동 전송과 기존 초안 데이터 변경은 없다. API 운영 반영은 clean release SHA의
+  `deploy.sh bluegreen`, 동일 digest, routed health, 5분 P0/P1 감시 후에만 완료 판정한다.

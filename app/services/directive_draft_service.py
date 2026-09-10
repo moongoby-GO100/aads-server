@@ -55,6 +55,7 @@ class DraftSource:
     workspace_name: str
     project_key: str
     messages: list[dict[str, Any]]
+    selected_assistant_message_id: uuid.UUID | None = None
 
 
 def normalize_project_key(value: str | None) -> str:
@@ -133,9 +134,58 @@ def _user_request_text(messages: Iterable[dict[str, Any]]) -> str:
     ).strip()
 
 
+def _selected_assistant_text(source: DraftSource) -> str:
+    selected_id = source.selected_assistant_message_id
+    if selected_id is None:
+        return ""
+    for message in source.messages:
+        if (
+            message.get("role") == "assistant"
+            and str(message.get("id")) == str(selected_id)
+        ):
+            return str(message.get("content") or "").strip()
+    return ""
+
+
+def _assistant_action_focus(content: str) -> str:
+    """Prefer the explicit follow-up section when a selected answer has one."""
+    text = (content or "").strip()
+    for marker in ("→ 다음 단계:", "→ 권장 조치:", "## 다음 단계", "## 조치안", "## 개선안"):
+        marker_index = text.rfind(marker)
+        if marker_index >= 0:
+            focused = text[marker_index + len(marker):].strip()
+            if focused:
+                return focused
+    return text
+
+
+def _fallback_title(text: str) -> str:
+    first_meaningful_line = next(
+        (line.strip() for line in text.splitlines() if line.strip()),
+        "선택한 AI 응답 후속 작업",
+    )
+    plain = re.sub(r"[#>*`_\[\]()]", " ", first_meaningful_line)
+    plain = re.sub(r"^[-+\d.\s]+", "", plain)
+    return re.sub(r"\s+", " ", plain).strip()[:80] or "선택한 AI 응답 후속 작업"
+
+
+def _risk_source_text(source: DraftSource) -> str:
+    request = _user_request_text(source.messages)
+    selected_response = _selected_assistant_text(source)
+    if selected_response:
+        return f"{request}\n{_assistant_action_focus(selected_response)}".strip()
+    return request
+
+
 def build_fallback_directive(source: DraftSource, risk_level: str) -> str:
     request = _latest_user_request(source.messages)
-    title = re.sub(r"\s+", " ", request).strip()[:80] or "최근 문답 후속 작업"
+    selected_response = _selected_assistant_text(source)
+    response_focus = _assistant_action_focus(selected_response)
+    title = (
+        _fallback_title(response_focus)
+        if response_focus
+        else re.sub(r"\s+", " ", request).strip()[:80] or "최근 문답 후속 작업"
+    )
     priority = "P1-HIGH" if risk_level == "high" else "P2-MEDIUM"
     size = "M" if risk_level != "low" else "S"
     project = source.project_key
@@ -143,6 +193,17 @@ def build_fallback_directive(source: DraftSource, risk_level: str) -> str:
         "운영 배포·재시작·DB 변경은 대상과 롤백을 확인하고 별도 승인 게이트를 통과한다."
         if risk_level == "high"
         else "요청 범위 밖 파일과 기존 dirty 변경을 수정하거나 되돌리지 않는다."
+    )
+    objective = (
+        "선택한 AI 응답의 제안·조치 항목을 실제 상태와 대조하고 실행 가능한 작업으로 반영한다."
+        if response_focus
+        else request[:1200]
+    )
+    evidence = (
+        f"선택한 AI 응답의 후속 항목: {response_focus[:1200]}\n"
+        f"  - 해당 응답의 원 사용자 요청: {request[:600]}"
+        if response_focus
+        else f"세션 '{source.session_title}'의 최근 사용자 질문과 AI 응답을 원문 기준으로 재검토한다."
     )
     return (
         ">>>DIRECTIVE_START\n"
@@ -153,9 +214,9 @@ def build_fallback_directive(source: DraftSource, risk_level: str) -> str:
         "MODEL: AUTO\n"
         "DESCRIPTION: |\n"
         "  목표:\n"
-        f"  - {request[:1200]}\n"
+        f"  - {objective}\n"
         "  현재 근거:\n"
-        f"  - 세션 '{source.session_title}'의 최근 사용자 질문과 AI 응답을 원문 기준으로 재검토한다.\n"
+        f"  - {evidence}\n"
         "  허용 범위:\n"
         f"  - 프로젝트: {project}; 이번 요청과 직접 관련된 코드, 테스트, 문서만 변경한다.\n"
         "  금지 범위:\n"
@@ -172,10 +233,21 @@ def build_fallback_directive(source: DraftSource, risk_level: str) -> str:
 
 
 def _build_generation_prompt(source: DraftSource, risk_level: str) -> str:
+    selected_id = source.selected_assistant_message_id
     transcript = "\n\n".join(
-        f"[{message['role'].upper()} | {message['id']}]\n{str(message.get('content') or '')[:3500]}"
+        (
+            f"[{message['role'].upper()}"
+            f"{' | SELECTED_RESPONSE' if str(message.get('id')) == str(selected_id) else ''}"
+            f" | {message['id']}]\n{str(message.get('content') or '')[:3500]}"
+        )
         for message in source.messages
     )[-14000:]
+    selection_rule = (
+        "- SELECTED_RESPONSE로 표시된 AI 응답의 분석·제안·다음 단계를 실행 지시로 변환한다. "
+        "직전 USER 메시지는 의도와 범위 확인에만 사용하고, 사용자 질문을 그대로 다시 지시하지 않는다."
+        if selected_id is not None
+        else "- 전체 최근 문답에서 사용자의 최신 실행 의도를 기준으로 지시서를 작성한다."
+    )
     return f"""아래 세션의 최근 문답을 검토하여 실행 전 CEO가 수정·확인할 개발 지시서 초안을 작성하라.
 
 규칙:
@@ -189,6 +261,7 @@ def _build_generation_prompt(source: DraftSource, risk_level: str) -> str:
 - 서로 다른 구현이 이미 있으면 canonical 정본, 소비자, 전환·제거·rollback 기준을 명시한다.
 - 원문에 없는 파일명, 수치, 완료 사실, 실제 작업 ID를 만들어내지 않는다.
 - 자동 전송이나 무단 배포를 지시하지 않는다.
+{selection_rule}
 
 프로젝트: {source.project_key}
 위험도: {risk_level}
@@ -256,7 +329,7 @@ async def _load_source(
         if not session:
             raise DraftNotFoundError("session not found")
         if message_ids:
-            parsed_ids = [uuid.UUID(value) for value in message_ids]
+            parsed_ids = list(dict.fromkeys(uuid.UUID(value) for value in message_ids))
             rows = await conn.fetch(
                 """
                 SELECT id, role, content, created_at
@@ -268,6 +341,8 @@ async def _load_source(
                 tenant_uuid,
                 parsed_ids,
             )
+            if len(rows) != len(parsed_ids):
+                raise ValueError("선택한 메시지 중 현재 세션에서 확인할 수 없는 항목이 있습니다.")
         else:
             rows = await conn.fetch(
                 """
@@ -291,6 +366,15 @@ async def _load_source(
         raise ValueError("초안을 만들 최근 문답이 없습니다.")
     if not _user_request_text(messages):
         raise ValueError("초안을 만들 최근 사용자 요청이 없습니다.")
+    selected_assistant_message_id = None
+    if message_ids:
+        selected_assistants = [
+            message["id"] for message in messages if message.get("role") == "assistant"
+        ]
+        if len(selected_assistants) > 1:
+            raise ValueError("한 번에 하나의 AI 응답만 지시 초안 대상으로 선택할 수 있습니다.")
+        if selected_assistants:
+            selected_assistant_message_id = selected_assistants[0]
     return DraftSource(
         session_id=session_uuid,
         workspace_id=session["workspace_id"],
@@ -298,6 +382,7 @@ async def _load_source(
         workspace_name=session["workspace_name"] or "워크스페이스",
         project_key=normalize_project_key(session["project_key"]),
         messages=messages,
+        selected_assistant_message_id=selected_assistant_message_id,
     )
 
 
@@ -336,8 +421,8 @@ async def create_draft(
         context_window=context_window,
         message_ids=message_ids,
     )
-    # AI 답변의 "배포하지 않음" 같은 설명이 위험도를 올리지 않도록 사용자 요청만 판정한다.
-    risk_level = classify_risk(_user_request_text(source.messages))
+    # 최근 문답 모드는 사용자 요청만 판정하고, 응답 선택 모드는 선택된 후속 조치도 포함한다.
+    risk_level = classify_risk(_risk_source_text(source))
     content, generation_mode = await generate_directive_content(
         source,
         risk_level,
@@ -351,6 +436,12 @@ async def create_draft(
         "risk_level": risk_level,
         "generation_mode": generation_mode,
         "context_message_count": len(source.messages),
+        "source_mode": "selected_response" if source.selected_assistant_message_id else "recent_context",
+        "selected_assistant_message_id": (
+            str(source.selected_assistant_message_id)
+            if source.selected_assistant_message_id
+            else None
+        ),
         "requires_human_review": True,
         "auto_submit": False,
     }

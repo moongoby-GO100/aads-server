@@ -79,6 +79,9 @@ DESCRIPTION: |
 | F-08 | 입력창 반영 | 자동 전송 없이 편집 가능한 입력값으로 이동 |
 | F-09 | 피드백 이벤트 | created/edited/inserted/approved/rejected/sent 이벤트 보존 |
 | F-10 | 충돌 방지 | 다른 세션·테넌트의 초안 조회/수정 차단 |
+| F-11 | 응답 선택 생성 | 완료된 AI 응답 버블에서 해당 응답과 직전 사용자 질문만 선택해 초안 생성 |
+| F-12 | 선택형 폴백 | LLM 실패 시 마지막 사용자 질문을 반복하지 않고 선택 응답의 후속 조치를 지시로 변환 |
+| F-13 | 출처 추적 | classification에 `source_mode=selected_response`와 선택 assistant 메시지 ID 저장 |
 
 ## 6. 데이터 모델
 
@@ -104,6 +107,10 @@ DESCRIPTION: |
 | POST | `/api/v1/chat/directive-drafts/{draft_id}/events` | inserted/approved/rejected/sent 기록 |
 
 기존 `/api/v1/chat/artifacts/{artifact_id}` 편집도 directive draft subtype이면 같은 revision 저장 경로로 연결한다.
+
+응답 버블 생성은 기존 POST에 `message_ids=[직전 user ID, 선택 assistant ID]`를 전달한다.
+서버는 두 ID가 같은 tenant/session에 실제 존재하는지 검증하며, assistant 메시지는 한 건만
+허용한다. 입력창의 전역 아이콘은 `message_ids` 없이 기존 최근 문답 모드를 유지한다.
 
 ## 8. 권한·보안
 
@@ -131,6 +138,8 @@ L3 자동형은 조회·보고 같은 low risk에만 허용한다. 코드 수정
 - 서비스 단위 테스트: 필드 검증, 프로젝트/risk 판정, LLM 실패 폴백.
 - API 계약 테스트: 인증, 세션/테넌트 격리, revision 충돌 409.
 - 대시보드: lint/build, 데스크톱·모바일 버튼, 기존 입력 보호, 아티팩트 편집·입력 반영.
+- 응답 선택: 완료된 assistant 버블에만 버튼 노출, 직전 user 연결, 선택형 prompt/fallback,
+  다른 세션·누락 메시지 fail-closed, classification 출처 확인.
 - 운영 검증: migration 적용 후 DB row/revision/event 생성, API 헬스, 로그인 화면 E2E.
 
 ## 11. 출시 계획

@@ -32,6 +32,33 @@ def _source(project_key: str = "AADS") -> DraftSource:
     )
 
 
+def _selected_response_source() -> DraftSource:
+    user_id = uuid.uuid4()
+    assistant_id = uuid.uuid4()
+    return DraftSource(
+        session_id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        session_title="파동엔진 통일",
+        workspace_name="CEO 통합지시",
+        project_key="AADS",
+        messages=[
+            {"id": user_id, "role": "user", "content": "왜 서로 다른 파동엔진을 쓰는지 보고해줘"},
+            {
+                "id": assistant_id,
+                "role": "assistant",
+                "content": (
+                    "현재 정본과 소비자가 분리돼 있습니다.\n\n"
+                    "→ 다음 단계:\n"
+                    "1. AI 응답 버블에 지시서 버튼 추가\n"
+                    "2. 선택 응답과 직전 질문만 초안 생성 API에 전달\n"
+                    "3. 폴백도 선택 응답을 실행 항목으로 변환"
+                ),
+            },
+        ],
+        selected_assistant_message_id=assistant_id,
+    )
+
+
 def test_normalize_project_key_fails_closed_to_custom() -> None:
     assert normalize_project_key("newtalk-v2") == "NTV2"
     assert normalize_project_key("ShortFlow") == "SF"
@@ -51,6 +78,32 @@ def test_fallback_directive_satisfies_v2_contract() -> None:
     assert "TASK_ID: AADS-DRAFT" in content
     assert "기존 정본과 호출 경로" in content
     assert "완료 보고:" in content
+
+
+def test_selected_response_fallback_uses_assistant_actions_not_user_question() -> None:
+    content = build_fallback_directive(_selected_response_source(), "medium")
+
+    assert "TITLE: AI 응답 버블에 지시서 버튼 추가" in content
+    assert "선택한 AI 응답의 제안·조치 항목" in content
+    assert "선택한 AI 응답의 후속 항목" in content
+    assert "해당 응답의 원 사용자 요청" in content
+    assert validate_directive(content, expected_project="AADS")[0]
+
+
+def test_selected_response_prompt_marks_and_prioritizes_assistant_answer() -> None:
+    prompt = service._build_generation_prompt(_selected_response_source(), "medium")
+
+    assert "ASSISTANT | SELECTED_RESPONSE" in prompt
+    assert "사용자 질문을 그대로 다시 지시하지 않는다" in prompt
+
+
+def test_selected_response_risk_includes_selected_follow_up_actions() -> None:
+    source = _selected_response_source()
+    selected_id = source.selected_assistant_message_id
+    assert selected_id is not None
+    source.messages[-1]["content"] += "\n4. 운영에 deploy"
+
+    assert classify_risk(service._risk_source_text(source)) == "high"
 
 
 def test_validate_directive_rejects_partial_response() -> None:
