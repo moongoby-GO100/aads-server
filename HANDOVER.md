@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-09-10 14:36 KST — Runner approval notification resumes owning chat AI
+
+- `app/api/pipeline_runner.py`: removed the `awaiting_approval` notification suppression. The runner state remains a task-panel concern, while an internal `[시스템]` action trigger now reaches the owning chat AI for diff/test/metadata review and approve-or-reject follow-up.
+- The existing `notify_ai` JSON-log claim remains the at-most-once gate for each awaiting-approval transition. `trigger_ai_reaction()` supplies the continuity contract: active CEO responses are queued durably instead of superseded, and idle sessions react immediately.
+- `tests/unit/test_pipeline_runner_notify_contract.py` locks the approval trigger, deferred chat continuity, resume-attempt limit of 3, and the active-slot/standby stream-drain release contract.
+- This change does not expose the internal trigger as a CEO chat bubble. Visible runner status remains in the task panel; presentation work belongs to the dashboard runner-status UI.
+- Rollback: revert this entry, the contract test, and the awaiting-approval branch to suppression. That rollback would restore the defect where the assigned chat AI does not review runner results.
+
 ## 2026-09-10 13:50 KST — Dashboard release-SHA verifier compatibility
 
 - Fixed the global release-contract verifier so the dashboard deploy may archive the explicitly approved `AADS_RELEASE_SHA`, while retaining compatibility with the legacy committed `HEAD` form.

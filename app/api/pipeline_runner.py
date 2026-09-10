@@ -1519,35 +1519,20 @@ async def notify_completion(job_id: str):
                 "session_id": session_id,
                 "promoted_job_id": promoted_job_id,
             }
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                UPDATE pipeline_jobs
-                SET logs = COALESCE(logs, '[]'::jsonb) || jsonb_build_array(
-                    jsonb_build_object(
-                        'ts', NOW()::text,
-                        'event', 'notify_ai_suppressed',
-                        'status', 'awaiting_approval',
-                        'reason', 'chat_stability_no_visible_autoreaction'
-                    )
-                )
-                WHERE job_id = $1
-                """,
-                job_id,
-            )
-        logger.info(
-            "pipeline_runner.notify_ai_suppressed",
-            job_id=job_id,
-            session_id=session_id,
-            status=status,
-            reason="chat_stability_no_visible_autoreaction",
+        # Keep the visible runner state in the task panel, while delivering an
+        # internal action trigger to the owning chat AI. trigger_ai_reaction()
+        # defers durably when a CEO response is already running and starts
+        # immediately when the session is idle. The notify_ai claim above keeps
+        # the same awaiting-approval transition at-most-once.
+        msg = (
+            f"[시스템] Pipeline Runner 작업이 AI 검수 대기 상태입니다.\n\n"
+            f"**Job**: {job_id}\n**프로젝트**: {project}\n"
+            f"**원 지시**: {instruction[:200]}\n"
+            f"**실행 결과**: {output[:300]}\n\n"
+            "작업 패널의 diff·테스트·변경 파일·승인 메타데이터를 실제 도구로 검수하고, "
+            "이상이 없으면 승인 도구를 호출하십시오. 문제가 있으면 구체적인 근거로 반려하고 "
+            "안전한 후속 조치를 이어서 수행하십시오. 진행 중인 CEO 응답이나 추가 지시는 중단하지 마십시오."
         )
-        return {
-            "status": "skipped",
-            "reason": "awaiting_approval AI chat trigger suppressed for chat stability",
-            "session_id": session_id,
-            "promoted_job_id": promoted_job_id,
-        }
     elif status == "done":
         msg = (f"[시스템] Pipeline Runner 작업 배포 완료\n\n"
                f"**Job**: {job_id}\n**프로젝트**: {project}\n"
