@@ -121,4 +121,3 @@ async def record_directive_draft_event(
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-

@@ -55,4 +55,3 @@ CREATE INDEX IF NOT EXISTS idx_directive_draft_revisions_tenant_draft
     ON directive_draft_revisions (tenant_id, draft_id, revision DESC);
 CREATE INDEX IF NOT EXISTS idx_directive_draft_events_tenant_draft
     ON directive_draft_events (tenant_id, draft_id, created_at DESC);
-
