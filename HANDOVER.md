@@ -8,6 +8,12 @@
 - 검증: 영속 경로 회귀 테스트 + 기존 파일 API 테스트 7건 통과, 두 모듈 `py_compile` 통과, 스모크 CSV의 외부 `/exports/` HTTP 200·12바이트 확인 후 시험 파일을 제거했다.
 - 롤백: 본 세 파일만 revert한다. 단, 롤백 시 장문 에이전트 결과와 `export_data` 링크가 다시 슬롯 교체 후 소실될 수 있다.
 
+## 2026-09-10 15:55 KST — standby drain timeout 배포 인증 fail-closed
+
+- `deploy.sh`: nginx cutover 후 구 슬롯에 실행 중인 채팅 SSE가 남아 standby 동기화 상한을 넘겨도 실행은 강제 종료하지 않는다. 다만 이전 구현처럼 `return 0`으로 release certification을 계속하지 않고 `return 1`로 same-digest 미충족을 실패 처리한다.
+- 효과: 사용자 응답 보존과 “양 슬롯 동일 digest 전에 완료 보고 금지”를 동시에 지킨다. drain 후 재배포하면 이미 빌드된 불변 이미지를 재사용한다.
+- 검증: `tests/unit/test_deploy_stream_reconcile.py`가 timeout 분기의 `release not certified`, `return 1`, 과거 성공 문구 제거를 고정한다.
+
 ## 2026-09-10 15:10 KST — Runner 내부 알림 숨김과 AI 후속응답 표시 분리
 
 - `app/services/chat_service.py`: 내부 `system_trigger` 사용자 행은 저장 직후 `is_hidden=TRUE`로 유지하되, 그 트리거로 생성된 `runner_response`/`auto_reaction`을 메시지 조회 SQL에서 제외하던 미배포 회귀를 제거했다.

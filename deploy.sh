@@ -1709,15 +1709,14 @@ sync_standby_slot_after_drain() {
         done
 
         if [[ "${active:-0}" != "0" && -n "${active:-}" ]]; then
-            # RC7: the standby slot no longer receives nginx traffic (cutover is done).
-            # Force-draining it would kill live CEO chat turns still owned by this slot,
-            # and returning 1 marked an already-live release as "failed".
-            # Defer the standby resync instead: the release stays certified and the
-            # standby slot is refreshed on the next deploy.
+            # The standby slot no longer receives new nginx traffic, but it still owns
+            # live CEO chat turns. Preserve those turns and fail the release
+            # certification closed: same-digest standby sync is mandatory and must
+            # never be reported as complete while the old release is still serving.
             set_deploy_stream_phase_metadata "$old_container" "$old_port" "${active:-unknown}" "$elapsed" "$drain_max"
-            echo "[deploy.sh] standby sync DEFERRED: ${old_container}:${old_port} still has active streams=${active}; release stays certified"
-            audit_control "standby-sync" "${old_container}:${old_port}" "deferred" "drain timeout active=${active}; standby resync postponed"
-            return 0
+            echo "[deploy.sh] standby sync BLOCKED: ${old_container}:${old_port} still has active streams=${active}; release not certified"
+            audit_control "standby-sync" "${old_container}:${old_port}" "blocked" "drain timeout active=${active}; same-digest certification withheld"
+            return 1
         fi
         set_deploy_stream_phase_metadata "$old_container" "$old_port" "${active:-0}" "$elapsed" "$drain_max"
 

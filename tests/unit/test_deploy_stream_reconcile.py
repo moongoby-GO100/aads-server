@@ -151,3 +151,17 @@ def test_standby_sync_failure_cannot_be_certified_as_partial_success():
     assert 'record_deploy "failed" "$MODE"' in failure_path
     assert "exit 1" in failure_path
     assert "success_partial" not in failure_path
+
+
+def test_standby_drain_timeout_preserves_streams_but_blocks_certification():
+    deploy_script = (Path(__file__).parents[2] / "deploy.sh").read_text()
+    sync_function = deploy_script.split("sync_standby_slot_after_drain()", 1)[1].split(
+        "# .env에서 텔레그램 변수 로드", 1
+    )[0]
+    timeout_path = sync_function.split(
+        'if [[ "${active:-0}" != "0" && -n "${active:-}" ]]', 1
+    )[1].split("\n        fi", 1)[0]
+
+    assert "release not certified" in timeout_path
+    assert "return 1" in timeout_path
+    assert "release stays certified" not in timeout_path
