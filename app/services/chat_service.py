@@ -43,6 +43,7 @@ _EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX
 _RESUME_INCOMPLETE_STREAM_MAX_RETRIES = max(
     0, int(os.getenv("AADS_RESUME_INCOMPLETE_STREAM_MAX_RETRIES", "2"))
 )
+_RESUME_LEASE_IDLE_TIMEOUT = max(60, int(os.getenv("AADS_RESUME_LEASE_IDLE_TIMEOUT", "180")))
 _execution_owner_epochs: Dict[str, int] = {}
 
 
@@ -3104,6 +3105,48 @@ async def cleanup_stale_streaming_placeholders(
             _stale_lease_cleaned += 1
         if _stale_lease_cleaned:
             logger.info("stale_lease_execution_cleanup cleaned=%s", _stale_lease_cleaned)
+
+        _hard_age_rows = await conn.fetch(
+            """
+            SELECT te.id, te.session_id
+            FROM chat_turn_executions te
+            WHERE te.status IN ('running', 'retrying')
+              AND te.actual_model IS NULL
+              AND te.created_at < NOW() - INTERVAL '900 seconds'
+            """,
+        )
+        _hard_age_cleaned = 0
+        for _ha in _hard_age_rows:
+            await conn.execute(
+                """
+                UPDATE chat_turn_executions
+                SET status = 'interrupted',
+                    interrupt_category = 'watchdog_timeout',
+                    completed_at = COALESCE(completed_at, NOW()),
+                    error_message = 'force_interrupted_null_model_hard_age_900s',
+                    owner_instance = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND status IN ('running', 'retrying')
+                  AND actual_model IS NULL
+                """,
+                _ha["id"],
+            )
+            await conn.execute(
+                """
+                UPDATE chat_sessions
+                SET current_execution_id = NULL,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND current_execution_id = $2
+                """,
+                _ha["session_id"],
+                _ha["id"],
+            )
+            _hard_age_cleaned += 1
+        if _hard_age_cleaned:
+            logger.warning("hard_age_null_model_zombie_cleanup cleaned=%s", _hard_age_cleaned)
 
         rows = await conn.fetch(
             """
@@ -6703,6 +6746,7 @@ async def _resume_single_stream(
 
         if _execution_uuid and owner_epoch is not None:
             async def _resume_lease_pump() -> None:
+                _pump_start = _bg_time.monotonic()
                 while not _resume_lease_stop.is_set():
                     try:
                         await _heartbeat_asyncio.wait_for(
@@ -6711,6 +6755,19 @@ async def _resume_single_stream(
                         )
                         return
                     except _heartbeat_asyncio.TimeoutError:
+                        _pump_elapsed = _bg_time.monotonic() - _pump_start
+                        if _pump_elapsed > _RESUME_LEASE_IDLE_TIMEOUT:
+                            _st = _streaming_state.get(session_id)
+                            _st_updated = _st.get("updated_at", _started_at) if _st else _started_at
+                            if _st_updated <= _started_at + 10:
+                                logger.warning(
+                                    "resume_lease_idle_timeout session=%s execution=%s elapsed=%.0fs",
+                                    session_id[:8],
+                                    str(_execution_uuid)[:8],
+                                    _pump_elapsed,
+                                )
+                                _resume_lease_lost.set()
+                                return
                         async with get_pool().acquire() as _lease_heartbeat_conn:
                             lease_ok = await _heartbeat_execution_lease(
                                 _lease_heartbeat_conn,
