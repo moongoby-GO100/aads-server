@@ -771,7 +771,7 @@ def _strip_internal_continuation_context(content: str) -> str:
 
 
 _SENTINEL = object()  # Queue 종료 신호
-_RESUME_SEMAPHORE = _heartbeat_asyncio.Semaphore(3)  # 동시 resume 최대 3개 (CEO 지시)
+_RESUME_SEMAPHORE = _heartbeat_asyncio.Semaphore(max(1, int(os.getenv("AADS_RESUME_SEMAPHORE_LIMIT", "5"))))
 
 _HTML_EDIT_KEYWORDS = (
     "바꿔", "수정해", "변경", "추가", "빼", "키워", "줄여", "색", "로고", "버튼",
