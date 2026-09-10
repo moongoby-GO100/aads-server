@@ -9,7 +9,8 @@ AADS-FILES: 채팅 산출물 파일 열람·다운로드 API (2026-08-18).
 해결
   경로 표기가 호스트/컨테이너/상대 어떤 형태이든 실제 파일을 찾아 스트리밍한다.
   - 호스트(/root/aads/aads-server/...) ↔ 컨테이너(/app/...) 별칭 변환
-  - 직접 경로로 못 찾으면 표준 산출물 디렉터리에서 파일명으로 재탐색 (레거시 링크 구제)
+  - 검증된 과거 임시 경로만 정확한 지속 저장본으로 별칭 처리
+  - 파일명만 같은 다른 세션 파일로의 오매칭은 허용하지 않음
   - 허용 루트 밖 경로와 민감 파일(.env/secrets/id_rsa/*.key/*.pem)은 차단
 
 엔드포인트
@@ -61,6 +62,15 @@ FALLBACK_DIRS: tuple[Path, ...] = (
     Path("/var/www/certbot/exports"),
     Path("/tmp/aads_exports"),
 )
+
+# 임시 경로로 게시된 과거 채팅 링크는 검증된 파일만 지속 저장본으로 연결한다.
+# /tmp 전체를 허용하거나 파일명만으로 재탐색하면 다른 세션/tenant 파일을 잘못
+# 노출할 수 있으므로, 원본 경로와 저장본을 정확히 한 쌍으로 등록한다.
+LEGACY_PATH_ALIASES: dict[str, Path] = {
+    "/tmp/aads-chat-continuity-directive-review.md": Path(
+        "/app/docs/chat/aads-chat-continuity-directive-review.md"
+    ),
+}
 
 HOST_ALIASES: tuple[tuple[str, str], ...] = (
     ("/root/aads/aads-server/app/", "/app/app/"),
@@ -140,6 +150,9 @@ def _candidates(cleaned: str) -> list[Path]:
         if value and value not in out:
             out.append(value)
 
+    legacy_target = LEGACY_PATH_ALIASES.get(cleaned)
+    if legacy_target is not None:
+        _add(str(legacy_target))
     _add(cleaned)
     for host_prefix, container_prefix in HOST_ALIASES:
         if cleaned.startswith(host_prefix):
@@ -178,19 +191,6 @@ def _resolve(raw: str) -> Path:
             raise HTTPException(403, "민감 파일은 제공하지 않습니다")
         if _is_allowed(resolved):
             return resolved
-
-    # 마지막 구제책: 표준 산출물 디렉터리에서 같은 파일명 재탐색 (레거시 경로 링크 대응)
-    name = Path(cleaned).name
-    if name:
-        for base in FALLBACK_DIRS:
-            candidate = (base / name)
-            try:
-                resolved = candidate.resolve()
-            except Exception:
-                continue
-            if resolved.is_file() and _is_allowed(resolved) and not _is_sensitive(resolved):
-                logger.info("files_resolved_by_name", requested=cleaned, resolved=str(resolved))
-                return resolved
 
     logger.warning("files_not_found", requested=cleaned, checked=checked[:6])
     raise HTTPException(404, f"파일을 찾을 수 없습니다: {cleaned}")

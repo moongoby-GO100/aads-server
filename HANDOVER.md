@@ -28,6 +28,26 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 사용자 제한에 따라 Git 상태 조회/커밋/푸시, DB의 활성 `pipeline_jobs`·`chat_workspace_change_ledger` preflight, runner 교체, API 동작, 배포는 실행하지 않았다.
 - 장기 실행 호스트 프로세스의 실제 신규 판정은 위 절차가 끝나기 전에는 완료로 간주하지 않는다.
 
+## 2026-09-10 — 채팅 파일 링크 지속 저장·레거시 경로 안전 복구 (TODO 68a144b6)
+
+- 확인 원인: 원본 `aads-chat-continuity-directive-review.md`가 비지속 `/tmp`에만 있었고,
+  파일 API는 임의 경로 실패 시 허용 디렉터리에서 파일명만 같은 파일을 재탐색하여
+  세션/소유권이 다른 파일을 잘못 연결할 가능성이 있었다. Dashboard의 최신 링크 분기·
+  비동기 패널 갱신에도 별도 확인된 결함이 있으나 현재 Server 격리 worktree에는 최신
+  Dashboard 소스가 없어 이번 변경에 포함하지 못했다.
+- 변경: 원본을 `docs/chat/aads-chat-continuity-directive-review.md`에 byte-identical하게
+  지속 저장하고, 기존 `/tmp/aads-chat-continuity-directive-review.md` 링크만 정확한 저장본에
+  매핑했다. 일반 `/tmp` 허용은 추가하지 않았고 파일명 기반 fallback은 제거했다.
+- 보안: 기존 allowed-root, 민감 경로, traversal, symlink resolve 검사를 그대로 통과해야
+  하며, `sandbox:/mnt/data` 및 존재하지 않는 임시 파일은 별칭 등록 없이 404다.
+- 검증: 전용 unit 5 passed, `py_compile` 성공, 원본/저장본 SHA-256 모두
+  `01317d045e2cf10795906b8d12ac583a8acec659b750b110c492a1e3d64af151`, `git diff --check` 성공.
+  로그인 `/chat` 화면·서로 다른 세션·모바일·경합 Playwright 검증은 Dashboard 변경 및
+  실행 가능한 인증 환경이 없어 미완료이며 TODO는 completed로 바꾸지 않는다.
+- 삭제: 일반 파일명 fallback 코드. 영향은 부정확한 레거시 링크의 우연한 구제 중단이며,
+  롤백은 해당 fallback 블록을 복원하는 대신 검증된 경로별 별칭을 추가하는 것이 안전하다.
+- commit/push/운영 반영은 수행하지 않았다. 비용은 미측정.
+
 ## 2026-09-10 09:24 KST — Goal 릴리스 배포 게이트 복구
 
 - Goal 완료 판정 보정 `604b0ce9`를 원격 `main`에 푸시했다. 운영 배포 첫 시도

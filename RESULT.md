@@ -1,3 +1,28 @@
+# 채팅 파일 클릭 장애 — 이번 격리 작업 결과
+
+## STEP 0 기존 구현 분류
+
+| 항목 | 분류 | 결과 |
+|---|---|---|
+| `app/api/files.py` `_clean_path`, `_candidates`, `_resolve` | 수정 | 검증된 `/tmp` 경로의 정확 별칭 추가, 파일명 오매칭 fallback 제거 |
+| `file_meta`, `file_download` | 유지 | 기존 인증 middleware, 허용 root, 크기/MIME/inline 정책 유지 |
+| `project_docs.get_doc_content` | 유지 | configured base와 traversal 검증 유지 |
+| Dashboard `documentLinks` | 수정 필요(미수행) | 일반 `/tmp` 정규화 결함 확인, 최신 소스가 Server 격리 worktree에 없음 |
+| Dashboard `MarkdownRenderer` | 수정 필요(미수행) | managed download 중 inline 링크만 패널 분기 |
+| Dashboard `handleDocumentLinkClickStable` | 수정 필요(미수행) | 세션/sequence/AbortController 가드 없음, 인증 blob URL 미생성 |
+| Dashboard `ChatArtifactPanel` | 수정 필요(미수행) | file 아티팩트를 원본 href 새 탭 링크로만 렌더 |
+| 지속 저장 문서 | 신규 | `docs/chat/aads-chat-continuity-directive-review.md` |
+| 단위 회귀 테스트 | 신규 | `tests/unit/test_files_api.py` 5건 |
+| 삭제 | 삭제(보안) | 파일명만으로 다른 파일을 찾던 fallback; 호출 API는 유지 |
+
+원본과 지속 저장본 SHA-256은 동일하다. Server 변경은 5 tests passed, `py_compile` 및
+`git diff --check`를 통과했다. Dashboard 코드·Playwright 실제 화면·401 재로그인·두 세션
+경합 검증은 미완료이므로 전체 P1 완료 또는 운영 정상이라고 판정하지 않는다. 기존 TODO
+68a144b6-c7f7-4769-822b-1c3954bf80b0 상태는 변경하지 않았다. commit/push 및 운영 반영은
+수행하지 않았다. 비용은 미측정이다.
+
+---
+
 # PC Agent 실시간 화면 스트리밍 — 검증 결과
 
 ## 2026-09-10 — Runner 저장소 판정 최종 보완
