@@ -1903,6 +1903,23 @@ async def _get_or_create_turn_execution(
             )
             return str(existing_execution_id)
 
+    # P1 FIX: Runner/system notifications must not supersede active executions
+    if user_message_id:
+        _incoming_content = await conn.fetchval(
+            "SELECT content FROM chat_messages WHERE id = $1", user_message_id
+        )
+        if _incoming_content and _looks_like_runner_notification(_incoming_content):
+            _running_exec = await conn.fetchval(
+                "SELECT id FROM chat_turn_executions WHERE session_id = $1 AND status IN ('running', 'retrying') LIMIT 1",
+                session_id,
+            )
+            if _running_exec:
+                logger.info(
+                    "skip_supersede_runner_notification session=%s running_exec=%s",
+                    str(session_id)[:8], str(_running_exec)[:8],
+                )
+                return str(_running_exec)
+
     # 새 지시가 기존 실행을 supersede하기 전에 메모리의 최신 partial을 DB에 먼저 flush한다.
     # 기존에는 state["content"]가 있어도 "_accumulated_content" 키가 없으면 취소 직전 저장이
     # 건너뛰어져, 화면에 잠깐 보인 "응답 중단/이어서" 버블이 강력 새로고침 후 사라질 수 있었다.
@@ -5568,10 +5585,14 @@ async def with_background_completion(
 
                 if not _retried:
                     _FALLBACK_CHAIN_429 = {
-                        "claude-opus": ["claude-sonnet", "gpt-5.5"],
-                        "gpt-5.5": ["claude-opus", "claude-sonnet"],
-                        "claude-sonnet": ["claude-haiku", "claude-opus"],
-                        "claude-haiku": ["claude-sonnet", "gpt-5.4-mini"],
+                        "claude-opus-5": ["claude-fable-5-1", "gpt-5.6-sol"],
+                        "claude-opus": ["claude-fable-5-1", "gpt-5.6-sol"],
+                        "claude-fable-5-1": ["claude-opus-5", "gpt-5.6-sol"],
+                        "gpt-5.6-sol": ["claude-fable-5-1", "claude-opus-5"],
+                        "gpt-6-astra": ["claude-opus-5", "gpt-5.6-sol"],
+                        "claude-sonnet": ["claude-haiku", "claude-opus-5"],
+                        "claude-haiku": ["claude-sonnet", "claude-fable-5-1"],
+                        "gpt-5.5": ["claude-opus-5", "claude-fable-5-1"],
                     }
                     for _fb_model in _FALLBACK_CHAIN_429.get(_original_model, []):
                         try:
@@ -6008,6 +6029,20 @@ async def with_background_completion(
                     partial_content=state.get("content", ""),
                     delete_empty_placeholder=False,
                 )
+                try:
+                    _cur_model = state.get("requested_model") or state.get("model")
+                    _fb_chain = _cross_provider_chat_fallback_chain(_cur_model)
+                    if len(_fb_chain) > 1:
+                        await _conn.execute(
+                            "UPDATE chat_turn_executions SET resume_model_override = $1 WHERE id = $2",
+                            _fb_chain[1], uuid.UUID(str(_execution_id)),
+                        )
+                        logger.info(
+                            "first_response_timeout_fallback session=%s model=%s->%s",
+                            session_id[:8], _cur_model, _fb_chain[1],
+                        )
+                except Exception:
+                    pass
         except Exception as _timeout_mark_err:
             logger.warning(
                 "first_response_timeout_mark_failed session=%s execution=%s error=%s",
