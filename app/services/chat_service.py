@@ -8147,16 +8147,6 @@ _AUTO_MESSAGE_EXCLUDE_FILTER = (
 
 def _visible_message_filter(is_active: bool, include_streaming: bool) -> str:
     hidden_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate'"
-    # P0 SSE hidden filter: system-generated messages hidden from chat timeline
-    hidden_filter += (
-        " AND NOT (role = 'user' AND intent = 'system_trigger')"
-        " AND NOT (role = 'user' AND content LIKE '[시스템]%')"
-        " AND intent IS DISTINCT FROM 'auto_reaction'"
-        " AND intent IS DISTINCT FROM 'pipeline_c'"
-        " AND intent IS DISTINCT FROM 'runner_notification'"
-        " AND intent IS DISTINCT FROM 'ai_review_warning'"
-        " AND intent IS DISTINCT FROM 'auto_report'"
-    )
     if include_streaming:
         # streaming_placeholder rows are intentionally is_hidden=true for normal
         # history, but live/recovery fetches explicitly request them. Interrupted
@@ -8173,7 +8163,6 @@ def _visible_message_filter(is_active: bool, include_streaming: bool) -> str:
         )
     else:
         hidden_filter += " AND is_hidden = FALSE"
-        hidden_filter += " AND intent IS DISTINCT FROM 'runner_response'"
     if is_active and not include_streaming:
         # 활성 스트리밍 중에는 SSE 버블과 DB placeholder 중복 렌더링을 막는다.
         hidden_filter += " AND intent IS DISTINCT FROM 'streaming_placeholder'"

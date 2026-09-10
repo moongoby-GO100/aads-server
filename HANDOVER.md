@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-09-10 15:10 KST — Runner 내부 알림 숨김과 AI 후속응답 표시 분리
+
+- `app/services/chat_service.py`: 내부 `system_trigger` 사용자 행은 저장 직후 `is_hidden=TRUE`로 유지하되, 그 트리거로 생성된 `runner_response`/`auto_reaction`을 메시지 조회 SQL에서 제외하던 미배포 회귀를 제거했다.
+- 이유: 러너 상태는 작업 패널에만 표시할 수 있지만, 담당 AI가 검수·승인·후속 조치를 수행한 응답은 원 채팅에서 보여야 한다. 두 데이터를 같은 필터로 숨기면 “알림은 숨기되 AI는 반응” 계약을 깨뜨린다.
+- `tests/unit/test_chat_service.py`에 활성/비활성 조회 모두 `runner_response`를 배제하지 않는 회귀 계약을 추가했다. 격리 컨테이너에서 필터 동작과 Python 구문 검증을 통과했다.
+- 기존 아티팩트 파일 클릭 수정은 대시보드 `47b5aad` 양 슬롯에서 유지된다. 인증 Playwright로 세션 `474e1681-…`의 과거 `/tmp/aads-chat-continuity-directive-review.md`를 클릭해 파일 API 200, 동일 채팅 URL 유지, 우측 아티팩트 본문 표시를 재검증했다.
+- 롤백: 이 변경을 되돌리면 내부 시스템 행뿐 아니라 AI 후속응답도 화면에서 사라질 수 있으므로, 반드시 `system_trigger` 저장 숨김과 `runner_response` 표시를 함께 회귀검증한다.
+
 ## 2026-09-10 14:52 KST — Deploy clean-worktree and phase-metadata fail-closed fix
 
 - Live deployment run 311 exposed two release-control defects. A clean worktree was miscounted as `00` dirty files because `pipefail` appended a fallback zero; the resulting no-op stash command set a restore flag and later popped an unrelated global stash into the release worktree. Deployment phase events also attempted `metadata=NULL` against a NOT NULL column, losing phase audit rows.

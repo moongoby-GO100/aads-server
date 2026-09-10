@@ -290,6 +290,18 @@ def test_visible_message_filter_allows_hidden_streaming_placeholder_when_request
     assert "AND intent IS DISTINCT FROM 'streaming_placeholder'" not in active_filter
 
 
+def test_visible_message_filter_keeps_runner_ai_followup_visible():
+    live_filter = chat_service._visible_message_filter(is_active=True, include_streaming=True)
+    history_filter = chat_service._visible_message_filter(is_active=False, include_streaming=False)
+
+    # The internal system_trigger row is persisted as hidden, but the AI response
+    # produced from it must remain visible in the owning chat.  Excluding
+    # runner_response here would silently undo the runner-notification contract.
+    assert "intent IS DISTINCT FROM 'runner_response'" not in live_filter
+    assert "intent IS DISTINCT FROM 'runner_response'" not in history_filter
+    assert "intent IS DISTINCT FROM 'auto_reaction'" not in live_filter
+
+
 def test_visible_message_filter_hides_streaming_placeholder_by_default_for_active_session():
     default_filter = chat_service._visible_message_filter(is_active=True, include_streaming=False)
 
