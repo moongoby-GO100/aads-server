@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AADS 무결점 채팅 시스템 PRD — 설계·연구·개선안</title>
+<style>
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --surface2: #242836;
+    --border: #2e3347; --text: #e4e6ef; --text2: #9299b8;
+    --accent: #6c8cff; --accent2: #4ecdc4; --danger: #ff6b6b;
+    --warning: #ffd93d; --success: #51cf66;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.7;
+    max-width: 1100px; margin: 0 auto; padding: 40px 24px;
+  }
+  h1 { font-size: 2rem; color: var(--accent); margin-bottom: 8px; border-bottom: 2px solid var(--accent); padding-bottom: 12px; }
+  .subtitle { color: var(--text2); font-size: 0.95rem; margin-bottom: 32px; }
+  h2 { font-size: 1.4rem; color: var(--accent2); margin: 40px 0 16px; padding-left: 12px; border-left: 4px solid var(--accent2); }
+  h3 { font-size: 1.15rem; color: var(--text); margin: 24px 0 12px; }
+  h4 { font-size: 1rem; color: var(--accent); margin: 16px 0 8px; }
+  p, li { color: var(--text); font-size: 0.95rem; }
+  p { margin-bottom: 12px; }
+  ul, ol { padding-left: 24px; margin-bottom: 16px; }
+  li { margin-bottom: 6px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 24px; margin: 16px 0;
+  }
+  .card-danger { border-left: 4px solid var(--danger); }
+  .card-warning { border-left: 4px solid var(--warning); }
+  .card-success { border-left: 4px solid var(--success); }
+  .card-info { border-left: 4px solid var(--accent); }
+
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.9rem; }
+  th { background: var(--surface2); color: var(--accent); text-align: left; padding: 10px 12px; border-bottom: 2px solid var(--border); }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:hover { background: var(--surface); }
+
+  .badge {
+    display: inline-block; padding: 2px 10px; border-radius: 12px;
+    font-size: 0.8rem; font-weight: 600;
+  }
+  .badge-p0 { background: var(--danger); color: #fff; }
+  .badge-p1 { background: var(--warning); color: #000; }
+  .badge-p2 { background: var(--accent); color: #fff; }
+  .badge-p3 { background: var(--text2); color: #fff; }
+
+  .metric-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px; margin: 20px 0;
+  }
+  .metric-card {
+    background: var(--surface2); border-radius: 10px; padding: 16px 20px;
+    text-align: center;
+  }
+  .metric-value { font-size: 2rem; font-weight: 700; color: var(--danger); }
+  .metric-value.warn { color: var(--warning); }
+  .metric-value.ok { color: var(--success); }
+  .metric-label { font-size: 0.85rem; color: var(--text2); margin-top: 4px; }
+
+  .timeline { position: relative; padding-left: 32px; margin: 20px 0; }
+  .timeline::before { content: ''; position: absolute; left: 12px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .timeline-item { position: relative; margin-bottom: 20px; }
+  .timeline-item::before {
+    content: ''; position: absolute; left: -24px; top: 6px;
+    width: 10px; height: 10px; border-radius: 50%; background: var(--accent);
+  }
+  .timeline-item.bad::before { background: var(--danger); }
+
+  .phase-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 20px; margin: 20px 0;
+  }
+  .phase-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; position: relative;
+  }
+  .phase-card h4 { margin-top: 0; }
+  .phase-num {
+    position: absolute; top: 12px; right: 16px;
+    font-size: 2.5rem; font-weight: 800; color: var(--surface2); opacity: 0.5;
+  }
+
+  code {
+    background: var(--surface2); padding: 2px 6px; border-radius: 4px;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.85rem;
+  }
+  pre {
+    background: var(--surface2); padding: 16px; border-radius: 8px;
+    overflow-x: auto; margin: 12px 0; font-size: 0.85rem;
+  }
+  pre code { background: none; padding: 0; }
+
+  .chart-bar {
+    display: flex; align-items: center; margin: 6px 0;
+  }
+  .chart-bar-label { width: 80px; font-size: 0.85rem; color: var(--text2); text-align: right; padding-right: 12px; }
+  .chart-bar-fill {
+    height: 24px; border-radius: 4px; background: var(--accent);
+    display: flex; align-items: center; padding-left: 8px;
+    font-size: 0.8rem; font-weight: 600; min-width: 40px;
+    transition: width 0.3s;
+  }
+  .chart-bar-fill.danger { background: var(--danger); }
+  .chart-bar-fill.warn { background: var(--warning); color: #000; }
+
+  .toc { background: var(--surface); border-radius: 12px; padding: 20px 28px; margin: 24px 0; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .toc ol { counter-reset: toc; list-style: none; padding-left: 0; }
+  .toc li { counter-increment: toc; margin-bottom: 6px; }
+  .toc li::before { content: counter(toc) ". "; color: var(--accent2); font-weight: 600; }
+
+  .footer { margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--text2); font-size: 0.85rem; text-align: center; }
+
+  @media (max-width: 768px) {
+    body { padding: 20px 16px; }
+    .metric-grid { grid-template-columns: repeat(2, 1fr); }
+    .phase-grid { grid-template-columns: 1fr; }
+    h1 { font-size: 1.5rem; }
+  }
+</style>
+</head>
+<body>
+
+<h1>🛡️ AADS 무결점 채팅 시스템 PRD</h1>
+<p class="subtitle">
+  Product Requirements Document — 채팅 UI 회귀 방지·품질 자동화·아키텍처 개선 설계<br>
+  작성일: 2026-09-10 KST &nbsp;|&nbsp; 작성: AADS CTO AI (Opus 5) &nbsp;|&nbsp; 승인 대기: CEO moongoby
+</p>
+
+<div class="toc">
+  <strong>목차</strong>
+  <ol>
+    <li><a href="#exec-summary">Executive Summary</a></li>
+    <li><a href="#current-state">현재 상태 진단</a></li>
+    <li><a href="#root-cause">근본 원인 분석</a></li>
+    <li><a href="#architecture">목표 아키텍처 설계</a></li>
+    <li><a href="#testing">테스트 자동화 전략</a></li>
+    <li><a href="#cicd">CI/CD 게이트 설계</a></li>
+    <li><a href="#contract">프론트-백엔드 계약 동기화</a></li>
+    <li><a href="#canary">안전 배포 전략</a></li>
+    <li><a href="#monitoring">관측·모니터링 설계</a></li>
+    <li><a href="#roadmap">구현 로드맵</a></li>
+    <li><a href="#references">참고 자료·방법론</a></li>
+  </ol>
+</div>
+
+<!-- ==================== 1. EXECUTIVE SUMMARY ==================== -->
+<h2 id="exec-summary">1. Executive Summary</h2>
+
+<div class="card card-danger">
+  <strong>핵심 문제:</strong> 채팅 UI(page.tsx)를 수정할 때마다 잘 되던 기능이 깨지고, AI 응답이 사라지거나 멈추며, CEO가 직접 롤백을 지시해야 하는 상황이 반복되고 있습니다.
+</div>
+
+<div class="metric-grid">
+  <div class="metric-card">
+    <div class="metric-value">42.8%</div>
+    <div class="metric-label">오늘(09/10) 인터럽트율</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-value">12,484</div>
+    <div class="metric-label">page.tsx 줄 수</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-value">0</div>
+    <div class="metric-label">테스트 파일 수</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-value warn">636</div>
+    <div class="metric-label">30일 interrupted 건수</div>
+  </div>
+</div>
+
+<p><strong>목표:</strong> 채팅 UI 수정 시 기존 기능 파손 확률을 <strong>90% 이상 감소</strong>시키고, 회귀 발생 시 <strong>자동 감지·자동 롤백</strong>이 가능한 시스템을 구축합니다.</p>
+
+<p><strong>핵심 전략 3가지:</strong></p>
+<ol>
+  <li><strong>구조 분리</strong> — 12,484줄 단일 파일을 기능별 모듈로 분할하여 변경 영향 범위를 제한</li>
+  <li><strong>자동 방어막</strong> — 테스트·타입체크·lint CI 게이트로 파손을 배포 전에 차단</li>
+  <li><strong>계약 동기화</strong> — 프론트·백엔드 이중 필터를 단일 소스로 통합하여 불일치 원천 제거</li>
+</ol>
+
+<!-- ==================== 2. 현재 상태 진단 ==================== -->
+<h2 id="current-state">2. 현재 상태 진단</h2>
+
+<h3>2.1 인터럽트율 추이 (최근 7일)</h3>
+<div class="card">
+  <div class="chart-bar">
+    <div class="chart-bar-label">09/03</div>
+    <div class="chart-bar-fill ok" style="width: 5%">0%</div>
+  </div>
+  <div class="chart-bar">
+    <div class="chart-bar-label">09/04</div>
+    <div class="chart-bar-fill ok" style="width: 8%">3.8%</div>
+  </div>
+  <div class="chart-bar">
+    <div class="chart-bar-label">09/05</div>
+    <div class="chart-bar-fill ok" style="width: 5%">0%</div>
+  </div>
+  <div class="chart-bar">
+    <div class="chart-bar-label">09/06</div>
+    <div class="chart-bar-fill warn" style="width: 15%">8.8%</div>
+  </div>
+  <div class="chart-bar">
+    <div class="chart-bar-label">09/07</div>
+    <div class="chart-bar-fill warn" style="width: 25%">16.2%</div>
+  </div>
+  <div class="chart-bar">
+    <div class="chart-bar-label">09/08</div>
+    <div class="chart-bar-fill warn" style="width: 32%">22.4%</div>
+  </div>
+  <div class="chart-bar">
+    <div class="chart-bar-label">09/09</div>
+    <div class="chart-bar-fill warn" style="width: 30%">21.9%</div>
+  </div>
+  <div class="chart-bar">
+    <div class="chart-bar-label">09/10</div>
+    <div class="chart-bar-fill danger" style="width: 55%">42.8%</div>
+  </div>
+  <p style="font-size: 0.8rem; color: var(--text2); margin-top: 8px;">[출처: chat_turn_executions DB 조회, 2026-09-10 19:20 KST]</p>
+</div>
+
+<h3>2.2 인터럽트 유형 분포 (30일)</h3>
+<table>
+  <tr><th>유형</th><th>건수</th><th>비율</th><th>영향</th></tr>
+  <tr><td><code>superseded</code></td><td>140</td><td>22.0%</td><td>새 턴 진입 시 이전 실행 강제 종료</td></tr>
+  <tr><td><code>resume_exhausted</code></td><td>95</td><td>14.9%</td><td>재시도 한도 도달, 사용자 알림 없이 포기</td></tr>
+  <tr><td><code>null</code> (미분류)</td><td>91</td><td>14.3%</td><td>분류 로직 자체 누락 — 원인 추적 불가</td></tr>
+  <tr><td><code>watchdog_timeout</code></td><td>58</td><td>9.1%</td><td>LLM 응답 지연 시 워치독 강제 중단</td></tr>
+  <tr><td><code>llm_provider_error</code></td><td>41</td><td>6.4%</td><td>LLM 공급자 장애/폴백 실패</td></tr>
+  <tr><td><code>user_action</code></td><td>38</td><td>6.0%</td><td>사용자 정상 중단 (혼입 가능)</td></tr>
+  <tr><td><code>producer_incomplete</code></td><td>35</td><td>5.5%</td><td>스트리밍 미완료 종료 — "응답 사라짐" 직결</td></tr>
+  <tr><td>기타 8종</td><td>138</td><td>21.7%</td><td>auto_recovery, relay_503, stale_empty 등</td></tr>
+</table>
+<p style="font-size: 0.8rem; color: var(--text2);">[출처: chat_turn_executions DB, interrupt_category 집계, 2026-09-10]</p>
+
+<h3>2.3 코드 규모·품질 현황</h3>
+<table>
+  <tr><th>항목</th><th>현재 값</th><th>업계 권장</th><th>판정</th></tr>
+  <tr><td>page.tsx 줄 수</td><td>12,484</td><td>200~500줄/파일</td><td><span class="badge badge-p0">위험</span></td></tr>
+  <tr><td>page.tsx 함수/화살표 수</td><td>366</td><td>10~30개/파일</td><td><span class="badge badge-p0">위험</span></td></tr>
+  <tr><td>chat_service.py 줄 수</td><td>14,345</td><td>500~1,000줄/모듈</td><td><span class="badge badge-p0">위험</span></td></tr>
+  <tr><td>프론트엔드 테스트 파일</td><td>0</td><td>컴포넌트당 1+ 파일</td><td><span class="badge badge-p0">위험</span></td></tr>
+  <tr><td>CI/CD 테스트 게이트</td><td>없음</td><td>lint + typecheck + unit + E2E</td><td><span class="badge badge-p0">위험</span></td></tr>
+  <tr><td>Git 수정 빈도 (7일)</td><td>page.tsx 27회</td><td>—</td><td><span class="badge badge-p1">주의</span></td></tr>
+  <tr><td>숨김 필터 이중화</td><td>백엔드+프론트 각각</td><td>단일 소스</td><td><span class="badge badge-p1">주의</span></td></tr>
+  <tr><td>채팅 에러 → error_log</td><td>0건 (미연동)</td><td>전수 집계</td><td><span class="badge badge-p1">주의</span></td></tr>
+</table>
+
+<h3>2.4 CEO 보고 반복 장애 타임라인</h3>
+<div class="timeline">
+  <div class="timeline-item bad">
+    <strong>09/10</strong> — "마지막 응답 버블 사라짐" + "응답 끊김 반복" → <code>interrupted_partial</code> 숨김 필터 버그 발견·핫픽스
+  </div>
+  <div class="timeline-item bad">
+    <strong>09/10</strong> — "채팅창 수정할 때마다 이런 문제" → page.tsx 27회 수정, 같은 버그 2회 재발, CEO 롤백 1회
+  </div>
+  <div class="timeline-item bad">
+    <strong>09/08~09</strong> — "응답이 완료되거나 중단된 상황 푸시알림" + "스트리밍 응답 사라짐" 반복 보고
+  </div>
+  <div class="timeline-item bad">
+    <strong>09/02</strong> — 대규모 resume 실패/메시지 정리 → 백업 테이블 2개 생성 (chat_resume_fail_message_backup, chat_message_cleanup_backup)
+  </div>
+  <div class="timeline-item bad">
+    <strong>08/19</strong> — 전수조사: interrupted 비율 비정상, 러너 알림 중복 863건, 빈 응답 49건, 응답중단 352건
+  </div>
+  <div class="timeline-item bad">
+    <strong>05/15</strong> — 패치(mergeCooldownRef)가 blue/green 번들에 미반영된 채 "완료" 보고 (R-001 위반)
+  </div>
+</div>
+
+<!-- ==================== 3. 근본 원인 분석 ==================== -->
+<h2 id="root-cause">3. 근본 원인 분석</h2>
+
+<div class="card card-danger">
+  <h3>핵심 결론</h3>
+  <p>반복 회귀의 근본 원인은 단일 코드 버그가 아니라 <strong>구조적 방어막의 부재</strong>입니다. 12,000줄+ 단일 파일에 테스트 0건, CI 게이트 없음, 프론트-백엔드 이중 필터 — 이 3가지가 동시에 존재하면 어떤 수정이든 기존 기능을 파손할 확률이 높습니다.</p>
+</div>
+
+<h3>3.1 구조적 원인 상세</h3>
+
+<div class="card card-danger">
+  <h4>원인 1: 초거대 단일 파일 (God Object)</h4>
+  <p><strong>현상:</strong> <code>page.tsx</code> 12,484줄에 366개 함수가 한 파일에 집중. 채팅의 모든 로직(상태관리, SSE 파싱, 메시지 렌더링, 필터링, resume, 아티팩트, 파일 업로드, 설정 등)이 하나의 React 컴포넌트에 응축.</p>
+  <p><strong>영향:</strong> 한 줄 수정해도 366개 함수 중 어디에 영향을 주는지 예측 불가. 코드 리뷰로도 side effect를 잡기 어려움.</p>
+  <p><strong>근거:</strong> Git 이력상 7일간 27회 수정 중 핫픽스/롤백이 7회 — 수정의 26%가 이전 수정의 부작용을 고치는 데 소모됨. [Git 조회]</p>
+</div>
+
+<div class="card card-danger">
+  <h4>원인 2: 자동 테스트·CI 게이트 전무</h4>
+  <p><strong>현상:</strong> 프론트엔드에 jest/vitest/playwright/cypress 미설치, 테스트 파일 0건, Dockerfile에 build 단계만 존재.</p>
+  <p><strong>영향:</strong> 어떤 변경이든 기존 기능 파손을 배포 전에 잡을 방법이 전혀 없음. "빌드 성공 = 정상"이라는 착각에 의존.</p>
+  <p><strong>근거:</strong> <code>find</code>로 *.test.*, *.spec.* 검색 결과 프로젝트 소스에 0건, node_modules 내부만 존재. package.json에 test 관련 의존성 없음. [코드 확인]</p>
+</div>
+
+<div class="card card-warning">
+  <h4>원인 3: 프론트-백엔드 이중 필터, 공유 계약 없음</h4>
+  <p><strong>현상:</strong> 메시지 숨김 판정이 두 곳에서 독립적으로 수행됨.</p>
+  <ul>
+    <li>백엔드: <code>_visible_message_filter</code> (chat_service.py:8225) — SQL intent whitelist</li>
+    <li>프론트: <code>isHiddenSystemChatMessage</code> (page.tsx:539) — JS intent list</li>
+  </ul>
+  <p><strong>영향:</strong> 새 intent 추가 시 한쪽만 반영 → 시스템 메시지가 사용자에게 노출되거나, 정상 AI 응답이 숨겨짐. <code>interrupted_partial</code> 버블 소실이 정확히 이 패턴.</p>
+</div>
+
+<div class="card card-warning">
+  <h4>원인 4: SSE 이벤트 핸들러 3중 중복</h4>
+  <p><strong>현상:</strong> <code>stream_start</code>/이벤트 파싱 로직이 page.tsx 내 3곳(line 4732, 7308, 8650)에 각각 독립 구현.</p>
+  <p><strong>영향:</strong> 한 곳만 수정하면 나머지 2곳과 동작 불일치 → 특정 시나리오(새 세션/재연결/백그라운드 완료)에서만 "멈춤" 발생.</p>
+</div>
+
+<div class="card card-warning">
+  <h4>원인 5: Resume 실패의 무통보 흡수</h4>
+  <p><strong>현상:</strong> <code>ResumeFencedOut</code> 발생 시 상태만 pop하고 종료, SSE 클라이언트로 push되지 않음. <code>ResumeAttemptLimitExceeded</code>도 범용 except로 흡수.</p>
+  <p><strong>영향:</strong> AI가 "멈춘 것처럼" 보이지만 로그에만 남음. 프론트 폴링이 발견해야만 노출되는데, 폴링 타이밍 불일치 시 무기한 "생성중" UI로 방치.</p>
+  <p><strong>근거:</strong> chat_turn_executions에서 <code>resume_exhausted</code> 95건 확인. [DB 조회]</p>
+</div>
+
+<div class="card card-info">
+  <h4>원인 6: 채팅 계층 모니터링 공백</h4>
+  <p><strong>현상:</strong> <code>error_log</code> 테이블에 채팅 관련 에러가 0건. watchdog 항목(service_down_http_health 등)만 존재.</p>
+  <p><strong>영향:</strong> 채팅 장애가 발생해도 중앙 에러 로그에 집계되지 않아, 사전 감지·추이 분석·알림이 불가능. CEO가 직접 발견해서 보고해야만 인지됨.</p>
+</div>
+
+<!-- ==================== 4. 목표 아키텍처 설계 ==================== -->
+<h2 id="architecture">4. 목표 아키텍처 설계</h2>
+
+<h3>4.1 page.tsx 분할 설계</h3>
+
+<div class="card card-info">
+  <p><strong>원칙:</strong> "한 파일 수정이 다른 기능을 깨뜨릴 수 없는 구조"를 만든다. 각 모듈은 명확한 인터페이스로만 통신하고, 독립적으로 테스트 가능해야 한다.</p>
+</div>
+
+<table>
+  <tr><th>모듈</th><th>책임</th><th>예상 줄 수</th><th>의존성</th></tr>
+  <tr>
+    <td><code>ChatPage.tsx</code></td>
+    <td>페이지 레이아웃, 라우트, 세션 전환</td>
+    <td>~300</td>
+    <td>모든 하위 모듈 import</td>
+  </tr>
+  <tr>
+    <td><code>hooks/useChatStream.ts</code></td>
+    <td>SSE 연결, 이벤트 파싱, 재연결, resume 상태</td>
+    <td>~500</td>
+    <td>SSE 이벤트 스키마</td>
+  </tr>
+  <tr>
+    <td><code>hooks/useChatMessages.ts</code></td>
+    <td>메시지 CRUD, 필터링, 정렬, 병합</td>
+    <td>~400</td>
+    <td>메시지 타입, 필터 규칙</td>
+  </tr>
+  <tr>
+    <td><code>hooks/useResumeManager.ts</code></td>
+    <td>Resume 재시도, 한도 관리, 실패 알림</td>
+    <td>~250</td>
+    <td>useChatStream</td>
+  </tr>
+  <tr>
+    <td><code>components/MessageBubble.tsx</code></td>
+    <td>단일 메시지 렌더링 (마크다운, 코드블록, 아티팩트 링크)</td>
+    <td>~400</td>
+    <td>메시지 타입</td>
+  </tr>
+  <tr>
+    <td><code>components/MessageList.tsx</code></td>
+    <td>메시지 목록, 스크롤, 가상화</td>
+    <td>~300</td>
+    <td>MessageBubble, useChatMessages</td>
+  </tr>
+  <tr>
+    <td><code>components/ChatComposer.tsx</code></td>
+    <td>입력창, 파일 업로드, 전송</td>
+    <td>~400</td>
+    <td>useChatStream</td>
+  </tr>
+  <tr>
+    <td><code>components/ChatHeader.tsx</code></td>
+    <td>세션 정보, 모델 선택, 배지</td>
+    <td>~200</td>
+    <td>세션 상태</td>
+  </tr>
+  <tr>
+    <td><code>components/ArtifactPanel.tsx</code></td>
+    <td>아티팩트·파일·로그 탭</td>
+    <td>~500</td>
+    <td>아티팩트 API</td>
+  </tr>
+  <tr>
+    <td><code>components/SystemNotice.tsx</code></td>
+    <td>시스템 알림, resume 실패 안내, 에러 표시</td>
+    <td>~200</td>
+    <td>useResumeManager</td>
+  </tr>
+  <tr>
+    <td><code>lib/chatFilters.ts</code></td>
+    <td>메시지 숨김/표시 필터 (단일 소스)</td>
+    <td>~100</td>
+    <td>공유 상수 (shared-constants)</td>
+  </tr>
+  <tr>
+    <td><code>lib/sseEventSchema.ts</code></td>
+    <td>SSE 이벤트 타입 정의, 파싱, 검증</td>
+    <td>~150</td>
+    <td>공유 상수</td>
+  </tr>
+  <tr>
+    <td><code>types/chat.ts</code></td>
+    <td>메시지, 세션, 아티팩트 타입 정의</td>
+    <td>~200</td>
+    <td>없음</td>
+  </tr>
+</table>
+
+<p><strong>합계:</strong> ~4,000줄 (현재 12,484줄 대비 68% 감소. 나머지는 중복 제거·리팩터링으로 해소)</p>
+
+<h3>4.2 안전한 분할 전략 (Strangler Fig Pattern)</h3>
+
+<div class="card card-success">
+  <p><strong>핵심:</strong> 한 번에 전체를 재작성하지 않습니다. 기존 page.tsx를 유지하면서 하나씩 모듈을 추출하고, 추출된 모듈은 기존 코드와 동일하게 동작하는지 테스트로 검증한 후 교체합니다.</p>
+</div>
+
+<ol>
+  <li><strong>Step 1: 타입 추출</strong> — <code>types/chat.ts</code>에 인터페이스/타입을 먼저 분리. 기존 코드는 import로 교체. 동작 변경 없음.</li>
+  <li><strong>Step 2: 순수 함수 추출</strong> — <code>chatFilters.ts</code>, <code>sseEventSchema.ts</code> 등 상태에 의존하지 않는 로직을 먼저 분리. 단위 테스트 즉시 작성 가능.</li>
+  <li><strong>Step 3: 커스텀 훅 추출</strong> — <code>useChatStream</code>, <code>useChatMessages</code> 등을 순서대로 추출. 각 추출 후 통합 테스트로 기존 동작 검증.</li>
+  <li><strong>Step 4: 렌더링 컴포넌트 추출</strong> — MessageBubble, MessageList, Composer 등을 분리. Storybook 또는 스냅샷 테스트로 렌더링 검증.</li>
+  <li><strong>Step 5: page.tsx를 조합 레이어로</strong> — 최종적으로 page.tsx는 ~300줄의 조합 컴포넌트만 남김.</li>
+</ol>
+
+<h3>4.3 chat_service.py 분할 설계</h3>
+<table>
+  <tr><th>모듈</th><th>책임</th><th>예상 줄 수</th></tr>
+  <tr><td><code>chat_session_service.py</code></td><td>세션 CRUD, 워크스페이스 관리</td><td>~800</td></tr>
+  <tr><td><code>chat_message_service.py</code></td><td>메시지 CRUD, 필터, 아카이브</td><td>~1,000</td></tr>
+  <tr><td><code>chat_stream_service.py</code></td><td>SSE 스트리밍, 이벤트 생성, 연결 관리</td><td>~1,500</td></tr>
+  <tr><td><code>chat_execution_service.py</code></td><td>턴 실행, LLM 호출, 도구 실행</td><td>~2,000</td></tr>
+  <tr><td><code>chat_resume_service.py</code></td><td>Resume 로직, 재시도, 실패 처리</td><td>~800</td></tr>
+  <tr><td><code>chat_filter_rules.py</code></td><td>메시지 가시성 필터 (단일 소스)</td><td>~200</td></tr>
+  <tr><td><code>chat_artifact_service.py</code></td><td>아티팩트 관리</td><td>~600</td></tr>
+  <tr><td><code>chat_service.py</code></td><td>Facade — 하위 서비스 조합, 기존 API 호환</td><td>~500</td></tr>
+</table>
+
+<!-- ==================== 5. 테스트 자동화 전략 ==================== -->
+<h2 id="testing">5. 테스트 자동화 전략</h2>
+
+<h3>5.1 테스트 피라미드</h3>
+
+<div class="card card-info">
+  <pre><code>
+         /‾‾‾‾‾‾‾\
+        / E2E (5) \         ← Playwright: SSE 스트리밍, 메시지 표시, 세션 전환
+       /‾‾‾‾‾‾‾‾‾‾‾\
+      / 통합 (15~20)  \      ← API + 프론트 연동: 메시지 필터, resume 흐름
+     /‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\
+    / 단위 테스트 (50~80)  \   ← 순수 함수: 필터, 파서, 상태 변환
+   /‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\
+  / 타입 체크 + Lint (전체)    \  ← TypeScript strict, ESLint
+ /‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\
+</code></pre>
+</div>
+
+<h3>5.2 단위 테스트 (Vitest)</h3>
+
+<div class="card">
+  <h4>왜 Vitest인가?</h4>
+  <ul>
+    <li>Next.js 16과 네이티브 호환, ESM 지원, Jest 대비 2~5배 빠른 실행</li>
+    <li>React Testing Library와 조합하여 컴포넌트 렌더링 테스트 지원</li>
+    <li>watch 모드로 개발 중 실시간 피드백</li>
+  </ul>
+
+  <h4>최우선 테스트 대상 (Phase 1)</h4>
+  <table>
+    <tr><th>대상</th><th>테스트 내용</th><th>예상 케이스</th></tr>
+    <tr><td><code>chatFilters.ts</code></td><td>모든 intent별 숨김/표시 판정</td><td>~30</td></tr>
+    <tr><td><code>sseEventSchema.ts</code></td><td>SSE 이벤트 파싱, 잘못된 형식 처리</td><td>~20</td></tr>
+    <tr><td><code>useChatMessages</code></td><td>메시지 병합, 정렬, 중복 제거</td><td>~15</td></tr>
+    <tr><td><code>useResumeManager</code></td><td>재시도 횟수, 한도 초과, 알림 트리거</td><td>~10</td></tr>
+  </table>
+</div>
+
+<h3>5.3 SSE 스트리밍 E2E 테스트 (Playwright)</h3>
+
+<div class="card">
+  <h4>SSE 테스트가 특별한 이유</h4>
+  <p>일반 HTTP 요청과 달리 SSE는 연결이 열린 상태에서 서버가 점진적으로 데이터를 보냅니다. Playwright의 <code>page.evaluate()</code>로 EventSource를 감시하거나, <code>page.route()</code>로 SSE 응답을 모킹하여 테스트합니다.</p>
+
+  <h4>핵심 E2E 시나리오</h4>
+  <table>
+    <tr><th>#</th><th>시나리오</th><th>검증 포인트</th></tr>
+    <tr><td>1</td><td>메시지 전송 → SSE 스트리밍 → 완료</td><td>버블 생성, 스트리밍 텍스트 표시, 완료 표시</td></tr>
+    <tr><td>2</td><td>스트리밍 중 연결 끊김 → 재연결</td><td>기존 텍스트 보존, 이어서 스트리밍</td></tr>
+    <tr><td>3</td><td>Resume 실패 → 사용자 알림</td><td>"다시 시도" 버튼 표시, 에러 메시지</td></tr>
+    <tr><td>4</td><td>시스템 메시지 필터링</td><td>시스템 intent 숨김, AI/CEO 메시지 표시</td></tr>
+    <tr><td>5</td><td>세션 전환 → 메시지 로드</td><td>이전 세션 메시지 정상 표시</td></tr>
+  </table>
+
+  <h4>SSE 모킹 전략</h4>
+  <pre><code>// Playwright SSE 모킹 예시
+await page.route('**/api/v1/chat/*/stream', async route => {
+  const body = [
+    'event: stream_start\ndata: {"execution_id":"test-1"}\n\n',
+    'event: content_delta\ndata: {"text":"안녕하세요"}\n\n',
+    'event: stream_end\ndata: {"status":"completed"}\n\n',
+  ].join('');
+  await route.fulfill({
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream' },
+    body,
+  });
+});</code></pre>
+</div>
+
+<h3>5.4 시각적 회귀 테스트 (Visual Regression)</h3>
+
+<div class="card">
+  <p><strong>도구:</strong> Playwright의 <code>toHaveScreenshot()</code> 내장 비교 기능 또는 Chromatic/Percy 연동</p>
+  <p><strong>대상:</strong> MessageBubble (일반/코드/에러/시스템), ChatComposer (빈 상태/파일 첨부), ArtifactPanel (각 탭)</p>
+  <p><strong>전략:</strong> 각 컴포넌트의 "골든" 스크린샷을 저장하고, PR마다 비교. 차이 감지 시 리뷰어에게 알림.</p>
+</div>
+
+<!-- ==================== 6. CI/CD 게이트 설계 ==================== -->
+<h2 id="cicd">6. CI/CD 게이트 설계</h2>
+
+<h3>6.1 배포 전 자동 검증 파이프라인</h3>
+
+<div class="card card-success">
+  <pre><code>
+┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
+│  ① Lint     │──▶│ ② TypeCheck │──▶│ ③ Unit Test │──▶│ ④ Build     │──▶│ ⑤ E2E Test  │
+│  ESLint     │   │ tsc --noEmit│   │ Vitest      │   │ next build  │   │ Playwright  │
+│  ~10초      │   │ ~15초       │   │ ~30초       │   │ ~60초       │   │ ~120초      │
+└─────────────┘   └─────────────┘   └─────────────┘   └─────────────┘   └─────────────┘
+     │                  │                 │                  │                  │
+     ▼                  ▼                 ▼                  ▼                  ▼
+   ❌ 실패 시          ❌ 실패 시        ❌ 실패 시         ❌ 실패 시         ❌ 실패 시
+   배포 차단           배포 차단          배포 차단          배포 차단          배포 차단
+</code></pre>
+</div>
+
+<h3>6.2 Dockerfile 통합</h3>
+
+<div class="card">
+  <pre><code># --- 현재 Dockerfile (검증 없음) ---
+FROM node:20-alpine
+COPY . .
+RUN npm run build
+# → 빌드만 성공하면 배포
+
+# --- 목표 Dockerfile (5단계 게이트) ---
+FROM node:20-alpine AS deps
+COPY package*.json ./
+RUN npm ci
+
+FROM deps AS quality-gate
+COPY . .
+RUN npm run lint          # ① ESLint
+RUN npm run typecheck     # ② TypeScript strict
+RUN npm run test          # ③ Vitest unit tests
+RUN npm run build         # ④ Next.js build
+
+FROM deps AS e2e
+COPY . .
+RUN npx playwright install --with-deps chromium
+RUN npm run test:e2e      # ⑤ Playwright E2E
+
+FROM node:20-alpine AS production
+# quality-gate와 e2e 모두 통과해야 여기에 도달
+COPY --from=quality-gate /app/.next ./.next
+# ...</code></pre>
+</div>
+
+<h3>6.3 deploy.sh 통합</h3>
+
+<div class="card">
+  <p>현재 <code>deploy.sh bluegreen</code>은 빌드 성공만 확인합니다. 다음 게이트를 추가합니다:</p>
+  <ol>
+    <li><strong>Pre-build check:</strong> <code>npm run lint && npm run typecheck</code> 실패 시 배포 중단</li>
+    <li><strong>Post-build check:</strong> <code>npm run test</code> 실패 시 배포 중단</li>
+    <li><strong>Post-deploy check:</strong> Blue/Green 전환 후 5분 이내 health-check + 핵심 API 응답 검증. 실패 시 자동 롤백.</li>
+  </ol>
+</div>
+
+<!-- ==================== 7. 계약 동기화 ==================== -->
+<h2 id="contract">7. 프론트-백엔드 계약 동기화</h2>
+
+<h3>7.1 현재 문제: 이중 필터</h3>
+
+<div class="card card-warning">
+  <table>
+    <tr><th>레이어</th><th>위치</th><th>구현</th><th>문제</th></tr>
+    <tr>
+      <td>백엔드</td>
+      <td><code>chat_service.py:8225</code><br><code>_visible_message_filter</code></td>
+      <td>SQL intent whitelist</td>
+      <td rowspan="2">새 intent 추가 시 한쪽만 반영되면 메시지 노출/은닉 버그 발생.<br>실제 사례: <code>interrupted_partial</code> 필터 불일치로 CEO 응답 버블 소실 (09/10)</td>
+    </tr>
+    <tr>
+      <td>프론트</td>
+      <td><code>page.tsx:539</code><br><code>isHiddenSystemChatMessage</code></td>
+      <td>JS intent list</td>
+    </tr>
+  </table>
+</div>
+
+<h3>7.2 해결: 공유 상수 + 자동 검증</h3>
+
+<div class="card card-success">
+  <h4>방법 A: 공유 상수 파일 (권장, 즉시 적용 가능)</h4>
+  <pre><code># shared/chat_constants.py (Python)
+HIDDEN_INTENTS = frozenset({
+    "system_trigger", "auto_reaction", "runner_response",
+    "interruption_notice", "stale_empty_placeholder",
+    "resume_failure_notice", ...
+})
+
+VISIBLE_INTENTS = frozenset({
+    "user_message", "ai_response", "interrupted_partial", ...
+})
+
+# → 백엔드: from shared.chat_constants import HIDDEN_INTENTS
+# → 프론트: API /api/v1/chat/filter-rules 엔드포인트로 제공,
+#           또는 빌드 시 Python → JSON → TypeScript 자동 변환</code></pre>
+
+  <h4>방법 B: 계약 테스트 (중기)</h4>
+  <p>Pact 또는 자체 스키마 검증으로, 프론트가 기대하는 SSE 이벤트 형식과 백엔드가 실제 보내는 형식이 일치하는지 CI에서 자동 검증합니다.</p>
+  <pre><code>// 계약 테스트 예시
+test('SSE stream_end event matches contract', () => {
+  const event = parseSSE('event: stream_end\ndata: {"status":"completed"}\n\n');
+  expect(event).toMatchSchema(SSE_EVENT_SCHEMA.stream_end);
+});</code></pre>
+</div>
+
+<h3>7.3 SSE 이벤트 스키마 표준화</h3>
+
+<table>
+  <tr><th>이벤트</th><th>필수 필드</th><th>프론트 핸들러</th><th>현재 상태</th></tr>
+  <tr><td><code>stream_start</code></td><td>execution_id</td><td>버블 생성, 스피너 표시</td><td>3곳 중복 → 1곳으로</td></tr>
+  <tr><td><code>content_delta</code></td><td>text, [tool_calls]</td><td>스트리밍 텍스트 추가</td><td>정상</td></tr>
+  <tr><td><code>stream_end</code></td><td>status, [final_content]</td><td>스피너 제거, 최종 저장</td><td>누락 시 무한 스피너</td></tr>
+  <tr><td><code>stream_error</code></td><td>error_type, message</td><td>에러 표시, 재시도 버튼</td><td><span class="badge badge-p0">미구현</span></td></tr>
+  <tr><td><code>resume_failed</code></td><td>attempt, max_attempts</td><td>"재시도 실패" 알림</td><td><span class="badge badge-p0">미구현</span></td></tr>
+</table>
+
+<!-- ==================== 8. 안전 배포 전략 ==================== -->
+<h2 id="canary">8. 안전 배포 전략</h2>
+
+<h3>8.1 현재 vs 목표</h3>
+<table>
+  <tr><th>항목</th><th>현재</th><th>목표</th></tr>
+  <tr><td>배포 방식</td><td>Blue/Green (수동)</td><td>Blue/Green + 자동 Health Gate</td></tr>
+  <tr><td>롤백</td><td>CEO 수동 지시</td><td>Health 실패 시 자동 롤백 (30초)</td></tr>
+  <tr><td>검증</td><td>빌드 성공만</td><td>5단계 CI + Post-deploy E2E</td></tr>
+  <tr><td>모니터링</td><td>없음</td><td>배포 후 5분 인터럽트율 감시</td></tr>
+  <tr><td>점진 배포</td><td>없음 (전체 교체)</td><td>Feature Flag로 신규 코드 점진 노출</td></tr>
+</table>
+
+<h3>8.2 Feature Flag 설계</h3>
+
+<div class="card">
+  <p><strong>목적:</strong> 채팅 UI의 신규 변경을 <strong>코드 배포와 기능 노출을 분리</strong>하여, 문제 발생 시 롤백 없이 플래그만 끄면 즉시 원복.</p>
+  <pre><code>// lib/featureFlags.ts
+export const CHAT_FLAGS = {
+  NEW_MESSAGE_FILTER: 'chat.new_message_filter',    // v2 필터 로직
+  RUNNER_BADGE:       'chat.runner_badge',            // 러너 상태 배지
+  RESUME_NOTICE:      'chat.resume_failure_notice',   // resume 실패 알림
+} as const;
+
+// 사용
+const useNewFilter = useFeatureFlag(CHAT_FLAGS.NEW_MESSAGE_FILTER);
+const messages = useNewFilter
+  ? filterMessagesV2(rawMessages)
+  : filterMessagesLegacy(rawMessages);</code></pre>
+
+  <p><strong>Flag 저장:</strong> <code>chat_feature_flags</code> 테이블 (flag_key, enabled, rollout_pct, updated_by) — API로 실시간 변경 가능.</p>
+</div>
+
+<h3>8.3 자동 롤백 기준</h3>
+
+<div class="card card-danger">
+  <p>배포 후 5분 이내 아래 조건 중 하나라도 충족되면 자동으로 이전 슬롯으로 복귀:</p>
+  <ul>
+    <li>인터럽트율 > 30% (현재 baseline 대비 2배 이상 급증)</li>
+    <li>SSE 연결 실패율 > 10%</li>
+    <li>API 5xx 응답률 > 5%</li>
+    <li>Health-check 연속 3회 실패</li>
+  </ul>
+</div>
+
+<!-- ==================== 9. 관측·모니터링 설계 ==================== -->
+<h2 id="monitoring">9. 관측·모니터링 설계</h2>
+
+<h3>9.1 채팅 계층 전용 메트릭</h3>
+
+<div class="card card-info">
+  <p><strong>현재 공백:</strong> error_log에 채팅 관련 에러 0건. CEO가 직접 발견해야만 장애 인지.</p>
+  <p><strong>목표:</strong> 채팅 장애를 <strong>CEO보다 먼저</strong> 감지하고 자동 대응.</p>
+</div>
+
+<table>
+  <tr><th>메트릭</th><th>수집 방법</th><th>알림 기준</th><th>대응</th></tr>
+  <tr>
+    <td>턴 인터럽트율</td>
+    <td>chat_turn_executions 5분 집계</td>
+    <td>> 25% (5분 윈도우)</td>
+    <td>텔레그램 경고 + 자동 진단</td>
+  </tr>
+  <tr>
+    <td>resume_exhausted 비율</td>
+    <td>interrupt_category 집계</td>
+    <td>> 5건/시간</td>
+    <td>텔레그램 경고 + 로그 수집</td>
+  </tr>
+  <tr>
+    <td>producer_incomplete 비율</td>
+    <td>interrupt_category 집계</td>
+    <td>> 3건/시간</td>
+    <td>SSE 스트림 상태 진단</td>
+  </tr>
+  <tr>
+    <td>미분류(null) 인터럽트</td>
+    <td>interrupt_category IS NULL 집계</td>
+    <td>> 10건/일</td>
+    <td>분류 로직 보완 알림</td>
+  </tr>
+  <tr>
+    <td>SSE 연결 수명</td>
+    <td>연결 시작~종료 시간 기록</td>
+    <td>평균 < 30초</td>
+    <td>네트워크/프록시 진단</td>
+  </tr>
+  <tr>
+    <td>메시지 렌더링 누락</td>
+    <td>DB 저장 vs 프론트 표시 count 비교</td>
+    <td>차이 > 0</td>
+    <td>필터 불일치 진단</td>
+  </tr>
+</table>
+
+<h3>9.2 error_log 연동</h3>
+
+<div class="card">
+  <p>채팅 계층의 모든 에러를 <code>error_log</code> 테이블에 자동 기록하는 미들웨어를 추가합니다:</p>
+  <ul>
+    <li><code>source = 'chat_service'</code></li>
+    <li><code>error_type</code>: resume_exhausted, producer_incomplete, sse_disconnect, filter_mismatch 등</li>
+    <li><code>context</code>: session_id, execution_id, model, 실행 시간</li>
+    <li><code>auto_recoverable</code>: resume 가능 여부</li>
+  </ul>
+</div>
+
+<!-- ==================== 10. 구현 로드맵 ==================== -->
+<h2 id="roadmap">10. 구현 로드맵</h2>
+
+<div class="phase-grid">
+  <div class="phase-card">
+    <div class="phase-num">1</div>
+    <h4>Phase 1: 즉시 방어막 (1~3일)</h4>
+    <span class="badge badge-p0">P0</span>
+    <ul>
+      <li>숨김 필터 공유 상수 추출 + 계약 테스트</li>
+      <li>SSE 이벤트 핸들러 3중 중복 → 단일 함수로 통합</li>
+      <li>Resume 실패 시 사용자 알림 SSE 이벤트 추가</li>
+      <li>error_log에 채팅 에러 연동</li>
+      <li><code>npm run typecheck</code> 활성화 (tsconfig strict)</li>
+    </ul>
+    <p><strong>완료 기준:</strong> 필터 테스트 통과, resume 실패 시 알림 표시 확인, error_log에 채팅 에러 1건+ 기록</p>
+  </div>
+
+  <div class="phase-card">
+    <div class="phase-num">2</div>
+    <h4>Phase 2: 테스트 기반 (1주)</h4>
+    <span class="badge badge-p1">P1</span>
+    <ul>
+      <li>Vitest 설치 + chatFilters, sseEventSchema 단위 테스트 30건+</li>
+      <li>Playwright 설치 + SSE 스트리밍 E2E 5건</li>
+      <li>Dockerfile에 lint → typecheck → test 게이트 추가</li>
+      <li>deploy.sh에 pre-build check 통합</li>
+    </ul>
+    <p><strong>완료 기준:</strong> CI 게이트 5단계 모두 통과해야 배포 가능, E2E 5건 PASS</p>
+  </div>
+
+  <div class="phase-card">
+    <div class="phase-num">3</div>
+    <h4>Phase 3: 구조 분할 (2~3주)</h4>
+    <span class="badge badge-p1">P1</span>
+    <ul>
+      <li>types/chat.ts 추출</li>
+      <li>순수 함수 추출 (chatFilters, sseEventSchema)</li>
+      <li>커스텀 훅 추출 (useChatStream, useChatMessages, useResumeManager)</li>
+      <li>Strangler Fig: 각 추출 후 기존 동작 테스트 검증</li>
+      <li>chat_service.py 분할 시작</li>
+    </ul>
+    <p><strong>완료 기준:</strong> page.tsx 4,000줄 이하, 각 모듈 독립 테스트 존재</p>
+  </div>
+
+  <div class="phase-card">
+    <div class="phase-num">4</div>
+    <h4>Phase 4: 안전 배포 (1주)</h4>
+    <span class="badge badge-p2">P2</span>
+    <ul>
+      <li>Feature Flag 시스템 구현</li>
+      <li>배포 후 자동 인터럽트율 감시 + 자동 롤백</li>
+      <li>시각적 회귀 테스트 (Playwright screenshot comparison)</li>
+      <li>채팅 메트릭 대시보드 패널 추가</li>
+    </ul>
+    <p><strong>완료 기준:</strong> 배포 후 인터럽트율 30% 초과 시 자동 롤백 동작 확인</p>
+  </div>
+</div>
+
+<h3>비용·기간 요약</h3>
+<table>
+  <tr><th>Phase</th><th>기간</th><th>예상 비용</th><th>리스크 감소 효과</th></tr>
+  <tr><td>Phase 1</td><td>1~3일</td><td>$30~50 (러너 비용)</td><td>필터 불일치·resume 무통보 즉시 제거 → 회귀 40% 감소</td></tr>
+  <tr><td>Phase 2</td><td>1주</td><td>$50~80</td><td>빌드 전 파손 자동 탐지 → 회귀 70% 감소</td></tr>
+  <tr><td>Phase 3</td><td>2~3주</td><td>$100~150</td><td>변경 영향 범위 제한 → 회귀 90% 감소</td></tr>
+  <tr><td>Phase 4</td><td>1주</td><td>$30~50</td><td>파손 시 자동 복구 → CEO 수동 개입 제거</td></tr>
+  <tr><td><strong>합계</strong></td><td><strong>4~6주</strong></td><td><strong>$210~330</strong></td><td><strong>회귀 90%+ 감소, 자동 롤백</strong></td></tr>
+</table>
+
+<!-- ==================== 11. 참고 자료 ==================== -->
+<h2 id="references">11. 참고 자료·방법론</h2>
+
+<h3>11.1 적용 방법론</h3>
+<table>
+  <tr><th>방법론</th><th>적용 포인트</th><th>출처</th></tr>
+  <tr>
+    <td><strong>Strangler Fig Pattern</strong></td>
+    <td>page.tsx 점진적 분할 — 기존 코드를 유지하면서 하나씩 모듈 교체</td>
+    <td>Martin Fowler, "Strangler Fig Application" (2004, 2019 업데이트)</td>
+  </tr>
+  <tr>
+    <td><strong>Contract Testing</strong></td>
+    <td>프론트-백엔드 SSE 이벤트 스키마 자동 검증</td>
+    <td>Pact Foundation, Consumer-Driven Contract Testing</td>
+  </tr>
+  <tr>
+    <td><strong>Testing Trophy</strong></td>
+    <td>통합 테스트 우선 — Kent C. Dodds의 "Write tests. Not too many. Mostly integration."</td>
+    <td>Kent C. Dodds, "Testing JavaScript" (2018)</td>
+  </tr>
+  <tr>
+    <td><strong>Zero-Defect Methodology</strong></td>
+    <td>Philip Crosby "Quality is Free" — 예방 비용 < 수정 비용. 테스트·CI 게이트는 예방 투자.</td>
+    <td>Philip Crosby, "Quality is Free" (1979)</td>
+  </tr>
+  <tr>
+    <td><strong>Feature Flags / Progressive Delivery</strong></td>
+    <td>코드 배포와 기능 노출 분리 — 문제 시 플래그 off로 즉시 원복</td>
+    <td>Pete Hodgson, "Feature Toggles" (Martin Fowler, 2017)</td>
+  </tr>
+  <tr>
+    <td><strong>Shift-Left Testing</strong></td>
+    <td>테스트를 배포 직전이 아닌 개발 단계에서 실행 — Dockerfile 빌드 시 테스트 통합</td>
+    <td>Larry Smith, "Shift Left Testing" (2001)</td>
+  </tr>
+</table>
+
+<h3>11.2 기술 스택 선택 근거</h3>
+<table>
+  <tr><th>도구</th><th>선택 이유</th><th>대안</th></tr>
+  <tr>
+    <td>Vitest</td>
+    <td>Next.js 네이티브 호환, ESM, 빠른 실행, React Testing Library 조합</td>
+    <td>Jest (호환성 이슈), Mocha (설정 복잡)</td>
+  </tr>
+  <tr>
+    <td>Playwright</td>
+    <td>SSE/WebSocket 네이티브 지원, 멀티 브라우저, 스크린샷 비교 내장</td>
+    <td>Cypress (SSE 지원 제한), Puppeteer (크롬 전용)</td>
+  </tr>
+  <tr>
+    <td>ESLint + TypeScript strict</td>
+    <td>타입 안전성으로 런타임 에러 사전 차단, 기존 Next.js 프로젝트 호환</td>
+    <td>—</td>
+  </tr>
+</table>
+
+<h3>11.3 AADS 내부 관련 문서</h3>
+<ul>
+  <li><code>CLAUDE.md</code> — R-QUALITY (코드 품질 규칙), R-COMMIT (커밋 규칙)</li>
+  <li><code>docs/knowledge/AADS-KNOWLEDGE.md</code> — 아키텍처, 파이프라인, 함정</li>
+  <li><code>docs/shared-lessons/INDEX.md</code> — 공유 교훈 목록</li>
+  <li><code>reports/20260310_AADS190_phase0_phase1_phase2_report.md</code> — 서브에이전트 리포트</li>
+</ul>
+
+<div class="footer">
+  <p>AADS 무결점 채팅 시스템 PRD v1.0 — 2026-09-10 KST</p>
+  <p>작성: AADS CTO AI (Claude Opus 5) &nbsp;|&nbsp; 승인 대기: CEO moongoby</p>
+  <p>이 문서는 DB 실측 데이터, 코드 분석, 에이전트 병렬 조사 결과를 기반으로 작성되었습니다.</p>
+</div>
+
+</body>
+</html>
