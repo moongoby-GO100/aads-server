@@ -2517,7 +2517,7 @@ def _looks_like_incomplete_progress_tail(text: str) -> bool:
         return True
     if re.search(r"```[a-z]*\n(?:(?!```).)*$", tail, re.DOTALL):
         return True
-    if re.search(r"[가-힣a-zA-Z0-9]{1,4}$", tail) and not re.search(r"[.!?다요함됨임음]\s*$", tail):
+    if len(clean) < 2000 and re.search(r"[가-힣a-zA-Z0-9]{1,4}$", tail) and not re.search(r"[.!?다요함됨임음]\s*$", tail):
         return True
     return bool(
         re.search(r"(?:⏳|생성 중|응답 생성 중|조회 중|확인 중)\s*\.{0,3}\s*$", tail)
@@ -5931,6 +5931,12 @@ async def with_background_completion(
                         session_id[:8], _content_len,
                     )
                     _completed_ok = True
+                elif _content_len > 3000:
+                    logger.info(
+                        "partial_force_accepted_long session=%s content_len=%d tail_incomplete=%s",
+                        session_id[:8], _content_len, _tail_incomplete,
+                    )
+                    _completed_ok = True
                 elif _content_len > 0:
                     state["_producer_incomplete_exit"] = "missing_done_event_content_incomplete"
                     logger.warning(
@@ -7335,7 +7341,14 @@ async def _resume_single_stream(
                             elif etype == "error":
                                 raise RuntimeError(str(event.get("content") or "resume_stream_error"))
 
-                        _require_resume_done_event(_resume_saw_done_event, len((full_response or "").strip()))
+                        if not _resume_saw_done_event:
+                            _rfl = len((full_response or "").strip())
+                            if _rfl > 800 and not _looks_like_incomplete_progress_tail(full_response or ""):
+                                logger.info("resume_accepted_without_done session=%s len=%d", session_id[:8], _rfl)
+                            elif _rfl > 3000:
+                                logger.info("resume_force_accepted_long session=%s len=%d", session_id[:8], _rfl)
+                            else:
+                                _require_resume_done_event(False, _rfl)
                         if not _has_meaningful_partial_content(full_response):
                             raise RuntimeError("resume_no_meaningful_response")
                         last_error = None
