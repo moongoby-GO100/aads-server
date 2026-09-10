@@ -964,8 +964,8 @@ async def _complete_db(
                    updated_at = NOW()
              WHERE id = $1
                AND (
-                    (status <> 'running' AND NULLIF($7, '') IS NULL AND $8 IS NULL)
-                    OR (owner_instance = $7 AND owner_epoch = $8)
+                    (status <> 'running' AND NULLIF($7::text, '') IS NULL AND $8::bigint IS NULL)
+                    OR (owner_instance = $7::text AND owner_epoch = $8::bigint)
                )
             RETURNING *
             """,

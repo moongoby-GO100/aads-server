@@ -124,6 +124,8 @@ def test_unfenced_completion_cannot_update_a_running_claim(monkeypatch):
 
     assert result is None
     assert "status <> 'running'" in str(captured["query"])
+    assert "$8::bigint IS NULL" in str(captured["query"])
+    assert "owner_epoch = $8::bigint" in str(captured["query"])
     assert captured["args"][-2:] == ("", None)
 
 
