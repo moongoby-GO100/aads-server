@@ -31,20 +31,8 @@ logger = logging.getLogger(__name__)
 # AADS(2026-09-06): Gemini/DeepSeek 폴백 제거 — CLI 모델(Claude)로 대체 (CEO 지시)
 _DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 _DASHSCOPE_API_KEY = os.getenv("ALIBABA_API_KEY", "")
-# AADS-LOOP P0(2026-07-30): Claude OAuth 토큰 만료(401) + Gemini 크레딧 고갈 +
-# DashScope 404 동시 발생 시 배경 LLM이 전부 None을 반환해 루프/평가가 100% 실패했다.
-# LiteLLM 경유 저비용 체인을 최종 폴백으로 둬 배경 작업 가용성을 유지한다.
-_BG_FALLBACK_MODELS = [
-    m.strip()
-    for m in os.getenv(
-        "LLM_BG_FALLBACK_MODELS", "groq-llama-70b,groq-gpt-oss-120b,qwen-flash"
-    ).split(",")
-    if m.strip()
-]
-# AADS-LOOP P0(2026-07-30): Claude OAuth 토큰 만료(401) + Gemini 크레딧 고갈 +
-# DashScope 404 동시 발생 시 배경 LLM이 전부 None을 반환해 루프/평가가 100% 실패했다.
-# LiteLLM 경유 저비용 체인을 최종 폴백으로 둬 배경 작업 가용성을 유지한다.
-_BG_FALLBACK_MODELS = [
+# AADS-LLM-AUTH: DB(llm_fallback_chains) 우선, 환경변수 폴백
+_BG_FALLBACK_MODELS_ENV = [
     m.strip()
     for m in os.getenv(
         "LLM_BG_FALLBACK_MODELS", "groq-llama-70b,groq-gpt-oss-120b,qwen-flash"
@@ -256,7 +244,9 @@ async def call_llm_with_fallback(
             return await _call_litellm(prompt, model, max_tokens, system)
         except Exception as e:
             logger.warning("litellm_bg_error: model=%s error=%s", model, str(e)[:80])
-            for _fb_model in _BG_FALLBACK_MODELS:
+            from app.core.llm_fallback_engine import get_bg_fallback_models
+            _fb_models = await get_bg_fallback_models()
+            for _fb_model in (_fb_models or _BG_FALLBACK_MODELS_ENV):
                 if _fb_model == model:
                     continue
                 try:
@@ -406,7 +396,9 @@ async def call_llm_with_fallback(
 
     # 4순위(최종): LiteLLM 저비용 체인 — Claude OAuth 만료 시 가용성 유지
     if _lc.get("key"):
-        for _fb_model in _BG_FALLBACK_MODELS:
+        from app.core.llm_fallback_engine import get_bg_fallback_models as _get_fb
+        _fb_list = await _get_fb()
+        for _fb_model in (_fb_list or _BG_FALLBACK_MODELS_ENV):
             try:
                 _text = await _call_litellm(prompt, _fb_model, max_tokens, system)
                 if _text:
