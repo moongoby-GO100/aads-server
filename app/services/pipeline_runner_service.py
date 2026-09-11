@@ -51,16 +51,16 @@ def _get_timeout_for_job(job: "PipelineCJob") -> int:
     return _TIMEOUT_BY_SIZE.get(size.upper(), _CLAUDE_MAX_WAIT)
 _MAX_OUTPUT_CHARS = 6000    # 결과 최대 문자수
 _MAX_DIFF_CHARS = 50000     # git diff 최대 문자수 (L3)
-_REVIEW_MODEL = "claude-sonnet-4-6"
+_REVIEW_MODEL = "claude-sonnet-5"
 _MAX_REVIEW_PARSE_RETRIES = 3  # AI 검수 인프라 실패(DELEGATED) 재시도 횟수 — 소진 후 세션 AI 직접 검수 전환
 
 # AADS-234: LiteLLM Runner 폴백 모델 — size 기반, 무료 쿼터 우선
 # CEO 지시: 크기별 Claude 모델 분기 — XL=Opus, L/M=Sonnet, S/XS=Haiku (2026-04-14)
 _CLAUDE_MODEL_BY_SIZE = {
     "XS": "claude-haiku-4-5-20251001",
-    "S":  "claude-haiku-4-5-20251001",
-    "M":  "claude-sonnet-4-6",
-    "L":  "claude-sonnet-4-6",
+    "S":  "claude-sonnet-5",
+    "M":  "claude-sonnet-5",
+    "L":  "claude-sonnet-5",
     "XL": "claude-opus-5",
 }
 
@@ -73,7 +73,7 @@ _LITELLM_FALLBACK_MODELS = {
 }
 
 # Codex CLI 가용 모델 (Codex catalog, 2026-04-28)
-_CODEX_AVAILABLE_MODELS = {"default", "gpt-6-astra", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+_CODEX_AVAILABLE_MODELS = {"default", "gpt-6-astra", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-tela"}
 _TERMINAL_JOB_STATUSES = {
     "done",
     "error",
@@ -700,7 +700,7 @@ class PipelineCJob:
                 work_result = await self._run_codex_cli(enriched_instruction, override_model=_codex_model)
             elif _wm == "claude":
                 # Claude 명시 지정: Claude 직행 (크기별 모델 분기)
-                _claude_model = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-4-6")
+                _claude_model = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5")
                 self.actual_model = f"claude:{_claude_model.split('-')[1] if '-' in _claude_model else 'sonnet'}"
                 self.model = _claude_model.split('-')[1] if self.size in ("XL",) else ("haiku" if self.size in ("S", "XS") else "sonnet")
                 work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
@@ -709,7 +709,7 @@ class PipelineCJob:
                 db_models = await _get_db_model_config(self.size)
                 model_cycle = db_models or [
                     f"litellm:{_LITELLM_FALLBACK_MODELS.get(self.size, 'minimax-m2.7')}",
-                    _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-4-6"),
+                    _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5"),
                 ]
                 self._log("model_cycle", f"모델 우선순위: {', '.join(model_cycle)}")
 
@@ -1746,7 +1746,7 @@ class PipelineCJob:
             spec = f"litellm:{_LITELLM_FALLBACK_MODELS.get(self.size, 'minimax-m2.7')}"
 
         if spec == "claude":
-            spec = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-4-6")
+            spec = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5")
 
         if spec.startswith("codex:"):
             self._log("model_attempt", f"DB 모델 시도: {spec}")
