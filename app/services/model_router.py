@@ -30,21 +30,21 @@ LITELLM_BASE_URL = os.environ.get("LITELLM_BASE_URL", "http://aads-litellm:4000/
 # 인텐트 → LiteLLM 모델명 매핑 (AADS-171)
 INTENT_MODEL_MAP: dict[str, str | None] = {
     "casual":            "claude-haiku",
-    "search":            "qwen-turbo",
+    "search":            "claude-haiku",
     "deep_research":     "claude-sonnet",
-    "url_analyze":       "qwen-turbo",
+    "url_analyze":       "claude-haiku",
     "video_analyze":     "claude-sonnet",
     "image_analyze":     "claude-sonnet",
     "planning":          "claude-sonnet",
     "decision":          "claude-opus",
     "code_exec":         "gpt-5.6-sol",
     "directive_gen":     "claude-sonnet",
-    "memory_recall":     "qwen-turbo",
+    "memory_recall":     "claude-haiku",
     "workspace_switch":  None,  # 모델 불필요
     # 기존 인텐트
-    "dashboard":         "qwen-turbo",
+    "dashboard":         "claude-haiku",
     "diagnosis":         "claude-sonnet",
-    "research":          "qwen-turbo",
+    "research":          "claude-haiku",
     "execute":           "claude-sonnet",
     "browser":           "claude-sonnet",
     "strategy":          "claude-opus",
@@ -53,7 +53,7 @@ INTENT_MODEL_MAP: dict[str, str | None] = {
     "design_fix":        "claude-sonnet",
     "architect":         "claude-opus",
     "execution_verify":  "claude-sonnet",
-    "health_check":      "qwen-turbo",
+    "health_check":      "claude-haiku",
 }
 
 # 일 $5 초과 시 Opus 비용 이상치만 감지 (v2.1 Q-COST: 강제 차단 없음)
@@ -87,7 +87,7 @@ async def resolve_intent_model(intent: str) -> str | None:
     월 $150 초과 시 경고 로그.
     workspace_switch 등 모델 불필요 인텐트는 None 반환.
     """
-    model = INTENT_MODEL_MAP.get(intent, "qwen-turbo")
+    model = INTENT_MODEL_MAP.get(intent, "claude-haiku")
 
     if model is None:
         return None
@@ -166,13 +166,13 @@ AGENT_MODELS: dict[str, dict[str, ModelConfig]] = {
     # PM: claude-sonnet-4-6 ($3/$15)
     "pm": {
         "primary":  ModelConfig("anthropic", "claude-sonnet-4-6", 3.0,  15.0),
-        "fallback": ModelConfig("openai",    "gpt-5.2-chat-latest", 5.0, 15.0),
+        "fallback": ModelConfig("codex",     "gpt-5.6-sol",       4.0,  20.0),
         "error":    ModelConfig("anthropic", "claude-haiku-4-5",  1.0,   5.0),
     },
     # Developer: claude-sonnet-4-6 ($3/$15)
     "developer": {
         "primary":  ModelConfig("anthropic", "claude-sonnet-4-6", 3.0,  15.0),
-        "fallback": ModelConfig("openai",    "gpt-5.2-chat-latest", 5.0, 15.0),
+        "fallback": ModelConfig("codex",     "gpt-5.6-sol",       4.0,  20.0),
         "error":    ModelConfig("anthropic", "claude-haiku-4-5",  1.0,   5.0),
     },
     # QA: claude-sonnet-4-6 ($3/$15)
@@ -184,7 +184,7 @@ AGENT_MODELS: dict[str, dict[str, ModelConfig]] = {
     # Judge: Google commercial route paused by CEO policy (2026-09-02 KST)
     "judge": {
         "primary":  ModelConfig("anthropic", "claude-sonnet-4-6",      3.0, 15.0),
-        "fallback": ModelConfig("openai",    "gpt-5.6-sol",            5.0, 30.0),
+        "fallback": ModelConfig("codex",     "gpt-5.6-sol",            4.0, 20.0),
         "error":    ModelConfig("anthropic", "claude-haiku-4-5",       1.0,  5.0),
     },
     # DevOps: gpt-5-mini ($0.25/$2)
@@ -196,14 +196,14 @@ AGENT_MODELS: dict[str, dict[str, ModelConfig]] = {
     # Researcher: Google commercial route paused by CEO policy (2026-09-02 KST)
     "researcher": {
         "primary":  ModelConfig("anthropic", "claude-haiku-4-5",   0.80,  4.0),
-        "fallback": ModelConfig("openai",    "gpt-5.6-luna",       1.0,   6.0),
-        "error":    ModelConfig("anthropic", "claude-sonnet-4-6",  3.0,  15.0),
+        "fallback": ModelConfig("anthropic", "claude-sonnet-4-6",  3.0,  15.0),
+        "error":    ModelConfig("anthropic", "claude-haiku-4-5",   0.80,  4.0),
     },
     # Strategist 수집: Google commercial route paused by CEO policy (2026-09-02 KST)
     "strategist_collect": {
         "primary":  ModelConfig("anthropic", "claude-haiku-4-5",   0.80,  4.0),
-        "fallback": ModelConfig("openai",    "gpt-5.6-luna",       1.0,   6.0),
-        "error":    ModelConfig("anthropic", "claude-sonnet-4-6",  3.0,  15.0),
+        "fallback": ModelConfig("anthropic", "claude-sonnet-4-6",  3.0,  15.0),
+        "error":    ModelConfig("anthropic", "claude-haiku-4-5",   0.80,  4.0),
     },
     # Strategist 분석: claude-opus-4.6 ($5/$25) — 고품질 전략 분석 (AADS-125)
     "strategist_analyze": {
