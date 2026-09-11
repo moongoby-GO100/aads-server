@@ -1966,10 +1966,11 @@ async def call_stream(
                 except Exception as _cfb_exc:
                     logger.warning(f"codex_fb_exc: {model}→{_cfb}: {_cfb_exc}")
             _secondary_available = await get_available_model_ids()
+            # CEO 지시(2026-09-11): 유료 LiteLLM 폴백 비활성화 — Groq(무료)만 허용
             _secondary_candidates = await _configured_llm_fallback_candidates(
                 model,
                 _secondary_available,
-                excluded_providers={"codex", "anthropic"},
+                excluded_providers={"codex", "anthropic", "openrouter", "qwen", "alibaba", "kimi", "minimax", "openai"},
             )
             for _sfb in _secondary_candidates:
                 try:
