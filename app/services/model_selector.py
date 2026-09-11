@@ -2138,17 +2138,8 @@ async def call_stream(
 
             logger.warning(f"tier_exhausted: {_fm}/slot{_fs}[{_fi}]")
 
-        # Tier3: CLI Relay 오프라인 환경(server5 등) → LiteLLM으로 같은 모델 직접 시도
-        _litellm_direct_err = False
-        logger.info(f"litellm_direct_fallback: trying {_original_model} via LiteLLM after relay failure")
-        async for event in _stream_litellm(_original_model, system_prompt, messages, tools=tools, session_id=session_id):
-            if event.get("type") == "error":
-                _litellm_direct_err = True
-                logger.warning(f"litellm_direct_fallback_failed: {_original_model}: {event.get('content', '')[:80]}")
-                break
-            yield event
-        if not _litellm_direct_err:
-            return
+        # Tier3: LiteLLM 유료 경로 비활성화 (CEO 지시) → Codex CLI/samegrade 폴백으로 직행
+        logger.info(f"litellm_direct_fallback_skipped: {_original_model} — paid route disabled, proceeding to samegrade")
 
         # 모든 Claude 모델×계정 실패 → 동급 외부 모델 순차 시도
         try:

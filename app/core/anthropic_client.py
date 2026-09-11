@@ -37,17 +37,7 @@ _DASHSCOPE_API_KEY = os.getenv("ALIBABA_API_KEY", "")
 _BG_FALLBACK_MODELS = [
     m.strip()
     for m in os.getenv(
-        "LLM_BG_FALLBACK_MODELS", "groq-llama-70b,groq-gpt-oss-120b,qwen-flash"
-    ).split(",")
-    if m.strip()
-]
-# AADS-LOOP P0(2026-07-30): Claude OAuth 토큰 만료(401) + Gemini 크레딧 고갈 +
-# DashScope 404 동시 발생 시 배경 LLM이 전부 None을 반환해 루프/평가가 100% 실패했다.
-# LiteLLM 경유 저비용 체인을 최종 폴백으로 둬 배경 작업 가용성을 유지한다.
-_BG_FALLBACK_MODELS = [
-    m.strip()
-    for m in os.getenv(
-        "LLM_BG_FALLBACK_MODELS", "groq-llama-70b,groq-gpt-oss-120b,qwen-flash"
+        "LLM_BG_FALLBACK_MODELS", "groq-llama-70b,groq-gpt-oss-120b"
     ).split(",")
     if m.strip()
 ]
@@ -397,12 +387,8 @@ async def call_llm_with_fallback(
 
     _lc = get_litellm_config()
 
-    # 3순위: qwen3-235b (DashScope)
-    if _DASHSCOPE_API_KEY:
-        try:
-            return await _call_dashscope(prompt, "qwen3-235b", max_tokens, system)
-        except Exception as e:
-            logger.warning("qwen3_235b_fallback_error: %s", str(e)[:80])
+    # 3순위: qwen3-235b — 비활성화 (CEO 지시: 유료 DashScope 폴백 비활성화, 무료 Groq만 유지)
+    logger.info("qwen3_235b_fallback_skipped: paid DashScope disabled by policy")
 
     # 4순위(최종): LiteLLM 저비용 체인 — Claude OAuth 만료 시 가용성 유지
     if _lc.get("key"):
@@ -427,38 +413,18 @@ async def call_background_llm(
     max_tokens: int = 1000,
     tenant_id: Optional[str] = None,
 ) -> str:
-    """배경 서비스용 LLM 호출 — qwen-turbo(DashScope) 1순위, claude-haiku 폴백.
+    """배경 서비스용 LLM — Claude-haiku 1순위, 무료 Groq 최종 폴백.
 
     compaction, memory_manager, fact_extractor, experience_learner,
     quality_feedback_loop, self_evaluator, smart_search, code_reviewer 등
-    OAuth 한도를 소비하지 않는 배경 작업에서 사용.
+    배경 작업에서 사용. DashScope 유료 모델(qwen-turbo) 비활성화됨 (CEO 지시).
     """
-    global _bg_qwen_fail_streak
     if tenant_id:
         from app.services.tenant_usage_limits import check_tenant_usage_limit
 
         await check_tenant_usage_limit(tenant_id, operation="background_llm", projected_calls=1)
-    t0 = time.time()
 
-    # 1순위: qwen-turbo (DashScope 직접)
-    try:
-        result = await _call_dashscope(prompt, "qwen-turbo", max_tokens, system or None)
-        if result:
-            _bg_qwen_fail_streak = 0
-            await _bg_llm_log(
-                "background", "qwen-turbo", True,
-                latency_ms=int((time.time() - t0) * 1000),
-                tenant_id=tenant_id,
-            )
-            return result
-    except Exception as e:
-        logger.warning("call_background_llm_qwen_failed: %s", str(e)[:80])
-        _bg_qwen_fail_streak += 1
-        await _bg_llm_log("background", "qwen-turbo", False, error_code="qwen_failed", tenant_id=tenant_id)
-        if _bg_qwen_fail_streak >= 3:  # qwen-turbo 조기 감지를 위해 3회로 낮춤 (AADS-204)
-            await _notify_bg_llm_alert(_bg_qwen_fail_streak)
-
-    # 2순위: claude-haiku (OAuth 폴백)
+    # 1순위: Claude-haiku (OAuth), 최종 폴백: 무료 Groq (call_llm_with_fallback 내부)
     fallback = await call_llm_with_fallback(
         prompt=prompt,
         system=system or None,
