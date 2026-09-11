@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="AI 학습의 원리부터 사전학습, 미세조정, RLHF, DPO, RAG, 메모리, 평가, AADS 적용 구분과 다음 실행 단계까지 설명하는 CEO 교육자료">
+  <title>AI 학습론 완전 이해 - AADS CEO 교육자료</title>
+  <style>
+    :root {
+      --navy:#0b1526; --navy2:#132641; --ink:#172033; --muted:#5c687a;
+      --paper:#f4f7fb; --panel:#fff; --line:#d9e1ec; --blue:#1f67b1;
+      --sky:#eaf4ff; --green:#16745a; --green-bg:#e9f7f1; --amber:#946200;
+      --amber-bg:#fff7df; --red:#a33b33; --red-bg:#fff0ee; --violet:#6a4ba0;
+    }
+    *{box-sizing:border-box} html{scroll-behavior:smooth}
+    body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",Arial,sans-serif;line-height:1.72}
+    a{color:#17599d} a:hover{text-decoration-thickness:2px}
+    header{background:linear-gradient(120deg,var(--navy),var(--navy2));color:#fff;border-bottom:6px solid #36a37e;padding:52px 26px 38px}
+    header .wrap,main,footer .wrap{max-width:1180px;margin:auto}
+    h1{margin:0 0 12px;font-size:clamp(30px,4vw,46px);line-height:1.2}
+    h2{margin:48px 0 18px;padding-bottom:9px;border-bottom:2px solid var(--line);font-size:27px;line-height:1.35}
+    h3{margin:27px 0 10px;font-size:20px;line-height:1.4} h4{font-size:16px;margin:18px 0 6px}
+    p{margin:8px 0 13px}.lead{max-width:950px;color:#dbe7f5;font-size:18px}
+    main{padding:30px 24px 64px}.meta,.grid{display:grid;gap:13px}.meta{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:24px}
+    .meta div{padding:14px 16px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:10px}
+    .label{display:block;color:#bfcde0;font-size:12px}.value{font-weight:800}.grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .card,.callout,.quiz,.next-step{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:17px 19px;margin:12px 0}
+    .card h3,.card h4,.callout h3{margin-top:0}.callout{border-left:6px solid var(--green)}.callout.warn{border-left-color:var(--amber);background:var(--amber-bg)}.callout.danger{border-left-color:var(--red);background:var(--red-bg)}.callout.info{border-left-color:var(--blue);background:var(--sky)}
+    .toc a{display:block;text-decoration:none;padding:5px 0}.toc a:hover{text-decoration:underline}.tag{display:inline-block;border-radius:999px;padding:2px 9px;margin:2px 5px 2px 0;color:#fff;background:var(--blue);font-size:12px;font-weight:800}.tag.green{background:var(--green)}.tag.amber{background:var(--amber)}.tag.red{background:var(--red)}.tag.violet{background:var(--violet)}
+    table{width:100%;border-collapse:collapse;background:#fff;margin:14px 0 24px;font-size:14px}th,td{border:1px solid var(--line);padding:10px 12px;vertical-align:top;text-align:left}th{background:#eaf0f7;font-weight:800}
+    code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}code{background:#edf2f7;border-radius:4px;padding:1px 5px}pre{overflow:auto;background:#0e192a;color:#edf4fb;border-radius:9px;padding:17px;font-size:13px;line-height:1.55}
+    .diagram{overflow:auto;background:#fff;border:1px solid var(--line);border-radius:10px;padding:18px;margin:15px 0}.flow{display:flex;align-items:stretch;gap:8px;min-width:790px}.node{flex:1;min-width:130px;border:2px solid #b8cae0;border-radius:9px;padding:12px;background:#f7fbff;text-align:center}.node strong{display:block;color:#174f88}.arrow{align-self:center;font-size:25px;color:var(--muted)}
+    .formula{background:#101b2e;color:#fff;padding:16px;border-radius:9px;font-family:Georgia,serif;font-size:17px;text-align:center;margin:14px 0}.small{font-size:13px;color:var(--muted)}.checklist{padding-left:0;list-style:none}.checklist li{padding:6px 0 6px 29px;position:relative}.checklist li:before{content:"✓";position:absolute;left:4px;color:var(--green);font-weight:900}.num{display:inline-flex;width:29px;height:29px;align-items:center;justify-content:center;border-radius:50%;background:var(--blue);color:white;font-weight:800;margin-right:8px}
+    .bar{height:10px;background:#e4eaf2;border-radius:99px;overflow:hidden;margin:5px 0 12px}.bar span{display:block;height:100%;background:linear-gradient(90deg,#1f67b1,#31a17b)}
+    details{background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin:9px 0}summary{cursor:pointer;font-weight:800}.source-list li{margin-bottom:9px;word-break:break-word}
+    .next-step{border:2px solid #2e876d}.next-step .owner{color:var(--green);font-weight:800}.status-ok{color:var(--green);font-weight:800}.status-partial{color:var(--amber);font-weight:800}.status-no{color:var(--red);font-weight:800}
+    footer{background:var(--navy);color:#cbd7e7;padding:28px 24px}footer a{color:#a9d0ff}
+    @media(max-width:850px){.meta,.grid.two,.grid.three{grid-template-columns:1fr}main{padding-left:16px;padding-right:16px}header{padding-left:18px;padding-right:18px}table{display:block;overflow-x:auto;white-space:normal}h2{font-size:23px}}
+    @media print{body{background:white}header{background:#fff;color:#111;border-bottom:3px solid #111}.lead,.label{color:#333}.meta div{border-color:#bbb}.toc{display:none}a{color:#111;text-decoration:none}main{max-width:none}.card,.callout{break-inside:avoid}}
+  </style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>AI 학습론 완전 이해</h1>
+    <p class="lead">AI가 실제로 학습하는 수학적 과정부터 사전학습·미세조정·RLHF·DPO·RAG·메모리·평가를 구분하고, AADS가 현재 무엇을 하고 있으며 다음에 무엇을 해야 하는지 CEO 관점에서 설명합니다.</p>
+    <div class="meta">
+      <div><span class="label">작성 기준</span><span class="value">2026-09-10 21:59 KST</span></div>
+      <div><span class="label">대상</span><span class="value">CEO · PM · 개발 · QA · Ops</span></div>
+      <div><span class="label">근거</span><span class="value">원 논문 · 공식 가이드 · AADS 실측</span></div>
+      <div><span class="label">읽는 시간</span><span class="value">핵심 20분 · 전체 60분</span></div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="callout">
+    <h2 id="summary">핵심 결론</h2>
+    <p><strong>AI 학습은 모델의 가중치가 데이터에 의해 바뀌는 과정</strong>입니다. 반면 프롬프트, RAG, 위키, 대화 메모리는 가중치를 바꾸지 않고 실행 시점에 정보를 공급합니다. AADS는 현재 후자에 강하며, 이를 “AADS가 모델을 재학습한다”고 표현하면 기술적으로 부정확합니다.</p>
+    <p>실무에서는 최신 사실은 RAG·도구로, 반복되는 행동 양식은 프롬프트·정책으로, 안정적으로 축적된 도메인 능력은 미세조정으로, 선호·안전 행동은 RLHF/DPO 계열로 해결합니다. 어느 하나가 나머지를 대체하지 않습니다.</p>
+  </section>
+
+  <section>
+    <h2 id="toc">목차와 학습 경로</h2>
+    <div class="grid three toc">
+      <div class="card"><a href="#meaning">1. 학습의 정확한 뜻</a><a href="#math">2. 학습의 수학</a><a href="#transformer">3. Transformer</a><a href="#pretrain">4. 사전학습</a><a href="#adapt">5. SFT·LoRA·QLoRA</a><a href="#alignment">6. RLHF·DPO</a><a href="#rag">7. RAG·메모리</a></div>
+      <div class="card"><a href="#continual">8. 지속학습·증류</a><a href="#data">9. 데이터 품질</a><a href="#eval">10. 평가</a><a href="#aads">11. AADS 적용 구분</a><a href="#decision">12. 선택 기준</a><a href="#lifecycle">13. 운영 수명주기</a><a href="#examples">14. AADS 실전 예시</a></div>
+      <div class="card"><a href="#misconceptions">15. 오해 10개</a><a href="#governance">16. 보안·거버넌스</a><a href="#next">17. 다음 단계</a><a href="#checklist">18. CEO 체크리스트</a><a href="#quiz">19. 이해도 점검</a><a href="#glossary">20. 용어사전</a><a href="#sources">21. 연구·공식 자료</a></div>
+    </div>
+    <div class="callout info"><strong>빠르게 읽는 법:</strong> 먼저 1장과 7장을 읽고, AADS 적용이 궁금하면 11장으로 이동하십시오. 직접 모델을 튜닝하려면 5·6·10·17장을 이어서 읽으십시오.</div>
+  </section>
+
+  <section>
+    <h2 id="meaning">1. AI가 “학습한다”는 말의 정확한 뜻</h2>
+    <p>머신러닝 모델은 입력 <code>x</code>를 받아 출력 <code>ŷ</code>를 만드는 함수 <code>fθ(x)</code>입니다. 여기서 <code>θ</code>는 수백만~수천억 개의 가중치입니다. 학습은 예측과 정답의 차이인 손실을 줄이는 방향으로 <code>θ</code>를 반복 수정하는 과정입니다.</p>
+    <div class="diagram"><div class="flow">
+      <div class="node"><strong>데이터</strong>입력 x · 정답 y</div><div class="arrow">→</div>
+      <div class="node"><strong>순전파</strong>예측 ŷ 생성</div><div class="arrow">→</div>
+      <div class="node"><strong>손실</strong>틀린 정도 계산</div><div class="arrow">→</div>
+      <div class="node"><strong>역전파</strong>기울기 계산</div><div class="arrow">→</div>
+      <div class="node"><strong>최적화</strong>가중치 θ 수정</div>
+    </div></div>
+    <table>
+      <thead><tr><th>표현</th><th>가중치 변경</th><th>실제 의미</th><th>대표 예</th></tr></thead>
+      <tbody>
+        <tr><td>모델 학습</td><td>예</td><td>손실함수와 역전파로 파라미터 수정</td><td>사전학습, SFT, LoRA, DPO</td></tr>
+        <tr><td>인컨텍스트 학습</td><td>아니오</td><td>프롬프트 안의 예시를 임시 규칙처럼 사용</td><td>few-shot 예시 3개 제공</td></tr>
+        <tr><td>RAG</td><td>아니오</td><td>외부 문서를 찾아 현재 입력에 붙임</td><td>사내 위키 검색 후 답변</td></tr>
+        <tr><td>메모리</td><td>아니오</td><td>사용자 선호·과거 사실을 DB에서 재주입</td><td>CEO 보고 형식 기억</td></tr>
+        <tr><td>프롬프트 개선</td><td>아니오</td><td>매 호출마다 지시·제약을 더 정확히 제공</td><td>완료 계약, 보안 규칙</td></tr>
+        <tr><td>모델 편집</td><td>대개 일부</td><td>특정 사실·행동을 국소적으로 바꾸는 연구기법</td><td>한 사실 수정, 부작용 검증 필요</td></tr>
+      </tbody>
+    </table>
+    <h3>1.1 학습 방식 전체 지도</h3>
+    <p>AI 학습은 정답을 누가 제공하는지와 피드백이 언제 들어오는지에 따라 나뉩니다. 실제 제품은 한 방식만 쓰지 않고 여러 방식을 단계적으로 조합합니다.</p>
+    <table><thead><tr><th>학습 방식</th><th>학습 신호</th><th>대표 사례</th><th>적합한 문제</th></tr></thead><tbody>
+      <tr><td>지도학습</td><td>사람이 붙인 정답</td><td>스팸 분류, SFT</td><td>정답 기준이 명확한 예측·행동</td></tr>
+      <tr><td>비지도학습</td><td>정답 없이 구조 탐색</td><td>군집화, 이상 탐지</td><td>숨은 패턴·그룹 발견</td></tr>
+      <tr><td>자기지도학습</td><td>데이터 일부가 나머지의 정답</td><td>다음 토큰·가려진 토큰 예측</td><td>대규모 범용 표현 학습</td></tr>
+      <tr><td>반지도학습</td><td>소량 라벨 + 대량 무라벨</td><td>pseudo-labeling</td><td>라벨 비용이 큰 도메인</td></tr>
+      <tr><td>강화학습</td><td>행동 뒤 보상</td><td>게임, 제어, RFT</td><td>순차 의사결정·검증 가능한 목표</td></tr>
+      <tr><td>능동학습</td><td>모델이 어려운 샘플의 라벨 요청</td><td>검수 우선순위화</td><td>전문가 라벨 비용 절감</td></tr>
+      <tr><td>온라인·지속학습</td><td>시간에 따라 들어오는 새 데이터</td><td>드리프트 적응</td><td>분포가 계속 변하는 환경</td></tr>
+    </tbody></table>
+    <div class="callout info"><strong>AADS 적용 해석:</strong> 현재 관찰·메모리 축적은 온라인 데이터 수집에는 가깝지만, 그 데이터로 가중치를 자동 갱신하지 않으므로 온라인 학습은 아닙니다. 검수된 데이터를 별도 훈련 파이프라인에 투입하고 체크포인트를 만들 때 비로소 모델 학습이 됩니다.</div>
+    <div class="callout warn"><strong>CEO 검수 포인트:</strong> 누군가 “AI가 학습했다”고 보고하면 ① 어느 가중치가 ② 어떤 데이터셋과 손실함수로 ③ 언제 바뀌었고 ④ 전후 평가가 무엇인지 물으십시오. 답이 없다면 대부분 메모리·RAG·프롬프트 개선입니다.</div>
+  </section>
+
+  <section>
+    <h2 id="math">2. 학습을 움직이는 핵심 수학</h2>
+    <h3>2.1 손실함수</h3>
+    <p>손실함수는 모델이 얼마나 틀렸는지를 하나의 수로 만듭니다. 언어모델은 다음 토큰의 정답 확률을 높이는 교차엔트로피 손실을 주로 사용합니다.</p>
+    <div class="formula">L(θ) = − Σ log Pθ(정답 토큰 | 이전 토큰)</div>
+    <p>정답 토큰에 높은 확률을 주면 손실이 작아지고, 엉뚱한 토큰에 확률을 주면 손실이 커집니다. 단, 손실 감소가 사실성·안전성·업무효과를 자동으로 보장하지는 않습니다.</p>
+    <h3>2.2 역전파와 경사하강법</h3>
+    <div class="formula">θ ← θ − η · ∇θL</div>
+    <p><code>∇θL</code>은 각 가중치가 오류에 미친 방향과 크기, <code>η</code>는 학습률입니다. 학습률이 너무 크면 발산하고 너무 작으면 느리거나 나쁜 해에 머뭅니다. AdamW 같은 옵티마이저는 기울기의 이동 통계를 이용해 업데이트를 안정화합니다.</p>
+    <h3>2.3 배치·에폭·일반화</h3>
+    <table><thead><tr><th>용어</th><th>뜻</th><th>실패 시 현상</th><th>대응</th></tr></thead><tbody>
+      <tr><td>배치</td><td>한 번에 학습하는 샘플 묶음</td><td>너무 작으면 불안정, 너무 크면 비용 증가</td><td>gradient accumulation 포함 실험</td></tr>
+      <tr><td>에폭</td><td>전체 데이터셋을 한 번 본 횟수</td><td>과도하면 과적합</td><td>검증 손실·조기 종료</td></tr>
+      <tr><td>과적합</td><td>훈련 데이터를 외우고 새 입력에 약함</td><td>훈련 점수만 높음</td><td>분리된 테스트셋·정규화</td></tr>
+      <tr><td>데이터 누수</td><td>정답 또는 미래 정보가 훈련에 섞임</td><td>가짜 고성능</td><td>시간·사용자·프로젝트 단위 분리</td></tr>
+      <tr><td>분포 이동</td><td>운영 입력이 훈련 데이터와 달라짐</td><td>배포 후 급격한 저하</td><td>슬라이스 평가·드리프트 감시</td></tr>
+    </tbody></table>
+  </section>
+
+  <section>
+    <h2 id="transformer">3. Transformer가 문장을 배우는 방식</h2>
+    <p>Transformer는 2017년 제안된 attention 중심 구조입니다. 문장을 토큰으로 나누고 각 토큰이 다른 토큰을 얼마나 참고해야 하는지 계산합니다. 병렬 학습에 유리해 현대 대규모 언어모델의 기반이 됐습니다.</p>
+    <div class="diagram"><div class="flow">
+      <div class="node"><strong>토큰화</strong>문장 → 토큰 ID</div><div class="arrow">→</div>
+      <div class="node"><strong>임베딩</strong>ID → 벡터</div><div class="arrow">→</div>
+      <div class="node"><strong>Self-Attention</strong>문맥 관계 계산</div><div class="arrow">→</div>
+      <div class="node"><strong>MLP 층</strong>특징 변환</div><div class="arrow">→</div>
+      <div class="node"><strong>출력 확률</strong>다음 토큰 분포</div>
+    </div></div>
+    <h3>3.1 Attention의 직관</h3>
+    <p>“철수가 영희에게 책을 주었고, 그녀는 웃었다”에서 “그녀”가 누구인지 판단하려면 앞 토큰을 참고해야 합니다. Attention은 query·key·value 벡터를 이용해 어떤 토큰을 얼마나 참고할지 수치화합니다.</p>
+    <h3>3.2 토큰 예측이 왜 지식과 능력을 만드는가</h3>
+    <p>방대한 텍스트에서 다음 토큰을 맞히려면 문법뿐 아니라 개념, 관계, 문서 구조, 일부 추론 패턴을 압축해야 합니다. 그러나 목표는 “진실 판별”이 아니라 확률적 예측이므로 그럴듯한 허위 답변도 만들 수 있습니다.</p>
+    <h3>3.3 학습과 추론은 다른 단계다</h3>
+    <table><thead><tr><th>구분</th><th>학습(Training)</th><th>추론(Inference)</th><th>운영 질문</th></tr></thead><tbody>
+      <tr><td>목적</td><td>가중치 조정</td><td>고정된 가중치로 결과 생성</td><td>지금 모델이 바뀌는가?</td></tr>
+      <tr><td>주요 입력</td><td>훈련 데이터·손실함수</td><td>프롬프트·RAG·도구 결과</td><td>최신 사실은 어디서 오는가?</td></tr>
+      <tr><td>주요 설정</td><td>학습률·배치·에폭</td><td>temperature·top-p·출력 제한</td><td>재현성이 필요한가?</td></tr>
+      <tr><td>산출물</td><td>체크포인트·어댑터</td><td>텍스트·코드·도구 호출</td><td>어떤 버전이 답했는가?</td></tr>
+      <tr><td>대표 비용</td><td>GPU 시간·훈련 토큰</td><td>입출력 토큰·지연</td><td>성공 1건당 비용은?</td></tr>
+    </tbody></table>
+    <p>컨텍스트 창이 길어지거나 모델이 더 오래 추론해 답이 좋아져도 가중치는 바뀌지 않습니다. 대화 중 “배운 것처럼” 보이는 현상은 대개 현재 컨텍스트를 활용한 인컨텍스트 학습입니다.</p>
+  </section>
+
+  <section>
+    <h2 id="pretrain">4. 사전학습: 범용 능력의 형성</h2>
+    <p>사전학습은 대규모 말뭉치에서 자기지도 방식으로 다음 토큰을 예측하게 합니다. 사람이 모든 문장에 정답 라벨을 붙이지 않아도 원문 자체가 다음 토큰 정답을 제공합니다.</p>
+    <table><thead><tr><th>단계</th><th>입력</th><th>얻는 것</th><th>주요 위험</th></tr></thead><tbody>
+      <tr><td>수집</td><td>웹·책·코드·도메인 문서</td><td>폭넓은 학습 원천</td><td>저작권, 개인정보, 오염</td></tr>
+      <tr><td>정제</td><td>중복 제거·품질 필터</td><td>신호대잡음 향상</td><td>편향된 필터, 희귀 지식 손실</td></tr>
+      <tr><td>토큰화</td><td>텍스트</td><td>모델 입력 단위</td><td>한국어·코드 효율 차이</td></tr>
+      <tr><td>학습</td><td>토큰 시퀀스</td><td>기초 언어·지식·패턴</td><td>막대한 연산, 불안정성</td></tr>
+      <tr><td>검증</td><td>미사용 데이터</td><td>일반화와 오염 여부</td><td>벤치마크 과적합</td></tr>
+    </tbody></table>
+    <div class="callout info"><strong>Scaling law의 교훈:</strong> 모델 크기만 키우는 것이 답이 아닙니다. Chinchilla 연구는 주어진 연산 예산에서 모델 크기와 학습 토큰의 균형이 중요함을 보였습니다. AADS가 독자 모델을 만든다면 먼저 작은 도메인 모델의 데이터 품질·평가 체계를 확보해야 합니다.</div>
+  </section>
+
+  <section>
+    <h2 id="adapt">5. 도메인 적응: SFT·LoRA·QLoRA</h2>
+    <h3>5.1 지도 미세조정(SFT)</h3>
+    <p>입력과 모범답안 쌍으로 사전학습 모델을 추가 학습합니다. “AADS 장애 보고를 8개 섹션으로 작성” 같은 반복 가능하고 안정된 행동 형식을 가르치는 데 적합합니다. 최신 사실을 주입하는 용도로는 유지보수 비용이 크므로 RAG가 더 적합합니다.</p>
+    <pre><code>{
+  "instruction": "채팅 스트리밍 장애를 CEO 형식으로 보고하라",
+  "input": "로그, 배포 SHA, 재현 조건, DB 상태",
+  "output": "지시 파악 → 목표 → 계획 → 실행순서 → 결과 → 검증 → 리스크 → 다음 단계"
+}</code></pre>
+    <h3>5.2 Full fine-tuning과 PEFT</h3>
+    <table><thead><tr><th>방식</th><th>변경 범위</th><th>장점</th><th>적합한 상황</th></tr></thead><tbody>
+      <tr><td>전체 미세조정</td><td>대부분/전체 가중치</td><td>표현력 큼</td><td>충분한 데이터·GPU·MLOps가 있을 때</td></tr>
+      <tr><td>LoRA</td><td>저랭크 어댑터</td><td>훈련 파라미터·메모리 절감</td><td>여러 도메인 어댑터 운영</td></tr>
+      <tr><td>QLoRA</td><td>양자화 기반모델 + LoRA</td><td>제한된 GPU에서 큰 모델 튜닝</td><td>비용 제한형 실험</td></tr>
+      <tr><td>프롬프트 튜닝</td><td>소수의 연속 벡터</td><td>매우 가벼움</td><td>좁고 반복적인 태스크</td></tr>
+    </tbody></table>
+    <h3>5.3 미세조정이 오히려 나쁜 경우</h3>
+    <ul>
+      <li>매일 바뀌는 가격·정책·운영 상태를 넣으려는 경우</li>
+      <li>좋은 정답 데이터보다 오류 로그만 많은 경우</li>
+      <li>기존 범용 능력 저하를 측정할 회귀 평가가 없는 경우</li>
+      <li>민감 데이터의 권리·보존·삭제 정책이 정리되지 않은 경우</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2 id="alignment">6. 정렬 학습: RLHF와 DPO</h2>
+    <p>사전학습 모델은 “다음 토큰”을 잘 예측하지만 반드시 사용자의 의도에 맞게 답하지는 않습니다. 정렬(alignment)은 도움됨·정확성·안전·형식 준수 같은 선호를 모델 행동에 반영하는 단계입니다.</p>
+    <h3>6.1 RLHF의 전형적 흐름</h3>
+    <div class="diagram"><div class="flow">
+      <div class="node"><strong>① SFT</strong>모범답안 학습</div><div class="arrow">→</div>
+      <div class="node"><strong>② 비교 데이터</strong>A와 B 중 선호 선택</div><div class="arrow">→</div>
+      <div class="node"><strong>③ 보상모델</strong>선호 점수 예측</div><div class="arrow">→</div>
+      <div class="node"><strong>④ RL 최적화</strong>보상 증가 + KL 제약</div>
+    </div></div>
+    <p>InstructGPT 연구는 사람의 시연과 응답 순위를 사용해 SFT 후 RLHF를 적용했습니다. 핵심 교훈은 큰 모델 자체보다 고품질 피드백과 목적 정렬이 실제 사용 만족도에 큰 영향을 줄 수 있다는 점입니다.</p>
+    <h3>6.2 DPO</h3>
+    <p>DPO는 선택된 응답과 거절된 응답의 쌍을 직접 비교해 정책을 학습합니다. 별도 보상모델과 복잡한 PPO 루프를 생략할 수 있어 구현이 단순하고 안정적인 장점이 있습니다. 그렇다고 데이터 편향·과최적화·안전 평가가 사라지는 것은 아닙니다.</p>
+    <table><thead><tr><th>구분</th><th>RLHF(PPO형)</th><th>DPO</th><th>AADS 관점</th></tr></thead><tbody>
+      <tr><td>데이터</td><td>선호 비교</td><td>선택/거절 쌍</td><td>둘 다 평가 기준의 일관성이 핵심</td></tr>
+      <tr><td>구성</td><td>보상모델 + RL</td><td>직접 분류형 목적</td><td>DPO가 초기 PoC에 단순</td></tr>
+      <tr><td>운영 난도</td><td>높음</td><td>중간</td><td>평가셋 없는 도입은 금지</td></tr>
+      <tr><td>위험</td><td>reward hacking</td><td>선호 데이터 과적합</td><td>안전·사실성·형식 별도 평가</td></tr>
+    </tbody></table>
+  </section>
+
+  <section>
+    <h2 id="rag">7. RAG·메모리·프롬프트는 학습과 무엇이 다른가</h2>
+    <div class="diagram"><div class="flow">
+      <div class="node"><strong>사용자 질문</strong>현재 요청</div><div class="arrow">→</div>
+      <div class="node"><strong>검색</strong>벡터·키워드·그래프</div><div class="arrow">→</div>
+      <div class="node"><strong>컨텍스트 조립</strong>근거 + 규칙 + 메모리</div><div class="arrow">→</div>
+      <div class="node"><strong>LLM 추론</strong>가중치는 그대로</div><div class="arrow">→</div>
+      <div class="node"><strong>근거 포함 답변</strong>추적 가능</div>
+    </div></div>
+    <table><thead><tr><th>수단</th><th>가장 잘 해결하는 문제</th><th>장점</th><th>한계</th></tr></thead><tbody>
+      <tr><td>시스템 프롬프트</td><td>역할·금지·출력 형식</td><td>즉시 수정, 저비용</td><td>길이·충돌·무시 가능성</td></tr>
+      <tr><td>RAG</td><td>최신 지식·출처·사내 문서</td><td>업데이트·삭제·감사 용이</td><td>검색 실패와 잘못된 근거</td></tr>
+      <tr><td>메모리</td><td>사용자 선호·과거 결정·진행 상태</td><td>개인화·연속성</td><td>오래된 기억·개인정보·모순</td></tr>
+      <tr><td>도구 호출</td><td>실시간 DB·서버·계산</td><td>실측·행동 가능</td><td>권한·오류·부작용 관리</td></tr>
+      <tr><td>파인튜닝</td><td>반복 행동·스타일·도메인 패턴</td><td>프롬프트 축소·행동 안정</td><td>재훈련·회귀·삭제 어려움</td></tr>
+    </tbody></table>
+    <div class="callout"><strong>권장 원칙:</strong> “지식은 외부화하고, 행동은 학습한다.” 자주 바뀌는 지식은 위키/RAG에 두고, 오랜 기간 반복 검증된 행동 패턴만 미세조정 후보로 승격하십시오.</div>
+    <h3>7.1 좋은 RAG의 8단계</h3>
+    <ol>
+      <li>권한이 확인된 원문만 수집</li><li>문서 구조를 보존해 청킹</li><li>메타데이터·프로젝트·시점·보안등급 부착</li>
+      <li>임베딩과 키워드 하이브리드 검색</li><li>재순위화(reranking)</li><li>중복·모순 제거</li>
+      <li>답변에 근거와 시점 표시</li><li>검색 적중률·근거 충실도·답변 정확도 평가</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2 id="continual">8. 지속학습·모델 편집·지식증류</h2>
+    <h3>8.1 지속학습(Continual Learning)</h3>
+    <p>운영 중 들어오는 새 데이터로 모델을 계속 갱신하는 기술입니다. 가장 큰 위험은 새 능력을 얻으면서 예전 능력을 잃는 <strong>파국적 망각</strong>입니다. 따라서 리플레이 데이터, 정규화, 어댑터 분리, 구·신 평가셋 동시 검증이 필요합니다.</p>
+    <h3>8.2 모델 편집</h3>
+    <p>특정 사실을 국소 수정하려는 기법입니다. 한 사실이 바뀌었어도 관련 없는 답변이 변하지 않는 locality, 표현을 바꾼 질문에도 적용되는 generalization을 함께 검증해야 합니다. 운영 최신 지식에는 아직 RAG가 더 통제하기 쉽습니다.</p>
+    <h3>8.3 지식증류</h3>
+    <p>큰 teacher 모델의 출력 분포나 설명을 작은 student 모델이 모방하도록 학습합니다. 비용·지연을 줄일 수 있지만 teacher의 오류와 편향도 복제됩니다. 따라서 “큰 모델 생성 → 자동 필터 → 사람 검수 → 작은 모델 학습”의 품질 게이트가 필요합니다.</p>
+    <h3>8.4 추론시간 계산(Test-time compute)</h3>
+    <p>답변 시 더 오래 생각하거나 여러 후보를 탐색·검증하는 방식입니다. 가중치가 바뀌지 않으므로 학습이 아니라 추론 전략입니다. 어려운 문제의 품질을 높일 수 있지만 지연·비용이 증가하며, 검증기 자체가 약하면 오래 생각해도 틀릴 수 있습니다.</p>
+    <h3>8.5 연합학습·차등프라이버시</h3>
+    <p><strong>연합학습</strong>은 원본 데이터를 중앙에 모으지 않고 각 장치·조직에서 계산한 업데이트를 집계합니다. 데이터 이동을 줄이지만 업데이트 자체의 정보 노출, 악성 참여자, 장치별 데이터 편향과 통신비용이 남습니다. <strong>차등프라이버시</strong>는 개별 샘플의 영향을 수학적으로 제한하도록 노이즈를 추가하지만, 개인정보 위험을 0으로 만들지는 않으며 정확도와 프라이버시 예산의 절충이 필요합니다.</p>
+    <div class="callout warn"><strong>중요:</strong> 연합학습은 “데이터가 절대 외부로 나가지 않는다”는 보증이 아닙니다. 업데이트 보안, 안전한 집계, 접근통제, 데이터 최소화, 공격·복원 테스트를 함께 적용해야 합니다.</div>
+  </section>
+
+  <section>
+    <h2 id="data">9. 데이터가 모델보다 먼저다</h2>
+    <p>학습 데이터의 품질은 “많음”보다 <strong>대표성·정확성·권리·추적성·난이도 구성</strong>으로 판단해야 합니다.</p>
+    <table><thead><tr><th>검사축</th><th>질문</th><th>실패 영향</th><th>필수 증거</th></tr></thead><tbody>
+      <tr><td>출처·권리</td><td>수집·학습·재사용 권한이 있는가?</td><td>법적·계약 위험</td><td>라이선스·동의·보존정책</td></tr>
+      <tr><td>정확성</td><td>답변이 사실이고 재현 가능한가?</td><td>오류 학습</td><td>원문 링크·검수자·시점</td></tr>
+      <tr><td>대표성</td><td>운영 입력과 실패 사례를 포함하는가?</td><td>배포 후 성능 저하</td><td>슬라이스 분포표</td></tr>
+      <tr><td>중복</td><td>같은 문서가 훈련·평가에 겹치는가?</td><td>가짜 고성능</td><td>해시·근접중복 검사</td></tr>
+      <tr><td>민감정보</td><td>개인·금융·시크릿이 섞였는가?</td><td>유출·암기 위험</td><td>DLP·마스킹 로그</td></tr>
+      <tr><td>버전</td><td>어느 코드·프롬프트·정책 기준인가?</td><td>재현 불가</td><td>dataset manifest·SHA</td></tr>
+    </tbody></table>
+    <h3>9.1 올바른 데이터 분할</h3>
+    <pre><code>train: 가중치를 학습하는 데이터
+validation: 하이퍼파라미터·조기 종료 결정
+test: 최종 비교 전까지 잠그는 데이터
+shadow/canary: 실제 운영 트래픽에서 안전 검증
+
+금지: 같은 세션, 같은 문서 복제본, 미래 데이터가 train과 test에 동시에 존재</code></pre>
+  </section>
+
+  <section>
+    <h2 id="eval">10. 평가는 학습의 계기판이다</h2>
+    <p>하나의 평균 점수로 모델을 승인하면 안 됩니다. 능력, 사실성, 안전, 지연, 비용, 회귀를 각각 측정하고 실제 업무 슬라이스별로 분리해야 합니다. HELM 계열의 핵심 교훈도 다차원·재현 가능한 평가입니다.</p>
+    <div class="grid three">
+      <div class="card"><h3>오프라인 평가</h3><p>고정 골든셋, exact match, rubric, 코드 테스트, 도구 호출 성공률.</p></div>
+      <div class="card"><h3>사람 평가</h3><p>블라인드 A/B, 전문 검수, 오류 심각도, 평가자 일치도.</p></div>
+      <div class="card"><h3>온라인 평가</h3><p>성공률, 재질문율, 취소율, 지연, 비용, 장애·안전 이벤트.</p></div>
+    </div>
+    <table><thead><tr><th>평가 종류</th><th>예시 지표</th><th>왜 필요한가</th><th>주의점</th></tr></thead><tbody>
+      <tr><td>정확성</td><td>사실 일치율, 테스트 통과율</td><td>업무 정답성</td><td>문제 오염 점검</td></tr>
+      <tr><td>근거성</td><td>인용 충실도, 검색 적중률</td><td>환각 통제</td><td>인용 존재 ≠ 주장 지지</td></tr>
+      <tr><td>안전</td><td>금지행동 차단률</td><td>운영 사고 방지</td><td>과차단도 측정</td></tr>
+      <tr><td>견고성</td><td>표현 변형·노이즈 성능</td><td>실사용 변동 대응</td><td>평균에 숨은 취약 슬라이스</td></tr>
+      <tr><td>효율</td><td>p50/p95 지연, 토큰, $/성공</td><td>사업 운영성</td><td>품질 하락과 함께 비교</td></tr>
+      <tr><td>회귀</td><td>기존 업무 실패 증가율</td><td>새 학습의 부작용 탐지</td><td>구 평가셋 유지</td></tr>
+    </tbody></table>
+    <div class="callout danger"><strong>LLM-as-a-Judge 주의:</strong> 빠르고 저렴하지만 자기 선호, 위치 편향, 장문 선호가 생길 수 있습니다. 핵심 업무는 사람 골드셋과 프로그램 검증을 섞고, 평가 프롬프트·모델 버전을 고정하십시오.</div>
+  </section>
+
+  <section>
+    <h2 id="aads">11. AADS는 현재 무엇을 실제로 “학습”하는가</h2>
+    <p>아래는 2026-09-10 21:59 KST의 DB·코드 실측입니다. 행 수는 운영 저장 현황이며 모델 가중치 학습량이 아닙니다.</p>
+    <table><thead><tr><th>구성</th><th>실측</th><th>기술적 분류</th><th>판정</th></tr></thead><tbody>
+      <tr><td><code>memory_facts</code></td><td>74,510건 [DB 조회]</td><td>장기 메모리·RAG 원천</td><td class="status-ok">적용</td></tr>
+      <tr><td><code>ai_observations</code></td><td>903건 [DB 조회]</td><td>자동 관찰·선호/패턴 저장</td><td class="status-ok">적용</td></tr>
+      <tr><td><code>ohvis_wiki_pages</code></td><td>1,693건 [DB 조회]</td><td>외부 지식 저장소</td><td class="status-ok">적용</td></tr>
+      <tr><td><code>compiled_prompt_provenance</code></td><td>17,344건 [DB 조회]</td><td>프롬프트 적용 추적</td><td class="status-ok">적용</td></tr>
+      <tr><td>Auto-RAG</td><td><code>app/services/context_builder.py</code></td><td>실행 시 관련 기억 주입</td><td class="status-ok">코드 적용</td></tr>
+      <tr><td>임베딩 백필</td><td><code>app/main.py</code></td><td>메모리 벡터화</td><td class="status-ok">코드 적용</td></tr>
+      <tr><td>Reflexion</td><td><code>app/services/self_evaluator.py</code></td><td>오류패턴 저장·재주입</td><td class="status-partial">휴리스틱/LLM 평가</td></tr>
+      <tr><td>Sleep-time 정제</td><td><code>app/core/memory_gc.py</code></td><td>메모리 통합·정리</td><td class="status-ok">스케줄 적용</td></tr>
+      <tr><td>품질 집계</td><td><code>app/services/eval_pipeline.py</code></td><td>응답 품질 관측</td><td class="status-partial">평가 편향 검증 필요</td></tr>
+      <tr><td>AADS 전용 가중치 훈련</td><td>훈련 런·체크포인트 증거 미확인</td><td>SFT/LoRA/DPO</td><td class="status-no">미검증/미적용 판정</td></tr>
+    </tbody></table>
+    <h3>11.1 현재 AADS의 개선 루프</h3>
+    <div class="diagram"><div class="flow">
+      <div class="node"><strong>대화·작업</strong>응답과 실행 결과</div><div class="arrow">→</div>
+      <div class="node"><strong>평가·관찰</strong>quality / error pattern</div><div class="arrow">→</div>
+      <div class="node"><strong>DB 기억</strong>facts / observations / wiki</div><div class="arrow">→</div>
+      <div class="node"><strong>검색·프롬프트</strong>다음 요청에 주입</div><div class="arrow">→</div>
+      <div class="node"><strong>행동 개선</strong>가중치는 그대로</div>
+    </div></div>
+    <p>이 구조는 빠르게 수정·삭제·감사할 수 있다는 장점이 있습니다. 반면 컨텍스트가 길어지고, 잘못된 기억이 재주입되며, 검색하지 못하면 능력이 사라지는 단점이 있습니다. 미세조정은 이 중 장기간 검증된 안정 행동만 승격하는 다음 단계입니다.</p>
+  </section>
+
+  <section>
+    <h2 id="decision">12. 어떤 문제에 어떤 기술을 써야 하는가</h2>
+    <table><thead><tr><th>문제</th><th>1순위</th><th>2순위</th><th>미세조정 여부</th></tr></thead><tbody>
+      <tr><td>오늘 서버 상태를 정확히 답함</td><td>도구 호출</td><td>RAG/로그 검색</td><td>불필요</td></tr>
+      <tr><td>최신 정책·가격·문서 반영</td><td>RAG</td><td>웹/DB 도구</td><td>부적합</td></tr>
+      <tr><td>CEO 보고 형식을 안정적으로 준수</td><td>프롬프트 + validator</td><td>SFT</td><td>실패 데이터 충분할 때</td></tr>
+      <tr><td>GO100 도메인 용어를 자연스럽게 사용</td><td>용어집 RAG</td><td>LoRA/SFT</td><td>반복성이 높을 때</td></tr>
+      <tr><td>좋은 답변을 나쁜 답변보다 선호</td><td>선호 데이터</td><td>DPO/RLHF</td><td>가능</td></tr>
+      <tr><td>실시간 주문·배포를 안전하게 실행</td><td>코드 정책·권한·승인 게이트</td><td>에이전트 도구</td><td>학습에 맡기지 않음</td></tr>
+      <tr><td>비용과 지연 절감</td><td>캐시·라우팅·작은 모델</td><td>증류</td><td>평가 후 가능</td></tr>
+    </tbody></table>
+    <div class="callout warn"><strong>안전 경계:</strong> 금융 주문, 배포, 삭제, 개인정보 처리는 “모델이 잘 학습했으니 맡긴다”가 아니라 결정론적 권한·스키마·멱등키·승인·감사로그로 통제해야 합니다.</div>
+  </section>
+
+  <section>
+    <h2 id="lifecycle">13. 기업용 AI 학습 운영 수명주기</h2>
+    <ol>
+      <li><span class="num">1</span><strong>업무 문제 정의:</strong> 학습이 필요한지, RAG·도구·코드로 충분한지 판정</li>
+      <li><span class="num">2</span><strong>베이스라인:</strong> 현재 모델·프롬프트·RAG의 품질·비용·지연 측정</li>
+      <li><span class="num">3</span><strong>데이터 계약:</strong> 출처, 권리, PII, 버전, 포함/제외 기준 고정</li>
+      <li><span class="num">4</span><strong>평가셋 잠금:</strong> 학습 전에 성공 기준과 회귀셋 확정</li>
+      <li><span class="num">5</span><strong>최소 실험:</strong> 작은 모델·LoRA·제한 샘플로 효과 검증</li>
+      <li><span class="num">6</span><strong>안전 검수:</strong> 레드팀, 데이터 누수, 암기, 편향, 도구 오용 검사</li>
+      <li><span class="num">7</span><strong>Shadow/Canary:</strong> 실제 업무에서 읽기 전용·일부 트래픽 검증</li>
+      <li><span class="num">8</span><strong>승격과 롤백:</strong> 모델·데이터·코드 SHA를 묶고 즉시 되돌릴 수 있게 배포</li>
+      <li><span class="num">9</span><strong>운영 감시:</strong> 품질·비용·지연·드리프트·안전사건 지속 관찰</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2 id="examples">14. AADS 실전 예시</h2>
+    <h3>예시 A: “완료라고 했는데 배포가 안 됨”을 줄이기</h3>
+    <table><thead><tr><th>방법</th><th>설계</th><th>효과</th></tr></thead><tbody>
+      <tr><td>프롬프트</td><td>완료 계약과 금지 문구 주입</td><td>즉시 개선, 누락 가능</td></tr>
+      <tr><td>코드 validator</td><td>커밋·푸시·배포 필드와 실제 ledger 대조</td><td>결정론적 차단</td></tr>
+      <tr><td>RAG</td><td>배포 규칙과 과거 사고를 근거로 주입</td><td>맥락 보강</td></tr>
+      <tr><td>SFT</td><td>좋은 완료보고 사례 학습</td><td>형식·판단 안정화</td></tr>
+      <tr><td>DPO</td><td>과장 보고보다 증거 기반 보고 선호</td><td>선호 행동 강화</td></tr>
+    </tbody></table>
+    <h3>예시 B: GO100 파동 시그널 설명</h3>
+    <p>파동 계산 자체는 검증된 코드·수학식이 담당하고, 최신 봉 데이터는 DB 도구로 가져오며, 정의·버전·한계는 RAG로 제공합니다. LLM은 이를 전략카드 사용자에게 설명하지만 시그널을 임의 생성하지 않습니다. 도메인 표현이 충분히 안정된 뒤에만 SFT 후보로 올립니다.</p>
+    <h3>예시 C: CEO 개인화</h3>
+    <p>합쇼체, 결론 우선, 표·검증·다음 단계 선호는 메모리와 프롬프트로 즉시 반영합니다. 많은 세션에서 일관되게 검증된 뒤 민감정보를 제거한 예제만 모아 SFT할 수 있습니다. 개인 대화 원문 전체를 그대로 훈련 데이터로 쓰지 않습니다.</p>
+  </section>
+
+  <section>
+    <h2 id="misconceptions">15. 자주 틀리는 주장 10개</h2>
+    <details open><summary>1. “RAG를 붙였으니 모델이 회사 지식을 학습했다.”</summary><p>아닙니다. 외부 지식을 검색해 현재 입력에 붙였을 뿐 가중치는 변하지 않았습니다.</p></details>
+    <details><summary>2. “데이터가 많을수록 무조건 좋아진다.”</summary><p>중복·오류·누수·낮은 대표성이 많으면 성능과 안전이 악화됩니다.</p></details>
+    <details><summary>3. “훈련 손실이 낮으면 운영 품질이 높다.”</summary><p>훈련 데이터 암기일 수 있습니다. 잠긴 테스트셋과 실제 업무 지표가 필요합니다.</p></details>
+    <details><summary>4. “RLHF를 하면 사실성이 보장된다.”</summary><p>사람이 선호하는 그럴듯함을 강화할 수도 있습니다. 사실 검증을 별도 측정해야 합니다.</p></details>
+    <details><summary>5. “DPO는 RLHF의 모든 문제를 해결한다.”</summary><p>훈련 루프는 단순해지지만 선호 데이터 편향과 회귀는 남습니다.</p></details>
+    <details><summary>6. “모델이 크면 작은 모델보다 항상 낫다.”</summary><p>업무·데이터·지연·비용 조건에 따라 다릅니다. 정렬된 작은 모델이 특정 업무에서 더 유용할 수 있습니다.</p></details>
+    <details><summary>7. “한 번 파인튜닝하면 계속 최신이다.”</summary><p>가중치 지식은 시점에 고정됩니다. 최신 사실은 RAG·도구가 적합합니다.</p></details>
+    <details><summary>8. “AI가 스스로 오류를 반성하면 진짜로 학습한다.”</summary><p>반성문을 저장·재주입하면 행동은 달라질 수 있지만 가중치 학습은 아닙니다.</p></details>
+    <details><summary>9. “LLM 평가 점수 하나면 출시 가능하다.”</summary><p>평가자 모델 편향이 있습니다. 사람·코드·업무 결과의 교차 검증이 필요합니다.</p></details>
+    <details><summary>10. “학습된 모델에는 보안 규칙을 맡겨도 된다.”</summary><p>고위험 권한은 모델 행동이 아니라 정책 엔진과 승인 게이트로 강제해야 합니다.</p></details>
+  </section>
+
+  <section>
+    <h2 id="governance">16. 보안·거버넌스</h2>
+    <p>NIST AI RMF와 생성형 AI 프로필은 AI 수명주기 전반을 <strong>Govern · Map · Measure · Manage</strong>로 관리하도록 안내합니다. 교육·실험 단계에서도 데이터 계보와 위험 측정을 먼저 설계해야 합니다.</p>
+    <ul class="checklist">
+      <li>학습 데이터 원본·정제본·평가셋의 소유자와 SHA 기록</li>
+      <li>개인정보·시크릿·금융정보 탐지와 마스킹</li>
+      <li>외부 모델 사업자 전송 범위와 보존·학습 정책 계약 확인</li>
+      <li>모델카드에 목적, 금지용도, 알려진 실패, 평가 결과 기록</li>
+      <li>고위험 도구는 최소권한·승인·멱등성·감사로그 적용</li>
+      <li>삭제 요청이 있을 때 RAG 문서, 로그, 데이터셋, 어댑터까지 추적</li>
+      <li>모델·프롬프트·RAG 인덱스·평가셋을 하나의 release manifest로 묶기</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2 id="next">17. AADS 다음 단계 실행 로드맵</h2>
+    <p>아래는 이 교육자료에 포함하도록 요청된 실행 가능한 다음 단계입니다. 수치 목표는 현재 베이스라인을 먼저 실측한 후 확정해야 하며, 임의 성능 향상률은 제시하지 않습니다.</p>
+    <div class="next-step">
+      <h3>Gate 0 · 용어와 현황 고정 (즉시, XS)</h3>
+      <p><span class="owner">책임:</span> CTO/PM · <span class="owner">산출물:</span> AADS Learning Registry</p>
+      <ul><li>모델 훈련, RAG, 메모리, 프롬프트, 평가를 운영 화면에서 서로 다른 상태로 표시</li><li>각 기능의 데이터 원천·보존기간·소유자·버전 기록</li><li>“학습 완료” 표현은 실제 training run과 checkpoint가 있을 때만 허용</li></ul>
+      <p><strong>완료 기준:</strong> 구성별 정의·owner·source·version·last_verified가 한 표에서 조회됨.</p>
+    </div>
+    <div class="next-step">
+      <h3>Gate 1 · 골든 평가셋 구축 (1~2주, M)</h3>
+      <p><span class="owner">책임:</span> PM/QA · <span class="owner">산출물:</span> 프로젝트별 골든셋과 rubric</p>
+      <ul><li>AADS, KIS, GO100, SF, NTV2, NAS의 핵심 업무·실패·안전 사례를 분리</li><li>동일 문서·세션이 train/test에 겹치지 않도록 해시 기반 차단</li><li>정확성, 근거성, 형식, 도구 사용, 안전, 비용·지연을 별도 채점</li></ul>
+      <p><strong>완료 기준:</strong> 현재 모델·프롬프트·RAG의 재현 가능한 baseline report 생성.</p>
+    </div>
+    <div class="next-step">
+      <h3>Gate 2 · 메모리/RAG 품질 개선 (2~4주, M)</h3>
+      <p><span class="owner">책임:</span> Knowledge/Ops · <span class="owner">산출물:</span> 검색 평가와 기억 수명주기</p>
+      <ul><li>중복·모순·만료·프로젝트 오염 탐지</li><li>하이브리드 검색과 reranking A/B</li><li>주장별 근거 연결 및 잘못된 기억 비활성화/복구 경로</li></ul>
+      <p><strong>완료 기준:</strong> retrieval recall, citation precision, stale-memory rate를 실측하고 승인 기준 충족.</p>
+    </div>
+    <div class="next-step">
+      <h3>Gate 3 · LoRA/SFT 소규모 PoC (Gate 1~2 통과 후, M)</h3>
+      <p><span class="owner">책임:</span> ML/QA · <span class="owner">산출물:</span> 어댑터·dataset card·model card</p>
+      <ul><li>최신 지식이 아닌 안정된 행동 1개만 선택</li><li>PII·시크릿 제거된 고품질 예제와 hard negative 사용</li><li>베이스모델 대비 품질·회귀·지연·비용을 블라인드 비교</li></ul>
+      <p><strong>중단 기준:</strong> 핵심 회귀, 데이터 권리 불명, 안전 실패, baseline 대비 유의미한 개선 미확인.</p>
+    </div>
+    <div class="next-step">
+      <h3>Gate 4 · 선호 최적화 검토 (PoC 성공 후, L)</h3>
+      <p><span class="owner">책임:</span> ML/Safety · <span class="owner">산출물:</span> DPO 실험과 독립 레드팀 보고서</p>
+      <ul><li>좋음/나쁨의 근거를 rubric으로 고정하고 평가자 일치도 측정</li><li>과도한 형식 준수와 사실성 저하를 별도 검사</li><li>Shadow → Canary → 승격, 즉시 rollback 가능한 모델 레지스트리 적용</li></ul>
+      <p><strong>완료 기준:</strong> 잠긴 평가셋과 실제 업무에서 품질·안전·비용의 승인 게이트 통과.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="checklist">18. CEO 승인 체크리스트</h2>
+    <ul class="checklist">
+      <li>이 문제가 정말 가중치 학습을 요구하는가, RAG·도구·코드로 해결 가능한가?</li>
+      <li>학습 데이터의 출처, 권리, 민감정보, 버전이 증빙되는가?</li>
+      <li>훈련 전에 평가셋과 성공·중단 기준을 잠갔는가?</li>
+      <li>train/validation/test 누수와 중복을 검사했는가?</li>
+      <li>정확성뿐 아니라 안전, 근거, 회귀, 지연, 비용을 측정했는가?</li>
+      <li>모델·어댑터·데이터셋·코드·프롬프트의 SHA가 연결되는가?</li>
+      <li>Shadow/Canary를 거치며 고위험 액션은 승인 게이트로 보호되는가?</li>
+      <li>실패 시 어느 버전으로 어떻게 롤백하는가?</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2 id="quiz">19. 이해도 점검</h2>
+    <div class="quiz"><strong>Q1.</strong> AADS가 memory_facts를 10만 건 저장하면 모델이 재학습된 것인가?<br><span class="small">정답: 아니다. 검색·주입용 외부 메모리가 늘어난 것이다.</span></div>
+    <div class="quiz"><strong>Q2.</strong> 매일 바뀌는 주가를 LoRA로 학습하는 것이 좋은가?<br><span class="small">정답: 아니다. 실시간 DB/도구를 사용해야 한다.</span></div>
+    <div class="quiz"><strong>Q3.</strong> 완료 보고 형식 누락을 줄일 때 학습만 하면 되는가?<br><span class="small">정답: 아니다. validator로 결정론적 검증하고, 필요하면 SFT를 보조로 쓴다.</span></div>
+    <div class="quiz"><strong>Q4.</strong> DPO가 PPO형 RLHF보다 단순하면 검증도 줄여도 되는가?<br><span class="small">정답: 아니다. 데이터 편향·회귀·안전 검증은 동일하게 필요하다.</span></div>
+    <div class="quiz"><strong>Q5.</strong> 좋은 모델 하나를 고르면 모든 프로젝트에서 최고인가?<br><span class="small">정답: 아니다. 업무별 품질·비용·지연·안전 평가로 라우팅해야 한다.</span></div>
+  </section>
+
+  <section>
+    <h2 id="glossary">20. 핵심 용어사전</h2>
+    <table><thead><tr><th>용어</th><th>한 줄 정의</th><th>CEO 질문</th></tr></thead><tbody>
+      <tr><td>Parameter/Weight</td><td>모델이 데이터에서 조정하는 내부 수치</td><td>실제로 바뀌었는가?</td></tr>
+      <tr><td>Gradient</td><td>손실을 줄이는 가중치 변화 방향</td><td>학습이 안정적인가?</td></tr>
+      <tr><td>Checkpoint</td><td>특정 학습 시점의 모델 상태</td><td>버전·복구가 가능한가?</td></tr>
+      <tr><td>Hyperparameter</td><td>학습률·배치 등 사람이 정하는 설정</td><td>어떤 근거로 골랐나?</td></tr>
+      <tr><td>Overfitting</td><td>훈련 데이터에만 지나치게 맞음</td><td>새 데이터 성능은?</td></tr>
+      <tr><td>Catastrophic forgetting</td><td>새 학습 때문에 과거 능력을 잃음</td><td>회귀셋을 통과했나?</td></tr>
+      <tr><td>Embedding</td><td>의미 유사도를 계산하기 위한 벡터 표현</td><td>검색 품질을 측정했나?</td></tr>
+      <tr><td>Reranker</td><td>1차 검색 후보를 더 정밀하게 재정렬</td><td>실제 적중률이 올랐나?</td></tr>
+      <tr><td>Grounding</td><td>답변을 외부 근거에 연결</td><td>인용이 주장을 지지하나?</td></tr>
+      <tr><td>Reward hacking</td><td>의도 대신 점수의 허점을 최적화</td><td>지표를 속이지 않는가?</td></tr>
+      <tr><td>Data lineage</td><td>데이터의 출처·변환·사용 이력</td><td>원본까지 추적 가능한가?</td></tr>
+      <tr><td>Drift</td><td>운영 입력·행동 분포가 변함</td><td>배포 후 감시하는가?</td></tr>
+    </tbody></table>
+  </section>
+
+  <section>
+    <h2 id="sources">21. 주요 연구·공식 자료</h2>
+    <ol class="source-list">
+      <li>Vaswani et al., <a href="https://arxiv.org/abs/1706.03762">Attention Is All You Need</a>, 2017 — Transformer 원 논문.</li>
+      <li>Hoffmann et al., <a href="https://arxiv.org/abs/2203.15556">Training Compute-Optimal Large Language Models</a>, 2022 — 모델·데이터·연산 균형.</li>
+      <li>Ouyang et al., <a href="https://arxiv.org/abs/2203.02155">Training language models to follow instructions with human feedback</a>, 2022 — InstructGPT·RLHF.</li>
+      <li>Rafailov et al., <a href="https://arxiv.org/abs/2305.18290">Direct Preference Optimization</a>, 2023 — DPO.</li>
+      <li>Hu et al., <a href="https://arxiv.org/abs/2106.09685">LoRA: Low-Rank Adaptation of Large Language Models</a>, 2021.</li>
+      <li>Dettmers et al., <a href="https://arxiv.org/abs/2305.14314">QLoRA: Efficient Finetuning of Quantized LLMs</a>, 2023.</li>
+      <li>Lewis et al., <a href="https://arxiv.org/abs/2005.11401">Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks</a>, 2020.</li>
+      <li>Hinton, Vinyals, Dean, <a href="https://arxiv.org/abs/1503.02531">Distilling the Knowledge in a Neural Network</a>, 2015.</li>
+      <li>Wu et al., <a href="https://arxiv.org/abs/2402.01364">Continual Learning for Large Language Models: A Survey</a>, 2024.</li>
+      <li>McMahan et al., <a href="https://arxiv.org/abs/1602.05629">Communication-Efficient Learning of Deep Networks from Decentralized Data</a>, 2017 — 연합학습의 대표적 FedAvg 연구.</li>
+      <li>Stanford CRFM, <a href="https://crfm.stanford.edu/helm/latest/">HELM</a> — 다차원·재현 가능한 모델 평가.</li>
+      <li>OpenAI, <a href="https://developers.openai.com/api/docs/guides/supervised-fine-tuning">Supervised fine-tuning</a> — 예제 입력·정답 출력 기반의 현행 SFT 절차와 평가.</li>
+      <li>OpenAI, <a href="https://developers.openai.com/api/docs/guides/direct-preference-optimization">Direct preference optimization</a> — 선호/비선호 출력 쌍을 이용한 현행 DPO 절차.</li>
+      <li>OpenAI, <a href="https://developers.openai.com/api/docs/guides/reinforcement-fine-tuning">Reinforcement fine-tuning</a> — 사용자 정의 grader 보상 기반의 현행 RFT 절차.</li>
+      <li>NIST, <a href="https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-generative-artificial-intelligence">AI RMF Generative AI Profile (NIST AI 600-1)</a>, 2024, 2026년 갱신 확인.</li>
+      <li>NIST, <a href="https://www.nist.gov/itl/ai-risk-management-framework">AI Risk Management Framework</a> — Govern·Map·Measure·Manage 운영 프레임.</li>
+    </ol>
+    <p class="small">주의: 논문에 기재된 성능 수치는 해당 논문의 데이터·모델·평가 설정 안에서의 결과입니다. AADS 성능 향상값으로 전용하지 않았습니다. AADS 수치는 2026-09-10 21:59 KST 운영 DB SELECT와 저장소 코드 확인에 근거합니다.</p>
+  </section>
+</main>
+
+<footer><div class="wrap">
+  <strong>AADS CEO 교육자료 · AI 학습론</strong>
+  <p>내부 경로: <code>app/static/reports/20260910_ai_learning_theory_education.html</code></p>
+  <p>이 문서는 교육 및 설계 판단용입니다. 모델 훈련·운영 배포는 별도의 데이터 권리, 보안, 평가, 승인 게이트를 통과해야 합니다.</p>
+</div></footer>
+</body>
+</html>

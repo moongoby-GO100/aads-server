@@ -1,11 +1,12 @@
 # AADS HANDOVER
 
-## 2026-09-11 03:28 KST — 지시 초안 sent 감사 이벤트 PostgreSQL 타입 고정
+## 2026-09-10 21:59 KST — AI 학습론 CEO 교육자료
 
-- `app/services/directive_draft_service.py`: `record_event()`가 아티팩트 metadata에 상태를 병합할 때 `jsonb_build_object('status', $3::text)`로 명시해 asyncpg/PostgreSQL의 unknown 파라미터 타입 추론 실패를 제거했다.
-- `tests/test_directive_draft_events.py`: `sent` 이벤트가 draft 상태, 아티팩트 metadata, 감사 이벤트를 한 트랜잭션에서 갱신하며 status 파라미터가 명시적 text 타입인지 회귀 검증한다.
-- 영향 범위는 지시 코파일럿의 `inserted/approved/rejected/sent/archived` 상태 이벤트이며, 스키마·기존 데이터·자동 생성 품질 로직은 변경하지 않는다.
-- 롤백은 본 커밋을 revert한 뒤 동일 blue/green 절차로 재배포한다. 롤백 시 status 이벤트가 다시 HTTP 500으로 실패할 수 있다.
+- `app/static/reports/20260910_ai_learning_theory_education.html`에 AI 학습의 수학, Transformer, 사전학습, SFT·LoRA·QLoRA, RLHF·DPO, RAG·메모리, 지속학습·증류, 데이터·평가·거버넌스와 AADS 적용 구분을 21개 장으로 정리했다.
+- 운영 DB 스냅샷은 21:59 KST 기준 `memory_facts=74,510`, `ai_observations=903`, `ohvis_wiki_pages=1,693`, `compiled_prompt_provenance=17,344`이며, 모델 가중치 학습량이 아니라 운영 메모리·관찰·위키·프롬프트 이력임을 문서에 명시했다.
+- 다음 단계는 Gate 0 용어·현황 고정 → Gate 1 골든 평가셋 → Gate 2 메모리/RAG 품질 → Gate 3 LoRA/SFT PoC → Gate 4 선호 최적화의 순서와 책임·산출물·완료/중단 기준으로 반영했다.
+- 검증: HTML 파서 기준 미닫힌 태그·중복 ID·누락 내부 앵커 0건, 23개 섹션·14개 표·5개 실행 Gate 확인. 공개 `https://fb.newtalk.kr/static/reports/20260910_ai_learning_theory_education.html?v=202609102159`은 HTTP 200과 최신 본문을 반환했고, 로컬 Playwright Chromium으로 1,440×17,965 전체 페이지 렌더링 및 PNG 캡처를 확인했다. 독립 `capture_screenshot` 도구는 120초 타임아웃이었으나 로컬 브라우저 검증으로 대체 완료했다.
+- 커밋·푸시·배포는 수행하지 않았다. 기존 dirty 파일은 건드리지 않았다.
 
 ## 2026-09-10 15:42 KST — 보고 산출물 영속 저장 경로 표준화
 
@@ -13494,17 +13495,3 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - `b9147c09`에서 `jsonb_build_object('revision', $5::integer)`로 SQL 파라미터 타입을 명시하고 API blue/green 배포 run 320을 완료했다. active/standby는 동일 digest `sha256:044fa7c3...04ecd48`이며 300초 P0/P1 감시를 통과했다.
 - 운영 `PUT /api/v1/chat/artifacts/{id}` 재검증에서 DB 트랜잭션은 draft revision 2와 `edited` 이벤트를 저장했지만, asyncpg JSONB codec이 반환한 문자열 metadata가 `ArtifactOut.metadata` 응답 검증에서 HTTP 500을 일으키는 후속 결함을 확인했다.
 - `directive_draft_service._serialize_row`가 `metadata`와 `classification` JSON 문자열을 안전하게 역직렬화하도록 보강하고 회귀 테스트를 추가했다. 자동 전송은 수행하지 않았으며, 후속 커밋·blue/green 배포·운영 API 200 재검증 결과를 최종 보고에 기록한다.
-
-## 2026-09-11 05:25 KST — 선택한 AI 응답 기반 지시 초안
-
-- 기존 입력창 전역 생성은 최근 문답 모드로 유지하고, 완료된 AI 응답을 직접 선택한 경우
-  직전 사용자 질문과 선택 assistant 메시지 두 건만 정본 API에 전달하도록 계약을 확장했다.
-- `app/services/directive_draft_service.py`는 선택 assistant를 prompt의 `SELECTED_RESPONSE`로
-  표시한다. LLM 실패 시에도 마지막 사용자 질문을 되풀이하지 않고 선택 응답의 `다음 단계`·
-  `권장 조치`를 우선 추출해 실행형 폴백 지시서로 만든다.
-- 요청한 메시지가 tenant/session에 모두 존재하는지 확인하고 assistant가 둘 이상이면
-  fail-closed한다. classification에는 `source_mode`와 선택 assistant ID를 남겨 사후 검수한다.
-- PRD 정본 `docs/plans/20260910_OHVIS_DIRECTIVE_COPILOT_PRD.md`에 F-11~F-13과 API 계약을
-  추가했다. 관련 pytest 17건, Python compile, diff-check를 통과한 뒤 커밋·푸시한다.
-- 자동 전송과 기존 초안 데이터 변경은 없다. API 운영 반영은 clean release SHA의
-  `deploy.sh bluegreen`, 동일 digest, routed health, 5분 P0/P1 감시 후에만 완료 판정한다.
