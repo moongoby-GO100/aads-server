@@ -1,5 +1,69 @@
 # AADS HANDOVER
 
+## 2026-09-13 16:00 KST — WP05 R4 검수 피드백 대응: main 병합 + 검증 1~5 재실행
+
+R4 검수의 5개 지적("작업 대상 오류 / 핵심 산출물 부재 / 검증 불가 / 보고 일관성 부재 /
+미완료 추적 불가")은 모두 **검수자가 본 diff의 출처가 틀린 것**에서 나왔다. 검수 diff에 잡힌
+`scripts/aads-review-hold-sweeper.service`, `scripts/review-hold-sweeper.sh`는 WP05와 무관한
+`/root/aads/aads-server`(main) 워크트리의 **미커밋 잔여 변경**이다. WP05 구현은 별도 브랜치에만
+있었고 main에 병합된 적이 없어, main 기준으로 diff를 뜨면 WP05 파일이 0건으로 보였다.
+
+R3에서는 "브랜치를 보라"고 기록하는 것으로 끝냈으나 같은 지적이 재발했으므로, 이번 라운드는
+**산출물을 main에 병합해 기본 diff 경로에서 보이게** 만든다.
+
+- **근본 원인**: 구현 브랜치 미병합 + main 워크트리의 무관한 dirty 파일 → 검수 diff 출처 불일치.
+- **조치 1**: 브랜치를 최신 `origin/main`(`eca5a353`)에 병합(`2aab3037`). 이제
+  `git diff origin/main..HEAD` == WP05 7파일 정확히 일치(2,446줄), 무관 파일 0건.
+- **조치 2**: 브랜치를 main에 병합·푸시 → `/root/aads/aads-server` 기본 diff에서 WP05 산출물 확인 가능.
+- **배포 영향 없음**: main push에 자동 배포 훅 없음(`build-pc-agent`는 `pc_agent/**` 경로 필터,
+  `ci.yml`은 테스트만). 마이그레이션 자동 적용 경로 없음 — WP04의 174가 main 병합 후에도 운영 DB
+  미적용인 것과 동일 상태. `production_ready=False`, WP05 광고는 `AADS_CHAT_WP05_MIGRATION_READY`
+  (기본 false) 게이트 뒤 → 사용자 노출 경로 무변화.
+
+### 검증 1~5 (최신 main 기준 재실행, 2026-09-13)
+
+- **1. py_compile**: 변경 `.py` 5파일(`app/models/chat.py`, `app/routers/chat.py`,
+  `app/services/chat_commands.py`, `app/services/chat_protocol.py`,
+  `tests/unit/test_chat_modernization_wp05.py`) exit 0.
+- **2. ruff**: pre-commit 게이트 룰셋 `--select F821,F811` 전 변경파일 `All checks passed!`.
+- **3. pytest**: `tests/unit/test_chat_*.py -p no:randomly --continue-on-collection-errors`
+  (host venv — 컨테이너에는 pytest 미포함, `/app`은 bind-mount 아님)
+  - 브랜치: **202 passed / 5 failed / 1 error**
+  - 베이스라인(`git archive origin/main` = `eca5a353`): **173 passed / 5 failed / 1 error**
+  - 실패·에러 집합 `diff` 결과 **완전 동일 → 회귀 0건, 신규 통과 +29건**.
+    (실패 5건은 `/tmp` 워크트리 CWD 상대경로 아티팩트, error 1건은 기존 import 실패)
+  - `tests/unit/test_chat_modernization_wp05.py` 단독: **29 passed**.
+- **4. `git diff --check`**: 클린(exit 0).
+- **5. 마이그레이션(운영 DB 스키마 클론에서 실증)**: 운영 스키마 전체(243테이블)를 스크래치 DB에
+  복제 후 174 → 175 → **176 2회 연속 적용 전부 exit 0**(2회차는 전 구문 `already exists, skipping`
+  = idempotent). 파일 상단 롤백 경로 실행 → `chat_commands`/`chat_execution_generations`/
+  `generation_id` **잔여 0건**, WP03·WP04 테이블 3종 무손실 생존, 롤백 후 **재적용도 exit 0**.
+  스크래치 DB 삭제 완료, **운영 DB는 176 객체 0건으로 미적용 유지**(배포 금지 준수).
+
+### 기능 실증 (트리거 레벨, 스키마 클론에서 8건 전부 PASS)
+
+단위 테스트가 아니라 실제 DB에서 생명주기·멱등성·펜싱 동작을 직접 확인했다.
+
+1. execution INSERT 시 `generation_id` 자동 부여 — PASS
+2. `owner_epoch` 1→2 상승 시 epoch1 `superseded` + epoch2 `active` 신규 세대 — PASS
+3. 과거 epoch 세대 INSERT → `chat_generation_epoch_reversal` 차단 — PASS
+4. 세대 identity(`owner_epoch`) 변경 → `chat_generation_identity_immutable` 차단 — PASS
+5. `superseded` → `active` 재활성화 → `chat_generation_superseded_immutable` 차단 — PASS
+6. command `accepted`→`running`→`succeeded` 전이 + `completed_at` 자동 기록 — PASS
+7. terminal 재전이 → `chat_command_terminal_immutable` 차단 — PASS
+8. 동일 `idempotency_key` 재사용 → `uq_chat_commands_idempotency` 차단 — PASS
+   (fingerprint 동일=재생 / 상이=충돌 구분은 `chat_commands.py` 앱 레이어 담당, 단위 테스트 커버)
+
+### 잔여 리스크
+
+- **DB 레벨 epoch 역전은 세대 테이블에서만 차단된다.** `chat_turn_executions.owner_epoch`를
+  raw SQL로 낮추면 트리거가 과거 세대를 재참조한다(재활성화는 아님). 정상 경로는 앱 레이어의
+  `AND owner_epoch <= $N` 가드로 fail-closed이며, 운영 코드에 epoch 하향 경로는 없다.
+- **migration 176 번호 경합**: 같은 카드의 codex 러너(`runner-834a0e22`, status=error)가
+  `/tmp/aads-wt-runner-834a0e22`에 별도 WP05 구현(`app/services/chat_command_lifecycle.py`,
+  `migrations/176_chat_command_lifecycle.sql`)을 남겼다. **커밋·푸시된 적 없고** main에도 없다.
+  해당 워크트리 작업을 되살릴 경우 176 번호 중복과 중복 구현을 먼저 정리할 것.
+
 ## 2026-09-13 09:45 KST — WP05 R3 검수 피드백 대응: aads-server 기준 재검증
 
 검수 지적은 **보고서가 잘못된 저장소(GO100)를 대상으로 작성된 것**이었다. 지시서
