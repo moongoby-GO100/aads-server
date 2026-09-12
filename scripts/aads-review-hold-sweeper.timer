@@ -1,0 +1,12 @@
+[Unit]
+Description=AADS review_hold 자동 재검수 스위퍼 10분 주기 실행
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Persistent=true
+Unit=aads-review-hold-sweeper.service
+
+[Install]
+WantedBy=timers.target

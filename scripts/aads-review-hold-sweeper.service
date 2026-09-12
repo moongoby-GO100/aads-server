@@ -1,0 +1,30 @@
+[Unit]
+Description=AADS review_hold 자동 재검수 스위퍼 (검수 인프라 장애 복구)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/aads/aads-server
+ExecStart=/root/aads/aads-server/scripts/review-hold-sweeper.sh
+
+# 민감정보는 러너와 동일한 EnvironmentFile에서 로드
+EnvironmentFile=-/root/.config/aads-runner.env
+Environment=HOME=/root
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=AADS_API_URL=http://127.0.0.1:8100
+Environment=SWEEP_BATCH=5
+Environment=SWEEP_MAX_RETRY=6
+Environment=SWEEP_BACKOFF_BASE_MIN=10
+Environment=SWEEP_BACKOFF_MAX_MIN=360
+# 리뷰 1건이 폴백 체인에 물려 창 전체를 잡아먹지 않도록 상한을 둔다.
+Environment=REVIEW_MAX_TIME=180
+
+TimeoutStartSec=3600
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aads-review-hold-sweeper
+
+[Install]
+WantedBy=multi-user.target

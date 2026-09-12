@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from collections import Counter
@@ -20,6 +21,8 @@ logger = logging.getLogger(__name__)
 _REVIEW_MODEL = "qwen-turbo"
 _REVIEW_MODEL_FALLBACK = _REVIEW_MODEL  # DB 조회 실패 시 기본값
 _REVIEW_PARSE_MAX_ATTEMPTS = 3  # P0: JSON 파싱 실패 시 즉시 REVIEW_PARSER_FAILURE 대신 재시도 후 폴백
+# P0: 리뷰 LLM 시도 1회 상한(초). 초과하면 무응답으로 간주하고 다음 시도로 넘긴다.
+_REVIEW_LLM_TIMEOUT_SEC = int(os.environ.get("REVIEW_LLM_TIMEOUT_SEC", "120"))
 
 _DIFF_HEADER_RE = re.compile(r"^diff --git a\/.+ b\/.+$", re.MULTILINE)
 _DIFF_HUNK_RE = re.compile(r"^@@ .+ @@$", re.MULTILINE)
@@ -641,12 +644,23 @@ async def review_code_diff(
         for attempt_no in range(1, _REVIEW_PARSE_MAX_ATTEMPTS + 1):
             model = review_models[(attempt_no - 1) % len(review_models)] if review_models else _REVIEW_MODEL_FALLBACK
             try:
-                result_text = await call_llm_with_fallback(
-                    prompt=prompt,
-                    model=model,
-                    system=_REVIEW_SYSTEM_PROMPT,
-                    max_tokens=1024,
+                # P0: 리뷰 모델이 실패하면 call_llm_with_fallback 이 Claude 429 재시도(최대 60회)와
+                # LiteLLM 폴백 체인을 순회하며 수 분간 반환되지 않는 경우가 있다. 그동안 러너의
+                # ai_review 요청과 재검수 스위퍼가 함께 묶여 review_hold 가 누적됐다.
+                # 시도당 상한을 두고 다음 모델/재시도로 넘긴다.
+                result_text = await asyncio.wait_for(
+                    call_llm_with_fallback(
+                        prompt=prompt,
+                        model=model,
+                        system=_REVIEW_SYSTEM_PROMPT,
+                        max_tokens=1024,
+                    ),
+                    timeout=_REVIEW_LLM_TIMEOUT_SEC,
                 )
+            except asyncio.TimeoutError:
+                logger.warning("review_model_timeout: model=%s attempt=%s/%s limit=%ss",
+                               model, attempt_no, _REVIEW_PARSE_MAX_ATTEMPTS, _REVIEW_LLM_TIMEOUT_SEC)
+                result_text = None
             except Exception as model_err:
                 logger.warning("review_model_failed: model=%s attempt=%s/%s error=%s",
                                model, attempt_no, _REVIEW_PARSE_MAX_ATTEMPTS, str(model_err)[:60])
