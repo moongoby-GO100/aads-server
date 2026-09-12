@@ -302,10 +302,16 @@ def log_usage(
     error_code: Optional[str] = None,
     duration_ms: int = 0,
     tenant_id: Optional[str] = None,
+    account_slot: Optional[str] = None,
 ) -> None:
-    """사용량 기록 (buffered fire-and-forget). LLM 호출 직후 호출."""
+    """사용량 기록 (buffered fire-and-forget). LLM 호출 직후 호출.
+
+    account_slot 은 토큰 없이 슬롯을 아는 호출자를 위한 것이다. CLI 릴레이
+    경로는 토큰을 릴레이 서버가 들고 있어 앱에는 슬롯 번호("1"/"2")만
+    있으므로, _token_slot(token) 으로는 항상 "unknown" 이 된다.
+    """
     rl = parse_ratelimit_headers(headers)
-    slot = _token_slot(token)
+    slot = (account_slot or "").strip() or _token_slot(token)
     prefix = _token_prefix(token)
 
     # 선제적 계정 전환 경고

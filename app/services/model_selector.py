@@ -3215,6 +3215,49 @@ async def _stream_cli_relay_once(
                         except Exception as _rl_err:
                             logger.debug("rate_limit_event capture failed: %s", str(_rl_err)[:120])
 
+                    # result 이벤트: 이 호출이 실제로 태운 토큰이다.
+                    #
+                    # 릴레이 경로에는 사용량 적재가 아예 없어서 oauth_usage_log 가
+                    # 2026-09-11 20:27 이후 비어 있었다. 채팅 트래픽이 SDK 경로에서
+                    # CLI 릴레이로 옮겨갔는데 기록 코드는 SDK 경로에만 있었기 때문이다.
+                    # 그 결과 "어느 세션의 어떤 작업이 토큰을 태웠나"를 계정 단위로
+                    # 답할 수 없었다. 캐시 토큰까지 남긴다 — 도구를 반복 호출하는 턴은
+                    # 입력이 출력의 20배를 넘고 그 대부분이 캐시 읽기다.
+                    if event.get("type") == "result" and not event.get("is_error"):
+                        try:
+                            _u = event.get("usage") or {}
+                            _in = int(_u.get("input_tokens") or 0)
+                            _out = int(_u.get("output_tokens") or 0)
+                            _cc = int(_u.get("cache_creation_input_tokens") or 0)
+                            _cr = int(_u.get("cache_read_input_tokens") or 0)
+                            _cost = float(event.get("total_cost_usd") or 0)
+                            _used_model = sdk_model
+                            for _m, _mv in (event.get("modelUsage") or {}).items():
+                                _used_model = _m.split("[")[0]
+                                _in = int(_mv.get("inputTokens") or _in)
+                                _out = int(_mv.get("outputTokens") or _out)
+                                _cc = int(_mv.get("cacheCreationInputTokens") or _cc)
+                                _cr = int(_mv.get("cacheReadInputTokens") or _cr)
+                                if _mv.get("costUSD"):
+                                    _cost = float(_mv["costUSD"])
+                                break
+                            _log_oauth_usage(
+                                token="",
+                                model=_used_model,
+                                input_tokens=_in,
+                                output_tokens=_out,
+                                cache_creation_tokens=_cc,
+                                cache_read_tokens=_cr,
+                                cost_usd=_cost,
+                                call_source="cli_relay",
+                                session_id=session_id or "",
+                                account_slot=str(oauth_slot or ""),
+                            )
+                        except Exception as _usage_err:
+                            logger.debug(
+                                "cli_relay_usage_log_failed: %s", str(_usage_err)[:120]
+                            )
+
                     # result 이벤트에서 is_error 체크 (CLI가 529 등으로 실패 시)
                     if event.get("type") == "result" and event.get("is_error"):
                         error_text = event.get("result", "CLI error")
@@ -3663,6 +3706,23 @@ async def _stream_codex_relay_once(
                         in_tok = event.get("input_tokens", 0)
                         out_tok = event.get("output_tokens", 0)
                         cost = _estimate_cost(model, in_tok, out_tok)
+                        # Claude 와 별도 쿼터를 쓰지만, 경로별 소비 비교가 되어야
+                        # 어떤 작업을 어디로 보낼지 판단할 수 있다.
+                        try:
+                            _log_oauth_usage(
+                                token="",
+                                model=display_model,
+                                input_tokens=int(in_tok or 0),
+                                output_tokens=int(out_tok or 0),
+                                cost_usd=float(cost),
+                                call_source="codex_relay",
+                                session_id=session_id or "",
+                                account_slot="codex",
+                            )
+                        except Exception as _usage_err:
+                            logger.debug(
+                                "codex_relay_usage_log_failed: %s", str(_usage_err)[:120]
+                            )
                         yield {"type": "done", "model": display_model, "cost": str(cost),
                                "input_tokens": in_tok, "output_tokens": out_tok}
     except httpx.ConnectError as e:
