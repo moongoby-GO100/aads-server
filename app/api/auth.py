@@ -450,7 +450,7 @@ async def e2e_inject(
     if saas_user:
         uid = str(saas_user["id"])
         token = auth_module.create_token(
-            user_id,
+            uid,
             saas_user["email"],
             tenant_id=await auth_module.resolve_login_tenant_for_user(saas_user),
         )
