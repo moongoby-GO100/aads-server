@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import time as _time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -965,6 +967,7 @@ async def record_slot_rate_limit(
         return
 
     await _maybe_alert_slot_quota(slot, label, pct_7d, seven, rate_limit_info)
+    await prune_usage_snapshots()
 
 
 async def _maybe_alert_slot_quota(
@@ -1067,3 +1070,54 @@ async def get_slot_usage_all() -> List[Dict[str, Any]]:
             }
         out.append(entry)
     return out
+
+
+# ─── 스냅샷 보존 정책 ────────────────────────────────────────────────────────
+#
+# claude_max_usage_snapshot 은 폴러가 계속 적재하는데 정리 주체가 없어
+# 2026-09-12 기준 518,915행 / 238MB 까지 자랐다. rate_limit_event 적재가
+# 더해지므로 상한을 둔다. 시간당 한 번, 배치 삭제로 잠금 시간을 짧게 유지한다.
+
+_SNAPSHOT_RETENTION_DAYS = int(os.getenv("CLAUDE_MAX_SNAPSHOT_RETENTION_DAYS", "30"))
+_SNAPSHOT_PRUNE_BATCH = int(os.getenv("CLAUDE_MAX_SNAPSHOT_PRUNE_BATCH", "20000"))
+_SNAPSHOT_PRUNE_INTERVAL_SEC = 3600
+_snapshot_last_prune = 0.0
+
+
+async def prune_usage_snapshots(force: bool = False) -> int:
+    """보존 기간이 지난 스냅샷을 배치로 삭제. 삭제 행 수를 반환한다."""
+    global _snapshot_last_prune
+    now = _time.time()
+    if not force and (now - _snapshot_last_prune) < _SNAPSHOT_PRUNE_INTERVAL_SEC:
+        return 0
+    _snapshot_last_prune = now
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            # execute()는 "DELETE <n>" 상태 문자열을 돌려준다. fetchval은 RETURNING의
+            # 첫 행만 주므로 삭제 건수 집계에 쓸 수 없다.
+            status = await conn.execute(
+                """
+                WITH doomed AS (
+                    SELECT id FROM claude_max_usage_snapshot
+                    WHERE fetched_at < NOW() - ($1 || ' days')::interval
+                    ORDER BY id
+                    LIMIT $2
+                )
+                DELETE FROM claude_max_usage_snapshot s
+                USING doomed d WHERE s.id = d.id
+                """,
+                str(_SNAPSHOT_RETENTION_DAYS), _SNAPSHOT_PRUNE_BATCH,
+            )
+            deleted = status.rsplit(" ", 1)[-1] if status else 0
+    except Exception as e:
+        logger.warning("prune_usage_snapshots failed: %s", str(e)[:160])
+        return 0
+    try:
+        count = int(deleted or 0)
+    except (TypeError, ValueError):
+        count = 0
+    if count:
+        logger.info("usage_snapshot_pruned rows=%d retention_days=%d",
+                    count, _SNAPSHOT_RETENTION_DAYS)
+    return count
