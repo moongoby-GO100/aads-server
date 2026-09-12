@@ -12,6 +12,7 @@
 #       H3(임시파일정리), H4(승인타임아웃), H5(재시도)
 # ═══════════════════════════════════════════════════════════════════════
 set -eo pipefail
+CLAUDE_MODEL_CONTRACT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude_model_contract.py"
 
 # general: normal Claude/Codex runner. litellm: claims only LiteLLM jobs.
 RUNNER_ENGINE_MODE="${RUNNER_ENGINE_MODE:-general}"
@@ -379,14 +380,10 @@ dedupe_model_cycle_for_attempt_caps() {
 normalize_runner_model() {
     local model="${1:-}"
     case "$model" in
-        claude-sonnet|claude-sonnet-4-5|claude-sonnet-4-6-*)
-            echo "claude-sonnet-4-6"
-            ;;
-        claude-haiku|claude-haiku-4-5)
-            echo "claude-haiku-4-5-20251001"
-            ;;
-        claude-opus|claude-opus-4-6|claude-opus-4-7|claude-opus-4-8)
-            echo "claude-opus-4-6"
+        claude-*|opus|sonnet|haiku)
+            # Keep invalid IDs unchanged for explicit launch rejection below;
+            # do not crash the polling runner while building its model cycle.
+            python3 "$CLAUDE_MODEL_CONTRACT" "$model" || printf '%s\n' "$model"
             ;;
         "")
             echo "auto"
@@ -398,21 +395,7 @@ normalize_runner_model() {
 }
 
 normalize_claude_cli_model() {
-    local model="${1:-}"
-    case "$model" in
-        claude-sonnet*|sonnet)
-            echo "sonnet"
-            ;;
-        claude-haiku*|haiku)
-            echo "haiku"
-            ;;
-        claude-opus*|opus)
-            echo "opus"
-            ;;
-        *)
-            echo "$model"
-            ;;
-    esac
+    python3 "$CLAUDE_MODEL_CONTRACT" "${1:-}"
 }
 
 is_read_only_instruction() {
@@ -1509,7 +1492,13 @@ ${safe_instruction}"
         else
             # AADS-242/AADS-Runner-Root: root/sudo 환경에서는 --dangerously-skip-permissions 자체가 CLI 보안 차단을 유발한다.
             local claude_cli_model
-            claude_cli_model=$(normalize_claude_cli_model "$current_model")
+            if ! claude_cli_model=$(normalize_claude_cli_model "$current_model"); then
+                log "MODEL_CONTRACT_REJECTED job=$job_id requested=$current_model"
+                attempt=$((attempt + 1)); sleep 2; continue
+            fi
+            # Text output does not contain provider model evidence.
+            effective_model="unverified"
+            log "MODEL_CONTRACT job=$job_id requested=$current_model cli_model=$claude_cli_model verification=cli_argument_only"
             local claude_args=(--model "$claude_cli_model" -p --output-format text)
             if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
                 claude_args+=(--dangerously-skip-permissions)
