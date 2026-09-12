@@ -36,3 +36,12 @@ def test_review_hold_sweeper_prioritizes_small_diffs():
     assert "-- 큰 diff 한 건이 복구 창을 독점하지 않도록" in script
     assert "rows=$(db_query \"$select_sql\") || rows=\"\"" not in script
     assert "review_hold 대상 조회 실패" in script
+
+
+def test_review_hold_sweeper_service_uses_active_bluegreen_route():
+    service = (ROOT / "scripts" / "aads-review-hold-sweeper.service").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Environment=AADS_API_URL=http://127.0.0.1\n" in service
+    assert "AADS_API_URL=http://127.0.0.1:8100" not in service

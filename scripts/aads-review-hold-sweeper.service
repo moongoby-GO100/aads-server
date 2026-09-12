@@ -13,7 +13,9 @@ ExecStart=/root/aads/aads-server/scripts/review-hold-sweeper.sh
 EnvironmentFile=-/root/.config/aads-runner.env
 Environment=HOME=/root
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-Environment=AADS_API_URL=http://127.0.0.1:8100
+# Always enter through nginx's active Blue/Green route. Pinning the sweeper to
+# 8100 can send new review work to the draining/inactive slot after cutover.
+Environment=AADS_API_URL=http://127.0.0.1
 Environment=SWEEP_BATCH=5
 Environment=SWEEP_MAX_RETRY=6
 Environment=SWEEP_BACKOFF_BASE_MIN=10
