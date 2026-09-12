@@ -160,6 +160,44 @@ def _setup_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pc_agent.pc_agent_manager, "broadcast_frame", AsyncMock())
 
 
+class _TokenConnection:
+    def __init__(self, *, has_active_column: bool, token_row: dict[str, object] | None) -> None:
+        self.has_active_column = has_active_column
+        self.token_row = token_row
+        self.queries: list[str] = []
+
+    async def fetchval(self, query: str, *_args: object) -> bool:
+        self.queries.append(query)
+        return self.has_active_column
+
+    async def fetchrow(self, query: str, *_args: object) -> dict[str, object] | None:
+        self.queries.append(query)
+        return self.token_row
+
+    async def execute(self, query: str, *_args: object) -> str:
+        self.queries.append(query)
+        return "UPDATE 1"
+
+
+class _TokenAcquire:
+    def __init__(self, conn: _TokenConnection) -> None:
+        self.conn = conn
+
+    async def __aenter__(self) -> _TokenConnection:
+        return self.conn
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+
+class _TokenPool:
+    def __init__(self, conn: _TokenConnection) -> None:
+        self.conn = conn
+
+    def acquire(self) -> _TokenAcquire:
+        return _TokenAcquire(self.conn)
+
+
 def test_code_1005_is_classified_as_abnormal_close() -> None:
     classification = pc_agent._classify_disconnect_cause(
         close_code=1005,
@@ -170,6 +208,64 @@ def test_code_1005_is_classified_as_abnormal_close() -> None:
 
     assert classification["cause"] == "abnormal_close"
     assert classification["severity"] == "warning"
+
+
+def test_server_ping_failure_has_distinct_classification() -> None:
+    classification = pc_agent._classify_disconnect_cause(
+        close_code=1011,
+        close_reason="server_ping_failed",
+        uptime_seconds=120.0,
+        exc_type="RuntimeError",
+    )
+
+    assert classification["cause"] == "server_ping_failed"
+    assert classification["severity"] == "warning"
+
+
+def test_disconnect_alert_key_is_stable_only_inside_cooldown_window() -> None:
+    first = datetime(2026, 9, 12, 11, 0, 0, tzinfo=timezone.utc)
+    same_window = datetime(2026, 9, 12, 11, 4, 0, tzinfo=timezone.utc)
+    next_window = datetime(2026, 9, 12, 11, 16, 0, tzinfo=timezone.utc)
+
+    first_key = pc_agent._disconnect_alert_idempotency_key(
+        "ceo-pc", "heartbeat_timeout", observed_at=first
+    )
+    assert first_key == pc_agent._disconnect_alert_idempotency_key(
+        "ceo-pc", "heartbeat_timeout", observed_at=same_window
+    )
+    assert first_key != pc_agent._disconnect_alert_idempotency_key(
+        "ceo-pc", "heartbeat_timeout", observed_at=next_window
+    )
+    assert len(first_key) <= 64
+
+
+@pytest.mark.asyncio
+async def test_verify_token_accepts_legacy_schema_until_migration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _TokenConnection(
+        has_active_column=False,
+        token_row={"user_id": "owner-1", "tenant_id": "tenant-1"},
+    )
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _TokenPool(conn))
+
+    valid, owner_user_id, owner_tenant_id = await pc_agent._verify_token_db("legacy-token")
+
+    assert (valid, owner_user_id, owner_tenant_id) == (True, "owner-1", "tenant-1")
+    assert all("is_active = TRUE" not in query for query in conn.queries)
+
+
+@pytest.mark.asyncio
+async def test_verify_token_enforces_active_state_after_migration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _TokenConnection(has_active_column=True, token_row=None)
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _TokenPool(conn))
+
+    valid, owner_user_id, owner_tenant_id = await pc_agent._verify_token_db("revoked-token")
+
+    assert (valid, owner_user_id, owner_tenant_id) == (False, "", "")
+    assert any("is_active = TRUE" in query for query in conn.queries)
 
 
 @pytest.mark.asyncio
@@ -340,6 +436,9 @@ async def test_ws_pc_agent_records_heartbeat_timeout_and_closes_socket(monkeypat
     assert disconnected_calls
     assert disconnected_calls[-1].kwargs["reason"] == "heartbeat_timeout"
     assert disconnected_calls[-1].kwargs["metadata"]["close_reason"] == "heartbeat_timeout"
+    assert disconnected_calls[-1].kwargs["metadata"]["reason_source"] == "receive_timeout"
+    assert disconnected_calls[-1].kwargs["metadata"]["receive_timeout_seconds"] == 90
+    assert "last_heartbeat_age_seconds" in disconnected_calls[-1].kwargs["metadata"]
     assert ws.close_calls[-1] == (1011, "heartbeat_timeout")
 
 
@@ -443,6 +542,8 @@ async def test_disconnect_notification_posts_same_session_report(
     assert kwargs["project"] == "FOOD"
     assert kwargs["trigger_reaction"] is True
     assert "diagnostics/disconnect-stats" in kwargs["reaction_prompt"]
+    assert kwargs["idempotency_key"].startswith("pc-agent-disconnect-")
+    assert "125.0" not in kwargs["idempotency_key"]
 
 
 @pytest.mark.asyncio

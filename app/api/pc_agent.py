@@ -5,6 +5,7 @@ WebSocket 엔드포인트 + REST API.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -25,6 +26,13 @@ router = APIRouter()
 
 PC_AGENT_SECRET = os.environ.get("PC_AGENT_SECRET", "")
 HEARTBEAT_INTERVAL = 30  # 초
+try:
+    _DISCONNECT_ALERT_DEDUP_SECONDS = max(
+        60,
+        int(os.environ.get("PC_AGENT_DISCONNECT_ALERT_DEDUP_SECONDS", "900") or "900"),
+    )
+except ValueError:
+    _DISCONNECT_ALERT_DEDUP_SECONDS = 900
 _PEER_FALLBACK_HEADER = "x-aads-pc-agent-peer-fallback"
 _PEER_OWNER_HEADER = "x-aads-pc-agent-owner-user-id"
 _PEER_RETRYABLE_ERROR_CODES = {
@@ -176,7 +184,10 @@ def _classify_disconnect_cause(
     elif "sleep_wake" in reason:
         cause = "pc_sleep_wake"
         severity = "info"
-    elif "heartbeat_timeout" in reason or exc_type == "TimeoutError":
+    elif "server_ping_failed" in reason:
+        cause = "server_ping_failed"
+        severity = "warning"
+    elif "heartbeat_timeout" in reason or "ping timeout" in reason or exc_type == "TimeoutError":
         if uptime_seconds < 60:
             cause = "network_unstable"
             severity = "warning"
@@ -207,6 +218,21 @@ def _classify_disconnect_cause(
     }
 
 
+def _disconnect_alert_idempotency_key(
+    agent_id: str,
+    cause: str,
+    *,
+    observed_at: datetime | None = None,
+) -> str:
+    """Return one stable alert key per agent/cause/cooldown window."""
+    event_time = observed_at or datetime.now(timezone.utc)
+    if event_time.tzinfo is None:
+        event_time = event_time.replace(tzinfo=timezone.utc)
+    bucket = int(event_time.timestamp()) // _DISCONNECT_ALERT_DEDUP_SECONDS
+    digest = hashlib.sha256(f"{agent_id}|{cause}|{bucket}".encode("utf-8")).hexdigest()[:20]
+    return f"pc-agent-disconnect-{digest}"
+
+
 async def _notify_chat_session_disconnect(
     *,
     agent_id: str,
@@ -218,6 +244,7 @@ async def _notify_chat_session_disconnect(
     severity = classification.get("severity", "warning")
     auto_recoverable = classification.get("auto_recoverable", True)
     uptime = classification.get("uptime_seconds", 0)
+    alert_key = _disconnect_alert_idempotency_key(agent_id, str(cause))
 
     observation = (
         f"PC Agent '{agent_id}' 연결 끊김 — "
@@ -239,11 +266,12 @@ async def _notify_chat_session_disconnect(
             await conn.execute(
                 """
                 INSERT INTO ai_observations (project, category, key, value, created_at)
-                VALUES ($1, $2, $3, $4::jsonb, NOW())
+                VALUES ($1, $2, $3, $4, NOW())
+                ON CONFLICT DO NOTHING
                 """,
                 "FOOD",
                 "pc_agent_disconnect_alert",
-                f"disconnect_{agent_id}_{cause}",
+                alert_key,
                 json.dumps({
                     "agent_id": agent_id,
                     "cause": cause,
@@ -294,10 +322,7 @@ async def _notify_chat_session_disconnect(
                     "auto_generated": True,
                 },
                 intent="pc_agent_alert",
-                idempotency_key=(
-                    f"pc-agent-disconnect-{agent_id}-{cause}-"
-                    f"{metadata.get('close_code')}-{metadata.get('uptime_seconds')}"
-                ),
+                idempotency_key=alert_key,
                 trigger_reaction=True,
                 reaction_prompt=reaction_prompt,
             )
@@ -362,15 +387,37 @@ async def _verify_token_db(token: str) -> tuple[bool, str, str]:
 
         pool = get_pool()
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
+            has_active_column = await conn.fetchval(
                 """
-                SELECT user_id, tenant_id
-                  FROM kakao_pc_agent_tokens
-                 WHERE token = $1
-                   AND COALESCE(is_active, TRUE) = TRUE
-                """,
-                token,
+                SELECT EXISTS (
+                    SELECT 1
+                      FROM information_schema.columns
+                     WHERE table_schema = 'public'
+                       AND table_name = 'kakao_pc_agent_tokens'
+                       AND column_name = 'is_active'
+                )
+                """
             )
+            if has_active_column:
+                row = await conn.fetchrow(
+                    """
+                    SELECT user_id, tenant_id
+                      FROM kakao_pc_agent_tokens
+                     WHERE token = $1
+                       AND is_active = TRUE
+                    """,
+                    token,
+                )
+            else:
+                logger.warning("pc_agent_token_schema_legacy_missing_is_active")
+                row = await conn.fetchrow(
+                    """
+                    SELECT user_id, tenant_id
+                      FROM kakao_pc_agent_tokens
+                     WHERE token = $1
+                    """,
+                    token,
+                )
             if row is not None:
                 await conn.execute(
                     "UPDATE kakao_pc_agent_tokens SET last_used_at = NOW() WHERE token = $1",
@@ -551,6 +598,10 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
 
     _agent_connections[agent_id] = websocket
     connected_at = datetime.utcnow()
+    last_message_at = connected_at
+    last_heartbeat_at = connected_at
+    last_server_ping_at: datetime | None = None
+    server_ping_count = 0
     logger.info("pc_agent_ws_connected agent_id=%s total=%d", agent_id, len(_agent_connections))
     await _record_agent_event(agent_id, "connected")
     disconnect_recorded = False
@@ -580,12 +631,23 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
         exc_type: str,
         extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        now = datetime.utcnow()
         metadata: dict[str, Any] = {
-            "uptime_seconds": round((datetime.utcnow() - connected_at).total_seconds(), 1),
+            "uptime_seconds": round((now - connected_at).total_seconds(), 1),
             "close_code": close_code,
             "close_reason": close_reason,
             "exc_type": exc_type,
             "disconnect_category": _categorize_disconnect(close_code, exc_type),
+            "heartbeat_interval_seconds": HEARTBEAT_INTERVAL,
+            "receive_timeout_seconds": HEARTBEAT_INTERVAL * 3,
+            "last_message_age_seconds": round(max(0.0, (now - last_message_at).total_seconds()), 1),
+            "last_heartbeat_age_seconds": round(max(0.0, (now - last_heartbeat_at).total_seconds()), 1),
+            "last_server_ping_age_seconds": (
+                round(max(0.0, (now - last_server_ping_at).total_seconds()), 1)
+                if last_server_ping_at is not None
+                else None
+            ),
+            "server_ping_count": server_ping_count,
         }
         if extra:
             metadata.update(extra)
@@ -667,9 +729,12 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
 
     # 서버 → 클라이언트 keepalive ping (dead connection 조기 감지)
     async def _server_ping() -> None:
+        nonlocal last_server_ping_at, server_ping_count
         while True:
             try:
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
+                last_server_ping_at = datetime.utcnow()
+                server_ping_count += 1
                 await websocket.send_json({"type": "heartbeat", "id": "", "payload": {}})
             except asyncio.CancelledError:
                 raise
@@ -697,9 +762,11 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
             raw = await asyncio.wait_for(
                 websocket.receive_json(), timeout=HEARTBEAT_INTERVAL * 3
             )
+            last_message_at = datetime.utcnow()
             msg = WSMessage.model_validate(raw)
 
             if msg.type == "heartbeat":
+                last_heartbeat_at = last_message_at
                 pc_agent_manager.update_heartbeat(agent_id)
                 heartbeat_payload = msg.payload or {}
                 if heartbeat_payload:
@@ -772,6 +839,7 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
             close_code=close_code,
             close_reason=close_reason_to_use,
             exc_type=type(exc).__name__,
+            extra={"reason_source": "receive_timeout"} if isinstance(exc, asyncio.TimeoutError) else None,
         )
         await _record_disconnect_once(reason_detail, metadata)
         await _close_socket(code=close_code or 1000, reason=close_reason_to_use or "disconnected")
@@ -1972,19 +2040,28 @@ async def pc_agent_disconnect_stats():
         cause_counts: dict[str, int] = {}
         for row in rows:
             classification = {}
+            meta = _event_metadata_dict(row["meta"])
             try:
                 raw = row["classification_raw"]
                 if raw:
                     classification = json.loads(raw) if isinstance(raw, str) else raw
             except Exception:
                 pass
-            cause = classification.get("cause", "unknown") if classification else "legacy_no_classification"
+            cause = (
+                classification.get("cause", "unknown")
+                if classification
+                else "legacy_no_classification"
+            )
             cause_counts[cause] = cause_counts.get(cause, 0) + 1
             events.append({
                 "reason": row["reason"],
                 "cause": cause,
                 "severity": classification.get("severity", "unknown"),
                 "kst": row["kst"].isoformat() if row["kst"] else None,
+                "last_message_age_seconds": meta.get("last_message_age_seconds"),
+                "last_heartbeat_age_seconds": meta.get("last_heartbeat_age_seconds"),
+                "last_server_ping_age_seconds": meta.get("last_server_ping_age_seconds"),
+                "server_ping_count": meta.get("server_ping_count"),
             })
         return {
             "period": "24h",
