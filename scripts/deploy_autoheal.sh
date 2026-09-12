@@ -97,7 +97,7 @@ autoheal_policy() {
     local cause="${1:-unknown}"
     local phase="${2:-${DEPLOY_CURRENT_PHASE:-}}"
     case "$cause" in
-        disk_full|dirty_worktree|stale_heartbeat|standby_sync_fail|lock_wait_timeout)
+        disk_full|dirty_worktree|stale_heartbeat|standby_sync_fail|lock_wait_timeout|source_dir_missing)
             echo "retry" ;;
         signal_interrupt)
             if [[ "${DEPLOY_UPSTREAM_SWITCHED:-false}" == "true" ]] || autoheal_phase_is_post_switch "$phase"; then
@@ -109,6 +109,51 @@ autoheal_policy() {
         *)
             echo "manual" ;;
     esac
+}
+
+# 배포 소스(릴리스 worktree)가 실재하는지 본다. 메시지 파싱보다 확실한 판정이다.
+autoheal_source_dir_ok() {
+    local dir="${COMPOSE_DIR:-}"
+    [[ -n "$dir" && -f "${dir}/docker-compose.prod.yml" ]]
+}
+
+# docker image/builder prune 은 삭제를 비동기로 끝낸다. 2026-09-13 08:00 KST 실측에서
+# prune 직후 avail 이 17,863MB 였다가 1~2분 뒤 25,436MB 로 회복됐는데, 즉시 한 번만
+# 재확인해서 "회수 실패"로 조기 에스컬레이션했다. 짧게 정착을 기다리며 재확인한다.
+autoheal_wait_disk_recovery() {
+    local attempts interval i
+    attempts="${AADS_DEPLOY_AUTOHEAL_DISK_RECHECKS:-6}"
+    interval="${AADS_DEPLOY_AUTOHEAL_DISK_RECHECK_SEC:-5}"
+    i=1
+    while (( i <= attempts )); do
+        if require_build_disk_free >/dev/null 2>&1; then
+            autoheal_log "빌드 디스크 임계 복귀 확인 (${i}/${attempts}회차)"
+            return 0
+        fi
+        if (( i < attempts )); then
+            sleep "$interval"
+        fi
+        i=$(( i + 1 ))
+    done
+    return 1
+}
+
+# 릴리스 worktree 가 배포 도중 사라진 경우(정리 스크립트·수동 삭제) 같은 커밋으로
+# 다시 만든다. 운영 트리(STATE_DIR)와 미커밋 작업은 절대 건드리지 않는다.
+autoheal_recreate_release_worktree() {
+    local sha dir repo
+    sha="${AADS_RELEASE_SHA:-}"
+    dir="${COMPOSE_DIR:-}"
+    repo="${STATE_DIR:-/root/aads/aads-server}"
+    if [[ -z "$sha" || "$sha" == "unknown" || -z "$dir" ]]; then
+        return 1
+    fi
+    if [[ "$dir" == "$repo" ]]; then
+        return 1
+    fi
+    git -C "$repo" worktree prune >/dev/null 2>&1 || true
+    git -C "$repo" worktree add --detach "$dir" "$sha" >/dev/null 2>&1 || return 1
+    [[ -f "${dir}/docker-compose.prod.yml" ]]
 }
 
 # ── 3단계: 원인별 자동 교정 ─────────────────────────────────────────────────
@@ -131,11 +176,21 @@ remediate_deploy_failure() {
                 docker builder prune -f --filter "until=${AUTOHEAL_BUILDER_PRUNE_UNTIL}" >/dev/null 2>&1 || true
             fi
             AUTOHEAL_LAST_REMEDIATION="disk_reclaim"
-            if [[ "$AADS_DEPLOY_AUTOHEAL_DRYRUN" != "1" ]] && ! require_build_disk_free >/dev/null 2>&1; then
+            if [[ "$AADS_DEPLOY_AUTOHEAL_DRYRUN" != "1" ]] && ! autoheal_wait_disk_recovery; then
                 autoheal_log "❌ 회수 후에도 빌드 디스크 임계 미달 — 자동 재개를 중단한다"
                 return 1
             fi
             autoheal_log "✅ 빌드 디스크 임계 복귀"
+            ;;
+        source_dir_missing)
+            autoheal_log "릴리스 소스 복구: ${COMPOSE_DIR:-unknown} 재생성 (sha=${AADS_RELEASE_SHA:-unknown})"
+            AUTOHEAL_LAST_REMEDIATION="recreate_release_worktree"
+            if [[ "$AADS_DEPLOY_AUTOHEAL_DRYRUN" == "1" ]]; then
+                autoheal_log "DRYRUN: worktree 재생성 생략"
+            elif ! autoheal_recreate_release_worktree; then
+                autoheal_log "❌ 릴리스 worktree 재생성 실패 — 자동 재개를 중단한다"
+                return 1
+            fi
             ;;
         dirty_worktree)
             # 작업 트리는 절대 건드리지 않는다(CEO/러너의 미커밋 작업 보호).
@@ -301,6 +356,13 @@ deploy_autoheal_on_exit() {
         err="$(deploy_db_exec "SELECT COALESCE(error_summary,'') FROM deploy_runs WHERE id=${DEPLOY_RUN_ID};" | tail -1)"
     fi
     cause="$(classify_deploy_failure "$phase" "$err")"
+    # 2026-09-13 #368/#370 실측: 릴리스 worktree 가 사라진 배포는 compose 파일을 못 열고
+    # 매번 unexpected_exit 로 떨어져 수동 개입이 필요했다. 소스 디렉터리 실재 여부는
+    # 에러 문자열보다 확실한 근거이므로 일반 분류를 이 판정으로 덮어쓴다.
+    if [[ "$cause" == "unexpected_exit" || "$cause" == "other" ]] && ! autoheal_source_dir_ok; then
+        autoheal_log "릴리스 소스 부재 확인: ${COMPOSE_DIR:-unknown} — 분류를 source_dir_missing 으로 보정"
+        cause="source_dir_missing"
+    fi
     policy="$(autoheal_policy "$cause" "$phase")"
     attempts="$(autoheal_attempt_count "$cause")"
     autoheal_log "실패 감지: rc=${rc}, phase=${phase}, cause=${cause}, policy=${policy}, attempts=${attempts}/${AUTOHEAL_MAX_ATTEMPTS}"

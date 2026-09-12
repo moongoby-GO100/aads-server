@@ -95,7 +95,8 @@ dirty 게이트를 건너뛴다(`deploy.sh:1447`). 따라서 이 경로 하나�
 
 | 원인 코드 | 분류 키워드 | 정책 | 자동 교정 내용 |
 |-----------|-------------|------|----------------|
-| `disk_full` | insufficient build disk / no space left | retry | release image retention + `docker image prune -f` + `docker builder prune -f --filter until=48h` → 임계 재검사 |
+| `disk_full` | insufficient build disk / no space left | retry | release image retention + `docker image prune -f` + `docker builder prune -f --filter until=48h` → **정착 대기 재검사**(기본 5초×6회, `autoheal_wait_disk_recovery`) |
+| `source_dir_missing` | 릴리스 worktree 부재(메시지 무관, `docker-compose.prod.yml` 실재 판정) | retry | 같은 SHA로 릴리스 worktree 재생성. 운영 트리(STATE_DIR)는 대상에서 제외 |
 | `dirty_worktree` | dirty worktree | retry | **작업 트리 불변.** 큐 워커의 clean worktree 경로로 우회 |
 | `stale_heartbeat` | heartbeat exceeded / stale deploy | retry | reconcile은 기존 로직이 수행 → 재개만 |
 | `standby_sync_fail` | standby same-digest sync | retry | 동일 릴리스 재기동으로 standby 슬롯만 정렬 |
@@ -205,3 +206,24 @@ ORDER BY id DESC LIMIT 20;
 종료되는 경로(`queued deploy wait timeout`, `deploy flock acquisition failed`)는
 자가치유가 적용되지 않는다. `autoheal_policy` 의 `lock_wait_timeout` 분기는 현재
 도달하지 않는 예약 경로이며, 해당 구간 보호는 P1 과제로 남긴다.
+
+---
+
+## 9. 운영 실측 검증 (2026-09-13 KST)
+
+| 배포 | 릴리스 | 결과 | 자가치유 동작 |
+|------|--------|------|----------------|
+| `#368` | eca5a353 | failed | `unexpected_exit` → manual 에스컬레이션 (릴리스 worktree 삭제로 compose 파일 부재) |
+| `#369` | 8fa8390b | blocked | `disk_full` → retry 판정, 회수 수행, 임계 미복귀로 에스컬레이션 (avail 17,863MB / 필요 20,480MB) |
+| `#370` | eca5a353 | failed | `unexpected_exit` → manual 에스컬레이션 (동일 원인) |
+| `#372` | 858a8725 | **success** | 실패 없음. 컷오버·검증 전 단계 통과, 무중단 유지(health 200) |
+
+실측에서 드러난 결함 3건과 후속 조치:
+
+1. **디스크 회수 비동기 반영** — prune 직후 재확인이 실패했으나 1~2분 뒤 25,436MB로 회복.
+   → `autoheal_wait_disk_recovery`(5초×6회 재확인) 도입.
+2. **사라진 릴리스 소스 자동복구 불가** — `#368`/`#370`이 매번 `unexpected_exit(manual)`로 종료.
+   → `source_dir_missing` 원인 신설. `docker-compose.prod.yml` 실재 여부로 판정하고 같은 SHA로 worktree 재생성.
+3. **ERR 트랩이 구체 사유를 덮어씀** — `#369`의 `insufficient build disk`가 DB에는
+   `unexpected error exit=1`로 기록되어, DB 기반 재분류 시 원인을 잃었다.
+   → `deploy_error_trap`이 `DEPLOY_LAST_FAIL_ERROR`를 우선 보존.

@@ -1164,8 +1164,16 @@ deploy_error_trap() {
     local line_no="${1:-unknown}"
     local command="${2:-unknown}"
     stop_downtime_monitor
-    deploy_phase_end "$DEPLOY_CURRENT_PHASE" "failed" "unexpected error exit=${exit_code} line=${line_no}: ${command:0:300}"
-    record_deploy "failed" "$MODE" "unexpected error exit=${exit_code} line=${line_no}: ${command:0:300}"
+    local detail="unexpected error exit=${exit_code} line=${line_no}: ${command:0:300}"
+    # AADS-191 후속: preflight 등에서 이미 구체 사유(insufficient build disk 등)를 기록한 뒤
+    # exit 1 이 ERR 트랩을 타면 일반 메시지가 실제 원인을 덮어써, 자가치유 분류가
+    # unexpected_exit(manual) 로 잘못 떨어졌다(2026-09-13 #369 실측). 구체 사유를 보존한다.
+    local last_fail="${DEPLOY_LAST_FAIL_ERROR:-}"
+    if [[ -n "${last_fail//[[:space:]]/}" ]]; then
+        detail="$last_fail"
+    fi
+    deploy_phase_end "$DEPLOY_CURRENT_PHASE" "failed" "$detail"
+    record_deploy "failed" "$MODE" "$detail"
 }
 
 trap 'deploy_error_trap "$LINENO" "$BASH_COMMAND"' ERR

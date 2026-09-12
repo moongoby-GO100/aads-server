@@ -76,6 +76,7 @@ def test_classify_deploy_failure(phase: str, err: str, expected: str):
         ("stale_heartbeat", "retry"),
         ("standby_sync_fail", "retry"),
         ("lock_wait_timeout", "retry"),
+        ("source_dir_missing", "retry"),
         ("mem_limit_mismatch", "manual"),
         ("unexpected_exit", "manual"),
         ("other", "manual"),
@@ -191,3 +192,94 @@ def test_worktree_is_never_mutated():
     src = AUTOHEAL_LIB.read_text(encoding="utf-8", errors="ignore")
     for forbidden in ("git stash", "git checkout", "git clean", "git reset"):
         assert forbidden not in src, f"자가치유가 작업 트리를 변경한다: {forbidden}"
+
+
+def _flaky_disk_stub(counter_path, fail_times: int) -> str:
+    """require_build_disk_free 가 fail_times 회 실패한 뒤 성공하도록 흉내낸다."""
+    return (
+        f'COUNTER="{counter_path}"\n'
+        'require_build_disk_free() {\n'
+        '    local n=0\n'
+        '    if [[ -f "$COUNTER" ]]; then n="$(cat "$COUNTER")"; fi\n'
+        '    n=$(( n + 1 ))\n'
+        '    echo "$n" > "$COUNTER"\n'
+        f'    if (( n <= {fail_times} )); then return 1; fi\n'
+        '    return 0\n'
+        '}\n'
+        'export AADS_DEPLOY_AUTOHEAL_DISK_RECHECK_SEC=0\n'
+    )
+
+
+def test_disk_recheck_waits_for_prune_to_settle(tmp_path):
+    """prune 은 비동기라 즉시 재확인하면 실패한다 — 정착을 기다린 뒤 복귀를 인정한다."""
+    counter = tmp_path / "calls"
+    out = _call("autoheal_wait_disk_recovery", env_prefix=_flaky_disk_stub(counter, 2))
+    assert "빌드 디스크 임계 복귀 확인 (3/6회차)" in out
+    assert counter.read_text().strip() == "3"
+
+
+def test_disk_recheck_gives_up_after_budget(tmp_path):
+    """계속 임계 미달이면 무한 대기하지 않고 실패로 끝낸다."""
+    counter = tmp_path / "calls"
+    env_prefix = _flaky_disk_stub(counter, 99) + "export AADS_DEPLOY_AUTOHEAL_DISK_RECHECKS=3\n"
+    out = _call('autoheal_wait_disk_recovery || echo "GAVE_UP"', env_prefix=env_prefix)
+    assert "GAVE_UP" in out
+    assert counter.read_text().strip() == "3"
+
+
+def _missing_source_env(tmp_path, compose_dir: str) -> str:
+    """릴리스 소스 판정만 보기 위해 DB·감사 로그를 막은 공통 환경."""
+    state_dir = tmp_path / "autoheal"
+    state_dir.mkdir(exist_ok=True)
+    return (
+        f'export AADS_DEPLOY_AUTOHEAL_STATE_DIR="{state_dir}"\n'
+        'export AADS_RELEASE_SHA="srcsha"\n'
+        'export AADS_DEPLOY_AUTOHEAL_DRYRUN=1\n'
+        'export AADS_DEPLOY_AUTOHEAL_COOLDOWN_SEC=0\n'
+        'export DEPLOY_CURRENT_PHASE="build_candidate_image"\n'
+        'export DEPLOY_LAST_FAIL_ERROR="unexpected error exit=1 line=1: docker compose up"\n'
+        f'COMPOSE_DIR="{compose_dir}"\n'
+        'audit_control() { :; }\n'
+        'deploy_db_available() { return 1; }\n'
+    )
+
+
+def test_missing_release_source_is_reclassified_and_retryable(tmp_path):
+    """사라진 릴리스 worktree 는 unexpected_exit(manual) 이 아니라 자동복구 대상이다."""
+    out = _call(
+        "deploy_autoheal_on_exit",
+        "1",
+        env_prefix=_missing_source_env(tmp_path, str(tmp_path / "gone")),
+    )
+    assert "분류를 source_dir_missing 으로 보정" in out
+    assert "cause=source_dir_missing" in out
+    assert "policy=retry" in out
+
+
+def test_present_release_source_keeps_unexpected_exit(tmp_path):
+    """소스가 멀쩡하면 기존 분류를 바꾸지 않는다(오탐 방지)."""
+    out = _call(
+        "deploy_autoheal_on_exit",
+        "1",
+        env_prefix=_missing_source_env(tmp_path, str(REPO_ROOT)),
+    )
+    assert "cause=unexpected_exit" in out
+    assert "source_dir_missing" not in out
+
+
+def test_recreate_release_worktree_refuses_operational_tree():
+    """운영 트리(STATE_DIR)를 릴리스 소스로 다시 만드는 일은 절대 하지 않는다."""
+    env_prefix = (
+        'export AADS_RELEASE_SHA="srcsha"\n'
+        f'COMPOSE_DIR="{REPO_ROOT}"\n'
+        f'STATE_DIR="{REPO_ROOT}"\n'
+    )
+    out = _call('autoheal_recreate_release_worktree || echo "REFUSED"', env_prefix=env_prefix)
+    assert "REFUSED" in out
+
+
+def test_error_trap_preserves_specific_failure_reason():
+    """ERR 트랩의 일반 메시지가 preflight 의 구체 사유를 덮어쓰면 안 된다."""
+    src = DEPLOY_SH.read_text(encoding="utf-8", errors="ignore")
+    assert 'local last_fail="${DEPLOY_LAST_FAIL_ERROR:-}"' in src
+    assert 'record_deploy "failed" "$MODE" "$detail"' in src
