@@ -3192,6 +3192,7 @@ async def _stream_cli_relay_once(
                     yield {"type": "error", "content": f"CLI Relay {resp.status_code}: {body.decode()[:200]}"}
                     return
 
+                _cli_interrupt_notified = False
                 async for line in resp.aiter_lines():
                     line = line.strip()
                     if not line:
@@ -3222,6 +3223,24 @@ async def _stream_cli_relay_once(
                         return
 
                     # _map_cli_event 재사용하여 NDJSON → AADS 이벤트 변환
+                    # 추가지시(인터럽트) 감지. CLI 는 stdin 이 닫혀 있어 실행 중 주입이
+                    # 불가하므로, 받았다는 사실만 즉시 알리고 실제 반영은 다음 요청에서
+                    # "[CEO 추가 지시]" 문맥과 함께 전달한다. 그동안 이 경로에는 인터럽트
+                    # 소비 자체가 없어 큐에 쌓인 지시가 방치되었다 — 구현은 LiteLLM
+                    # 경로에만 있었고 그 경로는 비활성 상태다.
+                    if session_id and not _cli_interrupt_notified:
+                        try:
+                            from app.core.interrupt_queue import has_interrupt
+                            if has_interrupt(session_id):
+                                _cli_interrupt_notified = True
+                                logger.info("cli_relay_interrupt_pending session=%s", session_id[:8])
+                                yield {
+                                    "type": "interrupt_applied",
+                                    "content": "추가 지시를 받았습니다. 현재 작업을 정리한 뒤 반영합니다.",
+                                }
+                        except Exception as _iq_err:
+                            logger.debug("interrupt peek failed: %s", str(_iq_err)[:100])
+
                     mapped = _map_cli_event(event, session_id=session_id)
                     if mapped is None:
                         # init 이벤트에서 session_id 캡처

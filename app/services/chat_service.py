@@ -422,6 +422,9 @@ def _should_auto_resume_interrupted_reason(reason: str) -> bool:
         return False
     blocked_tokens = (
         "CancelledError",
+        # done 없이 끝난 턴을 자동 재개하면 도구 수십 회를 다시 돌며 쿼터를 태운다.
+        # 사용자에게 미완료를 알리고 재지시 여부를 맡긴다(2026-09-12 설계 판단).
+        "completion_guard_no_done_event",
         "superseded",
         "newer_user",
         "new_execution",
@@ -2599,6 +2602,21 @@ def _log_stream_producer_exit(
     )
 
 
+_COMPLETION_SIGNAL_MARKERS = (
+    "최종 보고", "최종 결과", "결과 보고", "완료 보고", "수행 내역",
+    "작업 완료", "현재 작업은 완료", "미완료/주의", "다음 단계",
+    "커밋 완료", "배포 완료", "푸시 완료", "검증 완료", "테스트 완료",
+)
+
+
+def _has_completion_signal(text: str) -> bool:
+    """모델이 스스로 마무리를 선언한 흔적이 있는가."""
+    clean = _strip_streaming_progress_markers(text or "")
+    if len(clean.strip()) <= 400:
+        return False
+    return any(sig in clean for sig in _COMPLETION_SIGNAL_MARKERS)
+
+
 def _looks_like_incomplete_progress_tail(text: str) -> bool:
     clean = _strip_streaming_progress_markers(text or "").strip()
     if not clean:
@@ -2614,10 +2632,12 @@ def _looks_like_incomplete_progress_tail(text: str) -> bool:
     if len(clean) > 400 and any(sig in clean for sig in _COMPLETION_SIGNALS):
         return False
     tail = clean[-600:]
+    # 동사를 열거하지 않고 어미로 판정한다. 열거 방식은 새 동사가 나올 때마다 뚫렸다 —
+    # 2026-09-12 에 "…병렬로 수집하겠습니다." 가 목록에 없어 통과했고, 그 턴은 최종
+    # 산출물 없이 완료로 기록되었다. 한국어에서 "~하겠습니다/~겠습니다/~중입니다" 는
+    # 의도·진행을 뜻하므로, 마지막 문장이 여기서 끝나면 아직 하지 않은 것이다.
     progress_tail = re.search(
-        r"(?:이제|먼저|다음으로|추가로|바로|곧|현재)?\s*.{0,120}"
-        r"(?:확인|조회|점검|분석|파악|조사|검토|진행|실행|처리|수정|패치|적용|반영|준비|로드|읽겠|읽|찾|호출|우회|대조|비교|캡처|접속|연결|재시도|보고|정리)"
-        r"(?:하겠습니다|하겠습니|하겠|합니다|중입니다)\.?\s*$",
+        r"(?:하겠습니다|하겠습니|하겠|겠습니다|중입니다|하는 중|진행 중)\s*[.!\u2026]?\s*$",
         tail,
     )
     if progress_tail:
@@ -5566,9 +5586,23 @@ async def with_background_completion(
                     )
                 elif clean_content:
                     _guard_saw_done2 = bool(state.get("saw_done_event"))
-                    if not _guard_saw_done2 and _looks_like_incomplete_progress_tail(clean_content):
+                    # 완료 판정의 원칙은 "모델이 done 을 보냈는가" 다. done 이 없다는 건
+                    # 모델이 끝났다고 선언한 적이 없다는 뜻이므로 기본값은 미완료로 둔다.
+                    # 종전에는 꼬리 문구 검사만 통과하면 완료로 승격시켜, 도구 30회를
+                    # 쓰고 최종 산출물 없이 끊긴 턴이 조용히 "완료"로 기록되었다
+                    # (2026-09-12 세션 2c929b8e). 명시적 완료 신호가 있을 때만 예외로 인정한다.
+                    _guard_incomplete = (
+                        not _guard_saw_done2
+                        and (
+                            _looks_like_incomplete_progress_tail(clean_content)
+                            or not _has_completion_signal(clean_content)
+                        )
+                    )
+                    if _guard_incomplete:
                         reason = _stream_interrupt_diagnostic_reason(
-                            "completion_guard_incomplete_progress_tail",
+                            "completion_guard_no_done_event"
+                            if not _looks_like_incomplete_progress_tail(clean_content)
+                            else "completion_guard_incomplete_progress_tail",
                             state,
                         )
                         await _mark_execution_interrupted(
