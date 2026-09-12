@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AADS 문서 포털 — 교육자료 · 기획 · 보고서</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f172a;--card:#1e293b;--card-hover:#334155;--accent:#3b82f6;--accent2:#8b5cf6;
+--accent3:#06b6d4;--accent4:#f59e0b;--accent5:#10b981;--accent6:#ef4444;
+--text:#e2e8f0;--text2:#94a3b8;--border:#334155;--tag-bg:#1e293b}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh}
+.container{max-width:1200px;margin:0 auto;padding:24px 20px}
+header{text-align:center;padding:48px 0 32px;border-bottom:1px solid var(--border);margin-bottom:32px}
+header h1{font-size:2rem;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--accent2));
+-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px}
+header p{color:var(--text2);font-size:1rem}
+.stats{display:flex;gap:16px;justify-content:center;margin-top:20px;flex-wrap:wrap}
+.stat{background:var(--card);padding:12px 20px;border-radius:10px;text-align:center;min-width:100px}
+.stat .n{font-size:1.5rem;font-weight:700;color:var(--accent)}
+.stat .l{font-size:.75rem;color:var(--text2);margin-top:2px}
+.filter-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:24px;align-items:center}
+.filter-bar input{flex:1;min-width:200px;padding:10px 16px;border-radius:8px;border:1px solid var(--border);
+background:var(--card);color:var(--text);font-size:.95rem;outline:none}
+.filter-bar input:focus{border-color:var(--accent)}
+.filter-bar button{padding:8px 16px;border-radius:8px;border:1px solid var(--border);
+background:var(--card);color:var(--text2);cursor:pointer;font-size:.85rem;transition:.2s}
+.filter-bar button:hover,.filter-bar button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.section{margin-bottom:40px}
+.section-header{display:flex;align-items:center;gap:10px;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.section-icon{width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+.section-header h2{font-size:1.2rem;font-weight:600}
+.section-header .count{font-size:.8rem;color:var(--text2);margin-left:auto;
+background:var(--card);padding:2px 10px;border-radius:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;
+padding:20px;text-decoration:none;color:var(--text);transition:.2s;display:flex;flex-direction:column}
+.card:hover{background:var(--card-hover);border-color:var(--accent);transform:translateY(-2px);
+box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.card .title{font-size:.95rem;font-weight:600;margin-bottom:8px;line-height:1.4}
+.card .meta{display:flex;gap:8px;align-items:center;margin-top:auto;padding-top:10px;flex-wrap:wrap}
+.card .date{font-size:.75rem;color:var(--text2)}
+.card .size{font-size:.75rem;color:var(--text2);margin-left:auto}
+.tag{font-size:.7rem;padding:2px 8px;border-radius:4px;font-weight:500}
+.tag-edu{background:#3b82f620;color:#60a5fa}
+.tag-design{background:#8b5cf620;color:#a78bfa}
+.tag-mockup{background:#06b6d420;color:#22d3ee}
+.tag-analysis{background:#f59e0b20;color:#fbbf24}
+.tag-biz{background:#10b98120;color:#34d399}
+.tag-llm{background:#ef444420;color:#f87171}
+.tag-store{background:#ec489920;color:#f472b6}
+footer{text-align:center;padding:32px 0;color:var(--text2);font-size:.8rem;border-top:1px solid var(--border);margin-top:40px}
+@media(max-width:600px){.grid{grid-template-columns:1fr}header h1{font-size:1.5rem}.container{padding:16px 12px}}
+</style>
+</head>
+<body>
+<div class="container">
+<header>
+<h1>AADS 문서 포털</h1>
+<p>교육자료 · 기획/설계 · 기업분석 · 보고서 — 한곳에서 모두 열람</p>
+<div class="stats">
+<div class="stat"><div class="n" id="totalCount">34</div><div class="l">전체 문서</div></div>
+<div class="stat"><div class="n" id="eduCount">5</div><div class="l">교육자료</div></div>
+<div class="stat"><div class="n" id="designCount">6</div><div class="l">기획/설계</div></div>
+<div class="stat"><div class="n" id="analysisCount">6</div><div class="l">분석/보고</div></div>
+</div>
+</header>
+
+<div class="filter-bar">
+<input type="text" id="search" placeholder="문서 검색 (제목, 카테고리, 날짜)..." oninput="filterDocs()">
+<button class="active" onclick="setFilter('all',this)">전체</button>
+<button onclick="setFilter('edu',this)">교육자료</button>
+<button onclick="setFilter('design',this)">기획/설계</button>
+<button onclick="setFilter('mockup',this)">UI 목업</button>
+<button onclick="setFilter('analysis',this)">분석/보고</button>
+<button onclick="setFilter('biz',this)">사업</button>
+<button onclick="setFilter('store',this)">매장비서</button>
+</div>
+
+<div id="content"></div>
+
+<footer>
+AADS 문서 포털 · 최종 업데이트 2026-09-12 · 자동 생성
+</footer>
+</div>
+
+<script>
+const docs = [
+  // === 교육자료 ===
+  {cat:"edu",title:"AI 학습론 완전 이해",file:"20260910_ai_learning_theory_education.html",date:"2026-09-10",size:"53KB",desc:"사전학습·미세조정·RLHF·RAG·메모리 구분, AADS 적용 현황"},
+  {cat:"edu",title:"업무 지시·검수·재지시 멀티 에이전트 운영",file:"20260909_directive_review_rework_education.html",date:"2026-09-09",size:"83KB",desc:"지시서 작성·검수·재작업 오케스트레이션 교육"},
+  {cat:"edu",title:"멀티 에이전트 운영 기술 교육자료",file:"20260908_multi_agent_ops_education.html",date:"2026-09-08",size:"41KB",desc:"논문·공식문서 기반 멀티 에이전트 운영 전략"},
+  {cat:"edu",title:"AI 바이브코딩 핵심 교육자료",file:"20260908_ai_vibecoding_ohvis_education.html",date:"2026-09-08",size:"39KB",desc:"Hermes Gate, Harness, LangGraph, LangChain, LangSmith, Ops"},
+  {cat:"edu",title:"Wiki/지식화 최신 기술 교육자료",file:"20260908_wiki_knowledge_management_education.html",date:"2026-09-08",size:"38KB",desc:"RAG·GraphRAG·Temporal KG·MCP·Eval 기술 현황"},
+
+  // === 기획/설계 ===
+  {cat:"design",title:"ACCT 공용 회계·매장·경리·인사 비서 설계",file:"ACCT_HERMES_FOUNDATION_PRD_MOCKUP_20260909.html",date:"2026-09-09",size:"61KB",desc:"PRD·동작형 목업 포함"},
+  {cat:"design",title:"오비스 12축 오케스트레이션 아키텍처 v3",file:"ohvis-jarvis-beyond-control-plane-20260906.html",date:"2026-09-06",size:"97KB",desc:"Control Loop 통합·구현 자산 인벤토리"},
+  {cat:"design",title:"Objective Control Loop Phase 2",file:"ohvis-objective-control-loop-phase2-20260906.html",date:"2026-09-06",size:"39KB",desc:"오비스 목표 제어 루프 추가 조사"},
+  {cat:"design",title:"금융정보 자동수집 PC 에이전트 PRD",file:"20260907_finance_pc_collector_prd_design_tooling.html",date:"2026-09-07",size:"40KB",desc:"PC설치형 에이전트 설계·목업·Tool 셋업"},
+  {cat:"design",title:"AADS 스마트 커서 인스펙터 기획서 v2.0",file:"aads-smart-cursor-design-spec.html",date:"2026-07-15",size:"90KB",desc:"상세 구현 기획서"},
+  {cat:"design",title:"AADS Release Control + LLMOps Mockup",file:"20260907_langgraph_llmops_release_control_mockup.html",date:"2026-09-07",size:"7KB",desc:"LangGraph 기반 릴리스 제어"},
+
+  // === UI 목업 ===
+  {cat:"mockup",title:"AADS 응답 섹션카드 목업 v2.0",file:"20260908_response_section_card_mockup.html",date:"2026-09-08",size:"12KB",desc:"AADS-CRF 섹션카드 UI"},
+  {cat:"mockup",title:"CEO 8섹션 응답 — 섹션카드 목업 v2.0",file:"section_card_mockup_v2.html",date:"2026-09-07",size:"25KB",desc:"8섹션 플로우 목업"},
+  {cat:"mockup",title:"섹션카드 목업 v3 (통합 리포트형)",file:"section_card_mockup_v3.html",date:"2026-09-07",size:"19KB",desc:"통합 리포트형 UI"},
+  {cat:"mockup",title:"섹션카드 목업 v3.1 — 운영 폰트 동기화",file:"section_card_mockup_v3_1.html",date:"2026-09-07",size:"20KB",desc:"최종 폰트 동기화 버전"},
+
+  // === 기업분석/투자 ===
+  {cat:"analysis",title:"코그콤 · Re:Column 기업분석 보고서",file:"20260909_recolumn_cogcom_company_analysis.html",date:"2026-09-09",size:"64KB",desc:"2026년 기업분석"},
+  {cat:"analysis",title:"우리로(046970) 기업인텔리전스 허브",file:"wooriro-046970-intelligence-hub.html",date:"2026-09-09",size:"7KB",desc:"baseline·supplement 통합 허브"},
+  {cat:"analysis",title:"우리로(046970) 기업인텔리전스 baseline v1.0",file:"20260909_wooriro_046970_company_intelligence_baseline.html",date:"2026-09-09",size:"32KB",desc:"외부 공개용 상장사 기업분석"},
+  {cat:"analysis",title:"우리로(046970) 주가 방향 supplement v1",file:"20260909_wooriro_046970_stock_direction_supplement_v1.html",date:"2026-09-09",size:"9KB",desc:"주가 방향 관점 v1"},
+  {cat:"analysis",title:"우리로(046970) 주가 방향 분석 v2",file:"20260909_wooriro_046970_stock_direction_supplement_v2.html",date:"2026-09-09",size:"8KB",desc:"종가 보정 v2"},
+  {cat:"analysis",title:"AADS 최신 LLM 전수 분석 보고서",file:"llm-models-current.html",date:"2026-09-07",size:"399KB",desc:"LLM 모델 전수 비교 분석"},
+
+  // === 사업 보고서 ===
+  {cat:"biz",title:"블루샵 SNS 패션 트렌드 보고서",file:"blue_shop_sns_fashion_trend_report_20260612_1128.html",date:"2026-06-12",size:"7KB",desc:"SNS 패션 트렌드"},
+  {cat:"biz",title:"고명희 냉면 로고 디자인 시안 6종",file:"gomyunghee-naengmyeon-logo-proposals.html",date:"2026-08-03",size:"24KB",desc:"로고 시안"},
+  {cat:"biz",title:"냉면육수 OEM/ODM 제조공장 조사보고서",file:"naengmyeon_oem_report.html",date:"2026-08-04",size:"42KB",desc:"OEM/ODM 조사"},
+  {cat:"biz",title:"냉면육수 OEM 문의 이메일 초안",file:"naengmyeon_oem_email_draft.html",date:"2026-08-04",size:"33KB",desc:"이메일 초안"},
+  {cat:"biz",title:"Seoul Audio 구독자 성장 상세 기획서",file:"seoul-audio-subscriber-growth-plan-20260612.html",date:"2026-06-12",size:"39KB",desc:"구독자 성장 전략"},
+  {cat:"biz",title:"열정국밥 중화점 인수전환 체크리스트",file:"%EC%97%B4%EC%A0%95%EA%B5%AD%EB%B0%A5_%EC%A4%91%ED%99%94%EC%A0%90_%EC%9D%B8%EC%88%98%EC%A0%84%ED%99%98_%EC%B2%B4%ED%81%AC%EB%A6%AC%EC%8A%A4%ED%8A%B8.html",date:"2026-07-15",size:"53KB",desc:"법인설립~사업자등록 상세"},
+
+  // === 매장비서 ===
+  {cat:"store",title:"매장비서 아키텍처·디자인 기획서",file:"20260716_yeoljeong_store_assistant_architecture_design.html",date:"2026-07-16",size:"8KB",desc:"아키텍처 설계"},
+  {cat:"store",title:"매장비서 아키텍처·디자인 기획서 (상세)",file:"20260716_yeoljeong_store_assistant_architecture_design_plan.html",date:"2026-07-16",size:"22KB",desc:"상세 기획"},
+  {cat:"store",title:"매장비서 JSON 원장 DB 전환 설계",file:"20260716_yeoljeong_store_assistant_db_transition_plan.html",date:"2026-07-16",size:"7KB",desc:"DB 전환 설계"},
+  {cat:"store",title:"매장비서 문서 인덱스",file:"20260716_yeoljeong_store_assistant_docs_index.html",date:"2026-07-16",size:"5KB",desc:"문서 목록"},
+  {cat:"store",title:"매장비서 기술문서",file:"20260716_yeoljeong_store_assistant_technical.html",date:"2026-07-16",size:"7KB",desc:"기술 명세"},
+  {cat:"store",title:"매장비서 기술문서 (복본)",file:"20260716_yeoljeong_store_assistant_technical_doc.html",date:"2026-07-16",size:"7KB",desc:"기술 명세 복본"},
+  {cat:"store",title:"매장비서 A4 계약서 출력 E2E",file:"yeoljeong-contract-a4-e2e.html",date:"2026-07-16",size:"9KB",desc:"A4 인쇄 계약서 검증"}
+];
+
+const catMeta = {
+  edu:     {label:"교육자료",  icon:"📘",color:"var(--accent)",  tagClass:"tag-edu"},
+  design:  {label:"기획/설계", icon:"📐",color:"var(--accent2)", tagClass:"tag-design"},
+  mockup:  {label:"UI 목업",  icon:"🖥️",color:"var(--accent3)", tagClass:"tag-mockup"},
+  analysis:{label:"분석/보고", icon:"📊",color:"var(--accent4)", tagClass:"tag-analysis"},
+  biz:     {label:"사업",     icon:"💼",color:"var(--accent5)", tagClass:"tag-biz"},
+  llm:     {label:"LLM",     icon:"🤖",color:"var(--accent6)", tagClass:"tag-llm"},
+  store:   {label:"매장비서",  icon:"🏪",color:"#ec4899",       tagClass:"tag-store"}
+};
+
+let currentFilter = 'all';
+
+function setFilter(f, btn) {
+  currentFilter = f;
+  document.querySelectorAll('.filter-bar button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  filterDocs();
+}
+
+function filterDocs() {
+  const q = document.getElementById('search').value.toLowerCase();
+  const filtered = docs.filter(d => {
+    if (currentFilter !== 'all' && d.cat !== currentFilter) return false;
+    if (q) {
+      const hay = (d.title + d.desc + d.date + catMeta[d.cat].label).toLowerCase();
+      return hay.includes(q);
+    }
+    return true;
+  });
+  render(filtered);
+}
+
+function render(list) {
+  const groups = {};
+  const order = ['edu','design','mockup','analysis','biz','store'];
+  order.forEach(c => { groups[c] = []; });
+  list.forEach(d => { if (!groups[d.cat]) groups[d.cat]=[]; groups[d.cat].push(d); });
+
+  let html = '';
+  order.forEach(cat => {
+    const items = groups[cat];
+    if (!items || items.length === 0) return;
+    const m = catMeta[cat];
+    html += `<div class="section" data-cat="${cat}">
+      <div class="section-header">
+        <div class="section-icon" style="background:${m.color}20;color:${m.color}">${m.icon}</div>
+        <h2>${m.label}</h2>
+        <span class="count">${items.length}건</span>
+      </div>
+      <div class="grid">`;
+    items.forEach(d => {
+      const m2 = catMeta[d.cat];
+      html += `<a class="card" href="${d.file}" target="_blank">
+        <div class="title">${d.title}</div>
+        <div style="font-size:.8rem;color:var(--text2);margin-bottom:4px">${d.desc}</div>
+        <div class="meta">
+          <span class="tag ${m2.tagClass}">${m2.label}</span>
+          <span class="date">${d.date}</span>
+          <span class="size">${d.size}</span>
+        </div>
+      </a>`;
+    });
+    html += '</div></div>';
+  });
+
+  if (!html) html = '<p style="text-align:center;color:var(--text2);padding:40px">검색 결과가 없습니다.</p>';
+  document.getElementById('content').innerHTML = html;
+}
+
+filterDocs();
+</script>
+</body>
+</html>
