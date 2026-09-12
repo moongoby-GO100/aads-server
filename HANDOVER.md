@@ -1,5 +1,43 @@
 # AADS HANDOVER
 
+## 2026-09-13 07:35 KST — Chat modernization WP05 durable command lifecycle (R3)
+
+- **구현**: 채팅 명령(interrupt/stop/resume)의 상태 전이를 `chat_commands`에 내구성 있게 기록하고,
+  `Idempotency-Key` 기반 중복 실행 방지와 `owner_epoch` fencing을 추가했다. WP03의 owner_epoch,
+  WP04의 revision/checkpoint 계약을 그대로 사용하고 새 소유권 계약을 만들지 않았다.
+- **stable generation identity**: `chat_execution_generations`를 `UNIQUE (execution_id, owner_epoch)`로
+  키잉해 같은 fence로 재접속하면 항상 같은 `generation_id`가 나오고, lease 재획득(epoch+1)마다 새 세대가
+  시작된다. 세대 부여는 **DB 트리거**(`trg_chat_execution_a_generation`)로 처리해
+  `_claim_execution_lease`·`chat_repair`·resume 워커의 **Python 시그니처를 전혀 바꾸지 않았다**.
+  이로써 WP03 `activation_requires`의 `stable_generation_identity` 선행 조건이 충족된다.
+- **fail-closed**: epoch 역전, terminal 재전이, identity 변경, superseded 세대 재활성화, 키 재사용
+  (fingerprint 불일치), schema 미적용(503)을 모두 명시적으로 거부한다. 조용한 무시 경로는 없다.
+- **변경 파일**: `migrations/176_chat_command_lifecycle_and_generations.sql`(신규),
+  `app/services/chat_commands.py`(신규), `app/services/chat_protocol.py`(capability additive),
+  `app/models/chat.py`(모델 additive), `app/routers/chat.py`(엔드포인트 4종 additive),
+  `tests/unit/test_chat_modernization_wp05.py`(신규 29건).
+- **검증**: py_compile 4파일 통과. 변경 파일 ruff — 신규 2파일 잔여 0건(pre-commit 게이트
+  `--select F821,F811` 기준 전 변경파일 0건). 필터 단위 테스트를 host venv에서 실행해
+  **258 passed / 6 failed / 4 collection errors**, 동일 필터의 `origin/main`(19c984e8) 베이스라인이
+  **229 passed / 6 failed / 4 collection errors** — 실패·에러 집합이 완전히 동일하고 +29는 신규 WP05
+  테스트다(회귀 0건). `git diff --check` 클린.
+- **마이그레이션 실검증**: 운영 스키마를 schema-only 복제한 일회용 DB(`wp05_check`)에 174→176 적용,
+  176 재실행 무해(idempotent) 확인. 세대 안정성(동일 epoch 재claim시 동일 generation_id), epoch 증가시
+  새 세대+구세대 superseded, checkpoint가 실행 세대를 그대로 운반하는 것까지 실측했다. 문서화된
+  롤백 경로를 그대로 실행해 WP04 객체(`chat_execution_checkpoints`/`chat_session_revisions`/`chat_outbox`)와
+  기존 execution 행이 보존됨을 확인한 뒤 스크래치 DB를 삭제했다.
+- **미완료/리스크**:
+  1. `send`/`retry`는 SSE 스트리밍 응답이라 durable command로 settle할 수 없어 `/commands`에서
+     `chat_command_type_not_wired`(400)로 **fail-closed 거부**한다. 두 경로의 내구 식별자는 이번에 만든
+     generation이며, 스트리밍 핸들러가 자기 command 행을 settle하도록 배선하는 일은 다음 WP 과제다.
+  2. **배포·마이그레이션 미수행**(지시서상 금지). 운영 DB에는 174도 아직 미적용 상태다
+     (`to_regclass('chat_execution_checkpoints')` = NULL). 176은 174 선행이 필요하다.
+  3. v2 운영 플래그는 열지 않았다. `production_ready`는 여전히 False이며 WP05 광고는
+     `AADS_CHAT_WP05_MIGRATION_READY`로만 켜진다.
+  4. 브라우저 E2E 미실행 — 서버 전용 변경이고 신규 엔드포인트가 배포되지 않아 UI 표면이 없다.
+     라우트 등록은 단위 테스트로, 운영 무영향은 health-check HTTP 200 + 컨테이너 healthy로 대체 검증했다.
+  5. 이 작업 카드에 러너 `runner-1792bfad`가 queued 상태로 중복 접수돼 있다(직전 `runner-834a0e22`는
+     error 종료). 동일 카드 중복 실행 위험이 있어 별도 worktree/브랜치를 사용했다.
 
 - `18668fae`(phase-aware timeout fence)를 clean worktree에서 `origin/main`에 병합해 `41a7c131`로 푸시했다.
   운영 스크립트 `scripts/pipeline-runner.sh`를 동일 내용(d31eba87)으로 교체하고 active job 0건을 확인한 뒤

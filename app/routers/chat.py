@@ -14,10 +14,19 @@ from typing import Any, List, Optional
 from uuid import UUID
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.core.interrupt_queue import is_streaming, push_interrupt, set_streaming
 from app.auth import TenantRole, require_tenant_role
@@ -32,6 +41,10 @@ from app.models.chat import (
     ChatTodoBulkActionRequest,
     ChatTodoCreateRequest,
     ChatChangesV2Out,
+    ChatCommandOut,
+    ChatCommandRecoveryOut,
+    ChatCommandRequest,
+    ChatGenerationOut,
     ChatProjectionRepairOut,
     ChatProjectionRepairRequest,
     ChatProtocolCapabilitiesOut,
@@ -1873,6 +1886,225 @@ async def repair_session_projection(
             status_code=exc.status_code,
             detail={"code": exc.code, "message": str(exc)},
         ) from exc
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# WP05 durable command lifecycle / stable generation identity
+# ════════════════════════════════════════════════════════════════════════════════
+
+
+def _chat_command_http_error(exc: Any) -> HTTPException:
+    return HTTPException(
+        status_code=exc.status_code,
+        detail={"code": exc.code, "message": str(exc)},
+    )
+
+
+# ``send`` and ``retry`` answer with an SSE stream, so their durable identity is
+# the execution generation this work package introduces, not a JSON command
+# result.  Accepting them here would hand the client a command that nothing can
+# ever settle, so they fail closed until a later work package wires the
+# streaming handlers to settle their own command row.
+_DURABLE_COMMAND_HANDLERS = frozenset({"interrupt", "stop", "resume"})
+
+
+@router.post(
+    "/chat/sessions/{session_id}/commands",
+    response_model=ChatCommandOut,
+    tags=["chat-session"],
+)
+async def submit_chat_command(
+    session_id: UUID,
+    body: ChatCommandRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """Run one chat command exactly once, with a durable record of its outcome.
+
+    The command row commits before the side effect runs.  A client that retries
+    the same Idempotency-Key gets the stored result instead of a second
+    execution — and a key reused with a different body is rejected rather than
+    answered with the first request's result.
+    """
+    from app.services.chat_commands import (
+        ChatCommandError,
+        begin_command,
+        complete_command,
+        fail_command,
+        mark_command_running,
+    )
+
+    tenant_id_str = _tenant_id(context)
+    tenant_id = UUID(tenant_id_str)
+    if not await svc.get_session(str(session_id), tenant_id=tenant_id_str):
+        raise _NOT_FOUND("session")
+
+    try:
+        record, replayed = await begin_command(
+            tenant_id=tenant_id,
+            session_id=session_id,
+            command_type=body.command_type,
+            idempotency_key=idempotency_key,
+            payload=body.payload,
+        )
+    except ChatCommandError as exc:
+        raise _chat_command_http_error(exc) from exc
+
+    if replayed:
+        # Either the authoritative stored result, or an honest in-flight state.
+        # Both are returned without re-running the side effect.
+        return record.to_payload(replayed=True)
+
+    if body.command_type not in _DURABLE_COMMAND_HANDLERS:
+        await fail_command(
+            command_id=record.command_id,
+            tenant_id=tenant_id,
+            code="chat_command_type_not_wired",
+            message=(
+                f"{body.command_type} streams its result over SSE and is not "
+                "settleable as a durable command yet"
+            ),
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "chat_command_type_not_wired",
+                "message": (
+                    f"use the existing streaming route for {body.command_type}; "
+                    "durable commands currently cover "
+                    f"{sorted(_DURABLE_COMMAND_HANDLERS)}"
+                ),
+            },
+        )
+
+    try:
+        await mark_command_running(command_id=record.command_id, tenant_id=tenant_id)
+        if body.command_type == "interrupt":
+            result = await interrupt_session(
+                session_id=session_id,
+                req=InterruptRequest(**body.payload),
+                context=context,
+            )
+        elif body.command_type == "stop":
+            result = await stop_session_streaming(session_id=session_id, context=context)
+        else:
+            result = await resume_interrupted(
+                session_id=session_id,
+                payload=ResumeInterruptedRequest(**body.payload),
+                context=context,
+            )
+    except ValidationError as exc:
+        await fail_command(
+            command_id=record.command_id,
+            tenant_id=tenant_id,
+            code="invalid_chat_command_payload",
+            message=str(exc),
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_chat_command_payload",
+                "message": f"payload is not valid for command {body.command_type}",
+            },
+        ) from exc
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        await fail_command(
+            command_id=record.command_id,
+            tenant_id=tenant_id,
+            code=str(detail.get("code") or f"chat_command_http_{exc.status_code}"),
+            message=str(detail.get("message") or exc.detail),
+        )
+        raise
+    except Exception as exc:
+        await fail_command(
+            command_id=record.command_id,
+            tenant_id=tenant_id,
+            code="chat_command_handler_failed",
+            message=str(exc),
+        )
+        raise
+
+    settled = await complete_command(
+        command_id=record.command_id,
+        tenant_id=tenant_id,
+        result=result if isinstance(result, dict) else {"value": result},
+    )
+    return settled.to_payload(replayed=False)
+
+
+@router.get(
+    "/chat/sessions/{session_id}/commands/{command_id}",
+    response_model=ChatCommandOut,
+    tags=["chat-session"],
+)
+async def get_chat_command(
+    session_id: UUID,
+    command_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """Read a command's durable state after a reconnect, restart, or slot switch.
+
+    Read-only by construction: recovering an orphaned command is the explicit
+    sweep below, never a side effect of this GET.
+    """
+    from app.services.chat_commands import ChatCommandError, get_command
+
+    try:
+        record = await get_command(
+            command_id=command_id,
+            tenant_id=UUID(_tenant_id(context)),
+            session_id=session_id,
+        )
+    except ChatCommandError as exc:
+        raise _chat_command_http_error(exc) from exc
+    return record.to_payload()
+
+
+@router.get(
+    "/chat/executions/{execution_id}/generation",
+    response_model=ChatGenerationOut,
+    tags=["chat-session"],
+)
+async def get_execution_generation(
+    execution_id: UUID,
+    owner_epoch: Optional[str] = Query(None, pattern=r"^\d+$"),
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """Resolve the stable generation for an execution.
+
+    Without ``owner_epoch`` this returns the newest generation.  With one it
+    fails closed (409) when a newer epoch has already superseded it, which is
+    how a stale writer learns it lost the fence.
+    """
+    from app.services.chat_commands import ChatCommandError, resolve_generation
+
+    try:
+        record = await resolve_generation(
+            execution_id=execution_id,
+            tenant_id=UUID(_tenant_id(context)),
+            owner_epoch=owner_epoch,
+        )
+    except ChatCommandError as exc:
+        raise _chat_command_http_error(exc) from exc
+    return record.to_payload()
+
+
+@router.post(
+    "/chat/commands/recover",
+    response_model=ChatCommandRecoveryOut,
+    tags=["chat-session"],
+)
+async def recover_chat_commands(
+    limit: int = Query(50, ge=1, le=500),
+    grace_seconds: int = Query(900, ge=60, le=86400),
+    context: TenantContext = Depends(require_tenant_admin),
+):
+    """Explicit sweep that settles commands whose owning process disappeared."""
+    del context
+    from app.services.chat_commands import recover_orphaned_commands
+
+    return await recover_orphaned_commands(limit=limit, grace_seconds=grace_seconds)
 
 
 @router.get("/chat/sessions/{session_id}/streaming-status", response_model=StreamingStatusOut, tags=["chat-session"])

@@ -208,6 +208,7 @@ class ChatProtocolCapabilitiesOut(BaseModel):
     resume_cursor: Dict[str, Any] = Field(default_factory=dict)
     snapshot: Dict[str, Any] = Field(default_factory=dict)
     read_model: Dict[str, Any] = Field(default_factory=dict)
+    command_lifecycle: Dict[str, Any] = Field(default_factory=dict)
     legacy_compatibility: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -350,6 +351,72 @@ class ChatProjectionRepairOut(BaseModel):
     repaired: int = 0
     archived: int = 0
     status: Literal["repaired", "noop"]
+
+
+# ─── WP05 durable command lifecycle ──────────────────────────────────────────
+
+
+class ChatCommandRequest(BaseModel):
+    """Durable submission of one chat command.
+
+    ``payload`` is forwarded verbatim to the existing handler for that command
+    type, and is also what the idempotency fingerprint is computed over.
+    """
+
+    command_type: Literal["send", "interrupt", "resume", "retry", "stop"]
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatCommandOut(BaseModel):
+    """Durable state of one chat command; ``replayed`` marks an idempotent hit."""
+
+    schema_version: Literal[2] = 2
+    contract_version: Literal[2] = 2
+    command_id: uuid.UUID
+    session_id: uuid.UUID
+    command_type: Literal["send", "interrupt", "resume", "retry", "stop"]
+    idempotency_key: str
+    status: Literal["accepted", "running", "succeeded", "failed", "superseded"]
+    terminal: bool = False
+    replayed: bool = False
+    execution_id: Optional[uuid.UUID] = None
+    generation_id: Optional[uuid.UUID] = None
+    owner_epoch: str = Field(pattern=r"^\d+$")
+    attempt: int = 0
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
+class ChatGenerationOut(BaseModel):
+    """Stable generation identity keyed by (execution_id, owner_epoch)."""
+
+    schema_version: Literal[2] = 2
+    contract_version: Literal[2] = 2
+    generation_id: uuid.UUID
+    execution_id: uuid.UUID
+    session_id: uuid.UUID
+    owner_epoch: str = Field(pattern=r"^\d+$")
+    attempt: int = 1
+    status: Literal["active", "superseded", "completed", "failed"]
+    owner_instance: Optional[str] = None
+    command_id: Optional[uuid.UUID] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    superseded_by_epoch: Optional[str] = Field(None, pattern=r"^\d+$")
+
+
+class ChatCommandRecoveryOut(BaseModel):
+    """Result of one explicit orphaned-command sweep."""
+
+    scanned: int = 0
+    recovered_succeeded: int = 0
+    recovered_failed: int = 0
+    skipped: int = 0
+    inactive_slot_skipped: int = 0
+    schema_unavailable: int = 0
 
 
 # ─── Session Todo ────────────────────────────────────────────────────────────

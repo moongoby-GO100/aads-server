@@ -146,6 +146,7 @@ def compare_redis_event_ids(left: str, right: str) -> int:
 
 def chat_protocol_capabilities() -> dict[str, Any]:
     """Return the stable, additive capability advertisement."""
+    from app.services.chat_commands import wp05_migration_ready
     from app.services.chat_read_model import (
         chat_cursor_secret_configured,
         chat_cursor_ttl_seconds,
@@ -161,6 +162,7 @@ def chat_protocol_capabilities() -> dict[str, Any]:
         "AADS_CHAT_WP04_CROSS_VERSION_READY", ""
     ).lower() in {"1", "true", "yes"}
     cursor_secret_ready = chat_cursor_secret_configured()
+    command_lifecycle_ready = wp05_migration_ready()
     return {
         "contract_version": CHAT_CONTRACT_V2,
         "default_contract_version": DEFAULT_CHAT_CONTRACT_VERSION,
@@ -188,6 +190,9 @@ def chat_protocol_capabilities() -> dict[str, Any]:
             "chat.composite_cursor.v2",
             "chat.revision_outbox.v2",
             "chat.explicit_fenced_repair.v2",
+            "chat.command_lifecycle.v2",
+            "chat.command_idempotency.v2",
+            "chat.generation_identity.v2",
             "chat.legacy_sse.v1",
         ],
         "event_envelope": {
@@ -225,7 +230,12 @@ def chat_protocol_capabilities() -> dict[str, Any]:
             "retention_field": "retention_trimmed",
             "retention_boundary_field": "max_deleted_event_id",
             "coverage_atomic": migration_ready,
-            "generation_identity": "unavailable",
+            # WP05 keys generation identity by (execution_id, owner_epoch), so a
+            # reconnect to the same fence always resolves the same generation and
+            # every new lease claim starts a new one.
+            "generation_identity": (
+                "stable_per_owner_epoch" if command_lifecycle_ready else "unavailable"
+            ),
         },
         "read_model": {
             "view_endpoint": "/api/v1/chat/sessions/{session_id}/view",
@@ -246,6 +256,30 @@ def chat_protocol_capabilities() -> dict[str, Any]:
             ],
             "cursor_ttl_seconds": chat_cursor_ttl_seconds(),
             "get_is_read_only": True,
+        },
+        "command_lifecycle": {
+            "submit_endpoint": "/api/v1/chat/sessions/{session_id}/commands",
+            "state_endpoint": "/api/v1/chat/sessions/{session_id}/commands/{command_id}",
+            "generation_endpoint": "/api/v1/chat/executions/{execution_id}/generation",
+            "recovery_endpoint": "/api/v1/chat/commands/recover",
+            "idempotency_header": "Idempotency-Key",
+            "idempotency_scope": [
+                "tenant_id",
+                "session_id",
+                "command_type",
+                "idempotency_key",
+            ],
+            "key_reuse_policy": "fail_closed_on_fingerprint_mismatch",
+            "durable_command_types": ["interrupt", "stop", "resume"],
+            # send/retry answer over SSE; their durable identity is the
+            # generation, and settling their command row is not wired yet.
+            "streaming_command_types": ["send", "retry"],
+            "statuses": ["accepted", "running", "succeeded", "failed", "superseded"],
+            "terminal_statuses": ["succeeded", "failed", "superseded"],
+            "fence_field": "owner_epoch",
+            "generation_key": ["execution_id", "owner_epoch"],
+            "migration_ready": command_lifecycle_ready,
+            "production_ready": False,
         },
         "legacy_compatibility": {
             "default_contract_version": CHAT_CONTRACT_V1,
