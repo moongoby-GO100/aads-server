@@ -294,57 +294,59 @@ async def _notify_chat_session_disconnect(
     except Exception as exc:
         logger.warning("pc_agent_disconnect_observation_failed chat_suppressed=true: %s", exc)
 
-    # Preserve the former reporting path for auditability and rollback safety,
-    # while keeping it disabled by policy. session_reporter also rejects the
-    # same source/intent as defense in depth.
-    if _PC_AGENT_DISCONNECT_CHAT_REPORTS_ENABLED:
-        try:
-            session_id = await _latest_pc_agent_alert_session_id()
-            if session_id:
-                from app.services.session_reporter import post_session_report
+    try:
+        # Keep the former reporting implementation intact for auditability, but
+        # make target resolution impossible while the diagnostics-only policy is active.
+        session_id = (
+            await _latest_pc_agent_alert_session_id()
+            if _PC_AGENT_DISCONNECT_CHAT_REPORTS_ENABLED
+            else ""
+        )
+        if session_id:
+            from app.services.session_reporter import post_session_report
 
-                title = f"PC Agent 연결 끊김 자동 알림: {agent_id}"
-                body = (
-                    f"{observation}\n\n"
-                    "확인할 항목:\n"
-                    "- `/api/v1/pc-agent/diagnostics`로 최신 launcher/connection 상태 확인\n"
-                    "- `/api/v1/pc-agent/disconnect-stats`로 최근 24시간 원인 분포 확인\n"
-                    "- FOOD 자동수집 실행 중이면 중단 지점과 stale lock 여부 확인\n"
-                    "- 재연결 후 동일 작업을 재개할 수 있으면 세션 재사용으로 재시도"
-                )
-                reaction_prompt = (
-                    "[시스템] PC Agent 연결 끊김 자동 알림입니다. "
-                    "이 채팅 세션에서 diagnostics/disconnect-stats/수집 상태를 확인하고, "
-                    "가능한 조치를 실행한 뒤 CEO에게 원인과 조치 결과를 보고하세요.\n\n"
-                    f"agent_id={agent_id}\n"
-                    f"classification={json.dumps(classification, ensure_ascii=False)}\n"
-                    f"metadata={json.dumps(metadata, ensure_ascii=False)[:1200]}"
-                )
-                await post_session_report(
-                    session_id=session_id,
-                    title=title,
-                    body=body,
-                    status="warning" if severity != "critical" else "error",
-                    source="pc_agent_disconnect_monitor",
-                    project="FOOD",
-                    metadata={
-                        "agent_id": agent_id,
-                        "classification": classification,
-                        "disconnect_metadata": metadata,
-                        "auto_generated": True,
-                    },
-                    intent="pc_agent_alert",
-                    idempotency_key=alert_key,
-                    trigger_reaction=True,
-                    reaction_prompt=reaction_prompt,
-                )
-            else:
-                logger.info(
-                    "pc_agent_disconnect_session_report_skipped no_target_session agent_id=%s",
-                    agent_id,
-                )
-        except Exception as exc:
-            logger.warning("pc_agent_disconnect_session_report_failed: %s", exc)
+            title = f"PC Agent 연결 끊김 자동 알림: {agent_id}"
+            body = (
+                f"{observation}\n\n"
+                "확인할 항목:\n"
+                "- `/api/v1/pc-agent/diagnostics`로 최신 launcher/connection 상태 확인\n"
+                "- `/api/v1/pc-agent/disconnect-stats`로 최근 24시간 원인 분포 확인\n"
+                "- FOOD 자동수집 실행 중이면 중단 지점과 stale lock 여부 확인\n"
+                "- 재연결 후 동일 작업을 재개할 수 있으면 세션 재사용으로 재시도"
+            )
+            reaction_prompt = (
+                "[시스템] PC Agent 연결 끊김 자동 알림입니다. "
+                "이 채팅 세션에서 diagnostics/disconnect-stats/수집 상태를 확인하고, "
+                "가능한 조치를 실행한 뒤 CEO에게 원인과 조치 결과를 보고하세요.\n\n"
+                f"agent_id={agent_id}\n"
+                f"classification={json.dumps(classification, ensure_ascii=False)}\n"
+                f"metadata={json.dumps(metadata, ensure_ascii=False)[:1200]}"
+            )
+            await post_session_report(
+                session_id=session_id,
+                title=title,
+                body=body,
+                status="warning" if severity != "critical" else "error",
+                source="pc_agent_disconnect_monitor",
+                project="FOOD",
+                metadata={
+                    "agent_id": agent_id,
+                    "classification": classification,
+                    "disconnect_metadata": metadata,
+                    "auto_generated": True,
+                },
+                intent="pc_agent_alert",
+                idempotency_key=alert_key,
+                trigger_reaction=True,
+                reaction_prompt=reaction_prompt,
+            )
+        else:
+            logger.info(
+                "pc_agent_disconnect_session_report_suppressed policy=diagnostics_only agent_id=%s",
+                agent_id,
+            )
+    except Exception as exc:
+        logger.warning("pc_agent_disconnect_session_report_failed: %s", exc)
 
     if severity == "critical":
         try:
