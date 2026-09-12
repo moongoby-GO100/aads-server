@@ -111,6 +111,73 @@ require_build_disk_free() {
     audit_control "build-disk-preflight" "$check_path" "success" "available_kb=${avail_kb}; required_kb=${min_free_kb}"
 }
 
+# 배포마다 4.24GB 이미지가 쌓이는데 회수 절차가 없었다. 2026-09-12 에 7번
+# 빌드하자 /var/lib/docker 여유가 33GB → 15GB 로 말라 #340 이 빌드 직전에
+# 막혔다. 실행 중이 아닌 오래된 릴리스 이미지를 남길 개수만 두고 정리한다.
+prune_old_release_images() {
+    local keep repo in_use kept removed tag
+    keep="${AADS_DEPLOY_KEEP_IMAGES:-3}"
+    if [[ ! "$keep" =~ ^[0-9]+$ ]] || [[ "$keep" -lt 2 ]]; then
+        keep="3"
+    fi
+    in_use="$(docker ps -a --format '{{.Image}}' 2>/dev/null | sort -u)"
+    for repo in aads-server aads-dashboard; do
+        kept=0
+        removed=0
+        while read -r tag; do
+            [[ -z "$tag" ]] && continue
+            # 실행 중이거나 실행 예정인 이미지는 건드리지 않는다.
+            if grep -Fxq "$tag" <<< "$in_use"; then
+                continue
+            fi
+            case "$tag" in
+                *:latest|*:local) continue ;;
+            esac
+            if [[ "$kept" -lt "$keep" ]]; then
+                kept=$((kept + 1))
+                continue
+            fi
+            if docker rmi "$tag" >/dev/null 2>&1; then
+                removed=$((removed + 1))
+            fi
+        done < <(docker images "$repo" --format '{{.Repository}}:{{.Tag}}' 2>/dev/null)
+        if [[ "$removed" -gt 0 ]]; then
+            echo "[deploy.sh] 🧹 image retention: ${repo} removed=${removed} kept=${keep}"
+            audit_control "image-retention" "$repo" "success" "removed=${removed}; keep=${keep}"
+        fi
+    done
+}
+
+# 이미 양쪽 슬롯에 올라가 있는 릴리스를 다시 빌드하는 건 이미지 하나와 컷오버
+# 한 번을 헛되이 쓰는 일이다. 2026-09-12 #335 가 이미 라이브인 릴리스를 다시
+# 배포했고, 그만큼 디스크가 줄고 진행 중이던 채팅 턴이 한 번 더 끊겼다.
+reject_duplicate_live_release() {
+    local sha short img_blue img_green
+    sha="${AADS_RELEASE_SHA:-}"
+    [[ -z "$sha" ]] && return 0
+    if [[ "${AADS_DEPLOY_ALLOW_SAME_RELEASE:-0}" == "1" ]]; then
+        echo "[deploy.sh] same-release guard bypassed by AADS_DEPLOY_ALLOW_SAME_RELEASE=1"
+        return 0
+    fi
+    short="${sha:0:8}"
+    img_blue="$(docker inspect aads-server --format '{{.Config.Image}}' 2>/dev/null || true)"
+    img_green="$(docker inspect aads-server-green --format '{{.Config.Image}}' 2>/dev/null || true)"
+    # 양쪽 다 이 릴리스이고 둘 다 건강할 때만 막는다. 한쪽만 올라가 있으면
+    # standby 동기화가 남은 상태이므로 정상적인 복구 배포다.
+    if [[ "$img_blue" == *"$short"* && "$img_green" == *"$short"* ]]; then
+        local h_blue h_green
+        h_blue="$(docker inspect aads-server --format '{{.State.Health.Status}}' 2>/dev/null || true)"
+        h_green="$(docker inspect aads-server-green --format '{{.State.Health.Status}}' 2>/dev/null || true)"
+        if [[ "$h_blue" == "healthy" && "$h_green" == "healthy" ]]; then
+            echo "[deploy.sh] ⏭️ same release already live on both slots (${short}) — nothing to deploy"
+            audit_control "same-release-guard" "aads-server:${short}" "skipped" \
+                "blue=${img_blue}; green=${img_green}"
+            return 1
+        fi
+    fi
+    return 0
+}
+
 require_release_context_within_limit() {
     local max_context_mb context_mb
     max_context_mb="${AADS_DEPLOY_MAX_RELEASE_CONTEXT_MB:-1024}"
@@ -1365,6 +1432,21 @@ elif ! enforce_release_worktree_gate; then
     exit 1
 fi
 supersede_older_queued_deploy_requests
+
+# 검사는 앞으로 당긴다. 디스크 검사가 build_candidate_image 안에만 있어서,
+# #340 은 preflight·dependency_check·code_validation 을 모두 통과한 뒤 빌드
+# 직전에야 공간 부족으로 막혔다. 헛된 4단계를 걷기 전에 여기서 끝낸다.
+if ! reject_duplicate_live_release; then
+    deploy_phase_end "preflight" "skipped" "same release already live on both slots"
+    record_deploy "skipped" "$MODE" "same release already live on both slots"
+    exit 0
+fi
+prune_old_release_images
+if ! require_build_disk_free; then
+    deploy_phase_end "preflight" "blocked" "insufficient build disk"
+    record_deploy "blocked" "$MODE" "insufficient build disk"
+    exit 1
+fi
 
 # 텔레그램 알림 (환경변수 있으면 발송)
 notify() {
