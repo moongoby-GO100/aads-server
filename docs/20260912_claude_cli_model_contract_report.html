@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Claude CLI 모델 일치 개선·운영 검증 보고서</title><style>body{margin:0;background:#f5f7fa;color:#172536;font:16px/1.8 system-ui,sans-serif}main{max-width:1000px;margin:auto;padding:32px 22px;background:white;overflow-wrap:anywhere}h1{font-size:1.9rem}h2{border-top:1px solid #dbe2ec;padding-top:22px;margin-top:36px}h3{font-size:1.1rem;color:#244970}code{font-size:.9em;background:#edf1f6;padding:2px 4px;overflow-wrap:anywhere}a{color:#125aa3}table{border-collapse:collapse;width:100%;min-width:500px}td,th{padding:10px;border:1px solid #dbe2ec;text-align:left}.table-scroll{overflow-x:auto}li{margin:10px 0}@media(max-width:600px){main{padding:18px 14px}h1{font-size:1.5rem}}</style></head><body><main id="report"><h1>Claude CLI 설정·실행 모델 일치 개선 보고서</h1>
+<p>작성일: 2026-09-12. 범위: <code>/settings</code>의 Claude CLI 모델과 채팅 릴레이·Python/셸 러너 실행 경로. 배포 및 최종 검증 결과는 후속 절에 별도 기록한다.</p>
+<h2>1. 확인한 원인</h2>
+<ul>
+<li>API의 <code>claude-opus</code>는 Opus 5를 의미했지만 호스트 릴레이는 Opus 4.6으로 해석했다.</li>
+<li>릴레이는 등록되지 않은 모델을 오류로 처리하지 않고 <code>claude-opus-4-6</code>으로 실행했다. Sonnet 5와 Fable 계열도 영향을 받았다.</li>
+<li>Python/셸 러너는 명시된 전체 모델 ID를 <code>opus</code>·<code>sonnet</code> 등 이동 가능한 CLI 별칭으로 축약했다. 셸에는 이전 버전을 다른 버전으로 바꾸는 규칙도 있었다.</li>
+<li>최종 <code>modelUsage</code>의 첫 항목을 실제 모델로 기록했다. 이 항목이 하위 에이전트 모델일 수 있어 주 응답 모델의 증거로 부적절했다.</li>
+<li>CLI 재개 세션을 대화·계정으로만 구분해 모델 변경이 세션 경계에 반영되지 않았다.</li>
+</ul>
+<p>읽기 전용 감사 당시 운영 API와 호스트 릴레이 코드, 설정 API, CLI 버전 2.1.259, <code>chat_turn_executions</code> 및 릴레이 실행 로그를 대조했다. 최근 24시간 범위에서 Opus 5 요청/Opus 4.6 실행 완료 5건을 확인했다. 이는 당시 조사 범위의 수치이며 전체 장애 건수는 아니다. 과거 DB 기록을 소급 수정하지 않는다.</p>
+<h2>2. 요구사항·설계</h2>
+<ol>
+<li><code>scripts/claude_model_contract.py</code>를 API·호스트 릴레이·러너의 공통 모델 해석 규칙으로 사용한다. 표준 라이브러리만 사용하며 별도 서비스나 DB 변경이 필요 없다.</li>
+<li>명시된 전체 모델 ID는 버전을 유지한다. 허용 목록은 구문·정책 허용 목록이지 계정의 사용 권한 보장이 아니다. 새 모델은 목록·테스트·배포를 함께 갱신한다.</li>
+<li>알 수 없는 모델은 릴레이에서 HTTP 400으로 거부하고 CLI를 시작하지 않는다. API는 릴레이 계약 버전이 맞지 않으면 해당 릴레이 호출을 중단한다. 기존의 명시적 재시도·폴백 정책 자체를 없애지는 않는다.</li>
+<li>요청값, CLI 인자, 실제 응답 모델, 검증 여부, 불일치 여부, 사용 모델 목록을 구분한다. 실제 모델은 최상위 <code>assistant.message.model</code>에서 확인한다. <code>system.init</code>이나 집계 사용량만으로 확인 완료라고 기록하지 않는다.</li>
+<li>실제 모델을 확인하지 못했거나 하나의 호출에서 여러 주 모델이 관찰되면 <code>unverified</code>로 기록한다. 텍스트 출력 러너도 동일하다. 정확한 CLI 인자는 별도 실행 로그로 보존한다.</li>
+<li>API와 릴레이의 재개 키를 대화·계정·정규 모델 ID로 구분한다. 모델 변경 후 첫 요청은 기존 전체 문맥 전달 경로를 사용한다. 순차 배포 중 구형 API는 기존 재개 규칙을 유지한다.</li>
+<li>DB의 오래된 별칭 메타데이터가 명시된 버전을 다른 버전으로 바꾸지 못하도록 조회 단계에서도 동등성을 검사한다.</li>
+<li>전체 호출 사용량·비용을 첫 모델의 부분 집계로 덮어쓰지 않는다. 이 집계는 하위 에이전트까지 포함하므로 주 모델만의 비용으로 해석해서는 안 된다.</li>
+</ol>
+<div class="table-scroll"><table><thead><tr><th>설정/요청 ID</th><th>고정 실행 ID</th></tr></thead><tbody><tr><td><code>claude-opus</code>, <code>claude-opus-5</code>, CLI <code>opus</code></td><td><code>claude-opus-5</code></td></tr><tr><td><code>claude-opus-46</code>, <code>claude-opus-4-6</code></td><td><code>claude-opus-4-6</code></td></tr><tr><td><code>claude-sonnet</code></td><td><code>claude-sonnet-4-6</code> (기존 AADS 의미 유지)</td></tr><tr><td><code>claude-sonnet-5</code>, CLI <code>sonnet</code></td><td><code>claude-sonnet-5</code></td></tr><tr><td><code>claude-haiku</code>, CLI <code>haiku</code></td><td><code>claude-haiku-4-5-20251001</code></td></tr><tr><td><code>claude-fable-5</code></td><td><code>claude-fable-5</code></td></tr><tr><td><code>claude-fable-5-1</code>, <code>claude-fable-5.1</code>, <code>claude-fable-latest</code></td><td><code>claude-fable-5-1</code></td></tr></tbody></table></div>
+<h2>3. 검증·인수 기준</h2>
+<ul>
+<li>설정 모델별로 실제 subprocess 경계의 <code>--model</code> 인자를 검증한다. 가짜 CLI를 사용하므로 과금이나 고객 대화 변경이 없다.</li>
+<li>알 수 없는 모델은 subprocess를 시작하지 않는다.</li>
+<li>구형 릴레이 계약 차단, 계정/모델별 재개 격리, 과거 DB 별칭 차단을 테스트한다.</li>
+<li>하위 에이전트가 사용량 목록의 첫 항목인 경우에도 주 모델 판정이 바뀌지 않는다.</li>
+<li>응답 증거 누락·복수 주 모델은 확인 불가로 남는다.</li>
+<li>Python/셸 러너 및 원격 복사본 템플릿의 규칙 일치를 검사한다.</li>
+<li>원격 동기화는 공통 모듈을 먼저 설치하고 해시를 검증한다. 미커밋 작업 파일의 자동 배포를 차단한다.</li>
+<li>운영 반영은 릴레이 유휴 확인, 현재 운영 버전 기반 격리 릴리스, 후보 직접 health, 짧은 nginx 전환 잠금, 진행 중 스트림 종료, 동일 이미지 standby, 외부 health, 5분 오류 감시를 통과해야 완료로 판단한다.</li>
+</ul>
+<h2>4. 운영상 한계·주의사항</h2>
+<ul>
+<li>모델 ID 일치는 계정 권한·할당량·과금 가능 여부와 별개다. Fable을 실제 호출하는 유료 검증은 이 회귀 테스트에 포함하지 않는다.</li>
+<li>하위 에이전트는 기존 별도 Sonnet 정책을 유지한다. 따라서 <code>used_models</code>에 다른 모델이 있다는 사실만으로 주 모델 불일치로 판정하면 안 된다.</li>
+<li><code>unverified</code>는 실행 실패나 모델명 누락 버그가 아니라 증거 부족 표시다. 요청 모델을 실제 모델로 가장하는 것보다 보수적으로 기록한다.</li>
+<li>기존 UI의 모델 라벨을 실제 응답 검증 배지로 간주해서는 안 된다. 이번 변경은 실행 경로와 기록 정확성에 집중한다.</li>
+<li>장애 시 해당 호출의 요청 모델, CLI 인자, 응답 모델 증거 및 명시적 폴백 이력을 함께 확인한다. 실제 실행 증거 없이 과거 기록을 수정하지 않는다.</li>
+<li>원격 러너가 작업 중이면 강제 중단하지 않고 적용을 보류한다. 배포 상태는 소스 저장, 호스트 재시작, API 전환, 원격 러너 반영을 각각 구분한다.</li>
+</ul>
+<h2>5. 출처</h2>
+<ul>
+<li><a href="https://code.claude.com/docs/en/model-config" target="_blank" rel="noopener noreferrer">Anthropic Claude Code 모델 설정</a>: 전체 모델 ID로 버전 지정, 이동 별칭의 의미, 버전 요구사항, 재개 시 모델 및 Fable 과금 관련 주의사항. 2026-09-12 조회.</li>
+<li>내부 코드: <code>app/services/model_selector.py</code>, <code>app/services/model_registry.py</code>, <code>app/services/pipeline_runner_service.py</code>, <code>scripts/claude_relay_server.py</code>, <code>scripts/pipeline-runner.sh</code>, <code>scripts/sync_pipeline_runner_remote.sh</code>.</li>
+<li>운영 증거: <code>/api/v1/llm-models?provider=anthropic</code>, <code>/api/v1/settings/runner-models</code>, <code>/api/v1/settings/directive-models</code>, <code>chat_turn_executions.requested_model/actual_model</code>, <code>claude-relay.service</code>의 <code>CLI: model=</code> 로그. 인증 토큰과 고객 대화 원문은 문서에 포함하지 않았다.</li>
+</ul>
+<h2>6. 적용 상태</h2>
+<h3>확인 완료</h3>
+<ul>
+<li>소스 커밋 <code>a7edaffa</code>를 <code>origin/main</code>에 푸시했다. Python 러너 변경 일부는 공유 작업 공간에서 선행 커밋 <code>c534109a</code>에 함께 포함되어 있어, 배포 시 공통 모듈까지 포함된 후속 버전을 기준으로 확인했다.</li>
+<li>현재 운영 릴리스 <code>16877c21de45</code>가 <code>a7edaffa</code>를 포함하는 것을 Git 이력과 실행 중 컨테이너 코드로 확인했다. 이 릴리스는 병행 운영 배포로 반영되었으며, 본 작업에서 별도의 중복 전환·재시작은 수행하지 않았다.</li>
+<li>API 두 슬롯의 이미지 지문은 모두 <code>sha256:99c100f20e23b84e46da40e68e671a58ab5137b00c3488eecc2ed34134acea25</code>, health는 모두 <code>healthy</code>였다.</li>
+<li>운영 컨테이너에서 계약 버전 1, <code>claude-opus → claude-opus-5</code>, Python 러너의 Opus 5 유지, 명시된 Opus 4.8 버전 유지가 확인됐다.</li>
+<li>릴레이 실제 응답 로그에서 Opus 5 및 Fable 5의 요청·CLI 인자·주 응답 모델 일치를 확인했다. Haiku/Sonnet 하위 사용량이 함께 존재하는 사례에서도 주 모델 판정이 유지됐다. 이 관찰로 모든 계정·모든 모델의 가용성을 보장하지는 않는다.</li>
+<li>관련 회귀 테스트 112개, Claude 라우팅 집중 테스트 9개 통과. 별도 격리 릴리스 작업 공간에서도 같은 결과를 확인했다.</li>
+<li>2026-09-12 14:45:24–14:50:48 UTC(23:45:24–23:50:48 KST), 324초 동안 외부 health, 계약 버전, 두 슬롯 health·동일 지문·버전 불변을 확인했다. <code>/settings</code>, <code>/docs</code>, Claude 모델 목록 API, 러너 설정 API는 HTTP 200이었다.</li>
+<li>같은 감시 구간의 두 API 슬롯 표준 출력·표준 오류를 모두 검사하여 <code>level=(error|critical)</code>, <code>Traceback</code>, <code>CRITICAL</code> 패턴 0건을 확인했다. 이는 정의한 로그 패턴 범위의 검사이며 모든 종류의 오류가 없음을 보장하는 주장은 아니다.</li>
+<li>원격 러너 211 및 114의 공통 모듈 SHA-256은 로컬과 같은 <code>952cb127d5736a23d3d827f9bc4a63169f0621c50f61303a853e03e2b7c17455</code>였다. 두 원격 서비스는 스크립트 갱신 후 시작되어 <code>active</code>였으며, 각각 Opus 5/Fable 5.1 해석을 모델 호출 없이 확인했다. 로컬 러너도 갱신 후 시작된 <code>active</code> 상태였다.</li>
+<li>격리 릴리스 후보 <code>3e054f21</code>은 비교·복구 검토용 브랜치 <code>fix/claude-model-contract-release-20260912</code>로 보존했다. 그사이 더 최신 운영본에 수정이 포함되어, 오래된 기준 후보를 운영에 배포하지 않았다.</li>
+</ul>
+<h3>남은 제한 및 후속 조치</h3>
+<ul>
+<li>커밋 필수 훅의 Haiku 4.5 최소 응답 호출은 공급자 429 제한으로 통과하지 못했다. 코드 정적 검사·import 검사·관련 회귀 테스트는 통과했지만, <strong>모든 모델의 실제 생성 검증 완료로 선언하지 않는다.</strong> 할당량/계정 상태가 정상화된 후 같은 최소 응답 검사를 재실행해야 한다. 임의의 유료 계정 전환이나 추가 과금 설정은 하지 않았다.</li>
+<li>확장 테스트의 <code>test_call_stream_routes_registry_codex_backend_without_static_allowlist</code>는 기존 테스트 더블이 본문 없이 done만 반환해 기존 빈 응답 방어와 충돌했다. 수정 전 운영 기준 <code>cda0c79c</code>에서도 동일 실패를 재현했다. Claude 변경의 신규 회귀로 분류하지 않았으며 Codex 제품 코드를 임의 변경하지 않았다.</li>
+<li><code>unverified</code> 사례는 응답 모델 증거가 없다는 의미이며 성공·일치로 집계해서는 안 된다. CLI 실행 인자의 정확성과 공급자의 성공 응답 가용성은 별도로 감시한다.</li>
+</ul></main></body></html>
