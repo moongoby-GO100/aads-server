@@ -359,3 +359,77 @@ async def update_directive_model_config(req: _DirectiveModelConfigUpdate):
     invalidate_directive_model_cache()
     logger.info("directive_model_config_updated", count=len(req.configs))
     return {"status": "ok", "message": f"{len(req.configs)}개 역할 지시서 모델 설정 업데이트 완료"}
+
+
+# ── Directive Model Config (AADS-212) ──────────────────────
+
+class _DirectiveModelItem(BaseModel):
+    role: str = "generation"
+    models: List[str]
+    timeout_seconds: int = 60
+    max_tokens: int = 2000
+
+
+class _DirectiveModelConfigUpdate(BaseModel):
+    configs: List[_DirectiveModelItem]
+
+
+ROLE_LABELS = {"generation": "지시서 생성"}
+
+
+@router.get("/settings/directive-models")
+async def get_directive_model_config():
+    """지시서 생성 모델 우선순위 조회."""
+    import json as _json
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT role, models, timeout_seconds, max_tokens, updated_at, updated_by "
+            "FROM directive_model_config ORDER BY role"
+        )
+    configs = []
+    for r in rows:
+        raw = r["models"]
+        if isinstance(raw, str):
+            models = _json.loads(raw)
+        elif isinstance(raw, list):
+            models = raw
+        else:
+            models = list(raw) if raw else []
+        configs.append({
+            "role": r["role"],
+            "role_label": ROLE_LABELS.get(r["role"], r["role"]),
+            "models": models,
+            "timeout_seconds": r["timeout_seconds"],
+            "max_tokens": r["max_tokens"],
+            "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+            "updated_by": r["updated_by"],
+        })
+    return {"configs": configs}
+
+
+@router.put("/settings/directive-models")
+async def update_directive_model_config(req: _DirectiveModelConfigUpdate):
+    """지시서 생성 모델 우선순위 업데이트. CEO 대시보드에서 호출."""
+    import json as _json
+    from app.core.db_pool import get_pool
+    from app.services.directive_draft_service import invalidate_directive_model_cache
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            for item in req.configs:
+                await conn.execute(
+                    "INSERT INTO directive_model_config (role, models, timeout_seconds, max_tokens, updated_at, updated_by) "
+                    "VALUES ($1, $2::jsonb, $3, $4, NOW(), 'CEO') "
+                    "ON CONFLICT (role) DO UPDATE "
+                    "SET models = EXCLUDED.models, timeout_seconds = EXCLUDED.timeout_seconds, "
+                    "max_tokens = EXCLUDED.max_tokens, updated_at = NOW(), updated_by = 'CEO'",
+                    item.role,
+                    _json.dumps(item.models),
+                    item.timeout_seconds,
+                    item.max_tokens,
+                )
+    invalidate_directive_model_cache()
+    logger.info("directive_model_config_updated", count=len(req.configs))
+    return {"status": "ok", "message": f"{len(req.configs)}개 역할 지시서 모델 설정 업데이트 완료"}
