@@ -48,9 +48,19 @@ if str(_REPO_ROOT) not in sys.path:
 from scripts.claude_model_contract import (  # noqa: E402
     CONTRACT_VERSION, EXACT_MODEL_IDS, ModelObservation, resolve_model, session_key,
 )
+from app.core.claude_oauth_credentials import (  # noqa: E402
+    classify_auth_error,
+    read_slot_auth_status,
+    record_slot_validation,
+    redact_secret_text,
+)
 _CLAUDE_WRAPPER = Path(os.getenv(
     "CLAUDE_NONINTERACTIVE_WRAPPER",
     str(_REPO_ROOT / "scripts" / "claude-docker-wrapper.sh"),
+))
+_SLOT_CREDENTIAL_WRAPPER = Path(os.getenv(
+    "CLAUDE_SLOT_CREDENTIAL_WRAPPER",
+    str(_REPO_ROOT / "scripts" / "claude-slot-credentials-wrapper.sh"),
 ))
 MCP_TEMPLATE = Path(os.getenv(
     "MCP_CONFIG_TEMPLATE",
@@ -240,6 +250,8 @@ _OAUTH_STATE_PORTS = ("8100", "8102")
 # 양쪽 다 내려가 있는 순간(배포 교체 창)을 견디기 위한 마지막 성공값 캐시.
 _OAUTH_STATE_DISK_CACHE = Path(os.getenv(
     "CLAUDE_RELAY_OAUTH_CACHE_FILE", "/root/.claude-relay/oauth-state-cache.json"))
+_AUTH_VALIDATION_MAX_AGE_SEC = int(os.getenv(
+    "CLAUDE_AUTH_VALIDATION_MAX_AGE_SEC", "86400"))
 
 
 def _oauth_state_urls():
@@ -500,24 +512,77 @@ def _read_oauth_tokens():
     return token1, token2, current, label1, label2
 
 
-def _pick_token(preferred_slot=None):
+def _slot_auth_status(slot, env_fallback_available=False):
+    return read_slot_auth_status(
+        _slot_credentials_path(slot),
+        env_fallback_available=env_fallback_available,
+        max_validation_age_seconds=_AUTH_VALIDATION_MAX_AGE_SEC,
+    )
+
+
+def _record_slot_validation_safe(slot, ok, error=""):
+    try:
+        record_slot_validation(_slot_credentials_path(slot), ok=ok, error=error)
+    except OSError as exc:
+        logger.warning("slot validation state write failed slot=%s: %s", slot, exc)
+
+
+def _pick_auth(preferred_slot=None, allow_auth_recovery=False):
+    """Select refresh-capable slot credentials before any fixed env token."""
     global _last_429_slot
     token1, token2, current, label1, label2 = _read_oauth_tokens()
-    if preferred_slot:
-        slot = preferred_slot
+    explicitly_requested = preferred_slot in ("1", "2")
+    if explicitly_requested:
+        first_slot = preferred_slot
     elif _last_429_slot:
-        slot = "2" if _last_429_slot == 1 else "1"
+        first_slot = "2" if _last_429_slot == 1 else "1"
     else:
-        slot = current
-    if slot == "1" and token1:
-        return token1, "1", label1
-    elif slot == "2" and token2:
-        return token2, "2", label2
-    elif token1:
-        return token1, "1", label1
-    elif token2:
-        return token2, "2", label2
-    return "", "0", "none"
+        first_slot = current if current in ("1", "2") else "1"
+
+    tokens = {"1": token1, "2": token2}
+    labels = {"1": label1, "2": label2}
+    ordered_slots = [first_slot]
+    if not explicitly_requested:
+        ordered_slots.append("2" if first_slot == "1" else "1")
+    for slot in ordered_slots:
+        credential_path = _slot_credentials_path(slot)
+        status = _slot_auth_status(slot, env_fallback_available=bool(tokens[slot]))
+        terminal_auth_failure = status.get("status") in {
+            "revoked", "authentication_failed",
+        }
+        if status.get("refresh_capable") and (
+            allow_auth_recovery or not terminal_auth_failure
+        ):
+            return {
+                "token": "",
+                "slot": slot,
+                "label": labels[slot],
+                "source": "slot_credentials",
+                "status": status,
+            }
+        # Fixed access tokens are an explicit fallback only when the slot file
+        # is absent.  A malformed/incomplete credential must remain visible.
+        if not credential_path.exists() and tokens[slot]:
+            return {
+                "token": tokens[slot],
+                "slot": slot,
+                "label": labels[slot],
+                "source": "env_fallback",
+                "status": status,
+            }
+    return {
+        "token": "",
+        "slot": "0",
+        "label": "none",
+        "source": "none",
+        "status": {},
+    }
+
+
+def _pick_token(preferred_slot=None):
+    """Backward-compatible token tuple for switch/status helpers."""
+    auth = _pick_auth(preferred_slot=preferred_slot)
+    return auth["token"], auth["slot"], auth["label"]
 
 
 def _ensure_relay_home():
@@ -538,10 +603,10 @@ def _slot_credentials_path(slot):
 
 
 def _ensure_slot_home(slot):
-    """슬롯 전용 HOME 경로. 자격증명 파일이 없으면 None(= env 토큰 폴백)."""
+    """Return a slot HOME only for a complete access+refresh credential."""
     if not slot or str(slot) in ("0", "none", "proxy"):
         return None
-    if not _slot_credentials_path(slot).is_file():
+    if not _slot_auth_status(slot).get("refresh_capable"):
         return None
     settings_file = _slot_home_path(slot) / ".claude" / "settings.json"
     try:
@@ -554,12 +619,12 @@ def _ensure_slot_home(slot):
 
 
 def _claude_argv_for_slot(claude_meta, slot):
-    """호스트에서 CLI를 직접 실행할 때만 래퍼를 우회한다.
+    """Use the slot persistence wrapper for a host CLI credential run.
 
     /usr/local/bin/claude 래퍼는 CLAUDE_CODE_OAUTH_TOKEN 이 비어 있으면
     /root/.claude/current.env 의 토큰을 주입하므로, 슬롯 자격증명 파일이
-    무시된다. 단 docker_wrapper 모드에서는 CLI가 컨테이너 안에서 돌기 때문에
-    이 우회가 성립하지 않는다(아래 _build_claude_env 주석 참조).
+    무시된다. 호스트 모드도 별도 HOME에서 실행한 뒤 검증된 credential만
+    원본 경로에 atomic replace한다.
     """
     argv = list((claude_meta or {}).get("argv", []) or [])
     if (claude_meta or {}).get("mode") == "docker_wrapper":
@@ -567,20 +632,16 @@ def _claude_argv_for_slot(claude_meta, slot):
     if not _ensure_slot_home(slot):
         return argv
     if argv and argv[0] == str(_CLAUDE_WRAPPER) and _REAL_CLAUDE_BIN.exists():
-        return [str(_REAL_CLAUDE_BIN)] + argv[1:]
-    return argv
+        argv = [str(_REAL_CLAUDE_BIN)] + argv[1:]
+    return [str(_SLOT_CREDENTIAL_WRAPPER)] + argv
 
 
 def _build_claude_env(token, slot=None, cli_mode=""):
     """CLI 실행 환경.
 
-    docker_wrapper 모드에서는 CLI가 컨테이너 안에서 돈다. 이때 호스트의 HOME 은
-    전달되지 않고(claude-docker-wrapper.sh 는 CLAUDE_CODE_OAUTH_TOKEN 만
-    -e 로 넘긴다), 컨테이너의 claude-oauth-wrapper.sh 가 HOME 을
-    /tmp/.claude-sdk 로 고정한다. 따라서 슬롯별 자격증명 파일은 CLI에 닿지
-    않으며, 토큰을 비우면 컨테이너 .env 의 ANTHROPIC_AUTH_TOKEN(=slot1)으로
-    폴백되어 모든 요청이 slot1 로만 흐른다. 컨테이너 래퍼 주석이 경고하는
-    바로 그 회귀다 — 이 모드에서는 슬롯 토큰을 반드시 주입해야 한다.
+    Complete slot credentials are passed by path to the Docker/host isolation
+    wrapper, which lets the CLI refresh without an env token override. A fixed
+    access token is retained only for a slot whose credential file is absent.
     """
     if not _DIRECT_OAUTH_ENABLED:
         return dict(os.environ, CLAUDE_CODE_MAX_OUTPUT_TOKENS="16384")
@@ -590,18 +651,30 @@ def _build_claude_env(token, slot=None, cli_mode=""):
               "NVM_DIR", "NVM_BIN", "NVM_INC"):
         if k in os.environ:
             env[k] = os.environ[k]
-    in_container = cli_mode == "docker_wrapper"
-    slot_home = "" if in_container else _ensure_slot_home(slot)
+    slot_home = _ensure_slot_home(slot)
+    auth_source = "env_token"
     if slot_home:
-        # 호스트 실행 + 슬롯 자격증명 파일: CLI가 refreshToken 으로 만료분을
-        # 스스로 갱신한다. env 토큰은 파일보다 우선하므로 주입하지 않는다.
+        # Docker/host 래퍼가 격리 HOME에 credential을 staging하고 CLI의
+        # refresh 결과를 검증 후 atomic replace한다. env 토큰은 주입하지 않는다.
         env["HOME"] = slot_home
         env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        env["CLAUDE_OAUTH_SLOT"] = str(slot)
+        env["CLAUDE_SLOT_CREDENTIALS_FILE"] = str(_slot_credentials_path(slot))
+        env["CLAUDE_SLOT_CREDENTIAL_LOCK_FILE"] = str(
+            _slot_credentials_path(slot).with_name(".credentials.lock")
+        )
+        auth_source = "slot_credentials"
+    elif slot in ("1", "2") and _slot_credentials_path(slot).exists():
+        # Do not hide a malformed credential behind a potentially stale env
+        # access token. _pick_auth normally excludes this slot before execution.
+        env["HOME"] = _ensure_relay_home()
+        env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        auth_source = "invalid_slot_credentials"
     else:
         env["HOME"] = _ensure_relay_home()
         env["CLAUDE_CODE_OAUTH_TOKEN"] = token
     logger.info("claude_auth_source=%s slot=%s cli_mode=%s",
-                "slot_credentials" if slot_home else "env_token",
+                auth_source,
                 slot or "-", cli_mode or "-")
     env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "16384"
     return env
@@ -1377,12 +1450,28 @@ async def handle_stream(request):
     observation = ModelObservation(body.get("requested_model", model), cli_model)
 
     # 세션 조회가 슬롯을 키에 쓰므로 토큰/슬롯 결정이 먼저다.
+    auth_source = "proxy"
+    force_oauth_refresh = bool(body.get("force_oauth_refresh"))
     if _DIRECT_OAUTH_ENABLED:
         requested_slot = body.get("oauth_slot")
-        token, slot, label = _pick_token(preferred_slot=requested_slot)
-        if not token:
-            return web.json_response({"error": "no OAuth token available"}, status=500)
-        logger.info("Direct OAuth: slot=%s label=%s (requested=%s)", slot, label, requested_slot or "auto")
+        selected_auth = _pick_auth(
+            preferred_slot=requested_slot,
+            allow_auth_recovery=force_oauth_refresh,
+        )
+        token = selected_auth["token"]
+        slot = selected_auth["slot"]
+        label = selected_auth["label"]
+        auth_source = selected_auth["source"]
+        if auth_source == "none":
+            return web.json_response({
+                "error": "OAuth credentials missing or invalid",
+                "error_type": "oauth_credentials_unavailable",
+                "requested_slot": requested_slot or "auto",
+            }, status=401)
+        logger.info(
+            "Direct OAuth: slot=%s label=%s source=%s (requested=%s)",
+            slot, label, auth_source, requested_slot or "auto",
+        )
     else:
         token, slot, label = "", "0", "proxy"
 
@@ -1411,6 +1500,19 @@ async def handle_stream(request):
                     "error_type": claude_preflight.get("error_type", "preflight_failed"),
                     "detail": claude_preflight.get("detail", ""),
                 }, status=503)
+            if (
+                auth_source == "slot_credentials"
+                and claude_meta.get("mode") != "docker_wrapper"
+            ):
+                slot_wrapper_preflight = _preflight_cli_command({
+                    "resolved": str(_SLOT_CREDENTIAL_WRAPPER),
+                })
+                if not slot_wrapper_preflight.get("ok"):
+                    return web.json_response({
+                        "error": "claude_slot_wrapper_preflight_failed",
+                        "error_type": slot_wrapper_preflight.get("error_type", "preflight_failed"),
+                        "detail": slot_wrapper_preflight.get("detail", ""),
+                    }, status=503)
 
             mcp_template = _load_mcp_template(aads_session_id)
             servers = mcp_template.setdefault("mcpServers", {})
@@ -1491,6 +1593,8 @@ async def handle_stream(request):
                         (mcp_diag or {}).get("path_mode", "unknown"))
 
             cli_env = _build_claude_env(token, slot, claude_meta.get("mode", ""))
+            if force_oauth_refresh:
+                cli_env["CLAUDE_SLOT_FORCE_EXCLUSIVE_LOCK"] = "1"
             # AADS-191B-8B: coreutils timeout으로 cmd 감싸기 — OS 레벨 hard kill 안전망
             # Python wait_for가 실패해도, relay가 crash해도, 시간 초과 시 자식 프로세스가 자체 종료됨.
             if _OS_TIMEOUT_ENABLED and os.path.isfile(_OS_TIMEOUT_BIN):
@@ -1510,6 +1614,9 @@ async def handle_stream(request):
             await proc.stdin.drain()
             proc.stdin.close()
             captured_cli_session_id = None
+            saw_result = False
+            last_result_error = ""
+            stderr_text = ""
 
             try:
                 async for raw_line in _iter_ndjson_lines(proc.stdout, timeout_sec=600):
@@ -1523,6 +1630,19 @@ async def handle_stream(request):
                     event["aads_model_contract"] = evidence
                     line_to_write = json.dumps(event).encode("utf-8")
                     if evt_type == "result":
+                        saw_result = True
+                        if event.get("is_error"):
+                            last_result_error = redact_secret_text(event.get("result", "CLI error"))
+                            event["result"] = last_result_error
+                            if (
+                                auth_source == "slot_credentials"
+                                and classify_auth_error(last_result_error) != "error"
+                            ):
+                                _record_slot_validation_safe(
+                                    slot, ok=False, error=last_result_error,
+                                )
+                        elif auth_source == "slot_credentials":
+                            _record_slot_validation_safe(slot, ok=True)
                         log = logger.error if evidence["model_mismatch"] else logger.info
                         log("claude_model_execution: session=%s evidence=%s", aads_session_id, json.dumps(evidence))
                     if evt_type == "system" and event.get("subtype") == "init":
@@ -1556,9 +1676,10 @@ async def handle_stream(request):
                     logger.info("CLI timeout write skipped: client already closed aads=%s", aads_session_id[:8])
                 proc.kill()
             except Exception as e:
-                logger.error("Stream error: %s", e)
+                safe_error = redact_secret_text(e)
+                logger.error("Stream error: %s", safe_error)
                 try:
-                    await _stream_write(response, json.dumps({"type": "error", "content": str(e)}).encode() + b"\n")
+                    await _stream_write(response, json.dumps({"type": "error", "content": safe_error}).encode() + b"\n")
                 except ConnectionResetError:
                     logger.info("CLI stream error write skipped: client already closed aads=%s", aads_session_id[:8])
             finally:
@@ -1589,7 +1710,9 @@ async def handle_stream(request):
                         except (ProcessLookupError, Exception):
                             pass
                     if stderr_bytes:
-                        stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+                        stderr_text = redact_secret_text(
+                            stderr_bytes.decode("utf-8", errors="replace")
+                        )
                         if proc.returncode not in (None, 0):
                             logger.warning("CLI stderr(exit=%s): %s", proc.returncode, stderr_text[:1200])
                         else:
@@ -1604,6 +1727,33 @@ async def handle_stream(request):
 
             if proc.returncode != 0:
                 logger.warning("CLI exited %s (slot=%s, resume=%s)", proc.returncode, slot, is_resume)
+                if auth_source == "slot_credentials" and classify_auth_error(stderr_text or last_result_error) != "error":
+                    _record_slot_validation_safe(
+                        slot,
+                        ok=False,
+                        error=stderr_text or last_result_error,
+                    )
+                if not saw_result:
+                    safe_failure = redact_secret_text(
+                        stderr_text
+                        or "CLI exited with code %s" % proc.returncode
+                    )[:1200]
+                    failure_event = {
+                        "type": "result",
+                        "subtype": "error_during_execution",
+                        "is_error": True,
+                        "result": safe_failure,
+                        "aads_model_contract": observation.observe({"type": "result"}),
+                    }
+                    try:
+                        await _stream_write(
+                            response, json.dumps(failure_event).encode("utf-8") + b"\n",
+                        )
+                    except ConnectionResetError:
+                        logger.info(
+                            "CLI failure event skipped: client already closed aads=%s",
+                            aads_session_id[:8],
+                        )
                 _stale_key = _session_key(aads_session_id, slot, resume_model)
                 if is_resume and _stale_key and _stale_key in _session_map:
                     del _session_map[_stale_key]
@@ -2245,10 +2395,20 @@ async def handle_health(request):
               "max_lease_sec": _MAX_LEASE_SEC,
               "os_timeout_enabled": _OS_TIMEOUT_ENABLED}
     if _DIRECT_OAUTH_ENABLED:
-        token, slot, label = _pick_token()
-        health.update({"oauth_slot": slot, "oauth_label": label, "token_available": bool(token),
+        selected_auth = _pick_auth()
+        token1, token2, _current, _label1, _label2 = _read_oauth_tokens()
+        env_tokens = {"1": token1, "2": token2}
+        health.update({"oauth_slot": selected_auth["slot"],
+                       "oauth_label": selected_auth["label"],
+                       "oauth_source": selected_auth["source"],
+                       "token_available": selected_auth["source"] != "none",
                        "slot_credentials": {
                            s: _slot_credentials_path(s).is_file() for s in ("1", "2")
+                       },
+                       "slot_auth": {
+                           s: _slot_auth_status(
+                               s, env_fallback_available=bool(env_tokens[s])
+                           ) for s in ("1", "2")
                        }})
     return web.json_response(health)
 
@@ -2435,8 +2595,14 @@ async def handle_oauth_switch(request):
     _last_429_slot = 0
     _DB_OAUTH_CACHE["rows"] = None
     _DB_OAUTH_CACHE["ts"] = 0
-    token, cur_slot, label = _pick_token()
-    return web.json_response({"ok": True, "slot": cur_slot, "label": label, "token_available": bool(token)})
+    selected_auth = _pick_auth()
+    return web.json_response({
+        "ok": True,
+        "slot": selected_auth["slot"],
+        "label": selected_auth["label"],
+        "auth_source": selected_auth["source"],
+        "token_available": selected_auth["source"] != "none",
+    })
 
 
 async def handle_sessions(request):
@@ -2523,10 +2689,17 @@ def main():
     if _DIRECT_OAUTH_ENABLED:
         _ensure_relay_home()
         for _s in ("1", "2"):
-            logger.info("slot%s auth source: %s", _s,
-                        "slot_credentials" if _slot_credentials_path(_s).is_file() else "env_token")
-        token, slot, label = _pick_token()
-        logger.info("OAuth ready: slot=%s label=%s ok=%s", slot, label, bool(token))
+            _status = _slot_auth_status(_s)
+            logger.info(
+                "slot%s auth source=%s status=%s refresh_capable=%s",
+                _s, _status["source"], _status["status"], _status["refresh_capable"],
+            )
+        selected_auth = _pick_auth()
+        logger.info(
+            "OAuth ready: slot=%s label=%s source=%s ok=%s",
+            selected_auth["slot"], selected_auth["label"], selected_auth["source"],
+            selected_auth["source"] != "none",
+        )
     app = create_app()
     web.run_app(app, host="0.0.0.0", port=PORT, access_log=logger)
 

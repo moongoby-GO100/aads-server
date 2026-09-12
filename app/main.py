@@ -1346,26 +1346,40 @@ async def lifespan(app: FastAPI):
         # ──────────────────────────────────────────────
         async def _auth_daily_check():
             """인증 토큰 유효성 일일 자동 점검 + 텔레그램 보고"""
-            import os, httpx, asyncio
+            import os, httpx
             from datetime import datetime
             from zoneinfo import ZoneInfo
+            from app.core.claude_oauth_credentials import format_auth001_slot
             kst = ZoneInfo("Asia/Seoul")
             now_kst = datetime.now(kst).strftime("%Y-%m-%d %H:%M KST")
             results = []
 
-            # 1) 토큰 환경변수 존재 확인
-            token1 = os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
-            token2 = os.environ.get("ANTHROPIC_AUTH_TOKEN_2", "")
-            token_status = []
-            if token1:
-                token_status.append(f"TOKEN_1: {'✅' if 'sk-ant-oat01-' in token1 else '⚠️형식이상'}")
-            else:
-                token_status.append("TOKEN_1: ❌없음")
-            if token2:
-                token_status.append(f"TOKEN_2: {'✅' if 'sk-ant-oat01-' in token2 else '⚠️형식이상'}")
-            else:
-                token_status.append("TOKEN_2: ❌없음")
-            results.extend(token_status)
+            # 1) 릴레이가 credential의 만료/refresh 가능 여부와 최근 실제 CLI
+            # 검증 결과를 secret-free metadata로 제공한다. env 문자열 prefix는
+            # revoked/expired를 구분할 수 없으므로 정상 판정 근거로 쓰지 않는다.
+            relay_url = os.environ.get(
+                "CLAUDE_RELAY_URL", "http://host.docker.internal:8199"
+            ).rstrip("/")
+            try:
+                async with httpx.AsyncClient(timeout=5) as c:
+                    relay_response = await c.get(f"{relay_url}/health")
+                relay_response.raise_for_status()
+                relay_health = relay_response.json()
+                slot_auth = relay_health.get("slot_auth") or {}
+                for slot in ("1", "2"):
+                    status = slot_auth.get(slot)
+                    if isinstance(status, dict):
+                        results.append(format_auth001_slot(slot, status))
+                    else:
+                        results.append(
+                            f"CLAUDE_SLOT_{slot}: ❌relay credential metadata unavailable"
+                        )
+            except Exception as e:
+                results.extend([
+                    "CLAUDE_SLOT_1: ❌relay health unavailable",
+                    "CLAUDE_SLOT_2: ❌relay health unavailable",
+                ])
+                logger.warning(f"auth_daily_check relay health failed: {str(e)[:120]}")
 
             # 2) LiteLLM 연결 확인
             litellm_url = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000")

@@ -24,6 +24,10 @@ import asyncpg  # noqa: E402
 import httpx  # noqa: E402
 from anthropic import AsyncAnthropic, APIStatusError, APIConnectionError, RateLimitError  # noqa: E402
 from app.config import Settings  # noqa: E402
+from app.core.claude_oauth_credentials import (  # noqa: E402
+    classify_auth_error as _classify_claude_auth_error,
+    redact_secret_text as _redact_secret_text,
+)
 from app.core.llm_key_provider import get_api_key as _get_db_key, get_provider_keys as _get_provider_keys  # noqa: E402
 from app.services.model_registry import get_executable_model_ids as _get_registry_executable_model_ids  # noqa: E402
 from app.services.model_registry import list_registered_models as _list_registered_models  # noqa: E402
@@ -2181,12 +2185,17 @@ async def call_stream(
                 if _s not in _smart_slots:
                     _smart_slots.append(_s)
 
+        _auth_failed_slots = set()
+
         async def _stream_with_slots(_target_model: str) -> AsyncGenerator[Dict[str, Any], None]:
             for _si, _slot in enumerate(_smart_slots):
+                if _slot in _auth_failed_slots:
+                    continue
                 if _si > 0:
                     logger.info(f"fallback[{_si}/{len(_smart_slots)}]: {_target_model} slot={_slot}")
 
                 _err = False
+                _err_msg = ""
                 async for event in _stream_cli_relay(_target_model, system_prompt, messages, tools=tools, session_id=session_id, oauth_slot=_slot):
                     if event.get("type") == "error":
                         _err = True
@@ -2199,6 +2208,8 @@ async def call_stream(
                             if _slot_key:
                                 await _mark_key_rate_limited(_slot_key, seconds=_reset_secs)
                             logger.warning("quota_reset_parsed: slot=%s seconds=%d msg=%s", _slot, _reset_secs, _err_msg[:120])
+                        elif _is_cli_auth_error(_err_msg):
+                            _auth_failed_slots.add(_slot)
                         break
                     yield event
                 if not _err:
@@ -2206,7 +2217,7 @@ async def call_stream(
 
                 await _relay_clear_aads_session_for_oauth_fallback(session_id)
 
-                if _slot == _ACCOUNT_SLOTS[0]:
+                if _slot == _ACCOUNT_SLOTS[0] and not _is_cli_auth_error(_err_msg):
                     _err = False
                     logger.info(f"relay_failed: SDK for {_target_model}[{_si}]")
                     async for event in _stream_agent_sdk(_target_model, system_prompt, messages, session_id=session_id):
@@ -2227,11 +2238,14 @@ async def call_stream(
                 _fb_seq.append((_dg, _sl))
 
         for _fi, (_fm, _fs) in enumerate(_fb_seq):
+            if _fs in _auth_failed_slots:
+                continue
             if _fi > 0:
                 logger.info(f"fallback[{_fi}/{len(_fb_seq)}]: {_fm} slot={_fs}")
 
             # Tier1: CLI Relay (oauth_slot으로 계정 지정)
             _err = False
+            _err_msg = ""
             async for event in _stream_cli_relay(_fm, system_prompt, messages, tools=tools, session_id=session_id, oauth_slot=_fs):
                 if event.get("type") == "error":
                     _err = True
@@ -2249,6 +2263,8 @@ async def call_stream(
                     # CLI exit 반복 실패는 짧은 고정 쿨다운 적용
                     elif any(k in _err_lower for k in ("cli exited", "exit code", "exited with code")):
                         _mark_slot_cooldown(_fs, duration_override=60)
+                    elif _is_cli_auth_error(_err_msg):
+                        _auth_failed_slots.add(_fs)
                     break
                 yield event
             if not _err:
@@ -2257,7 +2273,7 @@ async def call_stream(
             await _relay_clear_aads_session_for_oauth_fallback(session_id)
 
             # Tier2: Agent SDK (첫 계정에서만 — 컨테이너 고정 토큰)
-            if _fs == _ACCOUNT_SLOTS[0]:
+            if _fs == _ACCOUNT_SLOTS[0] and not _is_cli_auth_error(_err_msg):
                 _err = False
                 logger.info(f"relay_failed: SDK for {_fm}[{_fi}]")
                 async for event in _stream_agent_sdk(_fm, system_prompt, messages, session_id=session_id):
@@ -2324,7 +2340,18 @@ async def call_stream(
 
         if not _samegrade_success:
             yield {"type": "delta", "content": "\n\n⚠️ _전체 LLM 장애 — 잠시 후 다시 시도해주세요._\n\n"}
-            yield {"type": "error", "content": "All LLM providers failed"}
+            yield {
+                "type": "interrupted",
+                "content": "All LLM providers failed",
+                "terminal": True,
+                "reason": "provider_fallback_exhausted",
+            }
+            yield {
+                "type": "error",
+                "content": "All LLM providers failed",
+                "terminal": True,
+                "stream_status": "interrupted",
+            }
         return
 
     # Gemini 모델 → LiteLLM 경유 (실패 시 동급 Claude 우선 폴백)
@@ -3105,6 +3132,7 @@ async def _stream_cli_relay_once(
     tools: Optional[List[Dict[str, Any]]] = None,
     session_id: Optional[str] = None,
     oauth_slot: Optional[str] = None,
+    force_oauth_refresh: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """CLI Relay 서버(host.docker.internal:8199)를 통한 스트리밍.
 
@@ -3134,6 +3162,8 @@ async def _stream_cli_relay_once(
     }
     if oauth_slot:
         req_body["oauth_slot"] = oauth_slot
+    if force_oauth_refresh:
+        req_body["force_oauth_refresh"] = True
 
     if isinstance(formatted, list):
         # 이미지 포함: content block 배열로 전달 → relay가 --input-format stream-json 사용
@@ -3179,7 +3209,8 @@ async def _stream_cli_relay_once(
             ) as resp:
                 if resp.status_code != 200:
                     body = await resp.aread()
-                    yield {"type": "error", "content": f"CLI Relay {resp.status_code}: {body.decode()[:200]}"}
+                    detail = _redact_secret_text(body.decode(errors="replace"))[:200]
+                    yield {"type": "error", "content": f"CLI Relay {resp.status_code}: {detail}"}
                     return
 
                 _cli_interrupt_notified = False
@@ -3194,6 +3225,15 @@ async def _stream_cli_relay_once(
 
                     # Observe provider receipts locally as well as at the relay.
                     event["aads_model_contract"] = observation.observe(event)
+
+                    if event.get("type") == "error":
+                        yield {
+                            "type": "error",
+                            "content": _redact_secret_text(
+                                event.get("content") or event.get("error") or "CLI relay error"
+                            ),
+                        }
+                        return
 
                     # rate_limit_event: 이 호출에 쓰인 계정의 쿼터 실측값이다.
                     # 외부 API 재조회 없이 슬롯별 사용량을 여기서 적재한다.
@@ -3255,8 +3295,8 @@ async def _stream_cli_relay_once(
 
                     # result 이벤트에서 is_error 체크 (CLI가 529 등으로 실패 시)
                     if event.get("type") == "result" and event.get("is_error"):
-                        error_text = event.get("result", "CLI error")
-                        logger.warning(f"cli_relay_result_error: {error_text[:100]}")
+                        error_text = _redact_secret_text(event.get("result", "CLI error"))
+                        logger.warning("cli_relay_result_error: %s", error_text[:100])
                         yield {"type": "error", "content": error_text}
                         return
 
@@ -3328,7 +3368,7 @@ async def _stream_cli_relay_once(
                         yield aads_evt
 
     except httpx.ConnectError as e:
-        yield {"type": "error", "content": f"CLI Relay connect failed: {e}"}
+        yield {"type": "error", "content": f"CLI Relay connect failed: {_redact_secret_text(e)}"}
         return
     except httpx.ReadTimeout:
         yield {"type": "error", "content": "CLI Relay timeout (600s)"}
@@ -3349,8 +3389,9 @@ async def _stream_cli_relay_once(
         yield {"type": "error", "content": "CLI Relay stream connection aborted (upstream disconnect)"}
         return
     except Exception as e:
-        logger.error(f"cli_relay_error: {e}")
-        yield {"type": "error", "content": str(e)}
+        safe_error = _redact_secret_text(e)
+        logger.error("cli_relay_error: %s", safe_error)
+        yield {"type": "error", "content": safe_error}
         return
 
     # 세션 매핑 저장
@@ -3415,6 +3456,10 @@ _CODEX_RETRYABLE_ERROR_MARKERS = _RELAY_RETRYABLE_ERROR_MARKERS
 _CODEX_NON_RETRYABLE_ERROR_MARKERS = _RELAY_NON_RETRYABLE_ERROR_MARKERS
 
 
+def _is_cli_auth_error(error_content: str) -> bool:
+    return _classify_claude_auth_error(error_content) != "error"
+
+
 def _is_relay_retryable_error(error_content: str) -> bool:
     lowered = str(error_content or "").lower()
     if not lowered:
@@ -3466,16 +3511,23 @@ async def _stream_cli_relay(
 ) -> AsyncGenerator[Dict[str, Any], None]:
     retry_messages = messages
     partial_content = ""
+    network_attempt_idx = 0
+    auth_retry_used = False
 
-    for attempt_idx in range(len(_CLI_RETRY_DELAYS) + 1):
+    while True:
         last_error: Optional[str] = None
+        relay_once_kwargs: Dict[str, Any] = {
+            "tools": tools,
+            "session_id": session_id,
+            "oauth_slot": oauth_slot,
+        }
+        if auth_retry_used:
+            relay_once_kwargs["force_oauth_refresh"] = True
         async for event in _stream_cli_relay_once(
             model,
             system_prompt,
             retry_messages,
-            tools=tools,
-            session_id=session_id,
-            oauth_slot=oauth_slot,
+            **relay_once_kwargs,
         ):
             event_type = event.get("type")
             if event_type == "delta":
@@ -3483,7 +3535,7 @@ async def _stream_cli_relay(
                 yield event
                 continue
             if event_type == "error":
-                last_error = str(event.get("content", "CLI relay error"))
+                last_error = _redact_secret_text(event.get("content", "CLI relay error"))
                 break
             yield event
             if event_type == "done":
@@ -3492,24 +3544,47 @@ async def _stream_cli_relay(
         if not last_error:
             return
 
-        if attempt_idx >= len(_CLI_RETRY_DELAYS) or not _is_cli_retryable_error(last_error):
-            yield {"type": "error", "content": last_error}
+        # A refresh-capable CLI normally renews during the first call.  Some
+        # versions surface the initial 401 before persisting the new token, so
+        # allow exactly one immediate same-slot retry before account fallback.
+        if _is_cli_auth_error(last_error) and not auth_retry_used:
+            auth_retry_used = True
+            logger.warning(
+                "cli_relay_oauth_refresh_retry: model=%s session=%s slot=%s",
+                model, (session_id or "default")[:8], oauth_slot or "auto",
+            )
+            yield {
+                "type": "retry_progress",
+                "attempt": 1,
+                "max_attempts": 1,
+                "reason": "oauth_refresh",
+                "content": "OAuth credential 갱신 확인 후 1회 재시도합니다.",
+            }
+            retry_messages = _build_cli_retry_messages(messages, partial_content)
+            continue
+
+        if (
+            network_attempt_idx >= len(_CLI_RETRY_DELAYS)
+            or not _is_cli_retryable_error(last_error)
+        ):
+            yield {"type": "error", "content": last_error, "auth_retry_used": auth_retry_used}
             return
 
-        retry_delay = _CLI_RETRY_DELAYS[attempt_idx]
+        retry_delay = _CLI_RETRY_DELAYS[network_attempt_idx]
+        network_attempt_idx += 1
         logger.warning(
             "cli_relay_retry_same_model: model=%s session=%s attempt=%s/%s error=%s",
             model,
             (session_id or "default")[:8],
-            attempt_idx + 1,
+            network_attempt_idx,
             len(_CLI_RETRY_DELAYS),
-            last_error[:200],
+            _redact_secret_text(last_error)[:200],
         )
         yield {
             "type": "retry_progress",
-            "attempt": attempt_idx + 1,
+            "attempt": network_attempt_idx,
             "max_attempts": len(_CLI_RETRY_DELAYS),
-            "content": f"⏳ 재시도 중 ({attempt_idx + 1}/{len(_CLI_RETRY_DELAYS)})...",
+            "content": f"⏳ 재시도 중 ({network_attempt_idx}/{len(_CLI_RETRY_DELAYS)})...",
         }
         await asyncio.sleep(retry_delay)
         retry_messages = _build_cli_retry_messages(messages, partial_content)

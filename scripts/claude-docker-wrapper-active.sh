@@ -26,6 +26,14 @@ CONTAINER_NAME="$(resolve_container_name)"
 LOCAL_MCP_CONFIG=""
 CONTAINER_MCP_CONFIG=""
 
+# Slot credentials need refresh-token locking and atomic copy-back. Delegate
+# only that mode to the canonical Docker wrapper while preserving this file's
+# active blue/green container resolution and the legacy env-token path below.
+if [[ -n "${CLAUDE_SLOT_CREDENTIALS_FILE:-}" ]]; then
+    export CLAUDE_DOCKER_CONTAINER="$CONTAINER_NAME"
+    exec "${SCRIPT_DIR}/claude-docker-wrapper.sh" "$@"
+fi
+
 cleanup() {
     local exit_code=$?
     if [[ -n "$CONTAINER_MCP_CONFIG" ]]; then
