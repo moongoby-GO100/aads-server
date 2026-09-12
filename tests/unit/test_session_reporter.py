@@ -165,6 +165,33 @@ def test_post_session_report_skips_missing_session():
     assert result.skipped_reason == "session_not_found"
 
 
+def test_post_session_report_suppresses_pc_agent_disconnect_policy():
+    post_session_report = _load_session_reporter().post_session_report
+
+    for source, intent in (
+        ("pc_agent_disconnect_monitor", "auto_report"),
+        ("session_report", "pc_agent_alert"),
+    ):
+        session_id = str(uuid.uuid4())
+        conn = _FakeConn()
+        result = asyncio.run(
+            post_session_report(
+                session_id=session_id,
+                title="PC Agent 연결 끊김 자동 알림",
+                body="heartbeat_timeout",
+                source=source,
+                intent=intent,
+                conn=conn,
+                trigger_reaction=True,
+            )
+        )
+
+        assert result.posted is False
+        assert result.reaction_triggered is False
+        assert result.skipped_reason == "policy_suppressed"
+        assert conn.queries == []
+
+
 def test_schedule_task_binds_report_session_id():
     from app.api import ceo_chat_tools_scheduler as scheduler_mod
 

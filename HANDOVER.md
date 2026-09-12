@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-09-12 21:19 KST — PC Agent disconnect chat suppression
+
+- Root cause: warning/critical disconnect handling in `app/api/pc_agent.py` wrote a durable disconnect observation and then called `post_session_report(..., source="pc_agent_disconnect_monitor", intent="pc_agent_alert", trigger_reaction=True)`. This created both a CEO-visible chat message and an automatic AI follow-up for every qualifying disconnect.
+- `app/api/pc_agent.py` now keeps the `ai_observations` disconnect ledger, connection event diagnostics, automatic reconnection, and critical Telegram escalation. The former chat-reporting path is retained behind the explicit disabled policy switch `_PC_AGENT_DISCONNECT_CHAT_REPORTS_ENABLED` for preservation and rollback safety.
+- `app/services/session_reporter.py` independently rejects the disconnect source or intent with `skipped_reason="policy_suppressed"` before any database query or AI reaction. This is the defense-in-depth guard against a future caller reintroducing the chat path.
+- Regression coverage verifies warning/critical and repeated disconnect events still record observations while session lookup/reporting remain at zero; it also verifies both shared-reporter policy keys perform no database write or reaction. Existing scheduled-job and runner reports remain enabled.
+- Heartbeat loss remains queryable through the existing diagnostics/disconnect-stats surfaces. The available evidence distinguishes a missed WebSocket heartbeat from a confirmed network, sleep, or event-loop root cause; timeout values were therefore not changed in this patch.
+- Rollback: revert this release commit. Doing so restores disconnect messages and automatic AI reactions in CEO chat, so rollback requires an explicit decision to re-enable that behavior.
+
 ## 2026-09-10 21:59 KST — AI 학습론 CEO 교육자료
 
 - `app/static/reports/20260910_ai_learning_theory_education.html`에 AI 학습의 수학, Transformer, 사전학습, SFT·LoRA·QLoRA, RLHF·DPO, RAG·메모리, 지속학습·증류, 데이터·평가·거버넌스와 AADS 적용 구분을 21개 장으로 정리했다.

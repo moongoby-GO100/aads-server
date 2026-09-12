@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 _MAX_CONTENT_CHARS = 12000
 _MAX_TITLE_CHARS = 160
+_SUPPRESSED_SESSION_REPORT_SOURCES = frozenset({"pc_agent_disconnect_monitor"})
+_SUPPRESSED_SESSION_REPORT_INTENTS = frozenset({"pc_agent_alert"})
 _XML_TOOL_TAGS = (
     "function_calls",
     "function_response",
@@ -143,6 +145,24 @@ async def post_session_report(
     sid = normalize_session_id(session_id)
     if not sid:
         return SessionReportResult(posted=False, session_id="", skipped_reason="missing_or_invalid_session_id")
+
+    normalized_source = str(source or "").strip().lower()
+    normalized_intent = str(intent or "").strip().lower()
+    if (
+        normalized_source in _SUPPRESSED_SESSION_REPORT_SOURCES
+        or normalized_intent in _SUPPRESSED_SESSION_REPORT_INTENTS
+    ):
+        logger.info(
+            "session_report_policy_suppressed session=%s source=%s intent=%s",
+            sid[:8],
+            normalized_source,
+            normalized_intent,
+        )
+        return SessionReportResult(
+            posted=False,
+            session_id=sid,
+            skipped_reason="policy_suppressed",
+        )
 
     content = build_session_report_content(
         title=title,
