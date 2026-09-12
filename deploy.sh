@@ -1130,6 +1130,13 @@ record_deploy() {
     local err_sql
     local downtime
 
+    # AADS-191: 모든 실패 경로가 여기를 지난다. 자가치유 계층이 EXIT 트랩에서
+    # 원인을 분류할 수 있도록 마지막 실패 사유를 전역에 남긴다.
+    if [[ "$status" == "failed" || "$status" == "blocked" ]]; then
+        DEPLOY_LAST_FAIL_STATUS="$status"
+        DEPLOY_LAST_FAIL_ERROR="$err"
+    fi
+
     now_epoch=$(date +%s)
     duration=$((now_epoch - DEPLOY_START_EPOCH))
     if [[ "$status" == "started" ]]; then
@@ -1382,7 +1389,20 @@ if [ -f "$LOCKFILE" ]; then
     fi
 fi
 echo $$ > "$LOCKFILE"
+# AADS-191: 실패 원인 분류 → 자동 교정 → 재개 계층.
+# 여기서 source 하는 이유는 EXIT 트랩이 이 아래에서 설치되기 때문이다.
+# 라이브러리가 없어도 배포는 기존 동작 그대로 진행되어야 한다(fail open).
+if [[ -f "${COMPOSE_DIR}/scripts/deploy_autoheal.sh" ]]; then
+    # shellcheck source=scripts/deploy_autoheal.sh
+    source "${COMPOSE_DIR}/scripts/deploy_autoheal.sh"
+elif [[ -f "${STATE_DIR}/scripts/deploy_autoheal.sh" ]]; then
+    source "${STATE_DIR}/scripts/deploy_autoheal.sh"
+else
+    echo "[deploy.sh] ⚠️ deploy_autoheal.sh 없음 — 자가치유 없이 진행"
+fi
+
 cleanup_deploy() {
+    local _deploy_rc="$?"
     stop_deploy_heartbeat
     stop_downtime_monitor
     cleanup_release_context
@@ -1391,6 +1411,12 @@ cleanup_deploy() {
         flock -u 7 >/dev/null 2>&1 || true
         DEPLOY_LOCK_HELD=false
     fi
+    # 자가치유는 반드시 배포 락을 놓은 뒤에 기동한다. 락을 쥔 채로 재개하면
+    # 새 워커가 flock 에서 다시 대기하다가 queued 로 튕겨 나간다.
+    if declare -F deploy_autoheal_on_exit >/dev/null 2>&1; then
+        deploy_autoheal_on_exit "$_deploy_rc" || true
+    fi
+    return "$_deploy_rc"
 }
 trap cleanup_deploy EXIT
 
