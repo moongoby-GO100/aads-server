@@ -31,6 +31,8 @@ from app.models.chat import (
     ChatTodoBulkActionOut,
     ChatTodoBulkActionRequest,
     ChatTodoCreateRequest,
+    ChatProtocolCapabilitiesOut,
+    ChatStreamSnapshotOut,
     DriveFileOut,
     ExecutionOut,
     ChatTodoItemOut,
@@ -57,6 +59,60 @@ TenantContext = dict[str, Any]
 require_tenant_viewer = require_tenant_role(TenantRole.VIEWER)
 require_tenant_member = require_tenant_role(TenantRole.MEMBER)
 require_tenant_admin = require_tenant_role(TenantRole.ADMIN)
+
+
+def _chat_contract_version(request: Optional[Request], requested: Optional[str | int] = None) -> int:
+    """Negotiate chat protocol without changing the unversioned v1 default."""
+    from app.services.chat_protocol import ChatProtocolError, negotiate_contract_version
+
+    header_value = None
+    if request is not None:
+        header_value = (
+            request.headers.get("X-Chat-Contract-Version")
+            or request.headers.get("X-AADS-Chat-Contract-Version")
+        )
+    try:
+        return negotiate_contract_version(requested, header_value)
+    except ChatProtocolError as exc:
+        raise HTTPException(
+            status_code=406,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+def _chat_resume_cursor(
+    *,
+    contract_version: int,
+    last_applied_event_id: Optional[str],
+    last_event_id: Optional[str],
+    request: Optional[Request],
+) -> str:
+    """Resolve the client-applied cursor and reject ambiguous v2 reconnects."""
+    from app.services.chat_protocol import ChatProtocolError, resolve_resume_cursor
+
+    header_last_event_id = request.headers.get("Last-Event-ID") if request else None
+    try:
+        return resolve_resume_cursor(
+            contract_version=contract_version,
+            last_applied_event_id=last_applied_event_id,
+            legacy_last_event_id=last_event_id,
+            header_last_event_id=header_last_event_id,
+        )
+    except ChatProtocolError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+def _chat_stream_headers(contract_version: int, **headers: str) -> dict[str, str]:
+    if contract_version == 2:
+        headers.update({
+            "X-Chat-Contract-Version": "2",
+            "X-Chat-Event-Schema-Version": "2",
+            "X-Chat-Resume-Cursor": "last_applied_event_id",
+        })
+    return headers
 
 
 def _tenant_id(context: TenantContext) -> str:
@@ -1222,6 +1278,7 @@ async def get_workspace_session_messages(
 @router.post("/chat/messages/send", tags=["chat-message"])
 async def send_message(
     request: Request,
+    contract_version: Optional[str] = Query(None),
     context: TenantContext = Depends(require_tenant_member),
 ):
     """
@@ -1232,6 +1289,7 @@ async def send_message(
     """
     import base64 as _b64
 
+    negotiated_contract = _chat_contract_version(request, contract_version)
     content_type = request.headers.get("content-type", "")
 
     _MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
@@ -1403,17 +1461,25 @@ async def send_message(
     )
     # 클라이언트 연결 종료 시 백그라운드에서 LLM 생성 완료 → DB 저장 보장
     bg_stream = svc.with_background_completion(raw_stream, session_id=session_id_str)
+    response_stream = bg_stream
+    if negotiated_contract == 2:
+        from app.services.chat_protocol import adapt_sse_stream
+
+        response_stream = adapt_sse_stream(bg_stream, session_id=session_id_str)
     return StreamingResponse(
-        bg_stream,
+        response_stream,
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-            "Transfer-Encoding": "chunked",
-            "X-Stream-Session": session_id_str,
-            "X-HTML-Context-Used": "true" if html_context_state.get("html_context_used") else "false",
-        },
+        headers=_chat_stream_headers(
+            negotiated_contract,
+            **{
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+                "Transfer-Encoding": "chunked",
+                "X-Stream-Session": session_id_str,
+                "X-HTML-Context-Used": "true" if html_context_state.get("html_context_used") else "false",
+            },
+        ),
     )
 
 
@@ -1576,6 +1642,63 @@ async def list_discussion_presets():
     """사용 가능한 토론 프리셋 목록."""
     from app.services.discussion_presets import DISCUSSION_PRESETS
     return {"presets": DISCUSSION_PRESETS}
+
+
+@router.get(
+    "/chat/capabilities",
+    response_model=ChatProtocolCapabilitiesOut,
+    tags=["chat-session"],
+)
+async def get_chat_capabilities(
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """Advertise additive chat protocol support without changing v1 defaults."""
+    del context
+    from app.services.chat_protocol import chat_protocol_capabilities
+
+    return chat_protocol_capabilities()
+
+
+@router.get(
+    "/chat/sessions/{session_id}/stream-snapshot",
+    response_model=ChatStreamSnapshotOut,
+    tags=["chat-session"],
+)
+async def get_stream_snapshot(
+    session_id: UUID,
+    request: Request,
+    contract_version: Optional[str] = Query("2"),
+    execution_id: Optional[UUID] = Query(None),
+    last_applied_event_id: Optional[str] = Query(None),
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """Return a read-only v2 snapshot with independent coverage/watermark cursors."""
+    negotiated = _chat_contract_version(request, contract_version)
+    if negotiated != 2:
+        raise HTTPException(
+            status_code=406,
+            detail={
+                "code": "snapshot_requires_chat_contract_v2",
+                "message": "stream-snapshot is available with chat contract version 2",
+            },
+        )
+    applied_cursor = _chat_resume_cursor(
+        contract_version=negotiated,
+        last_applied_event_id=last_applied_event_id,
+        last_event_id=None,
+        request=None,
+    )
+    from app.services.chat_protocol import get_stream_snapshot as load_stream_snapshot
+
+    snapshot = await load_stream_snapshot(
+        session_id=session_id,
+        tenant_id=UUID(_tenant_id(context)),
+        execution_id=execution_id,
+        last_applied_event_id=applied_cursor,
+    )
+    if snapshot is None:
+        raise _NOT_FOUND("execution" if execution_id else "session")
+    return snapshot
 
 
 @router.get("/chat/sessions/{session_id}/streaming-status", response_model=StreamingStatusOut, tags=["chat-session"])
@@ -2224,21 +2347,41 @@ async def get_streaming_status(
 async def execution_events(
     execution_id: UUID,
     last_event_id: Optional[str] = None,
+    last_applied_event_id: Optional[str] = None,
+    contract_version: Optional[str] = None,
     request: Request = None,
     context: TenantContext = Depends(require_tenant_viewer),
 ):
     """execution 단위 SSE attach/replay."""
-    if not await svc.get_execution(str(execution_id), tenant_id=_tenant_id(context)):
+    execution = await svc.get_execution(str(execution_id), tenant_id=_tenant_id(context))
+    if not execution:
         raise _NOT_FOUND("execution")
-    _last_id = last_event_id
-    if not _last_id and request:
-        _last_id = request.headers.get("Last-Event-ID")
+    negotiated = _chat_contract_version(request, contract_version)
+    _last_id = _chat_resume_cursor(
+        contract_version=negotiated,
+        last_applied_event_id=last_applied_event_id,
+        last_event_id=last_event_id,
+        request=request,
+    )
 
     from app.services.stream_worker import deliver_sse
     return StreamingResponse(
-        deliver_sse(str(execution_id), last_event_id=_last_id or "0"),
+        deliver_sse(
+            str(execution_id),
+            last_event_id=_last_id,
+            contract_version=negotiated,
+            session_id=str(execution.get("session_id") or "") or None,
+            execution_id=str(execution_id),
+        ),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+        headers=_chat_stream_headers(
+            negotiated,
+            **{
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        ),
     )
 
 
@@ -2248,6 +2391,8 @@ async def stream_resume(
     offset: int = 0,
     message_id: Optional[str] = None,
     last_event_id: Optional[str] = None,
+    last_applied_event_id: Optional[str] = None,
+    contract_version: Optional[str] = None,
     execution_id: Optional[UUID] = None,
     request: Request = None,
     context: TenantContext = Depends(require_tenant_viewer),
@@ -2262,7 +2407,18 @@ async def stream_resume(
     import json
 
     sid = str(session_id)
+    negotiated = _chat_contract_version(request, contract_version)
     active_execution = str(execution_id) if execution_id else None
+    if execution_id:
+        execution_meta = await svc.get_execution(
+            str(execution_id),
+            tenant_id=_tenant_id(context),
+        )
+        if (
+            not execution_meta
+            or str(execution_meta.get("session_id")) != sid
+        ):
+            raise _NOT_FOUND("execution")
     if not active_execution:
         try:
             current_execution = await svc.get_current_execution(sid, tenant_id=_tenant_id(context))
@@ -2296,17 +2452,34 @@ async def stream_resume(
     stream_id = active_execution or sid
 
     # Last-Event-ID 우선: 쿼리 파라미터 → HTTP 헤더
-    _last_id = last_event_id
-    if not _last_id and request:
-        _last_id = request.headers.get("Last-Event-ID")
+    _last_id = _chat_resume_cursor(
+        contract_version=negotiated,
+        last_applied_event_id=last_applied_event_id,
+        last_event_id=last_event_id,
+        request=request,
+    )
 
-    # Phase4: Last-Event-ID가 있으면 Redis Stream XREAD 기반 전송
-    if _last_id and _last_id != "0":
+    # Phase4: Last-Event-ID가 있으면 Redis Stream XREAD 기반 전송.
+    # V2는 offset fallback을 사용하지 않고 snapshot/applied cursor 계약을 따른다.
+    if negotiated == 2 or (_last_id and _last_id != "0"):
         from app.services.stream_worker import deliver_sse
         return StreamingResponse(
-            deliver_sse(stream_id, last_event_id=_last_id),
+            deliver_sse(
+                stream_id,
+                last_event_id=_last_id,
+                contract_version=negotiated,
+                session_id=sid,
+                execution_id=active_execution,
+            ),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+            headers=_chat_stream_headers(
+                negotiated,
+                **{
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                    "Connection": "keep-alive",
+                },
+            ),
         )
 
     # Fallback: offset 기반 (레거시 호환 + Redis Stream 없는 경우)
@@ -2400,10 +2573,26 @@ async def stream_resume(
             yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
             await asyncio.sleep(0.5)
 
+    response_stream = _generate()
+    if negotiated == 2:
+        from app.services.chat_protocol import adapt_sse_stream
+
+        response_stream = adapt_sse_stream(
+            response_stream,
+            session_id=sid,
+            execution_id=active_execution,
+        )
     return StreamingResponse(
-        _generate(),
+        response_stream,
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+        headers=_chat_stream_headers(
+            negotiated,
+            **{
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        ),
     )
 
 
@@ -3004,9 +3193,11 @@ async def regenerate_message(
     message_id: UUID,
     request: Request,
     mode: str = "regenerate",
+    contract_version: Optional[str] = Query(None),
     context: TenantContext = Depends(require_tenant_member),
 ):
     """AI 응답 재생성 또는 이어서 생성. mode=continue: 중단 지점부터 이어서 생성."""
+    negotiated_contract = _chat_contract_version(request, contract_version)
     from app.core.db_pool import get_pool
     pool = get_pool()
     tenant_id = _tenant_id(context)
@@ -3072,16 +3263,24 @@ async def regenerate_message(
         reply_to_id=str(ai_msg["id"]),
     )
     bg_stream = svc.with_background_completion(raw_stream, session_id=session_id_str)
+    response_stream = bg_stream
+    if negotiated_contract == 2:
+        from app.services.chat_protocol import adapt_sse_stream
+
+        response_stream = adapt_sse_stream(bg_stream, session_id=session_id_str)
     return StreamingResponse(
-        bg_stream,
+        response_stream,
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-            "Transfer-Encoding": "chunked",
-            "X-Stream-Session": session_id_str,
-        },
+        headers=_chat_stream_headers(
+            negotiated_contract,
+            **{
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+                "Transfer-Encoding": "chunked",
+                "X-Stream-Session": session_id_str,
+            },
+        ),
     )
 
 

@@ -47,13 +47,20 @@ def _stream_key(stream_id: str) -> str:
     return f"{_STREAM_PREFIX}{stream_id}"
 
 
-async def publish_token(stream_id: str, event_data: str, token_index: int) -> Optional[str]:
+async def publish_token(
+    stream_id: str,
+    event_data: str,
+    token_index: int,
+    *,
+    owner_epoch: Optional[int] = None,
+) -> Optional[str]:
     """토큰을 Redis Stream에 추가. 실패 시 None 반환 (기존 동작 영향 없음).
 
     Args:
         stream_id: execution 또는 세션 ID
         event_data: SSE 이벤트 문자열 (data: {...}\n\n)
         token_index: 토큰 순서 번호
+        owner_epoch: 이벤트 생성 시점에 캡처한 DB execution fence epoch
 
     Returns:
         Redis Stream entry ID (성공 시) 또는 None (실패 시)
@@ -61,9 +68,12 @@ async def publish_token(stream_id: str, event_data: str, token_index: int) -> Op
     try:
         r = await _get_redis()
         key = _stream_key(stream_id)
+        fields = {"data": event_data, "idx": str(token_index), "ts": str(time.time())}
+        if owner_epoch is not None:
+            fields["owner_epoch"] = str(int(owner_epoch))
         entry_id = await r.xadd(
             key,
-            {"data": event_data, "idx": str(token_index), "ts": str(time.time())},
+            fields,
             maxlen=5000,  # 세션당 최대 5000 이벤트 (메모리 보호)
         )
         # TTL 설정 (첫 토큰 시에만 — 이후 XADD는 TTL 갱신 불필요)
@@ -105,11 +115,14 @@ async def read_tokens_after(stream_id: str, last_id: str = "0") -> List[Dict[str
         entries = await r.xrange(key, min=f"({last_id}" if last_id != "0" else "-", max="+")
         result = []
         for entry_id, fields in entries:
+            raw_index = fields.get("idx")
             result.append({
                 "id": entry_id,
                 "data": fields.get("data", ""),
                 "done": fields.get("done") == "true",
-                "idx": int(fields.get("idx", 0)),
+                "idx": int(raw_index) if str(raw_index).isdigit() else None,
+                "ts": fields.get("ts"),
+                "owner_epoch": fields.get("owner_epoch"),
             })
         return result
     except Exception as e:
@@ -118,7 +131,12 @@ async def read_tokens_after(stream_id: str, last_id: str = "0") -> List[Dict[str
 
 
 async def get_stream_info(stream_id: str) -> Optional[Dict[str, Any]]:
-    """Redis Stream 상태 조회 (디버그/상태 체크용)."""
+    """Redis Stream 상태와 replay 보관 경계를 조회한다.
+
+    ``first_event_id``/``last_event_id``는 v2 snapshot coverage와 비교하기
+    위한 광고 값이다. 이 값을 클라이언트가 적용한 cursor로 취급하면 안 된다.
+    기존 호출자가 사용하는 ``exists``/``length``/``is_done``은 유지한다.
+    """
     try:
         r = await _get_redis()
         key = _stream_key(stream_id)
@@ -126,16 +144,46 @@ async def get_stream_info(stream_id: str) -> Optional[Dict[str, Any]]:
         if not exists:
             return None
         length = await r.xlen(key)
-        # 마지막 엔트리 확인
+        retention_trimmed = None
+        try:
+            summary = await r.xinfo_stream(key)
+            entries_added = summary.get("entries-added")
+            max_deleted_id = summary.get("max-deleted-entry-id")
+            if entries_added is not None:
+                retention_trimmed = int(entries_added) > int(length)
+            if max_deleted_id not in (None, "", "0-0"):
+                retention_trimmed = True
+        except Exception:
+            # Older Redis versions may not expose deletion metadata.
+            retention_trimmed = None
+        # 첫/마지막 엔트리를 함께 확인해야 trim된 applied cursor를 감지할 수 있다.
+        try:
+            first_entries = await r.xrange(key, min="-", max="+", count=1)
+        except Exception:
+            # Boundary metadata is additive; its failure must not erase the
+            # legacy exists/is_done distinction.
+            first_entries = []
         last_entries = await r.xrevrange(key, count=1)
         is_done = False
+        first_event_id = None
+        first_event_index = None
+        last_event_id = None
+        if first_entries:
+            first_event_id, first_fields = first_entries[0]
+            first_event_index = first_fields.get("idx")
         if last_entries:
-            _, fields = last_entries[0]
+            last_event_id, fields = last_entries[0]
             is_done = fields.get("done") == "true"
         return {
             "exists": True,
             "length": length,
             "is_done": is_done,
+            "first_event_id": first_event_id,
+            "first_event_index": (
+                int(first_event_index) if str(first_event_index).isdigit() else None
+            ),
+            "last_event_id": last_event_id,
+            "retention_trimmed": retention_trimmed,
             "stream_key": key,
         }
     except Exception as e:

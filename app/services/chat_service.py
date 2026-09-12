@@ -5877,7 +5877,12 @@ async def with_background_completion(
                 # Redis Stream 병행 저장 — heartbeat 제외 (불필요한 Redis 발행 ~30% 감소)
                 if 'data: {' in chunk and _event_type not in ("heartbeat",):
                     try:
-                        _entry_id = await _redis_stream.publish_token(_stream_id_for_state(session_id, state), chunk, _token_idx)
+                        _entry_id = await _redis_stream.publish_token(
+                            _stream_id_for_state(session_id, state),
+                            chunk,
+                            _token_idx,
+                            owner_epoch=state.get("owner_epoch"),
+                        )
                         if _entry_id:
                             state["last_event_id"] = _entry_id
                         _token_idx += 1
@@ -5971,7 +5976,12 @@ async def with_background_completion(
                             _entry_id = None
                             if 'data: {' in chunk:
                                 try:
-                                    _entry_id = await _redis_stream.publish_token(_stream_id_for_state(session_id, state), chunk, _token_idx)
+                                    _entry_id = await _redis_stream.publish_token(
+                                        _stream_id_for_state(session_id, state),
+                                        chunk,
+                                        _token_idx,
+                                        owner_epoch=state.get("owner_epoch"),
+                                    )
                                     if _entry_id:
                                         state["last_event_id"] = _entry_id
                                     _token_idx += 1
@@ -6057,7 +6067,12 @@ async def with_background_completion(
                                 _entry_id = None
                                 if 'data: {' in chunk:
                                     try:
-                                        _entry_id = await _redis_stream.publish_token(_stream_id_for_state(session_id, state), chunk, _token_idx)
+                                        _entry_id = await _redis_stream.publish_token(
+                                            _stream_id_for_state(session_id, state),
+                                            chunk,
+                                            _token_idx,
+                                            owner_epoch=state.get("owner_epoch"),
+                                        )
                                         if _entry_id:
                                             state["last_event_id"] = _entry_id
                                         _token_idx += 1
@@ -7598,7 +7613,12 @@ async def _resume_single_stream(
                                 )
                                 # Redis Stream에 발행 → 프론트 stream-resume가 실시간 수신
                                 chunk = f'data: {json.dumps({"type": "delta", "content": delta_content})}\n\n'
-                                _entry_id = await _redis_stream.publish_token(_stream_id, chunk, _token_idx)
+                                _entry_id = await _redis_stream.publish_token(
+                                    _stream_id,
+                                    chunk,
+                                    _token_idx,
+                                    owner_epoch=owner_epoch,
+                                )
                                 if _entry_id:
                                     _merge_resume_state(last_event_id=_entry_id)
                                 _token_idx += 1

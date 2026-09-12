@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -176,6 +176,66 @@ class StreamingStatusOut(BaseModel):
     completion_token: Optional[str] = None
     final_message_id: Optional[str] = None
     final_message_ready: bool = False
+
+
+class ChatEventEnvelopeV2(BaseModel):
+    """Runtime-validated shape advertised for negotiated chat SSE v2."""
+
+    schema_version: Literal[2] = 2
+    event_id: Optional[str] = None
+    session_id: Optional[uuid.UUID] = None
+    execution_id: Optional[uuid.UUID] = None
+    owner_epoch: Optional[str] = Field(None, pattern=r"^\d+$")
+    generation_id: Optional[uuid.UUID] = None
+    segment_id: Optional[uuid.UUID] = None
+    sequence: Optional[str] = Field(None, pattern=r"^\d+$")
+    type: str
+    occurred_at: datetime
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatProtocolCapabilitiesOut(BaseModel):
+    """Additive protocol discovery; unversioned stream requests remain v1."""
+
+    contract_version: Literal[2] = 2
+    default_contract_version: Literal[1] = 1
+    supported_contract_versions: List[int] = Field(default_factory=lambda: [1, 2])
+    event_schema_version: Literal[2] = 2
+    capabilities: List[str] = Field(default_factory=list)
+    event_envelope: Dict[str, Any] = Field(default_factory=dict)
+    resume_cursor: Dict[str, Any] = Field(default_factory=dict)
+    snapshot: Dict[str, Any] = Field(default_factory=dict)
+    legacy_compatibility: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatStreamSnapshotOut(BaseModel):
+    """A DB snapshot paired with coverage, not with the Redis watermark."""
+
+    schema_version: Literal[2] = 2
+    contract_version: Literal[2] = 2
+    session_id: uuid.UUID
+    session_revision: str
+    execution_id: Optional[uuid.UUID] = None
+    generation_id: Optional[uuid.UUID] = None
+    segment_id: Optional[uuid.UUID] = None
+    message_id: Optional[uuid.UUID] = None
+    content_version: Optional[str] = Field(None, pattern=r"^\d+$")
+    content_completeness: Literal["full"] = "full"
+    content: str = ""
+    intent: Optional[str] = None
+    tools_called: List[Any] = Field(default_factory=list)
+    execution_phase: str = "idle"
+    owner_epoch: Optional[str] = Field(None, pattern=r"^\d+$")
+    covers_through_event_id: Optional[str] = None
+    server_high_watermark: Optional[str] = None
+    first_available_event_id: Optional[str] = None
+    retention_trimmed: Optional[bool] = None
+    last_applied_event_id: str = "0"
+    resume_from_event_id: str = "0"
+    snapshot_required: bool = False
+    replay_required: bool = False
+    replay_status: str
+    coverage_mismatch: bool = False
 
 
 # ─── Session Todo ────────────────────────────────────────────────────────────
