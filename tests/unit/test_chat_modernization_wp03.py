@@ -7,7 +7,7 @@ made by this module.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
@@ -64,18 +64,24 @@ def test_capability_and_cursor_negotiation_preserve_v1_default():
     assert capabilities["snapshot"]["generation_identity"] == "unavailable"
     assert capabilities["resume_cursor"]["parameter"] == "last_applied_event_id"
     assert capabilities["legacy_compatibility"]["unwrapped_sse_events"] is True
-    assert chat_protocol.resolve_resume_cursor(
-        contract_version=1,
-        last_applied_event_id=None,
-        legacy_last_event_id="10-2",
-        header_last_event_id=None,
-    ) == "10-2"
-    assert chat_protocol.resolve_resume_cursor(
-        contract_version=2,
-        last_applied_event_id="10-1",
-        legacy_last_event_id=None,
-        header_last_event_id=None,
-    ) == "10-1"
+    assert (
+        chat_protocol.resolve_resume_cursor(
+            contract_version=1,
+            last_applied_event_id=None,
+            legacy_last_event_id="10-2",
+            header_last_event_id=None,
+        )
+        == "10-2"
+    )
+    assert (
+        chat_protocol.resolve_resume_cursor(
+            contract_version=2,
+            last_applied_event_id="10-1",
+            legacy_last_event_id=None,
+            header_last_event_id=None,
+        )
+        == "10-1"
+    )
 
     with pytest.raises(chat_protocol.ChatProtocolError) as conflict:
         chat_protocol.resolve_resume_cursor(
@@ -109,13 +115,11 @@ async def test_common_v2_adapter_handles_chunking_crlf_multidata_and_unknown_eve
     """T06/T36: all live paths can share one frame parser and additive event adapter."""
 
     async def source():
-        yield "retry: 3000\r\n\r\ndata: {\"type\":\"stream_start\","
-        yield f'\r\ndata: \"execution_id\":\"{EXECUTION_ID}\"}}\r\n\r\n'
-        yield "data:{\"type\":\"future_additive\",\"value\":7}\n\n"
+        yield 'retry: 3000\r\n\r\ndata: {"type":"stream_start",'
+        yield f'\r\ndata: "execution_id":"{EXECUTION_ID}"}}\r\n\r\n'
+        yield 'data:{"type":"future_additive","value":7}\n\n'
 
-    events = await _collect(
-        chat_protocol.adapt_sse_stream(source(), session_id=SESSION_ID)
-    )
+    events = await _collect(chat_protocol.adapt_sse_stream(source(), session_id=SESSION_ID))
 
     assert events[0] == "retry:3000\n\n"
     started = _payload(events[1])
@@ -194,7 +198,7 @@ async def test_legacy_replay_bytes_and_completion_distinction_are_unchanged():
 
     assert events == [
         'id:10-1\ndata: {"type":"delta","content":"한글"}\n\n',
-        f'data: {json.dumps({"type": "resume_done"})}\n\n',
+        f"data: {json.dumps({'type': 'resume_done'})}\n\n",
     ]
 
 
@@ -450,7 +454,7 @@ async def test_snapshot_pairs_db_coverage_with_separate_redis_high_watermark():
         return_value={
             "session_id": UUID(SESSION_ID),
             "message_count": 9,
-            "session_updated_at": datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc),
+            "session_updated_at": datetime(2026, 9, 12, 12, 0, tzinfo=UTC),
             "execution_id": UUID(EXECUTION_ID),
             "execution_phase": "running",
             "owner_epoch": 12,
@@ -459,8 +463,8 @@ async def test_snapshot_pairs_db_coverage_with_separate_redis_high_watermark():
             "content": "동일 bubble의 DB checkpoint",
             "intent": "streaming_placeholder",
             "tools_called": '[{"type":"tool_use","tool_use_id":"tool-1"}]',
-            "message_created_at": datetime(2026, 9, 12, 11, 59, tzinfo=timezone.utc),
-            "message_edited_at": datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc),
+            "message_created_at": datetime(2026, 9, 12, 11, 59, tzinfo=UTC),
+            "message_edited_at": datetime(2026, 9, 12, 12, 0, tzinfo=UTC),
         }
     )
     with (
