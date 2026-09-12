@@ -10,6 +10,14 @@
 - Heartbeat loss remains queryable through the existing diagnostics/disconnect-stats surfaces. The available evidence distinguishes a missed WebSocket heartbeat from a confirmed network, sleep, or event-loop root cause; timeout values were therefore not changed in this patch.
 - Rollback: revert this release commit. Doing so restores disconnect messages and automatic AI reactions in CEO chat, so rollback requires an explicit decision to re-enable that behavior.
 
+## 2026-09-12 — Chat modernization WP00 server regression baseline
+
+- 착수 시 `origin/main` SHA `a61aa927a9993b8fe604be0608f55f3fa4ea0d5d`에서 messages/status/last-response/interrupt/stop/resume/stream-resume endpoint와 lease·visibility·partial/final 저장, interrupt queue, SSE replay 접점을 조사했다. 완료 시 `origin/main`은 `d2c100b73fdf25e5dd3c7f0ca0409b73af2981d1`로 이동했지만 이 chat 대상 파일들은 byte-identical함을 재확인했다. 운영 모듈은 변경하지 않았다.
+- `tests/unit/test_chat_modernization_wp00.py`가 내부 trigger 숨김과 runner/partial 표시, `interrupted_partial`의 execution/message/placeholder identity 및 owner fence, 추가 지시 FIFO/attachment, stop 보존, resume terminal gate, SSE replay event ID/terminal 분리를 실제 서비스 함수로 고정한다.
+- 관련 기존 회귀를 포함해 43개가 통과했고 신규 파일 Ruff가 통과했다. 실제 DB·Redis·provider·다중 worker 경쟁은 이 단계에서 실행하지 않았다.
+- CI는 OAuth token 우선 합성 환경과 유효한 JWT secret을 사용하며 WP00 관련 회귀를 전체 unit 단계 앞에서 fail-closed로 실행한다. `pytest --timeout`과 설치 dependency를 일치시키기 위해 `pytest-timeout==2.4.0`을 dev group에 명시했다.
+- Dashboard의 통합 STEP 0 분류, trace matrix, 측정 기준선과 unknown은 `docs/chat-modernization-20260912/implementation/WP00.md`에 기록했다. 기존 server dirty 파일은 건드리지 않았다.
+
 ## 2026-09-10 21:59 KST — AI 학습론 CEO 교육자료
 
 - `app/static/reports/20260910_ai_learning_theory_education.html`에 AI 학습의 수학, Transformer, 사전학습, SFT·LoRA·QLoRA, RLHF·DPO, RAG·메모리, 지속학습·증류, 데이터·평가·거버넌스와 AADS 적용 구분을 21개 장으로 정리했다.
