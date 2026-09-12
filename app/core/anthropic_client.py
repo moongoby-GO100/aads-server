@@ -31,6 +31,16 @@ logger = logging.getLogger(__name__)
 # AADS(2026-09-06): Gemini/DeepSeek 폴백 제거 — CLI 모델(Claude)로 대체 (CEO 지시)
 _DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 _DASHSCOPE_API_KEY = os.getenv("ALIBABA_API_KEY", "")
+# DashScope 계정이 차단돼 모든 호출이 실패한다(2026-09-12 실측):
+#   qwen3-235b → 404 "model does not exist or you do not have access"
+#   qwen-turbo → 400 "Access denied, please make sure your account is in good standing"
+# 키는 남아 있어서 `if _DASHSCOPE_API_KEY:` 가드를 통과하고, 폴백을 탈 때마다
+# 헛된 왕복과 경고 로그를 만든다. 계정이 복구되면 이 값을 1 로 되돌린다.
+_DASHSCOPE_ENABLED = os.getenv("AADS_DASHSCOPE_ENABLED", "0") == "1"
+
+
+class DashScopeDisabled(RuntimeError):
+    """DashScope 경로가 꺼져 있음 — 호출자는 다음 폴백으로 넘어간다."""
 # AADS-LLM-AUTH: DB(llm_fallback_chains) 우선, 환경변수 폴백
 _BG_FALLBACK_MODELS_ENV = [
     m.strip()
@@ -528,7 +538,9 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
 
     # 비Claude 모델 → DashScope/LiteLLM 직접
     if not _model.startswith("claude"):
-        if _model.startswith("qwen"):
+        # 이 자리에는 try/except 가 없다. DashScope 가 꺼져 있으면 예외를 올리는
+        # 대신 LiteLLM 으로 흘려보내야 폴백이 성립한다.
+        if _model.startswith("qwen") and _DASHSCOPE_ENABLED:
             return await _call_dashscope_messages(
                 model=_model,
                 messages=kwargs.get("messages", []),
@@ -679,6 +691,8 @@ async def _call_dashscope(
     system: Optional[str] = None,
 ) -> str:
     """DashScope API 직접 호출 (OpenAI 호환). 일시 오류 시 3회 빠른 재시도."""
+    if not _DASHSCOPE_ENABLED:
+        raise DashScopeDisabled("dashscope_disabled")
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -727,6 +741,8 @@ async def _call_dashscope_messages(
     system: Optional[str] = None,
 ) -> _LiteLLMResponse:
     """DashScope API 직접 Messages 호출 — Anthropic Response 호환 래핑."""
+    if not _DASHSCOPE_ENABLED:
+        raise DashScopeDisabled("dashscope_disabled")
     oai_msgs = []
     if system:
         oai_msgs.append({"role": "system", "content": system})
