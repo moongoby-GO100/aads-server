@@ -1,0 +1,885 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MCP·Tool Calling 교육자료 — AADS Academy</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0a0f1a;--surface:#111827;--card:#1e293b;--card-hover:#334155;
+--accent:#3b82f6;--accent2:#8b5cf6;--accent3:#06b6d4;--accent4:#f59e0b;--accent5:#10b981;--accent6:#ef4444;
+--text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;--border:#334155;--border2:#475569;
+--code-bg:#0d1117;--highlight:#fbbf2420;--success:#10b981;--warning:#f59e0b;--danger:#ef4444}
+body{font-family:'Pretendard',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+background:var(--bg);color:var(--text);line-height:1.8;min-height:100vh}
+.container{max-width:1100px;margin:0 auto;padding:32px 24px 80px}
+/* Header */
+.hero{text-align:center;padding:60px 0 40px;border-bottom:1px solid var(--border);margin-bottom:48px}
+.hero h1{font-size:2.2rem;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2),var(--accent3));
+-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:12px;letter-spacing:-0.5px}
+.hero .subtitle{color:var(--text2);font-size:1.05rem;max-width:700px;margin:0 auto}
+.hero .meta-info{display:flex;gap:16px;justify-content:center;margin-top:20px;flex-wrap:wrap}
+.hero .meta-tag{font-size:.8rem;color:var(--accent);background:var(--accent)15;padding:4px 14px;border-radius:20px}
+/* TOC */
+.toc{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px 32px;margin-bottom:48px}
+.toc h2{font-size:1.1rem;font-weight:700;margin-bottom:16px;color:var(--accent)}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
+.toc a{color:var(--text2);text-decoration:none;font-size:.9rem;padding:6px 12px;border-radius:8px;display:block;transition:.2s}
+.toc a:hover{background:var(--card);color:var(--accent)}
+.toc a .num{color:var(--accent);font-weight:700;margin-right:6px;font-size:.8rem}
+/* Sections */
+.section{margin-bottom:56px}
+.section-anchor{scroll-margin-top:24px}
+h2.section-title{font-size:1.5rem;font-weight:700;margin-bottom:20px;padding-bottom:12px;
+border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:10px}
+h2.section-title .icon{font-size:1.3rem}
+h3{font-size:1.15rem;font-weight:600;margin:28px 0 12px;color:var(--accent3)}
+h4{font-size:1rem;font-weight:600;margin:20px 0 8px;color:var(--accent4)}
+p{margin-bottom:14px;color:var(--text)}
+/* Tables */
+.table-wrap{overflow-x:auto;margin:16px 0 24px;border-radius:12px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+thead{background:var(--surface)}
+th{padding:12px 16px;text-align:left;font-weight:600;color:var(--accent);border-bottom:2px solid var(--border);white-space:nowrap}
+td{padding:10px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:hover{background:var(--card)}
+.price{color:var(--accent4);font-weight:600}
+.perf{color:var(--accent3);font-weight:600}
+.recommend{color:var(--success);font-weight:600}
+/* Cards */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:16px 0 24px}
+.info-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.info-card h4{margin:0 0 8px;color:var(--accent);font-size:.95rem}
+.info-card p{font-size:.88rem;color:var(--text2);margin:0}
+.info-card .badge{display:inline-block;font-size:.7rem;padding:2px 8px;border-radius:4px;margin-top:8px;font-weight:600}
+.badge-free{background:#10b98120;color:#34d399}
+.badge-paid{background:#f59e0b20;color:#fbbf24}
+.badge-enterprise{background:#8b5cf620;color:#a78bfa}
+/* Code */
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;padding:16px 20px;
+overflow-x:auto;margin:12px 0 20px;font-size:.85rem;line-height:1.6}
+code{font-family:'Fira Code','JetBrains Mono',monospace;color:var(--accent3)}
+p code,li code,td code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-size:.85em}
+/* Diagram */
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;
+margin:16px 0 24px;text-align:center;font-family:monospace;font-size:.85rem;line-height:1.8;overflow-x:auto}
+.diagram .title{font-weight:700;color:var(--accent);margin-bottom:12px;font-family:sans-serif;font-size:.95rem}
+/* Alert boxes */
+.alert{border-radius:10px;padding:16px 20px;margin:16px 0;font-size:.9rem}
+.alert-info{background:#3b82f610;border-left:4px solid var(--accent)}
+.alert-warn{background:#f59e0b10;border-left:4px solid var(--warning)}
+.alert-success{background:#10b98110;border-left:4px solid var(--success)}
+.alert-danger{background:#ef444410;border-left:4px solid var(--danger)}
+.alert strong{display:block;margin-bottom:4px}
+/* Lists */
+ul,ol{margin:8px 0 16px 20px}
+li{margin-bottom:6px;font-size:.92rem}
+li strong{color:var(--text)}
+/* Architecture diagram */
+.arch-flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin:20px 0}
+.arch-box{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;
+font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
+.arch-arrow{color:var(--accent);font-size:1.2rem}
+/* Comparison */
+.compare-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+.compare-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.compare-box h4{margin:0 0 8px}
+.compare-box.pro{border-top:3px solid var(--success)}
+.compare-box.con{border-top:3px solid var(--danger)}
+/* CEO Checkpoint */
+.ceo-box{background:#10b98110;border:1px solid #10b98140;border-left:4px solid var(--success);
+border-radius:10px;padding:18px 22px;margin:24px 0 8px}
+.ceo-box .ceo-title{font-weight:700;color:var(--success);margin-bottom:10px;font-size:.95rem;display:flex;align-items:center;gap:6px}
+.ceo-box ol{margin:0 0 0 20px}
+.ceo-box li{font-size:.88rem;color:var(--text)}
+/* Quote (원문 인용) */
+blockquote{background:var(--surface);border-left:4px solid var(--accent2);padding:14px 20px;margin:16px 0;
+border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-height:1.75}
+/* Footer */
+.footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--border);text-align:center;color:var(--text3);font-size:.8rem}
+/* Responsive */
+@media(max-width:768px){
+  .hero h1{font-size:1.5rem}
+  .toc-grid{grid-template-columns:1fr}
+  .card-grid{grid-template-columns:1fr}
+  .compare-row{grid-template-columns:1fr}
+  table{font-size:.78rem}
+  th,td{padding:8px 10px}
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ===== HERO ===== -->
+<div class="hero">
+  <h1>MCP·Tool Calling 교육자료</h1>
+  <p class="subtitle">AI가 "도구를 쓴다"는 것은 정확히 무엇을 의미하는가 — 비개발자 경영자를 위한 Model Context Protocol과 툴 호출 설계의 모든 것<br>AADS 이중 MCP 구조·54개 도구 실측 데이터 포함</p>
+  <div class="meta-info">
+    <span class="meta-tag">2026-09-12 작성</span>
+    <span class="meta-tag">AADS Academy</span>
+    <span class="meta-tag">CEO 교육용</span>
+  </div>
+</div>
+
+<!-- ===== TOC ===== -->
+<div class="toc">
+  <h2>목차</h2>
+  <div class="toc-grid">
+    <a href="#ch1"><span class="num">01</span> MCP란 무엇인가 — Tool Calling 표준화의 배경</a>
+    <a href="#ch2"><span class="num">02</span> Tool Calling 원리 — LLM은 도구를 어떻게 "호출"하는가</a>
+    <a href="#ch3"><span class="num">03</span> 도구 스키마 설계 — 이름·설명·JSON Schema</a>
+    <a href="#ch4"><span class="num">04</span> MCP 아키텍처 — Host·Client·Server 3단 구조</a>
+    <a href="#ch5"><span class="num">05</span> Transport 계층 — stdio·SSE·Streamable HTTP</a>
+    <a href="#ch6"><span class="num">06</span> 에이전트 루프 설계 — ReAct와 멀티턴 도구 호출</a>
+    <a href="#ch7"><span class="num">07</span> 병렬 툴 호출 — 언제, 어떻게 동시에 부를 것인가</a>
+    <a href="#ch8"><span class="num">08</span> 오류·재시도 설계 — isError·백오프·Graceful Degradation</a>
+    <a href="#ch9"><span class="num">09</span> 권한·보안 경계 — 동의·화이트리스트·민감 경로 차단</a>
+    <a href="#ch10"><span class="num">10</span> 툴 과다의 함정 — 컨텍스트 오염과 선택 정확도 저하</a>
+    <a href="#ch11"><span class="num">11</span> 대응 전략 — Tool Search와 Deferred Loading</a>
+    <a href="#ch12"><span class="num">12</span> AADS 실측 ① — 이중 MCP 구조(서버 역할 vs 클라이언트 역할)</a>
+    <a href="#ch13"><span class="num">13</span> AADS 실측 ② — 54개 도구 호출 통계와 실측 실패율</a>
+    <a href="#ch14"><span class="num">14</span> 나쁜 도구 설계 vs 좋은 도구 설계 5쌍</a>
+    <a href="#ch15"><span class="num">15</span> CEO 체크리스트와 지시서 템플릿</a>
+    <a href="#ch16"><span class="num">16</span> AADS 적용 현황 종합·미검증 항목·참고자료</a>
+  </div>
+</div>
+
+<!-- ===== CH1 ===== -->
+<div class="section" id="ch1">
+  <h2 class="section-title section-anchor"><span class="icon">🔌</span> 01. MCP란 무엇인가 — Tool Calling 표준화의 배경</h2>
+
+  <p><strong>MCP(Model Context Protocol)</strong>는 Anthropic이 2024년 11월 공개한 개방형 프로토콜로, LLM 애플리케이션이 외부 데이터 소스와 도구에 연결하는 방식을 표준화합니다. 공식 문서(modelcontextprotocol.io)는 MCP를 "애플리케이션이 언어 모델에 컨텍스트를 공유하고, AI 시스템에 도구와 기능을 노출하며, 조합 가능한 통합·워크플로를 구축하는 표준화된 방법"으로 정의합니다. 메시지 포맷은 <strong>JSON-RPC 2.0</strong>을 사용하며, 프로그래밍 언어 지원을 표준화한 LSP(Language Server Protocol)에서 영감을 받았다고 공식 스펙에 명시되어 있습니다.</p>
+
+  <p>MCP 이전에는 각 AI 애플리케이션마다 데이터베이스 연동, 파일 접근, 검색 API 호출 방식이 제각각이었습니다. N개의 AI 애플리케이션과 M개의 외부 시스템이 있으면 이론상 N×M개의 커스텀 연동 코드가 필요했습니다. MCP는 "AI용 USB-C"에 비유되곤 하는데, 하나의 표준 인터페이스만 구현하면 그 인터페이스를 지원하는 모든 애플리케이션·도구와 연결될 수 있기 때문입니다. 즉 도구 제작자는 "MCP 서버" 하나만 만들면 되고, AI 애플리케이션(호스트)은 "MCP 클라이언트" 하나만 구현하면 수많은 MCP 서버에 연결할 수 있습니다.</p>
+
+  <div class="diagram">
+    <div class="title">MCP 이전 vs 이후 — N×M 문제의 해소</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+[MCP 이전]                          [MCP 이후]
+AI 앱A ─커스텀코드─ DB              AI 앱A ─┐
+AI 앱A ─커스텀코드─ 검색API                 │   MCP
+AI 앱B ─커스텀코드─ DB                       ├─ 클라이언트 ── MCP 표준 ── DB 서버
+AI 앱B ─커스텀코드─ 검색API          AI 앱B ─┘                 ├── 검색 서버
+  ...N×M개의 개별 연동 코드                                    └── 파일 서버
+                                     N+M개의 표준 구현으로 축소
+</pre>
+  </div>
+
+  <p>MCP 스펙은 계속 개정되고 있습니다. 2026-09-12 기준 공식 문서(modelcontextprotocol.io/specification)를 실제 조회한 결과, 최신 버전은 <strong>2026-07-28</strong>이며 그 이전 안정 버전은 <strong>2025-06-18</strong>이었습니다(2025-03-26, 2024-11-05가 그 이전 버전으로 표기됨). 두 버전 사이에는 아키텍처 수준의 변화가 있었는데, 이는 5장에서 상세히 다룹니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>구분</th><th>Function Calling(모델 단위 기능)</th><th>MCP(생태계 표준 프로토콜)</th></tr></thead>
+      <tbody>
+        <tr><td><strong>정의 주체</strong></td><td>각 LLM 제공사(OpenAI, Anthropic, Google 등)가 자사 API에 개별 구현</td><td>Anthropic 주도, 현재 Linux Foundation 산하 프로젝트(LF Projects, LLC)로 운영</td></tr>
+        <tr><td><strong>재사용성</strong></td><td>모델·API마다 스키마 형식이 조금씩 다름</td><td>한 번 만든 MCP 서버를 여러 AI 애플리케이션이 재사용 가능</td></tr>
+        <tr><td><strong>실행 위치</strong></td><td>보통 호출 앱 프로세스 내부</td><td>별도 프로세스(stdio) 또는 별도 서버(HTTP)로 분리 가능</td></tr>
+        <tr><td><strong>관계</strong></td><td colspan="2" style="text-align:center">MCP 서버가 노출하는 "도구(tools)"는 결국 LLM에게 Function Calling 스키마로 변환되어 전달됨 — MCP는 Function Calling 위에 쌓인 배포·발견 표준</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-info"><strong>실무 판단 기준</strong>"우리 팀이 만든 사내 도구를 여러 AI 에이전트·여러 프로젝트에서 재사용해야 하는가?"라는 질문에 "예"라면 MCP 서버로 만드는 것이 유리합니다. 한 프로젝트 내부에서만 쓰는 일회성 함수라면 굳이 MCP로 감쌀 필요 없이 해당 LLM API의 기본 tool 정의만으로 충분합니다.</div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>"MCP 도입"이라는 보고를 받으면 새로운 AI 모델이 아니라 "도구 연결 표준"을 채택했다는 뜻임을 이해한다.</li>
+      <li>MCP는 Anthropic이 시작했지만 현재 Linux Foundation 산하 오픈 표준이므로 특정 벤더 종속 문제로 오인하지 않는다.</li>
+      <li>새 외부 시스템을 AI에 연결할 때 "이 커넥터를 다른 프로젝트에서도 쓸 수 있는가"를 먼저 담당자에게 확인시킨다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH2 ===== -->
+<div class="section" id="ch2">
+  <h2 class="section-title section-anchor"><span class="icon">⚙️</span> 02. Tool Calling 원리 — LLM은 도구를 어떻게 "호출"하는가</h2>
+
+  <p>Anthropic 공식 문서(docs.claude.com, 2026-09-12 확인)는 Tool Calling을 이렇게 설명합니다: "Tool use(함수 호출이라고도 함)는 Claude가 개발자가 정의했거나 Anthropic이 제공하는 함수를 호출할 수 있게 합니다. Claude는 사용자 요청과 도구 설명을 근거로 언제 도구를 호출할지 스스로 결정합니다." 중요한 점은, LLM이 실제로 코드를 "실행"하는 것이 아니라는 것입니다. LLM은 "이 도구를 이 인자로 불러야 한다"는 <strong>구조화된 요청(JSON)</strong>을 텍스트로 생성할 뿐이고, 그 요청을 실제로 실행하는 것은 호출 측 애플리케이션(클라이언트 도구) 또는 Anthropic 인프라(서버 도구)입니다.</p>
+
+  <div class="diagram">
+    <div class="title">Tool Calling 왕복 흐름 (클라이언트 도구 기준)</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+① 사용자: "서울 날씨 알려줘"
+② 앱 → Claude: tools=[get_weather 스키마] + 사용자 메시지
+③ Claude → 앱: stop_reason="tool_use", tool_use{name:"get_weather", input:{location:"서울"}}
+④ 앱: 실제 날씨 API를 호출해 결과를 얻음 (Claude는 관여하지 않음)
+⑤ 앱 → Claude: tool_result{tool_use_id, content:"12도, 맑음"}
+⑥ Claude → 앱: 최종 자연어 답변 "서울은 현재 12도로 맑습니다"
+</pre>
+  </div>
+
+  <p>이 흐름에서 도구는 실행 위치에 따라 두 종류로 나뉩니다. <strong>클라이언트 도구(Client tools)</strong>는 개발자가 정의한 도구와 <code>bash</code>·<code>text_editor</code> 같은 Anthropic 표준 스키마 도구를 포함하며, 실제 실행은 호출 측 애플리케이션에서 이뤄집니다. <strong>서버 도구(Server tools)</strong>는 <code>web_search</code>, <code>web_fetch</code>, <code>code_execution</code>, <code>tool_search</code> 등으로, Anthropic 인프라에서 직접 실행되어 개발자가 별도 실행 코드를 작성할 필요가 없습니다(2026-09-12 docs.claude.com/agents-and-tools/tool-use/overview 실측 확인).</p>
+
+  <p>도구 호출 여부 판단은 기본값 <code>tool_choice: {"type":"auto"}</code>일 때 매 턴마다 Claude가 스스로 결정합니다. 요청이 도구의 설명된 기능과 맞아떨어지고 답이 이미 컨텍스트에 없을 때 도구를 호출하며, 안정적인 지식 질문·창작·일상 대화에는 직접 답합니다. <code>tool_choice</code>를 <code>any</code>(도구 중 하나는 반드시 호출)나 <code>tool</code>(특정 도구 강제 호출)로 바꿔 이 판단을 개발자가 강제할 수도 있습니다.</p>
+
+  <h3>가격 구조 — 도구 정의도 토큰이다</h3>
+  <p>도구를 많이 정의할수록 API 비용이 늘어납니다. <code>tools</code> 파라미터에 포함된 도구 이름·설명·스키마 전체가 입력 토큰으로 과금되기 때문입니다. Anthropic 공식 가격 문서(2026-09-12 확인) 기준 최신 모델 가격은 다음과 같습니다. (환율은 CEO 지시에 따라 $1 ≈ ₩1,380 고정 환산)</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>모델</th><th>입력 토큰 가격 (1M당)</th><th>출력 토큰 가격 (1M당)</th><th>컨텍스트 윈도우</th></tr></thead>
+      <tbody>
+        <tr><td>Claude Opus 5</td><td class="price">$5 (≈₩6,900)</td><td class="price">$25 (≈₩34,500)</td><td>1M 토큰</td></tr>
+        <tr><td>Claude Sonnet 5</td><td class="price">$2 (≈₩2,760)</td><td class="price">$10 (≈₩13,800)</td><td>1M 토큰</td></tr>
+        <tr><td>Claude Haiku 4.5</td><td class="price">$1 (≈₩1,380)</td><td class="price">$5 (≈₩6,900)</td><td>200K 토큰</td></tr>
+        <tr><td>Claude Fable 5.1<br><span style="color:var(--text3);font-size:.78rem">(2026-09-12 기준 문서에 등재된 최상위 추론 모델. CEO 지시 기준 최신 3종에는 포함되지 않으나 실측을 위해 병기)</span></td><td class="price">$10 (≈₩13,800)</td><td class="price">$50 (≈₩69,000)</td><td>1M 토큰</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>여기에 더해 <code>tools</code> 파라미터를 쓰면 API가 자동으로 "도구 사용법" 시스템 프롬프트를 추가로 삽입합니다. 이 오버헤드도 모델별·<code>tool_choice</code>별로 다르며 공식 문서 실측치는 아래와 같습니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>모델</th><th>tool_choice=auto/none</th><th>tool_choice=any/tool</th></tr></thead>
+      <tbody>
+        <tr><td>Claude Opus 5</td><td>286 토큰</td><td>406 토큰</td></tr>
+        <tr><td>Claude Sonnet 5</td><td>354 토큰</td><td>474 토큰</td></tr>
+        <tr><td>Claude Haiku 4.5</td><td>496 토큰</td><td>588 토큰</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-warn"><strong>비용 함정</strong>도구를 100개 등록하면 이 100개의 이름·설명·스키마 전체가 "매 요청마다" 입력 토큰으로 청구됩니다. 도구 자체를 실제로 호출하지 않아도 목록만 컨텍스트에 올라가는 것만으로 비용이 발생합니다 — 10장·11장에서 이 문제와 해법을 다룹니다.</div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>"AI가 도구를 호출했다"는 보고를 받으면 실제 작업을 실행한 것은 AI 모델이 아니라 우리 애플리케이션 코드(또는 Anthropic 서버)라는 것을 이해한다.</li>
+      <li>도구 개수가 늘어나면 매 요청 비용도 함께 오른다는 사실을 근거로, "도구를 무조건 많이 붙이는 것"이 항상 좋은 설계는 아니라고 판단한다.</li>
+      <li>가격 비교 시 모델명뿐 아니라 컨텍스트 윈도우(Haiku 4.5는 200K로 나머지 대비 작음)까지 함께 확인하도록 요구한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH3 ===== -->
+<div class="section" id="ch3">
+  <h2 class="section-title section-anchor"><span class="icon">📐</span> 03. 도구 스키마 설계 — 이름·설명·JSON Schema</h2>
+
+  <p>도구 정의는 세 가지 필수 요소로 구성됩니다: <code>name</code>(도구 이름), <code>description</code>(도구 설명), <code>input_schema</code>(JSON Schema 형식의 파라미터 정의). MCP 공식 스펙(2026-07-28)은 도구 이름 규칙을 다음과 같이 명시합니다: 길이는 1~128자, 대소문자를 구분하며, 허용 문자는 영문 대소문자·숫자·밑줄(_)·하이픈(-)·점(.)뿐이고 공백·쉼표 등 특수문자는 허용되지 않으며, 서버 내에서 고유해야 합니다.</p>
+
+  <p>Anthropic의 도구 설계 공식 가이드(docs.claude.com/agents-and-tools/tool-use/define-tools, 2026-09-12 확인)는 "설명의 품질이 도구 성능을 좌우하는 단연 가장 중요한 요소"라고 명시하며, 도구가 무엇을 하는지, 언제 써야(또는 쓰지 말아야) 하는지, 각 파라미터의 의미와 동작 방식, 중요한 제약 조건까지 설명에 담아야 한다고 권고합니다. 권장 분량은 도구당 최소 3~4문장이며 복잡한 도구는 더 길게 써야 합니다.</p>
+
+  <div class="compare-row">
+    <div class="compare-box con"><h4 style="color:var(--danger)">❌ 나쁜 설명 (공식 문서 예시)</h4><pre style="margin:0;font-size:.8rem">{
+  "name": "get_stock_price",
+  "description": "Gets the stock price
+    for a ticker.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "ticker": {"type": "string"}
+    }
+  }
+}</pre></div>
+    <div class="compare-box pro"><h4 style="color:var(--success)">✅ 좋은 설명 (공식 문서 예시)</h4><pre style="margin:0;font-size:.8rem">{
+  "name": "get_stock_price",
+  "description": "Retrieves the current
+    stock price for a given ticker.
+    Must be valid NYSE/NASDAQ symbol.
+    Returns latest trade price in USD.
+    Use when user asks about current
+    price only — no other company info.",
+  "input_schema": {...}
+}</pre></div>
+  </div>
+
+  <p>공식 가이드는 추가로 네 가지 원칙을 제시합니다. ① <strong>관련 작업을 하나의 도구로 통합</strong>하라 — <code>create_pr</code>·<code>review_pr</code>·<code>merge_pr</code>을 따로 만들기보다 <code>action</code> 파라미터를 가진 도구 하나로 묶으면 선택 모호성이 줄어듭니다. ② <strong>이름에 네임스페이스를 부여</strong>하라 — <code>github_list_prs</code>, <code>slack_send_message</code>처럼 서비스명을 접두어로 붙이면 도구가 많아져도 구분이 쉬워지고, 특히 11장에서 다룰 Tool Search 사용 시 중요합니다. ③ <strong>응답은 고신호 정보만</strong> 반환하라 — 불투명한 내부 참조 대신 슬러그·UUID 같은 안정적 식별자를 쓰고, 다음 단계 추론에 필요한 필드만 남기라는 것입니다. 불필요하게 큰 응답은 컨텍스트를 낭비하고 핵심 파악을 어렵게 만듭니다. ④ 복잡한 입력에는 <code>input_examples</code>(선택 필드)로 유효한 예시 입력을 함께 제공할 수 있습니다.</p>
+
+  <h3>MCP 도구 정의의 확장 필드 (2026-07-28 스펙)</h3>
+  <p>MCP 최신 스펙은 도구 정의에 다음 필드를 추가로 규정합니다(공식 문서 실측): <code>title</code>(표시용 사람이 읽는 이름, 선택), <code>icons</code>(UI 표시용 아이콘 배열, 선택), <code>outputSchema</code>(도구가 반환할 구조화 결과의 JSON Schema, 선택), <code>annotations</code>(도구 동작을 설명하는 부가 속성). 스펙은 "신뢰할 수 있는 서버에서 온 것이 아니라면 annotations를 신뢰해서는 안 된다(untrusted)"고 명시해 도구 설명·주석이 프롬프트 인젝션 경로가 될 수 있음을 경고합니다.</p>
+
+  <div class="alert alert-info"><strong>실무 팁</strong>파라미터가 없는 도구를 정의할 때 <code>inputSchema</code>를 <code>null</code>로 두면 안 됩니다. MCP 스펙은 <code>{"type":"object","additionalProperties":false}</code>(빈 객체만 허용, 권장) 또는 <code>{"type":"object"}</code>(임의 객체 허용) 중 하나를 명시적으로 쓰도록 규정합니다.</div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>도구 관련 버그 보고를 받으면 "코드 로직"보다 먼저 "설명 문구가 충분히 구체적인가"를 확인하도록 요구한다 — 공식 가이드가 지목하는 1순위 원인이다.</li>
+      <li>비슷한 기능의 도구가 여러 개 난립하고 있다면 통합(consolidation) 여부를 검토하라고 지시한다.</li>
+      <li>외부에서 가져온 MCP 서버의 도구 설명(annotations)은 신뢰할 수 없는 입력일 수 있으므로, 검증되지 않은 MCP 서버 연결 전 보안 검토를 요구한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH4 ===== -->
+<div class="section" id="ch4">
+  <h2 class="section-title section-anchor"><span class="icon">🏗️</span> 04. MCP 아키텍처 — Host·Client·Server 3단 구조</h2>
+
+  <p>MCP 공식 스펙(2025-06-18/2026-07-28 공통)은 통신 참여자를 세 가지 역할로 정의합니다. <strong>Host</strong>는 연결을 시작하는 LLM 애플리케이션(예: Claude Desktop, AADS 자체, Claude Code)입니다. <strong>Client</strong>는 Host 애플리케이션 내부에 있는 커넥터로, 하나의 Host가 여러 Server에 연결하기 위해 여러 Client 인스턴스를 가질 수 있습니다. <strong>Server</strong>는 컨텍스트와 기능을 제공하는 서비스입니다.</p>
+
+  <div class="arch-flow">
+    <div class="arch-box">Host<br><span style="font-weight:400;font-size:.75rem;color:var(--text2)">AI 애플리케이션</span></div>
+    <span class="arch-arrow">→</span>
+    <div class="arch-box">Client<br><span style="font-weight:400;font-size:.75rem;color:var(--text2)">Host 내부 커넥터</span></div>
+    <span class="arch-arrow">↔</span>
+    <div class="arch-box">Server<br><span style="font-weight:400;font-size:.75rem;color:var(--text2)">도구·데이터 제공</span></div>
+  </div>
+
+  <p>Server가 Client에 제공할 수 있는 기능은 세 가지입니다: <strong>Resources</strong>(사용자나 모델이 사용할 컨텍스트·데이터), <strong>Prompts</strong>(사용자를 위한 템플릿 메시지·워크플로), <strong>Tools</strong>(AI 모델이 실행할 함수). 반대로 Client가 Server에 제공할 수 있는 기능도 있는데, 2025-06-18 스펙에서는 <strong>Sampling</strong>(서버 주도 에이전틱 동작·재귀적 LLM 호출), <strong>Roots</strong>(서버가 URI·파일시스템 경계를 조회), <strong>Elicitation</strong>(서버가 사용자에게 추가 정보를 요청) 세 가지가 명시되어 있었습니다. 2026-07-28 최신 스펙 개요 문서에서는 이 중 <strong>Elicitation</strong>만 "Clients may offer" 목록에 남아 있었으나(2026-09-12 실측), 사이드바 문서 구조에는 Roots·Sampling 페이지가 여전히 존재해 완전히 폐지된 것인지 개요 문서 요약이 축약된 것인지는 <strong>미검증</strong>입니다 — 실제 도입 시 해당 버전의 변경 로그(changelog) 원문 확인이 필요합니다.</p>
+
+  <p>연결은 <strong>lifecycle(생명주기)</strong> 단계를 거칩니다: Client가 <code>initialize</code> 요청으로 지원 가능한 capability(기능)를 서버에 알리고, 서버가 자신의 capability로 응답하며, 이후 실제 요청·알림을 주고받습니다. 서버가 <code>tools</code> capability를 지원한다면 <code>{"capabilities":{"tools":{"listChanged":true}}}</code>처럼 선언해야 하며, <code>listChanged:true</code>는 도구 목록이 바뀔 때 서버가 클라이언트에게 알림(notification)을 보낼 것임을 뜻합니다.</p>
+
+  <h3>2026-07-28 스펙의 근본적 변화 — Stateful → Stateless</h3>
+  <p>두 스펙 버전의 "Key Details" 원문을 직접 비교한 결과(2026-09-12 실측), 기반 프로토콜 설명 자체가 달라졌습니다.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>항목</th><th>2025-06-18</th><th>2026-07-28 (최신)</th></tr></thead>
+      <tbody>
+        <tr><td>연결 방식</td><td>"Stateful connections" (상태 유지 연결)</td><td>"Stateless, self-contained requests" (무상태·자기완결적 요청)</td></tr>
+        <tr><td>capability 협상</td><td>"Server and client capability negotiation" (연결 시점 1회)</td><td>"Per-request capability negotiation" (요청 단위)</td></tr>
+        <tr><td>신규 개념</td><td>—</td><td>Extensions(선택적 확장): Tasks, Skills over MCP, MCP Apps</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>2026-07-28 스펙이 신설한 <strong>Extensions</strong>는 항상 opt-in이며 클라이언트·서버 양쪽이 초기화 시점에 명시적으로 지원을 협상해야 활성화됩니다. 주요 확장으로 <strong>Tasks</strong>(장시간 작업의 비동기 실행, 폴링·중간 입력·지속 핸들 지원), <strong>Skills over MCP</strong>(에이전트 워크플로용 구조화 지침을 MCP로 발견·소비), <strong>MCP Apps</strong>(대화 안에 인라인 렌더링되는 차트·폼 등 대화형 UI 요소)가 공식 문서에 나열되어 있습니다.</p>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>"MCP 서버를 붙였다"는 보고에서 Host/Client/Server 중 우리가 실제로 구현한 것이 무엇인지 구분해서 보고받는다(AADS는 두 역할을 모두 가지고 있음 — 12장 참조).</li>
+      <li>MCP 스펙 버전이 프로젝트마다 다를 수 있으므로, 새 MCP 연동 시 어떤 스펙 버전을 기준으로 구현했는지 명시하도록 요구한다.</li>
+      <li>Stateful→Stateless 전환처럼 스펙 자체가 바뀌는 경우가 있으므로, "MCP는 이미 완성된 고정 표준"이라고 가정하지 않는다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH5 ===== -->
+<div class="section" id="ch5">
+  <h2 class="section-title section-anchor"><span class="icon">🚇</span> 05. Transport 계층 — stdio·SSE·Streamable HTTP</h2>
+
+  <p>MCP 스펙은 JSON-RPC 메시지를 주고받는 "전송(Transport)" 방식을 표준으로 두 가지 정의합니다: <strong>stdio</strong>와 <strong>Streamable HTTP</strong>. 스펙 원문은 "클라이언트는 가능한 한 stdio를 지원해야 한다(SHOULD)"고 권고합니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Transport</th><th>동작 방식</th><th>적합한 상황</th></tr></thead>
+      <tbody>
+        <tr><td><strong>stdio</strong></td><td>클라이언트가 서버를 서브프로세스로 실행. 서버는 표준입력(stdin)으로 JSON-RPC 메시지를 읽고 표준출력(stdout)으로 응답. 메시지는 줄바꿈으로 구분되며 내부에 줄바꿈을 포함할 수 없음. stderr는 로깅용으로만 사용 가능</td><td>로컬 프로세스, 파일시스템 접근 등 같은 머신에서 실행되는 도구</td></tr>
+        <tr><td><strong>Streamable HTTP</strong></td><td>서버가 독립 프로세스로 동작하며 다중 클라이언트 연결 처리 가능. 단일 HTTP 엔드포인트가 POST(요청 전송)와 GET(SSE 스트림 개설) 모두 지원. 서버는 응답을 <code>application/json</code> 단일 객체 또는 <code>text/event-stream</code> SSE 스트림으로 반환 가능</td><td>원격 서버, 다중 사용자 서비스, 인증이 필요한 연동</td></tr>
+        <tr><td><strong>(구) HTTP+SSE</strong><br><span style="font-size:.75rem;color:var(--text3)">2024-11-05 버전, deprecated</span></td><td>POST 엔드포인트와 SSE 엔드포인트가 분리된 구조. 2025-06-18부터 Streamable HTTP로 대체되었으나 하위 호환을 위해 유지 가능</td><td>레거시 서버와의 호환 유지 목적으로만 신규 사용은 비권장</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Streamable HTTP에는 보안 요구사항이 명시되어 있습니다: 서버는 DNS 리바인딩 공격을 막기 위해 모든 연결의 <code>Origin</code> 헤더를 검증해야 하며(MUST), 로컬 실행 시 모든 인터페이스(0.0.0.0)가 아닌 localhost(127.0.0.1)에만 바인딩해야 한다(SHOULD)고 스펙이 경고합니다. 또한 세션 관리를 위해 서버가 초기화 시점에 <code>Mcp-Session-Id</code> 헤더로 세션 ID를 발급할 수 있고, 클라이언트는 이후 모든 요청에 이 헤더를 포함해야 합니다.</p>
+
+  <p>Anthropic의 Claude API <strong>MCP 커넥터</strong>(Messages API에서 별도 MCP 클라이언트 구현 없이 원격 MCP 서버에 직접 연결하는 기능, 2026-09-12 기준 베타 헤더 <code>mcp-client-2025-11-20</code>)는 스펙의 전체 기능 중 <strong>도구 호출(tool calls)만</strong> 지원하며, 서버는 반드시 HTTP로 공개되어야 하고 <strong>Streamable HTTP와 SSE 두 transport를 모두 지원</strong>하지만 로컬 stdio 서버는 직접 연결할 수 없다고 공식 문서에 명시되어 있습니다.</p>
+
+  <div class="alert alert-warn"><strong>AADS 아키텍처와의 연결(12장 예고)</strong>AADS의 MCP 클라이언트 설정 코드(<code>app/mcp/config.py</code>)를 실측한 결과, 연결 방식이 <code>"transport":"sse"</code>로 고정되어 있고 서버별로 포트를 분리(8765~8771)해 <code>/sse</code> 경로를 사용하는 구조였습니다. 이는 2025-06-18 스펙이 표준으로 승격시킨 "단일 엔드포인트 Streamable HTTP" 패턴이 아니라, 서버별 개별 포트를 쓰는 구식 SSE 패턴에 더 가깝습니다. 실제 백엔드 MCP 서버 구현체가 무엇을 쓰는지까지는 이번 조사에서 확인하지 못해 <strong>미검증</strong>이지만, 클라이언트 설정 자체는 레거시에 가까운 형태임을 코드로 확인했습니다.</div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>"MCP로 연결했다"는 보고에 stdio인지 HTTP 계열인지 묻는다 — 로컬 프로세스 도구와 원격 서비스는 보안·배포 방식이 완전히 다르다.</li>
+      <li>원격 MCP 서버를 붙일 때는 Origin 헤더 검증, localhost 바인딩 여부를 보안 체크리스트에 포함하도록 요구한다.</li>
+      <li>기존 시스템이 구버전 transport 패턴을 쓰고 있다면, 당장 교체가 필요한 긴급 이슈는 아니지만 신규 구축 시에는 최신 표준(Streamable HTTP)을 우선 검토하게 한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH6 ===== -->
+<div class="section" id="ch6">
+  <h2 class="section-title section-anchor"><span class="icon">🔁</span> 06. 에이전트 루프 설계 — ReAct와 멀티턴 도구 호출</h2>
+
+  <p>단발성 도구 호출(질문 1회 → 도구 1회 → 답변)과 달리, <strong>에이전트 루프(Agent Loop)</strong>는 모델이 도구 결과를 보고 다시 판단해 다음 도구를 호출하는 과정을 여러 차례 반복하는 구조입니다. 이는 2022~2023년 학계에서 제안된 <strong>ReAct(Reasoning + Acting)</strong> 패턴 — "생각(reasoning) → 행동(도구 호출) → 관찰(결과) → 다시 생각" 순환 — 이 업계 표준 구현 패턴으로 자리잡은 것입니다. Claude의 응답이 <code>stop_reason: "tool_use"</code>인 동안 호출 측은 도구를 실행하고 결과를 돌려주는 것을 반복하며, 모델이 더 이상 도구가 필요 없다고 판단하면 최종 <code>stop_reason: "end_turn"</code> 텍스트 응답을 냅니다.</p>
+
+  <div class="diagram">
+    <div class="title">에이전트 루프 (ReAct 패턴)</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+┌─────────────────────────────────────────────┐
+│  ①생각: "무엇을 해야 하는가"                    │
+│       ↓                                      │
+│  ②행동: 도구 호출 (tool_use)                    │
+│       ↓                                      │
+│  ③관찰: 도구 결과 수신 (tool_result)             │
+│       ↓                                      │
+│  ④재판단: 목표 달성? ──아니오──┐                 │
+│       │예                    │                │
+│       ▼                     (①로 복귀)         │
+│  최종 답변 반환 (end_turn)   └────────────────┘  │
+└─────────────────────────────────────────────┘
+</pre>
+  </div>
+
+  <p>2026-07-28 MCP 스펙은 여기에 <strong>MRTR(Multi Round-Trip Requests, 다중 왕복 요청)</strong>이라는 새로운 패턴을 공식화했습니다. 서버가 <code>tools/call</code> 요청에 즉시 결과를 주는 대신 <code>InputRequiredResult</code>(추가 입력 필요 응답)로 응답할 수 있고, 이 경우 클라이언트는 <code>elicitation/create</code> 같은 방식으로 사용자에게 정보를 요청한 뒤, 같은 도구 호출을 <code>inputResponses</code>와 <code>requestState</code>를 포함해 재시도합니다. 예: GitHub 로그인이 필요한 도구를 호출했는데 로그인 정보가 없으면, 서버가 "GitHub 사용자명을 알려달라"는 입력 요청을 반환하고 클라이언트가 사용자에게 물어본 뒤 재호출하는 식입니다. 이때 재시도 요청의 JSON-RPC <code>id</code>는 최초 요청과 반드시 달라야 한다고 스펙이 명시합니다.</p>
+
+  <p>에이전트 루프 설계에서 실무적으로 중요한 두 가지는 <strong>턴 예산(turn budget)</strong>과 <strong>도구 목록 캐싱</strong>입니다. 루프가 무한히 반복되지 않도록 최대 턴 수·최대 비용 상한을 두는 것이 필수인데, AADS CLAUDE.md에도 "LLM 15회/task"라는 명시적 상한이 CEO 절대 규칙으로 규정되어 있습니다. 또한 2026-07-28 스펙은 <code>tools/list</code> 응답에 <code>ttlMs</code>(캐시 유효 시간)와 <code>cacheScope</code>(캐시 범위) 필드를 신설해, 클라이언트가 도구 목록을 매번 새로 요청하지 않고 캐싱해 지연시간과 프롬프트 캐시 적중률을 높일 수 있게 했습니다. 스펙은 "서버는 결정적(deterministic)인 순서로 도구를 반환해야 한다(SHOULD)"고도 명시하는데, 이는 동일한 도구 목록이 매번 다른 순서로 오면 LLM 프롬프트 캐시가 깨지기 때문입니다.</p>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>에이전트 기능을 도입할 때 "최대 몇 번까지 스스로 반복할 수 있는가(턴 예산)"를 반드시 설계 문서에 명시하게 한다.</li>
+      <li>턴 예산이 없는 에이전트 루프는 무한 반복·과금 폭주 위험이 있으므로, 상한이 없다는 보고를 받으면 즉시 추가를 지시한다.</li>
+      <li>"AI가 중간에 추가 정보를 물어봤다"는 보고는 버그가 아니라 MRTR 같은 정상 설계 패턴일 수 있음을 이해하고, 어떤 패턴인지 구분해서 보고받는다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH7 ===== -->
+<div class="section" id="ch7">
+  <h2 class="section-title section-anchor"><span class="icon">⚡</span> 07. 병렬 툴 호출 — 언제, 어떻게 동시에 부를 것인가</h2>
+
+  <p>Claude 응답 하나에 여러 <code>tool_use</code> 블록이 동시에 담길 수 있습니다. Anthropic 공식 문서(2026-09-12 확인)는 "API는 실행 순서를 규정하지 않는다 — 동시 실행(<code>Promise.all</code>, <code>asyncio.gather</code>), 도구가 나온 순서대로 순차 실행, 또는 그 조합 중 무엇을 택할지는 호출 측의 결정"이라고 명시합니다. 판단 기준은 도구의 성격입니다: <strong>독립적이고 읽기 전용인 작업은 병렬 실행이 지연시간을 줄이는 데 안전</strong>하고, <strong>부작용이 있거나 상태를 공유하거나 순서 의존성이 있는 도구는 순차 실행이 낫습니다.</strong></p>
+
+  <div class="compare-row">
+    <div class="compare-box pro"><h4 style="color:var(--success)">✅ 병렬화 적합</h4><p style="font-size:.85rem;color:var(--text2)">여러 파일 동시 읽기, 여러 도시 날씨 동시 조회, 여러 DB 테이블 스키마 동시 조회 — 서로 영향을 주지 않는 조회성 작업</p></div>
+    <div class="compare-box con"><h4 style="color:var(--danger)">❌ 병렬화 부적합</h4><p style="font-size:.85rem;color:var(--text2)">파일 쓰기 후 그 파일을 읽는 작업, 레코드 생성 후 그 ID로 업데이트하는 작업 — 순서·상태 의존성이 있는 작업</p></div>
+  </div>
+
+  <p>병렬 호출을 사용할 때 지켜야 할 형식 규칙이 있습니다: 여러 <code>tool_use</code>에 대한 <code>tool_result</code>는 <strong>각각 별도 메시지가 아니라 하나의 user 메시지 안에 모두 담아 함께 보내야</strong> 하며, 그 메시지 안에서 <code>tool_result</code> 블록은 어떤 텍스트 콘텐츠보다도 앞에 와야 합니다. 공식 트러블슈팅 가이드는 이 규칙을 어기고 도구 결과를 별도 메시지로 쪼개 보내는 것이 "Claude에게 병렬 호출을 하지 말라고 가르치는" 가장 흔한 실수라고 지적합니다. 만약 순차 실행 중 앞선 호출이 실패해 뒤 호출을 아예 실행하지 않았다면, 그 호출에도 <code>is_error: true</code>와 짧은 사유를 담은 <code>tool_result</code>를 반드시 반환해야 합니다.</p>
+
+  <pre><code>// 올바른 형식 — 결과를 하나의 메시지에 모아 반환
+[
+  {"role": "assistant", "content": [tool_use_1, tool_use_2]},
+  {"role": "user", "content": [tool_result_1, tool_result_2]}
+]
+
+// 잘못된 형식 — 병렬 호출을 억제시킴
+[
+  {"role": "assistant", "content": [tool_use_1, tool_use_2]},
+  {"role": "user", "content": [tool_result_1]},
+  {"role": "user", "content": [tool_result_2]}
+]</code></pre>
+
+  <p>병렬 호출 빈도를 높이고 싶다면 시스템 프롬프트에 "독립적인 여러 작업을 수행해야 할 때는 순차적으로 하지 말고 관련된 모든 도구를 동시에 호출하라"는 지침을 추가하는 것을 공식 문서가 권장합니다. 다만 Claude Fable 5.1처럼 긴 에이전트 루프(커스텀 코딩 에이전트, bash/텍스트 에디터 하네스 등)에서는 다음 읽기 작업이 암묵적으로만 유추되는 상황에서 병렬 호출 빈도가 낮아질 수 있다고 공식 문서가 안내하며, 이 경우 전용 배치 지침을 프롬프트에 추가하도록 권고합니다.</p>
+
+  <h3>AADS의 병렬 처리 실측 사례</h3>
+  <p>AADS는 <code>spawn_parallel_subagents</code> 도구를 통해 여러 서브에이전트를 <code>asyncio.gather</code>로 동시 실행하는 구조를 갖추고 있습니다(CLAUDE.md AADS-190 Phase 2 기록, 2026-03-10). 이는 "독립적인 여러 조사·읽기 작업을 병렬화하라"는 위 공식 권고를 그대로 구현한 사례입니다. 13장에서 이 도구의 실제 호출 건수(45건)를 실측 데이터로 제시합니다.</p>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>여러 조회 작업을 순차로 처리해 느리다는 보고를 받으면, 해당 작업들이 서로 독립적인지 확인 후 병렬화를 지시한다.</li>
+      <li>쓰기·삭제처럼 부작용이 있는 작업을 병렬화하겠다는 제안은 순서 보장이 되는지부터 검증하게 한다.</li>
+      <li>도구 결과 처리 코드에서 "메시지를 하나로 묶어 보내는지"는 사소해 보이지만 병렬 성능 전체를 좌우하는 실무 디테일이므로, 성능 이슈 보고 시 이 부분을 점검 항목에 넣는다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH8 ===== -->
+<div class="section" id="ch8">
+  <h2 class="section-title section-anchor"><span class="icon">🛡️</span> 08. 오류·재시도 설계 — isError·백오프·Graceful Degradation</h2>
+
+  <p>MCP 스펙은 도구 실행 결과에 <code>isError</code> 불리언 필드를 두어, 도구가 "프로토콜 수준에서는 정상 호출됐지만 도구 자체 로직이 실패했음"을 모델에게 알리도록 설계했습니다. 이는 JSON-RPC 자체의 오류(잘못된 도구 이름, 잘못된 인자 등 프로토콜 오류)와는 다른 층위입니다 — 프로토콜 오류는 JSON-RPC 표준 오류 응답으로, 도구 실행 실패는 정상적인 결과 객체 안의 <code>isError: true</code>로 표현됩니다. Claude API의 MCP 커넥터도 동일하게 <code>mcp_tool_result</code> 블록에 <code>is_error</code> 필드를 둡니다.</p>
+
+  <pre><code>// 도구 실행 자체는 실패했지만 정상적인 결과 객체로 반환되는 예
+{
+  "jsonrpc": "2.0", "id": 2,
+  "result": {
+    "content": [{"type": "text", "text": "파일을 찾을 수 없습니다: /etc/passwd"}],
+    "isError": true
+  }
+}</code></pre>
+
+  <p>재시도 설계의 핵심 패턴은 <strong>지수 백오프(Exponential Backoff)</strong>와 <strong>Graceful Degradation(우아한 성능 저하)</strong>입니다. 지수 백오프는 재시도 간격을 2⁰초, 2¹초, 2²초...처럼 지수적으로 늘려, 일시 장애 시 상대 서버에 부하를 몰아주지 않으면서도 복구를 기다리는 기법입니다. Graceful Degradation은 도구·서버 연결이 실패해도 전체 시스템이 죽지 않고 "일부 기능 없이도" 계속 동작하도록 설계하는 원칙입니다.</p>
+
+  <h3>AADS 실제 재시도·Graceful Degradation 구현 (코드 실측)</h3>
+  <p>AADS의 MCP 클라이언트 매니저(<code>app/mcp/client.py</code>, 2026-09-12 코드 직접 확인)는 이 두 원칙을 다음과 같이 실제 구현하고 있습니다.</p>
+  <ul>
+    <li><strong>2단 재시도 구조</strong>: 서버 1개당 ping 실패 시 <code>2 ** attempt</code>초 간격으로 최대 3회 재시도, 그래도 전체 서버가 하나도 응답하지 않으면 5초 간격으로 전체 재시도를 다시 최대 3회 반복(코드 원문: <code>for attempt in range(3)</code> 내부 재시도 + <code>for global_attempt in range(3)</code> 전체 재시도).</li>
+    <li><strong>SSE 특유의 ping 방식</strong>: 일반 GET으로 응답 본문을 기다리면 SSE는 무한 스트림이라 타임아웃까지 블로킹되므로, <code>httpx.AsyncClient.stream()</code>으로 헤더만 확인하고 본문은 읽지 않는 방식을 사용 — 상태 코드 200/405/406을 "연결 가능"으로 판정.</li>
+    <li><strong>Graceful Degradation 3단계</strong>: ① 개별 서버 연결 실패 시 해당 서버만 제외하고 나머지로 진행 ② 상시 가동 서버가 하나도 없어도 <code>self._initialized = True</code>로 표시해 서버 전체가 크래시하지 않고 "도구 없이" 계속 기동 ③ <code>get_tools()</code> 호출 자체가 예외를 던지면 빈 리스트를 반환해 상위 로직이 깨지지 않게 함.</li>
+  </ul>
+  <blockquote>logger.warning("mcp_no_servers_available")
+self._initialized = True  # graceful degradation: 서버 없어도 동작</blockquote>
+
+  <div class="alert alert-success"><strong>설계 원칙</strong>이 코드가 보여주는 핵심 원칙은 "MCP 서버 연결 실패가 AADS 전체 서비스 장애로 번지지 않아야 한다"는 것입니다. 도구 하나가 없으면 그 도구를 쓰는 기능만 축소되고, 나머지 서비스는 정상 동작합니다.</div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>외부 연동(MCP 서버, API 등) 실패가 전체 서비스 중단으로 이어지는 설계인지, 아니면 해당 기능만 축소되는 설계인지 신규 기능 검토 시 반드시 확인한다.</li>
+      <li>재시도 로직에 상한(최대 횟수)이 없으면 무한 재시도로 인한 리소스 낭비·장애 은폐 위험이 있으므로 상한 설정 여부를 점검한다.</li>
+      <li>"도구 호출이 실패했다"는 보고에서 프로토콜 오류(연결 자체 실패)인지 도구 로직 오류(isError)인지 구분해서 원인 분석을 요구한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH9 ===== -->
+<div class="section" id="ch9">
+  <h2 class="section-title section-anchor"><span class="icon">🔒</span> 09. 권한·보안 경계 — 동의·화이트리스트·민감 경로 차단</h2>
+
+  <p>MCP 공식 스펙은 "Security and Trust & Safety" 섹션에서 4대 핵심 원칙을 명시합니다(2025-06-18/2026-07-28 공통 확인). ① <strong>사용자 동의와 통제</strong>: 사용자는 모든 데이터 접근·작업에 명시적으로 동의해야 하고 무엇이 공유되는지 통제권을 가져야 한다. ② <strong>데이터 프라이버시</strong>: 호스트는 사용자 데이터를 서버에 노출하기 전 명시적 동의를 얻어야 하고, 동의 없이 리소스 데이터를 다른 곳에 전송해서는 안 된다. ③ <strong>도구 안전성</strong>: 도구는 임의 코드 실행을 의미하므로 신중히 다뤄야 하며, 신뢰할 수 있는 서버가 아니라면 도구 동작에 대한 annotations는 신뢰할 수 없는 것으로 간주해야 하고, 호스트는 어떤 도구를 호출하든 명시적 사용자 동의를 얻어야 한다. ④ <strong>LLM 샘플링 통제</strong>: 서버가 재귀적으로 LLM을 호출하는 Sampling 기능은 사용자가 허용 여부·실제 전송될 프롬프트·서버가 볼 수 있는 결과를 통제해야 한다.</p>
+
+  <p>스펙 자체는 이 원칙들을 프로토콜 수준에서 강제할 수는 없다고 인정하며, 구현체(호스트 애플리케이션)가 견고한 동의·인가 플로우를 구축하고, 보안 함의를 명확히 문서화하고, 적절한 접근 통제와 데이터 보호를 구현할 것을 권고(SHOULD)합니다. 즉 <strong>MCP 보안은 프로토콜이 아니라 이를 구현하는 각 애플리케이션의 책임</strong>입니다.</p>
+
+  <h3>AADS의 실제 보안 경계 구현 (코드 실측)</h3>
+  <p>AADS는 두 가지 방향의 MCP 보안 경계를 코드로 실제 구현하고 있습니다(<code>app/core/mcp_server.py</code> 직접 확인, 2026-09-12).</p>
+  <ul>
+    <li><strong>화이트리스트 노출</strong>: AADS가 자신의 REST API를 MCP 도구로 노출할 때(fastapi-mcp 사용), <code>_EXPOSED_OPERATIONS</code> 리스트에 <code>health_check</code>, <code>submit_directive</code>, 아젠다 CRUD(<code>add_agenda</code>, <code>list_agendas</code>, <code>decide_agenda</code> 등) 등 명시적으로 지정한 operation만 MCP 도구로 노출됩니다. 목록에 없는 엔드포인트는 자동 노출되지 않습니다.</li>
+    <li><strong>경로 블랙리스트</strong>: <code>_EXCLUDED_PATH_PREFIXES</code>로 <code>/api/v1/auth</code>, <code>/api/v1/debug</code>, <code>/api/v1/admin</code>, <code>/api/v1/stream</code> 네 경로 그룹을 명시적으로 제외합니다. 이는 인증·디버그·관리자·스트리밍 엔드포인트가 실수로 AI 모델에게 도구로 노출되는 것을 막는 방어선입니다.</li>
+    <li><strong>graceful 비활성화</strong>: <code>MCP_ENABLED=false</code> 환경변수 하나로 전체 MCP 서버 마운트를 끌 수 있고, <code>fastapi-mcp</code> 라이브러리가 설치되지 않았거나 마운트 중 예외가 발생해도 앱 전체가 죽지 않고 경고 로그만 남깁니다.</li>
+  </ul>
+
+  <p>반대 방향(AADS가 클라이언트로서 외부 MCP 도구를 호출하는 경우)의 보안 경계는 이 교육자료 작성에 사용된 도구들의 설명문에서도 직접 확인할 수 있습니다. 예를 들어 <code>write_remote_file</code> 도구 설명은 "<code>.env</code>/<code>.ssh</code>/credentials 등 민감 파일 차단, 최대 1MB"라고 명시하고, <code>query_database</code>류 도구는 "SELECT만 허용, DML/DDL 차단"이라고 명시합니다. 이는 CLAUDE.md의 <strong>R-KEY(API 키 보안)</strong> 절대 규칙(API 키를 소스코드에 하드코딩 금지, <code>.env</code> 경유만 허용)이 도구 설계 단계에서부터 강제되고 있는 사례입니다.</p>
+
+  <div class="alert alert-warn"><strong>주의할 함정</strong>MCP 스펙은 "annotations는 신뢰할 수 없는 서버라면 믿지 말라"고 경고합니다. 즉 외부(제3자) MCP 서버를 연결할 때, 그 서버가 제공하는 도구 설명 텍스트 자체에 악의적 지시문이 숨어 있을 수 있는 <strong>프롬프트 인젝션 경로</strong>가 됩니다 — 검증되지 않은 MCP 서버를 그대로 연결하는 것은 새로운 공격 표면을 여는 것과 같습니다.</div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>새 MCP 서버·도구를 AI 시스템에 연결하기 전, 그 서버가 신뢰할 수 있는 출처인지(자체 구축/공식 파트너/불특정 제3자)를 반드시 확인시킨다.</li>
+      <li>AADS가 자신의 API를 도구로 노출할 때 화이트리스트 방식(명시적으로 허용한 것만 노출)을 쓰고 있는지, 블랙리스트 방식(막은 것 외엔 다 노출)으로 바뀌지 않았는지 주기적으로 점검을 지시한다.</li>
+      <li>고위험 도구(삭제, 결제, 배포)는 "사용자 동의" 원칙에 따라 실행 전 확인 단계가 있는지 별도로 검증하게 한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH10 ===== -->
+<div class="section" id="ch10">
+  <h2 class="section-title section-anchor"><span class="icon">📉</span> 10. 툴 과다의 함정 — 컨텍스트 오염과 선택 정확도 저하</h2>
+
+  <p>도구 개수가 늘어나면 세 가지 문제가 동시에 발생합니다. ① <strong>토큰 비용 증가</strong> — 2장에서 본 것처럼 모든 도구의 이름·설명·스키마가 매 요청마다 입력 토큰으로 청구됩니다. ② <strong>선택 정확도 저하</strong> — 후보 도구가 많아질수록 모델이 이름과 설명만 보고 올바른 도구를 골라내야 하는 부담이 커지고, 비슷한 이름·기능의 도구가 섞여 있으면 오선택 확률이 올라갑니다. ③ <strong>컨텍스트 오염(Context Rot)</strong> — 실제로는 쓰이지 않을 도구 설명들이 컨텍스트 윈도우를 차지해 정작 중요한 정보(사용자 지시, 이전 대화)의 상대적 비중을 희석시킵니다.</p>
+
+  <p>Anthropic MCP 커넥터 공식 문서(2026-09-12 확인)는 이 문제를 명시적으로 언급합니다: "도구가 많을 때(여러 서버에 걸쳐 수십 개) Claude는 도구 이름과 설명을 기반으로 선택한다. 명확하고 구체적인 도구 설명이 선택 정확도를 높인다. 큰 도구 집합에서는 관련 도구만 쿼리별로 노출되도록 Tool Search Tool과 함께 <code>defer_loading</code>을 활성화하는 것을 고려하라." 정확히 몇 개부터 문제가 시작되는지에 대한 절대적 임계값은 공식 문서에서 숫자로 확인하지 못했으므로 <strong>미검증</strong>이며, 다만 Tool Search Tool 자체의 공식 설명이 "수천 개(thousands)의 도구를 다루기 위한" 기능이라고 표현하는 것으로 볼 때, 업계는 "수십~수백 개 이상" 구간부터 선택 문제가 실질적으로 대두된다고 간주하는 것으로 추정됩니다(추정치, 미검증).</p>
+
+  <h3>실측 관찰 — 이 문서를 만드는 이번 작업 자체가 사례였다</h3>
+  <p>흥미롭게도, 이 교육자료를 작성하는 이번 작업 세션 자체가 "툴 과다" 문제의 실사례였습니다. 작업 시작 시점에 시스템이 제공한 "미로딩 도구(deferred tools)" 목록을 직접 세어본 결과 <strong>총 143개</strong>였고(비MCP 제어 도구 5개 + <code>mcp__aads-tools__</code> 접두어 도구 138개), 이 도구들은 이름만 노출되고 파라미터 스키마는 별도로 요청해야 로딩되는 방식이었습니다. 실제로 첫 시도에서 <code>ToolSearch(query="select:read_remote_file,list_remote_dir,query_database,fetch_url,write_remote_file")</code>처럼 도구 이름을 쉼표로 나열해 한 번에 스키마를 불러오려 했으나 <strong>"No matching deferred tools found"</strong> 오류가 반환되어, 결국 도구 이름 하나씩 개별 키워드 검색으로 다시 요청해야 했습니다. 이는 11장에서 다룰 "Tool Search/Deferred Loading" 개념이 이론이 아니라 실제로 이 작업 도중 직접 겪은 UX 마찰(friction)이었다는 뜻입니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>항목</th><th>값</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>이번 세션 미로딩(deferred) 도구 총 개수</td><td class="perf">143개</td><td>세션 시작 시 시스템 메시지에서 직접 카운트(실측)</td></tr>
+        <tr><td>그중 <code>mcp__aads-tools__*</code> 접두어 도구</td><td class="perf">138개</td><td>AADS 자체 MCP 도구군</td></tr>
+        <tr><td>다중 이름 select 쿼리 1회 성공 여부</td><td style="color:var(--danger);font-weight:600">실패</td><td>"No matching deferred tools found" — 개별 키워드 재시도로 해결</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-danger"><strong>실무 시사점</strong>도구가 138개 이상 등록된 시스템에서는 "필요한 도구를 한 번에 정확히 찾아내는 것" 자체가 별도의 기술적 과제가 됩니다. 도구를 추가할 때마다 이 탐색 비용(시간·토큰·실패율)이 함께 늘어난다는 것을 설계 단계부터 고려해야 합니다.</div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>"도구를 몇 개 더 추가하자"는 요청이 들어오면, 추가 비용뿐 아니라 기존 도구 선택 정확도에 미치는 영향도 함께 검토하게 한다.</li>
+      <li>도구 개수가 이미 100개를 넘는 시스템이라면(AADS가 해당), 신규 도구 추가보다 기존 도구 통합·정리가 우선순위일 수 있음을 인지한다.</li>
+      <li>"AI가 엉뚱한 도구를 불렀다" 또는 "필요한 도구를 못 찾았다"는 보고가 반복되면 도구 설명 품질 문제 이전에 도구 개수 자체가 임계점을 넘었는지부터 의심한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH11 ===== -->
+<div class="section" id="ch11">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 11. 대응 전략 — Tool Search와 Deferred Loading</h2>
+
+  <p>10장의 문제에 대한 업계 표준 해법은 <strong>점진적 노출(Progressive Disclosure)</strong>입니다: 모든 도구의 전체 스키마를 처음부터 컨텍스트에 다 올리는 대신, 필요할 때만 관련 도구를 찾아 로딩하는 방식입니다. Anthropic은 이를 <strong>Tool Search Tool</strong>이라는 서버 도구로 공식 제공하며, 공식 설명은 "수천 개의 도구를 온디맨드로 발견·로딩해 다룰 수 있게 한다"입니다.</p>
+
+  <p>Claude API의 MCP 커넥터에서는 이 메커니즘이 <code>defer_loading</code> 설정으로 노출됩니다(2026-09-12 공식 문서 실측). MCP 툴셋(<code>mcp_toolset</code>) 설정에서 도구별로 <code>enabled</code>(활성화 여부)와 <code>defer_loading</code>(초기 로딩 지연 여부)을 지정할 수 있고, <code>defer_loading: true</code>인 도구는 <strong>도구 설명이 모델에게 처음부터 전송되지 않고</strong>, Tool Search Tool을 통해 필요할 때만 검색되어 로딩됩니다.</p>
+
+  <pre><code>{
+  "type": "mcp_toolset",
+  "mcp_server_name": "google-calendar-mcp",
+  "default_config": {
+    "enabled": false,
+    "defer_loading": true
+  },
+  "configs": {
+    "search_events": {"enabled": true, "defer_loading": false},
+    "list_events":   {"enabled": true}
+  }
+}
+// search_events: 즉시 노출 / list_events: 지연 로딩 / 나머지: 비활성화</code></pre>
+
+  <p>설정 병합 우선순위는 <code>configs</code>(도구별 개별 설정) &gt; <code>default_config</code>(세트 전체 기본값) &gt; 시스템 기본값 순입니다. 공식 문서는 "여러 MCP 서버에 걸쳐 수십 개 도구가 있는 대규모 환경에서는 <code>defer_loading</code>과 Tool Search Tool을 함께 써서 쿼리별로 관련 도구만 노출하는 것을 고려하라"고 명시적으로 권고합니다.</p>
+
+  <p>MCP 프로토콜 자체도 이 방향을 뒷받침하는 신설 기능을 2026-07-28 스펙에 담았습니다: <code>tools/list</code> 응답에 <strong>페이지네이션(cursor/nextCursor)</strong>과 <strong>캐싱 힌트(ttlMs, cacheScope)</strong>를 추가해, 도구 수가 많은 서버도 한 번에 전체를 내려받지 않고 필요한 페이지만, 그것도 캐시 가능한 형태로 가져올 수 있게 했습니다.</p>
+
+  <h3>10장 사례와의 연결 — 이번 세션의 대응 방식</h3>
+  <p>10장에서 겪은 실패(다중 이름 select 쿼리 불가)에 대한 실제 대응은, 개별 도구명마다 <code>ToolSearch</code>를 키워드 검색으로 재호출하는 것이었습니다. 이는 원리상 Tool Search Tool의 "필요한 것만 찾아서 로딩"이라는 개념과 동일한 패턴이며, 구현 세부사항(다중 이름 배치 조회 지원 여부)에서 이 시스템의 <code>ToolSearch</code>가 Anthropic 공식 Tool Search Tool과 정확히 동일한 구현체인지는 <strong>미검증</strong>이지만, "선요약 목록 + 필요시 상세 로딩"이라는 설계 사상은 동일하게 확인됩니다.</p>
+
+  <div class="alert alert-info"><strong>설계 원칙 요약</strong>도구가 많아질 때의 정답은 "도구를 줄이는 것"이 아니라 "한 번에 보여주는 범위를 줄이는 것"입니다. 전체 목록은 서버에 그대로 두고, 모델에게는 이름 수준의 가벼운 목록만 먼저 주고, 실제로 필요한 도구의 상세 스키마만 그때그때 불러오는 것이 핵심입니다.</div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>도구가 많은 시스템을 새로 설계할 때는 처음부터 "전체 로딩" 대신 "지연 로딩(defer_loading) + 검색" 구조를 기본값으로 검토하게 한다.</li>
+      <li>지연 로딩 도입 시 자주 쓰는 핵심 도구(예: 파일 읽기, DB 조회)는 즉시 노출로 남기고 부가 기능만 지연 로딩하는 우선순위 설계를 요구한다.</li>
+      <li>"도구 검색이 실패했다"는 로그가 쌓이면 검색 키워드·네이밍 규칙(3장의 네임스페이스 원칙)부터 점검하도록 지시한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH12 ===== -->
+<div class="section" id="ch12">
+  <h2 class="section-title section-anchor"><span class="icon">🏢</span> 12. AADS 실측 ① — 이중 MCP 구조(서버 역할 vs 클라이언트 역할)</h2>
+
+  <p>AADS 코드베이스를 직접 조회한 결과(<code>list_remote_dir(project='AADS', path='app', keyword='mcp')</code>, 2026-09-12), MCP 관련 코드는 <code>app/core/mcp_server.py</code>, <code>app/mcp/client.py</code>, <code>app/mcp/config.py</code>, <code>app/services/mcp_client.py</code> 네 파일에 분산되어 있으며, 이는 AADS가 <strong>MCP Server 역할</strong>과 <strong>MCP Client 역할</strong>을 동시에 수행하는 이중 구조임을 보여줍니다.</p>
+
+  <div class="diagram">
+    <div class="title">AADS 이중 MCP 구조 (코드 실측)</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+        [외부 AI 클라이언트]                    [AADS 서버]
+              │  MCP 프로토콜로 호출                 │
+              ▼                                     │
+   ┌──────────────────────┐                          │
+   │ app/core/mcp_server.py│ ◄── AADS = MCP Server 역할 │
+   │ (fastapi-mcp 마운트)   │      화이트리스트 15개 op   │
+   └──────────────────────┘      노출, 4개 경로 제외    │
+                                                       │
+   ┌──────────────────────┐                           │
+   │ app/mcp/client.py     │ ◄── AADS = MCP Client 역할  │
+   │ app/mcp/config.py     │      MultiServerMCPClient  │
+   └──────────┬───────────┘      (langchain-mcp-adapters)│
+              │  SSE, localhost:8765~8771               │
+              ▼                                          │
+   [filesystem][git][memory] 상시 3개 + [postgres][github]
+   [brave_search][fetch] — config 주석상 "온디맨드 3개"
+</pre>
+  </div>
+
+  <h3>① 서버 역할 — app/core/mcp_server.py</h3>
+  <p><code>fastapi-mcp</code> 라이브러리(요구 버전 <code>&gt;=0.3.0</code>, ImportError 시 graceful 비활성화)로 AADS의 기존 FastAPI 엔드포인트를 자동으로 MCP 도구로 노출합니다. 화이트리스트(<code>_EXPOSED_OPERATIONS</code>)에는 <code>health_check</code>, <code>infra_check</code>, <code>project_docs</code>, <code>submit_directive</code>, <code>list_workspaces</code> 및 CEO 아젠다 관리 6종(<code>add_agenda</code>, <code>list_agendas</code>, <code>get_agenda</code>, <code>update_agenda</code>, <code>decide_agenda</code>, <code>search_agendas</code>)이 등록되어 있어 총 15개 operation이 화이트리스트로 관리됩니다. 제외 경로(<code>_EXCLUDED_PATH_PREFIXES</code>)는 <code>/api/v1/auth</code>, <code>/api/v1/debug</code>, <code>/api/v1/admin</code>, <code>/api/v1/stream</code> 4개입니다. <code>MCP_ENABLED</code> 환경변수(기본값 true)로 전체 기능을 켜고 끌 수 있습니다.</p>
+
+  <h3>② 클라이언트 역할 — app/mcp/client.py, config.py</h3>
+  <p>AADS는 <code>langchain-mcp-adapters</code>의 <code>MultiServerMCPClient</code>로 외부 MCP 서버 7개에 연결하도록 설정되어 있습니다. <code>app/mcp/config.py</code> 코드 원문 주석은 "상시 가동 4개: Filesystem, Git, Memory, PostgreSQL / 온디맨드 3개: GitHub, Brave Search, Fetch"라고 설명하지만, 실제 <code>ALWAYS_ON_SERVERS</code> 상수를 코드에서 직접 확인한 결과 <code>["filesystem", "git", "memory"]</code> <strong>3개만</strong> 포함되어 있고 <code>postgres</code>는 <code>MCP_PORTS</code> 딕셔너리와 <code>get_mcp_connections()</code>에는 정의되어 있지만 <code>ALWAYS_ON_SERVERS</code>·<code>ON_DEMAND_SERVERS</code> 어느 목록에도 포함되어 있지 않습니다. 이는 주석(문서화)과 실제 상수 목록 사이의 불일치를 코드 레벨에서 실측 확인한 것이며, 의도된 설계 변경인지 누락된 버그인지는 이번 조사 범위에서 확인하지 못해 <strong>미검증</strong>입니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>서버명</th><th>포트</th><th>ALWAYS_ON_SERVERS 포함</th><th>ON_DEMAND_SERVERS 포함</th></tr></thead>
+      <tbody>
+        <tr><td>filesystem</td><td>8765</td><td class="recommend">O</td><td>-</td></tr>
+        <tr><td>git</td><td>8766</td><td class="recommend">O</td><td>-</td></tr>
+        <tr><td>memory</td><td>8767</td><td class="recommend">O</td><td>-</td></tr>
+        <tr><td>postgres</td><td>8768</td><td style="color:var(--warning);font-weight:600">X (주석은 포함이라 함)</td><td style="color:var(--warning);font-weight:600">X</td></tr>
+        <tr><td>github</td><td>8769</td><td>-</td><td class="recommend">O</td></tr>
+        <tr><td>brave_search</td><td>8770</td><td>-</td><td class="recommend">O</td></tr>
+        <tr><td>fetch</td><td>8771</td><td>-</td><td class="recommend">O</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>이 두 역할의 관계를 CEO 관점에서 정리하면: AADS는 (a) 다른 AI 애플리케이션이 AADS의 아젠다·헬스체크 기능을 도구로 쓸 수 있게 "제공"하는 동시에, (b) 자기 자신은 파일시스템·Git·메모리·검색 같은 외부 MCP 서버의 도구를 "소비"합니다. 이 둘은 완전히 독립된 코드 경로이며, 하나가 장애나도 다른 하나는 8장에서 설명한 graceful degradation 원칙에 따라 계속 동작하도록 설계되어 있습니다.</p>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>"AADS가 MCP를 쓴다"는 보고를 받으면 서버 역할인지 클라이언트 역할인지 구분해서 다시 보고받는다 — 두 역할은 코드도, 보안 경계도, 장애 영향 범위도 다르다.</li>
+      <li>주석(문서)과 코드 상수가 불일치하는 사례(postgres 상시가동 여부)가 실제로 발견되었으므로, 앞으로 유사한 "문서-코드 불일치" 점검을 정기 코드 리뷰 항목에 추가하도록 지시한다.</li>
+      <li>MCP 서버 화이트리스트(15개 operation)에 새 엔드포인트를 추가할 때는 반드시 CEO 또는 보안 담당자 검토를 거치도록 프로세스화한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH13 ===== -->
+<div class="section" id="ch13">
+  <h2 class="section-title section-anchor"><span class="icon">📊</span> 13. AADS 실측 ② — 54개 도구 호출 통계와 실측 실패율</h2>
+
+  <p>AADS DB의 <code>tool_results_archive</code> 테이블을 직접 조회한 결과(<code>query_database</code>, 2026-09-12), 이 테이블은 도구 호출 1건당 1행으로 <code>tool_use_id</code>, <code>tool_name</code>, <code>input_params</code>(jsonb), <code>raw_output</code>, <code>output_tokens</code>, <code>is_error</code>, <code>success</code>, <code>latency_ms</code>, <code>error_detail</code> 컬럼을 갖고 있습니다. 전체 실측 통계는 다음과 같습니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>지표</th><th>실측값</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>총 도구 호출 기록 건수</td><td class="perf">6,305건</td><td>COUNT(*) 실측</td></tr>
+        <tr><td>서로 다른 도구 종류 수</td><td class="perf">54개</td><td>COUNT(DISTINCT tool_name) 실측 — CEO 지시서의 "50개 이상"과 부합</td></tr>
+        <tr><td><code>is_error=true</code> 건수</td><td style="color:var(--danger);font-weight:600">1,896건</td><td>실측 실패율 <strong>30.07%</strong> (1896/6305)</td></tr>
+        <tr><td><code>success=false</code> 건수</td><td style="color:var(--warning);font-weight:600">0건</td><td><code>is_error</code>와 모순 — <code>success</code> 컬럼이 신뢰성 있게 기록되지 않는 것으로 추정(미검증)</td></tr>
+        <tr><td><code>error_detail</code>이 채워진 건수(1,896건 중)</td><td style="color:var(--warning);font-weight:600">0건</td><td>실패 사유 텍스트가 전부 NULL — 실패 원인 세분류 <strong>미검증</strong></td></tr>
+        <tr><td><code>latency_ms</code> 기록된 건수</td><td>6,305건 (전체)</td><td>컬럼 자체는 채워져 있으나 평균 집계 시 0에 수렴하는 값이 나와 실질적 지연시간 측정 신뢰도는 <strong>미검증</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-warn"><strong>데이터 품질 발견사항</strong><code>is_error</code>(실패 30.07%)와 <code>success</code>(실패 0건) 두 컬럼이 서로 모순되는 값을 갖고 있음을 실측으로 확인했습니다. 이는 실제 실패율이 30.07%라기보다, 두 컬럼 중 하나(또는 둘 다)가 정확히 기록되지 않고 있을 가능성을 시사합니다. CEO 보고 시에는 "AADS 도구 호출 실패율은 약 30%"라고 단정하지 말고 "is_error 컬럼 기준 30.07%이나 success 컬럼과 불일치가 있어 데이터 정합성 재검증이 필요하다"고 정확히 표기해야 합니다.</div>
+
+  <h3>도구별 호출량 상위 20개 (실측)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>순위</th><th>도구명</th><th>호출 건수</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><code>run_remote_command</code></td><td>3,319</td></tr>
+        <tr><td>2</td><td><code>read_remote_file</code></td><td>667</td></tr>
+        <tr><td>3</td><td><code>query_database</code></td><td>477</td></tr>
+        <tr><td>4</td><td><code>query_project_database</code></td><td>426</td></tr>
+        <tr><td>5</td><td><code>write_remote_file</code></td><td>265</td></tr>
+        <tr><td>6</td><td><code>list_remote_dir</code></td><td>185</td></tr>
+        <tr><td>7</td><td><code>patch_remote_file</code></td><td>95</td></tr>
+        <tr><td>8</td><td><code>read_github_file</code></td><td>87</td></tr>
+        <tr><td>9</td><td><code>terminate_task</code></td><td>79</td></tr>
+        <tr><td>10</td><td><code>pipeline_c_status</code></td><td>75</td></tr>
+        <tr><td>11</td><td><code>recall_notes</code></td><td>51</td></tr>
+        <tr><td>12</td><td><code>spawn_parallel_subagents</code></td><td>45</td></tr>
+        <tr><td>13</td><td><code>web_search</code></td><td>44</td></tr>
+        <tr><td>14</td><td><code>check_task_status</code></td><td>42</td></tr>
+        <tr><td>15</td><td><code>pipeline_c_start</code></td><td>39</td></tr>
+        <tr><td>16</td><td><code>browser_navigate</code></td><td>35</td></tr>
+        <tr><td>17</td><td><code>pipeline_runner_submit</code></td><td>31</td></tr>
+        <tr><td>18</td><td><code>browser_snapshot</code></td><td>30</td></tr>
+        <tr><td>19</td><td><code>health_check</code></td><td>29</td></tr>
+        <tr><td>20</td><td><code>capture_screenshot</code></td><td>28</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>상위 20개 도구 중 1위 <code>run_remote_command</code>가 전체 6,305건 중 3,319건(약 52.6%)을 차지해, 압도적으로 편중된 사용 패턴을 보입니다. 이는 6~7장에서 설명한 "관련 작업을 소수의 강력한 도구로 통합"하는 원칙과 상통하는 지점으로, 원격 명령 실행이라는 하나의 범용 도구가 여러 세분화된 전용 도구들의 역할을 상당 부분 흡수하고 있는 것으로 해석할 수 있습니다(해석이며, AADS 설계 의도가 실제로 그러한지는 별도 확인 필요 — 미검증).</p>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>"AADS 도구 실패율 30%"라는 수치를 외부에 보고할 때는 반드시 "is_error 기준이며 success 컬럼과 불일치가 있어 재검증 필요"라는 단서를 함께 전달하게 한다.</li>
+      <li>error_detail이 전부 비어 있어 실패 원인을 사후 분석할 수 없는 상태이므로, 실패 시 사유를 기록하는 로직 보완을 담당자에게 지시한다.</li>
+      <li>도구 호출이 특정 도구(run_remote_command)에 52% 이상 편중되어 있다는 사실을 근거로, 해당 도구의 안정성·보안 점검을 다른 도구보다 우선순위 높게 배정한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH14 ===== -->
+<div class="section" id="ch14">
+  <h2 class="section-title section-anchor"><span class="icon">⚖️</span> 14. 나쁜 도구 설계 vs 좋은 도구 설계 5쌍</h2>
+
+  <h3>예시 1 — 이름 짓기</h3>
+  <div class="compare-row">
+    <div class="compare-box con"><h4 style="color:var(--danger)">❌ 나쁜 예</h4><p style="font-size:.85rem;color:var(--text2)"><code>do_thing</code>, <code>process</code>, <code>handle</code> — 무엇을 하는지 이름만으로 알 수 없음</p></div>
+    <div class="compare-box pro"><h4 style="color:var(--success)">✅ 좋은 예</h4><p style="font-size:.85rem;color:var(--text2)"><code>github_list_open_prs</code>, <code>slack_send_message</code> — 서비스명 접두어 + 동작이 이름에 그대로 드러남(3장 네임스페이스 원칙)</p></div>
+  </div>
+
+  <h3>예시 2 — 설명문</h3>
+  <div class="compare-row">
+    <div class="compare-box con"><h4 style="color:var(--danger)">❌ 나쁜 예</h4><p style="font-size:.85rem;color:var(--text2)">"Gets the stock price for a ticker." (공식 문서의 나쁜 예시 그대로)</p></div>
+    <div class="compare-box pro"><h4 style="color:var(--success)">✅ 좋은 예</h4><p style="font-size:.85rem;color:var(--text2)">"NYSE/NASDAQ 상장 종목의 현재가를 USD로 반환. 현재/최근 가격 질문에만 사용하고 기업 정보 등 다른 데이터는 반환하지 않음"(공식 문서의 좋은 예시 그대로)</p></div>
+  </div>
+
+  <h3>예시 3 — 도구 분리 수준</h3>
+  <div class="compare-row">
+    <div class="compare-box con"><h4 style="color:var(--danger)">❌ 나쁜 예</h4><p style="font-size:.85rem;color:var(--text2)"><code>create_pr</code>, <code>review_pr</code>, <code>merge_pr</code>, <code>close_pr</code>를 전부 별도 도구로 등록 — 도구 개수만 늘고 선택 모호성 증가</p></div>
+    <div class="compare-box pro"><h4 style="color:var(--success)">✅ 좋은 예</h4><p style="font-size:.85rem;color:var(--text2)"><code>manage_pr(action: "create"|"review"|"merge"|"close", ...)</code> 하나로 통합 — 도구 수 감소, 10장의 컨텍스트 오염 완화</p></div>
+  </div>
+
+  <h3>예시 4 — 응답 설계</h3>
+  <div class="compare-row">
+    <div class="compare-box con"><h4 style="color:var(--danger)">❌ 나쁜 예</h4><p style="font-size:.85rem;color:var(--text2)">DB row 전체(내부 컬럼, 타임스탬프, 불필요 메타데이터 수십 개 필드)를 그대로 JSON으로 반환</p></div>
+    <div class="compare-box pro"><h4 style="color:var(--success)">✅ 좋은 예</h4><p style="font-size:.85rem;color:var(--text2)">다음 판단에 필요한 필드(안정적 식별자, 상태값, 핵심 수치)만 추려 반환 — 공식 가이드 "고신호 정보만" 원칙</p></div>
+  </div>
+
+  <h3>예시 5 — 오류 처리</h3>
+  <div class="compare-row">
+    <div class="compare-box con"><h4 style="color:var(--danger)">❌ 나쁜 예</h4><p style="font-size:.85rem;color:var(--text2)">실패해도 <code>isError</code> 표시 없이 빈 문자열이나 <code>null</code>만 반환 — 모델이 성공한 것으로 오인</p></div>
+    <div class="compare-box pro"><h4 style="color:var(--success)">✅ 좋은 예</h4><p style="font-size:.85rem;color:var(--text2)"><code>isError: true</code> + 사람이 읽을 수 있는 실패 사유 텍스트 반환 — 모델이 재시도·대안 판단 가능(13장에서 확인한 AADS의 error_detail 미기록 사례가 이 원칙 위반의 실제 사례)</p></div>
+  </div>
+
+  <div class="alert alert-success"><strong>공통 패턴</strong>좋은 도구 설계는 모두 ①이름만 봐도 기능이 짐작되고 ②설명이 구체적 사용 조건까지 담고 ③관련 기능이 과도하게 쪼개져 있지 않고 ④응답이 다음 판단에 필요한 정보만 담고 ⑤실패를 명확히 신호(isError)로 전달합니다. 13장에서 실측한 AADS의 error_detail 전량 NULL 사례는 예시 5의 나쁜 패턴에 해당하는 실제 개선 대상입니다.</div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>신규 도구 설계 검토 시 이 5가지 체크리스트(이름/설명/분리수준/응답/오류처리)를 표준 검토 항목으로 적용하게 한다.</li>
+      <li>13장에서 발견된 error_detail 미기록 문제를 이 장의 "예시 5" 원칙 위반 사례로 연결해 개선 작업을 지시한다.</li>
+      <li>기존 도구 중 이름만으로 기능을 알 수 없는 것이 있는지 정기 감사(audit)를 요구한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH15 ===== -->
+<div class="section" id="ch15">
+  <h2 class="section-title section-anchor"><span class="icon">📝</span> 15. CEO 체크리스트와 지시서 템플릿</h2>
+
+  <h3>신규 MCP 도구/서버 도입 승인 체크리스트</h3>
+  <pre><code>[출처 신뢰성] 자체 구축인가, 공식 파트너인가, 불특정 제3자인가?
+[노출 범위]   화이트리스트로 필요한 것만 노출하는가, 전체 노출인가?
+[민감 경로]   auth/debug/admin/stream 등 위험 경로가 제외되어 있는가?
+[전송 방식]   stdio/SSE/Streamable HTTP 중 무엇이며 보안 요구사항(Origin 검증 등)을 충족하는가?
+[재시도 설계] 실패 시 무한 재시도가 아닌 상한·백오프가 있는가?
+[장애 격리]   이 도구/서버 장애가 전체 서비스로 번지는가, 격리되는가(Graceful Degradation)?
+[비용 영향]   도구 개수 증가가 기존 도구 선택 정확도·토큰 비용에 미치는 영향은?
+[동의 절차]   고위험(쓰기/삭제/배포) 도구는 실행 전 확인 단계가 있는가?</code></pre>
+
+  <h3>도구 실패율 보고서 요청 템플릿</h3>
+  <pre><code>[대상] 확인하려는 도구명 또는 도구군
+[기간] 조회 기간
+[지표 정의] "실패"의 정의를 is_error/success/HTTP상태 중 무엇으로 볼지 명시 요청
+[교차 검증] 서로 다른 컬럼(is_error vs success)이 있다면 두 값을 모두 보고하고 불일치 여부 확인 요청
+[원인 분류] error_detail 등 사유 필드가 비어있다면 "미검증"으로 표기하고 별도 보완 작업 여부 확인
+[비교 기준] 이전 기간 대비 증감, 다른 도구 대비 상대적 수준</code></pre>
+
+  <h3>MCP 아키텍처 검토 지시서 템플릿</h3>
+  <pre><code>[질문] 우리 시스템은 MCP 서버 역할인가, 클라이언트 역할인가, 둘 다인가?
+[코드 위치] 각 역할을 구현한 파일 경로를 명시해서 보고
+[문서-코드 일치] 설정 파일의 주석과 실제 상수/코드가 일치하는지 대조 확인
+[스펙 버전] 어떤 MCP 스펙 버전(2025-06-18/2026-07-28 등) 기준으로 구현했는지
+[다음 단계] 발견된 불일치·미검증 항목에 대한 후속 확인 계획</code></pre>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>새로운 MCP 연동 제안이 올라오면 이 장의 체크리스트 8개 항목에 모두 답하게 한 뒤 승인 여부를 결정한다.</li>
+      <li>실패율·통계 보고를 받을 때는 반드시 "지표 정의"를 먼저 확정하게 해서 13장에서 발견된 것과 같은 컬럼 간 불일치 문제를 사전에 걸러낸다.</li>
+      <li>템플릿 사용 후에도 답변이 부실하면 담당자의 이해 부족이 아니라 시스템 자체의 가시성(관측 가능성) 부족일 수 있음을 함께 점검한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH16 ===== -->
+<div class="section" id="ch16">
+  <h2 class="section-title section-anchor"><span class="icon">✅</span> 16. AADS 적용 현황 종합·미검증 항목·참고자료</h2>
+
+  <p>본 장은 12·13장에서 다룬 DB·코드 실측 결과를 종합하고, 이 문서 작성 과정에서 확인하지 못한 항목을 명확히 구분해 표기합니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>항목</th><th>상태</th><th>근거</th></tr></thead>
+      <tbody>
+        <tr><td>AADS가 MCP Server 역할 수행(fastapi-mcp, 15개 op 화이트리스트)</td><td class="recommend">실측 확인</td><td>app/core/mcp_server.py 코드 직접 확인</td></tr>
+        <tr><td>AADS가 MCP Client 역할 수행(langchain-mcp-adapters, 7개 서버 설정)</td><td class="recommend">실측 확인</td><td>app/mcp/client.py, config.py 코드 직접 확인</td></tr>
+        <tr><td>ALWAYS_ON_SERVERS 상수 = 3개(주석은 4개라 명시)</td><td class="recommend">실측 확인(불일치 발견)</td><td>config.py 코드 원문 대조</td></tr>
+        <tr><td>tool_results_archive 총 6,305건, 54개 도구 종류</td><td class="recommend">실측 확인</td><td>query_database COUNT/DISTINCT 쿼리</td></tr>
+        <tr><td>is_error=true 1,896건(30.07%) vs success=false 0건 불일치</td><td class="recommend">실측 확인(데이터 품질 이슈 발견)</td><td>동일 테이블 집계 쿼리</td></tr>
+        <tr><td>run_remote_command가 전체 호출의 약 52.6% 차지</td><td class="recommend">실측 확인</td><td>tool_name GROUP BY 쿼리</td></tr>
+        <tr><td>error_detail 컬럼의 실제 실패 사유 세부 내용</td><td style="color:var(--warning);font-weight:600">미검증</td><td>1,896건 전부 NULL — 원인 텍스트 자체가 기록되지 않음</td></tr>
+        <tr><td>latency_ms 컬럼의 실질적 측정 신뢰도</td><td style="color:var(--warning);font-weight:600">미검증</td><td>평균 집계 시 이례적으로 0에 수렴하는 값 확인, 원인 미조사</td></tr>
+        <tr><td>postgres 서버가 실제로 상시가동인지 여부(설계 의도)</td><td style="color:var(--warning);font-weight:600">미검증</td><td>주석과 코드 상수 불일치의 원인(의도적 변경 vs 버그)은 확인 못함</td></tr>
+        <tr><td>실제 백엔드 MCP 서버 구현체가 최신 Streamable HTTP를 지원하는지</td><td style="color:var(--warning);font-weight:600">미검증</td><td>클라이언트 설정만 확인, 서버측 구현은 조회 범위 밖</td></tr>
+        <tr><td>MCP 스펙 2026-07-28의 Client Features 요약에서 Sampling/Roots 누락</td><td style="color:var(--warning);font-weight:600">미검증(확인 필요)</td><td>개요 페이지 요약 문구 변경인지 실제 폐지인지 changelog 원문 대조 필요</td></tr>
+        <tr><td>Tool Search Tool/defer_loading의 정확한 도구 개수 임계값</td><td style="color:var(--warning);font-weight:600">미검증</td><td>공식 문서는 "수천 개" 대응 목적이라고만 서술, 숫자 임계값 명시 없음</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-warn"><strong>원칙</strong>이 표에서 "실측 확인"으로 표기된 항목만 근거 있는 사실이며, "미검증"은 이번 조사에서 직접 데이터로 재확인하지 못했다는 뜻입니다. 특히 <strong>실패율 30.07%라는 수치는 is_error 컬럼 기준이며, success 컬럼과 모순되므로 단독으로 의사결정 근거로 사용해서는 안 됩니다.</strong></div>
+
+  <h3>참고자료</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>출처명</th><th>날짜</th><th>URL / 근거</th></tr></thead>
+      <tbody>
+        <tr><td>Model Context Protocol 공식 스펙 (2025-06-18)</td><td>2026-09-12 확인</td><td>modelcontextprotocol.io/specification/2025-06-18</td></tr>
+        <tr><td>Model Context Protocol 공식 스펙 (2026-07-28, 최신)</td><td>2026-09-12 확인</td><td>modelcontextprotocol.io/specification/latest, .../2026-07-28/server/tools</td></tr>
+        <tr><td>MCP Transports 규격 원문</td><td>2026-09-12 확인</td><td>modelcontextprotocol.io/specification/2025-06-18/basic/transports</td></tr>
+        <tr><td>Anthropic 공식 문서 — Tool use with Claude</td><td>2026-09-12 확인</td><td>docs.claude.com/en/docs/agents-and-tools/tool-use/overview</td></tr>
+        <tr><td>Anthropic 공식 문서 — Define tools(스키마 설계 가이드)</td><td>2026-09-12 확인</td><td>docs.claude.com/en/docs/agents-and-tools/tool-use/define-tools</td></tr>
+        <tr><td>Anthropic 공식 문서 — Parallel tool use</td><td>2026-09-12 확인</td><td>docs.claude.com/en/docs/agents-and-tools/tool-use/parallel-tool-use</td></tr>
+        <tr><td>Anthropic 공식 문서 — MCP connector(defer_loading 포함)</td><td>2026-09-12 확인</td><td>docs.claude.com/en/docs/agents-and-tools/mcp-connector</td></tr>
+        <tr><td>Anthropic 공식 문서 — Models overview(가격·컨텍스트 윈도우)</td><td>2026-09-12 확인</td><td>docs.claude.com/en/docs/about-claude/models/overview</td></tr>
+        <tr><td>AADS 코드 — app/core/mcp_server.py, app/mcp/client.py, config.py</td><td>2026-09-12 확인</td><td>read_remote_file (내부 코드 저장소, 본 문서 12장 근거)</td></tr>
+        <tr><td>AADS DB — tool_results_archive 테이블 실측</td><td>2026-09-12 확인</td><td>query_database (내부 DB, 본 문서 13장 근거)</td></tr>
+        <tr><td>AADS 참조 교육자료 — 프롬프트·컨텍스트 엔지니어링</td><td>2026-09-12 확인</td><td>app/static/reports/20260912_prompt_context_engineering_education.html (스타일·구조 참조)</td></tr>
+        <tr><td>AADS CLAUDE.md — 프로젝트 절대 규칙</td><td>상시 갱신</td><td>저장소 루트 CLAUDE.md (LLM 15회/task, R-KEY, R-DOCKER 등 인용 근거)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>다음 단계 로드맵</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>단계</th><th>실행 항목</th><th>기대 효과</th></tr></thead>
+      <tbody>
+        <tr><td>즉시</td><td>tool_results_archive의 is_error/success 컬럼 불일치 원인 조사 지시</td><td>실패율 지표의 신뢰도 확보</td></tr>
+        <tr><td>즉시</td><td>error_detail 컬럼이 항상 NULL로 기록되는 원인(로깅 미구현 추정) 확인 및 보완</td><td>도구 실패 사후 분석 가능</td></tr>
+        <tr><td>2주 내</td><td>app/mcp/config.py의 postgres 상시가동 여부 주석-코드 불일치 해소</td><td>문서와 실제 동작 일치, 운영 혼선 방지</td></tr>
+        <tr><td>1개월 내</td><td>run_remote_command 편중(52.6%) 사용 패턴에 대한 세분화 필요성 검토</td><td>단일 범용 도구 리스크 분산 여부 판단</td></tr>
+        <tr><td>분기 내</td><td>도구 100개 이상 환경에서 defer_loading/Tool Search 적용 가능성 검토(10·11장)</td><td>토큰 비용 절감, 도구 선택 정확도 개선</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ===== FOOTER ===== -->
+<div class="footer">
+  <p>AADS Academy · MCP·Tool Calling 교육자료 · 2026-09-12 작성 · CEO 교육용</p>
+  <p style="margin-top:6px">MCP 스펙·Anthropic 공식 문서 인용은 2026-09-12 fetch_url 실측 결과이며, AADS 적용 현황은 동일 시점 query_database/read_remote_file 실측 결과만 기재했습니다. 확인하지 못한 항목은 본문에 '미검증'으로 표기했습니다. 스펙·가격은 향후 변경될 수 있으므로 적용 전 공식 자료로 재확인이 필요합니다.</p>
+</div>
+
+</div>
+</body>
+</html>

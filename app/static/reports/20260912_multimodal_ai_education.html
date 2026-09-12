@@ -1,0 +1,699 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>멀티모달 AI 교육자료 — AADS Academy</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0a0f1a;--surface:#111827;--card:#1e293b;--card-hover:#334155;
+--accent:#3b82f6;--accent2:#8b5cf6;--accent3:#06b6d4;--accent4:#f59e0b;--accent5:#10b981;--accent6:#ef4444;
+--text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;--border:#334155;--border2:#475569;
+--code-bg:#0d1117;--highlight:#fbbf2420;--success:#10b981;--warning:#f59e0b;--danger:#ef4444}
+body{font-family:'Pretendard',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+background:var(--bg);color:var(--text);line-height:1.8;min-height:100vh}
+.container{max-width:1100px;margin:0 auto;padding:32px 24px 80px}
+/* Header */
+.hero{text-align:center;padding:60px 0 40px;border-bottom:1px solid var(--border);margin-bottom:48px}
+.hero h1{font-size:2.2rem;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2),var(--accent3));
+-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:12px;letter-spacing:-0.5px}
+.hero .subtitle{color:var(--text2);font-size:1.05rem;max-width:700px;margin:0 auto}
+.hero .meta-info{display:flex;gap:16px;justify-content:center;margin-top:20px;flex-wrap:wrap}
+.hero .meta-tag{font-size:.8rem;color:var(--accent);background:var(--accent)15;padding:4px 14px;border-radius:20px}
+/* TOC */
+.toc{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px 32px;margin-bottom:48px}
+.toc h2{font-size:1.1rem;font-weight:700;margin-bottom:16px;color:var(--accent)}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
+.toc a{color:var(--text2);text-decoration:none;font-size:.9rem;padding:6px 12px;border-radius:8px;display:block;transition:.2s}
+.toc a:hover{background:var(--card);color:var(--accent)}
+.toc a .num{color:var(--accent);font-weight:700;margin-right:6px;font-size:.8rem}
+/* Sections */
+.section{margin-bottom:56px}
+.section-anchor{scroll-margin-top:24px}
+h2.section-title{font-size:1.5rem;font-weight:700;margin-bottom:20px;padding-bottom:12px;
+border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:10px}
+h2.section-title .icon{font-size:1.3rem}
+h3{font-size:1.15rem;font-weight:600;margin:28px 0 12px;color:var(--accent3)}
+h4{font-size:1rem;font-weight:600;margin:20px 0 8px;color:var(--accent4)}
+p{margin-bottom:14px;color:var(--text)}
+/* Tables */
+.table-wrap{overflow-x:auto;margin:16px 0 24px;border-radius:12px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+thead{background:var(--surface)}
+th{padding:12px 16px;text-align:left;font-weight:600;color:var(--accent);border-bottom:2px solid var(--border);white-space:nowrap}
+td{padding:10px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:hover{background:var(--card)}
+.price{color:var(--accent4);font-weight:600}
+.perf{color:var(--accent3);font-weight:600}
+.recommend{color:var(--success);font-weight:600}
+.unverified{color:var(--text3);font-style:italic}
+/* Cards */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:16px 0 24px}
+.info-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.info-card h4{margin:0 0 8px;color:var(--accent);font-size:.95rem}
+.info-card p{font-size:.88rem;color:var(--text2);margin:0}
+.info-card .badge{display:inline-block;font-size:.7rem;padding:2px 8px;border-radius:4px;margin-top:8px;font-weight:600}
+.badge-free{background:#10b98120;color:#34d399}
+.badge-paid{background:#f59e0b20;color:#fbbf24}
+.badge-enterprise{background:#8b5cf620;color:#a78bfa}
+/* Code */
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;padding:16px 20px;
+overflow-x:auto;margin:12px 0 20px;font-size:.85rem;line-height:1.6}
+code{font-family:'Fira Code','JetBrains Mono',monospace;color:var(--accent3)}
+p code,li code,td code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-size:.85em}
+/* Diagram */
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;
+margin:16px 0 24px;text-align:center;font-family:monospace;font-size:.85rem;line-height:1.8;overflow-x:auto}
+.diagram .title{font-weight:700;color:var(--accent);margin-bottom:12px;font-family:sans-serif;font-size:.95rem}
+/* Alert boxes */
+.alert{border-radius:10px;padding:16px 20px;margin:16px 0;font-size:.9rem}
+.alert-info{background:#3b82f610;border-left:4px solid var(--accent)}
+.alert-warn{background:#f59e0b10;border-left:4px solid var(--warning)}
+.alert-success{background:#10b98110;border-left:4px solid var(--success)}
+.alert-danger{background:#ef444410;border-left:4px solid var(--danger)}
+.alert strong{display:block;margin-bottom:4px}
+/* Lists */
+ul,ol{margin:8px 0 16px 20px}
+li{margin-bottom:6px;font-size:.92rem}
+li strong{color:var(--text)}
+/* Architecture diagram */
+.arch-flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin:20px 0}
+.arch-box{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;
+font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
+.arch-arrow{color:var(--accent);font-size:1.2rem}
+/* Comparison */
+.compare-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+.compare-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.compare-box h4{margin:0 0 8px}
+.compare-box.pro{border-top:3px solid var(--success)}
+.compare-box.con{border-top:3px solid var(--danger)}
+/* CEO Checkpoint */
+.ceo-box{background:#10b98110;border:1px solid #10b98140;border-left:4px solid var(--success);
+border-radius:10px;padding:18px 22px;margin:24px 0 8px}
+.ceo-box .ceo-title{font-weight:700;color:var(--success);margin-bottom:10px;font-size:.95rem;display:flex;align-items:center;gap:6px}
+.ceo-box ol{margin:0 0 0 20px}
+.ceo-box li{font-size:.88rem;color:var(--text)}
+/* Quote */
+blockquote{background:var(--surface);border-left:4px solid var(--accent2);padding:14px 20px;margin:16px 0;
+border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-height:1.75}
+/* Footer */
+.footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--border);text-align:center;color:var(--text3);font-size:.8rem}
+/* Responsive */
+@media(max-width:768px){
+  .hero h1{font-size:1.5rem}
+  .toc-grid{grid-template-columns:1fr}
+  .card-grid{grid-template-columns:1fr}
+  .compare-row{grid-template-columns:1fr}
+  table{font-size:.78rem}
+  th,td{padding:8px 10px}
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ===== HERO ===== -->
+<div class="hero">
+  <h1>멀티모달 AI 교육자료</h1>
+  <p class="subtitle">텍스트를 넘어 이미지·영상·음성·3D·문서를 이해하고 만들어내는 AI — 비개발자 경영자를 위한 멀티모달 지형과 비용 구조 안내<br>AADS 미디어 도구 실측 데이터(35만 건 실행 이력) 포함</p>
+  <div class="meta-info">
+    <span class="meta-tag">2026-09-12 작성</span>
+    <span class="meta-tag">AADS Academy</span>
+    <span class="meta-tag">CEO 교육용</span>
+  </div>
+</div>
+
+<!-- ===== TOC ===== -->
+<div class="toc">
+  <h2>목차</h2>
+  <div class="toc-grid">
+    <a href="#ch1"><span class="num">01</span> 멀티모달 AI란 무엇인가 — 2026년 9월 지형</a>
+    <a href="#ch2"><span class="num">02</span> 비전 입력 이해 — 이미지·문서·차트를 읽는 방법</a>
+    <a href="#ch3"><span class="num">03</span> OCR·문서 파싱 — 클라우드 vs 로컬</a>
+    <a href="#ch4"><span class="num">04</span> 이미지 생성·편집 — 모델 지형과 비용 구조</a>
+    <a href="#ch5"><span class="num">05</span> 영상 생성 — Sora·Veo·Kling·Runway·Pika</a>
+    <a href="#ch6"><span class="num">06</span> 음성 — STT·TTS 지형과 AADS 이원화 구조</a>
+    <a href="#ch7"><span class="num">07</span> 3D·음악 생성 — 지형과 AADS 라우팅 현황</a>
+    <a href="#ch8"><span class="num">08</span> 멀티모달 토큰 비용 구조</a>
+    <a href="#ch9"><span class="num">09</span> 비전 기반 QA·UI 검증 자동화</a>
+    <a href="#ch10"><span class="num">10</span> 모달리티별 한계와 실무 리스크</a>
+    <a href="#ch11"><span class="num">11</span> AADS 실측 ① 미디어 도구 운영 현황 종합</a>
+    <a href="#ch12"><span class="num">12</span> AADS 실측 ② 이미지 생성 35만 건 실패의 교훈</a>
+    <a href="#ch13"><span class="num">13</span> 실무 적용 패턴 — 의사결정 트리</a>
+    <a href="#ch14"><span class="num">14</span> 참고자료와 다음 단계 로드맵</a>
+  </div>
+</div>
+
+<!-- ===== CH1 ===== -->
+<div class="section" id="ch1">
+  <h2 class="section-title section-anchor"><span class="icon">🌐</span> 01. 멀티모달 AI란 무엇인가 — 2026년 9월 지형</h2>
+
+  <p><strong>멀티모달 AI(Multimodal AI)</strong>란 텍스트 하나만이 아니라 이미지·영상·음성·문서·3D 등 서로 다른 "형태(modality)"의 정보를 함께 입력받아 이해하거나, 반대로 그런 형태로 결과물을 생성할 수 있는 AI를 말합니다. 2023~2024년까지는 "텍스트 모델에 이미지 이해 기능을 얹은" 수준이었다면, 2026년 9월 현재는 프론티어 3사(Anthropic·Google·OpenAI) 모두 이미지·문서 이해를 기본 탑재하고, 이미지·영상·음성·음악 생성은 별도 특화 모델로 갈라져 있는 "코어 모델 + 위성 생성 모델" 구조가 정착했습니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>제공사</th><th>최신 텍스트·비전 코어 모델(2026-09 기준)</th><th>이미지 생성</th><th>영상 생성</th><th>음성/음악</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Anthropic</strong></td><td>Opus 5 / Sonnet 5 / Haiku 4.5 / Fable 5.1 (모두 이미지·문서 입력 지원, 자체 이미지/영상 생성 모델은 없음)</td><td>미제공(타사 연동 필요)</td><td>미제공</td><td>미제공</td></tr>
+        <tr><td><strong>Google</strong></td><td>Gemini 3.8 Flash(최신), Gemini 3.1 Pro Preview, Gemini Omni Flash(음성·영상 실시간 통합)</td><td>Nano Banana Pro(Gemini 3 Pro Image), Nano Banana 2(Gemini 3.1 Flash Image), Imagen 4 계열</td><td>Veo 3.1</td><td>Lyria 3.5(음악), Gemini TTS</td></tr>
+        <tr><td><strong>OpenAI</strong></td><td>GPT-6 Astra(최신 플래그십), GPT-5.6 Sol/Terra/Luna 계열</td><td>GPT-Image-1/2</td><td>Sora 2 / Sora 2 Pro</td><td>Whisper(STT), TTS 계열</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="unverified">※ 위 표의 모델 라인업 명칭은 각사 공식 페이지(Anthropic pricing, Google Gemini API pricing, OpenAI platform docs)를 2026-09-12에 fetch하여 확인한 값입니다. 다만 세부 스펙(파라미터 수, 정확한 출시일)은 각사가 공개하지 않아 미검증입니다.</p>
+
+  <div class="diagram">
+    <div class="title">멀티모달 AI의 두 갈래 — "이해"와 "생성"</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+┌─────────────────────────────────────────────────────────┐
+│                     입력 모달리티                          │
+│   텍스트   이미지   문서(PDF)   차트/표   음성   영상(프레임)  │
+└──────────────────────────┬──────────────────────────────┘
+                            ▼
+                 ┌─────────────────────┐
+                 │  코어 멀티모달 모델    │  ← Opus5/Sonnet5/
+                 │ (이해·추론·판단)      │    Gemini3.x/GPT-6
+                 └──────────┬──────────┘
+                            ▼
+        ┌───────────────────────────────────────┐
+        │        위성 생성 모델 (특화·별도 과금)      │
+        │  이미지생성  영상생성  음악생성  TTS  3D    │
+        │ (Imagen/GPT-Image) (Sora/Veo/Kling) 등    │
+        └───────────────────────────────────────┘
+</pre>
+  </div>
+
+  <div class="alert alert-info"><strong>실무 판단 기준</strong>"이해"는 코어 모델 하나로 충분한 경우가 많지만, "생성"은 이미지/영상/음악마다 최적 모델이 다르고 가격 체계도 다릅니다. "멀티모달 AI 도입"을 한 덩어리로 취급하지 말고, 이해 작업과 생성 작업을 분리해서 예산·품질 기준을 따로 세워야 합니다.</div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>"멀티모달 도입"을 보고받을 때 이해(vision QA, 문서 분석)와 생성(이미지/영상 제작)을 구분해서 각각의 목적·비용을 따로 보고받는다.</li>
+      <li>신규 생성 모델 도입 제안이 오면 공식 가격 페이지 캡처나 링크를 첨부하게 하고, 확인되지 않은 가격 추정치로 의사결정하지 않는다.</li>
+      <li>텍스트 전용 모델로 충분한 업무에 굳이 비싼 멀티모달 모델을 쓰고 있지 않은지 분기별로 재점검을 지시한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH2 ===== -->
+<div class="section" id="ch2">
+  <h2 class="section-title section-anchor"><span class="icon">👁️</span> 02. 비전 입력 이해 — 이미지·문서·차트를 읽는 방법</h2>
+
+  <p>비전 지원 모델은 이미지를 받으면 내부적으로 작은 타일(patch)로 쪼개 이를 텍스트 토큰과 같은 "토큰" 형태로 변환한 뒤 언어모델에 함께 넣습니다. 즉 이미지 한 장도 결국 "토큰 뭉치"로 과금되며, 해상도가 높거나 이미지 장수가 많을수록 토큰 소모(=비용)가 커집니다. 정확한 타일 크기·토큰 환산 공식은 제공사·모델별로 다르고 수시로 바뀌므로 <span class="unverified">본 문서에서는 구체적 환산표를 확정값으로 제시하지 않고 "미검증"으로 남겨두며, 실제 예산 산정 시 각사 공식 문서의 최신 계산기를 사용해야 합니다.</span></p>
+
+  <h3>이미지 이해 vs 문서(PDF) 이해 vs 차트/표 이해</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>유형</th><th>모델이 하는 일</th><th>실무 함정</th></tr></thead>
+      <tbody>
+        <tr><td><strong>일반 이미지</strong></td><td>사물 인식, 장면 설명, 스타일 판단</td><td>브랜드 로고·유명인 식별은 정책상 회피되도록 설계된 경우가 많음(4장 참조)</td></tr>
+        <tr><td><strong>문서(PDF/스캔본)</strong></td><td>레이아웃을 고려한 텍스트 추출, 표 구조 인식</td><td>다단 레이아웃·손글씨·저해상도 스캔에서 정확도 급락</td></tr>
+        <tr><td><strong>차트/그래프</strong></td><td>축·범례를 읽어 수치를 추정</td><td>정확한 숫자를 "추정"하는 것이므로 그래프에서 읽은 숫자를 의사결정 근거로 바로 쓰면 위험 — 반드시 원본 데이터와 대조 필요</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-warn"><strong>차트 오독 위험</strong>비전 모델은 막대그래프의 정확한 수치를 "읽는" 것이 아니라 "추정"합니다. 재무 차트, KPI 대시보드 스크린샷을 AI에게 분석시킬 때는 반드시 원본 수치 데이터(CSV/DB)를 함께 제공하거나, 결과를 원본과 대조 검증해야 합니다.</div>
+
+  <h3>실무 팁</h3>
+  <ul>
+    <li><strong>고해상도 캡처</strong>: 작은 글씨가 포함된 UI 스크린샷은 원본 해상도 그대로, 불필요하게 축소하지 않는다.</li>
+    <li><strong>크롭</strong>: 분석 대상이 이미지의 일부라면 미리 크롭해서 보내면 토큰(=비용)도 줄고 정확도도 올라간다.</li>
+    <li><strong>대비/화질</strong>: 스캔 문서는 그레이스케일 대비를 높이면 텍스트 인식률이 개선되는 경우가 많다.</li>
+  </ul>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>재무·매출 차트를 AI에게 "읽혀서" 보고받는 경우, 반드시 원본 수치와 대조된 값인지 확인을 요구한다.</li>
+      <li>이미지 분석 비용이 예상보다 크다는 보고를 받으면 해상도·크롭 최적화가 되어 있는지 먼저 확인을 지시한다.</li>
+      <li>손글씨·저해상도 문서가 많은 업무는 비전 모델 단독이 아니라 사람 검수를 포함한 이중 확인 프로세스를 요구한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH3 ===== -->
+<div class="section" id="ch3">
+  <h2 class="section-title section-anchor"><span class="icon">📄</span> 03. OCR·문서 파싱 — 클라우드 vs 로컬</h2>
+
+  <p>문자를 이미지에서 뽑아내는 방법은 크게 두 갈래입니다. 하나는 <strong>비전 LLM에게 "이 이미지의 글자를 읽어줘"라고 프롬프트로 요청</strong>하는 방식이고, 다른 하나는 <strong>전통적인 OCR 엔진(패턴 인식 기반)을 별도로 돌리는 방식</strong>입니다. 전자는 문맥을 이해하며 정리된 형태로 답을 주지만 토큰 비용이 들고, 후자는 빠르고 저렴하지만 문맥 이해 없이 글자만 뽑아냅니다.</p>
+
+  <h3>AADS 실측 — 로컬 OCR 브릿지 구조</h3>
+  <p>AADS는 <code>app/core/local_ocr_bridge.py</code>와 <code>app/api/local_media_router.py</code>를 통해 클라우드 비전 API가 아니라 <strong>CEO의 PC에 설치된 로컬 에이전트(PC Agent, <code>127.0.0.1:8102</code>)</strong>에 OCR 실행을 위임하는 구조를 쓰고 있습니다. 요청은 <code>/api/v1/local/ocr</code>로 들어와 PC Agent의 <code>route-execute</code> 엔드포인트로 전달되고, 결과는 <code>text / confidence / language</code> 필드로 반환됩니다. 언어 기본값은 <code>kor+eng</code>(한글+영어 동시 인식)입니다. 이 구조는 API 토큰 비용이 들지 않는 대신, PC Agent가 연결되어 있지 않으면(<code>agent_id</code> 없음) 즉시 실패하는 단일 장애점이 됩니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>방식</th><th>비용</th><th>정확도 특성</th><th>가용성 리스크</th></tr></thead>
+      <tbody>
+        <tr><td>클라우드 Vision-LLM OCR</td><td>이미지 토큰 과금(4장 참조)</td><td>문맥 이해 우수, 표 구조 재구성 가능</td><td>제공사 API 키/쿼터 의존</td></tr>
+        <tr><td><strong>AADS 로컬 OCR(PC Agent 경유)</strong></td><td>API 과금 없음(로컬 연산)</td><td>패턴 인식 기반, confidence 스코어 반환</td><td>CEO PC가 꺼져 있거나 PC Agent 미연결 시 전면 불가 — <code>RuntimeError("PC Agent 연결 없음 — OCR 불가")</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-info"><strong>근거</strong>본 절 내용은 2026-09-12 <code>read_remote_file</code>로 <code>app/core/local_ocr_bridge.py</code>(49줄), <code>app/api/local_media_router.py</code>(55줄) 전문을 확인한 실측입니다. 어떤 OCR 엔진(예: Tesseract 계열)이 PC Agent 내부에서 실제로 동작하는지는 PC Agent 자체 코드가 AADS 서버 저장소 밖에 있어 <span class="unverified">미검증</span>입니다.</div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>로컬 OCR은 CEO PC 전원·PC Agent 연결 상태에 의존한다는 것을 인지하고, 중요한 문서 처리 전 PC Agent 연결 상태(<code>/api/v1/local/status</code>) 확인을 지시한다.</li>
+      <li>PC Agent가 꺼져 있을 때 클라우드 Vision-LLM으로 자동 폴백되는지, 아니면 그냥 실패하는지 담당자에게 확인을 요구한다(현재 코드상 자동 폴백 없음, 즉시 실패).</li>
+      <li>대량 문서 OCR이 필요한 프로젝트는 로컬 OCR 단독이 아니라 처리량·정확도 요구사항에 맞는 방식을 사전 검토하도록 지시한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH4 ===== -->
+<div class="section" id="ch4">
+  <h2 class="section-title section-anchor"><span class="icon">🎨</span> 04. 이미지 생성·편집 — 모델 지형과 비용 구조</h2>
+
+  <p>이미지 생성 모델은 텍스트 생성과 과금 체계가 다릅니다. 토큰이 아니라 <strong>이미지 1장당, 또는 해상도/품질 등급당</strong> 정액 요금을 매기는 경우가 많습니다. 2026-09 기준 시장에는 프론티어 3사 외에도 이미지 생성 전문 업체들이 다수 경쟁하고 있으며, AADS는 CEO 정책에 따라 이 중 여러 곳을 동시에 라우팅 후보로 등록해 두고 있습니다.</p>
+
+  <h3>AADS DB 실측 — image / edit_image 라우팅 후보 (model_routing_preferences 테이블)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>라우트</th><th>제공사</th><th>모델 ID</th><th>기본값 여부</th><th>활성 여부</th><th>비고(DB notes 원문 기반)</th></tr></thead>
+      <tbody>
+        <tr><td>image</td><td>genspark_ui</td><td>genspark-image-ui</td><td class="recommend">기본값</td><td>활성</td><td>브라우저 UI 자동화 폴백 — Google 상업적 사용 일시중단 기간 동안의 임시 기본 경로</td></tr>
+        <tr><td>image</td><td>kling</td><td>kling-v2-1 / kling-v2-new / kling-v2</td><td>-</td><td>활성</td><td>text-to-image 및 image-to-image, KLING_ACCESS_KEY/SECRET_KEY 기반 JWT 인증</td></tr>
+        <tr><td>image</td><td>black-forest-labs</td><td>flux-1.1-pro</td><td>-</td><td>활성</td><td>Flux 1.1 Pro</td></tr>
+        <tr><td>image</td><td>stability</td><td>stable-diffusion-3-5</td><td>-</td><td>활성</td><td>SD 3.5</td></tr>
+        <tr><td>image</td><td>google</td><td>imagen-4.0-generate-001 외 2종</td><td>-</td><td class="unverified">비활성</td><td>"Google/Gemini commercial routes disabled by CEO policy 2026-09-02 KST"</td></tr>
+        <tr><td>image</td><td>gemini</td><td>gemini-3-pro-image-preview(Nano Banana Pro) 외 2종</td><td>-</td><td class="unverified">비활성</td><td>동일 사유로 비활성</td></tr>
+        <tr><td>image</td><td>openai</td><td>gpt-image-2 / dall-e-3</td><td>-</td><td class="unverified">비활성</td><td>"OPENAI_API_KEY inactive; CEO requested OpenAI excluded"</td></tr>
+        <tr><td>edit_image</td><td>genspark_ui</td><td>genspark-image-ui</td><td class="recommend">기본값</td><td>활성</td><td>이미지 편집도 동일한 브라우저 자동화 폴백 사용</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-warn"><strong>실측에서 드러난 핵심 사실</strong>AADS의 이미지 생성은 2026-09-12 기준 <strong>Google/Gemini 계열이 CEO 정책으로 전면 비활성화</strong>되어 있고, OpenAI도 API 키 비활성으로 제외된 상태이며, 실제 기본 경로는 <strong>브라우저 자동화(genspark_ui)</strong>와 Kling/Flux/Stable Diffusion 같은 서드파티 API입니다. 이는 애플리케이션 코드(<code>app/services/image_service.py</code>)에 적힌 "Google Imagen 4.0 primary → GPT-Image-1 → DALL-E 3" 주석과 실제 운영 라우팅 설정이 다르다는 뜻이며, <strong>코드 주석만 보고 실제 운영 경로를 판단하면 안 된다</strong>는 교훈을 줍니다.</div>
+
+  <p class="unverified">Kling / Flux 1.1 Pro / Stable Diffusion 3.5 / GPT-Image-1·2의 정확한 장당 가격(USD/₩)은 각사 공식 가격 페이지를 이번 조사에서 확인하지 못해 미검증입니다. 이미지 생성 예산을 세울 때는 반드시 해당 시점의 공식 가격표를 재확인해야 합니다.</p>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>"이미지 생성이 Imagen/GPT-Image로 된다"는 코드 주석 수준 보고를 받으면, 실제 DB 라우팅 설정과 일치하는지 재확인을 지시한다.</li>
+      <li>브라우저 자동화(genspark_ui) 폴백은 로그인 세션 만료·UI 변경에 취약하므로, 이 경로가 기본값인 상태가 언제까지 유지되는지 담당자에게 기한을 물어본다.</li>
+      <li>서드파티 이미지 생성 API(Kling/Flux/Stability) 사용 전 반드시 최신 공식 단가를 재확인하도록 지시하고, 확정되지 않은 단가로 예산을 잡지 않는다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH5 ===== -->
+<div class="section" id="ch5">
+  <h2 class="section-title section-anchor"><span class="icon">🎬</span> 05. 영상 생성 — Sora·Veo·Kling·Runway·Pika</h2>
+
+  <p>영상 생성은 이미지 생성보다 계산량이 훨씬 커서 생성 시간이 수십 초에서 수 분에 이르고, 과금도 초당·클립당 단위가 흔합니다. 2026-09 기준 AADS DB에는 5개 제공사, 9개 모델이 <code>video</code> 라우트 후보로 등록되어 있습니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>제공사</th><th>모델</th><th>기본값</th><th>활성</th><th>비고(DB notes 원문 기반)</th></tr></thead>
+      <tbody>
+        <tr><td>openai</td><td>sora-2</td><td class="recommend">기본값</td><td>활성</td><td>"Job is recorded and returns a clear unavailable/not-configured status until adapter is enabled" — 즉 기본값이지만 실행 어댑터 미완성 상태</td></tr>
+        <tr><td>openai</td><td>sora-2-pro</td><td>-</td><td>활성</td><td>"adapter pending"</td></tr>
+        <tr><td>kling</td><td>kling-v1 / v2 / v2.0 / v3</td><td>-</td><td>활성</td><td>v1은 "verified with the current paid API key" — 4개 버전 중 실사용 검증이 명시된 유일한 버전</td></tr>
+        <tr><td>runway</td><td>gen-4-turbo</td><td>-</td><td>활성</td><td>Gen-4 Turbo</td></tr>
+        <tr><td>pika</td><td>pika-2.2</td><td>-</td><td>활성</td><td>Pika 2.2</td></tr>
+        <tr><td>genspark_ui</td><td>genspark-video-ui</td><td>-</td><td>활성</td><td>브라우저 UI 자동화 폴백</td></tr>
+        <tr><td>google</td><td>veo-3.1-generate-preview / veo-3.0-generate-preview</td><td>-</td><td class="unverified">비활성</td><td>"Google/Gemini commercial routes disabled by CEO policy 2026-09-02 KST"</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-info"><strong>실측 — 실제 실행 이력은 매우 적다</strong>11장에서 다시 다루지만, <code>media_generation_jobs</code> 테이블 실측 결과 영상(<code>kind='video'</code>) 작업은 전체 기간(2026-05-15~2026-09-12) 동안 <strong>단 5건(kling, 성공 2·실패 2·대기 1)</strong>뿐이었습니다. 즉 라우팅 설정상 9개 모델이 등록되어 있지만 실사용은 Kling 한 곳, 그것도 극소량에 그칩니다.</div>
+
+  <h3>영상 생성 공통 한계</h3>
+  <ul>
+    <li><strong>생성 시간</strong>: 수십 초~수 분 소요가 일반적이라 실시간 워크플로에 넣기 어렵다.</li>
+    <li><strong>캐릭터 일관성</strong>: 같은 인물이 여러 클립에서 다르게 나오는 문제가 아직 흔하다.</li>
+    <li><strong>워터마크/출처 표시</strong>: 다수 제공사가 AI 생성 영상에 워터마크나 메타데이터 표시를 의무화하는 추세다.</li>
+  </ul>
+  <p class="unverified">Sora 2/2 Pro, Kling, Runway Gen-4 Turbo, Pika 2.2의 정확한 초당·클립당 단가는 이번 조사에서 공식 페이지를 통해 확인하지 못해 미검증입니다.</p>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>영상 생성 도구 도입을 검토할 때 "라우팅 설정이 있다"와 "실제로 작동하고 검증됐다"를 구분해서 보고받는다(Sora-2는 기본값이지만 어댑터 미완성 상태였음).</li>
+      <li>실사용 실적이 사실상 전무한 모델·제공사에 대한 라우팅 유지 비용(관리 부담)이 있는지 분기별로 재검토를 지시한다.</li>
+      <li>영상 생성 결과물을 대외 공개(마케팅 등)에 쓸 경우 워터마크·출처 표시 정책을 사전에 확인하도록 요구한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH6 ===== -->
+<div class="section" id="ch6">
+  <h2 class="section-title section-anchor"><span class="icon">🎙️</span> 06. 음성 — STT·TTS 지형과 AADS 이원화 구조</h2>
+
+  <p>음성 인식(STT, Speech-to-Text)과 음성 합성(TTS, Text-to-Speech)은 텍스트·이미지보다 먼저 상용화된 분야라 선택지가 많습니다. AADS를 실측한 결과, <strong>같은 회사 안에 서로 다른 두 개의 음성 경로가 각기 다른 기본 제공사를 쓰고 있는 불일치</strong>가 발견되었습니다.</p>
+
+  <h3>실측 ① — 채팅 음성 API (app/api/voice.py, app/services/voice_service.py)</h3>
+  <p>CEO 채팅창의 음성 입력(<code>/voice/transcribe</code>)과 음성 출력(<code>/voice/speech</code>)은 <code>voice_service.py</code>에 하드코딩된 기본값을 씁니다: STT 모델은 환경변수 <code>AADS_VOICE_STT_MODEL</code> 기본값 <code>whisper-1</code>, TTS 모델은 <code>AADS_VOICE_TTS_MODEL</code> 기본값 <code>tts-1</code>, 음성은 <code>AADS_VOICE_TTS_VOICE</code> 기본값 <code>alloy</code>입니다. 즉 <strong>OpenAI 단일 제공사</strong>에 고정되어 있고, 프로바이더 자체를 DB 라우팅으로 바꿀 수 있는 구조가 아닙니다.</p>
+
+  <h3>실측 ② — model_routing_preferences의 audio 라우트</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>제공사</th><th>모델</th><th>기본값</th><th>활성</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>elevenlabs</td><td>eleven-v3</td><td class="recommend">기본값</td><td>활성</td><td>"ElevenLabs v3"</td></tr>
+        <tr><td>openai</td><td>tts-1-hd</td><td>-</td><td>활성</td><td>"OpenAI TTS HD"</td></tr>
+        <tr><td>google</td><td>google-wavenet-tts</td><td>-</td><td class="unverified">비활성</td><td>"Google/Gemini commercial routes disabled by CEO policy 2026-09-02 KST"</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-danger"><strong>발견된 불일치</strong>DB 라우팅 테이블상 <code>audio</code> 라우트의 기본값은 <strong>ElevenLabs eleven-v3</strong>이지만, 실제 채팅 음성 엔드포인트는 이 라우팅을 거치지 않고 <strong>OpenAI tts-1을 직접 하드코딩</strong>해서 씁니다. 즉 "AADS 음성 기본값은 ElevenLabs"라는 DB 설정과 "실제 CEO가 듣는 음성은 OpenAI tts-1"이라는 실행 결과가 서로 다릅니다. 이는 두 시스템(DB 라우팅 vs 개별 서비스 하드코딩)이 통합되지 않아 생긴 전형적인 설정 드리프트(configuration drift) 사례입니다.</div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>"음성 기본 제공사가 무엇이냐"는 질문에 DB 설정과 실제 코드 동작이 다를 수 있다는 것을 인지하고, 보고받을 때 어느 쪽 기준인지 명확히 구분해서 확인한다.</li>
+      <li>두 경로를 하나로 통합할지, 의도적으로 분리 운영할지(예: 관리자용은 ElevenLabs 고음질, 채팅은 OpenAI 저비용) 담당자에게 설계 의도를 확인하도록 지시한다.</li>
+      <li>ElevenLabs/OpenAI TTS의 실제 단가를 비교해 어느 경로가 비용 효율적인지 실측 근거로 보고받은 뒤 통합 방향을 결정한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH7 ===== -->
+<div class="section" id="ch7">
+  <h2 class="section-title section-anchor"><span class="icon">🎵</span> 07. 3D·음악 생성 — 지형과 AADS 라우팅 현황</h2>
+
+  <p>음악 생성(text-to-music)과 3D 에셋 생성(text-to-3D)은 이미지·영상보다 늦게 성숙한 분야입니다. AADS는 MCP 도구로 <code>generate_music</code>과 <code>generate_three_d_asset</code>을 노출하고 있어, 실제 백엔드 구현과 사용 이력을 실측했습니다.</p>
+
+  <h3>music 라우트 (model_routing_preferences 실측)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>제공사</th><th>모델</th><th>기본값</th><th>활성</th></tr></thead>
+      <tbody>
+        <tr><td>suno</td><td>suno-v4</td><td class="recommend">기본값</td><td>활성</td></tr>
+        <tr><td>udio</td><td>udio-3.0</td><td>-</td><td>활성</td></tr>
+        <tr><td>meta</td><td>musicgen-large</td><td>-</td><td class="unverified">비활성</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-warn"><strong>실측 — 실행 이력 0건</strong><code>media_generation_jobs</code> 테이블의 <code>kind</code> 컬럼에 실제로 기록된 값은 <code>image</code>, <code>edit_image</code>, <code>video</code> 세 가지뿐이었습니다(2026-09-12 <code>query_database</code> 실측). <strong>music과 3D 관련 작업 기록은 단 한 건도 존재하지 않았습니다.</strong> 즉 <code>generate_music</code>·<code>generate_three_d_asset</code> 도구와 라우팅 설정(Suno v4 등)은 존재하지만, 이 테이블을 통해 실제 실행되고 있는지는 <span class="unverified">확인할 수 없었습니다(미검증)</span>. 별도의 로그 테이블에 기록될 가능성도 있으나 이번 조사 범위에서 해당 테이블을 찾지 못했습니다.</div>
+
+  <h3>3D 에셋 생성</h3>
+  <p>코드 저장소에서 <code>3d</code>, <code>three_d</code> 키워드로 <code>app/services</code>, <code>app/api</code> 디렉터리를 탐색했으나 전용 서비스 파일을 찾지 못했습니다. <code>ai_route_resolver.py</code>의 <code>AI_ROUTE_KEYS</code> 목록에도 3D 전용 라우트 키가 없었습니다. 따라서 <strong><code>generate_three_d_asset</code> 도구의 백엔드 구현 위치와 사용 프로바이더는 이번 조사에서 미검증</strong>으로 남깁니다.</p>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>음악·3D 생성 도구가 실제로 몇 번이나 쓰였는지, 어느 로그에 기록되는지 담당자에게 명확한 실행 이력 조회 방법을 요구한다.</li>
+      <li>실행 이력이 확인되지 않는 도구는 "존재만 하는 기능"인지 "쓰이는데 기록이 누락된 기능"인지 구분하는 점검 작업을 지시한다.</li>
+      <li>3D 에셋 생성처럼 구현 위치가 불분명한 도구는 다음 스프린트에서 코드 위치 문서화를 우선순위로 요구한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH8 ===== -->
+<div class="section" id="ch8">
+  <h2 class="section-title section-anchor"><span class="icon">💰</span> 08. 멀티모달 토큰 비용 구조</h2>
+
+  <p>텍스트 모델의 비용은 "입력 토큰 수 × 단가 + 출력 토큰 수 × 단가"로 비교적 단순하지만, 멀티모달은 모달리티마다 과금 단위 자체가 다릅니다. 아래는 2026-09-12 각사 공식 가격 페이지를 <code>fetch_url</code>로 직접 확인한 <strong>검증된 텍스트 토큰 단가</strong>입니다. ($1 ≈ ₩1,380 환산)</p>
+
+  <h3>Anthropic Claude — 공식 가격 (anthropic.com/pricing 2026-09-12 확인)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>모델</th><th>입력(1M 토큰)</th><th>출력(1M 토큰)</th><th>캐시 읽기</th><th>캐시 쓰기</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Fable 5.1</strong></td><td class="price">$10 (₩13,800)</td><td class="price">$50 (₩69,000)</td><td class="price">$0.25 (₩345)</td><td class="price">$12.50 (₩17,250)</td></tr>
+        <tr><td><strong>Opus 5</strong></td><td class="price">$5 (₩6,900)</td><td class="price">$25 (₩34,500)</td><td class="price">$0.50 (₩690)</td><td class="price">$6.25 (₩8,625)</td></tr>
+        <tr><td><strong>Sonnet 5</strong></td><td class="price">$2 (₩2,760)</td><td class="price">$10 (₩13,800)</td><td class="price">$0.20 (₩276)</td><td class="price">$2.50 (₩3,450)</td></tr>
+        <tr><td><strong>Haiku 4.5</strong></td><td class="price">$1 (₩1,380)</td><td class="price">$5 (₩6,900)</td><td class="price">$0.10 (₩138)</td><td class="price">$1.25 (₩1,725)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Claude 계열은 <strong>이미지 입력에 별도 단가를 매기지 않습니다.</strong> 이미지를 토큰으로 환산한 뒤 위 "입력 토큰" 단가로 동일하게 과금합니다. 즉 이미지 1장이 몇 토큰으로 환산되는지가 실질 비용을 좌우하며, 이 환산 공식 자체는 2장에서 언급했듯 미검증(공식 계산기 재확인 필요) 영역입니다.</p>
+
+  <h3>Google Gemini — 텍스트 토큰 공식 가격 (ai.google.dev/gemini-api/docs/pricing 2026-09-12 확인)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>모델</th><th>입력(1M 토큰)</th><th>출력(1M 토큰, 사고 토큰 포함)</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Gemini 3.8 Flash</strong>(최신)</td><td class="price">$0.75 (₩1,035)</td><td class="price">$3.75 (₩5,175)</td><td>2026-12-31까지 단가, 2027-01-01부터 2배 인상 예정(공식 페이지 명시)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="unverified">Nano Banana Pro(이미지 생성), Veo 3.1(영상 생성), Lyria 3.5(음악 생성)의 정확한 단가는 가격 페이지 하단에 별도 표로 존재하나, 이번 조사에서는 페이지 용량 제한으로 상단 텍스트 모델 표까지만 확인했고 미디어 생성 단가 표는 <strong>미검증</strong>으로 남깁니다.</p>
+
+  <h3>OpenAI — 모델 라인업만 확인, 단가는 미검증</h3>
+  <p>OpenAI의 공개 API 가격 페이지(platform.openai.com/docs/pricing)는 이번 조사에서 접속은 되었으나 실제 단가 표가 페이지 하단 동적 렌더링 영역에 있어 <code>fetch_url</code> 결과 안에서 확인하지 못했습니다. 최신 모델 라인업(GPT-6 Astra, GPT-5.6 계열)만 확인되었고 GPT-Image, Sora 2, Whisper, TTS의 정확한 단가는 <span class="unverified">미검증</span>입니다.</p>
+
+  <div class="alert alert-info"><strong>실무 시사점</strong>이미지 1장을 분석시키는 비용이 텍스트 수천~수만 토큰과 맞먹는 경우가 흔합니다. 이미지/영상을 대량으로 처리하는 파이프라인을 설계할 때는 "장당 비용 × 예상 처리량"을 텍스트 파이프라인과 별도로 반드시 시산해야 합니다.</div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>모델별 단가표를 정기 보고서에 포함시키되, 확인 날짜를 반드시 명시하게 한다(가격은 자주 바뀐다 — 2027년 Gemini 인상 사례 참고).</li>
+      <li>이미지/영상 대량 처리 프로젝트는 사전에 "장당 예상 비용 × 처리량" 시산표를 요구하고 승인 없이 대량 실행하지 않도록 한다.</li>
+      <li>미검증으로 표기된 단가(OpenAI 미디어 계열 등)를 실제 예산 근거로 쓰지 않았는지 재무 담당자에게 교차 확인을 지시한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH9 ===== -->
+<div class="section" id="ch9">
+  <h2 class="section-title section-anchor"><span class="icon">🧪</span> 09. 비전 기반 QA·UI 검증 자동화</h2>
+
+  <p>화면(UI)이 의도대로 보이는지 자동으로 검증하는 방법은 크게 두 가지입니다. 하나는 <strong>스크린샷을 픽셀 단위로 비교하는 결정론적(deterministic) 방식</strong>이고, 다른 하나는 <strong>비전 LLM에게 "이 화면이 정상으로 보이나요?"라고 판단을 맡기는 방식</strong>입니다. AADS는 두 방식을 모두 구현해 두었습니다.</p>
+
+  <h3>실측 ① — Playwright + 픽셀 diff (app/services/visual_qa.py, 341줄)</h3>
+  <p>Playwright로 헤드리스 브라우저를 띄워 지정 페이지를 스크린샷 촬영한 뒤, <strong>Pillow의 <code>ImageChops.difference</code></strong>로 현재 화면과 기준(baseline) 이미지를 픽셀 단위 비교합니다. 코드 실측 결과 <strong>차이 픽셀 비율이 1.0% 미만이면 "일치(match)"</strong>로 판정하며, 불일치 시 차이를 10배 증폭한 diff 이미지를 별도 저장합니다. 이 방식은 비전 LLM 토큰을 전혀 쓰지 않아 비용이 거의 없고 결과가 항상 재현 가능(deterministic)합니다.</p>
+
+  <h3>실측 ② — Claude Vision 기반 판단형 QA (model_routing_preferences, visual_qa 라우트)</h3>
+  <p>DB 라우팅 테이블에는 <code>visual_qa</code> 라우트가 <strong>anthropic / claude-vision</strong>을 기본값(notes: "Visual QA without Google")으로 등록되어 있습니다. 이는 "레이아웃이 자연스러운가", "디자인 의도와 맞는가"처럼 픽셀 비교로는 판단할 수 없는 주관적·맥락적 평가에 쓰이는 것으로 보이며, 픽셀 diff와는 별개의 목적입니다.</p>
+
+  <h3>실측 ③ — 정적 코드 스캔 QA (app/services/design_qa_scorer.py, 796줄)</h3>
+  <p>이 서비스는 비전 모델을 전혀 쓰지 않고, 변경된 소스 코드를 정규식으로 스캔해 접근성 힌트(<code>aria-*</code>, <code>alt=</code>, <code>focus</code>/<code>focus-visible</code>)와 반응형 폰트 스케일링(<code>vw/vh/vmin/vmax</code> 단위 사용) 여부를 점수화합니다. 총점 90점 이상 "승인 후보", 80점 이상 "조건부 승인", 70점 이상 "수정 필요", 미만 "반려"로 등급을 매깁니다(코드 실측, <code>SCORING_VERSION = "static-v1"</code>).</p>
+
+  <div class="compare-row">
+    <div class="compare-box pro">
+      <h4>✅ 픽셀 diff / 정적 스캔이 유리한 경우</h4>
+      <p style="font-size:.85rem;color:var(--text2)">회귀 테스트처럼 "이전과 똑같아야 한다"가 기준일 때. 비용이 거의 없고 결과가 항상 동일하게 재현된다.</p>
+    </div>
+    <div class="compare-box con">
+      <h4>⚠️ 비전 LLM 판단이 필요한 경우</h4>
+      <p style="font-size:.85rem;color:var(--text2)">"디자인이 좋아 보이는가"처럼 정답이 하나가 아닌 주관적 평가. 비용이 들고 같은 화면도 실행마다 판단이 미세하게 달라질 수 있다.</p>
+    </div>
+  </div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>UI 회귀 테스트 보고를 받을 때 "픽셀 diff로 통과했다"인지 "비전 LLM이 괜찮다고 판단했다"인지 구분해서 보고받는다 — 신뢰 수준이 다르다.</li>
+      <li>비전 LLM 판단형 QA는 결과가 매번 달라질 수 있으므로, 중요한 배포 게이트로 쓸 때는 픽셀 diff 같은 결정론적 검증과 병행하도록 요구한다.</li>
+      <li>정적 코드 스캔 QA의 점수 기준(90/80/70점)이 실제 승인 기준으로 안전한지 최소 분기 1회 재검토를 지시한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH10 ===== -->
+<div class="section" id="ch10">
+  <h2 class="section-title section-anchor"><span class="icon">⚠️</span> 10. 모달리티별 한계와 실무 리스크</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>리스크</th><th>설명</th><th>대응 방향</th></tr></thead>
+      <tbody>
+        <tr><td><strong>차트/숫자 환각</strong></td><td>차트에서 수치를 "추정"하며 틀린 값을 확신 있게 제시</td><td>원본 데이터 대조 필수(2장 참조)</td></tr>
+        <tr><td><strong>저작권/브랜드 침해</strong></td><td>생성 이미지에 실존 브랜드·유명인 요소가 섞여 나올 위험</td><td>프롬프트 필터링(아래 AADS 실측 참조)</td></tr>
+        <tr><td><strong>이미지 속 프롬프트 인젝션</strong></td><td>이미지 안에 숨겨진 텍스트로 AI에게 별도 지시를 주입하는 공격</td><td>비전 입력을 신뢰할 수 없는 외부 소스로 취급, 별도 지시 무시 정책 필요</td></tr>
+        <tr><td><strong>딥페이크/신원 오용</strong></td><td>실존 인물과 유사한 영상·음성 생성</td><td>제공사 정책 준수, 용도 명시</td></tr>
+        <tr><td><strong>워터마크/출처 표시</strong></td><td>AI 생성물임을 표시해야 하는 규제 확대 추세</td><td>공개용 산출물은 표시 정책 사전 확인</td></tr>
+        <tr><td><strong>생성 지연</strong></td><td>영상·음악은 수십 초~수 분 소요, 실시간 워크플로 부적합</td><td>비동기 작업 큐 설계(AADS <code>media_generation_jobs</code> 방식)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>AADS 실측 — 이미지 생성 프롬프트 필터링</h3>
+  <p><code>app/services/image_service.py</code>의 <code>_sanitize_prompt()</code> 함수는 프롬프트를 1000자로 자르고 정규식으로 <code>brand</code>, <code>logo</code>, <code>trademark</code>, <code>celebrity</code>, <code>famous</code> 단어를 대소문자 무관하게 제거합니다. 이는 저작권·초상권 리스크를 줄이기 위한 최소한의 장치이며, 완벽한 필터는 아닙니다(단어 자체를 지우는 방식이라 우회 표현은 걸러지지 않을 수 있음).</p>
+
+  <div class="alert alert-danger"><strong>이미지 속 프롬프트 인젝션 주의</strong>비전 모델에 넣는 이미지에 사람이 읽기 어려운 방식으로 텍스트 지시가 숨겨져 있으면, 모델이 이를 "사용자의 새로운 지시"로 오인해 원래 작업과 무관한 행동을 할 수 있습니다. 외부에서 받은 이미지(사용자 업로드, 웹 크롤링 결과)를 비전 모델에 넣을 때는 이 위험을 감안한 시스템 프롬프트 방어가 필요합니다.</p>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>이미지 생성 프롬프트 필터가 "단어 제거" 수준임을 인지하고, 대외 공개용 이미지는 생성 후 사람 검수를 거치도록 요구한다.</li>
+      <li>외부에서 수집한 이미지를 AI 파이프라인에 넣는 프로젝트는 이미지 속 프롬프트 인젝션 방어 여부를 점검 항목에 추가하도록 지시한다.</li>
+      <li>대외 공개 산출물(영상·이미지)에 AI 생성 표시 의무가 있는 국가/플랫폼인지 사전 확인을 요구한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH11 ===== -->
+<div class="section" id="ch11">
+  <h2 class="section-title section-anchor"><span class="icon">📊</span> 11. AADS 실측 ① 미디어 도구 운영 현황 종합</h2>
+
+  <p>AADS는 CEO 채팅에서 호출 가능한 미디어 관련 MCP 도구를 다수 운영합니다. 2026-09-12 기준 코드·DB 실측을 종합하면 다음과 같습니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>도구</th><th>백엔드 구현/근거 파일</th><th>기본 프로바이더(실측)</th><th>실행 이력</th></tr></thead>
+      <tbody>
+        <tr><td><code>generate_image</code></td><td>model_routing_preferences('image') + app/services/image_service.py</td><td>genspark_ui(브라우저 자동화)</td><td>352,299건 시도(성공 4,124 / 실패 352,175 — 4·12장 참조)</td></tr>
+        <tr><td><code>edit_image</code></td><td>model_routing_preferences('edit_image')</td><td>genspark_ui</td><td>22건 실패 기록, 성공 기록 없음</td></tr>
+        <tr><td><code>generate_video</code></td><td>model_routing_preferences('video')</td><td>openai/sora-2(설정상 기본, 어댑터 미완성) 실질 kling</td><td>5건(성공 2·실패 2·대기 1)</td></tr>
+        <tr><td><code>generate_music</code></td><td>model_routing_preferences('music')</td><td>suno/suno-v4</td><td class="unverified">미검증(0건, 별도 로그 가능성)</td></tr>
+        <tr><td><code>generate_three_d_asset</code></td><td class="unverified">미확인 — 전용 서비스 파일 미발견</td><td class="unverified">미검증</td><td class="unverified">미검증</td></tr>
+        <tr><td><code>local_ocr</code></td><td>app/core/local_ocr_bridge.py, app/api/local_media_router.py</td><td>CEO PC Agent(로컬)</td><td class="unverified">미검증(전용 로그 테이블 미발견)</td></tr>
+        <tr><td><code>visual_qa_test</code></td><td>model_routing_preferences('visual_qa') + app/services/visual_qa.py</td><td>anthropic/claude-vision(판단형) + Playwright 픽셀diff(결정론적)</td><td class="unverified">미검증(전용 로그 테이블 미발견)</td></tr>
+        <tr><td><code>capture_screenshot</code></td><td>app/services/visual_qa.py (Playwright)</td><td>Playwright headless Chromium</td><td class="unverified">미검증</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>media_generation_jobs 테이블 스키마 (실측)</h3>
+  <p><code>id, job_id, kind, provider, model_id, prompt, input_refs(jsonb), status, result_uri, result_path, result_metadata(jsonb), error_message, requested_by, session_id, created_at, updated_at, completed_at</code> — 총 17개 컬럼. <code>kind</code> 컬럼에 실제로 존재하는 값은 <strong><code>image</code>, <code>edit_image</code>, <code>video</code></strong> 세 가지뿐이며, 전체 <strong>356,417건</strong>이 2026-05-15부터 2026-09-12까지 누적되어 있습니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>kind</th><th>provider</th><th>status</th><th>건수</th></tr></thead>
+      <tbody>
+        <tr><td>image</td><td>gemini</td><td class="unverified">failed</td><td>352,173</td></tr>
+        <tr><td>image</td><td>gemini</td><td class="recommend">succeeded</td><td>4,036</td></tr>
+        <tr><td>image</td><td>google</td><td class="recommend">succeeded</td><td>87</td></tr>
+        <tr><td>image</td><td>google</td><td class="unverified">failed</td><td>39</td></tr>
+        <tr><td>image</td><td>gemini</td><td>running</td><td>19</td></tr>
+        <tr><td>image</td><td>openai</td><td class="unverified">failed</td><td>18</td></tr>
+        <tr><td>image</td><td>genspark_ui</td><td>queued</td><td>9</td></tr>
+        <tr><td>image</td><td>기타(kling/qa 등)</td><td>혼합</td><td>6</td></tr>
+        <tr><td>edit_image</td><td>openai/google/gemini</td><td class="unverified">failed</td><td>22</td></tr>
+        <tr><td>video</td><td>kling</td><td>혼합(성공2·실패2·대기1)</td><td>5</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>8개 미디어 도구 중 절반 이상이 실행 이력을 확인할 전용 로그가 없다는 사실을 인지하고, 모든 미디어 도구에 통일된 실행 로그 테이블 적용을 지시한다.</li>
+      <li>가장 많이 시도된 image/gemini 조합이 사실상 전멸(성공률 1.13%, 12장 참조)이었다는 점을 근거로, 실행 전 헬스체크 없이 대량 재시도가 이뤄지지 않았는지 점검을 지시한다.</li>
+      <li>video/kling처럼 극소량이지만 검증된 조합과, image/gemini처럼 대량이지만 실패한 조합을 구분해 "검증된 소수 경로" 중심으로 기본값을 재설계하도록 요구한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH12 ===== -->
+<div class="section" id="ch12">
+  <h2 class="section-title section-anchor"><span class="icon">🔥</span> 12. AADS 실측 ② 이미지 생성 35만 건 실패의 교훈</h2>
+
+  <p>11장에서 확인한 <code>image / gemini</code> 조합의 실패 352,173건을 <code>error_message</code> 기준으로 세분화하면, R-KEY 규칙("API 키를 하드코딩하지 마라, 유출 시 영구 비활성화된다")이 왜 존재하는지를 숫자로 보여주는 사례가 나타납니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>실패 원인</th><th>건수</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td>429 RESOURCE_EXHAUSTED — "Your prepayment credits are depleted"</td><td>108,729</td><td>선불 크레딧 소진 — 결제 문제를 인지하지 못한 채 재시도가 계속됨</td></tr>
+        <tr><td>"Google Generative Language API key required"</td><td>75,412</td><td>API 키 자체가 설정되지 않은 상태에서 호출이 계속 시도됨</td></tr>
+        <tr><td>403 CONSUMER_SUSPENDED (키 A: <code>AIzaSy...WvghQ</code>)</td><td>약 92,000+ (다건 합산)</td><td>해당 API 키가 Google에 의해 정지됨</td></tr>
+        <tr><td>403 CONSUMER_SUSPENDED (키 B: <code>AIzaSy...g4Z-5Y</code>)</td><td>약 31,000+ (다건 합산)</td><td>서로 다른 두 번째 API 키도 별도로 정지됨</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-danger"><strong>R-KEY 규칙과의 직접적 연결</strong>CLAUDE.md의 R-KEY 규칙은 "API 키가 유출되면 제공사가 영구 비활성화 처리한다"고 경고합니다. 이번 실측에서 발견된 <strong>두 개의 서로 다른 Google API 키가 모두 CONSUMER_SUSPENDED 상태</strong>인 것은 이 경고가 현실화된 사례로 해석할 수 있습니다. 다만 정지 사유가 유출 때문인지, 다른 정책 위반 때문인지는 이번 조사에서 <span class="unverified">확정할 수 없어 미검증</span>으로 남깁니다 — 에러 메시지만으로는 원인까지 특정되지 않습니다.</div>
+
+  <h3>재시도 폭풍(Retry Storm)의 비용</h3>
+  <p>키가 정지되거나 크레딧이 고갈된 뒤에도 <strong>35만 건 이상의 호출이 계속 시도</strong>되었다는 것은, 실패가 감지된 즉시 해당 경로를 차단하는 서킷 브레이커(circuit breaker)가 없었거나 늦게 작동했다는 뜻입니다. API 호출 자체는 실패해도 네트워크 요청·로깅·재시도 스케줄링에는 인프라 비용이 들고, 장애 원인 파악도 로그가 뒤섞여 더 어려워집니다.</p>
+
+  <div class="alert alert-success"><strong>이미 조치된 사실도 확인됨</strong>DB 실측 결과 현재 <code>image</code>, <code>edit_image</code>, <code>video</code> 라우트의 Google/Gemini 항목에는 모두 <strong>"Google/Gemini commercial routes disabled by CEO policy 2026-09-02 KST"</strong>라는 메모가 달려 비활성화되어 있습니다. 즉 CEO가 이미 정책적으로 해당 경로를 차단한 상태이며, 이번 35만 건 실패 데이터는 <strong>그 차단 조치 이전 기간(2026-05-15~정책 시행일)의 누적 기록</strong>으로 보입니다. 현재 시점 기준으로는 같은 실패가 반복되지 않도록 막혀 있는 것으로 실측됩니다.</div>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>키 정지·크레딧 고갈 같은 "복구 불가능한" 오류가 감지되면 자동으로 해당 라우트를 즉시 차단하는 서킷 브레이커 로직이 모든 미디어 라우트에 적용되어 있는지 점검을 지시한다.</li>
+      <li>2026-09-02 정책 차단 이전 35만 건 규모의 실패가 쌓이는 동안 알림(텔레그램 등)이 왜 조기에 CEO에게 도달하지 않았는지 원인 조사를 요구한다.</li>
+      <li>다른 제공사(OpenAI, Kling, Suno 등) 라우트에도 동일한 대량 실패 패턴이 없는지 정기적으로 <code>media_generation_jobs</code> 실패율을 모니터링하도록 지시한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH13 ===== -->
+<div class="section" id="ch13">
+  <h2 class="section-title section-anchor"><span class="icon">🧭</span> 13. 실무 적용 패턴 — 의사결정 트리</h2>
+
+  <p>지금까지의 내용을 종합해, "어떤 상황에 어떤 모달리티/방식을 쓸 것인가"를 판단하는 실무 기준을 제시합니다.</p>
+
+  <div class="diagram">
+    <div class="title">모달리티 선택 의사결정 트리</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+문서에서 텍스트를 뽑아야 한다
+ ├─ PC Agent 연결 가능? → YES: 로컬 OCR 우선(비용 없음)
+ │                        NO : 클라우드 Vision-LLM(비용 발생, 문맥 이해 우수)
+ │
+마케팅/콘텐츠용 이미지가 필요하다
+ ├─ 브랜드/저작권 민감? → YES: 생성 후 반드시 사람 검수
+ │                        NO : genspark_ui/Kling/Flux 등 활성 라우트 사용
+ │
+데모/프로토타입 영상이 필요하다
+ ├─ 소량·저부담? → Kling(검증된 v1 경로) 우선 검토
+ └─ 프로덕션급? → 최신 공식 단가 재확인 후 Sora 2 Pro 등 검토(미검증 비용 주의)
+ │
+UI가 의도대로 보이는지 확인해야 한다
+ ├─ "이전과 같아야 함"(회귀) → Playwright 픽셀 diff(결정론적, 저비용)
+ └─ "괜찮아 보이는가"(주관) → Claude Vision 판단형 QA
+</pre>
+  </div>
+
+  <h3>공통 원칙</h3>
+  <ul>
+    <li><strong>결정론적으로 검증 가능하면 결정론적 방법을 먼저 쓴다</strong> — 비전 LLM은 비용과 변동성이 있는 최후 수단이다.</li>
+    <li><strong>대량 처리 전 소량 파일럿으로 실패율을 먼저 측정한다</strong> — 12장의 35만 건 실패 사례가 이를 뒷받침한다.</li>
+    <li><strong>가격은 항상 재확인한다</strong> — 본 문서의 "미검증" 표기 항목은 실행 전 공식 페이지 재확인이 필수다.</li>
+  </ul>
+
+  <div class="ceo-box">
+    <div class="ceo-title">📌 CEO 체크포인트</div>
+    <ol>
+      <li>신규 멀티모달 프로젝트 제안서에 이 의사결정 트리를 기준으로 "왜 이 방식/모델을 선택했는가"를 명시하도록 요구한다.</li>
+      <li>대량 처리 프로젝트는 반드시 소량 파일럿 실패율 데이터를 먼저 보고받은 뒤 본 실행을 승인한다.</li>
+      <li>"미검증" 가격을 근거로 예산이 잡힌 제안서는 반려하고 공식 자료 재확인을 요구한다.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH14 ===== -->
+<div class="section" id="ch14">
+  <h2 class="section-title section-anchor"><span class="icon">📖</span> 14. 참고자료와 다음 단계 로드맵</h2>
+
+  <h3>참고자료</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>출처명</th><th>확인 방법/날짜</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>Anthropic 공식 가격 페이지</td><td>fetch_url, 2026-09-12</td><td>Opus5/Sonnet5/Haiku4.5/Fable5.1 텍스트 토큰 단가 — 확정치 인용</td></tr>
+        <tr><td>Google Gemini API 공식 가격 페이지</td><td>fetch_url, 2026-09-12</td><td>Gemini 3.8 Flash 텍스트 단가 확정, 미디어 생성 단가는 페이지 하단 미확인</td></tr>
+        <tr><td>OpenAI Platform 가격/문서 페이지</td><td>fetch_url, 2026-09-12</td><td>모델 라인업(GPT-6 Astra 등)만 확인, 단가 미확인</td></tr>
+        <tr><td>AADS DB — model_routing_preferences 테이블</td><td>query_database, 2026-09-12</td><td>image/edit_image/video/music/audio/visual_qa 라우팅 실측(4~9장 근거)</td></tr>
+        <tr><td>AADS DB — media_generation_jobs 테이블</td><td>query_database, 2026-09-12</td><td>총 356,417건 실행 이력 실측(11·12장 근거)</td></tr>
+        <tr><td>AADS 코드 — image_service.py, local_ocr_bridge.py, visual_qa.py, voice_service.py, design_qa_scorer.py, ai_route_resolver.py</td><td>read_remote_file, 2026-09-12</td><td>실제 구현 로직 실측(3·4·6·9장 근거)</td></tr>
+        <tr><td>AADS CLAUDE.md — R-KEY 규칙</td><td>저장소 루트, 상시 갱신</td><td>12장 실패 데이터 해석 근거</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>다음 단계 로드맵</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>단계</th><th>실행 항목</th><th>기대 효과</th></tr></thead>
+      <tbody>
+        <tr><td>즉시</td><td>모든 미디어 라우트에 서킷 브레이커(연속 실패 시 자동 차단) 적용 여부 점검</td><td>12장과 같은 대량 재시도 실패 재발 방지</td></tr>
+        <tr><td>2주 내</td><td>음성 경로 이원화(6장) 통합 또는 의도 명문화</td><td>설정 드리프트 해소, 실제 비용/품질 예측 가능</td></tr>
+        <tr><td>1개월 내</td><td>generate_music/generate_three_d_asset 실행 이력을 확인할 로그 체계 구축</td><td>"존재만 하는 기능" 여부 판단 가능</td></tr>
+        <tr><td>분기 내</td><td>OpenAI/Kling/Suno 등 미검증 단가 항목 공식 재확인 및 내부 단가표 갱신</td><td>예산 산정 정확도 향상</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ===== FOOTER ===== -->
+<div class="footer">
+  <p>AADS Academy · 멀티모달 AI 교육자료 · 2026-09-12 작성 · CEO 교육용</p>
+  <p style="margin-top:6px">AADS 적용 현황은 2026-09-12 query_database/read_remote_file/fetch_url 실측 결과만 기재했으며, 확인하지 못한 항목은 본문에 '미검증'으로 표기했습니다. 모든 가격은 조사 시점 공식 페이지 기준이며 변동될 수 있으므로 적용 전 재확인이 필요합니다.</p>
+</div>
+
+</div>
+</body>
+</html>
