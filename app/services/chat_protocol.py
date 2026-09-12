@@ -337,7 +337,7 @@ def _legacy_payload(event: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     return event_type, payload
 
 
-def _validate_v2_envelope(envelope: Dict[str, Any]) -> None:
+def _validate_v2_envelope(envelope: dict[str, Any]) -> None:
     required = {
         "schema_version",
         "type",
