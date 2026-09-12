@@ -66,6 +66,37 @@ _RESUME_FAIL_SUFFIX_ALT = "⚠️ _서버 재시작 후 응답 생성에 실패�
 
 
 _INTERRUPT_MARKER = "_(이전 응답은 중단 처리되었습니다. 최신 지시를 우선 처리합니다.)_"
+# 위 문구는 새 지시가 들어와 이전 턴을 덮은 경우에만 사실이다. 재시도 한도 소진이나
+# LLM 전 경로 실패로 죽은 턴에도 같은 문구가 붙어, 사용자는 "곧 처리되겠지"라고
+# 읽고 기다리지만 아무 일도 일어나지 않는다. 최근 7일 기준 하드캡 75건, 재개 실패
+# 49건이 이 상태였다. 사유별로 실제로 일어난 일을 적는다.
+_INTERRUPT_MARKER_SUPERSEDED = _INTERRUPT_MARKER
+_INTERRUPT_MARKER_EXHAUSTED = (
+    "_(여기까지 생성한 뒤 중단되었습니다. 재시도 한도에 도달해 자동 재개를 멈췄습니다 — "
+    "이어서 진행하려면 다시 요청해 주세요.)_"
+)
+_INTERRUPT_MARKER_PROVIDER = (
+    "_(여기까지 생성한 뒤 중단되었습니다. 모델 응답 경로가 모두 실패해 자동 재개에 실패했습니다 — "
+    "잠시 후 다시 요청해 주세요.)_"
+)
+_INTERRUPT_MARKER_STOPPED = "_(사용자 요청으로 중단되었습니다.)_"
+_INTERRUPT_MARKER_GENERIC = (
+    "_(여기까지 생성한 뒤 중단되었습니다. 이어서 진행하려면 다시 요청해 주세요.)_"
+)
+
+
+def _interrupt_marker_for(reason: str, *, is_superseded: bool = False) -> str:
+    """중단 사유에 맞는 안내 문구."""
+    r = str(reason or "").lower()
+    if is_superseded or "superseded" in r or "newer_user" in r:
+        return _INTERRUPT_MARKER_SUPERSEDED
+    if "stopped by user" in r or "user_stop" in r:
+        return _INTERRUPT_MARKER_STOPPED
+    if "hard_cap" in r or "attempt" in r:
+        return _INTERRUPT_MARKER_EXHAUSTED
+    if "providers failed" in r or "resume_single_stream_error" in r or "all_slots_failed" in r:
+        return _INTERRUPT_MARKER_PROVIDER
+    return _INTERRUPT_MARKER_GENERIC
 
 
 def _strip_resume_fail_markers(text: str) -> str:
@@ -468,7 +499,10 @@ _FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOU
 _COMPLETION_AUTO_CONTINUE_MAX = int(os.getenv("AADS_COMPLETION_AUTO_CONTINUE_MAX", "3"))
 _FINALIZE_DB_RETRY_DELAYS = (0.5, 1.0, 2.0)
 _COOLDOWN_SECS_DEFAULT = 300
-_RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped", None}
+# model_used 가 비어 있다고 해서 복구 메시지인 것은 아니다. 최근 7일 assistant
+# 메시지의 37%가 NULL 이었고, 이들이 병합 후보가 되면서 서로 다른 답변 64건이
+# 컨텍스트에서 사라졌다(2026-09-12 실측). NULL 은 여기서 제외한다.
+_RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped"}
 
 
 def stream_status_payload(
@@ -530,7 +564,11 @@ def _normalize_final_assistant_intent(intent: Optional[str], content: str) -> Op
     if intent == "pipeline_runner" and not _looks_like_runner_notification(content):
         return "execute"
     return intent
-_RECOVERY_PREFIX_LEN = 50
+# 50자는 너무 짧다. 한국어 응답은 "확인했습니다", "네, 알겠습니다" 처럼 도입부가
+# 겹치는 일이 흔해, 실제로는 다른 답변이 같은 것으로 판정되었다.
+_RECOVERY_PREFIX_LEN = int(os.getenv("AADS_RECOVERY_PREFIX_LEN", "300"))
+# 길이가 크게 다르면 이어쓰기가 아니라 별개 답변으로 본다.
+_RECOVERY_DEDUPE_MAX_LEN_RATIO = float(os.getenv("AADS_RECOVERY_DEDUPE_MAX_LEN_RATIO", "1.5"))
 _STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT = 90
 _STALE_CLEANUP_INTERVAL_SEC_DEFAULT = 30
 _ACTIVE_STREAM_HARD_TIMEOUT_SEC_DEFAULT = 2700
@@ -801,6 +839,33 @@ _HTML_CONTEXT_MAX_AGE = timedelta(hours=24)
 import time as _bg_time  # noqa: E402
 
 
+# 시스템 알림(runner_notification, ai_review_warning, pc_agent_alert 등)은
+# assistant 로 저장되지만 모델이 만든 응답이 아니다. model_used 가 비어 있을 뿐인데
+# 이를 "복구 메시지"로 보아 병합하면서, 서로 다른 알림 64건이 사라졌다
+# (2026-09-12 실측: ai_review_warning 43, runner_notification 18, pc_agent_alert 2).
+# 알림끼리는 앞부분이 같은 양식을 쓰므로 접두 비교에 특히 취약하다.
+_NOTIFICATION_INTENTS = frozenset({
+    "runner_notification",
+    "pipeline_c",
+    "ai_review_warning",
+    "pc_agent_alert",
+    "auto_report",
+    "e2e_test",
+})
+
+
+def _is_notification_message(msg: Dict[str, Any]) -> bool:
+    return str(msg.get("intent") or "") in _NOTIFICATION_INTENTS
+
+
+def _recovery_len_close(a: str, b: str) -> bool:
+    """두 응답의 길이가 배수 이내인가. 크게 다르면 재생성이 아니라 별개 답변이다."""
+    la, lb = len(a), len(b)
+    if la == 0 or lb == 0:
+        return True
+    return max(la, lb) / min(la, lb) <= _RECOVERY_DEDUPE_MAX_LEN_RATIO
+
+
 def _dedupe_recovery_like_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """연속 recovery 계열 assistant 메시지 중 가장 긴 1건만 남긴다."""
     if len(messages) <= 1:
@@ -812,10 +877,13 @@ def _dedupe_recovery_like_messages(messages: List[Dict[str, Any]]) -> List[Dict[
         if (
             cur.get("role") == "assistant"
             and prev.get("role") == "assistant"
+            and not _is_notification_message(cur)
+            and not _is_notification_message(prev)
             and cur.get("model_used") in _RECOVERY_DEDUPE_MODEL_USED
             and prev.get("model_used") in _RECOVERY_DEDUPE_MODEL_USED
             and (cur.get("content") or "")[:_RECOVERY_PREFIX_LEN]
             == (prev.get("content") or "")[:_RECOVERY_PREFIX_LEN]
+            and _recovery_len_close(cur.get("content") or "", prev.get("content") or "")
         ):
             if len(cur.get("content") or "") > len(prev.get("content") or ""):
                 deduped[-1] = cur
@@ -4070,7 +4138,14 @@ async def _mark_execution_interrupted(
     assistant_message_id = pid
     if pid:
         if clean_partial:
-            final_content = clean_partial if _INTERRUPT_MARKER in clean_partial else clean_partial + "\n\n" + _INTERRUPT_MARKER
+            _marker = _interrupt_marker_for(reason, is_superseded=is_superseded_cancel)
+            _already = any(
+                m and m in clean_partial
+                for m in (_INTERRUPT_MARKER_SUPERSEDED, _INTERRUPT_MARKER_EXHAUSTED,
+                          _INTERRUPT_MARKER_PROVIDER, _INTERRUPT_MARKER_STOPPED,
+                          _INTERRUPT_MARKER_GENERIC)
+            )
+            final_content = clean_partial if _already else clean_partial + "\n\n" + _marker
             _intent = '_archived_partial' if is_superseded_cancel else (
                 'interrupted_partial' if len(clean_partial) > 50 else 'interruption_notice'
             )
