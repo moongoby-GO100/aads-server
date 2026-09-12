@@ -48,6 +48,24 @@ def test_deferred_reaction_claim_skips_exhausted_attempts():
     assert handler.count("attempts = GREATEST(attempts - 1, 0)") >= 2
 
 
+def test_deferred_reaction_completion_survives_bluegreen_owner_change():
+    service = Path("app/services/chat_service.py").read_text(encoding="utf-8")
+    handler = service.split("async def _process_deferred_reactions_once", 1)[1].split(
+        "async def _consume_next_reaction", 1
+    )[0]
+    completion = handler.split("def _finish_deferred_reaction", 1)[1].split(
+        "task.add_done_callback", 1
+    )[0]
+
+    assert "WHERE id = $1 AND completed_at IS NULL" in completion
+    assert "claimed_by" not in completion
+    assert "_EXECUTION_OWNER_INSTANCE" not in completion
+
+    # Returning an unstarted claim to pending must remain owner-fenced.
+    before_completion = handler.split("def _finish_deferred_reaction", 1)[0]
+    assert before_completion.count("WHERE id = $1 AND claimed_by = $2") >= 2
+
+
 def test_bluegreen_deploy_builds_once_and_starts_without_build():
     deploy = Path("deploy.sh").read_text(encoding="utf-8")
     compose = Path("docker-compose.prod.yml").read_text(encoding="utf-8")

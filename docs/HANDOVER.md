@@ -658,3 +658,10 @@ MCP 원격 쓰기 도구(`write_remote_file`/`patch_remote_file`)는 **활성 AP
 - 조치: `app/static/apps/yeoljeong-finance/index.html`에 은행 계좌별 인증정보 등록/수정 버튼, Vault 저장 전용 모달, `saveBankAccountCredentials()` JSON POST, 저장 결과 merge, 신한 차단 안내 문구를 추가했다. 비밀값은 화면 재표시 없이 서버 API로만 전송한다.
 - 검증: `node -e` 정적 `<script>` 파싱 성공(`static-js-ok 427087`). `python -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 성공. 운영 URL `http://127.0.0.1:8100/static/apps/yeoljeong-finance/index.html` HTTP 200 및 `bankCredentialFormHtml` 포함 확인. 인증 없는 credential API 호출은 HTTP 401로 보호됨을 확인.
 - 남은 이슈: pytest 실행은 현재 로컬/컨테이너 환경에 `pytest`가 없어 미실행. 실제 IBK 중화점 credential 저장 E2E는 CEO가 입력값을 화면에서 다시 저장한 뒤 진행해야 한다.
+
+## 2026-09-13 00:02 KST - CHAT 지연 알림 blue/green 완료 마킹 검증
+
+- 요청: blue/green 슬롯 교체로 `claimed_by`가 바뀐 뒤 지연 알림 완료 UPDATE가 0행이 되고 리스 만료 마다 재전송되는 문제의 직접 조치 완료 확인.
+- 확인: 수정은 이미 커밋 `2ada630e` (`fix(chat): 지연 알림 완료 마킹이 blue/green 소유자 불일치로 실패하던 문제 수정`)으로 `main` 계보와 `origin/main`에 포함되어 있다. `_finish_deferred_reaction` 완료 조건은 `id + completed_at IS NULL`이며 현재 슬롯의 `_EXECUTION_OWNER_INSTANCE`를 전달하지 않는다.
+- 검증 보강: `tests/unit/test_execution_lease_contract.py` 회귀 계약에 완료 callback은 owner-independent여야 하고, 실행을 시작하지 못한 claim을 pending으로 돌리는 경로는 기존 owner fence를 유지해야 한다는 검증을 추가했다.
+- 영향: 완료 알림 상태 전환만 대상이며 claim/리스 반납·채팅 실행 owner fence는 변경하지 않았다. DB 쓰기, 서비스 재시작, 배포는 수행하지 않았다.
