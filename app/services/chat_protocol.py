@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, AsyncIterable, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from app.services import redis_stream
@@ -24,7 +25,7 @@ SUPPORTED_CHAT_CONTRACT_VERSIONS = (CHAT_CONTRACT_V1, CHAT_CONTRACT_V2)
 CHAT_EVENT_SCHEMA_VERSION = 2
 
 _REDIS_EVENT_ID_RE = re.compile(r"^(?:0|\d+-\d+)$")
-_LEGACY_EVENT_TYPES: Dict[str, str] = {
+_LEGACY_EVENT_TYPES: dict[str, str] = {
     "delta": "message.delta",
     "done": "message.final",
     "message_stop": "message.final",
@@ -62,8 +63,8 @@ class ChatProtocolError(ValueError):
 
 
 def negotiate_contract_version(
-    requested: Optional[str | int],
-    header_value: Optional[str] = None,
+    requested: str | int | None,
+    header_value: str | None = None,
 ) -> int:
     """Resolve an explicit version while keeping unversioned clients on v1."""
     raw = requested if requested not in (None, "") else header_value
@@ -84,7 +85,7 @@ def negotiate_contract_version(
     return version
 
 
-def validate_event_cursor(cursor: Optional[str]) -> Optional[str]:
+def validate_event_cursor(cursor: str | None) -> str | None:
     """Validate the currently Redis-backed opaque replay cursor."""
     if cursor in (None, ""):
         return None
@@ -100,9 +101,9 @@ def validate_event_cursor(cursor: Optional[str]) -> Optional[str]:
 def resolve_resume_cursor(
     *,
     contract_version: int,
-    last_applied_event_id: Optional[str],
-    legacy_last_event_id: Optional[str],
-    header_last_event_id: Optional[str],
+    last_applied_event_id: str | None,
+    legacy_last_event_id: str | None,
+    header_last_event_id: str | None,
 ) -> str:
     """Select a reconnect cursor without conflating it with a high watermark.
 
@@ -140,7 +141,7 @@ def compare_redis_event_ids(left: str, right: str) -> int:
     return (left_parts > right_parts) - (left_parts < right_parts)
 
 
-def chat_protocol_capabilities() -> Dict[str, Any]:
+def chat_protocol_capabilities() -> dict[str, Any]:
     """Return the stable, additive capability advertisement."""
     return {
         "contract_version": CHAT_CONTRACT_V2,
@@ -193,10 +194,10 @@ def chat_protocol_capabilities() -> Dict[str, Any]:
 
 @dataclass(frozen=True)
 class ParsedSSEFrame:
-    data: Optional[str]
-    event_id: Optional[str]
-    event: Optional[str]
-    retry: Optional[int]
+    data: str | None
+    event_id: str | None
+    event: str | None
+    retry: int | None
 
 
 class SSEFrameDecoder:
@@ -206,9 +207,9 @@ class SSEFrameDecoder:
         self._line = ""
         self._saw_cr = False
         self._data_lines: list[str] = []
-        self._event_id: Optional[str] = None
-        self._event: Optional[str] = None
-        self._retry: Optional[int] = None
+        self._event_id: str | None = None
+        self._event: str | None = None
+        self._retry: int | None = None
         self._has_fields = False
 
     def feed(self, chunk: str) -> list[ParsedSSEFrame]:
@@ -278,15 +279,13 @@ class SSEFrameDecoder:
 def _occurred_at(value: Any = None) -> str:
     if value not in (None, ""):
         try:
-            return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat().replace(
-                "+00:00", "Z"
-            )
+            return datetime.fromtimestamp(float(value), tz=UTC).isoformat().replace("+00:00", "Z")
         except (TypeError, ValueError, OSError):
             pass
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _legacy_payload(event: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
+def _legacy_payload(event: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     legacy_type = str(event.get("type") or "unknown")
     event_type = _LEGACY_EVENT_TYPES.get(legacy_type, f"legacy.{legacy_type}")
     payload = {key: value for key, value in event.items() if key != "type"}
@@ -309,17 +308,17 @@ def _legacy_payload(event: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
 
 
 def build_event_envelope(
-    event: Dict[str, Any],
+    event: dict[str, Any],
     *,
-    event_id: Optional[str],
-    session_id: Optional[str],
-    execution_id: Optional[str],
-    owner_epoch: Optional[int | str] = None,
-    generation_id: Optional[str] = None,
-    segment_id: Optional[str] = None,
-    sequence: Optional[int | str] = None,
+    event_id: str | None,
+    session_id: str | None,
+    execution_id: str | None,
+    owner_epoch: int | str | None = None,
+    generation_id: str | None = None,
+    segment_id: str | None = None,
+    sequence: int | str | None = None,
     occurred_at: Any = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Adapt one legacy event to the v2 envelope without inventing terminal state."""
     if event.get("schema_version") == CHAT_EVENT_SCHEMA_VERSION:
         payload = event.get("payload")
@@ -363,12 +362,12 @@ def build_event_envelope(
 def encode_v2_sse_event(
     raw_sse: str,
     *,
-    event_id: Optional[str] = None,
-    session_id: Optional[str] = None,
-    execution_id: Optional[str] = None,
-    owner_epoch: Optional[int | str] = None,
-    generation_id: Optional[str] = None,
-    sequence: Optional[int | str] = None,
+    event_id: str | None = None,
+    session_id: str | None = None,
+    execution_id: str | None = None,
+    owner_epoch: int | str | None = None,
+    generation_id: str | None = None,
+    sequence: int | str | None = None,
     occurred_at: Any = None,
 ) -> str:
     """Convert exactly one legacy SSE data frame into a v2 SSE data frame."""
@@ -391,7 +390,9 @@ def encode_v2_sse_event(
     try:
         event = json.loads(frame.data or "")
     except json.JSONDecodeError as exc:
-        raise ChatProtocolError("invalid_legacy_event_json", "legacy event is not valid JSON") from exc
+        raise ChatProtocolError(
+            "invalid_legacy_event_json", "legacy event is not valid JSON"
+        ) from exc
     if not isinstance(event, dict):
         raise ChatProtocolError("invalid_legacy_event_json", "legacy event must be a JSON object")
     envelope = build_event_envelope(
@@ -411,10 +412,10 @@ def encode_v2_sse_event(
 def encode_snapshot_required_event(
     *,
     reason: str,
-    session_id: Optional[str],
-    execution_id: Optional[str],
-    server_high_watermark: Optional[str] = None,
-    failed_event_id: Optional[str] = None,
+    session_id: str | None,
+    execution_id: str | None,
+    server_high_watermark: str | None = None,
+    failed_event_id: str | None = None,
 ) -> str:
     """Emit a valid recovery instruction without advancing the applied cursor."""
     envelope = build_event_envelope(
@@ -436,15 +437,15 @@ def encode_snapshot_required_event(
 async def adapt_sse_stream(
     source: AsyncIterable[str],
     *,
-    session_id: Optional[str],
-    execution_id: Optional[str] = None,
-    owner_epoch: Optional[int | str] = None,
+    session_id: str | None,
+    execution_id: str | None = None,
+    owner_epoch: int | str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Adapt a live v1 stream to v2 with one shared incremental parser."""
     decoder = SSEFrameDecoder()
     current_execution_id = execution_id
 
-    async def _adapt_frame(frame: ParsedSSEFrame) -> Optional[str]:
+    async def _adapt_frame(frame: ParsedSSEFrame) -> str | None:
         nonlocal current_execution_id
         if frame.data is None:
             if frame.retry is not None:
@@ -453,8 +454,8 @@ async def adapt_sse_stream(
         try:
             event = json.loads(frame.data)
             if not isinstance(event, dict):
-                raise ValueError("event must be an object")
-        except (json.JSONDecodeError, ValueError):
+                raise TypeError("event must be an object")
+        except (json.JSONDecodeError, TypeError):
             return encode_snapshot_required_event(
                 reason="invalid_event_frame",
                 session_id=session_id,
@@ -464,9 +465,7 @@ async def adapt_sse_stream(
         if event.get("type") == "stream_start" and event.get("execution_id"):
             current_execution_id = str(event["execution_id"])
         try:
-            replayable_frame = "".join(
-                f"data:{line}\n" for line in frame.data.split("\n")
-            ) + "\n"
+            replayable_frame = "".join(f"data:{line}\n" for line in frame.data.split("\n")) + "\n"
             return encode_v2_sse_event(
                 replayable_frame,
                 event_id=frame.event_id,
@@ -497,11 +496,11 @@ async def adapt_sse_stream(
                 return
 
 
-def _version_from_datetime(value: Any) -> Optional[str]:
+def _version_from_datetime(value: Any) -> str | None:
     if not isinstance(value, datetime):
         return None
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
+        value = value.replace(tzinfo=UTC)
     return str(int(value.timestamp() * 1_000_000))
 
 
@@ -521,9 +520,9 @@ async def get_stream_snapshot(
     *,
     session_id: UUID,
     tenant_id: UUID,
-    execution_id: Optional[UUID] = None,
+    execution_id: UUID | None = None,
     last_applied_event_id: str = "0",
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Read a tenant-scoped DB snapshot and its independent Redis watermark.
 
     This query is deliberately side-effect free.  In particular it does not use
