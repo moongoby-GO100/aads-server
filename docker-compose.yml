@@ -153,6 +153,10 @@ services:
       # 서버 소스코드 읽기 (read_file / code_explorer 도구용)
       - /root/aads/aads-server:/root/aads/aads-server:ro
       - /root/aads/aads-dashboard:/root/aads/aads-dashboard:ro
+      # CLI 세션 영속화: 컨테이너 재생성·blue/green 전환에도 대화 맥락(도구 호출·결과)
+      # 을 유지한다. 종전에는 /tmp/.claude-sdk 가 컨테이너와 함께 사라져, 배포할 때마다
+      # 진행 중 대화가 --resume 대상을 잃고 도구를 처음부터 다시 돌렸다.
+      - /root/aads/data/claude-sessions:/tmp/.claude-sdk:rw
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

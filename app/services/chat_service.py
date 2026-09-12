@@ -422,9 +422,6 @@ def _should_auto_resume_interrupted_reason(reason: str) -> bool:
         return False
     blocked_tokens = (
         "CancelledError",
-        # done 없이 끝난 턴을 자동 재개하면 도구 수십 회를 다시 돌며 쿼터를 태운다.
-        # 사용자에게 미완료를 알리고 재지시 여부를 맡긴다(2026-09-12 설계 판단).
-        "completion_guard_no_done_event",
         "superseded",
         "newer_user",
         "new_execution",
