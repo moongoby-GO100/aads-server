@@ -362,6 +362,47 @@ def _precheck_review_input(diff: str) -> Optional[ReviewVerdict]:
     )
 
 
+async def _call_review_model(
+    *,
+    model: str,
+    prompt: str,
+    system: str,
+    max_tokens: int,
+) -> Optional[str]:
+    """Route CLI model IDs to their real relay and API IDs to the central client.
+
+    ``call_llm_with_fallback`` treats every non-Claude name as a LiteLLM model.
+    Sending ``codex:*`` there therefore produces HTTP 400 instead of reaching
+    the Codex CLI relay. Claude CLI IDs also need the relay so its DB-priority
+    OAuth slot selection and refresh-capable credentials are honored.
+    """
+    normalized = str(model or "").strip()
+    provider, separator, bare_model = normalized.partition(":")
+    provider = provider.lower() if separator else ""
+    if provider in {"codex", "claude"} or (
+        not provider and (normalized.startswith("gpt-") or normalized.startswith("claude-"))
+    ):
+        from app.services.directive_draft_service import _call_configured_model
+
+        return await _call_configured_model(
+            model_candidate=normalized,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            system=system,
+            tenant_id=None,
+            user_id=None,
+        )
+
+    from app.core.anthropic_client import call_llm_with_fallback
+
+    return await call_llm_with_fallback(
+        prompt=prompt,
+        model=bare_model if provider == "litellm" else normalized,
+        system=system,
+        max_tokens=max_tokens,
+    )
+
+
 def _extract_changed_files(diff: str) -> list[str]:
     files: list[str] = []
     for match in re.finditer(r"^diff --git a/(.+?) b/(.+)$", diff or "", re.MULTILINE):
@@ -633,7 +674,6 @@ async def review_code_diff(
 위 기준에 따라 JSON으로 판정하세요."""
 
     try:
-        from app.core.anthropic_client import call_llm_with_fallback
         review_models = await _get_review_models()
         used_model = review_models[0] if review_models else _REVIEW_MODEL_FALLBACK
 
@@ -660,7 +700,7 @@ async def review_code_diff(
                 # ai_review 요청과 재검수 스위퍼가 함께 묶여 review_hold 가 누적됐다.
                 # 시도당 상한을 두고 다음 모델/재시도로 넘긴다.
                 result_text = await asyncio.wait_for(
-                    call_llm_with_fallback(
+                    _call_review_model(
                         prompt=prompt,
                         model=model,
                         system=_REVIEW_SYSTEM_PROMPT,

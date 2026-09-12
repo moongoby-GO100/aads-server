@@ -13892,3 +13892,8 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 검증: reviewer/flag/sweeper 집중 테스트 26건, Python compile, Bash syntax,
   `git diff --check`를 통과했다. 운영 반영 후 실제 리뷰 1건 성공, 보류 건 감소,
   systemd 타이머 반복 실행을 확인해야 최종 복구로 판정한다.
+- 배포 전 catch-up 검증에서 SQL 문자열 안의 잘못된 `#` 주석과 `codex:*`를
+  LiteLLM으로 보내는 기존 provider 오분기를 추가 발견했다. SQL 오류는 실패 폐쇄로
+  바꾸고, Codex/Claude CLI 모델은 검증된 relay caller로, API 모델만 중앙
+  `call_llm_with_fallback()`으로 보내도록 분기했다. 운영 이미지 런타임에서 관련
+  두 모듈의 임포트와 helper 연결을 확인했다.

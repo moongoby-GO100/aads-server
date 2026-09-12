@@ -49,22 +49,15 @@ async def _review_code_diff_reaches_later_healthy_model():
       "issues": [],
       "summary": "fourth model recovered"
     }"""
-    call_llm = AsyncMock(side_effect=["", "", "", valid_response])
-    anthropic_mod = types.ModuleType("app.core.anthropic_client")
-    anthropic_mod.call_llm_with_fallback = call_llm
-    with patch.dict(
-        sys.modules,
-        {
-            "app": types.ModuleType("app"),
-            "app.core": types.ModuleType("app.core"),
-            "app.core.anthropic_client": anthropic_mod,
-        },
-    ), patch.object(
+    call_model = AsyncMock(side_effect=["", "", "", valid_response])
+    with patch.object(
         reviewer,
         "_get_review_models",
         new=AsyncMock(return_value=["bad-1", "bad-2", "bad-3", "codex:gpt-5.6-sol"]),
     ), patch.object(
         reviewer, "_save_review_result", new=AsyncMock(),
+    ), patch.object(
+        reviewer, "_call_review_model", new=call_model,
     ):
         verdict = await reviewer.review_code_diff(
             project="AADS",
@@ -74,8 +67,8 @@ async def _review_code_diff_reaches_later_healthy_model():
             files_changed=["a.py"],
         )
 
-    assert call_llm.await_count == 4
-    assert [call.kwargs["model"] for call in call_llm.await_args_list] == [
+    assert call_model.await_count == 4
+    assert [call.kwargs["model"] for call in call_model.await_args_list] == [
         "bad-1", "bad-2", "bad-3", "codex:gpt-5.6-sol",
     ]
     assert verdict.verdict == "APPROVE"
