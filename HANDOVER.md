@@ -13640,3 +13640,22 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 운영 API 배포와 실제 Redis/DB/브라우저 cross-version E2E는 아직 미수행이다. WP03
   dashboard consumer가 통합되고 양쪽 계약 테스트가 통과한 뒤 Blue/Green으로 함께
   배포하며, 양 슬롯 동일 digest와 5분 P0/P1 감시를 완료 기준으로 한다.
+
+## 2026-09-13 00:52 KST — WP03 독립 러너 보강 통합
+
+- 서버 재시작으로 DB 작업 상태는 오류가 됐지만 격리 worktree에 남은 독립 WP03
+  보강을 회수해 공식 `origin/main` 후속 수정과 의미 단위로 통합했다. 기존 dirty
+  `main`과 사용자 파일은 건드리지 않았다.
+- capability에 `production_ready=false`, activation prerequisites, 원자적 snapshot 및
+  stable generation 미완료 상태를 명시했다. Redis의 `max-deleted-entry-id`와 완료
+  marker `owner_epoch`를 보존하고, 삭제 경계가 입증된 경우에만 trim mismatch를
+  판정해 완전 보존 스트림의 초기 replay를 잘못 차단하지 않는다.
+- v2 envelope는 schema·scope UUID·owner epoch·sequence·발생 시각을 fail-closed로
+  검증한다. 마지막 Redis event id는 owner-fenced terminal DB writer 안에서만 최종
+  snapshot coverage로 저장한다.
+- 검증: WP03 집중 테스트 15건, WP00·interrupt receipt 인접 회귀 포함 26건, Python
+  compile, pre-commit Python 검사와 import 완결성 검사를 통과했다. 전체 파일 Ruff는
+  기존 대형 모듈의 누적 lint 부채 때문에 release gate로 사용하지 않았다.
+- 실제 Redis/DB cross-version E2E와 브라우저 검증은 dashboard WP03 통합 후 수행한다.
+  WP04의 atomic snapshot checkpoint와 WP05의 stable generation identity가 끝나기 전
+  v2 protocol은 운영 활성화하지 않는다.
