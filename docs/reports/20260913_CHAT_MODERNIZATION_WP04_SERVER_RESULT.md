@@ -2,7 +2,7 @@
 
 - 기준 시각: 2026-09-13 KST
 - 작업 기준: 로컬 `HEAD`와 로컬 `origin/main` 참조 모두
-  `97481d1c771ee3f069265b69dcfdb4f398689e8c`
+  `97481d1c771ee95a2c11502347c02968dad9e93a`
 - 작업 위치: 기존 main 작업 디렉터리와 분리된
   `/tmp/aads-wt-runner-2d903d0b`
 - 원격 fetch: 상위 필수 규칙의 "파일 생성/수정/삭제만 허용"에 따라 실행하지 않았다.
@@ -135,7 +135,7 @@
 Runner 타임아웃 뒤 보존된 worktree를 2026-09-13 KST에 직접 재검수했다.
 
 - WP00/WP03/WP04와 receipt/resume/retry/chat-service/status/lease/watchdog 회귀 묶음:
-  `163 passed, 1 warning`.
+  `175 passed, 1 skipped, 1 warning`.
 - WP03+WP04 집중 묶음: `22 passed`.
 - 변경 Python 파일 `py_compile`: 통과.
 - 변경 Python 파일 Ruff critical (`E9,F63,F7,F82`): 통과.
