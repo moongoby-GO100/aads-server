@@ -26,6 +26,8 @@ class WorkspaceCreate(BaseModel):
 
 class WorkspaceUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=100)
+    # 표시용 별칭. name 은 프로젝트 키를 담은 식별용이라 함부로 바꾸면 안 된다.
+    display_name: Optional[str] = Field(None, max_length=100)
     system_prompt: Optional[str] = None
     files: Optional[List[Any]] = None
     settings: Optional[Dict[str, Any]] = None

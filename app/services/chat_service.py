@@ -8187,12 +8187,15 @@ async def list_workspaces(tenant_id: Optional[str] = None) -> List[Dict[str, Any
         result = []
         for r in rows:
             d = _row_to_dict(r)
-            pk = d.get("project_key") or ""
-            if pk:
-                dn = get_display_name(pk)
-                d["display_name"] = dn if dn != pk else None
+            # 사용자가 저장한 별칭이 우선이다. 예전에는 project_key 로 유도한 값으로
+            # 무조건 덮어써서, 별칭을 바꿔도 조회할 때마다 되돌아갔다.
+            saved = (d.get("display_name") or "").strip()
+            if saved:
+                d["display_name"] = saved
             else:
-                d["display_name"] = None
+                pk = d.get("project_key") or ""
+                dn = get_display_name(pk) if pk else ""
+                d["display_name"] = dn if (pk and dn != pk) else None
             result.append(d)
         return result
 
@@ -8225,7 +8228,9 @@ async def update_workspace(workspace_id: str, data: Dict[str, Any], tenant_id: O
         sets = []
         vals: List[Any] = []
         idx = 1
-        for field in ("name", "system_prompt", "color", "icon"):
+        # display_name 은 표시용 별칭이다. name 은 [CEO] 통합지시 처럼 프로젝트 키를
+        # 담은 식별용 이름이라 바꾸면 project_key 재파생 등 다른 동작이 딸려 온다.
+        for field in ("name", "display_name", "system_prompt", "color", "icon"):
             if field in data and data[field] is not None:
                 sets.append(f"{field} = ${idx}")
                 vals.append(data[field])
