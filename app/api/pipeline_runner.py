@@ -9,6 +9,7 @@ import hashlib
 import os
 import re
 import uuid
+from functools import lru_cache
 from typing import Optional
 
 import structlog
@@ -323,8 +324,27 @@ def _is_local_runner_project(project: str | None) -> bool:
     return (project or "").upper() in _local_pid_projects()
 
 
+@lru_cache(maxsize=1)
+def _runner_pid_namespace_visible() -> bool:
+    """러너 호스트의 PID를 이 프로세스에서 볼 수 있는지 판정한다.
+
+    API가 자체 PID namespace를 가진 컨테이너에서 돌면 호스트 러너 PID는
+    /proc 에 없다. 그 상태로 생존 판정을 하면 살아 있는 작업이 전부
+    process_died 로 강제 종결된다.
+    """
+    if not os.path.exists("/.dockerenv"):
+        return True
+    try:
+        with open("/proc/1/comm", encoding="utf-8") as handle:
+            return handle.read().strip() in ("systemd", "init")
+    except OSError:
+        return False
+
+
 def _local_pid_alive(pid) -> bool | None:
     if not pid:
+        return None
+    if not _runner_pid_namespace_visible():
         return None
     try:
         return os.path.exists(f"/proc/{int(pid)}")
