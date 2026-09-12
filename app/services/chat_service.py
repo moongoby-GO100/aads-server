@@ -8590,6 +8590,10 @@ def _message_select_fields(fields: str) -> str:
             "id, session_id, execution_id, role, content, model_used, intent, "
             "cost, tokens_in, tokens_out, bookmarked, attachments, sources, artifact_id, "
             "created_at, edited_at, "
+            # AADS-RENDER-HYDRATION-P1: 화면이 직접 참조하는 소용량 컬럼을 복원한다.
+            # branch_id=버블 들여쓰기, reply_to_id=답글 연결, thinking_summary=사고 요약,
+            # is_hidden/quality_score=표시 판정. embedding 등 대용량 컬럼은 계속 제외한다.
+            "branch_id, reply_to_id, thinking_summary, is_hidden, quality_score, "
             "CASE "
             "WHEN quality_details IS NULL THEN NULL "
             "WHEN role = 'assistant' AND ("
