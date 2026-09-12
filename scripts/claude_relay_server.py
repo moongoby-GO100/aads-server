@@ -214,6 +214,9 @@ _OS_TIMEOUT_ENABLED = os.getenv("CLAUDE_RELAY_OS_TIMEOUT_ENABLED", "1") == "1"
 _DIRECT_OAUTH_ENABLED = os.getenv("AADS_CLAUDE_DIRECT_OAUTH", "0") == "1"
 _ENV_OAUTH_FILE = Path(os.getenv("ENV_OAUTH_FILE", "/root/.genspark/.env.oauth"))
 _RELAY_HOME = Path("/tmp/.claude-relay")
+# 슬롯별 자격증명 HOME. 각 슬롯이 자기 .credentials.json(accessToken+refreshToken)을
+# 보유하면 CLI가 만료 시 스스로 갱신·영속화하므로 토큰 수동 동기화가 불필요해진다.
+_SLOT_HOME_ROOT = Path(os.getenv("CLAUDE_RELAY_SLOT_HOME_ROOT", "/root/.claude-relay-slots"))
 _CODEX_HOME_ROOT = Path(os.getenv("CODEX_HOME_ROOT", "/root/.codex-relay"))
 _AADS_API_OAUTH_STATE_URL = os.getenv(
     "CLAUDE_RELAY_OAUTH_STATE_URL",
@@ -458,18 +461,52 @@ def _ensure_relay_home():
     return str(_RELAY_HOME)
 
 
-def _build_claude_env(token):
+def _slot_home_path(slot):
+    return _SLOT_HOME_ROOT / ("slot%s" % slot)
+
+
+def _slot_credentials_path(slot):
+    return _slot_home_path(slot) / ".claude" / ".credentials.json"
+
+
+def _ensure_slot_home(slot):
+    """슬롯 전용 HOME 경로. 자격증명 파일이 없으면 None(= env 토큰 폴백)."""
+    if not slot or str(slot) in ("0", "none", "proxy"):
+        return None
+    if not _slot_credentials_path(slot).is_file():
+        return None
+    settings_file = _slot_home_path(slot) / ".claude" / "settings.json"
+    try:
+        if not settings_file.exists():
+            settings_file.parent.mkdir(parents=True, exist_ok=True)
+            settings_file.write_text("{}")
+    except OSError as e:
+        logger.warning("slot home settings init failed slot=%s: %s", slot, e)
+    return str(_slot_home_path(slot))
+
+
+def _build_claude_env(token, slot=None):
     if not _DIRECT_OAUTH_ENABLED:
         return dict(os.environ, CLAUDE_CODE_MAX_OUTPUT_TOKENS="16384")
-    relay_home = _ensure_relay_home()
     env = {}
     for k in ("PATH", "LANG", "LC_ALL", "TERM", "USER", "LOGNAME",
               "SHELL", "TMPDIR", "XDG_RUNTIME_DIR", "NODE_PATH",
               "NVM_DIR", "NVM_BIN", "NVM_INC"):
         if k in os.environ:
             env[k] = os.environ[k]
-    env["HOME"] = relay_home
-    env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    slot_home = _ensure_slot_home(slot)
+    if slot_home:
+        # 자격증명 파일 모드: CLI가 refreshToken으로 만료분을 스스로 갱신한다.
+        # CLAUDE_CODE_OAUTH_TOKEN은 액세스 토큰만 담기고 파일보다 우선하므로,
+        # 주입하면 파일이 정상이어도 만료 시 401이 난다. 절대 설정하지 않는다.
+        env["HOME"] = slot_home
+        env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    else:
+        # 아직 자격증명 파일이 없는 슬롯은 기존 env 토큰 경로로 동작(점진 전환).
+        env["HOME"] = _ensure_relay_home()
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    logger.info("claude_auth_source=%s slot=%s",
+                "slot_credentials" if slot_home else "env_token", slot or "-")
     env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "16384"
     return env
 
@@ -1324,7 +1361,7 @@ async def handle_stream(request):
                         claude_meta.get("mode", "unknown"),
                         (mcp_diag or {}).get("path_mode", "unknown"))
 
-            cli_env = _build_claude_env(token)
+            cli_env = _build_claude_env(token, slot)
             # AADS-191B-8B: coreutils timeout으로 cmd 감싸기 — OS 레벨 hard kill 안전망
             # Python wait_for가 실패해도, relay가 crash해도, 시간 초과 시 자식 프로세스가 자체 종료됨.
             if _OS_TIMEOUT_ENABLED and os.path.isfile(_OS_TIMEOUT_BIN):
@@ -2071,7 +2108,10 @@ async def handle_health(request):
               "os_timeout_enabled": _OS_TIMEOUT_ENABLED}
     if _DIRECT_OAUTH_ENABLED:
         token, slot, label = _pick_token()
-        health.update({"oauth_slot": slot, "oauth_label": label, "token_available": bool(token)})
+        health.update({"oauth_slot": slot, "oauth_label": label, "token_available": bool(token),
+                       "slot_credentials": {
+                           s: _slot_credentials_path(s).is_file() for s in ("1", "2")
+                       }})
     return web.json_response(health)
 
 
@@ -2342,6 +2382,9 @@ def main():
     logger.info("Starting Claude Relay on port %d (%d sessions) [auth=%s]", PORT, len(_session_map), auth_mode)
     if _DIRECT_OAUTH_ENABLED:
         _ensure_relay_home()
+        for _s in ("1", "2"):
+            logger.info("slot%s auth source: %s", _s,
+                        "slot_credentials" if _slot_credentials_path(_s).is_file() else "env_token")
         token, slot, label = _pick_token()
         logger.info("OAuth ready: slot=%s label=%s ok=%s", slot, label, bool(token))
     app = create_app()
