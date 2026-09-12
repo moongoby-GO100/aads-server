@@ -254,13 +254,6 @@ async def _ensure_model_routing_preferences_table() -> None:
             'DROP CONSTRAINT IF EXISTS model_routing_preferences_route_key_chk'
         )
         await conn.execute(
-            "ALTER TABLE model_routing_preferences "
-            "ADD CONSTRAINT model_routing_preferences_route_key_chk "
-            "CHECK (route_key IN ("
-            + ",".join(f"'{key}'" for key in AI_ROUTE_KEYS)
-            + "))"
-        )
-        await conn.execute(
             'ALTER TABLE model_routing_preferences ADD COLUMN IF NOT EXISTS display_name TEXT'
         )
         await conn.execute(
