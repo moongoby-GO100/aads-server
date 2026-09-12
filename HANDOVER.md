@@ -13518,3 +13518,19 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 운영 E2E와 배포는 미수행이다. 완료 기준은 국내 PC Agent에서 신한 또는 IBK
   한 계좌가 `imported_rows > 0` 또는 `verified_no_records=true`를 반환하고,
   거래목록/은행요약에서 동일 결과가 확인되는 것이다.
+
+## 2026-09-12 20:40 KST — PC Agent heartbeat 진단·토큰 스키마·알림 멱등성 P1
+
+- 운영 로그의 `pc_agent_token_db_check_failed: column "is_active" does not exist`를
+  재현해 `kakao_pc_agent_tokens` 생성 DDL과 migration 173에 `is_active BOOLEAN NOT
+  NULL DEFAULT TRUE`를 추가했다. 마이그레이션 전 연결도 잠기지 않도록 토큰 검증은
+  실제 컬럼 존재 여부를 확인하고 레거시 스키마에서는 기존 토큰 계약으로 폴백한다.
+- heartbeat/server ping 끊김 이벤트에 마지막 메시지·heartbeat·server ping 경과시간,
+  수신 timeout, ping 횟수, 판정 소스를 기록한다. `/pc-agent/disconnect-stats`가 이 값을
+  반환하며 `server_ping_failed`와 keepalive ping timeout을 별도 원인으로 분류한다.
+- 자동 세션 알림 키에서 매번 달라지는 uptime을 제거하고 agent/cause/15분 window의
+  SHA-256 기반 키로 바꿨다. 동일 window의 DB 관찰·세션 보고·AI 후속 반응은 한 번만
+  생성되고 다음 window의 재발은 다시 보고된다.
+- 집중 회귀 테스트 24건, Python compile, `git diff --check`를 통과했다. 운영 DB
+  migration, 커밋·푸시·blue/green 배포, 재연결 후 로그/통계 확인은 릴리스 단계에서
+  실제 결과를 확인한다.

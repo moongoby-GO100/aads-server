@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS kakao_pc_agent_tokens (
     label VARCHAR(100) DEFAULT '',
     user_id TEXT,
     tenant_id UUID,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     last_used_at TIMESTAMPTZ
 );
@@ -87,7 +88,8 @@ async def _ensure_pc_agent_tables() -> None:
                 """
                 ALTER TABLE kakao_pc_agent_tokens
                     ADD COLUMN IF NOT EXISTS user_id TEXT,
-                    ADD COLUMN IF NOT EXISTS tenant_id UUID
+                    ADD COLUMN IF NOT EXISTS tenant_id UUID,
+                    ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE
                 """
             )
             await conn.execute(
