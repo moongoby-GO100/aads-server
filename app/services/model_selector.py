@@ -286,7 +286,15 @@ def _is_db_slot_rate_limited(record: Optional[Dict[str, Any]]) -> bool:
     return target > datetime.now(timezone.utc)
 
 # AADS session_id → CLI session_id 매핑 (대화 이어가기용)
-_cli_session_map: Dict[str, str] = {}  # {aads_session_id: cli_session_id}
+_cli_session_map: Dict[str, str] = {}  # {"<aads_session_id>@<slot>": cli_session_id}
+
+
+def _cli_session_key(session_id: Optional[str], slot: Optional[str] = None) -> str:
+    """릴레이의 _session_key 와 같은 규칙. 슬롯별로 CLI 세션을 구분한다."""
+    if not session_id:
+        return ""
+    s = str(slot or "")
+    return "%s@%s" % (session_id, s) if s and s not in ("0", "none", "proxy") else session_id
 
 _SESSION_BOUND_TOOLS = {
     "pipeline_runner_submit",
@@ -710,13 +718,18 @@ async def _resolve_governed_intent_model(
     return None, None
 
 
-async def _relay_clear_aads_session_for_oauth_fallback(session_id: Optional[str]) -> None:
-    """OAuth 슬롯 전환(Gmail→Naver) 전에 호출.
+# 릴레이가 세션을 슬롯별로 보관하면(_session_key) 폴백 시 매핑을 버릴 필요가 없다.
+# 버리는 순간 도구 호출 이력이 사라져, 재개된 세션이 이미 끝낸 작업을 다시 한다
+# (2026-09-12 중복 커밋). 구버전 릴레이와 함께 돌 때만 폐기로 되돌아간다.
+_RELAY_PER_SLOT_SESSIONS = os.getenv("CLAUDE_RELAY_PER_SLOT_SESSIONS", "1") == "1"
 
-    Relay는 session_id당 CLI session_id를 하나만 저장한다. 슬롯1에서 만든 CLI 세션으로
-    슬롯2 토큰이 --resume 하면 인증/계정 불일치로 실패한다. 폴백 전 매핑 제거 필수.
-    """
+
+async def _relay_clear_aads_session_for_oauth_fallback(session_id: Optional[str]) -> None:
+    """OAuth 슬롯 전환 전 호출. 슬롯별 세션이 켜져 있으면 아무것도 하지 않는다."""
     if not session_id:
+        return
+    if _RELAY_PER_SLOT_SESSIONS:
+        logger.debug("relay_session_kept: 슬롯별 세션 유지 session=%s", session_id[:8])
         return
     _cli_session_map.pop(session_id, None)
     if not _CLAUDE_CLI_ENABLED:
@@ -2050,17 +2063,46 @@ async def call_stream(
         _original_model = model
         _downgrade = [model] if _explicit_model_requested else _MODEL_DOWNGRADE.get(model, [model])
         _fb_seq = []  # [(model, slot), ...]
+
+        # 사전 슬롯 선택: 주간 한도를 다 쓴 계정은 아예 시도하지 않는다.
+        # 턴 중간에 계정을 갈아타면 릴레이가 CLI 세션 매핑을 버려야 하고
+        # (슬롯1 세션을 슬롯2 토큰으로 --resume 할 수 없다), 그 순간 도구 호출
+        # 이력이 사라져 이미 끝낸 작업을 다시 한다. 2026-09-12 에 같은 커밋이
+        # 두 번 만들어진 경로가 이것이다. 소진된 슬롯을 건너뛰면 폴백 자체가
+        # 줄어 세션이 살아남는다. DB의 rate_limited_until 은 429마다 300초로
+        # 덮이고 복구 잡이 지워 신호가 되지 못하므로 실측 사용률을 쓴다.
+        _quota_blocked: Dict[str, str] = {}
+        try:
+            from app.services.oauth_usage_tracker import get_exhausted_slots
+            _quota_blocked = await get_exhausted_slots()
+        except Exception as _qb_err:
+            logger.debug("exhausted slot lookup failed: %s", str(_qb_err)[:120])
+        if _quota_blocked and len(_quota_blocked) < len(_ACCOUNT_SLOTS):
+            logger.info("slot_preflight_skip: %s (주간 한도 소진)", ",".join(sorted(_quota_blocked)))
+
         # 쿨다운 스마트 정렬: 사용 가능 슬롯 먼저, 쿨다운 슬롯 뒤로
         _avail = [
             s for s in _ACCOUNT_SLOTS
             if _is_slot_available(s) and not _is_db_slot_rate_limited(_slot_records.get(s))
+            and s not in _quota_blocked
+        ]
+        # 전부 소진이면 원래 순서를 유지한다(막힌 슬롯이라도 시도는 해야 한다).
+        _quota_exhausted = [
+            s for s in _ACCOUNT_SLOTS
+            if s in _quota_blocked and _is_slot_available(s)
         ]
         _db_limited = [
             s for s in _ACCOUNT_SLOTS
             if _is_slot_available(s) and _is_db_slot_rate_limited(_slot_records.get(s))
+            and s not in _quota_blocked
         ]
         _cooled = [s for s in _ACCOUNT_SLOTS if not _is_slot_available(s)]
-        _smart_slots = _avail + _db_limited + _cooled
+        # 여유 슬롯 → DB 레이트리밋 → 주간 소진 → 쿨다운 순
+        _smart_slots = []
+        for _bucket in (_avail, _db_limited, _quota_exhausted, _cooled):
+            for _s in _bucket:
+                if _s not in _smart_slots:
+                    _smart_slots.append(_s)
 
         async def _stream_with_slots(_target_model: str) -> AsyncGenerator[Dict[str, Any], None]:
             for _si, _slot in enumerate(_smart_slots):
@@ -2994,8 +3036,10 @@ async def _stream_cli_relay_once(
     """
     sdk_model = _ANTHROPIC_MODEL_ID.get(model, model)
 
-    # 세션 이어가기 여부
-    _has_resume = bool(_cli_session_map.get(session_id)) if session_id else False
+    # 세션 이어가기 여부 — 이 슬롯에 세션이 있을 때만 True.
+    # 슬롯을 무시하면 "이어가기"라고 판단해 최신 메시지만 보내는데, 정작 그
+    # 슬롯에는 세션이 없어 모델이 맥락 없이 답하게 된다.
+    _has_resume = bool(_cli_session_map.get(_cli_session_key(session_id, oauth_slot))) if session_id else False
     formatted = _format_messages_for_llm(messages, has_resume=_has_resume)
 
     req_body: Dict[str, Any] = {
@@ -3026,7 +3070,7 @@ async def _stream_cli_relay_once(
 
     full_text = ""
     _tool_id_to_name: Dict[str, str] = {}
-    _captured_cli_sid = _cli_session_map.get(session_id, "") if session_id else ""
+    _captured_cli_sid = _cli_session_map.get(_cli_session_key(session_id, oauth_slot), "") if session_id else ""
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
@@ -3157,7 +3201,7 @@ async def _stream_cli_relay_once(
 
     # 세션 매핑 저장
     if session_id and _captured_cli_sid:
-        _cli_session_map[session_id] = _captured_cli_sid
+        _cli_session_map[_cli_session_key(session_id, oauth_slot)] = _captured_cli_sid
         logger.info(f"cli_relay_session_map: aads={session_id[:8]} -> cli={_captured_cli_sid[:8]}")
 
 

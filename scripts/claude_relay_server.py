@@ -541,6 +541,29 @@ def _build_claude_env(token, slot=None, cli_mode=""):
     return env
 
 
+def _session_key(aads_session_id, slot):
+    """세션 매핑 키. 슬롯을 포함해 계정별로 CLI 세션을 따로 보관한다.
+
+    예전에는 aads_session_id 하나만 키로 썼다. 슬롯1에서 만든 CLI 세션을 슬롯2
+    토큰으로 --resume 하면 계정 불일치로 실패하므로, 폴백 전에 매핑을 통째로
+    지워야 했다. 그 순간 도구 호출 이력이 사라져 이미 끝낸 작업(파일 생성,
+    git commit)을 재개된 세션이 다시 수행했다 — 2026-09-12 중복 커밋의 원인.
+    슬롯을 키에 넣으면 각 계정이 자기 세션을 유지하므로 폐기가 필요 없다.
+    """
+    if not aads_session_id:
+        return ""
+    s = str(slot or "")
+    return "%s@%s" % (aads_session_id, s) if s and s not in ("0", "none", "proxy") else aads_session_id
+
+
+def _session_keys_for(aads_session_id):
+    """해당 대화에 속한 모든 슬롯 키(레거시 키 포함)."""
+    if not aads_session_id:
+        return []
+    prefix = aads_session_id + "@"
+    return [k for k in list(_session_map) if k == aads_session_id or k.startswith(prefix)]
+
+
 def _load_session_map():
     global _session_map
     try:
@@ -1278,7 +1301,7 @@ async def handle_stream(request):
 
     use_stream_json_input = bool(content_blocks)
     cli_model = _MODEL_MAP.get(model, "claude-opus-4-6")
-    cli_session_id = _session_map.get(aads_session_id) if aads_session_id else None
+    cli_session_id = _session_map.get(_session_key(aads_session_id, slot)) if aads_session_id else None
     is_resume = cli_session_id is not None
 
     if _DIRECT_OAUTH_ENABLED:
@@ -1499,18 +1522,20 @@ async def handle_stream(request):
 
             if proc.returncode != 0:
                 logger.warning("CLI exited %s (slot=%s, resume=%s)", proc.returncode, slot, is_resume)
-                if is_resume and aads_session_id and aads_session_id in _session_map:
-                    del _session_map[aads_session_id]
+                _stale_key = _session_key(aads_session_id, slot)
+                if is_resume and _stale_key and _stale_key in _session_map:
+                    del _session_map[_stale_key]
                     _save_session_map()
-                    logger.info("Cleared stale session: aads=%s", aads_session_id[:8])
+                    logger.info("Cleared stale session: key=%s", _stale_key[:20])
 
             # 실패(exit!=0) 시 세션 저장 금지 — OAuth 슬롯 폴백 시 잘못된 --resume 방지
             if proc.returncode == 0 and aads_session_id and captured_cli_session_id:
-                old_cli = _session_map.get(aads_session_id)
+                _map_key = _session_key(aads_session_id, slot)
+                old_cli = _session_map.get(_map_key)
                 if old_cli != captured_cli_session_id:
-                    _session_map[aads_session_id] = captured_cli_session_id
+                    _session_map[_map_key] = captured_cli_session_id
                     _save_session_map()
-                    logger.info("Session mapped: aads=%s -> cli=%s", aads_session_id[:8], captured_cli_session_id[:8])
+                    logger.info("Session mapped: key=%s -> cli=%s", _map_key[:20], captured_cli_session_id[:8])
             try:
                 await _stream_write_eof(response)
             except ConnectionResetError:
@@ -2337,10 +2362,12 @@ async def handle_sessions(request):
 
 async def handle_reset_session(request):
     aads_sid = request.match_info.get("aads_session_id", "")
-    if aads_sid in _session_map:
-        del _session_map[aads_sid]
+    keys = _session_keys_for(aads_sid)
+    if keys:
+        for k in keys:
+            _session_map.pop(k, None)
         _save_session_map()
-        return web.json_response({"deleted": aads_sid})
+        return web.json_response({"deleted": keys})
     return web.json_response({"error": "not found"}, status=404)
 
 

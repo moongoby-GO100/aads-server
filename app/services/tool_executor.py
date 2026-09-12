@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import hashlib
+import time as _time
 import inspect
 import json
 import logging
@@ -359,6 +360,62 @@ _PROJECT_SCOPED_TOOLS = frozenset({
 })
 _PROJECT_KEYS = ("GO100", "NTV2", "KIS", "SF", "NAS", "KAKAOBOT", "AADS")
 
+# ── 부수효과 도구 멱등성 (2026-09-12) ──────────────────────────────────────
+#
+# 턴이 중단되어 재개되면 CLI 세션이 새로 열리면서 도구 호출 이력이 사라진다.
+# 재개된 모델은 이미 만든 파일을 또 만들고 같은 메시지로 또 커밋한다. 실제로
+# settings UI 커밋이 12분 간격으로 두 번 생겼고, 그 중 한 번은 파일 일부만
+# 커밋되어 저장소가 빌드 불가 상태가 되었다.
+# 같은 실행(execution) 안에서 동일한 부수효과가 반복되면 막는다.
+_IDEMPOTENT_TOOLS = frozenset({
+    "git_remote_commit",
+    "git_remote_push",
+    "git_remote_create_branch",
+    "write_remote_file",
+    "patch_remote_file",
+})
+_IDEMPOTENT_TTL_SEC = int(os.getenv("AADS_TOOL_IDEMPOTENCY_TTL_SEC", "3600"))
+_IDEMPOTENT_SEEN: Dict[str, float] = {}
+
+
+def _sideeffect_fingerprint(tool_name: str, tool_input: Dict[str, Any]) -> str:
+    """실행 범위 + 도구 + 의미 있는 인자로 지문을 만든다."""
+    scope = str(current_chat_session_id.get("") or "").strip() or "no-session"
+    keep = {k: v for k, v in sorted((tool_input or {}).items())
+            if k not in ("tenant_id", "session_id") and v not in (None, "")}
+    raw = json.dumps([scope, tool_name, keep], ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _sideeffect_duplicate(tool_name: str, tool_input: Dict[str, Any]) -> Optional[str]:
+    """같은 부수효과가 이미 수행됐으면 사유를 담은 JSON, 아니면 None."""
+    if tool_name not in _IDEMPOTENT_TOOLS:
+        return None
+    now = _time.time()
+    for k, ts in list(_IDEMPOTENT_SEEN.items()):
+        if now - ts > _IDEMPOTENT_TTL_SEC:
+            _IDEMPOTENT_SEEN.pop(k, None)
+    fp = _sideeffect_fingerprint(tool_name, tool_input)
+    prev = _IDEMPOTENT_SEEN.get(fp)
+    if prev is not None and now - prev <= _IDEMPOTENT_TTL_SEC:
+        logger.warning(
+            "tool_idempotency_block tool=%s age=%.0fs — 같은 실행에서 이미 수행됨",
+            tool_name, now - prev,
+        )
+        return json.dumps({
+            "skipped": "duplicate_side_effect",
+            "tool": tool_name,
+            "reason": (
+                "이 작업은 같은 대화 실행에서 이미 수행되었습니다. "
+                "중단 후 재개되며 반복 호출된 것으로 보입니다. "
+                "결과를 확인하고 필요한 경우에만 다른 인자로 다시 호출하세요."
+            ),
+            "seconds_ago": round(now - prev),
+        }, ensure_ascii=False)
+    _IDEMPOTENT_SEEN[fp] = now
+    return None
+
+
 _DEPLOY_SAFE_ALLOWED_MODES = frozenset({"reload", "bluegreen", "restart-single"})
 _DEPLOY_SAFE_RELOAD_CMD = ["bash", "/root/aads/aads-server/scripts/reload-api.sh"]
 _DEPLOY_SAFE_CONTAINER_RELOAD_CMD = ["bash", "/app/scripts/reload-api.sh"]
@@ -587,6 +644,9 @@ class ToolExecutor:
         """
         try:
             tool_input = dict(tool_input or {})
+            _dup = _sideeffect_duplicate(tool_name, tool_input)
+            if _dup:
+                return _dup
             tenant_id = await resolve_bound_tenant_id(
                 tool_input.get("tenant_id", ""),
                 tool_input.get("session_id", ""),

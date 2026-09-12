@@ -1121,3 +1121,39 @@ async def prune_usage_snapshots(force: bool = False) -> int:
         logger.info("usage_snapshot_pruned rows=%d retention_days=%d",
                     count, _SNAPSHOT_RETENTION_DAYS)
     return count
+
+
+async def get_exhausted_slots() -> Dict[str, str]:
+    """주간 한도를 다 쓴 슬롯 → 리셋 시각(ISO). 사전 슬롯 선택에 쓴다.
+
+    DB의 rate_limited_until 은 429마다 300초로 덮이고 복구 잡이 1분 뒤 지워
+    신호로 쓰기 어렵다. CLI가 준 실측 주간 사용률을 대신 본다.
+    """
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (account_slot)
+                       account_slot, seven_day_utilization, seven_day_resets_at
+                FROM claude_max_usage_snapshot
+                WHERE account_slot <> ''
+                ORDER BY account_slot, fetched_at DESC
+                """
+            )
+    except Exception as e:
+        logger.warning("get_exhausted_slots failed: %s", str(e)[:160])
+        return {}
+
+    now = datetime.now(timezone.utc)
+    blocked: Dict[str, str] = {}
+    for r in rows:
+        util = r["seven_day_utilization"]
+        resets = r["seven_day_resets_at"]
+        if util is None or float(util) < 100.0:
+            continue
+        # 리셋 시각이 지났으면 더 이상 막힌 것으로 보지 않는다.
+        if resets and resets <= now:
+            continue
+        blocked[r["account_slot"]] = resets.isoformat() if resets else ""
+    return blocked
