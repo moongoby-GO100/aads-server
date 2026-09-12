@@ -54,7 +54,10 @@ classify_deploy_failure() {
             echo "dirty_worktree" ;;
         *"heartbeat exceeded"*|*"stale deploy"*|*"stale_auto"*|*"stale_process_reconciled"*|*"stale_reconciled"*)
             echo "stale_heartbeat" ;;
-        *"interrupted by TERM"*|*"interrupted by INT"*|*"interrupted_post_switch"*)
+        *"deploy interrupted by"*|*"interrupted_post_switch"*)
+            # TERM/INT 뿐 아니라 HUP/QUIT 도 같은 경로로 들어온다.
+            # deploy_runs 실측(최근 14일) 기준 HUP 중단만 13건이었고,
+            # 패턴을 신호 이름으로 고정하면 그만큼이 other→manual 로 새어나간다.
             echo "signal_interrupt" ;;
         *"standby same-digest sync"*)
             echo "standby_sync_fail" ;;
@@ -77,13 +80,27 @@ classify_deploy_failure() {
 # retry = 교정 후 자동 재개, manual = 교정 불가로 CEO 에스컬레이션.
 # 컷오버(nginx upstream 전환) 이후의 중단은 서비스가 이미 새 슬롯으로 살아 있다.
 # 이 상태에서 전체 재배포를 자동으로 다시 돌리면 트래픽만 한 번 더 흔든다.
+# 컷오버(nginx upstream 전환) 이후 phase 인지 이름만으로 판별한다.
+# deploy.sh 2310행에서 DEPLOY_UPSTREAM_SWITCHED=true 가 되고,
+# 그 이후 실행되는 phase 목록(2327~2511행)과 1:1로 맞춘다.
+# 플래그가 유실된 경로(DB 복구 후 분류)에서도 재배포를 막는 2중 안전장치다.
+autoheal_phase_is_post_switch() {
+    case "${1:-}" in
+        *post_switch*|standby_same_digest_sync|e2e_gate|db_schema_check|chat_table_check|llm_health_check|frontend_qa|p0p1_monitoring)
+            return 0 ;;
+        *)
+            return 1 ;;
+    esac
+}
+
 autoheal_policy() {
     local cause="${1:-unknown}"
+    local phase="${2:-${DEPLOY_CURRENT_PHASE:-}}"
     case "$cause" in
         disk_full|dirty_worktree|stale_heartbeat|standby_sync_fail|lock_wait_timeout)
             echo "retry" ;;
         signal_interrupt)
-            if [[ "${DEPLOY_UPSTREAM_SWITCHED:-false}" == "true" ]]; then
+            if [[ "${DEPLOY_UPSTREAM_SWITCHED:-false}" == "true" ]] || autoheal_phase_is_post_switch "$phase"; then
                 echo "manual"
             else
                 echo "retry"
@@ -284,7 +301,7 @@ deploy_autoheal_on_exit() {
         err="$(deploy_db_exec "SELECT COALESCE(error_summary,'') FROM deploy_runs WHERE id=${DEPLOY_RUN_ID};" | tail -1)"
     fi
     cause="$(classify_deploy_failure "$phase" "$err")"
-    policy="$(autoheal_policy "$cause")"
+    policy="$(autoheal_policy "$cause" "$phase")"
     attempts="$(autoheal_attempt_count "$cause")"
     autoheal_log "실패 감지: rc=${rc}, phase=${phase}, cause=${cause}, policy=${policy}, attempts=${attempts}/${AUTOHEAL_MAX_ATTEMPTS}"
     audit_control "autoheal" "deploy_runs:${DEPLOY_RUN_ID:-none}" "classified" \
