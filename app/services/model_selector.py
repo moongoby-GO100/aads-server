@@ -248,10 +248,23 @@ async def _get_claude_slot_records() -> Dict[str, Dict[str, Any]]:
         logger.warning("oauth_slot_records_failed: %s", e)
         records = []
     slot_records: Dict[str, Dict[str, Any]] = {}
+    dropped: List[str] = []
     for record in records:
         slot = str(record.get("slot", "") or "")
-        if slot in ("1", "2") and slot not in slot_records:
-            slot_records[slot] = record
+        if slot not in ("1", "2"):
+            dropped.append("%s(slot=%r)" % (record.get("label") or record.get("key_name"), slot))
+            continue
+        if slot in slot_records:
+            # 같은 슬롯을 두 계정이 차지하면 뒤엣것이 조용히 버려져 폴백이
+            # 한 계정으로 줄어든다. 2026-09-12에 이 상태로 교차 폴백이 사라졌다.
+            dropped.append("%s(slot=%s 중복)" % (record.get("label") or record.get("key_name"), slot))
+            continue
+        slot_records[slot] = record
+    if dropped and len(records) > len(slot_records):
+        logger.warning(
+            "oauth_slot_collision: 계정 %d개 중 %d개만 슬롯 확보 — 교차 폴백 축소. 제외=%s",
+            len(records), len(slot_records), ", ".join(dropped),
+        )
     return slot_records
 
 

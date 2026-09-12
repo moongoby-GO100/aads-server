@@ -18,7 +18,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 from anthropic import AsyncAnthropic
@@ -111,6 +111,20 @@ def _build_env_records() -> List[Dict[str, str]]:
     return records
 
 
+# 슬롯은 키 이름이 이미 규정한다. ANTHROPIC_AUTH_TOKEN 이 1번, _2 가 2번이며
+# env_oauth_N 도 같은 규칙을 따른다. 이 표를 1순위로 쓰는 이유:
+# 토큰 "값"을 컨테이너 env 와 비교해 슬롯을 정하던 옛 방식은, DB 토큰이 갱신되어
+# env 와 어긋나는 순간 매칭에 실패해 아무 빈 슬롯이나 집어갔다. 그 뒤 값이 맞는
+# 키가 같은 슬롯을 또 요구하면 두 계정이 한 슬롯에 겹쳐, 나머지 슬롯은 주소
+# 지정이 불가능해진다(2026-09-12 실제 발생: 두 계정이 모두 slot 1 로 접혔다).
+_KEY_NAME_SLOTS = {
+    "ANTHROPIC_AUTH_TOKEN": "1",
+    "ANTHROPIC_AUTH_TOKEN_2": "2",
+    "env_oauth_1": "1",
+    "env_oauth_2": "2",
+}
+
+
 def _assign_slots(records: List[Dict[str, str]]) -> List[Dict[str, str]]:
     slot_info = _read_env_oauth_slot_tokens()
     slot_tokens = slot_info["tokens"]
@@ -118,19 +132,37 @@ def _assign_slots(records: List[Dict[str, str]]) -> List[Dict[str, str]]:
         slot_tokens["1"] = _TOKEN_PRIMARY
     if "2" not in slot_tokens and _TOKEN_FALLBACK:
         slot_tokens["2"] = _TOKEN_FALLBACK
+
     assigned: List[Dict[str, str]] = []
-    used_slots = set()
+    used_slots: set = set()
+
+    def _claim(candidate: str) -> str:
+        """이미 쓰인 슬롯은 절대 다시 내주지 않는다."""
+        return candidate if candidate and candidate not in used_slots else ""
+
+    # 1순위: 키 이름. 순회 순서(=우선순위)가 바뀌어도 결과가 흔들리지 않도록
+    # 이름으로 정해지는 슬롯을 먼저 예약한 뒤 나머지를 채운다.
+    prelim: List[Tuple[Dict[str, str], str]] = []
     for record in records:
         item = dict(record)
+        slot = _claim(_KEY_NAME_SLOTS.get(str(item.get("key_name", "")), ""))
+        if slot:
+            used_slots.add(slot)
+        prelim.append((item, slot))
+
+    for item, slot in prelim:
         value = item.get("value", "") or ""
-        slot = ""
-        for candidate_slot, candidate_token in slot_tokens.items():
-            if not candidate_token:
-                continue
-            if value == candidate_token or value[:20] == candidate_token[:20]:
-                slot = candidate_slot
-                break
         if not slot:
+            # 2순위: 토큰 값이 env 슬롯 토큰과 일치하는가 (구 동작 호환)
+            for candidate_slot, candidate_token in slot_tokens.items():
+                if not candidate_token:
+                    continue
+                if value == candidate_token or value[:20] == candidate_token[:20]:
+                    slot = _claim(candidate_slot)
+                    if slot:
+                        break
+        if not slot:
+            # 3순위: 남은 슬롯 중 가장 앞
             for candidate_slot in ("1", "2"):
                 if candidate_slot not in used_slots:
                     slot = candidate_slot
