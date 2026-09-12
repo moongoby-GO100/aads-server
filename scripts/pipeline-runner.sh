@@ -2891,12 +2891,10 @@ main() {
     if [ -f /tmp/.pipeline_current_job ]; then
         prev_job=$(cat /tmp/.pipeline_current_job)
         if [ -n "$prev_job" ]; then
-            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-                       error_detail='runner_restarted',
-                       review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 재시작으로 중단]',
-                       completed_at=NOW(), updated_at=NOW() WHERE job_id='${prev_job}' AND status='running';" || true
-            record_runner_event "$prev_job" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"runner_restarted\"}"
-            log "WARN: 이전 running 작업 $prev_job 을 error로 정리 (러너 재시작)"
+            # SIGKILL 등으로 cleanup 트랩이 돌지 못한 경우의 복구 경로.
+            # error 확정 대신 큐로 되돌려 자동 복구시킨다(재큐잉 한도는 helper가 판단).
+            _shutdown_finalize_job "$prev_job" "" quiet
+            log "WARN: 이전 running 작업 $prev_job 재큐잉 처리 (러너 재시작)"
         fi
         rm -f /tmp/.pipeline_current_job
     fi
@@ -3020,8 +3018,9 @@ _current_session_id=""
 SHUTDOWN_REQUEUE_MARK='[RUNNER_SHUTDOWN_REQUEUE]'
 SHUTDOWN_REQUEUE_MAX="${SHUTDOWN_REQUEUE_MAX:-2}"
 
+# RUNNER_RESTART_REQUEUE_APPLIED
 _shutdown_finalize_job() {
-    local _jid="$1" _sid="${2:-}"
+    local _jid="$1" _sid="${2:-}" _quiet="${3:-}"
     [[ -z "$_jid" ]] && return 0
     local _marks
     _marks=$(db_exec "SELECT (length(COALESCE(review_feedback,'')) - length(replace(COALESCE(review_feedback,''), $(sql_escape "$SHUTDOWN_REQUEUE_MARK"), ''))) / ${#SHUTDOWN_REQUEUE_MARK} FROM pipeline_jobs WHERE job_id=$(sql_escape "$_jid");" 2>/dev/null | tr -d '[:space:]')
@@ -3033,7 +3032,7 @@ _shutdown_finalize_job() {
                    completed_at=NOW(), updated_at=NOW() WHERE job_id=$(sql_escape "$_jid") AND status IN ('running','claimed');" || true
         record_runner_event "$_jid" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"runner_shutdown\"}"
         log "  Marked $_jid as error (runner shutdown, requeue limit ${SHUTDOWN_REQUEUE_MAX})"
-        post_to_chat "$_sid" "🔴 [Pipeline Runner] 러너 종료로 작업 중단(자동 재큐잉 한도 초과): $_jid"
+        [[ "$_quiet" == "quiet" ]] || post_to_chat "$_sid" "🔴 [Pipeline Runner] 러너 종료로 작업 중단(자동 재큐잉 한도 초과): $_jid"
         _notify_ai "$_jid"
         return 0
     fi
@@ -3043,7 +3042,7 @@ _shutdown_finalize_job() {
                updated_at=NOW() WHERE job_id=$(sql_escape "$_jid") AND status IN ('running','claimed');" || true
     record_runner_event "$_jid" "job_requeued" "queued" "queued" "" "" "" "" "{\"error_detail\":\"runner_shutdown_requeued\"}"
     log "  Requeued $_jid (runner shutdown)"
-    post_to_chat "$_sid" "🔄 [Pipeline Runner] 러너 종료로 중단 → 자동 재큐잉: $_jid"
+    [[ "$_quiet" == "quiet" ]] || post_to_chat "$_sid" "🔄 [Pipeline Runner] 러너 종료로 중단 → 자동 재큐잉: $_jid"
 }
 
 cleanup() {
