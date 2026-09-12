@@ -13916,3 +13916,20 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   단축 백오프로 배수한 뒤 기본값으로 복귀한다. 구현 검증은 Python compile, Bash
   syntax, diff check와 reviewer/sweeper 집중 테스트 29건을 통과했다. 운영 DB migration,
   Blue/Green 배포, 실제 비동기 요청 E2E와 보류 배수 결과는 배포 기록에서 확정한다.
+
+## 2026-09-13 08:40 KST — AADS-191 운영 실측 후속 보정 3건
+
+- 2026-09-13 배포 `#368`~`#372` 실측에서 자가치유 계층이 실제로 호출되는 것을 확인했고
+  (`disk_full` retry 판정·회수 수행, `unexpected_exit` manual 에스컬레이션), 같은 실측에서
+  결함 3건이 드러나 후속 보정했다. `#372`(858a8725)는 success 로 완주했고 무중단이었다.
+- `autoheal_wait_disk_recovery`: `docker image/builder prune` 은 삭제를 비동기로 끝낸다.
+  즉시 한 번만 재확인해 "회수 실패"로 조기 에스컬레이션했는데, 실측에서는 1~2분 뒤
+  17,863MB → 25,436MB 로 회복됐다. 기본 5초 간격 6회 재확인으로 바꿨다.
+- `source_dir_missing` 원인 신설: 릴리스 worktree 가 사라진 배포는 매번
+  `unexpected_exit(manual)` 로 끝나 수동 개입이 필요했다. 에러 문자열이 아니라
+  `docker-compose.prod.yml` 실재 여부로 판정하고, 같은 SHA 로 worktree 를 재생성한다.
+  운영 트리(STATE_DIR)는 재생성 대상에서 제외한다.
+- `deploy_error_trap` 이 `DEPLOY_LAST_FAIL_ERROR` 를 우선 보존한다. preflight 가 기록한
+  `insufficient build disk` 가 ERR 트랩의 일반 메시지로 덮여 DB 에는 원인이 사라졌다.
+- 검증: `tests/unit/test_deploy_autoheal.py` 44건 통과(신규 7건), `bash -n` 2종 통과.
+  운영 배포로 3건 보정 경로를 재현하는 검증은 다음 실패 배포에서 관찰한다(미실행).
