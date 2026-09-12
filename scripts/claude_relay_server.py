@@ -217,6 +217,8 @@ _RELAY_HOME = Path("/tmp/.claude-relay")
 # 슬롯별 자격증명 HOME. 각 슬롯이 자기 .credentials.json(accessToken+refreshToken)을
 # 보유하면 CLI가 만료 시 스스로 갱신·영속화하므로 토큰 수동 동기화가 불필요해진다.
 _SLOT_HOME_ROOT = Path(os.getenv("CLAUDE_RELAY_SLOT_HOME_ROOT", "/root/.claude-relay-slots"))
+# 래퍼가 아닌 실제 CLI. 슬롯 모드에서 래퍼 우회에 쓴다.
+_REAL_CLAUDE_BIN = Path(os.getenv("CLAUDE_REAL_BIN", "/usr/bin/claude"))
 _CODEX_HOME_ROOT = Path(os.getenv("CODEX_HOME_ROOT", "/root/.codex-relay"))
 _AADS_API_OAUTH_STATE_URL = os.getenv(
     "CLAUDE_RELAY_OAUTH_STATE_URL",
@@ -485,7 +487,35 @@ def _ensure_slot_home(slot):
     return str(_slot_home_path(slot))
 
 
-def _build_claude_env(token, slot=None):
+def _claude_argv_for_slot(claude_meta, slot):
+    """호스트에서 CLI를 직접 실행할 때만 래퍼를 우회한다.
+
+    /usr/local/bin/claude 래퍼는 CLAUDE_CODE_OAUTH_TOKEN 이 비어 있으면
+    /root/.claude/current.env 의 토큰을 주입하므로, 슬롯 자격증명 파일이
+    무시된다. 단 docker_wrapper 모드에서는 CLI가 컨테이너 안에서 돌기 때문에
+    이 우회가 성립하지 않는다(아래 _build_claude_env 주석 참조).
+    """
+    argv = list((claude_meta or {}).get("argv", []) or [])
+    if (claude_meta or {}).get("mode") == "docker_wrapper":
+        return argv
+    if not _ensure_slot_home(slot):
+        return argv
+    if argv and argv[0] == str(_CLAUDE_WRAPPER) and _REAL_CLAUDE_BIN.exists():
+        return [str(_REAL_CLAUDE_BIN)] + argv[1:]
+    return argv
+
+
+def _build_claude_env(token, slot=None, cli_mode=""):
+    """CLI 실행 환경.
+
+    docker_wrapper 모드에서는 CLI가 컨테이너 안에서 돈다. 이때 호스트의 HOME 은
+    전달되지 않고(claude-docker-wrapper.sh 는 CLAUDE_CODE_OAUTH_TOKEN 만
+    -e 로 넘긴다), 컨테이너의 claude-oauth-wrapper.sh 가 HOME 을
+    /tmp/.claude-sdk 로 고정한다. 따라서 슬롯별 자격증명 파일은 CLI에 닿지
+    않으며, 토큰을 비우면 컨테이너 .env 의 ANTHROPIC_AUTH_TOKEN(=slot1)으로
+    폴백되어 모든 요청이 slot1 로만 흐른다. 컨테이너 래퍼 주석이 경고하는
+    바로 그 회귀다 — 이 모드에서는 슬롯 토큰을 반드시 주입해야 한다.
+    """
     if not _DIRECT_OAUTH_ENABLED:
         return dict(os.environ, CLAUDE_CODE_MAX_OUTPUT_TOKENS="16384")
     env = {}
@@ -494,19 +524,19 @@ def _build_claude_env(token, slot=None):
               "NVM_DIR", "NVM_BIN", "NVM_INC"):
         if k in os.environ:
             env[k] = os.environ[k]
-    slot_home = _ensure_slot_home(slot)
+    in_container = cli_mode == "docker_wrapper"
+    slot_home = "" if in_container else _ensure_slot_home(slot)
     if slot_home:
-        # 자격증명 파일 모드: CLI가 refreshToken으로 만료분을 스스로 갱신한다.
-        # CLAUDE_CODE_OAUTH_TOKEN은 액세스 토큰만 담기고 파일보다 우선하므로,
-        # 주입하면 파일이 정상이어도 만료 시 401이 난다. 절대 설정하지 않는다.
+        # 호스트 실행 + 슬롯 자격증명 파일: CLI가 refreshToken 으로 만료분을
+        # 스스로 갱신한다. env 토큰은 파일보다 우선하므로 주입하지 않는다.
         env["HOME"] = slot_home
         env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
     else:
-        # 아직 자격증명 파일이 없는 슬롯은 기존 env 토큰 경로로 동작(점진 전환).
         env["HOME"] = _ensure_relay_home()
         env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-    logger.info("claude_auth_source=%s slot=%s",
-                "slot_credentials" if slot_home else "env_token", slot or "-")
+    logger.info("claude_auth_source=%s slot=%s cli_mode=%s",
+                "slot_credentials" if slot_home else "env_token",
+                slot or "-", cli_mode or "-")
     env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "16384"
     return env
 
@@ -1343,7 +1373,7 @@ async def handle_stream(request):
                 "qa": {"description": "테스트 실행, 변경사항 검증, 서비스 헬스체크 등 품질 검증이 필요할 때 사용.", "prompt": "당신은 QA 엔지니어입니다. MCP 도구를 사용하여 시스템 상태를 검증하세요.", "model": "sonnet"},
             })
 
-            cmd = list(claude_meta.get("argv", []) or []) + ["-p", "--output-format", "stream-json", "--verbose",
+            cmd = _claude_argv_for_slot(claude_meta, slot) + ["-p", "--output-format", "stream-json", "--verbose",
                    "--model", cli_model, "--mcp-config", mcp_config_path, "--strict-mcp-config",
                    "--allowedTools", "Agent,mcp__aads-tools__*",
                    "--disallowedTools", "Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,NotebookEdit",
@@ -1361,7 +1391,7 @@ async def handle_stream(request):
                         claude_meta.get("mode", "unknown"),
                         (mcp_diag or {}).get("path_mode", "unknown"))
 
-            cli_env = _build_claude_env(token, slot)
+            cli_env = _build_claude_env(token, slot, claude_meta.get("mode", ""))
             # AADS-191B-8B: coreutils timeout으로 cmd 감싸기 — OS 레벨 hard kill 안전망
             # Python wait_for가 실패해도, relay가 crash해도, 시간 초과 시 자식 프로세스가 자체 종료됨.
             if _OS_TIMEOUT_ENABLED and os.path.isfile(_OS_TIMEOUT_BIN):
