@@ -1,0 +1,1068 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM 서버 구축 종합 교육자료 — AADS Academy</title>
+<style>
+  :root {
+    --bg: #0f172a; --surface: #1e293b; --surface2: #334155;
+    --text: #e2e8f0; --text2: #94a3b8; --accent: #38bdf8;
+    --accent2: #818cf8; --green: #4ade80; --orange: #fb923c;
+    --red: #f87171; --border: #475569;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Pretendard','Apple SD Gothic Neo','Noto Sans KR',sans-serif; background:var(--bg); color:var(--text); line-height:1.7; }
+  .container { max-width:1200px; margin:0 auto; padding:20px; }
+
+  /* Header */
+  .hero { background:linear-gradient(135deg,#1e1b4b,#0f172a 60%,#0c4a6e); border-radius:16px; padding:48px 40px; margin-bottom:32px; border:1px solid var(--border); position:relative; overflow:hidden; }
+  .hero::before { content:''; position:absolute; top:-50%; right:-20%; width:500px; height:500px; background:radial-gradient(circle,rgba(56,189,248,0.08),transparent 70%); }
+  .hero h1 { font-size:2.2em; font-weight:800; background:linear-gradient(135deg,var(--accent),var(--accent2)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:8px; }
+  .hero .sub { color:var(--text2); font-size:1.1em; }
+  .hero .meta { margin-top:16px; display:flex; gap:20px; flex-wrap:wrap; }
+  .hero .meta span { background:var(--surface); padding:4px 14px; border-radius:20px; font-size:0.85em; color:var(--accent); border:1px solid var(--border); }
+
+  /* Navigation */
+  .toc { background:var(--surface); border-radius:12px; padding:24px 28px; margin-bottom:32px; border:1px solid var(--border); }
+  .toc h2 { font-size:1.2em; color:var(--accent); margin-bottom:16px; }
+  .toc-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:8px; }
+  .toc a { color:var(--text); text-decoration:none; padding:8px 12px; border-radius:8px; display:block; transition:all .2s; font-size:0.92em; }
+  .toc a:hover { background:var(--surface2); color:var(--accent); }
+  .toc a .num { color:var(--accent); font-weight:700; margin-right:8px; }
+
+  /* Sections */
+  .section { background:var(--surface); border-radius:12px; padding:32px; margin-bottom:24px; border:1px solid var(--border); }
+  .section h2 { font-size:1.5em; font-weight:700; color:var(--accent); margin-bottom:20px; padding-bottom:12px; border-bottom:2px solid var(--surface2); }
+  .section h3 { font-size:1.15em; font-weight:600; color:var(--accent2); margin:24px 0 12px; }
+  .section h4 { font-size:1em; font-weight:600; color:var(--green); margin:16px 0 8px; }
+  .section p { color:var(--text); margin-bottom:12px; }
+
+  /* Tables */
+  .table-wrap { overflow-x:auto; margin:16px 0; border-radius:8px; }
+  table { width:100%; border-collapse:collapse; font-size:0.88em; }
+  thead { background:var(--surface2); }
+  th { padding:12px 14px; text-align:left; font-weight:600; color:var(--accent); white-space:nowrap; border-bottom:2px solid var(--border); }
+  td { padding:10px 14px; border-bottom:1px solid var(--border); vertical-align:top; }
+  tr:hover td { background:rgba(56,189,248,0.04); }
+  .price { color:var(--orange); font-weight:600; }
+  .highlight { color:var(--green); font-weight:600; }
+  .warn { color:var(--red); font-weight:600; }
+
+  /* Cards */
+  .card-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:16px; margin:16px 0; }
+  .card { background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:20px; }
+  .card .tag { display:inline-block; padding:2px 10px; border-radius:12px; font-size:0.75em; font-weight:600; margin-bottom:8px; }
+  .tag-green { background:rgba(74,222,128,0.15); color:var(--green); }
+  .tag-blue { background:rgba(56,189,248,0.15); color:var(--accent); }
+  .tag-purple { background:rgba(129,140,248,0.15); color:var(--accent2); }
+  .tag-orange { background:rgba(251,146,60,0.15); color:var(--orange); }
+  .tag-red { background:rgba(248,113,113,0.15); color:var(--red); }
+  .card h4 { margin:4px 0 8px; color:var(--text); font-size:1em; }
+  .card p { font-size:0.88em; color:var(--text2); margin-bottom:0; }
+
+  /* Flow / Pipeline */
+  .flow { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:16px 0; }
+  .flow-step { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px 16px; font-size:0.85em; text-align:center; min-width:120px; }
+  .flow-step .label { color:var(--accent); font-weight:600; font-size:0.8em; }
+  .flow-arrow { color:var(--accent); font-size:1.2em; }
+
+  /* Code blocks */
+  .code-block { background:#0d1117; border:1px solid var(--border); border-radius:8px; padding:16px; margin:12px 0; overflow-x:auto; font-family:'JetBrains Mono','Fira Code',monospace; font-size:0.82em; line-height:1.6; color:#e6edf3; }
+  .code-block .comment { color:#8b949e; }
+  .code-block .keyword { color:#ff7b72; }
+  .code-block .string { color:#a5d6ff; }
+  .code-block .func { color:#d2a8ff; }
+
+  /* Info boxes */
+  .info-box { border-radius:8px; padding:16px 20px; margin:16px 0; font-size:0.9em; }
+  .info-box.tip { background:rgba(74,222,128,0.08); border-left:4px solid var(--green); }
+  .info-box.warn { background:rgba(251,146,60,0.08); border-left:4px solid var(--orange); }
+  .info-box.danger { background:rgba(248,113,113,0.08); border-left:4px solid var(--red); }
+  .info-box .title { font-weight:700; margin-bottom:4px; }
+
+  /* Lists */
+  ul, ol { padding-left:24px; margin:8px 0 16px; }
+  li { margin-bottom:6px; font-size:0.92em; }
+  li strong { color:var(--accent); }
+
+  /* Comparison bar */
+  .bar-chart { margin:16px 0; }
+  .bar-row { display:flex; align-items:center; gap:12px; margin:6px 0; }
+  .bar-label { min-width:140px; font-size:0.85em; text-align:right; }
+  .bar-track { flex:1; height:24px; background:var(--bg); border-radius:4px; overflow:hidden; }
+  .bar-fill { height:100%; border-radius:4px; display:flex; align-items:center; padding-left:8px; font-size:0.75em; font-weight:600; color:#fff; }
+
+  /* Footer */
+  .footer { text-align:center; color:var(--text2); font-size:0.82em; padding:32px 0 16px; }
+
+  @media(max-width:768px) {
+    .container { padding:12px; }
+    .hero { padding:28px 20px; }
+    .hero h1 { font-size:1.5em; }
+    .section { padding:20px; }
+    .card-grid { grid-template-columns:1fr; }
+    .toc-grid { grid-template-columns:1fr; }
+    table { font-size:0.8em; }
+    th, td { padding:8px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ═══════════════ HERO ═══════════════ -->
+<div class="hero">
+  <h1>🖥️ LLM 서버 구축 종합 교육자료</h1>
+  <p class="sub">하드웨어 선정부터 모델 배포까지 — 자체 LLM 인프라 완전 가이드</p>
+  <div class="meta">
+    <span>📅 2026-09-12</span>
+    <span>📖 AADS Academy</span>
+    <span>🔖 v1.0</span>
+    <span>⏱️ 약 45분 읽기</span>
+  </div>
+</div>
+
+<!-- ═══════════════ TOC ═══════════════ -->
+<div class="toc">
+  <h2>📋 목차</h2>
+  <div class="toc-grid">
+    <a href="#ch1"><span class="num">01</span>LLM 서버 개요 — 왜 자체 서버인가</a>
+    <a href="#ch2"><span class="num">02</span>GPU 하드웨어 완전 비교 (종류·사양·가격)</a>
+    <a href="#ch3"><span class="num">03</span>하드웨어 성능별 구현 방식</a>
+    <a href="#ch4"><span class="num">04</span>모델 구동 방식 — 추론 서빙 아키텍처</a>
+    <a href="#ch5"><span class="num">05</span>오픈소스 LLM 모델 비교</a>
+    <a href="#ch6"><span class="num">06</span>한국어 LLM 모델 생태계</a>
+    <a href="#ch7"><span class="num">07</span>자체 모델 직접 개발 방법론</a>
+    <a href="#ch8"><span class="num">08</span>데이터셋 확보 방법</a>
+    <a href="#ch9"><span class="num">09</span>파인튜닝 — 종류와 활용</a>
+    <a href="#ch10"><span class="num">10</span>구축 방식 — 온프레미스 vs 클라우드</a>
+    <a href="#ch11"><span class="num">11</span>기술 스택 전체 구조</a>
+    <a href="#ch12"><span class="num">12</span>도구·툴 완전 가이드</a>
+    <a href="#ch13"><span class="num">13</span>비용 시뮬레이션 — 규모별 예산</a>
+    <a href="#ch14"><span class="num">14</span>실전 구축 로드맵</a>
+  </div>
+</div>
+
+<!-- ═══════════════ CH1: 개요 ═══════════════ -->
+<div class="section" id="ch1">
+  <h2>01. LLM 서버 개요 — 왜 자체 서버인가</h2>
+
+  <h3>API vs 자체 서빙 비교</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>항목</th><th>API 사용 (OpenAI/Anthropic)</th><th>자체 LLM 서버</th></tr></thead>
+      <tbody>
+        <tr><td>초기 비용</td><td class="highlight">없음 (사용량 과금)</td><td class="warn">GPU 서버 구매/임대 필요</td></tr>
+        <tr><td>운영 비용</td><td class="warn">토큰 단가 누적 (대량시 고비용)</td><td class="highlight">전기료 + 유지보수만</td></tr>
+        <tr><td>데이터 보안</td><td class="warn">외부 전송 필수</td><td class="highlight">완전 내부 보관</td></tr>
+        <tr><td>커스터마이즈</td><td class="warn">제한적 (프롬프트만)</td><td class="highlight">파인튜닝·모델 변경 자유</td></tr>
+        <tr><td>응답 속도</td><td>네트워크 의존 (~200ms+)</td><td class="highlight">로컬 추론 (~50ms)</td></tr>
+        <tr><td>모델 최신성</td><td class="highlight">항상 최신</td><td>직접 업데이트 필요</td></tr>
+        <tr><td>확장성</td><td class="highlight">무제한</td><td>GPU 추가 필요</td></tr>
+        <tr><td>손익분기</td><td colspan="2" style="text-align:center;">일반적으로 <strong>월 $3,000~5,000 API 비용 초과 시</strong> 자체 서버가 유리</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>자체 서버가 필요한 경우</h3>
+  <div class="card-grid">
+    <div class="card"><span class="tag tag-red">필수</span><h4>데이터 보안 규제</h4><p>금융·의료·군사·개인정보 등 외부 전송이 불가한 데이터를 다루는 경우</p></div>
+    <div class="card"><span class="tag tag-orange">권장</span><h4>대량 처리</h4><p>하루 수십만~수백만 건의 추론 요청이 발생하여 API 비용이 과도한 경우</p></div>
+    <div class="card"><span class="tag tag-blue">선택</span><h4>모델 커스터마이즈</h4><p>도메인 특화 파인튜닝, 한국어 최적화, 자체 데이터 학습이 필요한 경우</p></div>
+    <div class="card"><span class="tag tag-green">선택</span><h4>오프라인 운영</h4><p>인터넷 연결 없이 독립 운영해야 하는 엣지/폐쇄망 환경</p></div>
+  </div>
+</div>
+
+<!-- ═══════════════ CH2: GPU 하드웨어 ═══════════════ -->
+<div class="section" id="ch2">
+  <h2>02. GPU 하드웨어 완전 비교</h2>
+
+  <h3>2-1. 데이터센터 GPU (학습 + 추론 겸용)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>GPU 모델</th><th>VRAM</th><th>메모리 대역폭</th><th>FP16 성능</th><th>TDP</th><th>구매 가격(장당)</th><th>클라우드 시간당</th><th>주요 용도</th></tr></thead>
+      <tbody>
+        <tr><td><strong>NVIDIA H100 SXM</strong></td><td>80GB HBM3</td><td>3.35 TB/s</td><td>989 TFLOPS</td><td>700W</td><td class="price">$25,000~35,000</td><td class="price">$2.5~4.0/hr</td><td>대규모 학습·추론 표준</td></tr>
+        <tr><td><strong>NVIDIA H200 SXM</strong></td><td>141GB HBM3e</td><td>4.8 TB/s</td><td>989 TFLOPS</td><td>700W</td><td class="price">$30,000~40,000</td><td class="price">$3.5~5.0/hr</td><td>초대형 모델, VRAM 확장</td></tr>
+        <tr><td><strong>NVIDIA A100 SXM</strong></td><td>80GB HBM2e</td><td>2.0 TB/s</td><td>312 TFLOPS</td><td>400W</td><td class="price">$10,000~15,000</td><td class="price">$1.5~2.5/hr</td><td>범용 학습·추론 (전세대)</td></tr>
+        <tr><td><strong>NVIDIA B200</strong></td><td>192GB HBM3e</td><td>8.0 TB/s</td><td>2,250 TFLOPS</td><td>1000W</td><td class="price">$35,000~50,000</td><td class="price">$5.0~8.0/hr</td><td>차세대 최상위 (2025~)</td></tr>
+        <tr><td><strong>NVIDIA L40S</strong></td><td>48GB GDDR6X</td><td>864 GB/s</td><td>362 TFLOPS</td><td>350W</td><td class="price">$8,000~12,000</td><td class="price">$1.0~1.8/hr</td><td>추론 특화, 비용 효율</td></tr>
+        <tr><td><strong>AMD MI300X</strong></td><td>192GB HBM3</td><td>5.3 TB/s</td><td>1,307 TFLOPS</td><td>750W</td><td class="price">$12,000~20,000</td><td class="price">$2.0~3.5/hr</td><td>H100 대안, 대 VRAM</td></tr>
+        <tr><td><strong>AMD MI325X</strong></td><td>256GB HBM3e</td><td>6.0 TB/s</td><td>1,307 TFLOPS</td><td>750W</td><td class="price">$15,000~25,000</td><td class="price">미정</td><td>초대형 VRAM (2025~)</td></tr>
+        <tr><td><strong>Intel Gaudi 3</strong></td><td>128GB HBM2e</td><td>3.7 TB/s</td><td>1,835 TFLOPS</td><td>900W</td><td class="price">$8,000~15,000</td><td class="price">$1.5~2.5/hr</td><td>비용효율 학습 (Intel)</td></tr>
+        <tr><td><strong>AWS Trainium2</strong></td><td>96GB HBM3</td><td>2.4 TB/s</td><td>756 TFLOPS</td><td>N/A</td><td class="price">클라우드 전용</td><td class="price">$1.5~2.0/hr</td><td>AWS 전용 학습 칩</td></tr>
+        <tr><td><strong>Google TPU v5p</strong></td><td>95GB HBM2e</td><td>2.7 TB/s</td><td>459 TFLOPS</td><td>N/A</td><td class="price">클라우드 전용</td><td class="price">$1.2~2.0/hr</td><td>GCP 전용 학습+추론</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="info-box tip">
+    <div class="title">💡 핵심 TIP: VRAM이 가장 중요</div>
+    LLM 서빙에서 가장 중요한 스펙은 <strong>VRAM(비디오 메모리)</strong>입니다. 모델 파라미터가 클수록 더 많은 VRAM이 필요합니다.<br>
+    • 7B 모델: FP16 기준 ~14GB → <strong>RTX 4090 1장</strong>으로 가능<br>
+    • 13B 모델: FP16 기준 ~26GB → <strong>A100 40GB 1장</strong> 또는 RTX 4090 2장<br>
+    • 70B 모델: FP16 기준 ~140GB → <strong>A100 80GB 2장</strong> 또는 H100 2장<br>
+    • 405B 모델: FP16 기준 ~810GB → <strong>H100 80GB 10장+</strong> 필요
+  </div>
+
+  <h3>2-2. 소비자/워크스테이션 GPU (소규모·개발·테스트용)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>GPU 모델</th><th>VRAM</th><th>메모리 대역폭</th><th>FP16 성능</th><th>TDP</th><th>구매 가격</th><th>추천 용도</th></tr></thead>
+      <tbody>
+        <tr><td><strong>RTX 4090</strong></td><td>24GB GDDR6X</td><td>1,008 GB/s</td><td>165 TFLOPS</td><td>450W</td><td class="price">₩2,800,000~3,500,000</td><td>7B~13B 추론, 소규모 학습</td></tr>
+        <tr><td><strong>RTX 5090</strong></td><td>32GB GDDR7</td><td>1,792 GB/s</td><td>210 TFLOPS</td><td>575W</td><td class="price">₩3,500,000~4,500,000</td><td>13B+ 추론, 파인튜닝</td></tr>
+        <tr><td><strong>RTX 4080 Super</strong></td><td>16GB GDDR6X</td><td>736 GB/s</td><td>97 TFLOPS</td><td>320W</td><td class="price">₩1,500,000~1,800,000</td><td>7B 추론, 실험용</td></tr>
+        <tr><td><strong>RTX A6000</strong></td><td>48GB GDDR6</td><td>768 GB/s</td><td>155 TFLOPS</td><td>300W</td><td class="price">₩5,000,000~7,000,000</td><td>워크스테이션, 13B~30B</td></tr>
+        <tr><td><strong>RTX 6000 Ada</strong></td><td>48GB GDDR6</td><td>960 GB/s</td><td>184 TFLOPS</td><td>300W</td><td class="price">₩8,000,000~10,000,000</td><td>워크스테이션 최상위</td></tr>
+        <tr><td><strong>Apple M4 Ultra</strong></td><td>192GB 통합</td><td>819 GB/s</td><td>~55 TFLOPS</td><td>~100W</td><td class="price">₩10,000,000~</td><td>대형 모델 로컬 추론 (저전력)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>2-3. VRAM 요구량 계산법</h3>
+  <div class="code-block">
+    <span class="comment"># 모델 VRAM 추정 공식</span><br>
+    <span class="keyword">VRAM(GB)</span> = 파라미터수(B) × 정밀도(바이트) × 1.2(오버헤드)<br><br>
+    <span class="comment"># 예시: Llama 3.1 70B, FP16(2바이트)</span><br>
+    70 × 2 × 1.2 = <span class="string">168GB</span> → H100 80GB <span class="keyword">3장</span> 또는 A100 80GB <span class="keyword">3장</span><br><br>
+    <span class="comment"># 양자화 적용 시 (INT4, 0.5바이트)</span><br>
+    70 × 0.5 × 1.2 = <span class="string">42GB</span> → RTX 4090 24GB <span class="keyword">2장</span> 또는 A100 40GB <span class="keyword">1장</span><br><br>
+    <span class="comment"># 양자화 정밀도별 메모리 사용량</span><br>
+    FP32(4바이트) → FP16(2바이트) → INT8(1바이트) → INT4(0.5바이트) → GPTQ/GGUF(0.4~0.6바이트)
+  </div>
+
+  <h3>2-4. GPU 서버 완제품 가격대</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>구성</th><th>GPU</th><th>CPU</th><th>RAM</th><th>스토리지</th><th>예상 가격</th><th>운영 가능 모델</th></tr></thead>
+      <tbody>
+        <tr><td><strong>입문형</strong></td><td>RTX 4090 ×1</td><td>i9-14900K</td><td>64GB</td><td>2TB NVMe</td><td class="price">₩5,000,000~</td><td>7B Q4, 13B Q4</td></tr>
+        <tr><td><strong>중소규모</strong></td><td>RTX 4090 ×2~4</td><td>Xeon W9 / EPYC</td><td>128GB</td><td>4TB NVMe</td><td class="price">₩15,000,000~</td><td>13B FP16, 70B Q4</td></tr>
+        <tr><td><strong>전문가</strong></td><td>A100 80GB ×4</td><td>EPYC 9654</td><td>512GB</td><td>8TB NVMe</td><td class="price">₩80,000,000~</td><td>70B FP16, 405B Q4</td></tr>
+        <tr><td><strong>엔터프라이즈</strong></td><td>H100 80GB ×8</td><td>EPYC 9654 ×2</td><td>1TB+</td><td>16TB NVMe</td><td class="price">₩3~5억</td><td>405B FP16, 대규모 학습</td></tr>
+        <tr><td><strong>슈퍼컴퓨팅</strong></td><td>H100 ×64+ 클러스터</td><td>다중 노드</td><td>다중 노드</td><td>PFS</td><td class="price">₩30억~</td><td>1T+ 모델 학습</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════ CH3: 성능별 구현방식 ═══════════════ -->
+<div class="section" id="ch3">
+  <h2>03. 하드웨어 성능별 구현 방식</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>등급</th><th>하드웨어 예시</th><th>구현 방식</th><th>추천 모델</th><th>성능 기대치</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="tag tag-green">Tier 1<br>개인/실험</span></td>
+          <td>RTX 3060~4070<br>(8~16GB VRAM)</td>
+          <td>• Ollama + GGUF 양자화<br>• llama.cpp (CPU+GPU 하이브리드)<br>• LM Studio (GUI)</td>
+          <td>• Llama 3.2 3B<br>• Phi-3 Mini 3.8B<br>• Gemma 2 2B<br>• Qwen2.5 7B (Q4)</td>
+          <td>10~30 tok/s<br>간단한 질의응답, 요약</td>
+        </tr>
+        <tr>
+          <td><span class="tag tag-blue">Tier 2<br>소규모 팀</span></td>
+          <td>RTX 4090 ×1~2<br>(24~48GB VRAM)</td>
+          <td>• vLLM (PagedAttention)<br>• Ollama + API 서빙<br>• TGI (Hugging Face)<br>• ExLlamaV2 (GPTQ)</td>
+          <td>• Llama 3.1 8B (FP16)<br>• Mistral 7B (FP16)<br>• Qwen2.5 14B (Q8)<br>• 70B (GPTQ/AWQ 4bit)</td>
+          <td>30~80 tok/s<br>팀 내부 챗봇, RAG</td>
+        </tr>
+        <tr>
+          <td><span class="tag tag-purple">Tier 3<br>중소기업</span></td>
+          <td>A100/H100 ×2~4<br>(160~320GB VRAM)</td>
+          <td>• vLLM + 텐서 병렬<br>• TGI + 멀티GPU 분산<br>• TensorRT-LLM<br>• SGLang</td>
+          <td>• Llama 3.1 70B (FP16)<br>• Mixtral 8x22B<br>• DeepSeek-V3 (Q8)<br>• Qwen2.5 72B</td>
+          <td>40~120 tok/s<br>사내 서비스, B2B</td>
+        </tr>
+        <tr>
+          <td><span class="tag tag-orange">Tier 4<br>엔터프라이즈</span></td>
+          <td>H100/H200 ×8+<br>(640GB+ VRAM)</td>
+          <td>• TensorRT-LLM<br>• vLLM + Ray 클러스터<br>• NVIDIA Triton<br>• 파이프라인 병렬</td>
+          <td>• Llama 3.1 405B<br>• DeepSeek-R1<br>• Mixtral 8x22B (FP16)<br>• 자체 학습 모델</td>
+          <td>50~200 tok/s<br>대규모 SaaS, 플랫폼</td>
+        </tr>
+        <tr>
+          <td><span class="tag tag-red">Tier 5<br>대규모 학습</span></td>
+          <td>H100 ×64+ 클러스터<br>(멀티노드)</td>
+          <td>• Megatron-LM<br>• DeepSpeed ZeRO-3<br>• FSDP (PyTorch)<br>• 3D 병렬화</td>
+          <td>• 자체 모델 사전학습<br>• 100B+ 파라미터</td>
+          <td>학습 전용<br>수주~수개월</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="info-box warn">
+    <div class="title">⚠️ CPU 전용 추론</div>
+    GPU 없이도 llama.cpp를 이용해 <strong>CPU만으로 LLM 추론</strong>이 가능합니다. 다만 속도가 1~5 tok/s 수준으로 매우 느리므로 실시간 서비스에는 부적합하고, 오프라인 배치 처리나 테스트 용도로만 적합합니다. Apple Silicon(M1~M4)은 통합 메모리 덕분에 CPU 대비 5~15배 빠르게 구동 가능합니다.
+  </div>
+</div>
+
+<!-- ═══════════════ CH4: 모델 구동 방식 ═══════════════ -->
+<div class="section" id="ch4">
+  <h2>04. 모델 구동 방식 — 추론 서빙 아키텍처</h2>
+
+  <h3>4-1. 추론 서빙 프레임워크 비교</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>프레임워크</th><th>개발사</th><th>핵심 기술</th><th>장점</th><th>단점</th><th>추천 규모</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>vLLM</strong></td><td>UC Berkeley</td>
+          <td>PagedAttention, 연속 배칭</td>
+          <td class="highlight">최고 처리량, OpenAI 호환 API, 쉬운 설정</td>
+          <td>멀티노드 설정 복잡</td>
+          <td>Tier 2~4 (추천 1순위)</td>
+        </tr>
+        <tr>
+          <td><strong>TGI</strong></td><td>Hugging Face</td>
+          <td>Flash Attention, 스트리밍</td>
+          <td>HF Hub 연동 완벽, 프로덕션 검증</td>
+          <td>vLLM 대비 처리량 약간 낮음</td>
+          <td>Tier 2~4</td>
+        </tr>
+        <tr>
+          <td><strong>Ollama</strong></td><td>Ollama Inc.</td>
+          <td>llama.cpp 래핑, GGUF</td>
+          <td class="highlight">설치 1분, macOS/Linux/Win, 초간단</td>
+          <td>대규모 서빙 부적합</td>
+          <td>Tier 1~2 (개인/팀)</td>
+        </tr>
+        <tr>
+          <td><strong>llama.cpp</strong></td><td>Georgi Gerganov</td>
+          <td>GGUF, CPU+GPU 하이브리드</td>
+          <td>CPU 전용 가능, 경량, 임베디드</td>
+          <td>API 서버 기능 부족</td>
+          <td>Tier 1 (엣지/임베디드)</td>
+        </tr>
+        <tr>
+          <td><strong>TensorRT-LLM</strong></td><td>NVIDIA</td>
+          <td>그래프 최적화, 커널 퓨전</td>
+          <td class="highlight">NVIDIA GPU 최고 성능, 최저 지연</td>
+          <td>NVIDIA 전용, 설정 복잡</td>
+          <td>Tier 3~5 (프로덕션)</td>
+        </tr>
+        <tr>
+          <td><strong>SGLang</strong></td><td>Stanford</td>
+          <td>RadixAttention, 구조화 생성</td>
+          <td>JSON 구조화 출력 최적, 빠른 발전</td>
+          <td>상대적으로 새로운 프로젝트</td>
+          <td>Tier 2~4</td>
+        </tr>
+        <tr>
+          <td><strong>LMDeploy</strong></td><td>Shanghai AI Lab</td>
+          <td>TurboMind, 양자화 최적화</td>
+          <td>중국 모델 호환 최적</td>
+          <td>영어 문서 부족</td>
+          <td>Tier 2~3</td>
+        </tr>
+        <tr>
+          <td><strong>ExLlamaV2</strong></td><td>turboderp</td>
+          <td>EXL2 양자화, 커스텀 커널</td>
+          <td>GPTQ/EXL2 최고 속도</td>
+          <td>NVIDIA 전용, API 미비</td>
+          <td>Tier 1~2 (로컬)</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>4-2. 서빙 아키텍처 패턴</h3>
+  <div class="card-grid">
+    <div class="card">
+      <span class="tag tag-green">단일 GPU</span>
+      <h4>직접 서빙</h4>
+      <p>1장의 GPU에 모델을 로드하고 API 엔드포인트를 노출. 가장 단순.<br>
+      <strong>구성:</strong> vLLM/Ollama → :8000 → 클라이언트<br>
+      <strong>적합:</strong> 7B~13B 모델, 소규모 팀</p>
+    </div>
+    <div class="card">
+      <span class="tag tag-blue">멀티 GPU</span>
+      <h4>텐서 병렬 (Tensor Parallelism)</h4>
+      <p>모델의 각 레이어를 여러 GPU에 분산. 1대 서버 내 GPU 간 통신.<br>
+      <strong>구성:</strong> vLLM --tensor-parallel-size 4<br>
+      <strong>적합:</strong> 70B+ 모델, NVLink 연결 필수</p>
+    </div>
+    <div class="card">
+      <span class="tag tag-purple">멀티 노드</span>
+      <h4>파이프라인 병렬 (Pipeline Parallelism)</h4>
+      <p>모델의 레이어를 여러 서버에 나누어 순차 처리. 노드 간 네트워크.<br>
+      <strong>구성:</strong> Ray + vLLM 또는 Megatron-LM<br>
+      <strong>적합:</strong> 405B+, 초대형 모델, InfiniBand 필수</p>
+    </div>
+    <div class="card">
+      <span class="tag tag-orange">로드밸런싱</span>
+      <h4>다중 인스턴스 + 라우팅</h4>
+      <p>동일 모델을 여러 GPU/서버에 복제하고 요청을 분산.<br>
+      <strong>구성:</strong> Nginx/Traefik → vLLM ×N 인스턴스<br>
+      <strong>적합:</strong> 고트래픽 서비스, 가용성 확보</p>
+    </div>
+  </div>
+
+  <h3>4-3. 양자화 기법 비교</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>기법</th><th>비트</th><th>메모리 절감</th><th>품질 손실</th><th>속도 변화</th><th>도구</th></tr></thead>
+      <tbody>
+        <tr><td><strong>FP16 (기본)</strong></td><td>16bit</td><td>기준</td><td>없음</td><td>기준</td><td>기본 지원</td></tr>
+        <tr><td><strong>BF16</strong></td><td>16bit</td><td>≈FP16</td><td>거의 없음</td><td>동등</td><td>Ampere+ GPU</td></tr>
+        <tr><td><strong>INT8 (W8A8)</strong></td><td>8bit</td><td>~50%</td><td>매우 적음</td><td>+10~20%</td><td>bitsandbytes, SmoothQuant</td></tr>
+        <tr><td><strong>GPTQ</strong></td><td>4bit</td><td>~75%</td><td>적음</td><td>+30~50%</td><td>AutoGPTQ, ExLlamaV2</td></tr>
+        <tr><td><strong>AWQ</strong></td><td>4bit</td><td>~75%</td><td>GPTQ 대비 약간 나음</td><td>+30~50%</td><td>autoawq, vLLM 내장</td></tr>
+        <tr><td><strong>GGUF (Q4_K_M)</strong></td><td>4~5bit</td><td>~70%</td><td>적음</td><td>CPU 호환</td><td>llama.cpp, Ollama</td></tr>
+        <tr><td><strong>EXL2</strong></td><td>2~8bit 혼합</td><td>가변</td><td>조절 가능</td><td>최고 속도</td><td>ExLlamaV2</td></tr>
+        <tr><td><strong>FP4 (NF4)</strong></td><td>4bit</td><td>~75%</td><td>적음</td><td>QLoRA 학습용</td><td>bitsandbytes</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════ CH5: 오픈소스 모델 ═══════════════ -->
+<div class="section" id="ch5">
+  <h2>05. 오픈소스 LLM 모델 비교 (2025~2026)</h2>
+
+  <h3>5-1. 주요 글로벌 오픈소스 모델</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>모델</th><th>개발사</th><th>파라미터</th><th>라이선스</th><th>특징</th><th>VRAM (FP16)</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Llama 3.1</strong></td><td>Meta</td><td>8B / 70B / 405B</td><td>Llama 3.1 Community</td><td>범용 최강, 128K 컨텍스트, 도구 사용</td><td>16/140/810 GB</td></tr>
+        <tr><td><strong>Llama 4</strong></td><td>Meta</td><td>Scout 17B(109B MoE) / Maverick 17B(400B MoE)</td><td>Llama 4 Community</td><td>MoE 아키텍처, 10M 컨텍스트, 네이티브 멀티모달</td><td>34/100 GB (활성)</td></tr>
+        <tr><td><strong>Mistral Large 2</strong></td><td>Mistral AI</td><td>123B</td><td>Mistral Research</td><td>코딩·수학 강점, 32K 컨텍스트</td><td>246 GB</td></tr>
+        <tr><td><strong>Mixtral 8x22B</strong></td><td>Mistral AI</td><td>176B (39B 활성)</td><td>Apache 2.0</td><td>MoE, 효율적 추론, 64K 컨텍스트</td><td>~80 GB (활성)</td></tr>
+        <tr><td><strong>Qwen2.5</strong></td><td>Alibaba</td><td>0.5B~72B</td><td>Apache 2.0 / Qwen</td><td>다국어 강점, 코딩 우수, 128K 컨텍스트</td><td>1~144 GB</td></tr>
+        <tr><td><strong>DeepSeek-V3</strong></td><td>DeepSeek</td><td>671B (37B 활성)</td><td>DeepSeek License</td><td>MoE, 극저비용 학습($5.5M), GPT-4급</td><td>~74 GB (활성)</td></tr>
+        <tr><td><strong>DeepSeek-R1</strong></td><td>DeepSeek</td><td>671B MoE</td><td>MIT</td><td>추론(Reasoning) 특화, o1 경쟁</td><td>~74 GB (활성)</td></tr>
+        <tr><td><strong>Phi-4</strong></td><td>Microsoft</td><td>14B</td><td>MIT</td><td>소형 모델 최강, 수학·추론</td><td>28 GB</td></tr>
+        <tr><td><strong>Gemma 2</strong></td><td>Google</td><td>2B / 9B / 27B</td><td>Gemma License</td><td>경량, 모바일/엣지 친화</td><td>4/18/54 GB</td></tr>
+        <tr><td><strong>Command R+</strong></td><td>Cohere</td><td>104B</td><td>CC-BY-NC-4.0</td><td>RAG 특화, 다국어, 도구 사용</td><td>208 GB</td></tr>
+        <tr><td><strong>Falcon 180B</strong></td><td>TII (UAE)</td><td>180B</td><td>Apache 2.0</td><td>아랍어/영어, 대규모</td><td>360 GB</td></tr>
+        <tr><td><strong>Yi-1.5</strong></td><td>01.AI</td><td>6B / 9B / 34B</td><td>Apache 2.0</td><td>중/영 이중언어 강점</td><td>12~68 GB</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>5-2. 모델 크기별 성능 포지셔닝</h3>
+  <div class="bar-chart">
+    <div class="bar-row"><div class="bar-label">Llama 3.1 405B</div><div class="bar-track"><div class="bar-fill" style="width:95%;background:linear-gradient(90deg,#38bdf8,#818cf8);">GPT-4급 ★★★★★</div></div></div>
+    <div class="bar-row"><div class="bar-label">DeepSeek-V3</div><div class="bar-track"><div class="bar-fill" style="width:92%;background:linear-gradient(90deg,#38bdf8,#a78bfa);">GPT-4급 (MoE 효율) ★★★★★</div></div></div>
+    <div class="bar-row"><div class="bar-label">Qwen2.5 72B</div><div class="bar-track"><div class="bar-fill" style="width:85%;background:linear-gradient(90deg,#38bdf8,#4ade80);">GPT-4 근접 ★★★★☆</div></div></div>
+    <div class="bar-row"><div class="bar-label">Llama 3.1 70B</div><div class="bar-track"><div class="bar-fill" style="width:83%;background:linear-gradient(90deg,#38bdf8,#4ade80);">GPT-3.5 초과 ★★★★☆</div></div></div>
+    <div class="bar-row"><div class="bar-label">Mistral Large 2</div><div class="bar-track"><div class="bar-fill" style="width:80%;background:linear-gradient(90deg,#818cf8,#4ade80);">코딩/수학 강점 ★★★★☆</div></div></div>
+    <div class="bar-row"><div class="bar-label">Phi-4 14B</div><div class="bar-track"><div class="bar-fill" style="width:70%;background:linear-gradient(90deg,#4ade80,#fbbf24);">소형 최강 ★★★☆☆</div></div></div>
+    <div class="bar-row"><div class="bar-label">Llama 3.1 8B</div><div class="bar-track"><div class="bar-fill" style="width:60%;background:linear-gradient(90deg,#4ade80,#fb923c);">범용 기본 ★★★☆☆</div></div></div>
+    <div class="bar-row"><div class="bar-label">Gemma 2 2B</div><div class="bar-track"><div class="bar-fill" style="width:40%;background:linear-gradient(90deg,#fb923c,#f87171);">엣지/모바일 ★★☆☆☆</div></div></div>
+  </div>
+</div>
+
+<!-- ═══════════════ CH6: 한국어 LLM ═══════════════ -->
+<div class="section" id="ch6">
+  <h2>06. 한국어 LLM 모델 생태계</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>모델</th><th>개발사</th><th>파라미터</th><th>라이선스</th><th>한국어 성능</th><th>특징</th></tr></thead>
+      <tbody>
+        <tr><td><strong>HyperCLOVA X</strong></td><td>네이버</td><td>비공개 (추정 200B+)</td><td>상용 API만</td><td class="highlight">최상위</td><td>한국어 사전학습 최대, 네이버 서비스 탑재</td></tr>
+        <tr><td><strong>EXAONE 3.5</strong></td><td>LG AI Research</td><td>2.4B / 7.8B / 32B</td><td>EXAONE AI (비상업 무료)</td><td class="highlight">상위</td><td>한국어 벤치마크 강세, 기업용 특화</td></tr>
+        <tr><td><strong>Solar Pro</strong></td><td>업스테이지</td><td>22B</td><td>Apache 2.0</td><td class="highlight">상위</td><td>DUS(Depth Up-Scaling) 기술, 효율적 구조</td></tr>
+        <tr><td><strong>Solar Open 100B</strong></td><td>업스테이지</td><td>100B</td><td>연구 라이선스</td><td class="highlight">최상위</td><td>한국어 대형 모델, KMMLU 강세</td></tr>
+        <tr><td><strong>A.X (K1)</strong></td><td>SKT</td><td>비공개</td><td>상용 API</td><td>상위</td><td>SKT 서비스 연동, 에이닷 탑재</td></tr>
+        <tr><td><strong>KoGPT</strong></td><td>카카오브레인</td><td>6B</td><td>CC-BY-NC</td><td>중상</td><td>초기 한국어 오픈소스 모델</td></tr>
+        <tr><td><strong>KULLM (구름)</strong></td><td>고려대</td><td>5.8B / 12.8B</td><td>Apache 2.0</td><td>중상</td><td>학술용, 한국어 Instruction 데이터</td></tr>
+        <tr><td><strong>Polyglot-Ko</strong></td><td>EleutherAI</td><td>1.3B ~ 12.8B</td><td>Apache 2.0</td><td>중</td><td>한국어 특화 GPT-NeoX 기반</td></tr>
+        <tr><td><strong>GECKO</strong></td><td>카카오</td><td>비공개</td><td>상용</td><td>상위</td><td>카카오 서비스 탑재 (2025~)</td></tr>
+        <tr><td><strong>Bllossom</strong></td><td>서울대/MLP Lab</td><td>8B (Llama3 기반)</td><td>Llama License</td><td>중상</td><td>Llama3 한국어 파인튜닝</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="info-box tip">
+    <div class="title">💡 한국어 모델 선택 기준</div>
+    • <strong>상용 API 사용</strong>: HyperCLOVA X, A.X → 최고 한국어 품질, 운영 부담 없음<br>
+    • <strong>자체 서빙 (상업용)</strong>: EXAONE 3.5, Solar Pro → Apache 2.0/비상업 무료, 파인튜닝 가능<br>
+    • <strong>자체 서빙 (연구/학습)</strong>: KULLM, Polyglot-Ko, Bllossom → 완전 오픈소스<br>
+    • <strong>글로벌 모델 한국어</strong>: Qwen2.5, Llama 3.1 → 다국어 성능 충분, 한국어 파인튜닝으로 보강 가능
+  </div>
+</div>
+
+<!-- ═══════════════ CH7: 자체 모델 개발 ═══════════════ -->
+<div class="section" id="ch7">
+  <h2>07. 자체 모델 직접 개발 방법론</h2>
+
+  <h3>7-1. 개발 방식 3단계</h3>
+  <div class="flow">
+    <div class="flow-step"><div class="label">Level 1</div>프롬프트<br>엔지니어링</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step"><div class="label">Level 2</div>파인튜닝<br>(기존 모델 조정)</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step"><div class="label">Level 3</div>사전학습<br>(처음부터 훈련)</div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>항목</th><th>프롬프트 엔지니어링</th><th>파인튜닝</th><th>사전학습 (Pre-training)</th></tr></thead>
+      <tbody>
+        <tr><td>비용</td><td class="highlight">거의 무료</td><td class="price">$100~$10,000</td><td class="warn">$100,000~$10M+</td></tr>
+        <tr><td>시간</td><td>수분~수시간</td><td>수시간~수일</td><td>수주~수개월</td></tr>
+        <tr><td>데이터</td><td>수십 예시</td><td>1,000~100,000건</td><td>수십TB 텍스트</td></tr>
+        <tr><td>GPU</td><td>불필요</td><td>1~8장</td><td>64~수천 장</td></tr>
+        <tr><td>전문성</td><td>낮음</td><td>중간</td><td>매우 높음</td></tr>
+        <tr><td>커스터마이즈</td><td>제한적</td><td>도메인 특화 가능</td><td>완전한 제어</td></tr>
+        <tr><td>적합 대상</td><td>모든 규모</td><td>중소기업~대기업</td><td>빅테크·연구소</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>7-2. 사전학습 파이프라인 (Level 3)</h3>
+  <div class="flow">
+    <div class="flow-step"><div class="label">Step 1</div>데이터 수집<br>크롤링·정제</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step"><div class="label">Step 2</div>토크나이저<br>학습 (BPE/SPM)</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step"><div class="label">Step 3</div>모델 아키텍처<br>설계</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step"><div class="label">Step 4</div>사전학습<br>(수주~수개월)</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step"><div class="label">Step 5</div>SFT / RLHF<br>정렬 학습</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step"><div class="label">Step 6</div>평가·벤치마크<br>배포</div>
+  </div>
+
+  <h3>7-3. 학습 프레임워크</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>프레임워크</th><th>개발사</th><th>핵심 기능</th><th>규모</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Megatron-LM</strong></td><td>NVIDIA</td><td>3D 병렬화 (텐서+파이프라인+데이터), 대규모 학습 최적화</td><td>100B+</td></tr>
+        <tr><td><strong>DeepSpeed</strong></td><td>Microsoft</td><td>ZeRO-1/2/3 메모리 최적화, 혼합 정밀도, Offload</td><td>10B~1T</td></tr>
+        <tr><td><strong>FSDP</strong></td><td>PyTorch (Meta)</td><td>파라미터 샤딩, 네이티브 PyTorch 통합</td><td>10B~100B</td></tr>
+        <tr><td><strong>NeMo</strong></td><td>NVIDIA</td><td>E2E 학습 파이프라인, 데이터 전처리~학습~서빙</td><td>전 규모</td></tr>
+        <tr><td><strong>LitGPT</strong></td><td>Lightning AI</td><td>PyTorch 기반 깔끔한 구현, 빠른 실험</td><td>1B~70B</td></tr>
+        <tr><td><strong>Nanotron</strong></td><td>Hugging Face</td><td>경량 사전학습 프레임워크, MoE 지원</td><td>1B~100B</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════ CH8: 데이터셋 ═══════════════ -->
+<div class="section" id="ch8">
+  <h2>08. 데이터셋 확보 방법</h2>
+
+  <h3>8-1. 학습 데이터 유형</h3>
+  <div class="card-grid">
+    <div class="card">
+      <span class="tag tag-blue">사전학습용</span>
+      <h4>대규모 텍스트 코퍼스</h4>
+      <p>수TB~수PB 규모. 웹 크롤링, 책, 논문, 위키 등. 목적: 언어 이해 능력 형성</p>
+    </div>
+    <div class="card">
+      <span class="tag tag-green">파인튜닝용 (SFT)</span>
+      <h4>Instruction 데이터</h4>
+      <p>질문-답변 쌍 1K~100K건. 도메인 지식 주입, 응답 형식 학습</p>
+    </div>
+    <div class="card">
+      <span class="tag tag-purple">정렬용 (RLHF/DPO)</span>
+      <h4>선호도 데이터</h4>
+      <p>동일 질문에 대한 좋은/나쁜 응답 쌍. 인간 피드백 기반 정렬</p>
+    </div>
+    <div class="card">
+      <span class="tag tag-orange">평가용</span>
+      <h4>벤치마크 데이터</h4>
+      <p>MMLU, HumanEval, KMMLU 등 표준 평가 세트</p>
+    </div>
+  </div>
+
+  <h3>8-2. 데이터 소스별 확보 방법</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>소스</th><th>데이터 유형</th><th>규모</th><th>접근 방법</th><th>라이선스 주의</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Hugging Face Hub</strong></td><td>사전학습/SFT/DPO</td><td>수만 개 데이터셋</td><td>datasets 라이브러리, 무료 다운로드</td><td>개별 확인 필수</td></tr>
+        <tr><td><strong>Common Crawl</strong></td><td>웹 텍스트</td><td>수PB</td><td>S3 직접 다운로드, CCNet 파이프라인</td><td>퍼블릭 도메인</td></tr>
+        <tr><td><strong>RedPajama v2</strong></td><td>사전학습</td><td>30T 토큰</td><td>HuggingFace/직접 다운로드</td><td>Apache 2.0</td></tr>
+        <tr><td><strong>FineWeb</strong></td><td>사전학습</td><td>15T 토큰</td><td>HuggingFace (HF팀 제작)</td><td>ODC-By 1.0</td></tr>
+        <tr><td><strong>SlimPajama</strong></td><td>사전학습</td><td>627B 토큰</td><td>HuggingFace</td><td>Apache 2.0</td></tr>
+        <tr><td><strong>The Stack v2</strong></td><td>코드</td><td>67.5TB</td><td>HuggingFace (BigCode)</td><td>개별 라이선스</td></tr>
+        <tr><td><strong>Wikipedia</strong></td><td>지식</td><td>수GB (한국어 ~1GB)</td><td>Wikimedia 덤프</td><td>CC BY-SA</td></tr>
+        <tr><td><strong>AI Hub (한국)</strong></td><td>한국어 NLP 데이터</td><td>수백 개 데이터셋</td><td>aihub.or.kr 신청 후 다운로드</td><td>정부 데이터, 조건부</td></tr>
+        <tr><td><strong>모두의 말뭉치</strong></td><td>한국어 코퍼스</td><td>수GB</td><td>corpus.korean.go.kr 신청</td><td>비상업 연구용</td></tr>
+        <tr><td><strong>KorQuAD</strong></td><td>한국어 QA</td><td>10만+ 문항</td><td>GitHub 공개</td><td>CC BY-ND 2.0</td></tr>
+        <tr><td><strong>자체 크롤링</strong></td><td>도메인 데이터</td><td>가변</td><td>Scrapy/Crawl4AI/Beautiful Soup</td><td>robots.txt 준수 필수</td></tr>
+        <tr><td><strong>합성 데이터</strong></td><td>SFT/DPO</td><td>무제한 생성 가능</td><td>강력한 LLM으로 생성 (GPT-4/Claude)</td><td>생성 모델 ToS 확인</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>8-3. 데이터 전처리 파이프라인</h3>
+  <div class="flow">
+    <div class="flow-step"><div class="label">1</div>수집<br>크롤링/API</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step"><div class="label">2</div>정제<br>HTML·중복·노이즈 제거</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step"><div class="label">3</div>필터링<br>품질·언어·유해 필터</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step"><div class="label">4</div>중복제거<br>MinHash/SimHash</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step"><div class="label">5</div>토큰화<br>BPE/SentencePiece</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step"><div class="label">6</div>저장<br>Arrow/Parquet</div>
+  </div>
+
+  <div class="code-block">
+    <span class="comment"># 데이터 전처리 도구 스택</span><br>
+    <span class="keyword">수집</span>: Scrapy, Crawl4AI, trafilatura, newspaper3k<br>
+    <span class="keyword">정제</span>: datatrove (HuggingFace), text-dedup, fasttext (언어감지)<br>
+    <span class="keyword">중복제거</span>: MinHashLSH, datasketch, SimHash<br>
+    <span class="keyword">품질필터</span>: KenLM (perplexity), fasttext classifier<br>
+    <span class="keyword">토큰화</span>: SentencePiece, tiktoken, HuggingFace tokenizers<br>
+    <span class="keyword">저장</span>: Apache Arrow, Parquet, HuggingFace datasets
+  </div>
+</div>
+
+<!-- ═══════════════ CH9: 파인튜닝 ═══════════════ -->
+<div class="section" id="ch9">
+  <h2>09. 파인튜닝 — 종류와 활용</h2>
+
+  <h3>9-1. 파인튜닝 기법 비교</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>기법</th><th>학습 파라미터</th><th>VRAM 요구</th><th>데이터 필요량</th><th>적합 상황</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Full Fine-tuning</strong></td><td>전체 (100%)</td><td class="warn">매우 높음 (모델의 3~4배)</td><td>10K~100K+</td><td>데이터 충분, 최고 성능 목표</td></tr>
+        <tr><td><strong>LoRA</strong></td><td>0.1~1%</td><td class="highlight">낮음 (모델의 1.2배)</td><td>1K~50K</td><td>가장 범용적, 추천 1순위</td></tr>
+        <tr><td><strong>QLoRA</strong></td><td>0.1~1%</td><td class="highlight">매우 낮음 (INT4 모델+어댑터)</td><td>1K~50K</td><td>저사양 GPU, 70B도 1장으로 가능</td></tr>
+        <tr><td><strong>DoRA</strong></td><td>0.1~1%</td><td class="highlight">LoRA와 유사</td><td>1K~50K</td><td>LoRA 개선, 방향+크기 분리 학습</td></tr>
+        <tr><td><strong>Prefix Tuning</strong></td><td>접두사 토큰만</td><td class="highlight">매우 낮음</td><td>500~10K</td><td>프롬프트 확장 효과</td></tr>
+        <tr><td><strong>Adapter</strong></td><td>삽입 레이어만</td><td class="highlight">낮음</td><td>1K~50K</td><td>다중 태스크 전환</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>9-2. 정렬 학습 (Alignment)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>기법</th><th>데이터 형태</th><th>장점</th><th>단점</th></tr></thead>
+      <tbody>
+        <tr><td><strong>SFT (Supervised Fine-Tuning)</strong></td><td>질문→모범답변 쌍</td><td>단순, 효과 확실</td><td>데이터 품질 의존</td></tr>
+        <tr><td><strong>RLHF (PPO)</strong></td><td>선호도 + 보상모델</td><td>인간 선호 반영 최고</td><td>복잡, 불안정, 고비용</td></tr>
+        <tr><td><strong>DPO (Direct Preference Optimization)</strong></td><td>선호/비선호 쌍</td><td>보상모델 불필요, 안정적</td><td>RLHF 대비 약간 제한적</td></tr>
+        <tr><td><strong>ORPO</strong></td><td>선호/비선호 쌍</td><td>SFT+DPO 동시 학습</td><td>최신 기법, 검증 진행 중</td></tr>
+        <tr><td><strong>KTO</strong></td><td>좋음/나쁨 이진 피드백</td><td>쌍 데이터 불필요</td><td>DPO 대비 데이터 효율 낮을 수 있음</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>9-3. 파인튜닝 실전 코드 (QLoRA 예시)</h3>
+  <div class="code-block">
+    <span class="comment"># pip install transformers peft trl bitsandbytes datasets accelerate</span><br><br>
+    <span class="keyword">from</span> transformers <span class="keyword">import</span> AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig<br>
+    <span class="keyword">from</span> peft <span class="keyword">import</span> LoraConfig, get_peft_model<br>
+    <span class="keyword">from</span> trl <span class="keyword">import</span> SFTTrainer, SFTConfig<br><br>
+    <span class="comment"># 4비트 양자화 로드</span><br>
+    bnb_config = <span class="func">BitsAndBytesConfig</span>(load_in_4bit=True, bnb_4bit_quant_type=<span class="string">"nf4"</span>)<br>
+    model = <span class="func">AutoModelForCausalLM.from_pretrained</span>(<span class="string">"meta-llama/Llama-3.1-8B"</span>, quantization_config=bnb_config)<br>
+    tokenizer = <span class="func">AutoTokenizer.from_pretrained</span>(<span class="string">"meta-llama/Llama-3.1-8B"</span>)<br><br>
+    <span class="comment"># LoRA 설정</span><br>
+    lora_config = <span class="func">LoraConfig</span>(r=16, lora_alpha=32, target_modules=[<span class="string">"q_proj"</span>,<span class="string">"v_proj"</span>], lora_dropout=0.05)<br>
+    model = <span class="func">get_peft_model</span>(model, lora_config)<br><br>
+    <span class="comment"># 학습</span><br>
+    trainer = <span class="func">SFTTrainer</span>(model=model, train_dataset=dataset, args=<span class="func">SFTConfig</span>(<br>
+    &nbsp;&nbsp;output_dir=<span class="string">"./output"</span>, num_train_epochs=3, per_device_train_batch_size=4,<br>
+    &nbsp;&nbsp;learning_rate=2e-4, fp16=True, logging_steps=10<br>
+    ))<br>
+    trainer.<span class="func">train</span>()
+  </div>
+
+  <h3>9-4. 파인튜닝 도구 비교</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>도구</th><th>난이도</th><th>특징</th><th>GUI</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Unsloth</strong></td><td class="highlight">쉬움</td><td>2배 빠른 파인튜닝, VRAM 60% 절감, Colab 지원</td><td>없음</td></tr>
+        <tr><td><strong>TRL (HuggingFace)</strong></td><td>중간</td><td>SFT/DPO/PPO/ORPO 통합, transformers 생태계</td><td>없음</td></tr>
+        <tr><td><strong>Axolotl</strong></td><td>중간</td><td>YAML 설정, 다양한 기법 통합, 대규모 학습</td><td>없음</td></tr>
+        <tr><td><strong>LLaMA-Factory</strong></td><td class="highlight">쉬움</td><td>100+ 모델 지원, 웹 GUI, 원클릭 학습</td><td class="highlight">있음 (웹UI)</td></tr>
+        <tr><td><strong>AutoTrain</strong></td><td class="highlight">매우 쉬움</td><td>HuggingFace 노코드 파인튜닝</td><td class="highlight">있음 (웹UI)</td></tr>
+        <tr><td><strong>NVIDIA NeMo</strong></td><td>어려움</td><td>엔터프라이즈 급, NVIDIA GPU 최적화</td><td>있음</td></tr>
+        <tr><td><strong>torchtune</strong></td><td>중간</td><td>PyTorch 공식, 깔끔한 레시피 기반</td><td>없음</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════ CH10: 구축 방식 ═══════════════ -->
+<div class="section" id="ch10">
+  <h2>10. 구축 방식 — 온프레미스 vs 클라우드</h2>
+
+  <h3>10-1. 3가지 인프라 옵션</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>항목</th><th>온프레미스 (자체 구매)</th><th>클라우드 GPU</th><th>하이브리드</th></tr></thead>
+      <tbody>
+        <tr><td>초기 비용</td><td class="warn">매우 높음 (₩5,000만~수억)</td><td class="highlight">없음 (시간 과금)</td><td>중간</td></tr>
+        <tr><td>운영 비용</td><td class="highlight">전기+냉각+인건비</td><td class="warn">시간당 과금 누적</td><td>중간</td></tr>
+        <tr><td>유연성</td><td>하드웨어 고정</td><td class="highlight">즉시 스케일링</td><td>높음</td></tr>
+        <tr><td>데이터 보안</td><td class="highlight">완전 통제</td><td>제공자 의존</td><td>핵심=온프레미스</td></tr>
+        <tr><td>유지보수</td><td class="warn">자체 책임</td><td class="highlight">제공자 관리</td><td>분담</td></tr>
+        <tr><td>손익분기</td><td colspan="3" style="text-align:center;">GPU 가동률 60% 이상이면 12~18개월 내 온프레미스가 유리</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>10-2. 주요 클라우드 GPU 서비스</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>서비스</th><th>GPU 종류</th><th>시간당 가격 (예시)</th><th>특징</th></tr></thead>
+      <tbody>
+        <tr><td><strong>AWS (EC2 P5)</strong></td><td>H100 ×8</td><td class="price">$98.32/hr</td><td>가장 안정적, SageMaker 통합</td></tr>
+        <tr><td><strong>Google Cloud (A3)</strong></td><td>H100 ×8</td><td class="price">$98.00/hr</td><td>TPU 옵션, Vertex AI 통합</td></tr>
+        <tr><td><strong>Azure (ND H100)</strong></td><td>H100 ×8</td><td class="price">$103.68/hr</td><td>엔터프라이즈, Azure ML 통합</td></tr>
+        <tr><td><strong>Lambda Cloud</strong></td><td>H100 ×8</td><td class="price">$27.60/hr</td><td>AI 특화, 저렴</td></tr>
+        <tr><td><strong>RunPod</strong></td><td>H100 ×1</td><td class="price">$3.49/hr</td><td>온디맨드, 커뮤니티 클라우드</td></tr>
+        <tr><td><strong>Vast.ai</strong></td><td>다양 (마켓플레이스)</td><td class="price">$0.50~5.00/hr</td><td>P2P 마켓, 가장 저렴</td></tr>
+        <tr><td><strong>Together AI</strong></td><td>서버리스 추론</td><td class="price">토큰 과금</td><td>vLLM 기반, 오픈소스 모델 서빙</td></tr>
+        <tr><td><strong>Replicate</strong></td><td>서버리스</td><td class="price">초당 과금</td><td>간편 배포, Cog 컨테이너</td></tr>
+        <tr><td><strong>네이버 클라우드</strong></td><td>A100/V100</td><td class="price">₩3,000~12,000/hr</td><td>국내 데이터센터, HyperCLOVA 연동</td></tr>
+        <tr><td><strong>KT Cloud</strong></td><td>A100</td><td class="price">₩4,000~10,000/hr</td><td>국내, 공공기관 친화</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="info-box tip">
+    <div class="title">💡 비용 최적화 전략</div>
+    • <strong>스팟/프리엠프터블 인스턴스</strong>: 60~90% 할인, 학습 체크포인트 필수<br>
+    • <strong>Reserved Instance</strong>: 1~3년 약정으로 30~60% 할인<br>
+    • <strong>Vast.ai / RunPod</strong>: 커뮤니티 GPU로 하이퍼스케일러 대비 70% 절감<br>
+    • <strong>혼합 전략</strong>: 학습은 스팟, 추론 서빙은 온디맨드/온프레미스
+  </div>
+</div>
+
+<!-- ═══════════════ CH11: 기술 스택 ═══════════════ -->
+<div class="section" id="ch11">
+  <h2>11. 기술 스택 전체 구조</h2>
+
+  <h3>11-1. LLM 서버 풀스택 아키텍처</h3>
+  <div class="code-block">
+    ┌─────────────────────────────────────────────────────────────────┐<br>
+    │  <span class="keyword">CLIENT LAYER</span>                                                  │<br>
+    │  Web App (React/Next.js) │ Mobile App │ API Client │ CLI       │<br>
+    └──────────────────────────┬──────────────────────────────────────┘<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│ HTTPS / WebSocket / SSE<br>
+    ┌──────────────────────────┴──────────────────────────────────────┐<br>
+    │  <span class="keyword">API GATEWAY</span>                                                    │<br>
+    │  Nginx / Traefik / Kong │ Rate Limit │ Auth │ Load Balance     │<br>
+    └──────────────────────────┬──────────────────────────────────────┘<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+    ┌──────────────────────────┴──────────────────────────────────────┐<br>
+    │  <span class="keyword">APPLICATION LAYER</span>                                              │<br>
+    │  FastAPI / Flask │ LangChain / LangGraph │ RAG Pipeline        │<br>
+    │  Prompt Management │ Memory │ Tool Calling │ Agent Orchestrator│<br>
+    └──────────────────────────┬──────────────────────────────────────┘<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+    ┌──────────────────────────┴──────────────────────────────────────┐<br>
+    │  <span class="keyword">MODEL SERVING LAYER</span>                                            │<br>
+    │  vLLM / TGI / TensorRT-LLM / Ollama / Triton                  │<br>
+    │  OpenAI-Compatible API (:8000)                                  │<br>
+    └──────────────────────────┬──────────────────────────────────────┘<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+    ┌──────────────────────────┴──────────────────────────────────────┐<br>
+    │  <span class="keyword">MODEL & DATA LAYER</span>                                             │<br>
+    │  Model Weights (GGUF/safetensors) │ Vector DB (Chroma/Milvus) │<br>
+    │  Embedding Model │ Tokenizer │ Config                          │<br>
+    └──────────────────────────┬──────────────────────────────────────┘<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+    ┌──────────────────────────┴──────────────────────────────────────┐<br>
+    │  <span class="keyword">INFRASTRUCTURE LAYER</span>                                           │<br>
+    │  GPU (CUDA / ROCm) │ Docker / K8s │ Monitoring (Prometheus)   │<br>
+    │  Storage (NVMe SSD) │ Network (InfiniBand/RoCE)               │<br>
+    └─────────────────────────────────────────────────────────────────┘
+  </div>
+
+  <h3>11-2. 레이어별 기술 선택지</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>레이어</th><th>핵심 기술</th><th>추천 조합</th></tr></thead>
+      <tbody>
+        <tr><td><strong>언어/런타임</strong></td><td>Python 3.10+, CUDA 12.x, cuDNN 9.x</td><td>Python 3.11 + CUDA 12.4</td></tr>
+        <tr><td><strong>딥러닝 프레임워크</strong></td><td>PyTorch 2.x, JAX, TensorFlow</td><td>PyTorch 2.4+ (압도적 1위)</td></tr>
+        <tr><td><strong>모델 허브</strong></td><td>Hugging Face Hub, ModelScope</td><td>Hugging Face Hub</td></tr>
+        <tr><td><strong>추론 서빙</strong></td><td>vLLM, TGI, Ollama, TensorRT-LLM</td><td>vLLM (범용) / Ollama (간편)</td></tr>
+        <tr><td><strong>API 프레임워크</strong></td><td>FastAPI, Flask, Express</td><td>FastAPI (비동기, 타입안전)</td></tr>
+        <tr><td><strong>LLM 오케스트레이션</strong></td><td>LangChain, LlamaIndex, Haystack</td><td>LangChain + LangGraph</td></tr>
+        <tr><td><strong>벡터 DB (RAG)</strong></td><td>Chroma, Milvus, Pinecone, Qdrant, Weaviate, pgvector</td><td>Chroma (소규모) / Milvus (대규모)</td></tr>
+        <tr><td><strong>임베딩 모델</strong></td><td>BGE, E5, Cohere Embed, OpenAI Ada</td><td>BGE-M3 (다국어, 오픈소스)</td></tr>
+        <tr><td><strong>컨테이너</strong></td><td>Docker, Podman</td><td>Docker + Docker Compose</td></tr>
+        <tr><td><strong>오케스트레이션</strong></td><td>Kubernetes, Docker Swarm</td><td>K8s + NVIDIA GPU Operator</td></tr>
+        <tr><td><strong>모니터링</strong></td><td>Prometheus + Grafana, Datadog</td><td>Prometheus + Grafana</td></tr>
+        <tr><td><strong>로깅</strong></td><td>ELK, Loki, CloudWatch</td><td>Loki + Grafana</td></tr>
+        <tr><td><strong>프롬프트 관리</strong></td><td>LangSmith, Langfuse, PromptLayer</td><td>Langfuse (오픈소스)</td></tr>
+        <tr><td><strong>평가</strong></td><td>lm-eval-harness, ragas, deepeval</td><td>lm-eval-harness + ragas</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════ CH12: 도구 가이드 ═══════════════ -->
+<div class="section" id="ch12">
+  <h2>12. 도구·툴 완전 가이드</h2>
+
+  <h3>12-1. 개발·실험 도구</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>도구</th><th>용도</th><th>특징</th><th>가격</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Ollama</strong></td><td>로컬 LLM 실행</td><td>1분 설치, CLI, macOS/Linux/Win, 모델 자동 다운로드</td><td class="highlight">무료</td></tr>
+        <tr><td><strong>LM Studio</strong></td><td>로컬 LLM GUI</td><td>GUI 기반, 모델 검색·다운로드·채팅, GGUF 지원</td><td class="highlight">무료</td></tr>
+        <tr><td><strong>Open WebUI</strong></td><td>웹 채팅 인터페이스</td><td>ChatGPT 유사 UI, Ollama/vLLM 연동, 멀티유저</td><td class="highlight">무료 (오픈소스)</td></tr>
+        <tr><td><strong>Jan</strong></td><td>로컬 LLM 앱</td><td>데스크톱 앱, 오프라인, 프라이버시 중심</td><td class="highlight">무료</td></tr>
+        <tr><td><strong>text-generation-webui</strong></td><td>웹 LLM 인터페이스</td><td>Gradio 기반, 다양한 로더/양자화, 확장기능</td><td class="highlight">무료 (오픈소스)</td></tr>
+        <tr><td><strong>AnythingLLM</strong></td><td>RAG + 채팅</td><td>문서 업로드→RAG 자동 구성, 벡터DB 내장</td><td class="highlight">무료 (오픈소스)</td></tr>
+        <tr><td><strong>Jupyter + nbdev</strong></td><td>실험·프로토타이핑</td><td>인터랙티브 개발, 시각화</td><td class="highlight">무료</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>12-2. 프로덕션 운영 도구</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>도구</th><th>용도</th><th>특징</th></tr></thead>
+      <tbody>
+        <tr><td><strong>LiteLLM</strong></td><td>LLM 프록시/게이트웨이</td><td>100+ LLM 통합 API, 로드밸런싱, 폴백, 비용 추적</td></tr>
+        <tr><td><strong>Langfuse</strong></td><td>LLM 관측성</td><td>트레이싱, 프롬프트 관리, 평가, 비용 모니터링 (오픈소스)</td></tr>
+        <tr><td><strong>LangSmith</strong></td><td>LLM 디버깅·모니터링</td><td>LangChain 공식, 트레이싱, 평가, 데이터셋 관리</td></tr>
+        <tr><td><strong>NVIDIA Triton</strong></td><td>모델 서빙 플랫폼</td><td>멀티모델, 멀티프레임워크, 동적 배칭, 앙상블</td></tr>
+        <tr><td><strong>Ray Serve</strong></td><td>분산 서빙</td><td>자동 스케일링, 멀티모델, vLLM 연동</td></tr>
+        <tr><td><strong>BentoML</strong></td><td>ML 모델 패키징·배포</td><td>Docker 자동 생성, REST/gRPC, 클라우드 배포</td></tr>
+        <tr><td><strong>Weights & Biases</strong></td><td>실험 추적</td><td>학습 메트릭 시각화, 하이퍼파라미터 관리, 팀 협업</td></tr>
+        <tr><td><strong>MLflow</strong></td><td>ML 라이프사이클</td><td>실험 추적, 모델 레지스트리, 배포 (오픈소스)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>12-3. RAG (검색증강생성) 구축 도구</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>도구</th><th>역할</th><th>특징</th></tr></thead>
+      <tbody>
+        <tr><td><strong>LangChain</strong></td><td>RAG 파이프라인</td><td>문서 로더·분할·임베딩·검색·생성 풀체인</td></tr>
+        <tr><td><strong>LlamaIndex</strong></td><td>데이터 인덱싱</td><td>구조화/비구조화 데이터 통합, 에이전트</td></tr>
+        <tr><td><strong>Haystack</strong></td><td>검색 파이프라인</td><td>모듈식, 프로덕션 지향, 파이프라인 빌더</td></tr>
+        <tr><td><strong>Chroma</strong></td><td>벡터 DB</td><td>경량, 임베디드, Python 네이티브</td></tr>
+        <tr><td><strong>Milvus</strong></td><td>벡터 DB</td><td>대규모 분산, 10억+ 벡터, GPU 검색</td></tr>
+        <tr><td><strong>Qdrant</strong></td><td>벡터 DB</td><td>Rust 기반, 빠름, 풍부한 필터링</td></tr>
+        <tr><td><strong>pgvector</strong></td><td>벡터 DB (PostgreSQL)</td><td>기존 PostgreSQL에 벡터 검색 추가</td></tr>
+        <tr><td><strong>Unstructured.io</strong></td><td>문서 전처리</td><td>PDF/DOCX/HTML/이미지→텍스트 자동 변환</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>12-4. MCP (Model Context Protocol)</h3>
+  <div class="info-box tip">
+    <div class="title">💡 2025년 핵심 기술: MCP</div>
+    Anthropic이 발표한 <strong>Model Context Protocol</strong>은 LLM이 외부 도구·데이터 소스와 표준화된 방식으로 연동하는 프로토콜입니다.<br><br>
+    • <strong>역할</strong>: LLM ↔ 도구(DB, 파일, API, 브라우저 등) 간 표준 인터페이스<br>
+    • <strong>장점</strong>: 한번 구현하면 모든 MCP 호환 LLM에서 사용 가능<br>
+    • <strong>생태계</strong>: Cursor, Claude Code, Zed 등 주요 IDE/에디터에서 지원<br>
+    • <strong>AADS 활용</strong>: 현재 AADS가 MCP 기반으로 50+ 도구를 연동하여 운영 중
+  </div>
+</div>
+
+<!-- ═══════════════ CH13: 비용 시뮬레이션 ═══════════════ -->
+<div class="section" id="ch13">
+  <h2>13. 비용 시뮬레이션 — 규모별 예산</h2>
+
+  <h3>13-1. 규모별 구축 비용 예시</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>규모</th><th>구성</th><th>초기 비용</th><th>월 운영비</th><th>적합 모델</th><th>처리량</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>🏠 개인/실험</strong></td>
+          <td>RTX 4090 ×1 데스크톱</td>
+          <td class="price">₩500~700만</td>
+          <td class="price">₩5~10만 (전기)</td>
+          <td>7B FP16, 70B Q4</td>
+          <td>~50 req/min</td>
+        </tr>
+        <tr>
+          <td><strong>🏢 소규모 팀</strong></td>
+          <td>RTX 4090 ×4 워크스테이션<br>또는 클라우드 A100×1</td>
+          <td class="price">₩1,500~3,000만<br>(클라우드: ₩0)</td>
+          <td class="price">₩20~50만<br>(클라우드: ₩150~300만)</td>
+          <td>13B FP16, 70B Q4~Q8</td>
+          <td>~200 req/min</td>
+        </tr>
+        <tr>
+          <td><strong>🏗️ 중소기업</strong></td>
+          <td>A100 80GB ×4 서버<br>+ 스토리지 + 네트워크</td>
+          <td class="price">₩8,000만~1.5억</td>
+          <td class="price">₩100~200만</td>
+          <td>70B FP16, 파인튜닝</td>
+          <td>~1,000 req/min</td>
+        </tr>
+        <tr>
+          <td><strong>🏭 대기업</strong></td>
+          <td>H100 ×8 서버 × 다수<br>+ InfiniBand 클러스터</td>
+          <td class="price">₩5~20억</td>
+          <td class="price">₩500~2,000만</td>
+          <td>405B FP16, 자체 학습</td>
+          <td>~10,000 req/min</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>13-2. API vs 자체 서버 손익분기 분석</h3>
+  <div class="code-block">
+    <span class="comment"># 예시: 하루 10만 건 추론 (평균 1,000 토큰/건)</span><br><br>
+    <span class="keyword">API 비용 (GPT-4o-mini)</span>:<br>
+    &nbsp;&nbsp;입력: 500 tok × 100,000 = 50M tok × $0.15/1M = <span class="string">$7.5/일</span><br>
+    &nbsp;&nbsp;출력: 500 tok × 100,000 = 50M tok × $0.60/1M = <span class="string">$30/일</span><br>
+    &nbsp;&nbsp;월 비용: <span class="warn">$1,125/월 ≈ ₩155만</span><br><br>
+    <span class="keyword">자체 서빙 (Llama 3.1 8B on RTX 4090)</span>:<br>
+    &nbsp;&nbsp;서버 구매: ₩700만 (36개월 감가)<br>
+    &nbsp;&nbsp;월 감가: ₩19.4만 + 전기 ₩8만 = <span class="highlight">₩27.4만/월</span><br><br>
+    <span class="func">→ 손익분기: 약 6개월</span> (이후 월 ₩127만 절감)
+  </div>
+
+  <div class="info-box warn">
+    <div class="title">⚠️ 숨은 비용 체크리스트</div>
+    • <strong>전기료</strong>: GPU 서버 1대 (700W) 기준 월 ₩5~10만 (24시간 가동)<br>
+    • <strong>냉각/공조</strong>: 데이터센터 수준 필요 시 초기 ₩500만+ 추가<br>
+    • <strong>네트워크</strong>: InfiniBand (멀티노드 시) 스위치만 ₩3,000만+<br>
+    • <strong>인건비</strong>: ML Ops 엔지니어 인건비 (연봉 ₩6,000만~1.2억)<br>
+    • <strong>스토리지</strong>: 모델 파일 + 데이터셋 NVMe SSD 4~16TB (₩100~500만)<br>
+    • <strong>라이선스</strong>: NVIDIA AI Enterprise 등 상용 소프트웨어
+  </div>
+</div>
+
+<!-- ═══════════════ CH14: 실전 로드맵 ═══════════════ -->
+<div class="section" id="ch14">
+  <h2>14. 실전 구축 로드맵</h2>
+
+  <h3>Phase 1: 실험 및 검증 (1~2주)</h3>
+  <div class="card-grid">
+    <div class="card">
+      <span class="tag tag-green">Day 1~2</span>
+      <h4>환경 설정</h4>
+      <p>① Ollama 설치 (개인 PC)<br>② 오픈소스 모델 3~5개 테스트<br>③ 도메인 적합 모델 선정</p>
+    </div>
+    <div class="card">
+      <span class="tag tag-green">Day 3~5</span>
+      <h4>프로토타입</h4>
+      <p>① Open WebUI로 채팅 인터페이스 구축<br>② RAG 파이프라인 기본 구성<br>③ 사내 문서 기반 Q&A 테스트</p>
+    </div>
+    <div class="card">
+      <span class="tag tag-green">Day 6~10</span>
+      <h4>벤치마크</h4>
+      <p>① 처리량/지연/품질 측정<br>② API vs 자체 서빙 비용 비교<br>③ Go/No-Go 결정</p>
+    </div>
+  </div>
+
+  <h3>Phase 2: 파인튜닝 (2~4주)</h3>
+  <div class="card-grid">
+    <div class="card">
+      <span class="tag tag-blue">Week 1</span>
+      <h4>데이터 준비</h4>
+      <p>① 도메인 데이터 수집/정제<br>② Instruction 데이터셋 구축 (1K~10K건)<br>③ 검증 세트 분리 (10~20%)</p>
+    </div>
+    <div class="card">
+      <span class="tag tag-blue">Week 2~3</span>
+      <h4>파인튜닝 실행</h4>
+      <p>① QLoRA로 빠른 실험<br>② 하이퍼파라미터 튜닝<br>③ 평가·비교 (기본 vs 튜닝 모델)</p>
+    </div>
+    <div class="card">
+      <span class="tag tag-blue">Week 4</span>
+      <h4>모델 최적화</h4>
+      <p>① 양자화 (GPTQ/AWQ/GGUF)<br>② 추론 속도 벤치마크<br>③ 모델 선정 확정</p>
+    </div>
+  </div>
+
+  <h3>Phase 3: 프로덕션 배포 (2~4주)</h3>
+  <div class="card-grid">
+    <div class="card">
+      <span class="tag tag-purple">Week 1</span>
+      <h4>인프라 구축</h4>
+      <p>① GPU 서버 구매/클라우드 프로비저닝<br>② Docker + vLLM 서빙 환경<br>③ API Gateway + 인증</p>
+    </div>
+    <div class="card">
+      <span class="tag tag-purple">Week 2</span>
+      <h4>서비스 통합</h4>
+      <p>① 애플리케이션 API 연동<br>② RAG + 벡터DB 구축<br>③ 프롬프트 관리 시스템</p>
+    </div>
+    <div class="card">
+      <span class="tag tag-purple">Week 3~4</span>
+      <h4>운영 안정화</h4>
+      <p>① 모니터링·알림 구성<br>② 부하 테스트 (k6/Locust)<br>③ 장애 대응 플레이북</p>
+    </div>
+  </div>
+
+  <h3>Quick Start: 가장 빠른 첫 걸음</h3>
+  <div class="code-block">
+    <span class="comment"># 1. Ollama 설치 (Linux/macOS)</span><br>
+    curl -fsSL https://ollama.com/install.sh | sh<br><br>
+    <span class="comment"># 2. 모델 다운로드 및 실행</span><br>
+    ollama run llama3.1:8b<br><br>
+    <span class="comment"># 3. API 서버로 사용 (기본 포트 11434)</span><br>
+    curl http://localhost:11434/api/generate -d '{<br>
+    &nbsp;&nbsp;"model": "llama3.1:8b",<br>
+    &nbsp;&nbsp;"prompt": "한국의 수도는?"<br>
+    }'<br><br>
+    <span class="comment"># 4. vLLM으로 프로덕션 서빙 (GPU 서버)</span><br>
+    pip install vllm<br>
+    vllm serve meta-llama/Llama-3.1-8B-Instruct \<br>
+    &nbsp;&nbsp;--host 0.0.0.0 --port 8000 \<br>
+    &nbsp;&nbsp;--max-model-len 8192 \<br>
+    &nbsp;&nbsp;--gpu-memory-utilization 0.9<br><br>
+    <span class="comment"># 5. Open WebUI (채팅 인터페이스)</span><br>
+    docker run -d -p 3000:8080 \<br>
+    &nbsp;&nbsp;-e OLLAMA_BASE_URL=http://host.docker.internal:11434 \<br>
+    &nbsp;&nbsp;--name open-webui ghcr.io/open-webui/open-webui:main
+  </div>
+</div>
+
+<!-- ═══════════════ 부록: 용어집 ═══════════════ -->
+<div class="section">
+  <h2>📖 부록: 핵심 용어집</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>용어</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td><strong>LLM</strong></td><td>Large Language Model. 대규모 언어 모델. 수십억~수조 파라미터의 신경망</td></tr>
+        <tr><td><strong>VRAM</strong></td><td>Video RAM. GPU 전용 메모리. LLM 로딩의 최대 병목</td></tr>
+        <tr><td><strong>Transformer</strong></td><td>2017년 Google이 발표한 어텐션 기반 신경망 아키텍처. 모든 현대 LLM의 기반</td></tr>
+        <tr><td><strong>파라미터 (Parameter)</strong></td><td>모델이 학습한 가중치 수. 7B = 70억 개. 클수록 일반적으로 성능 향상</td></tr>
+        <tr><td><strong>양자화 (Quantization)</strong></td><td>모델 가중치를 낮은 정밀도로 변환 (FP16→INT4). 메모리/속도 최적화</td></tr>
+        <tr><td><strong>MoE (Mixture of Experts)</strong></td><td>전체 파라미터 중 일부만 활성화하는 구조. 효율적 대형 모델 (예: Mixtral)</td></tr>
+        <tr><td><strong>RAG</strong></td><td>Retrieval-Augmented Generation. 외부 문서 검색 + LLM 생성 결합</td></tr>
+        <tr><td><strong>LoRA</strong></td><td>Low-Rank Adaptation. 적은 파라미터만 학습하는 효율적 파인튜닝 기법</td></tr>
+        <tr><td><strong>SFT</strong></td><td>Supervised Fine-Tuning. 지도학습 기반 파인튜닝 (질문→답변 학습)</td></tr>
+        <tr><td><strong>RLHF</strong></td><td>Reinforcement Learning from Human Feedback. 인간 선호도 기반 강화학습</td></tr>
+        <tr><td><strong>DPO</strong></td><td>Direct Preference Optimization. RLHF의 간소화 버전</td></tr>
+        <tr><td><strong>GGUF</strong></td><td>GPT-Generated Unified Format. llama.cpp의 모델 파일 형식. CPU 추론 지원</td></tr>
+        <tr><td><strong>토큰 (Token)</strong></td><td>LLM이 처리하는 텍스트의 최소 단위. 한국어 ~1글자, 영어 ~0.75단어</td></tr>
+        <tr><td><strong>컨텍스트 길이</strong></td><td>모델이 한 번에 처리할 수 있는 최대 토큰 수 (예: 128K = ~10만 글자)</td></tr>
+        <tr><td><strong>CUDA</strong></td><td>NVIDIA GPU 프로그래밍 플랫폼. LLM 연산의 사실상 표준</td></tr>
+        <tr><td><strong>NVLink</strong></td><td>GPU 간 고속 직접 연결. 멀티GPU 텐서 병렬에 필수</td></tr>
+        <tr><td><strong>InfiniBand</strong></td><td>서버 간 고속 네트워크. 멀티노드 학습에 사용 (200~400Gbps)</td></tr>
+        <tr><td><strong>PagedAttention</strong></td><td>vLLM의 핵심 기술. OS 페이지 관리 방식으로 KV 캐시 효율화</td></tr>
+        <tr><td><strong>MCP</strong></td><td>Model Context Protocol. LLM과 외부 도구 간 표준 통신 규약</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════ FOOTER ═══════════════ -->
+<div class="footer">
+  <p>AADS Academy · LLM 서버 구축 종합 교육자료 v1.0</p>
+  <p>작성일: 2026-09-12 KST · 출처: 공식 문서, 벤치마크 보고서, 제조사 스펙 시트 기반</p>
+  <p>가격 정보는 2025~2026년 시장가 기준이며, 수급·환율에 따라 변동될 수 있습니다.</p>
+</div>
+
+</div><!-- container -->
+</body>
+</html>

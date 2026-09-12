@@ -103,3 +103,6 @@ tmp_ntv2_hotfix/
 exports/
 .deploy_downtime
 .deploy_generation
+
+# 런타임 업로드 저장소 — 채팅 산출물 사본이 쌓인다(git 대상 아님)
+uploads/
