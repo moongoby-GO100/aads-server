@@ -1,5 +1,29 @@
 # AADS HANDOVER
 
+## 2026-09-13 07:00 KST — Runner 위상별 타임아웃 main 병합 + 운영 워크트리 복구
+
+- `18668fae`(phase-aware timeout fence)를 clean worktree에서 `origin/main`에 병합해 `41a7c131`로 푸시했다.
+  운영 스크립트 `scripts/pipeline-runner.sh`를 동일 내용(d31eba87)으로 교체하고 active job 0건을 확인한 뒤
+  `aads-pipeline-runner.service`만 유휴 재시작했다(PID 3405529, 06:56 KST). `AADS_REVIEW_MAX_RUNTIME`,
+  `POST_PROCESS_ABORTED_TERMINAL`, `AI_REVIEW_ABORTED_TERMINAL` 로드를 실측 확인했다.
+- 운영 워크트리 `/root/aads/aads-server`는 HEAD가 `5881b667`에 멈춘 채 `app/models/chat.py`,
+  `app/services/chat_protocol.py`, `redis_stream.py`, `stream_worker.py`,
+  `tests/unit/test_chat_modernization_wp03.py` 5개가 unmerged(UU/DU) 상태였고 충돌 마커 때문에
+  `py_compile`이 실패했다. 컨테이너 `/app`은 bind mount가 아니라 이미지 코드라 운영 장애는 없었지만,
+  `deploy.sh`가 `git archive HEAD`로 빌드하므로 WP03/WP04/OAuth 수정이 배포될 수 없는 상태였다.
+- 조치: dirty 전체를 `/root/aads/backups/wt-20260913/`(full_dirty.patch 358KB, staged.patch, 파일 6개)로
+  백업한 뒤 충돌 5개 파일과 chat_service.py, runner 스크립트 2종을 `origin/main` 버전으로 해소하고
+  `git merge --ff-only origin/main`으로 `41a7c131`까지 전진시켰다. 타 세션 dirty 9개 파일과 untracked
+  산출물은 그대로 보존했다.
+- 검증: `py_compile` 8개 파일 통과, 격리 컨테이너에서 WP03/WP04/OAuth 단위 테스트 `37 passed`,
+  runner 스크립트 테스트 `50 passed`, `bash -n` 2종 통과, API health-check HTTP 200.
+- 미완료/리스크: (1) 운영 배포 미수행 — 서버 이미지는 여전히 `5881b667`로 origin/main 대비 19커밋,
+  대시보드는 `1ab0125`로 3커밋(WP07/WP08) 뒤쳐져 있다. (2) 디스크 96%(8.9GB 여유)라 `deploy.sh`의
+  20GB 빌드 preflight에 막힌다. `/tmp` 47GB 중 stale worktree 다수가 회수 대상이다.
+  (3) 리뷰 파이프라인은 원격 러너(GO100/NTV2)가 Cloudflare 100초 상한에 걸려 HTTP 524, AADS 로컬은
+  http=000으로 24시간 내 38건 중 done 0건이다. (4) pre-commit 단위 테스트 단계는 컨테이너에
+  pytest가 없어 "No module named pytest" 출력이 실패로 판정되지 않고 통과 처리된다.
+
 ## 2026-09-13 04:20 KST — Chat modernization WP04 durable read-model contract
 
 - Added an opt-in, fail-closed v2 chat read model while preserving the unversioned v1 API: read-only
