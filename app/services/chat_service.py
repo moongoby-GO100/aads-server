@@ -85,6 +85,58 @@ _INTERRUPT_MARKER_GENERIC = (
 )
 
 
+# 재개하지 않고 버려지는 중단(추가지시 교체 66건, 사용자 중지 28건)은 중복 실행
+# 위험은 없지만 중간 상태를 남긴다. 파일은 썼는데 커밋 전, 커밋했는데 푸시 전 같은
+# 상태가 조용히 남아 나중에 빌드나 배포를 막는다. 2026-09-12 에 ModelSettingsPanel
+# 이 그렇게 미추적으로 남아 저장소가 하루 종일 빌드 불가였다.
+_SIDE_EFFECT_TOOLS = frozenset({
+    "git_remote_commit",
+    "git_remote_push",
+    "git_remote_create_branch",
+    "git_remote_add",
+    "write_remote_file",
+    "patch_remote_file",
+    "run_remote_command",
+    "deploy_safe",
+    "db_safe_write",
+    "pipeline_runner_submit",
+})
+
+
+def _side_effect_tools_used(tools_called: Any) -> List[str]:
+    """이 턴이 손을 댄 부수효과 도구 이름(중복 제거, 순서 유지)."""
+    items = tools_called
+    if isinstance(items, str):
+        try:
+            items = json.loads(items)
+        except (TypeError, ValueError):
+            return []
+    if not isinstance(items, list):
+        return []
+    seen: List[str] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        name = str(it.get("tool_name") or "")
+        if name in _SIDE_EFFECT_TOOLS and name not in seen:
+            seen.append(name)
+    return seen
+
+
+def _unfinished_work_notice(tools: List[str]) -> str:
+    """중간 상태 경고. 무엇을 확인해야 하는지까지 적는다."""
+    if not tools:
+        return ""
+    listed = ", ".join("`%s`" % t for t in tools[:6])
+    more = " 외 %d종" % (len(tools) - 6) if len(tools) > 6 else ""
+    return (
+        "\n\n> ⚠️ **미완료 작업이 남아 있을 수 있습니다.**\n"
+        "> 이 턴은 %s%s 를 호출한 뒤 중단되었습니다.\n"
+        "> 파일 생성 후 `git add` 전, 커밋 후 푸시 전처럼 중간 상태로 남았을 수 있으니\n"
+        "> `git status` 와 배포 상태를 확인해 주세요." % (listed, more)
+    )
+
+
 def _interrupt_marker_for(reason: str, *, is_superseded: bool = False) -> str:
     """중단 사유에 맞는 안내 문구."""
     r = str(reason or "").lower()
@@ -4139,6 +4191,17 @@ async def _mark_execution_interrupted(
     if pid:
         if clean_partial:
             _marker = _interrupt_marker_for(reason, is_superseded=is_superseded_cancel)
+            # 자동 재개되지 않는 중단만 경고한다. 재개되는 턴은 이어서 마무리하므로
+            # 미완료라고 알리면 오히려 혼란스럽다.
+            if not _should_auto_resume_interrupted_reason(reason):
+                try:
+                    _tc = await conn.fetchval(
+                        "SELECT tools_called FROM chat_messages WHERE id = $1", pid
+                    )
+                    _marker += _unfinished_work_notice(_side_effect_tools_used(_tc))
+                except Exception as _tc_err:
+                    logger.debug("unfinished_work_notice_failed execution=%s error=%s",
+                                 str(eid)[:8], str(_tc_err)[:120])
             _already = any(
                 m and m in clean_partial
                 for m in (_INTERRUPT_MARKER_SUPERSEDED, _INTERRUPT_MARKER_EXHAUSTED,
