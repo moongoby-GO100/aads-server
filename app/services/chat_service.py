@@ -10398,10 +10398,9 @@ async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
                             UPDATE chat_deferred_reactions
                             SET status = 'completed', completed_at = NOW(),
                                 lease_expires_at = NULL, error_message = NULL, updated_at = NOW()
-                            WHERE id = $1 AND claimed_by = $2
+                            WHERE id = $1 AND completed_at IS NULL
                             """,
                             uuid.UUID(deferred_id),
-                            _EXECUTION_OWNER_INSTANCE,
                         )
                 except Exception as finish_error:
                     logger.warning(
