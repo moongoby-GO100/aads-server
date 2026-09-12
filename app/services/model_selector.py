@@ -12,7 +12,7 @@ import logging
 import os
 import uuid
 from decimal import Decimal
-from typing import Any, AsyncGenerator, Dict, List, Optional, Union
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
 
 import time as _time_mod
 import contextvars
@@ -412,6 +412,75 @@ async def _get_default_llm_model_from_db() -> Optional[str]:
     except Exception as e:
         logger.warning("llm_default_db_lookup_failed: %s", e)
     return None
+
+
+# Codex 도 주간 한도를 다 쓰면 에러가 아니라 "200 + 0토큰"을 돌려준다. 그래서
+# output_validator 가 사후에 "내용 없음"으로 잡을 때까지 재시도를 낭비하고, 사용자에게는
+# 진행 서술만 남은 채 끝난 턴이 보인다(2026-09-12 세션 2c929b8e). 릴레이의 /codex-usage 가
+# used_percent 를 정확히 알려주고 있었는데 라우팅이 이 값을 전혀 보지 않았다.
+def _load_relay_shared_secret() -> str:
+    """릴레이 공유 시크릿. env 우선, 없으면 마운트된 파일."""
+    secret = (os.getenv("CLAUDE_RELAY_SHARED_SECRET") or "").strip()
+    if secret:
+        return secret
+    try:
+        from pathlib import Path as _Path
+        return _Path(os.getenv(
+            "CLAUDE_RELAY_SHARED_SECRET_FILE",
+            "/app/scripts/claude_relay_secret.txt",
+        )).read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def _codex_to_claude_equivalent(model: Any) -> str:
+    """Codex 모델을 같은 급의 Claude 모델로 대응시킨다."""
+    m = str(model or "").lower()
+    if "astra" in m or "gpt-6" in m:
+        return "claude-opus-5"
+    return os.getenv("AADS_CODEX_BYPASS_MODEL", "claude-sonnet-5")
+
+
+_CODEX_QUOTA_CACHE: Dict[str, Any] = {"ts": 0.0, "blocked": False, "detail": ""}
+_CODEX_QUOTA_TTL_SEC = int(os.getenv("AADS_CODEX_QUOTA_TTL_SEC", "60"))
+
+
+async def _codex_quota_exhausted() -> Tuple[bool, str]:
+    """Codex 주간 한도가 소진되었는가. (차단여부, 사유) 반환."""
+    now = _time_mod.time()
+    if now - float(_CODEX_QUOTA_CACHE.get("ts") or 0) < _CODEX_QUOTA_TTL_SEC:
+        return bool(_CODEX_QUOTA_CACHE.get("blocked")), str(_CODEX_QUOTA_CACHE.get("detail") or "")
+
+    blocked, detail = False, ""
+    try:
+        headers = {}
+        secret = _load_relay_shared_secret()
+        if secret:
+            headers["X-Claude-Relay-Secret"] = secret
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
+            resp = await client.get("{}/codex-usage".format(_CLAUDE_RELAY_URL), headers=headers)
+        if resp.status_code == 200:
+            payload = resp.json()
+            limits = payload.get("limits") or []
+            # 한도가 여럿이면(codex, codex_bengalfox 등) 하나라도 여유가 있으면 통과시킨다.
+            usable = False
+            worst = []
+            for lim in limits:
+                pct = ((lim.get("primary") or {}).get("used_percent"))
+                if pct is None:
+                    usable = True  # 알 수 없으면 막지 않는다
+                    continue
+                if float(pct) < 100.0:
+                    usable = True
+                else:
+                    worst.append("%s=100%%" % (lim.get("limit_id") or "?"))
+            if limits and not usable:
+                blocked, detail = True, ", ".join(worst)
+    except Exception as e:
+        logger.debug("codex quota lookup failed: %s", str(e)[:120])
+
+    _CODEX_QUOTA_CACHE.update({"ts": now, "blocked": blocked, "detail": detail})
+    return blocked, detail
 
 
 async def _get_codex_cli_fallback_model_from_db() -> str:
@@ -1924,9 +1993,22 @@ async def call_stream(
                 yield event
             return
         elif backend == "codex_cli":
+            _cx_blocked, _cx_detail = await _codex_quota_exhausted()
+            if _cx_blocked:
+                logger.warning("codex_preflight_skip: 주간 한도 소진(%s) — Claude 경로로 우회", _cx_detail)
+                async for event in _stream_cli_relay(
+                    _codex_to_claude_equivalent(model), system_prompt, messages,
+                    tools=tools, session_id=session_id,
+                ):
+                    yield event
+                return
             _codex_had_error = False
             _codex_error_content = ""
             _codex_is_tool_error = False
+            # Codex 는 한도 초과 시 에러가 아니라 "200 + 0토큰"으로 끝난다. 내용이 전혀
+            # 없으면 성공으로 보지 말고 실패로 승격해, 아래 폴백 체계를 그대로 태운다.
+            # (기존에는 output_validator 가 사후에 잡을 때까지 재시도를 낭비했다.)
+            _codex_emitted_chars = 0
             async for event in _stream_codex_relay(
                 model, system_prompt, messages, tools=tools, session_id=session_id,
             ):
@@ -1939,7 +2021,18 @@ async def call_stream(
                         "tool_error", "tool error", "connection reset",
                     ))
                     break
+                if event.get("type") in ("delta", "text", "content"):
+                    _codex_emitted_chars += len(str(event.get("content") or ""))
+                elif event.get("type") in ("tool_use", "tool_result"):
+                    _codex_emitted_chars += 1  # 도구를 썼다면 빈 응답이 아니다
                 yield event
+            if not _codex_had_error and _codex_emitted_chars == 0:
+                _codex_had_error = True
+                _codex_error_content = (
+                    "codex_empty_response: 모델이 내용을 반환하지 않았습니다 "
+                    "(주간 한도 소진 시 나타나는 증상)"
+                )
+                logger.warning("codex_empty_response model=%s — 폴백으로 전환", model)
             if not _codex_had_error:
                 return
             if _codex_is_tool_error:
@@ -4193,12 +4286,45 @@ def _is_internal_cli_command_tool(tool_name: Any) -> bool:
     }
 
 
+# 한도/인증 실패는 CLI가 result(is_error) 로만 주지 않고 assistant 텍스트로도 내보낸다.
+# 그대로 두면 delta 로 누적되어 "You've hit your weekly limit…" 이 응답 본문에 남고,
+# 폴백이 성공하면 그 앞에 붙은 채 저장된다. 최근 7일 11건, 평균 2,259자, 최대 6,249자가
+# 이렇게 오염되었다(2026-09-12 세션 2c929b8e). 본문에 싣지 않고 진단으로만 흘린다.
+_PROVIDER_FAILURE_TEXTS = (
+    "you've hit your weekly limit",
+    "you've hit your usage limit",
+    "hit your 5-hour limit",
+    "oauth access token has been revoked",
+    "oauth access token has expired",
+    "failed to authenticate",
+    "your session has ended. please log in again",
+)
+
+
+def _is_provider_failure_text(text: Any) -> bool:
+    t = str(text or "").strip().lower()
+    if not t or len(t) > 400:
+        return False
+    return any(marker in t for marker in _PROVIDER_FAILURE_TEXTS)
+
+
 def _map_cli_event(event: dict, session_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
     """Claude CLI NDJSON 이벤트 → AADS SSE 이벤트 리스트로 변환.
 
     Returns None if event should be skipped, otherwise a list of AADS events.
     """
     evt_type = event.get("type", "")
+
+    # 공급자 실패 문구가 assistant 텍스트로 온 경우 본문에서 제외한다.
+    if evt_type == "assistant":
+        _blocks = (event.get("message") or {}).get("content") or []
+        if isinstance(_blocks, list) and _blocks and all(
+            isinstance(b, dict) and b.get("type") == "text" and _is_provider_failure_text(b.get("text"))
+            for b in _blocks
+        ):
+            logger.warning("provider_failure_text_suppressed: %s",
+                           str(_blocks[0].get("text"))[:80])
+            return None
 
     # init 이벤트 — 스킵
     if evt_type == "system" and event.get("subtype") == "init":
