@@ -26,16 +26,16 @@ WITH upserted AS (
         'status',
         'Claude account 1/2 OAuth auto-refresh path recovery',
         'Slot credentials take precedence over fixed env access tokens; refresh is serialized and persisted atomically.',
-        E'## Implemented\n\n'
-        E'- Claude CLI Docker and host paths use per-slot accessToken+refreshToken credentials.\n'
-        E'- A per-account file lock prevents refresh-token reuse races; only validated credential JSON is atomically recovered.\n'
-        E'- Fixed env access tokens are used only when the corresponding credential file is absent.\n'
-        E'- A 401/revoked/expired response gets one same-slot refresh retry, then existing account and cross-provider fallback continues.\n'
-        E'- AUTH-001 uses expiry, refresh-token presence, and recent redacted CLI validation state.\n'
-        E'- Successful streams retain done; exhausted providers emit an explicit terminal interrupted event.\n\n'
-        E'## Verification scope\n\n'
-        E'Unit tests cover slot precedence, Docker/host refresh persistence, env fallback, concurrent locking, 401 retry, redaction, and revoked/expired AUTH-001 classification.\n\n'
-        E'## Runtime state\n\n'
+        E'## Implemented\n\n' ||
+        E'- Claude CLI Docker and host paths use per-slot accessToken+refreshToken credentials.\n' ||
+        E'- A per-account file lock prevents refresh-token reuse races; only validated credential JSON is atomically recovered.\n' ||
+        E'- Fixed env access tokens are used only when the corresponding credential file is absent.\n' ||
+        E'- A 401/revoked/expired response gets one same-slot refresh retry, then existing account and cross-provider fallback continues.\n' ||
+        E'- AUTH-001 uses expiry, refresh-token presence, and recent redacted CLI validation state.\n' ||
+        E'- Successful streams retain done; exhausted providers emit an explicit terminal interrupted event.\n\n' ||
+        E'## Verification scope\n\n' ||
+        E'Unit tests cover slot precedence, Docker/host refresh persistence, env fallback, concurrent locking, 401 retry, redaction, and revoked/expired AUTH-001 classification.\n\n' ||
+        E'## Runtime state\n\n' ||
         E'Code-only stage. No service restart or live OAuth smoke was performed. Approved runtime smoke must verify both slots with masked expiry/mtime metadata and must stop for re-login if a refresh token is revoked or reused.',
         'active',
         'P0',
