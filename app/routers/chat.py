@@ -438,7 +438,7 @@ async def _schedule_recovery_auto_resume(
     assistant_message_id: Optional[UUID],
     partial_content: str,
     *,
-    preserve_retry_count: bool = False,
+    preserve_retry_count: bool = False,  # 정보용: 예산 청구는 모델 호출 시점에서만 한다
     retry_limit: int = 0,
 ) -> bool:
     """Turn a recovered stale chat execution back into a retrying stream.
@@ -530,14 +530,17 @@ async def _schedule_recovery_auto_resume(
                 ),
             )
 
+        # 재개 예산(retry_count)은 '실제 모델 호출' 하나만 청구한다.
+        # 예전에는 여기서도 +1 하고 _claim_resume_model_attempt 에서 또 +1 해서
+        # 재개 1회가 예산 2칸을 먹었다. 상한이 5이므로 실질 재개 가능 횟수는
+        # 2.5회였고, 배포 컷오버처럼 연속으로 끊기면 45초 만에 한도가 소진돼
+        # "완료 전 중단"으로 영구 종료됐다(2026-09-12 8bf0405a 실측).
+        # 청구는 _claim_resume_model_attempt 한 곳에서만 한다. 여기서는
+        # status='interrupted' CAS 와 retry_count < limit 가드로만 막는다.
         claimed = await conn.fetchval(
             """
             UPDATE chat_turn_executions
             SET status = 'retrying',
-                retry_count = CASE
-                    WHEN $4::boolean THEN retry_count
-                    ELSE retry_count + 1
-                END,
                 assistant_message_id = $2,
                 completed_at = NULL,
                 error_message = 'recovery_auto_retry_scheduled',
@@ -545,13 +548,12 @@ async def _schedule_recovery_auto_resume(
             WHERE id = $1
               AND session_id = $3
               AND status = 'interrupted'
-              AND retry_count < $5
+              AND retry_count < $4
             RETURNING id
             """,
             execution_id,
             placeholder_id,
             session_id,
-            preserve_retry_count,
             retry_limit,
         )
         if not claimed:
@@ -600,7 +602,7 @@ async def _schedule_recovery_auto_resume(
 
         task.add_done_callback(_on_recovery_resume_done)
         logger.info(
-            "recovery_auto_resume_scheduled session=%s execution=%s partial_len=%s preserve_retry_count=%s",
+            "recovery_auto_resume_scheduled session=%s execution=%s partial_len=%s hard_stale=%s",
             str(session_id)[:8],
             str(execution_id)[:8],
             len(clean_partial),

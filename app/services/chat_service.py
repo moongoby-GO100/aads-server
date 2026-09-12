@@ -1052,6 +1052,64 @@ async def _checkpoint_resume_progress(
         )
 
 
+# 펜싱 환불 상한. 소유권 경합은 배포 1회당 몇 번이면 끝나므로 넉넉하되 유한하게.
+_RESUME_FENCE_REFUND_MAX = max(0, int(os.getenv("AADS_RESUME_FENCE_REFUND_MAX", "8")))
+
+
+async def _refund_fenced_resume_attempt(
+    conn,
+    execution_id: uuid.UUID,
+) -> bool:
+    """산출물 없이 펜싱된 시도의 예산을 되돌린다.
+
+    펜싱은 '이 컨테이너가 더는 이 실행의 주인이 아니다'라는 소유권 이동이지
+    모델이 실패한 것이 아니다. 그런데 예산은 모델 호출 직전에 이미 청구돼 있어,
+    배포 컷오버로 4초 만에 밀려난 시도까지 소진으로 계산됐다. 그 결과
+    2026-09-12 세션 8bf0405a 는 45초 만에 상한 5회를 다 쓰고 "완료 전 중단"으로
+    영구 종료됐다. _claim_resume_model_attempt 의 docstring 이 약속한
+    "fencing 과 exhaustion 의 분리"를 실제로 성립시킨다.
+
+    무한 핑퐁을 막기 위해 환불 횟수는 interruption_diagnostics.fence_refunds 로
+    누적해 _RESUME_FENCE_REFUND_MAX 까지만 허용한다.
+    """
+    if _RESUME_FENCE_REFUND_MAX <= 0:
+        return False
+    try:
+        refunded = await conn.fetchval(
+            """
+            UPDATE chat_turn_executions
+            SET retry_count = GREATEST(retry_count - 1, 0),
+                interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb)
+                    || jsonb_build_object(
+                        'fence_refunds',
+                        COALESCE((interruption_diagnostics->>'fence_refunds')::int, 0) + 1
+                    ),
+                updated_at = NOW()
+            WHERE id = $1
+              AND retry_count > 0
+              AND COALESCE((interruption_diagnostics->>'fence_refunds')::int, 0) < $2
+            RETURNING retry_count
+            """,
+            execution_id,
+            _RESUME_FENCE_REFUND_MAX,
+        )
+    except Exception as refund_err:
+        logger.info(
+            "resume_fence_refund_skipped execution=%s reason=%s",
+            str(execution_id)[:8],
+            str(refund_err)[:120],
+        )
+        return False
+    if refunded is None:
+        return False
+    logger.info(
+        "resume_fence_refunded execution=%s retry_count=%s",
+        str(execution_id)[:8],
+        refunded,
+    )
+    return True
+
+
 async def _claim_resume_model_attempt(
     conn,
     execution_id: uuid.UUID,
@@ -7437,6 +7495,7 @@ async def _resume_single_stream(
                 _resume_model_chain = _cross_provider_chat_fallback_chain(_resume_model)
                 _resume_model_used = _resume_model_chain[0] if _resume_model_chain else _resume_model
 
+                _resume_attempt_charge = {"charged": False, "baseline_len": 0}
                 for attempt in range(len(retry_delays) + 1):
                     _token_idx = 0
                     full_response = partial_content
@@ -7458,6 +7517,9 @@ async def _resume_single_stream(
                                     _execution_uuid,
                                     owner_epoch,
                                 )
+                            # 이 시도가 산출물을 냈는지 펜싱 핸들러에서 판정하기 위한 기준선
+                            _resume_attempt_charge["charged"] = True
+                            _resume_attempt_charge["baseline_len"] = len(full_response or "")
                         # P0-FIX: 새 모델 attempt 시작 → idle 판정 baseline 리셋
                         _pump_baseline["ts"] = _bg_time.monotonic()
                         logger.info(
@@ -7636,6 +7698,27 @@ async def _resume_single_stream(
             owner_epoch,
             str(fenced)[:200],
         )
+        # 아무것도 만들지 못하고 소유권만 빼앗긴 시도는 예산에서 되돌린다.
+        try:
+            _fence_produced = bool(tools_called) or len(full_response or "") > int(
+                _resume_attempt_charge.get("baseline_len") or 0
+            )
+        except NameError:
+            # 첫 모델 호출에 닿기도 전에 펜싱된 경우 — 청구 자체가 없다
+            _fence_produced = True
+        if _execution_uuid and not _fence_produced:
+            try:
+                if _resume_attempt_charge.get("charged"):
+                    async with get_pool().acquire() as _refund_conn:
+                        await _refund_fenced_resume_attempt(_refund_conn, _execution_uuid)
+            except NameError:
+                pass
+            except Exception as _refund_err:
+                logger.info(
+                    "resume_fence_refund_failed session=%s error=%s",
+                    session_id[:8],
+                    str(_refund_err)[:120],
+                )
         state = _streaming_state.get(session_id)
         if state and str(state.get("execution_id") or "") == str(execution_id or ""):
             _streaming_state.pop(session_id, None)
