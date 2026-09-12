@@ -194,6 +194,27 @@ async def update_agenda(agenda_id: int, req: AgendaUpdateRequest, context: dict 
     return result
 
 
+@router.delete("/{agenda_id}", operation_id="delete_agenda", summary="아젠다 삭제")
+async def delete_agenda(agenda_id: int, context: dict = Depends(require_tenant_role(TenantRole.ADMIN))):
+    """아이디어 메모 삭제.
+
+    하드 DELETE 가 아니라 deleted_at 을 남기는 소프트 삭제다. 잘못 지웠을 때
+    DB 에서 되돌릴 수 있다. 조회·수정에서는 제외된다.
+
+    테넌트 범위를 먼저 확인한다. 확인 없이 id 만으로 지우면 다른 테넌트의
+    메모를 지울 수 있다.
+    """
+    svc = get_agenda_service()
+    tenant_id, include_global = _agenda_scope(context)
+    scoped = await svc.get_agenda(agenda_id, tenant_id=tenant_id, include_global=include_global)
+    if scoped is None:
+        raise HTTPException(status_code=404, detail=f"아젠다 {agenda_id}를 찾을 수 없습니다.")
+    deleted = await svc.delete_agenda(agenda_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"아젠다 {agenda_id}를 찾을 수 없습니다.")
+    return {"status": "deleted", "agenda_id": agenda_id}
+
+
 @router.post("/{agenda_id}/decide", operation_id="decide_agenda", summary="CEO 결정 등록")
 async def decide_agenda(agenda_id: int, req: AgendaDecideRequest, context: dict = Depends(require_tenant_role(TenantRole.ADMIN))):
     """CEO 결정 기록 — status='결정', decision 저장. CEO만 가능."""

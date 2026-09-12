@@ -112,7 +112,8 @@ class AgendaService:
             limit: 페이지 크기 (기본 20)
             offset: 시작 위치 (기본 0)
         """
-        conditions = []
+        # 삭제된 메모는 목록에 나오지 않는다. 행은 남겨 되돌릴 수 있게 한다.
+        conditions = ["deleted_at IS NULL"]
         params: List[Any] = []
 
         if project is not None:
@@ -196,9 +197,26 @@ class AgendaService:
                 )
             else:
                 row = await conn.fetchrow(
-                    "SELECT * FROM ceo_agenda WHERE id = $1", agenda_id
+                    "SELECT * FROM ceo_agenda WHERE id = $1 AND deleted_at IS NULL", agenda_id
                 )
         return _row_to_dict(row) if row else None
+
+    async def delete_agenda(self, agenda_id: int) -> bool:
+        """아이디어 메모 삭제.
+
+        하드 DELETE 하지 않는다. status 의 '폐기' 는 "논의 끝에 버린 안건"이라는
+        업무 상태이므로, 사용자가 목록에서 지우는 행위와 구분해야 한다. 둘을
+        뒤섞으면 둘 다 의미를 잃는다. 잘못 지웠을 때 되돌릴 수 있도록 시각만
+        남기고 조회에서 제외한다.
+        """
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "UPDATE ceo_agenda SET deleted_at = NOW(), updated_at = NOW() "
+                "WHERE id = $1 AND deleted_at IS NULL RETURNING id",
+                agenda_id,
+            )
+        return row is not None
 
     async def update_agenda(
         self,
@@ -218,7 +236,7 @@ class AgendaService:
         pool = get_pool()
         async with pool.acquire() as conn:
             current = await conn.fetchrow(
-                "SELECT * FROM ceo_agenda WHERE id = $1", agenda_id
+                "SELECT * FROM ceo_agenda WHERE id = $1 AND deleted_at IS NULL", agenda_id
             )
         if not current:
             return None
