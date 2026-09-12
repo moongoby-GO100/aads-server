@@ -241,6 +241,23 @@ def test_pipeline_runner_retries_review_api_before_declaring_unavailable():
         assert retry_loop < fail_close
 
 
+def test_pipeline_runner_watchdog_uses_phase_budget_and_stops_terminal_review():
+    """긴 모델 실행 뒤 리뷰가 전체 상한에 잘리거나 terminal job을 재시도하지 않는다."""
+    for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
+        script = _read_script(script_name)
+
+        assert 'MAX_JOB_RUNTIME="${MAX_JOB_RUNTIME:-$MAX_RUNTIME}"' in script
+        assert 'AADS_REVIEW_MAX_RUNTIME="${AADS_REVIEW_MAX_RUNTIME:-$((AADS_REVIEW_MAX_TIME * AADS_REVIEW_MAX_ATTEMPTS + 120))}"' in script
+        assert "phase = 'ai_review'" in script
+        assert "phase IS DISTINCT FROM 'ai_review'" in script
+        assert "SET phase='ai_review', runner_pid=${BASHPID}, updated_at=NOW()" in script
+        assert 'if [[ "$(get_job_status "$job_id")" != "running" ]]; then' in script
+        assert "AI_REVIEW_ABORTED_TERMINAL" in script
+        assert "POST_PROCESS_ABORTED_TERMINAL" in script
+        assert 'pkill -TERM -P "$t_pid"' in script
+        assert '_release_work_lock "$t_project" "$t_job" "$t_scope"' in script
+
+
 def test_pipeline_runner_separates_review_infra_failure_from_code_rejection():
     """리뷰 인프라 장애는 코드 반려와 구분하고 산출물 worktree를 보존한다."""
     for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
