@@ -220,7 +220,7 @@ class ChatStreamSnapshotOut(BaseModel):
     segment_id: Optional[uuid.UUID] = None
     message_id: Optional[uuid.UUID] = None
     content_version: Optional[str] = Field(None, pattern=r"^\d+$")
-    content_completeness: Literal["full"] = "full"
+    content_completeness: Literal["full", "partial", "preview"] = "full"
     content: str = ""
     intent: Optional[str] = None
     tools_called: List[Any] = Field(default_factory=list)

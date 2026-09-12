@@ -112,15 +112,17 @@ def resolve_resume_cursor(
     values fail closed instead of skipping events.
     """
     applied = validate_event_cursor(last_applied_event_id)
-    legacy = validate_event_cursor(legacy_last_event_id or header_last_event_id)
-    if contract_version == CHAT_CONTRACT_V2 and applied and legacy and applied != legacy:
+    legacy_query = validate_event_cursor(legacy_last_event_id)
+    legacy_header = validate_event_cursor(header_last_event_id)
+    supplied = {value for value in (applied, legacy_query, legacy_header) if value is not None}
+    if contract_version == CHAT_CONTRACT_V2 and len(supplied) > 1:
         raise ChatProtocolError(
             "conflicting_chat_event_cursors",
-            "last_applied_event_id and legacy Last-Event-ID do not match",
+            "last_applied_event_id, last_event_id and Last-Event-ID must agree",
         )
     if contract_version == CHAT_CONTRACT_V2:
-        return applied or legacy or "0"
-    return legacy or applied or "0"
+        return applied or legacy_query or legacy_header or "0"
+    return legacy_query or legacy_header or applied or "0"
 
 
 def compare_redis_event_ids(left: str, right: str) -> int:
@@ -148,6 +150,13 @@ def chat_protocol_capabilities() -> dict[str, Any]:
         "default_contract_version": DEFAULT_CHAT_CONTRACT_VERSION,
         "supported_contract_versions": list(SUPPORTED_CHAT_CONTRACT_VERSIONS),
         "event_schema_version": CHAT_EVENT_SCHEMA_VERSION,
+        "production_ready": False,
+        "activation_requires": [
+            "chat.protocol_v2 feature flag",
+            "atomic_snapshot_checkpoint",
+            "stable_generation_identity",
+            "cross_version_browser_contract_tests",
+        ],
         "capabilities": [
             "chat.event_envelope.v2",
             "chat.snapshot_coverage.v2",
@@ -160,12 +169,18 @@ def chat_protocol_capabilities() -> dict[str, Any]:
             "schema_version": CHAT_EVENT_SCHEMA_VERSION,
             "required_fields": [
                 "schema_version",
-                "event_id",
-                "session_id",
-                "execution_id",
                 "type",
                 "occurred_at",
                 "payload",
+            ],
+            "nullable_scope_fields": [
+                "event_id",
+                "session_id",
+                "execution_id",
+                "owner_epoch",
+                "generation_id",
+                "segment_id",
+                "sequence",
             ],
             "unknown_event_policy": "ignore_additive",
             "critical_invalid_policy": "snapshot_required",
@@ -183,6 +198,8 @@ def chat_protocol_capabilities() -> dict[str, Any]:
             "coverage_field": "covers_through_event_id",
             "high_watermark_field": "server_high_watermark",
             "retention_field": "retention_trimmed",
+            "coverage_atomic": False,
+            "generation_identity": "unavailable",
         },
         "legacy_compatibility": {
             "default_contract_version": CHAT_CONTRACT_V1,
@@ -229,13 +246,13 @@ class SSEFrameDecoder:
         return frames
 
     def finish(self) -> list[ParsedSSEFrame]:
-        frames: list[ParsedSSEFrame] = []
+        """Discard an event that was not terminated by a blank line at EOF."""
         self._saw_cr = False
         if self._line:
-            frames.extend(self._consume_line())
+            self._consume_line()
         if self._has_fields or self._data_lines:
-            frames.append(self._dispatch())
-        return frames
+            self._dispatch()
+        return []
 
     def _consume_line(self) -> list[ParsedSSEFrame]:
         line, self._line = self._line, ""
@@ -320,7 +337,12 @@ def build_event_envelope(
     occurred_at: Any = None,
 ) -> dict[str, Any]:
     """Adapt one legacy event to the v2 envelope without inventing terminal state."""
-    if event.get("schema_version") == CHAT_EVENT_SCHEMA_VERSION:
+    if "schema_version" in event:
+        if event.get("schema_version") != CHAT_EVENT_SCHEMA_VERSION:
+            raise ChatProtocolError(
+                "unsupported_chat_event_schema_version",
+                f"chat event schema version must be {CHAT_EVENT_SCHEMA_VERSION}",
+            )
         payload = event.get("payload")
         if not isinstance(event.get("type"), str) or not isinstance(payload, dict):
             raise ChatProtocolError(
@@ -333,11 +355,26 @@ def build_event_envelope(
                 "chat_event_id_mismatch",
                 "SSE id and envelope event_id do not match",
             )
-        return dict(event)
+        candidate = dict(event)
+        if event_id and not existing_event_id:
+            candidate["event_id"] = str(event_id)
+        try:
+            from pydantic import ValidationError
+
+            from app.models.chat import ChatEventEnvelopeV2
+
+            ChatEventEnvelopeV2.model_validate(candidate)
+        except (TypeError, ValueError, ValidationError) as exc:
+            raise ChatProtocolError(
+                "invalid_chat_event_envelope",
+                "v2 event envelope failed runtime validation",
+            ) from exc
+        return candidate
 
     event_type, payload = _legacy_payload(event)
     resolved_execution_id = execution_id or event.get("execution_id")
     resolved_session_id = session_id or event.get("session_id")
+    resolved_generation_id = generation_id or event.get("generation_id")
     resolved_segment_id = segment_id or event.get("segment_id")
     message = event.get("message")
     if not resolved_segment_id and isinstance(message, dict):
@@ -348,9 +385,7 @@ def build_event_envelope(
         "session_id": str(resolved_session_id) if resolved_session_id else None,
         "execution_id": str(resolved_execution_id) if resolved_execution_id else None,
         "owner_epoch": str(owner_epoch) if owner_epoch is not None else None,
-        "generation_id": str(generation_id or resolved_execution_id)
-        if generation_id or resolved_execution_id
-        else None,
+        "generation_id": str(resolved_generation_id) if resolved_generation_id else None,
         "segment_id": str(resolved_segment_id) if resolved_segment_id else None,
         "sequence": str(sequence) if sequence is not None else None,
         "type": event_type,
@@ -610,7 +645,7 @@ async def get_stream_snapshot(
     coverage_mismatch = bool(
         covers and high_watermark and compare_redis_event_ids(covers, high_watermark) > 0
     )
-    if retention_trimmed is True and first_available:
+    if first_available:
         coverage_cursor = covers or "0"
         if compare_redis_event_ids(coverage_cursor, first_available) < 0:
             coverage_mismatch = True
@@ -643,11 +678,16 @@ async def get_stream_snapshot(
         "session_id": str(session_id),
         "session_revision": f"{message_count}:{session_version}",
         "execution_id": str(resolved_execution_id) if resolved_execution_id else None,
-        "generation_id": str(resolved_execution_id) if resolved_execution_id else None,
+        "generation_id": None,
         "segment_id": str(message_id) if message_id else None,
         "message_id": str(message_id) if message_id else None,
         "content_version": content_version,
-        "content_completeness": "full",
+        "content_completeness": (
+            "partial"
+            if values.get("intent")
+            in {"streaming_placeholder", "interrupted_partial", "_archived_partial"}
+            else "full"
+        ),
         "content": str(values.get("content") or ""),
         "intent": values.get("intent"),
         "tools_called": _normalize_json_list(values.get("tools_called")),

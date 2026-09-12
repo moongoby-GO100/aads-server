@@ -58,6 +58,9 @@ def test_capability_and_cursor_negotiation_preserve_v1_default():
     assert chat_protocol.negotiate_contract_version(None) == 1
     assert chat_protocol.negotiate_contract_version("2") == 2
     assert capabilities["supported_contract_versions"] == [1, 2]
+    assert capabilities["production_ready"] is False
+    assert capabilities["snapshot"]["coverage_atomic"] is False
+    assert capabilities["snapshot"]["generation_identity"] == "unavailable"
     assert capabilities["resume_cursor"]["parameter"] == "last_applied_event_id"
     assert capabilities["legacy_compatibility"]["unwrapped_sse_events"] is True
     assert (
@@ -88,6 +91,23 @@ def test_capability_and_cursor_negotiation_preserve_v1_default():
         )
     assert conflict.value.code == "conflicting_chat_event_cursors"
 
+    with pytest.raises(chat_protocol.ChatProtocolError) as legacy_conflict:
+        chat_protocol.resolve_resume_cursor(
+            contract_version=2,
+            last_applied_event_id=None,
+            legacy_last_event_id="10-1",
+            header_last_event_id="10-2",
+        )
+    assert legacy_conflict.value.code == "conflicting_chat_event_cursors"
+
+
+def test_unterminated_sse_event_is_discarded_at_eof():
+    """T05/T06: EOF does not dispatch a frame without the required blank line."""
+    decoder = chat_protocol.SSEFrameDecoder()
+
+    assert decoder.feed('id:10-1\ndata:{"type":"delta","content":"partial"}') == []
+    assert decoder.finish() == []
+
 
 @pytest.mark.asyncio
 async def test_common_v2_adapter_handles_chunking_crlf_multidata_and_unknown_event():
@@ -106,7 +126,7 @@ async def test_common_v2_adapter_handles_chunking_crlf_multidata_and_unknown_eve
     assert started["schema_version"] == 2
     assert started["type"] == "execution.phase"
     assert started["execution_id"] == EXECUTION_ID
-    assert started["generation_id"] == EXECUTION_ID
+    assert started["generation_id"] is None
     assert additive["type"] == "legacy.future_additive"
     assert additive["payload"] == {"value": 7, "legacy_type": "future_additive"}
     ChatEventEnvelopeV2.model_validate(started)
@@ -398,8 +418,9 @@ async def test_snapshot_pairs_db_coverage_with_separate_redis_high_watermark():
     validated = ChatStreamSnapshotOut.model_validate(snapshot)
     assert validated.message_id == UUID(MESSAGE_ID)
     assert validated.segment_id == UUID(MESSAGE_ID)
-    assert validated.generation_id == UUID(EXECUTION_ID)
+    assert validated.generation_id is None
     assert validated.owner_epoch == "12"
+    assert validated.content_completeness == "partial"
     assert validated.covers_through_event_id == "10-2"
     assert validated.server_high_watermark == "10-5"
     assert validated.retention_trimmed is False
@@ -426,3 +447,21 @@ def test_envelope_schema_rejects_critical_version_mismatch():
 
     with pytest.raises(ValidationError):
         ChatEventEnvelopeV2.model_validate({**envelope, "schema_version": 3})
+
+    with pytest.raises(chat_protocol.ChatProtocolError) as version_error:
+        chat_protocol.build_event_envelope(
+            {**envelope, "schema_version": 3},
+            event_id="10-1",
+            session_id=SESSION_ID,
+            execution_id=EXECUTION_ID,
+        )
+    assert version_error.value.code == "unsupported_chat_event_schema_version"
+
+    with pytest.raises(chat_protocol.ChatProtocolError) as required_error:
+        chat_protocol.build_event_envelope(
+            {"schema_version": 2, "type": "message.delta", "payload": {}},
+            event_id="10-1",
+            session_id=SESSION_ID,
+            execution_id=EXECUTION_ID,
+        )
+    assert required_error.value.code == "invalid_chat_event_envelope"
