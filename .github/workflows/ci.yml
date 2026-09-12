@@ -14,10 +14,10 @@ jobs:
 
     env:
       ANTHROPIC_AUTH_TOKEN: dummy_oauth_token_for_ci
-      ANTHROPIC_API_KEY: dummy_anthropic_key_for_ci
       OPENAI_API_KEY: dummy_openai_key_for_ci
       GOOGLE_API_KEY: dummy_google_key_for_ci
       E2B_API_KEY: PLACEHOLDER_E2B_API_KEY
+      JWT_SECRET_KEY: synthetic_ci_only_secret_at_least_32_chars
       SUPABASE_DIRECT_URL: postgresql://postgres:dummy@localhost:5432/aads
       UPSTASH_REDIS_URL: ""
 
@@ -39,6 +39,16 @@ jobs:
       - name: Tool consistency check (no --fix)
         run: |
           python scripts/check_tool_consistency.py
+        continue-on-error: false
+
+      - name: Chat modernization WP00 regression gate
+        run: |
+          pytest \
+            tests/unit/test_chat_modernization_wp00.py \
+            tests/unit/test_chat_retry_partial_lifecycle.py \
+            tests/unit/test_chat_resume_owner_fence_v2.py \
+            tests/unit/test_chat_status_retry_projection.py \
+            -q --tb=short --timeout=60
         continue-on-error: false
 
       - name: Run unit tests
