@@ -462,20 +462,24 @@ async def _codex_quota_exhausted() -> Tuple[bool, str]:
         if resp.status_code == 200:
             payload = resp.json()
             limits = payload.get("limits") or []
-            # 한도가 여럿이면(codex, codex_bengalfox 등) 하나라도 여유가 있으면 통과시킨다.
-            usable = False
-            worst = []
+            # 주 한도(limit_id="codex")만 본다. codex_bengalfox 가 0% 여도 주 한도가
+            # 차면 CLI 가 통째로 거부한다("You've hit your usage limit"). 2026-09-12 에
+            # bengalfox=0%, codex=100% 상태에서 직접 호출해 확인했다 — 별도 집계일 뿐
+            # 대체 경로가 아니므로, 여유가 있다고 보아 통과시키면 안 된다.
+            primary_names = ("codex", "codex_cli", "primary")
+            chosen = None
             for lim in limits:
-                pct = ((lim.get("primary") or {}).get("used_percent"))
-                if pct is None:
-                    usable = True  # 알 수 없으면 막지 않는다
-                    continue
-                if float(pct) < 100.0:
-                    usable = True
-                else:
-                    worst.append("%s=100%%" % (lim.get("limit_id") or "?"))
-            if limits and not usable:
-                blocked, detail = True, ", ".join(worst)
+                if str(lim.get("limit_id") or "").lower() in primary_names:
+                    chosen = lim
+                    break
+            if chosen is None and limits:
+                chosen = limits[0]
+            if chosen is not None:
+                pct = ((chosen.get("primary") or {}).get("used_percent"))
+                # 값이 없으면 막지 않는다(조회 실패로 서비스를 멈추지 않는다).
+                if pct is not None and float(pct) >= 100.0:
+                    blocked = True
+                    detail = "%s=%s%%" % (chosen.get("limit_id") or "codex", pct)
     except Exception as e:
         logger.debug("codex quota lookup failed: %s", str(e)[:120])
 
