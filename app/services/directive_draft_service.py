@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -18,6 +19,45 @@ logger = logging.getLogger(__name__)
 SUPPORTED_PROJECTS = {"AADS", "KIS", "GO100", "SF", "NTV2", "NAS"}
 ALLOWED_EVENTS = {"inserted", "approved", "rejected", "sent", "archived"}
 GENERATION_TIMEOUT_SECONDS = 45
+
+_directive_model_cache: dict = {}
+_directive_model_cache_ts: float = 0.0
+_DIRECTIVE_MODEL_CACHE_TTL = 60
+
+
+async def _get_directive_model_config(role: str = "generation") -> dict:
+    """DB에서 지시서 생성 모델 설정 조회 (60초 캐시)."""
+    global _directive_model_cache, _directive_model_cache_ts
+    now = time.monotonic()
+    if role in _directive_model_cache and (now - _directive_model_cache_ts) < _DIRECTIVE_MODEL_CACHE_TTL:
+        return _directive_model_cache[role]
+    try:
+        async with get_pool().acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT models, timeout_seconds, max_tokens FROM directive_model_config WHERE role = $1",
+                role,
+            )
+        if row:
+            raw = row["models"]
+            models = json.loads(raw) if isinstance(raw, str) else (list(raw) if raw else [])
+            config = {"models": models, "timeout_seconds": row["timeout_seconds"] or 60, "max_tokens": row["max_tokens"] or 2000}
+        else:
+            config = {"models": ["claude-sonnet-5", "codex:gpt-5.6-tela"], "timeout_seconds": 60, "max_tokens": 2000}
+        _directive_model_cache[role] = config
+        _directive_model_cache_ts = now
+        return config
+    except Exception:
+        logger.warning("directive_model_config_read_failed role=%s", role)
+        return {"models": ["claude-sonnet-5", "codex:gpt-5.6-tela"], "timeout_seconds": 60, "max_tokens": 2000}
+
+
+def invalidate_directive_model_cache():
+    """설정 변경 시 캐시 무효화."""
+    global _directive_model_cache, _directive_model_cache_ts
+    _directive_model_cache = {}
+    _directive_model_cache_ts = 0.0
+
+
 _DIRECTIVE_RE = re.compile(r">>>DIRECTIVE_START\s*.*?\s*>>>DIRECTIVE_END", re.DOTALL)
 _FIELD_RE = re.compile(r"^(TASK_ID|TITLE|PRIORITY|SIZE|MODEL):\s*(.+)$", re.MULTILINE)
 _REQUIRED_DESCRIPTION_HEADINGS = (
@@ -279,31 +319,42 @@ async def generate_directive_content(
     *,
     tenant_id: str | None = None,
     user_id: str | None = None,
-) -> tuple[str, str]:
-    """Generate a validated directive or fail closed to a deterministic draft."""
-    try:
-        raw = await asyncio.wait_for(
-            call_llm_with_fallback(
-                prompt=_build_generation_prompt(source, risk_level),
-                model="claude-haiku-4-5-20251001",
-                max_tokens=1800,
-                system="당신은 사실 기반 작업계약을 만드는 OHVIS 지시 코파일럿이다.",
-                tenant_id=tenant_id,
-                user_id=user_id,
-            ),
-            timeout=GENERATION_TIMEOUT_SECONDS,
-        )
-    except Exception as exc:
-        logger.warning(
-            "directive_draft_generation_fallback session=%s error=%s",
-            str(source.session_id)[:8],
-            type(exc).__name__,
-        )
-        raw = None
+) -> tuple[str, str, str | None]:
+    """Generate a validated directive or fail closed to a deterministic draft.
+    Returns (content, generation_mode, model_used)."""
+    config = await _get_directive_model_config()
+    models = config["models"]
+    timeout = config["timeout_seconds"]
+    max_tok = config["max_tokens"]
+    model_used = None
+    raw = None
+    for model_candidate in models:
+        try:
+            raw = await asyncio.wait_for(
+                call_llm_with_fallback(
+                    prompt=_build_generation_prompt(source, risk_level),
+                    model=model_candidate,
+                    max_tokens=max_tok,
+                    system="당신은 사실 기반 작업계약을 만드는 OHVIS 지시 코파일럿이다.",
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                ),
+                timeout=timeout,
+            )
+            model_used = model_candidate
+            break
+        except Exception as exc:
+            logger.warning(
+                "directive_draft_model_failed session=%s model=%s error=%s",
+                str(source.session_id)[:8],
+                model_candidate,
+                type(exc).__name__,
+            )
+            continue
     content = _extract_directive(raw, expected_project=source.project_key)
     if content is not None:
-        return content, "generated"
-    return build_fallback_directive(source, risk_level), "fallback"
+        return content, "generated", model_used
+    return build_fallback_directive(source, risk_level), "fallback", model_used
 
 
 async def _load_source(
@@ -423,7 +474,7 @@ async def create_draft(
     )
     # 최근 문답 모드는 사용자 요청만 판정하고, 응답 선택 모드는 선택된 후속 조치도 포함한다.
     risk_level = classify_risk(_risk_source_text(source))
-    content, generation_mode = await generate_directive_content(
+    content, generation_mode, model_used = await generate_directive_content(
         source,
         risk_level,
         tenant_id=tenant_id,
@@ -444,6 +495,7 @@ async def create_draft(
         ),
         "requires_human_review": True,
         "auto_submit": False,
+        "model_used": model_used,
     }
     tenant_uuid = uuid.UUID(tenant_id)
     actor_uuid = uuid.UUID(user_id) if user_id else None
@@ -453,8 +505,8 @@ async def create_draft(
                 """
                 INSERT INTO directive_drafts
                     (tenant_id, session_id, created_by, project_key, title, content,
-                     risk_level, confidence, source_message_ids, classification)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid[], $10::jsonb)
+                     risk_level, confidence, source_message_ids, classification, model_used)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid[], $10::jsonb, $11)
                 RETURNING *
                 """,
                 tenant_uuid,
@@ -467,6 +519,7 @@ async def create_draft(
                 0.75 if generation_mode == "generated" else 0.45,
                 source_ids,
                 json.dumps(classification, ensure_ascii=False),
+                model_used,
             )
             metadata = {
                 "subtype": "directive_draft",
