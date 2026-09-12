@@ -100,6 +100,7 @@ class AgendaService:
         offset: int = 0,
         tenant_id: Optional[str] = None,
         include_global: bool = True,
+        include_deleted: bool = False,
     ) -> Dict[str, Any]:
         """아젠다 목록 조회 (페이지네이션 포함).
 
@@ -113,7 +114,8 @@ class AgendaService:
             offset: 시작 위치 (기본 0)
         """
         # 삭제된 메모는 목록에 나오지 않는다. 행은 남겨 되돌릴 수 있게 한다.
-        conditions = ["deleted_at IS NULL"]
+        # include_deleted 는 "최근 삭제" 화면처럼 되살릴 대상을 찾을 때만 쓴다.
+        conditions = [] if include_deleted else ["deleted_at IS NULL"]
         params: List[Any] = []
 
         if project is not None:
@@ -214,6 +216,17 @@ class AgendaService:
             row = await conn.fetchrow(
                 "UPDATE ceo_agenda SET deleted_at = NOW(), updated_at = NOW() "
                 "WHERE id = $1 AND deleted_at IS NULL RETURNING id",
+                agenda_id,
+            )
+        return row is not None
+
+    async def restore_agenda(self, agenda_id: int) -> bool:
+        """삭제한 메모를 되살린다. 잘못 지웠을 때의 유일한 복구 경로다."""
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "UPDATE ceo_agenda SET deleted_at = NULL, updated_at = NOW() "
+                "WHERE id = $1 AND deleted_at IS NOT NULL RETURNING id",
                 agenda_id,
             )
         return row is not None

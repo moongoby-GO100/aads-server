@@ -130,6 +130,7 @@ async def list_agendas(
     source_session_id: Optional[str] = Query(None, description="세션 ID 필터"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    include_deleted: bool = Query(False, description="삭제한 메모 포함 (복구 화면용)"),
     context: dict = Depends(require_tenant_role(TenantRole.VIEWER)),
 ):
     """아젠다 목록 조회. project=None이면 전체(CEO용), 지정 시 해당 프로젝트만(CTO용)."""
@@ -138,6 +139,7 @@ async def list_agendas(
     if not include_global and not source_session_id:
         return {"total": 0, "limit": limit, "offset": offset, "items": []}
     return await svc.list_agendas(
+        include_deleted=include_deleted,
         project=project,
         status=status,
         priority=priority,
@@ -192,6 +194,28 @@ async def update_agenda(agenda_id: int, req: AgendaUpdateRequest, context: dict 
     if result is None:
         raise HTTPException(status_code=404, detail=f"아젠다 {agenda_id}를 찾을 수 없습니다.")
     return result
+
+
+@router.post("/{agenda_id}/restore", operation_id="restore_agenda", summary="삭제한 아젠다 복구")
+async def restore_agenda(agenda_id: int, context: dict = Depends(require_tenant_role(TenantRole.ADMIN))):
+    """삭제한 아이디어 메모를 되살린다.
+
+    삭제는 소프트 삭제라 행이 남아 있다. 화면에서 잘못 지웠을 때의 복구 경로다.
+    get_agenda 는 삭제분을 제외하므로 여기서는 범위 확인에 쓸 수 없다.
+    tenant 범위는 list_agendas(include_deleted=True) 로 확인한다.
+    """
+    svc = get_agenda_service()
+    tenant_id, include_global = _agenda_scope(context)
+    found = await svc.list_agendas(
+        tenant_id=tenant_id, include_global=include_global,
+        include_deleted=True, limit=1000,
+    )
+    items = found.get("items", found) if isinstance(found, dict) else found
+    if not any(int(i.get("id", -1)) == agenda_id for i in items):
+        raise HTTPException(status_code=404, detail=f"아젠다 {agenda_id}를 찾을 수 없습니다.")
+    if not await svc.restore_agenda(agenda_id):
+        raise HTTPException(status_code=404, detail=f"아젠다 {agenda_id}는 삭제 상태가 아닙니다.")
+    return {"status": "restored", "agenda_id": agenda_id}
 
 
 @router.delete("/{agenda_id}", operation_id="delete_agenda", summary="아젠다 삭제")
