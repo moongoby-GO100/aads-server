@@ -10,6 +10,7 @@ Anthropic API 응답 헤더에서 rate-limit 정보를 추출하고,
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -484,8 +485,16 @@ async def get_usage_stats() -> Dict[str, Any]:
         resets_at_1w = None
         usage_source = "db_estimate"
 
+    # 계정별 쿼터 — 기존 단수 claude_max 는 호환을 위해 유지하고 배열을 추가한다.
+    try:
+        claude_slots = await get_slot_usage_all()
+    except Exception as _slot_err:
+        logger.warning("claude_slots build failed: %s", str(_slot_err)[:160])
+        claude_slots = []
+
     return {
         "token_labels": token_labels,
+        "claude_slots": claude_slots,
         "window_5h": [_row_to_dict(r) for r in rows_5h],
         "window_1w": [_row_to_dict(r) for r in rows_1w],
         "by_model_5h": [_row_to_dict(r) for r in rows_model],
@@ -887,3 +896,174 @@ def ensure_claude_max_poller_running(interval_sec: Optional[int] = None) -> bool
     except Exception as e:
         logger.warning("ensure_claude_max_poller_running failed: %s", str(e)[:120])
         return False
+
+
+# ─── 슬롯별 주간/5시간 쿼터 스냅샷 (AADS-RELAY-OAUTH-RESILIENCE §7) ──────────
+#
+# CLI가 매 호출마다 내보내는 rate_limit_event 는 그 호출에 쓰인 계정의 실측값이다.
+# 외부 API를 다시 부르지 않고 이것만 받아 적으면 계정별 사용량이 실시간으로 쌓인다.
+# (2026-09-12: 이 이벤트를 버리고 있었던 탓에 naver 계정이 한 시간 만에
+#  11%→100%로 소진되는 동안 아무도 보지 못했다.)
+
+_SLOT_ALERT_THRESHOLDS = (90, 70)
+_SLOT_ALERT_STATE: Dict[str, int] = {}
+
+
+def _utilization_to_percent(value: Any) -> Optional[float]:
+    """CLI는 0~1 비율로 주지만 방어적으로 0~100 입력도 허용한다."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if v < 0:
+        return None
+    return round(v * 100, 1) if v <= 1.0 else round(v, 1)
+
+
+async def record_slot_rate_limit(
+    slot: str,
+    label: str,
+    rate_limit_info: Dict[str, Any],
+) -> None:
+    """CLI rate_limit_event 를 슬롯별 스냅샷으로 저장하고 임계치 경보를 낸다."""
+    slot = str(slot or "").strip()
+    if not slot:
+        return
+    windows = (rate_limit_info or {}).get("unifiedWindows") or {}
+    five = windows.get("five_hour") or {}
+    seven = windows.get("seven_day") or {}
+    pct_5h = _utilization_to_percent(five.get("utilization"))
+    pct_7d = _utilization_to_percent(seven.get("utilization"))
+    if pct_5h is None and pct_7d is None:
+        return
+
+    def _reset(window: Dict[str, Any]):
+        epoch = window.get("resetsAt")
+        if not epoch:
+            return None
+        try:
+            return datetime.fromtimestamp(float(epoch), timezone.utc)
+        except (TypeError, ValueError, OSError):
+            return None
+
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO claude_max_usage_snapshot
+                    (source, account_slot, account_label, plan_type,
+                     five_hour_utilization, five_hour_resets_at,
+                     seven_day_utilization, seven_day_resets_at, raw_data)
+                VALUES ('cli_rate_limit_event', $1, $2, NULL, $3, $4, $5, $6, $7::jsonb)
+                """,
+                slot, label or "", pct_5h, _reset(five), pct_7d, _reset(seven),
+                json.dumps(rate_limit_info, ensure_ascii=False),
+            )
+    except Exception as e:
+        logger.warning("record_slot_rate_limit failed slot=%s: %s", slot, str(e)[:160])
+        return
+
+    await _maybe_alert_slot_quota(slot, label, pct_7d, seven, rate_limit_info)
+
+
+async def _maybe_alert_slot_quota(
+    slot: str,
+    label: str,
+    pct_7d: Optional[float],
+    seven: Dict[str, Any],
+    rate_limit_info: Dict[str, Any],
+) -> None:
+    """주간 사용량이 임계치를 넘으면 경보. 같은 단계는 한 번만 울린다."""
+    if pct_7d is None:
+        return
+    crossed = next((t for t in _SLOT_ALERT_THRESHOLDS if pct_7d >= t), 0)
+    previous = _SLOT_ALERT_STATE.get(slot, 0)
+    if crossed <= previous:
+        # 소진 후 리셋되어 임계치 아래로 내려오면 다시 울릴 수 있게 초기화
+        if crossed == 0:
+            _SLOT_ALERT_STATE[slot] = 0
+        return
+    _SLOT_ALERT_STATE[slot] = crossed
+
+    resets_at = seven.get("resetsAt")
+    when = "-"
+    if resets_at:
+        try:
+            when = datetime.fromtimestamp(float(resets_at), KST).strftime("%m-%d %H:%M KST")
+        except (TypeError, ValueError, OSError):
+            when = "-"
+    rejected = str((rate_limit_info or {}).get("status", "")).lower() == "rejected"
+    severity = "CRITICAL" if (crossed >= 90 or rejected) else "WARNING"
+    try:
+        from app.services.alert_manager import Alert, get_alert_manager
+
+        await get_alert_manager().send_alert(Alert(
+            severity=severity,
+            category="claude_quota",
+            title=f"Claude 주간 쿼터 {pct_7d:.0f}% — slot{slot} {label or ''}".strip(),
+            message=(
+                f"slot{slot} ({label or 'unknown'}) 주간 사용량 {pct_7d:.1f}% "
+                f"(임계 {crossed}%). 리셋 {when}."
+                + (" 현재 요청이 거부되고 있습니다." if rejected else "")
+            ),
+            extra={"slot": slot, "label": label, "seven_day_percent": pct_7d,
+                   "threshold": crossed, "resets_at": when, "rejected": rejected},
+        ))
+    except Exception as e:
+        logger.warning("slot quota alert failed slot=%s: %s", slot, str(e)[:160])
+
+
+async def get_slot_usage_all() -> List[Dict[str, Any]]:
+    """슬롯별 최신 쿼터 스냅샷. UsageBar 가 계정 수만큼 렌더하는 데 쓴다."""
+    try:
+        from app.core.auth_provider import get_oauth_key_records_async
+        records = await get_oauth_key_records_async(include_rate_limited=True)
+    except Exception:
+        records = []
+
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (account_slot)
+                       account_slot, account_label, source, fetched_at,
+                       five_hour_utilization, five_hour_resets_at,
+                       seven_day_utilization, seven_day_resets_at
+                FROM claude_max_usage_snapshot
+                WHERE account_slot <> ''
+                ORDER BY account_slot, fetched_at DESC
+                """
+            )
+    except Exception as e:
+        logger.warning("get_slot_usage_all failed: %s", str(e)[:160])
+        rows = []
+
+    by_slot = {r["account_slot"]: r for r in rows}
+    out: List[Dict[str, Any]] = []
+    known = [(str(r.get("slot", "")), r.get("label", "")) for r in records if r.get("slot")]
+    for slot in sorted({s for s, _ in known} | set(by_slot)):
+        label = next((lb for s, lb in known if s == slot), "")
+        row = by_slot.get(slot)
+        entry: Dict[str, Any] = {
+            "slot": slot,
+            "label": label or (row["account_label"] if row else ""),
+            "source": row["source"] if row else "none",
+            "sampled_at": row["fetched_at"].isoformat() if row else None,
+            "primary": {"used_percent": None, "window_minutes": 300, "resets_at": None},
+            "secondary": {"used_percent": None, "window_minutes": 10080, "resets_at": None},
+        }
+        if row:
+            entry["primary"] = {
+                "used_percent": float(row["five_hour_utilization"]) if row["five_hour_utilization"] is not None else None,
+                "window_minutes": 300,
+                "resets_at": row["five_hour_resets_at"].isoformat() if row["five_hour_resets_at"] else None,
+            }
+            entry["secondary"] = {
+                "used_percent": float(row["seven_day_utilization"]) if row["seven_day_utilization"] is not None else None,
+                "window_minutes": 10080,
+                "resets_at": row["seven_day_resets_at"].isoformat() if row["seven_day_resets_at"] else None,
+            }
+        out.append(entry)
+    return out

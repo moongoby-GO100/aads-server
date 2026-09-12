@@ -2953,6 +2953,19 @@ async def _stream_claude_sonnet_fallback(
         yield event
 
 
+def _slot_label(slot: Optional[str]) -> str:
+    """슬롯 번호를 사람이 읽는 계정 라벨로. 실패해도 빈 문자열로 넘어간다."""
+    if not slot:
+        return ""
+    try:
+        for rec in (_ap_get_labels() or []):
+            if str(rec.get("slot", "")) == str(slot):
+                return str(rec.get("label", "") or "")
+    except Exception:
+        pass
+    return ""
+
+
 async def _stream_cli_relay_once(
     model: str,
     system_prompt: str,
@@ -3033,6 +3046,19 @@ async def _stream_cli_relay_once(
                         event = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+
+                    # rate_limit_event: 이 호출에 쓰인 계정의 쿼터 실측값이다.
+                    # 외부 API 재조회 없이 슬롯별 사용량을 여기서 적재한다.
+                    if event.get("type") == "rate_limit_event":
+                        try:
+                            from app.services.oauth_usage_tracker import record_slot_rate_limit
+                            await record_slot_rate_limit(
+                                str(oauth_slot or ""),
+                                _slot_label(oauth_slot),
+                                event.get("rate_limit_info") or {},
+                            )
+                        except Exception as _rl_err:
+                            logger.debug("rate_limit_event capture failed: %s", str(_rl_err)[:120])
 
                     # result 이벤트에서 is_error 체크 (CLI가 529 등으로 실패 시)
                     if event.get("type") == "result" and event.get("is_error"):
