@@ -1301,9 +1301,8 @@ async def handle_stream(request):
 
     use_stream_json_input = bool(content_blocks)
     cli_model = _MODEL_MAP.get(model, "claude-opus-4-6")
-    cli_session_id = _session_map.get(_session_key(aads_session_id, slot)) if aads_session_id else None
-    is_resume = cli_session_id is not None
 
+    # 세션 조회가 슬롯을 키에 쓰므로 토큰/슬롯 결정이 먼저다.
     if _DIRECT_OAUTH_ENABLED:
         requested_slot = body.get("oauth_slot")
         token, slot, label = _pick_token(preferred_slot=requested_slot)
@@ -1312,6 +1311,9 @@ async def handle_stream(request):
         logger.info("Direct OAuth: slot=%s label=%s (requested=%s)", slot, label, requested_slot or "auto")
     else:
         token, slot, label = "", "0", "proxy"
+
+    cli_session_id = _session_map.get(_session_key(aads_session_id, slot)) if aads_session_id else None
+    is_resume = cli_session_id is not None
 
     mcp_config_path = None
     try:
