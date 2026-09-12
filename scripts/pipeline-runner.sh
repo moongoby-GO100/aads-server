@@ -1383,6 +1383,12 @@ run_job() {
         exit_code=0
         cd "$workdir"
         local current_model="${MODEL_CYCLE[$attempt]}"
+        # 2026-09-12: 접두사 없는 Codex 모델명(gpt-*)이 Claude CLI 경로로 잘못 라우팅되어
+        # MODEL_CONTRACT_REJECTED(unsupported_claude_model) 무한 루프를 유발하는 문제 방지 — codex: 접두사 자동 보정
+        if [[ "$current_model" == gpt-* ]]; then
+            log "  MODEL_PREFIX_NORMALIZED job=$job_id from=$current_model to=codex:$current_model"
+            current_model="codex:${current_model}"
+        fi
         local effective_model="$current_model"
         local token_slot="${TOKEN_CYCLE[$attempt]}"
         local cycle_num=$(( attempt / 2 + 1 ))
