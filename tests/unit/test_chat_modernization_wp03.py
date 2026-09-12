@@ -92,14 +92,14 @@ def test_capability_and_cursor_negotiation_preserve_v1_default():
         )
     assert conflict.value.code == "conflicting_chat_event_cursors"
 
-    with pytest.raises(chat_protocol.ChatProtocolError) as alias_conflict:
+    with pytest.raises(chat_protocol.ChatProtocolError) as legacy_conflict:
         chat_protocol.resolve_resume_cursor(
             contract_version=2,
             last_applied_event_id=None,
             legacy_last_event_id="10-1",
             header_last_event_id="10-2",
         )
-    assert alias_conflict.value.code == "conflicting_chat_event_cursors"
+    assert legacy_conflict.value.code == "conflicting_chat_event_cursors"
 
 
 def test_unterminated_sse_event_is_discarded_at_eof():
@@ -578,6 +578,15 @@ def test_envelope_schema_rejects_critical_version_mismatch():
             execution_id=EXECUTION_ID,
         )
     assert scope_mismatch.value.code == "chat_event_scope_mismatch"
+
+    with pytest.raises(chat_protocol.ChatProtocolError) as required_error:
+        chat_protocol.build_event_envelope(
+            {"schema_version": 2, "type": "message.delta", "payload": {}},
+            event_id="10-1",
+            session_id=SESSION_ID,
+            execution_id=EXECUTION_ID,
+        )
+    assert required_error.value.code == "invalid_chat_event_envelope"
 
 
 def test_final_snapshot_checkpoint_updates_remain_owner_fenced():

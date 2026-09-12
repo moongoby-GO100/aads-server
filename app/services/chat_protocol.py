@@ -114,25 +114,15 @@ def resolve_resume_cursor(
     applied = validate_event_cursor(last_applied_event_id)
     legacy_query = validate_event_cursor(legacy_last_event_id)
     legacy_header = validate_event_cursor(header_last_event_id)
-    if (
-        contract_version == CHAT_CONTRACT_V2
-        and legacy_query
-        and legacy_header
-        and legacy_query != legacy_header
-    ):
+    supplied = {value for value in (applied, legacy_query, legacy_header) if value is not None}
+    if contract_version == CHAT_CONTRACT_V2 and len(supplied) > 1:
         raise ChatProtocolError(
             "conflicting_chat_event_cursors",
-            "last_event_id and Last-Event-ID do not match",
-        )
-    legacy = legacy_query or legacy_header
-    if contract_version == CHAT_CONTRACT_V2 and applied and legacy and applied != legacy:
-        raise ChatProtocolError(
-            "conflicting_chat_event_cursors",
-            "last_applied_event_id and legacy Last-Event-ID do not match",
+            "last_applied_event_id, last_event_id and Last-Event-ID must agree",
         )
     if contract_version == CHAT_CONTRACT_V2:
-        return applied or legacy or "0"
-    return legacy or applied or "0"
+        return applied or legacy_query or legacy_header or "0"
+    return legacy_query or legacy_header or applied or "0"
 
 
 def compare_redis_event_ids(left: str, right: str) -> int:

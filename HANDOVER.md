@@ -13624,7 +13624,9 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 
 - 기존 무버전 SSE는 v1 기본값으로 그대로 유지하고, 명시적으로 협상한 v2 요청에만
   schema-versioned event envelope, capability discovery, snapshot coverage와 별도
-  server high-watermark, client-applied resume cursor 계약을 추가했다.
+  server high-watermark, client-applied resume cursor 계약을 추가했다. 다만 원자적
+  snapshot checkpoint와 stable generation identity가 WP04/WP05에서 완성되기 전에는
+  capability가 `production_ready=false`를 반환하며 운영 v2 활성화를 금지한다.
 - Redis replay 이벤트에 생성 시점 `owner_epoch`를 선택적으로 보존하고, trim 경계나
   잘못된 cursor/frame은 이벤트를 건너뛰지 않고 `snapshot_required`로 실패 폐쇄한다.
   transport EOF/replay 완료는 DB execution terminal 상태로 승격하지 않는다.
@@ -13633,7 +13635,8 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   유지하며 신규 v2 route/model/service만 additive하게 연결했다.
 - 검증: 신규 protocol/test Ruff 통과, Python compile 통과, WP00/WP03/interrupt receipt/
   resume fence/retry lifecycle/status projection/stream completion/execution lease/deploy
-  reconcile 관련 테스트 79건 통과(기존 FastAPI deprecation warning 1건).
+  reconcile 관련 테스트 80건 통과(기존 FastAPI deprecation warning 1건). EOF 미종결
+  frame 폐기, schema mismatch 실패 폐쇄, 세 cursor 출처 충돌도 회귀로 고정했다.
 - 운영 API 배포와 실제 Redis/DB/브라우저 cross-version E2E는 아직 미수행이다. WP03
   dashboard consumer가 통합되고 양쪽 계약 테스트가 통과한 뒤 Blue/Green으로 함께
   배포하며, 양 슬롯 동일 digest와 5분 P0/P1 감시를 완료 기준으로 한다.
