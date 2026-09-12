@@ -149,7 +149,10 @@ runner_heartbeat() {
                  last_seen_at=NOW();" 2>/dev/null || true
 }
 
-MAX_JOB_RUNTIME="${MAX_JOB_RUNTIME:-3600}"      # 단일 작업 최대 60분 (stale 방지)
+MAX_JOB_RUNTIME="${MAX_JOB_RUNTIME:-$MAX_RUNTIME}"  # CLI 상한보다 먼저 작업을 종료하지 않음
+AADS_REVIEW_MAX_TIME="${AADS_REVIEW_MAX_TIME:-420}"
+AADS_REVIEW_MAX_ATTEMPTS="${AADS_REVIEW_MAX_ATTEMPTS:-3}"
+AADS_REVIEW_MAX_RUNTIME="${AADS_REVIEW_MAX_RUNTIME:-$((AADS_REVIEW_MAX_TIME * AADS_REVIEW_MAX_ATTEMPTS + 120))}"
 WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-300}"    # 5분마다 프로세스 생존 확인
 STUCK_CHECK_INTERVAL="${STUCK_CHECK_INTERVAL:-300}"  # 좀비/stuck 감지 주기 (초, 기본 5분)
 MIN_DISK_GB="${MIN_DISK_GB:-1}"                  # 최소 디스크 공간 (GB)
@@ -1048,15 +1051,22 @@ check_duplicate() {
 # ── 프로세스 생존 확인 (watchdog) ──────────────────────────────────────
 _watchdog_check() {
     local filter="$1"
-    # running 상태이면서 started_at이 MAX_JOB_RUNTIME 초과인 작업 → 타임아웃
+    # 모델 실행과 리뷰는 서로 다른 예산을 사용한다. 리뷰 진입 시 updated_at을
+    # 갱신하므로 긴 모델 실행 직후 정상 리뷰가 전체 job 상한에 잘리지 않는다.
     local timed_out
     timed_out=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
                          error_detail='timeout_max_runtime',
-                         review_feedback=COALESCE(review_feedback,'') || E'\n[Watchdog] 최대 실행시간 ${MAX_JOB_RUNTIME}s 초과 타임아웃',
+                         review_feedback=COALESCE(review_feedback,'') || E'\n[Watchdog] 단계별 최대 실행시간 초과 타임아웃',
                          completed_at=NOW(), updated_at=NOW()
                          WHERE status='running'
                            AND started_at IS NOT NULL
-                           AND started_at < NOW() - INTERVAL '${MAX_JOB_RUNTIME} seconds'
+                           AND (
+                             (phase = 'ai_review'
+                              AND updated_at < NOW() - INTERVAL '${AADS_REVIEW_MAX_RUNTIME} seconds')
+                             OR
+                             (phase IS DISTINCT FROM 'ai_review'
+                              AND started_at < NOW() - INTERVAL '${MAX_JOB_RUNTIME} seconds')
+                           )
                            $filter
                          RETURNING job_id;" 2>/dev/null) || true
     if [[ -n "$timed_out" ]]; then
@@ -1065,14 +1075,21 @@ _watchdog_check() {
         for t_job in $timed_out; do
             t_job="${t_job// /}"
             [[ -z "$t_job" ]] && continue
-            local t_session
-            t_session=$(db_exec "SELECT chat_session_id FROM pipeline_jobs WHERE job_id='${t_job}';" 2>/dev/null) || true
+            local t_session t_project t_pid t_scope
+            IFS=$'\x1e' read -r t_session t_project t_pid t_scope <<< "$(db_exec "SELECT chat_session_id, project, runner_pid, COALESCE(parallel_group, '') FROM pipeline_jobs WHERE job_id='${t_job}';" 2>/dev/null || true)"
             t_session="${t_session// /}"
-            post_to_chat "$t_session" "⏰ [Pipeline Runner] 작업 타임아웃 (${MAX_JOB_RUNTIME}초 초과): $t_job — 자동 종료됨"
+            t_project="${t_project// /}"
+            t_pid="${t_pid// /}"
+            t_scope="${t_scope// /}"
+            if [[ "$t_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$t_pid" 2>/dev/null; then
+                pkill -TERM -P "$t_pid" 2>/dev/null || true
+                kill -TERM "$t_pid" 2>/dev/null || true
+            fi
+            db_update "UPDATE pipeline_jobs SET runner_pid=NULL WHERE job_id='${t_job}' AND status='error';" || true
+            _release_work_lock "$t_project" "$t_job" "$t_scope"
+            post_to_chat "$t_session" "⏰ [Pipeline Runner] 단계별 실행시간 초과: $t_job — 자동 종료됨"
             record_runner_event "$t_job" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"timeout_max_runtime\"}"
             _notify_ai "$t_job"
-            local t_project
-            t_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${t_job}';" 2>/dev/null) || true
             promote_next_queued "${t_project// /}"
         done
     fi
@@ -1625,8 +1642,14 @@ ${safe_instruction}"
         fi
     done
 
-    # runner_pid 클리어
-    db_update "UPDATE pipeline_jobs SET runner_pid=NULL WHERE job_id='${job_id}';"
+    # CLI 자식 PID 대신 post-processing을 수행하는 job subshell PID를 추적한다.
+    # watchdog이 review/diff 처리 중인 작업도 정확히 종료할 수 있어야 한다.
+    db_update "UPDATE pipeline_jobs SET runner_pid=${BASHPID} WHERE job_id='${job_id}' AND status='running';"
+    if [[ "$(get_job_status "$job_id")" != "running" ]]; then
+        log "  POST_PROCESS_ABORTED_TERMINAL job=$job_id"
+        _release_work_lock "$project" "$job_id" "$parallel_group"
+        return 1
+    fi
 
     local output=""
     [[ -f "$output_file" ]] && output=$(head -c 50000 "$output_file")
@@ -1795,6 +1818,12 @@ ${output:0:1500}
     if [[ -n "$git_diff" && ${#git_diff} -gt 10 ]]; then
         if looks_like_git_diff "$git_diff"; then
             log "  AI_REVIEW job=$job_id"
+            db_update "UPDATE pipeline_jobs SET phase='ai_review', runner_pid=${BASHPID}, updated_at=NOW() WHERE job_id='${job_id}' AND status='running';"
+            if [[ "$(get_job_status "$job_id")" != "running" ]]; then
+                log "  AI_REVIEW_ABORTED_TERMINAL job=$job_id"
+                _release_work_lock "$project" "$job_id" "$parallel_group"
+                return 1
+            fi
             local review_response=""
             # diff에서 변경 파일 목록 추출
             local changed_files=""
@@ -1815,12 +1844,23 @@ ${output:0:1500}
             local review_attempt=0
             local review_max_attempts="${AADS_REVIEW_MAX_ATTEMPTS:-3}"
             while [[ $review_attempt -lt $review_max_attempts ]]; do
+                if [[ "$(get_job_status "$job_id")" != "running" ]]; then
+                    log "  AI_REVIEW_ABORTED_TERMINAL job=$job_id attempt=$((review_attempt + 1))"
+                    _release_work_lock "$project" "$job_id" "$parallel_group"
+                    return 1
+                fi
                 review_attempt=$((review_attempt + 1))
                 review_response=$(curl -4 -s --http1.1 -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
                     -H "Content-Type: application/json" \
                     -d "$review_body" \
                     --connect-timeout 10 \
-                    --max-time "${AADS_REVIEW_MAX_TIME:-420}" 2>/dev/null) || true
+                    --max-time "$AADS_REVIEW_MAX_TIME" 2>/dev/null) || true
+
+                if [[ "$(get_job_status "$job_id")" != "running" ]]; then
+                    log "  AI_REVIEW_ABORTED_TERMINAL job=$job_id attempt=${review_attempt}"
+                    _release_work_lock "$project" "$job_id" "$parallel_group"
+                    return 1
+                fi
 
                 review_http_code=$(echo "$review_response" | tail -1)
                 review_response=$(echo "$review_response" | sed '$d')

@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 2026-09-13 04:22 KST — Pipeline Runner phase-aware timeout recovery
+
+- `runner-2d903d0b`는 모델 작업을 3,453초에 끝내고 AI review에 진입했으나, CLI 상한 `MAX_RUNTIME=7,200`초와 별개로 watchdog 기본값 `MAX_JOB_RUNTIME=3,600`초가 job 시작시각만 계산해 review 도중 `timeout_max_runtime`으로 확정했다. 실패 확정 뒤에도 review curl 재시도가 계속되고 scoped work lock이 남는 제어-plane 결함을 함께 확인했다.
+- 즉시 조치로 해당 job subshell만 종료하고 `chatmod-wp04-recovery-20260913` scoped lock을 해제했다. `/tmp/aads-wt-runner-2d903d0b`와 WP04 변경 12개 파일은 보존했으며, 재검증은 `55 passed, 1 skipped`였다.
+- `scripts/pipeline-runner.sh`와 동기화 템플릿은 기본 job 상한을 CLI 상한과 맞추고, `ai_review` 진입 시 별도 review 시간창을 시작한다. watchdog은 terminal 전환 시 추적 PID의 자식/부모를 종료하고 scoped lock과 `runner_pid`를 정리한다. post-processing과 review retry는 DB status가 더 이상 `running`이 아니면 즉시 중단해 terminal 상태를 뒤집지 않는다.
+- 검증: 두 스크립트 `bash -n`, byte-identical 비교, `git diff --check`, runner reliability/review/script guard `32 passed`. 운영 적용은 AADS 후속 작업 `runner-5f1646ee`가 현재 claimed 상태라 러너 재시작 없이 보류한다. 롤백은 본 커밋의 두 runner 스크립트와 회귀 테스트를 revert한 뒤 active job 0건에서 러너만 유휴 재시작한다.
+
 ## 2026-09-12 23:05 KST — OHVIS 연구 Charter·Evidence Manifest·Dataset Pilot v1(30건)
 
 - CEO 지시 "다음단계 진행해"에 따라 읽기 전용 파일럿 추출기와 30건 비식별 데이터셋을 실제로 구현·실행했다. 신규 파일: `research/ohvis_dataset_v1/extract_pilot.py`(16,490 B), `research/ohvis_dataset_v1/DATASET_CARD.md`(6,471 B), `app/static/reports/20260912_ohvis_research_charter_evidence_pilot.html`(31,875 B). 산출물: `research/ohvis_dataset_v1/out/pilot_v1.jsonl`(30행, 90,906 B), `out/pii_scan_report.json`(777 B).
