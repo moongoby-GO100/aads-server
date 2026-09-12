@@ -21,7 +21,10 @@ import sys
 import uuid
 from pathlib import Path
 
-WORKSPACE_ID = os.getenv("AADS_IMPORT_WORKSPACE_ID", "48cb8821-76b6-4493-9874-7fcb5a751b1a")
+# 터미널 대화 전용 워크스페이스([TERM] 터미널 대화).
+# 이전에는 [CEO] 통합지시로 들어가, 실제 지시 세션 25건 사이에 자동 적재된
+# 터미널 기록 40건이 섞여 목록을 덮었다. 성격이 다른 자료이므로 분리한다.
+WORKSPACE_ID = os.getenv("AADS_IMPORT_WORKSPACE_ID", "ce8e8bd2-9105-4fb7-914e-a62a236c0ac3")
 TENANT_ID = os.getenv("AADS_IMPORT_TENANT_ID", "2d701a8c-9596-4757-8588-faa4f7837112")
 PG_CONTAINER = os.getenv("AADS_PG_CONTAINER", "aads-postgres")
 PG_USER = os.getenv("AADS_PG_USER", "aads")
