@@ -82,8 +82,9 @@ sql_escape() {
 # 재시도 추적 컬럼 — 멱등 생성
 db_exec "ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_retry_count INTEGER NOT NULL DEFAULT 0;"
 db_exec "ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_retry_last_at TIMESTAMPTZ;"
+db_exec "ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_request_id UUID;"
 
-select_sql="SELECT job_id, project, COALESCE(review_retry_count,0), COALESCE(chat_session_id,'')
+select_sql="SELECT job_id, project, COALESCE(review_retry_count,0), COALESCE(chat_session_id,''), COALESCE(review_request_id::text,'')
 FROM pipeline_jobs
 WHERE status='review_hold'
   AND review_flag_category IN (${INFRA_CATEGORIES})
@@ -108,7 +109,7 @@ fi
 
 total=0; promoted=0; rejected=0; retried=0
 
-while IFS=$'\x1e' read -r job_id project retry_count session_id; do
+while IFS=$'\x1e' read -r job_id project retry_count session_id request_id; do
     [[ -z "$job_id" ]] && continue
     # C1: job_id 형식 검증 — DB 값이라도 그대로 SQL/URL에 넣지 않는다.
     if [[ ! "$job_id" =~ ^runner-[0-9a-f]{6,32}$ ]]; then
@@ -137,18 +138,39 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id; do
         continue
     fi
 
-    jq -n --rawfile d "$diff_file" --rawfile i "$ins_file" \
-          --arg j "$job_id" --arg p "$project" \
-          '{job_id:$j, project:$p, diff:$d, instruction:$i}' > "$payload_file"
+    if [[ ! "$request_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+        request_id=$(cat /proc/sys/kernel/random/uuid)
+        db_exec "UPDATE pipeline_jobs SET review_request_id='${request_id}'::uuid WHERE job_id='${job_id}' AND status='review_hold';"
+    fi
 
+    jq -n --rawfile d "$diff_file" --rawfile i "$ins_file" \
+          --arg r "$request_id" --arg j "$job_id" --arg p "$project" \
+          '{request_id:$r, job_id:$j, project:$p, diff:$d, instruction:$i}' > "$payload_file"
+
+    # 요청은 먼저 DB에 저장되고 202로 즉시 반환된다. 이후에는 HTTP 응답 본문이
+    # 아니라 request_id의 DB 상태만 폴링하므로 verdict 응답 유실이 없다.
     http_code=$(curl -4 -s --http1.1 -o "$resp_file" -w '%{http_code}' \
-        -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
+        -X POST "${AADS_API_URL}/api/v1/review/code-diff/requests" \
         -H 'Content-Type: application/json' \
         -d @"$payload_file" \
-        --connect-timeout 10 --max-time "$REVIEW_MAX_TIME" 2>/dev/null) || http_code="000"
+        --connect-timeout 10 --max-time 20 2>/dev/null) || http_code="000"
 
     verdict=""; score="0.0"; category=""; issues=""
-    if [[ "$http_code" == "200" && -s "$resp_file" ]]; then
+    request_status=""
+    if [[ "$http_code" == "202" ]]; then
+        deadline=$((SECONDS + REVIEW_MAX_TIME))
+        while (( SECONDS < deadline )); do
+            poll_code=$(curl -4 -s --http1.1 -o "$resp_file" -w '%{http_code}' \
+                "${AADS_API_URL}/api/v1/review/code-diff/requests/${request_id}" \
+                --connect-timeout 5 --max-time 15 2>/dev/null) || poll_code="000"
+            if [[ "$poll_code" == "200" ]]; then
+                request_status=$(jq -r '.status // empty' "$resp_file" 2>/dev/null || echo "")
+                [[ "$request_status" == "completed" || "$request_status" == "failed" ]] && break
+            fi
+            sleep "${REVIEW_POLL_INTERVAL:-3}"
+        done
+    fi
+    if [[ "$request_status" == "completed" ]]; then
         verdict=$(jq -r '.verdict // empty' "$resp_file" 2>/dev/null || echo "")
         score=$(jq -r '.score // 0.0' "$resp_file" 2>/dev/null || echo "0.0")
         category=$(jq -r '.flag_category // empty' "$resp_file" 2>/dev/null || echo "")
@@ -158,11 +180,21 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id; do
 
     # 검수 인프라 전체가 죽은 경우 잡별 재시도 예산을 태우며 같은 장애를 배치
     # 전체에 반복하지 않는다. 첫 실패에서 회로를 열고 다음 타이머 주기에 재확인한다.
-    if [[ "$http_code" != "200" || -z "$verdict" ]]; then
-        log "  CIRCUIT_OPEN $job_id project=$project http=$http_code verdict=${verdict:-none} — retry budget preserved; batch stopped"
+    if [[ "$request_status" == "failed" ]]; then
+        db_exec "UPDATE pipeline_jobs
+                 SET review_request_id=NULL, review_retry_last_at=NOW()
+                 WHERE job_id='${job_id}' AND status='review_hold';"
+        log "  CIRCUIT_OPEN $job_id project=$project request_status=failed — request reset; retry budget preserved; batch stopped"
+        break
+    fi
+    if [[ "$http_code" != "202" || -z "$verdict" ]]; then
+        log "  CIRCUIT_OPEN $job_id project=$project enqueue_http=$http_code request_status=${request_status:-unknown} verdict=${verdict:-none} — retry budget preserved; batch stopped"
         break
     fi
     if [[ "$verdict" == "FLAG" && ",REVIEW_API_UNAVAILABLE,REVIEW_MODEL_NO_RESPONSE,REVIEW_PARSER_FAILURE,REVIEW_TIMEOUT," == *",${category},"* ]]; then
+        db_exec "UPDATE pipeline_jobs
+                 SET review_request_id=NULL, review_retry_last_at=NOW()
+                 WHERE job_id='${job_id}' AND status='review_hold';"
         log "  CIRCUIT_OPEN $job_id project=$project category=$category — retry budget preserved; batch stopped"
         break
     fi
@@ -176,6 +208,7 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id; do
                  SET status='awaiting_approval', phase='awaiting_approval',
                      review_verdict='APPROVE', review_score=${score},
                      review_flag_category=NULL, review_needs_retry=FALSE,
+                     review_request_id=NULL,
                      error_detail=NULL,
                      review_retry_count=${next_retry}, review_retry_last_at=NOW(),
                      review_feedback=COALESCE(review_feedback,'') || E'\n' || ${note},
@@ -198,6 +231,7 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id; do
                      review_verdict='REQUEST_CHANGES', review_score=${score},
                      review_flag_category=${cat_sql},
                      review_needs_retry=FALSE,
+                     review_request_id=NULL,
                      error_detail=${detail},
                      review_retry_count=${next_retry}, review_retry_last_at=NOW(),
                      review_feedback=COALESCE(review_feedback,'') || E'\n' || ${note},
@@ -209,6 +243,7 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id; do
         note=$(sql_escape "[자동재검수] 재시도 ${next_retry}/${SWEEP_MAX_RETRY} http=${http_code} verdict=${verdict:-none} category=${category:-none}")
         db_exec "UPDATE pipeline_jobs
                  SET review_retry_count=${next_retry}, review_retry_last_at=NOW(),
+                     review_request_id=NULL,
                      review_feedback=COALESCE(review_feedback,'') || E'\n' || ${note}
                  WHERE job_id='${job_id}' AND status='review_hold';"
         retried=$((retried + 1))

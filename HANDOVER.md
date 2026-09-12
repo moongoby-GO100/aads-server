@@ -13897,3 +13897,22 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   바꾸고, Codex/Claude CLI 모델은 검증된 relay caller로, API 모델만 중앙
   `call_llm_with_fallback()`으로 보내도록 분기했다. 운영 이미지 런타임에서 관련
   두 모듈의 임포트와 helper 연결을 확인했다.
+
+## 2026-09-13 08:33 KST — 리뷰 verdict DB 선저장·비동기 폴링 전환
+
+- `/settings`의 `AI_REVIEW` 설정은 `runner_model_config`를 정본으로 사용한다. 운영
+  DB에는 Codex 3종 뒤 Claude Haiku 순서가 저장되어 있었지만, 배포 이미지가 최신
+  relay 분기 커밋 전 버전이라 `codex:*` 실행 경로가 설정과 달랐다. 최신 main의
+  CLI relay 분기를 포함해 배포하는 것으로 정합시킨다.
+- `code_review_requests` 원장을 추가했다. 요청 payload와 hash를 모델 호출 전에
+  `queued`로 저장하고 API는 202/request_id를 즉시 반환한다. 백그라운드 작업은 DB
+  claim 후 검수하고 verdict/score/feedback/issues/model을 `completed` 상태와 함께
+  저장한다. 동일 request_id 재전송은 payload hash가 다르면 409로 실패 폐쇄한다.
+- 재검수 스위퍼는 동기 응답을 신뢰하지 않고 request_id를 `pipeline_jobs`에 보존한
+  뒤 상태 API를 폴링한다. 연결이 끊겨도 다음 주기에 동일 요청을 이어받으며,
+  completed verdict만 승인 대기/코드 반려 상태 전이에 사용한다. 인프라 실패는
+  회로를 열고 재시도 예산을 보존한다.
+- 평시 timer의 batch 5·10분 백오프는 유지한다. 기존 보류 적체만 임시 batch 22와
+  단축 백오프로 배수한 뒤 기본값으로 복귀한다. 구현 검증은 Python compile, Bash
+  syntax, diff check와 reviewer/sweeper 집중 테스트 29건을 통과했다. 운영 DB migration,
+  Blue/Green 배포, 실제 비동기 요청 E2E와 보류 배수 결과는 배포 기록에서 확정한다.
