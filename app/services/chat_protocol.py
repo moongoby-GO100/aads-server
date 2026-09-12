@@ -111,7 +111,19 @@ def resolve_resume_cursor(
     values fail closed instead of skipping events.
     """
     applied = validate_event_cursor(last_applied_event_id)
-    legacy = validate_event_cursor(legacy_last_event_id or header_last_event_id)
+    legacy_query = validate_event_cursor(legacy_last_event_id)
+    legacy_header = validate_event_cursor(header_last_event_id)
+    if (
+        contract_version == CHAT_CONTRACT_V2
+        and legacy_query
+        and legacy_header
+        and legacy_query != legacy_header
+    ):
+        raise ChatProtocolError(
+            "conflicting_chat_event_cursors",
+            "last_event_id and Last-Event-ID do not match",
+        )
+    legacy = legacy_query or legacy_header
     if contract_version == CHAT_CONTRACT_V2 and applied and legacy and applied != legacy:
         raise ChatProtocolError(
             "conflicting_chat_event_cursors",
@@ -147,6 +159,13 @@ def chat_protocol_capabilities() -> Dict[str, Any]:
         "default_contract_version": DEFAULT_CHAT_CONTRACT_VERSION,
         "supported_contract_versions": list(SUPPORTED_CHAT_CONTRACT_VERSIONS),
         "event_schema_version": CHAT_EVENT_SCHEMA_VERSION,
+        "production_ready": False,
+        "activation_requires": [
+            "chat.protocol_v2 feature flag",
+            "atomic_snapshot_checkpoint",
+            "stable_generation_identity",
+            "cross_version_browser_contract_tests",
+        ],
         "capabilities": [
             "chat.event_envelope.v2",
             "chat.snapshot_coverage.v2",
@@ -159,12 +178,18 @@ def chat_protocol_capabilities() -> Dict[str, Any]:
             "schema_version": CHAT_EVENT_SCHEMA_VERSION,
             "required_fields": [
                 "schema_version",
-                "event_id",
-                "session_id",
-                "execution_id",
                 "type",
                 "occurred_at",
                 "payload",
+            ],
+            "nullable_scope_fields": [
+                "event_id",
+                "session_id",
+                "execution_id",
+                "owner_epoch",
+                "generation_id",
+                "segment_id",
+                "sequence",
             ],
             "unknown_event_policy": "ignore_additive",
             "critical_invalid_policy": "snapshot_required",
@@ -182,6 +207,9 @@ def chat_protocol_capabilities() -> Dict[str, Any]:
             "coverage_field": "covers_through_event_id",
             "high_watermark_field": "server_high_watermark",
             "retention_field": "retention_trimmed",
+            "retention_boundary_field": "max_deleted_event_id",
+            "coverage_atomic": False,
+            "generation_identity": "unavailable",
         },
         "legacy_compatibility": {
             "default_contract_version": CHAT_CONTRACT_V1,
@@ -228,13 +256,13 @@ class SSEFrameDecoder:
         return frames
 
     def finish(self) -> list[ParsedSSEFrame]:
-        frames: list[ParsedSSEFrame] = []
+        """Discard an event that was not terminated by a blank line at EOF."""
         self._saw_cr = False
         if self._line:
-            frames.extend(self._consume_line())
+            self._consume_line()
         if self._has_fields or self._data_lines:
-            frames.append(self._dispatch())
-        return frames
+            self._dispatch()
+        return []
 
     def _consume_line(self) -> list[ParsedSSEFrame]:
         line, self._line = self._line, ""
@@ -277,12 +305,24 @@ class SSEFrameDecoder:
 
 def _occurred_at(value: Any = None) -> str:
     if value not in (None, ""):
+        if isinstance(value, datetime):
+            parsed = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         try:
             return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat().replace(
                 "+00:00", "Z"
             )
         except (TypeError, ValueError, OSError):
-            pass
+            if isinstance(value, str):
+                try:
+                    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    return parsed.astimezone(timezone.utc).isoformat().replace(
+                        "+00:00", "Z"
+                    )
+                except ValueError:
+                    pass
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
@@ -308,6 +348,81 @@ def _legacy_payload(event: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     return event_type, payload
 
 
+def _validate_v2_envelope(envelope: Dict[str, Any]) -> None:
+    required = {
+        "schema_version",
+        "type",
+        "occurred_at",
+        "payload",
+    }
+    if missing := sorted(required.difference(envelope)):
+        raise ChatProtocolError(
+            "invalid_chat_event_envelope",
+            f"v2 event envelope is missing required fields: {', '.join(missing)}",
+        )
+    schema_version = envelope.get("schema_version")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version != CHAT_EVENT_SCHEMA_VERSION
+    ):
+        raise ChatProtocolError(
+            "unsupported_chat_event_schema_version",
+            f"chat event schema version must be {CHAT_EVENT_SCHEMA_VERSION}",
+        )
+    if not isinstance(envelope.get("type"), str) or not envelope["type"].strip():
+        raise ChatProtocolError(
+            "invalid_chat_event_envelope",
+            "v2 event envelope requires a non-empty string type",
+        )
+    if not isinstance(envelope.get("payload"), dict):
+        raise ChatProtocolError(
+            "invalid_chat_event_envelope",
+            "v2 event envelope requires an object payload",
+        )
+    event_id = envelope.get("event_id")
+    if event_id is not None and (
+        not isinstance(event_id, str) or not event_id.strip()
+    ):
+        raise ChatProtocolError(
+            "invalid_chat_event_envelope",
+            "v2 event_id must be a non-empty opaque string or null",
+        )
+    for field in ("session_id", "execution_id", "generation_id", "segment_id"):
+        value = envelope.get(field)
+        if value is None:
+            continue
+        try:
+            UUID(str(value))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ChatProtocolError(
+                "invalid_chat_event_envelope",
+                f"v2 {field} must be a UUID or null",
+            ) from exc
+    for field in ("owner_epoch", "sequence"):
+        value = envelope.get(field)
+        if value is not None and (
+            not isinstance(value, str) or not value.isdigit()
+        ):
+            raise ChatProtocolError(
+                "invalid_chat_event_envelope",
+                f"v2 {field} must be a decimal string or null",
+            )
+    occurred_at = envelope.get("occurred_at")
+    if not isinstance(occurred_at, str):
+        raise ChatProtocolError(
+            "invalid_chat_event_envelope",
+            "v2 occurred_at must be an ISO-8601 string",
+        )
+    try:
+        datetime.fromisoformat(occurred_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ChatProtocolError(
+            "invalid_chat_event_envelope",
+            "v2 occurred_at must be an ISO-8601 string",
+        ) from exc
+
+
 def build_event_envelope(
     event: Dict[str, Any],
     *,
@@ -321,43 +436,77 @@ def build_event_envelope(
     occurred_at: Any = None,
 ) -> Dict[str, Any]:
     """Adapt one legacy event to the v2 envelope without inventing terminal state."""
-    if event.get("schema_version") == CHAT_EVENT_SCHEMA_VERSION:
-        payload = event.get("payload")
-        if not isinstance(event.get("type"), str) or not isinstance(payload, dict):
+    if "schema_version" in event:
+        event_schema_version = event.get("schema_version")
+        if (
+            not isinstance(event_schema_version, int)
+            or isinstance(event_schema_version, bool)
+            or event_schema_version != CHAT_EVENT_SCHEMA_VERSION
+        ):
             raise ChatProtocolError(
-                "invalid_chat_event_envelope",
-                "v2 event envelope requires string type and object payload",
+                "unsupported_chat_event_schema_version",
+                f"chat event schema version must be {CHAT_EVENT_SCHEMA_VERSION}",
             )
+        envelope = dict(event)
         existing_event_id = event.get("event_id")
         if existing_event_id and event_id and str(existing_event_id) != str(event_id):
             raise ChatProtocolError(
                 "chat_event_id_mismatch",
                 "SSE id and envelope event_id do not match",
             )
-        return dict(event)
+        if event_id:
+            envelope["event_id"] = str(event_id)
+        for field, context_value in (
+            ("session_id", session_id),
+            ("execution_id", execution_id),
+            ("owner_epoch", owner_epoch),
+            ("generation_id", generation_id),
+            ("segment_id", segment_id),
+            ("sequence", sequence),
+        ):
+            existing_scope = event.get(field)
+            if (
+                existing_scope not in (None, "")
+                and context_value is not None
+                and str(existing_scope) != str(context_value)
+            ):
+                raise ChatProtocolError(
+                    "chat_event_scope_mismatch",
+                    f"v2 event {field} does not match the stream scope",
+                )
+            if context_value is not None:
+                envelope[field] = str(context_value)
+        _validate_v2_envelope(envelope)
+        return envelope
 
     event_type, payload = _legacy_payload(event)
     resolved_execution_id = execution_id or event.get("execution_id")
     resolved_session_id = session_id or event.get("session_id")
+    resolved_generation_id = generation_id or event.get("generation_id")
     resolved_segment_id = segment_id or event.get("segment_id")
     message = event.get("message")
     if not resolved_segment_id and isinstance(message, dict):
         resolved_segment_id = message.get("id")
-    return {
+    resolved_owner_epoch = (
+        owner_epoch if owner_epoch is not None else event.get("owner_epoch")
+    )
+    envelope = {
         "schema_version": CHAT_EVENT_SCHEMA_VERSION,
         "event_id": str(event_id) if event_id else None,
         "session_id": str(resolved_session_id) if resolved_session_id else None,
         "execution_id": str(resolved_execution_id) if resolved_execution_id else None,
-        "owner_epoch": str(owner_epoch) if owner_epoch is not None else None,
-        "generation_id": str(generation_id or resolved_execution_id)
-        if generation_id or resolved_execution_id
+        "owner_epoch": str(resolved_owner_epoch)
+        if resolved_owner_epoch is not None
         else None,
+        "generation_id": str(resolved_generation_id) if resolved_generation_id else None,
         "segment_id": str(resolved_segment_id) if resolved_segment_id else None,
         "sequence": str(sequence) if sequence is not None else None,
         "type": event_type,
         "occurred_at": _occurred_at(occurred_at),
         "payload": payload,
     }
+    _validate_v2_envelope(envelope)
+    return envelope
 
 
 def encode_v2_sse_event(
@@ -601,19 +750,22 @@ async def get_stream_snapshot(
     high_watermark = None
     first_available = None
     retention_trimmed = None
+    max_deleted_event_id = None
     if stream_info:
         high_watermark = stream_info.get("last_event_id")
         first_available = stream_info.get("first_event_id")
         retention_trimmed = stream_info.get("retention_trimmed")
+        max_deleted_event_id = stream_info.get("max_deleted_event_id")
     high_watermark = str(high_watermark) if high_watermark else covers
     first_available = str(first_available) if first_available else None
 
     coverage_mismatch = bool(
         covers and high_watermark and compare_redis_event_ids(covers, high_watermark) > 0
     )
-    if retention_trimmed is True and first_available:
+    if retention_trimmed is True and (max_deleted_event_id or first_available):
         coverage_cursor = covers or "0"
-        if compare_redis_event_ids(coverage_cursor, first_available) < 0:
+        retention_floor = str(max_deleted_event_id or first_available)
+        if compare_redis_event_ids(coverage_cursor, retention_floor) < 0:
             coverage_mismatch = True
     replay_required = bool(
         high_watermark
@@ -644,11 +796,16 @@ async def get_stream_snapshot(
         "session_id": str(session_id),
         "session_revision": f"{message_count}:{session_version}",
         "execution_id": str(resolved_execution_id) if resolved_execution_id else None,
-        "generation_id": str(resolved_execution_id) if resolved_execution_id else None,
+        "generation_id": None,
         "segment_id": str(message_id) if message_id else None,
         "message_id": str(message_id) if message_id else None,
         "content_version": content_version,
-        "content_completeness": "full",
+        "content_completeness": (
+            "partial"
+            if values.get("intent")
+            in {"streaming_placeholder", "interrupted_partial", "_archived_partial"}
+            else "full"
+        ),
         "content": str(values.get("content") or ""),
         "intent": values.get("intent"),
         "tools_called": _normalize_json_list(values.get("tools_called")),
@@ -660,6 +817,9 @@ async def get_stream_snapshot(
         "server_high_watermark": high_watermark,
         "first_available_event_id": first_available,
         "retention_trimmed": retention_trimmed,
+        "max_deleted_event_id": str(max_deleted_event_id)
+        if max_deleted_event_id
+        else None,
         "last_applied_event_id": applied_cursor,
         "resume_from_event_id": covers or "0",
         "snapshot_required": snapshot_required,

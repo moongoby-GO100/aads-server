@@ -69,8 +69,9 @@ async def publish_token(
         r = await _get_redis()
         key = _stream_key(stream_id)
         fields = {"data": event_data, "idx": str(token_index), "ts": str(time.time())}
-        if owner_epoch is not None:
-            fields["owner_epoch"] = str(int(owner_epoch))
+        owner_epoch_value = str(owner_epoch) if owner_epoch is not None else ""
+        if owner_epoch_value.isdigit():
+            fields["owner_epoch"] = owner_epoch_value
         entry_id = await r.xadd(
             key,
             fields,
@@ -87,12 +88,20 @@ async def publish_token(
         return None
 
 
-async def mark_stream_done(stream_id: str) -> None:
+async def mark_stream_done(
+    stream_id: str,
+    *,
+    owner_epoch: Optional[int] = None,
+) -> None:
     """스트리밍 완료 마커를 Redis Stream에 추가."""
     try:
         r = await _get_redis()
         key = _stream_key(stream_id)
-        await r.xadd(key, {"data": "", "done": "true", "ts": str(time.time())})
+        fields = {"data": "", "done": "true", "ts": str(time.time())}
+        owner_epoch_value = str(owner_epoch) if owner_epoch is not None else ""
+        if owner_epoch_value.isdigit():
+            fields["owner_epoch"] = owner_epoch_value
+        await r.xadd(key, fields)
         # 완료 후 TTL 단축 (30분 — 서버 재시작 + resume 시간 충분)
         await r.expire(key, 1800)
     except Exception as e:
@@ -145,6 +154,7 @@ async def get_stream_info(stream_id: str) -> Optional[Dict[str, Any]]:
             return None
         length = await r.xlen(key)
         retention_trimmed = None
+        max_deleted_event_id = None
         try:
             summary = await r.xinfo_stream(key)
             entries_added = summary.get("entries-added")
@@ -153,6 +163,7 @@ async def get_stream_info(stream_id: str) -> Optional[Dict[str, Any]]:
                 retention_trimmed = int(entries_added) > int(length)
             if max_deleted_id not in (None, "", "0-0"):
                 retention_trimmed = True
+                max_deleted_event_id = str(max_deleted_id)
         except Exception:
             # Older Redis versions may not expose deletion metadata.
             retention_trimmed = None
@@ -168,12 +179,14 @@ async def get_stream_info(stream_id: str) -> Optional[Dict[str, Any]]:
         first_event_id = None
         first_event_index = None
         last_event_id = None
+        last_event_owner_epoch = None
         if first_entries:
             first_event_id, first_fields = first_entries[0]
             first_event_index = first_fields.get("idx")
         if last_entries:
             last_event_id, fields = last_entries[0]
             is_done = fields.get("done") == "true"
+            last_event_owner_epoch = fields.get("owner_epoch")
         return {
             "exists": True,
             "length": length,
@@ -183,7 +196,9 @@ async def get_stream_info(stream_id: str) -> Optional[Dict[str, Any]]:
                 int(first_event_index) if str(first_event_index).isdigit() else None
             ),
             "last_event_id": last_event_id,
+            "last_event_owner_epoch": last_event_owner_epoch,
             "retention_trimmed": retention_trimmed,
+            "max_deleted_event_id": max_deleted_event_id,
             "stream_key": key,
         }
     except Exception as e:

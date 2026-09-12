@@ -353,6 +353,9 @@ def _classify_interruption_reason(reason: str, fallback: str = "unknown") -> str
 from contextvars import ContextVar as _ContextVar  # noqa: E402
 _current_branch_id: _ContextVar[Optional[str]] = _ContextVar("_current_branch_id", default=None)
 _current_execution_id: _ContextVar[Optional[str]] = _ContextVar("_current_execution_id", default=None)
+_current_stream_event_id: _ContextVar[Optional[str]] = _ContextVar(
+    "_current_stream_event_id", default=None,
+)
 _artifact_extraction_context: _ContextVar[Optional[Dict[str, Any]]] = _ContextVar(
     "_artifact_extraction_context", default=None,
 )
@@ -5739,6 +5742,7 @@ async def with_background_completion(
                     UPDATE chat_turn_executions
                     SET assistant_message_id = $2,
                         actual_model = COALESCE(actual_model, requested_model, 'unknown'),
+                        last_event_id = COALESCE($5, last_event_id),
                         status = 'completed',
                         error_message = NULL,
                         completed_at = COALESCE(completed_at, NOW()),
@@ -5754,6 +5758,7 @@ async def with_background_completion(
                     assistant_message_id,
                     _EXECUTION_OWNER_INSTANCE,
                     int(exec_epoch or 0),
+                    state.get("last_event_id"),
                 )
                 await _archive_interrupted_siblings_for_completed_execution(
                     conn,
@@ -5885,6 +5890,7 @@ async def with_background_completion(
                         )
                         if _entry_id:
                             state["last_event_id"] = _entry_id
+                            _current_stream_event_id.set(str(_entry_id))
                         _token_idx += 1
                     except Exception:
                         pass
@@ -5984,6 +5990,7 @@ async def with_background_completion(
                                     )
                                     if _entry_id:
                                         state["last_event_id"] = _entry_id
+                                        _current_stream_event_id.set(str(_entry_id))
                                     _token_idx += 1
                                 except Exception:
                                     pass
@@ -6075,6 +6082,7 @@ async def with_background_completion(
                                         )
                                         if _entry_id:
                                             state["last_event_id"] = _entry_id
+                                            _current_stream_event_id.set(str(_entry_id))
                                         _token_idx += 1
                                     except Exception:
                                         pass
@@ -6222,7 +6230,10 @@ async def with_background_completion(
                     )
             if _completed_ok:
                 try:
-                    await _redis_stream.mark_stream_done(_stream_id_for_state(session_id, state))
+                    await _redis_stream.mark_stream_done(
+                        _stream_id_for_state(session_id, state),
+                        owner_epoch=state.get("owner_epoch"),
+                    )
                 except Exception:
                     pass
                 await _retry_background_finalize_step(
@@ -7087,6 +7098,7 @@ async def _resume_single_stream(
 
     try:
         _current_execution_id.set(execution_id)
+        _current_stream_event_id.set(None)
         pool = get_pool()
         sid = uuid.UUID(session_id)
 
@@ -7621,6 +7633,7 @@ async def _resume_single_stream(
                                 )
                                 if _entry_id:
                                     _merge_resume_state(last_event_id=_entry_id)
+                                    _current_stream_event_id.set(str(_entry_id))
                                 _token_idx += 1
                             elif etype == "tool_use":
                                 tools_called.append(event["tool_name"])
@@ -7719,7 +7732,10 @@ async def _resume_single_stream(
                     raise last_error
 
                 # 완료 마커 발행 → 프론트에서 resume_done 수신
-                await _redis_stream.mark_stream_done(_stream_id)
+                await _redis_stream.mark_stream_done(
+                    _stream_id,
+                    owner_epoch=owner_epoch,
+                )
 
             await _save_and_update_session(
                 sid,
@@ -9764,6 +9780,13 @@ async def _save_and_update_session(
     if _execution_uuid is None:
         _execution_id_str = _current_execution_id.get(None)
         _execution_uuid = uuid.UUID(_execution_id_str) if _execution_id_str else None
+    _context_execution_id = _current_execution_id.get(None)
+    _snapshot_last_event_id = (
+        _current_stream_event_id.get(None)
+        if _execution_uuid is not None
+        and _context_execution_id == str(_execution_uuid)
+        else None
+    )
     intent = _normalize_final_assistant_intent(intent, content)
     content = await _rewrite_incomplete_final_report_once(
         content,
@@ -10071,6 +10094,7 @@ async def _save_and_update_session(
                         requested_model = COALESCE($3, requested_model),
                         actual_model = COALESCE($4, actual_model, requested_model, 'unknown'),
                         fallback_chain = COALESCE($7::jsonb, fallback_chain),
+                        last_event_id = COALESCE($8, last_event_id),
                         status = 'completed',
                         error_message = NULL,
                         completed_at = NOW(),
@@ -10090,6 +10114,7 @@ async def _save_and_update_session(
                     _EXECUTION_OWNER_INSTANCE,
                     int(_exec_epoch or 0),
                     _fallback_chain_json,
+                    _snapshot_last_event_id,
                 )
                 await conn.execute(
                     """
@@ -11444,6 +11469,7 @@ async def send_message_stream(
                 requested_model=model_override,
             )
             _current_execution_id.set(_execution_id_str)
+            _current_stream_event_id.set(None)
             _stream_id = _execution_id_str
 
             # CEO 채팅 학습 트리거 (백그라운드, 비차단)

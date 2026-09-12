@@ -94,6 +94,7 @@ async def deliver_sse(
             first_id = initial_info.get("first_event_id")
             high_watermark = initial_info.get("last_event_id")
             retention_trimmed = initial_info.get("retention_trimmed")
+            max_deleted_id = initial_info.get("max_deleted_event_id")
             mismatch_reason = None
             if high_watermark and not first_id:
                 mismatch_reason = "retention_boundary_unavailable"
@@ -104,7 +105,16 @@ async def deliver_sse(
                 mismatch_reason = "snapshot_required_before_replay"
             elif current_id != "0" and first_id:
                 try:
-                    if compare_redis_event_ids(current_id, str(first_id)) < 0:
+                    # A snapshot covering exactly through Redis's greatest
+                    # deleted ID can safely replay the first retained entry.
+                    # Without that proof, a cursor below the first retained
+                    # entry may have skipped trimmed data or belong elsewhere.
+                    retention_floor = (
+                        str(max_deleted_id)
+                        if retention_trimmed is True and max_deleted_id
+                        else str(first_id)
+                    )
+                    if compare_redis_event_ids(current_id, retention_floor) < 0:
                         mismatch_reason = "cursor_before_retention"
                 except ChatProtocolError:
                     mismatch_reason = "invalid_applied_cursor"
@@ -204,6 +214,7 @@ async def deliver_sse(
                             encoded = await _v2_event(
                                 f'data: {json.dumps({"type": "resume_done"})}\n\n',
                                 event_id=info.get("last_event_id"),
+                                event_owner_epoch=info.get("last_event_owner_epoch"),
                             )
                             if encoded:
                                 yield encoded

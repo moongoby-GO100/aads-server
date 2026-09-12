@@ -201,6 +201,8 @@ class ChatProtocolCapabilitiesOut(BaseModel):
     default_contract_version: Literal[1] = 1
     supported_contract_versions: List[int] = Field(default_factory=lambda: [1, 2])
     event_schema_version: Literal[2] = 2
+    production_ready: bool = False
+    activation_requires: List[str] = Field(default_factory=list)
     capabilities: List[str] = Field(default_factory=list)
     event_envelope: Dict[str, Any] = Field(default_factory=dict)
     resume_cursor: Dict[str, Any] = Field(default_factory=dict)
@@ -220,7 +222,7 @@ class ChatStreamSnapshotOut(BaseModel):
     segment_id: Optional[uuid.UUID] = None
     message_id: Optional[uuid.UUID] = None
     content_version: Optional[str] = Field(None, pattern=r"^\d+$")
-    content_completeness: Literal["full"] = "full"
+    content_completeness: Literal["full", "partial", "preview"] = "full"
     content: str = ""
     intent: Optional[str] = None
     tools_called: List[Any] = Field(default_factory=list)
@@ -230,6 +232,7 @@ class ChatStreamSnapshotOut(BaseModel):
     server_high_watermark: Optional[str] = None
     first_available_event_id: Optional[str] = None
     retention_trimmed: Optional[bool] = None
+    max_deleted_event_id: Optional[str] = None
     last_applied_event_id: str = "0"
     resume_from_event_id: str = "0"
     snapshot_required: bool = False
