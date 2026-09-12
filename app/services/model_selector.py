@@ -3241,6 +3241,14 @@ async def _stream_cli_relay_once(
                                 if _mv.get("costUSD"):
                                     _cost = float(_mv["costUSD"])
                                 break
+                            _tenant = ""
+                            try:
+                                from app.services.tool_executor import resolve_bound_tenant_id
+                                _tenant = await resolve_bound_tenant_id(
+                                    explicit_session_id=session_id or ""
+                                )
+                            except Exception:
+                                _tenant = ""
                             _log_oauth_usage(
                                 token="",
                                 model=_used_model,
@@ -3252,6 +3260,7 @@ async def _stream_cli_relay_once(
                                 call_source="cli_relay",
                                 session_id=session_id or "",
                                 account_slot=str(oauth_slot or ""),
+                                tenant_id=_tenant or None,
                             )
                         except Exception as _usage_err:
                             logger.debug(

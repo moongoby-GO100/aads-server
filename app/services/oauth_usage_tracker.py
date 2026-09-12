@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 KST = timezone(timedelta(hours=9))
 USAGE_LOG_FLUSH_BATCH_SIZE = 10
 USAGE_LOG_FLUSH_INTERVAL_SEC = 30.0
+# 적재 실패분 재시도 버퍼 상한. 무한 재시도로 메모리가 늘어나는 것을 막는다.
+USAGE_LOG_BUFFER_MAX = 5000
 
 _USAGE_LOG_BUFFER: List[Dict[str, Any]] = []
 _USAGE_LOG_LOCK = asyncio.Lock()
@@ -210,8 +212,19 @@ async def _insert_usage_batch(entries: List[Dict[str, Any]]) -> None:
             args: List[Any] = []
             for row_index, entry in enumerate(chunk):
                 base = row_index * column_count
+                # tenant_id 는 NOT NULL 이고 컬럼 기본값이 aads_internal_tenant_id()
+                # 인데, NULL 을 명시적으로 넘기면 기본값이 적용되지 않고 제약 위반으로
+                # 배치 전체가 깨진다. 실패한 배치는 버퍼로 되돌아가 무한 재시도되므로
+                # 한 건의 tenant_id 누락이 모든 사용량 기록을 영구히 막는다
+                # (2026-09-12: CLI 릴레이 적재가 이 이유로 한 건도 남지 않았다).
+                # 마지막 자리가 tenant_id 이므로 그 자리만 COALESCE 로 감싼다.
                 placeholders = ", ".join(
-                    f"${base + column_index + 1}" for column_index in range(column_count)
+                    (
+                        f"COALESCE(${base + column_index + 1}, aads_internal_tenant_id())"
+                        if _USAGE_LOG_COLUMNS[column_index] == "tenant_id"
+                        else f"${base + column_index + 1}"
+                    )
+                    for column_index in range(column_count)
                 )
                 values_sql.append(f"({placeholders})")
                 args.extend(_usage_log_values(entry))
@@ -238,8 +251,15 @@ async def _flush_usage_buffer() -> None:
     try:
         await _insert_usage_batch(entries)
     except Exception as e:
+        # 실패분을 무한히 되돌리면 한 번의 스키마 불일치가 버퍼를 영원히 키운다.
+        # 되돌리되 상한을 두고, 넘치면 오래된 것부터 버린다. 사용량 기록은
+        # 참고 자료이지 손실되면 안 되는 원장이 아니다.
         async with _USAGE_LOG_LOCK:
             _USAGE_LOG_BUFFER[:0] = entries
+            if len(_USAGE_LOG_BUFFER) > USAGE_LOG_BUFFER_MAX:
+                _dropped = len(_USAGE_LOG_BUFFER) - USAGE_LOG_BUFFER_MAX
+                del _USAGE_LOG_BUFFER[:_dropped]
+                logger.warning("oauth_usage_buffer_overflow_dropped: %d", _dropped)
         logger.warning("oauth_usage_batch_insert_failed: %s", str(e)[:120])
 
 
