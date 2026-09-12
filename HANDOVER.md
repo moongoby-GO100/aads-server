@@ -1,5 +1,43 @@
 # AADS HANDOVER
 
+## 2026-09-13 09:45 KST — WP05 R3 검수 피드백 대응: aads-server 기준 재검증
+
+검수 지적은 **보고서가 잘못된 저장소(GO100)를 대상으로 작성된 것**이었다. 지시서
+`AADS-CHATMOD-WP05-SERVER-R3`의 TARGET인 `/root/aads/aads-server` 구현 자체는 아래 항목대로
+이미 존재·커밋·푸시되어 있었으며, 이번 라운드에서 지시서 검증 1~5를 aads-server에서 전부 재실행했다.
+구현 코드는 추가 변경하지 않았다(재검증 + 기록만).
+
+- **대상**: 브랜치 `feat/chat-modernization-wp05-server-r3-opus-20260913`, 커밋
+  `a33f1d387d2845457df648148dd43e5e50f6adfe`, 워크트리 `/tmp/aads-wp05-r3-opus`,
+  리포지토리 `github.com/moongoby-GO100/aads-server`. `git rev-parse HEAD` ==
+  `git rev-parse origin/<branch>` 로 푸시 완료 확인.
+- **검증 1 (py_compile)**: 변경 `.py` 5파일 전체 exit 0.
+- **검증 2 (ruff)**: pre-commit 게이트 룰셋(`--select F821,F811`) 및 `--select F` 전체 변경파일
+  `All checks passed!`. 신규 파일 2종(`chat_commands.py`, `test_chat_modernization_wp05.py`)은
+  기본 룰셋에서도 잔여 0건. 기존 파일 증분(models/chat.py +16, routers/chat.py +5)은 전부
+  해당 파일에 이미 수백 건 존재하는 기존 부채 클래스(UP045/UP006/B008)로, 신규 룰 클래스는 0건이다.
+- **검증 3 (pytest)**: 지시서의 `docker exec aads-server python3 -m pytest …`는
+  **`No module named pytest`** 로 실행 자체가 불가하다(컨테이너 이미지에 pytest 미포함 +
+  `/app`은 bind-mount가 아니라 워크트리를 보지도 못함). 따라서 host venv로 동일 필터를 실행:
+  브랜치 **258 passed / 6 failed / 4 errors**, 베이스라인 `origin/main`(19c984e8) **229 passed /
+  6 failed / 4 errors**. 실패·에러 집합 완전 동일(프런트 static 5건은 `/tmp` 워크트리 경로 아티팩트,
+  `test_recovery_auto_resume_can_preserve_retry_count` 1건은 기존 실패) → **회귀 0건, 신규 통과 +29건**.
+- **검증 4 (`git diff --check`)**: 클린(exit 0). 워크트리 `git status --short` 클린.
+- **검증 5 (마이그레이션)**: 176은 전 구문 `IF NOT EXISTS`/`CREATE OR REPLACE`로 idempotent,
+  롤백 경로는 파일 상단 7~20행에 명시. 운영 DB 재확인 결과 `chat_execution_checkpoints`,
+  `chat_commands`, `chat_execution_generations` 모두 `NULL` — 174/176 **미적용 상태 유지**(배포 금지 준수).
+- **보존 하드 게이트**: 삭제/이름변경 파일 0건(`--diff-filter=DR` 공집합), 기존 테스트 삭제 0건.
+  기존 파일 제거 라인은 총 3줄이며 전부 additive 재작성이다 — `fastapi`/`pydantic` import 2줄은
+  심볼 추가로 확장, `"generation_identity": "unavailable"` 1줄은 조건식으로 바뀌며 기존 값이
+  false-분기에 그대로 보존된다. `production_ready`는 여전히 `False`, WP05 광고는
+  `AADS_CHAT_WP05_MIGRATION_READY`(기본 false) 게이트 뒤 → v2 운영 플래그 미활성.
+- **경합 주의(신규)**: 같은 카드의 codex 러너 `runner-834a0e22`(PID 3748522)가 본 검증 시점에도
+  `/tmp/aads-wt-runner-834a0e22`에서 **별도 WP05 구현**(`app/services/chat_command_lifecycle.py`,
+  동일 번호 `migrations/176_chat_command_lifecycle.sql`)을 작성 중이며, `runner-1792bfad`가
+  `running`으로 추가 접수돼 있다. 격리 워크트리라 본 브랜치 파일과 충돌하지는 않았으나,
+  **origin에 푸시된 WP05 브랜치는 현재 본 건 하나뿐**이다. 병합 시 migration 176 번호 중복과
+  중복 구현 여부를 반드시 먼저 확인할 것.
+
 ## 2026-09-13 07:35 KST — Chat modernization WP05 durable command lifecycle (R3)
 
 - **구현**: 채팅 명령(interrupt/stop/resume)의 상태 전이를 `chat_commands`에 내구성 있게 기록하고,
