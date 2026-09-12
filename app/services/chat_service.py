@@ -3776,6 +3776,12 @@ async def _stale_placeholder_cleanup_loop() -> None:
                 await _reconcile_streaming_state_with_db()
                 await cleanup_overlong_running_executions()
                 await cleanup_stale_streaming_placeholders()
+                # WP04: completed-message normalization is an explicit,
+                # owner-epoch-fenced writer.  GET handlers only project the
+                # equivalent state and never call this repair path.
+                from app.services.chat_repair import repair_completed_projection_batch
+
+                await repair_completed_projection_batch()
                 cleanup_count += 1
                 if cleanup_count % 10 == 0:
                     await archive_old_hidden_messages()
@@ -8741,6 +8747,8 @@ def _message_has_response_duration(message: Dict[str, Any]) -> bool:
 async def _hydrate_message_response_durations(
     conn: asyncpg.Connection,
     messages: List[Dict[str, Any]],
+    *,
+    persist: bool = True,
 ) -> List[Dict[str, Any]]:
     """Backfill response duration in API payloads from execution ledger.
 
@@ -8799,7 +8807,7 @@ async def _hydrate_message_response_durations(
         message["response_duration_ms"] = int(round(duration_sec * 1000))
         message["duration_sec"] = duration_sec
         message["duration_ms"] = int(round(duration_sec * 1000))
-        if status not in ("running", "retrying"):
+        if persist and status not in ("running", "retrying"):
             try:
                 await conn.execute(
                     """
@@ -8828,6 +8836,28 @@ async def _hydrate_message_response_durations(
 
 def _message_list_filter(is_active: bool, include_streaming: bool) -> str:
     return _visible_message_filter(is_active, include_streaming)
+
+
+def _project_inactive_streaming_placeholders(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Apply the legacy inactive-placeholder display policy without database writes.
+
+    The durable normalization is owned by the fenced repair worker.  GET callers
+    still see the same meaningful partial/notice immediately, but merely viewing
+    a session can no longer update or delete a row.
+    """
+    projected: List[Dict[str, Any]] = []
+    for original in messages:
+        message = dict(original)
+        if message.get("intent") == "streaming_placeholder":
+            content = str(message.get("content") or "").strip()
+            message["intent"] = "interrupted_partial" if content else "interruption_notice"
+            message["model_used"] = "interrupted"
+            if not content:
+                message["content"] = "⚠️ 응답이 중단되었습니다. 다시 시도해 주세요."
+        projected.append(message)
+    return projected
 
 
 async def _promote_inactive_streaming_placeholders(
@@ -8936,6 +8966,8 @@ async def _repair_completed_execution_message_flags(
     conn: asyncpg.Connection,
     messages: List[Dict[str, Any]],
     log_prefix: str,
+    *,
+    persist: bool = True,
 ) -> List[Dict[str, Any]]:
     """Keep completed execution rows from rendering as interrupted bubbles.
 
@@ -9009,45 +9041,52 @@ async def _repair_completed_execution_message_flags(
                 ),
             )
         repair_by_id[keeper["id"]] = keeper
-        archived = await _archive_interrupted_siblings_for_completed_execution(
-            conn,
-            execution_id,
-            keeper["id"],
-            reason=f"{log_prefix}_completed_execution_duplicate",
-        )
-        if archived:
-            archived_ids.update(str(row["id"]) for row in execution_rows if row["id"] != keeper["id"])
+        sibling_ids = {
+            str(row["id"]) for row in execution_rows if row["id"] != keeper["id"]
+        }
+        if persist:
+            archived = await _archive_interrupted_siblings_for_completed_execution(
+                conn,
+                execution_id,
+                keeper["id"],
+                reason=f"{log_prefix}_completed_execution_duplicate",
+            )
+            if archived:
+                archived_ids.update(sibling_ids)
+        else:
+            archived_ids.update(sibling_ids)
 
-    await conn.execute(
-        """
-        UPDATE chat_messages m
-        SET intent = NULL,
-            is_hidden = FALSE,
-            model_used = COALESCE(r.final_model, NULLIF(m.model_used, 'interrupted'), m.model_used),
-            content = regexp_replace(
-                regexp_replace(
-                    m.content,
-                    E'\\n\\n_\\((?:응답이 중단되어 여기까지 보존되었습니다|이전 응답은 중단 처리되었습니다\\. 최신 지시를 우선 처리합니다|이전 지시 응답은 여기까지 보존되고, 최신 지시를 이어서 처리합니다)\\.\\)_\\s*$',
+    if persist:
+        await conn.execute(
+            """
+            UPDATE chat_messages m
+            SET intent = NULL,
+                is_hidden = FALSE,
+                model_used = COALESCE(r.final_model, NULLIF(m.model_used, 'interrupted'), m.model_used),
+                content = regexp_replace(
+                    regexp_replace(
+                        m.content,
+                        E'\\n\\n_\\((?:응답이 중단되어 여기까지 보존되었습니다|이전 응답은 중단 처리되었습니다\\. 최신 지시를 우선 처리합니다|이전 지시 응답은 여기까지 보존되고, 최신 지시를 이어서 처리합니다)\\.\\)_\\s*$',
+                        ''
+                    ),
+                    E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$',
                     ''
                 ),
-                E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$',
-                ''
-            ),
-            edited_at = NOW()
-        FROM (
-            SELECT m2.id,
-                   COALESCE(te.actual_model, te.requested_model, NULLIF(m2.model_used, 'streaming')) AS final_model
-            FROM chat_messages m2
-            JOIN chat_turn_executions te
-              ON te.id = m2.execution_id
-            WHERE m2.id = ANY($1::uuid[])
-              AND te.status = 'completed'
-              AND te.completed_at IS NOT NULL
-        ) r
-        WHERE m.id = r.id
-        """,
-        list(repair_by_id.keys()),
-    )
+                edited_at = NOW()
+            FROM (
+                SELECT m2.id,
+                       COALESCE(te.actual_model, te.requested_model, NULLIF(m2.model_used, 'streaming')) AS final_model
+                FROM chat_messages m2
+                JOIN chat_turn_executions te
+                  ON te.id = m2.execution_id
+                WHERE m2.id = ANY($1::uuid[])
+                  AND te.status = 'completed'
+                  AND te.completed_at IS NOT NULL
+            ) r
+            WHERE m.id = r.id
+            """,
+            list(repair_by_id.keys()),
+        )
 
     repaired_ids = {str(mid) for mid in repair_by_id}
     final_models = {str(row["id"]): row["final_model"] for row in rows}
@@ -9067,7 +9106,7 @@ async def _repair_completed_execution_message_flags(
             )
             content = re.sub(r"\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$", "", content)
             msg["content"] = content
-    logger.warning(
+    (logger.warning if persist else logger.debug)(
         "%s_repaired_completed_execution_flags count=%d archived=%d",
         log_prefix,
         len(repaired_ids),
@@ -9106,13 +9145,15 @@ async def list_messages(
             tenant_uuid,
         )
         results = [_row_to_dict(r) for r in rows]
-        results = await _hydrate_message_response_durations(conn, results)
+        results = await _hydrate_message_response_durations(
+            conn, results, persist=not read_only
+        )
         if fields == "minimal":
             return results
         if fields != "render":
             results = [_apply_tool_summary(result) for result in results]
         results = await _repair_completed_execution_message_flags(
-            conn, results, "list_messages",
+            conn, results, "list_messages", persist=not read_only,
         )
         # 비활성 세션의 streaming_placeholder → 내용 있으면 recovered 전환, 없으면 제외
         if not _is_active and not read_only:
@@ -9122,6 +9163,8 @@ async def list_messages(
             results = await _repair_completed_execution_message_flags(
                 conn, results, "list_messages_after_promote",
             )
+        elif not _is_active and read_only:
+            results = _project_inactive_streaming_placeholders(results)
         return _dedupe_recovery_like_messages(results)
 
 
@@ -9171,7 +9214,9 @@ async def list_messages_cursor(
                 sid, fetch_limit, tenant_uuid,
             )
         messages = [_row_to_dict(r) for r in rows]
-        messages = await _hydrate_message_response_durations(conn, messages)
+        messages = await _hydrate_message_response_durations(
+            conn, messages, persist=not read_only
+        )
         has_more = len(messages) > limit  # has_more는 필터링 전 원본 건수로 판별
         if has_more:
             messages = messages[1:]  # 가장 오래된 1건(초과분) 제거 — dedup 전에 수행
@@ -9179,7 +9224,7 @@ async def list_messages_cursor(
             if fields != "render":
                 messages = [_apply_tool_summary(message) for message in messages]
             messages = await _repair_completed_execution_message_flags(
-                conn, messages, "list_messages_cursor",
+                conn, messages, "list_messages_cursor", persist=not read_only,
             )
             # 비활성 세션의 streaming_placeholder → 내용 있으면 recovered 전환, 없으면 제외
             if not _is_active and not read_only:
@@ -9189,6 +9234,8 @@ async def list_messages_cursor(
                 messages = await _repair_completed_execution_message_flags(
                     conn, messages, "list_messages_cursor_after_promote",
                 )
+            elif not _is_active and read_only:
+                messages = _project_inactive_streaming_placeholders(messages)
             messages = _dedupe_recovery_like_messages(messages)
         next_cursor = messages[0]["created_at"].isoformat() if has_more and messages else None
         return {
@@ -9351,7 +9398,9 @@ async def get_message(message_id: str, fields: str = "full", tenant_id: Optional
         if not row:
             return None
         result = _row_to_dict(row)
-        result = (await _hydrate_message_response_durations(conn, [result]))[0]
+        result = (
+            await _hydrate_message_response_durations(conn, [result], persist=False)
+        )[0]
         if fields not in ("minimal", "render"):
             result = _apply_tool_summary(result)
         return result

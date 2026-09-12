@@ -31,7 +31,11 @@ from app.models.chat import (
     ChatTodoBulkActionOut,
     ChatTodoBulkActionRequest,
     ChatTodoCreateRequest,
+    ChatChangesV2Out,
+    ChatProjectionRepairOut,
+    ChatProjectionRepairRequest,
     ChatProtocolCapabilitiesOut,
+    ChatSessionViewV2Out,
     ChatStreamSnapshotOut,
     DriveFileOut,
     ExecutionOut,
@@ -1174,8 +1178,34 @@ async def _get_messages_payload(
     include_streaming: bool,
     fields: str,
     tenant_id: str,
+    user_id: Optional[str] = None,
+    contract_version: int = 1,
+    direction: str = "before",
 ) -> Any:
-    read_only = fields == "minimal"
+    if contract_version == 2:
+        from app.services.chat_read_model import list_messages_v2
+
+        if offset is not None or sort != "asc":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "chat_v2_keyset_required",
+                    "message": "chat contract v2 uses cursor+direction and ascending response order",
+                },
+            )
+        return await list_messages_v2(
+            session_id=session_id,
+            tenant_id=UUID(tenant_id),
+            user_id=str(user_id),
+            limit=limit,
+            cursor=cursor,
+            direction=direction,
+            include_streaming=include_streaming,
+            projection=fields,
+        )
+    # WP04 INV08: all HTTP GET list paths are projections.  The service keeps
+    # its historical opt-in repair switch for explicit worker callers only.
+    read_only = True
     # 레거시 offset 모드: offset이 명시적으로 전달되거나, sort=desc(배열 기대)인 경우
     # 프론트엔드 6곳에서 sort=desc + ChatMessage[] 배열을 기대하므로 반드시 배열 반환
     if offset is not None or (sort == "desc" and cursor is None):
@@ -1203,6 +1233,7 @@ async def _get_messages_payload(
 
 @router.get("/chat/messages", tags=["chat-message"])
 async def get_messages(
+    request: Request,
     response: Response,
     session_id: UUID = Query(...),
     limit: int = Query(50, le=1000),
@@ -1211,20 +1242,36 @@ async def get_messages(
     sort: str = Query("asc", pattern="^(asc|desc)$"),
     include_streaming: bool = Query(False, description="진행 중 streaming_placeholder 포함 여부"),
     fields: str = Query("full", pattern="^(full|minimal|render)$"),
+    direction: str = Query("before", pattern="^(before|after)$"),
+    contract_version: Optional[str] = Query(None),
     context: TenantContext = Depends(require_tenant_viewer),
 ):
     """메시지 목록 — cursor 기반 페이지네이션 (offset 레거시 호환 유지)."""
     started_at = time.perf_counter()
-    payload = await _get_messages_payload(
-        session_id,
-        limit=limit,
-        cursor=cursor,
-        offset=offset,
-        sort=sort,
-        include_streaming=include_streaming,
-        fields=fields,
-        tenant_id=_tenant_id(context),
-    )
+    negotiated = _chat_contract_version(request, contract_version)
+    try:
+        payload = await _get_messages_payload(
+            session_id,
+            limit=limit,
+            cursor=cursor,
+            offset=offset,
+            sort=sort,
+            include_streaming=include_streaming,
+            fields=fields,
+            tenant_id=_tenant_id(context),
+            user_id=_user_id(context),
+            contract_version=negotiated,
+            direction=direction,
+        )
+    except Exception as exc:
+        from app.services.chat_read_model import ChatReadModelError
+
+        if isinstance(exc, ChatReadModelError):
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        raise
     _set_message_response_headers(response, started_at, payload)
     return payload
 
@@ -1249,6 +1296,7 @@ async def get_interruption_report(
 async def get_workspace_session_messages(
     workspace_id: UUID,
     session_id: UUID,
+    request: Request,
     response: Response,
     limit: int = Query(50, le=1000),
     cursor: Optional[str] = Query(None, description="created_at ISO 문자열 (이전 메시지 로딩 시)"),
@@ -1256,21 +1304,37 @@ async def get_workspace_session_messages(
     sort: str = Query("asc", pattern="^(asc|desc)$"),
     include_streaming: bool = Query(False, description="진행 중 streaming_placeholder 포함 여부"),
     fields: str = Query("full", pattern="^(full|minimal|render)$"),
+    direction: str = Query("before", pattern="^(before|after)$"),
+    contract_version: Optional[str] = Query(None),
     context: TenantContext = Depends(require_tenant_viewer),
 ):
     """워크스페이스 경로 메시지 목록 — 기존 /chat/messages와 동일한 응답 계약."""
     del workspace_id
     started_at = time.perf_counter()
-    payload = await _get_messages_payload(
-        session_id,
-        limit=limit,
-        cursor=cursor,
-        offset=offset,
-        sort=sort,
-        include_streaming=include_streaming,
-        fields=fields,
-        tenant_id=_tenant_id(context),
-    )
+    negotiated = _chat_contract_version(request, contract_version)
+    try:
+        payload = await _get_messages_payload(
+            session_id,
+            limit=limit,
+            cursor=cursor,
+            offset=offset,
+            sort=sort,
+            include_streaming=include_streaming,
+            fields=fields,
+            tenant_id=_tenant_id(context),
+            user_id=_user_id(context),
+            contract_version=negotiated,
+            direction=direction,
+        )
+    except Exception as exc:
+        from app.services.chat_read_model import ChatReadModelError
+
+        if isinstance(exc, ChatReadModelError):
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        raise
     _set_message_response_headers(response, started_at, payload)
     return payload
 
@@ -1701,8 +1765,157 @@ async def get_stream_snapshot(
     return snapshot
 
 
+@router.get(
+    "/chat/sessions/{session_id}/view",
+    response_model=ChatSessionViewV2Out,
+    tags=["chat-session"],
+)
+async def get_session_view_v2(
+    session_id: UUID,
+    request: Request,
+    contract_version: Optional[str] = Query("2"),
+    limit: int = Query(40, ge=1, le=200),
+    fields: str = Query("render", pattern="^(full|minimal|render)$"),
+    include_streaming: bool = Query(True),
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """Return the additive WP04 read model at one read-only DB snapshot."""
+    if _chat_contract_version(request, contract_version) != 2:
+        raise HTTPException(
+            status_code=406,
+            detail={
+                "code": "chat_view_requires_contract_v2",
+                "message": "session view is available with chat contract version 2",
+            },
+        )
+    from app.services.chat_read_model import (
+        ChatReadModelError,
+        get_session_view_v2 as load_session_view_v2,
+    )
+
+    try:
+        return await load_session_view_v2(
+            session_id=session_id,
+            tenant_id=UUID(_tenant_id(context)),
+            user_id=_user_id(context),
+            limit=limit,
+            projection=fields,
+            include_streaming=include_streaming,
+        )
+    except ChatReadModelError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@router.get(
+    "/chat/sessions/{session_id}/changes",
+    response_model=ChatChangesV2Out,
+    tags=["chat-session"],
+)
+async def get_session_changes_v2(
+    session_id: UUID,
+    request: Request,
+    after_revision: str = Query(..., pattern=r"^\d+$"),
+    contract_version: Optional[str] = Query("2"),
+    limit: int = Query(100, ge=1, le=500),
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """Return bounded changed IDs/tombstones from the transactional outbox."""
+    if _chat_contract_version(request, contract_version) != 2:
+        raise HTTPException(
+            status_code=406,
+            detail={
+                "code": "chat_changes_requires_contract_v2",
+                "message": "session changes are available with chat contract version 2",
+            },
+        )
+    from app.services.chat_read_model import ChatReadModelError, get_changes_v2
+
+    try:
+        return await get_changes_v2(
+            session_id=session_id,
+            tenant_id=UUID(_tenant_id(context)),
+            user_id=_user_id(context),
+            after_revision=after_revision,
+            limit=limit,
+        )
+    except ChatReadModelError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@router.post(
+    "/chat/sessions/{session_id}/repair-projection",
+    response_model=ChatProjectionRepairOut,
+    tags=["chat-session"],
+)
+async def repair_session_projection(
+    session_id: UUID,
+    body: ChatProjectionRepairRequest,
+    context: TenantContext = Depends(require_tenant_admin),
+):
+    """Explicit admin repair command; never called as a consequence of GET."""
+    from app.services.chat_repair import ChatRepairError, repair_completed_execution_projection
+
+    try:
+        return await repair_completed_execution_projection(
+            session_id=session_id,
+            execution_id=body.execution_id,
+            tenant_id=UUID(_tenant_id(context)),
+            reason=body.reason,
+        )
+    except ChatRepairError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
 @router.get("/chat/sessions/{session_id}/streaming-status", response_model=StreamingStatusOut, tags=["chat-session"])
 async def get_streaming_status(
+    session_id: UUID,
+    acked_completion_token: Optional[str] = None,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """Read the legacy status projection without triggering durable repair.
+
+    The projection still inspects a ``streaming_placeholder`` but leaves stale
+    execution settlement to the explicit fenced worker.
+    """
+    tenant_id = _tenant_id(context)
+    if not await svc.get_session(str(session_id), tenant_id=tenant_id):
+        raise _NOT_FOUND("session")
+    cached_status = svc.get_streaming_status(
+        str(session_id), acked_completion_token=acked_completion_token
+    )
+    from app.services.chat_read_model import (
+        ChatReadModelError,
+        get_streaming_status_projection,
+    )
+
+    try:
+        projected = await get_streaming_status_projection(
+            session_id=session_id,
+            tenant_id=UUID(tenant_id),
+            cached_status=cached_status,
+            has_live_runtime=_has_live_streaming_runtime(session_id, cached_status),
+            acked_completion_token=acked_completion_token,
+        )
+    except ChatReadModelError as exc:
+        if exc.status_code == 404:
+            raise _NOT_FOUND("session") from exc
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    return await _finalize_streaming_status(session_id, projected)
+
+
+async def _get_streaming_status_legacy_repairing(
     session_id: UUID,
     acked_completion_token: Optional[str] = None,
     context: TenantContext = Depends(require_tenant_viewer),
@@ -2601,6 +2814,35 @@ async def get_last_response(
     session_id: UUID,
     context: TenantContext = Depends(require_tenant_viewer),
 ):
+    """Read the legacy recovery projection without updating execution/message rows.
+
+    ``_settle_stale_execution_for_recovery`` remains available to command and
+    worker paths; a GET only reports that a fenced repair is required.
+    """
+    tenant_id = _tenant_id(context)
+    if not await svc.get_session(str(session_id), tenant_id=tenant_id):
+        raise _NOT_FOUND("session")
+    from app.services.chat_read_model import ChatReadModelError, get_last_response_projection
+
+    try:
+        return await get_last_response_projection(
+            session_id=session_id,
+            tenant_id=UUID(tenant_id),
+            has_live_runtime=_has_live_streaming_runtime(session_id),
+        )
+    except ChatReadModelError as exc:
+        if exc.status_code == 404:
+            raise _NOT_FOUND("session") from exc
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+async def _get_last_response_legacy_repairing(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """SSE 끊김 시 마지막 AI 응답 복구용.
 
     클라이언트가 네트워크 끊김 후 서버에서 완성된 응답이 있는지 확인.
@@ -3341,15 +3583,56 @@ async def search_messages(
 @router.get("/chat/messages/{message_id}", tags=["chat-message"])
 async def get_message_detail(
     message_id: UUID,
+    request: Request,
     response: Response,
     fields: str = Query("full", pattern="^(full|minimal)$"),
+    contract_version: Optional[str] = Query(None),
     context: TenantContext = Depends(require_tenant_viewer),
 ):
     """단일 메시지 상세. fields=minimal 목록에서 도구박스/전체 본문을 lazy hydrate한다."""
     started_at = time.perf_counter()
-    result = await svc.get_message(str(message_id), fields=fields, tenant_id=_tenant_id(context))
+    negotiated = _chat_contract_version(request, contract_version)
+    if negotiated == 2:
+        from app.services.chat_read_model import ChatReadModelError, get_message_v2
+
+        try:
+            result = await get_message_v2(
+                message_id=message_id,
+                tenant_id=UUID(_tenant_id(context)),
+                user_id=_user_id(context),
+                projection=fields,
+            )
+        except ChatReadModelError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+    else:
+        result = await svc.get_message(
+            str(message_id), fields=fields, tenant_id=_tenant_id(context)
+        )
     if not result:
         raise _NOT_FOUND("message")
+    if negotiated == 2:
+        etag = (
+            f'W/"chat-message:{message_id}:{result["content_version"]}:'
+            f'{fields}:v2"'
+        )
+        cache_headers = {
+            "ETag": etag,
+            "Cache-Control": "private, no-cache",
+            "Vary": (
+                "Authorization, X-Chat-Contract-Version, "
+                "X-AADS-Chat-Contract-Version"
+            ),
+            "X-Chat-Contract-Version": "2",
+        }
+        supplied_etags = {
+            value.strip() for value in request.headers.get("if-none-match", "").split(",")
+        }
+        if etag in supplied_etags or "*" in supplied_etags:
+            return Response(status_code=304, headers=cache_headers)
+        response.headers.update(cache_headers)
     _set_message_response_headers(response, started_at, result)
     return result
 

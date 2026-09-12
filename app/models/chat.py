@@ -207,6 +207,7 @@ class ChatProtocolCapabilitiesOut(BaseModel):
     event_envelope: Dict[str, Any] = Field(default_factory=dict)
     resume_cursor: Dict[str, Any] = Field(default_factory=dict)
     snapshot: Dict[str, Any] = Field(default_factory=dict)
+    read_model: Dict[str, Any] = Field(default_factory=dict)
     legacy_compatibility: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -239,6 +240,116 @@ class ChatStreamSnapshotOut(BaseModel):
     replay_required: bool = False
     replay_status: str
     coverage_mismatch: bool = False
+
+
+class ChatMessageProjectionV2(BaseModel):
+    """Versioned message projection shared by minimal/render/full responses."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: uuid.UUID
+    session_id: uuid.UUID
+    execution_id: Optional[uuid.UUID] = None
+    role: str
+    content: str
+    model_used: Optional[str] = None
+    intent: Optional[str] = None
+    created_at: datetime
+    edited_at: Optional[datetime] = None
+    content_version: str = Field(pattern=r"^\d+$")
+    content_completeness: Literal["full", "partial", "preview"] = "full"
+    generation_id: Optional[uuid.UUID] = None
+    segment_id: uuid.UUID
+
+
+class ChatMessagePageInfoV2(BaseModel):
+    direction: Literal["before", "after"] = "before"
+    has_more: bool = False
+    next_cursor: Optional[str] = None
+    previous_cursor: Optional[str] = None
+
+
+class ChatMessagesPageV2Out(BaseModel):
+    schema_version: Literal[2] = 2
+    contract_version: Literal[2] = 2
+    session_id: uuid.UUID
+    projection: Literal["minimal", "render", "full"]
+    session_revision: str = Field(pattern=r"^\d+$")
+    message_revision: str = Field(pattern=r"^\d+$")
+    messages: List[ChatMessageProjectionV2] = Field(default_factory=list)
+    page: ChatMessagePageInfoV2
+
+
+class ChatRevisionSetV2(BaseModel):
+    session: str = Field(pattern=r"^\d+$")
+    message: str = Field(pattern=r"^\d+$")
+    artifact: str = Field(pattern=r"^\d+$")
+    execution: str = Field(pattern=r"^\d+$")
+
+
+class ChatExecutionProjectionV2(BaseModel):
+    id: uuid.UUID
+    phase: str
+    owner_epoch: str = Field(pattern=r"^\d+$")
+
+
+class ChatExecutionCheckpointV2(BaseModel):
+    execution_id: uuid.UUID
+    generation_id: Optional[uuid.UUID] = None
+    segment_id: Optional[uuid.UUID] = None
+    content_version: Optional[str] = Field(None, pattern=r"^\d+$")
+    covers_through_event_id: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+
+class ChatSessionViewV2Out(BaseModel):
+    schema_version: Literal[2] = 2
+    contract_version: Literal[2] = 2
+    production_ready: bool = False
+    snapshot_at: datetime
+    session_id: uuid.UUID
+    title: Optional[str] = None
+    revisions: ChatRevisionSetV2
+    execution: Optional[ChatExecutionProjectionV2] = None
+    checkpoint: Optional[ChatExecutionCheckpointV2] = None
+    server_high_watermark: Optional[str] = None
+    messages: ChatMessagesPageV2Out
+
+
+class ChatChangeV2(BaseModel):
+    event_id: uuid.UUID
+    revision: str = Field(pattern=r"^\d+$")
+    type: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    occurred_at: datetime
+
+
+class ChatChangesV2Out(BaseModel):
+    schema_version: Literal[2] = 2
+    contract_version: Literal[2] = 2
+    session_id: uuid.UUID
+    after_revision: str = Field(pattern=r"^\d+$")
+    current_revision: str = Field(pattern=r"^\d+$")
+    next_after_revision: str = Field(pattern=r"^\d+$")
+    snapshot_required: bool = False
+    has_more: bool = False
+    changed_message_ids: List[uuid.UUID] = Field(default_factory=list)
+    tombstones: List[uuid.UUID] = Field(default_factory=list)
+    changes: List[ChatChangeV2] = Field(default_factory=list)
+
+
+class ChatProjectionRepairRequest(BaseModel):
+    execution_id: uuid.UUID
+    reason: str = Field(default="explicit_projection_repair", max_length=200)
+
+
+class ChatProjectionRepairOut(BaseModel):
+    session_id: uuid.UUID
+    execution_id: uuid.UUID
+    claimed_owner_epoch: str = Field(pattern=r"^\d+$")
+    repaired: int = 0
+    archived: int = 0
+    status: Literal["repaired", "noop"]
 
 
 # ─── Session Todo ────────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ their reducer actually applied, never from a server-advertised high watermark.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass
@@ -145,14 +146,34 @@ def compare_redis_event_ids(left: str, right: str) -> int:
 
 def chat_protocol_capabilities() -> dict[str, Any]:
     """Return the stable, additive capability advertisement."""
+    from app.services.chat_read_model import (
+        chat_cursor_secret_configured,
+        chat_cursor_ttl_seconds,
+        wp04_read_model_activation_ready,
+    )
+
+    migration_ready = os.getenv("AADS_CHAT_WP04_MIGRATION_READY", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    cross_version_ready = os.getenv(
+        "AADS_CHAT_WP04_CROSS_VERSION_READY", ""
+    ).lower() in {"1", "true", "yes"}
+    cursor_secret_ready = chat_cursor_secret_configured()
     return {
         "contract_version": CHAT_CONTRACT_V2,
         "default_contract_version": DEFAULT_CHAT_CONTRACT_VERSION,
         "supported_contract_versions": list(SUPPORTED_CHAT_CONTRACT_VERSIONS),
         "event_schema_version": CHAT_EVENT_SCHEMA_VERSION,
+        # Global protocol readiness also depends on later browser/generation
+        # gates advertised below; WP04 exposes its narrower readiness separately.
         "production_ready": False,
         "activation_requires": [
             "chat.protocol_v2 feature flag",
+            "wp04_read_model_migration",
+            "dedicated_cursor_hmac_secret",
+            "wp04_cross_version_contract_tests",
             "atomic_snapshot_checkpoint",
             "stable_generation_identity",
             "cross_version_browser_contract_tests",
@@ -163,6 +184,10 @@ def chat_protocol_capabilities() -> dict[str, Any]:
             "chat.server_high_watermark.v2",
             "chat.applied_cursor.v2",
             "chat.transport_execution_separation.v2",
+            "chat.read_model.v2",
+            "chat.composite_cursor.v2",
+            "chat.revision_outbox.v2",
+            "chat.explicit_fenced_repair.v2",
             "chat.legacy_sse.v1",
         ],
         "event_envelope": {
@@ -199,8 +224,28 @@ def chat_protocol_capabilities() -> dict[str, Any]:
             "high_watermark_field": "server_high_watermark",
             "retention_field": "retention_trimmed",
             "retention_boundary_field": "max_deleted_event_id",
-            "coverage_atomic": False,
+            "coverage_atomic": migration_ready,
             "generation_identity": "unavailable",
+        },
+        "read_model": {
+            "view_endpoint": "/api/v1/chat/sessions/{session_id}/view",
+            "changes_endpoint": "/api/v1/chat/sessions/{session_id}/changes",
+            "migration_ready": migration_ready,
+            "cursor_secret_configured": cursor_secret_ready,
+            "cross_version_verified": cross_version_ready,
+            "activation_gates_passed": wp04_read_model_activation_ready(),
+            "production_ready": wp04_read_model_activation_ready(),
+            "cursor_order": ["created_at", "id"],
+            "cursor_scope": [
+                "tenant_id",
+                "user_id",
+                "session_id",
+                "projection",
+                "include_streaming",
+                "direction",
+            ],
+            "cursor_ttl_seconds": chat_cursor_ttl_seconds(),
+            "get_is_read_only": True,
         },
         "legacy_compatibility": {
             "default_contract_version": CHAT_CONTRACT_V1,
@@ -666,65 +711,122 @@ async def get_stream_snapshot(
 
     This query is deliberately side-effect free.  In particular it does not use
     the legacy status/list repair paths and never claims or releases an execution
-    lease.  ``te.last_event_id`` is the persisted snapshot coverage checkpoint;
-    Redis's last id is only an advertisement that newer events may exist.
+    lease. With the WP04 migration gate enabled, content and coverage come from
+    one checkpoint row; Redis's last id remains only an advertisement that newer
+    events may exist.
     """
     from app.core.db_pool import get_pool
 
     applied_cursor = validate_event_cursor(last_applied_event_id) or "0"
     async with get_pool().acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT s.id AS session_id,
-                   s.message_count,
-                   s.updated_at AS session_updated_at,
-                   te.id AS execution_id,
-                   te.status AS execution_phase,
-                   te.owner_epoch,
-                   te.last_event_id AS covers_through_event_id,
-                   m.id AS message_id,
-                   m.content,
-                   m.intent,
-                   m.tools_called,
-                   m.created_at AS message_created_at,
-                   COALESCE(
-                       NULLIF(to_jsonb(m)->>'edited_at', '')::timestamptz,
-                       m.created_at
-                   ) AS message_edited_at
-            FROM chat_sessions s
-            LEFT JOIN LATERAL (
-                SELECT candidate.*
-                FROM chat_turn_executions candidate
-                WHERE candidate.session_id = s.id
-                  AND ($3::uuid IS NULL OR candidate.id = $3::uuid)
-                ORDER BY
-                    CASE WHEN candidate.status IN ('running', 'retrying') THEN 0 ELSE 1 END,
-                    candidate.updated_at DESC,
-                    candidate.id DESC
-                LIMIT 1
-            ) te ON TRUE
-            LEFT JOIN LATERAL (
-                SELECT candidate_message.*
-                FROM chat_messages candidate_message
-                WHERE candidate_message.execution_id = te.id
-                  AND candidate_message.role = 'assistant'
-                ORDER BY
-                    CASE
-                        WHEN candidate_message.id = te.assistant_message_id THEN 0
-                        WHEN candidate_message.intent = 'streaming_placeholder' THEN 1
-                        ELSE 2
-                    END,
-                    candidate_message.created_at DESC,
-                    candidate_message.id DESC
-                LIMIT 1
-            ) m ON TRUE
-            WHERE s.id = $1
-              AND s.tenant_id = $2
-            """,
-            session_id,
-            tenant_id,
-            execution_id,
-        )
+        migration_ready = os.getenv(
+            "AADS_CHAT_WP04_MIGRATION_READY", "false"
+        ).lower() in {"1", "true", "yes", "on"}
+        if migration_ready:
+            row = await conn.fetchrow(
+                """
+                SELECT s.id AS session_id,
+                       s.message_count,
+                       s.updated_at AS session_updated_at,
+                       COALESCE(r.revision, 0)::text AS ledger_revision,
+                       te.id AS execution_id,
+                       te.status AS execution_phase,
+                       te.owner_epoch,
+                       cp.covers_through_event_id,
+                       COALESCE(cp.message_id, m.id) AS message_id,
+                       CASE WHEN cp.execution_id IS NOT NULL
+                            THEN cp.partial_content ELSE COALESCE(m.content, '') END AS content,
+                       COALESCE(cp.intent, m.intent) AS intent,
+                       CASE WHEN cp.execution_id IS NOT NULL
+                            THEN cp.tool_checkpoint ELSE COALESCE(m.tools_called, '[]'::jsonb)
+                       END AS tools_called,
+                       cp.generation_id AS checkpoint_generation_id,
+                       cp.segment_id AS checkpoint_segment_id,
+                       cp.content_version::text AS checkpoint_content_version,
+                       m.created_at AS message_created_at,
+                       COALESCE(m.edited_at, m.created_at) AS message_edited_at
+                FROM chat_sessions s
+                LEFT JOIN chat_session_revisions r
+                  ON r.tenant_id = s.tenant_id AND r.session_id = s.id
+                LEFT JOIN LATERAL (
+                    SELECT candidate.*
+                    FROM chat_turn_executions candidate
+                    WHERE candidate.session_id = s.id
+                      AND ($3::uuid IS NULL OR candidate.id = $3::uuid)
+                    ORDER BY
+                        CASE WHEN candidate.status IN ('running', 'retrying') THEN 0 ELSE 1 END,
+                        candidate.updated_at DESC,
+                        candidate.id DESC
+                    LIMIT 1
+                ) te ON TRUE
+                LEFT JOIN chat_execution_checkpoints cp
+                  ON cp.execution_id = te.id
+                 AND cp.tenant_id = s.tenant_id
+                 AND cp.session_id = s.id
+                LEFT JOIN chat_messages m
+                  ON m.id = te.assistant_message_id
+                 AND m.tenant_id = s.tenant_id
+                 AND m.session_id = s.id
+                WHERE s.id = $1
+                  AND s.tenant_id = $2
+                """,
+                session_id,
+                tenant_id,
+                execution_id,
+            )
+        else:
+            row = await conn.fetchrow(
+                """
+                SELECT s.id AS session_id,
+                       s.message_count,
+                       s.updated_at AS session_updated_at,
+                       te.id AS execution_id,
+                       te.status AS execution_phase,
+                       te.owner_epoch,
+                       te.last_event_id AS covers_through_event_id,
+                       m.id AS message_id,
+                       m.content,
+                       m.intent,
+                       m.tools_called,
+                       m.created_at AS message_created_at,
+                       COALESCE(
+                           NULLIF(to_jsonb(m)->>'edited_at', '')::timestamptz,
+                           m.created_at
+                       ) AS message_edited_at
+                FROM chat_sessions s
+                LEFT JOIN LATERAL (
+                    SELECT candidate.*
+                    FROM chat_turn_executions candidate
+                    WHERE candidate.session_id = s.id
+                      AND ($3::uuid IS NULL OR candidate.id = $3::uuid)
+                    ORDER BY
+                        CASE WHEN candidate.status IN ('running', 'retrying') THEN 0 ELSE 1 END,
+                        candidate.updated_at DESC,
+                        candidate.id DESC
+                    LIMIT 1
+                ) te ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT candidate_message.*
+                    FROM chat_messages candidate_message
+                    WHERE candidate_message.execution_id = te.id
+                      AND candidate_message.role = 'assistant'
+                    ORDER BY
+                        CASE
+                            WHEN candidate_message.id = te.assistant_message_id THEN 0
+                            WHEN candidate_message.intent = 'streaming_placeholder' THEN 1
+                            ELSE 2
+                        END,
+                        candidate_message.created_at DESC,
+                        candidate_message.id DESC
+                    LIMIT 1
+                ) m ON TRUE
+                WHERE s.id = $1
+                  AND s.tenant_id = $2
+                """,
+                session_id,
+                tenant_id,
+                execution_id,
+            )
     if not row:
         return None
     values = dict(row)
@@ -769,7 +871,7 @@ async def get_stream_snapshot(
         replay_status = "not_started"
 
     session_version = _version_from_datetime(values.get("session_updated_at")) or "0"
-    content_version = _version_from_datetime(
+    content_version = values.get("checkpoint_content_version") or _version_from_datetime(
         values.get("message_edited_at") or values.get("message_created_at")
     )
     message_count = int(values.get("message_count") or 0)
@@ -783,10 +885,16 @@ async def get_stream_snapshot(
         "schema_version": CHAT_EVENT_SCHEMA_VERSION,
         "contract_version": CHAT_CONTRACT_V2,
         "session_id": str(session_id),
-        "session_revision": f"{message_count}:{session_version}",
+        "session_revision": str(
+            values.get("ledger_revision") or f"{message_count}:{session_version}"
+        ),
         "execution_id": str(resolved_execution_id) if resolved_execution_id else None,
-        "generation_id": None,
-        "segment_id": str(message_id) if message_id else None,
+        "generation_id": str(values["checkpoint_generation_id"])
+        if values.get("checkpoint_generation_id")
+        else None,
+        "segment_id": str(values.get("checkpoint_segment_id") or message_id)
+        if values.get("checkpoint_segment_id") or message_id
+        else None,
         "message_id": str(message_id) if message_id else None,
         "content_version": content_version,
         "content_completeness": (
