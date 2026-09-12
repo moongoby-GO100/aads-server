@@ -311,10 +311,25 @@ build_release_image() {
     echo "[deploy.sh] clean release context: ${RELEASE_CONTEXT_DIR} (HEAD=${AADS_RELEASE_SHA}, build_timeout=${build_max_wait}s)"
     emit_release_context_manifest
     require_release_context_within_limit
+    # 로컬 빌드 캐시에만 기대면 캐시가 비워졌을 때 매번 처음부터 빌드한다.
+    # 2026-09-12 빌드 로그에서 CACHED 단계가 0개였고, 그중 pip wheel 단계
+    # 하나가 166초, 설치 단계가 269초였다(총 455초 평균). 이전 릴리스 이미지를
+    # 캐시 소스로 명시하면 로컬 캐시가 사라져도 레이어를 재사용한다.
+    # inline cache 를 함께 심어 다음 배포가 이 이미지를 캐시로 쓸 수 있게 한다.
+    local cache_from_args=()
+    local prev_image=""
+    prev_image="$(docker inspect "$(cat "${STATE_DIR}/.active_container" 2>/dev/null || echo aads-server)" \
+        --format '{{.Config.Image}}' 2>/dev/null || true)"
+    if [[ -n "$prev_image" ]] && docker image inspect "$prev_image" >/dev/null 2>&1; then
+        cache_from_args+=(--cache-from "$prev_image")
+        echo "[deploy.sh] build cache source: ${prev_image}"
+    fi
     timeout --kill-after=30s "$build_max_wait" env DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build \
         --target "${AADS_DOCKER_TARGET}" \
         --build-arg "AADS_IMAGE_PROFILE=${AADS_IMAGE_PROFILE}" \
         --build-arg "INSTALL_PLAYWRIGHT=${AADS_INSTALL_PLAYWRIGHT}" \
+        --build-arg BUILDKIT_INLINE_CACHE=1 \
+        "${cache_from_args[@]}" \
         --label "org.opencontainers.image.revision=${AADS_RELEASE_SHA}" \
         --tag "aads-server:${AADS_RELEASE_SHA}" \
         "$RELEASE_CONTEXT_DIR"
@@ -911,9 +926,17 @@ start_deploy_heartbeat() {
     status_sql="$(sql_escape "$status")"
     (
         trap '' HUP INT        # RC2: prevent HUP/INT propagation killing heartbeat
-        trap 'exit 0' TERM    # allow graceful stop from stop_deploy_heartbeat
+        # sleep 을 foreground 로 두면 TERM 트랩이 sleep 이 끝난 뒤에야 실행된다.
+        # 그래서 stop_deploy_heartbeat 의 wait 이 매 단계마다 최대 interval(15초)
+        # 만큼 멈췄고, 몇 초짜리 검사 단계들이 일률적으로 17~18초로 찍혔다.
+        # 15개 단계 × 14초 ≈ 3분 30초가 순수 대기였다(2026-09-12 실측).
+        # sleep 을 백그라운드로 돌리고 wait 하면 트랩이 즉시 실행된다 —
+        # wait 은 시그널로 깨어나는 예외다(실측 14초 → 4ms).
+        trap 'kill "${_HB_SLEEP_PID:-0}" 2>/dev/null; exit 0' TERM
         while true; do
-            sleep "$interval"
+            sleep "$interval" &
+            _HB_SLEEP_PID=$!
+            wait "$_HB_SLEEP_PID" 2>/dev/null || true
             local elapsed_ms estimate_ms
             elapsed_ms=$((($(date +%s) - start_epoch) * 1000))
             estimate_ms="$(deploy_estimated_remaining_ms "$elapsed_ms")"
@@ -2462,6 +2485,8 @@ deploy_phase_end "frontend_qa" "success" "frontend_qa=${FRONTEND_QA_STATUS}"
 deploy_phase_start "p0p1_monitoring" "verifying"
 MONITOR_SECONDS="${AADS_DEPLOY_P0P1_MONITOR_SECONDS:-300}"
 MONITOR_INTERVAL="${AADS_DEPLOY_P0P1_MONITOR_INTERVAL:-30}"
+# 전 구간이 깨끗할 때 채우는 최소 관측 시간. 소크 자체를 없애지는 않는다.
+MONITOR_MIN_SECONDS="${AADS_DEPLOY_P0P1_MIN_SECONDS:-120}"
 MONITOR_PATTERN="${AADS_DEPLOY_MONITOR_PATTERN:-level=(error|critical)|Traceback|CRITICAL}"
 MONITOR_SINCE="$(date --iso-8601=seconds)"
 MONITOR_ELAPSED=0
@@ -2480,9 +2505,25 @@ while [[ "$MONITOR_ELAPSED" -lt "$MONITOR_SECONDS" ]]; do
         record_deploy "failed" "$MODE" "Phase 7 P0/P1 monitor hit: ${MONITOR_HITS:0:500}"
         exit 1
     fi
+    # 로그만 보면 "조용한 실패"(프로세스는 살아 있는데 응답을 못 하는 상태)를
+    # 놓친다. 헬스까지 같이 확인해 검증을 넓히고, 그 대신 전 구간이 깨끗하면
+    # 최소 관측 시간만 채우고 끝낸다. 300초 고정 대기는 배포 시간의 25%였다.
+    if ! curl -sf --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
+        echo "[deploy.sh] ❌ Phase 7: health check 실패 (${MONITOR_ELAPSED}s)"
+        notify "❌ 배포 후 모니터링 중 health 실패"
+        deploy_phase_end "p0p1_monitoring" "failed" "health failed at ${MONITOR_ELAPSED}s"
+        record_deploy "failed" "$MODE" "Phase 7 health failed at ${MONITOR_ELAPSED}s"
+        exit 1
+    fi
     echo "[deploy.sh] Phase 7: monitoring ${MONITOR_ELAPSED}/${MONITOR_SECONDS}초 이상 없음"
+    if [[ "$MONITOR_ELAPSED" -ge "$MONITOR_MIN_SECONDS" ]]; then
+        echo "[deploy.sh] Phase 7: ✅ ${MONITOR_ELAPSED}초 연속 이상 없음 — 조기 종료"
+        audit_control "p0p1-monitor" "$ACTIVE_CONTAINER" "success" \
+            "early_exit_after=${MONITOR_ELAPSED}s; max=${MONITOR_SECONDS}s"
+        break
+    fi
 done
-deploy_phase_end "p0p1_monitoring" "success" "seconds=${MONITOR_SECONDS}"
+deploy_phase_end "p0p1_monitoring" "success" "seconds=${MONITOR_ELAPSED}"
 
 echo "[deploy.sh] ✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
 notify "✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
