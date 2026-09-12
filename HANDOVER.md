@@ -1,6 +1,5 @@
 # AADS HANDOVER
 
-## 2026-09-13 07:00 KST — Runner 위상별 타임아웃 main 병합 + 운영 워크트리 복구
 
 - `18668fae`(phase-aware timeout fence)를 clean worktree에서 `origin/main`에 병합해 `41a7c131`로 푸시했다.
   운영 스크립트 `scripts/pipeline-runner.sh`를 동일 내용(d31eba87)으로 교체하고 active job 0건을 확인한 뒤
@@ -18,14 +17,12 @@
 - 검증: `py_compile` 8개 파일 통과, 격리 컨테이너에서 WP03/WP04/OAuth 단위 테스트 `37 passed`,
   runner 스크립트 테스트 `50 passed`, `bash -n` 2종 통과, API health-check HTTP 200.
 - 미완료/리스크: (1) 운영 배포 미수행 — 서버 이미지는 여전히 `5881b667`로 origin/main 대비 19커밋,
-  대시보드는 `1ab0125`로 3커밋(WP07/WP08) 뒤쳐져 있다. (2) 디스크 96%(8.9GB 여유)라 `deploy.sh`의
   20GB 빌드 preflight에 막힌다. `/tmp` 47GB 중 stale worktree 다수가 회수 대상이다.
   (3) 리뷰 파이프라인은 원격 러너(GO100/NTV2)가 Cloudflare 100초 상한에 걸려 HTTP 524, AADS 로컬은
   http=000으로 24시간 내 38건 중 done 0건이다. (4) pre-commit 단위 테스트 단계는 컨테이너에
   pytest가 없어 "No module named pytest" 출력이 실패로 판정되지 않고 통과 처리된다.
 
 ## 2026-09-13 04:20 KST — Chat modernization WP04 durable read-model contract
-
 - Added an opt-in, fail-closed v2 chat read model while preserving the unversioned v1 API: read-only
   GET projections, tenant/user/session/projection-bound HMAC cursors, typed session view/change
   responses, and an explicit active-slot/owner-epoch-fenced repair writer.
@@ -41,6 +38,7 @@
   API blue/green deployment, and five-minute P0/P1 monitoring have not been performed. Roll back the
   code with a revert; additive schema can remain dormant with `AADS_CHAT_V2_READ_MODEL_ENABLED=false`.
 - Detailed implementation record: `docs/reports/20260913_CHAT_MODERNIZATION_WP04_SERVER_RESULT.md`.
+
 
 ## 2026-09-13 04:22 KST — Pipeline Runner phase-aware timeout recovery
 
