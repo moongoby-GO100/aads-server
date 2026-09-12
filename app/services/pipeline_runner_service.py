@@ -27,6 +27,7 @@ import asyncpg
 
 from app.core.project_config import PROJECT_MAP
 from app.services.goal_binding import is_terminal_job_state, parse_goal_binding
+from scripts.claude_model_contract import resolve_model
 
 logger = logging.getLogger(__name__)
 
@@ -91,17 +92,11 @@ def _is_codex_model_allowed(model: str) -> bool:
 
 
 def _normalize_claude_cli_model(model: str) -> str:
-    """Map internal/provider model ids to Claude Code CLI model aliases."""
+    """Preserve the requested version; never send floating family aliases."""
     value = (model or "").strip()
     if not value:
         return ""
-    if value == "sonnet" or value.startswith("claude-sonnet"):
-        return "sonnet"
-    if value == "haiku" or value.startswith("claude-haiku"):
-        return "haiku"
-    if value == "opus" or value.startswith("claude-opus"):
-        return "opus"
-    return value
+    return resolve_model(value)
 
 
 def _is_read_only_instruction(instruction: str) -> bool:
@@ -427,6 +422,32 @@ async def _get_db_model_config(size: str) -> list[str]:
         return []
 
 
+
+async def _resolve_runner_oauth_token() -> str:
+    """한도에 걸리지 않은 OAuth 토큰을 고른다.
+
+    러너는 `${ANTHROPIC_AUTH_TOKEN:-$API_KEY_1}` 로 환경변수를 그대로 썼다.
+    그 값은 항상 slot1 이라, slot1 이 주간 한도를 소진한 2026-09-12 에는
+    모든 러너 작업이 "You've hit your weekly limit" 로 끝나고 그 메시지가
+    채팅에 반복 게시됐다. llm_api_keys.rate_limited_until 로 슬롯을 쉬게 해도
+    이 경로는 그것을 보지 않았다.
+
+    auth_provider 는 DB 의 rate_limited_until 을 반영해 쓸 수 있는 토큰만
+    돌려준다. 실패하면 빈 문자열을 주고, 호출부는 기존 환경변수 방식으로
+    물러난다 — 토큰을 못 고른다고 러너가 멈추면 안 된다.
+    """
+    try:
+        from app.core.auth_provider import get_oauth_tokens_async
+
+        tokens = await get_oauth_tokens_async()
+        for token in tokens:
+            if token:
+                return token
+    except Exception as exc:
+        logger.warning("runner_oauth_token_resolve_failed: %s", str(exc)[:120])
+    return ""
+
+
 class PipelineCJob:
     """단일 Pipeline Runner 작업."""
 
@@ -702,9 +723,7 @@ class PipelineCJob:
             elif _wm == "claude":
                 # Claude 명시 지정: Claude 직행 (크기별 모델 분기)
                 _claude_model = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5")
-                self.actual_model = f"claude:{_claude_model.split('-')[1] if '-' in _claude_model else 'sonnet'}"
-                self.model = "sonnet"
-                work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
+                work_result = await self._run_model_candidate(enriched_instruction, _claude_model)
             else:
                 # 기본: DB runner_model_config 우선순위 순회 → DB 미구성/실패 시 기존 폴백 유지
                 db_models = await _get_db_model_config(self.size)
@@ -1395,12 +1414,19 @@ class PipelineCJob:
 
         escaped = shlex.quote(instruction)
 
+        # 한도에 걸린 슬롯을 피해 토큰을 고른다. 못 고르면 기존 환경변수로 물러난다.
+        _runner_token = await _resolve_runner_oauth_token()
+        _runner_token_export = (
+            f"export CLAUDE_CODE_OAUTH_TOKEN={shlex.quote(_runner_token)}; "
+            if _runner_token
+            else "export CLAUDE_CODE_OAUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-$API_KEY_1}; "
+        )
         # locale + API 키 주입 (locale 미설정 시 Claude CLI 경고→exit=137 방지)
         api_key_setup = (
             "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; export LANGUAGE=en_US:en; "
             "export MANPATH=; "  # manpath locale 경고 억제
             "source ~/.claude/api_keys.env 2>/dev/null; "
-            "export CLAUDE_CODE_OAUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-$API_KEY_1}; "
+            f"{_runner_token_export}"
             "unset ANTHROPIC_API_KEY 2>/dev/null; "
             "unset ANTHROPIC_BASE_URL 2>/dev/null; "  # LiteLLM proxy로 라우팅 방지 → 직접 Anthropic API 사용
         )
@@ -1541,11 +1567,18 @@ class PipelineCJob:
             f"{escaped}"
         )
 
+        # 한도에 걸린 슬롯을 피해 토큰을 고른다. 못 고르면 기존 환경변수로 물러난다.
+        _runner_token = await _resolve_runner_oauth_token()
+        _runner_token_export = (
+            f"export CLAUDE_CODE_OAUTH_TOKEN={shlex.quote(_runner_token)}; "
+            if _runner_token
+            else "export CLAUDE_CODE_OAUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-$API_KEY_1}; "
+        )
         api_key_setup_direct = (
             "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; export LANGUAGE=en_US:en; "
             "export MANPATH=; "
             "source ~/.claude/api_keys.env 2>/dev/null; "
-            "export CLAUDE_CODE_OAUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-$API_KEY_1}; "
+            f"{_runner_token_export}"
             "unset ANTHROPIC_API_KEY 2>/dev/null; "
             "unset ANTHROPIC_BASE_URL 2>/dev/null; "  # LiteLLM proxy로 라우팅 방지
         )
@@ -1757,9 +1790,14 @@ class PipelineCJob:
             return await self._run_litellm_fallback(instruction, override_model=spec.split(":", 1)[1] or _LITELLM_FALLBACK_MODELS.get(self.size, "groq-llama-70b"))
 
         self._log("model_attempt", f"DB 모델 시도: {spec}")
-        family = "opus" if "opus" in spec else ("haiku" if "haiku" in spec else "sonnet")
-        self.actual_model = f"claude:{family}"
-        self.model = _normalize_claude_cli_model(spec)
+        try:
+            self.model = _normalize_claude_cli_model(spec)
+        except ValueError as exc:
+            return {"error": str(exc), "output": ""}
+        # Text-output runner has no provider model receipt. Keep this distinct
+        # from a verified actual model; exact launch model is in the audit log.
+        self.actual_model = "unverified"
+        self._log("model_contract", f"requested_model={spec} cli_model={self.model} verification=cli_argument_only")
         return await self._run_claude_code(instruction, continue_session=False)
 
     # ─── 기존 구현 보존 자기감사 trace ───────────────────────────────────────
