@@ -18,7 +18,7 @@
 
 1. 지시서 생성 모델을 DB 기반으로 관리하고, Ops 세팅 페이지에서 CEO가 직접 변경한다.
 2. 러너 모델 설정(`runner_model_config`)과 동일한 패턴(우선순위 배열 + UPSERT + 폴백 체인)을 적용한다.
-3. 초기 설정: 1순위 `claude-sonnet-5`, 2순위 `codex:gpt-5.6-tela`.
+3. 초기 설정: 1순위 `claude-sonnet-5`, 2순위 `codex:gpt-5.6-terra`.
 4. 코드 배포 없이 모델 변경이 즉시 반영된다.
 5. 토큰/비용 추적 필드를 directive_drafts에 추가한다.
 
@@ -35,7 +35,7 @@
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
 | `role` | `varchar(50)` PK | 역할 키. `generation` = 지시서 초안 생성 |
-| `models` | `jsonb` | 모델 ID 우선순위 배열. 예: `["claude-sonnet-5", "codex:gpt-5.6-tela"]` |
+| `models` | `jsonb` | 모델 ID 우선순위 배열. 예: `["claude-sonnet-5", "codex:gpt-5.6-terra"]` |
 | `timeout_seconds` | `integer` DEFAULT 60 | LLM 호출 타임아웃 |
 | `max_tokens` | `integer` DEFAULT 2000 | 최대 생성 토큰 |
 | `updated_at` | `timestamptz` DEFAULT NOW() | 마지막 수정 시각 |
@@ -65,7 +65,7 @@
     {
       "role": "generation",
       "role_label": "지시서 생성",
-      "models": ["claude-sonnet-5", "codex:gpt-5.6-tela"],
+      "models": ["claude-sonnet-5", "codex:gpt-5.6-terra"],
       "timeout_seconds": 60,
       "max_tokens": 2000,
       "updated_at": "2026-09-12T10:00:00+09:00",
@@ -85,7 +85,7 @@
   "configs": [
     {
       "role": "generation",
-      "models": ["claude-sonnet-5", "codex:gpt-5.6-tela"],
+      "models": ["claude-sonnet-5", "codex:gpt-5.6-terra"],
       "timeout_seconds": 60,
       "max_tokens": 2000
     }
@@ -136,7 +136,7 @@ Ops 세팅 페이지(`/settings`)에 **"지시서 모델 설정"** 섹션 추가
 
 ```sql
 INSERT INTO directive_model_config (role, models, timeout_seconds, max_tokens, updated_by)
-VALUES ('generation', '["claude-sonnet-5", "codex:gpt-5.6-tela"]'::jsonb, 60, 2000, 'CEO');
+VALUES ('generation', '["claude-sonnet-5", "codex:gpt-5.6-terra"]'::jsonb, 60, 2000, 'CEO');
 ```
 
 ## 8. 검증 기준
@@ -159,10 +159,11 @@ VALUES ('generation', '["claude-sonnet-5", "codex:gpt-5.6-tela"]'::jsonb, 60, 20
 - 증상: 지시 초안 생성이 2분 이상 대기한 뒤 화면 오류처럼 보였고, 저장된 결과도
   `generation_mode=fallback`이었다.
 - 근인: Claude 설정값이 Claude CLI가 아닌 Anthropic 백그라운드 API 재시도 체인으로
-  실행됐고, `codex:gpt-5.6-tela`는 Codex CLI가 아닌 LiteLLM 모델명으로 전송되어
+  실행됐고, 레거시 오기 `codex:gpt-5.6-tela`는 Codex CLI가 아닌 LiteLLM 모델명으로 전송되어
   HTTP 400이 발생했다. 모델별 60초 타임아웃이 직렬 누적됐다.
-- 보정: 설정 모델을 실제 CLI 릴레이로 분기하고, 0자·오류 이벤트·계약 불일치 응답은
+- 보정: 설정 모델을 실제 CLI 릴레이로 분기하고, 레거시 `tela` 값은 실제 지원 ID
+  `codex:gpt-5.6-terra`로 정규화한다. 0자·오류 이벤트·계약 불일치 응답은
   성공으로 기록하지 않고 다음 모델로 진행한다. 설정 API 중복 GET/PUT 등록도 제거한다.
 - 운영 한도: 2026-09-12 23:48 KST 실측에서 Claude Sonnet 5는 주간 한도 소진,
-  Codex GPT 5.6 Tela는 0토큰 응답이었다. 이 외부 가용성 문제는 코드 수정과 별개이며,
+  Codex GPT 5.6 Terra는 0토큰 응답이었다. 이 외부 가용성 문제는 코드 수정과 별개이며,
   전 모델 실패 시 결정론적 폴백 초안으로 안전하게 종료한다.

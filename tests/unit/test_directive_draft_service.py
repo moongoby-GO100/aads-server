@@ -233,7 +233,7 @@ async def test_generation_continues_after_invalid_model_output(monkeypatch) -> N
         service,
         "_get_directive_model_config",
         AsyncMock(return_value={
-            "models": ["claude-sonnet-5", "codex:gpt-5.6-tela"],
+            "models": ["claude-sonnet-5", "codex:gpt-5.6-terra"],
             "timeout_seconds": 1,
             "max_tokens": 2000,
         }),
@@ -241,9 +241,9 @@ async def test_generation_continues_after_invalid_model_output(monkeypatch) -> N
 
     content, mode, model_used = await service.generate_directive_content(_source(), "medium")
 
-    assert calls == ["claude-sonnet-5", "codex:gpt-5.6-tela"]
+    assert calls == ["claude-sonnet-5", "codex:gpt-5.6-terra"]
     assert mode == "generated"
-    assert model_used == "codex:gpt-5.6-tela"
+    assert model_used == "codex:gpt-5.6-terra"
     assert content == valid
 
 
@@ -268,8 +268,14 @@ async def test_configured_codex_model_uses_cli_relay(monkeypatch) -> None:
     )
 
     assert content == "relay output"
-    assert seen["model"] == "gpt-5.6-tela"
+    assert seen["model"] == "gpt-5.6-terra"
     assert seen["tools"] is None
+
+
+def test_directive_model_alias_is_canonicalized_and_deduplicated() -> None:
+    assert service.normalize_directive_models(
+        ["codex:gpt-5.6-tela", "codex:gpt-5.6-terra", ""]
+    ) == ["codex:gpt-5.6-terra"]
 
 
 @pytest.mark.asyncio

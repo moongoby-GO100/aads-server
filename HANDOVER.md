@@ -13608,3 +13608,14 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   Codex 0토큰 응답을 반환했으며 수정 경로가 둘 다 실패로 판정하는 것을 확인했다.
 - 운영 배포는 미수행이다. API blue/green 배포 후 인증된 지시 초안 POST가 201이고,
   draft/artifact/revision/created event가 모두 생성되는 것을 확인해야 최종 완료다.
+
+## 2026-09-13 00:02 KST — 지시서 Codex 모델 ID 원천 보정
+
+- 추가 실측에서 Ops DB에 레거시 오기 `codex:gpt-5.6-tela`가 남아 있었고, 실제 Codex
+  Relay 지원 ID는 `codex:gpt-5.6-terra`임을 확인했다. 단순 CLI 분기만 배포하면 해당
+  폴백 순서에서 다시 실패할 수 있으므로 런타임·설정 API 양쪽에 정규화를 추가했다.
+- 서비스 기본값과 PRD 예시를 `claude-sonnet-5` → `codex:gpt-5.6-terra`로 바로잡고,
+  GET은 레거시 값을 canonical ID로 표시하며 PUT은 정규화·중복 제거 후 저장한다.
+- 테스트용 격리 컨테이너에서 `tests/unit/test_directive_draft_service.py` 21건 통과,
+  Python compile과 `git diff --check`를 통과했다. 운영 DB 값은 기존 CEO 우선순위를
+  보존한 채 `tela` 항목만 `terra`로 바꾸고 전후 SELECT로 검증한다.

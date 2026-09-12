@@ -23,6 +23,26 @@ GENERATION_TIMEOUT_SECONDS = 45
 _directive_model_cache: dict = {}
 _directive_model_cache_ts: float = 0.0
 _DIRECTIVE_MODEL_CACHE_TTL = 60
+_DEFAULT_DIRECTIVE_MODELS = ["claude-sonnet-5", "codex:gpt-5.6-terra"]
+_DIRECTIVE_MODEL_ALIASES = {
+    # Legacy typo accepted by the first Ops-settings implementation.
+    "codex:gpt-5.6-tela": "codex:gpt-5.6-terra",
+    "gpt-5.6-tela": "gpt-5.6-terra",
+}
+
+
+def normalize_directive_model_id(value: str | None) -> str:
+    model_id = str(value or "").strip()
+    return _DIRECTIVE_MODEL_ALIASES.get(model_id.lower(), model_id)
+
+
+def normalize_directive_models(values: Iterable[str]) -> list[str]:
+    normalized: list[str] = []
+    for value in values:
+        model_id = normalize_directive_model_id(value)
+        if model_id and model_id not in normalized:
+            normalized.append(model_id)
+    return normalized
 
 
 async def _get_directive_model_config(role: str = "generation") -> dict:
@@ -40,15 +60,16 @@ async def _get_directive_model_config(role: str = "generation") -> dict:
         if row:
             raw = row["models"]
             models = json.loads(raw) if isinstance(raw, str) else (list(raw) if raw else [])
+            models = normalize_directive_models(models) or list(_DEFAULT_DIRECTIVE_MODELS)
             config = {"models": models, "timeout_seconds": row["timeout_seconds"] or 60, "max_tokens": row["max_tokens"] or 2000}
         else:
-            config = {"models": ["claude-sonnet-5", "codex:gpt-5.6-tela"], "timeout_seconds": 60, "max_tokens": 2000}
+            config = {"models": list(_DEFAULT_DIRECTIVE_MODELS), "timeout_seconds": 60, "max_tokens": 2000}
         _directive_model_cache[role] = config
         _directive_model_cache_ts = now
         return config
     except Exception:
         logger.warning("directive_model_config_read_failed role=%s", role)
-        return {"models": ["claude-sonnet-5", "codex:gpt-5.6-tela"], "timeout_seconds": 60, "max_tokens": 2000}
+        return {"models": list(_DEFAULT_DIRECTIVE_MODELS), "timeout_seconds": 60, "max_tokens": 2000}
 
 
 def invalidate_directive_model_cache():
@@ -328,10 +349,11 @@ async def generate_directive_content(
     max_tok = config["max_tokens"]
     generation_prompt = _build_generation_prompt(source, risk_level)
     for model_candidate in models:
+        configured_model = normalize_directive_model_id(model_candidate)
         try:
             raw = await asyncio.wait_for(
                 _call_configured_model(
-                    model_candidate=model_candidate,
+                    model_candidate=configured_model,
                     prompt=generation_prompt,
                     max_tokens=max_tok,
                     system="당신은 사실 기반 작업계약을 만드는 OHVIS 지시 코파일럿이다.",
@@ -344,17 +366,17 @@ async def generate_directive_content(
             logger.warning(
                 "directive_draft_model_failed session=%s model=%s error=%s",
                 str(source.session_id)[:8],
-                model_candidate,
+                configured_model,
                 type(exc).__name__,
             )
             continue
         content = _extract_directive(raw, expected_project=source.project_key)
         if content is not None:
-            return content, "generated", model_candidate
+            return content, "generated", configured_model
         logger.warning(
             "directive_draft_model_invalid session=%s model=%s",
             str(source.session_id)[:8],
-            model_candidate,
+            configured_model,
         )
     return build_fallback_directive(source, risk_level), "fallback", None
 
@@ -375,7 +397,7 @@ async def _call_configured_model(
     ``codex:*`` to LiteLLM produces HTTP 400 and using the Anthropic background
     retry chain can consume the whole HTTP request before Codex is attempted.
     """
-    configured = str(model_candidate or "").strip()
+    configured = normalize_directive_model_id(model_candidate)
     provider, separator, bare_model = configured.partition(":")
     provider = provider.lower() if separator else ""
     model = bare_model.strip() if separator else configured
