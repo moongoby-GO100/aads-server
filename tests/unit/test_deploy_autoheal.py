@@ -53,6 +53,10 @@ def test_syntax_is_valid():
         ("build_candidate_image_stale_auto", "auto-reconciled: heartbeat exceeded 1200s", "stale_heartbeat"),
         ("build_candidate_image", "stale deploy reconciled before new deploy: pid=142610", "stale_heartbeat"),
         ("interrupted_post_switch", "deploy interrupted by TERM; certification incomplete", "signal_interrupt"),
+        ("build_candidate_image", "deploy interrupted by INT", "signal_interrupt"),
+        # HUP 중단은 최근 14일 deploy_runs 에 13건 쌓여 있다(2026-09-13 07:45 KST 조회).
+        ("standby_same_digest_sync", "deploy interrupted by HUP", "signal_interrupt"),
+        ("p0p1_monitoring", "deploy interrupted by HUP", "signal_interrupt"),
         ("standby_same_digest_sync", "standby same-digest sync failed for aads-server:8100", "standby_sync_fail"),
         ("build_candidate_image", "aads-server-green memory limit mismatch", "mem_limit_mismatch"),
         ("standby_same_digest_sync", "unexpected error exit=1 line=2211: echo ...", "unexpected_exit"),
@@ -88,6 +92,28 @@ def test_signal_interrupt_policy_depends_on_cutover():
     after = _call("autoheal_policy", "signal_interrupt", env_prefix="DEPLOY_UPSTREAM_SWITCHED=true\n")
     assert before == "retry"
     assert after == "manual"
+
+
+@pytest.mark.parametrize(
+    "phase,expected",
+    [
+        ("build_candidate_image", "retry"),
+        ("target_slot_drain", "retry"),
+        ("standby_same_digest_sync", "manual"),
+        ("post_switch_health", "manual"),
+        ("p0p1_monitoring", "manual"),
+        ("llm_health_check", "manual"),
+    ],
+)
+def test_signal_interrupt_policy_uses_phase_when_flag_lost(phase: str, expected: str):
+    """DEPLOY_UPSTREAM_SWITCHED 가 유실돼도 컷오버 이후 phase 면 재배포하지 않는다."""
+    out = _call(
+        "autoheal_policy",
+        "signal_interrupt",
+        phase,
+        env_prefix="unset DEPLOY_UPSTREAM_SWITCHED 2>/dev/null || true\n",
+    )
+    assert out == expected
 
 
 def test_autoheal_disabled_is_noop():

@@ -100,7 +100,7 @@ dirty 게이트를 건너뛴다(`deploy.sh:1447`). 따라서 이 경로 하나�
 | `stale_heartbeat` | heartbeat exceeded / stale deploy | retry | reconcile은 기존 로직이 수행 → 재개만 |
 | `standby_sync_fail` | standby same-digest sync | retry | 동일 릴리스 재기동으로 standby 슬롯만 정렬 |
 | `lock_wait_timeout` | queued deploy wait timeout / flock | retry | 재개만 |
-| `signal_interrupt` | interrupted by TERM/INT | 조건부 | 컷오버 **전**이면 retry, **후**면 manual |
+| `signal_interrupt` | `deploy interrupted by` (TERM/INT/HUP/QUIT 공통) | 조건부 | 컷오버 **전**이면 retry, **후**면 manual. 컷오버 판정은 `DEPLOY_UPSTREAM_SWITCHED` + phase 이름(`autoheal_phase_is_post_switch`) 2중 확인 |
 | `mem_limit_mismatch` | memory limit mismatch | manual | 에스컬레이션 |
 | `release_context_too_large` | release context too large | manual | 에스컬레이션 |
 | `dependency_lock_stale` | dependency lock | manual | 에스컬레이션 |
