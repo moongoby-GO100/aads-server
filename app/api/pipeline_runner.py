@@ -1218,6 +1218,122 @@ async def list_jobs(
     return results
 
 
+# project → 실행 서버 매핑. runner_host 가 아직 비어 있는 과거 행을 위한 폴백이다.
+# 2026-09-12 기준 담당이 겹치지 않아 역산이 성립한다(contabo116=AADS,
+# contabo14=GO100, cafe24_114=SF/NTV2/NAS). 담당이 바뀌면 이 매핑이 조용히
+# 틀려지므로, 러너가 기록한 runner_host 가 있으면 항상 그쪽을 우선한다.
+_PROJECT_HOST_FALLBACK = {
+    "AADS": "contabo116",
+    "GO100": "contabo14",
+    "KIS": "contabo14",
+    "SF": "cafe24_114",
+    "NTV2": "cafe24_114",
+    "NAS": "cafe24_114",
+}
+
+
+@router.get("/pipeline/runner/status", tags=["pipeline-runner"])
+async def runner_status(
+    window_hours: int = Query(1, ge=1, le=24),
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """서버별 러너 작업 현황.
+
+    화면이 "어느 서버가 막혔나"를 즉시 보여주기 위한 집계다. 2026-09-12 에
+    GO100 러너가 인증 실패로 6시간 동안 37건을 실패시켰는데, 현황을 보여주는
+    곳이 없어 아무도 알아차리지 못했다.
+
+    서버 가동 여부는 원격 systemctl 호출 없이 pipeline_runner_hosts 의
+    하트비트로 판단한다. 원격 호출은 느리고 한 대가 응답하지 않으면 화면
+    전체가 멈춘다.
+    """
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    tenant = _tenant_id(context)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT COALESCE(NULLIF(runner_host, ''), '') AS runner_host,
+                   project,
+                   status,
+                   COUNT(*)::int AS cnt,
+                   MAX(EXTRACT(EPOCH FROM (NOW() - COALESCE(started_at, created_at)))::int)
+                       FILTER (WHERE status IN ('running', 'claimed')) AS oldest_sec
+            FROM pipeline_jobs
+            WHERE tenant_id = $1::uuid
+              AND (status IN ('running', 'claimed')
+                   OR updated_at > NOW() - ($2::int * INTERVAL '1 hour'))
+            GROUP BY 1, 2, 3
+            """,
+            tenant,
+            window_hours,
+        )
+        hosts = await conn.fetch(
+            "SELECT host, projects, engine_mode, max_concurrent, "
+            "EXTRACT(EPOCH FROM (NOW() - last_seen_at))::int AS seen_ago "
+            "FROM pipeline_runner_hosts"
+        )
+
+    agg: dict = {}
+
+    def _bucket(host: str) -> dict:
+        return agg.setdefault(host, {
+            "host": host, "running": 0, "done": 0, "error": 0,
+            "cancelled": 0, "other": 0, "oldest_running_sec": 0,
+            "projects": set(), "alive": None, "seen_ago_sec": None,
+        })
+
+    for row in rows:
+        host = row["runner_host"] or _PROJECT_HOST_FALLBACK.get(row["project"], "unknown")
+        bucket = _bucket(host)
+        bucket["projects"].add(row["project"])
+        status = row["status"]
+        count = int(row["cnt"] or 0)
+        if status in ("running", "claimed"):
+            bucket["running"] += count
+            bucket["oldest_running_sec"] = max(
+                bucket["oldest_running_sec"], int(row["oldest_sec"] or 0))
+        elif status == "done":
+            bucket["done"] += count
+        elif status in ("error", "failed"):
+            bucket["error"] += count
+        elif status == "cancelled":
+            bucket["cancelled"] += count
+        else:
+            bucket["other"] += count
+
+    for row in hosts:
+        bucket = _bucket(row["host"])
+        seen = int(row["seen_ago"] or 0)
+        bucket["seen_ago_sec"] = seen
+        # 하트비트 주기보다 넉넉히 잡는다. 한 주기 놓쳤다고 죽었다고 보면 안 된다.
+        bucket["alive"] = seen < 600
+        if row["projects"]:
+            bucket["projects"].update(
+                p.strip() for p in str(row["projects"]).split(",") if p.strip())
+        bucket["engine_mode"] = row["engine_mode"] or ""
+        bucket["max_concurrent"] = row["max_concurrent"]
+
+    servers = []
+    for bucket in agg.values():
+        bucket["projects"] = sorted(bucket["projects"])
+        servers.append(bucket)
+    servers.sort(key=lambda b: (-b["error"], -b["running"], b["host"]))
+
+    return {
+        "window_hours": window_hours,
+        "servers": servers,
+        "totals": {
+            "hosts": len(servers),
+            "running": sum(b["running"] for b in servers),
+            "error": sum(b["error"] for b in servers),
+            "done": sum(b["done"] for b in servers),
+            "cancelled": sum(b["cancelled"] for b in servers),
+        },
+    }
+
+
 @router.get("/pipeline/runner/model-stats", tags=["pipeline-runner"])
 async def get_runner_model_stats(
     days: int = Query(30, ge=1, le=180),
