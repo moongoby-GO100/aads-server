@@ -13619,3 +13619,21 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 테스트용 격리 컨테이너에서 `tests/unit/test_directive_draft_service.py` 21건 통과,
   Python compile과 `git diff --check`를 통과했다. 운영 DB 값은 기존 CEO 우선순위를
   보존한 채 `tela` 항목만 `terra`로 바꾸고 전후 SELECT로 검증한다.
+
+## 2026-09-13 00:27 KST — 채팅 현대화 WP03 서버 스트리밍 계약
+
+- 기존 무버전 SSE는 v1 기본값으로 그대로 유지하고, 명시적으로 협상한 v2 요청에만
+  schema-versioned event envelope, capability discovery, snapshot coverage와 별도
+  server high-watermark, client-applied resume cursor 계약을 추가했다.
+- Redis replay 이벤트에 생성 시점 `owner_epoch`를 선택적으로 보존하고, trim 경계나
+  잘못된 cursor/frame은 이벤트를 건너뛰지 않고 `snapshot_required`로 실패 폐쇄한다.
+  transport EOF/replay 완료는 DB execution terminal 상태로 승격하지 않는다.
+- 작업은 기존 dirty `main`과 실패 러너 worktree를 사용하지 않고 최신 `origin/main`
+  기반 격리 worktree에서 통합했다. 기존 send/resume/regenerate v1 경로와 owner fencing은
+  유지하며 신규 v2 route/model/service만 additive하게 연결했다.
+- 검증: 신규 protocol/test Ruff 통과, Python compile 통과, WP00/WP03/interrupt receipt/
+  resume fence/retry lifecycle/status projection/stream completion/execution lease/deploy
+  reconcile 관련 테스트 79건 통과(기존 FastAPI deprecation warning 1건).
+- 운영 API 배포와 실제 Redis/DB/브라우저 cross-version E2E는 아직 미수행이다. WP03
+  dashboard consumer가 통합되고 양쪽 계약 테스트가 통과한 뒤 Blue/Green으로 함께
+  배포하며, 양 슬롯 동일 digest와 5분 P0/P1 감시를 완료 기준으로 한다.
