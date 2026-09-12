@@ -665,3 +665,13 @@ MCP 원격 쓰기 도구(`write_remote_file`/`patch_remote_file`)는 **활성 AP
 - 확인: 수정은 이미 커밋 `2ada630e` (`fix(chat): 지연 알림 완료 마킹이 blue/green 소유자 불일치로 실패하던 문제 수정`)으로 `main` 계보와 `origin/main`에 포함되어 있다. `_finish_deferred_reaction` 완료 조건은 `id + completed_at IS NULL`이며 현재 슬롯의 `_EXECUTION_OWNER_INSTANCE`를 전달하지 않는다.
 - 검증 보강: `tests/unit/test_execution_lease_contract.py` 회귀 계약에 완료 callback은 owner-independent여야 하고, 실행을 시작하지 못한 claim을 pending으로 돌리는 경로는 기존 owner fence를 유지해야 한다는 검증을 추가했다.
 - 영향: 완료 알림 상태 전환만 대상이며 claim/리스 반납·채팅 실행 owner fence는 변경하지 않았다. DB 쓰기, 서비스 재시작, 배포는 수행하지 않았다.
+
+## 2026-09-13 AAP 원자화 기반 중소기업 업무 자동화 플랫폼 구상 문서화 (CEO 지시)
+- 질문: 중소기업이 사용중인 양식·절차·서류·이미지·영상을 등록하면 원자화 1차 저장 → 분석 → 자동화 시스템을 구현 제공할 수 있는가.
+- 판정: 가능. 단 "코드 자동생성"이 아니라 "검증된 업무 모듈 + 규칙 DSL 자동 조립" 방식으로 설계해야 성립.
+- 산출물: docs/AAP-ATOMIC-AUTOMATION-PLATFORM-20260913.md (기획+설계+PRD 통합)
+- 구조: L1 수집 → L2 원자화(WORM, 역추적) → L3 지식화(후보 추출+실무자 확정) → L4 조립(모듈·워크플로·권한 구성)
+- 온보딩 목표: 업무 1건당 실무자 3시간 이내. 장치 = 지문학습·별칭학습·객관식 질문·과거 데이터 재현 대사.
+- 실증 자산: NTV2 atomic_data_* 7테이블 + OrderExcelShadowParser v1.0.0 (엑셀 원자화 계층 동작 확인).
+- Phase 0 제안: NTV2 NT-ORDER-INTAKE M1과 동일 코드베이스로 진행(실증+제품화 동시).
+- 상태: 문서만 작성. 코드/DB 변경 없음.
