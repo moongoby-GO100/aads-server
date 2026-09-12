@@ -51,6 +51,14 @@ _deferred_consecutive_count: Dict[str, int] = {}
 _DEFERRED_MAX_CONSECUTIVE = max(3, int(os.getenv("AADS_DEFERRED_MAX_CONSECUTIVE", "5")))
 _HARD_AGE_MAX_SECONDS = max(600, int(os.getenv("AADS_HARD_AGE_MAX_SECONDS", "1800")))
 _HARD_AGE_PER_PROJECT: Dict[str, int] = {"GO100": 3600}
+# 오래된 실행이라도 "살아서 진행 중"이면 죽이지 않는다. 이 유예 시간만큼
+# 아무 진전이 없을 때만 정지 상태로 본다.
+_HARD_AGE_IDLE_GRACE_SECONDS = max(60, int(os.getenv("AADS_HARD_AGE_IDLE_GRACE_SECONDS", "300")))
+# 다만 무한정 두지는 않는다. 진행 중이어도 이 시간을 넘으면 종료한다.
+_HARD_AGE_ABSOLUTE_MAX_SECONDS = max(
+    _HARD_AGE_MAX_SECONDS,
+    int(os.getenv("AADS_HARD_AGE_ABSOLUTE_MAX_SECONDS", "14400")),
+)
 
 
 class ResumeFencedOut(RuntimeError):
@@ -3397,14 +3405,31 @@ async def cleanup_stale_streaming_placeholders(
         if _hard_age_cleaned:
             logger.warning("hard_age_null_model_zombie_cleanup cleaned=%s", _hard_age_cleaned)
 
+        # 나이만 보고 죽이면 실제로 답을 쓰고 있는 턴이 끊긴다.
+        #
+        # 세션 5090a247(백테스트, 도구 200회 이상)은 한 턴이 30분을 넘는 게
+        # 정상인데, 이 스위퍼가 created_at 만 보고 무조건 종료시켜 매번
+        # "응답 생성에 실패했습니다" 로 끝났다. 같은 시각 다른 경로는
+        # overlong_running_execution_deferred_active 로 "idle=2s" 라며 살아있다고
+        # 판정하고 있었다 — 두 판정이 서로 모순이었다.
+        #
+        # 이제 유휴 상태일 때만 종료한다. 진행 중이어도 절대 상한(기본 4시간)을
+        # 넘으면 종료해 폭주는 여전히 막는다.
         _hard_age_any_rows = await conn.fetch(
             """
             SELECT te.id, te.session_id
             FROM chat_turn_executions te
             WHERE te.status IN ('running', 'retrying')
               AND te.created_at < NOW() - ($1::int * INTERVAL '1 second')
+              AND (
+                    COALESCE(te.heartbeat_at, te.updated_at, te.started_at, te.created_at)
+                        < NOW() - ($2::int * INTERVAL '1 second')
+                 OR te.created_at < NOW() - ($3::int * INTERVAL '1 second')
+              )
             """,
             _HARD_AGE_MAX_SECONDS,
+            _HARD_AGE_IDLE_GRACE_SECONDS,
+            _HARD_AGE_ABSOLUTE_MAX_SECONDS,
         )
         _hard_age_any_cleaned = 0
         for _haa in _hard_age_any_rows:
