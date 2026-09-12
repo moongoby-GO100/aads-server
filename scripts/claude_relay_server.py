@@ -224,6 +224,38 @@ _AADS_API_OAUTH_STATE_URL = os.getenv(
     "CLAUDE_RELAY_OAUTH_STATE_URL",
     "http://127.0.0.1:8100/api/v1/health/claude-relay/oauth-state",
 )
+# 토큰 조회처를 한 슬롯에 고정하면 그 슬롯이 재생성되는 동안 인증이 통째로 끊긴다.
+# 2026-09-12 21:00, 배포로 8100 이 내려간 사이 릴레이가 8100 만 두드리다
+# "no OAuth token available" 500 을 반환했고 Opus 응답이 전부 실패했다.
+# 활성 슬롯(.active_port)을 먼저 보고, 그다음 양쪽 포트를 모두 시도한다.
+_ACTIVE_PORT_FILE = Path(os.getenv(
+    "CLAUDE_RELAY_ACTIVE_PORT_FILE", "/root/aads/aads-server/.active_port"))
+_OAUTH_STATE_PATH = "/api/v1/health/claude-relay/oauth-state"
+_OAUTH_STATE_PORTS = ("8100", "8102")
+# 양쪽 다 내려가 있는 순간(배포 교체 창)을 견디기 위한 마지막 성공값 캐시.
+_OAUTH_STATE_DISK_CACHE = Path(os.getenv(
+    "CLAUDE_RELAY_OAUTH_CACHE_FILE", "/root/.claude-relay/oauth-state-cache.json"))
+
+
+def _oauth_state_urls():
+    """조회 후보 URL. 활성 슬롯 우선, 그다음 나머지 포트."""
+    urls = []
+    if os.getenv("CLAUDE_RELAY_OAUTH_STATE_URL"):
+        urls.append(_AADS_API_OAUTH_STATE_URL)
+    active = ""
+    try:
+        active = _ACTIVE_PORT_FILE.read_text().strip()
+    except OSError:
+        active = ""
+    for port in ([active] if active else []) + list(_OAUTH_STATE_PORTS):
+        if not port:
+            continue
+        url = "http://127.0.0.1:%s%s" % (port, _OAUTH_STATE_PATH)
+        if url not in urls:
+            urls.append(url)
+    if not urls:
+        urls.append(_AADS_API_OAUTH_STATE_URL)
+    return urls
 _RELAY_SECRET_FILE = Path(os.getenv(
     "CLAUDE_RELAY_SHARED_SECRET_FILE",
     "/root/aads/aads-server/scripts/claude_relay_secret.txt",
@@ -357,18 +389,56 @@ def _read_db_oauth_rows():
     secret = _load_relay_secret()
     if secret:
         headers["X-Claude-Relay-Secret"] = secret
-    req = urllib_request.Request(_AADS_API_OAUTH_STATE_URL, headers=headers)
-    try:
-        with urllib_request.urlopen(req, timeout=3) as resp:
-            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
-        rows = payload.get("keys", []) if isinstance(payload, dict) else []
-        if isinstance(rows, list):
-            _DB_OAUTH_CACHE["rows"] = rows
-            _DB_OAUTH_CACHE["ts"] = now
-            return rows
-    except (urllib_error.URLError, urllib_error.HTTPError, ValueError, json.JSONDecodeError, OSError) as e:
-        logger.warning("DB OAuth read failed, using env fallback: %s", e)
+    last_error = None
+    for url in _oauth_state_urls():
+        req = urllib_request.Request(url, headers=headers)
+        try:
+            with urllib_request.urlopen(req, timeout=3) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+            rows = payload.get("keys", []) if isinstance(payload, dict) else []
+            if isinstance(rows, list) and rows:
+                _DB_OAUTH_CACHE["rows"] = rows
+                _DB_OAUTH_CACHE["ts"] = now
+                _write_oauth_state_disk_cache(rows)
+                return rows
+        except (urllib_error.URLError, urllib_error.HTTPError, ValueError,
+                json.JSONDecodeError, OSError) as e:
+            last_error = e
+            continue
+
+    # 배포 교체 창처럼 두 슬롯이 동시에 내려간 순간에도 인증이 끊기면 안 된다.
+    # 마지막으로 성공한 값을 쓴다. 토큰 회전은 드물고, 잠깐 이전 토큰을 쓰는 편이
+    # 인증 자체가 사라져 모든 응답이 실패하는 것보다 낫다.
+    cached = _read_oauth_state_disk_cache()
+    if cached:
+        logger.warning(
+            "DB OAuth read failed on all slots (%s) — using last known good cache", last_error)
+        _DB_OAUTH_CACHE["rows"] = cached
+        _DB_OAUTH_CACHE["ts"] = now
+        return cached
+
+    logger.warning("DB OAuth read failed, using env fallback: %s", last_error)
     return None
+
+
+def _write_oauth_state_disk_cache(rows):
+    try:
+        _OAUTH_STATE_DISK_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _OAUTH_STATE_DISK_CACHE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"ts": time.time(), "keys": rows}))
+        tmp.replace(_OAUTH_STATE_DISK_CACHE)
+        os.chmod(str(_OAUTH_STATE_DISK_CACHE), 0o600)
+    except OSError as e:
+        logger.debug("oauth state cache write failed: %s", e)
+
+
+def _read_oauth_state_disk_cache():
+    try:
+        payload = json.loads(_OAUTH_STATE_DISK_CACHE.read_text())
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    rows = payload.get("keys") if isinstance(payload, dict) else None
+    return rows if isinstance(rows, list) and rows else None
 
 
 def _is_rate_limited_row(row):
