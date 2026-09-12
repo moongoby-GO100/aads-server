@@ -8,13 +8,14 @@ set -euo pipefail
 
 LOG="/var/log/codex_auth_sync.log"
 AUTH_FILE="/root/.codex/auth.json"
-CODEX_BIN="/root/.nvm/versions/node/v20.20.0/bin/codex"
+CODEX_BIN="${CODEX_BIN:-$(command -v codex 2>/dev/null || echo /usr/bin/codex)}"
 WARN_DAYS=3
 TELEGRAM_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 
-SSH_211="5.104.86.14"
-SSH_114="-p 7916 114.207.244.86"
+# host + port 분리: scp는 -P, ssh는 -p 로 포트를 각각 받아야 한다.
+HOST_211="5.104.86.14";     PORT_211="22"
+HOST_114="114.207.244.86";  PORT_114="7916"
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=no"
 
 [[ -f /root/aads/.env ]] && source /root/aads/.env
@@ -57,31 +58,34 @@ except Exception as e:
 
 prewarm_codex() {
     log "PREWARM: codex exec 실행으로 토큰 자동 갱신 시도"
-    timeout 60 "$CODEX_BIN" exec --sandbox read-only "echo codex-auth-prewarm-ok" > /dev/null 2>&1
-    local rc=$?
-    if [[ $rc -eq 0 ]]; then
+    local out rc
+    out=$(timeout 60 "$CODEX_BIN" exec --sandbox read-only "echo codex-auth-prewarm-ok" 2>&1)
+    rc=$?
+    if [[ $rc -eq 0 ]] && ! grep -qiE 'usage limit|rate limit|quota' <<< "$out"; then
         log "PREWARM: 성공 — 토큰 자동 갱신됨"
         return 0
-    else
-        log "PREWARM: 실패 (exit=$rc) — 수동 재인증 필요"
-        return 1
     fi
+    # 사용량 한도는 인증 문제가 아니다. 재인증을 요구하면 오진이 된다
+    # (2026-09-12: 폐기된 refresh token이 한도 소진을 가리는 사례가 실제 발생).
+    if grep -qiE 'usage limit|rate limit|quota' <<< "$out"; then
+        log "PREWARM: 사용량 한도 — 인증은 유효, 재인증 불필요"
+        return 2
+    fi
+    log "PREWARM: 실패 (exit=$rc) — 수동 재인증 필요: ${out:0:200}"
+    return 1
 }
 
 sync_to_remote() {
-    local label="$1"
-    shift
-    local ssh_target="$*"
+    local label="$1" host="$2" port="${3:-22}"
 
-    # 원격 서버에 백업 + 복사
-    ssh $SSH_OPTS $ssh_target "cp $AUTH_FILE ${AUTH_FILE}.bak 2>/dev/null; true" 2>/dev/null
-    scp $SSH_OPTS "$AUTH_FILE" "${ssh_target##* }:$AUTH_FILE" 2>/dev/null
-    ssh $SSH_OPTS $ssh_target "chmod 600 $AUTH_FILE" 2>/dev/null
-
-    if [[ $? -eq 0 ]]; then
-        log "SYNC: $label ← 동기화 성공"
+    # 원격 백업 후 복사. 성패는 scp 자체의 종료코드로 판정한다
+    # (과거에는 뒤따르는 chmod의 $?를 보아 실패가 성공으로 기록되었다).
+    ssh $SSH_OPTS -p "$port" "$host" "cp $AUTH_FILE ${AUTH_FILE}.bak 2>/dev/null; true" 2>/dev/null
+    if scp $SSH_OPTS -P "$port" "$AUTH_FILE" "${host}:$AUTH_FILE" >/dev/null 2>&1; then
+        ssh $SSH_OPTS -p "$port" "$host" "chmod 600 $AUTH_FILE" 2>/dev/null
+        log "SYNC: $label ($host:$port) ← 동기화 성공"
     else
-        log "SYNC: $label ← 동기화 실패"
+        log "SYNC: $label ($host:$port) ← 동기화 실패 (scp)"
         send_telegram "🔴 [Codex Auth] ${label} 동기화 실패 — 수동 확인 필요"
     fi
 }
@@ -105,13 +109,16 @@ if (( remaining_int < 1 )); then
     log "ALERT: 토큰 만료 임박 (${remaining}일) — 프리웜 갱신 시도"
     send_telegram "🟡 [Codex Auth] contabo116 토큰 ${remaining}일 남음 — 자동 갱신 시도 중"
 
-    if prewarm_codex; then
+    prewarm_codex; prewarm_rc=$?
+    if [[ $prewarm_rc -eq 0 ]]; then
         new_remaining=$(get_token_remaining_days)
         log "RENEWED: 갱신 후 잔여 ${new_remaining}일"
         send_telegram "✅ [Codex Auth] contabo116 토큰 자동 갱신 성공 — ${new_remaining}일 남음"
         # 갱신된 토큰을 전서버에 동기화
-        sync_to_remote "contabo14" "$SSH_211"
-        sync_to_remote "cafe24_114" $SSH_114
+        sync_to_remote "contabo14" "$HOST_211" "$PORT_211"
+        sync_to_remote "cafe24_114" "$HOST_114" "$PORT_114"
+    elif [[ $prewarm_rc -eq 2 ]]; then
+        send_telegram "🟡 [Codex Auth] contabo116 사용량 한도로 프리웜 보류 — 인증은 정상, 조치 불필요"
     else
         send_telegram "🔴 [Codex Auth] contabo116 토큰 자동 갱신 실패 — CEO 수동 인증 필요: codex login --device-auth"
     fi
@@ -134,8 +141,8 @@ else
     MIN=$(date +%M)
     if [[ "$HOUR" == "04" && "$MIN" -ge 25 && "$MIN" -le 35 ]]; then
         log "DAILY_SYNC: 정기 전서버 동기화"
-        sync_to_remote "contabo14" "$SSH_211"
-        sync_to_remote "cafe24_114" $SSH_114
+        sync_to_remote "contabo14" "$HOST_211" "$PORT_211"
+        sync_to_remote "cafe24_114" "$HOST_114" "$PORT_114"
     fi
 fi
 
