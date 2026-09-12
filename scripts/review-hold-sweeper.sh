@@ -92,7 +92,8 @@ WHERE status='review_hold'
   AND (review_retry_last_at IS NULL
        OR review_retry_last_at < NOW() - ((LEAST(${SWEEP_BACKOFF_MAX_MIN},
             (${SWEEP_BACKOFF_BASE_MIN} * POWER(2, COALESCE(review_retry_count,0)))::int))::text || ' minutes')::interval)
-ORDER BY updated_at ASC
+# 큰 diff 한 건이 복구 창을 독점하지 않도록 작은 것부터 처리한다.
+ORDER BY length(COALESCE(git_diff,'')) ASC, updated_at ASC
 LIMIT ${SWEEP_BATCH};"
 
 rows=$(db_query "$select_sql") || rows=""
@@ -151,6 +152,17 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id; do
         issues=$(jq -r '(.issues // []) | join("; ")' "$resp_file" 2>/dev/null || echo "")
     fi
     [[ "$score" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || score="0.0"
+
+    # 검수 인프라 전체가 죽은 경우 잡별 재시도 예산을 태우며 같은 장애를 배치
+    # 전체에 반복하지 않는다. 첫 실패에서 회로를 열고 다음 타이머 주기에 재확인한다.
+    if [[ "$http_code" != "200" || -z "$verdict" ]]; then
+        log "  CIRCUIT_OPEN $job_id project=$project http=$http_code verdict=${verdict:-none} — retry budget preserved; batch stopped"
+        break
+    fi
+    if [[ "$verdict" == "FLAG" && ",REVIEW_API_UNAVAILABLE,REVIEW_MODEL_NO_RESPONSE,REVIEW_PARSER_FAILURE,REVIEW_TIMEOUT," == *",${category},"* ]]; then
+        log "  CIRCUIT_OPEN $job_id project=$project category=$category — retry budget preserved; batch stopped"
+        break
+    fi
 
     next_retry=$((retry_count + 1))
     log "  REVIEW $job_id project=$project http=$http_code verdict=${verdict:-none} score=$score category=${category:-none} retry=${next_retry}/${SWEEP_MAX_RETRY}"

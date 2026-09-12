@@ -20,6 +20,8 @@ Environment=SWEEP_BACKOFF_BASE_MIN=10
 Environment=SWEEP_BACKOFF_MAX_MIN=360
 # 리뷰 1건이 폴백 체인에 물려 창 전체를 잡아먹지 않도록 상한을 둔다.
 Environment=REVIEW_MAX_TIME=180
+Environment=REVIEW_LLM_TIMEOUT_SEC=45
+Environment=REVIEW_MODEL_MAX_ATTEMPTS=6
 
 TimeoutStartSec=3600
 StandardOutput=journal

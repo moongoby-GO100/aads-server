@@ -21,8 +21,12 @@ logger = logging.getLogger(__name__)
 _REVIEW_MODEL = "qwen-turbo"
 _REVIEW_MODEL_FALLBACK = _REVIEW_MODEL  # DB 조회 실패 시 기본값
 _REVIEW_PARSE_MAX_ATTEMPTS = 3  # P0: JSON 파싱 실패 시 즉시 REVIEW_PARSER_FAILURE 대신 재시도 후 폴백
+# DB에 여러 독립 리뷰 모델이 등록되어 있으면 앞쪽 모델 장애만으로 뒤쪽의 정상
+# 모델을 영구히 건너뛰지 않는다. 다만 잘못된 설정이 요청 시간을 무한히 늘리지
+# 않도록 전체 모델 시도 수도 별도 상한으로 제한한다.
+_REVIEW_MODEL_MAX_ATTEMPTS = int(os.environ.get("REVIEW_MODEL_MAX_ATTEMPTS", "6"))
 # P0: 리뷰 LLM 시도 1회 상한(초). 초과하면 무응답으로 간주하고 다음 시도로 넘긴다.
-_REVIEW_LLM_TIMEOUT_SEC = int(os.environ.get("REVIEW_LLM_TIMEOUT_SEC", "120"))
+_REVIEW_LLM_TIMEOUT_SEC = int(os.environ.get("REVIEW_LLM_TIMEOUT_SEC", "45"))
 
 _DIFF_HEADER_RE = re.compile(r"^diff --git a\/.+ b\/.+$", re.MULTILINE)
 _DIFF_HUNK_RE = re.compile(r"^@@ .+ @@$", re.MULTILINE)
@@ -641,7 +645,14 @@ async def review_code_diff(
         result_text = None
         details = None
         parse_fail_count = 0
-        for attempt_no in range(1, _REVIEW_PARSE_MAX_ATTEMPTS + 1):
+        # 기존에는 모델이 4개 이상이어도 고정 3회만 돌아 네 번째 이후의 정상
+        # Codex/로컬 모델에 도달하지 못했다. 최소 파싱 재시도 수는 보장하되,
+        # 등록 모델 수만큼 순회하고 운영 상한을 넘기지 않는다.
+        attempt_limit = min(
+            max(_REVIEW_PARSE_MAX_ATTEMPTS, len(review_models)),
+            max(_REVIEW_PARSE_MAX_ATTEMPTS, _REVIEW_MODEL_MAX_ATTEMPTS),
+        )
+        for attempt_no in range(1, attempt_limit + 1):
             model = review_models[(attempt_no - 1) % len(review_models)] if review_models else _REVIEW_MODEL_FALLBACK
             try:
                 # P0: 리뷰 모델이 실패하면 call_llm_with_fallback 이 Claude 429 재시도(최대 60회)와
@@ -659,11 +670,11 @@ async def review_code_diff(
                 )
             except asyncio.TimeoutError:
                 logger.warning("review_model_timeout: model=%s attempt=%s/%s limit=%ss",
-                               model, attempt_no, _REVIEW_PARSE_MAX_ATTEMPTS, _REVIEW_LLM_TIMEOUT_SEC)
+                               model, attempt_no, attempt_limit, _REVIEW_LLM_TIMEOUT_SEC)
                 result_text = None
             except Exception as model_err:
                 logger.warning("review_model_failed: model=%s attempt=%s/%s error=%s",
-                               model, attempt_no, _REVIEW_PARSE_MAX_ATTEMPTS, str(model_err)[:60])
+                               model, attempt_no, attempt_limit, str(model_err)[:60])
                 result_text = None
 
             if not result_text:
@@ -677,9 +688,9 @@ async def review_code_diff(
             parse_fail_count += 1
             logger.warning(
                 "code_reviewer_json_parse_failed: job_id=%s model=%s attempt=%s/%s preview=%r",
-                job_id, model, attempt_no, _REVIEW_PARSE_MAX_ATTEMPTS, (result_text or "")[:200]
+                job_id, model, attempt_no, attempt_limit, (result_text or "")[:200]
             )
-            if attempt_no < _REVIEW_PARSE_MAX_ATTEMPTS:
+            if attempt_no < attempt_limit:
                 await asyncio.sleep(2 * attempt_no)
 
         if not result_text:

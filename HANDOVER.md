@@ -13880,3 +13880,15 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 검증: `tests/unit/test_deploy_autoheal.py` 37건 통과, `bash -n` 2종 통과,
   DRYRUN 실측으로 deploy_runs 실제 실패 문자열 9종의 분류·정책을 확인했다.
   실제 배포 실패를 주입한 E2E 재개 검증은 미실행이며 다음 실패 배포에서 관찰한다.
+
+## 2026-09-13 08:01 KST — review_hold 반복 장애 회로 차단·후순위 모델 도달 보강
+
+- 운영 DB에서 `review_hold` 23건 중 22건이 리뷰 인프라 분류였고, Anthropic 및
+  LiteLLM 429가 겹치면서 재검수 한 건이 2~3분씩 점유했다. 기존 리뷰 루프는 모델이
+  4개 이상이어도 3회만 시도해 뒤쪽의 정상 Codex 모델에 도달하지 못했다.
+- 리뷰 모델 순회를 등록 모델 수까지 확장하되 최대 6회로 제한하고, 시도당 상한을
+  45초로 낮췄다. 스위퍼는 작은 diff부터 처리하며 HTTP 무응답 또는 인프라 FLAG를
+  만나면 첫 건에서 배치를 중단하고 해당 작업의 재시도 예산을 보존한다.
+- 검증: reviewer/flag/sweeper 집중 테스트 26건, Python compile, Bash syntax,
+  `git diff --check`를 통과했다. 운영 반영 후 실제 리뷰 1건 성공, 보류 건 감소,
+  systemd 타이머 반복 실행을 확인해야 최종 복구로 판정한다.

@@ -33,6 +33,55 @@ def test_review_parse_max_attempts_is_three():
     assert reviewer._REVIEW_PARSE_MAX_ATTEMPTS == 3
 
 
+def test_review_code_diff_reaches_later_healthy_model():
+    asyncio.run(_review_code_diff_reaches_later_healthy_model())
+
+
+async def _review_code_diff_reaches_later_healthy_model():
+    reviewer = _load_reviewer()
+    valid_response = """{
+      "verdict": "APPROVE",
+      "correctness": 0.9,
+      "security": 0.9,
+      "scope_compliance": 0.9,
+      "preservation": 0.9,
+      "quality": 0.9,
+      "issues": [],
+      "summary": "fourth model recovered"
+    }"""
+    call_llm = AsyncMock(side_effect=["", "", "", valid_response])
+    anthropic_mod = types.ModuleType("app.core.anthropic_client")
+    anthropic_mod.call_llm_with_fallback = call_llm
+    with patch.dict(
+        sys.modules,
+        {
+            "app": types.ModuleType("app"),
+            "app.core": types.ModuleType("app.core"),
+            "app.core.anthropic_client": anthropic_mod,
+        },
+    ), patch.object(
+        reviewer,
+        "_get_review_models",
+        new=AsyncMock(return_value=["bad-1", "bad-2", "bad-3", "codex:gpt-5.6-sol"]),
+    ), patch.object(
+        reviewer, "_save_review_result", new=AsyncMock(),
+    ):
+        verdict = await reviewer.review_code_diff(
+            project="AADS",
+            job_id="runner-test-later-model",
+            diff="diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n a = 1\n+b = 2\n",
+            instruction="test",
+            files_changed=["a.py"],
+        )
+
+    assert call_llm.await_count == 4
+    assert [call.kwargs["model"] for call in call_llm.await_args_list] == [
+        "bad-1", "bad-2", "bad-3", "codex:gpt-5.6-sol",
+    ]
+    assert verdict.verdict == "APPROVE"
+    assert verdict.model_used == "codex:gpt-5.6-sol"
+
+
 def test_review_code_diff_retries_parse_failure_then_recovers():
     asyncio.run(_review_code_diff_retries_parse_failure_then_recovers())
 
