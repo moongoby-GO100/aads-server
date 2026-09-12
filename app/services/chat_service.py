@@ -929,6 +929,14 @@ def _recovery_len_close(a: str, b: str) -> bool:
     return max(la, lb) / min(la, lb) <= _RECOVERY_DEDUPE_MAX_LEN_RATIO
 
 
+def _is_recovery_extension(a: str, b: str) -> bool:
+    """Return whether two recovery messages are prefix-compatible copies."""
+    shorter, longer = sorted((a or "", b or ""), key=len)
+    return longer.startswith(shorter) or (
+        shorter[:_RECOVERY_PREFIX_LEN] == longer[:_RECOVERY_PREFIX_LEN]
+    )
+
+
 def _dedupe_recovery_like_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """연속 recovery 계열 assistant 메시지 중 가장 긴 1건만 남긴다."""
     if len(messages) <= 1:
@@ -944,8 +952,9 @@ def _dedupe_recovery_like_messages(messages: List[Dict[str, Any]]) -> List[Dict[
             and not _is_notification_message(prev)
             and cur.get("model_used") in _RECOVERY_DEDUPE_MODEL_USED
             and prev.get("model_used") in _RECOVERY_DEDUPE_MODEL_USED
-            and (cur.get("content") or "")[:_RECOVERY_PREFIX_LEN]
-            == (prev.get("content") or "")[:_RECOVERY_PREFIX_LEN]
+            and _is_recovery_extension(
+                cur.get("content") or "", prev.get("content") or ""
+            )
             and _recovery_len_close(cur.get("content") or "", prev.get("content") or "")
         ):
             if len(cur.get("content") or "") > len(prev.get("content") or ""):
@@ -2717,6 +2726,12 @@ def _looks_like_incomplete_progress_tail(text: str) -> bool:
     ):
         return True
     if re.search(
+        r"(?:확인|조회|점검|분석|파악|조사|검토|진행|실행|처리|수정|패치|적용|반영|준비|로드)"
+        r"(?:합니다|중입니다)\.?\s+.{1,100}(?:합니다|하겠습니다)\.?\s*$",
+        tail,
+    ):
+        return True
+    if re.search(
         r"(?:병렬로|순차적으로|순차로|동시에)\s*.{0,80}"
         r"(?:진행|실행|시작|처리|조회|확인|실측)"
         r"(?:하겠습니다|합니다|중입니다)\.?\s*$",
@@ -3232,7 +3247,12 @@ async def cleanup_stale_streaming_placeholders(
         )
         _orphan_terminal_cleaned = 0
         for _orow in _orphan_terminal_rows:
-            _oeid = uuid.UUID(str(_orow["execution_id"]))
+            if str(_orow["session_id"]) in live_sessions:
+                continue
+            _execution_id = _orow.get("execution_id")
+            if not _execution_id:
+                continue
+            _oeid = uuid.UUID(str(_execution_id))
             _has_final = await conn.fetchval(
                 "SELECT 1 FROM chat_messages WHERE execution_id = $1 AND role = 'assistant' AND intent IS DISTINCT FROM 'streaming_placeholder' LIMIT 1",
                 _oeid,
@@ -3251,7 +3271,7 @@ async def cleanup_stale_streaming_placeholders(
 
         _stale_content_rows = await conn.fetch(
             """
-            SELECT m.id, m.content
+            SELECT m.id, m.session_id::text AS session_id, m.content
             FROM chat_messages m
             WHERE m.intent IN ('streaming_placeholder', '_archived_partial')
               AND m.is_hidden = TRUE
@@ -3268,6 +3288,8 @@ async def cleanup_stale_streaming_placeholders(
         )
         _stale_content_promoted = 0
         for _scr in _stale_content_rows:
+            if str(_scr["session_id"]) in live_sessions:
+                continue
             _sc_content = _format_stale_placeholder_content(_scr["content"] or "")
             await conn.execute(
                 "UPDATE chat_messages SET intent = 'interrupted_partial', model_used = 'interrupted', is_hidden = FALSE, edited_at = NOW(), content = $2 WHERE id = $1",
@@ -3377,6 +3399,8 @@ async def cleanup_stale_streaming_placeholders(
         )
         _hard_age_cleaned = 0
         for _ha in _hard_age_rows:
+            if str(_ha["session_id"]) in live_sessions:
+                continue
             await conn.execute(
                 """
                 UPDATE chat_turn_executions
@@ -3436,6 +3460,8 @@ async def cleanup_stale_streaming_placeholders(
         )
         _hard_age_any_cleaned = 0
         for _haa in _hard_age_any_rows:
+            if str(_haa["session_id"]) in live_sessions:
+                continue
             await conn.execute(
                 """
                 UPDATE chat_turn_executions
@@ -8632,9 +8658,10 @@ def _message_select_fields(fields: str) -> str:
             "cost, tokens_in, tokens_out, bookmarked, attachments, sources, artifact_id, "
             "created_at, edited_at, "
             # AADS-RENDER-HYDRATION-P1: 화면이 직접 참조하는 소용량 컬럼을 복원한다.
-            # branch_id=버블 들여쓰기, reply_to_id=답글 연결, thinking_summary=사고 요약,
-            # is_hidden/quality_score=표시 판정. embedding 등 대용량 컬럼은 계속 제외한다.
-            "branch_id, reply_to_id, thinking_summary, is_hidden, quality_score, "
+            # branch_id=버블 들여쓰기, reply_to_id=답글 연결,
+            # is_hidden/quality_score=표시 판정. thinking_summary와 embedding 등
+            # 대용량 컬럼은 명시적 detail 조회에만 포함한다.
+            "branch_id, reply_to_id, is_hidden, quality_score, "
             "CASE "
             "WHEN quality_details IS NULL THEN NULL "
             "WHEN role = 'assistant' AND ("

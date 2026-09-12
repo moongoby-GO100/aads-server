@@ -13659,3 +13659,16 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 실제 Redis/DB cross-version E2E와 브라우저 검증은 dashboard WP03 통합 후 수행한다.
   WP04의 atomic snapshot checkpoint와 WP05의 stable generation identity가 끝나기 전
   v2 protocol은 운영 활성화하지 않는다.
+
+## 2026-09-13 01:58 KST — WP03 배포 차단 회귀 핫픽스
+
+- clean `origin/main` WP03 배포 전 회귀에서 복구 메시지 중복 제거, render projection
+  경량화, live session placeholder 보호, 한국어 진행문 미완료 판정 4건이 실패해
+  배포를 중단했다.
+- `chat_service.py`만 최소 보정했다. 접두 확장형 복구 메시지는 가장 긴 1건만 남기고,
+  render 목록에서 heavy `thinking_summary`를 제외하며, cleanup의 모든 hard-age 경로가
+  process-local live session을 건너뛰도록 통일했다. 두 문장형 한국어 진행 선언도
+  완료 응답으로 오판하지 않는다.
+- WP03/interrupt/status/chat-service 회귀 119건과 Python compile, 변경 파일 Ruff,
+  `git diff --check`를 릴리스 전 게이트로 실행한다. 운영 v2 활성화와 WP04 migration은
+  이 핫픽스 범위에 포함하지 않는다.
