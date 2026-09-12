@@ -13719,3 +13719,24 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - WP03/interrupt/status/chat-service 회귀 119건과 Python compile, 변경 파일 Ruff,
   `git diff --check`를 릴리스 전 게이트로 실행한다. 운영 v2 활성화와 WP04 migration은
   이 핫픽스 범위에 포함하지 않는다.
+
+## 2026-09-13 07:50 KST — AADS-191 배포 실패 자가치유 계층
+
+- 배포 실패가 `record_deploy`로 실패만 기록하고 끝나던 경로에 자가치유 계층을
+  넣었다. `deploy.sh` EXIT 트랩에서 `deploy_autoheal_on_exit`을 호출해 원인 분류
+  → 정책 판정 → 자동 교정 → 큐 재등록 → 워커 재개까지 연결한다. 설계는
+  `docs/prd/AADS-191-DEPLOY-SELF-HEALING-PRD.md`.
+- 분류 패턴은 최근 14일 `deploy_runs.error_summary` 실측 문자열에 맞췄다.
+  disk_full / dirty_worktree / stale_heartbeat / signal_interrupt /
+  standby_sync_fail / lock_wait_timeout만 retry 대상이고 나머지는 CEO
+  에스컬레이션으로 끝낸다.
+- 폭주 방지: 릴리스 SHA·원인당 재시도 1회, 쿨다운 180초, 킬스위치
+  `AADS_DEPLOY_AUTOHEAL=0`. 작업 트리를 바꾸는 교정(stash/checkout/clean/reset)은
+  금지하고 dirty는 큐 워커의 clean worktree 경로로 우회한다.
+- 후속 보정 2건: 큐 등록 실패 시 "재개 완료"로 보고하던 실패 은폐를 막았고,
+  신호 분류가 TERM/INT만 잡아 HUP 중단 13건이 새던 것을 `deploy interrupted by`
+  전체로 넓혔다. 컷오버 이후 재배포는 `DEPLOY_UPSTREAM_SWITCHED`와 phase 이름
+  (`autoheal_phase_is_post_switch`) 2중으로 차단한다.
+- 검증: `tests/unit/test_deploy_autoheal.py` 37건 통과, `bash -n` 2종 통과,
+  DRYRUN 실측으로 deploy_runs 실제 실패 문자열 9종의 분류·정책을 확인했다.
+  실제 배포 실패를 주입한 E2E 재개 검증은 미실행이며 다음 실패 배포에서 관찰한다.
