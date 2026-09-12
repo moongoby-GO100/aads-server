@@ -13552,3 +13552,33 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 집중 회귀 테스트 24건, Python compile, `git diff --check`를 통과했다. 운영 DB
   migration, 커밋·푸시·blue/green 배포, 재연결 후 로그/통계 확인은 릴리스 단계에서
   실제 결과를 확인한다.
+
+## 2026-09-12 23:05 KST — fields=render 하이드레이션 스톰 차단(P0)·render projection 컬럼 복원(P1)
+
+- 증상: 2026-09-12 21:07 KST 대시보드 354dee1(fields=full → fields=render) 배포 직후부터
+  채팅 화면이 `ChatErrorBoundary`("채팅 렌더링 오류가 발생했습니다")로 덮였다.
+  대상 세션 5090a247-47f7-4a05-a965-da89f844ad2f.
+- 확인한 사실: render projection이 빠뜨린 컬럼은 branch_id, embedding, idempotency_key,
+  is_compacted, is_hidden, quality_score, reply_to_id, tenant_id, thinking_summary 9개이며
+  컨테이너 실측 diff와 일치한다. 페이로드는 120건 기준 2,218,527B → 633,642B(-71.4%).
+  9개 컬럼의 프론트 사용처를 전수 확인한 결과 전부 옵셔널 가드가 걸려 있어
+  "필드 부재가 예외를 던진다"는 가설은 확인되지 않았다.
+- 확정 원인: render가 tools_called를 항상 빈 배열로 내려주면서 page.tsx의 자동 도구
+  하이드레이션 effect가 "도구를 쓴 모든 메시지"를 대상으로 잡았다. 하이드레이션이
+  setMessages를 호출하면 같은 effect가 다시 깨어 다음 3건을 잡는 연쇄가 생겼고
+  GET /chat/messages/{id}가 20분간 1,389회(distinct 315건, 분당 피크 118회) 발생했다.
+  해당 엔드포인트의 유일한 GET 호출부는 page.tsx의 hydrateMessageTools다.
+- 조치 P0(aads-dashboard 09ce829): 자동 하이드레이션을 기본 펼침 상태인 마지막 assistant
+  메시지 1건으로 제한하고, 나머지는 사용자가 도구 박스를 펼칠 때
+  onRequestToolHydration으로 1건씩 받도록 바꿨다. fields=render 자체는 유지한다.
+  되돌리면 354dee1이 고친 원래 멈춤(tools_called 9.2MB, 한 버블 676칩)이 되돌아온다.
+- 조치 P1(aads-server b1febab5): render projection에 branch_id, reply_to_id,
+  thinking_summary, is_hidden, quality_score 5개 소용량 컬럼을 복원했다. 이들은 각각
+  버블 들여쓰기, 답글 연결, 사고 요약, 표시 판정에 쓰인다. embedding 등 대용량은 계속 제외.
+- 검증: 대시보드 `npx tsc --noEmit` 통과, `npx eslint` 0 errors(기존 경고 19건 유지).
+  서버 `python3 -m py_compile` 통과, pre-commit Python 검수 통과.
+  LLM smoke test는 claude 429로 실패했고 hook 자체가 경고 처리했다(우회 아님).
+- 미완료: 브라우저 E2E 재현은 미실행이다. get_e2e_login_url/credential_list가
+  tenant_scope_required로 막혔고 Browser Bridge 세션이 전부 stale이라 콘솔 스택을
+  확보하지 못했다. 따라서 "던져진 예외의 정확한 지점"은 여전히 미검증이며,
+  이번 조치는 관측된 요청 폭주와 리렌더 폭주를 제거하는 근본 수정이다.
