@@ -1052,8 +1052,10 @@ async def _checkpoint_resume_progress(
         )
 
 
-# 펜싱 환불 상한. 소유권 경합은 배포 1회당 몇 번이면 끝나므로 넉넉하되 유한하게.
-_RESUME_FENCE_REFUND_MAX = max(0, int(os.getenv("AADS_RESUME_FENCE_REFUND_MAX", "8")))
+# 펜싱 환불 상한. 배포 #334 실측에서 컷오버+standby 재기동 한 번에 실행당 7~8회
+# 펜싱이 났다. 8은 한 번의 배포도 못 견디는 값이라 20으로 둔다. 상한의 목적은
+# 정상 배포를 통과시키는 게 아니라 무한 핑퐁을 끊는 것이므로 유한하면 충분하다.
+_RESUME_FENCE_REFUND_MAX = max(0, int(os.getenv("AADS_RESUME_FENCE_REFUND_MAX", "20")))
 
 
 async def _refund_fenced_resume_attempt(
@@ -7495,7 +7497,7 @@ async def _resume_single_stream(
                 _resume_model_chain = _cross_provider_chat_fallback_chain(_resume_model)
                 _resume_model_used = _resume_model_chain[0] if _resume_model_chain else _resume_model
 
-                _resume_attempt_charge = {"charged": False, "baseline_len": 0}
+                _resume_attempt_charge = {"charged": False}
                 for attempt in range(len(retry_delays) + 1):
                     _token_idx = 0
                     full_response = partial_content
@@ -7517,9 +7519,8 @@ async def _resume_single_stream(
                                     _execution_uuid,
                                     owner_epoch,
                                 )
-                            # 이 시도가 산출물을 냈는지 펜싱 핸들러에서 판정하기 위한 기준선
+                            # 펜싱 핸들러가 "이 시도에 예산이 청구됐는지"만 알면 된다
                             _resume_attempt_charge["charged"] = True
-                            _resume_attempt_charge["baseline_len"] = len(full_response or "")
                         # P0-FIX: 새 모델 attempt 시작 → idle 판정 baseline 리셋
                         _pump_baseline["ts"] = _bg_time.monotonic()
                         logger.info(
@@ -7698,21 +7699,25 @@ async def _resume_single_stream(
             owner_epoch,
             str(fenced)[:200],
         )
-        # 아무것도 만들지 못하고 소유권만 빼앗긴 시도는 예산에서 되돌린다.
+        # 소유권을 빼앗긴 시도는 산출물 유무와 무관하게 예산에서 되돌린다.
+        #
+        # 처음에는 "아무것도 못 만든 시도"만 환불했는데, 실제 배포에서는 펜싱까지
+        # 20~50초가 걸리는 동안 모델이 이미 도구를 호출해 tools_called 가 차 있었고,
+        # 그래서 5회 중 2회만 환불되고 예산은 계속 깎였다. 배포 #334 구간(15:27~15:34)
+        # 에서 세션 15782f6e·bf6f097c 가 각각 5회를 소진해 영구 종료됐다.
+        #
+        # 펜싱은 컷오버와 standby 재기동이 소유권을 흔들어 생기는 일이지 모델이
+        # 실패한 것이 아니다. 시스템이 자기가 일으킨 중단을 사용자 예산으로 청구해서는
+        # 안 된다. 무한 핑퐁은 fence_refunds 상한(_RESUME_FENCE_REFUND_MAX)이 막는다.
         try:
-            _fence_produced = bool(tools_called) or len(full_response or "") > int(
-                _resume_attempt_charge.get("baseline_len") or 0
-            )
+            _fence_charged = bool(_resume_attempt_charge.get("charged"))
         except NameError:
             # 첫 모델 호출에 닿기도 전에 펜싱된 경우 — 청구 자체가 없다
-            _fence_produced = True
-        if _execution_uuid and not _fence_produced:
+            _fence_charged = False
+        if _execution_uuid and _fence_charged:
             try:
-                if _resume_attempt_charge.get("charged"):
-                    async with get_pool().acquire() as _refund_conn:
-                        await _refund_fenced_resume_attempt(_refund_conn, _execution_uuid)
-            except NameError:
-                pass
+                async with get_pool().acquire() as _refund_conn:
+                    await _refund_fenced_resume_attempt(_refund_conn, _execution_uuid)
             except Exception as _refund_err:
                 logger.info(
                     "resume_fence_refund_failed session=%s error=%s",
