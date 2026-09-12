@@ -326,14 +326,13 @@ async def generate_directive_content(
     models = config["models"]
     timeout = config["timeout_seconds"]
     max_tok = config["max_tokens"]
-    model_used = None
-    raw = None
+    generation_prompt = _build_generation_prompt(source, risk_level)
     for model_candidate in models:
         try:
             raw = await asyncio.wait_for(
-                call_llm_with_fallback(
-                    prompt=_build_generation_prompt(source, risk_level),
-                    model=model_candidate,
+                _call_configured_model(
+                    model_candidate=model_candidate,
+                    prompt=generation_prompt,
                     max_tokens=max_tok,
                     system="당신은 사실 기반 작업계약을 만드는 OHVIS 지시 코파일럿이다.",
                     tenant_id=tenant_id,
@@ -341,8 +340,6 @@ async def generate_directive_content(
                 ),
                 timeout=timeout,
             )
-            model_used = model_candidate
-            break
         except Exception as exc:
             logger.warning(
                 "directive_draft_model_failed session=%s model=%s error=%s",
@@ -351,10 +348,87 @@ async def generate_directive_content(
                 type(exc).__name__,
             )
             continue
-    content = _extract_directive(raw, expected_project=source.project_key)
-    if content is not None:
-        return content, "generated", model_used
-    return build_fallback_directive(source, risk_level), "fallback", model_used
+        content = _extract_directive(raw, expected_project=source.project_key)
+        if content is not None:
+            return content, "generated", model_candidate
+        logger.warning(
+            "directive_draft_model_invalid session=%s model=%s",
+            str(source.session_id)[:8],
+            model_candidate,
+        )
+    return build_fallback_directive(source, risk_level), "fallback", None
+
+
+async def _call_configured_model(
+    *,
+    model_candidate: str,
+    prompt: str,
+    max_tokens: int,
+    system: str,
+    tenant_id: str | None,
+    user_id: str | None,
+) -> str | None:
+    """Route configured CLI model IDs to their real relay backends.
+
+    ``call_llm_with_fallback`` is intentionally retained for API/LiteLLM model
+    IDs.  Claude and Codex entries in the settings UI are CLI contracts; sending
+    ``codex:*`` to LiteLLM produces HTTP 400 and using the Anthropic background
+    retry chain can consume the whole HTTP request before Codex is attempted.
+    """
+    configured = str(model_candidate or "").strip()
+    provider, separator, bare_model = configured.partition(":")
+    provider = provider.lower() if separator else ""
+    model = bare_model.strip() if separator else configured
+
+    if provider == "codex" or (not provider and model.startswith("gpt-")):
+        from app.services.model_selector import _stream_codex_relay
+
+        stream = _stream_codex_relay(
+            model,
+            system,
+            [{"role": "user", "content": prompt}],
+            tools=None,
+            session_id=None,
+        )
+        return await _collect_relay_text(stream, configured)
+
+    if provider == "claude" or (not provider and model.startswith("claude")):
+        from app.services.model_selector import _stream_cli_relay
+
+        stream = _stream_cli_relay(
+            model,
+            system,
+            [{"role": "user", "content": prompt}],
+            tools=None,
+            session_id=None,
+        )
+        return await _collect_relay_text(stream, configured)
+
+    return await call_llm_with_fallback(
+        prompt=prompt,
+        model=configured,
+        max_tokens=max_tokens,
+        system=system,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+
+
+async def _collect_relay_text(stream: Any, configured_model: str) -> str:
+    chunks: list[str] = []
+    async for event in stream:
+        event_type = str(event.get("type") or "")
+        if event_type in {"delta", "text", "content"}:
+            chunks.append(str(event.get("content") or ""))
+        elif event_type == "error":
+            raise RuntimeError(
+                f"configured model relay failed: {configured_model}: "
+                f"{str(event.get('content') or 'unknown error')[:240]}"
+            )
+    content = "".join(chunks).strip()
+    if not content:
+        raise RuntimeError(f"configured model relay returned no text: {configured_model}")
+    return content
 
 
 async def _load_source(

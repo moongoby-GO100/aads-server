@@ -142,10 +142,16 @@ async def test_generation_rejects_valid_looking_wrong_project_and_falls_back(mon
     async def wrong_generation(**_kwargs):
         return wrong_project
 
-    monkeypatch.setattr(service, "call_llm_with_fallback", wrong_generation)
-    content, mode = await service.generate_directive_content(_source("AADS"), "medium")
+    monkeypatch.setattr(service, "_call_configured_model", wrong_generation)
+    monkeypatch.setattr(
+        service,
+        "_get_directive_model_config",
+        AsyncMock(return_value={"models": ["claude-sonnet-5"], "timeout_seconds": 1, "max_tokens": 2000}),
+    )
+    content, mode, model_used = await service.generate_directive_content(_source("AADS"), "medium")
 
     assert mode == "fallback"
+    assert model_used is None
     assert "TASK_ID: AADS-DRAFT" in content
 
 
@@ -154,6 +160,13 @@ def test_directive_draft_api_routes_are_registered() -> None:
     assert "/chat/sessions/{session_id}/directive-drafts" in paths
     assert "/chat/directive-drafts/{draft_id}" in paths
     assert "/chat/directive-drafts/{draft_id}/events" in paths
+
+
+def test_directive_model_setting_routes_are_not_duplicated() -> None:
+    from app.api.directives import router as directives_router
+
+    paths = [route.path for route in directives_router.routes]
+    assert paths.count("/settings/directive-models") == 2  # one GET and one PUT
 
 
 def test_migration_is_additive_and_contains_audit_tables() -> None:
@@ -192,12 +205,96 @@ async def test_generation_failure_uses_deterministic_fallback(monkeypatch) -> No
     async def fail_generation(**_kwargs):
         raise RuntimeError("provider unavailable")
 
-    monkeypatch.setattr(service, "call_llm_with_fallback", fail_generation)
-    content, mode = await service.generate_directive_content(_source(), "medium")
+    monkeypatch.setattr(service, "_call_configured_model", fail_generation)
+    monkeypatch.setattr(
+        service,
+        "_get_directive_model_config",
+        AsyncMock(return_value={"models": ["claude-sonnet-5"], "timeout_seconds": 1, "max_tokens": 2000}),
+    )
+    content, mode, model_used = await service.generate_directive_content(_source(), "medium")
 
     assert mode == "fallback"
+    assert model_used is None
     assert "TASK_ID: AADS-DRAFT" in content
     assert validate_directive(content)[0]
+
+
+@pytest.mark.asyncio
+async def test_generation_continues_after_invalid_model_output(monkeypatch) -> None:
+    valid = build_fallback_directive(_source(), "medium")
+    calls: list[str] = []
+
+    async def generate(*, model_candidate: str, **_kwargs):
+        calls.append(model_candidate)
+        return "not a directive" if len(calls) == 1 else valid
+
+    monkeypatch.setattr(service, "_call_configured_model", generate)
+    monkeypatch.setattr(
+        service,
+        "_get_directive_model_config",
+        AsyncMock(return_value={
+            "models": ["claude-sonnet-5", "codex:gpt-5.6-tela"],
+            "timeout_seconds": 1,
+            "max_tokens": 2000,
+        }),
+    )
+
+    content, mode, model_used = await service.generate_directive_content(_source(), "medium")
+
+    assert calls == ["claude-sonnet-5", "codex:gpt-5.6-tela"]
+    assert mode == "generated"
+    assert model_used == "codex:gpt-5.6-tela"
+    assert content == valid
+
+
+@pytest.mark.asyncio
+async def test_configured_codex_model_uses_cli_relay(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def relay(model, system, messages, **kwargs):
+        seen.update({"model": model, "system": system, "messages": messages, **kwargs})
+        yield {"type": "delta", "content": "relay output"}
+        yield {"type": "done"}
+
+    monkeypatch.setattr("app.services.model_selector._stream_codex_relay", relay)
+
+    content = await service._call_configured_model(
+        model_candidate="codex:gpt-5.6-tela",
+        prompt="make a directive",
+        max_tokens=2000,
+        system="system",
+        tenant_id=None,
+        user_id=None,
+    )
+
+    assert content == "relay output"
+    assert seen["model"] == "gpt-5.6-tela"
+    assert seen["tools"] is None
+
+
+@pytest.mark.asyncio
+async def test_configured_claude_model_uses_cli_relay(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def relay(model, system, messages, **kwargs):
+        seen.update({"model": model, "system": system, "messages": messages, **kwargs})
+        yield {"type": "delta", "content": "claude output"}
+        yield {"type": "done"}
+
+    monkeypatch.setattr("app.services.model_selector._stream_cli_relay", relay)
+
+    content = await service._call_configured_model(
+        model_candidate="claude-sonnet-5",
+        prompt="make a directive",
+        max_tokens=2000,
+        system="system",
+        tenant_id=None,
+        user_id=None,
+    )
+
+    assert content == "claude output"
+    assert seen["model"] == "claude-sonnet-5"
+    assert seen["tools"] is None
 
 
 @pytest.mark.asyncio

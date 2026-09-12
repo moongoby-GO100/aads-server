@@ -106,6 +106,12 @@
 
 폴백 체인: DB 1순위 모델 실패 → DB 2순위 모델 → 결정론적 폴백 템플릿.
 
+CLI 모델은 표시명만 CLI인 일반 API 모델이 아니다. `claude-*`는 Claude CLI Relay
+`/stream`, `codex:*`와 `gpt-*`는 Codex CLI Relay `/codex-stream`으로 실행한다.
+API/LiteLLM 모델만 공통 `call_llm_with_fallback` 경로를 사용한다. 각 모델 응답은
+지시서 계약 검증을 통과해야 성공이며, 형식이 잘못되거나 본문이 0자이면 다음 순위
+모델로 진행한다.
+
 ### 캐싱
 
 DB 조회 비용을 줄이기 위해 in-memory 캐시 60초 TTL 적용. 설정 변경 시 캐시 무효화.
@@ -147,3 +153,16 @@ VALUES ('generation', '["claude-sonnet-5", "codex:gpt-5.6-tela"]'::jsonb, 60, 20
 1. Phase 1 (이번): DB + API + 서비스 + UI 구현, Sonnet 5 + Codex GPT 5.6 Tela 초기 설정
 2. Phase 2: 모델별 성공률/비용 통계 대시보드, 자동 폴백 성능 리포트
 3. Phase 3: 역할별 모델 확장 (review, summary 등)
+
+## 10. 2026-09-12 운영 오류 보정
+
+- 증상: 지시 초안 생성이 2분 이상 대기한 뒤 화면 오류처럼 보였고, 저장된 결과도
+  `generation_mode=fallback`이었다.
+- 근인: Claude 설정값이 Claude CLI가 아닌 Anthropic 백그라운드 API 재시도 체인으로
+  실행됐고, `codex:gpt-5.6-tela`는 Codex CLI가 아닌 LiteLLM 모델명으로 전송되어
+  HTTP 400이 발생했다. 모델별 60초 타임아웃이 직렬 누적됐다.
+- 보정: 설정 모델을 실제 CLI 릴레이로 분기하고, 0자·오류 이벤트·계약 불일치 응답은
+  성공으로 기록하지 않고 다음 모델로 진행한다. 설정 API 중복 GET/PUT 등록도 제거한다.
+- 운영 한도: 2026-09-12 23:48 KST 실측에서 Claude Sonnet 5는 주간 한도 소진,
+  Codex GPT 5.6 Tela는 0토큰 응답이었다. 이 외부 가용성 문제는 코드 수정과 별개이며,
+  전 모델 실패 시 결정론적 폴백 초안으로 안전하게 종료한다.

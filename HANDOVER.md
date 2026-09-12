@@ -13592,3 +13592,19 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   tenant_scope_required로 막혔고 Browser Bridge 세션이 전부 stale이라 콘솔 스택을
   확보하지 못했다. 따라서 "던져진 예외의 정확한 지점"은 여전히 미검증이며,
   이번 조치는 관측된 요청 폭주와 리렌더 폭주를 제거하는 근본 수정이다.
+
+## 2026-09-12 23:48 KST — 지시서 생성 CLI 라우팅·폴백 오류 수정
+
+- 운영 세션 `ac5278a7`의 지시 초안 생성은 Claude Opus 5와 Sonnet 5에서 각각 60초
+  타임아웃된 뒤 `codex:gpt-5.6-tela`를 LiteLLM에 잘못 보내 HTTP 400을 발생시켰다.
+  요청은 약 2분 뒤 fallback으로 저장돼 화면에서는 오류처럼 보였다.
+- `directive_draft_service.py`가 `claude-*`를 Claude CLI Relay, `codex:*`/`gpt-*`를
+  Codex CLI Relay로 직접 분기하도록 수정했다. 오류 이벤트와 0자 응답은 실패로
+  승격하고, 지시서 계약 검증에 실패한 응답도 다음 DB 우선순위 모델로 계속 진행한다.
+- `directives.py`의 중복 GET/PUT 설정 라우트를 제거하고 모델 배열·role·timeout·토큰
+  범위를 Pydantic에서 검증한다. 빈 모델 체인은 저장할 수 없다.
+- 검증: 지시서 단위/이벤트 테스트 21건 통과, Python compile 및 `git diff --check`
+  통과, 설정 라우트 GET 1개·PUT 1개 확인. 실제 Relay는 Claude 주간 한도 오류와
+  Codex 0토큰 응답을 반환했으며 수정 경로가 둘 다 실패로 판정하는 것을 확인했다.
+- 운영 배포는 미수행이다. API blue/green 배포 후 인증된 지시 초안 POST가 201이고,
+  draft/artifact/revision/created event가 모두 생성되는 것을 확인해야 최종 완료다.
