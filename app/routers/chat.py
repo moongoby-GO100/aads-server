@@ -2716,27 +2716,40 @@ async def interrupt_session(
                 "reason": stale_reason,
             }
 
-        # DB에 즉시 저장 (유실 방지) — 스트리밍 중일 때만 저장
+        # DB에 즉시 저장 (유실 방지) — 스트리밍 중일 때만 저장.
+        # The process-local queue is only a wake-up optimization: a durable DB
+        # receipt must commit before the caller can observe queued=true.
         try:
             from app.core.db_pool import get_pool
             import json as _json
             pool = get_pool()
             async with pool.acquire() as conn:
-                await conn.execute(
-                    """INSERT INTO chat_messages
-                       (session_id, role, content, intent, attachments)
-                       VALUES ($1, 'user', $2, 'queued_interrupt', $3::jsonb)""",
-                    session_id,
-                    f"[추가 지시] {req.content}",
-                    _json.dumps(req.attachments or []),
-                )
-                await conn.execute(
-                    "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
-                    session_id,
-                )
+                async with conn.transaction():
+                    await conn.execute(
+                        """INSERT INTO chat_messages
+                           (session_id, role, content, intent, attachments)
+                           VALUES ($1, 'user', $2, 'queued_interrupt', $3::jsonb)""",
+                        session_id,
+                        f"[추가 지시] {req.content}",
+                        _json.dumps(req.attachments or []),
+                    )
+                    updated = await conn.execute(
+                        "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
+                        session_id,
+                    )
+                    if updated != "UPDATE 1":
+                        raise RuntimeError("interrupt receipt session update did not match")
             logger.info("interrupt_saved_to_db", session_id=sid, intent="queued_interrupt", content=req.content[:100])
         except Exception as e:
             logger.error("interrupt_db_save_failed", session_id=sid, error=str(e))
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "interrupt_receipt_failed",
+                    "message": "추가 지시를 저장하지 못해 접수하지 않았습니다. 입력 내용을 확인한 뒤 다시 시도해 주세요.",
+                    "queued": False,
+                },
+            ) from e
 
         push_interrupt(sid, req.content, req.attachments if req.attachments else None)
         logger.info("interrupt_queued", session_id=sid, content=req.content[:100],
