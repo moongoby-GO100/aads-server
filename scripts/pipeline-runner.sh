@@ -1137,7 +1137,23 @@ post_to_chat() {
 
 # C4: 원자적 Job 클레임 — UPDATE ... RETURNING으로 동시 실행 방지
 # 프로젝트별 동시실행 Lock: 같은 프로젝트에 running/claimed 작업이 있으면 claim하지 않음
-claim_queued_job() {
+claim_queued_job() (
+    # Both engine services on one host share this lock. Keep it until the
+    # queued -> claimed UPDATE commits, so the last server slot cannot race.
+    if [[ -n "${MAX_CONCURRENT_SERVER:-}" ]]; then
+        [[ "$MAX_CONCURRENT_SERVER" =~ ^[1-9][0-9]{0,2}$ && -n "$1" ]] || return 1
+        exec 8>"${RUNNER_CAPACITY_LOCK_FILE:-/tmp/pipeline-runner-capacity.lock}"
+        flock -x 8 || return 1
+        local server_running
+        server_running=$(db_exec "SELECT count(*) FROM pipeline_jobs WHERE status IN ('running','claimed') $1;") || return 1
+        server_running="${server_running//[[:space:]]/}"
+        [[ "$server_running" =~ ^[0-9]+$ ]] || return 1
+        (( server_running < MAX_CONCURRENT_SERVER )) || return 0
+    fi
+    _claim_queued_job "$1"
+)
+
+_claim_queued_job() {
     local filter="$1"
     local engine_predicate model_return_expr
     if [[ "$RUNNER_ENGINE_MODE" == "litellm" ]]; then
@@ -2834,6 +2850,13 @@ _check_runtime_alerts() {
 main() {
     _init_db_mode
     log "═══ Pipeline Runner v2.1 시작 (mode=${RUNNER_ENGINE_MODE}, 승인→커밋→푸시→빌드→배포) poll=${POLL_INTERVAL}s, max_runtime=${MAX_RUNTIME}s, retries=${MAX_RETRIES} ═══"
+    if [[ -n "${MAX_CONCURRENT_SERVER:-}" ]]; then
+        [[ "$MAX_CONCURRENT_SERVER" =~ ^[1-9][0-9]{0,2}$ && -n "${RUNNER_PROJECTS:-}" ]] || {
+            log "ERROR: server capacity requires a positive limit and RUNNER_PROJECTS"
+            return 1
+        }
+        log "SERVER_CAPACITY limit=${MAX_CONCURRENT_SERVER} projects=${RUNNER_PROJECTS} per_project=${MAX_CONCURRENT_PER_PROJECT} (shared across engines)"
+    fi
 
     # 프로젝트 필터 구성
     local project_filter=""
@@ -2873,7 +2896,9 @@ main() {
     [[ "$_stuck_check_cycles" -lt 1 ]] && _stuck_check_cycles=1
     log "STUCK_CHECK_INTERVAL=${STUCK_CHECK_INTERVAL}s → 매 ${_stuck_check_cycles} cycle마다 감지"
     while true; do
-        # 글로벌 동시 작업 상한 체크 (전 서버 합산, rate limit 예방)
+        # Legacy hosts retain the global limit. Hosts with an explicit server
+        # budget enforce it atomically at claim time and keep servicing reviews.
+        if [[ -z "${MAX_CONCURRENT_SERVER:-}" ]]; then
         local _running_count
         _running_count=$(db_exec "SELECT count(*) FROM pipeline_jobs WHERE status IN ('running','claimed');" 2>/dev/null) || _running_count="0"
         _running_count="${_running_count// /}"
@@ -2886,6 +2911,7 @@ main() {
             sleep "$POLL_INTERVAL"
             _cycle=$((_cycle + 1))
             continue
+        fi
         fi
 
         # 방안A: 완료된 백그라운드 작업 정리
