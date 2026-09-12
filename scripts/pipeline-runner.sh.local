@@ -12,6 +12,7 @@
 #       H3(임시파일정리), H4(승인타임아웃), H5(재시도)
 # ═══════════════════════════════════════════════════════════════════════
 set -eo pipefail
+CLAUDE_MODEL_CONTRACT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude_model_contract.py"
 
 # general: normal Claude/Codex runner. litellm: claims only LiteLLM jobs.
 RUNNER_ENGINE_MODE="${RUNNER_ENGINE_MODE:-general}"
@@ -131,6 +132,22 @@ get_job_instruction() {
 
 # 프로젝트별 허용 목록 (M4: 화이트리스트 검증)
 VALID_PROJECTS="AADS KIS GO100 SF NTV2"
+
+# 실행 서버 이름. pipeline_jobs.runner_host 와 하트비트에 쓴다.
+RUNNER_HOST_NAME="${AADS_RUNNER_HOST_NAME:-$(hostname -s 2>/dev/null || hostname)}"
+
+# 이 러너가 살아 있음을 DB 에 남긴다. 조회 측이 원격 systemctl 을 호출하지 않고
+# DB 만 읽어 서버 가동 여부를 판단할 수 있게 한다.
+runner_heartbeat() {
+    db_update "INSERT INTO pipeline_runner_hosts (host, projects, engine_mode, max_concurrent, last_seen_at)
+               VALUES ('${RUNNER_HOST_NAME}', '${RUNNER_PROJECTS:-}', '${RUNNER_ENGINE_MODE:-}',
+                       NULLIF('${MAX_CONCURRENT_SERVER:-}', '')::int, NOW())
+               ON CONFLICT (host) DO UPDATE SET
+                 projects=EXCLUDED.projects,
+                 engine_mode=EXCLUDED.engine_mode,
+                 max_concurrent=EXCLUDED.max_concurrent,
+                 last_seen_at=NOW();" 2>/dev/null || true
+}
 
 MAX_JOB_RUNTIME="${MAX_JOB_RUNTIME:-3600}"      # 단일 작업 최대 60분 (stale 방지)
 WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-300}"    # 5분마다 프로세스 생존 확인
@@ -379,14 +396,10 @@ dedupe_model_cycle_for_attempt_caps() {
 normalize_runner_model() {
     local model="${1:-}"
     case "$model" in
-        claude-sonnet|claude-sonnet-4-5|claude-sonnet-4-6-*)
-            echo "claude-sonnet-4-6"
-            ;;
-        claude-haiku|claude-haiku-4-5)
-            echo "claude-haiku-4-5-20251001"
-            ;;
-        claude-opus|claude-opus-4-6|claude-opus-4-7|claude-opus-4-8)
-            echo "claude-opus-4-6"
+        claude-*|opus|sonnet|haiku)
+            # Keep invalid IDs unchanged for explicit launch rejection below;
+            # do not crash the polling runner while building its model cycle.
+            python3 "$CLAUDE_MODEL_CONTRACT" "$model" || printf '%s\n' "$model"
             ;;
         "")
             echo "auto"
@@ -398,21 +411,7 @@ normalize_runner_model() {
 }
 
 normalize_claude_cli_model() {
-    local model="${1:-}"
-    case "$model" in
-        claude-sonnet*|sonnet)
-            echo "sonnet"
-            ;;
-        claude-haiku*|haiku)
-            echo "haiku"
-            ;;
-        claude-opus*|opus)
-            echo "opus"
-            ;;
-        *)
-            echo "$model"
-            ;;
-    esac
+    python3 "$CLAUDE_MODEL_CONTRACT" "${1:-}"
 }
 
 is_read_only_instruction() {
@@ -1166,7 +1165,8 @@ _claim_queued_job() {
     # instruction의 줄바꿈을 \\n으로 치환하여 단일행 RETURNING 보장
     # AADS-211: depends_on 체크 — 의존 작업이 done이 아니면 스킵
     # RUNNER_ENGINE_MODE=litellm: litellm:* 작업만 claim. general은 원격 litellm 작업을 전용 러너에 넘김.
-    db_exec "UPDATE pipeline_jobs SET status='claimed', updated_at=NOW()
+    # 어느 서버가 집었는지 남긴다. runner_pid 는 숫자라 호스트를 구분하지 못한다.
+    db_exec "UPDATE pipeline_jobs SET status='claimed', runner_host='${RUNNER_HOST_NAME}', updated_at=NOW()
              WHERE job_id = (
                 SELECT p.job_id FROM pipeline_jobs p
                 WHERE p.status='queued' AND p.phase IN ('queued','coding') $filter
@@ -1509,7 +1509,13 @@ ${safe_instruction}"
         else
             # AADS-242/AADS-Runner-Root: root/sudo 환경에서는 --dangerously-skip-permissions 자체가 CLI 보안 차단을 유발한다.
             local claude_cli_model
-            claude_cli_model=$(normalize_claude_cli_model "$current_model")
+            if ! claude_cli_model=$(normalize_claude_cli_model "$current_model"); then
+                log "MODEL_CONTRACT_REJECTED job=$job_id requested=$current_model"
+                attempt=$((attempt + 1)); sleep 2; continue
+            fi
+            # Text output does not contain provider model evidence.
+            effective_model="unverified"
+            log "MODEL_CONTRACT job=$job_id requested=$current_model cli_model=$claude_cli_model verification=cli_argument_only"
             local claude_args=(--model "$claude_cli_model" -p --output-format text)
             if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
                 claude_args+=(--dangerously-skip-permissions)
@@ -2858,6 +2864,9 @@ main() {
         log "SERVER_CAPACITY limit=${MAX_CONCURRENT_SERVER} projects=${RUNNER_PROJECTS} per_project=${MAX_CONCURRENT_PER_PROJECT} (shared across engines)"
     fi
 
+    runner_heartbeat
+    log "RUNNER_HOST=${RUNNER_HOST_NAME}"
+
     # 프로젝트 필터 구성
     local project_filter=""
     if [[ -n "${RUNNER_PROJECTS:-}" ]]; then
@@ -2966,6 +2975,7 @@ main() {
         # 주기적 정리 (STUCK_CHECK_INTERVAL 초마다 — BUG-7: 동적 주기)
         _cycle=$((_cycle + 1))
         if (( _cycle % _stuck_check_cycles == 0 )); then
+            runner_heartbeat
             _recover_stuck_jobs "$project_filter"
             _watchdog_check "$project_filter"
             _cleanup_old_artifacts

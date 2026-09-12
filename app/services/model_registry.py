@@ -416,16 +416,9 @@ _DEEPSEEK_LITELLM_RUNTIME_ALIASES = {
     "deepseek-chat": "deepseek-chat",
     "deepseek-reasoner": "deepseek-reasoner",
 }
-_ANTHROPIC_RUNTIME_MODEL_IDS = {
-    "claude-sonnet": "claude-sonnet-4-6",
-    "claude-opus": "claude-opus-5",
-    "claude-opus-5": "claude-opus-5",
-    "claude-opus-46": "claude-opus-4-6",
-    "claude-haiku": "claude-haiku-4-5-20251001",
-    "claude-sonnet-5": "claude-sonnet-5",
-    "claude-fable-5": "claude-fable-5",
-    "claude-fable-5-1": "claude-fable-5-1",
-}
+from scripts.claude_model_contract import AADS_MODEL_IDS  # noqa: E402
+
+_ANTHROPIC_RUNTIME_MODEL_IDS = dict(AADS_MODEL_IDS)
 _MODEL_ACCEPTED_ALIASES: dict[str, tuple[str, ...]] = {
     "claude-fable-5-1": (
         "claude-fable-5.1",
@@ -439,23 +432,11 @@ _MODEL_ACCEPTED_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "claude-sonnet": (
         "claude-sonnet-4-6",
-        "claude-sonnet-4-5",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-sonnet-20240229",
-        "claude-2.1",
-    ),
-    "claude-opus": (
-        "claude-opus-4-8",
-        "claude-opus-4-8",
-        "claude-opus-4-5",
-        "claude-3-opus-20240229",
     ),
     "claude-opus-46": ("claude-opus-4-6",),
     "claude-haiku": (
         "claude-haiku-4-5",
         "claude-haiku-4-5-20251001",
-        "claude-3-5-haiku-20241022",
-        "claude-3-haiku-20240307",
     ),
 }
 _MODEL_CANONICAL_ALIASES: dict[str, str] = {

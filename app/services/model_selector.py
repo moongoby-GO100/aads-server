@@ -29,6 +29,10 @@ from app.services.model_registry import get_executable_model_ids as _get_registr
 from app.services.model_registry import list_registered_models as _list_registered_models  # noqa: E402
 from app.services.model_registry import normalize_provider as _normalize_registry_provider  # noqa: E402
 from app.services.intent_router import IntentResult  # noqa: E402
+from scripts.claude_model_contract import (  # noqa: E402
+    AADS_MODEL_IDS, CONTRACT_VERSION, ModelObservation, resolve_model,
+    runtime_alias, session_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -289,12 +293,9 @@ def _is_db_slot_rate_limited(record: Optional[Dict[str, Any]]) -> bool:
 _cli_session_map: Dict[str, str] = {}  # {"<aads_session_id>@<slot>": cli_session_id}
 
 
-def _cli_session_key(session_id: Optional[str], slot: Optional[str] = None) -> str:
+def _cli_session_key(session_id: Optional[str], slot: Optional[str] = None, model: Optional[str] = None) -> str:
     """릴레이의 _session_key 와 같은 규칙. 슬롯별로 CLI 세션을 구분한다."""
-    if not session_id:
-        return ""
-    s = str(slot or "")
-    return "%s@%s" % (session_id, s) if s and s not in ("0", "none", "proxy") else session_id
+    return session_key(session_id, slot, model)
 
 _SESSION_BOUND_TOOLS = {
     "pipeline_runner_submit",
@@ -914,29 +915,7 @@ _COST_MAP = {
 }
 
 # LiteLLM alias → Anthropic model ID
-_ANTHROPIC_MODEL_ID = {
-    "claude-sonnet": "claude-sonnet-4-6",
-    "claude-sonnet-5": "claude-sonnet-5",
-    "claude-opus":   "claude-opus-5",
-    "claude-opus-46": "claude-opus-4-6",
-    "claude-haiku":  "claude-haiku-4-5-20251001",
-    "claude-fable-5": "claude-fable-5",
-    "claude-fable-5-1": "claude-fable-5-1",
-    "claude-fable-5.1": "claude-fable-5-1",
-}
-
-_ANTHROPIC_ACCEPTED_ALIAS_CANONICAL = {
-    "claude-fable-5.1": "claude-fable-5-1",
-    "claude-fable-latest": "claude-fable-5-1",
-}
-
-_ANTHROPIC_FAMILY_ALIASES = (
-    ("claude-fable", "claude-fable-5-1"),
-    ("claude-opus", "claude-opus"),
-    ("claude-sonnet-5", "claude-sonnet-5"),
-    ("claude-sonnet", "claude-sonnet"),
-    ("claude-haiku", "claude-haiku"),
-)
+_ANTHROPIC_MODEL_ID = dict(AADS_MODEL_IDS, **{"claude-fable-5.1": "claude-fable-5-1"})
 
 _ANTHROPIC_THINKING_ALIASES = {
     "claude-fable-5",
@@ -948,20 +927,7 @@ _ANTHROPIC_THINKING_ALIASES = {
 
 
 def _to_anthropic_runtime_alias(model: str) -> str:
-    model_id = str(model or "").strip()
-    if not model_id:
-        return model_id
-    if model_id in _ANTHROPIC_ACCEPTED_ALIAS_CANONICAL:
-        return _ANTHROPIC_ACCEPTED_ALIAS_CANONICAL[model_id]
-    if model_id in _ANTHROPIC_MODEL_ID:
-        return model_id
-    for alias, sdk_model in _ANTHROPIC_MODEL_ID.items():
-        if model_id == sdk_model:
-            return alias
-    for prefix, alias in _ANTHROPIC_FAMILY_ALIASES:
-        if model_id.startswith(prefix):
-            return alias
-    return model_id
+    return runtime_alias(model)
 
 
 def _is_anthropic_thinking_alias(model: str) -> bool:
@@ -1254,6 +1220,20 @@ async def _get_registered_model_row(model_id: str, provider: str | None = None) 
         if isinstance(accepted_aliases, list):
             aliases.update(str(alias or "").strip() for alias in accepted_aliases)
         aliases.discard("")
+        if row.get("provider") == "anthropic":
+            try:
+                exact = resolve_model(row.get("model_id"))
+            except ValueError:
+                return {str(row.get("model_id") or "").strip()}
+            # Stale DB metadata must not reinterpret another explicit version.
+            valid_aliases = set()
+            for alias in aliases:
+                try:
+                    if resolve_model(alias) == exact:
+                        valid_aliases.add(alias)
+                except ValueError:
+                    continue
+            return valid_aliases
         return aliases
 
     if normalized_provider:
@@ -3131,16 +3111,23 @@ async def _stream_cli_relay_once(
     호스트 최신 CLI를 사용하므로 OAuth 인증 안정성이 높음.
     NDJSON 응답을 파싱하여 AADS SSE 이벤트로 변환.
     """
-    sdk_model = _ANTHROPIC_MODEL_ID.get(model, model)
+    try:
+        sdk_model = resolve_model(model)
+    except ValueError as exc:
+        yield {"type": "error", "content": str(exc), "error_type": "unsupported_claude_model"}
+        return
+    observation = ModelObservation(model, sdk_model)
 
-    # 세션 이어가기 여부 — 이 슬롯에 세션이 있을 때만 True.
+    # 세션 이어가기 여부 — 이 슬롯/모델에 세션이 있을 때만 True.
     # 슬롯을 무시하면 "이어가기"라고 판단해 최신 메시지만 보내는데, 정작 그
     # 슬롯에는 세션이 없어 모델이 맥락 없이 답하게 된다.
-    _has_resume = bool(_cli_session_map.get(_cli_session_key(session_id, oauth_slot))) if session_id else False
+    _has_resume = bool(_cli_session_map.get(_cli_session_key(session_id, oauth_slot, sdk_model))) if session_id else False
     formatted = _format_messages_for_llm(messages, has_resume=_has_resume)
 
     req_body: Dict[str, Any] = {
-        "model": model,
+        "model": sdk_model,
+        "requested_model": model,
+        "model_contract_version": CONTRACT_VERSION,
         "system_prompt": system_prompt,
         "session_id": session_id or "",
         "temperature": _ctx_temperature.get(0.2),
@@ -3167,7 +3154,7 @@ async def _stream_cli_relay_once(
 
     full_text = ""
     _tool_id_to_name: Dict[str, str] = {}
-    _captured_cli_sid = _cli_session_map.get(_cli_session_key(session_id, oauth_slot), "") if session_id else ""
+    _captured_cli_sid = _cli_session_map.get(_cli_session_key(session_id, oauth_slot, sdk_model), "") if session_id else ""
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
@@ -3176,6 +3163,9 @@ async def _stream_cli_relay_once(
                 hc = await client.get(f"{_CLAUDE_RELAY_URL}/health", timeout=5.0)
                 if hc.status_code != 200:
                     yield {"type": "error", "content": f"CLI Relay not healthy: {hc.status_code}"}
+                    return
+                if (hc.json().get("claude_model_contract") or {}).get("version") != CONTRACT_VERSION:
+                    yield {"type": "error", "content": "CLI Relay model_contract_version_mismatch"}
                     return
             except Exception as hc_err:
                 yield {"type": "error", "content": f"CLI Relay unreachable: {hc_err}"}
@@ -3201,6 +3191,9 @@ async def _stream_cli_relay_once(
                         event = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+
+                    # Observe provider receipts locally as well as at the relay.
+                    event["aads_model_contract"] = observation.observe(event)
 
                     # rate_limit_event: 이 호출에 쓰인 계정의 쿼터 실측값이다.
                     # 외부 API 재조회 없이 슬롯별 사용량을 여기서 적재한다.
@@ -3231,16 +3224,9 @@ async def _stream_cli_relay_once(
                             _cc = int(_u.get("cache_creation_input_tokens") or 0)
                             _cr = int(_u.get("cache_read_input_tokens") or 0)
                             _cost = float(event.get("total_cost_usd") or 0)
-                            _used_model = sdk_model
-                            for _m, _mv in (event.get("modelUsage") or {}).items():
-                                _used_model = _m.split("[")[0]
-                                _in = int(_mv.get("inputTokens") or _in)
-                                _out = int(_mv.get("outputTokens") or _out)
-                                _cc = int(_mv.get("cacheCreationInputTokens") or _cc)
-                                _cr = int(_mv.get("cacheReadInputTokens") or _cr)
-                                if _mv.get("costUSD"):
-                                    _cost = float(_mv["costUSD"])
-                                break
+                            _used_model = event["aads_model_contract"]["actual_model"]
+                            # usage/total_cost_usd cover the whole invocation,
+                            # including subagents; never replace with the first model.
                             _tenant = ""
                             try:
                                 from app.services.tool_executor import resolve_bound_tenant_id
@@ -3336,7 +3322,7 @@ async def _stream_cli_relay_once(
                             result_sid = event.get("session_id")
                             if result_sid:
                                 _captured_cli_sid = result_sid
-                            aads_evt["actual_model"] = aads_evt.get("actual_model") or aads_evt.get("model") or sdk_model
+                            aads_evt["actual_model"] = aads_evt.get("actual_model") or "unverified"
                             aads_evt["model"] = sdk_model
 
                         yield aads_evt
@@ -3369,7 +3355,7 @@ async def _stream_cli_relay_once(
 
     # 세션 매핑 저장
     if session_id and _captured_cli_sid:
-        _cli_session_map[_cli_session_key(session_id, oauth_slot)] = _captured_cli_sid
+        _cli_session_map[_cli_session_key(session_id, oauth_slot, sdk_model)] = _captured_cli_sid
         logger.info(f"cli_relay_session_map: aads={session_id[:8]} -> cli={_captured_cli_sid[:8]}")
 
 
@@ -4515,19 +4501,12 @@ def _map_cli_event(event: dict, session_id: Optional[str] = None) -> Optional[Li
     # result 이벤트 — 최종 완료
     if evt_type == "result":
         usage = event.get("usage", {})
-        model = ""
+        evidence = event.get("aads_model_contract") or ModelObservation().observe(event)
+        model = evidence["actual_model"]
         # modelUsage에서 모델명과 토큰 추출
-        model_usage = event.get("modelUsage", {})
         in_tokens = usage.get("input_tokens", 0)
         out_tokens = usage.get("output_tokens", 0)
         total_cost = event.get("total_cost_usd", 0)
-        for m, mu in model_usage.items():
-            model = m.split("[")[0]  # "claude-opus-4-6[1m]" → "claude-opus-4-6"
-            in_tokens = mu.get("inputTokens", in_tokens)
-            out_tokens = mu.get("outputTokens", out_tokens)
-            if mu.get("costUSD"):
-                total_cost = mu["costUSD"]
-            break
 
         # result 텍스트 (CLI가 최종 결과를 result 필드에도 넣음)
         events = []
@@ -4537,6 +4516,9 @@ def _map_cli_event(event: dict, session_id: Optional[str] = None) -> Optional[Li
             "type": "done",
             "model": model,
             "actual_model": model,
+            "model_verified": evidence["model_verified"],
+            "model_mismatch": evidence["model_mismatch"],
+            "used_models": evidence["used_models"],
             "cost": str(round(total_cost, 6)),
             "input_tokens": in_tokens,
             "output_tokens": out_tokens,

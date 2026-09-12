@@ -11,7 +11,7 @@ from app.services.intent_router import IntentResult, get_model_for_override
 
 def test_anthropic_registry_model_ids_are_normalized_to_runtime_aliases():
     assert model_selector._to_anthropic_runtime_alias("claude-opus-5") == "claude-opus"
-    assert model_selector._to_anthropic_runtime_alias("claude-opus-4-8") == "claude-opus"
+    assert model_selector._to_anthropic_runtime_alias("claude-opus-4-8") == "claude-opus-4-8"
     assert model_selector._to_anthropic_runtime_alias("claude-sonnet-4-6") == "claude-sonnet"
     assert model_selector._to_anthropic_runtime_alias("claude-haiku-4-5-20251001") == "claude-haiku"
     assert model_selector._to_anthropic_runtime_alias("claude-fable-5") == "claude-fable-5"
@@ -96,7 +96,7 @@ async def test_db_primary_policy_no_change_blocks_legacy_fable_downgrade(monkeyp
     ) == (None, None)
 
 
-def test_cli_result_preserves_runtime_model_for_actual_model_audit():
+def test_cli_result_without_primary_receipt_does_not_infer_actual_model():
     events = model_selector._map_cli_event(
         {
             "type": "result",
@@ -114,11 +114,14 @@ def test_cli_result_preserves_runtime_model_for_actual_model_audit():
     assert events == [
         {
             "type": "done",
-            "model": "claude-opus-4-6",
-            "actual_model": "claude-opus-4-6",
-            "cost": "0.123456",
-            "input_tokens": 3,
-            "output_tokens": 5,
+            "model": "unverified",
+            "actual_model": "unverified",
+            "model_verified": False,
+            "model_mismatch": False,
+            "used_models": ["claude-opus-4-6"],
+            "cost": "0",
+            "input_tokens": 1,
+            "output_tokens": 2,
         }
     ]
 

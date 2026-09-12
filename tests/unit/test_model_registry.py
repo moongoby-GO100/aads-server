@@ -170,10 +170,6 @@ def test_build_registry_snapshots_marks_anthropic_oauth_as_runtime_only_discover
     assert claude_row["metadata"]["auto_discovery_supported"] is False
     assert claude_row["metadata"]["accepted_aliases"] == [
         "claude-sonnet-4-6",
-        "claude-sonnet-4-5",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-sonnet-20240229",
-        "claude-2.1",
     ]
     assert claude_row["execution_model_id"] == "claude-sonnet-4-6"
 

@@ -154,6 +154,15 @@ sync_one_target() {
     log "${name}: current=${current_sha:-missing} desired=${local_sha}"
     ssh_run "$host" "mkdir -p '$(dirname "$remote_runner")'"
 
+    # Install the shared resolver before any runner referencing it can start.
+    local contract_status=0
+    sync_remote_file_if_changed "$name" "$host" "${SCRIPT_DIR}/claude_model_contract.py" "$(dirname "$remote_runner")/claude_model_contract.py" "0644" || contract_status=$?
+    if [[ "$contract_status" == "0" ]]; then
+        changed=1
+    elif [[ "$contract_status" != "1" ]]; then
+        return "$contract_status"
+    fi
+
     if [[ "$current_sha" != "$local_sha" ]]; then
         changed=1
         if [[ "$DRY_RUN" == "1" ]]; then
@@ -207,6 +216,19 @@ sync_one_target() {
 }
 
 main() {
+    # The timer must never publish edits from an in-progress shared worktree.
+    local source_file committed_sha working_sha
+    for source_file in scripts/pipeline-runner.sh scripts/claude_model_contract.py scripts/sync_pipeline_runner_remote.sh; do
+        committed_sha=$(git -C "$REPO_ROOT" show "HEAD:${source_file}" 2>/dev/null | sha256sum | awk '{print $1}') || {
+            log "source not committed: ${source_file}; sync deferred"
+            return 0
+        }
+        working_sha=$(sha256_file "${REPO_ROOT}/${source_file}")
+        if [[ "$committed_sha" != "$working_sha" ]]; then
+            log "source has uncommitted changes: ${source_file}; sync deferred"
+            return 0
+        fi
+    done
     [[ -f "$CANONICAL_RUNNER" ]] || { echo "ERROR: canonical runner missing: $CANONICAL_RUNNER" >&2; exit 2; }
     bash -n "$CANONICAL_RUNNER"
 

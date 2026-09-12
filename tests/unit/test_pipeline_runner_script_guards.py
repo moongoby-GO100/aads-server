@@ -87,13 +87,12 @@ def test_pipeline_runner_claude_oauth_avoids_litellm_proxy_env():
     assert "unset ANTHROPIC_BASE_URL 2>/dev/null || true" in script
 
 
-def test_pipeline_runner_maps_internal_claude_ids_to_cli_aliases():
+def test_pipeline_runner_preserves_exact_claude_versions():
     script = _read_script("pipeline-runner.sh")
 
     assert "normalize_claude_cli_model()" in script
-    assert "claude-sonnet*|sonnet)" in script
-    assert "claude-haiku*|haiku)" in script
-    assert "claude-opus*|opus)" in script
+    assert 'python3 "$CLAUDE_MODEL_CONTRACT"' in script
+    assert 'effective_model="unverified"' in script
     assert "claude_cli_model=$(normalize_claude_cli_model \"$current_model\")" in script
     assert "local claude_args=(--model \"$claude_cli_model\" -p --output-format text)" in script
 

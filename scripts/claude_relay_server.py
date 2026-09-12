@@ -43,6 +43,11 @@ PORT = int(os.getenv("CLAUDE_RELAY_PORT", "8199"))
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", "claude")
 CODEX_BIN = os.getenv("CODEX_BIN", "codex")
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from scripts.claude_model_contract import (  # noqa: E402
+    CONTRACT_VERSION, EXACT_MODEL_IDS, ModelObservation, resolve_model, session_key,
+)
 _CLAUDE_WRAPPER = Path(os.getenv(
     "CLAUDE_NONINTERACTIVE_WRAPPER",
     str(_REPO_ROOT / "scripts" / "claude-docker-wrapper.sh"),
@@ -358,15 +363,6 @@ class _SemaphoreLease:
             _LEASE_REGISTRY.pop(self._lease_id, None)
         return False
 
-_MODEL_MAP = {
-    "claude-opus": "claude-opus-4-6",
-    "claude-sonnet": "claude-sonnet-4-6",
-    "claude-haiku": "claude-haiku-4-5-20251001",
-    "claude-opus-4-6": "claude-opus-4-6",
-    "claude-sonnet-4-6": "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
-}
-
 
 def _load_relay_secret():
     secret = (os.getenv("CLAUDE_RELAY_SHARED_SECRET") or "").strip()
@@ -611,7 +607,7 @@ def _build_claude_env(token, slot=None, cli_mode=""):
     return env
 
 
-def _session_key(aads_session_id, slot):
+def _session_key(aads_session_id, slot, model=None):
     """세션 매핑 키. 슬롯을 포함해 계정별로 CLI 세션을 따로 보관한다.
 
     예전에는 aads_session_id 하나만 키로 썼다. 슬롯1에서 만든 CLI 세션을 슬롯2
@@ -620,10 +616,7 @@ def _session_key(aads_session_id, slot):
     git commit)을 재개된 세션이 다시 수행했다 — 2026-09-12 중복 커밋의 원인.
     슬롯을 키에 넣으면 각 계정이 자기 세션을 유지하므로 폐기가 필요 없다.
     """
-    if not aads_session_id:
-        return ""
-    s = str(slot or "")
-    return "%s@%s" % (aads_session_id, s) if s and s not in ("0", "none", "proxy") else aads_session_id
+    return session_key(aads_session_id, slot, model)
 
 
 def _session_keys_for(aads_session_id):
@@ -1360,6 +1353,8 @@ async def handle_stream(request):
     except Exception:
         return web.json_response({"error": "invalid JSON"}, status=400)
 
+    if not isinstance(body, dict):
+        return web.json_response({"error": "JSON object required"}, status=400)
     system_prompt = body.get("system_prompt", "")
     messages_text = body.get("messages_text", "")
     content_blocks = body.get("content_blocks")
@@ -1370,7 +1365,16 @@ async def handle_stream(request):
         return web.json_response({"error": "messages_text or content_blocks required"}, status=400)
 
     use_stream_json_input = bool(content_blocks)
-    cli_model = _MODEL_MAP.get(model, "claude-opus-4-6")
+    try:
+        cli_model = resolve_model(model)
+    except ValueError as exc:
+        return web.json_response({"error": str(exc), "error_type": "unsupported_claude_model"}, status=400)
+    contract_version = body.get("model_contract_version")
+    if contract_version not in (None, CONTRACT_VERSION):
+        return web.json_response({"error": "model_contract_version_mismatch"}, status=409)
+    # Legacy clients keep their existing resume protocol during a staged rollout.
+    resume_model = cli_model if contract_version == CONTRACT_VERSION else None
+    observation = ModelObservation(body.get("requested_model", model), cli_model)
 
     # 세션 조회가 슬롯을 키에 쓰므로 토큰/슬롯 결정이 먼저다.
     if _DIRECT_OAUTH_ENABLED:
@@ -1382,7 +1386,7 @@ async def handle_stream(request):
     else:
         token, slot, label = "", "0", "proxy"
 
-    cli_session_id = _session_map.get(_session_key(aads_session_id, slot)) if aads_session_id else None
+    cli_session_id = _session_map.get(_session_key(aads_session_id, slot, resume_model)) if aads_session_id else None
     is_resume = cli_session_id is not None
 
     mcp_config_path = None
@@ -1515,6 +1519,12 @@ async def handle_stream(request):
                     except json.JSONDecodeError:
                         continue
                     evt_type = event.get("type", "")
+                    evidence = observation.observe(event)
+                    event["aads_model_contract"] = evidence
+                    line_to_write = json.dumps(event).encode("utf-8")
+                    if evt_type == "result":
+                        log = logger.error if evidence["model_mismatch"] else logger.info
+                        log("claude_model_execution: session=%s evidence=%s", aads_session_id, json.dumps(evidence))
                     if evt_type == "system" and event.get("subtype") == "init":
                         captured_cli_session_id = event.get("session_id")
                         if _DIRECT_OAUTH_ENABLED:
@@ -1594,7 +1604,7 @@ async def handle_stream(request):
 
             if proc.returncode != 0:
                 logger.warning("CLI exited %s (slot=%s, resume=%s)", proc.returncode, slot, is_resume)
-                _stale_key = _session_key(aads_session_id, slot)
+                _stale_key = _session_key(aads_session_id, slot, resume_model)
                 if is_resume and _stale_key and _stale_key in _session_map:
                     del _session_map[_stale_key]
                     _save_session_map()
@@ -1602,7 +1612,7 @@ async def handle_stream(request):
 
             # 실패(exit!=0) 시 세션 저장 금지 — OAuth 슬롯 폴백 시 잘못된 --resume 방지
             if proc.returncode == 0 and aads_session_id and captured_cli_session_id:
-                _map_key = _session_key(aads_session_id, slot)
+                _map_key = _session_key(aads_session_id, slot, resume_model)
                 old_cli = _session_map.get(_map_key)
                 if old_cli != captured_cli_session_id:
                     _session_map[_map_key] = captured_cli_session_id
@@ -2210,6 +2220,7 @@ async def handle_health(request):
     except Exception:
         pass
     health = {"status": "ok", "port": PORT, "sessions": len(_session_map),
+              "claude_model_contract": {"version": CONTRACT_VERSION, "models": sorted(EXACT_MODEL_IDS)},
               "auth_mode": "direct_oauth" if _DIRECT_OAUTH_ENABLED else "litellm_proxy",
               "claude_cmd_mode": _resolve_cli_command("claude").get("mode", "unknown"),
               "codex_cmd_mode": _resolve_cli_command("codex").get("mode", "unknown"),

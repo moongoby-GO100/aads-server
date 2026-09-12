@@ -24,14 +24,14 @@ class RelayDisconnectTests(unittest.TestCase):
             with self.assertRaises(ConnectionResetError):
                 await _stream_write(ClosingResponse(), b"test")
 
-        asyncio.get_event_loop().run_until_complete(_run())
+        asyncio.run(_run())
 
     def test_stream_prepare_normalizes_closing_transport_runtime_error(self):
         async def _run():
             with self.assertRaises(ConnectionResetError):
                 await _stream_prepare(ClosingResponse(), object())
 
-        asyncio.get_event_loop().run_until_complete(_run())
+        asyncio.run(_run())
 
 
 if __name__ == "__main__":
