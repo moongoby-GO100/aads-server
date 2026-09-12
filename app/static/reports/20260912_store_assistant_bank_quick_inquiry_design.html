@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>매장비서 은행 빠른조회·간편조회 기술 설계서</title>
+  <style>
+    :root{--bg:#f4f7f9;--paper:#fff;--ink:#182024;--muted:#66727a;--line:#d9e1e5;--brand:#0f766e;--nav:#18333b;--ok:#18794e;--warn:#a15c00;--bad:#b42318;--soft:#edf7f5}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 system-ui,-apple-system,"Segoe UI","Malgun Gothic",sans-serif}main{max-width:1180px;margin:auto;padding:36px 18px 72px}header,section{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:22px;margin-bottom:16px}h1{margin:4px 0 10px;font-size:32px;line-height:1.2}h2{margin:0 0 14px;font-size:21px;color:var(--nav)}h3{margin:22px 0 8px;font-size:16px}.kicker{font-size:12px;font-weight:900;color:var(--brand);letter-spacing:.08em}.lead{font-size:17px}.meta{display:flex;gap:8px;flex-wrap:wrap}.meta span,.tag{padding:3px 9px;border-radius:999px;background:var(--soft);color:var(--brand);font-size:12px;font-weight:800}.warn{border-left:5px solid var(--warn)}.ok{border-left:5px solid var(--ok)}table{width:100%;border-collapse:collapse;font-size:13.5px}th,td{border-bottom:1px solid var(--line);padding:9px;text-align:left;vertical-align:top}th{background:#f7f9fa;color:var(--muted)}code{background:#eef2f4;padding:2px 5px;border-radius:4px}pre{background:#10252c;color:#d8f3ec;padding:16px;border-radius:8px;overflow:auto;line-height:1.5}.flow{display:grid;grid-template-columns:repeat(6,minmax(145px,1fr));gap:8px;overflow:auto}.flow div{background:#f7fafb;border:1px solid var(--line);border-radius:8px;padding:12px;min-height:105px}.status-ok{color:var(--ok);font-weight:800}.status-warn{color:var(--warn);font-weight:800}.status-plan{color:#175cd3;font-weight:800}@media(max-width:760px){h1{font-size:26px}.flow{grid-template-columns:1fr}table{display:block;overflow-x:auto}}
+  </style>
+</head>
+<body><main>
+  <header>
+    <div class="kicker">STORE ASSISTANT · BANK QUICK INQUIRY · DESIGN v2.0</div>
+    <h1>매장비서 은행 빠른조회·간편조회 기술 설계서</h1>
+    <p class="lead">은행에 신청해 둔 빠른조회/간편조회 계좌를 국내 Windows PC Agent에서 조회하고, AADS 서버가 POST 요청·작업 큐·감사·거래 원장·통계를 담당하는 보존형 설계입니다.</p>
+    <div class="meta"><span>기준 시각 2026-09-12 KST</span><span>신한·IBK 우선</span><span>기존 기능 보존</span><span>비밀값 API 비노출</span></div>
+  </header>
+
+  <section class="ok">
+    <h2>1. 결론</h2>
+    <p><strong>BankAPI와 같은 POST 기반 사용 경험은 가능하며, 우리 구조에서는 은행 접속 실행 위치만 국내 PC Agent로 분리합니다.</strong> 운영 서버는 계좌 비밀번호를 요청 본문이나 큐에 넣지 않고 Vault 연결 식별자만 사용합니다. 기존 동기 수집 API는 유지하고, 비동기 <code>POST quick-inquiries</code>와 <code>GET job status</code>를 추가했습니다.</p>
+  </section>
+
+  <section>
+    <h2>2. 현재 실측과 갭</h2>
+    <table><thead><tr><th>항목</th><th>실측</th><th>판정</th><th>조치</th></tr></thead><tbody>
+      <tr><td>등록 은행계좌</td><td>6건 [운영 DB, 2026-09-12]</td><td class="status-ok">기반 존재</td><td>계좌별 Vault 연결을 결정적으로 선택</td></tr>
+      <tr><td>은행 거래원장</td><td>0건 [운영 DB, 2026-09-12]</td><td class="status-warn">운영 E2E 미완</td><td>PC Agent에서 1건 이상 또는 무거래 확정 검증</td></tr>
+      <tr><td>플랫폼/금융 계정</td><td>44건 [운영 DB, 2026-09-12]</td><td class="status-warn">복수 후보</td><td><code>platform_account_id → username → account mask</code> 우선순위 적용</td></tr>
+      <tr><td>수집 큐</td><td>19건 [운영 DB, 2026-09-12]</td><td class="status-ok">재사용 가능</td><td>bank queue와 financial-exclusive lease 재사용</td></tr>
+      <tr><td>기존 수집기</td><td>신한 개인 간편/법인 빠른조회, IBK 빠른조회, 파서·원장 적재 코드 존재 [소스]</td><td class="status-ok">보존</td><td>전면 교체 없이 REST facade만 추가</td></tr>
+    </tbody></table>
+  </section>
+
+  <section>
+    <h2>3. 목표 아키텍처</h2>
+    <div class="flow">
+      <div><strong>1. 매장비서 UI/스케줄</strong><br>계좌 ID와 조회기간만 POST</div>
+      <div><strong>2. Hermes Gate</strong><br>관리자 권한·사업자 범위·5분 제한·중복 방지</div>
+      <div><strong>3. AADS Queue</strong><br>비밀값 없는 job, DB lease와 상태 저장</div>
+      <div><strong>4. 국내 PC Agent</strong><br>전용 브라우저·보안프로그램·은행 화면 실행</div>
+      <div><strong>5. Collector</strong><br>Vault를 메모리에서만 복호화, 조회·파싱</div>
+      <div><strong>6. Ledger/통계</strong><br>멱등 적재 후 거래/요약 API 제공</div>
+    </div>
+    <pre>POST request → validate_scope → resolve_credential_link → cooldown/idempotency
+→ enqueue(financial_exclusive) → PC Agent claim → security_preflight
+→ open/login/query → parse → idempotent_import → verify → GET status/result</pre>
+  </section>
+
+  <section>
+    <h2>4. Trust Boundary와 비밀정보 정책</h2>
+    <table><thead><tr><th>구간</th><th>허용 데이터</th><th>금지 데이터</th><th>통제</th></tr></thead><tbody>
+      <tr><td>브라우저 → AADS API</td><td>계좌 ID, 기간, Agent 선택</td><td>계좌번호 원문, PIN, 로그인 비밀번호</td><td>관리자 인증·Pydantic extra forbid</td></tr>
+      <tr><td>AADS Queue/DB</td><td>마스킹 번호, 상태, 오류코드, 집계</td><td>복호화된 secret, OTP, 인증서 비밀번호</td><td>큐 payload secret-free, 결과 요약 화이트리스트</td></tr>
+      <tr><td>Vault → Collector</td><td>작업 순간 메모리의 자격값</td><td>로그·trace·응답·fixture 저장</td><td>연결 ID 우선 선택, 사용 후 참조 폐기</td></tr>
+      <tr><td>Collector → 원장</td><td>거래일시·입출금·금액·잔액·적요</td><td>인증 자격정보</td><td>source hash 기반 멱등 적재</td></tr>
+    </tbody></table>
+  </section>
+
+  <section>
+    <h2>5. Hermes Gate / 실행 하네스</h2>
+    <table><thead><tr><th>게이트</th><th>거부/대기 조건</th><th>응답</th></tr></thead><tbody>
+      <tr><td>Authorization</td><td>비관리자, 다른 tenant/사업자 범위</td><td>403 또는 존재 비노출 404</td></tr>
+      <tr><td>Credential binding</td><td>연결 Vault 레코드 또는 필수 필드 없음</td><td><code>action_required / MISSING_CREDENTIALS</code></td></tr>
+      <tr><td>Cooldown</td><td>동일 계좌 5분 이내 재요청</td><td>같은 job 재사용 또는 <code>retry_after_seconds</code></td></tr>
+      <tr><td>Execution lease</td><td>동일 Agent/계좌 금융 작업 실행 중</td><td><code>financial_exclusive</code> 큐 대기</td></tr>
+      <tr><td>Runtime</td><td>Agent 오프라인·보안프로그램 미준비·추가 인증</td><td>queued/action_required와 복구 안내</td></tr>
+      <tr><td>Completion</td><td>신규 거래도 무거래 확정도 없음</td><td>완료 처리 금지, 검증 실패 상태 유지</td></tr>
+    </tbody></table>
+  </section>
+
+  <section>
+    <h2>6. LangGraph·LangSmith·Wiki·LLMOps 적용</h2>
+    <p>거래 수집의 결정 경로에는 LLM을 넣지 않습니다. 기존 LangGraph 하네스는 상태 전이를 관리하고, OHVIS trace를 기본 감사 원장으로 사용합니다. LangSmith 환경변수가 설정된 경우 같은 run ID로 trace를 보조 전송합니다.</p>
+    <table><thead><tr><th>도구</th><th>적용</th><th>미적용/주의</th></tr></thead><tbody>
+      <tr><td>LangGraph</td><td>validate → preflight → collect → verify 상태머신</td><td>은행 응답 해석을 LLM에게 맡기지 않음</td></tr>
+      <tr><td>LangChain/LangSmith</td><td>오류 분류·trace·회귀 평가 메타</td><td>secret·거래 전문 trace 금지</td></tr>
+      <tr><td>Wiki/HTML</td><td>본 문서·PRD·운영 runbook 정본 링크</td><td>구현 전 계획과 구현 완료를 혼합하지 않음</td></tr>
+      <tr><td>LLMOps</td><td>단계별 성공률, action_required 비율, 수집 지연 관측</td><td>미측정 성능 수치 보고 금지</td></tr>
+    </tbody></table>
+  </section>
+
+  <section>
+    <h2>7. REST·데이터 계약</h2>
+    <pre>POST /api/v1/yeoljeong-finance/bank-accounts/{account_id}/quick-inquiries
+{ "business_id":"biz-mia", "branch_id":"branch-gangbuk-mia",
+  "date_from":"2026-09-01", "date_to":"2026-09-12",
+  "browser_agent_id":"optional" }
+→ 202 { "quick_inquiry": { "job_id":"...", "status":"queued", ... } }
+
+GET /api/v1/yeoljeong-finance/bank-quick-inquiries/{job_id}
+→ 200 { "quick_inquiry": { "status":"succeeded|action_required|failed|...",
+  "retry_after_seconds":0, "error_code":"", "result":{
+  "collected_rows":0,"imported_rows":0,"duplicate_rows":0,
+  "verified_no_records":false } } }</pre>
+    <p>거래 상세는 기존 <code>GET /bank-transactions</code>, 집계는 <code>GET /bank-summary</code>를 사용합니다. 큐 결과 응답은 화이트리스트 집계만 노출합니다.</p>
+  </section>
+
+  <section>
+    <h2>8. 상태·복구·롤백</h2>
+    <table><thead><tr><th>상태</th><th>사용자 표시</th><th>복구</th></tr></thead><tbody>
+      <tr><td>queued/running</td><td>수집 대기/진행, 최근 갱신 시각</td><td>GET polling, 중복 POST 금지</td></tr>
+      <tr><td>action_required</td><td>로그인·보안프로그램·추가 인증 필요</td><td>같은 work key에서 조치 후 재시도</td></tr>
+      <tr><td>succeeded</td><td>수집/신규/중복 건수, 마지막 성공</td><td>거래 원장·요약 재조회</td></tr>
+      <tr><td>failed</td><td>비밀값 없는 오류코드와 안내</td><td>일시 오류만 backoff, 인증 오류 자동 반복 금지</td></tr>
+    </tbody></table>
+    <p><strong>코드 롤백:</strong> 신규 두 route와 service wrapper를 제거하면 기존 동기 <code>/collect</code>가 그대로 남습니다. <strong>데이터 롤백:</strong> 신규 스키마가 없고 기존 큐/원장을 사용하므로 DB 역마이그레이션이 없습니다.</p>
+  </section>
+
+  <section class="warn">
+    <h2>9. 구현 상태</h2>
+    <table><thead><tr><th>범위</th><th>상태</th><th>완료 기준</th></tr></thead><tbody>
+      <tr><td>POST/GET facade, 결정적 credential link, secret-free 응답</td><td class="status-ok">코드·단위시험 완료</td><td>관련 테스트 통과</td></tr>
+      <tr><td>신한/IBK 브라우저 connector와 원장 import</td><td class="status-ok">기존 구현 재사용</td><td>회귀시험 통과</td></tr>
+      <tr><td>운영 배포</td><td class="status-plan">미배포</td><td>커밋·push·blue/green·5분 관측</td></tr>
+      <tr><td>실은행 E2E</td><td class="status-warn">미검증</td><td><code>imported_rows &gt; 0</code> 또는 <code>verified_no_records=true</code></td></tr>
+    </tbody></table>
+  </section>
+</main></body></html>

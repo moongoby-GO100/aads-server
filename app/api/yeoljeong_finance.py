@@ -333,6 +333,20 @@ class BankAccountCollectPayload(BaseModel):
     browser_timeout_seconds: float = Field(default=120, ge=5, le=300)
 
 
+class BankQuickInquiryPayload(BaseModel):
+    """Secret-free request contract for queued bank quick/simple inquiries."""
+
+    model_config = {"extra": "forbid"}
+    business_id: str = ""
+    branch_id: str = ""
+    date_from: str = ""
+    date_to: str = ""
+    browser_agent_id: str = ""
+    browser_work_key: str = ""
+    auto_open_browser: bool = True
+    force_recreate_browser: bool = False
+
+
 @router.get("/session")
 async def get_session(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return await run_in_threadpool(svc.session_for_user, current_user)
@@ -762,6 +776,30 @@ async def collect_bank_account_transactions(
     current_user: dict = Depends(get_current_user),
 ) -> dict[str, Any]:
     return await run_in_threadpool(svc.collect_bank_account_transactions, account_id, payload.model_dump(), current_user)
+
+
+@router.post("/bank-accounts/{account_id}/quick-inquiries", status_code=202)
+async def enqueue_bank_quick_inquiry(
+    account_id: str,
+    payload: BankQuickInquiryPayload,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    inquiry = await run_in_threadpool(
+        svc.enqueue_bank_quick_inquiry,
+        account_id,
+        payload.model_dump(),
+        current_user,
+    )
+    return {"quick_inquiry": inquiry}
+
+
+@router.get("/bank-quick-inquiries/{job_id}")
+async def get_bank_quick_inquiry(
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    inquiry = await run_in_threadpool(svc.get_bank_quick_inquiry, job_id, current_user)
+    return {"quick_inquiry": inquiry}
 
 
 @router.post("/bank-collector/shinhan-easyview/run")

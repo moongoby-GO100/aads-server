@@ -153,6 +153,18 @@ BANK_QUICK_SERVICE_CONFIG = {
         "enrollment": "기업뱅킹의 빠른조회서비스 신청/해제에서 대상 계좌를 등록한 뒤 빠른조회로 거래내역을 확인합니다.",
     },
 }
+BANK_AGENT_VAULT_ORIGINS: dict[str, tuple[str, ...]] = {
+    # Keep the legacy corporate origin because CEO Password Manager imports
+    # were saved before the collector moved to Shinhan EasyView.
+    "shinhan_business": (
+        "https://bank.shinhan.com",
+        "https://bizbank.shinhan.com",
+    ),
+    "ibk_business": (
+        "https://kiup.ibk.co.kr",
+        "https://mybank.ibk.co.kr",
+    ),
+}
 
 
 def _normalize_bank_quick_login_url(service: str, login_url: Any) -> str:
@@ -1212,6 +1224,88 @@ async def _db_fetch_delivery_agent_vault_credentials() -> list[dict[str, Any]] |
         return [dict(row) for row in rows]
     finally:
         await conn.close()
+
+
+async def _db_fetch_bank_agent_vault_credentials(
+    service: str,
+    tenant_id: str,
+) -> list[dict[str, Any]]:
+    """Fetch encrypted bank login rows for one tenant and approved origins."""
+    import asyncpg
+
+    origins = sorted({_normalize_origin(value) for value in BANK_AGENT_VAULT_ORIGINS.get(service, ())})
+    if not origins or not tenant_id:
+        return []
+    try:
+        tenant_uuid = UUID(str(tenant_id))
+    except (TypeError, ValueError, AttributeError):
+        return []
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        ready = await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", "public.agent_vault_credentials")
+        if not ready:
+            return []
+        rows = await conn.fetch(
+            """
+            SELECT id, work_key, origin, label, username_enc, password_enc, metadata
+              FROM agent_vault_credentials
+             WHERE tenant_id = $1
+               AND is_active = TRUE
+               AND origin = ANY($2::text[])
+             ORDER BY updated_at DESC, label
+            """,
+            tenant_uuid,
+            origins,
+        )
+        return [dict(row) for row in rows]
+    finally:
+        await conn.close()
+
+
+def _bank_login_from_agent_vault(
+    *,
+    service: str,
+    tenant_id: str,
+    expected_username: str,
+    business_id: str,
+    branch_names: set[str],
+) -> dict[str, str]:
+    """Resolve a Password Manager login without crossing tenant boundaries."""
+    if not tenant_id or not _db_available():
+        return {}
+    rows = _run_db(_db_fetch_bank_agent_vault_credentials(service, tenant_id))
+    if not isinstance(rows, list) or not rows:
+        return {}
+    expected = str(expected_username or "").strip().lower()
+
+    def _rank(row: dict[str, Any]) -> tuple[int, int, int, str]:
+        metadata = _jsonb_object(row.get("metadata"))
+        username = _decrypt_secret(str(row.get("username_enc") or "")).strip().lower()
+        row_business = str(metadata.get("business_id") or metadata.get("businessId") or "").strip()
+        row_branch = str(metadata.get("branch") or "").strip()
+        return (
+            1 if expected and username == expected else 0,
+            1 if business_id and row_business == business_id else 0,
+            1 if branch_names and row_branch in branch_names else 0,
+            str(row.get("id") or ""),
+        )
+
+    ranked = sorted(rows, key=_rank, reverse=True)
+    best = ranked[0]
+    best_rank = _rank(best)
+    # A non-singleton Vault set needs at least one positive identity/scope match.
+    if len(ranked) > 1 and not any(best_rank[:3]):
+        return {}
+    username = _decrypt_secret(str(best.get("username_enc") or "")).strip()
+    password = _decrypt_secret(str(best.get("password_enc") or ""))
+    if not username or not password:
+        return {}
+    return {
+        "login_username": username,
+        "login_password": password,
+        "agent_vault_credential_id": str(best.get("id") or ""),
+        "agent_vault_origin": _normalize_origin(best.get("origin")),
+    }
 
 
 def _hydrate_delivery_account_passwords_from_agent_vault(rows: list[dict[str, Any]]) -> int:
@@ -6018,6 +6112,7 @@ def _bank_quick_credentials_for_account(
     *,
     business_id: str,
     branch_id: str,
+    tenant_id: str = "",
 ) -> dict[str, str]:
     """Return decrypted read-only bank quick-service credentials for browser fill.
 
@@ -6043,6 +6138,29 @@ def _bank_quick_credentials_for_account(
         candidates.append(row)
     if not candidates:
         return {}
+    linked_platform_id = str(account.get("platform_account_id") or "").strip()
+    credential_username = str(account.get("credential_username") or "").strip().lower()
+    account_mask = str(account.get("account_number_masked") or "").strip()
+
+    def _candidate_rank(row: dict[str, Any]) -> tuple[int, int, int, str]:
+        """Prefer the explicitly linked Vault row before scope-only matches.
+
+        Older data can have several bank quick-service rows for one branch.  The
+        previous "first row wins" behavior could therefore decrypt another
+        account's credentials.  The rank is deterministic and never compares
+        plaintext secrets.
+        """
+        row_id = str(row.get("id") or "").strip()
+        row_username = str(row.get("username") or "").strip().lower()
+        row_mask = str(row.get("account_no_masked") or "").strip()
+        return (
+            1 if linked_platform_id and row_id == linked_platform_id else 0,
+            1 if credential_username and row_username == credential_username else 0,
+            1 if account_mask and row_mask and account_mask == row_mask else 0,
+            str(row.get("updated_at") or row.get("created_at") or ""),
+        )
+
+    candidates.sort(key=_candidate_rank, reverse=True)
     selected = candidates[0]
     credentials: dict[str, str] = {
         "quick_account_configured": "1",
@@ -6059,7 +6177,166 @@ def _bank_quick_credentials_for_account(
         encrypted = str(selected.get(encrypted_field) or "")
         if encrypted:
             credentials[plaintext_field] = _decrypt_secret(encrypted)
+    if not credentials.get("login_username") or not credentials.get("login_password"):
+        vault_login = _bank_login_from_agent_vault(
+            service=service_code,
+            tenant_id=tenant_id,
+            expected_username=str(credentials.get("login_username") or selected.get("username") or ""),
+            business_id=business_id,
+            branch_names=branch_names,
+        )
+        if vault_login:
+            credentials["login_username"] = vault_login["login_username"]
+            credentials["login_password"] = vault_login["login_password"]
     return credentials
+
+
+def _public_bank_quick_job(item: dict[str, Any], *, account_id: str = "") -> dict[str, Any]:
+    """Return a secret-free quick-inquiry job contract for API clients."""
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    result = item.get("result") if isinstance(item.get("result"), dict) else {}
+    collections = result.get("bank_collections") if isinstance(result.get("bank_collections"), list) else []
+    collection = next(
+        (
+            row
+            for row in collections
+            if isinstance(row, dict)
+            and (not account_id or str(row.get("bank_account_id") or "") == account_id)
+        ),
+        {},
+    )
+    retry_after_seconds = 0
+    next_run_at = str(item.get("next_run_at") or "").strip()
+    if next_run_at and str(item.get("status") or "") in {"queued", "action_required"}:
+        try:
+            parsed = datetime.fromisoformat(next_run_at.replace("Z", "+00:00"))
+            now = datetime.now(parsed.tzinfo or KST)
+            retry_after_seconds = max(0, int((parsed - now).total_seconds()))
+        except ValueError:
+            retry_after_seconds = 0
+    status = str(item.get("status") or "queued")
+    return {
+        "job_id": str(item.get("id") or ""),
+        "status": status,
+        "action_required": status == "action_required",
+        "bank_account_id": account_id or str(payload.get("bank_account_id") or ""),
+        "service": str(item.get("service") or payload.get("service") or ""),
+        "business_id": str(item.get("business_id") or payload.get("business_id") or ""),
+        "branch_id": str(item.get("branch") or payload.get("branch") or ""),
+        "date_from": str(payload.get("date_from") or ""),
+        "date_to": str(payload.get("date_to") or ""),
+        "attempt_count": int(item.get("attempt_count") or 0),
+        "retry_after_seconds": retry_after_seconds,
+        "next_run_at": next_run_at,
+        "error_code": str(item.get("error_code") or collection.get("error_code") or ""),
+        "message": str(item.get("message") or collection.get("message") or ""),
+        "created_at": str(item.get("created_at") or ""),
+        "updated_at": str(item.get("updated_at") or ""),
+        "started_at": str(item.get("started_at") or ""),
+        "finished_at": str(item.get("finished_at") or ""),
+        "result": {
+            "collected_rows": int(collection.get("collected_rows") or 0),
+            "imported_rows": int(collection.get("imported_rows") or 0),
+            "duplicate_rows": int(collection.get("duplicate_rows") or 0),
+            "verified_no_records": str(collection.get("status") or "") == "no_records",
+            "last_collected_at": str(collection.get("last_collected_at") or ""),
+        },
+    }
+
+
+def enqueue_bank_quick_inquiry(
+    account_id: str,
+    payload: dict[str, Any],
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    """Queue a bank quick/simple inquiry without putting secrets in the job."""
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="은행 빠른조회 실행 권한이 없습니다")
+    account_key = str(account_id or "").strip()
+    account = _find_bank_account(_read_file_rows(BANK_ACCOUNTS_LEDGER), account_key)
+    if account is None:
+        raise HTTPException(status_code=404, detail="조회할 은행계좌를 찾지 못했습니다")
+    service_code = _bank_service_code_for_account(account)
+    if service_code not in BANK_QUICK_SERVICE_CONFIG:
+        raise HTTPException(status_code=400, detail="빠른조회/간편조회를 지원하지 않는 은행계좌입니다")
+    business_id, requested_branch_id = _normalize_bank_scope(
+        payload.get("business_id") or account.get("business_id"),
+        payload.get("branch_id") or account.get("branch_id") or "",
+    )
+    if not _bank_account_matches_scope(account, business_id, requested_branch_id):
+        raise HTTPException(status_code=404, detail="사업자/지점 범위에 맞는 은행계좌를 찾지 못했습니다")
+    date_from, date_to = _valid_range_bounds(payload.get("date_from"), payload.get("date_to"))
+    today = datetime.now(KST).date().isoformat()
+    date_from = date_from or today
+    date_to = date_to or today
+    branch_id = requested_branch_id or str(account.get("branch_id") or "")
+    browser_agent_id = str(payload.get("browser_agent_id") or "").strip()
+    work_key = str(payload.get("browser_work_key") or "").strip() or (
+        f"yeoljeong-bank-{service_code}-{business_id}-{branch_id or 'common'}"
+    )
+    sync_job_id = f"bank-quick-{uuid4().hex[:16]}"
+    queue_payload = {
+        "services": [service_code],
+        "service": service_code,
+        "bank_account_id": account_key,
+        "business_id": business_id,
+        "branch": branch_id,
+        "all_businesses": False,
+        "bank_only": True,
+        "skip_financial_accounts": False,
+        "date_from": date_from,
+        "date_to": date_to,
+        "source": "bank-quick-api",
+        "prefer_pc_agent": True,
+        "require_pc_agent": True,
+        "auto_open_bank_browser": bool(payload.get("auto_open_browser", True)),
+        "force_recreate_bank_browser": bool(payload.get("force_recreate_browser", False)),
+        "bank_browser_work_key": work_key,
+        "browser_agent_id": browser_agent_id,
+        "pc_agent_id": browser_agent_id,
+        "required_browser_agent_id": browser_agent_id,
+        "sync_job_id": sync_job_id,
+    }
+    from app.services.pc_agent_collection_queue import enqueue_collection_item
+
+    queued = enqueue_collection_item(
+        {
+            "tenant_id": str(user.get("tenant_id") or "").strip(),
+            "queue_type": "bank",
+            "site_key": f"bank:{service_code}",
+            "service": service_code,
+            "business_id": business_id,
+            "branch": branch_id,
+            "work_key": work_key,
+            "runtime": "pc_agent",
+            "priority": 10,
+            "min_interval_seconds": 300,
+            "latest_only": True,
+            "payload": queue_payload,
+            "created_by": str(user.get("email") or user.get("id") or "bank-quick-api"),
+        }
+    )
+    return _public_bank_quick_job(queued, account_id=account_key)
+
+
+def get_bank_quick_inquiry(job_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    """Read one quick-inquiry status/result while enforcing tenant scope."""
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="은행 빠른조회 상태 조회 권한이 없습니다")
+    from app.services.pc_agent_collection_queue import queue_snapshot
+
+    target = str(job_id or "").strip()
+    item = next((row for row in queue_snapshot(200) if str(row.get("id") or "") == target), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="은행 빠른조회 작업을 찾지 못했습니다")
+    if str(item.get("queue_type") or "") != "bank":
+        raise HTTPException(status_code=404, detail="은행 빠른조회 작업을 찾지 못했습니다")
+    tenant_id = str(user.get("tenant_id") or "").strip()
+    item_tenant_id = str(item.get("tenant_id") or "").strip()
+    if tenant_id and item_tenant_id and tenant_id != item_tenant_id:
+        raise HTTPException(status_code=404, detail="은행 빠른조회 작업을 찾지 못했습니다")
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    return _public_bank_quick_job(item, account_id=str(payload.get("bank_account_id") or ""))
 
 
 def _business_entity_type_for_bank_scope(business_id: str) -> str:
@@ -6123,6 +6400,7 @@ def _collect_bank_via_browser(
         account,
         business_id=business_id,
         branch_id=branch_id,
+        tenant_id=str(user.get("tenant_id") or ""),
     )
     if service_code in {"shinhan_business", "ibk_business"} and bank_credentials.get("quick_account_configured") == "1":
         required_fields = {

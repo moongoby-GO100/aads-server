@@ -13495,3 +13495,26 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - `b9147c09`에서 `jsonb_build_object('revision', $5::integer)`로 SQL 파라미터 타입을 명시하고 API blue/green 배포 run 320을 완료했다. active/standby는 동일 digest `sha256:044fa7c3...04ecd48`이며 300초 P0/P1 감시를 통과했다.
 - 운영 `PUT /api/v1/chat/artifacts/{id}` 재검증에서 DB 트랜잭션은 draft revision 2와 `edited` 이벤트를 저장했지만, asyncpg JSONB codec이 반환한 문자열 metadata가 `ArtifactOut.metadata` 응답 검증에서 HTTP 500을 일으키는 후속 결함을 확인했다.
 - `directive_draft_service._serialize_row`가 `metadata`와 `classification` JSON 문자열을 안전하게 역직렬화하도록 보강하고 회귀 테스트를 추가했다. 자동 전송은 수행하지 않았으며, 후속 커밋·blue/green 배포·운영 API 200 재검증 결과를 최종 보고에 기록한다.
+
+## 2026-09-12 19:54 KST — 매장비서 은행 빠른조회·간편조회 REST facade 및 문서
+- 기존 신한/IBK PC Agent 수집기와 동기 `/collect`를 보존하면서 비동기
+  `POST /bank-accounts/{account_id}/quick-inquiries` 및
+  `GET /bank-quick-inquiries/{job_id}` 계약을 추가했다. 작업 큐에는 계좌 ID,
+  기간, Agent/work key만 저장하고 secret은 넣지 않는다.
+- 같은 지점에 은행 credential 후보가 여러 건일 때 `platform_account_id`,
+  `credential_username`, 마스킹 계좌 순으로 결정적으로 선택한다. Agent Vault는
+  tenant와 허용 은행 origin을 제한하며, 기존 신한 Password Manager가 저장된
+  `bizbank.shinhan.com` origin도 간편조회 로그인 보조 자격으로 연결한다.
+- 5분 최소 간격, financial-exclusive resource, secret-free 상태/결과 요약,
+  사업자·지점·tenant 범위 검증을 적용했다. 거래 적재는 기존
+  `yeoljeong_bank_transactions` 멱등 경로를 그대로 사용한다.
+- 기술 설계서와 PRD를 `app/static/reports/20260912_store_assistant_bank_quick_inquiry_*.html`에
+  저장하고 문서 인덱스에 연결했다. BankAPI 공식 문서는 비교 기준으로만 인용하며
+  외부 서비스 의존성은 추가하지 않았다.
+- 검증: DB 환경변수를 제거한 격리 실행에서 관련 보존 회귀 포함 302 passed,
+  집중 API/서비스 10 passed, Python compile, HTML 3개 parser, `git diff --check` 통과.
+  첫 회귀 실행의 4건 실패는 운영 `DATABASE_URL`을 상속한 테스트가 임시 파일 대신
+  운영 DB 경로로 진입한 환경 문제였고, 격리 재실행으로 통과했다.
+- 운영 E2E와 배포는 미수행이다. 완료 기준은 국내 PC Agent에서 신한 또는 IBK
+  한 계좌가 `imported_rows > 0` 또는 `verified_no_records=true`를 반환하고,
+  거래목록/은행요약에서 동일 결과가 확인되는 것이다.
