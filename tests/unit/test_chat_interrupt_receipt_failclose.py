@@ -1,10 +1,4 @@
-"""WP01 regression tests for durable additional-instruction receipts.
-
-C17 / FR19 / INV13 / T19: the process-local interrupt queue must never
-acknowledge work that PostgreSQL did not commit. The C16 query-writer cleanup
-remains a separate WP04 migration; these tests keep this POST-only containment
-from adding a read-path repair dependency.
-"""
+"""WP01 regression tests for durable additional-instruction receipts."""
 
 from __future__ import annotations
 

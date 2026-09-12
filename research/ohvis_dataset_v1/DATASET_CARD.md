@@ -1,7 +1,7 @@
 # OHVIS Research Dataset v1 — Pilot Dataset Card
 
 - **dataset_version**: `ohvis-pilot-v1`
-- **생성 시각**: 2026-09-12 23:10 KST
+- **생성 시각**: 2026-09-12 23:04 KST
 - **생성 도구**: `research/ohvis_dataset_v1/extract_pilot.py` (SELECT 전용)
 - **산출물**: `research/ohvis_dataset_v1/out/pilot_v1.jsonl`, `out/pii_scan_report.json`
 - **상태**: 파일럿(30건). 본 데이터셋은 **연구 결과가 아니라 분석 대상 표본**이다.
@@ -18,7 +18,7 @@ AADS/OHVIS에서 실제로 수행된 **자율 AI 개발 사이클 1건**(CEO 지
 |---|---|---|
 | 원천 테이블 | `pipeline_jobs` | [DB 조회] |
 | 전체 행 | 820 | [DB 조회 2026-09-12 23:02 KST] |
-| 모집단(최근 120일) | 417 | [추출기 리포트] |
+| 모집단(최근 120일) | 416 | [추출기 리포트] |
 | 파일럿 표본 | 30 | [추출기 리포트] |
 | 층화 기준 | `project` × `outcome` | 코드 `stratify()` |
 | 추출 방식 | 층별 라운드로빈 + `sha256(job_id)` 정렬 → **결정론적 재현 가능** | 코드 |

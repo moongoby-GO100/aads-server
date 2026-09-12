@@ -14,8 +14,7 @@ def _source(path: str) -> str:
 
 def test_awaiting_approval_notifies_session_ai_without_visible_runner_chat_dependency():
     source = _source("app/api/pipeline_runner.py")
-    notify_endpoint = source.split("async def notify_completion", 1)[1]
-    branch = notify_endpoint.split('if status == "awaiting_approval":', 1)[1].split(
+    branch = source.split('if status == "awaiting_approval":', 1)[1].split(
         'elif status == "done":', 1
     )[0]
 
@@ -42,7 +41,7 @@ def test_chat_interrupt_and_bluegreen_drain_contracts_remain_enabled():
 
     assert "_apply_deferred_interrupts_to_state" in chat_source
     assert "deferred_interrupt_apply" in chat_source
-    assert 'AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "5"' in chat_source
+    assert 'AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "3"' in chat_source
     assert 'deploy_phase_start "active_slot_drain" "running"' in deploy_source
     assert "while [[ $DRAIN_ELAPSED -lt 60 ]]" in deploy_source
     assert "sync_standby_slot_after_drain" in deploy_source

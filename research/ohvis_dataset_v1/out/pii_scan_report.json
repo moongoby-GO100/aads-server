@@ -1,17 +1,18 @@
 {
   "dataset_version": "ohvis-pilot-v1",
-  "generated_at_kst": "2026-09-12T23:10:56+09:00",
-  "population_rows_120d": 417,
+  "generated_at_kst": "2026-09-12T23:16:33+09:00",
+  "population_rows_120d": 420,
   "sampled": 30,
   "strata": {
     "GO100/terminal_after_rejection": 4,
     "AADS/terminal_after_rejection": 4,
     "GO100/failed": 4,
     "NTV2/terminal_after_rejection": 4,
-    "AADS/failed": 4,
+    "AADS/failed": 3,
     "AADS/in_flight": 3,
     "GO100/accepted": 3,
     "GO100/in_flight": 3,
+    "GO100/other": 1,
     "KIS/terminal_after_rejection": 1
   },
   "redaction_hits": {

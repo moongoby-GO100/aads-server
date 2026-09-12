@@ -682,7 +682,7 @@ async def get_model_routing_preferences() -> dict[str, Any]:
     return {
         "preferences": preferences,
         "total": len(preferences),
-        "route_keys": list(AI_ROUTE_KEYS),
+        "route_keys": [k for k in AI_ROUTE_KEYS if not k.startswith("intent_")],
         "route_groups": ROUTE_GROUPS,
         "route_counts": route_counts,
         "default_models": default_models,

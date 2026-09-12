@@ -17,7 +17,7 @@ AADS/OHVIS 운영 DB에서 Pipeline Runner 작업 30건을 층화 추출해
 사용
 ----
     docker exec aads-server python3 /app/research/ohvis_dataset_v1/extract_pilot.py \
-        --n 30 --outdir /app/research/ohvis_dataset_v1/out
+        --n 30   (기본 outdir = 이 스크립트 옆의 out/)
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ import os
 import re
 import secrets
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import asyncpg
@@ -91,7 +91,7 @@ def load_salt() -> str:
 def pseudo(salt: str, kind: str, value: str | None) -> str | None:
     if value is None or value == "":
         return None
-    digest = hashlib.sha256(f"{salt}|{kind}|{value}".encode()).hexdigest()
+    digest = hashlib.sha256(f"{salt}|{kind}|{value}".encode("utf-8")).hexdigest()
     return f"{kind}_{digest[:16]}"
 
 
@@ -130,19 +130,50 @@ def auto_labels(row: dict) -> dict:
     verdict = (row.get("review_verdict") or "").lower()
     err = (row.get("error_detail") or "").lower()
 
-    # 주의: 'rejected_done'은 코드상(app/api/admin.py:51) done/approved와 같은 종료군으로
-    # 집계되지만, 이름은 '반려 후 종료'를 뜻한다. 이 모호성은 자동 라벨로 확정하지 않고
-    # needs_human_adjudication=True로 표시해 rater A/B 판정 대상으로 넘긴다.
+    # ------------------------------------------------------------------
+    # R1 해소 (2026-09-12 KST) — rejected_done 의미를 코드 실측으로 확정했다.
+    #
+    #   기록 경로가 단 하나뿐이다:
+    #     scripts/pipeline-runner.sh:2639  reject_job() → status/phase='rejected_done'
+    #   진입 조건:
+    #     scripts/pipeline-runner.sh:1199  claim_rejected_job()
+    #       → status='rejected' 행만 클레임해 'rolling_back'으로 전이시킨다
+    #     app/api/pipeline_runner.py:1812  승인 API(action='reject')만이 'rejected'를 쓴다
+    #   부수효과: worktree 제거 = 해당 작업의 코드 변경 원복
+    #
+    #   ⇒ rejected_done = "승인 게이트에서 사람이 반려했고 코드가 원복된 상태" = 실패군.
+    #      commit_hash가 있어도 성공이 아니다(커밋은 검수 이전 단계에서 일어난다).
+    #
+    #   app/api/admin.py:51 은 rejected_done 을 화면상 'done' 버킷에 넣지만, 그것은
+    #   "종료 여부" 표시용이며 성공 판정이 아니다. 연구 라벨은 admin 버킷을 쓰지 않는다.
+    #
+    #   review_verdict(APPROVE/REQUEST_CHANGES/FLAG)는 AI 검수자의 독립 변수이며
+    #   사람의 승인 결정과 같지 않다. 둘의 불일치는 ai_human_agreement 로 보존한다.
+    # ------------------------------------------------------------------
     if status in ("done", "approved"):
-        outcome = "accepted"
+        outcome = "accepted_deployed"
     elif status == "rejected_done":
-        outcome = "terminal_after_rejection"
+        outcome = "human_rejected"
     elif status in ("error", "cancelled"):
         outcome = "failed"
     elif status in ("queued", "running", "awaiting_approval", "review_hold"):
         outcome = "in_flight"
     else:
         outcome = "other"
+
+    # AI 검수 판정 vs 사람 승인 결정의 일치도 — 종료된 작업에만 정의된다.
+    ai_positive = verdict == "approve"
+    ai_negative = verdict in ("request_changes", "flag")
+    if outcome == "accepted_deployed" and ai_positive:
+        ai_human_agreement = "agree_accept"
+    elif outcome == "human_rejected" and ai_negative:
+        ai_human_agreement = "agree_reject"
+    elif outcome == "human_rejected" and ai_positive:
+        ai_human_agreement = "ai_false_accept"
+    elif outcome == "accepted_deployed" and ai_negative:
+        ai_human_agreement = "ai_false_reject"
+    else:
+        ai_human_agreement = None
 
     if not err:
         failure_mode = "none"
@@ -159,14 +190,20 @@ def auto_labels(row: dict) -> dict:
     else:
         failure_mode = "other"
 
+    # 잔존 모호성: 실행조차 되지 않은 채 반려된 작업은 '품질 반려'인지
+    # '행정적 취소(중복 제출·계획 변경)'인지 자동 판정할 수 없다 → 사람 판정 대상.
+    never_started = row.get("started_at") is None
+    needs_adjudication = outcome == "human_rejected" and not verdict and never_started
+
     return {
         "outcome": outcome,
         "review_verdict_norm": verdict or None,
+        "ai_human_agreement": ai_human_agreement,
         "failure_mode": failure_mode,
         "reached_commit": bool(row.get("commit_hash")),
         "reached_deploy": row.get("deployed_at") is not None,
         "rework_cycles": int(row.get("cycle") or 0),
-        "needs_human_adjudication": outcome == "terminal_after_rejection",
+        "needs_human_adjudication": needs_adjudication,
         "human_label": None,          # 이중 라벨링(rater A/B)용 공란
         "human_label_rater": None,
         "label_disagreement": None,
@@ -213,8 +250,8 @@ def stratify(rows: list[dict], n: int) -> list[dict]:
     for r in rows:
         key = (r["project"] or "UNKNOWN", auto_labels(r)["outcome"])
         buckets.setdefault(key, []).append(r)
-    for items in buckets.values():
-        items.sort(key=lambda r: hashlib.sha256(r["job_id"].encode()).hexdigest())
+    for key in buckets:
+        buckets[key].sort(key=lambda r: hashlib.sha256(r["job_id"].encode()).hexdigest())
 
     # 층이 큰 순으로 라운드로빈하여 소수 층도 최소 1건 확보
     order = sorted(buckets, key=lambda k: (-len(buckets[k]), k))
@@ -239,8 +276,8 @@ async def fetch(dsn: str) -> list[dict]:
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute("SET TRANSACTION READ ONLY")  # 세션 레벨 안전장치
-    except asyncpg.PostgresError as exc:
-        print(f"[warn] SET TRANSACTION READ ONLY 실패(쿼리는 SELECT 전용): {exc}", file=sys.stderr)
+    except Exception:
+        pass
     try:
         recs = await conn.fetch(SELECT_SQL)
         return [dict(r) for r in recs]
@@ -266,7 +303,9 @@ def build_record(salt: str, row: dict, redact_stats: dict[str, int]) -> dict:
             parsed = json.loads(changed)
         except json.JSONDecodeError:
             parsed = [x for x in changed.replace(",", "\n").split("\n") if x.strip()]
-        if isinstance(parsed, (list, dict)):
+        if isinstance(parsed, list):
+            changed_n = len(parsed)
+        elif isinstance(parsed, dict):
             changed_n = len(parsed)
     elif isinstance(changed, (list, tuple)):
         changed_n = len(changed)
@@ -338,7 +377,7 @@ def rescan(path: Path) -> list[dict]:
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=30)
-    ap.add_argument("--outdir", default="/app/research/ohvis_dataset_v1/out")
+    ap.add_argument("--outdir", default=str(Path(__file__).resolve().parent / "out"))
     args = ap.parse_args()
 
     dsn = os.getenv("DATABASE_URL")

@@ -160,7 +160,46 @@ def _parse_quota_reset_seconds(error_msg: str) -> int:
     m = _re_mod.search(r'resets?\s+in\s+(\d+)\s*(day|일)', low)
     if m:
         return int(m.group(1)) * 86400
-    # Codex CLI 고정시각 패턴: "resets 3am (Asia/Seoul)", "resets at 3:00 AM"
+    # 날짜가 붙은 패턴: "resets Sep 16, 3am (Asia/Seoul)"
+    #
+    # Claude 주간 한도 메시지가 이 형태다. 아래 고정시각 패턴은 "resets 3am" 만
+    # 받아서 여기에 매칭되지 않았고, 결국 기본값 300초로 떨어져 소진된 계정을
+    # 5분마다 다시 두드렸다. 설령 시각만 잡았더라도 오늘/내일 3시로 계산해
+    # 실제 리셋(3일 뒤)과 크게 어긋난다. 날짜를 함께 읽어야 한다.
+    # (2026-09-12~13 실측: "resets Sep 16, 3am" → 300초로 오판)
+    m = _re_mod.search(
+        r'resets?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})'
+        r'(?:\s*,)?\s*(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)',
+        low,
+    )
+    if m:
+        import datetime as _dt
+        _KST = _dt.timezone(_dt.timedelta(hours=9))
+        _MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+                   "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+        now_kst = _dt.datetime.now(_KST)
+        month = _MONTHS[m.group(1)]
+        day = int(m.group(2))
+        h = int(m.group(3))
+        mi = int(m.group(4)) if m.group(4) else 0
+        if m.group(5) == "pm" and h != 12:
+            h += 12
+        elif m.group(5) == "am" and h == 12:
+            h = 0
+        year = now_kst.year
+        try:
+            target = _dt.datetime(year, month, day, h, mi, tzinfo=_KST)
+        except ValueError:
+            return _COOLDOWN_SECS
+        # 연말에 다음 해로 넘어가는 리셋을 과거로 읽지 않는다.
+        if target <= now_kst - _dt.timedelta(days=180):
+            try:
+                target = target.replace(year=year + 1)
+            except ValueError:
+                return _COOLDOWN_SECS
+        return max(int((target - now_kst).total_seconds()), 60)
+
+    # 고정시각 패턴: "resets 3am (Asia/Seoul)", "resets at 3:00 AM"
     m = _re_mod.search(r'resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s*\(?\s*(?:asia/seoul|kst)\s*\)?)?', low)
     if m:
         import datetime as _dt
