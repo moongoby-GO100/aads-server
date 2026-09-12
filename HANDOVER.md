@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+## 2026-09-12 23:05 KST — OHVIS 연구 Charter·Evidence Manifest·Dataset Pilot v1(30건)
+
+- CEO 지시 "다음단계 진행해"에 따라 읽기 전용 파일럿 추출기와 30건 비식별 데이터셋을 실제로 구현·실행했다. 신규 파일: `research/ohvis_dataset_v1/extract_pilot.py`(16,490 B), `research/ohvis_dataset_v1/DATASET_CARD.md`(6,471 B), `app/static/reports/20260912_ohvis_research_charter_evidence_pilot.html`(31,875 B). 산출물: `research/ohvis_dataset_v1/out/pilot_v1.jsonl`(30행, 90,906 B), `out/pii_scan_report.json`(777 B).
+- 추출기는 `pipeline_jobs` 단일 SELECT만 수행하고 연결 직후 `SET TRANSACTION READ ONLY`를 시도한다. INSERT/UPDATE/DELETE/DDL 없음. 원문 instruction·logs·git_diff 전문은 반출하지 않고 길이만 지표화한다. 식별자는 `SHA-256(salt|kind|value)` 앞 16자 의사식별자로 치환하며 salt는 컨테이너 `/root/.ohvis_research_salt`(0600)에 보관하고 저장소·데이터셋에 포함하지 않는다.
+- 실측: 모집단(최근 120일) 417건에서 project×outcome 9개 층으로 30건 층화 추출. 층 분포는 GO100/AADS/NTV2 terminal_after_rejection 각 4, GO100/AADS failed 각 4, AADS/GO100 in_flight 각 3, GO100 accepted 3, KIS terminal_after_rejection 1이다. redaction 적중은 조직 도메인·계정 일반화 8건뿐이고 키·토큰·PII 적중 0건, 출력 재스캔 잔존 유출 0건(`leak_clean: true`)이었다. 재스캔에서 1건이라도 탐지되면 `exit 2`로 산출물 배포를 차단한다.
+- 구성타당도 결함을 발견해 기록한다. `pipeline_jobs` 820건 중 683건(83.3%)이 `rejected_done`이며 코드는 이를 done·approved와 같은 종료군으로 집계한다(`app/api/admin.py:51`, `app/api/pipeline_runner.py:821`). 명칭은 "반려 후 종료"를 뜻해 의미가 모호하므로 자동 라벨로 확정하지 않고 `labels.needs_human_adjudication=true`(파일럿 13건)로 표시해 rater A/B 판정 대상으로 넘겼다. 이 판정 전에는 성공률·품질 향상률·비용 절감률을 산출하지 않는다.
+- 증거 보존 사고를 확인했다. 2026-09-09 항목의 `20260909_ohvis_research_portfolio_design_prd.html`은 작업 트리에 없었고 `preserve/chat-finalize-aa433b41-20260909` 브랜치 커밋 `4950f142`에만 존재해 `git show`로 복원했다. 같은 단계에서 작성했다고 보고된 `...charter_evidence_pilot.html`은 전 브랜치 `--diff-filter=A` 검색 0건으로 어디에도 존재하지 않았으며, 이번 `20260912_...charter_evidence_pilot.html`이 그 정본을 대체한다.
+- 검증: `HTMLParser` 구조 감사 통과(미닫힘 0, 태그 불일치 0, 중복 ID 0, 깨진 내부 앵커 0, section 9, table 10). JSONL 30행 전부 JSON 파싱 성공, `case_id` 중복 0. 공개 경로 HTTP 200 확인 — `https://aads.newtalk.kr/education/20260912_ohvis_research_charter_evidence_pilot.html`(33,113 B), `.../20260909_ohvis_research_portfolio_design_prd.html`(50,977 B). 화면 캡처 확보: `https://aads.newtalk.kr/screenshots/screenshot_20260912_230758_068938.png`.
+- 미완: 사람 라벨 0건, Cohen's kappa 미측정, `rejected_done` 판정 미확정, 배포 도달 표본 0/30, 선행연구 조사(SLR) 미실시. API·DB·Docker·nginx·활성 러너는 변경하지 않았고 외부 유료 호출 비용은 $0이다.
+
 ## 2026-09-12 21:19 KST — PC Agent disconnect chat suppression
 
 - Root cause: warning/critical disconnect handling in `app/api/pc_agent.py` wrote a durable disconnect observation and then called `post_session_report(..., source="pc_agent_disconnect_monitor", intent="pc_agent_alert", trigger_reaction=True)`. This created both a CEO-visible chat message and an automatic AI follow-up for every qualifying disconnect.

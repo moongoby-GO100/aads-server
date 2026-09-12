@@ -1,0 +1,31 @@
+{
+  "dataset_version": "ohvis-pilot-v1",
+  "generated_at_kst": "2026-09-12T23:10:56+09:00",
+  "population_rows_120d": 417,
+  "sampled": 30,
+  "strata": {
+    "GO100/terminal_after_rejection": 4,
+    "AADS/terminal_after_rejection": 4,
+    "GO100/failed": 4,
+    "NTV2/terminal_after_rejection": 4,
+    "AADS/failed": 4,
+    "AADS/in_flight": 3,
+    "GO100/accepted": 3,
+    "GO100/in_flight": 3,
+    "KIS/terminal_after_rejection": 1
+  },
+  "redaction_hits": {
+    "domain:aads.newtalk.kr": 2,
+    "domain:moongoby": 3,
+    "domain:newtalk.kr": 3
+  },
+  "leak_findings": [],
+  "leak_clean": true,
+  "fields_per_record": 23,
+  "labeling_status": {
+    "auto_labeled": 30,
+    "human_labeled": 0,
+    "raters_planned": 2,
+    "agreement_metric": "Cohen's kappa (미측정)"
+  }
+}

@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="OHVIS/AADS 개발 실증을 논문 포트폴리오와 교육자료로 전환하기 위한 연구설계 및 Research Dataset v1 PRD">
+  <title>OHVIS 연구 포트폴리오 설계 · Research Dataset v1 PRD</title>
+  <style>
+    :root{
+      --ink:#16201f;--muted:#5d6966;--paper:#fbfaf6;--card:#fff;--line:#d8ddd8;
+      --green:#0f6554;--green2:#dff2ec;--navy:#173a52;--blue:#e7f1f7;
+      --gold:#a77516;--gold2:#fff2ce;--red:#a43d39;--red2:#fae8e5;--shadow:0 16px 42px rgba(20,42,40,.08)
+    }
+    *{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:22px}
+    body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.72 system-ui,-apple-system,"Noto Sans KR","Malgun Gothic",sans-serif}
+    a{color:var(--navy);text-underline-offset:3px}.shell{display:grid;grid-template-columns:270px minmax(0,1fr);max-width:1500px;margin:auto}
+    nav{position:sticky;top:0;height:100vh;overflow:auto;padding:28px 22px;border-right:1px solid var(--line);background:#f5f4ee}
+    nav .brand{font-weight:800;letter-spacing:.08em;color:var(--green);font-size:13px;margin-bottom:18px}
+    nav a{display:block;padding:5px 8px;border-radius:6px;color:#495653;text-decoration:none;font-size:14px}
+    nav a:hover,nav a:focus-visible{background:white;color:var(--green)}
+    main{min-width:0;max-width:1150px;padding:52px 58px 110px}
+    .eyebrow{color:var(--green);font-weight:800;letter-spacing:.1em;text-transform:uppercase;font-size:13px}
+    h1{font-size:42px;line-height:1.23;letter-spacing:-1.5px;margin:12px 0 20px;max-width:920px}
+    h2{font-size:28px;line-height:1.4;margin:0 0 18px;letter-spacing:-.4px}h3{font-size:20px;margin:28px 0 10px}
+    p{margin:9px 0 16px}.lead{font-size:20px;line-height:1.75;max-width:940px}.muted,.small{color:var(--muted)}.small{font-size:13px}
+    section{padding:42px 0;border-top:1px solid var(--line)}
+    .meta{display:flex;gap:9px;flex-wrap:wrap;margin:24px 0 32px}.pill{border:1px solid var(--line);background:white;border-radius:999px;padding:7px 12px;font-size:13px}
+    .hero-card{border:1px solid #b9d6cd;background:linear-gradient(135deg,#eaf6f1,#f8fbfa);padding:24px 26px;border-radius:14px;box-shadow:var(--shadow)}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+    .card{background:var(--card);border:1px solid var(--line);padding:19px 21px;border-radius:12px}.card h3{margin-top:0}.card p:last-child{margin-bottom:0}
+    .metric{font-size:30px;font-weight:850;color:var(--green);letter-spacing:-1px}.metric-label{font-size:13px;color:var(--muted)}
+    .table-wrap{overflow-x:auto;margin:18px 0 25px}table{border-collapse:collapse;width:100%;font-size:14px;background:white}
+    th,td{border:1px solid var(--line);padding:11px 13px;text-align:left;vertical-align:top;min-width:110px}th{background:#eef1ee;font-weight:760}
+    tr:nth-child(even) td{background:#fcfcfa}.tag{display:inline-block;border-radius:5px;padding:2px 7px;font-size:12px;font-weight:750;white-space:nowrap}
+    .t-green{background:var(--green2);color:var(--green)}.t-blue{background:var(--blue);color:var(--navy)}.t-gold{background:var(--gold2);color:#75500b}.t-red{background:var(--red2);color:var(--red)}
+    .callout{border-left:4px solid var(--green);padding:15px 18px;background:white;margin:18px 0}.callout.warn{border-color:var(--gold);background:#fffaf0}.callout.danger{border-color:var(--red);background:#fff8f7}
+    .flow{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;align-items:stretch;margin:22px 0}.flow div{background:white;border:1px solid var(--line);border-top:4px solid var(--green);border-radius:9px;padding:13px}.flow b{display:block;margin-bottom:5px}.flow small{color:var(--muted)}
+    .diagram{overflow-x:auto;background:white;border:1px solid var(--line);border-radius:12px;padding:16px;margin:20px 0}.diagram svg{min-width:760px;width:100%;height:auto}.box{fill:#f7faf8;stroke:#7c9e94;stroke-width:1.4}.box.primary{fill:#e2f2ec;stroke:#0f6554;stroke-width:2}.box.guard{fill:#fff3d5;stroke:#a77516}.arrow{stroke:#57716a;stroke-width:1.7;fill:none}.diagram text{font-family:system-ui,"Malgun Gothic",sans-serif;fill:var(--ink);font-size:14px}.diagram .sub{fill:var(--muted);font-size:12px}
+    ul,ol{padding-left:22px}li{margin-bottom:7px}code{font:13px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;background:#edf1ee;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}
+    pre{padding:18px;background:#182522;color:#eef6f2;border-radius:10px;overflow:auto;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace}
+    details{border-bottom:1px solid var(--line);padding:14px 0}summary{cursor:pointer;font-weight:750;min-height:38px}.checklist label{display:flex;gap:11px;padding:9px 0;border-bottom:1px solid var(--line)}.checklist input{width:19px;height:19px;margin-top:5px}
+    .actions{display:flex;gap:10px;flex-wrap:wrap;margin:28px 0}.actions button{min-height:44px;border:1px solid #78958c;background:white;border-radius:7px;padding:9px 15px;font:inherit;cursor:pointer}.actions button:hover,.actions button:focus-visible{background:var(--green2)}
+    :focus-visible{outline:3px solid #e3ae3c;outline-offset:3px}.only-print{display:none}
+    @media(max-width:980px){.shell{grid-template-columns:210px minmax(0,1fr)}main{padding:38px 30px}h1{font-size:35px}.flow{grid-template-columns:1fr 1fr}}
+    @media(max-width:720px){.shell{display:block}nav{position:static;height:auto;max-height:260px;border-right:0;border-bottom:1px solid var(--line)}nav a{display:inline-block;margin:2px}main{padding:30px 19px 70px}h1{font-size:30px}.lead{font-size:18px}.grid,.grid3,.flow{grid-template-columns:1fr}section{padding:32px 0}.metric{font-size:27px}th,td{padding:9px}.hero-card{padding:20px}}
+    @media print{body{background:white;font-size:10.5pt}.shell{display:block}nav,.actions,.no-print{display:none}main{max-width:none;padding:0}.only-print{display:block}section{padding:22px 0}h1{font-size:26pt}h2{font-size:18pt}.card,.hero-card,table,.diagram{break-inside:avoid;box-shadow:none}.grid,.grid3{display:block}.card{margin:10px 0}.flow{grid-template-columns:repeat(5,1fr)}a{color:inherit;text-decoration:none}}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <nav aria-label="문서 목차">
+    <div class="brand">OHVIS RESEARCH OFFICE</div>
+    <a href="#decision">01 의사결정 요약</a>
+    <a href="#baseline">02 실증 근거 기준선</a>
+    <a href="#portfolio">03 논문 포트폴리오</a>
+    <a href="#flagship">04 대표논문 설계</a>
+    <a href="#questions">05 연구질문·가설</a>
+    <a href="#method">06 연구방법·변수</a>
+    <a href="#prd">07 Dataset v1 PRD</a>
+    <a href="#data">08 데이터·라벨 설계</a>
+    <a href="#architecture">09 시스템 설계</a>
+    <a href="#ethics">10 보안·연구윤리</a>
+    <a href="#education">11 교육자료 전환</a>
+    <a href="#roadmap">12 실행 로드맵</a>
+    <a href="#acceptance">13 완료 기준</a>
+    <a href="#risks">14 리스크</a>
+    <a href="#sources">15 근거·출처</a>
+  </nav>
+
+  <main>
+    <header>
+      <div class="eyebrow">Research Design + Product Requirements Document · v1.0</div>
+      <h1>OHVIS 개발 실증을 논문과 교육자산으로 전환하는 설계</h1>
+      <p class="lead">CEO 지시에서 기획, AI 라우팅, 코드 생성, 검수, 배포, 실패 복구, 기억 축적까지의 실제 운영 흔적을 <strong>재현 가능한 연구 데이터</strong>로 만들고, 대표논문과 후속 논문군 및 교육과정으로 확장하기 위한 통합 설계·PRD입니다.</p>
+      <div class="meta">
+        <span class="pill">문서 ID: OHVIS-RESEARCH-PRD-20260909</span>
+        <span class="pill">기준 시각: 2026-09-09 15:58 KST</span>
+        <span class="pill">상태: 설계 기준선 v1.0</span>
+        <span class="pill">운영 변경: 없음</span>
+      </div>
+      <div class="actions no-print"><button type="button" id="printBtn">인쇄 / PDF 저장</button><button type="button" id="expandBtn">상세 모두 펼치기</button><button type="button" id="resetChecklist">체크리스트 초기화</button></div>
+      <p class="only-print small">이 문서는 브라우저용 원본 HTML에서 인쇄되었습니다.</p>
+    </header>
+
+    <section id="decision">
+      <h2>01. 의사결정 요약</h2>
+      <div class="hero-card">
+        <h3>권장안: 하나의 대표논문 + 세 개의 실증 트랙 + 공통 데이터셋</h3>
+        <p>첫 논문은 <strong>증거 기반 폐쇄루프 자율 AI 개발 운영체계</strong>를 다룹니다. AX, 바이브코딩, 모델 라우팅을 각각 별도 주장으로 흩뜨리지 않고 “사람의 의도가 어떻게 실행 가능한 계약과 검증 증거로 변환되는가”라는 하나의 중심 질문에 연결합니다.</p>
+        <p>후속 논문은 ① AI 라우팅의 품질·비용·지연 균형, ② 인간–AI 바이브코딩의 요구 보존, ③ 운영 기억과 재발 방지로 분리합니다. 모든 논문은 같은 <strong>OHVIS Research Dataset v1</strong>을 사용하되 분석 단위와 사전등록 가설을 다르게 둡니다.</p>
+      </div>
+      <div class="grid3" style="margin-top:18px">
+        <div class="card"><div class="tag t-green">포함</div><h3>설계</h3><p>연구질문, 가설, 변수, 비교군, 분석계획, 교육 전환.</p></div>
+        <div class="card"><div class="tag t-blue">구축 대상</div><h3>PRD</h3><p>추출·익명화·라벨·버전·품질검사·내보내기 계약.</p></div>
+        <div class="card"><div class="tag t-gold">제외</div><h3>이번 단계 아님</h3><p>효과 확정, 논문 투고, 원문 데이터 공개, 운영 DB 변경.</p></div>
+      </div>
+    </section>
+
+    <section id="baseline">
+      <h2>02. 실증 근거 기준선</h2>
+      <p>아래 값은 성능 향상이나 연구 성공을 뜻하지 않습니다. 현재 연구 대상으로 선별할 수 있는 원자료의 규모와 재현성 점검 결과입니다.</p>
+      <div class="grid3">
+        <div class="card"><div class="metric">434</div><div class="metric-label">OHVIS 작업 [DB 조회]</div></div>
+        <div class="card"><div class="metric">698</div><div class="metric-label">Pipeline 작업 [DB 조회]</div></div>
+        <div class="card"><div class="metric">35,000</div><div class="metric-label">채팅 메시지 [DB 조회]</div></div>
+        <div class="card"><div class="metric">16,967</div><div class="metric-label">프롬프트 컴파일 [DB 조회]</div></div>
+        <div class="card"><div class="metric">560</div><div class="metric-label">LLMOps trace [DB 조회]</div></div>
+        <div class="card"><div class="metric">137</div><div class="metric-label">핵심 회귀테스트 통과 [로컬 테스트]</div></div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>근거층</th><th>확인한 자산</th><th>연구에서의 용도</th><th>현재 한계</th></tr></thead>
+        <tbody>
+          <tr><td>요구·대화</td><td><code>chat_messages</code>, 세션 TODO, 지시서</td><td>의도, 변경 요청, 실패 복구 경로</td><td>개인·프로젝트 정보 익명화 전 사용 금지</td></tr>
+          <tr><td>실행</td><td><code>ohvis_tasks</code>, <code>pipeline_jobs</code>, task logs</td><td>상태 전이, 소요시간, 재시도, 결과</td><td>작업 유형별 라벨 품질 미검증</td></tr>
+          <tr><td>라우팅·프롬프트</td><td><code>compiled_prompt_provenance</code>, 모델/도구 메타데이터</td><td>라우팅 정책과 지시 보존 분석</td><td>모델별 비교군의 교란변수 통제 필요</td></tr>
+          <tr><td>코드·검수</td><td>Git SHA, diff, 테스트, 리뷰, 승인</td><td>산출물 정확성·재현성·수정 비용</td><td>커밋과 지시의 자동 연결률 미측정</td></tr>
+          <tr><td>운영</td><td>배포·헬스·롤백·관측 기록</td><td>완료 선언과 실제 운영 결과의 차이</td><td>장애 심각도 라벨의 일관성 검토 필요</td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout warn"><strong>증거 등급:</strong> DB count와 테스트 통과는 실측입니다. 인과효과, 품질 향상률, 비용 절감률은 아직 측정하지 않았으므로 목표 수치로도 확정하지 않습니다.</div>
+    </section>
+
+    <section id="portfolio">
+      <h2>03. 논문 포트폴리오</h2>
+      <p>후보는 공통 원자료를 공유하되 같은 결과를 중복 출판하지 않도록 연구질문·종속변수·분석 단위를 분리합니다.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>우선</th><th>트랙·가제</th><th>핵심 질문</th><th>실증 단위</th><th>권장 방법</th></tr></thead>
+        <tbody>
+          <tr><td><span class="tag t-green">대표</span></td><td><strong>증거 기반 폐쇄루프 AI 개발 운영</strong></td><td>계획–실행–검증–재계획 구조가 요구 충족과 복구 가능성을 높이는가?</td><td>작업·릴리스</td><td>설계과학 + 종단 사례 + 준실험</td></tr>
+          <tr><td><span class="tag t-green">P1</span></td><td><strong>AI 라우터 기반 개인·조직 비서</strong></td><td>위험·복잡도 기반 라우팅이 단일 모델 대비 품질·비용·지연을 어떻게 바꾸는가?</td><td>모델 호출·세션</td><td>오프라인 재생 + 교차검증</td></tr>
+          <tr><td><span class="tag t-green">P1</span></td><td><strong>바이브코딩에서 요구 보존</strong></td><td>자연어 지시가 코드·테스트·배포까지 전달되는 동안 어디서 손실되는가?</td><td>요구사항·diff</td><td>요구 추적 분석 + 오류 분류</td></tr>
+          <tr><td><span class="tag t-blue">P1</span></td><td><strong>AX 전환의 실행 단위</strong></td><td>대화형 보조가 조직의 승인·책임·증거 구조를 어떻게 재설계하는가?</td><td>업무 흐름·역할</td><td>다중 사례연구 + 인터뷰</td></tr>
+          <tr><td><span class="tag t-blue">P2</span></td><td><strong>운영 기억과 재발 방지</strong></td><td>오류패턴·반성·핸드오버가 반복 실패율에 미치는 영향은 무엇인가?</td><td>오류 사건·후속 작업</td><td>중단 시계열 + 생존분석</td></tr>
+          <tr><td><span class="tag t-blue">P2</span></td><td><strong>다중 에이전트 협업의 경계</strong></td><td>병렬화가 유리한 과제와 조정비용이 더 큰 과제는 어떻게 구분되는가?</td><td>작업 DAG·파일</td><td>층화 실험 + 네트워크 분석</td></tr>
+          <tr><td><span class="tag t-gold">P2</span></td><td><strong>프롬프트 거버넌스</strong></td><td>다층 프롬프트의 provenance가 정책 준수 판정을 재현 가능하게 하는가?</td><td>컴파일·응답</td><td>정책 적합성 평가</td></tr>
+          <tr><td><span class="tag t-gold">P2</span></td><td><strong>AI DevOps의 완료 증명</strong></td><td>커밋·테스트·배포·관측 증거를 묶을 때 거짓 완료를 얼마나 줄일 수 있는가?</td><td>완료 보고·릴리스</td><td>전후 비교 + 결함 주입</td></tr>
+          <tr><td><span class="tag t-gold">P3</span></td><td><strong>대화 복구와 신뢰</strong></td><td>중단·재접속·스트리밍 복구가 사용자 신뢰와 과업 지속에 미치는 영향은?</td><td>대화 turn·사용자</td><td>사용성 실험 + 로그 분석</td></tr>
+          <tr><td><span class="tag t-gold">P3</span></td><td><strong>AI 실증자료의 교육 전환</strong></td><td>실패 원장을 사례 기반 교육으로 바꾸면 검수 역량이 향상되는가?</td><td>학습자·모듈</td><td>사전/사후 검사 + 루브릭</td></tr>
+        </tbody>
+      </table></div>
+      <details><summary>확장 가능한 추가 논문 제목 14개</summary>
+        <ol>
+          <li>자율 AI 비서에서 인간 승인 게이트의 설계 원칙</li><li>도구 호출 실패 시 다중 폴백 전략의 신뢰성 분석</li>
+          <li>LLM 비용 통제와 품질 하한의 다목적 최적화</li><li>장기 실행 에이전트의 임대·소유권·중복 실행 방지</li>
+          <li>자연어 업무 계약의 테스트 가능한 사양 변환</li><li>AI 생성 코드의 블루/그린 릴리스 안전성</li>
+          <li>멀티프로젝트 오케스트레이터의 컨텍스트 격리</li><li>AI 조직의 역할 분리와 독립 검수 편향</li>
+          <li>대화형 작업 TODO가 목표 완결성에 미치는 영향</li><li>도메인 지식그래프와 세션 기억의 결합</li>
+          <li>모바일 AI 비서의 실패 복구 UX</li><li>음성 알림이 비동기 AI 작업 회수율에 미치는 영향</li>
+          <li>AI 운영 데이터셋의 개인정보 최소화와 연구 유용성 균형</li><li>실패 분류체계가 재작업 라우팅에 미치는 영향</li>
+        </ol>
+      </details>
+    </section>
+
+    <section id="flagship">
+      <h2>04. 대표논문 연구설계</h2>
+      <div class="card">
+        <div class="tag t-green">대표 가제</div>
+        <h3>From Vibe Coding to Evidence-Grounded Autonomous Software Operations: A Longitudinal Design Science Study of OHVIS</h3>
+        <p><strong>국문:</strong> 바이브코딩에서 증거 기반 자율 소프트웨어 운영으로: OHVIS 종단 설계과학 연구</p>
+      </div>
+      <div class="grid" style="margin-top:18px">
+        <div class="card"><h3>연구 문제</h3><p>자연어 지시는 빠르지만 범위·책임·완료 조건이 손실될 수 있습니다. 다중 에이전트는 처리량을 늘릴 수 있으나 충돌과 자기검수 편향을 만듭니다. 완료 선언과 운영 결과도 분리될 수 있습니다.</p></div>
+        <div class="card"><h3>연구 산출물</h3><p>요구 계약, 작업 DAG, 실행 소유권, 증거 번들, 인간 승인, 배포 관측을 연결한 참조 아키텍처와 구현·평가 결과입니다.</p></div>
+        <div class="card"><h3>학술 기여</h3><p>바이브코딩을 “코드 생성 기법”이 아니라 의도 보존과 검증 가능한 조직 운영 문제로 확장해 설명합니다.</p></div>
+        <div class="card"><h3>실무 기여</h3><p>CEO 지시부터 운영 인증까지 추적 가능한 최소 데이터 계약, 측정지표, 실패 복구 플레이북을 제공합니다.</p></div>
+      </div>
+      <div class="flow" aria-label="대표논문 개념 흐름">
+        <div><b>의도</b><small>CEO 지시·제약·승인</small></div>
+        <div><b>계약</b><small>PRD·요구 ID·완료 기준</small></div>
+        <div><b>실행</b><small>라우팅·도구·작업 DAG</small></div>
+        <div><b>증거</b><small>diff·test·review·trace</small></div>
+        <div><b>학습</b><small>실패 분류·기억·재계획</small></div>
+      </div>
+    </section>
+
+    <section id="questions">
+      <h2>05. 연구질문·가설</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>ID</th><th>연구질문</th><th>검증 가설</th><th>주요 지표</th></tr></thead>
+        <tbody>
+          <tr><td>RQ1</td><td>폐쇄루프 운영이 요구 충족도를 개선하는가?</td><td>H1: 증거 게이트 적용 작업은 비교군보다 필수 요구 누락률이 낮다.</td><td>요구 충족률, 누락률, 추적 가능률</td></tr>
+          <tr><td>RQ2</td><td>검증 기반 재계획이 실패 복구를 개선하는가?</td><td>H2: 구조화된 실패 분류 후 재작업은 동일 결함 재발률과 복구 시간을 낮춘다.</td><td>MTTR, 반복 실패율, 재작업 횟수</td></tr>
+          <tr><td>RQ3</td><td>다중 모델 라우팅의 순효과는 무엇인가?</td><td>H3: 위험·복잡도 기반 라우팅은 고정 모델 대비 품질 하한을 유지하며 비용 또는 지연을 줄인다.</td><td>품질, 지연, 비용, 폴백률</td></tr>
+          <tr><td>RQ4</td><td>사람의 승인과 자율성은 어디서 분리해야 하는가?</td><td>H4: 고위험 단계만 승인하는 정책이 전 단계 승인보다 처리시간을 줄이면서 운영 결함률을 악화시키지 않는다.</td><td>승인 대기, 결함률, 무단 변경률</td></tr>
+          <tr><td>RQ5</td><td>운영 기억은 실제 행동을 바꾸는가?</td><td>H5: 오류패턴이 다음 작업의 프롬프트·검수 항목에 연결될 때 같은 유형의 재발 간격이 증가한다.</td><td>재발 간격, 기억 적용률, 예방 테스트율</td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout"><strong>사전등록 원칙:</strong> 데이터 확인 후 유리한 가설을 만드는 HARKing을 피하기 위해, 주 분석의 포함 기간·지표·제외 규칙·통계모형을 데이터셋 동결 전에 등록합니다. 탐색 분석은 별도 표기합니다.</div>
+    </section>
+
+    <section id="method">
+      <h2>06. 연구방법·변수</h2>
+      <h3>혼합 연구 설계</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>단계</th><th>목적</th><th>자료</th><th>분석</th><th>인과 해석</th></tr></thead>
+        <tbody>
+          <tr><td>A. 설계과학</td><td>OHVIS 아티팩트와 설계 원리 정의</td><td>문서, 코드, 운영 규칙</td><td>문제–목표–설계–평가 추적</td><td>아티팩트 유용성 중심</td></tr>
+          <tr><td>B. 회고 코호트</td><td>현재까지의 패턴과 실패 지점 발견</td><td>채팅, 작업, Git, trace</td><td>기술통계, 시계열, 오류 분류</td><td>연관성만 주장</td></tr>
+          <tr><td>C. 전향 비교</td><td>새 게이트·라우팅 정책 평가</td><td>동일 과제 세트의 A/B 실행</td><td>층화 무작위 또는 매칭 비교</td><td>사전등록 조건에서 제한적 인과</td></tr>
+          <tr><td>D. 질적 연구</td><td>CEO·PM·개발·QA 경험 설명</td><td>인터뷰, 의사결정 기록</td><td>주제 분석·삼각검증</td><td>메커니즘 설명</td></tr>
+        </tbody>
+      </table></div>
+      <h3>핵심 변수의 조작적 정의</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>변수</th><th>계산 기준</th><th>필요 필드</th><th>주의</th></tr></thead>
+        <tbody>
+          <tr><td>요구 충족률</td><td>증거가 연결된 필수 요구 수 ÷ 전체 필수 요구 수</td><td>requirement_id, evidence_id, verdict</td><td>LLM 자기평가만 증거로 인정하지 않음</td></tr>
+          <tr><td>추적 가능률</td><td>지시→작업→SHA→테스트→릴리스가 모두 연결된 작업 비율</td><td>correlation_id, task_id, commit_sha, release_id</td><td>링크 부재와 실제 미수행을 구분</td></tr>
+          <tr><td>복구시간</td><td>최초 실패 관측부터 검증된 정상 판정까지</td><td>event_at, error_class, verified_at</td><td>단순 프로세스 종료를 정상화로 보지 않음</td></tr>
+          <tr><td>운영 결함률</td><td>배포 후 관측구간의 P0/P1 사건 ÷ 인증 릴리스</td><td>severity, release_sha, detected_at</td><td>배포 전 발견 결함과 분리</td></tr>
+          <tr><td>비용</td><td>모델·도구·컴퓨트의 실제 청구 또는 계측 합계</td><td>provider, model, tokens, billed_cost</td><td>미계측값을 0으로 처리하지 않음</td></tr>
+          <tr><td>지연</td><td>요청 접수→첫 응답, 요청 접수→검증 완료를 분리</td><td>accepted_at, first_response_at, verified_at</td><td>즉답과 작업 완료를 혼합하지 않음</td></tr>
+        </tbody>
+      </table></div>
+      <h3>통제해야 할 교란변수</h3>
+      <p>작업 크기, 프로젝트, 변경 파일 수, 테스트 존재 여부, 작업자/모델, 컨텍스트 길이, 도구 장애, 근무시간대, 기존 코드 품질, 요구 변경 횟수를 층화·공변량 또는 민감도 분석에 포함합니다.</p>
+    </section>
+
+    <section id="prd">
+      <h2>07. OHVIS Research Dataset v1 PRD</h2>
+      <div class="grid">
+        <div class="card"><h3>제품 목표</h3><p>운영 DB와 Git의 원자료를 직접 분석자에게 노출하지 않고도, 논문 주장을 재현할 수 있는 익명화·버전화·증거 연결 데이터셋을 생성합니다.</p></div>
+        <div class="card"><h3>비목표</h3><p>대화 원문 전체 공개, 운영 DB 복제, 모델 성능 순위 자동 발표, 개인정보 가역 익명화, 평가자 없는 자동 합격 판정은 v1 범위가 아닙니다.</p></div>
+      </div>
+      <h3>대상 사용자와 핵심 업무</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>사용자</th><th>첫 진입</th><th>반복 업무</th><th>실패 복구</th></tr></thead>
+        <tbody>
+          <tr><td>논문관리자</td><td>연구 스냅샷과 증거 커버리지 확인</td><td>코호트 동결, 주장–증거 매핑</td><td>누락 필드·불일치 원장으로 이동</td></tr>
+          <tr><td>연구자</td><td>승인된 데이터 사전과 샘플 조회</td><td>분석셋 내보내기, 재현 스크립트 실행</td><td>버전·필터·결측 사유 확인</td></tr>
+          <tr><td>라벨러/QA</td><td>익명화된 사건 묶음 열기</td><td>오류·충족·증거 등급 판정</td><td>판정 보류·중재 요청</td></tr>
+          <tr><td>보안·윤리 검토자</td><td>데이터 계보와 민감도 요약</td><td>삭제·보존·접근 로그 감사</td><td>내보내기 중지·재식별 위험 신고</td></tr>
+          <tr><td>교육 설계자</td><td>승인된 사례 라이브러리 조회</td><td>실패–복구 사례를 모듈로 조합</td><td>민감 사례 제외·대체 사례 선택</td></tr>
+        </tbody>
+      </table></div>
+      <h3>기능 요구사항</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>ID</th><th>요구사항</th><th>우선</th><th>수용 기준</th></tr></thead>
+        <tbody>
+          <tr><td>FR-01</td><td>읽기 전용 스냅샷으로 원천별 추출 시각·범위를 기록한다.</td><td>P0</td><td>모든 행에 source_system, snapshot_at, source_pk_hash 존재</td></tr>
+          <tr><td>FR-02</td><td>세션·사용자·프로젝트 식별자를 연구용 비가역 ID로 변환한다.</td><td>P0</td><td>평문 식별자 0건, salt는 데이터셋과 분리 보관</td></tr>
+          <tr><td>FR-03</td><td>지시–작업–커밋–테스트–배포–장애의 관계를 evidence edge로 보존한다.</td><td>P0</td><td>edge_type·source·confidence·created_at 필수</td></tr>
+          <tr><td>FR-04</td><td>PII·secret 탐지에 실패한 행은 내보내기에서 차단한다.</td><td>P0</td><td>차단 사유 원장과 수동 해제 승인 기록</td></tr>
+          <tr><td>FR-05</td><td>라벨러 2인 독립 판정과 불일치 중재를 지원한다.</td><td>P1</td><td>원 판정 보존, 합의값과 중재자 분리</td></tr>
+          <tr><td>FR-06</td><td>코호트 정의와 분석셋을 manifest·checksum으로 동결한다.</td><td>P0</td><td>같은 manifest 재실행 시 같은 행 집합·해시</td></tr>
+          <tr><td>FR-07</td><td>결측·제외·삭제 사유를 0/빈값과 구분한다.</td><td>P0</td><td>missing_reason 코드북 검사 통과</td></tr>
+          <tr><td>FR-08</td><td>연구 주장별 사용된 변수·쿼리·버전을 연결한다.</td><td>P1</td><td>claim_id에서 분석 산출물까지 역추적 가능</td></tr>
+          <tr><td>FR-09</td><td>승인된 비식별 사례만 교육자료로 내보낸다.</td><td>P1</td><td>education_approved=true 및 검토자 기록 필수</td></tr>
+          <tr><td>FR-10</td><td>철회·정정 요청 시 파생 데이터의 영향 범위를 계산한다.</td><td>P1</td><td>source hash로 연결된 dataset version·figure 목록 반환</td></tr>
+        </tbody>
+      </table></div>
+      <h3>비기능 요구사항</h3>
+      <ul>
+        <li><strong>재현성:</strong> 추출 코드, 데이터 사전, manifest, checksum, 환경 잠금 파일을 함께 보존합니다.</li>
+        <li><strong>최소권한:</strong> 운영 DB는 읽기 전용 계정, 분석자는 익명화된 스냅샷만 접근합니다.</li>
+        <li><strong>감사성:</strong> 추출·열람·내보내기·라벨 변경·삭제를 append-only 감사 이벤트로 남깁니다.</li>
+        <li><strong>성능:</strong> v1 목표치는 기준선 벤치마크 후 확정하며, 미측정 상태에서 SLA를 약속하지 않습니다.</li>
+        <li><strong>가용성:</strong> 연구 파이프라인 장애가 운영 채팅·배포를 차단하지 않도록 비동기·격리합니다.</li>
+      </ul>
+    </section>
+
+    <section id="data">
+      <h2>08. 데이터·라벨 설계</h2>
+      <h3>논리 데이터 제품</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>데이터셋</th><th>한 행의 단위</th><th>핵심 키</th><th>주요 필드</th></tr></thead>
+        <tbody>
+          <tr><td><code>research_tasks</code></td><td>작업 시도</td><td>research_task_id</td><td>project_class, task_type, size, status, timestamps</td></tr>
+          <tr><td><code>research_requirements</code></td><td>원자적 요구</td><td>requirement_id</td><td>priority, constraint_type, acceptance_text_redacted</td></tr>
+          <tr><td><code>research_events</code></td><td>상태·도구·모델 사건</td><td>event_id</td><td>event_type, actor_class, elapsed_ms, outcome</td></tr>
+          <tr><td><code>research_artifacts</code></td><td>코드·문서·테스트 산출물</td><td>artifact_id</td><td>artifact_type, content_hash, commit_sha, path_class</td></tr>
+          <tr><td><code>research_evidence_edges</code></td><td>두 개체의 증거 관계</td><td>edge_id</td><td>from_id, to_id, edge_type, confidence, provenance</td></tr>
+          <tr><td><code>research_labels</code></td><td>라벨러 판정</td><td>label_id</td><td>schema_version, labeler_id, value, rationale_code</td></tr>
+          <tr><td><code>research_costs</code></td><td>계측 비용 사건</td><td>cost_event_id</td><td>provider_class, model_class, tokens, billed_cost, currency</td></tr>
+          <tr><td><code>research_releases</code></td><td>릴리스 시도</td><td>release_id</td><td>sha, image_digest_hash, gates, rollback, monitor_window</td></tr>
+        </tbody>
+      </table></div>
+      <h3>오류 라벨 코드북 v1</h3>
+      <div class="grid3">
+        <div class="card"><div class="tag t-red">E1</div><h3>의도 손실</h3><p>필수 조건 누락, 범위 확대, 금지 조건 위반.</p></div>
+        <div class="card"><div class="tag t-red">E2</div><h3>조정 실패</h3><p>소유권 충돌, 의존성 역전, 중복 실행.</p></div>
+        <div class="card"><div class="tag t-red">E3</div><h3>실행 실패</h3><p>도구·모델·프로세스·환경 오류.</p></div>
+        <div class="card"><div class="tag t-gold">E4</div><h3>검증 실패</h3><p>테스트 부재, 잘못된 판정, 증거 미연결.</p></div>
+        <div class="card"><div class="tag t-gold">E5</div><h3>운영 실패</h3><p>배포·헬스·롤백·관측 계약 위반.</p></div>
+        <div class="card"><div class="tag t-blue">E6</div><h3>보고 실패</h3><p>빈 응답, 완료 과장, 미검증 사실 확정.</p></div>
+      </div>
+      <h3>데이터 품질 게이트</h3>
+      <pre>DQ-01 primary key uniqueness = 100%
+DQ-02 required provenance fields = 100%
+DQ-03 plaintext secret matches = 0
+DQ-04 unresolved direct identifiers = 0
+DQ-05 frozen cohort checksum mismatch = 0
+DQ-06 label agreement = report value; threshold is fixed before production labeling
+DQ-07 evidence-edge coverage = measured baseline first; target fixed after pilot</pre>
+    </section>
+
+    <section id="architecture">
+      <h2>09. 시스템 설계</h2>
+      <div class="diagram" role="img" aria-label="운영 데이터에서 연구 데이터셋과 논문 및 교육자료로 이어지는 격리 아키텍처">
+        <svg viewBox="0 0 1010 370" aria-labelledby="archTitle"><title id="archTitle">OHVIS Research Dataset v1 아키텍처</title>
+          <defs><marker id="head" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#57716a"/></marker></defs>
+          <rect class="box" x="18" y="55" width="175" height="70" rx="8"/><text x="106" y="84" text-anchor="middle">운영 DB · 로그</text><text class="sub" x="106" y="107" text-anchor="middle">읽기 전용</text>
+          <rect class="box" x="18" y="160" width="175" height="70" rx="8"/><text x="106" y="189" text-anchor="middle">Git · 테스트 · 문서</text><text class="sub" x="106" y="212" text-anchor="middle">SHA · checksum</text>
+          <rect class="box guard" x="250" y="105" width="190" height="92" rx="8"/><text x="345" y="136" text-anchor="middle">추출·비식별 게이트</text><text class="sub" x="345" y="160" text-anchor="middle">secret/PII 차단</text><text class="sub" x="345" y="181" text-anchor="middle">provenance 기록</text>
+          <path class="arrow" marker-end="url(#head)" d="M193 90H222V136H250"/><path class="arrow" marker-end="url(#head)" d="M193 195H222V166H250"/>
+          <rect class="box primary" x="500" y="95" width="205" height="112" rx="8"/><text x="602" y="128" text-anchor="middle">Dataset Registry</text><text class="sub" x="602" y="153" text-anchor="middle">manifest · version · schema</text><text class="sub" x="602" y="176" text-anchor="middle">evidence graph · labels</text><text class="sub" x="602" y="196" text-anchor="middle">access audit</text>
+          <path class="arrow" marker-end="url(#head)" d="M440 151H500"/>
+          <rect class="box" x="770" y="28" width="210" height="70" rx="8"/><text x="875" y="57" text-anchor="middle">재현 분석 환경</text><text class="sub" x="875" y="79" text-anchor="middle">notebook · locked deps</text>
+          <rect class="box" x="770" y="128" width="210" height="70" rx="8"/><text x="875" y="157" text-anchor="middle">논문 Evidence Pack</text><text class="sub" x="875" y="179" text-anchor="middle">figure · table · claim map</text>
+          <rect class="box" x="770" y="228" width="210" height="70" rx="8"/><text x="875" y="257" text-anchor="middle">교육 사례 라이브러리</text><text class="sub" x="875" y="279" text-anchor="middle">승인된 비식별 사례</text>
+          <path class="arrow" marker-end="url(#head)" d="M705 137H738V63H770"/><path class="arrow" marker-end="url(#head)" d="M705 151H770"/><path class="arrow" marker-end="url(#head)" d="M705 171H738V263H770"/>
+          <rect class="box guard" x="497" y="275" width="210" height="62" rx="8"/><text x="602" y="301" text-anchor="middle">윤리·보안·CEO 승인</text><text class="sub" x="602" y="322" text-anchor="middle">공개·철회·정정 게이트</text>
+          <path class="arrow" marker-end="url(#head)" d="M602 275V215"/>
+        </svg>
+      </div>
+      <div class="callout"><strong>운영 격리:</strong> 데이터 추출·라벨링·분석 실패가 AADS 채팅, Pipeline Runner, API 릴리스에 영향을 주지 않아야 합니다. 연구용 쓰기는 별도 스키마 또는 별도 DB에서 수행하며 운영 정본에는 역기입하지 않습니다.</div>
+    </section>
+
+    <section id="ethics">
+      <h2>10. 보안·연구윤리</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>위험</th><th>예방 통제</th><th>검증 증거</th><th>공개 원칙</th></tr></thead>
+        <tbody>
+          <tr><td>개인·고객 재식별</td><td>직접식별자 제거, 희귀 조합 일반화, 소규모 셀 억제</td><td>재식별 위험 검토서</td><td>공개본은 사례 합성 또는 고도 비식별</td></tr>
+          <tr><td>API key·secret 노출</td><td>정규식 + 엔트로피 + 알려진 secret scanner, 실패 시 fail-closed</td><td>scanner 결과 0건</td><td>원문·환경값 비공개</td></tr>
+          <tr><td>직원·에이전트 평가 오용</td><td>연구목적 제한, 개별 순위화 금지, 맥락 변수 포함</td><td>데이터 사용 정책</td><td>집계 결과 중심</td></tr>
+          <tr><td>선택 편향</td><td>전체 포함 흐름과 제외 사유 원장</td><td>코호트 플로차트</td><td>제외 수·사유 보고</td></tr>
+          <tr><td>사후 가설 변경</td><td>사전등록, 탐색/확증 분석 분리</td><td>timestamped protocol</td><td>변경 이력 공개</td></tr>
+          <tr><td>기업 기밀 유출</td><td>경로·프로젝트·고객 정보 범주화, 공개 전 법률·사업 검토</td><td>공개 승인서</td><td>재현 코드는 synthetic fixture 사용</td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout danger"><strong>중요:</strong> 이 PRD는 기술·연구 설계이며 법률 또는 IRB 승인 자체가 아닙니다. 사람 대상 인터뷰·행동로그 활용과 외부 공개 전에는 적용 기관의 연구윤리 및 개인정보 절차를 별도로 거쳐야 합니다.</div>
+    </section>
+
+    <section id="education">
+      <h2>11. 교육자료 전환</h2>
+      <p>논문은 “무엇이 사실인가”를 검증하고, 교육자료는 “어떻게 판단하고 실행하는가”를 학습시킵니다. 같은 사례를 사용하되 교육용 시뮬레이션과 실측 데이터를 명확히 표시합니다.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>모듈</th><th>학습 목표</th><th>실습</th><th>평가 산출물</th></tr></thead>
+        <tbody>
+          <tr><td>1. OHVIS와 AX</td><td>AI 도입과 업무 운영 재설계 구분</td><td>현행 업무를 의도–계약–증거로 분해</td><td>업무 전환 맵</td></tr>
+          <tr><td>2. 바이브코딩의 힘과 한계</td><td>자연어 지시의 빠른 탐색과 요구 손실 이해</td><td>모호한 지시를 수용 기준으로 변환</td><td>PRD·추적표</td></tr>
+          <tr><td>3. AI 라우팅</td><td>품질·비용·지연·위험의 균형 이해</td><td>동일 과제를 세 라우팅 정책으로 평가</td><td>라우팅 결정표</td></tr>
+          <tr><td>4. 멀티에이전트 운영</td><td>병렬화와 조정 비용 구분</td><td>작업 DAG·파일 소유권 설계</td><td>실행 그래프</td></tr>
+          <tr><td>5. 검증 가능한 완료</td><td>응답 완료·코드 완료·릴리스 인증 분리</td><td>거짓 완료 보고 검출</td><td>증거 체크리스트</td></tr>
+          <tr><td>6. 실패 복구</td><td>재시도·재작업·재계획·중단 구분</td><td>실패 사건 분류와 재지시</td><td>복구 플레이북</td></tr>
+          <tr><td>7. LLMOps·관측</td><td>trace와 사용자 가치 연결</td><td>한 세션의 비용·지연·품질 분석</td><td>관측 대시보드 설계</td></tr>
+          <tr><td>8. 기억과 학습</td><td>반성문과 재발 방지 증거 구분</td><td>오류패턴을 예방 테스트로 전환</td><td>학습 루프</td></tr>
+          <tr><td>9. 안전한 AI DevOps</td><td>불변 SHA·후보 검증·롤백 이해</td><td>블루/그린 릴리스 모의훈련</td><td>릴리스 증거팩</td></tr>
+          <tr><td>10. 연구 재현</td><td>운영 경험을 검증 가능한 논문으로 전환</td><td>코호트 동결·가설·분석계획 작성</td><td>미니 연구계획서</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>교육 완료 기준:</strong> 출석이 아니라, 실제 사례에서 요구 누락·증거 부족·운영 위험을 루브릭으로 판정하고 수정안을 작성할 수 있어야 합니다.</p>
+    </section>
+
+    <section id="roadmap">
+      <h2>12. 12주 실행 로드맵</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>기간</th><th>산출물</th><th>핵심 작업</th><th>게이트</th></tr></thead>
+        <tbody>
+          <tr><td>1주</td><td>Research Charter</td><td>대표논문 범위, 저자·역할, 공개 수준, 윤리 검토 경로 확정</td><td>CEO 범위 승인</td></tr>
+          <tr><td>2주</td><td>Evidence Manifest v0</td><td>주장 후보와 DB·Git·테스트·문서 연결</td><td>허위·고립 주장 0건</td></tr>
+          <tr><td>3–4주</td><td>Dataset Pilot</td><td>20–50개 작업 파일럿 추출, 비식별·라벨 코드북 검증</td><td>PII/secret 차단 통과</td></tr>
+          <tr><td>5주</td><td>Protocol Freeze</td><td>RQ·가설·포함/제외·통계분석 사전등록</td><td>분석 전 timestamp 고정</td></tr>
+          <tr><td>6–7주</td><td>Dataset v1 RC</td><td>전체 코호트 추출, 이중 라벨, 불일치 중재</td><td>DQ gate 통과</td></tr>
+          <tr><td>8주</td><td>Reproducibility Pack</td><td>분석 코드·잠금 환경·synthetic fixture·README</td><td>깨끗한 환경 재실행</td></tr>
+          <tr><td>9–10주</td><td>논문 초고</td><td>방법·결과·한계·도표·부록 작성</td><td>주장–증거 100% 매핑</td></tr>
+          <tr><td>11주</td><td>교육 HTML v1</td><td>10개 모듈, 사례 실습, 평가 루브릭 통합</td><td>모바일·인쇄 렌더 검수</td></tr>
+          <tr><td>12주</td><td>내부 심사본</td><td>기술·통계·보안·CEO 검수와 수정</td><td>차단 이슈 0건 또는 명시 보류</td></tr>
+        </tbody>
+      </table></div>
+      <p class="small">기간은 현재 설계 가정이며 인력·윤리심사·데이터 정제 난이도 실측 후 다시 산정합니다. 확정 일정이 아닙니다.</p>
+    </section>
+
+    <section id="acceptance">
+      <h2>13. 완료 기준</h2>
+      <div class="checklist" id="checklist">
+        <label><input type="checkbox"> <span><strong>범위 동결</strong> — 대표논문 1편과 후속 트랙의 중복 경계를 승인했습니다.</span></label>
+        <label><input type="checkbox"> <span><strong>증거 manifest</strong> — 모든 핵심 주장에 source·시각·버전·검증 상태가 있습니다.</span></label>
+        <label><input type="checkbox"> <span><strong>비식별 검증</strong> — 직접식별자와 secret 탐지 결과가 0건입니다.</span></label>
+        <label><input type="checkbox"> <span><strong>코호트 동결</strong> — 포함·제외 규칙과 checksum이 고정되었습니다.</span></label>
+        <label><input type="checkbox"> <span><strong>사전등록</strong> — 가설·주분석·결측 처리·민감도 분석이 데이터 분석 전에 기록되었습니다.</span></label>
+        <label><input type="checkbox"> <span><strong>라벨 신뢰도</strong> — 이중 라벨과 불일치 중재 결과가 보고되었습니다.</span></label>
+        <label><input type="checkbox"> <span><strong>재현 실행</strong> — 제3자가 clean environment에서 표·그림을 재생성했습니다.</span></label>
+        <label><input type="checkbox"> <span><strong>논문 검수</strong> — 결과, 한계, 반례, 부정 결과가 함께 보고되었습니다.</span></label>
+        <label><input type="checkbox"> <span><strong>교육 검수</strong> — 모바일, 인쇄, 키보드 접근, 사례 출처 표시가 통과했습니다.</span></label>
+        <label><input type="checkbox"> <span><strong>공개 승인</strong> — 윤리·보안·사업 검토와 CEO 승인이 기록되었습니다.</span></label>
+      </div>
+      <p class="small">체크 상태는 이 브라우저의 localStorage에만 저장되며 서버에 전송되지 않습니다.</p>
+    </section>
+
+    <section id="risks">
+      <h2>14. 리스크와 대응</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>우선</th><th>리스크</th><th>영향</th><th>대응</th></tr></thead>
+        <tbody>
+          <tr><td>P0</td><td>민감 데이터·secret 노출</td><td>법적·보안 사고</td><td>fail-closed 비식별 게이트, 공개본 별도 생성</td></tr>
+          <tr><td>P0</td><td>운영 데이터와 연구 데이터 혼합</td><td>서비스 영향·정본 오염</td><td>읽기 전용 추출, 별도 저장소·자격증명·감사</td></tr>
+          <tr><td>P1</td><td>성공 사례 선택 편향</td><td>효과 과장</td><td>연속 기간 전체 코호트와 제외 원장</td></tr>
+          <tr><td>P1</td><td>모델·시스템 동시 변화</td><td>인과 해석 불가</td><td>버전 기록, 층화, 전향 비교, 민감도 분석</td></tr>
+          <tr><td>P1</td><td>한 회사 사례의 일반화 한계</td><td>외적 타당성 제한</td><td>분석적 일반화, 다중 프로젝트·과제 복제</td></tr>
+          <tr><td>P2</td><td>라벨러가 시스템 맥락에 편향</td><td>평가 신뢰도 저하</td><td>독립 블라인드 라벨, 중재, 원 판정 공개</td></tr>
+          <tr><td>P2</td><td>교육자료가 홍보물로 변질</td><td>학습 신뢰 저하</td><td>실측·가상·미측정 표시와 실패 사례 포함</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="sources">
+      <h2>15. 근거·출처·검증 범위</h2>
+      <h3>이번 문서의 내부 근거</h3>
+      <ul>
+        <li><strong>DB 실측:</strong> <code>ohvis_tasks</code>, <code>pipeline_jobs</code>, <code>chat_messages</code>, <code>compiled_prompt_provenance</code>, <code>llmops_traces</code> — 2026-09-09 15:58:04 KST 조회.</li>
+        <li><strong>Git 실측:</strong> 2026-07-24 이후 commit message에 OHVIS가 포함된 고유 커밋 51건 — 2026-09-09 15:58 KST 조회. 이는 모든 관련 변경을 포괄한다는 뜻이 아닙니다.</li>
+        <li><strong>파일 실측:</strong> OHVIS·vibe·LLMOps·prompt·pipeline 패턴 후보 파일 262개 — 가상환경·Git·임시 작업공간 제외. 후보 인벤토리이며 논문 증거 채택 건수는 아닙니다.</li>
+        <li><strong>테스트:</strong> 저장소 가상환경에서 OHVIS harness/trace/LLMOps/prompt compiler/worktree policy 핵심 7개 파일 실행, 137 passed, 1 warning, 2.12s.</li>
+        <li><strong>운영 계약:</strong> <code>/root/aads/AGENTS.md</code>의 불변 SHA, 후보 헬스, 롤백, 동일 digest, 관측 게이트.</li>
+        <li><strong>기존 설계:</strong> <code>docs/reports/20260907_ohvis_harness_langgraph_langchain_langsmith_llmwiki_plan.md</code>, <code>docs/reports/20260802_OHVIS_SYSTEM_CONSTRUCTION_PLAN.md</code>.</li>
+        <li><strong>기존 교육:</strong> <code>app/static/reports/20260908_ai_vibecoding_ohvis_education.html</code>, <code>app/static/reports/20260909_orchestration_closed_loop_education.html</code>.</li>
+      </ul>
+      <h3>연구방법 참고문헌</h3>
+      <ul>
+        <li>Hevner et al. (2004), <em>Design Science in Information Systems Research</em> — 설계과학의 문제·아티팩트·평가 틀.</li>
+        <li>Peffers et al. (2007), <em>A Design Science Research Methodology for Information Systems Research</em> — DSRM 절차.</li>
+        <li>Yin, <em>Case Study Research and Applications</em> — 사례연구 설계와 증거 삼각검증.</li>
+        <li>MetaGPT (2023/2024), Reflexion (2023), AFlow (2024/2025), VMAO (2026) — 역할·언어 피드백·워크플로 최적화·검증 기반 재계획의 비교 맥락.</li>
+      </ul>
+      <div class="callout warn"><strong>문헌 검토 상태:</strong> 이 문서는 OHVIS 다음 단계의 내부 설계 기준선입니다. 체계적 문헌고찰, 신규성 판정, 학회·저널 적합성, 인용 형식 검수는 아직 수행하지 않았으며 논문 초고 전에 별도 프로토콜로 진행해야 합니다.</div>
+      <h3>현재 산출물 상태</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>항목</th><th>상태</th><th>설명</th></tr></thead>
+        <tbody>
+          <tr><td>연구설계 HTML</td><td><span class="tag t-green">작성</span></td><td>대표논문·포트폴리오·방법론·교육 전환 포함</td></tr>
+          <tr><td>Dataset v1 PRD</td><td><span class="tag t-green">작성</span></td><td>사용자, 요구사항, 데이터 제품, 보안, 수용 기준 포함</td></tr>
+          <tr><td>DB·코드 변경</td><td><span class="tag t-blue">없음</span></td><td>정적 문서만 신규 생성</td></tr>
+          <tr><td>연구 데이터셋 구축</td><td><span class="tag t-gold">미착수</span></td><td>윤리·범위 승인 후 별도 작업</td></tr>
+          <tr><td>논문 결과·효과값</td><td><span class="tag t-gold">미측정</span></td><td>전향 비교와 분석 전 확정 금지</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <footer class="small">OHVIS powered by AADS · 연구설계 및 PRD v1.0 · 외부 유료 호출 비용 $0 · 운영 반영/배포 없음</footer>
+  </main>
+</div>
+<script>
+  const qs=(s)=>document.querySelector(s), qsa=(s)=>[...document.querySelectorAll(s)];
+  qs('#printBtn').addEventListener('click',()=>window.print());
+  qs('#expandBtn').addEventListener('click',()=>{
+    const all=qsa('details'); const shouldOpen=all.some(d=>!d.open); all.forEach(d=>d.open=shouldOpen);
+    qs('#expandBtn').textContent=shouldOpen?'상세 모두 접기':'상세 모두 펼치기';
+  });
+  const key='ohvis-research-prd-checks-v1';
+  const checks=qsa('#checklist input[type="checkbox"]');
+  try{const saved=JSON.parse(localStorage.getItem(key)||'[]');checks.forEach((c,i)=>c.checked=Boolean(saved[i]));}catch(e){}
+  checks.forEach(c=>c.addEventListener('change',()=>{try{localStorage.setItem(key,JSON.stringify(checks.map(x=>x.checked)));}catch(e){}}));
+  qs('#resetChecklist').addEventListener('click',()=>{checks.forEach(c=>c.checked=false);try{localStorage.removeItem(key);}catch(e){}});
+</script>
+</body>
+</html>

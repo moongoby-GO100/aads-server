@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OHVIS 연구 Charter · Evidence Manifest · Dataset Pilot v1</title>
+<style>
+:root{
+  --bg:#0e1117; --panel:#161b26; --panel2:#1c2331; --line:#2a3446;
+  --tx:#e7ecf3; --tx2:#a8b4c6; --tx3:#7b8799;
+  --ok:#37d399; --warn:#f6c445; --bad:#f2616b; --acc:#6aa6ff; --acc2:#b18cff;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",sans-serif;
+  line-height:1.7;font-size:15px;-webkit-text-size-adjust:100%}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 18px 90px}
+header.hero{background:linear-gradient(135deg,#182034,#111722);border:1px solid var(--line);
+  border-radius:14px;padding:26px 22px;margin-bottom:22px}
+.hero h1{margin:0 0 8px;font-size:26px;letter-spacing:-.4px}
+.hero p{margin:0;color:var(--tx2);font-size:14px}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.pill{background:#0f1520;border:1px solid var(--line);border-radius:999px;
+  padding:5px 12px;font-size:12.5px;color:var(--tx2);white-space:nowrap}
+.pill b{color:var(--tx)}
+nav.toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:16px 18px;margin-bottom:24px}
+nav.toc h2{margin:0 0 10px;font-size:14px;color:var(--tx3);letter-spacing:.6px;text-transform:uppercase}
+nav.toc ol{margin:0;padding-left:20px;columns:2;column-gap:26px}
+nav.toc li{margin:4px 0}
+nav.toc a{color:var(--acc);text-decoration:none}
+nav.toc a:hover{text-decoration:underline}
+section{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:22px;margin-bottom:20px;scroll-margin-top:16px}
+section>h2{margin:0 0 6px;font-size:19px;letter-spacing:-.2px;
+  border-left:3px solid var(--acc);padding-left:10px}
+section>p.lead{color:var(--tx2);margin:0 0 16px;font-size:14px}
+h3{margin:22px 0 8px;font-size:15.5px;color:var(--acc2)}
+h4{margin:16px 0 6px;font-size:14px;color:var(--tx)}
+p{margin:8px 0}
+ul,ol{margin:8px 0;padding-left:22px}
+li{margin:4px 0}
+code{background:#0b101a;border:1px solid var(--line);border-radius:5px;
+  padding:1px 6px;font-size:12.8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#9fd0ff}
+pre{background:#0b101a;border:1px solid var(--line);border-radius:9px;padding:14px;
+  overflow-x:auto;font-size:12.8px;line-height:1.6}
+pre code{background:none;border:none;padding:0;color:#cfe3ff}
+.tablewrap{overflow-x:auto;margin:12px 0;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;min-width:520px;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:var(--panel2);color:var(--tx2);font-weight:600;white-space:nowrap}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.ok{color:var(--ok);font-weight:600}
+.warn{color:var(--warn);font-weight:600}
+.bad{color:var(--bad);font-weight:600}
+.muted{color:var(--tx3)}
+.src{color:var(--tx3);font-size:12px}
+.box{border-radius:10px;padding:14px 16px;margin:14px 0;border:1px solid var(--line);background:var(--panel2)}
+.box.warn{border-color:#6a5310;background:#241e08}
+.box.bad{border-color:#6b2730;background:#261215}
+.box.ok{border-color:#1c5a44;background:#0f2620}
+.box h4{margin-top:0}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0}
+.kpi{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px}
+.kpi .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+.kpi .k{font-size:12px;color:var(--tx3);margin-top:2px}
+.bar{height:9px;background:#0b101a;border-radius:5px;overflow:hidden;border:1px solid var(--line)}
+.bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--acc2))}
+details{background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+  padding:10px 14px;margin:10px 0}
+details>summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--acc)}
+details[open]>summary{margin-bottom:8px}
+label.chk{display:flex;gap:10px;align-items:flex-start;padding:7px 0;
+  border-bottom:1px dashed var(--line);font-size:14px;cursor:pointer}
+label.chk:last-child{border-bottom:none}
+label.chk input{margin-top:5px;flex:none;width:16px;height:16px;accent-color:var(--acc)}
+label.chk.done span{text-decoration:line-through;color:var(--tx3)}
+footer{color:var(--tx3);font-size:12.5px;text-align:center;padding:26px 10px 0;border-top:1px solid var(--line);margin-top:26px}
+@media (max-width:720px){
+  nav.toc ol{columns:1}
+  .wrap{padding:16px 12px 70px}
+  .hero h1{font-size:21px}
+  section{padding:16px 14px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>OHVIS 연구 Charter · Evidence Manifest · Dataset Pilot v1</h1>
+  <p>대표논문 실행 준비 정본 — 주장(claim)과 근거(evidence)를 1:1로 고정하고, 30건 비식별 파일럿으로 측정 가능성을 선검증한 문서</p>
+  <div class="meta">
+    <span class="pill">작성 <b>2026-09-12 23:05 KST</b></span>
+    <span class="pill">문서 <b>v1.0</b></span>
+    <span class="pill">dataset <b>ohvis-pilot-v1</b></span>
+    <span class="pill">DB 기준선 <b>2026-09-12 23:02 KST</b></span>
+    <span class="pill">상태 <b class="warn">연구 준비 완료 · 결론 미산출</b></span>
+  </div>
+</header>
+
+<nav class="toc">
+  <h2>목차</h2>
+  <ol>
+    <li><a href="#s1">Research Charter</a></li>
+    <li><a href="#s2">연구질문 · 가설 · 변수</a></li>
+    <li><a href="#s3">Evidence Manifest</a></li>
+    <li><a href="#s4">Dataset Pilot v1 실측 결과</a></li>
+    <li><a href="#s5">비식별 · 안전성 검증</a></li>
+    <li><a href="#s6">라벨링 프로토콜 (rater A/B)</a></li>
+    <li><a href="#s7">재현 절차</a></li>
+    <li><a href="#s8">미측정 항목과 리스크</a></li>
+    <li><a href="#s9">실행 체크리스트</a></li>
+  </ol>
+</nav>
+
+<!-- ================= 1 ================= -->
+<section id="s1">
+  <h2>1. Research Charter</h2>
+  <p class="lead">이 연구가 무엇을 주장하고, 무엇을 주장하지 않는지를 먼저 고정한다.</p>
+
+  <h3>1.1 연구 형태</h3>
+  <div class="tablewrap"><table>
+    <tr><th>항목</th><th>내용</th></tr>
+    <tr><td>연구 방법론</td><td>설계과학 연구(Design Science Research) + 단일 조직 종단 사례연구(longitudinal case study)</td></tr>
+    <tr><td>분석 단위</td><td><b>자율 AI 개발 사이클 1건</b> = 지시 → 러너 실행 → AI 자동검수 → 승인/반려 → 커밋 → 배포</td></tr>
+    <tr><td>관측 창</td><td>2026-07-24 ~ 2026-09-12 (OHVIS 명시 커밋 최초~최근) <span class="src">[Git 로그]</span></td></tr>
+    <tr><td>사례 조직</td><td>1개 조직 · 6개 서비스(AADS/KIS/GO100/SF/NTV2/NAS) · 3개 서버</td></tr>
+    <tr><td>산출물(artifact)</td><td>증거 기반 폐쇄루프 멀티에이전트 개발·운영 체계(OHVIS)</td></tr>
+  </table></div>
+
+  <h3>1.2 주장 범위 선언</h3>
+  <div class="box ok">
+    <h4>주장한다</h4>
+    <ul>
+      <li>인간 1인(CEO)이 다수 AI 에이전트를 <b>지시–검수–승인 루프</b>로 운영하는 구조를 실제 프로덕션에서 7주 이상 지속 운용했다.</li>
+      <li>그 루프의 각 단계가 <b>DB에 원장으로 남아 사후 감사·재현이 가능</b>하다.</li>
+      <li>이 구조를 다른 조직이 복제할 수 있도록 설계 원리·실패 모드·가드레일을 문서화할 수 있다.</li>
+    </ul>
+  </div>
+  <div class="box bad">
+    <h4>주장하지 않는다 (현 단계)</h4>
+    <ul>
+      <li>생산성·품질·비용의 <b>인과적 개선 효과</b> — 관찰 데이터만으로는 인과 추론이 불가능하다.</li>
+      <li>모델 라우팅 전략의 <b>우월성</b> — 무작위 배정이 없으므로 선택 편향이 통제되지 않는다.</li>
+      <li>타 조직 일반화 — 단일 조직·단일 의사결정자 사례다.</li>
+    </ul>
+  </div>
+
+  <h3>1.3 완료 기준 (이 Charter가 "끝났다"고 판정하는 조건)</h3>
+  <ol>
+    <li>모든 핵심 주장이 Evidence Manifest(§3)에서 <b>검증 가능한 locator</b>를 갖는다.</li>
+    <li>데이터셋 파일럿이 <b>유출 0건</b>으로 재현 가능하다. → §4·§5에서 충족</li>
+    <li><code>rejected_done</code> 라벨 의미가 사람 판정으로 확정된다. → <b class="warn">미완</b></li>
+    <li>rater A/B 이중 라벨 + Cohen's κ 보고. → <b class="warn">미완</b></li>
+  </ol>
+</section>
+
+<!-- ================= 2 ================= -->
+<section id="s2">
+  <h2>2. 연구질문 · 가설 · 변수</h2>
+  <p class="lead">가설은 결과가 아니라 <b>검증 대상</b>이다. 아래 어떤 수치도 현재 측정되지 않았다.</p>
+
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>연구질문(RQ)</th><th>가설(H)</th><th>검증 데이터</th><th>현재 상태</th></tr>
+    <tr><td>RQ1</td><td>AI 자동검수(review)가 인간 승인 전 재작업을 얼마나 걸러내는가?</td>
+        <td>H1: review_score가 낮을수록 반려·재작업 사이클이 증가한다</td>
+        <td><code>pipeline_jobs.review_score</code> × <code>cycle</code> (검수 기록 354건)</td>
+        <td class="warn">미측정</td></tr>
+    <tr><td>RQ2</td><td>지시서 품질(구조화 정도)이 결과에 영향을 주는가?</td>
+        <td>H2: TASK_ID·PRIORITY·SIZE가 선언된 지시서는 실패율이 낮다</td>
+        <td><code>declared_task_id/priority/size</code> × <code>outcome</code></td>
+        <td class="warn">미측정</td></tr>
+    <tr><td>RQ3</td><td>모델 라우팅(오케스트레이터/워커 분리)이 리드타임에 영향을 주는가?</td>
+        <td>H3: 워커 모델별 <code>work_sec</code> 분포가 유의하게 다르다</td>
+        <td><code>orchestrator_model</code>, <code>worker_model</code> × <code>metrics.work_sec</code></td>
+        <td class="bad">관찰연구 — 인과 불가</td></tr>
+    <tr><td>RQ4</td><td>실패는 어디에서 발생하는가?</td>
+        <td>H4: 실패는 코드 생성보다 <b>인증·큐·프로세스 수명</b> 층에 집중된다</td>
+        <td><code>labels.failure_mode</code>, <code>error_detail</code></td>
+        <td class="warn">파일럿 신호만 확인</td></tr>
+    <tr><td>RQ5</td><td>승인 대기(human-in-the-loop)가 전체 리드타임의 몇 %인가?</td>
+        <td>H5: <code>approval_wait_sec</code>가 <code>total_lead_sec</code>의 주요 구성요소다</td>
+        <td><code>metrics.approval_wait_sec / total_lead_sec</code></td>
+        <td class="warn">미측정</td></tr>
+  </table></div>
+
+  <h3>2.1 변수 정의</h3>
+  <div class="tablewrap"><table>
+    <tr><th>구분</th><th>변수</th><th>조작적 정의</th></tr>
+    <tr><td>독립</td><td>지시 구조화 수준</td><td>지시서 내 TASK_ID/PRIORITY/SIZE 선언 개수(0~3)</td></tr>
+    <tr><td>독립</td><td>모델 라우팅</td><td><code>orchestrator_model</code>, <code>worker_model</code> 조합</td></tr>
+    <tr><td>독립</td><td>작업 규모</td><td>선언 SIZE(XS~XL), 실측 <code>changed_files_n</code>, <code>git_diff_len</code></td></tr>
+    <tr><td>종속</td><td>결과</td><td><code>labels.outcome</code> 4범주</td></tr>
+    <tr><td>종속</td><td>리드타임</td><td><code>queue_wait_sec</code>, <code>work_sec</code>, <code>approval_wait_sec</code>, <code>total_lead_sec</code></td></tr>
+    <tr><td>종속</td><td>재작업</td><td><code>cycle</code> (0~<code>max_cycles</code>)</td></tr>
+    <tr><td>통제</td><td>프로젝트·시간대</td><td><code>project</code>, <code>timestamps_kst.created</code></td></tr>
+  </table></div>
+</section>
+
+<!-- ================= 3 ================= -->
+<section id="s3">
+  <h2>3. Evidence Manifest</h2>
+  <p class="lead">각 주장은 반드시 <b>재확인 가능한 locator</b>를 갖는다. locator가 없는 주장은 논문에 쓰지 않는다.</p>
+
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>주장(Claim)</th><th>근거 유형</th><th>Locator (재확인 경로)</th><th>실측값</th><th>판정</th></tr>
+    <tr><td>E1</td><td>OHVIS는 7주 이상 지속 개발된 실제 시스템이다</td><td>Git</td>
+        <td><code>git log --all -i --grep=ohvis</code></td>
+        <td>커밋 79건 / 2026-07-24~2026-09-09</td><td class="ok">확인</td></tr>
+    <tr><td>E2</td><td>OHVIS는 코드베이스에 실재하는 모듈이다</td><td>코드</td>
+        <td><code>git ls-files | grep -i ohvis</code></td>
+        <td>추적 파일 43개</td><td class="ok">확인</td></tr>
+    <tr><td>E3</td><td>개발 사이클이 원장으로 남는다</td><td>DB</td>
+        <td><code>SELECT count(*) FROM pipeline_jobs</code></td>
+        <td>820건</td><td class="ok">확인</td></tr>
+    <tr><td>E4</td><td>AI 자동검수가 실제로 작동한다</td><td>DB</td>
+        <td><code>WHERE review_verdict IS NOT NULL AND review_verdict&lt;&gt;''</code></td>
+        <td>354건 (820건 중 43.2%)</td><td class="ok">확인</td></tr>
+    <tr><td>E5</td><td>목표 루프(OHVIS task)가 별도 원장으로 존재한다</td><td>DB</td>
+        <td><code>SELECT count(*) FROM ohvis_tasks</code></td>
+        <td>548건</td><td class="ok">확인</td></tr>
+    <tr><td>E6</td><td>프롬프트가 계층 자산으로 관리·컴파일된다</td><td>DB</td>
+        <td><code>prompt_assets</code>, <code>compiled_prompt_provenance</code></td>
+        <td>자산 142개(활성 141) / 컴파일 17,661건</td><td class="ok">확인</td></tr>
+    <tr><td>E7</td><td>대화 원장이 장기 축적되어 있다</td><td>DB</td>
+        <td><code>SELECT count(*) FROM chat_messages</code></td>
+        <td>37,848건</td><td class="ok">확인</td></tr>
+    <tr><td>E8</td><td>스키마 변경이 마이그레이션으로 통제된다</td><td>파일</td>
+        <td><code>ls migrations/*.sql</code></td>
+        <td>187개</td><td class="ok">확인</td></tr>
+    <tr><td>E9</td><td>회귀 테스트 체계가 존재한다</td><td>파일</td>
+        <td><code>ls tests/unit/*.py</code></td>
+        <td>167개 파일</td><td class="ok">확인</td></tr>
+    <tr><td>E10</td><td>연구용 비식별 추출이 가능하다</td><td>산출물</td>
+        <td><code>research/ohvis_dataset_v1/out/pilot_v1.jsonl</code></td>
+        <td>30건 · 유출 0건</td><td class="ok">확인</td></tr>
+    <tr><td>E11</td><td>"품질이 N% 향상됐다"</td><td>—</td><td>—</td>
+        <td>—</td><td class="bad">근거 없음 · 사용 금지</td></tr>
+    <tr><td>E12</td><td>"비용이 N% 절감됐다"</td><td>—</td><td>—</td>
+        <td>—</td><td class="bad">근거 없음 · 사용 금지</td></tr>
+  </table></div>
+
+  <div class="box warn">
+    <h4>⚠️ 증거 보존 사고 — 기록해 둔다</h4>
+    <p>이전 단계에서 작성한 <code>20260909_ohvis_research_portfolio_design_prd.html</code>(49,739 bytes)는
+    작업 트리에 남아 있지 않았고, <code>preserve/chat-finalize-aa433b41-20260909</code> 브랜치의 커밋
+    <code>4950f142</code>에만 존재했다. 이번 단계에서 <code>git show</code>로 복원했다.<br>
+    같은 단계에서 작성했다고 보고된 <code>...charter_evidence_pilot.html</code>은
+    <b>어떤 브랜치·작업 트리에도 존재하지 않았다</b>(전 브랜치 <code>--diff-filter=A</code> 검색 0건, HANDOVER 기록 없음).
+    이 문서가 그 정본을 대체한다.<br>
+    <b>교훈:</b> 연구 산출물은 생성 직후 커밋되지 않으면 소실된다. §9 체크리스트에 커밋 게이트를 넣었다.</p>
+  </div>
+</section>
+
+<!-- ================= 4 ================= -->
+<section id="s4">
+  <h2>4. Dataset Pilot v1 실측 결과</h2>
+  <p class="lead">추출 시각 2026-09-12 23:10:56 KST · 추출기 <code>research/ohvis_dataset_v1/extract_pilot.py</code></p>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v">417</div><div class="k">모집단 (최근 120일)</div></div>
+    <div class="kpi"><div class="v">30</div><div class="k">파일럿 표본</div></div>
+    <div class="kpi"><div class="v">9</div><div class="k">층(project×outcome)</div></div>
+    <div class="kpi"><div class="v ok">0</div><div class="k">잔존 유출</div></div>
+    <div class="kpi"><div class="v">23</div><div class="k">레코드 필드 그룹</div></div>
+    <div class="kpi"><div class="v">90,906</div><div class="k">JSONL bytes</div></div>
+  </div>
+
+  <h3>4.1 층 분포</h3>
+  <div class="tablewrap"><table>
+    <tr><th>프로젝트</th><th>outcome</th><th class="num">건수</th><th>분포</th></tr>
+    <tr><td>GO100</td><td>terminal_after_rejection</td><td class="num">4</td><td><div class="bar"><i style="width:100%"></i></div></td></tr>
+    <tr><td>AADS</td><td>terminal_after_rejection</td><td class="num">4</td><td><div class="bar"><i style="width:100%"></i></div></td></tr>
+    <tr><td>NTV2</td><td>terminal_after_rejection</td><td class="num">4</td><td><div class="bar"><i style="width:100%"></i></div></td></tr>
+    <tr><td>GO100</td><td>failed</td><td class="num">4</td><td><div class="bar"><i style="width:100%"></i></div></td></tr>
+    <tr><td>AADS</td><td>failed</td><td class="num">4</td><td><div class="bar"><i style="width:100%"></i></div></td></tr>
+    <tr><td>AADS</td><td>in_flight</td><td class="num">3</td><td><div class="bar"><i style="width:75%"></i></div></td></tr>
+    <tr><td>GO100</td><td>in_flight</td><td class="num">3</td><td><div class="bar"><i style="width:75%"></i></div></td></tr>
+    <tr><td>GO100</td><td>accepted</td><td class="num">3</td><td><div class="bar"><i style="width:75%"></i></div></td></tr>
+    <tr><td>KIS</td><td>terminal_after_rejection</td><td class="num">1</td><td><div class="bar"><i style="width:25%"></i></div></td></tr>
+  </table></div>
+  <p class="src">SF는 120일 내 러너 작업이 2건뿐이라 층에서 제외됐다. v2에서 기간 확장 또는 별도 소표본 처리가 필요하다.</p>
+
+  <h3>4.2 파일럿에서 관측된 신호 <span class="muted">(표본 30건 — 모집단 추정치 아님)</span></h3>
+  <div class="tablewrap"><table>
+    <tr><th>항목</th><th class="num">값</th><th>해석</th></tr>
+    <tr><td>outcome 분포</td><td class="num">terminal_after_rejection 13 / failed 8 / in_flight 6 / accepted 3</td>
+        <td>층화 추출 결과이므로 <b>모집단 비율이 아니다</b></td></tr>
+    <tr><td>커밋 도달</td><td class="num">5 / 30</td><td>배포 단계 종속변수는 표본 확대 필요</td></tr>
+    <tr><td>배포 도달</td><td class="num">0 / 30</td><td>v1로는 배포 지표 분석 불가</td></tr>
+    <tr><td>검수 점수 보유</td><td class="num">14 / 30</td><td>RQ1 분석 가능 최소 조건 확인</td></tr>
+    <tr><td>총 리드타임 중앙값</td><td class="num">854.1초 (약 14.2분)</td><td>n=27(종료 시각 보유분)</td></tr>
+    <tr><td>실패 모드</td><td class="num">none 23 / other 5 / worker_crash 2</td><td>세분화 규칙 보강 필요(other 비중 과다)</td></tr>
+  </table></div>
+
+  <details>
+    <summary>레코드 예시 (비식별 후 실제 산출물)</summary>
+<pre><code>{
+ "case_id": "case_bd91e32641b9d8fb",
+ "session_pseudo": "sess_1a16268121b4bf2f",
+ "project": "GO100",
+ "declared_task_id": "GO100-MOMENTUM-PREDICT-LABELS",
+ "declared_priority": "P1",
+ "declared_size": "M",
+ "orchestrator_model": "codex:gpt-5.6-sol",
+ "review_score": 0.92,
+ "max_cycles": 3,
+ "metrics": {
+   "instruction_len": 821, "git_diff_len": 18076, "changed_files_n": 28,
+   "queue_wait_sec": 10.0, "work_sec": 3297.4,
+   "approval_wait_sec": 2190.6, "total_lead_sec": 3307.4
+ },
+ "labels": {
+   "outcome": "terminal_after_rejection",
+   "review_verdict_norm": "approve",
+   "failure_mode": "none",
+   "reached_commit": true, "reached_deploy": false,
+   "needs_human_adjudication": true,
+   "human_label": null
+ }
+}</code></pre>
+    <p class="src">이 레코드는 <code>review_verdict=approve</code>이면서 <code>status=rejected_done</code>이다.
+    자동 라벨만으로는 성공/실패를 판정할 수 없다는 근거이며, §6 이중 라벨링이 필요한 이유다.</p>
+  </details>
+</section>
+
+<!-- ================= 5 ================= -->
+<section id="s5">
+  <h2>5. 비식별 · 안전성 검증</h2>
+  <p class="lead">연구 데이터 반출은 "안 넣었다"가 아니라 "넣고 나서 다시 찾아봤다"로 증명한다.</p>
+
+  <h3>5.1 적용 규칙 18종 + 도메인 일반화</h3>
+  <div class="tablewrap"><table>
+    <tr><th>분류</th><th>규칙</th></tr>
+    <tr><td>LLM 자격증명</td><td>Anthropic OAuth(<code>sk-ant-oat*</code>), Anthropic API(<code>sk-ant-api*</code>), OpenAI(<code>sk-*</code>), Google(<code>AIza*</code>)</td></tr>
+    <tr><td>플랫폼 토큰</td><td>GitHub(<code>ghp_/gho_/ghs_</code>), Slack(<code>xox*</code>), Telegram, JWT, Bearer 헤더, PRIVATE KEY 헤더</td></tr>
+    <tr><td>접속정보</td><td>URL userinfo(<code>://user:pass@</code>), IPv4</td></tr>
+    <tr><td>개인정보</td><td>이메일, 주민등록번호, 휴대폰, 계좌번호, 카드번호</td></tr>
+    <tr><td>경로</td><td><code>/home/&lt;user&gt;</code>, <code>/Users/&lt;user&gt;</code>, <code>C:\Users\&lt;user&gt;</code></td></tr>
+    <tr><td>조직 식별</td><td><code>aads.newtalk.kr</code>→<code>[ORG_HOST_A]</code>, <code>moongoby</code>→<code>[ORG_ACTOR_1]</code></td></tr>
+  </table></div>
+
+  <h3>5.2 의사식별자</h3>
+  <p><code>case_id</code>·<code>session_pseudo</code>·<code>commit_pseudo</code>·<code>parallel_group</code>은
+  <code>SHA-256(salt|kind|value)</code> 앞 16자다. salt는 컨테이너
+  <code>/root/.ohvis_research_salt</code>(권한 0600)에 보관하며 <b>데이터셋 디렉터리와 git 어디에도 포함하지 않는다</b>.
+  salt 없이는 재식별이 불가능하고, salt가 있으면 동일 표본을 재현할 수 있다.</p>
+
+  <h3>5.3 자체 재스캔 결과</h3>
+  <div class="box ok">
+    <h4>✅ leak_clean: true — 잔존 유출 0건</h4>
+    <p>추출기는 JSONL을 <b>디스크에 쓴 뒤 다시 읽어</b> 16종 유출 패턴으로 전수 재스캔한다.
+    1건이라도 탐지되면 <code>exit 2</code>로 실패해 산출물 배포를 차단한다.</p>
+    <p>이번 실행의 redaction 적중은 조직 도메인/계정 일반화 8건뿐이었다
+    (<code>aads.newtalk.kr</code> 2, <code>newtalk.kr</code> 3, <code>moongoby</code> 3).
+    키·토큰·PII 적중은 0건이었다.</p>
+  </div>
+
+  <h3>5.4 운영 안전성</h3>
+  <ul>
+    <li>DB 접근은 <code>SELECT</code> 단일 쿼리다. INSERT/UPDATE/DELETE/DDL이 코드에 존재하지 않는다.</li>
+    <li>연결 직후 <code>SET TRANSACTION READ ONLY</code>를 시도한다.</li>
+    <li>원문 <code>instruction</code>·<code>logs</code>·<code>git_diff</code> 전문은 반출하지 않고 길이만 지표화한다.</li>
+    <li>API·Docker·nginx·활성 러너를 변경하지 않는다.</li>
+  </ul>
+</section>
+
+<!-- ================= 6 ================= -->
+<section id="s6">
+  <h2>6. 라벨링 프로토콜 (rater A/B)</h2>
+  <p class="lead">자동 라벨은 가설이 아니라 <b>초안</b>이다. 사람 판정 없이는 성공률을 보고하지 않는다.</p>
+
+  <div class="box warn">
+    <h4>⚠️ 최우선 쟁점 — <code>rejected_done</code></h4>
+    <p>전체 820건 중 <b>683건(83.3%)</b>이 <code>rejected_done</code>이다.
+    코드는 이를 <code>done</code>·<code>approved</code>와 같은 종료군으로 집계하지만
+    (<code>app/api/admin.py:51</code>, <code>app/api/pipeline_runner.py:821</code>),
+    명칭은 "반려 후 종료"를 뜻한다. <b>이 한 라벨의 해석이 논문 결론 전체를 좌우한다.</b>
+    따라서 자동 확정하지 않고 <code>needs_human_adjudication=true</code>로 표시해 사람 판정으로 넘긴다.</p>
+  </div>
+
+  <h3>6.1 절차</h3>
+  <ol>
+    <li><b>codebook 작성</b> — outcome 4범주 + failure_mode 6범주의 포함/제외 기준과 경계 사례를 문서화한다.</li>
+    <li><b>독립 라벨링</b> — rater A, rater B가 서로의 판정을 보지 않고 30건 전부를 라벨링한다.</li>
+    <li><b>일치도 측정</b> — Cohen's κ를 계산한다. κ &lt; 0.60이면 codebook을 수정하고 재라벨링한다.</li>
+    <li><b>불일치 조정</b> — 3인 판정 또는 합의로 확정하고 <code>label_disagreement</code>에 기록한다.</li>
+    <li><b>확정 후에만</b> 빈도·비율·성공률을 산출한다.</li>
+  </ol>
+
+  <h3>6.2 라벨 스키마</h3>
+  <div class="tablewrap"><table>
+    <tr><th>필드</th><th>값</th><th>현재</th></tr>
+    <tr><td><code>outcome</code></td><td>accepted / terminal_after_rejection / failed / in_flight</td><td>자동 30건</td></tr>
+    <tr><td><code>failure_mode</code></td><td>none / timeout / auth_or_quota / vcs_conflict / worker_crash / build_or_test / other</td><td>자동 30건</td></tr>
+    <tr><td><code>needs_human_adjudication</code></td><td>bool</td><td>13건 true</td></tr>
+    <tr><td><code>human_label</code></td><td>확정 라벨</td><td class="warn">0건</td></tr>
+    <tr><td><code>label_disagreement</code></td><td>rater 불일치 기록</td><td class="warn">0건</td></tr>
+  </table></div>
+</section>
+
+<!-- ================= 7 ================= -->
+<section id="s7">
+  <h2>7. 재현 절차</h2>
+  <p class="lead">동일 salt·동일 DB 스냅샷이면 표본 구성과 <code>case_id</code>가 동일하게 재생성된다.</p>
+<pre><code># 1) 추출 (읽기 전용)
+docker exec aads-server python3 /app/research/ohvis_dataset_v1/extract_pilot.py \
+    --n 30 --outdir /app/research/ohvis_dataset_v1/out
+
+# 2) 호스트 저장소로 회수
+docker cp aads-server:/app/research/ohvis_dataset_v1/out/. \
+    /root/aads/aads-server/research/ohvis_dataset_v1/out/
+
+# 3) 검증 — 유출 0건 확인
+python3 -c "import json;print(json.load(open('/root/aads/aads-server/research/ohvis_dataset_v1/out/pii_scan_report.json'))['leak_clean'])"</code></pre>
+
+  <div class="tablewrap"><table>
+    <tr><th>산출물</th><th>경로</th><th>크기</th></tr>
+    <tr><td>추출기</td><td><code>research/ohvis_dataset_v1/extract_pilot.py</code></td><td class="num">16,490 B</td></tr>
+    <tr><td>데이터셋 카드</td><td><code>research/ohvis_dataset_v1/DATASET_CARD.md</code></td><td class="num">6,471 B</td></tr>
+    <tr><td>파일럿 데이터</td><td><code>research/ohvis_dataset_v1/out/pilot_v1.jsonl</code></td><td class="num">90,906 B</td></tr>
+    <tr><td>PII 스캔 리포트</td><td><code>research/ohvis_dataset_v1/out/pii_scan_report.json</code></td><td class="num">777 B</td></tr>
+    <tr><td>포트폴리오 설계·PRD(복원)</td><td><code>app/static/reports/20260909_ohvis_research_portfolio_design_prd.html</code></td><td class="num">49,739 B</td></tr>
+    <tr><td>본 문서</td><td><code>app/static/reports/20260912_ohvis_research_charter_evidence_pilot.html</code></td><td class="num">—</td></tr>
+  </table></div>
+</section>
+
+<!-- ================= 8 ================= -->
+<section id="s8">
+  <h2>8. 미측정 항목과 리스크</h2>
+
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>리스크</th><th>영향</th><th>대응</th><th>우선순위</th></tr>
+    <tr><td>R1</td><td><code>rejected_done</code> 의미 미확정</td><td>성공률·품질 지표 전체가 무효화될 수 있음</td>
+        <td>코드 경로 추적 + rater A/B 판정</td><td class="bad">P0</td></tr>
+    <tr><td>R2</td><td>사람 라벨 0건 · κ 미측정</td><td>라벨 신뢰도 입증 불가 → 심사 거절 사유</td>
+        <td>§6 프로토콜 실행</td><td class="bad">P0</td></tr>
+    <tr><td>R3</td><td>관찰 데이터만 존재</td><td>인과 주장 불가</td>
+        <td>사전등록 A/B(모델 라우팅 무작위 배정) 설계</td><td class="warn">P1</td></tr>
+    <tr><td>R4</td><td>표본 30건 · 배포 도달 0건</td><td>배포 단계 분석 불가, 검정력 부족</td>
+        <td>v2에서 n≥200, 기간 180일로 확장</td><td class="warn">P1</td></tr>
+    <tr><td>R5</td><td>단일 조직·단일 의사결정자</td><td>외적 타당도 제한</td>
+        <td>한계 명시 + 설계원리 중심 기여로 포지셔닝</td><td>P2</td></tr>
+    <tr><td>R6</td><td>failure_mode의 <code>other</code> 비중 과다(5/7)</td><td>실패 분류 해상도 부족</td>
+        <td>error_detail 실값 조사 후 규칙 세분화</td><td>P2</td></tr>
+    <tr><td>R7</td><td>연구 산출물 소실 이력</td><td>증거 재현 불가</td>
+        <td>생성 즉시 커밋 게이트(§9)</td><td class="warn">P1</td></tr>
+    <tr><td>R8</td><td>선행연구 조사 미실시</td><td>신규성 미확정</td>
+        <td>체계적 문헌고찰(SLR) 별도 단계</td><td class="warn">P1</td></tr>
+  </table></div>
+
+  <div class="box bad">
+    <h4>❌ 현재 문서에서 금지된 표현</h4>
+    <p>"생산성 N배", "품질 N% 향상", "비용 N% 절감", "실패율 N% 감소" —
+    어떤 형태로도 사용하지 않는다. 측정 설계는 §2에 있고, 측정은 아직 수행되지 않았다.</p>
+  </div>
+</section>
+
+<!-- ================= 9 ================= -->
+<section id="s9">
+  <h2>9. 실행 체크리스트</h2>
+  <p class="lead">체크 상태는 브라우저에 저장된다.</p>
+
+  <h4>즉시 (P0)</h4>
+  <div id="ck">
+    <label class="chk"><input type="checkbox" data-k="c1"><span><code>rejected_done</code> 코드 경로 전수 추적 — 어떤 조건에서 이 상태로 수렴하는지 확정</span></label>
+    <label class="chk"><input type="checkbox" data-k="c2"><span>라벨 codebook v1 작성 (outcome 4범주 + failure_mode 6범주 경계 사례 포함)</span></label>
+    <label class="chk"><input type="checkbox" data-k="c3"><span>rater A/B 독립 라벨링 30건 → Cohen's κ 산출</span></label>
+    <label class="chk"><input type="checkbox" data-k="c4"><span>연구 산출물 커밋 — 소실 재발 방지</span></label>
+  </div>
+
+  <h4>단기 (P1)</h4>
+  <div>
+    <label class="chk"><input type="checkbox" data-k="c5"><span>Dataset v2 확장: 기간 180일, n≥200, 배포 도달 케이스 확보</span></label>
+    <label class="chk"><input type="checkbox" data-k="c6"><span><code>error_detail</code> 실값 조사 → failure_mode 규칙 세분화</span></label>
+    <label class="chk"><input type="checkbox" data-k="c7"><span>사전등록 A/B 설계: 모델 라우팅 무작위 배정 프로토콜</span></label>
+    <label class="chk"><input type="checkbox" data-k="c8"><span>체계적 문헌고찰(SLR) — 신규성·투고처 확정</span></label>
+  </div>
+
+  <h4>중기 (P2)</h4>
+  <div>
+    <label class="chk"><input type="checkbox" data-k="c9"><span>교육 모듈 10개 통합 — 기존 교육 HTML 중복 제거</span></label>
+    <label class="chk"><input type="checkbox" data-k="c10"><span>재현성 부록(Reproducibility Appendix) 작성</span></label>
+    <label class="chk"><input type="checkbox" data-k="c11"><span>외부 공개 등급 심사 — 윤리 검토 + CEO 승인</span></label>
+  </div>
+</section>
+
+<footer>
+  OHVIS Research — Charter · Evidence Manifest · Dataset Pilot v1 · 2026-09-12 23:05 KST<br>
+  이 문서의 모든 수치는 Git·DB·산출물 파일에서 실측한 값이며, 미측정 항목은 명시적으로 표시했다.
+</footer>
+
+</div>
+<script>
+(function(){
+  var KEY='ohvis_charter_20260912';
+  var saved={};
+  try{saved=JSON.parse(localStorage.getItem(KEY)||'{}')}catch(e){saved={}}
+  var boxes=document.querySelectorAll('label.chk input[type=checkbox]');
+  boxes.forEach(function(b){
+    var k=b.getAttribute('data-k');
+    if(saved[k]){b.checked=true;b.closest('label').classList.add('done')}
+    b.addEventListener('change',function(){
+      b.closest('label').classList.toggle('done',b.checked);
+      saved[k]=b.checked;
+      try{localStorage.setItem(KEY,JSON.stringify(saved))}catch(e){}
+    });
+  });
+})();
+</script>
+</body>
+</html>
