@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-09-13 04:20 KST — Chat modernization WP04 durable read-model contract
+
+- Added an opt-in, fail-closed v2 chat read model while preserving the unversioned v1 API: read-only
+  GET projections, tenant/user/session/projection-bound HMAC cursors, typed session view/change
+  responses, and an explicit active-slot/owner-epoch-fenced repair writer.
+- Added expand-only migrations 174/175 for message versions, session revisions, changed-ID outbox,
+  execution checkpoints, and top-level concurrent indexes. Healthy streaming content updates do not
+  emit per-token revision/outbox rows; recovery checkpoints are bounded to once per second and the
+  terminal execution write always flushes final state.
+- Verification in the current API dependency image passed 144 focused/regression tests with one
+  opt-in DB test skipped. A PostgreSQL 15 disposable clone of the production schema applied both
+  migrations, passed the real read-only integration test, and verified two immediate token updates
+  left revision/outbox counts unchanged while the terminal transition advanced them.
+- Activation remains closed: migration, dedicated cursor secret, cross-version browser evidence,
+  API blue/green deployment, and five-minute P0/P1 monitoring have not been performed. Roll back the
+  code with a revert; additive schema can remain dormant with `AADS_CHAT_V2_READ_MODEL_ENABLED=false`.
+- Detailed implementation record: `docs/reports/20260913_CHAT_MODERNIZATION_WP04_SERVER_RESULT.md`.
+
 ## 2026-09-12 23:05 KST — OHVIS 연구 Charter·Evidence Manifest·Dataset Pilot v1(30건)
 
 - CEO 지시 "다음단계 진행해"에 따라 읽기 전용 파일럿 추출기와 30건 비식별 데이터셋을 실제로 구현·실행했다. 신규 파일: `research/ohvis_dataset_v1/extract_pilot.py`(16,490 B), `research/ohvis_dataset_v1/DATASET_CARD.md`(6,471 B), `app/static/reports/20260912_ohvis_research_charter_evidence_pilot.html`(31,875 B). 산출물: `research/ohvis_dataset_v1/out/pilot_v1.jsonl`(30행, 90,906 B), `out/pii_scan_report.json`(777 B).
