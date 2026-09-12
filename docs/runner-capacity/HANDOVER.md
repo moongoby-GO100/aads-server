@@ -44,3 +44,17 @@ unknown `asyncio_mode` pytest configuration warning. The new tests exercise
 concurrent claimers at both requested limits and DB failure/invalid input.
 No production 20/10-job load test is submitted. Production rollout evidence
 will be recorded in the AADS canonical handover after verification.
+
+## Production rollout evidence
+
+- 2026-09-12 21:00:56 KST: cafe24_114 general and LiteLLM runner services
+  started with `MAX_CONCURRENT_SERVER=10`, `MAX_CONCURRENT_PER_PROJECT=10`,
+  and the shared `SF,NTV2,NAS` project scope. Both services were active.
+- 2026-09-12 21:09:08 KST: after the in-flight GO100 job exited, the
+  contabo14 runner restarted with `MAX_CONCURRENT_SERVER=20`,
+  `MAX_CONCURRENT_PER_PROJECT=20`, and project scope `GO100`. The service was
+  active; no API or trading service was restarted.
+- The canonical and both remote runner scripts had SHA-256
+  `abf1a46e2a7c8d7e17b26c76c1d3c3f7988c91eb0ad8a29ec1430ef40477304c`.
+- Production saturation was not induced. Capacity behavior is covered by the
+  33 focused concurrency, script-guard, and remote-sync tests recorded above.
