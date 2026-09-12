@@ -20,3 +20,6 @@ def test_review_hold_sweeper_prioritizes_small_diffs():
     script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
 
     assert "ORDER BY length(COALESCE(git_diff,'')) ASC, updated_at ASC" in script
+    assert "-- 큰 diff 한 건이 복구 창을 독점하지 않도록" in script
+    assert "rows=$(db_query \"$select_sql\") || rows=\"\"" not in script
+    assert "review_hold 대상 조회 실패" in script

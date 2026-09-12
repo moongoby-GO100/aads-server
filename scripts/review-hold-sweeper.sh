@@ -69,7 +69,7 @@ _psql() {
     fi
 }
 
-db_query() { printf '%s' "$1" | _psql -q -t -A -P footer=off -F $'\x1e' 2>/dev/null; }
+db_query() { printf '%s' "$1" | _psql -q -t -A -P footer=off -F $'\x1e'; }
 db_exec()  { printf '%s' "$1" | _psql -q >/dev/null 2>&1; }
 
 # pipeline-runner.sh 와 동일한 달러 인용 방식 (SQL 인젝션 방지)
@@ -92,11 +92,14 @@ WHERE status='review_hold'
   AND (review_retry_last_at IS NULL
        OR review_retry_last_at < NOW() - ((LEAST(${SWEEP_BACKOFF_MAX_MIN},
             (${SWEEP_BACKOFF_BASE_MIN} * POWER(2, COALESCE(review_retry_count,0)))::int))::text || ' minutes')::interval)
-# 큰 diff 한 건이 복구 창을 독점하지 않도록 작은 것부터 처리한다.
+-- 큰 diff 한 건이 복구 창을 독점하지 않도록 작은 것부터 처리한다.
 ORDER BY length(COALESCE(git_diff,'')) ASC, updated_at ASC
 LIMIT ${SWEEP_BATCH};"
 
-rows=$(db_query "$select_sql") || rows=""
+if ! rows=$(db_query "$select_sql"); then
+    log "review_hold 대상 조회 실패 — 대상 없음으로 오인하지 않고 중단합니다"
+    exit 1
+fi
 
 if [[ -z "${rows//[[:space:]]/}" ]]; then
     log "no eligible review_hold job (infra category, backoff 만족)"
