@@ -3007,6 +3007,39 @@ _reap_bg_jobs() {
 # ── 시그널 핸들링 ────────────────────────────────────────────────────
 _current_job_id=""
 _current_session_id=""
+# ── 러너 종료 시 작업 마감 정책 (RUNNER-SHUTDOWN-REQUEUE) ───────────
+# systemctl restart 등으로 러너가 종료되면 진행 중 작업을 error로 확정하지 않고
+# 큐로 되돌려 재시작 후 자동 복구시킨다. 동일 작업이 SHUTDOWN_REQUEUE_MAX회
+# 이상 종료에 휘말리면 무한 재큐잉을 막기 위해 error로 확정한다.
+SHUTDOWN_REQUEUE_MARK='[RUNNER_SHUTDOWN_REQUEUE]'
+SHUTDOWN_REQUEUE_MAX="${SHUTDOWN_REQUEUE_MAX:-2}"
+
+_shutdown_finalize_job() {
+    local _jid="$1" _sid="${2:-}"
+    [[ -z "$_jid" ]] && return 0
+    local _marks
+    _marks=$(db_exec "SELECT (length(COALESCE(review_feedback,'')) - length(replace(COALESCE(review_feedback,''), $(sql_escape "$SHUTDOWN_REQUEUE_MARK"), ''))) / ${#SHUTDOWN_REQUEUE_MARK} FROM pipeline_jobs WHERE job_id=$(sql_escape "$_jid");" 2>/dev/null | tr -d '[:space:]')
+    [[ "$_marks" =~ ^[0-9]+$ ]] || _marks=0
+    if (( _marks >= SHUTDOWN_REQUEUE_MAX )); then
+        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                   error_detail='runner_shutdown',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 종료로 중단] 자동 재큐잉 한도 초과',
+                   completed_at=NOW(), updated_at=NOW() WHERE job_id=$(sql_escape "$_jid") AND status IN ('running','claimed');" || true
+        record_runner_event "$_jid" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"runner_shutdown\"}"
+        log "  Marked $_jid as error (runner shutdown, requeue limit ${SHUTDOWN_REQUEUE_MAX})"
+        post_to_chat "$_sid" "🔴 [Pipeline Runner] 러너 종료로 작업 중단(자동 재큐잉 한도 초과): $_jid"
+        _notify_ai "$_jid"
+        return 0
+    fi
+    db_update "UPDATE pipeline_jobs SET status='queued', phase='queued',
+               started_at=NULL, completed_at=NULL, error_detail=NULL,
+               review_feedback=COALESCE(review_feedback,'') || E'\n${SHUTDOWN_REQUEUE_MARK} 러너 종료로 중단되어 자동 재큐잉',
+               updated_at=NOW() WHERE job_id=$(sql_escape "$_jid") AND status IN ('running','claimed');" || true
+    record_runner_event "$_jid" "job_requeued" "queued" "queued" "" "" "" "" "{\"error_detail\":\"runner_shutdown_requeued\"}"
+    log "  Requeued $_jid (runner shutdown)"
+    post_to_chat "$_sid" "🔄 [Pipeline Runner] 러너 종료로 중단 → 자동 재큐잉: $_jid"
+}
+
 cleanup() {
     log "═══ Pipeline Runner v2.1 종료 ═══"
     # 방안A: 모든 백그라운드 작업 정리
@@ -3014,28 +3047,15 @@ cleanup() {
         IFS='|' read -r _jid _sid <<< "${_bg_jobs[$_pid]}"
         kill "$_pid" 2>/dev/null || true
         wait "$_pid" 2>/dev/null || true
-        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-                   error_detail='runner_shutdown',
-                   review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 종료로 중단]',
-                   completed_at=NOW(), updated_at=NOW() WHERE job_id='${_jid}' AND status='running';" || true
-        record_runner_event "$_jid" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"runner_shutdown\"}"
-        log "  Marked $_jid as error (runner shutdown)"
-        post_to_chat "$_sid" "🔴 [Pipeline Runner] 러너 종료로 작업 중단: $_jid"
-        _notify_ai "$_jid"
+        _shutdown_finalize_job "$_jid" "$_sid"
     done
     # 레거시 호환: 단일 작업 추적
     if [[ -n "$_current_job_id" ]] && ! printf '%s\n' "${_bg_jobs[@]}" | grep -q "$_current_job_id"; then
-        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-                   error_detail='runner_shutdown',
-                   review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 종료로 중단]',
-                   completed_at=NOW(), updated_at=NOW() WHERE job_id='${_current_job_id}' AND status='running';" || true
-        record_runner_event "$_current_job_id" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"runner_shutdown\"}"
-        log "  Marked $_current_job_id as error (runner shutdown)"
-        post_to_chat "$_current_session_id" "🔴 [Pipeline Runner] 러너 종료로 작업 중단: $_current_job_id"
-        _notify_ai "$_current_job_id"
+        _shutdown_finalize_job "$_current_job_id" "$_current_session_id"
     fi
     exit 0
 }
+
 trap cleanup SIGTERM SIGINT
 
 main "$@"
