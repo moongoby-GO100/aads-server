@@ -7109,7 +7109,18 @@ async def _resume_single_stream(
                     str(_execution_uuid)[:8],
                 )
                 return
-            _streaming_state[session_id]["owner_epoch"] = owner_epoch
+            # 7052 에서 만든 상태를 여기서 읽는데, 그 사이 _claim_execution_lease 의
+            # await 에서 다른 코루틴으로 넘어간다. 그동안 펜싱 핸들러 등이 같은 키를
+            # 지울 수 있고(_streaming_state.pop 지점이 7군데), 그러면 여기서
+            # KeyError 가 난다. 2026-09-12 세션 ac5278a7 이 이 예외로 28분간
+            # "재개 → KeyError → 중단 → 재개" 를 반복했다. 오류 메시지가 세션 ID
+            # 하나뿐이라(KeyError 의 형태) 원인 추적이 오래 걸렸다.
+            #
+            # 상태가 사라졌다는 것은 이 워커가 이미 밀려났다는 뜻이다. 예외를 던져
+            # 실행을 종료시킬 일이 아니라 조용히 넘어가야 한다.
+            _resume_state = _streaming_state.get(session_id)
+            if _resume_state is not None:
+                _resume_state["owner_epoch"] = owner_epoch
 
         _pump_baseline: Dict[str, float] = {"ts": _bg_time.monotonic()}
 
@@ -7753,7 +7764,14 @@ async def _resume_single_stream(
         if state and str(state.get("execution_id") or "") == str(execution_id or ""):
             _streaming_state.pop(session_id, None)
     except Exception as e:
-        logger.error(f"resume_single_stream_error: session={session_id[:8]} error={e}")
+        # 트레이스백 없이 str(e) 만 남기면 원인 추적이 불가능하다. 2026-09-12 에
+        # KeyError 가 "error='ac5278a7-...'" 로만 찍혀, 세션 ID 가 에러 메시지라는
+        # 단서로 역추적해야 했다. 한 번 더 같은 일을 겪지 않도록 스택을 남긴다.
+        logger.error(
+            f"resume_single_stream_error: session={session_id[:8]} "
+            f"error_type={type(e).__name__} error={e}",
+            exc_info=True,
+        )
         try:
             async with get_pool().acquire() as c:
                 if _execution_uuid:
