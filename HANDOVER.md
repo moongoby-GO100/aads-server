@@ -1,5 +1,34 @@
 # AADS HANDOVER
 
+## 2026-09-13 09:07 KST — 미완결 잔여 항목 정리(커밋 누락 3건 + 커밋 훅 DB 인증 오류)
+
+CEO 지시 "미진한 사항 즉시 직접 조치". 운영 코드 변경 없이, 워크트리에 남아 있던 미커밋 산출물과
+매 커밋마다 반복되던 post-commit 오류를 정리했다.
+
+- **조치 1 — 회귀 테스트 정합화(`fe1944e8`)**: `tests/unit/test_tools_and_pipeline.py` 의
+  `test_recovery_auto_resume_can_preserve_retry_count` 가 `0e64584a`(예산 청구를
+  `_claim_resume_model_attempt` 한 곳으로 단일화) 이후 코드와 어긋나 실패 상태로 방치돼 있었다.
+  recovery CAS 는 `retry_count` 를 올리지 않고 `retry_count < $4` 가드만 걸므로 단언을 그에 맞췄다.
+  컨테이너 기준 `pytest tests/unit/test_tools_and_pipeline.py` **64 passed**.
+- **조치 2 — 교육자료 9건 + 갱신 스크립트 커밋(`1eeb710f`)**: `app/static/reports/20260912_*_education.html`
+  9개가 untracked 였다. 함께 있던 `app/scripts/update_llm_education.py` 는 **`app` 패키지 안**이라
+  pre-commit 의 import 검증이 모듈로 로드했고, import 시점에 파일을 쓰는 스크립트라
+  read-only FS 에서 커밋이 차단됐다. 훅 우회(`--no-verify`) 대신 원인을 제거 —
+  일회성 스크립트를 `scripts/update_llm_education.py` 로 이동, `app/scripts/` 디렉터리 삭제.
+- **조치 3 — post-commit `collect_env_snapshot` DB 인증 실패**: `/root/aads/scripts/collect_env_snapshot.py`
+  가 `DB_PASS/AADS_DB_PASSWORD/POSTGRES_PASSWORD` 미설정 시 더미값 `aads_dev_local` 로 접속을 시도해
+  커밋마다 `password authentication failed for user "aads"` 를 남기고 `server_env_history` INSERT 가
+  전부 유실됐다(git hook 셸은 `.env` 를 로드하지 않음). `_env_file_secret()` 폴백을 추가해
+  `.env` 에서 읽도록 했다(값은 로그에 남기지 않음). 검증: 비밀번호 환경변수를 모두 제거한 셸에서
+  실행 → 오류 없음, `server_env_history` **id 1554 / 09:07:08 KST** 신규 행 적재 확인.
+  `/root/aads` 는 git 저장소가 아니라 커밋 불가 — 서버 로컬 파일이며
+  백업 `collect_env_snapshot.py.bak_aads_20260913` 보관.
+- **배포 영향 없음**: 변경분은 테스트·정적 리포트·서버 로컬 스크립트뿐. 이미지 리빌드 불필요
+  (`app/static` 은 bind mount). health-check **200**, 교육자료 `https://aads.newtalk.kr/reports/…` **200**.
+- **미조치(의도적)**: `deploy.sh`, `scripts/deploy_autoheal.sh` 의 dirty 변경은 AADS-191 후속
+  작업 중인 **다른 세션 소유**라 건드리지 않았다(직접 작업 게이트 YELLOW). → **09:09 KST 해소 확인**: 해당 세션이 `662d26c2 fix(deploy): record measured disk shortfall and autoheal outcome in deploy_runs` 로 커밋 완료. 워크트리 dirty 파일은 이 HANDOVER 뿐.
+- **잔여 리스크**: contabo116 디스크 09:07 KST 89% → **09:09 KST 재측정 77%**(`df -h /` 193G 중 148G 사용, 46G 여유)로 회복. `deploy.sh` 빌드 preflight 하한 여유 확보, 재상승 추세는 계속 감시. 운영 확인: health-check **200**, aads-server/aads-server-green 모두 healthy.
+
 ## 2026-09-13 16:00 KST — WP05 R4 검수 피드백 대응: main 병합 + 검증 1~5 재실행
 
 R4 검수의 5개 지적("작업 대상 오류 / 핵심 산출물 부재 / 검증 불가 / 보고 일관성 부재 /
