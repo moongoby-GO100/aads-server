@@ -1,0 +1,74 @@
+[
+  {
+    "file": "20260912_ai_evaluation_evals_education",
+    "viewport": "desktop",
+    "가로스크롤px": 0,
+    "외부링크": 31,
+    "범례": true,
+    "분류배지": 9,
+    "콘솔오류": 0
+  },
+  {
+    "file": "20260912_prompt_context_engineering_education",
+    "viewport": "desktop",
+    "가로스크롤px": 0,
+    "외부링크": 10,
+    "범례": true,
+    "분류배지": 6,
+    "콘솔오류": 0
+  },
+  {
+    "file": "20260912_ai_law_copyright_privacy_education",
+    "viewport": "desktop",
+    "가로스크롤px": 0,
+    "외부링크": 37,
+    "범례": true,
+    "분류배지": 8,
+    "콘솔오류": 0
+  },
+  {
+    "file": "20260912_ai_security_governance_education",
+    "viewport": "desktop",
+    "가로스크롤px": 0,
+    "외부링크": 22,
+    "범례": true,
+    "분류배지": 7,
+    "콘솔오류": 0
+  },
+  {
+    "file": "20260912_ai_evaluation_evals_education",
+    "viewport": "mobile",
+    "가로스크롤px": 0,
+    "외부링크": 31,
+    "범례": true,
+    "분류배지": 9,
+    "콘솔오류": 0
+  },
+  {
+    "file": "20260912_prompt_context_engineering_education",
+    "viewport": "mobile",
+    "가로스크롤px": 0,
+    "외부링크": 10,
+    "범례": true,
+    "분류배지": 6,
+    "콘솔오류": 0
+  },
+  {
+    "file": "20260912_ai_law_copyright_privacy_education",
+    "viewport": "mobile",
+    "가로스크롤px": 0,
+    "외부링크": 37,
+    "범례": true,
+    "분류배지": 8,
+    "콘솔오류": 0
+  },
+  {
+    "file": "20260912_ai_security_governance_education",
+    "viewport": "mobile",
+    "가로스크롤px": 0,
+    "외부링크": 22,
+    "범례": true,
+    "분류배지": 7,
+    "콘솔오류": 0
+  }
+]

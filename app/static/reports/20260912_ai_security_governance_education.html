@@ -94,6 +94,23 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
   table{font-size:.78rem}
   th,td{padding:8px 10px}
 }
+/* === 출처 표기 범례 (2026-09-13 sources_p0 2차 보강) === */
+a.src{color:var(--accent3);text-decoration:none;border-bottom:1px dotted var(--accent3);word-break:break-all}
+a.src:hover{color:var(--accent);border-bottom-style:solid}
+.src-legend{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent3);
+border-radius:12px;padding:20px 24px;margin:0 0 40px}
+.src-legend h3{margin:0 0 10px;font-size:1.02rem;color:var(--accent3)}
+.src-legend ul{margin:10px 0 12px 18px}
+.src-legend li{font-size:.87rem;color:var(--text2);margin-bottom:5px}
+.tag-v{display:inline-block;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:7px;white-space:nowrap}
+.tag-fact{background:#10b98120;color:#34d399}
+.tag-edu{background:#3b82f620;color:#60a5fa}
+.tag-plan{background:#8b5cf620;color:#a78bfa}
+.tag-unver{background:#f59e0b20;color:#fbbf24}
+.http-ok{color:var(--success);font-weight:600}
+.http-waf{color:var(--warning);font-weight:600}
+/* 모바일 가로 스크롤 방지: 긴 URL·경로 토큰이 줄바꿈되지 않아 문서 폭을 넘기던 문제 */
+.alert,.info-card,.checkpoint,td,li,p{overflow-wrap:break-word}
 </style>
 </head>
 <body>
@@ -131,6 +148,19 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
     <a href="#ch15"><span class="num">15</span> 참고자료·다음 단계</a>
     <a href="#source-audit-20260913"><span class="num">★</span> 부록. 출처 검수 이력 (2026-09-13)</a>
   </div>
+</div>
+
+<!-- ===== 출처 표기 범례 (2026-09-13 sources_p0 2차 보강) ===== -->
+<div class="src-legend">
+  <h3>📌 출처 표기 범례 — 무엇이 검증된 사실이고 무엇이 아닌가</h3>
+  <p style="font-size:.87rem;color:var(--text2);margin-bottom:6px">이 문서의 주장은 근거의 강도에 따라 아래 4가지로 구분됩니다. 외부 출처는 <strong>기관 공식 문서·법령 원문·원 논문(1차 출처)</strong>의 클릭 가능한 링크로 연결되어 있습니다.</p>
+  <ul>
+    <li><span class="tag-v tag-fact">검증</span>1차 출처로 원문을 확인한 사실 — 링크를 눌러 직접 대조할 수 있습니다</li>
+    <li><span class="tag-v tag-edu">예시</span>이해를 돕기 위한 교육용 예시·비유·가상 시나리오 — 실측치가 아닙니다</li>
+    <li><span class="tag-v tag-plan">제안</span>본 문서가 제안하는 개선안 — 아직 실행되지 않은 계획입니다</li>
+    <li><span class="tag-v tag-unver">미검증</span>확인하지 못한 항목 — 의사결정 전 반드시 재확인이 필요합니다</li>
+  </ul>
+  <p style="font-size:.8rem;color:var(--text3);margin:0">링크 점검: <strong>2026-09-13 09:31~09:55 KST</strong>, 서버 68 런타임에서 각 URL에 HTTP 요청을 보내 응답 코드를 기록했습니다. 일부 기관 사이트는 자동화 접근을 차단(HTTP 403)하지만 브라우저에서는 정상 열람됩니다. <strong>URL 접근 확인은 링크가 살아 있다는 뜻일 뿐, 내용의 사실 검증이 아닙니다.</strong></p>
 </div>
 
 <!-- ===== CH1 ===== -->
@@ -915,6 +945,9 @@ API_KEY=[A-Za-z0-9][A-Za-z0-9_-]{15,}  # 범용 API_KEY= 패턴</pre>
         <tr><td>AI 기본법 기업 인지도 조사 보도(ZDNet Korea)</td><td>2026-05-04 보도</td><td><a href="https://zdnet.co.kr/view/?no=20260504111211" target="_blank" rel="noopener">zdnet.co.kr — 인지도 조사</a></td><td>2차(보도)</td></tr>
         <tr><td>EU AI Act 고위험 규제 연기 — <strong>확정 근거 규정</strong> <span class="tag-verified">2026-09-13 추가</span></td><td>Regulation (EU) 2026/1744 (2026-07-24 관보, 2026-07-27 발효)</td><td><a href="https://eur-lex.europa.eu/eli/reg/2026/1744/oj" target="_blank" rel="noopener">EUR-Lex — Regulation (EU) 2026/1744</a></td><td>HTTP 200 (보도 대신 1차 출처 추가)</td></tr>
         <tr><td>EU AI Act 고위험 규제 연기 보도(Impact On) / 디지털 옴니버스 최초 보도(AI타임스)</td><td>2026-06-30 / 2025-11-20 보도</td><td><a href="http://www.impacton.net/news/articleView.html?idxno=19421" target="_blank" rel="noopener">impacton.net</a> · <a href="https://www.aitimes.com/news/articleView.html?idxno=204121" target="_blank" rel="noopener">aitimes.com</a></td><td>2차(보도) — 둘 다 HTTP 200</td></tr>
+        <tr><td><span class="tag-v tag-fact">검증</span>MITRE ATLAS — AI 시스템 공격 전술·기법 지식베이스 <span style="color:var(--text3)">(2차 보강)</span></td><td>2026-09-13 추가</td><td><a class="src" href="https://atlas.mitre.org/" target="_blank" rel="noopener">atlas.mitre.org</a></td><td><span class="http-ok">200</span> — 2~4장 공격 유형 분류를 OWASP 외 표준 지식베이스로 교차 확인</td></tr>
+        <tr><td><span class="tag-v tag-fact">검증</span>간접 프롬프트 인젝션 — 원 논문 <span style="color:var(--text3)">(2차 보강)</span></td><td>2023 (Greshake 외)</td><td><a class="src" href="https://arxiv.org/abs/2302.12173" target="_blank" rel="noopener">「Not what you've signed up for: Compromising Real-World LLM-Integrated Applications with Indirect Prompt Injection」 arXiv:2302.12173</a></td><td><span class="http-ok">200</span> — 프롬프트 인젝션이 "개발자 실수가 아닌 구조적 한계"라는 1장 주장의 학술 근거</td></tr>
+        <tr><td><span class="tag-v tag-fact">검증</span>OWASP GenAI Security Project — LLM Top 10 본문 <span style="color:var(--text3)">(2차 보강)</span></td><td>2026-09-13 추가</td><td><a class="src" href="https://genai.owasp.org/llm-top-10/" target="_blank" rel="noopener">genai.owasp.org/llm-top-10</a></td><td><span class="http-ok">200</span> — 프로젝트 홈 외 개별 항목 본문 경로</td></tr>
         <tr><td>AADS 소스코드 — scripts/hooks/pre-commit, app/core/anthropic_client.py, app/services/tool_executor.py, app/services/subagent_service.py</td><td>2026-09-12 직접 조회</td><td>server 68 내부 저장소(비공개)</td><td>외부 링크 없음</td></tr>
       </tbody>
     </table>

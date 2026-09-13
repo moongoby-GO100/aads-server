@@ -94,6 +94,23 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
   table{font-size:.78rem}
   th,td{padding:8px 10px}
 }
+/* === 출처 표기 범례 (2026-09-13 sources_p0 2차 보강) === */
+a.src{color:var(--accent3);text-decoration:none;border-bottom:1px dotted var(--accent3);word-break:break-all}
+a.src:hover{color:var(--accent);border-bottom-style:solid}
+.src-legend{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent3);
+border-radius:12px;padding:20px 24px;margin:0 0 40px}
+.src-legend h3{margin:0 0 10px;font-size:1.02rem;color:var(--accent3)}
+.src-legend ul{margin:10px 0 12px 18px}
+.src-legend li{font-size:.87rem;color:var(--text2);margin-bottom:5px}
+.tag-v{display:inline-block;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:7px;white-space:nowrap}
+.tag-fact{background:#10b98120;color:#34d399}
+.tag-edu{background:#3b82f620;color:#60a5fa}
+.tag-plan{background:#8b5cf620;color:#a78bfa}
+.tag-unver{background:#f59e0b20;color:#fbbf24}
+.http-ok{color:var(--success);font-weight:600}
+.http-waf{color:var(--warning);font-weight:600}
+/* 모바일 가로 스크롤 방지: 긴 URL·경로 토큰이 줄바꿈되지 않아 문서 폭을 넘기던 문제 */
+.alert,.info-card,.checkpoint,td,li,p{overflow-wrap:break-word}
 </style>
 </head>
 <body>
@@ -139,11 +156,31 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
   </div>
 </div>
 
+<!-- ===== 출처 표기 범례 (2026-09-13 sources_p0 2차 보강) ===== -->
+<div class="src-legend">
+  <h3>📌 출처 표기 범례 — 무엇이 검증된 사실이고 무엇이 아닌가</h3>
+  <p style="font-size:.87rem;color:var(--text2);margin-bottom:6px">이 문서의 주장은 근거의 강도에 따라 아래 4가지로 구분됩니다. 외부 출처는 <strong>기관 공식 문서·법령 원문·원 논문(1차 출처)</strong>의 클릭 가능한 링크로 연결되어 있습니다.</p>
+  <ul>
+    <li><span class="tag-v tag-fact">검증</span>1차 출처로 원문을 확인한 사실 — 링크를 눌러 직접 대조할 수 있습니다</li>
+    <li><span class="tag-v tag-edu">예시</span>이해를 돕기 위한 교육용 예시·비유·가상 시나리오 — 실측치가 아닙니다</li>
+    <li><span class="tag-v tag-plan">제안</span>본 문서가 제안하는 개선안 — 아직 실행되지 않은 계획입니다</li>
+    <li><span class="tag-v tag-unver">미검증</span>확인하지 못한 항목 — 의사결정 전 반드시 재확인이 필요합니다</li>
+  </ul>
+  <p style="font-size:.8rem;color:var(--text3);margin:0">링크 점검: <strong>2026-09-13 09:31~09:55 KST</strong>, 서버 68 런타임에서 각 URL에 HTTP 요청을 보내 응답 코드를 기록했습니다. 일부 기관 사이트는 자동화 접근을 차단(HTTP 403)하지만 브라우저에서는 정상 열람됩니다. <strong>URL 접근 확인은 링크가 살아 있다는 뜻일 뿐, 내용의 사실 검증이 아닙니다.</strong></p>
+</div>
+
 <!-- ===== CH1 ===== -->
 <div class="section" id="ch1">
   <h2 class="section-title section-anchor"><span class="icon">⚖️</span> 01. 왜 지금 AI 법을 알아야 하는가</h2>
 
-  <p>2026년 1월 22일, 한국은 세계 최초로 <strong>AI를 포괄적으로 규율하는 기본법을 전면 시행</strong>한 국가가 되었습니다. 같은 해 8월 2일에는 EU AI Act의 2차 핵심 조항(생성형 AI 표시의무·범용 AI 모델 규제)이 발효되었습니다. AI를 업무에 도입한 기업이라면 이제 '기술 선택'뿐 아니라 <strong>'법적 의무 이행'</strong>이 경영 리스크로 직결됩니다.</p>
+  <p>2026년 1월 22일, 한국은 세계 최초로 <strong>AI를 포괄적으로 규율하는 기본법을 전면 시행</strong>한 국가가 되었습니다. 같은 해 8월 2일에는 EU AI Act가 <strong>일반 적용일</strong>을 맞아 생성형 AI 표시의무(제50조)를 포함한 대부분의 조항이 적용되기 시작했습니다.</p>
+
+  <div class="alert alert-info">
+    <strong>📌 2026-09-13 원문 대조에 따른 정정 — "2026.8.2 = 범용 AI(GPAI) 규제 시작"은 정확하지 않습니다</strong>
+    <span class="tag-v tag-fact">검증</span><a class="src" href="https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A32024R1689" target="_blank" rel="noopener">EU AI Act(Regulation (EU) 2024/1689) 제113조 원문</a>을 직접 조회한 결과, <strong>범용 AI 모델(GPAI, 제5장) 의무는 2025-08-02에 이미 적용</strong>되었고(제101조 과징금만 제외), 2026-08-02은 제50조 투명성·표시의무를 포함한 <strong>일반 적용일이자 GPAI 과징금(제101조) 집행 개시</strong> 시점입니다. 원문 문언: <em>"It shall apply from 2 August 2026. However: … (b) Chapter III Section 4, Chapter V, Chapter VII and Chapter XII and Article 78 shall apply from 2 August 2025, with the exception of Article 101."</em> 본 문서 5장 연표는 이 구분을 이미 올바르게 담고 있어, 1장 도입부 서술을 연표에 맞춰 정정했습니다. 고위험 AI 의무 연기(부속서 III 2027-12-02)는 5장의 <a class="src" href="https://eur-lex.europa.eu/eli/reg/2026/1744/oj" target="_blank" rel="noopener">Regulation (EU) 2026/1744</a> 설명을 따르십시오.
+  </div>
+
+  <p> AI를 업무에 도입한 기업이라면 이제 '기술 선택'뿐 아니라 <strong>'법적 의무 이행'</strong>이 경영 리스크로 직결됩니다.</p>
 
   <div class="card-grid">
     <div class="info-card">
@@ -530,7 +567,7 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
     </ol>
   </div>
 
-  <p style="font-size:.8rem;color:var(--text3)">출처: etnews.com 「日·싱가포르는 면책…AI 학습데이터 저작권 제도 정비 시급」(2025-06-09) · ipkorea.go.kr(특허청) 「생성형 인공지능에서 이용되는 저작물의 저작재산권 제한에 관한 연구」 · contents.premium.naver.com/issue10 「생성형 AI 학습데이터 컴플라이언스」(2026-02)</p>
+  <p style="font-size:.8rem;color:var(--text3)">출처: etnews.com 「日·싱가포르는 면책…AI 학습데이터 저작권 제도 정비 시급」(2025-06-09) · <a class="src" href="https://www.ipkorea.go.kr/" target="_blank" rel="noopener">ipkorea.go.kr</a>(<strong>국가지식재산위원회</strong> — 종전 "특허청" 표기는 오기. 특허청은 현재 <a class="src" href="https://www.kipo.go.kr/" target="_blank" rel="noopener">지식재산처(kipo.go.kr)</a>, 2026-09-13 확인) 「생성형 인공지능에서 이용되는 저작물의 저작재산권 제한에 관한 연구」 · contents.premium.naver.com/issue10 「생성형 AI 학습데이터 컴플라이언스」(2026-02)</p>
 </div>
 
 <!-- ===== CH8 ===== -->
@@ -713,7 +750,7 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
 
   <div class="alert alert-warn">
     <strong>⚠️ GO100/KIS 자동매매 프로젝트 시사점</strong>
-    한국투자증권(KIS) Open API를 활용한 자동매매 시스템(GO100)은 자본시장법상 투자중개·자문 관련 규제, 이상매매 감시 체계, 그리고 AI기본법상 고영향 AI 해당 여부를 함께 검토해야 하는 영역입니다. 특히 AI가 매매 신호를 자동 생성·실행하는 구조라면 설명가능성·인간 감독 체계를 문서화해 두는 것이 바람직합니다. 실제 규제 해당 여부는 금융위원회·금융감독원 유권해석 또는 법률 자문을 통해 개별 확인이 필요합니다. [미검증 — 개별 법률자문 필요]</p>
+    한국투자증권(KIS) Open API를 활용한 자동매매 시스템(GO100)은 자본시장법상 투자중개·자문 관련 규제, 이상매매 감시 체계, 그리고 AI기본법상 고영향 AI 해당 여부를 함께 검토해야 하는 영역입니다. 특히 AI가 매매 신호를 자동 생성·실행하는 구조라면 설명가능성·인간 감독 체계를 문서화해 두는 것이 바람직합니다. 실제 규제 해당 여부는 금융위원회·금융감독원 유권해석 또는 법률 자문을 통해 개별 확인이 필요합니다. [미검증 — 개별 법률자문 필요]
   </div>
 
   <h3>12-2. 의료분야 AI 규제 (개요)</h3>
@@ -758,7 +795,7 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
 
   <div class="alert alert-info">
     <strong>💡 AADS의 이중적 지위</strong>
-    AADS는 Anthropic·Google 등 LLM에 대해서는 '이용자/배포자'이지만, 자체적으로 NTV2·SF 등에 AI 기능을 통합해 최종 고객에게 제공하는 시점에는 그 서비스에 대해 '배포자' 지위를 갖습니다. 즉 하나의 조직이 프로젝트별로 서로 다른 책임 주체가 될 수 있습니다.</p>
+    AADS는 Anthropic·Google 등 LLM에 대해서는 '이용자/배포자'이지만, 자체적으로 NTV2·SF 등에 AI 기능을 통합해 최종 고객에게 제공하는 시점에는 그 서비스에 대해 '배포자' 지위를 갖습니다. 즉 하나의 조직이 프로젝트별로 서로 다른 책임 주체가 될 수 있습니다.
   </div>
 
   <h3>13-1. 계약을 통한 책임 배분</h3>
@@ -891,6 +928,9 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
         <tr><td>日·싱가포르는 면책…AI 학습데이터 저작권 제도 정비 시급(2025-06-09)</td><td>전자신문</td><td><a href="https://www.etnews.com/20250609000227" target="_blank" rel="noopener">etnews.com/20250609000227</a></td><td>2차(보도)</td><td>HTTP 200</td></tr>
         <tr><td>금융분야 인공지능 가이드라인</td><td>금융위원회</td><td><a href="https://www.fsc.go.kr" target="_blank" rel="noopener">fsc.go.kr</a></td><td>1차(발행기관)</td><td>HTTP 200 (도메인)</td></tr>
         <tr><td>EUR/KRW 환율 (1EUR≈1,555~1,567원)</td><td>Investing.com</td><td><a href="https://kr.investing.com/currencies/eur-krw" target="_blank" rel="noopener">kr.investing.com/currencies/eur-krw</a></td><td>2차</td><td class="price">HTTP 403 — 자동조회 차단(브라우저 접속은 가능). 환율은 <span class="tag-unverified">재확인 필요</span></td></tr>
+        <tr><td><span class="tag-v tag-fact">검증</span>「개인정보 보호법」 현행 원문 <span style="color:var(--text3)">(2차 보강)</span></td><td>법제처 국가법령정보센터 · <a class="src" href="https://www.pipc.go.kr/" target="_blank" rel="noopener">개인정보보호위원회</a></td><td><a class="src" href="https://www.law.go.kr/법령/개인정보보호법" target="_blank" rel="noopener">law.go.kr/법령/개인정보보호법</a></td><td>1차</td><td><span class="http-ok">HTTP 200</span> — 7·8장 개인정보 서술의 조문 대조용</td></tr>
+        <tr><td><span class="tag-v tag-fact">검증</span>「저작권법」 현행 원문 <span style="color:var(--text3)">(2차 보강)</span></td><td>법제처 국가법령정보센터</td><td><a class="src" href="https://www.law.go.kr/법령/저작권법" target="_blank" rel="noopener">law.go.kr/법령/저작권법</a></td><td>1차</td><td><span class="http-ok">HTTP 200</span> — 제35조의5 공정이용 등 학습데이터 논의의 조문 근거</td></tr>
+        <tr><td><span class="tag-v tag-fact">정정</span>지식재산 관련 기관 — 기존 표기 "ipkorea.go.kr(특허청)" 오기 <span style="color:var(--text3)">(2차 보강)</span></td><td>국가지식재산위원회 · 지식재산처(구 특허청)</td><td><a class="src" href="https://www.ipkorea.go.kr/" target="_blank" rel="noopener">ipkorea.go.kr</a> · <a class="src" href="https://www.kipo.go.kr/" target="_blank" rel="noopener">kipo.go.kr</a></td><td>1차</td><td><span class="http-ok">HTTP 200</span> — 2026-09-13 각 사이트 제목으로 기관명 확인</td></tr>
         <tr><td>인공지능기본법 지원데스크</td><td>과기정통부/NIA</td><td>sw.or.kr/AI_act_helpdesk</td><td>2차</td><td class="price">접속 실패(연결 불가) — 링크 미제공</td></tr>
       </tbody>
     </table>
