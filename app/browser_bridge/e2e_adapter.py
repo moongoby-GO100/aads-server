@@ -10,7 +10,27 @@ from .security import validate_bridge_endpoint
 from .service import get_browser_bridge_service
 
 
-def build_e2e_config(session_id: str | None = None) -> dict[str, Any]:
+class PcAgentUnavailable(RuntimeError):
+    """PC Agent 가 필요한데 쓸 수 없을 때. 헤드리스로 내려가지 않고 멈춘다.
+
+    브라우저 브릿지는 PC Agent 가 없으면 headless 로 폴백한다. 그런데 헤드리스는
+    봇 차단을 통과하지 못한다 — GenSpark 는 헤드리스에 로그인 화면조차 주지 않고
+    검증 페이지만 준다(2026-09-13 실측). 즉 PC 가 꺼지면 자동화가 멈추는 게
+    아니라 **쓸모없는 결과를 계속 만든다.**
+
+    2026-04 GenSpark 수집기가 정확히 그렇게 고장났다. 세션이 끊긴 뒤 로그인
+    화면을 2,406건(그 달 적재의 99%) "대화"로 저장했고, 숫자는 쌓이니 겉보기에는
+    정상이었다.
+
+    그래서 PC Agent 가 필요한 작업은 조용히 강등되는 대신 여기서 끊는다.
+    """
+
+
+def build_e2e_config(
+    session_id: str | None = None,
+    *,
+    require_pc_agent: bool = False,
+) -> dict[str, Any]:
     """Return Playwright connection hints with headless fallback semantics.
 
     Environment overrides are intentionally simple so non-AADS runners can use
@@ -67,4 +87,19 @@ def build_e2e_config(session_id: str | None = None) -> dict[str, Any]:
             "headless_fallback": True,
         }
 
-    return get_browser_bridge_service().e2e_config(session_id=session_id)
+    config = get_browser_bridge_service().e2e_config(session_id=session_id)
+    if require_pc_agent:
+        _assert_pc_agent(config)
+    return config
+
+
+def _assert_pc_agent(config: dict[str, Any]) -> None:
+    """헤드리스·불가 상태면 실행하지 않고 끊는다."""
+    mode = str((config or {}).get("mode") or "")
+    if mode in {"headless", "unavailable", ""}:
+        detail = (config or {}).get("error") or (config or {}).get("fallback_reason") or ""
+        raise PcAgentUnavailable(
+            f"PC Agent 필요 작업인데 사용할 수 없다 (mode={mode or 'none'}"
+            + (f", {detail}" if detail else "")
+            + "). 헤드리스로 내려가면 봇 차단을 통과하지 못해 로그인 화면만 수집된다."
+        )
