@@ -49,7 +49,7 @@ _SCOPE_PATH_RE = re.compile(
     r"[A-Za-z0-9_.-]+\.(?:py|pyi|js|jsx|ts|tsx|sql|md|json|ya?ml|toml|sh|html|css))"
 )
 _DELETED_SYMBOL_RE = re.compile(
-    r"^-\s*((?:async\s+def|def|class)\s+[A-Za-z_][A-Za-z0-9_]*|@router\.[A-Za-z_]+)",
+    r"^-[ \t]*((?:async[ \t]+def|def|class)[ \t]+[A-Za-z_][A-Za-z0-9_]*|@router\.[A-Za-z_]+)",
     re.MULTILINE,
 )
 

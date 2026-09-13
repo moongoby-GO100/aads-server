@@ -326,3 +326,69 @@ def test_private_signature_change_still_requires_semantic_review():
         assert verdict.flag_category == "CODE_QUALITY"
 
     asyncio.run(run())
+
+
+def _file_diff(body: str) -> str:
+    return (
+        "diff --git a/scripts/go100/recalculate_confidence.py"
+        " b/scripts/go100/recalculate_confidence.py\n"
+        "index 1111111..2222222 100644\n"
+        "--- a/scripts/go100/recalculate_confidence.py\n"
+        "+++ b/scripts/go100/recalculate_confidence.py\n"
+        "@@ -1,10 +1,6 @@\n"
+        f"{body}"
+    )
+
+
+def test_deleted_constant_block_does_not_flag_next_context_declaration():
+    """상수 블록과 빈 줄만 삭제해도 다음 context 선언이 삭제로 오인되면 안 된다."""
+    reviewer = _load_reviewer()
+    diff = _file_diff(
+        "-DB_CONFIG = {\n"
+        '-    "host": "localhost",\n'
+        "-}\n"
+        "-\n"
+        " def get_indicators_from_params(params):\n"
+        "     return params\n"
+    )
+
+    assert reviewer._removed_preservation_symbols(diff) == []
+
+
+def test_deleted_constant_block_does_not_trigger_preservation_hard_gate():
+    reviewer = _load_reviewer()
+    diff = _file_diff(
+        "-DB_CONFIG = {\n"
+        '-    "host": "localhost",\n'
+        "-}\n"
+        "-\n"
+        " def get_indicators_from_params(params):\n"
+        "+    params = dict(params)\n"
+        "+    params.setdefault('window', 20)\n"
+        "+    params.setdefault('mode', 'fast')\n"
+        "+    params.setdefault('source', 'db')\n"
+        "+    params.setdefault('debug', False)\n"
+        "+    params.setdefault('retry', 3)\n"
+        "+    params.setdefault('timeout', 10)\n"
+        "+    params.setdefault('limit', 100)\n"
+        "+    params.setdefault('offset', 0)\n"
+        "     return params\n"
+    )
+
+    verdict = reviewer._precheck_preservation_gate(diff, "", None)
+
+    assert verdict is None
+
+
+@pytest.mark.parametrize("deleted_line, expected", [
+    ("-def get_indicators_from_params(params):\n", "def get_indicators_from_params"),
+    ("-class ConfidenceRecalculator:\n", "class ConfidenceRecalculator"),
+    ("-    async def run_batch(self):\n", "async def run_batch"),
+    ('-@router.get("/indicators")\n', "@router.get"),
+])
+def test_real_symbol_deletions_are_still_detected(deleted_line, expected):
+    reviewer = _load_reviewer()
+
+    symbols = reviewer._removed_preservation_symbols(_file_diff(deleted_line))
+
+    assert symbols == [expected]
