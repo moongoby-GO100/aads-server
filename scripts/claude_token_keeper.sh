@@ -115,6 +115,16 @@ for slot in 1 2; do
         log "slot${slot}: 만료시각 판독 실패 — 건너뜀"; continue
     fi
     if [ "$left" -gt "$RENEW_BEFORE_MIN" ]; then
+        # 갱신할 필요가 없어도 DB 는 맞춰 둔다.
+        #
+        # 러너는 llm_api_keys 의 만료 시각과 토큰 값을 보고 슬롯을 고른다.
+        # 갱신 경로에서만 동기화하면, DB 가 한 번 어긋난 뒤 토큰이 넉넉해지는
+        # 순간부터 영영 고쳐지지 않는다. 2026-09-13 실측 — 파일은 382분 남아
+        # 있는데 DB 는 8시간 전 만료 시각을 들고 있어 러너가 쓸 수 있는 슬롯을
+        # 찾지 못했다. 10분마다 도는 작업이라 비용은 무시할 수 있다.
+        key="ANTHROPIC_AUTH_TOKEN"
+        [ "$slot" = "2" ] && key="ANTHROPIC_AUTH_TOKEN_2"
+        resync_to_db "$slot" "$key" "$cred" >/dev/null 2>&1 || true
         continue
     fi
 
@@ -124,6 +134,18 @@ for slot in 1 2; do
     HOME="$home" timeout 120 "$CLAUDE_BIN" -p "ping" --output-format json >/dev/null 2>&1 || true
 
     after="$(remaining_min "$cred")"
+    # -1 은 "만료됨"이 아니라 파일을 읽지 못했다는 신호다(remaining_min 의
+    # 예외 경로). 릴레이가 자격증명 파일을 쓰는 중이면 깨진 JSON 을 읽는다.
+    # 2026-09-13 15:50 실측: slot2 가 `0분 → -1분` 으로 기록돼 "refreshToken
+    # 만료, 재로그인 필요"로 단정됐고 DB 동기화를 건너뛰었다. 실제로는 파일이
+    # 멀쩡했고(382분 남음) DB 만 8시간 낡은 채로 남아, 러너가 만료된 토큰을
+    # 집어 작업을 시작하지 못했다.
+    # 한 번 더 읽어보고 판단한다.
+    if [[ "$after" == "-1" ]]; then
+        sleep 3
+        after="$(remaining_min "$cred")"
+        [[ "$after" == "-1" ]] || log "  (자격증명 파일 재읽기 성공: ${after}분)"
+    fi
     if [[ "$after" =~ ^-?[0-9]+$ ]] && [ "$after" -gt "$left" ]; then
         log "  갱신됨: ${left}분 → ${after}분"
         renewed=$((renewed + 1))
@@ -136,6 +158,15 @@ for slot in 1 2; do
         resync_to_db "$slot" "$key" "$cred" >/dev/null 2>&1 || true
         continue
     else
+        # 갱신에 실패해도 파일이 아직 유효하면 DB 는 맞춰 둔다. 러너는 DB 의
+        # 만료 시각과 토큰 값을 보고 슬롯을 고르므로, 여기서 건너뛰면 멀쩡한
+        # 토큰을 두고도 "쓸 수 있는 슬롯 없음"이 된다.
+        if [[ "$after" =~ ^[0-9]+$ ]] && [ "$after" -gt 0 ]; then
+            key="ANTHROPIC_AUTH_TOKEN"
+            [ "$slot" = "2" ] && key="ANTHROPIC_AUTH_TOKEN_2"
+            resync_to_db "$slot" "$key" "$cred" >/dev/null 2>&1 \
+                && log "  갱신은 실패했지만 파일이 유효해 DB 는 동기화함 (${after}분)"
+        fi
         log "  ⚠️ 갱신 실패 (${left}분 → ${after}분) — refreshToken 만료로 보인다. 재로그인 필요"
         ALERT="/root/aads/aads-server/scripts/send_disk_alert.sh"
         [ -x "$ALERT" ] && "$ALERT" "Claude slot${slot} 토큰 갱신 실패 — 재로그인 필요" >/dev/null 2>&1 || true
