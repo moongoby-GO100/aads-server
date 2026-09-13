@@ -256,6 +256,11 @@ async def _get_streaming_status_revisions(session_id: UUID, conn) -> dict:
 
 async def _finalize_streaming_status(session_id: UUID, result: Optional[dict], conn=None) -> dict:
     payload = dict(result or {"is_streaming": False})
+    # Clients read the protocol advertisement from the status they already poll;
+    # gates are environment-only reads, so this adds no I/O to the hot path.
+    from app.services.chat_protocol import advertised_chat_capabilities
+
+    payload.setdefault("capabilities", advertised_chat_capabilities())
     if not payload.get("stream_status"):
         if payload.get("just_completed"):
             status_name = "completed" if payload.get("final_message_ready") else "finalizing"
