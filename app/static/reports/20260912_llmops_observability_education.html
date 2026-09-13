@@ -314,26 +314,29 @@ Trace (root span): "사용자 질문 처리" — 전체 4.1초
   <p>이 구조의 핵심은, 전체 4.1초 중 <strong>어느 스팬이 병목인지</strong>를 한눈에 알 수 있다는 점입니다. 스팬 트리가 없으면 "4.1초 걸렸다"는 사실만 남고, 그 안에서 무슨 일이 있었는지는 로그를 뒤져야 합니다.</p>
 
   <h3>OpenTelemetry GenAI 시맨틱 컨벤션</h3>
-  <p><strong>OpenTelemetry(OTel)</strong>는 관측 데이터(트레이스·메트릭·로그)의 업계 표준 규격입니다. 특정 벤더에 종속되지 않고 수집기를 한 번 계측해두면 LangSmith·Langfuse·Datadog 등 어느 백엔드로도 데이터를 보낼 수 있는 것이 핵심 장점입니다. 여기에 생성형 AI 전용 속성 이름을 표준화한 것이 <strong>GenAI 시맨틱 컨벤션</strong>입니다.</p>
+  <p><strong><a href="https://opentelemetry.io/" target="_blank" rel="noopener">OpenTelemetry(OTel)</a></strong>는 관측 데이터(트레이스·메트릭·로그)의 업계 표준 규격입니다. 특정 벤더에 종속되지 않고 수집기를 한 번 계측해두면 LangSmith·Langfuse·Datadog 등 어느 백엔드로도 데이터를 보낼 수 있는 것이 핵심 장점입니다. 여기에 생성형 AI 전용 속성 이름을 표준화한 것이 <strong><a href="https://github.com/open-telemetry/semantic-conventions-genai" target="_blank" rel="noopener">GenAI 시맨틱 컨벤션</a></strong>입니다.</p>
+
+  <div class="alert alert-danger"><strong>⚠️ 2026-09-13 검수: 컨벤션 문서가 이사했고, 속성 하나가 대체되었습니다<span class="tag-verified">2026-09-13 KST 원문 확인</span></strong>초판이 재확인처로 안내한 <code>opentelemetry.io/docs/specs/semconv/gen-ai</code>는 현재 <u>"GenAI 시맨틱 컨벤션은 <a href="https://github.com/open-telemetry/semantic-conventions-genai" target="_blank" rel="noopener">별도 저장소</a>로 이전되었습니다"라는 안내만 남은 페이지</u>입니다. 실제 규격은 <strong>open-telemetry/semantic-conventions-genai</strong> 저장소에 있습니다. 또한 <strong><code>gen_ai.system</code>은 <code>gen_ai.provider.name</code>으로 대체</strong>되었습니다 — 아래 표를 교정했습니다.</div>
 
   <div class="table-wrap">
     <table>
-      <thead><tr><th>속성명</th><th>의미</th><th>예시 값</th></tr></thead>
+      <thead><tr><th>속성명</th><th>의미</th><th>예시 값</th><th>안정성 등급</th></tr></thead>
       <tbody>
-        <tr><td><code>gen_ai.system</code></td><td>모델 공급사</td><td>anthropic, openai</td></tr>
-        <tr><td><code>gen_ai.request.model</code></td><td>요청한 모델명</td><td>claude-opus-5</td></tr>
-        <tr><td><code>gen_ai.operation.name</code></td><td>호출 종류</td><td>chat, embeddings, execute_tool</td></tr>
-        <tr><td><code>gen_ai.usage.input_tokens</code></td><td>입력 토큰 수</td><td>1,842</td></tr>
-        <tr><td><code>gen_ai.usage.output_tokens</code></td><td>출력 토큰 수</td><td>512</td></tr>
-        <tr><td><code>gen_ai.response.finish_reasons</code></td><td>종료 사유</td><td>stop, tool_calls, length</td></tr>
-        <tr><td><code>error.type</code></td><td>실패 유형 (표준 에러 네임스페이스 공용)</td><td>timeout, rate_limit_exceeded</td></tr>
+        <tr><td><code class="price">gen_ai.provider.name</code><br><small style="color:var(--text3)">구 <code>gen_ai.system</code> — <strong>대체됨</strong></small></td><td>모델 공급사 <strong>(필수)</strong></td><td>anthropic, openai</td><td class="price">Development</td></tr>
+        <tr><td><code>gen_ai.request.model</code></td><td>요청한 모델명</td><td>claude-opus-5</td><td class="price">Development</td></tr>
+        <tr><td><code>gen_ai.operation.name</code></td><td>호출 종류</td><td>chat, embeddings, execute_tool</td><td class="price">Development</td></tr>
+        <tr><td><code>gen_ai.usage.input_tokens</code></td><td>입력 토큰 수</td><td>1,842</td><td class="price">Development</td></tr>
+        <tr><td><code>gen_ai.usage.output_tokens</code></td><td>출력 토큰 수</td><td>512</td><td class="price">Development</td></tr>
+        <tr><td><code>gen_ai.response.finish_reasons</code></td><td>종료 사유</td><td>stop, tool_calls, length</td><td class="price">Development</td></tr>
+        <tr><td><code>error.type</code></td><td>실패 유형 (표준 에러 네임스페이스 공용)</td><td>timeout, rate_limit_exceeded</td><td class="recommend"><strong>Stable</strong></td></tr>
       </tbody>
     </table>
   </div>
 
   <div class="alert alert-info">
-    <strong>💡 표준을 써야 하는 이유</strong>
-    GenAI 시맨틱 컨벤션은 OpenTelemetry 프로젝트 내에서 지속적으로 개정되는 진행형(evolving) 표준입니다. 세부 속성 이름은 버전에 따라 바뀔 수 있으므로, 도입 시점의 공식 문서(opentelemetry.io/docs/specs/semconv/gen-ai)를 반드시 재확인해야 합니다. 다만 "표준 속성 이름으로 계측해두면 도구를 갈아타도 재계측이 필요 없다"는 원칙 자체는 유지됩니다.
+    <strong>💡 표준을 써야 하는 이유 — 다만 아직 "Development" 단계입니다<span class="tag-verified">2026-09-13 KST 원문 확인</span></strong>
+    <a href="https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md" target="_blank" rel="noopener">GenAI 스팬 규격 문서</a>의 상태 배너는 <strong>Status: Development</strong>입니다. 즉 <u>아직 확정되지 않은 개발 단계 규격</u>이며, 위 표의 <code>gen_ai.*</code> 속성은 전부 Development 등급입니다(<code>error.type</code>·<code>server.*</code>만 Stable). 실제로 이번 검수에서 <code>gen_ai.system</code> → <code>gen_ai.provider.name</code> 대체가 확인되었습니다.
+    <br><br><strong>그래서 실무 결론은 두 가지입니다.</strong> ① "표준 속성 이름으로 계측해두면 도구를 갈아타도 재계측이 필요 없다"는 원칙 자체는 여전히 유효합니다. ② 다만 <u>속성 이름을 코드 곳곳에 하드코딩하지 말고 상수 한 곳에 모아두십시오</u> — 이번처럼 이름이 바뀌면 한 줄만 고치면 됩니다. 도입 시점에는 반드시 <a href="https://github.com/open-telemetry/semantic-conventions-genai" target="_blank" rel="noopener">현재 저장소</a>를 다시 확인하십시오.
   </div>
 
   <h3>프롬프트/응답 원문을 스팬에 넣을 것인가</h3>
@@ -958,19 +961,19 @@ Trace (root span): "사용자 질문 처리" — 전체 4.1초
 
   <div class="table-wrap">
     <table>
-      <thead><tr><th>구분</th><th>출처</th><th>용도</th></tr></thead>
+      <thead><tr><th>구분</th><th>출처 (클릭 가능)</th><th>출처 등급</th><th>용도 · 주의</th><th>접속 확인<br>(2026-09-13 KST)</th></tr></thead>
       <tbody>
-        <tr><td>표준 규격</td><td>OpenTelemetry — opentelemetry.io/docs/specs/semconv/gen-ai</td><td>GenAI 시맨틱 컨벤션 공식 문서 (버전에 따라 속성명 변경 가능, 도입 시 재확인 필수)</td></tr>
-        <tr><td>관측 도구</td><td>Langfuse — langfuse.com</td><td>오픈소스 LLM 옵저버빌리티, 셀프호스팅 가이드</td></tr>
-        <tr><td>관측 도구</td><td>Arize Phoenix — arize.com/phoenix</td><td>오픈소스, OpenTelemetry 네이티브, RAG/임베딩 평가</td></tr>
-        <tr><td>관측 도구</td><td>Helicone — helicone.ai</td><td>프록시 기반 즉시 계측, 오픈소스</td></tr>
-        <tr><td>관측 도구</td><td>LangSmith — smith.langchain.com</td><td>LangChain/LangGraph 통합 관측·평가</td></tr>
-        <tr><td>관측 도구</td><td>W&amp;B Weave — wandb.ai/site/weave</td><td>Weights & Biases 생성형 AI 트레이싱</td></tr>
-        <tr><td>내부 근거</td><td>서버68 <code>app/services/circuit_breaker.py</code></td><td>AADS 서킷브레이커 구현 (11장 근거)</td></tr>
-        <tr><td>내부 근거</td><td>서버68 <code>app/api/watchdog.py</code></td><td>error_log UPSERT·자동복구 로직 (11장 근거)</td></tr>
-        <tr><td>내부 근거</td><td>서버68 <code>app/core/anthropic_client.py</code></td><td>중앙 LLM 폴백·재시도 정책 (11장 근거)</td></tr>
-        <tr><td>내부 근거</td><td>서버68 <code>deploy.sh</code></td><td>블루그린 무중단 배포 게이트웨이 (11장 근거)</td></tr>
-        <tr><td>내부 근거</td><td>운영 DB — <code>error_log</code>, <code>circuit_breaker_state</code>, <code>monitored_services</code></td><td>2026-09-12 직접 조회 실측치 (11·12장 근거)</td></tr>
+        <tr><td>표준 규격</td><td><a href="https://github.com/open-telemetry/semantic-conventions-genai" target="_blank" rel="noopener">OpenTelemetry GenAI 시맨틱 컨벤션 저장소</a><br><small style="color:var(--text3)">구 주소 <a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/" target="_blank" rel="noopener">opentelemetry.io/docs/specs/semconv/gen-ai</a>는 <strong>이전 안내 페이지</strong>만 남음</small></td><td><span class="tag-v tag-fact">1차</span>표준·제품 공식</td><td>3장 스팬 속성 근거. <strong>상태: Development(미확정)</strong> — 속성명이 실제로 바뀐 전례가 있으므로(<code>gen_ai.system</code> → <code>gen_ai.provider.name</code>) 도입 시 재확인 필수</td><td class="http-ok">HTTP 200</td></tr>
+        <tr><td>관측 도구</td><td><a href="https://langfuse.com" target="_blank" rel="noopener">Langfuse</a></td><td><span class="tag-v tag-fact">1차</span>표준·제품 공식</td><td>오픈소스 LLM 옵저버빌리티, 셀프호스팅 가이드</td><td class="http-ok">HTTP 200</td></tr>
+        <tr><td>관측 도구</td><td><a href="https://arize.com/phoenix" target="_blank" rel="noopener">Arize Phoenix</a></td><td><span class="tag-v tag-fact">1차</span>표준·제품 공식</td><td>오픈소스, OpenTelemetry 네이티브, RAG/임베딩 평가</td><td class="http-ok">HTTP 200</td></tr>
+        <tr><td>관측 도구</td><td><a href="https://www.helicone.ai" target="_blank" rel="noopener">Helicone</a></td><td><span class="tag-v tag-fact">1차</span>표준·제품 공식</td><td>프록시 기반 즉시 계측, 오픈소스</td><td class="http-ok">HTTP 200</td></tr>
+        <tr><td>관측 도구</td><td><a href="https://smith.langchain.com" target="_blank" rel="noopener">LangSmith</a></td><td><span class="tag-v tag-fact">1차</span>표준·제품 공식</td><td>LangChain/LangGraph 통합 관측·평가</td><td class="http-ok">HTTP 200</td></tr>
+        <tr><td>관측 도구</td><td><a href="https://wandb.ai/site/weave" target="_blank" rel="noopener">W&amp;B Weave</a></td><td><span class="tag-v tag-fact">1차</span>표준·제품 공식</td><td>Weights &amp; Biases 생성형 AI 트레이싱</td><td class="http-ok">HTTP 200</td></tr>
+        <tr><td>내부 근거</td><td>서버68 <code>app/services/circuit_breaker.py</code></td><td><span class="tag-v tag-unver">내부</span>사내 코드·DB</td><td>AADS 서킷브레이커 구현 (11장 근거) — <strong>외부 공개 출처로 대조 불가</strong></td><td style="color:var(--text3)">해당 없음</td></tr>
+        <tr><td>내부 근거</td><td>서버68 <code>app/api/watchdog.py</code></td><td><span class="tag-v tag-unver">내부</span>사내 코드·DB</td><td>error_log UPSERT·자동복구 로직 (11장 근거) — <strong>외부 공개 출처로 대조 불가</strong></td><td style="color:var(--text3)">해당 없음</td></tr>
+        <tr><td>내부 근거</td><td>서버68 <code>app/core/anthropic_client.py</code></td><td><span class="tag-v tag-unver">내부</span>사내 코드·DB</td><td>중앙 LLM 폴백·재시도 정책 (11장 근거) — <strong>외부 공개 출처로 대조 불가</strong></td><td style="color:var(--text3)">해당 없음</td></tr>
+        <tr><td>내부 근거</td><td>서버68 <code>deploy.sh</code></td><td><span class="tag-v tag-unver">내부</span>사내 코드·DB</td><td>블루그린 무중단 배포 게이트웨이 (11장 근거) — <strong>외부 공개 출처로 대조 불가</strong></td><td style="color:var(--text3)">해당 없음</td></tr>
+        <tr><td>내부 근거</td><td>운영 DB — <code>error_log</code>, <code>circuit_breaker_state</code>, <code>monitored_services</code></td><td><span class="tag-v tag-unver">내부</span>사내 코드·DB</td><td>2026-09-12 직접 조회 실측치 (11·12장 근거) — <strong>외부 공개 출처로 대조 불가</strong></td><td style="color:var(--text3)">해당 없음</td></tr>
       </tbody>
     </table>
   </div>
@@ -982,6 +985,49 @@ Trace (root span): "사용자 질문 처리" — 전체 4.1초
     <li><strong>1개월 이내</strong>: 운영 문서(CLAUDE.md 등)와 anthropic_client.py 등 핵심 코드 주석 간 폴백 정책 설명을 대조해 최신 상태로 일치시키는 점검 1회 수행</li>
     <li><strong>분기 단위</strong>: 14장의 로드맵 단계 기준으로 현재 위치를 재평가하고 다음 목표 단계를 팀과 합의</li>
   </ol>
+</div>
+
+<div class="section" id="source-audit-20260913">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 부록. 출처 검수 이력 (2026-09-13 KST)</h2>
+  <p>본 문서는 2026-09-12 초판 작성 이후, <strong>2026-09-13 KST</strong>에 별도 출처 검수를 거쳤습니다. 초판에는
+  <strong>클릭 가능한 출처 링크가 0건</strong>이었습니다.</p>
+
+  <h3>이번 검수에서 실제로 바뀐 것</h3>
+  <ul>
+    <li><strong>교정(속성명 대체) — 가장 실무적인 수정</strong> — 3장 속성표의 <code>gen_ai.system</code>은
+      <strong><code>gen_ai.provider.name</code>으로 대체</strong>되었습니다. 초판 표를 그대로 보고 계측하면
+      <u>더 이상 규격에 없는 속성명으로 스팬을 기록</u>하게 됩니다. 표를 교정하고 구 이름을 함께 병기했습니다.</li>
+    <li><strong>교정(문서 이전)</strong> — 초판이 "도입 시 반드시 재확인하라"며 안내한 주소
+      <code>opentelemetry.io/docs/specs/semconv/gen-ai</code>는 현재 <u>"별도 저장소로 이전되었습니다"라는 안내만 남은
+      페이지</u>입니다. 실제 규격은 <a href="https://github.com/open-telemetry/semantic-conventions-genai" target="_blank" rel="noopener">
+      open-telemetry/semantic-conventions-genai</a> 저장소에 있습니다 — <strong>재확인 경로 자체가 끊겨 있던 셈</strong>이라
+      본문·참고자료의 주소를 모두 교체했습니다.</li>
+    <li><strong>보강(안정성 등급)</strong> — GenAI 스팬 규격의 상태 배너가 <strong>Status: Development</strong>(미확정)임을
+      명시하고, 속성표에 등급 열을 추가했습니다. <code>gen_ai.*</code>는 전부 Development이고
+      <code>error.type</code>·<code>server.*</code>만 Stable입니다. 초판은 "진행형 표준"이라고만 서술해
+      <u>어느 속성이 얼마나 불안정한지</u>를 구분하지 못했습니다.</li>
+    <li><strong>보강(실무 지침)</strong> — 위 사실에서 따라 나오는 권고를 추가했습니다:
+      <strong>속성 이름을 코드 곳곳에 하드코딩하지 말고 상수 한 곳에 모아 둘 것</strong>. 이번처럼 이름이 바뀌어도
+      한 줄만 고치면 됩니다.</li>
+    <li><strong>링크화</strong> — 관측 도구 5종(Langfuse·Phoenix·Helicone·LangSmith·W&amp;B Weave)을 공식 사이트 링크로
+      전환하고 접속을 확인했습니다.</li>
+  </ul>
+
+  <h3>이번 검수에서도 해소하지 못한 것</h3>
+  <ul>
+    <li><strong>범위 밖</strong> — 11·12장의 AADS 관측 체계 전수분석(<code>error_log</code>·
+      <code>circuit_breaker_state</code>·<code>monitored_services</code> 조회, claude_api_fallback pending 4,149건,
+      tool_metrics 0건 반환 등)은 사내 코드·DB 실측으로 <u>외부 공개 출처로 대조할 수 없습니다.</u>
+      초판 서술과 "다음 단계"의 원인 확인 과제는 그대로 유효합니다.</li>
+    <li><strong>미해소</strong> — 6장 관측 도구 비교의 <u>기능 대조·가격</u>은 5개 제품의 공식 사이트 접속만 확인했을 뿐,
+      개별 기능 유무와 요금제를 한 줄씩 재검증하지는 않았습니다. 도구 선정 시 각 공식 사이트에서 직접 확인하십시오.</li>
+    <li><strong>성격상 검증 대상 아님</strong> — 12장 관측 공백 개선안, 13장 ROI 추정, 14장 로드맵·팀 구성은 본 문서의
+      <span class="tag-v tag-plan">제안</span>이며 외부 출처로 참·거짓을 가릴 대상이 아닙니다.</li>
+  </ul>
+
+  <p style="font-size:.82rem;color:var(--text3)">※ "HTTP 200"은 2026-09-13 KST에 해당 URL이 응답했다는 뜻이며, 그 페이지에
+  실린 모든 내용을 본 문서가 검증했다는 뜻이 아닙니다. <strong>GenAI 시맨틱 컨벤션은 Development 단계라 속성명이 또 바뀔 수
+  있습니다</strong> — 계측 착수 전 저장소를 다시 확인하십시오.</p>
 </div>
 
 <!-- ===== FOOTER ===== -->

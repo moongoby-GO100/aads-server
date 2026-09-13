@@ -583,6 +583,7 @@ border-radius:12px;padding:20px 24px;margin:0 0 40px}
     </table>
   </div>
   <p style="font-size:.82rem;color:var(--text3)">* 상기 가격은 자매 문서 「LLM 서버 구축 종합 교육자료」(2026-09-12, 같은 시리즈) 3-4절과 동일 출처 기준으로 통일했습니다.</p>
+  <div class="alert alert-warn"><strong>⚠️ GPU 임대 단가는 "가격표"가 아니라 "시세"입니다<span class="tag-v tag-unver">변동성 높음</span></strong>Vast.ai·RunPod 같은 마켓플레이스형 서비스의 시간당 단가는 <u>공급자·지역·시점에 따라 실시간으로 변동</u>하며, 같은 A100 80GB라도 조회 때마다 값이 다를 수 있습니다. 2026-09-13 검수에서 <a href="https://vast.ai/pricing" target="_blank" rel="noopener">Vast.ai</a>·<a href="https://lambda.ai/service/gpu-cloud" target="_blank" rel="noopener">Lambda</a>·<a href="https://www.runpod.io/pricing" target="_blank" rel="noopener">RunPod</a> 공식 가격 페이지의 <strong>접속 가능 여부만 확인</strong>했고, <strong>본 표의 개별 단가를 현재 시세와 대조해 확정하지는 않았습니다</strong>. 예산 승인 직전에 담당자가 위 링크에서 직접 재확인하게 하십시오.</div>
 
   <div class="checkpoint">
     <div class="cp-title">✅ CEO 체크포인트</div>
@@ -991,30 +992,32 @@ num_epochs: 3
 <div class="section" id="ch16">
   <h2 class="section-title section-anchor"><span class="icon">📖</span> 16. 참고자료 · 다음 단계</h2>
 
-  <h3>핵심 논문 (arXiv, 2026-09-12 원문 확인)</h3>
+  <h3>핵심 논문 (arXiv) <span class="tag-verified">2026-09-13 KST 전 8건 접속 확인 HTTP 200</span></h3>
+  <p style="font-size:.87rem;color:var(--text2)">초판은 arXiv 주소를 <u>평문으로만</u> 적어 두어 독자가 직접 대조할 수 없었습니다. 2026-09-13 검수에서 8건 전부를 클릭 가능한 링크로 전환하고 접속을 확인했습니다.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>논문</th><th>저자/연도</th><th>핵심 내용</th><th>링크</th></tr></thead>
       <tbody>
-        <tr><td><strong>LoRA</strong></td><td>Hu et al., 2021</td><td>GPT-3 175B 기준 학습 파라미터 10,000배, GPU 메모리 3배 감소</td><td>arxiv.org/abs/2106.09685</td></tr>
-        <tr><td><strong>QLoRA</strong></td><td>Dettmers et al., 2023</td><td>65B 모델을 단일 48GB GPU에서 파인튜닝, Guanaco 24시간 학습</td><td>arxiv.org/abs/2305.14314</td></tr>
-        <tr><td><strong>DoRA</strong></td><td>Liu et al., 2024 (ICML 2024 Oral)</td><td>가중치 분해로 LoRA 대비 일관된 성능 향상, 추가 추론비용 없음</td><td>arxiv.org/abs/2402.09353</td></tr>
-        <tr><td><strong>DPO</strong></td><td>Rafailov et al., 2023</td><td>보상모델·RL 없이 선호 데이터로 직접 정렬 최적화</td><td>arxiv.org/abs/2305.18290</td></tr>
-        <tr><td><strong>GRPO (DeepSeekMath)</strong></td><td>Shao et al., 2024</td><td>크리틱 모델 없는 그룹 상대 정책 최적화, DeepSeek-R1 기반 기법</td><td>arxiv.org/abs/2402.03300</td></tr>
-        <tr><td><strong>InstructGPT (RLHF)</strong></td><td>Ouyang et al., 2022</td><td>인간 피드백 기반 강화학습으로 지시 따르기 정렬</td><td>arxiv.org/abs/2203.02155</td></tr>
-        <tr><td><strong>ZeRO</strong></td><td>Rajbhandari et al., 2019</td><td>Full FT 메모리 요구량 분석(파라미터+그래디언트+옵티마이저 상태)</td><td>arxiv.org/abs/1910.02054</td></tr>
-        <tr><td><strong>카타스트로픽 포게팅 실증</strong></td><td>Luo et al., 2023</td><td>LLM 연속 파인튜닝 중 범용 능력 손실 실증 연구</td><td>arxiv.org/abs/2308.08747</td></tr>
+        <tr><td><strong>LoRA</strong></td><td>Hu et al., 2021</td><td>GPT-3 175B 기준 학습 파라미터 10,000배, GPU 메모리 3배 감소</td><td><a href="https://arxiv.org/abs/2106.09685" target="_blank" rel="noopener">arXiv:2106.09685</a></td></tr>
+        <tr><td><strong>QLoRA</strong></td><td>Dettmers et al., 2023</td><td>65B 모델을 단일 48GB GPU에서 파인튜닝, Guanaco 24시간 학습</td><td><a href="https://arxiv.org/abs/2305.14314" target="_blank" rel="noopener">arXiv:2305.14314</a></td></tr>
+        <tr><td><strong>DoRA</strong></td><td>Liu et al., 2024 (ICML 2024 Oral)</td><td>가중치 분해로 LoRA 대비 일관된 성능 향상, 추가 추론비용 없음</td><td><a href="https://arxiv.org/abs/2402.09353" target="_blank" rel="noopener">arXiv:2402.09353</a></td></tr>
+        <tr><td><strong>DPO</strong></td><td>Rafailov et al., 2023</td><td>보상모델·RL 없이 선호 데이터로 직접 정렬 최적화</td><td><a href="https://arxiv.org/abs/2305.18290" target="_blank" rel="noopener">arXiv:2305.18290</a></td></tr>
+        <tr><td><strong>GRPO (DeepSeekMath)</strong></td><td>Shao et al., 2024</td><td>크리틱 모델 없는 그룹 상대 정책 최적화, DeepSeek-R1 기반 기법</td><td><a href="https://arxiv.org/abs/2402.03300" target="_blank" rel="noopener">arXiv:2402.03300</a></td></tr>
+        <tr><td><strong>InstructGPT (RLHF)</strong></td><td>Ouyang et al., 2022</td><td>인간 피드백 기반 강화학습으로 지시 따르기 정렬</td><td><a href="https://arxiv.org/abs/2203.02155" target="_blank" rel="noopener">arXiv:2203.02155</a></td></tr>
+        <tr><td><strong>ZeRO</strong></td><td>Rajbhandari et al., 2019</td><td>Full FT 메모리 요구량 분석(파라미터+그래디언트+옵티마이저 상태)</td><td><a href="https://arxiv.org/abs/1910.02054" target="_blank" rel="noopener">arXiv:1910.02054</a></td></tr>
+        <tr><td><strong>카타스트로픽 포게팅 실증</strong></td><td>Luo et al., 2023</td><td>LLM 연속 파인튜닝 중 범용 능력 손실 실증 연구</td><td><a href="https://arxiv.org/abs/2308.08747" target="_blank" rel="noopener">arXiv:2308.08747</a></td></tr>
       </tbody>
     </table>
   </div>
 
-  <h3>공식 문서 (2026-09-12 직접 확인)</h3>
+  <h3>공식 문서 <span class="tag-verified">2026-09-13 KST 재확인</span></h3>
   <ul>
-    <li><strong>OpenAI 파인튜닝 가이드</strong> — developers.openai.com/api/docs/guides/supervised-fine-tuning — SFT/Vision FT/DPO/RFT 전체 가이드 [OpenAI 공식, 2026-09]</li>
-    <li><strong>Claude Glossary(파인튜닝 항목)</strong> — docs.claude.com/en/docs/about-claude/glossary — "Claude API는 현재 파인튜닝 미제공" 공식 명시 [Anthropic 공식, 2026-09 확인]</li>
-    <li><strong>Gemini API 파인튜닝 안내</strong> — ai.google.dev/gemini-api/docs/model-tuning — Gemini API/AI Studio 파인튜닝 미지원, Gemini Enterprise Agent Platform으로 이관 [Google 공식, 2026-04-28 갱신]</li>
-    <li><strong>Hugging Face PEFT</strong> — huggingface.co/docs/peft — LoRA/QLoRA/DoRA 구현 표준 라이브러리 문서</li>
-    <li><strong>Hugging Face TRL</strong> — huggingface.co/docs/trl — SFT/DPO/GRPO 트레이너 문서</li>
+    <li><strong><a href="https://developers.openai.com/api/docs/guides/supervised-fine-tuning" target="_blank" rel="noopener">OpenAI 파인튜닝 가이드</a></strong> — SFT/Vision FT/DPO/RFT 전체 가이드 <span class="tag-v tag-fact">1차</span>OpenAI 공식 · <span class="http-ok">HTTP 200</span></li>
+    <li><strong><a href="https://platform.claude.com/docs/en/about-claude/glossary" target="_blank" rel="noopener">Claude Glossary(파인튜닝 항목)</a></strong> — 원문은 <em>"The Claude API does not currently offer fine-tuning, <strong>but ask your Anthropic contact if you are interested in exploring this option</strong>"</em>입니다. 즉 <u>"제공하지 않는다"로 끝나는 것이 아니라 별도 문의 경로를 함께 안내</u>하고 있으므로, 파인튜닝이 꼭 필요한 과제라면 영업 채널 확인이 다음 단계입니다. <span class="tag-v tag-fact">1차</span>Anthropic 공식 · <span class="http-ok">HTTP 200</span><br><span style="font-size:.8rem;color:var(--text3)">초판이 적은 <code>docs.claude.com</code> 주소는 현재 <code>platform.claude.com</code>으로 이전됨</span></li>
+    <li><strong><a href="https://ai.google.dev/gemini-api/docs/model-tuning" target="_blank" rel="noopener">Gemini API 파인튜닝 안내</a></strong> — Gemini API/AI Studio 파인튜닝 미지원, Gemini Enterprise Agent Platform으로 이관 <span class="tag-v tag-fact">1차</span>Google 공식 · <span class="http-ok">HTTP 200</span></li>
+    <li><strong><a href="https://huggingface.co/docs/peft" target="_blank" rel="noopener">Hugging Face PEFT</a></strong> — LoRA/QLoRA/DoRA 구현 표준 라이브러리 문서 <span class="tag-v tag-fact">1차</span>라이브러리 공식 · <span class="http-ok">HTTP 200</span></li>
+    <li><strong><a href="https://huggingface.co/docs/trl" target="_blank" rel="noopener">Hugging Face TRL</a></strong> — SFT/DPO/GRPO 트레이너 문서 <span class="tag-v tag-fact">1차</span>라이브러리 공식 · <span class="http-ok">HTTP 200</span></li>
+    <li><strong>GPU 임대 단가(8·9장 근거)</strong> — <a href="https://vast.ai/pricing" target="_blank" rel="noopener">Vast.ai</a> · <a href="https://lambda.ai/service/gpu-cloud" target="_blank" rel="noopener">Lambda</a> · <a href="https://www.runpod.io/pricing" target="_blank" rel="noopener">RunPod</a> <span class="tag-v tag-unver">변동성 높음</span>GPU 임대가는 <u>수요에 따라 실시간으로 바뀌는 마켓플레이스 가격</u>입니다. 세 곳 모두 <span class="http-ok">HTTP 200</span>이나, <strong>단가 자체는 조회 시점마다 달라지므로 견적 직전에 재확인</strong>해야 합니다</li>
   </ul>
 
   <h3>자매 문서</h3>
@@ -1032,6 +1035,52 @@ num_epochs: 3
       <li>파일럿(Phase 2) 예산 $500~2,000(약 69~276만원) 규모로 소규모 승인 요청</li>
     </ol>
   </div>
+</div>
+
+<div class="section" id="source-audit-20260913">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 부록. 출처 검수 이력 (2026-09-13 KST)</h2>
+  <p>본 문서는 2026-09-12 초판 작성 이후, <strong>2026-09-13 KST</strong>에 별도 출처 검수를 거쳤습니다.
+  초판은 arXiv 논문 8건과 공식 문서 5건을 <u>평문 주소로만</u> 적어 두어 독자가 원문을 직접 대조할 수 없었습니다
+  (<strong>클릭 가능한 링크 0건</strong>).</p>
+
+  <div class="alert alert-success"><strong>✅ 이 문서는 초판의 출처 위생이 특히 좋았습니다</strong>
+  9장 비용 시뮬레이션이 스스로 <em>"QLoRA 논문에서 확인된 유일한 실측 앵커는 65B/24시간이며, 나머지는 비례 추정"</em>이라고
+  밝히고 모든 수치에 "(추정)"을 붙여 둔 점, 8장이 "논문 실증치인지 추정치인지 구분해 보고받으라"는 체크포인트를 둔 점은
+  <u>이번 검수에서 고칠 것이 없었습니다.</u> 이번 작업은 주로 <strong>그 근거들을 클릭 가능하게 만드는 일</strong>이었습니다.</div>
+
+  <h3>이번 검수에서 실제로 바뀐 것</h3>
+  <ul>
+    <li><strong>링크화</strong> — 핵심 논문 <strong>8건 전부</strong>(LoRA·QLoRA·DoRA·DPO·GRPO·InstructGPT·ZeRO·
+      카타스트로픽 포게팅)를 arXiv 초록 페이지 링크로 전환하고 <span class="http-ok">HTTP 200</span>을 확인했습니다.
+      이제 "10,000배 감소", "65B/24시간" 같은 수치를 독자가 원문에서 직접 확인할 수 있습니다.</li>
+    <li><strong>보강(중요한 단서)</strong> — Claude Glossary 인용을 <em>"Claude API는 현재 파인튜닝 미제공"</em>에서
+      원문 전체로 확장했습니다. 원문은 <strong>"…but ask your Anthropic contact if you are interested in exploring this
+      option"</strong>으로 이어집니다. 즉 <u>단순한 '미제공'이 아니라 별도 문의 경로를 함께 안내</u>하고 있으므로,
+      파인튜닝이 꼭 필요한 과제라면 영업 채널 확인이 다음 단계라는 점이 초판에서 누락되어 있었습니다.</li>
+    <li><strong>라벨링(변동성 경고)</strong> — 8·9장의 GPU 시간당 단가에 <span class="tag-v tag-unver">변동성 높음</span>
+      경고를 추가하고 Vast.ai·Lambda·RunPod 공식 가격 페이지를 연결했습니다. 마켓플레이스형 단가는
+      <u>"가격표"가 아니라 "시세"</u>이므로 같은 GPU라도 조회 시점마다 다릅니다.</li>
+    <li><strong>교정(URL 이전)</strong> — Anthropic 문서 주소가 <code>docs.claude.com</code>에서
+      <code>platform.claude.com</code>으로 이전된 것을 반영했습니다.</li>
+    <li><strong>재확인(변동 없음)</strong> — OpenAI 파인튜닝 가이드, Gemini API 파인튜닝 미지원(Enterprise Agent Platform
+      이관), Hugging Face PEFT·TRL 문서는 초판 서술 그대로 유효했습니다.</li>
+  </ul>
+
+  <h3>이번 검수에서도 해소하지 못한 것</h3>
+  <ul>
+    <li><strong>미해소</strong> — 8·9장의 <u>개별 GPU 시간당 단가</u>는 접속 가능 여부만 확인했을 뿐
+      <strong>현재 시세와 한 줄씩 대조하지 않았습니다</strong>. 마켓플레이스 가격은 스크래핑 시점 값이 곧 낡기 때문에,
+      문서에 숫자를 새로 박아 넣는 대신 <u>담당자가 직접 확인할 공식 경로</u>를 남기는 편을 택했습니다.</li>
+    <li><strong>성격상 검증 대상 아님</strong> — 9장 비용 시뮬레이션 3종은 초판이 밝힌 대로 QLoRA 논문 앵커에서
+      <span class="tag-v tag-edu">비례 추정</span>한 값이며, 13장 AADS/GO100/SF 후보 업무 판단과 14장 로드맵은
+      <span class="tag-v tag-plan">제안</span>입니다. 외부 출처로 참·거짓을 가릴 대상이 아닙니다.</li>
+    <li><strong>미해소</strong> — 데이터 라벨링 외주 단가(건당 $0.3~1)는 공급사·언어·난이도에 따라 편차가 커
+      <span class="tag-unverified">미검증</span>으로 유지했습니다.</li>
+  </ul>
+
+  <p style="font-size:.82rem;color:var(--text3)">※ "HTTP 200"은 2026-09-13 KST에 해당 URL이 응답했다는 뜻이며, 그 페이지에
+  실린 모든 수치를 본 문서가 검증했다는 뜻이 아닙니다. <strong>파인튜닝 착수 전에는 반드시 소규모 시험 학습(pilot run)으로
+  시간·비용을 실측</strong>하라는 9장 권고가 이번 검수 이후에도 그대로 유효합니다.</p>
 </div>
 
 <!-- ===== FOOTER ===== -->
