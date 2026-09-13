@@ -440,6 +440,26 @@ def _should_auto_resume_interrupted_reason(reason: str) -> bool:
         "assistant message already terminal",
         "stale_superseded_by_newer_user_message",
     )
+    # CancelledError 는 취소의 '수단'이지 이유가 아니다. 시스템이 스스로 건
+    # 타임아웃도 프로듀서를 cancel 해서 끝내므로 같은 토큰이 붙는다. 실제 사유는
+    # 그 뒤에 있다:
+    #   background_producer_incomplete_exit:CancelledError:mark_interrupted:
+    #   llm_first_response_timeout_after_31s:heartbeat ...
+    # 이 문자열은 아래 prefix 목록과 producer_incomplete 분류 양쪽에서 재개
+    # 대상인데, 앞의 blocked_tokens 한 줄에 걸려 전부 거부됐다. 그래서 버블이
+    # "생성 중"에서 멈춘 채 영영 재개되지 않았다. 2026-09-13 21~22시 실측:
+    # 7건이 이 경로로 방치됐고, 직전 3일간은 1건뿐이었다.
+    #
+    # 시스템이 건 타임아웃임이 문자열에 분명히 남아 있으면 CancelledError 는
+    # 거부 사유에서 뺀다. supersede/newer_user 는 그대로 막는다 — 더 새 지시가
+    # 들어온 턴은 타임아웃이든 아니든 재개하면 안 된다.
+    _system_timeout_markers = (
+        "llm_first_response_timeout",
+        "active_stream_hard_timeout",
+        "heartbeat_idle_ceiling",
+    )
+    if any(marker in normalized for marker in _system_timeout_markers):
+        blocked_tokens = tuple(t for t in blocked_tokens if t != "CancelledError")
     if any(token in normalized for token in blocked_tokens):
         return False
     if "auto-settled by stale execution watchdog" in normalized:
@@ -558,7 +578,12 @@ _STREAM_STATUS_LABELS = {
 # 클라이언트 이탈 후 자동 종료 시간 (초): stale watchdog(최대 45분+20분)보다 먼저
 # 정상 장시간 응답을 중단하지 않도록 기본 65분으로 둔다.
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "3900"))
-_FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "30"))
+# 30초는 opus-5 콜드 스타트에 짧다. 컨테이너 교체·릴레이 재시작으로 CLI 대화가
+# 사라지면 모든 턴이 resume 없이 전체 프롬프트(실측 39,572자)를 다시 보내고,
+# 첫 토큰까지 40초 넘게 걸린다. 2026-09-13 실측 7건이 전부 31~32초에서 잘렸고
+# CLI 는 그때까지 살아서 응답을 만들고 있었다. 살아 있는 스트림을 죽이는 쪽이
+# 방치보다 나쁘다 — 하드 타임아웃과 watchdog 이 뒤를 받치므로 여유를 준다.
+_FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "90"))
 _COMPLETION_AUTO_CONTINUE_MAX = int(os.getenv("AADS_COMPLETION_AUTO_CONTINUE_MAX", "3"))
 _FINALIZE_DB_RETRY_DELAYS = (0.5, 1.0, 2.0)
 _COOLDOWN_SECS_DEFAULT = 300
