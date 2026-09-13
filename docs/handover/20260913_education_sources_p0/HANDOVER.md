@@ -92,6 +92,22 @@
 - 대응: 피어 워크트리는 **읽기조차 수정하지 않고**, 본 작업은 `origin/main`에서 새로 만든 격리 워크트리 `/tmp/aads-wt-edu-p0-692183` + 자체 브랜치(PID 접미사)에서만 수행.
 - **후속 판단 필요**: 같은 4개 파일에 대한 경쟁 산출물이 나올 수 있음. 통합 시 두 결과를 비교해 선택하거나 병합해야 하며, 본 브랜치를 자동 머지하기 전에 피어 브랜치 존재 여부를 확인할 것.
 
+## 5-1. 공개 경로 실측 (2026-09-13 09:40 KST)
+
+초판 카드에는 "`fb.newtalk.kr/static/reports/*`가 로컬 런타임에서 HTTP 403"이라고 적혀 있었으나, **이번 검수 시점에는 403이 해소되어 200으로 응답**한다. 4건 전부 공개 경로에서 검수본이 그대로 서빙되는 것을 확인했다.
+
+| 파일 | 공개 URL | HTTP | 외부 인용 링크 | 검수 부록 |
+|------|----------|------|----------------|-----------|
+| prompt_context_engineering | https://fb.newtalk.kr/static/reports/20260912_prompt_context_engineering_education.html | 200 | 9* | 있음 |
+| ai_security_governance | https://fb.newtalk.kr/static/reports/20260912_ai_security_governance_education.html | 200 | 20* | 있음 |
+| ai_evaluation_evals | https://fb.newtalk.kr/static/reports/20260912_ai_evaluation_evals_education.html | 200 | 27* | 있음 |
+| ai_law_copyright_privacy | https://fb.newtalk.kr/static/reports/20260912_ai_law_copyright_privacy_education.html | 200 | 29* | 있음 |
+
+\* Cloudflare가 삽입하는 `cdn-cgi` 링크 1건 포함(문서 본문 링크는 각각 8/19/26/28건).
+
+- 서빙본과 저장소본을 바이트 비교한 결과 **차이는 Cloudflare 봇관리 스크립트 2조각뿐**이며 문서 내용은 동일했다. 즉 정적 리포트는 호스트 경로에서 바로 서빙되므로, `origin/main` 푸시가 곧 공개 반영이다(별도 배포 단계 없음).
+- `aads.newtalk.kr/static/reports/*`는 404 — 공개 경로는 `fb.newtalk.kr` 쪽이다. 라우팅 정리는 포털 등록 잡 소관이므로 본 잡에서는 변경하지 않고 사실만 기록한다.
+
 ## 6. 배포·공개
 
 - 정적 HTML만 변경. **API 재시작·Docker 재빌드·compose 전체 기동 없음**(카드 금지사항 준수).
