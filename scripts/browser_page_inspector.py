@@ -112,6 +112,68 @@ INSPECT_JS = """(() => {
 })()""" % _CSS_PATH_JS
 
 
+# 페이지에 걸린 보안 장치를 확인한다.
+#
+# 우회하려는 것이 아니라 **무엇이 자동화 가능한지 판단**하기 위해서다.
+# 보안 키보드가 걸린 입력창은 browser_fill 로 값을 넣어도 서버로 가지 않고,
+# 신뢰 이벤트를 요구하는 위젯은 프로그램 클릭에 반응하지 않는다. 미리 알면
+# "사람이 한 번 해주는 절차"로 설계할 수 있고, 모르면 오늘처럼 시행착오로
+# 수십 초씩 태운다. 2026-09-13 GenSpark 로그인이 그 사례였다 —
+# 봇 검증과 자동 로그인 차단을 모르고 네 번을 시도했다.
+SECURITY_JS = """(() => {
+  const out = {};
+  const html = document.documentElement.outerHTML;
+  const low = html.toLowerCase();
+
+  // 봇/챌린지 계열
+  const vendors = {
+    cloudflare: /cf-challenge|__cf_bm|challenges\\.cloudflare|cf_chl|performing security verification/i,
+    recaptcha: /recaptcha|grecaptcha/i,
+    hcaptcha: /hcaptcha/i,
+    datadome: /datadome/i,
+    perimeterx: /perimeterx|_px/i,
+    akamai: /akam|_abck/i,
+    imperva: /incapsula|visid_incap/i
+  };
+  out.bot_protection = Object.keys(vendors).filter(k => vendors[k].test(low) || vendors[k].test(document.cookie));
+
+  // 한국 금융권 보안 모듈 (키보드/백신/방화벽)
+  const kr = {
+    keyboard_security: /nprotect|astx|veraport|touchen|transkey|delfino|ksign|raonsecure|wizvera/i,
+    npki: /npki|공동인증|공인인증/i
+  };
+  out.kr_security = Object.keys(kr).filter(k => kr[k].test(low));
+
+  // 입력 보호 — 보안 키보드는 대개 readonly 이거나 값이 별도 hidden 으로 간다
+  const inputs = [...document.querySelectorAll('input[type=password], input[type=text]')];
+  out.protected_inputs = inputs.filter(i => i.readOnly || i.getAttribute('virtualkeyboard') || i.autocomplete === 'off' && i.readOnly).length;
+  out.password_inputs = document.querySelectorAll('input[type=password]').length;
+
+  // 자동화 탐지 흔적
+  out.webdriver_flag = navigator.webdriver === true;
+  out.automation_probe = /navigator\\.webdriver|__webdriver|_phantom|callPhantom|__selenium/i.test(low);
+
+  // 프레임/오리진
+  out.in_iframe = window.top !== window.self;
+  out.iframes = document.querySelectorAll('iframe').length;
+  out.origin = location.origin;
+  out.https = location.protocol === 'https:';
+
+  // 쿠키 — HttpOnly 는 JS 에서 안 보인다. 보인다는 것 자체가 신호다
+  out.js_visible_cookies = (document.cookie || '').split(';').filter(Boolean).length;
+
+  // CSP meta (헤더 CSP 는 별도로 확인한다)
+  const csp = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
+  out.csp_meta = csp ? csp.content.slice(0, 160) : null;
+
+  // 우클릭/복사/개발자도구 차단 흔적
+  out.blocks_contextmenu = typeof document.oncontextmenu === 'function';
+  out.blocks_selection = getComputedStyle(document.body).userSelect === 'none';
+
+  return JSON.stringify(out);
+})()"""
+
+
 def mint_token() -> str:
     code = (
         'import sys\nsys.path.insert(0, "/app")\n'
@@ -152,6 +214,7 @@ def main() -> int:
     ap.add_argument("--inspect", action="store_true")
     ap.add_argument("--clicks", action="store_true")
     ap.add_argument("--find", default="")
+    ap.add_argument("--security", action="store_true", help="페이지 보안 장치 확인")
     ap.add_argument("--json", action="store_true", help="원본 JSON 출력")
     args = ap.parse_args()
 
@@ -165,6 +228,30 @@ def main() -> int:
     # 이동하면 페이지가 갈리므로 기록기를 다시 심는다.
     if args.url or args.inspect:
         print(f"  클릭 기록기: {ev(token, SPY_JS)}")
+
+    if args.security:
+        raw = ev(token, SECURITY_JS)
+        try:
+            sec = json.loads(raw)
+        except Exception:
+            print(f"  보안 확인 실패: {str(raw)[:150]}")
+            return 1
+        if args.json:
+            print(json.dumps(sec, ensure_ascii=False, indent=2)); return 0
+        def mark(ok_when_empty, val):
+            return "없음" if not val else str(val)
+        print(f"  오리진        {sec.get('origin')} (HTTPS {'예' if sec.get('https') else '아니오'})")
+        print(f"  봇 차단       {mark(True, sec.get('bot_protection'))}")
+        print(f"  국내 금융보안  {mark(True, sec.get('kr_security'))}")
+        print(f"  비밀번호 입력  {sec.get('password_inputs')}개 (보호된 입력 {sec.get('protected_inputs')}개)")
+        print(f"  webdriver 노출 {'예 — 탐지됨' if sec.get('webdriver_flag') else '아니오'}")
+        print(f"  자동화 탐지코드 {'있음' if sec.get('automation_probe') else '없음'}")
+        print(f"  iframe        {sec.get('iframes')}개 (현재 프레임 내부: {'예' if sec.get('in_iframe') else '아니오'})")
+        print(f"  JS 노출 쿠키   {sec.get('js_visible_cookies')}개")
+        print(f"  CSP meta      {sec.get('csp_meta') or '없음'}")
+        print(f"  우클릭 차단    {'있음' if sec.get('blocks_contextmenu') else '없음'}"
+              f" · 선택 차단 {'있음' if sec.get('blocks_selection') else '없음'}")
+        return 0
 
     if args.clicks:
         raw = ev(token, "JSON.stringify(window.__aadsClicks || [])")
