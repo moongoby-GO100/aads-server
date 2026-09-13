@@ -1,5 +1,8 @@
 import io
+import os
 import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -15,6 +18,68 @@ def _write_xlsx(path):
     ws.append(["name", "amount"])
     ws.append(["OHVIS", 5600])
     wb.save(path)
+
+
+def test_public_education_index_filters_metadata_and_sorts_newest_first(tmp_path):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+
+    allowed_old = reports_dir / "20260912_alpha_education.html"
+    allowed_new = reports_dir / "20260913_beta-2_education.html"
+    allowed_no_date = reports_dir / "topic.v1_education.html"
+    for report in (allowed_old, allowed_new, allowed_no_date):
+        report.write_text("<title>secret content</title>", encoding="utf-8")
+
+    fallback_timestamp = datetime(2026, 9, 11, 12, tzinfo=timezone.utc).timestamp()
+    os.utime(allowed_no_date, (fallback_timestamp, fallback_timestamp))
+
+    for blocked_name in (
+        ".hidden_education.html",
+        "not-education.html",
+        "nested_education.htm",
+        "unsafe name_education.html",
+    ):
+        (reports_dir / blocked_name).write_text("blocked", encoding="utf-8")
+    nested = reports_dir / "nested_education.html"
+    nested.mkdir()
+    (nested / "child_education.html").write_text("blocked", encoding="utf-8")
+    (reports_dir / "linked_education.html").symlink_to(allowed_new)
+
+    documents = project_docs._list_public_education_reports(reports_dir)
+
+    assert [item["basename"] for item in documents] == [
+        "20260913_beta-2_education.html",
+        "20260912_alpha_education.html",
+        "topic.v1_education.html",
+    ]
+    assert documents[0] == {
+        "basename": "20260913_beta-2_education.html",
+        "title": "beta 2",
+        "date": "2026-09-13",
+        "size": allowed_new.stat().st_size,
+    }
+    assert documents[-1]["date"] == "2026-09-11"
+    assert all(set(item) == {"basename", "title", "date", "size"} for item in documents)
+    assert "secret content" not in repr(documents)
+    assert str(reports_dir) not in repr(documents)
+
+
+@pytest.mark.asyncio
+async def test_public_education_index_uses_fixed_server_directory(monkeypatch, tmp_path):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    report = reports_dir / "20260913_new_topic_education.html"
+    report.write_text("new", encoding="utf-8")
+    monkeypatch.setattr(project_docs, "PUBLIC_EDUCATION_REPORTS_DIR", reports_dir)
+
+    response = await project_docs.public_education_index()
+
+    assert response == {"documents": [{
+        "basename": report.name,
+        "title": "new topic",
+        "date": "2026-09-13",
+        "size": 3,
+    }]}
 
 
 @pytest.mark.asyncio
@@ -242,3 +307,63 @@ async def test_go100_document_status_scans_api_and_artifacts_paths(monkeypatch):
     )
     assert "api/" in catch_all[3]
     assert "kis-api-portal/" in catch_all[3]
+
+
+# ── 병렬 세션 병합 가드 ──
+# 같은 결함을 서로 다른 브랜치에서 고치는 중이고, 각 브랜치가 공개 면제 집합을
+# 다른 이름(_PUBLIC_EXACT_PATHS / _AUTH_EXEMPT_EXACT_PATHS)으로 들고 있다.
+# 나중에 둘 다 병합되면 면제 집합이 두 벌 생기고 같은 경로가 두 번 등록되는데,
+# FastAPI 는 먼저 등록된 핸들러만 쓰므로 조용히 어긋난다. 이름과 등록 횟수를
+# 여기서 고정해서, 병합 사고가 리뷰가 아니라 테스트에서 걸리게 한다.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_public_readonly_exempt_set_is_single_and_canonical():
+    source = (REPO_ROOT / "app" / "main.py").read_text(encoding="utf-8")
+
+    assert source.count("_PUBLIC_READONLY_EXACT_PATHS = {") == 1
+    assert "path in _PUBLIC_READONLY_EXACT_PATHS" in source
+    for rejected_alias in ("_PUBLIC_EXACT_PATHS", "_AUTH_EXEMPT_EXACT_PATHS"):
+        assert rejected_alias not in source
+
+    prefixes_block = source.split("_AUTH_EXEMPT_PREFIXES = (", 1)[1].split(")", 1)[0]
+    assert "project-docs" not in prefixes_block
+
+
+def test_public_education_index_route_is_registered_once():
+    source = (REPO_ROOT / "app" / "api" / "project_docs.py").read_text(encoding="utf-8")
+
+    assert source.count('@router.get("/project-docs/public-education-index")') == 1
+    assert source.count("async def public_education_index(") == 1
+    assert source.count("async def scan_all_docs(") == 1
+
+
+def test_public_education_index_survives_unstatable_and_invalid_date_entries(tmp_path, monkeypatch):
+    """날짜처럼 생겼지만 실제 날짜가 아닌 접두사와, 스캔 도중 사라진 항목을 견딘다."""
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    invalid_date = reports_dir / "20261345_invalid-date_education.html"
+    vanishing = reports_dir / "20260913_vanished_education.html"
+    for report in (invalid_date, vanishing):
+        report.write_text("x", encoding="utf-8")
+
+    fallback_timestamp = datetime(2026, 9, 10, 12, tzinfo=timezone.utc).timestamp()
+    os.utime(invalid_date, (fallback_timestamp, fallback_timestamp))
+
+    real_stat = Path.stat
+
+    def stat_that_loses_one_entry(self, *args, **kwargs):
+        if self.name == vanishing.name:
+            raise OSError("entry removed mid-scan")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_that_loses_one_entry)
+
+    documents = project_docs._list_public_education_reports(reports_dir)
+
+    assert [item["basename"] for item in documents] == [invalid_date.name]
+    assert documents[0]["date"] == "2026-09-10"
+
+
+def test_public_education_index_returns_empty_when_directory_is_unreadable(tmp_path):
+    assert project_docs._list_public_education_reports(tmp_path / "absent") == []

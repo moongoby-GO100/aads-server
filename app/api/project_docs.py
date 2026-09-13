@@ -15,8 +15,10 @@ import mimetypes
 import os
 import re
 import shlex
+import stat
 import time
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -30,6 +32,14 @@ logger = structlog.get_logger()
 _cache: dict = {"data": None, "ts": 0}
 CACHE_TTL = 300  # 5분
 PERSISTENT_CACHE_FILE = Path(os.getenv("PROJECT_DOCS_CACHE_FILE", "/tmp/aads_project_docs_cache.json"))
+
+# Public education-report discovery is intentionally isolated from the broad
+# project document scanner below. Keep both the directory and filename policy
+# server-controlled so this endpoint cannot become an arbitrary file browser.
+PUBLIC_EDUCATION_REPORTS_DIR = Path("/app/app/static/reports")
+PUBLIC_EDUCATION_FILENAME_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*_education\.html$"
+)
 
 # ── 서버/프로젝트 경로 매핑 ──
 SERVER_CONFIG = {
@@ -765,6 +775,63 @@ async def _scan_project(project: str, config: dict, previous: Optional[dict] = N
         "total": len(deduped),
         "files": deduped,
     }, previous)
+
+
+def _education_report_date(basename: str, modified_at: float) -> str:
+    """Return a stable display date, preferring a valid YYYYMMDD filename prefix."""
+    prefix = basename[:8]
+    if len(basename) > 8 and basename[8] in {"_", "-"} and prefix.isdigit():
+        try:
+            return datetime.strptime(prefix, "%Y%m%d").date().isoformat()
+        except ValueError:
+            pass
+    return datetime.fromtimestamp(modified_at, tz=timezone.utc).date().isoformat()
+
+
+def _education_report_title(basename: str) -> str:
+    """Derive a safe human-readable title from an allowlisted basename."""
+    title = re.sub(r"^\d{8}[_-]", "", basename)
+    title = title.removesuffix("_education.html")
+    return re.sub(r"[_-]+", " ", title).strip()
+
+
+def _list_public_education_reports(reports_dir: Path | None = None) -> list[dict]:
+    """List safe metadata for direct, regular education-report files only."""
+    directory = reports_dir or PUBLIC_EDUCATION_REPORTS_DIR
+    reports: list[tuple[str, int, dict]] = []
+
+    try:
+        entries = directory.iterdir()
+        for entry in entries:
+            basename = entry.name
+            if not PUBLIC_EDUCATION_FILENAME_RE.fullmatch(basename):
+                continue
+            try:
+                file_stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if not stat.S_ISREG(file_stat.st_mode):
+                continue
+
+            date = _education_report_date(basename, file_stat.st_mtime)
+            reports.append((date, file_stat.st_mtime_ns, {
+                "basename": basename,
+                "title": _education_report_title(basename),
+                "date": date,
+                "size": file_stat.st_size,
+            }))
+    except OSError as exc:
+        logger.warning("public_education_index_unavailable", error=type(exc).__name__)
+        return []
+
+    reports.sort(key=lambda item: (-int(item[0].replace("-", "")), -item[1], item[2]["basename"]))
+    return [metadata for _, _, metadata in reports]
+
+
+@router.get("/project-docs/public-education-index")
+async def public_education_index():
+    """Return the public, read-only education-report index."""
+    return {"documents": _list_public_education_reports()}
 
 
 @router.get("/project-docs/scan")

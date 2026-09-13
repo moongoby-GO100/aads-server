@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+## 2026-09-13 10:39 KST — 교육자료 포털 공개 자동발견 인증 결함 수정
+
+CEO 지시: 교육자료 12건의 미작성 여부를 확인하고, 새 교육자료가 포털에 자동 반영되도록 남은 조치·검증을 완료.
+
+- **문서 정합성**: 신규 교육자료 12건 모두 존재하며 `app/static/reports/index.html` 정적 폴백에 각각 1회 등록돼 있다. 별도 LLM 서버 교육자료를 포함한 `20260912_*_education.html` 13건과 포털은 공개 URL에서 모두 HTTP 200을 반환했다. P0 4건은 출처 링크 100개, P1 8건은 121개가 포함되어 있다.
+- **원인**: 기존 자동발견 로직은 인증이 필요한 광역 `/api/v1/project-docs/scan`을 호출해 비로그인 포털에서는 HTTP 401이었다. 따라서 이후 생성되는 문서는 정적 배열을 수동 편집하지 않으면 공개 사용자에게 자동 노출되지 않았다.
+- **조치**: `app/api/project_docs.py`에 고정 디렉터리의 엄격한 `*_education.html` 일반 파일만 basename/title/date/size로 반환하는 공개 읽기 전용 `/api/v1/project-docs/public-education-index`를 추가했다. 절대경로·본문·타 프로젝트·심볼릭 링크·숨김/비교육 파일은 반환하지 않는다. `app/main.py`는 이 정확한 경로 하나만 인증 예외로 두고, 포털은 신규 API를 사용하되 기존 정적 목록을 장애 시 폴백으로 유지한다.
+- **검증**: `tests/unit/test_project_docs_viewer.py` 11 passed, `py_compile` 통과, Ruff F821/F811 통과, `git diff --check` 통과. 현재 운영 이미지 기반 격리 컨테이너에 작업트리를 read-only mount한 TestClient 실증에서 공개 exact route=200, 기존 `/scan`=401, `/public-education-index/extra`=401을 확인했다.
+- **릴리스 상태**: 이 기록 시점에는 변경 4파일+HANDOVER를 커밋·푸시하기 전이며 API 배포 전이다. 커밋·푸시 후 `deploy.sh bluegreen` 계약과 5분 P0/P1 모니터링을 거쳐 최종 완료 판정한다.
+
 ## 2026-09-13 09:20 KST — 배포 실패 사유 미기록·재시작 불가 원인 조치 (AADS-191 후속)
 
 CEO 지시: "현재 배포가 실패인데 왜 실패이유 기록이 없지? 그리고 재시작을 못하는거지?"

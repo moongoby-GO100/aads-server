@@ -3364,13 +3364,29 @@ _SERVICE_AUTH_EXACT_PATHS = {
     "/api/v1/ohvis/llmops/trace-ingest",
 }
 
+# Public read-only routes must be listed individually. Never place the
+# surrounding project-docs prefix in the broad prefix exemptions above: that
+# would also expose /project-docs/scan (multi-project file metadata) and
+# /project-docs/content (file bodies).
+#
+# This is the single canonical set for unauthenticated public routes — do not
+# introduce a second one under another name. test_public_readonly_exempt_set_is_single
+# fails if a parallel branch merges one in.
+_PUBLIC_READONLY_EXACT_PATHS = {
+    "/api/v1/project-docs/public-education-index",
+}
+
 
 @app.middleware("http")
 async def jwt_auth_middleware(request: Request, call_next):
     path = request.url.path
 
     # 1) 면제 경로
-    if any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES) or path in _SERVICE_AUTH_EXACT_PATHS:
+    if (
+        any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES)
+        or path in _SERVICE_AUTH_EXACT_PATHS
+        or path in _PUBLIC_READONLY_EXACT_PATHS
+    ):
         return await call_next(request)
 
     # 2) 모니터 키 인증 경로 (별도 인증 체계)
