@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # 터미널 대화 전용 워크스페이스([TERM] 터미널 대화).
@@ -191,12 +192,77 @@ def sql_literal(value: str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def already_imported(session_id: str) -> bool:
+def existing_import(session_id: str) -> tuple[str, int] | None:
+    """이미 적재된 세션이면 (AADS 세션 id, 적재된 행 수)를 돌려준다.
+
+    예전에는 적재 여부만 bool 로 돌려주고 호출부가 곧바로 반환했다. 그래서 진행
+    중인 세션을 주기 스캔이 한 번 집어가면, 그 뒤에 오간 대화는 SessionEnd 훅이
+    돌아도 "already imported" 로 막혀 **영원히 들어오지 못했다.** 이어붙이려면
+    어디까지 넣었는지를 알아야 한다.
+    """
     out = psql(
-        "SELECT 1 FROM external_chat_sessions "
-        f"WHERE provider IN ('claude-code','codex') AND external_user_id={sql_literal(session_id)} LIMIT 1;"
-    )
-    return out.strip() == "1"
+        "SELECT aads_session_id::text, coalesce((metadata->>'entries')::int, 0) "
+        "FROM external_chat_sessions "
+        f"WHERE provider IN ('claude-code','codex') AND external_user_id={sql_literal(session_id)} "
+        "ORDER BY created_at LIMIT 1;"
+    ).strip()
+    if not out:
+        return None
+    parts = out.split("|")
+    if len(parts) < 2 or not parts[0]:
+        return None
+    try:
+        return parts[0], int(parts[1] or 0)
+    except ValueError:
+        return parts[0], 0
+
+
+def _parse_ts(value) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def assign_timestamps(rows: list[dict], path: Path) -> None:
+    """각 행에 created_at 을 박는다.
+
+    예전에는 DB 기본값 now() 에 맡겼다. 한 트랜잭션의 now() 는 모든 행이 같은
+    값이고 앱은 created_at 으로 정렬하므로(보조키는 랜덤 uuid), **한 번에 넣은
+    대화가 통째로 순서를 잃었다.** 2026-09-13 검증에서 질문보다 답변이 앞서는
+    것으로 드러났다.
+
+    트랜스크립트에 있는 실제 시각을 쓴다. 없거나 거꾸로 가면 바로 앞 행에서
+    1밀리초씩 밀어 순서만은 지킨다.
+    """
+    try:
+        fallback = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        fallback = datetime.now(timezone.utc)
+    last: datetime | None = None
+    for row in rows:
+        ts = _parse_ts(row.get("ts"))
+        if ts is None or (last is not None and ts <= last):
+            ts = (last or fallback) + timedelta(milliseconds=1)
+        last = ts
+        row["created_at"] = ts.isoformat()
+
+
+def message_inserts(aads_session: str, rows: list[dict]) -> list[str]:
+    return [
+        "INSERT INTO chat_messages "
+        "(session_id, role, content, model_used, intent, tools_called, created_at) VALUES ("
+        f"{sql_literal(aads_session)}::uuid, {sql_literal(row['role'])}, "
+        f"{sql_literal(row['content'])}, "
+        f"{sql_literal(row['model']) if row['model'] else 'NULL'}, "
+        "'claude_code_terminal', "
+        f"{sql_literal(json.dumps(row['tools'], ensure_ascii=False))}::jsonb, "
+        f"{sql_literal(row['created_at'])}::timestamptz);"
+        for row in rows
+    ]
 
 
 def main() -> int:
@@ -225,13 +291,41 @@ def main() -> int:
     session_id = session_id or path.stem
 
     try:
-        if already_imported(session_id):
-            print(f"already imported: {session_id}")
-            return 0
         fmt = detect_format(path)
         rows = parse_codex_transcript(path) if fmt == "codex" else parse_transcript(path)
         if not rows:
             print("no conversational rows")
+            return 0
+        assign_timestamps(rows, path)
+
+        # 이미 적재된 세션이면 늘어난 만큼만 이어붙인다.
+        #
+        # 트랜스크립트는 append-only 이고 파서의 필터링은 결정적이므로, 앞부분
+        # 행은 다시 읽어도 그대로다. 따라서 개수 차이가 곧 새로 생긴 대화다.
+        # 이 덕분에 주기 스캔과 SessionEnd 훅이 겹쳐 돌아도 안전하다 —
+        # 훅은 마지막 남은 분량을 넣는 한 번의 호출이 될 뿐이다.
+        existing = existing_import(session_id)
+        if existing:
+            aads_session, imported_count = existing
+            if len(rows) <= imported_count:
+                print(f"already imported: {session_id} ({imported_count} rows)")
+                return 0
+            new_rows = rows[imported_count:]
+            stmts = ["BEGIN;"]
+            stmts.extend(message_inserts(aads_session, new_rows))
+            stmts.append(
+                f"UPDATE chat_sessions SET message_count={len(rows)}, updated_at=NOW() "
+                f"WHERE id={sql_literal(aads_session)}::uuid;"
+            )
+            stmts.append(
+                "UPDATE external_chat_sessions SET metadata = metadata || "
+                f"jsonb_build_object('entries', {len(rows)}, 'last_appended_at', NOW()::text) "
+                "WHERE provider IN ('claude-code','codex') "
+                f"AND external_user_id={sql_literal(session_id)};"
+            )
+            stmts.append("COMMIT;")
+            psql("\n".join(stmts))
+            print(f"appended {len(new_rows)} messages -> {aads_session}")
             return 0
 
         aads_session = str(uuid.uuid4())
@@ -244,15 +338,7 @@ def main() -> int:
             f"{sql_literal(aads_session)}::uuid, {sql_literal(WORKSPACE_ID)}::uuid, "
             f"{sql_literal(TENANT_ID)}::uuid, {sql_literal(title)}, {len(rows)});",
         ]
-        for row in rows:
-            stmts.append(
-                "INSERT INTO chat_messages (session_id, role, content, model_used, intent, tools_called) VALUES ("
-                f"{sql_literal(aads_session)}::uuid, {sql_literal(row['role'])}, "
-                f"{sql_literal(row['content'])}, "
-                f"{sql_literal(row['model']) if row['model'] else 'NULL'}, "
-                "'claude_code_terminal', "
-                f"{sql_literal(json.dumps(row['tools'], ensure_ascii=False))}::jsonb);"
-            )
+        stmts.extend(message_inserts(aads_session, rows))
         meta = json.dumps({
             "source_file": str(path),
             "format": fmt,
