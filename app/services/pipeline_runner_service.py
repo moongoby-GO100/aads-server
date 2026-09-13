@@ -2514,7 +2514,11 @@ async def cancel_pipeline(job_id: str) -> dict:
                 return {"error": f"이미 취소된 작업: {job_id}"}
 
             await conn.execute(
+                # 중단 사유는 error_detail 에 남긴다. review_feedback 은 AI 리뷰 피드백을
+                # 담는 칸이라, 운영 중단 사유를 섞으면 둘 다 읽기 어려워지고 집계에서는
+                # "사유 없음"으로 보인다(2026-09-13 실측: error 8건 전부 사유 없음으로 조회).
                 "UPDATE pipeline_jobs SET status='error', phase='cancelled', "
+                "error_detail=COALESCE(NULLIF(error_detail,''),'force_cancelled'), "
                 "review_feedback=COALESCE(review_feedback,'')||' | 강제취소', updated_at=now() "
                 "WHERE job_id=$1",
                 job_id,
@@ -2607,6 +2611,10 @@ async def recover_interrupted_jobs():
                 """
                 UPDATE pipeline_jobs
                 SET status = 'error', phase = 'error',
+                    -- 24시간 실패 38건 중 최다 사유가 이것인데 error_detail 이 비어 있어
+                    -- 집계에서 "사유 없음"으로 보였다. 배포마다 컨테이너가 교체되며
+                    -- 진행 중인 작업이 끊기는 것이 원인이라, 사유가 남아야 추적된다.
+                    error_detail = COALESCE(NULLIF(error_detail, ''), 'server_restart_orphan'),
                     review_feedback = COALESCE(review_feedback, '') || ' | 서버 재시작으로 중단됨',
                     updated_at = now()
                 WHERE status = 'running' AND phase NOT IN ('restarting', 'done', 'error', 'claude_code_detached')
@@ -3117,7 +3125,10 @@ async def _resume_detached_polling(job_id: str, project: str, chat_session_id: s
         pool = get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
-                "UPDATE pipeline_jobs SET status='error', phase='error', review_feedback=COALESCE(review_feedback,'')||' | 폴링재개후 타임아웃', updated_at=now() WHERE job_id=$1",
+                "UPDATE pipeline_jobs SET status='error', phase='error', "
+                "error_detail=COALESCE(NULLIF(error_detail,''),'poll_resume_timeout'), "
+                "review_feedback=COALESCE(review_feedback,'')||' | 폴링재개후 타임아웃', updated_at=now() "
+                "WHERE job_id=$1",
                 job_id,
             )
         await _reconcile_job_goal_links(job_id)
@@ -3222,9 +3233,11 @@ async def _check_stalled_jobs():
                     async with _pool.acquire() as _conn:
                         await _conn.execute(
                             "UPDATE pipeline_jobs SET status='error', phase='error', "
+                            "error_detail=COALESCE(NULLIF(error_detail,''),$3), "
                             "review_feedback=COALESCE(review_feedback,'')||$2, updated_at=now() "
                             "WHERE job_id=$1",
-                            job.job_id, f" | watchdog 자동종료: {stall_minutes}분 스톨"
+                            job.job_id, f" | watchdog 자동종료: {stall_minutes}분 스톨",
+                            f"watchdog_stall_{stall_minutes}min"
                         )
                     await _reconcile_job_goal_links(job.job_id)
                     job.status = "error"
