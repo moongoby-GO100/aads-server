@@ -1,5 +1,32 @@
 # AADS HANDOVER
 
+## 2026-09-13 09:20 KST — 배포 실패 사유 미기록·재시작 불가 원인 조치 (AADS-191 후속)
+
+CEO 지시: "현재 배포가 실패인데 왜 실패이유 기록이 없지? 그리고 재시작을 못하는거지?"
+
+- **사유 기록은 있었으나 쓸모가 없었다**: #376(08:50 KST) `error_summary` 는
+  `insufficient build disk` 한 줄뿐이고, 실측값(`available=19619MB, required=20480MB`,
+  861MB 부족)은 워커 로그에만 있었다. 자가치유가 디스크 회수를 **시도했다가 실패했다**는
+  사실도 로그·audit 에만 남아 DB/대시보드에서는 보이지 않았다.
+  → `DEPLOY_DISK_FAIL_DETAIL` 로 실측값을 `error_summary` 까지 전달(`deploy.sh` 104·111·1509행),
+  `autoheal_record_outcome()` 이 escalate/retry_launched 결과를 `deploy_runs` 에 append
+  (`scripts/deploy_autoheal.sh` 343행). 커밋 `662d26c2`.
+- **재시작이 안 된 이유**: 설계상 화이트리스트 원인만 자동 재개하고, 교정 실패 시
+  `AUTOHEAL_MAX_ATTEMPTS=1` 예산에서 멈춘다. #376 은 회수 후에도 임계 미달이라 정상 중단이었다.
+  디스크는 09:09 KST 46G 로 회복되어 병목 자체가 해소.
+- **실동작에서 신규 버그 2건 발견·수정(커밋 `8b5e9a12`)**:
+  1. `deploy.sh status` 호출이 모드 검사(code_validation, 2364행) 전에 preflight 를 통과하고
+     큐 릴리스를 claim 해 **#377/#378 실패 2건을 원장에 남겼다**. 모드 검증을 16행으로 올려
+     DB 접근 전에 `exit 2`. 실측 확인: `bash deploy.sh status` → rc=2, DB 기록 없음.
+  2. 자가치유가 `MODE=status` 를 재개 워커에 그대로 넘겨 재시도가 code_validation 에서
+     반드시 죽었다. `retry_mode` 를 배포 모드로만 보정.
+- **검증**: `tests/unit/test_deploy_autoheal.py` **44 → 51 passed**(신규 7건).
+  `autoheal_record_outcome` 은 #378 대상 실행으로 append 동작 실측 확인.
+- **미검증**: #378 실 실행에서는 escalate 로그가 찍혔는데 DB append 가 남지 않았다.
+  원인 미규명 — 진단용 로그(`결과 기록 생략: …` / `결과 기록: …`)를 추가했으므로 다음 실패 때 확인한다.
+- **배포**: HEAD `01b71144` 기준 bluegreen `deploy_runs#379` 진행 중(09:18 KST build_candidate_image).
+  라이브 이미지는 아직 `aads-server:5eeae18e1bdb`. health-check **200**, 양 슬롯 healthy.
+
 ## 2026-09-13 09:07 KST — 미완결 잔여 항목 정리(커밋 누락 3건 + 커밋 훅 DB 인증 오류)
 
 CEO 지시 "미진한 사항 즉시 직접 조치". 운영 코드 변경 없이, 워크트리에 남아 있던 미커밋 산출물과
