@@ -89,6 +89,30 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
   table{font-size:.78rem}
   th,td{padding:8px 10px}
 }
+/* === 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) === */
+a.src{color:var(--accent3);text-decoration:none;border-bottom:1px dotted var(--accent3);word-break:break-all}
+a.src:hover{color:var(--accent);border-bottom-style:solid}
+.src-legend{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent3);
+border-radius:12px;padding:20px 24px;margin:0 0 40px}
+.src-legend h3{margin:0 0 10px;font-size:1.02rem;color:var(--accent3)}
+.src-legend ul{margin:10px 0 12px 18px}
+.src-legend li{font-size:.87rem;color:var(--text2);margin-bottom:5px}
+.tag-v{display:inline-block;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:7px;white-space:nowrap}
+.tag-fact{background:#10b98120;color:#34d399}
+.tag-edu{background:#3b82f620;color:#60a5fa}
+.tag-plan{background:#8b5cf620;color:#a78bfa}
+.tag-unver{background:#f59e0b20;color:#fbbf24}
+.tag-verified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#10b98120;color:#34d399;margin-left:6px}
+.tag-unverified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#ef444420;color:#f87171;margin-left:6px}
+.src-fix{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--warning);
+border-radius:10px;padding:14px 18px;margin:18px 0;font-size:.88rem;color:var(--text2)}
+.src-fix strong{color:var(--warning)}
+/* 모바일 가로 스크롤 방지: 긴 URL·경로 토큰이 줄바꿈되지 않아 문서 폭을 넘기던 문제 */
+.alert,.info-card,.checkpoint,.ceo-box,td,li,p{overflow-wrap:break-word}
+/* 줄바꿈되지 않는 코드 블록(JSON 예시 등)이 좁은 화면에서 문서 폭을 밀어내던 문제:
+   블록 자체를 가로 스크롤시키고, 그리드 칸이 내용 최소폭에 갇히지 않도록 min-width 해제 */
+pre{overflow-x:auto;max-width:100%}
+.compare-row>*,.card-grid>*,.compare-box,.info-card{min-width:0}
 </style>
 </head>
 <body>
@@ -125,7 +149,21 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
     <a href="#ch14"><span class="num">14</span> 실전 로드맵</a>
     <a href="#ch15"><span class="num">15</span> 도구·라이브러리 총정리</a>
     <a href="#ch16"><span class="num">16</span> 참고자료 · 다음 단계</a>
+    <a href="#source-audit-20260913"><span class="num">★</span> 부록. 출처 검수 이력 (2026-09-13)</a>
   </div>
+</div>
+
+<!-- ===== 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) ===== -->
+<div class="src-legend">
+  <h3>📌 출처 표기 범례 — 무엇이 검증된 사실이고 무엇이 아닌가</h3>
+  <p style="font-size:.87rem;color:var(--text2);margin-bottom:6px">이 문서의 주장은 근거의 강도에 따라 아래 4가지로 구분됩니다. 외부 출처는 <strong>기관 공식 문서·공식 가격표·원 논문(1차 출처)</strong>의 클릭 가능한 링크로 연결되어 있습니다.</p>
+  <ul>
+    <li><span class="tag-v tag-fact">검증</span>1차 출처로 원문을 확인한 사실 — 링크를 눌러 직접 대조할 수 있습니다</li>
+    <li><span class="tag-v tag-edu">예시</span>이해를 돕기 위한 교육용 예시·비유·가상 시나리오 — 실측치가 아닙니다</li>
+    <li><span class="tag-v tag-plan">제안</span>본 문서가 제안하는 개선안 — 아직 실행되지 않은 계획입니다</li>
+    <li><span class="tag-v tag-unver">미검증</span>확인하지 못한 항목 — 의사결정 전 반드시 재확인이 필요합니다</li>
+  </ul>
+  <p style="font-size:.8rem;color:var(--text3);margin:0">링크 점검: <strong>2026-09-13 09:40~10:20 KST</strong>, 서버 68 런타임에서 본 문서가 인용한 각 URL에 HTTP 요청을 보내 응답 코드를 기록했습니다. 총 66개 URL 중 <strong>61개가 <span class="http-ok">HTTP 200</span></strong>이며, Gartner·BCG 등 일부 기관 사이트는 자동화 접근을 차단(<span class="http-waf">HTTP 403</span>)하고 Milvus 문서는 자동화 요청에 302로 응답하지만 <strong>브라우저에서는 모두 정상 열람</strong>됩니다. <strong>URL 접근 확인은 링크가 살아 있다는 뜻일 뿐, 그 페이지에 실린 모든 수치를 본 문서가 검증했다는 뜻은 아닙니다.</strong> 가격·모델 라인업·스펙 버전은 수시로 바뀌므로 의사결정 전 링크 원문을 다시 확인하십시오.</p>
 </div>
 
 <!-- ===== CH1 ===== -->
@@ -323,14 +361,23 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
       <thead><tr><th>기법</th><th>학습 파라미터 비율</th><th>7B 모델 학습 VRAM(추정)</th><th>학습 속도</th><th>성능(원본 대비)</th><th>핵심 근거</th></tr></thead>
       <tbody>
         <tr><td><strong>Full Fine-tuning</strong></td><td>100%</td><td class="warn-cell">약 100~130GB<br><small style="color:var(--text3)">(추정, Adam 옵티마이저 기준)</small></td><td>느림</td><td>기준선(최고 상한)</td><td>ZeRO 메모리 분석(Rajbhandari et al., 2019): 파라미터+그래디언트+Adam 상태 합산 시 파라미터당 약 16바이트 필요</td></tr>
-        <tr><td><strong>LoRA</strong></td><td>0.01~1%</td><td class="recommend">약 16~24GB<br><small style="color:var(--text3)">(추정, rank·배치 크기에 따라 변동)</small></td><td>빠름</td><td>Full FT와 동등하거나 근접</td><td>GPT-3 175B 기준 학습 파라미터 10,000배 감소, GPU 메모리 3배 감소 (Hu et al., 2021, arXiv:2106.09685)</td></tr>
-        <tr><td><strong>QLoRA</strong></td><td>0.01~1%(4비트 베이스+LoRA)</td><td class="recommend">약 6~10GB<br><small style="color:var(--text3)">(추정, 7B 기준)</small></td><td>LoRA보다 약간 느림(양자화 연산 오버헤드)</td><td>16비트 Full FT 성능 보존 확인</td><td>65B 모델을 단일 48GB GPU에서 파인튜닝 성공, 16비트 풀파인튜닝 성능 보존 (Dettmers et al., 2023, arXiv:2305.14314)</td></tr>
-        <tr><td><strong>DoRA</strong></td><td>LoRA와 유사(+방향/크기 분해)</td><td>LoRA와 유사(약간 추가)</td><td>LoRA와 유사</td><td class="recommend">LoRA 대비 일관되게 우수</td><td>가중치를 크기·방향으로 분해, LLaMA/LLaVA/VL-BART 전반에서 LoRA 능가, 추론 시 추가 비용 없음 (Liu et al., 2024, arXiv:2402.09353, ICML 2024 Oral)</td></tr>
+        <tr><td><strong>LoRA</strong></td><td>0.01~1%</td><td class="recommend">약 16~24GB<br><small style="color:var(--text3)">(추정, rank·배치 크기에 따라 변동)</small></td><td>빠름</td><td>Full FT와 동등하거나 근접</td><td>GPT-3 175B 기준 학습 파라미터 10,000배 감소, GPU 메모리 3배 감소 (Hu et al., 2021, <a class="src" href="https://arxiv.org/abs/2106.09685" target="_blank" rel="noopener">arXiv:2106.09685</a>) <span class="tag-v tag-fact">검증</span></td></tr>
+        <tr><td><strong>QLoRA</strong></td><td>0.01~1%(4비트 베이스+LoRA)</td><td class="recommend">약 6~10GB<br><small style="color:var(--text3)">(추정, 7B 기준)</small></td><td>LoRA보다 약간 느림(양자화 연산 오버헤드)</td><td>16비트 Full FT 성능 보존 확인</td><td>65B 모델을 단일 48GB GPU에서 파인튜닝 성공, 16비트 풀파인튜닝 성능 보존 (Dettmers et al., 2023, <a class="src" href="https://arxiv.org/abs/2305.14314" target="_blank" rel="noopener">arXiv:2305.14314</a>) <span class="tag-v tag-fact">검증</span></td></tr>
+        <tr><td><strong>DoRA</strong></td><td>LoRA와 유사(+방향/크기 분해)</td><td>LoRA와 유사(약간 추가)</td><td>LoRA와 유사</td><td class="recommend">LoRA 대비 일관되게 우수</td><td>가중치를 크기·방향으로 분해, LLaMA/LLaVA/VL-BART 전반에서 LoRA 능가, 추론 시 추가 비용 없음 (Liu et al., 2024, <a class="src" href="https://arxiv.org/abs/2402.09353" target="_blank" rel="noopener">arXiv:2402.09353</a>, ICML 2024 Oral) <span class="tag-v tag-fact">검증</span></td></tr>
         <tr><td><strong>Adapter (기존 방식)</strong></td><td>0.5~5%</td><td>LoRA와 유사~약간 높음</td><td>중간</td><td>LoRA와 유사</td><td>레이어 사이에 추가 모듈 삽입 → 추론 시 지연시간 증가(LoRA 논문에서 지적)</td></tr>
         <tr><td><strong>Prompt/Prefix Tuning</strong></td><td>0.01% 미만</td><td>매우 낮음(수 GB)</td><td>매우 빠름</td><td>LoRA보다 낮음(과제 복잡도 높을수록 격차 커짐)</td><td>연속 임베딩만 학습, 표현력 제한</td></tr>
       </tbody>
     </table>
   </div>
+
+  <div class="src-fix"><strong>2026-09-13 출처 검수 — 위 표의 '핵심 근거' 3건을 원 논문 초록과 직접 대조했습니다</strong><br>
+  세 논문 모두 <strong>초록의 원문 주장과 표의 서술이 일치</strong>함을 확인했습니다 <span class="tag-v tag-fact">검증</span>. 제목·저자 대조 결과는 다음과 같습니다.
+  <ul style="margin:10px 0 4px 18px;font-size:.87rem">
+    <li><strong>LoRA</strong> — <em>LoRA: Low-Rank Adaptation of Large Language Models</em> (Edward J. Hu 외, 2021). 초록 원문 기준 GPT-3 175B를 Adam으로 파인튜닝한 경우 대비 <strong>학습 파라미터 10,000배·GPU 메모리 3배 감소</strong>. 표의 Adapter 행에 적힌 "추론 지연 증가" 지적도 같은 초록의 "<em>unlike adapters, no additional inference latency</em>"가 근거입니다.</li>
+    <li><strong>QLoRA</strong> — <em>QLoRA: Efficient Finetuning of Quantized LLMs</em> (Tim Dettmers 외, 2023). 초록 원문 기준 <strong>65B 모델을 단일 48GB GPU에서 파인튜닝하면서 16비트 풀파인튜닝 성능을 보존</strong>. 핵심 기법 3종(4비트 NormalFloat·이중 양자화·페이지드 옵티마이저)도 초록에 명시되어 있습니다.</li>
+    <li><strong>DoRA</strong> — <em>DoRA: Weight-Decomposed Low-Rank Adaptation</em> (Shih-Yang Liu 외, 2024, <strong>ICML 2024 Oral</strong>). 초록 원문 기준 가중치를 <strong>크기(magnitude)와 방향(direction)으로 분해</strong>하며, LLaMA·LLaVA·VL-BART에서 LoRA를 일관되게 능가하고 <strong>추론 시 추가 비용이 없습니다</strong>.</li>
+  </ul>
+  <strong>다만 표의 VRAM 열은 논문에서 가져온 수치가 아닙니다</strong> — 바로 아래 주의 문단대로 설정에 따라 달라지는 <span class="tag-v tag-unver">추정치</span>이므로, 장비 도입을 결정하기 전 자체 환경에서 실측해야 합니다.</div>
 
   <div class="alert alert-warn">
     <strong>⚠️ VRAM 수치 해석 주의</strong>
@@ -756,7 +803,7 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
       <thead><tr><th>제공사</th><th>API 파인튜닝 지원</th><th>현재 방식</th><th>출처</th></tr></thead>
       <tbody>
         <tr><td><strong>OpenAI</strong></td><td class="recommend">지원</td><td>지도 파인튜닝(SFT), Vision 파인튜닝, DPO, 강화 파인튜닝(RFT)까지 API로 제공 — 현재 주력 모델은 GPT-6 Astra</td><td>OpenAI 공식 개발자 문서, developers.openai.com/api/docs/guides (2026-09-12 확인)</td></tr>
-        <tr><td><strong>Anthropic (Claude)</strong></td><td class="warn-cell">일반 API 미지원</td><td>"Claude API는 현재 파인튜닝을 제공하지 않는다. 관심이 있다면 Anthropic 담당자에게 문의하라"고 공식 명시. 현재 모델 라인업: Claude Opus 5, Claude Sonnet 5, Claude Fable 5.1 등</td><td>Claude 공식 문서 Glossary, docs.claude.com/en/docs/about-claude/glossary (2026-09-12 확인)</td></tr>
+        <tr><td><strong>Anthropic (Claude)</strong></td><td class="warn-cell">일반 API 미지원</td><td>"Claude API는 현재 파인튜닝을 제공하지 않는다. 관심이 있다면 Anthropic 담당자에게 문의하라"고 공식 명시. 현재 모델 라인업: Claude Opus 5, Claude Sonnet 5, Claude Fable 5.1 등</td><td><a class="src" href="https://platform.claude.com/docs/en/about-claude/glossary" target="_blank" rel="noopener">Claude 공식 문서 Glossary</a> (2026-09-12 확인, 2026-09-13 원문 재대조) <span class="tag-verified">1차</span><br><small style="color:var(--text3)">원문: "The Claude API does not currently offer fine-tuning, but ask your Anthropic contact if you are interested in exploring this option."</small></td></tr>
         <tr><td><strong>Google (Gemini)</strong></td><td class="warn-cell">Gemini API/AI Studio 미지원</td><td>2025년 5월 Gemini 1.5 Flash-001 지원 종료 이후 Gemini API·AI Studio에서 파인튜닝 가능한 모델 없음. 지도 튜닝(Supervised Tuning)은 별도의 Gemini Enterprise Agent Platform(구글 클라우드)에서만 지원</td><td>Google 공식 문서, ai.google.dev/gemini-api/docs/model-tuning (2026-04-28 갱신, 2026-09-12 확인)</td></tr>
       </tbody>
     </table>
@@ -953,30 +1000,31 @@ num_epochs: 3
 <div class="section" id="ch16">
   <h2 class="section-title section-anchor"><span class="icon">📖</span> 16. 참고자료 · 다음 단계</h2>
 
-  <h3>핵심 논문 (arXiv, 2026-09-12 원문 확인)</h3>
+  <h3>핵심 논문 (arXiv, 2026-09-12 원문 확인 · 2026-09-13 제목 재대조)</h3>
+  <p style="font-size:.88rem;color:var(--text2)"><span class="tag-v tag-fact">검증</span>아래 8건은 2026-09-13 KST에 각 arXiv 초록 페이지에 직접 요청해 <strong>arXiv ID가 표에 적힌 논문과 일치</strong>함을 제목 단위로 전수 확인했습니다(전부 <span class="http-ok">HTTP 200</span>). 링크를 눌러 원문 초록과 바로 대조할 수 있습니다.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>논문</th><th>저자/연도</th><th>핵심 내용</th><th>링크</th></tr></thead>
       <tbody>
-        <tr><td><strong>LoRA</strong></td><td>Hu et al., 2021</td><td>GPT-3 175B 기준 학습 파라미터 10,000배, GPU 메모리 3배 감소</td><td>arxiv.org/abs/2106.09685</td></tr>
-        <tr><td><strong>QLoRA</strong></td><td>Dettmers et al., 2023</td><td>65B 모델을 단일 48GB GPU에서 파인튜닝, Guanaco 24시간 학습</td><td>arxiv.org/abs/2305.14314</td></tr>
-        <tr><td><strong>DoRA</strong></td><td>Liu et al., 2024 (ICML 2024 Oral)</td><td>가중치 분해로 LoRA 대비 일관된 성능 향상, 추가 추론비용 없음</td><td>arxiv.org/abs/2402.09353</td></tr>
-        <tr><td><strong>DPO</strong></td><td>Rafailov et al., 2023</td><td>보상모델·RL 없이 선호 데이터로 직접 정렬 최적화</td><td>arxiv.org/abs/2305.18290</td></tr>
-        <tr><td><strong>GRPO (DeepSeekMath)</strong></td><td>Shao et al., 2024</td><td>크리틱 모델 없는 그룹 상대 정책 최적화, DeepSeek-R1 기반 기법</td><td>arxiv.org/abs/2402.03300</td></tr>
-        <tr><td><strong>InstructGPT (RLHF)</strong></td><td>Ouyang et al., 2022</td><td>인간 피드백 기반 강화학습으로 지시 따르기 정렬</td><td>arxiv.org/abs/2203.02155</td></tr>
-        <tr><td><strong>ZeRO</strong></td><td>Rajbhandari et al., 2019</td><td>Full FT 메모리 요구량 분석(파라미터+그래디언트+옵티마이저 상태)</td><td>arxiv.org/abs/1910.02054</td></tr>
-        <tr><td><strong>카타스트로픽 포게팅 실증</strong></td><td>Luo et al., 2023</td><td>LLM 연속 파인튜닝 중 범용 능력 손실 실증 연구</td><td>arxiv.org/abs/2308.08747</td></tr>
+        <tr><td><strong>LoRA</strong></td><td>Hu et al., 2021</td><td>GPT-3 175B 기준 학습 파라미터 10,000배, GPU 메모리 3배 감소</td><td><a class="src" href="https://arxiv.org/abs/2106.09685" target="_blank" rel="noopener">arXiv:2106.09685</a> <span class="tag-verified">제목 대조</span><br><small style="color:var(--text3)">LoRA: Low-Rank Adaptation of Large Language Models</small></td></tr>
+        <tr><td><strong>QLoRA</strong></td><td>Dettmers et al., 2023</td><td>65B 모델을 단일 48GB GPU에서 파인튜닝, Guanaco 24시간 학습</td><td><a class="src" href="https://arxiv.org/abs/2305.14314" target="_blank" rel="noopener">arXiv:2305.14314</a> <span class="tag-verified">제목 대조</span><br><small style="color:var(--text3)">QLoRA: Efficient Finetuning of Quantized LLMs</small></td></tr>
+        <tr><td><strong>DoRA</strong></td><td>Liu et al., 2024 (ICML 2024 Oral)</td><td>가중치 분해로 LoRA 대비 일관된 성능 향상, 추가 추론비용 없음</td><td><a class="src" href="https://arxiv.org/abs/2402.09353" target="_blank" rel="noopener">arXiv:2402.09353</a> <span class="tag-verified">제목 대조</span><br><small style="color:var(--text3)">DoRA: Weight-Decomposed Low-Rank Adaptation</small></td></tr>
+        <tr><td><strong>DPO</strong></td><td>Rafailov et al., 2023</td><td>보상모델·RL 없이 선호 데이터로 직접 정렬 최적화</td><td><a class="src" href="https://arxiv.org/abs/2305.18290" target="_blank" rel="noopener">arXiv:2305.18290</a> <span class="tag-verified">제목 대조</span><br><small style="color:var(--text3)">Direct Preference Optimization: Your Language Model is Secretly a Reward Model</small></td></tr>
+        <tr><td><strong>GRPO (DeepSeekMath)</strong></td><td>Shao et al., 2024</td><td>크리틱 모델 없는 그룹 상대 정책 최적화, DeepSeek-R1 기반 기법</td><td><a class="src" href="https://arxiv.org/abs/2402.03300" target="_blank" rel="noopener">arXiv:2402.03300</a> <span class="tag-verified">제목 대조</span><br><small style="color:var(--text3)">DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models</small></td></tr>
+        <tr><td><strong>InstructGPT (RLHF)</strong></td><td>Ouyang et al., 2022</td><td>인간 피드백 기반 강화학습으로 지시 따르기 정렬</td><td><a class="src" href="https://arxiv.org/abs/2203.02155" target="_blank" rel="noopener">arXiv:2203.02155</a> <span class="tag-verified">제목 대조</span><br><small style="color:var(--text3)">Training language models to follow instructions with human feedback</small></td></tr>
+        <tr><td><strong>ZeRO</strong></td><td>Rajbhandari et al., 2019</td><td>Full FT 메모리 요구량 분석(파라미터+그래디언트+옵티마이저 상태)</td><td><a class="src" href="https://arxiv.org/abs/1910.02054" target="_blank" rel="noopener">arXiv:1910.02054</a> <span class="tag-verified">제목 대조</span><br><small style="color:var(--text3)">ZeRO: Memory Optimizations Toward Training Trillion Parameter Models</small></td></tr>
+        <tr><td><strong>카타스트로픽 포게팅 실증</strong></td><td>Luo et al., 2023</td><td>LLM 연속 파인튜닝 중 범용 능력 손실 실증 연구</td><td><a class="src" href="https://arxiv.org/abs/2308.08747" target="_blank" rel="noopener">arXiv:2308.08747</a> <span class="tag-verified">제목 대조</span><br><small style="color:var(--text3)">An Empirical Study of Catastrophic Forgetting in Large Language Models During Continual Fine-tuning</small></td></tr>
       </tbody>
     </table>
   </div>
 
-  <h3>공식 문서 (2026-09-12 직접 확인)</h3>
+  <h3>공식 문서 (2026-09-12 직접 확인 · 2026-09-13 링크 재점검)</h3>
   <ul>
-    <li><strong>OpenAI 파인튜닝 가이드</strong> — developers.openai.com/api/docs/guides/supervised-fine-tuning — SFT/Vision FT/DPO/RFT 전체 가이드 [OpenAI 공식, 2026-09]</li>
-    <li><strong>Claude Glossary(파인튜닝 항목)</strong> — docs.claude.com/en/docs/about-claude/glossary — "Claude API는 현재 파인튜닝 미제공" 공식 명시 [Anthropic 공식, 2026-09 확인]</li>
-    <li><strong>Gemini API 파인튜닝 안내</strong> — ai.google.dev/gemini-api/docs/model-tuning — Gemini API/AI Studio 파인튜닝 미지원, Gemini Enterprise Agent Platform으로 이관 [Google 공식, 2026-04-28 갱신]</li>
-    <li><strong>Hugging Face PEFT</strong> — huggingface.co/docs/peft — LoRA/QLoRA/DoRA 구현 표준 라이브러리 문서</li>
-    <li><strong>Hugging Face TRL</strong> — huggingface.co/docs/trl — SFT/DPO/GRPO 트레이너 문서</li>
+    <li><strong>OpenAI 파인튜닝 가이드</strong> — <a class="src" href="https://developers.openai.com/api/docs/guides/supervised-fine-tuning" target="_blank" rel="noopener">developers.openai.com/api/docs/guides/supervised-fine-tuning</a> — SFT/Vision FT/DPO/RFT 전체 가이드 [OpenAI 공식, 2026-09]</li>
+    <li><strong>Claude Glossary(파인튜닝 항목)</strong> — <a class="src" href="https://platform.claude.com/docs/en/about-claude/glossary" target="_blank" rel="noopener">platform.claude.com/docs/en/about-claude/glossary</a> — "Claude API는 현재 파인튜닝 미제공" 공식 명시 [Anthropic 공식, 2026-09 확인]</li>
+    <li><strong>Gemini API 파인튜닝 안내</strong> — <a class="src" href="https://ai.google.dev/gemini-api/docs/model-tuning" target="_blank" rel="noopener">ai.google.dev/gemini-api/docs/model-tuning</a> — Gemini API/AI Studio 파인튜닝 미지원, Gemini Enterprise Agent Platform으로 이관 [Google 공식, 2026-04-28 갱신]</li>
+    <li><strong>Hugging Face PEFT</strong> — <a class="src" href="https://huggingface.co/docs/peft/index" target="_blank" rel="noopener">huggingface.co/docs/peft</a> — LoRA/QLoRA/DoRA 구현 표준 라이브러리 문서</li>
+    <li><strong>Hugging Face TRL</strong> — <a class="src" href="https://huggingface.co/docs/trl/index" target="_blank" rel="noopener">huggingface.co/docs/trl</a> — SFT/DPO/GRPO 트레이너 문서</li>
   </ul>
 
   <h3>자매 문서</h3>
@@ -994,6 +1042,22 @@ num_epochs: 3
       <li>파일럿(Phase 2) 예산 $500~2,000(약 69~276만원) 규모로 소규모 승인 요청</li>
     </ol>
   </div>
+</div>
+
+<!-- ===== 출처 검수 이력 (2026-09-13 sources_p1) ===== -->
+<div class="section" id="source-audit-20260913">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 부록. 출처 검수 이력 (2026-09-13 KST)</h2>
+  <p>본 문서는 2026-09-12 초판 작성 이후, <strong>2026-09-13 KST</strong>에 별도 출처 검수를 거쳤습니다. 검수 원칙은 ①원 논문·공식 문서 등 <strong>1차 출처 우선</strong>, ②모든 인용을 <strong>클릭 가능한 링크</strong>로 전환, ③확인하지 못한 내용은 삭제하지 않고 <span class="tag-unverified">미검증</span>으로 명시, ④원문과 다른 서술은 원문 기준으로 교정입니다. 아래는 이번 검수에서 실제로 바뀐 내용입니다.</p>
+  <ul>
+    <li><strong>전수 확인</strong> — 16장 핵심 논문 <strong>8건의 arXiv ID가 표에 적힌 논문과 실제로 일치</strong>하는지 제목 단위로 전수 대조했습니다(LoRA·QLoRA·DoRA·DPO·GRPO/DeepSeekMath·InstructGPT·ZeRO·카타스트로픽 포게팅). <strong>8건 모두 일치</strong>했으며, 표에 논문 정식 제목을 병기하고 클릭 가능한 링크로 전환했습니다.</li>
+    <li><strong>보강</strong> — 4장 PEFT 비교표의 핵심 근거 3건(LoRA 10,000배·QLoRA 65B/48GB·DoRA 가중치 분해)을 <strong>원 논문 초록 문장과 직접 대조</strong>해 서술이 정확함을 확인하고 근거를 요약해 추가했습니다. Adapter 행의 "추론 지연 증가" 지적이 LoRA 논문 초록의 <em>"unlike adapters, no additional inference latency"</em>에서 온 것임도 명시했습니다.</li>
+    <li><strong>경계 명확화</strong> — 같은 표의 <strong>VRAM 열은 논문 수치가 아니라 설정 의존적 추정치</strong>임을 검수 박스에서 다시 못박았습니다. 장비 구매 의사결정에 이 숫자를 그대로 인용해서는 안 됩니다.</li>
+    <li><strong>원문 인용 추가</strong> — 12장 "Claude API 파인튜닝 미지원" 서술의 근거를 공식 Glossary 원문 문장(<em>"The Claude API does not currently offer fine-tuning, but ask your Anthropic contact…"</em>)으로 병기했습니다.</li>
+    <li><strong>URL 이전 반영</strong> — 초판이 인용한 <code>docs.claude.com</code> 주소는 2026-09-13 확인 시 <code>platform.claude.com</code>으로 <strong>302 리다이렉트</strong>됩니다. 정식 주소로 교체했습니다.</li>
+    <li><strong>링크화</strong> — 16장 공식 문서 5건(OpenAI 파인튜닝 가이드·Claude Glossary·Gemini 파인튜닝 안내·HF PEFT·HF TRL)을 모두 클릭 가능한 링크로 전환했습니다.</li>
+    <li><strong>미해소</strong> — 8장 GPU 임대가·학습 비용 시뮬레이션은 제공사별 변동이 커 <strong>이번 검수에서 재확인하지 않았습니다</strong> <span class="tag-unverified">미검증</span>. 13~14장의 AADS 후보 업무 선정은 본 문서의 <span class="tag-v tag-plan">제안</span>이며 실행된 계획이 아닙니다.</li>
+  </ul>
+  <p style="font-size:.82rem;color:var(--text3)">※ 본 검수에서 인용한 외부 URL은 2026-09-13 09:40~10:20 KST에 전수 점검했으며, 대부분 <span class="http-ok">HTTP 200</span>으로 응답했습니다. Gartner·BCG 등 자동화 접근을 차단하는 사이트는 <span class="http-waf">HTTP 403</span>으로 응답하지만 브라우저에서는 정상 열람되며, 링크가 죽은 것이 아닙니다. "HTTP 200"은 해당 URL이 응답했다는 뜻이며, 그 페이지에 실린 모든 내용을 본 문서가 검증했다는 뜻이 아닙니다. "제목 대조"는 arXiv ID가 해당 논문을 가리킨다는 확인이며, 논문 본문의 모든 실험 수치를 본 문서가 재현·검증했다는 뜻은 아닙니다.</p>
 </div>
 
 <!-- ===== FOOTER ===== -->

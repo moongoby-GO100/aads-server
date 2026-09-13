@@ -107,6 +107,30 @@ border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-
   table{font-size:.78rem}
   th,td{padding:8px 10px}
 }
+/* === 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) === */
+a.src{color:var(--accent3);text-decoration:none;border-bottom:1px dotted var(--accent3);word-break:break-all}
+a.src:hover{color:var(--accent);border-bottom-style:solid}
+.src-legend{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent3);
+border-radius:12px;padding:20px 24px;margin:0 0 40px}
+.src-legend h3{margin:0 0 10px;font-size:1.02rem;color:var(--accent3)}
+.src-legend ul{margin:10px 0 12px 18px}
+.src-legend li{font-size:.87rem;color:var(--text2);margin-bottom:5px}
+.tag-v{display:inline-block;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:7px;white-space:nowrap}
+.tag-fact{background:#10b98120;color:#34d399}
+.tag-edu{background:#3b82f620;color:#60a5fa}
+.tag-plan{background:#8b5cf620;color:#a78bfa}
+.tag-unver{background:#f59e0b20;color:#fbbf24}
+.tag-verified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#10b98120;color:#34d399;margin-left:6px}
+.tag-unverified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#ef444420;color:#f87171;margin-left:6px}
+.src-fix{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--warning);
+border-radius:10px;padding:14px 18px;margin:18px 0;font-size:.88rem;color:var(--text2)}
+.src-fix strong{color:var(--warning)}
+/* 모바일 가로 스크롤 방지: 긴 URL·경로 토큰이 줄바꿈되지 않아 문서 폭을 넘기던 문제 */
+.alert,.info-card,.checkpoint,.ceo-box,td,li,p{overflow-wrap:break-word}
+/* 줄바꿈되지 않는 코드 블록(JSON 예시 등)이 좁은 화면에서 문서 폭을 밀어내던 문제:
+   블록 자체를 가로 스크롤시키고, 그리드 칸이 내용 최소폭에 갇히지 않도록 min-width 해제 */
+pre{overflow-x:auto;max-width:100%}
+.compare-row>*,.card-grid>*,.compare-box,.info-card{min-width:0}
 </style>
 </head>
 <body>
@@ -141,7 +165,21 @@ border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-
     <a href="#ch12"><span class="num">12</span> AADS 실측 ② 이미지 생성 35만 건 실패의 교훈</a>
     <a href="#ch13"><span class="num">13</span> 실무 적용 패턴 — 의사결정 트리</a>
     <a href="#ch14"><span class="num">14</span> 참고자료와 다음 단계 로드맵</a>
+    <a href="#source-audit-20260913"><span class="num">★</span> 부록. 출처 검수 이력 (2026-09-13)</a>
   </div>
+</div>
+
+<!-- ===== 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) ===== -->
+<div class="src-legend">
+  <h3>📌 출처 표기 범례 — 무엇이 검증된 사실이고 무엇이 아닌가</h3>
+  <p style="font-size:.87rem;color:var(--text2);margin-bottom:6px">이 문서의 주장은 근거의 강도에 따라 아래 4가지로 구분됩니다. 외부 출처는 <strong>기관 공식 문서·공식 가격표·원 논문(1차 출처)</strong>의 클릭 가능한 링크로 연결되어 있습니다.</p>
+  <ul>
+    <li><span class="tag-v tag-fact">검증</span>1차 출처로 원문을 확인한 사실 — 링크를 눌러 직접 대조할 수 있습니다</li>
+    <li><span class="tag-v tag-edu">예시</span>이해를 돕기 위한 교육용 예시·비유·가상 시나리오 — 실측치가 아닙니다</li>
+    <li><span class="tag-v tag-plan">제안</span>본 문서가 제안하는 개선안 — 아직 실행되지 않은 계획입니다</li>
+    <li><span class="tag-v tag-unver">미검증</span>확인하지 못한 항목 — 의사결정 전 반드시 재확인이 필요합니다</li>
+  </ul>
+  <p style="font-size:.8rem;color:var(--text3);margin:0">링크 점검: <strong>2026-09-13 09:40~10:20 KST</strong>, 서버 68 런타임에서 본 문서가 인용한 각 URL에 HTTP 요청을 보내 응답 코드를 기록했습니다. 총 66개 URL 중 <strong>61개가 <span class="http-ok">HTTP 200</span></strong>이며, Gartner·BCG 등 일부 기관 사이트는 자동화 접근을 차단(<span class="http-waf">HTTP 403</span>)하고 Milvus 문서는 자동화 요청에 302로 응답하지만 <strong>브라우저에서는 모두 정상 열람</strong>됩니다. <strong>URL 접근 확인은 링크가 살아 있다는 뜻일 뿐, 그 페이지에 실린 모든 수치를 본 문서가 검증했다는 뜻은 아닙니다.</strong> 가격·모델 라인업·스펙 버전은 수시로 바뀌므로 의사결정 전 링크 원문을 다시 확인하십시오.</p>
 </div>
 
 <!-- ===== CH1 ===== -->
@@ -155,12 +193,23 @@ border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-
       <thead><tr><th>제공사</th><th>최신 텍스트·비전 코어 모델(2026-09 기준)</th><th>이미지 생성</th><th>영상 생성</th><th>음성/음악</th></tr></thead>
       <tbody>
         <tr><td><strong>Anthropic</strong></td><td>Opus 5 / Sonnet 5 / Haiku 4.5 / Fable 5.1 (모두 이미지·문서 입력 지원, 자체 이미지/영상 생성 모델은 없음)</td><td>미제공(타사 연동 필요)</td><td>미제공</td><td>미제공</td></tr>
-        <tr><td><strong>Google</strong></td><td>Gemini 3.8 Flash(최신), Gemini 3.1 Pro Preview, Gemini Omni Flash(음성·영상 실시간 통합)</td><td>Nano Banana Pro(Gemini 3 Pro Image), Nano Banana 2(Gemini 3.1 Flash Image), Imagen 4 계열</td><td>Veo 3.1</td><td>Lyria 3.5(음악), Gemini TTS</td></tr>
-        <tr><td><strong>OpenAI</strong></td><td>GPT-6 Astra(최신 플래그십), GPT-5.6 Sol/Terra/Luna 계열</td><td>GPT-Image-1/2</td><td>Sora 2 / Sora 2 Pro</td><td>Whisper(STT), TTS 계열</td></tr>
+        <tr><td><strong>Google</strong></td><td>Gemini 3.8 Flash(최신), Gemini 3.1 Pro Preview, Gemini Omni Flash(음성·영상 실시간 통합)</td><td>Nano Banana Pro(<code>gemini-3-pro-image</code>), Nano Banana 2(<code>gemini-3.1-flash-image</code>), Nano Banana 2 Lite<br><small style="color:var(--text3)">※ Imagen 4 계열은 공식 모델 목록에서 <strong>Deprecated</strong>로 표기됨(아래 교정 박스)</small></td><td>Veo 3.1</td><td>Lyria 3.5(음악), Gemini 3.1 Flash TTS</td></tr>
+        <tr><td><strong>OpenAI</strong></td><td>GPT-6 Astra(최신 플래그십), GPT-5.6 Sol/Terra/Luna 계열</td><td>GPT-Image-2.5 Sunburst / GPT-Image-2.5 Flare<br><small style="color:var(--text3)">※ 초판 "GPT-Image-1/2"에서 교정(아래 박스)</small></td><td>Sora 2 / Sora 2 Pro</td><td>Whisper(STT), TTS 계열</td></tr>
       </tbody>
     </table>
   </div>
   <p class="unverified">※ 위 표의 모델 라인업 명칭은 각사 공식 페이지(Anthropic pricing, Google Gemini API pricing, OpenAI platform docs)를 2026-09-12에 fetch하여 확인한 값입니다. 다만 세부 스펙(파라미터 수, 정확한 출시일)은 각사가 공개하지 않아 미검증입니다.</p>
+
+  <div class="src-fix"><strong>2026-09-13 검수 — 모델 라인업 재대조 결과 2건 교정, 1건 상태 변경</strong><br>
+  제품 라인업은 이 문서에서 가장 빨리 낡는 정보이므로 각사 공식 문서와 다시 대조했습니다. <strong>대부분은 정확했고</strong>, 아래 항목만 달라졌습니다.
+  <ul style="margin:10px 0 4px 18px;font-size:.87rem">
+    <li><strong>교정 — OpenAI 이미지 생성</strong>: 초판의 "GPT-Image-1/2"는 현재 목록에 없습니다. <a class="src" href="https://developers.openai.com/api/docs/models" target="_blank" rel="noopener">OpenAI 공식 모델 문서</a> 기준 현행 이미지 모델은 <strong>GPT-Image-2.5 Sunburst</strong>(최상위)와 <strong>GPT-Image-2.5 Flare</strong>(고속)입니다. <span class="tag-v tag-fact">검증</span></li>
+    <li><strong>상태 변경 — Google Imagen 4</strong>: <a class="src" href="https://ai.google.dev/gemini-api/docs/models" target="_blank" rel="noopener">Gemini API 공식 모델 목록</a>에서 <strong>Deprecated로 표기</strong>되어 있습니다. 신규 설계에 Imagen 4 계열을 넣지 마십시오. 이미지 생성은 Nano Banana 계열이 현행 권장입니다. <span class="tag-v tag-fact">검증</span></li>
+    <li><strong>정밀화 — Google 음성</strong>: "Gemini TTS"는 공식 목록상 <strong>Gemini 3.1 Flash TTS</strong>가 정식 명칭입니다. Nano Banana Pro/2의 모델 ID(<code>gemini-3-pro-image</code> / <code>gemini-3.1-flash-image</code>)도 공식 문서와 일치함을 확인했습니다.</li>
+    <li><strong>확인됨(변경 없음)</strong>: Gemini 3.8 Flash·Lyria 3.5·Nano Banana Pro/2와 OpenAI GPT-6 Astra·GPT-5.6 Sol/Terra/Luna는 공식 문서에 <strong>그대로 등재</strong>되어 있습니다.</li>
+    <li><span class="tag-v tag-unver">미검증</span>Veo 3.1·Sora 2/Sora 2 Pro·Gemini Omni Flash는 이번에 확인한 모델 문서 페이지에서 확인되지 않았습니다. <strong>"없다"는 뜻이 아니라 별도 제품 문서에 있을 가능성이 크며</strong>, 도입 검토 시 각사 영상 생성 전용 문서를 직접 확인해야 합니다.</li>
+  </ul>
+  <strong>이 표를 인용할 때의 원칙:</strong> 모델 라인업은 수 주 단위로 바뀝니다. 본 표는 <strong>2026-09-13 KST 시점 스냅샷</strong>이며, 기술 선정 문서에 그대로 복사하지 말고 링크된 공식 목록을 그 시점에 다시 확인하십시오.</div>
 
   <div class="diagram">
     <div class="title">멀티모달 AI의 두 갈래 — "이해"와 "생성"</div>
@@ -199,7 +248,7 @@ border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-
 <div class="section" id="ch2">
   <h2 class="section-title section-anchor"><span class="icon">👁️</span> 02. 비전 입력 이해 — 이미지·문서·차트를 읽는 방법</h2>
 
-  <p>비전 지원 모델은 이미지를 받으면 내부적으로 작은 타일(patch)로 쪼개 이를 텍스트 토큰과 같은 "토큰" 형태로 변환한 뒤 언어모델에 함께 넣습니다. 즉 이미지 한 장도 결국 "토큰 뭉치"로 과금되며, 해상도가 높거나 이미지 장수가 많을수록 토큰 소모(=비용)가 커집니다. 정확한 타일 크기·토큰 환산 공식은 제공사·모델별로 다르고 수시로 바뀌므로 <span class="unverified">본 문서에서는 구체적 환산표를 확정값으로 제시하지 않고 "미검증"으로 남겨두며, 실제 예산 산정 시 각사 공식 문서의 최신 계산기를 사용해야 합니다.</span></p>
+  <p>비전 지원 모델은 이미지를 받으면 내부적으로 작은 타일(patch)로 쪼개 이를 텍스트 토큰과 같은 "토큰" 형태로 변환한 뒤 언어모델에 함께 넣습니다. 즉 이미지 한 장도 결국 "토큰 뭉치"로 과금되며, 해상도가 높거나 이미지 장수가 많을수록 토큰 소모(=비용)가 커집니다. 정확한 타일 크기·토큰 환산 공식은 제공사·모델별로 다르고 수시로 바뀌므로 <span class="unverified">본 문서에서는 구체적 환산표를 확정값으로 제시하지 않고 "미검증"으로 남겨두며, 실제 예산 산정 시 각사 공식 문서의 최신 계산기를 사용해야 합니다.</span> <span class="tag-v tag-fact">검증</span>이 "미확정" 판단 자체는 2026-09-13에도 유효합니다 — Anthropic의 경우 이미지 토큰은 <a class="src" href="https://platform.claude.com/docs/en/build-with-claude/vision" target="_blank" rel="noopener">비전 문서</a>의 이미지 크기 기준으로 산정되며, 요청별 정확한 토큰 수는 <a class="src" href="https://platform.claude.com/docs/en/build-with-claude/token-counting" target="_blank" rel="noopener">토큰 카운팅 엔드포인트</a>로 사전 측정하는 것이 공식 권장 방식입니다.</p>
 
   <h3>이미지 이해 vs 문서(PDF) 이해 vs 차트/표 이해</h3>
   <div class="table-wrap">
@@ -510,7 +559,7 @@ border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-
   <h3>AADS 실측 — 이미지 생성 프롬프트 필터링</h3>
   <p><code>app/services/image_service.py</code>의 <code>_sanitize_prompt()</code> 함수는 프롬프트를 1000자로 자르고 정규식으로 <code>brand</code>, <code>logo</code>, <code>trademark</code>, <code>celebrity</code>, <code>famous</code> 단어를 대소문자 무관하게 제거합니다. 이는 저작권·초상권 리스크를 줄이기 위한 최소한의 장치이며, 완벽한 필터는 아닙니다(단어 자체를 지우는 방식이라 우회 표현은 걸러지지 않을 수 있음).</p>
 
-  <div class="alert alert-danger"><strong>이미지 속 프롬프트 인젝션 주의</strong>비전 모델에 넣는 이미지에 사람이 읽기 어려운 방식으로 텍스트 지시가 숨겨져 있으면, 모델이 이를 "사용자의 새로운 지시"로 오인해 원래 작업과 무관한 행동을 할 수 있습니다. 외부에서 받은 이미지(사용자 업로드, 웹 크롤링 결과)를 비전 모델에 넣을 때는 이 위험을 감안한 시스템 프롬프트 방어가 필요합니다.</p>
+  <div class="alert alert-danger"><strong>이미지 속 프롬프트 인젝션 주의</strong>비전 모델에 넣는 이미지에 사람이 읽기 어려운 방식으로 텍스트 지시가 숨겨져 있으면, 모델이 이를 "사용자의 새로운 지시"로 오인해 원래 작업과 무관한 행동을 할 수 있습니다. 외부에서 받은 이미지(사용자 업로드, 웹 크롤링 결과)를 비전 모델에 넣을 때는 이 위험을 감안한 시스템 프롬프트 방어가 필요합니다.</div>
 
   <div class="ceo-box">
     <div class="ceo-title">📌 CEO 체크포인트</div>
@@ -663,9 +712,9 @@ UI가 의도대로 보이는지 확인해야 한다
     <table>
       <thead><tr><th>출처명</th><th>확인 방법/날짜</th><th>비고</th></tr></thead>
       <tbody>
-        <tr><td>Anthropic 공식 가격 페이지</td><td>fetch_url, 2026-09-12</td><td>Opus5/Sonnet5/Haiku4.5/Fable5.1 텍스트 토큰 단가 — 확정치 인용</td></tr>
-        <tr><td>Google Gemini API 공식 가격 페이지</td><td>fetch_url, 2026-09-12</td><td>Gemini 3.8 Flash 텍스트 단가 확정, 미디어 생성 단가는 페이지 하단 미확인</td></tr>
-        <tr><td>OpenAI Platform 가격/문서 페이지</td><td>fetch_url, 2026-09-12</td><td>모델 라인업(GPT-6 Astra 등)만 확인, 단가 미확인</td></tr>
+        <tr><td><a class="src" href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">Anthropic 공식 가격 페이지</a> <span class="tag-verified">1차</span></td><td>fetch_url, 2026-09-12<br>2026-09-13 재확인</td><td>Opus5/Sonnet5/Haiku4.5/Fable5.1 텍스트 토큰 단가 — 확정치 인용</td></tr>
+        <tr><td><a class="src" href="https://ai.google.dev/gemini-api/docs/models" target="_blank" rel="noopener">Google Gemini API 공식 모델 목록</a> <span class="tag-verified">1차</span></td><td>fetch_url, 2026-09-12<br>2026-09-13 재확인</td><td>Gemini 3.8 Flash 텍스트 단가 확정, 미디어 생성 단가는 페이지 하단 미확인</td></tr>
+        <tr><td><a class="src" href="https://developers.openai.com/api/docs/models" target="_blank" rel="noopener">OpenAI 공식 모델 문서</a> <span class="tag-verified">1차</span></td><td>fetch_url, 2026-09-12<br>2026-09-13 재확인</td><td>모델 라인업(GPT-6 Astra 등)만 확인, 단가 미확인</td></tr>
         <tr><td>AADS DB — model_routing_preferences 테이블</td><td>query_database, 2026-09-12</td><td>image/edit_image/video/music/audio/visual_qa 라우팅 실측(4~9장 근거)</td></tr>
         <tr><td>AADS DB — media_generation_jobs 테이블</td><td>query_database, 2026-09-12</td><td>총 356,417건 실행 이력 실측(11·12장 근거)</td></tr>
         <tr><td>AADS 코드 — image_service.py, local_ocr_bridge.py, visual_qa.py, voice_service.py, design_qa_scorer.py, ai_route_resolver.py</td><td>read_remote_file, 2026-09-12</td><td>실제 구현 로직 실측(3·4·6·9장 근거)</td></tr>
@@ -686,6 +735,23 @@ UI가 의도대로 보이는지 확인해야 한다
       </tbody>
     </table>
   </div>
+</div>
+
+<!-- ===== 출처 검수 이력 (2026-09-13 sources_p1) ===== -->
+<div class="section" id="source-audit-20260913">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 부록. 출처 검수 이력 (2026-09-13 KST)</h2>
+  <p>본 문서는 2026-09-12 초판 작성 이후, <strong>2026-09-13 KST</strong>에 별도 출처 검수를 거쳤습니다. 검수 원칙은 ①각사 공식 모델 문서·공식 가격표 등 <strong>1차 출처 우선</strong>, ②모든 인용을 <strong>클릭 가능한 링크</strong>로 전환, ③확인하지 못한 내용은 삭제하지 않고 <span class="tag-unverified">미검증</span>으로 명시, ④원문과 다른 서술은 원문 기준으로 교정입니다. 아래는 이번 검수에서 실제로 바뀐 내용입니다.</p>
+  <ul>
+    <li><strong>교정</strong> — 1장 라인업표의 OpenAI 이미지 생성 모델 "GPT-Image-1/2"는 현행 목록에 없습니다. 공식 모델 문서 기준 <strong>GPT-Image-2.5 Sunburst</strong>(최상위)·<strong>GPT-Image-2.5 Flare</strong>(고속)로 교정했습니다.</li>
+    <li><strong>상태 변경(중요)</strong> — Google <strong>Imagen 4 계열이 공식 모델 목록에서 Deprecated로 표기</strong>되어 있습니다. 표에서 현행 권장 라인(Nano Banana 계열)과 분리 표기하고, 신규 설계에 넣지 말라는 경고를 추가했습니다.</li>
+    <li><strong>정밀화</strong> — "Gemini TTS"의 정식 명칭은 <strong>Gemini 3.1 Flash TTS</strong>입니다. Nano Banana Pro/2의 모델 ID(<code>gemini-3-pro-image</code>·<code>gemini-3.1-flash-image</code>)도 공식 문서와 일치함을 확인해 표에 병기했습니다.</li>
+    <li><strong>재확인(변경 없음)</strong> — Gemini 3.8 Flash·Lyria 3.5·Nano Banana Pro/2, OpenAI GPT-6 Astra·GPT-5.6 Sol/Terra/Luna는 공식 문서에 <strong>그대로 등재</strong>되어 있어 초판 서술이 정확했습니다.</li>
+    <li><strong>미검증 명시</strong> — Veo 3.1·Sora 2/Sora 2 Pro·Gemini Omni Flash는 이번에 확인한 모델 문서에서 확인되지 않았습니다. <strong>부재의 증거가 아니라 확인 범위 밖</strong>이라는 뜻이며, 영상 생성 도입 검토 시 각사 전용 문서를 직접 확인해야 합니다.</li>
+    <li><strong>보강</strong> — 2장 이미지 토큰 환산이 "미확정"이라는 초판 판단이 2026-09-13에도 유효함을 확인하고, Anthropic 비전 문서와 <strong>토큰 카운팅 엔드포인트로 사전 측정</strong>하라는 공식 권장 경로를 링크로 추가했습니다.</li>
+    <li><strong>HTML 구조 교정</strong> — 5장 "이미지 속 프롬프트 인젝션 주의" 경고 박스가 <code>&lt;/div&gt;</code> 대신 <code>&lt;/p&gt;</code>로 닫혀 있어 <strong>그 뒤 본문 전체가 빨간 경고 박스 안에 들어가 렌더링되던 문제</strong>를 교정했습니다(초판부터 있던 오류).</li>
+    <li><strong>미해소</strong> — 4장 멀티모달 토큰 단가, 이미지·영상 생성 단가는 이번에도 <strong>확정하지 않았습니다</strong> <span class="tag-unverified">미검증</span>. 10~12장의 AADS 내부 DB·코드 실측치(미디어 작업 356,417건 등)는 본 검수 범위 밖이라 재조회하지 않았습니다.</li>
+  </ul>
+  <p style="font-size:.82rem;color:var(--text3)">※ 본 검수에서 인용한 외부 URL은 2026-09-13 09:40~10:20 KST에 전수 점검했으며, 대부분 <span class="http-ok">HTTP 200</span>으로 응답했습니다. Gartner·BCG 등 자동화 접근을 차단하는 사이트는 <span class="http-waf">HTTP 403</span>으로 응답하지만 브라우저에서는 정상 열람되며, 링크가 죽은 것이 아닙니다. "HTTP 200"은 해당 URL이 응답했다는 뜻이며, 그 페이지에 실린 모든 내용을 본 문서가 검증했다는 뜻이 아닙니다. 모델 라인업은 수 주 단위로 바뀌는 정보입니다. 본 표는 <strong>2026-09-13 KST 스냅샷</strong>이므로 기술 선정 문서에 그대로 복사하지 말고, 그 시점의 공식 목록을 다시 확인하십시오.</p>
 </div>
 
 <!-- ===== FOOTER ===== -->

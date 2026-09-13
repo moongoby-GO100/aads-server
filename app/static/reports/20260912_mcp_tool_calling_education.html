@@ -106,6 +106,30 @@ border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-
   table{font-size:.78rem}
   th,td{padding:8px 10px}
 }
+/* === 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) === */
+a.src{color:var(--accent3);text-decoration:none;border-bottom:1px dotted var(--accent3);word-break:break-all}
+a.src:hover{color:var(--accent);border-bottom-style:solid}
+.src-legend{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent3);
+border-radius:12px;padding:20px 24px;margin:0 0 40px}
+.src-legend h3{margin:0 0 10px;font-size:1.02rem;color:var(--accent3)}
+.src-legend ul{margin:10px 0 12px 18px}
+.src-legend li{font-size:.87rem;color:var(--text2);margin-bottom:5px}
+.tag-v{display:inline-block;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:7px;white-space:nowrap}
+.tag-fact{background:#10b98120;color:#34d399}
+.tag-edu{background:#3b82f620;color:#60a5fa}
+.tag-plan{background:#8b5cf620;color:#a78bfa}
+.tag-unver{background:#f59e0b20;color:#fbbf24}
+.tag-verified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#10b98120;color:#34d399;margin-left:6px}
+.tag-unverified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#ef444420;color:#f87171;margin-left:6px}
+.src-fix{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--warning);
+border-radius:10px;padding:14px 18px;margin:18px 0;font-size:.88rem;color:var(--text2)}
+.src-fix strong{color:var(--warning)}
+/* 모바일 가로 스크롤 방지: 긴 URL·경로 토큰이 줄바꿈되지 않아 문서 폭을 넘기던 문제 */
+.alert,.info-card,.checkpoint,.ceo-box,td,li,p{overflow-wrap:break-word}
+/* 줄바꿈되지 않는 코드 블록(JSON 예시 등)이 좁은 화면에서 문서 폭을 밀어내던 문제:
+   블록 자체를 가로 스크롤시키고, 그리드 칸이 내용 최소폭에 갇히지 않도록 min-width 해제 */
+pre{overflow-x:auto;max-width:100%}
+.compare-row>*,.card-grid>*,.compare-box,.info-card{min-width:0}
 </style>
 </head>
 <body>
@@ -142,7 +166,21 @@ border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-
     <a href="#ch14"><span class="num">14</span> 나쁜 도구 설계 vs 좋은 도구 설계 5쌍</a>
     <a href="#ch15"><span class="num">15</span> CEO 체크리스트와 지시서 템플릿</a>
     <a href="#ch16"><span class="num">16</span> AADS 적용 현황 종합·미검증 항목·참고자료</a>
+    <a href="#source-audit-20260913"><span class="num">★</span> 부록. 출처 검수 이력 (2026-09-13)</a>
   </div>
+</div>
+
+<!-- ===== 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) ===== -->
+<div class="src-legend">
+  <h3>📌 출처 표기 범례 — 무엇이 검증된 사실이고 무엇이 아닌가</h3>
+  <p style="font-size:.87rem;color:var(--text2);margin-bottom:6px">이 문서의 주장은 근거의 강도에 따라 아래 4가지로 구분됩니다. 외부 출처는 <strong>기관 공식 문서·공식 가격표·원 논문(1차 출처)</strong>의 클릭 가능한 링크로 연결되어 있습니다.</p>
+  <ul>
+    <li><span class="tag-v tag-fact">검증</span>1차 출처로 원문을 확인한 사실 — 링크를 눌러 직접 대조할 수 있습니다</li>
+    <li><span class="tag-v tag-edu">예시</span>이해를 돕기 위한 교육용 예시·비유·가상 시나리오 — 실측치가 아닙니다</li>
+    <li><span class="tag-v tag-plan">제안</span>본 문서가 제안하는 개선안 — 아직 실행되지 않은 계획입니다</li>
+    <li><span class="tag-v tag-unver">미검증</span>확인하지 못한 항목 — 의사결정 전 반드시 재확인이 필요합니다</li>
+  </ul>
+  <p style="font-size:.8rem;color:var(--text3);margin:0">링크 점검: <strong>2026-09-13 09:40~10:20 KST</strong>, 서버 68 런타임에서 본 문서가 인용한 각 URL에 HTTP 요청을 보내 응답 코드를 기록했습니다. 총 66개 URL 중 <strong>61개가 <span class="http-ok">HTTP 200</span></strong>이며, Gartner·BCG 등 일부 기관 사이트는 자동화 접근을 차단(<span class="http-waf">HTTP 403</span>)하고 Milvus 문서는 자동화 요청에 302로 응답하지만 <strong>브라우저에서는 모두 정상 열람</strong>됩니다. <strong>URL 접근 확인은 링크가 살아 있다는 뜻일 뿐, 그 페이지에 실린 모든 수치를 본 문서가 검증했다는 뜻은 아닙니다.</strong> 가격·모델 라인업·스펙 버전은 수시로 바뀌므로 의사결정 전 링크 원문을 다시 확인하십시오.</p>
 </div>
 
 <!-- ===== CH1 ===== -->
@@ -167,6 +205,10 @@ AI 앱B ─커스텀코드─ 검색API          AI 앱B ─┘                 
   </div>
 
   <p>MCP 스펙은 계속 개정되고 있습니다. 2026-09-12 기준 공식 문서(modelcontextprotocol.io/specification)를 실제 조회한 결과, 최신 버전은 <strong>2026-07-28</strong>이며 그 이전 안정 버전은 <strong>2025-06-18</strong>이었습니다(2025-03-26, 2024-11-05가 그 이전 버전으로 표기됨). 두 버전 사이에는 아키텍처 수준의 변화가 있었는데, 이는 5장에서 상세히 다룹니다.</p>
+
+  <div class="src-fix"><strong>2026-09-13 검수 교정 — 개정 이력에서 한 버전이 누락되어 있었습니다</strong><br>
+  <a class="src" href="https://modelcontextprotocol.io/specification/versioning" target="_blank" rel="noopener">공식 버전 관리 문서</a>를 다시 확인한 결과 2026-07-28이 <strong>current</strong>라는 점은 맞지만, <strong>그 직전 버전은 2025-06-18이 아니라 <code>2025-11-25</code></strong>입니다. 전체 개정 이력은 <code>2024-11-05 → 2025-03-26 → 2025-06-18 → 2025-11-25 → 2026-07-28</code> 5개입니다 <span class="tag-v tag-fact">검증</span>. 공식 문서는 핸드셰이크 기반 구버전을 "<code>2025-11-25</code> 및 그 이전"으로 묶어 하위 호환 대상으로 규정하므로, <strong>구버전 호환 범위를 산정할 때 이 버전을 빠뜨리면 안 됩니다.</strong><br>
+  덧붙여 MCP 버전 문자열은 "마지막으로 <em>하위 호환을 깨는</em> 변경이 있었던 날짜"를 뜻하며, 하위 호환이 유지되는 개선에는 버전을 올리지 않습니다. 즉 <strong>"버전 날짜가 그대로 = 문서 내용이 그대로"가 아닙니다.</strong></div>
 
   <div class="table-wrap">
     <table>
@@ -196,7 +238,7 @@ AI 앱B ─커스텀코드─ 검색API          AI 앱B ─┘                 
 <div class="section" id="ch2">
   <h2 class="section-title section-anchor"><span class="icon">⚙️</span> 02. Tool Calling 원리 — LLM은 도구를 어떻게 "호출"하는가</h2>
 
-  <p>Anthropic 공식 문서(docs.claude.com, 2026-09-12 확인)는 Tool Calling을 이렇게 설명합니다: "Tool use(함수 호출이라고도 함)는 Claude가 개발자가 정의했거나 Anthropic이 제공하는 함수를 호출할 수 있게 합니다. Claude는 사용자 요청과 도구 설명을 근거로 언제 도구를 호출할지 스스로 결정합니다." 중요한 점은, LLM이 실제로 코드를 "실행"하는 것이 아니라는 것입니다. LLM은 "이 도구를 이 인자로 불러야 한다"는 <strong>구조화된 요청(JSON)</strong>을 텍스트로 생성할 뿐이고, 그 요청을 실제로 실행하는 것은 호출 측 애플리케이션(클라이언트 도구) 또는 Anthropic 인프라(서버 도구)입니다.</p>
+  <p><a class="src" href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview" target="_blank" rel="noopener">Anthropic 공식 문서 — Tool use with Claude</a>(2026-09-12 확인, 2026-09-13 재확인)는 Tool Calling을 이렇게 설명합니다: "Tool use(함수 호출이라고도 함)는 Claude가 개발자가 정의했거나 Anthropic이 제공하는 함수를 호출할 수 있게 합니다. Claude는 사용자 요청과 도구 설명을 근거로 언제 도구를 호출할지 스스로 결정합니다." 중요한 점은, LLM이 실제로 코드를 "실행"하는 것이 아니라는 것입니다. LLM은 "이 도구를 이 인자로 불러야 한다"는 <strong>구조화된 요청(JSON)</strong>을 텍스트로 생성할 뿐이고, 그 요청을 실제로 실행하는 것은 호출 측 애플리케이션(클라이언트 도구) 또는 Anthropic 인프라(서버 도구)입니다.</p>
 
   <div class="diagram">
     <div class="title">Tool Calling 왕복 흐름 (클라이언트 도구 기준)</div>
@@ -210,7 +252,7 @@ AI 앱B ─커스텀코드─ 검색API          AI 앱B ─┘                 
 </pre>
   </div>
 
-  <p>이 흐름에서 도구는 실행 위치에 따라 두 종류로 나뉩니다. <strong>클라이언트 도구(Client tools)</strong>는 개발자가 정의한 도구와 <code>bash</code>·<code>text_editor</code> 같은 Anthropic 표준 스키마 도구를 포함하며, 실제 실행은 호출 측 애플리케이션에서 이뤄집니다. <strong>서버 도구(Server tools)</strong>는 <code>web_search</code>, <code>web_fetch</code>, <code>code_execution</code>, <code>tool_search</code> 등으로, Anthropic 인프라에서 직접 실행되어 개발자가 별도 실행 코드를 작성할 필요가 없습니다(2026-09-12 docs.claude.com/agents-and-tools/tool-use/overview 실측 확인).</p>
+  <p>이 흐름에서 도구는 실행 위치에 따라 두 종류로 나뉩니다. <strong>클라이언트 도구(Client tools)</strong>는 개발자가 정의한 도구와 <code>bash</code>·<code>text_editor</code> 같은 Anthropic 표준 스키마 도구를 포함하며, 실제 실행은 호출 측 애플리케이션에서 이뤄집니다. <strong>서버 도구(Server tools)</strong>는 <code>web_search</code>, <code>web_fetch</code>, <code>code_execution</code>, <code>tool_search</code> 등으로, Anthropic 인프라에서 직접 실행되어 개발자가 별도 실행 코드를 작성할 필요가 없습니다(<a class="src" href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview" target="_blank" rel="noopener">공식 Tool use 개요</a>, 2026-09-12 실측 확인·2026-09-13 재확인). <span class="tag-v tag-fact">검증</span></p>
 
   <p>도구 호출 여부 판단은 기본값 <code>tool_choice: {"type":"auto"}</code>일 때 매 턴마다 Claude가 스스로 결정합니다. 요청이 도구의 설명된 기능과 맞아떨어지고 답이 이미 컨텍스트에 없을 때 도구를 호출하며, 안정적인 지식 질문·창작·일상 대화에는 직접 답합니다. <code>tool_choice</code>를 <code>any</code>(도구 중 하나는 반드시 호출)나 <code>tool</code>(특정 도구 강제 호출)로 바꿔 이 판단을 개발자가 강제할 수도 있습니다.</p>
 
@@ -258,9 +300,13 @@ AI 앱B ─커스텀코드─ 검색API          AI 앱B ─┘                 
 <div class="section" id="ch3">
   <h2 class="section-title section-anchor"><span class="icon">📐</span> 03. 도구 스키마 설계 — 이름·설명·JSON Schema</h2>
 
-  <p>도구 정의는 세 가지 필수 요소로 구성됩니다: <code>name</code>(도구 이름), <code>description</code>(도구 설명), <code>input_schema</code>(JSON Schema 형식의 파라미터 정의). MCP 공식 스펙(2026-07-28)은 도구 이름 규칙을 다음과 같이 명시합니다: 길이는 1~128자, 대소문자를 구분하며, 허용 문자는 영문 대소문자·숫자·밑줄(_)·하이픈(-)·점(.)뿐이고 공백·쉼표 등 특수문자는 허용되지 않으며, 서버 내에서 고유해야 합니다.</p>
+  <p>도구 정의는 세 가지 필수 요소로 구성됩니다: <code>name</code>(도구 이름), <code>description</code>(도구 설명), <code>input_schema</code>(JSON Schema 형식의 파라미터 정의). <a class="src" href="https://modelcontextprotocol.io/specification/2026-07-28/server/tools" target="_blank" rel="noopener">MCP 공식 스펙(2026-07-28) Tools 절</a>은 도구 이름 규칙을 다음과 같이 명시합니다: 길이는 1~128자, 대소문자를 구분하며, 허용 문자는 영문 대소문자·숫자·밑줄(_)·하이픈(-)·점(.)뿐이고 공백·쉼표 등 특수문자는 허용되지 않으며, 서버 내에서 고유해야 합니다. <span class="tag-v tag-fact">검증</span></p>
 
-  <p>Anthropic의 도구 설계 공식 가이드(docs.claude.com/agents-and-tools/tool-use/define-tools, 2026-09-12 확인)는 "설명의 품질이 도구 성능을 좌우하는 단연 가장 중요한 요소"라고 명시하며, 도구가 무엇을 하는지, 언제 써야(또는 쓰지 말아야) 하는지, 각 파라미터의 의미와 동작 방식, 중요한 제약 조건까지 설명에 담아야 한다고 권고합니다. 권장 분량은 도구당 최소 3~4문장이며 복잡한 도구는 더 길게 써야 합니다.</p>
+  <div class="src-fix"><strong>2026-09-13 검수 보강 — 규범 강도와 "고유성"의 범위를 정확히 읽어야 합니다</strong><br>
+  ① 위 이름 규칙은 원문에서 전부 <strong><em>SHOULD</em>(권고)</strong>로 서술되어 있습니다(<em>MUST</em> 아님). 즉 규칙을 어긴 이름도 프로토콜상 즉시 거부되지는 않지만, 클라이언트 호환성을 보장받지 못합니다.<br>
+  ② <strong>이름의 고유성은 "서버 하나" 안에서만 보장됩니다.</strong> 스펙은 여러 서버의 도구를 모아 쓰는 클라이언트·프록시에서 <code>search</code> 같은 이름이 <strong>충돌할 수 있으며</strong>, 서버 식별자를 접두어로 붙이는 등 <em>모호성 해소 전략을 구현해야 한다(SHOULD)</em>고 경고합니다. 또한 <code>serverInfo</code>의 서버 <code>name</code>은 <strong>서버 간 고유성이 보장되지 않으므로 구분자로 쓰면 안 됩니다</strong>. AADS처럼 다수의 MCP 서버를 한 클라이언트에 물리는 구조에서는 이 점이 실제 장애로 이어질 수 있습니다.</div>
+
+  <p><a class="src" href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools" target="_blank" rel="noopener">Anthropic의 도구 설계 공식 가이드 — Define tools</a>(2026-09-12 확인, 2026-09-13 재확인)는 "설명의 품질이 도구 성능을 좌우하는 단연 가장 중요한 요소"라고 명시하며, 도구가 무엇을 하는지, 언제 써야(또는 쓰지 말아야) 하는지, 각 파라미터의 의미와 동작 방식, 중요한 제약 조건까지 설명에 담아야 한다고 권고합니다. 권장 분량은 도구당 최소 3~4문장이며 복잡한 도구는 더 길게 써야 합니다.</p>
 
   <div class="compare-row">
     <div class="compare-box con"><h4 style="color:var(--danger)">❌ 나쁜 설명 (공식 문서 예시)</h4><pre style="margin:0;font-size:.8rem">{
@@ -317,7 +363,22 @@ AI 앱B ─커스텀코드─ 검색API          AI 앱B ─┘                 
     <div class="arch-box">Server<br><span style="font-weight:400;font-size:.75rem;color:var(--text2)">도구·데이터 제공</span></div>
   </div>
 
-  <p>Server가 Client에 제공할 수 있는 기능은 세 가지입니다: <strong>Resources</strong>(사용자나 모델이 사용할 컨텍스트·데이터), <strong>Prompts</strong>(사용자를 위한 템플릿 메시지·워크플로), <strong>Tools</strong>(AI 모델이 실행할 함수). 반대로 Client가 Server에 제공할 수 있는 기능도 있는데, 2025-06-18 스펙에서는 <strong>Sampling</strong>(서버 주도 에이전틱 동작·재귀적 LLM 호출), <strong>Roots</strong>(서버가 URI·파일시스템 경계를 조회), <strong>Elicitation</strong>(서버가 사용자에게 추가 정보를 요청) 세 가지가 명시되어 있었습니다. 2026-07-28 최신 스펙 개요 문서에서는 이 중 <strong>Elicitation</strong>만 "Clients may offer" 목록에 남아 있었으나(2026-09-12 실측), 사이드바 문서 구조에는 Roots·Sampling 페이지가 여전히 존재해 완전히 폐지된 것인지 개요 문서 요약이 축약된 것인지는 <strong>미검증</strong>입니다 — 실제 도입 시 해당 버전의 변경 로그(changelog) 원문 확인이 필요합니다.</p>
+  <p>Server가 Client에 제공할 수 있는 기능은 세 가지입니다: <strong>Resources</strong>(사용자나 모델이 사용할 컨텍스트·데이터), <strong>Prompts</strong>(사용자를 위한 템플릿 메시지·워크플로), <strong>Tools</strong>(AI 모델이 실행할 함수). 반대로 Client가 Server에 제공할 수 있는 기능도 있는데, 2025-06-18 스펙에서는 <strong>Sampling</strong>(서버 주도 에이전틱 동작·재귀적 LLM 호출), <strong>Roots</strong>(서버가 URI·파일시스템 경계를 조회), <strong>Elicitation</strong>(서버가 사용자에게 추가 정보를 요청) 세 가지가 명시되어 있었습니다. 2026-07-28 최신 스펙 개요 문서에서는 이 중 <strong>Elicitation</strong>만 "Clients may offer" 목록에 남아 있었으나(2026-09-12 실측), 사이드바 문서 구조에는 Roots·Sampling 페이지가 여전히 존재해 완전히 폐지된 것인지 개요 문서 요약이 축약된 것인지는 <strong>미검증</strong>이었습니다.</p>
+
+  <div class="src-fix"><strong>2026-09-13 검수 해소 — 위 '미검증' 항목의 정답: 폐지가 아니라 "Deprecated(사용 중단 예정)"</strong><br>
+  초판이 남겨둔 질문을 <a class="src" href="https://modelcontextprotocol.io/specification/2026-07-28/deprecated" target="_blank" rel="noopener">공식 <em>폐기 예정 기능 레지스트리</em></a> 원문으로 확정했습니다 <span class="tag-v tag-fact">검증</span>. <strong>Roots와 Sampling은 삭제된 것이 아니라 2026-07-28 버전에서 Deprecated 상태로 전환</strong>되었습니다(근거 제안서 <a class="src" href="https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577" target="_blank" rel="noopener">SEP-2577</a>). 그래서 개요의 "Clients may offer" 목록에서는 빠졌지만 <a class="src" href="https://modelcontextprotocol.io/specification/2026-07-28/client/roots" target="_blank" rel="noopener">개별 문서 페이지</a>는 <em>Deprecated 경고 배너와 함께</em> 그대로 남아 있는 것입니다.
+  <div class="table-wrap" style="margin-top:12px">
+    <table>
+      <thead><tr><th>기능</th><th>상태</th><th>공식 권고 대체 경로</th><th>가장 이른 제거 시점</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Roots</strong></td><td>Deprecated (2026-07-28)</td><td>디렉터리·파일을 도구 파라미터, 리소스 URI, 서버 설정으로 전달</td><td>2027-07-28 이후 첫 개정판</td></tr>
+        <tr><td><strong>Sampling</strong></td><td>Deprecated (2026-07-28)</td><td>LLM 제공사 API와 직접 연동</td><td>2027-07-28 이후 첫 개정판</td></tr>
+        <tr><td><strong>Logging</strong></td><td>Deprecated (2026-07-28)</td><td>stdio는 <code>stderr</code>로 로깅, 관측은 OpenTelemetry 사용</td><td>2027-07-28 이후 첫 개정판</td></tr>
+        <tr><td><strong>HTTP+SSE 전송</strong></td><td>Deprecated (2025-03-26)</td><td>Streamable HTTP (7장 참조)</td><td>SEP-2596 Final 확정 후 3개월</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <strong>실무 판단:</strong> 공식 정책상 Deprecated 기능은 <em>최소 12개월</em> 스펙에 남아 있으므로 기존 구현이 당장 깨지지는 않습니다. 다만 공식 문구는 "신규 구현은 채택하지 말 것(<em>SHOULD NOT</em>), 기존 구현은 마이그레이션할 것(<em>SHOULD</em>)"이므로, <strong>지금 새로 만드는 MCP 연동에 Roots·Sampling을 넣는 설계는 재검토 대상</strong>입니다. 2026-09-13 기준 실제로 <em>제거된</em> 기능은 아직 없습니다.</div>
 
   <p>연결은 <strong>lifecycle(생명주기)</strong> 단계를 거칩니다: Client가 <code>initialize</code> 요청으로 지원 가능한 capability(기능)를 서버에 알리고, 서버가 자신의 capability로 응답하며, 이후 실제 요청·알림을 주고받습니다. 서버가 <code>tools</code> capability를 지원한다면 <code>{"capabilities":{"tools":{"listChanged":true}}}</code>처럼 선언해야 하며, <code>listChanged:true</code>는 도구 목록이 바뀔 때 서버가 클라이언트에게 알림(notification)을 보낼 것임을 뜻합니다.</p>
 
@@ -843,14 +904,17 @@ self._initialized = True  # graceful degradation: 서버 없어도 동작</block
     <table>
       <thead><tr><th>출처명</th><th>날짜</th><th>URL / 근거</th></tr></thead>
       <tbody>
-        <tr><td>Model Context Protocol 공식 스펙 (2025-06-18)</td><td>2026-09-12 확인</td><td>modelcontextprotocol.io/specification/2025-06-18</td></tr>
-        <tr><td>Model Context Protocol 공식 스펙 (2026-07-28, 최신)</td><td>2026-09-12 확인</td><td>modelcontextprotocol.io/specification/latest, .../2026-07-28/server/tools</td></tr>
-        <tr><td>MCP Transports 규격 원문</td><td>2026-09-12 확인</td><td>modelcontextprotocol.io/specification/2025-06-18/basic/transports</td></tr>
-        <tr><td>Anthropic 공식 문서 — Tool use with Claude</td><td>2026-09-12 확인</td><td>docs.claude.com/en/docs/agents-and-tools/tool-use/overview</td></tr>
-        <tr><td>Anthropic 공식 문서 — Define tools(스키마 설계 가이드)</td><td>2026-09-12 확인</td><td>docs.claude.com/en/docs/agents-and-tools/tool-use/define-tools</td></tr>
-        <tr><td>Anthropic 공식 문서 — Parallel tool use</td><td>2026-09-12 확인</td><td>docs.claude.com/en/docs/agents-and-tools/tool-use/parallel-tool-use</td></tr>
-        <tr><td>Anthropic 공식 문서 — MCP connector(defer_loading 포함)</td><td>2026-09-12 확인</td><td>docs.claude.com/en/docs/agents-and-tools/mcp-connector</td></tr>
-        <tr><td>Anthropic 공식 문서 — Models overview(가격·컨텍스트 윈도우)</td><td>2026-09-12 확인</td><td>docs.claude.com/en/docs/about-claude/models/overview</td></tr>
+        <tr><td>MCP 공식 스펙 (2026-07-28, current) <span class="tag-verified">1차</span></td><td>2026-09-12 확인<br>2026-09-13 재확인</td><td><a class="src" href="https://modelcontextprotocol.io/specification/2026-07-28" target="_blank" rel="noopener">modelcontextprotocol.io/specification/2026-07-28</a> — Stateless 전환·Elicitation 근거</td></tr>
+        <tr><td>MCP 공식 버전 관리 문서 <span class="tag-verified">1차</span></td><td>2026-09-13 확인</td><td><a class="src" href="https://modelcontextprotocol.io/specification/versioning" target="_blank" rel="noopener">/specification/versioning</a> — 개정 이력 5종(2025-11-25 포함) 교정 근거</td></tr>
+        <tr><td>MCP 공식 스펙 — Tools <span class="tag-verified">1차</span></td><td>2026-09-13 확인</td><td><a class="src" href="https://modelcontextprotocol.io/specification/2026-07-28/server/tools" target="_blank" rel="noopener">/2026-07-28/server/tools</a> — 이름 규칙·<code>isError</code>·outputSchema 근거</td></tr>
+        <tr><td>MCP 공식 — 폐기 예정 기능 레지스트리 <span class="tag-verified">1차</span></td><td>2026-09-13 확인</td><td><a class="src" href="https://modelcontextprotocol.io/specification/2026-07-28/deprecated" target="_blank" rel="noopener">/2026-07-28/deprecated</a> — Roots·Sampling·Logging·HTTP+SSE 상태 확정 근거</td></tr>
+        <tr><td>MCP 공식 — Roots(Deprecated 배너) <span class="tag-verified">1차</span></td><td>2026-09-13 확인</td><td><a class="src" href="https://modelcontextprotocol.io/specification/2026-07-28/client/roots" target="_blank" rel="noopener">/2026-07-28/client/roots</a></td></tr>
+        <tr><td>MCP 공식 — Streamable HTTP 전송 규격 <span class="tag-verified">1차</span></td><td>2026-09-13 확인</td><td><a class="src" href="https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http" target="_blank" rel="noopener">/2026-07-28/basic/transports/streamable-http</a></td></tr>
+        <tr><td>MCP 공식 — 다중 왕복 요청(MRTR) 패턴 <span class="tag-verified">1차</span></td><td>2026-09-13 확인</td><td><a class="src" href="https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr" target="_blank" rel="noopener">/2026-07-28/basic/patterns/mrtr</a> — 입력 요청·재시도 <code>id</code> 규칙 근거</td></tr>
+        <tr><td>JSON-RPC 2.0 규격 원문 <span class="tag-verified">1차</span></td><td>2026-09-13 확인</td><td><a class="src" href="https://www.jsonrpc.org/specification" target="_blank" rel="noopener">jsonrpc.org/specification</a> — MCP 기반 메시지 형식</td></tr>
+        <tr><td>Anthropic 공식 문서 — Tool use with Claude <span class="tag-verified">1차</span></td><td>2026-09-12 확인<br>2026-09-13 재확인</td><td><a class="src" href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview" target="_blank" rel="noopener">platform.claude.com/…/tool-use/overview</a><br><small style="color:var(--text3)">※ 초판의 <code>docs.claude.com</code> 주소는 2026-09-13 확인 시 <code>platform.claude.com</code>으로 <strong>302 리다이렉트</strong>됩니다.</small></td></tr>
+        <tr><td>Anthropic 공식 문서 — Define tools(스키마 설계 가이드) <span class="tag-verified">1차</span></td><td>2026-09-13 재확인</td><td><a class="src" href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools" target="_blank" rel="noopener">platform.claude.com/…/tool-use/define-tools</a></td></tr>
+        <tr><td>Anthropic 공식 문서 — 도구 사용 토큰 과금 <span class="tag-verified">1차</span></td><td>2026-09-13 확인</td><td><a class="src" href="https://platform.claude.com/docs/en/about-claude/pricing#tool-use-pricing" target="_blank" rel="noopener">platform.claude.com/…/pricing#tool-use-pricing</a> — <code>tools</code> 파라미터 과금 근거</td></tr>
         <tr><td>AADS 코드 — app/core/mcp_server.py, app/mcp/client.py, config.py</td><td>2026-09-12 확인</td><td>read_remote_file (내부 코드 저장소, 본 문서 12장 근거)</td></tr>
         <tr><td>AADS DB — tool_results_archive 테이블 실측</td><td>2026-09-12 확인</td><td>query_database (내부 DB, 본 문서 13장 근거)</td></tr>
         <tr><td>AADS 참조 교육자료 — 프롬프트·컨텍스트 엔지니어링</td><td>2026-09-12 확인</td><td>app/static/reports/20260912_prompt_context_engineering_education.html (스타일·구조 참조)</td></tr>
@@ -875,8 +939,24 @@ self._initialized = True  # graceful degradation: 서버 없어도 동작</block
 </div>
 
 <!-- ===== FOOTER ===== -->
+<!-- ===== 출처 검수 이력 (2026-09-13 sources_p1) ===== -->
+<div class="section" id="source-audit-20260913">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 부록. 출처 검수 이력 (2026-09-13 KST)</h2>
+  <p>본 문서는 2026-09-12 초판 작성 이후, <strong>2026-09-13 KST</strong>에 별도 출처 검수를 거쳤습니다. 검수 원칙은 ①공식 스펙·공식 문서 등 <strong>1차 출처 우선</strong>, ②모든 인용을 <strong>클릭 가능한 링크</strong>로 전환, ③확인하지 못한 내용은 삭제하지 않고 <span class="tag-unverified">미검증</span>으로 명시, ④원문과 다른 서술은 원문 기준으로 교정입니다. 아래는 이번 검수에서 실제로 바뀐 내용입니다.</p>
+  <ul>
+    <li><strong>교정</strong> — 4장 개정 이력에서 <strong><code>2025-11-25</code> 버전이 누락</strong>되어 있었습니다. 초판은 2026-07-28의 직전 버전을 2025-06-18로 적었으나, 공식 버전 관리 문서 기준 실제 이력은 <code>2024-11-05 → 2025-03-26 → 2025-06-18 → 2025-11-25 → 2026-07-28</code>입니다. 하위 호환 대상 범위가 달라지는 실무상 중요한 차이입니다.</li>
+    <li><strong>미검증 해소</strong> — 5장의 "Roots·Sampling이 폐지된 것인지 요약이 축약된 것인지 미검증" 항목을 <strong>공식 폐기 예정 레지스트리로 확정</strong>했습니다. 두 기능은 <strong>삭제가 아니라 Deprecated</strong>(SEP-2577, 2026-07-28 전환)이며, 가장 이른 제거 시점은 2027-07-28 이후 첫 개정판입니다. 대체 경로와 함께 표로 정리했고, Logging·HTTP+SSE의 상태도 같이 확정했습니다. 2026-09-13 기준 실제로 제거된 기능은 아직 없습니다.</li>
+    <li><strong>보강</strong> — 6장 도구 이름 규칙의 <strong>규범 강도가 전부 <em>SHOULD</em>(권고)</strong>임을 명시하고, <strong>이름의 고유성이 "서버 1개" 범위에서만 보장</strong>된다는 점과 다중 서버 집계 시 이름 충돌·<code>serverInfo.name</code>을 구분자로 쓰면 안 된다는 공식 경고를 추가했습니다.</li>
+    <li><strong>보강</strong> — 4장에 MCP 버전 문자열의 의미(하위 호환을 깨는 변경이 있을 때만 증가)를 추가해 "버전 날짜가 같으면 내용도 같다"는 오해를 차단했습니다.</li>
+    <li><strong>URL 이전 반영</strong> — 초판이 인용한 <code>docs.claude.com</code> 계열 주소는 2026-09-13 확인 시 <code>platform.claude.com</code>으로 <strong>302 리다이렉트</strong>됩니다. 본문·참고자료의 Anthropic 링크를 정식 주소의 클릭 가능한 링크로 교체했습니다.</li>
+    <li><strong>유지</strong> — 2026-07-28의 Stateless 전환, <code>isError</code>와 JSON-RPC 오류의 층위 구분, 입력 요청 재시도 시 JSON-RPC <code>id</code>를 달리해야 한다는 서술은 원문과 <strong>일치</strong>해 그대로 두었습니다.</li>
+    <li><strong>미해소</strong> — AADS 백엔드 MCP 서버 구현체가 실제로 어떤 transport를 쓰는지(구식 SSE 패턴 여부)는 이번에도 확인하지 못해 <span class="tag-unverified">미검증</span>으로 남습니다. 12~13장의 내부 코드·DB 실측 수치도 본 검수 범위 밖이라 재조회하지 않았습니다.</li>
+  </ul>
+  <p style="font-size:.82rem;color:var(--text3)">※ 본 검수에서 인용한 외부 URL은 2026-09-13 09:40~10:20 KST에 전수 점검했으며, 대부분 <span class="http-ok">HTTP 200</span>으로 응답했습니다. Gartner·BCG 등 자동화 접근을 차단하는 사이트는 <span class="http-waf">HTTP 403</span>으로 응답하지만 브라우저에서는 정상 열람되며, 링크가 죽은 것이 아닙니다. "HTTP 200"은 해당 URL이 응답했다는 뜻이며, 그 페이지의 모든 내용을 본 문서가 검증했다는 뜻이 아닙니다. <strong>MCP 스펙은 개정이 잦으므로 신규 연동 설계 전 반드시 링크 원문을 다시 확인하십시오.</strong></p>
+</div>
+
 <div class="footer">
-  <p>AADS Academy · MCP·Tool Calling 교육자료 · 2026-09-12 작성 · CEO 교육용</p>
+  <p>AADS Academy · MCP·Tool Calling 교육자료 · 2026-09-12 작성 · 2026-09-13 출처 검수 · CEO 교육용</p>
   <p style="margin-top:6px">MCP 스펙·Anthropic 공식 문서 인용은 2026-09-12 fetch_url 실측 결과이며, AADS 적용 현황은 동일 시점 query_database/read_remote_file 실측 결과만 기재했습니다. 확인하지 못한 항목은 본문에 '미검증'으로 표기했습니다. 스펙·가격은 향후 변경될 수 있으므로 적용 전 공식 자료로 재확인이 필요합니다.</p>
 </div>
 

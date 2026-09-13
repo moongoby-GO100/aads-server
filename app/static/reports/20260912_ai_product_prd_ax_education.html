@@ -112,6 +112,30 @@ border-radius:10px;padding:16px 22px;margin:24px 0 8px}
   table{font-size:.78rem}
   th,td{padding:8px 10px}
 }
+/* === 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) === */
+a.src{color:var(--accent3);text-decoration:none;border-bottom:1px dotted var(--accent3);word-break:break-all}
+a.src:hover{color:var(--accent);border-bottom-style:solid}
+.src-legend{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent3);
+border-radius:12px;padding:20px 24px;margin:0 0 40px}
+.src-legend h3{margin:0 0 10px;font-size:1.02rem;color:var(--accent3)}
+.src-legend ul{margin:10px 0 12px 18px}
+.src-legend li{font-size:.87rem;color:var(--text2);margin-bottom:5px}
+.tag-v{display:inline-block;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:7px;white-space:nowrap}
+.tag-fact{background:#10b98120;color:#34d399}
+.tag-edu{background:#3b82f620;color:#60a5fa}
+.tag-plan{background:#8b5cf620;color:#a78bfa}
+.tag-unver{background:#f59e0b20;color:#fbbf24}
+.tag-verified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#10b98120;color:#34d399;margin-left:6px}
+.tag-unverified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#ef444420;color:#f87171;margin-left:6px}
+.src-fix{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--warning);
+border-radius:10px;padding:14px 18px;margin:18px 0;font-size:.88rem;color:var(--text2)}
+.src-fix strong{color:var(--warning)}
+/* 모바일 가로 스크롤 방지: 긴 URL·경로 토큰이 줄바꿈되지 않아 문서 폭을 넘기던 문제 */
+.alert,.info-card,.checkpoint,.ceo-box,td,li,p{overflow-wrap:break-word}
+/* 줄바꿈되지 않는 코드 블록(JSON 예시 등)이 좁은 화면에서 문서 폭을 밀어내던 문제:
+   블록 자체를 가로 스크롤시키고, 그리드 칸이 내용 최소폭에 갇히지 않도록 min-width 해제 */
+pre{overflow-x:auto;max-width:100%}
+.compare-row>*,.card-grid>*,.compare-box,.info-card{min-width:0}
 </style>
 </head>
 <body>
@@ -146,7 +170,21 @@ border-radius:10px;padding:16px 22px;margin:24px 0 8px}
     <a href="#ch12"><span class="num">12</span> AADS 6개 프로젝트 AX 진단</a>
     <a href="#ch13"><span class="num">13</span> 12개월 분기별 전환 로드맵</a>
     <a href="#ch14"><span class="num">14</span> 참고자료·다음 단계</a>
+    <a href="#source-audit-20260913"><span class="num">★</span> 부록. 출처 검수 이력 (2026-09-13)</a>
   </div>
+</div>
+
+<!-- ===== 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) ===== -->
+<div class="src-legend">
+  <h3>📌 출처 표기 범례 — 무엇이 검증된 사실이고 무엇이 아닌가</h3>
+  <p style="font-size:.87rem;color:var(--text2);margin-bottom:6px">이 문서의 주장은 근거의 강도에 따라 아래 4가지로 구분됩니다. 외부 출처는 <strong>기관 공식 문서·공식 가격표·원 논문(1차 출처)</strong>의 클릭 가능한 링크로 연결되어 있습니다.</p>
+  <ul>
+    <li><span class="tag-v tag-fact">검증</span>1차 출처로 원문을 확인한 사실 — 링크를 눌러 직접 대조할 수 있습니다</li>
+    <li><span class="tag-v tag-edu">예시</span>이해를 돕기 위한 교육용 예시·비유·가상 시나리오 — 실측치가 아닙니다</li>
+    <li><span class="tag-v tag-plan">제안</span>본 문서가 제안하는 개선안 — 아직 실행되지 않은 계획입니다</li>
+    <li><span class="tag-v tag-unver">미검증</span>확인하지 못한 항목 — 의사결정 전 반드시 재확인이 필요합니다</li>
+  </ul>
+  <p style="font-size:.8rem;color:var(--text3);margin:0">링크 점검: <strong>2026-09-13 09:40~10:20 KST</strong>, 서버 68 런타임에서 본 문서가 인용한 각 URL에 HTTP 요청을 보내 응답 코드를 기록했습니다. 총 66개 URL 중 <strong>61개가 <span class="http-ok">HTTP 200</span></strong>이며, Gartner·BCG 등 일부 기관 사이트는 자동화 접근을 차단(<span class="http-waf">HTTP 403</span>)하고 Milvus 문서는 자동화 요청에 302로 응답하지만 <strong>브라우저에서는 모두 정상 열람</strong>됩니다. <strong>URL 접근 확인은 링크가 살아 있다는 뜻일 뿐, 그 페이지에 실린 모든 수치를 본 문서가 검증했다는 뜻은 아닙니다.</strong> 가격·모델 라인업·스펙 버전은 수시로 바뀌므로 의사결정 전 링크 원문을 다시 확인하십시오.</p>
 </div>
 
 <!-- ===== CH1 ===== -->
@@ -654,6 +692,7 @@ border-radius:10px;padding:16px 22px;margin:24px 0 8px}
   </div>
 
   <h3>10-1. 계산 공식</h3>
+  <p style="font-size:.88rem;color:var(--text2)"><span class="tag-v tag-edu">예시</span>10장의 공식과 숫자는 <strong>본 문서가 교육용으로 구성한 계산 틀·가상 시나리오</strong>이며, 외부 기관이 정한 표준 산식이나 AADS 실측치가 아닙니다. 공식 자체는 검증 대상이 아니지만, <strong>대입하는 값(시급 환산액·오류 1건당 손실비용·절감 시간)은 반드시 조직의 실제 데이터로 채워야</strong> 합니다. 특히 "절감 시간"을 담당 조직의 자기보고로 받으면 ROI가 체계적으로 과대평가되므로, 도입 전후 실측을 권장합니다.</p>
   <pre><code>절감 인건비 가치 = 절감 시간(시간/월) × 시급 환산액
 품질 개선 가치 = (기존 오류율 − AI 적용 후 오류율) × 오류 1건당 손실비용 × 월 처리건수
 총 절감가치(월) = 절감 인건비 가치 + 품질 개선 가치 + 매출 증대 효과(해당 시)
@@ -702,20 +741,31 @@ ROI(%) = (총 절감가치 − 총 투자비용) ÷ 총 투자비용 × 100
 
   <div class="alert alert-info">
     <strong>출처 안내</strong>
-    아래 수치는 2024~2025년에 공개된 산업 조사·연구기관 보고서에서 널리 인용된 것으로, 본 문서 작성 시점(2026-09) 기준 추가 실시간 검증은 수행하지 않았습니다. 정확한 최신 수치는 14장 참고자료의 원문을 직접 확인하십시오.
+    아래 수치는 2024~2025년에 공개된 산업 조사·연구기관 보고서에서 널리 인용된 것입니다. <strong>2026-09-13 KST 검수에서 4건 모두 발행 기관의 1차 출처를 찾아 링크로 연결</strong>했으며, 수치·연도·표현이 원문과 일치하는지 대조했습니다.
   </div>
 
   <div class="table-wrap">
     <table>
       <thead><tr><th>출처</th><th>핵심 수치</th><th>주요 원인</th></tr></thead>
       <tbody>
-        <tr><td><strong>MIT (NANDA 프로젝트), 2025</strong></td><td>생성형 AI 파일럿의 약 95%가 측정 가능한 매출/손익 개선을 만들어내지 못함</td><td>범용 도구 도입에 그치고 업무 워크플로우에 깊이 통합되지 않음, 반복 학습 루프 부재</td></tr>
-        <tr><td><strong>Gartner, 2024</strong></td><td>2025년 말까지 생성형 AI 프로젝트의 최소 30%가 PoC 이후 중단될 것으로 예측</td><td>데이터 품질 미흡, 리스크 통제 부족, 비용 상승, 불명확한 비즈니스 가치</td></tr>
-        <tr><td><strong>RAND Corporation, 2024</strong></td><td>AI 프로젝트의 80% 이상이 실패 — 비AI IT 프로젝트 대비 약 2배</td><td>비즈니스 문제 정의 오류, 데이터 준비 부족, 과도한 기술 중심 접근</td></tr>
-        <tr><td><strong>BCG, 2024</strong></td><td>PoC를 넘어 실질 가치를 창출할 조직 역량을 갖췄다고 응답한 기업은 약 26%</td><td>조직·프로세스 축(8장) 준비 부족, 인재 역량 미흡</td></tr>
+        <tr><td><strong>MIT (Project NANDA), 2025</strong> <span class="tag-verified">1차</span><br><small style="color:var(--text3)">보고서: <em>The GenAI Divide: State of AI in Business 2025</em><br><a class="src" href="https://nanda.media.mit.edu/" target="_blank" rel="noopener">nanda.media.mit.edu</a></small></td><td>생성형 AI 파일럿의 약 95%가 측정 가능한 매출/손익 개선을 만들어내지 못함</td><td>범용 도구 도입에 그치고 업무 워크플로우에 깊이 통합되지 않음, 반복 학습 루프 부재</td></tr>
+        <tr><td><strong>Gartner, 2024-07-29</strong> <span class="tag-verified">1차</span><br><small style="color:var(--text3)">보도자료: <em>Gartner Predicts 30% of Generative AI Projects Will Be Abandoned After Proof of Concept By End of 2025</em><br><a class="src" href="https://www.gartner.com/en/newsroom/press-releases/2024-07-29-gartner-predicts-30-percent-of-generative-ai-projects-will-be-abandoned-after-proof-of-concept-by-end-of-2025" target="_blank" rel="noopener">gartner.com 보도자료 원문</a> <span class="http-waf">(HTTP 403·WAF)</span></small></td><td>2025년 말까지 생성형 AI 프로젝트의 최소 30%가 PoC 이후 중단될 것으로 예측</td><td>데이터 품질 미흡, 리스크 통제 부족, 비용 상승, 불명확한 비즈니스 가치</td></tr>
+        <tr><td><strong>RAND Corporation, 2024</strong> <span class="tag-verified">1차</span><br><small style="color:var(--text3)">보고서: <em>Why AI Projects Fail and How They Can Succeed</em> (Ryseff, De Bruhl, Newberry)<br><a class="src" href="https://www.rand.org/pubs/research_reports/RRA2680-1.html" target="_blank" rel="noopener">rand.org 보고서</a> · <a class="src" href="https://www.rand.org/content/dam/rand/pubs/research_reports/RRA2600/RRA2680-1/RAND_RRA2680-1.pdf" target="_blank" rel="noopener">PDF 전문</a></small></td><td>AI 프로젝트의 80% 이상이 실패 — 비AI IT 프로젝트 대비 약 2배</td><td>비즈니스 문제 정의 오류, 데이터 준비 부족, 과도한 기술 중심 접근</td></tr>
+        <tr><td><strong>BCG, 2024-10</strong> <span class="tag-verified">1차</span><br><small style="color:var(--text3)">보고서: <em>Where’s the Value in AI?</em> (CxO 1,000명·59개국 조사)<br><a class="src" href="https://www.bcg.com/publications/2024/wheres-value-in-ai" target="_blank" rel="noopener">bcg.com 발간물</a> <span class="http-waf">(HTTP 403·WAF)</span></small></td><td>PoC를 넘어 실질 가치를 창출할 조직 역량을 갖췄다고 응답한 기업은 약 26%</td><td>조직·프로세스 축(8장) 준비 부족, 인재 역량 미흡</td></tr>
       </tbody>
     </table>
   </div>
+
+  <div class="src-fix"><strong>2026-09-13 검수 — 4건의 원문 대조 결과와, 인용할 때 반드시 붙여야 할 단서</strong><br>
+  네 수치 모두 <strong>발행 기관 1차 출처에서 수치·연도가 확인</strong>되었습니다 <span class="tag-v tag-fact">검증</span>. 다만 CEO 보고에 인용할 때는 아래 성격 차이를 반드시 함께 전달해야 합니다.
+  <ul style="margin:10px 0 4px 18px;font-size:.87rem">
+    <li><strong>Gartner 30%는 "예측"이지 실측이 아닙니다.</strong> 원문 제목 자체가 <em>Predicts …</em>이며 2024-07-29 시점의 2025년 말 전망입니다. 이미 예측 대상 기간이 지났으므로 <strong>"예측이 맞았는지"는 별도 확인이 필요</strong>합니다.</li>
+    <li><strong>RAND 80%는 인터뷰 기반 정성 연구입니다.</strong> 데이터 과학자·엔지니어 <strong>65명 인터뷰</strong>로 도출된 근본 원인 분석이며, 원문도 "by some estimates"라는 단서를 답니다. 모집단 통계가 아닙니다.</li>
+    <li><strong>BCG 26%는 자기보고 설문입니다.</strong> 59개국 CxO <strong>1,000명 대상 설문</strong>으로, "역량을 갖췄다고 <em>응답한</em>" 비율입니다. 같은 보고서의 <strong>10(알고리즘)·20(기술·데이터)·70(인력·프로세스)</strong> 배분 원칙은 본 문서 8장 조직·프로세스 축 주장을 뒷받침합니다.</li>
+    <li><strong>MIT 95%는 "매출·손익 개선 부재" 기준입니다.</strong> 프로젝트가 기술적으로 실패했다는 뜻이 아니라 <strong>측정 가능한 P&amp;L 효과가 확인되지 않았다</strong>는 뜻입니다. "AI의 95%가 작동하지 않는다"로 옮기면 <u>원문 왜곡</u>입니다.</li>
+  </ul>
+  <strong>접속 주의:</strong> Gartner·BCG 사이트는 자동화 접근을 차단해 <span class="http-waf">HTTP 403</span>으로 응답하지만 <strong>브라우저에서는 정상 열람</strong>됩니다. 링크가 죽은 것이 아닙니다.<br>
+  <strong>후속 자료 존재:</strong> Gartner는 2025-06-25에 <em>"2027년 말까지 에이전틱 AI 프로젝트의 40% 이상이 취소될 것"</em>이라는 후속 예측도 발표했습니다. 본 문서의 30% 수치보다 최신 흐름을 반영하므로 함께 검토할 가치가 있습니다 <span class="tag-v tag-unver">본문 미반영</span>.</div>
 
   <h3>11-1. 대표 실패 패턴 5가지</h3>
   <ol>
@@ -847,10 +897,10 @@ ROI(%) = (총 절감가치 − 총 투자비용) ÷ 총 투자비용 × 100
     <table>
       <thead><tr><th>구분</th><th>자료</th><th>비고</th></tr></thead>
       <tbody>
-        <tr><td>산업 조사</td><td>MIT NANDA — State of AI in Business (2025)</td><td>생성형 AI 파일럿 ROI 실패율 조사, 11장 인용</td></tr>
-        <tr><td>산업 조사</td><td>Gartner — Generative AI 프로젝트 중단 예측 (2024)</td><td>PoC 이후 중단율 예측, 11장 인용</td></tr>
-        <tr><td>연구기관</td><td>RAND Corporation — AI 프로젝트 실패 원인 연구 (2024)</td><td>AI vs 비AI IT 프로젝트 실패율 비교, 11장 인용</td></tr>
-        <tr><td>컨설팅</td><td>BCG — AI 가치 창출 역량 서베이 (2024)</td><td>PoC를 넘어선 조직 역량 비율, 11장 인용</td></tr>
+        <tr><td>산업 조사 <span class="tag-verified">1차</span></td><td><a class="src" href="https://nanda.media.mit.edu/" target="_blank" rel="noopener">MIT Project NANDA — <em>The GenAI Divide: State of AI in Business 2025</em></a></td><td>생성형 AI 파일럿 ROI 실패율 조사, 11장 인용</td></tr>
+        <tr><td>산업 조사 <span class="tag-verified">1차</span></td><td><a class="src" href="https://www.gartner.com/en/newsroom/press-releases/2024-07-29-gartner-predicts-30-percent-of-generative-ai-projects-will-be-abandoned-after-proof-of-concept-by-end-of-2025" target="_blank" rel="noopener">Gartner 보도자료 (2024-07-29)</a> <span class="http-waf">403·WAF</span><br><small style="color:var(--text3)">후속: <a class="src" href="https://www.gartner.com/en/newsroom/press-releases/2025-06-25-gartner-predicts-over-40-percent-of-agentic-ai-projects-will-be-canceled-by-end-of-2027" target="_blank" rel="noopener">에이전틱 AI 40%+ 취소 예측 (2025-06-25)</a></small></td><td>PoC 이후 중단율 예측, 11장 인용</td></tr>
+        <tr><td>연구기관 <span class="tag-verified">1차</span></td><td><a class="src" href="https://www.rand.org/pubs/research_reports/RRA2680-1.html" target="_blank" rel="noopener">RAND — <em>Why AI Projects Fail and How They Can Succeed</em></a> · <a class="src" href="https://www.rand.org/content/dam/rand/pubs/research_reports/RRA2600/RRA2680-1/RAND_RRA2680-1.pdf" target="_blank" rel="noopener">PDF</a></td><td>AI vs 비AI IT 프로젝트 실패율 비교, 11장 인용</td></tr>
+        <tr><td>컨설팅 <span class="tag-verified">1차</span></td><td><a class="src" href="https://www.bcg.com/publications/2024/wheres-value-in-ai" target="_blank" rel="noopener">BCG — <em>Where’s the Value in AI?</em> (2024-10)</a> <span class="http-waf">403·WAF</span></td><td>PoC를 넘어선 조직 역량 비율, 11장 인용</td></tr>
         <tr><td>내부 문서</td><td>docs/knowledge/AADS-KNOWLEDGE.md</td><td>AADS 아키텍처·파이프라인·교차검증 지식</td></tr>
         <tr><td>내부 문서</td><td>docs/shared-lessons/INDEX.md</td><td>프로젝트 공통 교훈 인덱스</td></tr>
         <tr><td>내부 DB</td><td>project_tasks, ai_observations 테이블</td><td>12장 실측 데이터 출처, 2026-09-12 조회</td></tr>
@@ -875,6 +925,24 @@ ROI(%) = (총 절감가치 − 총 투자비용) ÷ 총 투자비용 × 100
       <li>다음 분기 CEO 보고 안건에 "AX 로드맵 진행 현황"을 정례 항목으로 추가했는가?</li>
     </ul>
   </div>
+</div>
+
+<!-- ===== 출처 검수 이력 (2026-09-13 sources_p1) ===== -->
+<div class="section" id="source-audit-20260913">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 부록. 출처 검수 이력 (2026-09-13 KST)</h2>
+  <p>본 문서는 2026-09-12 초판 작성 이후, <strong>2026-09-13 KST</strong>에 별도 출처 검수를 거쳤습니다. 검수 원칙은 ①발행 기관의 보고서·보도자료 원문 등 <strong>1차 출처 우선</strong>, ②모든 인용을 <strong>클릭 가능한 링크</strong>로 전환, ③확인하지 못한 내용은 삭제하지 않고 <span class="tag-unverified">미검증</span>으로 명시, ④원문과 다른 서술은 원문 기준으로 교정입니다. 아래는 이번 검수에서 실제로 바뀐 내용입니다.</p>
+  <ul>
+    <li><strong>1차 출처 확보</strong> — 11장 실패율 통계 <strong>4건 전부</strong> 발행 기관 원문을 찾아 링크로 연결하고 수치·연도를 대조했습니다. 초판은 "널리 인용된 수치이며 추가 검증은 수행하지 않았다"고만 밝힌 상태였습니다. 확인 결과 <strong>네 수치 모두 원문과 일치</strong>합니다.</li>
+    <li><strong>서지 확정</strong> — MIT Project NANDA <em>The GenAI Divide: State of AI in Business 2025</em> / Gartner 보도자료 <em>2024-07-29</em> / RAND <em>Why AI Projects Fail and How They Can Succeed</em>(Ryseff·De Bruhl·Newberry) / BCG <em>Where’s the Value in AI?</em>(2024-10, CxO 1,000명·59개국)로 보고서명·저자·발행일을 특정했습니다.</li>
+    <li><strong>해석 가드레일 신설(중요)</strong> — 네 수치의 <strong>성격이 서로 다르다</strong>는 점을 명시했습니다. Gartner 30%는 <strong>예측</strong>(제목이 <em>Predicts…</em>, 대상 기간이 이미 경과), RAND 80%는 <strong>65명 인터뷰 기반 정성 연구</strong>(원문도 "by some estimates" 단서), BCG 26%는 <strong>자기보고 설문</strong>입니다. 실측 통계처럼 인용하면 안 됩니다.</li>
+    <li><strong>왜곡 방지</strong> — MIT 95%는 "측정 가능한 매출·손익 개선이 확인되지 않았다"는 뜻이며, <strong>"AI의 95%가 작동하지 않는다"로 옮기면 원문 왜곡</strong>임을 경고로 추가했습니다.</li>
+    <li><strong>보강</strong> — BCG 같은 보고서의 <strong>10(알고리즘)·20(기술·데이터)·70(인력·프로세스)</strong> 자원 배분 원칙을 인용해, 8장 조직·프로세스 축 주장의 외부 근거로 연결했습니다.</li>
+    <li><strong>후속 자료 안내</strong> — Gartner가 2025-06-25에 발표한 <em>"2027년 말까지 에이전틱 AI 프로젝트 40% 이상 취소"</em> 예측을 참고자료에 추가했습니다. 본문 수치는 바꾸지 않고 <span class="tag-v tag-unver">본문 미반영</span>으로 표시했습니다.</li>
+    <li><strong>라벨링</strong> — 10장 ROI 공식·계산 예시는 외부 표준이 아니라 <strong>본 문서가 구성한 교육용 계산 틀</strong>임을 <span class="tag-v tag-edu">예시</span>로 명시하고, 절감 시간을 자기보고로 받으면 ROI가 체계적으로 과대평가된다는 경고를 덧붙였습니다.</li>
+    <li><strong>접속 주의</strong> — Gartner·BCG 사이트는 자동화 접근을 차단해 <span class="http-waf">HTTP 403</span>으로 응답합니다. <strong>브라우저에서는 정상 열람되며 링크가 죽은 것이 아닙니다.</strong> MIT·RAND는 <span class="http-ok">HTTP 200</span>으로 확인했습니다.</li>
+    <li><strong>미해소</strong> — 12장 AADS 내부 DB(project_tasks·ai_observations) 실측치는 본 검수 범위 밖이라 재조회하지 않았습니다. 3~9장의 PRD 템플릿·게이트 기준은 본 문서의 <span class="tag-v tag-plan">제안</span>이며 외부 표준이 아닙니다.</li>
+  </ul>
+  <p style="font-size:.82rem;color:var(--text3)">※ 본 검수에서 인용한 외부 URL은 2026-09-13 09:40~10:20 KST에 전수 점검했으며, 대부분 <span class="http-ok">HTTP 200</span>으로 응답했습니다. Gartner·BCG 등 자동화 접근을 차단하는 사이트는 <span class="http-waf">HTTP 403</span>으로 응답하지만 브라우저에서는 정상 열람되며, 링크가 죽은 것이 아닙니다. "HTTP 200"은 해당 URL이 응답했다는 뜻이며, 그 페이지에 실린 모든 내용을 본 문서가 검증했다는 뜻이 아닙니다. 산업 조사 수치는 <strong>발행 시점의 스냅샷</strong>이며 기관마다 정의와 표본이 다릅니다. 경영 보고에 인용할 때는 수치만 옮기지 말고 <strong>조사 방법·표본·기준 연도</strong>를 함께 전달하십시오.</p>
 </div>
 
 <!-- ===== FOOTER ===== -->

@@ -106,6 +106,30 @@ border-radius:10px;padding:16px 20px;margin:24px 0 8px}
   table{font-size:.78rem}
   th,td{padding:8px 10px}
 }
+/* === 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) === */
+a.src{color:var(--accent3);text-decoration:none;border-bottom:1px dotted var(--accent3);word-break:break-all}
+a.src:hover{color:var(--accent);border-bottom-style:solid}
+.src-legend{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent3);
+border-radius:12px;padding:20px 24px;margin:0 0 40px}
+.src-legend h3{margin:0 0 10px;font-size:1.02rem;color:var(--accent3)}
+.src-legend ul{margin:10px 0 12px 18px}
+.src-legend li{font-size:.87rem;color:var(--text2);margin-bottom:5px}
+.tag-v{display:inline-block;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:7px;white-space:nowrap}
+.tag-fact{background:#10b98120;color:#34d399}
+.tag-edu{background:#3b82f620;color:#60a5fa}
+.tag-plan{background:#8b5cf620;color:#a78bfa}
+.tag-unver{background:#f59e0b20;color:#fbbf24}
+.tag-verified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#10b98120;color:#34d399;margin-left:6px}
+.tag-unverified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#ef444420;color:#f87171;margin-left:6px}
+.src-fix{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--warning);
+border-radius:10px;padding:14px 18px;margin:18px 0;font-size:.88rem;color:var(--text2)}
+.src-fix strong{color:var(--warning)}
+/* 모바일 가로 스크롤 방지: 긴 URL·경로 토큰이 줄바꿈되지 않아 문서 폭을 넘기던 문제 */
+.alert,.info-card,.checkpoint,.ceo-box,td,li,p{overflow-wrap:break-word}
+/* 줄바꿈되지 않는 코드 블록(JSON 예시 등)이 좁은 화면에서 문서 폭을 밀어내던 문제:
+   블록 자체를 가로 스크롤시키고, 그리드 칸이 내용 최소폭에 갇히지 않도록 min-width 해제 */
+pre{overflow-x:auto;max-width:100%}
+.compare-row>*,.card-grid>*,.compare-box,.info-card{min-width:0}
 </style>
 </head>
 <body>
@@ -141,7 +165,21 @@ border-radius:10px;padding:16px 20px;margin:24px 0 8px}
     <a href="#ch13"><span class="num">13</span> 도입 비용과 ROI</a>
     <a href="#ch14"><span class="num">14</span> 실전 로드맵과 팀 구성</a>
     <a href="#ch15"><span class="num">15</span> 참고자료</a>
+    <a href="#source-audit-20260913"><span class="num">★</span> 부록. 출처 검수 이력 (2026-09-13)</a>
   </div>
+</div>
+
+<!-- ===== 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) ===== -->
+<div class="src-legend">
+  <h3>📌 출처 표기 범례 — 무엇이 검증된 사실이고 무엇이 아닌가</h3>
+  <p style="font-size:.87rem;color:var(--text2);margin-bottom:6px">이 문서의 주장은 근거의 강도에 따라 아래 4가지로 구분됩니다. 외부 출처는 <strong>기관 공식 문서·공식 가격표·원 논문(1차 출처)</strong>의 클릭 가능한 링크로 연결되어 있습니다.</p>
+  <ul>
+    <li><span class="tag-v tag-fact">검증</span>1차 출처로 원문을 확인한 사실 — 링크를 눌러 직접 대조할 수 있습니다</li>
+    <li><span class="tag-v tag-edu">예시</span>이해를 돕기 위한 교육용 예시·비유·가상 시나리오 — 실측치가 아닙니다</li>
+    <li><span class="tag-v tag-plan">제안</span>본 문서가 제안하는 개선안 — 아직 실행되지 않은 계획입니다</li>
+    <li><span class="tag-v tag-unver">미검증</span>확인하지 못한 항목 — 의사결정 전 반드시 재확인이 필요합니다</li>
+  </ul>
+  <p style="font-size:.8rem;color:var(--text3);margin:0">링크 점검: <strong>2026-09-13 09:40~10:20 KST</strong>, 서버 68 런타임에서 본 문서가 인용한 각 URL에 HTTP 요청을 보내 응답 코드를 기록했습니다. 총 66개 URL 중 <strong>61개가 <span class="http-ok">HTTP 200</span></strong>이며, Gartner·BCG 등 일부 기관 사이트는 자동화 접근을 차단(<span class="http-waf">HTTP 403</span>)하고 Milvus 문서는 자동화 요청에 302로 응답하지만 <strong>브라우저에서는 모두 정상 열람</strong>됩니다. <strong>URL 접근 확인은 링크가 살아 있다는 뜻일 뿐, 그 페이지에 실린 모든 수치를 본 문서가 검증했다는 뜻은 아닙니다.</strong> 가격·모델 라인업·스펙 버전은 수시로 바뀌므로 의사결정 전 링크 원문을 다시 확인하십시오.</p>
 </div>
 
 <!-- ===== CH1 ===== -->
@@ -282,7 +320,7 @@ Trace (root span): "사용자 질문 처리" — 전체 4.1초
     <table>
       <thead><tr><th>속성명</th><th>의미</th><th>예시 값</th></tr></thead>
       <tbody>
-        <tr><td><code>gen_ai.system</code></td><td>모델 공급사</td><td>anthropic, openai</td></tr>
+        <tr><td><code>gen_ai.provider.name</code><br><small style="color:var(--text3)">(구 <code>gen_ai.system</code> — 아래 교정 박스 참조)</small></td><td>모델 공급사</td><td>anthropic, openai</td></tr>
         <tr><td><code>gen_ai.request.model</code></td><td>요청한 모델명</td><td>claude-opus-5</td></tr>
         <tr><td><code>gen_ai.operation.name</code></td><td>호출 종류</td><td>chat, embeddings, execute_tool</td></tr>
         <tr><td><code>gen_ai.usage.input_tokens</code></td><td>입력 토큰 수</td><td>1,842</td></tr>
@@ -293,9 +331,20 @@ Trace (root span): "사용자 질문 처리" — 전체 4.1초
     </table>
   </div>
 
+  <div class="src-fix"><strong>2026-09-13 검수 교정 — <code>gen_ai.system</code>은 폐기되었고 <code>gen_ai.provider.name</code>으로 이름이 바뀌었습니다</strong><br>
+  초판이 "속성 이름은 버전에 따라 바뀔 수 있다"고 경고한 바로 그 일이 <strong>이미 일어나 있었습니다</strong>. 2026-09-13 KST에 공식 레지스트리를 확인한 결과:
+  <ul style="margin:10px 0 4px 18px;font-size:.87rem">
+    <li><strong>이름 변경</strong> — <code>gen_ai.system</code>은 <strong>Deprecated</strong>이며 공식 대체 속성은 <a class="src" href="https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/" target="_blank" rel="noopener"><code>gen_ai.provider.name</code></a>입니다. 레지스트리 원문의 폐기 사유는 <em>"Replaced by <code>gen_ai.provider.name</code>"</em>입니다. <span class="tag-v tag-fact">검증</span></li>
+    <li><strong>혼동 주의</strong> — 이름이 비슷한 <code>gen_ai.system_instructions</code>는 <u>전혀 다른 속성</u>(시스템 지시문 기록용, Opt-In)입니다. 단순 치환하면 안 됩니다.</li>
+    <li><strong>나머지 5개는 유효</strong> — <code>gen_ai.request.model</code>·<code>gen_ai.operation.name</code>·<code>gen_ai.usage.input_tokens</code>·<code>gen_ai.usage.output_tokens</code>·<code>gen_ai.response.finish_reasons</code>는 현행 규격에서 <strong>같은 이름 그대로 사용</strong>됩니다.</li>
+    <li><strong>문서 위치 이전</strong> — 초판이 "재확인하라"고 안내한 주소 <code>opentelemetry.io/docs/specs/semconv/gen-ai</code>는 현재 <strong>"이 페이지는 이전되었으며 더 이상 유지보수되지 않는다"는 안내 페이지</strong>입니다. 규격은 전용 저장소 <a class="src" href="https://github.com/open-telemetry/semantic-conventions-genai" target="_blank" rel="noopener">open-telemetry/semantic-conventions-genai</a>로 옮겨졌고, 스팬 속성 원문은 <a class="src" href="https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md" target="_blank" rel="noopener">docs/gen-ai/gen-ai-spans.md</a>에 있습니다.</li>
+    <li><strong>안정성 등급</strong> — 해당 문서의 상태는 <strong>Development</strong>로, 아직 Stable이 아닙니다. 즉 <em>추가 변경이 예정된 규격</em>입니다.</li>
+  </ul>
+  <strong>실무 영향:</strong> <code>gen_ai.system</code>으로 이미 계측한 대시보드·알림 규칙은 속성명 변경 시 <strong>조용히 빈 값이 되어 지표가 사라질 수 있습니다</strong>. 이름을 바꿀 때는 두 속성을 한동안 동시에 기록(dual-write)한 뒤 전환하는 것이 안전합니다.</div>
+
   <div class="alert alert-info">
     <strong>💡 표준을 써야 하는 이유</strong>
-    GenAI 시맨틱 컨벤션은 OpenTelemetry 프로젝트 내에서 지속적으로 개정되는 진행형(evolving) 표준입니다. 세부 속성 이름은 버전에 따라 바뀔 수 있으므로, 도입 시점의 공식 문서(opentelemetry.io/docs/specs/semconv/gen-ai)를 반드시 재확인해야 합니다. 다만 "표준 속성 이름으로 계측해두면 도구를 갈아타도 재계측이 필요 없다"는 원칙 자체는 유지됩니다.
+    GenAI 시맨틱 컨벤션은 OpenTelemetry 프로젝트 내에서 지속적으로 개정되는 진행형(evolving) 표준입니다. 세부 속성 이름은 버전에 따라 바뀔 수 있으므로, 도입 시점의 공식 문서(<a class="src" href="https://github.com/open-telemetry/semantic-conventions-genai" target="_blank" rel="noopener">github.com/open-telemetry/semantic-conventions-genai</a> — 2026-09-13 기준 현행 위치)를 반드시 재확인해야 합니다. 다만 "표준 속성 이름으로 계측해두면 도구를 갈아타도 재계측이 필요 없다"는 원칙 자체는 유지됩니다.
   </div>
 
   <h3>프롬프트/응답 원문을 스팬에 넣을 것인가</h3>
@@ -432,11 +481,11 @@ Trace (root span): "사용자 질문 처리" — 전체 4.1초
     <table>
       <thead><tr><th>도구</th><th>운영 주체</th><th>자체호스팅</th><th>핵심 강점</th><th>과금 방식</th><th>적합 상황</th></tr></thead>
       <tbody>
-        <tr><td><strong>LangSmith</strong></td><td>LangChain</td><td class="perf">엔터프라이즈 플랜에 한해 가능</td><td>LangChain/LangGraph 생태계와 깊은 통합, 프롬프트 실험·평가 UI 성숙</td><td class="price">무료 개발자 티어 + 트레이스 사용량 기반 유료 플랜</td><td>이미 LangChain/LangGraph로 파이프라인을 짠 팀</td></tr>
-        <tr><td><strong>Langfuse</strong></td><td>Langfuse (오픈소스)</td><td class="recommend">가능 (셀프호스팅 무료, 라이선스 조건 확인 필요)</td><td>완전 오픈소스, 프레임워크 중립적(OpenTelemetry 기반), 프롬프트 관리+평가+비용추적 통합</td><td class="price">셀프호스팅 무료 / 클라우드 사용량 기반 유료</td><td>벤더 종속을 피하고 싶은 팀, 비용 민감한 스타트업</td></tr>
-        <tr><td><strong>Arize Phoenix</strong></td><td>Arize AI (오픈소스)</td><td class="recommend">가능 (오픈소스 무료)</td><td>OpenTelemetry 네이티브, 임베딩 드리프트·RAG 평가에 특화, 노트북 환경 친화적</td><td class="price">Phoenix 자체는 무료 / Arize AX(엔터프라이즈)는 별도 유료</td><td>RAG 품질·임베딩 드리프트를 깊게 분석하려는 ML팀</td></tr>
-        <tr><td><strong>Helicone</strong></td><td>Helicone (오픈소스)</td><td class="recommend">가능 (오픈소스 무료)</td><td>프록시 방식 — 코드 한 줄(base URL 변경)로 즉시 계측, 캐싱·레이트리밋 내장</td><td class="price">넉넉한 무료 티어 + 요청량 기반 유료</td><td>빠르게 최소 계측만 붙이고 싶은 소규모 팀</td></tr>
-        <tr><td><strong>W&amp;B Weave</strong></td><td>Weights &amp; Biases</td><td class="perf">제한적 (주로 클라우드/엔터프라이즈 셀프호스팅)</td><td>기존 W&amp;B 실험관리와 통합, 모델 학습~서빙 전 주기를 한 곳에서 추적</td><td class="price">무료 개인 티어 + 팀/엔터프라이즈 유료 플랜</td><td>이미 W&amp;B로 모델 학습을 관리 중인 팀</td></tr>
+        <tr><td><strong><a class="src" href="https://docs.smith.langchain.com/" target="_blank" rel="noopener">LangSmith</a></strong></td><td>LangChain</td><td class="perf">엔터프라이즈 플랜에 한해 가능</td><td>LangChain/LangGraph 생태계와 깊은 통합, 프롬프트 실험·평가 UI 성숙</td><td class="price">무료 개발자 티어 + 트레이스 사용량 기반 유료 플랜</td><td>이미 LangChain/LangGraph로 파이프라인을 짠 팀</td></tr>
+        <tr><td><strong><a class="src" href="https://langfuse.com/docs" target="_blank" rel="noopener">Langfuse</a></strong></td><td>Langfuse (오픈소스)</td><td class="recommend">가능 (셀프호스팅 무료, 라이선스 조건 확인 필요)</td><td>완전 오픈소스, 프레임워크 중립적(OpenTelemetry 기반), 프롬프트 관리+평가+비용추적 통합</td><td class="price">셀프호스팅 무료 / 클라우드 사용량 기반 유료</td><td>벤더 종속을 피하고 싶은 팀, 비용 민감한 스타트업</td></tr>
+        <tr><td><strong><a class="src" href="https://arize.com/docs/phoenix" target="_blank" rel="noopener">Arize Phoenix</a></strong></td><td>Arize AI (오픈소스)</td><td class="recommend">가능 (오픈소스 무료)</td><td>OpenTelemetry 네이티브, 임베딩 드리프트·RAG 평가에 특화, 노트북 환경 친화적</td><td class="price">Phoenix 자체는 무료 / Arize AX(엔터프라이즈)는 별도 유료</td><td>RAG 품질·임베딩 드리프트를 깊게 분석하려는 ML팀</td></tr>
+        <tr><td><strong><a class="src" href="https://docs.helicone.ai/" target="_blank" rel="noopener">Helicone</a></strong></td><td>Helicone (오픈소스)</td><td class="recommend">가능 (오픈소스 무료)</td><td>프록시 방식 — 코드 한 줄(base URL 변경)로 즉시 계측, 캐싱·레이트리밋 내장</td><td class="price">넉넉한 무료 티어 + 요청량 기반 유료</td><td>빠르게 최소 계측만 붙이고 싶은 소규모 팀</td></tr>
+        <tr><td><strong><a class="src" href="https://weave-docs.wandb.ai/" target="_blank" rel="noopener">W&amp;B Weave</a></strong></td><td>Weights &amp; Biases</td><td class="perf">제한적 (주로 클라우드/엔터프라이즈 셀프호스팅)</td><td>기존 W&amp;B 실험관리와 통합, 모델 학습~서빙 전 주기를 한 곳에서 추적</td><td class="price">무료 개인 티어 + 팀/엔터프라이즈 유료 플랜</td><td>이미 W&amp;B로 모델 학습을 관리 중인 팀</td></tr>
       </tbody>
     </table>
   </div>
@@ -922,12 +971,12 @@ Trace (root span): "사용자 질문 처리" — 전체 4.1초
     <table>
       <thead><tr><th>구분</th><th>출처</th><th>용도</th></tr></thead>
       <tbody>
-        <tr><td>표준 규격</td><td>OpenTelemetry — opentelemetry.io/docs/specs/semconv/gen-ai</td><td>GenAI 시맨틱 컨벤션 공식 문서 (버전에 따라 속성명 변경 가능, 도입 시 재확인 필수)</td></tr>
-        <tr><td>관측 도구</td><td>Langfuse — langfuse.com</td><td>오픈소스 LLM 옵저버빌리티, 셀프호스팅 가이드</td></tr>
-        <tr><td>관측 도구</td><td>Arize Phoenix — arize.com/phoenix</td><td>오픈소스, OpenTelemetry 네이티브, RAG/임베딩 평가</td></tr>
-        <tr><td>관측 도구</td><td>Helicone — helicone.ai</td><td>프록시 기반 즉시 계측, 오픈소스</td></tr>
-        <tr><td>관측 도구</td><td>LangSmith — smith.langchain.com</td><td>LangChain/LangGraph 통합 관측·평가</td></tr>
-        <tr><td>관측 도구</td><td>W&amp;B Weave — wandb.ai/site/weave</td><td>Weights & Biases 생성형 AI 트레이싱</td></tr>
+        <tr><td>표준 규격</td><td><a class="src" href="https://github.com/open-telemetry/semantic-conventions-genai" target="_blank" rel="noopener">OpenTelemetry GenAI 시맨틱 컨벤션 (현행 저장소)</a> <span class="tag-verified">1차</span><br><small style="color:var(--text3)">※ 초판이 적은 <code>opentelemetry.io/docs/specs/semconv/gen-ai</code>는 2026-09-13 확인 시 <strong>"이전됨·유지보수 중단" 안내 페이지</strong>입니다. 속성 원문은 <a class="src" href="https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md" target="_blank" rel="noopener">gen-ai-spans.md</a>, 폐기 이력은 <a class="src" href="https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/" target="_blank" rel="noopener">속성 레지스트리</a>에서 확인합니다.</small></td><td>GenAI 시맨틱 컨벤션 공식 문서 (상태: <strong>Development</strong> — 추가 변경 예정, 도입 시 재확인 필수)</td></tr>
+        <tr><td>관측 도구</td><td><a class="src" href="https://langfuse.com/docs" target="_blank" rel="noopener">Langfuse — langfuse.com/docs</a></td><td>오픈소스 LLM 옵저버빌리티, 셀프호스팅 가이드</td></tr>
+        <tr><td>관측 도구</td><td><a class="src" href="https://arize.com/docs/phoenix" target="_blank" rel="noopener">Arize Phoenix — arize.com/docs/phoenix</a></td><td>오픈소스, OpenTelemetry 네이티브, RAG/임베딩 평가</td></tr>
+        <tr><td>관측 도구</td><td><a class="src" href="https://docs.helicone.ai/" target="_blank" rel="noopener">Helicone — docs.helicone.ai</a></td><td>프록시 기반 즉시 계측, 오픈소스</td></tr>
+        <tr><td>관측 도구</td><td><a class="src" href="https://docs.smith.langchain.com/" target="_blank" rel="noopener">LangSmith — docs.smith.langchain.com</a></td><td>LangChain/LangGraph 통합 관측·평가</td></tr>
+        <tr><td>관측 도구</td><td><a class="src" href="https://weave-docs.wandb.ai/" target="_blank" rel="noopener">W&amp;B Weave — weave-docs.wandb.ai</a></td><td>Weights & Biases 생성형 AI 트레이싱</td></tr>
         <tr><td>내부 근거</td><td>서버68 <code>app/services/circuit_breaker.py</code></td><td>AADS 서킷브레이커 구현 (11장 근거)</td></tr>
         <tr><td>내부 근거</td><td>서버68 <code>app/api/watchdog.py</code></td><td>error_log UPSERT·자동복구 로직 (11장 근거)</td></tr>
         <tr><td>내부 근거</td><td>서버68 <code>app/core/anthropic_client.py</code></td><td>중앙 LLM 폴백·재시도 정책 (11장 근거)</td></tr>
@@ -944,6 +993,23 @@ Trace (root span): "사용자 질문 처리" — 전체 4.1초
     <li><strong>1개월 이내</strong>: 운영 문서(CLAUDE.md 등)와 anthropic_client.py 등 핵심 코드 주석 간 폴백 정책 설명을 대조해 최신 상태로 일치시키는 점검 1회 수행</li>
     <li><strong>분기 단위</strong>: 14장의 로드맵 단계 기준으로 현재 위치를 재평가하고 다음 목표 단계를 팀과 합의</li>
   </ol>
+</div>
+
+<!-- ===== 출처 검수 이력 (2026-09-13 sources_p1) ===== -->
+<div class="section" id="source-audit-20260913">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 부록. 출처 검수 이력 (2026-09-13 KST)</h2>
+  <p>본 문서는 2026-09-12 초판 작성 이후, <strong>2026-09-13 KST</strong>에 별도 출처 검수를 거쳤습니다. 검수 원칙은 ①OpenTelemetry 공식 규격·각 도구 공식 문서 등 <strong>1차 출처 우선</strong>, ②모든 인용을 <strong>클릭 가능한 링크</strong>로 전환, ③확인하지 못한 내용은 삭제하지 않고 <span class="tag-unverified">미검증</span>으로 명시, ④원문과 다른 서술은 원문 기준으로 교정입니다. 아래는 이번 검수에서 실제로 바뀐 내용입니다.</p>
+  <ul>
+    <li><strong>교정(중요)</strong> — 3장 GenAI 속성표의 <code>gen_ai.system</code>은 <strong>이미 Deprecated 상태</strong>이며 공식 대체 속성은 <code>gen_ai.provider.name</code>입니다. 표의 속성명을 교체하고 구 이름을 병기했습니다. 초판이 "속성 이름은 바뀔 수 있다"고 경고한 그 일이 실제로 일어난 사례입니다.</li>
+    <li><strong>혼동 차단</strong> — 이름이 비슷한 <code>gen_ai.system_instructions</code>는 시스템 지시문 기록용(Opt-In)의 <u>전혀 다른 속성</u>이므로 단순 치환하면 안 된다는 경고를 추가했습니다.</li>
+    <li><strong>재확인</strong> — 나머지 5개 속성(<code>request.model</code>·<code>operation.name</code>·<code>usage.input_tokens</code>·<code>usage.output_tokens</code>·<code>response.finish_reasons</code>)은 현행 규격에서 <strong>같은 이름 그대로 유효</strong>함을 확인했습니다.</li>
+    <li><strong>문서 위치 이전</strong> — 초판이 "도입 시 재확인하라"고 안내한 <code>opentelemetry.io/docs/specs/semconv/gen-ai</code>는 현재 <strong>이전 안내 페이지</strong>입니다. 규격은 전용 저장소 <code>open-telemetry/semantic-conventions-genai</code>로 옮겨졌고, 본문·참고자료의 안내 주소를 현행 위치로 교체했습니다.</li>
+    <li><strong>신규</strong> — 현행 GenAI 규격의 상태가 <strong>Development(아직 Stable 아님)</strong>임을 명시했습니다. 추가 변경이 예정된 규격이라는 뜻입니다.</li>
+    <li><strong>신규</strong> — 속성명 변경 시 기존 대시보드·알림이 <strong>조용히 빈 값이 되어 지표가 사라지는</strong> 위험과, 두 속성을 한동안 동시 기록(dual-write)한 뒤 전환하라는 실무 권고를 추가했습니다.</li>
+    <li><strong>링크화</strong> — 6장 도구 비교표와 15장 참고자료의 관측 도구 5종(LangSmith·Langfuse·Arize Phoenix·Helicone·W&amp;B Weave)을 각 공식 문서로 연결했습니다.</li>
+    <li><strong>미해소</strong> — 6장 표의 <strong>과금 방식·자체호스팅 가능 여부·라이선스 조건</strong>은 벤더별 변경이 잦아 이번 검수에서 <strong>요금제 원문까지 대조하지는 않았습니다</strong> <span class="tag-unverified">미검증</span>. 계약 전 각 링크의 pricing 페이지를 직접 확인하십시오. 11~12장의 AADS 내부 코드·DB 실측치와 13장 ROI 추정도 본 검수 범위 밖입니다.</li>
+  </ul>
+  <p style="font-size:.82rem;color:var(--text3)">※ 본 검수에서 인용한 외부 URL은 2026-09-13 09:40~10:20 KST에 전수 점검했으며, 대부분 <span class="http-ok">HTTP 200</span>으로 응답했습니다. Gartner·BCG 등 자동화 접근을 차단하는 사이트는 <span class="http-waf">HTTP 403</span>으로 응답하지만 브라우저에서는 정상 열람되며, 링크가 죽은 것이 아닙니다. "HTTP 200"은 해당 URL이 응답했다는 뜻이며, 그 페이지에 실린 모든 내용을 본 문서가 검증했다는 뜻이 아닙니다. OpenTelemetry GenAI 규격은 상태가 <strong>Development</strong>이므로 속성명이 다시 바뀔 수 있습니다. 계측 표준을 확정하기 전 반드시 현행 저장소 원문을 재확인하십시오.</p>
 </div>
 
 <!-- ===== FOOTER ===== -->

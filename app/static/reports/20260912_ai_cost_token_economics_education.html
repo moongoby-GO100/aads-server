@@ -106,6 +106,30 @@ border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-
   table{font-size:.78rem}
   th,td{padding:8px 10px}
 }
+/* === 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) === */
+a.src{color:var(--accent3);text-decoration:none;border-bottom:1px dotted var(--accent3);word-break:break-all}
+a.src:hover{color:var(--accent);border-bottom-style:solid}
+.src-legend{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent3);
+border-radius:12px;padding:20px 24px;margin:0 0 40px}
+.src-legend h3{margin:0 0 10px;font-size:1.02rem;color:var(--accent3)}
+.src-legend ul{margin:10px 0 12px 18px}
+.src-legend li{font-size:.87rem;color:var(--text2);margin-bottom:5px}
+.tag-v{display:inline-block;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:7px;white-space:nowrap}
+.tag-fact{background:#10b98120;color:#34d399}
+.tag-edu{background:#3b82f620;color:#60a5fa}
+.tag-plan{background:#8b5cf620;color:#a78bfa}
+.tag-unver{background:#f59e0b20;color:#fbbf24}
+.tag-verified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#10b98120;color:#34d399;margin-left:6px}
+.tag-unverified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#ef444420;color:#f87171;margin-left:6px}
+.src-fix{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--warning);
+border-radius:10px;padding:14px 18px;margin:18px 0;font-size:.88rem;color:var(--text2)}
+.src-fix strong{color:var(--warning)}
+/* 모바일 가로 스크롤 방지: 긴 URL·경로 토큰이 줄바꿈되지 않아 문서 폭을 넘기던 문제 */
+.alert,.info-card,.checkpoint,.ceo-box,td,li,p{overflow-wrap:break-word}
+/* 줄바꿈되지 않는 코드 블록(JSON 예시 등)이 좁은 화면에서 문서 폭을 밀어내던 문제:
+   블록 자체를 가로 스크롤시키고, 그리드 칸이 내용 최소폭에 갇히지 않도록 min-width 해제 */
+pre{overflow-x:auto;max-width:100%}
+.compare-row>*,.card-grid>*,.compare-box,.info-card{min-width:0}
 </style>
 </head>
 <body>
@@ -142,7 +166,21 @@ border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-
     <a href="#ch13"><span class="num">13</span> AADS 실측 비용 분석 (DB 직접 조회)</a>
     <a href="#ch14"><span class="num">14</span> 미검증 항목 종합 및 다음 단계 로드맵</a>
     <a href="#ch15"><span class="num">15</span> 참고자료</a>
+    <a href="#source-audit-20260913"><span class="num">★</span> 부록. 출처 검수 이력 (2026-09-13)</a>
   </div>
+</div>
+
+<!-- ===== 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) ===== -->
+<div class="src-legend">
+  <h3>📌 출처 표기 범례 — 무엇이 검증된 사실이고 무엇이 아닌가</h3>
+  <p style="font-size:.87rem;color:var(--text2);margin-bottom:6px">이 문서의 주장은 근거의 강도에 따라 아래 4가지로 구분됩니다. 외부 출처는 <strong>기관 공식 문서·공식 가격표·원 논문(1차 출처)</strong>의 클릭 가능한 링크로 연결되어 있습니다.</p>
+  <ul>
+    <li><span class="tag-v tag-fact">검증</span>1차 출처로 원문을 확인한 사실 — 링크를 눌러 직접 대조할 수 있습니다</li>
+    <li><span class="tag-v tag-edu">예시</span>이해를 돕기 위한 교육용 예시·비유·가상 시나리오 — 실측치가 아닙니다</li>
+    <li><span class="tag-v tag-plan">제안</span>본 문서가 제안하는 개선안 — 아직 실행되지 않은 계획입니다</li>
+    <li><span class="tag-v tag-unver">미검증</span>확인하지 못한 항목 — 의사결정 전 반드시 재확인이 필요합니다</li>
+  </ul>
+  <p style="font-size:.8rem;color:var(--text3);margin:0">링크 점검: <strong>2026-09-13 09:40~10:20 KST</strong>, 서버 68 런타임에서 본 문서가 인용한 각 URL에 HTTP 요청을 보내 응답 코드를 기록했습니다. 총 66개 URL 중 <strong>61개가 <span class="http-ok">HTTP 200</span></strong>이며, Gartner·BCG 등 일부 기관 사이트는 자동화 접근을 차단(<span class="http-waf">HTTP 403</span>)하고 Milvus 문서는 자동화 요청에 302로 응답하지만 <strong>브라우저에서는 모두 정상 열람</strong>됩니다. <strong>URL 접근 확인은 링크가 살아 있다는 뜻일 뿐, 그 페이지에 실린 모든 수치를 본 문서가 검증했다는 뜻은 아닙니다.</strong> 가격·모델 라인업·스펙 버전은 수시로 바뀌므로 의사결정 전 링크 원문을 다시 확인하십시오.</p>
 </div>
 
 <!-- ===== CH1 ===== -->
@@ -227,6 +265,8 @@ border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-
 
   <p>2026년 9월 12일 기준 Anthropic 공식 가격 문서에서 확인한 <strong>Claude Opus 5, Claude Sonnet 5, Claude Haiku 4.5</strong>의 표준(Base) 단가는 다음과 같습니다. 모든 값은 100만 토큰(MTok) 기준이며, 원화는 $1 ≈ ₩1,380 고정환율로 병기합니다.</p>
 
+  <p><span class="tag-v tag-fact">검증</span>아래 표의 단가 15개 항목은 2026-09-13 KST에 <a class="src" href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">Anthropic 공식 가격 문서 — Model pricing</a>의 표와 한 칸씩 대조해 <strong>전부 일치</strong>함을 확인했습니다. 요약 가격표는 <a class="src" href="https://claude.com/pricing" target="_blank" rel="noopener">claude.com/pricing</a>에도 게시됩니다.</p>
+
   <div class="table-wrap">
     <table>
       <thead><tr><th>모델 / API 모델 ID</th><th>기본 입력</th><th>5분 캐시 쓰기</th><th>1시간 캐시 쓰기</th><th>캐시 히트</th><th>출력</th></tr></thead>
@@ -240,9 +280,17 @@ border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-
 
   <p><strong>상대 배수로 보면:</strong> Opus 5는 Sonnet 5보다 입력 2.5배·출력 2.5배 비싸고, Haiku 4.5보다는 입력 5배·출력 5배 비쌉니다. "가장 똑똑한 모델"과 "가장 저렴한 모델" 사이에 5배의 비용 격차가 존재하므로, 모든 작업에 최고 등급 모델을 쓰는 것은 대부분의 업무에서 비용 낭비입니다(4장 참조).</p>
 
-  <div class="alert alert-success"><strong>실제 검증된 중요 뉴스 — Sonnet 5 가격 동결</strong>Anthropic 공식 문서는 "Sonnet 5의 $2/$10 가격은 2026년 8월 31일까지의 도입 특가로 발표되었으나, 이제 표준 가격으로 확정되었다. 2026년 9월 1일로 예정되어 있던 $3/$15 인상은 시행되지 않는다"고 명시합니다. 오늘(2026-09-12)은 이미 그 인상 예정일이 지난 시점이며, <strong>인상이 실제로 취소되었음이 공식 문서로 확인</strong>됩니다. Sonnet 5를 주력으로 쓰는 조직은 예산에 반영된 인상분을 되돌려도 됩니다.</div>
+  <div class="src-fix"><strong>2026-09-13 검수 신규 — "MTok 단가"만 비교하면 틀리는 이유(토크나이저 변경)</strong><br>
+  초판에는 없던 항목입니다. <a class="src" href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">공식 가격 문서</a>는 <strong>Claude 4.7 이후 모델이 새 토크나이저를 쓰며, 같은 텍스트에 대해 약 30% 더 많은 토큰을 만들어낸다</strong>고 명시합니다(Sonnet 4.6 이하는 이전 토크나이저). <span class="tag-v tag-fact">검증</span><br>
+  이것은 비용 비교의 전제를 바꿉니다. <strong>$/MTok 단가가 같아도 같은 문서를 넣었을 때 청구 토큰 수가 달라지므로</strong>, 세대가 다른 모델을 "단가표"만으로 비교하면 신형 모델의 실제 비용이 과소평가됩니다. 정확한 증가율은 콘텐츠와 작업 형태에 따라 달라진다고만 공개되어 있어 <strong>일반화된 환산 계수는 존재하지 않습니다</strong> <span class="tag-v tag-unver">미검증</span>. 모델 교체 전후 비용을 비교할 때는 단가표가 아니라 <a class="src" href="https://platform.claude.com/docs/en/build-with-claude/token-counting" target="_blank" rel="noopener">토큰 카운팅 엔드포인트</a>로 <em>대표 샘플의 실제 토큰 수</em>를 먼저 측정하십시오.</div>
 
-  <div class="alert alert-info"><strong>참고 — 상위 프리미엄 라인(일반 비교 대상 아님)</strong>동일 공식 문서에는 Opus 5보다 비싼 <strong>Claude Fable 5.1</strong>·<strong>Claude Mythos 5.1</strong>(제한적 접근, 입력 $10/MTok·출력 $50/MTok)도 등재되어 있습니다. 이 두 모델은 일반 기업 대상 가용성 여부가 <strong>미검증</strong>이므로 본 문서의 실무 비교·전략에는 포함하지 않았습니다.</div>
+  <div class="alert alert-success"><strong>실제 검증된 중요 뉴스 — Sonnet 5 가격 동결</strong>Anthropic 공식 문서는 "Sonnet 5의 $2/$10 가격은 2026년 8월 31일까지의 도입 특가로 발표되었으나, 이제 표준 가격으로 확정되었다. 2026년 9월 1일로 예정되어 있던 $3/$15 인상은 시행되지 않는다"고 명시합니다. 오늘(2026-09-12)은 이미 그 인상 예정일이 지난 시점이며, <strong>인상이 실제로 취소되었음이 공식 문서로 확인</strong>됩니다. Sonnet 5를 주력으로 쓰는 조직은 예산에 반영된 인상분을 되돌려도 됩니다. <span class="tag-v tag-fact">검증</span>2026-09-13 KST 재확인 시점에도 이 공지(<a class="src" href="https://platform.claude.com/docs/en/about-claude/pricing#claude-sonnet-5-introductory-pricing" target="_blank" rel="noopener">공식 가격 문서 내 Sonnet 5 도입가 공지 원문</a>)와 $2/$10 단가가 그대로 유지되고 있었습니다.</div>
+
+  <div class="alert alert-info"><strong>참고 — 상위 프리미엄 라인(일반 비교 대상 아님)</strong>동일 공식 문서에는 Opus 5보다 비싼 <strong>Claude Fable 5.1</strong>·<strong>Claude Mythos 5.1</strong>(입력 $10/MTok·출력 $50/MTok)도 등재되어 있습니다. 두 모델 모두 본 문서의 실무 비교·전략에는 포함하지 않았습니다.</div>
+
+  <div class="src-fix"><strong>2026-09-13 검수 교정 — "제한적 접근"은 두 모델 중 하나에만 해당</strong><br>
+  초판은 Fable 5.1과 Mythos 5.1을 묶어 "제한적 접근"이라 적고 두 모델의 가용성을 모두 <em>미검증</em>으로 남겼습니다. <a class="src" href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">공식 가격표 원문</a>을 다시 대조한 결과, <strong>limited availability 표기가 붙은 모델은 Claude Mythos 5.1뿐</strong>이며(해당 표기는 <a class="src" href="https://anthropic.com/glasswing" target="_blank" rel="noopener">anthropic.com/glasswing</a>으로 연결됩니다), Claude Fable 5.1은 같은 표에 그런 단서 없이 등재되어 있습니다. 따라서 "두 모델 모두 가용성 미검증"이라는 초판 서술은 과도했습니다. <span class="tag-v tag-fact">검증</span><br>
+  <strong>함께 확인된 캐시 단가의 예외</strong> — 이 두 모델은 캐시 히트 단가가 다른 모델의 표준 <strong>0.1배가 아니라 0.025배</strong>($0.25/MTok)입니다. 공식 문서 각주에 "All other models use the standard 0.1x multiplier"로 명시되어 있으므로, 프리미엄 라인의 비용을 추정할 때 0.1배를 그대로 적용하면 캐시 비용을 4배 과대계상하게 됩니다.</div>
 
   <div class="ceo-box">
     <div class="ceo-title">📌 CEO 체크포인트</div>
@@ -310,13 +358,17 @@ border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-
   </div>
 
   <h3>숫자로 보는 절감 효과 (Sonnet 5 기준)</h3>
+  <p><span class="tag-v tag-edu">예시</span>아래는 <strong>가정된 사용량으로 계산한 교육용 예시</strong>이며 AADS 실측치가 아닙니다. 다만 계산에 쓰인 배수(쓰기 1.25배·히트 0.1배)와 Sonnet 5 단가($2/MTok)는 <a class="src" href="https://platform.claude.com/docs/en/about-claude/pricing#prompt-caching" target="_blank" rel="noopener">공식 캐싱 단가표</a>에서 확인한 값이고, 산식도 2026-09-13 검수에서 재계산해 결과가 일치함을 확인했습니다.</p>
   <p>시스템 프롬프트 + 참고문서가 10,000토큰이고 하루 20번 같은 세션에서 재사용된다고 가정하면:</p>
   <ul>
     <li><strong>캐싱 없이:</strong> 20회 × 10,000토큰 × $2/MTok = $0.40/일 (₩552)</li>
     <li><strong>5분 캐싱 사용:</strong> 1회 쓰기(1.25x) + 19회 히트(0.1x) = (1×1.25 + 19×0.1) × 10,000 × $2/MTok ÷ 1,000,000 = 약 $0.063/일 (₩87) — <strong>약 84% 절감</strong></li>
   </ul>
 
-  <div class="alert alert-success"><strong>캐싱은 다른 할인과 중첩된다</strong>공식 문서에 따르면 캐싱 배수는 배치 API 할인, 데이터 상주 배수와 함께 스택(중첩 적용)됩니다. 즉 캐싱을 배치 처리와 결합하면 절감 효과가 더 커질 수 있습니다(6장 참조).</div>
+  <div class="alert alert-success"><strong>캐싱은 다른 할인과 중첩된다</strong>공식 문서에 따르면 캐싱 배수는 배치 API 할인, 데이터 상주 배수와 함께 스택(중첩 적용)됩니다. 즉 캐싱을 배치 처리와 결합하면 절감 효과가 더 커질 수 있습니다(6장 참조). <span class="tag-v tag-fact">검증</span>원문: <a class="src" href="https://platform.claude.com/docs/en/about-claude/pricing#prompt-caching" target="_blank" rel="noopener">"These multipliers stack with other pricing modifiers, including the Batch API discount and data residency."</a></div>
+
+  <div class="src-fix"><strong>2026-09-13 검수 보강 — 캐싱 절감을 예산에 반영하기 전 확인할 손익분기</strong><br>
+  공식 문서는 캐시 히트가 표준 입력가의 10%이므로 <strong>5분 캐시(1.25배 쓰기)는 히트 1회, 1시간 캐시(2배 쓰기)는 히트 2회부터 이득</strong>이라고 명시합니다. 재사용 횟수가 이 손익분기에 못 미치면 캐싱은 오히려 비용을 늘립니다. 또한 캐싱에는 <strong>모델별 최소 캐시 가능 토큰 수</strong>가 있어 그 아래 길이는 <em>오류 없이 조용히</em> 캐싱되지 않으므로, 절감률이 예상과 다르면 이 조건부터 확인해야 합니다 — 상세는 <a class="src" href="https://platform.claude.com/docs/en/build-with-claude/prompt-caching" target="_blank" rel="noopener">프롬프트 캐싱 구현 문서</a> 참조.</div>
 
   <div class="ceo-box">
     <div class="ceo-title">📌 CEO 체크포인트</div>
@@ -418,7 +470,7 @@ border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-
     <li><strong>Claude Sonnet 5 / Haiku 4.5의 Bash 도구 오버헤드는 공식 문서에 별도 명시되어 있지 않아 미검증입니다.</strong></li>
   </ul>
 
-  <div class="alert alert-success"><strong>비용을 아예 없애는 조합도 있다</strong>공식 문서는 "웹 검색(web_search) 또는 웹 페치(web_fetch) 도구와 함께 코드 실행(code execution) 도구를 사용하면, 표준 입출력 토큰 비용 외에 코드 실행 자체에 대한 추가 요금이 없다"고 명시합니다. 도구 조합을 잘 설계하면 특정 오버헤드를 회피할 수 있다는 뜻입니다.</p></div>
+  <div class="alert alert-success"><strong>비용을 아예 없애는 조합도 있다</strong>공식 문서는 "웹 검색(web_search) 또는 웹 페치(web_fetch) 도구와 함께 코드 실행(code execution) 도구를 사용하면, 표준 입출력 토큰 비용 외에 코드 실행 자체에 대한 추가 요금이 없다"고 명시합니다. 도구 조합을 잘 설계하면 특정 오버헤드를 회피할 수 있다는 뜻입니다.</div>
 
   <div class="ceo-box">
     <div class="ceo-title">📌 CEO 체크포인트</div>
@@ -446,7 +498,11 @@ border-radius:8px;font-size:.83rem;color:var(--text2);white-space:pre-wrap;line-
     </table>
   </div>
 
-  <p>Fast Mode는 Opus 5 표준 단가(입력 $5, 출력 $25)의 <strong>정확히 2배</strong>에 해당하는 프리미엄입니다. 속도가 곧 매출에 직결되는 극히 일부 실시간 유스케이스가 아니라면 기본적으로 켤 이유가 없습니다.</p>
+  <p>Fast Mode는 Opus 5 표준 단가(입력 $5, 출력 $25)의 <strong>정확히 2배</strong>에 해당하는 프리미엄입니다. 속도가 곧 매출에 직결되는 극히 일부 실시간 유스케이스가 아니라면 기본적으로 켤 이유가 없습니다. <span class="tag-v tag-fact">검증</span>위 표의 세 항목(1.1배 데이터 상주, 리전 +10%, Fast Mode $10/$50)은 <a class="src" href="https://platform.claude.com/docs/en/about-claude/pricing#fast-mode-pricing" target="_blank" rel="noopener">공식 가격 문서의 Fast mode pricing·Data residency 절</a>과 대조해 일치를 확인했습니다. 기능 자체의 설명은 <a class="src" href="https://platform.claude.com/docs/en/build-with-claude/fast-mode" target="_blank" rel="noopener">Fast mode 문서</a>에 있습니다.</p>
+
+  <div class="src-fix"><strong>2026-09-13 검수 보강 — Fast Mode에서 함께 확인해야 할 두 가지</strong><br>
+  ① <strong>모델별 동작이 다릅니다.</strong> 공식 문서 기준 Opus 4.7에서는 <code>speed: "fast"</code> 요청이 <em>오류</em>로 거부되지만, Opus 4.6에서는 <em>오류 없이</em> 표준 속도로 실행되고 표준 단가로 청구됩니다. 즉 Opus 4.6에 Fast Mode를 켜면 "켰다고 생각했는데 실제로는 아무 효과가 없는" 상태가 조용히 발생합니다.<br>
+  ② <strong>Fast Mode 단가는 200k 토큰 초과 구간을 포함해 컨텍스트 전 구간에 적용</strong>되며, 캐싱·데이터 상주 배수가 그 위에 곱해집니다. 반면 Batch API와는 병행할 수 없어 50% 배치 할인으로 상쇄할 수 없습니다.</div>
 
   <div class="alert alert-warn"><strong>배수는 곱셈으로 쌓인다</strong>예를 들어 Opus 5 Fast Mode(2x) + 데이터 상주 1.1x를 동시에 쓰면 표준 단가의 2.2배가 됩니다. 옵션을 켤 때마다 "이게 정말 필요한 옵션인가"를 확인하는 절차가 없으면 청구서에서 뒤늦게 발견하게 됩니다.</div>
 
@@ -580,6 +636,7 @@ AI 비용   = 토큰 비용 + 인프라/운영 비용 + 도입·유지보수 인
   <p>본 장의 모든 수치는 2026-09-12 <code>query_database</code>로 AADS PostgreSQL을 직접 조회한 결과이며, 추정치를 섞지 않았습니다. 조회하지 못한 항목은 명시적으로 '미검증'으로 표기합니다.</p>
 
   <h3>13-1. 전체 비용 총계 (cost_tracking 테이블)</h3>
+  <p style="font-size:.88rem;color:var(--text2)"><span class="tag-v tag-unver">출처 구분</span>13장의 모든 수치는 <strong>AADS 내부 DB(cost_tracking) 조회 결과</strong>로, 외부 1차 출처가 존재하지 않아 <strong>독자가 링크로 대조할 수 없는 유일한 구간</strong>입니다. 본 검수(2026-09-13)는 외부 인용의 출처 보강을 범위로 하므로 <strong>이 내부 수치들을 재조회해 검증하지는 않았습니다</strong>. 인용 시에는 "AADS 2026-03 관측 구간 내부 실측"이라는 단서를 반드시 함께 표기하십시오.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>항목</th><th>값</th></tr></thead>
@@ -633,7 +690,7 @@ AI 비용   = 토큰 비용 + 인프라/운영 비용 + 도입·유지보수 인
       </tbody>
     </table>
   </div>
-  <p>이 테이블에는 입력/출력 토큰 컬럼이 존재하지만 실제 값은 0으로 기록되어 있어 토큰 기반 비용 산정이 불가능했습니다. <strong>호출량(26,760건)과 성공률(99.39%)만 실측 가능</strong하며, 이 경로의 토큰·비용 규모는 미검증입니다.</p>
+  <p>이 테이블에는 입력/출력 토큰 컬럼이 존재하지만 실제 값은 0으로 기록되어 있어 토큰 기반 비용 산정이 불가능했습니다. <strong>호출량(26,760건)과 성공률(99.39%)만 실측 가능</strong>하며, 이 경로의 토큰·비용 규모는 미검증입니다.</p>
 
   <h3>13-5. Claude Max 정액제 사용률 (claude_max_usage_snapshot)</h3>
   <div class="table-wrap">
@@ -708,7 +765,12 @@ AI 비용   = 토큰 비용 + 인프라/운영 비용 + 도입·유지보수 인
     <table>
       <thead><tr><th>출처명</th><th>날짜</th><th>URL / 근거</th></tr></thead>
       <tbody>
-        <tr><td>Anthropic 공식 가격 문서</td><td>2026-09-12 확인</td><td>fetch_url(https://docs.claude.com/en/docs/about-claude/pricing) — 2~9장 단가·배수 근거</td></tr>
+        <tr><td>Anthropic 공식 가격 문서 <span class="tag-verified">1차</span></td><td>2026-09-12 최초 확인<br>2026-09-13 재확인</td><td><a class="src" href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">platform.claude.com/docs/en/about-claude/pricing</a> — 2~9장 단가·배수 근거<br><small style="color:var(--text3)">※ 초판에 적힌 <code>docs.claude.com/en/docs/about-claude/pricing</code>은 2026-09-13 확인 시 위 주소로 <strong>302 리다이렉트</strong>됩니다(링크는 살아 있으나 정식 주소가 이전됨).</small></td></tr>
+        <tr><td>Anthropic 공식 요약 가격표 <span class="tag-verified">1차</span></td><td>2026-09-13 확인</td><td><a class="src" href="https://claude.com/pricing" target="_blank" rel="noopener">claude.com/pricing</a> — 모델별 입·출력 단가 교차 확인<br><small style="color:var(--text3)">※ <code>anthropic.com/pricing</code>은 이 주소로 <strong>301 영구 이동</strong>됩니다.</small></td></tr>
+        <tr><td>Anthropic 프롬프트 캐싱 문서 <span class="tag-verified">1차</span></td><td>2026-09-13 확인</td><td><a class="src" href="https://platform.claude.com/docs/en/build-with-claude/prompt-caching" target="_blank" rel="noopener">platform.claude.com/…/prompt-caching</a> — 5장 캐싱 손익분기·최소 캐시 길이 근거</td></tr>
+        <tr><td>Anthropic Fast mode 문서 <span class="tag-verified">1차</span></td><td>2026-09-13 확인</td><td><a class="src" href="https://platform.claude.com/docs/en/build-with-claude/fast-mode" target="_blank" rel="noopener">platform.claude.com/…/fast-mode</a> — 9장 프리미엄 옵션 근거</td></tr>
+        <tr><td>Anthropic 토큰 카운팅 문서 <span class="tag-verified">1차</span></td><td>2026-09-13 확인</td><td><a class="src" href="https://platform.claude.com/docs/en/build-with-claude/token-counting" target="_blank" rel="noopener">platform.claude.com/…/token-counting</a> — 3장 토크나이저 변경 대응 근거</td></tr>
+        <tr><td>Anthropic 배치 처리 문서 <span class="tag-verified">1차</span></td><td>2026-09-13 확인</td><td><a class="src" href="https://platform.claude.com/docs/en/build-with-claude/batch-processing" target="_blank" rel="noopener">platform.claude.com/…/batch-processing</a> — 6장 50% 할인 근거</td></tr>
         <tr><td>AADS DB — cost_tracking 테이블 실측</td><td>2026-09-12</td><td>query_database (내부 DB, 13장 근거)</td></tr>
         <tr><td>AADS DB — bg_llm_usage_log 테이블 실측</td><td>2026-09-12</td><td>query_database (내부 DB, 13-4장 근거)</td></tr>
         <tr><td>AADS DB — claude_max_usage_snapshot 테이블 실측</td><td>2026-09-12</td><td>query_database (내부 DB, 13-5장 근거)</td></tr>
@@ -721,10 +783,28 @@ AI 비용   = 토큰 비용 + 인프라/운영 비용 + 도입·유지보수 인
   <div class="alert alert-info"><strong>환율 표기 기준</strong>본 문서의 모든 원화 병기는 $1 ≈ ₩1,380 고정환율을 적용한 참고용 환산치이며, 실제 청구 시점의 환율과 다를 수 있습니다.</div>
 </div>
 
+<!-- ===== 출처 검수 이력 (2026-09-13 sources_p1) ===== -->
+<div class="section" id="source-audit-20260913">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 부록. 출처 검수 이력 (2026-09-13 KST)</h2>
+  <p>본 문서는 2026-09-12 초판 작성 이후, <strong>2026-09-13 KST</strong>에 별도 출처 검수를 거쳤습니다. 검수 원칙은 ①공식 가격 문서·공식 스펙 등 <strong>1차 출처 우선</strong>, ②모든 인용을 <strong>클릭 가능한 링크</strong>로 전환, ③확인하지 못한 내용은 삭제하지 않고 <span class="tag-unverified">미검증</span>으로 명시, ④원문과 다른 서술은 원문 기준으로 교정입니다. 아래는 이번 검수에서 실제로 바뀐 내용입니다.</p>
+  <ul>
+    <li><strong>전수 대조</strong> — 3장 단가표 15개 항목(3개 모델 × 기본입력·5분쓰기·1시간쓰기·캐시히트·출력)을 공식 가격표와 한 칸씩 대조해 <strong>전부 일치</strong> 확인. 6장 배치 단가, 9장 배수 3종도 동일하게 일치.</li>
+    <li><strong>교정</strong> — 3장 프리미엄 라인 설명에서 "Fable 5.1·Mythos 5.1 = 제한적 접근"이라는 묶음 서술을 교정. <strong>limited availability 표기는 Mythos 5.1에만</strong> 붙어 있으며 Fable 5.1에는 없습니다. "두 모델 모두 가용성 미검증"이라는 초판 서술은 과도했습니다.</li>
+    <li><strong>신규</strong> — 같은 절에 프리미엄 라인의 <strong>캐시 히트 예외 배수(0.1배가 아닌 0.025배)</strong>를 추가. 표준 배수를 적용하면 캐시 비용을 4배 과대계상합니다.</li>
+    <li><strong>신규</strong> — 3장에 <strong>토크나이저 변경</strong> 항목 신설. Claude 4.7 이후 모델은 같은 텍스트에 약 30% 더 많은 토큰을 생성하므로, 세대가 다른 모델을 $/MTok 단가만으로 비교하면 신형의 실제 비용이 과소평가됩니다.</li>
+    <li><strong>신규</strong> — 5장에 캐싱 <strong>손익분기</strong>(5분 캐시는 히트 1회, 1시간 캐시는 히트 2회부터 이득)와 최소 캐시 길이 미만 시 <u>오류 없이 조용히</u> 캐싱되지 않는 함정을 추가.</li>
+    <li><strong>신규</strong> — 9장에 Fast Mode의 모델별 동작 차이를 추가. Opus 4.7은 <code>speed:"fast"</code>가 오류로 거부되지만, <strong>Opus 4.6은 오류 없이 표준 속도·표준 단가로 실행</strong>되어 "켰는데 효과가 없는" 상태가 조용히 발생합니다.</li>
+    <li><strong>URL 이전 반영</strong> — 초판이 인용한 <code>docs.claude.com</code>은 <code>platform.claude.com</code>으로 302, <code>anthropic.com/pricing</code>은 <code>claude.com/pricing</code>으로 301 이동합니다. 15장 참고자료를 정식 주소의 클릭 가능한 링크로 교체하고 출처 6건을 추가했습니다.</li>
+    <li><strong>라벨링</strong> — 5장 절감 계산은 가정 기반 <span class="tag-v tag-edu">예시</span>로, 13장 전체는 외부 대조가 불가능한 <strong>AADS 내부 DB 실측</strong> 구간으로 명시했습니다.</li>
+    <li><strong>미해소</strong> — 13장 내부 수치(cost_tracking 등)는 본 검수 범위 밖이라 <strong>재조회하지 않았습니다</strong>. 3월 11일 이후 관측 공백, 대체 업무의 인건비 환산 가치, 토크나이저 변경의 구체적 환산 계수는 여전히 <span class="tag-unverified">미검증</span>입니다.</li>
+  </ul>
+  <p style="font-size:.82rem;color:var(--text3)">※ 본 검수에서 인용한 외부 URL은 2026-09-13 09:40~10:20 KST에 전수 점검했으며, 대부분 <span class="http-ok">HTTP 200</span>으로 응답했습니다. Gartner·BCG 등 자동화 접근을 차단하는 사이트는 <span class="http-waf">HTTP 403</span>으로 응답하지만 브라우저에서는 정상 열람되며, 링크가 죽은 것이 아닙니다. "HTTP 200"은 해당 URL이 응답했다는 뜻이며, 그 페이지에 실린 모든 수치를 본 문서가 검증했다는 뜻이 아닙니다. <strong>가격·모델 라인업은 수시로 변동되므로 예산 집행 전 반드시 링크 원문을 다시 확인하십시오.</strong></p>
+</div>
+
 <!-- ===== FOOTER ===== -->
 <div class="footer">
-  <p>AADS Academy · AI 비용·토큰 경제학 교육자료 · 2026-09-12 작성 · CEO 교육용</p>
-  <p style="margin-top:6px">모델 단가는 2026-09-12 Anthropic 공식 문서(docs.claude.com)에서 fetch_url로 직접 확인한 값만 기재했으며, AADS 적용 현황은 같은 날짜 query_database 실측 결과만 인용했습니다. 확인하지 못한 항목은 본문에 '미검증'으로 표기했습니다. 가격·정책은 변동 가능하므로 예산 집행 전 공식 자료로 재확인이 필요합니다.</p>
+  <p>AADS Academy · AI 비용·토큰 경제학 교육자료 · 2026-09-12 작성 · 2026-09-13 출처 검수 · CEO 교육용</p>
+  <p style="margin-top:6px">모델 단가는 2026-09-12 Anthropic 공식 문서에서 직접 확인하고 2026-09-13 <a class="src" href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">platform.claude.com 공식 가격표</a>로 재대조한 값만 기재했으며, AADS 적용 현황은 같은 날짜 query_database 실측 결과만 인용했습니다. 확인하지 못한 항목은 본문에 '미검증'으로 표기했습니다. 가격·정책은 변동 가능하므로 예산 집행 전 공식 자료로 재확인이 필요합니다.</p>
 </div>
 
 </div>

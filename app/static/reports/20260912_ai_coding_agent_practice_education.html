@@ -88,6 +88,30 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
   table{font-size:.78rem}
   th,td{padding:8px 10px}
 }
+/* === 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) === */
+a.src{color:var(--accent3);text-decoration:none;border-bottom:1px dotted var(--accent3);word-break:break-all}
+a.src:hover{color:var(--accent);border-bottom-style:solid}
+.src-legend{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent3);
+border-radius:12px;padding:20px 24px;margin:0 0 40px}
+.src-legend h3{margin:0 0 10px;font-size:1.02rem;color:var(--accent3)}
+.src-legend ul{margin:10px 0 12px 18px}
+.src-legend li{font-size:.87rem;color:var(--text2);margin-bottom:5px}
+.tag-v{display:inline-block;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:7px;white-space:nowrap}
+.tag-fact{background:#10b98120;color:#34d399}
+.tag-edu{background:#3b82f620;color:#60a5fa}
+.tag-plan{background:#8b5cf620;color:#a78bfa}
+.tag-unver{background:#f59e0b20;color:#fbbf24}
+.tag-verified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#10b98120;color:#34d399;margin-left:6px}
+.tag-unverified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#ef444420;color:#f87171;margin-left:6px}
+.src-fix{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--warning);
+border-radius:10px;padding:14px 18px;margin:18px 0;font-size:.88rem;color:var(--text2)}
+.src-fix strong{color:var(--warning)}
+/* 모바일 가로 스크롤 방지: 긴 URL·경로 토큰이 줄바꿈되지 않아 문서 폭을 넘기던 문제 */
+.alert,.info-card,.checkpoint,.ceo-box,td,li,p{overflow-wrap:break-word}
+/* 줄바꿈되지 않는 코드 블록(JSON 예시 등)이 좁은 화면에서 문서 폭을 밀어내던 문제:
+   블록 자체를 가로 스크롤시키고, 그리드 칸이 내용 최소폭에 갇히지 않도록 min-width 해제 */
+pre{overflow-x:auto;max-width:100%}
+.compare-row>*,.card-grid>*,.compare-box,.info-card{min-width:0}
 </style>
 </head>
 <body>
@@ -123,7 +147,21 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
     <a href="#ch13"><span class="num">13</span> 요금제 총정리 (원화 병기)</a>
     <a href="#ch14"><span class="num">14</span> 도입 로드맵</a>
     <a href="#ch15"><span class="num">15</span> 참고자료 및 다음 단계</a>
+    <a href="#source-audit-20260913"><span class="num">★</span> 부록. 출처 검수 이력 (2026-09-13)</a>
   </div>
+</div>
+
+<!-- ===== 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) ===== -->
+<div class="src-legend">
+  <h3>📌 출처 표기 범례 — 무엇이 검증된 사실이고 무엇이 아닌가</h3>
+  <p style="font-size:.87rem;color:var(--text2);margin-bottom:6px">이 문서의 주장은 근거의 강도에 따라 아래 4가지로 구분됩니다. 외부 출처는 <strong>기관 공식 문서·공식 가격표·원 논문(1차 출처)</strong>의 클릭 가능한 링크로 연결되어 있습니다.</p>
+  <ul>
+    <li><span class="tag-v tag-fact">검증</span>1차 출처로 원문을 확인한 사실 — 링크를 눌러 직접 대조할 수 있습니다</li>
+    <li><span class="tag-v tag-edu">예시</span>이해를 돕기 위한 교육용 예시·비유·가상 시나리오 — 실측치가 아닙니다</li>
+    <li><span class="tag-v tag-plan">제안</span>본 문서가 제안하는 개선안 — 아직 실행되지 않은 계획입니다</li>
+    <li><span class="tag-v tag-unver">미검증</span>확인하지 못한 항목 — 의사결정 전 반드시 재확인이 필요합니다</li>
+  </ul>
+  <p style="font-size:.8rem;color:var(--text3);margin:0">링크 점검: <strong>2026-09-13 09:40~10:20 KST</strong>, 서버 68 런타임에서 본 문서가 인용한 각 URL에 HTTP 요청을 보내 응답 코드를 기록했습니다. 총 66개 URL 중 <strong>61개가 <span class="http-ok">HTTP 200</span></strong>이며, Gartner·BCG 등 일부 기관 사이트는 자동화 접근을 차단(<span class="http-waf">HTTP 403</span>)하고 Milvus 문서는 자동화 요청에 302로 응답하지만 <strong>브라우저에서는 모두 정상 열람</strong>됩니다. <strong>URL 접근 확인은 링크가 살아 있다는 뜻일 뿐, 그 페이지에 실린 모든 수치를 본 문서가 검증했다는 뜻은 아닙니다.</strong> 가격·모델 라인업·스펙 버전은 수시로 바뀌므로 의사결정 전 링크 원문을 다시 확인하십시오.</p>
 </div>
 
 <!-- ===== CH1 ===== -->
@@ -188,16 +226,26 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
       <tbody>
         <tr><td><strong>Claude Code</strong></td><td>Anthropic</td><td>Sonnet 5 / Opus 5 / Haiku 4.5</td><td class="recommend">매우 높음 — 서브에이전트 병렬, 장시간 자율 수행</td><td class="price">Pro $17~20/월<br><small style="color:var(--text3)">(약 ₩23,460~27,600)</small></td><td class="price">Team $20~100/시트<br>Enterprise $20/시트+사용량<br><small style="color:var(--text3)">(약 ₩27,600~138,000)</small></td><td>기본 학습 미사용, Enterprise ZDR·IP allowlist</td></tr>
         <tr><td><strong>OpenAI Codex CLI</strong></td><td>OpenAI</td><td>GPT-6 Astra / GPT-5.6 Sol·Terra·Luna</td><td>높음 — 클라우드 샌드박스+로컬 CLI 겸용</td><td class="price">ChatGPT Plus/Go 포함 플랜 내</td><td class="price">Business $20~100/시트<br>Enterprise 별도 협의<br><small style="color:var(--text3)">(약 ₩27,600~138,000)</small></td><td>기본 학습 미사용(Business/Enterprise), SCIM·EKM·데이터 거주지 10개국</td></tr>
-        <tr><td><strong>Cursor</strong></td><td>Anysphere</td><td>xAI Grok 계열 "frontier models" 중심 멀티모델</td><td>중~높음 — IDE 통합형, Cloud Agents로 백그라운드 지원</td><td class="price">Hobby 무료<br>Pro $20/월<br>Pro+ $60/월<br>Ultra $200/월<br><small style="color:var(--text3)">(약 ₩27,600~276,000)</small></td><td class="price">Teams/Enterprise 별도 협의</td><td>Privacy mode 켜면 학습 미사용(팀 관리자 설정)</td></tr>
+        <tr><td><strong>Cursor</strong></td><td>Anysphere</td><td>멀티모델("frontier models" 접근 제공 — 2026-09-13 기준 공식 가격 페이지는 <strong>특정 모델명을 명시하지 않음</strong>)</td><td>중~높음 — IDE 통합형, Cloud Agents로 백그라운드 지원</td><td class="price">Hobby 무료<br>Pro $20/월<br>Pro+ $60/월<br>Ultra $200/월<br><small style="color:var(--text3)">(약 ₩27,600~276,000)</small></td><td class="price">Teams/Enterprise 별도 협의</td><td>Privacy mode 켜면 학습 미사용(팀 관리자 설정)</td></tr>
         <tr><td><strong>GitHub Copilot</strong></td><td>Microsoft/GitHub</td><td>멀티모델(Anthropic/OpenAI 혼합, 자동 라우팅)</td><td>중 — 저장소·PR·Actions와 깊게 통합, CLI/cloud agent 지원</td><td class="price">Pro $10/월<br>Pro+ $39/월<br><small style="color:var(--text3)">(약 ₩13,800~53,820)</small></td><td class="price">Business/Enterprise 시트+2026-06-01부터 프리미엄 요청 사용량 과금 전환</td><td>조직 설정으로 학습 미사용 지정 가능</td></tr>
       </tbody>
     </table>
   </div>
 
+  <div class="src-fix"><strong>2026-09-13 검수 — 요금은 공식 페이지로 재대조했습니다(2건 확정, 1건 누락 보완, 1건 확인 불가)</strong><br>
+  요금제는 이 문서에서 가장 빨리 낡고 예산에 직접 영향을 주는 정보이므로 각사 공식 페이지와 대조했습니다.
+  <ul style="margin:10px 0 4px 18px;font-size:.87rem">
+    <li><span class="tag-v tag-fact">검증</span><strong>Cursor</strong> — <a class="src" href="https://cursor.com/pricing" target="_blank" rel="noopener">공식 가격 페이지</a> 기준 Hobby 무료 · Pro <strong>$20</strong> · Pro+ <strong>$60</strong> · Ultra <strong>$200</strong>/월로 <strong>표의 값과 정확히 일치</strong>합니다.</li>
+    <li><span class="tag-v tag-fact">검증</span><strong>GitHub Copilot</strong> — <a class="src" href="https://docs.github.com/en/copilot/about-github-copilot/plans-for-github-copilot" target="_blank" rel="noopener">공식 플랜 문서</a> 기준 Pro <strong>$10</strong> · Pro+ <strong>$39</strong>/월로 표와 일치합니다.</li>
+    <li><strong>누락 보완</strong> — 같은 문서에 초판 표에 없던 <strong>Copilot Max $100/월</strong> 개인 플랜과, 조직 플랜의 구체 단가(<strong>Business $19/시트·Enterprise $39/시트</strong>)가 등재되어 있습니다. 시트 단가를 "별도 협의"로만 알고 예산을 짜면 안 됩니다.</li>
+    <li><span class="tag-v tag-unver">확인 불가</span><strong>"2026-06-01부터 프리미엄 요청 사용량 과금 전환"</strong> — 공식 플랜 문서에서 <strong>이 날짜와 전환 내용을 확인하지 못했습니다</strong>. 현재 문서는 <em>GitHub AI Credits 기반 사용량 과금</em>을 별도 문서로 안내하고 있습니다. <strong>사용량 기반 과금이 존재한다는 큰 줄기는 유효하나, 특정 시행일을 근거로 예산을 확정하지 마십시오.</strong> 2026-04-20 신규 가입 중단 건도 이번 검수에서 확인하지 못했습니다.</li>
+  </ul>
+  <strong>공통 주의:</strong> 위 단가는 <strong>2026-09-13 KST 스냅샷</strong>입니다. 좌석 수·연간 약정·지역에 따라 실제 청구가 달라지므로 계약 전 링크 원문을 반드시 재확인하십시오.</div>
+
   <h3>2026년 시장에서 벌어진 구조 변화</h3>
   <ul>
     <li><strong>GitHub Copilot 요금 개편(2026-06-01)</strong> — 기존 Pro($10)/Pro+($39) 정액 요금은 유지하되, "고정 할당량"이던 프리미엄 모델 요청을 사용량 기반 과금으로 전환. 2026-04-20에는 신규 가입을 일시 중단하는 사태도 있었습니다. 정액제만 보고 예산을 짜면 실제 청구액이 크게 벗어날 수 있습니다.</li>
-    <li><strong>Cursor의 모델 전략 이동</strong> — 2026-09 기준 Cursor의 프라이싱 페이지 최상단에 xAI Grok이 "frontier model"로 노출되고 있습니다. 특정 벤더 한 곳에 록인되지 않는 멀티모델 전략은 장점이지만, 조직이 Anthropic/OpenAI 데이터 정책에 맞춰 설계한 보안 정책을 Cursor에도 동일하게 적용할 수 있는지 별도 확인이 필요합니다.</li>
+    <li><strong>Cursor의 모델 전략 이동</strong> — 초판은 "2026-09 기준 Cursor 프라이싱 페이지 최상단에 xAI Grok이 frontier model로 노출된다"고 적었습니다. <strong>2026-09-13 재확인 시점에는 해당 페이지가 특정 모델명을 표기하지 않고 "Access to frontier models"라고만 안내</strong>하고 있어, 이 서술은 <span class="tag-unverified">현재 확인 불가</span>입니다(마케팅 문구는 자주 바뀌므로 초판 시점에는 사실이었을 수 있습니다). 다만 <strong>멀티모델 전략에서 파생되는 실무 논점은 그대로 유효합니다</strong> — 어떤 모델이 실제로 코드를 처리하는지 불확실하면, 조직이 Anthropic/OpenAI 데이터 정책에 맞춰 설계한 보안 정책을 동일하게 적용할 수 있는지 별도 확인이 필요합니다.</li>
   </ul>
 
   <div class="checkpoint">
@@ -272,7 +320,7 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
   <div class="card-grid">
     <div class="info-card">
       <h4>채택 현황</h4>
-      <p>60,000개 이상의 오픈소스 프로젝트가 사용 중. OpenAI Codex, Google Jules, Cursor, Factory, Aider, Zed, Warp, JetBrains Junie 등이 공동 지원. 2026년 기준 Linux Foundation 산하 Agentic AI Foundation이 표준을 관리.</p>
+      <p>60,000개 이상의 오픈소스 프로젝트가 사용 중. OpenAI Codex, Google Jules, Cursor, Factory, Aider, Zed, Warp, JetBrains Junie 등이 공동 지원. 2026년 기준 Linux Foundation 산하 Agentic AI Foundation이 표준을 관리. <span class="tag-v tag-fact">검증</span><a class="src" href="https://agents.md/" target="_blank" rel="noopener">공식 사이트(agents.md)</a> 2026-09-13 대조 — "used by over 60k open-source projects", "stewarded by the Agentic AI Foundation under the Linux Foundation" 원문 확인. 지원 도구 목록에 Google Gemini CLI·GitHub Copilot·Cognition(Devin·Windsurf)·UiPath·VS Code 등도 함께 등재되어 있습니다.</p>
     </div>
     <div class="info-card">
       <h4>모노레포 지원</h4>
@@ -614,7 +662,7 @@ _TERMINAL_JOB_STATUSES = {
 
   <div class="alert alert-danger">
     <strong>⚠️ worktree 격리는 이 파일에 구현되어 있지 않다</strong>
-    "worktree"라는 문자열이 3,314줄 전체에서 단 한 번도 등장하지 않습니다. 병렬 실행 시 여러 job이 실행되는 것은 <code>parallel_group</code> 필드(640~643행)와 <code>_project_locks</code>로 "순서"만 조율할 뿐, <code>_ssh_command</code>는 항상 동일한 <code>self.workdir</code>에서 실행됩니다(2065행, <code>cd {workdir} &amp;&amp; ...</code>). 즉 6장에서 설명한 "파일시스템 격리"는 이 서비스에는 없고, 락으로 순서를 제어하는 방식입니다. 병렬 job이 같은 프로젝트의 같은 파일을 동시에 건드리지 않도록 작업지시서 설계로 보완해야 합니다.</p>
+    "worktree"라는 문자열이 3,314줄 전체에서 단 한 번도 등장하지 않습니다. 병렬 실행 시 여러 job이 실행되는 것은 <code>parallel_group</code> 필드(640~643행)와 <code>_project_locks</code>로 "순서"만 조율할 뿐, <code>_ssh_command</code>는 항상 동일한 <code>self.workdir</code>에서 실행됩니다(2065행, <code>cd {workdir} &amp;&amp; ...</code>). 즉 6장에서 설명한 "파일시스템 격리"는 이 서비스에는 없고, 락으로 순서를 제어하는 방식입니다. 병렬 job이 같은 프로젝트의 같은 파일을 동시에 건드리지 않도록 작업지시서 설계로 보완해야 합니다.
   </div>
 
   <h3>승인 로직 — 사람이 아니라 "세션 AI"가 1차 승인</h3>
@@ -809,14 +857,14 @@ _TIMEOUT_BY_SIZE = {
     <table>
       <thead><tr><th>출처</th><th>URL</th><th>조회일</th><th>용도</th></tr></thead>
       <tbody>
-        <tr><td>Anthropic 공식 요금</td><td>anthropic.com/pricing</td><td>2026-09-12</td><td>Claude Code/Pro/Max/Team/Enterprise 요금, 모델별 단가</td></tr>
-        <tr><td>OpenAI 공식 요금(Business)</td><td>openai.com/api/pricing</td><td>2026-09-12</td><td>ChatGPT Business/Enterprise 시트 요금, Codex 포함 여부</td></tr>
-        <tr><td>OpenAI Platform 문서</td><td>platform.openai.com/docs/pricing</td><td>2026-09-12</td><td>GPT-6 Astra 등 최신 모델 카탈로그 확인</td></tr>
-        <tr><td>Cursor 공식 요금</td><td>cursor.com/pricing</td><td>2026-09-12</td><td>Hobby/Pro/Pro+/Ultra 요금, Grok 중심 모델 전략</td></tr>
-        <tr><td>GitHub Copilot 문서</td><td>docs.github.com/en/copilot/get-started/plans</td><td>2026-09-12</td><td>Copilot CLI/에이전트 개념 구조</td></tr>
-        <tr><td>PCWorld — Copilot 요금 개편</td><td>pcworld.com (2026-04-27 기사)</td><td>2026-09-12(재확인)</td><td>2026-06-01 사용량 기반 과금 전환 사실관계</td></tr>
-        <tr><td>Business Insider — Copilot 과금 반응</td><td>businessinsider.com (2026-06 기사)</td><td>2026-09-12(재확인)</td><td>사용량 기반 전환 이후 시장 반응</td></tr>
-        <tr><td>AGENTS.md 공식 사이트</td><td>agents.md</td><td>2026-09-12</td><td>규칙 파일 표준, 60k+ 프로젝트 채택 현황, Agentic AI Foundation 관리 체계</td></tr>
+        <tr><td>Anthropic 공식 요금 <span class="tag-verified">1차</span></td><td><a class="src" href="https://claude.com/pricing" target="_blank" rel="noopener">claude.com/pricing</a><br><small style="color:var(--text3)">※ <code>anthropic.com/pricing</code>은 이 주소로 <strong>301 영구 이동</strong></small></td><td>2026-09-12<br>2026-09-13 재확인</td><td>Claude Code/Pro/Max/Team/Enterprise 요금, 모델별 단가</td></tr>
+        <tr><td>OpenAI 공식 요금 <span class="tag-verified">1차</span></td><td><a class="src" href="https://developers.openai.com/api/docs/pricing" target="_blank" rel="noopener">developers.openai.com/api/docs/pricing</a></td><td>2026-09-12<br>2026-09-13 재확인</td><td>ChatGPT Business/Enterprise 시트 요금, Codex 포함 여부</td></tr>
+        <tr><td>OpenAI 모델 카탈로그 <span class="tag-verified">1차</span></td><td><a class="src" href="https://developers.openai.com/api/docs/models" target="_blank" rel="noopener">developers.openai.com/api/docs/models</a><br><small style="color:var(--text3)">※ <code>platform.openai.com/docs/*</code>는 <code>developers.openai.com</code>으로 <strong>301 이동</strong></small></td><td>2026-09-12<br>2026-09-13 재확인</td><td>GPT-6 Astra 등 최신 모델 카탈로그 확인</td></tr>
+        <tr><td>Cursor 공식 요금 <span class="tag-verified">1차</span></td><td><a class="src" href="https://cursor.com/pricing" target="_blank" rel="noopener">cursor.com/pricing</a></td><td>2026-09-12<br>2026-09-13 재확인</td><td>Hobby/Pro/Pro+/Ultra 요금 <strong>일치 확인</strong>. 단 "Grok 중심 모델 전략"은 재확인 시점 페이지에서 <strong>확인되지 않음</strong></td></tr>
+        <tr><td>GitHub Copilot 플랜 문서 <span class="tag-verified">1차</span></td><td><a class="src" href="https://docs.github.com/en/copilot/about-github-copilot/plans-for-github-copilot" target="_blank" rel="noopener">docs.github.com/…/plans-for-github-copilot</a></td><td>2026-09-12<br>2026-09-13 재확인</td><td>Copilot CLI/에이전트 개념 구조</td></tr>
+        <tr><td>PCWorld — Copilot 요금 개편 <span class="tag-unverified">2차(언론)</span></td><td>pcworld.com (2026-04-27 기사)</td><td>2026-09-12</td><td>2026-06-01 전환 <strong>날짜의 유일한 근거가 언론 보도</strong>이며 공식 문서로 재확인되지 않음 — 예산 확정 근거로 부적합</td></tr>
+        <tr><td>Business Insider — Copilot 과금 반응 <span class="tag-unverified">2차(언론)</span></td><td>businessinsider.com (2026-06 기사)</td><td>2026-09-12</td><td>사용량 기반 전환 이후 시장 반응</td></tr>
+        <tr><td>AGENTS.md 공식 사이트 <span class="tag-verified">1차</span></td><td><a class="src" href="https://agents.md/" target="_blank" rel="noopener">agents.md</a></td><td>2026-09-12<br>2026-09-13 원문 대조</td><td>규칙 파일 표준, 60k+ 프로젝트 채택 현황, Agentic AI Foundation 관리 체계</td></tr>
         <tr><td>AADS 소스코드</td><td>app/services/pipeline_runner_service.py</td><td>2026-09-12</td><td>11장 파이프라인 구조 전수분석(3,314줄 전체 확인)</td></tr>
         <tr><td>AADS DB</td><td>PostgreSQL pipeline_jobs 테이블</td><td>2026-09-12</td><td>11장 실제 운영 상태 분포(822건)</td></tr>
         <tr><td>AADS CLAUDE.md</td><td>프로젝트 루트 CLAUDE.md</td><td>2026-09-12</td><td>4·8·9·10장 규칙 파일 실전 사례(R-KEY/R-COMMIT/R-QUALITY/R-DOCKER)</td></tr>
@@ -831,6 +879,23 @@ _TIMEOUT_BY_SIZE = {
     <li><strong>1개월 내</strong> — 13장 요금표를 기준으로 현재 사용 중인 도구의 실제 청구액과 비교해 최적 플랜을 재산정한다.</li>
     <li><strong>분기마다</strong> — 이 문서 자체를 재검증한다. 코딩 에이전트 시장은 3개월이면 요금·모델 카탈로그가 크게 바뀐다.</li>
   </ol>
+</div>
+
+<!-- ===== 출처 검수 이력 (2026-09-13 sources_p1) ===== -->
+<div class="section" id="source-audit-20260913">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 부록. 출처 검수 이력 (2026-09-13 KST)</h2>
+  <p>본 문서는 2026-09-12 초판 작성 이후, <strong>2026-09-13 KST</strong>에 별도 출처 검수를 거쳤습니다. 검수 원칙은 ①각사 공식 가격·플랜 문서와 표준 공식 사이트 등 <strong>1차 출처 우선</strong>, ②모든 인용을 <strong>클릭 가능한 링크</strong>로 전환, ③확인하지 못한 내용은 삭제하지 않고 <span class="tag-unverified">미검증</span>으로 명시, ④원문과 다른 서술은 원문 기준으로 교정입니다. 아래는 이번 검수에서 실제로 바뀐 내용입니다.</p>
+  <ul>
+    <li><strong>검증</strong> — 3장 요금표의 <strong>Cursor 4개 플랜</strong>(Hobby 무료·Pro $20·Pro+ $60·Ultra $200)과 <strong>Copilot 2개 플랜</strong>(Pro $10·Pro+ $39)이 공식 페이지와 <strong>정확히 일치</strong>함을 확인했습니다.</li>
+    <li><strong>누락 보완</strong> — 공식 플랜 문서에 있으나 초판 표에 없던 <strong>Copilot Max $100/월</strong>과 조직 플랜 단가(<strong>Business $19/시트·Enterprise $39/시트</strong>)를 추가했습니다. 시트 단가를 "별도 협의"로만 알고 예산을 짜면 안 됩니다.</li>
+    <li><strong>근거 등급 강등(중요)</strong> — <strong>"2026-06-01 프리미엄 요청 사용량 과금 전환"의 시행일은 공식 문서에서 확인되지 않았습니다</strong>. 근거가 PCWorld·Business Insider <span class="tag-unverified">2차(언론)</span> 보도뿐이므로 참고자료에 등급을 명시했습니다. 사용량 기반 과금이 존재한다는 큰 줄기는 유효하나, <strong>특정 시행일을 근거로 예산을 확정해서는 안 됩니다</strong>. 2026-04-20 신규 가입 중단 건도 이번에 확인하지 못했습니다.</li>
+    <li><strong>교정</strong> — "Cursor 프라이싱 페이지 최상단에 xAI Grok이 frontier model로 노출된다"는 서술은 2026-09-13 재확인 시점에 <strong>확인되지 않았습니다</strong>(현재는 모델명 없이 "Access to frontier models"로만 안내). 초판 시점에는 사실이었을 수 있으므로 삭제하지 않고 <em>현재 확인 불가</em>로 표시하되, <strong>멀티모델 전략에서 파생되는 보안 정책 논점은 유효</strong>하다는 점을 유지했습니다.</li>
+    <li><strong>원문 대조</strong> — 7장 AGENTS.md의 "60,000개 이상 프로젝트 채택"과 "Linux Foundation 산하 Agentic AI Foundation 관리"를 공식 사이트 원문(<em>"used by over 60k open-source projects"</em>, <em>"stewarded by the Agentic AI Foundation under the Linux Foundation"</em>)으로 확인했습니다. <span class="tag-v tag-fact">검증</span></li>
+    <li><strong>URL 이전 반영</strong> — <code>anthropic.com/pricing</code> → <code>claude.com/pricing</code>(301), <code>platform.openai.com/docs/*</code> → <code>developers.openai.com</code>(301). 참고자료를 정식 주소의 클릭 가능한 링크로 교체하고 <strong>1차/2차 출처 등급</strong>을 표기했습니다.</li>
+    <li><strong>HTML 구조 교정</strong> — 11장 경고 박스에 여는 <code>&lt;p&gt;</code> 없이 남아 있던 고아 <code>&lt;/p&gt;</code> 태그를 제거했습니다(초판부터 있던 오류).</li>
+    <li><strong>미해소</strong> — Codex CLI의 ChatGPT Business 시트 요금($20~100) 구간과 각 플랜의 데이터 학습·보존 정책 세부 조항은 이번 검수에서 <strong>약관 원문까지 대조하지 않았습니다</strong> <span class="tag-unverified">미검증</span>. 11~12장의 AADS 내부 코드·DB 실측치도 본 검수 범위 밖입니다.</li>
+  </ul>
+  <p style="font-size:.82rem;color:var(--text3)">※ 본 검수에서 인용한 외부 URL은 2026-09-13 09:40~10:20 KST에 전수 점검했으며, 대부분 <span class="http-ok">HTTP 200</span>으로 응답했습니다. Gartner·BCG 등 자동화 접근을 차단하는 사이트는 <span class="http-waf">HTTP 403</span>으로 응답하지만 브라우저에서는 정상 열람되며, 링크가 죽은 것이 아닙니다. "HTTP 200"은 해당 URL이 응답했다는 뜻이며, 그 페이지에 실린 모든 내용을 본 문서가 검증했다는 뜻이 아닙니다. 코딩 에이전트 요금제는 분기 단위로 바뀝니다. 위 단가는 <strong>2026-09-13 KST 스냅샷</strong>이며 좌석 수·연간 약정·지역에 따라 실제 청구가 달라지므로, 계약 전 반드시 링크 원문을 재확인하십시오.</p>
 </div>
 
 <!-- ===== FOOTER ===== -->
