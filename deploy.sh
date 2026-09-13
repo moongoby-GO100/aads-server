@@ -7,7 +7,12 @@
 #
 # 검증 6단계: 의존성→코드검증→배포→Health→DB스키마→채팅→LLM→프론트QA
 
-set -euo pipefail
+set -Eeuo pipefail
+# -E(errtrace): ERR 트랩을 함수와 서브셸에도 상속시킨다.
+# 이것이 없으면 함수 안에서 실패해도 트랩이 호출 지점에서 발동해, 실제로 어느
+# 줄에서 죽었는지 남지 않는다. 2026-09-13 실패 로그가 전부 "line=1" 이었던
+# 이유이며, 그 때문에 자가치유가 원인을 분류하지 못하고 manual 로 넘겼다.
+# (실측: set -E 없으면 호출 지점만, 있으면 실패한 줄이 먼저 보고된다)
 trap '' HUP  # RC4: ignore HUP immediately — eliminates race window before main trap block
 trap '' SIGPIPE 2>/dev/null || true  # RC9: prevent broken-pipe from killing deploy subprocesses
 
@@ -556,7 +561,13 @@ supersede_older_queued_deploy_requests() {
         WHERE project='AADS'
           AND status='queued'
           AND phase='queued_for_deploy'
-          AND release_sha IS DISTINCT FROM '$release_sql'
+          -- 같은 SHA 의 대기 행도 함께 닫는다. 예전에는 IS DISTINCT FROM 으로
+          -- 다른 SHA 만 흡수해, 같은 커밋이 두 번 큐에 들어가면 둘 다 살아남아
+          -- 순차로 같은 이미지를 두 번 빌드했다(2026-09-13: #348/#349,
+          -- #379/#380). git 커밋은 누적이므로 지금 시작하는 배포가 대기 행의
+          -- 내용을 이미 포함한다 — 닫아도 잃는 것이 없다.
+          -- 진행 중(running)인 배포는 건드리지 않는다. 큐 정리가 실행 중인
+          -- 배포를 중단시켜서는 안 된다.
           AND id <> ${current_run_id};
     " >/dev/null
 }
