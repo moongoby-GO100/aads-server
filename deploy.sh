@@ -841,8 +841,13 @@ claim_latest_queued_deploy_request() {
         exit 0
     fi
     if [[ "$latest_sha" != "${AADS_RELEASE_SHA:-unknown}" ]]; then
-        echo "[deploy.sh] ❌ latest queued release (${latest_sha}) does not match local HEAD (${AADS_RELEASE_SHA:-unknown}); leaving queue intact"
-        exit 1
+        # 내 SHA 가 더 이상 큐의 최신이 아니다 = 더 새 릴리스가 나를 흡수했다.
+        # 실패가 아니라 할 일이 없어진 것이므로 0 으로 나간다. exit 1 로 나가면
+        # ERR 트랩이 "unexpected error exit=1" 로 잡아 record_deploy failed 를
+        # 남긴다. 2026-09-13 #389 가 이렇게 만들어졌다 — e0aca65c 가 0ac2166c 를
+        # 흡수한 정상 동작이 실패 1건으로 집계됐다.
+        echo "[deploy.sh] queue worker standing down: 큐 최신은 ${latest_sha}, 내 HEAD 는 ${AADS_RELEASE_SHA:-unknown} — 더 새 릴리스가 흡수했다"
+        exit 0
     fi
     run_id="$(
         deploy_db_exec "
@@ -1440,6 +1445,13 @@ fi
 
 cleanup_deploy() {
     local _deploy_rc="$?"
+    # 종료 핸들러는 그 자체로 새 실패가 될 수 없다. set -E(D7) 이후 ERR 트랩이
+    # 함수 안까지 상속되면서, 이 함수의 `return "$_deploy_rc"` 가 다시 트랩을
+    # 태워 "unexpected error exit=N line=1" 로 실제 원인을 덮어썼다.
+    # 2026-09-13 #389 가 그렇게 만들어졌다 — 큐 워커가 정상적으로 물러난 것이
+    # 실패 1건으로 기록됐다. 여기서는 트랩을 끄고 나간다.
+    trap - ERR
+    set +E
     stop_deploy_heartbeat
     stop_downtime_monitor
     cleanup_release_context
