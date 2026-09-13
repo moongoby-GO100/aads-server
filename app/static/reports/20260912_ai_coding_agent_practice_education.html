@@ -214,8 +214,8 @@ border-radius:12px;padding:20px 24px;margin:0 0 40px}
   <h2 class="section-title section-anchor"><span class="icon">⚖️</span> 02. 주요 코딩 에이전트 비교 (2026-09 기준)</h2>
 
   <div class="alert alert-info">
-    <strong>💡 조회 기준</strong>
-    아래 요금·모델명은 각 사 공식 페이지를 2026-09-12에 직접 조회한 값입니다(출처는 15장 참고자료 참조). 코딩 에이전트 시장은 분기 단위로 요금 체계가 바뀌므로 실제 계약 전 반드시 재확인하십시오. 원화는 $1≈₩1,380 환산.
+    <strong>💡 조회 기준 — 2026-09-13 KST 재확인<span class="tag-verified">각 사 공식 요금 페이지 재대조</span></strong>
+    아래 요금·모델명은 각 사 <strong>공식 요금 페이지</strong>를 <strong>2026-09-13 KST에 재확인</strong>한 값입니다. 초판(2026-09-12) 이후 <u>GitHub Copilot과 Cursor 두 곳에서 요금 구조 변경이 확인되어 표를 교정</u>했습니다 — 변경 내역은 바로 아래 "2026-09-13 재확인에서 드러난 초판과의 차이"에 정리했습니다. 코딩 에이전트 시장은 분기 단위로 요금 체계가 바뀌므로 <strong>실제 계약 전 반드시 각 사 공식 페이지를 직접 열어 재확인</strong>하십시오. 원화는 <span class="tag-v tag-edu">예시</span>$1≈₩1,380 고정 환산이며 공식 출처에 없는 본 문서의 계산값입니다.
   </div>
 
   <div class="table-wrap">
@@ -224,18 +224,33 @@ border-radius:12px;padding:20px 24px;margin:0 0 40px}
         <tr><th>도구</th><th>제공사</th><th>대표 모델(2026-09)</th><th>CLI 자율성</th><th>개인 요금</th><th>팀/기업 요금</th><th>데이터 정책</th></tr>
       </thead>
       <tbody>
-        <tr><td><strong>Claude Code</strong></td><td>Anthropic</td><td>Sonnet 5 / Opus 5 / Haiku 4.5</td><td class="recommend">매우 높음 — 서브에이전트 병렬, 장시간 자율 수행</td><td class="price">Pro $17~20/월<br><small style="color:var(--text3)">(약 ₩23,460~27,600)</small></td><td class="price">Team $20~100/시트<br>Enterprise $20/시트+사용량<br><small style="color:var(--text3)">(약 ₩27,600~138,000)</small></td><td>기본 학습 미사용, Enterprise ZDR·IP allowlist</td></tr>
+        <tr><td><strong>Claude Code</strong></td><td>Anthropic</td><td>Sonnet 5 / Opus 5 / Haiku 4.5</td><td class="recommend">매우 높음 — 서브에이전트 병렬, 장시간 자율 수행</td><td class="price"><a href="https://claude.com/pricing" target="_blank" rel="noopener">Pro $17</a>(연간) / $20(월간)<br>Max $100~<br><small style="color:var(--text3)">(약 ₩23,460~27,600)</small></td><td class="price">Team 표준 $20 / 프리미엄 $100 시트<br><small style="color:var(--text3)">월간결제 시 $25 / $125</small><br>Enterprise $20/시트+사용량<br><small style="color:var(--text3)">(약 ₩27,600~138,000)</small></td><td>기본 학습 미사용, Enterprise ZDR·IP allowlist</td></tr>
         <tr><td><strong>OpenAI Codex CLI</strong></td><td>OpenAI</td><td>GPT-6 Astra / GPT-5.6 Sol·Terra·Luna</td><td>높음 — 클라우드 샌드박스+로컬 CLI 겸용</td><td class="price">ChatGPT Plus/Go 포함 플랜 내</td><td class="price">Business $20~100/시트<br>Enterprise 별도 협의<br><small style="color:var(--text3)">(약 ₩27,600~138,000)</small></td><td>기본 학습 미사용(Business/Enterprise), SCIM·EKM·데이터 거주지 10개국</td></tr>
-        <tr><td><strong>Cursor</strong></td><td>Anysphere</td><td>xAI Grok 계열 "frontier models" 중심 멀티모델</td><td>중~높음 — IDE 통합형, Cloud Agents로 백그라운드 지원</td><td class="price">Hobby 무료<br>Pro $20/월<br>Pro+ $60/월<br>Ultra $200/월<br><small style="color:var(--text3)">(약 ₩27,600~276,000)</small></td><td class="price">Teams/Enterprise 별도 협의</td><td>Privacy mode 켜면 학습 미사용(팀 관리자 설정)</td></tr>
-        <tr><td><strong>GitHub Copilot</strong></td><td>Microsoft/GitHub</td><td>멀티모델(Anthropic/OpenAI 혼합, 자동 라우팅)</td><td>중 — 저장소·PR·Actions와 깊게 통합, CLI/cloud agent 지원</td><td class="price">Pro $10/월<br>Pro+ $39/월<br><small style="color:var(--text3)">(약 ₩13,800~53,820)</small></td><td class="price">Business/Enterprise 시트+2026-06-01부터 프리미엄 요청 사용량 과금 전환</td><td>조직 설정으로 학습 미사용 지정 가능</td></tr>
+        <tr><td><strong>Cursor</strong></td><td>Anysphere</td><td>"frontier models" 중심 멀티모델</td><td>중~높음 — IDE 통합형, Cloud Agents로 백그라운드 지원</td><td class="price"><a href="https://cursor.com/docs/account/pricing" target="_blank" rel="noopener">Pro $20/월</a><br>Pro Plus $60/월<br>Ultra $200/월<br><small style="color:var(--text3)">(약 ₩27,600~276,000)<br><strong>공식 요금 문서에 Hobby(무료) 플랜 미등재</strong></small></td><td class="price"><strong>Teams 표준 $40/사용자·월</strong><br>Teams 프리미엄 $120/사용자·월<br>Enterprise 별도 협의<br><small style="color:var(--text3)">(약 ₩55,200 / ₩165,600)</small></td><td>Privacy mode 켜면 학습 미사용(팀 관리자 설정)</td></tr>
+        <tr><td><strong>GitHub Copilot</strong></td><td>Microsoft/GitHub</td><td>멀티모델(Anthropic/OpenAI 혼합, 자동 라우팅)</td><td>중 — 저장소·PR·Actions와 깊게 통합, CLI/cloud agent 지원</td><td class="price"><a href="https://docs.github.com/en/copilot/get-started/plans" target="_blank" rel="noopener">Pro $10/월</a><br>Pro+ $39/월<br><strong>Max $100/월</strong><br><small style="color:var(--text3)">(약 ₩13,800~138,000)<br>Free·Student 플랜 별도</small></td><td class="price"><strong>Business $19/시트</strong><br><strong>Enterprise $39/시트</strong><br><small style="color:var(--text3)">(약 ₩26,220 / ₩53,820)</small><br>+ AI Credits 사용량 과금</td><td>조직 설정으로 학습 미사용 지정 가능</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>2026-09-13 재확인에서 드러난 초판과의 차이 <span class="tag-verified">2026-09-13 KST 공식 페이지 대조</span></h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>항목</th><th>초판(2026-09-12) 기재</th><th>2026-09-13 공식 페이지 확인값</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Copilot 과금 용어</strong></td><td>"프리미엄 요청(premium request)" 사용량 과금</td><td class="recommend"><strong>"GitHub AI Credits"로 대체됨</strong> — <a href="https://github.com/features/copilot/plans" target="_blank" rel="noopener">1 credit = $0.01</a>. 플랜마다 월 크레딧 할당량이 있고 코드 자동완성은 유료 플랜에서 무제한</td></tr>
+        <tr><td><strong>Copilot 개인 최상위</strong></td><td>Pro+ $39가 최상위</td><td class="recommend">그 위에 <strong>Max $100/월</strong> 티어 존재 — 초판에 누락</td></tr>
+        <tr><td><strong>Copilot 조직 요금</strong></td><td>"시트 + 사용량"으로만 서술(금액 없음)</td><td class="recommend"><strong>Business $19/시트, Enterprise $39/시트</strong>로 공개되어 있음</td></tr>
+        <tr><td><strong>Cursor Teams</strong></td><td>"Teams/Enterprise 별도 협의"</td><td class="recommend"><strong>Teams는 공개 정가 존재</strong> — 표준 $40/사용자·월, 프리미엄 $120/사용자·월. Enterprise만 협의</td></tr>
+        <tr><td><strong>Cursor 무료 플랜</strong></td><td>"Hobby 무료"</td><td class="price"><strong>공식 요금 문서에 Hobby 플랜이 더 이상 등재되어 있지 않음</strong>(인도 한정 Start ₩ 플랜이 별도 존재). 무료 사용을 전제로 한 도입 계획은 재확인 필요</td></tr>
+        <tr><td><strong>Cursor 대표 모델</strong></td><td>'xAI Grok 계열 "frontier models" 중심'</td><td class="price"><span class="tag-v tag-unver">미검증</span>공식 요금 문서는 "frontier models 접근"이라고만 표기하고 <u>특정 벤더명을 명시하지 않습니다.</u> 초판의 "Grok 중심" 서술은 마케팅 페이지의 노출 순서를 근거로 한 관찰이므로, 벤더 확정 서술은 철회하고 미검증으로 둡니다</td></tr>
       </tbody>
     </table>
   </div>
 
   <h3>2026년 시장에서 벌어진 구조 변화</h3>
   <ul>
-    <li><strong>GitHub Copilot 요금 개편(2026-06-01)</strong> — 기존 Pro($10)/Pro+($39) 정액 요금은 유지하되, "고정 할당량"이던 프리미엄 모델 요청을 사용량 기반 과금으로 전환. 2026-04-20에는 신규 가입을 일시 중단하는 사태도 있었습니다. 정액제만 보고 예산을 짜면 실제 청구액이 크게 벗어날 수 있습니다.</li>
-    <li><strong>Cursor의 모델 전략 이동</strong> — 2026-09 기준 Cursor의 프라이싱 페이지 최상단에 xAI Grok이 "frontier model"로 노출되고 있습니다. 특정 벤더 한 곳에 록인되지 않는 멀티모델 전략은 장점이지만, 조직이 Anthropic/OpenAI 데이터 정책에 맞춰 설계한 보안 정책을 Cursor에도 동일하게 적용할 수 있는지 별도 확인이 필요합니다.</li>
+    <li><strong>GitHub Copilot 과금 구조 전환</strong> — 정액 요금(Pro $10 / Pro+ $39 / Max $100)은 유지하되, 채팅·에이전트·CLI·코드리뷰 사용량이 <strong>AI Credits</strong>를 소모하는 구조로 바뀌었습니다. 각 플랜에 월 크레딧 할당량이 포함되고, 초과분은 추가 구매합니다. <u>코드 자동완성(completions)은 유료 플랜에서 무제한</u>이므로, 비용이 튀는 지점은 "자동완성"이 아니라 "에이전트·채팅"입니다. <strong>정액제만 보고 예산을 짜면 실제 청구액이 크게 벗어날 수 있습니다.</strong></li>
+    <li><strong>Cursor의 모델 전략</strong> — <span class="tag-v tag-unver">미검증</span>초판은 "xAI Grok 중심"이라고 서술했으나, 2026-09-13 공식 요금 문서에는 <u>특정 벤더명 없이 "frontier models"로만</u> 표기되어 있습니다. 멀티모델 전략 자체는 벤더 록인을 줄이는 장점이지만, <strong>어떤 벤더의 모델로 우리 코드가 전송되는지가 계약 시점에 특정되지 않을 수 있다</strong>는 점이 보안 검토의 핵심입니다 — 조직이 Anthropic/OpenAI 데이터 정책에 맞춰 설계한 보안 정책을 Cursor에도 동일하게 적용할 수 있는지 별도 확인이 필요합니다.</li>
   </ul>
 
   <div class="checkpoint">
@@ -243,7 +258,8 @@ border-radius:12px;padding:20px 24px;margin:0 0 40px}
     <ul>
       <li>자율성과 요금이 반드시 비례하지 않는다는 것을 이해했는가 — IDE 경험 특화(Cursor) vs 백그라운드 자율 작업 특화(Claude Code/Codex CLI)는 다른 상품이다</li>
       <li>우리 조직의 코드 저장소·이슈트래커·CI가 어느 벤더와 가장 깊게 통합되는지 비교했는가</li>
-      <li>요금제가 시트당 정액인지 사용량 기반인지 구분해 예산에 반영했는가(2026-06 Copilot 개편 사례 참고)</li>
+      <li>요금제가 시트당 정액인지 사용량 기반인지 구분해 예산에 반영했는가 — Copilot은 정액 + AI Credits <strong>혼합</strong>이므로 "월 $10"만 보고 예산을 짜면 안 된다</li>
+      <li>무료 플랜을 전제로 세운 도입 계획이 있다면 <strong>그 무료 플랜이 아직 존재하는지</strong> 확인했는가 — Cursor Hobby처럼 공식 요금 문서에서 사라지는 경우가 있다</li>
     </ul>
   </div>
 </div>
@@ -759,30 +775,35 @@ _TIMEOUT_BY_SIZE = {
   <h2 class="section-title section-anchor"><span class="icon">💰</span> 13. 요금제 총정리 (원화 병기)</h2>
 
   <div class="alert alert-info">
-    <strong>💡 환산 기준</strong> $1 ≈ ₩1,380. 각 사 공식 페이지 2026-09-12 조회 기준이며, 실제 결제 시점의 환율·정책 변경으로 달라질 수 있습니다.
+    <strong>💡 환산 기준<span class="tag-verified">2026-09-13 KST 재확인</span></strong> <span class="tag-v tag-edu">예시</span>$1 ≈ ₩1,380 고정 환산이며 <u>공식 출처에 없는 본 문서의 계산값</u>입니다. 달러 정가는 각 사 공식 페이지를 <strong>2026-09-13 KST</strong>에 재확인했습니다. 2장 표와 마찬가지로 <strong>Copilot·Cursor 항목이 초판과 달라져 교정</strong>했습니다.
   </div>
 
   <div class="table-wrap">
     <table>
       <thead><tr><th>도구</th><th>플랜</th><th>가격</th><th>원화 환산</th><th>비고</th></tr></thead>
       <tbody>
-        <tr><td rowspan="4"><strong>Claude Code (Anthropic)</strong></td><td>Pro</td><td class="price">$17/월(연간) / $20(월간)</td><td>₩23,460 / ₩27,600</td><td>Claude Code 포함</td></tr>
+        <tr><td rowspan="4"><strong><a href="https://claude.com/pricing" target="_blank" rel="noopener">Claude Code (Anthropic)</a></strong></td><td>Pro</td><td class="price">$17/월(연간) / $20(월간)</td><td>₩23,460 / ₩27,600</td><td>Claude Code 포함</td></tr>
         <tr><td>Max</td><td class="price">$100~/월</td><td>₩138,000~</td><td>Pro 대비 5x/20x 사용량</td></tr>
-        <tr><td>Team</td><td class="price">$20~100/시트</td><td>₩27,600~138,000</td><td>Standard/Premium 시트 혼합 가능</td></tr>
+        <tr><td>Team</td><td class="price">표준 $20 / 프리미엄 $100 시트<br><small style="color:var(--text3)">월간결제 시 $25 / $125</small></td><td>₩27,600~138,000</td><td>Standard/Premium 시트 혼합 가능. Claude Code·Claude Cowork 포함</td></tr>
         <tr><td>Enterprise</td><td class="price">$20/시트+API 사용량</td><td>₩27,600+</td><td>SCIM·감사로그·ZDR</td></tr>
-        <tr><td rowspan="2"><strong>OpenAI Codex CLI</strong></td><td>ChatGPT Business</td><td class="price">$20~100/시트</td><td>₩27,600~138,000</td><td>Codex 포함</td></tr>
+        <tr><td rowspan="2"><strong><a href="https://openai.com/chatgpt/pricing/" target="_blank" rel="noopener">OpenAI Codex CLI</a></strong></td><td>ChatGPT Business</td><td class="price">$20~100/시트</td><td>₩27,600~138,000</td><td>Codex 포함. <span class="tag-v tag-unver">미검증</span>OpenAI 요금 페이지가 자동조회를 차단(<span class="http-waf">403</span>)해 2026-09-13 재확인 불가 — 브라우저로 직접 확인 필요</td></tr>
         <tr><td>Enterprise</td><td class="price">별도 협의</td><td>-</td><td>SCIM·EKM·데이터거주지</td></tr>
-        <tr><td rowspan="4"><strong>Cursor</strong></td><td>Hobby</td><td class="price">무료</td><td>₩0</td><td>제한적 Agent 요청</td></tr>
+        <tr><td rowspan="6"><strong><a href="https://cursor.com/docs/account/pricing" target="_blank" rel="noopener">Cursor</a></strong></td><td>Hobby</td><td class="price">—</td><td>—</td><td class="price"><strong>2026-09-13 공식 요금 문서에 미등재.</strong> 초판의 "무료" 기재는 현재 확인되지 않음</td></tr>
         <tr><td>Pro</td><td class="price">$20/월</td><td>₩27,600</td><td></td></tr>
         <tr><td>Pro+</td><td class="price">$60/월</td><td>₩82,800</td><td>Pro 3배 한도</td></tr>
         <tr><td>Ultra</td><td class="price">$200/월</td><td>₩276,000</td><td>Pro 20배 한도</td></tr>
-        <tr><td rowspan="2"><strong>GitHub Copilot</strong></td><td>Pro</td><td class="price">$10/월</td><td>₩13,800</td><td>2026-06-01부터 프리미엄 요청 사용량 과금 병행</td></tr>
+        <tr><td>Teams 표준</td><td class="price">$40/사용자·월</td><td>₩55,200</td><td class="recommend">초판 "별도 협의" → <strong>공개 정가 확인</strong></td></tr>
+        <tr><td>Teams 프리미엄</td><td class="price">$120/사용자·월</td><td>₩165,600</td><td class="recommend">초판 누락분</td></tr>
+        <tr><td rowspan="5"><strong><a href="https://docs.github.com/en/copilot/get-started/plans" target="_blank" rel="noopener">GitHub Copilot</a></strong></td><td>Pro</td><td class="price">$10/월</td><td>₩13,800</td><td>+ <strong>AI Credits</strong> 사용량 과금 병행(1 credit = $0.01)</td></tr>
         <tr><td>Pro+</td><td class="price">$39/월</td><td>₩53,820</td><td>상동</td></tr>
+        <tr><td>Max</td><td class="price">$100/월</td><td>₩138,000</td><td class="recommend">초판 누락분 — 개인 최상위 티어</td></tr>
+        <tr><td>Business</td><td class="price">$19/시트</td><td>₩26,220</td><td class="recommend">초판 "별도 협의" → <strong>공개 정가 확인</strong></td></tr>
+        <tr><td>Enterprise</td><td class="price">$39/시트</td><td>₩53,820</td><td class="recommend">초판 누락분</td></tr>
       </tbody>
     </table>
   </div>
 
-  <h3>Claude API 종량제 (참고 — Pipeline Runner 등 자동화에 적용)</h3>
+  <h3>Claude API 종량제 (참고 — Pipeline Runner 등 자동화에 적용) <span class="tag-verified">2026-09-13 KST <a href="https://platform.claude.com/docs/en/about-claude/pricing#model-pricing" target="_blank" rel="noopener">공식 가격표</a> 대조 — 변동 없음</span></h3>
   <div class="table-wrap">
     <table>
       <thead><tr><th>모델</th><th>입력 $/MTok</th><th>출력 $/MTok</th><th>원화 환산(입력/출력)</th></tr></thead>
@@ -845,19 +866,19 @@ _TIMEOUT_BY_SIZE = {
 
   <div class="table-wrap">
     <table>
-      <thead><tr><th>출처</th><th>URL</th><th>조회일</th><th>용도</th></tr></thead>
+      <thead><tr><th>출처</th><th>링크</th><th>출처 등급</th><th>조회일(KST)</th><th>용도 · 주의</th><th>접속</th></tr></thead>
       <tbody>
-        <tr><td>Anthropic 공식 요금</td><td>anthropic.com/pricing</td><td>2026-09-12</td><td>Claude Code/Pro/Max/Team/Enterprise 요금, 모델별 단가</td></tr>
-        <tr><td>OpenAI 공식 요금(Business)</td><td>openai.com/api/pricing</td><td>2026-09-12</td><td>ChatGPT Business/Enterprise 시트 요금, Codex 포함 여부</td></tr>
+        <tr><td>Anthropic 공식 요금</td><td><a href="https://claude.com/pricing" target="_blank" rel="noopener">claude.com/pricing</a> · <a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">API 가격 문서</a></td><td><span class="tag-v tag-fact">1차</span>제공사 공식</td><td>2026-09-13</td><td>Pro/Max/Team/Enterprise 요금, 모델별 단가 — 재확인 결과 변동 없음</td><td class="http-ok">200</td></tr>
+        <tr><td>OpenAI 공식 요금</td><td><a href="https://openai.com/chatgpt/pricing/" target="_blank" rel="noopener">openai.com/chatgpt/pricing</a></td><td><span class="tag-v tag-fact">1차</span>제공사 공식</td><td>2026-09-13</td><td>ChatGPT Business/Enterprise 시트 요금 — <strong>자동조회 차단으로 재확인 못함(미검증)</strong></td><td class="http-waf">403</td></tr>
         <tr><td>OpenAI Platform 문서</td><td>platform.openai.com/docs/pricing</td><td>2026-09-12</td><td>GPT-6 Astra 등 최신 모델 카탈로그 확인</td></tr>
-        <tr><td>Cursor 공식 요금</td><td>cursor.com/pricing</td><td>2026-09-12</td><td>Hobby/Pro/Pro+/Ultra 요금, Grok 중심 모델 전략</td></tr>
-        <tr><td>GitHub Copilot 문서</td><td>docs.github.com/en/copilot/get-started/plans</td><td>2026-09-12</td><td>Copilot CLI/에이전트 개념 구조</td></tr>
-        <tr><td>PCWorld — Copilot 요금 개편</td><td>pcworld.com (2026-04-27 기사)</td><td>2026-09-12(재확인)</td><td>2026-06-01 사용량 기반 과금 전환 사실관계</td></tr>
-        <tr><td>Business Insider — Copilot 과금 반응</td><td>businessinsider.com (2026-06 기사)</td><td>2026-09-12(재확인)</td><td>사용량 기반 전환 이후 시장 반응</td></tr>
-        <tr><td>AGENTS.md 공식 사이트</td><td>agents.md</td><td>2026-09-12</td><td>규칙 파일 표준, 60k+ 프로젝트 채택 현황, Agentic AI Foundation 관리 체계</td></tr>
-        <tr><td>AADS 소스코드</td><td>app/services/pipeline_runner_service.py</td><td>2026-09-12</td><td>11장 파이프라인 구조 전수분석(3,314줄 전체 확인)</td></tr>
-        <tr><td>AADS DB</td><td>PostgreSQL pipeline_jobs 테이블</td><td>2026-09-12</td><td>11장 실제 운영 상태 분포(822건)</td></tr>
-        <tr><td>AADS CLAUDE.md</td><td>프로젝트 루트 CLAUDE.md</td><td>2026-09-12</td><td>4·8·9·10장 규칙 파일 실전 사례(R-KEY/R-COMMIT/R-QUALITY/R-DOCKER)</td></tr>
+        <tr><td>Cursor 공식 요금 문서</td><td><a href="https://cursor.com/docs/account/pricing" target="_blank" rel="noopener">cursor.com/docs/account/pricing</a></td><td><span class="tag-v tag-fact">1차</span>제공사 공식</td><td>2026-09-13</td><td>Pro/Pro Plus/Ultra/Teams 요금 — <strong>Teams 공개 정가 확인, Hobby 미등재 확인</strong></td><td class="http-ok">200</td></tr>
+        <tr><td>GitHub Copilot 공식 플랜 문서</td><td><a href="https://docs.github.com/en/copilot/get-started/plans" target="_blank" rel="noopener">docs.github.com — copilot/plans</a> · <a href="https://github.com/features/copilot/plans" target="_blank" rel="noopener">github.com/features/copilot/plans</a></td><td><span class="tag-v tag-fact">1차</span>제공사 공식</td><td>2026-09-13</td><td><strong>AI Credits 과금 모델·Max 티어·조직 시트 정가 확인</strong> — 2장·13장 교정 근거</td><td class="http-ok">200</td></tr>
+        <tr><td>PCWorld — Copilot 요금 개편</td><td>pcworld.com (2026-04-27 기사)</td><td><span class="tag-v tag-unver">2차</span>언론 보도</td><td>2026-09-12</td><td><span class="tag-v tag-unver">2차 출처</span>과금 전환 사실관계는 <u>위 GitHub 공식 문서로 대체 확인</u>했습니다. 요금 사실은 공식 문서를 우선 인용하십시오</td><td style="color:var(--text3)">—</td></tr>
+        <tr><td>Business Insider — Copilot 과금 반응</td><td>businessinsider.com (2026-06 기사)</td><td><span class="tag-v tag-unver">2차</span>언론 보도</td><td>2026-09-12</td><td><span class="tag-v tag-unver">2차 출처</span>시장 반응(정성 정보)이며 <strong>요금 수치의 근거로는 사용하지 않음</strong></td><td style="color:var(--text3)">—</td></tr>
+        <tr><td>AGENTS.md 공식 사이트</td><td><a href="https://agents.md" target="_blank" rel="noopener">agents.md</a></td><td><span class="tag-v tag-fact">1차</span>제공사 공식</td><td>2026-09-13</td><td>규칙 파일 표준. <strong>MCP와 마찬가지로 Linux Foundation 산하 Agentic AI Foundation 소속</strong> 프로젝트</td><td class="http-ok">200</td></tr>
+        <tr><td>AADS 소스코드</td><td><code>app/services/pipeline_runner_service.py</code></td><td><span class="tag-v tag-unver">내부</span>사내 코드·DB</td><td>2026-09-12</td><td>11장 파이프라인 구조 전수분석(3,314줄 전체 확인) — <strong>외부 공개 출처로 대조 불가</strong></td><td style="color:var(--text3)">—</td></tr>
+        <tr><td>AADS DB</td><td><code>PostgreSQL pipeline_jobs 테이블</code></td><td><span class="tag-v tag-unver">내부</span>사내 코드·DB</td><td>2026-09-12</td><td>11장 실제 운영 상태 분포(822건) — <strong>외부 공개 출처로 대조 불가</strong></td><td style="color:var(--text3)">—</td></tr>
+        <tr><td>AADS CLAUDE.md</td><td><code>프로젝트 루트 CLAUDE.md</code></td><td><span class="tag-v tag-unver">내부</span>사내 코드·DB</td><td>2026-09-12</td><td>4·8·9·10장 규칙 파일 실전 사례(R-KEY/R-COMMIT/R-QUALITY/R-DOCKER) — <strong>외부 공개 출처로 대조 불가</strong></td><td style="color:var(--text3)">—</td></tr>
       </tbody>
     </table>
   </div>
@@ -869,6 +890,58 @@ _TIMEOUT_BY_SIZE = {
     <li><strong>1개월 내</strong> — 13장 요금표를 기준으로 현재 사용 중인 도구의 실제 청구액과 비교해 최적 플랜을 재산정한다.</li>
     <li><strong>분기마다</strong> — 이 문서 자체를 재검증한다. 코딩 에이전트 시장은 3개월이면 요금·모델 카탈로그가 크게 바뀐다.</li>
   </ol>
+</div>
+
+<div class="section" id="source-audit-20260913">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 부록. 출처 검수 이력 (2026-09-13 KST)</h2>
+  <p>본 문서는 2026-09-12 초판 작성 이후, <strong>2026-09-13 KST</strong>에 별도 출처 검수를 거쳤습니다. 초판에는
+  <strong>클릭 가능한 출처 링크가 0건</strong>이었습니다. 이 문서는 <u>경쟁 제품의 요금제를 표로 비교</u>하는 성격이라
+  다른 교육자료보다 훨씬 빨리 낡습니다. 실제로 <strong>초판 작성 하루 만에 2개 벤더의 요금 구조 차이가 확인</strong>되었습니다.</p>
+
+  <div class="alert alert-danger"><strong>⚠️ 이 문서를 인용할 때의 원칙</strong>
+  요금표는 <strong>계약 근거가 아니라 "비교 관점"으로만</strong> 쓰십시오. 아래 교정 사례가 보여주듯, 정가·티어 구성·과금
+  용어는 한 달은커녕 <u>하루 단위로도 바뀝니다.</u> 실제 구매·계약 전에는 반드시 각 사 공식 페이지를 직접 열어 확인해야 합니다.</div>
+
+  <h3>이번 검수에서 실제로 바뀐 것</h3>
+  <ul>
+    <li><strong>교정(GitHub Copilot 과금 용어)</strong> — 초판의 <em>"프리미엄 요청(premium request) 사용량 과금"</em>은
+      현재 <strong>"GitHub AI Credits"</strong>로 대체되어 있습니다(1 credit = $0.01, 플랜별 월 할당량 포함).
+      <u>코드 자동완성은 유료 플랜에서 무제한</u>이고 채팅·에이전트·CLI·코드리뷰가 크레딧을 소모하므로,
+      비용이 튀는 지점은 "자동완성"이 아니라 "에이전트"입니다.</li>
+    <li><strong>교정(누락 티어)</strong> — Copilot 개인 최상위가 Pro+ $39라고 적혀 있었으나 그 위에
+      <strong>Max $100/월</strong>이 존재합니다. 조직 요금도 "시트+사용량"으로만 서술되어 있었으나
+      <strong>Business $19/시트 · Enterprise $39/시트</strong>로 공개되어 있습니다.</li>
+    <li><strong>교정(Cursor Teams)</strong> — 초판의 "Teams/Enterprise 별도 협의"는 사실과 다릅니다.
+      <strong>Teams는 공개 정가가 있습니다</strong> — 표준 $40/사용자·월, 프리미엄 $120/사용자·월. Enterprise만 협의 대상입니다.</li>
+    <li><strong>교정(사라진 무료 플랜)</strong> — 초판은 "Hobby 무료"로 적었으나, 2026-09-13 기준 Cursor 공식 요금 문서에
+      <strong>Hobby 플랜이 등재되어 있지 않습니다</strong>(인도 한정 Start 플랜이 별도 존재). <u>무료 플랜을 전제로 한
+      도입 계획은 재확인이 필요</u>합니다.</li>
+    <li><strong>철회(벤더 확정 서술)</strong> — 초판은 Cursor의 대표 모델을 <em>'xAI Grok 계열 중심'</em>이라고 단정했으나,
+      공식 요금 문서는 벤더명 없이 <strong>"frontier models"</strong>로만 표기합니다. 마케팅 페이지의 노출 순서를 근거로 한
+      관찰이었으므로 <span class="tag-v tag-unver">미검증</span>으로 되돌리고, 대신 <u>"어떤 벤더로 우리 코드가
+      전송되는지가 계약 시점에 특정되지 않을 수 있다"</u>는 보안 검토 관점을 남겼습니다.</li>
+    <li><strong>출처 등급 분리</strong> — 초판은 Copilot 과금 전환의 근거로 <strong>PCWorld·Business Insider 기사(2차 출처)</strong>를
+      들고 있었습니다. 같은 사실을 <a href="https://docs.github.com/en/copilot/get-started/plans" target="_blank"
+      rel="noopener">GitHub 공식 플랜 문서</a>로 대체 확인하고, 언론 기사는 "시장 반응(정성 정보)"으로 용도를 한정했습니다.</li>
+    <li><strong>재확인(변동 없음)</strong> — Claude Pro $17(연간)/$20(월간), Max $100~, Cursor Pro $20 / Pro Plus $60 /
+      Ultra $200, Copilot Pro $10 / Pro+ $39, Claude API 단가(Opus 5 $5/$25 · Sonnet 5 $2/$10 · Haiku 4.5 $1/$5)는
+      공식 페이지와 일치했습니다.</li>
+  </ul>
+
+  <h3>이번 검수에서도 해소하지 못한 것</h3>
+  <ul>
+    <li><strong>미해소</strong> — <strong>OpenAI 요금 페이지는 자동화 접근을 차단(<span class="http-waf">HTTP 403</span>)</strong>해
+      ChatGPT Business/Enterprise 시트 요금과 Codex 포함 범위를 2026-09-13에 재확인하지 못했습니다.
+      초판 기재값을 유지하되 <span class="tag-unverified">미검증</span>으로 표시했습니다 — 브라우저로 직접 확인이 필요합니다.</li>
+    <li><strong>범위 밖</strong> — 11장 AADS Pipeline Runner 전수분석과 <code>pipeline_jobs</code> 822건 실측은
+      사내 코드·DB 조회 결과로 <u>외부 공개 출처로 대조할 수 없습니다.</u> 초판 서술을 그대로 유지했습니다.</li>
+    <li><strong>미해소</strong> — 각 도구의 "CLI 자율성" 등급(매우 높음/중~높음/중)은 본 문서의
+      <span class="tag-v tag-edu">정성 평가</span>이며 공식 출처로 확인할 수 있는 값이 아닙니다.</li>
+  </ul>
+
+  <p style="font-size:.82rem;color:var(--text3)">※ "HTTP 200"은 2026-09-13 KST에 해당 URL이 응답했다는 뜻이며,
+  <strong>HTTP 403은 링크가 죽은 것이 아니라 자동화 도구 차단(WAF)</strong>으로 브라우저에서는 정상 열람됩니다.
+  본 문서 14장이 이미 권고한 대로, <strong>이 문서 자체를 분기마다 재검증</strong>하십시오.</p>
 </div>
 
 <!-- ===== FOOTER ===== -->
