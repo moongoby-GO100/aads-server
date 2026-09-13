@@ -14027,3 +14027,22 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - Verification: focused directive service/event tests, Python compilation, and diff checks must
   pass before release. API blue/green deployment and authenticated production E2E remain separate
   release gates.
+
+## 2026-09-13 09:35 KST — 리뷰 verdict 선기록·폴링 운영 반영 확인 및 review_hold 배수
+
+- 배포: `deploy_runs #379` release `01b71144`(cf2f1666 검수 DB 선기록+폴링, 7fc34cb5 스위퍼
+  활성슬롯 라우팅 포함)가 09:22 KST 후보 슬롯 8100 healthy → 09:24 KST nginx 활성 전환.
+  standby(green 8102) same-digest 동기화는 활성 스트림 drain 대기(max 600s)로 진행 중이며
+  `#381`(6ba87bdb)이 후속 큐에 대기.
+- 신규 경로 실측: `POST /api/v1/review/code-diff/requests` 활성 슬롯 422(존재), 구 이미지 404.
+  `GET /api/v1/review/code-diff/requests/{request_id}` 폴링 정상.
+- 스위퍼(`aads-review-hold-sweeper.timer`, 10분 주기): 배포 전 5회는 `enqueue_http=404`로
+  CIRCUIT_OPEN. 배포 후 09:28 KST `runner-4c3600cf` http=202 REQUEST_CHANGES 0.65(error/review_failed),
+  09:30 KST `runner-799fd648` APPROVE 0.915(awaiting_approval). review_hold 8→6건.
+  verdict는 `code_review_requests`에 먼저 영속화됨(클라이언트 타임아웃과 무관).
+- ledger: 세션 58bf1337의 stale dirty 8행 → `reconciled_clean`(git clean·origin/main 포함 확인).
+  타 세션 stale dirty(539a6086 25행, ac5278a7 5행)는 미정리 — `sync_workspace_change_ledger.py`는
+  호스트에 asyncpg 없어 실행 불가.
+- 중복 러너 `runner-f69d78c9`/`7856f8b3`(같은 지시)는 09:09 KST 강제종료. 요구사항은 main 반영 완료.
+- 남은 판단: `runner-c4ea84bf`(OAuth 자동갱신) 08:33 KST 재검수 REQUEST_CHANGES 0.615 → CEO 판단.
+  스위퍼 unit Environment 블록 2회 중복 정의(AADS_API_URL=8100 고정) 정리 필요.
