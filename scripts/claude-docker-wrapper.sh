@@ -11,6 +11,9 @@ CREDENTIAL_LOCK_FILE="${CLAUDE_SLOT_CREDENTIAL_LOCK_FILE:-}"
 OAUTH_SLOT="${CLAUDE_OAUTH_SLOT:-}"
 REFRESH_LOCK_WINDOW_SEC="${CLAUDE_SLOT_REFRESH_LOCK_WINDOW_SEC:-6000}"
 CONTAINER_CREDENTIAL_HOME=""
+# 대화 기록 영속 저장소(컨테이너 안 경로). /root/aads/data/claude-sessions 가
+# 여기에 마운트돼 있어 컨테이너 교체를 넘어 살아남는다.
+CLAUDE_SESSION_STORE="${CLAUDE_SESSION_STORE:-/tmp/.claude-sdk/.claude}"
 LOCK_MODE="exclusive"
 ORIGINAL_CREDENTIAL_DIGEST=""
 
@@ -137,6 +140,28 @@ if [[ -n "$CREDENTIAL_FILE" ]]; then
     CONTAINER_CREDENTIAL_HOME="/tmp/.claude-relay-slot-${OAUTH_SLOT:-unknown}-${BASHPID}-${RANDOM}"
     docker exec "$CONTAINER_NAME" sh -lc \
         "umask 077; mkdir -p '$CONTAINER_CREDENTIAL_HOME/.claude'" >/dev/null
+
+    # 대화 기록만 영속 볼륨으로 돌린다.
+    #
+    # 이 HOME 은 슬롯별 자격증명을 격리하려고 호출마다 새로 만들고 끝나면
+    # 지운다(a49eee32). 그런데 CLI 는 대화도 $HOME/.claude/projects 에 쓰기
+    # 때문에, 격리와 함께 대화까지 매번 버려졌다. 전날 볼륨을 붙여 배포를
+    # 넘어 살아남게 해둔 것(a41445df)이 그대로 무력화됐다 —
+    # claude-oauth-wrapper.sh 의 `export HOME="${HOME:-/tmp/.claude-sdk}"` 는
+    # 래퍼가 HOME 을 넘기는 순간 기본값을 쓰지 않는다.
+    #
+    # 결과: --resume 대상 대화가 없어 매 턴 전체 프롬프트를 다시 보냈다.
+    # 2026-09-13 실측 6시간 resume 42건 중 18건이 "No conversation found",
+    # 프롬프트가 5만 자까지 커져 첫 토큰 전에 스트림이 끊겼다.
+    #
+    # 지워야 할 것(자격증명)과 남겨야 할 것(대화)을 분리한다. projects 만
+    # 볼륨으로 링크하고 .credentials.json 은 임시 HOME 에 그대로 둔다.
+    # cleanup 의 rm -rf 는 심볼릭 링크를 따라가지 않으므로 볼륨은 안전하다.
+    docker exec "$CONTAINER_NAME" sh -lc \
+        "umask 077; mkdir -p '$CLAUDE_SESSION_STORE/projects' \
+         && ln -sfn '$CLAUDE_SESSION_STORE/projects' '$CONTAINER_CREDENTIAL_HOME/.claude/projects'" \
+        >/dev/null 2>&1 || echo "[claude-docker-wrapper] WARN: 대화 볼륨 연결 실패 — 이번 호출은 resume 불가" >&2
+
     docker cp "$CREDENTIAL_FILE" \
         "${CONTAINER_NAME}:${CONTAINER_CREDENTIAL_HOME}/.claude/.credentials.json" >/dev/null
 fi
