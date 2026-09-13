@@ -150,7 +150,11 @@ runner_heartbeat() {
 }
 
 MAX_JOB_RUNTIME="${MAX_JOB_RUNTIME:-$MAX_RUNTIME}"  # CLI 상한보다 먼저 작업을 종료하지 않음
-AADS_REVIEW_MAX_TIME="${AADS_REVIEW_MAX_TIME:-420}"
+# 러너는 공개 URL(Cloudflare)로 검수 API 를 부른다. Cloudflare 는 약 100초에
+# 원본 응답을 포기하고 524 를 돌려주므로, 420초를 기다려도 쓸 수 있는 시간은
+# 100초뿐이다. 서버 쪽 검수 마감(REVIEW_TOTAL_DEADLINE_SEC=85)보다 조금 길게
+# 잡아, 정상 응답은 받고 프록시가 끊기 전에 우리가 먼저 포기하도록 한다.
+AADS_REVIEW_MAX_TIME="${AADS_REVIEW_MAX_TIME:-95}"
 AADS_REVIEW_MAX_ATTEMPTS="${AADS_REVIEW_MAX_ATTEMPTS:-3}"
 AADS_REVIEW_MAX_RUNTIME="${AADS_REVIEW_MAX_RUNTIME:-$((AADS_REVIEW_MAX_TIME * AADS_REVIEW_MAX_ATTEMPTS + 120))}"
 WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-300}"    # 5분마다 프로세스 생존 확인

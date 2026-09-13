@@ -26,7 +26,20 @@ _REVIEW_PARSE_MAX_ATTEMPTS = 3  # P0: JSON 파싱 실패 시 즉시 REVIEW_PARSE
 # 않도록 전체 모델 시도 수도 별도 상한으로 제한한다.
 _REVIEW_MODEL_MAX_ATTEMPTS = int(os.environ.get("REVIEW_MODEL_MAX_ATTEMPTS", "6"))
 # P0: 리뷰 LLM 시도 1회 상한(초). 초과하면 무응답으로 간주하고 다음 시도로 넘긴다.
-_REVIEW_LLM_TIMEOUT_SEC = int(os.environ.get("REVIEW_LLM_TIMEOUT_SEC", "45"))
+_REVIEW_LLM_TIMEOUT_SEC = int(os.environ.get("REVIEW_LLM_TIMEOUT_SEC", "25"))
+# 검수 전체에 마감을 둔다.
+#
+# 러너는 공개 URL(Cloudflare)로 이 API 를 부르고, Cloudflare 는 약 100초에
+# 원본 응답을 포기하고 524 를 돌려준다. 그런데 서버는 최대
+# 6회 x 45초 = 270초를 쓸 수 있었다. 앞 두 모델이 응답하지 않으면 뒤에
+# 멀쩡한 모델이 있어도 러너는 언제나 524 를 받는다.
+# 2026-09-13 실측 — GO100 반려 13건 중 8건이 이 경로였다.
+#   verdict=FLAG score=0.0 http=524 attempts=3/3 category=REVIEW_API_UNAVAILABLE
+# 당시 Codex 계정은 주간 98% + 크레딧 0 이라 응답이 올 수 없었다.
+#
+# 마감 안에 답이 없으면 "응답 없음"으로 정직하게 닫는다. 프록시에
+# 잘려 사유를 잃는 것보다 낫다.
+_REVIEW_TOTAL_DEADLINE_SEC = int(os.environ.get("REVIEW_TOTAL_DEADLINE_SEC", "85"))
 
 _DIFF_HEADER_RE = re.compile(r"^diff --git a\/.+ b\/.+$", re.MULTILINE)
 _DIFF_HUNK_RE = re.compile(r"^@@ .+ @@$", re.MULTILINE)
@@ -692,7 +705,16 @@ async def review_code_diff(
             max(_REVIEW_PARSE_MAX_ATTEMPTS, len(review_models)),
             max(_REVIEW_PARSE_MAX_ATTEMPTS, _REVIEW_MODEL_MAX_ATTEMPTS),
         )
+        _review_started_at = time.monotonic()
         for attempt_no in range(1, attempt_limit + 1):
+            _elapsed = time.monotonic() - _review_started_at
+            # 다음 시도가 마감을 넘길 것 같으면 더 하지 않는다.
+            if _elapsed + _REVIEW_LLM_TIMEOUT_SEC > _REVIEW_TOTAL_DEADLINE_SEC:
+                logger.warning(
+                    "review_deadline_reached: job_id=%s elapsed=%.0fs attempts=%s/%s deadline=%ss",
+                    job_id, _elapsed, attempt_no - 1, attempt_limit, _REVIEW_TOTAL_DEADLINE_SEC,
+                )
+                break
             model = review_models[(attempt_no - 1) % len(review_models)] if review_models else _REVIEW_MODEL_FALLBACK
             try:
                 # P0: 리뷰 모델이 실패하면 call_llm_with_fallback 이 Claude 429 재시도(최대 60회)와
