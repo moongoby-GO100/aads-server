@@ -57,6 +57,19 @@ def _live_execution_row() -> dict[str, object]:
     }
 
 
+def _live_connection() -> AsyncMock:
+    """A connection whose session has exactly one live execution.
+
+    ``interrupt_session`` also fails closed when a newer execution has already
+    superseded the running one, so the supersede probe (``fetchval``) has to
+    answer False for the turn to count as the session's current turn.
+    """
+    connection = AsyncMock()
+    connection.fetchrow.return_value = _live_execution_row()
+    connection.fetchval.return_value = False
+    return connection
+
+
 async def _call_interrupt(connection):
     session_id = uuid4()
     request = chat_router.InterruptRequest(
@@ -103,9 +116,24 @@ def _assert_fail_closed(error: HTTPException | None, push_interrupt: MagicMock) 
 
 
 @pytest.mark.asyncio
+async def test_superseded_execution_is_rejected_instead_of_queued():
+    """A newer execution means the running turn is no longer the current one."""
+    connection = _live_connection()
+    connection.fetchval.return_value = True
+    connection.execute.side_effect = ["INSERT 0 1", "UPDATE 1"]
+
+    result, error, push_interrupt, _transaction, _session_id = await _call_interrupt(connection)
+
+    assert error is None
+    assert result is not None
+    assert result["queued"] is False
+    assert "superseded=True" in result["reason"]
+    push_interrupt.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_insert_failure_is_not_reported_or_enqueued():
-    connection = AsyncMock()
-    connection.fetchrow.return_value = _live_execution_row()
+    connection = _live_connection()
     connection.execute.side_effect = RuntimeError("synthetic insert failure")
 
     result, error, push_interrupt, transaction, _session_id = await _call_interrupt(connection)
@@ -118,8 +146,7 @@ async def test_insert_failure_is_not_reported_or_enqueued():
 
 @pytest.mark.asyncio
 async def test_counter_failure_rolls_back_receipt_and_does_not_enqueue():
-    connection = AsyncMock()
-    connection.fetchrow.return_value = _live_execution_row()
+    connection = _live_connection()
     connection.execute.side_effect = ["INSERT 0 1", RuntimeError("synthetic count failure")]
     result, error, push_interrupt, transaction, _session_id = await _call_interrupt(connection)
 
@@ -130,8 +157,7 @@ async def test_counter_failure_rolls_back_receipt_and_does_not_enqueue():
 
 @pytest.mark.asyncio
 async def test_missing_session_counter_update_fails_closed():
-    connection = AsyncMock()
-    connection.fetchrow.return_value = _live_execution_row()
+    connection = _live_connection()
     connection.execute.side_effect = ["INSERT 0 1", "UPDATE 0"]
     result, error, push_interrupt, transaction, _session_id = await _call_interrupt(connection)
 
@@ -142,8 +168,7 @@ async def test_missing_session_counter_update_fails_closed():
 
 @pytest.mark.asyncio
 async def test_committed_receipt_is_enqueued_and_acknowledged():
-    connection = AsyncMock()
-    connection.fetchrow.return_value = _live_execution_row()
+    connection = _live_connection()
     connection.execute.side_effect = ["INSERT 0 1", "UPDATE 1"]
 
     result, error, push_interrupt, transaction, session_id = await _call_interrupt(connection)
