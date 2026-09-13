@@ -3,7 +3,7 @@
     "desktop": {
       "ids": 17,
       "dup_ids": [],
-      "anchors": 18,
+      "anchors": 19,
       "broken_anchors": [],
       "scroll_w": 1440,
       "client_w": 1440,
@@ -18,7 +18,7 @@
     "mobile": {
       "ids": 17,
       "dup_ids": [],
-      "anchors": 18,
+      "anchors": 19,
       "broken_anchors": [],
       "scroll_w": 390,
       "client_w": 390,
@@ -48,8 +48,8 @@
       "overflow": false,
       "wide_elements": [],
       "audit_present": true,
-      "audit_links": 13,
-      "ext_links": 16,
+      "audit_links": 1,
+      "ext_links": 38,
       "console_errors": [],
       "pass": true
     },
@@ -69,8 +69,8 @@
         "TR."
       ],
       "audit_present": true,
-      "audit_links": 13,
-      "ext_links": 16,
+      "audit_links": 1,
+      "ext_links": 38,
       "console_errors": [],
       "pass": true
     }
@@ -86,8 +86,8 @@
       "overflow": false,
       "wide_elements": [],
       "audit_present": true,
-      "audit_links": 12,
-      "ext_links": 25,
+      "audit_links": 0,
+      "ext_links": 19,
       "console_errors": [],
       "pass": true
     },
@@ -107,8 +107,8 @@
         "TR."
       ],
       "audit_present": true,
-      "audit_links": 12,
-      "ext_links": 25,
+      "audit_links": 0,
+      "ext_links": 19,
       "console_errors": [],
       "pass": true
     }
@@ -124,8 +124,8 @@
       "overflow": false,
       "wide_elements": [],
       "audit_present": true,
-      "audit_links": 6,
-      "ext_links": 8,
+      "audit_links": 1,
+      "ext_links": 13,
       "console_errors": [],
       "pass": true
     },
@@ -145,8 +145,8 @@
         "TR."
       ],
       "audit_present": true,
-      "audit_links": 6,
-      "ext_links": 8,
+      "audit_links": 1,
+      "ext_links": 13,
       "console_errors": [],
       "pass": true
     }
@@ -155,22 +155,22 @@
     "desktop": {
       "ids": 15,
       "dup_ids": [],
-      "anchors": 15,
+      "anchors": 16,
       "broken_anchors": [],
       "scroll_w": 1440,
       "client_w": 1440,
       "overflow": false,
       "wide_elements": [],
       "audit_present": true,
-      "audit_links": 6,
-      "ext_links": 6,
+      "audit_links": 11,
+      "ext_links": 14,
       "console_errors": [],
       "pass": true
     },
     "mobile": {
       "ids": 15,
       "dup_ids": [],
-      "anchors": 15,
+      "anchors": 16,
       "broken_anchors": [],
       "scroll_w": 390,
       "client_w": 390,
@@ -183,8 +183,8 @@
         "TR."
       ],
       "audit_present": true,
-      "audit_links": 6,
-      "ext_links": 6,
+      "audit_links": 11,
+      "ext_links": 14,
       "console_errors": [],
       "pass": true
     }
@@ -200,8 +200,8 @@
       "overflow": false,
       "wide_elements": [],
       "audit_present": true,
-      "audit_links": 6,
-      "ext_links": 6,
+      "audit_links": 1,
+      "ext_links": 17,
       "console_errors": [],
       "pass": true
     },
@@ -221,8 +221,8 @@
         "TR."
       ],
       "audit_present": true,
-      "audit_links": 6,
-      "ext_links": 6,
+      "audit_links": 1,
+      "ext_links": 17,
       "console_errors": [],
       "pass": true
     }
@@ -238,8 +238,8 @@
       "overflow": false,
       "wide_elements": [],
       "audit_present": true,
-      "audit_links": 3,
-      "ext_links": 3,
+      "audit_links": 0,
+      "ext_links": 11,
       "console_errors": [],
       "pass": true
     },
@@ -259,8 +259,8 @@
         "TABLE."
       ],
       "audit_present": true,
-      "audit_links": 3,
-      "ext_links": 3,
+      "audit_links": 0,
+      "ext_links": 11,
       "console_errors": [],
       "pass": true
     }
@@ -276,8 +276,8 @@
       "overflow": false,
       "wide_elements": [],
       "audit_present": true,
-      "audit_links": 8,
-      "ext_links": 9,
+      "audit_links": 0,
+      "ext_links": 18,
       "console_errors": [],
       "pass": true
     },
@@ -297,8 +297,8 @@
         "TR."
       ],
       "audit_present": true,
-      "audit_links": 8,
-      "ext_links": 9,
+      "audit_links": 0,
+      "ext_links": 18,
       "console_errors": [],
       "pass": true
     }

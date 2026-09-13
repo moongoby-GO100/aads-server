@@ -115,6 +115,12 @@ border-radius:12px;padding:20px 24px;margin:0 0 40px}
    min-width:auto 라서 안에 든 <pre>·긴 토큰이 트랙을 밀어내 문서 폭을 넘긴다. */
 .compare-row>*,.card-grid>*,.toc-grid>*,.compare-box,.info-card{min-width:0}
 pre{max-width:100%}
+/* --- 2026-09-13 출처 검수(sources_p1): 모바일 가로 스크롤 제거 --- */
+/* grid 항목은 기본값이 min-width:auto 라서, 안에 든 <pre>·긴 토큰이 트랙을
+   밀어내 문서 폭을 넘긴다(그리드 blowout). compare-row 는 768px 이하에서 이미
+   1단으로 접히지만 이 규칙이 없으면 390px 뷰포트에서 문서가 424px 로 넘쳤다. */
+.compare-row>*,.card-grid>*,.toc-grid>*,.compare-box,.info-card{min-width:0}
+pre{max-width:100%}
 </style>
 </head>
 <body>
