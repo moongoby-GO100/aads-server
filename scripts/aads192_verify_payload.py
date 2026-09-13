@@ -42,6 +42,22 @@ async def main() -> int:
                     hit = item
                     break
             has_key = any("error_summary" in item for item in items)
+
+            # 대시보드 배포 이력 카드는 recent_deployments 를 우선 사용한다.
+            recent = payload.get("recent_deployments") or []
+            recent_hit = next(
+                (r for r in recent if r.get("error_summary") == SENTINEL),
+                None,
+            )
+            print(f"[check] recent_deployments 항목 수 = {len(recent)}")
+            if recent_hit is None:
+                print("FAIL: recent_deployments 에 실패 배포가 노출되지 않습니다")
+                return 1
+            print("[check] recent_deployments 테스트 행 =")
+            print(json.dumps(
+                {k: recent_hit.get(k) for k in ("project", "component", "status", "error_summary")},
+                ensure_ascii=False,
+            ))
             print(f"[check] project_deployments 항목 수 = {len(items)}")
             print(f"[check] error_summary 키 존재 = {has_key}")
             if hit is not None:
