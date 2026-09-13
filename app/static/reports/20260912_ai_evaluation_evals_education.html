@@ -110,6 +110,23 @@ border-radius:10px;padding:18px 22px;margin:24px 0 8px}
   table{font-size:.78rem}
   th,td{padding:8px 10px}
 }
+/* === 출처 표기 범례 (2026-09-13 sources_p0 2차 보강) === */
+a.src{color:var(--accent3);text-decoration:none;border-bottom:1px dotted var(--accent3);word-break:break-all}
+a.src:hover{color:var(--accent);border-bottom-style:solid}
+.src-legend{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent3);
+border-radius:12px;padding:20px 24px;margin:0 0 40px}
+.src-legend h3{margin:0 0 10px;font-size:1.02rem;color:var(--accent3)}
+.src-legend ul{margin:10px 0 12px 18px}
+.src-legend li{font-size:.87rem;color:var(--text2);margin-bottom:5px}
+.tag-v{display:inline-block;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:7px;white-space:nowrap}
+.tag-fact{background:#10b98120;color:#34d399}
+.tag-edu{background:#3b82f620;color:#60a5fa}
+.tag-plan{background:#8b5cf620;color:#a78bfa}
+.tag-unver{background:#f59e0b20;color:#fbbf24}
+.http-ok{color:var(--success);font-weight:600}
+.http-waf{color:var(--warning);font-weight:600}
+/* 모바일 가로 스크롤 방지: 긴 URL·경로 토큰이 줄바꿈되지 않아 문서 폭을 넘기던 문제 */
+.alert,.info-card,.checkpoint,td,li,p{overflow-wrap:break-word}
 </style>
 </head>
 <body>
@@ -145,6 +162,19 @@ border-radius:10px;padding:18px 22px;margin:24px 0 8px}
     <a href="#ch13"><span class="num">13</span> 참고자료 · 다음 단계</a>
     <a href="#source-audit-20260913"><span class="num">★</span> 부록. 출처 검수 이력 (2026-09-13)</a>
   </div>
+</div>
+
+<!-- ===== 출처 표기 범례 (2026-09-13 sources_p0 2차 보강) ===== -->
+<div class="src-legend">
+  <h3>📌 출처 표기 범례 — 무엇이 검증된 사실이고 무엇이 아닌가</h3>
+  <p style="font-size:.87rem;color:var(--text2);margin-bottom:6px">이 문서의 주장은 근거의 강도에 따라 아래 4가지로 구분됩니다. 외부 출처는 <strong>기관 공식 문서·법령 원문·원 논문(1차 출처)</strong>의 클릭 가능한 링크로 연결되어 있습니다.</p>
+  <ul>
+    <li><span class="tag-v tag-fact">검증</span>1차 출처로 원문을 확인한 사실 — 링크를 눌러 직접 대조할 수 있습니다</li>
+    <li><span class="tag-v tag-edu">예시</span>이해를 돕기 위한 교육용 예시·비유·가상 시나리오 — 실측치가 아닙니다</li>
+    <li><span class="tag-v tag-plan">제안</span>본 문서가 제안하는 개선안 — 아직 실행되지 않은 계획입니다</li>
+    <li><span class="tag-v tag-unver">미검증</span>확인하지 못한 항목 — 의사결정 전 반드시 재확인이 필요합니다</li>
+  </ul>
+  <p style="font-size:.8rem;color:var(--text3);margin:0">링크 점검: <strong>2026-09-13 09:31~09:55 KST</strong>, 서버 68 런타임에서 각 URL에 HTTP 요청을 보내 응답 코드를 기록했습니다. 일부 기관 사이트는 자동화 접근을 차단(HTTP 403)하지만 브라우저에서는 정상 열람됩니다. <strong>URL 접근 확인은 링크가 살아 있다는 뜻일 뿐, 내용의 사실 검증이 아닙니다.</strong></p>
 </div>
 
 <!-- ===== CH1 ===== -->
@@ -791,7 +821,7 @@ border-radius:10px;padding:18px 22px;margin:24px 0 8px}
   </ul>
 
   <h3>12-4. ai_observations 테이블 — 품질 파이프라인과는 별개 시스템 <span class="tag-verified">DB 스키마 확인됨</span></h3>
-  <p>DB 스키마를 직접 조회한 결과, <code>ai_observations</code> 테이블은 <code>category, key, value, confidence, source_session_id, project, usage_count</code> 등의 컬럼을 가진 <strong>CEO 선호·지시·경험 교훈 저장소</strong>이며 (CLAUDE.md에 명시된 AADS-186E 메모리 자동 주입 시스템의 데이터 원천), 위에서 설명한 <code>chat_messages.quality_score</code> 기반 품질 평가 파이프라인과는 <strong>별개의 테이블·별개의 목적</strong>입니다. 실제 조회된 데이터는 "CEO 선호: 데이터 품질을 높여야지..." 같은 대화 학습 기록이며, quality_score 산출과 직접 연결되는 코드 경로는 확인되지 않았습니다. 브리핑에서 두 개념이 함께 언급되었으나, <strong>본 조사 결과 ai_observations는 quality_score의 산출 근거가 아니며 이는 혼동을 정정하는 내용입니다.</strong>
+  <p>DB 스키마를 직접 조회한 결과, <code>ai_observations</code> 테이블은 <code>category, key, value, confidence, source_session_id, project, usage_count</code> 등의 컬럼을 가진 <strong>CEO 선호·지시·경험 교훈 저장소</strong>이며 (CLAUDE.md에 명시된 AADS-186E 메모리 자동 주입 시스템의 데이터 원천), 위에서 설명한 <code>chat_messages.quality_score</code> 기반 품질 평가 파이프라인과는 <strong>별개의 테이블·별개의 목적</strong>입니다. 실제 조회된 데이터는 "CEO 선호: 데이터 품질을 높여야지..." 같은 대화 학습 기록이며, quality_score 산출과 직접 연결되는 코드 경로는 확인되지 않았습니다. 브리핑에서 두 개념이 함께 언급되었으나, <strong>본 조사 결과 ai_observations는 quality_score의 산출 근거가 아니며 이는 혼동을 정정하는 내용입니다.</strong></p>
 
   <h3>12-5. 품질 피드백 루프 — 주간 약점 자동 발견 <span class="tag-verified">코드 확인됨</span></h3>
   <p><code>quality_feedback_loop.py</code>는 Sleep-Time Agent(매일 05:00 UTC) 이후 06:00 UTC에 실행되어, 최근 7일 <code>quality_details</code>에서 6개 차원별 평균을 계산하고 <strong>0.55 미만인 차원을 약점으로 식별</strong>합니다. 표본이 5건 미만이면 스킵합니다. 약점이 발견되면 Haiku급 모델(<code>qwen-turbo</code>)로 구체적 교정 지시를 생성해 <code>ai_meta_memory</code> category=<code>quality_improvement</code>에 저장하고, 이후 컨텍스트 빌더가 최근 7일 이내 지시 최대 5건을 다음 응답에 자동 주입합니다. 비용은 일 1회 Haiku 호출로 약 $0.001(≈ ₩1.38)/일로 코드 주석에 명시됩니다.</p>
@@ -862,6 +892,11 @@ border-radius:10px;padding:18px 22px;margin:24px 0 8px}
         <tr><td>방법론</td><td><a href="https://arxiv.org/abs/2306.05685" target="_blank" rel="noopener">Zheng 외, "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena" (arXiv:2306.05685)</a></td><td>4장 위치/장문/자기선호 편향과 "사람과 80% 이상 일치" 근거</td><td>HTTP 200</td></tr>
         <tr><td>통계</td><td><a href="https://pubmed.ncbi.nlm.nih.gov/843571/" target="_blank" rel="noopener">Landis &amp; Koch (1977), Biometrics 33(1):159–174</a> · 이항비율 A/B 테스트 표본크기 표준 공식</td><td>5장 κ 해석 구간, 10장 표본 수 산정 근거</td><td>HTTP 200(PubMed)</td></tr>
         <tr><td>AADS 내부 코드</td><td>app/services/self_evaluator.py, quality_gate.py, quality_feedback_loop.py, eval_pipeline.py, ab_test_problems.py (서버 68, 2026-09-12 확인)</td><td>12장 전체 근거</td><td>비공개 저장소 — 외부 링크 없음</td></tr>
+        <tr><td><span class="tag-v tag-fact">검증</span>평가 프레임워크 원 논문 <span style="color:var(--text3)">(2차 보강)</span></td><td><a class="src" href="https://arxiv.org/abs/2211.09110" target="_blank" rel="noopener">Liang 외, 「Holistic Evaluation of Language Models」 arXiv:2211.09110</a></td><td>2장 HELM 다차원 평가의 원 논문 근거</td><td><span class="http-ok">200</span> · 제목 대조 완료</td></tr>
+        <tr><td><span class="tag-v tag-fact">검증</span>벤치마크 원 논문 <span style="color:var(--text3)">(2차 보강)</span></td><td><a class="src" href="https://arxiv.org/abs/2009.03300" target="_blank" rel="noopener">Hendrycks 외, 「Measuring Massive Multitask Language Understanding」(MMLU) arXiv:2009.03300</a></td><td>8장 MMLU-Pro의 전신인 원 MMLU 정의</td><td><span class="http-ok">200</span> · 제목 대조 완료</td></tr>
+        <tr><td><span class="tag-v tag-fact">검증</span>에이전트 평가 <span style="color:var(--text3)">(2차 보강)</span></td><td><a class="src" href="https://arxiv.org/abs/2406.12045" target="_blank" rel="noopener">Yao 외, 「τ-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains」 arXiv:2406.12045</a></td><td>9장 도구 사용·다중 턴 에이전트 평가 설계 근거</td><td><span class="http-ok">200</span> · 제목 대조 완료</td></tr>
+        <tr><td><span class="tag-v tag-fact">검증</span>안전성 평가 <span style="color:var(--text3)">(2차 보강)</span></td><td><a class="src" href="https://arxiv.org/abs/2109.07958" target="_blank" rel="noopener">Lin 외, 「TruthfulQA: Measuring How Models Mimic Human Falsehoods」 arXiv:2109.07958</a></td><td>11장 환각·사실성 측정 벤치마크 원 논문</td><td><span class="http-ok">200</span> · 제목 대조 완료</td></tr>
+        <tr><td><span class="tag-v tag-fact">검증</span>통계 <span style="color:var(--text3)">(2차 보강)</span></td><td><a class="src" href="https://www.itl.nist.gov/div898/handbook/prc/section2/prc242.htm" target="_blank" rel="noopener">NIST/SEMATECH e-Handbook 7.2.4.2 — 비율 검정 표본크기 산정</a></td><td>10장 표본 수 산정 공식의 표준 원문</td><td><span class="http-ok">200</span></td></tr>
         <tr><td>AADS 내부 DB</td><td>chat_messages.quality_score/quality_details, ai_observations 스키마 (2026-09-12 쿼리)</td><td>12-2, 12-4 실측 수치</td><td>비공개 DB — 외부 링크 없음</td></tr>
       </tbody>
     </table>

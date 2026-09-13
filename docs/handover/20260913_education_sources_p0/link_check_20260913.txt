@@ -1,0 +1,75 @@
+# 출처 링크 점검 로그 — AI 교육자료 4종 (sources_p0, 12a891ff 위에 2차 보강)
+# 실행: 2026-09-13 09:41:40 KST / 서버 68 런타임
+# 403/30x = 기관 사이트 봇 차단·리다이렉트. 브라우저 열람은 정상이며 죽은 링크가 아님 (우회 시도하지 않음).
+
+PASS app/static/reports/20260912_ai_evaluation_evals_education.html
+   태그 오류 0 · 미종료 태그 0 · 내부 앵커 14(깨짐 0) · 외부 링크 19
+   [200] https://artificialanalysis.ai/
+   [200] https://arxiv.org/abs/2009.03300
+   [200] https://arxiv.org/abs/2109.07958
+   [200] https://arxiv.org/abs/2211.09110
+   [200] https://arxiv.org/abs/2306.05685
+   [200] https://arxiv.org/abs/2310.06770
+   [200] https://arxiv.org/abs/2311.12022
+   [200] https://arxiv.org/abs/2406.01574
+   [200] https://arxiv.org/abs/2406.12045
+   [200] https://crfm.stanford.edu/helm/
+   [200] https://crfm.stanford.edu/helm/lite/latest/
+   [200] https://github.com/TIGER-AI-Lab/MMLU-Pro
+   [200] https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified
+   [200] https://huggingface.co/spaces/open-llm-leaderboard/open_llm_leaderboard
+   [200] https://livebench.ai/
+   [200] https://lmarena.ai/leaderboard
+   [203] https://pubmed.ncbi.nlm.nih.gov/843571/
+   [200] https://www.itl.nist.gov/div898/handbook/prc/section2/prc242.htm
+   [200] https://www.swebench.com/
+PASS app/static/reports/20260912_prompt_context_engineering_education.html
+   태그 오류 0 · 미종료 태그 0 · 내부 앵커 19(깨짐 0) · 외부 링크 8
+   [200] https://arxiv.org/abs/2005.11401
+   [200] https://arxiv.org/abs/2201.11903
+   [200] https://arxiv.org/abs/2203.11171
+   [200] https://arxiv.org/abs/2210.03629
+   [200] https://arxiv.org/abs/2307.03172
+   [200] https://platform.claude.com/docs/en/about-claude/pricing
+   [200] https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+   [200] https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/overview
+PASS app/static/reports/20260912_ai_law_copyright_privacy_education.html
+   태그 오류 0 · 미종료 태그 0 · 내부 앵커 17(깨짐 0) · 외부 링크 20
+   [200] https://artificialintelligenceact.eu/article/50/
+   [200] https://artificialintelligenceact.eu/article/99/
+   [200] https://bh-law.kr
+   [200] https://devlery.com
+   [200] https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai
+   [200] https://edu.imaginationgroup.co.kr
+   [200] https://eur-lex.europa.eu/eli/reg/2026/1744/oj
+   [200] https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A32024R1689
+   [200] https://kr.investing.com/currencies/eur-krw
+   [200] https://www.copyright.or.kr/main.do
+   [200] https://www.etnews.com/20250609000227
+   [200] https://www.fsc.go.kr
+   [200] https://www.ipkorea.go.kr/
+   [200] https://www.kipo.go.kr/
+   [200] https://www.law.go.kr/LSW/lsInfoP.do?efYd=20260122&lsiSeq=282879
+   [200] https://www.law.go.kr/lsInfoP.do?lsiSeq=276241
+   [200] https://www.law.go.kr/법령/개인정보보호법
+   [200] https://www.law.go.kr/법령/저작권법
+   [200] https://www.nia.or.kr
+   [200] https://www.pipc.go.kr/
+PASS app/static/reports/20260912_ai_security_governance_education.html
+   태그 오류 0 · 미종료 태그 0 · 내부 앵커 16(깨짐 0) · 외부 링크 16
+   [URLError] http://www.ifs.or.kr/bbs/board.php?bo_table=News&wr_id=56007
+   [200] http://www.impacton.net/news/articleView.html?idxno=19421
+   [302] https://ai.google.dev/gemini-api/terms
+   [200] https://arxiv.org/abs/2302.12173
+   [200] https://atlas.mitre.org/
+   [200] https://eur-lex.europa.eu/eli/reg/2026/1744/oj
+   [200] https://genai.owasp.org/llm-top-10/
+   [403] https://openai.com/enterprise-privacy/
+   [200] https://owasp.org/www-project-top-10-for-large-language-model-applications/
+   [200] https://privacy.claude.com/en/articles/7996866-how-long-do-you-store-my-organization-s-data
+   [200] https://privacy.claude.com/en/articles/7996868-is-my-data-used-for-model-training
+   [200] https://www.aitimes.com/news/articleView.html?idxno=204121
+   [403] https://www.iso.org/standard/81230.html
+   [200] https://www.law.go.kr/lsInfoP.do?lsiSeq=276241
+   [200] https://www.nist.gov/itl/ai-risk-management-framework
+   [200] https://zdnet.co.kr/view/?no=20260504111211
