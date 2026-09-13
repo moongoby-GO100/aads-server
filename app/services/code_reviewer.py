@@ -683,6 +683,13 @@ async def review_code_diff(
         # LLM이 가끔 비-JSON 텍스트를 반환해도 첫 실패에 바로 review_hold로
         # 보내지 않기 위함.
         result_text = None
+        # P0 버그 수정: 이전에는 마지막 시도의 result_text만 보고 "응답 없음"을
+        # 판정했다. 앞 시도가 파싱 실패했더라도 뒤 시도가 타임아웃/빈 응답이면
+        # result_text가 None으로 덮어써져 REVIEW_PARSER_FAILURE가
+        # REVIEW_MODEL_NO_RESPONSE로 오분류됐다. "응답을 한 번이라도 받았는지"와
+        # "마지막으로 받은 (파싱 실패한) 응답 텍스트"를 별도 변수로 보존한다.
+        any_response_received = False
+        last_text_response = None
         details = None
         parse_fail_count = 0
         # 기존에는 모델이 4개 이상이어도 고정 3회만 돌아 네 번째 이후의 정상
@@ -720,6 +727,8 @@ async def review_code_diff(
             if not result_text:
                 continue
 
+            any_response_received = True
+            last_text_response = result_text
             used_model = model
             details = _parse_review_json(result_text)
             if details is not None:
@@ -733,7 +742,7 @@ async def review_code_diff(
             if attempt_no < attempt_limit:
                 await asyncio.sleep(2 * attempt_no)
 
-        if not result_text:
+        if not any_response_received:
             logger.warning(f"code_reviewer_no_response: job_id={job_id}")
             verdict = _build_review_verdict(
                 verdict="FLAG",
@@ -759,10 +768,12 @@ async def review_code_diff(
             return verdict
 
         # 재시도 루프에서 이미 파싱을 시도했으므로, 모두 실패한 경우에만 여기 도달한다.
+        # last_text_response(최초로 응답을 받았던 시도의 텍스트)를 사용해야
+        # 뒤 시도의 무응답이 앞 시도의 파싱 실패 분류를 덮어쓰지 않는다.
         if details is None:
             logger.warning(
                 "code_reviewer_json_parse_failed: job_id=%s model=%s attempts=%s preview=%r",
-                job_id, used_model, parse_fail_count, (result_text or "")[:200]
+                job_id, used_model, parse_fail_count, (last_text_response or "")[:200]
             )
             verdict_obj = _build_review_verdict(
                 verdict="FLAG",
@@ -773,7 +784,7 @@ async def review_code_diff(
                     "코드 품질을 검증하지 못했으므로 승인 대기로 넘기면 안 됩니다.",
                 ],
                 feedback={
-                    "raw_preview": (result_text or "")[:500],
+                    "raw_preview": (last_text_response or "")[:500],
                     "summary": f"리뷰 응답 파싱 실패 ({parse_fail_count}회 재시도) — 승인 보류 필요",
                     "parse_attempts": parse_fail_count,
                 },

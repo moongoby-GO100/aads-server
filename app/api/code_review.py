@@ -181,6 +181,29 @@ async def create_code_review_request(req: AsyncCodeReviewRequest):
     payload_hash = _payload_sha256(req)
     pool = get_pool()
     async with pool.acquire() as conn:
+        # P0: 같은 job_id에 동일 payload(diff/instruction/files_changed)로 이미
+        # 진행 중이거나 완료된 요청이 있으면 새 request_id로 재큐잉하지 않고
+        # 그 요청을 재사용한다. 호출자가 request_id를 재사용하지 못해도
+        # (재시작, 서로 다른 클라이언트 등) 중복 LLM 호출·토큰 낭비를 막는다.
+        reusable = await conn.fetchrow(
+            """
+            SELECT request_id, status FROM code_review_requests
+            WHERE job_id=$1 AND payload_sha256=$2
+              AND status IN ('queued', 'running', 'completed')
+              AND created_at > NOW() - INTERVAL '24 hours'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            req.job_id,
+            payload_hash,
+        )
+        if reusable:
+            return AsyncCodeReviewAccepted(
+                request_id=reusable["request_id"],
+                status=reusable["status"],
+                result_url=f"/api/v1/review/code-diff/requests/{reusable['request_id']}",
+            )
+
         inserted = await conn.fetchval(
             """
             INSERT INTO code_review_requests

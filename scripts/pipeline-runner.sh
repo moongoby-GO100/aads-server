@@ -1829,17 +1829,25 @@ ${output:0:1500}
             local changed_files=""
             changed_files=$(echo "$git_diff" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//' | tr '\n' ',' | sed 's/,$//')
 
+            # P0: 같은 job_id의 재시도(review_hold 재검수 포함)가 동일 request_id를
+            # 재사용하도록 pipeline_jobs.review_request_id 에서 먼저 조회한다.
+            # 서버는 request_id + payload_sha256 이 일치하면 LLM을 재호출하지 않고
+            # 기존 상태를 그대로 반환하므로, 전송 타임아웃 뒤 재진입해도 중복 호출이
+            # 발생하지 않는다.
+            local review_request_id=""
+            review_request_id=$(db_exec "SELECT COALESCE(review_request_id::text,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | head -n1 | tr -d '[:space:]') || review_request_id=""
+            if [[ ! "$review_request_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+                review_request_id=$(cat /proc/sys/kernel/random/uuid)
+            fi
+            db_update "UPDATE pipeline_jobs SET review_request_id='${review_request_id}'::uuid WHERE job_id='${job_id}';"
+
             # JSON body 생성 (jq 사용)
             local review_body=""
-            review_body=$(jq -n \
-                --arg jid "$job_id" \
-                --arg proj "$project" \
-                --arg diff "$git_diff" \
-                --arg inst "$instruction" \
-                --arg files "$changed_files" \
-                '{job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
 
-            # P0: 리뷰 API 전송 실패는 코드 품질 문제가 아니므로 즉시 fail-close하지 않고 재시도
+            # P0: 리뷰 요청은 먼저 DB에 영속화되고 즉시 202로 반환된다(POST
+            # /code-diff/requests). 검수 자체는 서버 백그라운드 태스크로 계속
+            # 진행되므로, 이 curl의 전송 타임아웃이 곧 검수 결과 유실로 이어지지
+            # 않는다. 결과는 이후 폴링(GET .../requests/{id})으로 회수한다.
             local review_http_code=""
             local review_attempt=0
             local review_max_attempts="${AADS_REVIEW_MAX_ATTEMPTS:-3}"
@@ -1850,11 +1858,19 @@ ${output:0:1500}
                     return 1
                 fi
                 review_attempt=$((review_attempt + 1))
-                review_response=$(curl -4 -s --http1.1 -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
+                review_body=$(jq -n \
+                    --arg rid "$review_request_id" \
+                    --arg jid "$job_id" \
+                    --arg proj "$project" \
+                    --arg diff "$git_diff" \
+                    --arg inst "$instruction" \
+                    --arg files "$changed_files" \
+                    '{request_id: $rid, job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
+                review_response=$(curl -4 -s --http1.1 -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff/requests" \
                     -H "Content-Type: application/json" \
                     -d "$review_body" \
                     --connect-timeout 10 \
-                    --max-time "$AADS_REVIEW_MAX_TIME" 2>/dev/null) || true
+                    --max-time 20 2>/dev/null) || true
 
                 if [[ "$(get_job_status "$job_id")" != "running" ]]; then
                     log "  AI_REVIEW_ABORTED_TERMINAL job=$job_id attempt=${review_attempt}"
@@ -1865,11 +1881,21 @@ ${output:0:1500}
                 review_http_code=$(echo "$review_response" | tail -1)
                 review_response=$(echo "$review_response" | sed '$d')
 
-                if [[ "$review_http_code" == "200" && -n "$review_response" ]]; then
+                if [[ "$review_http_code" == "202" ]]; then
                     if [[ $review_attempt -gt 1 ]]; then
                         log "  AI_REVIEW_TRANSPORT_RECOVERED job=$job_id attempt=${review_attempt}/${review_max_attempts}"
                     fi
                     break
+                fi
+
+                if [[ "$review_http_code" == "409" ]]; then
+                    # request_id가 다른 payload에 이미 쓰였다 — DB의 오래된 request_id를
+                    # 버리고 새 id로 한 번 더 시도한다(재시도 예산은 소모하지 않음).
+                    review_request_id=$(cat /proc/sys/kernel/random/uuid)
+                    db_update "UPDATE pipeline_jobs SET review_request_id='${review_request_id}'::uuid WHERE job_id='${job_id}';"
+                    log "  AI_REVIEW_REQUEST_ID_CONFLICT job=$job_id new_request_id=${review_request_id}"
+                    review_attempt=$((review_attempt - 1))
+                    continue
                 fi
 
                 log "  AI_REVIEW_TRANSPORT_FAIL job=$job_id attempt=${review_attempt}/${review_max_attempts} http=${review_http_code:-000}"
@@ -1879,7 +1905,35 @@ ${output:0:1500}
                 fi
             done
 
-            if [[ "$review_http_code" == "200" ]] && [[ -n "$review_response" ]]; then
+            # P0: 제출이 성공하면 결과가 나올 때까지 폴링한다. 폴링 간격/상한은
+            # 환경변수로 조절 가능하며, 상한을 넘겨도 이미 DB에 기록된 verdict가
+            # 있으면(다음 재검수 시도나 review-hold-sweeper에서) 그대로 재사용된다 —
+            # 폴링 타임아웃이 검수 실패로 오인되지 않는다.
+            local review_status=""
+            if [[ "$review_http_code" == "202" ]]; then
+                local review_poll_interval="${AADS_REVIEW_POLL_INTERVAL:-4}"
+                local review_poll_deadline=$((SECONDS + AADS_REVIEW_MAX_TIME))
+                while (( SECONDS < review_poll_deadline )); do
+                    if [[ "$(get_job_status "$job_id")" != "running" ]]; then
+                        log "  AI_REVIEW_ABORTED_TERMINAL job=$job_id phase=poll"
+                        _release_work_lock "$project" "$job_id" "$parallel_group"
+                        return 1
+                    fi
+                    review_response=$(curl -4 -s --http1.1 -w "\n%{http_code}" \
+                        "${AADS_API_URL}/api/v1/review/code-diff/requests/${review_request_id}" \
+                        --connect-timeout 5 --max-time 15 2>/dev/null) || true
+                    local review_poll_http_code=""
+                    review_poll_http_code=$(echo "$review_response" | tail -1)
+                    review_response=$(echo "$review_response" | sed '$d')
+                    if [[ "$review_poll_http_code" == "200" ]]; then
+                        review_status=$(echo "$review_response" | jq -r '.status // empty')
+                        [[ "$review_status" == "completed" || "$review_status" == "failed" ]] && break
+                    fi
+                    sleep "$review_poll_interval"
+                done
+            fi
+
+            if [[ "$review_status" == "completed" ]]; then
                 review_verdict=$(echo "$review_response" | jq -r '.verdict // "APPROVE"')
                 review_score=$(echo "$review_response" | jq -r '.score // "1.0"')
                 review_flag_category=$(echo "$review_response" | jq -r '.flag_category // empty')
@@ -1894,6 +1948,20 @@ ${output:0:1500}
                 elif [[ "$review_verdict" == "FLAG" && -n "$review_flag_category" ]]; then
                     log "  AI_REVIEW_FLAG job=$job_id category=$review_flag_category"
                 fi
+                # 확정된 요청은 재사용 대상에서 제외 — 다음 실행(재작업 등)은 새 id를 받는다.
+                db_update "UPDATE pipeline_jobs SET review_request_id=NULL WHERE job_id='${job_id}';"
+            elif [[ "$review_status" == "failed" ]]; then
+                review_verdict="FLAG"
+                review_score="0.0"
+                review_flag_category="REVIEW_API_UNAVAILABLE"
+                review_needs_retry="true"
+                log "  AI_REVIEW_HOLD job=$job_id (async request failed request_id=${review_request_id})"
+            elif [[ "$review_http_code" == "202" ]]; then
+                review_verdict="FLAG"
+                review_score="0.0"
+                review_flag_category="REVIEW_TIMEOUT"
+                review_needs_retry="true"
+                log "  AI_REVIEW_HOLD job=$job_id (poll timeout request_id=${review_request_id})"
             else
                 review_verdict="FLAG"
                 review_score="0.0"

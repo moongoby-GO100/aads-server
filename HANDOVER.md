@@ -56,6 +56,79 @@ CEO 지시 "미진한 사항 즉시 직접 조치". 운영 코드 변경 없이,
   작업 중인 **다른 세션 소유**라 건드리지 않았다(직접 작업 게이트 YELLOW). → **09:09 KST 해소 확인**: 해당 세션이 `662d26c2 fix(deploy): record measured disk shortfall and autoheal outcome in deploy_runs` 로 커밋 완료. 워크트리 dirty 파일은 이 HANDOVER 뿐.
 - **잔여 리스크**: contabo116 디스크 09:07 KST 89% → **09:09 KST 재측정 77%**(`df -h /` 193G 중 148G 사용, 46G 여유)로 회복. `deploy.sh` 빌드 preflight 하한 여유 확보, 재상승 추세는 계속 감시. 운영 확인: health-check **200**, aads-server/aads-server-green 모두 healthy.
 
+## 2026-09-13 09:27 KST — AADS-REVIEW-ASYNC-PERSIST-P0: AI 검수 verdict 유실 차단 (DB 선기록 + 폴링)
+
+**배경**: `code_review_complete: job_id=runner-44625acb verdict=APPROVE duration_ms=329281`처럼
+검수 자체는 성공했지만, `scripts/pipeline-runner.sh`가 `POST /api/v1/review/code-diff`를 동기
+호출하면서 `AADS_REVIEW_MAX_TIME=420`으로 curl이 먼저 끊겨 verdict가 통째로 버려지고
+`REVIEW_API_UNAVAILABLE`로 review_hold에 적체(24h 22건)되는 문제.
+
+**선행 작업 확인**: 같은 카드가 파이프라인에서 병행 디스패치돼 있었다(`runner-7856f8b3`,
+`runner-f69d78c9`). 이전 라운드가 이미 `migrations/177_code_review_async_requests.sql`,
+`app/api/code_review.py`의 `POST /code-diff/requests`(durable, 202 즉시응답) +
+`GET /code-diff/requests/{id}`(폴링) + `scripts/review-hold-sweeper.sh`의 비동기 제출/폴링
+전환을 main에 병합 완료(commit `cf2f1666` 등, `pipeline_jobs.review_request_id` 컬럼 포함).
+이번 라운드는 그 위에서 **아직 비동기로 전환되지 않았던 메인 러너 경로**와 **재시도 루프
+버그**를 마무리했다. 기존 구현은 대체하지 않고 확장만 했다.
+
+### STEP 0 — 기존 구현 조사/분류
+- `app/api/code_review.py`: `POST /code-diff`(동기, 유지 — 하위호환 기본값), `POST /code-diff/requests`
+  + `GET /code-diff/requests/{id}`(비동기, 유지) → **수정**: job_id+payload 기준 재사용 조회 추가.
+- `app/services/code_reviewer.py::review_code_diff()`: 재시도 루프 **수정**(버그 수정, 아래 참고).
+  나머지(전처리 게이트, 보존 하드 게이트, `_save_review_result` 등)는 **유지**.
+- `scripts/review-hold-sweeper.sh`: 이미 비동기 제출+폴링 — **유지, 무변경**.
+- `scripts/pipeline-runner.sh` / `.local`(둘은 byte-identical 계약, 테스트로 강제됨): AI Reviewer
+  단계가 여전히 동기 `POST /code-diff` 1회 호출 — **수정**(비동기 제출+폴링으로 전환). 삭제된
+  기존 구현 없음 — 동일 로그 태그(`AI_REVIEW_TRANSPORT_FAIL`, `AI_REVIEW_HOLD`,
+  `AI_REVIEW_ABORTED_TERMINAL` 등)와 `review_max_attempts`/`AADS_REVIEW_MAX_ATTEMPTS` 전송
+  재시도 루프 구조를 그대로 보존하고, 그 안에서 호출하는 엔드포인트와 이후 처리만 바꿨다.
+
+### 변경 내용
+1. **`scripts/pipeline-runner.sh` + `.local`**: AI Reviewer 단계를 `POST /code-diff/requests`
+   (제출, 202 즉시응답) → `GET /code-diff/requests/{id}` 폴링(간격 `AADS_REVIEW_POLL_INTERVAL`
+   기본 4초, 상한은 기존 `AADS_REVIEW_MAX_TIME` 재사용)으로 전환. `pipeline_jobs.review_request_id`
+   에 요청 id를 먼저 영속화하고 재진입 시 재사용 — 같은 job의 재검수가 새 LLM 호출 없이 이미
+   완료된 결과를 회수한다(요구사항 5). 폴링이 상한을 넘겨도 `REVIEW_TIMEOUT`으로 review_hold에
+   보류될 뿐 verdict를 잃지 않으며, 서버 쪽 백그라운드 태스크는 계속 실행되어 DB에 기록되므로
+   다음 재시도(러너 재진입 또는 review-hold-sweeper)가 같은 request_id를 폴링해 회수한다.
+   request_id 충돌(409, payload 불일치)은 재시도 예산을 소모하지 않고 새 id로 1회 재시도.
+2. **`app/api/code_review.py`**: `POST /code-diff/requests`에 job_id+payload_sha256 기준
+   재사용 조회를 추가 — request_id를 모르는 새 클라이언트/재시도도 이미 완료·진행 중인 요청을
+   재활용해 중복 LLM 호출을 막는다(요구사항 5, 서버 측 안전망).
+3. **`app/services/code_reviewer.py`**: 재시도 루프 버그 수정(요구사항 6). 기존에는 매 시도마다
+   `result_text`를 덮어써서, 앞 시도가 파싱 불가 텍스트를 받았어도 뒤 시도가 타임아웃/빈 응답이면
+   `REVIEW_PARSER_FAILURE`가 `REVIEW_MODEL_NO_RESPONSE`로 오분류됐다. `any_response_received`/
+   `last_text_response`를 별도로 추적해 "응답을 한 번이라도 받았는지"와 "최초 응답 텍스트"를
+   보존하도록 수정.
+4. 배포 컨테이너(`docker exec aads-server cat .../code_reviewer.py`) 대조 결과 호스트 워크트리와
+   **byte-identical** — 지시서가 경고한 배포 전용 변경(`_REVIEW_LLM_TIMEOUT_SEC` wrap 등)은 이미
+   이전 라운드에서 호스트에 반영/배포되어 있었다. 되돌린 것 없음.
+
+### 검증
+- 호스트 venv(`/root/aads/aads-server/.venv`, `JWT_SECRET_KEY` 필요 — 컨테이너는 pytest 자체가
+  없어 `docker exec aads-server pytest`는 항상 무의미한 그린이다):
+  - 타겟 55개 테스트(async contract/sweeper/reviewer/script guards) 전부 PASS.
+  - 전체 스위트 before/after 비교: origin/main(`1eeb710f`) 베이스라인 **93 failed / 2086 passed /
+    25 errors** vs 본 브랜치 **93 failed / 2089 passed / 25 errors**(신규 테스트 3건만 증가,
+    FAILED 집합 완전 동일 → 회귀 0건).
+  - 신규 회귀 테스트 3건: (a) 백그라운드 태스크가 "클라이언트가 더 기다리지 않아도" verdict를
+    DB에 남기는지, (b) job_id+payload 재사용이 LLM 재호출 없이 기존 결과를 반환하는지, (c) 재시도
+    루프가 "뒤 시도 무응답"에 "앞 시도 파싱 실패" 분류를 잃지 않는지 — (c)는 수정 전 코드로
+    되돌려 실제로 FAIL함을 확인 후 원복.
+- `pipeline-runner.sh`/`.local` byte-identical 유지 확인, `bash -n` 문법 검사 통과.
+- 브라우저 E2E: 해당 없음(백엔드 러너/API 변경, UI 없음). ⚠️ 배포 전이라 운영 API 실통합 테스트도
+  미실행 — 배포는 CEO 승인 후 진행.
+
+### 미완료/후속
+- `app/services/code_reviewer.py`의 "검수 시작 시 pending 레코드"는 비동기 경로
+  (`code_review_requests`, `queued`→`running`→`completed`)로 이미 충족되지만, 동기 `/code-diff`
+  직접 호출 경로는 여전히 완료 시점에만 기록한다(기존 동작 유지 — 하위호환 계약이라 응답 계약을
+  바꾸지 않았다). 운영에서 동기 경로를 더 쓸 일이 없다면(러너/스위퍼 모두 비동기 전환 완료)
+  실질적 위험은 낮다.
+- migrations/177(`code_review_requests`, `pipeline_jobs.review_request_id`)은 운영 DB에 이미
+  적용 확인됨(`\d code_review_requests` 조회로 실증). 코드 배포(이미지 재빌드/블루그린)만 남음 —
+  CEO 승인 후 진행.
+
 ## 2026-09-13 16:00 KST — WP05 R4 검수 피드백 대응: main 병합 + 검증 1~5 재실행
 
 R4 검수의 5개 지적("작업 대상 오류 / 핵심 산출물 부재 / 검증 불가 / 보고 일관성 부재 /
