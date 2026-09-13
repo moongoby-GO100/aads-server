@@ -1,0 +1,112 @@
+# sources_p1 외부 링크 실측 점검 (최종)
+# 점검 시각: 2026-09-13 10:20~10:26 KST (서버 68 런타임, curl -L, 브라우저 UA)
+# 대상: 교육자료 8건의 외부 링크 — (파일,URL) 103쌍 / 고유 URL 95건
+# 판정: 200=정상 · 302=리다이렉트(정상 도달) · 403=기관 사이트 봇 차단(브라우저 열람 가능)
+#
+# 응답코드\tURL
+200	https://agents.md
+302	https://ai.google.dev/gemini-api/docs
+302	https://ai.google.dev/gemini-api/docs/embeddings
+302	https://ai.google.dev/gemini-api/docs/model-tuning
+302	https://ai.google.dev/gemini-api/docs/pricing
+200	https://arize.com/phoenix
+200	https://arxiv.org/abs/1603.09320
+200	https://arxiv.org/abs/1910.02054
+200	https://arxiv.org/abs/2004.12832
+200	https://arxiv.org/abs/2005.11401
+200	https://arxiv.org/abs/2103.00020
+200	https://arxiv.org/abs/2106.09685
+200	https://arxiv.org/abs/2203.02155
+200	https://arxiv.org/abs/2210.07316
+200	https://arxiv.org/abs/2212.04356
+200	https://arxiv.org/abs/2305.14314
+200	https://arxiv.org/abs/2305.18290
+200	https://arxiv.org/abs/2308.08747
+200	https://arxiv.org/abs/2309.15217
+200	https://arxiv.org/abs/2402.03300
+200	https://arxiv.org/abs/2402.09353
+200	https://arxiv.org/abs/2404.16130
+200	https://claude.com/pricing
+200	https://cohere.com/pricing
+200	https://cursor.com/docs/account/pricing
+200	https://developers.openai.com/api/docs/guides/supervised-fine-tuning
+200	https://developers.openai.com/api/docs/pricing
+200	https://docs.cohere.com/docs/cohere-embed
+200	https://docs.github.com/en/copilot/get-started/plans
+200	https://docs.pinecone.io/
+200	https://docs.ragas.io/
+200	https://docs.voyageai.com/docs/pricing
+200	https://docs.weaviate.io/weaviate
+200	https://github.com/features/copilot/plans
+200	https://github.com/microsoft/graphrag
+200	https://github.com/open-telemetry/semantic-conventions-genai
+200	https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md
+200	https://github.com/pgvector/pgvector
+200	https://huggingface.co/docs/peft
+200	https://huggingface.co/docs/trl
+200	https://huggingface.co/spaces/mteb/leaderboard
+200	https://jina.ai/embeddings/
+200	https://lambda.ai/service/gpu-cloud
+200	https://langfuse.com
+200	https://microsoft.github.io/language-server-protocol/
+302	https://milvus.io/docs
+200	https://mlq.ai/media/quarterly_decks/v0.1_State_of_AI_in_Business_2025_Report.pdf
+200	https://modelcontextprotocol.io
+200	https://modelcontextprotocol.io/specification/2025-06-18
+200	https://modelcontextprotocol.io/specification/2026-07-28
+200	https://modelcontextprotocol.io/specification/2026-07-28/basic/transports
+200	https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http
+200	https://modelcontextprotocol.io/specification/2026-07-28/client/roots
+200	https://modelcontextprotocol.io/specification/2026-07-28/client/sampling
+200	https://modelcontextprotocol.io/specification/2026-07-28/deprecated
+200	https://modelcontextprotocol.io/specification/2026-07-28/server/tools
+200	https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/logging
+200	https://nanda.media.mit.edu/
+403	https://openai.com/chatgpt/pricing/
+200	https://opentelemetry.io/
+200	https://opentelemetry.io/docs/specs/semconv/gen-ai/
+200	https://platform.claude.com/docs/en/about-claude/glossary
+200	https://platform.claude.com/docs/en/about-claude/models/overview
+200	https://platform.claude.com/docs/en/about-claude/pricing
+200	https://platform.claude.com/docs/en/about-claude/pricing#batch-processing
+200	https://platform.claude.com/docs/en/about-claude/pricing#code-execution-tool
+200	https://platform.claude.com/docs/en/about-claude/pricing#data-residency-pricing
+200	https://platform.claude.com/docs/en/about-claude/pricing#fast-mode-pricing
+200	https://platform.claude.com/docs/en/about-claude/pricing#long-context-pricing
+200	https://platform.claude.com/docs/en/about-claude/pricing#model-pricing
+200	https://platform.claude.com/docs/en/about-claude/pricing#prompt-caching
+200	https://platform.claude.com/docs/en/about-claude/pricing#tool-use-pricing
+200	https://platform.claude.com/docs/en/about-claude/pricing#web-fetch-tool
+200	https://platform.claude.com/docs/en/about-claude/pricing#web-search-tool
+200	https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+200	https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools
+200	https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+200	https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use
+200	https://platform.claude.com/docs/en/build-with-claude/vision
+200	https://platform.claude.com/docs/en/models/fable-5-1/overview
+200	https://qdrant.tech/documentation/
+200	https://smith.langchain.com
+200	https://vast.ai/pricing
+200	https://wandb.ai/site/weave
+200	https://www.anthropic.com/news/donating-the-model-context-protocol-and-establishing-of-the-agentic-ai-foundation
+403	https://www.bcg.com/press/24october2024-ai-adoption-in-2024-74-of-companies-struggle-to-achieve-and-scale-value
+403	https://www.bcg.com/publications/2024/wheres-value-in-ai
+403	https://www.gartner.com/en/newsroom/press-releases/2024-07-29-gartner-predicts-30-percent-of-generative-ai-projects-will-be-abandoned-after-proof-of-concept-by-end-of-2025
+200	https://www.helicone.ai
+200	https://www.jsonrpc.org/
+200	https://www.linuxfoundation.org/press/linux-foundation-announces-the-formation-of-the-agentic-ai-foundation
+200	https://www.rand.org/content/dam/rand/pubs/research_reports/RRA2600/RRA2680-1/RAND_RRA2680-1.pdf
+200	https://www.rand.org/pubs/research_reports/RRA2680-1.html
+200	https://www.runpod.io/pricing
+200	https://www.upstage.ai/pricing/api
+#
+# 분포: 200=86 · 302=5 · 403=4 · 4xx(404 등 죽은 링크)=0
+# 파일별 고유 링크 수
+#   20260912_ai_coding_agent_practice_education.html     8건
+#   20260912_ai_cost_token_economics_education.html      14건
+#   20260912_ai_product_prd_ax_education.html            7건
+#   20260912_finetuning_lora_practice_education.html     16건
+#   20260912_llmops_observability_education.html         9건
+#   20260912_mcp_tool_calling_education.html             21건
+#   20260912_multimodal_ai_education.html                6건
+#   20260912_rag_vectordb_embedding_education.html       22건

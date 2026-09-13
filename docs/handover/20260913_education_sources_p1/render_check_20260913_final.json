@@ -1,0 +1,306 @@
+{
+  "20260912_rag_vectordb_embedding_education.html": {
+    "desktop": {
+      "ids": 17,
+      "dup_ids": [],
+      "anchors": 19,
+      "broken_anchors": [],
+      "scroll_w": 1440,
+      "client_w": 1440,
+      "overflow": false,
+      "wide_elements": [],
+      "audit_present": true,
+      "audit_links": 43,
+      "ext_links": 65,
+      "console_errors": [],
+      "pass": true
+    },
+    "mobile": {
+      "ids": 17,
+      "dup_ids": [],
+      "anchors": 19,
+      "broken_anchors": [],
+      "scroll_w": 390,
+      "client_w": 390,
+      "overflow": false,
+      "wide_elements": [
+        "TABLE.",
+        "THEAD.",
+        "TR.",
+        "TBODY.",
+        "TR."
+      ],
+      "audit_present": true,
+      "audit_links": 43,
+      "ext_links": 65,
+      "console_errors": [],
+      "pass": true
+    }
+  },
+  "20260912_mcp_tool_calling_education.html": {
+    "desktop": {
+      "ids": 17,
+      "dup_ids": [],
+      "anchors": 17,
+      "broken_anchors": [],
+      "scroll_w": 1440,
+      "client_w": 1440,
+      "overflow": false,
+      "wide_elements": [],
+      "audit_present": true,
+      "audit_links": 8,
+      "ext_links": 45,
+      "console_errors": [],
+      "pass": true
+    },
+    "mobile": {
+      "ids": 17,
+      "dup_ids": [],
+      "anchors": 17,
+      "broken_anchors": [],
+      "scroll_w": 390,
+      "client_w": 390,
+      "overflow": false,
+      "wide_elements": [
+        "TABLE.",
+        "THEAD.",
+        "TR.",
+        "TBODY.",
+        "TR."
+      ],
+      "audit_present": true,
+      "audit_links": 8,
+      "ext_links": 45,
+      "console_errors": [],
+      "pass": true
+    }
+  },
+  "20260912_finetuning_lora_practice_education.html": {
+    "desktop": {
+      "ids": 17,
+      "dup_ids": [],
+      "anchors": 17,
+      "broken_anchors": [],
+      "scroll_w": 1440,
+      "client_w": 1440,
+      "overflow": false,
+      "wide_elements": [],
+      "audit_present": true,
+      "audit_links": 7,
+      "ext_links": 26,
+      "console_errors": [],
+      "pass": true
+    },
+    "mobile": {
+      "ids": 17,
+      "dup_ids": [],
+      "anchors": 17,
+      "broken_anchors": [],
+      "scroll_w": 390,
+      "client_w": 390,
+      "overflow": false,
+      "wide_elements": [
+        "TABLE.",
+        "THEAD.",
+        "TR.",
+        "TBODY.",
+        "TR."
+      ],
+      "audit_present": true,
+      "audit_links": 0,
+      "ext_links": 19,
+      "console_errors": [],
+      "pass": true
+    }
+  },
+  "20260912_llmops_observability_education.html": {
+    "desktop": {
+      "ids": 16,
+      "dup_ids": [],
+      "anchors": 16,
+      "broken_anchors": [],
+      "scroll_w": 1440,
+      "client_w": 1440,
+      "overflow": false,
+      "wide_elements": [],
+      "audit_present": true,
+      "audit_links": 1,
+      "ext_links": 13,
+      "console_errors": [],
+      "pass": true
+    },
+    "mobile": {
+      "ids": 16,
+      "dup_ids": [],
+      "anchors": 16,
+      "broken_anchors": [],
+      "scroll_w": 390,
+      "client_w": 390,
+      "overflow": false,
+      "wide_elements": [
+        "TABLE.",
+        "THEAD.",
+        "TR.",
+        "TBODY.",
+        "TR."
+      ],
+      "audit_present": true,
+      "audit_links": 1,
+      "ext_links": 13,
+      "console_errors": [],
+      "pass": true
+    }
+  },
+  "20260912_multimodal_ai_education.html": {
+    "desktop": {
+      "ids": 15,
+      "dup_ids": [],
+      "anchors": 16,
+      "broken_anchors": [],
+      "scroll_w": 1440,
+      "client_w": 1440,
+      "overflow": false,
+      "wide_elements": [],
+      "audit_present": true,
+      "audit_links": 11,
+      "ext_links": 14,
+      "console_errors": [],
+      "pass": true
+    },
+    "mobile": {
+      "ids": 15,
+      "dup_ids": [],
+      "anchors": 16,
+      "broken_anchors": [],
+      "scroll_w": 390,
+      "client_w": 390,
+      "overflow": false,
+      "wide_elements": [
+        "TABLE.",
+        "THEAD.",
+        "TR.",
+        "TBODY.",
+        "TR."
+      ],
+      "audit_present": true,
+      "audit_links": 11,
+      "ext_links": 14,
+      "console_errors": [],
+      "pass": true
+    }
+  },
+  "20260912_ai_coding_agent_practice_education.html": {
+    "desktop": {
+      "ids": 16,
+      "dup_ids": [],
+      "anchors": 16,
+      "broken_anchors": [],
+      "scroll_w": 1440,
+      "client_w": 1440,
+      "overflow": false,
+      "wide_elements": [],
+      "audit_present": true,
+      "audit_links": 1,
+      "ext_links": 17,
+      "console_errors": [],
+      "pass": true
+    },
+    "mobile": {
+      "ids": 16,
+      "dup_ids": [],
+      "anchors": 16,
+      "broken_anchors": [],
+      "scroll_w": 390,
+      "client_w": 390,
+      "overflow": false,
+      "wide_elements": [
+        "TABLE.",
+        "THEAD.",
+        "TR.",
+        "TBODY.",
+        "TR."
+      ],
+      "audit_present": true,
+      "audit_links": 1,
+      "ext_links": 17,
+      "console_errors": [],
+      "pass": true
+    }
+  },
+  "20260912_ai_product_prd_ax_education.html": {
+    "desktop": {
+      "ids": 15,
+      "dup_ids": [],
+      "anchors": 15,
+      "broken_anchors": [],
+      "scroll_w": 1440,
+      "client_w": 1440,
+      "overflow": false,
+      "wide_elements": [],
+      "audit_present": true,
+      "audit_links": 0,
+      "ext_links": 11,
+      "console_errors": [],
+      "pass": true
+    },
+    "mobile": {
+      "ids": 15,
+      "dup_ids": [],
+      "anchors": 15,
+      "broken_anchors": [],
+      "scroll_w": 390,
+      "client_w": 390,
+      "overflow": false,
+      "wide_elements": [
+        "CODE.",
+        "CODE.",
+        "CODE.",
+        "CODE.",
+        "TABLE."
+      ],
+      "audit_present": true,
+      "audit_links": 0,
+      "ext_links": 11,
+      "console_errors": [],
+      "pass": true
+    }
+  },
+  "20260912_ai_cost_token_economics_education.html": {
+    "desktop": {
+      "ids": 16,
+      "dup_ids": [],
+      "anchors": 16,
+      "broken_anchors": [],
+      "scroll_w": 1440,
+      "client_w": 1440,
+      "overflow": false,
+      "wide_elements": [],
+      "audit_present": true,
+      "audit_links": 0,
+      "ext_links": 18,
+      "console_errors": [],
+      "pass": true
+    },
+    "mobile": {
+      "ids": 16,
+      "dup_ids": [],
+      "anchors": 16,
+      "broken_anchors": [],
+      "scroll_w": 390,
+      "client_w": 390,
+      "overflow": false,
+      "wide_elements": [
+        "TABLE.",
+        "THEAD.",
+        "TR.",
+        "TBODY.",
+        "TR."
+      ],
+      "audit_present": true,
+      "audit_links": 0,
+      "ext_links": 18,
+      "console_errors": [],
+      "pass": true
+    }
+  }
+}
