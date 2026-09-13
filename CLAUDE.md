@@ -68,7 +68,9 @@ docs/knowledge/AADS-KNOWLEDGE.md — 아키텍처, 파이프라인, 교차검증
 
 ## 코드 품질 규칙 (R-QUALITY)
 - **자동 생성 코드(`check_tool_consistency --fix` 등) 실행 후 반드시 테스트** — 자동 생성이 들여쓰기, 클래스 소속을 잘못 만들 수 있음.
-- **테스트 추가 시 반드시 실행 확인**: `docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py -v` — 전체 PASS 확인 후 커밋.
+- **테스트 추가 시 반드시 실행 확인**: `bash scripts/run_unit_tests.sh tests/unit/test_tools_and_pipeline.py` — 전체 PASS 확인 후 커밋.
+  - 런타임 이미지에 pytest가 없어 `docker exec aads-server python3 -m pytest`는 더 이상 동작하지 않는다. 이 스크립트가 운영 이미지 + 워킹트리 마운트로 실행한다.
+  - 종료코드 0=통과 / 1=실패 / 2=실행 불가. 2는 게이트 미작동이므로 pre-commit이 커밋을 차단한다.
 - **기존 테스트가 실패하면 방치하지 말고 즉시 수정** — 실패하는 테스트가 쌓이면 테스트 시스템 전체가 무력화됨.
 - **pre-commit hook 5단계**: ①API 키 탐지 ②구문 검사 ③ruff 정적 분석 ④Docker import 검증 ⑤단위 테스트 — 모두 통과해야 커밋 가능.
 

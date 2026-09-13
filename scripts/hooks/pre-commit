@@ -148,9 +148,16 @@ if [ -n "$PY_FILES" ]; then
   TOOL_MODIFIED=$(echo "$PY_FILES" | grep -c "$TOOL_FILES_PATTERN" || true)
   if [ -f "$TEST_FILE" ] && [ "$TOOL_MODIFIED" -gt 0 ]; then
     echo "[pre-commit] 도구/핵심 코드 변경 감지 — 단위 테스트 실행..."
-    docker cp "$TEST_FILE" aads-server:/app/tests/unit/test_tools_and_pipeline.py 2>/dev/null
-    TEST_OUT=$(docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py -q --tb=line 2>&1 || true)
-    if echo "$TEST_OUT" | grep -q "failed"; then
+    # 운영 이미지에는 pytest 가 없어서 `docker exec ... pytest` 는 실행 자체가 실패했고,
+    # 그 출력에 "failed" 문자열이 없다는 이유로 게이트가 통과로 오판했다.
+    # 이제 실행기가 종료코드로 말한다 — 0 통과 / 1 테스트 실패 / 2 실행 불가.
+    TEST_OUT=$(bash scripts/run_unit_tests.sh "$TEST_FILE" 2>&1)
+    TEST_RC=$?
+    if [ "$TEST_RC" -eq 2 ]; then
+      echo -e "  ${RED}❌ 단위 테스트를 실행하지 못했습니다 — 게이트가 아무것도 검증하지 못하므로 커밋을 차단합니다${NC}"
+      echo "$TEST_OUT" | tail -5
+      PY_ERRORS=$((PY_ERRORS + 1))
+    elif [ "$TEST_RC" -ne 0 ]; then
       FAIL_COUNT=$(echo "$TEST_OUT" | grep -oP '\d+ failed' | head -1)
       echo -e "  ${RED}❌ 테스트 실패: ${FAIL_COUNT}${NC}"
       echo "$TEST_OUT" | grep "FAILED" | head -5
