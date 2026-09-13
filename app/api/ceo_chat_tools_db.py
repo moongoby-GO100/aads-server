@@ -59,6 +59,16 @@ _LEGACY_DB_HOST_ALIAS: Dict[str, str] = {
     "211.188.51.113": get_server_host("contabo14"),
 }
 
+# 프로젝트 이름은 KIS → GO100 으로 통합됐지만 운영 .env 의 접속 정보는 아직
+# 레거시 KIS_DB_* 이름으로만 존재한다. 정식 접두사를 먼저 보고, 없으면 레거시로
+# 내려간다. 이 폴백이 없으면 GO100/KIS 조회가 "DB 설정 없음" 으로 전부 죽는다.
+_LEGACY_ENV_PREFIX: Dict[str, Tuple[str, ...]] = {"GO100": ("KIS",)}
+
+
+def _env_prefixes(resolved: str) -> Tuple[str, ...]:
+    """환경변수 접두사 후보 — 정식 이름 우선, 레거시 이름 폴백."""
+    return (resolved.upper(),) + _LEGACY_ENV_PREFIX.get(resolved.upper(), ())
+
 
 def _env_value(names: Tuple[str, ...], default: str = "") -> str:
     """첫 번째로 설정된 환경변수 값을 반환한다."""
@@ -225,10 +235,11 @@ def _get_project_db_config(project: str) -> Optional[Dict[str, str]]:
         resolved,
         ("", "5432" if db_type == "postgresql" else "3306"),
     )
-    database = os.getenv(f"{prefix}_DB_NAME", "")
-    user = os.getenv(f"{prefix}_DB_USER", "")
-    password = os.getenv(f"{prefix}_DB_PASSWORD", "")
-    host = _env_value((f"{prefix}_DB_HOST",), "")
+    prefixes = _env_prefixes(prefix)
+    database = _env_value(tuple(f"{p}_DB_NAME" for p in prefixes), "")
+    user = _env_value(tuple(f"{p}_DB_USER" for p in prefixes), "")
+    password = _env_value(tuple(f"{p}_DB_PASSWORD" for p in prefixes), "")
+    host = _env_value(tuple(f"{p}_DB_HOST" for p in prefixes), "")
     if not host and (database or user or password):
         host = default_host
     if not host:
@@ -244,7 +255,7 @@ def _get_project_db_config(project: str) -> Optional[Dict[str, str]]:
         host = normalized_host
     return {
         "host": host,
-        "port": _env_value((f"{prefix}_DB_PORT",), default_port),
+        "port": _env_value(tuple(f"{p}_DB_PORT" for p in prefixes), default_port),
         "database": database,
         "user": user,
         "password": password,
