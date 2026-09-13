@@ -834,14 +834,17 @@ class TestRegressions:
 
         await chat_router.asyncio.sleep(0)
 
-        update_args = [
-            args for query, args in calls["fetchval"]
+        update_calls = [
+            (query, args) for query, args in calls["fetchval"]
             if "UPDATE chat_turn_executions" in query
         ]
         assert scheduled is True
-        assert update_args
-        assert update_args[0][3] is True
-        assert update_args[0][4] == 8
+        assert update_calls
+        update_query, update_args = update_calls[0]
+        # 예산 청구는 _claim_resume_model_attempt 한 곳에서만 한다(0e64584a).
+        # 이 CAS 는 retry_count 를 올리지 않고 retry_count < $4 가드만 건다.
+        assert "retry_count = retry_count" not in update_query
+        assert update_args[3] == 8
         assert calls["resumed"]
 
     @pytest.mark.asyncio
