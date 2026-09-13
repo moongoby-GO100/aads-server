@@ -14144,3 +14144,25 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   outbox 증식은 178로 막았으나 왕복 자체는 앱 코드 수정(=이미지 재빌드)이 필요해 분리한다.
   이 스윕은 `chat_messages` 풀스캔이라 pg_stat_activity 표본의 6%를 점유하고 autovacuum을
   상시 유발한다 — 부분 인덱스 + 핑퐁 차단을 묶어 별도 작업으로 제출할 것.
+
+## 2026-09-13 23:35 KST — stale_empty 스윕 풀스캔 제거(migration 179)
+
+- **문제**: `chat_service.py:3244` 30초 주기 스윕이 `length(trim(content))<50` 을 인덱스 없이
+  평가해 chat_messages(39,483행/1,178MB) 전체를 읽었다. content 가 TOAST 라 매 주기
+  **17,561블록(≈137MB)을 디스크에서 재차 읽는다**. 실제 매칭은 644행(1.6%)뿐.
+- **조치**: `migrations/179_chat_messages_stale_empty_sweep_index.sql` —
+  스윕 술어를 그대로 담은 부분 인덱스 `idx_chat_messages_stale_empty_sweep`
+  (`CREATE INDEX CONCURRENTLY`, 잠금 없음, 크기 32kB).
+- **검증(EXPLAIN ANALYZE, BUFFERS 실측)**:
+
+  | 경로 | 실행시간 | shared buffers | 디스크 read |
+  |---|---|---|---|
+  | 풀스캔(기존) | 2,849 ms | 55,272 | 17,561 |
+  | 부분 인덱스(현재) | 0.2 ms | 565 | 0 |
+
+  플래너가 `Bitmap Index Scan on idx_chat_messages_stale_empty_sweep` 선택 확인.
+- **롤백**: `DROP INDEX CONCURRENTLY IF EXISTS idx_chat_messages_stale_empty_sweep;`
+- **미해결**: 짧은 assistant 메시지의 숨김↔표시 왕복은 여전히 관측된다
+  (`074785c8` content_version 1490@23:20 → 1509@23:29, 약 2회/분).
+  178 적용 후 outbox 총량이 21~35행/분으로 떨어져 영향은 제한적이나, 원인 경로
+  (`is_hidden=FALSE` 복원 statement)는 앱 코드 수정이 필요해 별도 과제로 남긴다.
