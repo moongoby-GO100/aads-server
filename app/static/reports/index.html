@@ -184,10 +184,12 @@ async function mergeAutoEducationDocs() {
     const known = new Set(docs.map(doc => decodeURIComponent(doc.file)));
     const discovered = (Array.isArray(payload.documents) ? payload.documents : [])
       .filter(doc => doc && typeof doc.basename === 'string')
-      .filter(doc => /^[A-Za-z0-9][A-Za-z0-9._-]*_education\.html$/.test(doc.basename))
-      .filter(doc => !known.has(doc.basename));
+      .filter(doc => /^[A-Za-z0-9][A-Za-z0-9._-]*_education\.html$/.test(doc.basename));
 
     discovered.forEach(doc => {
+      // 중복 제거는 반드시 루프 안에서 한다. filter 단계에서 걸러내면 같은 응답에
+      // 동일 파일명이 두 번 들어왔을 때 known.add 가 너무 늦어 둘 다 추가된다.
+      if (known.has(doc.basename)) return;
       known.add(doc.basename);
       const size = Number.isFinite(doc.size) && doc.size >= 0 ? doc.size : 0;
       docs.unshift({

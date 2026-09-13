@@ -402,8 +402,46 @@ def test_public_education_index_is_reachable_without_auth(middleware_client):
     "/api/v1/project-docs",
     # 면제는 정확히 일치할 때만이다. 슬래시가 붙은 변형은 공개되면 안 된다.
     "/api/v1/project-docs/public-education-index/",
+    # 면제 경로를 prefix 로 삼는 변형도 새어나가면 안 된다.
+    "/api/v1/project-docs/public-education-index/extra",
+    "/api/v1/project-docs/public-education-index2",
 ])
 def test_sibling_project_doc_routes_still_require_auth(middleware_client, path):
     response = middleware_client.get(path, follow_redirects=False)
 
     assert response.status_code == 401
+
+
+def test_public_education_index_response_leaks_no_filesystem_location(middleware_client):
+    """응답 본문에 절대경로·호스트·전체경로 키가 섞여 나가지 않는다."""
+    body = middleware_client.get("/api/v1/project-docs/public-education-index").text
+
+    for leaked in ("/app/", "/root/", "full_path", "base_path", "host"):
+        assert leaked not in body
+
+
+def test_portal_merges_discovered_docs_and_keeps_static_fallback():
+    """포털이 자동발견 결과를 중복 없이 병합하고, 실패 시 정적 목록을 유지한다."""
+    portal = (REPO_ROOT / "app" / "static" / "reports" / "index.html").read_text(encoding="utf-8")
+
+    # 좁은 공개 엔드포인트만 호출하고, 인증이 필요한 scan 은 더 이상 부르지 않는다.
+    assert "/api/v1/project-docs/public-education-index" in portal
+    assert "/api/v1/project-docs/scan" not in portal
+
+    # 중복 제거: 정적 목록의 파일명을 Set 으로 모아 이미 아는 문서를 걸러낸다.
+    assert "new Set(docs.map(" in portal
+    assert "known.add(doc.basename)" in portal
+    # 중복 검사는 unshift 직전 루프 안에서 이뤄져야 한다. filter 단계로 옮기면
+    # 같은 응답에 동일 파일명이 두 번 오는 경우를 걸러내지 못한다.
+    assert "if (known.has(doc.basename)) return;" in portal
+    assert ".filter(doc => !known.has(doc.basename))" not in portal
+
+    # 서버가 무엇을 주든 클라이언트도 동일한 허용목록 정규식으로 다시 거른다.
+    assert r"/^[A-Za-z0-9][A-Za-z0-9._-]*_education\.html$/.test(doc.basename)" in portal
+
+    # 실패·오프라인 시 폴백: catch 로 삼키고 검증된 정적 목록을 그대로 둔다.
+    assert "catch (_)" in portal
+    assert portal.count('_education.html"') >= 12
+
+    # 병합 후 통계/목록을 다시 그린다 — 병합만 하고 렌더를 안 하면 화면에 안 보인다.
+    assert "mergeAutoEducationDocs().then(" in portal
