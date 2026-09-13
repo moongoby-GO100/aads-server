@@ -325,10 +325,31 @@ launch_autoheal_worker() {
     return 0
 }
 
+# 자가치유 결과를 deploy_runs 에 남긴다.
+# 기존에는 escalate 가 로그·audit_control·텔레그램에만 찍혀서,
+# 대시보드/DB 만 보는 쪽에서는 "왜 멈췄고 재개는 시도했는지" 를 알 수 없었다.
+# (2026-09-13 #376: error_summary 가 "insufficient build disk" 한 줄뿐이었다)
+autoheal_record_outcome() {
+    local outcome="${1:-}"
+    local cause="${2:-unknown}"
+    local detail="${3:-}"
+    [[ -n "${DEPLOY_RUN_ID:-}" ]] || return 0
+    deploy_db_available || return 0
+    local note_sql
+    note_sql="$(sql_escape "autoheal ${outcome}: cause=${cause}; remediation=${AUTOHEAL_LAST_REMEDIATION}; ${detail}")"
+    deploy_db_exec "
+        UPDATE deploy_runs
+           SET error_summary = CONCAT_WS(' | ', NULLIF(error_summary, ''), '${note_sql}'),
+               updated_at = NOW()
+         WHERE id = ${DEPLOY_RUN_ID};
+    " >/dev/null 2>&1 || true
+}
+
 autoheal_escalate() {
     local cause="${1:-unknown}"
     local reason="${2:-}"
     autoheal_log "🚨 자동 복구 불가 — CEO 에스컬레이션: cause=${cause}, reason=${reason}"
+    autoheal_record_outcome "escalated" "$cause" "reason=${reason}"
     audit_control "autoheal" "deploy_runs:${DEPLOY_RUN_ID:-none}" "escalated" \
         "cause=${cause}; reason=${reason}; release=${AADS_RELEASE_SHA:-unknown}" || true
     # notify() 는 deploy.sh 뒷부분에서 정의된다. preflight 단계 실패 시점에는

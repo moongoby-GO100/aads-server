@@ -98,15 +98,21 @@ require_build_disk_free() {
     avail_kb="$(df -Pk "$check_path" | awk 'NR == 2 {print $4}')"
     if [[ ! "$avail_kb" =~ ^[0-9]+$ ]]; then
         echo "[deploy.sh] ❌ cannot read available disk for ${check_path}"
+        # AADS-191 후속: 실측 수치를 DB error_summary 까지 끌고 간다.
+        # 기존에는 "insufficient build disk" 7글자만 남아서 대시보드에서
+        # "얼마나 모자란지" 를 알 수 없었고, 매번 로그 파일을 열어야 했다.
+        DEPLOY_DISK_FAIL_DETAIL="cannot read available disk for ${check_path}"
         audit_control "build-disk-preflight" "$check_path" "failed" "available_kb=unknown"
         return 1
     fi
     if [[ "$avail_kb" -lt "$min_free_kb" ]]; then
         echo "[deploy.sh] ❌ build disk preflight failed: ${check_path} available=$((avail_kb / 1024))MB, required=$((min_free_kb / 1024))MB"
         echo "[deploy.sh]    Free Docker space before retrying; this avoids slow builds that fail during image export."
+        DEPLOY_DISK_FAIL_DETAIL="${check_path} available=$((avail_kb / 1024))MB, required=$((min_free_kb / 1024))MB, short=$(((min_free_kb - avail_kb) / 1024))MB"
         audit_control "build-disk-preflight" "$check_path" "blocked" "available_kb=${avail_kb}; required_kb=${min_free_kb}"
         return 1
     fi
+    DEPLOY_DISK_FAIL_DETAIL=""
     echo "[deploy.sh] ✅ build disk preflight: ${check_path} available=$((avail_kb / 1024))MB, required=$((min_free_kb / 1024))MB"
     audit_control "build-disk-preflight" "$check_path" "success" "available_kb=${avail_kb}; required_kb=${min_free_kb}"
 }
@@ -1500,8 +1506,12 @@ if ! reject_duplicate_live_release; then
 fi
 prune_old_release_images
 if ! require_build_disk_free; then
-    deploy_phase_end "preflight" "blocked" "insufficient build disk"
-    record_deploy "blocked" "$MODE" "insufficient build disk"
+    disk_reason="insufficient build disk"
+    if [[ -n "${DEPLOY_DISK_FAIL_DETAIL:-}" ]]; then
+        disk_reason="insufficient build disk (${DEPLOY_DISK_FAIL_DETAIL})"
+    fi
+    deploy_phase_end "preflight" "blocked" "$disk_reason"
+    record_deploy "blocked" "$MODE" "$disk_reason"
     exit 1
 fi
 

@@ -283,3 +283,54 @@ def test_error_trap_preserves_specific_failure_reason():
     src = DEPLOY_SH.read_text(encoding="utf-8", errors="ignore")
     assert 'local last_fail="${DEPLOY_LAST_FAIL_ERROR:-}"' in src
     assert 'record_deploy "failed" "$MODE" "$detail"' in src
+
+
+def test_disk_preflight_records_measured_numbers():
+    """디스크 차단 사유에 실측 수치(available/required/short)가 들어가야 한다.
+
+    #376(2026-09-13 08:50 KST)은 error_summary 가 'insufficient build disk'
+    한 줄뿐이어서 얼마나 모자란지 로그 파일을 열어야만 알 수 있었다.
+    """
+    src = DEPLOY_SH.read_text(encoding="utf-8", errors="ignore")
+    assert "DEPLOY_DISK_FAIL_DETAIL=" in src
+    assert "short=$(((min_free_kb - avail_kb) / 1024))MB" in src
+    assert 'disk_reason="insufficient build disk (${DEPLOY_DISK_FAIL_DETAIL})"' in src
+    assert 'record_deploy "blocked" "$MODE" "$disk_reason"' in src
+
+
+def test_disk_fail_detail_is_populated_on_block():
+    """require_build_disk_free 가 막을 때 실제로 detail 변수를 채우는지 실행 검증."""
+    script = (
+        'set -uo pipefail\n'
+        'audit_control() { :; }\n'
+        'build_disk_check_path() { echo "/"; }\n'
+        f'source <(sed -n "/^require_build_disk_free()/,/^}}/p" "{DEPLOY_SH}")\n'
+        'AADS_DEPLOY_MIN_FREE_GB=999999\n'
+        'require_build_disk_free >/dev/null 2>&1\n'
+        'echo "DETAIL=${DEPLOY_DISK_FAIL_DETAIL:-EMPTY}"\n'
+    )
+    proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+    assert "available=" in proc.stdout
+    assert "required=" in proc.stdout
+    assert "short=" in proc.stdout
+
+
+def test_autoheal_escalation_is_recorded_in_db():
+    """에스컬레이션 결과가 deploy_runs.error_summary 에 남아야 한다.
+
+    로그·audit_control·텔레그램에만 남기면 대시보드/DB 를 보는 쪽에서는
+    '재개를 시도했는지' 자체를 알 수 없다.
+    """
+    src = AUTOHEAL_LIB.read_text(encoding="utf-8", errors="ignore")
+    assert "autoheal_record_outcome()" in src
+    assert 'autoheal_record_outcome "escalated"' in src
+    assert "UPDATE deploy_runs" in src
+    assert "CONCAT_WS(' | '" in src
+
+
+def test_autoheal_record_outcome_noop_without_run_id():
+    """DEPLOY_RUN_ID 가 없으면 DB 를 건드리지 않고 조용히 끝나야 한다."""
+    env_prefix = 'DEPLOY_RUN_ID=""\n'
+    out = _call('autoheal_record_outcome "escalated" "disk_full" "x" && echo "NOOP_OK"', env_prefix=env_prefix)
+    assert "NOOP_OK" in out
