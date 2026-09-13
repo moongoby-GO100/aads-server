@@ -2217,12 +2217,29 @@ async def call_stream(
             and s not in _quota_blocked
         ]
         _cooled = [s for s in _ACCOUNT_SLOTS if not _is_slot_available(s)]
-        # 여유 슬롯 → DB 레이트리밋 → 주간 소진 → 쿨다운 순
+        # 여유 슬롯이 하나라도 있으면 막힌 슬롯은 후보에서 뺀다.
+        #
+        # 위 주석대로 "소진된 계정은 아예 시도하지 않는다"가 설계 의도인데,
+        # 막힌 버킷을 뒤에 이어 붙이는 바람에 실제로는 늘 시도됐다. 복구 시각이
+        # 사흘 뒤인 슬롯을 시도하면 결과는 정해져 있고, 그 계정의 주간 한도
+        # 메시지가 최종 오류로 사용자에게 나간다. 2026-09-13 09:54 에 슬롯2 가
+        # 낡은 resume ID 로 한 번 실패하자 슬롯1(09-16 복구)로 내려가 "weekly
+        # limit · resets Sep 16" 이 채팅에 뜬 경로가 이것이다.
+        #
+        # 막힌 슬롯을 남기는 경우는 하나뿐이다 — 쓸 수 있는 슬롯이 아예 없을 때.
+        # 그때는 시도해야 정확한 한도 메시지를 사용자에게 보여줄 수 있다.
         _smart_slots = []
-        for _bucket in (_avail, _db_limited, _quota_exhausted, _cooled):
+        _buckets = (_avail,) if _avail else (_db_limited, _quota_exhausted, _cooled)
+        for _bucket in _buckets:
             for _s in _bucket:
                 if _s not in _smart_slots:
                     _smart_slots.append(_s)
+        if _avail and (_db_limited or _quota_exhausted or _cooled):
+            logger.info(
+                "slot_blocked_skip: 여유=%s 제외=%s",
+                ",".join(_avail),
+                ",".join(sorted(set(_db_limited + _quota_exhausted + _cooled))),
+            )
 
         _auth_failed_slots = set()
 
@@ -2235,6 +2252,7 @@ async def call_stream(
 
                 _err = False
                 _err_msg = ""
+                _yielded = 0
                 async for event in _stream_cli_relay(_target_model, system_prompt, messages, tools=tools, session_id=session_id, oauth_slot=_slot):
                     if event.get("type") == "error":
                         _err = True
@@ -2250,7 +2268,28 @@ async def call_stream(
                         elif _is_cli_auth_error(_err_msg):
                             _auth_failed_slots.add(_slot)
                         break
+                    _yielded += 1
                     yield event
+
+                # 낡은 resume ID 는 계정 문제가 아니므로 슬롯을 바꾸지 않는다.
+                # 릴레이가 방금 그 매핑을 지웠으니 같은 슬롯으로 다시 부르면 새
+                # CLI 세션으로 나간다. CLI 는 찾지 못한 세션에 대해 아무것도
+                # 출력하지 못하고 죽으므로(_yielded == 0) 재시도가 내용을
+                # 중복시키지 않는다. 이 조건이 성립할 때만 재시도한다.
+                if _err and _yielded == 0 and _is_stale_resume_error(_err_msg):
+                    logger.info("stale_resume_retry: slot=%s model=%s", _slot, _target_model)
+                    _err = False
+                    _err_msg = ""
+                    async for event in _stream_cli_relay(_target_model, system_prompt, messages, tools=tools, session_id=session_id, oauth_slot=_slot):
+                        if event.get("type") == "error":
+                            _err = True
+                            _err_msg = event.get("content", "")
+                            logger.warning(
+                                "stale_resume_retry_failed: slot=%s — %s", _slot, _err_msg[:80]
+                            )
+                            break
+                        yield event
+
                 if not _err:
                     return
 
@@ -3497,6 +3536,19 @@ _CODEX_NON_RETRYABLE_ERROR_MARKERS = _RELAY_NON_RETRYABLE_ERROR_MARKERS
 
 def _is_cli_auth_error(error_content: str) -> bool:
     return _classify_claude_auth_error(error_content) != "error"
+
+
+def _is_stale_resume_error(error_content: str) -> bool:
+    """CLI 가 --resume 대상 세션을 못 찾은 경우인지.
+
+    "No conversation found with session ID: ..." 는 계정 문제가 아니라 릴레이가
+    들고 있던 CLI 세션 매핑이 낡아서 생긴다. 컨테이너 교체나 CLI 세션 만료로
+    매핑만 남고 실제 대화가 사라지면 나온다. 이때 계정을 갈아타면 소진된 슬롯까지
+    내려가 엉뚱한 한도 메시지가 사용자에게 나간다(2026-09-13 09:54 실측).
+    같은 슬롯에서 --resume 없이 다시 붙는 것이 옳은 대응이다.
+    """
+    lowered = str(error_content or "").lower()
+    return "no conversation found" in lowered and "session id" in lowered
 
 
 def _is_relay_retryable_error(error_content: str) -> bool:
