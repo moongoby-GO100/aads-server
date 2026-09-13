@@ -251,6 +251,35 @@ def assign_timestamps(rows: list[dict], path: Path) -> None:
         row["created_at"] = ts.isoformat()
 
 
+# 사용자가 쓴 말이 아닌 첫 행들. 제목으로 뽑으면 세션을 구분할 수 없다.
+_NOT_USER_SPEECH = (
+    "<local-command", "<command-name>", "<command-message>", "<command-args>",
+    "<environment_context>", "<system-reminder>", "Caveat:",
+    "This session is being continued", "<user-prompt-submit-hook>",
+    "<task-notification>", "[SYSTEM NOTIFICATION",
+)
+
+
+def pick_title(rows: list[dict]) -> str:
+    """세션 제목을 고른다. 사람이 실제로 한 말 중 첫 줄이다.
+
+    예전에는 role=user 인 첫 행을 그대로 썼다. 그런데 터미널 세션의 첫 user
+    행은 거의 항상 슬래시 명령 에코나 caveat 블록이라, 목록이 전부
+    "<local-command-caveat>Caveat: The messag..." 로 찍혀 세션을 구분할 수
+    없었다(2026-09-13 실측: 402건 중 상위가 전부 이 형태).
+    """
+    for row in rows:
+        if row.get("role") != "user":
+            continue
+        text = str(row.get("content") or "").strip()
+        if not text or text.startswith(_NOT_USER_SPEECH):
+            continue
+        line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+        if line:
+            return line[:120]
+    return "terminal session"
+
+
 def message_inserts(aads_session: str, rows: list[dict]) -> list[str]:
     return [
         "INSERT INTO chat_messages "
@@ -329,8 +358,7 @@ def main() -> int:
             return 0
 
         aads_session = str(uuid.uuid4())
-        first_user = next((r["content"] for r in rows if r["role"] == "user"), "terminal session")
-        title = (first_user.splitlines()[0] or "terminal session")[:120]
+        title = pick_title(rows)
 
         stmts = [
             "BEGIN;",
