@@ -14166,3 +14166,34 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   (`074785c8` content_version 1490@23:20 → 1509@23:29, 약 2회/분).
   178 적용 후 outbox 총량이 21~35행/분으로 떨어져 영향은 제한적이나, 원인 경로
   (`is_hidden=FALSE` 복원 statement)는 앱 코드 수정이 필요해 별도 과제로 남긴다.
+
+## 2026-09-13 23:25 KST — chat_outbox 무한증식 차단(migration 178) + 보존 스윕
+
+- **증상**: WP04 `chat_outbox`가 소비자 0건(v2 게이트 7/7 false)인데도 13.5시간 만에
+  942,611행 / 698MB까지 증가. 5개월 전(4/3) 메시지 1건이 단독으로 이벤트 1,489개를 생성.
+- **원인 확정**: migration 174의 `AFTER UPDATE OF ...` 트리거는 **값이 같아도 SET 목록에
+  컬럼이 있으면 발화**한다. 유지보수 스윕(`chat_service.py:3244` 외)이 동일 값을 반복
+  기록하면서 outbox만 계속 쌓였다. 증거 —
+  `BEGIN; UPDATE chat_messages SET is_hidden=is_hidden, content=content ...;` 실행 시
+  `content_version`은 1490 그대로인데 outbox는 1489→1490으로 +1 (ROLLBACK으로 검증).
+- **조치**:
+  1. `migrations/178_chat_outbox_noop_suppression_and_retention.sql` — 트리거 함수에
+     일반 no-op 가드 추가(추적 컬럼이 실제로 안 바뀐 UPDATE는 revision/outbox 생성 안 함).
+     4개 테이블(messages/sessions/turn_executions/artifacts) 전부 적용. 174의
+     streaming_placeholder 가드는 그대로 유지.
+  2. `aads_chat_outbox_prune(INTERVAL, batch, max_batches)` 보존 함수 신설.
+     read model은 커서가 보존 구간보다 오래되면 `snapshot_required`로 폴백하므로
+     (`chat_read_model.py:847`) 오래된 이벤트 삭제는 정합성을 깨지 않는다.
+  3. `scripts/chat_outbox_prune.sh` + root crontab `*/5` 등록(보존 2시간).
+     로그 `/var/log/aads-chat-outbox-prune.log`, crontab 백업 `/root/crontab.bak.20260913`.
+- **검증(실측)**: 적용 전 702행/분 → 적용 후 **21~22행/분 (-97%)**. 초기 정리에서
+  805,489행 삭제(잔여 148,089 = 최근 2시간분). no-op UPDATE +0행 / 실제 변경 +1행 확인.
+  `scripts/run_unit_tests.sh tests/unit/test_tools_and_pipeline.py` **64 passed**.
+  API health-check HTTP 200.
+- **앱 재배포 없음** — 트리거 함수 교체라 테이블 잠금·컨테이너 재시작 불필요.
+  롤백은 174의 함수 본문 재적용 + `DROP FUNCTION aads_chat_outbox_prune` + crontab 행 삭제.
+- **미해결(후속 과제)**: 짧은 assistant 메시지가 숨김↔표시로 왕복하는 앱 레벨 핑퐁이 남아 있다
+  (`stale_empty_placeholder`로 숨기는 스윕과 `is_hidden=FALSE`로 되돌리는 경로의 충돌).
+  outbox 증식은 178로 막았으나 왕복 자체는 앱 코드 수정(=이미지 재빌드)이 필요해 분리한다.
+  이 스윕은 `chat_messages` 풀스캔이라 pg_stat_activity 표본의 6%를 점유하고 autovacuum을
+  상시 유발한다 — 부분 인덱스 + 핑퐁 차단을 묶어 별도 작업으로 제출할 것.
