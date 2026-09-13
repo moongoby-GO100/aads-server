@@ -1280,7 +1280,11 @@ async def get_directives(project: Optional[str] = None):
         },
         "project_breakdown": by_project,
         "by_project": by_project,
-        "items": unique_directives,      # T-072: items 키 추가 (별칭)
+        # T-072 가 추가한 "items" 별칭은 제거했다. JSON 에는 참조가 없어서 같은
+        # 리스트를 두 키에 담으면 바이트가 그대로 두 배가 된다 — 응답 1,551,804B
+        # 중 715,302B 가 이 사본이었다(2026-09-13 프론트 진단기 실측).
+        # /tasks 가 30초마다 이 응답을 다시 받으므로 파싱 비용이 계속 이중으로
+        # 든다. 대시보드는 "directives" 만 읽는다(tasks/page.tsx:486,534).
         "directives": unique_directives,
     }
 

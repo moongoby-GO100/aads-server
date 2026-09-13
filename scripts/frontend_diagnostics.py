@@ -59,7 +59,8 @@ BUDGET = {
     "lcp_ms":         (2500, 4000),
     "data_wait_ms":   (1000, 3000),
     "api_slowest_ms": (800, 2500),
-    "transfer_bytes": (2 * 1024 * 1024, 5 * 1024 * 1024),
+    # 압축 해제 후 크기. 대역폭이 아니라 브라우저의 파싱·메모리 비용을 본다.
+    "payload_bytes":  (2 * 1024 * 1024, 5 * 1024 * 1024),
 }
 # 런타임 오류는 경고 단계를 두지 않는다. 예외 하나면 그 화면은 이미 깨진 것이다.
 API_RESPONSE_WARN = 512 * 1024
@@ -106,13 +107,19 @@ COLLECT_SCRIPT = """
   const nav = performance.getEntriesByType('navigation')[0] || {};
   const paints = {};
   for (const p of performance.getEntriesByType('paint')) paints[p.name] = p.startTime;
+  // transferSize(실제 전송) 와 decodedBodySize(압축 해제 후) 는 다르다.
+  // zstd/brotli 로 나가면 transferSize 가 0 으로 오고 encoded 도 decoded 와
+  // 같아져서, 셋을 합쳐 쓰면 압축 전 크기를 "전송량"으로 오해한다
+  // (2026-09-13: /dashboard/directives 를 1.55MB 전송이라고 적었는데 실제
+  //  전송은 126KB 였다). 따로 담고 판정에서 구분해 쓴다.
   const res = performance.getEntriesByType('resource').map(r => ({
     name: r.name,
     kind: r.initiatorType,
     start: r.startTime,
     end: r.responseEnd,
     dur: r.duration,
-    bytes: r.transferSize || r.encodedBodySize || 0,
+    wire: r.transferSize || 0,
+    payload: r.decodedBodySize || r.encodedBodySize || 0,
   }));
   const bodyText = (document.body && document.body.innerText || '').slice(0, 4000);
   // 조작 대상인데 보이지 않는 요소 — 눌러도 반응이 없다.
@@ -135,7 +142,8 @@ COLLECT_SCRIPT = """
     ttfb: nav.responseStart || 0,
     dcl: nav.domContentLoadedEventEnd || 0,
     load: nav.loadEventEnd || 0,
-    docBytes: nav.transferSize || 0,
+    docWire: nav.transferSize || 0,
+    docPayload: nav.decodedBodySize || nav.encodedBodySize || 0,
     fcp: paints['first-contentful-paint'] || 0,
     lcp: window.__lcp || 0,
     resources: res,
@@ -306,8 +314,12 @@ def diagnose_page(ctx, route: str, timeout_ms: int) -> dict:
     result["lcp_ms"] = raw.get("lcp") or 0
 
     resources = raw.get("resources") or []
-    result["transfer_bytes"] = int(raw.get("docBytes") or 0) + sum(
-        int(r.get("bytes") or 0) for r in resources)
+    # payload_bytes — 압축 해제 후 크기. 대역폭이 아니라 **파싱·메모리·렌더 비용**이다.
+    # wire_bytes — 실제 전송량. 압축 방식에 따라 0 으로 오므로 없을 수 있다.
+    result["payload_bytes"] = int(raw.get("docPayload") or 0) + sum(
+        int(r.get("payload") or 0) for r in resources)
+    wire = int(raw.get("docWire") or 0) + sum(int(r.get("wire") or 0) for r in resources)
+    result["wire_bytes"] = wire or None
 
     # ── 데이터 로딩 ────────────────────────────────────────────────
     api_calls = []
@@ -320,7 +332,8 @@ def diagnose_page(ctx, route: str, timeout_ms: int) -> dict:
             "start": float(r.get("start") or 0),
             "end": float(r.get("end") or 0),
             "dur": float(r.get("dur") or 0),
-            "bytes": int(r.get("bytes") or 0),
+            "bytes": int(r.get("payload") or 0),
+            "wire": int(r.get("wire") or 0),
         })
     api_calls.sort(key=lambda c: c["start"])
     result["api_calls"] = api_calls
@@ -465,12 +478,12 @@ def evaluate_page(page: dict, baseline: dict | None) -> tuple[str, list[dict]]:
     for call in page.get("api_calls", []):
         if call["bytes"] >= API_RESPONSE_FAIL:
             findings.append({"severity": "major", "category": "payload",
-                             "title": f"과대 응답 {call['bytes']:,}B — {call['url']}",
+                             "title": f"과대 응답 {call['bytes']:,}B(압축 전) — {call['url']}",
                              "evidence": call})
             bump("fail")
         elif call["bytes"] >= API_RESPONSE_WARN:
             findings.append({"severity": "minor", "category": "payload",
-                             "title": f"큰 응답 {call['bytes']:,}B — {call['url']}",
+                             "title": f"큰 응답 {call['bytes']:,}B(압축 전) — {call['url']}",
                              "evidence": call})
             bump("warn")
 
@@ -555,11 +568,11 @@ def store(run_id: str, mode: str, release: str, pages: list[dict],
         }
         stmts.append(
             "INSERT INTO frontend_diagnostic_pages (run_id, route, status, ttfb_ms, dcl_ms, fcp_ms, "
-            "lcp_ms, load_ms, transfer_bytes, api_calls, api_total_ms, api_slowest_ms, api_slowest_url, "
+            "lcp_ms, load_ms, payload_bytes, wire_bytes, api_calls, api_total_ms, api_slowest_ms, api_slowest_url, "
             "data_wait_ms, serial_chain_ms, console_errors, page_errors, failed_requests, detail) VALUES ("
             f"{lit(run_id)}::uuid, {lit(p['route'])}, {lit(p['status'])}, {num(p.get('ttfb_ms'))}, "
             f"{num(p.get('dcl_ms'))}, {num(p.get('fcp_ms'))}, {num(p.get('lcp_ms'))}, {num(p.get('load_ms'))}, "
-            f"{num(p.get('transfer_bytes'))}, {len(p.get('api_calls', []))}, {num(p.get('api_total_ms'))}, "
+            f"{num(p.get('payload_bytes'))}, {num(p.get('wire_bytes'))}, {len(p.get('api_calls', []))}, {num(p.get('api_total_ms'))}, "
             f"{num(p.get('api_slowest_ms'))}, {lit(p.get('api_slowest_url'))}, {num(p.get('data_wait_ms'))}, "
             f"{num(p.get('serial_chain_ms'))}, {len(p.get('console_errors', []))}, "
             f"{len(p.get('page_errors', []))}, {len(p.get('failed_requests', []))}, "

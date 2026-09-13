@@ -395,12 +395,47 @@ async def _fetch_last_registry_sync() -> dict[str, Any] | None:
     }
 
 
+# 모델 선택기가 실제로 읽는 필드. 채팅 페이지는 이 목록으로 드롭다운 하나를
+# 채우는데, 전체 응답은 1,005,630B 였고 그중 599,688B(60%)가 metadata 였다
+# (2026-09-13 프론트 진단기 실측, 모델 524건). 선택기는 metadata 에서
+# alias_of 와 model_source 두 키만 본다.
+_SELECTOR_FIELDS = (
+    "provider", "model_id", "display_name", "input_cost", "output_cost",
+    "is_active", "is_selectable", "is_executable",
+)
+_SELECTOR_METADATA_KEYS = ("alias_of", "model_source")
+
+
+def _slim_for_selector(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """선택기에 필요한 만큼만 남긴다.
+
+    필드를 지우는 게 아니라 **고르는** 방식이다. 레지스트리에 새 필드가 생겨도
+    선택기 응답이 조용히 불어나지 않는다.
+    """
+    out: list[dict[str, Any]] = []
+    for row in models:
+        item = {key: row.get(key) for key in _SELECTOR_FIELDS if key in row}
+        meta = row.get("metadata")
+        if isinstance(meta, str):
+            meta = _coerce_json_object(meta)
+        if isinstance(meta, dict):
+            trimmed = {k: meta[k] for k in _SELECTOR_METADATA_KEYS if k in meta}
+            if trimmed:
+                item["metadata"] = trimmed
+        out.append(item)
+    return out
+
+
 @router.get("")
 async def list_llm_models(
     provider: str | None = Query(None),
     active_only: bool = Query(False),
+    view: str = Query("full", description="full | selector — selector 는 모델 선택기용 축약"),
 ) -> dict[str, Any]:
     models = await list_registered_models(provider=provider, active_only=active_only)
+    # 기본값은 full 이다. 관리 화면 등 기존 호출부의 응답을 바꾸지 않는다.
+    if str(view or "").strip().lower() == "selector":
+        models = _slim_for_selector(models)
     return {"models": models, "total": len(models)}
 
 
