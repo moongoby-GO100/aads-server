@@ -42,7 +42,23 @@ def build_e2e_config(session_id: str | None = None) -> dict[str, Any]:
             "headless_fallback": True,
         }
 
+    # 환경변수가 비어 있으면 기본 경로를 본다.
+    #
+    # 시각 QA 브라우저가 인증 없이 페이지를 열어, /, /chat, /ops 세 장이 전부
+    # 로그인 화면이었다(2026-09-13 실측: 스크린샷 4장이 23,241바이트로 바이트
+    # 동일, 감리 요약도 "로그인 UI"라고 적었다). 캡처 스크립트는 storage_state
+    # 를 이미 지원하는데 아무도 넘겨주지 않았을 뿐이다.
+    #
+    # 환경변수로만 받으면 docker-compose 를 고쳐야 하고 그건 재시작을 부른다.
+    # browser-bridge-state 는 이미 붙어 있는 쓰기 가능 마운트이므로, 거기
+    # 파일이 있으면 쓴다. scripts/refresh_qa_storage_state.py 가 QA 직전에
+    # 이 파일을 새로 만든다 — 토큰이 만료되면 조용히 로그인 화면으로
+    # 되돌아가므로 크론이 아니라 QA 직전 갱신이어야 한다.
     storage_state = os.environ.get("AADS_BROWSER_BRIDGE_STORAGE_STATE", "").strip()
+    if not storage_state:
+        _default_state = "/app/browser-bridge-state/qa-storage-state.json"
+        if Path(_default_state).is_file():
+            storage_state = _default_state
     if storage_state and Path(storage_state).is_file():
         return {
             "mode": "storage_state",
