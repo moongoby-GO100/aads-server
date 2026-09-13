@@ -267,7 +267,10 @@ function render(list) {
   document.getElementById('content').innerHTML = html;
 }
 
-mergeAutoEducationDocs().finally(() => {
+updateStats();
+filterDocs();
+
+mergeAutoEducationDocs().then(() => {
   updateStats();
   filterDocs();
 });
