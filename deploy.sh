@@ -1888,7 +1888,12 @@ sync_standby_slot_after_drain() {
             set_deploy_stream_phase_metadata "$old_container" "$old_port" "${active:-unknown}" "$elapsed" "$drain_max"
             echo "[deploy.sh] standby sync BLOCKED: ${old_container}:${old_port} still has active streams=${active}; release not certified"
             audit_control "standby-sync" "${old_container}:${old_port}" "blocked" "drain timeout active=${active}; same-digest certification withheld"
-            return 1
+            # 진짜 동기화 실패와 구분한다. 여기까지 왔다는 것은 컷오버가 이미
+            # 성공해 새 릴리스가 트래픽을 받고 있다는 뜻이고, 남은 것은 대기
+            # 슬롯이 구버전이라는 사실뿐이다. 이를 배포 전체 실패로 기록하면
+            # 성공률이 실제보다 낮게 보이고 자가치유가 헛된 재시도를 건다
+            # (2026-09-13: 이 사유로 3건이 failed 로 집계됐다).
+            return 2
         fi
         set_deploy_stream_phase_metadata "$old_container" "$old_port" "${active:-0}" "$elapsed" "$drain_max"
 
@@ -2371,13 +2376,28 @@ case "$MODE" in
         docker exec "$NEW_CONTAINER" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         docker exec "$OLD_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         release_nginx_switch_lock
-        if ! sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT" "$DEPLOY_GENERATION"; then
-            notify "❌ Blue-Green 인증 실패: standby same-digest 동기화 실패"
-            deploy_phase_end "standby_same_digest_sync" "failed" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}"
-            record_deploy "failed" "$MODE" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}"
-            exit 1
-        fi
-        deploy_phase_end "standby_same_digest_sync" "success" ""
+        STANDBY_SYNC_DEFERRED=false
+        sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT" "$DEPLOY_GENERATION" || _standby_rc=$?
+        case "${_standby_rc:-0}" in
+            0)
+                deploy_phase_end "standby_same_digest_sync" "success" ""
+                ;;
+            2)
+                # 활성 스트림이 남아 드레인하지 못한 경우. 진행 중인 대화를 끊지
+                # 않으려는 의도된 동작이며 서비스에는 영향이 없다. 배포를 여기서
+                # 중단하지 않고 검증을 계속한 뒤 success_partial 로 닫는다.
+                STANDBY_SYNC_DEFERRED=true
+                notify "⚠️ standby 동기화 보류: 활성 스트림 때문에 ${OLD_CONTAINER} 가 구버전으로 남음"
+                deploy_phase_end "standby_same_digest_sync" "skipped" "deferred: active streams on ${OLD_CONTAINER}:${OLD_PORT}"
+                echo "[deploy.sh] ⚠️ standby 동기화 보류 — 활성 슬롯은 새 릴리스로 정상 동작"
+                ;;
+            *)
+                notify "❌ Blue-Green 인증 실패: standby same-digest 동기화 실패"
+                deploy_phase_end "standby_same_digest_sync" "failed" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}"
+                record_deploy "failed" "$MODE" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}"
+                exit 1
+                ;;
+        esac
 
         HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"
         echo "[deploy.sh] ✅ Blue-Green active 전환 + standby same-digest 동기화 완료: :${NEW_PORT} 활성"
@@ -2604,7 +2624,13 @@ for _final_try in 1 2 3; do
     echo "[deploy.sh] ⚠️ final success DB update retry ${_final_try}/3 (got status=${_final_status:-empty})"
     sleep 2
 done
-record_deploy "success" "$MODE" ""
+if [[ "${STANDBY_SYNC_DEFERRED:-false}" == "true" ]]; then
+    # 트래픽은 새 릴리스가 받고 있으나 대기 슬롯이 구버전이다. 폴백이 일어나면
+    # 이번 수정이 빠진 이미지로 돌아가므로, 성공과는 구분해 남긴다.
+    record_deploy "success_partial" "$MODE" "standby sync deferred: active streams"
+else
+    record_deploy "success" "$MODE" ""
+fi
 # RC8: ensure final success persisted — override stale_auto if deploy_db_exec failed mid-run
 for _final_retry in 1 2 3; do
     deploy_db_exec "UPDATE deploy_runs SET status='success', phase='completed', updated_at=NOW(), last_heartbeat_at=NOW(), error_summary=NULL WHERE id=${DEPLOY_RUN_ID} AND status != 'success';" >/dev/null 2>&1 && break

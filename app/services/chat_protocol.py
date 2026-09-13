@@ -144,25 +144,84 @@ def compare_redis_event_ids(left: str, right: str) -> int:
     return (left_parts > right_parts) - (left_parts < right_parts)
 
 
-def chat_protocol_capabilities() -> dict[str, Any]:
-    """Return the stable, additive capability advertisement."""
+CHAT_PROTOCOL_V2_CAPABILITY = "chat.protocol.v2"
+_PROTOCOL_V2_FLAG_ENV = "AADS_CHAT_PROTOCOL_V2_ENABLED"
+_PROTOCOL_V2_BROWSER_CONTRACT_ENV = "AADS_CHAT_V2_BROWSER_CONTRACT_VERIFIED"
+_BASE_CHAT_CAPABILITIES = (
+    "chat.event_envelope.v2",
+    "chat.snapshot_coverage.v2",
+    "chat.server_high_watermark.v2",
+    "chat.applied_cursor.v2",
+    "chat.transport_execution_separation.v2",
+    "chat.read_model.v2",
+    "chat.composite_cursor.v2",
+    "chat.revision_outbox.v2",
+    "chat.explicit_fenced_repair.v2",
+    "chat.command_lifecycle.v2",
+    "chat.command_idempotency.v2",
+    "chat.generation_identity.v2",
+    "chat.legacy_sse.v1",
+)
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").lower() in {"1", "true", "yes", "on"}
+
+
+def chat_protocol_v2_activation_gates() -> dict[str, bool]:
+    """Report each operational gate that must pass before v2 may go live.
+
+    The browser only switches adapters when the server advertises
+    ``chat.protocol.v2``; every gate is operator-controlled, so an unset
+    environment keeps the legacy v1 contract byte-for-byte unchanged.
+    """
     from app.services.chat_commands import wp05_migration_ready
     from app.services.chat_read_model import (
         chat_cursor_secret_configured,
+        wp04_read_model_activation_ready,
+    )
+
+    return {
+        "chat.protocol_v2 feature flag": _env_flag(_PROTOCOL_V2_FLAG_ENV),
+        "wp04_read_model_migration": wp04_read_model_activation_ready(),
+        "dedicated_cursor_hmac_secret": chat_cursor_secret_configured(),
+        "wp04_cross_version_contract_tests": _env_flag(
+            "AADS_CHAT_WP04_CROSS_VERSION_READY"
+        ),
+        "atomic_snapshot_checkpoint": _env_flag("AADS_CHAT_WP04_MIGRATION_READY"),
+        "stable_generation_identity": wp05_migration_ready(),
+        "cross_version_browser_contract_tests": _env_flag(
+            _PROTOCOL_V2_BROWSER_CONTRACT_ENV
+        ),
+    }
+
+
+def chat_protocol_v2_activation_ready() -> bool:
+    """True only when every activation gate passes."""
+    return all(chat_protocol_v2_activation_gates().values())
+
+
+def advertised_chat_capabilities() -> list[str]:
+    """Capability strings a client may act on, computed from live gates."""
+    capabilities = list(_BASE_CHAT_CAPABILITIES)
+    if chat_protocol_v2_activation_ready():
+        capabilities.append(CHAT_PROTOCOL_V2_CAPABILITY)
+    return capabilities
+
+
+def chat_protocol_capabilities() -> dict[str, Any]:
+    """Return the stable, additive capability advertisement."""
+    from app.services.chat_read_model import (
         chat_cursor_ttl_seconds,
         wp04_read_model_activation_ready,
     )
 
-    migration_ready = os.getenv("AADS_CHAT_WP04_MIGRATION_READY", "").lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    cross_version_ready = os.getenv(
-        "AADS_CHAT_WP04_CROSS_VERSION_READY", ""
-    ).lower() in {"1", "true", "yes"}
-    cursor_secret_ready = chat_cursor_secret_configured()
-    command_lifecycle_ready = wp05_migration_ready()
+    gates = chat_protocol_v2_activation_gates()
+    protocol_v2_ready = all(gates.values())
+    migration_ready = gates["atomic_snapshot_checkpoint"]
+    cross_version_ready = gates["wp04_cross_version_contract_tests"]
+    cursor_secret_ready = gates["dedicated_cursor_hmac_secret"]
+    command_lifecycle_ready = gates["stable_generation_identity"]
     return {
         "contract_version": CHAT_CONTRACT_V2,
         "default_contract_version": DEFAULT_CHAT_CONTRACT_VERSION,
@@ -170,31 +229,13 @@ def chat_protocol_capabilities() -> dict[str, Any]:
         "event_schema_version": CHAT_EVENT_SCHEMA_VERSION,
         # Global protocol readiness also depends on later browser/generation
         # gates advertised below; WP04 exposes its narrower readiness separately.
-        "production_ready": False,
-        "activation_requires": [
-            "chat.protocol_v2 feature flag",
-            "wp04_read_model_migration",
-            "dedicated_cursor_hmac_secret",
-            "wp04_cross_version_contract_tests",
-            "atomic_snapshot_checkpoint",
-            "stable_generation_identity",
-            "cross_version_browser_contract_tests",
+        "production_ready": protocol_v2_ready,
+        "activation_requires": list(gates.keys()),
+        "activation_gates": dict(gates),
+        "pending_activation_requires": [
+            name for name, passed in gates.items() if not passed
         ],
-        "capabilities": [
-            "chat.event_envelope.v2",
-            "chat.snapshot_coverage.v2",
-            "chat.server_high_watermark.v2",
-            "chat.applied_cursor.v2",
-            "chat.transport_execution_separation.v2",
-            "chat.read_model.v2",
-            "chat.composite_cursor.v2",
-            "chat.revision_outbox.v2",
-            "chat.explicit_fenced_repair.v2",
-            "chat.command_lifecycle.v2",
-            "chat.command_idempotency.v2",
-            "chat.generation_identity.v2",
-            "chat.legacy_sse.v1",
-        ],
+        "capabilities": advertised_chat_capabilities(),
         "event_envelope": {
             "schema_version": CHAT_EVENT_SCHEMA_VERSION,
             "required_fields": [
@@ -279,7 +320,7 @@ def chat_protocol_capabilities() -> dict[str, Any]:
             "fence_field": "owner_epoch",
             "generation_key": ["execution_id", "owner_epoch"],
             "migration_ready": command_lifecycle_ready,
-            "production_ready": False,
+            "production_ready": protocol_v2_ready,
         },
         "legacy_compatibility": {
             "default_contract_version": CHAT_CONTRACT_V1,

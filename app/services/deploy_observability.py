@@ -659,6 +659,7 @@ async def _load_project_deployments(
             "updated_at": None,
             "last_deploy_at": None,
             "last_success_sha": None,
+            "error_summary": None,
             "source": "none",
             "has_deploy_run": False,
             "has_pipeline_job": False,
@@ -676,7 +677,8 @@ async def _load_project_deployments(
                    id, upper(project) AS project,
                    status, phase, release_sha, requested_at, created_at,
                    phase_started_at, phase_completed_at, updated_at,
-                   duration_ms, release_title, release_summary, request_payload
+                   duration_ms, error_summary,
+                   release_title, release_summary, request_payload
               FROM deploy_runs
              WHERE upper(project) = ANY($1::text[])
              ORDER BY upper(project),

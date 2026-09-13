@@ -176,6 +176,9 @@ class StreamingStatusOut(BaseModel):
     completion_token: Optional[str] = None
     final_message_id: Optional[str] = None
     final_message_ready: bool = False
+    # Advertised chat protocol capabilities; clients only switch adapters when
+    # "chat.protocol.v2" is present, so an empty/legacy list keeps v1 behaviour.
+    capabilities: List[str] = Field(default_factory=list)
 
 
 class ChatEventEnvelopeV2(BaseModel):
@@ -203,6 +206,8 @@ class ChatProtocolCapabilitiesOut(BaseModel):
     event_schema_version: Literal[2] = 2
     production_ready: bool = False
     activation_requires: List[str] = Field(default_factory=list)
+    activation_gates: Dict[str, bool] = Field(default_factory=dict)
+    pending_activation_requires: List[str] = Field(default_factory=list)
     capabilities: List[str] = Field(default_factory=list)
     event_envelope: Dict[str, Any] = Field(default_factory=dict)
     resume_cursor: Dict[str, Any] = Field(default_factory=dict)
