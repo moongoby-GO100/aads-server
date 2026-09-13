@@ -420,7 +420,15 @@ deploy_autoheal_on_exit() {
     # 2026-09-13 #368/#370 실측: 릴리스 worktree 가 사라진 배포는 compose 파일을 못 열고
     # 매번 unexpected_exit 로 떨어져 수동 개입이 필요했다. 소스 디렉터리 실재 여부는
     # 에러 문자열보다 확실한 근거이므로 일반 분류를 이 판정으로 덮어쓴다.
-    if [[ "$cause" == "unexpected_exit" || "$cause" == "other" ]] && ! autoheal_source_dir_ok; then
+    # container_recreate_fail 도 포함한다. 2026-09-13 오전 분류 세분화(D6)로
+    # "unexpected error exit=... docker compose ..." 가 unexpected_exit 대신
+    # container_recreate_fail 로 잡히면서, 소스가 사라진 경우에도 이 보정이
+    # 걸리지 않게 됐다. 컨테이너 재생성을 재시도해도 compose 파일이 없으면
+    # 같은 실패가 반복될 뿐이다 — 워크트리 복구가 먼저다.
+    # 기존 테스트 2건이 이 회귀를 잡고 있었으나 pre-commit 게이트가 이 파일을
+    # 돌리지 않아 드러나지 않았다.
+    if [[ "$cause" == "unexpected_exit" || "$cause" == "other" || "$cause" == "container_recreate_fail" ]] \
+       && ! autoheal_source_dir_ok; then
         autoheal_log "릴리스 소스 부재 확인: ${COMPOSE_DIR:-unknown} — 분류를 source_dir_missing 으로 보정"
         cause="source_dir_missing"
     fi

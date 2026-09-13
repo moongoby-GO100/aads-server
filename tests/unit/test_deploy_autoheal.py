@@ -256,14 +256,21 @@ def test_missing_release_source_is_reclassified_and_retryable(tmp_path):
     assert "policy=retry" in out
 
 
-def test_present_release_source_keeps_unexpected_exit(tmp_path):
-    """소스가 멀쩡하면 기존 분류를 바꾸지 않는다(오탐 방지)."""
+def test_present_release_source_keeps_original_cause(tmp_path):
+    """소스가 멀쩡하면 source_dir_missing 보정을 걸지 않는다(오탐 방지).
+
+    2026-09-13 분류 세분화(D6) 이후 "unexpected error exit=... docker compose ..."
+    는 unexpected_exit 이 아니라 container_recreate_fail 로 잡힌다. 컷오버
+    이전이면 재시도할 값이 있는 실패라 별도 분류로 뺀 것이다. 이 테스트가
+    지키려는 것은 분류 이름이 아니라 "소스가 멀쩡하면 보정이 끼어들지 않는다"
+    이므로, 기대값만 현재 분류에 맞춘다.
+    """
     out = _call(
         "deploy_autoheal_on_exit",
         "1",
         env_prefix=_missing_source_env(tmp_path, str(REPO_ROOT)),
     )
-    assert "cause=unexpected_exit" in out
+    assert "cause=container_recreate_fail" in out
     assert "source_dir_missing" not in out
 
 
