@@ -70,11 +70,30 @@ def _normalize_codex_limit_window(window: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# 화면에 띄울 Codex 한도 버킷. 주 한도만 본다.
+#
+# Codex 는 limit_id 를 여러 개 내려준다. codex_bengalfox 는 같은 계정의 별도
+# 집계일 뿐 대체 용량이 아니다 — 주 한도가 차면 CLI 가 통째로 거부한다
+# ("You've hit your usage limit"). 2026-09-12 에 bengalfox=0%, codex=100%
+# 상태로 직접 호출해 확인했고 model_selector.py 도 같은 이유로 주 한도만 본다.
+#
+# 그런데 채팅 상단 사용량 표시는 두 버킷을 나란히 그려, 주 한도가 98%인데
+# 옆에 0% 가 보였다. 쓸 수 있는 여유가 있는 것처럼 읽혀 오판을 부른다.
+# 판정에 쓰지 않는 값은 화면에도 올리지 않는다.
+_CODEX_PRIMARY_LIMIT_IDS = ("codex", "codex_cli", "primary")
+
+
 def _normalize_codex_usage_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    raw_limits = [i for i in (payload.get("limits") or []) if isinstance(i, dict)]
+    primary_only = [
+        i for i in raw_limits
+        if str(i.get("limit_id") or "").strip().lower() in _CODEX_PRIMARY_LIMIT_IDS
+    ]
+    # 주 한도를 못 찾으면 첫 버킷을 남긴다 — 표시가 통째로 비면 더 나쁘다.
+    source_limits = primary_only or raw_limits[:1]
+
     limits = []
-    for item in payload.get("limits") or []:
-        if not isinstance(item, dict):
-            continue
+    for item in source_limits:
         limits.append({
             "limit_id": item.get("limit_id"),
             "plan_type": item.get("plan_type") or payload.get("plan_type") or payload.get("raw_plan_type"),
