@@ -3364,13 +3364,25 @@ _SERVICE_AUTH_EXACT_PATHS = {
     "/api/v1/ohvis/llmops/trace-ingest",
 }
 
+# 공개 읽기전용 경로. **정확히 일치**할 때만 면제한다 — prefix 로 풀면
+# /api/v1/project-docs/scan(다중 프로젝트 파일 메타데이터)까지 같이 열린다.
+_PUBLIC_EXACT_PATHS = {
+    # 교육자료 포털(/static/reports/index.html)이 신규 *_education.html 을 자동으로
+    # 표시하기 위해 호출한다. 파일명·제목·날짜·크기만 돌려주는 좁은 계약.
+    "/api/v1/project-docs/public-education-index",
+}
+
 
 @app.middleware("http")
 async def jwt_auth_middleware(request: Request, call_next):
     path = request.url.path
 
     # 1) 면제 경로
-    if any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES) or path in _SERVICE_AUTH_EXACT_PATHS:
+    if (
+        any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES)
+        or path in _SERVICE_AUTH_EXACT_PATHS
+        or path in _PUBLIC_EXACT_PATHS
+    ):
         return await call_next(request)
 
     # 2) 모니터 키 인증 경로 (별도 인증 체계)

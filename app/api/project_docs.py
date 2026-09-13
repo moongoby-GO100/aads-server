@@ -1050,3 +1050,107 @@ async def get_doc_content(
         "is_binary": is_binary,
         "format": "binary" if is_binary and ext not in BASE64_PREVIEW_EXTENSIONS else _detect_format(file_path),
     }
+
+
+# ── 공개 교육자료 인덱스 ──
+#
+# /project-docs/scan 은 여러 프로젝트의 원격 파일 메타데이터를 돌려주므로 공개할 수
+# 없다. 그렇다고 교육자료 목록을 index.html 에 계속 하드코딩하면 새 교육자료를 올릴
+# 때마다 HTML 을 고쳐야 한다. 그래서 AADS 정적 리포트 디렉토리 **바로 아래**의
+# 교육자료 파일 이름만 노출하는 읽기전용 엔드포인트를 따로 둔다.
+EDUCATION_PUBLIC_BASE = "/app/app/static/reports"
+EDUCATION_PUBLIC_FILENAME_RE = re.compile(r"^[A-Za-z0-9._-]+_education\.html$")
+_EDUCATION_DATE_PREFIX_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})_")
+_EDUCATION_ACRONYM_RE = re.compile(r"\b(ai|llm|rag|mcp|prd|ax|lora|llmops)\b", re.IGNORECASE)
+
+
+def _is_public_education_basename(name: str) -> bool:
+    """공개해도 되는 교육자료 파일 이름인지 판정한다.
+
+    허용목록 정규식이 이미 `/`, `\\`, 상위 이동(`..`), 공백을 모두 배제하지만,
+    정규식이 나중에 완화되더라도 숨김 파일과 경로 조작이 새어나가지 않도록
+    독립적인 검사를 함께 둔다.
+    """
+    if not name or name.startswith("."):
+        return False
+    if "/" in name or "\\" in name or "\x00" in name:
+        return False
+    if ".." in name:
+        return False
+    return bool(EDUCATION_PUBLIC_FILENAME_RE.fullmatch(name))
+
+
+def _education_date_from_basename(name: str, mtime: int) -> str:
+    """파일명 앞머리의 `YYYYMMDD_` 를 우선 쓰고, 없으면 mtime 날짜를 쓴다."""
+    matched = _EDUCATION_DATE_PREFIX_RE.match(name)
+    if matched:
+        year, month, day = matched.groups()
+        if "01" <= month <= "12" and "01" <= day <= "31":
+            return f"{year}-{month}-{day}"
+    return time.strftime("%Y-%m-%d", time.localtime(mtime))
+
+
+def _education_title_from_basename(name: str) -> str:
+    """파일명만으로 제목을 만든다 (문서 본문의 <title> 은 읽지 않는다).
+
+    포털은 제목을 innerHTML 로 렌더링하므로 문서 본문에서 제목을 읽어오면 임의
+    마크업이 주입될 수 있다. 허용목록 정규식이 보장하는 `[A-Za-z0-9._-]` 문자만
+    쓰면 그런 경로가 애초에 생기지 않는다.
+    """
+    stem = _EDUCATION_DATE_PREFIX_RE.sub("", name)
+    stem = re.sub(r"_education\.html$", "", stem, flags=re.IGNORECASE)
+    stem = stem.replace("_", " ").replace("-", " ").strip()
+    if not stem:
+        return name
+    return _EDUCATION_ACRONYM_RE.sub(lambda m: m.group(0).upper(), stem)
+
+
+def _collect_public_education_files() -> list[dict]:
+    """AADS 정적 리포트 디렉토리 바로 아래의 교육자료 메타데이터를 모은다.
+
+    하위 디렉토리로 내려가지 않고, 심볼릭 링크는 디렉토리 밖을 가리킬 수 있으므로
+    제외한다. 컨테이너 경로와 호스트 경로가 같은 디렉토리를 가리키는 경우가 있어
+    파일명 기준으로 중복을 제거한다(앞선 base 우선).
+    """
+    seen: dict[str, dict] = {}
+    for base in _candidate_local_bases(EDUCATION_PUBLIC_BASE):
+        try:
+            entries = sorted(base.iterdir(), key=lambda item: item.name)
+        except (OSError, ValueError):
+            continue
+        for entry in entries:
+            name = entry.name
+            if name in seen or not _is_public_education_basename(name):
+                continue
+            try:
+                if entry.is_symlink() or not entry.is_file():
+                    continue
+                stat_result = entry.stat()
+            except OSError:
+                continue
+            mtime = int(stat_result.st_mtime)
+            seen[name] = {
+                "file": name,
+                "title": _education_title_from_basename(name),
+                "date": _education_date_from_basename(name, mtime),
+                "size": int(stat_result.st_size),
+            }
+    # 최신순. 같은 날짜면 파일명 역순으로 고정해 응답 순서를 결정적으로 만든다.
+    return sorted(seen.values(), key=lambda item: (item["date"], item["file"]), reverse=True)
+
+
+@router.get("/project-docs/public-education-index")
+async def public_education_index():
+    """공개 교육자료 인덱스 (인증 불필요, 읽기 전용).
+
+    AADS `app/static/reports` 바로 아래의 `*_education.html` 파일명·제목·날짜·크기만
+    돌려준다. 절대경로·호스트·본문·디렉토리 목록은 노출하지 않으며, 조회 대상 경로를
+    쿼리로 바꿀 수 없다.
+    """
+    files = _collect_public_education_files()
+    return {
+        "status": "ok",
+        "category": "edu",
+        "total": len(files),
+        "files": files,
+    }

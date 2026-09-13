@@ -242,3 +242,216 @@ async def test_go100_document_status_scans_api_and_artifacts_paths(monkeypatch):
     )
     assert "api/" in catch_all[3]
     assert "kis-api-portal/" in catch_all[3]
+
+
+# ── 공개 교육자료 인덱스 ──
+
+
+def _seed_education_dir(root):
+    """교육자료 · 비교육자료 · 숨김파일 · 하위 디렉토리를 섞어 둔다."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "20260912_mcp_tool_calling_education.html").write_text("<html>a</html>")
+    (root / "20260908_multi_agent_ops_education.html").write_text("<html>b</html>")
+    # 교육자료가 아닌 이름 — 노출되면 안 된다.
+    (root / "20260909_recolumn_cogcom_company_analysis.html").write_text("<html>c</html>")
+    (root / "index.html").write_text("<html>portal</html>")
+    (root / "notes_education.txt").write_text("not html")
+    # 숨김 파일 — 이름은 규칙에 맞아도 노출되면 안 된다.
+    (root / ".secret_education.html").write_text("<html>hidden</html>")
+    # 하위 디렉토리는 재귀하지 않는다.
+    nested = root / "nested"
+    nested.mkdir()
+    (nested / "20260901_nested_education.html").write_text("<html>nested</html>")
+    # 디렉토리 이름이 규칙에 맞아도 파일이 아니면 제외한다.
+    (root / "20260902_dir_education.html").mkdir()
+
+
+@pytest.mark.asyncio
+async def test_public_education_index_returns_only_allowlisted_education_files(tmp_path, monkeypatch):
+    reports = tmp_path / "reports"
+    _seed_education_dir(reports)
+    monkeypatch.setattr(
+        project_docs,
+        "LOCAL_BASE_ALIASES",
+        {project_docs.EDUCATION_PUBLIC_BASE: [str(reports)]},
+    )
+
+    response = await project_docs.public_education_index()
+
+    names = [item["file"] for item in response["files"]]
+    assert names == [
+        "20260912_mcp_tool_calling_education.html",
+        "20260908_multi_agent_ops_education.html",
+    ]
+    assert response["total"] == 2
+    assert response["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_public_education_index_metadata_never_leaks_paths(tmp_path, monkeypatch):
+    reports = tmp_path / "reports"
+    _seed_education_dir(reports)
+    monkeypatch.setattr(
+        project_docs,
+        "LOCAL_BASE_ALIASES",
+        {project_docs.EDUCATION_PUBLIC_BASE: [str(reports)]},
+    )
+
+    response = await project_docs.public_education_index()
+
+    assert set(response) == {"status", "category", "total", "files"}
+    for item in response["files"]:
+        # 파일명·제목·날짜·크기만. 절대경로/호스트/본문은 없다.
+        assert set(item) == {"file", "title", "date", "size"}
+        assert "/" not in item["file"]
+        for value in item.values():
+            assert str(tmp_path) not in str(value)
+            assert not str(value).startswith("/")
+
+
+@pytest.mark.asyncio
+async def test_public_education_index_sorts_newest_first(tmp_path, monkeypatch):
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    for name in (
+        "20260908_alpha_education.html",
+        "20260912_bravo_education.html",
+        "20260910_charlie_education.html",
+        "20260912_alpha_education.html",
+    ):
+        (reports / name).write_text("<html></html>")
+    monkeypatch.setattr(
+        project_docs,
+        "LOCAL_BASE_ALIASES",
+        {project_docs.EDUCATION_PUBLIC_BASE: [str(reports)]},
+    )
+
+    response = await project_docs.public_education_index()
+
+    assert [item["file"] for item in response["files"]] == [
+        "20260912_bravo_education.html",
+        "20260912_alpha_education.html",
+        "20260910_charlie_education.html",
+        "20260908_alpha_education.html",
+    ]
+    assert response["files"][0]["date"] == "2026-09-12"
+
+
+@pytest.mark.asyncio
+async def test_public_education_index_dedupes_container_and_host_aliases(tmp_path, monkeypatch):
+    """컨테이너 경로와 호스트 경로가 같은 문서를 가리켜도 한 번만 나와야 한다."""
+    first = tmp_path / "container"
+    second = tmp_path / "host"
+    for root in (first, second):
+        root.mkdir()
+        (root / "20260912_mcp_tool_calling_education.html").write_text("<html></html>")
+    monkeypatch.setattr(
+        project_docs,
+        "LOCAL_BASE_ALIASES",
+        {project_docs.EDUCATION_PUBLIC_BASE: [str(first), str(second)]},
+    )
+
+    response = await project_docs.public_education_index()
+
+    assert [item["file"] for item in response["files"]] == [
+        "20260912_mcp_tool_calling_education.html"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_public_education_index_skips_symlinks(tmp_path, monkeypatch):
+    """심볼릭 링크는 디렉토리 밖 파일을 가리킬 수 있으므로 노출하지 않는다."""
+    outside = tmp_path / "outside.html"
+    outside.write_text("<html>secret</html>")
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "20260912_linked_education.html").symlink_to(outside)
+    (reports / "20260911_real_education.html").write_text("<html></html>")
+    monkeypatch.setattr(
+        project_docs,
+        "LOCAL_BASE_ALIASES",
+        {project_docs.EDUCATION_PUBLIC_BASE: [str(reports)]},
+    )
+
+    response = await project_docs.public_education_index()
+
+    assert [item["file"] for item in response["files"]] == [
+        "20260911_real_education.html"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_public_education_index_is_empty_when_directory_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        project_docs,
+        "LOCAL_BASE_ALIASES",
+        {project_docs.EDUCATION_PUBLIC_BASE: [str(tmp_path / "does-not-exist")]},
+    )
+
+    response = await project_docs.public_education_index()
+
+    assert response["files"] == []
+    assert response["total"] == 0
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "",
+        ".hidden_education.html",
+        "..education.html",
+        "../20260912_escape_education.html",
+        "..%2F20260912_escape_education.html",
+        "sub/20260912_nested_education.html",
+        "sub\\20260912_nested_education.html",
+        "20260912_report_analysis.html",
+        "20260912_mcp_tool_calling_education.htm",
+        "20260912_mcp_tool_calling_education.html.bak",
+        "education.html",
+        "20260912 spaced_education.html",
+        "20260912_null_education.html\x00.png",
+        ".env_education.html",
+    ],
+)
+def test_public_education_basename_filter_blocks_unsafe_names(name):
+    assert project_docs._is_public_education_basename(name) is False
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "20260912_mcp_tool_calling_education.html",
+        "multi_agent_ops_education.html",
+        "a-b.c_education.html",
+    ],
+)
+def test_public_education_basename_filter_allows_expected_names(name):
+    assert project_docs._is_public_education_basename(name) is True
+
+
+def test_public_education_title_is_derived_from_filename_only():
+    title = project_docs._education_title_from_basename(
+        "20260912_mcp_tool_calling_education.html"
+    )
+    assert title == "MCP tool calling"
+    assert "<" not in title and ">" not in title
+
+
+def test_public_education_date_falls_back_to_mtime_without_prefix():
+    import time as _time
+
+    mtime = 1_757_721_600
+    expected = _time.strftime("%Y-%m-%d", _time.localtime(mtime))
+
+    # 파일명에 YYYYMMDD_ 접두사가 없으면 mtime 날짜를 쓴다.
+    assert project_docs._education_date_from_basename("plain_education.html", mtime) == expected
+    # 접두사가 있어도 달/일이 말이 안 되면 mtime 으로 되돌아간다.
+    assert (
+        project_docs._education_date_from_basename("20261399_bad_education.html", mtime)
+        == expected
+    )
+    # 정상 접두사는 그대로 쓴다.
+    assert (
+        project_docs._education_date_from_basename("20260912_ok_education.html", mtime)
+        == "2026-09-12"
+    )
