@@ -1,0 +1,410 @@
+{
+  "20260912_rag_vectordb_embedding_education.html": {
+    "toc": "부록. 출처 검수 이력 (2026-09-13)",
+    "items": [
+      "<strong>교정 — 임베딩 세대 표기</strong>: 5-2장 비교표가 최신으로 적은 <code>voyage-3-large / voyage-3.5</code>는 <a href=\"https://docs.voyageai.com/docs/pricing\">Voyage 공식 가격표</a>에서 <strong>구형(no longer current)</strong>으로 분류되어 있어 현행 <code>voyage-4</code> 계열($0.12 / $0.06 / $0.02, 계정당 2억 토큰 무료)로 교체했다. 코드 전용도 <code>voyage-code-4</code>로 세대가 바뀌었다.",
+      "<strong>교정 — Gemini 임베딩</strong>: 초판의 \"추정 $0.10~0.15(미검증)\"을 <a href=\"https://ai.google.dev/gemini-api/docs/embeddings\">공식 문서</a>·<a href=\"https://ai.google.dev/gemini-api/docs/pricing\">공식 가격표</a> 기준 <strong>$0.20/1M(유료 등급, 무료 등급 별도)</strong>로 확정했다. 아울러 현행 최신은 멀티모달 <code>gemini-embedding-2</code>(최대 입력 8,192 토큰)이고 텍스트 전용 <code>gemini-embedding-001</code>(2,048 토큰)도 계속 제공되며, <strong>두 모델의 임베딩 공간은 호환되지 않아 교체 시 전량 재임베딩이 필요</strong>하다는 사실을 추가했다.",
+      "<strong>해소 — Upstage 임베딩</strong>: \"미검증(콘솔 확인 필요)\"으로 비어 있던 칸을 <a href=\"https://www.upstage.ai/pricing/api\">공식 가격 페이지</a>로 채웠다(<code>Embed 2</code> <strong>$0.02/1M</strong>). 동시에 구형 <code>Embed (Legacy)</code>가 <strong>2026-12-31(UTC) 서비스 종료</strong> 예정이라는, 초판에 없던 도입 리스크를 명시했다.",
+      "<strong>⚠️ 신규 — 라이선스 리스크</strong>: <code>jina-embeddings-v4</code>를 초판은 \"오픈소스\"로 적었으나, <a href=\"https://jina.ai/embeddings/\">공식 안내</a>는 <strong>Qwen Research License</strong>가 적용되어 <strong>상업적 이용이 허용되지 않으며</strong> 스루풋 제한으로 <strong>프로덕션에 부적합</strong>하다고 명시한다. 사내 도입 검토 시 오해를 부를 수 있어 표기를 \"연구용(상업 이용 불가)\"으로 정정했다.",
+      "<strong>철회 — 근거 없는 추정 단가</strong>: Cohere <code>embed-v4.0</code>의 \"추정 $0.10~0.12\"는 <a href=\"https://cohere.com/pricing\">공식 가격 페이지</a>에 토큰 단가가 게시되어 있지 않아(전용배포 시간당 요금만 게시) 철회하고 <span class=\"tag-unverified\">미공개</span>로 바꿨다. 대신 <a href=\"https://docs.cohere.com/docs/cohere-embed\">공식 문서</a>로 확인한 차원(256/512/1024/1536)·최대 컨텍스트(128k)·멀티모달(텍스트·이미지·PDF) 사양을 채워 넣었다.",
+      "<strong>확인(유지) — OpenAI 단가</strong>: <code>text-embedding-3-small</code> $0.02 / <code>-3-large</code> $0.13은 <a href=\"https://developers.openai.com/api/docs/pricing\">공식 가격표</a>와 일치해 그대로 두고 근거 링크만 부착했다. (공식 가격 페이지 주소가 <code>platform.openai.com/docs/pricing</code> → <code>developers.openai.com/api/docs/pricing</code>으로 <strong>301 이전</strong>된 점을 반영했다.)",
+      "<strong>신규 — 원 논문 인용</strong>: 16장 참고자료를 전부 링크화하고 근거 논문을 추가했다 — RAG <a href=\"https://arxiv.org/abs/2005.11401\">arXiv:2005.11401</a>, MTEB <a href=\"https://arxiv.org/abs/2210.07316\">arXiv:2210.07316</a>, RAGAS <a href=\"https://arxiv.org/abs/2309.15217\">arXiv:2309.15217</a>, GraphRAG <a href=\"https://arxiv.org/abs/2404.16130\">arXiv:2404.16130</a>, 그리고 7장 HNSW <a href=\"https://arxiv.org/abs/1603.09320\">arXiv:1603.09320</a>·9-3장 ColBERT <a href=\"https://arxiv.org/abs/2004.12832\">arXiv:2004.12832</a>(초판에 근거 문헌 없이 설명만 있던 두 장). 모두 2026-09-13 KST에 제목·저자를 대조했다.",
+      "<strong>미해소(의도적)</strong>: 모델별 <strong>MTEB 점수·순위</strong>는 이번에도 싣지 않는다 — 리더보드가 수시로 갱신되어 교육자료에 고정 수치로 박으면 곧 틀린 정보가 되기 때문이며, 확인 실패가 아니라 판단에 따른 제외다. <a href=\"https://huggingface.co/spaces/mteb/leaderboard\">공식 리더보드</a> 링크로 갈음했다.",
+      "<strong>미해소</strong>: Cohere <code>embed-v4.0</code>의 토큰 단가, <code>semantic_code_search</code> 도구의 내부 구현(14-3장)은 이번 검수 범위에서도 확인하지 못해 <span class=\"tag-unverified\">미검증</span>으로 남긴다."
+    ],
+    "note": "초판이 \"조사 도구 오류로 확인 불가\"라고 적었던 가격·사양 항목은 이번 검수에서 <strong>대부분 공식 문서로 확정</strong>되었습니다. 다만 위 표의 단가는 <strong>변동 항목</strong>이므로, 계약·예산 반영 직전에는 각 사 공식 가격 페이지를 다시 여십시오.",
+    "sources": [
+      [
+        "임베딩 단가",
+        "OpenAI 공식 가격표",
+        "https://developers.openai.com/api/docs/pricing",
+        "1차(공식 가격표)"
+      ],
+      [
+        "임베딩 사양",
+        "Gemini Embeddings 공식 문서",
+        "https://ai.google.dev/gemini-api/docs/embeddings",
+        "1차(공식 문서)"
+      ],
+      [
+        "임베딩 단가",
+        "Gemini API 공식 가격표",
+        "https://ai.google.dev/gemini-api/docs/pricing",
+        "1차(공식 가격표)"
+      ],
+      [
+        "임베딩 단가",
+        "Voyage AI 공식 가격표",
+        "https://docs.voyageai.com/docs/pricing",
+        "1차(공식 가격표)"
+      ],
+      [
+        "임베딩 사양",
+        "Cohere Embed 공식 문서",
+        "https://docs.cohere.com/docs/cohere-embed",
+        "1차(공식 문서)"
+      ],
+      [
+        "임베딩 단가",
+        "Upstage API 공식 가격표",
+        "https://www.upstage.ai/pricing/api",
+        "1차(공식 가격표)"
+      ],
+      [
+        "라이선스",
+        "Jina Embeddings 공식 안내",
+        "https://jina.ai/embeddings/",
+        "1차(공식 문서)"
+      ],
+      [
+        "벤치마크",
+        "MTEB 공식 리더보드",
+        "https://huggingface.co/spaces/mteb/leaderboard",
+        "1차(공식 리더보드)"
+      ],
+      [
+        "원 논문",
+        "RAG — arXiv:2005.11401",
+        "https://arxiv.org/abs/2005.11401",
+        "1차(원 논문)"
+      ],
+      [
+        "원 논문",
+        "HNSW — arXiv:1603.09320",
+        "https://arxiv.org/abs/1603.09320",
+        "1차(원 논문)"
+      ],
+      [
+        "원 논문",
+        "ColBERT — arXiv:2004.12832",
+        "https://arxiv.org/abs/2004.12832",
+        "1차(원 논문)"
+      ],
+      [
+        "원 논문",
+        "MTEB — arXiv:2210.07316",
+        "https://arxiv.org/abs/2210.07316",
+        "1차(원 논문)"
+      ],
+      [
+        "원 논문",
+        "RAGAS — arXiv:2309.15217",
+        "https://arxiv.org/abs/2309.15217",
+        "1차(원 논문)"
+      ],
+      [
+        "원 논문",
+        "GraphRAG — arXiv:2404.16130",
+        "https://arxiv.org/abs/2404.16130",
+        "1차(원 논문)"
+      ]
+    ]
+  },
+  "20260912_mcp_tool_calling_education.html": {
+    "toc": "부록. 출처 검수 이력 (2026-09-13)",
+    "items": [
+      "<strong>⚠️ 해소 — Sampling·Roots는 '요약 누락'이 아니라 폐기예정이었다</strong>: 초판이 16장에서 \"스펙 개요의 Client Features에서 Sampling/Roots가 빠진 것이 문구 변경인지 실제 폐지인지 확인 필요\"라며 <span class=\"tag-unverified\">미검증</span>으로 남긴 항목을 규격 원문 대조로 확정했다. <a href=\"https://modelcontextprotocol.io/specification/2026-07-28/client/sampling\">Sampling</a>·<a href=\"https://modelcontextprotocol.io/specification/2026-07-28/client/roots\">Roots</a> 두 페이지 모두 상단에 <strong>\"Deprecated as of protocol version 2026-07-28\"</strong> 경고를 달고 있으며 근거는 <a href=\"https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577\">SEP-2577</a>이다.",
+      "<strong>확정 — 유예 기간과 대체 경로</strong>: 규격의 기능 수명주기 정책상 두 기능은 <strong>이 개정판 공개 후 최소 12개월</strong> 규격에 남아 있다가 제거 대상이 된다. 원문은 신규 구현이 이를 채택하지 말 것(<code>SHOULD NOT</code>)을 명시하고, 기존 구현의 이전 경로로 <strong>Roots → 도구 파라미터·리소스 URI·서버 설정</strong>, <strong>Sampling → LLM 공급사 API 직접 연동</strong>을 제시한다. AADS처럼 MCP 클라이언트를 직접 구현·설정하는 쪽에서는 <strong>이 두 기능에 새로 의존하지 않는 것</strong>이 안전하다.",
+      "<strong>확정 — 현행 기능 구성</strong>: <a href=\"https://modelcontextprotocol.io/specification/2026-07-28\">규격 개요</a> 기준으로 Server가 제공하는 기능은 <strong>Resources·Prompts·Tools</strong> 3종(초판 서술과 일치, 유지), Client가 제공하는 기능은 <strong>Elicitation 1종</strong>이다. 또한 핵심 프로토콜 밖의 <strong>선택적 확장</strong>으로 <a href=\"https://modelcontextprotocol.io/extensions/tasks/overview\">Tasks</a>(장시간 작업의 비동기 실행·폴링), Skills over MCP, <a href=\"https://modelcontextprotocol.io/extensions/apps/overview\">MCP Apps</a>(대화 안에 렌더링되는 UI)가 정의되어 있으며, 확장은 항상 opt-in이고 초기화 단계에서 양측이 합의해야 한다.",
+      "<strong>유지</strong>: 초판이 2026-09-12 <code>fetch_url</code> 실측으로 기재한 스펙 개정일(<code>2026-07-28</code>), 전송 방식, Anthropic MCP 커넥터의 \"도구가 많을 때\" 서술은 이번 재확인에서도 원문과 일치해 <strong>그대로 둔다</strong>.",
+      "<strong>미해소</strong>: AADS 내부 실측 항목(<code>error_detail</code> 전건 NULL, <code>latency_ms</code> 집계 신뢰도, <code>success</code> 컬럼과 <code>is_error</code>의 불일치, postgres 서버 상시가동 설계 의도, 백엔드 MCP 서버 구현체의 Streamable HTTP 지원 여부)은 저장소 밖 운영 데이터·서버측 구현 확인이 필요해 이번 <strong>문서 검수 범위를 벗어난다</strong>. <span class=\"tag-unverified\">미검증</span>을 그대로 유지한다.",
+      "<strong>미해소</strong>: Tool Search Tool / <code>defer_loading</code>의 <strong>정확한 도구 개수 임계값</strong>은 공식 문서가 여전히 수치를 명시하지 않아 <span class=\"tag-unverified\">미검증</span>으로 남긴다."
+    ],
+    "note": "이 문서에서 가장 중요한 변경은 <strong>Sampling·Roots 폐기예정 확정</strong>입니다. 초판은 이를 \"확인 필요\"로만 남겨두었으나, 규격 원문에 명시적 deprecation 경고와 SEP 번호가 있으므로 <strong>신규 MCP 연동 설계에 두 기능을 전제로 깔지 않도록</strong> 담당 개발자에게 공유하십시오.",
+    "sources": [
+      [
+        "규격 원문",
+        "MCP 규격 2026-07-28 개요",
+        "https://modelcontextprotocol.io/specification/2026-07-28",
+        "1차(규격 원문)"
+      ],
+      [
+        "폐기예정",
+        "MCP Sampling (deprecated)",
+        "https://modelcontextprotocol.io/specification/2026-07-28/client/sampling",
+        "1차(규격 원문)"
+      ],
+      [
+        "폐기예정",
+        "MCP Roots (deprecated)",
+        "https://modelcontextprotocol.io/specification/2026-07-28/client/roots",
+        "1차(규격 원문)"
+      ],
+      [
+        "폐기 근거",
+        "SEP-2577 (deprecation PR)",
+        "https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577",
+        "1차(규격 변경 제안)"
+      ],
+      [
+        "확장",
+        "MCP Tasks 확장",
+        "https://modelcontextprotocol.io/extensions/tasks/overview",
+        "1차(규격 원문)"
+      ],
+      [
+        "확장",
+        "MCP Apps 확장",
+        "https://modelcontextprotocol.io/extensions/apps/overview",
+        "1차(규격 원문)"
+      ],
+      [
+        "스키마",
+        "MCP schema.ts (2026-07-28)",
+        "https://github.com/modelcontextprotocol/specification/blob/main/schema/2026-07-28/schema.ts",
+        "1차(규격 스키마)"
+      ]
+    ]
+  },
+  "20260912_finetuning_lora_practice_education.html": {
+    "toc": "부록. 출처 검수 이력 (2026-09-13)",
+    "items": [
+      "<strong>확인(유지) — LoRA 수치</strong>: 본문의 \"GPT-3 175B 기준 학습 파라미터 약 10,000분의 1\"은 원 논문 <a href=\"https://arxiv.org/abs/2106.09685\">LoRA: Low-Rank Adaptation of Large Language Models</a>(Hu et al., 2021 — arXiv:2106.09685) 초록의 \"reduce the number of trainable parameters by 10,000 times\"와 일치한다. 같은 문장이 <strong>GPU 메모리 요구량은 3배 감소</strong>라고 밝히고 있으며, 이 비교 기준이 <strong>Adam으로 full fine-tuning한 GPT-3 175B</strong>라는 전제도 함께 확인했다.",
+      "<strong>확인(유지) — QLoRA 수치</strong>: 본문이 여러 곳에서 인용한 \"65B를 단일 48GB GPU에서\"는 원 논문 <a href=\"https://arxiv.org/abs/2305.14314\">QLoRA: Efficient Finetuning of Quantized LLMs</a>(Dettmers et al., 2023 — arXiv:2305.14314) 초록의 \"finetune a 65B parameter model on a single 48GB GPU while preserving full 16-bit finetuning task performance\"와 일치한다. 논문이 도입한 3대 기법(<strong>4-bit NormalFloat, Double Quantization, Paged Optimizers</strong>)과, 8장에서 인용한 \"작지만 고품질인 데이터셋\" 근거인 <strong>Guanaco — 단일 GPU 24시간 학습으로 ChatGPT 성능의 99.3% 도달</strong>도 원문에서 확인했다.",
+      "<strong>보강 — 인용 링크화</strong>: 초판은 두 논문을 \"Dettmers et al., 2023\" 같은 <strong>본문 표기로만</strong> 언급하고 클릭 가능한 링크가 한 건도 없었다. 16장 참고자료를 포함해 원 논문·공식 문서 링크를 부착했다(Hugging Face <a href=\"https://huggingface.co/docs/peft\">PEFT</a>, <a href=\"https://huggingface.co/docs/trl\">TRL</a>, <a href=\"https://github.com/artidoro/qlora\">QLoRA 공식 저장소</a>).",
+      "<strong>유지</strong>: 표의 VRAM 수치는 초판이 이미 \"시퀀스 길이·배치 크기·rank·옵티마이저 설정에 따라 달라지는 <strong>추정치</strong>\"라고 명시하고 있어, 라벨을 그대로 둔다. 이 값들은 논문 실측치가 아니라 <strong>실무 어림값</strong>이며 문서에도 그렇게 표기되어 있다.",
+      "<strong>미해소</strong>: 상용 API 파인튜닝(각 사 콘솔)의 <strong>학습 단가·최소 데이터 요건</strong>은 공급사·리전·시점별로 달라 교육자료에 고정 수치로 싣지 않는다. 도입 검토 시 각 사 공식 가격 페이지에서 직접 확인하십시오."
+    ],
+    "note": null,
+    "sources": [
+      [
+        "원 논문",
+        "LoRA — arXiv:2106.09685",
+        "https://arxiv.org/abs/2106.09685",
+        "1차(원 논문)"
+      ],
+      [
+        "원 논문",
+        "QLoRA — arXiv:2305.14314",
+        "https://arxiv.org/abs/2305.14314",
+        "1차(원 논문)"
+      ],
+      [
+        "공식 문서",
+        "Hugging Face PEFT",
+        "https://huggingface.co/docs/peft",
+        "1차(공식 문서)"
+      ],
+      [
+        "공식 문서",
+        "Hugging Face TRL",
+        "https://huggingface.co/docs/trl",
+        "1차(공식 문서)"
+      ],
+      [
+        "공식 문서",
+        "OpenAI 파인튜닝 가이드",
+        "https://developers.openai.com/api/docs/guides/supervised-fine-tuning",
+        "1차(공식 문서)"
+      ],
+      [
+        "공식 문서",
+        "Claude Glossary (파인튜닝)",
+        "https://platform.claude.com/docs/en/about-claude/glossary",
+        "1차(공식 문서)"
+      ],
+      [
+        "공식 문서",
+        "Gemini API 파인튜닝 안내",
+        "https://ai.google.dev/gemini-api/docs/model-tuning",
+        "1차(공식 문서)"
+      ]
+    ]
+  },
+  "20260912_llmops_observability_education.html": {
+    "toc": "부록. 출처 검수 이력 (2026-09-13)",
+    "items": [
+      "<strong>⚠️ 교정 — <code>gen_ai.system</code>은 현행 규격에 없다</strong>: 7장 속성표의 첫 행을 <code>gen_ai.provider.name</code>으로 교정했다. <a href=\"https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md\">GenAI 스팬 규격 원문</a>에 <code>gen_ai.system</code>은 더 이상 등장하지 않으며, 공급사 식별자는 <code>gen_ai.provider.name</code>이고 추론 오퍼레이션에서 <strong>Required</strong>다. 이 속성명으로 대시보드·알람 쿼리를 짜둔 경우 <strong>깨질 수 있으므로</strong> 점검이 필요하다.",
+      "<strong>⚠️ 신규 — 규격 문서 위치가 이전됐다</strong>: GenAI 시맨틱 컨벤션은 OpenTelemetry 본체 문서에서 전용 저장소 <a href=\"https://github.com/open-telemetry/semantic-conventions-genai\">open-telemetry/semantic-conventions-genai</a>로 옮겨졌고, 기존 <code>opentelemetry.io/docs/specs/semconv/gen-ai/</code> 경로는 이전 안내만 표시한다. 이 저장소는 GenAI 클라이언트뿐 아니라 <strong>MCP</strong>와 공급사별 규약까지 함께 정의한다. 사내 문서·북마크 갱신이 필요하다.",
+      "<strong>신규 — 안정성 등급 경고</strong>: <code>gen_ai.*</code> 속성 대부분은 아직 <strong>Development(개발) 등급</strong>이며 <code>server.address</code>·<code>server.port</code> 등 공용 속성만 Stable이다. 즉 <strong>속성명이 앞으로도 바뀔 수 있다</strong>. 초판에는 이 경고가 없어 규격이 확정된 것처럼 읽힐 수 있었으므로 7장에 경고 박스를 추가했다.",
+      "<strong>신규 — 캐시·추론 토큰 속성</strong>: 프롬프트 캐싱 비용을 분리 계측하려면 <code>gen_ai.usage.cache_read.input_tokens</code>·<code>gen_ai.usage.cache_write.input_tokens</code>가 필요하다. 규격에는 <code>gen_ai.usage.reasoning.output_tokens</code>와 text/image/audio 모달리티별 변형도 정의되어 있어 속성표에 행을 추가했다.",
+      "<strong>유지</strong>: <code>gen_ai.request.model</code>·<code>gen_ai.operation.name</code>·<code>gen_ai.usage.input_tokens</code>·<code>gen_ai.usage.output_tokens</code>·<code>gen_ai.response.finish_reasons</code>·<code>error.type</code>은 규격 원문과 일치해 그대로 둔다.",
+      "<strong>미해소</strong>: 상용 관측 도구(LangSmith·Langfuse·Datadog 등)의 <strong>요금제·보관 기간</strong>은 변동 항목이라 고정 수치로 싣지 않는다. 도입 직전 각 사 공식 가격 페이지에서 확인하십시오."
+    ],
+    "note": "이 문서의 핵심 교정은 <strong>속성명 <code>gen_ai.system</code> → <code>gen_ai.provider.name</code></strong>입니다. 이미 계측 코드를 작성한 경우 <strong>실제로 수집되는 속성명</strong>을 먼저 확인하도록 담당 개발자에게 지시하십시오.",
+    "sources": [
+      [
+        "규격 원문",
+        "OTel GenAI 시맨틱 컨벤션 저장소",
+        "https://github.com/open-telemetry/semantic-conventions-genai",
+        "1차(규격 원문)"
+      ],
+      [
+        "규격 원문",
+        "GenAI 스팬 속성 규격",
+        "https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md",
+        "1차(규격 원문)"
+      ],
+      [
+        "이전 안내",
+        "OpenTelemetry 본체 GenAI 페이지",
+        "https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/",
+        "1차(공식 문서)"
+      ],
+      [
+        "공식 문서",
+        "OpenTelemetry 시맨틱 컨벤션",
+        "https://opentelemetry.io/docs/specs/semconv/",
+        "1차(공식 문서)"
+      ]
+    ]
+  },
+  "20260912_multimodal_ai_education.html": {
+    "toc": "부록. 출처 검수 이력 (2026-09-13)",
+    "items": [
+      "<strong>확인(유지) — Anthropic 라인업</strong>: 3장 비교표의 \"Opus 5 / Sonnet 5 / Haiku 4.5 / Fable 5.1 — 모두 이미지·문서 입력 지원, <strong>자체 이미지/영상 생성 모델은 없음</strong>\" 서술을 <a href=\"https://platform.claude.com/docs/en/about-claude/models/overview\">공식 모델 개요</a>로 대조해 확인했다. 원문은 \"All current models support text and image input, text output, multilingual capabilities, vision, and tool use\"라고 명시하며, 이미지·영상 <strong>생성</strong> 모델은 라인업에 없다.",
+      "<strong>구조 교정</strong>: 9장 \"이미지 속 프롬프트 인젝션 주의\" 경고 박스가 <code>&lt;div&gt;</code>로 열린 뒤 <code>&lt;/p&gt;</code>로 닫혀 HTML 트리가 어긋나 있던 문제를 바로잡았다(브라우저는 관대하게 렌더링하지만, 이후 섹션이 이 박스 안에 중첩된 것으로 해석될 수 있었다).",
+      "<strong>라벨링 — 타사 제품명은 시점 표기</strong>: 3장 비교표의 Google·OpenAI 제품명(Gemini 3.8 Flash, Nano Banana Pro, GPT-6 Astra, Sora 2 등)은 <strong>2026-09-12 초판 작성 시점의 라인업</strong>이다. 생성형 모델 라인업은 분기 단위로 바뀌므로 <strong>제품명·버전 자체가 빠르게 낡는다</strong>. 본 검수에서는 Anthropic 라인업만 1차 출처로 재확인했고, 타사 제품명은 <strong>시점 표기를 명시하는 선에서 유지</strong>한다(이름을 임의로 갱신하면 오히려 근거 없는 서술이 되기 때문).",
+      "<strong>유지</strong>: AADS 내부 미디어 공급자 표(kling, black-forest-labs/flux, stability/SD 3.5, genspark_ui 폴백 등)는 초판이 저장소 설정을 직접 조회해 기록한 <strong>내부 실측</strong>이므로 그대로 둔다. 다만 이는 <strong>AADS 환경의 설정값</strong>이지 각 사 공식 제품 사양이 아니다.",
+      "<strong>미해소</strong>: 모델별 <strong>이미지 토큰 과금 단가·해상도 한도</strong>와 타사 생성 모델의 <strong>라이선스·상업적 이용 조건</strong>은 이번 검수 범위 밖이다. 특히 생성물의 <strong>저작권·상업적 이용 가능 범위</strong>는 공급사 약관마다 다르므로, 마케팅·제품에 실제 사용하기 전 <strong>법무 검토</strong>가 필요하다."
+    ],
+    "note": "생성형 미디어는 <strong>제품명·가격보다 이용약관(상업적 이용 가능 여부)이 먼저 확인되어야 하는</strong> 영역입니다. 본 문서는 기술 개념 교육용이며, 실제 사용 승인 근거로 쓰기 전에는 각 공급사 약관을 직접 확인하십시오.",
+    "sources": [
+      [
+        "모델 사양",
+        "Claude 공식 모델 개요",
+        "https://platform.claude.com/docs/en/about-claude/models/overview",
+        "1차(공식 문서)"
+      ],
+      [
+        "이미지 과금",
+        "Claude Vision 공식 문서",
+        "https://platform.claude.com/docs/en/build-with-claude/vision",
+        "1차(공식 문서)"
+      ],
+      [
+        "모델 사양",
+        "Gemini API 공식 문서",
+        "https://ai.google.dev/gemini-api/docs",
+        "1차(공식 문서)"
+      ],
+      [
+        "원 논문",
+        "CLIP — arXiv:2103.00020",
+        "https://arxiv.org/abs/2103.00020",
+        "1차(원 논문)"
+      ],
+      [
+        "원 논문",
+        "Whisper — arXiv:2212.04356",
+        "https://arxiv.org/abs/2212.04356",
+        "1차(원 논문)"
+      ]
+    ]
+  },
+  "20260912_ai_coding_agent_practice_education.html": {
+    "toc": "부록. 출처 검수 이력 (2026-09-13)",
+    "items": [
+      "<strong>구조 교정</strong>: 11장 \"worktree 격리는 이 파일에 구현되어 있지 않다\" 경고 박스가 <code>&lt;div&gt;</code>로 열린 뒤 <code>&lt;/p&gt;</code>로 닫혀, 그 이후 문서 전체의 태그 짝이 어긋나 있었다(검증기 기준 <code>&lt;body&gt;</code>가 <code>&lt;/div&gt;</code>로 닫히고 <code>&lt;/html&gt;</code>이 여는 태그 없이 등장). 이를 바로잡아 <strong>문서 트리가 정상적으로 닫히도록</strong> 수정했다.",
+      "<strong>유지</strong>: 11장의 AADS Pipeline Runner 분석(3,314줄 전체에 \"worktree\" 문자열 부재, <code>parallel_group</code>·<code>_project_locks</code>로 순서만 조율, <code>_ssh_command</code> 동작)은 초판이 <strong>저장소 소스를 직접 조회</strong>해 기록한 내부 실측이므로 그대로 둔다. 이는 외부 출처로 검증할 성질의 주장이 아니다.",
+      "<strong>라벨링 — 모델명·가격</strong>: 문서 하단 고지대로 가격·모델명은 <strong>2026-09-12 각 사 공식 페이지 조회 기준</strong>이며 변동 항목이다. Anthropic 모델 라인업·단가는 <a href=\"https://platform.claude.com/docs/en/about-claude/models/overview\">공식 모델 개요</a>와 <a href=\"https://platform.claude.com/docs/en/about-claude/pricing\">공식 가격 문서</a>에서 직접 확인할 수 있도록 링크를 부착했다.",
+      "<strong>주의 — 인용 URL 이전</strong>: Anthropic 공식 문서 주소가 <code>docs.claude.com/…</code>에서 <code>platform.claude.com/…</code>으로 <strong>302 리다이렉트</strong>된다. 사내 문서에 옛 주소가 남아 있다면 갱신하십시오.",
+      "<strong>미해소</strong>: 코딩 에이전트 제품군(Claude Code·경쟁 도구)의 <strong>요금제·사용량 한도</strong>는 변동이 잦아 고정 수치로 싣지 않는다. 또한 AADS 운영 지표(작업 성공률·재시도율 등)는 이번 <strong>문서 검수 범위를 벗어난</strong> 운영 데이터다."
+    ],
+    "note": null,
+    "sources": [
+      [
+        "모델 사양",
+        "Claude 공식 모델 개요",
+        "https://platform.claude.com/docs/en/about-claude/models/overview",
+        "1차(공식 문서)"
+      ],
+      [
+        "단가",
+        "Claude 공식 가격 문서",
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "1차(공식 가격표)"
+      ],
+      [
+        "공식 문서",
+        "Claude Code 공식 문서",
+        "https://code.claude.com/docs/en/overview",
+        "1차(공식 문서)"
+      ],
+      [
+        "벤치마크",
+        "SWE-bench — arXiv:2310.06770",
+        "https://arxiv.org/abs/2310.06770",
+        "1차(원 논문)"
+      ]
+    ]
+  },
+  "20260912_ai_product_prd_ax_education.html": {
+    "toc": "부록. 출처 검수 이력 (2026-09-13)",
+    "items": [
+      "<strong>성격 규정 — 이 문서의 수치는 대부분 '예시'다</strong>: 본 문서의 지표 수치(\"핵심 사실 누락률 5% 이하\", \"치명적 오답 1,000건당 1건 이하\", \"재문의율 15% 이하\" 등)는 <strong>외부 출처에서 인용한 업계 기준값이 아니라, 모호한 요구사항을 측정 가능한 형태로 바꾸는 방법을 보여주기 위한 작성 예시</strong>다. 이번 검수에서 이 점을 명확히 한다 — <strong>그대로 사내 목표치로 옮겨 쓰면 안 된다</strong>. 실제 목표치는 해당 제품의 평가셋과 사업 맥락에서 정해야 한다.",
+      "<strong>성격 규정 — 프레임워크는 제안</strong>: 자율성 등급(자동실행/검토후실행/제안만), PRD 항목 구성, 롤백 조건 같은 구조는 <strong>공인 표준이 아니라 이 문서가 제시하는 정리 틀(제안)</strong>이다. 외부 규격을 인용한 것처럼 읽히지 않도록 명시한다.",
+      "<strong>유지</strong>: 위 성격 규정에 따라 본문 구조·예시·체크리스트는 <strong>수정하지 않고 그대로 둔다</strong>. 교육 목적상 예시 수치 자체가 설명 장치이며, 이를 외부 출처로 '교정'하는 것은 부적절하기 때문이다.",
+      "<strong>참고 — 규제 맥락</strong>: AI 제품의 <strong>품질 기준선·실패 허용범위·사람 개입(human-in-the-loop) 설계</strong>는 국내 AI 기본법상 <strong>고영향 AI</strong> 해당 여부에 따라 법적 의무로 바뀔 수 있다. 관련 법령 원문 대조는 같은 교육자료 시리즈의 <strong>「AI 법·저작권·개인정보」 편(2026-09-13 검수 완료)</strong>에서 다루므로, PRD 작성 시 그 문서를 함께 참조하십시오.",
+      "<strong>미해소</strong>: 업계 벤치마크(\"AI 제품의 일반적 정확도 목표\" 같은 수치)는 <strong>제품·도메인마다 달라 일반화된 1차 출처가 존재하지 않는다</strong>. 본 문서는 그런 수치를 제시하지 않으며, 앞으로도 제시하지 않는 편이 옳다."
+    ],
+    "note": "이 문서는 8건 중 <strong>외부 사실 주장이 가장 적은</strong> 자료입니다. 따라서 이번 검수의 핵심은 수치 교정이 아니라 <strong>\"무엇이 예시이고 무엇이 제안인지\"를 분명히 라벨링</strong>하는 것이었습니다.",
+    "sources": [
+      [
+        "법령 원문",
+        "국가법령정보센터(법제처)",
+        "https://www.law.go.kr/",
+        "1차(법령 원문)"
+      ],
+      [
+        "시리즈 교차참조",
+        "같은 시리즈 「AI 법·저작권·개인정보」편",
+        "https://fb.newtalk.kr/static/reports/20260912_ai_law_copyright_privacy_education.html",
+        "2차(사내 교육자료)"
+      ],
+      [
+        "시리즈 교차참조",
+        "같은 시리즈 「AI 평가·Evals」편",
+        "https://fb.newtalk.kr/static/reports/20260912_ai_evaluation_evals_education.html",
+        "2차(사내 교육자료)"
+      ]
+    ]
+  },
+  "20260912_ai_cost_token_economics_education.html": {
+    "toc": "부록. 출처 검수 이력 (2026-09-13)",
+    "items": [
+      "<strong>⚠️ 교정 — 공식 문서 URL이 이전됐다</strong>: 초판이 근거로 적은 <code>docs.claude.com/en/docs/about-claude/pricing</code>은 현재 <code>platform.claude.com/docs/en/about-claude/pricing</code>으로 <strong>302 리다이렉트</strong>된다. 본문 인용 표기를 <a href=\"https://platform.claude.com/docs/en/about-claude/pricing\">새 주소의 클릭 가능한 링크</a>로 교체했다. 사내 문서·북마크에 옛 주소가 남아 있다면 갱신이 필요하다.",
+      "<strong>확인(유지) — 캐싱 배수</strong>: 5분 쓰기 <strong>1.25×</strong>, 1시간 쓰기 <strong>2×</strong>, 캐시 읽기 <strong>0.1×</strong>를 2026-09-13 KST에 공식 문서에서 재확인했다. 원문은 이 배수들이 <strong>배치 할인·데이터 상주 배수와 중첩(stack)</strong>된다는 점, 그리고 손익분기가 <strong>5분 캐시는 1회 읽기, 1시간 캐시는 2회 읽기</strong>라는 점도 명시한다.",
+      "<strong>확인(유지) — Fable/Mythos 예외</strong>: Claude Fable 5.1·Mythos 5.1의 캐시 히트는 예외적으로 <strong>0.025×($0.25/MTok)</strong>이며, Mythos 5.1은 공식 표기상 <strong>limited availability(제한적 접근)</strong>다. 초판이 \"일반 기업 대상 가용성은 미검증\"이라고 유보한 판단은 <strong>타당했으므로 유지</strong>한다.",
+      "<strong>확인(유지) — Sonnet 5 가격 동결</strong>: 공식 문서는 Sonnet 5의 $2/$10(입력/출력 MTok)이 <strong>도입가에서 표준가로 전환</strong>되었고 <strong>2026-09-01로 예정됐던 $3/$15 인상은 시행되지 않는다</strong>고 명시한다. 초판 서술과 일치한다.",
+      "<strong>확인(유지) — 배치·도구 과금</strong>: 배치 API <strong>입력·출력 모두 50% 할인</strong>, 웹 검색 <strong>$10 / 1,000회</strong>, 웹 페치 <strong>추가 과금 없음</strong>, 코드 실행 <strong>조직당 월 1,550시간 무료 후 컨테이너당 시간당 $0.05</strong>를 원문에서 재확인했다.",
+      "<strong>신규 — 토크나이저 교체로 같은 글이 토큰을 더 먹는다</strong>: 공식 문서는 <strong>Claude 4.7 이후 모델이 새 토크나이저를 쓰며 같은 텍스트에서 약 30% 많은 토큰이 나온다</strong>고 명시한다(정확한 증가폭은 콘텐츠·워크로드에 따라 다름). <strong>단가만 비교하면 세대 간 실비용을 잘못 추정하게 되는</strong> 중요한 함정이므로 부록에 기록한다. Sonnet 4.6 이하는 이전 토크나이저를 쓴다.",
+      "<strong>부분 해소 — Bash 도구 오버헤드</strong>: 공식 문서는 Bash 도구 추가 입력 토큰을 <strong>Opus 5·4.8·4.7 = 325토큰</strong>, <strong>Opus 4.6·Sonnet 4.6 및 그 이전 = 244토큰</strong> 두 구간으로만 제시한다. <strong>Sonnet 5·Haiku 4.5는 어느 구간인지 명시되어 있지 않아</strong>, 초판의 <span class=\"tag-unverified\">미검증</span> 표기를 <strong>그대로 유지</strong>한다. 정확한 값이 필요하면 <a href=\"https://platform.claude.com/docs/en/build-with-claude/token-counting\">토큰 카운팅 엔드포인트</a>로 실측하는 것이 확실하다.",
+      "<strong>구조 교정</strong>: ① 8장 경고 박스에서 열린 적 없는 <code>&lt;/p&gt;</code>가 <code>&lt;div&gt;</code>를 먼저 닫아버리던 문제, ② 13장의 닫는 태그 오타 <code>&lt;/strong하며,&gt;</code>를 바로잡았다.",
+      "<strong>미해소</strong>: AADS 내부 관측 공백(<code>cost_tracking</code> 데이터가 2026년 3월 첫째 주까지만 존재, <code>llm_calls</code>·토큰 컬럼 미기록, qwen 경로 토큰 0 기록)은 <strong>운영 데이터 문제이지 문서의 출처 문제가 아니다</strong>. 이번 검수 범위를 벗어나므로 <span class=\"tag-unverified\">미검증</span>을 유지하며, 14장의 후속 조치 지시가 그대로 유효하다."
+    ],
+    "note": "단가는 <strong>변동 항목</strong>입니다. 본 부록은 2026-09-13 KST 시점의 공식 문서와 대조한 결과이며, 예산 수립·계약 직전에는 <a href=\"https://platform.claude.com/docs/en/about-claude/pricing\">공식 가격 문서</a>를 다시 여십시오.",
+    "sources": [
+      [
+        "단가·캐싱·배치",
+        "Claude 공식 가격 문서",
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "1차(공식 가격표)"
+      ],
+      [
+        "모델 사양",
+        "Claude 공식 모델 개요",
+        "https://platform.claude.com/docs/en/about-claude/models/overview",
+        "1차(공식 문서)"
+      ],
+      [
+        "캐싱 구현",
+        "프롬프트 캐싱 공식 문서",
+        "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+        "1차(공식 문서)"
+      ],
+      [
+        "토큰 실측",
+        "토큰 카운팅 엔드포인트",
+        "https://platform.claude.com/docs/en/build-with-claude/token-counting",
+        "1차(공식 문서)"
+      ],
+      [
+        "배치",
+        "배치 처리 공식 문서",
+        "https://platform.claude.com/docs/en/build-with-claude/batch-processing",
+        "1차(공식 문서)"
+      ]
+    ]
+  }
+}
