@@ -1713,7 +1713,11 @@ class PipelineCJob:
 
         proc = None
         try:
-            if self.server in ("localhost", "host.docker.internal"):
+            # host.docker.internal은 "로컬"이 아니라 컨테이너 밖의 호스트다.
+            # codex 바이너리(/usr/bin/codex)와 workdir(/root/aads/aads-server)은
+            # 호스트에만 있어서 컨테이너 안에서 직접 exec 하면 [Errno 2]로 즉사한다.
+            # 같은 이유로 _ssh_command/_run_claude_code_direct는 localhost만 로컬로 본다.
+            if self.server == "localhost":
                 proc = await asyncio.create_subprocess_exec(
                     *cmd_parts,
                     stdout=asyncio.subprocess.PIPE,
