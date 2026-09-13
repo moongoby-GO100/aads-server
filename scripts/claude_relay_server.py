@@ -1617,6 +1617,13 @@ async def handle_stream(request):
             saw_result = False
             last_result_error = ""
             stderr_text = ""
+            # 오류 result 이벤트는 바로 내보내지 않고 붙들어 둔다. 실패 사유는
+            # stderr 에 있고 stderr 는 프로세스가 끝나야 읽을 수 있는데, 먼저
+            # 내보내면 앱은 "CLI error" 라는 빈 문구만 받는다. 그러면 한도인지
+            # 인증 실패인지 세션 유실인지 구분할 수 없어 폴백이 엉뚱하게 돈다.
+            # 2026-09-13 bf6f097c 실측: stale resume 이 "CLI error" 로 전달돼
+            # 같은 슬롯 재시도 대신 모델 강등(opus-5 → sonnet-4-6)이 일어났다.
+            pending_error_event = None
 
             try:
                 async for raw_line in _iter_ndjson_lines(proc.stdout, timeout_sec=600):
@@ -1665,6 +1672,10 @@ async def handle_stream(request):
                     elif evt_type == "user":
                         event = _annotate_claude_event(event, aads_session_id)
                         line_to_write = json.dumps(event).encode("utf-8")
+                    if evt_type == "result" and event.get("is_error"):
+                        # 종료 후 stderr 와 합쳐서 내보낸다(아래 flush 지점).
+                        pending_error_event = event
+                        continue
                     await _stream_write(response, line_to_write + b"\n")
             except ConnectionResetError:
                 logger.info("CLI relay client disconnected: aads=%s resume=%s", aads_session_id[:8], is_resume)
@@ -1724,6 +1735,31 @@ async def handle_stream(request):
                         transport.close()
                 except Exception:
                     pass
+
+            # 붙들어 둔 오류 result 를 stderr 와 합쳐 내보낸다. returncode 와
+            # 무관하게 반드시 흘려보내야 한다 — 여기서 빠지면 앱은 오류 이벤트를
+            # 영영 받지 못하고 스트림이 조용히 끝난 것처럼 보인다.
+            if pending_error_event is not None:
+                _detail = (stderr_text or "").strip()
+                _cur = str(pending_error_event.get("result") or "").strip()
+                if _detail and _detail not in _cur:
+                    _merged = _detail if (not _cur or _cur == "CLI error") else "%s: %s" % (_cur, _detail)
+                    pending_error_event["result"] = redact_secret_text(_merged)[:1200]
+                    last_result_error = pending_error_event["result"]
+                    logger.info(
+                        "CLI error detail attached: aads=%s reason=%s",
+                        aads_session_id[:8], pending_error_event["result"][:120],
+                    )
+                try:
+                    await _stream_write(
+                        response, json.dumps(pending_error_event).encode("utf-8") + b"\n",
+                    )
+                except ConnectionResetError:
+                    logger.info(
+                        "CLI error result write skipped: client already closed aads=%s",
+                        aads_session_id[:8],
+                    )
+                pending_error_event = None
 
             if proc.returncode != 0:
                 logger.warning("CLI exited %s (slot=%s, resume=%s)", proc.returncode, slot, is_resume)

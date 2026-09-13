@@ -2324,6 +2324,7 @@ async def call_stream(
             # Tier1: CLI Relay (oauth_slot으로 계정 지정)
             _err = False
             _err_msg = ""
+            _yielded = 0
             async for event in _stream_cli_relay(_fm, system_prompt, messages, tools=tools, session_id=session_id, oauth_slot=_fs):
                 if event.get("type") == "error":
                     _err = True
@@ -2344,7 +2345,27 @@ async def call_stream(
                     elif _is_cli_auth_error(_err_msg):
                         _auth_failed_slots.add(_fs)
                     break
+                _yielded += 1
                 yield event
+
+            # 낡은 resume ID 는 계정·모델 문제가 아니다. 강등 경로에서도 슬롯을
+            # 바꾸거나 모델을 내리지 않고 같은 조건으로 한 번 다시 붙는다.
+            # 릴레이가 매핑을 이미 지웠으므로 재호출은 새 CLI 세션으로 나간다.
+            if _err and _yielded == 0 and _is_stale_resume_error(_err_msg):
+                logger.info("stale_resume_retry: slot=%s model=%s (fallback)", _fs, _fm)
+                _err = False
+                _err_msg = ""
+                async for event in _stream_cli_relay(_fm, system_prompt, messages, tools=tools, session_id=session_id, oauth_slot=_fs):
+                    if event.get("type") == "error":
+                        _err = True
+                        _err_msg = event.get("content", "")
+                        logger.warning(
+                            "stale_resume_retry_failed: slot=%s model=%s — %s",
+                            _fs, _fm, _err_msg[:80],
+                        )
+                        break
+                    yield event
+
             if not _err:
                 return
 
@@ -4593,6 +4614,17 @@ def _map_cli_event(event: dict, session_id: Optional[str] = None) -> Optional[Li
             if isinstance(block, dict):
                 if block.get("type") == "text":
                     text = block.get("text", "")
+                    # 공급자 실패 문구는 블록 단위로 건다. 위의 전체 블록 검사는
+                    # 메시지가 그 문구 하나뿐일 때만 동작해서, 배너 블록과 실제
+                    # 답변 블록이 함께 오면 둘 다 통과했다. 2026-09-13 bf6f097c
+                    # 에서 "You've hit your weekly limit ..." 가 답변 앞에
+                    # 붙어 저장된 경로다 — 사용자에게는 한도 소진으로 보이지만
+                    # 실제로는 응답이 정상 생성됐다.
+                    if text and _is_provider_failure_text(text):
+                        logger.warning(
+                            "provider_failure_block_suppressed: %s", str(text)[:80]
+                        )
+                        continue
                     if text:
                         events.append({"type": "delta", "content": text})
                 elif block.get("type") == "tool_use":
