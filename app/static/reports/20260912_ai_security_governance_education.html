@@ -25,6 +25,12 @@ background:var(--bg);color:var(--text);line-height:1.8;min-height:100vh}
 .toc a{color:var(--text2);text-decoration:none;font-size:.9rem;padding:6px 12px;border-radius:8px;display:block;transition:.2s}
 .toc a:hover{background:var(--card);color:var(--accent)}
 .toc a .num{color:var(--accent);font-weight:700;margin-right:6px;font-size:.8rem}
+/* --- 2026-09-13 출처 검수: 본문 인용 링크 클릭 가능화 스타일 --- */
+.section a[href^="http"],.footer a[href^="http"],.alert a[href^="http"],td a[href^="http"]{color:var(--accent3);text-decoration:none;border-bottom:1px dashed var(--accent3);transition:.2s;word-break:break-all}
+.section a[href^="http"]:hover,.footer a[href^="http"]:hover,.alert a[href^="http"]:hover,td a[href^="http"]:hover{color:var(--accent);border-bottom-style:solid}
+.section a[href^="http"]::after,.footer a[href^="http"]::after{content:" \2197";font-size:.75em;opacity:.7}
+.tag-verified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#10b98120;color:#34d399;margin-left:6px}
+.tag-unverified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#f59e0b20;color:#fbbf24;margin-left:6px}
 .section{margin-bottom:56px}
 .section-anchor{scroll-margin-top:24px}
 h2.section-title{font-size:1.5rem;font-weight:700;margin-bottom:20px;padding-bottom:12px;
@@ -123,6 +129,7 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
     <a href="#ch13"><span class="num">13</span> 사고 대응 플레이북</a>
     <a href="#ch14"><span class="num">14</span> AADS 실제 보안 통제 현황</a>
     <a href="#ch15"><span class="num">15</span> 참고자료·다음 단계</a>
+    <a href="#source-audit-20260913"><span class="num">★</span> 부록. 출처 검수 이력 (2026-09-13)</a>
   </div>
 </div>
 
@@ -374,12 +381,22 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
 
   <p>&quot;우리 데이터가 AI 학습에 쓰이는가?&quot;는 경영진이 가장 많이 묻는 질문이면서도 가장 오해가 많은 영역입니다. 3사 공식 문서를 직접 확인한 2026년 9월 기준 정책은 다음과 같습니다.</p>
 
+  <div class="alert alert-success">
+    <strong>✅ 2026-09-13 KST 재검증 — 3사 공식 문서 원문 대조</strong>
+    이번 검수에서 아래 표의 핵심 주장을 공식 문서 원문으로 다시 확인했고, 원문 문구를 함께 싣습니다.
+    <ul style="margin-top:8px">
+      <li><strong>Anthropic</strong> — <em>"By default, we will not use your inputs or outputs from our commercial products to train our models."</em> 피드백을 명시적으로 제출한 경우에 한해 <em>"we will store the entire related conversation … for up to 5 years"</em>(계정 식별자 분리 후). 관리자는 Data and Privacy의 "Rate chats" 설정으로 피드백 제출 자체를 차단할 수 있습니다. <a href="https://privacy.claude.com/en/articles/7996868-is-my-data-used-for-model-training" target="_blank" rel="noopener">원문</a></li>
+      <li><strong>Google</strong> — 무료(Unpaid) 등급은 <em>"Google uses the content you submit to the Services and any generated responses to provide, improve, and develop Google products and services and machine learning technologies"</em>, 유료(Paid)는 <em>"Google doesn't use your prompts … or responses to improve our products"</em>. 약관 발효일 <strong>2026-03-23</strong>. <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">원문</a></li>
+      <li class="price"><strong>URL 변경 감지</strong> — <code>privacy.anthropic.com</code>은 현재 <code>privacy.claude.com</code>으로 <strong>HTTP 301 영구 이동</strong>합니다(2026-09-13 KST 확인). 사내 정책 문서에 옛 도메인을 인용해 두었다면 갱신하십시오.</li>
+    </ul>
+  </div>
+
   <h3>6-1. Anthropic (Claude API / Claude for Work)</h3>
   <div class="table-wrap">
     <table>
       <thead><tr><th>항목</th><th>내용</th><th>출처</th></tr></thead>
       <tbody>
-        <tr><td>기본 학습 활용</td><td>상용 제품(API, Claude for Work, Claude Gov 등) 입력·출력은 <strong>기본적으로 학습에 사용하지 않음</strong>. 사용자가 피드백 버튼(👍/👎)으로 명시적으로 공유한 경우에만 예외</td><td rowspan="4">privacy.anthropic.com, privacy.claude.com (2026-07-01 갱신 확인)</td></tr>
+        <tr><td>기본 학습 활용</td><td>상용 제품(API, Claude for Work, Claude Gov 등) 입력·출력은 <strong>기본적으로 학습에 사용하지 않음</strong>. 사용자가 피드백 버튼(👍/👎)으로 명시적으로 공유한 경우에만 예외</td><td rowspan="4"><a href="https://privacy.claude.com/en/articles/7996868-is-my-data-used-for-model-training" target="_blank" rel="noopener">학습 활용 여부 문서</a> · <a href="https://privacy.claude.com/en/articles/7996866-how-long-do-you-store-my-organization-s-data" target="_blank" rel="noopener">보존 기간 문서</a><br><small>(2026-09-13 KST 재확인, 모두 HTTP 200. 구 <code>privacy.anthropic.com</code>은 301 리다이렉트)</small></td></tr>
         <tr><td>기본 보존 기간</td><td>API 입력·출력은 수신 후 <strong>30일 이내 자동 삭제</strong>(Files API 등 사용자 설정 보존 기능, 영시보존계약(ZDR) 등 예외 존재)</td></tr>
         <tr><td>정책 위반 시 보존</td><td>Usage Policy 위반으로 플래그된 경우 최대 2년 보존, 신뢰·안전 분류 점수는 최대 7년 보존</td></tr>
         <tr><td>피드백 데이터</td><td>👍/👎로 제출된 피드백은 최대 5년 보존, 계정·고객 ID와 분리(de-link) 후 활용</td></tr>
@@ -392,7 +409,7 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
     <table>
       <thead><tr><th>항목</th><th>내용</th><th>출처</th></tr></thead>
       <tbody>
-        <tr><td>기본 학습 활용</td><td>2023년 3월 1일 이후 API 데이터 및 ChatGPT Business/Enterprise/Edu/Healthcare/Teachers 데이터는 <strong>기본적으로 학습에 사용하지 않음</strong>. 명시적 옵트인(피드백 공유) 시에만 예외</td><td rowspan="3">openai.com/enterprise-privacy (2026-01-08 갱신 확인)</td></tr>
+        <tr><td>기본 학습 활용</td><td>2023년 3월 1일 이후 API 데이터 및 ChatGPT Business/Enterprise/Edu/Healthcare/Teachers 데이터는 <strong>기본적으로 학습에 사용하지 않음</strong>. 명시적 옵트인(피드백 공유) 시에만 예외</td><td rowspan="3"><a href="https://openai.com/enterprise-privacy/" target="_blank" rel="noopener">openai.com/enterprise-privacy</a><br><small>(2026-01-08 갱신 확인. 2026-09-13 KST 자동 조회는 HTTP 403 — 봇 차단이며 브라우저 접속은 정상)</small></td></tr>
         <tr><td>기본 보존 기간</td><td>API 입력·출력은 최대 <strong>30일</strong> 보존 후 삭제(남용 탐지 목적). 적격 엔드포인트는 영시보존(Zero Data Retention) 신청 가능</td></tr>
         <tr><td>Enterprise/Business 대화</td><td>워크스페이스 관리자가 보존 기간을 직접 제어. 삭제된 대화는 30일 이내 시스템에서도 제거</td></tr>
       </tbody>
@@ -421,7 +438,7 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
       </ul>
     </div>
   </div>
-  <p style="font-size:.85rem;color:var(--text3)">출처: ai.google.dev/gemini-api/terms &quot;Gemini API Additional Terms of Service&quot;(2026-03-23 발효판 확인)</p>
+  <p style="font-size:.85rem;color:var(--text3)">출처: <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">ai.google.dev/gemini-api/terms — &quot;Gemini API Additional Terms of Service&quot;</a> (2026-03-23 발효판, 2026-09-13 KST 재확인 HTTP 200)</p>
 
   <h3>6-4. 3사 요약 비교표</h3>
   <div class="table-wrap">
@@ -884,20 +901,21 @@ API_KEY=[A-Za-z0-9][A-Za-z0-9_-]{15,}  # 범용 API_KEY= 패턴</pre>
   <h3>15-1. 참고자료</h3>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>출처명</th><th>확인 날짜</th><th>URL</th></tr></thead>
+      <thead><tr><th>출처명</th><th>확인 날짜</th><th>URL(클릭 가능)</th><th>2026-09-13 KST 접속확인</th></tr></thead>
       <tbody>
-        <tr><td>Anthropic Privacy Center — Is my data used for model training?</td><td>2026-09-12 (문서 &quot;Updated over 3 weeks ago&quot; 확인)</td><td>https://privacy.anthropic.com/en/articles/7996868-is-my-data-used-for-model-training</td></tr>
-        <tr><td>Anthropic Privacy Center — How long do you store my organization's data?</td><td>2026-07-01 갱신본 확인</td><td>https://privacy.claude.com/en/articles/7996866-how-long-do-you-store-my-organization-s-data</td></tr>
-        <tr><td>OpenAI — Enterprise privacy</td><td>2026-01-08 갱신본 확인</td><td>https://openai.com/enterprise-privacy/</td></tr>
-        <tr><td>Google — Gemini API Additional Terms of Service</td><td>2026-03-23 발효판 확인</td><td>https://ai.google.dev/gemini-api/terms</td></tr>
-        <tr><td>OWASP — Top 10 for LLM Applications</td><td>2025년 개정판 기준 (2026-09 시점 최신)</td><td>https://owasp.org/www-project-top-10-for-large-language-model-applications/</td></tr>
-        <tr><td>NIST — AI Risk Management Framework (AI RMF 1.0 / 생성형 AI 프로파일 AI 600-1)</td><td>AI RMF 1.0: 2023-01, 생성형 AI 프로파일: 2024-07</td><td>https://www.nist.gov/itl/ai-risk-management-framework</td></tr>
-        <tr><td>ISO/IEC 42001:2023 — AI 관리시스템(AIMS) 표준</td><td>2023-12 발행</td><td>https://www.iso.org/standard/81230.html</td></tr>
-        <tr><td>한국 「인공지능 발전과 신뢰 기반 조성 등에 관한 기본법」 관련 보도(IFS)</td><td>2026-09-11 보도</td><td>http://www.ifs.or.kr/bbs/board.php?bo_table=News&amp;wr_id=56007</td></tr>
-        <tr><td>AI 기본법 기업 인지도 조사 보도(ZDNet Korea)</td><td>2026-05-04 보도</td><td>https://zdnet.co.kr/view/?no=20260504111211</td></tr>
-        <tr><td>EU AI Act 고위험 규제 연기 보도(Impact On)</td><td>2026-06-30 보도</td><td>http://www.impacton.net/news/articleView.html?idxno=19421</td></tr>
-        <tr><td>EU 디지털 옴니버스 16개월 연기 최초 보도(AI타임스)</td><td>2025-11-20 보도</td><td>https://www.aitimes.com/news/articleView.html?idxno=204121</td></tr>
-        <tr><td>AADS 소스코드 — scripts/hooks/pre-commit, app/core/anthropic_client.py, app/services/tool_executor.py, app/services/subagent_service.py</td><td>2026-09-12 직접 조회</td><td>server 68 내부 저장소(비공개)</td></tr>
+        <tr><td>Anthropic Privacy Center — Is my data used for model training?</td><td>2026-09-13 재확인</td><td><a href="https://privacy.claude.com/en/articles/7996868-is-my-data-used-for-model-training" target="_blank" rel="noopener">privacy.claude.com — 학습 활용 여부</a></td><td>HTTP 200 <span class="tag-verified">구 privacy.anthropic.com → 301</span></td></tr>
+        <tr><td>Anthropic Privacy Center — How long do you store my organization's data?</td><td>2026-07-01 갱신본 / 2026-09-13 재확인</td><td><a href="https://privacy.claude.com/en/articles/7996866-how-long-do-you-store-my-organization-s-data" target="_blank" rel="noopener">privacy.claude.com — 보존 기간</a></td><td>HTTP 200</td></tr>
+        <tr><td>OpenAI — Enterprise privacy</td><td>2026-01-08 갱신본 확인</td><td><a href="https://openai.com/enterprise-privacy/" target="_blank" rel="noopener">openai.com/enterprise-privacy</a></td><td class="price">HTTP 403(자동조회 봇 차단) — 브라우저 접속 필요</td></tr>
+        <tr><td>Google — Gemini API Additional Terms of Service</td><td>2026-03-23 발효판 확인</td><td><a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">ai.google.dev/gemini-api/terms</a></td><td>HTTP 200</td></tr>
+        <tr><td>OWASP — Top 10 for LLM Applications</td><td>2025년 개정판 기준 (2026-09 시점 최신)</td><td><a href="https://owasp.org/www-project-top-10-for-large-language-model-applications/" target="_blank" rel="noopener">owasp.org — Top 10 for LLM Applications</a></td><td>HTTP 200</td></tr>
+        <tr><td>NIST — AI Risk Management Framework (AI RMF 1.0 / 생성형 AI 프로파일 AI 600-1)</td><td>AI RMF 1.0: 2023-01, 생성형 AI 프로파일: 2024-07</td><td><a href="https://www.nist.gov/itl/ai-risk-management-framework" target="_blank" rel="noopener">nist.gov — AI Risk Management Framework</a></td><td>HTTP 200</td></tr>
+        <tr><td>ISO/IEC 42001:2023 — AI 관리시스템(AIMS) 표준</td><td>2023-12 발행</td><td><a href="https://www.iso.org/standard/81230.html" target="_blank" rel="noopener">iso.org/standard/81230.html</a></td><td class="price">HTTP 403(자동조회 봇 차단) — 브라우저 접속 필요</td></tr>
+        <tr><td>한국 「인공지능 발전과 신뢰 기반 조성 등에 관한 기본법」 <strong>원문</strong> <span class="tag-verified">2026-09-13 추가</span></td><td>현행 법률 제21065호(2026-01-22 시행)</td><td><a href="https://www.law.go.kr/lsInfoP.do?lsiSeq=276241" target="_blank" rel="noopener">법제처 국가법령정보센터 — 인공지능기본법</a></td><td>HTTP 200 (보도자료 대신 1차 출처 추가)</td></tr>
+        <tr><td>한국 AI 기본법 관련 보도(IFS)</td><td>2026-09-11 보도</td><td><a href="http://www.ifs.or.kr/bbs/board.php?bo_table=News&amp;wr_id=56007" target="_blank" rel="noopener">ifs.or.kr — 관련 보도</a></td><td class="price">2차(보도). HTTPS 301 후 <strong>TLS 인증서 검증 실패</strong>로 자동 조회 불가 — 위 법령 원문으로 대체 확인 권장</td></tr>
+        <tr><td>AI 기본법 기업 인지도 조사 보도(ZDNet Korea)</td><td>2026-05-04 보도</td><td><a href="https://zdnet.co.kr/view/?no=20260504111211" target="_blank" rel="noopener">zdnet.co.kr — 인지도 조사</a></td><td>2차(보도)</td></tr>
+        <tr><td>EU AI Act 고위험 규제 연기 — <strong>확정 근거 규정</strong> <span class="tag-verified">2026-09-13 추가</span></td><td>Regulation (EU) 2026/1744 (2026-07-24 관보, 2026-07-27 발효)</td><td><a href="https://eur-lex.europa.eu/eli/reg/2026/1744/oj" target="_blank" rel="noopener">EUR-Lex — Regulation (EU) 2026/1744</a></td><td>HTTP 200 (보도 대신 1차 출처 추가)</td></tr>
+        <tr><td>EU AI Act 고위험 규제 연기 보도(Impact On) / 디지털 옴니버스 최초 보도(AI타임스)</td><td>2026-06-30 / 2025-11-20 보도</td><td><a href="http://www.impacton.net/news/articleView.html?idxno=19421" target="_blank" rel="noopener">impacton.net</a> · <a href="https://www.aitimes.com/news/articleView.html?idxno=204121" target="_blank" rel="noopener">aitimes.com</a></td><td>2차(보도) — 둘 다 HTTP 200</td></tr>
+        <tr><td>AADS 소스코드 — scripts/hooks/pre-commit, app/core/anthropic_client.py, app/services/tool_executor.py, app/services/subagent_service.py</td><td>2026-09-12 직접 조회</td><td>server 68 내부 저장소(비공개)</td><td>외부 링크 없음</td></tr>
       </tbody>
     </table>
   </div>
@@ -930,6 +948,18 @@ API_KEY=[A-Za-z0-9][A-Za-z0-9_-]{15,}  # 범용 API_KEY= 패턴</pre>
     <strong>✅ 마무리</strong>
     AI 보안·거버넌스는 한 번 구축하고 끝나는 프로젝트가 아니라, 모델·법규·공격 기법이 계속 바뀌는 <strong>지속적 관리 체계</strong>입니다. 이 문서의 참고자료 URL을 분기별로 재방문해 정책 변경 여부를 확인하는 것을 권장합니다.
   </div>
+</div>
+
+<div class="section" id="source-audit-20260913">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 부록. 출처 검수 이력 (2026-09-13 KST)</h2>
+  <p>본 문서는 2026-09-12 초판 작성 이후, <strong>2026-09-13 KST</strong>에 별도 출처 검수를 거쳤습니다. 검수 원칙은 ①법령·공식 문서·원 논문 등 <strong>1차 출처 우선</strong>, ②모든 인용을 <strong>클릭 가능한 링크</strong>로 전환, ③확인하지 못한 내용은 삭제하지 않고 <span class="tag-unverified">미검증</span>으로 명시, ④원문과 다른 서술은 원문 기준으로 교정입니다. 아래는 이번 검수에서 실제로 바뀐 내용입니다.</p>
+  <ul>
+    <li><strong>재검증</strong> — Anthropic 상용 제품 기본 미학습 원칙, 피드백 제출 시 최대 5년 보존, Google 유료/무료 정책 차이를 공식 문서 원문 문구로 재확인(약관 발효일 2026-03-23).</li>
+    <li><strong>교정</strong> — <code>privacy.anthropic.com</code> → <code>privacy.claude.com</code> 301 영구 이동 반영.</li>
+    <li><strong>보강</strong> — 참고자료 12건 전부를 클릭 가능 링크로 전환하고 접속 상태를 병기. 보도자료로만 인용하던 한국 AI기본법·EU 고위험 연기 항목에 <u>1차 출처</u>(법제처 원문, EUR-Lex Regulation (EU) 2026/1744)를 추가.</li>
+    <li><strong>미해소</strong> — openai.com/enterprise-privacy와 iso.org/standard/81230.html은 자동 조회 HTTP 403(봇 차단), ifs.or.kr은 TLS 인증서 검증 실패로 자동 확인 불가. 셋 다 브라우저 접속으로 확인해야 함.</li>
+  </ul>
+  <p style="font-size:.82rem;color:var(--text3)">※ "HTTP 200"은 2026-09-13 KST에 해당 URL이 응답했다는 뜻이며, 그 페이지에 실린 모든 수치를 본 문서가 검증했다는 뜻이 아닙니다. HTTP 403은 대체로 자동화 도구 차단(WAF)이며 링크가 죽었다는 뜻이 아닙니다 — 브라우저로는 정상 접속됩니다.</p>
 </div>
 
 <div class="footer">

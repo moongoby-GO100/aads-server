@@ -28,6 +28,10 @@ background:var(--bg);color:var(--text);line-height:1.8;min-height:100vh}
 .toc a:hover{background:var(--card);color:var(--accent)}
 .toc a .num{color:var(--accent);font-weight:700;margin-right:6px;font-size:.8rem}
 /* Sections */
+/* --- 2026-09-13 출처 검수: 본문 인용 링크 클릭 가능화 스타일 --- */
+.section a[href^="http"],.footer a[href^="http"],.alert a[href^="http"],td a[href^="http"]{color:var(--accent3);text-decoration:none;border-bottom:1px dashed var(--accent3);transition:.2s;word-break:break-all}
+.section a[href^="http"]:hover,.footer a[href^="http"]:hover,.alert a[href^="http"]:hover,td a[href^="http"]:hover{color:var(--accent);border-bottom-style:solid}
+.section a[href^="http"]::after,.footer a[href^="http"]::after{content:" \2197";font-size:.75em;opacity:.7}
 .section{margin-bottom:56px}
 .section-anchor{scroll-margin-top:24px}
 h2.section-title{font-size:1.5rem;font-weight:700;margin-bottom:20px;padding-bottom:12px;
@@ -139,6 +143,7 @@ border-radius:10px;padding:18px 22px;margin:24px 0 8px}
     <a href="#ch11"><span class="num">11</span> 안전성 평가 — 환각·거절·유해성·편향</a>
     <a href="#ch12"><span class="num">12</span> AADS 실제 품질 체계 분석</a>
     <a href="#ch13"><span class="num">13</span> 참고자료 · 다음 단계</a>
+    <a href="#source-audit-20260913"><span class="num">★</span> 부록. 출처 검수 이력 (2026-09-13)</a>
   </div>
 </div>
 
@@ -341,6 +346,10 @@ border-radius:10px;padding:18px 22px;margin:24px 0 8px}
   </div>
 
   <h3>3대 편향과 완화 기법</h3>
+  <div class="alert alert-info">
+    <strong>📎 출처 — 이 3대 편향의 원 근거 <span class="tag-verified">2026-09-13 KST 원논문 확인</span></strong>
+    아래 세 가지 편향은 Zheng 외, <a href="https://arxiv.org/abs/2306.05685" target="_blank" rel="noopener">"Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena"(arXiv:2306.05685)</a>에서 <em>position, verbosity, self-enhancement bias</em> 및 <em>limited reasoning ability</em>로 정리된 내용입니다. 같은 논문은 <strong>GPT-4급 판정자가 사람의 선호와 80% 이상 일치</strong>하며 이는 "사람들 사이의 일치도와 같은 수준"이라고 보고합니다 — LLM-as-Judge를 쓸 근거이자, 사람 평가를 완전히 대체할 수 없다는 근거를 동시에 제공합니다.
+  </div>
   <div class="card-grid">
     <div class="info-card">
       <h4>① 위치 편향 (Positional Bias)</h4>
@@ -412,6 +421,8 @@ border-radius:10px;padding:18px 22px;margin:24px 0 8px}
       </tbody>
     </table>
   </div>
+
+  <p style="font-size:.8rem;color:var(--text3)">위 κ 구간 해석은 Landis &amp; Koch(1977), <a href="https://pubmed.ncbi.nlm.nih.gov/843571/" target="_blank" rel="noopener">"The Measurement of Observer Agreement for Categorical Data", <em>Biometrics</em> 33(1):159–174 (PubMed 843571)</a>에서 제시된 관례적 구간 기준입니다 — 통계적 필연이 아니라 널리 쓰이는 관습이라는 점에 유의하십시오. <span class="tag-verified">2026-09-13 KST 출처 확인</span></p>
 
   <div class="alert alert-info">
     <strong>💡 실전 팁</strong>
@@ -532,19 +543,35 @@ border-radius:10px;padding:18px 22px;margin:24px 0 8px}
     <table>
       <thead><tr><th>벤치마크</th><th>측정 대상</th><th>의미</th><th>한계</th></tr></thead>
       <tbody>
-        <tr><td><strong>MMLU-Pro</strong></td><td>57개+ 분야 전문 지식·추론 (기존 MMLU의 난이도 상향판)</td><td>범용 지식 폭과 다지선다 추론력</td><td>실제 업무 대화·도구 사용 능력은 측정 안 함</td></tr>
-        <tr><td><strong>GPQA Diamond</strong></td><td>박사급 난이도의 물리·화학·생물 문제</td><td>전문가도 어려워하는 최상위 추론력</td><td>일반 업무와 무관한 극단적 난이도 — 실무 대리지표로 부적합</td></tr>
-        <tr><td><strong>SWE-bench Verified</strong></td><td>실제 GitHub 이슈를 해결하는 코딩 능력</td><td>실전 코드 수정 능력의 비교적 현실적인 지표</td><td>파이썬 오픈소스 저장소 편중, 사내 레거시 코드베이스와는 다름</td></tr>
-        <tr><td><strong>HELM</strong> (Stanford)</td><td>정확도+효율성+공정성+견고성 등 다차원 종합 평가 프레임워크</td><td>단일 점수가 아닌 다면적 비교표 제공</td><td>항목이 많아 해석에 전문성 필요, 업데이트 주기가 모델 출시 속도보다 느릴 수 있음</td></tr>
-        <tr><td><strong>Chatbot Arena (LMSYS)</strong></td><td>실사용자 블라인드 투표 기반 Elo 랭킹</td><td>실제 사람의 "선호"를 반영 — 가장 현실적인 대중 체감 지표 중 하나</td><td>일반 대중 사용자 취향 편중 (장문·형식 선호 등 verbosity bias 가능성)</td></tr>
+        <tr><td><strong><a href="https://arxiv.org/abs/2406.01574" target="_blank" rel="noopener">MMLU-Pro</a></strong></td><td><strong>14개 분야</strong>·12,000여 문항의 전문 지식·추론 (기존 MMLU의 난이도 상향판, 선택지 4→<strong>10개</strong>)</td><td>범용 지식 폭과 다지선다 추론력. 원논문 기준 MMLU 대비 정확도 <strong>16~33% 하락</strong>, 프롬프트 문구 변화에 따른 점수 흔들림은 4~5%→<strong>2%</strong>로 감소</td><td>실제 업무 대화·도구 사용 능력은 측정 안 함</td></tr>
+        <tr><td><strong><a href="https://arxiv.org/abs/2311.12022" target="_blank" rel="noopener">GPQA Diamond</a></strong></td><td>박사급 난이도의 생물·물리·화학 문제 (원 데이터셋 <strong>448문항</strong>, Diamond는 그 중 난이도 검증 부분집합)</td><td>전문가도 어려워하는 최상위 추론력 — 원논문에서 해당 분야 박사(과정) 전문가 정답률 <strong>65%</strong>(오류 보정 시 74%), <u>웹 검색을 30분 이상 허용한</u> 비전문가는 <strong>34%</strong></td><td>일반 업무와 무관한 극단적 난이도 — 실무 대리지표로 부적합</td></tr>
+        <tr><td><strong><a href="https://www.swebench.com/" target="_blank" rel="noopener">SWE-bench Verified</a></strong></td><td>실제 GitHub 이슈를 해결하는 코딩 능력. 원 벤치마크는 <strong>12개 파이썬 저장소에서 수집한 2,294건</strong>, Verified는 사람이 풀이 가능성을 검증한 <strong>500건</strong> 부분집합</td><td>실전 코드 수정 능력의 비교적 현실적인 지표</td><td>파이썬 오픈소스 저장소 편중(원 논문 기준 12개 저장소), 사내 레거시 코드베이스와는 다름</td></tr>
+        <tr><td><strong><a href="https://crfm.stanford.edu/helm/" target="_blank" rel="noopener">HELM</a></strong> (Stanford CRFM)</td><td>정확도+효율성+공정성+견고성 등 다차원 종합 평가 프레임워크</td><td>단일 점수가 아닌 다면적 비교표 제공</td><td>항목이 많아 해석에 전문성 필요, 업데이트 주기가 모델 출시 속도보다 느릴 수 있음</td></tr>
+        <tr><td><strong><a href="https://lmarena.ai/leaderboard" target="_blank" rel="noopener">Chatbot Arena (LMArena, 구 LMSYS)</a></strong></td><td>실사용자 블라인드 투표 기반 Elo 랭킹</td><td>실제 사람의 "선호"를 반영 — 가장 현실적인 대중 체감 지표 중 하나</td><td>일반 대중 사용자 취향 편중 (장문·형식 선호 등 verbosity bias 가능성 — 4장 <a href="https://arxiv.org/abs/2306.05685" target="_blank" rel="noopener">arXiv:2306.05685</a> 참고)</td></tr>
       </tbody>
     </table>
   </div>
 
   <div class="alert alert-warn">
-    <strong>⚠️ 벤치마크 순위는 시점 변화가 매우 빠릅니다</strong>
-    2026년 9월 시점의 구체적 리더보드 순위·점수는 본 문서 작성 중 실시간 검증 도구 연결 오류로 확인하지 못했습니다 (미검증). 벤치마크 순위는 신모델 출시마다 수 주 단위로 뒤바뀌므로, 의사결정 시점에 반드시 각 벤치마크 공식 리더보드(예: Artificial Analysis, Open LLM Leaderboard, LMSYS Arena)를 직접 확인할 것을 권장합니다.
+    <strong>⚠️ 벤치마크 순위는 시점 변화가 매우 빠릅니다 — 점수 대신 '확인 경로'를 문서화합니다</strong>
+    벤치마크 순위는 신모델 출시마다 수 주 단위로 뒤바뀌므로, <u>교육자료에 특정 시점 순위를 박아 넣으면 읽는 순간 이미 낡은 정보</u>가 됩니다. 그래서 본 문서는 순위 수치 대신 <strong>담당자가 직접 최신값을 확인할 공식 경로</strong>를 싣습니다. 아래 링크는 2026-09-13 KST에 접속 가능 여부를 실제로 확인했습니다.
   </div>
+
+  <h3>공식 리더보드 확인 경로 <span class="tag-verified">2026-09-13 KST 접속 확인</span></h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>리더보드</th><th>무엇을 보는가</th><th>링크</th><th>접속 확인</th></tr></thead>
+      <tbody>
+        <tr><td>Stanford HELM</td><td>정확도 외 효율성·공정성·견고성까지 다차원 비교</td><td><a href="https://crfm.stanford.edu/helm/" target="_blank" rel="noopener">crfm.stanford.edu/helm</a> (경량판: <a href="https://crfm.stanford.edu/helm/lite/latest/" target="_blank" rel="noopener">HELM Lite</a>)</td><td>HTTP 200</td></tr>
+        <tr><td>LMArena (구 LMSYS Chatbot Arena)</td><td>실사용자 블라인드 투표 Elo 랭킹</td><td><a href="https://lmarena.ai/leaderboard" target="_blank" rel="noopener">lmarena.ai/leaderboard</a></td><td class="price">자동조회 HTTP 403(봇 차단) — <strong>브라우저로 직접 접속</strong> 필요</td></tr>
+        <tr><td>Open LLM Leaderboard (Hugging Face)</td><td>공개 가중치 모델의 표준 벤치마크 점수</td><td><a href="https://huggingface.co/spaces/open-llm-leaderboard/open_llm_leaderboard" target="_blank" rel="noopener">huggingface.co — Open LLM Leaderboard</a></td><td>HTTP 200</td></tr>
+        <tr><td>Artificial Analysis</td><td>품질·속도·가격을 한 화면에서 비교(조달 판단용)</td><td><a href="https://artificialanalysis.ai/" target="_blank" rel="noopener">artificialanalysis.ai</a></td><td>HTTP 200</td></tr>
+        <tr><td>SWE-bench 리더보드</td><td>Verified/Full/Lite/Multimodal 분할별 이슈 해결률</td><td><a href="https://www.swebench.com/" target="_blank" rel="noopener">swebench.com</a></td><td>HTTP 200</td></tr>
+        <tr><td>LiveBench</td><td>오염 방지를 위해 문제를 주기적으로 교체하는 동적 벤치마크</td><td><a href="https://livebench.ai/" target="_blank" rel="noopener">livebench.ai</a></td><td>HTTP 200</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="font-size:.8rem;color:var(--text3)">※ 초판에는 "실시간 검증 도구 연결 오류로 확인하지 못했습니다(미검증)"라고 적혀 있었습니다. 2026-09-13 KST 검수에서 위 경로들의 접속 가능 여부를 실제로 확인해 그 문장을 대체했습니다. <u>접속 확인은 '링크가 살아있다'는 뜻이며, 그 페이지에 실린 개별 점수까지 본 문서가 검증했다는 뜻은 아닙니다.</u></p>
 
   <h3>벤치마크 오염 (Benchmark Contamination) 문제</h3>
   <p>벤치마크 문제와 정답이 인터넷에 공개되어 있으면, 신규 모델 학습 데이터에 그 문제가 그대로 섞여 들어갈 수 있습니다. 이 경우 모델은 "문제를 푼 것"이 아니라 "답을 암기한 것"이며, 벤치마크 점수가 실제 능력보다 부풀려집니다.</p>
@@ -825,20 +852,21 @@ border-radius:10px;padding:18px 22px;margin:24px 0 8px}
   <h3>참고자료</h3>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>구분</th><th>출처</th><th>활용</th></tr></thead>
+      <thead><tr><th>구분</th><th>출처(클릭 가능)</th><th>활용</th><th>2026-09-13 KST 확인</th></tr></thead>
       <tbody>
-        <tr><td>벤치마크/리더보드</td><td>Stanford HELM (crfm.stanford.edu/helm)</td><td>다차원 종합 평가 프레임워크 참고</td></tr>
-        <tr><td>벤치마크/리더보드</td><td>LMSYS Chatbot Arena</td><td>실사용자 블라인드 선호도 기반 랭킹</td></tr>
-        <tr><td>벤치마크/리더보드</td><td>Open LLM Leaderboard / Artificial Analysis</td><td>가격·속도·성능 종합 비교</td></tr>
-        <tr><td>벤치마크 원 논문</td><td>MMLU-Pro, GPQA, SWE-bench 각 공식 논문/저장소</td><td>측정 방법론 상세 확인</td></tr>
-        <tr><td>방법론</td><td>"Judging LLM-as-a-Judge" 계열 연구 (위치/장문/자기선호 편향 정량화)</td><td>Judge 설계 시 편향 완화 근거</td></tr>
-        <tr><td>통계</td><td>이항비율 A/B 테스트 표본크기 표준 공식</td><td>10장 표본 수 산정 근거</td></tr>
-        <tr><td>AADS 내부 코드</td><td>app/services/self_evaluator.py, quality_gate.py, quality_feedback_loop.py, eval_pipeline.py, ab_test_problems.py (서버 68, 2026-09-12 확인)</td><td>12장 전체 근거</td></tr>
-        <tr><td>AADS 내부 DB</td><td>chat_messages.quality_score/quality_details, ai_observations 스키마 (2026-09-12 쿼리)</td><td>12-2, 12-4 실측 수치</td></tr>
+        <tr><td>벤치마크/리더보드</td><td><a href="https://crfm.stanford.edu/helm/" target="_blank" rel="noopener">Stanford HELM</a></td><td>다차원 종합 평가 프레임워크 참고</td><td>HTTP 200</td></tr>
+        <tr><td>벤치마크/리더보드</td><td><a href="https://lmarena.ai/leaderboard" target="_blank" rel="noopener">LMArena (구 LMSYS Chatbot Arena)</a></td><td>실사용자 블라인드 선호도 기반 랭킹</td><td class="price">HTTP 403(봇 차단) — 브라우저 접속 필요</td></tr>
+        <tr><td>벤치마크/리더보드</td><td><a href="https://huggingface.co/spaces/open-llm-leaderboard/open_llm_leaderboard" target="_blank" rel="noopener">Open LLM Leaderboard</a> / <a href="https://artificialanalysis.ai/" target="_blank" rel="noopener">Artificial Analysis</a></td><td>가격·속도·성능 종합 비교</td><td>HTTP 200</td></tr>
+        <tr><td>벤치마크 원 논문</td><td><a href="https://arxiv.org/abs/2406.01574" target="_blank" rel="noopener">MMLU-Pro (arXiv:2406.01574)</a> · <a href="https://arxiv.org/abs/2311.12022" target="_blank" rel="noopener">GPQA (arXiv:2311.12022)</a> · <a href="https://arxiv.org/abs/2310.06770" target="_blank" rel="noopener">SWE-bench (arXiv:2310.06770)</a></td><td>8장 문항 수·선택지 수·전문가 정답률 등 수치의 직접 근거</td><td>HTTP 200 (제목 대조 확인)</td></tr>
+        <tr><td>벤치마크 데이터셋</td><td><a href="https://github.com/TIGER-AI-Lab/MMLU-Pro" target="_blank" rel="noopener">MMLU-Pro 저장소</a> · <a href="https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified" target="_blank" rel="noopener">SWE-bench Verified 데이터셋(500건)</a></td><td>"14개 분야·12,000+ 문항", "Verified 500건" 수치 확인</td><td>HTTP 200</td></tr>
+        <tr><td>방법론</td><td><a href="https://arxiv.org/abs/2306.05685" target="_blank" rel="noopener">Zheng 외, "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena" (arXiv:2306.05685)</a></td><td>4장 위치/장문/자기선호 편향과 "사람과 80% 이상 일치" 근거</td><td>HTTP 200</td></tr>
+        <tr><td>통계</td><td><a href="https://pubmed.ncbi.nlm.nih.gov/843571/" target="_blank" rel="noopener">Landis &amp; Koch (1977), Biometrics 33(1):159–174</a> · 이항비율 A/B 테스트 표본크기 표준 공식</td><td>5장 κ 해석 구간, 10장 표본 수 산정 근거</td><td>HTTP 200(PubMed)</td></tr>
+        <tr><td>AADS 내부 코드</td><td>app/services/self_evaluator.py, quality_gate.py, quality_feedback_loop.py, eval_pipeline.py, ab_test_problems.py (서버 68, 2026-09-12 확인)</td><td>12장 전체 근거</td><td>비공개 저장소 — 외부 링크 없음</td></tr>
+        <tr><td>AADS 내부 DB</td><td>chat_messages.quality_score/quality_details, ai_observations 스키마 (2026-09-12 쿼리)</td><td>12-2, 12-4 실측 수치</td><td>비공개 DB — 외부 링크 없음</td></tr>
       </tbody>
     </table>
   </div>
-  <p style="color:var(--text2);font-size:.82rem">※ 2026년 9월 시점 벤치마크 순위·점수는 실시간 검색 도구 연결 오류로 본 문서 작성 중 확인하지 못해 구체적 수치를 싣지 않았습니다 (미검증). 의사결정 시 각 벤치마크 공식 페이지를 직접 확인하시기 바랍니다.</p>
+  <p style="color:var(--text2);font-size:.82rem">※ 초판은 벤치마크 관련 사항을 "실시간 검색 도구 연결 오류로 확인하지 못함(미검증)"으로 남겼습니다. 2026-09-13 KST 검수에서 <strong>원 논문·공식 저장소를 직접 열람해 8장의 문항 수·선택지 수·전문가 정답률을 확정</strong>했고, 리더보드는 접속 경로만 검증했습니다(순위 수치는 변동이 빨라 의도적으로 싣지 않습니다). 여전히 <span class="tag-unverified">미검증</span>으로 남은 항목: 각 리더보드에 게시된 <u>개별 모델 점수·순위</u>.</p>
 
   <h3>다음 단계 (제안)</h3>
   <ol>
@@ -860,6 +888,19 @@ border-radius:10px;padding:18px 22px;margin:24px 0 8px}
 </div>
 
 <!-- ===== FOOTER ===== -->
+<div class="section" id="source-audit-20260913">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 부록. 출처 검수 이력 (2026-09-13 KST)</h2>
+  <p>본 문서는 2026-09-12 초판 작성 이후, <strong>2026-09-13 KST</strong>에 별도 출처 검수를 거쳤습니다. 검수 원칙은 ①법령·공식 문서·원 논문 등 <strong>1차 출처 우선</strong>, ②모든 인용을 <strong>클릭 가능한 링크</strong>로 전환, ③확인하지 못한 내용은 삭제하지 않고 <span class="tag-unverified">미검증</span>으로 명시, ④원문과 다른 서술은 원문 기준으로 교정입니다. 아래는 이번 검수에서 실제로 바뀐 내용입니다.</p>
+  <ul>
+    <li><strong>교정</strong> — MMLU-Pro를 "57개+ 분야"에서 원 논문·공식 저장소 기준 <u>14개 분야·12,000여 문항·10지선다</u>로 정정(MMLU 대비 정확도 16~33% 하락, 프롬프트 민감도 4~5%→2%).</li>
+    <li><strong>보강</strong> — GPQA 448문항·전문가 65%(보정 74%)·웹검색 허용 비전문가 34%, SWE-bench 2,294건(12개 파이썬 저장소)·Verified 500건을 원 논문/데이터셋에서 확인해 추가.</li>
+    <li><strong>보강</strong> — LLM-as-Judge 3대 편향과 "사람과 80% 이상 일치" 주장에 원 논문(arXiv:2306.05685) 근거 명시, κ 해석 구간에 Landis &amp; Koch(1977) 출처 명시.</li>
+    <li><strong>해소</strong> — "실시간 검증 도구 연결 오류로 확인 못함(미검증)" 문구를 제거하고, 공식 리더보드 6종의 접속 확인 결과표로 대체.</li>
+    <li><strong>미해소</strong> — 각 리더보드에 게시된 개별 모델 점수·순위는 변동성이 커 의도적으로 싣지 않음(미검증 유지). LMArena는 자동 조회 HTTP 403.</li>
+  </ul>
+  <p style="font-size:.82rem;color:var(--text3)">※ "HTTP 200"은 2026-09-13 KST에 해당 URL이 응답했다는 뜻이며, 그 페이지에 실린 모든 수치를 본 문서가 검증했다는 뜻이 아닙니다. HTTP 403은 대체로 자동화 도구 차단(WAF)이며 링크가 죽었다는 뜻이 아닙니다 — 브라우저로는 정상 접속됩니다.</p>
+</div>
+
 <div class="footer">
   <p>AADS Academy · AI 평가·품질측정 종합 교육자료 · 2026-09-12 · CEO 교육용</p>
   <p style="margin-top:6px">12장 AADS 관련 수치는 2026-09-12 서버 68(contabo116) 코드 열람 및 프로덕션 DB 조회로 직접 확인되었습니다. 그 외 일반 벤치마크·통계 수치는 2025~2026년 공개 방법론 기준이며 시점에 따라 변동될 수 있습니다.</p>

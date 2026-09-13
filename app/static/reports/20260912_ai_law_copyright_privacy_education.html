@@ -25,6 +25,12 @@ background:var(--bg);color:var(--text);line-height:1.8;min-height:100vh}
 .toc a{color:var(--text2);text-decoration:none;font-size:.9rem;padding:6px 12px;border-radius:8px;display:block;transition:.2s}
 .toc a:hover{background:var(--card);color:var(--accent)}
 .toc a .num{color:var(--accent);font-weight:700;margin-right:6px;font-size:.8rem}
+/* --- 2026-09-13 출처 검수: 본문 인용 링크 클릭 가능화 스타일 --- */
+.section a[href^="http"],.footer a[href^="http"],.alert a[href^="http"],td a[href^="http"]{color:var(--accent3);text-decoration:none;border-bottom:1px dashed var(--accent3);transition:.2s;word-break:break-all}
+.section a[href^="http"]:hover,.footer a[href^="http"]:hover,.alert a[href^="http"]:hover,td a[href^="http"]:hover{color:var(--accent);border-bottom-style:solid}
+.section a[href^="http"]::after,.footer a[href^="http"]::after{content:" \2197";font-size:.75em;opacity:.7}
+.tag-verified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#10b98120;color:#34d399;margin-left:6px}
+.tag-unverified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#f59e0b20;color:#fbbf24;margin-left:6px}
 .section{margin-bottom:56px}
 .section-anchor{scroll-margin-top:24px}
 h2.section-title{font-size:1.5rem;font-weight:700;margin-bottom:20px;padding-bottom:12px;
@@ -129,6 +135,7 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
     <a href="#ch14"><span class="num">14</span> 사내 AI 이용규정 템플릿</a>
     <a href="#ch15"><span class="num">15</span> AADS 6개 프로젝트 법적 리스크 점검표</a>
     <a href="#ch16"><span class="num">16</span> 참고자료·다음 단계</a>
+    <a href="#source-audit-20260913"><span class="num">★</span> 부록. 출처 검수 이력 (2026-09-13)</a>
   </div>
 </div>
 
@@ -223,7 +230,7 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
     </ol>
   </div>
 
-  <p style="font-size:.8rem;color:var(--text3)">출처: 법제처 국가법령정보센터 law.go.kr(인공지능기본법, lsiSeq=276241) · NIA 인공지능기본법 지원데스크(sw.or.kr/AI_act_helpdesk) · imaginationgroup.co.kr 「인공지능기본법 완벽 가이드」(2026)</p>
+  <p style="font-size:.8rem;color:var(--text3)">출처(1차): <a href="https://www.law.go.kr/lsInfoP.do?lsiSeq=276241" target="_blank" rel="noopener">법제처 국가법령정보센터 — 인공지능기본법 현행 원문</a> · <a href="https://www.law.go.kr/LSW/lsInfoP.do?efYd=20260122&amp;lsiSeq=282879" target="_blank" rel="noopener">같은 법 시행령(2026-01-22 시행)</a> (2026-09-13 KST 접속 확인). 보조 참고: imaginationgroup.co.kr 「인공지능기본법 완벽 가이드」(2026). <span class="tag-unverified">NIA 지원데스크(sw.or.kr/AI_act_helpdesk)는 2026-09-13 자동 접속이 실패해 링크를 싣지 않았습니다</span></p>
 </div>
 
 <!-- ===== CH3 ===== -->
@@ -231,23 +238,29 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
   <h2 class="section-title section-anchor"><span class="icon">🎯</span> 03. 고영향 AI·생성형 AI — 정의와 표시의무</h2>
 
   <h3>3-1. 고영향 AI(High-Impact AI) 정의</h3>
-  <p>AI기본법은 '고영향 인공지능'을 <strong>사람의 생명·신체의 안전 및 기본권에 중대한 영향을 미치거나 위험을 초래할 우려가 있는 AI 시스템</strong>으로 정의하며, 다음과 같은 활용 영역을 열거합니다(제2조, 시행령 보완). [영역 목록은 시행령·고시 원문 확인 필요 — 아래는 확인된 범위 내 요약]</p>
+  <p>AI기본법은 '고영향 인공지능'을 <strong>사람의 생명·신체의 안전 및 기본권에 중대한 영향을 미치거나 위험을 초래할 우려가 있는 인공지능시스템</strong>으로서 <strong>아래 11개 영역(가~카) 중 하나에서 활용되는 것</strong>으로 정의합니다(제2조제4호). 아래 표는 2026-09-13 KST에 <a href="https://www.law.go.kr/lsInfoP.do?lsiSeq=276241" target="_blank" rel="noopener">법제처 국가법령정보센터 현행 원문</a>을 직접 대조해 <strong>전체 목록을 그대로 옮긴 것</strong>입니다. <span class="tag-verified">원문 전수 확인</span></p>
 
   <div class="table-wrap">
     <table>
-      <thead><tr><th>고영향 AI 활용 영역 (예시)</th><th>비고</th></tr></thead>
+      <thead><tr><th>목</th><th>고영향 AI 활용 영역 (법 제2조제4호 원문)</th><th>실무 해설</th></tr></thead>
       <tbody>
-        <tr><td>에너지 공급(「에너지법」 제2조제1호 관련)</td><td>전력·에너지 수급 제어 AI</td></tr>
-        <tr><td>의료기기·의료 진단·치료 보조</td><td>의료법·의료기기법과 중복 규제 가능</td></tr>
-        <tr><td>채용·평가 등 고용 관련 의사결정</td><td>차별 우려 영역</td></tr>
-        <tr><td>신용평가·대출심사 등 금융 의사결정</td><td>금융분야 AI 가이드라인과 연계</td></tr>
-        <tr><td>교통·공공시설 등 안전 제어 시스템</td><td>자율주행·인프라 제어 포함 가능</td></tr>
+        <tr><td>가</td><td>「에너지법」 제2조제1호에 따른 에너지의 공급</td><td>전력·에너지 수급 제어 AI</td></tr>
+        <tr><td>나</td><td>「먹는물관리법」 제3조제1호에 따른 먹는물의 생산 공정</td><td>정수·수질 제어 자동화</td></tr>
+        <tr><td>다</td><td>「보건의료기본법」 제3조제1호에 따른 보건의료의 제공 및 이용체계의 구축·운영</td><td>의료 서비스 전달체계 전반</td></tr>
+        <tr><td>라</td><td>「의료기기법」 제2조제1항에 따른 의료기기 및 「디지털의료제품법」 제2조제2호에 따른 디지털의료기기의 개발 및 이용</td><td>의료기기 인허가 규제와 중복 적용 가능</td></tr>
+        <tr><td>마</td><td>「원자력시설 등의 방호 및 방사능 방재 대책법」에 따른 핵물질·원자력시설의 안전한 관리 및 운영</td><td>원자력 안전 제어</td></tr>
+        <tr><td>바</td><td>범죄 수사나 체포 업무를 위한 생체인식정보(얼굴·지문·홍채·손바닥 정맥 등)의 분석·활용</td><td>수사기관 생체인식 — 민간은 통상 비해당</td></tr>
+        <tr><td class="price">사</td><td class="price"><strong>채용, 대출 심사 등 개인의 권리·의무 관계에 중대한 영향을 미치는 판단 또는 평가</strong></td><td class="price">민간기업이 가장 걸리기 쉬운 항목 — AI 서류전형·신용평가</td></tr>
+        <tr><td>아</td><td>「교통안전법」 제2조제1호~제3호에 따른 교통수단·교통시설·교통체계의 주요한 작동 및 운영</td><td>자율주행·교통 인프라 제어</td></tr>
+        <tr><td>자</td><td>공공서비스 제공에 필요한 자격 확인 및 결정 또는 비용징수 등 국가기관등의 의사결정</td><td>공공기관 납품 시 확인 필요</td></tr>
+        <tr><td>차</td><td>「교육기본법」 제9조제1항에 따른 유아교육·초등교육 및 중등교육에서의 학생 평가</td><td>초·중등 학생평가 AI(고등·성인 교육은 미열거)</td></tr>
+        <tr><td>카</td><td>그 밖에 사람의 생명·신체의 안전 및 기본권 보호에 중대한 영향을 미치는 영역으로서 <strong>대통령령으로 정하는 영역</strong></td><td>시행령 개정으로 확대될 수 있는 개방 조항</td></tr>
       </tbody>
     </table>
   </div>
-  <div class="alert alert-warn">
-    <strong>⚠️ 미검증 — 전체 목록 원문 확인 필요</strong>
-    고영향 AI 활용 영역의 전체 목록(가~차 등 세부 항목)은 법제처 원문과 NIA 「고영향 인공지능 사업자 책무 가이드라인」에 상세 열거되어 있습니다. 본 문서는 검색으로 확인된 일부만 요약했으므로, 자사 서비스의 고영향 AI 해당 여부는 반드시 원문 대조와 법률 검토가 필요합니다.
+  <div class="alert alert-info">
+    <strong>💡 2026-09-13 보강 — 초판의 '미검증' 항목을 원문으로 해소</strong>
+    본 문서 초판은 이 목록을 "검색으로 확인된 일부만 요약"이라고 표기했으나, 이번 검수에서 법제처 원문 전수를 대조해 <strong>가~카 11개 전 항목</strong>으로 교체했습니다. 초판 표에 있던 "신용평가·대출심사 등 금융 의사결정"은 원문상 <strong>사목(채용·대출 심사 등)</strong>에 포섭되며, "교통·공공시설 등 안전 제어"는 <strong>아목</strong>에 해당합니다. 다만 개별 서비스의 해당 여부 판단(특히 카목의 시행령 위임 영역)은 여전히 법률 검토가 필요합니다.
   </div>
 
   <h3>3-2. 고영향 AI 사업자 의무 (개요)</h3>
@@ -258,20 +271,32 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
     <li><strong>안전성 확보 가이드라인 준수</strong> — NIA 「인공지능 안전성 확보 가이드라인」 이행</li>
   </ul>
 
-  <h3>3-3. 생성형 AI 표시의무 (제31조)</h3>
-  <p>생성형 AI 또는 고영향 AI 기반 제품·서비스를 제공하는 사업자는 <strong>①서비스 이용 전 사전 고지</strong>와 <strong>②생성물의 AI 생성 사실 표시</strong> 두 가지 의무를 집니다(인공지능기본법 제31조).</p>
+  <h3>3-3. 생성형 AI 표시의무 (제31조 — 공식 조문명 「인공지능 투명성 확보 의무」)</h3>
+  <p>생성형 AI 또는 고영향 AI 기반 제품·서비스를 제공하는 사업자는 <strong>①서비스 이용 전 사전 고지(제1항)</strong>, <strong>②생성물의 AI 생성 사실 표시(제2항)</strong>, <strong>③실제와 구분하기 어려운 음향·이미지·영상의 명확한 고지 또는 표시(제3항)</strong> 세 가지 의무를 집니다.</p>
+
+  <div class="alert alert-info">
+    <strong>📜 조문 원문 (2026-09-13 KST 법제처 국가법령정보센터 원문 대조)</strong>
+    제31조제3항 단서는 <em>"해당 결과물이 예술적·창의적 표현물에 해당하거나 그 일부를 구성하는 경우에는 전시 또는 향유 등을 저해하지 아니하는 방식으로 고지 또는 표시할 수 있다"</em>고 규정해, 예술·창작 영역에 완화된 표시 방식을 허용합니다. 구체적 방법·예외는 제31조제4항의 위임에 따라 <strong>시행령 제23조</strong>가 정합니다.
+    <a href="https://www.law.go.kr/lsInfoP.do?lsiSeq=276241" target="_blank" rel="noopener">법률 원문(국가법령정보센터, 현행)</a> ·
+    <a href="https://www.law.go.kr/LSW/lsInfoP.do?efYd=20260122&amp;lsiSeq=282879" target="_blank" rel="noopener">시행령 원문</a>
+  </div>
 
   <div class="table-wrap">
     <table>
-      <thead><tr><th>구분</th><th>표시 방법</th><th>비고</th></tr></thead>
+      <thead><tr><th>구분</th><th>표시 방법</th><th>근거 조문 / 비고</th></tr></thead>
       <tbody>
-        <tr><td>사전 고지</td><td>이용약관·계약서 명시, 앱 구동화면/팝업, 오프라인 안내문</td><td>서비스 이용 전 1회 고지로 충분</td></tr>
-        <tr><td>일반 생성물 — 가시적 방식</td><td>자막, 로고, 워터마크 등 육안 인식 가능한 표시</td><td>사업자 선택 가능</td></tr>
-        <tr><td>일반 생성물 — 비가시적 방식</td><td>메타데이터, 디지털 워터마크(기계 판독)</td><td>다운로드 시점 등 최소 1회 별도 안내 병행 필요</td></tr>
-        <tr><td>딥페이크(실제와 구분 곤란)</td><td class="price">가시적 표시 필수 (자막·로고 상시 노출, 음성은 재생 초입 안내)</td><td>비가시적 방식만으로는 불가 (제31조 제3항)</td></tr>
-        <tr><td>서비스 UI 내부 전용(외부 미유통)</td><td>결과물별 표시 불요, 서비스 초기 안내로 충분</td><td>예: 게임 NPC 대화, 챗봇 응답</td></tr>
+        <tr><td>사전 고지 (제1항)</td><td>①제품등에 직접 기재 또는 계약서·사용설명서·이용약관에 기재 ②이용자 화면·단말기 표시 ③제공 장소에 인식하기 쉬운 방법으로 게시 ④그 밖에 과기정통부장관이 인정하는 방법</td><td>시행령 제23조제1항 — <strong>네 가지 중 택일</strong>(원문 열거)</td></tr>
+        <tr><td>생성물 표시 — 사람이 인식하는 방식 (제2항)</td><td>자막, 로고, 화면 안내 문구 등 사람이 인식할 수 있는 방법</td><td>시행령 제23조제2항제1호</td></tr>
+        <tr><td>생성물 표시 — 기계 판독 방식 (제2항)</td><td>메타데이터·디지털 워터마크 등 기계가 판독할 수 있는 방법</td><td class="price">시행령 제23조제2항제2호 — 이 방식을 쓸 경우 <strong>"1회 이상 안내 문구·음성 등"</strong> 제공이 원문상 의무</td></tr>
+        <tr><td>실제와 구분 곤란한 결과물(이른바 딥페이크, 제3항)</td><td>이용자가 시각·청각 또는 소프트웨어를 통해 <strong>쉽게 확인</strong>할 수 있는 방법으로, 주된 이용자의 나이·신체적·사회적 조건을 고려해 고지·표시</td><td>시행령 제23조제3항 — 법문은 "가시적 표시 필수"가 아니라 <strong>"명확하게 인식할 수 있는 방식"</strong>으로 규정 <span class="tag-verified">원문 대조 교정</span></td></tr>
+        <tr><td>적용 예외</td><td>①AI 활용 사실이 제품·서비스명·화면·결과물 문구상 <strong>명백한 경우</strong> ②<strong>사업자 내부 업무 용도로만</strong> 사용되는 경우 ③과기정통부장관이 고시하는 경우</td><td class="price">시행령 제23조제4항 — 전부 또는 일부를 적용하지 않을 수 있음</td></tr>
       </tbody>
     </table>
+  </div>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ 2026-09-13 원문 대조에서 교정한 사항</strong>
+    본 문서 초판은 "서비스 UI 내부 전용(예: 게임 NPC 대화, 챗봇 응답)은 결과물별 표시가 불요"라고 적었으나, 시행령 제23조제4항제2호의 예외는 <strong>"인공지능사업자의 내부 업무 용도로만 사용되는 경우"</strong>입니다. 외부 이용자에게 제공되는 챗봇·NPC 응답은 <u>내부 업무 용도가 아니므로 이 예외에 해당하지 않고</u>, 제23조제4항제1호(AI 활용 사실이 명백한 경우)의 해당 여부를 개별 판단해야 합니다. 같은 이유로 "딥페이크는 비가시적 방식만으로는 불가"라는 서술도 법문에 그대로 있는 표현이 아니어서 위 표에서 원문 문구로 교체했습니다.
   </div>
 
   <div class="alert alert-info">
@@ -288,7 +313,7 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
     </ol>
   </div>
 
-  <p style="font-size:.8rem;color:var(--text3)">출처: bh-law.kr 「AI 생성물 표기 의무화」 칼럼(2026-06-17, 인공지능기본법 제31조·제43조 인용) · NIA 「인공지능 안전성 확보 가이드라인」·「고영향 인공지능 사업자 책무 가이드라인」(nia.or.kr)</p>
+  <p style="font-size:.8rem;color:var(--text3)">출처(1차): <a href="https://www.law.go.kr/lsInfoP.do?lsiSeq=276241" target="_blank" rel="noopener">「인공지능 발전과 신뢰 기반 조성 등에 관한 기본법」 제31조 원문 — 법제처 국가법령정보센터(현행)</a>(현행 법률 제21065호 타법개정, 2026-01-22 시행 / 원 제정 제20676호는 2025-01-21 공포 — 두 판본의 제31조·제43조 조문이 동일함을 2026-09-13 KST 대조 확인) · <a href="https://www.law.go.kr/LSW/lsInfoP.do?efYd=20260122&amp;lsiSeq=282879" target="_blank" rel="noopener">같은 법 시행령 제23조 원문</a>(2026-09-13 KST 조회). 보조 참고: bh-law.kr 「AI 생성물 표기 의무화」 칼럼(2026-06-17) · NIA 「인공지능 안전성 확보 가이드라인」·「고영향 인공지능 사업자 책무 가이드라인」 — <span class="price">1차 출처와 상충하는 부분은 위 원문 기준으로 교정했습니다.</span></p>
 </div>
 
 <!-- ===== CH4 ===== -->
@@ -299,8 +324,10 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
     <table>
       <thead><tr><th>위반 유형</th><th>제재</th><th>근거</th></tr></thead>
       <tbody>
-        <tr><td>사전 고지 의무 위반</td><td class="price">3,000만 원 이하 과태료<br><small style="color:var(--text3)">(약 3천만원, 원화 그대로)</small></td><td>인공지능기본법 제43조 제1항</td></tr>
-        <tr><td>생성물 표시 의무 위반</td><td>1차 시정명령 → 미이행 시 <span class="price">3,000만 원 이하 과태료</span></td><td>제43조 제1항 제3호</td></tr>
+        <tr><td>사전 고지 의무 위반 (제31조<strong>제1항</strong>)</td><td class="price">3,000만 원 이하 과태료</td><td>인공지능기본법 제43조제1항<strong>제1호</strong> — 조문 원문상 <u>직접</u> 과태료 대상</td></tr>
+        <tr><td>국내대리인 미지정 (제36조제1항)</td><td class="price">3,000만 원 이하 과태료</td><td>제43조제1항<strong>제2호</strong> — 국내 영업소 없는 해외 사업자에게 적용 <span class="tag-verified">원문 확인</span></td></tr>
+        <tr><td>생성물 표시 의무 위반 (제31조<strong>제2·3항</strong>)</td><td>제40조제3항에 따른 중지·시정명령 → <strong>명령 불이행 시</strong> <span class="price">3,000만 원 이하 과태료</span></td><td class="price">제43조제1항<strong>제3호</strong> — 표시의무 위반 <u>자체</u>는 과태료 직접 대상이 아니라 <strong>명령 불이행</strong>이 과태료 요건 <span class="tag-verified">원문 대조 교정</span></td></tr>
+        <tr><td>직무상 비밀 누설·목적 외 사용 (제7조제9항)</td><td class="price">3년 이하 징역 또는 3천만원 이하 벌금</td><td>제42조(벌칙) — 과태료가 아닌 <strong>형사처벌</strong> 조항 <span class="tag-verified">원문 확인</span></td></tr>
         <tr><td>AI 워싱(허위 표시 은폐·과장광고)</td><td>시정조치 + 과징금(현행 매출액 최대 2%, 상향 추진 중)</td><td>표시·광고의 공정화에 관한 법률(표시광고법)</td></tr>
         <tr><td>악의적 허위·조작정보 유통</td><td>실손해액 최대 5배 징벌적 손해배상 (도입 추진)</td><td>정보통신망법 개정안 [미검증 — 국회 논의 중]</td></tr>
       </tbody>
@@ -403,7 +430,7 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
     </table>
   </div>
 
-  <h3>6-2. 단계별 시행 일정 [2026-09 시점 확인]</h3>
+  <h3>6-2. 단계별 시행 일정 <span class="tag-verified">2026-09-13 KST 재확인</span></h3>
   <div class="table-wrap">
     <table>
       <thead><tr><th>시점</th><th>발효 내용</th></tr></thead>
@@ -411,10 +438,20 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
         <tr><td>2024.08.01</td><td>EU AI Act 발효(Entry into force)</td></tr>
         <tr><td>2025.02.02</td><td>금지된 AI 관행(Unacceptable risk) 적용 시작</td></tr>
         <tr><td>2025.08.02</td><td>범용 AI(GPAI) 모델 제공자 의무 1차 적용, 거버넌스 체계 가동</td></tr>
-        <tr><td class="recommend">2026.08.02</td><td><strong>AI 생성물 표시의무 + GPAI 감독·과징금 집행 본격화</strong> (2026년 두 번째 핵심 시행일)</td></tr>
-        <tr><td>2027.12(연기)</td><td>고위험 AI(부속서 III, 채용·교육 등) 규제 본격 적용 — 당초 2026.08 예정에서 연기 [미검증: 정확한 연기 사유·확정 여부는 EU 공식 발표 재확인 필요]</td></tr>
+        <tr><td class="recommend">2026.08.02</td><td><strong>제50조 투명성 의무(AI 상호작용 고지·생성물 표시) 적용 + GPAI 감독·과징금 집행 본격화</strong> — <u>디지털 옴니버스에도 불구하고 이 일정은 유지됨</u></td></tr>
+        <tr><td>2026.12.02</td><td>이미 시장에 출시된 시스템에 대한 <strong>워터마킹 요건</strong>의 4개월 유예 종료</td></tr>
+        <tr><td class="price">2027.12.02<br><small>(연기 확정)</small></td><td><strong>부속서 III 독립형 고위험 AI</strong>(채용·교육·신용 등) 의무 적용 — 당초 2026.08.02에서 연기. <span class="tag-verified">확정</span> 근거: 디지털 옴니버스 규정 <strong>Regulation (EU) 2026/1744</strong>(2026-07-24 관보 게재, 2026-07-27 발효)</td></tr>
+        <tr><td>2028.08.02</td><td>부속서 I(규제 대상 제품에 내장된 AI) 고위험 의무 적용</td></tr>
       </tbody>
     </table>
+  </div>
+  <div class="alert alert-info">
+    <strong>📌 2026-09-13 보강 — 초판의 '[미검증] 연기 여부' 해소</strong>
+    초판은 고위험 규제 연기를 "미검증"으로 표기했으나, 이번 검수에서 <strong>확정 사실</strong>로 확인했습니다. 유럽연합 이사회가 2026-06-29 디지털 옴니버스 패키지를 최종 승인했고, 해당 규정이 <strong>Regulation (EU) 2026/1744</strong>로 2026-07-24 관보에 게재되어 2026-07-27 발효되면서 부속서 III 독립형 고위험 AI 의무가 <strong>2027-12-02</strong>로, 부속서 I 내장형은 <strong>2028-08-02</strong>로 각각 연기됐습니다. 다만 <u>제50조 투명성 의무는 2026-08-02 일정 그대로 유지</u>되므로 "전부 연기됐다"고 이해하면 안 됩니다.
+    <br>1차 출처: <a href="https://eur-lex.europa.eu/eli/reg/2026/1744/oj" target="_blank" rel="noopener">EUR-Lex — Regulation (EU) 2026/1744 관보 원문</a> ·
+    <a href="https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai" target="_blank" rel="noopener">European Commission — AI Act 규제 프레임워크 공식 안내</a> ·
+    조문 확인: <a href="https://artificialintelligenceact.eu/article/50/" target="_blank" rel="noopener">제50조(투명성 의무)</a> ·
+    <a href="https://artificialintelligenceact.eu/article/99/" target="_blank" rel="noopener">제99조(과징금)</a> (모두 2026-09-13 KST 접속 확인)
   </div>
 
   <h3>6-3. 한국 기업에 적용되는 역외 조항</h3>
@@ -451,7 +488,7 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
     </ol>
   </div>
 
-  <p style="font-size:.8rem;color:var(--text3)">출처: devlery.com 「EU AI법 GPAI 과징금 8월 2일 시작」(2026) · epnc.co.kr 「EU AI법 핵심 조항 시행」(2026) · blog.naver.com/z4h1027 「EU AI법 8월 2일 시행」(2026) — EUR/KRW 환율: kr.investing.com(2026-09 조회, 1EUR≈1,555~1,567원 구간)</p>
+  <p style="font-size:.8rem;color:var(--text3)">출처(1차, 2026-09-13 KST 접속 확인): <a href="https://eur-lex.europa.eu/eli/reg/2026/1744/oj" target="_blank" rel="noopener">EUR-Lex — Regulation (EU) 2026/1744(디지털 옴니버스)</a> · <a href="https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai" target="_blank" rel="noopener">European Commission — Regulatory framework for AI</a> · 조문: <a href="https://artificialintelligenceact.eu/article/99/" target="_blank" rel="noopener">AI Act 제99조(과징금 상한 3,500만€/7%, 1,500만€/3%, 750만€/1%)</a>. 보조 참고(국내 보도): devlery.com·epnc.co.kr(2026). — EUR/KRW 환율: kr.investing.com(2026-09 조회, 1EUR≈1,555~1,567원 구간) <span class="tag-unverified">환율은 조회 시점값</span></p>
 </div>
 
 <!-- ===== CH7 ===== -->
@@ -839,18 +876,22 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
   <h3>주요 참고자료</h3>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>자료명</th><th>발행처/출처</th><th>URL</th><th>확인 시점</th></tr></thead>
+      <thead><tr><th>자료명</th><th>발행처/출처</th><th>URL(클릭 가능)</th><th>등급</th><th>2026-09-13 KST 접속확인</th></tr></thead>
       <tbody>
-        <tr><td>인공지능 발전과 신뢰 기반 조성 등에 관한 기본법(원문)</td><td>법제처 국가법령정보센터</td><td>law.go.kr (lsiSeq=276241)</td><td>2026-09-12</td></tr>
-        <tr><td>인공지능기본법 지원데스크</td><td>과기정통부/NIA</td><td>sw.or.kr/AI_act_helpdesk</td><td>2026-09-12</td></tr>
-        <tr><td>AI 생성물 표기 의무화 칼럼(제31조·제43조 인용)</td><td>법률사무소 번화</td><td>bh-law.kr</td><td>2026-06-17 작성, 2026-09-12 조회</td></tr>
-        <tr><td>인공지능기본법 완벽 가이드 2026</td><td>imaginationgroup.co.kr</td><td>edu.imaginationgroup.co.kr</td><td>2026-09-12</td></tr>
-        <tr><td>고영향 인공지능 사업자 책무 가이드라인 / 안전성 확보 가이드라인</td><td>NIA</td><td>nia.or.kr</td><td>2026-09-12</td></tr>
-        <tr><td>EU AI법 GPAI 과징금 8월 2일 시작 보도</td><td>Devlery / epnc.co.kr / 네이버블로그(z4h1027)</td><td>devlery.com 등</td><td>2026-09-12</td></tr>
-        <tr><td>생성형 인공지능 활용 저작물의 저작권 등록 안내서</td><td>한국저작권위원회</td><td>kocca.kr 소개</td><td>2025-06 발간, 2026-09-12 조회</td></tr>
-        <tr><td>日·싱가포르는 면책…AI 학습데이터 저작권 제도 정비 시급</td><td>전자신문(etnews.com)</td><td>etnews.com/20250609000227</td><td>2025-06-09 작성</td></tr>
-        <tr><td>금융분야 인공지능 가이드라인</td><td>금융위원회</td><td>fsc.go.kr</td><td>2026-09-12</td></tr>
-        <tr><td>EUR/KRW 환율</td><td>Investing.com</td><td>kr.investing.com/currencies/eur-krw</td><td>2026-09 조회, 1EUR≈1,555~1,567원</td></tr>
+        <tr><td>인공지능 발전과 신뢰 기반 조성 등에 관한 기본법(현행 원문)</td><td>법제처 국가법령정보센터</td><td><a href="https://www.law.go.kr/lsInfoP.do?lsiSeq=276241" target="_blank" rel="noopener">law.go.kr/lsInfoP.do?lsiSeq=276241</a></td><td class="recommend">1차</td><td>HTTP 200</td></tr>
+        <tr><td>같은 법 시행령(제23조 투명성 확보 의무 등, 2026-01-22 시행)</td><td>법제처 국가법령정보센터</td><td><a href="https://www.law.go.kr/LSW/lsInfoP.do?efYd=20260122&amp;lsiSeq=282879" target="_blank" rel="noopener">law.go.kr — 시행령(efYd=20260122)</a></td><td class="recommend">1차</td><td>HTTP 200</td></tr>
+        <tr><td>EU 디지털 옴니버스 규정(고위험 의무 2027-12-02 연기 근거)</td><td>EUR-Lex (EU 관보)</td><td><a href="https://eur-lex.europa.eu/eli/reg/2026/1744/oj" target="_blank" rel="noopener">eur-lex.europa.eu/eli/reg/2026/1744/oj</a></td><td class="recommend">1차</td><td>HTTP 200</td></tr>
+        <tr><td>EU AI Act 규제 프레임워크 공식 안내</td><td>European Commission</td><td><a href="https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai" target="_blank" rel="noopener">digital-strategy.ec.europa.eu — Regulatory framework for AI</a></td><td class="recommend">1차</td><td>HTTP 200</td></tr>
+        <tr><td>AI Act 제50조(투명성)·제99조(과징금) 조문</td><td>artificialintelligenceact.eu</td><td><a href="https://artificialintelligenceact.eu/article/50/" target="_blank" rel="noopener">제50조</a> · <a href="https://artificialintelligenceact.eu/article/99/" target="_blank" rel="noopener">제99조</a></td><td>2차(조문 열람용)</td><td>HTTP 200</td></tr>
+        <tr><td>AI 생성물 표기 의무화 칼럼(제31조·제43조 인용)</td><td>법률사무소 번화</td><td><a href="https://bh-law.kr" target="_blank" rel="noopener">bh-law.kr</a></td><td>2차</td><td>HTTP 200 (도메인)</td></tr>
+        <tr><td>인공지능기본법 완벽 가이드 2026</td><td>imaginationgroup.co.kr</td><td><a href="https://edu.imaginationgroup.co.kr" target="_blank" rel="noopener">edu.imaginationgroup.co.kr</a></td><td>2차</td><td>HTTP 200 (도메인)</td></tr>
+        <tr><td>고영향 인공지능 사업자 책무 가이드라인 / 안전성 확보 가이드라인</td><td>NIA 한국지능정보사회진흥원</td><td><a href="https://www.nia.or.kr" target="_blank" rel="noopener">nia.or.kr</a></td><td>1차(발행기관)</td><td>HTTP 200 (도메인)</td></tr>
+        <tr><td>EU AI법 GPAI 과징금 8월 2일 시작 보도</td><td>Devlery / epnc.co.kr</td><td><a href="https://devlery.com" target="_blank" rel="noopener">devlery.com</a></td><td>2차(보도)</td><td>HTTP 200 (도메인)</td></tr>
+        <tr><td>생성형 인공지능 활용 저작물의 저작권 등록 안내서(2025-06 발간)</td><td>한국저작권위원회</td><td><a href="https://www.copyright.or.kr/main.do" target="_blank" rel="noopener">copyright.or.kr</a></td><td>1차(발행기관)</td><td>HTTP 200</td></tr>
+        <tr><td>日·싱가포르는 면책…AI 학습데이터 저작권 제도 정비 시급(2025-06-09)</td><td>전자신문</td><td><a href="https://www.etnews.com/20250609000227" target="_blank" rel="noopener">etnews.com/20250609000227</a></td><td>2차(보도)</td><td>HTTP 200</td></tr>
+        <tr><td>금융분야 인공지능 가이드라인</td><td>금융위원회</td><td><a href="https://www.fsc.go.kr" target="_blank" rel="noopener">fsc.go.kr</a></td><td>1차(발행기관)</td><td>HTTP 200 (도메인)</td></tr>
+        <tr><td>EUR/KRW 환율 (1EUR≈1,555~1,567원)</td><td>Investing.com</td><td><a href="https://kr.investing.com/currencies/eur-krw" target="_blank" rel="noopener">kr.investing.com/currencies/eur-krw</a></td><td>2차</td><td class="price">HTTP 403 — 자동조회 차단(브라우저 접속은 가능). 환율은 <span class="tag-unverified">재확인 필요</span></td></tr>
+        <tr><td>인공지능기본법 지원데스크</td><td>과기정통부/NIA</td><td>sw.or.kr/AI_act_helpdesk</td><td>2차</td><td class="price">접속 실패(연결 불가) — 링크 미제공</td></tr>
       </tbody>
     </table>
   </div>
@@ -870,6 +911,21 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
 <div class="alert alert-danger" style="margin-top:32px">
   <strong>⚠️ 다시 한번 — 법률 자문 아님</strong>
   본 문서는 2026년 9월 12일 시점에 공개 검색으로 확인 가능한 자료를 취합한 교육 자료입니다. 법령·시행령·가이드라인은 개정되며, 개별 사안에 대한 법적 판단은 반드시 변호사 등 전문가의 검토를 거쳐야 합니다. 본 문서의 내용을 근거로 한 의사결정에 대해 작성자는 법적 책임을 지지 않습니다.
+</div>
+
+<div class="section" id="source-audit-20260913">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 부록. 출처 검수 이력 (2026-09-13 KST)</h2>
+  <p>본 문서는 2026-09-12 초판 작성 이후, <strong>2026-09-13 KST</strong>에 별도 출처 검수를 거쳤습니다. 검수 원칙은 ①법령·공식 문서·원 논문 등 <strong>1차 출처 우선</strong>, ②모든 인용을 <strong>클릭 가능한 링크</strong>로 전환, ③확인하지 못한 내용은 삭제하지 않고 <span class="tag-unverified">미검증</span>으로 명시, ④원문과 다른 서술은 원문 기준으로 교정입니다. 아래는 이번 검수에서 실제로 바뀐 내용입니다.</p>
+  <ul>
+    <li><strong>교정</strong> — 제31조 공식 조문명("인공지능 투명성 확보 의무")과 제3항(실제와 구분 곤란한 결과물) 의무를 반영. "딥페이크는 비가시적 방식만으로는 불가"는 법문 표현이 아니어서 원문 문구("명확하게 인식할 수 있는 방식")로 교체.</li>
+    <li><strong>교정</strong> — "서비스 UI 내부 전용(게임 NPC·챗봇)은 표시 불요" 서술을 정정. 시행령 제23조제4항제2호의 예외는 <u>사업자 내부 업무 용도</u>로만 쓰는 경우이며, 외부 이용자 대상 챗봇은 해당하지 않음.</li>
+    <li><strong>교정</strong> — 과태료 근거 매핑 정정. 제43조제1항은 ①제31조<u>제1항</u>(사전고지) 위반 ②제36조제1항 국내대리인 미지정 ③제40조제3항 명령 불이행을 열거하며, 생성물 표시의무(제31조제2·3항) 위반은 <u>명령 불이행 단계</u>에서 과태료 대상이 됨. 제42조(벌칙, 3년 이하 징역) 행 추가.</li>
+    <li><strong>보강</strong> — 고영향 AI 활용 영역을 "일부 요약(미검증)"에서 법 제2조제4호 <u>가~카 11개 전 항목</u>으로 교체.</li>
+    <li><strong>보강</strong> — EU 고위험 규제 연기를 "[미검증]"에서 확정 사실로 전환(Regulation (EU) 2026/1744, 2026-07-24 관보·2026-07-27 발효 / 부속서 III 2027-12-02, 부속서 I 2028-08-02, 제50조는 2026-08-02 유지, 워터마킹 유예 2026-12-02).</li>
+    <li><strong>보강</strong> — 참고자료표를 클릭 가능 링크 + 1차/2차 등급 + 접속 상태 열로 재구성.</li>
+    <li><strong>미해소</strong> — EUR/KRW 환율(kr.investing.com HTTP 403), 인공지능기본법 지원데스크(sw.or.kr 연결 불가), 정보통신망법·화장품법 개정 논의(국회 계류)는 여전히 미검증.</li>
+  </ul>
+  <p style="font-size:.82rem;color:var(--text3)">※ "HTTP 200"은 2026-09-13 KST에 해당 URL이 응답했다는 뜻이며, 그 페이지에 실린 모든 수치를 본 문서가 검증했다는 뜻이 아닙니다. HTTP 403은 대체로 자동화 도구 차단(WAF)이며 링크가 죽었다는 뜻이 아닙니다 — 브라우저로는 정상 접속됩니다.</p>
 </div>
 
 <div class="footer">
