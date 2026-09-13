@@ -2384,7 +2384,17 @@ async def call_stream(
         except Exception as _log_err:
             logger.warning(f"error_log insert failed: {_log_err}")
 
-        _samegrade_list = [] if _explicit_model_requested else _SAMEGRADE_FALLBACK.get(_original_model, [])
+        # 버전 붙은 모델 id 도 동급 폴백을 받게 한다.
+        #
+        # 표의 키는 alias(claude-opus)인데 채팅 주 모델은 claude-opus-5 로 들어온다.
+        # 정확히 일치하는 키가 없어 `.get()` 이 빈 목록을 돌려줬고, 두 계정이 모두
+        # 한도에 걸린 2026-09-13 12:39/13:21 KST 에는 codex 동급 폴백을 한 번도
+        # 시도하지 않고 "전체 LLM 장애" 로 끝났다(실측: 해당 시각 samegrade 로그 0건).
+        # alias 로 한 번 더 조회해 claude-opus-4-7 같은 후속 id 도 같이 살린다.
+        _samegrade_list = [] if _explicit_model_requested else (
+            _SAMEGRADE_FALLBACK.get(_original_model)
+            or _SAMEGRADE_FALLBACK.get(_normalize_intent_policy_model(_original_model), [])
+        )
         _samegrade_success = False
         for _sg_model in _samegrade_list:
             try:
@@ -2407,7 +2417,7 @@ async def call_stream(
                 logger.warning(f"samegrade_fallback_failed model={_sg_model}: {_sg_err}")
                 continue
 
-        if _original_model in ("claude-opus",) and not _samegrade_success:
+        if _normalize_intent_policy_model(_original_model) in ("claude-opus",) and not _samegrade_success:
             logger.warning(f"all_samegrade_failed: {_original_model} → last_resort claude-sonnet")
             try:
                 async for event in _stream_with_slots("claude-sonnet"):
