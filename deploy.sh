@@ -139,7 +139,10 @@ require_build_disk_free() {
 # 막혔다. 실행 중이 아닌 오래된 릴리스 이미지를 남길 개수만 두고 정리한다.
 prune_old_release_images() {
     local keep repo in_use kept removed tag
-    keep="${AADS_DEPLOY_KEEP_IMAGES:-3}"
+    # 릴리스 이미지 하나가 4.26GB 다. 3개면 12.8GB 를 상시 점유한다.
+    # 2026-09-13 디스크가 90%까지 차 빌드가 막혔다. 롤백 대상은 직전
+    # 릴리스 하나면 충분하므로 기본을 2로 내린다(현재+직전).
+    keep="${AADS_DEPLOY_KEEP_IMAGES:-2}"
     if [[ ! "$keep" =~ ^[0-9]+$ ]] || [[ "$keep" -lt 2 ]]; then
         keep="3"
     fi
@@ -343,9 +346,19 @@ build_release_image() {
     local prev_image=""
     prev_image="$(docker inspect "$(cat "${STATE_DIR}/.active_container" 2>/dev/null || echo aads-server)" \
         --format '{{.Config.Image}}' 2>/dev/null || true)"
-    if [[ -n "$prev_image" ]] && docker image inspect "$prev_image" >/dev/null 2>&1; then
-        cache_from_args+=(--cache-from "$prev_image")
-        echo "[deploy.sh] build cache source: ${prev_image}"
+    # `--cache-from <이미지명>` 은 BuildKit 에서 레지스트리 참조로 해석된다.
+    # 로컬에 이미지가 있어도 docker.io 에서 받으려다 실패한다. 2026-09-13 실측:
+    #   #6 importing cache manifest from aads-server:ead682ddd060
+    #   #6 ERROR: failed to configure registry cache importer: pull access denied
+    # 매 빌드마다 이 오류가 나면서 캐시는 하나도 쓰이지 않았다(CACHED 0/15).
+    # 오류만 남기고 효과가 없으므로, 레지스트리를 명시했을 때만 붙인다.
+    # 레지스트리가 없으면 BuildKit 로컬 캐시와 inline cache 에 맡긴다.
+    local cache_registry="${AADS_DEPLOY_CACHE_REGISTRY:-}"
+    if [[ -n "$cache_registry" ]]; then
+        cache_from_args+=(--cache-from "type=registry,ref=${cache_registry}")
+        echo "[deploy.sh] build cache source(registry): ${cache_registry}"
+    elif [[ -n "$prev_image" ]]; then
+        echo "[deploy.sh] build cache: 로컬 BuildKit 캐시 사용 (이전 이미지=${prev_image}, 레지스트리 미설정)"
     fi
     timeout --kill-after=30s "$build_max_wait" env DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build \
         --target "${AADS_DOCKER_TARGET}" \
@@ -2218,6 +2231,22 @@ case "$MODE" in
         fi
         echo "[deploy.sh] 현재: :${CURRENT_PORT} → 전환 대상: :${NEW_PORT} (${NEW_CONTAINER})"
 
+        # ①-1 이미지 빌드 — drain 보다 먼저 한다.
+        #
+        # 빌드는 이미지를 만들 뿐 실행 중인 컨테이너를 건드리지 않는다. 그런데
+        # 기존 순서는 활성 스트림이 빠지기를 최대 1800초 기다린 뒤에야 빌드를
+        # 시작했다. 2026-09-13 배포 #402 실측 — 58분 중 30분이 순수 대기였고
+        # 그 뒤에야 7분짜리 빌드가 돌았다.
+        #
+        # 순서를 뒤집으면 빌드하는 동안 스트림이 자연히 빠져 추가 대기가
+        # 대부분 사라진다. 컨테이너 교체(①-2)는 drain 이후로 그대로 둔다 —
+        # 그때가 실제로 스트림을 끊는 시점이다.
+        cd "$COMPOSE_DIR"
+        deploy_phase_start "build_candidate_image" "running"
+        echo "[deploy.sh] ① release image 1회 빌드 (${AADS_RELEASE_SHA})..."
+        build_release_image
+        deploy_phase_end "build_candidate_image" "success" "image built; container start pending drain"
+
         deploy_phase_start "target_slot_drain" "running"
         reconcile_inactive_target_recovery_executions "$NEW_CONTAINER"
         TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
@@ -2258,22 +2287,20 @@ case "$MODE" in
         set_deploy_stream_phase_metadata "$NEW_CONTAINER" "$NEW_PORT" "${TARGET_STREAMS:-unknown}" "${local_target_elapsed:-0}" "${local_target_drain_max:-0}"
         deploy_phase_end "target_slot_drain" "success" "active_streams=${TARGET_STREAMS}"
 
-        # ① release image 1회 빌드 + 새 컨테이너 시작
+        # ①-2 새 컨테이너 시작 — 이미지는 drain 이전에 이미 만들어 뒀다(①-1).
         cd "$COMPOSE_DIR"
-        deploy_phase_start "build_candidate_image" "running"
-        echo "[deploy.sh] ① release image 1회 빌드 (${AADS_RELEASE_SHA})..."
-        build_release_image
+        deploy_phase_start "start_candidate_container" "running"
         echo "[deploy.sh] ① ${NEW_CONTAINER} --no-build 시작..."
         docker compose "${COMPOSE_ENV_ARGS[@]}" $COMPOSE_FILE $PROFILE_CMD up -d --no-build --no-deps --force-recreate "$NEW_CONTAINER"
         if ! verify_container_memory_limit "$NEW_CONTAINER"; then
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             docker rm "$NEW_CONTAINER" 2>/dev/null || true
             notify "❌ Blue-Green 실패: ${NEW_CONTAINER} memory limit mismatch"
-            deploy_phase_end "build_candidate_image" "failed" "${NEW_CONTAINER} memory limit mismatch"
+            deploy_phase_end "start_candidate_container" "failed" "${NEW_CONTAINER} memory limit mismatch"
             record_deploy "failed" "$MODE" "${NEW_CONTAINER} memory limit mismatch"
             exit 1
         fi
-        deploy_phase_end "build_candidate_image" "success" ""
+        deploy_phase_end "start_candidate_container" "success" ""
 
         # ② 새 컨테이너 헬스체크
         deploy_phase_start "candidate_health" "running"
