@@ -59,7 +59,11 @@ docs/knowledge/AADS-KNOWLEDGE.md — 아키텍처, 파이프라인, 교차검증
 ## Docker 절대 규칙 (R-DOCKER)
 - **`docker compose up -d` 전체 실행 절대 금지** — postgres/litellm/aads-server가 동시 재생성되어 채팅 시스템 전체가 중단됨.
 - **단일 서비스만 재시작**: `docker compose up -d --no-deps <서비스명>` 또는 `docker compose restart <서비스명>`
-- **대시보드 빌드/배포**: `docker compose -f /root/aads/aads-dashboard/docker-compose.yml build aads-dashboard && docker compose -f /root/aads/aads-dashboard/docker-compose.yml up -d aads-dashboard` — aads-server compose 파일 사용 금지.
+- **대시보드 빌드/배포**: `cd /root/aads/aads-dashboard && bash deploy.sh` (blue-green 무중단)
+  - **`docker compose build` 를 직접 쓰지 마라.** 그 경로는 `aads-dashboard:local` 태그를 만드는데, 운영 컨테이너는 커밋 sha 태그(`aads-dashboard:<sha>`)를 쓴다. 빌드가 성공해도 배포되지 않는다(2026-09-13 실측: `:local` 을 빌드했으나 운영은 계속 이전 이미지였다).
+  - deploy.sh 는 워킹트리가 아니라 **커밋에서 뽑은 깨끗한 릴리스 디렉터리**(`/tmp/aads-dashboard-release.*`)에서 빌드한다. 커밋하지 않은 변경은 반영되지 않는다.
+  - **배포 중에 같은 이미지를 병행 빌드하지 마라.** BuildKit 이 동일 단계를 공유하므로 한쪽을 취소하면 다른 쪽도 `context canceled` 로 죽는다(2026-09-13 실측: 중복 빌드를 정리하려다 공식 배포 #414 를 실패시켰다).
+  - aads-server compose 파일 사용 금지.
 - **aads-server 재시작 필요 시 (무중단 배포 필수)**:
   - Python 코드만 변경: `docker exec aads-server bash /app/scripts/reload-api.sh` (0ms 다운타임)
   - 이미지 리빌드 필요: `bash /root/aads/aads-server/deploy.sh bluegreen` (0초 무중단)
