@@ -1609,6 +1609,23 @@ async def lifespan(app: FastAPI):
                 import sys
                 from pathlib import Path
 
+                # 배포 없이 끌 수 있는 정지 스위치. 수집이 잘못 돌고 있다는 걸
+                # 알았을 때 20분짜리 배포를 기다리면 그 사이 쓰레기가 쌓인다.
+                try:
+                    from app.services.collection_pause import (
+                        is_collection_paused as _is_paused,
+                        pause_reason as _pause_reason,
+                    )
+                    if await _is_paused("delivery"):
+                        logger.info(
+                            "delivery_auto_collect_skip: paused reason=%s switch=%s",
+                            reason, (await _pause_reason("delivery"))[:80],
+                        )
+                        return
+                except Exception as _pause_err:
+                    # 스위치 조회 실패는 멈춤이 아니다. 정상 수집을 막지 않는다.
+                    logger.debug("collection_pause_check_failed: %s", str(_pause_err)[:80])
+
                 if not _is_active_api_container_for_background_jobs():
                     logger.info(
                         "delivery_auto_collect_skip: inactive_api_container reason=%s container=%s port=%s",
