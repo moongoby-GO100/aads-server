@@ -14046,3 +14046,24 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 중복 러너 `runner-f69d78c9`/`7856f8b3`(같은 지시)는 09:09 KST 강제종료. 요구사항은 main 반영 완료.
 - 남은 판단: `runner-c4ea84bf`(OAuth 자동갱신) 08:33 KST 재검수 REQUEST_CHANGES 0.615 → CEO 판단.
   스위퍼 unit Environment 블록 2회 중복 정의(AADS_API_URL=8100 고정) 정리 필요.
+
+## 2026-09-13 10:40 KST — 교육자료 8건 출처 검수(sources_p1) 검수 반려 대응·브랜치 푸시
+
+- 반려 사유 6건 대응 완료. 핵심 원인은 **산출물이 브랜치에만 있고 main 에 없어** 검수자가
+  main 기준 diff 를 떠서 "변경사항 없음"을 본 것. 브랜치 `docs/edu-src-p1-iso1006172` 를
+  **origin 에 푸시**해 GitHub 브라우저 경로로 열람 가능하게 했다(커밋 8건, `927d7f5b` HEAD).
+- 8건 중 미완료였던 2건 해소: `multimodal_ai`·`rag_vectordb_embedding` 이 목차에 부록 앵커만
+  있고 부록 본문이 없어 구조 검증 FAIL 이었다(`5e7a6121`). 멀티모달은 본문 출처 검수까지 수행해
+  초판이 "미검증"으로 남긴 **이미지 토큰 환산 공식**을 Claude Vision 공식 문서로 확정했다
+  (28×28px = 비주얼 토큰 1개, 1장 = ⌈w/28⌉×⌈h/28⌉, 해상도 티어·입력 한도 포함).
+  8장 Claude 단가표 4행은 공식 가격 문서와 전 행 일치해 유지하고 근거 링크만 부착했다.
+- 검증(커밋 `cec9f11d` 상태를 오염 없는 export 에서 재실행): 구조 8/8 PASS(태그오류·앵커깨짐·
+  id중복 0), Playwright 데스크톱 1440×900·모바일 390×844 8/8 PASS(가로넘침 0·콘솔에러 0),
+  외부 링크 고유 95건 실접속 200:86 / 302:5 / 403:4 / **404 0건**. 스크린샷 32장 포함.
+- 세션 경합: 같은 카드가 3개 세션에 중복 디스패치됐다. A(본 세션)·B(`aads-server-a6`)는 같은
+  브랜치에 **선형 커밋**되어 충돌 없음 — B 의 모바일 그리드 blowout 교정(`min-width:0`)은 B 단독
+  발견이며 정본에 포함했다. C(`/tmp/aads-wt-edu-p1-audit`)는 **0커밋**이라 저장소에 미해결 충돌이
+  없고, 워크트리는 보존했다. C 에만 있는 출처 28건은 후속 보강 후보로 HANDOVER §10 에 기록.
+- **main 병합은 하지 않았다.** `app/static/reports` 는 별도 배포 단계 없이 main 푸시가 곧
+  `fb.newtalk.kr` 공개 반영이므로 공개 시점은 CEO 승인 사항이다. 배포·재시작·DB 변경 없음.
+- 상세: `docs/handover/20260913_education_sources_p1/HANDOVER.md`
