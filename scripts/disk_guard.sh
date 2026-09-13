@@ -33,6 +33,27 @@ if [ -f "$STAMP" ]; then
         exit 0
     fi
 fi
+# 배포 중에는 정리하지 않는다.
+#
+# 빌드가 갓 만든 이미지는 태그가 붙기 전 잠시 dangling 으로 보인다. 그때
+# `docker image prune --filter dangling=true` 가 돌면 릴리스 이미지를 지운다.
+# 2026-09-13 배포 #393 이 이렇게 깨졌다 — 빌드는 273초에 성공(`naming ... done`)
+# 했는데 22:40:15 에 이 스크립트가 정리를 돌렸고, 직후 릴리스 이미지 조회가
+# 실패해 배포 전체가 failed 로 끝났다.
+#
+# 디스크가 아무리 차도 진행 중인 배포를 깨는 것보다는 낫다. 다음 주기에 다시
+# 온다. 락은 flock 비차단으로만 본다 — 여기서 기다리면 크론이 쌓인다.
+DEPLOY_LOCK="${AADS_DEPLOY_LOCKFILE:-/tmp/aads-deploy.lock}"
+if [ -e "$DEPLOY_LOCK" ] && ! flock -n "$DEPLOY_LOCK" true 2>/dev/null; then
+    echo "$(date '+%F %T') disk=${USED}% — 배포 진행 중(락 점유), 정리 건너뜀"
+    exit 0
+fi
+if pgrep -f "deploy\.sh (bluegreen|queue-worker)" >/dev/null 2>&1 \
+   || pgrep -f "docker build" >/dev/null 2>&1; then
+    echo "$(date '+%F %T') disk=${USED}% — 배포/빌드 프로세스 감지, 정리 건너뜀"
+    exit 0
+fi
+
 printf '%s' "$now" > "$STAMP"
 
 echo "$(date '+%F %T') disk=${USED}% >= ${THRESHOLD}% — 즉시 정리 시작"

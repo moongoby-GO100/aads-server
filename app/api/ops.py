@@ -1217,6 +1217,67 @@ async def active_streams():
     }
 
 
+_CLI_SESSION_STORE = os.getenv("AADS_CLI_SESSION_STORE", "/tmp/.claude-sdk/.claude/projects")
+_CLI_SESSION_STALE_SEC = int(os.getenv("AADS_CLI_SESSION_STALE_SEC", "1800"))
+
+
+def _check_cli_session_persistence(turns_recent: int) -> dict:
+    """CLI 대화가 영속 볼륨에 실제로 쌓이고 있는지 본다.
+
+    2026-09-13: 인증 격리 수정이 대화 영속 수정을 조용히 깼는데 아무도 몰랐다.
+    볼륨은 마운트돼 있었고 코드도 남아 있어 겉보기에는 정상이었다. 실제로는
+    CLI 의 HOME 이 호출마다 바뀌면서 대화가 임시 디렉터리로 가 매번 지워졌고,
+    resume 이 전부 실패해 턴마다 전체 프롬프트(실측 5만 자)를 다시 보냈다.
+
+    "마운트돼 있는가"로는 못 잡는다. "최근에 쓰이고 있는가"로 봐야 한다.
+    채팅 턴이 돌았는데 볼륨에 그만큼의 쓰기가 없으면 저장 경로가 끊긴 것이다.
+    """
+    label = "CLI 대화 영속"
+    store = Path(_CLI_SESSION_STORE)
+    try:
+        if not store.is_dir():
+            return {"ok": False, "count": 1, "label": label,
+                    "detail": f"대화 저장소 없음: {store}"}
+        newest = 0.0
+        files = 0
+        writes_recent = 0
+        window_start = _time.time() - _CLI_SESSION_STALE_SEC
+        for root, _dirs, names in os.walk(store):
+            for name in names:
+                if not name.endswith(".jsonl"):
+                    continue
+                files += 1
+                try:
+                    mtime = os.stat(os.path.join(root, name)).st_mtime
+                except OSError:
+                    continue
+                if mtime > newest:
+                    newest = mtime
+                if mtime >= window_start:
+                    writes_recent += 1
+        if not files:
+            return {"ok": False, "count": 1, "label": label,
+                    "detail": "대화 파일 0건 — 저장 경로가 볼륨에 연결되지 않았다"}
+        age = int(_time.time() - newest) if newest else None
+        # 최근 턴이 없으면 판정하지 않는다. 유휴 시간에 오래된 것은 정상이다.
+        if turns_recent <= 0:
+            return {"ok": True, "count": 0, "label": label,
+                    "detail": f"최근 턴 없음 — 판정 보류 (파일 {files}건, 최신 {age}초 전)"}
+        # 완전 단절: 턴은 돌았는데 볼륨에 쓰기가 하나도 없다.
+        if writes_recent == 0:
+            return {"ok": False, "count": 1, "label": label,
+                    "detail": (f"턴 {turns_recent}건이 돌았는데 볼륨 쓰기 0건(최신 {age}초 전) — "
+                               "대화가 볼륨 밖에 쌓이고 있다. resume 불가, 매 턴 전체 프롬프트 재전송")}
+        # 부분 단절은 실패로 단정하지 않는다. 턴과 대화파일은 1:1 이 아니라
+        # 비율만으로 판정하면 오탐이 난다. 수치를 남겨 사람이 보게 한다.
+        return {"ok": True, "count": 0, "label": label,
+                "detail": (f"턴 {turns_recent}건 / 볼륨 쓰기 {writes_recent}건, "
+                           f"파일 {files}건, 최신 {age}초 전")}
+    except Exception as exc:  # 헬스체크가 예외로 죽으면 안 된다
+        return {"ok": True, "count": 0, "label": label,
+                "detail": f"점검 실패(무시): {str(exc)[:80]}"}
+
+
 @router.get("/ops/health-check")
 async def health_check():
     """전체 파이프라인 건전성 확인."""
@@ -1267,6 +1328,12 @@ async def health_check():
                 "WHERE server='68' AND metric_name='blocked_tasks_count' "
                 "ORDER BY recorded_at DESC LIMIT 1"
             )
+            # CLI 대화 영속 점검에 쓸 최근 채팅 활동량.
+            # 턴이 돌았는데 대화 볼륨에 쓰기가 없으면 저장 경로가 끊긴 것이다.
+            cli_turns_recent = await conn.fetchval(
+                "SELECT COUNT(*) FROM chat_turn_executions "
+                "WHERE created_at > NOW() - INTERVAL '30 minutes'"
+            )
             # AADS-116: 유지보수 모드 상태
             maintenance_row = await conn.fetchrow(
                 "SELECT server, reason FROM maintenance_schedule "
@@ -1295,6 +1362,7 @@ async def health_check():
             "cost_tracking": { "ok": True, "count": 0, "label": "비용 추적" },
             "env_trend": { "ok": True, "count": 0, "label": "환경 트렌드" },
             "manager_response": { "ok": True, "count": 0, "label": "매니저 응답" },
+            "cli_session_persistence": _check_cli_session_persistence(int(cli_turns_recent or 0)),
         }
         # ── 인프라 상태 (컨테이너 + DB풀 + 디스크 + 메모리) ──
         import shutil as _shutil
