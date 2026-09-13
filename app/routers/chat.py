@@ -3359,11 +3359,36 @@ async def interrupt_session(
                 _started_age = int(row["started_age_seconds"] or 0)
                 _empty_stale = not _has_progress and _updated_age >= 150
                 _hard_stale = _started_age >= 900 and _updated_age >= 120
-                accepts_interrupt = not (_empty_stale or _hard_stale)
+                # 이 실행보다 나중에 만들어진 실행이 있으면, 아직 running 이어도
+                # 세션의 현재 턴이 아니다. 하트비트가 계속 돌면 위의 두 조건은
+                # 모두 빠져나가므로 나이로는 잡히지 않는다.
+                #
+                # 2026-09-13 세션 539a6086 실측: 08:51 실행이 running 인 동안
+                # 09:00·09:23·09:25 실행이 시작되고 끝났고, 그 낡은 실행이
+                # 13시간 반 동안 is_streaming 을 붙잡았다. 그 사이 CEO 가 보낸
+                # 지시가 전부 "추가 지시"로 들어갔다 — 13시간 전에 버려진 턴에
+                # 새 지시가 붙은 것이다. 화면이 "응답이 중단되었습니다, 다시
+                # 보내주세요"라고 안내한 직후에도 그랬다.
+                async with pool.acquire() as _sup_conn:
+                    _superseded = await _sup_conn.fetchval(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1 FROM chat_turn_executions newer
+                            WHERE newer.session_id = $1
+                              AND newer.id <> $2::uuid
+                              AND newer.created_at > (
+                                  SELECT created_at FROM chat_turn_executions WHERE id = $2::uuid
+                              )
+                        )
+                        """,
+                        session_id,
+                        row["execution_id"],
+                    )
+                accepts_interrupt = not (_empty_stale or _hard_stale or _superseded)
                 if not accepts_interrupt:
                     stale_reason = (
                         f"stale execution age={_started_age}s updated_age={_updated_age}s "
-                        f"tools={_tool_count} last_tool={_last_tool}"
+                        f"tools={_tool_count} last_tool={_last_tool} superseded={bool(_superseded)}"
                     )
             else:
                 stale_reason = "no running DB execution"
