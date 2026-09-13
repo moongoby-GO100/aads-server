@@ -30,6 +30,7 @@ def _user_id(context: TenantContext) -> str | None:
 class DraftCreateRequest(BaseModel):
     context_window: int = Field(default=8, ge=2, le=16)
     message_ids: list[UUID] | None = Field(default=None, max_length=16)
+    composer_draft: str | None = Field(default=None, max_length=50_000)
 
 
 class DraftUpdateRequest(BaseModel):
@@ -59,6 +60,7 @@ async def create_directive_draft(
             session_id=str(session_id),
             context_window=body.context_window,
             message_ids=[str(value) for value in body.message_ids] if body.message_ids else None,
+            composer_draft=body.composer_draft,
         )
     except drafts.DraftNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc

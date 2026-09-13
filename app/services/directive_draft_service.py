@@ -117,6 +117,7 @@ class DraftSource:
     project_key: str
     messages: list[dict[str, Any]]
     selected_assistant_message_id: uuid.UUID | None = None
+    composer_draft: str | None = None
 
 
 def normalize_project_key(value: str | None) -> str:
@@ -187,6 +188,12 @@ def _latest_user_request(messages: Iterable[dict[str, Any]]) -> str:
     return "현재 세션의 최근 문답을 검토하여 필요한 작업을 수행한다."
 
 
+def _effective_user_request(source: DraftSource) -> str:
+    """Prefer the unsent composer text as the user's newest stated intent."""
+    composer_draft = (source.composer_draft or "").strip()
+    return composer_draft or _latest_user_request(source.messages)
+
+
 def _user_request_text(messages: Iterable[dict[str, Any]]) -> str:
     return "\n".join(
         str(message.get("content") or "")
@@ -232,6 +239,8 @@ def _fallback_title(text: str) -> str:
 
 def _risk_source_text(source: DraftSource) -> str:
     request = _user_request_text(source.messages)
+    if source.composer_draft:
+        request = f"{request}\n{source.composer_draft}".strip()
     selected_response = _selected_assistant_text(source)
     if selected_response:
         return f"{request}\n{_assistant_action_focus(selected_response)}".strip()
@@ -239,7 +248,7 @@ def _risk_source_text(source: DraftSource) -> str:
 
 
 def build_fallback_directive(source: DraftSource, risk_level: str) -> str:
-    request = _latest_user_request(source.messages)
+    request = _effective_user_request(source)
     selected_response = _selected_assistant_text(source)
     response_focus = _assistant_action_focus(selected_response)
     title = (
@@ -260,6 +269,8 @@ def build_fallback_directive(source: DraftSource, risk_level: str) -> str:
         if response_focus
         else request[:1200]
     )
+    if response_focus and source.composer_draft:
+        objective += f" 입력창의 추가 요구사항도 함께 반영한다: {request[:900]}"
     evidence = (
         f"선택한 AI 응답의 후속 항목: {response_focus[:1200]}\n"
         f"  - 해당 응답의 원 사용자 요청: {request[:600]}"
@@ -309,6 +320,13 @@ def _build_generation_prompt(source: DraftSource, risk_level: str) -> str:
         if selected_id is not None
         else "- 전체 최근 문답에서 사용자의 최신 실행 의도를 기준으로 지시서를 작성한다."
     )
+    composer_context = ""
+    if source.composer_draft:
+        composer_context = (
+            "\n\n[COMPOSER_DRAFT | UNSENT]\n"
+            f"{source.composer_draft[:50000]}\n"
+            "- 위 내용은 아직 전송하지 않은 입력창 초안이지만, 사용자의 가장 최신 요구사항으로 취급해 지시서에 반영한다."
+        )
     return f"""아래 세션의 최근 문답을 검토하여 실행 전 CEO가 수정·확인할 개발 지시서 초안을 작성하라.
 
 규칙:
@@ -330,7 +348,7 @@ def _build_generation_prompt(source: DraftSource, risk_level: str) -> str:
 워크스페이스: {source.workspace_name}
 
 최근 문답:
-{transcript}
+{transcript}{composer_context}
 """
 
 
@@ -459,6 +477,7 @@ async def _load_source(
     session_id: str,
     context_window: int,
     message_ids: list[str] | None,
+    composer_draft: str | None = None,
 ) -> DraftSource:
     tenant_uuid = uuid.UUID(tenant_id)
     session_uuid = uuid.UUID(session_id)
@@ -509,9 +528,10 @@ async def _load_source(
                 max(2, min(context_window, 16)),
             )
     messages = [dict(row) for row in rows]
-    if not messages:
+    normalized_composer_draft = (composer_draft or "").strip() or None
+    if not messages and not normalized_composer_draft:
         raise ValueError("초안을 만들 최근 문답이 없습니다.")
-    if not _user_request_text(messages):
+    if not _user_request_text(messages) and not normalized_composer_draft:
         raise ValueError("초안을 만들 최근 사용자 요청이 없습니다.")
     selected_assistant_message_id = None
     if message_ids:
@@ -530,6 +550,7 @@ async def _load_source(
         project_key=normalize_project_key(session["project_key"]),
         messages=messages,
         selected_assistant_message_id=selected_assistant_message_id,
+        composer_draft=normalized_composer_draft,
     )
 
 
@@ -561,12 +582,14 @@ async def create_draft(
     session_id: str,
     context_window: int = 8,
     message_ids: list[str] | None = None,
+    composer_draft: str | None = None,
 ) -> dict[str, Any]:
     source = await _load_source(
         tenant_id=tenant_id,
         session_id=session_id,
         context_window=context_window,
         message_ids=message_ids,
+        composer_draft=composer_draft,
     )
     # 최근 문답 모드는 사용자 요청만 판정하고, 응답 선택 모드는 선택된 후속 조치도 포함한다.
     risk_level = classify_risk(_risk_source_text(source))
@@ -592,6 +615,8 @@ async def create_draft(
         "requires_human_review": True,
         "auto_submit": False,
         "model_used": model_used,
+        "composer_draft_included": bool(source.composer_draft),
+        "composer_draft_content": source.composer_draft,
     }
     tenant_uuid = uuid.UUID(tenant_id)
     actor_uuid = uuid.UUID(user_id) if user_id else None
@@ -657,7 +682,10 @@ async def create_draft(
                 content,
                 generation_mode,
                 actor_uuid,
-                json.dumps({"source_message_ids": [str(value) for value in source_ids]}, ensure_ascii=False),
+                json.dumps({
+                    "source_message_ids": [str(value) for value in source_ids],
+                    "composer_draft": source.composer_draft,
+                }, ensure_ascii=False),
             )
             await conn.execute(
                 """

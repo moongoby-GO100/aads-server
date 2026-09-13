@@ -97,6 +97,47 @@ def test_selected_response_prompt_marks_and_prioritizes_assistant_answer() -> No
     assert "사용자 질문을 그대로 다시 지시하지 않는다" in prompt
 
 
+def test_generation_prompt_includes_unsent_composer_as_latest_intent() -> None:
+    source = _source()
+    source = DraftSource(
+        **{**source.__dict__, "composer_draft": "입력창에 작성 중인 추가 요구사항도 포함해줘"}
+    )
+
+    prompt = service._build_generation_prompt(source, "medium")
+
+    assert "[COMPOSER_DRAFT | UNSENT]" in prompt
+    assert "입력창에 작성 중인 추가 요구사항도 포함해줘" in prompt
+    assert "가장 최신 요구사항" in prompt
+
+
+def test_fallback_prefers_unsent_composer_text() -> None:
+    source = _source()
+    source = DraftSource(
+        **{**source.__dict__, "composer_draft": "편집창을 화면 높이에 맞춰 자동으로 확장해줘"}
+    )
+
+    content = build_fallback_directive(source, "medium")
+
+    assert "편집창을 화면 높이에 맞춰 자동으로 확장해줘" in content
+    assert validate_directive(content, expected_project="AADS")[0]
+
+
+def test_fallback_supports_composer_only_source() -> None:
+    source = _source()
+    source = DraftSource(
+        **{
+            **source.__dict__,
+            "messages": [],
+            "composer_draft": "첫 메시지를 보내기 전에 이 내용으로 지시서를 만들어줘",
+        }
+    )
+
+    content = build_fallback_directive(source, "medium")
+
+    assert "첫 메시지를 보내기 전에 이 내용으로 지시서를 만들어줘" in content
+    assert validate_directive(content, expected_project="AADS")[0]
+
+
 def test_selected_response_risk_includes_selected_follow_up_actions() -> None:
     source = _selected_response_source()
     selected_id = source.selected_assistant_message_id

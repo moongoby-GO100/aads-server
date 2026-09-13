@@ -13996,7 +13996,6 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   단축 백오프로 배수한 뒤 기본값으로 복귀한다. 구현 검증은 Python compile, Bash
   syntax, diff check와 reviewer/sweeper 집중 테스트 29건을 통과했다. 운영 DB migration,
   Blue/Green 배포, 실제 비동기 요청 E2E와 보류 배수 결과는 배포 기록에서 확정한다.
-
 ## 2026-09-13 08:40 KST — AADS-191 운영 실측 후속 보정 3건
 
 - 2026-09-13 배포 `#368`~`#372` 실측에서 자가치유 계층이 실제로 호출되는 것을 확인했고
@@ -14013,3 +14012,18 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   `insufficient build disk` 가 ERR 트랩의 일반 메시지로 덮여 DB 에는 원인이 사라졌다.
 - 검증: `tests/unit/test_deploy_autoheal.py` 44건 통과(신규 7건), `bash -n` 2종 통과.
   운영 배포로 3건 보정 경로를 재현하는 검증은 다음 실패 배포에서 관찰한다(미실행).
+
+## 2026-09-13 KST - Directive drafts include unsent composer context
+
+- `POST /api/v1/chat/sessions/{session_id}/directive-drafts` accepts an optional, tenant-scoped
+  `composer_draft` (maximum 50,000 characters). It is treated as the user's newest intent without
+  inserting a fake chat message or marking the text as sent.
+- Generated and deterministic-fallback directives both include that context. Risk classification
+  also evaluates it, and draft classification/revision metadata retain the exact context so the
+  same source can be regenerated reproducibly.
+- Composer-only generation is supported for a new session with no prior chat messages. Existing
+  `message_ids`, review-first, no-auto-submit, tenant isolation, and revision/event contracts remain
+  unchanged.
+- Verification: focused directive service/event tests, Python compilation, and diff checks must
+  pass before release. API blue/green deployment and authenticated production E2E remain separate
+  release gates.
