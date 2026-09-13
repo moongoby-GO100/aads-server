@@ -157,10 +157,56 @@ const catMeta = {
   store:   {label:"매장비서",  icon:"🏪",color:"#ec4899",       tagClass:"tag-store"}
 };
 
-document.getElementById('totalCount').textContent = docs.length;
-document.getElementById('eduCount').textContent = docs.filter(d => d.cat === 'edu').length;
-document.getElementById('designCount').textContent = docs.filter(d => d.cat === 'design').length;
-document.getElementById('analysisCount').textContent = docs.filter(d => d.cat === 'analysis').length;
+function updateStats() {
+  document.getElementById('totalCount').textContent = docs.length;
+  document.getElementById('eduCount').textContent = docs.filter(d => d.cat === 'edu').length;
+  document.getElementById('designCount').textContent = docs.filter(d => d.cat === 'design').length;
+  document.getElementById('analysisCount').textContent = docs.filter(d => d.cat === 'analysis').length;
+}
+
+function autoTitle(file) {
+  return file
+    .replace(/^\d{8}_/, '')
+    .replace(/_education\.html$/i, '')
+    .replace(/_/g, ' ')
+    .replace(/\b(ai|llm|rag|mcp|prd|ax|lora|llmops)\b/gi, word => word.toUpperCase());
+}
+
+async function mergeAutoEducationDocs() {
+  try {
+    const response = await fetch('/api/v1/project-docs/scan', {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' }
+    });
+    if (!response.ok) return;
+
+    const payload = await response.json();
+    const aads = (payload.projects || []).find(project => project.project === 'AADS');
+    if (!aads) return;
+
+    const known = new Set(docs.map(doc => decodeURIComponent(doc.file)));
+    const discovered = (aads.files || [])
+      .filter(doc => doc.base_path === '/app/app/static/reports')
+      .filter(doc => !doc.path.includes('/') && /_education\.html$/i.test(doc.path))
+      .filter(doc => !known.has(doc.path));
+
+    discovered.forEach(doc => {
+      const date = doc.modified
+        ? new Date(doc.modified * 1000).toISOString().slice(0, 10)
+        : '';
+      docs.unshift({
+        cat: 'edu',
+        title: autoTitle(doc.name || doc.path),
+        file: doc.path,
+        date,
+        size: `${Math.max(1, Math.round((doc.size || 0) / 1024))}KB`,
+        desc: '문서 스캔 API에서 자동 검색된 교육자료'
+      });
+    });
+  } catch (_) {
+    // 공개·오프라인 접근에서는 검증된 정적 목록을 그대로 사용합니다.
+  }
+}
 
 let currentFilter = 'all';
 
@@ -221,7 +267,10 @@ function render(list) {
   document.getElementById('content').innerHTML = html;
 }
 
-filterDocs();
+mergeAutoEducationDocs().finally(() => {
+  updateStats();
+  filterDocs();
+});
 </script>
 </body>
 </html>
