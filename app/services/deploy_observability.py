@@ -705,6 +705,7 @@ async def _load_project_deployments(
                 "is_active": status in ACTIVE_STATUSES,
                 "is_queued": status in QUEUED_STATUSES,
                 "duration_ms": row.get("duration_ms"),
+                "error_summary": row.get("error_summary"),
                 "release_title": row.get("release_title"),
                 "release_summary": row.get("release_summary"),
                 "changed_files": row.get("changed_files"),
