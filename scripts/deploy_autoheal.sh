@@ -69,16 +69,6 @@ classify_deploy_failure() {
             echo "dependency_lock_stale" ;;
         *"queued deploy wait timeout"*|*"flock acquisition failed"*)
             echo "lock_wait_timeout" ;;
-        # 아래 두 가지는 "unexpected error exit=" 안에 섞여 들어오지만 성격이
-        # 전혀 다르다. 한 통에 넣으면 둘 다 manual 로 빠져 자동 교정이 안 된다.
-        # (2026-09-13 실측: manual 8건 중 3건이 이 두 유형)
-        #
-        # 컨테이너 재생성 실패. 대개 일시적 자원 경합이라 재시도로 풀린다.
-        *"unexpected error exit="*"docker compose"*|*"unexpected error exit="*"force-recreate"*)
-            echo "container_recreate_fail" ;;
-        # deploy.sh 를 없는 모드로 호출한 것. 재시도해도 같은 결과다.
-        *"unknown mode:"*)
-            echo "invalid_mode" ;;
         *"unexpected error exit="*)
             echo "unexpected_exit" ;;
         *)
@@ -109,18 +99,6 @@ autoheal_policy() {
     case "$cause" in
         disk_full|dirty_worktree|stale_heartbeat|standby_sync_fail|lock_wait_timeout|source_dir_missing)
             echo "retry" ;;
-        # 컨테이너 재생성은 자원 경합으로 실패하는 경우가 많아 재시도할 값이 있다.
-        # 다만 컷오버 이후라면 이미 트래픽이 넘어간 뒤이므로 손대지 않는다.
-        container_recreate_fail)
-            if [[ "${DEPLOY_UPSTREAM_SWITCHED:-false}" == "true" ]] || autoheal_phase_is_post_switch "$phase"; then
-                echo "manual"
-            else
-                echo "retry"
-            fi
-            ;;
-        # 호출 방식이 틀린 것이라 재시도해도 같은 결과다. 사람이 고쳐야 한다.
-        invalid_mode)
-            echo "manual" ;;
         signal_interrupt)
             if [[ "${DEPLOY_UPSTREAM_SWITCHED:-false}" == "true" ]] || autoheal_phase_is_post_switch "$phase"; then
                 echo "manual"
