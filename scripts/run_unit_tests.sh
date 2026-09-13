@@ -46,12 +46,25 @@ if ! docker run --rm -v "$TESTDEPS_DIR":/testdeps "$IMAGE" \
     fi
 fi
 
+# 대시보드 정적 테스트는 리포지터리 밖의 ../aads-dashboard 를 읽는다.
+# 마운트하지 않으면 경로가 없어 조용히 aads-server 안의 낡은 사본으로 폴백하고,
+# 운영에 배포된 적 없는 코드를 검증하게 된다 — 게이트가 거짓말하는 또 하나의 경로다.
+DASHBOARD_ROOT="${AADS_DASHBOARD_ROOT:-$(cd "$REPO_ROOT/../aads-dashboard" 2>/dev/null && pwd)}"
+dashboard_mount=()
+if [ -n "$DASHBOARD_ROOT" ] && [ -d "$DASHBOARD_ROOT" ]; then
+    # 컨테이너 작업 디렉터리가 /app 이므로 ../aads-dashboard 는 /aads-dashboard 다.
+    dashboard_mount=(-v "$DASHBOARD_ROOT":/aads-dashboard:ro)
+else
+    echo "[run_unit_tests] 대시보드 소스를 찾지 못했습니다 — 대시보드 정적 테스트는 낡은 사본을 검증하게 됩니다." >&2
+fi
+
 # 원격 파일 도구 테스트는 host.docker.internal 로 SSH 를 건다.
 # 운영 컨테이너가 가진 것과 같은 조건을 임시 컨테이너에도 준다.
 docker run --rm \
     --add-host host.docker.internal:host-gateway \
     -v /root/.ssh:/root/.ssh:ro \
     -v "$REPO_ROOT":/app \
+    "${dashboard_mount[@]}" \
     -v "$TESTDEPS_DIR":/testdeps \
     -w /app \
     -e PYTHONPATH=/testdeps \
