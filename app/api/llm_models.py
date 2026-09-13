@@ -403,7 +403,9 @@ _SELECTOR_FIELDS = (
     "provider", "model_id", "display_name", "input_cost", "output_cost",
     "is_active", "is_selectable", "is_executable",
 )
-_SELECTOR_METADATA_KEYS = ("alias_of", "model_source")
+# 채팅 페이지가 별칭 모델을 걸러낼 때 읽는 키들. canonical_model 이 빠지면
+# alias 판정이 조용히 어긋난다(page.tsx:2012, 2027).
+_SELECTOR_METADATA_KEYS = ("alias_of", "canonical_model", "model_source")
 
 
 def _slim_for_selector(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
