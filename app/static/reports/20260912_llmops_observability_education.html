@@ -1,0 +1,957 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LLMOps · 옵저버빌리티 교육자료 — AADS Academy</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0a0f1a;--surface:#111827;--card:#1e293b;--card-hover:#334155;
+--accent:#3b82f6;--accent2:#8b5cf6;--accent3:#06b6d4;--accent4:#f59e0b;--accent5:#10b981;--accent6:#ef4444;
+--text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;--border:#334155;--border2:#475569;
+--code-bg:#0d1117;--highlight:#fbbf2420;--success:#10b981;--warning:#f59e0b;--danger:#ef4444}
+body{font-family:'Pretendard',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+background:var(--bg);color:var(--text);line-height:1.8;min-height:100vh}
+.container{max-width:1100px;margin:0 auto;padding:32px 24px 80px}
+/* Header */
+.hero{text-align:center;padding:60px 0 40px;border-bottom:1px solid var(--border);margin-bottom:48px}
+.hero h1{font-size:2.2rem;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2),var(--accent3));
+-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:12px;letter-spacing:-0.5px}
+.hero .subtitle{color:var(--text2);font-size:1.05rem;max-width:700px;margin:0 auto}
+.hero .meta-info{display:flex;gap:16px;justify-content:center;margin-top:20px;flex-wrap:wrap}
+.hero .meta-tag{font-size:.8rem;color:var(--accent);background:var(--accent)15;padding:4px 14px;border-radius:20px}
+/* TOC */
+.toc{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px 32px;margin-bottom:48px}
+.toc h2{font-size:1.1rem;font-weight:700;margin-bottom:16px;color:var(--accent)}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
+.toc a{color:var(--text2);text-decoration:none;font-size:.9rem;padding:6px 12px;border-radius:8px;display:block;transition:.2s}
+.toc a:hover{background:var(--card);color:var(--accent)}
+.toc a .num{color:var(--accent);font-weight:700;margin-right:6px;font-size:.8rem}
+/* Sections */
+.section{margin-bottom:56px}
+.section-anchor{scroll-margin-top:24px}
+h2.section-title{font-size:1.5rem;font-weight:700;margin-bottom:20px;padding-bottom:12px;
+border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:10px}
+h2.section-title .icon{font-size:1.3rem}
+h3{font-size:1.15rem;font-weight:600;margin:28px 0 12px;color:var(--accent3)}
+h4{font-size:1rem;font-weight:600;margin:20px 0 8px;color:var(--accent4)}
+p{margin-bottom:14px;color:var(--text)}
+/* Tables */
+.table-wrap{overflow-x:auto;margin:16px 0 24px;border-radius:12px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+thead{background:var(--surface)}
+th{padding:12px 16px;text-align:left;font-weight:600;color:var(--accent);border-bottom:2px solid var(--border);white-space:nowrap}
+td{padding:10px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:hover{background:var(--card)}
+.price{color:var(--accent4);font-weight:600}
+.perf{color:var(--accent3);font-weight:600}
+.recommend{color:var(--success);font-weight:600}
+/* Cards */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:16px 0 24px}
+.info-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.info-card h4{margin:0 0 8px;color:var(--accent);font-size:.95rem}
+.info-card p{font-size:.88rem;color:var(--text2);margin:0}
+.info-card .badge{display:inline-block;font-size:.7rem;padding:2px 8px;border-radius:4px;margin-top:8px;font-weight:600}
+.badge-free{background:#10b98120;color:#34d399}
+.badge-paid{background:#f59e0b20;color:#fbbf24}
+.badge-enterprise{background:#8b5cf620;color:#a78bfa}
+/* Code */
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;padding:16px 20px;
+overflow-x:auto;margin:12px 0 20px;font-size:.85rem;line-height:1.6}
+code{font-family:'Fira Code','JetBrains Mono',monospace;color:var(--accent3)}
+p code,li code,td code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-size:.85em}
+/* Diagram */
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;
+margin:16px 0 24px;text-align:center;font-family:monospace;font-size:.85rem;line-height:1.8;overflow-x:auto}
+.diagram .title{font-weight:700;color:var(--accent);margin-bottom:12px;font-family:sans-serif;font-size:.95rem}
+/* Alert boxes */
+.alert{border-radius:10px;padding:16px 20px;margin:16px 0;font-size:.9rem}
+.alert-info{background:#3b82f610;border-left:4px solid var(--accent)}
+.alert-warn{background:#f59e0b10;border-left:4px solid var(--warning)}
+.alert-success{background:#10b98110;border-left:4px solid var(--success)}
+.alert-danger{background:#ef444410;border-left:4px solid var(--danger)}
+.alert strong{display:block;margin-bottom:4px}
+/* Lists */
+ul,ol{margin:8px 0 16px 20px}
+li{margin-bottom:6px;font-size:.92rem}
+li strong{color:var(--text)}
+/* Architecture diagram */
+.arch-flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin:20px 0}
+.arch-box{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;
+font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
+.arch-arrow{color:var(--accent);font-size:1.2rem}
+/* Comparison */
+.compare-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+.compare-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.compare-box h4{margin:0 0 8px}
+.compare-box.pro{border-top:3px solid var(--success)}
+.compare-box.con{border-top:3px solid var(--danger)}
+/* Checkpoint */
+.checkpoint{background:var(--surface);border:1px solid var(--accent2);border-left:4px solid var(--accent2);
+border-radius:10px;padding:16px 20px;margin:24px 0 8px}
+.checkpoint h4{color:var(--accent2);margin:0 0 10px;font-size:.95rem;display:flex;align-items:center;gap:6px}
+.checkpoint ul{margin:0 0 0 18px}
+.checkpoint li{font-size:.88rem;color:var(--text2)}
+/* Verified/Unverified tags */
+.tag-verified{display:inline-block;font-size:.7rem;padding:2px 8px;border-radius:4px;background:#10b98120;color:#34d399;font-weight:600;margin-left:6px}
+.tag-unverified{display:inline-block;font-size:.7rem;padding:2px 8px;border-radius:4px;background:#ef444420;color:#f87171;font-weight:600;margin-left:6px}
+/* Footer */
+.footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--border);text-align:center;color:var(--text3);font-size:.8rem}
+/* Responsive */
+@media(max-width:768px){
+  .hero h1{font-size:1.5rem}
+  .toc-grid{grid-template-columns:1fr}
+  .card-grid{grid-template-columns:1fr}
+  .compare-row{grid-template-columns:1fr}
+  table{font-size:.78rem}
+  th,td{padding:8px 10px}
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ===== HERO ===== -->
+<div class="hero">
+  <h1>LLMOps · 옵저버빌리티 교육자료</h1>
+  <p class="subtitle">LLM 서비스는 "배포하면 끝"이 아니라 "배포 후 관찰하지 않으면 조용히 망가지는" 시스템입니다.<br>왜 전통적 MLOps로는 부족한지, 무엇을 측정하고 어떻게 장애에 대응해야 하는지, AADS는 실제로 어떻게 하고 있는지 정리합니다.</p>
+  <div class="meta-info">
+    <span class="meta-tag">2026-09-12 작성</span>
+    <span class="meta-tag">AADS Academy</span>
+    <span class="meta-tag">CEO 교육용</span>
+  </div>
+</div>
+
+<!-- ===== TOC ===== -->
+<div class="toc">
+  <h2>목차</h2>
+  <div class="toc-grid">
+    <a href="#ch1"><span class="num">01</span> LLMOps란 무엇인가 — MLOps와 무엇이 다른가</a>
+    <a href="#ch2"><span class="num">02</span> 관측 3요소 재정의: 로그·메트릭·트레이스</a>
+    <a href="#ch3"><span class="num">03</span> 트레이싱 실전: 스팬 구조와 OpenTelemetry GenAI 컨벤션</a>
+    <a href="#ch4"><span class="num">04</span> 핵심 지표: TTFT·TPS·지연·비용·성공률</a>
+    <a href="#ch5"><span class="num">05</span> 품질 드리프트 탐지 — 조용한 성능 저하 잡아내기</a>
+    <a href="#ch6"><span class="num">06</span> 관측 도구 비교 (LangSmith·Langfuse·Phoenix·Helicone·Weave)</a>
+    <a href="#ch7"><span class="num">07</span> 스트리밍(SSE) 장애 유형과 관측 포인트</a>
+    <a href="#ch8"><span class="num">08</span> 장애 대응 설계 — 서킷브레이커·레이트리밋·폴백·백프레셔</a>
+    <a href="#ch9"><span class="num">09</span> 온콜 운영 — 알림 임계값·경보 피로·포스트모템</a>
+    <a href="#ch10"><span class="num">10</span> 프롬프트·모델 버전 관리와 카나리/블루그린 배포</a>
+    <a href="#ch11"><span class="num">11</span> AADS 실제 관측 체계 전수분석</a>
+    <a href="#ch12"><span class="num">12</span> AADS 관측 공백과 개선안</a>
+    <a href="#ch13"><span class="num">13</span> 도입 비용과 ROI</a>
+    <a href="#ch14"><span class="num">14</span> 실전 로드맵과 팀 구성</a>
+    <a href="#ch15"><span class="num">15</span> 참고자료</a>
+  </div>
+</div>
+
+<!-- ===== CH1 ===== -->
+<div class="section" id="ch1">
+  <h2 class="section-title section-anchor"><span class="icon">🔭</span> 01. LLMOps란 무엇인가 — MLOps와 무엇이 다른가</h2>
+
+  <p><strong>LLMOps</strong>(LLM Operations)는 대규모 언어모델을 실서비스에 배포·운영·모니터링·개선하는 데 필요한 실천 방법론 전체를 말합니다. MLOps(전통적 머신러닝 운영)에서 출발했지만, LLM은 근본적으로 다른 운영 난제를 갖고 있어 별도 분야로 분리되었습니다.</p>
+
+  <h3>MLOps와 LLMOps, 무엇이 다른가</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>구분</th><th>전통 MLOps (분류·회귀 모델)</th><th>LLMOps (생성형 모델)</th></tr></thead>
+      <tbody>
+        <tr><td><strong>출력 형태</strong></td><td>고정된 라벨/숫자 (0.87, "spam" 등)</td><td>자유 형식 텍스트 — 같은 입력도 매번 다른 출력 가능</td></tr>
+        <tr><td><strong>정답 판정</strong></td><td>정확도·F1 등 명확한 수치</td><td>"좋은 답변"의 기준이 주관적·맥락 의존적</td></tr>
+        <tr><td><strong>입력 공간</strong></td><td>정형 피처 벡터, 범위가 유한</td><td>자연어 프롬프트 — 사실상 무한한 입력 조합</td></tr>
+        <tr><td><strong>실패 모드</strong></td><td>모델이 죽거나 에러를 던짐 (명시적)</td><td>모델은 정상 응답하지만 내용이 틀림 (암묵적·조용함)</td></tr>
+        <tr><td><strong>재현성</strong></td><td>같은 입력 → 같은 출력 (결정적)</td><td>temperature&gt;0이면 같은 입력도 다른 출력 (비결정적)</td></tr>
+        <tr><td><strong>비용 구조</strong></td><td>추론당 고정 비용, 예측 가능</td><td>토큰 수·캐시 히트율에 따라 요청마다 비용 변동</td></tr>
+        <tr><td><strong>파이프라인</strong></td><td>단일 모델 호출로 끝</td><td>에이전트·도구호출·RAG 검색이 체인으로 연결 — 실패 지점이 여러 곳</td></tr>
+        <tr><td><strong>버전 관리 대상</strong></td><td>모델 가중치, 하이퍼파라미터</td><td>모델 가중치 + <strong>프롬프트</strong> + 도구 정의 + RAG 인덱스, 4가지 모두 독립적으로 바뀜</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>LLM 특유의 3대 운영 난제</h3>
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>1. 비결정성 (Non-determinism)</h4>
+      <p>temperature, top_p 설정과 모델 내부 샘플링 때문에 동일 프롬프트도 응답이 매번 다릅니다. "어제는 됐는데 오늘은 안 된다"는 보고가 실제로 재현 불가능한 경우가 흔합니다. 관측 시스템은 단일 요청이 아니라 <strong>분포(distribution)</strong>로 품질을 봐야 합니다.</p>
+    </div>
+    <div class="info-card">
+      <h4>2. 무한 입력 공간</h4>
+      <p>사용자가 입력할 수 있는 자연어 문장은 사실상 무한합니다. 테스트 케이스를 아무리 많이 만들어도 프로덕션에서 처음 보는 입력(edge case)이 계속 등장합니다. 사전 테스트만으로는 커버할 수 없고, 실서비스 트래픽을 지속적으로 관찰해야 합니다.</p>
+    </div>
+    <div class="info-card">
+      <h4>3. 조용한 품질 저하 (Silent degradation)</h4>
+      <p>API는 200 OK를 반환하고 토큰도 정상 생성되지만, 답변 내용이 점점 부정확해지거나 형식이 깨지는 경우가 있습니다. 공급사가 백엔드에서 모델을 몰래 교체하거나(model routing), 프롬프트 한 줄을 수정했는데 다른 케이스가 깨지는 경우가 전형적입니다. HTTP 상태코드만 보는 헬스체크로는 절대 잡히지 않습니다.</p>
+    </div>
+    <div class="info-card">
+      <h4>+ 체인형 실패 전파</h4>
+      <p>에이전트 파이프라인에서는 프롬프트→도구 호출→모델 응답→다음 단계 입력이 순차적으로 이어집니다. 중간 어느 한 단계의 미묘한 오류가 다음 단계로 전파되며 증폭되어, 최종 실패 지점만 보면 원인을 찾을 수 없습니다.</p>
+    </div>
+  </div>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ 비개발자를 위한 요약</strong>
+    전통 소프트웨어는 "고장 나면 알람이 뜬다"가 기본 전제입니다. LLM 서비스는 "고장 나도 알람이 안 뜰 수 있다"가 기본 전제입니다. 그래서 LLMOps는 장애 탐지 자체를 별도로 설계해야 하는 분야입니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>우리 서비스에 "응답은 왔지만 내용이 틀렸다"를 감지하는 장치가 있는가, 아니면 HTTP 200만 보고 있는가?</li>
+      <li>같은 질문을 반복 입력했을 때 답변이 크게 달라지는 것을 "정상"으로 볼지 "이상"으로 볼지 기준이 있는가?</li>
+      <li>프롬프트를 한 줄 수정할 때 회귀 테스트(과거 잘 되던 케이스가 여전히 되는지) 없이 바로 배포하고 있지 않은가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH2 ===== -->
+<div class="section" id="ch2">
+  <h2 class="section-title section-anchor"><span class="icon">📊</span> 02. 관측 3요소 재정의: 로그·메트릭·트레이스</h2>
+
+  <p>전통적 관측가능성(Observability)의 3요소는 로그(Logs)·메트릭(Metrics)·트레이스(Traces)입니다. LLM 시스템에서는 이 3요소의 의미가 바뀝니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>요소</th><th>전통 웹서비스</th><th>LLM 서비스에서의 의미</th></tr></thead>
+      <tbody>
+        <tr><td><strong>로그 (Logs)</strong></td><td>요청/응답 라인, 에러 스택트레이스</td><td>프롬프트 전문, 모델 응답 전문, 도구 호출 인자·결과, 토큰 사용량. <strong>민감정보(PII) 포함 가능성이 높아 마스킹 필수</strong></td></tr>
+        <tr><td><strong>메트릭 (Metrics)</strong></td><td>QPS, 에러율, CPU/메모리</td><td>TTFT, TPS, 토큰당 비용, 도구 성공률, 폴백 발생률, 모델별 p95 지연 — 위 항목 대부분이 <strong>웹서비스에는 없던 LLM 고유 지표</strong></td></tr>
+        <tr><td><strong>트레이스 (Traces)</strong></td><td>마이크로서비스 간 호출 체인</td><td>한 사용자 요청이 "프롬프트 조립 → RAG 검색 → 모델 호출 → 도구 실행 → 재호출 → 최종 응답"으로 이어지는 전체 경로. 에이전트 체인이 길수록 트레이스가 곧 디버깅의 전부가 됨</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>왜 셋을 분리해서 보면 안 되는가</h3>
+  <p>메트릭 대시보드에서 "p95 지연이 튀었다"를 발견해도, 그 자체로는 원인을 알 수 없습니다. 해당 시간대의 <strong>트레이스</strong>를 열어 어느 스팬(도구 호출? RAG 검색? 모델 자체?)이 느려졌는지 봐야 하고, 그 스팬의 <strong>로그</strong>(실제 프롬프트·응답 내용)를 봐야 "프롬프트가 비정상적으로 길어져서"인지 "모델 공급사 쪽 지연"인지 구분됩니다. 세 요소가 같은 요청 ID(trace_id)로 연결되어 있어야 이 작업이 가능합니다.</p>
+
+  <div class="diagram">
+    <div class="title">3요소가 연결되지 않은 경우 vs 연결된 경우</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+[연결 안 됨]                          [연결됨 — trace_id로 조인]
+메트릭: "p95 3.2초로 상승"             메트릭: "p95 3.2초로 상승" (trace_id=T1042)
+     │ (원인 불명, 추측만 가능)              │
+     ▼                                     ▼
+로그: 수백만 줄 중 어디?               트레이스 T1042 열람 → RAG 검색 스팬 2.8초
+                                            │
+                                            ▼
+                                       로그: 검색 쿼리가 비정상적으로 길었음 확인
+                                       (원인 특정 → 조치 가능)
+</pre>
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>우리 팀이 "느려졌다"는 보고를 받으면 원인을 찾는 데 평균 몇 분이 걸리는가? (로그·메트릭·트레이스가 분리되어 있으면 이 시간이 길어짐)</li>
+      <li>프롬프트/응답 로그에 개인정보나 회사 기밀이 그대로 저장되고 있지 않은가?</li>
+      <li>장애 보고서에 "trace_id" 같은 추적 번호가 포함되는가, 아니면 "몇 시쯤 느렸다"는 식의 모호한 설명뿐인가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH3 ===== -->
+<div class="section" id="ch3">
+  <h2 class="section-title section-anchor"><span class="icon">🧵</span> 03. 트레이싱 실전: 스팬 구조와 OpenTelemetry GenAI 컨벤션</h2>
+
+  <p>트레이싱은 요청 하나가 시스템을 통과하는 전체 경로를 <strong>스팬(span)</strong>이라는 단위로 쪼개어 기록하는 것입니다. 스팬은 시작 시각·종료 시각·부모 스팬 ID·속성(attributes)을 가지며, 부모-자식 관계로 트리 구조를 이룹니다.</p>
+
+  <h3>LLM 에이전트 요청의 전형적인 스팬 트리</h3>
+  <div class="diagram">
+    <div class="title">하나의 채팅 요청이 만드는 스팬 트리</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+Trace (root span): "사용자 질문 처리" — 전체 4.1초
+├─ span: 프롬프트 조립 (0.05초)
+│    └─ 시스템 프롬프트 + 대화 이력 + 메모리 주입
+├─ span: RAG 검색 (0.8초)
+│    └─ 벡터 DB 질의 → 관련 문서 5건 반환
+├─ span: 모델 호출 #1 (1.2초)
+│    ├─ 속성: gen_ai.request.model, input_tokens, TTFT
+│    └─ 결과: 도구 호출 요청 (tool_call)
+├─ span: 도구 실행 — DB 조회 (0.3초)
+│    └─ 성공/실패, 반환 데이터 크기
+├─ span: 모델 호출 #2 (1.6초)  ← 도구 결과를 받아 최종 응답 생성
+│    └─ 속성: output_tokens, finish_reason, 비용
+└─ span: 응답 스트리밍 전송 (0.15초)
+</pre>
+  </div>
+
+  <p>이 구조의 핵심은, 전체 4.1초 중 <strong>어느 스팬이 병목인지</strong>를 한눈에 알 수 있다는 점입니다. 스팬 트리가 없으면 "4.1초 걸렸다"는 사실만 남고, 그 안에서 무슨 일이 있었는지는 로그를 뒤져야 합니다.</p>
+
+  <h3>OpenTelemetry GenAI 시맨틱 컨벤션</h3>
+  <p><strong>OpenTelemetry(OTel)</strong>는 관측 데이터(트레이스·메트릭·로그)의 업계 표준 규격입니다. 특정 벤더에 종속되지 않고 수집기를 한 번 계측해두면 LangSmith·Langfuse·Datadog 등 어느 백엔드로도 데이터를 보낼 수 있는 것이 핵심 장점입니다. 여기에 생성형 AI 전용 속성 이름을 표준화한 것이 <strong>GenAI 시맨틱 컨벤션</strong>입니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>속성명</th><th>의미</th><th>예시 값</th></tr></thead>
+      <tbody>
+        <tr><td><code>gen_ai.system</code></td><td>모델 공급사</td><td>anthropic, openai</td></tr>
+        <tr><td><code>gen_ai.request.model</code></td><td>요청한 모델명</td><td>claude-opus-5</td></tr>
+        <tr><td><code>gen_ai.operation.name</code></td><td>호출 종류</td><td>chat, embeddings, execute_tool</td></tr>
+        <tr><td><code>gen_ai.usage.input_tokens</code></td><td>입력 토큰 수</td><td>1,842</td></tr>
+        <tr><td><code>gen_ai.usage.output_tokens</code></td><td>출력 토큰 수</td><td>512</td></tr>
+        <tr><td><code>gen_ai.response.finish_reasons</code></td><td>종료 사유</td><td>stop, tool_calls, length</td></tr>
+        <tr><td><code>error.type</code></td><td>실패 유형 (표준 에러 네임스페이스 공용)</td><td>timeout, rate_limit_exceeded</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>💡 표준을 써야 하는 이유</strong>
+    GenAI 시맨틱 컨벤션은 OpenTelemetry 프로젝트 내에서 지속적으로 개정되는 진행형(evolving) 표준입니다. 세부 속성 이름은 버전에 따라 바뀔 수 있으므로, 도입 시점의 공식 문서(opentelemetry.io/docs/specs/semconv/gen-ai)를 반드시 재확인해야 합니다. 다만 "표준 속성 이름으로 계측해두면 도구를 갈아타도 재계측이 필요 없다"는 원칙 자체는 유지됩니다.
+  </div>
+
+  <h3>프롬프트/응답 원문을 스팬에 넣을 것인가</h3>
+  <p>초기 GenAI 컨벤션은 프롬프트·응답 전문을 스팬 속성에 직접 넣는 방식이었으나, 개인정보·기밀 노출 위험과 스팬 크기 폭증 문제로 최근에는 <strong>별도 로그 이벤트로 분리</strong>하고 스팬에는 참조 ID만 남기는 방식이 권장되는 추세입니다. 자체 구축 시에도 "원문은 접근 제어가 된 로그 저장소에, 트레이스에는 메타데이터만" 원칙을 따르는 것이 안전합니다.</p>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>우리 에이전트 파이프라인에서 "도구 호출 1건 실행에 몇 초 걸리는지" 개별적으로 확인할 수 있는가?</li>
+      <li>트레이싱 도구를 특정 벤더에 강하게 종속시킬 것인가, OTel 표준으로 계측해 나중에 갈아탈 수 있게 할 것인가?</li>
+      <li>프롬프트 원문이 트레이스 화면에 그대로 노출되어 아무나(외주 개발자 포함) 볼 수 있는 상태는 아닌가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH4 ===== -->
+<div class="section" id="ch4">
+  <h2 class="section-title section-anchor"><span class="icon">📈</span> 04. 핵심 지표: TTFT·TPS·지연·비용·성공률</h2>
+
+  <p>LLM 서비스는 전통 웹서비스 지표(QPS, 에러율)만으로는 사용자 체감 품질을 설명할 수 없습니다. 아래 지표들이 LLMOps 대시보드의 기본 구성 요소입니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>지표</th><th>정의</th><th>왜 중요한가</th><th>일반적 목표치</th></tr></thead>
+      <tbody>
+        <tr><td><strong>TTFT</strong><br><span style="color:var(--text3);font-size:.78rem">(Time To First Token)</span></td><td>요청 전송 후 첫 토큰이 돌아오기까지 시간</td><td>사용자가 체감하는 "반응성"의 핵심. 전체 응답이 느려도 TTFT가 짧으면 체감 대기시간이 줄어듦</td><td>채팅형 서비스 &lt; 1~2초</td></tr>
+        <tr><td><strong>TPS</strong><br><span style="color:var(--text3);font-size:.78rem">(Tokens Per Second)</span></td><td>토큰 생성 속도(첫 토큰 이후)</td><td>답변이 길수록 체감 시간을 좌우. 스트리밍 UI에서는 "타이핑 속도"로 느껴짐</td><td>모델·프로바이더별 상이, 일반적으로 20~100 TPS</td></tr>
+        <tr><td><strong>p95 / p99 지연</strong></td><td>전체 요청의 95%/99%가 이 시간 안에 끝남</td><td>평균값은 소수 극단치에 가려짐. SLA는 항상 p95/p99 기준으로 설정</td><td>서비스 성격에 따라 결정, 평균의 2~5배가 흔함</td></tr>
+        <tr><td><strong>토큰당 비용</strong></td><td>입력/출력 토큰 단가 × 사용량 (+캐시 할인)</td><td>모델 선택·프롬프트 길이·캐싱 전략이 직접 비용에 반영됨</td><td>모델·캐시 히트율에 따라 10배 이상 차이</td></tr>
+        <tr><td><strong>도구 성공률</strong></td><td>에이전트가 호출한 도구(함수·API)가 정상 응답한 비율</td><td>도구 실패는 전체 응답 실패로 이어지거나, 모델이 잘못된 정보로 답변을 지어내는(hallucination) 원인이 됨</td><td>99%+ 권장</td></tr>
+        <tr><td><strong>재시도율</strong></td><td>1차 호출 실패 후 재시도가 발생한 비율</td><td>재시도가 늘면 지연·비용이 배로 늘어남. 급증 시 공급사 장애의 선행 신호</td><td>평상시 1~3% 이하</td></tr>
+        <tr><td><strong>폴백 발생률</strong></td><td>주 모델 실패로 대체 모델/계정으로 전환된 비율</td><td>폴백 자체는 정상 동작이지만, 급증하면 주 모델 공급사 이상 신호</td><td>추세 감시 대상 (절대값보다 변화율이 중요)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>지표를 어떻게 잘라서 봐야 하는가</h3>
+  <ul>
+    <li><strong>모델별</strong> — 같은 서비스 안에서도 라우팅되는 모델이 다르면 지연·비용·성공률이 전혀 다름</li>
+    <li><strong>엔드포인트/기능별</strong> — 단순 질의응답과 도구 호출을 포함한 에이전트 작업은 지연 분포가 완전히 다름</li>
+    <li><strong>시간대별</strong> — 공급사 트래픽이 몰리는 시간대(미국 업무시간 등)에 지연이 구조적으로 늘어나는 경우가 흔함</li>
+    <li><strong>테넌트/사용자군별</strong> — 특정 사용자의 비정상적으로 긴 프롬프트가 전체 평균을 왜곡할 수 있음</li>
+  </ul>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ 평균의 함정</strong>
+    "평균 응답시간 1.2초"라는 보고를 받았을 때, p95가 8초라면 20명 중 1명은 8초를 기다리고 있다는 뜻입니다. 반드시 p95/p99를 함께 보고받아야 하며, 평균만 보고하는 대시보드는 경영 의사결정에 오히려 위험합니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>지금 보고받는 "응답 속도" 수치가 평균인가 p95인가?</li>
+      <li>토큰당 비용을 모델별로 분리해서 보고받고 있는가, 아니면 총 청구액만 보는가?</li>
+      <li>재시도율·폴백률이 "이번 주에 평소보다 늘었다/줄었다"를 누군가 매주 확인하고 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH5 ===== -->
+<div class="section" id="ch5">
+  <h2 class="section-title section-anchor"><span class="icon">🕵️</span> 05. 품질 드리프트 탐지 — 조용한 성능 저하 잡아내기</h2>
+
+  <p>품질 드리프트란 시스템이 정상 작동하는 것처럼 보이지만(에러 없음, 정상 지연) 실제 출력 품질이 서서히 나빠지는 현상입니다. 주요 원인 3가지와 탐지 방법을 정리합니다.</p>
+
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>원인 1: 공급사 모델 버전 교체</h4>
+      <p>OpenAI·Anthropic·Google 등은 같은 모델명 뒤에서 내부적으로 가중치를 업데이트하거나 트래픽을 다른 서빙 클러스터로 라우팅할 수 있습니다. 사용자는 공지를 받지 못하는 경우가 많습니다.</p>
+    </div>
+    <div class="info-card">
+      <h4>원인 2: 프롬프트 변경의 부작용</h4>
+      <p>특정 케이스를 고치려고 시스템 프롬프트를 수정했는데, 그 수정이 전혀 다른 케이스의 동작을 깨뜨리는 경우입니다. 프롬프트는 코드처럼 버전 관리·회귀 테스트 없이 수정되는 경우가 많아 가장 흔한 원인입니다.</p>
+    </div>
+    <div class="info-card">
+      <h4>원인 3: RAG 인덱스 노후화</h4>
+      <p>검색 대상 문서가 갱신되지 않거나, 임베딩 모델이 바뀌었는데 기존 인덱스를 재생성하지 않으면 검색 결과의 관련성이 서서히 떨어집니다.</p>
+    </div>
+  </div>
+
+  <h3>탐지 방법</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>방법</th><th>설명</th><th>장점</th><th>한계</th></tr></thead>
+      <tbody>
+        <tr><td><strong>골든 데이터셋 정기 평가</strong></td><td>정답이 확정된 질의 세트를 매일/매주 자동 재실행해 점수 추이를 추적</td><td>정량적 추세 확인 가능, 자동화 쉬움</td><td>데이터셋이 실제 트래픽 분포를 못 따라가면 신규 실패 유형을 놓침</td></tr>
+        <tr><td><strong>LLM-as-judge</strong></td><td>별도 LLM이 실서비스 응답 샘플을 채점(관련성·정확성·형식 준수)</td><td>사람 리뷰보다 저렴하고 빠르게 대량 샘플 처리</td><td>심판 모델 자체도 드리프트할 수 있음 — 주기적 사람 검증 필요</td></tr>
+        <tr><td><strong>사용자 피드백 신호</strong></td><td>재질문율, 대화 중도 이탈률, 명시적 좋아요/싫어요</td><td>실제 사용자 체감을 가장 직접 반영</td><td>피드백 자체가 드물고 편향될 수 있음</td></tr>
+        <tr><td><strong>응답 메타 신호</strong></td><td>응답 길이 급변, 거부(refusal) 비율, 형식 파싱 실패율 추적</td><td>정답 라벨 없이도 이상 징후 조기 포착</td><td>품질 저하의 "정도"까지는 알 수 없음, 이상 신호만 제공</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>실전 워크플로: 배포 전후 비교</h3>
+  <div class="diagram">
+    <div class="title">프롬프트/모델 변경 시 드리프트 방지 절차</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+변경 전 baseline 점수 기록
+    │
+    ▼
+프롬프트/모델 변경 (예: 시스템 프롬프트 1줄 수정)
+    │
+    ▼
+골든 데이터셋 자동 재평가 (수 분 내 완료)
+    │
+    ├─ 점수 하락 없음 → 카나리 배포 (트래픽 5~10%)
+    │                        │
+    │                        ▼
+    │                   실사용자 지표 모니터링 (1~24시간)
+    │                        │
+    │                   이상 없음 → 전체 배포
+    │
+    └─ 점수 하락 감지 → 배포 차단, 원인 분석
+</pre>
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>프롬프트를 수정한 날, 그 수정이 다른 기능을 깨뜨리지 않았는지 자동으로 확인하는 절차가 있는가?</li>
+      <li>"공급사가 모델을 몰래 바꿨을 수 있다"는 가능성을 전제로 정기 품질 점검을 하고 있는가?</li>
+      <li>사용자가 "같은 질문을 다시 한다"는 신호(재질문률)를 추적하고 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH6 ===== -->
+<div class="section" id="ch6">
+  <h2 class="section-title section-anchor"><span class="icon">🧰</span> 06. 관측 도구 비교: LangSmith vs Langfuse vs Phoenix vs Helicone vs Weave</h2>
+
+  <p>LLM 옵저버빌리티 전용 도구들을 기능·비용·자체호스팅 가능 여부 기준으로 비교합니다. <strong>가격은 각 서비스가 자체 정책으로 수시 변경하므로, 아래 표는 2026년 9월 시점의 일반적 포지셔닝 참고용이며 도입 전 공식 요금 페이지 재확인이 필수입니다.</strong></p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>도구</th><th>운영 주체</th><th>자체호스팅</th><th>핵심 강점</th><th>과금 방식</th><th>적합 상황</th></tr></thead>
+      <tbody>
+        <tr><td><strong>LangSmith</strong></td><td>LangChain</td><td class="perf">엔터프라이즈 플랜에 한해 가능</td><td>LangChain/LangGraph 생태계와 깊은 통합, 프롬프트 실험·평가 UI 성숙</td><td class="price">무료 개발자 티어 + 트레이스 사용량 기반 유료 플랜</td><td>이미 LangChain/LangGraph로 파이프라인을 짠 팀</td></tr>
+        <tr><td><strong>Langfuse</strong></td><td>Langfuse (오픈소스)</td><td class="recommend">가능 (셀프호스팅 무료, 라이선스 조건 확인 필요)</td><td>완전 오픈소스, 프레임워크 중립적(OpenTelemetry 기반), 프롬프트 관리+평가+비용추적 통합</td><td class="price">셀프호스팅 무료 / 클라우드 사용량 기반 유료</td><td>벤더 종속을 피하고 싶은 팀, 비용 민감한 스타트업</td></tr>
+        <tr><td><strong>Arize Phoenix</strong></td><td>Arize AI (오픈소스)</td><td class="recommend">가능 (오픈소스 무료)</td><td>OpenTelemetry 네이티브, 임베딩 드리프트·RAG 평가에 특화, 노트북 환경 친화적</td><td class="price">Phoenix 자체는 무료 / Arize AX(엔터프라이즈)는 별도 유료</td><td>RAG 품질·임베딩 드리프트를 깊게 분석하려는 ML팀</td></tr>
+        <tr><td><strong>Helicone</strong></td><td>Helicone (오픈소스)</td><td class="recommend">가능 (오픈소스 무료)</td><td>프록시 방식 — 코드 한 줄(base URL 변경)로 즉시 계측, 캐싱·레이트리밋 내장</td><td class="price">넉넉한 무료 티어 + 요청량 기반 유료</td><td>빠르게 최소 계측만 붙이고 싶은 소규모 팀</td></tr>
+        <tr><td><strong>W&amp;B Weave</strong></td><td>Weights &amp; Biases</td><td class="perf">제한적 (주로 클라우드/엔터프라이즈 셀프호스팅)</td><td>기존 W&amp;B 실험관리와 통합, 모델 학습~서빙 전 주기를 한 곳에서 추적</td><td class="price">무료 개인 티어 + 팀/엔터프라이즈 유료 플랜</td><td>이미 W&amp;B로 모델 학습을 관리 중인 팀</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>선택 기준 요약</h3>
+  <div class="compare-row">
+    <div class="compare-box pro">
+      <h4 style="color:var(--success)">셀프호스팅·비용 최소화 우선</h4>
+      <ul>
+        <li>Langfuse 또는 Arize Phoenix — 둘 다 오픈소스로 자체 서버에 무료 설치 가능</li>
+        <li>OpenTelemetry 표준을 따르므로 나중에 다른 백엔드로 전환 부담이 적음</li>
+        <li>초기 설치·운영 인력이 필요하다는 점은 감안해야 함</li>
+      </ul>
+    </div>
+    <div class="compare-box con">
+      <h4 style="color:var(--danger)">빠른 도입·관리 부담 최소화 우선</h4>
+      <ul>
+        <li>Helicone(프록시 방식, 즉시 적용) 또는 LangSmith(이미 LangChain 사용 중이면)</li>
+        <li>클라우드 SaaS이므로 데이터가 외부로 전송됨 — 민감 데이터 마스킹 정책 필수</li>
+        <li>사용량이 늘면 비용이 트래픽에 비례해 증가하는 구조를 감안해야 함</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>지금 우리가 쓰는 관측 방식은 셀프호스팅인가 외부 SaaS인가? 민감 데이터가 외부로 나가고 있지 않은가?</li>
+      <li>도구를 하나 도입하면 그 도구에 얼마나 종속되는가? 나중에 바꿀 수 있는 구조인가?</li>
+      <li>도구 비용이 트래픽에 비례해서 늘어나는 구조라면, 트래픽 10배 성장 시 비용이 어떻게 되는지 계산해봤는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH7 ===== -->
+<div class="section" id="ch7">
+  <h2 class="section-title section-anchor"><span class="icon">📡</span> 07. 스트리밍(SSE) 장애 유형과 관측 포인트</h2>
+
+  <p>대부분의 LLM 채팅 서비스는 <strong>SSE(Server-Sent Events)</strong>로 토큰을 실시간 스트리밍합니다. 일반 HTTP 요청과 달리 "연결은 됐지만 중간에 멈췄다"는 상태가 존재하기 때문에 일반적인 성공/실패 이분법으로는 장애를 포착하지 못합니다.</p>
+
+  <h3>SSE 특유의 장애 유형</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>장애 유형</th><th>증상</th><th>사용자 체감</th><th>관측 포인트</th></tr></thead>
+      <tbody>
+        <tr><td><strong>연결은 성공, 스트림 중단</strong></td><td>첫 토큰까지는 오는데 중간에 끊김</td><td>답변이 문장 중간에서 멈춤</td><td>스트림 시작 이후 마지막 토큰까지의 간격(inter-token gap) 모니터링</td></tr>
+        <tr><td><strong>TTFT는 정상, TPS 급락</strong></td><td>첫 토큰은 빠른데 이후 토큰 생성이 느려짐</td><td>"타이핑"이 뚝뚝 끊기는 느낌</td><td>토큰별 타임스탬프 기록 → 구간별 TPS 계산</td></tr>
+        <tr><td><strong>프록시/게이트웨이 타임아웃</strong></td><td>nginx 등 중간 프록시가 장시간 유휴 연결을 강제 종료</td><td>긴 답변 생성 중 갑자기 연결 끊김 에러</td><td>프록시 idle timeout 설정과 실제 응답 소요시간 비교 관측</td></tr>
+        <tr><td><strong>백프레셔로 인한 큐 지연</strong></td><td>서버가 동시 스트림을 과도하게 열어 신규 요청이 큐에서 대기</td><td>"로딩 중"이 유난히 길게 유지</td><td>대기열 길이, 큐 대기시간을 별도 지표로 계측</td></tr>
+        <tr><td><strong>부분 응답 후 폴백 전환</strong></td><td>주 모델이 스트리밍 도중 실패해 폴백 모델로 재시작</td><td>답변 스타일이 문장 중간에 바뀌거나 처음부터 다시 나옴</td><td>폴백 전환 이벤트를 트레이스에 명시적으로 기록</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>SSE 관측을 위한 최소 계측 항목</h3>
+  <ul>
+    <li><strong>연결 수립 시각, 첫 토큰 시각, 마지막 토큰 시각</strong> — TTFT와 총 스트리밍 시간을 모두 계산 가능</li>
+    <li><strong>토큰 간 최대 간격</strong> — 긴 침묵 구간이 있었는지(중단 위험 신호)</li>
+    <li><strong>스트림 종료 사유</strong> — 정상 종료(stop) / 클라이언트 연결 끊김 / 서버 타임아웃 / 에러</li>
+    <li><strong>동시 활성 스트림 수</strong> — 서버 자원 사용량과 직결, 백프레셔 트리거 판단 근거</li>
+  </ul>
+
+  <div class="alert alert-danger">
+    <strong>🔴 흔한 함정: "에러율 0%"의 착시</strong>
+    스트림이 중간에 끊겨도 서버 로그상으로는 "연결 정상 수립, HTTP 200"만 남고 별도 계측이 없으면 에러로 집계되지 않는 경우가 많습니다. 스트림 종료 사유를 반드시 별도 필드로 기록해야 진짜 장애율을 알 수 있습니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>채팅 중간에 답변이 멈추는 문제가 몇 % 빈도로 발생하는지 수치로 파악하고 있는가?</li>
+      <li>스트림이 "정상 종료"됐는지 "중간에 끊겼는지"를 구분해서 기록하고 있는가?</li>
+      <li>동시 접속자가 급증할 때 신규 요청이 대기열에서 얼마나 기다리는지 측정하고 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH8 ===== -->
+<div class="section" id="ch8">
+  <h2 class="section-title section-anchor"><span class="icon">🛡️</span> 08. 장애 대응 설계 — 서킷브레이커·레이트리밋·폴백·백프레셔</h2>
+
+  <p>관측은 문제를 "보는" 것이고, 장애 대응 설계는 문제가 생겼을 때 시스템이 "스스로 방어"하게 만드는 것입니다. 4가지 핵심 패턴을 정리합니다.</p>
+
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>서킷브레이커 (Circuit Breaker)</h4>
+      <p>특정 모델/서버가 연속 실패하면 일정 시간 동안 아예 호출을 차단해, 이미 죽은 대상에 계속 요청을 보내 자원을 낭비하거나 장애를 악화시키는 것을 막습니다. closed(정상)→open(차단)→half_open(시험 호출)의 3상태 전이가 표준 패턴입니다.</p>
+    </div>
+    <div class="info-card">
+      <h4>레이트리밋 (Rate Limiting)</h4>
+      <p>공급사 API의 분당 요청 한도(RPM)·토큰 한도(TPM)를 초과하지 않도록 자체적으로 속도를 제한합니다. 한도 초과(429) 자체가 실패로 집계되어 재시도 폭주를 유발할 수 있어, 사전에 속도를 조절하는 편이 안전합니다.</p>
+    </div>
+    <div class="info-card">
+      <h4>모델 폴백 체인</h4>
+      <p>주 모델 실패 시 대체 모델로 자동 전환합니다. 단순히 "다른 모델을 부른다"가 아니라, 같은 등급의 모델로 전환할지(품질 유지) 더 저렴한 모델로 전환할지(가용성 우선) 정책을 명확히 정해야 합니다.</p>
+    </div>
+    <div class="info-card">
+      <h4>큐잉 · 백프레셔</h4>
+      <p>동시 요청이 처리 용량을 초과하면 무작정 다 받아들이지 않고 대기열에 넣거나(큐잉) 신규 요청을 거부합니다(백프레셔). 이렇게 하지 않으면 모든 요청이 조금씩 느려지다가 전체가 타임아웃되는 "혼잡 붕괴(congestive collapse)"가 발생합니다.</p>
+    </div>
+  </div>
+
+  <h3>패턴들의 조합 — 계층적 방어</h3>
+  <div class="diagram">
+    <div class="title">요청이 실패했을 때의 계층적 방어 흐름</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+요청 유입
+   │
+   ▼
+[레이트리밋] 한도 초과? ──Yes──▶ 큐 대기 또는 즉시 거부(백프레셔)
+   │ No
+   ▼
+[서킷브레이커] 대상 서버 open 상태? ──Yes──▶ 즉시 폴백으로 우회 (호출 자체를 생략)
+   │ No (closed/half_open)
+   ▼
+모델 호출 시도
+   │
+   ├─ 성공 ──▶ 서킷브레이커에 성공 기록 → 카운터 리셋
+   │
+   └─ 실패 ──▶ 서킷브레이커에 실패 기록 → 임계치 도달 시 open 전환
+                    │
+                    ▼
+              [모델 폴백 체인]으로 재시도 (대체 모델)
+</pre>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>💡 설계 원칙</strong>
+    이 4가지는 각각 독립적으로도 동작하지만, 함께 있어야 "공급사 장애 → 재시도 폭주 → 자체 서버 과부하 → 전체 서비스 다운"이라는 연쇄 장애를 막을 수 있습니다. 하나만 구현하고 나머지를 생략하면 방어선에 구멍이 남습니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>주력 모델 공급사가 30분간 장애가 나면, 우리 서비스는 자동으로 대체 모델로 넘어가는가, 아니면 사람이 알아채고 수동 조치해야 하는가?</li>
+      <li>동시 사용자가 평소의 5배로 몰리면 전체가 느려지는가, 일부는 정상 속도를 유지하고 일부만 대기하는가?</li>
+      <li>이미 죽은 서버에 계속 요청을 보내며 시간을 낭비하는 구간이 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH9 ===== -->
+<div class="section" id="ch9">
+  <h2 class="section-title section-anchor"><span class="icon">🚨</span> 09. 온콜 운영 — 알림 임계값·경보 피로·포스트모템</h2>
+
+  <h3>알림 임계값 설정 원칙</h3>
+  <ul>
+    <li><strong>절대값보다 변화율</strong> — "에러 10건 발생"보다 "평소 대비 5배 증가"가 더 의미 있는 신호인 경우가 많음</li>
+    <li><strong>연속 실패 기준</strong> — 단발성 타임아웃 1건에 알림을 울리면 오탐이 쌓임. 연속 N회 실패를 기준으로 삼는 것이 일반적</li>
+    <li><strong>심각도 계층화</strong> — 모든 알림을 동일한 채널·동일한 긴급도로 보내면 정말 중요한 알림이 묻힘 (정보성 로그 / 경고 / 긴급 3단계 이상 분리 권장)</li>
+    <li><strong>자동복구 가능 여부로 분리</strong> — 시스템이 스스로 복구 가능한 장애(자동 재시작 등)와 사람 개입이 필요한 장애를 구분해 알림 대상을 다르게 설정</li>
+  </ul>
+
+  <h3>경보 피로 (Alert Fatigue) 방지</h3>
+  <div class="compare-row">
+    <div class="compare-box con">
+      <h4 style="color:var(--danger)">경보 피로가 생기는 전형적 패턴</h4>
+      <ul>
+        <li>일시적 네트워크 흔들림마다 알림 발송 → 하루 수백 건</li>
+        <li>이미 알려진 반복 이슈를 매번 신규 알림으로 재발송</li>
+        <li>자동 복구되는 문제까지 사람에게 알림</li>
+        <li>결과: 팀이 알림을 무시하는 습관이 들고, 진짜 장애 때도 늦게 반응</li>
+      </ul>
+    </div>
+    <div class="compare-box pro">
+      <h4 style="color:var(--success)">완화 방법</h4>
+      <ul>
+        <li>동일 에러 해시(fingerprint) 기준으로 그룹화 — 발생 횟수만 누적, 알림은 최초 1회 + 임계치 초과 시</li>
+        <li>자동 복구 성공 시 알림 억제, 복구 실패가 반복될 때만 에스컬레이션</li>
+        <li>알림 채널을 심각도별로 분리 (긴급=전화/문자, 경고=메신저, 정보=대시보드만)</li>
+        <li>주기적으로 "지난달 알림 중 실제 조치가 필요했던 비율"을 검토해 임계값 재조정</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>포스트모템(사후분석) 표준 양식</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>항목</th><th>기록 내용</th></tr></thead>
+      <tbody>
+        <tr><td><strong>요약</strong></td><td>무엇이, 언제부터 언제까지, 사용자에게 어떤 영향을 미쳤는가 (1~2문장)</td></tr>
+        <tr><td><strong>타임라인</strong></td><td>탐지 시각, 대응 시작 시각, 원인 특정 시각, 복구 시각 — 분 단위로 기록</td></tr>
+        <tr><td><strong>근본 원인</strong></td><td>표면적 증상이 아니라 "왜 그 증상이 발생했는가"의 근본 원인</td></tr>
+        <tr><td><strong>탐지 방법</strong></td><td>알림으로 먼저 알았는가, 사용자 신고로 알았는가 — 사용자 신고가 먼저였다면 관측 공백 신호</td></tr>
+        <tr><td><strong>재발 방지 조치</strong></td><td>담당자·기한이 명시된 액션 아이템 목록 (막연한 "모니터링 강화"는 금지)</td></tr>
+        <tr><td><strong>잘한 점 / 아쉬운 점</strong></td><td>비난 없는(blameless) 회고 — 사람의 실수가 아니라 시스템의 허점에 초점</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>지난달 발송된 알림 중 실제로 사람이 조치한 비율은 몇 %인가? 낮다면 경보 피로가 진행 중일 가능성이 높음</li>
+      <li>최근 장애를 "사용자 신고로 먼저 알았는가, 알림으로 먼저 알았는가"? 신고가 먼저였다면 관측 공백이 있다는 뜻</li>
+      <li>포스트모템이 비난(누구 잘못)이 아니라 재발 방지(무엇을 고칠지)에 초점을 맞추고 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH10 ===== -->
+<div class="section" id="ch10">
+  <h2 class="section-title section-anchor"><span class="icon">🔀</span> 10. 프롬프트·모델 버전 관리와 카나리/블루그린 배포</h2>
+
+  <p>전통 소프트웨어는 코드만 버전 관리하면 되지만, LLM 서비스는 <strong>프롬프트</strong>와 <strong>모델 버전</strong>도 코드와 동등하게 버전 관리 대상입니다. 둘 다 응답 품질에 직접 영향을 주면서도, 코드 리뷰 프로세스 밖에서 수정되는 경우가 흔합니다.</p>
+
+  <h3>프롬프트 버전 관리가 필요한 이유</h3>
+  <ul>
+    <li>프롬프트를 코드에 문자열로 하드코딩하면 변경 이력이 git diff에 묻혀 리뷰 없이 넘어가기 쉬움</li>
+    <li>프롬프트를 별도 레지스트리(버전 태그 포함)로 관리하면, "어느 버전이 어떤 성능이었는지" 추적 가능</li>
+    <li>롤백이 코드 배포 없이 즉시 가능해짐 (프롬프트 버전 포인터만 되돌리면 됨)</li>
+  </ul>
+
+  <h3>카나리 배포 vs 블루그린 배포</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>방식</th><th>동작 원리</th><th>장점</th><th>단점</th></tr></thead>
+      <tbody>
+        <tr><td><strong>카나리 배포</strong></td><td>신규 버전에 트래픽 일부(예: 5%)만 먼저 보내고, 지표를 보며 점진적으로 비율을 늘림</td><td>문제 발생 시 영향 범위가 작음, 실사용자 데이터로 검증 가능</td><td>두 버전을 동시에 운영해야 하므로 구성 복잡도 증가, 점진적 확대에 시간 소요</td></tr>
+        <tr><td><strong>블루그린 배포</strong></td><td>신규 버전(Green)을 별도로 완전히 띄운 뒤, 준비되면 트래픽을 한 번에 전환. 이전 버전(Blue)은 즉시 롤백 가능하도록 대기</td><td>전환이 순간적이라 다운타임이 사실상 0, 롤백이 매우 빠름</td><td>카나리처럼 "일부만 먼저 검증"은 안 됨 — 전환 전 검증에 더 의존</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>💡 LLM 서비스에서의 조합</strong>
+    모델/프롬프트 품질 검증은 카나리 방식(일부 트래픽으로 점진 검증)으로, 인프라(코드·컨테이너) 배포는 블루그린 방식(무중단 전환)으로 조합하는 것이 일반적입니다. 다음 장(AADS 사례)에서 실제 구현을 살펴봅니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>프롬프트가 바뀐 이력을 "누가, 언제, 왜" 기준으로 추적할 수 있는가?</li>
+      <li>새 버전 배포 시 전체 사용자에게 한 번에 노출되는가, 일부에게 먼저 노출해 검증하는가?</li>
+      <li>배포 후 문제가 발견되면 몇 분 안에 이전 버전으로 되돌릴 수 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH11: AADS 실제 관측 체계 전수분석 ===== -->
+<div class="section" id="ch11">
+  <h2 class="section-title section-anchor"><span class="icon">🔬</span> 11. AADS 실제 관측 체계 전수분석</h2>
+
+  <p>이 장의 모든 수치와 코드 내용은 2026-09-12 기준 서버68(aads-server) 소스코드와 운영 DB를 직접 조회하여 확인한 내용입니다. <span class="tag-verified">실측 확인</span></p>
+
+  <h3>11-1. 서킷브레이커 — <code>app/services/circuit_breaker.py</code></h3>
+  <p>AADS-132로 도입된 서킷브레이커는 <strong>closed → open → half_open</strong> 3상태 전이를 <code>circuit_breaker_state</code> 테이블에 저장하며 서버 단위로 동작합니다. 소스 확인 결과 정책은 다음과 같습니다.</p>
+  <ul>
+    <li><strong>임계치</strong>: 연속 실패 3회(<code>FAILURE_THRESHOLD = 3</code>) 도달 시 open 전환</li>
+    <li><strong>쿨다운</strong>: open 상태 5분(<code>COOLDOWN_MINUTES = 5</code>) 경과 후 half_open으로 전환, 시험 호출 1건만 허용</li>
+    <li><strong>fail-open 설계</strong>: DB 연결 자체가 실패하면 차단하지 않고 통과시킴(<code>except Exception: return True</code>) — 관측 시스템 장애가 서비스 장애로 전이되지 않도록 하는 방어적 설계</li>
+    <li><strong>알림 연동</strong>: open 전환 시 <code>_send_alert()</code>가 텔레그램으로 "🔴 서킷브레이커 OPEN" 메시지를 발송 (실패해도 조용히 무시 — graceful degradation)</li>
+  </ul>
+  <p>실측 조회 결과, 현재 서버 114/211/68 모두 <strong>state=closed, failure_count=0</strong>으로 정상 상태입니다. <span class="tag-verified">DB 실측 2026-09-12</span></p>
+
+  <h3>11-2. error_log / 에러 자동기록 — <code>app/api/watchdog.py</code></h3>
+  <p>watchdog.py의 <code>/watchdog/errors</code> 엔드포인트는 에러 발생 시 <code>error_hash</code>(SHA256 앞 16자) 기준으로 UPSERT합니다. 해시 계산 전에 타임스탬프·파일경로·IP를 정규화 문자열로 치환해, "같은 종류의 에러"가 매번 새 레코드로 쌓이지 않고 <code>occurrence_count</code>만 증가하도록 설계되어 있습니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>error_log 컬럼</th><th>역할</th></tr></thead>
+      <tbody>
+        <tr><td><code>error_hash</code></td><td>정규화된 메시지 기준 그룹핑 키 (UPSERT 대상)</td></tr>
+        <tr><td><code>occurrence_count</code></td><td>동일 패턴 누적 발생 횟수</td></tr>
+        <tr><td><code>auto_recoverable</code> / <code>recovery_command</code></td><td><code>unified_healer.py</code>의 <code>ERROR_RECOVERY_MAP</code>과 매칭되면 자동 복구 명령 저장, <code>_is_safe_command()</code> 화이트리스트 통과 시만 true</td></tr>
+        <tr><td><code>resolution_type</code></td><td>pending / auto / manual / resolved / dismissed</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong>DB 실측 결과(2026-09-12 쿼리)</strong>: <code>error_log</code> 테이블은 고유 에러 패턴(error_hash) <strong>1,585건</strong>, 누적 발생 횟수(occurrence_count 합계) <strong>29,609건</strong>입니다. <code>error_pattern</code>이라는 별도 테이블은 존재하지 않으며, 패턴 집계는 <code>error_log</code> 단일 테이블의 <code>error_hash</code> 그룹핑으로 처리됩니다. <span class="tag-unverified">참고: 사전 브리핑에 언급된 "9,257건"은 이번 실측 쿼리 결과와 일치하지 않아 이 문서에서는 인용하지 않고 직접 조회한 수치만 사용합니다.</span></p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>error_type</th><th>고유 패턴 수</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td><code>service_down_http_health</code></td><td>1,551</td><td>watchdog_daemon.py의 서비스 헬스체크 실패 — 압도적 다수</td></tr>
+        <tr><td><code>docker_crash</code></td><td>12</td><td>컨테이너 다운 감지, 대부분 auto_recoverable=true</td></tr>
+        <tr><td><code>disk_space_critical</code></td><td>8</td><td>디스크 사용률 임계치 초과</td></tr>
+        <tr><td><code>claude_api_fallback</code></td><td>6</td><td>계정 교차 폴백 전환 — 개별 패턴 수는 적지만 누적 발생은 최상위권(아래 참고)</td></tr>
+        <tr><td><code>api_unreachable</code> / <code>done_queue_overflow</code></td><td>각 3</td><td>타임아웃, 큐 오버플로</td></tr>
+        <tr><td><code>nginx_down</code> / <code>docker_check_failure</code></td><td>각 1</td><td>단일 패턴이지만 nginx_down은 누적 발생 9,065건으로 최다(레거시 서버 오탐 이력 포함)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>누적 발생 횟수 상위 실제 사례(occurrence_count 기준, DB 실측): <code>nginx_down</code> "Nginx status: inactive" 9,065회(resolved), <code>service_down_http_health</code> "aads-litellm DOWN" 6,858회(auto), <code>service_down_http_health</code> "aads-dashboard DOWN" 6,821회(auto), <code>claude_api_fallback</code> "claude-opus → samegrade fallback 전환" 4,149회(pending, 미해결 상태로 계속 재발 중)입니다. <span class="tag-verified">DB 실측 2026-09-12</span></p>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ nginx_down 오탐 방지 로직</strong>
+    watchdog.py 코드에는 레거시 서버 ID "68"에서 nginx_down 보고가 들어와도, 현재 실제 운영 서버인 contabo116의 nginx 상태가 정상이면 <code>"ignored_false_positive"</code>로 무시하는 로직이 있습니다. 과거 서버 이전(레거시 68 → contabo116) 과정에서 생긴 중복 모니터링을 소스에서 명시적으로 처리한 흔적입니다.
+  </div>
+
+  <h3>11-3. 응답속도 지표 — <code>llm_response_metrics</code> / <code>tool_metrics</code> 도구</h3>
+  <p><code>app/services/llm_response_metrics.py</code>는 채팅(chat_messages), API 사용량, CLI 러너 3개 소스를 통합 집계합니다. chat_messages의 <code>quality_details</code> JSONB 컬럼에서 <code>response_duration_ms</code> 또는 <code>duration_ms</code> 필드를 파싱해 모델별 avg/p50/p95/max 지연을 계산하고, <code>_classify_provider_from_model()</code>로 provider를 자동 분류합니다.</p>
+  <p>MCP 도구 <code>tool_metrics</code>를 이 보고서 작성 시점에 실행한 결과, 최근 24시간 <code>total_calls: 0</code>이 반환되었습니다. <span class="tag-unverified">이는 해당 시간대에 집계 대상 호출이 없었거나 별도 관측 공백일 수 있어 원인은 미검증이며, 12장에서 개선 과제로 다룹니다.</span></p>
+
+  <h3>11-4. 중앙 LLM 폴백 — <code>app/core/anthropic_client.py</code></h3>
+  <p>모듈 docstring에 명시된 대로 "Claude 실패 시 폴백 체인으로 자동 폴백"하는 중앙 클라이언트입니다. 소스 확인 결과 재시도·폴백 정책은 다음과 같습니다.</p>
+  <ul>
+    <li><strong>429(rate limit)</strong>: 고정 3초 대기 후 재시도, 최대 30회(<code>_CLAUDE_429_MAX_RETRIES = 30</code>)</li>
+    <li><strong>그 외 재시도 대상 상태코드</strong>(408/409/500/502/503/504/529): 지수 백오프(기본 2초, 최대 30초) + 0~1.5초 지터, 최대 60회(<code>_CLAUDE_MAX_RETRIES = 60</code>)</li>
+    <li><strong>배경작업 폴백 모델 체인</strong>: 기본값 <code>groq-llama-70b → groq-gpt-oss-120b → qwen-flash</code> (환경변수 <code>LLM_BG_FALLBACK_MODELS</code>로 재정의 가능, DB의 <code>llm_fallback_chains</code> 우선)</li>
+    <li><strong>DashScope(Qwen 직접 연동) 비활성화 상태</strong>: 소스 코드 주석에 "2026-09-12 실측: DashScope 계정이 차단되어 qwen3-235b는 404, qwen-turbo는 400 에러"라고 기록되어 있으며, <code>AADS_DASHSCOPE_ENABLED</code> 환경변수가 기본 0(비활성)으로 설정되어 헛된 왕복 호출을 방지하고 있습니다.</li>
+  </ul>
+
+  <div class="alert alert-info">
+    <strong>💡 문서-코드 간 실제 차이 발견</strong>
+    <code>anthropic_client.py</code> 코드 주석에는 "AADS(2026-09-06): Gemini/DeepSeek 폴백 제거 — CLI 모델(Claude)로 대체(CEO 지시)"라고 명시되어 있습니다. 이는 이 프로젝트의 기존 운영 문서에서 설명하는 "Gemini/DeepSeek는 LiteLLM 프록시 경유" 폴백 경로와 시점상 차이가 있을 수 있는 부분으로, 실제 반영 범위는 <code>llm_fallback_chains</code> DB 테이블과 함께 재확인이 필요합니다. <span class="tag-unverified">이 문서는 소스 코드 주석 원문을 그대로 인용했으며, 운영 문서 개정 여부는 별도 확인이 필요합니다.</span>
+  </div>
+
+  <h3>11-5. 서비스 감시 — <code>monitored_services</code> 테이블</h3>
+  <p>watchdog 데몬이 서버·서비스별 상태를 기록하는 테이블입니다. 2026-09-12 실측 조회 결과, 서버 contabo116(현재 운영 서버) 소속 서비스(nginx, aads-litellm, aads-dashboard, aads-server, aads-postgres, aads-redis, watchdog-daemon, aads-searxng 등)는 모두 <code>last_status=ok</code>입니다. <span class="tag-verified">DB 실측 2026-09-12</span></p>
+
+  <h3>11-6. 무중단 배포 — <code>deploy.sh bluegreen</code></h3>
+  <p>루트의 <code>deploy.sh</code>(2,566줄)는 CLAUDE.md가 명시한 "단일 서비스만 재시작" 원칙을 코드로 강제하는 배포 게이트웨이입니다. 확인된 주요 안전장치는 다음과 같습니다.</p>
+  <ul>
+    <li><strong>다운타임 자동 측정</strong>: nginx 경유 <code>/api/v1/health</code>를 1초 주기로 폴링해 실패 구간을 누적 기록(<code>.deploy_downtime</code> 파일) — "정말 무중단이었는지"를 주장이 아니라 실측으로 남김</li>
+    <li><strong>빌드 전 디스크 여유 검증</strong>: 최소 20GB 확보 안 되면 빌드 자체를 차단(<code>require_build_disk_free</code>)</li>
+    <li><strong>이미지 보존 정책</strong>: 실행 중이지 않은 오래된 릴리스 이미지를 최근 3개만 남기고 정리. 코드 주석에 "2026-09-12에 7번 빌드하자 디스크 여유가 33GB→15GB로 줄어 배포 직전 막혔다"는 실제 인시던트 기록이 남아있어, 이 정책이 실제 장애 경험 이후 추가되었음을 확인</li>
+    <li><strong>중복 배포 방지</strong>: 동일 릴리스 SHA가 블루·그린 양쪽에 이미 healthy 상태로 떠 있으면 재배포를 건너뜀(<code>reject_duplicate_live_release</code>)</li>
+    <li><strong>정체된 배포 회수</strong>: <code>deploy_runs</code> 테이블에서 heartbeat 15분 이상 끊긴 running 상태 배포를 failed로 강제 정리(<code>reconcile_stale_deploy_runs</code>) — 배포 프로세스 자체가 죽어도 상태가 영구히 "진행 중"으로 남지 않도록 방지</li>
+    <li><strong>릴리스 이미지 크기 상한</strong>: 7GB 초과 시 배포 차단</li>
+  </ul>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>서킷브레이커가 fail-open으로 설계된 것을 알고 있는가 — 즉 "관측 시스템이 죽으면 오히려 전체 요청을 막지 않고 통과시킨다"는 트레이드오프를 이해하고 있는가?</li>
+      <li>claude_opus → samegrade 폴백이 4,149회나 반복(pending 상태)되고 있다는 사실을 보고받은 적이 있는가?</li>
+      <li>운영 문서(CLAUDE.md 등)와 실제 소스 코드 주석 사이의 설명 차이를 정기적으로 맞춰보는 절차가 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH12: AADS 관측 공백과 개선안 ===== -->
+<div class="section" id="ch12">
+  <h2 class="section-title section-anchor"><span class="icon">🕳️</span> 12. AADS 관측 공백과 개선안</h2>
+
+  <p>11장의 실측 결과를 바탕으로, 이 문서 작성 과정에서 실제로 확인된 관측 공백과 개선 방향을 정리합니다. 모두 위 장에서 직접 조회·확인한 내용에 근거합니다.</p>
+
+  <h3>공백 1: claude_api_fallback이 4,000회 이상 반복되는데 상태가 계속 "pending"</h3>
+  <p><code>error_log</code> 실측 결과, "claude-opus → samegrade fallback 전환" 패턴이 <strong>4,149회</strong> 누적되었는데도 <code>resolution_type</code>이 여전히 <code>pending</code>입니다. <code>auto_recoverable=false</code>로 자동복구 대상도 아닙니다. 이는 "계정 교차 폴백"이 사실상 상시적으로 발생하는 상태이면서도, 이를 정식으로 해결하거나 최소한 "정상 동작으로 확인됨(dismissed)" 처리하는 절차가 없다는 뜻입니다.</p>
+  <p><strong>개선안</strong>: claude_api_fallback 발생률을 별도 대시보드 지표로 승격하고(9장의 "폴백 발생률" 지표), 임계치(예: 시간당 N회) 초과 시에만 알림을 울리도록 해 pending 상태로 방치되는 대량의 로우데이터와 "실제 조치가 필요한 급증"을 구분해야 합니다.</p>
+
+  <h3>공백 2: <code>tool_metrics</code> 도구가 24시간 집계에서 0건 반환</h3>
+  <p>이 문서 작성 중 <code>tool_metrics</code> MCP 도구를 실행한 결과 <code>total_calls: 0</code>이 반환되었습니다. 같은 시간대에 다른 MCP 도구(read_remote_file, query_database 등)는 다수 호출되고 있었으므로, 도구 사용량 자체가 0이라기보다 <strong>집계 파이프라인이 해당 호출들을 포착하지 못하고 있을 가능성</strong>이 있습니다. 원인은 이 조사만으로는 특정할 수 없어 미검증으로 남깁니다.</p>
+  <p><strong>개선안</strong>: tool_metrics 데이터 소스(어느 테이블/로그를 집계하는지)를 코드 레벨에서 재확인하고, MCP 도구 호출이 실제로 그 소스에 기록되는지 엔드투엔드로 검증이 필요합니다.</p>
+
+  <h3>공백 3: <code>monitored_services</code>의 타 서버 데이터가 장기간 미정리 상태로 보임</h3>
+  <p>watchdog 대상 테이블 실측 조회에서, contabo116(AADS 운영 서버) 외 다른 프로젝트 서버(contabo14 등) 소속 서비스 다수가 <code>consecutive_failures</code> 값 10만 회 이상으로 <code>last_status=fail</code> 상태로 남아 있는 레코드가 확인되었습니다. 이는 AADS 자체 헬스와는 무관하지만, 하나의 watchdog 체계가 여러 프로젝트 서버를 함께 감시하는 구조에서 <strong>더 이상 감시가 필요 없거나 실패가 고착된 레코드를 정리하는 절차가 없다면 진짜 이상 신호와 "만성적으로 죽은 것으로 알려진" 레코드가 뒤섞여 보인다는 신호</strong>입니다. 이 문서는 AADS 서버68 범위 밖의 원인까지 단정하지 않으며, 정확한 원인(모니터링 대상 서버가 실제로 운영 종료되었는지, 감시 설정 오류인지)은 미검증입니다.</p>
+  <p><strong>개선안</strong>: 프로젝트별 watchdog 감시 목록에 "활성/비활성" 플래그를 두어, 더 이상 운영하지 않는 서버는 감시에서 명시적으로 제외하고, consecutive_failures가 비정상적으로 큰(예: 1만 회 초과) 레코드는 별도로 검토 대상 목록에 올리는 배치 점검을 추가.</p>
+
+  <h3>공백 4: 운영 문서와 소스 코드 주석 간 폴백 경로 설명 차이</h3>
+  <p>11-4에서 확인한 대로, <code>anthropic_client.py</code> 코드 주석은 "Gemini/DeepSeek 폴백 제거(2026-09-06)"를 명시하지만 이 문서를 준비하며 참고한 운영 규칙 요약본에는 "Gemini/DeepSeek는 LiteLLM 프록시 경유" 문구가 남아 있었습니다. 둘 중 어느 쪽이 현재 실제 운영 정책인지는 <code>llm_fallback_chains</code> DB 테이블의 실제 값까지 대조해야 확정할 수 있어, 이 문서에서는 단정하지 않습니다.</p>
+  <p><strong>개선안</strong>: 코드 주석·DB 설정·운영 문서 3곳의 폴백 정책 설명이 실제로 일치하는지 정기(예: 월 1회) 대조 점검을 도입해, "문서는 옛날 정책을, 코드는 새 정책을 말하는" 드리프트를 조기에 잡아낼 것.</p>
+
+  <h3>종합: AADS 관측 체계의 강점과 약점</h3>
+  <div class="compare-row">
+    <div class="compare-box pro">
+      <h4 style="color:var(--success)">강한 부분 (실측 확인)</h4>
+      <ul>
+        <li>서킷브레이커가 fail-open 설계로 관측 장애가 서비스 장애로 전이되지 않도록 방어</li>
+        <li>error_hash 기반 UPSERT로 반복 에러가 로그를 폭증시키지 않고 occurrence_count로 압축</li>
+        <li>deploy.sh가 다운타임을 "주장"이 아니라 1초 단위 실측으로 검증하는 구조</li>
+        <li>실제 인시던트(디스크 고갈 등) 이후 재발 방지 로직이 코드 주석과 함께 추가된 이력 확인</li>
+      </ul>
+    </div>
+    <div class="compare-box con">
+      <h4 style="color:var(--danger)">약한 부분 (이번 조사에서 발견)</h4>
+      <ul>
+        <li>대량 반복 폴백(claude_api_fallback)이 장기 pending 상태로 방치되어 신호가 잡음에 묻힘</li>
+        <li>tool_metrics 등 일부 지표 도구의 데이터 소스 정합성이 이번 조회에서 의심스러운 결과(0건)를 보임</li>
+        <li>다중 프로젝트 watchdog 테이블에 고착된 실패 레코드가 정리되지 않아 신호 대 잡음비 저하</li>
+        <li>운영 문서와 코드 주석 간 정책 설명 불일치 가능성 (드리프트 점검 프로세스 부재)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>pending 상태로 수천 건 쌓인 에러 패턴을 "언제까지, 누가" 정리할지 담당자를 지정했는가?</li>
+      <li>관측 도구 자체(tool_metrics 등)가 제대로 데이터를 수집하고 있는지 별도로 검증한 적이 있는가?</li>
+      <li>운영 문서와 실제 코드가 어긋나 있을 가능성을 전제로, 월 1회 대조 점검을 도입할 의향이 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH13: 비용과 ROI ===== -->
+<div class="section" id="ch13">
+  <h2 class="section-title section-anchor"><span class="icon">💰</span> 13. 도입 비용과 ROI</h2>
+
+  <p>LLMOps 관측 체계 도입은 "공짜인 오픈소스를 설치하면 끝"이 아니라, 설치·운영 인력 비용까지 포함해 판단해야 합니다. 가격은 $1 ≈ ₩1,380 기준 환산이며, 실제 요금은 공급사 정책·환율에 따라 변동됩니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>구성</th><th>초기 비용</th><th>월 운영 비용 (추정)</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td><strong>오픈소스 셀프호스팅</strong><br><span style="color:var(--text3);font-size:.78rem">(Langfuse/Phoenix 자체 설치)</span></td><td>서버 구축·설정 인건비<br>1~2주 엔지니어 공수</td><td class="price">서버 리소스 비용만 (기존 인프라 활용 시 $0에 가까움) <br><small style="color:var(--text3)">(약 0원 추가)</small></td><td>라이선스 비용은 없지만 장애 시 자체 대응, 업그레이드 부담</td></tr>
+        <tr><td><strong>SaaS 무료 티어</strong><br><span style="color:var(--text3);font-size:.78rem">(Helicone/LangSmith 소규모)</span></td><td>거의 없음 (계정 생성 수준)</td><td class="price">$0~50<br><small style="color:var(--text3)">(약 0~6.9만원)</small></td><td>트래픽 한도 초과 시 유료 전환 필요</td></tr>
+        <tr><td><strong>SaaS 유료 플랜</strong><br><span style="color:var(--text3);font-size:.78rem">(중규모 트래픽)</span></td><td>없음</td><td class="price">$100~2,000+<br><small style="color:var(--text3)">(약 13.8~276만원+)</small></td><td>트레이스 수·사용자 수 기반 종량 과금이 일반적</td></tr>
+        <tr><td><strong>온콜/운영 인력</strong></td><td>-</td><td class="price">담당 인력 인건비 (전담 or 겸직)</td><td>도구를 도입해도 알림에 반응할 사람이 없으면 무의미</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>ROI를 어떻게 계산할 것인가</h3>
+  <ul>
+    <li><strong>장애 탐지 지연 단축의 가치</strong>: "사용자 신고로 30분 뒤에 알았다"를 "알림으로 2분 만에 알았다"로 줄이면, 해당 장애로 인한 이탈/신뢰 손실을 얼마나 줄이는지 추정</li>
+    <li><strong>원인 규명 시간 단축의 가치</strong>: 트레이싱 없이 로그를 수 시간 뒤지던 것을 트레이스 클릭 한 번으로 줄이면, 엔지니어 시간당 인건비 × 절감 시간으로 환산</li>
+    <li><strong>품질 드리프트 조기 발견의 가치</strong>: 골든 데이터셋 자동 평가가 없으면 품질 저하를 몇 주 뒤 사용자 이탈로 알아차리게 됨 — 이 지연이 곧 기회비용</li>
+    <li><strong>비용 과다 지출 방지</strong>: 토큰당 비용을 모델별로 추적하지 않으면, 불필요하게 비싼 모델을 계속 쓰고 있어도 알아차리지 못함</li>
+  </ul>
+
+  <div class="alert alert-success">
+    <strong>✅ 일반적 판단 기준</strong>
+    월 LLM API 지출이 커질수록(대략 수백만 원 이상), 관측 도구 도입 비용 대비 "장애를 며칠 일찍 발견해 절감하는 비용"이 훨씬 커지는 경향이 있습니다. 반대로 트래픽이 아주 작은 초기 단계라면, 오픈소스 셀프호스팅으로 최소 계측만 해두고 트래픽이 늘 때 본격 투자하는 것이 합리적입니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>우리 월 LLM API 비용 대비, 관측 도구에 얼마를 쓰는 것이 합리적인지 계산해본 적이 있는가?</li>
+      <li>장애를 며칠 늦게 발견해서 실제로 손실(이탈, 재작업, 신뢰 손상)이 발생한 사례가 있었는가?</li>
+      <li>도구를 도입했는데 알림에 반응할 인력·프로세스가 없어 방치되고 있는 부분은 없는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH14: 실전 로드맵 ===== -->
+<div class="section" id="ch14">
+  <h2 class="section-title section-anchor"><span class="icon">🗺️</span> 14. 실전 로드맵과 팀 구성</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>단계</th><th>목표</th><th>구체 작업</th><th>필요 인력</th></tr></thead>
+      <tbody>
+        <tr><td><strong>0단계 (즉시)</strong></td><td>최소 가시성 확보</td><td>모든 LLM 호출에 요청 ID 부여, 성공/실패·지연시간 로그 남기기</td><td>백엔드 엔지니어 1명, 수일 내</td></tr>
+        <tr><td><strong>1단계 (1~2주)</strong></td><td>핵심 지표 대시보드</td><td>TTFT·TPS·p95지연·토큰당비용·도구성공률을 모델별로 집계하는 대시보드 구축</td><td>백엔드 엔지니어 1명 + 관측 도구(오픈소스 또는 무료 티어) 도입</td></tr>
+        <tr><td><strong>2단계 (2~4주)</strong></td><td>트레이싱 도입</td><td>OpenTelemetry 계측 추가, 프롬프트 조립→도구호출→모델응답 전 경로를 스팬으로 연결</td><td>백엔드 엔지니어 1~2명</td></tr>
+        <tr><td><strong>3단계 (1~2개월)</strong></td><td>장애 대응 자동화</td><td>서킷브레이커·레이트리밋·모델 폴백 체인 구현, 알림 임계값·심각도 계층 설계</td><td>백엔드 엔지니어 1~2명 + 온콜 프로세스 정의</td></tr>
+        <tr><td><strong>4단계 (지속)</strong></td><td>품질 드리프트 감시 체계화</td><td>골든 데이터셋 자동 평가 파이프라인, 카나리 배포로 프롬프트/모델 변경 검증, 정기 포스트모템 문화 정착</td><td>ML/품질 담당 1명 + 팀 전체 포스트모템 참여</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>팀 구성 관점의 역할 분담</h3>
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>온콜 담당</h4>
+      <p>알림 1차 대응, 서킷브레이커/폴백이 정상 동작하는지 확인, 필요 시 수동 개입(모델 강제 전환 등)</p>
+    </div>
+    <div class="info-card">
+      <h4>관측 인프라 담당</h4>
+      <p>트레이싱·메트릭 파이프라인 유지보수, 대시보드·알림 임계값 튜닝, 관측 도구 자체의 데이터 정합성 점검</p>
+    </div>
+    <div class="info-card">
+      <h4>품질 담당</h4>
+      <p>골든 데이터셋 관리, 프롬프트/모델 버전 변경 시 회귀 테스트, 드리프트 조기 탐지</p>
+    </div>
+    <div class="info-card">
+      <h4>경영진(CEO)</h4>
+      <p>월 1회 이상 핵심 지표(장애 탐지 지연, 경보 피로 지표, 폴백 발생률 추세) 보고받고, 관측 도구 투자 규모를 트래픽 성장과 함께 재검토</p>
+    </div>
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>지금 조직에 "관측 인프라 담당"이라는 역할이 명시적으로 지정되어 있는가, 아니면 아무도 전담하지 않고 있는가?</li>
+      <li>0~4단계 중 우리는 지금 어느 단계에 있다고 보는가?</li>
+      <li>다음 분기 목표로 "몇 단계까지 도달할 것인가"를 팀과 합의했는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH15: 참고자료 ===== -->
+<div class="section" id="ch15">
+  <h2 class="section-title section-anchor"><span class="icon">📖</span> 15. 참고자료</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>구분</th><th>출처</th><th>용도</th></tr></thead>
+      <tbody>
+        <tr><td>표준 규격</td><td>OpenTelemetry — opentelemetry.io/docs/specs/semconv/gen-ai</td><td>GenAI 시맨틱 컨벤션 공식 문서 (버전에 따라 속성명 변경 가능, 도입 시 재확인 필수)</td></tr>
+        <tr><td>관측 도구</td><td>Langfuse — langfuse.com</td><td>오픈소스 LLM 옵저버빌리티, 셀프호스팅 가이드</td></tr>
+        <tr><td>관측 도구</td><td>Arize Phoenix — arize.com/phoenix</td><td>오픈소스, OpenTelemetry 네이티브, RAG/임베딩 평가</td></tr>
+        <tr><td>관측 도구</td><td>Helicone — helicone.ai</td><td>프록시 기반 즉시 계측, 오픈소스</td></tr>
+        <tr><td>관측 도구</td><td>LangSmith — smith.langchain.com</td><td>LangChain/LangGraph 통합 관측·평가</td></tr>
+        <tr><td>관측 도구</td><td>W&amp;B Weave — wandb.ai/site/weave</td><td>Weights & Biases 생성형 AI 트레이싱</td></tr>
+        <tr><td>내부 근거</td><td>서버68 <code>app/services/circuit_breaker.py</code></td><td>AADS 서킷브레이커 구현 (11장 근거)</td></tr>
+        <tr><td>내부 근거</td><td>서버68 <code>app/api/watchdog.py</code></td><td>error_log UPSERT·자동복구 로직 (11장 근거)</td></tr>
+        <tr><td>내부 근거</td><td>서버68 <code>app/core/anthropic_client.py</code></td><td>중앙 LLM 폴백·재시도 정책 (11장 근거)</td></tr>
+        <tr><td>내부 근거</td><td>서버68 <code>deploy.sh</code></td><td>블루그린 무중단 배포 게이트웨이 (11장 근거)</td></tr>
+        <tr><td>내부 근거</td><td>운영 DB — <code>error_log</code>, <code>circuit_breaker_state</code>, <code>monitored_services</code></td><td>2026-09-12 직접 조회 실측치 (11·12장 근거)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>다음 단계</h3>
+  <ol>
+    <li><strong>1주 이내</strong>: 12장에서 발견한 claude_api_fallback pending 4,149건, tool_metrics 0건 반환 두 가지를 담당자 지정해 원인 확인</li>
+    <li><strong>2주 이내</strong>: 현재 TTFT·p95지연·폴백률이 CEO 정기 보고에 포함되어 있는지 점검, 없으면 대시보드에 추가</li>
+    <li><strong>1개월 이내</strong>: 운영 문서(CLAUDE.md 등)와 anthropic_client.py 등 핵심 코드 주석 간 폴백 정책 설명을 대조해 최신 상태로 일치시키는 점검 1회 수행</li>
+    <li><strong>분기 단위</strong>: 14장의 로드맵 단계 기준으로 현재 위치를 재평가하고 다음 목표 단계를 팀과 합의</li>
+  </ol>
+</div>
+
+<!-- ===== FOOTER ===== -->
+<div class="footer">
+  <p>AADS Academy · LLMOps · 옵저버빌리티 교육자료 · 2026-09-12 작성 · CEO 교육용</p>
+  <p style="margin-top:6px">11·12장의 AADS 관련 수치·코드 내용은 2026-09-12 서버68 소스코드·운영 DB 직접 조회 기준이며, 표시되지 않은 부분은 미검증으로 별도 확인이 필요합니다. 그 외 일반 LLMOps 지식·도구 정보는 2025~2026년 공개 자료 기준으로 변동 가능합니다.</p>
+</div>
+
+</div>
+</body>
+</html>

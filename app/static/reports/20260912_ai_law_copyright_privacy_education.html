@@ -1,0 +1,882 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI 법률·저작권·개인정보 종합 교육자료 — AADS Academy</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0a0f1a;--surface:#111827;--card:#1e293b;--card-hover:#334155;
+--accent:#3b82f6;--accent2:#8b5cf6;--accent3:#06b6d4;--accent4:#f59e0b;--accent5:#10b981;--accent6:#ef4444;
+--text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;--border:#334155;--border2:#475569;
+--code-bg:#0d1117;--highlight:#fbbf2420;--success:#10b981;--warning:#f59e0b;--danger:#ef4444}
+body{font-family:'Pretendard',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+background:var(--bg);color:var(--text);line-height:1.8;min-height:100vh}
+.container{max-width:1100px;margin:0 auto;padding:32px 24px 80px}
+.hero{text-align:center;padding:60px 0 40px;border-bottom:1px solid var(--border);margin-bottom:48px}
+.hero h1{font-size:2.2rem;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2),var(--accent3));
+-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:12px;letter-spacing:-0.5px}
+.hero .subtitle{color:var(--text2);font-size:1.05rem;max-width:700px;margin:0 auto}
+.hero .meta-info{display:flex;gap:16px;justify-content:center;margin-top:20px;flex-wrap:wrap}
+.hero .meta-tag{font-size:.8rem;color:var(--accent);background:var(--accent)15;padding:4px 14px;border-radius:20px}
+.toc{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px 32px;margin-bottom:48px}
+.toc h2{font-size:1.1rem;font-weight:700;margin-bottom:16px;color:var(--accent)}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
+.toc a{color:var(--text2);text-decoration:none;font-size:.9rem;padding:6px 12px;border-radius:8px;display:block;transition:.2s}
+.toc a:hover{background:var(--card);color:var(--accent)}
+.toc a .num{color:var(--accent);font-weight:700;margin-right:6px;font-size:.8rem}
+.section{margin-bottom:56px}
+.section-anchor{scroll-margin-top:24px}
+h2.section-title{font-size:1.5rem;font-weight:700;margin-bottom:20px;padding-bottom:12px;
+border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:10px}
+h2.section-title .icon{font-size:1.3rem}
+h3{font-size:1.15rem;font-weight:600;margin:28px 0 12px;color:var(--accent3)}
+h4{font-size:1rem;font-weight:600;margin:20px 0 8px;color:var(--accent4)}
+p{margin-bottom:14px;color:var(--text)}
+.table-wrap{overflow-x:auto;margin:16px 0 24px;border-radius:12px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+thead{background:var(--surface)}
+th{padding:12px 16px;text-align:left;font-weight:600;color:var(--accent);border-bottom:2px solid var(--border);white-space:nowrap}
+td{padding:10px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:hover{background:var(--card)}
+.price{color:var(--accent4);font-weight:600}
+.perf{color:var(--accent3);font-weight:600}
+.recommend{color:var(--success);font-weight:600}
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:16px 0 24px}
+.info-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.info-card h4{margin:0 0 8px;color:var(--accent);font-size:.95rem}
+.info-card p{font-size:.88rem;color:var(--text2);margin:0}
+.info-card .badge{display:inline-block;font-size:.7rem;padding:2px 8px;border-radius:4px;margin-top:8px;font-weight:600}
+.badge-free{background:#10b98120;color:#34d399}
+.badge-paid{background:#f59e0b20;color:#fbbf24}
+.badge-enterprise{background:#8b5cf620;color:#a78bfa}
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;padding:16px 20px;
+overflow-x:auto;margin:12px 0 20px;font-size:.85rem;line-height:1.6}
+code{font-family:'Fira Code','JetBrains Mono',monospace;color:var(--accent3)}
+p code,li code,td code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-size:.85em}
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;
+margin:16px 0 24px;text-align:center;font-family:monospace;font-size:.85rem;line-height:1.8;overflow-x:auto}
+.diagram .title{font-weight:700;color:var(--accent);margin-bottom:12px;font-family:sans-serif;font-size:.95rem}
+.alert{border-radius:10px;padding:16px 20px;margin:16px 0;font-size:.9rem}
+.alert-info{background:#3b82f610;border-left:4px solid var(--accent)}
+.alert-warn{background:#f59e0b10;border-left:4px solid var(--warning)}
+.alert-success{background:#10b98110;border-left:4px solid var(--success)}
+.alert-danger{background:#ef444410;border-left:4px solid var(--danger)}
+.alert strong{display:block;margin-bottom:4px}
+ul,ol{margin:8px 0 16px 20px}
+li{margin-bottom:6px;font-size:.92rem}
+li strong{color:var(--text)}
+.arch-flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin:20px 0}
+.arch-box{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;
+font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
+.arch-arrow{color:var(--accent);font-size:1.2rem}
+.compare-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+.compare-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.compare-box h4{margin:0 0 8px}
+.compare-box.pro{border-top:3px solid var(--success)}
+.compare-box.con{border-top:3px solid var(--danger)}
+.checkpoint{background:var(--surface);border:1px solid var(--border2);border-radius:12px;padding:18px 22px;margin:20px 0}
+.checkpoint h4{color:var(--accent5);margin:0 0 10px;font-size:.95rem}
+.checkpoint ol{margin:0 0 0 18px}
+.checkpoint li{color:var(--text2);font-size:.88rem}
+.footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--border);text-align:center;color:var(--text3);font-size:.8rem}
+@media(max-width:768px){
+  .hero h1{font-size:1.5rem}
+  .toc-grid{grid-template-columns:1fr}
+  .card-grid{grid-template-columns:1fr}
+  .compare-row{grid-template-columns:1fr}
+  table{font-size:.78rem}
+  th,td{padding:8px 10px}
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ===== HERO ===== -->
+<div class="hero">
+  <h1>AI 법률·저작권·개인정보 종합 교육자료</h1>
+  <p class="subtitle">한국 AI기본법·개인정보보호법·EU AI Act부터 저작권·오픈소스 라이선스·계약 실무·AADS 6개 프로젝트 리스크 점검까지<br>비개발자 경영자를 위한 AI 법률 리스크 관리 가이드</p>
+  <div class="meta-info">
+    <span class="meta-tag">2026-09-12 작성</span>
+    <span class="meta-tag">AADS Academy</span>
+    <span class="meta-tag">CEO 교육용</span>
+  </div>
+</div>
+
+<div class="alert alert-danger">
+  <strong>⚠️ 법률 자문 아님 — 반드시 읽어주십시오</strong>
+  이 문서는 2026년 9월 12일 기준 공개된 법령·가이드라인·언론 보도를 취합한 <strong>교육용 요약 자료</strong>이며, 법률 자문을 대체하지 않습니다. 법령은 개정되고 가이드라인은 수시로 갱신되므로, 실제 사업 결정·계약 체결·규제 대응 전에는 반드시 <strong>변호사·법무법인의 최신 법령 검토</strong>를 거쳐야 합니다. 확인되지 않은 내용은 본문에 '[미검증]'으로 표기했습니다.
+</div>
+
+<!-- ===== TOC ===== -->
+<div class="toc">
+  <h2>목차</h2>
+  <div class="toc-grid">
+    <a href="#ch1"><span class="num">01</span> 왜 지금 AI 법을 알아야 하는가</a>
+    <a href="#ch2"><span class="num">02</span> 한국 AI기본법 — 정식명칭·시행일·적용대상</a>
+    <a href="#ch3"><span class="num">03</span> 고영향 AI·생성형 AI — 정의와 표시의무</a>
+    <a href="#ch4"><span class="num">04</span> AI기본법 위반 시 제재와 계도기간</a>
+    <a href="#ch5"><span class="num">05</span> 개인정보보호법과 AI</a>
+    <a href="#ch6"><span class="num">06</span> EU AI Act — 위험등급과 역외적용</a>
+    <a href="#ch7"><span class="num">07</span> 학습데이터 저작권과 TDM 면책 논의</a>
+    <a href="#ch8"><span class="num">08</span> AI 생성물의 저작권 귀속</a>
+    <a href="#ch9"><span class="num">09</span> 상용 AI 서비스 이용약관 체크리스트</a>
+    <a href="#ch10"><span class="num">10</span> 오픈소스 모델 라이선스 비교</a>
+    <a href="#ch11"><span class="num">11</span> 계약 실무 — AI 외주·SaaS 도입</a>
+    <a href="#ch12"><span class="num">12</span> 규제산업 추가요건 — 금융·의료</a>
+    <a href="#ch13"><span class="num">13</span> 사고 시 책임소재 — 공급자·배포자·이용자</a>
+    <a href="#ch14"><span class="num">14</span> 사내 AI 이용규정 템플릿</a>
+    <a href="#ch15"><span class="num">15</span> AADS 6개 프로젝트 법적 리스크 점검표</a>
+    <a href="#ch16"><span class="num">16</span> 참고자료·다음 단계</a>
+  </div>
+</div>
+
+<!-- ===== CH1 ===== -->
+<div class="section" id="ch1">
+  <h2 class="section-title section-anchor"><span class="icon">⚖️</span> 01. 왜 지금 AI 법을 알아야 하는가</h2>
+
+  <p>2026년 1월 22일, 한국은 세계 최초로 <strong>AI를 포괄적으로 규율하는 기본법을 전면 시행</strong>한 국가가 되었습니다. 같은 해 8월 2일에는 EU AI Act의 2차 핵심 조항(생성형 AI 표시의무·범용 AI 모델 규제)이 발효되었습니다. AI를 업무에 도입한 기업이라면 이제 '기술 선택'뿐 아니라 <strong>'법적 의무 이행'</strong>이 경영 리스크로 직결됩니다.</p>
+
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>왜 경영진이 직접 알아야 하나</h4>
+      <p>AI 법률 위반은 과태료·과징금뿐 아니라 서비스 중단명령, 브랜드 신뢰 훼손으로 이어집니다. 법무팀이 없는 중소·스타트업일수록 대표가 최소한의 리스크 지도를 파악해야 합니다.</p>
+    </div>
+    <div class="info-card">
+      <h4>2026년 하반기가 분기점인 이유</h4>
+      <p>한국 AI기본법(2026.1.22 시행)과 EU AI Act 2차 조항(2026.8.2 시행)이 같은 해에 겹치면서, 해외 서비스를 이용하거나 해외 이용자를 대상으로 서비스하는 기업 모두 동시에 영향권에 들어왔습니다.</p>
+    </div>
+    <div class="info-card">
+      <h4>AADS와의 관계</h4>
+      <p>AADS는 자체 개발 파이프라인(코드 생성), 대화형 AI 서비스(NewTalk), 금융 자동매매(GO100/KIS) 등 서로 다른 규제 영역에 걸쳐 있어 프로젝트별로 적용 법령이 다릅니다. 15장에서 실제 조회 결과 기반 점검표를 다룹니다.</p>
+    </div>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>💡 이 문서를 보는 방법</strong>
+    법률 조문 번호·과태료 액수 등 수치는 검색 시점(2026-09-12) 기준이며, 시행령·고시·가이드라인은 계속 개정됩니다. 각 장 하단 출처 링크를 통해 최신 원문을 직접 확인하는 습관을 들이십시오.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>우리 회사가 AI 기술을 '직접 개발·제공'하는 사업자인지, 아니면 '외부 AI 서비스를 도구로 활용'하는 이용자인지 구분되어 있는가?</li>
+      <li>법무 자문 없이 AI 관련 의사결정(신규 서비스 출시, 데이터 수집 확대 등)을 내리고 있지 않은가?</li>
+      <li>2026년 하반기 규제 변화(한국 AI기본법 계도기간 종료, EU AI Act 고위험 규제 시행 등) 일정이 사내 캘린더에 반영되어 있는가?</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH2 ===== -->
+<div class="section" id="ch2">
+  <h2 class="section-title section-anchor"><span class="icon">📜</span> 02. 한국 AI기본법 — 정식명칭·시행일·적용대상</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>항목</th><th>내용</th></tr></thead>
+      <tbody>
+        <tr><td><strong>정식 명칭</strong></td><td>「인공지능 발전과 신뢰 기반 조성 등에 관한 기본법」(약칭: 인공지능기본법, AI기본법)</td></tr>
+        <tr><td><strong>국회 통과</strong></td><td>2024년 12월 26일 본회의 통과 (재석 264명 중 찬성 260명)</td></tr>
+        <tr><td><strong>시행일</strong></td><td class="recommend">2026년 1월 22일 (하위법령·가이드라인 동시 공개)</td></tr>
+        <tr><td><strong>소관 부처</strong></td><td>과학기술정보통신부, 지원기관: NIA(한국지능정보사회진흥원)·TTA·KISDI·AISI(AI안전연구소)</td></tr>
+        <tr><td><strong>적용 대상</strong></td><td>국내에서 AI 제품·서비스를 제공하는 '인공지능사업자'(개발자·제공자). 국내 이용자 대상 <strong>해외 사업자도 포함</strong>(역외적용)</td></tr>
+        <tr><td><strong>목적(제1조)</strong></td><td>AI의 건전한 발전과 신뢰 기반 조성을 통해 국민 권익·존엄성 보호, 삶의 질 향상, 국가경쟁력 강화</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>2-1. '인공지능사업자' vs '단순 이용자' 구분이 핵심</h3>
+  <p>AI기본법의 각종 의무는 원칙적으로 <strong>AI 기술을 개발했거나 AI 기반 제품·서비스를 고객에게 직접 제공하는 사업자</strong>에게 부과됩니다. ChatGPT·Midjourney 등을 업무 도구로 활용하는 마케터·개발자는 '이용자'로서 현재는 직접적인 표시의무를 지지 않습니다.</p>
+
+  <div class="compare-row">
+    <div class="compare-box pro">
+      <h4 style="color:var(--success)">인공지능사업자 (의무 있음)</h4>
+      <ul>
+        <li>AI 프로필 생성 앱, AI 챗봇 서비스 운영사</li>
+        <li>AI 캐릭터 생성 메타버스 플랫폼</li>
+        <li>AI 음성합성·이미지생성 플랫폼</li>
+        <li>국내 이용자 대상 해외 AI 서비스(예: 글로벌 생성형 AI 업체)</li>
+      </ul>
+    </div>
+    <div class="compare-box con">
+      <h4 style="color:var(--danger)">단순 이용자 (현행 의무 없음)</h4>
+      <ul>
+        <li>ChatGPT로 카피 작성하는 마케터</li>
+        <li>Midjourney로 시안 제작하는 디자이너</li>
+        <li>AI 코딩 도구를 사내 개발에 쓰는 개발팀</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ 확대 가능성 주시</strong>
+    정보통신망법 개정이 논의 중이며, 통과 시 콘텐츠 <strong>게시자(이용자)</strong>에게도 AI 생성 사실 표시 의무가 확대될 수 있습니다. 화장품법에서도 가상모델 활용 시 고지 의무가 검토되고 있습니다. [2026-09 시점 국회 논의 중, 통과 여부·시행일 미확정 — 미검증]
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>우리 서비스가 AI 기술 자체를 고객이 경험하게 하는 구조(=사업자)인지, 내부 도구로만 쓰는지(=이용자) 문서로 정리했는가?</li>
+      <li>해외에 서버를 둔 AI 서비스를 국내 고객 대상으로 제공하고 있다면, 역외적용 대상 여부를 검토했는가?</li>
+      <li>정보통신망법·화장품법 등 연계 법령 개정 동향을 분기별로 모니터링하는 담당자가 지정되어 있는가?</li>
+    </ol>
+  </div>
+
+  <p style="font-size:.8rem;color:var(--text3)">출처: 법제처 국가법령정보센터 law.go.kr(인공지능기본법, lsiSeq=276241) · NIA 인공지능기본법 지원데스크(sw.or.kr/AI_act_helpdesk) · imaginationgroup.co.kr 「인공지능기본법 완벽 가이드」(2026)</p>
+</div>
+
+<!-- ===== CH3 ===== -->
+<div class="section" id="ch3">
+  <h2 class="section-title section-anchor"><span class="icon">🎯</span> 03. 고영향 AI·생성형 AI — 정의와 표시의무</h2>
+
+  <h3>3-1. 고영향 AI(High-Impact AI) 정의</h3>
+  <p>AI기본법은 '고영향 인공지능'을 <strong>사람의 생명·신체의 안전 및 기본권에 중대한 영향을 미치거나 위험을 초래할 우려가 있는 AI 시스템</strong>으로 정의하며, 다음과 같은 활용 영역을 열거합니다(제2조, 시행령 보완). [영역 목록은 시행령·고시 원문 확인 필요 — 아래는 확인된 범위 내 요약]</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>고영향 AI 활용 영역 (예시)</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>에너지 공급(「에너지법」 제2조제1호 관련)</td><td>전력·에너지 수급 제어 AI</td></tr>
+        <tr><td>의료기기·의료 진단·치료 보조</td><td>의료법·의료기기법과 중복 규제 가능</td></tr>
+        <tr><td>채용·평가 등 고용 관련 의사결정</td><td>차별 우려 영역</td></tr>
+        <tr><td>신용평가·대출심사 등 금융 의사결정</td><td>금융분야 AI 가이드라인과 연계</td></tr>
+        <tr><td>교통·공공시설 등 안전 제어 시스템</td><td>자율주행·인프라 제어 포함 가능</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="alert alert-warn">
+    <strong>⚠️ 미검증 — 전체 목록 원문 확인 필요</strong>
+    고영향 AI 활용 영역의 전체 목록(가~차 등 세부 항목)은 법제처 원문과 NIA 「고영향 인공지능 사업자 책무 가이드라인」에 상세 열거되어 있습니다. 본 문서는 검색으로 확인된 일부만 요약했으므로, 자사 서비스의 고영향 AI 해당 여부는 반드시 원문 대조와 법률 검토가 필요합니다.
+  </div>
+
+  <h3>3-2. 고영향 AI 사업자 의무 (개요)</h3>
+  <ul>
+    <li><strong>위험관리방안 수립</strong> — 안전성·신뢰성 확보 조치 마련</li>
+    <li><strong>이용자 사전 고지</strong> — 고영향 AI 기반 서비스임을 사전에 알림</li>
+    <li><strong>사람에 의한 감독(Human Oversight)</strong> — 자동화된 의사결정에 대한 인간의 관여·통제 체계</li>
+    <li><strong>안전성 확보 가이드라인 준수</strong> — NIA 「인공지능 안전성 확보 가이드라인」 이행</li>
+  </ul>
+
+  <h3>3-3. 생성형 AI 표시의무 (제31조)</h3>
+  <p>생성형 AI 또는 고영향 AI 기반 제품·서비스를 제공하는 사업자는 <strong>①서비스 이용 전 사전 고지</strong>와 <strong>②생성물의 AI 생성 사실 표시</strong> 두 가지 의무를 집니다(인공지능기본법 제31조).</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>구분</th><th>표시 방법</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>사전 고지</td><td>이용약관·계약서 명시, 앱 구동화면/팝업, 오프라인 안내문</td><td>서비스 이용 전 1회 고지로 충분</td></tr>
+        <tr><td>일반 생성물 — 가시적 방식</td><td>자막, 로고, 워터마크 등 육안 인식 가능한 표시</td><td>사업자 선택 가능</td></tr>
+        <tr><td>일반 생성물 — 비가시적 방식</td><td>메타데이터, 디지털 워터마크(기계 판독)</td><td>다운로드 시점 등 최소 1회 별도 안내 병행 필요</td></tr>
+        <tr><td>딥페이크(실제와 구분 곤란)</td><td class="price">가시적 표시 필수 (자막·로고 상시 노출, 음성은 재생 초입 안내)</td><td>비가시적 방식만으로는 불가 (제31조 제3항)</td></tr>
+        <tr><td>서비스 UI 내부 전용(외부 미유통)</td><td>결과물별 표시 불요, 서비스 초기 안내로 충분</td><td>예: 게임 NPC 대화, 챗봇 응답</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>💡 웹툰·애니메이션은 딥페이크 아님</strong>
+    누가 보더라도 가상임을 인식할 수 있는 웹툰·애니메이션·일러스트는 딥페이크로 분류되지 않습니다. 핵심 기준은 '실제 인물·현실과 구분이 어려운지 여부'입니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>우리 서비스가 생성형 AI 결과물을 외부로 유통(다운로드·공유)하는 구조라면, 표시 방식(가시적/비가시적)을 정했는가?</li>
+      <li>딥페이크 수준(실제와 구분 곤란)의 이미지·음성·영상을 생성하는 기능이 있다면 가시적 표시가 의무화되어 있는가?</li>
+      <li>고영향 AI 활용 영역(에너지·의료·금융·채용 등)에 해당하는 서비스가 있다면 법률 검토를 별도로 받았는가?</li>
+    </ol>
+  </div>
+
+  <p style="font-size:.8rem;color:var(--text3)">출처: bh-law.kr 「AI 생성물 표기 의무화」 칼럼(2026-06-17, 인공지능기본법 제31조·제43조 인용) · NIA 「인공지능 안전성 확보 가이드라인」·「고영향 인공지능 사업자 책무 가이드라인」(nia.or.kr)</p>
+</div>
+
+<!-- ===== CH4 ===== -->
+<div class="section" id="ch4">
+  <h2 class="section-title section-anchor"><span class="icon">🚨</span> 04. AI기본법 위반 시 제재와 계도기간</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>위반 유형</th><th>제재</th><th>근거</th></tr></thead>
+      <tbody>
+        <tr><td>사전 고지 의무 위반</td><td class="price">3,000만 원 이하 과태료<br><small style="color:var(--text3)">(약 3천만원, 원화 그대로)</small></td><td>인공지능기본법 제43조 제1항</td></tr>
+        <tr><td>생성물 표시 의무 위반</td><td>1차 시정명령 → 미이행 시 <span class="price">3,000만 원 이하 과태료</span></td><td>제43조 제1항 제3호</td></tr>
+        <tr><td>AI 워싱(허위 표시 은폐·과장광고)</td><td>시정조치 + 과징금(현행 매출액 최대 2%, 상향 추진 중)</td><td>표시·광고의 공정화에 관한 법률(표시광고법)</td></tr>
+        <tr><td>악의적 허위·조작정보 유통</td><td>실손해액 최대 5배 징벌적 손해배상 (도입 추진)</td><td>정보통신망법 개정안 [미검증 — 국회 논의 중]</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-success">
+    <strong>✅ 1년 이상 계도기간 운영 중</strong>
+    과기정통부는 법 시행 초기 현장 혼란을 최소화하기 위해 <strong>최소 1년 이상의 계도기간</strong>을 운영합니다. 계도기간 중에는 사실조사·과태료 부과가 원칙적으로 유예되며, 인명사고·인권 훼손 등 중대한 사안에 한해 예외적으로 사실조사가 이뤄집니다. 단, 계도기간은 '면제'가 아니라 '유예'이므로 종료 전 내부 체계 정비가 필요합니다.
+  </div>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ 한국 vs EU 제재 수준 차이</strong>
+    한국 AI기본법의 제재는 과태료·시정명령 중심의 단계적 조치인 반면, EU AI Act는 전 세계 매출액 대비 비율 또는 정액 중 큰 금액을 과징금으로 부과합니다(6장 참고). 해외向 서비스를 운영한다면 두 체계의 제재 강도 차이를 반드시 구분해야 합니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>계도기간 종료 예정 시점(시행일로부터 최소 1년 = 2027년 1월 이후)을 사내 컴플라이언스 일정에 반영했는가?</li>
+      <li>AI 가상인물·가상 전문가를 광고에 활용한다면 표시광고법상 'AI 워싱' 리스크를 검토했는가?</li>
+      <li>과태료·과징금 액수 자체보다 시정명령 불이행에 따른 서비스 중단·평판 리스크를 함께 평가하고 있는가?</li>
+    </ol>
+  </div>
+
+  <p style="font-size:.8rem;color:var(--text3)">출처: bh-law.kr 「AI 생성물 표기 의무화」(2026-06-17, 최종검토 2026-06-17) · 공정거래위원회 「추천·보증 등에 관한 표시·광고 심사지침」 개정 논의</p>
+</div>
+
+<!-- ===== CH5 ===== -->
+<div class="section" id="ch5">
+  <h2 class="section-title section-anchor"><span class="icon">🔐</span> 05. 개인정보보호법과 AI</h2>
+
+  <p>AI 서비스는 대량의 개인정보를 수집·학습·추론에 활용하므로, AI기본법과 별개로 <strong>개인정보보호법(PIPA)</strong>이 기본 규율 틀로 항상 함께 적용됩니다.</p>
+
+  <h3>5-1. 수집·이용의 법적 근거</h3>
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>정보주체 동의</h4>
+      <p>가장 일반적 근거. AI 학습·추론 목적을 명확히 고지하고 별도 동의를 받아야 함(포괄 동의 지양)</p>
+    </div>
+    <div class="info-card">
+      <h4>법령상 의무 이행</h4>
+      <p>금융실명법·자본시장법 등 타 법령이 요구하는 경우</p>
+    </div>
+    <div class="info-card">
+      <h4>계약 이행에 필요한 경우</h4>
+      <p>서비스 제공 계약의 본질적 이행에 불가피한 최소한의 정보</p>
+    </div>
+    <div class="info-card">
+      <h4>정당한 이익(제15조)</h4>
+      <p>정보주체 권리보다 명백히 우선하는 정당한 이익이 있고 합리적 범위 내인 경우. AI 학습 목적의 폭넓은 원용은 신중해야 함</p>
+    </div>
+  </div>
+
+  <h3>5-2. 가명처리와 AI 학습</h3>
+  <p>개인정보보호법상 <strong>가명정보</strong>는 통계작성·과학적 연구(산업적 연구 포함)·공익적 기록보존 목적으로 정보주체 동의 없이 처리할 수 있습니다. AI 모델 학습·연구개발이 '과학적 연구'에 해당하는지는 목적의 구체성, 상업적 활용 정도에 따라 판단이 달라질 수 있어 <strong>가명처리 절차(적정성 검토, 재식별 방지 조치)를 문서화</strong>해 두는 것이 안전합니다.</p>
+
+  <h3>5-3. 자동화된 결정에 대한 정보주체의 권리</h3>
+  <p>개인정보보호법은 완전히 자동화된 시스템으로 이루어지는 결정이 정보주체의 권리·의무에 중대한 영향을 미치는 경우, 정보주체에게 <strong>거부권 및 설명 요구권</strong>을 부여하는 조항을 두고 있습니다(2023년 개정으로 도입). AI 기반 채용 탈락·대출 거절·보험료 산정 등이 대표적 적용 대상 후보입니다. [정확한 조문 번호·세부 요건은 law.go.kr 원문 재확인 필요 — 본 항목은 공개된 일반 지식 기반이며 최신 개정 여부는 미검증]</p>
+
+  <h3>5-4. 개인정보 국외 이전</h3>
+  <p>해외 리전의 AI API(OpenAI, Anthropic, Google 등)에 개인정보를 전송하는 것은 <strong>국외 이전</strong>에 해당할 수 있습니다. 개인정보보호법은 원칙적으로 정보주체 동의 또는 법이 정한 예외 사유(적정성 결정 국가, 인증 취득 등)를 요구합니다.</p>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ AADS 실무 시사점</strong>
+    Anthropic Claude·Gemini 등 해외 LLM API를 호출할 때 프롬프트에 개인정보(고객명, 계좌정보 등)를 포함시키면 국외 이전 이슈가 발생할 수 있습니다. 민감정보·식별정보는 API 전송 전 마스킹·가명처리하는 것이 원칙입니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>AI 학습·추론에 사용하는 개인정보의 수집 근거(동의/계약/정당한이익)가 항목별로 문서화되어 있는가?</li>
+      <li>해외 AI API로 전송되는 데이터에 개인정보·민감정보가 포함되지 않도록 마스킹 절차가 있는가?</li>
+      <li>AI가 채용·신용·보험 등 정보주체에 중대한 영향을 미치는 자동화된 결정을 내리는 경우, 이의제기·설명요구 절차를 마련했는가?</li>
+    </ol>
+  </div>
+
+  <p style="font-size:.8rem;color:var(--text3)">출처: 법제처 국가법령정보센터 「개인정보 보호법」(law.go.kr) — 자동화된 결정 관련 세부 조항은 원문 대조 권고. 가명정보 관련 일반 원칙은 개인정보보호위원회 가이드라인 기준.</p>
+</div>
+
+<!-- ===== CH6 ===== -->
+<div class="section" id="ch6">
+  <h2 class="section-title section-anchor"><span class="icon">🇪🇺</span> 06. EU AI Act — 위험등급과 역외적용</h2>
+
+  <div class="alert alert-info">
+    <strong>💡 환율 환산 기준</strong>
+    본 장의 원화 환산은 €1 ≈ ₩1,555 (2026년 9월 기준 EUR/KRW 환율, investing.com 조회) 를 적용했습니다. 실제 결제 시점 환율에 따라 달라질 수 있습니다.
+  </div>
+
+  <h3>6-1. 4단계 위험 등급</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>등급</th><th>정의</th><th>규제 수준</th><th>예시</th></tr></thead>
+      <tbody>
+        <tr><td><strong>금지(Unacceptable)</strong></td><td>기본권을 용인할 수 없이 침해하는 AI</td><td>전면 금지</td><td>사회적 점수화(소셜 스코어링), 실시간 원격 생체인식(공공장소, 예외 제한적)</td></tr>
+        <tr><td><strong>고위험(High-risk)</strong></td><td>안전·기본권에 중대한 영향을 미치는 영역</td><td>사전 적합성평가, 품질관리, 인간 감독 의무</td><td>채용, 신용평가, 교육 평가, 핵심 인프라 제어, 의료기기</td></tr>
+        <tr><td><strong>제한적 위험(Limited risk)</strong></td><td>투명성 의무 중심</td><td>AI와의 상호작용·생성물 표시 고지</td><td>챗봇, 딥페이크, 감정인식 시스템</td></tr>
+        <tr><td><strong>최소 위험(Minimal risk)</strong></td><td>규제 대상 아님(권고 수준)</td><td>자율 규제</td><td>스팸필터, AI 기반 게임 NPC</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>6-2. 단계별 시행 일정 [2026-09 시점 확인]</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>시점</th><th>발효 내용</th></tr></thead>
+      <tbody>
+        <tr><td>2024.08.01</td><td>EU AI Act 발효(Entry into force)</td></tr>
+        <tr><td>2025.02.02</td><td>금지된 AI 관행(Unacceptable risk) 적용 시작</td></tr>
+        <tr><td>2025.08.02</td><td>범용 AI(GPAI) 모델 제공자 의무 1차 적용, 거버넌스 체계 가동</td></tr>
+        <tr><td class="recommend">2026.08.02</td><td><strong>AI 생성물 표시의무 + GPAI 감독·과징금 집행 본격화</strong> (2026년 두 번째 핵심 시행일)</td></tr>
+        <tr><td>2027.12(연기)</td><td>고위험 AI(부속서 III, 채용·교육 등) 규제 본격 적용 — 당초 2026.08 예정에서 연기 [미검증: 정확한 연기 사유·확정 여부는 EU 공식 발표 재확인 필요]</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>6-3. 한국 기업에 적용되는 역외 조항</h3>
+  <p>EU AI Act는 EU 역내에 제품을 출시하거나, EU 거주자를 대상으로 AI 시스템의 산출물을 사용하는 경우 <strong>EU 역외 사업자에게도 적용</strong>됩니다. 한국 기업이 다음에 해당하면 역외적용 검토가 필요합니다.</p>
+  <ul>
+    <li>EU 고객을 대상으로 SaaS형 AI 서비스를 판매하는 경우</li>
+    <li>EU에 자회사·지사를 두고 AI 시스템을 배포하는 경우</li>
+    <li>EU 시장에 출시되는 제품(예: 가전, 자동차)에 AI 기능을 임베드하는 경우</li>
+  </ul>
+
+  <h3>6-4. 과징금 규모</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>위반 유형</th><th>과징금 상한</th><th>원화 환산(상한 기준)</th></tr></thead>
+      <tbody>
+        <tr><td>금지된 AI 관행 위반</td><td class="price">3,500만 유로 또는 전 세계 매출액의 7% 중 큰 금액</td><td class="price">약 544.25억원~ (€35M 기준, 매출액 비율 적용 시 대기업은 훨씬 커질 수 있음)</td></tr>
+        <tr><td>고위험 AI 의무 위반 등</td><td>1,500만 유로 또는 매출액의 3%</td><td>약 233.25억원~</td></tr>
+        <tr><td>부정확한 정보 제공</td><td>750만 유로 또는 매출액의 1%</td><td>약 116.6억원~</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-danger">
+    <strong>🚨 EU AI Act vs 한국 AI기본법 — 제재 강도 차이 명심</strong>
+    한국은 정액 과태료(최대 3천만원) 중심이지만 EU는 <strong>전 세계 매출액 비율</strong>을 기준으로 하기 때문에, 대기업이 EU 시장에서 위반하면 한국 기준보다 수백~수천 배 큰 금액이 부과될 수 있습니다. EU 진출 계획이 있다면 별도의 법률 검토가 필수입니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>우리 서비스나 제품이 EU 거주자를 대상으로 하거나 EU 시장에 출시되는가? 역외적용 대상 여부를 검토했는가?</li>
+      <li>우리가 활용하는 AI 시스템이 EU AI Act 기준 고위험 카테고리(채용·신용평가·교육평가 등)에 해당하는가?</li>
+      <li>2026.08.02 발효된 생성물 표시의무가 EU向 서비스에 반영되어 있는가?</li>
+    </ol>
+  </div>
+
+  <p style="font-size:.8rem;color:var(--text3)">출처: devlery.com 「EU AI법 GPAI 과징금 8월 2일 시작」(2026) · epnc.co.kr 「EU AI법 핵심 조항 시행」(2026) · blog.naver.com/z4h1027 「EU AI법 8월 2일 시행」(2026) — EUR/KRW 환율: kr.investing.com(2026-09 조회, 1EUR≈1,555~1,567원 구간)</p>
+</div>
+
+<!-- ===== CH7 ===== -->
+<div class="section" id="ch7">
+  <h2 class="section-title section-anchor"><span class="icon">📚</span> 07. 학습데이터 저작권과 TDM 면책 논의</h2>
+
+  <h3>7-1. 국내 입법 현황 — TDM 면책 조항 부재</h3>
+  <p>일본·싱가포르는 <strong>텍스트·데이터마이닝(TDM) 면책 조항</strong>을 저작권법에 명문화해, AI 학습을 위한 저작물 복제·전송을 일정 요건 하에 허용하고 있습니다. 반면 한국은 2026년 9월 현재 <strong>TDM 명문 면책 조항이 도입되지 않았으며</strong>, 국회입법조사처가 관련 보고서에서 제도 정비 필요성을 지적한 상태입니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>국가/지역</th><th>TDM 관련 제도</th><th>상태</th></tr></thead>
+      <tbody>
+        <tr><td>일본</td><td>저작권법 제30조의4 (정보해석 목적 이용 면책)</td><td>기존 면책 조항 존재</td></tr>
+        <tr><td>싱가포르</td><td>Copyright Act TDM 예외 조항</td><td>2021년 도입</td></tr>
+        <tr><td>EU(독일 등)</td><td>DSM 지침 TDM 예외(제4조), 저작권자 opt-out 가능</td><td>도입, 분쟁 진행 중(독일 저작권법 제44b조 관련 소송)</td></tr>
+        <tr><td>한국</td><td>명문 TDM 면책 조항 부재. 저작권법 제35조의5 공정이용 일반조항 원용 가능성 논의</td><td class="price">미도입 — 입법 논의 중</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ 국내 실무 시사점</strong>
+    한국에서 AI 모델을 학습시키며 저작물을 대량 수집·복제하는 행위는, 일본·싱가포르처럼 명문 면책 조항으로 보호받지 못하고 저작권법 제35조의5(공정이용) 일반조항에 의존해야 합니다. 그런데 공정이용 해당 여부는 <strong>판례가 부족해 법적 불확실성이 큽니다</strong>. 학습데이터 출처·라이선스를 최대한 문서화해 두는 것이 리스크 관리의 핵심입니다.
+  </div>
+
+  <h3>7-2. 해외 판례·소송 동향 [개요 — 개별 사건 세부내용은 미검증]</h3>
+  <ul>
+    <li><strong>독일</strong> — 저작권법 제44b조 제3항 TDM 예외 규정의 적용 범위를 둘러싼 소송 진행</li>
+    <li><strong>미국</strong> — 뉴욕타임스 vs OpenAI/Microsoft 등 다수의 저작권 침해 소송이 진행 중이며, 공정이용(Fair Use) 항변의 인정 범위가 쟁점 [사건별 최신 판결 결과는 개별 확인 필요]</li>
+  </ul>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>자체 AI 모델을 학습시킨다면, 학습데이터의 출처·라이선스·저작권 상태를 기록한 데이터 카탈로그가 있는가?</li>
+      <li>저작권자가 자사 콘텐츠의 AI 학습 활용을 거부(opt-out)하는 경우에 대응할 절차가 있는가?</li>
+      <li>외부 AI 서비스를 이용할 때, 해당 서비스의 학습데이터 출처와 관련된 법적 분쟁 이력을 확인했는가?</li>
+    </ol>
+  </div>
+
+  <p style="font-size:.8rem;color:var(--text3)">출처: etnews.com 「日·싱가포르는 면책…AI 학습데이터 저작권 제도 정비 시급」(2025-06-09) · ipkorea.go.kr(특허청) 「생성형 인공지능에서 이용되는 저작물의 저작재산권 제한에 관한 연구」 · contents.premium.naver.com/issue10 「생성형 AI 학습데이터 컴플라이언스」(2026-02)</p>
+</div>
+
+<!-- ===== CH8 ===== -->
+<div class="section" id="ch8">
+  <h2 class="section-title section-anchor"><span class="icon">✍️</span> 08. AI 생성물의 저작권 귀속</h2>
+
+  <h3>8-1. 한국저작권위원회의 공식 입장</h3>
+  <p>한국저작권위원회는 2025년 6월 「생성형 인공지능 활용 저작물의 저작권 등록 안내서」를 발표했습니다. 핵심 원칙은 다음과 같습니다.</p>
+
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>AI가 순수 생성한 부분</h4>
+      <p>저작권법상 보호 대상 아님. '인간의 사상 또는 감정을 표현한 창작물'이 아니므로 저작물성이 부정됨</p>
+    </div>
+    <div class="info-card">
+      <h4>인간의 창작적 기여 부분</h4>
+      <p>AI 산출물에 인간이 <strong>편집, 수정, 배열, 각색</strong> 등 창작적으로 기여한 부분에 한해 그 기여 부분만 저작권 보호 대상</p>
+    </div>
+    <div class="info-card">
+      <h4>저작권 등록 실무</h4>
+      <p>등록 신청 시 AI 활용 사실과 인간의 창작적 기여 부분을 구체적으로 소명해야 함. 안내서에 실제 등록 사례 수록</p>
+    </div>
+    <div class="info-card">
+      <h4>귀속 주체</h4>
+      <p>AI 자체는 저작자가 될 수 없음(권리능력 없음). 창작적 기여를 한 인간(이용자 또는 개발자)이 해당 기여 부분의 저작자</p>
+    </div>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>💡 실무 팁 — "프롬프트만으로는 부족"</strong>
+    단순히 프롬프트를 입력해 결과물을 받는 것만으로는 창작적 기여로 인정받기 어렵습니다. 결과물을 선별·수정·재배열·편집하는 과정과 그 기록을 남겨두어야 저작권 등록·분쟁 시 창작적 기여를 입증하기 유리합니다.
+  </div>
+
+  <h3>8-2. 쟁점: 저작권 침해 판단기준의 한계</h3>
+  <p>법무부 산하 연구자료는 현행 저작권법이 'AI 창작 부분은 보호 대상이 아니다'는 원칙을 전제로 하고 있어, <strong>AI 산출물이 기존 저작물과 유사한 경우의 침해 판단 기준</strong>을 기존 인간 창작물 기준과 동일하게 적용하는 데 한계가 있다고 지적합니다. [세부 법리는 원문 확인 필요]</p>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>AI로 생성한 콘텐츠(로고, 카피, 이미지 등)를 상업적으로 사용할 때, 인간의 창작적 기여를 입증할 기록(수정 이력)을 남기고 있는가?</li>
+      <li>AI 생성 결과물을 저작권 등록하려는 경우, 한국저작권위원회 안내서의 소명 절차를 확인했는가?</li>
+      <li>AI가 만든 브랜드 자산(로고, 캐릭터 등)이 제3자에 의해 무단 복제될 경우 법적 보호를 받을 수 있는지 사전에 검토했는가?</li>
+    </ol>
+  </div>
+
+  <p style="font-size:.8rem;color:var(--text3)">출처: 한국저작권위원회 「생성형 인공지능 활용 저작물의 저작권 등록 안내서」(2025-06, kocca.kr 소개) · moj.go.kr 「인공지능(AI) 생성물의 저작권 침해 판단기준의 한계와 개선과제」</p>
+</div>
+
+<!-- ===== CH9 ===== -->
+<div class="section" id="ch9">
+  <h2 class="section-title section-anchor"><span class="icon">📄</span> 09. 상용 AI 서비스 이용약관 체크리스트</h2>
+
+  <p>ChatGPT, Claude, Gemini 등 상용 AI 서비스를 업무에 도입할 때, 다음 4가지 조항을 반드시 이용약관에서 확인해야 합니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>확인 조항</th><th>확인할 질문</th><th>리스크</th></tr></thead>
+      <tbody>
+        <tr><td><strong>출력물(Output) 권리</strong></td><td>생성된 결과물의 소유권이 이용자에게 귀속되는가? 상업적 이용이 가능한가?</td><td>귀속 불명확 시 브랜드 자산화 불가</td></tr>
+        <tr><td><strong>입력 데이터의 학습 이용</strong></td><td>내가 입력한 프롬프트·문서가 모델 재학습에 사용되는가? Opt-out이 가능한가?</td><td>영업비밀·고객정보 유출 위험</td></tr>
+        <tr><td><strong>책임 제한(Liability Cap)</strong></td><td>AI 오류·환각(hallucination)으로 인한 손해에 대해 제공사 책임이 어디까지 제한되는가?</td><td>대부분 결제금액 한도로 책임 제한, 실손해 미보전</td></tr>
+        <tr><td><strong>데이터 보존·삭제</strong></td><td>입력 데이터·대화 기록의 보존 기간, 삭제 요청 절차는?</td><td>규제산업(금융·의료)의 데이터 보존 의무와 충돌 가능</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ 엔터프라이즈 플랜과 무료/개인 플랜의 약관 차이</strong>
+    같은 회사의 AI 서비스라도 무료·개인 플랜은 입력 데이터를 학습에 활용할 수 있고, 엔터프라이즈/API 플랜은 기본적으로 학습 미이용을 명시하는 경우가 많습니다. <strong>업무용으로는 반드시 엔터프라이즈/API 약관을 확인</strong>하고, 개인 계정으로 업무 데이터를 입력하지 않도록 사내 규정을 두어야 합니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>직원들이 개인 무료 계정으로 회사 데이터를 AI 서비스에 입력하고 있지 않은지 점검했는가?</li>
+      <li>계약 중인 AI 서비스의 책임 제한 조항이 우리 회사가 감수 가능한 리스크 수준인지 확인했는가?</li>
+      <li>AI 서비스 해지 시 우리 데이터가 실제로 삭제되는지 확인하는 절차(삭제 확인서 등)가 있는가?</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH10 ===== -->
+<div class="section" id="ch10">
+  <h2 class="section-title section-anchor"><span class="icon">🔓</span> 10. 오픈소스 모델 라이선스 비교</h2>
+
+  <p>오픈소스로 공개된 LLM을 자체 서버에 구동·재배포·파인튜닝할 때는 라이선스 조건을 정확히 이해해야 합니다. 아래 표는 일반적으로 알려진 라이선스 조건을 정리한 것이며, <strong>버전별로 조건이 달라질 수 있으므로 실제 사용 전 각 모델의 공식 라이선스 원문을 반드시 재확인</strong>해야 합니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>라이선스</th><th>대표 모델</th><th>상업적 이용</th><th>재배포</th><th>파생모델(파인튜닝)</th><th>주요 제한</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Apache 2.0</strong></td><td>Qwen 일부, Mistral 일부, StarCoder2</td><td class="recommend">자유</td><td class="recommend">자유(라이선스 고지 유지)</td><td class="recommend">자유</td><td>특허 명시적 라이선스 포함, 상표권 별도. 가장 permissive한 라이선스 중 하나</td></tr>
+        <tr><td><strong>MIT</strong></td><td>일부 소형 오픈모델, 도구 라이브러리</td><td class="recommend">자유</td><td class="recommend">자유(저작권·라이선스 고지 유지)</td><td class="recommend">자유</td><td>특허 조항 없음. 가장 단순하고 관대한 라이선스</td></tr>
+        <tr><td><strong>Llama Community License</strong></td><td>Meta Llama 시리즈</td><td class="perf">조건부 자유</td><td class="perf">조건부(Llama 표기·정책 준수)</td><td class="perf">가능(Llama 파생 명칭 표기 의무)</td><td>월간 활성 사용자(MAU) <strong>7억 명 초과</strong> 대기업은 Meta 별도 라이선스 필요. Acceptable Use Policy 준수 필수 [정확한 MAU 임계값·최신 버전 조건은 Meta 공식 라이선스 원문 재확인 필요]</td></tr>
+        <tr><td><strong>Gemma 이용약관</strong></td><td>Google Gemma 시리즈</td><td class="perf">조건부 자유</td><td class="perf">조건부(Gemma 배포 시 이용약관 첨부)</td><td class="perf">가능(파생모델도 동일 이용약관 승계)</td><td>Google의 금지된 이용정책(Prohibited Use Policy) 준수, 독자적 라이선스(Apache 2.0 아님) [세부 조건은 Google 공식 페이지 재확인 필요]</td></tr>
+        <tr><td><strong>OpenRAIL / RAIL 계열</strong></td><td>BLOOM, Stable Diffusion 일부</td><td class="perf">조건부</td><td class="perf">조건부</td><td class="perf">조건부</td><td>책임있는 AI 사용 제한 조항(RAIL) 포함, 특정 유해 용도 금지</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-danger">
+    <strong>🚨 "오픈소스 = 무조건 자유 이용"이 아님</strong>
+    Llama·Gemma 등은 소스가 공개되어 있어도 엄밀히는 OSI(Open Source Initiative) 정의의 '오픈소스'가 아닌 <strong>커스텀 라이선스</strong>입니다. 대규모 서비스(대기업, 대량 MAU)에 활용할 경우 별도 상업 라이선스 계약이 필요할 수 있으므로, 사업 규모가 커지기 전에 라이선스 조건을 재점검해야 합니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>현재 사용 중인 오픈소스/공개가중치 모델의 라이선스 전문을 법무 검토 없이 상업 서비스에 적용하고 있지 않은가?</li>
+      <li>서비스 규모(MAU, 매출)가 커질 경우 Llama·Gemma 등의 라이선스 임계값을 넘어서는지 주기적으로 점검하는가?</li>
+      <li>파인튜닝한 모델을 외부에 재배포·판매할 계획이 있다면, 원본 라이선스의 파생모델 조건(명칭 표기, 이용약관 승계 등)을 준수하고 있는가?</li>
+    </ol>
+  </div>
+
+  <p style="font-size:.8rem;color:var(--text3)">주의: 본 장의 라이선스 조건 요약은 일반적으로 공개된 정보 기반이며, 실시간 검색으로 각 라이선스의 최신 버전 원문을 재확인하지 못했습니다. 반드시 Meta AI(llama.com), Google(ai.google.dev/gemma/terms) 등 공식 라이선스 페이지를 직접 확인하십시오. [미검증 표기]</p>
+</div>
+
+<!-- ===== CH11 ===== -->
+<div class="section" id="ch11">
+  <h2 class="section-title section-anchor"><span class="icon">📝</span> 11. 계약 실무 — AI 외주·SaaS 도입</h2>
+
+  <h3>11-1. AI 개발 외주 계약 시 필수 조항</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>조항</th><th>핵심 내용</th></tr></thead>
+      <tbody>
+        <tr><td>산출물 지식재산권 귀속</td><td>모델 가중치, 학습 코드, 프롬프트 엔지니어링 자산의 소유권을 발주사에 명시적으로 귀속</td></tr>
+        <tr><td>학습데이터 출처 진술·보증</td><td>외주업체가 사용한 학습데이터가 적법하게 수집·라이선스된 것임을 진술·보증(Representation & Warranty)</td></tr>
+        <tr><td>제3자 권리침해 면책(Indemnification)</td><td>납품물이 제3자 저작권·특허를 침해할 경우 외주업체가 배상·방어 책임을 지는 조항</td></tr>
+        <tr><td>성능 기준(SLA)과 검수 기준</td><td>정확도, 응답시간, 환각률 등 정량적 검수 기준 명시</td></tr>
+        <tr><td>재하도급 및 데이터 위탁 고지</td><td>외주업체가 데이터를 재하도급업체·해외 서버로 이전하는지 사전 고지 의무</td></tr>
+        <tr><td>보안·개인정보 처리 위탁 조항</td><td>개인정보보호법상 수탁자 의무(제26조 관련) 명시, 처리 위탁 계약서 별도 작성</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>11-2. AI SaaS 도입 계약 시 필수 조항</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>조항</th><th>핵심 내용</th></tr></thead>
+      <tbody>
+        <tr><td>데이터 처리 위치(Data Residency)</td><td>고객 데이터가 저장·처리되는 서버 소재국 명시 (국외 이전 이슈와 직결)</td></tr>
+        <tr><td>학습 이용 Opt-out 권리</td><td>입력 데이터를 벤더의 모델 재학습에 사용하지 않는다는 명시적 조항</td></tr>
+        <tr><td>SLA(가용성) 및 장애 보상</td><td>API 장애 시 서비스 크레딧·손해배상 기준</td></tr>
+        <tr><td>계약 종료 시 데이터 이관·삭제</td><td>해지 후 데이터 반환 형식, 삭제 확인서 제공 의무</td></tr>
+        <tr><td>가격 변경 통지 기간</td><td>API 단가·과금 정책 변경 시 사전 통지 기간(보통 30~90일)</td></tr>
+        <tr><td>규제 변화 대응 조항</td><td>AI기본법·EU AI Act 등 규제 변화에 따른 벤더의 준수 의무와 고객 협조 의무</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>현재 체결된 AI 외주·SaaS 계약서에 제3자 권리침해 면책 조항이 포함되어 있는가?</li>
+      <li>SaaS 벤더 변경(vendor lock-in) 시 데이터 이관이 계약상 보장되어 있는가?</li>
+      <li>개인정보 처리를 위탁하는 AI 외주업체와 별도의 개인정보 처리위탁 계약을 체결했는가?</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH12 ===== -->
+<div class="section" id="ch12">
+  <h2 class="section-title section-anchor"><span class="icon">🏦</span> 12. 규제산업 추가요건 — 금융·의료</h2>
+
+  <h3>12-1. 금융분야 AI 규제</h3>
+  <p>금융위원회는 「금융분야 인공지능 가이드라인」을 통해 은행법상 은행, 자본시장과 금융투자업에 관한 법률(자본시장법)상 금융투자업자 등에 적용되는 AI 활용 원칙을 제시하고 있습니다. 알고리즘 매매·로보어드바이저 등 자동화된 투자 의사결정에는 다음 요건이 추가로 검토되어야 합니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>영역</th><th>추가 요건 (일반 원칙)</th></tr></thead>
+      <tbody>
+        <tr><td>알고리즘 매매</td><td>자본시장법상 시세조종·불공정거래 방지 의무, 이상매매 모니터링 체계 필요</td></tr>
+        <tr><td>로보어드바이저</td><td>코스콤 로보어드바이저 테스트베드 심사를 거쳐 고객 자산 배분 알고리즘의 적합성 검증 필요 [코스콤 테스트베드 통과 여부는 서비스별 개별 확인 필요]</td></tr>
+        <tr><td>설명가능성(Explainability)</td><td>AI 기반 신용평가·투자자문 결정에 대해 고객이 이해 가능한 설명을 제공해야 한다는 감독 방향이 국내외에서 강화되는 추세</td></tr>
+        <tr><td>고영향 AI 해당 가능성</td><td>신용평가·대출심사 등은 AI기본법상 고영향 AI의 '금융 의사결정' 영역에 해당할 가능성이 있어 위험관리방안 수립 검토 필요</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ GO100/KIS 자동매매 프로젝트 시사점</strong>
+    한국투자증권(KIS) Open API를 활용한 자동매매 시스템(GO100)은 자본시장법상 투자중개·자문 관련 규제, 이상매매 감시 체계, 그리고 AI기본법상 고영향 AI 해당 여부를 함께 검토해야 하는 영역입니다. 특히 AI가 매매 신호를 자동 생성·실행하는 구조라면 설명가능성·인간 감독 체계를 문서화해 두는 것이 바람직합니다. 실제 규제 해당 여부는 금융위원회·금융감독원 유권해석 또는 법률 자문을 통해 개별 확인이 필요합니다. [미검증 — 개별 법률자문 필요]</p>
+  </div>
+
+  <h3>12-2. 의료분야 AI 규제 (개요)</h3>
+  <ul>
+    <li>AI 기반 진단·치료 보조 기기는 의료기기법상 <strong>의료기기 허가·인증</strong> 대상 여부를 먼저 판단</li>
+    <li>AI기본법상 고영향 AI(의료 영역)에 해당할 경우 안전성 확보 의무 중첩 적용 가능</li>
+    <li>의료데이터는 개인정보 중에서도 <strong>민감정보</strong>로 분류되어 원칙적 처리 금지, 별도 동의 필요</li>
+  </ul>
+  <div class="alert alert-danger">
+    <strong>🚨 미검증 항목</strong>
+    의료분야 AI 관련 최신 규제(2026년 기준 의료기기법 개정, AI 진단보조기기 허가 절차 등)는 이번 조사에서 구체적으로 확인하지 못했습니다. 의료 관련 AI 서비스를 계획 중이라면 식품의약품안전처 「인공지능 의료기기 허가·심사 가이드라인」을 별도로 확인해야 합니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>GO100/KIS 자동매매 시스템의 AI 의사결정 로직에 대해 인간 감독·개입 체계(Kill switch 등)가 마련되어 있는가?</li>
+      <li>알고리즘 매매의 이상매매 여부를 모니터링하는 절차가 자본시장법 요건에 부합하는지 점검했는가?</li>
+      <li>규제산업(금융·의료) 진출 전 해당 산업 주무부처(금융위/금감원, 식약처)의 AI 관련 가이드라인을 검토했는가?</li>
+    </ol>
+  </div>
+
+  <p style="font-size:.8rem;color:var(--text3)">출처: 금융위원회 「금융분야 인공지능 가이드라인」(fsc.go.kr) · kcmi.re.kr 「금융권의 AI 활용 확대와 해외 각국의 감독 방향」 · k-stock-simulator.com 「로보어드바이저 완벽 가이드 2026」(코스콤 테스트베드 언급)</p>
+</div>
+
+<!-- ===== CH13 ===== -->
+<div class="section" id="ch13">
+  <h2 class="section-title section-anchor"><span class="icon">⚡</span> 13. 사고 시 책임소재 — 공급자·배포자·이용자</h2>
+
+  <p>AI로 인한 사고(오작동, 차별적 결과, 정보 유출 등) 발생 시 책임 소재를 구분하는 3단계 프레임워크입니다. EU AI Act도 유사하게 <strong>Provider(공급자)·Deployer(배포자)·User(이용자)</strong> 개념을 구분합니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>주체</th><th>정의</th><th>주요 책임</th><th>AADS 예시</th></tr></thead>
+      <tbody>
+        <tr><td><strong>공급자(Provider)</strong></td><td>AI 시스템을 개발하여 시장에 출시하는 자</td><td>안전성 확보, 위험관리방안 수립, 기술문서 작성, 고영향 AI 요건 준수</td><td>Anthropic, Google 등 LLM 원 개발사</td></tr>
+        <tr><td><strong>배포자(Deployer)</strong></td><td>AI 시스템을 자신의 서비스에 통합해 최종 이용자에게 제공하는 자</td><td>사전 고지, 표시의무 이행, 인간 감독 체계 운영, 배포 전 영향평가</td><td>AADS(NTV2·SF에 AI 기능 통합), GO100(자동매매 로직 배포)</td></tr>
+        <tr><td><strong>이용자(User)</strong></td><td>AI 시스템 또는 그 산출물을 최종적으로 사용하는 자</td><td>서비스 약관 준수, 적절한 용도로 사용, 오남용 금지</td><td>NTV2 서비스 최종 고객, GO100 투자자</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>💡 AADS의 이중적 지위</strong>
+    AADS는 Anthropic·Google 등 LLM에 대해서는 '이용자/배포자'이지만, 자체적으로 NTV2·SF 등에 AI 기능을 통합해 최종 고객에게 제공하는 시점에는 그 서비스에 대해 '배포자' 지위를 갖습니다. 즉 하나의 조직이 프로젝트별로 서로 다른 책임 주체가 될 수 있습니다.</p>
+  </div>
+
+  <h3>13-1. 계약을 통한 책임 배분</h3>
+  <p>법정 책임 구분과 별개로, <strong>공급자-배포자 간 계약(SaaS 이용약관, API 계약)</strong>을 통해 사고 발생 시 손해배상 범위와 면책 사유를 사전에 정할 수 있습니다. 다만 소비자 보호 관련 강행법규(제조물책임법, 소비자기본법 등)는 계약으로 배제할 수 없는 경우가 많습니다.</p>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>AADS가 배포자 지위를 갖는 각 서비스(NTV2, SF, GO100 등)별로 사고 발생 시 대응 매뉴얼이 있는가?</li>
+      <li>공급자(LLM 벤더)의 책임 제한 범위와 우리가 최종 고객에게 부담하는 책임 범위 사이에 '갭(gap)'이 있는지 점검했는가?</li>
+      <li>AI 오작동으로 고객 피해가 발생했을 때 최초 대응(원인 조사, 고객 통지, 당국 신고 여부 판단) 프로세스가 정의되어 있는가?</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH14 ===== -->
+<div class="section" id="ch14">
+  <h2 class="section-title section-anchor"><span class="icon">📋</span> 14. 사내 AI 이용규정 템플릿</h2>
+
+  <p>아래는 바로 활용 가능한 사내 AI 이용규정 초안입니다. 조직 규모·업종에 맞춰 수정 후 사용하십시오. <strong>법무 검토 후 사내 공식 규정으로 확정하는 것을 권장합니다.</strong></p>
+
+  <div class="diagram">
+    <div class="title">사내 AI 이용규정(예시) — 조문 발췌</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+제1조(목적)
+  이 규정은 임직원의 인공지능(AI) 도구 활용에 관한 원칙과 절차를 정하여
+  법적 리스크를 최소화하고 정보보안을 확보함을 목적으로 한다.
+
+제2조(적용 범위)
+  1. 이 규정은 회사가 승인한 AI 서비스(엔터프라이즈 플랜 등)와
+     임직원이 업무 목적으로 사용하는 모든 AI 도구에 적용된다.
+  2. 개인 계정으로 회사 데이터를 처리하는 행위는 원칙적으로 금지한다.
+
+제3조(데이터 입력 금지 항목)
+  다음 각 호의 정보는 회사가 승인하지 않은 AI 서비스에 입력할 수 없다.
+  1. 고객 개인정보(성명, 연락처, 계좌정보, 주민등록번호 등)
+  2. 영업비밀 및 미공개 재무정보
+  3. 소스코드 중 보안정책상 외부 반출이 금지된 부분
+  4. 제3자와의 비밀유지계약(NDA) 대상 정보
+
+제4조(생성물 검수 의무)
+  1. AI 생성 결과물을 대외 공개·상업적으로 활용하기 전
+     담당자는 사실관계, 저작권 침해 여부, 편향성을 검수해야 한다.
+  2. 법령상 표시의무가 적용되는 생성물은 AI기본법 등 관련 규정에 따라
+     AI 생성 사실을 표시한다.
+
+제5조(승인된 AI 서비스 목록 관리)
+  정보보안팀(또는 담당 조직)은 승인된 AI 서비스 목록을 분기별로
+  갱신하고, 이용약관 변경 시 즉시 재검토한다.
+
+제6조(위반 시 조치)
+  이 규정을 위반하여 정보 유출 등 손해가 발생한 경우
+  사내 정보보안 규정 및 관련 법령에 따라 조치한다.
+
+제7조(교육)
+  회사는 신규 입사자 및 기존 임직원을 대상으로
+  연 1회 이상 AI 이용 관련 법규·보안 교육을 실시한다.
+</pre>
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>위 템플릿을 기반으로 한 사내 AI 이용규정이 실제로 제정·공지되었는가?</li>
+      <li>승인된 AI 서비스 목록과 비승인 서비스(그림자 IT, Shadow AI)를 파악하고 있는가?</li>
+      <li>전 직원 대상 AI 이용 관련 법규·보안 교육이 연 1회 이상 실시되고 있는가?</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH15 ===== -->
+<div class="section" id="ch15">
+  <h2 class="section-title section-anchor"><span class="icon">🔵</span> 15. AADS 6개 프로젝트 법적 리스크 점검표</h2>
+
+  <div class="alert alert-info">
+    <strong>💡 실제 조회 근거</strong>
+    아래 표의 프로젝트 성격은 2026-09-12 원격 서버 디렉터리 실사(list_remote_dir)를 통해 확인한 내용입니다. GO100은 <code>/root/kis-autotrade-v4</code>(한국투자증권 KIS API 기반 자동매매, go100-scalping.service 존재), SF는 도매·가격정책 관련 스크립트(aads_update_price_plan_v16.py 등), NTV2는 <code>/srv/newtalk-v2</code>(PHP 기반 도소매 플랫폼, PurchasingDashboardController.php·WholesaleProfile.php 확인)가 실제 배포되어 있습니다. KIS는 GO100과 동일 인프라(kis-autotrade-v4)를 공유하는 관계로 확인됩니다. NAS는 이번 조사에서 원격 도구로 직접 조회하지 못해 '미검증'으로 표기합니다.
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>프로젝트</th><th>확인된 실체</th><th>주요 법적 리스크 영역</th><th>우선 조치</th></tr></thead>
+      <tbody>
+        <tr><td><strong>AADS</strong></td><td>자율 AI 개발 시스템(서버68), LangGraph 기반 멀티에이전트, 자체 채팅/대시보드 서비스</td><td>AI기본법(고영향 AI 해당 여부 미확정 시스템 다수), 이용약관 상 학습이용 조항, 오픈소스 라이선스(Qwen/DeepSeek 등)</td><td>자체 서비스 중 고영향 AI 해당 여부 법률 검토, LLM API 계약서 재점검</td></tr>
+        <tr><td><strong>GO100</strong></td><td>kis-autotrade-v4, 자동매매/스캘핑 서비스(go100-scalping.service), 전략카드 기반 매매</td><td>자본시장법(알고리즘매매·이상매매), AI기본법 고영향 AI(금융 의사결정), 개인정보(계좌정보)</td><td class="recommend">최우선 — 금융위/금감원 자문, 인간 감독체계 문서화</td></tr>
+        <tr><td><strong>KIS</strong></td><td>한국투자증권 Open API 연동(GO100과 동일 인프라 확인)</td><td>KIS API 이용약관상 재배포·상업적 이용 제한, 자본시장법</td><td>KIS Open API 이용약관 재확인, GO100과 통합 리스크 관리</td></tr>
+        <tr><td><strong>SF</strong></td><td>가격정책·도매 관련 자동화 스크립트(aads_update_price_plan_v16.py, SF_Architecture_Report 확인)</td><td>전자상거래법, 표시광고법(가격 표시), 개인정보(구매자 정보)</td><td>가격 자동변경 로직의 표시광고법 준수 여부 점검</td></tr>
+        <tr><td><strong>NTV2</strong></td><td>newtalk-v2, PHP 기반 도소매 플랫폼(구매관리·도매프로필·웹푸시 기능 확인)</td><td>개인정보보호법(회원정보), 전자상거래법, AI 생성 콘텐츠 표시의무(AI 활용 시)</td><td>웹푸시·회원정보 처리에 대한 개인정보 처리방침 최신화</td></tr>
+        <tr><td><strong>NAS</strong></td><td>[미검증 — 이번 조사 도구로 직접 조회하지 못함]</td><td>[미검증]</td><td>별도 조사 후 리스크 점검표 보완 필요</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>15-1. 우선순위 3대 조치</h3>
+  <ol>
+    <li><strong>GO100/KIS 금융 규제 검토(최우선)</strong> — 자동매매 알고리즘의 자본시장법 적합성, AI기본법 고영향 AI 해당 여부를 법무 자문을 통해 확인. 인간 감독·이상매매 모니터링 체계 문서화.</li>
+    <li><strong>AADS 자체 서비스의 AI 생성물 표시의무 점검</strong> — 채팅/보고서 등 AI 생성 콘텐츠가 외부로 유통되는 경우 AI기본법 제31조 표시 방식 적용.</li>
+    <li><strong>전 프로젝트 공통 — 개인정보 국외이전 점검</strong> — Anthropic/Gemini/DeepSeek API 호출 시 개인정보 마스킹 여부를 프로젝트별로 재확인.</li>
+  </ol>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ol>
+      <li>GO100/KIS의 자동매매 로직에 대한 금융당국 유권해석 또는 법률 자문을 받을 일정이 잡혀 있는가?</li>
+      <li>NAS 프로젝트의 법적 리스크를 파악하기 위한 별도 실사가 필요하다는 점을 인지하고 있는가?</li>
+      <li>6개 프로젝트의 법적 리스크 점검표를 분기별로 갱신할 책임자가 지정되어 있는가?</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ===== CH16 ===== -->
+<div class="section" id="ch16">
+  <h2 class="section-title section-anchor"><span class="icon">📖</span> 16. 참고자료·다음 단계</h2>
+
+  <h3>주요 참고자료</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>자료명</th><th>발행처/출처</th><th>URL</th><th>확인 시점</th></tr></thead>
+      <tbody>
+        <tr><td>인공지능 발전과 신뢰 기반 조성 등에 관한 기본법(원문)</td><td>법제처 국가법령정보센터</td><td>law.go.kr (lsiSeq=276241)</td><td>2026-09-12</td></tr>
+        <tr><td>인공지능기본법 지원데스크</td><td>과기정통부/NIA</td><td>sw.or.kr/AI_act_helpdesk</td><td>2026-09-12</td></tr>
+        <tr><td>AI 생성물 표기 의무화 칼럼(제31조·제43조 인용)</td><td>법률사무소 번화</td><td>bh-law.kr</td><td>2026-06-17 작성, 2026-09-12 조회</td></tr>
+        <tr><td>인공지능기본법 완벽 가이드 2026</td><td>imaginationgroup.co.kr</td><td>edu.imaginationgroup.co.kr</td><td>2026-09-12</td></tr>
+        <tr><td>고영향 인공지능 사업자 책무 가이드라인 / 안전성 확보 가이드라인</td><td>NIA</td><td>nia.or.kr</td><td>2026-09-12</td></tr>
+        <tr><td>EU AI법 GPAI 과징금 8월 2일 시작 보도</td><td>Devlery / epnc.co.kr / 네이버블로그(z4h1027)</td><td>devlery.com 등</td><td>2026-09-12</td></tr>
+        <tr><td>생성형 인공지능 활용 저작물의 저작권 등록 안내서</td><td>한국저작권위원회</td><td>kocca.kr 소개</td><td>2025-06 발간, 2026-09-12 조회</td></tr>
+        <tr><td>日·싱가포르는 면책…AI 학습데이터 저작권 제도 정비 시급</td><td>전자신문(etnews.com)</td><td>etnews.com/20250609000227</td><td>2025-06-09 작성</td></tr>
+        <tr><td>금융분야 인공지능 가이드라인</td><td>금융위원회</td><td>fsc.go.kr</td><td>2026-09-12</td></tr>
+        <tr><td>EUR/KRW 환율</td><td>Investing.com</td><td>kr.investing.com/currencies/eur-krw</td><td>2026-09 조회, 1EUR≈1,555~1,567원</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>다음 단계 — CEO 실행 로드맵</h3>
+  <ol>
+    <li><strong>1주 이내</strong> — 본 문서 15장 리스크 점검표를 기준으로 GO100/KIS 담당 조직에 금융 규제 자문 착수 지시</li>
+    <li><strong>2주 이내</strong> — 사내 AI 이용규정(14장 템플릿)을 초안으로 법무 검토 요청, 전사 공지</li>
+    <li><strong>1개월 이내</strong> — 상용 AI 서비스(9장) 및 오픈소스 라이선스(10장) 전수 점검, 계약서 재검토</li>
+    <li><strong>분기별</strong> — AI기본법 계도기간 종료 일정, EU AI Act 고위험 규제 시행 동향, NAS 프로젝트 리스크 실사 결과를 반영해 본 문서 갱신</li>
+    <li><strong>상시</strong> — 신규 AI 기능 출시 전 법무 검토를 표준 프로세스(체크리스트)에 편입</li>
+  </ol>
+
+</div>
+
+<!-- ===== FOOTER ===== -->
+<div class="alert alert-danger" style="margin-top:32px">
+  <strong>⚠️ 다시 한번 — 법률 자문 아님</strong>
+  본 문서는 2026년 9월 12일 시점에 공개 검색으로 확인 가능한 자료를 취합한 교육 자료입니다. 법령·시행령·가이드라인은 개정되며, 개별 사안에 대한 법적 판단은 반드시 변호사 등 전문가의 검토를 거쳐야 합니다. 본 문서의 내용을 근거로 한 의사결정에 대해 작성자는 법적 책임을 지지 않습니다.
+</div>
+
+<div class="footer">
+  <p>AADS Academy · AI 법률·저작권·개인정보 종합 교육자료 · 2026-09-12 작성 · CEO 교육용</p>
+  <p style="margin-top:6px">출처가 명시되지 않았거나 '[미검증]'으로 표기된 내용은 2026년 9월 12일 검색으로 확인하지 못한 부분이며, 반드시 원문·전문가 검토를 거쳐야 합니다.</p>
+</div>
+
+</div>
+</body>
+</html>

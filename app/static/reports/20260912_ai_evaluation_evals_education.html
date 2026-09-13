@@ -1,0 +1,870 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI 평가·품질측정 종합 교육자료 — AADS Academy</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0a0f1a;--surface:#111827;--card:#1e293b;--card-hover:#334155;
+--accent:#3b82f6;--accent2:#8b5cf6;--accent3:#06b6d4;--accent4:#f59e0b;--accent5:#10b981;--accent6:#ef4444;
+--text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;--border:#334155;--border2:#475569;
+--code-bg:#0d1117;--highlight:#fbbf2420;--success:#10b981;--warning:#f59e0b;--danger:#ef4444}
+body{font-family:'Pretendard',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+background:var(--bg);color:var(--text);line-height:1.8;min-height:100vh}
+.container{max-width:1100px;margin:0 auto;padding:32px 24px 80px}
+/* Header */
+.hero{text-align:center;padding:60px 0 40px;border-bottom:1px solid var(--border);margin-bottom:48px}
+.hero h1{font-size:2.2rem;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2),var(--accent3));
+-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:12px;letter-spacing:-0.5px}
+.hero .subtitle{color:var(--text2);font-size:1.05rem;max-width:700px;margin:0 auto}
+.hero .meta-info{display:flex;gap:16px;justify-content:center;margin-top:20px;flex-wrap:wrap}
+.hero .meta-tag{font-size:.8rem;color:var(--accent);background:var(--accent)15;padding:4px 14px;border-radius:20px}
+/* TOC */
+.toc{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px 32px;margin-bottom:48px}
+.toc h2{font-size:1.1rem;font-weight:700;margin-bottom:16px;color:var(--accent)}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
+.toc a{color:var(--text2);text-decoration:none;font-size:.9rem;padding:6px 12px;border-radius:8px;display:block;transition:.2s}
+.toc a:hover{background:var(--card);color:var(--accent)}
+.toc a .num{color:var(--accent);font-weight:700;margin-right:6px;font-size:.8rem}
+/* Sections */
+.section{margin-bottom:56px}
+.section-anchor{scroll-margin-top:24px}
+h2.section-title{font-size:1.5rem;font-weight:700;margin-bottom:20px;padding-bottom:12px;
+border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:10px}
+h2.section-title .icon{font-size:1.3rem}
+h3{font-size:1.15rem;font-weight:600;margin:28px 0 12px;color:var(--accent3)}
+h4{font-size:1rem;font-weight:600;margin:20px 0 8px;color:var(--accent4)}
+p{margin-bottom:14px;color:var(--text)}
+/* Tables */
+.table-wrap{overflow-x:auto;margin:16px 0 24px;border-radius:12px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+thead{background:var(--surface)}
+th{padding:12px 16px;text-align:left;font-weight:600;color:var(--accent);border-bottom:2px solid var(--border);white-space:nowrap}
+td{padding:10px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:hover{background:var(--card)}
+.price{color:var(--accent4);font-weight:600}
+.perf{color:var(--accent3);font-weight:600}
+.recommend{color:var(--success);font-weight:600}
+/* Cards */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:16px 0 24px}
+.info-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.info-card h4{margin:0 0 8px;color:var(--accent);font-size:.95rem}
+.info-card p{font-size:.88rem;color:var(--text2);margin:0}
+.info-card .badge{display:inline-block;font-size:.7rem;padding:2px 8px;border-radius:4px;margin-top:8px;font-weight:600}
+.badge-free{background:#10b98120;color:#34d399}
+.badge-paid{background:#f59e0b20;color:#fbbf24}
+.badge-enterprise{background:#8b5cf620;color:#a78bfa}
+/* Code */
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;padding:16px 20px;
+overflow-x:auto;margin:12px 0 20px;font-size:.85rem;line-height:1.6}
+code{font-family:'Fira Code','JetBrains Mono',monospace;color:var(--accent3)}
+p code,li code,td code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-size:.85em}
+/* Diagram */
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;
+margin:16px 0 24px;text-align:center;font-family:monospace;font-size:.85rem;line-height:1.8;overflow-x:auto}
+.diagram .title{font-weight:700;color:var(--accent);margin-bottom:12px;font-family:sans-serif;font-size:.95rem}
+/* Alert boxes */
+.alert{border-radius:10px;padding:16px 20px;margin:16px 0;font-size:.9rem}
+.alert-info{background:#3b82f610;border-left:4px solid var(--accent)}
+.alert-warn{background:#f59e0b10;border-left:4px solid var(--warning)}
+.alert-success{background:#10b98110;border-left:4px solid var(--success)}
+.alert-danger{background:#ef444410;border-left:4px solid var(--danger)}
+.alert strong{display:block;margin-bottom:4px}
+/* Lists */
+ul,ol{margin:8px 0 16px 20px}
+li{margin-bottom:6px;font-size:.92rem}
+li strong{color:var(--text)}
+/* Architecture diagram */
+.arch-flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin:20px 0}
+.arch-box{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;
+font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
+.arch-arrow{color:var(--accent);font-size:1.2rem}
+/* Comparison */
+.compare-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+.compare-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.compare-box h4{margin:0 0 8px}
+.compare-box.pro{border-top:3px solid var(--success)}
+.compare-box.con{border-top:3px solid var(--danger)}
+/* Checkpoint */
+.checkpoint{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--accent5);
+border-radius:10px;padding:18px 22px;margin:24px 0 8px}
+.checkpoint h4{margin:0 0 10px;color:var(--accent5);font-size:.95rem;display:flex;align-items:center;gap:6px}
+.checkpoint ul{margin:0 0 0 18px}
+.checkpoint li{font-size:.88rem;color:var(--text2)}
+/* Verified/Unverified tags */
+.tag-verified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#10b98120;color:#34d399;margin-left:6px}
+.tag-unverified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#ef444420;color:#f87171;margin-left:6px}
+/* Footer */
+.footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--border);text-align:center;color:var(--text3);font-size:.8rem}
+/* Responsive */
+@media(max-width:768px){
+  .hero h1{font-size:1.5rem}
+  .toc-grid{grid-template-columns:1fr}
+  .card-grid{grid-template-columns:1fr}
+  .compare-row{grid-template-columns:1fr}
+  table{font-size:.78rem}
+  th,td{padding:8px 10px}
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ===== HERO ===== -->
+<div class="hero">
+  <h1>AI 평가·품질측정 종합 교육자료</h1>
+  <p class="subtitle">'느낌'이 아닌 '숫자'로 AI 품질을 판단하는 법 — Evals·LLM-as-Judge·회귀테스트·벤치마크부터<br>AADS 실제 품질 체계(quality_score·Reflexion·ai_observations) 코드 검증까지</p>
+  <div class="meta-info">
+    <span class="meta-tag">2026-09-12 작성</span>
+    <span class="meta-tag">AADS Academy</span>
+    <span class="meta-tag">CEO 교육용</span>
+  </div>
+</div>
+
+<!-- ===== TOC ===== -->
+<div class="toc">
+  <h2>목차</h2>
+  <div class="toc-grid">
+    <a href="#ch1"><span class="num">01</span> '느낌'으로 판단하면 안 되는 이유</a>
+    <a href="#ch2"><span class="num">02</span> 평가의 3계층 — 단위·시스템·비즈니스</a>
+    <a href="#ch3"><span class="num">03</span> 정답 있는 평가 vs 정답 없는 평가</a>
+    <a href="#ch4"><span class="num">04</span> LLM-as-Judge — 설계와 편향 완화</a>
+    <a href="#ch5"><span class="num">05</span> 인간 평가 설계 — 샘플링과 일치도</a>
+    <a href="#ch6"><span class="num">06</span> 골든 데이터셋 구축</a>
+    <a href="#ch7"><span class="num">07</span> 회귀 테스트 자동화</a>
+    <a href="#ch8"><span class="num">08</span> 주요 벤치마크와 벤치마크 오염</a>
+    <a href="#ch9"><span class="num">09</span> 에이전트 평가 — 완료율·도구·궤적</a>
+    <a href="#ch10"><span class="num">10</span> A/B 테스트와 통계적 유의성</a>
+    <a href="#ch11"><span class="num">11</span> 안전성 평가 — 환각·거절·유해성·편향</a>
+    <a href="#ch12"><span class="num">12</span> AADS 실제 품질 체계 분석</a>
+    <a href="#ch13"><span class="num">13</span> 참고자료 · 다음 단계</a>
+  </div>
+</div>
+
+<!-- ===== CH1 ===== -->
+<div class="section" id="ch1">
+  <h2 class="section-title section-anchor"><span class="icon">🎯</span> 01. '느낌'으로 AI 품질을 판단하면 안 되는 이유</h2>
+
+  <p>경영자가 AI 도입 여부·모델 교체·프롬프트 변경을 판단할 때 가장 흔히 저지르는 실수는 "내가 몇 번 써보니 괜찮던데?"라는 <strong>표본 크기 1~5의 주관적 인상</strong>으로 의사결정을 내리는 것입니다. 이는 마치 신약을 임상시험 없이 "의사 한 명이 먹어보니 괜찮았다"는 이유로 승인하는 것과 같습니다.</p>
+
+  <h3>실제로 벌어지는 실패 패턴</h3>
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>① 데모 편향 (Demo Bias)</h4>
+      <p>담당자가 데모용으로 미리 다듬은 질문 3~5개만 테스트하고 "잘 된다"고 보고. 실제 사용자는 예상 못 한 방식으로 질문하며, 프로덕션 실패율은 데모 대비 3~10배 높게 나타나는 경우가 흔함.</p>
+    </div>
+    <div class="info-card">
+      <h4>② 최신성 편향 (Recency Bias)</h4>
+      <p>최근 본 답변 1~2개가 좋았으면 "품질이 좋아졌다"고 판단. 실제로는 수백 건 중 우연히 좋은 답변만 눈에 띈 것일 수 있음 — 통계적으로 무의미한 표본.</p>
+    </div>
+    <div class="info-card">
+      <h4>③ 유창함=정확함 착각</h4>
+      <p>LLM은 틀린 내용도 문법적으로 매끄럽고 자신감 있게 서술함. 비개발자는 "말이 되니까 맞다"고 오판하기 쉬우며, 이것이 환각(hallucination)이 방치되는 주된 이유.</p>
+    </div>
+    <div class="info-card">
+      <h4>④ 회귀 무감지</h4>
+      <p>프롬프트를 한 줄 수정하거나 모델을 업그레이드했더니 특정 케이스에서 품질이 떨어졌는데, 담당자가 그 케이스를 우연히 테스트하지 않아 몇 주 뒤 고객 항의로 발견.</p>
+    </div>
+  </div>
+
+  <div class="alert alert-danger">
+    <strong>⚠️ 대표적 실패 사례 유형 (업계 공통 패턴)</strong>
+    법률·의료·금융 분야 AI 도입 사례에서 반복적으로 보고되는 실패 유형: (1) 챗봇이 존재하지 않는 판례·논문·규정을 그럴듯하게 인용 — 사람이 사후 검증하기 전까지 아무도 몰랐음. (2) 콜센터 AI가 정책을 잘못 안내해 회사가 그 안내를 이행해야 했던 분쟁. (3) 코드 생성 AI가 "테스트 통과"를 보고했지만 실제로는 테스트 자체를 무력화하는 코드를 작성. 세 경우 모두 <strong>정량적 평가 파이프라인이 없어 발견이 늦어졌다</strong>는 공통점이 있습니다. (일반적으로 보고되는 실패 유형 요약이며 특정 기업명은 본 문서에서 확인하지 않음 — 미검증)
+  </div>
+
+  <h3>Evals가 해결하는 것</h3>
+  <p><strong>Evals(평가 체계)</strong>는 AI 시스템의 출력을 사람의 즉흥적 판단이 아니라 <strong>재현 가능한 기준·점수·통계</strong>로 측정하는 인프라입니다. 소프트웨어의 "테스트 코드"에 해당하며, 다음 질문에 숫자로 답할 수 있게 합니다.</p>
+  <ul>
+    <li>이 프롬프트 변경이 실제로 품질을 올렸는가, 내려갔는가? (감으로 답하지 않고 회귀 테스트로 답함)</li>
+    <li>모델 A와 모델 B 중 어느 쪽이 우리 업무에 더 적합한가? (동일 문제셋으로 A/B 비교)</li>
+    <li>이번 배포 후 환각률·거절률이 올라갔는가? (자동 모니터링 지표)</li>
+    <li>비용을 30% 줄이는 저가 모델로 바꿔도 품질 손실이 허용 범위 안인가?</li>
+  </ul>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>우리 조직의 AI 품질 판단이 "담당자가 몇 번 써보고 좋다고 함" 수준에 머물러 있지 않은가?</li>
+      <li>프롬프트나 모델을 바꿀 때마다 성능 하락을 자동으로 감지하는 장치가 있는가?</li>
+      <li>AI가 틀린 답을 자신감 있게 말했을 때 이를 걸러낼 검증 단계가 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH2 ===== -->
+<div class="section" id="ch2">
+  <h2 class="section-title section-anchor"><span class="icon">🏗️</span> 02. 평가의 3계층 — 단위·시스템·비즈니스</h2>
+
+  <p>AI 품질 평가는 소프트웨어 테스트와 마찬가지로 세 계층으로 나뉩니다. 각 계층은 목적과 주기, 담당자가 다르며, <strong>세 계층 모두를 갖춰야</strong> "프롬프트는 좋아 보이는데 매출은 안 오른다" 같은 괴리를 막을 수 있습니다.</p>
+
+  <div class="diagram">
+    <div class="title">평가의 3계층 피라미드</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+                  ┌─────────────────────────┐
+                  │   3. 비즈니스 계층 (KPI)  │  ← 분기 단위, 경영진
+                  │  매출·재구매율·CS 감소량  │
+                  └─────────────┬───────────┘
+                                │ 연결되는가?
+                  ┌─────────────▼───────────┐
+                  │  2. 시스템 계층 (파이프라인)│  ← 주간, PM/엔지니어
+                  │ 작업완료율·궤적·지연시간   │
+                  └─────────────┬───────────┘
+                                │ 연결되는가?
+                  ┌─────────────▼───────────┐
+                  │   1. 단위 계층 (프롬프트)  │  ← 매 커밋, 개발자
+                  │  정확도·톤·형식·환각률    │
+                  └─────────────────────────┘
+</pre>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>계층</th><th>측정 대상</th><th>평가 주기</th><th>대표 지표</th><th>실패 시 증상</th></tr></thead>
+      <tbody>
+        <tr><td><strong>① 단위 (Unit)</strong></td><td>프롬프트/함수 1개 호출</td><td>커밋마다 (CI)</td><td>정확도, 형식 준수율, 톤 일치도</td><td>개별 답변이 틀림 — 발견 쉬움</td></tr>
+        <tr><td><strong>② 시스템 (System)</strong></td><td>여러 단계로 구성된 파이프라인/에이전트 전체</td><td>주간~배포마다</td><td>작업 완료율, 궤적 정확도, 종단 지연시간</td><td>개별 단계는 맞는데 전체 결과가 틀림 — 발견 어려움</td></tr>
+        <tr><td><strong>③ 비즈니스 (Business)</strong></td><td>실제 조직 성과</td><td>월/분기</td><td>매출, CS 문의 감소율, 재구매율, NPS</td><td>품질 점수는 높은데 매출이 안 오름 — KPI 설계 오류 가능성</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>왜 세 계층을 다 봐야 하는가</h3>
+  <div class="compare-row">
+    <div class="compare-box con">
+      <h4 style="color:var(--danger)">❌ 단위 계층만 본 경우</h4>
+      <ul>
+        <li>개별 응답 정확도는 95%인데, 5단계 파이프라인 전체 성공률은 0.95⁵ ≈ 77%로 급락 (오류가 누적됨)</li>
+        <li>매 단계가 옳아도 마지막에 잘못된 도구를 호출하면 전체가 실패</li>
+      </ul>
+    </div>
+    <div class="compare-box con">
+      <h4 style="color:var(--danger)">❌ 비즈니스 계층만 본 경우</h4>
+      <ul>
+        <li>매출이 안 늘면 "AI가 나쁘다"고 오판 — 실제 원인은 마케팅/가격일 수 있음</li>
+        <li>어느 단계가 문제인지 특정 못해 개선 방향을 못 잡음</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>💡 실전 원칙</strong>
+    단위 계층은 개발팀이 매일 자동으로 돌리고, 시스템 계층은 배포 전 게이트로 걸며, 비즈니스 계층은 경영진이 분기마다 검토합니다. 세 계층의 지표가 서로 상관관계를 보이는지(예: 단위 정확도 개선 → 시스템 완료율 개선 → CS 문의 감소) 주기적으로 확인해야 "품질 점수는 좋은데 사업은 그대로"인 함정을 피할 수 있습니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>우리는 단위/시스템/비즈니스 세 계층 중 몇 개를 실제로 측정하고 있는가?</li>
+      <li>개별 프롬프트 정확도와 전체 파이프라인 완료율이 따로 보고되는가, 뭉뚱그려 보고되는가?</li>
+      <li>품질 지표 개선이 실제 매출·비용·CS 지표와 상관관계가 있는지 분기별로 검증하는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH3 ===== -->
+<div class="section" id="ch3">
+  <h2 class="section-title section-anchor"><span class="icon">⚖️</span> 03. 정답 있는 평가 vs 정답 없는 평가</h2>
+
+  <p>AI 출력을 채점하는 방법은 크게 두 갈래로 나뉩니다. 어느 쪽을 쓸지는 과제의 성격이 결정하며, 잘못 고르면 평가 자체가 무의미해집니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>구분</th><th>정답 있는 평가 (Reference-based)</th><th>정답 없는 평가 (Reference-free)</th></tr></thead>
+      <tbody>
+        <tr><td><strong>적용 과제</strong></td><td>분류, 추출, 코드 정답 여부, 수치 계산, 객관식</td><td>요약, 창작, 상담, 코드 리뷰, 자유 대화</td></tr>
+        <tr><td><strong>채점 방식</strong></td><td>정확도(Accuracy), 정밀도/재현율/F1, Exact Match, 정규식 매칭</td><td>선호도 비교(pairwise), 루브릭 점수, LLM-as-Judge</td></tr>
+        <tr><td><strong>재현성</strong></td><td>100% (같은 입력→같은 점수)</td><td>낮음~중간 (판정자에 따라 편차)</td></tr>
+        <tr><td><strong>구축 비용</strong></td><td>정답 라벨링 비용 높음, 이후 자동화 쉬움</td><td>루브릭 설계 비용, 매 채점마다 LLM/사람 호출 비용</td></tr>
+        <tr><td><strong>대표 지표</strong></td><td>Accuracy, F1, BLEU/ROUGE(참고용, 텍스트 생성엔 한계 큼)</td><td>Win-rate, Elo 점수, 루브릭 평균 점수, Cohen's kappa</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>F1 스코어, 왜 정확도만으로는 부족한가</h3>
+  <p>분류 과제(예: "이 문의는 환불 요청인가?")에서 정확도(Accuracy)만 보면 함정에 빠집니다. 예: 전체 문의의 95%가 "환불 아님"이면, AI가 무조건 "환불 아님"만 답해도 정확도 95%가 나옵니다. 이럴 때 필요한 것이 <strong>정밀도(Precision)</strong>와 <strong>재현율(Recall)</strong>의 조화평균인 <strong>F1 스코어</strong>입니다.</p>
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>정밀도 (Precision)</h4>
+      <p>AI가 "환불 요청"이라고 답한 것 중 실제로 맞은 비율. 낮으면 → 오탐(false alarm)이 많아 불필요한 업무 유발.</p>
+    </div>
+    <div class="info-card">
+      <h4>재현율 (Recall)</h4>
+      <p>실제 환불 요청 중 AI가 놓치지 않고 잡아낸 비율. 낮으면 → 진짜 환불 요청을 놓쳐 고객 불만 누적.</p>
+    </div>
+    <div class="info-card">
+      <h4>F1 = 2×(정밀도×재현율)/(정밀도+재현율)</h4>
+      <p>둘 다 높아야 F1도 높음. 한쪽만 100%, 다른 쪽 0%면 F1은 0에 가까움 — 균형을 요구하는 지표.</p>
+    </div>
+  </div>
+
+  <h3>텍스트 생성 평가의 한계 — BLEU/ROUGE는 왜 부족한가</h3>
+  <p>요약이나 번역 품질을 옛날 방식으로 잴 때 쓰던 BLEU/ROUGE는 "정답 문장과 단어가 얼마나 겹치는가"만 봅니다. 의미는 같지만 표현이 다른 좋은 답변에 낮은 점수를 주는 문제가 있어, 2024년 이후 업계는 LLM-as-Judge 또는 임베딩 기반 의미 유사도로 빠르게 이동했습니다. 2026년 현재 BLEU/ROUGE는 참고 지표 이상의 의미를 두지 않는 것이 실무 표준입니다.</p>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>우리 AI 과제 중 "정답이 명확한 것"과 "정답이 없는 것"을 구분해 각각 다른 채점 방식을 쓰고 있는가?</li>
+      <li>분류형 과제에서 정확도만 보고받고 있지 않은가 (편향된 데이터셋 함정)?</li>
+      <li>요약·창작형 산출물에 옛날 방식(단어 겹침)이 아닌 의미 기반 평가를 쓰고 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH4 ===== -->
+<div class="section" id="ch4">
+  <h2 class="section-title section-anchor"><span class="icon">👨‍⚖️</span> 04. LLM-as-Judge — 설계와 편향 완화</h2>
+
+  <p><strong>LLM-as-Judge</strong>는 사람이 일일이 채점하기엔 양이 많고, 정답이 명확하지 않은 자유형 응답(대화, 요약, 코드 리뷰 등)을 또 다른 LLM에게 채점시키는 방법입니다. 2024~2026년 업계 표준으로 자리잡았으며, GPT-4급/Claude Opus급 모델이 사람 평가자와 80%대 일치도를 보인다는 연구가 다수 발표되어 있습니다 (구체 수치는 논문·벤치마크마다 상이 — 절대 신뢰 말고 자체 검증 필요).</p>
+
+  <h3>설계 5단계</h3>
+  <ol>
+    <li><strong>평가 기준(루브릭) 정의</strong> — "좋은 답변이란 무엇인가"를 3~7개 항목으로 구체화 (예: 정확성, 완전성, 형식 준수, 실행가능성)</li>
+    <li><strong>채점 방식 선택</strong> — 절대 점수(0~1 또는 1~5점) vs 상대 비교(A/B 중 무엇이 나은가, pairwise)</li>
+    <li><strong>판정 모델 선정</strong> — 피평가 모델보다 동급 이상 성능의 모델을 판정자로 사용 (동일 모델 자가 채점은 편향 위험 큼)</li>
+    <li><strong>편향 완화 장치 적용</strong> — 아래 3대 편향 대응</li>
+    <li><strong>사람 표본과 교차검증</strong> — 정기적으로 LLM 판정과 사람 판정의 일치도를 측정해 Judge 신뢰도 추적</li>
+  </ol>
+
+  <h3>루브릭 작성 예시 — "고객 응대 답변 품질"</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>항목</th><th>배점</th><th>1점 기준</th><th>0점 기준</th></tr></thead>
+      <tbody>
+        <tr><td>정확성</td><td>0.3</td><td>정책·데이터와 일치</td><td>사실과 다른 내용 포함</td></tr>
+        <tr><td>완전성</td><td>0.2</td><td>질문의 모든 하위 요청에 답변</td><td>일부 요청 누락</td></tr>
+        <tr><td>톤/형식</td><td>0.15</td><td>정중하고 브랜드 가이드 준수</td><td>딱딱하거나 무례한 표현</td></tr>
+        <tr><td>실행가능성</td><td>0.2</td><td>다음 행동(링크/절차)까지 제시</td><td>추상적 안내만 제공</td></tr>
+        <tr><td>안전성</td><td>0.15</td><td>과장·보장 표현 없음</td><td>확인 안 된 약속(환불 보장 등)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>3대 편향과 완화 기법</h3>
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>① 위치 편향 (Positional Bias)</h4>
+      <p>A/B 비교 시 먼저 제시된 답변을 더 좋게 평가하는 경향. <strong>완화</strong>: A-B, B-A 순서를 모두 판정해 평균내거나(swap test), 순서를 무작위화.</p>
+    </div>
+    <div class="info-card">
+      <h4>② 장문 편향 (Verbosity Bias)</h4>
+      <p>내용은 비슷한데 더 긴 답변에 높은 점수를 주는 경향. <strong>완화</strong>: 루브릭에 "불필요하게 긴 설명은 감점" 명시, 길이를 정규화한 별도 지표 병행.</p>
+    </div>
+    <div class="info-card">
+      <h4>③ 자기선호 편향 (Self-Preference Bias)</h4>
+      <p>판정 모델이 자신과 같은 계열/스타일의 답변을 더 후하게 평가하는 경향. <strong>완화</strong>: 피평가 모델과 다른 제공사의 모델을 판정자로 사용, 복수 판정자 앙상블 후 다수결.</p>
+    </div>
+  </div>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ Judge도 틀릴 수 있다</strong>
+    LLM-as-Judge는 "저렴하고 빠른 근사치"이지 절대 기준이 아닙니다. 판정 모델 자체의 편향·환각이 채점에 그대로 반영될 수 있으므로, 최소 월 1회는 사람이 Judge 판정 표본 30~50건을 재검토해 일치도를 확인해야 합니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>우리 LLM-as-Judge는 피평가 모델과 동일 모델을 판정자로 쓰고 있지 않은가 (자기선호 편향 위험)?</li>
+      <li>A/B 비교 시 순서를 바꿔서도 같은 결과가 나오는지 확인한 적이 있는가?</li>
+      <li>Judge의 채점 결과를 사람이 주기적으로 재검토하고 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH5 ===== -->
+<div class="section" id="ch5">
+  <h2 class="section-title section-anchor"><span class="icon">🧑‍🤝‍🧑</span> 05. 인간 평가 설계 — 샘플링과 일치도</h2>
+
+  <p>LLM-as-Judge로 대체하기 전, 혹은 Judge를 검증하기 위해 결국 사람이 평가해야 하는 구간이 남습니다. 이때 "누가, 몇 건을, 어떻게" 평가하느냐가 결과 신뢰도를 좌우합니다.</p>
+
+  <h3>샘플링 설계 원칙</h3>
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>무작위 표본 추출</h4>
+      <p>"최근 잘된 것 같은 것들"이 아니라 전체 응답 풀에서 무작위로 추출. 담당자가 고른 표본은 반드시 편향됨.</p>
+    </div>
+    <div class="info-card">
+      <h4>계층화 샘플링</h4>
+      <p>워크스페이스별·질문 유형별·난이도별로 나눠 각 층에서 비례 추출. 특정 쉬운 유형에 표본이 몰리는 것을 방지.</p>
+    </div>
+    <div class="info-card">
+      <h4>실패 사례 오버샘플링</h4>
+      <p>낮은 점수 구간(예: 하위 10%)은 의도적으로 더 많이 뽑아 실패 원인 분석에 활용 — 단, 전체 평균 계산 시엔 가중치 보정 필요.</p>
+    </div>
+    <div class="info-card">
+      <h4>블라인드 평가</h4>
+      <p>어느 모델/버전이 생성했는지 평가자에게 숨김 — 브랜드·기대에 의한 편향 방지.</p>
+    </div>
+  </div>
+
+  <h3>평가자 간 일치도 — Cohen's Kappa</h3>
+  <p>같은 응답을 평가자 2명에게 각각 채점시켰을 때 결과가 얼마나 일치하는지 측정하는 지표입니다. 단순 "일치율(%)"은 우연히 맞을 확률을 반영하지 못해 과대평가되므로, 우연 일치를 제거한 <strong>Cohen's Kappa(κ)</strong>를 씁니다.</p>
+  <pre><code>κ = (관찰된 일치율 − 우연 일치율) / (1 − 우연 일치율)</code></pre>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>κ 값</th><th>해석</th><th>실무 조치</th></tr></thead>
+      <tbody>
+        <tr><td>&lt; 0.20</td><td>거의 일치 안 함</td><td>루브릭 기준이 모호함 — 재설계 필요</td></tr>
+        <tr><td>0.21 ~ 0.40</td><td>약한 일치</td><td>평가자 교육/예시 답안 보강</td></tr>
+        <tr><td>0.41 ~ 0.60</td><td>중간 일치</td><td>사용 가능하나 개선 여지 있음</td></tr>
+        <tr><td>0.61 ~ 0.80</td><td>상당한 일치</td><td>실무에서 신뢰할 수 있는 수준</td></tr>
+        <tr><td>0.81 ~ 1.00</td><td>거의 완벽한 일치</td><td>루브릭이 명확하고 평가자 훈련이 잘 됨</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>💡 실전 팁</strong>
+    κ가 0.4 미만으로 나온다면 "평가자를 더 훈련시키자"보다 먼저 <strong>루브릭 자체가 모호하지 않은지</strong>를 의심해야 합니다. 예시 답안(anchor examples)을 각 점수 구간마다 2~3개씩 만들어 배포하면 κ가 크게 개선되는 경우가 많습니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>사람이 평가한 표본이 담당자가 임의로 고른 것인가, 무작위/계층화 추출인가?</li>
+      <li>평가자가 2명 이상일 때 Cohen's Kappa로 일치도를 측정한 적이 있는가?</li>
+      <li>일치도가 낮게 나왔을 때 "평가자 탓"이 아니라 "루브릭 탓"일 가능성을 먼저 점검하는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH6 ===== -->
+<div class="section" id="ch6">
+  <h2 class="section-title section-anchor"><span class="icon">🗂️</span> 06. 골든 데이터셋 구축</h2>
+
+  <p><strong>골든 데이터셋(Golden Dataset)</strong>은 "이 정도는 반드시 맞춰야 한다"는 기준 문제와 정답(또는 채점 기준)을 모아둔 고정 세트입니다. 프롬프트/모델을 바꿀 때마다 이 세트로 재채점해 회귀 여부를 확인하는 데 씁니다 — 소프트웨어의 회귀 테스트 스위트와 동일한 역할입니다.</p>
+
+  <h3>구축 절차</h3>
+  <ol>
+    <li><strong>실제 사용 로그에서 대표 사례 수집</strong> — 실제 사용자 질문 분포를 반영해야 함 (담당자가 상상한 질문 X)</li>
+    <li><strong>난이도·유형별 분류</strong> — 기초/중급/고급, 카테고리별(FAQ/복합업무/예외상황)로 태깅</li>
+    <li><strong>정답 또는 채점 기준 작성</strong> — 정답이 있으면 명시, 없으면 루브릭 첨부</li>
+    <li><strong>edge case 의도적 포함</strong> — 과거 실패했던 사례, 모호한 질문, 악의적 입력(프롬프트 인젝션 등)</li>
+    <li><strong>버전 관리</strong> — 데이터셋 자체도 git처럼 버전을 매겨, 언제 추가/수정했는지 추적</li>
+  </ol>
+
+  <h3>규모 산정 — 몇 건이면 충분한가</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>목적</th><th>권장 최소 규모</th><th>근거</th></tr></thead>
+      <tbody>
+        <tr><td>빠른 스모크 테스트 (배포 전 게이트)</td><td>20~50건</td><td>핵심 시나리오만 커버, CI에서 수 분 내 실행 가능해야 함</td></tr>
+        <tr><td>정기 회귀 테스트 (주간)</td><td>100~300건</td><td>카테고리별 20건 이상 확보해 통계적으로 유의미한 비교 가능</td></tr>
+        <tr><td>모델 교체 의사결정용</td><td>300~1,000건</td><td>A/B 비교에서 5~10%p 차이를 통계적으로 검출하려면 필요한 최소 표본 (10장 참고)</td></tr>
+        <tr><td>안전성/레드팀 세트</td><td>50~200건</td><td>유해 요청·탈옥 시도·개인정보 요청 등 카테고리별 다양성이 규모보다 중요</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ 흔한 실수 — 데이터셋 오염</strong>
+    골든 데이터셋 문제를 모델 파인튜닝 데이터나 프롬프트 예시(few-shot)에 그대로 넣으면 "채점 대상이 답을 외운 것"이 되어 점수가 실제 능력보다 부풀려집니다. 골든셋은 학습/프롬프트 예시와 반드시 분리 관리해야 합니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>우리 골든 데이터셋은 실제 사용 로그 기반인가, 담당자가 상상해서 만든 것인가?</li>
+      <li>과거 실패 사례가 골든셋에 의도적으로 포함되어 재발을 감시하고 있는가?</li>
+      <li>골든셋 문제가 실수로 파인튜닝/프롬프트 예시에 섞여 들어가지 않았는지 점검했는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH7 ===== -->
+<div class="section" id="ch7">
+  <h2 class="section-title section-anchor"><span class="icon">🔁</span> 07. 회귀 테스트 자동화</h2>
+
+  <p>프롬프트 한 줄, 모델 버전 하나를 바꿀 때마다 골든 데이터셋으로 자동 재채점하고, 이전 대비 품질이 떨어졌으면 배포를 막는 파이프라인입니다. 소프트웨어의 CI(지속적 통합) 테스트와 동일한 철학입니다.</p>
+
+  <div class="diagram">
+    <div class="title">회귀 테스트 자동화 파이프라인</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+프롬프트/모델 변경 커밋
+        │
+        ▼
+┌───────────────────────┐
+│ 골든 데이터셋 전체 재실행 │  (100~300건, 병렬 처리)
+└──────────┬────────────┘
+           ▼
+┌───────────────────────┐
+│  LLM-as-Judge 자동 채점  │
+└──────────┬────────────┘
+           ▼
+┌───────────────────────┐
+│ 이전 버전 점수와 비교     │  평균/중앙값/p10/p90, 카테고리별
+└──────────┬────────────┘
+           ▼
+     하락폭 > 임계치? ──Yes──▶ 배포 차단 + 담당자 알림
+           │No
+           ▼
+      배포 승인
+</pre>
+  </div>
+
+  <h3>임계치 설계 — 얼마나 떨어지면 "회귀"인가</h3>
+  <ul>
+    <li><strong>전체 평균 하락 임계치</strong>: 보통 5~15% 하락을 경고, 15% 이상을 배포 차단 기준으로 삼는 경우가 많음 (조직·리스크 수준에 따라 조정)</li>
+    <li><strong>카테고리별 개별 감시</strong>: 전체 평균은 유지돼도 특정 카테고리(예: 안전성)만 급락하면 별도 차단 — 평균의 함정 방지</li>
+    <li><strong>트렌드 판정</strong>: 최근 구간 vs 직전 구간 비교로 "개선/안정/하락" 3단계 라벨링, 단발성 노이즈와 실제 추세를 구분</li>
+  </ul>
+
+  <h3>비용 관리</h3>
+  <p>회귀 테스트를 매 커밋마다 대형 모델로 채점하면 비용이 빠르게 누적됩니다. 실무에서는 저가 모델(예: 1M 토큰당 $0.1~0.3, 약 ₩138~414)로 1차 채점하고, 경계선 케이스만 상위 모델로 재확인하는 <strong>2단계 채점(cascade)</strong>이 비용 효율적입니다.</p>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>프롬프트/모델 변경 시 자동으로 품질 하락을 감지하는 파이프라인이 있는가, 사람이 눈으로 확인하는가?</li>
+      <li>전체 평균만 보는가, 카테고리별(특히 안전성)로도 감시하는가?</li>
+      <li>회귀 테스트 채점 비용이 통제 가능한 수준으로 설계되어 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH8 ===== -->
+<div class="section" id="ch8">
+  <h2 class="section-title section-anchor"><span class="icon">🏆</span> 08. 주요 벤치마크와 벤치마크 오염</h2>
+
+  <p>공개 벤치마크는 모델 간 <strong>대략적인</strong> 실력 비교에 유용하지만, "우리 업무에도 그대로 적용된다"고 오해하면 안 됩니다. 벤치마크는 표준화된 시험이고, 우리 업무는 그 시험 범위 밖의 것일 수 있습니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>벤치마크</th><th>측정 대상</th><th>의미</th><th>한계</th></tr></thead>
+      <tbody>
+        <tr><td><strong>MMLU-Pro</strong></td><td>57개+ 분야 전문 지식·추론 (기존 MMLU의 난이도 상향판)</td><td>범용 지식 폭과 다지선다 추론력</td><td>실제 업무 대화·도구 사용 능력은 측정 안 함</td></tr>
+        <tr><td><strong>GPQA Diamond</strong></td><td>박사급 난이도의 물리·화학·생물 문제</td><td>전문가도 어려워하는 최상위 추론력</td><td>일반 업무와 무관한 극단적 난이도 — 실무 대리지표로 부적합</td></tr>
+        <tr><td><strong>SWE-bench Verified</strong></td><td>실제 GitHub 이슈를 해결하는 코딩 능력</td><td>실전 코드 수정 능력의 비교적 현실적인 지표</td><td>파이썬 오픈소스 저장소 편중, 사내 레거시 코드베이스와는 다름</td></tr>
+        <tr><td><strong>HELM</strong> (Stanford)</td><td>정확도+효율성+공정성+견고성 등 다차원 종합 평가 프레임워크</td><td>단일 점수가 아닌 다면적 비교표 제공</td><td>항목이 많아 해석에 전문성 필요, 업데이트 주기가 모델 출시 속도보다 느릴 수 있음</td></tr>
+        <tr><td><strong>Chatbot Arena (LMSYS)</strong></td><td>실사용자 블라인드 투표 기반 Elo 랭킹</td><td>실제 사람의 "선호"를 반영 — 가장 현실적인 대중 체감 지표 중 하나</td><td>일반 대중 사용자 취향 편중 (장문·형식 선호 등 verbosity bias 가능성)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ 벤치마크 순위는 시점 변화가 매우 빠릅니다</strong>
+    2026년 9월 시점의 구체적 리더보드 순위·점수는 본 문서 작성 중 실시간 검증 도구 연결 오류로 확인하지 못했습니다 (미검증). 벤치마크 순위는 신모델 출시마다 수 주 단위로 뒤바뀌므로, 의사결정 시점에 반드시 각 벤치마크 공식 리더보드(예: Artificial Analysis, Open LLM Leaderboard, LMSYS Arena)를 직접 확인할 것을 권장합니다.
+  </div>
+
+  <h3>벤치마크 오염 (Benchmark Contamination) 문제</h3>
+  <p>벤치마크 문제와 정답이 인터넷에 공개되어 있으면, 신규 모델 학습 데이터에 그 문제가 그대로 섞여 들어갈 수 있습니다. 이 경우 모델은 "문제를 푼 것"이 아니라 "답을 암기한 것"이며, 벤치마크 점수가 실제 능력보다 부풀려집니다.</p>
+  <ul>
+    <li><strong>탐지 방법</strong>: 문제를 살짝 바꾼 변형판(paraphrase)에서 점수가 급락하는지 확인, n-gram 중복 검사로 학습 데이터와 벤치마크 문제의 겹침을 통계적으로 탐지</li>
+    <li><strong>대응 방법</strong>: 비공개(held-out) 벤치마크 사용, 주기적으로 신규 문제로 교체되는 "동적 벤치마크"(예: LiveBench류 방식) 선호</li>
+    <li><strong>실무 시사점</strong>: 공개 벤치마크 점수만으로 모델을 최종 선정하지 말고, 반드시 <strong>우리 조직의 골든 데이터셋</strong>(6장)으로 재검증해야 함</li>
+  </ul>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>모델 선택 시 공개 벤치마크 점수만 보고 결정하고 있지 않은가?</li>
+      <li>벤치마크 순위가 우리 실제 업무(예: 사내 코드, 고객 상담 톤)와 관련 있는 종류인지 확인했는가?</li>
+      <li>벤치마크 오염 가능성을 인지하고, 최종 판단은 자체 골든 데이터셋으로 하고 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH9 ===== -->
+<div class="section" id="ch9">
+  <h2 class="section-title section-anchor"><span class="icon">🤖</span> 09. 에이전트 평가 — 완료율·도구·궤적</h2>
+
+  <p>단일 응답이 아니라 여러 단계를 거쳐 도구를 호출하고 작업을 완수하는 <strong>에이전트</strong>는 평가 방식이 다릅니다. "말이 맞다"가 아니라 "실제로 작업을 완수했는가"가 핵심입니다.</p>
+
+  <h3>3대 핵심 지표</h3>
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>① 작업 완료율 (Task Success Rate)</h4>
+      <p>주어진 작업을 실제로 끝까지 완료했는가를 이진(성공/실패) 또는 부분점수로 채점. 가장 중요하지만 "어디서 실패했는지"는 알려주지 않음.</p>
+    </div>
+    <div class="info-card">
+      <h4>② 도구 호출 정확도 (Tool-call Accuracy)</h4>
+      <p>올바른 도구를, 올바른 파라미터로, 올바른 순서에 호출했는가. 잘못된 도구 선택·파라미터 오류·불필요한 중복 호출을 감지.</p>
+    </div>
+    <div class="info-card">
+      <h4>③ 궤적 평가 (Trajectory Evaluation)</h4>
+      <p>최종 결과뿐 아니라 <strong>과정 전체</strong>(생각→도구 호출→관찰→재시도)를 사람 또는 Judge가 단계별로 심사. 결과는 맞았지만 과정이 비효율적이거나 위험했던 경우를 잡아냄.</p>
+    </div>
+  </div>
+
+  <div class="diagram">
+    <div class="title">궤적 평가 예시 — "고객 환불 처리" 에이전트</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+1단계: 주문 조회 도구 호출           ✅ 올바른 도구
+2단계: 환불 정책 문서 검색            ✅ 근거 확보 (tool_grounding)
+3단계: 환불 승인 여부 판단            ⚠️ 정책 조건 일부 누락 (부분 감점)
+4단계: 환불 처리 API 호출             ✅ 파라미터 정확
+5단계: 고객에게 결과 안내             ✅ 톤/형식 준수
+──────────────────────────────
+최종 결과: 성공 (Task Success = 1)
+궤적 점수: 0.8 (3단계 불완전 판단으로 감점)
+</pre>
+  </div>
+
+  <p>최종 결과만 보면 "성공"이지만 궤적 평가는 3단계의 판단 근거 부족을 짚어냅니다. <strong>결과만 보는 평가는 우연한 성공과 견고한 성공을 구분하지 못하므로</strong>, 반복 실행 가능한 고위험 에이전트(결제·계약·의료 등)일수록 궤적 평가 비중을 높여야 합니다.</p>
+
+  <h3>측정 실무</h3>
+  <ul>
+    <li><strong>도구 호출 로그를 구조화 저장</strong> — 어떤 도구를, 어떤 파라미터로, 몇 번 호출했는지 전부 기록해야 궤적 평가가 가능</li>
+    <li><strong>반복 시행(pass@k)</strong> — 같은 작업을 여러 번 시켜 몇 번 중 몇 번 성공하는지 측정 (LLM은 같은 입력에도 결과가 달라질 수 있음)</li>
+    <li><strong>실패 유형 분류</strong> — 도구 선택 오류/파라미터 오류/무한 루프/조기 종료 등으로 실패를 유형화해야 개선 우선순위를 정할 수 있음</li>
+  </ul>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>에이전트 평가를 "최종 결과 성공/실패"로만 보는가, 과정(궤적)도 심사하는가?</li>
+      <li>도구 호출 로그가 사후 분석 가능하게 구조화되어 저장되는가?</li>
+      <li>고위험 업무(결제·계약 등) 에이전트는 반복 시행으로 성공률의 안정성을 확인했는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH10 ===== -->
+<div class="section" id="ch10">
+  <h2 class="section-title section-anchor"><span class="icon">📊</span> 10. A/B 테스트와 통계적 유의성</h2>
+
+  <p>"새 프롬프트가 더 좋아 보인다"는 느낌을 "실제로 더 좋다"는 근거로 바꾸는 것이 통계적 A/B 테스트입니다. 표본이 작으면 우연이 진짜 개선처럼 보일 수 있습니다.</p>
+
+  <h3>핵심 개념 — 비개발자를 위한 쉬운 설명</h3>
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>유의수준 (p-value)</h4>
+      <p>"이 차이가 순전히 우연일 확률". 일반적으로 5% 미만(p&lt;0.05)이면 "우연이 아닐 가능성이 높다"고 봄.</p>
+    </div>
+    <div class="info-card">
+      <h4>효과 크기 (Effect Size)</h4>
+      <p>통계적으로 유의해도 차이가 1%포인트면 실무적으로 무의미할 수 있음. "유의성"과 "실용적 의미"는 별개.</p>
+    </div>
+    <div class="info-card">
+      <h4>검정력 (Power)</h4>
+      <p>실제로 차이가 있을 때 그것을 "있다"고 정확히 탐지할 확률. 표본이 작으면 검정력이 낮아 진짜 개선도 놓침.</p>
+    </div>
+  </div>
+
+  <h3>필요 표본 수 — 대략적 감각</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>탐지하려는 차이</th><th>기준 성공률 50%일 때 필요 표본(그룹당, 대략)</th><th>실무 시사점</th></tr></thead>
+      <tbody>
+        <tr><td>20%p 이상 큰 차이</td><td>약 100건</td><td>초기 프로토타입 비교엔 충분</td></tr>
+        <tr><td>10%p 차이</td><td>약 400건</td><td>일반적인 프롬프트 개선 검증 수준</td></tr>
+        <tr><td>5%p 차이</td><td>약 1,600건</td><td>이미 성숙한 시스템의 미세 개선 검증 — 표본 확보 부담 큼</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="color:var(--text2);font-size:.85rem">※ 위 수치는 이항분포 비율 비교의 근사 공식(표준 A/B 테스트 표본크기 계산 공식) 기준 대략치이며, 실제 필요 표본은 기준 성공률·유의수준·검정력 설정에 따라 달라집니다. 정확한 수치는 표본크기 계산기로 산출할 것을 권장합니다.</p>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ 흔한 실수 — 조기 종료(Peeking)</strong>
+    "지금 보니 B가 이기고 있으니 그만 테스트하자"는 식으로 중간에 결과를 보고 멈추면, 우연히 유의미해 보이는 순간을 포착할 확률이 크게 올라갑니다(다중비교 문제). 사전에 정한 표본 수·기간을 채운 뒤 한 번만 판정하는 것이 원칙입니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>"A가 더 낫다"는 보고를 받을 때 표본 수와 유의수준을 함께 확인하는가?</li>
+      <li>통계적으로 유의해도 실무적으로 의미 있는 차이인지(효과 크기) 따로 판단하는가?</li>
+      <li>테스트 중간에 결과를 보고 조기 종료하는 습관이 있지 않은가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH11 ===== -->
+<div class="section" id="ch11">
+  <h2 class="section-title section-anchor"><span class="icon">🛡️</span> 11. 안전성 평가 — 환각·거절·유해성·편향</h2>
+
+  <p>품질이 높아도 안전하지 않으면 사업 리스크입니다. 안전성은 별도의 평가 축으로 상시 감시해야 합니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>지표</th><th>정의</th><th>측정 방법</th><th>목표 방향</th></tr></thead>
+      <tbody>
+        <tr><td><strong>환각률 (Hallucination Rate)</strong></td><td>사실과 다른 내용을 확신에 찬 어조로 생성하는 비율</td><td>정답 있는 사실 질문셋 + 검색/DB 대조, 또는 Judge가 "근거 없는 주장" 식별</td><td>낮을수록 좋음 (0에 근접)</td></tr>
+        <tr><td><strong>거절률 (Refusal Rate)</strong></td><td>정당한 요청인데도 AI가 답변을 거부하는 비율</td><td>정상 요청 골든셋에서 거절 응답 비율 집계</td><td>과도하게 높으면 사용성 저하 — 유해 요청 거절률과 별도 관리</td></tr>
+        <tr><td><strong>유해성 (Toxicity)</strong></td><td>차별·혐오·폭력 조장 등 유해 콘텐츠 생성 비율</td><td>유해성 분류 모델 + 레드팀 프롬프트셋으로 자극 테스트</td><td>0에 근접해야 함, 특히 아동/취약계층 관련은 무관용</td></tr>
+        <tr><td><strong>편향 (Bias)</strong></td><td>성별·인종·연령 등에 따라 답변 품질/톤이 달라지는 정도</td><td>동일 질문을 속성만 바꿔 반복 제시 후 답변 차이 비교</td><td>속성과 무관하게 답변 품질이 일정해야 함</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>레드팀(Red-teaming) 실무</h3>
+  <ul>
+    <li><strong>내부 레드팀</strong>: 직원이 의도적으로 프롬프트 인젝션, 탈옥(jailbreak), 개인정보 유출 유도 시도</li>
+    <li><strong>자동화 레드팀</strong>: 알려진 공격 패턴 라이브러리로 정기 자동 공격 테스트 (배포 전 게이트에 포함 권장)</li>
+    <li><strong>외부 감사</strong>: 규제 산업(금융·의료)은 제3자 안전성 감사를 주기적으로 받는 것이 표준 관행화되는 추세</li>
+  </ul>
+
+  <div class="alert alert-danger">
+    <strong>⚠️ 환각률 측정의 함정</strong>
+    "환각이 없어 보인다"는 것은 검증하지 않았다는 뜻일 수 있습니다. 특히 조직 내부 데이터/정책처럼 외부에서 검증 불가능한 영역일수록 AI가 그럴듯한 오답을 만들어내도 아무도 눈치채지 못할 위험이 큽니다. 도구 호출로 실제 데이터를 조회했는지(tool grounding)를 별도로 채점하는 것이 환각 방지의 핵심 장치입니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>환각률·거절률·유해성·편향을 각각 별도 지표로 상시 모니터링하고 있는가?</li>
+      <li>레드팀 테스트(의도적 공격 시도)를 배포 전 정기적으로 수행하는가?</li>
+      <li>AI가 도구/DB로 검증한 주장과 검증 없이 생성한 주장을 구분해서 채점하는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH12: AADS 실제 품질 체계 ===== -->
+<div class="section" id="ch12">
+  <h2 class="section-title section-anchor"><span class="icon">🔵</span> 12. AADS 실제 품질 체계 분석</h2>
+
+  <div class="alert alert-info">
+    <strong>본 장의 모든 수치·로직은 2026-09-12 시점 서버 68(contabo116) 실제 코드(app/services/self_evaluator.py, quality_gate.py, quality_feedback_loop.py, eval_pipeline.py) 및 프로덕션 DB(chat_messages, ai_observations) 조회 결과입니다.</strong> 추정·가정 없이 확인된 내용만 기술하며, 확인하지 못한 부분은 명시적으로 "미검증"으로 표기합니다.
+  </div>
+
+  <h3>12-1. quality_score 산출 로직 — LLM-as-Judge 6차원 가중평균 <span class="tag-verified">코드 확인됨</span></h3>
+  <p>AADS 채팅 응답은 매 턴마다 <code>self_evaluator.py</code>의 <code>evaluate_response()</code>가 배경 LLM(<code>call_background_llm</code>, 기본 모델 <code>qwen-turbo</code>)을 호출해 6개 차원을 0.0~1.0으로 채점한 뒤 가중평균을 계산합니다. 이는 4장에서 설명한 LLM-as-Judge의 실제 프로덕션 적용 사례입니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>차원</th><th>가중치</th><th>판정 기준 (실제 프롬프트 발췌)</th></tr></thead>
+      <tbody>
+        <tr><td>context_awareness</td><td>0.25</td><td>이전 대화 맥락을 정확히 이해하고 답변했는가 (무시/엉뚱한 답변 시 0점, 첫 대화면 0.5)</td></tr>
+        <tr><td>accuracy</td><td>0.25</td><td>사실적 정확성</td></tr>
+        <tr><td>completeness</td><td>0.15</td><td>응답의 완성도</td></tr>
+        <tr><td>tool_grounding</td><td>0.15</td><td>도구를 사용해 주장/데이터를 검증했는가 (도구 불필요 시 0.5로 중립화)</td></tr>
+        <tr><td>relevance</td><td>0.10</td><td>질문과의 관련성</td></tr>
+        <tr><td>actionability</td><td>0.10</td><td>구체적인 다음 단계를 제시하는가</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <pre><code>overall = context_awareness*0.25 + accuracy*0.25 + completeness*0.15
+        + tool_grounding*0.15 + relevance*0.10 + actionability*0.10</code></pre>
+  <p>비용은 응답 1건당 약 $0.0003(≈ ₩0.41) 수준으로 코드 주석에 명시되어 있습니다 <span class="tag-verified">코드 확인됨</span>. tool_needed=false로 판정되면 tool_grounding과 actionability에 중립값(0.5) 이상을 보장해 "대화형 응답"이 도구 미사용을 이유로 부당하게 감점되지 않도록 설계되어 있습니다.</p>
+
+  <h3>12-2. 실측 품질 점수 — DB 직접 조회 결과 <span class="tag-verified">DB 조회됨</span></h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>조회 조건</th><th>결과</th></tr></thead>
+      <tbody>
+        <tr><td>최근 30일 assistant 응답 평균 quality_score</td><td><strong>0.754 (75.4%)</strong>, 표본 n=2,057건 (2026-08-14 ~ 2026-09-12)</td></tr>
+        <tr><td>최근 30일 중 quality_score &lt; 0.4 (Reflexion 발동 구간)</td><td>69건, 평균 0.332 (전체의 약 3.4%)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="alert alert-warn">
+    <strong>⚠️ "품질 70%" 수치에 대한 정정</strong>
+    브리핑에서 언급된 "품질 70%"는 실측 결과(75.4%, 30일 평균)와 정확히 일치하지 않습니다. 반올림·다른 집계 기간(예: 전체 누적 vs 최근 30일)·대시보드 표시 시점 차이로 인한 오차로 추정되나, 그 정확한 산출 경로는 본 조사에서 확인하지 못했습니다 — <strong>미검증</strong>. 본 문서는 2026-09-12 직접 쿼리로 확인된 75.4%를 신뢰 가능한 수치로 제시합니다.
+  </div>
+
+  <h3>12-3. Reflexion — 품질 40% 미만 자동 반성 <span class="tag-verified">코드 확인됨</span></h3>
+  <p>overall &lt; 0.4이고 session_id가 있으면 별도 LLM 호출로 "무엇이 잘못되었고 다음에 어떻게 개선할지" 1~2문장 반성문을 생성해 <code>memory_facts</code> 테이블에 category=<code>error_pattern</code>, tags=<code>['reflexion','self-improvement']</code>로 저장합니다. 이후 임베딩을 생성해 유사 오류 재발을 벡터 유사도(cosine ≥ 0.8)로 탐지하고, 7일 내 2회 이상 반복되면 <code>ai_meta_memory</code>에 영구 교정 지시를 생성합니다.</p>
+  <ul>
+    <li><strong>A1 (신뢰도 하향)</strong>: overall &lt; 0.5면 같은 세션(60분 이내) 또는 프로젝트(1시간 이내) 최근 추출 사실(memory_facts)의 confidence를 감쇠 — 낮은 품질 응답에서 나온 정보를 덜 신뢰하도록 전파</li>
+    <li><strong>B1 (Reflexion)</strong>: overall &lt; 0.4 + session_id 존재 시 반성문 생성·저장 (위 설명)</li>
+    <li><strong>B2 (Self-Refine 부스터)</strong>: overall &lt; 0.4면 가장 낮은 2개 차원을 골라 "다음 응답에서 반드시 개선" 지시를 <code>ai_meta_memory</code> category=<code>quality_booster</code>에 저장, 다음 턴 컨텍스트에 자동 주입. overall ≥ 0.6 회복 시 부스터 자동 해제</li>
+    <li><strong>P1 (경험 축적)</strong>: overall ≥ 0.75면 고품질 응답 패턴을 experience_memory에 저장 (성공 패턴 강화)</li>
+    <li><strong>P3 (반성 효과 검증)</strong>: 직전 3건 중 최근 점수가 이전 평균보다 +0.1 이상 개선되면 반성문 confidence 강화, -0.05 이상 악화되면 confidence 감쇠 — 반성이 실제로 효과가 있었는지 스스로 검증하는 폐루프 구조</li>
+    <li><strong>세션 알림</strong>: 최근 10건 평균이 0.5 미만(표본 5건 이상)이면 텔레그램 경고 발송(1시간 1회 제한)</li>
+  </ul>
+
+  <h3>12-4. ai_observations 테이블 — 품질 파이프라인과는 별개 시스템 <span class="tag-verified">DB 스키마 확인됨</span></h3>
+  <p>DB 스키마를 직접 조회한 결과, <code>ai_observations</code> 테이블은 <code>category, key, value, confidence, source_session_id, project, usage_count</code> 등의 컬럼을 가진 <strong>CEO 선호·지시·경험 교훈 저장소</strong>이며 (CLAUDE.md에 명시된 AADS-186E 메모리 자동 주입 시스템의 데이터 원천), 위에서 설명한 <code>chat_messages.quality_score</code> 기반 품질 평가 파이프라인과는 <strong>별개의 테이블·별개의 목적</strong>입니다. 실제 조회된 데이터는 "CEO 선호: 데이터 품질을 높여야지..." 같은 대화 학습 기록이며, quality_score 산출과 직접 연결되는 코드 경로는 확인되지 않았습니다. 브리핑에서 두 개념이 함께 언급되었으나, <strong>본 조사 결과 ai_observations는 quality_score의 산출 근거가 아니며 이는 혼동을 정정하는 내용입니다.</strong>
+
+  <h3>12-5. 품질 피드백 루프 — 주간 약점 자동 발견 <span class="tag-verified">코드 확인됨</span></h3>
+  <p><code>quality_feedback_loop.py</code>는 Sleep-Time Agent(매일 05:00 UTC) 이후 06:00 UTC에 실행되어, 최근 7일 <code>quality_details</code>에서 6개 차원별 평균을 계산하고 <strong>0.55 미만인 차원을 약점으로 식별</strong>합니다. 표본이 5건 미만이면 스킵합니다. 약점이 발견되면 Haiku급 모델(<code>qwen-turbo</code>)로 구체적 교정 지시를 생성해 <code>ai_meta_memory</code> category=<code>quality_improvement</code>에 저장하고, 이후 컨텍스트 빌더가 최근 7일 이내 지시 최대 5건을 다음 응답에 자동 주입합니다. 비용은 일 1회 Haiku 호출로 약 $0.001(≈ ₩1.38)/일로 코드 주석에 명시됩니다.</p>
+
+  <h3>12-6. 별도 시스템 — 코드 산출물 정적 품질 게이트 <span class="tag-verified">코드 확인됨</span></h3>
+  <p>위와는 완전히 별개로, <code>quality_gate.py</code>는 <strong>LLM 호출 없이</strong> 코드 diff에 정적 분석 기반 confidence score(A/B/C/F 등급)를 부여합니다. 가중치는 diff 존재 여부 0.3 + 구문 오류 검사 0.3 + 지시 키워드 반영도 0.2 + 출력 길이 0.2입니다.</p>
+  <div class="alert alert-danger">
+    <strong>⚠️ 코드로 확인된 실제 한계</strong>
+    <code>_check_python_syntax()</code> 함수를 직접 읽은 결과, "diff에서 +로 시작하는 Python 라인 추출은 복잡 → 단순 pass"라는 주석과 함께 <strong>항상 빈 리스트(오류 없음)를 반환하는 스텁 상태</strong>로 구현되어 있습니다. 즉 구문 오류 검사 항목(가중치 0.3)이 실질적으로 작동하지 않고 항상 만점(1.0)을 부여하는 구조입니다. 이는 실제 코드를 읽어 확인한 사실이며, 추정이 아닙니다.
+  </div>
+
+  <h3>12-7. 회귀 감지·대시보드 — eval_pipeline.py <span class="tag-verified">코드 확인됨</span></h3>
+  <p>7장에서 설명한 회귀 테스트 자동화가 AADS에도 실제로 구현되어 있습니다. <code>aggregate_quality_stats()</code>는 평균/중앙값/p10/p90을 워크스페이스별로 집계하고, 직전 동일 기간 대비 <strong>+3%p 초과 개선 시 "improving", -3%p 초과 하락 시 "declining"</strong>으로 트렌드를 라벨링합니다. <code>detect_quality_regression()</code>은 기본 3일 창을 최근/이전으로 나눠 워크스페이스별·전체(<code>__ALL__</code>) 평균을 비교하며, <strong>하락폭이 15%를 넘으면 회귀로 플래그</strong>합니다. quality_score &lt; 0.3인 하위 세부 차원은 <code>low_accuracy</code> 등으로 위반(violation) 카운트에 자동 집계됩니다.</p>
+
+  <h3>12-8. 골든 문제셋 — A/B 벤치마크 25문제 <span class="tag-verified">코드 확인됨</span></h3>
+  <p><code>ab_test_problems.py</code>에 알고리즘/자료구조/비동기 등 카테고리로 구성된 <strong>5단계 × 5문제 = 25문제</strong> 고정 문제셋이 존재하며, 6장에서 설명한 골든 데이터셋의 실제 적용 사례입니다. 각 문제는 구체적 요구사항(타입 힌트, 단위 테스트 포함 등)을 명시해 채점 재현성을 높이는 방식으로 설계되어 있습니다.</p>
+
+  <h3>AADS 현재 품질 체계의 한계와 개선안</h3>
+  <div class="compare-row">
+    <div class="compare-box con">
+      <h4 style="color:var(--danger)">확인된 한계</h4>
+      <ul>
+        <li>코드 diff 구문 검사가 스텁 상태 — 문법 오류가 있어도 quality_gate 점수에 반영 안 됨</li>
+        <li>self_evaluator의 Judge 모델이 단일 모델(qwen-turbo)뿐 — 5장의 "판정 모델 편향" 완화를 위한 앙상블·모델 교차 채점 없음</li>
+        <li>quality_feedback_loop·self_evaluator 채점 결과가 사람 평가와 주기적으로 대조(Cohen's kappa 등)되는 코드 경로는 확인되지 않음 — 미검증</li>
+        <li>ab_test_problems.py의 25문제가 실제 A/B 비교 파이프라인에 상시 연결되어 자동 실행되는지는 이번 조사 범위에서 확인하지 못함 — 미검증</li>
+      </ul>
+    </div>
+    <div class="compare-box pro">
+      <h4 style="color:var(--success)">잘 설계된 부분</h4>
+      <ul>
+        <li>단일 정적 점수가 아니라 A1(신뢰전파)·B1(반성)·B2(부스터)·P1(경험축적)·P3(효과검증)의 폐루프 구조 — 본 문서 4~9장에서 다룬 개념 대부분을 실제 반영</li>
+        <li>회귀 감지 로직(15% 하락 임계치, 트렌드 라벨링)이 7장 이론과 정확히 일치하는 구조로 프로덕션에 구현됨</li>
+        <li>도구 미사용이 정당한 경우(대화형 응답) tool_grounding 패널티를 배제하는 세밀한 설계 — 11장에서 다룬 "환각·근거 없는 감점" 오탐 방지</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="alert alert-success">
+    <strong>💡 개선 제안 (본 조사 기반)</strong>
+    (1) quality_gate.py의 구문 검사 스텁을 실제 AST 파싱으로 교체, (2) self_evaluator 판정에 최소 월 1회 사람 표본 재검토 + Cohen's kappa 측정 루틴 추가, (3) ab_test_problems.py 25문제를 정기 자동 실행 파이프라인에 연결해 모델/프롬프트 변경 시 회귀 게이트로 활용, (4) "품질 70%" 같은 요약 수치가 보고될 때 산출 기간·집계 방식을 함께 명시해 혼동 방지.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>"품질 70%"처럼 보고되는 수치의 집계 기간·산출 로직을 직접 코드/DB로 확인한 적이 있는가?</li>
+      <li>quality_gate.py의 구문 검사가 실질적으로 작동하지 않는다는 사실을 인지하고 있었는가?</li>
+      <li>Reflexion·품질 부스터 같은 자동 개선 루프가 실제로 효과가 있는지(P3 로직) 정기 보고받고 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH13: 참고자료 ===== -->
+<div class="section" id="ch13">
+  <h2 class="section-title section-anchor"><span class="icon">📖</span> 13. 참고자료 · 다음 단계</h2>
+
+  <h3>참고자료</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>구분</th><th>출처</th><th>활용</th></tr></thead>
+      <tbody>
+        <tr><td>벤치마크/리더보드</td><td>Stanford HELM (crfm.stanford.edu/helm)</td><td>다차원 종합 평가 프레임워크 참고</td></tr>
+        <tr><td>벤치마크/리더보드</td><td>LMSYS Chatbot Arena</td><td>실사용자 블라인드 선호도 기반 랭킹</td></tr>
+        <tr><td>벤치마크/리더보드</td><td>Open LLM Leaderboard / Artificial Analysis</td><td>가격·속도·성능 종합 비교</td></tr>
+        <tr><td>벤치마크 원 논문</td><td>MMLU-Pro, GPQA, SWE-bench 각 공식 논문/저장소</td><td>측정 방법론 상세 확인</td></tr>
+        <tr><td>방법론</td><td>"Judging LLM-as-a-Judge" 계열 연구 (위치/장문/자기선호 편향 정량화)</td><td>Judge 설계 시 편향 완화 근거</td></tr>
+        <tr><td>통계</td><td>이항비율 A/B 테스트 표본크기 표준 공식</td><td>10장 표본 수 산정 근거</td></tr>
+        <tr><td>AADS 내부 코드</td><td>app/services/self_evaluator.py, quality_gate.py, quality_feedback_loop.py, eval_pipeline.py, ab_test_problems.py (서버 68, 2026-09-12 확인)</td><td>12장 전체 근거</td></tr>
+        <tr><td>AADS 내부 DB</td><td>chat_messages.quality_score/quality_details, ai_observations 스키마 (2026-09-12 쿼리)</td><td>12-2, 12-4 실측 수치</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="color:var(--text2);font-size:.82rem">※ 2026년 9월 시점 벤치마크 순위·점수는 실시간 검색 도구 연결 오류로 본 문서 작성 중 확인하지 못해 구체적 수치를 싣지 않았습니다 (미검증). 의사결정 시 각 벤치마크 공식 페이지를 직접 확인하시기 바랍니다.</p>
+
+  <h3>다음 단계 (제안)</h3>
+  <ol>
+    <li><strong>단기 (1~2주)</strong>: 12장에서 확인된 quality_gate.py 구문 검사 스텁을 실제 AST 파싱으로 교체 — 코드 산출물 품질 게이트의 신뢰성 확보</li>
+    <li><strong>단기 (2~4주)</strong>: self_evaluator 채점 결과 30~50건을 사람이 재검토해 Cohen's kappa 측정 — Judge 신뢰도 baseline 확보</li>
+    <li><strong>중기 (1~2개월)</strong>: ab_test_problems.py 25문제를 정기 자동 실행 파이프라인에 연결, 프롬프트/모델 변경 시 회귀 게이트로 정식 사용</li>
+    <li><strong>중기 (1~2개월)</strong>: "품질 70%/75%" 같은 요약 보고 시 집계 기간·산출 방식을 대시보드에 함께 표기하도록 개선</li>
+    <li><strong>장기 (지속)</strong>: 안전성 지표(환각률·거절률·유해성·편향)를 quality_score와 분리된 별도 상시 대시보드로 구축</li>
+  </ol>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>이 문서에서 제안한 개선안 중 우리 조직에 우선 적용할 항목 3가지를 정했는가?</li>
+      <li>공개 벤치마크 수치는 반드시 최신 시점에 직접 재확인하도록 담당자에게 지시했는가?</li>
+      <li>다음 분기 리뷰에서 이 문서의 체크포인트 항목들을 다시 점검할 일정을 잡았는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== FOOTER ===== -->
+<div class="footer">
+  <p>AADS Academy · AI 평가·품질측정 종합 교육자료 · 2026-09-12 · CEO 교육용</p>
+  <p style="margin-top:6px">12장 AADS 관련 수치는 2026-09-12 서버 68(contabo116) 코드 열람 및 프로덕션 DB 조회로 직접 확인되었습니다. 그 외 일반 벤치마크·통계 수치는 2025~2026년 공개 방법론 기준이며 시점에 따라 변동될 수 있습니다.</p>
+</div>
+
+</div>
+</body>
+</html>

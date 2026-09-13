@@ -1,0 +1,888 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI 제품기획 · PRD · AX 전환 로드맵 종합 교육자료 — AADS Academy</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0a0f1a;--surface:#111827;--card:#1e293b;--card-hover:#334155;
+--accent:#3b82f6;--accent2:#8b5cf6;--accent3:#06b6d4;--accent4:#f59e0b;--accent5:#10b981;--accent6:#ef4444;
+--text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;--border:#334155;--border2:#475569;
+--code-bg:#0d1117;--highlight:#fbbf2420;--success:#10b981;--warning:#f59e0b;--danger:#ef4444}
+body{font-family:'Pretendard',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+background:var(--bg);color:var(--text);line-height:1.8;min-height:100vh}
+.container{max-width:1100px;margin:0 auto;padding:32px 24px 80px}
+/* Header */
+.hero{text-align:center;padding:60px 0 40px;border-bottom:1px solid var(--border);margin-bottom:48px}
+.hero h1{font-size:2.1rem;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2),var(--accent3));
+-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:12px;letter-spacing:-0.5px}
+.hero .subtitle{color:var(--text2);font-size:1.05rem;max-width:760px;margin:0 auto}
+.hero .meta-info{display:flex;gap:16px;justify-content:center;margin-top:20px;flex-wrap:wrap}
+.hero .meta-tag{font-size:.8rem;color:var(--accent);background:var(--accent)15;padding:4px 14px;border-radius:20px}
+/* TOC */
+.toc{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px 32px;margin-bottom:48px}
+.toc h2{font-size:1.1rem;font-weight:700;margin-bottom:16px;color:var(--accent)}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
+.toc a{color:var(--text2);text-decoration:none;font-size:.9rem;padding:6px 12px;border-radius:8px;display:block;transition:.2s}
+.toc a:hover{background:var(--card);color:var(--accent)}
+.toc a .num{color:var(--accent);font-weight:700;margin-right:6px;font-size:.8rem}
+/* Sections */
+.section{margin-bottom:56px}
+.section-anchor{scroll-margin-top:24px}
+h2.section-title{font-size:1.5rem;font-weight:700;margin-bottom:20px;padding-bottom:12px;
+border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:10px}
+h2.section-title .icon{font-size:1.3rem}
+h3{font-size:1.15rem;font-weight:600;margin:28px 0 12px;color:var(--accent3)}
+h4{font-size:1rem;font-weight:600;margin:20px 0 8px;color:var(--accent4)}
+p{margin-bottom:14px;color:var(--text)}
+/* Tables */
+.table-wrap{overflow-x:auto;margin:16px 0 24px;border-radius:12px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+thead{background:var(--surface)}
+th{padding:12px 16px;text-align:left;font-weight:600;color:var(--accent);border-bottom:2px solid var(--border);white-space:nowrap}
+td{padding:10px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:hover{background:var(--card)}
+.price{color:var(--accent4);font-weight:600}
+.perf{color:var(--accent3);font-weight:600}
+.recommend{color:var(--success);font-weight:600}
+.bad{color:var(--danger);font-weight:600}
+/* Cards */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:16px 0 24px}
+.info-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.info-card h4{margin:0 0 8px;color:var(--accent);font-size:.95rem}
+.info-card p{font-size:.88rem;color:var(--text2);margin:0}
+.info-card .badge{display:inline-block;font-size:.7rem;padding:2px 8px;border-radius:4px;margin-top:8px;font-weight:600}
+.badge-free{background:#10b98120;color:#34d399}
+.badge-paid{background:#f59e0b20;color:#fbbf24}
+.badge-enterprise{background:#8b5cf620;color:#a78bfa}
+/* Code */
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;padding:16px 20px;
+overflow-x:auto;margin:12px 0 20px;font-size:.83rem;line-height:1.65}
+code{font-family:'Fira Code','JetBrains Mono',monospace;color:var(--accent3)}
+p code,li code,td code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-size:.85em}
+/* Diagram */
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;
+margin:16px 0 24px;text-align:center;font-family:monospace;font-size:.85rem;line-height:1.8;overflow-x:auto}
+.diagram .title{font-weight:700;color:var(--accent);margin-bottom:12px;font-family:sans-serif;font-size:.95rem}
+/* Alert boxes */
+.alert{border-radius:10px;padding:16px 20px;margin:16px 0;font-size:.9rem}
+.alert-info{background:#3b82f610;border-left:4px solid var(--accent)}
+.alert-warn{background:#f59e0b10;border-left:4px solid var(--warning)}
+.alert-success{background:#10b98110;border-left:4px solid var(--success)}
+.alert-danger{background:#ef444410;border-left:4px solid var(--danger)}
+.alert strong{display:block;margin-bottom:4px}
+/* Lists */
+ul,ol{margin:8px 0 16px 20px}
+li{margin-bottom:6px;font-size:.92rem}
+li strong{color:var(--text)}
+/* Comparison */
+.compare-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+.compare-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.compare-box h4{margin:0 0 8px}
+.compare-box.pro{border-top:3px solid var(--success)}
+.compare-box.con{border-top:3px solid var(--danger)}
+/* Matrix 2x2 */
+.matrix-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0 24px}
+.matrix-box{border-radius:12px;padding:18px 20px;font-size:.88rem}
+.matrix-box h4{margin:0 0 8px;font-size:.95rem}
+.matrix-box.q1{background:#10b98115;border:1px solid var(--success)}
+.matrix-box.q2{background:#3b82f615;border:1px solid var(--accent)}
+.matrix-box.q3{background:#f59e0b15;border:1px solid var(--warning)}
+.matrix-box.q4{background:#ef444415;border:1px solid var(--danger)}
+/* Checkpoint */
+.checkpoint{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent5);
+border-radius:10px;padding:16px 22px;margin:24px 0 8px}
+.checkpoint h4{color:var(--accent5);margin:0 0 8px;font-size:.9rem;display:flex;align-items:center;gap:6px}
+.checkpoint ul{margin:0 0 0 18px}
+.checkpoint li{font-size:.87rem;color:var(--text2);margin-bottom:5px}
+/* Verified tag */
+.verified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;margin-left:6px;vertical-align:middle}
+.v-yes{background:#10b98120;color:#34d399}
+.v-no{background:#64748b30;color:#94a3b8}
+/* Footer */
+.footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--border);text-align:center;color:var(--text3);font-size:.8rem}
+/* Responsive */
+@media(max-width:768px){
+  .hero h1{font-size:1.4rem}
+  .toc-grid{grid-template-columns:1fr}
+  .card-grid{grid-template-columns:1fr}
+  .compare-row{grid-template-columns:1fr}
+  .matrix-grid{grid-template-columns:1fr}
+  table{font-size:.78rem}
+  th,td{padding:8px 10px}
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ===== HERO ===== -->
+<div class="hero">
+  <h1>AI 제품기획 · PRD · AX 전환 로드맵 종합 교육자료</h1>
+  <p class="subtitle">AI 기능은 왜 일반 소프트웨어처럼 기획하면 실패하는가부터, 바로 쓰는 AI PRD 템플릿, 실패를 전제로 한 UX 설계, 조직 전체의 AX(AI Transformation) 성숙도 진단과 12개월 로드맵까지<br>비개발자 경영자를 위한 AI 제품기획 실무 가이드</p>
+  <div class="meta-info">
+    <span class="meta-tag">2026-09-12 작성</span>
+    <span class="meta-tag">AADS Academy</span>
+    <span class="meta-tag">CEO 교육용</span>
+  </div>
+</div>
+
+<!-- ===== TOC ===== -->
+<div class="toc">
+  <h2>목차</h2>
+  <div class="toc-grid">
+    <a href="#ch1"><span class="num">01</span> AI 제품기획은 왜 다른가</a>
+    <a href="#ch2"><span class="num">02</span> AI 기능 발굴 프레임워크</a>
+    <a href="#ch3"><span class="num">03</span> AI PRD 표준 템플릿 (전체)</a>
+    <a href="#ch4"><span class="num">04</span> 사람-AI 협업 UX 패턴</a>
+    <a href="#ch5"><span class="num">05</span> 실패를 전제로 한 UX 설계</a>
+    <a href="#ch6"><span class="num">06</span> PoC→파일럿→전사확산 게이트</a>
+    <a href="#ch7"><span class="num">07</span> AX란 무엇인가 — DX와의 차이</a>
+    <a href="#ch8"><span class="num">08</span> AX 4축 성숙도 모델·진단</a>
+    <a href="#ch9"><span class="num">09</span> 변화관리: 저항·역할·교육</a>
+    <a href="#ch10"><span class="num">10</span> 투자회수(ROI) 계산법</a>
+    <a href="#ch11"><span class="num">11</span> AI 도입 실패 통계와 패턴</a>
+    <a href="#ch12"><span class="num">12</span> AADS 6개 프로젝트 AX 진단</a>
+    <a href="#ch13"><span class="num">13</span> 12개월 분기별 전환 로드맵</a>
+    <a href="#ch14"><span class="num">14</span> 참고자료·다음 단계</a>
+  </div>
+</div>
+
+<!-- ===== CH1 ===== -->
+<div class="section" id="ch1">
+  <h2 class="section-title section-anchor"><span class="icon">🎲</span> 01. AI 제품기획은 왜 일반 소프트웨어 기획과 다른가</h2>
+
+  <p>일반 소프트웨어는 <strong>같은 입력이면 같은 출력</strong>이 나옵니다. "주문 버튼을 누르면 항상 결제 화면으로 이동한다"처럼 요구사항을 결정론적(deterministic)으로 정의하고, 테스트도 "이 조건이면 이 결과"라는 단정형으로 작성합니다.</p>
+
+  <p>AI 기능, 특히 LLM 기반 기능은 <strong>같은 입력에도 다른 출력</strong>이 나올 수 있습니다(비결정적, non-deterministic). "고객 문의를 요약해줘"라는 같은 요청도 실행할 때마다 표현이 다르고, 드물게는 사실과 다른 내용(환각, hallucination)이 섞입니다. 이 근본적 차이를 인지하지 못하고 일반 소프트웨어 기획 방식 그대로 AI 기능을 기획하면 다음과 같은 실패가 반복됩니다.</p>
+
+  <div class="compare-row">
+    <div class="compare-box con">
+      <h4 style="color:var(--danger)">❌ 일반 SW 기획 방식을 AI에 그대로 적용할 때</h4>
+      <ul>
+        <li>"정확하게 동작해야 한다"는 모호한 요구사항 — 정확도가 몇 %인지 아무도 모름</li>
+        <li>QA가 "버그냐 아니냐"만 판단 — AI 출력은 버그가 아니라 확률적 오차일 수 있음</li>
+        <li>실패 시나리오를 "예외처리"로만 취급 — AI는 실패가 아니라 상시 발생하는 정상 분포의 일부</li>
+        <li>1회 테스트 통과 = 출시 — AI는 동일 테스트를 반복해도 결과가 흔들림</li>
+      </ul>
+    </div>
+    <div class="compare-box pro">
+      <h4 style="color:var(--success)">✅ AI 제품기획이 다뤄야 할 것</h4>
+      <ul>
+        <li>품질 목표를 <strong>확률/비율</strong>로 정의 (예: "95% 이상 정확", "치명적 오류 0.1% 이하")</li>
+        <li>QA가 아니라 <strong>평가(Evaluation)</strong> — 대표 샘플셋으로 통계적 품질을 측정</li>
+        <li>실패를 <strong>기본 설계 조건</strong>으로 포함 — 폴백 UX, 되돌리기, 사람 에스컬레이션을 처음부터 설계</li>
+        <li>출시 후에도 <strong>지속 모니터링</strong> — 모델/프롬프트/데이터가 바뀌면 품질도 바뀜(드리프트)</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>1-1. "품질 목표를 확률로 정의한다"는 것의 실제 의미</h3>
+  <p>비개발자 경영자가 가장 헷갈리는 지점입니다. "AI가 정확했으면 좋겠다"는 목표가 아니라, 다음처럼 <strong>측정 가능한 확률 문장</strong>으로 바꿔야 실제로 관리할 수 있습니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>흔한(잘못된) 목표</th><th>확률로 정의한 목표</th><th>왜 이게 관리 가능한가</th></tr></thead>
+      <tbody>
+        <tr><td>"AI 요약이 정확해야 한다"</td><td>"평가셋 200건 기준 핵심 사실 누락률 5% 이하"</td><td>매주 같은 방식으로 재측정해 추세 비교 가능</td></tr>
+        <tr><td>"챗봇이 이상한 말을 하면 안 된다"</td><td>"치명적 오답(금액·법적 조건 오류) 1,000건당 1건 이하, 발생 시 24시간 내 원인 분석"</td><td>"이상한 말"의 심각도를 등급화해 대응 우선순위 결정</td></tr>
+        <tr><td>"고객이 만족해야 한다"</td><td>"AI 응대 후 재문의율(같은 문제로 재문의) 15% 이하"</td><td>주관적 만족도 대신 행동 데이터로 대체 측정</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>💡 CEO가 던져야 할 첫 질문</strong>
+    담당 조직이 AI 기능 기획서를 가져오면 "정확하다"는 표현 대신 반드시 "몇 %가 기준이고, 어떤 데이터로 측정했는가"를 물으십시오. 답을 못하면 아직 기획이 끝난 게 아닙니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>새 AI 기능 제안서에 "정확도/성공률" 목표가 <strong>숫자(%)</strong>로 적혀 있는가?</li>
+      <li>그 숫자를 측정할 <strong>평가 데이터셋</strong>이 실제로 존재하는가, 아니면 "느낌"인가?</li>
+      <li>AI가 틀렸을 때 사용자가 어떻게 되는지(폴백 경로)가 기획 단계에서 이미 정의되어 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH2 ===== -->
+<div class="section" id="ch2">
+  <h2 class="section-title section-anchor"><span class="icon">🔍</span> 02. AI 기능 발굴 프레임워크</h2>
+
+  <p>"어디에 AI를 붙일까"를 감이 아니라 절차로 찾는 3단계 프레임워크입니다.</p>
+
+  <h3>2-1. 1단계 — 업무 분해 (Task Decomposition)</h3>
+  <p>부서 업무를 "이 업무가 실제로 하는 개별 작업 단위"로 쪼갭니다. 예: "고객 응대"라는 업무는 실제로는 [문의 분류] → [정보 조회] → [답변 초안 작성] → [최종 검수 및 발송] 등 여러 세부 작업의 합입니다. AI는 업무 전체가 아니라 <strong>세부 작업 단위</strong>에 적용해야 성공 확률이 올라갑니다.</p>
+
+  <h3>2-2. 2단계 — 반복성 × 판단복잡도 매트릭스</h3>
+  <p>분해한 각 작업을 두 축으로 배치합니다: <strong>반복성</strong>(같은 패턴이 얼마나 자주 반복되는가)과 <strong>판단복잡도</strong>(결정을 내리는 데 필요한 맥락·전문성 수준).</p>
+
+  <div class="matrix-grid">
+    <div class="matrix-box q1">
+      <h4 style="color:var(--success)">고반복 × 저판단 — 완전 자동화 최우선</h4>
+      <p>예: 영수증 데이터 입력, 정형 문서 요약, 반복 문의 자동 답변, 데이터 분류·태깅</p>
+      <p>AI 단독 실행 적합. ROI가 가장 빠르게 나오는 영역.</p>
+    </div>
+    <div class="matrix-box q2">
+      <h4 style="color:var(--accent)">고반복 × 고판단 — AI 보조 + 사람 승인</h4>
+      <p>예: 계약서 조항 검토, 채용 서류 1차 스크리닝, 코드 리뷰, 마케팅 문구 초안</p>
+      <p>AI가 초안을 만들고 사람이 최종 승인. 4장 협업 UX 패턴 참고.</p>
+    </div>
+    <div class="matrix-box q3">
+      <h4 style="color:var(--warning)">저반복 × 저판단 — 룰 기반이 더 경제적</h4>
+      <p>예: 특정 조건 알림, 단순 라우팅</p>
+      <p>AI 도입 ROI가 낮음. 기존 자동화(IFTTT형 규칙)로 충분한 경우가 많음.</p>
+    </div>
+    <div class="matrix-box q4">
+      <h4 style="color:var(--danger)">저반복 × 고판단 — AI 부적합, 사람 전담</h4>
+      <p>예: 신사업 전략 결정, 대규모 투자 판단, 조직 개편</p>
+      <p>AI는 참고자료·시뮬레이션 보조로만 사용. 의사결정 주체는 사람.</p>
+    </div>
+  </div>
+
+  <h3>2-3. 3단계 — ROI 산정</h3>
+  <p>매트릭스 1사분면(고반복·저판단)부터 순서대로 다음 공식으로 개략 ROI를 계산해 우선순위를 정합니다. 상세 계산식과 예시는 10장에서 다룹니다.</p>
+  <pre><code>개략 ROI 점수 = (반복 빈도 × 건당 소요시간 × 시급 환산액) ÷ (예상 구축비용 + 월 운영비 × 12)</code></pre>
+  <p>점수가 높을수록 우선 착수 후보입니다. 단, 판단복잡도가 높은 영역은 ROI가 높아도 <strong>실패 허용범위</strong>(5장)를 먼저 정의하지 않으면 착수하지 않습니다.</p>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>제안된 AI 과제가 "업무 전체"가 아니라 "쪼갠 세부 작업 단위"로 정의되어 있는가?</li>
+      <li>그 작업이 매트릭스 어느 사분면에 속하는지 실무팀이 설명할 수 있는가?</li>
+      <li>ROI 점수 상위 3개 후보가 무엇인지, 왜 그 순서인지 근거가 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH3 ===== -->
+<div class="section" id="ch3">
+  <h2 class="section-title section-anchor"><span class="icon">📋</span> 03. AI PRD 표준 템플릿 — 바로 복사해서 쓰는 전체 양식</h2>
+
+  <p>일반 PRD(제품요구사항문서)에 없는 5개 항목(품질 기준선, 실패 허용범위, 폴백 UX, 평가셋, 롤백 조건)이 AI PRD의 핵심입니다. 아래 템플릿을 그대로 복사해 문서 도구에 붙여넣고 빈칸을 채우면 됩니다.</p>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ 이 템플릿이 없는 AI 프로젝트는 승인하지 마십시오</strong>
+    "품질 기준선"과 "롤백 조건"이 비어 있는 AI 기획서는 아직 기획이 아니라 아이디어 단계입니다. 개발 착수 전 반드시 CEO 또는 프로젝트 리더의 승인란을 채우게 하십시오.
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>항목</th><th>왜 AI PRD에만 필요한가</th></tr></thead>
+      <tbody>
+        <tr><td>문제 정의</td><td>일반 PRD와 동일하지만, "AI가 아닌 방법으로는 왜 안 되는가"를 반드시 답해야 함</td></tr>
+        <tr><td>사용자</td><td>사용자의 AI 리터러시 수준에 따라 UX 설계(4장)가 완전히 달라짐</td></tr>
+        <tr><td>성공 지표</td><td>비즈니스 지표 + 품질 지표를 분리 — 둘은 다른 것</td></tr>
+        <tr><td>품질 기준선</td><td>확률로 정의된 정확도/신뢰도 목표 (1장 참고)</td></tr>
+        <tr><td>실패 허용범위</td><td>모든 오류를 막을 수 없음 — 어떤 오류는 허용하고 어떤 오류는 절대 허용 안 되는지 사전 구분</td></tr>
+        <tr><td>폴백 UX</td><td>AI가 자신 없을 때 사용자가 갈 수 있는 대안 경로 (5장)</td></tr>
+        <tr><td>평가셋</td><td>주관적 "느낌"이 아니라 고정된 데이터로 반복 측정하기 위한 근거</td></tr>
+        <tr><td>롤백 조건</td><td>품질이 떨어지면 언제·누가·어떻게 되돌릴지 사전 합의</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>3-1. 전체 템플릿 (복사용)</h3>
+  <pre><code># AI 기능 PRD — [기능명을 입력하세요]
+
+## 0. 문서 정보
+- 작성자 / 작성일 :
+- 관련 부서 :
+- 문서 버전 :
+- 승인자(CEO 또는 프로젝트 리더) / 승인일 :
+
+## 1. 문제 정의 (Problem)
+- 현재 무엇이 문제인가 :
+- 이 문제를 방치하면 어떤 비용/리스크가 발생하는가 (시간, 비용, 고객 이탈 등) :
+- AI가 아닌 방법(규칙 기반 자동화, 프로세스 개선, 인력 충원)으로는 왜 부족한가 :
+- 2장 매트릭스 기준 이 작업의 사분면 : [고반복·저판단 / 고반복·고판단 / 저반복·저판단 / 저반복·고판단]
+
+## 2. 대상 사용자 (Users)
+- 주 사용자(내부 직원 / 외부 고객) :
+- 사용 빈도(1일 n회) :
+- 사용자의 AI 리터러시 수준 : [초급 / 중급 / 고급]
+- 사용자가 AI 오답을 스스로 판별할 수 있는 전문성이 있는가 : [Y / N]
+
+## 3. 성공 지표 (Success Metrics)
+- 비즈니스 지표 (예: 처리시간 40%↓, 처리건수 2배↑, 비용 30%↓) :
+- 품질 지표 (예: 정확도, 사용자 만족도, 재문의율) :
+- 측정 주기 (일간/주간/월간) :
+- 측정 담당자 :
+
+## 4. 품질 기준선 (Quality Baseline) — 반드시 확률/비율로 정의
+- 정확도(Accuracy) 목표 : 예) 평가셋 기준 95% 이상
+- 응답 신뢰도(Confidence) 임계값 : 예) 0.8 미만이면 자동 에스컬레이션
+- 사람 대비 비교 기준 : 예) 숙련 담당자 정확도(__%) 이상 또는 그 -5%p 이내
+- 응답 속도 목표 (필요 시) :
+
+## 5. 실패 허용 범위 (Failure Tolerance)
+- 허용 가능한 경미한 오류 유형 (예: 문체 어색함, 사소한 표현 차이) :
+- 절대 허용 불가한 치명적 오류 유형 (예: 금액 오류, 법적 조건 오류, 차별적 표현) :
+- 치명적 오류 최대 허용 빈도 : 예) 10,000건당 1건 이하
+- 오류의 비즈니스 영향도 등급 : [경미 / 보통 / 심각 / 치명]
+
+## 6. 폴백 UX (Fallback UX)
+- AI 신뢰도가 낮을 때 사용자에게 보여줄 화면/문구 :
+- 사람에게 이관하는 경로 (버튼 위치, 담당자 배정 방식) :
+- AI를 아예 사용하지 않는 대안 경로가 항상 열려 있는가 : [Y / N]
+- 이관 시 목표 응답시간(SLA) :
+
+## 7. 평가셋 (Evaluation Set)
+- 평가 데이터 건수 및 출처 :
+- 정답(Ground Truth) 라벨링 방법 및 담당자 :
+- 극단 사례(edge case)·악의적 입력(adversarial) 포함 여부 :
+- 재평가 주기 및 트리거(모델 교체, 프롬프트 변경 시 필수 재평가) :
+
+## 8. 롤백 조건 (Rollback Criteria)
+- 품질 기준선 미달 시 자동/수동 롤백 트리거 : 예) 3일 연속 정확도 90% 미만
+- 롤백 결정권자 :
+- 롤백 시 기존(AI 도입 전) 프로세스로 복귀하는 데 걸리는 시간 :
+- 롤백 후 재도입 조건 :
+
+## 9. 리스크 및 규제 검토
+- 개인정보/민감정보 처리 여부 :
+- 관련 법규/내부 규정 검토 완료 여부 :
+- 보안 검토(데이터 외부 전송 여부) 완료 여부 :
+
+## 10. 승인 및 이력
+- 1차 검토(실무팀) :
+- 2차 승인(리더/CEO) :
+- 버전 이력 :
+</code></pre>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>결재 올라온 AI 기획서에 이 템플릿 10개 항목이 모두 채워져 있는가?</li>
+      <li>"5. 실패 허용 범위"에 치명적 오류의 최대 허용 빈도가 숫자로 적혀 있는가?</li>
+      <li>"8. 롤백 조건"의 결정권자가 명시되어 있고, 그것이 실무팀이 아니라 리더급인가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH4 ===== -->
+<div class="section" id="ch4">
+  <h2 class="section-title section-anchor"><span class="icon">🤝</span> 04. 사람-AI 협업 UX 패턴</h2>
+
+  <p>AI 기능을 화면에 배치할 때 "AI가 알아서 다 하게 할지, 사람이 확인할지"를 결정하는 3단계 자동화 수준이 있습니다. 판단복잡도와 오류의 비즈니스 영향도(3장 5항)에 따라 선택합니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>수준</th><th>정의</th><th>적합한 상황</th><th>예시</th></tr></thead>
+      <tbody>
+        <tr><td><strong>자동실행 (Autonomous)</strong></td><td>AI가 판단하고 즉시 실행, 사람 개입 없음</td><td>오류 영향도 "경미", 되돌리기 쉬움</td><td>초안 문서 태깅, 스팸 필터링, 내부용 요약 생성</td></tr>
+        <tr><td><strong>제안 (Suggest)</strong></td><td>AI가 결과를 제시하고 사람이 채택/수정/거부</td><td>오류 영향도 "보통", 판단복잡도 중간</td><td>답변 초안, 코드 자동완성, 디자인 시안 제안</td></tr>
+        <tr><td><strong>승인요청 (Approval-required)</strong></td><td>AI가 실행 전 반드시 사람의 명시적 승인을 받음</td><td>오류 영향도 "심각/치명", 되돌리기 어려움</td><td>대외 발송 이메일, 결제·환불 처리, 계약서 최종본 발송</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>💡 선택 기준</strong>
+    "이 작업이 잘못됐을 때 되돌릴 수 있는가?" + "잘못된 결과가 외부(고객, 거래처, 규제기관)에 노출되는가?" 두 질문에 하나라도 "되돌리기 어렵다" 또는 "외부 노출"이면 최소 <strong>제안</strong> 이상, 둘 다 해당하면 반드시 <strong>승인요청</strong>으로 설계합니다.
+  </div>
+
+  <h3>4-1. 신뢰 구축을 위한 근거 표시 (Explainability UX)</h3>
+  <p>사용자가 AI 출력을 신뢰하고 올바르게 검증하려면, 결과만이 아니라 "왜 이런 결과가 나왔는지"를 보여줘야 합니다.</p>
+
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>신뢰도 점수 표시</h4>
+      <p>AI가 스스로 판단한 확신도(예: "확신도 92%")를 함께 노출. 낮은 확신도는 시각적으로 경고 처리.</p>
+    </div>
+    <div class="info-card">
+      <h4>출처/근거 인용</h4>
+      <p>답변이 어떤 문서·데이터에서 나왔는지 링크. RAG 구조에서는 참조 문서를 클릭해 원문 확인 가능하게.</p>
+    </div>
+    <div class="info-card">
+      <h4>추론 과정 요약</h4>
+      <p>"왜 이 결론인가"를 1~2문장으로 요약 제공(전체 사고과정 노출은 불필요, 핵심 근거만).</p>
+    </div>
+    <div class="info-card">
+      <h4>수정 이력 추적</h4>
+      <p>사람이 AI 제안을 수정한 이력을 저장해, 어떤 유형에서 AI가 자주 틀리는지 추후 분석 가능하게.</p>
+    </div>
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>대외 발송·결제처럼 되돌리기 어려운 기능이 "자동실행"으로 설계되어 있지는 않은가?</li>
+      <li>AI 결과 화면에 신뢰도나 근거(출처)가 표시되는가, 아니면 결과만 툭 던져주는가?</li>
+      <li>사람이 AI 제안을 수정한 이력이 쌓여서 개선에 쓰이고 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH5 ===== -->
+<div class="section" id="ch5">
+  <h2 class="section-title section-anchor"><span class="icon">🛟</span> 05. AI 실패를 전제로 한 UX 설계</h2>
+
+  <p>AI는 언젠가, 반드시 틀립니다. 이것은 버그가 아니라 확률적 시스템의 본질입니다. "틀렸을 때 무엇을 하는가"를 출시 전에 설계하지 않으면, 실제 실패가 발생했을 때 사용자는 신뢰를 완전히 잃습니다.</p>
+
+  <h3>5-1. 오류 복구 경로 설계</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>단계</th><th>설계 요소</th><th>예시</th></tr></thead>
+      <tbody>
+        <tr><td>1. 감지</td><td>낮은 신뢰도, 사용자의 "이상해요" 피드백 버튼, 반복 재질문 패턴 감지</td><td>확신도 0.7 미만 시 배지 표시</td></tr>
+        <tr><td>2. 안내</td><td>"확실하지 않습니다"를 숨기지 않고 명확히 고지</td><td>"이 답변은 참고용입니다. 확실하지 않으면 담당자에게 문의하세요"</td></tr>
+        <tr><td>3. 대안 제시</td><td>재시도, 다른 표현으로 재질문, 사람 연결 중 선택지 제공</td><td>"다시 물어보기 / 담당자 연결 / 기존 방식으로 처리"</td></tr>
+        <tr><td>4. 이관</td><td>일정 조건 충족 시 자동으로 사람에게 이관</td><td>같은 문제로 2회 이상 재질문 시 자동 상담원 연결</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>5-2. 되돌리기(Undo)</h3>
+  <ul>
+    <li><strong>실행 전 확인</strong>: 되돌리기 어려운 작업(발송, 삭제, 결제)은 실행 전 최종 확인 단계 필수</li>
+    <li><strong>실행 후 취소 유예시간</strong>: 이메일 발송 등은 "5초 후 발송" 같은 취소 유예 구간 제공</li>
+    <li><strong>버전 관리</strong>: AI가 수정한 문서/데이터는 이전 버전을 항상 복구 가능하게 보관</li>
+  </ul>
+
+  <h3>5-3. 에스컬레이션 설계</h3>
+  <div class="alert alert-warn">
+    <strong>⚠️ "에스컬레이션 경로 없음"은 설계 실패입니다</strong>
+    AI가 처리할 수 없거나 처리해서는 안 되는 상황(법적 분쟁, 고액 환불, 감정적으로 격앙된 고객)에서 사람에게 넘어가는 경로가 없으면, 시스템이 계속 AI로만 응대를 시도하다 고객 이탈로 이어집니다. PRD의 "폴백 UX" 항목에 반드시 에스컬레이션 트리거 조건을 명시하십시오.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>AI 기능 화면에 "확실하지 않다"는 것을 사용자에게 정직하게 알리는 장치가 있는가?</li>
+      <li>되돌릴 수 없는 작업(발송/삭제/결제)에 확인 단계 또는 취소 유예시간이 있는가?</li>
+      <li>사람에게 이관되는 조건(몇 번 재질문 시, 어떤 키워드 감지 시)이 구체적으로 정의되어 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH6 ===== -->
+<div class="section" id="ch6">
+  <h2 class="section-title section-anchor"><span class="icon">🚪</span> 06. PoC → 파일럿 → 전사확산 게이트</h2>
+
+  <p>AI 과제를 규모를 키워가며 검증하는 3단계 게이트입니다. 각 단계를 통과하지 못하면 다음 단계로 넘어가지 않는 것이 원칙입니다(11장의 실패 통계 대부분이 이 게이트를 생략해서 발생).</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>단계</th><th>목적</th><th>기간</th><th>규모</th><th>통과 기준</th></tr></thead>
+      <tbody>
+        <tr><td><strong>PoC (개념검증)</strong></td><td>기술적으로 가능한가 확인</td><td>1~3주</td><td>담당자 1~2명, 샘플 데이터</td><td>품질 기준선(3장) 근사치 달성, 치명적 오류 없음</td></tr>
+        <tr><td><strong>파일럿</strong></td><td>실제 업무 환경에서 가치를 내는가 확인</td><td>4~8주</td><td>1개 팀, 실데이터, 실사용자</td><td>성공 지표 목표 90% 이상 달성, 평가셋 정식 측정 완료, 폴백 UX 실사용 검증</td></tr>
+        <tr><td><strong>전사확산</strong></td><td>여러 부서로 표준화된 방식으로 확산</td><td>지속</td><td>전사 또는 다부서</td><td>롤백 절차 실전 리허설 완료, 거버넌스(PRD 표준·승인 프로세스) 문서화, ROI 실측치 확보</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-danger">
+    <strong>🚫 가장 흔한 실패 패턴: PoC를 건너뛰고 바로 전사 배포</strong>
+    "데모에서 잘 되니까 전 직원에게 배포하자"는 결정이 11장 통계의 핵심 실패 원인 중 하나입니다. 데모는 준비된 좋은 사례만 보여줍니다. 파일럿의 실데이터·실사용자 검증 없이는 품질 기준선이 실전에서 무너지는 경우가 대부분입니다.
+  </div>
+
+  <h3>6-1. 각 게이트에서 CEO가 확인할 것</h3>
+  <ul>
+    <li><strong>PoC→파일럿 전환 시</strong>: 평가셋 기준 수치가 있는가, 아니면 "느낌상 괜찮았다"인가?</li>
+    <li><strong>파일럿→전사확산 전환 시</strong>: 실사용자가 실제로 폴백/에스컬레이션 경로를 사용한 사례가 있고, 그때 만족스러웠는가?</li>
+    <li><strong>전사확산 중</strong>: 롤백을 실제로 한 번 리허설해봤는가(연습 없이는 실전에서 못함)?</li>
+  </ul>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>지금 진행 중인 AI 과제가 PoC/파일럿/전사확산 중 어느 단계인지 명확한가?</li>
+      <li>다음 단계로 넘어가겠다는 보고에 "통과 기준" 수치가 첨부되어 있는가?</li>
+      <li>전사확산 전에 롤백 리허설을 한 번이라도 실행했는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH7 ===== -->
+<div class="section" id="ch7">
+  <h2 class="section-title section-anchor"><span class="icon">🧭</span> 07. AX(AI Transformation)란 무엇인가 — DX와의 차이</h2>
+
+  <p>DX(디지털 전환)는 아날로그 프로세스를 디지털·데이터화하고 규칙 기반으로 자동화하는 것이었습니다. AX(AI 전환)는 그 위에서 <strong>확률적 판단을 조직의 의사결정 구조에 통합</strong>하는 다음 단계입니다. 둘은 이어지지만 요구하는 조직 역량이 다릅니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>구분</th><th>DX (디지털 전환)</th><th>AX (AI 전환)</th></tr></thead>
+      <tbody>
+        <tr><td>핵심 동작</td><td>수작업 → 시스템화·규칙 기반 자동화</td><td>규칙으로 못 푸는 판단 업무 → 확률적 AI 보조/자동화</td></tr>
+        <tr><td>출력 특성</td><td>결정론적(같은 입력 = 같은 출력)</td><td>비결정적(확률 분포 기반, 1장 참고)</td></tr>
+        <tr><td>필요 데이터</td><td>정형 데이터, 트랜잭션 로그</td><td>정형+비정형(문서, 대화, 이미지), 지속 학습용 피드백 데이터</td></tr>
+        <tr><td>조직 역량</td><td>IT 부서 주도 시스템 구축</td><td>현업+AI 리터러시 결합, 지속적 평가·개선 루프</td></tr>
+        <tr><td>성공 측정</td><td>처리시간, 오류율(규칙 위반 여부)</td><td>품질 기준선 충족률, ROI, 신뢰도·사용자 채택률</td></tr>
+        <tr><td>리스크 성격</td><td>시스템 장애(다운타임)</td><td>품질 저하(환각, 편향), 드리프트, 설명불가능성</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>💡 왜 이 구분이 중요한가</strong>
+    DX가 성숙한 조직(ERP·데이터 표준화 완료)이 AX도 빠르다는 보장은 없습니다. AX는 "데이터가 정형화되어 있는가"뿐 아니라 "직원들이 AI 출력을 검증·활용할 수 있는가", "실패를 전제로 한 프로세스를 받아들이는 조직문화가 있는가"라는 완전히 다른 축을 요구합니다. 다음 장의 4축 성숙도 모델이 이 차이를 진단하는 도구입니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>우리 조직이 "DX는 끝났다"고 생각한다면, 그것이 곧 "AX도 준비됐다"는 뜻이 아님을 임원진이 이해하고 있는가?</li>
+      <li>AI 도입 논의에서 "시스템 장애"와 "품질 저하"를 같은 리스크로 취급하고 있지는 않은가?</li>
+      <li>현업 부서가 AI 출력을 검증할 수 있는 최소한의 리터러시 교육을 받았는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH8 ===== -->
+<div class="section" id="ch8">
+  <h2 class="section-title section-anchor"><span class="icon">📊</span> 08. AX 4축 성숙도 모델과 진단 체크리스트</h2>
+
+  <p>조직·프로세스·데이터·인재 4개 축을 각각 레벨 0~4로 진단합니다. 4개 축의 수준이 고르지 못하면(예: 데이터는 Lv3인데 인재는 Lv1) 가장 낮은 축이 전체 AX 속도를 제한합니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>레벨</th><th>명칭</th><th>일반적 특징</th></tr></thead>
+      <tbody>
+        <tr><td>Lv0</td><td><strong>미인지 (Unaware)</strong></td><td>AI 활용 계획 없음. 개인 차원 산발적 사용만 존재</td></tr>
+        <tr><td>Lv1</td><td><strong>실험 (Experimenting)</strong></td><td>부서별로 개별 도구 사용, 표준·거버넌스 없음</td></tr>
+        <tr><td>Lv2</td><td><strong>파일럿 (Piloting)</strong></td><td>특정 업무에 PoC/파일럿 진행, 성과 측정 시작</td></tr>
+        <tr><td>Lv3</td><td><strong>확산 (Scaling)</strong></td><td>여러 부서로 확산, PRD·승인 절차 표준화, ROI 정기 추적</td></tr>
+        <tr><td>Lv4</td><td><strong>내재화 (Embedded)</strong></td><td>핵심 프로세스에 AI 기본 내장, 지속 학습 루프, 조직 KPI에 AI 기여도 반영</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>8-1. 4축별 레벨 진단 기준</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>축</th><th>Lv1 실험</th><th>Lv2 파일럿</th><th>Lv3 확산</th><th>Lv4 내재화</th></tr></thead>
+      <tbody>
+        <tr><td><strong>조직</strong></td><td>개인이 각자 도구 사용, 담당 조직 없음</td><td>AI 전담 소규모 팀/TF 존재</td><td>부서별 AI 담당자 지정, 거버넌스 위원회 운영</td><td>AI가 경영 의사결정 프로세스에 정례 반영</td></tr>
+        <tr><td><strong>프로세스</strong></td><td>표준 절차 없음, 개인 판단에 의존</td><td>PRD 템플릿 시범 적용, 파일럿 단위 승인</td><td>전사 AI PRD·게이트 절차 표준화</td><td>롤백·모니터링이 자동화 파이프라인에 내장</td></tr>
+        <tr><td><strong>데이터</strong></td><td>데이터 흩어짐, 정제 안 됨</td><td>파일럿 대상 업무 데이터만 정제</td><td>평가셋·피드백 데이터 체계적 축적</td><td>실시간 피드백 루프로 모델·프롬프트 지속 개선</td></tr>
+        <tr><td><strong>인재</strong></td><td>일부 얼리어답터만 활용</td><td>파일럿 참여자 기본 교육 완료</td><td>전사 AI 리터러시 교육 프로그램 운영</td><td>AI 활용 역량이 채용·평가·승진 기준에 반영</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>8-2. 자가 진단 체크리스트 (각 축 3문항, Y 개수로 레벨 추정)</h3>
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>조직</h4>
+      <p>□ AI 과제를 승인하는 담당자/위원회가 있다<br>□ AI 예산이 별도 항목으로 편성되어 있다<br>□ AI 성과를 정기 보고받는 임원이 있다</p>
+    </div>
+    <div class="info-card">
+      <h4>프로세스</h4>
+      <p>□ 신규 AI 기능에 표준 PRD 양식을 쓴다<br>□ PoC→파일럿→확산 게이트가 문서화되어 있다<br>□ 롤백 절차를 리허설한 적이 있다</p>
+    </div>
+    <div class="info-card">
+      <h4>데이터</h4>
+      <p>□ 핵심 업무 데이터가 정형화·접근 가능하다<br>□ AI 평가용 데이터셋을 보유하고 있다<br>□ 사용자 피드백이 구조화되어 축적된다</p>
+    </div>
+    <div class="info-card">
+      <h4>인재</h4>
+      <p>□ 전 직원 대상 AI 리터러시 교육이 있다<br>□ 부서마다 AI 활용을 이끄는 챔피언이 있다<br>□ AI 활용도가 인사 평가 항목에 있다</p>
+    </div>
+  </div>
+  <p style="color:var(--text2);font-size:.85rem">3문항 모두 Y = 해당 축 Lv3 이상 추정, 1~2개 Y = Lv1~2, 0개 Y = Lv0~1. 정밀 진단은 축별 세부 인터뷰가 필요하며 본 체크리스트는 약식 자가진단용입니다.</p>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>4축 중 가장 낮은 축이 무엇인지 알고 있는가? (그 축이 전체 속도를 제한합니다)</li>
+      <li>데이터 축과 인재 축은 프로세스·조직 축보다 시간이 오래 걸린다는 것을 일정에 반영했는가?</li>
+      <li>이 체크리스트를 실제로 부서별로 실행해본 적이 있는가, 아니면 짐작으로만 판단하는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH9 ===== -->
+<div class="section" id="ch9">
+  <h2 class="section-title section-anchor"><span class="icon">🔄</span> 09. 변화관리: 직원 저항·역할 재정의·교육 계획</h2>
+
+  <h3>9-1. 직원 저항의 3가지 유형과 대응</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>저항 유형</th><th>근본 원인</th><th>대응 방법</th></tr></thead>
+      <tbody>
+        <tr><td><strong>일자리 불안</strong></td><td>"AI가 내 업무를 대체할 것"이라는 두려움</td><td>AI 도입 목적을 "대체"가 아닌 "저반복 업무 제거로 고부가 업무 재배치"로 명확히 커뮤니케이션. 재배치 계획을 구체적으로 제시</td></tr>
+        <tr><td><strong>신뢰 부족</strong></td><td>AI 출력을 믿을 수 없다는 경험적 불신</td><td>4장의 근거 표시 UX 도입, 초기에는 AI를 "제안" 수준으로만 노출해 신뢰를 단계적으로 축적</td></tr>
+        <tr><td><strong>숙련도 격차</strong></td><td>AI 도구 사용법 자체를 몰라서 오는 회피</td><td>역할별 맞춤 교육(9-3 참고), 사내 챔피언 제도 운영</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>9-2. 역할 재정의</h3>
+  <p>AI 도입 후 기존 역할이 사라지는 것이 아니라 <strong>검증자·감독자 역할로 재정의</strong>되는 경우가 많습니다. 예: "문서 작성 담당자" → "AI 초안 검수·최종 책임자". 이 재정의를 인사 직무기술서(JD)에 명시적으로 반영해야 저항이 줄어듭니다.</p>
+
+  <h3>9-3. 교육 계획 (역할별)</h3>
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>전 직원 — AI 리터러시 기초</h4>
+      <p>AI의 비결정적 특성 이해, 환각 인지법, 프롬프트 기본, 사내 AI 도구 사용 규정. 반기 1회, 2~4시간.</p>
+    </div>
+    <div class="info-card">
+      <h4>현업 실무자 — 검증 역량</h4>
+      <p>담당 업무의 AI 출력을 검증하는 법, 폴백/에스컬레이션 절차 숙지, 피드백 등록 방법. 파일럿 참여 시 필수.</p>
+    </div>
+    <div class="info-card">
+      <h4>팀 리더 — PRD·게이트 운영</h4>
+      <p>3장 PRD 작성법, 6장 게이트 통과 기준 판단, ROI 보고. 분기 1회 워크숍.</p>
+    </div>
+    <div class="info-card">
+      <h4>경영진 — 거버넌스·리스크</h4>
+      <p>4축 성숙도 진단 해석, 실패 통계(11장) 기반 리스크 판단, 투자 의사결정. 반기 1회.</p>
+    </div>
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>"AI가 당신의 일자리를 대체하지 않는다"는 메시지를 구체적 재배치 계획과 함께 전달했는가?</li>
+      <li>AI 도입 후 역할이 바뀐 직원의 직무기술서(JD)를 실제로 갱신했는가?</li>
+      <li>역할별 교육 계획이 문서로 존재하고, 실제 일정이 잡혀 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH10 ===== -->
+<div class="section" id="ch10">
+  <h2 class="section-title section-anchor"><span class="icon">💰</span> 10. 투자 회수(ROI) 계산법</h2>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ 아래 계산식의 수치는 설명을 위한 예시입니다</strong>
+    시급·건수·비용은 조직마다 다릅니다. 반드시 자사 실제 데이터로 대체해 계산하십시오. 예시 수치를 AADS나 특정 기업의 실적으로 오인하지 마십시오.
+  </div>
+
+  <h3>10-1. 계산 공식</h3>
+  <pre><code>절감 인건비 가치 = 절감 시간(시간/월) × 시급 환산액
+품질 개선 가치 = (기존 오류율 − AI 적용 후 오류율) × 오류 1건당 손실비용 × 월 처리건수
+총 절감가치(월) = 절감 인건비 가치 + 품질 개선 가치 + 매출 증대 효과(해당 시)
+
+총 투자비용 = 초기 구축비(1회성) + 월 운영비(API/GPU/인건비) × 운영개월수
+
+ROI(%) = (총 절감가치 − 총 투자비용) ÷ 총 투자비용 × 100
+회수기간(개월) = 초기 구축비 ÷ (월 절감가치 − 월 운영비)</code></pre>
+
+  <h3>10-2. 계산 예시 — 문서 요약 업무 자동화 (가상 시나리오)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>항목</th><th>값</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td>대상 인원</td><td>5명</td><td>주간 문서 요약 업무 담당자</td></tr>
+        <tr><td>절감 시간</td><td>월 200시간</td><td>1인당 주 10시간 × 5명 × 4주</td></tr>
+        <tr><td>시급 환산액</td><td>₩25,000 <small style="color:var(--text3)">(약 $18)</small></td><td>사무직 평균 시급 가정치 — 예시용</td></tr>
+        <tr><td>절감 인건비 가치(월)</td><td class="price">₩5,000,000 <small style="color:var(--text3)">(약 $3,623)</small></td><td>200시간 × ₩25,000</td></tr>
+        <tr><td>월 운영비(API)</td><td class="price">₩414,000 <small style="color:var(--text3)">($300)</small></td><td>LLM API 사용료 가정</td></tr>
+        <tr><td>초기 구축비(1회성)</td><td class="price">₩2,760,000 <small style="color:var(--text3)">($2,000)</small></td><td>PRD 작성·파일럿 인건비 포함</td></tr>
+        <tr><td>월 순절감액</td><td class="recommend">₩4,586,000 <small style="color:var(--text3)">(약 $3,323)</small></td><td>절감 인건비 − 월 운영비</td></tr>
+        <tr><td>회수기간</td><td class="recommend">약 0.6개월 (약 18일)</td><td>초기구축비 ÷ 월 순절감액</td></tr>
+        <tr><td>연간 순가치</td><td class="recommend">약 ₩52,270,000 <small style="color:var(--text3)">(약 $37,880)</small></td><td>월 순절감액×12 − 초기구축비</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>10-3. 품질 개선 가치의 정량화 — 별도 예시</h3>
+  <p>단순 시간 절감 외에, 오류 감소 자체도 금전 가치로 환산할 수 있습니다. 예: 월 1,000건 처리 업무에서 오류율이 8% → 3%로 감소하고, 오류 1건당 재작업·고객 대응 비용이 ₩50,000라면:</p>
+  <pre><code>품질 개선 가치 = (0.08 − 0.03) × ₩50,000 × 1,000건 = 월 ₩2,500,000 (약 $1,812)</code></pre>
+  <p>이 값을 절감 인건비 가치와 합산하면 AI 기능의 총 경제적 효과를 더 정확히 파악할 수 있습니다.</p>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>보고받는 AI ROI 수치가 예시가 아니라 자사 실제 시급·건수·오류율로 계산됐는가?</li>
+      <li>절감 인건비만이 아니라 품질 개선 가치도 별도로 계산에 포함되어 있는가?</li>
+      <li>회수기간이 비정상적으로 짧다면(예: 1개월 미만), 가정치가 과도하게 낙관적이지 않은지 재검토했는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH11 ===== -->
+<div class="section" id="ch11">
+  <h2 class="section-title section-anchor"><span class="icon">📉</span> 11. AI 도입 실패 원인 통계와 대표 실패 패턴</h2>
+
+  <div class="alert alert-info">
+    <strong>출처 안내</strong>
+    아래 수치는 2024~2025년에 공개된 산업 조사·연구기관 보고서에서 널리 인용된 것으로, 본 문서 작성 시점(2026-09) 기준 추가 실시간 검증은 수행하지 않았습니다. 정확한 최신 수치는 14장 참고자료의 원문을 직접 확인하십시오.
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>출처</th><th>핵심 수치</th><th>주요 원인</th></tr></thead>
+      <tbody>
+        <tr><td><strong>MIT (NANDA 프로젝트), 2025</strong></td><td>생성형 AI 파일럿의 약 95%가 측정 가능한 매출/손익 개선을 만들어내지 못함</td><td>범용 도구 도입에 그치고 업무 워크플로우에 깊이 통합되지 않음, 반복 학습 루프 부재</td></tr>
+        <tr><td><strong>Gartner, 2024</strong></td><td>2025년 말까지 생성형 AI 프로젝트의 최소 30%가 PoC 이후 중단될 것으로 예측</td><td>데이터 품질 미흡, 리스크 통제 부족, 비용 상승, 불명확한 비즈니스 가치</td></tr>
+        <tr><td><strong>RAND Corporation, 2024</strong></td><td>AI 프로젝트의 80% 이상이 실패 — 비AI IT 프로젝트 대비 약 2배</td><td>비즈니스 문제 정의 오류, 데이터 준비 부족, 과도한 기술 중심 접근</td></tr>
+        <tr><td><strong>BCG, 2024</strong></td><td>PoC를 넘어 실질 가치를 창출할 조직 역량을 갖췄다고 응답한 기업은 약 26%</td><td>조직·프로세스 축(8장) 준비 부족, 인재 역량 미흡</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>11-1. 대표 실패 패턴 5가지</h3>
+  <ol>
+    <li><strong>게이트 생략</strong> — PoC 데모만 보고 바로 전사 배포(6장 참고)</li>
+    <li><strong>품질 기준선 부재</strong> — "정확하면 좋겠다"는 모호한 목표로 시작해 실패를 실패로 인지하지 못함(1장 참고)</li>
+    <li><strong>데이터 축 과소평가</strong> — 프로세스·조직은 준비됐지만 평가셋·피드백 데이터가 없어 품질을 측정할 수 없음(8장 참고)</li>
+    <li><strong>변화관리 생략</strong> — 기술은 완성됐지만 직원 저항으로 실제 사용률이 낮음(9장 참고)</li>
+    <li><strong>단발성 프로젝트화</strong> — 지속적 평가·재학습 루프 없이 "출시 후 방치" — 모델/데이터 드리프트로 품질이 서서히 하락</li>
+  </ol>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>우리 AI 과제 중 위 5가지 실패 패턴에 해당하는 것이 있는지 점검했는가?</li>
+      <li>"실패율이 높은 분야"라는 것을 전제로, 초기 파일럿의 기대치를 과도하게 높게 잡지 않았는가?</li>
+      <li>출시 후에도 지속 평가·재학습 예산과 담당자가 배정되어 있는가(11-1의 5번 패턴 방지)?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH12 ===== -->
+<div class="section" id="ch12">
+  <h2 class="section-title section-anchor"><span class="icon">🔵</span> 12. AADS 6개 프로젝트 AX 성숙도 진단</h2>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ 진단 범위 안내</strong>
+    아래 표는 AADS 중앙 DB(<code>project_tasks</code>, <code>ai_observations</code> 테이블)를 2026-09-12 직접 조회한 <strong>실측 수치</strong>입니다. 다만 이 수치는 "프로세스 자동화 실행 볼륨"(작업 처리량·완료율)과 "관찰·학습 축적량" 두 가지 프록시(proxy) 지표일 뿐, 8장 4축(조직/프로세스/데이터/인재) 전체를 검증한 정밀 진단이 아닙니다. 조직·데이터 거버넌스·인재 교육 현황은 이번 조회로 확인되지 않아 <strong>미검증</strong>으로 표시합니다.
+  </div>
+
+  <h3>12-1. 실측 지표 — project_tasks 처리 현황 (DB 조회, 2026-09-12 기준)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>프로젝트</th><th>완료(completed)</th><th>진행중(running)</th><th>보고됨(reported)</th><th>오류(error)</th><th>합계</th><th>완료율</th></tr></thead>
+      <tbody>
+        <tr><td><strong>AADS</strong></td><td>298</td><td>30</td><td>16</td><td>0</td><td>344</td><td>86.6%</td></tr>
+        <tr><td><strong>GO100</strong></td><td>203</td><td>10</td><td>4</td><td>0</td><td>217</td><td>93.5%</td></tr>
+        <tr><td><strong>KIS</strong></td><td>478</td><td>25</td><td>23</td><td>0</td><td>526</td><td>90.9%</td></tr>
+        <tr><td><strong>SF</strong></td><td>114</td><td>0</td><td>0</td><td>1</td><td>115</td><td>99.1%</td></tr>
+        <tr><td><strong>NTV2</strong></td><td>81</td><td>1</td><td>0</td><td>0</td><td>82</td><td>98.8%</td></tr>
+        <tr><td><strong>NAS</strong></td><td>13</td><td>0</td><td>0</td><td>0</td><td>13</td><td>100% <span style="color:var(--text3);font-size:.78rem">(표본 13건, 소표본 주의)</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>12-2. 실측 지표 — ai_observations 축적 건수 (DB 조회, 2026-09-12 기준)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>프로젝트</th><th>관찰/학습 레코드 수</th><th>해석</th></tr></thead>
+      <tbody>
+        <tr><td><strong>GO100</strong></td><td class="recommend">91</td><td>6개 프로젝트 중 최다 — 관찰·패턴 축적이 가장 활발</td></tr>
+        <tr><td><strong>AADS</strong></td><td class="recommend">44</td><td>플랫폼 자체 프로젝트로 관찰 기록이 두 번째로 많음</td></tr>
+        <tr><td><strong>KIS</strong></td><td>3</td><td>작업 처리량(526건) 대비 관찰 축적은 상대적으로 적음</td></tr>
+        <tr><td><strong>NTV2</strong></td><td>3</td><td>-</td></tr>
+        <tr><td><strong>SF</strong></td><td>3</td><td>-</td></tr>
+        <tr><td><strong>NAS</strong></td><td>2</td><td>표본 자체가 작아(작업 13건) 관찰 축적도 초기 단계로 해석</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>12-3. 프록시 지표 기반 잠정 등급 (프로세스 축 한정)</h3>
+  <p>8장 4축 모델 중 <strong>프로세스 축</strong>에 한해, 위 실측 작업처리량·완료율·관찰축적량을 근거로 잠정 등급을 매깁니다. 조직/데이터/인재 축은 이번 조회로 확인할 수 없어 전부 <strong>미검증</strong>입니다.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>프로젝트</th><th>프로세스 축 잠정 등급</th><th>근거</th><th>조직/데이터/인재 축</th></tr></thead>
+      <tbody>
+        <tr><td><strong>AADS</strong></td><td>Lv3 파일럿→확산 경계 <span class="verified v-yes">DB 근거</span></td><td>작업량 344건, 완료율 86.6%, 관찰 44건 — 6개 중 처리량·관찰 모두 상위권</td><td class="verified v-no">미검증</td></tr>
+        <tr><td><strong>GO100</strong></td><td>Lv3 확산 <span class="verified v-yes">DB 근거</span></td><td>작업량 217건, 완료율 93.5%, 관찰 91건(최다) — 관찰·학습 축적이 가장 활발</td><td class="verified v-no">미검증</td></tr>
+        <tr><td><strong>KIS</strong></td><td>Lv2 파일럿 <span class="verified v-yes">DB 근거</span></td><td>작업량은 526건으로 최다이나 관찰 축적(3건)이 낮아 처리량 대비 학습 루프 미흡 추정</td><td class="verified v-no">미검증</td></tr>
+        <tr><td><strong>SF</strong></td><td>Lv2 파일럿 <span class="verified v-yes">DB 근거</span></td><td>작업량 115건, 완료율 99.1%로 안정적이나 관찰 축적 3건으로 초기 단계</td><td class="verified v-no">미검증</td></tr>
+        <tr><td><strong>NTV2</strong></td><td>Lv1~2 실험~파일럿 <span class="verified v-yes">DB 근거</span></td><td>작업량 82건으로 6개 중 하위권, 관찰 3건</td><td class="verified v-no">미검증</td></tr>
+        <tr><td><strong>NAS</strong></td><td>Lv1 실험 <span class="verified v-yes">DB 근거</span></td><td>작업량 13건, 관찰 2건 — 표본이 작아 초기 도입 단계로 추정</td><td class="verified v-no">미검증</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-danger">
+    <strong>🚫 이 등급의 한계를 반드시 인지하십시오</strong>
+    위 잠정 등급은 "작업이 얼마나 많이, 얼마나 완료됐는가"라는 프로세스 실행 볼륨만 반영합니다. 8장에서 정의한 조직 거버넌스·데이터 정제 수준·인재 교육 현황은 이번 조회 범위에 없어 반영되지 않았습니다. 정밀한 4축 진단을 위해서는 프로젝트별 담당자 인터뷰와 8-2 체크리스트 실사가 별도로 필요합니다.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>이 표가 "실행 볼륨" 프록시일 뿐 완전한 4축 진단이 아니라는 것을 보고 라인 전체가 이해하고 있는가?</li>
+      <li>KIS처럼 작업량은 많은데 관찰·학습 축적이 낮은 프로젝트에 피드백 루프 구축을 우선 지시했는가?</li>
+      <li>조직/데이터/인재 축의 정밀 진단(8-2 체크리스트 실사)을 6개 프로젝트에 대해 별도로 지시했는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH13 ===== -->
+<div class="section" id="ch13">
+  <h2 class="section-title section-anchor"><span class="icon">🗓️</span> 13. 12개월 분기별 AX 전환 로드맵</h2>
+
+  <p>2026-09 시점 기준 향후 4개 분기 로드맵입니다. 12장의 잠정 등급(프로세스 축)을 근거로, 처리량·관찰 축적이 앞선 AADS/GO100은 "확산 고도화" 중심, KIS/SF는 "학습 루프 보강" 중심, NTV2/NAS는 "기초 다지기" 중심으로 우선순위를 다르게 배치했습니다. 조직/데이터/인재 축은 12장에서 미검증이므로 아래 로드맵의 해당 항목은 8-2 체크리스트 실사를 선행 과제로 포함합니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>분기</th><th>AADS / GO100 (선도 그룹)</th><th>KIS / SF (보강 그룹)</th><th>NTV2 / NAS (기초 그룹)</th></tr></thead>
+      <tbody>
+        <tr><td><strong>2026 Q4<br>(10~12월)</strong></td><td>8-2 체크리스트로 조직/데이터/인재 축 정밀 실사 착수. PRD 표준 템플릿(3장) 전사 의무화</td><td>ai_observations 축적을 위한 피드백 수집 UX 도입(작업 완료 후 품질 평가 입력 단계 추가)</td><td>8-2 체크리스트 자가진단 실시, 첫 PoC 1건 착수(2장 매트릭스 1사분면 대상 선정)</td></tr>
+        <tr><td><strong>2027 Q1<br>(1~3월)</strong></td><td>Lv3→Lv4 전환 조건 정의(경영 의사결정 프로세스에 AI 지표 정례 반영 방안 수립)</td><td>파일럿 단위 롤백 리허설 1회 실시, 품질 기준선(1장) 문서화</td><td>PoC 결과 리뷰, 통과 시 파일럿 게이트(6장) 진입, 미통과 시 원인 분석 후 재설계</td></tr>
+        <tr><td><strong>2027 Q2<br>(4~6월)</strong></td><td>타 프로젝트(KIS/SF/NTV2/NAS) 대상 PRD·게이트 표준 전파, 사내 챔피언 제도 운영</td><td>ROI 실측(10장 공식 적용)치 첫 산출, 전사확산 게이트 조건 충족 여부 판정</td><td>파일럿 진행, 실사용자 피드백 기반 폴백 UX(5장) 보강</td></tr>
+        <tr><td><strong>2027 Q3<br>(7~9월)</strong></td><td>6개 프로젝트 통합 AX 성숙도 재진단(12장 방식 반복), 12개월 전 대비 변화 측정</td><td>확산 단계 진입 여부 결정, 확산 시 거버넌스 문서화</td><td>파일럿 결과에 따라 확산 여부 결정, 역할 재정의(9장) 검토 착수</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-success">
+    <strong>✅ 4개 분기 공통 원칙</strong>
+    모든 그룹은 분기 말 CEO 보고 시 (1) 정량 수치(작업량·완료율·ROI) (2) 8-2 체크리스트 Y/N 결과 (3) 다음 분기 목표를 함께 제출하도록 합니다. 숫자 없는 "잘 되고 있습니다" 보고는 반려하십시오.
+  </div>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>4개 분기 로드맵이 프로젝트별 캘린더에 실제 일정으로 등록되어 있는가?</li>
+      <li>분기 말 보고에 정량 수치와 체크리스트 결과가 빠짐없이 포함되는가?</li>
+      <li>2027 Q3 재진단에서 12장 대비 등급이 실제로 상승했는지 비교할 기준선(이 문서)을 보관하고 있는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH14 ===== -->
+<div class="section" id="ch14">
+  <h2 class="section-title section-anchor"><span class="icon">📖</span> 14. 참고자료와 다음 단계</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>구분</th><th>자료</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>산업 조사</td><td>MIT NANDA — State of AI in Business (2025)</td><td>생성형 AI 파일럿 ROI 실패율 조사, 11장 인용</td></tr>
+        <tr><td>산업 조사</td><td>Gartner — Generative AI 프로젝트 중단 예측 (2024)</td><td>PoC 이후 중단율 예측, 11장 인용</td></tr>
+        <tr><td>연구기관</td><td>RAND Corporation — AI 프로젝트 실패 원인 연구 (2024)</td><td>AI vs 비AI IT 프로젝트 실패율 비교, 11장 인용</td></tr>
+        <tr><td>컨설팅</td><td>BCG — AI 가치 창출 역량 서베이 (2024)</td><td>PoC를 넘어선 조직 역량 비율, 11장 인용</td></tr>
+        <tr><td>내부 문서</td><td>docs/knowledge/AADS-KNOWLEDGE.md</td><td>AADS 아키텍처·파이프라인·교차검증 지식</td></tr>
+        <tr><td>내부 문서</td><td>docs/shared-lessons/INDEX.md</td><td>프로젝트 공통 교훈 인덱스</td></tr>
+        <tr><td>내부 DB</td><td>project_tasks, ai_observations 테이블</td><td>12장 실측 데이터 출처, 2026-09-12 조회</td></tr>
+        <tr><td>연관 문서</td><td>20260912_llm_server_comprehensive_education.html</td><td>같은 시리즈의 LLM 서버 구축 교육자료(기술 인프라 관점)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>다음 단계</h3>
+  <ol>
+    <li><strong>이번 주</strong>: 3장 PRD 템플릿을 현재 진행 중인 모든 AI 과제에 소급 적용 — 미비 항목 식별</li>
+    <li><strong>이번 달</strong>: 6개 프로젝트 담당자를 대상으로 8-2 체크리스트 자가진단 실시 — 12장 프록시 등급을 조직/데이터/인재 축까지 확장</li>
+    <li><strong>이번 분기</strong>: 13장 로드맵의 2026 Q4 과제(PRD 의무화, 정밀 실사, PoC 착수) 착수 및 진행 상황 월 1회 보고 체계 수립</li>
+    <li><strong>지속</strong>: 11장 실패 패턴 5가지를 분기별 AI 과제 리뷰 체크리스트에 상시 포함</li>
+  </ol>
+
+  <div class="checkpoint">
+    <h4>✅ CEO 체크포인트</h4>
+    <ul>
+      <li>"다음 단계" 4개 항목 각각에 담당자와 기한을 지정했는가?</li>
+      <li>이 문서를 6개 프로젝트 리더 전원에게 공유하고, 각자 12장 표에서 자기 프로젝트 부분을 확인하게 했는가?</li>
+      <li>다음 분기 CEO 보고 안건에 "AX 로드맵 진행 현황"을 정례 항목으로 추가했는가?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== FOOTER ===== -->
+<div class="footer">
+  <p>AADS Academy · AI 제품기획 · PRD · AX 전환 로드맵 종합 교육자료 · 2026-09-12 작성 · CEO 교육용</p>
+  <p style="margin-top:6px">12장의 AADS 실측 수치는 project_tasks/ai_observations 테이블 직접 조회 결과이며, 그 외 산업 통계·계산 예시는 출처 표기 또는 "예시" 명시된 참고용 수치입니다. 변동 가능하며 의사결정 전 원문 재확인을 권장합니다.</p>
+</div>
+
+</div>
+</body>
+</html>

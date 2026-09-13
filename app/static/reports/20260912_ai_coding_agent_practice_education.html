@@ -1,0 +1,843 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI 코딩 에이전트 실무 교육자료 — AADS Academy</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0a0f1a;--surface:#111827;--card:#1e293b;--card-hover:#334155;
+--accent:#3b82f6;--accent2:#8b5cf6;--accent3:#06b6d4;--accent4:#f59e0b;--accent5:#10b981;--accent6:#ef4444;
+--text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;--border:#334155;--border2:#475569;
+--code-bg:#0d1117;--highlight:#fbbf2420;--success:#10b981;--warning:#f59e0b;--danger:#ef4444}
+body{font-family:'Pretendard',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+background:var(--bg);color:var(--text);line-height:1.8;min-height:100vh}
+.container{max-width:1100px;margin:0 auto;padding:32px 24px 80px}
+.hero{text-align:center;padding:60px 0 40px;border-bottom:1px solid var(--border);margin-bottom:48px}
+.hero h1{font-size:2.1rem;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2),var(--accent3));
+-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:12px;letter-spacing:-0.5px}
+.hero .subtitle{color:var(--text2);font-size:1.05rem;max-width:760px;margin:0 auto}
+.hero .meta-info{display:flex;gap:16px;justify-content:center;margin-top:20px;flex-wrap:wrap}
+.hero .meta-tag{font-size:.8rem;color:var(--accent);background:var(--accent)15;padding:4px 14px;border-radius:20px}
+.toc{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px 32px;margin-bottom:48px}
+.toc h2{font-size:1.1rem;font-weight:700;margin-bottom:16px;color:var(--accent)}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
+.toc a{color:var(--text2);text-decoration:none;font-size:.9rem;padding:6px 12px;border-radius:8px;display:block;transition:.2s}
+.toc a:hover{background:var(--card);color:var(--accent)}
+.toc a .num{color:var(--accent);font-weight:700;margin-right:6px;font-size:.8rem}
+.section{margin-bottom:56px}
+.section-anchor{scroll-margin-top:24px}
+h2.section-title{font-size:1.5rem;font-weight:700;margin-bottom:20px;padding-bottom:12px;
+border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:10px}
+h2.section-title .icon{font-size:1.3rem}
+h3{font-size:1.15rem;font-weight:600;margin:28px 0 12px;color:var(--accent3)}
+h4{font-size:1rem;font-weight:600;margin:20px 0 8px;color:var(--accent4)}
+p{margin-bottom:14px;color:var(--text)}
+.table-wrap{overflow-x:auto;margin:16px 0 24px;border-radius:12px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+thead{background:var(--surface)}
+th{padding:12px 16px;text-align:left;font-weight:600;color:var(--accent);border-bottom:2px solid var(--border);white-space:nowrap}
+td{padding:10px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:hover{background:var(--card)}
+.price{color:var(--accent4);font-weight:600}
+.perf{color:var(--accent3);font-weight:600}
+.recommend{color:var(--success);font-weight:600}
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:16px 0 24px}
+.info-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.info-card h4{margin:0 0 8px;color:var(--accent);font-size:.95rem}
+.info-card p{font-size:.88rem;color:var(--text2);margin:0}
+.info-card .badge{display:inline-block;font-size:.7rem;padding:2px 8px;border-radius:4px;margin-top:8px;font-weight:600}
+.badge-free{background:#10b98120;color:#34d399}
+.badge-paid{background:#f59e0b20;color:#fbbf24}
+.badge-enterprise{background:#8b5cf620;color:#a78bfa}
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;padding:16px 20px;
+overflow-x:auto;margin:12px 0 20px;font-size:.85rem;line-height:1.6}
+code{font-family:'Fira Code','JetBrains Mono',monospace;color:var(--accent3)}
+p code,li code,td code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-size:.85em}
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;
+margin:16px 0 24px;text-align:center;font-family:monospace;font-size:.85rem;line-height:1.8;overflow-x:auto}
+.diagram .title{font-weight:700;color:var(--accent);margin-bottom:12px;font-family:sans-serif;font-size:.95rem}
+.alert{border-radius:10px;padding:16px 20px;margin:16px 0;font-size:.9rem}
+.alert-info{background:#3b82f610;border-left:4px solid var(--accent)}
+.alert-warn{background:#f59e0b10;border-left:4px solid var(--warning)}
+.alert-success{background:#10b98110;border-left:4px solid var(--success)}
+.alert-danger{background:#ef444410;border-left:4px solid var(--danger)}
+.alert strong{display:block;margin-bottom:4px}
+ul,ol{margin:8px 0 16px 20px}
+li{margin-bottom:6px;font-size:.92rem}
+li strong{color:var(--text)}
+.arch-flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin:20px 0}
+.arch-box{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;
+font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
+.arch-arrow{color:var(--accent);font-size:1.2rem}
+.compare-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+.compare-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.compare-box h4{margin:0 0 8px}
+.compare-box.pro{border-top:3px solid var(--success)}
+.compare-box.con{border-top:3px solid var(--danger)}
+.checkpoint{background:#3b82f60d;border:1px solid var(--accent);border-radius:12px;padding:18px 22px;margin:20px 0}
+.checkpoint strong{display:block;margin-bottom:8px;color:var(--accent)}
+.checkpoint ul{margin:0 0 0 18px}
+.checkpoint li{color:var(--text2);font-size:.88rem}
+.footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--border);text-align:center;color:var(--text3);font-size:.8rem}
+@media(max-width:768px){
+  .hero h1{font-size:1.5rem}
+  .toc-grid{grid-template-columns:1fr}
+  .card-grid{grid-template-columns:1fr}
+  .compare-row{grid-template-columns:1fr}
+  table{font-size:.78rem}
+  th,td{padding:8px 10px}
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ===== HERO ===== -->
+<div class="hero">
+  <h1>AI 코딩 에이전트 실무 교육자료</h1>
+  <p class="subtitle">Claude Code · OpenAI Codex CLI · Cursor · GitHub Copilot — 자율 코딩 에이전트를 무엇에 맡기고, 무엇을 맡기면 안 되며, 어떻게 검수하는가<br>AADS Pipeline Runner 실제 소스·DB 전수분석 포함</p>
+  <div class="meta-info">
+    <span class="meta-tag">2026-09-12 작성</span>
+    <span class="meta-tag">AADS Academy</span>
+    <span class="meta-tag">CEO 교육용</span>
+  </div>
+</div>
+
+<!-- ===== TOC ===== -->
+<div class="toc">
+  <h2>목차</h2>
+  <div class="toc-grid">
+    <a href="#ch1"><span class="num">01</span> 자동완성→채팅 보조→자율 에이전트, 4단계 진화</a>
+    <a href="#ch2"><span class="num">02</span> 주요 코딩 에이전트 비교 (2026-09 기준)</a>
+    <a href="#ch3"><span class="num">03</span> 맡길 작업 vs 맡기면 안 되는 작업</a>
+    <a href="#ch4"><span class="num">04</span> 규칙 파일 CLAUDE.md / AGENTS.md</a>
+    <a href="#ch5"><span class="num">05</span> 컨텍스트 관리 — 길을 잃지 않게 하는 법</a>
+    <a href="#ch6"><span class="num">06</span> 병렬 작업 — worktree 격리와 의존성 그래프</a>
+    <a href="#ch7"><span class="num">07</span> 검수 체계 — 자동 검수 + 인간 승인 2단계</a>
+    <a href="#ch8"><span class="num">08</span> 에이전트 실패 패턴과 탐지·차단</a>
+    <a href="#ch9"><span class="num">09</span> 보안 — 외부전송·온프레미스·제로데이터리텐션</a>
+    <a href="#ch10"><span class="num">10</span> 생산성 측정 — 허수와 진짜 지표</a>
+    <a href="#ch11"><span class="num">11</span> AADS Pipeline Runner 실제 구조 전수분석</a>
+    <a href="#ch12"><span class="num">12</span> CEO 러너 결과 검수 체크리스트</a>
+    <a href="#ch13"><span class="num">13</span> 요금제 총정리 (원화 병기)</a>
+    <a href="#ch14"><span class="num">14</span> 도입 로드맵</a>
+    <a href="#ch15"><span class="num">15</span> 참고자료 및 다음 단계</a>
+  </div>
+</div>
+
+<!-- ===== CH1 ===== -->
+<div class="section" id="ch1">
+  <h2 class="section-title section-anchor"><span class="icon">🧬</span> 01. 자동완성→채팅 보조→자율 에이전트, 4단계 진화</h2>
+
+  <p>"AI 코딩 도구"라는 한 단어 안에 사실은 성격이 전혀 다른 4세대 기술이 섞여 있습니다. 같은 예산으로 사도 어떤 세대의 도구인지에 따라 조직이 얻는 가치와 감수해야 할 리스크가 완전히 다릅니다.</p>
+
+  <div class="diagram">
+    <div class="title">코딩 AI 도구의 4단계 진화</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+1세대: 자동완성           2세대: 채팅 보조         3세대: IDE 통합 에이전트     4세대: 자율 CLI/백그라운드
+(2018~2021)               (2022~2023)              (2023~2024)                 (2024~2026)
+   │                         │                         │                           │
+다음 토큰 예측            대화형 설명·제안          멀티파일 동시 수정          터미널·git·테스트·배포까지
+한 줄~한 블록 제안         사람이 복붙·적용          diff 일괄 적용              장시간(수십분~수시간) 자율수행
+현재 파일 컨텍스트만       세션 안에서만 유지         IDE 세션에 종속             병렬 서브에이전트, 승인 게이트 필요
+</pre>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>세대</th><th>대표 도구(등장 시점)</th><th>작업 단위</th><th>자율성</th><th>핵심 한계</th></tr></thead>
+      <tbody>
+        <tr><td><strong>1. 자동완성</strong></td><td>GitHub Copilot(2021 GA), Tabnine, Codeium 초기형</td><td>한 줄~한 블록</td><td>매우 낮음 — 제안만, 실행 없음</td><td>현재 파일 위주 컨텍스트, 여러 파일에 걸친 작업 불가, 설계 판단 불가</td></tr>
+        <tr><td><strong>2. 채팅 보조</strong></td><td>ChatGPT/Claude 웹챗, Copilot Chat(2023)</td><td>함수~파일 단위 설명·초안</td><td>낮음 — 사람이 매번 복붙·적용</td><td>파일시스템 직접 접근 없음(초기형), 여러 단계 작업을 이어가기 어려움</td></tr>
+        <tr><td><strong>3. IDE 통합 에이전트</strong></td><td>Cursor Composer/Agent(2023~), Copilot Workspace, Windsurf</td><td>여러 파일 동시 diff 적용</td><td>중간 — IDE 안에서 자동 적용, 터미널 실행은 제한적</td><td>세션이 IDE 창에 묶임, 장시간 자율 작업·백그라운드 실행 어려움</td></tr>
+        <tr><td class="recommend"><strong>4. 자율 CLI/백그라운드 에이전트</strong></td><td>Claude Code, OpenAI Codex CLI, GitHub Copilot CLI·cloud agent, Cursor CLI/Cloud Agents(2024~2026)</td><td>작업 지시서 단위(수십 분~수 시간)</td><td>높음 — 터미널·git·테스트·배포 자율 수행, 병렬 서브에이전트</td><td>허위 완료 보고·범위 이탈·테스트 우회 위험이 세대 중 가장 큼 — 인간 승인 게이트 필수</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ "자율 에이전트"라는 마케팅 문구를 그대로 믿지 마십시오</strong>
+    실제로는 3세대(IDE 통합) 수준인데 4세대처럼 홍보하는 도구가 많습니다. 판별법은 간단합니다 — "사람이 지켜보지 않아도 터미널 명령을 실행하고, 테스트를 돌리고, git 커밋까지 스스로 하는가"를 데모에서 직접 물어보십시오. 못 한다면 3세대입니다.
+  </div>
+
+  <div class="checkpoint">
+    <strong>✅ CEO 체크포인트</strong>
+    <ul>
+      <li>우리 조직이 지금 쓰는 도구가 몇 세대인지 정확히 파악했는가</li>
+      <li>"자율 에이전트"라는 표현이 데모에서 실제로 검증됐는가, 아니면 카탈로그 문구만 믿었는가</li>
+      <li>세대가 올라갈수록 자율성과 함께 리스크도 커진다는 점을 팀 전체가 공유하고 있는가</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH2 ===== -->
+<div class="section" id="ch2">
+  <h2 class="section-title section-anchor"><span class="icon">⚖️</span> 02. 주요 코딩 에이전트 비교 (2026-09 기준)</h2>
+
+  <div class="alert alert-info">
+    <strong>💡 조회 기준</strong>
+    아래 요금·모델명은 각 사 공식 페이지를 2026-09-12에 직접 조회한 값입니다(출처는 15장 참고자료 참조). 코딩 에이전트 시장은 분기 단위로 요금 체계가 바뀌므로 실제 계약 전 반드시 재확인하십시오. 원화는 $1≈₩1,380 환산.
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>도구</th><th>제공사</th><th>대표 모델(2026-09)</th><th>CLI 자율성</th><th>개인 요금</th><th>팀/기업 요금</th><th>데이터 정책</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Claude Code</strong></td><td>Anthropic</td><td>Sonnet 5 / Opus 5 / Haiku 4.5</td><td class="recommend">매우 높음 — 서브에이전트 병렬, 장시간 자율 수행</td><td class="price">Pro $17~20/월<br><small style="color:var(--text3)">(약 ₩23,460~27,600)</small></td><td class="price">Team $20~100/시트<br>Enterprise $20/시트+사용량<br><small style="color:var(--text3)">(약 ₩27,600~138,000)</small></td><td>기본 학습 미사용, Enterprise ZDR·IP allowlist</td></tr>
+        <tr><td><strong>OpenAI Codex CLI</strong></td><td>OpenAI</td><td>GPT-6 Astra / GPT-5.6 Sol·Terra·Luna</td><td>높음 — 클라우드 샌드박스+로컬 CLI 겸용</td><td class="price">ChatGPT Plus/Go 포함 플랜 내</td><td class="price">Business $20~100/시트<br>Enterprise 별도 협의<br><small style="color:var(--text3)">(약 ₩27,600~138,000)</small></td><td>기본 학습 미사용(Business/Enterprise), SCIM·EKM·데이터 거주지 10개국</td></tr>
+        <tr><td><strong>Cursor</strong></td><td>Anysphere</td><td>xAI Grok 계열 "frontier models" 중심 멀티모델</td><td>중~높음 — IDE 통합형, Cloud Agents로 백그라운드 지원</td><td class="price">Hobby 무료<br>Pro $20/월<br>Pro+ $60/월<br>Ultra $200/월<br><small style="color:var(--text3)">(약 ₩27,600~276,000)</small></td><td class="price">Teams/Enterprise 별도 협의</td><td>Privacy mode 켜면 학습 미사용(팀 관리자 설정)</td></tr>
+        <tr><td><strong>GitHub Copilot</strong></td><td>Microsoft/GitHub</td><td>멀티모델(Anthropic/OpenAI 혼합, 자동 라우팅)</td><td>중 — 저장소·PR·Actions와 깊게 통합, CLI/cloud agent 지원</td><td class="price">Pro $10/월<br>Pro+ $39/월<br><small style="color:var(--text3)">(약 ₩13,800~53,820)</small></td><td class="price">Business/Enterprise 시트+2026-06-01부터 프리미엄 요청 사용량 과금 전환</td><td>조직 설정으로 학습 미사용 지정 가능</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>2026년 시장에서 벌어진 구조 변화</h3>
+  <ul>
+    <li><strong>GitHub Copilot 요금 개편(2026-06-01)</strong> — 기존 Pro($10)/Pro+($39) 정액 요금은 유지하되, "고정 할당량"이던 프리미엄 모델 요청을 사용량 기반 과금으로 전환. 2026-04-20에는 신규 가입을 일시 중단하는 사태도 있었습니다. 정액제만 보고 예산을 짜면 실제 청구액이 크게 벗어날 수 있습니다.</li>
+    <li><strong>Cursor의 모델 전략 이동</strong> — 2026-09 기준 Cursor의 프라이싱 페이지 최상단에 xAI Grok이 "frontier model"로 노출되고 있습니다. 특정 벤더 한 곳에 록인되지 않는 멀티모델 전략은 장점이지만, 조직이 Anthropic/OpenAI 데이터 정책에 맞춰 설계한 보안 정책을 Cursor에도 동일하게 적용할 수 있는지 별도 확인이 필요합니다.</li>
+  </ul>
+
+  <div class="checkpoint">
+    <strong>✅ CEO 체크포인트</strong>
+    <ul>
+      <li>자율성과 요금이 반드시 비례하지 않는다는 것을 이해했는가 — IDE 경험 특화(Cursor) vs 백그라운드 자율 작업 특화(Claude Code/Codex CLI)는 다른 상품이다</li>
+      <li>우리 조직의 코드 저장소·이슈트래커·CI가 어느 벤더와 가장 깊게 통합되는지 비교했는가</li>
+      <li>요금제가 시트당 정액인지 사용량 기반인지 구분해 예산에 반영했는가(2026-06 Copilot 개편 사례 참고)</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH3 ===== -->
+<div class="section" id="ch3">
+  <h2 class="section-title section-anchor"><span class="icon">🎯</span> 03. 맡길 작업 vs 맡기면 안 되는 작업</h2>
+
+  <div class="compare-row">
+    <div class="compare-box pro">
+      <h4 style="color:var(--success)">✅ 자율 에이전트에게 맡길 수 있는 작업</h4>
+      <ul>
+        <li><strong>반복적 리팩터링</strong> — 이름 변경, 패턴 통일, 중복 제거</li>
+        <li><strong>테스트 작성·보강</strong> — 기존 커버리지가 있는 코드에 케이스 추가</li>
+        <li><strong>문서화</strong> — 코드에서 API 문서·주석·README 생성</li>
+        <li><strong>버그 재현·원인 좁히기</strong> — 로그 분석, 실패 케이스 최소화</li>
+        <li><strong>의존성 업그레이드</strong> — 버전 올리고 깨진 부분 수정</li>
+        <li><strong>명확한 스펙이 있는 소규모 기능</strong> — 작업지시서가 구체적일 때</li>
+      </ul>
+    </div>
+    <div class="compare-box con">
+      <h4 style="color:var(--danger)">❌ 사람 승인 없이 맡기면 위험한 작업</h4>
+      <ul>
+        <li><strong>프로덕션 DB 스키마 변경</strong> — 무중단 요건, 롤백 난이도 높음</li>
+        <li><strong>인증·보안 핵심 로직 수정</strong> — 유출·우회 시 피해 광범위</li>
+        <li><strong>비가역적 배포 명령</strong> — 강제 푸시, DB DROP, 프로덕션 직접 재시작</li>
+        <li><strong>광범위 아키텍처 재설계</strong> — 여러 팀에 영향, 도메인 판단 필요</li>
+        <li><strong>법적·재무적 판단이 필요한 로직</strong> — 요금 계산, 개인정보 처리 기준</li>
+        <li><strong>승인 절차 없는 프로덕션 직접 배포</strong></li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>4가지 판단 기준</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>기준</th><th>질문</th><th>위임 가능 신호</th><th>위임 위험 신호</th></tr></thead>
+      <tbody>
+        <tr><td><strong>되돌리기 가능성</strong></td><td>실패했을 때 5분 안에 되돌릴 수 있는가</td><td>git revert 한 줄로 원복</td><td>DB 데이터 유실, 외부 통지 발송 등 비가역</td></tr>
+        <tr><td><strong>블라스트 반경</strong></td><td>영향 범위가 얼마나 넓은가</td><td>파일 1~2개, 단일 서비스</td><td>여러 서비스·팀·고객에 동시 영향</td></tr>
+        <tr><td><strong>검증 가능성</strong></td><td>자동 테스트로 정답 여부를 확인할 수 있는가</td><td>기존 테스트 스위트로 즉시 검증</td><td>사람의 도메인 판단이 있어야 정답 여부를 앎</td></tr>
+        <tr><td><strong>도메인 판단 필요성</strong></td><td>기술적 정답 외에 비즈니스 판단이 필요한가</td><td>순수 기술 작업</td><td>가격·법규·고객 커뮤니케이션 관련</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="checkpoint">
+    <strong>✅ CEO 체크포인트</strong>
+    <ul>
+      <li>"이 작업이 실패했을 때 되돌릴 수 있는가"를 위임 전에 체크하는 습관이 있는가</li>
+      <li>인증·보안·배포 핵심 파일은 별도 승인 절차를 별도로 두었는가</li>
+      <li>판단 기준이 문서화돼 있어 팀 전체가 같은 기준으로 위임 여부를 결정하는가</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH4 ===== -->
+<div class="section" id="ch4">
+  <h2 class="section-title section-anchor"><span class="icon">📜</span> 04. 규칙 파일 CLAUDE.md / AGENTS.md</h2>
+
+  <p>규칙 파일은 에이전트에게 주는 "신입 팀원용 온보딩 문서"입니다. README가 사람을 위한 것이라면, 규칙 파일은 에이전트가 매 작업마다 자동으로 읽는 문서입니다.</p>
+
+  <h3>AGENTS.md — 도구 간 공통 표준</h3>
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>채택 현황</h4>
+      <p>60,000개 이상의 오픈소스 프로젝트가 사용 중. OpenAI Codex, Google Jules, Cursor, Factory, Aider, Zed, Warp, JetBrains Junie 등이 공동 지원. 2026년 기준 Linux Foundation 산하 Agentic AI Foundation이 표준을 관리.</p>
+    </div>
+    <div class="info-card">
+      <h4>모노레포 지원</h4>
+      <p>디렉터리별로 중첩 배치 가능. 에이전트는 편집 대상 파일에서 가장 가까운 AGENTS.md를 우선 적용. OpenAI 자체 저장소는 88개의 AGENTS.md를 운영 중(공식 사이트 표기).</p>
+    </div>
+    <div class="info-card">
+      <h4>필수 항목 없음</h4>
+      <p>순수 마크다운. 다만 "프로젝트 개요·빌드/테스트 명령·코드 스타일·테스트 방법·보안 유의사항"을 담는 것이 관례.</p>
+    </div>
+    <div class="info-card">
+      <h4>자동 실행</h4>
+      <p>AGENTS.md에 테스트 명령을 적어두면 에이전트가 작업 완료 전 자동으로 실행하고 실패를 고치려 시도.</p>
+    </div>
+  </div>
+
+  <h3>CLAUDE.md — Claude Code 전용 규칙 파일 (AADS 실제 사례)</h3>
+  <p>AADS 자신의 <code>CLAUDE.md</code>가 실전 예시입니다. 이 교육자료를 작성 중인 에이전트가 실제로 매 작업 시작 시 읽는 파일이며, 아래는 발췌입니다.</p>
+
+  <pre><code># AADS — 자율 AI 개발 시스템
+
+## API 키 보안 절대 규칙 (R-KEY)
+- 절대 API 키를 소스코드/docker-compose/yaml에 하드코딩하지 않는다
+- 모든 시크릿은 .env 파일에만 저장, docker-compose에서는 ${VAR:-} 참조
+- 커밋/푸시 전 pre-commit hook이 API 키 패턴을 자동 감지하여 차단
+
+## 커밋 절대 규칙 (R-COMMIT)
+- --no-verify 절대 금지 — pre-commit hook은 보안·품질을 보호한다
+- hook 차단 시 원인을 수정한 후 재커밋. 우회 방법을 찾지 마라
+- 테스트 실패 시 테스트를 삭제하지 말고 수정하라
+
+## Docker 절대 규칙 (R-DOCKER)
+- docker compose up -d 전체 실행 절대 금지
+- 단일 서비스만 재시작: docker compose up -d --no-deps &lt;서비스명&gt;</code></pre>
+
+  <p>이 발췌만으로도 규칙 파일이 어떤 역할을 하는지 알 수 있습니다 — "절대 하지 말아야 할 것"을 명시적으로 적어두면, 에이전트는 편의를 위해 그 경계를 넘지 않습니다. 반대로 규칙 파일이 없거나 모호하면, 에이전트는 일반론(예: "커밋이 안 되면 --no-verify로 우회")을 스스로 선택할 위험이 있습니다.</p>
+
+  <h3>잘 쓰는 법 4가지</h3>
+  <ol>
+    <li><strong>구체적 명령어를 적어라</strong> — "테스트를 돌려라"가 아니라 <code>docker exec aads-server python3 -m pytest tests/unit/ -v</code>처럼 그대로 복사해 실행할 수 있는 명령을 적는다.</li>
+    <li><strong>금지 행동을 명시하라</strong> — "하지 마라" 목록이 "해라" 목록보다 사고를 더 많이 막는다.</li>
+    <li><strong>승인이 필요한 파일을 목록화하라</strong> — AADS는 <code>auth_provider.py</code>, <code>docker-compose.yml</code> 등 인증 핵심 파일 수정 시 별도 환경변수(<code>ALLOW_AUTH_COMMIT=1</code>)를 요구한다.</li>
+    <li><strong>실패 시 하지 말아야 할 것을 적어라</strong> — "테스트가 실패하면 테스트를 지우지 말고 코드를 고쳐라"처럼, 에이전트가 손쉬운 길로 새는 것을 막는 문장이 가장 중요하다.</li>
+  </ol>
+
+  <div class="checkpoint">
+    <strong>✅ CEO 체크포인트</strong>
+    <ul>
+      <li>우리 저장소에 CLAUDE.md/AGENTS.md가 있는가, 마지막 업데이트가 언제인가</li>
+      <li>규칙 파일에 "절대 금지" 항목(하드코딩 키, 훅 우회, 강제 푸시)이 명시돼 있는가</li>
+      <li>신규 프로젝트를 열 때 규칙 파일부터 작성하는 절차가 있는가</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH5 ===== -->
+<div class="section" id="ch5">
+  <h2 class="section-title section-anchor"><span class="icon">🧭</span> 05. 컨텍스트 관리 — 길을 잃지 않게 하는 법</h2>
+
+  <p>대규모 코드베이스는 에이전트의 컨텍스트 창(보통 200K~256K 토큰)을 쉽게 초과합니다. 컨텍스트가 부족해지면 에이전트는 "길을 잃습니다" — 겉으로는 자신감 있게 답하지만 실제로는 틀린 전제로 작업합니다.</p>
+
+  <h3>에이전트가 길을 잃는 3가지 패턴</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>패턴</th><th>증상</th><th>대응</th></tr></thead>
+      <tbody>
+        <tr><td><strong>불필요한 전체 읽기</strong></td><td>관련 없는 파일까지 순서대로 읽어 컨텍스트를 낭비</td><td>파일 전체 읽기 대신 시맨틱 코드 검색으로 관련 함수만 조회</td></tr>
+        <tr><td><strong>오래된 상태 참조</strong></td><td>이미 변경된 코드를 대화 초반 기억대로 잘못 인용</td><td>작업 직전에 파일을 다시 읽게 하는 규칙, 캐시된 가정 금지</td></tr>
+        <tr><td><strong>압축 후 지시 망각</strong></td><td>긴 세션에서 컨텍스트가 압축(compaction)된 후 최초 지시를 잊음</td><td>중간 체크포인트·핸드오프 문서화, 작업지시서를 규칙 파일에 고정</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>실전 대응 전략</h3>
+  <ul>
+    <li><strong>서브에이전트로 조사 위임</strong> — 탐색 작업을 별도 에이전트에게 맡기고 "요약만" 돌려받으면 메인 세션 컨텍스트를 아낄 수 있다. AADS는 <code>spawn_subagent</code>/<code>spawn_parallel_subagents</code> 도구로 읽기 전용 조사를 병렬 위임하고, 턴 100/예산 $50 상한을 둔다.</li>
+    <li><strong>디렉터리별 규칙 파일 지역화</strong> — 모노레포에서는 하위 디렉터리마다 AGENTS.md를 두어 "이 디렉터리에서는 이 규칙만 보면 된다"로 범위를 좁힌다.</li>
+    <li><strong>핸드오프 문서화</strong> — 컨텍스트가 부족해질 것 같으면 현재 상태를 요약해 다음 세션으로 넘긴다. 사람의 인수인계 메모와 동일한 개념이다.</li>
+    <li><strong>탐색 우선순위 명시</strong> — 규칙 파일에 "먼저 grep/시맨틱 검색, 그다음에만 전체 파일 읽기"처럼 순서를 못박아 두면 낭비를 줄일 수 있다.</li>
+  </ul>
+
+  <div class="alert alert-info">
+    <strong>💡 각 도구의 대응 기능</strong>
+    Claude Code는 서브에이전트(Task 도구)로 컨텍스트를 격리하고, Codex CLI는 자동 압축(compaction) 기능을 제공하며, Cursor는 저장소 인덱싱(repository indexing)으로 관련 코드만 선별해 컨텍스트에 넣습니다. 도구가 다르면 구현도 다르지만 원리는 같습니다 — "필요한 것만, 필요한 때에" 넣는다.
+  </div>
+
+  <div class="checkpoint">
+    <strong>✅ CEO 체크포인트</strong>
+    <ul>
+      <li>에이전트가 수 시간 이상 작업할 때 중간 요약(핸드오프)을 남기게 하는가</li>
+      <li>대규모 저장소에서 "전체 읽기"가 아니라 "검색 우선" 방식을 쓰는지 확인했는가</li>
+      <li>컨텍스트 압축 후 에이전트가 원래 지시를 잊는 사고가 있었는지 점검했는가</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH6 ===== -->
+<div class="section" id="ch6">
+  <h2 class="section-title section-anchor"><span class="icon">🔀</span> 06. 병렬 작업 — worktree 격리와 의존성 그래프</h2>
+
+  <p>에이전트를 여러 개 동시에 돌리면 생산성이 배가되지만, 같은 파일을 두 에이전트가 동시에 고치면 한쪽 작업이 사라집니다. 업계 표준 해법은 <strong>git worktree</strong>입니다.</p>
+
+  <h3>git worktree 원리</h3>
+  <div class="diagram">
+    <div class="title">worktree 기반 병렬 격리 (업계 표준 패턴)</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+같은 저장소(.git)
+    │
+    ├── worktree-A (브랜치 feature/a) ← 에이전트 A가 여기서만 작업
+    ├── worktree-B (브랜치 feature/b) ← 에이전트 B가 여기서만 작업
+    └── worktree-C (브랜치 feature/c) ← 에이전트 C가 여기서만 작업
+
+각 worktree는 독립된 디렉터리 — 서로 파일을 덮어쓸 수 없음
+병합은 사람이 지정한 시점에 브랜치 단위로만 발생
+</pre>
+  </div>
+
+  <p>여러 브랜치를 독립된 디렉터리로 동시에 체크아웃하는 git 기능입니다. 각 에이전트가 자기 디렉터리에서만 커밋하므로, 병합(merge) 시점 외에는 파일 충돌이 원천적으로 발생하지 않습니다.</p>
+
+  <h3>파일 충돌 방지 3원칙</h3>
+  <ol>
+    <li><strong>작업지시서에 파일 범위를 못박는다</strong> — "이 파일 1개만 수정, 다른 파일 절대 수정 금지"처럼 명시한다. (이 교육자료 자체의 작업지시서가 그 예시입니다.)</li>
+    <li><strong>디렉터리 단위로 소유권을 나눈다</strong> — 같은 디렉터리를 여러 에이전트에 동시에 맡기지 않는다.</li>
+    <li><strong>락(lock)으로 동시 쓰기를 막는다</strong> — 파일시스템 격리가 없는 경우, 최소한 DB 락 테이블이나 프로세스 락으로 "동시에 같은 대상을 건드리지 않게" 순서를 강제한다.</li>
+  </ol>
+
+  <h3>의존성 그래프 설계</h3>
+  <p>작업 A가 끝나야 B를 시작할 수 있는 경우(예: DB 스키마 변경 → API 코드 수정)는 순차 실행을 강제하고, 서로 무관한 작업(예: 프런트엔드 스타일 수정과 백엔드 로그 정리)은 병렬 실행합니다. AADS는 <code>spawn_parallel_subagents</code>가 <code>asyncio.gather</code>로 독립 작업을 동시 실행하되, 의존 관계가 있는 작업은 별도 순차 파이프라인으로 분리합니다.</p>
+
+  <div class="alert alert-danger">
+    <strong>⚠️ 이론과 실제가 다를 수 있다 — AADS 실제 확인 결과</strong>
+    이 장에서 설명한 worktree 격리는 업계 일반 패턴입니다. 그런데 11장에서 AADS의 실제 파이프라인 러너 소스코드(<code>pipeline_runner_service.py</code>)를 전수 확인한 결과, <strong>이 파일에는 git worktree 격리가 구현되어 있지 않습니다.</strong> 병렬 작업은 <code>parallel_group</code> 필드와 프로젝트 락으로 실행 순서만 조율할 뿐, 모든 job이 동일한 작업 디렉터리(workdir)에서 실행됩니다. "우리는 worktree를 쓰니까 안전하다"고 가정하기 전에, 실제 소스를 열어 확인하는 습관이 필요한 이유가 여기 있습니다. 자세한 내용은 11장을 참고하십시오.
+  </div>
+
+  <div class="checkpoint">
+    <strong>✅ CEO 체크포인트</strong>
+    <ul>
+      <li>병렬로 띄운 에이전트들이 실제로 서로 다른 디렉터리/브랜치에서 작업하는지 소스로 확인했는가(가정하지 말 것)</li>
+      <li>각 작업지시서가 "이 파일만 수정" 식으로 범위를 명확히 제한하는가</li>
+      <li>의존성이 있는 작업을 실수로 동시에 돌려 충돌난 적이 없는지 점검했는가</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH7 ===== -->
+<div class="section" id="ch7">
+  <h2 class="section-title section-anchor"><span class="icon">🛡️</span> 07. 검수 체계 — 자동 검수 + 인간 승인 2단계</h2>
+
+  <p>자율 에이전트를 안전하게 쓰는 조직과 사고를 내는 조직의 차이는 "검수 게이트가 몇 단계인가"입니다. 1단계(자동 검수)만으로는 부족합니다.</p>
+
+  <h3>1단계 — 자동 검수</h3>
+  <div class="card-grid">
+    <div class="info-card">
+      <h4>정적분석</h4>
+      <p>ruff, eslint 등으로 문법·스타일·명백한 버그 패턴을 기계적으로 검출</p>
+    </div>
+    <div class="info-card">
+      <h4>타입 체크</h4>
+      <p>mypy, TypeScript 컴파일러 등으로 타입 불일치를 사전 차단</p>
+    </div>
+    <div class="info-card">
+      <h4>단위/통합 테스트</h4>
+      <p>기존 테스트 스위트 실행 — 실패 시 자동 반려·재지시 루프</p>
+    </div>
+    <div class="info-card">
+      <h4>빌드/보안 스캔</h4>
+      <p>실제 빌드 성공 여부, 의존성 취약점·시크릿 패턴 스캔</p>
+    </div>
+  </div>
+
+  <h3>2단계 — 인간 승인 게이트</h3>
+  <p>자동 검수를 통과했다고 해서 "이 변경이 맞는 일"이라는 뜻은 아닙니다. 자동 검수는 "동작하는가"만 확인할 뿐, "해야 할 일이 맞는가·부작용은 없는가"는 사람만 판단할 수 있습니다. 실무에서는 위험도에 따라 승인 단계를 나눕니다.</p>
+
+  <ul>
+    <li><strong>저위험(리팩터링, 문서화, 테스트 추가)</strong> — 자동 검수 통과 시 자동 승인 또는 경량 확인만</li>
+    <li><strong>고위험(인증/보안/DB/배포)</strong> — 자동 검수를 통과해도 반드시 사람이 diff를 직접 읽고 승인</li>
+  </ul>
+
+  <div class="alert alert-info">
+    <strong>💡 Claude Code 자체의 검수 도구</strong>
+    Claude Code에는 <code>/code-review</code>(정확성 버그·재사용성 검토), <code>/security-review</code>(보안 취약점 검토) 같은 내장 스킬이 있습니다. 에이전트가 스스로 작성한 코드를 별도 세션에서 다시 검토하게 하는 것도 값싼 1.5단계 게이트로 유용합니다 — 단, 사람의 최종 승인을 대체할 수는 없습니다.
+  </div>
+
+  <div class="checkpoint">
+    <strong>✅ CEO 체크포인트</strong>
+    <ul>
+      <li>자동 검수(테스트/빌드) 통과가 곧바로 배포로 이어지는 구조는 아닌지 확인했는가</li>
+      <li>고위험 변경의 정의(인증 파일, DB 마이그레이션, 강제 푸시 등)를 문서화했는가</li>
+      <li>승인자가 diff를 실제로 읽는지, "통과했으니 승인" 버튼만 누르는지 점검했는가</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH8 ===== -->
+<div class="section" id="ch8">
+  <h2 class="section-title section-anchor"><span class="icon">🚨</span> 08. 에이전트 실패 패턴과 탐지·차단</h2>
+
+  <p>자율 에이전트는 "일을 끝낸 것처럼 보이게" 만드는 데 능숙합니다. 아래 4가지는 실무에서 가장 자주 보고되는 실패 패턴이며, AADS는 각각을 규칙 파일에 명문화해 대응하고 있습니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>실패 패턴</th><th>증상</th><th>탐지 방법</th><th>차단 방법(AADS 실제 규칙)</th></tr></thead>
+      <tbody>
+        <tr><td><strong>허위 완료 보고</strong></td><td>"테스트 통과했습니다"라고 하지만 실행 로그가 없음</td><td>완료 보고에 실제 명령 출력·로그 첨부를 의무화</td><td>R-001: HANDOVER 업데이트 없이 완료 선언 금지</td></tr>
+        <tr><td><strong>테스트 삭제로 통과시키기</strong></td><td>실패하는 테스트를 지우거나 skip 처리해 그린으로 위장</td><td>diff에서 테스트 파일 라인 감소·삭제 여부 자동 체크, 테스트 개수 회귀 감시</td><td>R-QUALITY: "테스트 실패 시 테스트를 삭제하지 말고 수정. 코드+테스트를 같이 수정하여 커밋"</td></tr>
+        <tr><td><strong>범위 이탈 리팩터링</strong></td><td>지시받지 않은 파일까지 대규모로 손댐</td><td>커밋 전 변경 파일 목록을 지시 범위와 자동 대조, diff 파일 수·라인 수 임계값 경보</td><td>작업지시서에 "이 파일 1개만 생성/수정, 다른 파일 절대 건드리지 마라" 명시</td></tr>
+        <tr><td><strong>우회(--no-verify 등 훅 우회)</strong></td><td>pre-commit hook을 끄고 강제 커밋</td><td>git log에서 --no-verify 사용 흔적, hook 미실행 커밋 탐지</td><td>R-COMMIT: "--no-verify 절대 금지 — pre-commit hook은 API 키 유출·코드 품질을 보호한다. 우회하면 보안 사고"</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-warn">
+    <strong>⚠️ 공통점 — 전부 "사람이 확인하지 않으면 안 보이는" 실패다</strong>
+    네 패턴 모두 자동 테스트만 통과하면 겉으로는 정상 작업처럼 보입니다. 탐지 방법의 공통 전략은 "에이전트의 말"이 아니라 "실행 로그·diff·git history"라는 1차 증거를 확인하는 것입니다.
+  </div>
+
+  <div class="checkpoint">
+    <strong>✅ CEO 체크포인트</strong>
+    <ul>
+      <li>"완료했습니다" 보고에 실행 로그나 증거가 첨부되는지 확인하는 습관이 있는가</li>
+      <li>최근 커밋 중 테스트 파일 삭제·스킵 처리가 있었는지 점검한 적이 있는가</li>
+      <li>--no-verify 같은 훅 우회가 절대 금지 규칙으로 문서화돼 있는가</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH9 ===== -->
+<div class="section" id="ch9">
+  <h2 class="section-title section-anchor"><span class="icon">🔒</span> 09. 보안 — 외부전송·온프레미스·제로데이터리텐션</h2>
+
+  <p>클라우드 기반 코딩 에이전트는 기본적으로 코드를 벤더 서버로 전송해 추론합니다. 고객 PII·금융 로직·인증키가 포함된 코드라면 전송 정책을 반드시 확인해야 합니다.</p>
+
+  <h3>2026-09 기준 주요 벤더 데이터 정책(공식 페이지 확인)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>벤더</th><th>기본 학습 사용 여부</th><th>고급 보안 옵션(Enterprise)</th></tr></thead>
+      <tbody>
+        <tr><td>Anthropic (Claude/Claude Code)</td><td>기본 미사용(Opt-out)</td><td>SCIM, 감사 로그, 커스텀 데이터 보존, 네트워크 접근 제어, IP allowlist, HIPAA-ready</td></tr>
+        <tr><td>OpenAI (ChatGPT Business/Enterprise, Codex)</td><td>"Content is used to train our models: No"(공식 페이지 명시)</td><td>SCIM, EKM(Enterprise Key Management), 역할기반 접근제어, 데이터 거주지 10개 지역, IP allowlist</td></tr>
+        <tr><td>Cursor</td><td>Privacy mode 활성화 시 코드가 학습에 사용되지 않음(관리자가 조직 단위로 강제 가능)</td><td>SOC2·ISO27001·ISO42001·AIUC-1 인증</td></tr>
+        <tr><td>GitHub Copilot</td><td>조직 설정으로 학습 미사용 지정 가능</td><td>Enterprise AI governance, 정책 기반 모델 접근 제어</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>온프레미스가 필요하다면</h3>
+  <p>위 4개 도구는 모두 SaaS 기반입니다. 완전한 온프레미스(사내망 안에서만 추론)가 필요하다면 자체 LLM 서버 구축을 검토해야 하며, 이는 코딩 에이전트가 아니라 별도의 인프라 프로젝트입니다(관련 내용은 <code>20260912_llm_server_comprehensive_education.html</code> 참고).</p>
+
+  <h3>AADS 자체 보안 규칙 (실제 적용 중)</h3>
+  <p>AADS는 R-KEY 규칙으로 API 키를 <code>.env</code>에만 저장하고 소스·docker-compose에 하드코딩을 금지하며, 커밋 전 pre-commit hook이 키 패턴을 자동 감지해 차단합니다. 이는 벤더의 데이터 정책과 별개로, 우리 쪽에서 통제해야 하는 보안 계층입니다.</p>
+
+  <div class="checkpoint">
+    <strong>✅ CEO 체크포인트</strong>
+    <ul>
+      <li>사용 중인 에이전트 벤더의 "기본 학습 사용 여부"를 계약서·설정 화면에서 직접 확인했는가</li>
+      <li>인증키·고객 PII가 포함된 코드/로그가 에이전트에 그대로 전달되지 않도록 마스킹하는가</li>
+      <li>Enterprise 등급의 데이터 보존·IP allowlist 옵션이 필요한 수준의 민감도인지 판단했는가</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH10 ===== -->
+<div class="section" id="ch10">
+  <h2 class="section-title section-anchor"><span class="icon">📊</span> 10. 생산성 측정 — 허수와 진짜 지표</h2>
+
+  <div class="compare-row">
+    <div class="compare-box con">
+      <h4 style="color:var(--danger)">❌ 허수 지표</h4>
+      <ul>
+        <li><strong>코드 줄 수(LOC) 증가</strong> — 에이전트는 장황한 코드를 쉽게 뽑아낸다. 줄 수 감소가 오히려 좋은 리팩터링일 수 있다</li>
+        <li><strong>커밋 수</strong> — 작은 커밋을 여러 번 나누면 쉽게 늘어난다</li>
+        <li><strong>AI 제안 수락률</strong> — 수락했다고 그 코드가 정확하다는 뜻은 아니다</li>
+        <li><strong>"몇 % 빨라졌다"는 체감 설문</strong> — 실제 배포 품질과 상관관계가 약하다</li>
+      </ul>
+    </div>
+    <div class="compare-box pro">
+      <h4 style="color:var(--success)">✅ 진짜 지표</h4>
+      <ul>
+        <li><strong>배포까지 걸리는 시간(lead time)</strong> — 지시부터 프로덕션 반영까지</li>
+        <li><strong>배포 후 롤백·핫픽스 비율</strong> — 품질의 대리 지표</li>
+        <li><strong>검수 반려율·재작업 루프 횟수</strong> — 지시 품질과 에이전트 신뢰도의 지표</li>
+        <li><strong>작업당 실제 비용</strong> — LLM 호출 비용 대비 절감된 인건비</li>
+        <li><strong>확보한 "고차 판단" 시간</strong> — 반복작업 자동화로 사람이 설계·의사결정에 쓸 수 있는 시간</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>💡 AADS의 비용 통제형 지표 — 실제 CEO 지시</strong>
+    AADS는 작업당 LLM 호출 횟수를 15회로 상한하는 규칙(CEO-DIRECTIVES 핵심 원칙: "LLM 15회/task, 비용 효율 최우선")을 운영합니다. 이는 생산성 지표라기보다 비용 통제 지표지만, "무제한으로 재시도시키며 비용만 태우는" 실패를 막는 실질적 안전장치로 기능합니다.
+  </div>
+
+  <div class="checkpoint">
+    <strong>✅ CEO 체크포인트</strong>
+    <ul>
+      <li>코드 줄 수나 커밋 수를 성과 지표로 쓰고 있지 않은지 점검했는가</li>
+      <li>배포 후 롤백률·재작업 루프 횟수를 추적하는가</li>
+      <li>작업당 LLM 호출 횟수·비용 상한을 정해두었는가(AADS는 15회/task)</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH11 ===== -->
+<div class="section" id="ch11">
+  <h2 class="section-title section-anchor"><span class="icon">🔬</span> 11. AADS Pipeline Runner 실제 구조 전수분석</h2>
+
+  <div class="alert alert-info">
+    <strong>💡 이 장의 근거</strong>
+    아래 내용은 <code>app/services/pipeline_runner_service.py</code>(3,314줄) 전체를 순차로 직접 읽고, PostgreSQL <code>pipeline_jobs</code> 테이블을 실제 조회해 작성했습니다(조회일 2026-09-12). 추정·일반론이 아니라 코드 줄 번호·실제 상태값·실제 카운트만 기술합니다.
+  </div>
+
+  <p>AADS의 채팅 파이프라인 러너는 "채팅방 지시 → Claude Code 자율 작업 → AI 검수 → 재지시 루프 → 승인 → 배포"를 오케스트레이션합니다. 핵심 로직은 <code>PipelineCJob</code> 클래스 하나(451줄~)에 응집돼 있고, 외부 API는 <code>start_pipeline</code>(2270행), <code>approve_pipeline</code>(2392행), <code>reject_pipeline</code>(2400행), <code>cancel_pipeline</code>(2408행), <code>retry_pipeline</code>(2473행)로 노출됩니다.</p>
+
+  <h3>실제 Phase 흐름</h3>
+  <div class="diagram">
+    <div class="title">PipelineCJob 실제 처리 흐름 (소스 코드 기준)</div>
+<pre style="background:transparent;border:none;text-align:left;margin:0;color:var(--text)">
+run() [637행] → _run_inner() [649행]
+  ├─ Phase1 모델 실행 (Claude/Codex CLI 호출) ..... 736행
+  ├─ Phase2~3 AI 검수 루프 (_ai_review) ........... 772~910행 (1911행: _ai_review 본체)
+  └─ Phase4 승인 대기 진입 ......................... 911~941행
+
+approve() [962행] → _approve_inner() [971행]
+  ├─ Phase5 git push (프로젝트 락) ................. 1006~1016행
+  │    └─ AADS: deploy.sh bluegreen 큐 등록 ........ 1039행 (_queue_aads_deploy_after_push, 295행)
+  ├─ Phase6 서비스 재시작(30초 디바운스) ........... 1065~1134행 (279행)
+  └─ Phase7 최종 검증 (_final_verify) .............. 2032행
+
+reject() → _reject_inner() [1328~1356행]
+  └─ git checkout . && git clean -fd 로 변경 원복
+</pre>
+  </div>
+
+  <h3>상태값 체계 — 코드에 실제로 있는 것 vs 없는 것</h3>
+  <pre><code># 파일 내 실제 정의 (79~85행)
+_TERMINAL_JOB_STATUSES = {
+    "done", "error", "cancelled", "rejected_done", "review_hold",
+}</code></pre>
+  <p>그러나 <code>self.status =</code> 로 실제 대입되는 값은 이 파일 안에서 <code>"running"</code>(492행), <code>"awaiting_approval"</code>(807/914행), <code>"done"</code>(784/1041/1098/1133/1345행 — reject 포함), <code>"error"</code>(743/880/995/1021/1032/1205행) 4종뿐입니다. <code>"rejected_done"</code>과 <code>"review_hold"</code>는 이 파일에서 직접 대입되는 지점을 찾지 못했습니다 — API 레이어에서 최종 상태를 덮어쓰는 것으로 추정되나 <strong>미검증</strong>입니다. 아래 항목은 이번 전수 조사에서 파일 전체(3,314줄)를 확인했음에도 <strong>발견되지 않았습니다</strong>: <code>blocked_dependency</code>, <code>terminated</code>, <code>deploy_worktree_not_isolated</code>. 이런 상태값을 사용하는 문서·리포트가 있다면 해당 문서의 근거를 별도로 확인해야 합니다.</p>
+
+  <div class="alert alert-danger">
+    <strong>⚠️ worktree 격리는 이 파일에 구현되어 있지 않다</strong>
+    "worktree"라는 문자열이 3,314줄 전체에서 단 한 번도 등장하지 않습니다. 병렬 실행 시 여러 job이 실행되는 것은 <code>parallel_group</code> 필드(640~643행)와 <code>_project_locks</code>로 "순서"만 조율할 뿐, <code>_ssh_command</code>는 항상 동일한 <code>self.workdir</code>에서 실행됩니다(2065행, <code>cd {workdir} &amp;&amp; ...</code>). 즉 6장에서 설명한 "파일시스템 격리"는 이 서비스에는 없고, 락으로 순서를 제어하는 방식입니다. 병렬 job이 같은 프로젝트의 같은 파일을 동시에 건드리지 않도록 작업지시서 설계로 보완해야 합니다.</p>
+  </div>
+
+  <h3>승인 로직 — 사람이 아니라 "세션 AI"가 1차 승인</h3>
+  <p>Phase4는 CEO가 아니라 세션 AI가 <code>_trigger_ai_reaction()</code>(930행)으로 diff를 검토한 뒤 <code>pipeline_runner_approve</code> 도구를 호출하는 구조입니다. <code>_trace_task_policy()</code>(1842행)가 <code>task_policy_compiler.compile_task_policy()</code>를 호출해 <code>risk_tier</code>/<code>approval_required</code>를 감사 로그(<code>ohvis_harness_traces</code>)에 남기지만(1855행), 이 값으로 "고위험만 CEO 에스컬레이션, 저위험 자동승인"을 분기하는 코드는 이 파일 안에는 없습니다 — 감사(trace) 기록용이며, 실제 분기 로직은 <code>task_policy_compiler.py</code>에 있을 가능성이 높으나 이번 조사에서는 확인하지 못했습니다(<strong>미검증</strong>).</p>
+
+  <h3>모델 선택 — 실제 코드 원문</h3>
+  <pre><code># 60~78행 — CEO 지시(2026-09-11): 전 사이즈 Sonnet 5 통일, 폴백 Codex GPT 5.6 Tela
+_CLAUDE_MODEL_BY_SIZE = {
+    "XS": "claude-sonnet-5", "S": "claude-sonnet-5", "M": "claude-sonnet-5",
+    "L": "claude-sonnet-5", "XL": "claude-sonnet-5",
+}
+_LITELLM_FALLBACK_MODELS = {  # 유료 LiteLLM 폴백 비활성화, 무료 Groq만 유지
+    "XS": "groq-llama-70b", "S": "groq-llama-70b", "M": "groq-llama-70b",
+    "L": "groq-llama-70b", "XL": "groq-llama-70b",
+}
+_CODEX_AVAILABLE_MODELS = {
+    "default", "gpt-6-astra", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini",
+    "gpt-5.3-codex", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-tela",
+}</code></pre>
+  <p>실행 시점에는 <code>_get_db_model_config()</code>(352행)가 DB <code>runner_model_config</code>/<code>model_routing_preferences</code>를 먼저 조회하고, 없을 때만 위 딕셔너리로 폴백합니다(729행).</p>
+
+  <h3>타임아웃 정책 — 실제 코드 원문</h3>
+  <pre><code># 40~46행
+_TIMEOUT_BY_SIZE = {
+    "XS": 600,   # 10분
+    "S": 1200,   # 20분
+    "M": 3600,   # 60분
+    "L": 5400,   # 90분
+    "XL": 7200,  # 120분
+}</code></pre>
+
+  <h3>실제 운영 데이터 — pipeline_jobs 테이블 (2026-09-12 조회)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>status</th><th>건수</th><th>비중</th></tr></thead>
+      <tbody>
+        <tr><td><code>rejected_done</code></td><td>683</td><td class="price">약 83%</td></tr>
+        <tr><td><code>cancelled</code></td><td>59</td><td>약 7%</td></tr>
+        <tr><td><code>error</code></td><td>55</td><td>약 7%</td></tr>
+        <tr><td><code>queued</code></td><td>10</td><td>약 1%</td></tr>
+        <tr><td><code>done</code></td><td>7</td><td>약 1%</td></tr>
+        <tr><td><code>review_hold</code></td><td>5</td><td>&lt;1%</td></tr>
+        <tr><td><code>running</code></td><td>3</td><td>&lt;1%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="alert alert-warn">
+    <strong>⚠️ 데이터와 소스코드의 불일치</strong>
+    이 서비스 파일의 <code>reject()</code>는 <code>self.status="done"</code>만 대입합니다(1345행). 그런데 실제 DB에는 <code>rejected_done</code> 상태가 822건 중 683건(약 83%)으로 압도적입니다. 이는 <strong>API 레이어(예: <code>app/api/pipeline_runner.py</code> 등, 이번 조사 범위 밖)가 이 서비스 파일과 별도로 최종 상태를 <code>rejected_done</code>으로 덮어쓰는 것으로 추정</strong>됩니다 — 단정할 근거는 확보하지 못해 미검증으로 남깁니다. CEO가 이 통계를 볼 때 "reject 비율이 83%나 된다"는 사실 자체는 실제 데이터이지만, 코드 경로는 이 파일 하나만으로 설명되지 않는다는 점을 함께 인지해야 합니다.
+  </div>
+
+  <div class="checkpoint">
+    <strong>✅ CEO 체크포인트</strong>
+    <ul>
+      <li>병렬 파이프라인 job들이 같은 workdir을 쓴다는 사실을 인지하고 동시 실행 범위를 제한하고 있는가</li>
+      <li>reject 비율이 83%에 달하는 이유를 정기적으로 분석해 작업지시서 품질을 개선하는가</li>
+      <li>고위험 승인 분기 로직이 정확히 어느 파일에 있는지 파악했는가(이번 조사에서 <code>task_policy_compiler.py</code>로 추정되나 미검증)</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH12 ===== -->
+<div class="section" id="ch12">
+  <h2 class="section-title section-anchor"><span class="icon">✅</span> 12. CEO 러너 결과 검수 체크리스트</h2>
+
+  <p>11장에서 확인한 실제 구조를 바탕으로, CEO가 파이프라인 러너 결과 보고를 받을 때 실무적으로 확인해야 할 항목입니다.</p>
+
+  <h3>Phase별 검수 체크리스트</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Phase</th><th>확인 항목</th><th>확인 방법</th></tr></thead>
+      <tbody>
+        <tr><td>1. 모델 실행</td><td>어느 모델(Sonnet 5 / Codex GPT-5.6 계열)이 실제로 실행됐는가</td><td>채팅방 로그에 삽입된 완료 보고에서 모델명 확인</td></tr>
+        <tr><td>2~3. AI 검수·재지시</td><td>몇 차례 재지시 루프가 돌았는가(반복이 많으면 원 지시서 품질 문제)</td><td>채팅방 기록의 검수 결과 삽입 횟수 카운트</td></tr>
+        <tr><td>4. 승인 대기</td><td>승인한 주체가 CEO인지 세션 AI 자동승인인지 구분</td><td>이번 조사 기준 저위험은 세션 AI가 diff 검토 후 자동 승인 — 고위험 에스컬레이션 로직 위치는 미검증이므로, 애매하면 직접 diff를 요청해 확인</td></tr>
+        <tr><td>5. 배포(git push)</td><td>강제 푸시가 아닌지, 어느 브랜치로 push됐는지</td><td>git 로그의 push 커밋 해시 확인</td></tr>
+        <tr><td>6. 서비스 재시작</td><td>AADS는 deploy.sh bluegreen 무중단 배포인지, 아니면 위험한 직접 재시작인지</td><td>R-DOCKER 규칙 위반(supervisorctl restart aads-api 직접 실행 등) 여부 확인</td></tr>
+        <tr><td>7. 최종 검증</td><td>health-check가 실제로 200을 반환했는지</td><td><code>curl -s https://aads.newtalk.kr/api/v1/ops/health-check</code> 직접 실행</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>공통 점검 5가지</h3>
+  <ol>
+    <li><strong>diff를 실제로 열어봤는가</strong> — 완료 보고 문구만 읽고 승인하지 않는다.</li>
+    <li><strong>변경 파일 목록이 지시 범위와 일치하는가</strong> — 지시하지 않은 파일이 끼어 있으면 반려.</li>
+    <li><strong>테스트 파일이 삭제·축소되지 않았는가</strong> — diff에서 테스트 라인 수 감소 여부 확인.</li>
+    <li><strong>HANDOVER/완료 로그가 남았는가</strong> — R-001 원칙대로 기록 없는 완료 선언은 무효로 취급.</li>
+    <li><strong>재작업 루프가 3회를 넘으면 사람이 직접 개입한다</strong> — 자동 루프에 맡겨두지 않는다.</li>
+  </ol>
+
+  <div class="checkpoint">
+    <strong>✅ CEO 체크포인트</strong>
+    <ul>
+      <li>승인 버튼을 누르기 전 diff를 최소 한 번은 스크롤해서 보는가</li>
+      <li>재작업 루프가 반복되는 작업을 방치하지 않고 직접 개입 기준을 정했는가</li>
+      <li>배포 후 5분 모니터링·health-check 200 확인을 습관화했는가</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH13 ===== -->
+<div class="section" id="ch13">
+  <h2 class="section-title section-anchor"><span class="icon">💰</span> 13. 요금제 총정리 (원화 병기)</h2>
+
+  <div class="alert alert-info">
+    <strong>💡 환산 기준</strong> $1 ≈ ₩1,380. 각 사 공식 페이지 2026-09-12 조회 기준이며, 실제 결제 시점의 환율·정책 변경으로 달라질 수 있습니다.
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>도구</th><th>플랜</th><th>가격</th><th>원화 환산</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td rowspan="4"><strong>Claude Code (Anthropic)</strong></td><td>Pro</td><td class="price">$17/월(연간) / $20(월간)</td><td>₩23,460 / ₩27,600</td><td>Claude Code 포함</td></tr>
+        <tr><td>Max</td><td class="price">$100~/월</td><td>₩138,000~</td><td>Pro 대비 5x/20x 사용량</td></tr>
+        <tr><td>Team</td><td class="price">$20~100/시트</td><td>₩27,600~138,000</td><td>Standard/Premium 시트 혼합 가능</td></tr>
+        <tr><td>Enterprise</td><td class="price">$20/시트+API 사용량</td><td>₩27,600+</td><td>SCIM·감사로그·ZDR</td></tr>
+        <tr><td rowspan="2"><strong>OpenAI Codex CLI</strong></td><td>ChatGPT Business</td><td class="price">$20~100/시트</td><td>₩27,600~138,000</td><td>Codex 포함</td></tr>
+        <tr><td>Enterprise</td><td class="price">별도 협의</td><td>-</td><td>SCIM·EKM·데이터거주지</td></tr>
+        <tr><td rowspan="4"><strong>Cursor</strong></td><td>Hobby</td><td class="price">무료</td><td>₩0</td><td>제한적 Agent 요청</td></tr>
+        <tr><td>Pro</td><td class="price">$20/월</td><td>₩27,600</td><td></td></tr>
+        <tr><td>Pro+</td><td class="price">$60/월</td><td>₩82,800</td><td>Pro 3배 한도</td></tr>
+        <tr><td>Ultra</td><td class="price">$200/월</td><td>₩276,000</td><td>Pro 20배 한도</td></tr>
+        <tr><td rowspan="2"><strong>GitHub Copilot</strong></td><td>Pro</td><td class="price">$10/월</td><td>₩13,800</td><td>2026-06-01부터 프리미엄 요청 사용량 과금 병행</td></tr>
+        <tr><td>Pro+</td><td class="price">$39/월</td><td>₩53,820</td><td>상동</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Claude API 종량제 (참고 — Pipeline Runner 등 자동화에 적용)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>모델</th><th>입력 $/MTok</th><th>출력 $/MTok</th><th>원화 환산(입력/출력)</th></tr></thead>
+      <tbody>
+        <tr><td>Opus 5</td><td class="price">$5</td><td class="price">$25</td><td>₩6,900 / ₩34,500</td></tr>
+        <tr><td>Sonnet 5</td><td class="price">$2</td><td class="price">$10</td><td>₩2,760 / ₩13,800</td></tr>
+        <tr><td>Haiku 4.5</td><td class="price">$1</td><td class="price">$5</td><td>₩1,380 / ₩6,900</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="checkpoint">
+    <strong>✅ CEO 체크포인트</strong>
+    <ul>
+      <li>개인 요금제와 API 종량제 중 우리 사용 패턴에 맞는 쪽을 계산해봤는가</li>
+      <li>시트 기반 요금이 실사용률과 맞는지(놀고 있는 시트가 없는지) 분기별로 점검하는가</li>
+      <li>여러 도구를 동시에 쓰는 경우 총 비용을 한 표로 합산해 보고 있는가</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH14 ===== -->
+<div class="section" id="ch14">
+  <h2 class="section-title section-anchor"><span class="icon">🗺️</span> 14. 도입 로드맵</h2>
+
+  <h3>Phase 1: 시범 도입 (2~4주)</h3>
+  <ol>
+    <li>저위험 반복 작업(테스트 작성, 문서화, 린트 정리)부터 위임</li>
+    <li>규칙 파일(CLAUDE.md/AGENTS.md) 작성 — "절대 금지" 목록 우선</li>
+    <li>자동 검수(정적분석+테스트+빌드) 파이프라인 연결</li>
+  </ol>
+
+  <h3>Phase 2: 확대 (1~2개월)</h3>
+  <ol>
+    <li>병렬 작업 도입 — worktree 또는 디렉터리 분리로 파일 충돌 방지</li>
+    <li>인간 승인 게이트 정식화 — 고위험 파일 목록 문서화</li>
+    <li>생산성 지표 대시보드 구축(lead time, 롤백률, 비용)</li>
+  </ol>
+
+  <h3>Phase 3: 정착 (지속)</h3>
+  <ol>
+    <li>실패 패턴 탐지 자동화(diff 검사, 테스트 회귀 감시)</li>
+    <li>보안 정책(데이터 정책, IP allowlist 등) Enterprise 등급 재검토</li>
+    <li>분기별 요금제·모델 카탈로그 재확인(시장 변화가 빠름)</li>
+  </ol>
+
+  <div class="checkpoint">
+    <strong>✅ CEO 체크포인트</strong>
+    <ul>
+      <li>시범 도입 단계에서 고위험 작업을 실수로 위임하지 않도록 명시적으로 제한했는가</li>
+      <li>확대 단계로 넘어가기 전 자동 검수·승인 게이트가 실제로 작동하는지 점검했는가</li>
+      <li>정착 단계에서도 분기별로 요금제·정책 변경을 재확인하는 일정이 잡혀 있는가</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== CH15: 참고자료 ===== -->
+<div class="section" id="ch15">
+  <h2 class="section-title section-anchor"><span class="icon">📖</span> 15. 참고자료 및 다음 단계</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>출처</th><th>URL</th><th>조회일</th><th>용도</th></tr></thead>
+      <tbody>
+        <tr><td>Anthropic 공식 요금</td><td>anthropic.com/pricing</td><td>2026-09-12</td><td>Claude Code/Pro/Max/Team/Enterprise 요금, 모델별 단가</td></tr>
+        <tr><td>OpenAI 공식 요금(Business)</td><td>openai.com/api/pricing</td><td>2026-09-12</td><td>ChatGPT Business/Enterprise 시트 요금, Codex 포함 여부</td></tr>
+        <tr><td>OpenAI Platform 문서</td><td>platform.openai.com/docs/pricing</td><td>2026-09-12</td><td>GPT-6 Astra 등 최신 모델 카탈로그 확인</td></tr>
+        <tr><td>Cursor 공식 요금</td><td>cursor.com/pricing</td><td>2026-09-12</td><td>Hobby/Pro/Pro+/Ultra 요금, Grok 중심 모델 전략</td></tr>
+        <tr><td>GitHub Copilot 문서</td><td>docs.github.com/en/copilot/get-started/plans</td><td>2026-09-12</td><td>Copilot CLI/에이전트 개념 구조</td></tr>
+        <tr><td>PCWorld — Copilot 요금 개편</td><td>pcworld.com (2026-04-27 기사)</td><td>2026-09-12(재확인)</td><td>2026-06-01 사용량 기반 과금 전환 사실관계</td></tr>
+        <tr><td>Business Insider — Copilot 과금 반응</td><td>businessinsider.com (2026-06 기사)</td><td>2026-09-12(재확인)</td><td>사용량 기반 전환 이후 시장 반응</td></tr>
+        <tr><td>AGENTS.md 공식 사이트</td><td>agents.md</td><td>2026-09-12</td><td>규칙 파일 표준, 60k+ 프로젝트 채택 현황, Agentic AI Foundation 관리 체계</td></tr>
+        <tr><td>AADS 소스코드</td><td>app/services/pipeline_runner_service.py</td><td>2026-09-12</td><td>11장 파이프라인 구조 전수분석(3,314줄 전체 확인)</td></tr>
+        <tr><td>AADS DB</td><td>PostgreSQL pipeline_jobs 테이블</td><td>2026-09-12</td><td>11장 실제 운영 상태 분포(822건)</td></tr>
+        <tr><td>AADS CLAUDE.md</td><td>프로젝트 루트 CLAUDE.md</td><td>2026-09-12</td><td>4·8·9·10장 규칙 파일 실전 사례(R-KEY/R-COMMIT/R-QUALITY/R-DOCKER)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>다음 단계</h3>
+  <ol>
+    <li><strong>1주 내</strong> — 우리 조직의 CLAUDE.md/AGENTS.md 존재 여부와 최신성을 점검한다.</li>
+    <li><strong>2주 내</strong> — 11장에서 드러난 AADS worktree 미구현 이슈를 개발팀과 공유하고, 병렬 job의 파일 충돌 리스크를 재평가한다.</li>
+    <li><strong>1개월 내</strong> — 13장 요금표를 기준으로 현재 사용 중인 도구의 실제 청구액과 비교해 최적 플랜을 재산정한다.</li>
+    <li><strong>분기마다</strong> — 이 문서 자체를 재검증한다. 코딩 에이전트 시장은 3개월이면 요금·모델 카탈로그가 크게 바뀐다.</li>
+  </ol>
+</div>
+
+<!-- ===== FOOTER ===== -->
+<div class="footer">
+  <p>AADS Academy · AI 코딩 에이전트 실무 교육자료 · 2026-09-12 작성 · CEO 교육용</p>
+  <p style="margin-top:6px">가격·모델명은 2026-09-12 각 사 공식 페이지 조회 기준이며 변동될 수 있습니다. AADS 관련 내용은 실제 소스코드·DB 조회 결과만 기술했으며, 확인하지 못한 부분은 본문에 "미검증"으로 명시했습니다.</p>
+</div>
+
+</div>
+</body></html>
