@@ -1,5 +1,41 @@
 # AADS HANDOVER
 
+## 2026-09-13 11:00 KST — 교육자료 포털 공개 자동발견: 인증 가드 행위 테스트 보강 + 배포 전 검증
+
+같은 지시서(AADS-EDU-PORTAL-AUTO-PUBLIC)를 4개 브랜치가 병렬로 작업했고, 그중
+`92eb5f8f`(main)이 이미 구현을 반영한 상태였다. 재구현 대신 **검증과 결함 보강**만 수행했다.
+
+- **발견한 테스트 공백**: 기존 인증 가드 테스트 2건은 `app/main.py`의 **소스 텍스트만
+  grep**한다(`source.count("_PUBLIC_READONLY_EXACT_PATHS = {") == 1` 등). 소스가 그대로여도
+  미들웨어 분기 순서가 바뀌면 면제가 조용히 깨지는데 이를 잡지 못한다. 지시서가 요구한
+  "미인증 exact route 200 / 형제 경로 401"은 행위로 검증되지 않고 있었다.
+- **조치**: `tests/unit/test_project_docs_viewer.py`에 실제 `app.main:app`을 TestClient로
+  태우는 행위 테스트 5건 추가(기존 테스트는 모두 유지, 삭제 없음). lifespan은 시작하지
+  않는다 — 인증 미들웨어는 라우팅보다 앞서 돌기 때문에 DB 풀 없이 검증 가능하다.
+  - `/api/v1/project-docs/public-education-index` 미인증 → **200**, 응답 키는
+    `{basename,title,date,size}` 뿐이고 절대경로·숨김파일 없음
+  - `/scan`, `/content`, `/api/v1/project-docs`, 그리고 **슬래시 변형
+    `/public-education-index/`** → 모두 **401** (면제는 정확히 일치할 때만)
+- **역검증(negative control)**: `or path in _PUBLIC_READONLY_EXACT_PATHS` 한 줄을 제거하자
+  20건 중 2건이 실패 → 테스트가 실제로 결함을 잡는다는 것을 확인하고 원복했다.
+- **신규 파일 자동노출 실증**: 운영 이미지 격리 컨테이너에서 신규
+  `20260913_brand_new_topic_education.html` 1건만 노출되고 `.hidden_`, `..sneaky_`,
+  `notes.html`, `report_education.htm`는 전부 배제, 본문("SECRET")·절대경로 미노출 확인.
+- **브라우저 E2E(로컬 Playwright)**: MCP 브라우저 권한 거부로 로컬 Chromium 사용. 워킹트리
+  `index.html`을 스텁 API와 함께 렌더.
+  - API 200 → 교육자료 **18→19건**, 신규 카드가 최상단 렌더, **중복 파일명은 추가되지 않음(dedupe 정상)**,
+    `../evil_education.html`은 클라이언트 정규식에서 거부, pageerror 0건
+  - API 401 → **18건 폴백 유지**(정적 목록 그대로), pageerror 0건
+- **현재 배포 상태(중요)**: 운영 컨테이너는 이미지 `aads-server:c8459cc66258`(= `c8459cc6`,
+  main보다 2커밋 뒤)로 돌고 있어 **공개 엔드포인트가 아직 401**이다. 코드 결함이 아니라
+  **미배포**다. 직접 슬롯 `:8100`(blue)·`:8102`(green) 모두 health 200, 최근 60초 에러 0건.
+  지시서에 따라 배포/재시작은 하지 않았다 — **CEO 승인 후 `deploy.sh bluegreen` 필요**.
+- **배포 후 공개 검증 명령**:
+  `curl -s -o /dev/null -w "%{http_code}" https://aads.newtalk.kr/api/v1/project-docs/public-education-index` → **200**
+  `curl -s -o /dev/null -w "%{http_code}" https://aads.newtalk.kr/api/v1/project-docs/scan` → **401 유지**
+- **롤백**: 본 커밋은 테스트 전용이라 되돌려도 런타임 영향이 없다. 구현까지 되돌리려면
+  `git revert 92eb5f8f` 후 재배포하면 포털은 정적 18건 폴백으로 복귀한다.
+
 ## 2026-09-13 10:39 KST — 교육자료 포털 공개 자동발견 인증 결함 수정
 
 CEO 지시: 교육자료 12건의 미작성 여부를 확인하고, 새 교육자료가 포털에 자동 반영되도록 남은 조치·검증을 완료.

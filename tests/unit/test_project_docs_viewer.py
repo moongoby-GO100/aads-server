@@ -367,3 +367,43 @@ def test_public_education_index_survives_unstatable_and_invalid_date_entries(tmp
 
 def test_public_education_index_returns_empty_when_directory_is_unreadable(tmp_path):
     assert project_docs._list_public_education_reports(tmp_path / "absent") == []
+
+
+# ── 인증 미들웨어 실제 동작 검증 ──
+# 위의 가드들은 app/main.py 소스 텍스트만 본다. 소스가 그대로여도 미들웨어의
+# 분기 순서가 바뀌면 면제가 조용히 깨지므로, 실제 app 에 요청을 태워서
+# "이 경로만 공개, 형제 경로는 401"을 행위로 못박는다.
+@pytest.fixture(scope="module")
+def middleware_client():
+    from fastapi.testclient import TestClient
+
+    import app.main as main_module
+
+    # with 블록을 쓰지 않아 lifespan(DB 풀 등)은 시작되지 않는다.
+    # 인증 미들웨어는 라우팅보다 앞서 돌기 때문에 이것만으로 충분하다.
+    return TestClient(main_module.app, raise_server_exceptions=False)
+
+
+def test_public_education_index_is_reachable_without_auth(middleware_client):
+    response = middleware_client.get("/api/v1/project-docs/public-education-index")
+
+    assert response.status_code == 200
+    documents = response.json()["documents"]
+    assert isinstance(documents, list)
+    for item in documents:
+        assert set(item) == {"basename", "title", "date", "size"}
+        assert "/" not in item["basename"]
+        assert not str(item["basename"]).startswith(".")
+
+
+@pytest.mark.parametrize("path", [
+    "/api/v1/project-docs/scan",
+    "/api/v1/project-docs/content",
+    "/api/v1/project-docs",
+    # 면제는 정확히 일치할 때만이다. 슬래시가 붙은 변형은 공개되면 안 된다.
+    "/api/v1/project-docs/public-education-index/",
+])
+def test_sibling_project_doc_routes_still_require_auth(middleware_client, path):
+    response = middleware_client.get(path, follow_redirects=False)
+
+    assert response.status_code == 401
