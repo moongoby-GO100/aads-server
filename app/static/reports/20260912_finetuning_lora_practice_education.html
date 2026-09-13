@@ -89,6 +89,29 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
   table{font-size:.78rem}
   th,td{padding:8px 10px}
 }
+/* --- 2026-09-13 출처 검수(sources_p1): 본문 인용 링크 클릭 가능화 스타일 --- */
+.section a[href^="http"],.footer a[href^="http"],.alert a[href^="http"],td a[href^="http"]{color:var(--accent3);text-decoration:none;border-bottom:1px dashed var(--accent3);transition:.2s;word-break:break-all}
+.section a[href^="http"]:hover,.footer a[href^="http"]:hover,.alert a[href^="http"]:hover,td a[href^="http"]:hover{color:var(--accent);border-bottom-style:solid}
+.section a[href^="http"]::after,.footer a[href^="http"]::after{content:" \2197";font-size:.75em;opacity:.7}
+/* === 출처 표기 범례 (2026-09-13 sources_p1) === */
+a.src{color:var(--accent3);text-decoration:none;border-bottom:1px dotted var(--accent3);word-break:break-all}
+a.src:hover{color:var(--accent);border-bottom-style:solid}
+.src-legend{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent3);
+border-radius:12px;padding:20px 24px;margin:0 0 40px}
+.src-legend h3{margin:0 0 10px;font-size:1.02rem;color:var(--accent3)}
+.src-legend ul{margin:10px 0 12px 18px}
+.src-legend li{font-size:.87rem;color:var(--text2);margin-bottom:5px}
+.tag-v{display:inline-block;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:7px;white-space:nowrap}
+.tag-fact{background:#10b98120;color:#34d399}
+.tag-edu{background:#3b82f620;color:#60a5fa}
+.tag-plan{background:#8b5cf620;color:#a78bfa}
+.tag-unver{background:#f59e0b20;color:#fbbf24}
+.tag-verified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#10b98120;color:#34d399;margin-left:6px}
+.tag-unverified{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:#ef444420;color:#f87171;margin-left:6px}
+.http-ok{color:var(--success);font-weight:600}
+.http-waf{color:var(--warning);font-weight:600}
+/* 모바일 가로 스크롤 방지: 긴 URL·경로 토큰이 줄바꿈되지 않아 문서 폭을 넘기던 문제 */
+.alert,.info-card,.checkpoint,.ceo-box,td,li,p{overflow-wrap:break-word}
 </style>
 </head>
 <body>
@@ -125,8 +148,23 @@ font-size:.82rem;font-weight:600;text-align:center;min-width:100px}
     <a href="#ch14"><span class="num">14</span> 실전 로드맵</a>
     <a href="#ch15"><span class="num">15</span> 도구·라이브러리 총정리</a>
     <a href="#ch16"><span class="num">16</span> 참고자료 · 다음 단계</a>
+    <a href="#source-audit-20260913"><span class="num">★</span> 부록. 출처 검수 이력 (2026-09-13)</a>
   </div>
 </div>
+
+<!-- ===== 출처 표기 범례 (2026-09-13 sources_p1 출처 검수) ===== -->
+<div class="src-legend">
+  <h3>📌 출처 표기 범례 — 무엇이 검증된 사실이고 무엇이 아닌가</h3>
+  <p style="font-size:.87rem;color:var(--text2);margin-bottom:6px">이 문서의 주장은 근거의 강도에 따라 아래 4가지로 구분됩니다. 외부 출처는 <strong>기관 공식 문서·공식 가격표·원 논문(1차 출처)</strong>의 클릭 가능한 링크로 연결되어 있습니다.</p>
+  <ul>
+    <li><span class="tag-v tag-fact">검증</span>1차 출처로 원문을 확인한 사실 — 링크를 눌러 직접 대조할 수 있습니다</li>
+    <li><span class="tag-v tag-edu">예시</span>이해를 돕기 위한 교육용 예시·비유·가상 시나리오 — 실측치가 아닙니다</li>
+    <li><span class="tag-v tag-plan">제안</span>본 문서가 제안하는 개선안 — 아직 실행되지 않은 계획입니다</li>
+    <li><span class="tag-v tag-unver">미검증</span>확인하지 못한 항목 — 의사결정 전 반드시 재확인이 필요합니다</li>
+  </ul>
+  <p style="font-size:.8rem;color:var(--text3);margin:0">링크 점검: <strong>2026-09-13 09:40~10:20 KST</strong>, 서버 68 런타임에서 각 URL에 HTTP 요청을 보내 응답 코드를 기록했습니다. 일부 기관 사이트(Gartner·RAND·BCG·OpenAI 등)는 자동화 접근을 차단(<span class="http-waf">HTTP 403</span>)하지만 브라우저에서는 정상 열람됩니다. <strong>URL 접근 확인은 링크가 살아 있다는 뜻일 뿐, 그 페이지에 실린 모든 수치를 본 문서가 검증했다는 뜻은 아닙니다.</strong></p>
+</div>
+
 
 <!-- ===== CH1 ===== -->
 <div class="section" id="ch1">
