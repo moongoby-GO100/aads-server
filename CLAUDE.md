@@ -1,5 +1,23 @@
 # AADS — 자율 AI 개발 시스템 (서버 68)
 
+## 릴리스 규칙의 원본은 AGENTS.md 다 (R-RELEASE)
+
+빌드·배포·블루그린에 관한 규칙은 **`/root/aads/AGENTS.md` 가 유일한 원본**이고,
+저장소별 세부는 각 저장소의 `AGENTS.md` 에 있다. 이 문서는 그것을 요약하거나
+대체하지 않는다 — 배포 전에 직접 읽어라.
+
+| 파일 | 범위 |
+|---|---|
+| `/root/aads/AGENTS.md` | 전역 블루/그린 릴리스 계약 11개 조항 |
+| `aads-server/AGENTS.md` | API 릴리스 |
+| `aads-dashboard/AGENTS.md` | 대시보드 릴리스 + 실제 실패 사례 |
+
+**왜 이렇게 두는가.** 2026-09-13, 이 문서에는 대시보드 배포가
+`docker compose build && up -d` 로 적혀 있었고 그대로 따랐다가 헛빌드를 했다.
+정작 맞는 규칙("one image build per release SHA", "clean committed release
+worktree")은 AGENTS.md 에만 있었다. 규칙을 두 벌로 유지하면 한쪽이 반드시
+낡고, 낡은 쪽을 읽는 쪽이 사고를 낸다.
+
 ## 기술 스택
 FastAPI 0.115, PostgreSQL 15, LangGraph 1.0.10, Docker Compose, Python 3.11, Next.js 16
 
@@ -60,9 +78,7 @@ docs/knowledge/AADS-KNOWLEDGE.md — 아키텍처, 파이프라인, 교차검증
 - **`docker compose up -d` 전체 실행 절대 금지** — postgres/litellm/aads-server가 동시 재생성되어 채팅 시스템 전체가 중단됨.
 - **단일 서비스만 재시작**: `docker compose up -d --no-deps <서비스명>` 또는 `docker compose restart <서비스명>`
 - **대시보드 빌드/배포**: `cd /root/aads/aads-dashboard && bash deploy.sh` (blue-green 무중단)
-  - **`docker compose build` 를 직접 쓰지 마라.** 그 경로는 `aads-dashboard:local` 태그를 만드는데, 운영 컨테이너는 커밋 sha 태그(`aads-dashboard:<sha>`)를 쓴다. 빌드가 성공해도 배포되지 않는다(2026-09-13 실측: `:local` 을 빌드했으나 운영은 계속 이전 이미지였다).
-  - deploy.sh 는 워킹트리가 아니라 **커밋에서 뽑은 깨끗한 릴리스 디렉터리**(`/tmp/aads-dashboard-release.*`)에서 빌드한다. 커밋하지 않은 변경은 반영되지 않는다.
-  - **배포 중에 같은 이미지를 병행 빌드하지 마라.** BuildKit 이 동일 단계를 공유하므로 한쪽을 취소하면 다른 쪽도 `context canceled` 로 죽는다(2026-09-13 실측: 중복 빌드를 정리하려다 공식 배포 #414 를 실패시켰다).
+  - 세부 규칙과 실패 사례는 `aads-dashboard/AGENTS.md` — 배포 전에 읽어라. 여기에 다시 적지 않는다(R-RELEASE).
   - aads-server compose 파일 사용 금지.
 - **aads-server 재시작 필요 시 (무중단 배포 필수)**:
   - Python 코드만 변경: `docker exec aads-server bash /app/scripts/reload-api.sh` (0ms 다운타임)
