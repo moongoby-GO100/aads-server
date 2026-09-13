@@ -60,8 +60,8 @@ footer{text-align:center;padding:32px 0;color:var(--text2);font-size:.8rem;borde
 <h1>AADS 문서 포털</h1>
 <p>교육자료 · 기획/설계 · 기업분석 · 보고서 — 한곳에서 모두 열람</p>
 <div class="stats">
-<div class="stat"><div class="n" id="totalCount">34</div><div class="l">전체 문서</div></div>
-<div class="stat"><div class="n" id="eduCount">5</div><div class="l">교육자료</div></div>
+<div class="stat"><div class="n" id="totalCount">0</div><div class="l">전체 문서</div></div>
+<div class="stat"><div class="n" id="eduCount">0</div><div class="l">교육자료</div></div>
 <div class="stat"><div class="n" id="designCount">6</div><div class="l">기획/설계</div></div>
 <div class="stat"><div class="n" id="analysisCount">6</div><div class="l">분석/보고</div></div>
 </div>
@@ -88,7 +88,19 @@ AADS 문서 포털 · 최종 업데이트 2026-09-12 · 자동 생성
 <script>
 const docs = [
   // === 교육자료 ===
-  {cat:"edu",title:"LLM 서버 구축 종합 교육자료",file:"20260912_llm_server_comprehensive_education.html",date:"2026-09-12",size:"76KB",desc:"하드웨어·GPU·모델구동·오픈소스·자체개발·데이터셋·기술스택·도구·비용·보안 종합"},
+  {cat:"edu",title:"프롬프트·컨텍스트 엔지니어링",file:"20260912_prompt_context_engineering_education.html",date:"2026-09-12",size:"80KB",desc:"프롬프트 설계, 컨텍스트 구성, 장기 대화와 운영 패턴"},
+  {cat:"edu",title:"AI 보안·거버넌스",file:"20260912_ai_security_governance_education.html",date:"2026-09-12",size:"78KB",desc:"위협 모델, 데이터 보호, 정책·감사·거버넌스"},
+  {cat:"edu",title:"RAG·Vector DB·Embedding",file:"20260912_rag_vectordb_embedding_education.html",date:"2026-09-12",size:"64KB",desc:"검색증강생성, 임베딩, 벡터 저장소와 평가"},
+  {cat:"edu",title:"MCP·Tool Calling",file:"20260912_mcp_tool_calling_education.html",date:"2026-09-12",size:"89KB",desc:"도구 계약, MCP 아키텍처, 안전한 실행과 검증"},
+  {cat:"edu",title:"AI 평가·Evals",file:"20260912_ai_evaluation_evals_education.html",date:"2026-09-12",size:"74KB",desc:"평가셋, 자동·인간 평가, 회귀·운영 품질 관리"},
+  {cat:"edu",title:"LLMOps·관측성",file:"20260912_llmops_observability_education.html",date:"2026-09-12",size:"77KB",desc:"모델 운영, 추적, 비용·품질·장애 관측"},
+  {cat:"edu",title:"파인튜닝·LoRA 실전",file:"20260912_finetuning_lora_practice_education.html",date:"2026-09-12",size:"74KB",desc:"SFT, LoRA·QLoRA, 데이터 준비와 배포"},
+  {cat:"edu",title:"AI 코딩 에이전트 실전",file:"20260912_ai_coding_agent_practice_education.html",date:"2026-09-12",size:"62KB",desc:"코딩 에이전트 지시·검수·테스트·릴리스 운용"},
+  {cat:"edu",title:"AI 비용·토큰 경제학",file:"20260912_ai_cost_token_economics_education.html",date:"2026-09-12",size:"56KB",desc:"토큰 비용, 캐시, 라우팅과 원가 최적화"},
+  {cat:"edu",title:"AI 법률·저작권·개인정보",file:"20260912_ai_law_copyright_privacy_education.html",date:"2026-09-12",size:"83KB",desc:"AI 법적 쟁점, 저작권, 개인정보와 준수 체계"},
+  {cat:"edu",title:"AI 제품기획·PRD·AX",file:"20260912_ai_product_prd_ax_education.html",date:"2026-09-12",size:"61KB",desc:"AI 제품 발굴, PRD, 검증 지표와 AX 전환"},
+  {cat:"edu",title:"멀티모달 AI",file:"20260912_multimodal_ai_education.html",date:"2026-09-12",size:"60KB",desc:"텍스트·이미지·음성·영상 모델과 서비스 활용"},
+  {cat:"edu",title:"LLM 서버 구축 종합 교육자료",file:"20260912_llm_server_comprehensive_education.html",date:"2026-09-12",size:"93KB",desc:"하드웨어·GPU·모델구동·오픈소스·자체개발·데이터셋·기술스택·도구·비용·보안 종합"},
   {cat:"edu",title:"AI 학습론 완전 이해",file:"20260910_ai_learning_theory_education.html",date:"2026-09-10",size:"53KB",desc:"사전학습·미세조정·RLHF·RAG·메모리 구분, AADS 적용 현황"},
   {cat:"edu",title:"업무 지시·검수·재지시 멀티 에이전트 운영",file:"20260909_directive_review_rework_education.html",date:"2026-09-09",size:"83KB",desc:"지시서 작성·검수·재작업 오케스트레이션 교육"},
   {cat:"edu",title:"멀티 에이전트 운영 기술 교육자료",file:"20260908_multi_agent_ops_education.html",date:"2026-09-08",size:"41KB",desc:"논문·공식문서 기반 멀티 에이전트 운영 전략"},
@@ -144,6 +156,11 @@ const catMeta = {
   llm:     {label:"LLM",     icon:"🤖",color:"var(--accent6)", tagClass:"tag-llm"},
   store:   {label:"매장비서",  icon:"🏪",color:"#ec4899",       tagClass:"tag-store"}
 };
+
+document.getElementById('totalCount').textContent = docs.length;
+document.getElementById('eduCount').textContent = docs.filter(d => d.cat === 'edu').length;
+document.getElementById('designCount').textContent = docs.filter(d => d.cat === 'design').length;
+document.getElementById('analysisCount').textContent = docs.filter(d => d.cat === 'analysis').length;
 
 let currentFilter = 'all';
 
