@@ -1637,15 +1637,67 @@ def _parse_loadavg(output: str) -> dict[str, Any]:
         return {}
 
 
+def _parse_lscpu(output: str) -> dict[str, Any]:
+    """lscpu 출력에서 CPU 사양 추출 (코어 수·모델명·아키텍처)."""
+    fields: dict[str, str] = {}
+    for line in output.splitlines():
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        fields[key.strip().lower()] = value.strip()
+
+    result: dict[str, Any] = {}
+    for key in ("cpu(s)",):
+        try:
+            result["cpu_cores"] = int(fields[key])
+            break
+        except (KeyError, ValueError):
+            continue
+    if fields.get("model name"):
+        result["cpu_model"] = fields["model name"][:80]
+    if fields.get("architecture"):
+        result["cpu_arch"] = fields["architecture"]
+    if fields.get("hypervisor vendor"):
+        result["cpu_virtualization"] = fields["hypervisor vendor"]
+    for key in ("thread(s) per core",):
+        try:
+            result["cpu_threads_per_core"] = int(fields[key])
+        except (KeyError, ValueError):
+            pass
+    return result
+
+
+def _parse_nproc(output: str) -> dict[str, Any]:
+    """lscpu 미설치 환경 폴백 — 코어 수만 확보."""
+    try:
+        return {"cpu_cores": int(output.strip().splitlines()[0])}
+    except (ValueError, IndexError):
+        return {}
+
+
+def _derive_cpu_load_pct(metrics: dict[str, Any]) -> Optional[float]:
+    """load_1m / 코어 수 → CPU 부하율(%). 코어 수 없으면 계산 불가."""
+    load_1m = metrics.get("load_1m")
+    cores = metrics.get("cpu_cores")
+    if not isinstance(load_1m, (int, float)) or not isinstance(cores, int) or cores <= 0:
+        return None
+    return round(load_1m / cores * 100, 1)
+
+
 def _status_from_metrics(metrics: dict[str, Any]) -> str:
     disk_pct = metrics.get("disk_pct")
     memory_pct = metrics.get("memory_pct")
-    if (isinstance(disk_pct, (int, float)) and disk_pct >= 90) or (
-        isinstance(memory_pct, (int, float)) and memory_pct >= 90
+    cpu_load_pct = metrics.get("cpu_load_pct")
+    if (
+        (isinstance(disk_pct, (int, float)) and disk_pct >= 90)
+        or (isinstance(memory_pct, (int, float)) and memory_pct >= 90)
+        or (isinstance(cpu_load_pct, (int, float)) and cpu_load_pct >= 200)
     ):
         return "critical"
-    if (isinstance(disk_pct, (int, float)) and disk_pct >= 80) or (
-        isinstance(memory_pct, (int, float)) and memory_pct >= 80
+    if (
+        (isinstance(disk_pct, (int, float)) and disk_pct >= 80)
+        or (isinstance(memory_pct, (int, float)) and memory_pct >= 80)
+        or (isinstance(cpu_load_pct, (int, float)) and cpu_load_pct >= 100)
     ):
         return "warning"
     return "ok"
@@ -1658,6 +1710,7 @@ def _collect_server_health_fallback(cfg: dict[str, Any]) -> dict[str, Any]:
         ("free -m", _parse_free_m, "cat /proc/meminfo", _parse_meminfo),
         ("df -h /", _parse_df_h, None, None),
         ("uptime", _parse_uptime, "cat /proc/loadavg", _parse_loadavg),
+        ("lscpu", _parse_lscpu, "nproc", _parse_nproc),
     ]
     for command, parser, fallback_command, fallback_parser in probes:
         try:
@@ -1673,6 +1726,10 @@ def _collect_server_health_fallback(cfg: dict[str, Any]) -> dict[str, Any]:
             errors.append(f"{command}: {result.stderr.strip()[:120]}")
         except Exception as exc:
             errors.append(f"{command}: {str(exc)[:120]}")
+
+    cpu_load_pct = _derive_cpu_load_pct(metrics)
+    if cpu_load_pct is not None:
+        metrics["cpu_load_pct"] = cpu_load_pct
 
     status = _status_from_metrics(metrics) if metrics else "fail"
     return {
