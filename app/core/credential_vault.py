@@ -163,15 +163,67 @@ async def get_credential(
     """단일 자격증명 조회 (복호화 포함)."""
     tenant_uuid = _require_tenant_uuid(tenant_id, "get_credential")
     pool = get_pool()
+    cred_uuid = credential_id if isinstance(credential_id, UUID) else UUID(credential_id)
     row = await pool.fetchrow(
         "SELECT * FROM e2e_credentials WHERE id = $1 AND tenant_id = $2",
-        credential_id if isinstance(credential_id, UUID) else UUID(credential_id),
+        cred_uuid,
         tenant_uuid,
     )
     if not row:
-        return None
+        # 못 찾으면 에이전트 볼트를 한 번 더 본다.
+        #
+        # 자격증명 창고가 둘이다. 대시보드 UI 는 /agent-vault/credentials 로
+        # agent_vault_credentials 에 저장하는데, 이 모듈은 e2e_credentials 만
+        # 본다. 그래서 CEO 가 UI 로 등록한 자격증명은 e2e-inject 로그인도,
+        # 채팅의 브라우저 로그인 도구도 전부 "자격증명 없음"으로 실패했다.
+        # 2026-09-13 실측 — GenSpark·AADS 대시보드 자격증명 모두 조회 실패.
+        # e2e_credentials 에 행을 만드는 API 는 없어 사실상 죽은 테이블이다.
+        #
+        # 두 테이블은 같은 Fernet 키를 쓴다(agent_vault_service 가 이 모듈의
+        # encrypt_value/decrypt_value 를 그대로 import 한다). 테넌트 범위도
+        # 그대로라 읽을 수 있는 범위가 넓어지지 않는다.
+        row = await pool.fetchrow(
+            """
+            SELECT id, tenant_id, label, origin, work_key,
+                   username_enc, password_enc, metadata,
+                   created_at, updated_at, last_used_at
+            FROM agent_vault_credentials
+            WHERE id = $1 AND tenant_id = $2 AND is_active
+            """,
+            cred_uuid,
+            tenant_uuid,
+        )
+        if not row:
+            return None
+        item = dict(row)
+        # 호출부가 기대하는 모양으로 맞춘다. e2e 쪽에만 있는 필드는 비운다.
+        item["service"] = item.get("work_key") or ""
+        item["url"] = item.get("origin") or ""
+        item["extra_fields"] = None
+        item["last_verified"] = None
+        item["vault_source"] = "agent_vault"
+        _normalize_json_fields(item)
+        item["id"] = str(item["id"])
+        for _tf in ("created_at", "updated_at", "last_used_at"):
+            if item.get(_tf):
+                item[_tf] = item[_tf].isoformat()
+        try:
+            item["username"] = decrypt_value(item["username_enc"])
+        except Exception:
+            item["username"] = "[복호화 실패]"
+        if include_secrets:
+            try:
+                item["password"] = decrypt_value(item["password_enc"])
+            except Exception:
+                item["password"] = "[복호화 실패]"
+        else:
+            item["password"] = "********"
+        item.pop("username_enc", None)
+        item.pop("password_enc", None)
+        return item
 
     item = dict(row)
+    item["vault_source"] = "e2e"
     _normalize_json_fields(item)
     item["id"] = str(item["id"])
     for tf in ("created_at", "updated_at", "last_used_at", "last_verified"):
@@ -329,11 +381,22 @@ async def mark_used(credential_id: str, tenant_id: str | None = None) -> None:
     """사용 시각 갱신."""
     tenant_uuid = _require_tenant_uuid(tenant_id, "mark_used")
     pool = get_pool()
-    await pool.execute(
+    cred_uuid = UUID(credential_id)
+    result = await pool.execute(
         "UPDATE e2e_credentials SET last_used_at = NOW() WHERE id = $1 AND tenant_id = $2",
-        UUID(credential_id),
+        cred_uuid,
         tenant_uuid,
     )
+    # get_credential 이 에이전트 볼트로 넘어갈 수 있으므로 여기도 같이 본다.
+    # 빠뜨리면 last_used_at 이 영영 갱신되지 않아 실제로 쓰이는 자격증명이
+    # "한 번도 안 쓰인 것"으로 보인다.
+    if str(result).strip().endswith(" 0"):
+        await pool.execute(
+            "UPDATE agent_vault_credentials SET last_used_at = NOW() "
+            "WHERE id = $1 AND tenant_id = $2",
+            cred_uuid,
+            tenant_uuid,
+        )
 
 
 async def mark_verified(credential_id: str, success: bool = True, tenant_id: str | None = None) -> None:
