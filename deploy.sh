@@ -13,6 +13,18 @@ trap '' SIGPIPE 2>/dev/null || true  # RC9: prevent broken-pipe from killing dep
 
 REQUESTED_MODE="${1:-bluegreen}"
 MODE="$REQUESTED_MODE"
+# 모드 검증은 맨 앞에서 끝낸다.
+# 2026-09-13 09:09 KST #377/#378: 누군가 `deploy.sh status` 를 호출했는데
+# 모드 검사가 code_validation(2364행)에 있어서, 그 전에 preflight 를 통과하고
+# 큐에 있던 릴리스를 claim 한 뒤 deploy_runs 에 실패 2건을 남겼다.
+# 배포가 아닌 호출이 배포 실패 원장을 오염시키면 실패율·원인 분석이 전부 흐려진다.
+case "$MODE" in
+    bluegreen|code|reload|build) ;;
+    *)
+        echo "[deploy.sh] ERROR: 알 수 없는 모드 '$MODE'. bluegreen|code|reload|build 사용" >&2
+        exit 2
+        ;;
+esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_DIR="${AADS_DEPLOY_SOURCE_DIR:-$SCRIPT_DIR}"
 STATE_DIR="${AADS_DEPLOY_STATE_DIR:-/root/aads/aads-server}"

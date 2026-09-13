@@ -313,12 +313,23 @@ launch_autoheal_worker() {
         autoheal_log "❌ 큐 워커 런처를 찾을 수 없다 — 재개 불가"
         return 1
     fi
+    # 재개 모드는 배포 모드로만 넘긴다.
+    # 2026-09-13 09:09 KST #378: MODE=status 로 시작된 호출이 실패하자
+    # 그 MODE 가 그대로 재개 워커에 전달되어 code_validation 에서 다시 죽었다.
+    local retry_mode="${MODE:-bluegreen}"
+    case "$retry_mode" in
+        bluegreen|code|reload|build) ;;
+        *)
+            autoheal_log "재개 모드 보정: '${retry_mode}' 는 배포 모드가 아니다 → bluegreen 으로 대체"
+            retry_mode="bluegreen"
+            ;;
+    esac
     if [[ "$AADS_DEPLOY_AUTOHEAL_DRYRUN" == "1" ]]; then
-        autoheal_log "DRYRUN: 워커 기동 생략 (${launcher} ${MODE:-bluegreen} autoheal_${cause})"
+        autoheal_log "DRYRUN: 워커 기동 생략 (${launcher} ${retry_mode} autoheal_${cause})"
         return 0
     fi
     autoheal_cooldown_stamp
-    bash "$launcher" "${MODE:-bluegreen}" "autoheal_${cause}" || {
+    bash "$launcher" "$retry_mode" "autoheal_${cause}" || {
         autoheal_log "❌ 큐 워커 기동 실패"
         return 1
     }
@@ -333,8 +344,14 @@ autoheal_record_outcome() {
     local outcome="${1:-}"
     local cause="${2:-unknown}"
     local detail="${3:-}"
-    [[ -n "${DEPLOY_RUN_ID:-}" ]] || return 0
-    deploy_db_available || return 0
+    if [[ -z "${DEPLOY_RUN_ID:-}" ]]; then
+        autoheal_log "결과 기록 생략: DEPLOY_RUN_ID 없음 (outcome=${outcome}, cause=${cause})"
+        return 0
+    fi
+    if ! deploy_db_available; then
+        autoheal_log "결과 기록 생략: DB 불가 (outcome=${outcome}, cause=${cause})"
+        return 0
+    fi
     local note_sql
     note_sql="$(sql_escape "autoheal ${outcome}: cause=${cause}; remediation=${AUTOHEAL_LAST_REMEDIATION}; ${detail}")"
     deploy_db_exec "
@@ -343,6 +360,7 @@ autoheal_record_outcome() {
                updated_at = NOW()
          WHERE id = ${DEPLOY_RUN_ID};
     " >/dev/null 2>&1 || true
+    autoheal_log "결과 기록: deploy_runs#${DEPLOY_RUN_ID} ← ${outcome}/${cause}"
 }
 
 autoheal_escalate() {
@@ -416,6 +434,7 @@ deploy_autoheal_on_exit() {
     fi
     if launch_autoheal_worker "$cause"; then
         autoheal_log "✅ 자가치유 재개 기동 완료: cause=${cause}, remediation=${AUTOHEAL_LAST_REMEDIATION}"
+        autoheal_record_outcome "retry_launched" "$cause" "release=${AADS_RELEASE_SHA:-unknown}"
         audit_control "autoheal" "deploy_runs:${DEPLOY_RUN_ID:-none}" "retry_launched" \
             "cause=${cause}; remediation=${AUTOHEAL_LAST_REMEDIATION}; release=${AADS_RELEASE_SHA:-unknown}" || true
         if declare -F notify >/dev/null 2>&1; then

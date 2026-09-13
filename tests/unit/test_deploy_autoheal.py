@@ -329,6 +329,42 @@ def test_autoheal_escalation_is_recorded_in_db():
     assert "CONCAT_WS(' | '" in src
 
 
+def test_unknown_mode_exits_before_touching_deploy_ledger():
+    """배포가 아닌 모드는 DB/큐를 건드리기 전에 즉시 끝나야 한다.
+
+    2026-09-13 09:09 KST: `deploy.sh status` 호출이 모드 검사(code_validation)
+    전에 preflight 를 통과하고 큐 릴리스를 claim 해, deploy_runs 에
+    #377/#378 실패 2건을 남겼다.
+    """
+    proc = subprocess.run(
+        ["bash", str(DEPLOY_SH), "status"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=str(REPO_ROOT),
+    )
+    assert proc.returncode == 2, f"rc={proc.returncode} out={proc.stdout[-400:]}"
+    combined = proc.stdout + proc.stderr
+    assert "알 수 없는 모드" in combined
+    # 큐 claim / preflight 까지 내려가면 안 된다.
+    assert "claimed queued deploy_run_id" not in combined
+    assert "phase=preflight" not in combined
+
+
+def test_autoheal_retry_mode_is_sanitized():
+    """재개 워커에 배포 모드가 아닌 MODE 가 그대로 전달되면 안 된다."""
+    src = AUTOHEAL_LIB.read_text(encoding="utf-8", errors="ignore")
+    assert 'local retry_mode="${MODE:-bluegreen}"' in src
+    assert 'bash "$launcher" "$retry_mode" "autoheal_${cause}"' in src
+    assert 'retry_mode="bluegreen"' in src
+
+
+def test_autoheal_records_retry_launch_too():
+    """재개 성공도 DB 에 남아야 '재시도했는지' 를 DB 만 보고 알 수 있다."""
+    src = AUTOHEAL_LIB.read_text(encoding="utf-8", errors="ignore")
+    assert 'autoheal_record_outcome "retry_launched"' in src
+
+
 def test_autoheal_record_outcome_noop_without_run_id():
     """DEPLOY_RUN_ID 가 없으면 DB 를 건드리지 않고 조용히 끝나야 한다."""
     env_prefix = 'DEPLOY_RUN_ID=""\n'
