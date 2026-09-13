@@ -40,13 +40,22 @@ print(int((exp/1000 - time.time()) / 60) if exp else -1)
 }
 
 resync_to_db() {
-    local slot="$1" key="$2" cred="$3" container
+    local slot="$1" key="$2" cred="$3" container expires_iso
+    # 토큰은 불투명 문자열이라 앱이 만료를 읽을 수 없다. 자격증명 파일에만 있으므로
+    # 여기서 함께 넘겨 DB 에 남긴다. 러너가 긴 작업 전에 남은 수명을 볼 수 있게 된다.
+    expires_iso="$(python3 -c "
+import json, datetime
+d = json.load(open('$cred'))
+o = d.get('claudeAiOauth', d)
+exp = o.get('expiresAt', 0)
+print(datetime.datetime.fromtimestamp(exp/1000, datetime.timezone.utc).isoformat() if exp else '')
+" 2>/dev/null || echo "")"
     container="$(cat "${STATE_DIR}/.active_container" 2>/dev/null || echo aads-server)"
     docker inspect "$container" >/dev/null 2>&1 || { log "  컨테이너 없음: $container"; return 1; }
 
     local tmp="/tmp/.claude-token-keeper-$$.py"
     cat > "$tmp" <<'PY'
-import sys, asyncio
+import os, sys, asyncio
 sys.path.insert(0, "/app")
 from app.core.credential_vault import encrypt_value, decrypt_value
 from app.core.db_pool import get_pool, init_pool
@@ -63,16 +72,24 @@ async def main():
             print("reject:nokey"); return
         try:
             if decrypt_value(row["encrypted_value"]) == token:
+                # 토큰이 같아도 만료 기록은 최신으로 맞춘다.
+                await c.execute(
+                    "UPDATE llm_api_keys SET oauth_expires_at=NULLIF($2,'')::timestamptz, updated_at=NOW() "
+                    "WHERE provider='anthropic' AND key_name=$1",
+                    KEY, os.getenv("AADS_TOKEN_EXPIRES_ISO", ""))
                 print("skip:same"); return
         except Exception:
             pass
         await c.execute(
-            "UPDATE llm_api_keys SET encrypted_value=$2, last_verified_at=NOW(), updated_at=NOW() "
-            "WHERE provider='anthropic' AND key_name=$1", KEY, encrypt_value(token))
+            "UPDATE llm_api_keys SET encrypted_value=$2, oauth_expires_at=NULLIF($3,'')::timestamptz, "
+            "last_verified_at=NOW(), updated_at=NOW() "
+            "WHERE provider='anthropic' AND key_name=$1",
+            KEY, encrypt_value(token), os.getenv("AADS_TOKEN_EXPIRES_ISO", ""))
         print("ok:updated")
 asyncio.run(main())
 PY
     docker cp "$tmp" "$container":/tmp/_tk.py >/dev/null 2>&1
+    export AADS_TOKEN_EXPIRES_ISO="$expires_iso"
     # 토큰은 stdin 으로만 넘긴다. 인자로 주면 프로세스 목록에 노출된다.
     local out
     out="$(python3 -c "
@@ -80,7 +97,7 @@ import json
 d = json.load(open('$cred'))
 o = d.get('claudeAiOauth', d)
 print(o.get('accessToken',''), end='')
-" 2>/dev/null | docker exec -i "$container" python3 /tmp/_tk.py "$key" 2>&1 | grep -oE '^(ok|skip|reject):[a-z]+' | tail -1)"
+" 2>/dev/null | docker exec -i -e AADS_TOKEN_EXPIRES_ISO="$expires_iso" "$container" python3 /tmp/_tk.py "$key" 2>&1 | grep -oE '^(ok|skip|reject):[a-z]+' | tail -1)"
     docker exec "$container" rm -f /tmp/_tk.py >/dev/null 2>&1
     rm -f "$tmp"
     log "  DB 동기화: ${out:-unknown}"
@@ -112,7 +129,11 @@ for slot in 1 2; do
         renewed=$((renewed + 1))
     elif [[ "$after" =~ ^-?[0-9]+$ ]] && [ "$after" -ge "$FAIL_BELOW_MIN" ]; then
         # CLI 가 아직 갱신할 때가 아니라고 판단한 경우. 실패가 아니다.
+        # 다만 만료 시각은 남겨야 한다. 러너가 긴 작업 전에 남은 수명을 본다.
         log "  아직 갱신 시점 아님 (${after}분 남음)"
+        key="ANTHROPIC_AUTH_TOKEN"
+        [ "$slot" = "2" ] && key="ANTHROPIC_AUTH_TOKEN_2"
+        resync_to_db "$slot" "$key" "$cred" >/dev/null 2>&1 || true
         continue
     else
         log "  ⚠️ 갱신 실패 (${left}분 → ${after}분) — refreshToken 만료로 보인다. 재로그인 필요"

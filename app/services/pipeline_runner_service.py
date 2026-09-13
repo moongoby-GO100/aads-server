@@ -15,6 +15,7 @@ import base64
 import json
 import logging
 import os
+import datetime as _dt
 import shlex
 import time
 import uuid
@@ -440,11 +441,70 @@ async def _resolve_runner_oauth_token() -> str:
         from app.core.auth_provider import get_oauth_tokens_async
 
         tokens = await get_oauth_tokens_async()
-        for token in tokens:
-            if token:
-                return token
+        tokens = [t for t in tokens if t]
+        if not tokens:
+            return ""
+        # 남은 수명이 충분한 토큰을 고른다.
+        #
+        # 토큰 수명은 8시간인데 단일 CLI 호출은 MAX_RUNTIME(2시간)까지 간다.
+        # 만료가 임박한 토큰으로 긴 작업을 시작하면 도중에 401 로 죽는다
+        # (실측: 최근 7일 러너 62건 중 5건이 8시간 초과, 최대 20시간).
+        # 토큰 자체는 불투명해 만료를 읽을 수 없으므로, keeper 가 기록해 둔
+        # llm_api_keys.oauth_expires_at 을 본다.
+        chosen = await _pick_token_with_lifetime(tokens)
+        return chosen or tokens[0]
     except Exception as exc:
         logger.warning("runner_oauth_token_resolve_failed: %s", str(exc)[:120])
+    return ""
+
+
+# 단일 CLI 호출이 쓸 수 있는 최소 잔여 수명. MAX_RUNTIME(7200s) 에 여유를 더한다.
+_RUNNER_MIN_TOKEN_LIFETIME_SEC = int(os.getenv("AADS_RUNNER_MIN_TOKEN_LIFETIME_SEC", "9000"))
+
+
+async def _pick_token_with_lifetime(tokens: list) -> str:
+    """잔여 수명이 기준을 넘는 토큰을 고른다. 없으면 빈 문자열.
+
+    keeper 가 만료를 아직 기록하지 않은 키는 판단 근거가 없으므로 후보에서
+    제외하지 않는다 — 근거 없이 배제하면 쓸 수 있는 토큰까지 버리게 된다.
+    """
+    try:
+        from app.core.credential_vault import decrypt_value
+        from app.core.db_pool import get_pool
+
+        async with get_pool().acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT encrypted_value, oauth_expires_at, key_name FROM llm_api_keys "
+                "WHERE provider='anthropic' AND is_active "
+                "AND (rate_limited_until IS NULL OR rate_limited_until <= NOW()) "
+                "ORDER BY priority"
+            )
+        best, best_left = "", -1.0
+        for row in rows:
+            try:
+                value = decrypt_value(row["encrypted_value"])
+            except Exception:
+                continue
+            if value not in tokens:
+                continue
+            exp = row["oauth_expires_at"]
+            if exp is None:
+                # 근거가 없으면 우선순위 순서를 존중해 그대로 받아들인다.
+                return value
+            left = (exp - _dt.datetime.now(exp.tzinfo)).total_seconds()
+            if left >= _RUNNER_MIN_TOKEN_LIFETIME_SEC:
+                return value
+            if left > best_left:
+                best, best_left = value, left
+        if best:
+            logger.warning(
+                "runner_token_short_lifetime: 남은 수명 %.0f분 (기준 %.0f분) — "
+                "긴 작업은 중간에 401 로 끊길 수 있다",
+                best_left / 60, _RUNNER_MIN_TOKEN_LIFETIME_SEC / 60,
+            )
+            return best
+    except Exception as exc:
+        logger.info("runner_token_lifetime_check_skipped: %s", str(exc)[:120])
     return ""
 
 
