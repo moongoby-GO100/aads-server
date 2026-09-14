@@ -441,6 +441,36 @@ class ChatTodoItemOut(BaseModel):
     completed_at: Optional[datetime] = None
 
 
+class ChatTodoListItemOut(BaseModel):
+    """목록 응답 전용 — `metadata` 를 뺀다.
+
+    2026-09-14 실측: `GET /chat/sessions/{id}/todos` 가 하루 24,092회 호출되며
+    응답 평균이 116KB, 그중 약 93KB 가 `metadata` 였다. 24시간 2,674MB.
+
+    프론트가 todo 에서 읽는 필드는 `id`/`status`/`title`/`updated_at`/
+    `created_at` 뿐이고 `item.metadata` 참조는 0회다(page.tsx 실측).
+    `metadata` 는 `audit`(평균 382바이트)·`message_excerpt`(343바이트) 같은
+    내부 기록이라 화면에 쓸 데가 없다.
+
+    필요하면 `?include_metadata=true` 로 예전 응답을 그대로 받는다. 단건
+    조회/생성/수정 응답(`ChatTodoItemOut`)은 바꾸지 않는다 — 내부 파이썬
+    호출자(`tool_executor`, `chat_service`)는 이 모델을 거치지 않고 전체 dict 를
+    받으므로 영향이 없다.
+    """
+
+    id: uuid.UUID
+    session_id: uuid.UUID
+    message_id: Optional[uuid.UUID] = None
+    execution_id: Optional[uuid.UUID] = None
+    title: str
+    status: str
+    sort_order: int
+    source: str
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime] = None
+
+
 class ChatTodoCreateRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=300)
     status: str = Field(default="pending", description="pending | in_progress")

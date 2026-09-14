@@ -53,6 +53,7 @@ from app.models.chat import (
     DriveFileOut,
     ExecutionOut,
     ChatTodoItemOut,
+    ChatTodoListItemOut,
     ChatTodoUpdateRequest,
     MessageOut,
     MessageUpdateRequest,
@@ -4388,15 +4389,26 @@ async def create_session_todo(session_id: UUID, req: ChatTodoCreateRequest):
         raise HTTPException(status_code=500, detail="failed to create session todo") from exc
 
 
-@router.get("/chat/sessions/{session_id}/todos", response_model=List[ChatTodoItemOut], tags=["chat-todo"])
+@router.get("/chat/sessions/{session_id}/todos", tags=["chat-todo"])
 async def get_session_todos(
     session_id: UUID,
     include_completed: bool = Query(False),
     limit: int = Query(100, ge=1, le=200),
-    cleanup_stale: bool = Query(True, description="오래된 in_progress todo를 pending으로 정리"),
+    cleanup_stale: bool = Query(False, description="오래된 in_progress todo를 pending으로 정리 (쓰기)"),
     stale_minutes: int = Query(120, ge=5, le=1440),
+    include_metadata: bool = Query(False, description="내부 metadata 포함 (기본 제외 — 응답의 약 80%)"),
 ):
-    """세션별 내부 TODO 하네스 상태를 조회한다."""
+    """세션별 내부 TODO 하네스 상태를 조회한다.
+
+    2026-09-14 — 조회 전용으로 되돌렸다. `cleanup_stale` 기본값이 `True` 라서
+    이 GET 이 호출될 때마다 DML 이 돌았다. 하루 24,092회.
+
+    WP04 가 `streaming-status`·`last-response`·`messages` 에서 repair DML 을
+    걷어내고 "GET 은 read-only" 를 원칙으로 세웠는데 여기만 빠져 있었다.
+    정리는 명시적으로 `?cleanup_stale=true` 를 준 호출자만 수행한다.
+
+    응답에서 `metadata` 를 뺀다 — 상세는 `ChatTodoListItemOut` 참고.
+    """
     from app.services.chat_todo_service import cleanup_stale_in_progress_todos, list_todo_items
 
     try:
@@ -4405,11 +4417,14 @@ async def get_session_todos(
                 session_id=str(session_id),
                 stale_after_minutes=stale_minutes,
             )
-        return await list_todo_items(
+        items = await list_todo_items(
             session_id=str(session_id),
             include_completed=include_completed,
             max_items=limit,
         )
+        if include_metadata:
+            return [ChatTodoItemOut.model_validate(i).model_dump(mode="json") for i in items]
+        return [ChatTodoListItemOut.model_validate(i).model_dump(mode="json") for i in items]
     except Exception as exc:
         logger.warning("chat_todo_list_failed", session_id=str(session_id), error=str(exc))
         raise HTTPException(status_code=500, detail="failed to load session todos") from exc

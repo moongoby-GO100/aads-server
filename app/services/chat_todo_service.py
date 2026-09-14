@@ -630,6 +630,66 @@ async def list_todo_items(
         return await _list(active_conn)
 
 
+async def cleanup_stale_in_progress_todos_all_sessions(
+    *,
+    stale_after_minutes: int = DEFAULT_STALE_IN_PROGRESS_MINUTES,
+    max_rows: int = 2000,
+) -> int:
+    """모든 세션의 오래된 in_progress todo 를 한 번에 되돌린다.
+
+    2026-09-14 — 원래 이 정리는 `GET /chat/sessions/{id}/todos` 안에서
+    `cleanup_stale=True` 기본값으로 돌았다. 조회가 하루 24,092회이므로
+    쓰기도 그만큼 돌았고, 정리가 필요한 세션이 아니라 **열어본 세션만**
+    정리됐다. 아무도 안 보는 세션의 in_progress 는 영원히 남는다.
+
+    조회에서 떼어내 능동 슬롯 워커로 옮긴다. 조회 횟수와 무관하게 돌고,
+    보지 않는 세션도 정리된다.
+
+    반환값은 되돌린 행 수다.
+    """
+    from app.core.db_pool import get_pool
+
+    stale_after_minutes = max(5, int(stale_after_minutes or DEFAULT_STALE_IN_PROGRESS_MINUTES))
+    # execute() 가 'UPDATE <n>' 상태 문자열을 준다. fetchval 은 RETURNING 없는
+    # UPDATE 에서 None 을 돌려주므로 건수를 셀 수 없다.
+    reset = await get_pool().execute(
+        """
+        WITH stale AS (
+            SELECT id FROM chat_todo_items
+            WHERE status = $1
+              AND updated_at < NOW() - make_interval(mins => $3::int)
+            ORDER BY updated_at ASC
+            LIMIT $4
+        )
+        UPDATE chat_todo_items t
+        SET status = $2,
+            metadata = jsonb_set(
+                jsonb_set(
+                    COALESCE(t.metadata, '{}'::jsonb),
+                    '{stale_reset_at}', to_jsonb(NOW()::text), true
+                ),
+                '{stale_reset_reason}', to_jsonb('in_progress_timeout'::text), true
+            ),
+            updated_at = NOW(),
+            completed_at = NULL
+        FROM stale
+        WHERE t.id = stale.id
+        """,
+        TODO_STATUS_IN_PROGRESS,
+        TODO_STATUS_PENDING,
+        stale_after_minutes,
+        max(1, int(max_rows)),
+    )
+    count = 0
+    if isinstance(reset, str) and reset.startswith("UPDATE "):
+        count = int(reset.split()[-1])
+    if count:
+        logger.info(
+            "chat_todo_stale_reset_all count=%s minutes=%s", count, stale_after_minutes
+        )
+    return count
+
+
 async def cleanup_stale_in_progress_todos(
     *,
     session_id: str,

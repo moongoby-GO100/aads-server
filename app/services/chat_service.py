@@ -3807,6 +3807,13 @@ async def _stale_placeholder_cleanup_loop() -> None:
                 from app.services.chat_repair import repair_completed_projection_batch
 
                 await repair_completed_projection_batch()
+                # 2026-09-14: todo 정리를 GET 핸들러에서 이 워커로 옮겼다.
+                # 조회가 정리를 겸하면 열어본 세션만 정리된다.
+                from app.services.chat_todo_service import (
+                    cleanup_stale_in_progress_todos_all_sessions,
+                )
+
+                await cleanup_stale_in_progress_todos_all_sessions()
                 cleanup_count += 1
                 if cleanup_count % 10 == 0:
                     await archive_old_hidden_messages()
@@ -14422,6 +14429,18 @@ def _row_to_dict(row: asyncpg.Record) -> Dict[str, Any]:
 
 # ─── 메모리 컨텍스트 뷰어 API (AADS 메모리 & 맥락 뷰어) ─────────────────────
 
+# memory-context 응답의 항목 상한.
+#
+# 2026-09-14 실측: 이 엔드포인트가 336KB 를 돌려줬고 하루 3,259회 호출됐다
+# (24시간 1,510MB). `ai_observations` 242KB, `session_notes` 75KB 였는데
+# 두 쿼리 모두 LIMIT 이 없어 **세션이 늘수록 무한히 커지는** 구조였다.
+#
+# 이 응답은 화면의 메모리 상태 표시용이다. 실제로 모델에 주입되는 양이
+# 아니라 "쓸 수 있는 양"을 보여준다. 목록을 다 내려보낼 이유가 없다.
+# count/tokens 는 상한과 무관하게 전체를 집계해 그대로 보고한다.
+_MEMORY_CONTEXT_ITEM_LIMIT = int(os.getenv("MEMORY_CONTEXT_ITEM_LIMIT", "20"))
+
+
 async def get_memory_context_info(
     session_id: str,
     tenant_id: Optional[str] = None,
@@ -14515,49 +14534,62 @@ async def get_memory_context_info(
         if _ws_project and _ws_project != "CEO":
             obs_rows = await conn.fetch(
                 """
-                SELECT category, key, value, confidence
+                SELECT category, key, value, confidence,
+                       COUNT(*) OVER () AS total_count,
+                       SUM(LEAST(LENGTH(value::text), 120)) OVER () AS total_len
                 FROM ai_observations
                 WHERE confidence >= 0.2
                   AND (project = $1 OR project IS NULL)
                 ORDER BY confidence DESC, updated_at DESC
+                LIMIT $2
                 """,
                 _ws_project,
+                _MEMORY_CONTEXT_ITEM_LIMIT,
             )
         else:
             obs_rows = await conn.fetch(
                 """
-                SELECT category, key, value, confidence
+                SELECT category, key, value, confidence,
+                       COUNT(*) OVER () AS total_count,
+                       SUM(LEAST(LENGTH(value::text), 120)) OVER () AS total_len
                 FROM ai_observations
                 WHERE confidence >= 0.2
                 ORDER BY confidence DESC, updated_at DESC
+                LIMIT $1
                 """,
+                _MEMORY_CONTEXT_ITEM_LIMIT,
             )
         obs_items = []
-        obs_text_len = 0
         for r in obs_rows:
             obs_items.append({
                 "key": r["key"],
                 "category": r["category"],
                 "summary": str(r["value"])[:120],
             })
-            obs_text_len += min(len(str(r["value"])), 120)
+        # count/tokens 는 LIMIT 과 무관하게 전체 집계값을 쓴다. 잘린 목록으로
+        # 세면 화면의 "쓸 수 있는 메모리" 수치가 상한만큼으로 줄어 보인다.
+        obs_total = int(obs_rows[0]["total_count"]) if obs_rows else 0
+        obs_text_len = int(obs_rows[0]["total_len"] or 0) if obs_rows else 0
         obs_tokens = max(1, obs_text_len) * 2 // 3
 
         # 5) 세션 노트 (session_notes) — 같은 워크스페이스의 세션만
         note_rows = await conn.fetch(
             """
-            SELECT sn.summary, sn.key_decisions, sn.created_at, sn.projects_discussed
+            SELECT sn.summary, sn.key_decisions, sn.created_at, sn.projects_discussed,
+                   COUNT(*) OVER () AS total_count,
+                   SUM(LEAST(LENGTH(COALESCE(sn.summary, '')), 200)) OVER () AS total_len
             FROM session_notes sn
             JOIN chat_sessions cs ON sn.session_id = cs.id
             WHERE cs.workspace_id = $1
               AND ($2::uuid IS NULL OR cs.tenant_id = $2::uuid)
             ORDER BY sn.created_at DESC
+            LIMIT $3
             """,
             workspace_id,
             tenant_uuid,
+            _MEMORY_CONTEXT_ITEM_LIMIT,
         )
         session_summaries = []
-        ss_text_len = 0
         for r in note_rows:
             ts = r["created_at"].strftime("%Y-%m-%d") if r["created_at"] else ""
             summ = r["summary"] or ""
@@ -14565,7 +14597,8 @@ async def get_memory_context_info(
                 "date": ts,
                 "summary": summ[:200],
             })
-            ss_text_len += min(len(summ), 200)
+        ss_total = int(note_rows[0]["total_count"]) if note_rows else 0
+        ss_text_len = int(note_rows[0]["total_len"] or 0) if note_rows else 0
         ss_tokens = max(1, ss_text_len) * 2 // 3
 
         # 5b) experience_memory — 워크스페이스 프로젝트로 필터
@@ -14611,7 +14644,9 @@ async def get_memory_context_info(
             exp_text_len += len(summary)
         exp_tokens = max(1, exp_text_len) * 2 // 3
 
-        total_memory_count = len(long_term_items) + len(obs_items) + len(exp_items)
+        # obs 는 LIMIT 이 걸리므로 전체 집계값을 쓴다. 나머지는 원래부터
+        # 상한이 있어 len() 이 곧 전체다.
+        total_memory_count = len(long_term_items) + obs_total + len(exp_items)
         total_injected_tokens = system_prompt_tokens + ltm_tokens + obs_tokens + ss_tokens + exp_tokens
 
         # 6) Compaction 상태
@@ -14662,12 +14697,14 @@ async def get_memory_context_info(
                     "items": long_term_items,
                 },
                 "observations": {
-                    "count": len(obs_items),
+                    "count": obs_total,
+                    "returned": len(obs_items),
                     "tokens": obs_tokens,
                     "items": obs_items,
                 },
                 "session_summaries": {
-                    "count": len(session_summaries),
+                    "count": ss_total,
+                    "returned": len(session_summaries),
                     "tokens": ss_tokens,
                     "items": session_summaries,
                 },
