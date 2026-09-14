@@ -10230,6 +10230,23 @@ async def _save_and_update_session(
                     """,
                     cost, _execution_uuid, sid,
                 )
+                # The green "응답 포함 완료" badge was only ever set in the browser,
+                # so it vanished on reload and every consumed 추가 지시 fell back to
+                # the blue "응답 반영 중" forever.  The turn that injected them has
+                # just been saved, so record the terminal state where it is durable.
+                # Only 'interrupt_applied' is promoted: a still-queued interrupt may
+                # belong to the next turn and must keep waiting.
+                await conn.execute(
+                    """
+                    UPDATE chat_messages
+                    SET intent = 'interrupt_completed',
+                        edited_at = NOW()
+                    WHERE session_id = $1
+                      AND role = 'user'
+                      AND COALESCE(intent, '') = 'interrupt_applied'
+                    """,
+                    sid,
+                )
             else:
                 await conn.execute(
                     "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",

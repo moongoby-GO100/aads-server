@@ -22,6 +22,30 @@ import json
 import subprocess
 from uuid import uuid4
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _restore_chat_service_bg_tasks():
+    """Keep per-test stubs out of chat_service's module-global task registry.
+
+    These tests hand fake tasks to production code that files them under
+    _active_bg_tasks.  monkeypatch cannot undo a write made by the code under
+    test, so the entry survived the test and later files inherited it.
+    """
+    try:
+        from app.services import chat_service
+    except Exception:
+        yield
+        return
+    before = dict(chat_service._active_bg_tasks)
+    try:
+        yield
+    finally:
+        chat_service._active_bg_tasks.clear()
+        chat_service._active_bg_tasks.update(before)
+
+
 # 프로젝트 루트
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -861,6 +885,14 @@ class TestRegressions:
             def add_done_callback(self, callback):
                 self.callback = callback
 
+            def done(self):
+                # chat_service stores this in the module-global _active_bg_tasks and
+                # later calls done() on it (_get_live_streaming_session_ids and the
+                # cleanup sweeps).  Without it the stub leaked into every test file
+                # that ran afterwards and broke six unrelated tests with
+                # AttributeError.  A freshly scheduled task is not done.
+                return False
+
         class FakeConn:
             async def fetchrow(self, query, *args):
                 return {
@@ -922,6 +954,14 @@ class TestRegressions:
         class FakeTask:
             def add_done_callback(self, callback):
                 self.callback = callback
+
+            def done(self):
+                # chat_service stores this in the module-global _active_bg_tasks and
+                # later calls done() on it (_get_live_streaming_session_ids and the
+                # cleanup sweeps).  Without it the stub leaked into every test file
+                # that ran afterwards and broke six unrelated tests with
+                # AttributeError.  A freshly scheduled task is not done.
+                return False
 
         class FakeConn:
             async def fetchrow(self, query, *args):
