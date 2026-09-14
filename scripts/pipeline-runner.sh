@@ -1889,6 +1889,16 @@ $out_tail")
 
     # v2.2: committed(Claude가 커밋한 변경) + uncommitted diff 모두 캡처
     cd "$workdir"
+    # v2.3 (2026-09-14, ACCT-FLOWMAP 반복 no_changes 원인 수정):
+    # git diff/git diff HEAD는 untracked 신규 파일의 내용을 보여주지 않는다.
+    # "새 디렉터리에 새 파일만 추가" 지시를 따른 job은 전부 untracked라서
+    # 실제로 파일을 만들었어도 git_diff가 항상 비어 no_changes로 오판된다.
+    # intent-to-add(-N)로 신규 파일을 표시해 git diff가 내용을 포함하게 한다.
+    local _new_untracked=""
+    _new_untracked=$(git ls-files --others --exclude-standard 2>/dev/null) || true
+    if [[ -n "$_new_untracked" ]]; then
+        printf '%s\n' "$_new_untracked" | xargs -d '\n' -r git add -N -- 2>/dev/null || true
+    fi
     local git_diff=""
     local _current_head=""
     _current_head=$(git rev-parse HEAD 2>/dev/null) || _current_head=""
