@@ -37,6 +37,11 @@ MAX_HOP = int(os.getenv("SESSION_RELAY_MAX_HOP", "3"))
 CONTEXT_LIMIT = int(os.getenv("SESSION_RELAY_CONTEXT_CHARS", "4000"))
 ANSWER_LIMIT = int(os.getenv("SESSION_RELAY_ANSWER_CHARS", "6000"))
 
+# 물어본 쪽이 응답 중이면 기다린다. 진행 중인 응답에 새 user 메시지가 들어가면
+# 그 응답이 통째로 버려진다.
+_DELIVER_WAIT_TRIES = int(os.getenv("SESSION_RELAY_DELIVER_WAIT_TRIES", "20"))
+_DELIVER_WAIT_SEC = float(os.getenv("SESSION_RELAY_DELIVER_WAIT_SEC", "30"))
+
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 # 백그라운드 태스크 참조를 붙든다.
@@ -148,35 +153,48 @@ def _build_question(origin_title: str, origin_role: str, origin_id: str,
 
 
 async def _deliver_answer(origin_session_id: str, content: str) -> None:
-    """회신을 물어본 세션에 넣는다.
+    """회신을 물어본 세션에 넣고 **다음 행동을 하게 한다.**
 
-    **assistant 메시지로 직접 넣는다.** `send_message_stream` 으로 넣으면
-    물어본 세션이 그 회신에 또 답하고, 그 답이 다시 상대에게 가서 루프가
-    된다. 화면에는 보이되 새 응답을 유발하지 않아야 한다.
+    2026-09-14 첫 구현은 회신을 assistant 메시지로 넣었다. 루프를 막으려는
+    의도였는데, 그러면 **물어본 담당이 그걸 읽고 움직이지 않는다.** 실측:
+    회신이 18:08:56 에 도착했고 그 뒤 실행이 0건이었다. 답만 놓여 있었다.
 
-    `intent='session_relay_answer'` 로 표시해 둔다 — 나중에 히스토리에서
-    구분하거나 제외할 때 필요하다.
+    협업의 목적은 답을 받는 것이 아니라 **받은 답으로 다음을 하는 것**이다.
+    그래서 user 역할 + `system_trigger` 로 넣는다 — 파이프라인 러너가 쓰는
+    경로이고 응답률 96% 가 확인돼 있다.
+
+    루프는 회신 방식이 아니라 **홉 수**로 막는다. 받은 답으로 또 물으면
+    hop 이 오르고 3회에서 막힌다. 회신을 죽여서 막을 일이 아니었다.
+
+    물어본 쪽이 지금 응답 중이면 기다린다. 진행 중인 응답에 새 user 메시지가
+    들어가면 그 응답이 버려진다 — 오늘 세션 5090a247 에서
+    `stale_superseded_by_newer_user_message` 로 54,301자짜리 진행 중 응답이
+    사라지는 것을 봤다.
     """
-    from app.core.db_pool import get_pool
+    from app.services import chat_service as cs
 
-    pool = get_pool()
-    tenant_id = await pool.fetchval(
-        "SELECT tenant_id::text FROM chat_sessions WHERE id = $1::uuid", origin_session_id
-    )
-    if not tenant_id:
-        raise RuntimeError("물어본 세션의 tenant 를 찾지 못했다")
-    await pool.execute(
-        """
-        INSERT INTO chat_messages (session_id, tenant_id, role, content, intent, model_used, created_at)
-        VALUES ($1::uuid, $2::uuid, 'assistant', $3, 'session_relay_answer', 'relay', now())
-        """,
-        origin_session_id, tenant_id, content,
-    )
-    await pool.execute(
-        "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = now() "
-        "WHERE id = $1::uuid",
-        origin_session_id,
-    )
+    for attempt in range(_DELIVER_WAIT_TRIES):
+        if not await _target_is_busy(origin_session_id):
+            break
+        logger.info(
+            "session_relay_delivery_waiting origin=%s attempt=%d",
+            origin_session_id[:8], attempt + 1,
+        )
+        await asyncio.sleep(_DELIVER_WAIT_SEC)
+    else:
+        # 끝까지 바쁘면 그래도 넣는다. 답을 영영 안 주는 것보다는 낫다 —
+        # 다만 진행 중이던 응답이 대체될 수 있다는 것을 로그로 남긴다.
+        logger.warning(
+            "session_relay_delivered_while_busy origin=%s", origin_session_id[:8]
+        )
+
+    async for chunk in cs.send_message_stream(
+        session_id=origin_session_id,
+        content=content,
+        intent_override="system_trigger",
+        response_mode="quality",
+    ):
+        del chunk
 
 
 async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
@@ -242,9 +260,13 @@ async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
             target_session_id,
         ) or "담당"
         reply = (
-            f"📨 **{target_name}의 답**\n"
+            f"📨 **{target_name}의 답이 도착했습니다**\n"
             f"> 물어본 질문: {question.strip()[:120]}\n\n"
-            f"{answer[:ANSWER_LIMIT]}"
+            f"{answer[:ANSWER_LIMIT]}\n\n"
+            "── 이제 할 일 ──\n"
+            "이 답을 반영해 다음을 진행하세요. 다른 담당의 의견이 더 필요하면 "
+            "`ask_session` 으로 물으세요(한 줄기당 3회까지). 충분하면 결론을 내고 "
+            "CEO 에게 보고하세요. 이 메시지에 인사만 하고 끝내지 마세요."
         )
         await _deliver_answer(origin_session_id, reply)
 

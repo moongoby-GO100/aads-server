@@ -56,20 +56,38 @@ def test_three_loop_guards_exist():
     assert "target_busy" in src, "진행 중인 세션 보호가 없다"
 
 
-def test_reply_does_not_trigger_another_answer():
-    """회신에 또 답하면 그게 루프의 시작이다.
+def test_reply_triggers_next_action():
+    """회신이 다음 행동을 유발해야 한다.
 
-    회신은 assistant 메시지로 직접 넣는다 — `send_message_stream` 으로
-    넣으면 물어본 세션이 그 회신에 또 답한다.
+    2026-09-14 첫 구현은 회신을 assistant 메시지로 넣었다. 루프를 막으려는
+    의도였는데 **물어본 담당이 그걸 읽고 움직이지 않았다.** 실측: 회신이
+    18:08:56 에 도착했고 그 뒤 실행이 0건이었다. 답만 놓여 있었다.
+
+    협업의 목적은 답을 받는 것이 아니라 받은 답으로 다음을 하는 것이다.
+    루프는 회신을 죽여서가 아니라 **홉 수**로 막는다.
     """
     src = inspect.getsource(session_relay._deliver_answer)
-    assert "INSERT INTO chat_messages" in src
-    assert "'assistant'" in src
-    assert "session_relay_answer" in src, "회신을 구분할 intent 가 없다"
-    # 독스트링에 "send_message_stream 으로 넣으면 안 된다" 는 설명이 있다.
-    # 실제 코드 부분만 본다 — 첫 import 문 뒤가 본문이다.
-    body = src[src.index("from app.core.db_pool"):]
-    assert "send_message_stream" not in body, "회신이 새 응답을 유발한다"
+    body = src[src.index("from app.services import chat_service"):]
+    assert "send_message_stream" in body, "회신이 다음 행동을 유발하지 않는다"
+    assert "system_trigger" in body, "응답률 96% 가 확인된 경로를 쓰지 않는다"
+
+
+def test_delivery_waits_for_busy_origin():
+    """진행 중인 응답에 회신을 밀어 넣으면 그 응답이 버려진다.
+
+    오늘 세션 5090a247 에서 `stale_superseded_by_newer_user_message` 로
+    54,301자짜리 진행 중 응답이 사라지는 것을 봤다.
+    """
+    src = inspect.getsource(session_relay._deliver_answer)
+    assert "_target_is_busy" in src, "물어본 쪽이 바쁜지 확인하지 않는다"
+    assert "_DELIVER_WAIT_TRIES" in src
+
+
+def test_reply_tells_what_to_do_next():
+    """답만 던지면 무엇을 하라는 건지 모른다."""
+    src = inspect.getsource(session_relay._run_relay)
+    assert "이제 할 일" in src, "회신에 다음 행동 안내가 없다"
+    assert "ask_session" in src
 
 
 def test_hop_limit_is_bounded():
