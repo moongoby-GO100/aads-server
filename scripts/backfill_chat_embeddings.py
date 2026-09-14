@@ -247,7 +247,7 @@ def cmd_run(args) -> None:
         print(f"[backfill] {done}건 완료, 남음 {remain}, 시간당 {rate*3600:.0f}건, 예상 {eta}분", flush=True)
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -266,11 +266,18 @@ def main() -> None:
                     help="시간 상한 (R-BG: 끝날 시점을 모르면 띄우면 안 된다)")
     rn.set_defaults(func=cmd_run)
 
-    args = ap.parse_args()
+    return ap
+
+
+def main_argv(argv: list[str] | None = None) -> None:
+    ap = build_parser()
+    args = ap.parse_args(argv)
     if args.cmd == "run" and not (args.roster or args.workspace or args.session or args.all):
+        # 범위 없이 돌면 33,000건 = 34시간이다. 끝날 시점을 모르는 작업을
+        # 띄우지 않는다(R-BG).
         ap.error("범위를 지정해라: --roster / --workspace / --session / --all")
     args.func(args)
 
 
 if __name__ == "__main__":
-    main()
+    main_argv()

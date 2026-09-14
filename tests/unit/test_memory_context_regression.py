@@ -92,21 +92,46 @@ def test_schedule_message_embedding_uses_background_task(monkeypatch):
     assert created["called"] is True
 
 
-def test_backfill_chat_embeddings_defaults_to_assistant_canary():
+def test_backfill_chat_embeddings_requires_explicit_scope():
+    """범위를 안 주면 거절해야 한다.
+
+    2026-09-14 교체. 옛 스크립트는 `--limit 100` 만 받고 전체를 훑었는데,
+    CPU Ollama 실측 처리량이 시간당 963건이라 전체(33,000건)는 34시간이다.
+    끝날 시점을 모르는 작업을 띄우지 않는다(R-BG) — 범위를 강제한다.
+    """
+    import pytest
+
     from scripts import backfill_chat_embeddings as script
 
-    args = script.parse_args([])
+    parser_argv = ["run"]
+    with pytest.raises(SystemExit):
+        script.main_argv(parser_argv)
 
-    assert args.role == "assistant"
-    assert args.limit == 100
-    assert args.batch_size == 20
-    assert args.order == "newest"
+    for scope in (["run", "--roster"], ["run", "--session", "x"], ["run", "--all"]):
+        args = script.build_parser().parse_args(scope)
+        assert args.cmd == "run"
+        assert args.max_seconds > 0, "시간 상한 기본값이 있어야 한다"
 
 
-def test_backfill_chat_embeddings_clamps_batch_size_to_limit():
+def test_backfill_chat_embeddings_never_writes_dummy():
+    """이 사고의 원인은 '실패를 조용히 그럴듯한 값으로 덮은 것' 이었다.
+
+    백필은 진짜 임베딩만 저장한다. 실패하면 None 을 돌려주고 그 회차를
+    건너뛴다 — 더미를 만들지 않는다. 그리고 채운 것에는 세대를 적는다.
+    """
+    import inspect
+
     from scripts import backfill_chat_embeddings as script
 
-    args = script.parse_args(["--limit", "7", "--batch-size", "20"])
+    assert script.EMBED_VER == 2
+    assert script.DOC_PREFIX.startswith("search_document")
 
-    assert args.limit == 7
-    assert args.batch_size == 7
+    src = inspect.getsource(script.ollama_embed)
+    assert "return None" in src
+    assert "dummy" not in src.lower() or "더미를 만들지 않는다" in src
+
+    run_src = inspect.getsource(script.cmd_run)
+    assert "embedding_ver={EMBED_VER}" in run_src, (
+        "채운 벡터에 세대를 안 적으면 다음 백필이 같은 행을 또 채운다"
+    )
+    assert script.ROSTER and "StrategyCardLead" in script.ROSTER
