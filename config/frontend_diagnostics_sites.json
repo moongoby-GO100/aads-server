@@ -1,0 +1,32 @@
+{
+  "_주석": [
+    "진단 대상 사이트 정의. 코드는 한 벌만 두고 대상만 여기서 늘린다.",
+    "서버마다 스크립트 사본을 두면 사본이 갈라진다 — 2026-09-14 kiwoom_key_manager 가",
+    "정확히 그 사례였다(사본 3개 전부 옛 판).",
+    "",
+    "auth: storage_state 파일 경로. refresh 는 실행 직전 상태를 새로 만드는 스크립트.",
+    "토큰은 만료되므로 크론이 아니라 진단 직전 갱신이어야 한다."
+  ],
+  "aads": {
+    "label": "AADS 대시보드/채팅",
+    "base_url": "https://aads.newtalk.kr",
+    "core_routes": ["/", "/chat", "/ops", "/tasks", "/project-status"],
+    "major_routes": ["/decisions", "/handovers", "/reports", "/memory", "/projects",
+                     "/agenda", "/team", "/managers", "/server-status", "/flow"],
+    "auth": {
+      "storage_state": "/root/aads/aads-server/browser-bridge-state/qa-storage-state.json",
+      "refresh": "/root/aads/aads-server/scripts/refresh_qa_storage_state.py"
+    }
+  },
+  "go100": {
+    "label": "GO100 자동매매 대시보드",
+    "base_url": "https://go100.newtalk.kr",
+    "core_routes": ["/"],
+    "major_routes": [],
+    "auth": {
+      "storage_state": "",
+      "refresh": ""
+    },
+    "_비고": "라우트·인증 미확정. 인증 없이 열면 로그인 화면만 진단하므로 auth 채우기 전까지 결과는 auth_failed 로 남는다."
+  }
+}

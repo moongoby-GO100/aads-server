@@ -34,22 +34,79 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-BASE_URL = os.getenv("AADS_FRONTEND_BASE_URL", "https://aads.newtalk.kr")
-STORAGE_STATE = Path(os.getenv(
-    "AADS_QA_STORAGE_STATE",
-    "/root/aads/aads-server/browser-bridge-state/qa-storage-state.json",
+# 대상 사이트는 코드가 아니라 설정에서 읽는다. 서버마다 스크립트 사본을 두면
+# 사본이 갈라진다 — 2026-09-14 kiwoom_key_manager 가 그 사례였다(사본 3개 전부
+# 옛 판). 코드는 한 벌만 두고 대상만 늘린다.
+SITES_FILE = Path(os.getenv(
+    "AADS_FRONTEND_SITES",
+    "/root/aads/aads-server/config/frontend_diagnostics_sites.json",
 ))
-REFRESHER = Path("/root/aads/aads-server/scripts/refresh_qa_storage_state.py")
 PG_CONTAINER = os.getenv("AADS_PG_CONTAINER", "aads-postgres")
 PG_PASSWORD = os.getenv("AADS_PG_PASSWORD", "aads2026secure")
+
+# 아래 셋은 선택한 사이트에 따라 main() 에서 채워진다.
+BASE_URL = os.getenv("AADS_FRONTEND_BASE_URL", "https://aads.newtalk.kr")
+STORAGE_STATE = Path("")
+REFRESHER = Path("")
+
+
+def load_sites() -> dict:
+    """사이트 정의를 읽는다. 파일이 없으면 AADS 기본값으로 돈다."""
+    try:
+        raw = json.loads(SITES_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {"aads": {
+            "label": "AADS",
+            "base_url": "https://aads.newtalk.kr",
+            "core_routes": ["/", "/chat", "/ops", "/tasks", "/project-status"],
+            "major_routes": [],
+            "auth": {
+                "storage_state": "/root/aads/aads-server/browser-bridge-state/qa-storage-state.json",
+                "refresh": "/root/aads/aads-server/scripts/refresh_qa_storage_state.py",
+            },
+        }}
+    return {k: v for k, v in raw.items() if not k.startswith("_") and isinstance(v, dict)}
+
+
+def capture_load() -> dict:
+    """측정 시점의 서버 상태. 부하를 같이 남기지 않으면 회귀로 오독한다.
+
+    2026-09-14 배포 세 번 직후에 잰 값에서 LCP 가 +124% 로 찍혔는데, 같은 순간
+    아무 일도 하지 않는 /api/v1/health 가 2,011ms 였다. 프론트가 나빠진 게 아니라
+    서버가 밀리고 있었다. 부하 정보가 없으면 이 둘을 구분할 수 없다.
+    """
+    info: dict[str, Any] = {}
+    try:
+        one, five, fifteen = os.getloadavg()
+        info["load1"], info["load5"], info["load15"] = round(one, 2), round(five, 2), round(fifteen, 2)
+        info["cpus"] = os.cpu_count() or 0
+    except OSError:
+        pass
+    try:
+        out = subprocess.run(["pgrep", "-af", "deploy.sh"], capture_output=True, text=True, timeout=10).stdout
+        lines = [ln for ln in out.splitlines() if "deploy.sh" in ln and "pgrep" not in ln]
+        info["deploy_running"] = bool(lines)
+    except Exception:
+        info["deploy_running"] = False
+    return info
+
+
+def load_is_noisy(info: dict) -> str:
+    """측정을 믿기 어려운 상태면 사유를 돌려준다."""
+    if info.get("deploy_running"):
+        return "측정 중 배포가 진행 중이었다"
+    cpus = info.get("cpus") or 0
+    load1 = info.get("load1")
+    if cpus and load1 is not None and load1 > cpus * 0.9:
+        return f"부하가 높다 (load1={load1}, cpu={cpus})"
+    return ""
 
 # /chat 은 세션이 있어야 실제 렌더 경로를 탄다. 목록 화면만 보면 2026-09-13 의
 # React #31 처럼 특정 세션에서만 터지는 결함을 놓친다.
 CHAT_SESSION = os.getenv("AADS_FRONTEND_CHAT_SESSION", "")
 
-CORE_ROUTES = ["/", "/chat", "/ops", "/tasks", "/project-status"]
-MAJOR_ROUTES = ["/decisions", "/handovers", "/reports", "/memory", "/projects",
-                "/agenda", "/team", "/managers", "/server-status", "/flow"]
+CORE_ROUTES: list[str] = []
+MAJOR_ROUTES: list[str] = []
 
 # 예산. PRD §7. 실측으로 보정하되 올리지는 않는다 —
 # 올려야 할 이유가 생기면 그건 별도 의사결정이다.
@@ -228,13 +285,13 @@ def ensure_storage_state(refresh: bool) -> bool:
     저장하면 2026-09-13 의 시각 QA 와 똑같이 된다 — 로그인 UI 를 세 번 채점하고
     통과 판정을 냈다.
     """
-    if refresh and REFRESHER.is_file():
+    if refresh and str(REFRESHER) and REFRESHER.is_file():
         proc = subprocess.run([sys.executable, str(REFRESHER)],
                               capture_output=True, text=True, timeout=180)
         if proc.returncode != 0:
             print(f"  [경고] storage_state 갱신 실패 — 기존 파일을 쓴다: "
                   f"{(proc.stderr or '').strip()[:160]}")
-    return STORAGE_STATE.is_file()
+    return bool(str(STORAGE_STATE)) and STORAGE_STATE.is_file()
 
 
 def diagnose_page(ctx, route: str, timeout_ms: int) -> dict:
@@ -518,7 +575,7 @@ def evaluate_page(page: dict, baseline: dict | None) -> tuple[str, list[dict]]:
     return verdict, findings
 
 
-def load_baselines(routes: list[str]) -> dict[str, dict]:
+def load_baselines(routes: list[str], site: str = "aads") -> dict[str, dict]:
     """라우트별 직전 성공 측정값. 회귀 비교의 기준이다."""
     if not routes:
         return {}
@@ -528,7 +585,10 @@ def load_baselines(routes: list[str]) -> dict[str, dict]:
             "SELECT DISTINCT ON (route) route, coalesce(lcp_ms,0), coalesce(data_wait_ms,0), "
             "coalesce(fcp_ms,0), coalesce(api_slowest_ms,0) "
             "FROM frontend_diagnostic_pages "
-            f"WHERE status='ok' AND route IN ({in_list}) "
+            # 부하가 섞인 측정은 기준선에서 제외한다. 오염된 값을 기준으로 삼으면
+            # 다음 회귀 판정이 통째로 어긋난다.
+            f"WHERE status='ok' AND site={lit(site)} AND route IN ({in_list}) "
+            "  AND run_id IN (SELECT id FROM frontend_diagnostic_runs WHERE measurement_noisy = '') "
             "ORDER BY route, created_at DESC;"
         )
     except Exception:
@@ -546,12 +606,15 @@ def load_baselines(routes: list[str]) -> dict[str, dict]:
 
 
 def store(run_id: str, mode: str, release: str, pages: list[dict],
-          verdicts: dict[str, str], findings: list[dict], verdict: str) -> None:
+          verdicts: dict[str, str], findings: list[dict], verdict: str,
+          *, site: str = "aads", load_info: dict | None = None, noisy: str = "") -> None:
     ok = sum(1 for p in pages if p["status"] == "ok")
     stmts = ["BEGIN;",
              "INSERT INTO frontend_diagnostic_runs "
-             "(id, finished_at, mode, release_sha, base_url, pages_total, pages_ok, pages_failed, verdict, summary) "
+             "(id, finished_at, mode, release_sha, base_url, site, load_info, measurement_noisy, "
+             " pages_total, pages_ok, pages_failed, verdict, summary) "
              f"VALUES ({lit(run_id)}::uuid, now(), {lit(mode)}, {lit(release)}, {lit(BASE_URL)}, "
+             f"{lit(site)}, {lit(json.dumps(load_info or {}, ensure_ascii=False))}::jsonb, {lit(noisy)}, "
              f"{len(pages)}, {ok}, {len(pages) - ok}, {lit(verdict)}, "
              f"{lit(json.dumps({'verdicts': verdicts}, ensure_ascii=False))}::jsonb);"]
     for p in pages:
@@ -567,10 +630,10 @@ def store(run_id: str, mode: str, release: str, pages: list[dict],
             "error": p.get("error", ""),
         }
         stmts.append(
-            "INSERT INTO frontend_diagnostic_pages (run_id, route, status, ttfb_ms, dcl_ms, fcp_ms, "
+            "INSERT INTO frontend_diagnostic_pages (run_id, site, route, status, ttfb_ms, dcl_ms, fcp_ms, "
             "lcp_ms, load_ms, payload_bytes, wire_bytes, api_calls, api_total_ms, api_slowest_ms, api_slowest_url, "
             "data_wait_ms, serial_chain_ms, console_errors, page_errors, failed_requests, detail) VALUES ("
-            f"{lit(run_id)}::uuid, {lit(p['route'])}, {lit(p['status'])}, {num(p.get('ttfb_ms'))}, "
+            f"{lit(run_id)}::uuid, {lit(site)}, {lit(p['route'])}, {lit(p['status'])}, {num(p.get('ttfb_ms'))}, "
             f"{num(p.get('dcl_ms'))}, {num(p.get('fcp_ms'))}, {num(p.get('lcp_ms'))}, {num(p.get('load_ms'))}, "
             f"{num(p.get('payload_bytes'))}, {num(p.get('wire_bytes'))}, {len(p.get('api_calls', []))}, {num(p.get('api_total_ms'))}, "
             f"{num(p.get('api_slowest_ms'))}, {lit(p.get('api_slowest_url'))}, {num(p.get('data_wait_ms'))}, "
@@ -588,6 +651,10 @@ def store(run_id: str, mode: str, release: str, pages: list[dict],
     psql("\n".join(stmts))
 
 
+_report_load: dict = {}
+_report_noisy: str = ""
+
+
 def ms(value: Any) -> str:
     try:
         return f"{int(round(float(value))):,}"
@@ -600,6 +667,10 @@ def report(pages: list[dict], verdicts: dict[str, str], findings: list[dict],
     print()
     print("━" * 78)
     print(f"  프론트 진단  ·  {BASE_URL}  ·  {time.strftime('%F %T')}")
+    if _report_load:
+        _l = _report_load
+        print(f"  부하 load1={_l.get('load1','?')} / cpu={_l.get('cpus','?')}"
+              + (f"  ⚠ {_report_noisy}" if _report_noisy else ""))
     print("━" * 78)
     print(f"{'라우트':<18} {'판정':<6} {'TTFB':>7} {'FCP':>7} {'LCP':>8} "
           f"{'데이터대기':>10} {'API':>4} {'최장API':>8}")
@@ -654,7 +725,27 @@ def main() -> int:
     ap.add_argument("--no-refresh", action="store_true", help="storage_state 갱신 생략")
     ap.add_argument("--timeout", type=int, default=45000)
     ap.add_argument("--json", default="", help="결과 JSON 저장 경로")
+    ap.add_argument("--site", default=os.getenv("AADS_FRONTEND_SITE", "aads"),
+                    help="진단 대상 사이트 (config/frontend_diagnostics_sites.json)")
+    ap.add_argument("--list-sites", action="store_true", help="등록된 사이트 목록")
     args = ap.parse_args()
+
+    global BASE_URL, STORAGE_STATE, REFRESHER, CORE_ROUTES, MAJOR_ROUTES
+    sites = load_sites()
+    if args.list_sites:
+        for key, cfg in sites.items():
+            print(f"  {key:<10} {cfg.get('label','')}  {cfg.get('base_url','')}")
+        return 0
+    site = sites.get(args.site)
+    if not site:
+        print(f"[중단] 사이트 '{args.site}' 정의 없음. --list-sites 로 확인하라.", file=sys.stderr)
+        return 2
+    BASE_URL = os.getenv("AADS_FRONTEND_BASE_URL") or site.get("base_url", "")
+    CORE_ROUTES = list(site.get("core_routes") or [])
+    MAJOR_ROUTES = list(site.get("major_routes") or [])
+    _auth = site.get("auth") or {}
+    STORAGE_STATE = Path(os.getenv("AADS_QA_STORAGE_STATE") or _auth.get("storage_state") or "")
+    REFRESHER = Path(_auth.get("refresh") or "")
 
     if args.url:
         routes = list(args.url)
@@ -665,7 +756,11 @@ def main() -> int:
     if CHAT_SESSION and "/chat" in routes:
         routes[routes.index("/chat")] = f"/chat#{CHAT_SESSION}"
 
-    print(f"[진단] {len(routes)}개 라우트 · {BASE_URL}")
+    load_before = capture_load()
+    noisy = load_is_noisy(load_before)
+    print(f"[진단] {args.site} · {len(routes)}개 라우트 · {BASE_URL}")
+    if noisy:
+        print(f"[경고] {noisy} — 시간 지표를 회귀 근거로 쓰지 마라")
     if not ensure_storage_state(not args.no_refresh):
         print("[중단] storage_state 가 없다. 인증 없이 열면 로그인 화면만 진단하게 된다.",
               file=sys.stderr)
@@ -679,7 +774,10 @@ def main() -> int:
     except Exception:
         pass
 
-    baselines = {} if args.no_db else load_baselines([r.split("#")[0] for r in routes])
+    baselines = {} if args.no_db else load_baselines([r.split("#")[0] for r in routes], args.site)
+    if noisy:
+        # 부하 중 측정은 회귀 판정에 쓰지 않는다. 예산·런타임 오류는 그대로 본다.
+        baselines = {}
 
     from playwright.sync_api import sync_playwright
 
@@ -710,12 +808,15 @@ def main() -> int:
         if order[v] > order[overall]:
             overall = v
 
+    global _report_load, _report_noisy
+    _report_load, _report_noisy = load_before, noisy
     report(pages, verdicts, findings, baselines)
 
     run_id = str(uuid.uuid4())
     if not args.no_db:
         try:
-            store(run_id, "full" if args.full else "quick", release, pages, verdicts, findings, overall)
+            store(run_id, "full" if args.full else "quick", release, pages, verdicts, findings, overall,
+                  site=args.site, load_info=load_before, noisy=noisy)
             print(f"[저장] run_id={run_id}")
         except Exception as exc:
             print(f"[경고] DB 적재 실패: {str(exc)[:200]}", file=sys.stderr)
