@@ -759,6 +759,11 @@ class PipelineCJob:
             # 보존 정책 컴파일 결과를 실행 전 증거로 기록 (비치명적)
             await self._trace_task_policy()
 
+            # 검수용 diff 기준점: 작업자가 실행 중 커밋해도 git diff HEAD는
+            # 마지막 미커밋 변경만 보여준다. 작업 시작 시점 SHA와 비교해야
+            # 전체 변경이 리뷰에 보인다 (runner-3bd6be67 review_failed 원인).
+            pre_exec_sha = (await self._ssh_command("git rev-parse HEAD")).strip()
+
             # CEO 명시 지정: worker_model="litellm" 또는 "litellm:모델명" → LiteLLM Runner 직접 실행
             _wm = self.worker_model or ""
             if _wm == "litellm" or _wm.startswith("litellm:"):
@@ -832,8 +837,8 @@ class PipelineCJob:
             while self.cycle < self.max_cycles:
                 self.cycle += 1
 
-                # git diff 가져오기
-                self.git_diff = (await self._ssh_command("git diff HEAD"))[:_MAX_DIFF_CHARS]
+                # git diff 가져오기 (작업 시작 시점 대비 — 실행 중 커밋된 변경 포함)
+                self.git_diff = (await self._ssh_command(f"git diff {pre_exec_sha or 'HEAD'}"))[:_MAX_DIFF_CHARS]
 
                 if (
                     not self.git_diff.strip()
@@ -968,8 +973,8 @@ class PipelineCJob:
                     f"{self.max_cycles}회 재지시 완료. 현재 상태로 승인 요청합니다."
                 )
 
-            # Phase 4: 승인 대기
-            self.git_diff = (await self._ssh_command("git diff HEAD"))[:_MAX_DIFF_CHARS]
+            # Phase 4: 승인 대기 (작업 시작 시점 대비 — 실행 중 커밋된 변경 포함)
+            self.git_diff = (await self._ssh_command(f"git diff {pre_exec_sha or 'HEAD'}"))[:_MAX_DIFF_CHARS]
             self._log("awaiting_approval", "세션 AI 자동 검수 진행. 검토 후 승인/거부합니다.")
             self.status = "awaiting_approval"
             await self._save_to_db()
