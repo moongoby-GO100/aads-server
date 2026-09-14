@@ -2043,6 +2043,11 @@ async def submit_chat_command(
         try:
             return UUID(str(value))
         except (TypeError, ValueError):
+            # 조용히 None 으로 되돌리면 이번 수정의 목적(NULL 원인 추적)이
+            # 사라진다. 같은 증상을 처음부터 다시 디버깅하게 된다.
+            logger.warning(
+                "chat_command_stamp_bad_uuid value=%s", str(value)[:64]
+            )
             return None
 
     stamp_execution_id = _stamp_uuid(payload.get("execution_id"))
@@ -4892,9 +4897,16 @@ async def probe_slot_usage(slot: str):
     Anthropic 은 잔량 조회 API 가 없어 응답 헤더가 유일한 출처다. 남의 계정을
     건드리는 호출이라 자동으로 돌리지 않는다 — 누른 사람이 있을 때만 잰다.
     """
+    from app.core.auth_provider import LAST_RESORT_SLOTS
     from app.services.slot_gate import probe_usage
 
-    result = await probe_usage(str(slot).strip())
+    # 슬롯 번호는 알려진 최후 수단 슬롯만 받는다. 임의 문자열을 하위로
+    # 흘려보내지 않는다 — 여기는 남의 계정에 실제 호출을 내보내는 경로다.
+    slot_id = str(slot).strip()
+    if slot_id not in LAST_RESORT_SLOTS:
+        raise HTTPException(status_code=400, detail="알 수 없는 슬롯입니다")
+
+    result = await probe_usage(slot_id)
     if not result.get("ok"):
         raise HTTPException(status_code=502, detail=result.get("error", "probe_failed"))
     return result

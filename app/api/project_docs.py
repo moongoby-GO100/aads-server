@@ -912,7 +912,9 @@ async def approvals_pending(
             SELECT id::text, action_type, action_summary, risk_level,
                    requested_by, work_key,
                    to_char(created_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') AS at,
-                   decision
+                   decision,
+                   GREATEST(0, EXTRACT(EPOCH FROM (expires_at - now()))::int / 60)
+                       AS expires_in_min
             FROM agent_permission_requests
             WHERE decision = 'pending' AND expires_at > now()
               AND ($2 = '' OR requested_by = $2)
@@ -928,11 +930,107 @@ async def approvals_pending(
         "pending": [
             {"id": r["id"], "tool": r["action_type"], "summary": r["action_summary"],
              "risk": r["risk_level"], "requested_by": r["requested_by"],
-             "work_key": r["work_key"], "at": r["at"]}
+             "work_key": r["work_key"], "at": r["at"],
+             "expires_in_min": r["expires_in_min"],
+             # 승인 UI 가 그대로 그릴 수 있게 선택지를 서버가 내려준다.
+             # 화면마다 다른 규칙을 적어 두면 한쪽이 반드시 낡는다.
+             "choices": [
+                 {"key": "single", "label": "이번 건만",
+                  "params": {"decision": "approved", "scope": "single", "hours": 2}},
+                 {"key": "mission", "label": "이 미션 동안",
+                  "params": {"decision": "approved", "scope": "mission",
+                             "hours": 2, "max_executions": 20}},
+                 {"key": "reject", "label": "거부",
+                  "params": {"decision": "rejected"}},
+             ]}
             for r in rows
         ],
         "count": len(rows),
     }
+
+
+@router.get("/approvals/active")
+async def approvals_active(
+    session_id: str = Query("", max_length=64, description="이 세션이 받은 승인만"),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """지금 살아 있는 승인 — 잔여 횟수와 남은 시간.
+
+    미션 승인을 켜 두고 잊는 것이 가장 위험하다. 대표님이 상시로
+    "무엇이 몇 회 남았나" 를 볼 수 있어야 회수 판단이 가능하다.
+    """
+    from app.core.db_pool import get_pool
+
+    try:
+        rows = await get_pool().fetch(
+            """
+            SELECT id::text, action_type, action_summary, requested_by,
+                   approval_scope->>'scope' AS scope,
+                   max_executions,
+                   COALESCE((approval_scope->>'used')::int, 0) AS used,
+                   GREATEST(0, EXTRACT(EPOCH FROM (expires_at - now()))::int / 60)
+                       AS expires_in_min
+              FROM agent_permission_requests
+             WHERE decision = 'approved' AND expires_at > now()
+               AND COALESCE((approval_scope->>'used')::int, 0) < max_executions
+               AND ($2 = '' OR requested_by = $2)
+             ORDER BY decided_at DESC LIMIT $1
+            """,
+            limit, session_id,
+        )
+    except Exception as exc:
+        logger.warning("approvals_active_failed", error=str(exc))
+        raise HTTPException(status_code=503, detail="승인 현황을 읽지 못했습니다") from exc
+
+    return {
+        "active": [
+            {"id": r["id"], "tool": r["action_type"], "summary": r["action_summary"],
+             "scope": r["scope"] or "single", "used": r["used"],
+             "max_executions": r["max_executions"],
+             "remaining": max(0, r["max_executions"] - r["used"]),
+             "expires_in_min": r["expires_in_min"]}
+            for r in rows
+        ],
+        "count": len(rows),
+    }
+
+
+@router.post("/approvals/{request_id}/revoke")
+async def approvals_revoke(
+    request_id: str,
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """승인 즉시 회수.
+
+    미션 승인을 주고 나서 "지금 당장 멈춰" 가 안 되면 아무도 미션 승인을
+    주지 않는다. 회수는 만료를 앞당기는 것으로 끝낸다 — 기록은 남긴다.
+    """
+    from app.core.db_pool import get_pool
+
+    revoked_by = str(_tenant_id(context) or "CEO")
+    try:
+        row = await get_pool().fetchrow(
+            """
+            UPDATE agent_permission_requests
+               SET expires_at = now(), updated_at = now(),
+                   reason = COALESCE(NULLIF(reason, ''), '') || ' [회수됨]'
+             WHERE id = $1::uuid AND decision = 'approved' AND expires_at > now()
+            RETURNING id::text, action_type
+            """,
+            request_id,
+        )
+    except Exception as exc:
+        logger.warning("approvals_revoke_failed", error=str(exc))
+        raise HTTPException(status_code=503, detail="회수 처리 실패") from exc
+
+    if not row:
+        raise HTTPException(status_code=404, detail="유효한 승인이 아닙니다 (이미 만료·회수됨)")
+
+    logger.warning(
+        "live_trading_gate_revoked request=%s tool=%s by=%s",
+        request_id[:8], row["action_type"], revoked_by[:8],
+    )
+    return {"id": row["id"], "revoked": True}
 
 
 @router.post("/approvals/{request_id}/decide")
@@ -940,6 +1038,10 @@ async def approvals_decide(
     request_id: str,
     decision: str = Query(..., pattern="^(approved|rejected)$"),
     reason: str = Query("", max_length=500),
+    scope: str = Query("single", pattern="^(single|mission)$",
+                       description="single=이번 건만, mission=이 미션 동안"),
+    hours: int = Query(2, ge=1, le=24, description="승인 유효 시간"),
+    max_executions: int = Query(1, ge=1, le=50, description="mission 일 때 허용 횟수"),
     context: TenantContext = Depends(require_tenant_member),
 ):
     """승인 또는 거절.
@@ -947,22 +1049,42 @@ async def approvals_decide(
     **에이전트가 아니라 사람이 부른다.** 브라우저에서 CEO 인증으로 호출되며,
     채팅 세션의 도구로는 노출하지 않는다 — 에이전트가 자기 요청을 스스로
     승인할 수 있으면 게이트가 없는 것과 같다.
+
+    2026-09-15. 승인이 2시간·1회로 고정이라 "미션 끝까지" 가 불가능했다.
+    이제 세 가지를 고른다 — 이번 건만 / 이 미션 동안 / 거부.
+    미션 승인도 **무제한이 아니다**. 횟수 상한과 시간 상한을 둘 다 건다.
     """
     from app.core.db_pool import get_pool
 
     decided_by = str(_tenant_id(context) or "CEO")
+    # 이번 건만이면 1회·요청한 시간, 미션이면 횟수 상한을 준다.
+    grant_executions = max_executions if scope == "mission" else 1
     try:
         row = await get_pool().fetchrow(
             """
             UPDATE agent_permission_requests
                SET decision = $2, reason = NULLIF($3, ''), decided_by = $4,
                    decided_at = now(), updated_at = now(),
+                   max_executions = CASE WHEN $2 = 'approved'
+                                         THEN $6 ELSE max_executions END,
+                   approval_scope = CASE WHEN $2 = 'approved'
+                        THEN jsonb_build_object(
+                                 'scope', $5::text,
+                                 'used', 0,
+                                 'mission_key', CASE WHEN $5 = 'mission'
+                                     THEN split_part(work_key, ':', 1) || ':'
+                                          || split_part(work_key, ':', 2)
+                                     ELSE '' END)
+                        ELSE approval_scope END,
                    expires_at = CASE WHEN $2 = 'approved'
-                                     THEN now() + interval '2 hours' ELSE now() END
+                                     THEN now() + make_interval(hours => $7)
+                                     ELSE now() END
              WHERE id = $1::uuid AND decision = 'pending' AND expires_at > now()
-            RETURNING id::text, action_type, decision
+            RETURNING id::text, action_type, decision, max_executions,
+                      approval_scope->>'scope' AS scope
             """,
             request_id, decision, reason, decided_by,
+            scope, grant_executions, hours,
         )
     except Exception as exc:
         logger.warning("approvals_decide_failed", error=str(exc))
@@ -972,12 +1094,20 @@ async def approvals_decide(
         raise HTTPException(status_code=404, detail="대기 중인 요청이 아닙니다 (이미 처리됐거나 없음)")
 
     logger.warning(
-        "live_trading_gate_decided request=%s tool=%s decision=%s by=%s",
-        request_id[:8], row["action_type"], decision, decided_by[:8],
+        "live_trading_gate_decided request=%s tool=%s decision=%s scope=%s "
+        "hours=%s max_exec=%s by=%s",
+        request_id[:8], row["action_type"], decision, scope, hours,
+        grant_executions, decided_by[:8],
     )
-    # 승인은 2시간만 유효하다. 승인해 둔 것이 며칠 뒤 다른 맥락에서
-    # 쓰이면 CEO 가 승인한 그 변경이 아니다.
-    return {"id": row["id"], "decision": row["decision"], "valid_hours": 2 if decision == "approved" else 0}
+    # 승인에는 반드시 시간 상한이 붙는다. 승인해 둔 것이 며칠 뒤 다른
+    # 맥락에서 쓰이면 CEO 가 승인한 그 변경이 아니다.
+    return {
+        "id": row["id"],
+        "decision": row["decision"],
+        "scope": row["scope"] or ("single" if decision == "approved" else ""),
+        "valid_hours": hours if decision == "approved" else 0,
+        "max_executions": row["max_executions"] if decision == "approved" else 0,
+    }
 
 
 @router.get("/kg/stats")

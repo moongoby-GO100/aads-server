@@ -674,16 +674,24 @@ class ToolExecutor:
             #
             # 비용은 늘지 않는다. 아래에서 어차피 무조건 부르던 것을
             # 위로 옮긴 것뿐이다.
+            # 순서가 중요하다 — **세션 먼저, 그 다음 테넌트**.
+            #
+            # 2026-09-15 코드리뷰 지적. 첫 수정(9b1dd7c0)은 반대로 했다.
+            # 빈 session_id 로 테넌트를 물으면 None 이 돌아오고, 그 뒤에
+            # 세션을 채워도 테넌트를 다시 묻지 않는다. 고치려던 증상
+            # (테넌트를 못 구해 승인 요청이 None)이 그대로 남았다.
+            if not str(tool_input.get("session_id") or "").strip():
+                # 빈 인자를 주면 contextvar → SDK 활성 세션 순으로 폴백한다.
+                # MCP 경로에서는 contextvar 가 비어 있어 이 폴백이 유일한 길이다.
+                _bound_session = _resolve_bound_chat_session_id("")
+                if _bound_session:
+                    tool_input["session_id"] = _bound_session
             tenant_id = await resolve_bound_tenant_id(
                 tool_input.get("tenant_id", ""),
                 tool_input.get("session_id", ""),
             )
             if tenant_id and not str(tool_input.get("tenant_id") or "").strip():
                 tool_input["tenant_id"] = tenant_id
-            if not str(tool_input.get("session_id") or "").strip():
-                _bound_session = _resolve_bound_chat_session_id("")
-                if _bound_session:
-                    tool_input["session_id"] = _bound_session
 
             # 실매매 조건 변경은 CEO 승인 전까지 막는다.
             #
