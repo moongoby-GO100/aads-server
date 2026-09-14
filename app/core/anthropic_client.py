@@ -150,7 +150,12 @@ async def _try_user_key_claude(
     if not user_key:
         return None
     try:
-        client = AsyncAnthropic(api_key=user_key)
+        # OAuth 토큰(sk-ant-oat*)은 x-api-key 가 아니라 Authorization: Bearer 로
+        # 보내야 한다. AsyncAnthropic(api_key=...) 로 넘기면 401 이 난다.
+        # 2026-09-14: 진아(244) Claude Code OAuth 토큰을 BYOK 로 등록하면서 발견.
+        # 판별/분기는 auth_provider.create_anthropic_client 하나로 모은다.
+        from app.core.auth_provider import create_anthropic_client
+        client = create_anthropic_client(user_key)
         msgs = [{"role": "user", "content": prompt}]
         kwargs = {"model": model, "max_tokens": max_tokens, "messages": msgs}
         if system:
