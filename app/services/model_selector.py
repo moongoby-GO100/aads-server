@@ -402,6 +402,9 @@ _SESSION_BOUND_TOOLS = {
     "pipeline_runner_status",
     "check_task_status",
     "check_directive_status",
+    # 담당끼리 묻는 길. 원세션을 잃으면 질문 자체가 나가지 못한다 —
+    # env·contextvar 말고도 도구 입력으로 한 번 더 실어 보낸다.
+    "ask_session",
 }
 
 
@@ -4329,12 +4332,17 @@ async def _run_agent_sdk_with_key(
     from claude_agent_sdk import query as sdk_query, ClaudeAgentOptions
 
     # MCP config: 컨테이너 내부에서 직접 브릿지 실행
+    if not session_id:
+        logger.warning("agent_sdk_mcp_session_missing: 브릿지가 세션 없이 뜬다 — 세션 도구가 실패한다")
     _mcp_cfg = json.dumps({
         "mcpServers": {
             "aads-tools": {
                 "command": "python",
                 "args": ["-m", "mcp_servers.aads_tools_bridge"],
                 "cwd": "/app",
+                # 빈 문자열이 나가면 브릿지가 세션을 잃고, 세션에 묶인 도구가
+                # 조용히 실패한다(`origin_session_missing`). 비면 로그로 남긴다 —
+                # 조용한 실패를 다음 사람이 또 추적하지 않도록.
                 "env": {"AADS_SESSION_ID": session_id or ""},
             }
         }

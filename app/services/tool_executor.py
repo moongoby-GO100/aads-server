@@ -4763,11 +4763,12 @@ class ToolExecutor:
         """
         from app.services.session_relay import ask
 
-        session_id = str(inp.get("session_id") or "")
-        if not session_id:
-            from app.services.tool_executor import current_chat_session_id
-
-            session_id = current_chat_session_id.get() or ""
+        # 세션을 찾는 길은 한 벌이어야 한다. 여기만 contextvar 를 직접 읽고
+        # 있었고, 그래서 Agent SDK 경로(브릿지 env 가 빈 문자열)에서 원세션을
+        # 잃었다 — 2026-09-15 #310 주도 세션에서 5/5 `origin_session_missing`.
+        # `_resolve_bound_chat_session_id` 는 contextvar 가 비면 SDK 스트림에
+        # 묶인 세션까지 본다.
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id"))
         return await ask(
             origin_session_id=session_id,
             target=str(inp.get("target") or ""),

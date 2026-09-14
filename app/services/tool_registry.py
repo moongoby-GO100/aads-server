@@ -399,6 +399,13 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "description": "같이 보낼 내용 (선택). 판단에 필요한 수치나 코드 조각.",
                 },
+                "session_id": {
+                    "type": "string",
+                    "description": (
+                        "묻는 쪽(이 대화)의 세션 id (선택). 보통 서버가 자동으로 채운다. "
+                        "`origin_session_missing` 이 났을 때만 직접 넣는다."
+                    ),
+                },
             },
             "required": ["target", "question"],
         },

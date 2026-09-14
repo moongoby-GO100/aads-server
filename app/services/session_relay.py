@@ -335,7 +335,26 @@ async def ask(origin_session_id: str, target: str, question: str,
     from app.core.db_pool import get_pool
 
     if not origin_session_id:
-        return {"sent": False, "error": "origin_session_missing"}
+        # 코드만 돌려주면 담당은 "왜" 를 모른 채 같은 호출을 반복한다.
+        # 실제로 2026-09-15 #310 주도 세션이 5번 연속 같은 벽에 부딪혔다.
+        # 무엇이 비어 있었는지 로그에 남기고, 화면에도 다음 행동을 적는다.
+        import os as _os
+
+        from app.services.tool_executor import current_chat_session_id as _cv
+
+        logger.warning(
+            "session_relay_origin_missing: env=%s contextvar=%s pid=%d target=%s",
+            "있음" if (_os.getenv("AADS_SESSION_ID") or "").strip() else "없음",
+            "있음" if (_cv.get("") or "").strip() else "없음",
+            _os.getpid(),
+            str(target)[:40],
+        )
+        return {
+            "sent": False, "error": "origin_session_missing",
+            "message": "이 도구가 어느 대화에서 불렸는지 서버가 알지 못했습니다. "
+                       "같은 호출을 반복하지 말고, `session_id` 에 이 대화의 세션 id 를 "
+                       "직접 넣어 한 번 더 시도하세요. 그래도 실패하면 운영에 보고하세요.",
+        }
     if not (question or "").strip():
         return {"sent": False, "error": "question_required", "message": "무엇을 물을지 적어야 합니다."}
 

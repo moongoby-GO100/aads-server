@@ -137,6 +137,9 @@ _SESSION_BOUND_TOOLS = {
     "pipeline_runner_status",
     "check_task_status",
     "check_directive_status",
+    # 담당끼리 묻는 길. 원세션을 잃으면 질문 자체가 나가지 못한다 —
+    # env·contextvar 말고도 도구 입력으로 한 번 더 실어 보낸다.
+    "ask_session",
 }
 
 _DB_TOOLS = {
