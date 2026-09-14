@@ -14238,3 +14238,30 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - **후속 P1**: `deploy.sh` 에 standby 만 맞추는 독립 CLI 모드(`sync-standby`)가 없어, drain
   실패 시 전체 bluegreen 배포를 다시 돌려야만 두 슬롯이 수렴한다. nginx 는 :8100 을 backup
   으로 물고 있으므로 green 장애 시 구 이미지로 조용히 폴백되는 위험이 남는다.
+
+
+## 2026-09-14 09:50 KST — standby 자기 차단 교착 해소: `scripts/sync-standby.sh` 신설 + 슬롯 수렴
+
+- **문제**: `deploy.sh bluegreen` 의 마지막 단계인 standby 동기화는 대기 슬롯에 살아 있는
+  채팅 턴이 있으면 drain timeout 으로 blocked 된다(진행 중 CEO 턴 보호 — 이 동작 자체는
+  옳다). 그런데 blocked 이후 슬롯을 수렴시킬 수단이 "전체 bluegreen 을 한 번 더" 밖에 없었다.
+  그 결과 run 418 이후 nginx backup 인 :8100 이 6시간 전 이미지 `593360b18433` 로 남아,
+  활성 슬롯 장애 시 조용히 구버전으로 폴백하는 상태였다. 더 나쁜 것은 blocked 를 유발한
+  턴이 **그 배포를 지시한 채팅 턴 자신**이면 재배포로는 영원히 풀리지 않는다는 점이다.
+- **조치**: `aads-server/scripts/sync-standby.sh` 를 새로 만들었다. 재빌드도 트래픽 전환도
+  하지 않고, 대기 슬롯이 비는 순간 그 슬롯만 **활성 슬롯이 실제로 돌리는 이미지**로
+  재생성한다. 안전장치: `aads-deploy.flock` 선점으로 배포와 경합 차단, 활성 슬롯 헬스 확인
+  후에만 진행, 대기 슬롯 `executing_count != 0` 이면 exit 3(실패 아님 = 나중에 재시도),
+  재생성 후 digest 일치·헬스·활성 슬롯 무변경 3중 검증, `--dry-run` 지원.
+- **실행 결과**: 활성 green:8102 = `e68ad3b358ee`, 대기 blue:8100 = `df32839ad340` 드리프트를
+  확인하고 동기화했다. 현재 **양 슬롯 모두 `aads-server:44df37e3ec9f` / `sha256:e68ad3b358ee`**,
+  둘 다 healthy, 메모리 한도 5368709120 동일, 활성 슬롯은 green:8102 그대로. 외부 헬스
+  api=200(1.50s) / dash=307. blue 의 `raw_executing` 유령 태스크 1건도 재생성으로 사라졌다.
+- **재빌드가 필요 없던 이유**: `git diff 44df37e3..d95c26f2` 는 HANDOVER.md 와 deploy.sh
+  뿐이다. deploy.sh 는 호스트 워킹트리에서 실행되므로 이미지와 무관하게 이미 적용 상태다.
+  즉 앱 코드는 현재 이미지가 곧 최신이며, 필요한 것은 재빌드가 아니라 슬롯 수렴이었다.
+- **이번에 배운 것**: 도구 래퍼가 55s 에서 끊기면서 재생성 직후 검증 단계가 통째로 날아갔다
+  (컨테이너는 떴는데 digest 확인과 resume 플래그 처리가 누락돼 수동 보정했다). 스크립트에
+  `trap '' HUP` 을 넣어 부모가 죽어도 검증까지는 끝내도록 고쳤다. 같은 이유로 55s 를 넘길
+  가능성이 있는 원격 명령은 nohup/detach 로 돌려야 한다.
+- **남은 리스크**: 없음. 양 슬롯 digest 일치, 종료 상태 `phase='queued'` 잔여 0건.
