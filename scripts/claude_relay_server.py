@@ -1662,6 +1662,26 @@ async def handle_stream(request):
                     elif evt_type == "result":
                         if not captured_cli_session_id:
                             captured_cli_session_id = event.get("session_id")
+                        # 프롬프트 캐시 지표를 남긴다.
+                        #
+                        # 지금까지 아무도 이 값을 읽지 않아, 캐싱이 실제로 먹는지
+                        # 확인할 방법이 없었다(2026-09-14: 24시간 캐시 로그 0건).
+                        # 캐싱은 _stream_anthropic(직접 API)에만 붙어 있고 이 CLI
+                        # 경로는 system_prompt 를 문자열로 이어붙인다 — 캐시가
+                        # 걸리는지부터 측정해야 고칠지 판단할 수 있다.
+                        try:
+                            _u = event.get("usage") or {}
+                            if _u:
+                                logger.info(
+                                    "claude_usage session=%s slot=%s resume=%s "
+                                    "input=%s output=%s cache_read=%s cache_write=%s",
+                                    (aads_session_id or "none")[:8], slot, is_resume,
+                                    _u.get("input_tokens", 0), _u.get("output_tokens", 0),
+                                    _u.get("cache_read_input_tokens", 0),
+                                    _u.get("cache_creation_input_tokens", 0),
+                                )
+                        except Exception:
+                            pass
                         if _DIRECT_OAUTH_ENABLED and event.get("is_error"):
                             result_text = str(event.get("result", ""))
                             if re.search(r"429|rate.limit|overloaded|credit", result_text, re.IGNORECASE):
