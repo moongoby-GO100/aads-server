@@ -182,3 +182,48 @@ def test_chat_message_search_only_reads_current_generation():
     store = inspect.getsource(ces.embed_and_store_message)
     assert "CHAT_DOC_PREFIX" in store and "embedding_ver" in store
     assert "embed_texts_strict" in store, "더미를 저장하면 안 된다"
+
+
+def test_prompt_layer_templates_render():
+    """프롬프트 템플릿에 escape 안 된 중괄호가 들어가면 레이어가 통째로 빠진다.
+
+    2026-09-14. 지침 예시로 `todo_write(update={"원인 지점 확인": "completed"})`
+    를 LAYER4 템플릿 본문에 넣었는데, `str.format()` 이 그걸 치환 필드로 읽어
+    `build_layer4()` 가 **항상** KeyError 를 던졌다.
+
+    그 예외는 `build_messages_context` 전체를 무너뜨리고, 호출부의 fallback 이
+    담당 역할 프롬프트·Auto-RAG·메모리를 통째로 버린 채 "You are a helpful AI
+    assistant." 로 답하게 만든다. 답은 나오니까 겉으로는 멀쩡해 보인다.
+
+    템플릿을 `.format()` 으로 렌더하는 한 이 함정은 계속 있다. 그래서 렌더
+    자체를 테스트한다 — 필드 목록을 눈으로 세지 말고 실제로 돌려 본다.
+    """
+    import string
+
+    from app.core.prompts import system_prompt_v2 as sp
+
+    # 렌더 자체가 통과해야 한다. 이것 하나가 실제 사고를 잡는다.
+    rendered = sp.build_layer4()
+    assert rendered.strip()
+    # 예시는 escape 를 풀고 사람이 읽는 모양으로 나와야 한다.
+    assert 'todo_write(update={"원인 지점 확인": "completed"})' in rendered
+
+    # 치환 필드는 진화 통계 5개뿐이어야 한다. 늘어나면 호출부도 같이 고쳐야 한다.
+    # `string.Formatter` 로 읽는다 — 정규식으로 세면 escape 된 `{{...}}` 안쪽을
+    # 필드로 잘못 읽는다(이 테스트를 처음 쓸 때 그렇게 틀렸다).
+    fields = {
+        f for _, f, _, _ in string.Formatter().parse(sp.LAYER4_SELF_AWARENESS_TEMPLATE)
+        if f
+    }
+    assert fields == {
+        "fact_count", "obs_count", "avg_quality", "quality_count", "error_pattern_count",
+    }, f"LAYER4 템플릿에 예상 밖 치환 필드: {sorted(fields)}"
+
+    # 통계를 넘기는 경로도 렌더돼야 한다.
+    assert sp.build_layer4({
+        "fact_count": 1, "obs_count": 2, "avg_quality": 3,
+        "quality_count": 4, "error_pattern_count": 5,
+    })
+
+    # Layer 1 도 같은 함정을 쓴다.
+    assert sp.build_layer1("CEO", "", intent="analysis")

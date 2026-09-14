@@ -399,7 +399,7 @@ LAYER4_SELF_AWARENESS_TEMPLATE = """
 착수 직후 `todo_write` 로 단계를 등록하고, 단계가 끝날 때마다 갱신하라.
 
     todo_write(items=["원인 지점 확인", "수정 적용", "배포 후 검증"])
-    todo_write(update={"원인 지점 확인": "completed"})
+    todo_write(update={{"원인 지점 확인": "completed"}})
 
 이유: CEO 화면에는 진행 중 "도구 N회 호출" 이라는 숫자 하나만 보인다.
 2026-09-14 실측으로 한 지시가 22분간 도구를 45번 부르는 동안 화면에는

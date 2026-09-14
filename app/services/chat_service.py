@@ -7494,7 +7494,18 @@ async def _resume_single_stream(
                     raw_messages=raw_messages,
                     base_system_prompt=base_prompt,
                 )
-            except Exception:
+            except Exception as _ctx_err:
+                # 조용히 떨어지면 안 된다. 여기로 오면 담당 역할 프롬프트,
+                # Auto-RAG, 메모리, 도구 안내가 **통째로** 빠진 채로 답한다.
+                # 겉으로는 멀쩡히 답하니 아무도 모른다.
+                #
+                # 2026-09-14 실측. `build_layer4()` 가 템플릿의 중괄호 하나
+                # 때문에 항상 KeyError 를 던지고 있었는데, 다른 두 호출부는
+                # 로그를 남겨서 잡혔고 이 자리만 3시간 동안 조용했다.
+                logger.error(
+                    "context_builder failed on resume, using raw fallback: %s",
+                    _ctx_err,
+                )
                 system_prompt = base_prompt or "You are a helpful AI assistant."
                 messages = raw_messages[-20:]
             system_prompt = ((system_prompt or "") + "\n\n" + resume_instruction).strip()
