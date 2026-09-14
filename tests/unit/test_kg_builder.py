@@ -145,3 +145,29 @@ def test_auto_rag_keeps_graph_when_vector_empty():
     gi = src.index("graph_context = await context_for_question")
     ri = src.index("if not results:")
     assert gi < ri, "그래프 조회가 조기 반환보다 뒤에 있다"
+
+
+def test_list_keeps_unconnected_nodes():
+    """연결 0인 노드를 숨기면 안 된다.
+
+    파일 3,041개 중 대부분이 아직 연결이 없다. 숨기면 "그래프에 다
+    들어있다" 고 착각하게 된다 — 그래프의 빈 곳을 보이게 두는 것이
+    정직하다.
+    """
+    import inspect
+
+    from app.services import kg_query
+
+    src = inspect.getsource(kg_query.list_nodes)
+    assert "degree > 0" not in src, "연결 없는 노드를 걸러내고 있다"
+    assert "ORDER BY degree DESC" in src, "연결 많은 순 정렬이 아니다"
+
+
+def test_list_limit_is_bounded():
+    """목록 요청이 전체를 끌어오지 못하게 한다."""
+    import inspect
+
+    from app.services import kg_query
+
+    src = inspect.getsource(kg_query.list_nodes)
+    assert "min(limit, 200)" in src

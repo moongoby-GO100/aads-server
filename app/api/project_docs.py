@@ -890,6 +890,22 @@ async def kg_stats():
     return await stats()
 
 
+@router.get("/kg/list")
+async def kg_list(
+    type: Optional[str] = Query(None, description="file/doc/commit/deploy/error/..."),
+    q: Optional[str] = Query(None, max_length=120),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """그래프에 무엇이 들어 있는지 둘러본다 — 연결 많은 순.
+
+    검색창만 있으면 **뭘 쳐야 할지 모르는 사람은 못 쓴다.**
+    """
+    from app.services.kg_query import list_nodes
+
+    return await list_nodes(type, limit=limit, offset=offset, q=q)
+
+
 @router.get("/kg/trace")
 async def kg_trace(
     q: str = Query(..., min_length=2, max_length=200, description="파일 경로·커밋·오류 키"),

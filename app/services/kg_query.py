@@ -157,6 +157,64 @@ async def context_for_question(question: str, *, max_nodes: int = 2) -> str:
     )
 
 
+async def list_nodes(
+    entity_type: Optional[str] = None,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    q: Optional[str] = None,
+) -> Dict[str, Any]:
+    """둘러볼 목록. 연결이 많은 것부터.
+
+    2026-09-14 — 처음에는 검색창만 뒀는데, **뭘 쳐야 할지 모르면 못 쓴다.**
+    연결이 많은 노드가 곧 "여기서 시작하면 볼 게 많은 곳" 이다.
+
+    연결 0인 노드는 빼지 않는다. 파일 3,041개 중 대부분이 아직 연결이
+    없는데, 그걸 숨기면 "그래프에 다 들어있다" 고 착각하게 된다.
+    """
+    from app.core.db_pool import get_pool
+
+    where = ["TRUE"]
+    args: List[Any] = []
+    if entity_type:
+        args.append(entity_type)
+        where.append(f"e.entity_type = ${len(args)}")
+    if q and len(q.strip()) >= 2:
+        args.append(q.strip())
+        where.append(f"e.name ILIKE '%' || ${len(args)} || '%'")
+    args.extend([max(1, min(limit, 200)), max(0, offset)])
+
+    sql = f"""
+        SELECT e.id, e.entity_type, e.name, coalesce(e.description,'') AS description,
+               coalesce(e.project,'') AS project,
+               (SELECT count(*) FROM kg_relations r
+                 WHERE r.source_entity_id = e.id OR r.target_entity_id = e.id) AS degree
+        FROM kg_entities e
+        WHERE {' AND '.join(where)}
+        ORDER BY degree DESC, e.name ASC
+        LIMIT ${len(args) - 1} OFFSET ${len(args)}
+    """
+    try:
+        pool = get_pool()
+        rows = await pool.fetch(sql, *args)
+        total = await pool.fetchval(
+            f"SELECT count(*) FROM kg_entities e WHERE {' AND '.join(where)}",
+            *args[:-2],
+        )
+    except Exception as exc:
+        logger.debug("kg_list_failed", error=str(exc))
+        return {"items": [], "total": 0}
+    return {
+        "items": [
+            {"id": int(r["id"]), "type": r["entity_type"], "name": r["name"],
+             "description": r["description"], "project": r["project"],
+             "degree": int(r["degree"])}
+            for r in rows
+        ],
+        "total": int(total or 0),
+    }
+
+
 async def stats() -> Dict[str, Any]:
     from app.core.db_pool import get_pool
 
