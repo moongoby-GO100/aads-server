@@ -557,3 +557,27 @@ def test_orchestration_limits_defer_rather_than_burn_retries():
     # 기한은 알리되 멈추지 않는다.
     dl = inspect.getsource(orchestration_limits.check_deadlines)
     assert "status" not in dl.split("UPDATE")[0] or "UPDATE milestones" not in dl
+
+
+def test_every_context_caller_passes_db_conn():
+    """`db_conn` 을 안 넘기면 Layer 2 의 DB 조회가 통째로 건너뛰어진다.
+
+    서버 목록, 죽은 서비스, 같이 일하는 담당 명단이 전부 빠진다.
+    **오류는 안 난다. 그냥 없다.**
+
+    2026-09-14 실측. 세 호출부 중 이어쓰기만 안 넘기고 있었다 — 오늘 이
+    경로에서 세 번째로 나온 누락이다(예외로 통째 실패 → 역할 프롬프트
+    없음 → 이것).
+    """
+    import re
+    from pathlib import Path
+
+    src = Path("/app/app/services/chat_service.py").read_text(encoding="utf-8")
+    calls = [m.start() for m in re.finditer(r"await build_messages_context\(", src)]
+    assert calls, "호출부를 찾지 못했다"
+    for pos in calls:
+        block = src[pos:pos + 600]
+        end = block.find(")\n")
+        assert "db_conn=" in block[:end if end > 0 else 600], (
+            f"db_conn 을 안 넘기는 호출부가 있다 (offset {pos})"
+        )

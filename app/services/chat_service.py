@@ -7488,12 +7488,21 @@ async def _resume_single_stream(
             base_prompt = (sp_row["system_prompt"] if sp_row and sp_row["system_prompt"] else "")
 
             try:
-                messages, system_prompt = await build_messages_context(
-                    workspace_name=workspace_name,
-                    session_id=session_id,
-                    raw_messages=raw_messages,
-                    base_system_prompt=base_prompt,
-                )
+                # **`db_conn` 을 넘긴다.** 안 넘기면 Layer 2 의 DB 조회 블록이
+                # 통째로 건너뛰어진다 — 서버 목록, 죽은 서비스, 같이 일하는
+                # 담당 명단이 전부 빠진다. 오류는 안 난다. 그냥 없다.
+                #
+                # 2026-09-14 실측. 다른 두 호출부는 넘기는데 이어쓰기만
+                # 안 넘겼다. 오늘 이 경로에서 세 번째로 나온 누락이다
+                # (예외로 통째 실패 → 역할 프롬프트 없음 → 이것).
+                async with pool.acquire() as _ctx_conn:
+                    messages, system_prompt = await build_messages_context(
+                        workspace_name=workspace_name,
+                        session_id=session_id,
+                        raw_messages=raw_messages,
+                        base_system_prompt=base_prompt,
+                        db_conn=_ctx_conn,
+                    )
             except Exception as _ctx_err:
                 # 조용히 떨어지면 안 된다. 여기로 오면 담당 역할 프롬프트,
                 # Auto-RAG, 메모리, 도구 안내가 **통째로** 빠진 채로 답한다.
