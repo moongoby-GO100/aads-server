@@ -109,3 +109,46 @@ def test_memory_context_queries_are_bounded():
     # count/tokens 는 잘린 목록이 아니라 전체 집계로 보고해야 한다.
     assert "COUNT(*) OVER ()" in src
     assert "obs_total" in src and "ss_total" in src
+
+
+def test_resume_records_full_tool_events():
+    """이어쓰기 경로도 도구 입력을 남겨야 한다.
+
+    2026-09-14. `_resume_single_stream` 이 도구를 **이름 문자열로만** 쌓았다.
+
+        tools_called.append(event["tool_name"])
+
+    `normalize_tool_events` 가 문자열을 `{"tool_use_id": "", "tool_input": {}}`
+    로 펴기 때문에 무엇을 했는지가 사라진다. 실측으로 갈림이 정확했다.
+
+        재시도 0회  도구 2,604건 중 입력 1,203건 (46%)
+        재시도 1회  도구   258건 중 입력     0건 (0%)
+
+    이어쓰기가 도는 세션일수록 긴 작업이고, 긴 작업일수록 "무슨 명령을 왜
+    실행했나" 가 중요한데 바로 그 경로에서 기록이 비어 있었다.
+    """
+    import inspect
+
+    from app.services import chat_service
+
+    src = inspect.getsource(chat_service._resume_single_stream)
+    # 주석에 옛 코드를 근거로 인용해 두었으므로 주석 줄은 빼고 본다.
+    code_lines = [l for l in src.split("\n") if not l.lstrip().startswith("#")]
+    assert 'tools_called.append(event["tool_name"])' not in "\n".join(code_lines), (
+        "이어쓰기가 도구 이름만 쌓고 있다"
+    )
+    # 이벤트 전체(입력 포함)를 쌓는지 확인
+    idx = src.find('elif etype == "tool_use":')
+    assert idx > 0
+    block = src[idx: idx + 1600]
+    assert '"tool_input"' in block, "이어쓰기 도구 기록에 tool_input 이 없다"
+    assert '"tool_use_id"' in block, "이어쓰기 도구 기록에 tool_use_id 가 없다"
+
+
+def test_string_tool_names_still_normalize():
+    """문자열로 들어온 옛 기록은 그대로 읽혀야 한다 (하위호환)."""
+    from app.services.chat_service import normalize_tool_events
+
+    out = normalize_tool_events(["run_remote_command", "query_database"])
+    assert [e["tool_name"] for e in out] == ["run_remote_command", "query_database"]
+    assert all(e["tool_input"] == {} for e in out)
