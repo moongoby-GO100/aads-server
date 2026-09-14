@@ -41,6 +41,12 @@ REDACTIONS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(X-Claude-Relay-Secret:\s*)\S+"), r"\1[REDACTED]"),
     (re.compile(r"(?i)(password[\"'\s:=]+)([^\s\"',;)]{6,})"), r"\1[REDACTED]"),
     (re.compile(r"\b(ghp_|gho_|github_pat_)[A-Za-z0-9_]{20,}"), "[REDACTED:github]"),
+    # 텔레그램 봇 토큰. 2026-09-14 .env 를 화면에 출력하다 그대로 노출됐고,
+    # 기존 패턴 어느 것에도 걸리지 않아 평문으로 적재될 뻔했다.
+    (re.compile(r"\b\d{8,12}:AA[A-Za-z0-9_\-]{30,}"), "[REDACTED:telegram-bot]"),
+    # 슬랙·디스코드도 같은 형태로 새어나간다.
+    (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"), "[REDACTED:slack]"),
+    (re.compile(r"https://discord(?:app)?\.com/api/webhooks/\S+"), "[REDACTED:discord-webhook]"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
      "[REDACTED:private-key]"),
 ]
