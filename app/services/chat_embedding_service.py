@@ -96,6 +96,34 @@ async def embed_texts(texts: List[str]) -> List[List[float]]:
     return [r for r in results]  # type: ignore[return-value]
 
 
+class EmbeddingRouteUnavailable(RuntimeError):
+    """진짜 임베딩 경로가 없다. 더미를 저장하면 안 되는 호출자가 받는다."""
+
+
+# 마지막 호출이 더미로 떨어졌는지. 저장 전에 확인하라고 두는 값이다.
+_LAST_ROUTE_WAS_DUMMY = False
+
+
+def last_route_was_dummy() -> bool:
+    return _LAST_ROUTE_WAS_DUMMY
+
+
+async def embed_texts_strict(texts: List[str]) -> List[List[float]]:
+    """진짜 임베딩만 돌려준다. 경로가 없으면 예외를 던진다.
+
+    영구 저장하는 호출자(문서 색인 등)는 이걸 쓴다. 더미를 저장하면
+    나중에 진짜와 구분할 방법이 없다 — 차원도 값 분포도 똑같다.
+    """
+    global _LAST_ROUTE_WAS_DUMMY
+    _LAST_ROUTE_WAS_DUMMY = False
+    vectors = await embed_texts(texts)
+    if _LAST_ROUTE_WAS_DUMMY:
+        raise EmbeddingRouteUnavailable(
+            "임베딩 경로 없음 — Ollama/PC Agent/Gemini 전부 불가"
+        )
+    return vectors
+
+
 async def _embed_uncached_with_routes(texts: List[str]) -> List[List[float]]:
     candidates = await get_route_candidates("embedding")
     for candidate in candidates:
@@ -155,7 +183,21 @@ async def _embed_uncached_with_routes(texts: List[str]) -> List[List[float]]:
             if google_vectors:
                 return google_vectors
 
-    logger.debug("[ChatEmbed] no embedding route available — dummy embedding")
+    # 여기 오면 진짜 임베딩이 하나도 안 됐다는 뜻이다.
+    #
+    # 2026-09-14 — 이 줄이 debug 였다. 그래서 Ollama 주소가 컨테이너에서
+    # 안 닿는 상태로 몇 달을 돌면서, 더미 벡터가 chat_messages·memory_facts·
+    # doc_chunks 에 진짜인 것처럼 쌓였다. 더미도 해시 기반이라 값이 흩어져서
+    # 유사도 숫자는 그럴듯하게 나온다 — 의미만 없다. 그래서 아무도 눈치채지
+    # 못했다. "검색이 되긴 하는데 결과가 이상하다" 가 유일한 증상이었다.
+    #
+    # 조용한 실패가 시끄러운 실패보다 훨씬 비싸다.
+    global _LAST_ROUTE_WAS_DUMMY
+    _LAST_ROUTE_WAS_DUMMY = True
+    logger.warning(
+        "[ChatEmbed] 임베딩 경로 없음 — 더미 벡터 반환 (%d건). "
+        "저장하면 의미 없는 벡터가 진짜처럼 남는다.", len(texts)
+    )
     return [_dummy_embedding(t) for t in texts]
 
 
