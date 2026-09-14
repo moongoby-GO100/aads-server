@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import hashlib
+import os
 import re
 import subprocess
 import time
@@ -34,11 +35,37 @@ PG_CONTAINER = "aads-postgres"
 PG_PASSWORD = "aads2026secure"
 
 
+def _psql_argv() -> tuple[list[str], dict]:
+    """접속 방식을 고른다 — 서버마다 경로가 다르다.
+
+    contabo116 은 aads-postgres 컨테이너가 로컬에 있고, contabo14 같은 원격
+    서버는 SSH 터널(127.0.0.1:15433)로 같은 DB 에 닿는다. 도구를 서버마다 복사해
+    각자 고치면 사본이 갈라진다 — 2026-09-14 kiwoom_key_manager 가 그 사례였다.
+    한 파일이 두 경우를 모두 처리한다.
+
+    PGHOST 가 설정돼 있으면 그쪽을 먼저 쓴다(원격 러너와 같은 규약).
+    """
+    env = dict(os.environ)
+    host = env.get("PGHOST", "")
+    if host:
+        argv = ["psql",
+                "-h", host,
+                "-p", env.get("PGPORT", "5432"),
+                "-U", env.get("PGUSER", "aads"),
+                "-d", env.get("PGDATABASE", "aads")]
+        return argv, env
+
+    env["PGPASSWORD"] = PG_PASSWORD
+    argv = ["docker", "exec", "-i", "-e", f"PGPASSWORD={PG_PASSWORD}", PG_CONTAINER,
+            "psql", "-U", "aads", "-d", "aads"]
+    return argv, env
+
+
 def psql(sql: str) -> str:
+    argv, env = _psql_argv()
     proc = subprocess.run(
-        ["docker", "exec", "-i", "-e", f"PGPASSWORD={PG_PASSWORD}", PG_CONTAINER,
-         "psql", "-U", "aads", "-d", "aads", "-At", "-F", "\x1f", "-f", "-"],
-        input=sql, text=True, capture_output=True, timeout=60,
+        argv + ["-At", "-F", "\x1f", "-f", "-"],
+        input=sql, text=True, capture_output=True, timeout=60, env=env,
     )
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or "")[:300])
@@ -196,7 +223,65 @@ def do_register(a) -> int:
     return 0
 
 
-def do_list() -> int:
+def do_promote(a) -> int:
+    """후보를 active 로 올린다 — 원인을 밝혔을 때.
+
+    자동 기록은 증상만 남긴다. 원인을 알아낸 사람이 이 명령으로 채워야
+    다음 사람이 그 원인을 본다. 채우지 않으면 후보는 계속 "원인 미상" 이다.
+    """
+    out = psql(
+        "SELECT symptom, metadata::text FROM ohvis_wiki_error_book "
+        f"WHERE error_key = {lit(a.key)};"
+    ).strip()
+    if not out:
+        print(f"없는 항목: {a.key}", file=sys.stderr)
+        return 1
+    parts = out.split("\x1f")
+    try:
+        meta = json.loads(parts[1] if len(parts) > 1 else "{}")
+    except ValueError:
+        meta = {}
+    if a.signature:
+        meta["signatures"] = a.signature
+    fix: dict = {}
+    if a.fix_commit:
+        fix["commits"] = a.fix_commit
+    if a.fix_file:
+        fix["files"] = a.fix_file
+    if a.fix_note:
+        fix["note"] = a.fix_note
+    if fix:
+        fix["recorded_at"] = time.strftime("%F %T")
+        meta["fix"] = fix
+
+    sets = [f"root_cause = {lit(a.cause)}", f"prevention = {lit(a.prevention)}",
+            "status = 'active'", f"metadata = {lit(json.dumps(meta, ensure_ascii=False))}::jsonb",
+            "updated_at = NOW()"]
+    if a.symptom:
+        sets.append(f"symptom = {lit(a.symptom)}")
+    if a.rename:
+        sets.append(f"error_key = {lit(a.rename)}")
+    psql("UPDATE ohvis_wiki_error_book SET " + ", ".join(sets) + f" WHERE error_key = {lit(a.key)};")
+    print(f"승격: {a.rename or a.key} → active")
+    return 0
+
+
+def do_list(candidates_only: bool = False) -> int:
+    if candidates_only:
+        out = psql(
+            "SELECT error_key, recurrence_count, symptom, metadata->>'source' "
+            "FROM ohvis_wiki_error_book WHERE status = 'candidate' "
+            "ORDER BY recurrence_count DESC, error_key;"
+        )
+        rows = [l.split("\x1f") for l in out.splitlines() if l.strip()]
+        if not rows:
+            print("  원인 미상 후보 없음")
+            return 0
+        print("  원인 미상 후보 — 원인을 알면 promote 로 채운다")
+        for r in rows:
+            print(f"  {r[0]:<22} 재발 {r[1]:>3}회  출처 {r[3] if len(r)>3 else '-'}")
+            print(f"      {(r[2] if len(r)>2 else '')[:88]}")
+        return 0
     for e in load_entries():
         print(f"  {e['error_key']:<38} 재발 {e['recurrence_count']:>3}회  서명 {len(e['signatures'])}개")
         print(f"      {e['symptom'][:90]}")
@@ -227,7 +312,19 @@ def main() -> int:
                    help="고친 파일 (반복 가능)")
     r.add_argument("--fix-note", default="", help="조치 요약")
 
-    sub.add_parser("list", help="등록 목록")
+    pr = sub.add_parser("promote", help="후보를 active 로 승격 (원인을 밝혔을 때)")
+    pr.add_argument("--key", required=True, help="auto.xxxx 형태의 후보 키")
+    pr.add_argument("--cause", required=True)
+    pr.add_argument("--prevention", required=True)
+    pr.add_argument("--symptom", default="", help="증상 문구 다듬기 (선택)")
+    pr.add_argument("--rename", default="", help="읽기 좋은 키로 변경 (선택)")
+    pr.add_argument("--signature", action="append", default=[], help="서명 교체 (선택)")
+    pr.add_argument("--fix-commit", action="append", default=[])
+    pr.add_argument("--fix-file", action="append", default=[])
+    pr.add_argument("--fix-note", default="")
+
+    ls = sub.add_parser("list", help="등록 목록")
+    ls.add_argument("--candidates", action="store_true", help="원인 미상 후보만")
     a = ap.parse_args()
 
     if a.cmd == "match":
@@ -235,7 +332,9 @@ def main() -> int:
         return do_match(text, a.bump, a.record, a.source)
     if a.cmd == "register":
         return do_register(a)
-    return do_list()
+    if a.cmd == "promote":
+        return do_promote(a)
+    return do_list(getattr(a, "candidates", False))
 
 
 if __name__ == "__main__":
