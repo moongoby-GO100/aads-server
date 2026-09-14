@@ -77,6 +77,10 @@ declare -A PROJECT_WORKDIR=(
     ["GO100"]="/root/kis-autotrade-v4"
     ["SF"]="/data/shortflow"
     ["NTV2"]="/srv/newtalk-v2"
+    # ACCT(회계) 는 jinah244(5.104.85.244) 에만 있다. /srv/biseo 는 회계 원본 자료
+    # 5.4G 가 섞인 상위 디렉터리이고, 실제 git 저장소는 그 두 단계 아래다.
+    # (origin: github.com/dossau2018-oss/biseo, .git 48M)
+    ["ACCT"]="/srv/biseo/회계비서/회계비서"
 )
 
 AADS_DASHBOARD_WORKDIR="${AADS_DASHBOARD_WORKDIR:-/root/aads/aads-dashboard}"
