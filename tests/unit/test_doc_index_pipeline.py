@@ -684,13 +684,18 @@ def test_auto_rag_does_not_block_first_token():
     assert cb._AUTO_RAG_WAIT_MS <= 2000, "상한이 임베딩 시간(2.5초)보다 크면 의미가 없다"
 
     src = inspect.getsource(cb._build_auto_rag_layer_bounded)
+    # 주석은 뺀다 — 왜 그렇게 고쳤는지 설명하느라 옛 코드를 인용한다.
+    # (2026-09-14 이 검사를 처음 쓸 때 주석의 `wait_for` 를 잡았다.)
+    code = "\n".join(
+        line for line in src.splitlines() if not line.lstrip().startswith("#")
+    )
 
     # 늦은 근거를 **버리지 않는다.** 버리면 그 질문에 대한 근거가 영영 안 붙는다.
     assert "_late_rag" in src and "add_done_callback" in src
 
     # 작업을 취소하면 안 된다 — 뒤에서 마저 끝내야 다음 턴에 쓴다.
-    assert "wait_for" not in src, "wait_for 는 상한에서 작업을 취소한다"
-    assert "asyncio.wait(" in src
+    assert "wait_for" not in code, "wait_for 는 상한에서 작업을 취소한다"
+    assert "asyncio.wait(" in code
 
     # 조용히 빼면 안 된다. 근거 없이 답한 것을 대표님이 모르시면 안 된다.
     assert "늦어" in src
