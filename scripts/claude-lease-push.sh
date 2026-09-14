@@ -12,7 +12,7 @@ set -euo pipefail
 
 SLOT_ROOT="${CLAUDE_RELAY_SLOT_HOME_ROOT:-/root/.claude-relay-slots}"
 SLOTS="${CLAUDE_LEASE_SLOTS:-1 2}"
-TARGETS="${CLAUDE_LEASE_TARGETS:-root@5.104.86.14 root@114.207.244.86 root@5.104.85.244}"
+TARGETS="${CLAUDE_LEASE_TARGETS:-root@5.104.86.14 root@114.207.244.86}"
 LEASE_ROOT="${CLAUDE_LEASE_REMOTE_ROOT:-/root/.claude-lease}"
 MIN_REMAIN="${CLAUDE_LEASE_MIN_REMAINING_SEC:-300}"
 LOG_FILE="${CLAUDE_LEASE_LOG:-/root/aads/logs/claude-lease-push.log}"

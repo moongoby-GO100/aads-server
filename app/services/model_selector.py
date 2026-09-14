@@ -2691,11 +2691,18 @@ async def _stream_litellm_anthropic(
     _MAX_RETRIES = 10
     _MAX_TOOL_TURNS = 50
     _user_anthropic_key = await _get_session_user_api_key(session_id, "anthropic")
+    # BYOK 키가 OAuth 토큰(sk-ant-oat*, Claude Code setup-token)이면 x-api-key 가 아니라
+    # Authorization: Bearer 로 보내야 한다. 여기서 무조건 x-api-key 를 쓰던 탓에
+    # 구독 토큰을 등록한 사용자는 401 을 10회 재시도한 끝에 실패했다.
+    # 2026-09-14 실측: 동일 토큰 Bearer 200 / x-api-key 401.
     _headers = {
-        "x-api-key": _user_anthropic_key or LITELLM_API_KEY,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
+    if _user_anthropic_key.startswith("sk-ant-oat"):
+        _headers["authorization"] = "Bearer {}".format(_user_anthropic_key)
+    else:
+        _headers["x-api-key"] = _user_anthropic_key or LITELLM_API_KEY
     _url = (
         "https://api.anthropic.com/v1/messages"
         if _user_anthropic_key

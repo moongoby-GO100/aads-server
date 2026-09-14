@@ -1,0 +1,44 @@
+[Unit]
+# 진아실장 서버(5.104.85.244, vmi3535008) 전용 러너 — ACCT(회계) 프로젝트.
+#
+# CEO 지시 2026-09-14: "진아서버에는 진아계정만 유지하고 사용한다."
+# 그래서 이 유닛은 AADS 릴레이 슬롯을 쓰지 않는다(RUNNER_USE_SLOT_CREDENTIALS=0).
+# Claude 는 /usr/local/bin/claude-aads 를 거치고, 그 래퍼는 /etc/biseo.env 의
+# 진아 OAuth 토큰만 읽는다. lease.env 는 이 서버에 배달되지 않는다.
+#
+# 동시 실행을 2로 묶는 이유: 계정이 개인 구독 하나뿐이라 한도를 태우면
+# 진아실장 본인 작업까지 같이 막힌다. 공용 서버(4)보다 보수적으로 둔다.
+Description=AADS Pipeline Runner — ACCT (jinah244)
+After=network.target aads-db-tunnel.service
+Wants=aads-db-tunnel.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root
+ExecStart=/root/scripts/pipeline-runner.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aads-pipeline-runner
+EnvironmentFile=-/root/.config/aads-runner.env
+Environment=DB_MODE=psql
+Environment=RUNNER_PROJECTS=ACCT
+Environment=RUNNER_ENGINE_MODE=general
+Environment=AADS_RUNNER_HOST_NAME=jinah244
+Environment=RUNNER_USE_SLOT_CREDENTIALS=0
+Environment=RUNNER_CLAUDE_CLI_BIN=/usr/local/bin/claude-aads
+Environment=AADS_API_URL=https://aads.newtalk.kr
+Environment=POLL_INTERVAL=5
+Environment=MAX_RUNTIME=7200
+Environment=MAX_RETRIES=2
+Environment=MAX_CONCURRENT_GLOBAL=2
+Environment=MAX_CONCURRENT_PER_PROJECT=2
+Environment=HOME=/root
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+LimitNOFILE=65535
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
