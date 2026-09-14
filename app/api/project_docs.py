@@ -894,7 +894,10 @@ async def scan_all_docs(force: bool = Query(False, description="캐시 무시하
 
 
 @router.get("/approvals/pending")
-async def approvals_pending(limit: int = Query(50, ge=1, le=200)):
+async def approvals_pending(
+    limit: int = Query(50, ge=1, le=200),
+    session_id: str = Query("", max_length=64, description="이 세션이 올린 요청만"),
+):
     """CEO 승인 대기 목록.
 
     2026-09-14 CEO 지시 — "실매매조건은 나의 승인후 진행해야지".
@@ -911,10 +914,11 @@ async def approvals_pending(limit: int = Query(50, ge=1, le=200)):
                    to_char(created_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') AS at,
                    decision
             FROM agent_permission_requests
-            WHERE decision IS NULL
+            WHERE decision = 'pending' AND expires_at > now()
+              AND ($2 = '' OR requested_by = $2)
             ORDER BY created_at DESC LIMIT $1
             """,
-            limit,
+            limit, session_id,
         )
     except Exception as exc:
         logger.warning("approvals_pending_failed", error=str(exc))
@@ -954,8 +958,8 @@ async def approvals_decide(
                SET decision = $2, reason = NULLIF($3, ''), decided_by = $4,
                    decided_at = now(), updated_at = now(),
                    expires_at = CASE WHEN $2 = 'approved'
-                                     THEN now() + interval '2 hours' ELSE NULL END
-             WHERE id = $1::uuid AND decision IS NULL
+                                     THEN now() + interval '2 hours' ELSE now() END
+             WHERE id = $1::uuid AND decision = 'pending' AND expires_at > now()
             RETURNING id::text, action_type, decision
             """,
             request_id, decision, reason, decided_by,

@@ -136,24 +136,47 @@ async def request_approval(
     work_key = f"{session_id[:8]}:{tool_name}:{hash(summary) & 0xFFFFFFF:07x}"
     try:
         pool = get_pool()
+        # `decision` 은 NOT NULL 이고 기본값이 'pending' 이다. NULL 로 찾으면
+        # 영원히 안 맞는다 — 2026-09-14 첫 구현에서 그래서 대기 목록이
+        # 항상 비어 있었다.
         existing = await pool.fetchval(
             "SELECT id::text FROM agent_permission_requests "
-            "WHERE work_key = $1 AND decision IS NULL "
+            "WHERE work_key = $1 AND decision = 'pending' AND expires_at > now() "
             "ORDER BY created_at DESC LIMIT 1",
             work_key,
         )
         if existing:
             return existing
+
+        # tenant_id 는 NOT NULL 이다. 세션에서 가져온다.
+        tid = tenant_id or ""
+        if not tid and session_id:
+            try:
+                tid = str(await pool.fetchval(
+                    "SELECT tenant_id::text FROM chat_sessions WHERE id = $1::uuid",
+                    session_id,
+                ) or "")
+            except Exception:
+                tid = ""
+        if not tid:
+            logger.warning("live_trading_gate_no_tenant session=%s", session_id[:8])
+            return None
+
+        # 기본 만료가 10분이다. CEO 가 10분 안에 못 보면 요청이 사라진다 —
+        # 그러면 담당은 막히기만 하고 승인받을 방법이 없다. 24시간으로 둔다.
         return await pool.fetchval(
             """
             INSERT INTO agent_permission_requests
                 (tenant_id, work_key, origin, action_type, action_summary,
-                 risk_level, requested_by, approval_scope, max_executions, created_at)
-            VALUES ($1::uuid, $2, 'chat_session', $3, $4, 'high', $5, 'single', 1, now())
+                 risk_level, decision, requested_by, approval_scope,
+                 max_executions, expires_at, created_at)
+            VALUES ($1::uuid, $2, 'chat_session', $3, $4, 'high', 'pending', $5,
+                    $6::jsonb, 1, now() + interval '24 hours', now())
             RETURNING id::text
             """,
-            tenant_id or None, work_key, tool_name,
+            tid, work_key, tool_name,
             f"[실매매] {reason}\n{summary}", session_id or "unknown",
+            '{"scope": "single_call"}',
         )
     except Exception as exc:
         logger.warning("live_trading_gate_request_failed", error=str(exc))
@@ -169,8 +192,7 @@ async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: st
     try:
         row = await get_pool().fetchrow(
             "SELECT decision, max_executions FROM agent_permission_requests "
-            "WHERE work_key = $1 AND decision = 'approved' "
-            "AND (expires_at IS NULL OR expires_at > now()) "
+            "WHERE work_key = $1 AND decision = 'approved' AND expires_at > now() "
             "ORDER BY decided_at DESC LIMIT 1",
             work_key,
         )

@@ -94,3 +94,45 @@ def test_gate_can_be_switched_off_without_deploy():
 
     src = inspect.getsource(live_trading_guard)
     assert "LIVE_TRADING_GATE_ENABLED" in src
+
+
+def test_pending_uses_pending_not_null():
+    """`decision` 은 NOT NULL 이고 기본값이 'pending' 이다.
+
+    2026-09-14 첫 구현에서 `WHERE decision IS NULL` 로 찾아 **대기 목록이
+    항상 비어 있었다.** 차단은 되는데 승인할 대상이 안 보이니 담당은
+    막히기만 하고 풀릴 길이 없었다 — 게이트가 막다른 길이 된다.
+    """
+    import inspect
+
+    from app.services import live_trading_guard
+    from app.api import project_docs
+
+    for mod in (live_trading_guard, project_docs):
+        src = inspect.getsource(mod)
+        assert "decision IS NULL" not in src, f"{mod.__name__} 이 NULL 로 대기를 찾고 있다"
+
+    src = inspect.getsource(live_trading_guard.request_approval)
+    assert "decision = 'pending'" in src
+
+
+def test_request_outlives_default_expiry():
+    """기본 만료가 10분이다. CEO 가 그 안에 못 보면 요청이 사라진다."""
+    import inspect
+
+    from app.services import live_trading_guard
+
+    src = inspect.getsource(live_trading_guard.request_approval)
+    assert "expires_at" in src and "24 hours" in src, (
+        "요청이 기본 10분 만료를 그대로 쓰고 있다"
+    )
+
+
+def test_tenant_is_resolved_not_null():
+    """tenant_id 는 NOT NULL 이다. 없으면 요청 자체가 안 남는다."""
+    import inspect
+
+    from app.services import live_trading_guard
+
+    src = inspect.getsource(live_trading_guard.request_approval)
+    assert "FROM chat_sessions" in src, "세션에서 tenant 를 못 가져오고 있다"
