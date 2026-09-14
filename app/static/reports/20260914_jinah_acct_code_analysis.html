@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>진아 저장소 CTO 인수 분석 보고서 — 2026-09-14</title>
+<style>
+  @page { size: A4; margin: 18mm 15mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+    line-height: 1.65;
+    color: #1c2230;
+    background: #f5f6f8;
+    margin: 0;
+    padding: 0;
+    font-size: 14.5px;
+  }
+  .page {
+    max-width: 980px;
+    margin: 0 auto;
+    background: #fff;
+    padding: 40px 48px 80px;
+  }
+  h1, h2, h3, h4 { color: #10131c; font-weight: 700; line-height: 1.35; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  h2 {
+    font-size: 20px;
+    margin-top: 46px;
+    padding-bottom: 8px;
+    border-bottom: 3px solid #2b3a67;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  h2 .num { color: #7b8cc4; font-variant-numeric: tabular-nums; }
+  h3 { font-size: 16.5px; margin-top: 28px; color: #23305c; }
+  h4 { font-size: 14.5px; margin-top: 18px; }
+  p { margin: 10px 0; }
+  a { color: #2b57c4; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    background: #eef0f5;
+    border: 1px solid #dde1ea;
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 12.8px;
+    color: #a3123f;
+    word-break: break-all;
+  }
+  pre {
+    background: #161a24;
+    color: #d9e0ef;
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+  pre code { background: none; border: none; color: inherit; padding: 0; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0 22px;
+    font-size: 13px;
+  }
+  caption {
+    caption-side: top;
+    text-align: left;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: #4b568c;
+    margin-bottom: 6px;
+  }
+  th, td {
+    border: 1px solid #dfe3ec;
+    padding: 7px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: #2b3a67;
+    color: #fff;
+    font-weight: 600;
+    font-size: 12.5px;
+  }
+  tr:nth-child(even) td { background: #f7f8fc; }
+  .badge {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 20px;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #fff;
+  }
+  .p0 { background: #c1272d; }
+  .p1 { background: #d97b21; }
+  .p2 { background: #2b7a4b; }
+  .unconfirmed { color: #b25400; font-weight: 600; }
+  .summary-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin: 22px 0 10px;
+  }
+  .card {
+    background: linear-gradient(160deg, #2b3a67, #1c2745);
+    color: #fff;
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card .label { font-size: 11px; opacity: .75; margin-bottom: 4px; }
+  .card .value { font-size: 17px; font-weight: 700; }
+  .card .sub { font-size: 11px; opacity: .8; margin-top: 3px; }
+  .toc {
+    background: #f0f2f8;
+    border: 1px solid #dde1ea;
+    border-radius: 10px;
+    padding: 18px 24px;
+    margin: 26px 0;
+  }
+  .toc ol { margin: 6px 0 0; padding-left: 20px; columns: 2; column-gap: 30px; }
+  .toc li { margin: 4px 0; break-inside: avoid; }
+  .note {
+    background: #fff7e6;
+    border-left: 4px solid #e0a020;
+    padding: 10px 16px;
+    border-radius: 0 6px 6px 0;
+    margin: 14px 0;
+    font-size: 13px;
+  }
+  .finding {
+    background: #fdeeee;
+    border-left: 4px solid #c1272d;
+    padding: 10px 16px;
+    border-radius: 0 6px 6px 0;
+    margin: 14px 0;
+    font-size: 13px;
+  }
+  .quote {
+    border-left: 3px solid #9aa6cc;
+    padding: 6px 14px;
+    color: #444d6e;
+    font-style: italic;
+    margin: 12px 0;
+    font-size: 13px;
+  }
+  footer {
+    margin-top: 60px;
+    padding-top: 16px;
+    border-top: 1px solid #dde1ea;
+    font-size: 11.5px;
+    color: #888;
+  }
+  .backtotop { font-size: 11.5px; }
+  @media print {
+    body { background: #fff; }
+    .page { padding: 0; max-width: none; }
+    h2 { break-before: page; }
+    h2:first-of-type { break-before: avoid; }
+    table, pre { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>진아(眞我) 저장소 — CTO 인수 분석 보고서</h1>
+<p style="color:#666; font-size:13px;">대상 저장소 <code>/srv/biseo/회계비서/회계비서</code> · 신임 CTO 관점 코드/아키텍처 실사(Due Diligence)</p>
+
+<div class="summary-cards">
+  <div class="card">
+    <div class="label">저장소명</div>
+    <div class="value">회계비서 (진아)</div>
+    <div class="sub">/srv/biseo/회계비서/회계비서</div>
+  </div>
+  <div class="card">
+    <div class="label">추적 파일 수 (git)</div>
+    <div class="value">도구 295 .py · 규칙본문 29 .md</div>
+    <div class="sub">전체 로컬 파일 약 15,300개(브라우저 프로필·자료 포함, 미추적 다수)</div>
+  </div>
+  <div class="card">
+    <div class="label">주요 언어</div>
+    <div class="value">Python (stdlib 중심)</div>
+    <div class="sub">+ Markdown 규칙서, HTML/JS 채팅앱, PowerShell/Bat</div>
+  </div>
+  <div class="card">
+    <div class="label">분석 일시 / 계정</div>
+    <div class="value">2026-09-14 KST</div>
+    <div class="sub">분석 계정: 진아 Claude (claude-sonnet-5)</div>
+  </div>
+</div>
+
+<div class="note">
+본 보고서는 저장소 내 실제 파일을 직접 읽어(직접 조사 + 5개 조사 에이전트 병렬 파견) 작성했다. 확인하지 못한 부분은 <span class="unconfirmed">미확인</span>으로 명시했으며, 추측으로 채운 서술은 없다. 통장 잔액·거래처명·사업자번호·비밀번호 등 민감한 실제 값은 어디에도 인용하지 않았다 — 구조와 스키마만 기술한다.
+</div>
+
+<div class="toc">
+<strong>목차</strong>
+<ol>
+  <li><a href="#sec1">저장소 목적과 도메인</a></li>
+  <li><a href="#sec2">디렉터리 구조</a></li>
+  <li><a href="#sec3">실행 진입점</a></li>
+  <li><a href="#sec4">외부 연동</a></li>
+  <li><a href="#sec5">데이터 흐름</a></li>
+  <li><a href="#sec6">자동화 규칙 엔진</a></li>
+  <li><a href="#sec7">상태/기억 관리</a></li>
+  <li><a href="#sec8">코드 품질 리스크</a></li>
+  <li><a href="#sec9">AADS 공용화 관점</a></li>
+  <li><a href="#sec10">우선순위별 개선 권고 (P0/P1/P2)</a></li>
+  <li><a href="#sec11">조사 방법과 한계</a></li>
+</ol>
+</div>
+
+<h2 id="sec1"><span class="num">1.</span> 저장소 목적과 도메인</h2>
+
+<p>이 저장소는 한 중소기업(라일론 등으로 추정되는 복수 계열사)의 <strong>회계 실무를 대행하는 AI 비서 "진아"</strong>의 서버 측 코드·규칙·상태 전체다. <code>/srv/biseo/CLAUDE.md</code>(상위 자료 창고 안내)와 <code>/srv/biseo/회계비서/회계비서/CLAUDE.md</code>(진아 본체 지침, 5,938바이트, 목차만 두고 본문은 <code>규칙/본문/</code>에 분리)를 읽어 확인했다.</p>
+
+<p>자동화 대상 업무는 <code>시작하기.md</code>와 <code>.claude/agents/</code> 6개 부서 정의에서 명시적으로 드러난다: <strong>통장/카드 거래를 위하고(WEHAGO/SmartA) 업로드용 전표로 변환</strong>, <strong>전자세금계산서 대량발행 엑셀 생성 및 발행 전 검증</strong>, <strong>은행·카드·매출채권 대사(reconciliation)</strong>, <strong>계정별원장/재무제표 증감분석</strong>, <strong>부가세·불공제·적격증빙 감사</strong>, 그리고 <strong>WEHAGO 화면 자체를 브라우저로 조작</strong>(입력까지만, 전송·발행·마감은 사람)하는 것이다.</p>
+
+<p>이 시스템의 설계 철학은 <code>시작하기.md</code> 121~137행에 명시된 "일부러 안 하는 것" 3원칙으로 요약된다: ① 위하고 화면의 최종 실행 버튼(전송·발행·마감)은 절대 대신 누르지 않는다 ② 규칙에 없는 애매한 거래는 채워 넣지 않고 <code>확인필요</code> 시트로 분리한다 ③ 금액 계산은 사람 눈이 아니라 항상 코드로 한다. 이 세 원칙은 <code>규칙/본문/21_...절대_규칙_어기지_말_것.md</code>(577행, 16개 절대규칙 수록)에서 강제 규범으로 재확인된다.</p>
+
+<p>또한 이 시스템은 단순한 "봇"이 아니라 <strong>사람 역할을 모사한 조직도</strong>를 코드로 구현한다 — 진아(비서실장/오케스트레이터), 서린(감사실장, 결과물 대조·반려 전담), 진식(GPT 기반 기술감사관, 코드 수정 검증), 부서장(재무부장·인사부장·교육부장), 실무팀 6개(전표팀·세금계산서팀·대사팀·분석팀·감사팀·위하고팀)로 구성된 다층 승인 구조가 <code>.claude/agents/</code>와 <code>도구/_하네스.py</code>·<code>도구/_감찰관.py</code>에 코드화되어 있다.</p>
+
+<h2 id="sec2"><span class="num">2.</span> 디렉터리 구조</h2>
+
+<table>
+<caption>표 1 — 최상위 주요 디렉터리 역할</caption>
+<thead><tr><th>경로</th><th>역할</th><th>git 추적</th></tr></thead>
+<tbody>
+<tr><td><code>도구/</code></td><td>핵심 로직 295개 .py 파일. 오케스트레이션(<code>_하네스.py</code>), 게이트(<code>_감찰관.py</code>), 검증(<code>검증.py</code>/<code>_검증.py</code>/<code>교차검증.py</code>), WEHAGO 화면조작, OCR, 금고, 근태 등 기능별로 밑줄 접두 한글 파일명으로 나열되어 있다.</td><td>예 (*.py, *.md만)</td></tr>
+<tr><td><code>규칙/</code></td><td>사람이 읽는 지침서 저장소. <code>본문/</code> 29개 md(번호순 로딩), <code>PC연장/</code>(Windows 배치 스크립트), <code>서버설정/</code>(systemd 사본), <code>코덱스_체크리스트/</code>(카드사별 조작 체크리스트).</td><td>예 (*.md, 서버설정 일부)</td></tr>
+<tr><td><code>.claude/agents/</code></td><td>Claude Code 하위 에이전트(부서) 정의 10개 — voucher/tax-invoice/reconciliation/analysis/audit/wehago 6개 실무팀 + 재무부장·인사부장·교육부장·서린(감사실장) 4개 관리자급.</td><td>미확인(디렉터리 자체는 gitignore 화이트리스트 목록에 명시적 예외가 없어 추적 여부 별도 확인 필요)</td></tr>
+<tr><td><code>채팅앱/</code></td><td>폰/PC 공용 웹 UI. stdlib 기반 <code>server.py</code>(2,966줄) + 정적 HTML/PWA 자산 + API 모듈 7개(<code>_하네스api.py</code> 등).</td><td>예 (*.py/js/css/html)</td></tr>
+<tr><td><code>기억/</code></td><td>단기·장기 기억 저장소. 사업자 조회 캐시, 환율, 검사 결과, 지시대장, 공통/회사별 결정 로그 등 60여 개 jsonl/json/md 파일.</td><td>미추적</td></tr>
+<tr><td><code>금고/</code></td><td>로그인 자격증명 볼트. 권한 700/600으로 OS 레벨 제한, AES-256-GCM 암호화 저장(<code>도구/_금고.py</code>).</td><td>미추적</td></tr>
+<tr><td><code>대화기록/</code></td><td>Claude Code 세션 원본 사본(<code>원본/</code>), 사람이 읽는 요약(<code>전문/</code>, <code>오더/</code>, <code>일꾼/</code>). 1.7GB+, 계속 증가.</td><td>미추적</td></tr>
+<tr><td><code>작업/원본, 작업/결과, 작업/받은자료</code></td><td>업무 입출력 실 데이터. <code>결과/</code>만 10,300개+ 파일의 대형 아카이브.</td><td>미확인(작업 폴더는 *.md 외 데이터 파일은 gitignore 상 미노출로 추정)</td></tr>
+<tr><td>루트 산개 .py 파일 15개+ (<code>fable조이기.py</code> 등)</td><td>조사 결과 상시 실행 모듈이 아니라 특정 날짜 1회성 패치 스크립트로 확인됨(§8 참조).</td><td>예</td></tr>
+</tbody>
+</table>
+
+<h2 id="sec3"><span class="num">3.</span> 실행 진입점</h2>
+
+<table>
+<caption>표 2 — 실행 진입점(.bat/.py __main__)</caption>
+<thead><tr><th>파일</th><th>실행 방식</th><th>무엇을 시작하는가</th></tr></thead>
+<tbody>
+<tr><td><code>실행.bat</code></td><td><code>python 도구/_세션.py sync --safe</code> 후 <code>python 채팅앱/server.py</code></td><td>채팅앱 웹서버(포트 8765, <code>BISEO_PORT</code>로 변경 가능) 구동 — 폰/PC 공용 진입점</td></tr>
+<tr><td><code>터미널.bat</code></td><td><code>도구/_세션.py read</code>로 현재 세션ID 조회 → <code>claude --resume &lt;SID&gt;</code> 또는 신규 <code>claude</code></td><td>PC 터미널 세션을 폰 채팅앱과 <strong>동일한 Claude Code 세션</strong>에 강제 합류(창구 단일화)</td></tr>
+<tr><td><code>위하고_켜기.bat</code></td><td>Playwright Chromium 미설치 시 설치 후 <code>python 도구/위하고_워커.py</code></td><td>WEHAGO 전용 상주 브라우저(persistent profile) 기동</td></tr>
+<tr><td><code>중계보기.bat</code></td><td><code>python 채팅앱/중계보기.py</code></td><td>실행 로그 실시간 중계 뷰어</td></tr>
+<tr><td><code>isacom-screen.cmd</code></td><td><code>python viewrelay.py</code></td><td>별도 화면/탭 릴레이 서비스(용도 세부는 미확인)</td></tr>
+<tr><td><code>도구/_감찰관.py</code></td><td>CLI (<code>관문 일시작</code>, <code>끝냄 &lt;번호&gt;</code>, <code>관문 종료</code>, <code>규칙읽음</code>, <code>아침</code>)</td><td>사장님 지시 이행 여부를 강제하는 게이트(§6 참조)</td></tr>
+<tr><td><code>도구/_하네스.py</code></td><td>CLI (<code>오더</code>, <code>상태</code>, <code>보기</code>, <code>실황</code>, <code>멈춤</code>, <code>고치기</code>)</td><td>사장님 오더를 회사/부서별 디스크 상태로 영속시켜 세션이 끊겨도 이어가는 비동기 오케스트레이터(4,885줄)</td></tr>
+</tbody>
+</table>
+
+<p><code>채팅앱/server.py</code>는 Flask/FastAPI가 아니라 Python 표준 라이브러리 <code>http.server</code> 기반 자체 구현이다. Claude Code CLI는 API 직접 호출이 아니라 <code>subprocess</code>로 감싸 호출한다: <code>claude -p &lt;message&gt; --output-format stream-json --permission-mode acceptEdits --settings /etc/biseo-hooks.json --allowed-tools ... --model claude-opus-5 [--resume &lt;session_id&gt;]</code>. <code>ACCESS_CODE</code>는 <code>BISEO_APP_PW</code> 환경변수 또는 <code>.앱비번</code>(600 권한) 파일에서 읽으며 없으면 서버가 기동하지 않는다. 반면 <code>NTFY_TOPIC</code>(폰 알림 토픽)은 소스에 평문으로 하드코딩되어 있다(§8 리스크 참조).</p>
+
+<h2 id="sec4"><span class="num">4.</span> 외부 연동</h2>
+
+<table>
+<caption>표 3 — 외부 시스템 연동 방식</caption>
+<thead><tr><th>연동 대상</th><th>관련 파일</th><th>방식</th></tr></thead>
+<tbody>
+<tr><td>Claude Code (Anthropic)</td><td><code>채팅앱/server.py</code> (<code>build_cmd</code>, <code>find_claude</code>)</td><td><code>claude</code> CLI를 <code>subprocess.Popen</code>으로 감쌈. Anthropic SDK 직접 import는 발견 못 함 — 오히려 <code>도구/_시험모두.py</code>에 <code>requests/httpx/openai/anthropic</code> 등을 "들여오면 안 되는 것"으로 명시적으로 금지하는 테스트가 있음</td></tr>
+<tr><td>Codex/GPT (OpenAI, "진식")</td><td><code>도구/교차검증.py</code></td><td><code>codex exec --json</code> subprocess 호출, <code>~/.codex/sessions/**/rollout-*.jsonl</code>에서 결과 추적. 코드 수정 검증·부가세 교차검증 전담</td></tr>
+<tr><td>WEHAGO(SmartA)</td><td><code>도구/위하고_워커.py</code>(Playwright persistent Chromium), <code>도구/위하고.py</code>(JSON 명령 클라이언트)</td><td>클릭/입력은 RealGrid 캔버스 위젯 좌표계산 + CDP <code>insertText</code> 조합. 로그인·2차인증·전송·발행·마감은 코드에 없고 사람/코덱스가 수행하도록 명시. 자격증명 하드코딩은 두 파일 모두에서 발견되지 않음</td></tr>
+<tr><td>국세청(사업자상태조회)</td><td><code>기억/_사업자/</code> 캐시 대상 API 호출부</td><td>조회 결과를 <code>b_no/b_stt/tax_type</code> 구조로 캐시. 호출 코드 세부는 이번 조사 범위에서 상세 확인 못함(미확인)</td></tr>
+<tr><td>OCR(영수증)</td><td><code>도구/_ocr.py</code>, <code>도구/_스캔처리.py</code></td><td>Tesseract(kor+eng) 로컬 실행 → 신뢰도 60 기준 저신뢰 항목만 Claude vision으로 재확인하는 하이브리드 파이프라인</td></tr>
+<tr><td>폰 알림</td><td><code>채팅앱/server.py</code> <code>notify()</code></td><td>ntfy.sh 공개 토픽으로 HTTP POST. 토픽 문자열이 소스에 평문 존재</td></tr>
+<tr><td>MCP 서버</td><td><code>/srv/biseo/회계비서/회계비서/.mcp.json</code></td><td>저장소에 커밋된 설정은 <code>{"mcpServers": {}}</code>로 비어 있음. 이번 세션이 쓰는 accountingwiki/opendart MCP는 이 파일이 아닌 별도(전역) 설정에서 온 것으로 추정 — 정확한 출처는 미확인</td></tr>
+</tbody>
+</table>
+
+<div class="note">
+<strong>설계상 특징 — 화면조작과 판단의 분리.</strong> <code>규칙/본문/02_...역할_변경.md</code>에 따르면 2026-09-05부로 WEHAGO 등 실제 화면조작은 Codex(GPT-6-Astra)가 전담하고, Claude(진아)는 서버 유지보수와 오케스트레이션만 담당하도록 역할이 분리되었다. 이는 코드 저장소 안에서도 <code>도구/위하고.py</code>(명령 클라이언트)와 <code>도구/교차검증.py</code>(GPT 호출)가 분리되어 있는 것으로 뒷받침된다.
+</div>
+
+<h2 id="sec5"><span class="num">5.</span> 데이터 흐름</h2>
+
+<table>
+<caption>표 4 — 입력 → 처리 → 출력 흐름</caption>
+<thead><tr><th>입력</th><th>처리(핵심 로직)</th><th>출력</th><th>담당 에이전트</th></tr></thead>
+<tbody>
+<tr><td>통장 거래내역(위하고 조회/작업/원본)</td><td><code>규칙/계정과목_매핑.md</code> 키워드→계정과목 매핑 → <code>도구/검증.py</code>의 <code>check_balance</code>(대차평형)·<code>check_bank_rollforward</code>(기초+입금-출금=기말)</td><td><code>작업/결과/YYYYMM_구분_생성일.xlsx</code> (업로드 시트 + 확인필요 시트)</td><td>voucher-team (전표팀)</td></tr>
+<tr><td>신용카드 매입·매출 원본</td><td>동일 매핑 규칙 + 불공제 판정 → <code>도구/검증.py</code></td><td>상동, 카드 전용 엑셀 서식 컬럼</td><td>voucher-team</td></tr>
+<tr><td>매출 발행 대상 자료</td><td><code>check_bizno</code>(사업자번호 체크섬) · <code>check_vat</code>(세액=공급가액×10%) · 중복/작성일자 검증</td><td><code>작업/결과/YYYYMM_세금계산서_발행분_생성일.xlsx</code> (발행/보류/검증요약 시트)</td><td>tax-invoice-team</td></tr>
+<tr><td>통장↔장부, 카드사↔국세청↔장부, 채권↔수금</td><td>금액+일자(±3일) 매칭 → 조정표(요약/일치/장부만/상대만/기간차이)</td><td><code>작업/결과/YYYYMM_대사_구분_생성일.xlsx</code></td><td>reconciliation-team</td></tr>
+<tr><td>계정별원장/재무제표(위하고 다운로드)</td><td>증감·기여도 분석 (세부 로직 미확인 — 이번 조사 범위 밖)</td><td>분석 보고서 md/xlsx</td><td>analysis-team</td></tr>
+<tr><td>전표·세금계산서·경비 증빙</td><td>부가세 오류·불공제·중복·적격증빙 검증, 필요시 <code>교차검증.py</code>로 GPT와 다회전 토론</td><td>감사 결과 보고 (형식 미확인)</td><td>audit-team</td></tr>
+</tbody>
+</table>
+
+<div class="finding">
+<strong>발견 — 이름 근접으로 인한 혼동 위험.</strong> 시작하기.md·voucher-team.md·tax-invoice-team.md가 실제로 참조하는 검증 라이브러리는 밑줄 없는 <code>도구/검증.py</code>(9.8KB, <code>check_bizno/check_vat/check_balance/check_bank_rollforward/find_duplicates</code> 구현)인데, 이름이 거의 같은 <code>도구/_검증.py</code>(79,900B, 1,474줄)는 전혀 다른 시스템 — 하네스·서린·진식 간 오더 전달·세션 체이닝 오케스트레이터다. 파일명 한 글자(밑줄) 차이로 완전히 다른 두 시스템이 구분되는 구조는 향후 유지보수자가 잘못된 파일을 수정할 리스크가 있다.
+</div>
+
+<p>위하고_양식/ 폴더는 조사 시점에 실제 양식 실물이 하나도 없고 <code>여기에_양식을_넣으세요.md</code> 안내문만 있다 — 통장/신용카드매입/신용카드매출/일반전표/매입매출전표/세금계산서 6종을 사용자가 위하고에서 직접 받아 넣어야 하며, voucher-team은 양식이 없으면 작업을 멈추도록 규정되어 있다(설계상 의도된 안전장치).</p>
+
+<h2 id="sec6"><span class="num">6.</span> 자동화 규칙 엔진</h2>
+
+<p><strong>핵심 발견 — "규칙 엔진"은 파서가 아니라 텍스트 주입 + 별도의 하드코딩 게이트 로직 두 갈래로 나뉜다.</strong></p>
+
+<p><code>규칙/본문/</code> 29개 md 파일(00~28번 접두)은 <code>도구/_감찰관.py</code>의 <code>규칙읽음()</code> 함수(약 1164~1183행)가 <code>sorted(os.listdir(...))</code>로 정렬해 통째로 이어붙여 모델 컨텍스트에 주입하는 용도로만 쓰인다. <strong>코드가 이 md의 내용을 의미적으로 파싱해 조건 분기하지 않는다</strong> — 사람(모델)이 읽고 따르는 프롬프트일 뿐이며, <code>기억/규칙읽음.jsonl</code>에는 "오늘 읽었다"는 타임스탬프만 남는다.</p>
+
+<p>반면 실제로 작업을 <strong>막거나 통과시키는 "관문"</strong>은 md 해석이 아니라 <code>_감찰관.py</code> 안의 별도 파이썬 함수들로 코드화되어 있다: <code>규칙읽었나()</code>(오늘 규칙읽음 로그 확인), <code>헛쓰나()</code>(토큰 낭비 확인), <code>역할빠짐()</code>, <code>확인없이말함()</code>, 그리고 <code>차례인가()</code>(외부 LLM — Gemini 계열, <code>--model gemini-3.8-flash-low</code> — 를 별도로 호출해 "이 작업이 사장님이 시킨 목록·순서에 맞는가"를 판정시키고, 판정을 못 받으면 무조건 막는 구조). <code>끝냄</code> 명령은 보고서 파일 존재·형식을 코드로 체크하고, <code>관문 종료</code>는 그날 진식의 완료감사 파일 존재 여부를 확인한다.</p>
+
+<table>
+<caption>표 5 — 규칙/본문 로딩 순서와 핵심 내용(발췌)</caption>
+<thead><tr><th>파일(번호)</th><th>핵심 규칙</th></tr></thead>
+<tbody>
+<tr><td>05 — 제1규칙</td><td>손대기 전 1~6월 히스토리를 반드시 먼저 본다(절대규칙)</td></tr>
+<tr><td>10 — 이중검산</td><td>장부 잔액과 사이트 실제 잔액 둘 다 맞아야 끝</td></tr>
+<tr><td>14 — 그냥 생겨나는 전표는 없다</td><td>장부에 없으면 매입매출전표·일반전표·통장·카드 넷을 다 뒤진 뒤에만 "없다"고 말함</td></tr>
+<tr><td>21 — 절대 규칙(16개, 577행, 최대 파일)</td><td>전표전송만 사람 승인 후 진아가 누름 / 세금계산서발행·마감·삭제는 사람만 / 업로드양식 임의생성 금지 / 원본 수정 금지 / PC 저장 절대금지·서버가 원본 / "멈춰"는 즉시 정지 등</td></tr>
+<tr><td>25 — 훅(hookify)</td><td><code>.claude/hookify.*.local.md</code> 8개 규칙이 도구 실행 전 자동 검사(원본수정 차단, 전표전송 차단 등) — 이 항목은 md 텍스트가 아니라 실제 Claude Code 훅 배선으로 강제됨</td></tr>
+<tr><td>27 — 감사실장 진식</td><td>GPT-5.3-codex 기반, <code>교차검증.py</code>로 호출, 전송/발행/마감 직전 등 4가지 경우 필수 호출</td></tr>
+</tbody>
+</table>
+
+<div class="finding">
+<strong>발견 — 규칙 본문 내 중복·자기모순으로 읽히는 구간.</strong> 05·09·10·11·12·13번 6개 파일이 모두 2026-08-31 같은 사장님 발언(1~6월 히스토리)을 각기 다른 각도로 반복 기술하며 통합되지 않고 누적되어 있다. 21번 파일 절대규칙 10항은 "서버수정은 새벽에만"이라는 옛 규칙이 "[2026-09-03 폐지]"로 취소선 없이 남은 채 바로 아래 새 규칙이 이어져, 빠르게 읽으면 모순으로 보인다(최신 배너가 우선하는 구조이나 시각적 명확성이 떨어짐). 또한 CLAUDE.md가 표방하는 "본문을 두 번 나르지 않는다" 원칙과 달리, 15번 파일 자체가 다른 3개 규칙 파일 전문을 인용구로 재삽입하고 있다.
+</div>
+
+<p><code>.claude/agents/</code> 하위 6개 실무팀 정의 파일 중 5개(voucher/tax-invoice/reconciliation/analysis/audit)는 말미의 "근거 원문을 붙인다" 섹션(약 26줄)이 토씨 하나 다르지 않게 동일한 텍스트로 5중 복붙되어 있다 — 공통 지침이 별도 파일로 분리되지 않은 구조적 중복이다.</p>
+
+<h2 id="sec7"><span class="num">7.</span> 상태/기억 관리</h2>
+
+<table>
+<caption>표 6 — 상태 저장 디렉터리 정리</caption>
+<thead><tr><th>경로</th><th>형식</th><th>용도</th><th>git 추적</th></tr></thead>
+<tbody>
+<tr><td><code>기억/</code></td><td>jsonl/json/md 혼재, 60여 개</td><td>사업자 조회 캐시(<code>_사업자/</code>), 환율(<code>_환율/</code>), LLM 응답 자체검사 결과(<code>_검사/</code>), 지시 파싱·세션 로그(<code>_지시대장_자취/</code>, <code>_시작읽기/</code>), 회사·부서별 결정 누적(<code>_공통/</code>, <code>_라일론/</code>), 반려 사유(<code>_되반려/</code>)</td><td>미추적</td></tr>
+<tr><td><code>금고/</code></td><td>jsonl, 디렉터리 700 / 파일 600</td><td>로그인 자격증명 볼트(AES-256-GCM 암호화: 방식·소금·씨·잠김 필드) + 열람 감사로그. <code>도구/_금고.py</code>가 잠그기/열기/넣기/꺼내기 담당</td><td>미추적</td></tr>
+<tr><td><code>대화기록/원본, /전문</code></td><td>jsonl(원본 세션 사본, 비밀 마스킹) / md(사람이 읽는 전문)</td><td>Claude Code 세션 보존. <code>_대화기록.py</code>의 <code>원본보존()</code>이 매일 04:00 systemd 타이머로 증분 갱신, 삭제 로직 없음</td><td>미추적, 1.7GB+</td></tr>
+<tr><td><code>대화기록/오더, /일꾼</code></td><td>md + <code>_색인.json</code></td><td>회사·부서별 오더-답 요약</td><td>미추적</td></tr>
+<tr><td><code>.chatlog/</code></td><td>jsonl/json/md</td><td>폰 채팅앱 실시간 로그</td><td>미추적</td></tr>
+<tr><td><code>.crosscheck/</code></td><td>json (<code>session_YYYYMMDD_HHMM.json</code>)</td><td>진식(GPT) 교차검증 세션 기록</td><td>미추적</td></tr>
+<tr><td><code>.일꾼/</code></td><td>jsonl/json/log</td><td>윈도우 원격 일꾼(브라우저 자동화) 작업 큐·접속기록</td><td>미추적</td></tr>
+</tbody>
+</table>
+
+<div class="finding">
+<strong>리스크 — 금고가 백업 목록에서 빠져 있다.</strong> <code>도구/_동기.py</code>(PC↔서버 SFTP 동기화 대상 목록)와 <code>도구/_서버백업.py</code>(전체 tar.gz 백업 대상 목록)를 grep한 결과, 자격증명이 들어 있는 <code>금고/</code>가 두 백업 경로 어디에도 포함되어 있지 않다. 서버 디스크 손상 시 이 볼트는 복구 불가능하다(다른 백업 경로 존재 가능성은 배제 못 함 — <span class="unconfirmed">미확인</span>).
+</div>
+
+<div class="finding">
+<strong>리스크 — 무제한 누적, git 밖 단일 지점.</strong> <code>.gitignore</code>(1행 "전부 막는다" 화이트리스트 방식, 16~30행 확인)는 <code>*.py</code>·<code>*.md</code>·<code>규칙/서버설정/</code> 일부만 열어주고 <code>기억/</code>·<code>금고/</code>·<code>대화기록/</code>·<code>작업/</code>은 전부 git 추적 밖이다. 코드 전체를 탐색했지만 이 데이터들을 정리/회전(rotation)하는 로직은 <code>_서버백업.py</code>의 tar.gz 스냅샷 14벌(2주치) 로테이션 외에는 발견하지 못했다 — 원본 데이터 자체는 무한 누적 구조이며, 유일한 복구 경로가 이 한 대의 서버(<code>5.104.85.244</code>)에 있는 SFTP/tar.gz 백업뿐이다.
+</div>
+
+<h2 id="sec8"><span class="num">8.</span> 코드 품질 리스크</h2>
+
+<table>
+<caption>표 7 — 대형 파일(God-file) 현황</caption>
+<thead><tr><th>파일</th><th>크기/줄 수</th><th>요약</th><th>비고</th></tr></thead>
+<tbody>
+<tr><td><code>도구/_하네스.py</code></td><td>264,879B / 4,885줄</td><td>사장님 오더를 부서별 디스크 상태로 영속시키는 오케스트레이터. CLI·상태관리·모델호출·민감판정·로깅이 한 파일에 혼재</td><td>함수 132개, class 0개, try 117 / bare except 3</td></tr>
+<tr><td><code>도구/_감찰관.py</code></td><td>207,649B / 4,233줄</td><td>사장님 발화 순서를 코드 관문으로 강제. 규칙 로딩·판정·게이트 로직 전부 포함</td><td>함수 101개, class 1개, try 99 / bare except 2</td></tr>
+<tr><td><code>도구/_외부검증.py</code></td><td>142,399B / 2,554줄</td><td>코덱스가 만든 결과물 검사 파이프라인, 민감정보 판정 포함</td><td>함수 79개, try 45 / bare except 1</td></tr>
+<tr><td><code>도구/일꾼.py</code></td><td>112,099B / 2,127줄</td><td>윈도우 원격 PC에서 카드사/은행/홈택스 로그인·조회 대행, 금고에서 비번을 받아 자동 입력</td><td>함수 44개, try 56 / bare except 0</td></tr>
+<tr><td><code>도구/_코덱스.py</code></td><td>94,867B / 1,655줄</td><td>코덱스가 무료AI 직원·딥시크 부서장을 CLI로 호출하는 창구</td><td>함수 43개, try 25 / bare except 1</td></tr>
+</tbody>
+</table>
+
+<ul>
+<li><strong>의존성 관리 파일 없음.</strong> <code>requirements.txt</code>/<code>pyproject.toml</code>/<code>setup.py</code>/<code>Pipfile</code> 저장소 어디에도 없음(<code>.venv-ytdlp/pyvenv.cfg</code>는 별개 venv 설정으로 의존성 목록이 아님). Playwright, Tesseract(pytesseract) 등 실제 사용 중인 외부 패키지의 버전이 어디에도 고정되어 있지 않다.</li>
+<li><strong>테스트 프레임워크 미사용.</strong> <code>*시험.py</code> 118개(도구/ 내 294개 .py 중 40%)가 존재하지만 전부 pytest/unittest를 쓰지 않는 수제 스크립트다 — <code>importlib.util.spec_from_file_location</code>으로 대상 모듈을 직접 로드한 뒤 자체 assert 헬퍼로 통과/실패를 집계한다. CI 연동 여부는 <span class="unconfirmed">미확인</span>(발견되지 않음).</li>
+<li><strong>이름 근접 혼동 리스크.</strong> §5에서 확인한 <code>검증.py</code>/<code>_검증.py</code>/<code>교차검증.py</code> 사례 외에도, <code>_감시관.py</code>(고쳤다는 주장 검증)와 <code>_감찰관.py</code>(사장님 순서 게이트)처럼 한 글자 차이로 완전히 다른 책임을 갖는 파일 쌍이 다수 존재한다.</li>
+<li><strong>루트 산개 1회성 스크립트.</strong> <code>fable조이기.py</code>, <code>fable코덱스요청.py</code>, <code>gpt수준.py</code>, <code>대화라우트.py</code>, <code>대화체로.py</code>, <code>맥스없앰.py</code>, <code>본체반영.py</code> 등 15개+ 파일은 상시 실행 모듈이 아니라 특정 날짜 한 번 대상 파일을 문자열 치환하기 위해 작성된 패치 스크립트로 확인됐다. 저장소 루트에 영구 보관될 이유가 약하다.</li>
+<li><strong>하드코딩 비밀.</strong> API 키·비밀번호 평문 값은 발견되지 않았다(마스킹 로직/환경변수 참조/테스트 더미로 확인 완료). 다만 <code>채팅앱/server.py</code>의 <code>NTFY_TOPIC</code>은 소스에 평문 하드코딩되어 있다(주석 자체가 "토픽 이름은 비밀번호나 마찬가지"라고 인지하고 있음에도 소스 관리에 들어가 있음). <code>도구/_사업자.py</code>·<code>도구/_스캔시험.py</code>에 사업자등록번호 형식의 예시 숫자가 docstring/테스트 데이터로 존재하나 실제 값 여부는 <span class="unconfirmed">미확인</span>.</li>
+</ul>
+
+<h2 id="sec9"><span class="num">9.</span> AADS 공용화 관점 — 재사용 가능 vs 진아 전용</h2>
+
+<table>
+<caption>표 8 — 다른 회계 고객사 재사용 가능성 평가</caption>
+<thead><tr><th>구분</th><th>재사용 가능</th><th>진아(라일론) 전용</th></tr></thead>
+<tbody>
+<tr><td>검증 로직</td><td><code>도구/검증.py</code>의 <code>check_bizno</code>(사업자번호 체크섬)·<code>check_vat</code>(세액 계산)·<code>check_balance</code>(대차평형)·<code>check_bank_rollforward</code> — 순수 함수, 고객사 무관 회계 규칙</td><td>계정과목 매핑(<code>규칙/계정과목_매핑.md</code>)은 회사별 거래처·적요 키워드가 전제라 고객사마다 새로 채워야 함</td></tr>
+<tr><td>조직/승인 구조</td><td>비서실장→부서장→실무팀→감사실장의 다층 승인 패턴, "관문" 게이트 아키텍처 자체(작업 시작 전 점검→작업→완료 검증)는 다른 고객사에도 이식 가능한 거버넌스 프레임워크</td><td><code>규칙/본문/</code>의 실제 지시 내용은 특정 사장님의 화법·과거 사고 사례를 그대로 박제한 것(예: "2026-08-31 실제 사례")이라 텍스트 자체는 이식 불가, 프레임(번호순 로딩+게이트) 구조만 재사용 가능</td></tr>
+<tr><td>WEHAGO 자동화</td><td>Playwright 기반 RealGrid 조작 패턴(좌표+CDP insertText) 자체는 WEHAGO를 쓰는 다른 고객사에도 재사용 가능</td><td>화면 셀 좌표·회사별 계정과목 코드값은 고객사마다 다시 측정해야 함</td></tr>
+<tr><td>OCR 파이프라인</td><td><code>도구/_ocr.py</code>의 Tesseract+비전 하이브리드 신뢰도 라우팅 구조는 범용</td><td>없음(범용)</td></tr>
+<tr><td>채팅앱 인프라</td><td>stdlib 기반 서버, PWA, claude CLI 래핑 구조는 범용 SaaS 골격으로 재사용 가능</td><td><code>NTFY_TOPIC</code>·<code>.앱비번</code> 등 개별 배포 설정은 고객사별로 재발급 필요</td></tr>
+<tr><td>기억/게이트 시스템</td><td><code>_감찰관.py</code>의 "관문" 설계 사상(시작 전 순서 확인→완료 시 보고서 검증→종료 시 감사 확인)은 범용 워크플로 엔진으로 추출 가치 있음</td><td>현재 구현은 라일론 특유의 지시대장·회사명이 하드코딩에 가깝게 얽혀 있어 그대로는 이식 불가 — 멀티테넌시 파라미터화 필요</td></tr>
+</tbody>
+</table>
+
+<p>결론적으로 <strong>"무엇을 검증하는가"(계정과목, 세금계산서 요건 등 도메인 규칙)와 "어떻게 승인 흐름을 강제하는가"(게이트 아키텍처)는 코드/설계 수준에서 분리되어 있지 않고 한 파일(<code>_감찰관.py</code>, <code>_하네스.py</code>) 안에 뒤섞여 있다.</strong> AADS 공용화를 진행한다면 이 두 layer를 먼저 물리적으로 분리하는 리팩터링이 선행되어야 다른 고객사에 게이트 프레임워크만 이식하는 것이 가능해진다.</p>
+
+<h2 id="sec10"><span class="num">10.</span> 우선순위별 개선 권고</h2>
+
+<table>
+<caption>표 9 — P0/P1/P2 개선 권고</caption>
+<thead><tr><th>우선순위</th><th>권고</th><th>대상 파일</th><th>이유</th><th>기대효과</th></tr></thead>
+<tbody>
+<tr>
+<td><span class="badge p0">P0</span></td>
+<td><code>금고/</code>를 백업 대상에 포함</td>
+<td><code>도구/_동기.py</code>, <code>도구/_서버백업.py</code></td>
+<td>현재 로그인 자격증명 볼트가 SFTP 동기화와 tar.gz 전체백업 목록 양쪽에서 빠져 있음(§7) — 서버 1대 손상 시 전체 계정 자격증명 유실</td>
+<td>단일 장애점(SPOF) 제거, 복구 가능성 확보</td>
+</tr>
+<tr>
+<td><span class="badge p0">P0</span></td>
+<td><code>NTFY_TOPIC</code> 하드코딩 제거, 환경변수/금고로 이관</td>
+<td><code>채팅앱/server.py</code> (해당 상수 정의부)</td>
+<td>주석 스스로 "비밀번호나 마찬가지"라 인지하면서도 git에 커밋되는 소스에 평문 존재 — 저장소 접근 권한이 있는 누구나 폰 알림을 가로챌 수 있음</td>
+<td>알림 채널 탈취 리스크 제거</td>
+</tr>
+<tr>
+<td><span class="badge p0">P0</span></td>
+<td>의존성 고정 파일 도입</td>
+<td>저장소 루트 <code>requirements.txt</code> 신규</td>
+<td>Playwright·Tesseract 등 실사용 외부 패키지 버전이 어디에도 명시되지 않아, 서버 재구축 시(규칙/서버설정/이 "사본일 뿐, 실제 도는 자리 아님"이라 명시한 것과 같은 이유로) 동일 환경 재현이 불가능</td>
+<td>재해복구(DR) 시간 단축, 환경 표류(drift) 방지</td>
+</tr>
+<tr>
+<td><span class="badge p1">P1</span></td>
+<td>God-file 5종 책임 분리</td>
+<td><code>도구/_하네스.py</code>(4,885줄), <code>도구/_감찰관.py</code>(4,233줄), <code>도구/_외부검증.py</code>, <code>도구/일꾼.py</code>, <code>도구/_코덱스.py</code></td>
+<td>CLI·상태관리·모델호출·로깅이 한 파일에 혼재해 변경 영향범위 파악이 어렵고, AADS 공용화(§9)를 위한 "도메인 규칙 vs 게이트 엔진" 분리의 전제조건</td>
+<td>유지보수성·재사용성 향상, 신규 인력 온보딩 시간 단축</td>
+</tr>
+<tr>
+<td><span class="badge p1">P1</span></td>
+<td>이름 근접 파일 리네이밍</td>
+<td><code>도구/검증.py</code> ↔ <code>도구/_검증.py</code>, <code>도구/_감시관.py</code> ↔ <code>도구/_감찰관.py</code></td>
+<td>밑줄 하나 차이로 완전히 다른 책임(도메인 검증 함수 라이브러리 vs 오케스트레이션 체이닝)을 가진 파일이 공존 — 유지보수자가 잘못된 파일을 수정할 실수 위험이 실재</td>
+<td>오조작으로 인한 회계 오류 리스크 감소</td>
+</tr>
+<tr>
+<td><span class="badge p1">P1</span></td>
+<td>테스트를 표준 프레임워크로 이관</td>
+<td>도구/ 내 <code>*시험.py</code> 118개</td>
+<td>자체 제작 assert 헬퍼는 CI 연동·커버리지 측정·병렬 실행 등 표준 도구 생태계 이점을 전혀 못 씀. 다만 "변이 시험"(일부러 틀린 값을 넣어 실제로 떨어지는지 확인) 문화 자체는 우수하므로 보존하며 이관해야 함</td>
+<td>pytest 리포트/CI 게이트 연동 가능, 회귀 탐지 속도 향상</td>
+</tr>
+<tr>
+<td><span class="badge p1">P1</span></td>
+<td>규칙 본문 중복 통합</td>
+<td><code>규칙/본문/05,09,10,11,12,13</code>번(동일 사장님 발언 반복), <code>.claude/agents/</code> 5개 파일 말미 중복 섹션</td>
+<td>동일 내용이 여러 파일에 분산 기술되어 있어 한쪽만 갱신되면 불일치 발생 위험. CLAUDE.md가 스스로 표방하는 "본문을 두 번 나르지 않는다" 원칙 위반 사례가 규칙 자체 안에 존재</td>
+<td>규칙 컨텍스트 주입 용량(토큰) 절감, 갱신 시 불일치 방지</td>
+</tr>
+<tr>
+<td><span class="badge p2">P2</span></td>
+<td>루트 산개 1회성 패치 스크립트 정리</td>
+<td><code>fable조이기.py</code>, <code>fable코덱스요청.py</code>, <code>gpt수준.py</code>, <code>대화라우트.py</code>, <code>대화체로.py</code> 등 15개+</td>
+<td>상시 실행 모듈이 아닌 것으로 확인된 일회성 스크립트가 저장소 루트에 영구 보관되어, 신규 인수자가 "이게 지금도 도는 코드인가"를 매번 재확인해야 함</td>
+<td>저장소 탐색성 향상, 온보딩 혼란 감소</td>
+</tr>
+<tr>
+<td><span class="badge p2">P2</span></td>
+<td>대화기록/기억 보존 정책(TTL/아카이브) 도입</td>
+<td><code>도구/_대화기록.py</code>, <code>기억/</code> 관련 스크립트</td>
+<td>원본 세션 사본이 매일 증분만 추가되고 삭제 로직이 없어 <code>대화기록/</code>이 1.7GB+에서 계속 증가 — 디스크 소진 리스크가 시간에 비례해 커짐</td>
+<td>디스크 용량 리스크 완화, 장기 운영 안정성</td>
+</tr>
+<tr>
+<td><span class="badge p2">P2</span></td>
+<td>"관문" 게이트 로직과 도메인 검증 로직의 물리적 분리(AADS 공용화 선행작업)</td>
+<td><code>도구/_감찰관.py</code>, <code>도구/_하네스.py</code>, <code>도구/검증.py</code></td>
+<td>§9에서 확인했듯 두 layer가 한 파일에 얽혀 있어 다른 고객사에 게이트 프레임워크만 이식하는 것이 현재 불가능</td>
+<td>멀티테넌시 확장 기반 마련, AADS 상품화 착수 가능</td>
+</tr>
+</tbody>
+</table>
+
+<h2 id="sec11"><span class="num">11.</span> 조사 방법과 한계</h2>
+
+<p>본 보고서는 직접 셸 탐색(<code>ls</code>/<code>find</code>/<code>grep</code>/<code>wc</code>/<code>git log</code>)과 핵심 문서(<code>AGENTS.md</code>, <code>CLAUDE.md</code> 2종, <code>시작하기.md</code>, <code>원격접속.md</code>, <code>.gitignore</code>)의 직접 읽기, 그리고 5개 영역(도구/ 코드품질, 규칙엔진/에이전트, 상태·기억·금고, 실행진입점·외부연동, 작업 데이터흐름)에 대한 독립 조사 에이전트 5개를 병렬 파견해 각 에이전트가 실제 파일을 열람하고 file:line 근거를 보고한 결과를 종합했다.</p>
+
+<ul>
+<li><strong>민감정보 비인용 원칙</strong>: 실제 계좌번호·사업자번호·거래처명·금액·비밀번호 값은 조사 과정에서 확인했더라도 본 보고서에는 구조/스키마만 기술하고 값을 옮기지 않았다.</li>
+<li><strong>미확인 항목</strong>: <code>.mcp.json</code>과 현재 세션 MCP 도구의 정확한 출처 관계, <code>.codex/</code>·<code>agy</code> CLI의 정확한 용도, <code>기억/_사업자/</code> API 호출 코드 세부, <code>analysis-team.md</code>/<code>wehago-team.md</code>/<code>인사부장.md</code>/<code>재무부장.md</code>/<code>교육부장.md</code>/<code>서린.md</code>의 상세 내용(에이전트 존재와 대략적 역할만 확인, 본문 정독은 조사 범위·시간상 생략), 작업/결과 내 실제 엑셀 시트 컬럼 스키마 등은 이번 조사에서 상세 확인하지 못했다.</li>
+<li><strong>규모 제약</strong>: 저장소 전체 로컬 파일이 약 1.5만 개(브라우저 프로필·대화기록·작업 아카이브 포함, 5GB)에 달해 전수조사가 아닌 구조적 표본조사(대형 파일 우선, 진입점 우선)로 진행했다. 특히 <code>작업/결과/</code>(10,300개+ 파일)와 <code>기억/</code>·<code>대화기록/</code> 내부는 폴더 구조와 대표 파일 형식만 확인했고 전체 파일을 열람하지는 않았다.</li>
+</ul>
+
+<footer>
+진아(Claude Sonnet 5) CTO 인수 분석 보고서 · 저장소 <code>/srv/biseo/회계비서/회계비서</code> · 작성 2026-09-14 KST · 이 문서는 채팅에서 렌더링용으로만 출력했다 — 서버 저장이 필요하면 <code>작업/결과/</code>에 파일 쓰기 승인을 요청해야 한다(사장님 절대원칙 13, PC 저장 금지·서버가 원본).
+</footer>
+
+</div>
+</body>
+</html>
