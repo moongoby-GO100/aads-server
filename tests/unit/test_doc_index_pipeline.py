@@ -227,3 +227,28 @@ def test_prompt_layer_templates_render():
 
     # Layer 1 도 같은 함정을 쓴다.
     assert sp.build_layer1("CEO", "", intent="analysis")
+
+
+def test_context_builder_passes_session_role_to_compiler():
+    """담당 역할 프롬프트는 role_key 를 넘겨야 붙는다.
+
+    `PromptCompiler` 는 `role_scope` 가 지정된 자산을 넘겨받은 role 로 거른다.
+    빈 문자열을 넘기면 그런 자산은 **하나도** 선택되지 않는다.
+
+    2026-09-14 실측. `build_messages_context` 에 `role=""` 이 박혀 있어서,
+    #310 주도 세션을 이 경로로 조립하면 시스템 프롬프트에 `StrategyCardLead`
+    도 `ask_session` 도 없었다 — 담당이 자기가 누구인지, 누구를 부를 수 있는지
+    모르는 채로 이어쓰기를 한다. 오류는 없다. 그냥 역할이 빠진다.
+    """
+    import inspect
+
+    from app.services import context_builder
+
+    src = inspect.getsource(context_builder.build_messages_context)
+    # 주석은 뺀다 — 왜 이렇게 고쳤는지 설명하느라 옛 코드를 인용하기 때문이다.
+    code = "\n".join(
+        line for line in src.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert 'role=""' not in code, "role 을 빈 문자열로 넘기면 역할 자산이 전부 걸러진다"
+    assert "role_key" in code, "세션의 role_key 를 찾아 넘겨야 한다"
+    assert "role=_role_key" in code

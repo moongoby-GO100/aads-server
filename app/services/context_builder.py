@@ -414,13 +414,38 @@ async def build_messages_context(
     # 일반 채팅 경로는 모델/역할 확정 후 chat_service에서 한 번만 compile한다.
     if apply_prompt_assets:
         try:
+            # 세션의 담당을 찾아 넘긴다.
+            #
+            # 예전에는 `role=""` 이 박혀 있었다. 컴파일러는 `role_scope` 가
+            # 지정된 자산을 그 키로 거르므로, 빈 문자열을 넘기면 **담당 역할
+            # 프롬프트가 하나도 안 붙는다.** 2026-09-14 실측에서 #310 하네스의
+            # 주도 세션을 이 경로로 조립했더니 `StrategyCardLead` 도
+            # `ask_session` 도 시스템 프롬프트에 없었다 — 담당이 자기가 누구인지
+            # 모르는 채로 이어쓰기를 한다.
+            _role_key = ""
+            try:
+                if db_conn is not None:
+                    _role_key = await db_conn.fetchval(
+                        "SELECT role_key FROM chat_sessions WHERE id = $1::uuid",
+                        session_id,
+                    ) or ""
+                else:
+                    from app.core.db_pool import get_pool as _gp
+
+                    _role_key = await _gp().fetchval(
+                        "SELECT role_key FROM chat_sessions WHERE id = $1::uuid",
+                        session_id,
+                    ) or ""
+            except Exception as _role_exc:
+                logger.debug("role_key_lookup_failed", error=str(_role_exc))
+
             compiler = PromptCompiler()
             compiled = await compiler.compile(
                 workspace_name=workspace_name,
                 intent=intent,
                 model="",
                 session_id=session_id,
-                role="",
+                role=_role_key,
                 base_system_prompt=layer1,
             )
             layer1 = compiled.system_prompt
