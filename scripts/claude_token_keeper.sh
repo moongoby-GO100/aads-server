@@ -26,6 +26,21 @@ FAIL_BELOW_MIN="${CLAUDE_TOKEN_FAIL_BELOW_MIN:-10}"
 
 log() { echo "$(date '+%F %T') $*"; }
 
+# accessToken 또는 refreshToken 이 비었는지. 갱신이 파일을 망가뜨렸는지
+# 판단하는 유일한 기준이다 — 만료 시각만 보면 "만료됐다" 와 "지워졌다" 가
+# 구분되지 않는다.
+_token_field_empty() {
+    python3 - "$1" <<'PYEOF' 2>/dev/null
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    o = d.get("claudeAiOauth") or d
+    sys.exit(0 if not (o.get("accessToken") and o.get("refreshToken")) else 1)
+except Exception:
+    sys.exit(0)
+PYEOF
+}
+
 remaining_min() {
     python3 -c "
 import json, sys, time
@@ -129,6 +144,26 @@ for slot in 1 2; do
     fi
 
     log "slot${slot}: 만료까지 ${left}분 (<= ${RENEW_BEFORE_MIN}) — 갱신"
+
+    # **갱신 전에 원본을 복사한다.**
+    #
+    # 2026-09-14 23:40 사고. `claude -p "ping"` 이 갱신에 실패하면서
+    # 자격증명 파일을 **빈 값으로 덮어썼다.**
+    #
+    #     "accessToken": "", "refreshToken": "", "expiresAt": 0,
+    #     "refreshTokenExpiresAt": 1791552330578   ← 25일 남아 있었다
+    #
+    # refreshToken 이 만료된 것이 아니라 **지워진 것**이다. 그런데 이
+    # 스크립트는 "refreshToken 만료로 보인다" 고 오진했고, 되돌릴 백업이
+    # 없어 대표님 재로그인이 필요했다. 채팅이 그동안 멈췄다.
+    #
+    # 안전장치가 스스로 사고를 냈다. 갱신은 실패할 수 있다 — 실패해도
+    # **있던 것을 잃지는 않아야 한다.**
+    backup=""
+    if [ -s "$cred" ]; then
+        backup="${cred}.bak"
+        cp -p "$cred" "$backup" 2>/dev/null || backup=""
+    fi
     # CLI 는 만료가 임박하면 refreshToken 으로 스스로 갱신한다. 한도 초과(429)로
     # 응답이 실패해도 갱신 자체는 일어나므로 결과 코드로 판단하지 않는다.
     HOME="$home" timeout 120 "$CLAUDE_BIN" -p "ping" --output-format json >/dev/null 2>&1 || true
@@ -167,7 +202,17 @@ for slot in 1 2; do
             resync_to_db "$slot" "$key" "$cred" >/dev/null 2>&1 \
                 && log "  갱신은 실패했지만 파일이 유효해 DB 는 동기화함 (${after}분)"
         fi
-        log "  ⚠️ 갱신 실패 (${left}분 → ${after}분) — refreshToken 만료로 보인다. 재로그인 필요"
+        # 갱신이 토큰을 지웠으면 되돌린다. 빈 파일보다 만료 임박한 토큰이 낫다 —
+        # 남은 몇 분이라도 쓸 수 있고, 무엇보다 refreshToken 이 살아 있으면
+        # 다음 주기에 다시 시도할 수 있다.
+        if [ -n "$backup" ] && [ -s "$backup" ]; then
+            if _token_field_empty "$cred" && ! _token_field_empty "$backup"; then
+                cp -p "$backup" "$cred" 2>/dev/null \
+                    && log "  ↩ 갱신이 토큰을 지워 원본을 되돌렸다 (refreshToken 보존)"
+                after="$(remaining_min "$cred")"
+            fi
+        fi
+        log "  ⚠️ 갱신 실패 (${left}분 → ${after}분) — 다음 주기에 다시 시도한다"
         ALERT="/root/aads/aads-server/scripts/send_disk_alert.sh"
         [ -x "$ALERT" ] && "$ALERT" "Claude slot${slot} 토큰 갱신 실패 — 재로그인 필요" >/dev/null 2>&1 || true
         continue
