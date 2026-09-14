@@ -93,6 +93,12 @@ class AddOwnerRequest(BaseModel):
     as_lead: bool = False
 
 
+class ConfirmRequest(BaseModel):
+    ok: bool
+    reason: Optional[str] = None
+    negative: bool = False
+
+
 class InterveneRequest(BaseModel):
     message: Optional[str] = None
     roles: Optional[list[str]] = None
@@ -197,6 +203,24 @@ async def goal_board(goal_id: str):
             "is_lead": (r["role_key"] or "").endswith("Lead"),
         })
 
+    # 마일스톤 목록 — 우측 패널이 쓴다. 대표님이 채팅창을 떠나지 않고
+    # 어디까지 왔는지 보셔야 한다.
+    async with pool.acquire() as conn:
+        ms = await conn.fetch(
+            """
+            SELECT id::text, title, status, sequence_order, variant,
+                   completion_criteria, evidence, review_note,
+                   dispatch_note, dispatch_count, review_ask_count,
+                   COALESCE(owner_role_key, '') AS owner_role_key,
+                   (SELECT count(*) FROM milestone_notes n
+                     WHERE n.milestone_id = milestones.id AND n.answered_at IS NULL) AS open_notes
+            FROM milestones
+            WHERE goal_id = $1::uuid
+            ORDER BY sequence_order, COALESCE(variant, '')
+            """,
+            goal_id,
+        )
+
     from app.services.direction_guard import is_halted
 
     docs = await goal_documents(goal_id)
@@ -204,6 +228,7 @@ async def goal_board(goal_id: str):
         "goal": dict(goal),
         "halted": await is_halted(),
         "owners": owners,
+        "milestones": [dict(m) for m in ms],
         "has_lead": any(o["is_lead"] for o in owners),
         "documents": docs["documents"],
         "has_design": docs["has_design"],
@@ -515,6 +540,64 @@ async def goal_direct(goal_id: str, req: InterveneRequest):
     if not (req.message or "").strip():
         raise HTTPException(status_code=400, detail="message required")
     return await direct(goal_id, req.message, req.roles)
+
+
+@router.post("/goals/milestones/{milestone_id}/confirm")
+async def confirm_milestone_api(milestone_id: str, req: ConfirmRequest):
+    """대표님이 우측 패널에서 바로 판정한다.
+
+    주도가 도구로 하는 것과 같은 경로를 쓴다 — 판정 규칙이 두 벌이면
+    한쪽이 낡는다. **반려에는 사유가 필요하다.** 담당이 왜 반려됐는지
+    모르면 같은 것을 다시 올린다.
+    """
+    from app.services.milestone_review import confirm
+
+    reason = (req.reason or "").strip()
+    if not req.ok and not reason:
+        raise HTTPException(status_code=400, detail="reason required for rejection")
+
+    result = await confirm(
+        milestone_id, ok=req.ok, reason=reason,
+        negative=req.negative, confirmer="ceo",
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    # 판정을 담당에게 알린다. 승인이든 반려든 담당은 결과를 알아야 한다.
+    try:
+        from app.core.db_pool import get_pool
+        from app.services import chat_service as cs
+
+        sid = await get_pool().fetchval(
+            "SELECT COALESCE(m.owner_session_id::text, s.id::text) "
+            "FROM milestones m LEFT JOIN chat_sessions s ON s.role_key = m.owner_role_key "
+            "WHERE m.id = $1::uuid LIMIT 1",
+            milestone_id,
+        )
+        if sid:
+            verdict = "완료로 확정" if req.ok and not req.negative else (
+                "결과가 음성으로 판정" if req.negative else "반려")
+            body = (
+                f"[대표님 판정] {result['milestone']} — **{verdict}**"
+                + (f"\n\n{reason}" if reason else "")
+                + ("\n\n다음 마일스톤으로 넘어갑니다." if req.ok and not req.negative
+                   else "\n\n반려 사유를 보고 다시 진행하세요." if not req.ok
+                   else "\n\n제대로 했으나 결과가 음성입니다. 주도가 다음을 다시 짭니다.")
+            )
+            async for _c in cs.send_message_stream(
+                session_id=str(sid), content=body,
+                intent_override="system_trigger", response_mode="quality",
+            ):
+                pass
+    except Exception as exc:
+        # 통보 실패가 판정을 되돌리면 안 된다. 판정은 이미 기록됐다.
+        import structlog
+
+        structlog.get_logger(__name__).warning(
+            "confirm_notify_failed", milestone=milestone_id[:8], error=str(exc)[:160]
+        )
+
+    return result
 
 
 @router.post("/goals/milestones/{milestone_id}/rewind")
