@@ -23,6 +23,12 @@ AGENT_SDK_ENABLED: bool = os.getenv("AGENT_SDK_ENABLED", "true").lower() == "tru
 # 무한 대화 지원: 턴/예산 제한 제거 (0 = 무제한)
 _MAX_TURNS: int = int(os.getenv("AGENT_SDK_MAX_TURNS", "0"))
 _MAX_BUDGET_USD: float = float(os.getenv("AGENT_SDK_MAX_BUDGET_USD", "10"))
+
+# 양방향 연결로 돌릴지. 끄면 예전 일회성 `query()` 로 돌아간다 —
+# 중간 지시 주입만 못 할 뿐 대화는 그대로 된다.
+_BIDIRECTIONAL_ENABLED = os.getenv("CHAT_SDK_BIDIRECTIONAL", "true").lower() in (
+    "1", "true", "yes",
+)
 _CWD: str = os.getenv("AGENT_SDK_CWD", "/root/aads")
 
 # ─── SDK 임포트 (graceful degradation) ────────────────────────────────────────
@@ -371,6 +377,118 @@ class AgentSDKService:
 
         return options
 
+    async def _execute_stream_bidirectional(
+        self, prompt: str, options: Any, chat_session_id: str,
+        pids_before: set, stream_key: Any,
+    ) -> AsyncGenerator[str, None]:
+        """양방향 연결로 돌리고, 도는 중에 들어온 대표님 지시를 바로 넣는다.
+
+        세 가지를 지킨다.
+
+        **① 죽이지 않는다.** `interrupt()` 로 턴을 끊지 않는다 — 20분치
+        작업이 사라진다. 2026-09-14 배포로 두 번 그런 일이 있었고 그때마다
+        조사가 날아갔다. 이어서 반영하게 한다.
+
+        **② 우선순위를 적는다.** 기존 작업과 충돌하면 대표님 지시가 이긴다.
+
+        **③ 화면에 알린다.** 조용히 넣으면 무시된 것과 구분이 안 된다.
+        """
+        from app.core.interrupt_queue import has_interrupt, pop_interrupts
+
+        HEARTBEAT_SSE = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
+        client = ClaudeSDKClient(options=options)
+        captured_session_id: Optional[str] = None
+        try:
+            await client.connect()
+            await client.query(prompt)
+            _receiver = client.receive_response().__aiter__()
+            _active_iterators[str(stream_key)] = _receiver
+
+            while True:
+                try:
+                    message = await asyncio.wait_for(_receiver.__anext__(), timeout=8.0)
+                except asyncio.TimeoutError:
+                    # 하트비트 사이가 지시를 넣기 가장 좋은 자리다 — 모델이
+                    # 지금 아무것도 안 내놓고 있다.
+                    if has_interrupt(chat_session_id):
+                        async for _c in self._inject_interrupts(
+                            client, chat_session_id, pop_interrupts
+                        ):
+                            yield _c
+                    yield HEARTBEAT_SSE
+                    continue
+                except StopAsyncIteration:
+                    break
+
+                async for _c in self._render_sdk_message(message):
+                    yield _c
+                if isinstance(message, SystemMessage) and getattr(message, "subtype", "") == "init":
+                    captured_session_id = (getattr(message, "data", {}) or {}).get("session_id", "")
+
+                if has_interrupt(chat_session_id):
+                    async for _c in self._inject_interrupts(
+                        client, chat_session_id, pop_interrupts
+                    ):
+                        yield _c
+        except Exception as exc:
+            logger.warning("sdk_bidirectional_failed error=%s", str(exc)[:200])
+            yield f'data: {json.dumps({"type": "error", "content": str(exc)[:400]}, ensure_ascii=False)}\n\n'
+        finally:
+            _active_iterators.pop(str(stream_key), None)
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            yield f'data: {json.dumps({"type": "sdk_complete", "session_id": captured_session_id or ""})}\n\n'
+
+    async def _inject_interrupts(
+        self, client: Any, chat_session_id: str, pop_fn: Any,
+    ) -> AsyncGenerator[str, None]:
+        """큐에 쌓인 대표님 지시를 돌고 있는 턴에 넣는다."""
+        items = pop_fn(chat_session_id) or []
+        if not items:
+            return
+        text = "\n".join(str(i.get("content") or "") for i in items).strip()
+        if not text:
+            return
+        body = (
+            "[대표님 추가 지시] 작업 도중 대표님이 새 지시를 보내셨습니다. "
+            "지금까지의 결과를 고려하고 이 지시를 반영해 다음 행동을 정하세요. "
+            "기존 작업과 충돌하면 **대표님 지시를 우선합니다.**\n\n" + text
+        )
+        try:
+            await client.query(body)
+        except Exception as exc:
+            logger.warning("sdk_interrupt_inject_failed error=%s", str(exc)[:160])
+            return
+        for item in items:
+            yield (
+                "data: "
+                + json.dumps(
+                    {"type": "interrupt_applied",
+                     "content": str(item.get("content") or "")[:100]},
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
+        logger.info(
+            "sdk_interrupt_injected session=%s count=%d",
+            chat_session_id[:8], len(items),
+        )
+
+    async def _render_sdk_message(self, message: Any) -> AsyncGenerator[str, None]:
+        """SDK 메시지를 SSE 로 바꾼다. 일회성 경로와 같은 규격을 쓴다."""
+        if isinstance(message, SystemMessage) and getattr(message, "subtype", "") == "init":
+            sid = (getattr(message, "data", {}) or {}).get("session_id", "")
+            yield f'data: {json.dumps({"type": "sdk_session", "session_id": sid})}\n\n'
+        elif isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock) and block.text:
+                    yield f'data: {json.dumps({"type": "delta", "content": block.text}, ensure_ascii=False)}\n\n'
+        elif isinstance(message, ResultMessage):
+            if getattr(message, "result", None):
+                yield f'data: {json.dumps({"type": "delta", "content": message.result}, ensure_ascii=False)}\n\n'
+
     async def execute_stream(
         self,
         prompt: str,
@@ -404,6 +522,32 @@ class AgentSDKService:
         sdk_iter: Any = None
         _pids_before = set(_find_claude_child_pids())
         _stream_key = chat_session_id or id(self)
+
+        # 양방향 연결 — **돌고 있는 턴에 추가 지시를 넣을 수 있다.**
+        #
+        # 2026-09-14 대표님 지적: "중간 추가지시에 대한 너 정도 반응이면
+        # 좋겠는데". 실측하니 이 경로에 인터럽트 처리가 **0줄**이었고,
+        # 최근 12시간 응답 258건이 전부 이 경로였다. 응답 중에 보내신 지시가
+        # 그 턴이 끝날 때까지 아무 반응도 없었다 — 턴이 2~61분이니 최악은
+        # 한 시간 뒤다.
+        #
+        # 원인은 `sdk_query()` 가 일회성이라는 것이다. `ClaudeSDKClient` 는
+        # 연결을 열어 두고 `query()` 로 메시지를 더 보낼 수 있다
+        # (SDK 0.2.152 확인).
+        #
+        # **연결이 안 되면 일회성으로 떨어진다.** 반응성을 얻으려다 채팅을
+        # 못 쓰게 만들면 안 된다.
+        _bidi = (
+            _BIDIRECTIONAL_ENABLED
+            and ClaudeSDKClient is not None
+            and bool(chat_session_id)
+        )
+        if _bidi:
+            async for _chunk in self._execute_stream_bidirectional(
+                prompt, options, str(chat_session_id), _pids_before, _stream_key,
+            ):
+                yield _chunk
+            return
 
         try:
             HEARTBEAT_SSE = f'data: {json.dumps({"type": "heartbeat"})}\n\n'

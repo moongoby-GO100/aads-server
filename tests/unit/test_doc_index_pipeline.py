@@ -709,3 +709,47 @@ def test_auto_rag_does_not_block_first_token():
     whole = inspect.getsource(cb)
     assert "_build_auto_rag_layer(_last_user_msg" not in whole
     assert "_build_auto_rag_layer(last_user_message, session_id, _project)" not in whole
+
+
+def test_mid_turn_instruction_reaches_every_path():
+    """중간 추가지시가 경로마다 다르게 처리되면 안 된다.
+
+    2026-09-14 실측. 스트림 경로 15개 중 인터럽트를 보는 것은 2개뿐이었다
+    (`_stream_litellm_anthropic`, `_stream_anthropic`). **주력인 SDK 릴레이도,
+    코덱스도, GPT 계열도 안 봤다.** 최근 12시간 응답 258건이 전부 SDK
+    경로였으니, 대표님이 응답 중에 보내신 지시는 그 턴이 끝날 때까지
+    아무 반응도 없었다 — 턴이 2~61분이니 최악은 한 시간 뒤다.
+    """
+    import inspect
+
+    from app.services import chat_service
+
+    # `call_stream` 을 소비하는 자리에서 전 경로를 덮는다.
+    src = inspect.getsource(chat_service.send_message_stream)
+    assert "_has_interrupt(session_id)" in src
+    assert "interrupt_pending" in src, "받았다는 것을 즉시 알려야 한다"
+
+
+def test_sdk_injection_does_not_kill_the_turn():
+    """돌고 있는 턴을 끊으면 20분치 작업이 사라진다.
+
+    2026-09-14 배포로 두 번 그런 일이 있었고 그때마다 운영인프라담당의
+    조사가 날아갔다. `interrupt()` 로 끊지 않고 **이어서 반영**한다.
+    """
+    import inspect
+
+    from app.services.agent_sdk_service import AgentSDKService
+
+    inject = inspect.getsource(AgentSDKService._inject_interrupts)
+    assert "client.interrupt" not in inject, "턴을 끊으면 진행 중 작업이 사라진다"
+    assert "client.query" in inject, "이어서 넣어야 한다"
+    assert "대표님 지시를 우선" in inject, "충돌 시 우선순위를 적어야 한다"
+    assert "interrupt_applied" in inject, "넣었는지 화면에 알려야 한다"
+
+    bidi = inspect.getsource(AgentSDKService._execute_stream_bidirectional)
+    # 연결이 안 되면 대화가 멈추면 안 된다.
+    assert "except Exception" in bidi
+
+    stream = inspect.getsource(AgentSDKService.execute_stream)
+    assert "_BIDIRECTIONAL_ENABLED" in stream, "끌 수 있어야 한다"
+    assert "sdk_query(prompt=prompt" in stream, "실패 시 일회성으로 떨어져야 한다"

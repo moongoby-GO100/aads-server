@@ -13000,6 +13000,9 @@ async def send_message_stream(
             if _stream_attempt > 0 and _stream_attempt - 1 < len(_missing_done_fallback_models):
                 _attempt_model_override = _missing_done_fallback_models[_stream_attempt - 1]
             try:
+                from app.core.interrupt_queue import has_interrupt as _has_interrupt
+
+                _interrupt_notified = False
                 _timer.mark("request_sent")
                 async for event in call_stream(
                     intent_result=intent_result,
@@ -13015,6 +13018,27 @@ async def send_message_stream(
                     # 내놓지 않았는데 체감 시간을 짧게 적으면 계측이 거짓말을 한다.
                     if etype in ("delta", "thinking", "tool_use"):
                         _timer.mark("first_token")
+
+                    # 중간 추가지시가 들어왔는지 **모든 경로에서** 확인한다.
+                    #
+                    # 2026-09-14 실측. 스트림 경로 15개 중 인터럽트를 보는
+                    # 것은 2개뿐이었다(`_stream_litellm_anthropic`,
+                    # `_stream_anthropic`). 주력인 SDK 릴레이도, 코덱스도,
+                    # GPT 계열도 안 봤다. 대표님이 응답 중에 보내신 지시가
+                    # **그 턴이 끝날 때까지 아무 반응도 없었다.**
+                    #
+                    # 여기는 `call_stream` 을 소비하는 유일한 자리라 한 번만
+                    # 넣으면 전 경로에 걸린다. 다만 여기서 모델에 밀어 넣을
+                    # 수는 없다 — 경로마다 가능 여부가 다르다. **받았다는
+                    # 것을 즉시 알리는 것**까지가 여기 몫이고, 실제 주입은
+                    # 각 경로가 한다.
+                    if not _interrupt_notified and _has_interrupt(session_id):
+                        _interrupt_notified = True
+                        yield f"data: {json.dumps({'type': 'interrupt_pending', 'content': '추가 지시를 받았습니다. 지금 작업을 마치는 대로 반영합니다.'}, ensure_ascii=False)}\n\n"
+                        logger.info(
+                            "interrupt_seen_midstream session=%s model=%s",
+                            session_id[:8], model_used or "?",
+                        )
                     if etype == "heartbeat":
                         yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
                     elif etype == "model_info":
