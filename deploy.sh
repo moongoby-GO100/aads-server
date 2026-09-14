@@ -2366,9 +2366,21 @@ case "$MODE" in
         acquire_nginx_switch_lock
         cp "$UPSTREAM_CONF" "${UPSTREAM_CONF}.pre_deploy"
         # 새 포트에서 backup 제거, 기존 포트에 backup 추가
+        #
+        # 주석도 같이 고친다. 2026-09-14 이전에는 `server` 줄만 바꾸고 바로
+        # 위의 "Active API slot: blue (8100)" 주석은 그대로 뒀다. 그래서 green
+        # 으로 넘어간 뒤에도 파일은 blue 가 활성이라고 적혀 있었고, 상태를
+        # 확인하러 온 사람이 그 줄을 읽고 반대로 판단했다. 틀린 주석은 없는
+        # 주석보다 나쁘다.
+        if [[ "$NEW_PORT" == "$GREEN_PORT" ]]; then
+            NEW_SLOT_NAME="green"; OLD_SLOT_NAME="blue"
+        else
+            NEW_SLOT_NAME="blue"; OLD_SLOT_NAME="green"
+        fi
         sed -i -E \
             -e "s/server 127\.0\.0\.1:${NEW_PORT} [^;]*;/server 127.0.0.1:${NEW_PORT} max_fails=1 fail_timeout=10s;/g" \
             -e "s/server 127\.0\.0\.1:${CURRENT_PORT} [^;]*;/server 127.0.0.1:${CURRENT_PORT} max_fails=1 fail_timeout=10s backup;/g" \
+            -e "s|# Active API slot:.*|# Active API slot: ${NEW_SLOT_NAME} (${NEW_PORT}). ${OLD_SLOT_NAME^} (${CURRENT_PORT}) is kept as rollback backup.|" \
             "$UPSTREAM_CONF"
         if ! nginx_config_test; then
             echo "[deploy.sh] ❌ nginx 설정 오류 — 롤백"
