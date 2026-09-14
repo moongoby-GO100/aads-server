@@ -1462,6 +1462,14 @@ run_job() {
     for ((i=0; i<${#MODEL_CYCLE[@]}; i++)); do
         TOKEN_CYCLE+=($((i % 2 + 1)))
     done
+    # AADS-RUNNER-SLOT-LEASE (2026-09-14): 대여 토큰을 job 마다 다시 읽는다.
+    # 스크립트 상단의 source 는 데몬 기동 시 딱 한 번만 돈다. 슬롯이 없는 서버
+    # (contabo14 / cafe24_114)는 contabo116 이 10분마다 밀어 넣는 임시 accessToken 으로
+    # 사는데, 기동 시점 값을 붙들고 있으면 만료되는 순간 그 데몬은 재시작 전까지
+    # 전량 실패한다. 여기서 다시 읽으면 데몬을 안 건드려도 항상 최신 출입증을 쓴다.
+    # 슬롯 자격증명이 있는 contabo116 에서는 이 파일이 없어 아무 일도 하지 않는다.
+    # shellcheck disable=SC1091
+    source /root/scripts/runner.env 2>/dev/null || true
     local TOKEN_1="${ANTHROPIC_AUTH_TOKEN:-}"
     local TOKEN_2="${ANTHROPIC_AUTH_TOKEN_2:-}"
     # C-4: 빈 토큰 가드 — 둘 다 비어있으면 즉시 실패 처리
