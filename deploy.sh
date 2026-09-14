@@ -621,6 +621,13 @@ deploy_observe_update() {
     local status="${1:-running}"
     local phase="${2:-$DEPLOY_CURRENT_PHASE}"
     local err="${3:-}"
+    # deploy_runs.status 는 CHECK 제약이 걸린 열거값이다. 단계 스크립트가 쓰는
+    # 표현(skipped 등)을 그대로 넣으면 UPDATE 가 통째로 실패해, "standby 미동기화"
+    # 같은 사실이 원장에서 사라지고 배포가 완전 성공으로만 남는다(2026-09-14 run 418).
+    case "$status" in
+        skipped|deferred|partial) status="success_partial" ;;
+        completed) status="success" ;;
+    esac
     deploy_observe_init
     if [[ -z "${DEPLOY_RUN_ID:-}" ]]; then
         return 0

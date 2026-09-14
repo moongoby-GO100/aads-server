@@ -14197,3 +14197,22 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   outbox 증식은 178로 막았으나 왕복 자체는 앱 코드 수정(=이미지 재빌드)이 필요해 분리한다.
   이 스윕은 `chat_messages` 풀스캔이라 pg_stat_activity 표본의 6%를 점유하고 autovacuum을
   상시 유발한다 — 부분 인덱스 + 핑퐁 차단을 묶어 별도 작업으로 제출할 것.
+
+
+## 2026-09-14 02:1x KST — 배포 원장(phase/status) 관측 결함 2건 수정 + 릴리스 반영
+
+- **대시보드 phase 결함**: `aads-dashboard/deploy.sh` 가 `deploy_runs` INSERT 에 phase 를 주지
+  않고 성공/실패 UPDATE 도 phase 를 건드리지 않아, 대시보드 배포는 성공해도 원장에
+  `phase='queued'` 로 남았다(과거 6건: 성공 3 / 실패 3). 단계별 `record_deploy_phase` 를 넣어
+  build_candidate_image → candidate_health → traffic_switch → p0p1_monitoring → completed 로
+  기록하고, 실패 시에는 멈춘 단계를 그대로 보존한다. 커밋 `8643a17`(aads-dashboard).
+- **API status 결함**: `aads-server/deploy.sh` 가 standby 동기화 보류 시 `status='skipped'` 로
+  UPDATE 를 시도했으나 `deploy_runs_status_check` 위반으로 쓰기가 통째로 실패했다. 그 결과
+  run 418 은 standby 가 구 이미지로 남았는데도 원장에는 `success/completed` 로만 남았다.
+  `deploy_observe_update` 에서 skipped/deferred/partial → `success_partial`,
+  completed → `success` 로 정규화한다. (`deploy_phase_events` 에는 원래 표현을 그대로 남긴다.)
+- **배포 결과**: API run 418 = `44df37e3` success(활성 :8102), 대시보드 run 419 = `8643a17`
+  success/completed, 양 대시보드 슬롯 동일 이미지, 외부 헬스 api=200 / dash=307(로그인 리다이렉트).
+- **남은 리스크**: run 418 은 활성 스트림 1건 때문에 standby(:8100)가 구 이미지
+  `593360b18433` 로 남았다. 활성 슬롯은 새 릴리스로 정상이지만, 다음 배포나 스트림 종료 후
+  standby 재동기화가 필요하다. 과거 6건의 `phase='queued'` 행 백필은 CEO 승인 대기.
