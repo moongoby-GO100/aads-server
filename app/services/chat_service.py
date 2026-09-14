@@ -583,7 +583,24 @@ _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "3900"))
 # 첫 토큰까지 40초 넘게 걸린다. 2026-09-13 실측 7건이 전부 31~32초에서 잘렸고
 # CLI 는 그때까지 살아서 응답을 만들고 있었다. 살아 있는 스트림을 죽이는 쪽이
 # 방치보다 나쁘다 — 하드 타임아웃과 watchdog 이 뒤를 받치므로 여유를 준다.
-_FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "90"))
+# 첫 토큰까지 기다리는 기본 시간.
+#
+# 2026-09-14 — 90초에서 180초로 올린다. 90초는 "모델이 답을 만드는 시간"만
+# 본 값인데, 실제로는 그 앞에 **고정 비용**이 있다. 채팅 한 턴은 CLI 를 새로
+# 띄우고(cli=new) MCP 서버 35개를 로드한 뒤에야 첫 토큰이 나온다.
+#
+# 실측(같은 날, 같은 릴레이):
+#   작은 프롬프트 직접 호출   첫 바이트 9.7초, 완결 13.9초   ← 릴레이는 정상
+#   채팅 한 턴(프롬프트 49,893자, MCP 템플릿)  112초에 토큰 0개로 중단
+#
+# 이 고정 비용은 컨텍스트 크기와 무관하다. 그래서 아래 `_effective_first_
+# response_timeout()` 의 컨텍스트 비례분만으로는 못 덮는다.
+#
+# 같은 날 컨텍스트 상한(a97e0c37)을 넣어 히스토리를 74,304→32,377 토큰으로
+# 줄였는데, 비례분이 함께 줄어 타임아웃이 142초에서 112초로 **짧아졌다**.
+# 전에는 겨우 통과하던 턴들이 그 뒤로 중단됐다. 컨텍스트를 줄인 것이 응답을
+# 죽인 셈이다 — 기본값이 고정 비용을 안 세고 있었기 때문이다.
+_FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "180"))
 _COMPLETION_AUTO_CONTINUE_MAX = int(os.getenv("AADS_COMPLETION_AUTO_CONTINUE_MAX", "3"))
 _FINALIZE_DB_RETRY_DELAYS = (0.5, 1.0, 2.0)
 _COOLDOWN_SECS_DEFAULT = 300
