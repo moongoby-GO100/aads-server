@@ -199,7 +199,7 @@ async def _search_relevant(
     try:
         # 병렬: memory_facts + chat_messages + 문서
         #
-        # 2026-09-14 문서 추가. 그 전까지 대표가 "이거 왜 이렇게 돼 있지" 라고
+        # 2026-09-14 문서 추가. 그 전까지 대표님이 "이거 왜 이렇게 돼 있지" 라고
         # 물어도 문서가 근거로 잡히지 않았다 — 검색 대상이 아니었기 때문이다.
         # 문서 823건이 저장소에 있는데 채팅은 그걸 못 봤다.
         fact_results, msg_results, doc_results = await asyncio.gather(
