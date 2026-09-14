@@ -203,7 +203,8 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id request_id; do
     log "  REVIEW $job_id project=$project http=$http_code verdict=${verdict:-none} score=$score category=${category:-none} retry=${next_retry}/${SWEEP_MAX_RETRY}"
 
     if [[ "$verdict" == "APPROVE" ]]; then
-        note=$(sql_escape "[자동재검수] PASS score=${score} attempt=${next_retry} ($(date '+%Y-%m-%d %H:%M KST'))")
+        # 호스트 TZ 가 CEST 라 date 를 그대로 쓰면 "KST" 라벨이 7시간 어긋난다 (실측 2026-09-14).
+        note=$(sql_escape "[자동재검수] PASS score=${score} attempt=${next_retry} ($(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M KST'))")
         db_exec "UPDATE pipeline_jobs
                  SET status='awaiting_approval', phase='awaiting_approval',
                      review_verdict='APPROVE', review_score=${score},
