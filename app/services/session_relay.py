@@ -72,12 +72,53 @@ async def _resolve_target(target: str, origin_session_id: str) -> Optional[Dict[
         )
         return dict(row) if row else None
 
+    # 1) 역할 키 정확히 일치
     row = await pool.fetchrow(
         """
         SELECT s.id::text, s.title, s.role_key, s.workspace_id::text
         FROM chat_sessions s
         WHERE s.role_key = $1
           AND s.workspace_id = (SELECT workspace_id FROM chat_sessions WHERE id = $2::uuid)
+        ORDER BY s.updated_at DESC LIMIT 1
+        """,
+        t, origin_session_id,
+    )
+    if row:
+        return dict(row)
+
+    # 2) 한글 별칭 — `prompt_assets.role_scope` 에 같이 등록돼 있다.
+    #
+    #    role_scope = {DataEngineOwner, 데이터엔진담당, DataEngineLead}
+    #
+    # 프롬프트는 담당을 한글로 부르는데("데이터엔진담당") 세션의 role_key 는
+    # 영문이다. 2026-09-14 실측에서 `ask_session(target="데이터엔진담당")` 이
+    # 그대로 실패했다 — 주도가 프롬프트에 적힌 이름으로 불렀는데 못 찾는다.
+    row = await pool.fetchrow(
+        """
+        SELECT s.id::text, s.title, s.role_key, s.workspace_id::text
+        FROM chat_sessions s
+        WHERE s.workspace_id = (SELECT workspace_id FROM chat_sessions WHERE id = $2::uuid)
+          AND s.role_key IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM prompt_assets a
+              WHERE a.enabled AND a.role_scope @> ARRAY[$1]::text[]
+                AND a.role_scope @> ARRAY[s.role_key]::text[]
+          )
+        ORDER BY s.updated_at DESC LIMIT 1
+        """,
+        t, origin_session_id,
+    )
+    if row:
+        return dict(row)
+
+    # 3) 세션 제목 — 사람은 "데이터관리자" 처럼 화면에 보이는 이름으로 부른다.
+    row = await pool.fetchrow(
+        """
+        SELECT s.id::text, s.title, s.role_key, s.workspace_id::text
+        FROM chat_sessions s
+        WHERE s.workspace_id = (SELECT workspace_id FROM chat_sessions WHERE id = $2::uuid)
+          AND s.role_key IS NOT NULL
+          AND s.title ILIKE '%' || $1 || '%'
         ORDER BY s.updated_at DESC LIMIT 1
         """,
         t, origin_session_id,

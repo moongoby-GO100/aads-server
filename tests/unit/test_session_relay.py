@@ -120,3 +120,22 @@ def test_set_streaming_unbound_masking_is_fixed():
     tail = src[src.rindex("finally:"):]
     assert "_clear_streaming" in tail, "finally 가 여전히 마스킹한다"
     assert "import set_streaming as _clear_streaming" in tail
+
+
+def test_target_resolves_korean_aliases():
+    """프롬프트는 담당을 한글로 부르는데 세션의 role_key 는 영문이다.
+
+    2026-09-14 실측: `ask_session(target="데이터엔진담당")` 이 그대로
+    실패했다. 주도가 자기 프롬프트에 적힌 이름으로 불렀는데 못 찾았다 —
+    부를 수 없는 이름을 프롬프트에 적어 둔 셈이었다.
+    """
+    src = inspect.getsource(session_relay._resolve_target)
+    assert "role_scope" in src, "한글 별칭(prompt_assets.role_scope)을 보지 않는다"
+    assert "s.title ILIKE" in src, "세션 제목으로도 못 찾는다"
+
+
+def test_relay_tool_is_registered():
+    from app.services.tool_registry import ToolRegistry
+
+    names = [t["name"] for t in ToolRegistry().get_tools("all")]
+    assert "ask_session" in names, "도구가 모델에게 노출되지 않는다"
