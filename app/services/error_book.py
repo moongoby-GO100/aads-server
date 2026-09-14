@@ -54,6 +54,10 @@ async def _load_entries() -> list[dict]:
             "prevention": row["prevention"],
             "recurrence_count": row["recurrence_count"],
             "signatures": (meta or {}).get("signatures") or [],
+            # 이번에 무엇을 고쳤는지. prevention("앞으로 이렇게 해라")과 다르다.
+            # fix 가 없으면 재발했을 때 고친 것이 되돌아간 건지, 다른 경로가
+            # 같은 버그를 밟은 건지 구분할 수 없다.
+            "fix": (meta or {}).get("fix") or {},
         })
     _cache["at"] = now
     _cache["entries"] = entries

@@ -27,6 +27,7 @@ import json
 import hashlib
 import re
 import subprocess
+import time
 import sys
 
 PG_CONTAINER = "aads-postgres"
@@ -66,6 +67,7 @@ def load_entries() -> list[dict]:
             "error_key": f[0], "symptom": f[1], "root_cause": f[2],
             "prevention": f[3], "recurrence_count": int(f[4] or 0),
             "status": f[5], "signatures": meta.get("signatures") or [],
+            "fix": meta.get("fix") or {},
         })
     return entries
 
@@ -149,6 +151,10 @@ def do_match(text: str, bump: bool, record: bool = False, source: str = "") -> i
         print(f"  증상   {e['symptom']}")
         print(f"  원인   {e['root_cause']}")
         print(f"  예방   {e['prevention']}")
+        if e.get("fix"):
+            _f = e["fix"]
+            _c = ", ".join(_f.get("commits") or []) or "-"
+            print(f"  조치   {_f.get('note','')} [커밋 {_c}]")
         if bump:
             psql(
                 "UPDATE ohvis_wiki_error_book "
@@ -159,12 +165,29 @@ def do_match(text: str, bump: bool, record: bool = False, source: str = "") -> i
 
 
 def do_register(a) -> int:
-    meta = json.dumps({"signatures": a.signature}, ensure_ascii=False)
+    """항목을 등록한다.
+
+    prevention 은 "앞으로 이렇게 해라" 이고, fix 는 "이번에 무엇을 고쳤나" 다.
+    둘은 다르다. fix 가 없으면 재발했을 때 **고친 것이 되돌아간 건지, 다른
+    경로가 같은 버그를 밟은 건지** 구분할 수 없다.
+    """
+    meta: dict = {"signatures": a.signature}
+    fix: dict = {}
+    if a.fix_commit:
+        fix["commits"] = a.fix_commit
+    if a.fix_file:
+        fix["files"] = a.fix_file
+    if a.fix_note:
+        fix["note"] = a.fix_note
+    if fix:
+        fix["recorded_at"] = time.strftime("%F %T")
+        meta["fix"] = fix
+    meta_json = json.dumps(meta, ensure_ascii=False)
     psql(
         "INSERT INTO ohvis_wiki_error_book "
         "(project, error_key, symptom, root_cause, prevention, status, metadata) VALUES ("
         f"{lit(a.project)}, {lit(a.key)}, {lit(a.symptom)}, {lit(a.cause)}, "
-        f"{lit(a.prevention)}, 'active', {lit(meta)}::jsonb) "
+        f"{lit(a.prevention)}, 'active', {lit(meta_json)}::jsonb) "
         "ON CONFLICT (project, error_key) DO UPDATE SET "
         "  symptom=EXCLUDED.symptom, root_cause=EXCLUDED.root_cause, "
         "  prevention=EXCLUDED.prevention, metadata=EXCLUDED.metadata, updated_at=NOW();"
@@ -198,6 +221,11 @@ def main() -> int:
     r.add_argument("--prevention", default="")
     r.add_argument("--project", default="AADS")
     r.add_argument("--signature", action="append", default=[], required=True)
+    r.add_argument("--fix-commit", action="append", default=[],
+                   help="이번에 적용한 커밋 (반복 가능)")
+    r.add_argument("--fix-file", action="append", default=[],
+                   help="고친 파일 (반복 가능)")
+    r.add_argument("--fix-note", default="", help="조치 요약")
 
     sub.add_parser("list", help="등록 목록")
     a = ap.parse_args()
