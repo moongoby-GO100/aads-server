@@ -3287,6 +3287,90 @@ async def _get_last_response_legacy_repairing(
     }
 
 
+@router.get("/chat/sessions/{session_id}/documents", tags=["chat-session"])
+async def session_documents(
+    session_id: UUID,
+    limit: int = Query(80, ge=1, le=300),
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """이 대화가 만든 **문서 파일** 목록.
+
+    2026-09-14 대표님 지적: "아티팩트에 보고서탭이 있는데 용도가 다른듯해
+    보고서로 저장된 파일명 리스트가 안나오더라".
+
+    맞다. 아티팩트 탭은 `chat_artifacts` — **대화 안에서 만들어진 것**
+    (차트·코드 블록·이미지)을 모은다. 담당이 `write_remote_file` 로 파일에
+    쓴 보고서는 거기 안 들어간다. 두 경로가 이어져 있지 않다.
+
+    그런데 기록은 남아 있다. `chat_messages.tools_called` 에 도구 이름과
+    파일 경로가 함께 들어간다(오늘 아침에 고쳤다 — 그 전에는 도구 이름만
+    저장돼 경로를 알 수 없었다).
+
+    **새 저장소를 만들지 않는다.** 이미 있는 것을 모은다.
+    """
+    from app.core.db_pool import get_pool
+
+    rows = await get_pool().fetch(
+        """
+        SELECT path, MAX(at) AS at, COUNT(*) AS writes,
+               (ARRAY_AGG(tool ORDER BY at DESC))[1] AS tool
+        FROM (
+            SELECT COALESCE(
+                       t->'tool_input'->>'file_path',
+                       t->'tool_input'->>'path',
+                       t->'tool_input'->>'target_path'
+                   ) AS path,
+                   t->>'tool_name' AS tool,
+                   m.created_at AS at
+            FROM chat_messages m,
+                 LATERAL jsonb_array_elements(m.tools_called) t
+            WHERE m.session_id = $1
+              AND m.deleted_at IS NULL
+              AND jsonb_typeof(m.tools_called) = 'array'
+              AND t->>'tool_name' IN ('write_remote_file', 'patch_remote_file')
+        ) w
+        WHERE path IS NOT NULL AND path <> ''
+        GROUP BY path
+        ORDER BY MAX(at) DESC
+        LIMIT $2
+        """,
+        session_id, limit * 3,
+    )
+
+    # 문서로 볼 확장자. 코드는 따로 세어 **몇 개를 뺐는지 알린다** —
+    # 조용히 빼면 대표님이 무엇이 빠졌는지 모르신다.
+    doc_ext = {
+        ".md", ".txt", ".html", ".htm", ".pdf", ".xlsx", ".xls",
+        ".csv", ".docx", ".hwp", ".hwpx", ".pptx", ".rtf",
+    }
+    icon = {
+        ".md": "📄", ".txt": "📄", ".html": "🌐", ".htm": "🌐",
+        ".pdf": "📕", ".xlsx": "📊", ".xls": "📊", ".csv": "📊",
+        ".docx": "📝", ".hwp": "📝", ".hwpx": "📝", ".pptx": "📽",
+    }
+
+    docs, others = [], 0
+    for r in rows:
+        path = r["path"]
+        ext = ("." + path.rsplit(".", 1)[-1].lower()) if "." in path.rsplit("/", 1)[-1] else ""
+        if ext not in doc_ext:
+            others += 1
+            continue
+        if len(docs) >= limit:
+            continue
+        docs.append({
+            "path": path,
+            "name": path.rsplit("/", 1)[-1],
+            "dir": path.rsplit("/", 1)[0] if "/" in path else "",
+            "icon": icon.get(ext, "📄"),
+            "at": r["at"].isoformat() if r["at"] else None,
+            "writes": int(r["writes"] or 1),
+            "tool": r["tool"],
+        })
+
+    return {"documents": docs, "other_files": others}
+
+
 @router.get("/chat/timing", tags=["chat-session"])
 async def chat_timing(
     hours: int = Query(24, ge=1, le=168),
