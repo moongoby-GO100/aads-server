@@ -48,9 +48,22 @@ if [ -e "$DEPLOY_LOCK" ] && ! flock -n "$DEPLOY_LOCK" true 2>/dev/null; then
     echo "$(date '+%F %T') disk=${USED}% — 배포 진행 중(락 점유), 정리 건너뜀"
     exit 0
 fi
-if pgrep -f "deploy\.sh (bluegreen|queue-worker)" >/dev/null 2>&1 \
-   || pgrep -f "docker build" >/dev/null 2>&1; then
-    echo "$(date '+%F %T') disk=${USED}% — 배포/빌드 프로세스 감지, 정리 건너뜀"
+# 실행 파일이 docker 인 프로세스만 빌드로 본다.
+#
+# pgrep -f "docker build" 는 **그 문자열을 담은 아무 셸 명령이나** 잡는다.
+# 조사하느라 `ps ... | grep "docker build"` 를 치기만 해도 빌드가 도는 것으로
+# 오인한다. 2026-09-14 실측: 하루 동안 정리 0회 / 건너뜀 38회, 그 사이 디스크가
+# 85% → 89% 로 올랐다. 정작 실제 빌드는 하루 중 일부였다.
+#
+# 가드가 가장 필요한 날(배포가 잦은 날)에 한 번도 안 도는 구조였다.
+_build_running=$(ps -eo comm=,args= 2>/dev/null | awk '$1 == "docker" && /[ ]build[ ]/ {c++} END{print c+0}')
+# 인자 시작을 고정한다. 셸 래퍼(`/bin/bash -c ...`)는 명령 문자열 안에 같은
+# 단어를 담고 있어 부분 일치로는 구분되지 않는다 — 실제 배포는
+# `bash deploy.sh bluegreen` 처럼 두 번째 인자가 스크립트 이름이다.
+_deploy_running=$(ps -eo comm=,args= 2>/dev/null \
+    | awk '$1 == "bash" && $3 ~ /(^|\/)deploy\.sh$/ && $4 ~ /^(bluegreen|queue-worker)$/ {c++} END{print c+0}')
+if [ "${_build_running:-0}" -gt 0 ] || [ "${_deploy_running:-0}" -gt 0 ]; then
+    echo "$(date '+%F %T') disk=${USED}% — 배포/빌드 프로세스 감지(build=${_build_running} deploy=${_deploy_running}), 정리 건너뜀"
     exit 0
 fi
 
