@@ -279,3 +279,52 @@ def test_prompt_compiler_warns_when_role_selects_nothing():
     src = inspect.getsource(PromptCompiler.compile)
     assert "prompt_assets_none_selected" in src
     assert "if role_key and not rows:" in src
+
+
+def test_orchestrator_projects_single_source():
+    """통합지시 검색 범위는 한 곳에서만 정한다.
+
+    2026-09-07 에 만들어진 목록이 네 곳에 복사됐고 이미 갈라져 있었다 —
+    auto_rag 7개, memory_recall 7개, autonomous_executor 6개(CEO 없음),
+    subagent_service 5개(NAS·CEO 없음). 사본을 만들면 한쪽이 반드시 낡는다.
+    """
+    import inspect
+
+    from app.core import memory_recall, project_config
+    from app.services import auto_rag
+
+    assert project_config.ORCHESTRATOR_PROJECTS
+    assert auto_rag._CEO_ORCHESTRATOR_PROJECTS is project_config.ORCHESTRATOR_PROJECTS
+    assert memory_recall._CEO_ORCHESTRATOR_PROJECTS is project_config.ORCHESTRATOR_PROJECTS
+
+    for mod in (auto_rag, memory_recall):
+        src = inspect.getsource(mod)
+        assert '["AADS", "KIS", "GO100"' not in src, (
+            f"{mod.__name__} 에 목록 사본이 다시 생겼다"
+        )
+
+
+def test_orchestrator_projects_env_override(monkeypatch):
+    """환경변수로 바꿀 수 있고, 오타 하나로 통합 검색이 죽지 않는다."""
+    from app.core import project_config
+
+    monkeypatch.setenv("CEO_ORCHESTRATOR_PROJECTS", "AADS, GO100 ,FOOD")
+    assert project_config._parse_orchestrator_projects() == ["AADS", "GO100", "FOOD"]
+
+    # 모르는 이름은 버리고 나머지를 쓴다.
+    monkeypatch.setenv("CEO_ORCHESTRATOR_PROJECTS", "AADS,없는프로젝트,CEO")
+    assert project_config._parse_orchestrator_projects() == ["AADS", "CEO"]
+
+    # 전부 걸러지면 기본값. 빈 목록으로 검색이 조용히 죽으면 안 된다.
+    monkeypatch.setenv("CEO_ORCHESTRATOR_PROJECTS", "오타1,오타2")
+    assert (
+        project_config._parse_orchestrator_projects()
+        == project_config._DEFAULT_ORCHESTRATOR_PROJECTS
+    )
+
+    # 미설정이면 기본값.
+    monkeypatch.delenv("CEO_ORCHESTRATOR_PROJECTS", raising=False)
+    assert (
+        project_config._parse_orchestrator_projects()
+        == project_config._DEFAULT_ORCHESTRATOR_PROJECTS
+    )

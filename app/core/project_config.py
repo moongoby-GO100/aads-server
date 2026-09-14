@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict
 
 # ─── 프로젝트별 서버·경로·언어 매핑 ──────────────────────────────────────────
@@ -42,6 +43,70 @@ SEARCH_PROJECT_ENUM = ALL_PROJECTS + ["NAS"]
 
 # 외부 프로젝트만 (SSH 접근 대상)
 REMOTE_PROJECTS = [k for k, v in PROJECT_MAP.items() if v["server"] not in ("localhost", "host.docker.internal")]
+
+
+# ─── CEO 통합지시 검색 범위 ──────────────────────────────────────────────────
+#
+# `[CEO] 통합지시` 워크스페이스에서 물으면 **이 목록의 프로젝트를 가로질러**
+# 기억과 대화를 찾는다. 다른 워크스페이스는 자기 프로젝트 안만 본다.
+#
+# 이 목록은 2026-09-07 에 만들어진 뒤 **네 곳에 복사됐고 이미 서로 갈라졌다.**
+#
+#     auto_rag.py            7개  (… NAS, CEO)
+#     memory_recall.py       7개  (같음)
+#     autonomous_executor.py 6개  (CEO 없음)
+#     subagent_service.py    5개  (NAS·CEO 없음)
+#
+# 사본을 만들면 한쪽이 반드시 낡는다. 여기가 정본이다.
+#
+# **위의 `PROJECT_MAP` 과 성격이 다르다.** PROJECT_MAP 은 어느 서버에 SSH 로
+# 붙을지를 정하므로 하드코딩이 안전장치다(LLM 이 명령을 다른 서버로 돌릴 수
+# 없다). 이 목록은 **검색 범위만** 정한다 — 실행 대상을 바꾸지 못하므로
+# 환경변수로 열어도 같은 위험이 없다.
+#
+#     CEO_ORCHESTRATOR_PROJECTS=AADS,KIS,GO100,SF,NTV2,NAS,CEO
+#
+# 모르는 이름이 들어오면 그것만 버리고 나머지를 쓴다. 전부 걸러져 비면
+# 기본값으로 돌아간다 — 오타 하나로 통합 검색이 조용히 죽으면 안 된다.
+_DEFAULT_ORCHESTRATOR_PROJECTS = ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "CEO"]
+
+
+def _parse_orchestrator_projects() -> list[str]:
+    raw = os.getenv("CEO_ORCHESTRATOR_PROJECTS", "").strip()
+    if not raw:
+        return list(_DEFAULT_ORCHESTRATOR_PROJECTS)
+
+    known = set(PROJECT_MAP) | set(DISPLAY_ONLY_PROJECTS)
+    picked: list[str] = []
+    dropped: list[str] = []
+    for token in raw.replace(";", ",").split(","):
+        name = token.strip().upper()
+        if not name:
+            continue
+        if name not in known:
+            dropped.append(name)
+            continue
+        if name not in picked:
+            picked.append(name)
+
+    if dropped:
+        # 여기서 print 를 쓰는 이유: 이 모듈은 로거보다 먼저 import 된다.
+        print(
+            f"[project_config] CEO_ORCHESTRATOR_PROJECTS 에서 모르는 프로젝트를 "
+            f"버렸다: {', '.join(dropped)}",
+            flush=True,
+        )
+    if not picked:
+        print(
+            "[project_config] CEO_ORCHESTRATOR_PROJECTS 가 전부 걸러져 "
+            "기본값을 쓴다",
+            flush=True,
+        )
+        return list(_DEFAULT_ORCHESTRATOR_PROJECTS)
+    return picked
+
+
+ORCHESTRATOR_PROJECTS = _parse_orchestrator_projects()
 
 
 def _build_project_alias_index() -> Dict[str, str]:

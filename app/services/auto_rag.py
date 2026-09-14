@@ -22,7 +22,9 @@ _RAG_TOKEN_BUDGET = int(os.getenv("AUTO_RAG_TOKEN_BUDGET", "2000"))
 _CROSS_SESSION_WEIGHT = float(os.getenv("AUTO_RAG_CROSS_SESSION_WEIGHT", "0.85"))
 
 # CEO 통합지시 워크스페이스 — 전 프로젝트 시맨틱 검색 대상
-_CEO_ORCHESTRATOR_PROJECTS = ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "CEO"]
+# 통합지시 검색 범위는 `project_config` 가 정본이다 — 사본을 만들지 마라.
+# 환경변수 `CEO_ORCHESTRATOR_PROJECTS` 로 바꾼다.
+from app.core.project_config import ORCHESTRATOR_PROJECTS as _CEO_ORCHESTRATOR_PROJECTS
 
 
 def _is_ceo_orchestrator(project: Optional[str]) -> bool:

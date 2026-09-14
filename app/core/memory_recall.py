@@ -78,7 +78,9 @@ def _normalize_project(project: Optional[str]) -> Optional[str]:
 
 
 # CEO 통합지시 워크스페이스("[CEO] 통합지시" 등) — 전 프로젝트 조회 대상
-_CEO_ORCHESTRATOR_PROJECTS = ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "CEO"]
+# 통합지시 검색 범위는 `project_config` 가 정본이다 — 사본을 만들지 마라.
+# 환경변수 `CEO_ORCHESTRATOR_PROJECTS` 로 바꾼다.
+from app.core.project_config import ORCHESTRATOR_PROJECTS as _CEO_ORCHESTRATOR_PROJECTS
 _ORCHESTRATOR_PER_PROJECT_LIMIT = 5
 _ORCHESTRATOR_TOTAL_LIMIT = 35
 
