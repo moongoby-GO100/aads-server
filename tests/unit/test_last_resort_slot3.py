@@ -38,7 +38,11 @@ def test_slot_three_survives_record_filter(monkeypatch):
             {"key_name": "ANTHROPIC_AUTH_TOKEN_3", "slot": "3", "priority": 3},
         ]
 
+    async def _gate_on(slot):
+        return True
+
     monkeypatch.setattr(model_selector, "_ap_get_key_records_async", _records)
+    monkeypatch.setattr(model_selector, "_slot_gate_enabled", _gate_on)
     slots = asyncio.run(model_selector._get_claude_slot_records())
     assert set(slots) == {"1", "2", "3"}
 

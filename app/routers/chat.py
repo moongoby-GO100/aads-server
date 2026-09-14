@@ -2033,6 +2033,21 @@ async def submit_chat_command(
 
     payload = result if isinstance(result, dict) else {"value": result}
 
+    # 지시↔응답 연결 기록. 핸들러가 어느 실행/세대를 대상으로 삼았는지
+    # 알려주면 그대로 커맨드 행에 찍는다. 2026-09-15 실측에서 24시간
+    # 인터럽트 46건이 전부 NULL 이었고, 그래서 "이 지시가 어느 답변에
+    # 반영됐나"에 DB 로 답할 방법이 없었다.
+    def _stamp_uuid(value: Any) -> Optional[UUID]:
+        if not value:
+            return None
+        try:
+            return UUID(str(value))
+        except (TypeError, ValueError):
+            return None
+
+    stamp_execution_id = _stamp_uuid(payload.get("execution_id"))
+    stamp_generation_id = _stamp_uuid(payload.get("generation_id"))
+
     # A handler that refused to do the work must not settle as ``succeeded``.
     # Clients branch on ``status`` first, so a refused resume was indistinguishable
     # from a real one and the user just watched a dead turn: on 2026-09-14, 293
@@ -2052,6 +2067,8 @@ async def submit_chat_command(
             code=refusal_code,
             message=str(payload.get("message") or "resume was refused"),
             result=payload,
+            execution_id=stamp_execution_id,
+            generation_id=stamp_generation_id,
         )
         return settled.to_payload(replayed=False)
 
@@ -2059,6 +2076,8 @@ async def submit_chat_command(
         command_id=record.command_id,
         tenant_id=tenant_id,
         result=payload,
+        execution_id=stamp_execution_id,
+        generation_id=stamp_generation_id,
     )
     return settled.to_payload(replayed=False)
 
@@ -3543,10 +3562,11 @@ async def interrupt_session(
             pool = get_pool()
             async with pool.acquire() as conn:
                 async with conn.transaction():
-                    await conn.execute(
+                    interrupt_message_id = await conn.fetchval(
                         """INSERT INTO chat_messages
                            (session_id, role, content, intent, attachments)
-                           VALUES ($1, 'user', $2, 'queued_interrupt', $3::jsonb)""",
+                           VALUES ($1, 'user', $2, 'queued_interrupt', $3::jsonb)
+                           RETURNING id""",
                         session_id,
                         f"[추가 지시] {req.content}",
                         _json.dumps(req.attachments or []),
@@ -3572,7 +3592,38 @@ async def interrupt_session(
         push_interrupt(sid, req.content, req.attachments if req.attachments else None)
         logger.info("interrupt_queued", session_id=sid, content=req.content[:100],
                      attachments=len(req.attachments))
-        return {"queued": True, "message": "추가 지시가 현재 스트림 종료 전 또는 다음 도구 완료 시점에 반영됩니다."}
+
+        # 접수 응답에 대상 실행/세대를 실어 보낸다. 내구성 커맨드 래퍼가 이
+        # 값을 chat_commands 에 찍고(지시↔응답 연결), 프론트는 이 값으로
+        # 지시 버블을 어느 응답 버블에 붙일지 판단한다.
+        target_execution_id = str(row["execution_id"]) if row and row["execution_id"] else None
+        target_generation_id = None
+        if target_execution_id:
+            try:
+                async with pool.acquire() as _gen_conn:
+                    target_generation_id = await _gen_conn.fetchval(
+                        """
+                        SELECT generation_id::text
+                          FROM chat_execution_generations
+                         WHERE execution_id = $1::uuid
+                           AND ended_at IS NULL
+                         ORDER BY attempt DESC
+                         LIMIT 1
+                        """,
+                        target_execution_id,
+                    )
+            except Exception as _gen_err:
+                # 세대 조회는 표시용이다. 실패해도 접수는 이미 확정됐다.
+                logger.warning("interrupt_generation_lookup_failed session_id=%s error=%s",
+                               sid, str(_gen_err)[:160])
+
+        return {
+            "queued": True,
+            "message": "추가 지시가 현재 스트림 종료 전 또는 다음 도구 완료 시점에 반영됩니다.",
+            "message_id": str(interrupt_message_id) if interrupt_message_id else None,
+            "execution_id": target_execution_id,
+            "generation_id": target_generation_id,
+        }
     else:
         return {"queued": False, "message": "현재 AI가 응답 생성 중이 아닙니다. 일반 메시지로 전송하세요."}
 
@@ -4810,6 +4861,41 @@ async def use_template(template_id: UUID):
 
 class KeyOrderRequest(BaseModel):
     primary: str = Field(..., description="우선 사용할 키 label/key_name/slot")
+
+
+class SlotEnableRequest(BaseModel):
+    slot: str = Field(..., description="최후 수단 슬롯 번호")
+    enabled: bool = Field(..., description="켤지 끌지")
+
+
+@router.post("/settings/auth-keys/slot-enabled")
+async def set_slot_enabled(req: SlotEnableRequest):
+    """최후 수단 슬롯을 켜고 끈다.
+
+    대표님이 켠 동안에만 폴백 후보가 된다. 기본은 꺼짐이다 — AADS 소유가
+    아닌 계정이라, 아무도 켜지 않았는데 쓰이는 일이 있으면 안 된다.
+    """
+    from app.services.slot_gate import set_enabled
+
+    result = await set_enabled(str(req.slot).strip(), bool(req.enabled))
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("message", "적용 실패"))
+    return result
+
+
+@router.post("/settings/auth-keys/slot-probe/{slot}")
+async def probe_slot_usage(slot: str):
+    """그 계정에 최소 호출 한 번을 보내 한도 헤더를 받아온다.
+
+    Anthropic 은 잔량 조회 API 가 없어 응답 헤더가 유일한 출처다. 남의 계정을
+    건드리는 호출이라 자동으로 돌리지 않는다 — 누른 사람이 있을 때만 잰다.
+    """
+    from app.services.slot_gate import probe_usage
+
+    result = await probe_usage(str(slot).strip())
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=result.get("error", "probe_failed"))
+    return result
 
 
 @router.post("/settings/auth-keys")

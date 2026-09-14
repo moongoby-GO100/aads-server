@@ -1084,6 +1084,9 @@ async def get_slot_usage_all() -> List[Dict[str, Any]]:
             # 쓰는 것이므로 눌러서 1순위로 올리는 일이 없어야 하고, 대표님이
             # 그 막대를 볼 때 "이건 우리 것이 아니다" 를 바로 알아야 한다.
             "last_resort": slot in _LAST_RESORT_SLOTS,
+            # 최후 수단 슬롯은 대표님이 켠 동안에만 쓰인다. 화면이 스위치를
+            # 그리려면 지금 상태를 알아야 한다.
+            "enabled": True,
             "source": row["source"] if row else "none",
             "sampled_at": row["fetched_at"].isoformat() if row else None,
             "primary": {"used_percent": None, "window_minutes": 300, "resets_at": None},
@@ -1100,6 +1103,13 @@ async def get_slot_usage_all() -> List[Dict[str, Any]]:
                 "window_minutes": 10080,
                 "resets_at": row["seven_day_resets_at"].isoformat() if row["seven_day_resets_at"] else None,
             }
+        if entry["last_resort"]:
+            from app.services.slot_gate import state as _gate_state
+
+            gate = await _gate_state(slot)
+            entry["enabled"] = bool(gate.get("enabled"))
+            entry["gate_changed_at"] = gate.get("changed_at")
+            entry["gate_changed_by"] = gate.get("changed_by")
         out.append(entry)
     return out
 

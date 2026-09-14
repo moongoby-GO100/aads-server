@@ -342,6 +342,17 @@ def _slot_sort_key(slot: str, record: Dict[str, Any]) -> Tuple[int, int, str]:
     return (1 if slot in _LAST_RESORT_SLOTS else 0, priority, slot)
 
 
+async def _slot_gate_enabled(slot: str) -> bool:
+    """최후 수단 슬롯의 수동 스위치. 못 읽으면 꺼진 것으로 본다."""
+    try:
+        from app.services.slot_gate import is_enabled
+
+        return await is_enabled(slot)
+    except Exception as exc:
+        logger.warning("slot_gate_unavailable slot=%s: %s", slot, str(exc)[:120])
+        return False
+
+
 async def _get_claude_slot_records() -> Dict[str, Dict[str, Any]]:
     """Anthropic DB priority를 relay slot 기준으로 재구성."""
     try:
@@ -351,10 +362,19 @@ async def _get_claude_slot_records() -> Dict[str, Dict[str, Any]]:
         records = []
     slot_records: Dict[str, Dict[str, Any]] = {}
     dropped: List[str] = []
+    # 대표님이 꺼 둔 슬롯은 "사고" 가 아니다. 충돌 경고에 섞으면 진짜 충돌이
+    # 묻힌다 — 오늘 하루 고친 것의 절반이 그런 거짓 경보였다.
+    gated_off: List[str] = []
     for record in records:
         slot = str(record.get("slot", "") or "")
         if slot not in _KNOWN_SLOTS:
             dropped.append("%s(slot=%r)" % (record.get("label") or record.get("key_name"), slot))
+            continue
+        if slot in _LAST_RESORT_SLOTS and not await _slot_gate_enabled(slot):
+            # 대표님이 켜지 않은 최후 수단 슬롯은 후보에 넣지 않는다.
+            # 순서만 뒤로 미루면, 1·2 가 동시에 막히는 날 아무도 켜지 않았는데
+            # 남의 한도가 새어나간다.
+            gated_off.append("%s(slot=%s)" % (record.get("label") or record.get("key_name"), slot))
             continue
         if slot in slot_records:
             # 같은 슬롯을 두 계정이 차지하면 뒤엣것이 조용히 버려져 폴백이
@@ -362,7 +382,9 @@ async def _get_claude_slot_records() -> Dict[str, Dict[str, Any]]:
             dropped.append("%s(slot=%s 중복)" % (record.get("label") or record.get("key_name"), slot))
             continue
         slot_records[slot] = record
-    if dropped and len(records) > len(slot_records):
+    if gated_off:
+        logger.info("oauth_slot_gated_off: %s (대표님이 꺼 둔 최후 수단 계정)", ", ".join(gated_off))
+    if dropped and len(records) - len(gated_off) > len(slot_records):
         logger.warning(
             "oauth_slot_collision: 계정 %d개 중 %d개만 슬롯 확보 — 교차 폴백 축소. 제외=%s",
             len(records), len(slot_records), ", ".join(dropped),
