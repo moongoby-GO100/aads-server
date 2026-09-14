@@ -14218,20 +14218,23 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   standby 재동기화가 필요하다. 과거 6건의 `phase='queued'` 행 백필은 CEO 승인 대기.
 
 
-## 2026-09-14 02:1x KST — 배포 원장(phase/status) 관측 결함 2건 수정 + 릴리스 반영
+## 2026-09-14 09:45 KST — 배포 원장 phase 백필 6건 + HANDOVER 중복 섹션 제거
 
-- **대시보드 phase 결함**: `aads-dashboard/deploy.sh` 가 `deploy_runs` INSERT 에 phase 를 주지
-  않고 성공/실패 UPDATE 도 phase 를 건드리지 않아, 대시보드 배포는 성공해도 원장에
-  `phase='queued'` 로 남았다(과거 6건: 성공 3 / 실패 3). 단계별 `record_deploy_phase` 를 넣어
-  build_candidate_image → candidate_health → traffic_switch → p0p1_monitoring → completed 로
-  기록하고, 실패 시에는 멈춘 단계를 그대로 보존한다. 커밋 `8643a17`(aads-dashboard).
-- **API status 결함**: `aads-server/deploy.sh` 가 standby 동기화 보류 시 `status='skipped'` 로
-  UPDATE 를 시도했으나 `deploy_runs_status_check` 위반으로 쓰기가 통째로 실패했다. 그 결과
-  run 418 은 standby 가 구 이미지로 남았는데도 원장에는 `success/completed` 로만 남았다.
-  `deploy_observe_update` 에서 skipped/deferred/partial → `success_partial`,
-  completed → `success` 로 정규화한다. (`deploy_phase_events` 에는 원래 표현을 그대로 남긴다.)
-- **배포 결과**: API run 418 = `44df37e3` success(활성 :8102), 대시보드 run 419 = `8643a17`
-  success/completed, 양 대시보드 슬롯 동일 이미지, 외부 헬스 api=200 / dash=307(로그인 리다이렉트).
-- **남은 리스크**: run 418 은 활성 스트림 1건 때문에 standby(:8100)가 구 이미지
-  `593360b18433` 로 남았다. 활성 슬롯은 새 릴리스로 정상이지만, 다음 배포나 스트림 종료 후
-  standby 재동기화가 필요하다. 과거 6건의 `phase='queued'` 행 백필은 CEO 승인 대기.
+- **HANDOVER 중복 제거**: 커밋 `0af6d1b8` 이 `36eba6e3` 과 완전히 동일한 19줄 섹션을 한 번
+  더 덧붙여 같은 내용이 두 번 실려 있었다(14202행 / 14221행). `git checkout 36eba6e3 --
+  HANDOVER.md` 로 중복분만 되돌렸다(14237행 → 14218행). 재발 방지: 같은 메시지로 재커밋할
+  때는 append 전에 헤더 중복 여부(`grep -c`)를 먼저 확인할 것.
+- **원장 phase 백필**: `deploy_runs` 의 과거 6건이 종료 상태인데도 `phase='queued'` 로
+  남아 있었다(대시보드 deploy.sh 가 phase 를 기록하지 않던 시절의 행). 성공 3건
+  (403/405/417) → `phase='completed'`, 실패 3건(414/415/416) → `phase='build_candidate_image'`
+  로 정규화했다. **실패 3건의 단계는 기록된 값이 아니라 `error_summary` 의 마지막 로그
+  (`clean release context` = `build_release_image` 내부)로 역추정한 값이다.**
+  검증: 종료 상태 + `phase='queued'` 잔여 행 = 0.
+- **standby 재동기화 — 미완, 원인 확정**: API run 418 의 standby(:8100)는 여전히 구 이미지
+  `593360b18433`, 활성 green(:8102)은 `44df37e3ec9f` 다. 차단 원인은 blue 슬롯이 소유한
+  실행 중 턴 1건(`chat_turn_executions` 5cd0b995 / session 8bf0405a / 08:43 KST 시작 /
+  heartbeat 정상)이고, 이는 **현재 CTO 채팅 세션 자신의 턴**이다. 즉 장시간 채팅 턴이
+  자기 슬롯의 standby 동기화를 스스로 막는 구조적 교착이다. 그 턴 종료 후 재동기화해야 한다.
+- **후속 P1**: `deploy.sh` 에 standby 만 맞추는 독립 CLI 모드(`sync-standby`)가 없어, drain
+  실패 시 전체 bluegreen 배포를 다시 돌려야만 두 슬롯이 수렴한다. nginx 는 :8100 을 backup
+  으로 물고 있으므로 green 장애 시 구 이미지로 조용히 폴백되는 위험이 남는다.
