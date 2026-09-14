@@ -73,3 +73,17 @@ def test_set_enabled_refuses_non_gated_slot():
     out = asyncio.run(slot_gate.set_enabled("2", True))
     assert out["ok"] is False
     assert out["error"] == "not_gated"
+
+
+def test_probe_reads_slot_assigned_records(monkeypatch):
+    """슬롯 번호는 auth_provider 가 붙인다.
+
+    `llm_key_provider` 의 원본 레코드에는 slot 이 없어서, 그걸 보면 언제나
+    token_missing 이 된다 — 2026-09-15 실제로 그렇게 실패했다.
+    """
+    import inspect
+
+    src = inspect.getsource(slot_gate.probe_usage)
+    body = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert "get_oauth_key_records_async" in body
+    assert "get_provider_key_records" not in body

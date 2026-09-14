@@ -129,9 +129,12 @@ async def probe_usage(slot: str) -> Dict[str, Any]:
     **남의 계정을 건드리는 호출이다.** 대표님이 스위치를 켜는 순간처럼
     의도가 분명할 때만 부른다 — 주기적으로 돌리지 않는다.
     """
-    from app.core.llm_key_provider import get_provider_key_records
+    # `llm_key_provider` 의 원본 레코드에는 slot 이 없다 — 슬롯은
+    # `auth_provider._assign_slots` 가 키 이름으로 붙인다. 원본을 보면
+    # slot 이 항상 None 이라 무조건 token_missing 이 된다(실제로 그랬다).
+    from app.core.auth_provider import get_oauth_key_records_async
 
-    records = await get_provider_key_records("anthropic", include_rate_limited=True)
+    records = await get_oauth_key_records_async(include_rate_limited=True)
     token = ""
     label = ""
     for record in records:
