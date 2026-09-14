@@ -1512,9 +1512,15 @@ ${safe_instruction}"
             # instruction을 temp file로 전달 (arg에 멀티라인/대용량 문자열 깨짐 방지)
             local instr_file="${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt"
             if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'aads-server'; then
-                instr_file="/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt"
+                # /app/scripts 는 마운트가 아니라 이미지에 구워진 경로다. 호스트
+                # scripts/ 에 쓴 파일은 컨테이너에서 절대 보이지 않는다 —
+                # 2026-09-14 확인: 모든 litellm_runner 작업이
+                # FileNotFoundError: '/app/scripts/.litellm_instr_*.txt' 로 죽었고,
+                # 여러 세션이 이를 "러너 계정문제" 로 보고했다.
+                # app/data 는 실제로 마운트돼 있다(→ /app/app/data).
+                instr_file="/root/aads/aads-server/app/data/.litellm_instr_${job_id}.txt"
                 printf '%s' "$safe_instruction" > "$instr_file"
-                local container_instr="/app/scripts/.litellm_instr_${job_id}.txt"
+                local container_instr="/app/app/data/.litellm_instr_${job_id}.txt"
                 timeout "$MAX_RUNTIME" docker exec aads-server python3 /app/scripts/litellm_runner.py \
                     --model "$llm_model_name" \
                     --instruction-file "$container_instr" \
@@ -1574,7 +1580,13 @@ ${safe_instruction}"
                 fi
                 if grep -qiE "FAILED:|ERROR:|unauthorized|forbidden|invalid.?key|auth" "$err_file" 2>/dev/null; then
                     local _err_msg
-                    _err_msg=$(head -3 "$err_file" | tr '\n' ' ' | head -c 100)
+                    # head -3 은 stderr 맨 위, 즉 Codex 시작 배너를 집는다. 그래서
+                    # 로그에 "Reading additional input from stdin... OpenAI Codex"
+                    # 만 남고 진짜 원인이 가려졌다(2026-09-14: 실제 원인은
+                    # FileNotFoundError 였는데 세 세션이 계정 문제로 오진했다).
+                    # 패턴에 걸린 줄을 그대로 남긴다.
+                    _err_msg=$(grep -iEm3 "FAILED:|ERROR:|unauthorized|forbidden|invalid.?key|auth" "$err_file" 2>/dev/null | tr '\n' ' ' | head -c 160)
+                    [[ -n "$_err_msg" ]] || _err_msg=$(head -3 "$err_file" | tr '\n' ' ' | head -c 100)
                     if grep -qiE "refresh_token_reused|token_expired|Please log out and sign in again" "$err_file" 2>/dev/null; then
                         mark_codex_auth_disabled "$_err_msg"
                     fi
@@ -1604,6 +1616,7 @@ ${safe_instruction}"
 
         # LiteLLM instruction temp file 정리
         [[ -f "${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt" ]] && rm -f "${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt"
+        [[ -f "/root/aads/aads-server/app/data/.litellm_instr_${job_id}.txt" ]] && rm -f "/root/aads/aads-server/app/data/.litellm_instr_${job_id}.txt"
         [[ -f "/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt" ]] && rm -f "/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt"
 
         # 방어: Codex 출력 실패 감지
