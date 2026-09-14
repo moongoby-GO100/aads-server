@@ -87,3 +87,61 @@ def test_doc_mention_requires_known_file():
     assert "by_base" in src and "known" in src
     # 같은 파일명이 여러 곳이면 모호하므로 잇지 않는다.
     assert "len(targets) > 3" in src
+
+
+def test_graph_context_only_for_specific_shapes():
+    """질문에서 아무 단어나 그래프로 찾지 않는다.
+
+    파일 경로·커밋 SHA·오류 키처럼 **모양이 분명한 것만** 본다. 아무
+    명사나 넣으면 엉뚱한 노드가 걸리고, 그 순간 그래프는 근거로 못 쓴다.
+    """
+    from app.services.kg_query import extract_candidates
+
+    assert extract_candidates("chat_service.py 가 왜 느려졌지") == ["chat_service.py"]
+    assert "07321522" in extract_candidates("커밋 07321522 에서 뭘 고쳤지")
+    assert "embed.container_localhost" in " ".join(
+        extract_candidates("embed.container_localhost_dummy_fallback 이 뭐야")
+    )
+    # 평범한 문장은 후보가 없어야 한다.
+    assert extract_candidates("오늘 매출이 어떻게 되지") == []
+    assert extract_candidates("") == []
+
+
+def test_relation_labels_are_korean():
+    """대표가 읽는 화면이다. 관계 이름을 영문 그대로 두지 않는다."""
+    from app.services.kg_query import relation_label
+
+    for rel in ("modifies", "deployed_in", "documents", "resolved_by", "affects"):
+        label = relation_label(rel)
+        assert label != rel, f"{rel} 이 번역되지 않았다"
+        assert label.isascii() is False
+
+
+def test_graph_context_is_empty_without_matches():
+    """관계가 없으면 빈 문자열. 억지로 끌어오지 않는다."""
+    import inspect
+
+    from app.services import kg_query
+
+    src = inspect.getsource(kg_query.context_for_question)
+    assert 'return ""' in src
+    assert "knowledge_graph" in src
+
+
+def test_auto_rag_keeps_graph_when_vector_empty():
+    """벡터가 빈손이어도 그래프 근거는 살아야 한다.
+
+    예전에는 `if not results: return ""` 로 일찍 반환해서 그래프까지 버렸다.
+    """
+    import inspect
+
+    from app.services import auto_rag
+
+    src = inspect.getsource(auto_rag.build_auto_rag_context)
+    assert "graph_context" in src
+    assert "return graph_context" in src, (
+        "벡터 결과가 없을 때 그래프 근거까지 버리고 있다"
+    )
+    gi = src.index("graph_context = await context_for_question")
+    ri = src.index("if not results:")
+    assert gi < ri, "그래프 조회가 조기 반환보다 뒤에 있다"

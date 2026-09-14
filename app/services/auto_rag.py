@@ -57,8 +57,28 @@ async def build_auto_rag_context(
         results = await _search_relevant(
             query_emb, session_id, project, current_message_ids, user_message
         )
+
+        # 그래프 근거는 벡터 검색과 별개다.
+        #
+        # 질문에 파일 경로·커밋·오류 키가 들어 있으면 그것이 **무엇과
+        # 이어져 있는지**를 준다 — 어떤 오류가 그 파일에 있었고, 어느
+        # 커밋이 고쳤고, 어느 문서가 설명하는지.
+        #
+        # 벡터 검색이 빈손이어도 그래프는 답이 있을 수 있다. 예전처럼
+        # 여기서 일찍 반환하면 그 근거까지 같이 버린다.
+        #
+        # 관계가 없으면 빈 문자열이다. 억지로 비슷한 것을 끌어오지 않는다 —
+        # 그래프의 값어치는 "확실히 이어져 있다" 하나다.
+        graph_context = ""
+        try:
+            from app.services.kg_query import context_for_question
+
+            graph_context = await context_for_question(user_message)
+        except Exception as e:
+            logger.debug("auto_rag_graph_failed", error=str(e))
+
         if not results:
-            return ""
+            return graph_context
 
         # A4: Re-ask detection — same session, high similarity, recent (임베딩 재사용)
         reask_warning = ""
@@ -122,8 +142,10 @@ async def build_auto_rag_context(
                 logger.debug("auto_rag_ref_update_error", error=str(e_ref))
 
         context = "\n".join(lines)
+
         block = (
-            f"<auto_rag_context>\n"
+            (graph_context + "\n" if graph_context else "")
+            + f"<auto_rag_context>\n"
             f"{reask_warning}"
             f"## 관련 과거 컨텍스트 (자동 검색)\n"
             f"{context}\n"

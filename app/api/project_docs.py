@@ -882,6 +882,52 @@ async def scan_all_docs(force: bool = Query(False, description="캐시 무시하
     return resp
 
 
+@router.get("/kg/stats")
+async def kg_stats():
+    """지식 그래프 현황."""
+    from app.services.kg_query import stats
+
+    return await stats()
+
+
+@router.get("/kg/trace")
+async def kg_trace(
+    q: str = Query(..., min_length=2, max_length=200, description="파일 경로·커밋·오류 키"),
+    limit: int = Query(40, ge=5, le=120),
+):
+    """한 노드에서 선을 따라간다.
+
+    2026-09-14 신설. 벡터 검색은 "그 문장이 있는 문단" 을 준다. 그래프는
+    "그래서 뭐가 어떻게 됐나" 를 이어서 준다.
+
+    답하기 어려웠던 두 질문에 답한다.
+      - 이 파일 고치면 뭐가 영향받나
+      - 이 파일에 대한 문서가 어디 있나
+
+    그래프는 **구조화된 기록**(오류 사전·변경 원장·배포 원장)에서 만든다.
+    추측이 아니라 기계가 남긴 사실이다.
+    """
+    from app.services.kg_query import find_nodes, neighbors
+
+    matches = await find_nodes(q, limit=8)
+    if not matches:
+        return {"query": q, "found": False, "matches": [], "node": None,
+                "outgoing": [], "incoming": []}
+
+    node = matches[0]
+    rel = await neighbors(int(node["id"]), limit=limit)
+    return {
+        "query": q,
+        "found": True,
+        "matches": [{"id": int(m["id"]), "type": m["entity_type"], "name": m["name"],
+                     "degree": int(m["degree"])} for m in matches],
+        "node": {"id": int(node["id"]), "type": node["entity_type"], "name": node["name"],
+                 "description": node["description"], "project": node["project"]},
+        "outgoing": rel["outgoing"],
+        "incoming": rel["incoming"],
+    }
+
+
 @router.get("/changes/digest")
 async def changes_digest(
     days: int = Query(7, ge=1, le=60, description="며칠치"),
