@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>오비스 음성 AI 비서 — 상세 설계 PRD (2026-09-14)</title>
+<style>
+:root{--bg:#0f1419;--panel:#161c23;--line:#2a323c;--txt:#e6edf3;--dim:#9aa7b4;--acc:#4da3ff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;line-height:1.75;font-size:16px}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 18px 96px}
+header.doc{border-bottom:2px solid var(--acc);padding-bottom:18px;margin-bottom:28px}
+h1{font-size:1.65rem;margin:0 0 8px;letter-spacing:-.02em}
+h2{font-size:1.25rem;margin:44px 0 12px;padding-left:10px;border-left:4px solid var(--acc)}
+h3{font-size:1.05rem;margin:28px 0 10px;color:#cfe3ff}
+p,li{color:var(--txt)}
+.meta{color:var(--dim);font-size:.88rem}
+.meta b{color:var(--txt)}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:.92rem;display:block;overflow-x:auto;white-space:nowrap}
+@media(min-width:760px){table{display:table;white-space:normal}}
+th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:#1b2430;color:#cfe3ff;font-weight:600}
+tr:nth-child(even) td{background:#12181f}
+code,kbd{font-family:var(--mono);background:#1b2430;padding:1px 5px;border-radius:4px;font-size:.88em;color:#a5d6ff}
+pre{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:14px;overflow-x:auto;font-family:var(--mono);font-size:.84rem;line-height:1.55;color:#c9d1d9}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:16px 0}
+.card.ok{border-left:4px solid var(--ok)}
+.card.warn{border-left:4px solid var(--warn)}
+.card.bad{border-left:4px solid var(--bad)}
+.b{display:inline-block;padding:1px 8px;border-radius:99px;font-size:.76rem;font-weight:700;border:1px solid}
+.b.ok{color:var(--ok);border-color:var(--ok)}
+.b.warn{color:var(--warn);border-color:var(--warn)}
+.b.bad{color:var(--bad);border-color:var(--bad)}
+.b.new{color:var(--acc);border-color:var(--acc)}
+.b.keep{color:var(--dim);border-color:var(--dim)}
+nav.toc{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:20px 0 30px}
+nav.toc ol{margin:6px 0 0;padding-left:20px;columns:2;column-gap:28px}
+@media(max-width:700px){nav.toc ol{columns:1}}
+nav.toc a{color:#a5d6ff;text-decoration:none;font-size:.9rem}
+nav.toc a:hover{text-decoration:underline}
+.src{color:var(--dim);font-size:.8rem}
+blockquote{margin:14px 0;padding:12px 16px;border-left:3px solid var(--acc);background:#131a22;color:#d8e4f0;font-style:normal}
+footer{margin-top:60px;border-top:1px solid var(--line);padding-top:16px;color:var(--dim);font-size:.84rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+<h1>오비스 음성 AI 비서 — 상세 설계 PRD</h1>
+<p class="meta">
+문서번호 <b>OHVIS-VOICE-PRD-20260914</b> · 작성 <b>2026-09-14 (KST)</b> · 대상 <b>AADS / 오비스(OHVIS)</b><br>
+요청자 <b>CEO(moongoby)</b> · 기준 원문 <b>GenSpark 음성인식 AI 비서 설계·PRD</b>(회수본 <code>docs/ohvis/OHVIS-VOICE-SOURCE-20260913.md</code>)<br>
+모든 수치는 <b>2026-09-14 17:0x~17:4x KST 실측</b>이며, 추정치는 본문에 <span class="b warn">추정</span>으로 표기한다.
+</p>
+</header>
+
+<nav class="toc">
+<b>목차</b>
+<ol>
+<li><a href="#s1">요약과 판정</a></li>
+<li><a href="#s2">문제 정의 — 왜 전담 세션인가</a></li>
+<li><a href="#s3">시스템 구성 (3계층)</a></li>
+<li><a href="#s4">역할과 권한 매트릭스</a></li>
+<li><a href="#s5">모델 배정</a></li>
+<li><a href="#s6">상세 흐름 F1~F6</a></li>
+<li><a href="#s7">데이터 모델</a></li>
+<li><a href="#s8">프롬프트 엔지니어링</a></li>
+<li><a href="#s9">컨텍스트 엔지니어링</a></li>
+<li><a href="#s10">RAG 설계</a></li>
+<li><a href="#s11">지연 예산과 성능 목표</a></li>
+<li><a href="#s12">안전 게이트</a></li>
+<li><a href="#s13">구현 단계</a></li>
+<li><a href="#s14">검증 기준</a></li>
+<li><a href="#s15">리스크와 대안</a></li>
+<li><a href="#s16">부록 — 실측 데이터</a></li>
+</ol>
+</nav>
+
+<h2 id="s1">1. 요약과 판정</h2>
+
+<div class="card ok">
+<p><b>판정: 구현 가능하다. 단, 성립 조건이 하나 있다 — 음성 담당 세션은 "조회하지 않는다".</b></p>
+<p>CEO께서 제시한 구조(음성담당 ↔ 오케스트레이터 ↔ 시스템·러너)는 오비스의 현재 자산으로 대부분 조립된다.
+신규 개발보다 <b>배선(wiring)</b>에 가깝다. 다만 음성 담당이 질문을 받고 나서 DB를 뒤지기 시작하면 설계가 무너진다.
+음성의 제한 시간은 <b>1.5초</b>이고, 조회 한 번이 그 예산을 통째로 먹는다.</p>
+</div>
+
+<table>
+<tr><th>CEO 요구</th><th>설계상 해법</th><th>상태</th></tr>
+<tr><td>현황을 <b>상시 실시간 보유</b></td><td>스냅샷 루프(60초, SQL 집계 전용)가 만들어 두고 음성 담당은 1행만 읽음</td><td><span class="b new">신규</span></td></tr>
+<tr><td>음성 담당이 <b>1차 정제해 보고</b></td><td>Haiku 4.5 + L4 음성 포맷 에셋(3문장·숫자 3개·질문 종료)</td><td><span class="b new">신규 에셋 1건</span></td></tr>
+<tr><td>질문을 <b>실시간으로 오케스트레이터에 전달</b></td><td>음성 담당이 의도 분류 후 오케스트레이터 세션에 위임(내부 큐)</td><td><span class="b new">신규</span></td></tr>
+<tr><td>준비되는 동안 <b>빠르게 현황 보고</b></td><td>프리앰블 발화 + 스냅샷 기반 중간 응답</td><td><span class="b new">신규</span></td></tr>
+<tr><td>오케스트레이터가 <b>각 담당에 작업 지시</b></td><td><code>pipeline_runner_submit_batch</code> (parallel_group / depends_on)</td><td><span class="b keep">기존</span></td></tr>
+<tr><td>작업 현황을 <b>실시간 데이터로 체크</b></td><td><code>pipeline_jobs</code> + <code>ohvis_tasks</code> + trace</td><td><span class="b keep">기존</span></td></tr>
+<tr><td><b>중간보고 → 음성 전달</b></td><td>상태 전이 이벤트 → 음성 담당 요약 → TTS</td><td><span class="b new">신규</span></td></tr>
+<tr><td><b>완료 순차 보고 + 종합 보고</b></td><td>지시 추적 테이블(<code>voice_directive_track</code>)로 부모-자식 집계</td><td><span class="b new">신규 1테이블</span></td></tr>
+<tr><td><b>작업1 진행 중 작업2 추가 지시</b></td><td>같은 추적 트리에 형제 노드로 추가, 독립 완료 보고</td><td><span class="b new">신규</span></td></tr>
+</table>
+
+<h2 id="s2">2. 문제 정의 — 왜 전담 세션인가</h2>
+
+<p>지금의 CEO 채팅 세션은 <b>깊이</b>에 최적화돼 있다. 8섹션 보고서, 표, 커밋 해시, 검증 로그.
+화면으로 읽을 때는 옳지만 귀로 들을 때는 전부 잡음이다. 그리고 무엇보다 <b>느리다</b>.</p>
+
+<div class="card bad">
+<p><b>실측된 3가지 장애 요인</b></p>
+<table>
+<tr><th>#</th><th>사실</th><th>근거</th><th>음성에서의 결과</th></tr>
+<tr><td>1</td><td>현황 질문 1건에 DB 조회 <b>6회</b></td><td>본 세션 직전 턴 실측</td><td>응답까지 10초 이상 → 고장으로 인식</td></tr>
+<tr><td>2</td><td><code>ohvis_harness_traces</code> 22,830건 중 <code>latency_ms</code> 채워진 건 <b>0건</b></td><td>DB 집계</td><td>음성 지연을 <b>측정조차 못 함</b></td></tr>
+<tr><td>3</td><td><code>ohvis_tasks</code> 좀비 <b>5건</b>(running 표기, 실제 정지)</td><td>상태·갱신시각 대조</td><td>음성으로 <b>틀린 숫자를 보고</b>하게 됨</td></tr>
+</table>
+<p class="src">3번이 가장 위험하다. 화면 보고는 CEO가 스크롤해서 되짚지만, <b>귀로 들은 숫자는 검증 없이 그대로 신뢰된다.</b></p>
+</div>
+
+<h3>전담 세션이 해결하는 것</h3>
+<ul>
+<li><b>포맷 분리</b> — 같은 사실을 귀용으로 압축. 채팅 세션의 보고 규칙과 충돌하지 않게 스코프로 격리한다.</li>
+<li><b>속도 분리</b> — 음성 담당은 조회하지 않고 <b>이미 계산된 것</b>만 읽는다.</li>
+<li><b>권한 분리</b> — 음성 담당은 <b>읽기 전용</b>. 쓰기는 전부 오케스트레이터를 거친다. 오인식이 배포를 부르지 않게 만드는 구조적 차단이다.</li>
+</ul>
+
+<h2 id="s3">3. 시스템 구성 (3계층)</h2>
+
+<pre>
+ [CEO 폰 / 오비스앱 PWA]
+        │  ①발화(녹음)                          ⑥TTS 낭독 + 채팅 표시
+        ▼                                              ▲
+╔══════════════════════════════════════════════════════════════════╗
+║  A. 음성 담당 세션  (VOICE)        모델: Haiku 4.5   권한: 읽기   ║
+║   - 스냅샷 1행 읽기 → 3문장 요약                                  ║
+║   - 의도 분류(질의 / 지시 / 확인응답)                             ║
+║   - 프리앰블 발화("확인하고 있습니다")                            ║
+║   - 쓰기 도구 미보유 (구조적 차단)                                ║
+╚══════════════════════════════════════════════════════════════════╝
+        │  ②지시/질의 위임                      ⑤중간·완료 이벤트
+        ▼                                              ▲
+╔══════════════════════════════════════════════════════════════════╗
+║  B. 오비스 오케스트레이터  (ORCH)  모델: Sonnet 5 / Opus 5        ║
+║   - 지시서 생성, 러너 배정, 의존성(parallel_group/depends_on)     ║
+║   - 상태 감시·재시도·에스컬레이션                                 ║
+║   - voice_directive_track 에 추적 트리 기록                       ║
+║   - 고위험 명령은 승인 게이트로 보류                              ║
+╚══════════════════════════════════════════════════════════════════╝
+        │  ③작업 지시                            ④상태/결과
+        ▼                                              ▲
+╔══════════════════════════════════════════════════════════════════╗
+║  C. 실행·정보 계층                                                ║
+║   pipeline_jobs · ohvis_tasks · ohvis_loops · harness_traces      ║
+║   doc_chunks(RAG) · memory_facts · kg_entities · ohvis_wiki_pages ║
+║   3서버 러너: contabo116 / contabo14 / cafe24_114                 ║
+╚══════════════════════════════════════════════════════════════════╝
+        ▲
+        │  60초 주기 SQL 집계 (LLM 미사용)
+ [스냅샷 루프  voice-briefing-snapshot]  ──▶ voice_briefing_snapshot (1행)
+</pre>
+
+<div class="card">
+<p><b>설계 원칙 3가지</b></p>
+<ol>
+<li><b>음성 담당은 계산하지 않는다.</b> 집계는 루프가, 판단은 오케스트레이터가 한다. 음성 담당은 <b>말로 바꾸는 일</b>만 한다.</li>
+<li><b>쓰기 권한은 한 곳에만 둔다.</b> 오케스트레이터만 러너를 부른다. 음성 담당에 쓰기 도구를 주지 않는 것이 최선의 안전장치다.</li>
+<li><b>모든 지시는 추적 트리에 들어간다.</b> 작업1 진행 중 작업2가 와도 형제 노드로 붙고, 완료는 각각, 종합은 트리 단위로 보고한다.</li>
+</ol>
+</div>
+
+<h2 id="s4">4. 역할과 권한 매트릭스</h2>
+
+<p>CEO께서 "역할과 권한이 엄청 중요하다"고 하신 부분이다. 권한은 <b>프롬프트로 부탁하는 것이 아니라 도구 목록으로 강제</b>한다.</p>
+
+<table>
+<tr><th>능력</th><th>A. 음성 담당</th><th>B. 오케스트레이터</th><th>C. 러너 워커</th></tr>
+<tr><td>스냅샷 읽기</td><td>✅ (유일한 상시 소스)</td><td>✅</td><td>—</td></tr>
+<tr><td>DB 조회(SELECT)</td><td>⚠️ 1회 한정(스냅샷 미스 시)</td><td>✅ 제한 없음</td><td>✅</td></tr>
+<tr><td>RAG 검색</td><td>✅ top-3, 300자 상한</td><td>✅ top-10</td><td>✅</td></tr>
+<tr><td>지시서 생성</td><td>❌</td><td>✅</td><td>❌</td></tr>
+<tr><td>러너 제출</td><td>❌ <b>도구 미보유</b></td><td>✅</td><td>❌</td></tr>
+<tr><td>파일 쓰기·커밋·푸시</td><td>❌ <b>도구 미보유</b></td><td>⚠️ 승인 후</td><td>✅ 격리 worktree</td></tr>
+<tr><td>배포·재시작</td><td>❌</td><td>⚠️ <b>CEO 화면 승인 필수</b></td><td>❌</td></tr>
+<tr><td>TTS 발화</td><td>✅ 유일</td><td>❌</td><td>❌</td></tr>
+<tr><td>CEO에게 질문</td><td>✅ (예/아니오 1개)</td><td>간접(음성 담당 경유)</td><td>❌</td></tr>
+</table>
+
+<div class="card warn">
+<p><b>핵심 규칙</b> — 음성 담당 세션의 도구 화이트리스트에 <b>쓰기 계열 도구를 아예 넣지 않는다.</b>
+프롬프트에 "하지 마라"라고 쓰는 것으로는 부족하다. 오인식 한 번이 배포를 부르면 되돌릴 수 없다.
+(참고: AADS 운영 원칙 R-ERRBOOK — "두 번 이상 어긴 규칙은 코드 차단으로 옮긴다.")</p>
+</div>
+
+<h2 id="s5">5. 모델 배정</h2>
+
+<p>CEO 지시: "빠른 모델과 정확성이 좋은 모델로 지정한다." 역할별로 나눈다.</p>
+
+<table>
+<tr><th>역할</th><th>모델</th><th>이유</th><th>토큰 상한</th></tr>
+<tr><td>A. 음성 담당(즉답·요약)</td><td><code>claude-haiku-4-5-20251001</code></td><td>3문장 요약·의도 분류는 단순 작업. 지연이 전부</td><td>입력 6K / 출력 200</td></tr>
+<tr><td>A'. 음성 담당(복합 질의)</td><td><code>claude-sonnet-5</code></td><td>여러 프로젝트 교차 요약이 필요할 때만 승격</td><td>입력 16K / 출력 400</td></tr>
+<tr><td>B. 오케스트레이터(기본)</td><td><code>claude-sonnet-5</code></td><td>지시서 작성·러너 배정·상태 판단의 균형점</td><td>입력 60K</td></tr>
+<tr><td>B'. 오케스트레이터(고위험·종합보고)</td><td><code>claude-opus-5</code></td><td>배포 판단, 장애 원인 분석, 최종 종합 보고</td><td>입력 120K</td></tr>
+<tr><td>C. 러너 워커</td><td><code>claude-sonnet-5</code> (크기별 조정)</td><td>기존 러너 정책 유지</td><td>기존</td></tr>
+<tr><td>폴백</td><td>LiteLLM 경유 Gemini</td><td>OAuth 2계정 소진 시 (R-AUTH 2순위 폴백 규칙)</td><td>—</td></tr>
+</table>
+
+<p class="src">비용 원칙: 음성 담당은 호출 빈도가 가장 높고 출력이 가장 짧다. 여기에 Opus를 쓰면 비용이 역전된다.
+<b>Haiku 기본 + 필요 시 승격</b>이 CEO 비용 효율 원칙(LLM 15회/task, 비용 효율 최우선)과 맞는다.</p>
+
+<h3>승격 규칙 (자동)</h3>
+<pre>
+if 질문이 스냅샷 필드로 답 가능        -> Haiku 4.5   (도구 0회)
+elif 단일 프로젝트 + RAG 1회            -> Haiku 4.5   (도구 1회)
+elif 교차 프로젝트 / 원인 추론 필요      -> Sonnet 5    (승격, 프리앰블 발화)
+elif 배포·장애·비용 판단                -> Opus 5      (오케스트레이터로 위임)
+</pre>
+
+<h2 id="s6">6. 상세 흐름 F1~F6</h2>
+
+<h3>F1. 상시 현황 확보 (CEO 개입 없음, 60초)</h3>
+<pre>
+[loop: voice-briefing-snapshot]  every 60s
+  ├ SQL 집계 (LLM 호출 없음 — 비용 0)
+  │   · pipeline_jobs 24h: done/error/running
+  │   · ohvis_tasks: running 중 30분 미갱신 = stale 로 재분류   ← 좀비 오보 차단
+  │   · ohvis_loops: 각 루프 마지막 성공 시각
+  │   · 최근 배포/헬스/디스크
+  │   · 미해결 에러 Top3 (error_book 매칭)
+  └ UPSERT voice_briefing_snapshot (단일 행, updated_at 갱신)
+</pre>
+
+<h3>F2. 음성 질의 → 즉답 (목표 2초)</h3>
+<pre>
+CEO: "지금 작업 현황 알려줘"
+ ① 폰 녹음 → /api/v1/voice/transcribe (whisper-1)      ~1.0s
+ ② VOICE 세션: 의도=status_query 판정                   ~0.1s
+ ③ voice_briefing_snapshot 1행 읽기                     ~0.05s
+ ④ Haiku 4.5 3문장 생성                                 ~0.8s
+ ⑤ TTS 낭독 + 채팅창에 전체 표 표시                     ~0.3s
+ ─────────────────────────────────────────────────────────
+ 총 약 2.2초 · 도구 호출 1회 · 추가 LLM 0회
+</pre>
+<blockquote>
+"러너 16건 중 실패 5건입니다. GO100 네 건, AADS 한 건.<br>
+멈춘 작업 다섯 건이 실행 중으로 남아 있습니다.<br>
+정리할까요?"
+</blockquote>
+
+<h3>F3. 음성 지시 → 오케스트레이터 → 러너 배정</h3>
+<pre>
+CEO: "GO100 파동엔진 500 에러 고치고, 동시에 대시보드 차트도 점검해"
+ ① VOICE: 의도=directive, 대상 2건 감지
+ ② VOICE → CEO: "두 건으로 나눠 지시합니다. 진행할까요?"   ← 확인 1회
+ ③ CEO: "응"
+ ④ VOICE → ORCH 위임 (원문 전사 + 스냅샷 컨텍스트 동봉)
+ ⑤ ORCH: 지시서 2건 생성 → pipeline_runner_submit_batch
+         parallel_group='voice-20260914-01'  (파일 충돌 없음 → 병렬)
+ ⑥ ORCH → voice_directive_track 에 트리 기록
+         root(지시) ─┬ child#1 GO100-WAVE-500  (runner-xxxx)
+                     └ child#2 DASH-CHART-CHECK (runner-yyyy)
+ ⑦ VOICE → CEO: "두 건 접수했습니다. 예상 십오 분. 끝나는 대로 알려드립니다."
+</pre>
+
+<h3>F4. 중간 상태 확인 → 중간 보고</h3>
+<pre>
+[ORCH 감시 루프 120초]
+  · 러너 로그/상태 전이 확인
+  · 이상 감지 시 조치(재시도/의존성 조정/모델 승격)
+  · 조치가 있었을 때만 이벤트 발행  ← 잡음 억제
+       ↓
+[VOICE] 이벤트 수신 → 1문장으로 축약 → TTS
+</pre>
+<blockquote>"작업 하나에서 인증 오류가 나서 다시 돌렸습니다. 진행 중입니다."</blockquote>
+<p class="src">보고 빈도 규칙: 상태가 <b>바뀌었을 때만</b> 말한다. 진행률 중계는 하지 않는다. 귀는 폴링을 견디지 못한다.</p>
+
+<h3>F5. 완료 순차 보고</h3>
+<pre>
+child#1 done  → VOICE: "GO100 파동엔진 고쳤습니다. 오류 사라졌고 커밋 하나입니다."
+child#2 done  → VOICE: "대시보드 차트 점검 끝. 이상 없습니다."
+root  all done → F6 종합 보고 트리거
+</pre>
+
+<h3>F6. 종합 보고 + 다중 지시 추적</h3>
+<pre>
+작업1 진행 중 작업2 지시 도착
+  → 같은 root 아래 형제 노드로 추가 (트리 유지)
+  → 완료는 각각 즉시 보고, 종합은 root 의 미완료 자식이 0이 될 때
+
+[종합 보고 = Opus 5 1회]
+  · 지시 3건 중 3건 완료, 실패 0
+  · 변경 파일 수, 커밋, 배포 여부
+  · 남은 리스크 1건
+  → VOICE 가 4문장으로 축약해 낭독, 전문은 채팅창
+</pre>
+
+<h2 id="s7">7. 데이터 모델</h2>
+
+<p>기존 테이블은 그대로 쓰고, <b>신규 2개</b>만 추가한다.</p>
+
+<h3>7-1. 신규 <code>voice_briefing_snapshot</code></h3>
+<table>
+<tr><th>컬럼</th><th>타입</th><th>용도</th></tr>
+<tr><td>id</td><td>smallint PK (항상 1)</td><td>단일 행 유지</td></tr>
+<tr><td>payload</td><td>jsonb</td><td>집계 결과 전체(러너/루프/좀비/배포/에러)</td></tr>
+<tr><td>headline</td><td>text</td><td>음성용 1문장 후보(사전 생성, LLM 미사용)</td></tr>
+<tr><td>alert_level</td><td>text</td><td>ok / warn / bad</td></tr>
+<tr><td>computed_at</td><td>timestamptz</td><td>신선도 판정용</td></tr>
+</table>
+
+<h3>7-2. 신규 <code>voice_directive_track</code></h3>
+<table>
+<tr><th>컬럼</th><th>타입</th><th>용도</th></tr>
+<tr><td>id / parent_id</td><td>uuid</td><td>지시 트리(root=CEO 발화, child=개별 작업)</td></tr>
+<tr><td>utterance</td><td>text</td><td>원 발화 전사(감사·QA용 — 종단형을 배제한 이유)</td></tr>
+<tr><td>intent</td><td>text</td><td>status_query / directive / confirm</td></tr>
+<tr><td>runner_job_id</td><td>text</td><td><code>pipeline_jobs</code> 연결</td></tr>
+<tr><td>state</td><td>text</td><td>accepted / running / mid_report / done / failed</td></tr>
+<tr><td>reported_at</td><td>timestamptz</td><td>음성 보고 완료 시각(중복 보고 방지)</td></tr>
+</table>
+
+<h3>7-3. 재사용 (변경 없음)</h3>
+<table>
+<tr><th>테이블</th><th>적재량(실측)</th><th>음성에서의 쓰임</th></tr>
+<tr><td><code>pipeline_jobs</code></td><td>24h 16건</td><td>작업 현황 원천</td></tr>
+<tr><td><code>ohvis_tasks</code></td><td>649건</td><td>오비스 작업 상태</td></tr>
+<tr><td><code>ohvis_harness_traces</code></td><td>22,830건</td><td>지연·비용 계측(현재 NULL — 선행 수정 필요)</td></tr>
+<tr><td><code>doc_chunks</code></td><td>7,847 / 임베딩 4,616</td><td>지식 질의 RAG</td></tr>
+<tr><td><code>memory_facts</code></td><td>75,717</td><td>CEO 선호·과거 결정</td></tr>
+<tr><td><code>ohvis_wiki_pages</code></td><td>1,694</td><td>정리된 요약 우선 조회</td></tr>
+<tr><td><code>kg_entities / kg_relations</code></td><td>4,560 / 1,789</td><td>"누가 무엇을" 관계 질의</td></tr>
+<tr><td><code>prompt_assets</code></td><td>활성 150</td><td>음성 포맷 에셋 주입</td></tr>
+</table>
+
+<h2 id="s8">8. 프롬프트 엔지니어링</h2>
+
+<p><code>prompt_assets</code>에 <b>L4 에셋 1건</b>을 추가하고 <code>workspace_scope</code>·<code>role_scope</code>·<code>intent_scope</code>로 음성 세션에만 적용한다. 기존 채팅 보고 규칙(8섹션)과 충돌하지 않는다.</p>
+
+<pre>
+slug: voice-report-format
+layer: L4 (작업 유형)
+workspace_scope: ['voice']      role_scope: ['voice_reporter']
+intent_scope: ['voice_status','voice_directive','voice_confirm']
+target_models: ['claude-haiku-4-5-20251001','claude-sonnet-5']
+priority: 90   enabled: true
+
+--- content ---
+너는 귀로 듣는 보고를 한다. 화면 보고 규칙(8섹션·표·헤딩)은 이 세션에 적용하지 않는다.
+
+1. 3문장 이내. 첫 문장은 결론.
+2. 숫자는 최대 3개. 소수점·퍼센트 소수 자리는 반올림해 말한다.
+3. 읽지 않는 것: 표, URL, 커밋 해시, 파일 경로, UUID, 영문 약어 나열.
+   필요하면 "자세한 건 화면에 띄웠습니다"로 넘긴다.
+4. 마지막 문장은 CEO가 예/아니오로 답할 수 있는 질문 하나. 선택지는 2개를 넘기지 않는다.
+5. 모르면 "확인이 필요합니다"라고 말한다. 추정을 확정처럼 말하지 않는다.
+6. 스냅샷이 90초보다 오래됐으면 "조금 전 기준입니다"를 붙인다.
+7. 지시를 받으면 실행하지 말고 오케스트레이터에 넘긴다. 넘겼다는 사실만 보고한다.
+</pre>
+
+<h2 id="s9">9. 컨텍스트 엔지니어링</h2>
+
+<p>음성 세션의 적은 <b>컨텍스트 비대</b>다. <code>memory_facts</code> 75,717건을 그대로 붙이면 지연이 폭증한다. 예산을 못 박는다.</p>
+
+<table>
+<tr><th>주입 항목</th><th>출처</th><th>상한</th><th>갱신</th></tr>
+<tr><td>현황 스냅샷</td><td><code>voice_briefing_snapshot</code></td><td>1,500 토큰</td><td>60초</td></tr>
+<tr><td>진행 중 지시 트리</td><td><code>voice_directive_track</code></td><td>800 토큰(미완료만)</td><td>이벤트</td></tr>
+<tr><td>CEO 선호·지침</td><td><code>memory_recall</code> preferences/directives</td><td>1,200 토큰</td><td>세션 시작</td></tr>
+<tr><td>최근 대화 요약</td><td><code>session_notes</code></td><td>800 토큰</td><td>20턴</td></tr>
+<tr><td>RAG 결과</td><td><code>doc_chunks</code> top-3</td><td>900 토큰(300자×3)</td><td>질의 시</td></tr>
+<tr><td><b>합계 상한</b></td><td>—</td><td><b>약 6,000 토큰</b></td><td>—</td></tr>
+</table>
+
+<p class="src">현재 CEO 채팅 세션의 시스템 프롬프트만으로도 이보다 크다. 음성은 <b>다른 예산으로 운영되는 별도 세션</b>이어야 하는 실질적 이유가 여기에 있다.</p>
+
+<h2 id="s10">10. RAG 설계</h2>
+
+<table>
+<tr><th>프로젝트</th><th>청크</th><th>임베딩</th><th>충전율</th><th>음성 가용성</th></tr>
+<tr><td>AADS</td><td>3,230</td><td>3,230</td><td><b>100%</b></td><td><span class="b ok">즉시 사용</span></td></tr>
+<tr><td>GO100</td><td>4,617</td><td>1,386</td><td>30.0%</td><td><span class="b warn">재인덱싱 필요</span></td></tr>
+<tr><td>KIS / SF / NTV2 / NAS</td><td>0</td><td>0</td><td>0%</td><td><span class="b bad">미인덱싱</span></td></tr>
+</table>
+
+<p>음성 RAG 프로파일: <b>top-3, 청크당 300자, 총 900자 상한.</b> 화면 채팅(top-10)과 다르게 잡는다.
+읽어줄 수 있는 분량이 정해져 있으므로 더 가져와도 낭비다.
+검색 우선순위는 <b>① 위키 요약(1,694) → ② doc_chunks 벡터 → ③ 지식그래프</b> 순. 이미 정리된 요약이 있으면 그것이 가장 짧고 정확하다.</p>
+
+<h2 id="s11">11. 지연 예산과 성능 목표</h2>
+
+<table>
+<tr><th>구간</th><th>목표</th><th>현재</th><th>비고</th></tr>
+<tr><td>STT 전사</td><td>&lt; 1.2초</td><td><span class="b warn">미측정</span></td><td>whisper-1 클라우드</td></tr>
+<tr><td>스냅샷 조회</td><td>&lt; 50ms</td><td>—</td><td>단일 행</td></tr>
+<tr><td>요약 생성(Haiku)</td><td>&lt; 0.8초</td><td><span class="b warn">미측정</span></td><td>출력 200토큰 상한</td></tr>
+<tr><td>첫 발화까지</td><td><b>&lt; 2.5초</b></td><td>—</td><td>프리앰블은 0.5초 내</td></tr>
+<tr><td>도구 호출 수</td><td><b>0~1회</b></td><td>현재 6회</td><td>핵심 지표</td></tr>
+</table>
+
+<div class="card warn">
+<p><b>선행 조건</b> — 위 수치는 <code>ohvis_harness_traces.latency_ms</code>가 채워져야 측정 가능하다.
+현재 22,830건 전부 NULL이므로, 계측 충전(<code>AADS-OHVIS-TRACE-FILL</code>)이 <b>S1보다 먼저</b>거나 최소한 같이 가야 한다.
+측정 없이 "빨라졌다"고 보고하는 것은 이 문서의 검증 기준을 스스로 어기는 일이다.</p>
+</div>
+
+<h2 id="s12">12. 안전 게이트</h2>
+
+<table>
+<tr><th>명령 유형</th><th>음성 단독</th><th>필요 절차</th></tr>
+<tr><td>현황 조회·검색</td><td>✅ 허용</td><td>없음</td></tr>
+<tr><td>작업 지시(코드 수정·조사)</td><td>⚠️ 확인 1회</td><td>"진행할까요?" → 예</td></tr>
+<tr><td>커밋·푸시</td><td>❌</td><td>오케스트레이터 + 화면 확인</td></tr>
+<tr><td>배포·서비스 재시작</td><td>❌</td><td><b>화면 승인 버튼 필수</b></td></tr>
+<tr><td>DB 쓰기·마이그레이션</td><td>❌</td><td>화면 승인 + 롤백 계획</td></tr>
+<tr><td>파괴적 명령(DROP/force push)</td><td>❌ 전면 차단</td><td>음성 경로에서 제안조차 하지 않음</td></tr>
+</table>
+
+<p>추가로 <b>오인식 방어</b>: 전사문에 배포·삭제·푸시 키워드가 포함되면 실행 경로로 보내기 전에
+전사문을 그대로 되읽어 확인한다("'대시보드 배포해'로 들었습니다. 맞습니까?").
+전사 원문은 <code>voice_directive_track.utterance</code>에 남겨 사후 감사 가능하게 한다.</p>
+
+<h2 id="s13">13. 구현 단계</h2>
+
+<table>
+<tr><th>#</th><th>작업</th><th>산출물</th><th>규모</th><th>선행</th></tr>
+<tr><td>S0</td><td>계측 충전</td><td><code>record_trace</code> 호출부 2곳 + cost_usd 파라미터</td><td>S</td><td>—</td></tr>
+<tr><td>S1</td><td>스냅샷 루프</td><td><code>voice_briefing_snapshot</code> + 60초 루프 정의</td><td>M</td><td>—</td></tr>
+<tr><td>S2</td><td>음성 세션 스코프</td><td>워크스페이스 + <code>role_key</code> + L4 에셋 1건</td><td>S</td><td>S1</td></tr>
+<tr><td>S3</td><td>응답 축약 + 낭독</td><td>음성 모드 플래그, 이중 응답(귀/화면), TTS 연결</td><td>M</td><td>S2</td></tr>
+<tr><td>S4</td><td>오케스트레이터 위임</td><td>의도 분류 → ORCH 큐 → 러너 배정</td><td>M</td><td>S3</td></tr>
+<tr><td>S5</td><td>추적·보고 폐루프</td><td><code>voice_directive_track</code> + 중간/완료/종합 보고</td><td>M</td><td>S4</td></tr>
+<tr><td>S6</td><td>자체 호스팅 STT(선택)</td><td><code>local_stt_bridge.py</code> → CEO PC RTX 3060</td><td>M</td><td>독립</td></tr>
+</table>
+
+<p class="src">S0~S3까지만 해도 "음성으로 묻고 3문장으로 듣는다"가 성립한다. S4~S5가 "지시하고 추적한다"를 완성한다.</p>
+
+<h2 id="s14">14. 검증 기준</h2>
+
+<table>
+<tr><th>지표</th><th>합격선</th><th>측정 방법</th></tr>
+<tr><td>스냅샷 신선도</td><td>90초 이내 유지</td><td><code>now() - computed_at</code> 상시 감시</td></tr>
+<tr><td>즉답률</td><td>음성 질의의 <b>80% 이상</b>이 도구 0회</td><td><code>traces.tool_calls</code> 길이 분포</td></tr>
+<tr><td>첫 발화 지연</td><td>p50 &lt; 2.5초</td><td><code>run_type='voice.turn'</code> p50</td></tr>
+<tr><td>보고 길이</td><td>평균 3문장 이하</td><td>응답 문장 수 집계</td></tr>
+<tr><td><b>오보율</b></td><td><b>0건</b></td><td>스냅샷 수치 vs 실DB 재조회 일치 검사(일 1회)</td></tr>
+<tr><td>고위험 음성 단독 실행</td><td><b>0건</b></td><td><code>voice_directive_track</code> 감사</td></tr>
+<tr><td>비용</td><td>스냅샷 루프 LLM 비용 $0</td><td>루프는 SQL 전용, <code>cost_usd</code> 확인</td></tr>
+</table>
+
+<h2 id="s15">15. 리스크와 대안</h2>
+
+<table>
+<tr><th>#</th><th>리스크</th><th>영향</th><th>대안</th></tr>
+<tr><td>1</td><td>좀비 작업이 스냅샷에 그대로 반영</td><td>귀로 듣는 <b>오보</b> — 검증 불가</td><td>집계 단계에서 30분 미갱신은 stale 재분류(설계 반영 완료)</td></tr>
+<tr><td>2</td><td>계측 NULL</td><td>성능 목표를 검증 불가</td><td>S0을 선행 또는 병행</td></tr>
+<tr><td>3</td><td>GO100 임베딩 30%</td><td>GO100 음성 질의 품질 저하</td><td>야간 재인덱싱. 그전까지는 "GO100 문서는 일부만 색인됨" 고지</td></tr>
+<tr><td>4</td><td>STT 오인식이 지시로 연결</td><td>잘못된 작업 실행</td><td>확인 발화 + 전사문 되읽기 + 쓰기 도구 미보유</td></tr>
+<tr><td>5</td><td>전사문 외부 전송(whisper-1)</td><td>운영 지시 내용이 외부로</td><td>S6 자체 호스팅(RTX 3060 12GB 유휴 확인됨)</td></tr>
+<tr><td>6</td><td>contabo116 부하 load 15~17(8코어)</td><td>스냅샷 루프가 부하 가중</td><td>SQL 전용·60초·인덱스 확인. 실패 시 120초로 완화</td></tr>
+<tr><td>7</td><td>보고 과다(잡음)</td><td>CEO가 음성을 꺼버림</td><td>상태 변화 시에만 발화. 진행률 중계 금지</td></tr>
+</table>
+
+<h2 id="s16">16. 부록 — 실측 데이터 (2026-09-14 KST)</h2>
+
+<table>
+<tr><th>항목</th><th>값</th><th>출처</th></tr>
+<tr><td>러너 잡 24시간</td><td>16건 (done 10 / error 5 / rejected 1)</td><td><code>pipeline_jobs</code></td></tr>
+<tr><td>프로젝트별 실패</td><td>GO100 4 / AADS 1</td><td><code>pipeline_jobs</code></td></tr>
+<tr><td>활성 감시 루프</td><td>5개 (KIS 60s / GO100 300s / AADS 1800s·3600s·deploy-until-success)</td><td><code>ohvis_loop_definitions</code></td></tr>
+<tr><td>오비스 작업</td><td>649건 (done 450 / stale 190 / running 5 / 기타 4)</td><td><code>ohvis_tasks</code></td></tr>
+<tr><td>trace 적재</td><td>22,830건 / latency_ms 0건 / cost_usd 0건 / span_id 0건</td><td><code>ohvis_harness_traces</code></td></tr>
+<tr><td>RAG</td><td>7,847청크 823문서 / 임베딩 4,616 / 최종 색인 14:43</td><td><code>doc_chunks</code></td></tr>
+<tr><td>기억 계층</td><td>memory_facts 75,717 / session_notes 1,240 / ai_observations 1,006</td><td>DB</td></tr>
+<tr><td>지식그래프·위키</td><td>kg 4,560·1,789 / wiki 1,694</td><td>DB</td></tr>
+<tr><td>프롬프트 자산</td><td>활성 150건 (스코프 6종 지원)</td><td><code>prompt_assets</code></td></tr>
+<tr><td>contabo116</td><td>8 vCPU(AVX2) / RAM 23G / <b>GPU 없음</b> / load 15.31</td><td>서버 실측</td></tr>
+<tr><td>CEO PC</td><td>i7-10700F 8C16T / RAM 31.9G / <b>RTX 3060 12GB, util 0%</b></td><td>PC Agent</td></tr>
+<tr><td>오비스앱 음성 입력</td><td>구현·배포됨 (<code>MediaRecorder</code> → <code>/api/v1/voice/transcribe</code>)</td><td>대시보드 <code>fbfdad4</code></td></tr>
+<tr><td>서버 음성 API</td><td><code>/voice/transcribe</code>(whisper-1) · <code>/voice/speech</code>(tts-1, <b>미연결</b>)</td><td><code>app/api/voice.py</code></td></tr>
+</table>
+
+<footer>
+OHVIS-VOICE-PRD-20260914 · 작성: AADS CEO 전략 세션 · 근거: 본 문서의 모든 수치는 DB·서버·코드 실측이며 추정은 별도 표기.<br>
+관련 문서: <code>docs/ohvis/OHVIS-VOICE-SOURCE-20260913.md</code> (GenSpark 원문 회수본) · 핸드오버 <code>ohvis-voice-prd-20260913</code>, <code>ohvis-trace-instrumentation-gap</code>
+</footer>
+
+</div>
+</body>
+</html>
