@@ -6520,6 +6520,28 @@ async def with_background_completion(
     _HB_PAD = ":" + " " * 256 + "\n"
     _HB_LINE = f'data: {json.dumps({"type": "heartbeat"})}\n{_HB_PAD}\n'
 
+    def _effective_first_response_timeout() -> float:
+        """컨텍스트가 크면 첫 토큰까지 더 기다린다.
+
+        고정 90초는 작은 세션 기준이다. 메시지 1,670건짜리 세션에서는 모델이
+        프롬프트를 읽는 데만 그 시간을 넘기고, 정상 동작이 중단으로 처리된다
+        (2026-09-14 실측: 24시간 중단 31건 중 19건이 첫응답 타임아웃, 큰 세션에
+        몰림 — 1670건 3회, 1092건 3회, 944건 4회).
+
+        무한정 늘리지는 않는다. 상한을 두어 진짜로 멎은 스트림은 여전히 닫는다.
+        """
+        base = _FIRST_RESPONSE_TIMEOUT_SEC
+        if base <= 0:
+            return base
+        try:
+            chars = int(state.get("context_chars") or 0)
+        except Exception:
+            chars = 0
+        if chars <= 0:
+            return base
+        # 20만자마다 60초. 상한 +210초(=최대 5분).
+        return base + min(210.0, (chars / 200_000.0) * 60.0)
+
     async def _maybe_abort_first_response_timeout(source: str) -> bool:
         """LLM/relay가 첫 실제 이벤트를 주지 못한 채 heartbeat만 유지되는 상태를 닫는다."""
         if _FIRST_RESPONSE_TIMEOUT_SEC <= 0:
@@ -6533,7 +6555,8 @@ async def with_background_completion(
             return False
         _last_event_at = float(state.get("last_event_at") or state.get("started_at") or _bg_time.monotonic())
         _elapsed = _bg_time.monotonic() - _last_event_at
-        if _elapsed < _FIRST_RESPONSE_TIMEOUT_SEC:
+        _limit = _effective_first_response_timeout()
+        if _elapsed < _limit:
             return False
 
         state["_first_response_timeout_triggered"] = True
@@ -11711,6 +11734,17 @@ async def send_message_stream(
                 + _response_mode_prompt_block(response_mode)
                 + _runner_fast_path_prompt_block()
             )
+            # 첫 응답 타임아웃을 컨텍스트 크기에 맞추기 위해 기록한다.
+            # 큰 세션은 모델이 프롬프트를 읽는 데만 오래 걸린다 — 고정 90초로는
+            # 정상 동작을 중단으로 처리한다(2026-09-14: 24시간 중단 31건 중
+            # 19건이 첫응답 타임아웃이고, 메시지 1,670건 세션에 몰렸다).
+            try:
+                _ctx_chars = len(system_prompt or "") + sum(
+                    len(str(_m.get("content") or "")) for _m in (messages or [])
+                )
+                _streaming_state.setdefault(session_id, {})["context_chars"] = _ctx_chars
+            except Exception:
+                pass
             if _reply_scope_prompt_block:
                 system_prompt = system_prompt + _reply_scope_prompt_block
                 logger.info(
