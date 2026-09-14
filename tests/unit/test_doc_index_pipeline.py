@@ -581,3 +581,35 @@ def test_every_context_caller_passes_db_conn():
         assert "db_conn=" in block[:end if end > 0 else 600], (
             f"db_conn 을 안 넘기는 호출부가 있다 (offset {pos})"
         )
+
+
+def test_turn_timing_measures_what_the_user_feels():
+    """체감 시간을 재지 않으면 고칠 곳을 못 찾는다.
+
+    2026-09-14 대표님 질문 "채팅창이 너처럼 즉시 응답이 왜 안되지?" 에
+    답하려고 로그를 뒤졌는데 **계측 자체가 없었다.** 손으로 재 보니
+    컨텍스트 조립 2.2초(대부분 CPU Ollama 임베딩)였고 릴레이 구간은
+    못 쟀다. 못 재는 구간은 고칠 수도 없다.
+    """
+    import inspect
+
+    from app.services import turn_timing
+
+    src = inspect.getsource(turn_timing)
+    # 하트비트를 첫 토큰으로 세면 계측이 거짓말을 한다.
+    chat = inspect.getsource(
+        __import__("app.services.chat_service", fromlist=["x"]).send_message_stream
+    )
+    assert '_timer.mark("first_token")' in chat
+    i = chat.index('_timer.mark("first_token")')
+    assert "heartbeat" not in chat[i - 260:i], "하트비트를 첫 토큰으로 세고 있다"
+
+    # 실패한 턴이 오래 걸린 경우가 가장 알고 싶은 것이다.
+    assert "_timer.save()" in chat
+
+    # 평균은 긴 꼬리에 끌려간다.
+    summary = inspect.getsource(turn_timing.recent_summary)
+    assert "percentile_disc" in summary and "avg(" not in summary.lower()
+
+    # 계측이 응답 경로를 붙잡으면 본말전도다.
+    assert "asyncio.create_task" in src

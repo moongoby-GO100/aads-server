@@ -3287,6 +3287,22 @@ async def _get_last_response_legacy_repairing(
     }
 
 
+@router.get("/chat/timing", tags=["chat-session"])
+async def chat_timing(
+    hours: int = Query(24, ge=1, le=168),
+    session_id: str = Query(""),
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """채팅 턴의 구간별 소요. **중앙값과 90분위**로 준다.
+
+    평균은 긴 꼬리에 끌려가 실제 체감과 멀어진다 — 한 턴이 10분 걸리면
+    평균이 통째로 흔들린다.
+    """
+    from app.services.turn_timing import recent_summary
+
+    return await recent_summary(hours=hours, session_id=session_id)
+
+
 @router.post("/chat/sessions/{session_id}/stop", tags=["chat-session"])
 async def stop_session_streaming(
     session_id: UUID,

@@ -11218,6 +11218,11 @@ async def send_message_stream(
     )
     _lf_span_intent = None
     _lf_span_llm = None
+    # 구간 계측. 2026-09-14 대표님 질문("왜 즉시 응답이 안 되지")에 답하려
+    # 로그를 뒤졌는데 **계측 자체가 없었다.** 못 재는 구간은 고칠 수도 없다.
+    from app.services.turn_timing import TurnTimer
+
+    _timer = TurnTimer(session_id)
     _trace_start_time = __import__("time").monotonic()
     def _response_duration_sec() -> float:
         return round(__import__("time").monotonic() - _trace_start_time, 3)
@@ -11809,6 +11814,7 @@ async def send_message_stream(
 
             # 4. 3계층 컨텍스트 빌드 (AADS-CRITICAL-FIX #7: fallback 방어)
             from app.services.context_builder import build_messages_context
+            _timer.mark("ctx_start")
             try:
                 messages, system_prompt = await build_messages_context(
                     workspace_name=workspace_name,
@@ -11823,6 +11829,9 @@ async def send_message_stream(
                 logger.error(f"context_builder failed, using raw fallback: {_ctx_err}")
                 system_prompt = base_prompt or "You are a helpful AI assistant."
                 messages = [{"role": m["role"], "content": m["content"]} for m in raw_messages[-20:]]
+            _timer.mark("ctx_done")
+            _timer.prompt_chars = len(system_prompt or "")
+            _timer.history_count = len(messages or [])
             system_prompt = (
                 system_prompt
                 + _response_mode_prompt_block(response_mode)
@@ -12934,6 +12943,7 @@ async def send_message_stream(
             if _stream_attempt > 0 and _stream_attempt - 1 < len(_missing_done_fallback_models):
                 _attempt_model_override = _missing_done_fallback_models[_stream_attempt - 1]
             try:
+                _timer.mark("request_sent")
                 async for event in call_stream(
                     intent_result=intent_result,
                     system_prompt=system_prompt,
@@ -12944,6 +12954,10 @@ async def send_message_stream(
                     tenant_id=resolved_tenant_id,
                 ):
                     etype = event.get("type", "")
+                    # 하트비트는 첫 토큰이 아니다. 모델이 아직 아무것도
+                    # 내놓지 않았는데 체감 시간을 짧게 적으면 계측이 거짓말을 한다.
+                    if etype in ("delta", "thinking", "tool_use"):
+                        _timer.mark("first_token")
                     if etype == "heartbeat":
                         yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
                     elif etype == "model_info":
@@ -13943,6 +13957,13 @@ async def send_message_stream(
         # "cannot access local variable 'set_streaming'" 으로만 남아서
         # 무엇이 잘못됐는지 알 수 없었다. 여기서 다시 import 해 원래 오류가
         # 그대로 올라가게 한다.
+        # 구간 계측을 남긴다. **어떻게 끝나든** 남겨야 한다 — 실패한 턴이
+        # 오래 걸린 경우가 가장 알고 싶은 것인데, 성공한 턴만 재면 그게 빠진다.
+        try:
+            _timer.save()
+        except Exception:
+            pass
+
         try:
             from app.core.interrupt_queue import set_streaming as _clear_streaming
 
