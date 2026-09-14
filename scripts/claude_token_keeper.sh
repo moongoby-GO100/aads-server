@@ -20,7 +20,40 @@ STATE_DIR="/root/aads/aads-server"
 # CLI 는 아직 여유가 있는 토큰을 갱신하지 않는다(실측: 8시간 남은 토큰은 그대로).
 # 만료됐거나 임박했을 때만 refreshToken 을 쓴다. 그래서 임계값을 크게 잡으면
 # 매번 "갱신 안 됨" 경고만 나온다. 크론 주기(10분)보다 넉넉하되 짧게 둔다.
-RENEW_BEFORE_MIN="${CLAUDE_TOKEN_RENEW_BEFORE_MIN:-30}"
+RENEW_BEFORE_MIN="${CLAUDE_TOKEN_RENEW_BEFORE_MIN:-45}"
+
+# 겹쳐 돌지 않게 잠근다. 임박 재시도가 들어가면서 한 번 실행이 길어졌고,
+# 크론 주기를 넘으면 두 실행이 **같은 자격증명 파일을 동시에** 건드린다.
+# 2026-09-14 사고가 그 파일이 망가진 것이었다.
+_KEEPER_LOCK="/tmp/aads-claude-token-keeper.lock"
+exec 9>"$_KEEPER_LOCK"
+if ! flock -n 9; then
+    echo "$(date '+%F %T') 이전 실행이 아직 돌고 있다 — 건너뜀" >&2
+    exit 0
+fi
+
+# 만료가 이 시간 안으로 들어오면, CLI 가 "아직 아니다" 라고 거부해도
+# 같은 실행 안에서 잠깐 기다렸다 다시 시도한다.
+#
+# 2026-09-14 23:40 사고의 진짜 원인이 여기다. 임계값을 올리는 것으로는
+# 안 풀린다 — 23:30 에 이미 시도했고 **CLI 가 거부했다.**
+#
+#     23:30:08  slot2: 만료까지 10분 (<= 30) — 갱신     스크립트는 시도
+#     23:30:14    아직 갱신 시점 아님 (10분 남음)       CLI 가 거부
+#     23:40:16    ⚠️ 갱신 실패                          이미 만료
+#
+# 크론이 10분 주기라 **거부와 만료 사이에 기회가 한 번도 없었다.**
+# CLI 는 만료가 더 임박해야 갱신하므로, 그 순간을 놓치지 않으려면
+# 짧은 간격으로 몇 번 더 두드려야 한다.
+CLOSE_RETRY_MIN="${CLAUDE_TOKEN_CLOSE_RETRY_MIN:-15}"
+# 재시도 횟수·간격은 **크론 주기(10분) 안에 끝나야 한다.** 겹쳐 돌면 두
+# 실행이 같은 자격증명 파일을 동시에 건드린다 — 이번 사고가 바로 그
+# 파일이 망가진 것이었다.
+#
+#   슬롯당 최악 = TIMES × (SLEEP + ping 120초)
+#   2 × (45 + 120) = 330초, 슬롯 2개면 11분… 그래도 빠듯하므로 잠금을 건다.
+CLOSE_RETRY_TIMES="${CLAUDE_TOKEN_CLOSE_RETRY_TIMES:-2}"
+CLOSE_RETRY_SLEEP="${CLAUDE_TOKEN_CLOSE_RETRY_SLEEP:-45}"
 # 갱신 시도 후에도 이 시간 미만으로 남아 있으면 진짜 실패다(refreshToken 만료 등).
 FAIL_BELOW_MIN="${CLAUDE_TOKEN_FAIL_BELOW_MIN:-10}"
 
@@ -188,6 +221,30 @@ for slot in 1 2; do
         # CLI 가 아직 갱신할 때가 아니라고 판단한 경우. 실패가 아니다.
         # 다만 만료 시각은 남겨야 한다. 러너가 긴 작업 전에 남은 수명을 본다.
         log "  아직 갱신 시점 아님 (${after}분 남음)"
+        # 만료가 임박했는데 CLI 가 거부하면, 다음 크론(10분 뒤)에는 이미
+        # 늦을 수 있다. 같은 실행 안에서 몇 번 더 두드린다.
+        if [ "$after" -le "$CLOSE_RETRY_MIN" ]; then
+            tries=0
+            while [ "$tries" -lt "$CLOSE_RETRY_TIMES" ]; do
+                tries=$((tries + 1))
+                sleep "$CLOSE_RETRY_SLEEP"
+                HOME="$home" timeout 120 "$CLAUDE_BIN" -p "ping" --output-format json >/dev/null 2>&1 || true
+                retry_after="$(remaining_min "$cred")"
+                if [ -n "$backup" ] && [ -s "$backup" ] \
+                   && _token_field_empty "$cred" && ! _token_field_empty "$backup"; then
+                    cp -p "$backup" "$cred" 2>/dev/null \
+                        && log "  ↩ 재시도가 토큰을 지워 원본을 되돌렸다"
+                    retry_after="$(remaining_min "$cred")"
+                fi
+                if [[ "$retry_after" =~ ^[0-9]+$ ]] && [ "$retry_after" -gt "$after" ]; then
+                    log "  갱신됨(임박 재시도 ${tries}회): ${after}분 → ${retry_after}분"
+                    after="$retry_after"
+                    renewed=$((renewed + 1))
+                    break
+                fi
+                log "  임박 재시도 ${tries}/${CLOSE_RETRY_TIMES} — 아직 (${retry_after}분)"
+            done
+        fi
         key="ANTHROPIC_AUTH_TOKEN"
         [ "$slot" = "2" ] && key="ANTHROPIC_AUTH_TOKEN_2"
         resync_to_db "$slot" "$key" "$cred" >/dev/null 2>&1 || true
