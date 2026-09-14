@@ -16,7 +16,9 @@ Wants=aads-db-tunnel.service
 Type=simple
 User=root
 WorkingDirectory=/root
-ExecStart=/root/scripts/pipeline-runner.sh
+# 러너 본체는 ANTHROPIC_AUTH_TOKEN 이 비면 token_missing 으로 즉시 죽는다.
+# 이 서버는 lease 를 받지 않으므로 래퍼가 /etc/biseo.env 의 진아 토큰을 꺼내 넣는다.
+ExecStart=/root/scripts/runner_jinah_token_wrapper.sh
 Restart=always
 RestartSec=10
 StandardOutput=journal
