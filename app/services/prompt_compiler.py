@@ -5,9 +5,13 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+import structlog
+
 from app.core.db_pool import get_pool
 from app.core.feature_flags import governance_enabled
 from app.core.prompts.system_prompt_v2 import build_layer1, build_layer4
+
+logger = structlog.get_logger(__name__)
 
 LAYER_NAMES = {1: "global", 2: "project", 3: "role", 4: "intent", 5: "model"}
 
@@ -293,6 +297,21 @@ class PromptCompiler:
                         expanded_model_keys,
                         role_key,
                     )
+                    # 역할을 줬는데 한 건도 안 걸리면 범위가 어긋난 것이다.
+                    #
+                    # 2026-09-14 같은 함정에 두 번 빠졌다 — 한 번은 role 을 빈
+                    # 문자열로, 한 번은 workspace 를 표시명으로 넘겨서. 둘 다
+                    # 오류 없이 "자산 0건" 으로 조용히 끝났고, 프롬프트는 3만
+                    # 자가 넘으니 길이만 봐서는 붙은 줄 안다.
+                    if role_key and not rows:
+                        logger.warning(
+                            "prompt_assets_none_selected",
+                            workspace=workspace_key,
+                            role=role_key,
+                            intent=intent_key,
+                            hint="workspace_scope/role_scope 와 넘긴 값이 어긋났을 수 있다",
+                        )
+
                     extras: list[str] = []
                     for row in rows:
                         variants = row["model_variants"] or {}

@@ -252,3 +252,30 @@ def test_context_builder_passes_session_role_to_compiler():
     assert 'role=""' not in code, "role 을 빈 문자열로 넘기면 역할 자산이 전부 걸러진다"
     assert "role_key" in code, "세션의 role_key 를 찾아 넘겨야 한다"
     assert "role=_role_key" in code
+
+    # 워크스페이스도 같은 함정이다. 자산의 `workspace_scope` 는 `{GO100}` 인데
+    # 세션 이름은 `[GO100] 백억이` 다. 컴파일러는 정규화하지 않으므로 표시명을
+    # 넘기면 그 프로젝트 자산이 하나도 안 걸린다 — 오류 없이 0건이다.
+    #
+    # 2026-09-14 실측:
+    #   ws='[GO100] 백억이' → 12,656자, 팀 명단 없음
+    #   ws='GO100'         → 15,459자, 팀 명단 있음
+    assert "workspace_name=ws_key" in code, (
+        "표시명 대신 정규화된 프로젝트 키를 넘겨야 한다"
+    )
+
+
+def test_prompt_compiler_warns_when_role_selects_nothing():
+    """범위가 어긋나 자산이 0건이면 조용히 끝나면 안 된다.
+
+    2026-09-14 같은 함정에 두 번 빠졌다 — 한 번은 role 을 빈 문자열로, 한 번은
+    workspace 를 표시명으로 넘겨서. 둘 다 오류 없이 "자산 0건" 으로 끝났고,
+    프롬프트는 3만 자가 넘으니 길이만 봐서는 붙은 줄 안다.
+    """
+    import inspect
+
+    from app.services.prompt_compiler import PromptCompiler
+
+    src = inspect.getsource(PromptCompiler.compile)
+    assert "prompt_assets_none_selected" in src
+    assert "if role_key and not rows:" in src

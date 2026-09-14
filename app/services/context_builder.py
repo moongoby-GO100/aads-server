@@ -441,7 +441,16 @@ async def build_messages_context(
 
             compiler = PromptCompiler()
             compiled = await compiler.compile(
-                workspace_name=workspace_name,
+                # 표시명이 아니라 **정규화된 프로젝트 키**를 넘긴다.
+                #
+                # 자산의 `workspace_scope` 는 `{GO100}` 인데 세션의 워크스페이스
+                # 이름은 `[GO100] 백억이` 다. 컴파일러는 정규화하지 않고 받은
+                # 문자열을 그대로 비교하므로, 표시명을 넘기면 **그 프로젝트의
+                # 자산이 하나도 안 걸린다.** 2026-09-14 실측:
+                #   ws='[GO100] 백억이' → 12,656자, 팀 명단 없음
+                #   ws='GO100'         → 15,459자, 팀 명단 있음
+                # `ws_key` 는 이 함수 맨 위에서 이미 이걸 계산해 뒀다.
+                workspace_name=ws_key,
                 intent=intent,
                 model="",
                 session_id=session_id,
