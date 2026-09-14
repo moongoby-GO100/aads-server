@@ -328,9 +328,12 @@ def lookup_error_book(texts: list[str]) -> list[dict]:
         )
     except Exception:
         return []
-    if proc.returncode != 0 or "알려진 오류:" not in (proc.stdout or ""):
+    # match 는 "알려진 오류 없음" 일 때 종료코드 1 을 준다. 그때도 후보 기록
+    # 메시지가 출력에 있으므로 종료코드로 버리면 새 후보가 조용히 사라진다.
+    out = proc.stdout or ""
+    if "알려진 오류:" not in out and "후보로 기록:" not in out:
         return []
-    return [{"text": line.strip()} for line in proc.stdout.splitlines() if line.strip()]
+    return [{"text": line.strip()} for line in out.splitlines() if line.strip()]
 
 
 def ensure_storage_state(refresh: bool) -> bool:

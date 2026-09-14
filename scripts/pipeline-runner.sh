@@ -260,8 +260,15 @@ lookup_error_book() {
     local hit
     # --record: 사전에 없는 오류는 후보로 남긴다. 원인은 비워 두되 증상이
     # 어디에도 안 남는 일은 막는다. 다음 사람이 원인을 채워 active 로 올린다.
-    hit=$(timeout 30 "$book" match "$err_file" --bump --record --source "runner:${job_id}" 2>/dev/null) || return 0
-    [[ "$hit" == *"알려진 오류:"* ]] || return 0
+    # match 는 "알려진 오류 없음" 일 때 종료코드 1 을 준다. 그 경우에도 후보
+    # 기록 메시지가 출력에 있으므로 종료코드로 버리면 안 된다.
+    hit=$(timeout 30 "$book" match "$err_file" --bump --record --source "runner:${job_id}" 2>/dev/null || true)
+    # 알려진 오류든 새 후보든 로그에 남긴다. 후보가 조용히 기록되면 운영자는
+    # 새 오류가 사전에 들어온 사실 자체를 모른다.
+    case "$hit" in
+        *"알려진 오류:"*|*"후보로 기록:"*) ;;
+        *) return 0 ;;
+    esac
     while IFS= read -r line; do
         [[ -n "$line" ]] && log "  ERROR_BOOK job=${job_id} ${line}"
     done <<< "$hit"
