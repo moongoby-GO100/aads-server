@@ -142,6 +142,21 @@ async def resolve_bound_tenant_id(explicit_tenant_id: Any = "", explicit_session
         return ""
 
 
+def _missing_tenant_id_result(tool_name: str) -> Dict[str, str]:
+    chat_context = bool(str(current_chat_session_id.get("") or "").strip())
+    tenant_context = bool(str(current_tenant_id.get("") or "").strip())
+    return {
+        "error": "missing_tenant_id",
+        "message": f"{tool_name} requires a tenant-bound chat session",
+        "hint": (
+            "session_id 를 명시하거나 채팅 세션 안에서 호출하라 "
+            "(호출 경로 감지: "
+            f"current_chat_session_id contextvar={'있음' if chat_context else '없음'}, "
+            f"current_tenant_id contextvar={'있음' if tenant_context else '없음'})"
+        ),
+    }
+
+
 _GLOBAL_TASK_SCOPES = frozenset({"all", "global"})
 
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
@@ -1095,7 +1110,7 @@ class ToolExecutor:
         session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
         tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
         if not tenant_id:
-            return {"error": "missing_tenant_id", "message": "handover_write requires a tenant-bound chat session"}
+            return _missing_tenant_id_result("handover_write")
         metadata = inp.get("metadata")
         if not isinstance(metadata, dict):
             metadata = {}
@@ -1132,7 +1147,7 @@ class ToolExecutor:
         session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
         tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
         if not tenant_id:
-            return {"error": "missing_tenant_id", "message": "handover_search requires a tenant-bound chat session"}
+            return _missing_tenant_id_result("handover_search")
         try:
             items, total = await list_handover_entries(
                 tenant_id=tenant_id,
@@ -1153,7 +1168,7 @@ class ToolExecutor:
         session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
         tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
         if not tenant_id:
-            return {"error": "missing_tenant_id", "message": "handover_export requires a tenant-bound chat session"}
+            return _missing_tenant_id_result("handover_export")
         project = str(inp.get("project") or "")
         include_archived = _coerce_bool(inp.get("include_archived"), False)
         try:

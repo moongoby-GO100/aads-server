@@ -5381,6 +5381,9 @@ async def tool_get_e2e_login_url(project: str = "", redirect: str = "", role: st
 async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session_id: str = "") -> str:
     """도구 이름과 파라미터로 실제 실행."""
     params = dict(params or {})
+    chat_session_id = str(chat_session_id or "").strip()
+    if not chat_session_id:
+        chat_session_id = str(os.getenv("AADS_MCP_CHAT_SESSION_ID", "") or "").strip()
     if not str(params.get("tenant_id") or "").strip():
         try:
             from app.services.tool_executor import resolve_bound_tenant_id

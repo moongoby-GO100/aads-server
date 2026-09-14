@@ -3096,6 +3096,13 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_schema": {
             "type": "object",
             "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": (
+                        "MCP 브리지 등 채팅 컨텍스트가 없는 호출에서만 명시. "
+                        "생략 시 현재 채팅 세션을 사용."
+                    ),
+                },
                 "project": {"type": "string", "description": "프로젝트 키(AADS/GO100/KIS/SF/NTV2 등)"},
                 "title": {"type": "string", "description": "핸드오버 항목 제목"},
                 "body": {"type": "string", "description": "검증 근거와 다음 행동을 포함한 본문"},
@@ -3122,6 +3129,13 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_schema": {
             "type": "object",
             "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": (
+                        "MCP 브리지 등 채팅 컨텍스트가 없는 호출에서만 명시. "
+                        "생략 시 현재 채팅 세션을 사용."
+                    ),
+                },
                 "project": {"type": "string"},
                 "query": {"type": "string"},
                 "status": {"type": "string", "enum": ["active", "resolved", "superseded", "archived"]},
@@ -3137,6 +3151,13 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_schema": {
             "type": "object",
             "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": (
+                        "MCP 브리지 등 채팅 컨텍스트가 없는 호출에서만 명시. "
+                        "생략 시 현재 채팅 세션을 사용."
+                    ),
+                },
                 "project": {"type": "string"},
                 "include_archived": {"type": "boolean", "default": False},
             },
