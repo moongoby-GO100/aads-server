@@ -101,6 +101,83 @@ async def _build_layer2_dynamic(
     ws_display = workspace_name or "CEO"
     parts.append(f"현재 워크스페이스: {ws_display}")
 
+    # 서버 사실과 지금 죽어 있는 것.
+    #
+    # 2026-09-14 대표님 지적: "서버정보 등 최신 변경사항이 세션에 주입이
+    # 안 되나? 왜 옛날 정보를 보고하지". 실측해 보니 Layer 2 에는 시각과
+    # 지시 건수뿐이고 **서버에 관한 것이 하나도 없었다.** 세션이 도구를
+    # 직접 부르지 않으면 과거 대화에서 주워온 옛 수치를 말하게 된다.
+    #
+    # 정적 프롬프트에는 "## 3개 서버" 라고 손으로 적혀 있었는데 등록부에는
+    # 4대가 있었다(진아 서버가 같은 날 추가됨). 손으로 적은 목록은 반드시
+    # 틀어지므로 여기서 등록부를 읽는다.
+    if db_conn:
+        try:
+            srv = await db_conn.fetch(
+                "SELECT server_key, ip, coalesce(project,'') AS project, "
+                "       coalesce(description,'') AS description "
+                "FROM server_registry ORDER BY server_key"
+            )
+            if srv:
+                lines = [
+                    f"- {r['server_key']} ({r['ip']})"
+                    + (f" {r['project']}" if r["project"] else "")
+                    + (f" — {r['description'][:46]}" if r["description"] else "")
+                    for r in srv
+                ]
+                parts.append(f"\n## 서버 {len(srv)}대 (등록부)\n" + "\n".join(lines))
+        except Exception as e:
+            logger.debug(f"context_builder 서버 등록부 조회 실패: {e}")
+
+        try:
+            # **최근에 검사한 것만 본다.** 오래된 행을 그대로 읽으면 낡은
+            # 판정을 현재처럼 말하게 된다 — 고치려던 문제를 그대로 되풀이한다.
+            down = await db_conn.fetch(
+                """
+                SELECT server, service_name, consecutive_failures,
+                       to_char(last_check AT TIME ZONE 'Asia/Seoul', 'HH24:MI') AS at
+                FROM monitored_services
+                WHERE enabled AND last_status = 'fail'
+                  AND last_check > NOW() - interval '15 minutes'
+                ORDER BY server, service_name
+                LIMIT 12
+                """
+            )
+            checked = await db_conn.fetchval(
+                "SELECT to_char(max(last_check) AT TIME ZONE 'Asia/Seoul', 'HH24:MI') "
+                "FROM monitored_services WHERE enabled"
+            )
+            if down:
+                # **연속 실패가 아주 많으면 방금 죽은 게 아니다.**
+                # 감시 주기가 30초이므로 1,000회는 8시간, 100,000회는 35일이다.
+                # 2026-09-14 실측에서 contabo14 서비스 12개가 10만 회대로
+                # 잡혀 있었는데 전부 정상 가동 중이었다 — 감시기의 서버 키가
+                # 안 맞아 SSH 를 시도조차 못 하고 있었다.
+                #
+                # 그런 행을 "죽었다" 고 주입하면 낡은 거짓을 현재처럼 말하게
+                # 된다. 고치려던 문제를 그대로 되풀이하는 셈이다. 나눠 적는다.
+                fresh = [r for r in down if (r["consecutive_failures"] or 0) < 1000]
+                stale = [r for r in down if (r["consecutive_failures"] or 0) >= 1000]
+                if fresh:
+                    items = ", ".join(
+                        f"{r['server']}:{r['service_name']}({r['consecutive_failures']}회)"
+                        for r in fresh
+                    )
+                    parts.append(f"\n## 지금 죽어 있는 서비스 ({checked} 검사)\n{items}")
+                if stale:
+                    names = ", ".join(f"{r['server']}:{r['service_name']}" for r in stale)
+                    parts.append(
+                        f"\n## 장기 실패로 기록된 것 {len(stale)}건 — 감시 설정 의심\n"
+                        f"{names}\n"
+                        "연속 실패가 1,000회(8시간)를 넘었다. 실제 장애보다 "
+                        "감시 항목 설정이 틀렸을 가능성이 높다. 단정하지 말고 "
+                        "필요하면 직접 확인해라."
+                    )
+            elif checked:
+                parts.append(f"\n## 서비스 상태\n{checked} 검사 기준 전부 정상")
+        except Exception as e:
+            logger.debug(f"context_builder 서비스 상태 조회 실패: {e}")
+
     return "\n".join(parts)
 
 

@@ -163,11 +163,19 @@ _CAPABILITIES_FULL = """<capabilities>
 | NTV2 | NewTalk V2 소셜플랫폼 | cafe24_114 | NT-xxx |
 | NAS | 이미지처리 | cafe24_114 | NAS-xxx |
 
-## 3개 서버
-- contabo116 (5.104.86.116): AADS Backend(FastAPI 0.115) + Dashboard(Next.js 16) + PostgreSQL 15
-- contabo14 (5.104.86.14): GO100/KIS 실행 환경
-- cafe24_114 (114.207.244.86): SF/NTV2/NAS 실행 환경 (포트 7916)
+## 서버
+서버 목록과 지금 죽어 있는 서비스는 아래 "현재 상태" 에 실측으로 들어온다.
 </capabilities>"""
+# 서버 목록을 여기 손으로 적지 마라.
+#
+# 2026-09-14 까지 이 자리에 "## 3개 서버" 와 IP 세 줄이 박혀 있었다.
+# 그런데 `server_registry` 에는 4대가 있었다 — 진아 서버가 같은 날
+# 추가됐는데 이 문장은 몰랐다. 대표님이 "왜 옛날 정보를 보고하지" 라고
+# 지적하신 원인 중 하나다.
+#
+# 정본은 `server_registry` 테이블이고, `context_builder._build_layer2_dynamic`
+# 이 매 요청마다 읽어 넣는다. Layer 1 은 프롬프트 캐시용이라 정적이어야
+# 하므로 **변하는 사실을 여기 두면 안 된다.**
 
 WS_CAPABILITIES: Dict[str, str] = {
     "KIS": f"""<capabilities>

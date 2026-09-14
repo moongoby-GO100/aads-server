@@ -363,3 +363,33 @@ def test_healer_resolves_servers_from_registry():
 
     # registry.port 는 SSH 포트가 아니다 — cafe24_114 는 7916(웹)이고 SSH 는 22.
     assert "-p {port}" not in exec_src
+
+
+def test_layer2_injects_live_server_facts():
+    """서버 사실은 정적 프롬프트가 아니라 Layer 2 에 실측으로 들어간다.
+
+    2026-09-14 대표님 지적 — "서버정보 등 최신 변경사항이 세션에 주입이
+    안 되나? 왜 옛날 정보를 보고하지". 실측하니 Layer 2 에는 시각과 지시
+    건수뿐이고 서버에 관한 것이 하나도 없었고, Layer 1 에는 "## 3개 서버"
+    가 손으로 적혀 있었다. 등록부에는 4대가 있었다.
+    """
+    import inspect
+
+    from app.core.prompts import system_prompt_v2 as sp
+    from app.services import context_builder
+
+    # Layer 1 은 프롬프트 캐시용이다. 변하는 사실을 두면 안 된다.
+    rendered = sp.build_layer1("CEO", "", intent="analysis")
+    for ip in ("5.104.86.116", "5.104.86.14", "114.207.244.86"):
+        assert ip not in rendered, f"Layer 1 에 서버 IP({ip})가 다시 박혔다"
+
+    src = inspect.getsource(context_builder._build_layer2_dynamic)
+    assert "server_registry" in src, "서버 목록을 등록부에서 읽어야 한다"
+    assert "monitored_services" in src, "죽은 서비스를 주입해야 한다"
+
+    # 오래된 판정을 현재처럼 말하면 고치려던 문제를 되풀이한다.
+    assert "interval '15 minutes'" in src, "최근 검사만 읽어야 한다"
+    assert "consecutive_failures" in src and "1000" in src, (
+        "연속 실패가 많은 행은 '방금 죽은 것' 과 구분해야 한다 — "
+        "감시 주기 30초에 10만 회면 35일이다"
+    )
