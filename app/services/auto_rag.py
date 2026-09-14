@@ -54,8 +54,26 @@ async def build_auto_rag_context(
             return ""
         query_emb = embeddings[0]
 
+        # 찾는 쪽 벡터는 두 벌이다.
+        #
+        #   query_emb  접두어 없음 — memory_facts 용. 저장된 쪽이 아직 옛
+        #              세대라서 같은 규격으로 비교해야 한다.
+        #   ask_emb    `search_query: ` 접두어 — doc_chunks 와 세대 2
+        #              chat_messages 용.
+        #
+        # 세대가 다른 벡터끼리 비교하면 유사도 숫자는 나오는데 뜻이 없다.
+        # 한 벌로 두 세대를 다 찾으려다 2026-09-14 하루를 날렸다.
+        ask_emb = None
+        try:
+            from app.services.doc_index import embed_query
+
+            ask_emb = await embed_query(user_message[:500])
+        except Exception as e:
+            logger.debug("auto_rag_query_embed_failed", error=str(e))
+
         results = await _search_relevant(
-            query_emb, session_id, project, current_message_ids, user_message
+            query_emb, session_id, project, current_message_ids, user_message,
+            ask_emb=ask_emb,
         )
 
         # 그래프 근거는 벡터 검색과 별개다.
@@ -83,7 +101,7 @@ async def build_auto_rag_context(
         # A4: Re-ask detection — same session, high similarity, recent (임베딩 재사용)
         reask_warning = ""
         try:
-            reask_detected = await _detect_reask(query_emb, session_id)
+            reask_detected = await _detect_reask(ask_emb, session_id)
             if reask_detected:
                 reask_warning = (
                     "\u26a0\ufe0f \uc774\uc804\uc5d0 \uc720\uc0ac\ud55c \uc9c8\ubb38\uc774 "
@@ -166,8 +184,15 @@ async def _search_relevant(
     project: Optional[str],
     current_message_ids: Optional[set],
     query_text: str = "",
+    ask_emb: Optional[list] = None,
 ) -> List[Dict[str, Any]]:
-    """memory_facts + chat_messages에서 시맨틱 검색. query_emb는 사전 생성된 임베딩."""
+    """memory_facts + chat_messages + 문서에서 시맨틱 검색.
+
+    `query_emb` 는 접두어 없는 벡터(memory_facts 용), `ask_emb` 는
+    `search_query: ` 접두어가 붙은 벡터(문서·세대 2 채팅 메시지 용)다.
+    둘 다 바깥에서 한 번씩 만들어 넘긴다 — 여기서 또 만들면 CPU Ollama 에
+    같은 문장을 두 번 태운다.
+    """
     import asyncio
 
     results = []
@@ -179,8 +204,8 @@ async def _search_relevant(
         # 문서 823건이 저장소에 있는데 채팅은 그걸 못 봤다.
         fact_results, msg_results, doc_results = await asyncio.gather(
             _search_memory_facts(query_emb, project),
-            _search_chat_messages(query_emb, session_id, project),
-            _search_documents(query_emb, project, query_text),
+            _search_chat_messages(ask_emb, session_id, project),
+            _search_documents(ask_emb, project, query_text),
             return_exceptions=True,
         )
 
@@ -214,16 +239,13 @@ async def _search_documents(
     적혀 있나" 에 답할 수 있어야 문서를 붙인 의미가 있다.
     """
     try:
-        from app.services.doc_index import embed_query, search_docs
+        from app.services.doc_index import search_docs
 
-        # 문서 검색은 질문 쪽에도 접두어가 필요하다(nomic-embed-text).
-        # memory_facts/chat_messages 용 임베딩을 그대로 쓰면 문서만 조용히
-        # 품질이 떨어진다. 질문 원문이 없으면 문서 검색은 건너뛴다 —
-        # 접두어 없는 벡터로 찾느니 안 찾는 편이 낫다.
-        if not query_text:
+        # 접두어 붙은 질문 벡터가 없으면 문서 검색은 건너뛴다 — 접두어 없는
+        # 벡터로 찾느니 안 찾는 편이 낫다.
+        if query_emb is None:
             return []
-        doc_emb = await embed_query(query_text)
-        rows = await search_docs(doc_emb, top_k=_RAG_TOP_K, project=None)
+        rows = await search_docs(query_emb, top_k=_RAG_TOP_K, project=None)
     except Exception as e:
         logger.debug("auto_rag_doc_search_failed", error=str(e))
         return []
@@ -355,8 +377,16 @@ async def _search_memory_facts(query_emb: list, project: Optional[str]) -> List[
         return []
 
 
-async def _search_chat_messages(query_emb: list, session_id: str, project: Optional[str] = None) -> List[Dict]:
-    """chat_messages 테이블에서 시맨틱 검색 (동일 프로젝트 워크스페이스 내 크로스 세션)."""
+async def _search_chat_messages(query_emb: Optional[list], session_id: str, project: Optional[str] = None) -> List[Dict]:
+    """chat_messages 테이블에서 시맨틱 검색 (동일 프로젝트 워크스페이스 내 크로스 세션).
+
+    **세대 2 벡터만 본다.** 2026-09-14 이전에 쌓인 33,075건은 임베딩 경로가
+    끊긴 채 저장된 해시 더미다. 섞어서 검색하면 더미가 상위에 올라온다 —
+    값이 난수라 어떤 질문과도 적당히 비슷하게 나오기 때문이다.
+    백필은 `scripts/backfill_chat_embeddings.py` 가 채운다.
+    """
+    if query_emb is None:
+        return []
     try:
         from app.core.db_pool import get_pool
 
@@ -374,6 +404,7 @@ async def _search_chat_messages(query_emb: list, session_id: str, project: Optio
                     JOIN chat_sessions s ON s.id = m.session_id
                     JOIN chat_workspaces w ON w.id = s.workspace_id
                     WHERE m.embedding IS NOT NULL
+                      AND m.embedding_ver = 2
                       AND w.project_key = ANY($3::text[])
                     ORDER BY m.embedding <=> $1::vector
                     LIMIT $2
@@ -391,6 +422,7 @@ async def _search_chat_messages(query_emb: list, session_id: str, project: Optio
                     JOIN chat_sessions s ON s.id = m.session_id
                     JOIN chat_workspaces w ON w.id = s.workspace_id
                     WHERE m.embedding IS NOT NULL
+                      AND m.embedding_ver = 2
                       AND w.project_key = $3
                     ORDER BY m.embedding <=> $1::vector
                     LIMIT $2
@@ -408,6 +440,7 @@ async def _search_chat_messages(query_emb: list, session_id: str, project: Optio
                     FROM chat_messages m
                     JOIN chat_sessions s ON s.id = m.session_id
                     WHERE m.embedding IS NOT NULL
+                      AND m.embedding_ver = 2
                       AND s.workspace_id = (
                           SELECT workspace_id FROM chat_sessions WHERE id = $3::uuid
                       )
@@ -449,10 +482,12 @@ async def _search_chat_messages(query_emb: list, session_id: str, project: Optio
         return []
 
 
-async def _detect_reask(query_emb: list, session_id: str) -> bool:
+async def _detect_reask(query_emb: Optional[list], session_id: str) -> bool:
     """A4: Detect if user is re-asking a similar question within the same session (last 30 min).
     MEDIUM-1 fix: query_emb는 사전 생성된 임베딩을 재사용 (중복 API 호출 제거).
     """
+    if query_emb is None:
+        return False
     try:
         import uuid as _uuid
         from app.core.db_pool import get_pool
@@ -468,6 +503,7 @@ async def _detect_reask(query_emb: list, session_id: str) -> bool:
                 WHERE session_id = $2
                   AND role = 'user'
                   AND embedding IS NOT NULL
+                  AND embedding_ver = 2
                   AND created_at > NOW() - interval '30 minutes'
                 ORDER BY embedding <=> $1::vector
                 LIMIT 3

@@ -100,6 +100,19 @@ class EmbeddingRouteUnavailable(RuntimeError):
     """진짜 임베딩 경로가 없다. 더미를 저장하면 안 되는 호출자가 받는다."""
 
 
+# nomic-embed-text 는 작업 접두어를 요구한다. 저장하는 쪽에는
+# `search_document: `, 찾는 쪽에는 `search_query: ` 를 붙인다. 붙이지
+# 않아도 벡터는 나오지만 구분 폭이 4배 좁아진다(2026-09-14 실측).
+#
+# **세대를 같이 적는다.** `chat_messages.embedding_ver` 가 그것이다.
+# 2026-09-14 이전 벡터 33,075건은 임베딩 경로가 끊긴 채 저장된 해시
+# 더미였는데, 세대 표시가 없어서 진짜와 구분할 방법이 없었다. 검색은
+# 같은 세대끼리만 비교해야 한다 — 섞으면 조용히 나빠진다.
+CHAT_DOC_PREFIX = "search_document: "
+CHAT_QUERY_PREFIX = "search_query: "
+CHAT_EMBED_VER = 2
+
+
 # 마지막 호출이 더미로 떨어졌는지. 저장 전에 확인하라고 두는 값이다.
 _LAST_ROUTE_WAS_DUMMY = False
 
@@ -253,14 +266,29 @@ async def embed_and_store_message(pool: Any, message_id: str, content: str) -> N
     if not content or len(content.strip()) < 10:
         return
     try:
-        embeddings = await embed_texts([content[:2000]])  # 앞 2000자만
+        async with pool.acquire() as conn:
+            # 세션 제목을 본문 앞에 붙인다. 본문만 넣으면 "어느 담당의
+            # 말인지" 가 벡터에 안 들어가서, 담당이 8명으로 늘어난 지금
+            # 크로스 세션 검색에서 엉뚱한 쪽이 잡힌다.
+            title = await conn.fetchval(
+                "SELECT s.title FROM chat_messages m "
+                "JOIN chat_sessions s ON s.id = m.session_id WHERE m.id = $1::uuid",
+                message_id,
+            )
+        head = f"[{title}] " if title else ""
+        # 더미를 저장하지 않는다. 이 사고의 원인이 바로 "실패를 조용히
+        # 그럴듯한 값으로 덮은 것" 이었다 — 실패는 실패로 둔다.
+        embeddings = await embed_texts_strict(
+            [CHAT_DOC_PREFIX + (head + content)[:2000]]
+        )
         if not embeddings:
             return
         embedding = embeddings[0]
         async with pool.acquire() as conn:
             await conn.execute(
-                "UPDATE chat_messages SET embedding = $1::vector WHERE id = $2",
-                str(embedding), message_id,
+                "UPDATE chat_messages SET embedding = $1::vector, "
+                "embedding_ver = $3 WHERE id = $2",
+                str(embedding), message_id, CHAT_EMBED_VER,
             )
         logger.debug(f"[ChatEmbed] 메시지 {message_id[:8]}... 임베딩 저장 완료")
     except Exception as e:
@@ -287,7 +315,11 @@ def schedule_message_embedding(pool: Any, message_id: Any, content: str) -> bool
 
 
 async def backfill_embeddings(pool: Any, batch_size: int = 20) -> str:
-    """embedding이 NULL인 메시지들 일괄 임베딩 생성."""
+    """embedding이 NULL인 메시지들 일괄 임베딩 생성.
+
+    대량 백필은 `scripts/backfill_chat_embeddings.py` 를 쓴다 — 범위 지정과
+    시간 상한(R-BG), 세대 표시가 거기에 있다. 이 함수는 소량 보정용이다.
+    """
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -301,16 +333,17 @@ async def backfill_embeddings(pool: Any, batch_size: int = 20) -> str:
     if not rows:
         return "임베딩 백필 대상 없음 (모두 완료)"
 
-    texts = [r["content"][:2000] for r in rows]
-    embeddings = await embed_texts(texts)
+    texts = [CHAT_DOC_PREFIX + r["content"][:2000] for r in rows]
+    embeddings = await embed_texts_strict(texts)
 
     updated = 0
     async with pool.acquire() as conn:
         for row, emb in zip(rows, embeddings):
             try:
                 await conn.execute(
-                    "UPDATE chat_messages SET embedding = $1 WHERE id = $2",
-                    str(emb), row["id"],
+                    "UPDATE chat_messages SET embedding = $1::vector, "
+                    "embedding_ver = $3 WHERE id = $2",
+                    str(emb), row["id"], CHAT_EMBED_VER,
                 )
                 updated += 1
             except Exception as e:
