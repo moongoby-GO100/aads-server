@@ -80,6 +80,172 @@ async def create_goal(req: GoalCreateRequest):
     return result
 
 
+class InterveneRequest(BaseModel):
+    message: Optional[str] = None
+    roles: Optional[list[str]] = None
+    reason: Optional[str] = None
+    on: Optional[bool] = None
+
+
+@router.get("/goals/{goal_id}/board")
+async def goal_board(goal_id: str):
+    """담당별 현재 상태. 창 8개를 열지 않아도 되게.
+
+    **활동 판정을 DB 로만 한다.** `is_streaming()` 은 프로세스 메모리라
+    블루/그린에서 다른 슬롯이 물으면 못 읽는다. 마지막 메시지와 그 모양
+    (진행중 표시인지)으로 판단하면 어느 슬롯에서든 같은 답이 나온다.
+    """
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        goal = await conn.fetchrow(
+            "SELECT id::text, project, title, status, progress FROM goals WHERE id = $1::uuid",
+            goal_id,
+        )
+        if not goal:
+            raise HTTPException(status_code=404, detail="goal_not_found")
+
+        rows = await conn.fetch(
+            """
+            WITH bound AS (
+                SELECT s.id, COALESCE(s.role_key, '') AS role_key, s.title
+                FROM goal_task_links l
+                JOIN chat_sessions s ON s.id = l.task_id::uuid
+                WHERE l.goal_id = $1::uuid AND l.task_type = 'chat_session'
+                  AND COALESCE(l.link_state, 'active') = 'active'
+            ),
+            last_msg AS (
+                SELECT DISTINCT ON (m.session_id)
+                       m.session_id, m.role, m.content, m.created_at,
+                       COALESCE(jsonb_array_length(m.tools_called), 0) AS tool_calls
+                FROM chat_messages m
+                JOIN bound b ON b.id = m.session_id
+                WHERE m.deleted_at IS NULL
+                ORDER BY m.session_id, m.created_at DESC
+            )
+            SELECT b.id::text AS session_id, b.role_key, b.title,
+                   lm.role AS last_role, lm.created_at AS last_at,
+                   lm.tool_calls,
+                   (lm.content LIKE '⏳%') AS working,
+                   (lm.content LIKE '⚠️ _응답 생성이%') AS interrupted,
+                   ms.title AS milestone, ms.dispatched_at, ms.dispatch_count,
+                   ms.dispatch_note
+            FROM bound b
+            LEFT JOIN last_msg lm ON lm.session_id = b.id
+            LEFT JOIN milestones ms
+                   ON ms.goal_id = $1::uuid AND ms.status = 'in_progress'
+                  AND (ms.owner_session_id = b.id
+                       OR (ms.owner_session_id IS NULL AND ms.owner_role_key = b.role_key))
+            ORDER BY (b.role_key LIKE '%Lead') DESC, b.role_key
+            """,
+            goal_id,
+        )
+
+    owners = []
+    for r in rows:
+        if r["dispatch_note"]:
+            state = "막힘"
+        elif r["interrupted"]:
+            state = "응답 끊김"
+        elif r["working"]:
+            state = "작업 중"
+        elif r["dispatched_at"] and r["last_role"] == "user":
+            state = "응답 대기"
+        elif r["milestone"]:
+            state = "진행 중"
+        else:
+            state = "지시 없음"
+        owners.append({
+            "session_id": r["session_id"],
+            "role_key": r["role_key"],
+            "title": r["title"],
+            "state": state,
+            "milestone": r["milestone"],
+            "last_at": r["last_at"].isoformat() if r["last_at"] else None,
+            "tool_calls": r["tool_calls"] or 0,
+            "dispatch_count": r["dispatch_count"] or 0,
+            "note": r["dispatch_note"],
+        })
+
+    from app.services.direction_guard import is_halted
+
+    return {
+        "goal": dict(goal),
+        "halted": await is_halted(),
+        "owners": owners,
+    }
+
+
+@router.get("/goals/for-session/{session_id}")
+async def goals_for_session(session_id: str):
+    """이 세션이 참여 중인 목표와 맡은 마일스톤.
+
+    담당이 자기 창에서 "내가 무슨 목표에 묶여 있는지" 를 봐야 한다.
+    지금은 그걸 알 길이 없어서, 지시를 받아도 무엇의 일부인지 모른다.
+    """
+    from app.core.db_pool import get_pool
+
+    rows = await get_pool().fetch(
+        """
+        SELECT DISTINCT ON (g.id)
+               g.id::text AS goal_id, g.title, g.status, g.project,
+               COALESCE(g.progress, 0) AS progress,
+               s.role_key,
+               ms.id::text AS milestone_id, ms.title AS milestone,
+               ms.dispatch_note
+        FROM goal_task_links l
+        JOIN goals g ON g.id = l.goal_id
+        JOIN chat_sessions s ON s.id = l.task_id::uuid
+        LEFT JOIN milestones ms
+               ON ms.goal_id = g.id AND ms.status = 'in_progress'
+              AND (ms.owner_session_id = s.id
+                   OR (ms.owner_session_id IS NULL AND ms.owner_role_key = s.role_key))
+        WHERE l.task_type = 'chat_session'
+          AND l.task_id = $1
+          AND COALESCE(l.link_state, 'active') = 'active'
+          AND g.status IN ('draft', 'active', 'blocked')
+        ORDER BY g.id, ms.sequence_order NULLS LAST
+        """,
+        session_id,
+    )
+
+    from app.services.direction_guard import is_halted
+
+    return {"halted": await is_halted(), "goals": [dict(r) for r in rows]}
+
+
+@router.post("/goals/halt")
+async def goal_halt(req: InterveneRequest):
+    """전체 정지를 걸거나 푼다. 실제로 막는 것은 direction_guard 다."""
+    from app.services.goal_intervene import halt
+
+    if req.on is None:
+        raise HTTPException(status_code=400, detail="on required")
+    return await halt(bool(req.on), req.reason or "")
+
+
+@router.post("/goals/{goal_id}/direct")
+async def goal_direct(goal_id: str, req: InterveneRequest):
+    """대표님 지시를 담당 전원에게 동시에. 주도를 거치지 않는다."""
+    from app.services.goal_intervene import direct
+
+    if not (req.message or "").strip():
+        raise HTTPException(status_code=400, detail="message required")
+    return await direct(goal_id, req.message, req.roles)
+
+
+@router.post("/goals/milestones/{milestone_id}/rewind")
+async def goal_rewind(milestone_id: str, req: InterveneRequest):
+    """마일스톤을 되돌리고 발송 기록을 지운다 — 그래야 다시 지시가 나간다."""
+    from app.services.goal_intervene import rewind
+
+    result = await rewind(milestone_id, req.reason or "")
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
 @router.get("/goals/{goal_id}/status")
 async def goal_status(goal_id: str):
     from app.services.goal_manager import goal_state_machine
