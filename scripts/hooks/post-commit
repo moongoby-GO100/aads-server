@@ -1,0 +1,15 @@
+#!/bin/bash
+python3 /root/aads/scripts/collect_env_snapshot.py event "git_commit" &
+
+# AADS-HOOK-SHA-MARKER (2026-09-14)
+# pre-commit 이 남긴 PENDING 서명을 방금 만들어진 커밋 sha 로 확정한다.
+# 저장소당 마커 하나를 push 때 rm 하던 예전 방식은 동시 세션이 서로의 서명을
+# 소비해 정상 커밋의 push 를 막았다. sha 별로 남기면 소비가 없어 경합도 없다.
+_aads_gd=$(git rev-parse --git-dir 2>/dev/null)
+if [ -n "$_aads_gd" ] && [ -f "$_aads_gd/HOOK_VERIFIED_PENDING" ]; then
+    _aads_sha=$(git rev-parse HEAD 2>/dev/null)
+    if [ -n "$_aads_sha" ]; then
+        mkdir -p "$_aads_gd/hook_verified"
+        mv -f "$_aads_gd/HOOK_VERIFIED_PENDING" "$_aads_gd/hook_verified/$_aads_sha"
+    fi
+fi
