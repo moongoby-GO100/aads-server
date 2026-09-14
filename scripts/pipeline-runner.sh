@@ -1459,8 +1459,29 @@ run_job() {
     log "  MODEL_CYCLE_CAPPED job=$job_id size=$job_size total=${#MODEL_CYCLE[@]} models=${MODEL_CYCLE[*]}"
     # TOKEN_CYCLE 동적 생성 (MODEL_CYCLE 길이에 맞춤)
     local TOKEN_CYCLE=()
+    # AADS-RUNNER-SLOT-DEPRIORITIZE (2026-09-14)
+    # 한도가 소진된 계정을 첫 시도에서 뒤로 미룬다. 2026-09-14 실측: 계정1 이 주간한도
+    # 429(resets Sep 16, 3am KST) 라 매 job 이 attempt 1 을 40초씩 헛썼다. 최종 status 는
+    # done 이라 상태만 봐서는 보이지 않는 낭비였다.
+    # 만료 시각이 지나면 파일을 지우지 않아도 스스로 원래 순서(1,2,1,2)로 돌아간다 —
+    # 사람이 되돌리는 것을 잊어도 안전하게 복귀한다.
+    local _slot_first=1
+    if [[ -f /root/.claude/slot_limits.env ]]; then
+        # shellcheck disable=SC1091
+        source /root/.claude/slot_limits.env 2>/dev/null || true
+    fi
+    local _slot1_until="${AADS_RUNNER_SLOT1_LIMITED_UNTIL:-0}"
+    [[ "$_slot1_until" =~ ^[0-9]+$ ]] || _slot1_until=0
+    if (( _slot1_until > $(date +%s) )); then
+        _slot_first=2
+        log "  SLOT_DEPRIORITIZE job=$job_id 계정1 한도소진(until=$_slot1_until) → 계정2 우선"
+    fi
     for ((i=0; i<${#MODEL_CYCLE[@]}; i++)); do
-        TOKEN_CYCLE+=($((i % 2 + 1)))
+        if [[ "$_slot_first" == "2" ]]; then
+            TOKEN_CYCLE+=($(( (i + 1) % 2 + 1 )))
+        else
+            TOKEN_CYCLE+=($(( i % 2 + 1 )))
+        fi
     done
     # AADS-RUNNER-SLOT-LEASE (2026-09-14): 대여 토큰을 job 마다 다시 읽는다.
     # 스크립트 상단의 source 는 데몬 기동 시 딱 한 번만 돈다. 슬롯이 없는 서버
