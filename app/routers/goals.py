@@ -80,6 +80,13 @@ async def create_goal(req: GoalCreateRequest):
     return result
 
 
+class GoalDocRequest(BaseModel):
+    kind: str = "reference"          # plan | prd | report | reference
+    doc_path: str
+    title: Optional[str] = None
+    note: Optional[str] = None
+
+
 class InterveneRequest(BaseModel):
     message: Optional[str] = None
     roles: Optional[list[str]] = None
@@ -170,11 +177,62 @@ async def goal_board(goal_id: str):
 
     from app.services.direction_guard import is_halted
 
+    docs = await goal_documents(goal_id)
     return {
         "goal": dict(goal),
         "halted": await is_halted(),
         "owners": owners,
+        "documents": docs["documents"],
+        "has_design": docs["has_design"],
+        "missing_design": docs["missing"],
     }
+
+
+@router.get("/goals/{goal_id}/documents")
+async def goal_documents(goal_id: str):
+    """목표의 설계 문서. 없으면 없다고 답한다 — 빈 것과 안 쓴 것은 다르다."""
+    from app.core.db_pool import get_pool
+
+    rows = await get_pool().fetch(
+        "SELECT kind, doc_path, title, note, created_at FROM goal_documents "
+        "WHERE goal_id = $1::uuid "
+        "ORDER BY CASE kind WHEN 'plan' THEN 0 WHEN 'prd' THEN 1 "
+        "                   WHEN 'report' THEN 2 ELSE 3 END, created_at",
+        goal_id,
+    )
+    docs = [dict(r) for r in rows]
+    kinds = {d["kind"] for d in docs}
+    return {
+        "documents": docs,
+        # 기획서와 PRD 가 둘 다 있어야 "설계가 있다" 고 본다. 하나만 있으면
+        # 왜(기획서)나 어떻게(PRD) 중 한쪽이 비어 있다는 뜻이다.
+        "has_design": "plan" in kinds and "prd" in kinds,
+        "missing": [k for k in ("plan", "prd") if k not in kinds],
+    }
+
+
+@router.post("/goals/{goal_id}/documents")
+async def add_goal_document(goal_id: str, req: GoalDocRequest):
+    """문서를 목표에 잇는다. `doc_path` 는 doc_chunks 와 같은 규격이다."""
+    from app.core.db_pool import get_pool
+
+    path = (req.doc_path or "").strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="doc_path required")
+    if req.kind not in ("plan", "prd", "report", "reference"):
+        raise HTTPException(status_code=400, detail="kind must be plan|prd|report|reference")
+
+    row = await get_pool().fetchrow(
+        """
+        INSERT INTO goal_documents (goal_id, kind, doc_path, title, note, created_by)
+        VALUES ($1::uuid, $2, $3, $4, $5, 'ceo')
+        ON CONFLICT (goal_id, doc_path) DO UPDATE
+           SET kind = EXCLUDED.kind, title = EXCLUDED.title, note = EXCLUDED.note
+        RETURNING kind, doc_path, title
+        """,
+        goal_id, req.kind, path, req.title, req.note,
+    )
+    return dict(row)
 
 
 @router.get("/goals/for-session/{session_id}")
