@@ -678,3 +678,17 @@ MCP 원격 쓰기 도구(`write_remote_file`/`patch_remote_file`)는 **활성 AP
 - 실증 자산: NTV2 atomic_data_* 7테이블 + OrderExcelShadowParser v1.0.0 (엑셀 원자화 계층 동작 확인).
 - Phase 0 제안: NTV2 NT-ORDER-INTAKE M1과 동일 코드베이스로 진행(실증+제품화 동시).
 - 상태: 문서만 작성. 코드/DB 변경 없음.
+
+## 2026-09-14 19:55 KST — BYOK P0 재검증 + 진아서버 분석 보고서 게시
+
+- BYOK 게이트 `0e347b11` origin/main 푸시 확인. `app/services/model_selector.py:1215/1231`,
+  적용 3지점(`call_stream:1879`, `_stream_cli_relay:3716`, `_stream_codex_relay:4036`).
+  운영 컨테이너에 동일 코드 존재, `BYOK_ENFORCE_OWN_KEY` 미설정 → 기본 1(강제).
+- 244: `/root/.aads_anthropic_tokens` 삭제됨(진아 계정 전용). `claude-aads` 는 `/etc/biseo.env` 단일 경로.
+  러너 `runner-acct-smoke-20260914`(host=jinah244) status=done.
+- 진아서버 코드분석 HTML: 원본 `244:/root/acct-analysis/out.html`(43,027B, EXIT=0).
+  직전 보고 시점엔 AADS 에 게시되지 않아 볼 수 없었다. 이번에 복사·커밋(`016ad231`),
+  https://aads.newtalk.kr/reports/20260914_jinah_acct_code_analysis.html → HTTP 200.
+  서빙 경로는 `/reports/` 다. `/static/reports/` 는 404.
+- 미완료: main 이 origin 대비 7커밋 앞섬(6건은 타 세션 작업). 푸시는 CEO 확인 후.
+  DB 핸드오버(`handover_write`)는 tenant 미바인딩으로 실패 — 이 파일 기록만 있음.
