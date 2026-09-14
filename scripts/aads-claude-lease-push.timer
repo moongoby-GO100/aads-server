@@ -1,0 +1,13 @@
+[Unit]
+Description=AADS Claude lease push 타이머 (10분 주기)
+# accessToken 수명은 약 2시간이다. 10분 주기면 원격은 항상 최소 1시간 50분 이상 남은
+# 출입증을 들고 있다. 주기를 늘리면 만료된 lease 로 러너가 78 폴백하는 구간이 생긴다.
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Unit=aads-claude-lease-push.service
+
+[Install]
+WantedBy=timers.target

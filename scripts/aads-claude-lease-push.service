@@ -1,0 +1,10 @@
+[Unit]
+Description=AADS Claude lease push — contabo116 → 원격 러너 서버 임시 출입증 갱신
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/root/aads/aads-server/scripts/claude-lease-push.sh
+TimeoutStartSec=180
+Nice=5
