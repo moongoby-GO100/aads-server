@@ -2783,6 +2783,29 @@ async def _stream_litellm_anthropic(
     if _user_anthropic_key:
         logger.info("model_selector_byok_anthropic_stream_enabled session=%s model=%s", str(session_id)[:8], litellm_model)
 
+    # 사용량 한도 표시(P1). Anthropic 은 잔량 조회 API 를 주지 않으므로 응답 헤더가
+    # 유일한 출처다. 성공(200)이든 429 든 그 순간 헤더를 긁어 최신 스냅샷으로 남긴다.
+    # 기록 실패가 스트림을 끊지 않도록 record_snapshot 은 예외를 삼킨다.
+    _rl_user_id = await _resolve_session_user_id(session_id)
+    _rl_source = "byok" if _user_anthropic_key else "system"
+
+    async def _capture_rate_limit(_resp) -> None:
+        if not _rl_user_id:
+            return
+        try:
+            from app.core.llm_rate_limit import record_snapshot
+
+            await record_snapshot(
+                user_id=_rl_user_id,
+                headers=_resp.headers,
+                provider="anthropic",
+                key_source=_rl_source,
+                model=litellm_model,
+                status_code=_resp.status_code,
+            )
+        except Exception:
+            pass
+
     yield {"type": "model_info", "model": _display_model}
 
     # Prompt Caching: system_prompt -> cache_control 블록 변환
@@ -2815,6 +2838,9 @@ async def _stream_litellm_anthropic(
                 for _attempt in range(_MAX_RETRIES):
                     resp_ctx = client.stream("POST", _url, headers=_headers, json=req_body)
                     resp = await resp_ctx.__aenter__()
+                    # 200 이든 429 든 헤더를 남긴다. 한도 표시가 가장 필요한
+                    # 순간이 429 라서, 성공 응답만 기록하면 정작 쓸 값이 없다.
+                    await _capture_rate_limit(resp)
                     if resp.status_code == 200:
                         break
                     await resp.aread()
