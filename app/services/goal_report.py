@@ -45,17 +45,22 @@ _MAX_PER_CYCLE = int(os.getenv("GOAL_REPORT_MAX_PER_CYCLE", "3"))
 
 
 async def _telegram(text: str) -> bool:
-    try:
-        from app.services.ceo_notify import _get_telegram_chat_id, _send_telegram_message
+    """대표님께 알린다. **이름은 남기되 오비스 알림으로 보낸다.**
 
-        token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-        chat_id = _get_telegram_chat_id() or os.getenv("TELEGRAM_CHAT_ID", "").strip()
-        if not token or not chat_id:
-            return False
-        return await _send_telegram_message(token, chat_id, text)
-    except Exception as exc:
-        logger.warning("goal_report_telegram_failed", error=str(exc)[:160])
-        return False
+    2026-09-14 대표님 지시: "텔레그램 알림 사용안해 그냥 오비스알림으로
+    보내줘". 부르는 자리가 여럿이라 이름을 바꾸지 않고 안을 바꿨다 —
+    호출부를 일괄 수정하면 한 곳을 빠뜨린다.
+    """
+    from app.services.ohvis_alert import WARNING, notify
+
+    head, _, body = text.partition("\n")
+    return await notify(
+        head.strip()[:200] or "목표 알림",
+        body.strip(),
+        severity=WARNING,
+        category="goal",
+        dedupe_minutes=30,
+    )
 
 
 async def _post_to_lead(conn: Any, goal_id: str, text: str) -> bool:
