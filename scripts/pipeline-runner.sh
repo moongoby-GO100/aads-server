@@ -1899,6 +1899,38 @@ $out_tail")
     if [[ -n "$_new_untracked" ]]; then
         printf '%s\n' "$_new_untracked" | xargs -d '\n' -r git add -N -- 2>/dev/null || true
     fi
+    # v2.4 (2026-09-15, ACCT-FLOWMAP 5연속 no_changes 원인 수정):
+    # v2.3 의 intent-to-add 는 --exclude-standard 를 쓴다. 그런데 진아실장 저장소는
+    # .gitignore 17번째 줄이 '*' 인 화이트리스트 방식이라(!채팅앱/**/*.html 처럼 되살린다),
+    # Claude 가 새로 만든 산출물이 전부 ignored 로 걸러져 한 건도 잡히지 않았다.
+    # run c/d/e 는 Write 를 실제로 성공시켰는데도 changed_files=0 으로 오판돼
+    # cancelled 처리되고 워크트리째 삭제됐다(2026-09-14 세션 로그 실측).
+    #
+    # 표준 목록이 비었을 때만, 워크트리 생성 시각(.git 파일 mtime)보다 새 파일을
+    # 파일시스템에서 직접 찾아 -f 로 intent-to-add 한다. 표준 목록이 비지 않는
+    # 일반 저장소(AADS/KIS/GO100/SF/NTV2)에서는 이 블록이 아예 실행되지 않으므로
+    # 기존 동작에 영향이 없다.
+    if [[ -z "${_new_untracked//[[:space:]]/}" && -n "${worktree_dir:-}" && -e "${worktree_dir}/.git" ]]; then
+        # --exclude-standard 를 뺀 untracked 목록에서 시작한다. 갓 만든 워크트리에는
+        # 추적 파일만 체크아웃돼 있으므로 여기 남는 것은 이번 작업이 만든 파일뿐이다.
+        # 그래도 안전하게 워크트리 생성시각(.git mtime)보다 새 것만 통과시킨다.
+        # find 단독으로 훑으면 체크아웃된 추적 파일이 전부 걸려 200개 상한을 잡아먹는다.
+        local _ignored_cand=""
+        _ignored_cand=$(git ls-files --others 2>/dev/null \
+            | grep -vE '(^|/)(node_modules|__pycache__|\.venv|venv|dist|build|\.next)/' \
+            | grep -vE '\.(pyc|pyo|log)$') || true
+        local _ignored_new=""
+        if [[ -n "${_ignored_cand//[[:space:]]/}" ]]; then
+            _ignored_new=$(printf '%s\n' "$_ignored_cand" | while IFS= read -r _f; do
+                [[ -n "$_f" && -f "$_f" && "$_f" -nt "${worktree_dir}/.git" ]] && printf '%s\n' "$_f"
+            done | head -200) || true
+        fi
+        if [[ -n "${_ignored_new//[[:space:]]/}" ]]; then
+            log "  UNTRACKED_IGNORED_RESCUE job=$job_id files=$(printf '%s\n' "$_ignored_new" | sed '/^$/d' | wc -l) — .gitignore 에 가려진 신규 산출물 복구"
+            printf '%s\n' "$_ignored_new" | sed '/^$/d' | xargs -d '\n' -r git add -fN -- 2>/dev/null || true
+            _new_untracked="$_ignored_new"
+        fi
+    fi
     local git_diff=""
     local _current_head=""
     _current_head=$(git rev-parse HEAD 2>/dev/null) || _current_head=""
