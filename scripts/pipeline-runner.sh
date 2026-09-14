@@ -258,7 +258,9 @@ lookup_error_book() {
     local book="/root/aads/aads-server/scripts/error_book.py"
     [[ -x "$book" ]] || return 0
     local hit
-    hit=$(timeout 30 "$book" match "$err_file" --bump 2>/dev/null) || return 0
+    # --record: 사전에 없는 오류는 후보로 남긴다. 원인은 비워 두되 증상이
+    # 어디에도 안 남는 일은 막는다. 다음 사람이 원인을 채워 active 로 올린다.
+    hit=$(timeout 30 "$book" match "$err_file" --bump --record --source "runner:${job_id}" 2>/dev/null) || return 0
     [[ "$hit" == *"알려진 오류:"* ]] || return 0
     while IFS= read -r line; do
         [[ -n "$line" ]] && log "  ERROR_BOOK job=${job_id} ${line}"

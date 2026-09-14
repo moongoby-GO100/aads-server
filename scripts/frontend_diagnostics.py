@@ -322,7 +322,8 @@ def lookup_error_book(texts: list[str]) -> list[dict]:
         return []
     try:
         proc = subprocess.run(
-            [sys.executable, str(book), "match", "-", "--bump"],
+            [sys.executable, str(book), "match", "-", "--bump", "--record",
+             "--source", "frontend_diagnostics"],
             input=body, text=True, capture_output=True, timeout=40,
         )
     except Exception:

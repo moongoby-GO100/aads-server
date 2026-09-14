@@ -4528,6 +4528,12 @@ async def report_frontend_error(req: ErrorReportRequest, request: Request):
 
         probe = f"{req.error_type} {req.message} {req.url or ''}"
         known = await match_error(probe)
+        if not known:
+            # 사전에 없는 오류도 증상은 남긴다. 원인은 비워 둔다 —
+            # 모르는 채 "알려진 원인" 으로 넣으면 사전이 오염된다.
+            from app.services.error_book import record_candidate
+
+            await record_candidate(probe, source=f"chat:{req.error_type}")
         for hit in known:
             logger.warning(
                 "frontend_error_known",

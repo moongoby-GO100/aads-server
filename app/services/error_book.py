@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -31,7 +32,7 @@ async def _load_entries() -> list[dict]:
 
         rows = await get_pool().fetch(
             "SELECT error_key, symptom, root_cause, prevention, recurrence_count, metadata "
-            "FROM ohvis_wiki_error_book WHERE status <> 'retired'"
+            "FROM ohvis_wiki_error_book WHERE status = 'active'"
         )
     except Exception as exc:
         # 사전 조회 실패가 오류 처리 자체를 막으면 안 된다.
@@ -82,6 +83,57 @@ async def match_error(text: Any, *, limit: int = 2) -> list[dict]:
         if len(hits) >= limit:
             break
     return hits
+
+
+async def record_candidate(text: Any, source: str = "") -> str:
+    """알려지지 않은 오류를 후보로 남긴다.
+
+    원인을 모르는 채 active 로 넣으면 사전이 오염된다. status='candidate' 로
+    두어 "알려진 원인" 으로 행세하지 않게 하되, **증상이 어디에도 안 남는 것**은
+    막는다. 사람이 원인을 채우면 active 로 올린다.
+
+    서명은 변하는 값(숫자·해시)을 지운 형태다. 안 지우면 요청마다 새 항목이
+    쌓인다.
+    """
+    body = str(text or "")
+    cand = ""
+    for line in body.splitlines():
+        line = line.strip()
+        if line and re.search(r"error|exception|failed|refused|timeout|denied", line, re.I):
+            cand = line
+            break
+    if not cand:
+        cand = next((l.strip() for l in body.splitlines() if l.strip()), "")
+    if not cand:
+        return ""
+    cand = cand[:300]
+
+    norm = re.sub(r"[0-9a-fA-F]{8,}", "\u00a7H\u00a7", cand[:160])
+    norm = re.sub(r"\d+", "\u00a7N\u00a7", norm)
+    sig = re.escape(norm)
+    sig = sig.replace(re.escape("\u00a7H\u00a7"), "[0-9a-fA-F]+")
+    sig = sig.replace(re.escape("\u00a7N\u00a7"), "[0-9]+")
+
+    key = "auto." + hashlib.sha1(sig.encode("utf-8")).hexdigest()[:12]
+    try:
+        from app.core.db_pool import get_pool
+
+        await get_pool().execute(
+            """
+            INSERT INTO ohvis_wiki_error_book
+                (project, error_key, symptom, root_cause, prevention, status, metadata)
+            VALUES ('AADS', $1, $2, '', '', 'candidate', $3::jsonb)
+            ON CONFLICT (project, error_key) DO UPDATE
+                SET recurrence_count = ohvis_wiki_error_book.recurrence_count + 1,
+                    updated_at = NOW()
+            """,
+            key, cand,
+            json.dumps({"signatures": [sig], "source": source}, ensure_ascii=False),
+        )
+    except Exception as exc:
+        logger.debug("error_book_record_failed: %s", str(exc)[:120])
+        return ""
+    return key
 
 
 async def bump_recurrence(error_key: str) -> None:

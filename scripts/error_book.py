@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import re
 import subprocess
 import sys
@@ -50,7 +51,7 @@ def lit(v) -> str:
 def load_entries() -> list[dict]:
     out = psql(
         "SELECT error_key, symptom, root_cause, prevention, recurrence_count, status, metadata::text "
-        "FROM ohvis_wiki_error_book WHERE status <> 'retired' ORDER BY error_key;"
+        "FROM ohvis_wiki_error_book WHERE status = 'active' ORDER BY error_key;"
     )
     entries = []
     for line in out.splitlines():
@@ -69,7 +70,61 @@ def load_entries() -> list[dict]:
     return entries
 
 
-def do_match(text: str, bump: bool) -> int:
+def _signature_from(text: str) -> tuple[str, str]:
+    """오류 텍스트에서 후보 서명과 대표 문구를 뽑는다.
+
+    완전한 원인은 사람이 밝혀야 하지만, **증상이 어디에도 안 남는 것**은 막을 수
+    있다. 오류 같아 보이는 첫 줄을 대표 문구로 삼고, 변하는 값(숫자·경로·id)을
+    지운 형태를 서명으로 쓴다.
+    """
+    cand = ""
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if re.search(r"error|exception|failed|traceback|refused|timeout|denied", line, re.I):
+            cand = line
+            break
+    if not cand:
+        cand = next((l.strip() for l in text.splitlines() if l.strip()), "")
+    cand = cand[:300]
+    # 서명은 변하는 부분을 지운다. 안 지우면 job id·포트·주소마다 새 항목이 생긴다.
+    #
+    # 순서가 중요하다 — 먼저 자리표시자로 바꾸고, 이스케이프한 뒤, 자리표시자만
+    # 정규식으로 되돌린다. 이스케이프 후에 치환하면 숫자가 escape 대상이 아니라
+    # 아무것도 걸리지 않는다(2026-09-14 첫 구현이 그랬다).
+    norm = cand[:160]
+    norm = re.sub(r"[0-9a-fA-F]{8,}", "§H§", norm)   # 해시·uuid 조각
+    norm = re.sub(r"\d+", "§N§", norm)               # 숫자(포트·errno·크기)
+    sig = re.escape(norm)
+    sig = sig.replace(re.escape("§H§"), "[0-9a-fA-F]+")
+    sig = sig.replace(re.escape("§N§"), "[0-9]+")
+    return cand, sig
+
+
+def record_candidate(text: str, source: str) -> str:
+    """알려지지 않은 오류를 후보로 남긴다.
+
+    원인을 모르는 채 active 로 넣으면 사전이 오염된다. status='candidate' 로
+    두어 조회에는 걸리되 "알려진 원인" 으로 행세하지 않게 한다. 사람이 원인을
+    채우면 active 로 올린다.
+    """
+    cand, sig = _signature_from(text)
+    if not cand:
+        return ""
+    key = "auto." + hashlib.sha1(sig.encode("utf-8")).hexdigest()[:12]
+    meta = json.dumps({"signatures": [sig], "source": source}, ensure_ascii=False)
+    psql(
+        "INSERT INTO ohvis_wiki_error_book "
+        "(project, error_key, symptom, root_cause, prevention, status, metadata) VALUES ("
+        f"'AADS', {lit(key)}, {lit(cand)}, '', '', 'candidate', {lit(meta)}::jsonb) "
+        "ON CONFLICT (project, error_key) DO UPDATE SET "
+        "  recurrence_count = ohvis_wiki_error_book.recurrence_count + 1, updated_at = NOW();"
+    )
+    return key
+
+
+def do_match(text: str, bump: bool, record: bool = False, source: str = "") -> int:
     entries = load_entries()
     hits = []
     for e in entries:
@@ -84,6 +139,10 @@ def do_match(text: str, bump: bool) -> int:
                     break
     if not hits:
         print("알려진 오류 없음")
+        if record:
+            key = record_candidate(text, source)
+            if key:
+                print(f"  후보로 기록: {key} (원인 미상 — 사람이 채워야 한다)")
         return 1
     for e, sig in hits:
         print(f"알려진 오류: {e['error_key']}  (재발 {e['recurrence_count']}회)")
@@ -128,6 +187,9 @@ def main() -> int:
     m = sub.add_parser("match", help="오류 텍스트에서 알려진 원인 찾기")
     m.add_argument("path", help="오류 파일 경로, 또는 - (표준입력)")
     m.add_argument("--bump", action="store_true", help="일치 시 재발 횟수 증가")
+    m.add_argument("--record", action="store_true",
+                   help="일치하는 항목이 없으면 후보로 기록 (원인 미상 상태)")
+    m.add_argument("--source", default="", help="후보 기록 시 출처 표시")
 
     r = sub.add_parser("register", help="항목 등록/갱신")
     r.add_argument("--key", required=True)
@@ -142,7 +204,7 @@ def main() -> int:
 
     if a.cmd == "match":
         text = sys.stdin.read() if a.path == "-" else open(a.path, encoding="utf-8", errors="replace").read()
-        return do_match(text, a.bump)
+        return do_match(text, a.bump, a.record, a.source)
     if a.cmd == "register":
         return do_register(a)
     return do_list()
