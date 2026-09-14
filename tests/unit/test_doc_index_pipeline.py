@@ -328,3 +328,38 @@ def test_orchestrator_projects_env_override(monkeypatch):
         project_config._parse_orchestrator_projects()
         == project_config._DEFAULT_ORCHESTRATOR_PROJECTS
     )
+
+
+def test_healer_resolves_servers_from_registry():
+    """감시기는 서버 지도를 코드에 두지 않는다.
+
+    2026-09-14 실측. `unified_healer` 에 `{"211": ..., "114": ...}` 지도가
+    박혀 있었는데 `monitored_services.server` 값은 `contabo14` 였다.
+    매칭이 안 되니 SSH 를 **시도조차 하지 않고** 곧바로 fail 로 기록했다.
+
+        contabo14  go100-relay    fail  연속 실패 110,370회
+        contabo14  nginx          fail  연속 실패 106,709회
+
+    전부 정상 가동 중이었다. 고친 뒤 전체 26건을 재검사한 결과
+    **거짓 경보 8건이 해소되고 진짜 실패 4건이 드러났다** —
+    go100-ws-krx, kis-v41-minute-collector 등 수집 계통이다.
+
+    거짓 경보는 경보가 없는 것보다 나쁘다. 10만 건에 묻혀 진짜가 안 보인다.
+    """
+    import inspect
+
+    from app.services import unified_healer
+
+    src = inspect.getsource(unified_healer)
+    assert "server_registry" in src, "레지스트리를 봐야 한다"
+    assert "ssh_host_map" not in src, "코드에 서버 지도 사본이 다시 생겼다"
+
+    resolve_src = inspect.getsource(unified_healer._resolve_server)
+    assert "SELECT ip" in resolve_src
+
+    # 레지스트리에 없는 서버는 조용히 fail 하지 말고 왜인지 남겨야 한다.
+    exec_src = inspect.getsource(unified_healer._execute_command)
+    assert "monitored_server_not_in_registry" in exec_src
+
+    # registry.port 는 SSH 포트가 아니다 — cafe24_114 는 7916(웹)이고 SSH 는 22.
+    assert "-p {port}" not in exec_src

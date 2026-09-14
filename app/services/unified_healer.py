@@ -293,6 +293,79 @@ def _redirect_aads_core_restart(command: str, target_server: str = "68") -> str:
     return command
 
 
+# ─── 서버 해석 ───────────────────────────────────────────────────────────────
+#
+# 감시 대상의 서버 키를 실제 접속 정보로 바꾼다. 정본은 `server_registry`
+# 테이블이다 — 코드에 지도를 또 두지 않는다.
+#
+# 2026-09-14 실측. 여기에 `{"211": ..., "114": ...}` 지도가 박혀 있었는데
+# DB 의 서버 키는 `contabo14` 였다. 매칭이 안 되니 SSH 를 **시도조차 하지
+# 않고** 곧바로 실패로 기록했다. 그 결과:
+#
+#     contabo14  go100-relay      fail  연속 실패 110,370회
+#     contabo14  postgresql-16    fail  연속 실패 110,420회
+#     contabo14  nginx            fail  연속 실패 106,709회
+#
+# 전부 정상 가동 중이었다. 컨테이너에서 SSH 도 잘 됐다.
+#
+# 이게 왜 나쁜가 — 감시기가 **모든 것에** 늑대가 나타났다고 외치니 아무도
+# 믿지 않게 됐고, 같은 날 실제로 죽어 있던 서비스 4개(go100-minute-sync,
+# go100-daily-results-snapshot 등)가 10만 건의 가짜 실패에 묻혔다.
+# 거짓 경보는 경보가 없는 것보다 나쁘다.
+_SERVER_CACHE: dict[str, tuple[float, dict]] = {}
+_SERVER_CACHE_TTL = 300.0
+
+# 옛 이름 → 레지스트리 키. 예전 코드가 쓰던 값을 그대로 받아 준다.
+# `211` 이 contabo14 를 가리키는 것은 이름이 틀린 것이지만, 바꾸면 기존
+# 감시 항목이 조용히 대상을 잃으므로 동작을 그대로 보존한다.
+_SERVER_ALIASES = {
+    "68": "contabo116",
+    "116": "contabo116",
+    "114": "cafe24_114",
+    "211": "contabo14",
+}
+
+# 레지스트리에 없는 것 — 서버별 전용 키. 없으면 기본 키로 붙는다.
+_SSH_KEY_HINTS = {
+    "cafe24_114": "/root/.ssh/id_ed25519_newtalk",
+}
+
+
+async def _resolve_server(target_server: str) -> dict:
+    """서버 키 → {ip, user, port}. 레지스트리를 보고 5분 캐시한다."""
+    key = _SERVER_ALIASES.get(target_server, target_server)
+    now = time.time()
+    hit = _SERVER_CACHE.get(key)
+    if hit and (now - hit[0]) < _SERVER_CACHE_TTL:
+        return hit[1]
+
+    info: dict = {}
+    try:
+        from app.core.db_pool import get_pool
+
+        row = await get_pool().fetchrow(
+            "SELECT ip, coalesce(ssh_user, 'root') AS ssh_user, port "
+            "FROM server_registry WHERE server_key = $1",
+            key,
+        )
+        if row:
+            # `port` 는 **SSH 포트가 아니다.** cafe24_114 는 7916 인데
+            # 그건 웹 서비스 포트고 SSH 는 22 다. 실측으로 확인했다.
+            # SSH 포트 전용 칸이 생기기 전까지 기본 포트를 쓴다.
+            info = {"ip": row["ip"], "user": row["ssh_user"]}
+    except Exception as exc:
+        logger.warning("server_resolve_failed", server=key, error=str(exc)[:160])
+
+    if not info:
+        # 레지스트리에 없으면 옛 환경변수로 한 번 더 시도한다.
+        env_host = os.getenv(f"SERVER_{target_server}_HOST", "").strip()
+        if env_host:
+            info = {"ip": env_host, "user": "root", "port": "22"}
+
+    _SERVER_CACHE[key] = (now, info)
+    return info
+
+
 async def _execute_command(command: str, target_server: str = "contabo116") -> dict:
     """명령 실행. contabo116 docker 명령은 Unix Socket API로, 그 외=SSH."""
     command = _redirect_aads_core_restart(command, target_server)
@@ -325,22 +398,29 @@ async def _execute_command(command: str, target_server: str = "contabo116") -> d
                 "output": (stdout.decode()[:500] + stderr.decode()[:500]).strip(),
             }
         else:
-            ssh_key_map = {
-                "211": "/root/.ssh/id_ed25519_newtalk",
-                "114": "/root/.ssh/id_ed25519_newtalk",
-            }
-            ssh_host_map = {
-                "211": os.getenv("SERVER_211_HOST", "5.104.86.14"),
-                "114": os.getenv("SERVER_114_HOST", ""),
-            }
-            key = ssh_key_map.get(target_server, "")
-            host = ssh_host_map.get(target_server, "")
+            info = await _resolve_server(target_server)
+            host = info.get("ip", "")
             if not host:
-                return {"success": False, "output": f"No SSH config for {target_server}"}
+                # 여기 오면 감시 항목이 레지스트리에 없는 서버를 가리킨다.
+                # 조용히 fail 로 기록하면 10만 건짜리 거짓 경보가 다시 쌓인다.
+                logger.warning(
+                    "monitored_server_not_in_registry",
+                    server=target_server,
+                    hint="server_registry 에 등록하거나 감시 항목의 server 값을 고쳐라",
+                )
+                return {
+                    "success": False,
+                    "output": f"server_registry 에 '{target_server}' 가 없다",
+                }
 
+            user = info.get("user", "root")
+            key = _SSH_KEY_HINTS.get(
+                _SERVER_ALIASES.get(target_server, target_server), ""
+            )
+            key_opt = f"-i {key} " if key and os.path.exists(key) else ""
             ssh_cmd = (
-                f'ssh -i {key} -o StrictHostKeyChecking=no -o ConnectTimeout=10 '
-                f'root@{host} "{command}"'
+                f'ssh {key_opt}-o StrictHostKeyChecking=no -o ConnectTimeout=10 '
+                f'{user}@{host} "{command}"'
             )
             proc = await asyncio.create_subprocess_shell(
                 ssh_cmd,
