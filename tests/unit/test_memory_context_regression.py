@@ -135,3 +135,24 @@ def test_backfill_chat_embeddings_never_writes_dummy():
         "채운 벡터에 세대를 안 적으면 다음 백필이 같은 행을 또 채운다"
     )
     assert script.ROSTER and "StrategyCardLead" in script.ROSTER
+
+
+def test_backfill_orchestrator_scope_has_no_copy_of_the_list():
+    """통합지시 범위 사본을 스크립트에 또 만들지 않는다.
+
+    2026-09-14 이 목록이 네 곳에 복사돼 갈라져 있었다. 백필 스크립트는
+    원격 서버에서도 도는데 거기엔 앱 패키지가 없어서 사본을 두고 싶어지는
+    자리다 — 두면 다섯 번째가 된다. 앱이 있으면 정본을 import 하고,
+    없으면 환경변수를 읽고, 둘 다 없으면 실패한다.
+    """
+    import inspect
+
+    from scripts import backfill_chat_embeddings as script
+
+    src = inspect.getsource(script.orchestrator_projects)
+    assert "project_config" in src
+    assert "CEO_ORCHESTRATOR_PROJECTS" in src
+    assert '"AADS"' not in src and "'AADS'" not in src, "기본값 사본이 생겼다"
+
+    args = script.build_parser().parse_args(["run", "--orchestrator"])
+    assert args.orchestrator is True

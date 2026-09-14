@@ -23,6 +23,7 @@
 
     backfill_chat_embeddings.py status              현황만 본다
     backfill_chat_embeddings.py run --roster        #310 담당 8명 먼저
+    backfill_chat_embeddings.py run --orchestrator    통합지시가 보는 범위 전부
     backfill_chat_embeddings.py run --workspace GO100
     backfill_chat_embeddings.py run --all --max-seconds 7200
 
@@ -131,6 +132,33 @@ def ollama_embed(texts: list[str]) -> list[list[float]] | None:
     return vectors
 
 
+def orchestrator_projects() -> list[str]:
+    """통합지시 검색 범위. 정본은 `app/core/project_config` 다.
+
+    이 스크립트는 원격 서버에서도 도는데 거기엔 앱 패키지가 없다. 그래서
+    두 단계로 찾는다 — 앱이 있으면 정본을 import 하고, 없으면 환경변수를
+    직접 읽는다. **기본값 사본을 여기 두지 않는다.** 목록 사본이 네 벌로
+    갈라진 것이 바로 오늘 고친 문제다.
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from app.core.project_config import ORCHESTRATOR_PROJECTS
+
+        return list(ORCHESTRATOR_PROJECTS)
+    except Exception:
+        pass
+
+    raw = os.getenv("CEO_ORCHESTRATOR_PROJECTS", "").strip()
+    if not raw:
+        print(
+            "[backfill] 통합지시 범위를 찾을 수 없다 — 앱 패키지도 없고 "
+            "CEO_ORCHESTRATOR_PROJECTS 도 비어 있다. --workspace 로 하나씩 지정해라.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    return [t.strip().upper() for t in raw.replace(";", ",").split(",") if t.strip()]
+
+
 def _scope_sql(args) -> str:
     """어디를 채울지. 좁은 것부터 — 전부 채우려면 50시간이 든다."""
     if args.session:
@@ -143,6 +171,12 @@ def _scope_sql(args) -> str:
             "AND s.workspace_id IN (SELECT id FROM chat_workspaces "
             f"WHERE project_key = {lit(args.workspace.upper())} "
             f"   OR name ILIKE {lit('%' + args.workspace + '%')})"
+        )
+    if args.orchestrator:
+        keys = ",".join(lit(p) for p in orchestrator_projects())
+        return (
+            "AND s.workspace_id IN (SELECT id FROM chat_workspaces "
+            f"WHERE project_key IN ({keys}))"
         )
     return ""
 
@@ -260,6 +294,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--roster", action="store_true", help="#310 담당 8명 (기본으로 권장)")
     g.add_argument("--workspace", help="워크스페이스 project_key 또는 이름 일부")
     g.add_argument("--session", help="세션 id 하나만")
+    g.add_argument("--orchestrator", action="store_true",
+                   help="[CEO] 통합지시가 가로질러 보는 프로젝트 전부 "
+                        "(CEO_ORCHESTRATOR_PROJECTS)")
     g.add_argument("--all", action="store_true", help="전부 — 50시간 든다")
     rn.add_argument("--limit", type=int, default=0, help="이번 실행에서 채울 최대 건수")
     rn.add_argument("--max-seconds", type=int, default=7200,
@@ -272,7 +309,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main_argv(argv: list[str] | None = None) -> None:
     ap = build_parser()
     args = ap.parse_args(argv)
-    if args.cmd == "run" and not (args.roster or args.workspace or args.session or args.all):
+    if args.cmd == "run" and not (
+        args.roster or args.workspace or args.session or args.all or args.orchestrator
+    ):
         # 범위 없이 돌면 33,000건 = 34시간이다. 끝날 시점을 모르는 작업을
         # 띄우지 않는다(R-BG).
         ap.error("범위를 지정해라: --roster / --workspace / --session / --all")
