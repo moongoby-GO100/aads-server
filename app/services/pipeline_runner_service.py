@@ -2609,6 +2609,17 @@ async def recover_interrupted_jobs():
                 SELECT job_id, chat_session_id, project, substring(instruction from 1 for 100) as instr
                 FROM pipeline_jobs
                 WHERE status = 'running' AND phase NOT IN ('restarting', 'done', 'error', 'claude_code_detached')
+                  -- 살아 있는 원격 러너의 작업은 건드리지 않는다.
+                  -- 원격 러너(contabo14/rfree-0009/jinah244)는 이 서버와 생사를 같이하지
+                  -- 않는다. 2026-09-14 aads-server 재배포 때 jinah244 에서 10분째 정상
+                  -- 실행 중이던 ACCT 작업이 이 쓸이에 걸려 error 로 뒤집혔고, 러너는
+                  -- 그 직후 POST_PROCESS_ABORTED_TERMINAL 로 산출물을 버렸다.
+                  -- 러너가 진짜 죽은 경우는 각 러너가 재기동 때 스스로 requeue 한다.
+                  AND NOT EXISTS (
+                      SELECT 1 FROM pipeline_runner_hosts h
+                      WHERE h.host = pipeline_jobs.runner_host
+                        AND h.last_seen_at > now() - interval '15 minutes'
+                  )
                 """
             )
             orphan_count = await conn.execute(
@@ -2622,6 +2633,13 @@ async def recover_interrupted_jobs():
                     review_feedback = COALESCE(review_feedback, '') || ' | 서버 재시작으로 중단됨',
                     updated_at = now()
                 WHERE status = 'running' AND phase NOT IN ('restarting', 'done', 'error', 'claude_code_detached')
+                  -- 위 SELECT 와 동일한 생존 러너 제외 조건. 둘이 어긋나면 알림만 가고
+                  -- 상태는 안 바뀌거나 그 반대가 된다.
+                  AND NOT EXISTS (
+                      SELECT 1 FROM pipeline_runner_hosts h
+                      WHERE h.host = pipeline_jobs.runner_host
+                        AND h.last_seen_at > now() - interval '15 minutes'
+                  )
                 """
             )
             if orphan_count and orphan_count != "UPDATE 0":

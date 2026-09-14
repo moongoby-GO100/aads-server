@@ -953,14 +953,14 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── Pipeline Runner 도구 (호스트 독립 실행 — 권장) ─────────────────────
     {
         "name": "pipeline_runner_submit",
-        "description": "코드 수정/배포 작업을 Pipeline Runner로 제출.\n각 서버의 Runner가 독립적으로 Claude Code를 실행. 서버 재시작 무영향.\n서버매핑: AADS→contabo116, GO100→contabo14, SF/NTV2→cafe24_114.\n예: pipeline_runner_submit(project='GO100', instruction='order_executor.py null check 추가')",
+        "description": "코드 수정/배포 작업을 Pipeline Runner로 제출.\n각 서버의 Runner가 독립적으로 Claude Code를 실행. 서버 재시작 무영향.\n서버매핑: AADS→contabo116, GO100→contabo14, SF/NTV2→cafe24_114, ACCT→jinah244(5.104.85.244, 진아 계정 전용).\n예: pipeline_runner_submit(project='GO100', instruction='order_executor.py null check 추가')",
         "input_schema": {
             "type": "object",
             "properties": {
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["GO100", "SF", "NTV2", "AADS"],
+                    "enum": ["GO100", "SF", "NTV2", "AADS", "ACCT"],
                 },
                 "instruction": {
                     "type": "string",
@@ -1011,7 +1011,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["GO100", "SF", "NTV2", "AADS"],
+                    "enum": ["GO100", "SF", "NTV2", "AADS", "ACCT"],
                 },
                 "jobs": {
                     "type": "array",
