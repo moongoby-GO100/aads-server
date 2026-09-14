@@ -663,6 +663,28 @@ class ToolExecutor:
             if _dup:
                 return _dup
 
+            # 세션·테넌트는 게이트보다 **먼저** 해석한다.
+            #
+            # 원래는 두 게이트를 지난 뒤에 해석했다. 그래서 게이트가 승인
+            # 요청을 남기려 해도 session_id·tenant_id 가 비어 있었고,
+            # request_approval 이 테넌트를 못 구해 None 을 돌려줬다.
+            # agent_permission_requests 가 생성 이래 0 행이고 채팅의 인라인
+            # 승인 패널이 한 번도 뜨지 않은 이유가 이것이다 — 막히기만 하고
+            # 승인받을 길이 없었다.
+            #
+            # 비용은 늘지 않는다. 아래에서 어차피 무조건 부르던 것을
+            # 위로 옮긴 것뿐이다.
+            tenant_id = await resolve_bound_tenant_id(
+                tool_input.get("tenant_id", ""),
+                tool_input.get("session_id", ""),
+            )
+            if tenant_id and not str(tool_input.get("tenant_id") or "").strip():
+                tool_input["tenant_id"] = tenant_id
+            if not str(tool_input.get("session_id") or "").strip():
+                _bound_session = _resolve_bound_chat_session_id("")
+                if _bound_session:
+                    tool_input["session_id"] = _bound_session
+
             # 실매매 조건 변경은 CEO 승인 전까지 막는다.
             #
             # 2026-09-14 CEO 지시. **프롬프트로 막지 않는다** — 역할 지침에
@@ -723,12 +745,7 @@ class ToolExecutor:
                     tool_name, str(_dir_err)[:200],
                 )
 
-            tenant_id = await resolve_bound_tenant_id(
-                tool_input.get("tenant_id", ""),
-                tool_input.get("session_id", ""),
-            )
-            if tenant_id and not str(tool_input.get("tenant_id") or "").strip():
-                tool_input["tenant_id"] = tenant_id
+            # tenant_id 는 위(게이트 앞)에서 이미 해석했다.
             if tenant_id:
                 from app.services.tenant_usage_limits import TenantUsageLimitExceeded, check_tenant_usage_limit
 
