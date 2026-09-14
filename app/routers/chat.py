@@ -4334,6 +4334,9 @@ class ErrorReportRequest(BaseModel):
 class ErrorReportOut(BaseModel):
     ok: bool = True
     error_id: str
+    # 알려진 오류면 원인·예방을 함께 돌려준다. 프론트가 사용자에게 바로 보여줄
+    # 수 있고, 없으면 빈 목록이라 기존 호출부는 영향을 받지 않는다.
+    known_errors: list[dict] = []
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -4516,7 +4519,27 @@ async def report_frontend_error(req: ErrorReportRequest, request: Request):
     except Exception as e:
         logger.debug(f"error_report_save_failed: {e}")
 
-    return ErrorReportOut(ok=True, error_id=error_id)
+    # 오류 사전 조회 — 알려진 오류면 원인·예방을 그 자리에서 알려준다.
+    # 2026-09-14, 같은 실패를 세 세션이 서로 다르게 오진했다. 증상에서 원인으로
+    # 가는 길이 없으면 사람이 매번 처음부터 추적한다.
+    known: list[dict] = []
+    try:
+        from app.services.error_book import bump_recurrence, match_error
+
+        probe = f"{req.error_type} {req.message} {req.url or ''}"
+        known = await match_error(probe)
+        for hit in known:
+            logger.warning(
+                "frontend_error_known",
+                error_id=error_id,
+                error_key=hit["error_key"],
+                root_cause=str(hit.get("root_cause", ""))[:200],
+            )
+            await bump_recurrence(hit["error_key"])
+    except Exception as e:
+        logger.debug(f"error_book_lookup_failed: {e}")
+
+    return ErrorReportOut(ok=True, error_id=error_id, known_errors=known)
 
 
 # ═══ OAuth 토큰 순서 관리 ═══════════════════════════════════════════════════

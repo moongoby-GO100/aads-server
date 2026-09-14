@@ -305,6 +305,33 @@ def decode_react_error(text: str) -> str | None:
     return f"React #{code}: {REACT_ERRORS.get(code, '알려지지 않은 코드')}"
 
 
+def lookup_error_book(texts: list[str]) -> list[dict]:
+    """발견한 오류에 알려진 원인을 붙인다.
+
+    "React #418 hydration 불일치" 까지는 진단기가 말해주지만, 그게 무엇 때문에
+    생기는지는 매번 사람이 다시 추적했다. 한 번 원인을 밝힌 것은 사전에 넣고
+    다음부터는 여기서 이어 붙인다.
+
+    조회 실패는 무시한다 — 사전이 없다고 진단이 멈추면 안 된다.
+    """
+    body = "\n".join(t for t in texts if t)
+    if not body.strip():
+        return []
+    book = Path("/root/aads/aads-server/scripts/error_book.py")
+    if not book.is_file():
+        return []
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(book), "match", "-", "--bump"],
+            input=body, text=True, capture_output=True, timeout=40,
+        )
+    except Exception:
+        return []
+    if proc.returncode != 0 or "알려진 오류:" not in (proc.stdout or ""):
+        return []
+    return [{"text": line.strip()} for line in proc.stdout.splitlines() if line.strip()]
+
+
 def ensure_storage_state(refresh: bool) -> bool:
     """인증 상태를 준비한다.
 
@@ -838,6 +865,20 @@ def main() -> int:
 
     global _report_load, _report_noisy
     _report_load, _report_noisy = load_before, noisy
+    # 런타임 오류에 알려진 원인을 붙인다.
+    _err_texts: list[str] = []
+    for _p in pages:
+        _err_texts.extend(_p.get("page_errors", []))
+        _err_texts.extend(c.get("text", "") for c in _p.get("console_errors", []))
+        _err_texts.extend(_p.get("react_errors", []))
+        if _p.get("error"):
+            _err_texts.append(str(_p["error"]))
+    for _line in lookup_error_book(_err_texts):
+        findings.append({
+            "severity": "minor", "category": "error_book",
+            "title": _line["text"], "evidence": {}, "route": "-",
+        })
+
     report(pages, verdicts, findings, baselines)
 
     run_id = str(uuid.uuid4())
