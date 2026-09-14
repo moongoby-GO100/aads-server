@@ -701,6 +701,28 @@ class ToolExecutor:
                         "message": "승인 게이트를 확인할 수 없어 실매매 변경을 막았습니다. "
                                    "CEO 에게 알리고 게이트 상태를 먼저 확인하세요.",
                     }, ensure_ascii=False)
+            # 방향 게이트 — 실매매 게이트가 못 잡는 것을 잡는다.
+            #
+            # 실매매 게이트는 **파일 쓰기와 명령 실행**만 본다. 그래서
+            # 마일스톤·목표 기준·담당 배정을 바꾸는 것은 그냥 지나간다.
+            # 방향은 자유롭게 바뀌고 파일을 고치려는 순간에야 멈추는데,
+            # 그때는 이미 담당 여럿이 그 방향으로 몇 시간 일한 뒤다.
+            #
+            # 여기는 **통과 쪽으로 실패한다.** 게이트가 고장 났다고 모든
+            # 진행을 세우면 DB 가 흔들릴 때마다 전체가 선다. 실매매 게이트와
+            # 반대 방향인데, 그쪽은 돈이 걸려 있고 이쪽은 진행이 걸려 있다.
+            try:
+                from app.services.direction_guard import check as _dir_check
+
+                _dir_blocked = await _dir_check(tool_name, tool_input)
+                if _dir_blocked:
+                    return _dir_blocked
+            except Exception as _dir_err:
+                logger.warning(
+                    "direction_gate_error tool=%s error=%s",
+                    tool_name, str(_dir_err)[:200],
+                )
+
             tenant_id = await resolve_bound_tenant_id(
                 tool_input.get("tenant_id", ""),
                 tool_input.get("session_id", ""),

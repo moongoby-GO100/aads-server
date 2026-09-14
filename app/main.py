@@ -605,8 +605,11 @@ async def lifespan(app: FastAPI):
                     logger.info("goal_control_cycle_skipped_lock_held")
                     return
 
+                # 여기도 프로젝트를 박아 두면 안 된다 — 아래 advance 와
+                # 같은 이유다. 링크가 재조정되지 않으면 목표가 전진할 근거가
+                # 만들어지지 않는다.
                 reconciled = await reconcile(
-                    "AADS",
+                    None,
                     dry_run=False,
                     limit=200,
                     detach_legacy=False,
@@ -618,18 +621,48 @@ async def lifespan(app: FastAPI):
                 # exact/ancestor provenance of a certified deploy_run, then hands
                 # milestone completion back to the state machine below.
                 released = await reconcile_release_links(
-                    "AADS",
+                    None,
                     dry_run=False,
                     limit=200,
                     actor="goal_control_scheduler",
                 )
-                advanced = await goal_state_machine.advance_active_goals("AADS")
+                # 프로젝트를 박아 두면 나머지가 통째로 방치된다.
+                #
+                # 2026-09-14 실측. 여기가 `"AADS"` 로 고정돼 있어서 GO100 의
+                # #310(일일 누적수익 3%)은 물론이고 NAS·NTV2·SF 의 진행 중
+                # 목표들도 스케줄러가 아예 건드리지 않고 있었다. 골
+                # 오케스트레이션이 한 프로젝트에서만 돌고 있었던 셈이다.
+                advanced = await goal_state_machine.advance_active_goals(None)
+
+                # 상태만 옮기고 끝내면 담당은 자기 차례가 온 줄 모른다.
+                # 착수한 마일스톤의 담당 세션에 실제로 말을 건다.
+                dispatched = {"sent": 0, "gave_up": 0}
+                try:
+                    from app.services.goal_dispatch import dispatch_pending_milestones
+
+                    dispatched = await dispatch_pending_milestones(None)
+                except Exception as e_disp:
+                    logger.warning("goal_dispatch_failed", error=str(e_disp)[:200])
+
+                # 담당에게 일을 시켰으면 결과를 대표님께 알려야 한다.
+                # 이게 없으면 대표님이 화면을 직접 열어 확인해야 한다.
+                reported = {"reported": 0}
+                try:
+                    from app.services.goal_report import report_goal_events
+
+                    reported = await report_goal_events(None)
+                except Exception as e_rep:
+                    logger.warning("goal_report_failed", error=str(e_rep)[:200])
+
                 logger.info(
                     "goal_control_cycle_done",
                     repaired=reconciled.get("repaired", 0),
                     release_completed=released.get("completed", 0),
                     checked=advanced.get("checked", 0),
                     advanced=advanced.get("advanced", 0),
+                    dispatched=dispatched.get("sent", 0),
+                    dispatch_gave_up=dispatched.get("gave_up", 0),
+                    reported=reported.get("reported", 0),
                 )
             except Exception as e:
                 logger.warning("goal_control_cycle_failed", error=str(e))

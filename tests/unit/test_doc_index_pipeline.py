@@ -393,3 +393,84 @@ def test_layer2_injects_live_server_facts():
         "연속 실패가 많은 행은 '방금 죽은 것' 과 구분해야 한다 — "
         "감시 주기 30초에 10만 회면 35일이다"
     )
+
+
+def test_direction_guard_catches_what_trading_guard_misses():
+    """방향 변경은 실매매 게이트가 못 잡는다.
+
+    `live_trading_guard` 는 파일 쓰기·명령 실행만 본다. 마일스톤·목표 기준·
+    담당 배정을 바꾸는 것은 그냥 지나가므로, 방향은 자유롭게 바뀌고 그
+    방향대로 파일을 고치려는 순간에야 멈춘다 — 이미 담당 여럿이 그 방향으로
+    몇 시간 일한 뒤다.
+    """
+    from app.services.direction_guard import classify
+
+    for sql in (
+        "UPDATE milestones SET status='completed' WHERE id=1",
+        "INSERT INTO goal_task_links (goal_id) VALUES (1)",
+        "UPDATE goals SET title='기준 변경' WHERE id=1",
+        "UPDATE chat_sessions SET role_key='X' WHERE id=1",
+        "INSERT INTO prompt_assets (slug) VALUES ('x')",
+    ):
+        blocked, why = classify("db_safe_write", {"sql": sql})
+        assert blocked, f"방향 변경을 놓쳤다: {sql}"
+        assert why
+
+    # 확실할 때만 막는다. 정상 작업을 막으면 게이트를 우회할 길을 찾는다.
+    for tool, sql in (
+        ("db_safe_write", "SELECT * FROM milestones"),
+        ("db_safe_write", "UPDATE card_trades SET qty=1"),  # 실매매 게이트 몫
+        ("query_database", "UPDATE milestones SET x=1"),     # 조회 도구
+    ):
+        blocked, _ = classify(tool, {"sql": sql})
+        assert not blocked, f"정상 작업을 막았다: {tool} {sql}"
+
+
+def test_dispatch_does_not_give_up_silently():
+    """응답이 끊긴 마일스톤이 조용히 방치되면 안 된다.
+
+    2026-09-14 실측. 운영인프라담당에게 지시를 넣은 직후 배포로 슬롯이
+    바뀌며 스트림이 끊겼고 세션에는 이것만 남았다:
+
+        ⚠️ 응답 생성이 중단되어 여기까지 보존된 내용이 없습니다.
+
+    보낸 기록만 남기는 설계였다면 그 마일스톤은 영원히 멈춘다.
+    """
+    import inspect
+
+    from app.services import goal_dispatch, goal_report
+
+    src = inspect.getsource(goal_dispatch.dispatch_pending_milestones)
+
+    # 진행중·중단 표시를 답으로 세면 안 된다 — 그게 바로 끊긴 경우다.
+    assert "⏳" in src and "응답 생성이" in src
+    # 재시도 한도와 간격이 있어야 한다.
+    assert "_MAX_DISPATCH" in src and "_RETRY_AFTER_MIN" in inspect.getsource(goal_dispatch)
+    # 발송 실패도 횟수를 올려야 매 사이클 재시도 폭주를 막는다.
+    assert "dispatch_count = dispatch_count + 1" in src
+    # 한도를 넘긴 건은 기록에 남아 사람이 볼 수 있어야 한다.
+    assert "dispatch_note" in src
+
+    # 보고는 사건 기준이고 중복을 막아야 한다.
+    rep = inspect.getsource(goal_report)
+    assert "goal_report_log" in rep and "UNIQUE" in rep
+    assert "milestone_stuck" in rep
+
+
+def test_goal_scheduler_covers_every_project():
+    """프로젝트를 박아 두면 나머지가 통째로 방치된다.
+
+    2026-09-14 실측. 골 제어 사이클 세 곳이 `"AADS"` 로 고정돼 있어서
+    GO100 의 #310 은 물론 NAS·NTV2·SF 의 진행 중 목표도 스케줄러가 아예
+    건드리지 않고 있었다.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path("/app/app/main.py").read_text(encoding="utf-8")
+    i = src.find("_run_goal_control_cycle")
+    assert i > 0
+    cycle = src[i:i + 4000]
+    assert not re.search(r'\(\s*"AADS"', cycle), "골 사이클에 프로젝트가 다시 박혔다"
+    assert "dispatch_pending_milestones" in cycle, "담당에게 말을 걸어야 한다"
+    assert "report_goal_events" in cycle, "대표님께 보고해야 한다"
