@@ -674,7 +674,14 @@ def _normalize_final_assistant_intent(intent: Optional[str], content: str) -> Op
 _RECOVERY_PREFIX_LEN = int(os.getenv("AADS_RECOVERY_PREFIX_LEN", "300"))
 # 길이가 크게 다르면 이어쓰기가 아니라 별개 답변으로 본다.
 _RECOVERY_DEDUPE_MAX_LEN_RATIO = float(os.getenv("AADS_RECOVERY_DEDUPE_MAX_LEN_RATIO", "1.5"))
-_STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT = 90
+# 멈춘 응답으로 판단하기까지의 시간.
+#
+# 2026-09-14 90초에서 올렸다. 이 서버 채팅은 **2~61분** 걸린다(실측).
+# 90초는 정상적으로 긴 턴을 죽인다 — 대표님 세션에서 실제로 죽었다.
+#
+# `.env` 에도 같은 값을 적어 두지만 **기본값 자체가 안전해야 한다.**
+# 환경변수가 빠지는 순간 90초로 돌아가면 같은 사고가 재발한다.
+_STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT = 900
 _STALE_CLEANUP_INTERVAL_SEC_DEFAULT = 30
 _ACTIVE_STREAM_HARD_TIMEOUT_SEC_DEFAULT = 2700
 _RESPONSE_MODE_QUALITY = "quality"
@@ -2936,6 +2943,14 @@ async def _rewrite_incomplete_final_report_once(
 
 
 def _get_live_streaming_session_ids() -> set[str]:
+    """지금 응답을 만들고 있는 세션. **이 프로세스 기준이다.**
+
+    정리 작업이 살아 있는 턴을 죽이지 않게 막는 방패인데, 프로세스 메모리라
+    **슬롯이 바뀌면 통째로 빈다.** 블루/그린 컷오버 뒤 새 슬롯에서는 돌고
+    있던 턴이 전부 "멈춘 것" 으로 보인다.
+
+    DB 하트비트를 함께 보는 `_live_session_ids_with_db()` 를 쓴다.
+    """
     active_sessions = {
         sid for sid, task in list(_active_bg_tasks.items())
         if task is not None and not task.done()
@@ -2945,6 +2960,47 @@ def _get_live_streaming_session_ids() -> set[str]:
         if state and not state.get("completed", False)
     )
     return active_sessions
+
+
+# 하트비트가 이 시간 안에 찍혔으면 살아 있다고 본다. 슬롯이 바뀌어도
+# DB 는 남아 있으므로 새 슬롯도 같은 판단을 한다.
+_DB_LIVE_HEARTBEAT_SEC = int(os.getenv("DB_LIVE_HEARTBEAT_SEC", "180"))
+
+
+async def _live_session_ids_with_db(conn: Any) -> set[str]:
+    """프로세스 메모리 + **DB 하트비트**.
+
+    2026-09-14. 대표님 세션(bf6f097c)의 턴이
+    `force_interrupted_stale_placeholder_cleanup` 으로 죽었다. 배포로 슬롯이
+    바뀌자 새 슬롯의 메모리 목록이 비었고, 돌고 있던 턴이 90초 뒤 정리
+    대상이 됐다.
+
+    같은 문제를 오늘 현황판에서도 겪었다 — `is_streaming()` 이 프로세스
+    메모리라 다른 슬롯이 물으면 못 읽는다. 거기는 DB 로 바꿨는데 여기는
+    안 바꿨다.
+
+    조회가 실패하면 **메모리 목록만이라도 돌려준다.** 빈 집합을 주면
+    정리 작업이 전부 죽인다 — 실패 방향이 정반대다.
+    """
+    live = _get_live_streaming_session_ids()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT session_id::text AS sid
+            FROM chat_turn_executions
+            WHERE status IN ('running', 'retrying')
+              AND COALESCE(heartbeat_at, updated_at, created_at)
+                  > NOW() - ($1 || ' seconds')::interval
+            """,
+            str(_DB_LIVE_HEARTBEAT_SEC),
+        )
+        live.update(r["sid"] for r in rows)
+    except Exception as exc:
+        logger.warning(
+            "live_session_db_probe_failed error=%s — 메모리 목록만 사용",
+            str(exc)[:160],
+        )
+    return live
 
 
 def _format_stale_placeholder_content(content: str) -> str:
@@ -3255,9 +3311,10 @@ async def cleanup_stale_streaming_placeholders(
         else get_stale_placeholder_timeout_sec()
     )
     timeout = max(int(timeout), 60)
-    live_sessions = _get_live_streaming_session_ids()
-
     async with get_pool().acquire() as conn:
+        # **DB 하트비트를 함께 본다.** 프로세스 메모리만 보면 슬롯이 바뀐
+        # 직후 돌고 있던 턴이 전부 "멈춘 것" 으로 보여 90초 뒤 죽는다.
+        live_sessions = await _live_session_ids_with_db(conn)
         stale_empty_hidden = await conn.fetchval(
             """
             WITH hidden AS (

@@ -31,6 +31,7 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+
 COMMAND_TYPES = frozenset({"send", "interrupt", "resume", "retry", "stop"})
 COMMAND_STATUSES = frozenset(
     {"accepted", "running", "succeeded", "failed", "superseded"}
@@ -422,6 +423,35 @@ async def begin_command(
                     "this Idempotency-Key was already used for a different request body",
                     status_code=409,
                 )
+            # **실패한 명령을 조용히 재생하지 않는다.**
+            #
+            # 2026-09-14. 대표님 세션(bf6f097c)에서 07:48 에 실패한 `resume`
+            # 명령이 하루 종일 같은 실패로 재생됐다. 브라우저가 같은
+            # Idempotency-Key 로 계속 보내고 서버는 저장된 실패를 그대로
+            # 돌려주니 **새 턴이 아예 시작되지 않았다.** 오류 사전에
+            # 재발 89회로 올라 있던 항목이 이것이다.
+            #
+            # 처음엔 실패 기록을 되살리려 했는데, DB 트리거
+            # `aads_chat_command_transition` 이 막았다. **종결 상태를
+            # 불변으로 두는 것은 의도된 설계다** — 되살리면 같은 키가 두
+            # 결과를 갖게 되고 멱등성이 무너진다.
+            #
+            # 그래서 되살리지 않고 **클라이언트에게 새 키로 보내라고
+            # 알린다.** 실패한 명령은 부작용이 없었으므로 새 키로 다시
+            # 시도하는 것이 안전하고, 멱등성 규약에도 맞는다.
+            if record.status == "failed":
+                logger.info(
+                    "chat_command_failed_replay_rejected",
+                    command_id=str(record.command_id),
+                    session_id=str(session_id),
+                )
+                raise ChatCommandError(
+                    "chat_command_failed_use_new_key",
+                    "이전 시도가 실패로 끝났습니다. 새 요청으로 다시 보내세요 "
+                    "(같은 Idempotency-Key 는 같은 실패를 되돌려줍니다).",
+                    status_code=409,
+                )
+
             logger.info(
                 "chat_command_replayed",
                 tenant_id=str(tenant_id),

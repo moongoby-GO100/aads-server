@@ -613,3 +613,54 @@ def test_turn_timing_measures_what_the_user_feels():
 
     # 계측이 응답 경로를 붙잡으면 본말전도다.
     assert "asyncio.create_task" in src
+
+
+def test_stale_cleanup_does_not_kill_long_turns():
+    """정리 작업이 살아 있는 턴을 죽이면 안 된다.
+
+    2026-09-14. 대표님 세션(bf6f097c)의 턴이
+    `force_interrupted_stale_placeholder_cleanup` 으로 죽었다.
+
+    기본값이 90초였는데 이 서버 채팅은 **2~61분** 걸린다. 죽이지 않는
+    방패가 `_get_live_streaming_session_ids()` 인데 **프로세스 메모리**라
+    블루/그린 컷오버 뒤 새 슬롯에서는 비어 있다 — 방패가 사라진다.
+    """
+    import inspect
+
+    from app.services import chat_service
+
+    assert chat_service._STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT >= 600, (
+        "이 서버 채팅은 2~61분 걸린다. 90초는 정상적인 턴을 죽인다"
+    )
+
+    src = inspect.getsource(chat_service._live_session_ids_with_db)
+    assert "heartbeat_at" in src, "DB 하트비트를 봐야 슬롯이 바뀌어도 유지된다"
+    # 조회가 실패하면 메모리 목록만이라도 돌려준다. 빈 집합을 주면
+    # 정리 작업이 전부 죽인다 — 실패 방향이 정반대다.
+    assert "_get_live_streaming_session_ids()" in src
+
+    # 90초 정리 경로가 DB 병용 함수를 써야 한다.
+    cleanup = inspect.getsource(chat_service)
+    assert "_live_session_ids_with_db(conn)" in cleanup
+
+
+def test_failed_command_is_not_replayed_forever():
+    """실패한 명령을 무한 재생하면 새 턴이 아예 시작되지 않는다.
+
+    2026-09-14. 07:48 에 실패한 `resume` 명령이 하루 종일 같은 실패로
+    재생됐다. 오류 사전에 재발 89회로 올라 있던 항목이다.
+
+    되살리지는 않는다 — DB 트리거 `aads_chat_command_transition` 이 종결
+    상태를 불변으로 두는 것은 **의도된 설계**다. 되살리면 같은 키가 두
+    결과를 갖게 되고 멱등성이 무너진다. 대신 새 키를 요구한다.
+    """
+    import inspect
+
+    from app.services import chat_commands
+
+    src = inspect.getsource(chat_commands)
+    assert "chat_command_failed_use_new_key" in src
+    i = src.index("chat_command_failed_use_new_key")
+    assert 'record.status == "failed"' in src[i - 900:i]
+    # 되살리기를 다시 넣으면 트리거가 막고, 막히면 조용히 실패한다.
+    assert "SET status = 'pending', error = NULL" not in src
