@@ -324,9 +324,11 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "target": {
                     "type": "string",
                     "description": (
-                        "담당 역할 키 또는 세션 id. 예: 'WaveEngineOwner', "
-                        "'LiveTradingOwner', 'DataEngineOwner', 'StockDiscoveryOwner', "
-                        "'StrategyCardLead'"
+                        "담당 역할 키, 한글 담당 이름, 또는 세션 id. "
+                        "#310 하네스: 'StrategyCardLead'(주도) · 'WaveEngineOwner' · "
+                        "'LiveTradingOwner' · 'DataEngineOwner' · 'StockDiscoveryOwner' · "
+                        "'BacktestEngineOwner' · 'MLModelOwner' · 'OpsInfraOwner'. "
+                        "한글('데이터엔진담당')로 불러도 찾습니다."
                     ),
                 },
                 "question": {
