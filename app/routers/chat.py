@@ -3878,6 +3878,8 @@ async def resume_interrupted(
         "message": "이어서 생성을 시작합니다. 잠시 후 채팅창을 확인하세요.",
         "requested_model": row["requested_model"],
         "resume_model_override": requested_override or row["resume_model_override"],
+        # 재개도 어느 실행을 되살렸는지 남긴다 — 커맨드 행이 이 값을 받는다.
+        "execution_id": str(row["execution_id"]) if row["execution_id"] else None,
     }
 
 

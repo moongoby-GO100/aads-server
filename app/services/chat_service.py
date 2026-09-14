@@ -2043,15 +2043,61 @@ async def _fetch_persisted_interrupts(
                 limit,
             )
             if rows:
-                await conn.execute(
-                    """
-                    UPDATE chat_messages
-                       SET intent = 'interrupt_applied',
-                           edited_at = NOW()
-                     WHERE id = ANY($1::uuid[])
-                    """,
-                    [r["id"] for r in rows],
-                )
+                consumed_ids = [r["id"] for r in rows]
+                # 어떤 응답이 이 추가 지시를 먹었는지 남긴다.
+                #
+                # 2026-09-15 실측: 24시간 인터럽트 46건 전부
+                # execution_id·generation_id 가 NULL 이었다. 지시는 반영됐는데
+                # "어느 답변에 반영됐나"를 되물으면 아무도 답할 수 없었고,
+                # 화면도 그래서 응답 버블에 아무 표시를 못 했다.
+                #
+                # 소비 시점의 세션 현재 실행/세대를 그대로 찍는다. 새 컬럼이
+                # 필요 없다 — chat_messages 에 두 컬럼이 이미 있고, 프론트는
+                # 같은 execution_id 로 지시 버블과 응답 버블을 묶으면 된다.
+                try:
+                    await conn.execute(
+                        """
+                        UPDATE chat_messages m
+                           SET intent = 'interrupt_applied',
+                               edited_at = NOW(),
+                               execution_id = COALESCE(m.execution_id, t.execution_id),
+                               generation_id = COALESCE(m.generation_id, t.generation_id)
+                          FROM (
+                              SELECT s.current_execution_id AS execution_id,
+                                     (
+                                         SELECT g.generation_id
+                                           FROM chat_execution_generations g
+                                          WHERE g.execution_id = s.current_execution_id
+                                            AND g.ended_at IS NULL
+                                          ORDER BY g.attempt DESC
+                                          LIMIT 1
+                                     ) AS generation_id
+                                FROM chat_sessions s
+                               WHERE s.id = $2
+                          ) t
+                         WHERE m.id = ANY($1::uuid[])
+                        """,
+                        consumed_ids,
+                        sid,
+                    )
+                except Exception as stamp_exc:
+                    # 스탬프는 기록이고 소비는 동작이다. 기록이 실패했다고
+                    # 지시를 못 먹은 것으로 만들면 안 된다 — 표시를 포기하고
+                    # 소비만 확정한다.
+                    logger.warning(
+                        "interrupt_stamp_failed session=%s error=%s",
+                        str(session_id)[:8],
+                        str(stamp_exc)[:160],
+                    )
+                    await conn.execute(
+                        """
+                        UPDATE chat_messages
+                           SET intent = 'interrupt_applied',
+                               edited_at = NOW()
+                         WHERE id = ANY($1::uuid[])
+                        """,
+                        consumed_ids,
+                    )
     except Exception as exc:
         logger.warning(
             "persisted_interrupt_fetch_failed session=%s error=%s",

@@ -28,7 +28,11 @@ def test_stale_placeholder_defaults_match_chat_recovery_contract(monkeypatch):
     monkeypatch.delenv("STALE_PLACEHOLDER_TIMEOUT_SEC", raising=False)
     monkeypatch.delenv("STALE_CLEANUP_INTERVAL_SEC", raising=False)
 
-    assert chat_service.get_stale_placeholder_timeout_sec() == 90
+    # 2026-09-14 에 90 → 900 으로 올라갔다. 이 서버 채팅 턴은 실측 2~61분이라
+    # 90초 기본값은 정상적으로 긴 턴을 멈춘 응답으로 오인해 죽였다.
+    # `.env` 가 빠져도 안전하도록 **기본값 자체**를 올린 것이므로, 이 테스트가
+    # 지켜야 하는 것은 "90" 이 아니라 "환경변수 없이도 900" 이다.
+    assert chat_service.get_stale_placeholder_timeout_sec() == 900
     assert chat_service.get_stale_cleanup_interval_sec() == 30
 
 
