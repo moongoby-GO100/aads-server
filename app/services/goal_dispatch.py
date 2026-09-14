@@ -96,7 +96,7 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
             SELECT m.id::text AS milestone_id, m.title AS milestone_title,
                    m.description, m.completion_criteria,
                    m.dispatch_count, m.dispatched_at,
-                   g.title AS goal_title, g.project,
+                   g.title AS goal_title, g.project, g.id::text AS goal_id,
                    COALESCE(m.owner_session_id, s.id) AS session_id
             FROM milestones m
             JOIN goals g ON g.id = m.goal_id
@@ -120,6 +120,36 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 break
             if not row["session_id"]:
                 # 담당이 안 정해진 마일스톤. 말을 걸 곳이 없다.
+                skipped += 1
+                continue
+
+            # 상한 셋을 본다. **미루는 것과 포기하는 것은 다르다** —
+            # 아래 셋은 전부 미루기이므로 `dispatch_count` 를 올리지 않는다.
+            # 올리면 부하나 비용 때문에 미룬 것이 재시도 한도를 헛되이 깎는다.
+            from app.services.orchestration_limits import (
+                cost_gate, load_gate, owner_paused,
+            )
+
+            paused, why = await owner_paused(row["goal_id"], str(row["session_id"]))
+            if paused:
+                skipped += 1
+                continue
+
+            ok, why = await cost_gate(row["goal_id"])
+            if not ok:
+                logger.info(
+                    "goal_dispatch_cost_gated",
+                    milestone=row["milestone_id"][:8], why=why,
+                )
+                skipped += 1
+                continue
+
+            ok, why = await load_gate(row["project"])
+            if not ok:
+                logger.info(
+                    "goal_dispatch_load_gated",
+                    milestone=row["milestone_id"][:8], why=why,
+                )
                 skipped += 1
                 continue
 

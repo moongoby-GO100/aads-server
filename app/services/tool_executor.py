@@ -920,6 +920,8 @@ class ToolExecutor:
             # AI-to-AI: 다관점 토론
             "run_debate":             self._run_debate,
             "ask_session":            self._ask_session,
+            "report_milestone_done":  self._report_milestone_done,
+            "confirm_milestone":      self._confirm_milestone,
             # AADS-190: 내보내기 + 스케줄러
             "export_data":            self._export_data,
             "schedule_task":          self._schedule_task,
@@ -4709,6 +4711,48 @@ class ToolExecutor:
             phases=phases,
             max_concurrent=inp.get("max_concurrent", 5),
             cost_limit_usd=inp.get("cost_limit_usd", 10.0),
+        )
+
+    async def _report_milestone_done(self, inp: Dict[str, Any]) -> Any:
+        """담당이 완료를 신고한다. 완료가 아니라 확인 대기가 된다."""
+        from app.services.milestone_review import report_done
+
+        evidence = {
+            "summary": inp.get("summary") or "",
+            "numbers": inp.get("numbers"),
+            "refs": inp.get("refs") or [],
+        }
+        return await report_done(
+            str(inp.get("milestone_id") or ""),
+            evidence,
+            str(inp.get("session_id") or ""),
+        )
+
+    async def _confirm_milestone(self, inp: Dict[str, Any]) -> Any:
+        """주도가 판정한다. **자기 마일스톤은 못 한다** — 자기 확인은 확인이 아니다."""
+        from app.core.db_pool import get_pool
+        from app.services.milestone_review import confirm
+
+        mid = str(inp.get("milestone_id") or "")
+        sid = str(inp.get("session_id") or "")
+        if mid and sid:
+            own = await get_pool().fetchval(
+                "SELECT 1 FROM milestones m JOIN chat_sessions s ON s.id = $2::uuid "
+                "WHERE m.id = $1::uuid AND (m.owner_session_id = s.id "
+                "  OR m.owner_role_key = s.role_key)",
+                mid, sid,
+            )
+            if own:
+                return {
+                    "error": "cannot_confirm_own_milestone",
+                    "message": "자기가 맡은 마일스톤은 판정할 수 없다. "
+                               "대표님께 올라간다 — 근거만 정확히 남겨라.",
+                }
+        return await confirm(
+            mid,
+            ok=bool(inp.get("ok")),
+            reason=str(inp.get("reason") or ""),
+            negative=bool(inp.get("negative")),
         )
 
     async def _ask_session(self, inp: Dict[str, Any]) -> Any:

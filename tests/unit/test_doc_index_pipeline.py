@@ -470,7 +470,90 @@ def test_goal_scheduler_covers_every_project():
     src = Path("/app/app/main.py").read_text(encoding="utf-8")
     i = src.find("_run_goal_control_cycle")
     assert i > 0
-    cycle = src[i:i + 4000]
+    # 고정 길이로 자르면 사이클에 단계를 더할 때마다 검사 범위 밖으로
+    # 밀려난다. 로그 한 줄까지를 사이클로 본다.
+    end = src.find("goal_control_cycle_done", i)
+    assert end > i, "사이클 끝을 찾지 못했다"
+    cycle = src[i:end + 400]
     assert not re.search(r'\(\s*"AADS"', cycle), "골 사이클에 프로젝트가 다시 박혔다"
     assert "dispatch_pending_milestones" in cycle, "담당에게 말을 걸어야 한다"
     assert "report_goal_events" in cycle, "대표님께 보고해야 한다"
+
+
+def test_milestone_completion_has_a_judge():
+    """완료를 누가 판정하는지 없으면 첫 마일스톤에서 영원히 멈춘다.
+
+    `check_milestone_completion` 은 `goal_task_links` 의 상태로 판정한다.
+    담당 세션으로 굴러가는 마일스톤은 묶인 작업이 0건이라 `no_linked_tasks`
+    가 돌아오고 `in_progress` 에 영원히 남는다. 담당은 답을 했으니 재알림도
+    안 간다 — 조용한 영구 정지다.
+    """
+    import inspect
+
+    from app.services import milestone_review
+
+    report = inspect.getsource(milestone_review.report_done)
+    # 신고는 완료가 아니다. 확인 대기다.
+    assert "'review'" in report
+    # 근거 없는 완료는 받지 않는다.
+    assert "evidence_required" in report and "numbers_required" in report
+
+    confirm = inspect.getsource(milestone_review.confirm)
+    # 반려하면 발송 기록을 지워야 다시 지시가 나간다.
+    assert "dispatch_count = 0" in confirm
+    # 음성 결과는 반려와 다르다.
+    assert "failed" in confirm
+
+    ask = inspect.getsource(milestone_review.ask_pending_reviews)
+    # 주도가 확인을 안 하면 또 멈춘다 — 재알림과 승격이 있어야 한다.
+    assert "review_ask_count" in ask
+    assert "_telegram" in ask
+
+
+def test_ab_variants_open_together():
+    """A/B 는 같은 순서의 변형을 함께 열어야 비교가 된다.
+
+    2026-09-14 이전에는 `ORDER BY sequence_order LIMIT 1` 이라 하나만
+    열렸다. 하나만 끝내고 다음으로 넘어가면 비교할 대상이 없다.
+    """
+    import inspect
+
+    from app.services.goal_manager import GoalStateMachine
+
+    src = inspect.getsource(GoalStateMachine.advance_goal)
+    assert "pending_rows" in src, "변형을 전부 가져와야 한다"
+    assert "id = ANY($1::uuid[])" in src, "변형을 함께 착수해야 한다"
+    # review 도 열린 것으로 봐야 한다 — 반려될 수 있다.
+    assert "'in_progress', 'review'" in src
+
+
+def test_orchestration_limits_defer_rather_than_burn_retries():
+    """비용·부하·멈춤은 **미루기**지 포기가 아니다.
+
+    미룬 것을 재시도로 세면 한도가 헛되이 닳는다. 2026-09-14 contabo14
+    부하 29 의 주범이 백테스트 4개 동시 실행이었고, A/B 는 그걸 설계로
+    한다 — 오케스트레이션이 수집기를 죽일 수 있다.
+    """
+    import inspect
+
+    from app.services import goal_dispatch, orchestration_limits
+
+    src = inspect.getsource(goal_dispatch.dispatch_pending_milestones)
+    for gate in ("owner_paused", "cost_gate", "load_gate"):
+        assert gate in src, f"{gate} 를 발송 전에 봐야 한다"
+
+    # 게이트에 걸린 경로는 dispatch_count 를 올리지 않고 skip 으로 빠져야 한다.
+    gated = src[src.index("owner_paused"):src.index("# 보낸 뒤에")]
+    assert "dispatch_count + 1" not in gated, "미룬 것이 재시도 한도를 깎는다"
+
+    # 비용은 오케스트레이션이 쓴 것만 센다 — 대표님 대화까지 세면 안 된다.
+    cost = inspect.getsource(orchestration_limits.refresh_goal_cost)
+    assert "MIN(dispatched_at)" in cost
+
+    # 부하를 못 읽으면 통과시킨다. 못 읽는다고 진행을 막으면 안 된다.
+    load = inspect.getsource(orchestration_limits.load_gate)
+    assert "return True" in load
+
+    # 기한은 알리되 멈추지 않는다.
+    dl = inspect.getsource(orchestration_limits.check_deadlines)
+    assert "status" not in dl.split("UPDATE")[0] or "UPDATE milestones" not in dl

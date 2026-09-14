@@ -55,6 +55,8 @@ _DEFER_LOADING: Dict[str, bool] = {
     "run_agent_team": False,              # 멀티에이전트 팀 — 핵심 오케스트레이션
     "run_debate": True,                    # 다관점 토론 — 온디맨드 (CEO 요청 시)
     "ask_session": True,                   # 세션 간 협업 — 담당끼리 묻고 답함 (2026-09-14)
+    "report_milestone_done": True,         # 마일스톤 완료 신고 (2026-09-14)
+    "confirm_milestone": True,             # 마일스톤 완료 판정 — 주도 (2026-09-14)
     "save_note": True,
     "recall_notes": True,
     "delete_note": True,
@@ -309,6 +311,64 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
 
 _TOOLS: Dict[str, Dict[str, Any]] = {
     # ── 협업 그룹 ────────────────────────────────────────────────────────────
+    "report_milestone_done": {
+        "name": "report_milestone_done",
+        "description": (
+            "맡은 마일스톤을 끝냈다고 신고합니다. **완료가 아니라 확인 대기가 "
+            "됩니다** — 주도가 근거를 보고 판정합니다. 근거 없이 신고할 수 "
+            "없습니다. 완료 기준에 숫자가 있으면 before/after 를 넣으세요."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "milestone_id": {"type": "string", "description": "마일스톤 id"},
+                "summary": {
+                    "type": "string",
+                    "description": "무엇을 했고 결과가 무엇인가. 20자 이상.",
+                },
+                "numbers": {
+                    "type": "object",
+                    "description": "완료 기준이 숫자면 필수. 예: {\"before\": 0.4, \"after\": 2.2}",
+                },
+                "refs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "근거 — 커밋 sha, 리포트 경로, 잡 id 등",
+                },
+            },
+            "required": ["milestone_id", "summary"],
+        },
+    },
+    "confirm_milestone": {
+        "name": "confirm_milestone",
+        "description": (
+            "담당이 신고한 마일스톤을 판정합니다. 주도만 씁니다. "
+            "근거가 완료 기준을 만족하는지 보고 정하세요. "
+            "**자기가 맡은 마일스톤은 판정할 수 없습니다** — 대표님께 올라갑니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "milestone_id": {"type": "string"},
+                "ok": {
+                    "type": "boolean",
+                    "description": "true 면 판정 확정, false 면 반려(다시 하라)",
+                },
+                "negative": {
+                    "type": "boolean",
+                    "description": (
+                        "제대로 했는데 **결과가 음성**일 때 true. 반려와 다릅니다 — "
+                        "반려는 다시 하라는 것이고 음성은 다음을 다시 짜라는 것입니다."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "반려하거나 음성으로 판정할 때 사유. 담당에게 전달됩니다.",
+                },
+            },
+            "required": ["milestone_id", "ok"],
+        },
+    },
     "ask_session": {
         "name": "ask_session",
         "description": (

@@ -814,11 +814,14 @@ class GoalStateMachine:
                     "gated": blocked_reason,
                 }
 
+            # `review` 도 열린 것으로 본다. 담당이 신고했지만 아직 확인 전이면
+            # 다음 마일스톤을 열면 안 된다 — 반려될 수 있다.
             current = await conn.fetchrow(
                 """
                 SELECT id FROM milestones
-                WHERE goal_id = $1::uuid AND status = 'in_progress'
-                ORDER BY sequence_order
+                WHERE goal_id = $1::uuid
+                  AND status IN ('in_progress', 'review')
+                ORDER BY sequence_order, COALESCE(variant, '')
                 LIMIT 1
                 """,
                 goal_id,
@@ -840,15 +843,27 @@ class GoalStateMachine:
                 )
                 return {"goal_id": goal_id, "advanced": checked.get("completed", False), "current": checked}
 
-            pending = await conn.fetchrow(
+            # A/B — 같은 `sequence_order` 의 변형을 **전부 함께** 착수한다.
+            #
+            # 2026-09-14 이전에는 `LIMIT 1` 이라 한 번에 하나만 열렸다.
+            # 그러면 두 갈래를 나란히 돌릴 수가 없고, 하나만 끝내고 다음으로
+            # 넘어가면 **비교할 대상이 없다.**
+            #
+            # 그 seq 는 모든 변형이 끝나야 완료다 — `_current_open` 이
+            # 변형 전부를 보므로 하나라도 남아 있으면 다음으로 안 넘어간다.
+            pending_rows = await conn.fetch(
                 """
                 SELECT id FROM milestones
                 WHERE goal_id = $1::uuid AND status = 'pending'
-                ORDER BY sequence_order
-                LIMIT 1
+                  AND sequence_order = (
+                      SELECT MIN(sequence_order) FROM milestones
+                      WHERE goal_id = $1::uuid AND status = 'pending'
+                  )
+                ORDER BY COALESCE(variant, '')
                 """,
                 goal_id,
             )
+            pending = pending_rows[0] if pending_rows else None
             if pending:
                 if goal["status"] == "draft":
                     await conn.execute(
@@ -859,9 +874,9 @@ class GoalStateMachine:
                     """
                     UPDATE milestones
                     SET status = 'in_progress', started_at = COALESCE(started_at, NOW()), updated_at = NOW()
-                    WHERE id = $1::uuid
+                    WHERE id = ANY($1::uuid[])
                     """,
-                    str(pending["id"]),
+                    [str(r["id"]) for r in pending_rows],
                 )
                 await self._update_goal_progress(goal_id)
                 await self._trace(

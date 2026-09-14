@@ -644,6 +644,27 @@ async def lifespan(app: FastAPI):
                 except Exception as e_disp:
                     logger.warning("goal_dispatch_failed", error=str(e_disp)[:200])
 
+                # 담당이 신고한 완료를 주도에게 확인받는다.
+                #
+                # 이것이 없으면 마일스톤이 `review` 에서 영원히 멈춘다 —
+                # 담당은 끝냈고 주도는 물어본 적이 없으니 아무도 안 움직인다.
+                reviewed = {"asked": 0, "escalated": 0}
+                try:
+                    from app.services.milestone_review import ask_pending_reviews
+
+                    reviewed = await ask_pending_reviews(None)
+                except Exception as e_rev:
+                    logger.warning("milestone_review_failed", error=str(e_rev)[:200])
+
+                # 기한은 알리되 멈추지 않는다 — 자동 중단은 대표님이
+                # 모르시는 사이에 목표를 죽인다.
+                try:
+                    from app.services.orchestration_limits import check_deadlines
+
+                    await check_deadlines(None)
+                except Exception as e_dl:
+                    logger.warning("deadline_check_failed", error=str(e_dl)[:200])
+
                 # 담당에게 일을 시켰으면 결과를 대표님께 알려야 한다.
                 # 이게 없으면 대표님이 화면을 직접 열어 확인해야 한다.
                 reported = {"reported": 0}
@@ -662,6 +683,8 @@ async def lifespan(app: FastAPI):
                     advanced=advanced.get("advanced", 0),
                     dispatched=dispatched.get("sent", 0),
                     dispatch_gave_up=dispatched.get("gave_up", 0),
+                    review_asked=reviewed.get("asked", 0),
+                    review_escalated=reviewed.get("escalated", 0),
                     reported=reported.get("reported", 0),
                 )
             except Exception as e:

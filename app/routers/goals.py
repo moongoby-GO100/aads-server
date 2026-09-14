@@ -137,9 +137,15 @@ async def goal_board(goal_id: str):
                    (lm.content LIKE '⏳%') AS working,
                    (lm.content LIKE '⚠️ _응답 생성이%') AS interrupted,
                    ms.title AS milestone, ms.dispatched_at, ms.dispatch_count,
-                   ms.dispatch_note
+                   ms.dispatch_note, ms.id::text AS milestone_id, ms.variant,
+                   ms.status AS milestone_status,
+                   op.reason AS paused_reason,
+                   (SELECT count(*) FROM milestone_notes n
+                     WHERE n.milestone_id = ms.id AND n.answered_at IS NULL) AS open_notes
             FROM bound b
             LEFT JOIN last_msg lm ON lm.session_id = b.id
+            LEFT JOIN owner_pause op
+                   ON op.goal_id = $1::uuid AND op.session_id = b.id
             LEFT JOIN milestones ms
                    ON ms.goal_id = $1::uuid AND ms.status = 'in_progress'
                   AND (ms.owner_session_id = b.id
@@ -151,7 +157,11 @@ async def goal_board(goal_id: str):
 
     owners = []
     for r in rows:
-        if r["dispatch_note"]:
+        if r["paused_reason"] is not None:
+            state = "멈춤"
+        elif r["milestone_status"] == "review":
+            state = "확인 대기"
+        elif r["dispatch_note"]:
             state = "막힘"
         elif r["interrupted"]:
             state = "응답 끊김"
@@ -173,6 +183,11 @@ async def goal_board(goal_id: str):
             "tool_calls": r["tool_calls"] or 0,
             "dispatch_count": r["dispatch_count"] or 0,
             "note": r["dispatch_note"],
+            "milestone_id": r["milestone_id"],
+            "variant": r["variant"],
+            "paused": r["paused_reason"] is not None,
+            "paused_reason": r["paused_reason"],
+            "open_notes": r["open_notes"] or 0,
         })
 
     from app.services.direction_guard import is_halted
@@ -271,6 +286,71 @@ async def goals_for_session(session_id: str):
     from app.services.direction_guard import is_halted
 
     return {"halted": await is_halted(), "goals": [dict(r) for r in rows]}
+
+
+@router.post("/goals/{goal_id}/owners/{session_id}/pause")
+async def pause_owner(goal_id: str, session_id: str, req: InterveneRequest):
+    """이 담당에게 **새 지시를 보내지 않는다.** 진행 중 응답은 끝까지 둔다.
+
+    끊으면 지금까지 한 것이 사라진다. 2026-09-14 배포로 두 번 끊어서
+    운영인프라담당의 조사가 두 번 날아갔다. 지금 끊어야 하면
+    `/chat/sessions/{id}/stop` 을 따로 부른다.
+    """
+    from app.core.db_pool import get_pool
+
+    reason = (req.reason or "").strip()
+    if not reason:
+        # 이유 없이 멈춘 카드는 사흘 뒤에 왜 멈췄는지 아무도 모른다.
+        raise HTTPException(status_code=400, detail="reason required")
+    await get_pool().execute(
+        "INSERT INTO owner_pause (goal_id, session_id, reason) "
+        "VALUES ($1::uuid, $2::uuid, $3) "
+        "ON CONFLICT (goal_id, session_id) DO UPDATE "
+        "   SET reason = EXCLUDED.reason, paused_at = NOW()",
+        goal_id, session_id, reason,
+    )
+    return {"paused": True, "reason": reason}
+
+
+@router.delete("/goals/{goal_id}/owners/{session_id}/pause")
+async def resume_owner(goal_id: str, session_id: str):
+    """멈춤을 푼다. 밀린 지시가 있으면 다음 주기에 나간다."""
+    from app.core.db_pool import get_pool
+
+    await get_pool().execute(
+        "DELETE FROM owner_pause WHERE goal_id = $1::uuid AND session_id = $2::uuid",
+        goal_id, session_id,
+    )
+    return {"paused": False}
+
+
+@router.post("/goals/{goal_id}/owners/{session_id}/restart")
+async def restart_owner(goal_id: str, session_id: str):
+    """발송 기록을 지우고 처음부터 다시 지시한다.
+
+    멈춰 있었다면 같이 푼다 — 재시작을 눌렀는데 멈춘 채로 있으면
+    아무 일도 안 일어난다.
+    """
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        n = await conn.fetchval(
+            """
+            UPDATE milestones SET dispatched_at = NULL, dispatch_count = 0,
+                   dispatch_note = NULL, updated_at = NOW()
+            WHERE goal_id = $1::uuid AND status = 'in_progress'
+              AND (owner_session_id = $2::uuid
+                   OR owner_role_key = (SELECT role_key FROM chat_sessions WHERE id = $2::uuid))
+            RETURNING 1
+            """,
+            goal_id, session_id,
+        )
+        await conn.execute(
+            "DELETE FROM owner_pause WHERE goal_id = $1::uuid AND session_id = $2::uuid",
+            goal_id, session_id,
+        )
+    return {"restarted": bool(n), "resumed": True}
 
 
 @router.post("/goals/halt")
