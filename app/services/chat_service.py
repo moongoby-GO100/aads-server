@@ -13915,7 +13915,23 @@ async def send_message_stream(
         # 역순 reset + helper 가드로 producer 사망(SSE 스트림 끊김) 방지.
         _safe_reset_context_var(_current_todo_context, _todo_context_token_mid, label=f"todo_mid:{session_id[:8]}")
         _safe_reset_context_var(_current_todo_context, _todo_context_token, label=f"todo_init:{session_id[:8]}")
-        set_streaming(session_id, False)
+        # `set_streaming` 은 함수 중간(≈11234행)에서 import 한다. 그 전에
+        # 예외가 나면 이 finally 가 `UnboundLocalError: set_streaming` 을
+        # 던지고 **진짜 오류를 가린다.**
+        #
+        # 2026-09-14 `ask_session` 첫 시험에서 정확히 그랬다. 실패 사유가
+        # "cannot access local variable 'set_streaming'" 으로만 남아서
+        # 무엇이 잘못됐는지 알 수 없었다. 여기서 다시 import 해 원래 오류가
+        # 그대로 올라가게 한다.
+        try:
+            from app.core.interrupt_queue import set_streaming as _clear_streaming
+
+            _clear_streaming(session_id, False)
+        except Exception as _clear_err:
+            logger.debug(
+                "set_streaming_clear_failed session=%s error=%s",
+                session_id[:8], str(_clear_err)[:120],
+            )
 
 
 # ── CEO 채팅 학습 트리거 ────────────────────────────────────────────

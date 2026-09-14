@@ -897,6 +897,7 @@ class ToolExecutor:
             "run_agent_team":         self._run_agent_team,
             # AI-to-AI: 다관점 토론
             "run_debate":             self._run_debate,
+            "ask_session":            self._ask_session,
             # AADS-190: 내보내기 + 스케줄러
             "export_data":            self._export_data,
             "schedule_task":          self._schedule_task,
@@ -4686,6 +4687,26 @@ class ToolExecutor:
             phases=phases,
             max_concurrent=inp.get("max_concurrent", 5),
             cost_limit_usd=inp.get("cost_limit_usd", 10.0),
+        )
+
+    async def _ask_session(self, inp: Dict[str, Any]) -> Any:
+        """다른 담당에게 묻는다. 답은 나중에 이 대화로 돌아온다.
+
+        기다리지 않는다 — 오늘 실측 응답 시간이 2분~61분이다. 물어본 쪽이
+        기다리면 먼저 죽는다(`llm_first_response_timeout`).
+        """
+        from app.services.session_relay import ask
+
+        session_id = str(inp.get("session_id") or "")
+        if not session_id:
+            from app.services.tool_executor import current_chat_session_id
+
+            session_id = current_chat_session_id.get() or ""
+        return await ask(
+            origin_session_id=session_id,
+            target=str(inp.get("target") or ""),
+            question=str(inp.get("question") or ""),
+            context=str(inp.get("context") or ""),
         )
 
     async def _run_debate(self, inp: Dict[str, Any]) -> Any:

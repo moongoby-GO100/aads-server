@@ -54,6 +54,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "spawn_parallel_subagents": True,     # 병렬 서브에이전트 — 지연 로드
     "run_agent_team": False,              # 멀티에이전트 팀 — 핵심 오케스트레이션
     "run_debate": True,                    # 다관점 토론 — 온디맨드 (CEO 요청 시)
+    "ask_session": True,                   # 세션 간 협업 — 담당끼리 묻고 답함 (2026-09-14)
     "save_note": True,
     "recall_notes": True,
     "delete_note": True,
@@ -307,6 +308,48 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
 # ─── 도구 스키마 정의 (Anthropic Tool Use 포맷) ──────────────────────────────
 
 _TOOLS: Dict[str, Dict[str, Any]] = {
+    # ── 협업 그룹 ────────────────────────────────────────────────────────────
+    "ask_session": {
+        "name": "ask_session",
+        "description": (
+            "다른 담당에게 묻고 답을 받습니다. 답은 **나중에** 이 대화로 자동으로 "
+            "들어오므로 기다리지 말고 다른 일을 계속하세요. "
+            "자기 담당 범위를 벗어나는 판단이 필요할 때 씁니다 — 예를 들어 진입 시점을 "
+            "바꾸려 할 때 실매매 담당에게 슬리피지 영향을 묻습니다. "
+            "한 줄기당 3회까지만 오갈 수 있습니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": (
+                        "담당 역할 키 또는 세션 id. 예: 'WaveEngineOwner', "
+                        "'LiveTradingOwner', 'DataEngineOwner', 'StockDiscoveryOwner', "
+                        "'StrategyCardLead'"
+                    ),
+                },
+                "question": {
+                    "type": "string",
+                    "description": "무엇을 묻는지. 한 번에 하나만 묻습니다.",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "같이 보낼 내용 (선택). 판단에 필요한 수치나 코드 조각.",
+                },
+            },
+            "required": ["target", "question"],
+        },
+        "input_examples": [
+            {"target": "LiveTradingOwner",
+             "question": "진입을 15초 당기면 그 시간대 슬리피지가 어떻게 되나?",
+             "context": "현재 진입 지연 45초, 평균 체결가 괴리 0.12%"},
+            {"target": "DataEngineOwner",
+             "question": "card310-pit 데이터셋에 미래 정보 누출이 있나?"},
+        ],
+        "allowed_callers": ["code_execution_20250825"],
+    },
+
     # ── system 그룹 ──────────────────────────────────────────────────────────
     "health_check": {
         "name": "health_check",
