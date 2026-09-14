@@ -155,7 +155,9 @@ get_job_instruction() {
 }
 
 # 프로젝트별 허용 목록 (M4: 화이트리스트 검증)
-VALID_PROJECTS="AADS KIS GO100 SF NTV2"
+# ACCT 는 jinah244 전용이다. 여기에 없으면 러너가 job 을 집고도 invalid_project 로
+# 즉시 죽는다 — 2026-09-14 편입 스모크에서 실제로 그렇게 실패했다.
+VALID_PROJECTS="AADS KIS GO100 SF NTV2 ACCT"
 
 # 실행 서버 이름. pipeline_jobs.runner_host 와 하트비트에 쓴다.
 RUNNER_HOST_NAME="${AADS_RUNNER_HOST_NAME:-$(hostname -s 2>/dev/null || hostname)}"
