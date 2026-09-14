@@ -245,6 +245,26 @@ db_exec() {
     echo "$out"
 }
 
+# 실패 지점에서 오류 사전(ohvis_wiki_error_book)을 조회한다.
+#
+# 2026-09-14, 같은 실패를 세 세션이 "러너 계정 문제" 로 보고했다. 실제 원인은
+# 호스트/컨테이너 경로 불일치였고 로그에는 Codex 시작 배너만 남아 있었다.
+# 증상에서 원인으로 가는 길이 없으면 사람이 매번 처음부터 추적한다.
+#
+# 조회 실패는 무시한다 — 사전이 없다고 작업을 막으면 안 된다.
+lookup_error_book() {
+    local err_file="$1" job_id="${2:-}"
+    [[ -s "$err_file" ]] || return 0
+    local book="/root/aads/aads-server/scripts/error_book.py"
+    [[ -x "$book" ]] || return 0
+    local hit
+    hit=$(timeout 30 "$book" match "$err_file" --bump 2>/dev/null) || return 0
+    [[ "$hit" == *"알려진 오류:"* ]] || return 0
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && log "  ERROR_BOOK job=${job_id} ${line}"
+    done <<< "$hit"
+}
+
 db_update() {
     printf '%s' "$1" | _psql_cmd >/dev/null 2>&1
 }
@@ -1591,6 +1611,7 @@ ${safe_instruction}"
                         mark_codex_auth_disabled "$_err_msg"
                     fi
                     log "  CODEX_ERROR_SKIP job=$job_id reason='${_err_msg}' → immediate fallback"
+                    lookup_error_book "$err_file" "$job_id"
                     db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} 즉시폴백: ${_err_msg:0:60}' WHERE job_id='${job_id}';"
                     break
                 fi
