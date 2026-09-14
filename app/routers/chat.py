@@ -2030,10 +2030,34 @@ async def submit_chat_command(
         )
         raise
 
+    payload = result if isinstance(result, dict) else {"value": result}
+
+    # A handler that refused to do the work must not settle as ``succeeded``.
+    # Clients branch on ``status`` first, so a refused resume was indistinguishable
+    # from a real one and the user just watched a dead turn: on 2026-09-14, 293
+    # resume commands settled ``succeeded`` while every one of them had been
+    # refused for an exhausted retry budget.  Refusals that mean "another
+    # generation already owns this turn" stay successful — that one is benign
+    # and the live stream still delivers the answer.
+    blocking_refusals = {
+        "chat_resume_retry_budget_exhausted",
+        "chat_resume_nothing_to_resume",
+    }
+    refusal_code = str(payload.get("code") or "")
+    if payload.get("resumed") is False and refusal_code in blocking_refusals:
+        settled = await fail_command(
+            command_id=record.command_id,
+            tenant_id=tenant_id,
+            code=refusal_code,
+            message=str(payload.get("message") or "resume was refused"),
+            result=payload,
+        )
+        return settled.to_payload(replayed=False)
+
     settled = await complete_command(
         command_id=record.command_id,
         tenant_id=tenant_id,
-        result=result if isinstance(result, dict) else {"value": result},
+        result=payload,
     )
     return settled.to_payload(replayed=False)
 
@@ -3484,7 +3508,11 @@ async def resume_interrupted(
     # 이미 스트리밍 중이면 거부
     status = get_streaming_status(sid)
     if status and status.get("is_streaming"):
-        return {"resumed": False, "message": "이미 응답 생성 중입니다."}
+        return {
+            "resumed": False,
+            "code": "chat_resume_already_streaming",
+            "message": "이미 응답 생성 중입니다.",
+        }
 
     # placeholder 확인
     from app.core.db_pool import get_pool
@@ -3586,7 +3614,11 @@ async def resume_interrupted(
             """, session_id)
 
     if not row:
-        return {"resumed": False, "message": "중단된 응답이 없습니다."}
+        return {
+            "resumed": False,
+            "code": "chat_resume_nothing_to_resume",
+            "message": "중단된 응답이 없습니다.",
+        }
 
     requested_override = (payload.model_override or "").strip() if payload else ""
     reset_retry_count = bool(payload and payload.reset_retry_count)
@@ -3605,6 +3637,7 @@ async def resume_interrupted(
             if _rc >= svc._EXECUTION_RESUME_MAX_ATTEMPTS and not reset_retry_count:
                 return {
                     "resumed": False,
+                    "code": "chat_resume_retry_budget_exhausted",
                     "message": f"재시도 한도 초과 (retry_count={_rc}). 재시도 초기화 후 다시 시도하세요.",
                     "can_reset_retry_count": True,
                 }
@@ -3615,7 +3648,11 @@ async def resume_interrupted(
                 error_message="manual_resume_claimed",
             )
             if owner_epoch is None:
-                return {"resumed": False, "message": "다른 서버에서 이미 응답 생성 중입니다."}
+                return {
+                    "resumed": False,
+                    "code": "chat_resume_owned_elsewhere",
+                    "message": "다른 서버에서 이미 응답 생성 중입니다.",
+                }
             await _archive_competing_stream_placeholder(conn2, session_id, row["execution_id"])
             await conn2.execute(
                 """

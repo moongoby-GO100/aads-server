@@ -512,16 +512,23 @@ async def fail_command(
     tenant_id: UUID,
     code: str,
     message: str,
+    result: dict[str, Any] | None = None,
     owner_epoch: int | str | None = None,
     execution_id: UUID | None = None,
     generation_id: UUID | None = None,
 ) -> ChatCommandRecord:
-    """Record a terminal failure so the client stops polling an in-flight state."""
+    """Record a terminal failure so the client stops polling an in-flight state.
+
+    ``result`` carries the handler's own payload when a refusal still tells the
+    client how to recover — e.g. a resume blocked on an exhausted retry budget
+    reports ``can_reset_retry_count`` so the UI can offer the reset instead of
+    leaving the user with a dead turn.
+    """
     return await _settle_command(
         command_id=command_id,
         tenant_id=tenant_id,
         status="failed",
-        result=None,
+        result=result,
         error={"code": str(code), "message": str(message)[:500]},
         owner_epoch=owner_epoch,
         execution_id=execution_id,
