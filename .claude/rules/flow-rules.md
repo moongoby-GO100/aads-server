@@ -13,9 +13,13 @@
 
 ## 작업 전
 - _todo/ 에서 관련 TPP 확인. 있으면 /tpp 스킬로 이어서 진행.
-- docs/shared-lessons/INDEX.md에서 관련 교훈 확인.
+- 오류 사전에서 알려진 원인 확인: `scripts/error_book.py match <오류파일|->`
+  (2026-09-14 이관. 예전 `docs/shared-lessons/INDEX.md` 는 2026-03-06 에
+  멈춘 뒤 반년간 아무도 갱신하지 않았다. 규칙이 죽은 색인을 가리키면
+  규칙 자체가 무시된다 — 실제로 그렇게 됐다.)
 
 ## 작업 후
-- 다른 프로젝트에도 적용 가능한 교훈 → shared/lessons/ 등록
+- 원인을 밝혔으면 오류 사전에 넣는다: `scripts/error_book.py promote` 또는
+  `register`. 추측은 넣지 않고 확인한 것만 넣는다 (R-ERRBOOK).
 - 결과 파일에 ## 교훈 섹션 작성 시 자동 등록됨
 - 컨텍스트 부족 시 /handoff 스킬 실행

@@ -147,13 +147,20 @@ async def _search_relevant(
 
     results = []
     try:
-        # 병렬: memory_facts 검색 + chat_messages 검색
-        fact_results, msg_results = await asyncio.gather(
+        # 병렬: memory_facts + chat_messages + 문서
+        #
+        # 2026-09-14 문서 추가. 그 전까지 대표가 "이거 왜 이렇게 돼 있지" 라고
+        # 물어도 문서가 근거로 잡히지 않았다 — 검색 대상이 아니었기 때문이다.
+        # 문서 823건이 저장소에 있는데 채팅은 그걸 못 봤다.
+        fact_results, msg_results, doc_results = await asyncio.gather(
             _search_memory_facts(query_emb, project),
             _search_chat_messages(query_emb, session_id, project),
+            _search_documents(query_emb, project),
             return_exceptions=True,
         )
 
+        if isinstance(doc_results, list):
+            results.extend(doc_results)
         if isinstance(fact_results, list):
             results.extend(fact_results)
         if isinstance(msg_results, list):
@@ -171,6 +178,43 @@ async def _search_relevant(
     except Exception as e:
         logger.debug("auto_rag_search_error", error=str(e))
         return []
+
+
+async def _search_documents(query_emb: list, project: Optional[str]) -> List[Dict]:
+    """저장소 문서에서 검색. 결과에 출처 경로를 넣는다.
+
+    근거 경로가 없으면 비전문가는 답을 검증할 방법이 없다. "어디에 그렇게
+    적혀 있나" 에 답할 수 있어야 문서를 붙인 의미가 있다.
+    """
+    try:
+        from app.services.doc_index import search_docs
+
+        rows = await search_docs(query_emb, top_k=_RAG_TOP_K, project=None)
+    except Exception as e:
+        logger.debug("auto_rag_doc_search_failed", error=str(e))
+        return []
+
+    import os
+
+    out: List[Dict] = []
+    for r in rows:
+        path = r.get("doc_path", "")
+        heading = r.get("heading", "")
+        title = r.get("title", "")
+        # 포맷터가 읽는 키는 `text`/`source`/`timestamp` 다. 문서 출처는
+        # **파일 경로**여야 한다 — "어디에 그렇게 적혀 있나" 에 답할 수
+        # 있어야 근거로서 쓸모가 있다.
+        where = f"{title} › {heading}" if heading else title
+        out.append({
+            "kind": "doc",
+            "source": f"문서 {os.path.basename(path)}",
+            "msg_id": f"doc:{path}",
+            "similarity": r.get("similarity", 0.0),
+            "text": f"[{where}] {r.get('content', '')}",
+            "timestamp": path,
+            "path": path,
+        })
+    return out
 
 
 async def _search_memory_facts(query_emb: list, project: Optional[str]) -> List[Dict]:
