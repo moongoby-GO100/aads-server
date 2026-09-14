@@ -87,6 +87,12 @@ class GoalDocRequest(BaseModel):
     note: Optional[str] = None
 
 
+class AddOwnerRequest(BaseModel):
+    session_id: str
+    role_key: Optional[str] = None
+    as_lead: bool = False
+
+
 class InterveneRequest(BaseModel):
     message: Optional[str] = None
     roles: Optional[list[str]] = None
@@ -188,6 +194,7 @@ async def goal_board(goal_id: str):
             "paused": r["paused_reason"] is not None,
             "paused_reason": r["paused_reason"],
             "open_notes": r["open_notes"] or 0,
+            "is_lead": (r["role_key"] or "").endswith("Lead"),
         })
 
     from app.services.direction_guard import is_halted
@@ -197,6 +204,7 @@ async def goal_board(goal_id: str):
         "goal": dict(goal),
         "halted": await is_halted(),
         "owners": owners,
+        "has_lead": any(o["is_lead"] for o in owners),
         "documents": docs["documents"],
         "has_design": docs["has_design"],
         "missing_design": docs["missing"],
@@ -286,6 +294,142 @@ async def goals_for_session(session_id: str):
     from app.services.direction_guard import is_halted
 
     return {"halted": await is_halted(), "goals": [dict(r) for r in rows]}
+
+
+@router.get("/goals/{goal_id}/candidates")
+async def goal_owner_candidates(goal_id: str):
+    """붙일 수 있는 세션 — **같은 워크스페이스**의 아직 안 묶인 것만.
+
+    프로젝트를 넘어 붙이면 맥락이 섞인다. `ask_session` 이 워크스페이스
+    안으로 제한한 것과 같은 이유다.
+    """
+    from app.core.db_pool import get_pool
+
+    rows = await get_pool().fetch(
+        """
+        SELECT s.id::text AS session_id, s.title,
+               COALESCE(s.role_key, '') AS role_key,
+               s.message_count,
+               EXISTS (
+                   SELECT 1 FROM prompt_assets a
+                   WHERE a.enabled AND s.role_key IS NOT NULL
+                     AND a.role_scope @> ARRAY[s.role_key]::text[]
+               ) AS has_prompt
+        FROM chat_sessions s
+        WHERE s.workspace_id = (
+                SELECT s2.workspace_id FROM goal_task_links l2
+                JOIN chat_sessions s2 ON s2.id = l2.task_id::uuid
+                WHERE l2.goal_id = $1::uuid AND l2.task_type = 'chat_session'
+                LIMIT 1
+              )
+          AND NOT EXISTS (
+                SELECT 1 FROM goal_task_links l
+                WHERE l.goal_id = $1::uuid AND l.task_type = 'chat_session'
+                  AND l.task_id = s.id::text
+                  AND COALESCE(l.link_state,'active') = 'active'
+              )
+        ORDER BY s.updated_at DESC
+        LIMIT 40
+        """,
+        goal_id,
+    )
+    return {"candidates": [dict(r) for r in rows]}
+
+
+@router.post("/goals/{goal_id}/owners")
+async def add_goal_owner(goal_id: str, req: AddOwnerRequest):
+    """이미 있는 세션을 담당으로 붙인다. **세션을 만들지는 않는다.**
+
+    채팅창이 늘어나는 것을 대표님이 모르시는 상태가 되면 안 된다.
+
+    역할 프롬프트를 만들지도 않는다 — 그 담당이 무엇을 하는 사람인지는
+    사람이 쓴다. 다만 없으면 **응답에 담아 알린다.** 프롬프트가 없으면
+    그 담당은 자기가 누구인지 모르는 채로 시작한다.
+    """
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        sess = await conn.fetchrow(
+            "SELECT id::text, title, COALESCE(role_key,'') AS role_key "
+            "FROM chat_sessions WHERE id = $1::uuid",
+            req.session_id,
+        )
+        if not sess:
+            raise HTTPException(status_code=404, detail="session_not_found")
+
+        role = (req.role_key or sess["role_key"] or "").strip()
+        if role and role != sess["role_key"]:
+            await conn.execute(
+                "UPDATE chat_sessions SET role_key = $2, updated_at = NOW() WHERE id = $1::uuid",
+                req.session_id, role,
+            )
+
+        await conn.execute(
+            "INSERT INTO goal_task_links (goal_id, task_type, task_id, status, "
+            "       bind_source, bound_by, link_state) "
+            "VALUES ($1::uuid, 'chat_session', $2, 'active', 'manual', 'ceo', 'active') "
+            "ON CONFLICT DO NOTHING",
+            goal_id, req.session_id,
+        )
+
+        if req.as_lead:
+            await conn.execute(
+                "UPDATE goals SET owner_role_key = NULLIF($2,''), "
+                "owner_session_id = $3::uuid, updated_at = NOW() WHERE id = $1::uuid",
+                goal_id, role, req.session_id,
+            )
+
+        has_prompt = bool(role) and bool(await conn.fetchval(
+            "SELECT 1 FROM prompt_assets WHERE enabled "
+            "  AND role_scope @> ARRAY[$1]::text[] LIMIT 1",
+            role,
+        ))
+
+    return {
+        "added": True, "session": sess["title"], "role_key": role,
+        "as_lead": req.as_lead, "has_prompt": has_prompt,
+        "warning": (
+            None if has_prompt else
+            f"'{role or '(역할 없음)'}' 역할 프롬프트가 없습니다. 이 담당은 "
+            "자기가 무엇을 하는 사람인지 모르는 채로 시작합니다."
+        ),
+    }
+
+
+@router.delete("/goals/{goal_id}/owners/{session_id}")
+async def remove_goal_owner(goal_id: str, session_id: str):
+    """목표에서 뗀다. **세션은 지우지 않는다** — 링크만 끊는다."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        holding = await conn.fetchval(
+            "SELECT title FROM milestones WHERE goal_id = $1::uuid "
+            "  AND status IN ('in_progress','review') "
+            "  AND (owner_session_id = $2::uuid "
+            "       OR owner_role_key = (SELECT role_key FROM chat_sessions WHERE id = $2::uuid)) "
+            "LIMIT 1",
+            goal_id, session_id,
+        )
+        await conn.execute(
+            "UPDATE goal_task_links SET link_state = 'detached', "
+            "       detach_reason = 'ceo_removed', updated_at = NOW() "
+            "WHERE goal_id = $1::uuid AND task_type = 'chat_session' AND task_id = $2",
+            goal_id, session_id,
+        )
+        await conn.execute(
+            "DELETE FROM owner_pause WHERE goal_id = $1::uuid AND session_id = $2::uuid",
+            goal_id, session_id,
+        )
+    return {
+        "removed": True,
+        "was_holding": holding,
+        "warning": (
+            f"이 담당이 맡고 있던 '{holding}' 은 담당이 없어져 지시가 "
+            "나가지 않습니다." if holding else None
+        ),
+    }
 
 
 @router.post("/goals/{goal_id}/owners/{session_id}/pause")

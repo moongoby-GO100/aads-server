@@ -57,6 +57,7 @@ def build_layer1(ws_key: str, base_system_prompt: str = "", intent: str = "", **
 async def _build_layer2_dynamic(
     workspace_name: str,
     db_conn=None,
+    session_id: str = "",
 ) -> str:
     """현재 시간 + 최근 완료 작업 + pending/running 수."""
     now = datetime.now(ZoneInfo("Asia/Seoul"))
@@ -177,6 +178,61 @@ async def _build_layer2_dynamic(
                 parts.append(f"\n## 서비스 상태\n{checked} 검사 기준 전부 정상")
         except Exception as e:
             logger.debug(f"context_builder 서비스 상태 조회 실패: {e}")
+
+    # 같이 일하는 담당 명단.
+    #
+    # 2026-09-14 실측. 명단이 **역할 프롬프트 8개에 각각 박혀 있었다.**
+    # 담당을 한 명 추가하면 나머지 7개를 전부 고쳐야 하고, 안 고치면 새
+    # 담당이 외톨이가 된다 — 자기는 남을 부를 수 있는데 남들은 그를 모른다.
+    #
+    # 오늘 같은 문제를 다섯 번 고쳤다(통합지시 목록 네 벌, 감시기 서버 지도,
+    # 골 스케줄러 프로젝트, /goals 필터, Layer 1 의 "3개 서버").
+    # **손으로 적은 목록은 반드시 갈라진다.** 여기서 읽어 넣는다.
+    if db_conn and session_id:
+        try:
+            team = await db_conn.fetch(
+                """
+                SELECT DISTINCT ON (s.id)
+                       g.title AS goal_title,
+                       COALESCE(s.role_key, '') AS role_key,
+                       s.title AS session_title,
+                       (s.id = $2::uuid) AS is_me,
+                       (s.role_key LIKE '%Lead') AS is_lead
+                FROM goal_task_links me
+                JOIN goals g ON g.id = me.goal_id
+                JOIN goal_task_links peer ON peer.goal_id = g.id
+                                         AND peer.task_type = 'chat_session'
+                                         AND COALESCE(peer.link_state,'active') = 'active'
+                JOIN chat_sessions s ON s.id = peer.task_id::uuid
+                WHERE me.task_type = 'chat_session' AND me.task_id = $1
+                  AND COALESCE(me.link_state,'active') = 'active'
+                  AND g.status IN ('draft','active','blocked')
+                  AND s.role_key IS NOT NULL
+                ORDER BY s.id, g.created_at
+                """,
+                session_id, session_id,
+            )
+            if team:
+                goal_title = team[0]["goal_title"]
+                lines = []
+                for r in team:
+                    if r["is_me"]:
+                        continue
+                    mark = "주도" if r["is_lead"] else "    "
+                    lines.append(f"- {mark} `{r['role_key']}` — {r['session_title']}")
+                if lines:
+                    parts.append(
+                        f"\n## 같이 일하는 담당 ({goal_title})\n"
+                        + "\n".join(lines)
+                        + "\n`ask_session(target=\"역할키\", question=..., context=...)` 로 "
+                          "부른다. 한글 이름으로 불러도 찾는다. 답은 나중에 이 대화로 "
+                          "자동으로 들어온다 — 기다리지 말고 다른 일을 계속해라."
+                    )
+        except Exception as e:
+            # debug 로 두면 안 된다. 2026-09-14 여기서 asyncpg 타입 충돌
+            # (`$1` 을 text 와 uuid 로 동시 사용)이 났는데 debug 라서 조용히
+            # 빈 명단이 나갔다 — 오늘 내내 고친 그 패턴을 내가 다시 만들었다.
+            logger.warning("context_builder 담당 명단 조회 실패: %s", str(e)[:200])
 
     return "\n".join(parts)
 
@@ -569,7 +625,7 @@ async def build_messages_context(
     _l2_cache_key = f"l2:{ws_key}:{session_id}"
     _mem_cache_key = f"mem:{session_id}:{_project}"
     layer2, memory_layer, auto_rag_layer, preload_layer, artifact_layer = await asyncio.gather(
-        _get_cached_or_build(_l2_cache_key, _build_layer2_dynamic(workspace_name, db_conn=db_conn)),
+        _get_cached_or_build(_l2_cache_key, _build_layer2_dynamic(workspace_name, db_conn=db_conn, session_id=session_id)),
         _get_cached_or_build(_mem_cache_key, _build_memory_layer(session_id=session_id, project_id=_project)),
         _build_auto_rag_layer(_last_user_msg, session_id, _project, _current_message_ids),
         _build_workspace_preload_layer(_project, session_id),
@@ -678,7 +734,7 @@ async def build(
     _l2_cache_key = f"l2:{ws_key}:{session_id}"
     _mem_cache_key = f"mem:{session_id}:{_project}"
     layer2, ckp_layer, memory_layer, preload_layer, auto_rag_layer = await asyncio.gather(
-        _get_cached_or_build(_l2_cache_key, _build_layer2_dynamic(workspace_name, db_conn=db_conn)),
+        _get_cached_or_build(_l2_cache_key, _build_layer2_dynamic(workspace_name, db_conn=db_conn, session_id=session_id)),
         _build_ckp_layer(workspace_name),
         _get_cached_or_build(_mem_cache_key, _build_memory_layer(session_id=session_id, project_id=_project)),
         _build_workspace_preload_layer(_project, session_id),
