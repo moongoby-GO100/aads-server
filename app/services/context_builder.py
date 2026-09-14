@@ -265,6 +265,12 @@ async def _build_semantic_code_layer(
 
 _OBSERVATION_WINDOW = int(os.getenv("OBSERVATION_WINDOW_SIZE", "20"))  # 최근 N턴 도구 결과 유지, 이전은 마스킹
 
+# 메시지당 본문 상한과, 상한을 적용하지 않는 최근 구간.
+# 최근 구간을 너무 좁히면 지시대명사("그거", "아까 그 방식")가 가리키는 맥락이
+# 잘린다. 너무 넓히면 상한이 무의미해진다.
+_MSG_CHAR_CAP = int(os.getenv("HISTORY_MSG_CHAR_CAP", "4000"))
+_VERBATIM_RECENT = int(os.getenv("HISTORY_VERBATIM_RECENT", "6"))
+
 def _build_layer3_messages(
     raw_messages: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
@@ -316,6 +322,26 @@ def _build_layer3_messages(
                     content = content[:100] + "…[이전 질문 축소]"
                 elif role == "assistant" and len(content) > 200:
                     content = content[:200] + "…[이전 응답 축소]"
+
+        # 메시지당 상한 — 위치와 무관하게 한 건이 컨텍스트를 삼키지 못하게 한다.
+        #
+        # 기존 패턴 3(Deep Compression)은 2×윈도우(=40턴) **이전** 에만 걸린다.
+        # 그래서 최근 40건은 아무리 길어도 원문이 들어간다. 2026-09-14 실측:
+        # 세션 5090a247 의 컨텍스트 54건이 95,321 토큰이었고, 그중 한 메시지가
+        # 58,906자(34%)였다. 설계 목표는 3,000~5,000 토큰인데 20배였다.
+        #
+        # 도구 결과가 아니라 **긴 산문 답변**이 원인이라 기존 마스킹은 걸리지
+        # 않는다(본문 패턴 "[시스템 도구 조회 결과" 를 찾기 때문).
+        #
+        # 최근 _VERBATIM_RECENT 건은 손대지 않는다. "그거 다시 해줘" 같은
+        # 지시대명사가 직전 맥락을 가리키므로 그 구간을 자르면 대화가 깨진다.
+        if (
+            i < len(messages) - _VERBATIM_RECENT
+            and isinstance(content, str)
+            and len(content) > _MSG_CHAR_CAP
+        ):
+            _dropped = len(content) - _MSG_CHAR_CAP
+            content = content[:_MSG_CHAR_CAP] + f"\n…[{_dropped:,}자 생략 — 앞부분만 유지]"
 
         result.append({"role": role, "content": content})
 
