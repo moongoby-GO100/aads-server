@@ -117,11 +117,23 @@ def _build_env_records() -> List[Dict[str, str]]:
 # env 와 어긋나는 순간 매칭에 실패해 아무 빈 슬롯이나 집어갔다. 그 뒤 값이 맞는
 # 키가 같은 슬롯을 또 요구하면 두 계정이 한 슬롯에 겹쳐, 나머지 슬롯은 주소
 # 지정이 불가능해진다(2026-09-12 실제 발생: 두 계정이 모두 slot 1 로 접혔다).
+#
+# 슬롯 3(진아 계정)은 2026-09-15 대표님 지시로 들어왔다 — "2번으로 하자
+# 내 계정이 아니라서 로그인이 현재 안되". 이름이 없으면 _assign_slots 의
+# 3순위가 슬롯 1·2 만 훑고 빈 슬롯("")을 주며, 그 키는 주소 지정이 불가능해
+# 폴백에서 조용히 사라진다. 실제로 그렇게 사라져 있었다.
+# 최후 수단 슬롯 — AADS 소유가 아닌 계정이다. 1·2 가 모두 불가능할 때만
+# 쓰고, 자동 선택·1순위 승격 대상이 되면 안 된다. 한 곳에서 정의해 라우팅
+# (model_selector)·표시(oauth_usage_tracker)·전환 차단이 같은 값을 본다.
+LAST_RESORT_SLOTS = frozenset({"3"})
+
 _KEY_NAME_SLOTS = {
     "ANTHROPIC_AUTH_TOKEN": "1",
     "ANTHROPIC_AUTH_TOKEN_2": "2",
+    "ANTHROPIC_AUTH_TOKEN_3": "3",
     "env_oauth_1": "1",
     "env_oauth_2": "2",
+    "env_oauth_3": "3",
 }
 
 

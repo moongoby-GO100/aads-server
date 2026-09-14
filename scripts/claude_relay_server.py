@@ -462,11 +462,20 @@ def _is_rate_limited_row(row):
         return False
 
 
+# Slots beyond 1/2 are addressable only when the caller names them.  The
+# tuple returned by _read_oauth_tokens stays two-slot for its other callers;
+# the extras ride along here.  Slot 3 is the jinah account (2026-09-15): it
+# must never be selected implicitly, because using it spends someone else's
+# weekly quota.
+_EXTRA_SLOT_AUTH = {}
+
+
 def _read_oauth_tokens():
     token1 = token2 = ""
     current = "1"
     label1 = "slot1"
     label2 = "slot2"
+    extras = {}
     db_rows = _read_db_oauth_rows()
     if db_rows:
         for row in db_rows:
@@ -477,6 +486,13 @@ def _read_oauth_tokens():
             elif slot == "2":
                 token2 = row.get("value", "") or token2
                 label2 = row.get("label", "") or label2
+            elif slot and row.get("value"):
+                extras[slot] = {
+                    "token": row.get("value", ""),
+                    "label": row.get("label", "") or ("slot%s" % slot),
+                }
+        _EXTRA_SLOT_AUTH.clear()
+        _EXTRA_SLOT_AUTH.update(extras)
         ordered = [row for row in db_rows if row.get("value")]
         ordered.sort(key=lambda row: int(row.get("priority", 9999) or 9999))
         preferred = [row for row in ordered if not _is_rate_limited_row(row)]
@@ -531,7 +547,14 @@ def _pick_auth(preferred_slot=None, allow_auth_recovery=False):
     """Select refresh-capable slot credentials before any fixed env token."""
     global _last_429_slot
     token1, token2, current, label1, label2 = _read_oauth_tokens()
-    explicitly_requested = preferred_slot in ("1", "2")
+    preferred_slot = str(preferred_slot) if preferred_slot else None
+    tokens = {"1": token1, "2": token2}
+    labels = {"1": label1, "2": label2}
+    for extra_slot, extra in _EXTRA_SLOT_AUTH.items():
+        tokens.setdefault(extra_slot, extra.get("token", ""))
+        labels.setdefault(extra_slot, extra.get("label", "slot%s" % extra_slot))
+
+    explicitly_requested = preferred_slot in tokens
     if explicitly_requested:
         first_slot = preferred_slot
     elif _last_429_slot:
@@ -539,14 +562,14 @@ def _pick_auth(preferred_slot=None, allow_auth_recovery=False):
     else:
         first_slot = current if current in ("1", "2") else "1"
 
-    tokens = {"1": token1, "2": token2}
-    labels = {"1": label1, "2": label2}
     ordered_slots = [first_slot]
+    # Auto-selection stays inside the two AADS slots.  An extra slot is reached
+    # only by an explicit request from the caller.
     if not explicitly_requested:
         ordered_slots.append("2" if first_slot == "1" else "1")
     for slot in ordered_slots:
         credential_path = _slot_credentials_path(slot)
-        status = _slot_auth_status(slot, env_fallback_available=bool(tokens[slot]))
+        status = _slot_auth_status(slot, env_fallback_available=bool(tokens.get(slot)))
         terminal_auth_failure = status.get("status") in {
             "revoked", "authentication_failed",
         }
@@ -556,17 +579,17 @@ def _pick_auth(preferred_slot=None, allow_auth_recovery=False):
             return {
                 "token": "",
                 "slot": slot,
-                "label": labels[slot],
+                "label": labels.get(slot, "slot%s" % slot),
                 "source": "slot_credentials",
                 "status": status,
             }
         # Fixed access tokens are an explicit fallback only when the slot file
         # is absent.  A malformed/incomplete credential must remain visible.
-        if not credential_path.exists() and tokens[slot]:
+        if not credential_path.exists() and tokens.get(slot):
             return {
                 "token": tokens[slot],
                 "slot": slot,
-                "label": labels[slot],
+                "label": labels.get(slot, "slot%s" % slot),
                 "source": "env_fallback",
                 "status": status,
             }

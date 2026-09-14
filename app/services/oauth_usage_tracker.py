@@ -22,6 +22,8 @@ from app.core.auth_provider import get_oauth_tokens, get_token_labels
 
 logger = logging.getLogger(__name__)
 
+from app.core.auth_provider import LAST_RESORT_SLOTS as _LAST_RESORT_SLOTS
+
 KST = timezone(timedelta(hours=9))
 USAGE_LOG_FLUSH_BATCH_SIZE = 10
 USAGE_LOG_FLUSH_INTERVAL_SEC = 30.0
@@ -1078,6 +1080,10 @@ async def get_slot_usage_all() -> List[Dict[str, Any]]:
         entry: Dict[str, Any] = {
             "slot": slot,
             "label": label or (row["account_label"] if row else ""),
+            # 최후 수단 슬롯은 화면에서 구분되어야 한다. 남의 계정 한도를
+            # 쓰는 것이므로 눌러서 1순위로 올리는 일이 없어야 하고, 대표님이
+            # 그 막대를 볼 때 "이건 우리 것이 아니다" 를 바로 알아야 한다.
+            "last_resort": slot in _LAST_RESORT_SLOTS,
             "source": row["source"] if row else "none",
             "sampled_at": row["fetched_at"].isoformat() if row else None,
             "primary": {"used_percent": None, "window_minutes": 300, "resets_at": None},

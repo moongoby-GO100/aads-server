@@ -4815,7 +4815,22 @@ class KeyOrderRequest(BaseModel):
 @router.post("/settings/auth-keys")
 async def set_auth_key_order(req: KeyOrderRequest):
     """인증 키 순서 변경."""
-    from app.core.auth_provider import get_oauth_key_records_async, set_token_order_async
+    from app.core.auth_provider import (
+        LAST_RESORT_SLOTS,
+        get_oauth_key_records_async,
+        set_token_order_async,
+    )
+
+    # 최후 수단 슬롯(AADS 소유가 아닌 계정)은 1순위가 될 수 없다. 화면에서
+    # 버튼을 막아 두었지만, 화면만 막으면 API 로는 뚫린다 — 한 번 1순위가
+    # 되면 모든 대화가 남의 한도를 쓴다.
+    _pre = await get_oauth_key_records_async(include_rate_limited=True)
+    for _record in _pre:
+        if _record.get("key_name") == req.primary and str(_record.get("slot", "")) in LAST_RESORT_SLOTS:
+            raise HTTPException(
+                status_code=409,
+                detail="최후 수단 계정은 1순위로 지정할 수 없습니다 (슬롯 %s)" % _record.get("slot"),
+            )
 
     ok = await set_token_order_async(req.primary)
     if not ok:

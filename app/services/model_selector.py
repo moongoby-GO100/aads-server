@@ -268,6 +268,7 @@ def _is_slot_available(slot: str) -> bool:
 
 # Agent SDK OAuth 토큰 — auth_provider 경유 (R-AUTH)
 from app.core.auth_provider import (  # noqa: E402
+    LAST_RESORT_SLOTS as _AP_LAST_RESORT_SLOTS,
     get_oauth_tokens as _ap_get_tokens,
     get_oauth_key_records_async as _ap_get_key_records_async,
     get_token_labels as _ap_get_labels,
@@ -287,6 +288,60 @@ def set_key_order(primary: str) -> bool:
     return _ap_set_order(primary)
 
 
+# 알려진 릴레이 슬롯. 여기에 없는 슬롯은 주소 지정이 불가능하므로 버린다.
+_KNOWN_SLOTS = ("1", "2", "3")
+
+# 최후 수단 슬롯 — 1·2 가 모두 불가능할 때만 집는다.
+#
+# 슬롯 3 은 진아 계정이고 AADS 것이 아니다. 쓰이면 진아 쪽 한도가 줄어든다.
+# DB priority 로만 뒤에 두면 누군가 우선순위를 만지는 순간 앞으로 올라오므로,
+# 순서를 코드에서 못박는다. 대표님 지시(2026-09-15): 슬롯 3 으로 등록하되
+# 먼저 집히면 안 된다.
+_LAST_RESORT_SLOTS = _AP_LAST_RESORT_SLOTS
+
+
+# 최후 수단 슬롯이 실제로 쓰인 시각(프로세스 내 스로틀). 알림 자체가
+# 요청마다 DB를 때리지 않게 한다.
+_LAST_RESORT_NOTIFIED: Dict[str, float] = {}
+_LAST_RESORT_NOTIFY_SECS = 3600
+
+
+async def _alert_last_resort_slot(slot: str, model: str, session_id: Optional[str]) -> None:
+    """남의 계정 한도를 쓰기 시작하면 대표님께 알린다.
+
+    모르게 새는 것이 가장 나쁘다. 슬롯 3(진아 계정)은 1·2 가 모두 막혔을
+    때만 잡히므로, 이 알림이 뜬다는 것은 AADS 두 계정이 동시에 불가능해졌다는
+    신호이기도 하다.
+    """
+    now = _time_mod.time()
+    if now - _LAST_RESORT_NOTIFIED.get(slot, 0.0) < _LAST_RESORT_NOTIFY_SECS:
+        return
+    _LAST_RESORT_NOTIFIED[slot] = now
+    try:
+        from app.services import ohvis_alert
+
+        await ohvis_alert.notify(
+            "진아 계정(슬롯 %s) 사용 시작" % slot,
+            "AADS 슬롯 1·2 가 모두 불가능해 진아 계정으로 응답했습니다. "
+            "모델=%s 세션=%s. 진아 한도가 줄어듭니다." % (model, str(session_id or "-")[:8]),
+            severity=ohvis_alert.WARNING,
+            category="oauth_slot",
+            project="AADS",
+            dedupe_minutes=60,
+        )
+    except Exception as exc:
+        logger.warning("last_resort_alert_failed slot=%s: %s", slot, str(exc)[:120])
+
+
+def _slot_sort_key(slot: str, record: Dict[str, Any]) -> Tuple[int, int, str]:
+    """최후 수단 슬롯을 우선순위와 무관하게 맨 뒤로 보낸다."""
+    try:
+        priority = int(record.get("priority", 9999) or 9999)
+    except (TypeError, ValueError):
+        priority = 9999
+    return (1 if slot in _LAST_RESORT_SLOTS else 0, priority, slot)
+
+
 async def _get_claude_slot_records() -> Dict[str, Dict[str, Any]]:
     """Anthropic DB priority를 relay slot 기준으로 재구성."""
     try:
@@ -298,7 +353,7 @@ async def _get_claude_slot_records() -> Dict[str, Dict[str, Any]]:
     dropped: List[str] = []
     for record in records:
         slot = str(record.get("slot", "") or "")
-        if slot not in ("1", "2"):
+        if slot not in _KNOWN_SLOTS:
             dropped.append("%s(slot=%r)" % (record.get("label") or record.get("key_name"), slot))
             continue
         if slot in slot_records:
@@ -2218,7 +2273,7 @@ async def call_stream(
     _slot_records = await _get_claude_slot_records()
     _ACCOUNT_SLOTS = [slot for slot, _record in sorted(
         _slot_records.items(),
-        key=lambda item: (int(item[1].get("priority", 9999)), item[0]),
+        key=lambda item: _slot_sort_key(item[0], item[1]),
     )]
     if not _ACCOUNT_SLOTS:
         _ACCOUNT_SLOTS = ["2", "1"] if _CLAUDE_RELAY_NAVER_FIRST else ["1", "2"]
@@ -3754,6 +3809,9 @@ async def _stream_cli_relay(
             return
         yield {"type": "error", "content": _BYOK_GUIDE}
         return
+
+    if str(oauth_slot or "") in _LAST_RESORT_SLOTS:
+        await _alert_last_resort_slot(str(oauth_slot), model, session_id)
 
     retry_messages = messages
     partial_content = ""
