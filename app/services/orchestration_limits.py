@@ -66,15 +66,29 @@ async def refresh_goal_cost(goal_id: str) -> float:
     if started is None:
         spent = 0
     else:
+        # **한 세션이 여러 목표에 참여하면 비용을 나눈다.**
+        #
+        # 그냥 합하면 양쪽 목표가 같은 대화를 각자 자기 비용으로 세고,
+        # 둘 다 실제보다 빨리 상한에 닿는다. 어느 턴이 어느 목표의 일인지는
+        # 알 수 없으므로 참여 목표 수로 나눈다 — 합치면 실제 총액과 맞는다.
         spent = await pool.fetchval(
             """
-            SELECT COALESCE(SUM(m.cost), 0)::numeric(12,4)
+            SELECT COALESCE(SUM(m.cost / GREATEST(gc.n, 1)), 0)::numeric(12,4)
             FROM chat_messages m
-            WHERE m.session_id IN (
-                SELECT l.task_id::uuid FROM goal_task_links l
+            JOIN (
+                SELECT l.task_id::uuid AS sid,
+                       COUNT(DISTINCT l2.goal_id) AS n
+                FROM goal_task_links l
+                JOIN goal_task_links l2 ON l2.task_id = l.task_id
+                                       AND l2.task_type = 'chat_session'
+                                       AND COALESCE(l2.link_state,'active') = 'active'
+                JOIN goals g2 ON g2.id = l2.goal_id
+                             AND g2.status IN ('draft','active','blocked')
                 WHERE l.goal_id = $1::uuid AND l.task_type = 'chat_session'
-            )
-              AND m.created_at >= $2
+                  AND COALESCE(l.link_state,'active') = 'active'
+                GROUP BY l.task_id
+            ) gc ON gc.sid = m.session_id
+            WHERE m.created_at >= $2
             """,
             goal_id, started,
         )

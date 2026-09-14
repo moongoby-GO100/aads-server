@@ -190,9 +190,20 @@ async def _build_layer2_dynamic(
     # **손으로 적은 목록은 반드시 갈라진다.** 여기서 읽어 넣는다.
     if db_conn and session_id:
         try:
+            # **목표별로 나눈다.** 한 세션이 목표 두 개에 참여할 수 있는데,
+            # 처음 구현은 `DISTINCT ON (s.id)` 로 세션당 한 행만 남기고 첫
+            # 행의 목표 제목을 통째로 붙였다. 실측에서 두 목표의 담당이 한
+            # 목록으로 섞이고 제목은 엉뚱한 쪽이 붙었다.
+            #
+            #   ## 같이 일하는 담당 (__두번째)
+            #   - `CTO` — 백억이 기능테스트        ← 두번째 목표 소속
+            #   - `StrategyCardLead` — …           ← #310 소속
+            #
+            # 이러면 담당이 다른 목표 사람에게 말을 건다.
             team = await db_conn.fetch(
                 """
-                SELECT DISTINCT ON (s.id)
+                SELECT DISTINCT ON (g.id, s.id)
+                       g.id::text AS goal_id,
                        g.title AS goal_title,
                        COALESCE(s.role_key, '') AS role_key,
                        s.title AS session_title,
@@ -208,26 +219,35 @@ async def _build_layer2_dynamic(
                   AND COALESCE(me.link_state,'active') = 'active'
                   AND g.status IN ('draft','active','blocked')
                   AND s.role_key IS NOT NULL
-                ORDER BY s.id, g.created_at
+                ORDER BY g.id, s.id, g.created_at
                 """,
                 session_id, session_id,
             )
-            if team:
-                goal_title = team[0]["goal_title"]
-                lines = []
-                for r in team:
-                    if r["is_me"]:
-                        continue
-                    mark = "주도" if r["is_lead"] else "    "
-                    lines.append(f"- {mark} `{r['role_key']}` — {r['session_title']}")
-                if lines:
-                    parts.append(
-                        f"\n## 같이 일하는 담당 ({goal_title})\n"
-                        + "\n".join(lines)
-                        + "\n`ask_session(target=\"역할키\", question=..., context=...)` 로 "
-                          "부른다. 한글 이름으로 불러도 찾는다. 답은 나중에 이 대화로 "
-                          "자동으로 들어온다 — 기다리지 말고 다른 일을 계속해라."
-                    )
+            by_goal: dict[str, list[str]] = {}
+            titles: dict[str, str] = {}
+            for r in team:
+                gid = r["goal_id"]
+                titles[gid] = r["goal_title"]
+                if r["is_me"]:
+                    by_goal.setdefault(gid, [])
+                    continue
+                mark = "주도" if r["is_lead"] else "    "
+                by_goal.setdefault(gid, []).append(
+                    f"- {mark} `{r['role_key']}` — {r['session_title']}"
+                )
+            blocks = [
+                f"\n## 같이 일하는 담당 ({titles[gid]})\n" + "\n".join(lines)
+                for gid, lines in by_goal.items() if lines
+            ]
+            if blocks:
+                parts.append(
+                    "".join(blocks)
+                    + "\n\n`ask_session(target=\"역할키\", question=..., context=...)` 로 "
+                      "부른다. 한글 이름으로 불러도 찾는다. 답은 나중에 이 대화로 "
+                      "자동으로 들어온다 — 기다리지 말고 다른 일을 계속해라.\n"
+                      "**목표가 둘 이상이면 같은 목표의 담당에게 물어라** — "
+                      "다른 목표 사람에게 물으면 맥락이 안 맞는다."
+                )
         except Exception as e:
             # debug 로 두면 안 된다. 2026-09-14 여기서 asyncpg 타입 충돌
             # (`$1` 을 text 와 uuid 로 동시 사용)이 났는데 debug 라서 조용히

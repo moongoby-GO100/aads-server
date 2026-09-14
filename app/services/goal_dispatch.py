@@ -89,6 +89,10 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
 
     pool = get_pool()
     sent = skipped = gave_up = 0
+    # 한 세션에 한 주기 한 번만. 세션이 목표 두 개에 참여하면 양쪽에서
+    # 동시에 지시가 나갈 수 있는데, 담당은 그걸 두 개의 새 대화로 받는다.
+    # 어느 쪽부터 할지 모른 채 섞어서 답한다.
+    touched: set[str] = set()
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -129,6 +133,10 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
             from app.services.orchestration_limits import (
                 cost_gate, load_gate, owner_paused,
             )
+
+            if str(row["session_id"]) in touched:
+                skipped += 1
+                continue
 
             paused, why = await owner_paused(row["goal_id"], str(row["session_id"]))
             if paused:
@@ -217,6 +225,7 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 row["milestone_id"], row["session_id"],
             )
             sent += 1
+            touched.add(str(row["session_id"]))
             logger.info(
                 "goal_dispatch_sent",
                 milestone=row["milestone_id"][:8],
