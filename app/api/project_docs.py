@@ -23,7 +23,18 @@ from pathlib import Path
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+# 승인 결정은 **사람만** 부른다 — 테넌트 멤버 인증을 요구한다.
+from typing import Any as _Any
+from app.auth import TenantRole, require_tenant_role
+
+TenantContext = dict[str, _Any]
+require_tenant_member = require_tenant_role(TenantRole.MEMBER)
+
+
+def _tenant_id(context: TenantContext) -> str:
+    return str(context["tenant"]["id"])
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -880,6 +891,89 @@ async def scan_all_docs(force: bool = Query(False, description="캐시 무시하
     _cache["ts"] = now
     _save_persistent_cache(resp)
     return resp
+
+
+@router.get("/approvals/pending")
+async def approvals_pending(limit: int = Query(50, ge=1, le=200)):
+    """CEO 승인 대기 목록.
+
+    2026-09-14 CEO 지시 — "실매매조건은 나의 승인후 진행해야지".
+    실매매 경로를 바꾸려는 도구 호출은 `live_trading_guard` 가 실행 전에
+    막고 여기에 요청을 남긴다.
+    """
+    from app.core.db_pool import get_pool
+
+    try:
+        rows = await get_pool().fetch(
+            """
+            SELECT id::text, action_type, action_summary, risk_level,
+                   requested_by, work_key,
+                   to_char(created_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') AS at,
+                   decision
+            FROM agent_permission_requests
+            WHERE decision IS NULL
+            ORDER BY created_at DESC LIMIT $1
+            """,
+            limit,
+        )
+    except Exception as exc:
+        logger.warning("approvals_pending_failed", error=str(exc))
+        raise HTTPException(status_code=503, detail="승인 목록을 읽지 못했습니다") from exc
+
+    return {
+        "pending": [
+            {"id": r["id"], "tool": r["action_type"], "summary": r["action_summary"],
+             "risk": r["risk_level"], "requested_by": r["requested_by"],
+             "work_key": r["work_key"], "at": r["at"]}
+            for r in rows
+        ],
+        "count": len(rows),
+    }
+
+
+@router.post("/approvals/{request_id}/decide")
+async def approvals_decide(
+    request_id: str,
+    decision: str = Query(..., pattern="^(approved|rejected)$"),
+    reason: str = Query("", max_length=500),
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """승인 또는 거절.
+
+    **에이전트가 아니라 사람이 부른다.** 브라우저에서 CEO 인증으로 호출되며,
+    채팅 세션의 도구로는 노출하지 않는다 — 에이전트가 자기 요청을 스스로
+    승인할 수 있으면 게이트가 없는 것과 같다.
+    """
+    from app.core.db_pool import get_pool
+
+    decided_by = str(_tenant_id(context) or "CEO")
+    try:
+        row = await get_pool().fetchrow(
+            """
+            UPDATE agent_permission_requests
+               SET decision = $2, reason = NULLIF($3, ''), decided_by = $4,
+                   decided_at = now(), updated_at = now(),
+                   expires_at = CASE WHEN $2 = 'approved'
+                                     THEN now() + interval '2 hours' ELSE NULL END
+             WHERE id = $1::uuid AND decision IS NULL
+            RETURNING id::text, action_type, decision
+            """,
+            request_id, decision, reason, decided_by,
+        )
+    except Exception as exc:
+        logger.warning("approvals_decide_failed", error=str(exc))
+        raise HTTPException(status_code=503, detail="승인 처리 실패") from exc
+
+    if not row:
+        raise HTTPException(status_code=404, detail="대기 중인 요청이 아닙니다 (이미 처리됐거나 없음)")
+
+    logger.warning(
+        "live_trading_gate_decided request=%s tool=%s decision=%s by=%s",
+        request_id[:8], row["action_type"], decision, decided_by[:8],
+    )
+    # 승인은 2시간만 유효하다. 승인해 둔 것이 며칠 뒤 다른 맥락에서
+    # 쓰이면 CEO 가 승인한 그 변경이 아니다.
+    return {"id": row["id"], "decision": row["decision"], "valid_hours": 2 if decision == "approved" else 0}
 
 
 @router.get("/kg/stats")

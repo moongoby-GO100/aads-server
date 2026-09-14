@@ -662,6 +662,45 @@ class ToolExecutor:
             _dup = _sideeffect_duplicate(tool_name, tool_input)
             if _dup:
                 return _dup
+
+            # 실매매 조건 변경은 CEO 승인 전까지 막는다.
+            #
+            # 2026-09-14 CEO 지시. **프롬프트로 막지 않는다** — 역할 지침에
+            # "승인 후" 라고 적어 뒀지만 그것만으로는 안 막힌다. 같은 날
+            # 하루에 에이전트가 자기 규칙을 세 번 어겼고, 그중 하나는
+            # 오류 사전에 등록해 둔 항목을 다섯 번 밟은 것이다.
+            #
+            # AGENTS.md: "두 번 이상 어긴 규칙은 코드 차단으로 옮긴다."
+            # 실매매는 돈이 걸리므로 첫 번째부터 코드로 막는다.
+            #
+            # 읽기·조회·백테스트는 통과한다. 정상 작업을 막으면 담당들이
+            # 게이트를 우회할 길을 찾는다 — 그게 규칙이 무시되는 방식이다.
+            try:
+                from app.services.live_trading_guard import check as _lt_check
+
+                _lt_blocked = await _lt_check(tool_name, tool_input)
+                if _lt_blocked:
+                    return _lt_blocked
+            except Exception as _lt_err:
+                # 게이트가 고장 나면 **막는 쪽**으로 실패한다. 돈이 걸린
+                # 경로에서 "검사 못 했으니 통과" 는 안 된다.
+                from app.services.live_trading_guard import classify as _lt_classify
+
+                try:
+                    _should_block, _why = _lt_classify(tool_name, tool_input)
+                except Exception:
+                    _should_block, _why = False, ""
+                if _should_block:
+                    logger.error(
+                        "live_trading_gate_error_failclosed tool=%s error=%s",
+                        tool_name, str(_lt_err)[:200],
+                    )
+                    return json.dumps({
+                        "error": "live_trading_gate_unavailable",
+                        "blocked": True,
+                        "message": "승인 게이트를 확인할 수 없어 실매매 변경을 막았습니다. "
+                                   "CEO 에게 알리고 게이트 상태를 먼저 확인하세요.",
+                    }, ensure_ascii=False)
             tenant_id = await resolve_bound_tenant_id(
                 tool_input.get("tenant_id", ""),
                 tool_input.get("session_id", ""),
