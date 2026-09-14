@@ -33,6 +33,11 @@ PROJECT_MAP: Dict[str, Dict[str, Any]] = {
 DISPLAY_ONLY_PROJECTS = frozenset({
     "FOOD", "NAS", "CEO", "WORK", "LAW", "DESIGN", "KAKAOBOT", "COM",
     "TEST", "QA", "PLAY", "DKSEON", "KNW001", "VIBE", "HARNESS",
+    # 2026-09-14 추가. DB 에 워크스페이스가 있는데 이 목록에 없어서
+    # 프로젝트 이름으로 인정받지 못하던 것들이다. ACCT 는 같은 날에도
+    # 대화가 오갔고(회계프로그램 개발) 러너 쪽에서도 별도로 등록됐다.
+    # 여기에 있다고 실행 권한이 생기지는 않는다 — 이름표일 뿐이다.
+    "ACCT", "TERM", "FOOD1", "CTO",
 })
 
 ALL_PROJECTS = list(PROJECT_MAP.keys())
