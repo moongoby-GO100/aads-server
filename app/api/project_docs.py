@@ -882,6 +882,130 @@ async def scan_all_docs(force: bool = Query(False, description="캐시 무시하
     return resp
 
 
+@router.get("/changes/digest")
+async def changes_digest(
+    days: int = Query(7, ge=1, le=60, description="며칠치"),
+    project: Optional[str] = Query(None, description="프로젝트 한정"),
+):
+    """무엇이 언제 바뀌었나 — 날짜별 한 화면.
+
+    2026-09-14 신설. 그 전까지 이걸 볼 방법이 없었다.
+
+    규정(`.claude/rules/flow-rules.md`)은 기획→설계→실행→마무리 4단계
+    문서를 요구하는데 실제 산출물은 FIND 0건 / LAYOUT 6건 / WRAP 3건이다.
+    같은 기간 커밋 1,068건, 배포 430건이었다. **문서 절차는 사실상 돌지
+    않는다.**
+
+    대신 기계가 남기는 기록은 빠짐없이 쌓인다 — 변경 원장 30일 4,725건,
+    배포 원장 430건. 문서를 다시 강제하는 대신 이 기록을 볼 수 있게 한다.
+
+    세 가지를 한 줄에 묶는다.
+      - 무엇을 고쳤나 (파일·요약)
+      - 올라갔나 (커밋/푸시/배포 상태)
+      - 배포는 성공했나 (deploy_runs)
+
+    `dirty` 는 고쳐놓고 커밋이 안 된 변경이다. 30일 1,035건이었다 —
+    이게 쌓이면 "고쳤는데 반영이 안 된" 상태가 조용히 남는다.
+    """
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    try:
+        day_rows = await pool.fetch(
+            """
+            SELECT (created_at AT TIME ZONE 'Asia/Seoul')::date AS day,
+                   COALESCE(project, '?') AS project,
+                   count(*) AS changes,
+                   count(DISTINCT file_path) AS files,
+                   count(*) FILTER (WHERE status = 'deployed') AS deployed,
+                   count(*) FILTER (WHERE status = 'dirty') AS uncommitted,
+                   count(DISTINCT commit_sha) FILTER (WHERE commit_sha IS NOT NULL) AS commits
+            FROM chat_workspace_change_ledger
+            WHERE created_at > now() - ($1::int * INTERVAL '1 day')
+              AND ($2::text IS NULL OR project = $2::text)
+            GROUP BY 1, 2
+            ORDER BY 1 DESC, 3 DESC
+            """,
+            days, project,
+        )
+    except Exception as exc:
+        logger.warning("changes_digest_failed", error=str(exc))
+        raise HTTPException(status_code=503, detail="변경 원장을 읽지 못했습니다") from exc
+
+    days_map: dict = {}
+    for r in day_rows:
+        key = r["day"].isoformat()
+        entry = days_map.setdefault(key, {"date": key, "projects": [], "changes": 0,
+                                          "files": 0, "deployed": 0, "uncommitted": 0})
+        entry["projects"].append({
+            "project": r["project"],
+            "changes": int(r["changes"]),
+            "files": int(r["files"]),
+            "deployed": int(r["deployed"]),
+            "uncommitted": int(r["uncommitted"]),
+            "commits": int(r["commits"]),
+        })
+        entry["changes"] += int(r["changes"])
+        entry["files"] += int(r["files"])
+        entry["deployed"] += int(r["deployed"])
+        entry["uncommitted"] += int(r["uncommitted"])
+
+    # 배포는 별도 원장이다. 같은 날짜에 붙여서 "바꿨고, 올라갔나" 를 한눈에.
+    deploys = []
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT id, project, left(release_sha, 12) AS sha, status, phase,
+                   (created_at AT TIME ZONE 'Asia/Seoul')::date AS day,
+                   to_char(created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') AS at,
+                   COALESCE(error_summary, '') AS error
+            FROM deploy_runs
+            WHERE created_at > now() - ($1::int * INTERVAL '1 day')
+            ORDER BY id DESC LIMIT 200
+            """,
+            days,
+        )
+        deploys = [{
+            "id": int(r["id"]), "project": r["project"] or "?", "sha": r["sha"],
+            "status": r["status"], "phase": r["phase"],
+            "date": r["day"].isoformat(), "at": r["at"], "error": r["error"],
+        } for r in rows]
+    except Exception as exc:
+        logger.warning("changes_digest_deploys_failed", error=str(exc))
+
+    # 최근 변경 파일 — 무엇을 고쳤는지 실물
+    recent = []
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT (created_at AT TIME ZONE 'Asia/Seoul')::date AS day,
+                   to_char(created_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') AS at,
+                   COALESCE(project, '?') AS project, file_path, status,
+                   COALESCE(commit_message, change_summary, '') AS summary,
+                   COALESCE(left(commit_sha, 8), '') AS sha
+            FROM chat_workspace_change_ledger
+            WHERE created_at > now() - ($1::int * INTERVAL '1 day')
+              AND ($2::text IS NULL OR project = $2::text)
+            ORDER BY created_at DESC LIMIT 300
+            """,
+            days, project,
+        )
+        recent = [{
+            "date": r["day"].isoformat(), "at": r["at"], "project": r["project"],
+            "file": r["file_path"], "status": r["status"],
+            "summary": (r["summary"] or "").strip()[:180], "sha": r["sha"],
+        } for r in rows]
+    except Exception as exc:
+        logger.warning("changes_digest_recent_failed", error=str(exc))
+
+    return {
+        "days": sorted(days_map.values(), key=lambda d: d["date"], reverse=True),
+        "deploys": deploys,
+        "recent": recent,
+        "window_days": days,
+    }
+
+
 @router.get("/project-docs/search")
 async def search_docs_semantic(
     q: str = Query(..., min_length=2, max_length=300, description="찾는 내용 (뜻으로 찾는다)"),
