@@ -200,6 +200,9 @@ async def _claim_execution_lease(
         UPDATE chat_turn_executions
         SET owner_instance = $2,
             owner_epoch = owner_epoch + 1,
+            -- 슬롯이 바뀌면 새 슬롯은 처음부터 다시 시작한다(resume 아님).
+            -- 그러니 이때도 시도 시계를 다시 건다.
+            attempt_started_at = NOW(),
             heartbeat_at = NOW(),
             lease_expires_at = NOW() + ($3::int * INTERVAL '1 second'),
             status = COALESCE($4, status),
@@ -684,6 +687,10 @@ _RECOVERY_DEDUPE_MAX_LEN_RATIO = float(os.getenv("AADS_RECOVERY_DEDUPE_MAX_LEN_R
 _STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT = 900
 _STALE_CLEANUP_INTERVAL_SEC_DEFAULT = 30
 _ACTIVE_STREAM_HARD_TIMEOUT_SEC_DEFAULT = 2700
+# 도구가 돌고 있어도 넘길 수 없는 마지막 선 (90분).
+_ACTIVE_STREAM_ABSOLUTE_CEILING_SEC_DEFAULT = 5400
+# 이 시간 안에 뭔가 움직였으면 살아 있는 것으로 본다.
+_STREAM_LIVENESS_IDLE_SEC = 120
 _RESPONSE_MODE_QUALITY = "quality"
 _RESPONSE_MODE_FAST = "fast"
 _VALID_RESPONSE_MODES = {_RESPONSE_MODE_QUALITY, _RESPONSE_MODE_FAST}
@@ -1191,6 +1198,10 @@ async def _claim_resume_model_attempt(
         """
         UPDATE chat_turn_executions
         SET retry_count = retry_count + 1,
+            -- 새 시도가 시작하는 지점이다. 와치독은 전체 나이가 아니라
+            -- 이 시각부터 잰다 — 여섯 번 다시 시작한 턴을 "20분째 멈춰 있다"
+            -- 로 읽으면 살아 있는 턴이 죽는다.
+            attempt_started_at = NOW(),
             heartbeat_at = NOW(),
             lease_expires_at = NOW() + ($4::int * INTERVAL '1 second'),
             updated_at = NOW()
@@ -2477,6 +2488,35 @@ def get_active_stream_hard_timeout_sec() -> int:
     )
 
 
+def get_stream_absolute_ceiling_sec() -> int:
+    """어떤 근거로도 넘길 수 없는 상한.
+
+    도구가 돌고 있으면 살려두기로 했으므로(아래 `_stream_looks_alive`),
+    진짜 폭주를 잡을 마지막 선이 필요하다. 하트비트는 모델·도구 대기 중에도
+    갱신되므로 "살아 있음" 만으로는 영원히 살 수 있다.
+    """
+    return _get_positive_env_int(
+        "AADS_ACTIVE_STREAM_ABSOLUTE_CEILING_SEC",
+        _ACTIVE_STREAM_ABSOLUTE_CEILING_SEC_DEFAULT,
+        minimum=1200,
+    )
+
+
+def _stream_looks_alive(idle_seconds: Optional[int]) -> bool:
+    """방금까지 움직이고 있었나.
+
+    옛 규칙은 "눈에 보이는 본문이 있을 것" 이었다. 그래서 계속 도구만 돌던
+    턴은 `content_len=0` 이라 예외를 못 받고, **idle=31초 — 31초 전까지
+    멀쩡히 움직이던 턴이** 상한에서 잘렸다(2026-09-15 08:42, #310 주도).
+    조사가 길수록 보고 직전에 잘리는 구조였다.
+
+    살아 있음의 근거는 글자가 아니라 **최근 활동**이다.
+    """
+    if idle_seconds is None:
+        return False
+    return int(idle_seconds) < _STREAM_LIVENESS_IDLE_SEC
+
+
 def _diagnostic_token(value: Any, *, limit: int = 80) -> str:
     text = re.sub(r"\s+", "_", str(value or "")).strip("_")
     return text[:limit] if text else "-"
@@ -3106,6 +3146,10 @@ async def cleanup_overlong_running_executions(
                    (te.lease_expires_at IS NOT NULL AND te.lease_expires_at > NOW()) AS lease_valid,
                    EXTRACT(EPOCH FROM (NOW() - COALESCE(te.started_at, te.created_at)))::int AS age_seconds,
                    EXTRACT(EPOCH FROM (
+                       NOW() - COALESCE(te.attempt_started_at, te.started_at, te.created_at)
+                   ))::int AS attempt_age_seconds,
+                   te.retry_count,
+                   EXTRACT(EPOCH FROM (
                        NOW() - GREATEST(
                            COALESCE(te.heartbeat_at, te.updated_at, te.created_at),
                            COALESCE(te.updated_at, te.created_at),
@@ -3126,7 +3170,8 @@ async def cleanup_overlong_running_executions(
             ) ph ON TRUE
             WHERE te.status IN ('running', 'retrying')
               AND te.completed_at IS NULL
-              AND COALESCE(te.started_at, te.created_at) < NOW() - ($1::int * INTERVAL '1 second')
+              AND COALESCE(te.attempt_started_at, te.started_at, te.created_at)
+                  < NOW() - ($1::int * INTERVAL '1 second')
             ORDER BY COALESCE(te.started_at, te.created_at) ASC
             """,
             query_timeout,
@@ -3139,7 +3184,13 @@ async def cleanup_overlong_running_executions(
             row_data = _row_to_dict(row)
             model_name = row_data.get("actual_model") or row_data.get("requested_model") or ""
             row_timeout = _MODEL_TIMEOUT_OVERRIDES.get(model_name, timeout)
-            if int(row_data.get("age_seconds") or 0) < row_timeout:
+            attempt_age = int(
+                row_data.get("attempt_age_seconds")
+                if row_data.get("attempt_age_seconds") is not None
+                else (row_data.get("age_seconds") or 0)
+            )
+            total_age = int(row_data.get("age_seconds") or 0)
+            if attempt_age < row_timeout and total_age < get_stream_absolute_ceiling_sec():
                 continue
             session_id = row_data["session_id"]
             execution_id = row_data["execution_id"]
@@ -3171,25 +3222,42 @@ async def cleanup_overlong_running_executions(
                 else idle_seconds
             )
             meaningful_idle_grace_sec = max(300, row_timeout)
-            if (
-                _has_meaningful_partial_content(partial_content)
-                and effective_idle_seconds < meaningful_idle_grace_sec
-            ):
+            ceiling = get_stream_absolute_ceiling_sec()
+            has_content = _has_meaningful_partial_content(partial_content)
+            defer_reason = ""
+            if has_content and effective_idle_seconds < meaningful_idle_grace_sec:
+                defer_reason = "content"
+            elif _stream_looks_alive(effective_idle_seconds):
+                # 본문이 아직 없어도 도구를 돌고 있으면 살아 있는 것이다.
+                defer_reason = "alive"
+            if defer_reason and total_age < ceiling:
                 logger.info(
-                    "overlong_running_execution_deferred_active session=%s execution=%s age=%ss idle=%ss grace=%ss content_len=%s",
+                    "overlong_running_execution_deferred_%s session=%s execution=%s "
+                    "attempt_age=%ss total_age=%ss idle=%ss retries=%s ceiling=%ss content_len=%s",
+                    defer_reason,
                     session_id[:8],
                     execution_id[:8],
-                    int(row_data.get("age_seconds") or 0),
+                    attempt_age,
+                    total_age,
                     effective_idle_seconds,
-                    meaningful_idle_grace_sec,
+                    row_data.get("retry_count"),
+                    ceiling,
                     len(_strip_streaming_progress_markers(partial_content or "")),
                 )
                 continue
+            if defer_reason:
+                # 살아 있긴 한데 절대 상한을 넘었다. 이건 폭주로 본다.
+                logger.warning(
+                    "overlong_running_execution_ceiling session=%s execution=%s "
+                    "total_age=%ss ceiling=%ss idle=%ss — 살아 있으나 상한 초과",
+                    session_id[:8], execution_id[:8], total_age, ceiling, effective_idle_seconds,
+                )
             placeholder_id = row_data.get("assistant_message_id")
             reason = _stream_interrupt_diagnostic_reason(
-                f"active_stream_hard_timeout_after_{row_timeout}s",
+                f"active_stream_hard_timeout_after_{row_timeout}s"
+                f" attempt_age={attempt_age}s retries={row_data.get('retry_count')}",
                 state,
-                age_seconds=int(row_data.get("age_seconds") or 0),
+                age_seconds=total_age,
                 timeout_sec=row_timeout,
             )
 

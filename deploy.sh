@@ -1047,7 +1047,35 @@ deploy_signal_trap() {
     exit 143
 }
 
+# 배포가 사고의 증거를 지운다.
+#
+# 2026-09-15, 배포 중에 끊긴 채팅 두 건을 조사하려 했더니 두 번 다 앱 로그가
+# 없었다. 컨테이너를 재생성하면 `docker logs` 가 통째로 사라지기 때문이다.
+# 정작 로그가 가장 필요한 순간이 배포 중 사고인데, 그 순간의 로그만 없다.
+#
+# 컨테이너를 갈아엎기 전에 두 슬롯의 최근 로그를 파일로 떠 둔다.
+archive_slot_logs() {
+    local tag="${1:-phase}"
+    local out_dir="${STATE_DIR}/logs/archive"
+    local stamp
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$out_dir" 2>/dev/null || return 0
+    local c
+    for c in aads-server aads-server-green; do
+        docker inspect "$c" >/dev/null 2>&1 || continue
+        docker logs "$c" --since 45m > "${out_dir}/${stamp}-${tag}-${c}.log" 2>&1 || true
+    done
+    # 90일치만 남긴다. 조사는 그 안에 끝난다.
+    find "$out_dir" -name '*.log' -mtime +90 -delete 2>/dev/null || true
+    echo "[deploy.sh] 슬롯 로그 보존: ${out_dir}/${stamp}-${tag}-*.log"
+}
+
 deploy_phase_start() {
+    case "${1:-}" in
+        nginx_cutover|standby_same_digest_sync)
+            archive_slot_logs "${1}"
+            ;;
+    esac
     DEPLOY_CURRENT_PHASE="${1:-unknown}"
     DEPLOY_PHASE_START_EPOCH="$(date +%s)"
     deploy_observe_update "${2:-running}" "$DEPLOY_CURRENT_PHASE" ""
