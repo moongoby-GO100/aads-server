@@ -5020,6 +5020,36 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
             _tool_events_json = json.dumps(normalize_tool_events(_te))
             state["_cached_te_json"] = _tool_events_json
             state["_last_te_len"] = _te_len
+            # 도구 입력이 비어 저장되는 경로를 찾기 위한 계측.
+            #
+            # 2026-09-14 실측: intent=execute 인 메시지의 도구 기록은
+            # tool_input 이 **0%** 살아 있고, status_check 는 100% 였다.
+            # CLI 가 input 을 보내는 것은 직접 확인했고(probe), 코드 경로도
+            # 전부 값을 보존하게 돼 있는데 결과는 비어 있다.
+            #
+            # 입력이 없으면 화면에 "run_remote_command" 만 45줄 남는다 —
+            # 무슨 명령을 왜 실행했는지 알 수 없다. 읽어서 못 찾았으니
+            # 다음 실행이 스스로 말하게 한다. 원인을 확정하면 이 블록을
+            # 지운다.
+            try:
+                _tu = [e for e in _te if isinstance(e, dict) and e.get("type") == "tool_use"]
+                if _tu and not state.get("_tool_input_probe_logged"):
+                    _empty = sum(1 for e in _tu if not e.get("tool_input"))
+                    if _empty:
+                        state["_tool_input_probe_logged"] = True
+                        logger.warning(
+                            "tool_input_missing session=%s execution=%s intent=%s "
+                            "tool_use=%d empty=%d first_tool=%s sample_keys=%s",
+                            session_id[:8],
+                            str(_eid)[:8] if _eid else "-",
+                            state.get("intent") or "-",
+                            len(_tu),
+                            _empty,
+                            _tu[0].get("tool_name", "-"),
+                            sorted(_tu[0].keys()),
+                        )
+            except Exception:
+                pass
         else:
             _tool_events_json = state.get("_cached_te_json", "[]")
         async with pool.acquire() as conn:
