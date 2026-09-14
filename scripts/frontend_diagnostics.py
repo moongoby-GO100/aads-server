@@ -240,9 +240,36 @@ def num(value: Any) -> str:
         return "NULL"
 
 
+# 쿼리에 실려 올 수 있는 민감 값. 지우되 나머지는 남긴다.
+_SENSITIVE_PARAMS = ("token", "access_token", "key", "secret", "password", "auth")
+
+
 def normalize_url(url: str) -> str:
-    """쿼리스트링을 버린다. 토큰이 실려 올 수 있고, 집계 축으로도 방해된다."""
+    """집계용 경로. 쿼리를 버린다."""
     return str(url or "").split("?", 1)[0].split("#", 1)[0]
+
+
+def dedupe_key(url: str) -> str:
+    """중복 판정용 키. 경로만 보면 다른 요청을 같은 것으로 센다.
+
+    2026-09-14: /chat/messages 를 3회 호출한 것으로 보고했으나 응답이 각각
+    393,848B · 4,350B · 907,598B 였다. limit·cursor·fields 가 다른 **서로 다른
+    요청**인데 쿼리를 지워 같은 URL 로 셌다. 있지도 않은 중복을 잡으라고
+    보고하게 된다.
+
+    민감 파라미터만 지우고 나머지는 키에 남긴다.
+    """
+    base, _, query = str(url or "").split("#", 1)[0].partition("?")
+    if not query:
+        return base
+    kept = []
+    for part in query.split("&"):
+        name = part.split("=", 1)[0].lower()
+        if any(s in name for s in _SENSITIVE_PARAMS):
+            continue
+        kept.append(part)
+    kept.sort()  # 파라미터 순서가 달라도 같은 요청이다
+    return base + ("?" + "&".join(kept) if kept else "")
 
 
 def longest_serial_chain(calls: list[dict]) -> int:
@@ -386,6 +413,7 @@ def diagnose_page(ctx, route: str, timeout_ms: int) -> dict:
             continue
         api_calls.append({
             "url": normalize_url(name),
+            "key": dedupe_key(name),
             "start": float(r.get("start") or 0),
             "end": float(r.get("end") or 0),
             "dur": float(r.get("dur") or 0),
@@ -406,7 +434,7 @@ def diagnose_page(ctx, route: str, timeout_ms: int) -> dict:
         result["data_wait_ms"] = max(0.0, last_end - (result["fcp_ms"] or 0))
         seen: dict[str, int] = {}
         for c in api_calls:
-            seen[c["url"]] = seen.get(c["url"], 0) + 1
+            seen[c["key"]] = seen.get(c["key"], 0) + 1
         result["duplicate_api"] = {u: n for u, n in seen.items() if n > 1}
     else:
         result["api_slowest_ms"] = 0
