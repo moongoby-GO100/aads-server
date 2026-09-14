@@ -51,6 +51,36 @@ import sys
 import time
 import urllib.request
 
+def _load_env_file() -> None:
+    """저장소의 `.env` 를 읽어 없는 값만 채운다.
+
+    앱은 `env_file: - .env` 로 통째로 받지만, **호스트에서 직접 돌리는
+    스크립트는 아무것도 못 받는다.** 2026-09-14 실측: 통합지시 목록을
+    13개로 넓히고 `.env` 에 넣었는데, 이 스크립트는 그걸 못 읽어 기본값
+    7개로 돌았다. FOOD·LAW·COM 1,574건이 조용히 빠졌다.
+
+    이미 설정된 환경변수는 덮지 않는다 — 호출자가 일부러 준 값이 이긴다.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, ".env")
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                if key and key not in os.environ:
+                    os.environ[key] = val.strip().strip('"').strip("'")
+    except Exception as exc:
+        print(f"[backfill] .env 읽기 실패: {str(exc)[:120]}", file=sys.stderr)
+
+
+_load_env_file()
+
 PG_CONTAINER = "aads-postgres"
 PG_PASSWORD = "aads2026secure"
 
@@ -106,6 +136,42 @@ def lit(v) -> str:
     if isinstance(v, (int, float)):
         return str(v)
     return "'" + str(v).replace("\\", "\\\\").replace("'", "''") + "'"
+
+
+# 같은 모델 이름이어도 **양자화가 다르면 벡터가 달라진다.** 그러면 한
+# `embedding_ver` 안에 규격이 둘 생기고, 검색은 오류 없이 나빠진다 —
+# 오늘 하루 쫓던 실패와 정확히 같은 종류다.
+#
+# 2026-09-14 세 서버(contabo116 · jinah244 · cafe24_114)의 digest 와 실제
+# 벡터 앞 6차원이 모두 일치하는 것을 확인하고 이 값을 박았다.
+EXPECTED_MODEL_DIGEST = os.getenv("CHAT_EMBED_MODEL_DIGEST", "0a109f422b47")
+
+
+def verify_model() -> None:
+    """이 서버의 모델이 정본과 같은 것인지 확인한다. 다르면 시작하지 않는다."""
+    if not EXPECTED_MODEL_DIGEST:
+        return
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=10) as r:
+            models = json.loads(r.read()).get("models") or []
+    except Exception as exc:
+        print(f"[backfill] Ollama 조회 실패: {str(exc)[:120]}", file=sys.stderr)
+        raise SystemExit(2)
+
+    for m in models:
+        if str(m.get("name", "")).split(":")[0] == EMBED_MODEL.split(":")[0]:
+            got = str(m.get("digest", ""))[: len(EXPECTED_MODEL_DIGEST)]
+            if got == EXPECTED_MODEL_DIGEST:
+                return
+            print(
+                f"[backfill] 모델 digest 불일치 — 기대 {EXPECTED_MODEL_DIGEST}, "
+                f"실제 {got}. 다른 양자화를 섞으면 검색이 조용히 나빠진다. 중단.",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+
+    print(f"[backfill] {EMBED_MODEL} 모델이 없다 — `ollama pull` 먼저.", file=sys.stderr)
+    raise SystemExit(2)
 
 
 def ollama_embed(texts: list[str]) -> list[list[float]] | None:
@@ -204,8 +270,29 @@ GROUP BY 1 ORDER BY 2 DESC LIMIT 20;
 """).replace("\x1f", " | "))
 
 
+def _shard_sql(args) -> str:
+    """여러 서버가 같은 행을 집지 않게 나눈다.
+
+    메시지 id 해시로 가른다 — 서버끼리 말을 섞을 필요가 없다. 한 대가
+    죽어도 나머지가 자기 몫을 계속하고, 나중에 그 몫만 다시 돌리면 된다.
+    행을 선점(claim)하는 방식은 선점해 두고 죽은 행이 남아서 더 나쁘다.
+    """
+    if not args.shard:
+        return ""
+    try:
+        k, n = (int(x) for x in args.shard.split("/", 1))
+    except ValueError:
+        print("[backfill] --shard 는 0/3 처럼 준다", file=sys.stderr)
+        raise SystemExit(2)
+    if not (0 <= k < n) or n < 1:
+        print(f"[backfill] --shard {args.shard} 범위가 틀렸다", file=sys.stderr)
+        raise SystemExit(2)
+    return f"AND (('x' || substr(md5(m.id::text), 1, 8))::bit(32)::bigint & 2147483647) % {n} = {k}"
+
+
 def cmd_run(args) -> None:
-    scope = _scope_sql(args)
+    verify_model()
+    scope = _scope_sql(args) + " " + _shard_sql(args)
     target = _TARGET.format(ver=EMBED_VER)
     deadline = time.time() + args.max_seconds
     budget = args.limit or 10**9
@@ -298,6 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="[CEO] 통합지시가 가로질러 보는 프로젝트 전부 "
                         "(CEO_ORCHESTRATOR_PROJECTS)")
     g.add_argument("--all", action="store_true", help="전부 — 50시간 든다")
+    rn.add_argument("--shard", help="여러 서버로 나눠 돌릴 때. 예: 0/3 · 1/3 · 2/3")
     rn.add_argument("--limit", type=int, default=0, help="이번 실행에서 채울 최대 건수")
     rn.add_argument("--max-seconds", type=int, default=7200,
                     help="시간 상한 (R-BG: 끝날 시점을 모르면 띄우면 안 된다)")
