@@ -54,7 +54,9 @@ async def build_auto_rag_context(
             return ""
         query_emb = embeddings[0]
 
-        results = await _search_relevant(query_emb, session_id, project, current_message_ids)
+        results = await _search_relevant(
+            query_emb, session_id, project, current_message_ids, user_message
+        )
         if not results:
             return ""
 
@@ -141,6 +143,7 @@ async def _search_relevant(
     session_id: str,
     project: Optional[str],
     current_message_ids: Optional[set],
+    query_text: str = "",
 ) -> List[Dict[str, Any]]:
     """memory_facts + chat_messages에서 시맨틱 검색. query_emb는 사전 생성된 임베딩."""
     import asyncio
@@ -155,7 +158,7 @@ async def _search_relevant(
         fact_results, msg_results, doc_results = await asyncio.gather(
             _search_memory_facts(query_emb, project),
             _search_chat_messages(query_emb, session_id, project),
-            _search_documents(query_emb, project),
+            _search_documents(query_emb, project, query_text),
             return_exceptions=True,
         )
 
@@ -180,16 +183,25 @@ async def _search_relevant(
         return []
 
 
-async def _search_documents(query_emb: list, project: Optional[str]) -> List[Dict]:
+async def _search_documents(
+    query_emb: list, project: Optional[str], query_text: str = ""
+) -> List[Dict]:
     """저장소 문서에서 검색. 결과에 출처 경로를 넣는다.
 
     근거 경로가 없으면 비전문가는 답을 검증할 방법이 없다. "어디에 그렇게
     적혀 있나" 에 답할 수 있어야 문서를 붙인 의미가 있다.
     """
     try:
-        from app.services.doc_index import search_docs
+        from app.services.doc_index import embed_query, search_docs
 
-        rows = await search_docs(query_emb, top_k=_RAG_TOP_K, project=None)
+        # 문서 검색은 질문 쪽에도 접두어가 필요하다(nomic-embed-text).
+        # memory_facts/chat_messages 용 임베딩을 그대로 쓰면 문서만 조용히
+        # 품질이 떨어진다. 질문 원문이 없으면 문서 검색은 건너뛴다 —
+        # 접두어 없는 벡터로 찾느니 안 찾는 편이 낫다.
+        if not query_text:
+            return []
+        doc_emb = await embed_query(query_text)
+        rows = await search_docs(doc_emb, top_k=_RAG_TOP_K, project=None)
     except Exception as e:
         logger.debug("auto_rag_doc_search_failed", error=str(e))
         return []

@@ -25,6 +25,22 @@ _BACKFILL_BATCH = int(os.getenv("DOC_EMBED_BATCH", "4"))
 _BACKFILL_PER_CYCLE = int(os.getenv("DOC_EMBED_PER_CYCLE", "200"))
 _SEARCH_MIN_SIMILARITY = float(os.getenv("DOC_SEARCH_MIN_SIMILARITY", "0.35"))
 
+# nomic-embed-text 의 작업 접두어. `scripts/index_docs.py` 의 DOC_PREFIX 와
+# **짝이 맞아야 한다** — 근거와 실측은 그 파일 주석에 있다.
+DOC_PREFIX = "search_document: "
+QUERY_PREFIX = "search_query: "
+
+
+async def embed_query(text: str) -> List[float]:
+    """질문을 검색용 벡터로 바꾼다. 접두어를 여기서만 붙인다.
+
+    호출자가 각자 붙이면 한 곳이 빠졌을 때 그 경로만 조용히 나빠진다.
+    """
+    from app.services.chat_embedding_service import embed_texts_strict
+
+    vectors = await embed_texts_strict([QUERY_PREFIX + text[:500]])
+    return vectors[0]
+
 
 async def backfill_embeddings(limit: int = 0) -> int:
     """임베딩이 비어 있는 청크를 채운다. 채운 개수를 돌려준다.
@@ -59,7 +75,8 @@ async def backfill_embeddings(limit: int = 0) -> int:
         # 문서의 어느 절인지"가 벡터에 안 들어가서, 비슷한 문장이 여러
         # 문서에 있을 때 엉뚱한 쪽이 잡힌다.
         texts = [
-            f"{r['title']}\n{r['heading']}\n{r['content']}"[:2000] for r in rows
+            DOC_PREFIX + f"{r['title']}\n{r['heading']}\n{r['content']}"[:1600]
+            for r in rows
         ]
         try:
             # strict 를 쓴다 — 더미 벡터를 저장하면 검색이 조용히 무의미해진다.

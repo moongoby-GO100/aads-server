@@ -106,3 +106,38 @@ async def test_doc_search_survives_db_failure(monkeypatch):
 
     monkeypatch.setattr("app.core.db_pool.get_pool", _boom)
     assert await doc_index.search_docs([0.0] * 768) == []
+
+
+def test_index_and_query_prefixes_stay_paired():
+    """색인 접두어와 질문 접두어는 짝이 맞아야 한다.
+
+    nomic-embed-text 는 작업 접두어를 요구한다. 한쪽만 바꾸면 검색이
+    **조용히** 나빠진다 — 오류도 없고 결과도 나온다. 순위만 틀어진다.
+
+    2026-09-14 실측. 질문 "채팅 응답이 왜 느려졌지" 에 대해
+    정답 문단과 무관한 계약서 문단의 유사도 차이가
+    접두어 없이 0.015, 접두어를 붙이면 0.061 이었다. 4배다.
+    """
+    from app.services import doc_index
+
+    script = _load_script()
+    assert script.DOC_PREFIX == doc_index.DOC_PREFIX, (
+        "색인 스크립트와 서비스의 문서 접두어가 다르다 — 백필 경로별로 "
+        "다른 벡터가 저장된다"
+    )
+    assert doc_index.QUERY_PREFIX != doc_index.DOC_PREFIX
+    assert doc_index.QUERY_PREFIX.startswith("search_query")
+    assert doc_index.DOC_PREFIX.startswith("search_document")
+
+
+def test_query_prefix_applied_in_one_place():
+    """호출자가 각자 붙이면 한 곳이 빠졌을 때 그 경로만 나빠진다."""
+    from app.services import doc_index
+
+    assert inspect.iscoroutinefunction(doc_index.embed_query)
+    src = inspect.getsource(doc_index.embed_query)
+    assert "QUERY_PREFIX" in src
+
+    from app.services import auto_rag
+
+    assert "embed_query" in inspect.getsource(auto_rag._search_documents)

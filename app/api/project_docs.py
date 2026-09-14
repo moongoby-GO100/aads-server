@@ -882,6 +882,99 @@ async def scan_all_docs(force: bool = Query(False, description="캐시 무시하
     return resp
 
 
+@router.get("/project-docs/search")
+async def search_docs_semantic(
+    q: str = Query(..., min_length=2, max_length=300, description="찾는 내용 (뜻으로 찾는다)"),
+    limit: int = Query(20, ge=1, le=50),
+    project: Optional[str] = Query(None, description="프로젝트 한정 (AADS/GO100/KIS)"),
+):
+    """문서 **내용** 으로 찾는다 — 파일명이 아니라 뜻으로.
+
+    2026-09-14 신설. 그 전까지 문서함 검색은 파일명과 경로만 봤다. 무엇에
+    대한 문서인지 알아야 파일명을 떠올릴 수 있으니, 모르는 것을 찾을 때는
+    쓸 수 없었다. 문서가 823건이고 이름은 대부분 `20260914_AADS_..._REPORT.md`
+    꼴이라 더 그렇다.
+
+    질문을 숫자로 바꿔 같은 방식으로 바꿔 둔 문서 조각과 비교한다. 단어가
+    겹치지 않아도 뜻이 가까우면 찾는다 — "채팅이 왜 느려졌지" 로 물으면
+    "첫 응답 타임아웃" 을 다룬 문단이 나온다.
+
+    색인은 `scripts/index_docs.py` 가 만든다. 아직 임베딩이 안 채워진
+    조각은 검색되지 않으므로, 응답에 진행률을 같이 준다 — 결과가 적을 때
+    "없는 것" 인지 "아직 안 된 것" 인지 구분할 수 있어야 한다.
+    """
+    from app.core.db_pool import get_pool
+    from app.services.chat_embedding_service import EmbeddingRouteUnavailable
+    from app.services.doc_index import embed_query, index_status, search_docs
+
+    status = {}
+    try:
+        status = await index_status()
+    except Exception:
+        status = {}
+
+    try:
+        query_vector = await embed_query(q)
+    except EmbeddingRouteUnavailable:
+        # 더미 벡터로 검색하면 아무 문서나 그럴듯한 점수로 나온다.
+        # 결과가 없다고 하는 편이 거짓 결과보다 낫다.
+        raise HTTPException(
+            status_code=503,
+            detail="임베딩 경로를 쓸 수 없어 내용 검색이 불가합니다. 파일명 검색을 사용하세요.",
+        )
+    except Exception as exc:
+        logger.warning("doc_search_embed_failed", error=str(exc))
+        raise HTTPException(status_code=503, detail="내용 검색 일시 불가") from exc
+
+    rows = await search_docs(query_vector, top_k=limit * 3, project=project)
+
+    # 같은 문서의 여러 조각이 잡히면 가장 잘 맞는 것 하나만 남긴다.
+    # 안 그러면 긴 문서 하나가 결과를 독점한다.
+    best: dict = {}
+    for r in rows:
+        path = r.get("doc_path", "")
+        prev = best.get(path)
+        if prev is None or r.get("similarity", 0) > prev.get("similarity", 0):
+            best[path] = r
+
+    results = sorted(best.values(), key=lambda r: -r.get("similarity", 0))[:limit]
+
+    pool = get_pool()
+    out = []
+    for r in results:
+        path = r["doc_path"]
+        content = (r.get("content") or "").strip()
+        try:
+            total = await pool.fetchval(
+                "SELECT count(*) FROM doc_chunks WHERE doc_path = $1", path
+            )
+        except Exception:
+            total = None
+        out.append({
+            "path": path,
+            "name": os.path.basename(path),
+            "project": r.get("project", ""),
+            "server": r.get("server", ""),
+            "title": r.get("title", ""),
+            "heading": r.get("heading", ""),
+            "snippet": content[:400] + ("…" if len(content) > 400 else ""),
+            "similarity": round(float(r.get("similarity", 0.0)), 4),
+            "chunks": total,
+        })
+
+    return {
+        "query": q,
+        "count": len(out),
+        "results": out,
+        "index": {
+            "docs": status.get("docs", 0),
+            "chunks": status.get("chunks", 0),
+            "searchable": status.get("embedded", 0),
+            "coverage_pct": status.get("coverage", 0.0),
+        },
+    }
+
+
 @router.get("/project-docs/content")
 async def get_doc_content(
     project: str = Query(..., description="프로젝트명 (AADS/KIS/GO100/SF/NTV2)"),

@@ -314,6 +314,19 @@ EMBED_PARALLEL = int(os.getenv("DOC_EMBED_PARALLEL", "3"))
 EMBED_TIMEOUT = int(os.getenv("DOC_EMBED_TIMEOUT", "300"))
 EMBED_TEXT_CHARS = int(os.getenv("DOC_EMBED_TEXT_CHARS", "1600"))
 
+# nomic-embed-text 는 **작업 접두어를 요구한다.** 문서에는
+# `search_document: `, 질문에는 `search_query: ` 를 붙여야 한다. 붙이지
+# 않아도 벡터는 나오지만 검색 품질이 무너진다.
+#
+# 2026-09-14 실측. 질문 "채팅 응답이 왜 느려졌지" 에 대해:
+#   접두어 없음   정답 0.8158 / 무관한 계약서 0.8012  → 차이 0.015
+#   접두어 있음   정답 0.7830 / 무관한 계약서 0.7225  → 차이 0.061
+# 구분 폭이 4배다. 조각 7,847개 중에서 순위를 매기려면 이 폭이 필요하다.
+#
+# **검색하는 쪽(app/services/doc_index.QUERY_PREFIX)과 짝이 맞아야 한다.**
+# 한쪽만 바꾸면 검색이 조용히 나빠진다. 회귀 테스트가 둘을 대조한다.
+DOC_PREFIX = "search_document: "
+
 
 def ollama_embed(texts: list[str]) -> list[list[float]] | None:
     """진짜 임베딩만 돌려준다. 실패하면 None — 더미를 만들지 않는다.
@@ -375,7 +388,10 @@ def cmd_embed(args) -> None:
             # 제목·절 제목을 본문 앞에 붙인다. 본문만 넣으면 "어느 문서의 어느
             # 절인지"가 벡터에 안 들어가서 비슷한 문장이 여러 문서에 있을 때
             # 엉뚱한 쪽이 잡힌다.
-            texts = [f"{g[1]}\n{g[2]}\n{g[3]}"[:EMBED_TEXT_CHARS] for g in group]
+            texts = [
+                DOC_PREFIX + f"{g[1]}\n{g[2]}\n{g[3]}"[:EMBED_TEXT_CHARS]
+                for g in group
+            ]
             return group, ollama_embed(texts)
 
         wrote = 0
