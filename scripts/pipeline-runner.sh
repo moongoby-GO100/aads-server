@@ -45,6 +45,26 @@ LOG_DIR="/var/log/aads-pipeline"
 ARTIFACT_DIR="/tmp/aads_pipeline_artifacts"
 RUNNER_HOSTNAME=$(hostname -s)
 
+# ── Claude 릴레이 슬롯 자격증명 (AADS-RUNNER-SLOT-AUTH, 2026-09-14) ─────
+# .env 고정 oat 토큰은 refresh 수단이 없어 만료/revoke 되면 러너 전체가 정지한다.
+# 2026-09-14 실측: 계정1 429(주간한도), 계정2 401(revoked)로 35단 폴백이 전멸했는데
+# 같은 시각 릴레이는 정상이었다. 릴레이가 쓰는 슬롯 자격증명은 accessToken 과
+# refreshToken 을 함께 들고 있어 CLI 가 스스로 갱신하기 때문이다.
+# 러너도 같은 래퍼를 경유해 그 자격증명을 공유한다. 슬롯이 없거나 불완전하면
+# 조용히 기존 고정 토큰 경로로 폴백하므로 슬롯이 없는 서버(211/114)는 영향이 없다.
+CLAUDE_RELAY_SLOT_HOME_ROOT="${CLAUDE_RELAY_SLOT_HOME_ROOT:-/root/.claude-relay-slots}"
+CLAUDE_SLOT_CREDENTIAL_WRAPPER="${CLAUDE_SLOT_CREDENTIAL_WRAPPER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-slot-credentials-wrapper.sh}"
+RUNNER_USE_SLOT_CREDENTIALS="${RUNNER_USE_SLOT_CREDENTIALS:-1}"
+
+# 러너가 사용할 Claude CLI 바이너리.
+# 2026-09-14 실측 A/B(4/4, 동일 자격증명·동일 래퍼·동일 모델):
+#   호스트 전역 CLI 2.1.270 → "You've hit your weekly limit" 로 전량 차단
+#   릴레이 번들 CLI 2.1.259 → 정상 응답
+# 자격증명 문제가 아니라 CLI 버전 문제였다. 릴레이와 같은 버전을 고정 경로에 두고 쓴다.
+# 바이너리(216MB)는 저장소 밖에 두며, 없으면 전역 claude 로 조용히 폴백한다.
+RUNNER_CLAUDE_CLI_BIN="${RUNNER_CLAUDE_CLI_BIN:-/root/aads/vendor/claude-cli/claude}"
+[[ -x "$RUNNER_CLAUDE_CLI_BIN" ]] || RUNNER_CLAUDE_CLI_BIN="claude"
+
 # Claude Code 인증: current.env (oat 키) 사용 — API 키(api03) 사용 금지
 source ~/.claude/current.env 2>/dev/null || true
 source /root/scripts/runner.env 2>/dev/null || true
@@ -448,6 +468,36 @@ normalize_runner_model() {
 
 normalize_claude_cli_model() {
     python3 "$CLAUDE_MODEL_CONTRACT" "${1:-}"
+}
+
+# 슬롯 자격증명 경로를 stdout 으로 돌려준다.
+# 쓸 수 없으면 아무것도 출력하지 않고 1 을 반환해 호출측이 고정 토큰으로 폴백한다.
+# accessToken 만 있고 refreshToken 이 없는 파일은 갱신이 불가능하므로 거부한다.
+slot_credentials_file() {
+    local slot="${1:-1}"
+    [[ "$RUNNER_USE_SLOT_CREDENTIALS" == "1" ]] || return 1
+    [[ -x "$CLAUDE_SLOT_CREDENTIAL_WRAPPER" ]] || return 1
+    command -v flock >/dev/null 2>&1 || return 1
+    local cred="${CLAUDE_RELAY_SLOT_HOME_ROOT}/slot${slot}/.claude/.credentials.json"
+    [[ -f "$cred" ]] || return 1
+    python3 - "$cred" <<'PY' || return 1
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+oauth = payload.get("claudeAiOauth", payload)
+if not isinstance(oauth, dict):
+    raise SystemExit(1)
+for field in ("accessToken", "refreshToken"):
+    value = oauth.get(field)
+    if not isinstance(value, str) or not value:
+        raise SystemExit(1)
+PY
+    printf '%s' "$cred"
 }
 
 is_read_only_instruction() {
@@ -1415,7 +1465,10 @@ run_job() {
     local TOKEN_1="${ANTHROPIC_AUTH_TOKEN:-}"
     local TOKEN_2="${ANTHROPIC_AUTH_TOKEN_2:-}"
     # C-4: 빈 토큰 가드 — 둘 다 비어있으면 즉시 실패 처리
-    if [[ -z "$TOKEN_1" && -z "$TOKEN_2" ]]; then
+    # 단, 슬롯 자격증명이 살아 있으면 고정 토큰이 없어도 실행 가능하므로 차단하지 않는다.
+    local _slot_cred_available=""
+    _slot_cred_available="$(slot_credentials_file 1 || slot_credentials_file 2 || true)"
+    if [[ -z "$TOKEN_1" && -z "$TOKEN_2" && -z "$_slot_cred_available" ]]; then
         log "FATAL: ANTHROPIC_AUTH_TOKEN / _2 모두 비어있음 — job=$job_id 실패 처리"
         db_update "UPDATE pipeline_jobs SET status='error', phase='token_missing',
                    error_detail='token_missing',
@@ -1444,9 +1497,21 @@ run_job() {
         local cycle_num=$(( attempt / 2 + 1 ))
 
         # 계정 스위치: 토큰 교체 (R-AUTH)
+        # 1순위 — 릴레이 슬롯 자격증명(refresh 가능). CLI 가 만료 전 스스로 갱신하므로
+        #          고정 토큰처럼 한 번 죽으면 끝나는 상태가 되지 않는다.
+        # 2순위 — .env 고정 oat 토큰 (슬롯이 없는 서버의 기존 경로).
         # Claude Code CLI는 OAuth 토큰을 CLAUDE_CODE_OAUTH_TOKEN으로 받아야 한다.
         # oat 토큰을 ANTHROPIC_API_KEY에 넣으면 x-api-key 경로로 전송되어 Invalid API key가 발생한다.
-        if [[ "$token_slot" == "2" && -n "$TOKEN_2" ]]; then
+        local slot_cred_file=""
+        slot_cred_file="$(slot_credentials_file "$token_slot" || true)"
+        if [[ -n "$slot_cred_file" ]]; then
+            # 래퍼가 격리 HOME 에 자격증명을 staging 하고 CLAUDE_CODE_OAUTH_TOKEN 을 unset 한다.
+            # 여기서 고정 토큰을 export 하면 래퍼가 지우기 전까지 우선순위가 뒤집히므로 지운다.
+            unset CLAUDE_CODE_OAUTH_TOKEN 2>/dev/null || true
+            unset ANTHROPIC_API_KEY 2>/dev/null || true
+            unset ANTHROPIC_BASE_URL 2>/dev/null || true
+            log "  TOKEN_SWITCH job=$job_id → 계정${token_slot} via slot_credentials (refreshable)"
+        elif [[ "$token_slot" == "2" && -n "$TOKEN_2" ]]; then
             export CLAUDE_CODE_OAUTH_TOKEN="$TOKEN_2"
             unset ANTHROPIC_API_KEY 2>/dev/null || true
             unset ANTHROPIC_BASE_URL 2>/dev/null || true
@@ -1582,8 +1647,29 @@ ${safe_instruction}"
             if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
                 claude_args+=(--dangerously-skip-permissions)
             fi
-            timeout "$MAX_RUNTIME" claude "${claude_args[@]}" "$safe_instruction" \
-                > "$output_file" 2> "$err_file" &
+            if [[ -n "$slot_cred_file" ]]; then
+                # timeout 을 래퍼 안쪽에 두어야 한다. 바깥에 두면 래퍼만 죽고
+                # 실제 claude 자식이 고아로 남아 MAX_RUNTIME 이 무의미해진다.
+                # 래퍼는 종료 시 갱신된 자격증명을 원본 슬롯 파일로 되돌려 쓴다.
+                # env -u 로 자식 프로세스에서만 고정 토큰을 지운다.
+                # 2026-09-14 실측: ~/.claude/current.env 가 죽은 ANTHROPIC_AUTH_TOKEN(_2) 를
+                # export 하는데 CLI 는 이 고정 토큰을 slot credential 보다 우선한다.
+                #   "claude.ai connectors are disabled because ANTHROPIC_API_KEY or another
+                #    auth source is set and takes precedence over your claude.ai login"
+                # 이 다섯 개를 지우지 않으면 슬롯 자격증명이 살아 있어도 전량 실패한다.
+                # 셸 자체를 unset 하지 않는 이유는 뒤따르는 레거시 폴백 시도를 망가뜨리지 않기 위함이다.
+                CLAUDE_OAUTH_SLOT="$token_slot" \
+                CLAUDE_SLOT_CREDENTIALS_FILE="$slot_cred_file" \
+                env -u CLAUDE_CODE_OAUTH_TOKEN \
+                    -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_AUTH_TOKEN_2 \
+                    -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL \
+                    "$CLAUDE_SLOT_CREDENTIAL_WRAPPER" \
+                    timeout "$MAX_RUNTIME" "$RUNNER_CLAUDE_CLI_BIN" "${claude_args[@]}" "$safe_instruction" \
+                    < /dev/null > "$output_file" 2> "$err_file" &
+            else
+                timeout "$MAX_RUNTIME" "$RUNNER_CLAUDE_CLI_BIN" "${claude_args[@]}" "$safe_instruction" \
+                    > "$output_file" 2> "$err_file" &
+            fi
             local claude_pid=$!
         fi
 
