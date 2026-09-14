@@ -1200,6 +1200,66 @@ async def _get_session_user_api_key(session_id: Optional[str], provider: str) ->
         return ""
 
 
+# ── BYOK 전용 정책 (CEO 지시 2026-09-14) ────────────────────────────────
+# "사용자 가입후 사용은 각 사용자의 계정것만 사용하게 제한한다."
+#
+# 회사 공용 계정이 새는 곳은 두 군데다 — 릴레이 슬롯(Claude/Codex CLI)과
+# LiteLLM 마스터 키. 가입 사용자가 여기 붙으면 회사 한도를 대신 태운다.
+# 그래서 가입 사용자는 본인 키를 등록해야 대화가 되고, 릴레이는 막는다.
+#
+# 예외를 둔 이유를 남긴다. 나중에 "왜 다 막지 않았나" 를 다시 묻게 된다.
+#   ceo/admin        운영자가 스스로를 잠그면 되돌릴 수단이 사라진다.
+#   session_id 없음  배치 평가·러너·백그라운드 추출이다. 사람 사용자가 아니다.
+#   조회 실패        DB 일시 장애로 전원을 막지 않는다(fail-open).
+# 환경변수 스위치를 남긴다. 잘못 잠갔을 때 재배포 없이 되돌릴 수 있어야 한다.
+_BYOK_ONLY_ENFORCED = str(os.getenv("BYOK_ENFORCE_OWN_KEY", "1")).strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+_BYOK_EXEMPT_ROLES = {"ceo", "admin", "owner", "system"}
+_BYOK_GUIDE = (
+    "본인 계정 키가 등록되어 있지 않아 대화를 시작할 수 없습니다.\n\n"
+    "설정 → API 키에서 본인 키를 등록하면 그 계정으로 대화가 진행됩니다.\n"
+    "  • Anthropic: sk-ant-api03… (API 키) 또는 sk-ant-oat01… (Claude Code setup-token)\n"
+    "  • OpenAI: sk-… 를 등록한 뒤 GPT 계열 모델을 선택하십시오.\n\n"
+    "회사 공용 계정은 가입 사용자에게 제공되지 않습니다."
+)
+
+
+async def _byok_owner_context(session_id: Optional[str]) -> Dict[str, Any]:
+    """세션 사용자의 BYOK 상태. 조회가 실패하면 막지 않고 exempt 로 떨어뜨린다."""
+    ctx: Dict[str, Any] = {"user_id": None, "role": "", "exempt": True, "providers": set()}
+    if not _BYOK_ONLY_ENFORCED:
+        return ctx
+    user_id = await _resolve_session_user_id(session_id)
+    if not user_id:
+        return ctx
+    ctx["user_id"] = str(user_id)
+    try:
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        role = await pool.fetchval(
+            "SELECT lower(coalesce(role, '')) FROM saas_users WHERE id = $1", str(user_id)
+        )
+        rows = await pool.fetch(
+            "SELECT DISTINCT lower(provider) AS provider FROM user_api_keys "
+            "WHERE user_id = $1 AND is_active = TRUE",
+            str(user_id),
+        )
+    except Exception as exc:
+        logger.warning(
+            "byok_owner_context_failed session=%s err=%s", str(session_id)[:8], str(exc)[:100]
+        )
+        return ctx
+    ctx["role"] = str(role or "")
+    ctx["providers"] = {str(r["provider"]) for r in rows}
+    ctx["exempt"] = ctx["role"] in _BYOK_EXEMPT_ROLES
+    return ctx
+
+
 async def get_available_model_ids() -> set[str]:
     executable = await _get_registry_executable_model_ids()
     return executable or (_LITELLM_OPENAI_MODELS | set(_ANTHROPIC_MODEL_ID.keys()))
@@ -1814,6 +1874,18 @@ async def call_stream(
       output_tokens: int
     """
     global _anthropic, _LITELLM_API_KEY, LITELLM_API_KEY
+
+    # 본인 키가 없는 가입 사용자는 여기서 멈춘다. 아래 라우팅은 전부 회사 계정을 쓴다.
+    _byok_ctx = await _byok_owner_context(session_id)
+    if not _byok_ctx["exempt"] and not _byok_ctx["providers"]:
+        logger.info(
+            "byok_policy_blocked user=%s session=%s role=%s",
+            str(_byok_ctx["user_id"])[:12],
+            str(session_id)[:8],
+            _byok_ctx["role"],
+        )
+        yield {"type": "error", "content": _BYOK_GUIDE}
+        return
 
     _db_litellm_key = await _get_db_key("LITELLM_MASTER_KEY", "LITELLM_MASTER_KEY")
     if _db_litellm_key and _db_litellm_key != _LITELLM_API_KEY:
@@ -3638,6 +3710,25 @@ async def _stream_cli_relay(
     session_id: Optional[str] = None,
     oauth_slot: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
+    # 릴레이 슬롯은 회사 공용 Claude 계정(slot1/slot2)이다. 가입 사용자는 오면 안 된다.
+    # 본인 Anthropic 키가 있으면 막는 대신 그 키로 직결되는 경로로 돌린다 —
+    # 막기만 하면 키를 등록한 사용자까지 라우팅 우연에 따라 대화가 끊긴다.
+    _relay_ctx = await _byok_owner_context(session_id)
+    if not _relay_ctx["exempt"]:
+        if "anthropic" in _relay_ctx["providers"]:
+            logger.info(
+                "byok_policy_relay_redirect user=%s model=%s",
+                str(_relay_ctx["user_id"])[:12],
+                model,
+            )
+            async for _byok_event in _stream_litellm_anthropic(
+                model, system_prompt, messages, tools, session_id=session_id
+            ):
+                yield _byok_event
+            return
+        yield {"type": "error", "content": _BYOK_GUIDE}
+        return
+
     retry_messages = messages
     partial_content = ""
     network_attempt_idx = 0
@@ -3940,6 +4031,13 @@ async def _stream_codex_relay(
     tools: Optional[List[Dict[str, Any]]] = None,
     session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
+    # Codex 릴레이도 회사 공용 ChatGPT 구독 계정이다. 본인 계정으로 바꿔 줄 방법이
+    # 없다 — ChatGPT 구독 OAuth 는 BYOK(API 키) 로 대체되지 않는다. 그래서 안내만 한다.
+    _codex_ctx = await _byok_owner_context(session_id)
+    if not _codex_ctx["exempt"]:
+        yield {"type": "error", "content": _BYOK_GUIDE}
+        return
+
     display_model = _CODEX_MODEL_DISPLAY.get(model, model)
     retry_messages = messages
     partial_content = ""

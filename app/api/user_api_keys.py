@@ -232,12 +232,20 @@ async def delete_user_api_key(
 
 
 async def _test_anthropic_key(plain_key: str) -> tuple[bool, str]:
+    # Claude Code setup-token(sk-ant-oat01…)은 x-api-key 를 받지 않는다.
+    # Authorization: Bearer 로 보내야 한다 — 2026-09-14 실측으로 같은 토큰이
+    # Bearer 200 / x-api-key 401 이었다. 여기서 갈라주지 않으면 구독 토큰을
+    # 등록한 사용자는 "검증 실패" 만 보고 원인을 알 수 없다.
+    if plain_key.startswith("sk-ant-oat"):
+        _auth_headers = {"authorization": "Bearer {}".format(plain_key)}
+    else:
+        _auth_headers = {"x-api-key": plain_key}
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={
-                    "x-api-key": plain_key,
+                    **_auth_headers,
                     "anthropic-version": "2023-06-01",
                     "content-type": "application/json",
                 },
