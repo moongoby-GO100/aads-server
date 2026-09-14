@@ -308,6 +308,80 @@ async def _build_memory_layer(
 
 
 
+# Auto-RAG 를 기다리는 상한. 넘으면 **첫 토큰을 먼저 낸다.**
+#
+# 2026-09-14 실측. 질문 임베딩 한 번이 CPU Ollama 에서 2,558ms 다. 그동안
+# 화면은 비어 있다. 그런데 근거가 **첫 문장에 필요한 경우는 드물다** —
+# 대개 답을 시작한 뒤 중간에 쓰인다.
+#
+# 700ms 인 이유: 짧은 질문이나 캐시에 있는 것은 그 안에 끝난다(실측
+# 0.1초). 긴 질문만 밀린다.
+_AUTO_RAG_WAIT_MS = int(os.getenv("AUTO_RAG_WAIT_MS", "700"))
+
+# 늦게 끝난 근거를 담아 둔다. **버리지 않는다** — 버리면 그 질문에 대한
+# 근거가 영영 안 붙는다. 다음 턴에 붙인다.
+_late_rag: dict[str, str] = {}
+_LATE_RAG_MAX = 200
+
+
+def _take_late_rag(session_id: str) -> str:
+    """지난 턴에 늦어서 못 붙인 근거를 꺼낸다(한 번만)."""
+    return _late_rag.pop(session_id, "")
+
+
+async def _build_auto_rag_layer_bounded(
+    last_user_message: str,
+    session_id: str,
+    project: Optional[str] = None,
+    current_message_ids: Optional[set[str]] = None,
+) -> str:
+    """상한 안에 끝나면 붙이고, 늦으면 다음 턴으로 넘긴다.
+
+    **조용히 빼지 않는다.** 근거 없이 답한 것을 대표님이 모르시면 안 된다 —
+    2026-09-14 하루 종일 고친 것이 전부 그런 종류였다.
+    """
+    carried = _take_late_rag(session_id)
+
+    task = asyncio.create_task(
+        _build_auto_rag_layer(last_user_message, session_id, project, current_message_ids)
+    )
+    # `wait_for(shield(...))` 는 상한에서 취소 예외를 그대로 올린다(실측).
+    # `asyncio.wait` 는 **작업을 건드리지 않고** 기다리기만 한다 — 늦은
+    # 근거를 뒤에서 마저 끝내려면 이쪽이어야 한다.
+    done, _pending = await asyncio.wait({task}, timeout=_AUTO_RAG_WAIT_MS / 1000.0)
+    if task in done:
+        try:
+            block = task.result()
+        except Exception as exc:
+            logger.debug("auto_rag_failed: %s", str(exc)[:160])
+            block = ""
+        return (carried + block) if carried else block
+
+    # 늦은 것은 백그라운드에서 끝내 다음 턴에 쓰도록 담아 둔다.
+    def _stash(t: asyncio.Task) -> None:
+        # `CancelledError` 는 `Exception` 이 아니라 `BaseException` 이다.
+        # `except Exception` 으로 잡으면 콜백 밖으로 새어 나가 이벤트 루프
+        # 예외 핸들러에 찍힌다 — 실측에서 그렇게 됐다.
+        try:
+            out = t.result()
+        except BaseException:
+            return
+        if out and len(_late_rag) < _LATE_RAG_MAX:
+            _late_rag[session_id] = out
+
+    task.add_done_callback(_stash)
+    logger.info(
+        "auto_rag_deferred session=%s wait_ms=%s", session_id[:8], _AUTO_RAG_WAIT_MS
+    )
+    note = (
+        "\n<auto_rag_context>\n## 관련 과거 컨텍스트\n"
+        "근거 검색이 늦어 이번 답에는 반영되지 않았다. 다음 답부터 반영된다.\n"
+        "지금 답이 과거 기록에 의존해야 하는 내용이면 그렇다고 밝혀라.\n"
+        "</auto_rag_context>"
+    )
+    return (carried + note) if carried else note
+
+
 async def _build_auto_rag_layer(
     last_user_message: str,
     session_id: str,
@@ -647,7 +721,7 @@ async def build_messages_context(
     layer2, memory_layer, auto_rag_layer, preload_layer, artifact_layer = await asyncio.gather(
         _get_cached_or_build(_l2_cache_key, _build_layer2_dynamic(workspace_name, db_conn=db_conn, session_id=session_id)),
         _get_cached_or_build(_mem_cache_key, _build_memory_layer(session_id=session_id, project_id=_project)),
-        _build_auto_rag_layer(_last_user_msg, session_id, _project, _current_message_ids),
+        _build_auto_rag_layer_bounded(_last_user_msg, session_id, _project, _current_message_ids),
         _build_workspace_preload_layer(_project, session_id),
         _build_artifact_context_layer(session_id, db_conn=db_conn),
     )
@@ -758,7 +832,7 @@ async def build(
         _build_ckp_layer(workspace_name),
         _get_cached_or_build(_mem_cache_key, _build_memory_layer(session_id=session_id, project_id=_project)),
         _build_workspace_preload_layer(_project, session_id),
-        _build_auto_rag_layer(last_user_message, session_id, _project),
+        _build_auto_rag_layer_bounded(last_user_message, session_id, _project),
     )
     layer2_full = layer2 + ckp_layer + memory_layer + preload_layer + auto_rag_layer
 

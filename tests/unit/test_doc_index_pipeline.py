@@ -664,3 +664,43 @@ def test_failed_command_is_not_replayed_forever():
     assert 'record.status == "failed"' in src[i - 900:i]
     # 되살리기를 다시 넣으면 트리거가 막고, 막히면 조용히 실패한다.
     assert "SET status = 'pending', error = NULL" not in src
+
+
+def test_auto_rag_does_not_block_first_token():
+    """근거를 다 모을 때까지 첫 글자도 못 내면 안 된다.
+
+    2026-09-14 실측. 질문 임베딩 한 번이 CPU Ollama 에서 2,558ms 다.
+    그동안 화면은 비어 있다. 그런데 **근거가 첫 문장에 필요한 경우는
+    드물다** — 대개 답을 시작한 뒤 중간에 쓰인다.
+
+    실측(상한 700ms):
+        1회차  701 ms  상한에 걸려 다음 턴으로   129자
+        2회차  296 ms  지난 근거 이어받음        1,936자
+    """
+    import inspect
+
+    from app.services import context_builder as cb
+
+    assert cb._AUTO_RAG_WAIT_MS <= 2000, "상한이 임베딩 시간(2.5초)보다 크면 의미가 없다"
+
+    src = inspect.getsource(cb._build_auto_rag_layer_bounded)
+
+    # 늦은 근거를 **버리지 않는다.** 버리면 그 질문에 대한 근거가 영영 안 붙는다.
+    assert "_late_rag" in src and "add_done_callback" in src
+
+    # 작업을 취소하면 안 된다 — 뒤에서 마저 끝내야 다음 턴에 쓴다.
+    assert "wait_for" not in src, "wait_for 는 상한에서 작업을 취소한다"
+    assert "asyncio.wait(" in src
+
+    # 조용히 빼면 안 된다. 근거 없이 답한 것을 대표님이 모르시면 안 된다.
+    assert "늦어" in src
+
+    # CancelledError 는 Exception 이 아니다. 콜백에서 새어 나가면 루프
+    # 예외 핸들러에 찍힌다 — 실측에서 그렇게 됐다.
+    stash = src[src.index("def _stash"):]
+    assert "except BaseException" in stash
+
+    # 두 호출 경로 모두 상한을 거쳐야 한다.
+    whole = inspect.getsource(cb)
+    assert "_build_auto_rag_layer(_last_user_msg" not in whole
+    assert "_build_auto_rag_layer(last_user_message, session_id, _project)" not in whole
