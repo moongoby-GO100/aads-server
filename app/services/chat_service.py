@@ -7770,7 +7770,27 @@ async def _resume_single_stream(
                                     _current_stream_event_id.set(str(_entry_id))
                                 _token_idx += 1
                             elif etype == "tool_use":
-                                tools_called.append(event["tool_name"])
+                                # 이벤트 전체를 남긴다. 예전에는 이름 문자열만
+                                # 쌓았고(`tools_called.append(event["tool_name"])`),
+                                # `normalize_tool_events` 가 문자열을
+                                # `{"tool_use_id": "", "tool_input": {}}` 로 펴서
+                                # **무엇을 했는지가 사라졌다.**
+                                #
+                                # 2026-09-14 실측으로 갈림이 정확했다.
+                                #   재시도 0회  도구 2,604건 중 입력 1,203건 (46%)
+                                #   재시도 1회  도구   258건 중 입력     0건 (0%)
+                                #   재시도 2회  도구    96건 중 입력     0건 (0%)
+                                #
+                                # 이어쓰기가 도는 세션일수록 긴 작업이고, 긴
+                                # 작업일수록 "무슨 명령을 왜 실행했나" 가 중요한데
+                                # 바로 그 경로에서 기록이 비어 있었다. 화면에는
+                                # "run_remote_command" 만 45줄 남는다.
+                                tools_called.append({
+                                    "type": "tool_use",
+                                    "tool_name": event.get("tool_name", ""),
+                                    "tool_use_id": event.get("tool_use_id", ""),
+                                    "tool_input": event.get("tool_input", {}),
+                                })
                                 _merge_resume_state(
                                     tool_count=len(tools_called),
                                     last_tool=event["tool_name"],
