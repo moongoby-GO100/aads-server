@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="ko"><head>
+<meta name="robots" content="noindex,nofollow"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>진아실장 업무 흐름 도식 (2026-09-15)</title>
+<style>
+:root{--bg:#f8fafc;--fg:#0f172a;--mut:#64748b;--line:#e2e8f0;--card:#fff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+ font:15px/1.65 system-ui,-apple-system,"Malgun Gothic","Apple SD Gothic Neo",sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:18px 14px 60px}
+h1{font-size:24px;margin:.2em 0 .1em}
+.sub{color:var(--mut);font-size:13.5px;margin:0 0 18px}
+.note{background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:12px 14px;
+ font-size:13.5px;margin:0 0 20px}
+.note b{color:#92400e}
+table{border-collapse:collapse;width:100%;background:var(--card);font-size:13.5px}
+th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+th{background:#f1f5f9;font-size:12.5px;color:#334155;white-space:nowrap}
+td.num,th.num{text-align:right;white-space:nowrap}
+.summary{margin-bottom:8px}
+.summary tfoot td{font-weight:700;background:#f1f5f9}
+.kpi{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 18px}
+.kpi div{flex:1 1 130px;background:var(--card);border:1px solid var(--line);
+ border-radius:10px;padding:10px 12px}
+.kpi span{display:block;font-size:12px;color:var(--mut)}
+.kpi b{font-size:24px;line-height:1.2}
+.lane{background:var(--card);border:1px solid var(--line);border-top:4px solid var(--lane);
+ border-radius:12px;padding:14px;margin:0 0 22px}
+.lane h2{font-size:17px;margin:.1em 0 .6em;display:flex;flex-wrap:wrap;
+ align-items:baseline;gap:8px}
+.lid{background:var(--lane);color:#fff;border-radius:6px;padding:1px 7px;font-size:13px}
+.mini{font-size:12px;color:var(--mut);font-weight:400}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}
+.scroll svg{display:block}
+.hint{font-size:12px;color:var(--mut);margin:4px 0 12px}
+.nodes tr.unk td{background:#f3f4f6;color:#4b5563}
+.tag{display:inline-block;margin-left:6px;font-size:11px;padding:1px 6px;border-radius:5px;
+ vertical-align:middle;font-weight:600}
+.tag.auto{background:#dbeafe;color:#1d4ed8}
+.tag.hand{background:#fef3c7;color:#b45309}
+.tag.unk{background:#e5e7eb;color:#4b5563}
+code{background:#f1f5f9;border:1px solid var(--line);border-radius:4px;padding:0 4px;
+ font-size:11.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+ word-break:break-all;display:inline-block;margin:1px 0}
+.ev{min-width:180px}
+.none{color:#b91c1c;font-size:12px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--mut);margin:0 0 18px}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;
+ vertical-align:-1px}
+footer{color:var(--mut);font-size:12.5px;margin-top:30px;border-top:1px solid var(--line);
+ padding-top:14px}
+@media(max-width:640px){
+ body{font-size:14px} .wrap{padding:14px 10px 50px}
+ th,td{padding:6px 7px;font-size:12.5px}
+ .nodes thead{display:none}
+ .nodes,.nodes tbody,.nodes tr,.nodes td{display:block;width:100%}
+ .nodes tr{border:1px solid var(--line);border-radius:9px;margin:0 0 9px;padding:6px 4px}
+ .nodes td{border:0;padding:3px 8px}
+ .nodes td.num{text-align:left;color:var(--mut);font-size:11.5px}
+}
+</style></head><body><div class="wrap">
+
+<h1>진아실장 업무 흐름 도식</h1>
+<p class="sub">조사일 2026-09-15 · 대상 <code>/tmp/aads-wt-runner-6d5f4e89</code>
+ (진아 저장소 워크트리, 추적 파일 389개) · 외부 CDN 없음 · 인라인 SVG</p>
+
+<div class="note">
+<b>이 도식이 근거로 삼은 것은 이 저장소에 실제로 있는 파일뿐이다.</b>
+자료(통장·카드·매출·세금계산서·급여)와 <code>위하고_양식/</code>·<code>작업/원본/</code>·
+<code>.wehago/</code> 는 <code>.gitignore:17</code> 이 전부 막고 있어 여기에 없다.
+그래서 「문서에 적힌 절차」는 확인했지만 「그 절차가 돌아간 자료」는 못 봤다.
+근거를 못 댄 단계는 회색으로 칠하고 <b>미확인</b>이라고 적었다. 짐작으로 채우지 않았다.
+</div>
+
+<div class="kpi">
+ <div><span>흐름 수</span><b>6</b></div>
+ <div><span>전체 단계</span><b>76</b></div>
+ <div><span>자동화된 단계</span><b>49</b></div>
+ <div><span>수작업 단계</span><b>20</b></div>
+ <div><span>미확인</span><b>7</b></div>
+</div>
+
+<table class="summary">
+ <thead><tr><th>흐름</th><th>이름</th><th class="num">단계</th>
+  <th class="num">자동</th><th class="num">수작업</th><th class="num">미확인</th></tr></thead>
+ <tbody><tr><td><b>F1</b></td><td>매입 · 카드대사</td><td class='num'>13</td><td class='num'>7</td><td class='num'>6</td><td class='num'>0</td></tr><tr><td><b>F2</b></td><td>매출 · 수금</td><td class='num'>8</td><td class='num'>4</td><td class='num'>2</td><td class='num'>2</td></tr><tr><td><b>F3</b></td><td>경리 — 전표 · 마감</td><td class='num'>14</td><td class='num'>10</td><td class='num'>3</td><td class='num'>1</td></tr><tr><td><b>F4</b></td><td>인사 · 4대보험</td><td class='num'>12</td><td class='num'>3</td><td class='num'>7</td><td class='num'>2</td></tr><tr><td><b>F5</b></td><td>세금계산서 · 현금영수증</td><td class='num'>14</td><td class='num'>11</td><td class='num'>2</td><td class='num'>1</td></tr><tr><td><b>F6</b></td><td>보고 · 알림</td><td class='num'>15</td><td class='num'>14</td><td class='num'>0</td><td class='num'>1</td></tr></tbody>
+ <tfoot><tr><td colspan="2">합계</td><td class="num">76</td>
+  <td class="num">49</td><td class="num">20</td>
+  <td class="num">7</td></tr></tfoot>
+</table>
+
+<p class="legend">
+ <span><i style="background:#dbeafe;border:1px solid #1d4ed8"></i>자동 — 도구·규칙이 코드로 한다</span>
+ <span><i style="background:#fef3c7;border:1px solid #b45309"></i>수작업 — 사람(또는 코덱스)이 눌러야 한다</span>
+ <span><i style="background:#e5e7eb;border:1px solid #9ca3af"></i>미확인 — 이 저장소에서 근거를 못 찾았다</span>
+</p>
+
+
+<section class="lane" id="F1" style="--lane:#2563eb">
+  <h2><span class="lid">F1</span> 매입 · 카드대사
+    <span class="mini">단계 13 · 자동 7 · 수작업 6 · 미확인 0</span></h2>
+  <div class="scroll"><svg viewBox="0 0 764 532" width="764" height="532" role="img" aria-label="매입 · 카드대사 흐름도" xmlns="http://www.w3.org/2000/svg" font-family="system-ui,'Malgun Gothic',sans-serif">
+<defs><marker id="arF1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-end"><path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/></marker></defs>
+<line x1="178" y1="56.0" x2="206" y2="56.0" stroke="#2563eb" stroke-width="2" marker-end="url(#arF1)"/>
+<line x1="368" y1="56.0" x2="396" y2="56.0" stroke="#2563eb" stroke-width="2" marker-end="url(#arF1)"/>
+<line x1="558" y1="56.0" x2="586" y2="56.0" stroke="#2563eb" stroke-width="2" marker-end="url(#arF1)"/>
+<path d="M667.0,96 L667.0,138 L667.0,138 L667.0,156" fill="none" stroke="#2563eb" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF1)"/>
+<line x1="586" y1="196.0" x2="558" y2="196.0" stroke="#2563eb" stroke-width="2" marker-end="url(#arF1)"/>
+<line x1="396" y1="196.0" x2="368" y2="196.0" stroke="#2563eb" stroke-width="2" marker-end="url(#arF1)"/>
+<line x1="206" y1="196.0" x2="178" y2="196.0" stroke="#2563eb" stroke-width="2" marker-end="url(#arF1)"/>
+<path d="M97.0,236 L97.0,278 L97.0,278 L97.0,296" fill="none" stroke="#2563eb" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF1)"/>
+<line x1="178" y1="336.0" x2="206" y2="336.0" stroke="#2563eb" stroke-width="2" marker-end="url(#arF1)"/>
+<line x1="368" y1="336.0" x2="396" y2="336.0" stroke="#2563eb" stroke-width="2" marker-end="url(#arF1)"/>
+<line x1="558" y1="336.0" x2="586" y2="336.0" stroke="#2563eb" stroke-width="2" marker-end="url(#arF1)"/>
+<path d="M667.0,376 L667.0,418 L667.0,418 L667.0,436" fill="none" stroke="#2563eb" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF1)"/>
+<rect x="16" y="16" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="31" cy="31" r="10" fill="#b45309"/>
+<text x="31" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">1</text>
+<text x="97.0" y="50" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">카드사 승인내역 받기</text>
+<text x="97.0" y="87" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="206" y="16" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="221" cy="31" r="10" fill="#1d4ed8"/>
+<text x="221" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">2</text>
+<text x="287.0" y="50" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">카드 인덱스 만들기</text>
+<text x="287.0" y="87" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="396" y="16" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="411" cy="31" r="10" fill="#b45309"/>
+<text x="411" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">3</text>
+<text x="477.0" y="50" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">1단계 청구액 기준</text>
+<text x="477.0" y="87" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="586" y="16" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="31" r="10" fill="#1d4ed8"/>
+<text x="601" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">4</text>
+<text x="667.0" y="50" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">2단계 미지급금 잔액</text>
+<text x="667.0" y="87" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="171" r="10" fill="#1d4ed8"/>
+<text x="601" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">5</text>
+<text x="667.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">3단계 미전송 전표</text>
+<text x="667.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="396" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="171" r="10" fill="#1d4ed8"/>
+<text x="411" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">6</text>
+<text x="477.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">4단계 카드사별 대조</text>
+<text x="477.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="206" y="156" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="221" cy="171" r="10" fill="#b45309"/>
+<text x="221" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">7</text>
+<text x="287.0" y="190" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">PG·오픈마켓 실판매처</text>
+<text x="287.0" y="227" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="16" y="156" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="31" cy="171" r="10" fill="#b45309"/>
+<text x="31" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">8</text>
+<text x="97.0" y="190" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">광고 삼자대사</text>
+<text x="97.0" y="227" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="16" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="31" cy="311" r="10" fill="#1d4ed8"/>
+<text x="31" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">9</text>
+<text x="97.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">5단계 품명·부서</text>
+<text x="97.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="206" y="296" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="221" cy="311" r="10" fill="#b45309"/>
+<text x="221" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">10</text>
+<text x="287.0" y="330" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">6단계 보고</text>
+<text x="287.0" y="367" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="396" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="311" r="10" fill="#1d4ed8"/>
+<text x="411" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">11</text>
+<text x="477.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">전송 전 관문</text>
+<text x="477.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="296" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="601" cy="311" r="10" fill="#b45309"/>
+<text x="601" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">12</text>
+<text x="667.0" y="330" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">전표전송 (F3)</text>
+<text x="667.0" y="367" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="586" y="436" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="451" r="10" fill="#1d4ed8"/>
+<text x="601" y="455" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">13</text>
+<text x="667.0" y="470" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">8단계 전송 뒤 검산</text>
+<text x="667.0" y="507" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+</svg></div>
+  <p class="hint">↔ 도식이 잘리면 가로로 미세요. 아래 표에 같은 내용이 다 있습니다.</p>
+  <table class="nodes">
+    <thead><tr><th>#</th><th>단계</th><th>무엇을 하나</th><th>근거</th></tr></thead>
+    <tbody><tr class='hand'><td class='num'>1</td><td><b>카드사 승인내역 받기</b><span class='tag hand'>수작업</span></td><td>카드사 사이트에 사람(코덱스)이 로그인해 내려받는다. 카드사별 절차 문서가 따로 있다.</td><td class='ev'><code>규칙/카드사_로그인.md:1</code> <code>규칙/하나카드_승인내역받기.md:1</code> <code>규칙/롯데카드_승인내역받기.md:1</code> <code>규칙/비씨카드_승인내역받기.md:1</code> <code>규칙/코덱스_체크리스트/하나카드.md:1</code></td></tr><tr class='auto'><td class='num'>2</td><td><b>카드 인덱스 만들기</b><span class='tag auto'>자동</span></td><td>`만들기 · 카드 · 거래처 · 점검` 네 갈래. 카드 일을 시작하기 전에 무조건 먼저 돈다.</td><td class='ev'><code>도구/_카드인덱스.py:1</code> <code>규칙/카드인덱스.md:1</code> <code>규칙/_목차.md:32</code></td></tr><tr class='hand'><td class='num'>3</td><td><b>1단계 청구액 기준</b><span class='tag hand'>수작업</span></td><td>카드사 청구액이 기준이다. 청구서는 사람이 받아 놓아야 `청구액읽기()` 가 읽는다.</td><td class='ev'><code>규칙/카드_월마감_절차.md:47</code> <code>도구/카드마감.py:114</code></td></tr><tr class='auto'><td class='num'>4</td><td><b>2단계 미지급금 잔액</b><span class='tag auto'>자동</span></td><td>계정 25300 을 넣고 조회한다. `잔액읽기(계정=&#x27;25300&#x27;)`.</td><td class='ev'><code>규칙/카드_월마감_절차.md:61</code> <code>도구/카드마감.py:93</code> <code>도구/위하고.py:534</code></td></tr><tr class='auto'><td class='num'>5</td><td><b>3단계 미전송 전표</b><span class='tag auto'>자동</span></td><td>미전송 카드전표를 격자에서 읽어 온다. `미전송읽기()` · `목록잡기()`.</td><td class='ev'><code>규칙/카드_월마감_절차.md:80</code> <code>도구/카드마감.py:65</code> <code>도구/위하고.py:780</code></td></tr><tr class='auto'><td class='num'>6</td><td><b>4단계 카드사별 대조</b><span class='tag auto'>자동</span></td><td>잔액+미전송 = 청구액. **총액이 아니라 카드사별로** 맞아야 한다.</td><td class='ev'><code>규칙/카드_월마감_절차.md:103</code> <code>도구/카드마감.py:140</code> <code>규칙/대사_다시는이러지마라.md:201</code></td></tr><tr class='hand'><td class='num'>7</td><td><b>PG·오픈마켓 실판매처</b><span class='tag hand'>수작업</span></td><td>가맹점명이 중개사면 실판매처를 승인번호로 찾는다. 못 찾으면 공제 없는 일반전표.</td><td class='ev'><code>규칙/중개사_조회.md:1</code> <code>규칙/카드_월마감_절차.md:201</code> <code>규칙/계정과목_매핑.md:111</code></td></tr><tr class='hand'><td class='num'>8</td><td><b>광고 삼자대사</b><span class='tag hand'>수작업</span></td><td>사이트 · 카드 · 통장 셋이 다 맞아야 한다. 하나라도 건너뛰면 틀린다.</td><td class='ev'><code>규칙/광고_삼자대사.md:8</code> <code>규칙/광고_다시는이러지마라.md:1</code></td></tr><tr class='auto'><td class='num'>9</td><td><b>5단계 품명·부서</b><span class='tag auto'>자동</span></td><td>품명은 `용도(품목)-부서`. 부서는 카드로 정해진다. 짐작 금지. 다만 채움 도구는 2026-08월 작업표 전용 경로로 굳어 있다(도구/_8월품명채움.py:13).</td><td class='ev'><code>규칙/카드_월마감_절차.md:129</code> <code>규칙/카드_부서.md:1</code> <code>도구/_8월품명채움.py:1</code></td></tr><tr class='hand'><td class='num'>10</td><td><b>6단계 보고</b><span class='tag hand'>수작업</span></td><td>말하는 법이 정해져 있다. 「이것만 보내면 됩니다」는 금액이 맞을 때만 쓰는 말.</td><td class='ev'><code>규칙/카드_월마감_절차.md:147</code> <code>규칙/대사_다시는이러지마라.md:163</code></td></tr><tr class='auto'><td class='num'>11</td><td><b>전송 전 관문</b><span class='tag auto'>자동</span></td><td>이 관문을 통과해야 `--사장님승인` 을 붙일 수 있다. 종료코드 0 통과 / 1 반려 / 2 못 쟀다.</td><td class='ev'><code>도구/_보내기전.py:1</code> <code>도구/_외부검증.py:7</code> <code>규칙/_관문실측_20260905.txt:1</code> <code>규칙/코덱스_체크리스트/_누르기전검사.md:1</code></td></tr><tr class='hand'><td class='num'>12</td><td><b>전표전송 (F3)</b><span class='tag hand'>수작업</span></td><td>`전송하기()` 는 기본이 `눌러라=False` — 숫자만 읽고 안 누른다. 누르는 것은 사람이다.</td><td class='ev'><code>도구/위하고.py:826</code> <code>.claude/agents/wehago-team.md:98</code> <code>.claude/agents/wehago-team.md:13</code></td></tr><tr class='auto'><td class='num'>13</td><td><b>8단계 전송 뒤 검산</b><span class='tag auto'>자동</span></td><td>총액이 맞는 것은 「얹혔다」는 뜻일 뿐이다. 거래처 한 곳씩 다시 견준다.</td><td class='ev'><code>규칙/카드_월마감_절차.md:189</code> <code>도구/_전송뒤검산.py:1</code></td></tr></tbody>
+  </table>
+</section>
+<section class="lane" id="F2" style="--lane:#0891b2">
+  <h2><span class="lid">F2</span> 매출 · 수금
+    <span class="mini">단계 8 · 자동 4 · 수작업 2 · 미확인 2</span></h2>
+  <div class="scroll"><svg viewBox="0 0 764 252" width="764" height="252" role="img" aria-label="매출 · 수금 흐름도" xmlns="http://www.w3.org/2000/svg" font-family="system-ui,'Malgun Gothic',sans-serif">
+<defs><marker id="arF2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-end"><path d="M0,0 L10,5 L0,10 z" fill="#0891b2"/></marker></defs>
+<line x1="178" y1="56.0" x2="206" y2="56.0" stroke="#0891b2" stroke-width="2" marker-end="url(#arF2)"/>
+<line x1="368" y1="56.0" x2="396" y2="56.0" stroke="#0891b2" stroke-width="2" marker-end="url(#arF2)"/>
+<line x1="558" y1="56.0" x2="586" y2="56.0" stroke="#0891b2" stroke-width="2" marker-end="url(#arF2)"/>
+<path d="M667.0,96 L667.0,138 L667.0,138 L667.0,156" fill="none" stroke="#0891b2" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF2)"/>
+<line x1="586" y1="196.0" x2="558" y2="196.0" stroke="#0891b2" stroke-width="2" marker-end="url(#arF2)"/>
+<line x1="396" y1="196.0" x2="368" y2="196.0" stroke="#0891b2" stroke-width="2" marker-end="url(#arF2)"/>
+<line x1="206" y1="196.0" x2="178" y2="196.0" stroke="#0891b2" stroke-width="2" marker-end="url(#arF2)"/>
+<rect x="16" y="16" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="31" cy="31" r="10" fill="#b45309"/>
+<text x="31" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">1</text>
+<text x="97.0" y="50" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">사이트별 매출 받기</text>
+<text x="97.0" y="87" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="206" y="16" width="162" height="80" rx="9" fill="#e5e7eb" stroke="#9ca3af" stroke-width="2"/>
+<circle cx="221" cy="31" r="10" fill="#9ca3af"/>
+<text x="221" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">2</text>
+<text x="287.0" y="50" font-size="12.5" fill="#4b5563" text-anchor="middle" font-weight="600">매출 원본 자리</text>
+<text x="287.0" y="87" font-size="10.5" fill="#9ca3af" text-anchor="middle">미확인</text>
+<rect x="396" y="16" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="31" r="10" fill="#1d4ed8"/>
+<text x="411" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">3</text>
+<text x="477.0" y="50" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">매출채권 대사</text>
+<text x="477.0" y="87" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="16" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="31" r="10" fill="#1d4ed8"/>
+<text x="601" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">4</text>
+<text x="667.0" y="50" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">연령분석 30/60/90</text>
+<text x="667.0" y="87" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="156" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="601" cy="171" r="10" fill="#b45309"/>
+<text x="601" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">5</text>
+<text x="667.0" y="190" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">90일 초과 대손검토</text>
+<text x="667.0" y="227" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="396" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="171" r="10" fill="#1d4ed8"/>
+<text x="411" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">6</text>
+<text x="477.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">통장 입금 → 채권회수</text>
+<text x="477.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="206" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="221" cy="171" r="10" fill="#1d4ed8"/>
+<text x="221" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">7</text>
+<text x="287.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">거래처 불명 입금</text>
+<text x="287.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="16" y="156" width="162" height="80" rx="9" fill="#e5e7eb" stroke="#9ca3af" stroke-width="2"/>
+<circle cx="31" cy="171" r="10" fill="#9ca3af"/>
+<text x="31" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">8</text>
+<text x="97.0" y="190" font-size="12.5" fill="#4b5563" text-anchor="middle" font-weight="600">매출 정산 절차 문서</text>
+<text x="97.0" y="227" font-size="10.5" fill="#9ca3af" text-anchor="middle">미확인</text>
+</svg></div>
+  <p class="hint">↔ 도식이 잘리면 가로로 미세요. 아래 표에 같은 내용이 다 있습니다.</p>
+  <table class="nodes">
+    <thead><tr><th>#</th><th>단계</th><th>무엇을 하나</th><th>근거</th></tr></thead>
+    <tbody><tr class='hand'><td class='num'>1</td><td><b>사이트별 매출 받기</b><span class='tag hand'>수작업</span></td><td>사업자는 하나인데 판매 사이트가 여럿이다. 하나도 빠짐없이 받아야 매출이 안 빈다.</td><td class='ev'><code>규칙/계정_회사구분.md:28</code> <code>규칙/계정_회사구분.md:32</code></td></tr><tr class='unk'><td class='num'>2</td><td><b>매출 원본 자리</b><span class='tag unk'>미확인</span></td><td>「라일론 매출」 폴더가 한 단계 위(E:\claude\)에 있다고만 적혀 있다. 이 저장소에는 폴더도 파일도 없어 실물을 못 봤다.</td><td class='ev'><code>AGENTS.md:39</code></td></tr><tr class='auto'><td class='num'>3</td><td><b>매출채권 대사</b><span class='tag auto'>자동</span></td><td>거래처원장 ↔ 수금내역. 대사팀이 맡는다.</td><td class='ev'><code>.claude/agents/reconciliation-team.md:42</code></td></tr><tr class='auto'><td class='num'>4</td><td><b>연령분석 30/60/90</b><span class='tag auto'>자동</span></td><td>거래처별 잔액에 연령분석을 붙인다.</td><td class='ev'><code>.claude/agents/reconciliation-team.md:44</code></td></tr><tr class='hand'><td class='num'>5</td><td><b>90일 초과 대손검토</b><span class='tag hand'>수작업</span></td><td>목록만 만든다. **판단은 사람이 한다.**</td><td class='ev'><code>.claude/agents/reconciliation-team.md:45</code></td></tr><tr class='auto'><td class='num'>6</td><td><b>통장 입금 → 채권회수</b><span class='tag auto'>자동</span></td><td>거래처명이 맞으면 매출채권 회수로 잡고 거래처원장과 대사한다.</td><td class='ev'><code>규칙/계정과목_매핑.md:55</code> <code>규칙/통장_자동매핑.md:32</code></td></tr><tr class='auto'><td class='num'>7</td><td><b>거래처 불명 입금</b><span class='tag auto'>자동</span></td><td>**가수금 처리 금지.** 반드시 확인필요로 뺀다.</td><td class='ev'><code>규칙/계정과목_매핑.md:60</code></td></tr><tr class='unk'><td class='num'>8</td><td><b>매출 정산 절차 문서</b><span class='tag unk'>미확인</span></td><td>재무부장이 「매출정산」을 맡는다고만 되어 있고(.claude/agents/재무부장.md:3), 절차를 적은 규칙 문서도 도구도 이 저장소에서 못 찾았다.</td><td class='ev'><span class="none">근거 없음 — 미확인</span></td></tr></tbody>
+  </table>
+</section>
+<section class="lane" id="F3" style="--lane:#7c3aed">
+  <h2><span class="lid">F3</span> 경리 — 전표 · 마감
+    <span class="mini">단계 14 · 자동 10 · 수작업 3 · 미확인 1</span></h2>
+  <div class="scroll"><svg viewBox="0 0 764 532" width="764" height="532" role="img" aria-label="경리 — 전표 · 마감 흐름도" xmlns="http://www.w3.org/2000/svg" font-family="system-ui,'Malgun Gothic',sans-serif">
+<defs><marker id="arF3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-end"><path d="M0,0 L10,5 L0,10 z" fill="#7c3aed"/></marker></defs>
+<line x1="178" y1="56.0" x2="206" y2="56.0" stroke="#7c3aed" stroke-width="2" marker-end="url(#arF3)"/>
+<line x1="368" y1="56.0" x2="396" y2="56.0" stroke="#7c3aed" stroke-width="2" marker-end="url(#arF3)"/>
+<line x1="558" y1="56.0" x2="586" y2="56.0" stroke="#7c3aed" stroke-width="2" marker-end="url(#arF3)"/>
+<path d="M667.0,96 L667.0,138 L667.0,138 L667.0,156" fill="none" stroke="#7c3aed" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF3)"/>
+<line x1="586" y1="196.0" x2="558" y2="196.0" stroke="#7c3aed" stroke-width="2" marker-end="url(#arF3)"/>
+<line x1="396" y1="196.0" x2="368" y2="196.0" stroke="#7c3aed" stroke-width="2" marker-end="url(#arF3)"/>
+<line x1="206" y1="196.0" x2="178" y2="196.0" stroke="#7c3aed" stroke-width="2" marker-end="url(#arF3)"/>
+<path d="M97.0,236 L97.0,278 L97.0,278 L97.0,296" fill="none" stroke="#7c3aed" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF3)"/>
+<line x1="178" y1="336.0" x2="206" y2="336.0" stroke="#7c3aed" stroke-width="2" marker-end="url(#arF3)"/>
+<line x1="368" y1="336.0" x2="396" y2="336.0" stroke="#7c3aed" stroke-width="2" marker-end="url(#arF3)"/>
+<line x1="558" y1="336.0" x2="586" y2="336.0" stroke="#7c3aed" stroke-width="2" marker-end="url(#arF3)"/>
+<path d="M667.0,376 L667.0,418 L667.0,418 L667.0,436" fill="none" stroke="#7c3aed" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF3)"/>
+<line x1="586" y1="476.0" x2="558" y2="476.0" stroke="#7c3aed" stroke-width="2" marker-end="url(#arF3)"/>
+<rect x="16" y="16" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="31" cy="31" r="10" fill="#b45309"/>
+<text x="31" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">1</text>
+<text x="97.0" y="50" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">원본 넣기 작업/원본</text>
+<text x="97.0" y="87" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="206" y="16" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="221" cy="31" r="10" fill="#b45309"/>
+<text x="221" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">2</text>
+<text x="287.0" y="50" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">양식 확인 (없으면</text>
+<text x="287.0" y="65" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">멈춤)</text>
+<text x="287.0" y="87" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="396" y="16" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="31" r="10" fill="#1d4ed8"/>
+<text x="411" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">3</text>
+<text x="477.0" y="50" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">원본 읽기·정규화</text>
+<text x="477.0" y="87" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="16" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="31" r="10" fill="#1d4ed8"/>
+<text x="601" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">4</text>
+<text x="667.0" y="50" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">계정과목 매핑</text>
+<text x="667.0" y="87" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="171" r="10" fill="#1d4ed8"/>
+<text x="601" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">5</text>
+<text x="667.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">확인필요 분리</text>
+<text x="667.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="396" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="171" r="10" fill="#1d4ed8"/>
+<text x="411" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">6</text>
+<text x="477.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">검증 (대차·잔액·번호)</text>
+<text x="477.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="206" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="221" cy="171" r="10" fill="#1d4ed8"/>
+<text x="221" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">7</text>
+<text x="287.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">업로드 엑셀 출력</text>
+<text x="287.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="16" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="31" cy="171" r="10" fill="#1d4ed8"/>
+<text x="31" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">8</text>
+<text x="97.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">위하고 화면 채우기</text>
+<text x="97.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="16" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="31" cy="311" r="10" fill="#1d4ed8"/>
+<text x="31" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">9</text>
+<text x="97.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">서린 검증 · 반려</text>
+<text x="97.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="206" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="221" cy="311" r="10" fill="#1d4ed8"/>
+<text x="221" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">10</text>
+<text x="287.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">감찰관 관문</text>
+<text x="287.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="396" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="311" r="10" fill="#1d4ed8"/>
+<text x="411" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">11</text>
+<text x="477.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">은행 대사</text>
+<text x="477.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="311" r="10" fill="#1d4ed8"/>
+<text x="601" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">12</text>
+<text x="667.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">미지급금·선급금 정리</text>
+<text x="667.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="436" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="601" cy="451" r="10" fill="#b45309"/>
+<text x="601" y="455" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">13</text>
+<text x="667.0" y="470" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">전표전송 · 마감 버튼</text>
+<text x="667.0" y="507" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="396" y="436" width="162" height="80" rx="9" fill="#e5e7eb" stroke="#9ca3af" stroke-width="2"/>
+<circle cx="411" cy="451" r="10" fill="#9ca3af"/>
+<text x="411" y="455" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">14</text>
+<text x="477.0" y="470" font-size="12.5" fill="#4b5563" text-anchor="middle" font-weight="600">월마감 · 결산 절차</text>
+<text x="477.0" y="507" font-size="10.5" fill="#9ca3af" text-anchor="middle">미확인</text>
+</svg></div>
+  <p class="hint">↔ 도식이 잘리면 가로로 미세요. 아래 표에 같은 내용이 다 있습니다.</p>
+  <table class="nodes">
+    <thead><tr><th>#</th><th>단계</th><th>무엇을 하나</th><th>근거</th></tr></thead>
+    <tbody><tr class='hand'><td class='num'>1</td><td><b>원본 넣기 작업/원본</b><span class='tag hand'>수작업</span></td><td>사람이 처리할 파일을 `작업/원본/` 에 넣는 것이 시작이다. 이 저장소에는 그 폴더가 없다(자료는 깃에 안 올린다 — .gitignore:17).</td><td class='ev'><code>시작하기.md:58</code> <code>시작하기.md:115</code></td></tr><tr class='hand'><td class='num'>2</td><td><b>양식 확인 (없으면 멈춤)</b><span class='tag hand'>수작업</span></td><td>`위하고_양식/` 의 빈 서식이 없으면 **일부러 멈춘다.** 컬럼을 창작하지 않는다.</td><td class='ev'><code>.claude/agents/voucher-team.md:14</code> <code>시작하기.md:50</code></td></tr><tr class='auto'><td class='num'>3</td><td><b>원본 읽기·정규화</b><span class='tag auto'>자동</span></td><td>헤더 행 찾기, 금액 쉼표·괄호 정규화, 날짜 YYYY-MM-DD 통일.</td><td class='ev'><code>.claude/agents/voucher-team.md:27</code></td></tr><tr class='auto'><td class='num'>4</td><td><b>계정과목 매핑</b><span class='tag auto'>자동</span></td><td>표를 **위에서부터 순서대로** 적용한다. 먼저 걸리는 규칙이 이긴다.</td><td class='ev'><code>규칙/계정과목_매핑.md:7</code> <code>규칙/통장_자동매핑.md:8</code> <code>.claude/agents/voucher-team.md:33</code></td></tr><tr class='auto'><td class='num'>5</td><td><b>확인필요 분리</b><span class='tag auto'>자동</span></td><td>어느 규칙에도 안 걸리면 비우고 확인필요. 사유를 구체적으로 적는다.</td><td class='ev'><code>규칙/계정과목_매핑.md:92</code> <code>.claude/agents/voucher-team.md:55</code> <code>규칙/통장_자동매핑.md:93</code></td></tr><tr class='auto'><td class='num'>6</td><td><b>검증 (대차·잔액·번호)</b><span class='tag auto'>자동</span></td><td>차변합계=대변합계, 기초+입금−출금=기말, 사업자번호 체크섬. 눈으로 안 센다.</td><td class='ev'><code>도구/검증.py:1</code> <code>규칙/검증규칙.md:8</code> <code>.claude/agents/voucher-team.md:39</code></td></tr><tr class='auto'><td class='num'>7</td><td><b>업로드 엑셀 출력</b><span class='tag auto'>자동</span></td><td>시트 둘 — `업로드` 와 `확인필요`. 확인필요는 업로드 시트에 안 넣는다.</td><td class='ev'><code>.claude/agents/voucher-team.md:47</code></td></tr><tr class='auto'><td class='num'>8</td><td><b>위하고 화면 채우기</b><span class='tag auto'>자동</span></td><td>거래처·계정을 화면에 채운다. 워커가 떠 있어야 한다(wehago-team.md:20).</td><td class='ev'><code>도구/위하고_입력.py:116</code> <code>도구/위하고.py:625</code> <code>.claude/agents/wehago-team.md:77</code> <code>규칙/위하고_조작_실측.md:1</code></td></tr><tr class='auto'><td class='num'>9</td><td><b>서린 검증 · 반려</b><span class='tag auto'>자동</span></td><td>`서린 → 진식 → 되받기` 한 바퀴. 근거를 못 대면 반려한다. 만들지 않는다.</td><td class='ev'><code>도구/_검증.py:4</code> <code>.claude/agents/서린.md:59</code> <code>도구/_반려.py:1</code></td></tr><tr class='auto'><td class='num'>10</td><td><b>감찰관 관문</b><span class='tag auto'>자동</span></td><td>`관문 일시작` 이 막으면 시작을 못 한다. `끝냄` 은 근거가 있어야 받는다.</td><td class='ev'><code>도구/_감찰관.py:3262</code> <code>도구/_감찰관.py:3269</code> <code>CLAUDE.md:28</code></td></tr><tr class='auto'><td class='num'>11</td><td><b>은행 대사</b><span class='tag auto'>자동</span></td><td>금액 + 일자 ±3일로 매칭. 일자만 다르면 기간귀속 차이로 따로 분류한다.</td><td class='ev'><code>.claude/agents/reconciliation-team.md:20</code> <code>규칙/대사_다시는이러지마라.md:96</code></td></tr><tr class='auto'><td class='num'>12</td><td><b>미지급금·선급금 정리</b><span class='tag auto'>자동</span></td><td>거래처별 잔액 재계산 → 사유별 분류 → 요청서류 목록까지.</td><td class='ev'><code>도구/_미지급선급_정리.py:1</code> <code>도구/_미지급선급_산출.py:1</code></td></tr><tr class='hand'><td class='num'>13</td><td><b>전표전송 · 마감 버튼</b><span class='tag hand'>수작업</span></td><td>전표전송·발행·마감·삭제는 누르지 않는다. 마감된 전표는 안 바뀐다.</td><td class='ev'><code>.claude/agents/wehago-team.md:13</code> <code>도구/위하고.py:826</code> <code>규칙/위하고_화면.md:489</code></td></tr><tr class='unk'><td class='num'>14</td><td><b>월마감 · 결산 절차</b><span class='tag unk'>미확인</span></td><td>카드 월마감 절차(규칙/카드_월마감_절차.md)만 있다. 전사 월마감·결산 순서를 적은 문서를 이 저장소에서 못 찾았다.</td><td class='ev'><span class="none">근거 없음 — 미확인</span></td></tr></tbody>
+  </table>
+</section>
+<section class="lane" id="F4" style="--lane:#db2777">
+  <h2><span class="lid">F4</span> 인사 · 4대보험
+    <span class="mini">단계 12 · 자동 3 · 수작업 7 · 미확인 2</span></h2>
+  <div class="scroll"><svg viewBox="0 0 764 392" width="764" height="392" role="img" aria-label="인사 · 4대보험 흐름도" xmlns="http://www.w3.org/2000/svg" font-family="system-ui,'Malgun Gothic',sans-serif">
+<defs><marker id="arF4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-end"><path d="M0,0 L10,5 L0,10 z" fill="#db2777"/></marker></defs>
+<line x1="178" y1="56.0" x2="206" y2="56.0" stroke="#db2777" stroke-width="2" marker-end="url(#arF4)"/>
+<line x1="368" y1="56.0" x2="396" y2="56.0" stroke="#db2777" stroke-width="2" marker-end="url(#arF4)"/>
+<line x1="558" y1="56.0" x2="586" y2="56.0" stroke="#db2777" stroke-width="2" marker-end="url(#arF4)"/>
+<path d="M667.0,96 L667.0,138 L667.0,138 L667.0,156" fill="none" stroke="#db2777" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF4)"/>
+<line x1="586" y1="196.0" x2="558" y2="196.0" stroke="#db2777" stroke-width="2" marker-end="url(#arF4)"/>
+<line x1="396" y1="196.0" x2="368" y2="196.0" stroke="#db2777" stroke-width="2" marker-end="url(#arF4)"/>
+<line x1="206" y1="196.0" x2="178" y2="196.0" stroke="#db2777" stroke-width="2" marker-end="url(#arF4)"/>
+<path d="M97.0,236 L97.0,278 L97.0,278 L97.0,296" fill="none" stroke="#db2777" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF4)"/>
+<line x1="178" y1="336.0" x2="206" y2="336.0" stroke="#db2777" stroke-width="2" marker-end="url(#arF4)"/>
+<line x1="368" y1="336.0" x2="396" y2="336.0" stroke="#db2777" stroke-width="2" marker-end="url(#arF4)"/>
+<line x1="558" y1="336.0" x2="586" y2="336.0" stroke="#db2777" stroke-width="2" marker-end="url(#arF4)"/>
+<rect x="16" y="16" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="31" cy="31" r="10" fill="#b45309"/>
+<text x="31" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">1</text>
+<text x="97.0" y="50" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">출퇴근카드 원본 접수</text>
+<text x="97.0" y="87" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="206" y="16" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="221" cy="31" r="10" fill="#b45309"/>
+<text x="221" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">2</text>
+<text x="287.0" y="50" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">카드 판독 → 추출.</text>
+<text x="287.0" y="65" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">json</text>
+<text x="287.0" y="87" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="396" y="16" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="31" r="10" fill="#1d4ed8"/>
+<text x="411" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">3</text>
+<text x="477.0" y="50" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">근태 계산</text>
+<text x="477.0" y="87" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="16" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="601" cy="31" r="10" fill="#b45309"/>
+<text x="601" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">4</text>
+<text x="667.0" y="50" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">복지수당 칸 기입</text>
+<text x="667.0" y="87" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="586" y="156" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="601" cy="171" r="10" fill="#b45309"/>
+<text x="601" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">5</text>
+<text x="667.0" y="190" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">급여 계산 · 급여대장</text>
+<text x="667.0" y="227" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="396" y="156" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="411" cy="171" r="10" fill="#b45309"/>
+<text x="411" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">6</text>
+<text x="477.0" y="190" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">급여 ↔ 공단 대조</text>
+<text x="477.0" y="227" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="206" y="156" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="221" cy="171" r="10" fill="#b45309"/>
+<text x="221" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">7</text>
+<text x="287.0" y="190" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">4대보험 고지 ↔ 통장</text>
+<text x="287.0" y="227" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="16" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="31" cy="171" r="10" fill="#1d4ed8"/>
+<text x="31" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">8</text>
+<text x="97.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">예수금 배정 2540</text>
+<text x="97.0" y="205" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">0/28400</text>
+<text x="97.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="16" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="31" cy="311" r="10" fill="#1d4ed8"/>
+<text x="31" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">9</text>
+<text x="97.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">원천세·지급명세서 기한</text>
+<text x="97.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="206" y="296" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="221" cy="311" r="10" fill="#b45309"/>
+<text x="221" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">10</text>
+<text x="287.0" y="330" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">4대보험 신고 제출</text>
+<text x="287.0" y="367" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="396" y="296" width="162" height="80" rx="9" fill="#e5e7eb" stroke="#9ca3af" stroke-width="2"/>
+<circle cx="411" cy="311" r="10" fill="#9ca3af"/>
+<text x="411" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">11</text>
+<text x="477.0" y="330" font-size="12.5" fill="#4b5563" text-anchor="middle" font-weight="600">연말정산</text>
+<text x="477.0" y="367" font-size="10.5" fill="#9ca3af" text-anchor="middle">미확인</text>
+<rect x="586" y="296" width="162" height="80" rx="9" fill="#e5e7eb" stroke="#9ca3af" stroke-width="2"/>
+<circle cx="601" cy="311" r="10" fill="#9ca3af"/>
+<text x="601" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">12</text>
+<text x="667.0" y="330" font-size="12.5" fill="#4b5563" text-anchor="middle" font-weight="600">근로계약 · 입퇴사</text>
+<text x="667.0" y="367" font-size="10.5" fill="#9ca3af" text-anchor="middle">미확인</text>
+</svg></div>
+  <p class="hint">↔ 도식이 잘리면 가로로 미세요. 아래 표에 같은 내용이 다 있습니다.</p>
+  <table class="nodes">
+    <thead><tr><th>#</th><th>단계</th><th>무엇을 하나</th><th>근거</th></tr></thead>
+    <tbody><tr class='hand'><td class='num'>1</td><td><b>출퇴근카드 원본 접수</b><span class='tag hand'>수작업</span></td><td>원본이 정식 접수경로를 안 탄다. 파일명도 매달 다르다.</td><td class='ev'><code>규칙/근태_출퇴근카드_처리.md:7</code> <code>규칙/근태_출퇴근카드_처리.md:15</code></td></tr><tr class='hand'><td class='num'>2</td><td><b>카드 판독 → 추출.json</b><span class='tag hand'>수작업</span></td><td>**사람이 카드를 눈으로 읽어 채운다.** 앞/뒷면 가정이 실측과 달랐던 적이 있다.</td><td class='ev'><code>도구/_근태계산.py:5</code> <code>규칙/근태_출퇴근카드_처리.md:30</code></td></tr><tr class='auto'><td class='num'>3</td><td><b>근태 계산</b><span class='tag auto'>자동</span></td><td>30분 단위 올림 × 11,000원. 배송팀 09–18, 그 외 10–19.</td><td class='ev'><code>도구/_근태계산.py:1</code> <code>규칙/근태_출퇴근카드_처리.md:65</code></td></tr><tr class='hand'><td class='num'>4</td><td><b>복지수당 칸 기입</b><span class='tag hand'>수작업</span></td><td>전월 값이 잔재로 남아 있어 **지우고 다시 넣어야 한다.** 그 삭제는 도구가 안 한다.</td><td class='ev'><code>도구/_근태계산.py:17</code></td></tr><tr class='hand'><td class='num'>5</td><td><b>급여 계산 · 급여대장</b><span class='tag hand'>수작업</span></td><td>인사부장이 맡는다. 계산·검증까지만 하고 **집행은 사람이 한다**(인사부장.md:46).</td><td class='ev'><code>.claude/agents/인사부장.md:36</code></td></tr><tr class='hand'><td class='num'>6</td><td><b>급여 ↔ 공단 대조</b><span class='tag hand'>수작업</span></td><td>⚠ 목차가 **전 직원 일치 검증은 아직 안 끝났다**고 적어 두었다. 차이를 적었다고 맞은 것이 아니다.</td><td class='ev'><code>규칙/코덱스_체크리스트/라일론_급여공단대조_방법과인계_20260906.md:1</code> <code>규칙/_목차.md:59</code></td></tr><tr class='hand'><td class='num'>7</td><td><b>4대보험 고지 ↔ 통장</b><span class='tag hand'>수작업</span></td><td>고용·건강·연금·산재 1~7월 대사 결과가 목차에 요약돼 있다. 원문은 `작업/결과/_외부수집함/` 이라 이 저장소에는 없다.</td><td class='ev'><code>규칙/_목차.md:77</code> <code>규칙/_목차.md:78</code></td></tr><tr class='auto'><td class='num'>8</td><td><b>예수금 배정 25400/28400</b><span class='tag auto'>자동</span></td><td>전례로 검증된 18건 전용. 소득세등예수 4건은 계정도 25400→28400 으로 같이 고친다.</td><td class='ev'><code>도구/_예수금배정_00123_00124.py:1</code> <code>규칙/계정과목_매핑.md:21</code></td></tr><tr class='auto'><td class='num'>9</td><td><b>원천세·지급명세서 기한</b><span class='tag auto'>자동</span></td><td>매월 10일 — 원천세·4대보험 납부·일용 지급명세서·간이지급명세서. 브리핑이 D-day 를 센다.</td><td class='ev'><code>규칙/세무일정.json:11</code> <code>도구/_아침브리핑.py:1</code></td></tr><tr class='hand'><td class='num'>10</td><td><b>4대보험 신고 제출</b><span class='tag hand'>수작업</span></td><td>자료를 만들고 「제출해 주십시오」라고 보고한다. 제출은 사람이 한다.</td><td class='ev'><code>.claude/agents/인사부장.md:47</code></td></tr><tr class='unk'><td class='num'>11</td><td><b>연말정산</b><span class='tag unk'>미확인</span></td><td>맡는 일 표에 한 줄 있을 뿐, 절차 규칙도 도구도 못 찾았다. 인사부장.md:55 — 「인사 대장에 전례가 없는 판단(거의 전부)」.</td><td class='ev'><code>.claude/agents/인사부장.md:42</code></td></tr><tr class='unk'><td class='num'>12</td><td><b>근로계약 · 입퇴사</b><span class='tag unk'>미확인</span></td><td>맡는 일로만 적혀 있다. 양식도 절차 문서도 이 저장소에 없다.</td><td class='ev'><code>.claude/agents/인사부장.md:39</code> <code>.claude/agents/인사부장.md:40</code></td></tr></tbody>
+  </table>
+</section>
+<section class="lane" id="F5" style="--lane:#ea580c">
+  <h2><span class="lid">F5</span> 세금계산서 · 현금영수증
+    <span class="mini">단계 14 · 자동 11 · 수작업 2 · 미확인 1</span></h2>
+  <div class="scroll"><svg viewBox="0 0 764 532" width="764" height="532" role="img" aria-label="세금계산서 · 현금영수증 흐름도" xmlns="http://www.w3.org/2000/svg" font-family="system-ui,'Malgun Gothic',sans-serif">
+<defs><marker id="arF5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-end"><path d="M0,0 L10,5 L0,10 z" fill="#ea580c"/></marker></defs>
+<line x1="178" y1="56.0" x2="206" y2="56.0" stroke="#ea580c" stroke-width="2" marker-end="url(#arF5)"/>
+<line x1="368" y1="56.0" x2="396" y2="56.0" stroke="#ea580c" stroke-width="2" marker-end="url(#arF5)"/>
+<line x1="558" y1="56.0" x2="586" y2="56.0" stroke="#ea580c" stroke-width="2" marker-end="url(#arF5)"/>
+<path d="M667.0,96 L667.0,138 L667.0,138 L667.0,156" fill="none" stroke="#ea580c" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF5)"/>
+<line x1="586" y1="196.0" x2="558" y2="196.0" stroke="#ea580c" stroke-width="2" marker-end="url(#arF5)"/>
+<line x1="396" y1="196.0" x2="368" y2="196.0" stroke="#ea580c" stroke-width="2" marker-end="url(#arF5)"/>
+<line x1="206" y1="196.0" x2="178" y2="196.0" stroke="#ea580c" stroke-width="2" marker-end="url(#arF5)"/>
+<path d="M97.0,236 L97.0,278 L97.0,278 L97.0,296" fill="none" stroke="#ea580c" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF5)"/>
+<line x1="178" y1="336.0" x2="206" y2="336.0" stroke="#ea580c" stroke-width="2" marker-end="url(#arF5)"/>
+<line x1="368" y1="336.0" x2="396" y2="336.0" stroke="#ea580c" stroke-width="2" marker-end="url(#arF5)"/>
+<line x1="558" y1="336.0" x2="586" y2="336.0" stroke="#ea580c" stroke-width="2" marker-end="url(#arF5)"/>
+<path d="M667.0,376 L667.0,418 L667.0,418 L667.0,436" fill="none" stroke="#ea580c" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF5)"/>
+<line x1="586" y1="476.0" x2="558" y2="476.0" stroke="#ea580c" stroke-width="2" marker-end="url(#arF5)"/>
+<rect x="16" y="16" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="31" cy="31" r="10" fill="#b45309"/>
+<text x="31" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">1</text>
+<text x="97.0" y="50" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">대량발행 양식 확인</text>
+<text x="97.0" y="87" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="206" y="16" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="221" cy="31" r="10" fill="#1d4ed8"/>
+<text x="221" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">2</text>
+<text x="287.0" y="50" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">발행 대상 정리</text>
+<text x="287.0" y="87" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="396" y="16" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="31" r="10" fill="#1d4ed8"/>
+<text x="411" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">3</text>
+<text x="477.0" y="50" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">필수항목 누락 → 제외</text>
+<text x="477.0" y="87" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="16" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="31" r="10" fill="#1d4ed8"/>
+<text x="601" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">4</text>
+<text x="667.0" y="50" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">사업자번호 체크섬</text>
+<text x="667.0" y="87" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="171" r="10" fill="#1d4ed8"/>
+<text x="601" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">5</text>
+<text x="667.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">세액 = 공급가액 ×</text>
+<text x="667.0" y="205" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">10%</text>
+<text x="667.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="396" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="171" r="10" fill="#1d4ed8"/>
+<text x="411" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">6</text>
+<text x="477.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">중복 발행 검사</text>
+<text x="477.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="206" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="221" cy="171" r="10" fill="#1d4ed8"/>
+<text x="221" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">7</text>
+<text x="287.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">발행분 / 보류 엑셀</text>
+<text x="287.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="16" y="156" width="162" height="80" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+<circle cx="31" cy="171" r="10" fill="#b45309"/>
+<text x="31" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">8</text>
+<text x="97.0" y="190" font-size="12.5" fill="#78350f" text-anchor="middle" font-weight="600">발행 버튼</text>
+<text x="97.0" y="227" font-size="10.5" fill="#b45309" text-anchor="middle">수작업</text>
+<rect x="16" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="31" cy="311" r="10" fill="#1d4ed8"/>
+<text x="31" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">9</text>
+<text x="97.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">영수증 스캔 OCR</text>
+<text x="97.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="206" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="221" cy="311" r="10" fill="#1d4ed8"/>
+<text x="221" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">10</text>
+<text x="287.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">현금영수증 군 분류</text>
+<text x="287.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="396" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="311" r="10" fill="#1d4ed8"/>
+<text x="411" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">11</text>
+<text x="477.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">품명 전례 대조</text>
+<text x="477.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="311" r="10" fill="#1d4ed8"/>
+<text x="601" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">12</text>
+<text x="667.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">매입세액 불공제 판정</text>
+<text x="667.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="436" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="451" r="10" fill="#1d4ed8"/>
+<text x="601" y="455" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">13</text>
+<text x="667.0" y="470" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">적격증빙 · 기간귀속</text>
+<text x="667.0" y="507" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="396" y="436" width="162" height="80" rx="9" fill="#e5e7eb" stroke="#9ca3af" stroke-width="2"/>
+<circle cx="411" cy="451" r="10" fill="#9ca3af"/>
+<text x="411" y="455" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">14</text>
+<text x="477.0" y="470" font-size="12.5" fill="#4b5563" text-anchor="middle" font-weight="600">부가세 신고 · 납부</text>
+<text x="477.0" y="507" font-size="10.5" fill="#9ca3af" text-anchor="middle">미확인</text>
+</svg></div>
+  <p class="hint">↔ 도식이 잘리면 가로로 미세요. 아래 표에 같은 내용이 다 있습니다.</p>
+  <table class="nodes">
+    <thead><tr><th>#</th><th>단계</th><th>무엇을 하나</th><th>근거</th></tr></thead>
+    <tbody><tr class='hand'><td class='num'>1</td><td><b>대량발행 양식 확인</b><span class='tag hand'>수작업</span></td><td>`위하고_양식/세금계산서_대량발행양식.xlsx` 가 없으면 멈추고 요청한다. 이 저장소에는 그 파일이 없다.</td><td class='ev'><code>.claude/agents/tax-invoice-team.md:15</code></td></tr><tr class='auto'><td class='num'>2</td><td><b>발행 대상 정리</b><span class='tag auto'>자동</span></td><td>`작업/원본/` 의 매출 자료를 읽어 대상을 만든다.</td><td class='ev'><code>.claude/agents/tax-invoice-team.md:19</code></td></tr><tr class='auto'><td class='num'>3</td><td><b>필수항목 누락 → 제외</b><span class='tag auto'>자동</span></td><td>사업자번호·상호·이메일·작성일자·공급가액이 하나라도 비면 발행 대상에서 뺀다.</td><td class='ev'><code>.claude/agents/tax-invoice-team.md:24</code></td></tr><tr class='auto'><td class='num'>4</td><td><b>사업자번호 체크섬</b><span class='tag auto'>자동</span></td><td>10자리 체크섬 + 국세청 휴·폐업·과세유형 조회.</td><td class='ev'><code>도구/검증.py:1</code> <code>규칙/검증규칙.md:36</code> <code>도구/_사업자.py:1</code></td></tr><tr class='auto'><td class='num'>5</td><td><b>세액 = 공급가액 × 10%</b><span class='tag auto'>자동</span></td><td>원 단위 반올림 ±1원. 영세율은 세액 0, 면세는 세금계산서가 아니라 **계산서**다.</td><td class='ev'><code>규칙/검증규칙.md:51</code> <code>규칙/검증규칙.md:58</code> <code>.claude/agents/tax-invoice-team.md:35</code></td></tr><tr class='auto'><td class='num'>6</td><td><b>중복 발행 검사</b><span class='tag auto'>자동</span></td><td>거래처 + 작성일자 + 공급가액 조합이 이미 있는지 본다.</td><td class='ev'><code>.claude/agents/tax-invoice-team.md:39</code> <code>.claude/agents/audit-team.md:50</code></td></tr><tr class='auto'><td class='num'>7</td><td><b>발행분 / 보류 엑셀</b><span class='tag auto'>자동</span></td><td>시트 셋 — `발행` · `보류(사유)` · `검증요약`.</td><td class='ev'><code>.claude/agents/tax-invoice-team.md:45</code></td></tr><tr class='hand'><td class='num'>8</td><td><b>발행 버튼</b><span class='tag hand'>수작업</span></td><td>**발행 버튼은 누르지 않는다.** 브라우저 자동화든 무엇이든.</td><td class='ev'><code>.claude/agents/tax-invoice-team.md:69</code> <code>.claude/agents/wehago-team.md:13</code></td></tr><tr class='auto'><td class='num'>9</td><td><b>영수증 스캔 OCR</b><span class='tag auto'>자동</span></td><td>30분마다 저절로 돈다. 한 오더에 20쪽·타일 30장을 넘으면 끊는다(_목차.md:70).</td><td class='ev'><code>도구/_스캔처리.py:1</code> <code>도구/_ocr.py:1</code> <code>규칙/_목차.md:69</code></td></tr><tr class='auto'><td class='num'>10</td><td><b>현금영수증 군 분류</b><span class='tag auto'>자동</span></td><td>1~6군으로 가른다. 한 건은 한 군에만, 까닭은 다 적는다.</td><td class='ev'><code>도구/_현금영수증판정.py:1</code></td></tr><tr class='auto'><td class='num'>11</td><td><b>품명 전례 대조</b><span class='tag auto'>자동</span></td><td>1~6월 확정분에서 `용도(품목)-부서` 를 끌어온다. 전례 없으면 확인필요. 품명이 비면(5군) 못 보낸다.</td><td class='ev'><code>도구/_현금영수증_품명대조.py:1</code> <code>도구/_현금영수증판정.py:18</code></td></tr><tr class='auto'><td class='num'>12</td><td><b>매입세액 불공제 판정</b><span class='tag auto'>자동</span></td><td>불공제 대상·접대비 vs 복리후생비를 감사팀이 가른다.</td><td class='ev'><code>.claude/agents/audit-team.md:20</code> <code>.claude/agents/audit-team.md:37</code></td></tr><tr class='auto'><td class='num'>13</td><td><b>적격증빙 · 기간귀속</b><span class='tag auto'>자동</span></td><td>증빙 미비·기간귀속 오류를 잡는다.</td><td class='ev'><code>.claude/agents/audit-team.md:45</code> <code>.claude/agents/audit-team.md:55</code></td></tr><tr class='unk'><td class='num'>14</td><td><b>부가세 신고 · 납부</b><span class='tag unk'>미확인</span></td><td>기한표에는 있다. 홈택스 체크리스트는 **사이트에 접속하지 않고 기존 기록만으로** 만들었다고 그 문서가 스스로 적어 두었다(홈택스.md:4). 실제 신고 절차는 못 봤다.</td><td class='ev'><code>규칙/세무일정.json:23</code> <code>규칙/코덱스_체크리스트/홈택스.md:1</code></td></tr></tbody>
+  </table>
+</section>
+<section class="lane" id="F6" style="--lane:#059669">
+  <h2><span class="lid">F6</span> 보고 · 알림
+    <span class="mini">단계 15 · 자동 14 · 수작업 0 · 미확인 1</span></h2>
+  <div class="scroll"><svg viewBox="0 0 764 532" width="764" height="532" role="img" aria-label="보고 · 알림 흐름도" xmlns="http://www.w3.org/2000/svg" font-family="system-ui,'Malgun Gothic',sans-serif">
+<defs><marker id="arF6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-end"><path d="M0,0 L10,5 L0,10 z" fill="#059669"/></marker></defs>
+<line x1="178" y1="56.0" x2="206" y2="56.0" stroke="#059669" stroke-width="2" marker-end="url(#arF6)"/>
+<line x1="368" y1="56.0" x2="396" y2="56.0" stroke="#059669" stroke-width="2" marker-end="url(#arF6)"/>
+<line x1="558" y1="56.0" x2="586" y2="56.0" stroke="#059669" stroke-width="2" marker-end="url(#arF6)"/>
+<path d="M667.0,96 L667.0,138 L667.0,138 L667.0,156" fill="none" stroke="#059669" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF6)"/>
+<line x1="586" y1="196.0" x2="558" y2="196.0" stroke="#059669" stroke-width="2" marker-end="url(#arF6)"/>
+<line x1="396" y1="196.0" x2="368" y2="196.0" stroke="#059669" stroke-width="2" marker-end="url(#arF6)"/>
+<line x1="206" y1="196.0" x2="178" y2="196.0" stroke="#059669" stroke-width="2" marker-end="url(#arF6)"/>
+<path d="M97.0,236 L97.0,278 L97.0,278 L97.0,296" fill="none" stroke="#059669" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF6)"/>
+<line x1="178" y1="336.0" x2="206" y2="336.0" stroke="#059669" stroke-width="2" marker-end="url(#arF6)"/>
+<line x1="368" y1="336.0" x2="396" y2="336.0" stroke="#059669" stroke-width="2" marker-end="url(#arF6)"/>
+<line x1="558" y1="336.0" x2="586" y2="336.0" stroke="#059669" stroke-width="2" marker-end="url(#arF6)"/>
+<path d="M667.0,376 L667.0,418 L667.0,418 L667.0,436" fill="none" stroke="#059669" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arF6)"/>
+<line x1="586" y1="476.0" x2="558" y2="476.0" stroke="#059669" stroke-width="2" marker-end="url(#arF6)"/>
+<line x1="396" y1="476.0" x2="368" y2="476.0" stroke="#059669" stroke-width="2" marker-end="url(#arF6)"/>
+<rect x="16" y="16" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="31" cy="31" r="10" fill="#1d4ed8"/>
+<text x="31" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">1</text>
+<text x="97.0" y="50" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">채팅앱 오더 접수</text>
+<text x="97.0" y="87" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="206" y="16" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="221" cy="31" r="10" fill="#1d4ed8"/>
+<text x="221" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">2</text>
+<text x="287.0" y="50" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">부서 칸에 세우기</text>
+<text x="287.0" y="87" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="396" y="16" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="31" r="10" fill="#1d4ed8"/>
+<text x="411" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">3</text>
+<text x="477.0" y="50" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">시작 브리프</text>
+<text x="477.0" y="87" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="16" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="31" r="10" fill="#1d4ed8"/>
+<text x="601" y="35" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">4</text>
+<text x="667.0" y="50" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">대기 깨우기 (1분)</text>
+<text x="667.0" y="87" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="171" r="10" fill="#1d4ed8"/>
+<text x="601" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">5</text>
+<text x="667.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">코덱스 감시 (5분)</text>
+<text x="667.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="396" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="171" r="10" fill="#1d4ed8"/>
+<text x="411" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">6</text>
+<text x="477.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">코덱스 검증 (30분)</text>
+<text x="477.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="206" y="156" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="221" cy="171" r="10" fill="#1d4ed8"/>
+<text x="221" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">7</text>
+<text x="287.0" y="190" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">아침 브리핑 (09:05)</text>
+<text x="287.0" y="227" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="16" y="156" width="162" height="80" rx="9" fill="#e5e7eb" stroke="#9ca3af" stroke-width="2"/>
+<circle cx="31" cy="171" r="10" fill="#9ca3af"/>
+<text x="31" y="175" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">8</text>
+<text x="97.0" y="190" font-size="12.5" fill="#4b5563" text-anchor="middle" font-weight="600">세무일정 D-day</text>
+<text x="97.0" y="227" font-size="10.5" fill="#9ca3af" text-anchor="middle">미확인</text>
+<rect x="16" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="31" cy="311" r="10" fill="#1d4ed8"/>
+<text x="31" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">9</text>
+<text x="97.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">아침보고 HTML</text>
+<text x="97.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="206" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="221" cy="311" r="10" fill="#1d4ed8"/>
+<text x="221" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">10</text>
+<text x="287.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">폰 알림 (ntfy)</text>
+<text x="287.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="396" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="311" r="10" fill="#1d4ed8"/>
+<text x="411" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">11</text>
+<text x="477.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">야간작업 (03:00)</text>
+<text x="477.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="296" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="311" r="10" fill="#1d4ed8"/>
+<text x="601" y="315" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">12</text>
+<text x="667.0" y="330" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">비밀 뺀 백업 (11</text>
+<text x="667.0" y="345" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">:30)</text>
+<text x="667.0" y="367" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="586" y="436" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="601" cy="451" r="10" fill="#1d4ed8"/>
+<text x="601" y="455" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">13</text>
+<text x="667.0" y="470" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">커밋 문지기</text>
+<text x="667.0" y="507" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="396" y="436" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="411" cy="451" r="10" fill="#1d4ed8"/>
+<text x="411" y="455" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">14</text>
+<text x="477.0" y="470" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">현황 · 수치 재기</text>
+<text x="477.0" y="507" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+<rect x="206" y="436" width="162" height="80" rx="9" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="221" cy="451" r="10" fill="#1d4ed8"/>
+<text x="221" y="455" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">15</text>
+<text x="287.0" y="470" font-size="12.5" fill="#1e3a8a" text-anchor="middle" font-weight="600">대화기록 · 검색</text>
+<text x="287.0" y="507" font-size="10.5" fill="#1d4ed8" text-anchor="middle">자동</text>
+</svg></div>
+  <p class="hint">↔ 도식이 잘리면 가로로 미세요. 아래 표에 같은 내용이 다 있습니다.</p>
+  <table class="nodes">
+    <thead><tr><th>#</th><th>단계</th><th>무엇을 하나</th><th>근거</th></tr></thead>
+    <tbody><tr class='auto'><td class='num'>1</td><td><b>채팅앱 오더 접수</b><span class='tag auto'>자동</span></td><td>`/api/order` 로 받는다. 창을 닫아도 일은 계속 돈다(server.py:153).</td><td class='ev'><code>채팅앱/server.py:1929</code> <code>채팅앱/_하네스api.py:1881</code> <code>채팅앱/index.html:1</code></td></tr><tr class='auto'><td class='num'>2</td><td><b>부서 칸에 세우기</b><span class='tag auto'>자동</span></td><td>`/api/place`. 부서마다 세션이 따로라 재무 대화와 인사 대화가 안 섞인다.</td><td class='ev'><code>채팅앱/_하네스api.py:1730</code> <code>채팅앱/server.py:686</code></td></tr><tr class='auto'><td class='num'>3</td><td><b>시작 브리프</b><span class='tag auto'>자동</span></td><td>오더 낱말로 지침 목차를 대신 뒤져 준다. 하네스가 오더 앞에 자동으로 붙인다.</td><td class='ev'><code>도구/_시작읽기.py:16</code> <code>규칙/_목차.md:21</code></td></tr><tr class='auto'><td class='num'>4</td><td><b>대기 깨우기 (1분)</b><span class='tag auto'>자동</span></td><td>`OnCalendar=*:*:00`.</td><td class='ev'><code>규칙/서버설정/biseo-wake.timer:8</code> <code>도구/_대기깨우기.py:1</code></td></tr><tr class='auto'><td class='num'>5</td><td><b>코덱스 감시 (5분)</b><span class='tag auto'>자동</span></td><td>상태가 바뀔 때만 알린다. 같은 경고를 되풀이하지 않는다.</td><td class='ev'><code>규칙/서버설정/biseo-codexwatch.timer:5</code> <code>도구/_코덱스감시.py:1</code></td></tr><tr class='auto'><td class='num'>6</td><td><b>코덱스 검증 (30분)</b><span class='tag auto'>자동</span></td><td>새것이 없으면 모델 호출 0회로 그냥 끝낸다.</td><td class='ev'><code>규칙/서버설정/biseo-codexcheck.timer:5</code> <code>도구/_외부검증.py:1</code></td></tr><tr class='auto'><td class='num'>7</td><td><b>아침 브리핑 (09:05)</b><span class='tag auto'>자동</span></td><td>물어보시기 전에 먼저 알린다. 기한이 있는 일이라 뒤늦으면 가산세가 붙는다.</td><td class='ev'><code>도구/_아침브리핑.py:1</code> <code>규칙/세무일정.json:1</code></td></tr><tr class='unk'><td class='num'>8</td><td><b>세무일정 D-day</b><span class='tag unk'>미확인</span></td><td>⚠ `_확인받았나: false` — 진아가 기억으로 적은 초안이다. 사람 확인 전이라 브리핑이 그렇게 붙여서 알린다.</td><td class='ev'><code>규칙/세무일정.json:5</code></td></tr><tr class='auto'><td class='num'>9</td><td><b>아침보고 HTML</b><span class='tag auto'>자동</span></td><td>`작업/결과/_아침보고_YYYY-MM-DD.html` → 채팅앱 `/보고`. CSP sandbox 라 자바스크립트를 못 쓴다(도구/_아침보고.py:17).</td><td class='ev'><code>도구/_아침보고.py:1</code> <code>도구/_아침보고.py:6</code></td></tr><tr class='auto'><td class='num'>10</td><td><b>폰 알림 (ntfy)</b><span class='tag auto'>자동</span></td><td>실패하면 다시 건다. 08-29~09-01 나흘 연속 못 갔던 적이 있다.</td><td class='ev'><code>도구/_폰알림.py:1</code></td></tr><tr class='auto'><td class='num'>11</td><td><b>야간작업 (03:00)</b><span class='tag auto'>자동</span></td><td>긴 일은 새벽에. 끝날 때마다 폰으로 한 줄.</td><td class='ev'><code>규칙/서버설정/biseo-night.timer:5</code> <code>도구/_야간작업.py:1</code></td></tr><tr class='auto'><td class='num'>12</td><td><b>비밀 뺀 백업 (11:30)</b><span class='tag auto'>자동</span></td><td>PC 내려받기(12:20)보다 먼저 뜬다.</td><td class='ev'><code>규칙/서버설정/biseo-safebackup.timer:5</code> <code>규칙/서버설정/biseo-backup.sh:1</code></td></tr><tr class='auto'><td class='num'>13</td><td><b>커밋 문지기</b><span class='tag auto'>자동</span></td><td>비밀이 섞인 커밋을 막는다. .gitignore 는 전부 막고 코드만 하나씩 열어 준다.</td><td class='ev'><code>.githooks/pre-commit:19</code> <code>도구/_비밀검사.py:1</code> <code>.gitignore:17</code></td></tr><tr class='auto'><td class='num'>14</td><td><b>현황 · 수치 재기</b><span class='tag auto'>자동</span></td><td>짐작 대신 실측. 답에 쓴 숫자는 그 명령을 다시 돌려 확인한다.</td><td class='ev'><code>도구/_현황.py:1</code> <code>도구/_수치대조.py:1</code> <code>도구/_문서대조.py:1</code></td></tr><tr class='auto'><td class='num'>15</td><td><b>대화기록 · 검색</b><span class='tag auto'>자동</span></td><td>같은 말을 두 번 하지 않으려고 전부 텍스트로 남긴다.</td><td class='ev'><code>채팅앱/_기록api.py:135</code> <code>도구/_대화기록.py:1</code> <code>도구/_기억.py:1</code></td></tr></tbody>
+  </table>
+</section>
+
+<section class="lane" style="--lane:#475569">
+<h2><span class="lid">선</span> 모든 흐름이 공통으로 지키는 것</h2>
+<table class="nodes">
+<thead><tr><th>#</th><th>규칙</th><th>무엇을 막나</th><th>근거</th></tr></thead>
+<tbody>
+<tr class="hand"><td class="num">1</td>
+ <td><b>되돌릴 수 없는 버튼은 사람이 누른다</b><span class="tag hand">수작업</span></td>
+ <td>전표전송(F3)·세금계산서 발행·마감·삭제. 도구는 「전송대상 N건」만 읽고 멈춘다.</td>
+ <td class="ev"><code>.claude/agents/wehago-team.md:13</code>
+  <code>도구/위하고.py:826</code> <code>규칙/코덱스_AGENTS.md:425</code>
+  <code>.claude/hookify.wehago-irreversible.local.md:1</code></td></tr>
+<tr class="auto"><td class="num">2</td>
+ <td><b>애매하면 확인필요로 뺀다</b><span class="tag auto">자동</span></td>
+ <td>규칙에 없는 것을 채워 넣지 않는다. 사유를 구체적으로 적는다.</td>
+ <td class="ev"><code>규칙/계정과목_매핑.md:92</code>
+  <code>.claude/agents/voucher-team.md:55</code> <code>시작하기.md:133</code></td></tr>
+<tr class="auto"><td class="num">3</td>
+ <td><b>숫자는 눈이 아니라 코드로 센다</b><span class="tag auto">자동</span></td>
+ <td>합계·검산·체크섬을 전부 코드로 돌린다. 답에 쓴 숫자도 다시 잰다.</td>
+ <td class="ev"><code>도구/검증.py:1</code> <code>도구/_수치대조.py:1</code>
+  <code>시작하기.md:136</code> <code>규칙/검증규칙.md:8</code></td></tr>
+<tr class="auto"><td class="num">4</td>
+ <td><b>1~6월 히스토리를 먼저 본다</b><span class="tag auto">자동</span></td>
+ <td>전례가 있는 것을 새로 판단하지 않는다. 훅이 걸어서 막는다.</td>
+ <td class="ev"><code>CLAUDE.md:41</code>
+  <code>.claude/hookify.history-1to6.local.md:1</code>
+  <code>도구/_훅_히스토리먼저.py:1</code></td></tr>
+<tr class="auto"><td class="num">5</td>
+ <td><b>원본은 고치지 않는다</b><span class="tag auto">자동</span></td>
+ <td>받은 자료를 덮어쓰지 않는다. 훅이 편집을 막는다.</td>
+ <td class="ev"><code>.claude/hookify.protect-original.local.md:1</code>
+  <code>.claude/agents/voucher-team.md:67</code></td></tr>
+<tr class="auto"><td class="num">6</td>
+ <td><b>근거 없는 말은 반려된다</b><span class="tag auto">자동</span></td>
+ <td>서린이 원본 행·직접 계산·명문 규정 중 무엇인지 묻고, 못 대면 되돌린다.</td>
+ <td class="ev"><code>.claude/agents/서린.md:87</code> <code>도구/_검증.py:4</code>
+  <code>도구/_근거검사.py:1</code></td></tr>
+<tr class="auto"><td class="num">7</td>
+ <td><b>파일 본문을 오더에 싣지 않는다</b><span class="tag auto">자동</span></td>
+ <td>서버에 있는 것은 두 번 나르지 않는다. 경로만 준다.</td>
+ <td class="ev"><code>CLAUDE.md:3</code> <code>규칙/자료정리_인덱스.md:19</code>
+  <code>도구/_걷어내기.py:1</code></td></tr>
+<tr class="auto"><td class="num">8</td>
+ <td><b>비밀이 섞이면 커밋이 안 된다</b><span class="tag auto">자동</span></td>
+ <td>전부 막고 코드만 하나씩 열어 준다. 훅이 종료코드 1 로 커밋을 세운다.</td>
+ <td class="ev"><code>.gitignore:17</code> <code>.githooks/pre-commit:19</code>
+  <code>도구/_비밀검사.py:1</code></td></tr>
+</tbody></table>
+</section>
+
+<footer>
+<b>같이 보기</b> · <a href="forms_inventory.html">양식·참조파일 인벤토리</a> ·
+<a href="SUMMARY.md">SUMMARY.md</a><br>
+근거 표기는 <code>경로:줄번호</code> 다. 줄번호는 2026-09-15 워크트리
+<code>8bb868f</code> 기준이다. 파일이 바뀌면 줄이 밀린다 — 경로를 먼저 믿어라.
+</footer>
+</div></body></html>

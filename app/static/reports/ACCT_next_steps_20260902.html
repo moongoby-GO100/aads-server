@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta name="robots" content="noindex,nofollow">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ACCT 회계프로그램 — 진아실장 합류 후 다음 단계 상세 보고서 (2026-09-02)</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2b3440;
+    --tx:#e6edf3; --tx2:#9fb0c0; --acc:#4f9cf9; --ok:#3fb950; --warn:#d29922; --err:#f85149; --p0:#f85149; --p1:#d29922; --p2:#58a6ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",sans-serif;
+       line-height:1.7;font-size:15px}
+  .wrap{max-width:1180px;margin:0 auto;padding:32px 20px 80px}
+  header.top{border-bottom:2px solid var(--acc);padding-bottom:20px;margin-bottom:28px}
+  h1{font-size:26px;margin:0 0 8px;letter-spacing:-.4px}
+  .sub{color:var(--tx2);font-size:14px}
+  .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+  .meta span{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12.5px;color:var(--tx2)}
+  h2{font-size:20px;margin:44px 0 12px;padding-left:11px;border-left:4px solid var(--acc)}
+  h3{font-size:16.5px;margin:26px 0 8px;color:#cfe1f5}
+  h4{font-size:14.5px;margin:18px 0 6px;color:var(--tx2)}
+  p{margin:8px 0}
+  table{width:100%;border-collapse:collapse;margin:12px 0 18px;font-size:13.8px;background:var(--panel)}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top;text-align:left}
+  th{background:var(--panel2);color:#cfe1f5;font-weight:600;white-space:nowrap}
+  td code,p code,li code{background:#0b0f14;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:12.5px;color:#9fd0ff}
+  pre{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;font-size:12.6px;color:#c9d7e4;line-height:1.55}
+  .box{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:8px;padding:14px 18px;margin:14px 0}
+  .box.ok{border-left-color:var(--ok)}
+  .box.warn{border-left-color:var(--warn)}
+  .box.err{border-left-color:var(--err)}
+  .tag{display:inline-block;border-radius:5px;padding:1px 8px;font-size:12px;font-weight:700;color:#0b0f14}
+  .t-p0{background:var(--p0)} .t-p1{background:var(--p1)} .t-p2{background:var(--p2)}
+  .t-ok{background:var(--ok)} .t-warn{background:var(--warn)} .t-err{background:var(--err)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:12px;margin:14px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .card .k{color:var(--tx2);font-size:12.5px}
+  .card .v{font-size:22px;font-weight:700;margin-top:4px}
+  .card .n{color:var(--tx2);font-size:12px;margin-top:2px}
+  .bar{height:9px;background:#0b0f14;border:1px solid var(--line);border-radius:5px;overflow:hidden;margin-top:8px}
+  .bar > i{display:block;height:100%;background:linear-gradient(90deg,#4f9cf9,#3fb950)}
+  .src{color:#7d8fa1;font-size:12px}
+  ul,ol{margin:8px 0 8px 20px;padding:0}
+  li{margin:4px 0}
+  .flow{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;overflow-x:auto}
+  .foot{margin-top:56px;border-top:1px solid var(--line);padding-top:16px;color:var(--tx2);font-size:12.5px}
+  .nowrap{white-space:nowrap}
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>ACCT 회계프로그램 — 진아실장 합류 후 <span style="color:var(--acc)">다음 단계</span> 상세 보고서</h1>
+  <div class="sub">대상 시스템: <code>/srv/biseo</code> (진아실장 · 주식회사 라일론 회계 자동화) · 서버 <code>5.104.85.244</code></div>
+  <div class="meta">
+    <span>보고 시각 : 2026-09-02 18:12 KST</span>
+    <span>수신 : CEO moongoby</span>
+    <span>작성 : AADS CTO AI</span>
+    <span>워크스페이스 : ACCT</span>
+    <span>근거 : 서버 SSH 실측 (18:08~18:11 KST)</span>
+  </div>
+</header>
+
+<!-- ============================================================ -->
+<h2>1. 결론 요약</h2>
+
+<div class="box ok">
+<b>판정 — 신규 개발이 아니라 「합류 + 산업화」로 간다.</b><br>
+진아실장은 오늘 이 순간에도 <b>8개 서비스와 15개 systemd 타이머가 무중단 가동</b> 중인 실운영 시스템입니다
+(18:10 KST 실측). 회계 도메인 코드는 <b>도구 <code>*.py</code> 159개</b>가 이미 존재하며, 오늘 하루에만
+<b>커밋 22건</b>이 쌓였습니다. 새 회계프로그램을 처음부터 만드는 선택지는 <b>기각</b>합니다.<br><br>
+다음 단계의 본질은 「기능 추가」가 아니라 <b>①즉시 복구(진식 검증 정지 해소) ②AADS 관제 편입 ③데이터 계층 승격 ④CEO 미결 회계정책 확정</b> 4가지입니다.
+</div>
+
+<div class="grid">
+  <div class="card"><div class="k">가동 서비스</div><div class="v ok">8 / 8</div><div class="n">biseo-* 전부 running [systemctl 실측]</div></div>
+  <div class="card"><div class="k">자동화 타이머</div><div class="v ok">15개</div><div class="n">1분~24시간 주기, 전량 정상 스케줄 [list-timers]</div></div>
+  <div class="card"><div class="k">도구 코드</div><div class="v">159개</div><div class="n"><code>도구/*.py</code> [find 실측]</div></div>
+  <div class="card"><div class="k">오늘 커밋</div><div class="v">22건</div><div class="n">2026-09-02 기준 [git log]</div></div>
+  <div class="card"><div class="k">서비스 경고로그</div><div class="v ok">0건</div><div class="n">worker/chat, 00:00~18:10 [journalctl -p warning]</div></div>
+  <div class="card"><div class="k">P0 차단 이슈</div><div class="v err">3건</div><div class="n">아래 5장 참조</div></div>
+</div>
+
+<!-- ============================================================ -->
+<h2>2. 실측 스냅샷 (2026-09-02 18:08~18:11 KST)</h2>
+
+<h3>2-1. 서버 자원</h3>
+<table>
+<tr><th style="width:150px">항목</th><th style="width:230px">값</th><th>여유도</th><th style="width:150px">출처</th></tr>
+<tr><td>호스트 / OS</td><td>vmi3535008 · Ubuntu 24.04</td><td>—</td><td>[이전 세션 실측]</td></tr>
+<tr><td>메모리</td><td>총 23Gi · 사용 3.2Gi · 가용 20Gi</td>
+    <td>사용률 약 14%<div class="bar"><i style="width:14%"></i></div></td><td>[free -h]</td></tr>
+<tr><td>디스크 /</td><td>290G · 사용 25G · 가용 265G</td>
+    <td>사용률 9%<div class="bar"><i style="width:9%"></i></div></td><td>[df -h]</td></tr>
+<tr><td>부하 / 업타임</td><td>load 1.08 / 0.63 / 0.46 · up 2일 2시간</td><td>8코어 대비 여유<div class="bar"><i style="width:14%"></i></div></td><td>[uptime]</td></tr>
+<tr><td>동시 접속</td><td>6 users</td><td>사장님 PC · 사무실 · 에이전트 세션 혼재</td><td>[uptime]</td></tr>
+<tr><td>스왑</td><td class="warn">0B (미설정)</td><td>OOM 시 즉시 프로세스 kill 위험</td><td>[free -h]</td></tr>
+</table>
+<p class="src">해석 — 자원은 충분합니다. PostgreSQL·백업·모니터링 에이전트를 추가로 얹어도 여유가 큽니다. 다만 <b>스왑 0B</b>는 브라우저 워커(Chromium) 다중 실행 시 위험 요소이므로 4~8G 스왑 파일 추가를 권장합니다.</p>
+
+<h3>2-2. 가동 중인 진아실장 서비스 8종</h3>
+<table>
+<tr><th style="width:210px">유닛</th><th>역할</th><th style="width:110px">상태</th><th>외부 노출</th></tr>
+<tr><td><code>biseo-chat.service</code></td><td>진아실장 채팅앱 (사장님 폰·PC 접속 UI)</td><td><span class="tag t-ok">running</span></td><td><code>jin.jswworld.co.kr</code> → 127.0.0.1:8765</td></tr>
+<tr><td><code>biseo-worker.service</code></td><td>위하고(WEHAGO) 브라우저 자동조작 워커</td><td><span class="tag t-ok">running</span></td><td>내부</td></tr>
+<tr><td><code>biseo-x.service</code></td><td>가상 화면 Xvfb</td><td><span class="tag t-ok">running</span></td><td>내부</td></tr>
+<tr><td><code>biseo-wm.service</code></td><td>창 관리자</td><td><span class="tag t-ok">running</span></td><td>내부</td></tr>
+<tr><td><code>biseo-vnc.service</code></td><td>VNC 서버</td><td><span class="tag t-ok">running</span></td><td>내부 5901/5902</td></tr>
+<tr><td><code>biseo-novnc.service</code></td><td>화면 웹뷰어</td><td><span class="tag t-ok">running</span></td><td><code>vnc.jswworld.co.kr</code> → 6080</td></tr>
+<tr><td><code>biseo-pcview.service</code></td><td>사장님 PC 화면 중계 (6081→5902)</td><td><span class="tag t-ok">running</span></td><td><code>pc.jswworld.co.kr</code> → 6081</td></tr>
+<tr><td><code>biseo-tunnel.service</code></td><td>Cloudflare 터널 (외부 진입점 단일화)</td><td><span class="tag t-ok">running</span></td><td>터널 ID <code>7e92458d…</code></td></tr>
+</table>
+<p class="src">[출처: <code>systemctl list-units --state=running</code>, <code>/root/.cloudflared/config.yml</code> 실측]
+터널 유닛에는 <code>StartLimitIntervalSec=0 / RestartSec=5</code> 드롭인이 적용되어 있어 <b>연속 재시작 포기 문제가 이미 해결</b>되어 있습니다(2026-08-27 조치).</p>
+
+<h3>2-3. 자동화 타이머 15개 — 실제 사이클</h3>
+<table>
+<tr><th style="width:200px">타이머</th><th style="width:120px">주기(관측)</th><th>역할 추정</th><th style="width:170px">최근 실행(KST)</th></tr>
+<tr><td><code>biseo-wake.timer</code></td><td>1분</td><td>세션 깨우기 / 대기 작업 픽업</td><td>18:09:09</td></tr>
+<tr><td><code>biseo-guard.timer</code></td><td>5분</td><td>지킴이 — 이상 감지</td><td>18:09:18</td></tr>
+<tr><td><code>biseo-pcwatch.timer</code></td><td>5분</td><td>사장님 PC 화면 감시</td><td>18:06:02</td></tr>
+<tr><td><code>biseo-stuck.timer</code></td><td>10분</td><td>멈춘 작업 복구</td><td>18:01:49</td></tr>
+<tr><td><code>biseo-log.timer</code></td><td>10분</td><td>로그 수집</td><td>18:00:06</td></tr>
+<tr><td><code>biseo-keep.timer</code></td><td>15분</td><td>세션 유지</td><td>18:00:54</td></tr>
+<tr><td><code>biseo-window.timer</code></td><td>20분</td><td>창/브라우저 정리</td><td>17:59:54</td></tr>
+<tr><td><code>biseo-scan.timer</code></td><td>30분</td><td>스캔·OCR 인입 처리</td><td>17:45:54</td></tr>
+<tr><td><code>biseo-intake.timer</code></td><td>30분</td><td>자료 인입(SFTP/다운로드)</td><td>17:43:54</td></tr>
+<tr><td><code>biseo-checklogin.timer</code></td><td>60분</td><td>위하고/카드사 로그인 유효성</td><td>17:27:54</td></tr>
+<tr><td><code>biseo-morning.timer</code></td><td>매일 07:05</td><td>아침 이어서 작업</td><td>07:05:07</td></tr>
+<tr><td><code>biseo-briefing.timer</code></td><td>매일 08:30</td><td>아침 브리핑 발송</td><td>08:30:16</td></tr>
+<tr><td><code>biseo-ledger.timer</code></td><td>매일 09:00</td><td>받은것 장부 정리</td><td>09:00:01</td></tr>
+<tr><td><code>biseo-backup.timer</code></td><td>매일 12:00</td><td>서버 백업</td><td>12:00:00</td></tr>
+<tr><td><code>biseo-night.timer</code></td><td>매일 03:00</td><td>야간 자동작업</td><td>03:00:16</td></tr>
+</table>
+<p class="src">[출처: <code>systemctl list-timers --all</code> 18:10 KST 실측 — 전체 32개 중 biseo 계열 15개]
+<b>전 타이머가 예정대로 발화 중이며 스킵·실패 흔적은 없습니다.</b></p>
+
+<h3>2-4. 개발 활동 — 최근 커밋 성격 분석</h3>
+<table>
+<tr><th style="width:120px">분류</th><th style="width:70px">건수*</th><th>대표 커밋</th><th>시사점</th></tr>
+<tr><td>진식(감사) 반려 대응</td><td>11</td><td><code>27f68a7</code> 진식 여섯 번째 반려 고침 — 미검증 표시·재시도 주장 정정</td><td class="warn">교차검증 루프가 <b>6~7회까지 반복</b>. 1회 통과율이 낮아 토큰·시간 소모가 큼</td></tr>
+<tr><td>기능 버그 수정</td><td>4</td><td><code>8ad8cbd</code> 하이패스 카드번호 추출 순서 버그 수정</td><td>카드 품명 채움 작업이 현재 최전선</td></tr>
+<tr><td>구조 리팩터링</td><td>4</td><td><code>201baa2</code> 로그를 <code>_로그/&lt;종류&gt;/</code>로 재배치 + 도구 6개 경로 정정</td><td>경로 이동 시 참조 누락이 3회 연속 발생 → 회귀 테스트 부재 신호</td></tr>
+<tr><td>비용 안전장치</td><td>3</td><td><code>d3faf8a</code> 코덱스 CLI 실패 시 유료 API로 새지 않게 차단</td><td class="ok">비용 폭주 방지 장치 이미 존재</td></tr>
+</table>
+<p class="src">* 최근 25커밋 표본 기준 분류 [git log --oneline -25 실측]. 25건 중 24건이 2026-09-01~09-02에 집중.</p>
+
+<h4>미커밋 작업물 (git status 실측)</h4>
+<pre>M  규칙/계정과목_매핑.md
+?? 규칙/_목차.md
+?? 규칙/롯데카드_승인내역받기.md
+?? 규칙/비씨카드_승인내역받기.md
+?? 규칙/하나카드_승인내역받기.md</pre>
+<p class="src">→ <b>카드사 로그인/수집 규칙 3종과 규칙 목차가 아직 git에 없습니다.</b> 서버가 2분마다 자동 pull하는 구조이므로,
+커밋되지 않은 규칙은 <b>PC(<code>E:\claude</code>)와 사무실 서버에 전파되지 않습니다.</b> 지식 유실 위험 — 즉시 커밋 대상.</p>
+
+<!-- ============================================================ -->
+<h2>3. 시스템 구조 재확인</h2>
+
+<div class="flow">
+<pre>
+                     ┌──────────────── 외부 진입 (Cloudflare Tunnel) ────────────────┐
+  사장님 폰/PC  ───▶ │ jin.jswworld.co.kr → :8765 채팅앱  (biseo-chat)              │
+                     │ vnc.jswworld.co.kr → :6080 화면뷰어 (biseo-novnc)            │
+                     │  pc.jswworld.co.kr → :6081 PC화면   (biseo-pcview)           │
+                     └───────────────────────────────┬──────────────────────────────┘
+                                                     │
+                              ┌──────────────────────▼───────────────────────┐
+                              │  진아실장 (오케스트레이터, Claude Code CLI)   │
+                              │  CLAUDE.md 절대규칙 1~15 · 규칙/_목차.md 라우팅│
+                              └───┬───────────┬───────────┬──────────┬────────┘
+                                  │           │           │          │
+              ┌───────────────────▼──┐  ┌─────▼─────┐ ┌───▼─────┐ ┌──▼────────────┐
+              │ 전표팀 / 위하고팀     │  │ 세금계산서 │ │ 대사팀  │ │ 분석·감사팀   │
+              │ 위하고.py(55KB)+워커 │  │    팀      │ │         │ │ 교차검증.py   │
+              └───────────┬──────────┘  └───────────┘ └─────────┘ └──┬────────────┘
+                          │  Xvfb + VNC + Chromium(CDP)              │
+                          ▼                                          ▼
+              ┌────────────────────────┐              ┌──────────────────────────┐
+              │ WEHAGO SmartA (lylon01)│              │ 진식 = gpt-5.3-codex 감사 │
+              │ 전표 입력·조회·마감    │              │ ⛔ 현재 크레딧 소진 정지  │
+              └────────────────────────┘              └──────────────────────────┘
+
+  자료 계층(깃 아님, SFTP) : /srv/biseo/{통장, 카드, TDH, 라일론 매출, 거래처원장_세금계산서, 감사실, 기타}
+  코드 계층(깃)            : /srv/biseo/회계비서/회계비서/{도구 159개, 규칙, 작업/결과}
+  비밀 계층               : 도구/_금고.py (AES-256-GCM) + /etc/biseo-vault.key, 등록 127곳
+</pre>
+</div>
+
+<div class="box">
+<b>핵심 설계 원칙(현행) — 유지해야 할 것</b>
+<ul>
+<li><b>코드와 자료의 물리적 분리</b> — 코드는 git 이력 추적, 자료는 SFTP. 회계자료가 git에 섞이지 않아 유출면이 작습니다.</li>
+<li><b>「길찾기 표」 방식의 상태관리</b> — <code>_현재상황.md</code>가 요약본이 아니라 <b>인덱스</b>로 동작. 상세는 폴더별 <code>_xxx.md</code>가 진실.</li>
+<li><b>이중 감사</b> — 진아(작업) → 진식(교차검증, codex) → 서린(리뷰). 회계 도메인에서 필수적인 구조입니다.</li>
+<li><b>토큰 한도 자동정지</b> — <code>_하네스.py</code>가 95%에서 자동 정지. 비용 폭주 차단.</li>
+</ul>
+</div>
+
+<!-- ============================================================ -->
+<h2>4. 업무 진척도 — 회계 영역별 실측</h2>
+<table>
+<tr><th style="width:150px">영역</th><th style="width:110px">상태</th><th>확인된 사실</th><th>다음 액션</th></tr>
+<tr><td>통장 / 예수금</td><td><span class="tag t-p0">차단</span></td>
+    <td>기지급분 2,429,781원 사원별 분할 확인 완료. <b>00123·00124 전표는 진식 검증 대기 — codex 크레딧 소진</b></td>
+    <td>크레딧 충전 → 1~6월 개인거래처(012473 김영아 · 012527 정선웅) 예수금 사용 이력 확인</td></tr>
+<tr><td>카드</td><td><span class="tag t-p1">진행</span></td>
+    <td>카드사 로그인 갈래 정리 완료(하나·비씨=금고 자동 / 롯데·현대=사장님 수동 / 현대=서버 접속불가). 8월 품명 채움 진행 중</td>
+    <td>규칙 3종 git 커밋 → 하이패스 버그 수정분 회귀 검증</td></tr>
+<tr><td>광고(선급금)</td><td><span class="tag t-ok">7월 완료</span></td>
+    <td>선급금 13100 차 0 / 선급금2 14400 차 2(2025 이월). 전송 14건 28,000,000원 완료</td>
+    <td>8월 대사(계산서 미발행) · 모비아이 8월 6건 — 9월 카드사 자료 대기</td></tr>
+<tr><td>TDH(4대보험)</td><td><span class="tag t-ok">완료</span></td><td>8월분 70명 대사 완결(08-31)</td><td>라일론 4대보험 진식 지적 대응</td></tr>
+<tr><td>라일론 급여·원천</td><td><span class="tag t-ok">완료</span></td>
+    <td>09-01 9명 체크 완료. <b class="warn">⚠ 재검증 금지 — 과거 이 건으로 18시간 폭주 사고 발생</b></td>
+    <td>재개 금지. 종결 처리</td></tr>
+<tr><td>거래처원장·세금계산서</td><td><span class="tag t-p1">대기</span></td>
+    <td>외상매입금·미지급금·선급금 3계정 7/31 재계산 완료 → <b>사장님 확인 대기</b></td><td>CEO 확인 1건</td></tr>
+<tr><td>매출·정산</td><td><span class="tag t-p1">대기</span></td><td>7월 완료(기존 작성분 100% 일치), <b>8월 미착수</b></td><td>8월 채널정산 수집 → 대사</td></tr>
+<tr><td>프리랜서 원천징수 전표</td><td><span class="tag t-p1">미착수</span></td>
+    <td>현행 위하고는 <code>사업소득자/미지급비용2</code> 단일 처리(확정 145건). 총액비용+예수금+순지급 구조로 재분개 필요</td>
+    <td>CEO 오더 대기 중인 작업</td></tr>
+</table>
+<p class="src">[출처: <code>/srv/biseo/_현재상황.md</code>(09-02 15:30 갱신), <code>/srv/biseo/_물어볼것.md</code>(09-02 05:58), <code>CLAUDE.md</code> 실측]</p>
+
+<!-- ============================================================ -->
+<h2>5. 문제점 · 리스크 등록부</h2>
+
+<h3>P0 — 즉시 조치 (업무 정지 유발)</h3>
+<table>
+<tr><th style="width:56px">ID</th><th style="width:200px">문제</th><th>근거 / 현상</th><th>영향</th><th style="width:250px">조치안</th></tr>
+<tr><td>R-01</td><td>진식(codex) API 크레딧 소진</td>
+    <td><code>_현재상황.md</code>: "진식 codex 크레딧 소진으로 00123·00124 검증 대기 중". <code>.env</code>의 <code>OPENAI_API_KEY</code> 09-02 새벽 소진 확인</td>
+    <td class="err">절대규칙 7(10건 이상 수정 후 진식 필수)이 <b>물리적으로 실행 불가</b> → 전표 확정 라인 전체 정지</td>
+    <td>① 크레딧 충전(CEO 결제) ② 충전 전까지 <b>대체 검증 경로</b>로 AADS의 <code>call_llm_with_fallback</code>(Anthropic OAuth) 연결 ③ 잔액 임계 알림을 <code>_하네스.py</code>에 추가</td></tr>
+<tr><td>R-02</td><td>노출 자격증명 미회수</td>
+    <td>과거 대화에 OpenAI API 키·Contabo 로그인 노출 [CEO-018 세션 기록]. 재발급 여부 <b>미검증</b></td>
+    <td class="err">회계 원장·위하고 계정까지 연결된 서버의 탈취 위험</td>
+    <td>① OpenAI 키 재발급 ② Contabo 비밀번호 변경 + 2FA ③ 신규 키는 <code>_금고.py</code>에만 저장하고 <code>.env</code>는 참조로 전환</td></tr>
+<tr><td>R-03</td><td>규칙 문서 4건 미커밋</td>
+    <td><code>git status</code>: <code>규칙/_목차.md</code>, 카드사 승인내역받기 3종이 untracked</td>
+    <td class="err">서버가 2분마다 git pull하는 구조 → <b>PC·사무실서버에 규칙이 전파되지 않음.</b> 서버 장애 시 지식 소실</td>
+    <td>즉시 <code>git add 규칙/ &amp;&amp; git commit &amp;&amp; git push</code></td></tr>
+</table>
+
+<h3>P1 — 단기 (1주 내)</h3>
+<table>
+<tr><th style="width:56px">ID</th><th style="width:200px">문제</th><th>근거 / 현상</th><th>영향</th><th style="width:250px">조치안</th></tr>
+<tr><td>R-04</td><td>AADS 관제 미편입</td>
+    <td>AADS <code>/root/.ssh/config</code>에 <code>5.104.85.244</code> 항목 <b>없음</b>(기본 키로 우연히 접속됨). <code>run_remote_command</code>의 project enum에 ACCT 없음</td>
+    <td>장애 시 AADS 워치독·텔레그램 알림이 <b>동작하지 않음</b>. 매 조회를 수동 ssh로 우회</td>
+    <td>ssh config에 <code>Host acct 5.104.85.244</code> 등록 → 도구 프로젝트 매핑 추가 → 헬스체크 5분 주기 등록</td></tr>
+<tr><td>R-05</td><td>진식 반려 루프 6~7회</td>
+    <td>최근 25커밋 중 11건이 "반려 고침" 계열(<code>1e08020</code>~<code>27f68a7</code>)</td>
+    <td>1회 통과율 저하 → 토큰·시간·크레딧 소모(= R-01의 근본 원인 중 하나)</td>
+    <td>제출 전 셀프체크리스트(<code>_보내기전.py</code>)에 <b>진식 반려 사유 Top5 자동 검사</b> 추가</td></tr>
+<tr><td>R-06</td><td>회귀 테스트 부재</td>
+    <td>로그 경로 재배치(<code>201baa2</code>) 후 참조 누락 수정이 <b>3커밋 연속</b>(<code>6fe3888</code>, <code>b08c02d</code>)</td>
+    <td>구조 변경 때마다 조용한 실패. 회계 산출물 누락 가능</td>
+    <td><code>도구/_시험모두.py</code>를 <b>pre-commit 훅</b>으로 승격 + 경로 참조 정적 검사 추가</td></tr>
+<tr><td>R-07</td><td>데이터 계층이 파일 기반</td>
+    <td>PostgreSQL·Docker 미설치. 산출물은 xlsx/pkl/json/md</td>
+    <td>동시 수정 충돌·감사추적 한계. "저장한 걸 못 찾는다" 사고가 이미 반복(<code>_현재상황.md</code> 자체 기록)</td>
+    <td>PostgreSQL 15 설치 → <b>전표/대사 결과 이력만</b> 우선 적재(원본 파일은 유지하는 하이브리드)</td></tr>
+<tr><td>R-08</td><td>스왑 0B</td><td><code>free -h</code> 실측</td><td>Chromium 워커 다중 실행 시 OOM kill → 야간작업 유실</td><td>8G 스왑 파일 생성 + <code>vm.swappiness=10</code></td></tr>
+<tr><td>R-09</td><td>백업 검증 부재</td>
+    <td><code>biseo-backup.timer</code> 매일 12:00 발화는 확인. <b>오프사이트 여부·복원 테스트 미검증</b></td>
+    <td>서버 손실 시 회계 원장 복구 불가 가능성</td>
+    <td>백업 대상·목적지 확인 → 타 서버(contabo116)로 원격 동기화 → <b>분기 1회 복원 리허설</b></td></tr>
+</table>
+
+<h3>P2 — 중기 (1개월)</h3>
+<table>
+<tr><th style="width:56px">ID</th><th style="width:200px">문제</th><th>영향</th><th style="width:280px">조치안</th></tr>
+<tr><td>R-10</td><td>root 권한으로 코드 실행</td><td>사고 시 서버 전체 영향</td><td><code>biseo</code> 전용 계정 분리 + systemd <code>User=</code> 지정, 자료 디렉터리만 쓰기 허용</td></tr>
+<tr><td>R-11</td><td>현대카드 서버 접속 불가</td><td>수집 자동화가 사장님 수동 조작에 의존</td><td>사장님 크롬 CDP 연결 경로 표준화(이미 규칙 존재) → 반자동 절차 문서화</td></tr>
+<tr><td>R-12</td><td>단일 서버 SPOF</td><td>서버 다운 = 회계 업무 전면 중단</td><td>핵심 산출물 실시간 미러링 + 복구 런북(RTO/RPO 명시)</td></tr>
+<tr><td>R-13</td><td>지식 문서 비대화</td><td><code>CLAUDE.md</code>가 사건 기록으로 계속 팽창 → 컨텍스트 낭비</td><td>절대규칙(불변) / 사건로그(가변) 분리, 훅은 규칙만 주입</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>6. 다음 단계 로드맵</h2>
+
+<div class="box warn">
+<b>원칙 — 운영 중인 시스템을 멈추지 않는다.</b> 모든 단계는 진아실장의 현재 업무(카드 8월 품명·통장 예수금)를 <b>병행 가동</b>한 상태로 진행합니다.
+구조 변경은 반드시 <code>_시험모두.py</code> 통과 후 커밋합니다.
+</div>
+
+<h3>Phase 0 — 즉시 복구 (오늘~내일, 0.5일)</h3>
+<table>
+<tr><th style="width:95px">작업ID</th><th style="width:230px">작업</th><th>산출물</th><th style="width:230px">완료 검증 기준</th><th style="width:90px">담당</th></tr>
+<tr><td>ACCT-001</td><td>codex 크레딧 충전 + 잔액 임계 알림</td><td>충전 완료, <code>_하네스.py</code> 잔액 경보 추가</td><td><code>_토론.py 시작</code> 1회 성공 + 잔액 &lt;20% 시 ntfy 알림 수신</td><td class="err">CEO</td></tr>
+<tr><td>ACCT-002</td><td>노출 자격증명 재발급</td><td>OpenAI 신규 키 · Contabo 비번 변경</td><td>구 키로 API 호출 시 401 확인</td><td class="err">CEO</td></tr>
+<tr><td>ACCT-003</td><td>미커밋 규칙 4건 커밋·푸시</td><td>커밋 1건</td><td><code>git status</code> clean + 원격 반영 확인</td><td>CTO AI</td></tr>
+<tr><td>ACCT-004</td><td>통장 00123·00124 검증 재개</td><td>진식 판정문 + 근거 md</td><td>1~6월 012473·012527 예수금 이력 대조표 첨부, 차 0</td><td>진아</td></tr>
+</table>
+
+<h3>Phase 1 — AADS 관제 편입 (2~3일)</h3>
+<table>
+<tr><th style="width:95px">작업ID</th><th style="width:230px">작업</th><th>산출물</th><th style="width:230px">완료 검증 기준</th><th style="width:90px">담당</th></tr>
+<tr><td>ACCT-010</td><td>AADS ssh config에 ACCT 호스트 정식 등록</td><td><code>Host acct 5.104.85.244</code> 블록</td><td>AADS에서 <code>ssh acct</code> 1초 내 응답</td><td>CTO AI</td></tr>
+<tr><td>ACCT-011</td><td>AADS 도구 프로젝트 매핑에 ACCT 추가</td><td><code>read_remote_file</code>/<code>run_remote_command</code>가 ACCT 지원</td><td>ACCT 지정으로 <code>CLAUDE.md</code> 읽기 성공</td><td>CTO AI</td></tr>
+<tr><td>ACCT-012</td><td>헬스체크 워치독 (5분 주기)</td><td>서비스 8종 + 타이머 15종 상태 수집기</td><td>임의 서비스 중지 시 <b>5분 내 텔레그램 경보</b> 수신</td><td>CTO AI</td></tr>
+<tr><td>ACCT-013</td><td>AADS 대시보드에 ACCT 패널 추가</td><td>가동상태 · 오늘 커밋 · 미결 질의 · 크레딧 잔액</td><td>대시보드 화면 캡처로 렌더 확인</td><td>CTO AI</td></tr>
+<tr><td>ACCT-014</td><td>스왑 8G + swappiness 설정</td><td>스왑 파일</td><td><code>free -h</code>에 8Gi 표시, 재부팅 후 유지</td><td>CTO AI</td></tr>
+</table>
+
+<h3>Phase 2 — 품질·비용 안정화 (1주)</h3>
+<table>
+<tr><th style="width:95px">작업ID</th><th style="width:230px">작업</th><th>산출물</th><th style="width:230px">완료 검증 기준</th><th style="width:90px">담당</th></tr>
+<tr><td>ACCT-020</td><td>진식 반려 사유 Top5 사전검사</td><td><code>_보내기전.py</code> 확장</td><td>반려 횟수 <b>평균 6회 → 2회 이하</b>(다음 10건 이동평균)</td><td>진아</td></tr>
+<tr><td>ACCT-021</td><td>회귀 테스트 pre-commit 승격</td><td>훅 스크립트 + 경로참조 정적검사</td><td>경로 이동 커밋에서 참조 누락 <b>자동 차단</b> 재현 시험 통과</td><td>진아</td></tr>
+<tr><td>ACCT-022</td><td>LLM 폴백 이원화</td><td>codex 실패 시 Anthropic OAuth 경유 검증</td><td>codex 강제 실패 주입 시 검증이 <b>중단 없이</b> 완료</td><td>CTO AI</td></tr>
+<tr><td>ACCT-023</td><td>백업 오프사이트 + 복원 리허설</td><td>contabo116 동기화 + 복원 절차서</td><td>임의 산출물 1건을 백업본에서 <b>실제 복원</b> 성공</td><td>CTO AI</td></tr>
+<tr><td>ACCT-024</td><td>CLAUDE.md 분리(규칙/사건로그)</td><td>규칙본 + 사건로그 아카이브</td><td>훅 주입 토큰량 <b>측정치 기준 감소</b> 확인</td><td>진아</td></tr>
+</table>
+
+<h3>Phase 3 — 데이터 계층 승격 (2~4주)</h3>
+<table>
+<tr><th style="width:95px">작업ID</th><th style="width:230px">작업</th><th>산출물</th><th style="width:230px">완료 검증 기준</th><th style="width:90px">담당</th></tr>
+<tr><td>ACCT-030</td><td>PostgreSQL 15 설치 + 스키마 설계</td><td><code>voucher</code>(전표) / <code>recon</code>(대사) / <code>audit_log</code> / <code>vendor</code></td><td>7월 확정 전표를 적재해 <b>위하고 원장과 차 0</b> 재현</td><td>CTO AI</td></tr>
+<tr><td>ACCT-031</td><td>산출물 → DB 이중기록 (파일 유지)</td><td>적재 어댑터</td><td>신규 작업 10건이 파일·DB 양쪽에 <b>동일 값</b>으로 기록</td><td>진아</td></tr>
+<tr><td>ACCT-032</td><td>감사추적(누가·언제·무엇을 바꿨나)</td><td><code>audit_log</code> 자동 기록</td><td>임의 전표 수정 1건의 <b>변경 전/후 값 조회 가능</b></td><td>진아</td></tr>
+<tr><td>ACCT-033</td><td>월마감 리포트 자동 생성</td><td>계정별 증감·이상거래 리포트 HTML</td><td>8월 마감 리포트가 <b>수작업 결과와 일치</b></td><td>진아</td></tr>
+</table>
+
+<h4>일정 개요</h4>
+<table>
+<tr><th style="width:110px">단계</th><th style="width:110px">기간</th><th>진척 비중</th><th>선행조건</th></tr>
+<tr><td>Phase 0</td><td>09-02 ~ 09-03</td><td><div class="bar"><i style="width:10%"></i></div>10%</td><td class="err">CEO 결제·재발급 필요</td></tr>
+<tr><td>Phase 1</td><td>09-03 ~ 09-05</td><td><div class="bar"><i style="width:30%"></i></div>30%</td><td>Phase 0 완료</td></tr>
+<tr><td>Phase 2</td><td>09-05 ~ 09-12</td><td><div class="bar"><i style="width:60%"></i></div>60%</td><td>Phase 1 관제 가동</td></tr>
+<tr><td>Phase 3</td><td>09-12 ~ 10-03</td><td><div class="bar"><i style="width:100%"></i></div>100%</td><td>CEO 회계정책 확정(7장)</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>7. AADS 연동 목표 아키텍처</h2>
+<div class="flow">
+<pre>
+  ┌────────────── AADS (contabo116 · 5.104.86.116) ──────────────┐
+  │  CEO Chat  ─ 지시/보고                                        │
+  │  Watchdog  ─ 5분 주기 헬스체크 ──┐                            │
+  │  Dashboard ─ ACCT 패널          │  텔레그램 경보              │
+  │  Vault     ─ (ACCT 10건 소프트삭제 완료, 금고로 단일화)       │
+  └────────────────────┬─────────────┘                            
+                       │ SSH (Host acct, 키인증)                  
+  ┌────────────────────▼───────────── ACCT (5.104.85.244) ───────┐
+  │  진아실장 8서비스 · 타이머 15개 · 도구 159개                  │
+  │  비밀은 서버 자체 금고(_금고.py, 127곳)에서만 조회            │
+  └──────────────────────────────────────────────────────────────┘
+
+  경계 규칙
+   · AADS는 「관제·보고·배포 트리거」만 담당. 회계 로직은 진아실장이 계속 소유한다.
+   · 비밀은 AADS로 복제하지 않는다(이중관리 폐지 — 09-02 17:53 KST 조치 완료).
+   · 코드 변경은 기존 git 흐름(2분 자동 pull) 유지. AADS 러너는 강제하지 않는다.
+</pre>
+</div>
+<p class="src">[근거: AADS <code>/root/.ssh/config</code> 실측 — 244 미등록 / 09-02 17:53 KST AADS Vault ACCT 크리덴셜 10건 <code>is_active=false</code> 처리 완료]</p>
+
+<!-- ============================================================ -->
+<h2>8. CEO 의사결정 대기 항목</h2>
+<table>
+<tr><th style="width:44px">#</th><th style="width:220px">사안</th><th>선택지</th><th style="width:230px">미결 시 영향</th></tr>
+<tr><td>1</td><td>codex 크레딧 충전</td><td>(A) 즉시 충전 (B) Anthropic 폴백으로 대체</td><td class="err">전표 확정 라인 계속 정지</td></tr>
+<tr><td>2</td><td>미식별 입금 처리 계정</td><td>(A) 현행: 현금매출분 확인불가건+외상매출금 (B) 진식안: 가수금(부채)</td><td>매출채권 과대계상 지속</td></tr>
+<tr><td>3</td><td>환불 처리 방식</td><td>(A) 현행: 외상매출금 상계(6,239건 일관) (B) 매출환입/에누리</td><td>원장 이원화 위험 — 변경 시 소급 필요</td></tr>
+<tr><td>4</td><td>차량코드 관리 체계</td><td>위하고 <code>업무용승용차등록</code> 메뉴 사용 여부</td><td>일반전표 <code>no_car</code> 0건 → 업무용승용차 명세서 불일치</td></tr>
+<tr><td>5</td><td>전기차 충전비 계정</td><td>현행 (판)복리후생비 36건 유지 / 차량유지비 변경</td><td>명세서 금액 불일치</td></tr>
+<tr><td>6</td><td>결의서 회사 양식</td><td>기존 양식 제공 / 신규 설계</td><td>결의서 자동생성 착수 불가</td></tr>
+<tr><td>7</td><td>프리랜서 원천징수 재분개 오더</td><td>착수 시점 지정</td><td>145건 단일처리 상태 유지</td></tr>
+<tr><td>8</td><td>7/31 3계정 재계산 결과 확인</td><td>승인 / 반려</td><td>거래처원장 마감 지연</td></tr>
+</table>
+<p class="src">[출처: <code>/srv/biseo/_물어볼것.md</code> 09-02 05:58 실측 — 미답변 6건 + 확인대기 2건]</p>
+
+<!-- ============================================================ -->
+<h2>9. 완료 정의(DoD) 및 검증 방법</h2>
+<table>
+<tr><th style="width:160px">대상</th><th>검증 명령 / 방법</th><th style="width:200px">합격 기준</th></tr>
+<tr><td>서비스 가동</td><td><code>systemctl list-units --type=service --state=running</code></td><td>biseo-* 8종 running</td></tr>
+<tr><td>타이머 정상</td><td><code>systemctl list-timers --all</code></td><td>15종 NEXT 값 존재, PASSED가 주기 초과 없음</td></tr>
+<tr><td>코드 동기화</td><td><code>git status --short</code> / <code>git log origin/main..HEAD</code></td><td>둘 다 비어 있음</td></tr>
+<tr><td>교차검증 가동</td><td><code>python3 도구/_토론.py 시작 …</code></td><td>판정문 생성 + <code>[의심]</code> 절 포함</td></tr>
+<tr><td>AADS 관제</td><td>임의 서비스 <code>stop</code> 후 대기</td><td>5분 내 텔레그램 경보 수신</td></tr>
+<tr><td>백업 복원</td><td>백업본에서 산출물 1건 복원</td><td>원본과 바이트 동일</td></tr>
+<tr><td>회계 정합성</td><td>계정별 잔액 vs 위하고 원장 대조</td><td>차 0 (이월분 예외는 근거 명시)</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>10. 부록 — 실측 원문 발췌</h2>
+<h4>A. 타이머 (18:10 KST)</h4>
+<pre>Wed 2026-09-02 18:10:09 KST  biseo-wake.timer        (1분 주기, 36초 전 실행)
+Wed 2026-09-02 18:11:02 KST  biseo-pcwatch.timer     (5분)
+Wed 2026-09-02 18:14:18 KST  biseo-guard.timer       (5분)
+Wed 2026-09-02 18:15:54 KST  biseo-scan.timer        (30분)
+Thu 2026-09-03 03:00:00 KST  biseo-night.timer       (야간 자동작업)
+Thu 2026-09-03 12:00:00 KST  biseo-backup.timer      (백업)</pre>
+<h4>B. 자원</h4>
+<pre>메모리:  총 23Gi  사용 3.2Gi  가용 20Gi   스왑 0B
+/dev/sda1  290G  사용 25G  가용 265G  9%
+18:10:47 up 2 days, 2:04, 6 users, load average: 1.08, 0.63, 0.46</pre>
+<h4>C. 로그 경보</h4>
+<pre>$ journalctl -u biseo-worker -u biseo-chat --since '2026-09-02 00:00' -p warning
+-- No entries --</pre>
+<h4>D. 미커밋 파일</h4>
+<pre>M  규칙/계정과목_매핑.md
+?? 규칙/_목차.md
+?? 규칙/롯데카드_승인내역받기.md
+?? 규칙/비씨카드_승인내역받기.md
+?? 규칙/하나카드_승인내역받기.md</pre>
+
+<div class="foot">
+본 보고서의 모든 수치는 2026-09-02 18:08~18:11 KST 사이 <code>5.104.85.244</code> SSH 실측 및
+<code>/srv/biseo</code> 문서 원문에서 인용했습니다. 추정 항목은 본문에 "추정"으로 표기했으며,
+확인하지 못한 항목(백업 목적지, 자격증명 재발급 여부, 반려 루프 평균)은 <b>미검증</b>으로 명시했습니다.<br>
+생성: AADS CTO AI · 파일 <code>app/static/reports/ACCT_next_steps_20260902.html</code>
+</div>
+
+</div>
+</body>
+</html>

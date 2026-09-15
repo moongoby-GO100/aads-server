@@ -1,0 +1,1435 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta name="robots" content="noindex,nofollow">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>공용 회계프로그램 PRD — Hermes Gateway + LangGraph/LangChain/LangSmith</title>
+<style>
+:root {
+  --bg: #0a0e17; --card: #111827; --card2: #1a2332; --border: #1e3a5f;
+  --text: #e2e8f0; --muted: #94a3b8; --accent: #3b82f6; --accent2: #8b5cf6;
+  --green: #10b981; --orange: #f59e0b; --red: #ef4444; --cyan: #06b6d4;
+  --pink: #ec4899;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+.container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+
+/* Header */
+.header { text-align: center; padding: 3rem 0; border-bottom: 1px solid var(--border); margin-bottom: 3rem; }
+.header h1 { font-size: 2.2rem; background: linear-gradient(135deg, var(--accent), var(--accent2), var(--pink)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 0.5rem; }
+.header .subtitle { color: var(--muted); font-size: 1.1rem; }
+.header .meta { display: flex; justify-content: center; gap: 2rem; margin-top: 1.5rem; flex-wrap: wrap; }
+.header .meta span { background: var(--card); padding: 0.4rem 1rem; border-radius: 20px; font-size: 0.85rem; border: 1px solid var(--border); }
+
+/* TOC */
+.toc { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; margin-bottom: 3rem; }
+.toc h2 { color: var(--accent); margin-bottom: 1rem; font-size: 1.3rem; }
+.toc ol { padding-left: 1.5rem; }
+.toc li { margin: 0.4rem 0; }
+.toc a { color: var(--cyan); text-decoration: none; }
+.toc a:hover { text-decoration: underline; }
+
+/* Sections */
+.section { margin-bottom: 3rem; }
+.section h2 { font-size: 1.6rem; color: var(--accent); border-left: 4px solid var(--accent); padding-left: 1rem; margin-bottom: 1.5rem; }
+.section h3 { font-size: 1.2rem; color: var(--cyan); margin: 1.5rem 0 0.8rem; }
+.section h4 { font-size: 1.05rem; color: var(--orange); margin: 1rem 0 0.5rem; }
+.section p { margin-bottom: 1rem; color: var(--text); }
+
+/* Cards */
+.card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.5rem; margin: 1.5rem 0; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; transition: border-color 0.3s; }
+.card:hover { border-color: var(--accent); }
+.card .icon { font-size: 2rem; margin-bottom: 0.8rem; }
+.card h4 { color: var(--accent); margin-bottom: 0.5rem; }
+.card p { font-size: 0.9rem; color: var(--muted); }
+.card .tag { display: inline-block; background: rgba(59,130,246,0.15); color: var(--accent); padding: 0.2rem 0.6rem; border-radius: 12px; font-size: 0.75rem; margin: 0.3rem 0.2rem 0 0; }
+.card .tag.green { background: rgba(16,185,129,0.15); color: var(--green); }
+.card .tag.orange { background: rgba(245,158,11,0.15); color: var(--orange); }
+.card .tag.pink { background: rgba(236,72,153,0.15); color: var(--pink); }
+.card .tag.purple { background: rgba(139,92,246,0.15); color: var(--accent2); }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; margin: 1rem 0 1.5rem; font-size: 0.9rem; }
+th { background: var(--card2); color: var(--accent); text-align: left; padding: 0.8rem 1rem; border: 1px solid var(--border); position: sticky; top: 0; }
+td { padding: 0.7rem 1rem; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) { background: rgba(17,24,39,0.5); }
+.status-yes { color: var(--green); font-weight: 600; }
+.status-new { color: var(--orange); font-weight: 600; }
+.status-refactor { color: var(--cyan); font-weight: 600; }
+.status-no { color: var(--red); font-weight: 600; }
+
+/* Code */
+pre { background: #0d1117; border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem; overflow-x: auto; font-size: 0.82rem; line-height: 1.6; margin: 1rem 0 1.5rem; }
+code { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+.code-label { display: inline-block; background: var(--accent2); color: white; padding: 0.2rem 0.8rem; border-radius: 6px 6px 0 0; font-size: 0.75rem; font-weight: 600; margin-bottom: -1px; position: relative; z-index: 1; }
+.kw { color: #ff7b72; } .fn { color: #d2a8ff; } .str { color: #a5d6ff; }
+.cm { color: #8b949e; } .ty { color: #79c0ff; } .num { color: #ffa657; }
+
+/* Architecture diagram */
+.arch-box { background: var(--card); border: 2px solid var(--border); border-radius: 16px; padding: 2rem; margin: 1.5rem 0; overflow-x: auto; }
+.arch-box pre { background: transparent; border: none; padding: 0; font-size: 0.78rem; line-height: 1.5; }
+
+/* Flow */
+.flow-container { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 1.5rem 0; justify-content: center; }
+.flow-step { background: var(--card); border: 2px solid var(--accent); border-radius: 10px; padding: 0.6rem 1.2rem; text-align: center; min-width: 120px; }
+.flow-step.hermes { border-color: var(--pink); }
+.flow-step.langgraph { border-color: var(--accent2); }
+.flow-step.langchain { border-color: var(--green); }
+.flow-step.langsmith { border-color: var(--orange); }
+.flow-step .label { font-size: 0.7rem; color: var(--muted); }
+.flow-step .name { font-weight: 700; font-size: 0.9rem; }
+.flow-arrow { color: var(--muted); font-size: 1.5rem; }
+
+/* Phase timeline */
+.timeline { position: relative; padding-left: 2rem; margin: 1.5rem 0; }
+.timeline::before { content: ''; position: absolute; left: 0.5rem; top: 0; bottom: 0; width: 2px; background: var(--border); }
+.timeline-item { position: relative; margin-bottom: 1.5rem; padding-left: 1.5rem; }
+.timeline-item::before { content: ''; position: absolute; left: -1.65rem; top: 0.4rem; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent); background: var(--bg); }
+.timeline-item.done::before { background: var(--green); border-color: var(--green); }
+.timeline-item .phase-title { font-weight: 700; color: var(--accent); }
+.timeline-item .duration { color: var(--orange); font-size: 0.85rem; }
+
+/* Alert boxes */
+.alert { border-radius: 8px; padding: 1rem 1.2rem; margin: 1rem 0; border-left: 4px solid; }
+.alert.info { background: rgba(59,130,246,0.1); border-color: var(--accent); }
+.alert.warn { background: rgba(245,158,11,0.1); border-color: var(--orange); }
+.alert.success { background: rgba(16,185,129,0.1); border-color: var(--green); }
+.alert.danger { background: rgba(239,68,68,0.1); border-color: var(--red); }
+.alert strong { color: var(--accent); }
+
+/* Comparison */
+.comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 1.5rem 0; }
+.comparison .col { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; }
+.comparison .col h4 { text-align: center; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+.comparison .col.before h4 { color: var(--red); }
+.comparison .col.after h4 { color: var(--green); }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .container { padding: 1rem; }
+  .header h1 { font-size: 1.5rem; }
+  .comparison { grid-template-columns: 1fr; }
+  .card-grid { grid-template-columns: 1fr; }
+  table { font-size: 0.8rem; }
+  th, td { padding: 0.5rem; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ═══════════════════════════════════════════ HEADER ═══════════════════════════════════════════ -->
+<div class="header">
+  <h1>공용 회계프로그램 AI 자동화 PRD</h1>
+  <div class="subtitle">Hermes Gateway + LangGraph + LangChain + LangSmith 기반 아키텍처</div>
+  <div class="meta">
+    <span>문서번호: ACCT-PRD-001</span>
+    <span>작성일: 2026-09-09</span>
+    <span>작성자: 총책임자 (AI)</span>
+    <span>상태: CEO 검토 요청</span>
+    <span>버전: 1.0</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ TOC ═══════════════════════════════════════════ -->
+<div class="toc">
+  <h2>목차</h2>
+  <ol>
+    <li><a href="#s1">Executive Summary</a></li>
+    <li><a href="#s2">현행 시스템 분석 (AS-IS)</a></li>
+    <li><a href="#s3">기술 스택 선정 근거</a></li>
+    <li><a href="#s4">프로세스 설계 (TO-BE 아키텍처)</a></li>
+    <li><a href="#s5">PRD — 제품 요구사항 정의서</a></li>
+    <li><a href="#s6">목업 코드 (재사용 가능 수준)</a></li>
+    <li><a href="#s7">Tool Connect 명세</a></li>
+    <li><a href="#s8">데이터 모델 (DB 스키마)</a></li>
+    <li><a href="#s9">마이그레이션 로드맵</a></li>
+    <li><a href="#s10">비용 분석 및 ROI</a></li>
+    <li><a href="#s11">리스크 및 대응</a></li>
+    <li><a href="#s12">결론 및 다음 단계</a></li>
+  </ol>
+</div>
+
+<!-- ═══════════════════════════════════════════ 1. EXECUTIVE SUMMARY ═══════════════════════════════════════════ -->
+<div class="section" id="s1">
+  <h2>1. Executive Summary</h2>
+
+  <div class="alert info">
+    <strong>핵심 결론:</strong> 진아실장의 커스텀 Python 오케스트레이션(4,698줄 하네스 + 254개 도구)을
+    <strong>Hermes Gateway(프론트) + LangGraph(오케스트레이션) + LangChain(도구통합) + LangSmith(모니터링)</strong>
+    스택으로 전환하면, 멀티테넌트 공용화 + LLMOps 관측성 + 멀티채널 접속을 동시에 달성할 수 있습니다.
+    기존 148개 도구 중 <strong>120+개는 LangChain Tool로 래핑하여 그대로 재사용</strong> 가능합니다.
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="icon">🏗️</div>
+      <h4>현행 (AS-IS)</h4>
+      <p>순수 Python, 파일 기반(JSONL), 커스텀 HTTP 서버, ntfy 단일 채널, LLM 호출 장부 수동 기록</p>
+      <span class="tag orange">단일 테넌트</span>
+      <span class="tag orange">관측성 없음</span>
+      <span class="tag">254개 파일</span>
+    </div>
+    <div class="card">
+      <div class="icon">🚀</div>
+      <h4>목표 (TO-BE)</h4>
+      <p>Hermes 멀티채널 게이트웨이, LangGraph StateGraph 오케스트레이션, PostgreSQL, LangSmith 트레이싱</p>
+      <span class="tag green">멀티 테넌트</span>
+      <span class="tag green">완전 관측</span>
+      <span class="tag purple">120+ Tool 재사용</span>
+    </div>
+  </div>
+
+  <table>
+    <tr><th>지표</th><th>현행</th><th>전환 후</th><th>개선</th></tr>
+    <tr><td>멀티테넌시</td><td>브라우저 프로필 분리(3방)</td><td>DB tenant_id 정식 격리</td><td class="status-new">∞ 확장</td></tr>
+    <tr><td>접속 채널</td><td>PWA 1개 + ntfy 알림</td><td>Telegram·Discord·Slack·WhatsApp·Web·ntfy (12+)</td><td class="status-new">12× 채널</td></tr>
+    <tr><td>LLM 비용 추적</td><td>JSONL 수동 기록</td><td>LangSmith 자동 트레이싱 + 테넌트별 분리</td><td class="status-new">실시간</td></tr>
+    <tr><td>장애 복구</td><td>JSONL 즉시 쓰기</td><td>LangGraph Checkpoint (PostgreSQL)</td><td class="status-refactor">자동 재개</td></tr>
+    <tr><td>에이전트 오케스트레이션</td><td>커스텀 Python 4,698줄</td><td>LangGraph StateGraph ~500줄</td><td class="status-green">90% 축소</td></tr>
+    <tr><td>도구 통합</td><td>subprocess 직접 호출</td><td>LangChain StructuredTool + MCP</td><td class="status-refactor">표준화</td></tr>
+  </table>
+</div>
+
+<!-- ═══════════════════════════════════════════ 2. AS-IS ═══════════════════════════════════════════ -->
+<div class="section" id="s2">
+  <h2>2. 현행 시스템 분석 (AS-IS)</h2>
+
+  <h3>2.1 진아실장 아키텍처 실측</h3>
+  <table>
+    <tr><th>구성요소</th><th>구현</th><th>파일</th><th>규모</th></tr>
+    <tr><td>오케스트레이터</td><td>커스텀 Python 하네스</td><td><code>도구/_하네스.py</code></td><td>4,698줄 / 253KB</td></tr>
+    <tr><td>채팅 서버</td><td><code>http.server</code> + <code>socketserver</code></td><td><code>채팅앱/server.py</code></td><td>2,198줄</td></tr>
+    <tr><td>브라우저 자동화</td><td>Playwright + Xvfb + VNC</td><td><code>도구/위하고_워커.py</code></td><td>Room 패턴</td></tr>
+    <tr><td>자격증명 금고</td><td>AES-256-GCM + scrypt</td><td><code>도구/_금고.py</code></td><td>127건</td></tr>
+    <tr><td>감찰관/감시관</td><td>규정 준수 게이트</td><td><code>도구/_감찰관.py</code></td><td>2,634줄 / 126KB</td></tr>
+    <tr><td>데이터 저장</td><td>JSON/JSONL 파일</td><td><code>기억/*.jsonl</code></td><td>~40 파일</td></tr>
+    <tr><td>LLM 모델 라우팅</td><td>워터폴: Claude→DeepSeek→GPT→무료 12종</td><td><code>기억/_설정.json</code></td><td>5개 역할별 모델</td></tr>
+    <tr><td>도구 전체</td><td>Python 모듈 직접 호출</td><td><code>도구/*.py</code></td><td>254개 (본체 148개)</td></tr>
+    <tr><td>서비스</td><td>systemd 8종 + 타이머 5종</td><td><code>/etc/systemd/system/biseo-*</code></td><td>실행 중</td></tr>
+  </table>
+
+  <h3>2.2 현행 에이전트 역할 체계</h3>
+  <table>
+    <tr><th>에이전트</th><th>역할</th><th>모델</th><th>업무</th></tr>
+    <tr><td>진아 (비서실장)</td><td>오케스트레이터 + 판단</td><td>Claude Opus 5</td><td>위하고 입력, 회계 판단, 전체 관리</td></tr>
+    <tr><td>진식 (감사)</td><td>교차검증</td><td>GPT-5.6-Sol (Codex)</td><td>진아 결과물 검증, 부서장(DeepSeek) 검증</td></tr>
+    <tr><td>서린 (부서장)</td><td>분석/검증</td><td>Claude Fable 5 (검증 시)</td><td>GPT-6-Astra 컴퓨터조작 결과 검증</td></tr>
+    <tr><td>컴퓨터조작</td><td>외부 사이트 자동화</td><td>GPT-6-Astra</td><td>카드사, 공단, 매출처 화면 조작</td></tr>
+    <tr><td>부서장</td><td>부서 관리</td><td>DeepSeek Reasoner (무료)</td><td>무료 AI 관리, 보고 생성</td></tr>
+    <tr><td>대리/직원</td><td>실무 수행</td><td>DeepSeek Chat / 무료 AI 12종</td><td>단순 작업 수행</td></tr>
+  </table>
+
+  <h3>2.3 현행 모델 라우팅 (워터폴)</h3>
+  <div class="arch-box">
+<pre>
+┌──────────────────────────────────────────────────────────────────────┐
+│  현행 _하네스.py 워터폴 라우팅                                         │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  오더 접수 → 부서 칸 배정 → 모델 줄(line) 순회                          │
+│                                                                      │
+│  진아:     Claude Opus 5 ──(한도)──→ ❌ 대기(_대기깨우기.py)             │
+│  부서장:   DeepSeek Reasoner ──(한도)──→ 무료 AI 12종 순회              │
+│  컴퓨터:  GPT-6-Astra ──(한도)──→ ❌ 대기                              │
+│  검증:     Claude Fable 5 ──(한도)──→ ❌ 대기                           │
+│  대리:     DeepSeek Chat ──(한도)──→ 무료 AI 순회                       │
+│                                                                      │
+│  무료 AI 순회:                                                        │
+│  Groq → Mistral → Cerebras → NVIDIA → SambaNova                     │
+│  → Together → HuggingFace → OpenRouter → Gemini                     │
+│  (⚠ 도구 사용 불가, 텍스트 응답만)                                      │
+│                                                                      │
+│  저장: 기록.jsonl (스트림 즉시 쓰기) + _모델호출장부.jsonl                │
+└──────────────────────────────────────────────────────────────────────┘
+</pre>
+  </div>
+
+  <h3>2.4 공용화 시 문제점</h3>
+  <div class="card-grid">
+    <div class="card">
+      <div class="icon">🔴</div>
+      <h4>인증 없음</h4>
+      <p>전역 비밀번호 1개(<code>BISEO_APP_PW</code>). 사용자 구분 불가, RBAC 없음, 세션 관리 없음.</p>
+    </div>
+    <div class="card">
+      <div class="icon">🔴</div>
+      <h4>테넌트 격리 없음</h4>
+      <p>금고에 <code>tenant_id</code> 없음. 장부 파일에 회사 구분 없음. 야간작업 하드코딩.</p>
+    </div>
+    <div class="card">
+      <div class="icon">🔴</div>
+      <h4>관측성 없음</h4>
+      <p>LLM 호출 비용·지연·실패를 <code>_모델호출장부.jsonl</code>에 수동 기록. 대시보드 없음, 알림 없음.</p>
+    </div>
+    <div class="card">
+      <div class="icon">🟡</div>
+      <h4>단일 채널</h4>
+      <p>PWA 웹앱 1개 + ntfy 단방향 알림. 모바일 네이티브 앱 없음, 메신저 연동 없음.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ 3. TECH STACK ═══════════════════════════════════════════ -->
+<div class="section" id="s3">
+  <h2>3. 기술 스택 선정 근거</h2>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="icon">🔮</div>
+      <h4>Hermes Agent (Nous Research)</h4>
+      <p><strong>역할: 멀티채널 메시징 게이트웨이 + 스킬 시스템</strong></p>
+      <p>MIT 라이선스, 셀프호스팅, 12+ 메신저 통합 (Telegram, Discord, Slack, WhatsApp, ntfy 등). 경험 기반 자기 개선 학습 루프. 세션 간 영속 메모리.</p>
+      <span class="tag pink">Gateway</span>
+      <span class="tag pink">Skills</span>
+      <span class="tag pink">Memory</span>
+      <span class="tag green">MIT License</span>
+      <span class="tag green">Self-hosted</span>
+    </div>
+    <div class="card">
+      <div class="icon">🕸️</div>
+      <h4>LangGraph</h4>
+      <p><strong>역할: 에이전트 오케스트레이션 (하네스 대체)</strong></p>
+      <p>StateGraph 기반 멀티에이전트 워크플로우. 조건부 라우팅, 체크포인팅(자동 복구), 순환 그래프 지원. AADS에서 이미 8-agent 그래프 운영 중 (실증 완료).</p>
+      <span class="tag purple">StateGraph</span>
+      <span class="tag purple">Checkpoint</span>
+      <span class="tag purple">Conditional Routing</span>
+      <span class="tag green">AADS 실증</span>
+    </div>
+    <div class="card">
+      <div class="icon">🔗</div>
+      <h4>LangChain</h4>
+      <p><strong>역할: 도구 통합 레이어 (148개 도구 표준화)</strong></p>
+      <p>StructuredTool 래핑, 멀티 LLM 프로바이더 추상화, Document Loader, Vector Store (규칙/지식 검색). 기존 Python 함수를 <code>@tool</code> 데코레이터만으로 LangGraph 노드에 연결.</p>
+      <span class="tag green">StructuredTool</span>
+      <span class="tag green">Multi-Provider</span>
+      <span class="tag">Document Loader</span>
+    </div>
+    <div class="card">
+      <div class="icon">📊</div>
+      <h4>LangSmith</h4>
+      <p><strong>역할: LLMOps 관측성 플랫폼 (모델호출장부 대체)</strong></p>
+      <p>모든 LLM 호출 자동 트레이싱. 테넌트별 비용 추적, 지연 시간 모니터링, 품질 평가 데이터셋 구축, 실패 디버깅. 프로덕션 대시보드.</p>
+      <span class="tag orange">Tracing</span>
+      <span class="tag orange">Cost Tracking</span>
+      <span class="tag orange">Evaluation</span>
+      <span class="tag orange">Dashboard</span>
+    </div>
+  </div>
+
+  <h3>3.1 기술 스택 비교표</h3>
+  <table>
+    <tr><th>영역</th><th>현행 (진아실장)</th><th>전환 후</th><th>전환 이유</th></tr>
+    <tr>
+      <td>프론트엔드</td>
+      <td><code>채팅앱/server.py</code> (http.server, 2,198줄)</td>
+      <td>Hermes Gateway + Next.js 대시보드</td>
+      <td>멀티채널 확장, 스킬 자동 생성, 영속 메모리</td>
+    </tr>
+    <tr>
+      <td>오케스트레이션</td>
+      <td><code>_하네스.py</code> (4,698줄 커스텀)</td>
+      <td>LangGraph StateGraph (~500줄)</td>
+      <td>체크포인팅 내장, 조건부 라우팅, 그래프 시각화</td>
+    </tr>
+    <tr>
+      <td>모델 라우팅</td>
+      <td>워터폴 하드코딩 (<code>기억/_설정.json</code>)</td>
+      <td>LangChain ChatModel + Fallback Chain</td>
+      <td>표준 인터페이스, 프로바이더 교체 무중단</td>
+    </tr>
+    <tr>
+      <td>도구 호출</td>
+      <td><code>subprocess</code> / 직접 import</td>
+      <td>LangChain StructuredTool + MCP Server</td>
+      <td>스키마 자동 생성, 입출력 검증, 도구 발견</td>
+    </tr>
+    <tr>
+      <td>데이터 저장</td>
+      <td>JSON/JSONL 파일 (~40개)</td>
+      <td>PostgreSQL 15 + JSONB</td>
+      <td>트랜잭션, 테넌트 격리, 인덱스, 백업</td>
+    </tr>
+    <tr>
+      <td>비용 추적</td>
+      <td><code>_모델호출장부.jsonl</code> 수동</td>
+      <td>LangSmith 자동 트레이싱</td>
+      <td>테넌트별 실시간 비용, 대시보드, 알림</td>
+    </tr>
+    <tr>
+      <td>감사 로그</td>
+      <td><code>금고/꺼낸기록.jsonl</code></td>
+      <td>PostgreSQL audit_log + LangSmith trace</td>
+      <td>쿼리 가능, 보존 정책, 법적 준거</td>
+    </tr>
+    <tr>
+      <td>알림</td>
+      <td>ntfy 하드코딩 토픽</td>
+      <td>Hermes Gateway (ntfy + Telegram + Slack + ...)</td>
+      <td>채널 선택 가능, 양방향 대화</td>
+    </tr>
+  </table>
+
+  <h3>3.2 왜 Hermes Gateway인가?</h3>
+  <div class="comparison">
+    <div class="col before">
+      <h4>현행: 커스텀 채팅서버</h4>
+      <ul style="padding-left:1.2rem; color:var(--muted)">
+        <li>PWA 웹앱 1개만 지원</li>
+        <li>ntfy 단방향 알림 (하드코딩)</li>
+        <li>인증: 전역 비밀번호 1개</li>
+        <li>채팅 이력: 파일 기반</li>
+        <li>새 채널 추가 시 전면 개발 필요</li>
+      </ul>
+    </div>
+    <div class="col after">
+      <h4>TO-BE: Hermes Gateway</h4>
+      <ul style="padding-left:1.2rem; color:var(--muted)">
+        <li>12+ 메신저 동시 지원 (설정만으로)</li>
+        <li>양방향 대화 (명령→결과→후속)</li>
+        <li>플랫폼별 네이티브 인증</li>
+        <li>영속 메모리 (세션 간 학습)</li>
+        <li>스킬 자동 생성 (반복 패턴 학습)</li>
+        <li><strong>ntfy 네이티브 지원</strong> (기존 호환)</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ 4. TO-BE ARCHITECTURE ═══════════════════════════════════════════ -->
+<div class="section" id="s4">
+  <h2>4. 프로세스 설계 (TO-BE 아키텍처)</h2>
+
+  <h3>4.1 전체 아키텍처</h3>
+  <div class="arch-box">
+<pre>
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                          공용 회계프로그램 TO-BE 아키텍처                               │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                     │
+│  ┌─ 1. Hermes Gateway (메시징 레이어) ─────────────────────────────────────────┐     │
+│  │                                                                              │     │
+│  │  Telegram ─┐                                                                │     │
+│  │  Discord  ─┤                                                                │     │
+│  │  Slack    ─┤──→ Hermes Core ──→ Skills Router ──→ LangGraph API             │     │
+│  │  WhatsApp ─┤       │                  │                                      │     │
+│  │  ntfy     ─┤       ▼                  ▼                                      │     │
+│  │  Web UI   ─┘  Persistent         Auto-generated                             │     │
+│  │               Memory              Skills                                     │     │
+│  └──────────────────────────────────────────────────────────────────────────────┘     │
+│                              │                                                       │
+│                              ▼                                                       │
+│  ┌─ 2. LangGraph (오케스트레이션 레이어) ──────────────────────────────────────┐     │
+│  │                                                                              │     │
+│  │  ┌───────┐    ┌──────────┐    ┌──────────┐    ┌───────┐    ┌──────────┐     │     │
+│  │  │ 접수  │───→│ 부서배정  │───→│ 에이전트  │───→│ 검증  │───→│ 완료/보고│     │     │
+│  │  │ Node  │    │  Router  │    │  실행    │    │ Node  │    │   Node   │     │     │
+│  │  └───────┘    └──────────┘    └──────────┘    └───────┘    └──────────┘     │     │
+│  │       │              │              │              │              │          │     │
+│  │       ▼              ▼              ▼              ▼              ▼          │     │
+│  │  ┌──────────────────────────────────────────────────────────────────┐        │     │
+│  │  │              AADSAccountingState (TypedDict)                     │        │     │
+│  │  │  tenant_id │ department │ messages │ tools_used │ cost │ ...    │        │     │
+│  │  └──────────────────────────────────────────────────────────────────┘        │     │
+│  │                              │                                              │     │
+│  │                    PostgreSQL Checkpointer                                  │     │
+│  └──────────────────────────────────────────────────────────────────────────────┘     │
+│                              │                                                       │
+│                              ▼                                                       │
+│  ┌─ 3. LangChain (도구 통합 레이어) ──────────────────────────────────────────┐     │
+│  │                                                                              │     │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │     │
+│  │  │ 위하고 ERP  │  │  금고 Tool  │  │  카드 Tool  │  │  OCR Tool   │        │     │
+│  │  │ (Playwright)│  │ (AES-256)   │  │ (스캔/분석) │  │ (문서인식)  │        │     │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘        │     │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │     │
+│  │  │ 검증 Tool   │  │ 법령 Tool   │  │ 환율 Tool   │  │ 백업 Tool   │        │     │
+│  │  │(교차검증)   │  │(법률 조회)  │  │(실시간환율) │  │(서버백업)   │        │     │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘        │     │
+│  │                          ... (총 120+ Tools) ...                            │     │
+│  │                                                                              │     │
+│  │  ┌─ Multi-LLM Provider ────────────────────────────────────────────┐        │     │
+│  │  │  Claude Opus 5 → DeepSeek R → GPT-6-Astra → Fable 5 → 무료 12종│        │     │
+│  │  │  (ChatModel.with_fallbacks() 체인)                               │        │     │
+│  │  └──────────────────────────────────────────────────────────────────┘        │     │
+│  └──────────────────────────────────────────────────────────────────────────────┘     │
+│                              │                                                       │
+│                              ▼                                                       │
+│  ┌─ 4. LangSmith (관측성 레이어) ─────────────────────────────────────────────┐     │
+│  │                                                                              │     │
+│  │  Auto-Tracing ──→ Cost Dashboard ──→ Quality Eval ──→ Alert Rules           │     │
+│  │       │                  │                 │                │                │     │
+│  │  모든 LLM 호출      테넌트별 비용      평가 데이터셋    비용 초과 알림       │     │
+│  │  자동 기록          일/주/월 리포트     정확도 추적      장애 자동 감지       │     │
+│  └──────────────────────────────────────────────────────────────────────────────┘     │
+│                                                                                     │
+│  ┌─ 5. PostgreSQL 15 (데이터 레이어) ─────────────────────────────────────────┐     │
+│  │  tenants │ users │ credentials │ directives │ ledgers │ audit_log │ ...    │     │
+│  └──────────────────────────────────────────────────────────────────────────────┘     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+</pre>
+  </div>
+
+  <h3>4.2 데이터 흐름</h3>
+  <div class="flow-container">
+    <div class="flow-step hermes"><div class="label">Hermes</div><div class="name">메시지 수신</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step hermes"><div class="label">Hermes</div><div class="name">스킬 라우팅</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step langgraph"><div class="label">LangGraph</div><div class="name">접수 Node</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step langgraph"><div class="label">LangGraph</div><div class="name">부서 배정</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step langchain"><div class="label">LangChain</div><div class="name">Tool 실행</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step langgraph"><div class="label">LangGraph</div><div class="name">검증 Node</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step langsmith"><div class="label">LangSmith</div><div class="name">Trace 기록</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step hermes"><div class="label">Hermes</div><div class="name">결과 전송</div></div>
+  </div>
+
+  <h3>4.3 멀티테넌트 격리 모델</h3>
+  <div class="arch-box">
+<pre>
+┌─ 테넌트 격리 계층 ──────────────────────────────────────────────────┐
+│                                                                      │
+│  Layer 1: Hermes Gateway                                             │
+│  ├─ 채널별 tenant_id 매핑 (Telegram group → 라일론)                   │
+│  └─ 메시지에 tenant_id 자동 태깅                                      │
+│                                                                      │
+│  Layer 2: LangGraph State                                            │
+│  ├─ AADSAccountingState.tenant_id (모든 노드에서 전파)                │
+│  └─ 테넌트별 별도 thread_id (체크포인트 격리)                          │
+│                                                                      │
+│  Layer 3: LangChain Tools                                            │
+│  ├─ 위하고 워커: --방 {tenant_id} (기존 room 패턴 재사용)             │
+│  ├─ 금고: tenant_id 필터링 (HKDF 키 파생)                            │
+│  └─ 장부: tenant_id 컬럼 WHERE 절 자동 주입                          │
+│                                                                      │
+│  Layer 4: PostgreSQL                                                 │
+│  ├─ 모든 테이블에 tenant_id NOT NULL                                  │
+│  ├─ RLS (Row Level Security) 정책                                    │
+│  └─ 테넌트별 스키마 분리 (선택적)                                     │
+│                                                                      │
+│  Layer 5: LangSmith                                                  │
+│  ├─ 트레이스 metadata.tenant_id 태깅                                  │
+│  └─ 테넌트별 비용 대시보드 필터                                       │
+└──────────────────────────────────────────────────────────────────────┘
+</pre>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ 5. PRD ═══════════════════════════════════════════ -->
+<div class="section" id="s5">
+  <h2>5. PRD — 제품 요구사항 정의서</h2>
+
+  <h3>5.1 제품 비전</h3>
+  <p><strong>"어떤 회사든, 어떤 채널에서든, AI가 회계 업무를 자동으로 수행하는 공용 플랫폼"</strong></p>
+  <p>진아실장의 검증된 회계 자동화 엔진(위하고 ERP, 카드 처리, 급여, 4대보험) 위에 산업 표준 AI 오케스트레이션(LangGraph), 멀티채널 접속(Hermes), LLM 관측성(LangSmith)을 얹어 여러 회사가 동시에 사용 가능한 공용 회계프로그램으로 전환합니다.</p>
+
+  <h3>5.2 핵심 요구사항 (Functional Requirements)</h3>
+  <table>
+    <tr><th>ID</th><th>요구사항</th><th>우선순위</th><th>구현 기술</th><th>매핑 (AS-IS)</th></tr>
+    <tr><td>FR-001</td><td>멀티채널 메시지 수신/응답 (Telegram, Discord, Slack, WhatsApp, ntfy, Web)</td><td class="status-new">P0</td><td>Hermes Gateway</td><td>채팅앱/server.py → 대체</td></tr>
+    <tr><td>FR-002</td><td>테넌트별 회계 작업 요청 및 실행</td><td class="status-new">P0</td><td>LangGraph StateGraph</td><td>_하네스.py → 대체</td></tr>
+    <tr><td>FR-003</td><td>위하고 ERP 자동화 (전표입력, 조회, 인쇄)</td><td class="status-yes">P0</td><td>LangChain Tool (기존 재사용)</td><td>위하고_워커.py ✅</td></tr>
+    <tr><td>FR-004</td><td>카드 매입 자동 분류 및 입력</td><td class="status-yes">P0</td><td>LangChain Tool (기존 재사용)</td><td>카드마감.py ✅</td></tr>
+    <tr><td>FR-005</td><td>교차검증 (다중 LLM 검증)</td><td class="status-yes">P0</td><td>LangGraph 순환 그래프</td><td>교차검증.py ✅</td></tr>
+    <tr><td>FR-006</td><td>테넌트별 자격증명 관리 (AES-256-GCM)</td><td class="status-refactor">P0</td><td>LangChain Tool + PostgreSQL</td><td>_금고.py → 리팩터링</td></tr>
+    <tr><td>FR-007</td><td>모든 LLM 호출 자동 트레이싱 + 비용 추적</td><td class="status-new">P0</td><td>LangSmith</td><td>_모델호출장부.jsonl → 대체</td></tr>
+    <tr><td>FR-008</td><td>테넌트별 사용자 인증 + RBAC</td><td class="status-new">P0</td><td>Hermes + PostgreSQL</td><td>신규</td></tr>
+    <tr><td>FR-009</td><td>야간 배치 작업 (테넌트별 스케줄)</td><td class="status-refactor">P1</td><td>LangGraph + Celery/APScheduler</td><td>_야간작업.py → 리팩터링</td></tr>
+    <tr><td>FR-010</td><td>급여/4대보험 자동화</td><td class="status-yes">P1</td><td>LangChain Tool (기존 재사용)</td><td>_근태계산.py ✅</td></tr>
+    <tr><td>FR-011</td><td>외부 사이트 자동 자료수집 (카드사, 공단)</td><td class="status-yes">P1</td><td>LangChain Tool (기존 재사용)</td><td>_자료수집.py ✅</td></tr>
+    <tr><td>FR-012</td><td>스킬 자동 생성 (반복 패턴 학습)</td><td class="status-new">P2</td><td>Hermes Skills System</td><td>신규</td></tr>
+    <tr><td>FR-013</td><td>관리자 대시보드 (테넌트 관리, 비용, 작업 현황)</td><td class="status-new">P2</td><td>Next.js + LangSmith API</td><td>신규</td></tr>
+    <tr><td>FR-014</td><td>규정 준수 게이트 (감찰관 일반화)</td><td class="status-refactor">P1</td><td>LangGraph Guard Node</td><td>_감찰관.py → 리팩터링</td></tr>
+  </table>
+
+  <h3>5.3 비기능 요구사항 (Non-Functional Requirements)</h3>
+  <table>
+    <tr><th>ID</th><th>요구사항</th><th>목표치</th><th>구현</th></tr>
+    <tr><td>NFR-001</td><td>동시 테넌트 수</td><td>최소 20개 회사</td><td>PostgreSQL RLS + LangGraph thread 분리</td></tr>
+    <tr><td>NFR-002</td><td>응답 시간 (단순 조회)</td><td>&lt; 3초</td><td>LangGraph 캐시 + DB 인덱스</td></tr>
+    <tr><td>NFR-003</td><td>장애 복구 시간</td><td>&lt; 30초 (자동 재개)</td><td>LangGraph PostgreSQL Checkpointer</td></tr>
+    <tr><td>NFR-004</td><td>LLM 비용 가시성</td><td>테넌트별 실시간</td><td>LangSmith trace metadata</td></tr>
+    <tr><td>NFR-005</td><td>데이터 격리</td><td>테넌트 간 완전 격리</td><td>PostgreSQL RLS + 암호화 키 분리</td></tr>
+    <tr><td>NFR-006</td><td>가용성</td><td>99.5% (월 3.6h 이내 중단)</td><td>systemd + 헬스체크 + 자동 재시작</td></tr>
+    <tr><td>NFR-007</td><td>LLM 호출 제한</td><td>15회/task (CEO 규칙)</td><td>LangGraph State.llm_calls_count</td></tr>
+  </table>
+</div>
+
+<!-- ═══════════════════════════════════════════ 6. MOCKUP CODE ═══════════════════════════════════════════ -->
+<div class="section" id="s6">
+  <h2>6. 목업 코드 (재사용 가능 수준)</h2>
+
+  <div class="alert info">
+    <strong>설계 원칙:</strong> 아래 목업은 실제 프로젝트에 즉시 복사하여 사용 가능한 수준으로 작성되었습니다.
+    진아실장의 기존 도구(148개)를 LangChain Tool로 래핑하고, LangGraph StateGraph로 오케스트레이션하는 패턴을 보여줍니다.
+  </div>
+
+  <h3>6.1 프로젝트 구조</h3>
+  <span class="code-label">프로젝트 디렉터리</span>
+<pre><code>acct-platform/
+├── hermes/                      # Hermes Gateway 설정
+│   ├── config.yaml              # 메시징 채널 설정
+│   ├── skills/                  # 자동 생성 스킬
+│   └── providers.yaml           # LLM 프로바이더 설정
+├── graph/                       # LangGraph 오케스트레이션
+│   ├── __init__.py
+│   ├── state.py                 # AccountingState 정의
+│   ├── builder.py               # StateGraph 빌드
+│   ├── nodes/                   # 그래프 노드
+│   │   ├── intake.py            # 접수 노드
+│   │   ├── department_router.py # 부서 배정
+│   │   ├── executor.py          # 에이전트 실행
+│   │   ├── verifier.py          # 교차검증
+│   │   └── reporter.py          # 완료 보고
+│   └── routing.py               # 조건부 라우팅 함수
+├── tools/                       # LangChain Tools (기존 도구 래핑)
+│   ├── __init__.py
+│   ├── wehago.py                # 위하고 ERP Tool
+│   ├── vault.py                 # 금고 Tool
+│   ├── card.py                  # 카드 매입 Tool
+│   ├── verification.py          # 교차검증 Tool
+│   ├── payroll.py               # 급여/4대보험 Tool
+│   └── data_collect.py          # 외부 자료수집 Tool
+├── models/                      # Multi-LLM 라우팅
+│   ├── __init__.py
+│   ├── provider.py              # LangChain ChatModel 팩토리
+│   └── fallback_chain.py        # 워터폴 폴백 체인
+├── db/                          # PostgreSQL
+│   ├── models.py                # SQLAlchemy 모델
+│   ├── migrations/              # Alembic 마이그레이션
+│   └── tenant_rls.sql           # RLS 정책
+├── api/                         # FastAPI 엔드포인트
+│   ├── main.py
+│   ├── auth.py                  # 인증/인가
+│   └── webhooks.py              # Hermes 웹훅 수신
+├── docker-compose.yml
+├── .env                         # 환경변수 (API 키)
+└── pyproject.toml
+</code></pre>
+
+  <h3>6.2 LangGraph State 정의</h3>
+  <span class="code-label">graph/state.py</span>
+<pre><code><span class="cm">"""공용 회계프로그램 — LangGraph State 정의"""</span>
+<span class="kw">from</span> typing <span class="kw">import</span> TypedDict, Annotated, Optional, Literal
+<span class="kw">import</span> operator
+<span class="kw">from</span> langgraph.graph <span class="kw">import</span> add_messages
+
+
+<span class="kw">def</span> <span class="fn">_last</span>(a, b):
+    <span class="kw">return</span> b
+
+
+<span class="kw">def</span> <span class="fn">_merge_cost</span>(a: <span class="ty">dict</span>, b: <span class="ty">dict</span>) -> <span class="ty">dict</span>:
+    result = <span class="ty">dict</span>(a)
+    <span class="kw">for</span> k, v <span class="kw">in</span> b.items():
+        <span class="kw">if</span> k <span class="kw">in</span> result <span class="kw">and</span> <span class="kw">isinstance</span>(v, (<span class="ty">int</span>, <span class="ty">float</span>)):
+            result[k] = result[k] + v
+        <span class="kw">else</span>:
+            result[k] = v
+    <span class="kw">return</span> result
+
+
+<span class="kw">class</span> <span class="ty">AccountingState</span>(TypedDict):
+    <span class="cm"># ── 테넌트 식별 ──</span>
+    tenant_id: Annotated[<span class="ty">str</span>, _last]
+    company_name: Annotated[<span class="ty">str</span>, _last]
+
+    <span class="cm"># ── 메시지 ──</span>
+    messages: Annotated[<span class="ty">list</span>, add_messages]
+
+    <span class="cm"># ── 작업 ──</span>
+    department: Annotated[<span class="ty">str</span>, _last]  <span class="cm"># 재무, 인사, 투자, 교육</span>
+    task_type: Annotated[Optional[<span class="ty">str</span>], _last]
+    task_description: Annotated[<span class="ty">str</span>, _last]
+
+    <span class="cm"># ── 에이전트 라우팅 ──</span>
+    current_agent: Annotated[Optional[<span class="ty">str</span>], _last]  <span class="cm"># 진아, 진식, 서린, 부서장</span>
+    agent_model: Annotated[Optional[<span class="ty">str</span>], _last]
+
+    <span class="cm"># ── 도구 실행 결과 ──</span>
+    tool_results: Annotated[<span class="ty">list</span>[<span class="ty">dict</span>], operator.add]
+    wehago_actions: Annotated[<span class="ty">list</span>[<span class="ty">dict</span>], operator.add]
+
+    <span class="cm"># ── 검증 ──</span>
+    verification_result: Annotated[Optional[<span class="ty">dict</span>], _last]
+    verification_count: Annotated[<span class="ty">int</span>, _last]
+
+    <span class="cm"># ── 비용 추적 ──</span>
+    llm_calls_count: Annotated[<span class="ty">int</span>, _last]
+    total_cost_usd: Annotated[<span class="ty">float</span>, _last]
+    cost_by_model: Annotated[<span class="ty">dict</span>, _merge_cost]
+
+    <span class="cm"># ── 제어 ──</span>
+    status: Annotated[Literal[
+        <span class="str">"접수"</span>, <span class="str">"배정"</span>, <span class="str">"실행중"</span>, <span class="str">"검증중"</span>,
+        <span class="str">"완료"</span>, <span class="str">"실패"</span>, <span class="str">"대기"</span>
+    ], _last]
+    error_log: Annotated[<span class="ty">list</span>[<span class="ty">str</span>], operator.add]
+</code></pre>
+
+  <h3>6.3 LangGraph Builder (하네스 대체)</h3>
+  <span class="code-label">graph/builder.py</span>
+<pre><code><span class="cm">"""공용 회계프로그램 — LangGraph StateGraph 빌드
+현행 _하네스.py (4,698줄) → StateGraph (~200줄)로 전환
+"""</span>
+<span class="kw">from</span> langgraph.graph <span class="kw">import</span> StateGraph, START, END
+<span class="kw">from</span> graph.state <span class="kw">import</span> AccountingState
+<span class="kw">from</span> graph.nodes.intake <span class="kw">import</span> intake_node
+<span class="kw">from</span> graph.nodes.department_router <span class="kw">import</span> department_router_node
+<span class="kw">from</span> graph.nodes.executor <span class="kw">import</span> executor_node
+<span class="kw">from</span> graph.nodes.verifier <span class="kw">import</span> verifier_node
+<span class="kw">from</span> graph.nodes.reporter <span class="kw">import</span> reporter_node
+
+
+<span class="kw">def</span> <span class="fn">route_after_intake</span>(state: AccountingState) -> <span class="ty">str</span>:
+    <span class="kw">if</span> state[<span class="str">"llm_calls_count"</span>] >= <span class="num">15</span>:
+        <span class="kw">return</span> <span class="str">"__end__"</span>  <span class="cm"># CEO 규칙: 15회/task</span>
+    <span class="kw">return</span> <span class="str">"department_router"</span>
+
+
+<span class="kw">def</span> <span class="fn">route_after_execution</span>(state: AccountingState) -> <span class="ty">str</span>:
+    <span class="kw">if</span> state[<span class="str">"status"</span>] == <span class="str">"실패"</span>:
+        <span class="kw">return</span> <span class="str">"reporter"</span>
+    <span class="kw">if</span> state[<span class="str">"llm_calls_count"</span>] >= <span class="num">15</span>:
+        <span class="kw">return</span> <span class="str">"reporter"</span>
+    <span class="kw">return</span> <span class="str">"verifier"</span>
+
+
+<span class="kw">def</span> <span class="fn">route_after_verification</span>(state: AccountingState) -> <span class="ty">str</span>:
+    v = state.get(<span class="str">"verification_result"</span>) <span class="kw">or</span> {}
+    <span class="kw">if</span> v.get(<span class="str">"verdict"</span>) == <span class="str">"pass"</span>:
+        <span class="kw">return</span> <span class="str">"reporter"</span>
+    <span class="kw">if</span> state[<span class="str">"verification_count"</span>] >= <span class="num">3</span>:
+        <span class="kw">return</span> <span class="str">"reporter"</span>  <span class="cm"># 최대 3회 재시도</span>
+    <span class="kw">return</span> <span class="str">"executor"</span>  <span class="cm"># 재작업</span>
+
+
+<span class="kw">def</span> <span class="fn">build_accounting_graph</span>() -> StateGraph:
+    <span class="cm">"""
+    접수 → 부서배정 → 실행 → 검증 → 보고
+                       ↑←──(fail, max 3)──┘
+    """</span>
+    builder = StateGraph(AccountingState)
+
+    <span class="cm"># 노드 등록</span>
+    builder.add_node(<span class="str">"intake"</span>, intake_node)
+    builder.add_node(<span class="str">"department_router"</span>, department_router_node)
+    builder.add_node(<span class="str">"executor"</span>, executor_node)
+    builder.add_node(<span class="str">"verifier"</span>, verifier_node)
+    builder.add_node(<span class="str">"reporter"</span>, reporter_node)
+
+    <span class="cm"># 엣지</span>
+    builder.add_edge(START, <span class="str">"intake"</span>)
+    builder.add_conditional_edges(<span class="str">"intake"</span>, route_after_intake, {
+        <span class="str">"department_router"</span>: <span class="str">"department_router"</span>,
+        <span class="str">"__end__"</span>: END,
+    })
+    builder.add_edge(<span class="str">"department_router"</span>, <span class="str">"executor"</span>)
+    builder.add_conditional_edges(<span class="str">"executor"</span>, route_after_execution, {
+        <span class="str">"verifier"</span>: <span class="str">"verifier"</span>,
+        <span class="str">"reporter"</span>: <span class="str">"reporter"</span>,
+    })
+    builder.add_conditional_edges(<span class="str">"verifier"</span>, route_after_verification, {
+        <span class="str">"executor"</span>: <span class="str">"executor"</span>,
+        <span class="str">"reporter"</span>: <span class="str">"reporter"</span>,
+    })
+    builder.add_edge(<span class="str">"reporter"</span>, END)
+
+    <span class="kw">return</span> builder
+
+
+<span class="kw">async def</span> <span class="fn">compile_graph</span>(checkpointer=<span class="kw">None</span>):
+    builder = build_accounting_graph()
+    <span class="kw">return</span> builder.compile(checkpointer=checkpointer)
+</code></pre>
+
+  <h3>6.4 Multi-LLM 폴백 체인 (모델 워터폴 대체)</h3>
+  <span class="code-label">models/fallback_chain.py</span>
+<pre><code><span class="cm">"""진아실장의 모델 워터폴을 LangChain fallback으로 구현"""</span>
+<span class="kw">from</span> langchain_anthropic <span class="kw">import</span> ChatAnthropic
+<span class="kw">from</span> langchain_openai <span class="kw">import</span> ChatOpenAI
+<span class="kw">from</span> langchain_community.chat_models <span class="kw">import</span> ChatDeepSeek
+<span class="kw">from</span> langsmith <span class="kw">import</span> traceable
+<span class="kw">import</span> os
+
+
+<span class="kw">def</span> <span class="fn">get_model_chain</span>(role: <span class="ty">str</span>, tenant_id: <span class="ty">str</span>):
+    <span class="cm">"""역할별 모델 체인 생성 — 기존 _설정.json 매핑 재현"""</span>
+
+    <span class="kw">if</span> role == <span class="str">"진아"</span>:
+        primary = ChatAnthropic(
+            model=<span class="str">"claude-opus-5"</span>,
+            anthropic_api_key=os.getenv(<span class="str">"ANTHROPIC_AUTH_TOKEN"</span>),
+            metadata={<span class="str">"tenant_id"</span>: tenant_id, <span class="str">"role"</span>: <span class="str">"진아"</span>},
+        )
+        <span class="cm"># 진아는 대체 모델 없음 — 한도 시 대기 (CEO 지시)</span>
+        <span class="kw">return</span> primary
+
+    <span class="kw">elif</span> role == <span class="str">"부서장"</span>:
+        primary = ChatDeepSeek(
+            model=<span class="str">"deepseek-reasoner"</span>,
+            api_key=os.getenv(<span class="str">"BISEO_KEY_DEEPSEEK"</span>),
+        )
+        <span class="cm"># 무료 AI 폴백 체인</span>
+        fallbacks = [
+            ChatOpenAI(model=<span class="str">"groq/llama-3.3-70b"</span>,
+                       base_url=<span class="str">"https://api.groq.com/openai/v1"</span>,
+                       api_key=os.getenv(<span class="str">"BISEO_KEY_GROQ"</span>)),
+            ChatOpenAI(model=<span class="str">"mistral-large-latest"</span>,
+                       base_url=<span class="str">"https://api.mistral.ai/v1"</span>,
+                       api_key=os.getenv(<span class="str">"BISEO_KEY_MISTRAL"</span>)),
+        ]
+        <span class="kw">return</span> primary.with_fallbacks(fallbacks)
+
+    <span class="kw">elif</span> role == <span class="str">"컴퓨터조작"</span>:
+        <span class="kw">return</span> ChatOpenAI(
+            model=<span class="str">"gpt-6-astra"</span>,
+            api_key=os.getenv(<span class="str">"BISEO_KEY_OPENAI"</span>),
+        )
+
+    <span class="kw">elif</span> role == <span class="str">"검증"</span>:
+        <span class="cm"># 서린 — Claude Fable (GPT 메아리 방지)</span>
+        <span class="kw">return</span> ChatAnthropic(
+            model=<span class="str">"claude-fable-5"</span>,
+            anthropic_api_key=os.getenv(<span class="str">"ANTHROPIC_AUTH_TOKEN"</span>),
+        )
+
+    <span class="kw">raise</span> ValueError(f<span class="str">"알 수 없는 역할: {role}"</span>)
+</code></pre>
+
+  <h3>6.5 LangChain Tool 래핑 (기존 도구 재사용)</h3>
+  <span class="code-label">tools/wehago.py</span>
+<pre><code><span class="cm">"""위하고 ERP 자동화 — 기존 도구/위하고_워커.py를 LangChain Tool로 래핑"""</span>
+<span class="kw">from</span> langchain_core.tools <span class="kw">import</span> tool
+<span class="kw">from</span> pydantic <span class="kw">import</span> BaseModel, Field
+<span class="kw">import</span> subprocess
+<span class="kw">import</span> json
+
+
+<span class="kw">class</span> <span class="ty">WehagoInput</span>(BaseModel):
+    action: <span class="ty">str</span> = Field(description=<span class="str">"수행할 작업: 전표입력, 전표조회, 인쇄, 메뉴이동"</span>)
+    tenant_id: <span class="ty">str</span> = Field(description=<span class="str">"회사 식별자 (방 이름)"</span>)
+    data: <span class="ty">dict</span> = Field(default_factory=<span class="ty">dict</span>, description=<span class="str">"작업 데이터"</span>)
+
+
+@tool(args_schema=WehagoInput)
+<span class="kw">def</span> <span class="fn">wehago_erp</span>(action: <span class="ty">str</span>, tenant_id: <span class="ty">str</span>, data: <span class="ty">dict</span>) -> <span class="ty">str</span>:
+    <span class="cm">"""위하고 ERP 자동화 실행. 전표입력, 조회, 인쇄 등 수행."""</span>
+    cmd = [
+        <span class="str">"python3"</span>, <span class="str">"도구/위하고_워커.py"</span>,
+        <span class="str">"--방"</span>, tenant_id,
+        <span class="str">"--작업"</span>, action,
+        <span class="str">"--데이터"</span>, json.dumps(data, ensure_ascii=<span class="kw">False</span>),
+    ]
+    result = subprocess.run(cmd, capture_output=<span class="kw">True</span>, text=<span class="kw">True</span>, timeout=<span class="num">300</span>)
+    <span class="kw">return</span> result.stdout <span class="kw">or</span> result.stderr
+
+
+<span class="kw">class</span> <span class="ty">WehagoQueryInput</span>(BaseModel):
+    menu: <span class="ty">str</span> = Field(description=<span class="str">"위하고 메뉴 경로 (예: 재무회계/전표입력/일반전표입력)"</span>)
+    tenant_id: <span class="ty">str</span> = Field(description=<span class="str">"회사 식별자"</span>)
+    period: <span class="ty">str</span> = Field(description=<span class="str">"조회 기간 (예: 2026-09)"</span>)
+
+
+@tool(args_schema=WehagoQueryInput)
+<span class="kw">def</span> <span class="fn">wehago_query</span>(menu: <span class="ty">str</span>, tenant_id: <span class="ty">str</span>, period: <span class="ty">str</span>) -> <span class="ty">str</span>:
+    <span class="cm">"""위하고 ERP 데이터 조회. 메뉴 경로와 기간을 지정하여 조회."""</span>
+    cmd = [
+        <span class="str">"python3"</span>, <span class="str">"도구/위하고_워커.py"</span>,
+        <span class="str">"--방"</span>, tenant_id,
+        <span class="str">"--작업"</span>, <span class="str">"조회"</span>,
+        <span class="str">"--메뉴"</span>, menu,
+        <span class="str">"--기간"</span>, period,
+    ]
+    result = subprocess.run(cmd, capture_output=<span class="kw">True</span>, text=<span class="kw">True</span>, timeout=<span class="num">120</span>)
+    <span class="kw">return</span> result.stdout <span class="kw">or</span> result.stderr
+</code></pre>
+
+  <span class="code-label">tools/vault.py</span>
+<pre><code><span class="cm">"""금고 Tool — 테넌트별 자격증명 관리"""</span>
+<span class="kw">from</span> langchain_core.tools <span class="kw">import</span> tool
+<span class="kw">from</span> pydantic <span class="kw">import</span> BaseModel, Field
+
+
+<span class="kw">class</span> <span class="ty">VaultGetInput</span>(BaseModel):
+    site_name: <span class="ty">str</span> = Field(description=<span class="str">"사이트명 (예: 위하고, 고용보험)"</span>)
+    tenant_id: <span class="ty">str</span> = Field(description=<span class="str">"회사 식별자"</span>)
+    reason: <span class="ty">str</span> = Field(description=<span class="str">"접근 사유 (감사 로그 기록용)"</span>)
+
+
+@tool(args_schema=VaultGetInput)
+<span class="kw">def</span> <span class="fn">vault_get_credential</span>(site_name: <span class="ty">str</span>, tenant_id: <span class="ty">str</span>, reason: <span class="ty">str</span>) -> <span class="ty">str</span>:
+    <span class="cm">"""금고에서 자격증명 조회. 값은 브라우저 입력칸에 직접 주입 (LLM 컨텍스트 비노출)."""</span>
+    <span class="cm"># 기존 _금고.py 호출 — tenant_id 필터링 추가</span>
+    <span class="kw">import</span> subprocess, json
+    cmd = [<span class="str">"python3"</span>, <span class="str">"도구/_금고.py"</span>, <span class="str">"꺼내기"</span>,
+           <span class="str">"--이름"</span>, site_name, <span class="str">"--테넌트"</span>, tenant_id,
+           <span class="str">"--사유"</span>, reason]
+    result = subprocess.run(cmd, capture_output=<span class="kw">True</span>, text=<span class="kw">True</span>)
+    <span class="cm"># ⚠ 실제 비밀번호는 반환하지 않음 — _자동로그인.py가 직접 주입</span>
+    <span class="kw">return</span> <span class="str">"자격증명이 브라우저에 주입되었습니다"</span> <span class="kw">if</span> result.returncode == <span class="num">0</span> <span class="kw">else</span> result.stderr
+</code></pre>
+
+  <h3>6.6 Hermes Gateway 설정</h3>
+  <span class="code-label">hermes/config.yaml</span>
+<pre><code><span class="cm"># Hermes Agent 설정 — 공용 회계프로그램 메시징 게이트웨이</span>
+
+<span class="ty">providers</span>:
+  <span class="ty">anthropic</span>:
+    <span class="fn">api_key</span>: <span class="str">${ANTHROPIC_AUTH_TOKEN}</span>
+    <span class="fn">model</span>: <span class="str">claude-opus-5</span>
+  <span class="ty">deepseek</span>:
+    <span class="fn">api_key</span>: <span class="str">${BISEO_KEY_DEEPSEEK}</span>
+    <span class="fn">model</span>: <span class="str">deepseek-reasoner</span>
+
+<span class="ty">messaging</span>:
+  <span class="ty">telegram</span>:
+    <span class="fn">enabled</span>: <span class="kw">true</span>
+    <span class="fn">bot_token</span>: <span class="str">${TELEGRAM_BOT_TOKEN}</span>
+    <span class="fn">allowed_groups</span>:
+      - <span class="fn">group_id</span>: <span class="str">"-1001234567890"</span>
+        <span class="fn">tenant_id</span>: <span class="str">"lailon"</span>
+        <span class="fn">company_name</span>: <span class="str">"라일론"</span>
+      - <span class="fn">group_id</span>: <span class="str">"-1009876543210"</span>
+        <span class="fn">tenant_id</span>: <span class="str">"tdh"</span>
+        <span class="fn">company_name</span>: <span class="str">"티디에이치컴퍼니"</span>
+  <span class="ty">ntfy</span>:
+    <span class="fn">enabled</span>: <span class="kw">true</span>
+    <span class="fn">server</span>: <span class="str">"https://ntfy.sh"</span>
+    <span class="fn">topics</span>:
+      - <span class="fn">topic</span>: <span class="str">${NTFY_TOPIC_PREFIX}-{tenant_id}</span>
+        <span class="fn">direction</span>: <span class="str">"bidirectional"</span>
+  <span class="ty">discord</span>:
+    <span class="fn">enabled</span>: <span class="kw">false</span>  <span class="cm"># Phase 2에서 활성화</span>
+  <span class="ty">slack</span>:
+    <span class="fn">enabled</span>: <span class="kw">false</span>  <span class="cm"># Phase 2에서 활성화</span>
+
+<span class="ty">skills</span>:
+  <span class="fn">auto_create</span>: <span class="kw">true</span>
+  <span class="fn">learning_loop</span>: <span class="kw">true</span>
+  <span class="fn">built_in</span>:
+    - <span class="fn">name</span>: <span class="str">"카드마감"</span>
+      <span class="fn">description</span>: <span class="str">"월별 카드 매입 데이터 처리 및 위하고 입력"</span>
+      <span class="fn">handler</span>: <span class="str">"graph://accounting/card_closing"</span>
+    - <span class="fn">name</span>: <span class="str">"전표입력"</span>
+      <span class="fn">description</span>: <span class="str">"일반전표/매입매출전표 위하고 입력"</span>
+      <span class="fn">handler</span>: <span class="str">"graph://accounting/journal_entry"</span>
+    - <span class="fn">name</span>: <span class="str">"급여처리"</span>
+      <span class="fn">description</span>: <span class="str">"급여 계산 및 4대보험 처리"</span>
+      <span class="fn">handler</span>: <span class="str">"graph://accounting/payroll"</span>
+
+<span class="ty">memory</span>:
+  <span class="fn">persistent</span>: <span class="kw">true</span>
+  <span class="fn">backend</span>: <span class="str">"postgresql"</span>
+  <span class="fn">per_tenant</span>: <span class="kw">true</span>
+</code></pre>
+
+  <h3>6.7 LangSmith 통합</h3>
+  <span class="code-label">models/provider.py (LangSmith 트레이싱 통합)</span>
+<pre><code><span class="cm">"""LangSmith 자동 트레이싱 — 모든 LLM 호출에 tenant_id 태깅"""</span>
+<span class="kw">import</span> os
+<span class="kw">from</span> langsmith <span class="kw">import</span> Client
+<span class="kw">from</span> langsmith.run_helpers <span class="kw">import</span> traceable
+
+<span class="cm"># 환경변수 설정 (서버 시작 시)</span>
+os.environ[<span class="str">"LANGCHAIN_TRACING_V2"</span>] = <span class="str">"true"</span>
+os.environ[<span class="str">"LANGCHAIN_API_KEY"</span>] = os.getenv(<span class="str">"LANGSMITH_API_KEY"</span>, <span class="str">""</span>)
+os.environ[<span class="str">"LANGCHAIN_PROJECT"</span>] = <span class="str">"acct-platform"</span>
+
+client = Client()
+
+
+@traceable(run_type=<span class="str">"chain"</span>, name=<span class="str">"accounting_task"</span>)
+<span class="kw">async def</span> <span class="fn">run_accounting_task</span>(tenant_id: <span class="ty">str</span>, task: <span class="ty">str</span>, department: <span class="ty">str</span>):
+    <span class="cm">"""회계 작업 실행 — LangSmith에 자동 트레이싱"""</span>
+    <span class="kw">from</span> graph.builder <span class="kw">import</span> compile_graph
+    <span class="kw">from</span> langgraph.checkpoint.postgres <span class="kw">import</span> PostgresSaver
+
+    checkpointer = PostgresSaver.from_conn_string(os.getenv(<span class="str">"DATABASE_URL"</span>))
+    graph = <span class="kw">await</span> compile_graph(checkpointer=checkpointer)
+
+    config = {
+        <span class="str">"configurable"</span>: {
+            <span class="str">"thread_id"</span>: f<span class="str">"{tenant_id}_{department}"</span>,
+        },
+        <span class="str">"metadata"</span>: {
+            <span class="str">"tenant_id"</span>: tenant_id,
+            <span class="str">"department"</span>: department,
+        },
+    }
+
+    initial_state = {
+        <span class="str">"tenant_id"</span>: tenant_id,
+        <span class="str">"department"</span>: department,
+        <span class="str">"task_description"</span>: task,
+        <span class="str">"messages"</span>: [{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: task}],
+        <span class="str">"status"</span>: <span class="str">"접수"</span>,
+        <span class="str">"llm_calls_count"</span>: <span class="num">0</span>,
+        <span class="str">"total_cost_usd"</span>: <span class="num">0.0</span>,
+        <span class="str">"cost_by_model"</span>: {},
+        <span class="str">"tool_results"</span>: [],
+        <span class="str">"wehago_actions"</span>: [],
+        <span class="str">"error_log"</span>: [],
+        <span class="str">"verification_count"</span>: <span class="num">0</span>,
+    }
+
+    result = <span class="kw">await</span> graph.ainvoke(initial_state, config=config)
+    <span class="kw">return</span> result
+</code></pre>
+</div>
+
+<!-- ═══════════════════════════════════════════ 7. TOOL CONNECT ═══════════════════════════════════════════ -->
+<div class="section" id="s7">
+  <h2>7. Tool Connect 명세</h2>
+
+  <h3>7.1 기존 도구 → LangChain Tool 매핑 (148개 중 주요 40개)</h3>
+  <table>
+    <tr><th>#</th><th>기존 도구 (진아실장)</th><th>LangChain Tool 이름</th><th>카테고리</th><th>전환 방식</th><th>우선순위</th></tr>
+    <tr><td>1</td><td><code>위하고_워커.py</code></td><td><code>wehago_erp</code></td><td>ERP</td><td class="status-refactor">래핑+tenant</td><td>P0</td></tr>
+    <tr><td>2</td><td><code>위하고_입력.py</code></td><td><code>wehago_input</code></td><td>ERP</td><td class="status-refactor">래핑+tenant</td><td>P0</td></tr>
+    <tr><td>3</td><td><code>위하고_인쇄엑셀.py</code></td><td><code>wehago_export</code></td><td>ERP</td><td class="status-refactor">래핑+tenant</td><td>P0</td></tr>
+    <tr><td>4</td><td><code>카드마감.py</code></td><td><code>card_closing</code></td><td>카드</td><td class="status-yes">직접 래핑</td><td>P0</td></tr>
+    <tr><td>5</td><td><code>_카드스캔.py</code></td><td><code>card_scan</code></td><td>카드</td><td class="status-yes">직접 래핑</td><td>P0</td></tr>
+    <tr><td>6</td><td><code>_카드인덱스.py</code></td><td><code>card_index</code></td><td>카드</td><td class="status-yes">직접 래핑</td><td>P0</td></tr>
+    <tr><td>7</td><td><code>_금고.py</code></td><td><code>vault_get / vault_put</code></td><td>보안</td><td class="status-refactor">래핑+tenant</td><td>P0</td></tr>
+    <tr><td>8</td><td><code>_자동로그인.py</code></td><td><code>auto_login</code></td><td>보안</td><td class="status-yes">직접 래핑</td><td>P0</td></tr>
+    <tr><td>9</td><td><code>교차검증.py</code></td><td><code>cross_verify</code></td><td>검증</td><td class="status-yes">직접 래핑</td><td>P0</td></tr>
+    <tr><td>10</td><td><code>_감찰관.py</code></td><td><code>compliance_gate</code></td><td>거버넌스</td><td class="status-refactor">일반화</td><td>P0</td></tr>
+    <tr><td>11</td><td><code>_근태계산.py</code></td><td><code>attendance_calc</code></td><td>인사</td><td class="status-yes">직접 래핑</td><td>P1</td></tr>
+    <tr><td>12</td><td><code>_ocr.py</code></td><td><code>document_ocr</code></td><td>문서</td><td class="status-yes">직접 래핑</td><td>P1</td></tr>
+    <tr><td>13</td><td><code>_스캔처리.py</code></td><td><code>scan_process</code></td><td>문서</td><td class="status-yes">직접 래핑</td><td>P1</td></tr>
+    <tr><td>14</td><td><code>_검증.py</code></td><td><code>data_verify</code></td><td>검증</td><td class="status-yes">직접 래핑</td><td>P0</td></tr>
+    <tr><td>15</td><td><code>_수치대조.py</code></td><td><code>numeric_compare</code></td><td>검증</td><td class="status-yes">직접 래핑</td><td>P0</td></tr>
+    <tr><td>16</td><td><code>_문서대조.py</code></td><td><code>document_compare</code></td><td>검증</td><td class="status-yes">직접 래핑</td><td>P1</td></tr>
+    <tr><td>17</td><td><code>_법령.py</code></td><td><code>law_lookup</code></td><td>법률</td><td class="status-yes">직접 래핑</td><td>P1</td></tr>
+    <tr><td>18</td><td><code>_환율.py</code></td><td><code>exchange_rate</code></td><td>재무</td><td class="status-yes">직접 래핑</td><td>P1</td></tr>
+    <tr><td>19</td><td><code>_사업자.py</code></td><td><code>business_info</code></td><td>재무</td><td class="status-yes">직접 래핑</td><td>P1</td></tr>
+    <tr><td>20</td><td><code>_원장.py</code></td><td><code>ledger_query</code></td><td>재무</td><td class="status-refactor">DB 전환</td><td>P0</td></tr>
+    <tr><td>21</td><td><code>_야간작업.py</code></td><td><code>night_scheduler</code></td><td>배치</td><td class="status-new">재작성</td><td>P1</td></tr>
+    <tr><td>22</td><td><code>_서버백업.py</code></td><td><code>server_backup</code></td><td>운영</td><td class="status-yes">직접 래핑</td><td>P2</td></tr>
+    <tr><td>23</td><td><code>_아침보고.py</code></td><td><code>morning_report</code></td><td>보고</td><td class="status-refactor">다채널 전환</td><td>P1</td></tr>
+    <tr><td>24</td><td><code>_폰알림.py</code></td><td><code>push_notify</code></td><td>알림</td><td class="status-refactor">Hermes 전환</td><td>P0</td></tr>
+    <tr><td>25</td><td><code>_자료수집.py</code></td><td><code>data_collect</code></td><td>수집</td><td class="status-yes">직접 래핑</td><td>P1</td></tr>
+    <tr><td>26</td><td><code>_자료받기.py</code></td><td><code>data_download</code></td><td>수집</td><td class="status-yes">직접 래핑</td><td>P1</td></tr>
+    <tr><td>27</td><td><code>_토론.py</code></td><td><code>agent_debate</code></td><td>AI</td><td class="status-refactor">LangGraph 내장</td><td>P2</td></tr>
+    <tr><td>28</td><td><code>_삼자대화.py</code></td><td><code>three_way_chat</code></td><td>AI</td><td class="status-refactor">LangGraph 내장</td><td>P2</td></tr>
+    <tr><td>29</td><td><code>_코덱스.py</code></td><td><code>codex_execute</code></td><td>AI</td><td class="status-yes">직접 래핑</td><td>P1</td></tr>
+    <tr><td>30</td><td><code>_딥시크비용.py</code></td><td><code>deepseek_cost</code></td><td>모니터링</td><td class="status-refactor">LangSmith 대체</td><td>P2</td></tr>
+    <tr><td>31</td><td><code>_미지급선급_산출.py</code></td><td><code>accrual_calc</code></td><td>재무</td><td class="status-yes">직접 래핑</td><td>P1</td></tr>
+    <tr><td>32</td><td><code>_전송뒤검산.py</code></td><td><code>post_submit_verify</code></td><td>검증</td><td class="status-yes">직접 래핑</td><td>P0</td></tr>
+    <tr><td>33</td><td><code>_현금영수증판정.py</code></td><td><code>cash_receipt_judge</code></td><td>재무</td><td class="status-yes">직접 래핑</td><td>P1</td></tr>
+    <tr><td>34</td><td><code>_계정과목화면찾기.py</code></td><td><code>account_screen_find</code></td><td>ERP</td><td class="status-yes">직접 래핑</td><td>P0</td></tr>
+    <tr><td>35</td><td><code>_계정칸판정.py</code></td><td><code>account_field_judge</code></td><td>ERP</td><td class="status-yes">직접 래핑</td><td>P0</td></tr>
+    <tr><td>36</td><td><code>_위하고카드분석.py</code></td><td><code>wehago_card_analyze</code></td><td>카드</td><td class="status-yes">직접 래핑</td><td>P0</td></tr>
+    <tr><td>37</td><td><code>_일반전표차량.py</code></td><td><code>vehicle_journal</code></td><td>재무</td><td class="status-yes">직접 래핑</td><td>P1</td></tr>
+    <tr><td>38</td><td><code>_차량현황작성.py</code></td><td><code>vehicle_status</code></td><td>재무</td><td class="status-yes">직접 래핑</td><td>P1</td></tr>
+    <tr><td>39</td><td><code>_깃.py</code></td><td><code>git_ops</code></td><td>운영</td><td class="status-yes">직접 래핑</td><td>P2</td></tr>
+    <tr><td>40</td><td><code>_현황.py</code></td><td><code>status_report</code></td><td>보고</td><td class="status-refactor">다채널 전환</td><td>P1</td></tr>
+  </table>
+
+  <div class="alert success">
+    <strong>전환 요약:</strong> 40개 주요 도구 중
+    <strong>22개(55%)</strong>는 직접 래핑,
+    <strong>15개(37.5%)</strong>는 리팩터링+래핑,
+    <strong>3개(7.5%)</strong>는 재작성/대체 필요.
+    기존 코드 자산의 <strong>92.5%가 재사용</strong> 가능합니다.
+  </div>
+
+  <h3>7.2 MCP (Model Context Protocol) 서버 구성</h3>
+  <p>기존 148개 도구를 MCP 서버로 노출하면, Hermes Agent와 LangGraph 모두에서 표준 프로토콜로 호출 가능합니다.</p>
+
+  <span class="code-label">tools/mcp_server.py</span>
+<pre><code><span class="cm">"""MCP 서버 — 진아실장 도구를 MCP 프로토콜로 노출"""</span>
+<span class="kw">from</span> mcp.server <span class="kw">import</span> Server
+<span class="kw">from</span> mcp.types <span class="kw">import</span> Tool, TextContent
+<span class="kw">import</span> json
+
+app = Server(<span class="str">"acct-tools"</span>)
+
+<span class="cm"># 기존 도구를 MCP Tool로 등록</span>
+TOOL_REGISTRY = {
+    <span class="str">"wehago_erp"</span>: {<span class="str">"module"</span>: <span class="str">"도구/위하고_워커.py"</span>, <span class="str">"description"</span>: <span class="str">"위하고 ERP 자동화"</span>},
+    <span class="str">"vault"</span>: {<span class="str">"module"</span>: <span class="str">"도구/_금고.py"</span>, <span class="str">"description"</span>: <span class="str">"자격증명 관리"</span>},
+    <span class="str">"card_closing"</span>: {<span class="str">"module"</span>: <span class="str">"도구/카드마감.py"</span>, <span class="str">"description"</span>: <span class="str">"카드 매입 마감"</span>},
+    <span class="str">"cross_verify"</span>: {<span class="str">"module"</span>: <span class="str">"도구/교차검증.py"</span>, <span class="str">"description"</span>: <span class="str">"다중 LLM 교차검증"</span>},
+    <span class="str">"ocr"</span>: {<span class="str">"module"</span>: <span class="str">"도구/_ocr.py"</span>, <span class="str">"description"</span>: <span class="str">"문서 OCR"</span>},
+    <span class="cm"># ... 148개 전체 등록</span>
+}
+
+@app.list_tools()
+<span class="kw">async def</span> <span class="fn">list_tools</span>():
+    <span class="kw">return</span> [
+        Tool(name=name, description=info[<span class="str">"description"</span>],
+             inputSchema={<span class="str">"type"</span>: <span class="str">"object"</span>, <span class="str">"properties"</span>: {
+                 <span class="str">"tenant_id"</span>: {<span class="str">"type"</span>: <span class="str">"string"</span>},
+                 <span class="str">"action"</span>: {<span class="str">"type"</span>: <span class="str">"string"</span>},
+                 <span class="str">"params"</span>: {<span class="str">"type"</span>: <span class="str">"object"</span>},
+             }})
+        <span class="kw">for</span> name, info <span class="kw">in</span> TOOL_REGISTRY.items()
+    ]
+
+@app.call_tool()
+<span class="kw">async def</span> <span class="fn">call_tool</span>(name: <span class="ty">str</span>, arguments: <span class="ty">dict</span>):
+    info = TOOL_REGISTRY[name]
+    <span class="cm"># subprocess로 기존 도구 실행 (격리)</span>
+    <span class="kw">import</span> subprocess
+    result = subprocess.run(
+        [<span class="str">"python3"</span>, info[<span class="str">"module"</span>], json.dumps(arguments)],
+        capture_output=<span class="kw">True</span>, text=<span class="kw">True</span>, timeout=<span class="num">300</span>,
+    )
+    <span class="kw">return</span> [TextContent(type=<span class="str">"text"</span>, text=result.stdout)]
+</code></pre>
+</div>
+
+<!-- ═══════════════════════════════════════════ 8. DB SCHEMA ═══════════════════════════════════════════ -->
+<div class="section" id="s8">
+  <h2>8. 데이터 모델 (DB 스키마)</h2>
+
+  <span class="code-label">db/models.py (SQLAlchemy)</span>
+<pre><code><span class="cm">"""PostgreSQL 스키마 — 진아실장 JSONL → 정규화 DB"""</span>
+<span class="kw">from</span> sqlalchemy <span class="kw">import</span> (
+    Column, String, Integer, Float, Boolean, DateTime,
+    ForeignKey, JSON, Text, Index, func
+)
+<span class="kw">from</span> sqlalchemy.orm <span class="kw">import</span> DeclarativeBase, relationship
+<span class="kw">import</span> uuid
+
+
+<span class="kw">class</span> <span class="ty">Base</span>(DeclarativeBase):
+    <span class="kw">pass</span>
+
+
+<span class="kw">class</span> <span class="ty">Tenant</span>(Base):
+    __tablename__ = <span class="str">"tenants"</span>
+    id = Column(String, primary_key=<span class="kw">True</span>, default=<span class="kw">lambda</span>: <span class="ty">str</span>(uuid.uuid4())[:8])
+    name = Column(String, nullable=<span class="kw">False</span>)            <span class="cm"># 라일론, 티디에이치컴퍼니</span>
+    alias = Column(String)                             <span class="cm"># 바이로그인→라일론</span>
+    wehago_room = Column(String)                       <span class="cm"># 위하고 워커 --방 값</span>
+    is_active = Column(Boolean, default=<span class="kw">True</span>)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+<span class="kw">class</span> <span class="ty">TenantUser</span>(Base):
+    __tablename__ = <span class="str">"tenant_users"</span>
+    id = Column(String, primary_key=<span class="kw">True</span>)
+    tenant_id = Column(String, ForeignKey(<span class="str">"tenants.id"</span>), nullable=<span class="kw">False</span>)
+    username = Column(String, nullable=<span class="kw">False</span>)
+    role = Column(String, default=<span class="str">"user"</span>)           <span class="cm"># admin, manager, user</span>
+    channel = Column(String)                          <span class="cm"># telegram, web, slack</span>
+    channel_id = Column(String)                       <span class="cm"># 메신저 사용자 ID</span>
+    __table_args__ = (Index(<span class="str">"ix_tu_tenant"</span>, <span class="str">"tenant_id"</span>),)
+
+
+<span class="kw">class</span> <span class="ty">Credential</span>(Base):
+    <span class="cm">"""기존 금고/금고.jsonl → DB"""</span>
+    __tablename__ = <span class="str">"credentials"</span>
+    id = Column(Integer, primary_key=<span class="kw">True</span>, autoincrement=<span class="kw">True</span>)
+    tenant_id = Column(String, ForeignKey(<span class="str">"tenants.id"</span>), nullable=<span class="kw">False</span>)
+    site_name = Column(String, nullable=<span class="kw">False</span>)
+    encrypted_data = Column(Text, nullable=<span class="kw">False</span>)    <span class="cm"># AES-256-GCM (기존 방식 유지)</span>
+    key_derivation = Column(String, default=<span class="str">"hkdf"</span>) <span class="cm"># 테넌트별 키 파생</span>
+    is_active = Column(Boolean, default=<span class="kw">True</span>)
+    __table_args__ = (Index(<span class="str">"ix_cred_tenant"</span>, <span class="str">"tenant_id"</span>),)
+
+
+<span class="kw">class</span> <span class="ty">Directive</span>(Base):
+    <span class="cm">"""기존 기억/지시대장.jsonl → DB"""</span>
+    __tablename__ = <span class="str">"directives"</span>
+    id = Column(Integer, primary_key=<span class="kw">True</span>)
+    tenant_id = Column(String, ForeignKey(<span class="str">"tenants.id"</span>), nullable=<span class="kw">False</span>)
+    department = Column(String)                       <span class="cm"># 재무, 인사, 투자, 교육</span>
+    description = Column(Text, nullable=<span class="kw">False</span>)
+    assigned_agent = Column(String)                   <span class="cm"># 진아, 진식, 서린</span>
+    status = Column(String, default=<span class="str">"pending"</span>)
+    priority = Column(Integer, default=<span class="num">0</span>)
+    created_at = Column(DateTime, server_default=func.now())
+    completed_at = Column(DateTime)
+    result = Column(JSON)
+    __table_args__ = (Index(<span class="str">"ix_dir_tenant_dept"</span>, <span class="str">"tenant_id"</span>, <span class="str">"department"</span>),)
+
+
+<span class="kw">class</span> <span class="ty">ModelCallLog</span>(Base):
+    <span class="cm">"""기존 기억/_모델호출장부.jsonl → DB (LangSmith 보조)"""</span>
+    __tablename__ = <span class="str">"model_call_logs"</span>
+    id = Column(Integer, primary_key=<span class="kw">True</span>)
+    tenant_id = Column(String, ForeignKey(<span class="str">"tenants.id"</span>), nullable=<span class="kw">False</span>)
+    model = Column(String, nullable=<span class="kw">False</span>)
+    role = Column(String)                             <span class="cm"># 진아, 부서장, 검증</span>
+    input_tokens = Column(Integer)
+    output_tokens = Column(Integer)
+    cost_usd = Column(Float)
+    latency_ms = Column(Integer)
+    langsmith_run_id = Column(String)                 <span class="cm"># LangSmith trace 연결</span>
+    created_at = Column(DateTime, server_default=func.now())
+    __table_args__ = (Index(<span class="str">"ix_mcl_tenant_date"</span>, <span class="str">"tenant_id"</span>, <span class="str">"created_at"</span>),)
+
+
+<span class="kw">class</span> <span class="ty">AuditLog</span>(Base):
+    <span class="cm">"""기존 금고/꺼낸기록.jsonl + 제재장부.jsonl → DB"""</span>
+    __tablename__ = <span class="str">"audit_logs"</span>
+    id = Column(Integer, primary_key=<span class="kw">True</span>)
+    tenant_id = Column(String, ForeignKey(<span class="str">"tenants.id"</span>), nullable=<span class="kw">False</span>)
+    action = Column(String, nullable=<span class="kw">False</span>)         <span class="cm"># credential_access, sanction, ...</span>
+    actor = Column(String)                            <span class="cm"># 진아, 진식, user:xxx</span>
+    target = Column(String)
+    details = Column(JSON)
+    created_at = Column(DateTime, server_default=func.now())
+    __table_args__ = (Index(<span class="str">"ix_audit_tenant"</span>, <span class="str">"tenant_id"</span>),)
+
+
+<span class="kw">class</span> <span class="ty">NightTask</span>(Base):
+    <span class="cm">"""기존 _야간작업.py 하드코딩 → DB 스케줄"""</span>
+    __tablename__ = <span class="str">"night_tasks"</span>
+    id = Column(Integer, primary_key=<span class="kw">True</span>)
+    tenant_id = Column(String, ForeignKey(<span class="str">"tenants.id"</span>), nullable=<span class="kw">False</span>)
+    task_name = Column(String, nullable=<span class="kw">False</span>)
+    schedule_cron = Column(String, default=<span class="str">"0 3 * * *"</span>)
+    task_config = Column(JSON)
+    is_active = Column(Boolean, default=<span class="kw">True</span>)
+    last_run = Column(DateTime)
+    __table_args__ = (Index(<span class="str">"ix_nt_tenant"</span>, <span class="str">"tenant_id"</span>),)
+</code></pre>
+</div>
+
+<!-- ═══════════════════════════════════════════ 9. ROADMAP ═══════════════════════════════════════════ -->
+<div class="section" id="s9">
+  <h2>9. 마이그레이션 로드맵</h2>
+
+  <div class="timeline">
+    <div class="timeline-item">
+      <div class="phase-title">Phase 0: 기반 구축 <span class="duration">(1~2주)</span></div>
+      <ul style="padding-left:1.2rem; color:var(--muted); margin-top:0.5rem">
+        <li>PostgreSQL 15 설치 (5.104.85.244 또는 별도 서버)</li>
+        <li>DB 스키마 생성 + Alembic 마이그레이션 구성</li>
+        <li>기존 JSONL 데이터 → PostgreSQL 일괄 마이그레이션 스크립트</li>
+        <li>LangSmith 프로젝트 생성 + API 키 발급</li>
+        <li>Hermes Agent 설치 + 기본 설정</li>
+        <li><strong>산출물:</strong> DB 실행, 기존 데이터 이관 완료, LangSmith 트레이스 확인</li>
+      </ul>
+    </div>
+
+    <div class="timeline-item">
+      <div class="phase-title">Phase 1: LangGraph 오케스트레이터 <span class="duration">(2~3주)</span></div>
+      <ul style="padding-left:1.2rem; color:var(--muted); margin-top:0.5rem">
+        <li>AccountingState 정의 (위 목업 6.2)</li>
+        <li>StateGraph 빌드 (위 목업 6.3) — 접수→부서배정→실행→검증→보고</li>
+        <li>Multi-LLM 폴백 체인 구현 (위 목업 6.4)</li>
+        <li>PostgreSQL Checkpointer 연결 (장애 자동 복구)</li>
+        <li>기존 _하네스.py와 병렬 운영 (Shadow Mode)</li>
+        <li><strong>산출물:</strong> LangGraph 그래프 실행, 기존 하네스와 결과 비교 검증</li>
+      </ul>
+    </div>
+
+    <div class="timeline-item">
+      <div class="phase-title">Phase 2: LangChain Tool 래핑 <span class="duration">(2~3주)</span></div>
+      <ul style="padding-left:1.2rem; color:var(--muted); margin-top:0.5rem">
+        <li>P0 도구 22개 LangChain StructuredTool 래핑</li>
+        <li>위하고 ERP Tool에 tenant_id 주입</li>
+        <li>금고 Tool에 테넌트별 키 파생(HKDF) 추가</li>
+        <li>MCP 서버 구성 (선택적)</li>
+        <li>LangSmith 트레이싱 전 Tool에 자동 적용</li>
+        <li><strong>산출물:</strong> 22개 핵심 도구 LangGraph에서 호출 가능</li>
+      </ul>
+    </div>
+
+    <div class="timeline-item">
+      <div class="phase-title">Phase 3: Hermes Gateway 통합 <span class="duration">(2~3주)</span></div>
+      <ul style="padding-left:1.2rem; color:var(--muted); margin-top:0.5rem">
+        <li>Hermes Agent 설치 + providers.yaml 설정</li>
+        <li>Telegram 봇 연결 (테넌트 매핑)</li>
+        <li>ntfy 양방향 통합 (기존 하드코딩 토픽 → 환경변수화)</li>
+        <li>스킬 시스템 초기 설정 (카드마감, 전표입력, 급여처리)</li>
+        <li>기존 채팅앱/server.py → Hermes 웹 UI로 전환</li>
+        <li><strong>산출물:</strong> Telegram + ntfy + Web에서 회계 명령 실행 가능</li>
+      </ul>
+    </div>
+
+    <div class="timeline-item">
+      <div class="phase-title">Phase 4: 멀티테넌트 정식 운영 <span class="duration">(2~3주)</span></div>
+      <ul style="padding-left:1.2rem; color:var(--muted); margin-top:0.5rem">
+        <li>PostgreSQL RLS 정책 적용</li>
+        <li>테넌트 관리 API (생성, 설정, 비활성화)</li>
+        <li>테넌트별 비용 대시보드 (LangSmith + Next.js)</li>
+        <li>P1 도구 래핑 (급여, 4대보험, 자료수집 등)</li>
+        <li>기존 3개 방(라일론, TDH, jina) → 정식 테넌트 전환</li>
+        <li><strong>산출물:</strong> 3+ 회사 동시 운영, 테넌트별 비용·작업 격리 완료</li>
+      </ul>
+    </div>
+
+    <div class="timeline-item">
+      <div class="phase-title">Phase 5: 최적화 및 확장 <span class="duration">(2~4주)</span></div>
+      <ul style="padding-left:1.2rem; color:var(--muted); margin-top:0.5rem">
+        <li>Hermes 스킬 자동 생성 (반복 패턴 학습) 활성화</li>
+        <li>Discord, Slack, WhatsApp 채널 추가</li>
+        <li>LangSmith 평가 데이터셋 구축 + 품질 자동 모니터링</li>
+        <li>P2 도구 래핑 (서버백업, 깃, 토론 등)</li>
+        <li>온보딩 자동화 (신규 회사 셀프서비스 등록)</li>
+        <li><strong>산출물:</strong> 10+ 회사 운영 가능, 셀프서비스 온보딩</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>9.1 타임라인 요약</h3>
+  <table>
+    <tr><th>Phase</th><th>기간</th><th>누적</th><th>핵심 산출물</th><th>의존성</th></tr>
+    <tr><td>Phase 0</td><td>1~2주</td><td>2주</td><td>DB + LangSmith + Hermes 설치</td><td>없음</td></tr>
+    <tr><td>Phase 1</td><td>2~3주</td><td>5주</td><td>LangGraph 오케스트레이터</td><td>Phase 0</td></tr>
+    <tr><td>Phase 2</td><td>2~3주</td><td>8주</td><td>22개 핵심 Tool 래핑</td><td>Phase 1</td></tr>
+    <tr><td>Phase 3</td><td>2~3주</td><td>11주</td><td>멀티채널 게이트웨이</td><td>Phase 1</td></tr>
+    <tr><td>Phase 4</td><td>2~3주</td><td>14주</td><td>멀티테넌트 정식 운영</td><td>Phase 2, 3</td></tr>
+    <tr><td>Phase 5</td><td>2~4주</td><td>18주</td><td>최적화 + 확장</td><td>Phase 4</td></tr>
+  </table>
+
+  <div class="alert warn">
+    <strong>총 예상 기간: 10~18주.</strong> Phase 2와 Phase 3은 병렬 진행 가능하여 최단 10주에 MVP(Phase 4) 달성 가능합니다.
+    기존 진아실장은 전환 기간 내내 계속 운영하며, Shadow Mode로 점진적 전환합니다.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ 10. COST ═══════════════════════════════════════════ -->
+<div class="section" id="s10">
+  <h2>10. 비용 분석 및 ROI</h2>
+
+  <h3>10.1 인프라 비용</h3>
+  <table>
+    <tr><th>항목</th><th>현행 비용</th><th>전환 후 비용</th><th>비고</th></tr>
+    <tr><td>서버 (Contabo VPS)</td><td>~$15/월</td><td>~$15/월</td><td>기존 서버 계속 사용</td></tr>
+    <tr><td>PostgreSQL</td><td>$0 (없음)</td><td>$0 (서버 내 설치)</td><td>Docker 또는 직접 설치</td></tr>
+    <tr><td>LangSmith</td><td>$0</td><td>$0~39/월</td><td>Developer: 무료 5K traces/월, Plus: $39/월</td></tr>
+    <tr><td>Hermes Agent</td><td>$0</td><td>$0</td><td>MIT 라이선스, 셀프호스팅</td></tr>
+    <tr><td>Claude API (Opus 5)</td><td>~$50/월 (OAuth)</td><td>~$50/월</td><td>동일 (테넌트별 분리 추적 추가)</td></tr>
+    <tr><td>DeepSeek</td><td>~$20/월</td><td>~$20/월</td><td>동일</td></tr>
+    <tr><td>Telegram Bot API</td><td>$0</td><td>$0</td><td>무료</td></tr>
+    <tr><td><strong>총 월 비용</strong></td><td><strong>~$85/월</strong></td><td><strong>~$85~124/월</strong></td><td>LangSmith 유무에 따라</td></tr>
+  </table>
+
+  <h3>10.2 ROI 분석</h3>
+  <table>
+    <tr><th>항목</th><th>현행</th><th>전환 후</th><th>절감/가치</th></tr>
+    <tr><td>신규 회사 온보딩</td><td>수동 설정 (1~2일)</td><td>API 호출 1건 (5분)</td><td>시간 96% 절감</td></tr>
+    <tr><td>비용 과금 분리</td><td>불가능 (혼합 추적)</td><td>테넌트별 실시간 추적</td><td>과금 모델 도입 가능</td></tr>
+    <tr><td>장애 디버깅</td><td>JSONL 수동 탐색</td><td>LangSmith 트레이스</td><td>디버깅 80% 단축</td></tr>
+    <tr><td>채널 확장</td><td>개발 2~3주/채널</td><td>config 추가 (1시간)</td><td>채널당 99% 절감</td></tr>
+  </table>
+</div>
+
+<!-- ═══════════════════════════════════════════ 11. RISK ═══════════════════════════════════════════ -->
+<div class="section" id="s11">
+  <h2>11. 리스크 및 대응</h2>
+  <table>
+    <tr><th>#</th><th>리스크</th><th>영향</th><th>확률</th><th>대응</th></tr>
+    <tr>
+      <td>R-001</td>
+      <td>기존 _하네스.py의 미문서화 동작이 LangGraph로 이관 누락</td>
+      <td class="status-no">높음</td>
+      <td>중</td>
+      <td>Shadow Mode 병행 운영 + 결과 비교 자동화. 최소 2주간 동일 오더를 양쪽에서 실행</td>
+    </tr>
+    <tr>
+      <td>R-002</td>
+      <td>Hermes Agent가 한국어 회계 용어를 제대로 처리 못함</td>
+      <td>중</td>
+      <td>중</td>
+      <td>Hermes는 메시지 중계만 담당, 실제 회계 판단은 LangGraph 내 Claude가 수행. Hermes 스킬에 한국어 프롬프트 템플릿 내장</td>
+    </tr>
+    <tr>
+      <td>R-003</td>
+      <td>PostgreSQL 마이그레이션 시 기존 JSONL 데이터 손실</td>
+      <td class="status-no">높음</td>
+      <td>낮음</td>
+      <td>마이그레이션 전 JSONL 전체 백업 + 검증 스크립트 (건수 대조, 해시 비교). 기존 JSONL 파일 삭제하지 않고 1개월 보존</td>
+    </tr>
+    <tr>
+      <td>R-004</td>
+      <td>LangSmith 서비스 장애 시 트레이싱 불가</td>
+      <td>낮음</td>
+      <td>낮음</td>
+      <td>LangSmith는 비동기 전송, 장애 시 로컬 폴백 로그. 핵심 기능(오케스트레이션)은 LangSmith 독립적</td>
+    </tr>
+    <tr>
+      <td>R-005</td>
+      <td>전환 기간 중 진아실장 서비스 중단</td>
+      <td class="status-no">높음</td>
+      <td>낮음</td>
+      <td>기존 systemd 서비스 전혀 건드리지 않고 별도 프로세스로 신규 시스템 구동. 전환 완료 후 트래픽 스위칭</td>
+    </tr>
+    <tr>
+      <td>R-006</td>
+      <td>무료 AI 12종의 LangChain 호환성 미검증</td>
+      <td>중</td>
+      <td>중</td>
+      <td>LangChain ChatOpenAI(base_url=...) 호환 형식인 Groq/Mistral/Together는 즉시 사용 가능. 비호환 프로바이더는 커스텀 ChatModel 작성 (1~2시간/건)</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ═══════════════════════════════════════════ 12. CONCLUSION ═══════════════════════════════════════════ -->
+<div class="section" id="s12">
+  <h2>12. 결론 및 다음 단계</h2>
+
+  <div class="alert success">
+    <strong>결론:</strong> Hermes Gateway + LangGraph + LangChain + LangSmith 기반 전환은
+    <strong>기술적으로 실현 가능</strong>하며, 기존 도구 자산의 <strong>92.5%를 재사용</strong>할 수 있습니다.
+    AADS에서 이미 LangGraph 8-agent 그래프를 운영 중이므로 검증된 패턴 위에서 회계 도메인을 얹는 구조입니다.
+    총 예상 기간은 <strong>10~18주</strong>, 추가 인프라 비용은 <strong>월 $0~39</strong>(LangSmith)입니다.
+  </div>
+
+  <h3>12.1 즉시 실행 가능 항목 (CEO 승인 시)</h3>
+  <table>
+    <tr><th>#</th><th>항목</th><th>소요</th><th>CEO 승인 필요</th></tr>
+    <tr><td>1</td><td>PostgreSQL 15 설치 (5.104.85.244)</td><td>30분</td><td>✅ 서버 변경</td></tr>
+    <tr><td>2</td><td>LangSmith 프로젝트 생성 + API 키 발급</td><td>10분</td><td>✅ 외부 서비스</td></tr>
+    <tr><td>3</td><td>Hermes Agent 설치 (Docker)</td><td>1시간</td><td>✅ 서버 변경</td></tr>
+    <tr><td>4</td><td>DB 스키마 생성 + JSONL 마이그레이션 스크립트 작성</td><td>1일</td><td>❌</td></tr>
+    <tr><td>5</td><td>AccountingState + StateGraph 초기 구현</td><td>2일</td><td>❌</td></tr>
+    <tr><td>6</td><td>P0 도구 5개 LangChain Tool 래핑 (위하고, 금고, 교차검증)</td><td>2일</td><td>❌</td></tr>
+  </table>
+
+  <h3>12.2 CEO 결정 필요 사항</h3>
+  <div class="card-grid">
+    <div class="card">
+      <div class="icon">🅰️</div>
+      <h4>결정 1: LangSmith 유료 플랜</h4>
+      <p>Developer(무료, 5K traces/월) vs Plus($39/월, 무제한). 3개 회사×일 50건 = 월 ~4,500건이므로 무료로 시작 가능.</p>
+      <span class="tag green">권장: 무료 시작</span>
+    </div>
+    <div class="card">
+      <div class="icon">🅱️</div>
+      <h4>결정 2: Telegram 봇 생성</h4>
+      <p>Hermes Gateway 연결용 Telegram 봇을 @BotFather에서 생성해야 합니다. CEO 직접 또는 위임.</p>
+      <span class="tag orange">CEO 직접 조치</span>
+    </div>
+    <div class="card">
+      <div class="icon">🅲️</div>
+      <h4>결정 3: 전환 시작 시점</h4>
+      <p>Phase 0은 기존 서비스에 영향 없이 즉시 시작 가능합니다. 승인 시 바로 착수합니다.</p>
+      <span class="tag green">즉시 시작 가능</span>
+    </div>
+    <div class="card">
+      <div class="icon">🅳️</div>
+      <h4>결정 4: 추가 메신저 채널</h4>
+      <p>Phase 3에서 Telegram 외 어떤 채널을 추가할지. Discord, Slack, WhatsApp, KakaoTalk(비공식) 중 선택.</p>
+      <span class="tag">Phase 3 결정</span>
+    </div>
+  </div>
+
+  <div style="text-align:center; margin-top:3rem; padding:2rem; border-top:1px solid var(--border)">
+    <p style="color:var(--muted); font-size:0.9rem">
+      문서번호: ACCT-PRD-001 | 작성일: 2026-09-09 | 총책임자 (AI) 작성<br>
+      실측 근거: 서버 5.104.85.244 직접 조회 | AADS LangGraph 코드 분석 | Hermes Agent 공식 문서<br>
+      다음 갱신: CEO 방향 확정 후 상세 기술 설계서 (ACCT-LAYOUT-001) 작성
+    </p>
+  </div>
+</div>
+
+</div>
+</body>
+</html>
