@@ -162,7 +162,11 @@ contabo116 은 컨테이너 경유, 원격 서버는 PGHOST 터널로 붙는다 
   - 런타임 이미지에 pytest가 없어 `docker exec aads-server python3 -m pytest`는 더 이상 동작하지 않는다. 이 스크립트가 운영 이미지 + 워킹트리 마운트로 실행한다.
   - 종료코드 0=통과 / 1=실패 / 2=실행 불가. 2는 게이트 미작동이므로 pre-commit이 커밋을 차단한다.
 - **기존 테스트가 실패하면 방치하지 말고 즉시 수정** — 실패하는 테스트가 쌓이면 테스트 시스템 전체가 무력화됨.
-- **pre-commit hook 5단계**: ①API 키 탐지 ②구문 검사 ③ruff 정적 분석 ④Docker import 검증 ⑤단위 테스트 — 모두 통과해야 커밋 가능.
+- **pre-commit hook**: ①API 키 탐지 ②구문 검사 ③ruff 정적 분석 ④Docker import 검증 ⑤단위 테스트 ⑥중복 재적용 차단(`scripts/dup_guard.py`) — 모두 통과해야 커밋 가능.
+  - ③은 **이 호스트에 ruff 가 없어 실제로는 건너뛴다**(2026-09-15 확인). 문서만 돈다고 적고 있었고, 그 사이 F811(중복 정의)이 잡히지 않았다. 이제 건너뛸 때 경고를 남긴다.
+- **commit-msg: 같은 제목의 커밋이 최근 3일 안에 있으면 차단**. 중단된 턴이 재개되며 이미 커밋한 패치를 다시 얹는 사고가 2026-09-15 하루에 세 번 있었고(a9603307 이 되돌림), 같은 제목이 유일한 사전 신호였다.
+  - 이어지는 별개 작업이면 제목을 구분하거나 `ALLOW_DUP_COMMIT=1 git commit -m "..."`. 중복 검사 자체를 넘기는 것도 같은 변수다.
+  - hook 은 `scripts/hooks/` 가 정본이고 `.git/hooks/` 는 설치본이다. **저장소본만 고치면 게이트는 옛 코드로 돈다** — 고친 뒤 `cp scripts/hooks/{pre-commit,commit-msg} .git/hooks/`. 동기화 여부는 `tests/unit/test_dup_guard.py` 가 검사한다.
 
 ## 현재 상태
 - Phase: Phase 2 운영
