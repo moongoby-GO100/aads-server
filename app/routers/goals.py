@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 router = APIRouter()
 
@@ -119,7 +119,10 @@ async def goal_board(goal_id: str):
     pool = get_pool()
     async with pool.acquire() as conn:
         goal = await conn.fetchrow(
-            "SELECT id::text, project, title, status, progress FROM goals WHERE id = $1::uuid",
+            "SELECT id::text, project, title, status, progress, "
+            "       COALESCE(owner_role_key, '') AS owner_role_key, "
+            "       COALESCE(owner_session_id::text, '') AS owner_session_id "
+            "FROM goals WHERE id = $1::uuid",
             goal_id,
         )
         if not goal:
@@ -167,6 +170,10 @@ async def goal_board(goal_id: str):
             goal_id,
         )
 
+    # 주도 정본을 먼저 꺼낸다. 세션 지정이 우선, 없으면 역할키.
+    _goal_lead_session = str(goal["owner_session_id"] or "")
+    _goal_lead_role = str(goal["owner_role_key"] or "")
+
     owners = []
     for r in rows:
         if r["paused_reason"] is not None:
@@ -200,7 +207,20 @@ async def goal_board(goal_id: str):
             "paused": r["paused_reason"] is not None,
             "paused_reason": r["paused_reason"],
             "open_notes": r["open_notes"] or 0,
-            "is_lead": (r["role_key"] or "").endswith("Lead"),
+            # 주도는 **목표에 적힌 것**이 정본이다.
+            #
+            # 예전에는 역할 키가 "Lead" 로 끝나는지만 봤다. 그래서 #119 의
+            # 주도(`CTO` 역할키를 쓰는 "#119 상한가따라잡기 전략관리자")가
+            # 담당으로만 보였고, 대표님이 바꾸실 수도 없었다 —
+            # 2026-09-15 대표님 지적. 이름 규칙은 목표에 주도가 안 적혀 있을
+            # 때만 쓰는 마지막 수단이다.
+            "is_lead": (
+                r["session_id"] == _goal_lead_session
+                if _goal_lead_session
+                else (r["role_key"] == _goal_lead_role
+                      if _goal_lead_role
+                      else (r["role_key"] or "").endswith("Lead"))
+            ),
         })
 
     # 마일스톤 목록 — 우측 패널이 쓴다. 대표님이 채팅창을 떠나지 않고
@@ -420,6 +440,59 @@ async def add_goal_owner(goal_id: str, req: AddOwnerRequest):
             "자기가 무엇을 하는 사람인지 모르는 채로 시작합니다."
         ),
     }
+
+
+class GoalLeadRequest(BaseModel):
+    session_id: str = Field(..., description="주도로 세울 세션")
+
+
+@router.post("/goals/{goal_id}/lead")
+async def set_goal_lead(goal_id: str, req: GoalLeadRequest):
+    """이미 붙어 있는 담당을 주도로 바꾼다.
+
+    2026-09-15 대표님 지적 — "#119 전략관리자가 주도인데 담당으로 들어가
+    있어서 변경이 안된다".
+
+    붙일 때(`as_lead`)만 주도를 정할 수 있었고, 나중에 바꿀 길이 없었다.
+    그리고 화면은 역할 키가 "Lead" 로 끝나는지만 보고 주도를 판단해서,
+    `CTO` 역할키를 쓰는 주도는 담당으로만 보였다. 둘 다 여기서 푼다.
+    """
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        sess = await conn.fetchrow(
+            "SELECT id::text, title, COALESCE(role_key,'') AS role_key "
+            "FROM chat_sessions WHERE id = $1::uuid",
+            req.session_id,
+        )
+        if not sess:
+            raise HTTPException(status_code=404, detail="session_not_found")
+
+        # 붙어 있지 않은 세션을 주도로 세우면 목표 현황에 나오지 않는다.
+        linked = await conn.fetchval(
+            "SELECT 1 FROM goal_task_links WHERE goal_id = $1::uuid "
+            "  AND task_type = 'chat_session' AND task_id = $2 "
+            "  AND COALESCE(link_state,'active') = 'active' LIMIT 1",
+            goal_id, req.session_id,
+        )
+        if not linked:
+            raise HTTPException(
+                status_code=409,
+                detail="이 목표에 붙어 있지 않은 세션입니다. 먼저 담당으로 추가하세요.",
+            )
+
+        updated = await conn.fetchval(
+            "UPDATE goals SET owner_session_id = $2::uuid, "
+            "       owner_role_key = NULLIF($3,''), updated_at = NOW() "
+            " WHERE id = $1::uuid RETURNING id::text",
+            goal_id, req.session_id, sess["role_key"],
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail="goal_not_found")
+
+    return {"ok": True, "goal_id": updated, "lead": sess["title"],
+            "role_key": sess["role_key"]}
 
 
 @router.delete("/goals/{goal_id}/owners/{session_id}")
