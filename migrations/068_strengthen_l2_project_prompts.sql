@@ -18,7 +18,7 @@ WITH upserts(slug, title, workspace_scope, priority, content) AS (
         1,
         $$## L2 Project / CEO 통합지시 운영 컨텍스트
 프로젝트 정체성: CEO 통합지시는 AADS, KIS, GO100, SF, NTV2, NAS 전체를 조율하는 상위 운영 세션이다. 현재 active_project 값을 우선하며, 명시 프로젝트가 있으면 해당 프로젝트의 서버·경로·DB 계약을 따라야 한다.
-서버·경로 계약: AADS는 서버68의 `/root/aads/aads-server`와 `/root/aads/aads-dashboard`, KIS/GO100은 서버211의 `/root/kis-autotrade-v4`, SF는 서버114의 `/data/shortflow`, NTV2는 서버114의 `/var/www/newtalk`, NAS는 Cafe24/NAS 운영 계약을 우선한다.
+서버·경로 계약: AADS는 서버68의 `/root/aads/aads-server`와 `/root/aads/aads-dashboard`, KIS/GO100은 서버211의 `/root/kis-autotrade-v4`, SF는 서버114의 `/data/shortflow`, NTV2는 서버114의 `/srv/newtalk-v2/src`, NAS는 Cafe24/NAS 운영 계약을 우선한다.
 핵심 도메인: 지시서 생성, 러너/에이전트 상태, 프롬프트 거버넌스, 비용, 배포, 장애 대응, 프로젝트 간 우선순위 조정이 중심이다.
 고위험 영역: active_project 오인, 다른 프로젝트 경로로 silent fallback, 미검증 완료 보고, 무단 재시작·배포, 금융·개인정보·결제·시크릿 처리, 러너 좀비 트리거가 위험하다.
 필수 확인: 시간은 KST 실측, 상태는 DB·로그·헬스체크·git·러너 API 중 실제 도구 결과로 확인한다. 작업 지시가 있으면 기존 진행 중 러너와 최근 실패 이력을 먼저 확인한다.
@@ -74,7 +74,7 @@ WITH upserts(slug, title, workspace_scope, priority, content) AS (
         10,
         $$## L2 Project / NTV2 NewTalk V2
 프로젝트 정체성: NTV2는 NewTalk V2 소셜 플랫폼으로 계정, 프로필, 피드, 게시글, 댓글, 메시지, 상품, 주문, 결제, 업로드, 관리자 기능을 포함한다.
-서버·경로·DB 계약: 서버114의 `/var/www/newtalk`를 우선 사용한다. GitHub repo가 없으면 SSH 파일 조회를 우선하고, DB는 `query_project_database(project='NTV2')` 또는 지정 DB 프로필을 사용한다.
+서버·경로·DB 계약: 서버114의 `/srv/newtalk-v2/src`를 우선 사용한다. GitHub repo가 없으면 SSH 파일 조회를 우선하고, DB는 `query_project_database(project='NTV2')` 또는 지정 DB 프로필을 사용한다.
 핵심 도메인: 인증·인가, 사용자 데이터 경계, 게시/피드, 미디어 업로드, 알림, 상품/주문/결제, 관리자 권한, 모바일 UI다.
 고위험 영역: IDOR, 개인정보 노출, 결제/주문 정합성, webhook 검증 누락, 파일 업로드 취약점, 캐시로 인한 권한 우회, 모바일 레이아웃 깨짐이다.
 필수 확인: user_id/project_id 필터, 권한 미들웨어, 주요 테이블 전후 상태, 결제 webhook 로그, 업로드 저장 경로, API 응답, 모바일 화면 영향 범위를 확인한다.
@@ -116,7 +116,7 @@ WITH upserts(slug, title, workspace_scope, priority, content) AS (
         20,
         $$## L2 Project / 원격 접근 계약
 적용 범위: AADS 외부 프로젝트 또는 별도 서버에 있는 프로젝트 파일·DB·서비스를 다룰 때 적용한다. active_project와 명시 프로젝트가 다르면 명시 프로젝트를 우선 확인하고, 불명확하면 질문한다.
-서버 계약: KIS/GO100은 서버211의 `/root/kis-autotrade-v4`, SF는 서버114의 `/data/shortflow`, NTV2/NT는 서버114의 `/var/www/newtalk`, NAS는 Cafe24/NAS 운영 계약을 따른다.
+서버 계약: KIS/GO100은 서버211의 `/root/kis-autotrade-v4`, SF는 서버114의 `/data/shortflow`, NTV2/NT는 서버114의 `/srv/newtalk-v2/src`, NAS는 Cafe24/NAS 운영 계약을 따른다.
 도구 우선순위: GitHub repo가 없거나 최신 원격 상태가 중요하면 `read_remote_file`, `list_remote_dir`, `run_remote_command`, `query_project_database`를 우선한다. AADS는 로컬 파일과 GitHub 모두 가능하지만 현재 workspace 기준을 확인한다.
 필수 확인: 파일 수정 전 원문을 읽고, DB 수치는 SELECT/EXPLAIN 등 읽기 쿼리로 확인한다. 원격 명령은 단일 명령을 선호하고, 위험 명령·대량 삭제·시크릿 출력은 금지한다.
 완료 기준: 어떤 서버/경로/DB에서 확인했는지, 변경 파일과 백업 여부, 테스트·로그·헬스체크 결과, 미검증 항목을 보고한다.

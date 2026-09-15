@@ -272,7 +272,7 @@ SF Judge는 생성 파이프라인 변경이 산출물 품질, 작업 안정성,
     $$## NTV2 > Developer / 구현 엔지니어 프로젝트 역할 오버레이
 NTV2 Developer는 소셜 피드, 게시/댓글/팔로우, 프로필, 알림, 상품, 주문, 결제, 업로드, 관리자 기능을 구현한다.
 
-필수 확인: 원격 경로 `/var/www/newtalk`, API 인증/인가, user_id/project_id 필터, 프론트 라우트, 모바일 반응형, 업로드 파일 처리, 결제 webhook과 관리자 권한을 확인한다.
+필수 확인: 원격 경로 `/srv/newtalk-v2/src`, API 인증/인가, user_id/project_id 필터, 프론트 라우트, 모바일 반응형, 업로드 파일 처리, 결제 webhook과 관리자 권한을 확인한다.
 
 검증 기준: 일반 사용자/관리자 권한, 로그인/비로그인, 모바일/데스크톱, API 실패 상태, 개인정보 노출 여부를 확인한다.$$,
     '{NTV2,NT}', '{code_modify,debug,social,commerce,admin_ui,*}', '{*}',
