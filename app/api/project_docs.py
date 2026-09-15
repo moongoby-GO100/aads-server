@@ -1033,6 +1033,115 @@ async def approvals_revoke(
     return {"id": row["id"], "revoked": True}
 
 
+_SESSION_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+)
+
+
+async def _notify_chat_of_approval_decision(
+    *,
+    session_id: str,
+    request_id: str,
+    tool: str,
+    summary: str,
+    decision: str,
+    scope: str,
+    grant_executions: int,
+    hours: int,
+) -> None:
+    """결정을 그 대화에 남기고, 남은 대기 건이 없으면 막힌 작업을 이어서 돌린다.
+
+    2026-09-15 CEO 지적 — "승인 거절 누르면 해당 채팅창에 전달되나 액션이 없다".
+    그전까지 `/approvals/{id}/decide` 는 DB 행만 바꿨다. 화면에서는 카드가
+    사라질 뿐이고, 게이트에 막혀 멈춘 도구 호출은 **다음 지시가 올 때까지**
+    그대로 서 있었다. 승인을 눌러도 아무 일이 일어나지 않는 것과 같다.
+
+    그래서 둘을 한다. ① 결정을 대화에 기록으로 남긴다 — 승인 화면(/approvals)
+    에서 눌러도 대화에 남아야 나중에 "누가 언제 무엇을 허락했나" 가 보인다.
+    ② 그 세션에 남은 대기 건이 없을 때만 재개 턴을 띄운다. 대기 건마다
+    턴을 띄우면 5건을 연달아 누를 때 턴이 5번 뜬다.
+    """
+    sid = (session_id or "").strip()
+    if not _SESSION_UUID_RE.match(sid):
+        return  # 채팅이 아닌 경로(러너·스크립트)에서 올라온 요청
+
+    approved = decision == "approved"
+    head = "✅ 승인" if approved else "⛔ 거절"
+    if approved:
+        scope_label = (
+            "이번 건만 (1회)" if scope == "single"
+            else f"이 미션 동안 (최대 {grant_executions}회)"
+        )
+        note = (
+            f"**{head}** — `{tool}`\n\n"
+            f"- 범위: {scope_label} · 유효 {hours}시간\n"
+            f"- 요청: {(summary or '')[:300]}\n\n"
+            "막혀 있던 작업을 이어서 진행합니다."
+        )
+    else:
+        note = (
+            f"**{head}** — `{tool}`\n\n"
+            f"- 요청: {(summary or '')[:300]}\n\n"
+            "이 작업은 진행하지 않습니다."
+        )
+
+    from app.core.db_pool import get_pool
+
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO chat_messages
+                       (session_id, role, content, intent, cost, tokens_in, tokens_out,
+                        attachments, sources, tools_called)
+                   VALUES ($1::uuid, 'assistant', $2, 'approval_decision', 0, 0, 0,
+                           '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)""",
+                sid, note,
+            )
+            await conn.execute(
+                "UPDATE chat_sessions SET message_count = message_count + 1,"
+                " updated_at = now() WHERE id = $1::uuid",
+                sid,
+            )
+            remaining = await conn.fetchval(
+                """SELECT count(*) FROM agent_permission_requests
+                    WHERE requested_by = $1 AND decision = 'pending'
+                      AND expires_at > now()""",
+                sid,
+            )
+    except Exception as exc:
+        logger.warning(
+            "approval_decision_note_failed request=%s error=%s", request_id[:8], str(exc)
+        )
+        return
+
+    if remaining:
+        return  # 남은 결정을 다 누른 뒤에 한 번만 이어서 돈다
+
+    try:
+        from app.services.chat_service import trigger_ai_reaction
+
+        if approved:
+            prompt = (
+                f"[시스템] 대표님이 승인했습니다 — 도구 `{tool}`, 범위 {scope}, "
+                f"유효 {hours}시간.\n요청 내용: {(summary or '')[:500]}\n\n"
+                "보호 게이트에 막혀 중단됐던 그 작업을 지금 이어서 수행하고 결과를 보고하세요. "
+                "승인 범위를 벗어나는 변경은 하지 마세요."
+            )
+        else:
+            prompt = (
+                f"[시스템] 대표님이 거절했습니다 — 도구 `{tool}`.\n"
+                f"요청 내용: {(summary or '')[:500]}\n\n"
+                "이 작업은 진행하지 말고, 대신 가능한 대안과 남은 영향만 간단히 보고하세요."
+            )
+        await trigger_ai_reaction(sid, prompt)
+    except Exception as exc:
+        logger.warning(
+            "approval_decision_reaction_failed request=%s error=%s",
+            request_id[:8], str(exc),
+        )
+
+
 @router.post("/approvals/{request_id}/decide")
 async def approvals_decide(
     request_id: str,
@@ -1087,7 +1196,8 @@ async def approvals_decide(
                                      ELSE now() END
              WHERE id = $1::uuid AND decision = 'pending' AND expires_at > now()
             RETURNING id::text, action_type, decision, max_executions,
-                      approval_scope->>'scope' AS scope
+                      approval_scope->>'scope' AS scope,
+                      requested_by, action_summary
             """,
             request_id, decision, reason, decided_by,
             scope, grant_executions, hours,
@@ -1104,6 +1214,17 @@ async def approvals_decide(
         "hours=%s max_exec=%s by=%s",
         request_id[:8], row["action_type"], decision, scope, hours,
         grant_executions, decided_by[:8],
+    )
+    # 결정은 대화로 돌아간다 — 누른 결과가 화면에 보이고, 막힌 작업이 이어진다.
+    await _notify_chat_of_approval_decision(
+        session_id=row["requested_by"],
+        request_id=request_id,
+        tool=row["action_type"],
+        summary=row["action_summary"],
+        decision=decision,
+        scope=scope,
+        grant_executions=grant_executions,
+        hours=hours,
     )
     # 승인에는 반드시 시간 상한이 붙는다. 승인해 둔 것이 며칠 뒤 다른
     # 맥락에서 쓰이면 CEO 가 승인한 그 변경이 아니다.
