@@ -1103,6 +1103,18 @@ async def get_slot_usage_all() -> List[Dict[str, Any]]:
                 "window_minutes": 10080,
                 "resets_at": row["seven_day_resets_at"].isoformat() if row["seven_day_resets_at"] else None,
             }
+        # 토큰이 살아 있나. 자동 갱신이 안 되는 슬롯은 이것이 유일한 신호다.
+        try:
+            from app.services.slot_token_health import snapshot as _token_snapshot
+
+            health = _token_snapshot().get(slot) or {}
+            if health:
+                entry["token_alive"] = bool(health.get("alive"))
+                entry["token_checked_at"] = health.get("checked_at")
+                entry["token_status"] = health.get("status")
+        except Exception:
+            pass
+
         if entry["last_resort"]:
             from app.services.slot_gate import state as _gate_state
 

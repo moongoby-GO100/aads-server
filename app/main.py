@@ -2560,6 +2560,20 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         logger.warning(f"startup_placeholder_cleanup_failed: {_e}")
 
+    # 스스로 갱신하지 못하는 슬롯 토큰 감시.
+    #
+    # 슬롯 1·2 는 keeper 가 리프레시 토큰으로 지킨다. 슬롯 3(진아)에는
+    # 리프레시 토큰이 없어 죽는 것을 막을 수 없다 — 대신 죽는 순간 바로
+    # 알린다. 한도를 쓰지 않는 호출만 쓴다.
+    try:
+        import asyncio as _slot_health_asyncio
+        from app.services.slot_token_health import slot_token_health_poller
+
+        _slot_health_asyncio.create_task(slot_token_health_poller())
+        logger.info("slot_token_health_poller_started")
+    except Exception as _e:
+        logger.warning(f"slot_token_health_poller_start_failed: {_e}")
+
     # Claude Max 사용량 백그라운드 폴러 (DB 영속 저장 + 실시간 갱신)
     try:
         import asyncio as _claude_max_asyncio
