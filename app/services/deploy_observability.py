@@ -252,6 +252,12 @@ def _apply_release_metadata(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             str(row.get("release_sha") or ""),
         )
         merged = {**payload_meta, **{k: v for k, v in git_meta.items() if v not in (None, "", [])}}
+        # payload 에도 없고 이 컨테이너의 git 에서도 보이지 않는 릴리스가 있다.
+        # GO100 처럼 다른 서버에서 배포되어 원장에만 제목이 저장된 경우가 그렇다.
+        # 그때 DB 컬럼을 덮어써 버리면 배포 탭에 제목 없는 줄만 남는다.
+        for key in ("release_title", "release_summary"):
+            if not merged.get(key) and row.get(key):
+                merged[key] = row.get(key)
         row.update(merged)
     return rows
 
@@ -500,18 +506,35 @@ async def _load_recent_deployments(conn: Any) -> list[dict[str, Any]]:
     rows = _dict_rows(await conn.fetch(
         """
         /* recent_terminal_deploy_history */
-        SELECT dr.*,
-               CASE WHEN dr.image_digest IS NOT NULL
-                         AND dr.image_digest = dr.standby_digest THEN 'synced'
-                    WHEN dr.standby_digest IS NULL THEN 'unknown'
-                    ELSE 'mismatch' END AS bg_sync_status
-        FROM deploy_runs AS dr
-        WHERE dr.status IN ('completed', 'success', 'failed', 'error',
-                            'blocked', 'superseded', 'cancelled')
-        ORDER BY COALESCE(dr.phase_completed_at, dr.updated_at, dr.created_at) DESC, dr.id DESC
-        LIMIT 20
+        WITH terminal AS (
+            SELECT dr.*,
+                   CASE WHEN dr.image_digest IS NOT NULL
+                             AND dr.image_digest = dr.standby_digest THEN 'synced'
+                        WHEN dr.standby_digest IS NULL THEN 'unknown'
+                        ELSE 'mismatch' END AS bg_sync_status,
+                   COALESCE(dr.phase_completed_at, dr.updated_at, dr.created_at) AS _sort_at
+            FROM deploy_runs AS dr
+            WHERE dr.status IN ('completed', 'success', 'failed', 'error',
+                                'blocked', 'superseded', 'cancelled')
+        ), ranked AS (
+            SELECT t.*,
+                   ROW_NUMBER() OVER (ORDER BY t._sort_at DESC, t.id DESC) AS _rn_global,
+                   ROW_NUMBER() OVER (PARTITION BY upper(t.project)
+                                      ORDER BY t._sort_at DESC, t.id DESC) AS _rn_project
+            FROM terminal AS t
+        )
+        -- 전역 최신 20건에 더해 프로젝트별 최신 5건을 반드시 포함한다.
+        -- 배포가 잦은 AADS 가 전역 상위를 독점해 GO100/SF/NTV2 배포가
+        -- 목록에서 사라지던 문제(2026-09-15 CEO 지적) 때문이다.
+        SELECT * FROM ranked
+        WHERE _rn_global <= 20 OR _rn_project <= 5
+        ORDER BY _sort_at DESC, id DESC
+        LIMIT 60
         """
     ))
+    for row in rows:
+        for helper_key in ("_sort_at", "_rn_global", "_rn_project"):
+            row.pop(helper_key, None)
     return _apply_deploy_time_aliases(_apply_release_metadata(rows))
 
 

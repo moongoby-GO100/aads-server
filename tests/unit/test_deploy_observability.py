@@ -439,3 +439,61 @@ def test_ops_deploy_request_kicks_worker_and_returns_followup_state():
     assert "worker_start" in api
     assert "ops_api_request" in api
     assert '"/api/v1/ops/deploy/status"' in api
+
+
+def test_recent_deployments_reserve_slots_per_project():
+    """전역 최신 20건이 AADS 로 가득 차도 다른 프로젝트 배포가 목록에 남아야 한다.
+
+    2026-09-15: AADS 배포가 513건 쌓이는 동안 GO100 배포는 단 한 줄도
+    '최근 배포 이력'에 오르지 못했다. 전역 LIMIT 20 만 걸려 있었기 때문이다.
+    """
+    source = _MODULE_PATH.read_text()
+    marker = source.split("recent_terminal_deploy_history", 1)[1]
+    query = marker.split('"""', 1)[0]
+
+    assert "PARTITION BY upper(t.project)" in query
+    assert "_rn_project <= 5" in query
+    assert "_rn_global <= 20" in query
+
+
+def test_recent_deployments_strip_ranking_helper_columns():
+    now = datetime.now(timezone.utc)
+    conn = FakeConnection(
+        {"deploy_runs"},
+        {
+            "recent_terminal_deploy_history": [{
+                "id": 721,
+                "project": "GO100",
+                "release_sha": "0f245ae3c",
+                "status": "success",
+                "phase": "rollback",
+                "phase_completed_at": now,
+                "request_payload": {},
+                "_sort_at": now,
+                "_rn_global": 307,
+                "_rn_project": 1,
+            }],
+        },
+    )
+
+    rows = asyncio.run(_MODULE._load_recent_deployments(conn))
+
+    assert rows[0]["id"] == 721
+    assert not [key for key in rows[0] if key.startswith("_")]
+
+
+def test_external_release_title_survives_missing_git_and_payload():
+    """다른 서버에서 배포된 릴리스는 이 컨테이너의 git 으로 볼 수 없다.
+
+    그때 원장에 저장된 제목까지 덮어써 버리면 배포 탭에 제목 없는 줄만 남는다.
+    """
+    rows = _MODULE._apply_release_metadata([{
+        "project": "GO100",
+        "release_sha": "0f245ae3c",
+        "release_title": "GO100-LEDGER-DEPLOY-20260915",
+        "release_summary": "ceo-approved-p0-ledger-integrity",
+        "request_payload": {},
+    }])
+
+    assert rows[0]["release_title"] == "GO100-LEDGER-DEPLOY-20260915"
+    assert rows[0]["release_summary"] == "ceo-approved-p0-ledger-integrity"
