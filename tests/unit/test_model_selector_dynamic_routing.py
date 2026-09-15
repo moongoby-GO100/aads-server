@@ -138,7 +138,7 @@ async def _collect_claude_route(monkeypatch, *, intent: str, model: str, use_too
     async def _fake_registry_row(_model_id: str, provider=None):
         return None
 
-    async def _fake_claude_slots():
+    async def _fake_claude_slots(project: str = ""):
         return {}
 
     async def _fake_cli_stream(target_model, system_prompt, messages, tools=None, session_id=None, oauth_slot=None):
@@ -187,7 +187,7 @@ async def test_explicit_fable_5_1_does_not_silently_downgrade_to_opus(monkeypatc
             }
         return None
 
-    async def _fake_claude_slots():
+    async def _fake_claude_slots(project: str = ""):
         return {}
 
     async def _fake_cli_stream(target_model, *_args, **_kwargs):
@@ -258,7 +258,7 @@ async def test_call_stream_routes_dynamic_qwen_model_to_direct_provider(monkeypa
         raise AssertionError("LiteLLM fallback path should not run for dynamic qwen models")
         yield
 
-    async def _fake_claude_slots():
+    async def _fake_claude_slots(project: str = ""):
         return {}
 
     monkeypatch.setattr(model_selector, "_get_db_key", _fake_get_db_key)
@@ -300,7 +300,7 @@ async def test_call_stream_uses_db_default_for_legacy_auto_qwen(monkeypatch):
     async def _fake_registry_row(_model_id: str, provider=None):
         return None
 
-    async def _fake_claude_slots():
+    async def _fake_claude_slots(project: str = ""):
         return {}
 
     async def _fake_codex_stream(model, system_prompt, messages, tools=None, session_id=None):
@@ -352,7 +352,7 @@ async def test_call_stream_uses_db_default_for_auto_default_sentinel(monkeypatch
     async def _fake_registry_row(_model_id: str, provider=None):
         return None
 
-    async def _fake_claude_slots():
+    async def _fake_claude_slots(project: str = ""):
         return {}
 
     async def _fake_codex_stream(model, system_prompt, messages, tools=None, session_id=None):
@@ -1017,7 +1017,7 @@ async def test_call_stream_routes_registry_claude_backend_without_static_allowli
             }
         ]
 
-    async def _fake_claude_slots():
+    async def _fake_claude_slots(project: str = ""):
         return {}
 
     async def _fake_cli_stream(target_model, system_prompt, messages, tools=None, session_id=None, oauth_slot=None):
