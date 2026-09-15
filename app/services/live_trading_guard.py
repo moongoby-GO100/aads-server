@@ -115,6 +115,19 @@ def _has_write_redirect(cmd: str) -> bool:
     return bool(_REDIRECT_WRITE.search(_NULL_REDIRECT.sub("", cmd)))
 
 
+# 명령문 안의 문서·시험 경로는 지우고 나서 본다.
+#
+# `bash scripts/run_unit_tests.sh tests/unit/test_live_trading_guard.py` 가
+# 막혔다 — 실매매 코드를 **시험하는 파일 이름**에 `live_trading` 이 들어
+# 있다는 이유였다. 시험을 돌리는 것과 실매매를 바꾸는 것은 다른 일이다.
+_PATH_TOKEN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:docs?|reports?|tests?|plans?)/\S*", re.IGNORECASE)
+
+
+def _code_relevant_text(blob: str) -> str:
+    return _PATH_TOKEN.sub(" ", blob)
+
+
 def _text_of(tool_input: Dict[str, Any]) -> str:
     parts = []
     for key in ("file_path", "path", "command", "query", "sql", "target", "task", "project"):
@@ -150,8 +163,9 @@ def classify_tier(tool_name: str, tool_input: Dict[str, Any]) -> Tuple[str, str,
     if _NON_CODE_PATH.search(str(tool_input.get("file_path") or tool_input.get("path") or "")):
         return TIER_PASS, "", ""
 
-    is_critical = bool(_CRITICAL.search(blob))
-    on_guarded_path = bool(_GUARDED_PATH.search(blob))
+    scanned = _code_relevant_text(blob)
+    is_critical = bool(_CRITICAL.search(scanned))
+    on_guarded_path = bool(_GUARDED_PATH.search(scanned))
     if not is_critical and not on_guarded_path:
         return TIER_PASS, "", ""
 

@@ -31,6 +31,16 @@ PASS_CASES = [
     ("patch_remote_file", {"file_path": "docs/risk_report.md"}),
     ("write_remote_file", {"file_path": "reports/scalping_backtest_result.md"}),
     ("write_remote_file", {"file_path": "tests/test_live_engine.py"}),
+    # 실매매 코드를 **시험하는 파일 이름**에 live_trading 이 들어 있다는 이유로
+    # 시험 실행이 막혔다. 시험을 돌리는 것과 실매매를 바꾸는 것은 다른 일이다.
+    ("run_remote_command",
+     {"command": "bash scripts/run_unit_tests.sh tests/unit/test_live_trading_guard.py > /tmp/t.log 2>&1"}),
+    ("run_remote_command",
+     {"command": "pytest /root/aads/aads-server/tests/unit/test_live_engine.py"}),
+    # 헬스체크와 상태 조회는 읽기다.
+    ("run_remote_command",
+     {"command": "curl -s http://127.0.0.1:8002/health 2>/dev/null; systemctl is-active go100.service"}),
+    ("write_remote_file", {"file_path": "docs/plans/live_trading_plan.md"}),
 ]
 
 APPROVE_CASES = [
