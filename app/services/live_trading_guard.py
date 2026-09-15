@@ -316,7 +316,13 @@ async def request_approval(
             f"[{label}] {reason}\n{summary}", session_id or "unknown",
             # 대상 지문을 요청 시점에 박아 둔다. 승인 시점에 다시 계산하면
             # 그때는 tool_input 이 없어 무엇을 허락하는지 알 수 없다.
-            json.dumps({"scope": "single_call", "target": _target_key(tool_input)}),
+            json.dumps({
+                "scope": "single_call",
+                "target": _target_key(tool_input),
+                # 프로젝트 범위 승인이 나중에 이 값을 본다. 승인 시점에는
+                # tool_input 이 없어 다시 계산할 수 없다 — 대상 지문과 같은 이유다.
+                "project": str(tool_input.get("project") or "").strip().upper(),
+            }),
             risk_level,
             # 알림 등급은 승인 개념이 없다. 대기 목록에 섞이면 진짜 승인
             # 대상이 그 사이에 묻힌다.
@@ -491,7 +497,8 @@ async def goal_policy_allows(
     return str(row["id"])
 
 
-async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: str = "") -> bool:
+async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: str = "",
+                      risk_level: str = "") -> bool:
     """이미 승인된 **범위** 안인지.
 
     예전에는 `work_key` 하나로만 찾았다. 그 키에 명령 본문 해시가 들어 있어
@@ -503,7 +510,19 @@ async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: st
 
         single   이 요청 하나 (work_key 정확히 일치)
         mission  같은 세션 + 같은 도구 + **같은 대상**
+        session  같은 세션 + 같은 도구 (대상은 묻지 않는다)
+        project  같은 프로젝트 + 같은 도구 (**세션을 넘는다**)
         goal     그 목표가 살아 있는 동안 + 같은 도구
+
+    2026-09-15 대표님 지시로 `session`·`project` 가 붙었다. 미션 범위가
+    대상 지문까지 맞아야 해서, 파일 하나를 끝내고 다음 파일로 넘어갈 때마다
+    새 카드가 떴다 — 12시간에 카드 89장, 실사용 18회(실측). 한 대화에서
+    여러 파일을 고치는 것이 보통인데 범위가 그것을 담지 못했다.
+
+    **주문·자금(critical)은 이 두 범위로 통과하지 않는다.** 넓은 범위는
+    "같은 종류의 일을 계속 한다" 는 뜻이지 "돈이 나가는 일을 계속 해도
+    된다" 는 뜻이 아니다. 승인 화면에서도 그 버튼을 그리지 않지만, 여기서
+    한 번 더 막는다 — 화면은 바뀌어도 이 조회는 남는다.
 
     **무제한은 없다.** 어느 범위든 횟수 상한을 넘기면 다시 묻는다. 목표가
     끝나면 `_active_goal_ids` 에서 빠지므로 골 승인도 자동으로 닫힌다.
@@ -519,6 +538,9 @@ async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: st
     work_key = _work_key(session_id, tool_name, summary)
     target_key = _target_key(tool_input)
     goal_ids = await _active_goal_ids(session_id)
+    # 넓은 범위를 쓸 수 있는가. critical 이면 아래 두 절이 통째로 꺼진다.
+    wide_ok = (risk_level or "") != "critical"
+    target_project = str(tool_input.get("project") or "").strip().upper()
     try:
         pool = get_pool()
         row = await pool.fetchrow(
@@ -536,13 +558,26 @@ async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: st
                  OR (approval_scope->>'scope' = 'goal'
                      AND action_type = $3
                      AND approval_scope->>'goal_id' = ANY($4::text[]))
+                 -- 이 대화 동안: 같은 세션의 같은 도구면 대상을 묻지 않는다.
+                 OR ($6 AND approval_scope->>'scope' = 'session'
+                     AND requested_by = $2 AND action_type = $3)
+                 -- 이 프로젝트 동안: 세션을 넘는다. 그래서 프로젝트를 모르는
+                 -- 호출($7 = '')은 여기에 걸리지 않는다 — 무엇을 여는지
+                 -- 모르는 채로 여는 것이 가장 나쁘다.
+                 OR ($6 AND $7 <> '' AND approval_scope->>'scope' = 'project'
+                     AND action_type = $3
+                     AND UPPER(COALESCE(approval_scope->>'project', '')) = $7)
               )
+            -- 넓은 것부터 쓴다. 좁은 승인을 남겨 두어야 그 대상에 다시
+            -- 물어보지 않는다.
             ORDER BY CASE COALESCE(approval_scope->>'scope', 'single')
-                         WHEN 'goal' THEN 0 WHEN 'mission' THEN 1 ELSE 2 END,
+                         WHEN 'goal' THEN 0 WHEN 'project' THEN 1
+                         WHEN 'session' THEN 2 WHEN 'mission' THEN 3 ELSE 4 END,
                      decided_at DESC
             LIMIT 1
             """,
             work_key, session_id, tool_name, goal_ids or [""], target_key,
+            wide_ok, target_project,
         )
         if not row:
             return False
@@ -588,7 +623,7 @@ async def check(tool_name: str, tool_input: Dict[str, Any]) -> Optional[str]:
         )
         return None
 
-    if await is_approved(tool_name, tool_input, session_id):
+    if await is_approved(tool_name, tool_input, session_id, risk_level):
         logger.info("live_trading_gate_approved_pass tool=%s session=%s",
                     tool_name, session_id[:8])
         return None

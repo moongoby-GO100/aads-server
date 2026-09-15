@@ -949,15 +949,31 @@ async def approvals_pending(
                       "params": {"decision": "approved", "scope": "single", "hours": 2}},
                      {"key": "reject", "label": "거절",
                       "params": {"decision": "rejected"}},
-                 ] if r["gate_source"] == "next_step" else [
-                     {"key": "single", "label": "이번 건만",
-                      "params": {"decision": "approved", "scope": "single", "hours": 2}},
-                     {"key": "mission", "label": "이 미션 동안",
-                      "params": {"decision": "approved", "scope": "mission",
-                                 "hours": 2, "max_executions": 20}},
-                     {"key": "reject", "label": "거부",
-                      "params": {"decision": "rejected"}},
-                 ]
+                 ] if r["gate_source"] == "next_step" else (
+                     [
+                         {"key": "single", "label": "이번 건만",
+                          "params": {"decision": "approved", "scope": "single",
+                                     "hours": 2}},
+                         {"key": "mission", "label": "같은 대상",
+                          "params": {"decision": "approved", "scope": "mission",
+                                     "hours": 2, "max_executions": 20}},
+                     ]
+                     # 주문·자금(critical)에는 넓은 범위를 **보여주지도 않는다.**
+                     # 서버가 눌린 뒤에 미션으로 낮추기는 하지만, 누를 수 있게
+                     # 두면 언젠가 눌린다. 화면에서 먼저 내린다(2026-09-15).
+                     + ([] if r["risk_level"] == "critical" else [
+                         {"key": "session", "label": "이 대화 동안",
+                          "params": {"decision": "approved", "scope": "session",
+                                     "hours": 4, "max_executions": 50}},
+                         {"key": "project", "label": "이 프로젝트 동안",
+                          "params": {"decision": "approved", "scope": "project",
+                                     "hours": 8, "max_executions": 100}},
+                     ])
+                     + [
+                         {"key": "reject", "label": "거부",
+                          "params": {"decision": "rejected"}},
+                     ]
+                 )
              )}
             for r in rows
         ],
@@ -1207,10 +1223,12 @@ async def _notify_chat_of_approval_decision(
     # 제안 카드는 도구 이름(`next_step`)을 보여 봐야 뜻이 없다.
     label = "다음 단계" if (tool or "") == "next_step" else f"`{tool}`"
     if approved:
-        scope_label = (
-            "이번 건만 (1회)" if scope == "single"
-            else f"이 미션 동안 (최대 {grant_executions}회)"
-        )
+        scope_label = {
+            "single": "이번 건만 (1회)",
+            "mission": f"같은 대상 작업 (최대 {grant_executions}회)",
+            "session": f"이 대화 동안 (최대 {grant_executions}회)",
+            "project": f"이 프로젝트 전체 (최대 {grant_executions}회)",
+        }.get(scope, f"같은 대상 작업 (최대 {grant_executions}회)")
         note = (
             f"**{head}** — {label}\n\n"
             f"- 범위: {scope_label} · 유효 {hours}시간\n"
@@ -1304,10 +1322,12 @@ async def approvals_decide(
     request_id: str,
     decision: str = Query(..., pattern="^(approved|rejected)$"),
     reason: str = Query("", max_length=500),
-    scope: str = Query("single", pattern="^(single|mission)$",
-                       description="single=이번 건만, mission=이 미션 동안"),
+    scope: str = Query("single", pattern="^(single|mission|session|project)$",
+                       description="single=이번 건만, mission=같은 대상, "
+                                   "session=이 대화 전체, project=이 프로젝트 전체"),
     hours: int = Query(2, ge=1, le=24, description="승인 유효 시간"),
-    max_executions: int = Query(1, ge=1, le=500, description="mission 일 때 허용 횟수"),
+    max_executions: int = Query(1, ge=1, le=500,
+                                description="single 이 아닐 때 허용 횟수"),
     context: TenantContext = Depends(require_tenant_member),
 ):
     """승인 또는 거절.
@@ -1323,12 +1343,31 @@ async def approvals_decide(
     from app.core.db_pool import get_pool
 
     decided_by = str(_tenant_id(context) or "CEO")
-    # 이번 건만이면 1회·요청한 시간, 미션이면 횟수 상한을 준다.
-    grant_executions = max_executions if scope == "mission" else 1
+    # 이번 건만이면 1회, 그 밖의 범위는 요청한 횟수 상한을 준다.
+    grant_executions = max_executions if scope != "single" else 1
     try:
         row = await get_pool().fetchrow(
             """
-            UPDATE agent_permission_requests
+            WITH cur AS (
+                SELECT id, risk_level
+                  FROM agent_permission_requests
+                 WHERE id = $1::uuid AND decision = 'pending' AND expires_at > now()
+            ),
+            -- 주문·자금(critical)은 대화·프로젝트 범위로 열지 않는다.
+            --
+            -- 넓은 범위는 "같은 종류의 일을 계속 한다" 는 뜻이지 "돈이 나가는
+            -- 일을 계속 해도 된다" 는 뜻이 아니다. 실수로 눌렀을 때 되돌릴 수
+            -- 없는 쪽이므로, 거절하지 않고 **미션 범위로 낮춰서** 승인한다.
+            -- 거절하면 대표님이 다시 눌러야 하고, 그대로 열면 게이트가 없는
+            -- 것과 같다. 낮춘 사실은 대화 기록에 그대로 나간다.
+            eff AS (
+                SELECT id,
+                       CASE WHEN $5 IN ('session', 'project')
+                                 AND risk_level = 'critical'
+                            THEN 'mission' ELSE $5 END AS scope
+                  FROM cur
+            )
+            UPDATE agent_permission_requests a
                -- `reason` 은 NOT NULL 이다. NULLIF 로 빈 사유를 NULL 로
                -- 바꾸면 제약에 걸려 승인 자체가 503 으로 실패한다 — 대표님이
                -- 사유를 적지 않고 누르는 것이 보통이므로 사실상 항상 실패했다
@@ -1341,24 +1380,28 @@ async def approvals_decide(
                                          THEN $6 ELSE max_executions END,
                    approval_scope = CASE WHEN $2 = 'approved'
                         THEN jsonb_build_object(
-                                 'scope', $5::text,
+                                 'scope', eff.scope,
                                  'used', 0,
                                  -- 대상 지문은 요청 시점에 박혔다. 여기서
                                  -- 덮어 없애면 미션 승인이 다시 "세션의
                                  -- 모든 쓰기" 로 벌어진다(2026-09-15).
-                                 'target', COALESCE(approval_scope->>'target', ''),
-                                 'mission_key', CASE WHEN $5 = 'mission'
-                                     THEN split_part(work_key, ':', 1) || ':'
-                                          || split_part(work_key, ':', 2)
+                                 'target', COALESCE(a.approval_scope->>'target', ''),
+                                 -- 프로젝트 범위가 이 값으로 맞춘다. 대상
+                                 -- 지문과 같은 이유로 요청 시점 값을 옮긴다.
+                                 'project', COALESCE(a.approval_scope->>'project', ''),
+                                 'mission_key', CASE WHEN eff.scope = 'mission'
+                                     THEN split_part(a.work_key, ':', 1) || ':'
+                                          || split_part(a.work_key, ':', 2)
                                      ELSE '' END)
-                        ELSE approval_scope END,
+                        ELSE a.approval_scope END,
                    expires_at = CASE WHEN $2 = 'approved'
                                      THEN now() + make_interval(hours => $7)
                                      ELSE now() END
-             WHERE id = $1::uuid AND decision = 'pending' AND expires_at > now()
-            RETURNING id::text, action_type, decision, max_executions,
-                      approval_scope->>'scope' AS scope,
-                      requested_by, action_summary
+              FROM eff
+             WHERE a.id = eff.id
+            RETURNING a.id::text, a.action_type, a.decision, a.max_executions,
+                      a.approval_scope->>'scope' AS scope,
+                      a.requested_by, a.action_summary
             """,
             request_id, decision, reason, decided_by,
             scope, grant_executions, hours,
@@ -1370,11 +1413,15 @@ async def approvals_decide(
     if not row:
         raise HTTPException(status_code=404, detail="대기 중인 요청이 아닙니다 (이미 처리됐거나 없음)")
 
+    # critical 은 위에서 미션 범위로 낮춰졌을 수 있다. 기록도 대화 알림도
+    # **실제로 부여된 범위**를 써야 한다 — 요청한 범위를 적으면 대표님이
+    # 누른 것과 실제 권한이 달라진다.
+    effective_scope = row["scope"] or scope
     logger.warning(
         "live_trading_gate_decided request=%s tool=%s decision=%s scope=%s "
-        "hours=%s max_exec=%s by=%s",
-        request_id[:8], row["action_type"], decision, scope, hours,
-        grant_executions, decided_by[:8],
+        "granted=%s hours=%s max_exec=%s by=%s",
+        request_id[:8], row["action_type"], decision, scope, effective_scope,
+        hours, grant_executions, decided_by[:8],
     )
     # 결정은 대화로 돌아간다 — 누른 결과가 화면에 보이고, 막힌 작업이 이어진다.
     await _notify_chat_of_approval_decision(
@@ -1383,7 +1430,7 @@ async def approvals_decide(
         tool=row["action_type"],
         summary=row["action_summary"],
         decision=decision,
-        scope=scope,
+        scope=effective_scope,
         grant_executions=grant_executions,
         hours=hours,
     )
@@ -1423,7 +1470,7 @@ async def approvals_decide_bulk(
     if decision not in ("approved", "rejected"):
         raise HTTPException(status_code=400, detail="decision 은 approved 또는 rejected")
     scope = str(payload.get("scope") or "single")
-    if scope not in ("single", "mission"):
+    if scope not in ("single", "mission", "session", "project"):
         scope = "single"
     reason = str(payload.get("reason") or "")[:500]
     hours = max(1, min(24, int(payload.get("hours") or 12)))

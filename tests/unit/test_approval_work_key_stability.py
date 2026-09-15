@@ -126,7 +126,9 @@ def test_decide_endpoint_preserves_target():
     """승인 시점에 대상 지문을 덮어 없애면 범위가 다시 벌어진다."""
     api = REPO / "app" / "api" / "project_docs.py"
     src = api.read_text()
-    assert "'target', COALESCE(approval_scope->>'target', '')" in src
+    # 2026-09-15 범위 확장으로 UPDATE 가 `... a FROM eff` 형태가 되면서
+    # 컬럼 참조에 별칭이 붙었다. 보존한다는 사실 자체는 그대로다.
+    assert "'target', COALESCE(a.approval_scope->>'target', '')" in src
 
 
 def test_goal_policy_defaults_critical_off():
@@ -152,3 +154,69 @@ def test_goal_policy_is_bound_to_the_goal_project():
     assert "UPPER(COALESCE(g.project, '')) = $3" in body, "목표 정책이 프로젝트를 보지 않는다"
     # 대상 프로젝트를 모르는 호출은 통과시키지 않는다.
     assert "$3 <> ''" in body
+
+
+def test_session_scope_ignores_target():
+    """이 대화 동안 승인은 대상이 달라도 이어져야 한다.
+
+    2026-09-15 실측 — 미션 범위가 대상 지문까지 맞아야 해서 파일을 옮길
+    때마다 새 카드가 떴다(12시간 카드 89장, 실사용 18회). 세션 범위는
+    그 대상 조건을 빼는 것이 존재 이유다.
+    """
+    import inspect
+
+    body = inspect.getsource(guard.is_approved)
+    assert "approval_scope->>'scope' = 'session'" in body
+    session_clause = body.split("= 'session'", 1)[1].split(")", 1)[0]
+    assert "target" not in session_clause, "세션 범위가 대상을 다시 묻고 있다"
+
+
+def test_project_scope_requires_a_known_project():
+    """프로젝트 범위는 세션을 넘는다. 대상 프로젝트를 모르면 열지 않는다."""
+    import inspect
+
+    body = inspect.getsource(guard.is_approved)
+    assert "approval_scope->>'scope' = 'project'" in body
+    assert "UPPER(COALESCE(approval_scope->>'project', '')) = $7" in body
+    assert "$7 <> ''" in body
+
+
+def test_wide_scopes_are_closed_for_critical():
+    """주문·자금은 대화·프로젝트 범위로 통과하지 않는다.
+
+    화면에서도 그 버튼을 감추지만, 화면은 바뀐다. 조회에서 한 번 더 막는다.
+    """
+    import inspect
+
+    body = inspect.getsource(guard.is_approved)
+    assert 'wide_ok = (risk_level or "") != "critical"' in body
+    # 넓은 두 절은 전부 그 스위치 뒤에 있어야 한다.
+    for scope in ("'session'", "'project'"):
+        clause = body.split("= " + scope, 1)[0].rsplit("OR", 1)[1]
+        assert "$6" in clause, f"{scope} 범위가 critical 스위치를 거치지 않는다"
+
+
+def test_check_passes_risk_level_to_lookup():
+    """risk_level 을 넘기지 않으면 critical 차단이 조용히 꺼진다."""
+    import inspect
+
+    body = inspect.getsource(guard.check)
+    assert "is_approved(tool_name, tool_input, session_id, risk_level)" in body
+
+
+def test_request_records_project_for_later_project_scope():
+    """승인 시점에는 tool_input 이 없다. 요청 시점에 박아 두어야 한다."""
+    import inspect
+
+    body = inspect.getsource(guard.request_approval)
+    assert '"project": str(tool_input.get("project") or "").strip().upper()' in body
+
+
+def test_decide_endpoint_accepts_the_new_scopes():
+    """화면이 보내도 서버가 받지 않으면 버튼은 장식이다."""
+    api = REPO / "app" / "api" / "project_docs.py"
+    src = api.read_text()
+    assert "^(single|mission|session|project)$" in src
+    # critical 은 거절이 아니라 미션으로 낮춘다 — 거절하면 다시 눌러야 한다.
+    assert "THEN 'mission' ELSE $5 END AS scope" in src
+    assert "'project', COALESCE(a.approval_scope->>'project', '')" in src
