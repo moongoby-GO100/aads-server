@@ -421,6 +421,19 @@ async def goal_policy_allows(
     from app.core.db_pool import get_pool
 
     field = "auto_approve_critical" if risk_level == "critical" else "auto_approve_high"
+    # 목표의 프로젝트 밖은 이 설정이 덮지 않는다.
+    #
+    # 2026-09-15 실측 — 자동 승인이 켜진 목표 3건은 전부 GO100 이고 각각
+    # 채팅 세션 8~10 개가 묶여 있었다. 그런데 조회가 프로젝트를 보지 않아,
+    # 그 세션이 AADS `live_trading_guard.py` 를 고쳐도 같은 설정으로
+    # 통과했다. 파일명이 `_GUARDED_PATH` 에 걸리기만 하면 됐다.
+    #
+    # 대표님이 "이 목표 동안" 을 켜신 것은 그 목표의 일을 막지 말라는
+    # 뜻이지, 다른 프로젝트까지 열라는 뜻이 아니다.
+    #
+    # 대상 프로젝트를 알 수 없는 호출(예: db_safe_write)은 통과시키지
+    # 않는다. 무엇을 여는지 모르는 채로 여는 것이 가장 나쁘다.
+    target_project = str(tool_input.get("project") or "").strip().upper()
     try:
         pool = get_pool()
         row = await pool.fetchrow(
@@ -435,10 +448,12 @@ async def goal_policy_allows(
               AND COALESCE(l.link_state, 'active') = 'active'
               AND g.status IN ('draft', 'active', 'blocked')
               AND COALESCE((g.approval_policy->>$2)::boolean, false)
+              AND $3 <> ''
+              AND UPPER(COALESCE(g.project, '')) = $3
             ORDER BY g.updated_at DESC
             LIMIT 1
             """,
-            session_id, field,
+            session_id, field, target_project,
         )
     except Exception as exc:
         logger.warning("goal_policy_lookup_failed session=%s error=%s",
