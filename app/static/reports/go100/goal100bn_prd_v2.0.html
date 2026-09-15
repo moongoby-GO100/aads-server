@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GO100 100억 실행설계 PRD v2.0 — 분봉·일봉 파동 매매</title>
+<style>
+:root{--bg:#0f1115;--card:#171a21;--line:#2a2f3a;--tx:#e7e9ee;--dim:#9aa3b2;--ok:#34d399;--warn:#fbbf24;--bad:#f87171;--acc:#60a5fa}
+@media (prefers-color-scheme: light){:root{--bg:#f7f8fa;--card:#fff;--line:#e2e5ea;--tx:#1a1d23;--dim:#5b6472;--acc:#2563eb}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.7 -apple-system,BlinkMacSystemFont,"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:32px 20px 80px}
+header{border-bottom:2px solid var(--acc);padding-bottom:18px;margin-bottom:28px}
+h1{font-size:26px;margin:0 0 10px}
+h2{font-size:20px;margin:38px 0 12px;padding-left:10px;border-left:4px solid var(--acc)}
+h3{font-size:16px;margin:24px 0 8px;color:var(--acc)}
+.meta{color:var(--dim);font-size:13px;line-height:1.9}
+.meta b{color:var(--tx)}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;background:var(--card);border-radius:8px;overflow:hidden}
+th,td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:rgba(96,165,250,.12);font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+code{background:rgba(127,127,127,.16);padding:1px 6px;border-radius:4px;font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;overflow-x:auto;font-size:13px;line-height:1.6}
+.box{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:8px;padding:14px 18px;margin:16px 0}
+.box.warn{border-left-color:var(--warn)}.box.bad{border-left-color:var(--bad)}.box.ok{border-left-color:var(--ok)}
+.tag{display:inline-block;font-size:11.5px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+.p0{color:var(--bad);font-weight:600}.p1{color:var(--warn);font-weight:600}.p2{color:var(--dim)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.src{color:var(--dim);font-size:12.5px}
+ul,ol{padding-left:22px}li{margin:5px 0}
+footer{margin-top:50px;border-top:1px solid var(--line);padding-top:16px;color:var(--dim);font-size:13px}
+a{color:var(--acc)}
+</style>
+</head>
+<body><div class="wrap">
+
+<header>
+<h1>실행설계 PRD <span class="tag">v2.0</span> — 분봉·일봉 파동 매매</h1>
+<div class="meta">
+<b>목표</b> 순자산 100억원 달성 · <code>2c9c3c47-39f3-4448-a92e-c9bba68009df</code> (GO100 / P0)<br>
+<b>대상</b> contabo14(5.104.86.14) <code>/root/kis-autotrade-v4</code> · DB <code>kisautotrade</code><br>
+<b>작성</b> 2026-09-15 11:38 KST · 백억이 · <b>이전</b> v1.0 (Markdown, 2026-09-15 11:12)<br>
+<b>짝 문서</b> <a href="./goal100bn_plan_v2.0.html">기획서 v2.0</a> · <a href="./goal100bn_index.html">문서 인덱스</a>
+</div>
+</header>
+
+<div class="box"><b>이 문서의 규칙.</b> 모든 수치에 [출처]를 단다. 측정하지 않은 값은 "미측정"으로 쓰고,
+기대 효과를 숫자로 예언하지 않는다 — <b>검증 방법만</b> 적는다.</div>
+
+<h2>1. 범위</h2>
+<table>
+<tr><th>구분</th><th>내용</th></tr>
+<tr><td>In scope</td><td>피벗(확정 저점·고점) 기반 <b>분봉 파동매매</b>·<b>일봉 파동매매</b> 2축, 진입/청산 규칙, MTF 정합, 가설 정량 검증, 원장·리스크 전제조건, 성과 관측</td></tr>
+<tr><td>Out of scope</td><td>주봉·월봉 축(데이터는 확보, 차기 버전), 레버리지, 해외·코인, 외부 시그널</td></tr>
+<tr><td>전제</td><td>실매매 파라미터 변경은 CEO 승인 게이트를 통과해야 한다. 원금 증액은 EV 양전환 후</td></tr>
+</table>
+
+<h2>2. 성공 기준</h2>
+<table>
+<tr><th>ID</th><th>기준</th><th>측정</th><th>현재값</th></tr>
+<tr><td>SC-1</td><td>확정 저점 진입 규칙의 비용 반영 후 EV &gt; 0</td><td>V0 분석(분봉·일봉 각각)</td><td class="warn">미측정</td></tr>
+<tr><td>SC-2</td><td>파동 규칙 승률 &gt; 현행 승률</td><td>같은 기간·종목 대조</td><td>현행 <b>24.7%</b> <span class="src">[45일 매도 85건]</span></td></tr>
+<tr><td>SC-3</td><td>실매매 순기대값 &gt; 0</td><td>매도 60건 이동구간</td><td class="bad">-0.625%/건</td></tr>
+<tr><td>SC-4</td><td>2축 상관계수 &lt; 0.5, MDD 저감 실측</td><td>백테스트 병렬 시뮬</td><td class="warn">미측정</td></tr>
+<tr><td>SC-5</td><td>순자산 1억 → 10억 → 100억</td><td>계좌 스냅샷</td><td>458,798원 <span class="src">[11:07 KST]</span></td></tr>
+</table>
+
+<h2>3. 현재 구현 상태 (실측)</h2>
+<table>
+<tr><th>구성요소</th><th>파일 / 규모</th><th>실매매 배선</th></tr>
+<tr><td>피벗 확정 엔진</td><td><code>analysis/wave_pivot_engine.py</code> 331줄 — Donchian N봉 무갱신 + ATR</td><td class="bad">미배선</td></tr>
+<tr><td>분봉 파동 카운터</td><td><code>analysis/intraday_wave_counter.py</code> 974줄</td><td class="ok">배선 (live_engine, wave_cycle_trader)</td></tr>
+<tr><td>일봉 파동 카운터</td><td><code>analysis/daily_wave_counter.py</code> 102줄</td><td class="bad">미배선 (분석·라우터·스크립트만)</td></tr>
+<tr><td>진입 게이트</td><td><code>live_trading/scalping_entry_engine.py</code> — W2 확정저점 반등 상한 <code>W2_MAX_ENTRY_POSITION</code> 계열</td><td class="warn">부분 (최종 판정은 ML 확률)</td></tr>
+<tr><td>ML 게이트</td><td><code>analysis/wave_ml_predictor.py</code> — confidence≥50, loss_prob≤45, win floor 35</td><td class="ok">배선</td></tr>
+</table>
+<p class="src">[출처: 소스 전수 grep, 2026-09-15 11:25 KST]</p>
+
+<h3>파동 카운터 파라미터 (코드값)</h3>
+<table>
+<tr><th>파라미터</th><th>분봉(Intraday)</th><th>일봉(Daily)</th></tr>
+<tr><td>reversal_pct</td><td>0.7%</td><td>2.5%</td></tr>
+<tr><td>min_impulse_pct</td><td>0.5%</td><td>1.5%</td></tr>
+<tr><td>atr_reversal_multiplier</td><td>0.85</td><td>1.2</td></tr>
+<tr><td>clamp (min~max reversal)</td><td>0.35% ~ 1.4%</td><td>1.0% ~ 5.0%</td></tr>
+<tr><td>max_single_wave_ratio</td><td>0.50</td><td>0.50</td></tr>
+</table>
+
+<h2>4. 기능 요구사항</h2>
+
+<h3>FR-W0. 저점·고점 가설의 정량 검증 <span class="p0">P0</span> — 코드 변경 없음</h3>
+<table>
+<tr><th>항목</th><th>내용</th></tr>
+<tr><td>요구</td><td>과거 데이터에서 <b>확정 저점(trough) 진입 → 확정 고점(peak) 청산</b> 규칙의 성과를 산출한다. 분봉·일봉 각각 독립 산출</td></tr>
+<tr><td>데이터</td><td>분봉 <code>go100_kiwoom_minute_ohlcv</code>(약 3,990만 행), 일봉 <code>ohlcv_daily</code>(약 311만 행, 2023-01-02~2026-09-15)</td></tr>
+<tr><td>산출 지표</td><td>진입 건수, 승률, 평균수익률, 평균보유기간, 비용 반영 후 EV, MDD, 피벗 strength 구간별 분해</td></tr>
+<tr><td>비용</td><td>수수료 0.015%×2 + 거래세 0.18% = 0.21% + 시총별 슬리피지(large 0.05~0.10 … micro 0.30~0.50, 편도) <span class="src">[<code>live_engine.py:755-756</code>, <code>wave_event_handler.py:179-186</code>]</span></td></tr>
+<tr><td>대조군</td><td>① 현행 ML 임계값 0.25 규칙 ② 무작위 진입 ③ 매수후보유</td></tr>
+<tr><td>가드</td><td>DB 읽기 전용, 운영 설정·주문 변경 0건</td></tr>
+<tr><td>수용기준</td><td>AC-W0.1 분봉·일봉 각각 결과표 · AC-W0.2 strength/confirmation_bars 구간별 EV 분해 · AC-W0.3 대조군 3종 비교 · AC-W0.4 비용 상수 출처를 코드 경로로 표기 · AC-W0.5 "가설 지지/불지지" 명시적 판정</td></tr>
+</table>
+<div class="box warn">이 요구사항이 <b>전체 v2.0의 관문</b>이다. 여기서 EV가 음수로 나오면 아래 FR-W1~W3의
+파라미터를 바꿔 재측정하고, 그래도 음수면 <b>배선하지 않는다.</b></div>
+
+<h3>FR-W1. 일봉 파동매매 축 신설 <span class="p0">P0</span></h3>
+<table>
+<tr><th>항목</th><th>내용</th></tr>
+<tr><td>요구</td><td><code>DailyWaveCounter</code>를 실매매 경로에 배선한다. 진입: 확정 저점 + 일봉 추세 정렬. 청산: 확정 고점 / 파동 실패 / 손절</td></tr>
+<tr><td>구현 지점</td><td>신규 <code>live_trading/daily_wave_entry_engine.py</code> + 전략카드 1장(신규, 최초 SHADOW). 기존 분봉 경로(<code>scalping_entry_engine.py</code>) <b>수정 금지</b></td></tr>
+<tr><td>실행 주기</td><td>장 시작 전 1회(전일 확정 일봉 기준) + 장중 1회 재평가. 일봉 피벗은 종가 확정 후에만 확정 처리</td></tr>
+<tr><td>리페인트 금지</td><td>당일 미완성 봉으로 피벗을 확정하지 않는다. <code>confirmation_bars</code> 충족 전 신호는 후보로만 기록</td></tr>
+<tr><td>수용기준</td><td>AC-W1.1 SHADOW 로그에 진입·청산 후보가 근거(피벗 시각·가격·strength)와 함께 기록 · AC-W1.2 리페인트 0건(확정 피벗 변경 없음 검증) · AC-W1.3 LIVE 승격은 V0·V1·V2 통과 후 CEO 승인</td></tr>
+</table>
+
+<h3>FR-W2. 분봉 진입 기준을 파동 구조 우선으로 재정렬 <span class="p0">P0</span></h3>
+<table>
+<tr><th>항목</th><th>내용</th></tr>
+<tr><td>요구</td><td>1차 판정을 <b>확정 저점 기반 파동 위치</b>로, ML 확률은 <b>보조 필터</b>로 재배치</td></tr>
+<tr><td>현행</td><td>W2 반등 상한 게이트 통과 후 ML 확률 0.25(F1 최적, precision 29.63%)에서 최종 진입</td></tr>
+<tr><td>변경안</td><td>① 확정 저점 이후 경과봉·되돌림 비율·strength로 진입 구간 정의 ② ML은 하한 필터로만(loss_prob 상한) ③ 임계값은 EV 곡선 결과(M2) 채택값 사용</td></tr>
+<tr><td>가드</td><td>SHADOW 병행 비교 최소 10거래일 → 승인 → LIVE</td></tr>
+<tr><td>수용기준</td><td>AC-W2.1 동일 시점 신호를 현행/변경안 병렬 기록 · AC-W2.2 두 규칙의 EV 차이 실측 · AC-W2.3 운영 임계값 변경은 승인 후에만</td></tr>
+</table>
+
+<h3>FR-W3. 고점 기반 청산 <span class="p0">P0</span></h3>
+<table>
+<tr><th>항목</th><th>내용</th></tr>
+<tr><td>요구</td><td>청산 1차 기준을 <b>확정 고점(peak) 형성 / 파동 실패</b>로 둔다. 시간 기반·고정 % 청산은 보조</td></tr>
+<tr><td>배경</td><td>오늘(09-15) 실매매는 진입 후 수분 내 청산이 반복됐다 — 삼성전자(005930) 10:03 매수 → 10:05 매도 -1,771원, 삼화콘덴서(001820) 09:14 → 09:21 -1,997원 <span class="src">[<code>go100_trades</code>]</span>. 고점 도달 전에 나가면 파동 수익을 구조적으로 못 먹는다</td></tr>
+<tr><td>수용기준</td><td>AC-W3.1 청산 사유가 <code>exit_reason</code>에 유형별로 남음 · AC-W3.2 사유별 평균손익 집계 가능 · AC-W3.3 손절은 항상 우선</td></tr>
+</table>
+
+<h3>FR-W4. MTF 정합 — 일봉이 분봉을 통제 <span class="p1">P1</span></h3>
+<table>
+<tr><th>항목</th><th>내용</th></tr>
+<tr><td>요구</td><td>일봉 파동이 하락 구조인 종목은 분봉 저점 진입을 <b>차단 또는 축소</b>한다</td></tr>
+<tr><td>기반</td><td>기존 <code>analysis/mtf_wave_analyzer.py</code>, <code>daily_trend_filter.py</code> 재사용</td></tr>
+<tr><td>수용기준</td><td>AC-W4.1 차단 건수·사유 로깅 · AC-W4.2 차단군 vs 비차단군 EV 비교로 효과 실측(효과 없으면 철회)</td></tr>
+</table>
+
+<h3>FR-W5. 전제 조건 — 원장 정합·리스크 게이트 <span class="p0">P0</span> (v1.0 FR-1/FR-2 승계)</h3>
+<table>
+<tr><th>항목</th><th>내용</th></tr>
+<tr><td>FR-W5a 원장 정합</td><td>증권사 잔고를 SSOT로 <code>go100_positions</code>/<code>go100_live_orders</code>/<code>go100_trades</code> 주기 대사. 증권사에 없는 OPEN → 자동 CLOSE(<code>exit_reason='reconcile_phantom'</code>). 대사는 <b>기록 정정만</b>, 주문 금지</td></tr>
+<tr><td>FR-W5b 리스크 게이트</td><td>주문 직전 <code>single_stock_max_pct</code>·<code>daily_order_limit</code>·<code>consecutive_loss_halt</code>를 DB에서 읽어 차단. 위반은 <code>safety_check_passed=false</code> + 사유 기록</td></tr>
+<tr><td>근거</td><td>2026-09-15 원익홀딩스(030530) 유령 포지션 실발생 / 종목당 10% 상한이 엔진 경로에서 미참조 <span class="src">[v1.0 PRD §4 D-1·D-2]</span></td></tr>
+<tr><td>수용기준</td><td>AC-W5.1 유령 포지션 5분 내 자동 정정 · AC-W5.2 한도 초과 주문 실제 거부 · AC-W5.3 회귀 없음</td></tr>
+</table>
+
+<h3>FR-W6. 복리 자본배분 <span class="p1">P1</span> (v1.0 FR-5 승계)</h3>
+<p><code>CapitalArbiterV2</code> SHADOW 가동 중(커밋 <code>d5d9194fb</code>). 2축 전환 후에는
+<b>축 단위</b>(분봉/일봉)로 배분한다. 전제: 배분액 합계 ≤ 가용예수금 × 0.9.
+알려진 결함 — 카드 <code>last_backtest_sharpe</code>가 NULL이라 샤프 가중이 무력화되어 사실상 균등배분.</p>
+
+<h3>FR-W7. 성과 관측 <span class="p1">P1</span></h3>
+<p>축별·피벗 strength 구간별 EV/승률/MDD를 일·주·월로 자동 집계. 종목 표기는
+<b>종목명(종목코드)</b> 형식 필수. 게이트 V0~V3 및 G0~G3 통과 여부 자동 판정.</p>
+
+<h2>5. 작업 분해 — 러너 제출 단위</h2>
+<table>
+<tr><th>#</th><th>작업</th><th>요구사항</th><th>병렬</th><th>의존</th><th>주문 영향</th></tr>
+<tr><td>T1</td><td>V0 가설 검증 분석 (분봉)</td><td>FR-W0</td><td>A</td><td>없음</td><td class="ok">없음</td></tr>
+<tr><td>T2</td><td>V0 가설 검증 분석 (일봉)</td><td>FR-W0</td><td>A</td><td>없음</td><td class="ok">없음</td></tr>
+<tr><td>T3</td><td>원장 정합 대사기 구현</td><td>FR-W5a</td><td>B</td><td>없음</td><td class="warn">기록 정정</td></tr>
+<tr><td>T4</td><td>리스크 게이트 실집행</td><td>FR-W5b</td><td>B</td><td>없음</td><td class="bad">주문 차단 — 승인 필요</td></tr>
+<tr><td>T5</td><td>일봉 축 SHADOW 배선</td><td>FR-W1</td><td>C</td><td>T2 후</td><td class="ok">없음(SHADOW)</td></tr>
+<tr><td>T6</td><td>분봉 진입 재정렬 SHADOW 병행</td><td>FR-W2</td><td>C</td><td>T1·M2 후</td><td class="ok">없음(SHADOW)</td></tr>
+<tr><td>T7</td><td>고점 기반 청산 SHADOW</td><td>FR-W3</td><td>C</td><td>T1 후</td><td class="ok">없음(SHADOW)</td></tr>
+<tr><td>T8</td><td>LIVE 승격</td><td>FR-W1~W3</td><td>—</td><td>T5~T7 + V2</td><td class="bad">실매매 — CEO 승인</td></tr>
+</table>
+<p class="src">병렬 문자(A/B/C)는 Pipeline Runner의 <code>parallel_group</code>, 의존은 <code>depends_on_key</code>와 같은 의미로 쓴다.</p>
+
+<h2>6. 마일스톤 매핑</h2>
+<table>
+<tr><th>MS</th><th>제목</th><th>v2.0 대응</th><th>상태</th></tr>
+<tr><td class="bad">M0 (신설 건의)</td><td>안전 기반 — 원장 정합 + 리스크 게이트</td><td>FR-W5</td><td>승인 대기</td></tr>
+<tr><td class="bad">M0' (신설 건의)</td><td>저점·고점 가설 정량 검증</td><td>FR-W0</td><td>승인 대기</td></tr>
+<tr><td>M1</td><td>복리 자본배분 배선</td><td>FR-W6</td><td>SHADOW 가동 <span class="src">(d5d9194fb)</span></td></tr>
+<tr><td>M2</td><td>진입 임계값 EV 재산정</td><td>FR-W2 입력</td><td>진행 중 <span class="src">(runner-f188843f)</span></td></tr>
+<tr><td>M3</td><td>LIVE 카드 축소·자본 정합</td><td>FR-W6 전제</td><td>pending</td></tr>
+<tr><td>M4</td><td>#310 손익비 재설계</td><td>FR-W2·W3</td><td>pending</td></tr>
+<tr><td>M5</td><td>#303 청산 비대칭 교정</td><td>FR-W3</td><td>pending</td></tr>
+<tr><td>M6</td><td>백테스트-실전 괴리 규명</td><td>FR-W7</td><td>pending</td></tr>
+<tr><td>M7</td><td>데일리(분봉) 축 EV 양전환 실증</td><td>FR-W2·W3</td><td>pending</td></tr>
+<tr><td>M8</td><td>단기 스윙 축 신설 → <b>일봉 파동 축</b>으로 재정의</td><td>FR-W1</td><td>pending</td></tr>
+<tr><td>M9</td><td>중기 스윙 축(주봉)</td><td>차기 버전</td><td>pending</td></tr>
+<tr><td>M10</td><td>축 상관·MDD 실증</td><td>SC-4</td><td>pending</td></tr>
+<tr><td>M11~M14</td><td>원금 스케일업 게이트 → 1억 → 10억 → 100억</td><td>SC-5</td><td>pending</td></tr>
+</table>
+
+<h2>7. 미측정·열린 질문</h2>
+<table>
+<tr><th>#</th><th>항목</th><th>확인 방법</th></tr>
+<tr><td>Q1</td><td>확정 저점 진입의 실제 승률·EV (가설의 핵심)</td><td>FR-W0 / T1·T2</td></tr>
+<tr><td>Q2</td><td>피벗 strength·confirmation_bars의 어느 구간이 수익 구간인가</td><td>FR-W0 분해 분석</td></tr>
+<tr><td>Q3</td><td>일봉 축 적정 보유기간·손절폭</td><td>V1 백테스트</td></tr>
+<tr><td>Q4</td><td>분봉·일봉 축 상관계수</td><td>V1 병렬 시뮬</td></tr>
+<tr><td>Q5</td><td>EV 최대 ML 임계값</td><td>M2 <code>runner-f188843f</code></td></tr>
+<tr><td>Q6</td><td>유령 포지션(#574) 생성 코드 경로</td><td>FR-W5a 근본원인 추적</td></tr>
+<tr><td>Q7</td><td>목표 기한(3년/5년/10년)</td><td>CEO 결정</td></tr>
+</table>
+
+<h2>8. 변경 이력</h2>
+<table>
+<tr><th>버전</th><th>일시</th><th>내용</th></tr>
+<tr><td>v1.0</td><td>2026-09-15 11:12 KST</td><td>최초. 실측 기준선, 결함 5건(D-1~D-5), 요구사항 FR-1~7, 보유기간 기준 4축</td></tr>
+<tr><td><b>v2.0</b></td><td>2026-09-15 11:38 KST</td><td>CEO 지시 반영 — 축을 <b>파동 시간대(분봉·일봉)</b> 기준으로 재정의. 저점·고점 가설 검증(FR-W0)을 관문으로 신설. 파동엔진 배선 현황·파라미터·데이터 가용성 실측 추가. v1.0 안전 요구사항은 FR-W5로 승계. HTML 버전 관리 체계로 전환</td></tr>
+</table>
+
+<footer>
+GO100 · 백억이 · 실행설계 PRD v2.0 · 2026-09-15 11:38 KST<br>
+목표 달성 시까지 버전 관리된다 — <a href="./goal100bn_index.html">문서 인덱스</a>
+</footer>
+
+</div></body></html>

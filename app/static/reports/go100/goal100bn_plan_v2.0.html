@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GO100 100억 기획서 v2.0 — 파동 저점·고점 2축 매매</title>
+<style>
+:root{--bg:#0f1115;--card:#171a21;--line:#2a2f3a;--tx:#e7e9ee;--dim:#9aa3b2;--ok:#34d399;--warn:#fbbf24;--bad:#f87171;--acc:#60a5fa}
+@media (prefers-color-scheme: light){:root{--bg:#f7f8fa;--card:#fff;--line:#e2e5ea;--tx:#1a1d23;--dim:#5b6472;--acc:#2563eb}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.7 -apple-system,BlinkMacSystemFont,"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:32px 20px 80px}
+header{border-bottom:2px solid var(--acc);padding-bottom:18px;margin-bottom:28px}
+h1{font-size:26px;margin:0 0 10px}
+h2{font-size:20px;margin:38px 0 12px;padding-left:10px;border-left:4px solid var(--acc)}
+h3{font-size:16px;margin:24px 0 8px;color:var(--acc)}
+.meta{color:var(--dim);font-size:13px;line-height:1.9}
+.meta b{color:var(--tx)}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;background:var(--card);border-radius:8px;overflow:hidden}
+th,td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:rgba(96,165,250,.12);font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+code{background:rgba(127,127,127,.16);padding:1px 6px;border-radius:4px;font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.box{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:8px;padding:14px 18px;margin:16px 0}
+.box.warn{border-left-color:var(--warn)}
+.box.bad{border-left-color:var(--bad)}
+.box.ok{border-left-color:var(--ok)}
+.tag{display:inline-block;font-size:11.5px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.src{color:var(--dim);font-size:12.5px}
+ul,ol{padding-left:22px}li{margin:5px 0}
+footer{margin-top:50px;border-top:1px solid var(--line);padding-top:16px;color:var(--dim);font-size:13px}
+a{color:var(--acc)}
+</style>
+</head>
+<body><div class="wrap">
+
+<header>
+<h1>순자산 100억원 달성 기획서 <span class="tag">v2.0</span></h1>
+<div class="meta">
+<b>주제</b> 파동엔진 저점·고점 기반 <b>분봉 파동매매 + 일봉 파동매매</b> 2축 복리 전략<br>
+<b>목표</b> <code>2c9c3c47-39f3-4448-a92e-c9bba68009df</code> (GO100 / P0 / active) · 마일스톤 14건<br>
+<b>주도</b> 백억이 세션 <code>009efbfa</code> · 담당 10<br>
+<b>작성</b> 2026-09-15 11:35 KST · 백억이(GO100 PM/CTO AI) · <b>이전 버전</b> v1.0 (2026-09-15 11:10, Markdown)<br>
+<b>짝 문서</b> <a href="./goal100bn_prd_v2.0.html">실행설계 PRD v2.0</a> · <b>버전 목록</b> <a href="./goal100bn_index.html">문서 인덱스</a>
+</div>
+</header>
+
+<div class="box warn">
+<b>v1.0 → v2.0 무엇이 바뀌었나.</b> v1.0은 "기대값이 음수인 시스템을 어떻게 양수로 돌릴 것인가"를
+축으로 썼다. v2.0은 CEO 지시에 따라 <b>축을 파동엔진의 저점·고점으로 다시 잡았다</b> —
+스캘핑/스윙이라는 <i>보유기간</i> 기준 4축 분류를, <b>분봉 파동 / 일봉 파동</b>이라는
+<i>파동 시간대</i> 기준 2축으로 재정의한다. v1.0의 안전 요구사항(원장 정합, 리스크 게이트)은
+폐기하지 않고 <b>전제 조건</b>으로 승계한다.
+</div>
+
+<h2>1. CEO 가설과 이 문서의 태도</h2>
+
+<div class="box">
+<b>CEO 가설</b> — "파동엔진의 저점·고점으로 매매하면 승률과 수익이 커진다.
+이를 기반으로 분봉 파동매매·일봉 파동매매로 수익을 극대화한다."
+</div>
+
+<p>이 가설은 <b>구조적으로 타당하다</b>. 지금 실매매의 진입 판단은 파동 구조가 아니라
+<b>ML 확률 임계값 0.25</b>(F1 최적값)에 걸려 있고, 그 구간의 정밀도는 29.63%다.
+반면 실제 승률은 24.7% — 거의 같은 숫자다.
+<span class="src">[<code>wave_ml_quality_latest.json</code> 2026-09-11 · <code>go100_trades</code> 45일]</span>
+즉 <b>지금 시스템은 "파동의 어디인가"가 아니라 "모델 확률이 높은가"로 사고 있다.</b></p>
+
+<p>다만 <b>"저점 매수·고점 매도가 실제로 승률을 올린다"는 것은 아직 측정된 적이 없다.</b>
+이 문서는 가설을 믿고 설계하되, <b>첫 마일스톤을 "가설의 정량 검증"으로 둔다</b>.
+코드를 바꾸기 전에 과거 데이터에서 <i>확정 저점 진입 / 확정 고점 청산</i>의 승률·손익을
+먼저 뽑는다. 숫자가 가설을 지지하면 그때 배선한다.</p>
+
+<h2>2. 파동엔진 실측 — 무엇이 이미 있고, 무엇이 끊겨 있나</h2>
+
+<h3>2.1 저점·고점(피벗) 확정 엔진은 이미 있다</h3>
+
+<table>
+<tr><th>구성</th><th>파일</th><th>핵심 규칙</th></tr>
+<tr><td>피벗 확정 엔진</td><td><code>analysis/wave_pivot_engine.py</code> (331줄)</td>
+<td>Donchian식 <b>N봉 무갱신</b> 확정 + ATR 동적 임계값. 확정 피벗은 <b>절대 변경되지 않음</b>(리페인트 차단). 산출: <code>ConfirmedPivot(time, price, kind=peak|trough, strength=반전폭/ATR, confirmation_bars)</code></td></tr>
+<tr><td>분봉 파동 카운터</td><td><code>analysis/intraday_wave_counter.py</code> (974줄)</td>
+<td>피벗 기반 W1~W5 실시간 추적, 사이클 완료 시 자동 전환. reversal 0.7% / min_impulse 0.5% / ATR×0.85 / clamp 0.35~1.4%</td></tr>
+<tr><td>일봉 파동 카운터</td><td><code>analysis/daily_wave_counter.py</code> (102줄)</td>
+<td>같은 피벗 로직을 일봉 변동성에 맞춤. reversal 2.5% / min_impulse 1.5% / ATR×1.2 / clamp 1.0~5.0%</td></tr>
+<tr><td>MTF 정합</td><td><code>analysis/mtf_wave_analyzer.py</code></td><td>피벗 엔진을 다중 시간대에 걸쳐 정렬</td></tr>
+</table>
+<p class="src">[출처: contabo14 <code>/root/kis-autotrade-v4</code> 소스 실측, 2026-09-15 11:25 KST]</p>
+
+<div class="box ok"><b>핵심.</b> "리페인트 없는 저점·고점 확정"이라는 가장 어려운 부분은 <b>이미 개발되어 있다</b>.
+CEO께서 1차 개발을 마쳤다고 하신 그 엔진이 이것이다.</div>
+
+<h3>2.2 그런데 실매매에 연결된 것은 분봉뿐이다</h3>
+
+<table>
+<tr><th>엔진</th><th>실매매 경로(<code>live_trading/</code>) 연결</th><th>판정</th></tr>
+<tr><td>IntradayWaveCounter (분봉)</td><td><code>live_engine.py</code>, <code>wave_cycle_trader.py</code> 에서 사용</td><td class="ok">✅ 연결됨</td></tr>
+<tr><td>DailyWaveCounter (일봉)</td><td>분석 모듈·라우터·스크립트에서만 사용. <b>live_trading 경로 0건</b></td><td class="bad">❌ 미배선</td></tr>
+<tr><td>WavePivotEngine (피벗 원본)</td><td>분석·라우터·박스탐지에서만 사용. <b>live_trading 경로 0건</b></td><td class="bad">❌ 미배선</td></tr>
+</table>
+<p class="src">[출처: <code>grep -rln</code> 전수 검색, 2026-09-15 11:25 KST]</p>
+
+<p>대신 실매매 진입은 <code>live_trading/scalping_entry_engine.py</code> 의
+<b>W2 확정저점 반등 게이트</b>(<code>W2_MAX_ENTRY_POSITION</code> 계열 상수)를 통과한 뒤
+ML 확률 게이트에서 최종 판정된다. <b>즉 저점 개념은 부분적으로 쓰이지만,
+피벗 엔진의 확정 저점·고점이 진입·청산의 1차 기준은 아니다.</b></p>
+
+<h3>2.3 데이터는 이미 충분하다</h3>
+
+<table>
+<tr><th>데이터</th><th>규모</th><th>기간</th><th>용도</th></tr>
+<tr><td><code>ohlcv_daily</code></td><td>약 311만 행</td><td>2023-01-02 ~ 2026-09-15</td><td>일봉 파동 백테스트</td></tr>
+<tr><td><code>ohlcv_weekly</code></td><td>약 35.7만 행</td><td>—</td><td>중기 파동(향후)</td></tr>
+<tr><td><code>ohlcv_monthly</code></td><td>약 8.9만 행</td><td>—</td><td>장기 파동(향후)</td></tr>
+<tr><td><code>go100_kiwoom_minute_ohlcv</code></td><td>약 3,990만 행</td><td>—</td><td>분봉 파동</td></tr>
+</table>
+<p class="src">[출처: GO100 DB <code>pg_class.reltuples</code> 및 min/max 조회, 2026-09-15 11:30 KST]</p>
+
+<div class="box bad"><b>결론 한 줄.</b> 일봉 파동매매는 <b>엔진도 있고 데이터도 3.7년치 있는데
+실매매 배선만 없다.</b> 새로 만들 것이 아니라 <b>이어 붙이고 검증할 대상</b>이다.</div>
+
+<h2>3. 2축 구조 — 분봉 파동 · 일봉 파동</h2>
+
+<table>
+<tr><th>축</th><th>파동 기준</th><th>진입</th><th>청산</th><th>1회전</th><th>현재</th></tr>
+<tr><td><b>A. 분봉 파동매매</b></td><td>1~5분봉, reversal 0.35~1.4%</td>
+<td>확정 저점(trough) 후 W2 되돌림 구간 반등</td><td>확정 고점(peak) 또는 W5 종료</td><td>수분~수시간</td><td class="warn">부분 가동</td></tr>
+<tr><td><b>B. 일봉 파동매매</b></td><td>일봉, reversal 1.0~5.0%</td>
+<td>확정 저점 + 일봉 추세 정렬</td><td>확정 고점 또는 파동 실패 신호</td><td>2~20일</td><td class="bad">미배선</td></tr>
+</table>
+
+<h3>왜 두 축을 같이 굴리는가</h3>
+<ul>
+<li><b>비용 구조가 다르다.</b> 왕복 비용은 수수료 0.03% + 거래세 0.18% = <b>0.21%</b>에
+시총별 슬리피지 0.10~1.00%가 더해진다.
+<span class="src">[<code>live_engine.py:755-756</code>, <code>wave_event_handler.py:179-184</code>]</span>
+분봉 축은 이 비용을 <b>회전수로</b> 이기려 하고, 일봉 축은 <b>수익폭으로</b> 이긴다.</li>
+<li><b>실패 모드가 다르다.</b> 분봉 축은 횡보장에서 죽고, 일봉 축은 급락장에서 죽는다.
+같이 굴리면 한쪽이 죽는 구간에 다른 쪽이 버틴다 — 이것이 MDD를 줄이고 복리를 지킨다.</li>
+<li><b>일봉이 분봉의 필터가 된다.</b> 일봉 파동이 상승 구조일 때만 분봉 저점 진입을 허용하면
+분봉 축의 승률 자체가 올라갈 수 있다(가설, 검증 대상 → PRD FR-W5).</li>
+</ul>
+
+<h2>4. 검증 게이트 — 코드보다 숫자가 먼저다</h2>
+
+<table>
+<tr><th>게이트</th><th>무엇을 하는가</th><th>통과 조건</th><th>코드 변경</th></tr>
+<tr><td><b>V0. 가설 검증</b></td><td>과거 데이터에서 확정 저점 진입/확정 고점 청산의 승률·평균손익·EV 산출 (분봉·일봉 각각)</td><td>비용 반영 후 EV &gt; 0</td><td class="ok">없음(분석만)</td></tr>
+<tr><td><b>V1. 백테스트</b></td><td>V0 규칙을 백테스트 엔진에 넣어 기간·종목 분할 검증</td><td>구간별 EV 일관성, MDD 측정</td><td>백테스트만</td></tr>
+<tr><td><b>V2. 페이퍼</b></td><td>실시간 신호로 모의 체결 2주</td><td>백테스트 대비 슬리피지 열화 &lt; 20%</td><td>실주문 없음</td></tr>
+<tr><td><b>V3. 1주 카나리</b></td><td>최소 수량 실매매</td><td>20거래일 EV &gt; 0</td><td class="warn">실매매 — CEO 승인</td></tr>
+</table>
+
+<div class="box warn"><b>V0을 건너뛰지 않는다.</b> 지금까지의 손실은 "그럴듯한 규칙을 바로 실매매에
+올린" 결과다. V0은 주문을 내지 않고 과거 데이터만 읽으므로 <b>장중에도 안전하게 돌릴 수 있다.</b></div>
+
+<h2>5. 승계되는 전제 조건 (v1.0에서)</h2>
+
+<p>아래 3건은 <b>파동 전략의 성과 측정 자체를 오염시키므로</b> 2축 배선보다 먼저 해결한다.</p>
+<table>
+<tr><th>#</th><th>내용</th><th>왜 먼저인가</th></tr>
+<tr><td>D-1</td><td>원장 3중 불일치(유령 포지션) — 2026-09-15 원익홀딩스(030530) 실발생</td><td>유령 포지션 손익이 섞이면 파동 규칙의 승률을 믿을 수 없다</td></tr>
+<tr><td>D-2</td><td>종목당 10% 상한이 실매매 엔진에서 미집행</td><td>단일 종목 과대 진입 1건이 통계를 뒤집는다</td></tr>
+<tr><td>D-3</td><td>LIVE 카드 배분액 1,264,345원 &gt; 예수금 458,798원 (2.76배)</td><td>배분이 허구면 복리 계산이 허구가 된다</td></tr>
+</table>
+<p class="src">[출처: v1.0 PRD §4, GO100 DB 실측 2026-09-15 11:10 KST]</p>
+
+<h2>6. 목표까지의 산수 (v1.0 승계)</h2>
+<table>
+<tr><th>시작 원금</th><th>필요 배수</th><th>5년(1,250거래일)</th><th>3년(750일)</th></tr>
+<tr><td>458,798원 (현재)</td><td>21,796배</td><td><b>0.80%/일</b></td><td>1.33%/일</td></tr>
+<tr><td>1억원</td><td>100배</td><td><b>0.37%/일</b></td><td>0.61%/일</td></tr>
+<tr><td>5억원</td><td>20배</td><td>0.24%/일</td><td>0.40%/일</td></tr>
+</table>
+<p class="src">[산출: r = exp(ln(배수)/거래일수) − 1, 연 250거래일 가정]</p>
+<p>현재 실측은 매도 1건당 <b class="bad">-0.625%</b>다 <span class="src">[45일, 매도 85건]</span>.
+2축 설계의 1차 목표는 "0.80%/일"이 아니라 <b>"부호를 +로 바꾸는 것"</b>이다.</p>
+
+<h2>7. 문서 버전 관리 규칙</h2>
+<ul>
+<li>보관 위치: <code>aads-server/app/static/reports/go100/</code> — <b>git 추적 + 브라우저 열람</b>이 동시에 되는 유일한 경로.</li>
+<li>파일명: <code>goal100bn_{plan|prd}_v{major.minor}.html</code>. <b>이전 버전을 덮어쓰지 않는다.</b></li>
+<li>목표 패널 연결: 최신 버전만 <code>kind=plan|prd</code>, 과거 버전은 <code>kind=reference</code> 로 남긴다.</li>
+<li>올리는 기준: <b>major</b> = 전략 축·목표 구조 변경, <b>minor</b> = 수치 갱신·요구사항 추가.</li>
+<li>갱신 시점: 검증 게이트(V0~V3) 통과, 마일스톤 완료, 실측 수치 변동, CEO 방향 변경.</li>
+<li>모든 수치는 <b>[출처]와 측정 시각</b>을 함께 적는다. 출처 없는 수치는 문서에서 삭제한다.</li>
+<li>목표 달성(순자산 100억) 시점까지 이 규칙을 유지한다.</li>
+</ul>
+
+<h2>8. CEO 결정 필요 사항</h2>
+<table>
+<tr><th>#</th><th>결정</th><th>권장</th><th>사유</th></tr>
+<tr><td>D1</td><td>V0(가설 검증) 선행 여부</td><td><b>선행 권장</b></td><td>주문 0건·코드 변경 0건으로 장중 안전. 숫자가 나오면 이후 전부가 근거를 갖는다</td></tr>
+<tr><td>D2</td><td>전제 조건 D-1·D-2 선처리</td><td><b>선처리 권장</b></td><td>유령 포지션 위에서 측정한 승률은 재측정해야 한다</td></tr>
+<tr><td>D3</td><td>일봉 축 진입 시점</td><td>V0 통과 후</td><td>엔진·데이터는 준비됨. 배선은 검증 뒤</td></tr>
+<tr><td>D4</td><td>원금 증액</td><td>EV 양전환까지 동결</td><td>현재 -0.625%/건에서 증액은 손실 가속</td></tr>
+</table>
+
+<footer>
+GO100 · 백억이 · 기획서 v2.0 · 2026-09-15 11:35 KST<br>
+이 문서는 목표 달성 시까지 버전 관리된다. 최신 목록은 <a href="./goal100bn_index.html">문서 인덱스</a>에서 확인한다.
+</footer>
+
+</div></body></html>
