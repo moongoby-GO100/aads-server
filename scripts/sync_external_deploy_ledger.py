@@ -57,6 +57,19 @@ SOURCES: dict[str, dict[str, str]] = {
         "queue_file": "/var/lib/aads-release-control/GO100/release-queue.tsv",
         "releases_root": "/opt/go100/backend-releases",
         "state_file": "/etc/go100/backend-release-state",
+        # 정본은 nginx 실측이다(2026-09-15 CEO 결정). state_file 의 active_slot 은
+        # 배포 스크립트가 적어 둔 "의도"이고, 실제로 트래픽을 받는 슬롯은 여기다.
+        "upstream_file": "/etc/nginx/conf.d/go100-backend-upstream.conf",
+    },
+    # NTV2(cafe24_114) 는 블루/그린이 아니라 컨테이너 교체 방식이라 릴리스
+    # 디렉터리가 없다. 배포 스크립트가 `aads-record-release` 로 직접 사실을
+    # 남기고, 여기서는 그 큐만 읽는다(releases_root 없음).
+    "NTV2": {
+        "host": "114.207.244.86",
+        "component": "frontend",
+        "deploy_type": "rolling",
+        "queue_file": "/var/lib/aads-release-control/NTV2/release-queue.tsv",
+        "state_file": "/etc/aads-release/ntv2-release-state",
     },
 }
 
@@ -143,6 +156,52 @@ def parse_state(raw: str) -> dict[str, str]:
     return state
 
 
+def parse_nginx_active_port(raw: str) -> str:
+    """upstream 설정에서 실제로 트래픽을 받는 포트를 돌려준다.
+
+    `backup` 이 붙은 줄은 장애 시에만 쓰이므로 활성이 아니다. 활성 서버 줄이
+    여러 개면(가중치 분산) 판정하지 않고 빈 문자열을 돌려준다 — 추측 금지.
+    """
+    active: list[str] = []
+    for line in raw.splitlines():
+        stripped = line.split("#", 1)[0].strip()
+        if not stripped.startswith("server "):
+            continue
+        if "backup" in stripped or "down" in stripped:
+            continue
+        target = stripped.split()[1].rstrip(";")
+        if ":" in target:
+            active.append(target.rsplit(":", 1)[1])
+    return active[0] if len(active) == 1 else ""
+
+
+def resolve_slots(state: dict[str, str], nginx_port: str) -> tuple[str, str, str]:
+    """(current_slot, candidate_slot, mismatch_note) 를 돌려준다.
+
+    current_slot 은 nginx 실측 포트를 state 의 포트-슬롯 대응표로 되돌린 값이다.
+    실측이 없거나 대응되는 슬롯이 없으면 state 의 active_slot 을 쓰되, 그때는
+    mismatch_note 에 근거를 남긴다.
+    """
+    active_slot = state.get("active_slot", "")
+    standby_slot = state.get("standby_slot", "")
+    port_to_slot = {
+        state.get("active_port", ""): active_slot,
+        state.get("standby_port", ""): standby_slot,
+    }
+    port_to_slot.pop("", None)
+
+    if not nginx_port:
+        return active_slot, standby_slot, "nginx_upstream_unreadable"
+    measured = port_to_slot.get(nginx_port, "")
+    if not measured:
+        return active_slot, standby_slot, f"nginx_port_unmapped={nginx_port}"
+    if measured != active_slot:
+        # 실측이 정본이다. state 는 뒤집힌 것으로 본다.
+        other = active_slot if measured == standby_slot else standby_slot
+        return measured, other, f"slot_mismatch state={active_slot} nginx={measured}:{nginx_port}"
+    return measured, standby_slot, ""
+
+
 def to_dt(value: str) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(value)
@@ -154,13 +213,26 @@ def to_dt(value: str) -> datetime | None:
 def collect(project: str, cfg: dict[str, str], cutoff: datetime) -> list[dict[str, Any]]:
     host = cfg["host"]
     queue = parse_queue(ssh_read(host, f"cat {cfg['queue_file']} 2>/dev/null || true"))
-    dirs = parse_release_dirs(ssh_read(
-        host,
-        f"find {cfg['releases_root']} -mindepth 1 -maxdepth 1 -printf '%f\\t%T@\\n' 2>/dev/null || true",
-    ))
+    releases_root = cfg.get("releases_root", "")
+    dirs: dict[str, datetime] = {}
+    if releases_root:
+        dirs = parse_release_dirs(ssh_read(
+            host,
+            f"find {releases_root} -mindepth 1 -maxdepth 1 -printf '%f\\t%T@\\n' 2>/dev/null || true",
+        ))
     state = parse_state(ssh_read(host, f"cat {cfg['state_file']} 2>/dev/null || true"))
     active_sha = state.get("release_sha", "")
     active_phase = state.get("phase", "")
+
+    upstream_file = cfg.get("upstream_file", "")
+    nginx_port = ""
+    if upstream_file:
+        nginx_port = parse_nginx_active_port(
+            ssh_read(host, f"cat {upstream_file} 2>/dev/null || true")
+        )
+    current_slot, candidate_slot, slot_note = resolve_slots(state, nginx_port)
+    if slot_note:
+        print(f"[warn] {project} 슬롯 실측 주의: {slot_note}", file=sys.stderr)
 
     rows: list[dict[str, Any]] = []
     for sha, item in queue.items():
@@ -181,6 +253,10 @@ def collect(project: str, cfg: dict[str, str], cutoff: datetime) -> list[dict[st
             run_status, phase = "success", "released"
         elif status == "blocked":
             run_status, phase = "blocked", "blocked"
+        elif status == "failed":
+            # 배포 스크립트가 직접 실패를 남긴 경우에만 실패로 적는다.
+            # 파일이 말하지 않는 실패를 만들어내지는 않는다(R-CRITICAL).
+            run_status, phase = "failed", "failed"
         else:
             continue
 
@@ -190,8 +266,12 @@ def collect(project: str, cfg: dict[str, str], cutoff: datetime) -> list[dict[st
         evidence = [f"release_queue={status}"]
         if deployed_at:
             evidence.append(f"release_dir_mtime={deployed_at.astimezone().isoformat(timespec='seconds')}")
-        if sha == active_sha:
-            evidence.append(f"active_slot={state.get('active_slot', '?')}:{state.get('active_port', '?')}")
+        is_active_release = sha == active_sha
+        if is_active_release:
+            evidence.append(f"state_active_slot={state.get('active_slot', '?')}:{state.get('active_port', '?')}")
+            evidence.append(f"nginx_active_port={nginx_port or 'unreadable'}")
+            if slot_note:
+                evidence.append(slot_note)
 
         rows.append({
             "project": project,
@@ -201,12 +281,18 @@ def collect(project: str, cfg: dict[str, str], cutoff: datetime) -> list[dict[st
             "runner_job_id": item["queue_id"],
             "status": run_status,
             "phase": phase,
+            # 슬롯은 지금 트래픽을 받는 릴리스에만 기록한다. 과거 행에 현재
+            # 슬롯을 적으면 이력 전체가 지금 상태로 오염된다.
+            "current_slot": current_slot if is_active_release else None,
+            "candidate_slot": candidate_slot if is_active_release else None,
             "started_at": queued_at or event_at,
             "completed_at": event_at,
             "requested_by": (item["owner"] or "unknown")[:120],
             "request_source": "external_release_sync",
             "release_title": (item["task_id"] or f"{project} release {sha}")[:180],
             "release_summary": (item["note"] or "; ".join(evidence))[:240],
+            # 실패 사유는 화면(배포 탭)이 읽는 컬럼에 넣어야 보인다.
+            "error_summary": (item["note"] or f"release_queue={status}")[:240] if run_status in ("failed", "blocked") else None,
             "payload": {
                 "source": "sync_external_deploy_ledger",
                 "host": host,
@@ -214,7 +300,9 @@ def collect(project: str, cfg: dict[str, str], cutoff: datetime) -> list[dict[st
                 "queue_status": status,
                 "session": item["session"],
                 "evidence": evidence,
-                "is_active_release": sha == active_sha,
+                "is_active_release": is_active_release,
+                "slot_truth_source": "nginx_upstream",
+                "slot_mismatch": slot_note or None,
             },
         })
     rows.sort(key=lambda r: r["completed_at"])
@@ -226,6 +314,7 @@ INSERT INTO deploy_runs(
     project, component, deploy_type, target_env, release_sha,
     runner_job_id, status, phase,
     phase_started_at, phase_completed_at, queue_position,
+    current_slot, candidate_slot, error_summary,
     requested_by, request_source, commit_status, push_status,
     auto_start, request_payload, requested_at, last_heartbeat_at,
     release_title, release_summary, approval_policy,
@@ -234,6 +323,7 @@ INSERT INTO deploy_runs(
     %(project)s, %(component)s, %(deploy_type)s, 'production', %(release_sha)s,
     %(runner_job_id)s, %(status)s, %(phase)s,
     %(started_at)s, %(completed_at)s, 0,
+    %(current_slot)s, %(candidate_slot)s, %(error_summary)s,
     %(requested_by)s, %(request_source)s, 'committed', 'pushed',
     true, %(payload)s::jsonb, %(started_at)s, %(completed_at)s,
     %(release_title)s, %(release_summary)s, 'auto_if_green',
@@ -245,6 +335,9 @@ DO UPDATE SET
     phase = EXCLUDED.phase,
     release_sha = EXCLUDED.release_sha,
     phase_completed_at = EXCLUDED.phase_completed_at,
+    current_slot = EXCLUDED.current_slot,
+    candidate_slot = EXCLUDED.candidate_slot,
+    error_summary = EXCLUDED.error_summary,
     release_title = EXCLUDED.release_title,
     release_summary = EXCLUDED.release_summary,
     request_payload = EXCLUDED.request_payload,

@@ -757,10 +757,21 @@ async def _load_project_deployments(
                 continue
             current = overview[project]
             current["has_pipeline_job"] = True
-            if current["is_active"] or current["is_queued"]:
-                current["runner_job_id"] = current.get("runner_job_id") or row.get("runner_job_id")
-                continue
             status = str(row.get("status") or "")
+            # 배포 원장이 있으면 그것이 정본이다. 러너 이력은 아직 끝나지 않은
+            # 작업(진행 중인 배포 후보)일 때만 카드를 덮어쓴다.
+            # 2026-09-15: GO100 최신 deploy_runs(success/rollback)가 종료된 러너
+            # rejected_done 으로 덮여 프로젝트 카드가 배포 실패처럼 보였다.
+            runner_terminal = (not status) or status in TERMINAL_PIPELINE_STATUSES
+            if (
+                current["is_active"]
+                or current["is_queued"]
+                or (current["has_deploy_run"] and runner_terminal)
+            ):
+                current["runner_job_id"] = current.get("runner_job_id") or row.get("runner_job_id")
+                if not current.get("release_sha"):
+                    current["release_sha"] = row.get("release_sha")
+                continue
             current.update({
                 "status": status or current.get("status") or "unknown",
                 "phase": row.get("phase") or current.get("phase"),

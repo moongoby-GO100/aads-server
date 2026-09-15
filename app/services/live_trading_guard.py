@@ -186,6 +186,29 @@ def _target_key(tool_input: Dict[str, Any]) -> str:
     return hashlib.sha1(target.encode("utf-8", "replace")).hexdigest()[:10]
 
 
+def _file_fingerprint(tool_input: Dict[str, Any]) -> str:
+    """대상 파일의 **현재 내용** 지문. 대상 지문(``_target_key``)은 경로만 본다.
+
+    2026-09-15 확인 — mission/session/project 범위는 파일 *경로*가 같으면
+    통과한다. 승인 유효기간(미션 최대 2시간·20회, session/project 는 더
+    넓다) 동안 다른 세션·배포가 같은 파일을 먼저 바꿔도 그대로 통과했다 —
+    CEO 가 본 diff 와 실제 적용될 코드가 다를 수 있었다(commit_hash 미검증).
+
+    이 컨테이너에서 직접 읽을 수 있는 파일(project=AADS, 상대경로 존재)만
+    지문을 남긴다. 다른 프로젝트 파일은 이 컨테이너에서 보이지 않으므로
+    빈 문자열(=지문 없음, 기존 동작 유지)로 두어 거짓 안전감을 주지 않는다.
+    """
+    project = str(tool_input.get("project") or "").strip().upper()
+    path = str(tool_input.get("file_path") or tool_input.get("path") or "").strip()
+    if project != "AADS" or not path:
+        return ""
+    try:
+        with open(os.path.join("/app", path.lstrip("./")), "rb") as f:
+            return hashlib.sha1(f.read()).hexdigest()[:10]
+    except OSError:
+        return ""
+
+
 def _text_of(tool_input: Dict[str, Any]) -> str:
     parts = []
     for key in ("file_path", "path", "command", "query", "sql", "target", "task", "project"):
@@ -322,6 +345,10 @@ async def request_approval(
                 # 프로젝트 범위 승인이 나중에 이 값을 본다. 승인 시점에는
                 # tool_input 이 없어 다시 계산할 수 없다 — 대상 지문과 같은 이유다.
                 "project": str(tool_input.get("project") or "").strip().upper(),
+                # 요청 시점 파일 내용 지문. mission/session/project 범위가
+                # 소비 시점에 이 값과 비교해, 그 사이 파일이 바뀌면 재승인을
+                # 요구한다 (_file_fingerprint 참고).
+                "file_fp": _file_fingerprint(tool_input),
             }),
             risk_level,
             # 알림 등급은 승인 개념이 없다. 대기 목록에 섞이면 진짜 승인
@@ -541,6 +568,9 @@ async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: st
     # 넓은 범위를 쓸 수 있는가. critical 이면 아래 두 절이 통째로 꺼진다.
     wide_ok = (risk_level or "") != "critical"
     target_project = str(tool_input.get("project") or "").strip().upper()
+    # 지금 이 파일이 승인 당시와 같은 내용인가. 다르면 mission/session/
+    # project 범위 아래에서도 이 요청은 맞지 않는다 (_file_fingerprint 참고).
+    file_fp = _file_fingerprint(tool_input)
     try:
         pool = get_pool()
         row = await pool.fetchrow(
@@ -554,19 +584,22 @@ async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: st
                     work_key = $1
                  OR (approval_scope->>'scope' = 'mission'
                      AND requested_by = $2 AND action_type = $3
-                     AND approval_scope->>'target' = $5)
+                     AND approval_scope->>'target' = $5
+                     AND COALESCE(approval_scope->>'file_fp', '') IN ('', $8))
                  OR (approval_scope->>'scope' = 'goal'
                      AND action_type = $3
                      AND approval_scope->>'goal_id' = ANY($4::text[]))
                  -- 이 대화 동안: 같은 세션의 같은 도구면 대상을 묻지 않는다.
                  OR ($6 AND approval_scope->>'scope' = 'session'
-                     AND requested_by = $2 AND action_type = $3)
+                     AND requested_by = $2 AND action_type = $3
+                     AND COALESCE(approval_scope->>'file_fp', '') IN ('', $8))
                  -- 이 프로젝트 동안: 세션을 넘는다. 그래서 프로젝트를 모르는
                  -- 호출($7 = '')은 여기에 걸리지 않는다 — 무엇을 여는지
                  -- 모르는 채로 여는 것이 가장 나쁘다.
                  OR ($6 AND $7 <> '' AND approval_scope->>'scope' = 'project'
                      AND action_type = $3
-                     AND UPPER(COALESCE(approval_scope->>'project', '')) = $7)
+                     AND UPPER(COALESCE(approval_scope->>'project', '')) = $7
+                     AND COALESCE(approval_scope->>'file_fp', '') IN ('', $8))
               )
             -- 넓은 것부터 쓴다. 좁은 승인을 남겨 두어야 그 대상에 다시
             -- 물어보지 않는다.
@@ -577,7 +610,7 @@ async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: st
             LIMIT 1
             """,
             work_key, session_id, tool_name, goal_ids or [""], target_key,
-            wide_ok, target_project,
+            wide_ok, target_project, file_fp,
         )
         if not row:
             return False
