@@ -910,15 +910,19 @@ async def approvals_pending(
         rows = await get_pool().fetch(
             """
             SELECT id::text, action_type, action_summary, risk_level,
-                   requested_by, work_key,
+                   gate_source, tier, requested_by, work_key,
                    to_char(created_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') AS at,
                    decision,
                    GREATEST(0, EXTRACT(EPOCH FROM (expires_at - now()))::int / 60)
                        AS expires_in_min
             FROM agent_permission_requests
-            WHERE decision = 'pending' AND expires_at > now()
+            WHERE decision = 'pending' AND tier = 'approve'
+              AND expires_at > now()
               AND ($2 = '' OR requested_by = $2)
-            ORDER BY created_at DESC LIMIT $1
+            ORDER BY CASE risk_level WHEN 'critical' THEN 0 WHEN 'high' THEN 1
+                                     ELSE 2 END,
+                     created_at DESC
+            LIMIT $1
             """,
             limit, session_id,
         )
@@ -929,7 +933,8 @@ async def approvals_pending(
     return {
         "pending": [
             {"id": r["id"], "tool": r["action_type"], "summary": r["action_summary"],
-             "risk": r["risk_level"], "requested_by": r["requested_by"],
+             "risk": r["risk_level"], "gate_source": r["gate_source"],
+             "tier": r["tier"], "requested_by": r["requested_by"],
              "work_key": r["work_key"], "at": r["at"],
              "expires_in_min": r["expires_in_min"],
              # 승인 UI 가 그대로 그릴 수 있게 선택지를 서버가 내려준다.
@@ -946,6 +951,127 @@ async def approvals_pending(
             for r in rows
         ],
         "count": len(rows),
+    }
+
+
+@router.get("/approvals/notifications")
+async def approvals_notifications(
+    limit: int = Query(50, ge=1, le=200),
+    include_acknowledged: bool = Query(False, description="확인한 것도 보기"),
+):
+    """막지 않고 알린 것들.
+
+    2026-09-15 대표님 지시로 나뉘었다 — 되돌릴 수 있는 변경(목표·마일스톤·
+    프롬프트, 실매매 주변 코드)은 막지 않고 여기에만 남는다. 아니다 싶으면
+    대표님이 그때 되돌리시면 된다.
+    """
+    from app.core.db_pool import get_pool
+
+    wanted = ["notified", "acknowledged"] if include_acknowledged else ["notified"]
+    try:
+        rows = await get_pool().fetch(
+            """
+            SELECT id::text, action_type, action_summary, risk_level,
+                   gate_source, requested_by, decision,
+                   to_char(created_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') AS at
+            FROM agent_permission_requests
+            WHERE tier = 'notify' AND decision = ANY($2::text[])
+            ORDER BY created_at DESC LIMIT $1
+            """,
+            limit, wanted,
+        )
+    except Exception as exc:
+        logger.warning("approvals_notifications_failed", error=str(exc))
+        raise HTTPException(status_code=503, detail="알림 목록을 읽지 못했습니다") from exc
+
+    return {
+        "notifications": [
+            {"id": r["id"], "tool": r["action_type"], "summary": r["action_summary"],
+             "risk": r["risk_level"], "gate_source": r["gate_source"],
+             "requested_by": r["requested_by"], "decision": r["decision"],
+             "at": r["at"]}
+            for r in rows
+        ],
+        "count": len(rows),
+    }
+
+
+@router.post("/approvals/{request_id}/acknowledge")
+async def approvals_acknowledge(
+    request_id: str,
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """알림 한 건을 확인 처리한다. 승인과 다르다 — 이미 실행된 일이다."""
+    from app.core.db_pool import get_pool
+
+    row = await get_pool().fetchrow(
+        """
+        UPDATE agent_permission_requests
+           SET decision = 'acknowledged', decided_by = $2, decided_at = now(),
+               updated_at = now()
+         WHERE id = $1::uuid AND tier = 'notify' AND decision = 'notified'
+        RETURNING id::text
+        """,
+        request_id, str(_tenant_id(context) or "CEO"),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="확인 대기 중인 알림이 아닙니다")
+    return {"ok": True, "id": row["id"]}
+
+
+@router.post("/approvals/acknowledge-all")
+async def approvals_acknowledge_all(
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """알림을 한 번에 확인한다. 승인이 아니라 읽음 표시다."""
+    from app.core.db_pool import get_pool
+
+    count = await get_pool().fetchval(
+        """
+        WITH updated AS (
+            UPDATE agent_permission_requests
+               SET decision = 'acknowledged', decided_by = $1, decided_at = now(),
+                   updated_at = now()
+             WHERE tier = 'notify' AND decision = 'notified'
+            RETURNING 1
+        )
+        SELECT count(*) FROM updated
+        """,
+        str(_tenant_id(context) or "CEO"),
+    )
+    return {"ok": True, "acknowledged": int(count or 0)}
+
+
+@router.get("/approvals/gate-status")
+async def approvals_gate_status():
+    """게이트가 켜져 있나.
+
+    조용히 꺼져 있으면 대표님은 "승인할 게 없다" 로 읽는다. 화면이 그것을
+    구분해 그릴 수 있어야 한다.
+    """
+    import os
+
+    from app.core.db_pool import get_pool
+
+    live_on = os.getenv("LIVE_TRADING_GATE_ENABLED", "true").lower() == "true"
+    direction_on = os.getenv("DIRECTION_GUARD_ENABLED", "true").lower() == "true"
+    try:
+        counts = await get_pool().fetchrow(
+            """
+            SELECT count(*) FILTER (WHERE decision = 'pending' AND tier = 'approve'
+                                      AND expires_at > now()) AS waiting,
+                   count(*) FILTER (WHERE decision = 'notified' AND tier = 'notify')
+                       AS unread
+            FROM agent_permission_requests
+            """
+        )
+    except Exception:
+        counts = None
+    return {
+        "live_trading_gate": live_on,
+        "direction_guard": direction_on,
+        "waiting": int(counts["waiting"]) if counts else 0,
+        "unread_notifications": int(counts["unread"]) if counts else 0,
     }
 
 

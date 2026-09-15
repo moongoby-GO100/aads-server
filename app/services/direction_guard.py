@@ -118,31 +118,28 @@ async def check(tool_name: str, tool_input: Dict[str, Any]) -> Optional[str]:
             ),
         }, ensure_ascii=False)
 
-    should_block, why = classify(tool_name, tool_input)
-    if not should_block:
+    should_notify, why = classify(tool_name, tool_input)
+    if not should_notify:
         return None
 
-    request_id = ""
+    # **막지 않는다.** 2026-09-15 대표님 지시로 바뀐 부분이다.
+    #
+    # 목표·마일스톤·프롬프트 변경은 되돌릴 수 있다. 되돌릴 수 있는 일까지
+    # 승인 대기로 세우면 담당이 멈추고, 대표님 화면에는 진짜 승인 대상(주문·
+    # 자금)이 그 사이에 묻힌다 — 실제로 대기 8건 중 4건이 목표 정리였다.
+    #
+    # 대신 남기고 알린다. 아니다 싶으면 대표님이 그때 되돌리시면 된다.
     try:
-        from app.services.live_trading_guard import request_approval
+        from app.services.live_trading_guard import notify_only
 
-        request_id = await request_approval(
+        await notify_only(
             tool_name, tool_input, why,
             session_id=str(tool_input.get("session_id") or ""),
             tenant_id=str(tool_input.get("tenant_id") or ""),
-        ) or ""
+            gate_source="direction", risk_level="medium", label="방향",
+        )
     except Exception as exc:
-        logger.warning("direction_guard_request_failed", error=str(exc)[:160])
+        logger.warning("direction_guard_notify_failed", error=str(exc)[:160])
 
-    logger.info("direction_guard_blocked tool=%s why=%s", tool_name, why)
-    return json.dumps({
-        "error": "direction_change_needs_approval",
-        "blocked": True,
-        "approval_request_id": request_id,
-        "message": (
-            f"{why}. 대표님 승인이 필요합니다.\n\n"
-            "무엇을 왜 바꾸려는지, 바꾸면 어떤 담당의 작업이 영향을 받는지 "
-            "정리해서 보고하세요. 승인 화면(/approvals)에 요청이 올라갔습니다. "
-            "다른 담당을 시켜 우회하는 것도 같은 검사를 받습니다."
-        ),
-    }, ensure_ascii=False)
+    logger.info("direction_guard_notified tool=%s why=%s", tool_name, why)
+    return None

@@ -113,7 +113,11 @@ def test_pending_uses_pending_not_null():
         assert "decision IS NULL" not in src, f"{mod.__name__} 이 NULL 로 대기를 찾고 있다"
 
     src = inspect.getsource(live_trading_guard.request_approval)
-    assert "decision = 'pending'" in src
+    # 2026-09-15: 알림 등급이 생기면서 대기 판정이 `decision = ANY($2)` 로
+    # 바뀌었다. 지키려는 것은 문자열이 아니라 **NULL 로 찾지 않는다** 는 것과
+    # 대기 상태를 명시적으로 나열한다는 것이다.
+    assert "decision = ANY($2::text[])" in src
+    assert '"pending"' in src
 
 
 def test_request_outlives_default_expiry():
