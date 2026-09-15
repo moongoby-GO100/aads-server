@@ -335,7 +335,16 @@ def _build_generation_prompt(source: DraftSource, risk_level: str) -> str:
 - TASK_ID는 정확히 {source.project_key}-DRAFT, MODEL은 AUTO로 쓴다.
 - PRIORITY는 P0-CRITICAL/P1-HIGH/P2-MEDIUM/P3-LOW 중 하나다.
 - SIZE는 XS/S/M/L/XL 중 하나다.
-- DESCRIPTION에는 목표, 현재 근거, 허용 범위, 금지 범위, 구현 요구사항, 검증 기준, 완료 보고를 포함한다.
+- DESCRIPTION은 "DESCRIPTION: |" 로 시작하는 블록으로 쓰고, 아래 일곱 줄을 콜론까지 그대로, 이 순서로 포함한다.
+  목표:
+  현재 근거:
+  허용 범위:
+  금지 범위:
+  구현 요구사항:
+  검증 기준:
+  완료 보고:
+- 일곱 줄 각각 바로 아래에 "  - " 로 시작하는 근거 줄을 최소 1개 둔다.
+- 헤딩에 ##, **, 번호, 영문 표기를 덧붙이지 않는다. 위 문자열과 다르면 초안이 검증에서 폐기된다.
 - 최근 AI 답변을 사실로 맹신하지 말고 실제 코드·DB·화면 재검증을 요구한다.
 - 서로 다른 구현이 이미 있으면 canonical 정본, 소비자, 전환·제거·rollback 기준을 명시한다.
 - 원문에 없는 파일명, 수치, 완료 사실, 실제 작업 ID를 만들어내지 않는다.
@@ -382,19 +391,29 @@ async def generate_directive_content(
             )
         except Exception as exc:
             logger.warning(
-                "directive_draft_model_failed session=%s model=%s error=%s",
+                "directive_draft_model_failed session=%s model=%s error=%s detail=%s",
                 str(source.session_id)[:8],
                 configured_model,
                 type(exc).__name__,
+                str(exc)[:200] or "-",
             )
             continue
         content = _extract_directive(raw, expected_project=source.project_key)
         if content is not None:
             return content, "generated", configured_model
+        invalid_block = _DIRECTIVE_RE.search(raw or "")
+        invalid_reasons = (
+            validate_directive(
+                invalid_block.group(0).strip(), expected_project=source.project_key
+            )[1]
+            if invalid_block
+            else ["directive_block"]
+        )
         logger.warning(
-            "directive_draft_model_invalid session=%s model=%s",
+            "directive_draft_model_invalid session=%s model=%s reasons=%s",
             str(source.session_id)[:8],
             configured_model,
+            ",".join(invalid_reasons[:10]) or "unknown",
         )
     return build_fallback_directive(source, risk_level), "fallback", None
 
