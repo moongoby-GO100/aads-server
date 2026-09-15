@@ -38,6 +38,8 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 IMAGE_MODELS = (
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst",
     "gpt-image-2",
     "gpt-image-1",
     "dall-e-3",
@@ -84,6 +86,30 @@ def _is_imagen_4_model(model_id: str) -> bool:
     return str(model_id or "").strip().lower().startswith("imagen-4.0-")
 
 
+# OpenAI 이미지 모델. gpt-image-2.5 계열(flare/sunburst)은 images.generate 와
+# images.edit(레퍼런스 이미지) 를 모두 지원하지만 input_fidelity 파라미터는 받지 않는다.
+OPENAI_IMAGE_MODELS = {
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst",
+    "gpt-image-2",
+    "gpt-image-1",
+    "dall-e-3",
+}
+# 레퍼런스 이미지(images.edit) 를 받을 수 있는 모델. dall-e-3 는 edit 미지원.
+OPENAI_IMAGE_EDIT_MODELS = {
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst",
+    "gpt-image-2",
+    "gpt-image-1",
+}
+# input_fidelity 를 받는 모델만 별도로 둔다 — 2.5 계열에 넣으면 400 이 난다.
+OPENAI_INPUT_FIDELITY_MODELS = {"gpt-image-1", "gpt-image-2"}
+
+
+def _is_openai_image_model(model_id: str) -> bool:
+    return str(model_id or "").strip().lower() in OPENAI_IMAGE_MODELS
+
+
 def _canonical_media_model_id(model_id: str) -> str:
     normalized = str(model_id or "").strip().lower()
     aliases = {
@@ -94,6 +120,12 @@ def _canonical_media_model_id(model_id: str) -> str:
         "gemini-3.1-pro-image-preview": "gemini-3-pro-image-preview",
         "gemini-3.1-pro-preview-image": "gemini-3-pro-image-preview",
         "gemini-3-pro-image": "gemini-3-pro-image-preview",
+        # GPT Image 2.5 — 버전만 지정하면 기본 변형(flare)으로 보낸다.
+        "gpt-image-2.5": "gpt-image-2.5-flare",
+        "gpt-image-2-5": "gpt-image-2.5-flare",
+        "gpt image 2.5": "gpt-image-2.5-flare",
+        "gpt-image-2.5-flare-2026-09-08": "gpt-image-2.5-flare",
+        "gpt-image-2.5-sunburst-2026-09-08": "gpt-image-2.5-sunburst",
         "genspark": "genspark-image-ui",
         "genspark-ui": "genspark-image-ui",
         "genspark_image_ui": "genspark-image-ui",
@@ -251,7 +283,7 @@ class MediaGenerationService:
     def recognize_model(model_id: str) -> dict[str, str]:
         model = _canonical_media_model_id(model_id)
         lowered = model.lower()
-        if lowered in {"gpt-image-2", "gpt-image-1", "dall-e-3"}:
+        if _is_openai_image_model(lowered):
             return {"kind": "image", "provider": "openai", "model_id": model}
         if _is_imagen_4_model(lowered):
             return {"kind": "image", "provider": "google", "model_id": model}
@@ -655,7 +687,7 @@ class MediaGenerationService:
             }:
                 return True
             return provider in {"openai", "google"} and (
-                model_id in {"gpt-image-2", "gpt-image-1", "dall-e-3"}
+                _is_openai_image_model(model_id)
                 or _is_imagen_4_model(model_id)
             )
         if kind == "edit_image":
@@ -663,7 +695,7 @@ class MediaGenerationService:
                 return True
             if provider == "genspark_ui":
                 return model_id == "genspark-image-ui"
-            return provider == "openai" and model_id in {"gpt-image-2", "gpt-image-1"}
+            return provider == "openai" and model_id in OPENAI_IMAGE_EDIT_MODELS
         if kind == "video":
             if provider == "pc_local":
                 return True
@@ -2073,12 +2105,68 @@ class MediaGenerationService:
     ) -> dict[str, Any]:
         sanitized = _sanitize_prompt(prompt)
         if route.provider == "openai":
-            return await self._generate_openai_image(sanitized, prompt, size, route.model_id)
+            return await self._generate_openai_image(
+                sanitized,
+                prompt,
+                size,
+                route.model_id,
+                aspect_ratio=aspect_ratio,
+                reference_images=reference_images,
+            )
         if route.provider == "google":
             return await self._generate_google_image(sanitized, prompt, route.model_id, aspect_ratio=aspect_ratio, image_size=image_size)
         if route.provider == "gemini":
             return await self._generate_gemini_native_image(sanitized, prompt, route.model_id, aspect_ratio=aspect_ratio, image_size=image_size, reference_images=reference_images)
         raise ValueError(route.reason or "provider unavailable")
+
+    @staticmethod
+    def _openai_image_size(size: str | None, aspect_ratio: str | None) -> str:
+        """OpenAI 이미지 API 가 받는 사이즈로 정규화한다.
+
+        gpt-image 계열은 1024x1024 / 1024x1536 / 1536x1024 / auto 만 받는다.
+        NTV2 는 size 대신 aspect_ratio('3:4' 등) 를 보내므로 여기서 변환한다.
+        """
+        allowed = {"1024x1024", "1024x1536", "1536x1024", "auto"}
+        normalized_size = str(size or "").strip().lower()
+        ratio = str(aspect_ratio or "").strip()
+        if ratio:
+            portrait = {"3:4", "2:3", "9:16", "4:5"}
+            landscape = {"4:3", "3:2", "16:9", "5:4"}
+            if ratio in portrait:
+                return "1024x1536"
+            if ratio in landscape:
+                return "1536x1024"
+            if ratio == "1:1":
+                return "1024x1024"
+        if normalized_size in allowed:
+            return normalized_size
+        return "1024x1024"
+
+    async def _load_reference_bytes(self, reference_images: list[str]) -> list[tuple[str, bytes]]:
+        """레퍼런스 이미지를 바이트로 적재한다. https URL 과 data: URI 모두 받는다."""
+        loaded: list[tuple[str, bytes]] = []
+        for index, raw in enumerate(reference_images):
+            ref = str(raw or "").strip()
+            if not ref:
+                continue
+            try:
+                if ref.startswith("data:"):
+                    _, _, encoded = ref.partition(",")
+                    loaded.append((f"ref{index}.png", base64.b64decode(encoded)))
+                    continue
+                headers: dict[str, str] = {}
+                if "aads.newtalk.kr" in ref:
+                    monitor_key = os.getenv("AADS_MONITOR_KEY", "")
+                    if monitor_key:
+                        headers["X-Monitor-Key"] = monitor_key
+                async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as http_client:
+                    resp = await http_client.get(ref, headers=headers)
+                    resp.raise_for_status()
+                loaded.append((f"ref{index}.png", resp.content))
+                logger.info("openai_ref_image_loaded url=%s bytes=%d", ref, len(resp.content))
+            except Exception as exc:
+                logger.error("openai_ref_image_failed url=%s error=%s", ref, exc)
+        return loaded
 
     async def _generate_openai_image(
         self,
@@ -2086,16 +2174,45 @@ class MediaGenerationService:
         original: str,
         size: str,
         model_id: str,
+        *,
+        aspect_ratio: str | None = None,
+        reference_images: list[str] | None = None,
     ) -> dict[str, Any]:
         from openai import AsyncOpenAI
 
         client = AsyncOpenAI(api_key=_secret_value(self.settings, "OPENAI_API_KEY"))
-        resp = await client.images.generate(
-            model=model_id,
-            prompt=sanitized,
-            size=size,
-            n=1,
-        )
+        target_size = self._openai_image_size(size, aspect_ratio)
+
+        references: list[tuple[str, bytes]] = []
+        if reference_images and model_id in OPENAI_IMAGE_EDIT_MODELS:
+            references = await self._load_reference_bytes(list(reference_images)[:4])
+
+        if references:
+            # 레퍼런스가 있으면 images.edit 로 보낸다 — 인물/상품 동일성 유지 경로.
+            edit_kwargs: dict[str, Any] = {
+                "model": model_id,
+                "prompt": sanitized,
+                "size": target_size,
+                "n": 1,
+                "image": [(name, data, "image/png") for name, data in references],
+            }
+            if model_id in OPENAI_INPUT_FIDELITY_MODELS:
+                # 2.5 계열은 이 파라미터를 받지 않는다(400). 지원 모델에만 넣는다.
+                edit_kwargs["input_fidelity"] = "high"
+            logger.info(
+                "openai_image_edit model=%s refs=%d size=%s",
+                model_id,
+                len(references),
+                target_size,
+            )
+            resp = await client.images.edit(**edit_kwargs)
+        else:
+            resp = await client.images.generate(
+                model=model_id,
+                prompt=sanitized,
+                size=target_size,
+                n=1,
+            )
         if resp.data and getattr(resp.data[0], "b64_json", None):
             b64 = resp.data[0].b64_json
             return {"url": f"data:image/png;base64,{b64}", "provider": model_id, "prompt": original}
