@@ -3331,68 +3331,23 @@ async def session_documents(
     저장돼 경로를 알 수 없었다).
 
     **새 저장소를 만들지 않는다.** 이미 있는 것을 모은다.
+
+    2026-09-15 보강. 위 한 경로만으로는 목록이 **비어 있었다**. 두 가지가
+    겹쳤다.
+
+    1. `tool_input` 이 비어 저장되는 턴이 있다. 실측(최근 3일)
+       intent=execute 는 tool_use 2,505건 중 2,505건(100%)이 `{}` 였고,
+       status_check 는 3,133건 중 4건(0.1%)이었다. 도구를 써도 경로가
+       남지 않는다.
+    2. 문서를 만드는 경로가 그 두 도구만이 아니다. run_remote_command 의
+       heredoc/tee, Pipeline Runner, 서브에이전트가 만든다.
+
+    그래서 도구 입력·**도구 결과 본문**·워크스페이스 원장·러너 산출물 넷을
+    합친다. 수집 로직은 `app/services/session_documents.py` 에 있다.
     """
-    from app.core.db_pool import get_pool
+    from app.services.session_documents import collect_session_documents
 
-    rows = await get_pool().fetch(
-        """
-        SELECT path, MAX(at) AS at, COUNT(*) AS writes,
-               (ARRAY_AGG(tool ORDER BY at DESC))[1] AS tool
-        FROM (
-            SELECT COALESCE(
-                       t->'tool_input'->>'file_path',
-                       t->'tool_input'->>'path',
-                       t->'tool_input'->>'target_path'
-                   ) AS path,
-                   t->>'tool_name' AS tool,
-                   m.created_at AS at
-            FROM chat_messages m,
-                 LATERAL jsonb_array_elements(m.tools_called) t
-            WHERE m.session_id = $1
-              AND m.deleted_at IS NULL
-              AND jsonb_typeof(m.tools_called) = 'array'
-              AND t->>'tool_name' IN ('write_remote_file', 'patch_remote_file')
-        ) w
-        WHERE path IS NOT NULL AND path <> ''
-        GROUP BY path
-        ORDER BY MAX(at) DESC
-        LIMIT $2
-        """,
-        session_id, limit * 3,
-    )
-
-    # 문서로 볼 확장자. 코드는 따로 세어 **몇 개를 뺐는지 알린다** —
-    # 조용히 빼면 대표님이 무엇이 빠졌는지 모르신다.
-    doc_ext = {
-        ".md", ".txt", ".html", ".htm", ".pdf", ".xlsx", ".xls",
-        ".csv", ".docx", ".hwp", ".hwpx", ".pptx", ".rtf",
-    }
-    icon = {
-        ".md": "📄", ".txt": "📄", ".html": "🌐", ".htm": "🌐",
-        ".pdf": "📕", ".xlsx": "📊", ".xls": "📊", ".csv": "📊",
-        ".docx": "📝", ".hwp": "📝", ".hwpx": "📝", ".pptx": "📽",
-    }
-
-    docs, others = [], 0
-    for r in rows:
-        path = r["path"]
-        ext = ("." + path.rsplit(".", 1)[-1].lower()) if "." in path.rsplit("/", 1)[-1] else ""
-        if ext not in doc_ext:
-            others += 1
-            continue
-        if len(docs) >= limit:
-            continue
-        docs.append({
-            "path": path,
-            "name": path.rsplit("/", 1)[-1],
-            "dir": path.rsplit("/", 1)[0] if "/" in path else "",
-            "icon": icon.get(ext, "📄"),
-            "at": r["at"].isoformat() if r["at"] else None,
-            "writes": int(r["writes"] or 1),
-            "tool": r["tool"],
-        })
-
-    return {"documents": docs, "other_files": others}
+    return await collect_session_documents(session_id, limit=limit)
 
 
 @router.get("/chat/timing", tags=["chat-session"])
