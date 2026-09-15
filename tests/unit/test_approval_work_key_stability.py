@@ -75,6 +75,60 @@ def test_approval_lookup_matches_by_scope_not_only_work_key():
     assert "used" in body
 
 
+def test_mission_scope_is_bound_to_a_target():
+    """미션 승인은 **같은 대상**일 때만 이어져야 한다.
+
+    2026-09-15 실측 — AADS `live_trading_guard.py` 1건에 대한 "이 미션 동안"
+    승인이 같은 세션의 `patch_remote_file` 전부를 통과시켰다. 미션 범위가
+    (세션 + 도구) 로만 정의돼 GO100 `live_engine.py` 수정까지 열렸다.
+    """
+    import inspect
+
+    body = inspect.getsource(guard.is_approved)
+    assert "'scope' = 'mission'" in body
+    assert "approval_scope->>'target'" in body, "미션 범위가 대상을 보지 않는다"
+
+
+def test_target_key_separates_different_files():
+    aads = guard._target_key(
+        {"project": "AADS", "file_path": "app/services/live_trading_guard.py"})
+    go100 = guard._target_key(
+        {"project": "GO100",
+         "file_path": "backend/app/services/go100/live_trading/live_engine.py"})
+    assert aads != go100
+
+
+def test_target_key_survives_command_wording_changes():
+    """같은 파일을 다른 명령으로 고쳐도 승인 하나로 이어져야 한다.
+
+    여기서 명령 본문까지 보면 한 글자 차이로 다시 묻게 되고, 그러면
+    대표님이 화면을 계속 쳐다봐야 했던 예전 상태로 되돌아간다.
+    """
+    path = "/root/kis/backend/app/services/go100/live_trading/live_engine.py"
+    sed = guard._target_key({"project": "GO100", "command": f"sed -i s/x/y/ {path}"})
+    tee = guard._target_key({"project": "GO100", "command": f"tee -a {path}"})
+    assert sed == tee
+
+
+def test_target_key_is_never_empty():
+    """빈 지문끼리 맞으면 아무 대상이나 통과한다."""
+    for payload in ({}, {"project": ""}, {"command": ""}, {"file_path": ""}):
+        assert guard._target_key(payload)
+
+
+def test_target_key_normalizes_relative_prefix():
+    plain = guard._target_key({"project": "AADS", "file_path": "app/services/x.py"})
+    dotted = guard._target_key({"project": "AADS", "file_path": "./app/services/x.py"})
+    assert plain == dotted
+
+
+def test_decide_endpoint_preserves_target():
+    """승인 시점에 대상 지문을 덮어 없애면 범위가 다시 벌어진다."""
+    api = REPO / "app" / "api" / "project_docs.py"
+    src = api.read_text()
+    assert "'target', COALESCE(approval_scope->>'target', '')" in src
+
+
 def test_goal_policy_defaults_critical_off():
     """코드 수정을 미리 허락하는 것과 주문을 미리 허락하는 것은 다른 얘기다."""
     import inspect

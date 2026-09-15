@@ -146,6 +146,46 @@ def _work_key(session_id: str, tool_name: str, summary: str) -> str:
     return "%s:%s:%s" % (session_id[:8], tool_name, digest)
 
 
+def _target_key(tool_input: Dict[str, Any]) -> str:
+    """미션 승인이 덮는 **대상**. 명령 본문이 아니라 무엇을 건드리는가다.
+
+    2026-09-15 실측 — `app/services/live_trading_guard.py` 한 건에 대한
+    "이 미션 동안" 승인이 **같은 세션의 모든 `patch_remote_file` 을**
+    통과시켰다. 미션 범위가 (세션 + 도구) 로만 정의돼 대상을 보지
+    않았기 때문이다. AADS 파일 하나를 승인했더니 GO100 `live_engine.py`
+    수정까지 같은 승인으로 열렸다 — 게이트를 켜 둔 이유와 정반대다.
+
+    그렇다고 명령 본문 해시(`_work_key`) 로 좁히면 한 글자만 달라도 다시
+    묻는다. 그래서 그 중간을 잡는다.
+
+        쓰기 도구   프로젝트 + 파일 경로
+        명령 도구   명령문에서 잡힌 실매매 경로 토큰(정렬·중복 제거)
+                    → 같은 파일을 여러 명령으로 고쳐도 승인 하나로 이어진다
+        둘 다 비면  요약 전문 (= 사실상 이번 건만)
+
+    빈 문자열은 돌려주지 않는다. 빈 값끼리 맞으면 아무 대상이나 통과한다.
+    """
+    project = str(tool_input.get("project") or "").strip().upper()
+    path = str(tool_input.get("file_path") or tool_input.get("path") or "").strip()
+    if path:
+        target = "%s|%s" % (project, path.lstrip("./"))
+    else:
+        blob = _code_relevant_text(_text_of(tool_input))
+        # 경로 토큰을 통째로 쓴다. `live_trading` 같은 정규식 조각만 쓰면
+        # 같은 디렉터리의 다른 파일이 한 덩어리로 묶인다.
+        tokens = sorted({
+            t.strip("'\"`,;()") for t in re.split(r"\s+", blob)
+            if t and _GUARDED_PATH.search(t)
+        })
+        if not tokens:
+            tokens = sorted({m.group(0).lower() for m in _GUARDED_PATH.finditer(blob)})
+        target = (
+            "%s|%s" % (project, ",".join(tokens))
+            if tokens else "raw|%s" % ((_text_of(tool_input) or "")[:400])
+        )
+    return hashlib.sha1(target.encode("utf-8", "replace")).hexdigest()[:10]
+
+
 def _text_of(tool_input: Dict[str, Any]) -> str:
     parts = []
     for key in ("file_path", "path", "command", "query", "sql", "target", "task", "project"):
@@ -274,7 +314,9 @@ async def request_approval(
             """,
             tid, work_key, tool_name,
             f"[{label}] {reason}\n{summary}", session_id or "unknown",
-            '{"scope": "single_call"}',
+            # 대상 지문을 요청 시점에 박아 둔다. 승인 시점에 다시 계산하면
+            # 그때는 tool_input 이 없어 무엇을 허락하는지 알 수 없다.
+            json.dumps({"scope": "single_call", "target": _target_key(tool_input)}),
             risk_level,
             # 알림 등급은 승인 개념이 없다. 대기 목록에 섞이면 진짜 승인
             # 대상이 그 사이에 묻힌다.
@@ -445,16 +487,22 @@ async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: st
     이제 범위를 실제로 본다.
 
         single   이 요청 하나 (work_key 정확히 일치)
-        mission  같은 세션 + 같은 도구
+        mission  같은 세션 + 같은 도구 + **같은 대상**
         goal     그 목표가 살아 있는 동안 + 같은 도구
 
     **무제한은 없다.** 어느 범위든 횟수 상한을 넘기면 다시 묻는다. 목표가
     끝나면 `_active_goal_ids` 에서 빠지므로 골 승인도 자동으로 닫힌다.
+
+    미션 범위에 대상을 넣은 이유는 `_target_key` 주석에 적었다 — 요약하면,
+    파일 하나를 승인했더니 세션의 모든 쓰기가 열렸다(2026-09-15 실측).
+    대상 지문이 없는 옛 승인은 여기서 **맞지 않는다.** 다시 묻는 쪽이
+    잘못 통과시키는 쪽보다 낫다.
     """
     from app.core.db_pool import get_pool
 
     summary = (_text_of(tool_input) or "")[:400]
     work_key = _work_key(session_id, tool_name, summary)
+    target_key = _target_key(tool_input)
     goal_ids = await _active_goal_ids(session_id)
     try:
         pool = get_pool()
@@ -468,7 +516,8 @@ async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: st
               AND (
                     work_key = $1
                  OR (approval_scope->>'scope' = 'mission'
-                     AND requested_by = $2 AND action_type = $3)
+                     AND requested_by = $2 AND action_type = $3
+                     AND approval_scope->>'target' = $5)
                  OR (approval_scope->>'scope' = 'goal'
                      AND action_type = $3
                      AND approval_scope->>'goal_id' = ANY($4::text[]))
@@ -478,7 +527,7 @@ async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: st
                      decided_at DESC
             LIMIT 1
             """,
-            work_key, session_id, tool_name, goal_ids or [""],
+            work_key, session_id, tool_name, goal_ids or [""], target_key,
         )
         if not row:
             return False
