@@ -10764,14 +10764,34 @@ async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
             rows = await conn.fetch(
                 """
                 WITH candidates AS (
-                    SELECT id
-                    FROM chat_deferred_reactions
-                    WHERE attempts < 8
+                    SELECT q.id
+                    FROM chat_deferred_reactions q
+                    WHERE q.attempts < 8
                       AND (
-                        status = 'pending'
-                        OR (status = 'claimed' AND lease_expires_at <= NOW())
+                        q.status = 'pending'
+                        OR (q.status = 'claimed' AND q.lease_expires_at <= NOW())
                       )
-                    ORDER BY created_at
+                      -- 그 대화가 지금 답하고 있으면 다시 집지 않는다.
+                      --
+                      -- 리스는 15분인데 긴 턴은 그보다 오래 간다. 2026-09-15
+                      -- 실측: 거절 트리거 1건이 10:37·10:57 두 번 배달됐고
+                      -- (`attempts=2`) 그 사이 턴은 계속 돌고 있었다. 승인 건에서
+                      -- 같은 일이 나면 같은 작업이 두 번 실행된다.
+                      --
+                      -- 아래 프로세스 로컬 가드(_active_bg_tasks)로 막으려 했지만
+                      -- 슬롯이 바뀌면 새 프로세스의 그 표는 비어 있다. DB 로 본다.
+                      AND NOT EXISTS (
+                            SELECT 1
+                            FROM chat_sessions s
+                            JOIN chat_turn_executions te
+                              ON te.id = s.current_execution_id
+                            WHERE s.id = q.session_id
+                              AND te.status IN ('running', 'retrying')
+                              AND te.completed_at IS NULL
+                              AND te.lease_expires_at IS NOT NULL
+                              AND te.lease_expires_at > NOW()
+                      )
+                    ORDER BY q.created_at
                     FOR UPDATE SKIP LOCKED
                     LIMIT $1
                 )
@@ -10779,7 +10799,9 @@ async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
                 SET status = 'claimed',
                     claimed_by = $2,
                     attempts = attempts + 1,
-                    lease_expires_at = NOW() + INTERVAL '15 minutes',
+                    -- 긴 턴이 15분을 넘겨 리스가 먼저 끊기던 것을 늘린다.
+                    -- 위 NOT EXISTS 가 본 방어이고, 이것은 여유분이다.
+                    lease_expires_at = NOW() + INTERVAL '45 minutes',
                     updated_at = NOW()
                 FROM candidates c
                 WHERE q.id = c.id
