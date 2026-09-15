@@ -1,0 +1,64 @@
+#!/bin/bash
+COMMIT_MSG=$(cat "$1")
+if echo "$COMMIT_MSG" | grep -qxE '(and|Claude Code|update|fix|test|wip|.)'; then
+  echo "ERROR: 무의미 커밋 메시지 거부. 형식: feat(T-XXX): 설명"
+  exit 1
+fi
+
+# ── 동일 제목 연속 커밋 차단 (R-DEDUP) ──────────────────────────────
+#
+# 2026-09-15, 같은 제목의 커밋이 두 쌍 들어갔다.
+#   test(deploy-ledger): 외부 배포 원장 동기화기 ...   (2cac5971, 93daf434)
+#   fix(review): 검수 상한을 실측 지연에 맞추고 ...    (d83d4083, b5a03b9e)
+# 뒤쪽 커밋은 앞쪽의 변경을 그대로 한 번 더 얹은 것이었고, 그 중 하나가
+# INSERT 컬럼을 두 번 나열해 외부 배포 원장 동기화를 HEAD 에서 깨뜨렸다.
+# 되돌린 커밋이 a9603307 이다. **같은 제목이 유일한 사전 신호였다.**
+#
+# 중단된 턴이 재개되며 이미 커밋한 작업을 다시 커밋하는 것이 전형적인 경로다.
+# 그러니 "직전에 같은 제목을 커밋했는가" 를 본다. 최근 3일·30커밋만 본다.
+# amend 는 제목이 같은 것이 정상이므로 제외한다.
+SUBJECT=$(grep -v '^#' "$1" | sed '/^$/d' | head -1)
+PARENT_ARGS=$(ps -o args= -p $PPID 2>/dev/null | head -1)
+case "$SUBJECT" in
+  Merge\ *|Revert\ *) SUBJECT="" ;;   # 병합·되돌리기는 제목 재사용이 정상
+esac
+if [ -n "$SUBJECT" ] \
+   && [ "${ALLOW_DUP_COMMIT:-}" != "1" ] \
+   && [[ "$PARENT_ARGS" != *--amend* ]]; then
+  DUP_SHA=$(git log --since='3 days ago' --max-count=30 --format='%h%x09%s' 2>/dev/null \
+            | awk -F'\t' -v s="$SUBJECT" '$2 == s {print $1; exit}')
+  if [ -n "$DUP_SHA" ]; then
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "[BLOCKED] 최근 3일 안에 같은 제목의 커밋이 이미 있습니다"
+    echo "  기존: $DUP_SHA  $(git log -1 --format=%s "$DUP_SHA" 2>/dev/null)"
+    echo "  이번: $SUBJECT"
+    echo ""
+    echo "  같은 패치를 두 번 얹는 중은 아닌지 먼저 확인하세요:"
+    echo "    git show $DUP_SHA --stat"
+    echo "    git diff --cached --stat"
+    echo "  이미 적용된 수정이면 커밋할 것이 없습니다(2026-09-15 a9603307 사례)."
+    echo ""
+    echo "  이어지는 별개 작업이면 제목을 구분하거나:"
+    echo "    ALLOW_DUP_COMMIT=1 git commit -m \"...\""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    exit 1
+  fi
+fi
+
+# ── 감사: pre-commit hook 통과 서명 검증 ──────────────────
+GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
+VERIFIED_FILE="$GIT_DIR/HOOK_VERIFIED"
+if [ ! -f "$VERIFIED_FILE" ]; then
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "[BLOCKED] pre-commit hook 서명 없음"
+  echo "  --no-verify로 hook을 우회한 것으로 판단됩니다."
+  echo "  hook 차단 원인을 수정한 후 정상 커밋하세요."
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  exit 1
+fi
+# 서명 파일 소비 (1회용)
+# rm -f "$VERIFIED_FILE"  # pre-push에서 소비
+
+exit 0

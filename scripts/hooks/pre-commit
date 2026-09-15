@@ -96,6 +96,14 @@ if [ -n "$PY_FILES" ]; then
         PY_ERRORS=$((PY_ERRORS + 1))
         continue
       fi
+    elif [ "${RUFF_MISSING_WARNED:-0}" != "1" ]; then
+      # 2026-09-15: 이 호스트에 ruff 가 설치돼 있지 않다. `command -v ruff` 가
+      # 조용히 거짓이 되어 정적 분석 단계는 여태 한 번도 돌지 않았고,
+      # CLAUDE.md 에는 "pre-commit 5단계 ③ruff 정적 분석" 이라고 적혀 있었다.
+      # 그래서 F811(중복 정의)이 잡히지 않은 채 같은 패치가 세 번 커밋됐다.
+      # 건너뛴다는 사실을 보이게 만든다 — 중복 정의는 아래 dup_guard 가 맡는다.
+      echo -e "  ${YELLOW}⚠️ ruff 미설치 — 정적 분석 단계 건너뜀 (중복 정의는 dup_guard 가 검사)${NC}"
+      RUFF_MISSING_WARNED=1
     fi
 
     # Docker import 검증 (app/ 하위 파일만)
@@ -350,6 +358,36 @@ PYEOF
         exit 1
     fi
     echo -e "${GREEN}[커밋 완결성] import 대상 모두 추적됨${NC}"
+fi
+
+# ── 중복 재적용 패치 차단 (R-DEDUP) ──────────────────────────────────
+#
+# 2026-09-15, 같은 수정이 하루에 세 번 커밋됐다. 마지막 한 번은
+# sync_external_deploy_ledger.py 의 INSERT 컬럼을 두 번 나열해
+# ('specified more than once') 외부 배포 원장 동기화를 HEAD 에서 깨뜨렸다.
+# 되돌린 커밋이 a9603307. 규칙 문서로만 남기면 또 일어난다(R-ERRBOOK).
+#
+# HEAD 에 이미 있는 중복은 보고하지 않는다 — 이번 커밋이 새로 만든 것만 막는다.
+# 최근 30커밋 캘리브레이션: 실제 사고 2건 탐지, 오탐 0.
+if [ -f "scripts/dup_guard.py" ]; then
+    DUP_OUT=$(python3 scripts/dup_guard.py 2>&1)
+    DUP_RC=$?
+    if [ "$DUP_RC" -eq 1 ]; then
+        if [ "${ALLOW_DUP_COMMIT:-}" = "1" ]; then
+            echo -e "${YELLOW}[중복 재적용] ALLOW_DUP_COMMIT=1 — 알고도 진행합니다${NC}"
+            echo "$DUP_OUT" | sed 's/^/  /'
+        else
+            echo -e "${RED}[중복 재적용] 이번 커밋이 새로운 중복을 만듭니다${NC}"
+            echo "$DUP_OUT" | sed 's/^/  /'
+            echo -e "${YELLOW}  → 같은 패치를 두 번 얹은 것은 아닌지 확인하세요:${NC}"
+            echo -e "${YELLOW}      git log --oneline -5 && git diff --cached --stat${NC}"
+            echo -e "${YELLOW}  → 의도한 중복이면: ALLOW_DUP_COMMIT=1 git commit -m \"...\"${NC}"
+            exit 1
+        fi
+    elif [ "$DUP_RC" -ne 0 ]; then
+        echo -e "${YELLOW}[중복 재적용] 검사를 실행하지 못했습니다 — 경고로 통과${NC}"
+        echo "$DUP_OUT" | tail -2 | sed 's/^/  /'
+    fi
 fi
 
 # ── 문서 표류 검사 (경고) ────────────────────────────────────────────
