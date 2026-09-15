@@ -319,6 +319,10 @@ async def goals_for_session(session_id: str):
         SELECT DISTINCT ON (g.id)
                g.id::text AS goal_id, g.title, g.status, g.project,
                COALESCE(g.progress, 0) AS progress,
+               -- 이 세션이 그 목표의 주도인가. 담당과 구분해 그려야 한다 —
+               -- 주도는 목표 전체를 지고, 담당은 자기 몫만 진다
+               -- (2026-09-15 대표님 지시).
+               (g.owner_session_id = s.id) AS is_lead,
                s.role_key,
                ms.id::text AS milestone_id, ms.title AS milestone,
                ms.dispatch_note
