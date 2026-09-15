@@ -57,11 +57,6 @@ _REVIEW_TOTAL_DEADLINE_SEC = int(os.environ.get("REVIEW_TOTAL_DEADLINE_SEC", "85
 # 쓸 이유가 없다. 재검수 스위퍼가 이 경로를 쓴다 — 동기 경로에서 상한에 걸린
 # 작업이 재검수에서도 똑같이 걸리면 복구 경로가 아무 의미가 없다.
 _REVIEW_ASYNC_DEADLINE_SEC = int(os.environ.get("REVIEW_ASYNC_DEADLINE_SEC", "240"))
-# 비동기 요청 경로(POST /api/v1/review/code-diff/requests)는 202 로 즉시 반환하고
-# 클라이언트가 request_id 를 폴링한다. 프록시 마감에 묶이지 않으므로 같은 85초를
-# 쓸 이유가 없다. 재검수 스위퍼가 이 경로를 쓴다 — 동기 경로에서 상한에 걸린
-# 작업이 재검수에서도 똑같이 걸리면 복구 경로가 아무 의미가 없다.
-_REVIEW_ASYNC_DEADLINE_SEC = int(os.environ.get("REVIEW_ASYNC_DEADLINE_SEC", "240"))
 
 _DIFF_HEADER_RE = re.compile(r"^diff --git a\/.+ b\/.+$", re.MULTILINE)
 _DIFF_HUNK_RE = re.compile(r"^@@ .+ @@$", re.MULTILINE)
