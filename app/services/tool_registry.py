@@ -30,6 +30,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "query_database": False,             # DB 조회 2순위 — 상시 로드
     "query_project_database": False,     # 프로젝트 DB 조회 — 상시 로드
     "todo_write": False,                 # 채팅 하단 TODO 명시 관리 — 상시 로드
+    "propose_next_steps": False,         # 다음 단계를 승인 카드로 — 상시 로드
     "handover_write": False,             # 전 프로젝트 공통 핸드오버 정본 기록
     "handover_search": False,            # 현재 상태·과거 기록 검색
     "handover_export": True,             # Markdown 호환 내보내기
@@ -3276,6 +3277,60 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["project"],
         },
         "input_examples": [{"project": "GO100"}],
+    },
+    "propose_next_steps": {
+        "name": "propose_next_steps",
+        "description": (
+            "보고 끝의 '다음 단계' 를 대표님이 체크해 승인할 수 있는 카드로 올립니다. "
+            "승인하시면 그 제안을 이어서 자동 수행합니다. "
+            "이미 승인받은 범위 안인 제안은 카드를 만들지 않고 auto 로 돌려줍니다. "
+            "조치·배포·조사처럼 '다음에 무엇을 할까' 를 제시할 때 쓰고, "
+            "도구가 게이트에 막혔을 때는 쓰지 마십시오 — 그쪽은 카드가 자동으로 뜹니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "array",
+                    "description": "제안 1~5건. 많으면 읽지 않고 누르게 되므로 5건까지만 받습니다.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "무엇을 할지 한 줄 (필수)",
+                            },
+                            "detail": {
+                                "type": "string",
+                                "description": "왜 필요한지·무엇이 바뀌는지",
+                            },
+                            "tool": {
+                                "type": "string",
+                                "description": (
+                                    "이 단계에서 쓸 도구 이름. 적어 두면 이미 받아 둔 "
+                                    "미션·골 승인이 덮는지 확인해 중복 질문을 건너뜁니다."
+                                ),
+                            },
+                            "rollback": {
+                                "type": "string",
+                                "description": "되돌리는 방법. 읽기·조사면 비워 두십시오.",
+                            },
+                            "risk": {
+                                "type": "string",
+                                "enum": ["low", "medium", "high"],
+                                "description": "기본 low. 배포·DB 변경은 medium 이상.",
+                            },
+                        },
+                        "required": ["title"],
+                    },
+                },
+                "context": {
+                    "type": "string",
+                    "description": "제안 전체의 배경 한 줄",
+                },
+            },
+            "required": ["steps"],
+        },
     },
     "todo_write": {
         "name": "todo_write",

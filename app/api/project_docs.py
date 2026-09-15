@@ -1193,20 +1193,22 @@ async def _notify_chat_of_approval_decision(
 
     approved = decision == "approved"
     head = "✅ 승인" if approved else "⛔ 거절"
+    # 제안 카드는 도구 이름(`next_step`)을 보여 봐야 뜻이 없다.
+    label = "다음 단계" if (tool or "") == "next_step" else f"`{tool}`"
     if approved:
         scope_label = (
             "이번 건만 (1회)" if scope == "single"
             else f"이 미션 동안 (최대 {grant_executions}회)"
         )
         note = (
-            f"**{head}** — `{tool}`\n\n"
+            f"**{head}** — {label}\n\n"
             f"- 범위: {scope_label} · 유효 {hours}시간\n"
             f"- 요청: {(summary or '')[:300]}\n\n"
-            "막혀 있던 작업을 이어서 진행합니다."
+            "이어서 진행합니다."
         )
     else:
         note = (
-            f"**{head}** — `{tool}`\n\n"
+            f"**{head}** — {label}\n\n"
             f"- 요청: {(summary or '')[:300]}\n\n"
             "이 작업은 진행하지 않습니다."
         )
@@ -1247,12 +1249,30 @@ async def _notify_chat_of_approval_decision(
     try:
         from app.services.chat_service import trigger_ai_reaction
 
-        if approved:
+        # 제안 카드(next_step)는 "막혀서 멈춘 것" 이 아니라 "이걸 할까요" 다.
+        # 같은 문구로 이어 붙이면 담당이 있지도 않은 중단 지점을 찾는다.
+        is_proposal = (tool or "") == "next_step"
+        if approved and is_proposal:
+            prompt = (
+                f"[시스템] 대표님이 다음 단계를 승인했습니다.\n"
+                f"승인된 제안: {(summary or '')[:500]}\n\n"
+                "이 제안을 지금 수행하고 결과를 보고하세요. "
+                "제안에 적힌 범위만 하고, 적히지 않은 변경은 하지 마세요. "
+                "수행 중 새로 필요한 단계가 생기면 propose_next_steps 로 다시 올리세요."
+            )
+        elif approved:
             prompt = (
                 f"[시스템] 대표님이 승인했습니다 — 도구 `{tool}`, 범위 {scope}, "
                 f"유효 {hours}시간.\n요청 내용: {(summary or '')[:500]}\n\n"
                 "보호 게이트에 막혀 중단됐던 그 작업을 지금 이어서 수행하고 결과를 보고하세요. "
                 "승인 범위를 벗어나는 변경은 하지 마세요."
+            )
+        elif is_proposal:
+            prompt = (
+                f"[시스템] 대표님이 다음 단계 제안을 거절했습니다.\n"
+                f"거절된 제안: {(summary or '')[:500]}\n\n"
+                "이 제안은 진행하지 마세요. 다른 선택지가 있으면 짧게 제시하고, "
+                "없으면 그대로 두고 다음 지시를 기다리세요."
             )
         else:
             prompt = (

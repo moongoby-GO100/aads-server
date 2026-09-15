@@ -862,6 +862,7 @@ class ToolExecutor:
         dispatch = {
             "health_check":           self._health_check,
             "todo_write":             self._todo_write,
+            "propose_next_steps":     self._propose_next_steps,
             "handover_write":         self._handover_write,
             "handover_search":        self._handover_search,
             "handover_export":        self._handover_export,
@@ -1030,6 +1031,34 @@ class ToolExecutor:
         return await fn(tool_input)
 
     # ── system 도구 ─────────────────────────────────────────────────────────
+
+    async def _propose_next_steps(self, inp: Dict[str, Any]) -> Any:
+        """다음 단계 제안을 승인 카드로 올린다.
+
+        2026-09-15 CEO 지시 — "대안 다음진행사항을 승인게이트에 올려
+        내가 승인한 권한 범위면 자동으로 다음단계를 실행될수 있게".
+
+        보고서 끝에 글자로만 적던 "→ 다음 단계" 를 회장님이 체크할 수 있는
+        카드로 만든다. 이미 승인 범위 안인 것은 카드 없이 `auto` 로 돌려준다.
+        """
+        from app.services import next_step_proposals
+
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+        if not session_id:
+            return {
+                "error": "missing_session_id",
+                "message": "propose_next_steps 는 채팅 세션에 묶여야 합니다",
+            }
+
+        steps = inp.get("steps")
+        if not isinstance(steps, list) or not steps:
+            return {"error": "invalid_steps", "message": "steps 는 1건 이상의 배열이어야 합니다"}
+
+        return await next_step_proposals.propose(
+            session_id=session_id,
+            steps=steps,
+            context=str(inp.get("context") or "")[:400],
+        )
 
     async def _todo_write(self, inp: Dict[str, Any]) -> Any:
         """Manage the current chat session TODO list from tool-use."""
