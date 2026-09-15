@@ -20,10 +20,10 @@ import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 # 승인 결정은 **사람만** 부른다 — 테넌트 멤버 인증을 요구한다.
 from typing import Any as _Any
@@ -1276,7 +1276,7 @@ async def approvals_decide(
     scope: str = Query("single", pattern="^(single|mission)$",
                        description="single=이번 건만, mission=이 미션 동안"),
     hours: int = Query(2, ge=1, le=24, description="승인 유효 시간"),
-    max_executions: int = Query(1, ge=1, le=50, description="mission 일 때 허용 횟수"),
+    max_executions: int = Query(1, ge=1, le=500, description="mission 일 때 허용 횟수"),
     context: TenantContext = Depends(require_tenant_member),
 ):
     """승인 또는 거절.
@@ -1360,6 +1360,66 @@ async def approvals_decide(
         "scope": row["scope"] or ("single" if decision == "approved" else ""),
         "valid_hours": hours if decision == "approved" else 0,
         "max_executions": row["max_executions"] if decision == "approved" else 0,
+    }
+
+
+@router.post("/approvals/decide-bulk")
+async def approvals_decide_bulk(
+    payload: Dict[str, Any] = Body(...),
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """여러 건을 한 번에 승인하거나 거절한다.
+
+    2026-09-15 CEO 지시 — "체크박스같은걸 둬서 체크건 승인 가능하게".
+
+    대기가 열 건이면 열 번을 눌러야 했다. 누르는 동안 새 카드가 또 쌓이니
+    끝이 안 난다. 화면에서 고른 것만 한 번에 처리한다.
+
+    한 건이 실패해도 나머지는 계속한다 — 이미 처리된 카드가 섞여 있다고
+    전체가 멈추면 다시 열 번을 눌러야 한다.
+    """
+    ids = payload.get("ids") or []
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(status_code=400, detail="ids 가 비어 있습니다")
+    if len(ids) > 100:
+        raise HTTPException(status_code=400, detail="한 번에 100건까지입니다")
+
+    decision = str(payload.get("decision") or "")
+    if decision not in ("approved", "rejected"):
+        raise HTTPException(status_code=400, detail="decision 은 approved 또는 rejected")
+    scope = str(payload.get("scope") or "single")
+    if scope not in ("single", "mission"):
+        scope = "single"
+    reason = str(payload.get("reason") or "")[:500]
+    hours = max(1, min(24, int(payload.get("hours") or 12)))
+    max_executions = max(1, min(500, int(payload.get("max_executions") or 1)))
+
+    ok: list[str] = []
+    failed: list[Dict[str, str]] = []
+    for rid in ids:
+        try:
+            await approvals_decide(
+                request_id=str(rid), decision=decision, reason=reason,
+                scope=scope, hours=hours, max_executions=max_executions,
+                context=context,
+            )
+            ok.append(str(rid))
+        except HTTPException as exc:
+            failed.append({"id": str(rid), "error": str(exc.detail)})
+        except Exception as exc:  # noqa: BLE001
+            failed.append({"id": str(rid), "error": str(exc)[:160]})
+
+    logger.warning(
+        "live_trading_gate_decided_bulk count=%s ok=%s failed=%s decision=%s scope=%s",
+        len(ids), len(ok), len(failed), decision, scope,
+    )
+    return {
+        "requested": len(ids),
+        "decided": len(ok),
+        "ids": ok,
+        "failed": failed,
+        "decision": decision,
+        "scope": scope,
     }
 
 
