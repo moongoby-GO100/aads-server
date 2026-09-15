@@ -1695,6 +1695,11 @@ async def handle_stream(request):
             saw_result = False
             last_result_error = ""
             stderr_text = ""
+            # 실패를 설명할 최소한의 사실. stderr 가 비어 있을 때 이것마저
+            # 없으면 앱이 받는 것은 "CLI exited with code 255" 한 줄뿐이고,
+            # 그 255 조차 asyncio 가 지어낸 값일 수 있다(아래 주석 참고).
+            _cli_started_monotonic = time.monotonic()
+            _cli_event_count = 0
             # 오류 result 이벤트는 바로 내보내지 않고 붙들어 둔다. 실패 사유는
             # stderr 에 있고 stderr 는 프로세스가 끝나야 읽을 수 있는데, 먼저
             # 내보내면 앱은 "CLI error" 라는 빈 문구만 받는다. 그러면 한도인지
@@ -1711,6 +1716,7 @@ async def handle_stream(request):
                     except json.JSONDecodeError:
                         continue
                     evt_type = event.get("type", "")
+                    _cli_event_count += 1
                     evidence = observation.observe(event)
                     event["aads_model_contract"] = evidence
                     line_to_write = json.dumps(event).encode("utf-8")
@@ -1873,10 +1879,32 @@ async def handle_stream(request):
                         error=stderr_text or last_result_error,
                     )
                 if not saw_result:
-                    safe_failure = redact_secret_text(
-                        stderr_text
-                        or "CLI exited with code %s" % proc.returncode
-                    )[:1200]
+                    # stderr 가 비면 종료코드만 남는데, 그 종료코드가 진짜라는
+                    # 보장이 없다. 자식 프로세스를 다른 곳에서 먼저 거둬 가면
+                    # asyncio 는 실제 상태 대신 **255 를 지어내** 돌려준다
+                    #   asyncio: child process pid … exit status already read:
+                    #            will report returncode 255
+                    # 2026-09-15 하루에 62번 났고 전부 이 모양이었다. 원인을
+                    # 모르는 실패에 슬롯 쿨다운을 걸고 있었다는 뜻이다.
+                    #
+                    # 그래서 설명할 수 있는 사실을 함께 실어 보낸다 — 얼마나
+                    # 돌았나, 이벤트를 하나라도 받았나. 앱은 이것으로 "진짜
+                    # 오류" 와 "출력 한 줄 없이 사라짐" 을 구분한다.
+                    _elapsed = time.monotonic() - _cli_started_monotonic
+                    _context = "elapsed=%.1fs events=%d stderr=%s" % (
+                        _elapsed, _cli_event_count, "있음" if stderr_text else "없음",
+                    )
+                    if not stderr_text and _cli_event_count == 0:
+                        base_failure = (
+                            "cli_no_output: CLI 가 출력 한 줄 없이 종료했습니다 "
+                            "(code=%s %s)" % (proc.returncode, _context)
+                        )
+                    else:
+                        base_failure = (
+                            stderr_text
+                            or "CLI exited with code %s (%s)" % (proc.returncode, _context)
+                        )
+                    safe_failure = redact_secret_text(base_failure)[:1200]
                     failure_event = {
                         "type": "result",
                         "subtype": "error_during_execution",

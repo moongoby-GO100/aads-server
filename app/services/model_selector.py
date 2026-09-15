@@ -2539,6 +2539,11 @@ async def call_stream(
                         if _slot_key:
                             await _mark_key_rate_limited(_slot_key, seconds=_reset_secs)
                         logger.warning("quota_reset_parsed: slot=%s seconds=%d msg=%s", _fs, _reset_secs, _err_msg[:120])
+                    # 출력 없이 사라진 건 계정 잘못이 아니다. 쿨다운을 걸면
+                    # 유일한 계정을 우리 손으로 봉인한다.
+                    elif _is_bare_cli_exit(_err_msg):
+                        logger.warning(
+                            "cli_no_output_no_cooldown: slot=%s — 같은 슬롯에서 재시도", _fs)
                     # CLI exit 반복 실패는 짧은 고정 쿨다운 적용
                     elif any(k in _err_lower for k in ("cli exited", "exit code", "exited with code")):
                         _mark_slot_cooldown(_fs, duration_override=60)
@@ -2551,6 +2556,24 @@ async def call_stream(
             # 낡은 resume ID 는 계정·모델 문제가 아니다. 강등 경로에서도 슬롯을
             # 바꾸거나 모델을 내리지 않고 같은 조건으로 한 번 다시 붙는다.
             # 릴레이가 매핑을 이미 지웠으므로 재호출은 새 CLI 세션으로 나간다.
+            # 출력 없이 사라진 CLI 도 같은 자리에서 한 번 더 붙어 본다.
+            # 종료코드가 지어낸 값일 수 있어(asyncio 255) 계정을 탓할 근거가
+            # 없다. 한 번뿐이라 낭비도 한 번이다.
+            if _err and _yielded == 0 and _is_bare_cli_exit(_err_msg):
+                logger.info("cli_no_output_retry: slot=%s model=%s", _fs, _fm)
+                _err = False
+                _err_msg = ""
+                async for event in _stream_cli_relay(_fm, system_prompt, messages, tools=tools, session_id=session_id, oauth_slot=_fs):
+                    if event.get("type") == "error":
+                        _err = True
+                        _err_msg = event.get("content", "")
+                        logger.warning("cli_no_output_retry_failed: slot=%s — %s", _fs, _err_msg[:100])
+                        # 두 번 연속이면 그때는 슬롯을 의심한다.
+                        _mark_slot_cooldown(_fs, duration_override=60)
+                        break
+                    _yielded += 1
+                    yield event
+
             if _err and _yielded == 0 and _is_stale_resume_error(_err_msg):
                 logger.info("stale_resume_retry: slot=%s model=%s (fallback)", _fs, _fm)
                 _err = False
@@ -2585,6 +2608,14 @@ async def call_stream(
                     return
 
             logger.warning(f"tier_exhausted: {_fm}/slot{_fs}[{_fi}]")
+
+        # 모든 계정을 다 써 봤다. 여기까지 왔다는 것은 **갈아탈 곳이 없었다**는
+        # 뜻이다. 2026-09-15 15:11 에 실제로 그랬다 — 슬롯 1 은 주간 한도 소진,
+        # 슬롯 3 은 꺼짐, 남은 슬롯 2 가 삐끗하자 턴이 3분간 조용히 죽었다.
+        #
+        # 조용히 죽는 것이 가장 나쁘다. 대표님께 알리고, 사용자에게도 왜
+        # 멈췄는지 보여준다.
+        await _alert_no_slots_left(_ACCOUNT_SLOTS, _slot_records, _quota_blocked, session_id)
 
         # Tier3: LiteLLM 유료 경로 비활성화 (CEO 지시) → Codex CLI/samegrade 폴백으로 직행
         logger.info(f"litellm_direct_fallback_skipped: {_original_model} — paid route disabled, proceeding to samegrade")
@@ -3813,6 +3844,58 @@ def _is_stale_resume_error(error_content: str) -> bool:
     """
     lowered = str(error_content or "").lower()
     return "no conversation found" in lowered and "session id" in lowered
+
+
+_NO_SLOT_ALERT_AT: Dict[str, float] = {}
+
+
+async def _alert_no_slots_left(slots, slot_records, quota_blocked, session_id) -> None:
+    """쓸 계정이 하나도 남지 않았다는 사실을 알린다.
+
+    폴백이 0개가 되는 상황은 드물지만, 드물기 때문에 아무도 대비하지 않는다.
+    그러면 사용자는 "응답을 못 한다" 만 보고 이유를 알 수 없다.
+    """
+    now = _time_mod.time()
+    if now - _NO_SLOT_ALERT_AT.get("last", 0.0) < 900:
+        return
+    _NO_SLOT_ALERT_AT["last"] = now
+
+    detail = []
+    for slot in slots or []:
+        label = (slot_records.get(slot) or {}).get("label") or ("slot%s" % slot)
+        if slot in (quota_blocked or {}):
+            detail.append("%s 주간 한도 소진" % label)
+        elif not _is_slot_available(slot):
+            detail.append("%s 쿨다운" % label)
+        else:
+            detail.append("%s 실패" % label)
+    try:
+        from app.services import ohvis_alert
+
+        await ohvis_alert.notify(
+            "쓸 수 있는 Claude 계정이 없습니다",
+            "모든 슬롯을 시도했지만 응답하지 못했습니다 — %s. 세션=%s. "
+            "슬롯 3(최후 수단)을 켜거나 한도 복구를 기다려야 합니다."
+            % (", ".join(detail) or "후보 없음", str(session_id or "-")[:8]),
+            severity=ohvis_alert.CRITICAL,
+            category="oauth_slot", project="AADS", dedupe_minutes=30,
+        )
+    except Exception as exc:
+        logger.warning("no_slot_alert_failed: %s", str(exc)[:120])
+
+
+def _is_bare_cli_exit(error_content: str) -> bool:
+    """출력 한 줄 없이 사라진 CLI 인가 — 종료코드를 믿을 수 없는 경우.
+
+    자식 프로세스를 다른 곳에서 먼저 거둬 가면 asyncio 는 실제 종료 상태
+    대신 **255 를 지어낸다.** 2026-09-15 하루에 62번 났고 전부 슬롯 2였다.
+    그때마다 그 슬롯에 쿨다운을 걸었는데, 쓸 수 있는 계정이 하나뿐인 날에는
+    그 쿨다운 한 번이 대화 하나를 죽인다(15:11 실제 발생).
+
+    릴레이가 `cli_no_output:` 으로 표시해 준다. 이 경우에는 계정을 탓하지
+    않고 같은 슬롯에서 한 번 더 붙어 본다.
+    """
+    return "cli_no_output" in str(error_content or "").lower()
 
 
 def _is_relay_retryable_error(error_content: str) -> bool:
