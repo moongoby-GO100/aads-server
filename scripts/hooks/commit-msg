@@ -21,6 +21,10 @@ SUBJECT=$(grep -v '^#' "$1" | sed '/^$/d' | head -1)
 PARENT_ARGS=$(ps -o args= -p $PPID 2>/dev/null | head -1)
 case "$SUBJECT" in
   Merge\ *|Revert\ *) SUBJECT="" ;;   # 병합·되돌리기는 제목 재사용이 정상
+  # 채팅 자동 커밋의 제목은 "N files (세션sha)" 라서 내용이 전혀 달라도 같아진다.
+  # kis-autotrade-v4 실측(2026-09-15): 같은 제목 3건이 09-10, 09-14 12:01,
+  # 09-14 12:53 에 서로 다른 파일로 커밋돼 있었다. 막으면 자동 경로가 죽는다.
+  Chat-Finalize*) SUBJECT="" ;;
 esac
 if [ -n "$SUBJECT" ] \
    && [ "${ALLOW_DUP_COMMIT:-}" != "1" ] \

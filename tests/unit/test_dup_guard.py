@@ -159,6 +159,10 @@ def test_commit_msg_hook_blocks_repeated_subject_but_allows_amend():
     assert "ALLOW_DUP_COMMIT" in hook
     assert "--amend" in hook, "amend 는 제목이 같은 것이 정상이므로 제외해야 한다"
     assert "--since='3 days ago'" in hook
+    # 자동 커밋 제목은 "N files (세션sha)" 라 내용이 달라도 반복된다.
+    # 막으면 채팅 자동 커밋 경로가 죽는다(kis-autotrade-v4 실측 3건).
+    assert "Chat-Finalize*" in hook
+    assert "Merge\\ *" in hook and "Revert\\ *" in hook
 
 
 def test_installed_hooks_stay_synced_with_repo_copies():
