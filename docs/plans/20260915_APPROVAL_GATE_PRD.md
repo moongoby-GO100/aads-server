@@ -297,3 +297,201 @@ WHERE decision = 'approved' AND expires_at > now()
 | #518 | `2cc11c8f` | `decide-bulk` API | success 11:10 |
 | — | `e201f9f2` | 재개 턴 중복 수정 | 미배포 |
 | — | (이 커밋) | `propose_next_steps` + PRD 개정 | 미배포 |
+
+배포 이력 보정 (2026-09-15 저녁 실측, `deploy_runs`):
+
+| 배포 | 커밋 | 내용 | 결과 |
+|---|---|---|---|
+| #521 | `1496e89a` | `propose_next_steps` 제안 카드 | success |
+| #528 | `1add3fe3` | 목표 승인에 프로젝트 경계 | success |
+| #530 | `64bce0a3` | 승인 범위 4단계(API) | success |
+| #531 | `db761859` | 승인 범위 4단계(화면) | success |
+
+---
+
+# 11. 개정 — 2026-09-15 저녁: 상위 권한 3층 모델
+
+대표님 지시 — "이 대화 동안보다 더 상위인 채팅창 권한, 프로젝트 권한에
+대해 어떻게 적용하고 어떻게 화면에 반영할지".
+
+10절까지는 **카드 한 장의 범위를 넓히는** 이야기였다. 이 절은 그 위,
+**카드가 뜨기 전에 미리 정해 두는 권한**을 다룬다.
+
+## 11.1 지금 서버가 적용하는 계층 (실측)
+
+`live_trading_guard.is_approved()` 조회절(`app/services/live_trading_guard.py:576~614`)
+과 `goal_policy_allows()`(같은 파일 `:451`) 이 판정하는 것 전부다.
+
+| 계층 | 통과 조건 | 세션을 넘나 | 상한 | critical |
+|---|---|---|---|---|
+| single | `work_key` 완전일치 | ✕ | 1회 / 2h | 허용 |
+| mission | 세션+도구+대상지문+**파일지문** | ✕ | 20회 / 2h | 허용 |
+| session | 세션+도구 (대상 불문) | ✕ | 50회 / 4h | **차단** |
+| project | 프로젝트+도구 | **✅** | 100회 / 8h | **차단** |
+| goal | `goals.approval_policy` + 프로젝트 일치 | **✅** | 설정값 / 목표 종료까지 | 설정 시 허용 |
+
+넓은 것부터 소비한다(`ORDER BY goal→project→session→mission→single`).
+좁은 승인을 남겨 두어야 그 대상을 다시 묻지 않는다.
+
+가동 중인 최상위 권한 — `goals.approval_policy` 3건, 전부 GO100:
+`#310` used 24/200, `#119` used 42/200, `순자산 100억` used 0/200.
+
+승인 카드 24시간 분포: mission 90건(실사용 38) · single 10건 ·
+**session/project 0건**. 범위는 배포됐지만 아직 눌린 적이 없다.
+
+## 11.2 무엇이 빠졌나 — 전부 화면 쪽이다
+
+| # | 문제 | 근거 |
+|---|---|---|
+| 1 | 켜진 권한이 화면에 **안 보인다** | `/approvals/active` 대시보드 호출 0건(`grep -rn`) |
+| 2 | **회수 버튼이 없다** | `/approvals/{id}/revoke` 호출 0건 |
+| 3 | `/approvals` 페이지가 구버전 | `src/app/approvals/page.tsx:135` = `"single" \| "mission"` |
+| 4 | project 권한이 **다른 대화에 안 보인다** | `/approvals/active` 가 `requested_by = session_id` 로 거른다 |
+| 5 | **미리 켤 수 없다** | 카드가 떠야만 범위 선택 가능. goal 만 예외 |
+
+2번이 핵심이다. **회수가 안 되니 넓은 권한을 줄 수 없고, 넓은 권한을
+안 주니 카드가 계속 뜬다.** 12시간에 카드 89장, 실사용 18회가 그 결과다.
+
+서버 API는 이미 있다(`app/api/project_docs.py:1105`, `:1151`). 화면이
+부르지 않을 뿐이다. 그래서 P0 은 서버 추가 개발이 거의 없다.
+
+## 11.3 설계 — 3층 권한 모델
+
+| 층 | 이름 | 저장 위치 | 설정 지점 | critical |
+|---|---|---|---|---|
+| L1 | 요청 카드 (기존 4종) | `agent_permission_requests` | 팝업 버튼 | single/mission만 |
+| **L2** | **채팅창 권한** (신규) | `chat_sessions.approval_policy` | 채팅 상단 권한 칩 → 패널 | 구조적 차단 |
+| **L3** | **프로젝트 권한** (신규) | `project_approval_policies` (신규) | 프로젝트 설정 화면 | 구조적 차단 + 2단계 확인 |
+| L3′ | 목표 권한 (기존) | `goals.approval_policy` | 목표 상세 | 명시 설정 시만 |
+
+원칙 넷.
+
+1. **도구 하나가 아니라 도구군으로 준다.** 지금은 도구 1개씩이라
+   파일을 고치고 명령 한 줄 실행할 때 또 묻는다.
+2. **무제한은 없다.** L2 4시간/50회, L3 8시간/100회. 시간과 횟수가
+   둘 다 걸린다. 하나만 걸면 그것은 게이트 해제다.
+3. **자동 통과는 흔적을 남긴다.** 채팅에 `이 프로젝트 권한으로 통과
+   (12/100)` 한 줄. 조용히 통과하면 권한이 켜진 줄 모른다.
+4. **L3 는 감사 대상이다.** 세션을 넘으므로 어느 대화가 썼는지 남긴다.
+
+도구군:
+
+| 군 | 포함 도구 | 기본 |
+|---|---|---|
+| `code_write` | `write_remote_file`, `patch_remote_file` | 꺼짐 |
+| `shell` | `run_remote_command` | 꺼짐 |
+| `db_write` | `db_safe_write` | 꺼짐 |
+| `deploy` | `deploy_safe`, 배포 계열 | 꺼짐 |
+| `order` | 주문·자금 계열 | **L2·L3 에 없음** |
+
+## 11.4 데이터
+
+```sql
+-- L2: 채팅창 권한
+ALTER TABLE chat_sessions
+  ADD COLUMN IF NOT EXISTS approval_policy jsonb NOT NULL DEFAULT '{}'::jsonb;
+-- {"code_write": {"max": 50, "used": 3, "expires_at": "...", "set_by": "CEO"}}
+
+-- L3: 프로젝트 권한
+CREATE TABLE IF NOT EXISTS project_approval_policies (
+  project      text PRIMARY KEY,
+  policy       jsonb NOT NULL DEFAULT '{}'::jsonb,
+  set_by       text,
+  updated_at   timestamptz NOT NULL DEFAULT now()
+);
+```
+
+`agent_permission_requests.approval_scope` 에 `tool_group` 키를 추가한다.
+기존 행에는 없으므로 `COALESCE(..., '')` 로 읽고, 없으면 지금처럼
+`action_type` 단일 도구로 판정한다 — 옛 승인이 갑자기 넓어지면 안 된다.
+
+## 11.5 API
+
+| 경로 | 상태 | 용도 |
+|---|---|---|
+| `GET /approvals/active` | **있음** — 필터 보정 필요 | 살아 있는 권한 + 잔여·만료 |
+| `POST /approvals/{id}/revoke` | **있음** — 화면만 붙이면 됨 | 즉시 회수 |
+| `GET /approvals/gate-status` | 있음 | 게이트 on/off, 대기 건수 |
+| `GET/PUT /sessions/{id}/approval-policy` | 신규 | L2 조회·설정 |
+| `GET/PUT /projects/{key}/approval-policy` | 신규 | L3 조회·설정 |
+
+`/approvals/active` 보정 — 지금은 `($2 = '' OR requested_by = $2)` 라
+세션을 넘는 project 권한이 다른 대화에서 조회되지 않는다. `project`
+파라미터를 받아 `scope='project'` 행을 OR 로 합친다.
+
+## 11.6 화면
+
+**① 채팅 상단 권한 칩** (목표 띠와 같은 줄에 두지 않는다 — 가린다)
+
+```
+🔓 이 프로젝트 동안 · 코드수정 · 12/100 · 7h 12m 남음    [회수]
+🔒 건건 확인                                    ← 권한 없을 때
+```
+
+꺼진 상태도 그려야 한다. 안 그리면 대표님이 "승인할 게 없다" 로 읽는다.
+
+**② 권한 패널** (칩 클릭 → 우측 슬라이드)
+
+- 상단: 살아 있는 권한 목록, 행마다 `회수` 버튼
+- 하단: 미리 켜기 토글 — 도구군 4종 × 범위 2종(이 대화 / 이 프로젝트)
+- 주문·자금 줄은 토글을 **그리지 않고** "카드로만 승인" 문구를 둔다
+
+**③ `/approvals` 페이지** — 범위 4단계로 통일 + `활성 권한` 탭
+
+**④ 프로젝트 설정 화면** — L3 는 여기서만 켜진다. 켤 때 빨간 확인 모달
+(`이 프로젝트의 모든 대화에 적용됩니다`).
+
+**⑤ 자동 통과 흔적** — 통과한 메시지에 범위·잔여를 한 줄로 남긴다.
+
+## 11.7 판정 순서
+
+```
+check(tool, input)
+  tier == PASS        → 실행
+  tier == NOTIFY      → 알림만, 실행
+  goal_policy_allows()          → 통과 (프로젝트 일치 필수)
+  project_policy_allows()  L3   → 통과 (critical 제외)
+  session_policy_allows()  L2   → 통과 (critical 제외)
+  is_approved()            L1   → 통과 (카드 소비)
+  그 외                          → 카드 발급 후 차단
+```
+
+넓은 것을 먼저 본다. 좁은 카드를 아껴 두어야 그 대상에 다시 묻지 않는다.
+어느 층이든 통과하면 `used` 를 센다 — 세지 않으면 상한이 장식이 된다.
+
+## 11.8 작업 순서
+
+| 순위 | 조치 | 병렬 | 의존 | 검증기준 |
+|---|---|---|---|---|
+| P0 | 권한 칩 + 패널(활성표시·회수) | A | 없음 | 칩에 잔여·만료 표시, 회수 후 다시 물음 |
+| P0 | `/approvals/active` 프로젝트 필터 보정 | A | 없음 | 다른 세션에서 project 권한 1건 조회 |
+| P1 | `/approvals` 페이지 4단계 통일 | B | 없음 | 페이지·팝업 선택지 동일 |
+| P1 | 도구군(`tool_group`) 서버+화면 | C | P0 후 | 승인 1회로 write+run 연속 통과 |
+| P2 | `project_approval_policies` + 설정 화면 | — | P1 후 | 새 세션이 카드 없이 통과, 감사 남음 |
+| P2 | 자동 통과 흔적 1줄 | — | P1 후 | 통과 메시지에 범위·잔여 노출 |
+
+P0 둘만 나가도 체감은 대부분 해결된다. 넓은 권한을 **되돌릴 수 있게**
+되는 순간부터 넓게 줄 수 있다.
+
+## 11.9 시험
+
+| # | 항목 | 통과 기준 |
+|---|---|---|
+| 1 | 권한 칩 | 잔여/상한·만료가 실값으로 표시 |
+| 2 | 회수 | 클릭 후 같은 도구 재호출 시 카드 재출현 |
+| 3 | 세션 넘김 | 다른 대화에서 project 권한 1건 조회 |
+| 4 | 연속 작업 | 승인 1회로 서로 다른 파일 2개 연속 수정 |
+| 5 | critical | L2·L3 버튼 미노출 + 서버 차단 로그 |
+| 6 | 만료 | 상한 초과·시간 경과 후 자동으로 다시 물음 |
+
+## 11.10 되돌리기
+
+L2·L3 는 **읽는 쪽에 조건을 더하는** 변경이다. 되돌리면 그 조건이
+사라지고 L1 카드 판정만 남는다 — 게이트가 느슨해지지 않는다.
+컬럼·테이블은 남겨도 무해하다(빈 `{}` 는 아무것도 허용하지 않는다).
+
+## 11.11 열어 둔 것
+
+- 도구군 4종 구성이 맞는지 — `shell` 을 읽기/쓰기로 더 쪼갤지
+- L3 를 프로젝트 전체가 아니라 **경로 prefix** 로 더 좁힐지
+- `target` 없는 구 승인 카드 46장 처리 — 만료 대기 / 일괄 거절
