@@ -1063,7 +1063,13 @@ async def approvals_decide(
         row = await get_pool().fetchrow(
             """
             UPDATE agent_permission_requests
-               SET decision = $2, reason = NULLIF($3, ''), decided_by = $4,
+               -- `reason` 은 NOT NULL 이다. NULLIF 로 빈 사유를 NULL 로
+               -- 바꾸면 제약에 걸려 승인 자체가 503 으로 실패한다 — 대표님이
+               -- 사유를 적지 않고 누르는 것이 보통이므로 사실상 항상 실패했다
+               -- (2026-09-15 확인). 사유가 비면 기존 값을 그대로 둔다.
+               SET decision = $2,
+                   reason = CASE WHEN $3 <> '' THEN $3 ELSE reason END,
+                   decided_by = $4,
                    decided_at = now(), updated_at = now(),
                    max_executions = CASE WHEN $2 = 'approved'
                                          THEN $6 ELSE max_executions END,
