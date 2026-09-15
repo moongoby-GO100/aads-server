@@ -26,7 +26,19 @@ _REVIEW_PARSE_MAX_ATTEMPTS = 3  # P0: JSON 파싱 실패 시 즉시 REVIEW_PARSE
 # 않도록 전체 모델 시도 수도 별도 상한으로 제한한다.
 _REVIEW_MODEL_MAX_ATTEMPTS = int(os.environ.get("REVIEW_MODEL_MAX_ATTEMPTS", "6"))
 # P0: 리뷰 LLM 시도 1회 상한(초). 초과하면 무응답으로 간주하고 다음 시도로 넘긴다.
-_REVIEW_LLM_TIMEOUT_SEC = int(os.environ.get("REVIEW_LLM_TIMEOUT_SEC", "25"))
+#
+# 2026-09-15 실측 — runner-2a202a8e 의 실제 리뷰 프롬프트(10,602자)로 재현했더니
+# claude-opus-5 20.0초, claude-haiku-4-5 25.5초였다. 상한 25초는 유휴 상태에서도
+# 이미 경계에 걸려 있었고, 릴레이에 claude 세션이 8~10개 쌓인 구간에서는 등록된
+# 네 모델이 전부 25초에 잘려 REVIEW_MODEL_NO_RESPONSE 가 됐다. GO100 5건이 그렇게
+# 최대 200분 review_hold 에 묶였다.
+#
+# 상한을 줄일 때는 반드시 실제 리뷰 프롬프트로 지연을 먼저 재라. 프록시 한도에서
+# 거꾸로 계산해 내려잡으면 "무응답" 이 아닌 것을 무응답으로 만든다.
+_REVIEW_LLM_TIMEOUT_SEC = int(os.environ.get("REVIEW_LLM_TIMEOUT_SEC", "45"))
+# 마감까지 남은 시간이 이보다 짧으면 새 시도를 걸지 않는다. 남은 시간이 상한보다
+# 짧아도 이 값보다 길면 남은 만큼이라도 써서 시도한다 — 예산을 버리지 않는다.
+_REVIEW_MIN_ATTEMPT_SEC = int(os.environ.get("REVIEW_MIN_ATTEMPT_SEC", "12"))
 # 검수 전체에 마감을 둔다.
 #
 # 러너는 공개 URL(Cloudflare)로 이 API 를 부르고, Cloudflare 는 약 100초에
@@ -40,6 +52,11 @@ _REVIEW_LLM_TIMEOUT_SEC = int(os.environ.get("REVIEW_LLM_TIMEOUT_SEC", "25"))
 # 마감 안에 답이 없으면 "응답 없음"으로 정직하게 닫는다. 프록시에
 # 잘려 사유를 잃는 것보다 낫다.
 _REVIEW_TOTAL_DEADLINE_SEC = int(os.environ.get("REVIEW_TOTAL_DEADLINE_SEC", "85"))
+# 비동기 요청 경로(POST /api/v1/review/code-diff/requests)는 202 로 즉시 반환하고
+# 클라이언트가 request_id 를 폴링한다. 프록시 마감에 묶이지 않으므로 같은 85초를
+# 쓸 이유가 없다. 재검수 스위퍼가 이 경로를 쓴다 — 동기 경로에서 상한에 걸린
+# 작업이 재검수에서도 똑같이 걸리면 복구 경로가 아무 의미가 없다.
+_REVIEW_ASYNC_DEADLINE_SEC = int(os.environ.get("REVIEW_ASYNC_DEADLINE_SEC", "240"))
 
 _DIFF_HEADER_RE = re.compile(r"^diff --git a\/.+ b\/.+$", re.MULTILINE)
 _DIFF_HUNK_RE = re.compile(r"^@@ .+ @@$", re.MULTILINE)
@@ -640,9 +657,15 @@ async def review_code_diff(
     diff: str,
     instruction: str,
     files_changed: Optional[list] = None,
+    deadline_sec: Optional[int] = None,
 ) -> ReviewVerdict:
-    """코드 diff를 독립 AI로 리뷰. Claude Haiku 사용."""
+    """코드 diff를 독립 AI로 리뷰. Claude Haiku 사용.
+
+    deadline_sec 을 주면 전체 검수 마감을 그 값으로 바꾼다. 프록시에 묶이지 않는
+    비동기 요청 경로가 더 긴 마감을 쓰기 위한 것이다(_REVIEW_ASYNC_DEADLINE_SEC).
+    """
     start = time.time()
+    total_deadline = int(deadline_sec or _REVIEW_TOTAL_DEADLINE_SEC)
 
     precheck = _precheck_review_input(diff)
     if precheck is not None:
@@ -708,13 +731,19 @@ async def review_code_diff(
         _review_started_at = time.monotonic()
         for attempt_no in range(1, attempt_limit + 1):
             _elapsed = time.monotonic() - _review_started_at
-            # 다음 시도가 마감을 넘길 것 같으면 더 하지 않는다.
-            if _elapsed + _REVIEW_LLM_TIMEOUT_SEC > _REVIEW_TOTAL_DEADLINE_SEC:
+            _remaining = total_deadline - _elapsed
+            # 남은 예산이 의미 있는 시도조차 못 할 만큼 짧을 때만 멈춘다.
+            #
+            # 예전에는 "남은 시간 < 시도당 상한" 이면 바로 break 했다. 상한이 25초,
+            # 마감이 85초일 때 첫 시도가 실패하면 60초가 남아도 두 번째 모델을
+            # 부르지 않고 끝나는 구간이 생겼다. 남은 만큼이라도 쓰는 편이 낫다.
+            if _remaining < _REVIEW_MIN_ATTEMPT_SEC:
                 logger.warning(
                     "review_deadline_reached: job_id=%s elapsed=%.0fs attempts=%s/%s deadline=%ss",
-                    job_id, _elapsed, attempt_no - 1, attempt_limit, _REVIEW_TOTAL_DEADLINE_SEC,
+                    job_id, _elapsed, attempt_no - 1, attempt_limit, total_deadline,
                 )
                 break
+            _attempt_timeout = min(float(_REVIEW_LLM_TIMEOUT_SEC), _remaining)
             model = review_models[(attempt_no - 1) % len(review_models)] if review_models else _REVIEW_MODEL_FALLBACK
             try:
                 # P0: 리뷰 모델이 실패하면 call_llm_with_fallback 이 Claude 429 재시도(최대 60회)와
@@ -728,11 +757,11 @@ async def review_code_diff(
                         system=_REVIEW_SYSTEM_PROMPT,
                         max_tokens=1024,
                     ),
-                    timeout=_REVIEW_LLM_TIMEOUT_SEC,
+                    timeout=_attempt_timeout,
                 )
             except asyncio.TimeoutError:
-                logger.warning("review_model_timeout: model=%s attempt=%s/%s limit=%ss",
-                               model, attempt_no, attempt_limit, _REVIEW_LLM_TIMEOUT_SEC)
+                logger.warning("review_model_timeout: model=%s attempt=%s/%s limit=%.0fs",
+                               model, attempt_no, attempt_limit, _attempt_timeout)
                 result_text = None
             except Exception as model_err:
                 logger.warning("review_model_failed: model=%s attempt=%s/%s error=%s",

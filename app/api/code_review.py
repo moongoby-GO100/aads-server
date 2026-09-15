@@ -98,12 +98,18 @@ async def _execute_review_request(request_id: UUID) -> None:
             files_changed = row["files_changed"]
             if isinstance(files_changed, str):
                 files_changed = json.loads(files_changed)
+            # 이 경로는 202 로 이미 반환했고 클라이언트는 request_id 를 폴링한다.
+            # 프록시(Cloudflare ~100초)에 묶이지 않으므로 동기 경로보다 긴 마감을
+            # 준다. 재검수 스위퍼가 동기 경로와 똑같은 상한에 걸리면 복구가 안 된다.
+            from app.services.code_reviewer import _REVIEW_ASYNC_DEADLINE_SEC
+
             result = await do_review(
                 project=row["project"],
                 job_id=row["job_id"],
                 diff=row["diff"],
                 instruction=row["instruction"] or "",
                 files_changed=list(files_changed or []),
+                deadline_sec=_REVIEW_ASYNC_DEADLINE_SEC,
             )
             async with pool.acquire() as conn:
                 await conn.execute(

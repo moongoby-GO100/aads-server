@@ -35,6 +35,10 @@ SWEEP_BATCH="${SWEEP_BATCH:-5}"                      # 1회 실행당 재검수 
 SWEEP_MAX_RETRY="${SWEEP_MAX_RETRY:-6}"              # 잡당 자동 재검수 상한
 SWEEP_BACKOFF_BASE_MIN="${SWEEP_BACKOFF_BASE_MIN:-10}"
 SWEEP_BACKOFF_MAX_MIN="${SWEEP_BACKOFF_MAX_MIN:-360}"
+# 연속으로 이만큼 인프라 사유 실패가 나오면 그때 배치를 멈춘다(진짜 회로 개방).
+# 첫 실패에서 멈추면 "검수 인프라가 죽었다" 와 "이 작업 하나가 무겁다" 를
+# 구분하지 못한다.
+SWEEP_INFRA_CIRCUIT="${SWEEP_INFRA_CIRCUIT:-3}"
 REVIEW_MAX_TIME="${REVIEW_MAX_TIME:-600}"            # 재검수 1건 최대 대기(초)
 DRY_RUN="${DRY_RUN:-0}"
 LOG_DIR="${LOG_DIR:-/var/log/aads-pipeline}"
@@ -107,7 +111,32 @@ if [[ -z "${rows//[[:space:]]/}" ]]; then
     exit 0
 fi
 
-total=0; promoted=0; rejected=0; retried=0
+total=0; promoted=0; rejected=0; retried=0; consec_infra=0
+
+# 인프라 사유 실패 처리 — 재시도 예산을 실제로 소비하고 다음 작업으로 넘어간다.
+#
+# 예전에는 카운터를 올리지 않고(retry budget preserved) batch 를 break 했다.
+# 그 결과 백오프는 영원히 기본값 10분에 머물고 SWEEP_MAX_RETRY 에도 영영 닿지
+# 않았으며, 매 주기 같은 첫 작업만 다시 시도하고 나머지는 스캔조차 되지 않았다.
+# 2026-09-15 06:32~07:32 실측 — 21회 연속 `scanned=1 promoted=0 retried=0`,
+# 그동안 GO100 4건이 손도 닿지 않은 채 review_hold 에 있었다.
+infra_retry() {
+    local jid="$1" proj="$2" prev="$3" reason="$4"
+    local nxt=$((prev + 1))
+    local nte
+    nte=$(sql_escape "[자동재검수] 인프라 사유 재시도 ${nxt}/${SWEEP_MAX_RETRY} — ${reason}")
+    db_exec "UPDATE pipeline_jobs
+             SET review_retry_count=${nxt}, review_retry_last_at=NOW(),
+                 review_request_id=NULL,
+                 review_feedback=COALESCE(review_feedback,'') || E'\n' || ${nte}
+             WHERE job_id='${jid}' AND status='review_hold';"
+    retried=$((retried + 1))
+    consec_infra=$((consec_infra + 1))
+    log "  INFRA_RETRY ${jid} project=${proj} retry=${nxt}/${SWEEP_MAX_RETRY} ${reason}"
+    if [[ "$nxt" -ge "$SWEEP_MAX_RETRY" ]]; then
+        log "  EXHAUSTED ${jid} — 자동 재검수 상한 도달, 수동 확인 필요"
+    fi
+}
 
 while IFS=$'\x1e' read -r job_id project retry_count session_id request_id; do
     [[ -z "$job_id" ]] && continue
@@ -178,27 +207,30 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id request_id; do
     fi
     [[ "$score" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || score="0.0"
 
-    # 검수 인프라 전체가 죽은 경우 잡별 재시도 예산을 태우며 같은 장애를 배치
-    # 전체에 반복하지 않는다. 첫 실패에서 회로를 열고 다음 타이머 주기에 재확인한다.
+    # 인프라 사유 실패는 재시도 예산을 소비하고 다음 작업으로 넘어간다. 연속
+    # 실패가 SWEEP_INFRA_CIRCUIT 회 쌓였을 때만 "인프라가 죽었다" 로 보고 배치를
+    # 멈춘다.
+    infra_reason=""
     if [[ "$request_status" == "failed" ]]; then
-        db_exec "UPDATE pipeline_jobs
-                 SET review_request_id=NULL, review_retry_last_at=NOW()
-                 WHERE job_id='${job_id}' AND status='review_hold';"
-        log "  CIRCUIT_OPEN $job_id project=$project request_status=failed — request reset; retry budget preserved; batch stopped"
-        break
-    fi
-    if [[ "$http_code" != "202" || -z "$verdict" ]]; then
-        log "  CIRCUIT_OPEN $job_id project=$project enqueue_http=$http_code request_status=${request_status:-unknown} verdict=${verdict:-none} — retry budget preserved; batch stopped"
-        break
-    fi
-    if [[ "$verdict" == "FLAG" && ",REVIEW_API_UNAVAILABLE,REVIEW_MODEL_NO_RESPONSE,REVIEW_PARSER_FAILURE,REVIEW_TIMEOUT," == *",${category},"* ]]; then
-        db_exec "UPDATE pipeline_jobs
-                 SET review_request_id=NULL, review_retry_last_at=NOW()
-                 WHERE job_id='${job_id}' AND status='review_hold';"
-        log "  CIRCUIT_OPEN $job_id project=$project category=$category — retry budget preserved; batch stopped"
-        break
+        infra_reason="request_status=failed"
+    elif [[ "$http_code" != "202" || -z "$verdict" ]]; then
+        infra_reason="enqueue_http=${http_code} request_status=${request_status:-unknown} verdict=${verdict:-none}"
+    elif [[ "$verdict" == "FLAG" && ",REVIEW_API_UNAVAILABLE,REVIEW_MODEL_NO_RESPONSE,REVIEW_PARSER_FAILURE,REVIEW_TIMEOUT," == *",${category},"* ]]; then
+        infra_reason="category=${category}"
     fi
 
+    if [[ -n "$infra_reason" ]]; then
+        infra_retry "$job_id" "$project" "$retry_count" "$infra_reason"
+        rm -f "$diff_file" "$ins_file" "$payload_file" "$resp_file"
+        if [[ "$consec_infra" -ge "$SWEEP_INFRA_CIRCUIT" ]]; then
+            log "  CIRCUIT_OPEN 연속 인프라 실패 ${consec_infra}회 — 이번 배치 중단, 다음 타이머 주기에 재확인"
+            break
+        fi
+        continue
+    fi
+
+    # 판정을 받아냈다 — 인프라는 살아 있다.
+    consec_infra=0
     next_retry=$((retry_count + 1))
     log "  REVIEW $job_id project=$project http=$http_code verdict=${verdict:-none} score=$score category=${category:-none} retry=${next_retry}/${SWEEP_MAX_RETRY}"
 

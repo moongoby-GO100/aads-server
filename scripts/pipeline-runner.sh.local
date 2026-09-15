@@ -45,6 +45,26 @@ LOG_DIR="/var/log/aads-pipeline"
 ARTIFACT_DIR="/tmp/aads_pipeline_artifacts"
 RUNNER_HOSTNAME=$(hostname -s)
 
+# ── Claude 릴레이 슬롯 자격증명 (AADS-RUNNER-SLOT-AUTH, 2026-09-14) ─────
+# .env 고정 oat 토큰은 refresh 수단이 없어 만료/revoke 되면 러너 전체가 정지한다.
+# 2026-09-14 실측: 계정1 429(주간한도), 계정2 401(revoked)로 35단 폴백이 전멸했는데
+# 같은 시각 릴레이는 정상이었다. 릴레이가 쓰는 슬롯 자격증명은 accessToken 과
+# refreshToken 을 함께 들고 있어 CLI 가 스스로 갱신하기 때문이다.
+# 러너도 같은 래퍼를 경유해 그 자격증명을 공유한다. 슬롯이 없거나 불완전하면
+# 조용히 기존 고정 토큰 경로로 폴백하므로 슬롯이 없는 서버(211/114)는 영향이 없다.
+CLAUDE_RELAY_SLOT_HOME_ROOT="${CLAUDE_RELAY_SLOT_HOME_ROOT:-/root/.claude-relay-slots}"
+CLAUDE_SLOT_CREDENTIAL_WRAPPER="${CLAUDE_SLOT_CREDENTIAL_WRAPPER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-slot-credentials-wrapper.sh}"
+RUNNER_USE_SLOT_CREDENTIALS="${RUNNER_USE_SLOT_CREDENTIALS:-1}"
+
+# 러너가 사용할 Claude CLI 바이너리.
+# 2026-09-14 실측 A/B(4/4, 동일 자격증명·동일 래퍼·동일 모델):
+#   호스트 전역 CLI 2.1.270 → "You've hit your weekly limit" 로 전량 차단
+#   릴레이 번들 CLI 2.1.259 → 정상 응답
+# 자격증명 문제가 아니라 CLI 버전 문제였다. 릴레이와 같은 버전을 고정 경로에 두고 쓴다.
+# 바이너리(216MB)는 저장소 밖에 두며, 없으면 전역 claude 로 조용히 폴백한다.
+RUNNER_CLAUDE_CLI_BIN="${RUNNER_CLAUDE_CLI_BIN:-/root/aads/vendor/claude-cli/claude}"
+[[ -x "$RUNNER_CLAUDE_CLI_BIN" ]] || RUNNER_CLAUDE_CLI_BIN="claude"
+
 # Claude Code 인증: current.env (oat 키) 사용 — API 키(api03) 사용 금지
 source ~/.claude/current.env 2>/dev/null || true
 source /root/scripts/runner.env 2>/dev/null || true
@@ -57,6 +77,10 @@ declare -A PROJECT_WORKDIR=(
     ["GO100"]="/root/kis-autotrade-v4"
     ["SF"]="/data/shortflow"
     ["NTV2"]="/srv/newtalk-v2"
+    # ACCT(회계) 는 jinah244(5.104.85.244) 에만 있다. /srv/biseo 는 회계 원본 자료
+    # 5.4G 가 섞인 상위 디렉터리이고, 실제 git 저장소는 그 두 단계 아래다.
+    # (origin: github.com/dossau2018-oss/biseo, .git 48M)
+    ["ACCT"]="/srv/biseo/회계비서/회계비서"
 )
 
 AADS_DASHBOARD_WORKDIR="${AADS_DASHBOARD_WORKDIR:-/root/aads/aads-dashboard}"
@@ -131,7 +155,9 @@ get_job_instruction() {
 }
 
 # 프로젝트별 허용 목록 (M4: 화이트리스트 검증)
-VALID_PROJECTS="AADS KIS GO100 SF NTV2"
+# ACCT 는 jinah244 전용이다. 여기에 없으면 러너가 job 을 집고도 invalid_project 로
+# 즉시 죽는다 — 2026-09-14 편입 스모크에서 실제로 그렇게 실패했다.
+VALID_PROJECTS="AADS KIS GO100 SF NTV2 ACCT"
 
 # 실행 서버 이름. pipeline_jobs.runner_host 와 하트비트에 쓴다.
 RUNNER_HOST_NAME="${AADS_RUNNER_HOST_NAME:-$(hostname -s 2>/dev/null || hostname)}"
@@ -150,7 +176,11 @@ runner_heartbeat() {
 }
 
 MAX_JOB_RUNTIME="${MAX_JOB_RUNTIME:-$MAX_RUNTIME}"  # CLI 상한보다 먼저 작업을 종료하지 않음
-AADS_REVIEW_MAX_TIME="${AADS_REVIEW_MAX_TIME:-420}"
+# 러너는 공개 URL(Cloudflare)로 검수 API 를 부른다. Cloudflare 는 약 100초에
+# 원본 응답을 포기하고 524 를 돌려주므로, 420초를 기다려도 쓸 수 있는 시간은
+# 100초뿐이다. 서버 쪽 검수 마감(REVIEW_TOTAL_DEADLINE_SEC=85)보다 조금 길게
+# 잡아, 정상 응답은 받고 프록시가 끊기 전에 우리가 먼저 포기하도록 한다.
+AADS_REVIEW_MAX_TIME="${AADS_REVIEW_MAX_TIME:-95}"
 AADS_REVIEW_MAX_ATTEMPTS="${AADS_REVIEW_MAX_ATTEMPTS:-3}"
 AADS_REVIEW_MAX_RUNTIME="${AADS_REVIEW_MAX_RUNTIME:-$((AADS_REVIEW_MAX_TIME * AADS_REVIEW_MAX_ATTEMPTS + 120))}"
 WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-300}"    # 5분마다 프로세스 생존 확인
@@ -239,6 +269,35 @@ db_exec() {
         return 1
     }
     echo "$out"
+}
+
+# 실패 지점에서 오류 사전(ohvis_wiki_error_book)을 조회한다.
+#
+# 2026-09-14, 같은 실패를 세 세션이 "러너 계정 문제" 로 보고했다. 실제 원인은
+# 호스트/컨테이너 경로 불일치였고 로그에는 Codex 시작 배너만 남아 있었다.
+# 증상에서 원인으로 가는 길이 없으면 사람이 매번 처음부터 추적한다.
+#
+# 조회 실패는 무시한다 — 사전이 없다고 작업을 막으면 안 된다.
+lookup_error_book() {
+    local err_file="$1" job_id="${2:-}"
+    [[ -s "$err_file" ]] || return 0
+    local book="/root/aads/aads-server/scripts/error_book.py"
+    [[ -x "$book" ]] || return 0
+    local hit
+    # --record: 사전에 없는 오류는 후보로 남긴다. 원인은 비워 두되 증상이
+    # 어디에도 안 남는 일은 막는다. 다음 사람이 원인을 채워 active 로 올린다.
+    # match 는 "알려진 오류 없음" 일 때 종료코드 1 을 준다. 그 경우에도 후보
+    # 기록 메시지가 출력에 있으므로 종료코드로 버리면 안 된다.
+    hit=$(timeout 30 "$book" match "$err_file" --bump --record --source "runner:${job_id}" 2>/dev/null || true)
+    # 알려진 오류든 새 후보든 로그에 남긴다. 후보가 조용히 기록되면 운영자는
+    # 새 오류가 사전에 들어온 사실 자체를 모른다.
+    case "$hit" in
+        *"알려진 오류:"*|*"후보로 기록:"*) ;;
+        *) return 0 ;;
+    esac
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && log "  ERROR_BOOK job=${job_id} ${line}"
+    done <<< "$hit"
 }
 
 db_update() {
@@ -415,6 +474,36 @@ normalize_runner_model() {
 
 normalize_claude_cli_model() {
     python3 "$CLAUDE_MODEL_CONTRACT" "${1:-}"
+}
+
+# 슬롯 자격증명 경로를 stdout 으로 돌려준다.
+# 쓸 수 없으면 아무것도 출력하지 않고 1 을 반환해 호출측이 고정 토큰으로 폴백한다.
+# accessToken 만 있고 refreshToken 이 없는 파일은 갱신이 불가능하므로 거부한다.
+slot_credentials_file() {
+    local slot="${1:-1}"
+    [[ "$RUNNER_USE_SLOT_CREDENTIALS" == "1" ]] || return 1
+    [[ -x "$CLAUDE_SLOT_CREDENTIAL_WRAPPER" ]] || return 1
+    command -v flock >/dev/null 2>&1 || return 1
+    local cred="${CLAUDE_RELAY_SLOT_HOME_ROOT}/slot${slot}/.claude/.credentials.json"
+    [[ -f "$cred" ]] || return 1
+    python3 - "$cred" <<'PY' || return 1
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+oauth = payload.get("claudeAiOauth", payload)
+if not isinstance(oauth, dict):
+    raise SystemExit(1)
+for field in ("accessToken", "refreshToken"):
+    value = oauth.get(field)
+    if not isinstance(value, str) or not value:
+        raise SystemExit(1)
+PY
+    printf '%s' "$cred"
 }
 
 is_read_only_instruction() {
@@ -1376,13 +1465,45 @@ run_job() {
     log "  MODEL_CYCLE_CAPPED job=$job_id size=$job_size total=${#MODEL_CYCLE[@]} models=${MODEL_CYCLE[*]}"
     # TOKEN_CYCLE 동적 생성 (MODEL_CYCLE 길이에 맞춤)
     local TOKEN_CYCLE=()
+    # AADS-RUNNER-SLOT-DEPRIORITIZE (2026-09-14)
+    # 한도가 소진된 계정을 첫 시도에서 뒤로 미룬다. 2026-09-14 실측: 계정1 이 주간한도
+    # 429(resets Sep 16, 3am KST) 라 매 job 이 attempt 1 을 40초씩 헛썼다. 최종 status 는
+    # done 이라 상태만 봐서는 보이지 않는 낭비였다.
+    # 만료 시각이 지나면 파일을 지우지 않아도 스스로 원래 순서(1,2,1,2)로 돌아간다 —
+    # 사람이 되돌리는 것을 잊어도 안전하게 복귀한다.
+    local _slot_first=1
+    if [[ -f /root/.claude/slot_limits.env ]]; then
+        # shellcheck disable=SC1091
+        source /root/.claude/slot_limits.env 2>/dev/null || true
+    fi
+    local _slot1_until="${AADS_RUNNER_SLOT1_LIMITED_UNTIL:-0}"
+    [[ "$_slot1_until" =~ ^[0-9]+$ ]] || _slot1_until=0
+    if (( _slot1_until > $(date +%s) )); then
+        _slot_first=2
+        log "  SLOT_DEPRIORITIZE job=$job_id 계정1 한도소진(until=$_slot1_until) → 계정2 우선"
+    fi
     for ((i=0; i<${#MODEL_CYCLE[@]}; i++)); do
-        TOKEN_CYCLE+=($((i % 2 + 1)))
+        if [[ "$_slot_first" == "2" ]]; then
+            TOKEN_CYCLE+=($(( (i + 1) % 2 + 1 )))
+        else
+            TOKEN_CYCLE+=($(( i % 2 + 1 )))
+        fi
     done
+    # AADS-RUNNER-SLOT-LEASE (2026-09-14): 대여 토큰을 job 마다 다시 읽는다.
+    # 스크립트 상단의 source 는 데몬 기동 시 딱 한 번만 돈다. 슬롯이 없는 서버
+    # (contabo14 / cafe24_114)는 contabo116 이 10분마다 밀어 넣는 임시 accessToken 으로
+    # 사는데, 기동 시점 값을 붙들고 있으면 만료되는 순간 그 데몬은 재시작 전까지
+    # 전량 실패한다. 여기서 다시 읽으면 데몬을 안 건드려도 항상 최신 출입증을 쓴다.
+    # 슬롯 자격증명이 있는 contabo116 에서는 이 파일이 없어 아무 일도 하지 않는다.
+    # shellcheck disable=SC1091
+    source /root/scripts/runner.env 2>/dev/null || true
     local TOKEN_1="${ANTHROPIC_AUTH_TOKEN:-}"
     local TOKEN_2="${ANTHROPIC_AUTH_TOKEN_2:-}"
     # C-4: 빈 토큰 가드 — 둘 다 비어있으면 즉시 실패 처리
-    if [[ -z "$TOKEN_1" && -z "$TOKEN_2" ]]; then
+    # 단, 슬롯 자격증명이 살아 있으면 고정 토큰이 없어도 실행 가능하므로 차단하지 않는다.
+    local _slot_cred_available=""
+    _slot_cred_available="$(slot_credentials_file 1 || slot_credentials_file 2 || true)"
+    if [[ -z "$TOKEN_1" && -z "$TOKEN_2" && -z "$_slot_cred_available" ]]; then
         log "FATAL: ANTHROPIC_AUTH_TOKEN / _2 모두 비어있음 — job=$job_id 실패 처리"
         db_update "UPDATE pipeline_jobs SET status='error', phase='token_missing',
                    error_detail='token_missing',
@@ -1411,9 +1532,21 @@ run_job() {
         local cycle_num=$(( attempt / 2 + 1 ))
 
         # 계정 스위치: 토큰 교체 (R-AUTH)
+        # 1순위 — 릴레이 슬롯 자격증명(refresh 가능). CLI 가 만료 전 스스로 갱신하므로
+        #          고정 토큰처럼 한 번 죽으면 끝나는 상태가 되지 않는다.
+        # 2순위 — .env 고정 oat 토큰 (슬롯이 없는 서버의 기존 경로).
         # Claude Code CLI는 OAuth 토큰을 CLAUDE_CODE_OAUTH_TOKEN으로 받아야 한다.
         # oat 토큰을 ANTHROPIC_API_KEY에 넣으면 x-api-key 경로로 전송되어 Invalid API key가 발생한다.
-        if [[ "$token_slot" == "2" && -n "$TOKEN_2" ]]; then
+        local slot_cred_file=""
+        slot_cred_file="$(slot_credentials_file "$token_slot" || true)"
+        if [[ -n "$slot_cred_file" ]]; then
+            # 래퍼가 격리 HOME 에 자격증명을 staging 하고 CLAUDE_CODE_OAUTH_TOKEN 을 unset 한다.
+            # 여기서 고정 토큰을 export 하면 래퍼가 지우기 전까지 우선순위가 뒤집히므로 지운다.
+            unset CLAUDE_CODE_OAUTH_TOKEN 2>/dev/null || true
+            unset ANTHROPIC_API_KEY 2>/dev/null || true
+            unset ANTHROPIC_BASE_URL 2>/dev/null || true
+            log "  TOKEN_SWITCH job=$job_id → 계정${token_slot} via slot_credentials (refreshable)"
+        elif [[ "$token_slot" == "2" && -n "$TOKEN_2" ]]; then
             export CLAUDE_CODE_OAUTH_TOKEN="$TOKEN_2"
             unset ANTHROPIC_API_KEY 2>/dev/null || true
             unset ANTHROPIC_BASE_URL 2>/dev/null || true
@@ -1508,9 +1641,15 @@ ${safe_instruction}"
             # instruction을 temp file로 전달 (arg에 멀티라인/대용량 문자열 깨짐 방지)
             local instr_file="${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt"
             if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'aads-server'; then
-                instr_file="/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt"
+                # /app/scripts 는 마운트가 아니라 이미지에 구워진 경로다. 호스트
+                # scripts/ 에 쓴 파일은 컨테이너에서 절대 보이지 않는다 —
+                # 2026-09-14 확인: 모든 litellm_runner 작업이
+                # FileNotFoundError: '/app/scripts/.litellm_instr_*.txt' 로 죽었고,
+                # 여러 세션이 이를 "러너 계정문제" 로 보고했다.
+                # app/data 는 실제로 마운트돼 있다(→ /app/app/data).
+                instr_file="/root/aads/aads-server/app/data/.litellm_instr_${job_id}.txt"
                 printf '%s' "$safe_instruction" > "$instr_file"
-                local container_instr="/app/scripts/.litellm_instr_${job_id}.txt"
+                local container_instr="/app/app/data/.litellm_instr_${job_id}.txt"
                 timeout "$MAX_RUNTIME" docker exec aads-server python3 /app/scripts/litellm_runner.py \
                     --model "$llm_model_name" \
                     --instruction-file "$container_instr" \
@@ -1543,8 +1682,29 @@ ${safe_instruction}"
             if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
                 claude_args+=(--dangerously-skip-permissions)
             fi
-            timeout "$MAX_RUNTIME" claude "${claude_args[@]}" "$safe_instruction" \
-                > "$output_file" 2> "$err_file" &
+            if [[ -n "$slot_cred_file" ]]; then
+                # timeout 을 래퍼 안쪽에 두어야 한다. 바깥에 두면 래퍼만 죽고
+                # 실제 claude 자식이 고아로 남아 MAX_RUNTIME 이 무의미해진다.
+                # 래퍼는 종료 시 갱신된 자격증명을 원본 슬롯 파일로 되돌려 쓴다.
+                # env -u 로 자식 프로세스에서만 고정 토큰을 지운다.
+                # 2026-09-14 실측: ~/.claude/current.env 가 죽은 ANTHROPIC_AUTH_TOKEN(_2) 를
+                # export 하는데 CLI 는 이 고정 토큰을 slot credential 보다 우선한다.
+                #   "claude.ai connectors are disabled because ANTHROPIC_API_KEY or another
+                #    auth source is set and takes precedence over your claude.ai login"
+                # 이 다섯 개를 지우지 않으면 슬롯 자격증명이 살아 있어도 전량 실패한다.
+                # 셸 자체를 unset 하지 않는 이유는 뒤따르는 레거시 폴백 시도를 망가뜨리지 않기 위함이다.
+                CLAUDE_OAUTH_SLOT="$token_slot" \
+                CLAUDE_SLOT_CREDENTIALS_FILE="$slot_cred_file" \
+                env -u CLAUDE_CODE_OAUTH_TOKEN \
+                    -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_AUTH_TOKEN_2 \
+                    -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL \
+                    "$CLAUDE_SLOT_CREDENTIAL_WRAPPER" \
+                    timeout "$MAX_RUNTIME" "$RUNNER_CLAUDE_CLI_BIN" "${claude_args[@]}" "$safe_instruction" \
+                    < /dev/null > "$output_file" 2> "$err_file" &
+            else
+                timeout "$MAX_RUNTIME" "$RUNNER_CLAUDE_CLI_BIN" "${claude_args[@]}" "$safe_instruction" \
+                    > "$output_file" 2> "$err_file" &
+            fi
             local claude_pid=$!
         fi
 
@@ -1570,11 +1730,18 @@ ${safe_instruction}"
                 fi
                 if grep -qiE "FAILED:|ERROR:|unauthorized|forbidden|invalid.?key|auth" "$err_file" 2>/dev/null; then
                     local _err_msg
-                    _err_msg=$(head -3 "$err_file" | tr '\n' ' ' | head -c 100)
+                    # head -3 은 stderr 맨 위, 즉 Codex 시작 배너를 집는다. 그래서
+                    # 로그에 "Reading additional input from stdin... OpenAI Codex"
+                    # 만 남고 진짜 원인이 가려졌다(2026-09-14: 실제 원인은
+                    # FileNotFoundError 였는데 세 세션이 계정 문제로 오진했다).
+                    # 패턴에 걸린 줄을 그대로 남긴다.
+                    _err_msg=$(grep -iEm3 "FAILED:|ERROR:|unauthorized|forbidden|invalid.?key|auth" "$err_file" 2>/dev/null | tr '\n' ' ' | head -c 160)
+                    [[ -n "$_err_msg" ]] || _err_msg=$(head -3 "$err_file" | tr '\n' ' ' | head -c 100)
                     if grep -qiE "refresh_token_reused|token_expired|Please log out and sign in again" "$err_file" 2>/dev/null; then
                         mark_codex_auth_disabled "$_err_msg"
                     fi
                     log "  CODEX_ERROR_SKIP job=$job_id reason='${_err_msg}' → immediate fallback"
+                    lookup_error_book "$err_file" "$job_id"
                     db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} 즉시폴백: ${_err_msg:0:60}' WHERE job_id='${job_id}';"
                     break
                 fi
@@ -1600,6 +1767,7 @@ ${safe_instruction}"
 
         # LiteLLM instruction temp file 정리
         [[ -f "${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt" ]] && rm -f "${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt"
+        [[ -f "/root/aads/aads-server/app/data/.litellm_instr_${job_id}.txt" ]] && rm -f "/root/aads/aads-server/app/data/.litellm_instr_${job_id}.txt"
         [[ -f "/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt" ]] && rm -f "/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt"
 
         # 방어: Codex 출력 실패 감지
@@ -1721,6 +1889,48 @@ $out_tail")
 
     # v2.2: committed(Claude가 커밋한 변경) + uncommitted diff 모두 캡처
     cd "$workdir"
+    # v2.3 (2026-09-14, ACCT-FLOWMAP 반복 no_changes 원인 수정):
+    # git diff/git diff HEAD는 untracked 신규 파일의 내용을 보여주지 않는다.
+    # "새 디렉터리에 새 파일만 추가" 지시를 따른 job은 전부 untracked라서
+    # 실제로 파일을 만들었어도 git_diff가 항상 비어 no_changes로 오판된다.
+    # intent-to-add(-N)로 신규 파일을 표시해 git diff가 내용을 포함하게 한다.
+    local _new_untracked=""
+    _new_untracked=$(git ls-files --others --exclude-standard 2>/dev/null) || true
+    if [[ -n "$_new_untracked" ]]; then
+        printf '%s\n' "$_new_untracked" | xargs -d '\n' -r git add -N -- 2>/dev/null || true
+    fi
+    # v2.4 (2026-09-15, ACCT-FLOWMAP 5연속 no_changes 원인 수정):
+    # v2.3 의 intent-to-add 는 --exclude-standard 를 쓴다. 그런데 진아실장 저장소는
+    # .gitignore 17번째 줄이 '*' 인 화이트리스트 방식이라(!채팅앱/**/*.html 처럼 되살린다),
+    # Claude 가 새로 만든 산출물이 전부 ignored 로 걸러져 한 건도 잡히지 않았다.
+    # run c/d/e 는 Write 를 실제로 성공시켰는데도 changed_files=0 으로 오판돼
+    # cancelled 처리되고 워크트리째 삭제됐다(2026-09-14 세션 로그 실측).
+    #
+    # 표준 목록이 비었을 때만, 워크트리 생성 시각(.git 파일 mtime)보다 새 파일을
+    # 파일시스템에서 직접 찾아 -f 로 intent-to-add 한다. 표준 목록이 비지 않는
+    # 일반 저장소(AADS/KIS/GO100/SF/NTV2)에서는 이 블록이 아예 실행되지 않으므로
+    # 기존 동작에 영향이 없다.
+    if [[ -z "${_new_untracked//[[:space:]]/}" && -n "${worktree_dir:-}" && -e "${worktree_dir}/.git" ]]; then
+        # --exclude-standard 를 뺀 untracked 목록에서 시작한다. 갓 만든 워크트리에는
+        # 추적 파일만 체크아웃돼 있으므로 여기 남는 것은 이번 작업이 만든 파일뿐이다.
+        # 그래도 안전하게 워크트리 생성시각(.git mtime)보다 새 것만 통과시킨다.
+        # find 단독으로 훑으면 체크아웃된 추적 파일이 전부 걸려 200개 상한을 잡아먹는다.
+        local _ignored_cand=""
+        _ignored_cand=$(git ls-files --others 2>/dev/null \
+            | grep -vE '(^|/)(node_modules|__pycache__|\.venv|venv|dist|build|\.next)/' \
+            | grep -vE '\.(pyc|pyo|log)$') || true
+        local _ignored_new=""
+        if [[ -n "${_ignored_cand//[[:space:]]/}" ]]; then
+            _ignored_new=$(printf '%s\n' "$_ignored_cand" | while IFS= read -r _f; do
+                [[ -n "$_f" && -f "$_f" && "$_f" -nt "${worktree_dir}/.git" ]] && printf '%s\n' "$_f"
+            done | head -200) || true
+        fi
+        if [[ -n "${_ignored_new//[[:space:]]/}" ]]; then
+            log "  UNTRACKED_IGNORED_RESCUE job=$job_id files=$(printf '%s\n' "$_ignored_new" | sed '/^$/d' | wc -l) — .gitignore 에 가려진 신규 산출물 복구"
+            printf '%s\n' "$_ignored_new" | sed '/^$/d' | xargs -d '\n' -r git add -fN -- 2>/dev/null || true
+            _new_untracked="$_ignored_new"
+        fi
+    fi
     local git_diff=""
     local _current_head=""
     _current_head=$(git rev-parse HEAD 2>/dev/null) || _current_head=""
