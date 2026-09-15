@@ -31,6 +31,7 @@ AGENTS.md 에 이렇게 적혀 있다 — "에이전트는 자기가 쓴 규칙�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -128,6 +129,23 @@ def _code_relevant_text(blob: str) -> str:
     return _PATH_TOKEN.sub(" ", blob)
 
 
+def _work_key(session_id: str, tool_name: str, summary: str) -> str:
+    """요청을 가리키는 키. **프로세스가 달라도 같아야 한다.**
+
+    예전에는 파이썬 내장 `hash()` 를 썼다. 문자열 해시는 프로세스마다
+    무작위로 바뀐다(PYTHONHASHSEED). API 워커가 여러 개라, 요청을 남긴
+    워커와 승인을 확인하는 워커가 다르면 **같은 명령인데 키가 달라졌다.**
+
+    결과는 이랬다 — 승인 카드는 뜨는데 눌러도 실행되지 않고, 다음 시도에서
+    또 같은 카드가 새로 뜬다. 중복 요청이 쌓이던 것도 같은 원인이다.
+
+    sha1 은 어느 프로세스에서 돌려도 같은 값을 준다. 비밀을 다루는 자리가
+    아니므로 속도만 보면 된다.
+    """
+    digest = hashlib.sha1(summary.encode("utf-8", "replace")).hexdigest()[:7]
+    return "%s:%s:%s" % (session_id[:8], tool_name, digest)
+
+
 def _text_of(tool_input: Dict[str, Any]) -> str:
     parts = []
     for key in ("file_path", "path", "command", "query", "sql", "target", "task", "project"):
@@ -212,7 +230,7 @@ async def request_approval(
     from app.core.db_pool import get_pool
 
     summary = (_text_of(tool_input) or "")[:400]
-    work_key = f"{session_id[:8]}:{tool_name}:{hash(summary) & 0xFFFFFFF:07x}"
+    work_key = _work_key(session_id, tool_name, summary)
     try:
         pool = get_pool()
         # `decision` 은 NOT NULL 이고 기본값이 'pending' 이다. NULL 로 찾으면
@@ -305,21 +323,183 @@ async def notify_only(
     return request_id
 
 
+async def _active_goal_ids(session_id: str) -> list:
+    """이 세션이 지금 참여 중인 목표들. 끝난 목표는 빠진다."""
+    if not session_id:
+        return []
+    from app.core.db_pool import get_pool
+
+    try:
+        rows = await get_pool().fetch(
+            """
+            SELECT g.id::text AS id
+            FROM goal_task_links l
+            JOIN goals g ON g.id = l.goal_id
+            WHERE l.task_type = 'chat_session' AND l.task_id = $1
+              AND COALESCE(l.link_state, 'active') = 'active'
+              AND g.status IN ('draft', 'active', 'blocked')
+            """,
+            session_id,
+        )
+        return [r["id"] for r in rows]
+    except Exception as exc:
+        logger.warning("active_goal_lookup_failed session=%s error=%s",
+                       session_id[:8], str(exc)[:120])
+        return []
+
+
+async def goal_policy_allows(
+    session_id: str,
+    tool_name: str,
+    tool_input: Dict[str, Any],
+    risk_level: str,
+) -> Optional[str]:
+    """목표에 걸어 둔 승인 설정이 이 일을 허락하는가. 허락하면 목표 id.
+
+    2026-09-15 대표님 지시 — "골에 승인게이트 승인관련 설정할수 있게 반영해",
+    "내가 계속 쳐다 봐야하잖아".
+
+    목표 하나를 끝내는 동안 같은 종류의 변경이 수십 번 나온다. 그때마다
+    물으면 대표님이 화면을 떠날 수 없다. 그래서 **목표 단위로 미리** 허락을
+    받아 둔다.
+
+    세 가지를 지킨다.
+
+    1. **주문·자금(critical)은 기본 꺼짐이다.** 코드 수정을 미리 허락하는 것과
+       주문을 미리 허락하는 것은 다른 얘기다. 켜려면 따로 켜야 한다.
+    2. **횟수 상한이 있다.** 무제한이면 설정이 아니라 게이트 해제다.
+    3. **쓸 때마다 남긴다.** 자동 통과도 기록이 남아야 나중에 "언제부터
+       무엇이 그냥 나갔나" 를 볼 수 있다.
+
+    목표가 끝나거나 담당이 떨어지면 설정도 같이 끝난다 — 따로 회수하지
+    않아도 된다.
+    """
+    if not session_id:
+        return None
+    from app.core.db_pool import get_pool
+
+    field = "auto_approve_critical" if risk_level == "critical" else "auto_approve_high"
+    try:
+        pool = get_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT g.id::text AS id, g.title,
+                   COALESCE((g.approval_policy->>$2)::boolean, false) AS allowed,
+                   COALESCE((g.approval_policy->>'max_executions')::int, 0) AS max_exec,
+                   COALESCE((g.approval_policy->>'used')::int, 0) AS used
+            FROM goal_task_links l
+            JOIN goals g ON g.id = l.goal_id
+            WHERE l.task_type = 'chat_session' AND l.task_id = $1
+              AND COALESCE(l.link_state, 'active') = 'active'
+              AND g.status IN ('draft', 'active', 'blocked')
+              AND COALESCE((g.approval_policy->>$2)::boolean, false)
+            ORDER BY g.updated_at DESC
+            LIMIT 1
+            """,
+            session_id, field,
+        )
+    except Exception as exc:
+        logger.warning("goal_policy_lookup_failed session=%s error=%s",
+                       session_id[:8], str(exc)[:140])
+        return None
+
+    if not row or not row["allowed"]:
+        return None
+    if int(row["used"]) >= int(row["max_exec"] or 0):
+        logger.info("goal_policy_exhausted goal=%s used=%s max=%s",
+                    row["id"][:8], row["used"], row["max_exec"])
+        return None
+
+    try:
+        await pool.execute(
+            "UPDATE goals SET approval_policy = jsonb_set(approval_policy, '{used}', "
+            "       to_jsonb(COALESCE((approval_policy->>'used')::int, 0) + 1), true), "
+            "       updated_at = NOW() WHERE id = $1::uuid",
+            row["id"],
+        )
+    except Exception as exc:
+        logger.warning("goal_policy_count_failed goal=%s error=%s",
+                       row["id"][:8], str(exc)[:140])
+
+    # 자동으로 나간 것도 화면에 남는다. 안 보이면 없는 것과 같다.
+    await notify_only(
+        tool_name, tool_input,
+        "목표 승인 설정으로 통과 (%s, %d/%d회)"
+        % (row["title"][:40], int(row["used"]) + 1, int(row["max_exec"] or 0)),
+        session_id=session_id,
+        tenant_id=str(tool_input.get("tenant_id") or ""),
+        gate_source="goal_policy", risk_level=risk_level or "high",
+        label="목표 승인",
+    )
+    return str(row["id"])
+
+
 async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: str = "") -> bool:
-    """이미 승인된 요청인지."""
+    """이미 승인된 **범위** 안인지.
+
+    예전에는 `work_key` 하나로만 찾았다. 그 키에 명령 본문 해시가 들어 있어
+    **명령이 한 글자만 달라도 새 승인을 요구**했다. "이 미션 동안" 을 눌러도
+    다음 수정에서 또 물었다는 뜻이다 — 대표님이 화면을 계속 쳐다봐야 했던
+    이유다(2026-09-15 지적).
+
+    이제 범위를 실제로 본다.
+
+        single   이 요청 하나 (work_key 정확히 일치)
+        mission  같은 세션 + 같은 도구
+        goal     그 목표가 살아 있는 동안 + 같은 도구
+
+    **무제한은 없다.** 어느 범위든 횟수 상한을 넘기면 다시 묻는다. 목표가
+    끝나면 `_active_goal_ids` 에서 빠지므로 골 승인도 자동으로 닫힌다.
+    """
     from app.core.db_pool import get_pool
 
     summary = (_text_of(tool_input) or "")[:400]
-    work_key = f"{session_id[:8]}:{tool_name}:{hash(summary) & 0xFFFFFFF:07x}"
+    work_key = _work_key(session_id, tool_name, summary)
+    goal_ids = await _active_goal_ids(session_id)
     try:
-        row = await get_pool().fetchrow(
-            "SELECT decision, max_executions FROM agent_permission_requests "
-            "WHERE work_key = $1 AND decision = 'approved' AND expires_at > now() "
-            "ORDER BY decided_at DESC LIMIT 1",
-            work_key,
+        pool = get_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT id::text AS id, max_executions,
+                   COALESCE((approval_scope->>'used')::int, 0) AS used,
+                   COALESCE(approval_scope->>'scope', 'single') AS scope
+            FROM agent_permission_requests
+            WHERE decision = 'approved' AND expires_at > now()
+              AND (
+                    work_key = $1
+                 OR (approval_scope->>'scope' = 'mission'
+                     AND requested_by = $2 AND action_type = $3)
+                 OR (approval_scope->>'scope' = 'goal'
+                     AND action_type = $3
+                     AND approval_scope->>'goal_id' = ANY($4::text[]))
+              )
+            ORDER BY CASE COALESCE(approval_scope->>'scope', 'single')
+                         WHEN 'goal' THEN 0 WHEN 'mission' THEN 1 ELSE 2 END,
+                     decided_at DESC
+            LIMIT 1
+            """,
+            work_key, session_id, tool_name, goal_ids or [""],
         )
-        return bool(row)
-    except Exception:
+        if not row:
+            return False
+        if int(row["used"]) >= int(row["max_executions"] or 1):
+            logger.info(
+                "approval_exhausted id=%s scope=%s used=%s max=%s",
+                row["id"][:8], row["scope"], row["used"], row["max_executions"],
+            )
+            return False
+        # 쓴 횟수를 센다. 세지 않으면 상한이 장식이 된다.
+        await pool.execute(
+            "UPDATE agent_permission_requests "
+            "   SET approval_scope = jsonb_set(approval_scope, '{used}', "
+            "       to_jsonb(COALESCE((approval_scope->>'used')::int, 0) + 1), true), "
+            "       updated_at = now() "
+            " WHERE id = $1::uuid",
+            row["id"],
+        )
+        return True
+    except Exception as exc:
+        logger.warning("is_approved_failed error=%s", str(exc)[:160])
         return False
 
 
@@ -347,6 +527,16 @@ async def check(tool_name: str, tool_input: Dict[str, Any]) -> Optional[str]:
     if await is_approved(tool_name, tool_input, session_id):
         logger.info("live_trading_gate_approved_pass tool=%s session=%s",
                     tool_name, session_id[:8])
+        return None
+
+    # 목표에 걸어 둔 승인 설정. 대표님이 그 목표 동안 미리 허락해 두신 등급이면
+    # 여기서 통과한다 — 매번 묻지 않기 위해 존재한다.
+    goal_pass = await goal_policy_allows(session_id, tool_name, tool_input, risk_level)
+    if goal_pass:
+        logger.info(
+            "live_trading_gate_goal_policy_pass tool=%s session=%s goal=%s risk=%s",
+            tool_name, session_id[:8], goal_pass[:8], risk_level,
+        )
         return None
 
     request_id = await request_approval(

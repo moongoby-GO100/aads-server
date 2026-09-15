@@ -1,6 +1,8 @@
 """Goals API — 목표 Control Loop 엔드포인트."""
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -440,6 +442,99 @@ async def add_goal_owner(goal_id: str, req: AddOwnerRequest):
             "자기가 무엇을 하는 사람인지 모르는 채로 시작합니다."
         ),
     }
+
+
+class GoalApprovalPolicyRequest(BaseModel):
+    auto_approve_high: bool = Field(False, description="실매매 코드 수정을 이 목표 동안 미리 승인")
+    auto_approve_critical: bool = Field(False, description="주문·자금·서비스 재기동까지 미리 승인")
+    max_executions: int = Field(200, ge=0, le=5000, description="목표 전체 허용 횟수")
+
+
+@router.get("/goals/{goal_id}/approval-policy")
+async def get_goal_approval_policy(goal_id: str):
+    """이 목표에 걸린 승인 설정."""
+    from app.core.db_pool import get_pool
+
+    row = await get_pool().fetchrow(
+        "SELECT COALESCE(approval_policy, '{}'::jsonb) AS p, title, status "
+        "FROM goals WHERE id = $1::uuid",
+        goal_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="goal_not_found")
+    policy = row["p"] if isinstance(row["p"], dict) else json.loads(row["p"] or "{}")
+    return {
+        "goal_id": goal_id, "title": row["title"], "status": row["status"],
+        "auto_approve_high": bool(policy.get("auto_approve_high")),
+        "auto_approve_critical": bool(policy.get("auto_approve_critical")),
+        "max_executions": int(policy.get("max_executions") or 0),
+        "used": int(policy.get("used") or 0),
+        "set_by": policy.get("set_by") or "",
+        "set_at": policy.get("set_at") or "",
+    }
+
+
+@router.post("/goals/{goal_id}/approval-policy")
+async def set_goal_approval_policy(goal_id: str, req: GoalApprovalPolicyRequest):
+    """이 목표 동안 미리 승인해 둘 범위를 정한다.
+
+    2026-09-15 대표님 지시 — "실매매 코드 수정도 골 달성시까지 승인",
+    "내가 계속 쳐다 봐야하잖아".
+
+    목표 하나를 끝내는 동안 같은 종류의 변경이 수십 번 나온다. 그때마다
+    물으면 대표님이 화면을 떠날 수 없다.
+
+    **주문·자금(critical)은 따로 켜야 한다.** 코드 수정을 미리 허락하는 것과
+    주문을 미리 허락하는 것은 다른 얘기다. 그리고 횟수 상한이 없으면 설정이
+    아니라 게이트 해제다 — 상한을 반드시 받는다.
+
+    목표가 끝나면 설정도 같이 끝난다. 따로 회수하지 않아도 된다.
+    """
+    from app.core.db_pool import get_pool
+
+    if (req.auto_approve_high or req.auto_approve_critical) and req.max_executions <= 0:
+        raise HTTPException(status_code=400, detail="허용 횟수를 1 이상으로 정해 주십시오")
+
+    # 켤 때 사용 횟수를 0 으로 되돌린다. 끌 때는 기록을 남겨 둔다.
+    payload = {
+        "auto_approve_high": bool(req.auto_approve_high),
+        "auto_approve_critical": bool(req.auto_approve_critical),
+        "max_executions": int(req.max_executions),
+        "set_by": "CEO",
+        "set_at": datetime.now(timezone.utc).isoformat(),
+    }
+    row = await get_pool().fetchrow(
+        "UPDATE goals "
+        "   SET approval_policy = COALESCE(approval_policy, '{}'::jsonb) "
+        "       || $2::jsonb "
+        "       || jsonb_build_object('used', CASE WHEN $3 THEN 0 "
+        "              ELSE COALESCE((approval_policy->>'used')::int, 0) END), "
+        "       updated_at = NOW() "
+        " WHERE id = $1::uuid RETURNING id::text AS id, title",
+        goal_id, json.dumps(payload),
+        bool(req.auto_approve_high or req.auto_approve_critical),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="goal_not_found")
+
+    # 미리 승인해 둔 사실 자체가 기록으로 남아야 한다.
+    try:
+        from app.services import ohvis_alert
+
+        on = req.auto_approve_high or req.auto_approve_critical
+        await ohvis_alert.notify(
+            "목표 승인 설정 %s — %s" % ("켬" if on else "끔", row["title"][:40]),
+            "실매매 코드 %s · 주문·자금 %s · 허용 %d회"
+            % ("자동" if req.auto_approve_high else "승인 필요",
+               "자동" if req.auto_approve_critical else "승인 필요",
+               req.max_executions),
+            severity=ohvis_alert.WARNING if req.auto_approve_critical else ohvis_alert.INFO,
+            category="approval_policy", project="AADS",
+        )
+    except Exception:
+        pass
+
+    return {"ok": True, "goal_id": row["id"], "title": row["title"], **payload}
 
 
 class GoalLeadRequest(BaseModel):
