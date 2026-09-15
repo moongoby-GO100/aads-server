@@ -137,3 +137,18 @@ def test_goal_policy_defaults_critical_off():
     assert "auto_approve_critical" in body
     assert "auto_approve_high" in body
     assert "false" in body  # COALESCE(..., false) — 기본은 꺼짐
+
+
+def test_goal_policy_is_bound_to_the_goal_project():
+    """GO100 목표에 켠 설정이 AADS 파일까지 열면 안 된다.
+
+    2026-09-15 실측 — 자동 승인이 켜진 목표 3건은 전부 GO100 인데 각각
+    채팅 세션 8~10 개가 묶여 있었다. 조회가 프로젝트를 보지 않아 그
+    세션의 AADS 변경까지 같은 설정으로 통과했다.
+    """
+    import inspect
+
+    body = inspect.getsource(guard.goal_policy_allows)
+    assert "UPPER(COALESCE(g.project, '')) = $3" in body, "목표 정책이 프로젝트를 보지 않는다"
+    # 대상 프로젝트를 모르는 호출은 통과시키지 않는다.
+    assert "$3 <> ''" in body
