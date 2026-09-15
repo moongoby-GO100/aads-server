@@ -1412,7 +1412,11 @@ async def _fetch_registry_rows(conn: asyncpg.Connection) -> list[dict[str, Any]]
                    retired_at, verification_status, last_verified_at, capabilities,
                    pricing, is_selectable, is_executable
             FROM llm_models
-            ORDER BY provider, family, model_id
+            ORDER BY
+                CASE WHEN metadata->'raw'->>'created' ~ '^[0-9]+$'
+                     THEN (metadata->'raw'->>'created')::bigint
+                     ELSE NULL END DESC NULLS LAST,
+                provider, family, model_id
             """
         )
     except asyncpg.UndefinedTableError:
