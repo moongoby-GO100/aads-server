@@ -4890,6 +4890,39 @@ async def set_slot_enabled(req: SlotEnableRequest):
     return result
 
 
+class SlotProjectsRequest(BaseModel):
+    projects: list[str] = Field(default_factory=list, description="이 슬롯을 먼저 쓸 프로젝트들")
+
+
+@router.get("/settings/auth-keys/slot-projects")
+async def get_slot_projects():
+    """슬롯별 프로젝트 배정 전체.
+
+    배정이 없는 슬롯은 목록에 없고, 그 뜻은 **모든 프로젝트가 쓴다** 이다.
+    """
+    from app.services.slot_projects import slot_project_map
+
+    mapping = await slot_project_map(force=True)
+    return {"slots": {slot: sorted(keys) for slot, keys in mapping.items()}}
+
+
+@router.post("/settings/auth-keys/slot-projects/{slot}")
+async def set_slot_projects(slot: str, req: SlotProjectsRequest):
+    """이 슬롯을 먼저 쓸 프로젝트들을 정한다.
+
+    2026-09-15 대표님 지시 — "슬롯에 복수의 프로젝트를 지정하고 지정된
+    프로젝트는 해당 슬롯을 우선 사용… 미설정시 전체 프로젝트에서 사용가능".
+
+    빈 목록을 보내면 배정이 풀려 다시 모든 프로젝트가 쓴다.
+    """
+    from app.services.slot_projects import set_projects
+
+    result = await set_projects(str(slot).strip(), req.projects)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "적용 실패"))
+    return result
+
+
 @router.post("/settings/auth-keys/slot-probe/{slot}")
 async def probe_slot_usage(slot: str):
     """그 계정에 최소 호출 한 번을 보내 한도 헤더를 받아온다.

@@ -353,8 +353,38 @@ async def _slot_gate_enabled(slot: str) -> bool:
         return False
 
 
-async def _get_claude_slot_records() -> Dict[str, Dict[str, Any]]:
-    """Anthropic DB priority를 relay slot 기준으로 재구성."""
+async def _slot_assigned_to_project(slot: str, project: str) -> bool:
+    """이 프로젝트에 이 슬롯이 배정돼 있나. 못 읽으면 배정 없음으로 본다."""
+    if not project:
+        return False
+    try:
+        from app.services.slot_projects import is_assigned
+
+        return await is_assigned(slot, project)
+    except Exception as exc:
+        logger.debug("slot_assignment_lookup_failed: %s", str(exc)[:120])
+        return False
+
+
+async def _session_project_key(session_id: Optional[str]) -> str:
+    """이 대화가 속한 프로젝트 키. 못 찾으면 빈 문자열."""
+    if not session_id:
+        return ""
+    try:
+        from app.services.slot_projects import project_of_session
+
+        return await project_of_session(str(session_id))
+    except Exception as exc:
+        logger.debug("session_project_lookup_failed: %s", str(exc)[:120])
+        return ""
+
+
+async def _get_claude_slot_records(project: str = "") -> Dict[str, Dict[str, Any]]:
+    """Anthropic DB priority를 relay slot 기준으로 재구성.
+
+    `project` 가 주어지고 그 프로젝트에 배정된 슬롯이면, 최후 수단 스위치를
+    묻지 않는다 — 배정한 것 자체가 허락이다 (2026-09-15 대표님 지시).
+    """
     try:
         records = await _ap_get_key_records_async(include_rate_limited=True)
     except Exception as e:
@@ -370,10 +400,17 @@ async def _get_claude_slot_records() -> Dict[str, Dict[str, Any]]:
         if slot not in _KNOWN_SLOTS:
             dropped.append("%s(slot=%r)" % (record.get("label") or record.get("key_name"), slot))
             continue
-        if slot in _LAST_RESORT_SLOTS and not await _slot_gate_enabled(slot):
+        if (
+            slot in _LAST_RESORT_SLOTS
+            and not await _slot_assigned_to_project(slot, project)
+            and not await _slot_gate_enabled(slot)
+        ):
             # 대표님이 켜지 않은 최후 수단 슬롯은 후보에 넣지 않는다.
             # 순서만 뒤로 미루면, 1·2 가 동시에 막히는 날 아무도 켜지 않았는데
             # 남의 한도가 새어나간다.
+            #
+            # 다만 그 프로젝트에 **배정된** 슬롯이면 묻지 않는다. 배정이
+            # 곧 허락이고, 그러지 않으면 배정해 두고도 스위치를 또 켜야 한다.
             gated_off.append("%s(slot=%s)" % (record.get("label") or record.get("key_name"), slot))
             continue
         if slot in slot_records:
@@ -2295,11 +2332,22 @@ async def call_stream(
     route_backend = str(route_metadata.get("execution_backend") or "").strip()
 
     # Claude 모델 → DB priority 기반 계정 교차 폴백 (rate limit은 계정별)
-    _slot_records = await _get_claude_slot_records()
+    #
+    # 프로젝트 배정을 먼저 본다. 배정된 슬롯을 가진 프로젝트는 그 슬롯을
+    # 먼저 집고, 남의 프로젝트에 배정된 슬롯은 후보에서 빠진다
+    # (2026-09-15 대표님 지시). 배정이 없으면 종전 그대로 전역 순서다.
+    _project_key = await _session_project_key(session_id)
+    _slot_records = await _get_claude_slot_records(project=_project_key)
     _ACCOUNT_SLOTS = [slot for slot, _record in sorted(
         _slot_records.items(),
         key=lambda item: _slot_sort_key(item[0], item[1]),
     )]
+    try:
+        from app.services.slot_projects import order_slots_for_project
+
+        _ACCOUNT_SLOTS = await order_slots_for_project(_ACCOUNT_SLOTS, _project_key)
+    except Exception as _sp_err:
+        logger.warning("slot_project_order_failed: %s", str(_sp_err)[:120])
     if not _ACCOUNT_SLOTS:
         _ACCOUNT_SLOTS = ["2", "1"] if _CLAUDE_RELAY_NAVER_FIRST else ["1", "2"]
     _MODEL_DOWNGRADE = {
