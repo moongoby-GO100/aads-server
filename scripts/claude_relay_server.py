@@ -449,6 +449,49 @@ def _read_oauth_state_disk_cache():
     return rows if isinstance(rows, list) and rows else None
 
 
+# 이어받기가 연달아 실패한 대화를 세어 둔다.
+#
+# "대화 없음" 만 매핑을 버리는 사유로 좁혔더니, 다른 이유로 이어받기가 계속
+# 실패하는 대화(예: 도구 호출 중간에 끊겨 tool_result 가 빈 대화)를 영원히
+# 다시 시도할 수 있게 됐다. 한 번 실패하면 다음엔 이어받기 없이 가고, 두 번
+# 실패하면 매핑을 버린다. 낭비는 최대 한 번이다.
+_resume_failures = {}  # type: dict
+_RESUME_SKIP_AFTER = 1
+_RESUME_DROP_AFTER = 2
+
+
+def _is_missing_conversation_error(text):
+    """CLI 가 --resume 대상 대화를 못 찾은 경우인지.
+
+    이것만이 매핑을 버려야 하는 사유다. 예전에는 **실패이기만 하면** 매핑을
+    지웠다 — 와치독이 끊었든, 클라이언트가 닫혔든, 한도에 걸렸든. 그래서 한
+    번 삐끗하면 대화가 영구히 버려지고 다음 시도는 처음부터 시작했다.
+    """
+    lowered = str(text or "").lower()
+    return "no conversation found" in lowered and "session id" in lowered
+
+
+def _remember_cli_session(aads_session_id, slot, resume_model, cli_session_id):
+    """CLI 세션 매핑을 남긴다.
+
+    **시작하자마자** 남긴다. 예전에는 CLI 가 종료코드 0 으로 끝났을 때만
+    저장해서, 중단된 턴은 자기 CLI 세션 id 를 알면서도 버렸다. 그러면 다음
+    시도가 이어받을 수 없어 도구 작업을 통째로 다시 한다 — 2026-09-15
+    08:20 #310 주도 세션에서 17분치 도구 4건이 그렇게 사라졌다.
+
+    슬롯이 키에 들어 있으므로, 이렇게 일찍 저장해도 다른 계정이 남의 대화를
+    --resume 할 위험은 없다.
+    """
+    if not aads_session_id or not cli_session_id:
+        return
+    key = _session_key(aads_session_id, slot, resume_model)
+    if not key or _session_map.get(key) == cli_session_id:
+        return
+    _session_map[key] = cli_session_id
+    _save_session_map()
+    logger.info("Session mapped: key=%s -> cli=%s", key[:20], str(cli_session_id)[:8])
+
+
 def _is_rate_limited_row(row):
     until = (row or {}).get("rate_limited_until")
     if not until:
@@ -1498,7 +1541,19 @@ async def handle_stream(request):
     else:
         token, slot, label = "", "0", "proxy"
 
-    cli_session_id = _session_map.get(_session_key(aads_session_id, slot, resume_model)) if aads_session_id else None
+    _resume_key = _session_key(aads_session_id, slot, resume_model) if aads_session_id else ""
+    cli_session_id = _session_map.get(_resume_key) if _resume_key else None
+    if cli_session_id is not None:
+        _fails = _resume_failures.get(_resume_key, 0)
+        if _fails >= _RESUME_DROP_AFTER:
+            _session_map.pop(_resume_key, None)
+            _resume_failures.pop(_resume_key, None)
+            _save_session_map()
+            cli_session_id = None
+            logger.warning("Dropped unusable session mapping: key=%s", _resume_key[:20])
+        elif _fails >= _RESUME_SKIP_AFTER:
+            cli_session_id = None
+            logger.info("Skipping resume once after failure: key=%s", _resume_key[:20])
     is_resume = cli_session_id is not None
 
     mcp_config_path = None
@@ -1677,6 +1732,11 @@ async def handle_stream(request):
                         log("claude_model_execution: session=%s evidence=%s", aads_session_id, json.dumps(evidence))
                     if evt_type == "system" and event.get("subtype") == "init":
                         captured_cli_session_id = event.get("session_id")
+                        # 끝날 때까지 기다리지 않는다. 중단되면 그 id 를 영영
+                        # 못 쓰고, 다음 시도가 처음부터 다시 해야 한다.
+                        _remember_cli_session(
+                            aads_session_id, slot, resume_model, captured_cli_session_id,
+                        )
                         if _DIRECT_OAUTH_ENABLED:
                             event["claude_auth_mode"] = "direct"
                             event["oauth_slot"] = slot
@@ -1834,19 +1894,35 @@ async def handle_stream(request):
                             aads_session_id[:8],
                         )
                 _stale_key = _session_key(aads_session_id, slot, resume_model)
-                if is_resume and _stale_key and _stale_key in _session_map:
+                _failure_text = stderr_text or last_result_error
+                if (
+                    is_resume
+                    and _stale_key
+                    and _stale_key in _session_map
+                    and _is_missing_conversation_error(_failure_text)
+                ):
                     del _session_map[_stale_key]
                     _save_session_map()
                     logger.info("Cleared stale session: key=%s", _stale_key[:20])
+                elif is_resume and _stale_key in _session_map:
+                    # 실패했지만 대화가 없어진 것은 아니다. 버리지 않는다 —
+                    # 버리면 다음 시도가 이어받지 못해 같은 일을 처음부터 다시
+                    # 한다. 다만 연속 실패는 세어 둔다.
+                    _resume_failures[_stale_key] = _resume_failures.get(_stale_key, 0) + 1
+                    logger.info(
+                        "Kept session mapping after failure: key=%s rc=%s fails=%s",
+                        _stale_key[:20], proc.returncode, _resume_failures[_stale_key],
+                    )
+                elif _stale_key:
+                    _resume_failures.pop(_stale_key, None)
 
-            # 실패(exit!=0) 시 세션 저장 금지 — OAuth 슬롯 폴백 시 잘못된 --resume 방지
-            if proc.returncode == 0 and aads_session_id and captured_cli_session_id:
-                _map_key = _session_key(aads_session_id, slot, resume_model)
-                old_cli = _session_map.get(_map_key)
-                if old_cli != captured_cli_session_id:
-                    _session_map[_map_key] = captured_cli_session_id
-                    _save_session_map()
-                    logger.info("Session mapped: key=%s -> cli=%s", _map_key[:20], captured_cli_session_id[:8])
+            # init 에서 이미 남겼지만, result 이벤트로만 id 가 온 경우를 위해
+            # 한 번 더 부른다(같으면 아무것도 하지 않는다).
+            _remember_cli_session(
+                aads_session_id, slot, resume_model, captured_cli_session_id,
+            )
+            if proc.returncode == 0 and _resume_key:
+                _resume_failures.pop(_resume_key, None)
             try:
                 await _stream_write_eof(response)
             except ConnectionResetError:
