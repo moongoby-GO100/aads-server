@@ -1389,6 +1389,10 @@ async def approvals_decide(
                                  -- 프로젝트 범위가 이 값으로 맞춘다. 대상
                                  -- 지문과 같은 이유로 요청 시점 값을 옮긴다.
                                  'project', COALESCE(a.approval_scope->>'project', ''),
+                                 -- 파일 내용 지문도 같은 이유로 옮긴다. 여기서
+                                 -- 빠뜨리면 승인 즉시 지문이 사라져 파일이
+                                 -- 바뀌어도 재승인 없이 통과한다(2026-09-15).
+                                 'file_fp', COALESCE(a.approval_scope->>'file_fp', ''),
                                  'mission_key', CASE WHEN eff.scope = 'mission'
                                      THEN split_part(a.work_key, ':', 1) || ':'
                                           || split_part(a.work_key, ':', 2)
