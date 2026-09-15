@@ -4890,6 +4890,80 @@ async def set_slot_enabled(req: SlotEnableRequest):
     return result
 
 
+class SlotTokenRequest(BaseModel):
+    token: str = Field(..., min_length=20, description="새 OAuth 액세스 토큰")
+
+
+@router.post("/settings/auth-keys/slot-token/{slot}")
+async def replace_slot_token(slot: str, req: SlotTokenRequest):
+    """그 슬롯의 토큰을 새 값으로 바꾼다.
+
+    2026-09-15 대표님 지시 — "상단바에 토큰도 1줄로 해결되게".
+
+    슬롯 3(진아)에는 리프레시 토큰이 없어 자동 갱신이 불가능하다. 죽으면
+    사람이 새 값을 넣는 수밖에 없는데, 그때마다 서버에 들어가 `.env` 를
+    고치고 있었다. 화면에서 바로 끝나게 한다.
+
+    **토큰은 본문으로만 받는다.** 쿼리스트링에 실으면 접근 로그에 남는다.
+    바꾸기 전에 실제로 살아 있는 값인지 확인한다 — 죽은 값으로 덮으면
+    그 슬롯이 조용히 멈춘다.
+    """
+    from app.core.auth_provider import LAST_RESORT_SLOTS
+    from app.core.db_pool import get_pool
+
+    slot = str(slot).strip()
+    if slot not in LAST_RESORT_SLOTS:
+        raise HTTPException(
+            status_code=400,
+            detail="슬롯 %s 는 자동 갱신 대상입니다. 여기서 바꾸지 않습니다." % slot,
+        )
+
+    token = req.token.strip()
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            probe = await client.get(
+                "https://api.anthropic.com/v1/models?limit=1",
+                headers={
+                    "Authorization": "Bearer " + token,
+                    "anthropic-version": "2023-06-01",
+                    "anthropic-beta": "oauth-2025-04-20",
+                },
+            )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="확인 호출 실패: %s" % str(exc)[:120]) from exc
+    if probe.status_code != 200:
+        raise HTTPException(
+            status_code=400,
+            detail="이 토큰으로는 인증되지 않습니다 (HTTP %s). 바꾸지 않았습니다." % probe.status_code,
+        )
+
+    from app.core.llm_key_provider import store_api_key
+
+    key_name = "ANTHROPIC_AUTH_TOKEN_%s" % slot
+    # 라벨과 우선순위를 먼저 읽어 그대로 다시 넣는다. `store_api_key` 가
+    # 둘 다 덮어쓰기 때문에, 안 읽고 부르면 슬롯 순서가 조용히 바뀐다.
+    row = await get_pool().fetchrow(
+        "SELECT COALESCE(label,'') AS label, COALESCE(priority, 9) AS priority "
+        "FROM llm_api_keys WHERE key_name = $1",
+        key_name,
+    )
+    await store_api_key(
+        key_name, token, "anthropic",
+        label=(row["label"] if row else ""),
+        priority=int(row["priority"]) if row else 9,
+    )
+    try:
+        from app.services.slot_token_health import check_slot
+
+        await check_slot(slot)
+    except Exception:
+        pass
+
+    return {"ok": True, "slot": slot}
+
+
 class SlotProjectsRequest(BaseModel):
     projects: list[str] = Field(default_factory=list, description="이 슬롯을 먼저 쓸 프로젝트들")
 
