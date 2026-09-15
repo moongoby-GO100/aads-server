@@ -230,7 +230,11 @@ def collect(project: str, cfg: dict[str, str], cutoff: datetime) -> list[dict[st
         nginx_port = parse_nginx_active_port(
             ssh_read(host, f"cat {upstream_file} 2>/dev/null || true")
         )
-    current_slot, candidate_slot, slot_note = resolve_slots(state, nginx_port)
+    # 블루/그린이 아닌 프로젝트(NTV2 등)는 슬롯 개념 자체가 없다. 없는 것을
+    # "읽을 수 없음" 으로 경고하면 진짜 불일치가 소음에 묻힌다.
+    current_slot = candidate_slot = slot_note = ""
+    if upstream_file or state.get("active_slot"):
+        current_slot, candidate_slot, slot_note = resolve_slots(state, nginx_port)
     if slot_note:
         print(f"[warn] {project} 슬롯 실측 주의: {slot_note}", file=sys.stderr)
 
@@ -283,8 +287,8 @@ def collect(project: str, cfg: dict[str, str], cutoff: datetime) -> list[dict[st
             "phase": phase,
             # 슬롯은 지금 트래픽을 받는 릴리스에만 기록한다. 과거 행에 현재
             # 슬롯을 적으면 이력 전체가 지금 상태로 오염된다.
-            "current_slot": current_slot if is_active_release else None,
-            "candidate_slot": candidate_slot if is_active_release else None,
+            "current_slot": (current_slot or None) if is_active_release else None,
+            "candidate_slot": (candidate_slot or None) if is_active_release else None,
             "started_at": queued_at or event_at,
             "completed_at": event_at,
             "requested_by": (item["owner"] or "unknown")[:120],
