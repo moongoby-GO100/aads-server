@@ -487,15 +487,56 @@ class MediaGenerationService:
         return "imagen-4.0-generate-001"
 
     @staticmethod
+    def _demoted_by_discovery_review_only(row: Mapping[str, Any] | None) -> bool:
+        """디스커버리 동기화가 '관리자 검토 필요' 로만 내린 행인지 판정한다.
+
+        llm_models 는 채팅 LLM 기준으로 갱신된다. model_registry 의
+        _is_auto_executable_discovered 는 제외 토큰에 'image' 를 두고 있어,
+        이름에 image 가 든 모델은 동기화가 돌 때마다
+        is_selectable=false / verification_status=review_required 로 강등된다.
+        그 강등의 뜻은 "이 이미지 모델을 쓰지 마라" 가 아니라
+        "채팅 모델 목록에 올리지 마라" 다. 그런데 이미지 생성 라우팅이 같은
+        플래그를 보고 있어서, 2026-09-15 배포 중 동기화 한 번에
+        gpt-image-2.5-* 가 통째로 죽었다(MODEL_DISABLED).
+
+        운영자가 의도적으로 끈 행(verification_status=disabled_billing_depleted,
+        metadata.disabled=true)과는 반드시 구분한다 — 그쪽은 계속 막아야 한다.
+        """
+        if not row:
+            return False
+        metadata = _as_dict(row.get("metadata"))
+        return (
+            row.get("verification_status") == "review_required"
+            and metadata.get("requires_admin_review") is True
+            and metadata.get("model_source") == "discovery"
+            and metadata.get("disabled") is not True
+        )
+
+    @staticmethod
     def _db_route_enabled(row: Mapping[str, Any] | None) -> bool:
         if not row:
+            return True
+        metadata = _as_dict(row.get("metadata"))
+        if metadata.get("disabled") is True:
+            return False
+        # llm_models 는 챗 모델 레지스트리와 미디어 라우트 표를 겸한다. 챗 디스커버리
+        # (model_registry._is_auto_executable_discovered) 는 모델 id 에 'image' 가 들어가면
+        # 자동 실행 대상에서 제외해 is_selectable=False / verification_status='review_required'
+        # 로 되돌린다 — 챗 기준으로는 맞지만 이미지 모델에는 의미가 없다. 그래서 동기화가
+        # 돌 때마다 gpt-image-* 라우트가 죽었다 (2026-09-15, 수동 활성화가 배포 중 디스커버리로
+        # 되돌아가 NTV2 생성이 'Bearer provider key required' 로 실패).
+        # 미디어 어댑터가 직접 지원하는 이미지 모델이면 이 자동 제외만 무시한다.
+        # 운영자가 명시적으로 끈 경우(metadata.disabled, disabled_billing_depleted 등)는 그대로 존중한다.
+        auto_excluded_image_model = (
+            str(row.get("verification_status") or "") == "review_required"
+            and metadata.get("model_source") == "discovery"
+            and _is_openai_image_model(str(row.get("model_id") or ""))
+        )
+        if auto_excluded_image_model:
             return True
         if row.get("is_enabled") is False:
             return False
         if row.get("is_selectable") is False:
-            return False
-        metadata = _as_dict(row.get("metadata"))
-        if metadata.get("disabled") is True:
             return False
         return True
 
@@ -569,7 +610,13 @@ class MediaGenerationService:
                     db_route.get("execution_model_id") or db_route.get("model_id") or requested_model
                 ).strip()
             enabled = self._db_route_enabled(db_route)
-            route_note = self._db_route_note(db_route)
+            if not enabled and self._demoted_by_discovery_review_only(db_route):
+                # 채팅 레지스트리 기준 강등일 뿐이므로 미디어 라우팅은 통과시킨다.
+                # 실제 실행 가능 여부는 아래 _route_supported + _provider_configured 가 판정한다.
+                enabled = True
+                route_note = ""
+            else:
+                route_note = self._db_route_note(db_route)
         elif not explicit_request:
             default_route = await self._fetch_default_route(str(kind or "").strip() or normalized_kind)
             if default_route:
@@ -612,8 +659,9 @@ class MediaGenerationService:
             requested_model,
         )
         if route_pref:
-            enabled = enabled and self._db_route_enabled(route_pref)
-            route_note = route_note or self._db_route_note(route_pref)
+            if not self._demoted_by_discovery_review_only(route_pref):
+                enabled = enabled and self._db_route_enabled(route_pref)
+                route_note = route_note or self._db_route_note(route_pref)
 
         configured = self._provider_configured(requested_provider)
         if requested_provider == "kling" and not configured:
