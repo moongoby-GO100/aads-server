@@ -939,15 +939,26 @@ async def approvals_pending(
              "expires_in_min": r["expires_in_min"],
              # 승인 UI 가 그대로 그릴 수 있게 선택지를 서버가 내려준다.
              # 화면마다 다른 규칙을 적어 두면 한쪽이 반드시 낡는다.
-             "choices": [
-                 {"key": "single", "label": "이번 건만",
-                  "params": {"decision": "approved", "scope": "single", "hours": 2}},
-                 {"key": "mission", "label": "이 미션 동안",
-                  "params": {"decision": "approved", "scope": "mission",
-                             "hours": 2, "max_executions": 20}},
-                 {"key": "reject", "label": "거부",
-                  "params": {"decision": "rejected"}},
-             ]}
+             #
+             # 제안 카드(next_step)는 "이걸 할까요" 한 건이다. 도구 카드와
+             # 같은 선택지를 주면 1회성 제안에 "최대 20회" 권한이 붙는다
+             # (2026-09-15 실측 — 제안 승인 문구에 그대로 찍혀 나왔다).
+             "choices": (
+                 [
+                     {"key": "single", "label": "지금 실행",
+                      "params": {"decision": "approved", "scope": "single", "hours": 2}},
+                     {"key": "reject", "label": "거절",
+                      "params": {"decision": "rejected"}},
+                 ] if r["gate_source"] == "next_step" else [
+                     {"key": "single", "label": "이번 건만",
+                      "params": {"decision": "approved", "scope": "single", "hours": 2}},
+                     {"key": "mission", "label": "이 미션 동안",
+                      "params": {"decision": "approved", "scope": "mission",
+                                 "hours": 2, "max_executions": 20}},
+                     {"key": "reject", "label": "거부",
+                      "params": {"decision": "rejected"}},
+                 ]
+             )}
             for r in rows
         ],
         "count": len(rows),
@@ -1332,6 +1343,10 @@ async def approvals_decide(
                         THEN jsonb_build_object(
                                  'scope', $5::text,
                                  'used', 0,
+                                 -- 대상 지문은 요청 시점에 박혔다. 여기서
+                                 -- 덮어 없애면 미션 승인이 다시 "세션의
+                                 -- 모든 쓰기" 로 벌어진다(2026-09-15).
+                                 'target', COALESCE(approval_scope->>'target', ''),
                                  'mission_key', CASE WHEN $5 = 'mission'
                                      THEN split_part(work_key, ':', 1) || ':'
                                           || split_part(work_key, ':', 2)
