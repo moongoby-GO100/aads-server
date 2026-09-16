@@ -225,9 +225,47 @@ async def _call_tool(name: str, params: dict) -> str:
         return json.dumps({"error": str(e2), "tool": name}, ensure_ascii=False)
 
 
+# 상주 도구 — 최근 7일 호출 통계 상위 10개. 합쳐서 호출의 91% 를 덮는다.
+# 사람이 고른 것이 아니라 통계가 정한 것이고, 주 1회 재계산 대상이다.
+# 설계: aads-docs/docs/PRD-TOOL-RESIDENT-SET-v1.0.md
+_DEFAULT_RESIDENT_TOOLS = (
+    "run_remote_command",      # 57.1%
+    "query_database",          #  7.6%
+    "query_project_database",  #  7.1%
+    "read_remote_file",        #  6.5%
+    "pipeline_runner_status",  #  3.4%
+    "todo_write",              #  3.1%
+    "patch_remote_file",       #  2.3%
+    "handover_write",          #  1.0%
+    "write_remote_file",       #  0.9%
+    "read_task_logs",          #  0.6%
+)
+
+
+def _resident_tool_names() -> set[str]:
+    raw = os.getenv("AADS_TOOL_RESIDENT_LIST", "").strip()
+    if raw:
+        return {n.strip() for n in raw.split(",") if n.strip()}
+    return set(_DEFAULT_RESIDENT_TOOLS)
+
+
 @server.list_tools()
 async def list_tools() -> list[types.Tool]:
-    """TOOL_DEFINITIONS → MCP Tool 리스트 변환."""
+    """TOOL_DEFINITIONS → MCP Tool 리스트 변환.
+
+    기본은 전량 노출이다. AADS_TOOL_RESIDENT_MODE=1 이면 상주 집합만 스키마를
+    내보내고, 나머지는 **이름만** 한 줄로 알려준다.
+
+    왜 이렇게 하나 — 도구 142개 스키마가 76,245자(약 25,000토큰)이고, 질문
+    내용과 무관하게 매 턴 실린다. 그런데 최근 7일 41,875회 호출에서 상위 8개가
+    90.1% 를 차지했고 47개는 한 번도 쓰이지 않았다.
+
+    이름 목록을 함께 주는 이유는 모델이 "그런 도구가 있는지" 를 검색 없이 알게
+    하기 위해서다. 이름만이면 2,330자로 싸다. 설명까지 붙이면 16,800자가 되어
+    상주 집합(7,443자)보다 비싸지므로 넣지 않는다.
+
+    끄는 법: AADS_TOOL_RESIDENT_MODE=0 (기본값). 기존 동작 그대로다.
+    """
     defs = _get_tool_definitions()
     tools = []
     for td in defs:
@@ -236,7 +274,35 @@ async def list_tools() -> list[types.Tool]:
             description=td.get("description", ""),
             inputSchema=td.get("input_schema", {"type": "object", "properties": {}}),
         ))
-    return tools
+
+    if os.getenv("AADS_TOOL_RESIDENT_MODE", "0").strip() != "1":
+        return tools
+
+    resident = _resident_tool_names()
+    kept = [t for t in tools if t.name in resident]
+    deferred = sorted(t.name for t in tools if t.name not in resident)
+    if not kept:
+        # 상주 목록이 잘못 설정돼 하나도 안 남으면 전량으로 되돌린다.
+        # 도구가 통째로 사라지는 것보다 토큰을 더 쓰는 편이 낫다.
+        logger.warning("resident_mode_empty_match — 전량 노출로 폴백")
+        return tools
+
+    if deferred:
+        kept.append(types.Tool(
+            name="list_deferred_tools",
+            description=(
+                "이 세션에 스키마가 실리지 않은 도구 이름 목록. 상주 도구로 처리할 수 "
+                "없으면 먼저 이 목록에서 이름을 찾고, ToolSearch 로 스키마를 불러와 "
+                "호출해라. '도구가 없다' 고 답하기 전에 반드시 여기를 본다.\n"
+                "사용 가능한 이름: " + ", ".join(deferred)
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ))
+    logger.info(
+        "resident_mode_on: 상주 %d개 · 이름만 %d개 (전체 %d개)",
+        len(kept) - (1 if deferred else 0), len(deferred), len(tools),
+    )
+    return kept
 
 
 @server.call_tool()
