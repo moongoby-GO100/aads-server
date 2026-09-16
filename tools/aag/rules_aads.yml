@@ -50,8 +50,12 @@ entrypoints:
 
 # ── 프런트엔드 ──────────────────────────────────────────────────────────
 frontend:
+  # 대시보드 정본은 별도 저장소다(/root/aads/aads-dashboard, src 244파일).
+  # 2026-09-16 이전에는 aads-server 가 13파일짜리 미러를 추적하고 있었고
+  # 스캐너가 그 유령을 프런트 소스로 읽었다(커밋 9d6b03ea 로 제거).
+  # 저장소 밖을 가리키므로 iter_files 가 절대경로 키로 처리한다.
   roots:
-    - aads-dashboard/src
+    - ../aads-dashboard/src
   extensions: [".ts", ".tsx"]
 
   # `process.env.X || "기본값"` 의 X 이름. 기본값 문자열에서 base path 를 뽑는다.

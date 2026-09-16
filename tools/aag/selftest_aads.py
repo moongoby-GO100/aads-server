@@ -309,6 +309,14 @@ def main() -> int:
             'app.include_router(alpha.router, prefix="/api/v1")\n',
             encoding="utf-8",
         )
+        # 프런트 소스가 한 개는 있어야 "깨끗한 저장소" 다. 규칙이 frontend.roots 를
+        # 선언했는데 파일이 0개면 계약 검사가 조용히 꺼진 상태이므로 가드가 잡는다
+        # (2026-09-16 유령 미러 제거 직후 실제로 그 상태가 됐다).
+        (clean / "web/src/api.ts").write_text(
+            'const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "/api/v1";\n'
+            'export const listAlpha = () => fetch(`${BASE_URL}/alpha`);\n',
+            encoding="utf-8",
+        )
         clean_rules = clean / "rules.yml"
         clean_rules.write_text(RULES_YML.lstrip("\n"), encoding="utf-8")
         code_clean, payload_clean = run_scan(clean, clean_rules)

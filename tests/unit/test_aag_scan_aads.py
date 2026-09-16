@@ -553,16 +553,39 @@ def test_baseline_comparison_flags_a_rule_missing_from_the_baseline():
 class _FakeScan:
     """zero_target_guard 는 Scan 의 속성만 본다 — FS 없이 확인할 수 있다."""
 
-    def __init__(self, py_files, router_dir_files, modules, entrypoints_present):
+    def __init__(self, py_files, router_dir_files, modules, entrypoints_present,
+                 fe_roots=None, fe_files=None):
         self.py_files = py_files
         self.router_dir_files = router_dir_files
         self.modules = modules
         self.entrypoints_present = entrypoints_present
+        self.rules = {"frontend": {"roots": list(fe_roots or [])}}
+        self.fe_files = list(fe_files or [])
 
 
 def test_zero_target_guard_is_silent_when_everything_was_scanned():
     scan = _FakeScan(["app/main.py"], ["app/api/x.py"], {"app/api/x.py": object()},
                      ["app/main.py"])
+    assert sc.zero_target_guard(scan) == []
+
+
+def test_zero_target_guard_fires_when_frontend_is_configured_but_empty():
+    """2026-09-16: 유령 미러를 지우자 프런트 0파일이 됐고 PATH_DRIFT/ROUTE_MISSING 이
+    영원히 0 으로 나올 뻔했다. 백엔드가 멀쩡하면 전체 가드는 통과하므로 별도로 잡는다."""
+    scan = _FakeScan(["app/main.py"], ["app/api/x.py"], {"app/api/x.py": object()},
+                     ["app/main.py"], fe_roots=["../aads-dashboard/src"], fe_files=[])
+
+    reasons = sc.zero_target_guard(scan)
+
+    assert len(reasons) == 1
+    assert "frontend.roots" in reasons[0]
+
+
+def test_zero_target_guard_silent_when_frontend_has_files():
+    scan = _FakeScan(["app/main.py"], ["app/api/x.py"], {"app/api/x.py": object()},
+                     ["app/main.py"], fe_roots=["../aads-dashboard/src"],
+                     fe_files=["/root/aads/aads-dashboard/src/lib/api.ts"])
+
     assert sc.zero_target_guard(scan) == []
 
 

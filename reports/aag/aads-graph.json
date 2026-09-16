@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-09-16T12:51:16.546219+09:00",
-  "root": "/tmp/aads-wt-runner-1bf4a718",
+  "generated_at": "2026-09-16T13:24:06.587318+09:00",
+  "root": "/root/aads/aads-server",
   "api_roots": [
     "/api/v1/fact-check",
     "/api/v1/documents",
@@ -15,11 +15,11 @@
     "include_router_calls": 81,
     "mounted_routes": 873,
     "namespaces": 81,
-    "frontend_files": 13,
-    "frontend_calls_resolved": 143,
+    "frontend_files": 232,
+    "frontend_calls_resolved": 339,
     "sql_tables_referenced": 217,
-    "graph_nodes": 535,
-    "graph_edges": 951
+    "graph_nodes": 756,
+    "graph_edges": 1147
   },
   "nodes": [
     {
@@ -31,55 +31,931 @@
       "kind": "entrypoint"
     },
     {
-      "id": "aads-dashboard/src/app/admin/agents/page.tsx",
+      "id": "/root/aads/aads-dashboard/src/app/admin/agents/page.tsx",
       "kind": "frontend"
     },
     {
-      "id": "aads-dashboard/src/app/admin/governance/page.tsx",
+      "id": "/root/aads/aads-dashboard/src/app/admin/app-settings/page.tsx",
       "kind": "frontend"
     },
     {
-      "id": "aads-dashboard/src/app/admin/model-parity/page.tsx",
+      "id": "/root/aads/aads-dashboard/src/app/admin/deploy/page.tsx",
       "kind": "frontend"
     },
     {
-      "id": "aads-dashboard/src/app/admin/model-routing/page.tsx",
+      "id": "/root/aads/aads-dashboard/src/app/admin/emergency/page.tsx",
       "kind": "frontend"
     },
     {
-      "id": "aads-dashboard/src/app/admin/prompts/page.tsx",
+      "id": "/root/aads/aads-dashboard/src/app/admin/governance/page.tsx",
       "kind": "frontend"
     },
     {
-      "id": "aads-dashboard/src/app/admin/sessions/page.tsx",
+      "id": "/root/aads/aads-dashboard/src/app/admin/loops/page.tsx",
       "kind": "frontend"
     },
     {
-      "id": "aads-dashboard/src/app/admin/tasks/page.tsx",
+      "id": "/root/aads/aads-dashboard/src/app/admin/model-parity/page.tsx",
       "kind": "frontend"
     },
     {
-      "id": "aads-dashboard/src/app/chat/page.tsx",
+      "id": "/root/aads/aads-dashboard/src/app/admin/model-routing/page.tsx",
       "kind": "frontend"
     },
     {
-      "id": "aads-dashboard/src/app/settings/page.tsx",
+      "id": "/root/aads/aads-dashboard/src/app/admin/prompts/page.tsx",
       "kind": "frontend"
     },
     {
-      "id": "aads-dashboard/src/components/Header.tsx",
+      "id": "/root/aads/aads-dashboard/src/app/admin/sessions/page.tsx",
       "kind": "frontend"
     },
     {
-      "id": "aads-dashboard/src/components/Sidebar.tsx",
+      "id": "/root/aads/aads-dashboard/src/app/admin/tasks/page.tsx",
       "kind": "frontend"
     },
     {
-      "id": "aads-dashboard/src/lib/api.ts",
+      "id": "/root/aads/aads-dashboard/src/app/admin/users/page.tsx",
       "kind": "frontend"
     },
     {
-      "id": "aads-dashboard/src/lib/modelRegistryPresentation.ts",
+      "id": "/root/aads/aads-dashboard/src/app/agenda/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/agent-vault/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/approvals/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/assistant/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/authenticated-collector/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/braming/api.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/braming/components/BramingCanvas.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/braming/components/BramingNode.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/braming/components/NodeDetailPanel.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/braming/components/SessionSidebar.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/braming/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/browser-tasks/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/changes/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/channels/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/chat/ChatInput.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/chat/ChatSidebar.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/chat/MarkdownRenderer.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/chat/RunnerHostStatus.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/chat/ScreenShare.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/chat/[id]/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/chat/api.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/chat/directiveArtifacts.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/chat/layout.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/chat/terminal/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/chat/types.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/conversations/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/decisions/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/design/modifications/[id]/context/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/design/modifications/[id]/workbench/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/design/modifications/new/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/design/modifications/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/docs/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/error.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/flow/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/genspark/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/goals/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/InquiryForm.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/graph/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/handovers/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/home/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/impersonate/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/invite/accept/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/kakaobot/agent/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/kakaobot/ai-writer/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/kakaobot/anniversaries/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/kakaobot/contacts/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/kakaobot/layout.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/kakaobot/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/kakaobot/scheduled/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/kakaobot/templates/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/layout.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/lessons/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/login/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/managers/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/manifest.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/marketing/ably/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/memory/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/not-found.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/onboarding/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/ops/evals/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/ops/memory/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/ops/mobile-agent/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/ops/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/ops/pc-agents/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/ops/recovery/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/ops/servers/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/ops/traces/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/project-status/[id]/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/project-status/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/projects/[id]/approve-plan/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/projects/[id]/costs/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/projects/[id]/full-cycle/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/projects/[id]/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/projects/[id]/select-item/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/projects/[id]/stream/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/projects/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/reports/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/runtime/dashboard-slot/route.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/server-status/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/settings/api-keys/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/settings/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/settings/servers/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/signup/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/tasks/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/team/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/unni-naengmyeon/InquiryForm.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/unni-naengmyeon/brand/BrandNav.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/unni-naengmyeon/brand/banners/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/unni-naengmyeon/brand/logo/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/unni-naengmyeon/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/unni-naengmyeon/recipes/RecipePrintActions.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/app/unni-naengmyeon/recipes/page.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/AgentStatus.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/CheckpointList.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/ClientLayout.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/CodeDiffViewer.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/CodePanel.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/CostTracker.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/GoalPanel.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/Header.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/KakaoBotHeader.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/MermaidDiagram.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/PageTitleManager.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/PipelineHealthCard.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/ProjectCard.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/SSEMonitor.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/SearchableSelect.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/Sidebar.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/UpdateBanner.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/AIDrive.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/AIDriveFileList.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/AIDriveUpload.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ActionChips.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ArtifactCode.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ArtifactDashboard.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ArtifactHtmlPreview.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ArtifactPanel.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ArtifactReport.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ArtifactTabs.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ArtifactTaskMonitor.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ChatBubble.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ChatInput.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ChatLayout.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ChatOpsDock.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ChatStream.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/CitationCard.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ConfidenceBadge.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/DeepResearchProgress.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/DiscussionPanel.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/FactCheckCard.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/InlineChart.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/MemoryContextBar.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ModelSelector.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ResearchProgress.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/SectionCardContent.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/SessionSummaryCard.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ShortcutHelp.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/Sidebar.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/SidebarHubCard.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/SlashCommandMenu.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/SourceCard.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/TerminalPane.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ThemeToggle.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/ThinkingIndicator.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/UsageBar.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/chat/terminal/index.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/settings/AccountLoginModal.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/settings/ChatModelOrderPanel.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/settings/DatabaseOverviewPanel.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/settings/LlmAccountCard.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/settings/LlmRegistryWorkspacePanel.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/settings/ModelSettingsPanel.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/tasks/TaskCard.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/components/tasks/TaskTable.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/contexts/ThemeContext.tsx",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/accessibility/chatAccessibilityPolicy.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/auth/chatAuthPolicy.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/commands/durableCommandClient.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/composer/draftStore.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/composer/keyboardPolicy.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/composer/uploadQueue.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/domain/capabilities.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/domain/executionReducer.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/domain/messageReducer.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/domain/modelProvenance.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/domain/runtimeTypes.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/observability/chatTelemetry.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/queries/artifactRequestPolicy.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/rendering/contentPerformancePolicy.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/rendering/htmlPolicy.test.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/rendering/htmlPolicy.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/rendering/markdownPolicy.test.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/rendering/markdownPolicy.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/rendering/renderBudgetPolicy.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/rendering/renderPerformancePolicy.test.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/runtime/chatRuntime.selftest.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/runtime/createChatRuntime.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/runtime/statusScheduler.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/transport/legacyEventAdapter.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/transport/snapshotAdapter.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/transport/sseParser.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/viewport/chatViewportController.selftest.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/features/chat/viewport/chatViewportController.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/hooks/useArtifactPanel.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/hooks/useChatSSE.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/hooks/useChatSession.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/hooks/useDiffApproval.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/hooks/useSSE.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/hooks/useTaskPolling.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/hooks/useVersionCheck.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/lib/auth.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/lib/chatInterruptReceipt.selftest.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/lib/chatInterruptReceipt.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/lib/chatReplacementGuard.selftest.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/lib/chatReplacementGuard.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/lib/chatScrollPolicy.selftest.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/lib/chatScrollPolicy.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/lib/documentLinks.selftest.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/lib/documentLinks.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/lib/fileDownload.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/lib/navigation.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/lib/pageTitleEvents.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/lib/sse.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/middleware.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/services/chatApi.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/services/driveApi.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/services/errorReporter.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/services/pushNotifications.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/services/streamManager.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/services/taskApi.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/services/voiceAlerts.ts",
+      "kind": "frontend"
+    },
+    {
+      "id": "/root/aads/aads-dashboard/src/types/index.ts",
       "kind": "frontend"
     },
     {
@@ -997,6 +1873,11 @@
       "path": "/api/v1/terminal"
     },
     {
+      "id": "ns:/api/v1/unni-naengmyeon",
+      "kind": "namespace",
+      "path": "/api/v1/unni-naengmyeon"
+    },
+    {
       "id": "ns:/api/v1/user",
       "kind": "namespace",
       "path": "/api/v1/user"
@@ -1047,14 +1928,19 @@
       "path": "/api/v1/yeoljeong-ops"
     },
     {
-      "id": "ns:/chat",
+      "id": "ns:/moongoby-GO100",
       "kind": "namespace",
-      "path": "/chat"
+      "path": "/moongoby-GO100"
     },
     {
       "id": "ns:/pc-ollama",
       "kind": "namespace",
       "path": "/pc-ollama"
+    },
+    {
+      "id": "ns:/runtime",
+      "kind": "namespace",
+      "path": "/runtime"
     },
     {
       "id": "app/api/admin.py",
@@ -3813,1148 +4699,2716 @@
       "kind": "owns"
     },
     {
-      "from": "aads-dashboard/src/app/chat/page.tsx",
-      "to": "ns:/chat",
+      "from": "/root/aads/aads-dashboard/src/app/admin/loops/page.tsx",
+      "to": "ns:/api/v1/loops",
       "kind": "calls",
       "method": "GET",
-      "path": "/chat/executions/{}/events",
-      "lineno": 1705
+      "path": "/api/v1/loops",
+      "lineno": 42
     },
     {
-      "from": "aads-dashboard/src/app/chat/page.tsx",
+      "from": "/root/aads/aads-dashboard/src/app/admin/loops/page.tsx",
+      "to": "ns:/api/v1/loops",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/loops/{}/{}",
+      "lineno": 65
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/assistant/page.tsx",
+      "to": "ns:/api/v1/assistant",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/assistant/readiness",
+      "lineno": 54
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/channels/page.tsx",
+      "to": "ns:/moongoby-GO100",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/moongoby-GO100/aads-docs/main/shared/trigger-messages.json",
+      "lineno": 131
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/channels/page.tsx",
+      "to": "ns:/moongoby-GO100",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/moongoby-GO100/aads-docs/main/shared/project-docs.json",
+      "lineno": 185
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
       "to": "ns:/api/v1/health",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/health/api-keys",
-      "lineno": 1916
+      "lineno": 6006
     },
     {
-      "from": "aads-dashboard/src/app/chat/page.tsx",
+      "from": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/chat/workspaces/{}/roles",
-      "lineno": 2040
+      "lineno": 6155
     },
     {
-      "from": "aads-dashboard/src/app/chat/page.tsx",
+      "from": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
       "to": "ns:/api/v1/ops",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/ops/health-check",
-      "lineno": 3778
+      "lineno": 8827
     },
     {
-      "from": "aads-dashboard/src/app/chat/page.tsx",
-      "to": "ns:/api/v1/settings",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/settings/auth-keys",
-      "lineno": 6267
-    },
-    {
-      "from": "aads-dashboard/src/app/chat/page.tsx",
-      "to": "ns:/api/v1/settings",
+      "from": "/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/InquiryForm.tsx",
+      "to": "ns:/api/v1/unni-naengmyeon",
       "kind": "calls",
       "method": "POST",
-      "path": "/api/v1/settings/auth-keys",
-      "lineno": 6273
+      "path": "/api/v1/unni-naengmyeon/inquiries",
+      "lineno": 21
     },
     {
-      "from": "aads-dashboard/src/components/Header.tsx",
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/agent/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/kakao-bot/agent/version",
+      "lineno": 51
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/agent/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/kakao-bot/agent/token",
+      "lineno": 56
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/agent/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/kakao-bot/agent/token",
+      "lineno": 92
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/ai-writer/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/kakao-bot/ai/generate",
+      "lineno": 46
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/ai-writer/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/kakao-bot/templates",
+      "lineno": 71
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/anniversaries/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/kakao-bot/anniversaries",
+      "lineno": 39
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/anniversaries/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/kakao-bot/anniversaries",
+      "lineno": 47
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/anniversaries/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/kakao-bot/anniversaries",
+      "lineno": 55
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/contacts/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/kakao-bot/contacts",
+      "lineno": 41
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/contacts/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "DELETE",
+      "path": "/api/v1/kakao-bot/contacts/{}",
+      "lineno": 73
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/kakao-bot/history",
+      "lineno": 50
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/kakao-bot/history/stats",
+      "lineno": 51
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/kakao-bot/stats",
+      "lineno": 39
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/scheduled/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/kakao-bot/scheduled/{}/cancel",
+      "lineno": 51
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/kakao-bot/settings",
+      "lineno": 67
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/kakao-bot/agent/token",
+      "lineno": 72
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "PUT",
+      "path": "/api/v1/kakao-bot/settings",
+      "lineno": 81
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/kakao-bot/agent/token",
+      "lineno": 93
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/kakaobot/templates/page.tsx",
+      "to": "ns:/api/v1/kakao-bot",
+      "kind": "calls",
+      "method": "DELETE",
+      "path": "/api/v1/kakao-bot/templates/{}",
+      "lineno": 72
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/memory/page.tsx",
+      "to": "ns:/api/v1/chat",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/chat/workspaces",
+      "lineno": 62
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/memory/page.tsx",
+      "to": "ns:/api/v1/chat",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/chat/sessions",
+      "lineno": 68
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/memory/page.tsx",
+      "to": "ns:/api/v1/chat",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{}/memory-context",
+      "lineno": 75
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/ops/page.tsx",
+      "to": "ns:/runtime",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/runtime/dashboard-slot",
+      "lineno": 544
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/ops/recovery/page.tsx",
       "to": "ns:/api/v1/ops",
       "kind": "calls",
       "method": "GET",
-      "path": "/api/v1/ops/stream",
-      "lineno": 24
+      "path": "/api/v1/ops/recovery-logs",
+      "lineno": 133
     },
     {
-      "from": "aads-dashboard/src/components/Header.tsx",
+      "from": "/root/aads/aads-dashboard/src/app/ops/recovery/page.tsx",
       "to": "ns:/api/v1/ops",
       "kind": "calls",
       "method": "GET",
-      "path": "/api/v1/ops/full-health",
-      "lineno": 40
+      "path": "/api/v1/ops/recovery-logs/stats",
+      "lineno": 136
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/health",
+      "from": "/root/aads/aads-dashboard/src/app/ops/recovery/page.tsx",
+      "to": "ns:/api/v1/ops",
       "kind": "calls",
       "method": "GET",
-      "path": "/api/v1/health",
-      "lineno": 66
+      "path": "/api/v1/ops/circuit-breaker",
+      "lineno": 139
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/app/ops/recovery/page.tsx",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/ops/circuit-breaker/{}/reset",
+      "lineno": 167
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/projects/[id]/approve-plan/page.tsx",
+      "to": "ns:/api/v1/project-plans",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/project-plans",
+      "lineno": 32
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/projects/[id]/approve-plan/page.tsx",
+      "to": "ns:/api/v1/project-plans",
+      "kind": "calls",
+      "method": "PATCH",
+      "path": "/api/v1/project-plans/{}/approve",
+      "lineno": 44
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/projects/[id]/approve-plan/page.tsx",
       "to": "ns:/api/v1/projects",
       "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/projects",
-      "lineno": 69
+      "method": "POST",
+      "path": "/api/v1/projects/{}/checkpoint/revise-plan",
+      "lineno": 56
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/app/projects/[id]/full-cycle/page.tsx",
       "to": "ns:/api/v1/projects",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/projects/{}/status",
-      "lineno": 72
+      "lineno": 41
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/app/projects/[id]/full-cycle/page.tsx",
+      "to": "ns:/api/v1/artifacts",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/artifacts",
+      "lineno": 62
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/projects/[id]/select-item/page.tsx",
+      "to": "ns:/api/v1/strategy-reports",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/strategy-reports",
+      "lineno": 42
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/projects/[id]/select-item/page.tsx",
       "to": "ns:/api/v1/projects",
       "kind": "calls",
       "method": "POST",
-      "path": "/api/v1/projects",
-      "lineno": 75
+      "path": "/api/v1/projects/{}/checkpoint/select-item",
+      "lineno": 52
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/app/projects/[id]/select-item/page.tsx",
       "to": "ns:/api/v1/projects",
       "kind": "calls",
       "method": "POST",
-      "path": "/api/v1/projects/{}/auto_run",
-      "lineno": 81
+      "path": "/api/v1/projects/{}/checkpoint/revise-direction",
+      "lineno": 68
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/app/projects/[id]/select-item/page.tsx",
       "to": "ns:/api/v1/projects",
       "kind": "calls",
       "method": "POST",
-      "path": "/api/v1/projects/{}/resume",
-      "lineno": 87
+      "path": "/api/v1/projects/{}/checkpoint/research-more",
+      "lineno": 82
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/auth",
+      "from": "/root/aads/aads-dashboard/src/app/reports/page.tsx",
+      "to": "ns:/api/v1/strategy-reports",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/strategy-reports",
+      "lineno": 48
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/reports/page.tsx",
+      "to": "ns:/api/v1/project-plans",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/project-plans",
+      "lineno": 49
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/reports/page.tsx",
+      "to": "ns:/api/v1/artifacts",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/artifacts",
+      "lineno": 50
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/app/unni-naengmyeon/InquiryForm.tsx",
+      "to": "ns:/api/v1/unni-naengmyeon",
       "kind": "calls",
       "method": "POST",
-      "path": "/api/v1/auth/login",
-      "lineno": 93
+      "path": "/api/v1/unni-naengmyeon/inquiries",
+      "lineno": 21
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/auth",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/auth/me",
-      "lineno": 99
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/conversations",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/conversations",
-      "lineno": 104
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/conversations",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/conversations/stats",
-      "lineno": 107
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/conversations",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/conversations/channels",
-      "lineno": 109
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/conversations",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/conversations/messages",
-      "lineno": 111
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/conversations",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/conversations/search",
-      "lineno": 113
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/context",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/context/public-summary",
-      "lineno": 114
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/memory",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/memory/search",
-      "lineno": 120
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/memory",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/memory/inbox/{}",
-      "lineno": 122
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/projects",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/projects/dashboard",
-      "lineno": 125
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/projects",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/projects/dashboard/{}",
-      "lineno": 126
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/projects",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/projects/dashboard/timeline",
-      "lineno": 127
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/projects",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/projects/dashboard/alerts",
-      "lineno": 128
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/memory",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/memory/ceo-decisions",
-      "lineno": 129
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/dashboard",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/dashboard/directives",
-      "lineno": 132
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/dashboard",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/dashboard/reports",
-      "lineno": 133
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/dashboard",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/dashboard/reports/{}",
-      "lineno": 134
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/dashboard",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/dashboard/task-history",
-      "lineno": 135
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/dashboard",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/dashboard/directives/{}",
-      "lineno": 136
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/dashboard",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/dashboard/analytics",
-      "lineno": 139
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/documents/",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/documents",
-      "lineno": 140
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/documents/{}",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/documents/{}",
-      "lineno": 141
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/dashboard",
+      "from": "/root/aads/aads-dashboard/src/components/CodePanel.tsx",
+      "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "POST",
-      "path": "/api/v1/dashboard/complete-running",
-      "lineno": 144
+      "path": "/api/v1/chat/approve-diff",
+      "lineno": 49
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/channels",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/channels",
-      "lineno": 150
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/channels",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/channels/{}",
-      "lineno": 151
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/channels",
+      "from": "/root/aads/aads-dashboard/src/components/CodePanel.tsx",
+      "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "POST",
-      "path": "/api/v1/channels",
-      "lineno": 153
+      "path": "/api/v1/chat/approve-diff",
+      "lineno": 73
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/channels",
-      "kind": "calls",
-      "method": "PUT",
-      "path": "/api/v1/channels/{}",
-      "lineno": 155
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/channels",
-      "kind": "calls",
-      "method": "DELETE",
-      "path": "/api/v1/channels/{}",
-      "lineno": 157
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/channels",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/channels/{}/context-package",
-      "lineno": 158
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/components/Header.tsx",
       "to": "ns:/api/v1/ops",
       "kind": "calls",
       "method": "GET",
-      "path": "/api/v1/ops/health-check",
-      "lineno": 161
+      "path": "/api/v1/ops/stream",
+      "lineno": 23
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/ops/directive-lifecycle",
-      "lineno": 162
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/ops/cost/summary",
-      "lineno": 163
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/ops/account-usage",
-      "lineno": 164
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/ops/env-history/{}",
-      "lineno": 165
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/ops/bridge-log",
-      "lineno": 166
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/lessons",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/lessons",
-      "lineno": 174
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/lessons",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/lessons/{}",
-      "lineno": 176
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/ops/directive-lifecycle",
-      "lineno": 178
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/managers",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/managers",
-      "lineno": 181
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/managers",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/managers/{}",
-      "lineno": 182
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/context",
-      "kind": "calls",
-      "method": "POST",
-      "path": "/api/v1/context/system",
-      "lineno": 186
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/ops/project-docs",
-      "lineno": 189
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "POST",
-      "path": "/api/v1/ops/sync-project-docs",
-      "lineno": 191
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/ops/trigger-messages",
-      "lineno": 195
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "POST",
-      "path": "/api/v1/ops/sync-trigger-messages",
-      "lineno": 197
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/watchdog",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/watchdog/summary",
-      "lineno": 203
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/watchdog",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/watchdog/services",
-      "lineno": 204
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/watchdog",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/watchdog/errors",
-      "lineno": 206
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/ops/qa-results",
-      "lineno": 209
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/ops/design-reviews",
-      "lineno": 210
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/directives",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/directives/{}",
-      "lineno": 213
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/ops/pipeline-status",
-      "lineno": 214
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/ops/infra-check",
-      "lineno": 215
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/api/v1/ops/consistency-check",
-      "lineno": 216
-    },
-    {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/components/Header.tsx",
       "to": "ns:/api/v1/ops",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/ops/full-health",
-      "lineno": 217
+      "lineno": 39
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
-      "to": "ns:/api/v1/ops",
+      "from": "/root/aads/aads-dashboard/src/components/PageTitleManager.tsx",
+      "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "GET",
-      "path": "/api/v1/ops/claude-processes",
-      "lineno": 220
+      "path": "/api/v1/chat/sessions/{}",
+      "lineno": 31
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/components/PipelineHealthCard.tsx",
       "to": "ns:/api/v1/ops",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/ops/claude-cleanup",
-      "lineno": 222
+      "lineno": 237
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/components/PipelineHealthCard.tsx",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/ops/claude-cleanup",
+      "lineno": 244
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/PipelineHealthCard.tsx",
       "to": "ns:/api/v1/ops",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/ops/bridge-restart",
-      "lineno": 227
+      "lineno": 251
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/components/PipelineHealthCard.tsx",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/full-health",
+      "lineno": 481
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/PipelineHealthCard.tsx",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/claude-processes",
+      "lineno": 490
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/cost-trend",
+      "lineno": 139
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/project-stats",
+      "lineno": 140
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/ArtifactDashboard.tsx",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/status",
+      "lineno": 100
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/ArtifactDashboard.tsx",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/pipeline-history",
+      "lineno": 101
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/ArtifactTaskMonitor.tsx",
+      "to": "ns:/api/v1/tasks",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/tasks/{}/logs",
+      "lineno": 88
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/ArtifactTaskMonitor.tsx",
+      "to": "ns:/api/v1/tasks",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/tasks/{}/stream",
+      "lineno": 115
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/ChatInput.tsx",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/claude-accounts",
+      "lineno": 96
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/ChatInput.tsx",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/ops/claude-account/switch",
+      "lineno": 324
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/MemoryContextBar.tsx",
+      "to": "ns:/api/v1/chat",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{}/memory-context",
+      "lineno": 96
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/SessionSummaryCard.tsx",
+      "to": "ns:/api/v1/chat",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{}/memory-context",
+      "lineno": 50
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/UsageBar.tsx",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/usage-stats",
+      "lineno": 191
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/UsageBar.tsx",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/codex-usage",
+      "lineno": 192
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/UsageBar.tsx",
+      "to": "ns:/api/v1/settings",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/settings/auth-keys",
+      "lineno": 217
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/UsageBar.tsx",
+      "to": "ns:/api/v1/settings",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/settings/auth-keys/slot-enabled",
+      "lineno": 251
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/chat/UsageBar.tsx",
+      "to": "ns:/api/v1/health",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/health/relay-capacity",
+      "lineno": 350
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/settings/LlmAccountCard.tsx",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/claude-accounts",
+      "lineno": 101
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/components/settings/LlmAccountCard.tsx",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/ops/claude-account/switch",
+      "lineno": 116
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/hooks/useChatSSE.ts",
+      "to": "ns:/api/v1/chat",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{}/stream-resume",
+      "lineno": 525
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/hooks/useSSE.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/full-health",
+      "lineno": 62
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/hooks/useSSE.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/stream",
+      "lineno": 88
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/hooks/useVersionCheck.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/version",
+      "lineno": 10
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/authenticated-site-collector",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/authenticated-site-collector/overview",
+      "lineno": 281
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/authenticated-site-collector",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/authenticated-site-collector/site-profiles",
+      "lineno": 283
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/authenticated-site-collector",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/authenticated-site-collector/jobs",
+      "lineno": 290
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/authenticated-site-collector",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/authenticated-site-collector/jobs",
+      "lineno": 295
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/authenticated-site-collector",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/authenticated-site-collector/jobs/{}/challenge-action-required",
+      "lineno": 300
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/authenticated-site-collector",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/authenticated-site-collector/jobs/{}/resume",
+      "lineno": 310
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/authenticated-site-collector",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/authenticated-site-collector/recipes/{}/dry-run",
+      "lineno": 315
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/health",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/health",
+      "lineno": 319
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/projects",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/projects",
+      "lineno": 322
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/projects",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/projects/{}/status",
+      "lineno": 325
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/projects",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/projects",
+      "lineno": 328
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/projects",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/projects/{}/auto_run",
+      "lineno": 334
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/projects",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/projects/{}/resume",
+      "lineno": 340
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/auth",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/auth/login",
+      "lineno": 346
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/auth",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "lineno": 357
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/conversations",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/conversations",
+      "lineno": 369
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/conversations",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/conversations/stats",
+      "lineno": 372
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/conversations",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/conversations/channels",
+      "lineno": 374
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/conversations",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/conversations/messages",
+      "lineno": 376
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/conversations",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/conversations/search",
+      "lineno": 378
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/context",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/context/public-summary",
+      "lineno": 379
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/memory",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/memory/search",
+      "lineno": 385
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/memory",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/memory/inbox/{}",
+      "lineno": 387
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/projects",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/projects/dashboard",
+      "lineno": 390
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/projects",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/projects/dashboard/{}",
+      "lineno": 391
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/projects",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/projects/dashboard/timeline",
+      "lineno": 392
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/projects",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/projects/dashboard/alerts",
+      "lineno": 393
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/memory",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/memory/ceo-decisions",
+      "lineno": 394
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/dashboard",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/dashboard/directives",
+      "lineno": 397
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/dashboard",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/dashboard/reports",
+      "lineno": 398
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/dashboard",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/dashboard/reports/{}",
+      "lineno": 399
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/dashboard",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/dashboard/task-history",
+      "lineno": 400
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/dashboard",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/dashboard/directives/{}",
+      "lineno": 401
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/dashboard",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/dashboard/analytics",
+      "lineno": 404
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/documents/",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/documents",
+      "lineno": 405
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/documents/{}",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/documents/{}",
+      "lineno": 406
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/dashboard",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/dashboard/complete-running",
+      "lineno": 409
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/channels",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/channels",
+      "lineno": 415
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/channels",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/channels/{}",
+      "lineno": 416
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/channels",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/channels",
+      "lineno": 418
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/channels",
+      "kind": "calls",
+      "method": "PUT",
+      "path": "/api/v1/channels/{}",
+      "lineno": 420
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/channels",
+      "kind": "calls",
+      "method": "DELETE",
+      "path": "/api/v1/channels/{}",
+      "lineno": 422
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/channels",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/channels/{}/context-package",
+      "lineno": 423
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/health-check",
+      "lineno": 426
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/directive-lifecycle",
+      "lineno": 427
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/cost/summary",
+      "lineno": 428
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/account-usage",
+      "lineno": 429
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/codex-usage",
+      "lineno": 430
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/env-history/{}",
+      "lineno": 431
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/bridge-log",
+      "lineno": 432
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/lessons",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/lessons",
+      "lineno": 440
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/lessons",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/lessons/{}",
+      "lineno": 442
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/directive-lifecycle",
+      "lineno": 444
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/managers",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/managers",
+      "lineno": 447
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/managers",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/managers/{}",
+      "lineno": 448
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/context",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/context/system",
+      "lineno": 452
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/project-docs",
+      "lineno": 455
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/ops/sync-project-docs",
+      "lineno": 457
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/trigger-messages",
+      "lineno": 461
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/ops/sync-trigger-messages",
+      "lineno": 463
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/watchdog",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/watchdog/summary",
+      "lineno": 469
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/watchdog",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/watchdog/services",
+      "lineno": 470
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/watchdog",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/watchdog/errors",
+      "lineno": 472
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/qa-results",
+      "lineno": 475
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/design-reviews",
+      "lineno": 476
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/directives",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/directives/{}",
+      "lineno": 479
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/pipeline-status",
+      "lineno": 480
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/infra-check",
+      "lineno": 481
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/consistency-check",
+      "lineno": 482
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/full-health",
+      "lineno": 483
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/deploy/status",
+      "lineno": 484
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/claude-processes",
+      "lineno": 487
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/ops/claude-cleanup",
+      "lineno": 489
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/ops/bridge-restart",
+      "lineno": 494
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/chat/workspaces",
-      "lineno": 233
+      "lineno": 500
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/chat",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/chat/workspaces/{}/roles",
+      "lineno": 502
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/chat/workspaces",
-      "lineno": 235
+      "lineno": 504
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "PUT",
       "path": "/api/v1/chat/workspaces/{}",
-      "lineno": 237
+      "lineno": 506
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "DELETE",
       "path": "/api/v1/chat/workspaces/{}",
-      "lineno": 239
+      "lineno": 508
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/chat/sessions",
-      "lineno": 242
+      "lineno": 511
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/chat/sessions/{}",
-      "lineno": 244
+      "lineno": 513
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/chat/sessions",
-      "lineno": 246
+      "lineno": 515
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "PUT",
       "path": "/api/v1/chat/sessions/{}",
-      "lineno": 248
+      "lineno": 517
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "DELETE",
       "path": "/api/v1/chat/sessions/{}",
-      "lineno": 250
+      "lineno": 519
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/chat/messages",
-      "lineno": 253
+      "lineno": 522
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/chat/messages",
-      "lineno": 258
+      "lineno": 527
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/chat/messages/search",
-      "lineno": 262
+      "lineno": 531
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "PUT",
       "path": "/api/v1/chat/messages/{}/bookmark",
-      "lineno": 265
+      "lineno": 534
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/chat/artifacts",
-      "lineno": 268
+      "lineno": 537
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/chat/artifacts/{}",
-      "lineno": 269
+      "lineno": 538
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "PUT",
       "path": "/api/v1/chat/artifacts/{}",
-      "lineno": 271
+      "lineno": 540
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/chat/artifacts/{}/export",
-      "lineno": 273
+      "lineno": 542
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/chat/drive",
-      "lineno": 276
+      "lineno": 545
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "DELETE",
       "path": "/api/v1/chat/drive/{}",
-      "lineno": 278
+      "lineno": 547
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/chat/research",
-      "lineno": 281
+      "lineno": 550
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/chat",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/chat/research/history",
-      "lineno": 283
+      "lineno": 552
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/pc-agent",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/pc-agent/agents",
-      "lineno": 286
+      "lineno": 555
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/pc-agent",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/pc-agent/execute",
-      "lineno": 288
+      "lineno": 557
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/pc-agent",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/pc-agent/route-execute",
+      "lineno": 570
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/pc-agent",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/pc-agent/result/{}",
-      "lineno": 293
+      "lineno": 575
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/pc-agent",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/pc-agent/stream/{}/start",
-      "lineno": 295
+      "lineno": 577
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/pc-agent",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/pc-agent/stream/{}/stop",
-      "lineno": 300
+      "lineno": 582
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/user",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/user/api-keys",
+      "lineno": 585
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/user",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/user/api-keys",
+      "lineno": 587
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/user",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/user/api-keys/{}/test",
+      "lineno": 589
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/user",
+      "kind": "calls",
+      "method": "DELETE",
+      "path": "/api/v1/user/api-keys/{}",
+      "lineno": 591
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/user",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/user/project-servers",
+      "lineno": 592
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/user",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/user/project-servers",
+      "lineno": 602
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/user",
+      "kind": "calls",
+      "method": "DELETE",
+      "path": "/api/v1/user/project-servers/{}",
+      "lineno": 604
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/user",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/user/project-servers/route-execute",
+      "lineno": 613
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/devices",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/devices",
+      "lineno": 620
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/devices",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/devices/android/manifest",
+      "lineno": 621
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/devices",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/devices/android/pairing",
+      "lineno": 623
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/devices",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/devices/android/pairing/{}/revoke",
+      "lineno": 632
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/ops",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/ops/memory/stats",
-      "lineno": 303
+      "lineno": 635
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/ops",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/ops/memory/entries",
-      "lineno": 312
+      "lineno": 644
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/ops",
       "kind": "calls",
       "method": "DELETE",
       "path": "/api/v1/ops/memory/entries/{}/{}",
-      "lineno": 315
+      "lineno": 647
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/ops",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/ops/memory/deduplicate",
-      "lineno": 317
+      "lineno": 649
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/ops",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/ops/memory/learning-health",
-      "lineno": 319
+      "lineno": 651
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/agenda/",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/agenda",
-      "lineno": 331
+      "lineno": 663
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/agenda/{}",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/agenda/{}",
-      "lineno": 333
+      "lineno": 665
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/settings",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/settings/runner-models",
-      "lineno": 340
+      "lineno": 672
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/settings",
       "kind": "calls",
       "method": "PUT",
       "path": "/api/v1/settings/runner-models",
-      "lineno": 342
+      "lineno": 674
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/settings",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/settings/directive-models",
+      "lineno": 677
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/settings",
+      "kind": "calls",
+      "method": "PUT",
+      "path": "/api/v1/settings/directive-models",
+      "lineno": 679
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/approvals",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/approvals/pending",
+      "lineno": 685
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/approvals",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/approvals/notifications",
+      "lineno": 704
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/approvals",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/approvals/{}/acknowledge",
+      "lineno": 706
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/approvals",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/approvals/acknowledge-all",
+      "lineno": 708
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/approvals",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/approvals/gate-status",
+      "lineno": 710
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/kg",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/kg/stats",
+      "lineno": 711
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/kg",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/kg/trace",
+      "lineno": 719
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/changes",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/changes/digest",
+      "lineno": 722
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/project-docs",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/project-docs/scan",
-      "lineno": 345
+      "lineno": 723
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/project-docs",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/project-docs/search",
+      "lineno": 726
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/project-docs",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/project-docs/content",
-      "lineno": 347
+      "lineno": 728
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/handovers",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/handovers",
+      "lineno": 739
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/handovers",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/handovers/{}",
+      "lineno": 741
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/handovers",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/handovers/{}/events",
+      "lineno": 742
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/prompts/sections",
-      "lineno": 350
+      "lineno": 745
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/prompts/intent-groups",
-      "lineno": 351
+      "lineno": 746
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/admin/prompts/preview",
-      "lineno": 353
+      "lineno": 748
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/prompts/workspaces",
-      "lineno": 354
+      "lineno": 749
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "PUT",
       "path": "/api/v1/admin/prompts/workspace/{}",
-      "lineno": 356
+      "lineno": 751
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/prompts/versions",
-      "lineno": 358
+      "lineno": 753
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/prompts/versions/{}",
-      "lineno": 359
+      "lineno": 754
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/prompts/token-profile",
-      "lineno": 360
+      "lineno": 755
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/governance",
-      "lineno": 361
+      "lineno": 756
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/governance/layers",
-      "lineno": 362
+      "lineno": 757
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/governance",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/governance/intent-policies",
+      "lineno": 758
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/governance",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/governance/intent-policies",
+      "lineno": 760
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/governance",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/governance/feature-flags",
+      "lineno": 761
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/governance",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/governance/feature-flags/{}",
+      "lineno": 763
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/governance",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/governance/audit-log",
+      "lineno": 767
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/model-parity",
-      "lineno": 363
+      "lineno": 768
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/model-parity/intent-map",
-      "lineno": 364
+      "lineno": 769
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/deploy/status",
-      "lineno": 365
+      "lineno": 770
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/admin",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/admin/deploy/status",
+      "lineno": 771
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/emergency",
-      "lineno": 366
+      "lineno": 772
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/admin/emergency",
-      "lineno": 368
+      "lineno": 774
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/agents",
-      "lineno": 369
+      "lineno": 775
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/agents/{}",
-      "lineno": 370
+      "lineno": 776
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/agents/stats",
-      "lineno": 371
+      "lineno": 777
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/admin",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/admin/sessions",
+      "lineno": 785
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/admin",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/admin/sessions/{}",
+      "lineno": 788
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/auth",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/auth/admin/impersonate/{}",
+      "lineno": 790
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/admin",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/admin/users/overview",
+      "lineno": 798
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/tasks",
-      "lineno": 377
+      "lineno": 805
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/tasks/{}",
-      "lineno": 379
+      "lineno": 807
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/admin/tasks/stats",
-      "lineno": 380
+      "lineno": 808
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/browser-tasks",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/browser-tasks",
+      "lineno": 814
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/browser-tasks",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/browser-tasks",
+      "lineno": 817
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/browser-tasks",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/browser-tasks/access-check",
+      "lineno": 819
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/browser-tasks",
+      "kind": "calls",
+      "method": "PATCH",
+      "path": "/api/v1/browser-tasks/{}/status",
+      "lineno": 821
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/browser-tasks",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/browser-tasks/{}/events",
+      "lineno": 825
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/browser-tasks",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/browser-tasks/{}/live-frame",
+      "lineno": 831
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/browser-tasks",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/browser-tasks/{}/live-frame",
+      "lineno": 845
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/browser-tasks",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/browser-tasks/{}/permissions",
+      "lineno": 847
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/browser-tasks",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/browser-tasks/permissions/pending",
+      "lineno": 852
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/browser-tasks",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/browser-tasks/permissions/{}/approve",
+      "lineno": 855
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/browser-tasks",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/browser-tasks/permissions/{}/reject",
+      "lineno": 857
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/agent-vault",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/agent-vault/credentials",
+      "lineno": 862
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/agent-vault",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/agent-vault/credentials",
+      "lineno": 865
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/agent-vault",
+      "kind": "calls",
+      "method": "PATCH",
+      "path": "/api/v1/agent-vault/credentials/{}",
+      "lineno": 867
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/agent-vault",
+      "kind": "calls",
+      "method": "DELETE",
+      "path": "/api/v1/agent-vault/credentials/{}",
+      "lineno": 871
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/agent-vault",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/agent-vault/autofill-token",
+      "lineno": 874
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/agent-vault",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/agent-vault/access-logs",
+      "lineno": 878
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/admin",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/admin/design/projects/{}/screens",
+      "lineno": 883
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/admin",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/admin/design/projects/{}/modification-requests",
+      "lineno": 889
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/admin",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/admin/design/modification-requests",
+      "lineno": 892
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/admin",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/admin/design/modification-requests/{}",
+      "lineno": 894
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/admin",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/admin/design/modification-requests/{}/build-context",
+      "lineno": 896
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/admin",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/admin/design/modification-requests/{}/context-packs",
+      "lineno": 898
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/admin",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/admin/design/context-packs/{}/preview",
+      "lineno": 900
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/admin",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/admin/design/modification-requests/{}/score",
+      "lineno": 902
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/llm-keys",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/llm-keys",
-      "lineno": 383
+      "lineno": 905
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/llm-keys",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/llm-keys",
-      "lineno": 385
+      "lineno": 907
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/llm-keys",
       "kind": "calls",
       "method": "PUT",
       "path": "/api/v1/llm-keys/{}",
-      "lineno": 387
+      "lineno": 909
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/llm-keys",
       "kind": "calls",
       "method": "DELETE",
       "path": "/api/v1/llm-keys/{}",
-      "lineno": 388
+      "lineno": 910
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-keys",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/llm-keys/codex-usage",
+      "lineno": 912
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-keys",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/llm-keys/overview",
+      "lineno": 914
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-keys",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/llm-keys/providers",
+      "lineno": 915
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-keys",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/llm-keys/new-key-defaults",
+      "lineno": 917
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-keys",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/llm-keys/check-duplicate",
+      "lineno": 919
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-keys",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/llm-keys/account-bindings",
+      "lineno": 921
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-keys",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/llm-keys/account-login",
+      "lineno": 923
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-keys",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/llm-keys/account-login/{}",
+      "lineno": 924
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-keys",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/llm-keys/account-login/{}/code",
+      "lineno": 926
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-keys",
+      "kind": "calls",
+      "method": "DELETE",
+      "path": "/api/v1/llm-keys/account-login/{}",
+      "lineno": 928
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/llm-models",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/llm-models",
-      "lineno": 396
+      "lineno": 936
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/llm-models",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/llm-models/providers/{}/timeline",
-      "lineno": 399
+      "lineno": 939
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-models",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/llm-models/providers/summary",
+      "lineno": 940
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-models",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/llm-models/discovery-runs",
+      "lineno": 941
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-models",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/llm-models/sync",
+      "lineno": 942
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-models",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/llm-models/chat-preferences",
+      "lineno": 943
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/llm-models",
+      "kind": "calls",
+      "method": "PUT",
+      "path": "/api/v1/llm-models/chat-preferences",
+      "lineno": 954
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/llm-models",
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/llm-models/routing-preferences",
-      "lineno": 400
+      "lineno": 955
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/llm-models",
       "kind": "calls",
       "method": "PUT",
       "path": "/api/v1/llm-models/routing-preferences",
-      "lineno": 410
+      "lineno": 965
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/goals",
+      "lineno": 972
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/goals/{}/status",
+      "lineno": 974
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/goals/{}/board",
+      "lineno": 977
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/goals/halt",
+      "lineno": 980
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/goals/{}/direct",
+      "lineno": 982
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/goals/milestones/{}/confirm",
+      "lineno": 986
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/goals/{}/candidates",
+      "lineno": 991
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/goals/{}/owners",
+      "lineno": 993
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/goals/{}/lead",
+      "lineno": 998
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/settings",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/settings/auth-keys/slot-projects",
+      "lineno": 1005
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/settings",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/settings/auth-keys/slot-token/{}",
+      "lineno": 1008
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/settings",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/settings/auth-keys/slot-projects/{}",
+      "lineno": 1013
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/goals/{}/approval-policy",
+      "lineno": 1018
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/goals/{}/approval-policy",
+      "lineno": 1023
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "DELETE",
+      "path": "/api/v1/goals/{}/owners/{}",
+      "lineno": 1028
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/goals/{}/owners/{}/pause",
+      "lineno": 1033
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "DELETE",
+      "path": "/api/v1/goals/{}/owners/{}/pause",
+      "lineno": 1036
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/goals/{}/owners/{}/restart",
+      "lineno": 1039
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/chat",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/chat/sessions/{}/stop",
+      "lineno": 1042
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/goals",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/goals/milestones/{}/rewind",
+      "lineno": 1044
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/admin/prompt-assets",
-      "lineno": 419
+      "lineno": 1051
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "PUT",
       "path": "/api/v1/admin/prompt-assets/{}",
-      "lineno": 421
+      "lineno": 1053
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "DELETE",
       "path": "/api/v1/admin/prompt-assets/{}",
-      "lineno": 423
+      "lineno": 1055
     },
     {
-      "from": "aads-dashboard/src/lib/api.ts",
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
       "to": "ns:/api/v1/admin",
       "kind": "calls",
       "method": "POST",
       "path": "/api/v1/admin/prompt-assets/preview",
-      "lineno": 425
+      "lineno": 1057
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ohvis",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ohvis/llmops/status",
+      "lineno": 1060
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ohvis",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ohvis/llmops/traces",
+      "lineno": 1068
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ohvis",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ohvis/llmops/traces/{}",
+      "lineno": 1070
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ohvis",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ohvis/llmops/candidates",
+      "lineno": 1076
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ohvis",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/ohvis/llmops/datasets/from-trace",
+      "lineno": 1079
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ohvis",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/ohvis/llmops/evals/run",
+      "lineno": 1081
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ohvis",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ohvis/llmops/evals/{}",
+      "lineno": 1082
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ohvis",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/ohvis/llmops/feedback",
+      "lineno": 1084
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/sse.ts",
+      "to": "ns:/api/v1/projects",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/projects/{}/stream",
+      "lineno": 15
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/services/chatApi.ts",
+      "to": "ns:/api/v1/chat",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/chat/messages/send",
+      "lineno": 240
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/services/driveApi.ts",
+      "to": "ns:/api/v1/chat",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/chat/drive/upload",
+      "lineno": 74
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/services/errorReporter.ts",
+      "to": "ns:/api/v1/chat",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/chat/errors/report",
+      "lineno": 61
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/services/pushNotifications.ts",
+      "to": "ns:/api/v1/notifications",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/notifications/vapid-public-key",
+      "lineno": 42
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/services/pushNotifications.ts",
+      "to": "ns:/api/v1/notifications",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/notifications/push-subscriptions",
+      "lineno": 83
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/services/pushNotifications.ts",
+      "to": "ns:/api/v1/notifications",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/notifications/push-test",
+      "lineno": 95
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/services/taskApi.ts",
+      "to": "ns:/api/v1/directives",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/directives/all",
+      "lineno": 93
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/services/taskApi.ts",
+      "to": "ns:/api/v1/ops",
+      "kind": "calls",
+      "method": "GET",
+      "path": "/api/v1/ops/server-summary",
+      "lineno": 100
     },
     {
       "from": "app/api/project_dashboard.py",
@@ -8371,22 +10825,182 @@
   "findings": [
     {
       "rule": "ROUTE_MISSING",
-      "key": "aads-dashboard/src/lib/api.ts:209",
-      "file": "aads-dashboard/src/lib/api.ts",
-      "lineno": 209,
-      "method": "GET",
-      "path": "/api/v1/ops/qa-results",
-      "detail": "`aads-dashboard/src/lib/api.ts:209` GET `/api/v1/ops/qa-results` — 일치하는 라우트 없음",
+      "key": "/root/aads/aads-dashboard/src/app/admin/loops/page.tsx:65",
+      "file": "/root/aads/aads-dashboard/src/app/admin/loops/page.tsx",
+      "lineno": 65,
+      "method": "POST",
+      "path": "/api/v1/loops/{}/{}",
+      "detail": "`/root/aads/aads-dashboard/src/app/admin/loops/page.tsx:65` POST `/api/v1/loops/{}/{}` — 일치하는 라우트 없음",
       "severity": "P0"
     },
     {
       "rule": "ROUTE_MISSING",
-      "key": "aads-dashboard/src/lib/api.ts:210",
-      "file": "aads-dashboard/src/lib/api.ts",
-      "lineno": 210,
+      "key": "/root/aads/aads-dashboard/src/app/channels/page.tsx:131",
+      "file": "/root/aads/aads-dashboard/src/app/channels/page.tsx",
+      "lineno": 131,
+      "method": "GET",
+      "path": "/moongoby-GO100/aads-docs/main/shared/trigger-messages.json",
+      "detail": "`/root/aads/aads-dashboard/src/app/channels/page.tsx:131` GET `/moongoby-GO100/aads-docs/main/shared/trigger-messages.json` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/app/channels/page.tsx:185",
+      "file": "/root/aads/aads-dashboard/src/app/channels/page.tsx",
+      "lineno": 185,
+      "method": "GET",
+      "path": "/moongoby-GO100/aads-docs/main/shared/project-docs.json",
+      "detail": "`/root/aads/aads-dashboard/src/app/channels/page.tsx:185` GET `/moongoby-GO100/aads-docs/main/shared/project-docs.json` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/InquiryForm.tsx:21",
+      "file": "/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/InquiryForm.tsx",
+      "lineno": 21,
+      "method": "POST",
+      "path": "/api/v1/unni-naengmyeon/inquiries",
+      "detail": "`/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/InquiryForm.tsx:21` POST `/api/v1/unni-naengmyeon/inquiries` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:50",
+      "file": "/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx",
+      "lineno": 50,
+      "method": "GET",
+      "path": "/api/v1/kakao-bot/history",
+      "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:50` GET `/api/v1/kakao-bot/history` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:51",
+      "file": "/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx",
+      "lineno": 51,
+      "method": "GET",
+      "path": "/api/v1/kakao-bot/history/stats",
+      "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:51` GET `/api/v1/kakao-bot/history/stats` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/app/kakaobot/page.tsx:39",
+      "file": "/root/aads/aads-dashboard/src/app/kakaobot/page.tsx",
+      "lineno": 39,
+      "method": "GET",
+      "path": "/api/v1/kakao-bot/stats",
+      "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/page.tsx:39` GET `/api/v1/kakao-bot/stats` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/app/kakaobot/scheduled/page.tsx:51",
+      "file": "/root/aads/aads-dashboard/src/app/kakaobot/scheduled/page.tsx",
+      "lineno": 51,
+      "method": "POST",
+      "path": "/api/v1/kakao-bot/scheduled/{}/cancel",
+      "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/scheduled/page.tsx:51` POST `/api/v1/kakao-bot/scheduled/{}/cancel` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:67",
+      "file": "/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx",
+      "lineno": 67,
+      "method": "GET",
+      "path": "/api/v1/kakao-bot/settings",
+      "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:67` GET `/api/v1/kakao-bot/settings` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:81",
+      "file": "/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx",
+      "lineno": 81,
+      "method": "PUT",
+      "path": "/api/v1/kakao-bot/settings",
+      "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:81` PUT `/api/v1/kakao-bot/settings` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/app/ops/page.tsx:544",
+      "file": "/root/aads/aads-dashboard/src/app/ops/page.tsx",
+      "lineno": 544,
+      "method": "GET",
+      "path": "/runtime/dashboard-slot",
+      "detail": "`/root/aads/aads-dashboard/src/app/ops/page.tsx:544` GET `/runtime/dashboard-slot` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/app/unni-naengmyeon/InquiryForm.tsx:21",
+      "file": "/root/aads/aads-dashboard/src/app/unni-naengmyeon/InquiryForm.tsx",
+      "lineno": 21,
+      "method": "POST",
+      "path": "/api/v1/unni-naengmyeon/inquiries",
+      "detail": "`/root/aads/aads-dashboard/src/app/unni-naengmyeon/InquiryForm.tsx:21` POST `/api/v1/unni-naengmyeon/inquiries` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx:139",
+      "file": "/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx",
+      "lineno": 139,
+      "method": "GET",
+      "path": "/api/v1/ops/cost-trend",
+      "detail": "`/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx:139` GET `/api/v1/ops/cost-trend` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx:140",
+      "file": "/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx",
+      "lineno": 140,
+      "method": "GET",
+      "path": "/api/v1/ops/project-stats",
+      "detail": "`/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx:140` GET `/api/v1/ops/project-stats` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/components/chat/ArtifactDashboard.tsx:100",
+      "file": "/root/aads/aads-dashboard/src/components/chat/ArtifactDashboard.tsx",
+      "lineno": 100,
+      "method": "GET",
+      "path": "/api/v1/ops/status",
+      "detail": "`/root/aads/aads-dashboard/src/components/chat/ArtifactDashboard.tsx:100` GET `/api/v1/ops/status` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/components/chat/ArtifactDashboard.tsx:101",
+      "file": "/root/aads/aads-dashboard/src/components/chat/ArtifactDashboard.tsx",
+      "lineno": 101,
+      "method": "GET",
+      "path": "/api/v1/ops/pipeline-history",
+      "detail": "`/root/aads/aads-dashboard/src/components/chat/ArtifactDashboard.tsx:101` GET `/api/v1/ops/pipeline-history` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/lib/api.ts:475",
+      "file": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "lineno": 475,
+      "method": "GET",
+      "path": "/api/v1/ops/qa-results",
+      "detail": "`/root/aads/aads-dashboard/src/lib/api.ts:475` GET `/api/v1/ops/qa-results` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_MISSING",
+      "key": "/root/aads/aads-dashboard/src/lib/api.ts:476",
+      "file": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "lineno": 476,
       "method": "GET",
       "path": "/api/v1/ops/design-reviews",
-      "detail": "`aads-dashboard/src/lib/api.ts:210` GET `/api/v1/ops/design-reviews` — 일치하는 라우트 없음",
+      "detail": "`/root/aads/aads-dashboard/src/lib/api.ts:476` GET `/api/v1/ops/design-reviews` — 일치하는 라우트 없음",
       "severity": "P0"
     },
     {
@@ -8568,22 +11182,12 @@
     },
     {
       "rule": "PATH_DRIFT",
-      "key": "aads-dashboard/src/app/chat/page.tsx:1705",
-      "file": "aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 1705,
-      "method": "GET",
-      "path": "/chat/executions/{}/events",
-      "detail": "`aads-dashboard/src/app/chat/page.tsx:1705` GET `/chat/executions/{}/events` — 접두 /api/v1 가 빠졌다 (실제 라우트 /api/v1/chat/executions/{}/events)",
-      "severity": "P1"
-    },
-    {
-      "rule": "PATH_DRIFT",
-      "key": "aads-dashboard/src/lib/api.ts:253",
-      "file": "aads-dashboard/src/lib/api.ts",
-      "lineno": 253,
+      "key": "/root/aads/aads-dashboard/src/lib/api.ts:522",
+      "file": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "lineno": 522,
       "method": "POST",
       "path": "/api/v1/chat/messages",
-      "detail": "`aads-dashboard/src/lib/api.ts:253` POST `/api/v1/chat/messages` — 경로는 있으나 메서드가 GET 다 (/api/v1/chat/messages)",
+      "detail": "`/root/aads/aads-dashboard/src/lib/api.ts:522` POST `/api/v1/chat/messages` — 경로는 있으나 메서드가 GET 다 (/api/v1/chat/messages)",
       "severity": "P1"
     },
     {
@@ -9331,6 +11935,27 @@
     },
     {
       "rule": "STALE_BACKUP",
+      "key": "app/static/reports/식당창업_혜택_총정리_2026.html.bak_aads",
+      "path": "app/static/reports/식당창업_혜택_총정리_2026.html.bak_aads",
+      "detail": "`app/static/reports/식당창업_혜택_총정리_2026.html.bak_aads` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
+      "severity": "P2"
+    },
+    {
+      "rule": "STALE_BACKUP",
+      "key": "app/static/reports/언니냉면_육수OEM_문의메일_초안.html.bak_aads",
+      "path": "app/static/reports/언니냉면_육수OEM_문의메일_초안.html.bak_aads",
+      "detail": "`app/static/reports/언니냉면_육수OEM_문의메일_초안.html.bak_aads` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
+      "severity": "P2"
+    },
+    {
+      "rule": "STALE_BACKUP",
+      "key": "app/static/reports/열정국밥_중화점_인수전환_체크리스트.html.bak_aads",
+      "path": "app/static/reports/열정국밥_중화점_인수전환_체크리스트.html.bak_aads",
+      "detail": "`app/static/reports/열정국밥_중화점_인수전환_체크리스트.html.bak_aads` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
+      "severity": "P2"
+    },
+    {
+      "rule": "STALE_BACKUP",
       "key": "scripts/claude-oauth-wrapper.sh.bak_20260326_122801",
       "path": "scripts/claude-oauth-wrapper.sh.bak_20260326_122801",
       "detail": "`scripts/claude-oauth-wrapper.sh.bak_20260326_122801` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
@@ -9660,69 +12285,351 @@
     },
     {
       "kind": "FRONTEND_URL",
-      "module": "aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 2932,
+      "module": "/root/aads/aads-dashboard/src/app/braming/api.ts",
+      "lineno": 13,
+      "detail": "fetch() URL 해석 불가 — 변수가 경로 세그먼트 일부에만 붙어 경로를 확정할 수 없음: `${BASE}/braming${path}`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx",
+      "lineno": 1091,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/pipeline/jobs?session_id=${sessionId}&limit=50`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx",
+      "lineno": 1245,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/agenda/${qs}`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx",
+      "lineno": 1279,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/agenda/`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx",
+      "lineno": 1335,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/agenda/${agendaId}`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx",
+      "lineno": 1360,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/agenda/${agendaId}/restore`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx",
+      "lineno": 1383,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/agenda/${agendaId}`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx",
+      "lineno": 2511,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/artifacts/${activeArtifact.id}/export`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/ChatInput.tsx",
+      "lineno": 188,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/voice/transcribe`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/RunnerHostStatus.tsx",
+      "lineno": 55,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/pipeline/runner/status?window_hours=1`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/api.ts",
+      "lineno": 80,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${BASE_URL}${path}`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/api.ts",
+      "lineno": 162,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${BASE_URL}/chat/files/upload?session_id=${sessionId}&uploaded_by=user`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
+      "lineno": 5342,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sessionId}/resume`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
+      "lineno": 5455,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/executions/${executionId}/events?last_event_id=${encodeURIComponent(replayLastEventId)}`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
+      "lineno": 7508,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/image/generate`"
     },
     {
       "kind": "FRONTEND_URL",
-      "module": "aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 3191,
+      "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
+      "lineno": 8026,
       "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): fetchUrl"
     },
     {
       "kind": "FRONTEND_URL",
-      "module": "aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 3685,
-      "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): currentExecutionIdRef.current\n                  ? `${process.env.NEXT_PUBLIC_API_URL || \"\"}/chat/executions/${currentExe"
+      "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
+      "lineno": 8351,
+      "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): retry with backoff"
     },
     {
       "kind": "FRONTEND_URL",
-      "module": "aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 4029,
-      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${activeSession.id}/stop`"
+      "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
+      "lineno": 8737,
+      "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): resumeUrl"
     },
     {
       "kind": "FRONTEND_URL",
-      "module": "aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 4076,
-      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${activeSession.id}/stop`"
+      "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
+      "lineno": 9178,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sid}/stop`"
     },
     {
       "kind": "FRONTEND_URL",
-      "module": "aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 4110,
+      "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
+      "lineno": 9247,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sid}/stop`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
+      "lineno": 9340,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/messages/${msgId}`"
     },
     {
       "kind": "FRONTEND_URL",
-      "module": "aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 4140,
+      "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
+      "lineno": 9375,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/messages/${msgId}`"
     },
     {
       "kind": "FRONTEND_URL",
-      "module": "aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 4185,
-      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/messages/${msgId}/regenerate`"
+      "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
+      "lineno": 9446,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/messages/${msgId}/regenerate?mode=${encodeURIComponent(mode)}`"
     },
     {
       "kind": "FRONTEND_URL",
-      "module": "aads-dashboard/src/lib/api.ts",
-      "lineno": 47,
+      "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
+      "lineno": 10195,
+      "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): url.toString()"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/kakaobot/agent/page.tsx",
+      "lineno": 71,
+      "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): installTicketUrl"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/kakaobot/contacts/page.tsx",
+      "lineno": 60,
+      "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): url"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/kakaobot/scheduled/page.tsx",
+      "lineno": 40,
+      "detail": "fetch() URL 해석 불가 — 변수가 경로 세그먼트 일부에만 붙어 경로를 확정할 수 없음: `${API}/kakao-bot/scheduled${q}`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/kakaobot/templates/page.tsx",
+      "lineno": 51,
+      "detail": "fetch() URL 해석 불가 — 변수가 경로 세그먼트 일부에만 붙어 경로를 확정할 수 없음: `${API}/kakao-bot/templates${q}`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/kakaobot/templates/page.tsx",
+      "lineno": 63,
+      "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): url"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/ops/servers/page.tsx",
+      "lineno": 166,
+      "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): url"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/projects/[id]/full-cycle/page.tsx",
+      "lineno": 71,
+      "detail": "EventSource() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${API.replace(\"/api/v1\",\"\")}/api/v1/projects/${id}/stream`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/app/unni-naengmyeon/recipes/page.tsx",
+      "lineno": 104,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${API_BASE}/auth/me`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/components/chat/ArtifactTaskMonitor.tsx",
+      "lineno": 76,
+      "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): url"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/components/chat/DiscussionPanel.tsx",
+      "lineno": 135,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${BASE_URL}/llm-models?view=selector`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/components/chat/DiscussionPanel.tsx",
+      "lineno": 348,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${BASE_URL}/chat/sessions/${sessionId}/discussion/start`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/components/chat/DiscussionPanel.tsx",
+      "lineno": 392,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${BASE_URL}/chat/sessions/${sessionId}/discussion/continue`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/components/chat/DiscussionPanel.tsx",
+      "lineno": 417,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${BASE_URL}/chat/sessions/${sessionId}/discussion/stop`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/components/chat/ModelSelector.tsx",
+      "lineno": 307,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${_API_BASE}/llm-models/chat-preferences`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/components/chat/ModelSelector.tsx",
+      "lineno": 327,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${_API_BASE}/llm-models?view=selector`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/components/chat/TerminalPane.tsx",
+      "lineno": 367,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `@/app/chat/api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/terminal/sessions/${sessionId}/stream${suffix}`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/features/chat/viewport/chatViewportController.selftest.ts",
+      "lineno": 42,
+      "detail": "request() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): callback"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/features/chat/viewport/chatViewportController.ts",
+      "lineno": 59,
+      "detail": "request() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): callback: FrameRequestCallback"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/hooks/useTaskPolling.ts",
+      "lineno": 83,
+      "detail": "EventSource() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): SSE_URL"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "lineno": 259,
       "detail": "fetch() URL 해석 불가 — 변수가 경로 세그먼트 일부에만 붙어 경로를 확정할 수 없음: `${BASE_URL}${path}`"
     },
     {
       "kind": "FRONTEND_URL",
-      "module": "aads-dashboard/src/lib/api.ts",
-      "lineno": 336,
+      "module": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "lineno": 668,
       "detail": "request() URL 해석 불가 — 변수가 경로 세그먼트 일부에만 붙어 경로를 확정할 수 없음: `/agenda/sessions${qs}`"
     },
     {
       "kind": "FRONTEND_URL",
-      "module": "aads-dashboard/src/lib/api.ts",
-      "lineno": 417,
+      "module": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "lineno": 694,
+      "detail": "request() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): `/approvals/${encodeURIComponent(id)}/decide?decision=${decision}` +\n      `&scope=${opts.scope || \"single\"}` +\n      `&"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "lineno": 713,
+      "detail": "request() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): `/kg/list?limit=${limit}&offset=${offset}` +\n      (type ? `&type=${encodeURIComponent(type)}` : \"\") +\n      (q ? `&q=${"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "lineno": 1049,
       "detail": "request() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): layer ? `/admin/prompt-assets?layer=${layer}` : \"/admin/prompt-assets\""
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/lib/auth.ts",
+      "lineno": 111,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${API_BASE}/auth/login`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/lib/auth.ts",
+      "lineno": 146,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${API_BASE}/auth/me`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/lib/auth.ts",
+      "lineno": 180,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${API_BASE}/auth/register`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/lib/auth.ts",
+      "lineno": 212,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${API_BASE}/auth/onboarding`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/lib/auth.ts",
+      "lineno": 251,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${API_BASE}${path}`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/lib/auth.ts",
+      "lineno": 305,
+      "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${API_BASE}/auth/invites/accept`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/lib/fileDownload.ts",
+      "lineno": 74,
+      "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): url.toString()"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/services/chatApi.ts",
+      "lineno": 23,
+      "detail": "fetch() URL 해석 불가 — 변수가 경로 세그먼트 일부에만 붙어 경로를 확정할 수 없음: `${BASE_URL}${path}`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/services/driveApi.ts",
+      "lineno": 15,
+      "detail": "fetch() URL 해석 불가 — 변수가 경로 세그먼트 일부에만 붙어 경로를 확정할 수 없음: `${BASE_URL}${path}`"
+    },
+    {
+      "kind": "FRONTEND_URL",
+      "module": "/root/aads/aads-dashboard/src/services/taskApi.ts",
+      "lineno": 10,
+      "detail": "fetch() URL 해석 불가 — 변수가 경로 세그먼트 일부에만 붙어 경로를 확정할 수 없음: `${BASE_URL}${path}`"
     }
   ]
 }

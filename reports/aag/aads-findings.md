@@ -1,6 +1,6 @@
 # AAG L1/L2 — AADS 아키텍처 결함 리포트
 
-생성 2026-09-16 12:51 KST · 결함 93건 · 판정 불가(UNRESOLVED) 62건
+생성 2026-09-16 13:24 KST · 결함 111건 · 판정 불가(UNRESOLVED) 109건
 
 UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 결함으로 세면
 숫자가 부풀고, 부풀린 숫자는 아무도 손대지 않아 규칙 전체가 무시된다.
@@ -15,10 +15,10 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 | include_router 호출 | 81 |
 | 마운트된 라우트 | 873 |
 | 네임스페이스 | 81 |
-| 프런트 파일 | 13 |
-| 해석된 프런트 호출 | 143 |
+| 프런트 파일 | 232 |
+| 해석된 프런트 호출 | 339 |
 | SQL 참조 테이블 | 217 |
-| 그래프 노드/엣지 | 535 / 951 |
+| 그래프 노드/엣지 | 756 / 1147 |
 
 ## 규칙별 건수
 
@@ -28,11 +28,11 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 | `DOUBLE_MOUNT` | P1 | 9 |
 | `ORPHAN_ROUTER` | P2 | 1 |
 | `TABLE_NO_MODEL` | P1 | 44 |
-| `PATH_DRIFT` | P1 | 2 |
-| `ROUTE_MISSING` | P0 | 2 |
-| `STALE_BACKUP` | P2 | 34 |
+| `PATH_DRIFT` | P1 | 1 |
+| `ROUTE_MISSING` | P0 | 18 |
+| `STALE_BACKUP` | P2 | 37 |
 
-| **합계** | | **93** |
+| **합계** | | **111** |
 
 ## DUP_MODULE (1건)
 
@@ -101,17 +101,32 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 - [P1] 테이블 `task_tracking` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ceo_chat.py`)
 - [P1] 테이블 `yeoljeong_bank_transactions` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/yeoljeong_accounting_service.py`, `app/services/yeoljeong_dashboard_service.py`)
 
-## PATH_DRIFT (2건)
+## PATH_DRIFT (1건)
 
-- [P1] `aads-dashboard/src/app/chat/page.tsx:1705` GET `/chat/executions/{}/events` — 접두 /api/v1 가 빠졌다 (실제 라우트 /api/v1/chat/executions/{}/events)
-- [P1] `aads-dashboard/src/lib/api.ts:253` POST `/api/v1/chat/messages` — 경로는 있으나 메서드가 GET 다 (/api/v1/chat/messages)
+- [P1] `/root/aads/aads-dashboard/src/lib/api.ts:522` POST `/api/v1/chat/messages` — 경로는 있으나 메서드가 GET 다 (/api/v1/chat/messages)
 
-## ROUTE_MISSING (2건)
+## ROUTE_MISSING (18건)
 
-- [P0] `aads-dashboard/src/lib/api.ts:209` GET `/api/v1/ops/qa-results` — 일치하는 라우트 없음
-- [P0] `aads-dashboard/src/lib/api.ts:210` GET `/api/v1/ops/design-reviews` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/app/admin/loops/page.tsx:65` POST `/api/v1/loops/{}/{}` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/app/channels/page.tsx:131` GET `/moongoby-GO100/aads-docs/main/shared/trigger-messages.json` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/app/channels/page.tsx:185` GET `/moongoby-GO100/aads-docs/main/shared/project-docs.json` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/InquiryForm.tsx:21` POST `/api/v1/unni-naengmyeon/inquiries` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:50` GET `/api/v1/kakao-bot/history` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:51` GET `/api/v1/kakao-bot/history/stats` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/app/kakaobot/page.tsx:39` GET `/api/v1/kakao-bot/stats` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/app/kakaobot/scheduled/page.tsx:51` POST `/api/v1/kakao-bot/scheduled/{}/cancel` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:67` GET `/api/v1/kakao-bot/settings` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:81` PUT `/api/v1/kakao-bot/settings` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/app/ops/page.tsx:544` GET `/runtime/dashboard-slot` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/app/unni-naengmyeon/InquiryForm.tsx:21` POST `/api/v1/unni-naengmyeon/inquiries` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx:139` GET `/api/v1/ops/cost-trend` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx:140` GET `/api/v1/ops/project-stats` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/components/chat/ArtifactDashboard.tsx:100` GET `/api/v1/ops/status` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/components/chat/ArtifactDashboard.tsx:101` GET `/api/v1/ops/pipeline-history` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/lib/api.ts:475` GET `/api/v1/ops/qa-results` — 일치하는 라우트 없음
+- [P0] `/root/aads/aads-dashboard/src/lib/api.ts:476` GET `/api/v1/ops/design-reviews` — 일치하는 라우트 없음
 
-## STALE_BACKUP (34건)
+## STALE_BACKUP (37건)
 
 - [P2] `app/api/ceo_chat.py.bak` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
 - [P2] `app/api/chat.py.bak.T073` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
@@ -144,25 +159,37 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 - [P2] `app/models/pc_agent.py.bak` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
 - [P2] `app/services/sandbox.py.bak` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
 - [P2] `app/static/apps/yeoljeong-finance/index.html.bak-20260714-1605-static-short` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
+- [P2] `app/static/reports/식당창업_혜택_총정리_2026.html.bak_aads` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
+- [P2] `app/static/reports/언니냉면_육수OEM_문의메일_초안.html.bak_aads` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
+- [P2] `app/static/reports/열정국밥_중화점_인수전환_체크리스트.html.bak_aads` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
 - [P2] `scripts/claude-oauth-wrapper.sh.bak_20260326_122801` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
 - [P2] `scripts/pipeline-runner.sh.bak.litellm` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
 - [P2] `scripts/pipeline-runner.sh.bak_litellm_fix` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
 
 ## UNRESOLVED (결함 아님 — 판정 불가)
 
-### FRONTEND_URL (11건)
-- `aads-dashboard/src/app/chat/page.tsx:2932` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/image/generate`
-- `aads-dashboard/src/app/chat/page.tsx:3191` fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): fetchUrl
-- `aads-dashboard/src/app/chat/page.tsx:3685` fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): currentExecutionIdRef.current
-                  ? `${process.env.NEXT_PUBLIC_API_URL || ""}/chat/executions/${currentExe
-- `aads-dashboard/src/app/chat/page.tsx:4029` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${activeSession.id}/stop`
-- `aads-dashboard/src/app/chat/page.tsx:4076` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${activeSession.id}/stop`
-- `aads-dashboard/src/app/chat/page.tsx:4110` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/messages/${msgId}`
-- `aads-dashboard/src/app/chat/page.tsx:4140` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/messages/${msgId}`
-- `aads-dashboard/src/app/chat/page.tsx:4185` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/messages/${msgId}/regenerate`
-- `aads-dashboard/src/lib/api.ts:47` fetch() URL 해석 불가 — 변수가 경로 세그먼트 일부에만 붙어 경로를 확정할 수 없음: `${BASE_URL}${path}`
-- `aads-dashboard/src/lib/api.ts:336` request() URL 해석 불가 — 변수가 경로 세그먼트 일부에만 붙어 경로를 확정할 수 없음: `/agenda/sessions${qs}`
-- `aads-dashboard/src/lib/api.ts:417` request() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): layer ? `/admin/prompt-assets?layer=${layer}` : "/admin/prompt-assets"
+### FRONTEND_URL (58건)
+- `/root/aads/aads-dashboard/src/app/braming/api.ts:13` fetch() URL 해석 불가 — 변수가 경로 세그먼트 일부에만 붙어 경로를 확정할 수 없음: `${BASE}/braming${path}`
+- `/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx:1091` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/pipeline/jobs?session_id=${sessionId}&limit=50`
+- `/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx:1245` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/agenda/${qs}`
+- `/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx:1279` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/agenda/`
+- `/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx:1335` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/agenda/${agendaId}`
+- `/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx:1360` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/agenda/${agendaId}/restore`
+- `/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx:1383` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/agenda/${agendaId}`
+- `/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx:2511` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/artifacts/${activeArtifact.id}/export`
+- `/root/aads/aads-dashboard/src/app/chat/ChatInput.tsx:188` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/voice/transcribe`
+- `/root/aads/aads-dashboard/src/app/chat/RunnerHostStatus.tsx:55` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/pipeline/runner/status?window_hours=1`
+- `/root/aads/aads-dashboard/src/app/chat/api.ts:80` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${BASE_URL}${path}`
+- `/root/aads/aads-dashboard/src/app/chat/api.ts:162` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${BASE_URL}/chat/files/upload?session_id=${sessionId}&uploaded_by=user`
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:5342` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sessionId}/resume`
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:5455` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/executions/${executionId}/events?last_event_id=${encodeURIComponent(replayLastEventId)}`
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:7508` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/image/generate`
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:8026` fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): fetchUrl
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:8351` fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): retry with backoff
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:8737` fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): resumeUrl
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:9178` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sid}/stop`
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:9247` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sid}/stop`
+- … 외 38건
 
 ### SQL_TABLE (51건)
 - `app/api/admin.py:1045` 테이블 이름이 런타임 보간이라 확정 불가

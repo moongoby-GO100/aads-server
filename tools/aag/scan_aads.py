@@ -26,6 +26,7 @@ import ast
 import json
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -1203,23 +1204,75 @@ def find_stale_backups(paths: Iterable[str], patterns: Sequence[str]) -> list[di
 # ══════════════════════════════════════════════════════════════════════
 
 
+_IGNORED_CACHE: dict[str, set[str]] = {}
+
+
+def git_ignored_files(repo_root: Path) -> set[str]:
+    """git 이 무시하는 파일 절대경로 집합. 저장소가 아니면 빈 집합.
+
+    같은 커밋이 서버마다 다른 결과를 내면 baseline 은 의미가 없다.
+    2026-09-16 실측: 116 서버 워킹트리에는 gitignore 된 `.bak` 파일이 120개 있어
+    STALE_BACKUP 이 34(깨끗한 체크아웃) → 113 으로 부풀었다. 스캔 결과는
+    **커밋 내용**만으로 결정돼야 한다.
+    """
+    key = str(repo_root)
+    if key in _IGNORED_CACHE:
+        return _IGNORED_CACHE[key]
+    found: set[str] = set()
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "--others", "--ignored",
+             "--exclude-standard"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if proc.returncode == 0:
+            for line in proc.stdout.split("\n"):
+                if line.strip():
+                    found.add((repo_root / line.strip()).as_posix())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    _IGNORED_CACHE[key] = found
+    return found
+
+
 def iter_files(root: Path, rel_roots: Sequence[str], suffixes: Sequence[str],
                exclude_dirs: Sequence[str]) -> list[str]:
     excluded = set(exclude_dirs)
+    ignored = git_ignored_files(root)
     out: list[str] = []
+
+    def key_for(p: Path) -> str:
+        """저장소 밖 경로(예: 별도 저장소인 대시보드)도 다룬다.
+
+        2026-09-16: 대시보드 소스가 aads-server 안에 13파일짜리 유령 미러로
+        추적되고 있었고, 그 미러를 지우자 프런트 스캔이 0파일이 되어 계약
+        검사(PATH_DRIFT/ROUTE_MISSING)가 조용히 꺼졌다. 정본은 별도 저장소
+        `/root/aads/aads-dashboard` 한 곳이므로 root 밖을 가리킬 수 있어야 한다.
+        root 밖이면 절대경로를 키로 쓴다 — `root / "/abs"` 는 pathlib 에서
+        `/abs` 가 되므로 이후 읽기 경로가 그대로 성립한다.
+        """
+        try:
+            return p.relative_to(root).as_posix()
+        except ValueError:
+            return p.resolve().as_posix()
+
     for rel in rel_roots:
-        base = root / rel
+        base = (root / rel).resolve() if rel.startswith("..") else root / rel
         if not base.exists():
             continue
         if base.is_file():
-            out.append(base.relative_to(root).as_posix())
+            if base.as_posix() not in ignored:
+                out.append(key_for(base))
             continue
         for dirpath, dirnames, filenames in os.walk(base):
             dirnames[:] = [d for d in dirnames if d not in excluded]
             for fn in filenames:
                 if suffixes and not any(fn.endswith(s) for s in suffixes):
                     continue
-                out.append((Path(dirpath) / fn).relative_to(root).as_posix())
+                p = Path(dirpath) / fn
+                if p.as_posix() in ignored:
+                    continue
+                out.append(key_for(p))
     return sorted(set(out))
 
 
@@ -1683,6 +1736,12 @@ def zero_target_guard(scan: Scan) -> list[str]:
         empty.append("APIRouter 를 정의하는 모듈 0개")
     if not scan.entrypoints_present:
         empty.append("엔트리포인트 파일 0개")
+    # 프런트 계약 검사는 "설정했는데 0파일" 이 가장 위험하다 — 전체 스캔은
+    # 백엔드 파일이 있으니 통과하고, PATH_DRIFT/ROUTE_MISSING 만 영원히 0 이 된다.
+    # 2026-09-16 유령 미러를 지운 직후 실제로 이 상태가 됐다.
+    fe_roots = (getattr(scan, "rules", None) or {}).get("frontend", {}).get("roots")
+    if fe_roots and not getattr(scan, "fe_files", None):
+        empty.append("frontend.roots 가 설정됐는데 대상 파일 0개 (경로가 실재하는지 확인하라)")
     return empty
 
 
