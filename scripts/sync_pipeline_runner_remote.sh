@@ -110,6 +110,41 @@ remote_sha() {
     ssh_run "$host" "sha256sum '$path' 2>/dev/null | awk '{print \$1}' || true"
 }
 
+# ── 실행중 러너 보호 (AADS-RUNNER-SYNC-BUSY-DEFER) ──────────────────────
+# 원격 러너가 pipeline_jobs.runner_host 에 쓰는 이름은 systemd 환경변수
+# AADS_RUNNER_HOST_NAME, 없으면 `hostname -s` 다. 동기화 대상 이름(cafe24_114)과
+# 다를 수 있으므로(실측: cafe24_114 → rfree-0009) 하드코딩하지 않고 호스트에 묻는다.
+remote_runner_host_name() {
+    local host="$1" service="$2" name=""
+    # 한 번의 SSH 로 끝낸다 — 환경변수 값이 있으면 그것이, 없으면 hostname -s 가 첫 비어있지 않은 줄이다.
+    name=$(ssh_run "$host" "systemctl show -p Environment --value '$service' 2>/dev/null | tr ' ' '\n' | sed -n 's/^AADS_RUNNER_HOST_NAME=//p' | head -1; hostname -s" 2>/dev/null | awk 'NF{print; exit}' | tr -d '[:space:]') || name=""
+    [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || name=""
+    printf '%s' "$name"
+}
+
+# 해당 러너 호스트가 붙잡고 있는 작업 수. 조회 실패/이름 미상이면 빈 문자열.
+db_active_job_count() {
+    local host_name="$1" out=""
+    [[ -n "$host_name" ]] || { printf ''; return 0; }
+    out=$(docker exec -i "$PG_CONTAINER" psql -U "$PGUSER" -d "$PGDATABASE" \
+            -q -t -A -P footer=off \
+            -c "SELECT count(*) FROM pipeline_jobs WHERE status IN ('claimed','running','deploying') AND runner_host='${host_name}';" \
+            </dev/null 2>/dev/null | tr -d '[:space:]') || out=""
+    [[ "$out" =~ ^[0-9]+$ ]] || out=""
+    printf '%s' "$out"
+}
+
+# 0 = 미루기, 1 = 진행.
+# 판별 불가(빈 문자열)도 미룬다 — 타이머가 5분마다 다시 시도하므로 비용은 지연뿐이고,
+# 잘못 진행하면 실행 중인 P0 작업이 처음부터 다시 돌아간다.
+should_defer_for_busy() {
+    local busy_count="$1" ignore_busy="${2:-0}"
+    [[ "$ignore_busy" == "1" ]] && return 1
+    [[ "$busy_count" =~ ^[0-9]+$ ]] || return 0
+    [[ "$busy_count" -gt 0 ]] && return 0
+    return 1
+}
+
 default_targets() {
     cat <<EOF
 contabo14|contabo14|/root/scripts/pipeline-runner.sh|aads-pipeline-runner.service|${SCRIPT_DIR}/aads-pipeline-litellm-runner.211.service
@@ -164,6 +199,16 @@ sync_one_target() {
     if [[ "$SYNC_REMOTE_UNITS" == "1" && ! -f "$service_unit" ]]; then
         echo "ERROR: service unit missing for ${name}: ${service_unit}" >&2
         return 2
+    fi
+
+    # 실행 중인 러너는 건드리지 않는다 — 파일 교체도, 재시작도 미룬다.
+    local runner_host_name busy_count
+    runner_host_name=$(remote_runner_host_name "$host" "$service")
+    busy_count=$(db_active_job_count "$runner_host_name")
+    if should_defer_for_busy "$busy_count" "$IGNORE_BUSY"; then
+        log "${name}: sync deferred — runner host=${runner_host_name:-unknown} active_jobs=${busy_count:-unknown}"
+        DEFERRED=$((DEFERRED + 1))
+        return 0
     fi
 
     local local_sha current_sha installed_sha unit_dest changed=0 unit_changed=0
@@ -271,7 +316,7 @@ main() {
         echo "ERROR: no targets matched" >&2
         exit 2
     fi
-    log "sync complete targets=${synced}"
+    log "sync complete targets=${synced} deferred=${DEFERRED}"
 }
 
 main "$@"
