@@ -13222,6 +13222,17 @@ async def send_message_stream(
                 from app.core.interrupt_queue import has_interrupt as _has_interrupt
 
                 _interrupt_notified = False
+                # 실제로 보내는 시점의 크기를 잰다.
+                # ctx_done 직후에 재면 그 뒤에 붙는 응답모드·reply_to·테넌트·
+                # 멘션 블록이 빠져 실제보다 작게 기록된다 — 24시간 평균이
+                # 18,069자로 남았지만 provenance 실측은 34,000~40,000자였다.
+                _timer.prompt_chars = len(system_prompt or "")
+                _timer.history_count = len(messages or [])
+                try:
+                    _timer.model = str(_attempt_model_override or getattr(intent_result, "model", "") or "")
+                    _timer.intent = str(getattr(intent_result, "intent", "") or "")
+                except Exception:
+                    pass
                 _timer.mark("request_sent")
                 async for event in call_stream(
                     intent_result=intent_result,
@@ -13273,6 +13284,11 @@ async def send_message_stream(
                         thinking_summary += event.get("thinking", "")
                         yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
                     elif etype == "tool_use":
+                        # 도구 호출 횟수를 턴 계측에 남긴다.
+                        # chat_turn_timing.tool_calls 는 칼럼만 있고 아무도 채우지
+                        # 않아 24시간 192턴이 전부 0 이었다(2026-09-16 실측).
+                        # 그래서 "응답이 느린 게 도구 때문인가"에 수치로 답할 수 없었다.
+                        _timer.tool_calls += 1
                         tools_called.append({"type": "tool_use", "tool_name": event["tool_name"], "tool_use_id": event.get("tool_use_id", ""), "tool_input": event.get("tool_input", {})})
                         yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
                     elif etype == "tool_result":

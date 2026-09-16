@@ -726,9 +726,14 @@ async def build_messages_context(
         _build_artifact_context_layer(session_id, db_conn=db_conn),
     )
 
-    # KST 현재시각 최상단 주입 (매 턴 동적)
+    # KST 현재시각은 **꼬리**에 붙인다 (매 턴 동적).
+    #
+    # 최상단에 두면 분이 바뀔 때마다 프롬프트가 0번째 글자부터 달라진다.
+    # Anthropic prompt caching 은 프리픽스 일치로 판정하므로, 첫 글자가 바뀌면
+    # 그 뒤 시스템 프롬프트 전체(실측 34,000~40,000자)가 매 턴 캐시 미스가 된다.
+    # 모델이 시각을 읽는 데에는 위치가 상관없으므로 맥락 손실 없이 적중만 올린다.
     _kst_now = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST (%A)")
-    system_prompt = f"<currentTime>\n{_kst_now}\n</currentTime>\n\n" + layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer + artifact_layer + "\n\n" + _layer4
+    system_prompt = layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer + artifact_layer + "\n\n" + _layer4 + f"\n\n<currentTime>\n{_kst_now}\n</currentTime>"
 
     # 토큰 절감 측정 로깅
     _sp_chars = len(system_prompt)
@@ -858,12 +863,18 @@ async def build(
             },
         ]
 
-    # KST 현재시각 최상단 주입 (매 턴 동적)
+    # KST 현재시각은 **꼬리**에 붙인다 (매 턴 동적).
+    #
+    # 예전에는 비캐시 블록으로 만들어 system_blocks 맨 앞에 끼웠다. 그러면
+    # 바로 위에서 만든 3개 breakpoint(AADS-186D)가 **하나도 적중하지 않는다** —
+    # 캐시는 프리픽스 일치로 판정하는데 0번 블록이 분마다 바뀌기 때문이다.
+    # 꼬리로 옮기면 Layer1/Layer2/Memory 프리픽스가 그대로 유지되고, 모델이
+    # 읽는 내용은 동일하므로 맥락 유지에는 영향이 없다.
     _kst_now = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST (%A)")
-    _kst_header = f"<currentTime>\n{_kst_now}\n</currentTime>\n\n"
-    system_text = _kst_header + layer1 + "\n\n---\n\n" + layer2_full + "\n\n" + _layer4
-    # system_blocks 최상단에도 KST 시각 주입 (비캐시 블록)
-    system_blocks = [{"type": "text", "text": _kst_header.strip()}] + system_blocks
+    _kst_block = f"<currentTime>\n{_kst_now}\n</currentTime>"
+    system_text = layer1 + "\n\n---\n\n" + layer2_full + "\n\n" + _layer4 + "\n\n" + _kst_block
+    # system_blocks 꼬리에 KST 시각 주입 (비캐시 블록 — 캐시 프리픽스를 깨지 않는 위치)
+    system_blocks = system_blocks + [{"type": "text", "text": _kst_block}]
 
     # 토큰 절감 측정 로깅
     _sp_chars = len(system_text)
