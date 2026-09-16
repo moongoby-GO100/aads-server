@@ -38,10 +38,14 @@ POLLER_PAT='scripts/gh_token_to_en[v].sh'
 MODE="${1:-}"
 
 # 동시 실행 차단. 재실행이 겹쳐도 발급은 한 번만 일어난다.
-exec 9>"$LOCK"
-if ! flock -w 10 9; then
-    echo "다른 발급이 진행 중이다 — 중단" >&2
-    exit 3
+# --status 는 읽기 전용이므로 락을 잡지 않는다.
+# (락은 발급 경로 전용. 폴러가 fd 를 물고 있어도 상태 조회는 막히면 안 된다.)
+if [ "$MODE" != "--status" ]; then
+    exec 9>"$LOCK"
+    if ! flock -w 10 9; then
+        echo "다른 발급이 진행 중이다 — 중단" >&2
+        exit 3
+    fi
 fi
 
 live_pollers() { pgrep -f "$POLLER_PAT" 2>/dev/null; }
@@ -123,14 +127,14 @@ EXP_EPOCH="$(( $(date +%s) + EX ))"
 {
     echo "user_code=${UC}"
     echo "device_code=${DC}"
-    echo "issued=$(date '+%H:%M:%S')"
-    echo "expires=$(date -d "@${EXP_EPOCH}" '+%H:%M:%S')"
+    echo "issued=$(TZ=Asia/Seoul date '+%H:%M:%S')"
+    echo "expires=$(TZ=Asia/Seoul date -d "@${EXP_EPOCH}" '+%H:%M:%S')"
     echo "expires_epoch=${EXP_EPOCH}"
 } > "$MAP"
 chmod 600 "$MAP"
 
 : > "$LOG"
-setsid nohup timeout "$EX" bash "$POLLER" "$DC" >/dev/null 2>&1 &
+setsid nohup timeout "$EX" bash "$POLLER" "$DC" >/dev/null 2>&1 9>&- &
 sleep 1
 
 echo "state=issued"
