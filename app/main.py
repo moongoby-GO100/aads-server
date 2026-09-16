@@ -3168,6 +3168,28 @@ async def lifespan(app: FastAPI):
                 sorted({int(r["owner_epoch"] or 0) for r in rows}),
             )
 
+    async def _sweep_stale_interrupts_once():
+        """미회수 추가지시를 경과 시간으로 분류한다 (전 세션).
+
+        회수는 지금까지 **그 세션의 다음 턴이 돌 때만** 시도됐다. 세션이
+        멈추면 아무도 돌지 않아, 2026-09-17 실측으로 `[CEO 승인 · 배포 지시]`
+        가 23시간째 대기 중이었다. 턴을 기다리지 않는 주체를 따로 둔다.
+
+        여기서 실행하지는 않는다 — 분류만 한다. 하루 지난 "배포해" 를 자동
+        으로 얹으면 복구가 아니라 사고이므로, 30분을 넘긴 것은 화면에 올려
+        대표님이 고르시게 한다(`interrupt_needs_confirm`).
+        """
+        from app.core.db_pool import get_pool as _gp_sweep
+        from app.services.chat_service import sweep_stale_interrupts as _sweep
+
+        async with _gp_sweep().acquire() as conn:
+            result = await _sweep(conn)
+        if result.get("needs_confirm") or result.get("expired"):
+            logger.warning(
+                "interrupt_swept needs_confirm=%d expired=%d",
+                result.get("needs_confirm", 0), result.get("expired", 0),
+            )
+
     async def _periodic_execution_resume_scanner():
         import asyncio as _prs_asyncio
         _periodic_stale_seconds = int(os.getenv("AADS_EXECUTION_RESUME_STALE_SECONDS", "8"))
@@ -3185,6 +3207,9 @@ async def lifespan(app: FastAPI):
                 )
                 if _tick % _reap_every == 0 and _is_execution_resume_owner():
                     await _reap_abandoned_executions_once()
+                    # 같은 5분 주기에 얹는다. 둘 다 "턴을 기다리지 않는 청소"
+                    # 이고, 따로 두면 주기가 어긋났을 때 원인을 찾기 어렵다.
+                    await _sweep_stale_interrupts_once()
             except Exception as _e:
                 logger.warning(f"execution_resume_scanner_error: {_e}")
 

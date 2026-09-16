@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 import uuid
@@ -320,7 +321,7 @@ def test_auto_message_exclude_filter_only_checks_runner_markers_near_head():
 
 
 def test_history_filter_excludes_hidden_runner_notifications():
-    history_filter = chat_service._history_intent_filter_sql()
+    history_filter = chat_service._history_exclusion_sql()
 
     assert "'pipeline_c'" in history_filter
     assert "'runner_notification'" in history_filter
@@ -2085,12 +2086,18 @@ async def test_collect_queued_interrupts_recovers_db_saved_interrupt_without_mem
             "attachments": [{"type": "text", "name": "note.txt"}],
         }
     ]
-    # 두 번 실행된다: ① 창(30분)을 넘긴 미소비 지시를 interrupt_expired 로
-    # 내려놓고 ② 이번에 먹은 것을 interrupt_applied 로 표시한다. ①이 없으면
-    # 어제 들어온 '[추가 지시] 배포해' 가 오늘 답변에 끼어든다(2026-09-16 실측).
+    # 세 번 실행된다. ①② 는 sweep_stale_interrupts 의 3구간 분류 —
+    # 24시간을 넘긴 것은 interrupt_expired, 30분~24시간은
+    # interrupt_needs_confirm(대표님 확인 대기). ③ 은 이번에 먹은 것을
+    # interrupt_applied 로 표시한다.
+    #
+    # 가운데 구간이 필요한 이유: 2026-09-17 실측으로 23시간 묵은
+    # '[CEO 승인 · 배포 지시]' 가 대기 중이었다. 자동으로 얹으면 사고이고,
+    # 조용히 버리면 대표님 지시가 사라진다.
     statements = [call.args[0] for call in conn.execute.await_args_list]
-    assert len(statements) == 2
+    assert len(statements) == 3
     assert any("interrupt_expired" in sql for sql in statements)
+    assert any("interrupt_needs_confirm" in sql for sql in statements)
     assert any("interrupt_applied" in sql for sql in statements)
 
 
@@ -2294,3 +2301,112 @@ def test_strip_internal_continuation_context_removes_nested_scaffolds():
     )
 
     assert chat_service._strip_internal_continuation_context(content) == "이어서 진행해"
+
+
+# ---------------------------------------------------------------------------
+# 추가 지시 회수 (2026-09-17)
+#
+# 회수·만료·취소 세 쿼리가 서로 다른 기준을 쓰면 화면 버튼이 듣지 않는다.
+# 실측: `content LIKE '[추가 지시%'` 때문에 대기 16건 중 11건(69%)이
+# 회수도 만료도 못 받고 23시간 남아 있었고, 그중 7건이 대표님 지시였다.
+# ---------------------------------------------------------------------------
+
+
+def test_interrupt_queries_select_by_intent_not_by_prefix():
+    """접두 문자열로 고르면 새 접두가 나올 때마다 샌다."""
+    service = Path(chat_service.__file__).read_text(encoding="utf-8")
+    router = Path("app/routers/chat.py").read_text(encoding="utf-8")
+
+    fetch = service.split("async def _fetch_persisted_interrupts", 1)[1].split(
+        "\nasync def ", 1
+    )[0]
+    sweep = service.split("async def sweep_stale_interrupts", 1)[1].split(
+        "\nasync def ", 1
+    )[0]
+    cancel = router.split("async def cancel_queued_interrupts", 1)[1].split(
+        "\n@router.", 1
+    )[0]
+
+    def _code_only(block: str) -> str:
+        """주석을 걷어낸다. 옛 조건을 '왜 틀렸나'로 인용한 주석이 있어,
+        그대로 검사하면 설명 문장이 실제 쿼리로 오인된다."""
+        lines = []
+        for line in block.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#") or stripped.startswith("--"):
+                continue
+            lines.append(line)
+        return "\n".join(lines)
+
+    for name, block in (("fetch", fetch), ("sweep", sweep), ("cancel", cancel)):
+        code = _code_only(block)
+        assert "LIKE '[추가 지시" not in code, name
+        assert "intent" in code, name
+
+
+def test_stale_interrupts_are_held_for_confirmation_not_silently_dropped():
+    """30분~24시간 구간은 버리지도, 자동으로 얹지도 않는다."""
+    service = Path(chat_service.__file__).read_text(encoding="utf-8")
+    sweep = service.split("async def sweep_stale_interrupts", 1)[1].split(
+        "\nasync def ", 1
+    )[0]
+
+    assert "interrupt_needs_confirm" in sweep
+    assert "interrupt_expired" in sweep
+    assert "INTERRUPT_CONFIRM_WINDOW" in sweep
+    assert "INTERRUPT_RECOVERY_WINDOW" in sweep
+    # 24시간 창이 30분 창보다 넓어야 구간이 성립한다.
+    assert chat_service.INTERRUPT_CONFIRM_WINDOW > chat_service.INTERRUPT_RECOVERY_WINDOW
+
+
+def test_user_confirmed_interrupt_bypasses_the_auto_recovery_window():
+    """사람이 보고 고른 것을 나이로 다시 막지 않는다."""
+    service = Path(chat_service.__file__).read_text(encoding="utf-8")
+    fetch = service.split("async def _fetch_persisted_interrupts", 1)[1].split(
+        "\nasync def ", 1
+    )[0]
+
+    assert "interrupt_confirmed" in fetch
+    assert "m.intent = 'interrupt_confirmed'" in fetch
+
+
+def test_retract_stops_execution_and_soft_deletes_and_clears_relay():
+    """회수는 삭제와 다르다 — 넷을 함께 해야 회수다."""
+    service = Path(chat_service.__file__).read_text(encoding="utf-8")
+    retract = service.split("async def retract_user_message", 1)[1].split(
+        "\nasync def ", 1
+    )[0]
+
+    # ① 진행 중인 실행을 멈춘다. 멈추지 않으면 지운 뒤에도 도구를 더 실행한다.
+    assert "SET status = 'cancelled'" in retract
+    assert "retracted_by_user" in retract
+    # ② 하드 삭제가 아니라 소프트 삭제. 무엇을 회수했는지 남아야 한다.
+    assert "deleted_at = NOW()" in retract
+    assert "DELETE FROM chat_messages" not in retract
+    # ③ 딸린 대기 추가지시도 함께 무른다.
+    assert "interrupt_cancelled" in retract
+    # ④ 모델의 기억은 DB 밖(CLI resume)에도 있다.
+    assert "_relay_clear_aads_session_for_oauth_fallback" in retract
+    # 이미 실행된 도구는 되돌지 않는다 — 숨기지 말고 돌려준다.
+    assert "tools_already_run" in retract
+
+
+def test_retract_does_not_hide_the_whole_session():
+    """회수는 그 지시의 답변만 내린다.
+
+    실행 연결이 없을 때 `created_at > 원본` 만으로 잡으면 이후 모든 답변이
+    내려간다 — 회수가 아니라 대화 파괴다. 실행으로 묶인 것, 없으면 바로
+    다음 답변 한 건. 두 경로만 허용한다.
+    """
+    service = Path(chat_service.__file__).read_text(encoding="utf-8")
+    retract = service.split("async def retract_user_message", 1)[1].split(
+        "\nasync def ", 1
+    )[0]
+    hide_stmt = retract.split("SET deleted_at = NOW()", 1)[1].split('"""', 1)[0]
+
+    # 세션을 벗어나지 않는다.
+    assert "session_id = $2" in hide_stmt
+    # 열린 범위 조건(created_at > …)으로 답변을 쓸어담지 않는다.
+    assert "created_at >" not in hide_stmt
+    # 다음 답변 한 건은 LIMIT 1 로 미리 고른다.
+    assert "ORDER BY created_at ASC LIMIT 1" in retract

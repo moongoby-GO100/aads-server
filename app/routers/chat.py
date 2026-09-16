@@ -10,6 +10,7 @@ import re
 import time
 import asyncio
 import structlog
+from datetime import timedelta as _dt_timedelta, timezone as _dt_timezone
 from typing import Any, List, Optional
 from uuid import UUID
 import uuid
@@ -3671,8 +3672,11 @@ async def cancel_queued_interrupts(
                    edited_at = NOW()
              WHERE m.session_id = $1
                AND m.role = 'user'
-               AND m.content LIKE '[추가 지시%'
-               AND COALESCE(m.intent, '') IN ('', 'queued_interrupt')
+               -- 접두로 고르지 않는다. 2026-09-17 실측: `content LIKE
+               -- '[추가 지시%'` 가 대기 16건 중 11건을 놓쳤고 그중 7건이
+               -- 대표님 지시(`[CEO 승인 …]`, `[CEO 지시 …]`)였다. 취소도
+               -- 회수와 같은 기준이어야 화면 버튼이 실제로 듣는다.
+               AND m.intent IN ('queued_interrupt', 'interrupt_needs_confirm')
                AND ($2::uuid[] IS NULL OR m.id = ANY($2::uuid[]))
                AND NOT EXISTS (
                    SELECT 1
@@ -3690,7 +3694,6 @@ async def cancel_queued_interrupts(
               FROM chat_messages m
              WHERE m.session_id = $1
                AND m.role = 'user'
-               AND m.content LIKE '[추가 지시%'
                AND COALESCE(m.intent, '') IN ('interrupt_applied', 'interrupt_completed', 'recovered_interrupt')
                AND ($2::uuid[] IS NULL OR m.id = ANY($2::uuid[]))
                AND m.created_at > NOW() - INTERVAL '30 minutes'
@@ -3716,6 +3719,144 @@ async def cancel_queued_interrupts(
         "queue_dropped": dropped,
         "already_applied": int(already_applied or 0),
         "message_ids": [str(r["id"]) for r in rows],
+    }
+
+
+# 회수 대기 중인 지시의 intent 집합. 한 곳에 둔다 — 조회·반영·집계가 서로
+# 다른 목록을 보면 "3건 있다" 고 띄워놓고 열면 비어 있는 일이 생긴다.
+_INTERRUPT_PENDING_INTENTS = ("queued_interrupt", "interrupt_needs_confirm")
+
+_KST = _dt_timezone(_dt_timedelta(hours=9))
+
+
+def _to_kst_iso(value) -> Optional[str]:
+    """DB 시각을 KST ISO 문자열로. 화면 시각은 항상 한국시간이다.
+
+    이 서버의 로컬 타임존은 Europe/Berlin 이라 그대로 내려보내면 화면이
+    8~9시간 어긋난다. TIMESTAMPTZ 인데도 offset 이 없는 값이 섞여 들어와
+    한 번 어긋난 적이 있어, naive 는 UTC 로 보고 변환한다.
+    """
+    if value is None:
+        return None
+    if getattr(value, "tzinfo", None) is None:
+        value = value.replace(tzinfo=_dt_timezone.utc)
+    return value.astimezone(_KST).isoformat()
+
+
+@router.get("/chat/sessions/{session_id}/interrupt/pending", tags=["chat-session"])
+async def list_pending_interrupts(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """아직 어느 답변에도 들어가지 않은 추가 지시를 돌려준다.
+
+    2026-09-17 실측으로 16건이 최고 23시간 대기 중이었고, 그중 11건은 회수
+    쿼리의 접두 조건에 걸리지 않아 영영 회수될 수 없었다. 화면이 이 목록을
+    보고 건별로 [지금 반영] / [취소] 를 고르게 한다.
+    """
+    if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
+
+    from app.core.db_pool import get_pool
+
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT m.id::text AS id,
+                   m.content,
+                   m.intent,
+                   m.created_at,
+                   EXTRACT(EPOCH FROM (NOW() - m.created_at))::bigint AS age_seconds
+              FROM chat_messages m
+             WHERE m.session_id = $1
+               AND m.role = 'user'
+               AND m.intent = ANY($2::text[])
+               AND NOT EXISTS (
+                   SELECT 1 FROM chat_turn_executions te WHERE te.user_message_id = m.id
+               )
+             ORDER BY m.created_at ASC
+            """,
+            session_id,
+            list(_INTERRUPT_PENDING_INTENTS),
+        )
+
+    return {
+        "session_id": str(session_id),
+        "pending": [
+            {
+                "id": r["id"],
+                "content": r["content"],
+                "intent": r["intent"],
+                # 시각은 항상 KST 로 내려보낸다. 서버 로컬이 Europe/Berlin 이라
+                # 그대로 두면 화면이 8~9시간 어긋난다.
+                "created_at_kst": _to_kst_iso(r["created_at"]),
+                "age_seconds": int(r["age_seconds"] or 0),
+                # 30분 안이면 다음 턴이 자동으로 먹는다. 그 밖은 확인이 필요하다.
+                "needs_confirm": r["intent"] == "interrupt_needs_confirm",
+            }
+            for r in rows
+        ],
+        "total": len(rows),
+    }
+
+
+@router.post("/chat/sessions/{session_id}/interrupt/apply", tags=["chat-session"])
+async def apply_pending_interrupts(
+    session_id: UUID,
+    payload: Optional[CancelInterruptRequest] = None,
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """대기 중인 지시를 "다음 응답에 반영" 으로 올린다.
+
+    `interrupt_confirmed` 로 올려두면 `_fetch_persisted_interrupts` 가 나이와
+    무관하게 집어간다. 30분 창은 **자동** 회수에만 거는 것이고, 대표님이
+    화면에서 보고 직접 고른 것을 시간으로 다시 막을 이유가 없다.
+
+    여기서 턴을 직접 시작하지는 않는다. 하루 지난 "배포해" 를 서버가 스스로
+    실행하는 것과, 사람이 고른 것을 다음 대화에 얹는 것은 다른 일이다.
+    """
+    if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
+
+    target_ids: list[UUID] = []
+    if payload and payload.message_ids:
+        for raw in payload.message_ids:
+            try:
+                target_ids.append(UUID(str(raw)))
+            except (TypeError, ValueError):
+                continue
+
+    from app.core.db_pool import get_pool
+
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            UPDATE chat_messages m
+               SET intent = 'interrupt_confirmed',
+                   edited_at = NOW()
+             WHERE m.session_id = $1
+               AND m.role = 'user'
+               AND m.intent = ANY($2::text[])
+               AND ($3::uuid[] IS NULL OR m.id = ANY($3::uuid[]))
+               AND NOT EXISTS (
+                   SELECT 1 FROM chat_turn_executions te WHERE te.user_message_id = m.id
+               )
+         RETURNING m.id::text AS id, m.content
+            """,
+            session_id,
+            list(_INTERRUPT_PENDING_INTENTS),
+            target_ids or None,
+        )
+
+    logger.info(
+        "interrupt_confirmed_by_user",
+        session_id=str(session_id)[:8],
+        confirmed=len(rows),
+    )
+    return {
+        "confirmed": len(rows),
+        "message_ids": [r["id"] for r in rows],
+        "note": "다음 응답에 반영됩니다.",
     }
 
 
@@ -4094,6 +4235,33 @@ async def update_message(
     """사용자 메시지 내용 수정 (방식A: 수정 후 재전송용)."""
     result = await svc.update_message(str(message_id), req.content, tenant_id=_tenant_id(context))
     if not result:
+        raise _NOT_FOUND("message")
+    return result
+
+
+@router.post("/chat/messages/{message_id}/retract", tags=["chat-message"])
+async def retract_message(
+    message_id: UUID,
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """잘못 보낸 지시를 회수한다.
+
+    삭제(`DELETE /chat/messages/{id}`)와 다르다. 삭제는 행만 지우고 진행 중인
+    실행은 그대로 둔다 — 지운 뒤에도 그 턴이 계속 돌며 도구를 더 실행하고 새
+    응답 버블을 만든다. 회수는 넷을 함께 한다.
+
+    | 단계 | 내용 |
+    |---|---|
+    | ① | 그 지시로 시작된 실행을 `cancelled` 로 중단 |
+    | ② | 지시와 답변을 **소프트 삭제**(`deleted_at`) — 되돌릴 수 있게 |
+    | ③ | 딸린 대기 추가지시를 함께 무름 |
+    | ④ | CLI 릴레이 세션 연결을 끊어 모델의 기억에서도 제거 |
+
+    **이미 실행된 도구는 되돌리지 않는다.** 무엇이 실행됐는지
+    `tools_already_run` 으로 돌려주고 화면이 그대로 알린다.
+    """
+    result = await svc.retract_user_message(str(message_id), tenant_id=_tenant_id(context))
+    if not result.get("retracted"):
         raise _NOT_FOUND("message")
     return result
 

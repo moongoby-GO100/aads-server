@@ -740,11 +740,28 @@ _HISTORY_EXCLUDED_INTENTS = (
 )
 
 
-def _history_intent_filter_sql(alias: str = "") -> str:
-    """SQL predicate for messages that should not crowd LLM conversation history."""
+def _history_exclusion_sql(alias: str = "") -> str:
+    """모델 대화 이력에서 빼야 할 메시지의 SQL 조건.
+
+    두 가지를 뺀다.
+
+    1. 이력을 어지럽히는 intent (`_HISTORY_EXCLUDED_INTENTS`)
+    2. **회수된 메시지** (`deleted_at IS NOT NULL`)
+
+    2번이 여기 있어야 하는 이유 — 2026-09-17 확인 결과 이 조건을 쓰는 이력
+    쿼리가 네 곳인데 `deleted_at` 을 거르는 곳이 하나도 없었다. 읽기 모델
+    (chat_read_model.py)은 이미 걸렀으므로, 회수하면 **화면에서는 사라지고
+    모델은 계속 보는** 상태가 된다. 그것은 회수가 아니다.
+
+    조건을 이 함수 한 곳에 두는 이유도 같다. 네 곳에 흩어두면 반드시 하나를
+    빠뜨린다 — 오늘 오전 추가지시 판정에서 같은 실수를 이미 했다.
+    """
     prefix = f"{alias}." if alias else ""
     quoted = ", ".join(f"'{intent}'" for intent in _HISTORY_EXCLUDED_INTENTS)
-    return f"AND COALESCE({prefix}intent, '') NOT IN ({quoted})"
+    return (
+        f"AND COALESCE({prefix}intent, '') NOT IN ({quoted}) "
+        f"AND {prefix}deleted_at IS NULL"
+    )
 
 
 def _normalize_response_mode(response_mode: Optional[str]) -> str:
@@ -2050,10 +2067,81 @@ def _normalize_interrupt_content(content: Any) -> str:
 # 설계 근거: docs/prd/20260916_CHAT_INTERRUPT_QUEUE_PRD.md 3절.
 INTERRUPT_RECOVERY_WINDOW = timedelta(minutes=30)
 
+# 이 창을 넘긴 지시는 자동으로 얹지 않고 대표님 확인을 받는다. 어제 08:56 의
+# "배포해" 가 오늘 답변에 자동으로 끼어들면 복구가 아니라 사고다.
+# 이 창마저 넘기면 만료로 내린다.
+INTERRUPT_CONFIRM_WINDOW = timedelta(hours=24)
+
 # 한 턴이 수거하는 추가지시 상한. 프로세스 큐 pop 은 무제한인데 DB 복구만
 # 5 였다 — 2026-09-16 실측에서 한 실행이 10건을 삼킨 적이 있어, 스트림이
 # 끊겼을 때 6건째부터 복구되지 않는 비대칭이 있었다.
 INTERRUPT_COLLECT_LIMIT = 20
+
+
+async def sweep_stale_interrupts(
+    conn: asyncpg.Connection,
+    session_id: Optional[str] = None,
+) -> dict[str, int]:
+    """미회수 추가지시를 경과 시간으로 분류한다.
+
+    | 경과 | 처리 | intent |
+    |---|---|---|
+    | 30분 이내 | 그대로 둔다 — 다음 턴이 자동 회수 | `queued_interrupt` |
+    | 30분 ~ 24시간 | 대표님 확인을 받는다 | `interrupt_needs_confirm` |
+    | 24시간 초과 | 만료 | `interrupt_expired` |
+
+    가운데 구간을 둔 이유 — 2026-09-17 실측으로 23시간 묵은 `[CEO 승인 ·
+    배포 지시]` 가 대기 중이었다. 이런 것을 자동으로 얹으면 복구가 아니라
+    사고이고, 그렇다고 조용히 버리면 대표님 지시가 사라진다. 사람이 고르게
+    한다.
+
+    `session_id` 를 주면 그 세션만, 없으면 전체를 훑는다. 전체 훑기가 필요한
+    이유는 회수가 지금까지 **그 세션의 다음 턴이 돌 때만** 시도됐기 때문이다.
+    세션이 멈추면 아무도 돌지 않아 23시간이 지나도 그대로였다.
+    """
+    params: list[Any] = [INTERRUPT_RECOVERY_WINDOW, INTERRUPT_CONFIRM_WINDOW]
+    scope = ""
+    if session_id:
+        params.append(uuid.UUID(str(session_id)))
+        scope = " AND m.session_id = $3"
+
+    # 오래된 것부터 내린다. 한 쿼리로 합치지 않는 이유는 두 구간의 경계가
+    # 겹칠 때 어느 쪽이 이기는지 SQL 로 읽히지 않기 때문이다.
+    expired = await conn.execute(
+        f"""
+        UPDATE chat_messages m
+           SET intent = 'interrupt_expired', edited_at = NOW()
+         WHERE m.role = 'user'
+           AND m.intent IN ('queued_interrupt', 'interrupt_needs_confirm')
+           AND m.created_at <= NOW() - $2::interval
+           AND NOT EXISTS (
+               SELECT 1 FROM chat_turn_executions te WHERE te.user_message_id = m.id
+           ){scope}
+        """,
+        *params,
+    )
+    needs_confirm = await conn.execute(
+        f"""
+        UPDATE chat_messages m
+           SET intent = 'interrupt_needs_confirm', edited_at = NOW()
+         WHERE m.role = 'user'
+           AND m.intent = 'queued_interrupt'
+           AND m.created_at <= NOW() - $1::interval
+           AND m.created_at > NOW() - $2::interval
+           AND NOT EXISTS (
+               SELECT 1 FROM chat_turn_executions te WHERE te.user_message_id = m.id
+           ){scope}
+        """,
+        *params,
+    )
+
+    def _n(result: str) -> int:
+        try:
+            return int(str(result).split()[-1])
+        except (ValueError, IndexError):
+            return 0
+
+    return {"expired": _n(expired), "needs_confirm": _n(needs_confirm)}
 
 
 async def _fetch_persisted_interrupts(
@@ -2085,26 +2173,19 @@ async def _fetch_persisted_interrupts(
             #
             # 30분은 정상 복구(스트림이 죽어 다음 턴에 되살리는 경로,
             # 최근 7일 recovered_interrupt 44건)를 살리는 값이다.
+            #
+            # **접두로 고르지 않는다.** 2026-09-17 실측: 이 자리에 있던
+            # `content LIKE '[추가 지시%'` 때문에 대기 중인 16건 가운데 11건
+            # (69%)이 만료 표시도 회수도 받지 못하고 23시간을 남아 있었다.
+            # 걸리지 않은 접두 — `[CEO 승인 · …]` 4건, `[CEO 지시 · …]` 3건,
+            # `[정정 · …]` 2건, `[추가 근거 · …]` 2건. 대표님 지시가 가장
+            # 많이 빠졌다.
+            #
+            # 밀어내기 판정은 같은 날 오전에 intent 기준으로 옮겼는데 이쪽에는
+            # 접두가 그대로 남아 있었다. 분류는 sweep_stale_interrupts 한 곳에
+            # 있고, 주기 배치도 같은 함수를 쓴다.
             try:
-                await conn.execute(
-                    """
-                    UPDATE chat_messages m
-                       SET intent = 'interrupt_expired',
-                           edited_at = NOW()
-                     WHERE m.session_id = $1
-                       AND m.role = 'user'
-                       AND m.content LIKE '[추가 지시%%'
-                       AND COALESCE(m.intent, '') IN ('', 'queued_interrupt')
-                       AND m.created_at <= NOW() - $2::interval
-                       AND NOT EXISTS (
-                           SELECT 1
-                             FROM chat_turn_executions te
-                            WHERE te.user_message_id = m.id
-                       )
-                    """,
-                    sid,
-                    INTERRUPT_RECOVERY_WINDOW,
-                )
+                await sweep_stale_interrupts(conn, session_id=str(sid))
             except Exception as expire_exc:
                 # 만료 표시는 청소다. 실패해도 아래 수거 조건이 같은 시간창을
                 # 쓰므로 묵은 지시가 새 답변에 들어가지는 않는다.
@@ -2120,9 +2201,16 @@ async def _fetch_persisted_interrupts(
                   FROM chat_messages m
                  WHERE m.session_id = $1
                    AND m.role = 'user'
-                   AND m.content LIKE '[추가 지시%%'
-                   AND COALESCE(m.intent, '') IN ('', 'queued_interrupt')
-                   AND m.created_at > NOW() - $3::interval
+                   -- 접두가 아니라 intent 로 고른다. 위 만료 쿼리의 주석 참고.
+                   AND m.intent IN ('queued_interrupt', 'interrupt_confirmed')
+                   -- 30분 창은 자동 회수에만 건다. 대표님이 화면에서 직접
+                   -- "지금 반영" 을 누른 것(interrupt_confirmed)은 나이와
+                   -- 무관하게 들어간다 — 사람이 보고 고른 것을 시간으로
+                   -- 다시 막을 이유가 없다.
+                   AND (
+                        m.intent = 'interrupt_confirmed'
+                        OR m.created_at > NOW() - $3::interval
+                   )
                    AND NOT EXISTS (
                        SELECT 1
                          FROM chat_turn_executions te
@@ -7726,7 +7814,7 @@ async def _resume_single_stream(
                             SELECT id, role, content, created_at FROM chat_messages
                             WHERE session_id = $1
                               AND (is_compacted IS NULL OR is_compacted = false)
-                              {_history_intent_filter_sql()}
+                              {_history_exclusion_sql()}
                             ORDER BY created_at DESC LIMIT 30
                         ) sub ORDER BY created_at ASC
                     """, sid)
@@ -10720,7 +10808,7 @@ async def run_discussion(
             SELECT id, role, content FROM (
                 SELECT id, role, content, created_at FROM chat_messages
                 WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
-                {_history_intent_filter_sql()}
+                {_history_exclusion_sql()}
                 ORDER BY created_at DESC LIMIT 200
             ) sub ORDER BY created_at ASC
             """,
@@ -12062,7 +12150,7 @@ async def send_message_stream(
                               AND (is_compacted IS NULL OR is_compacted = false)
                               AND branch_id IS NULL
                               AND created_at <= $2
-                              {_history_intent_filter_sql()}
+                              {_history_exclusion_sql()}
                             ORDER BY created_at DESC LIMIT 200
                         ) sub ORDER BY created_at ASC
                         """,
@@ -12080,7 +12168,7 @@ async def send_message_stream(
                     SELECT id, role, content FROM (
                         SELECT id, role, content, created_at FROM chat_messages
                         WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
-                        {_history_intent_filter_sql()}
+                        {_history_exclusion_sql()}
                         ORDER BY created_at DESC LIMIT 200
                     ) sub ORDER BY created_at ASC
                     """,
@@ -14516,6 +14604,209 @@ async def update_message(message_id: str, new_content: str, tenant_id: Optional[
                 logger.debug("b2_ceo_correction_error", error=str(e_b2))
 
         return _row_to_dict(row) if row else None
+
+
+async def retract_user_message(message_id: str, tenant_id: Optional[str] = None) -> dict[str, Any]:
+    """잘못 보낸 지시를 회수한다.
+
+    삭제와 다른 일이다. `delete_message_and_response` 는 행을 지울 뿐이고,
+    2026-09-17 확인 결과 세 가지를 하지 않는다.
+
+    1. **진행 중인 실행을 멈추지 않는다.** `chat_turn_executions` 를 전혀
+       건드리지 않아, 메시지를 지워도 그 턴은 계속 돌며 도구를 더 실행하고
+       새 응답 버블을 만든다.
+    2. **되돌릴 수 없다.** 하드 DELETE 다. `deleted_at` 컬럼이 이미 있고
+       읽기 모델도 `deleted_at IS NULL` 로 거르는데(chat_read_model.py),
+       쓰는 코드가 없어 47,339행 중 0행이었다 — 절반만 지어진 기능이다.
+    3. **대기 중인 추가지시를 남긴다.** 회수한 지시에 딸린 추가지시가
+       그대로 남아 다음 턴에 얹힌다.
+
+    그래서 회수는 넷을 함께 한다 — 실행 중단 · 소프트 삭제 · 추가지시 취소 ·
+    CLI 기억 차단.
+
+    **이미 실행된 도구는 되돌리지 않는다.** 최근 7일 assistant 7,301건 중
+    1,165건이 도구를 호출했다. 배포나 파일 수정이었다면 회수해도 그 일은
+    일어난 뒤다. 무엇이 실행됐는지 돌려주고, 화면이 그대로 알린다.
+    """
+    tenant_uuid = _require_tenant_uuid(tenant_id, "retract_user_message")
+    mid = uuid.UUID(str(message_id))
+
+    async with get_pool().acquire() as conn:
+        msg = await conn.fetchrow(
+            """
+            SELECT id, session_id, role, created_at, execution_id
+              FROM chat_messages
+             WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+            """,
+            mid, tenant_uuid,
+        )
+        if not msg or msg["role"] != "user":
+            return {"retracted": False, "reason": "not_found_or_not_user_message"}
+
+        session_id = msg["session_id"]
+
+        # ① 이 지시로 시작된 실행을 찾아 멈춘다. 먼저 멈추지 않으면 아래에서
+        #    숨긴 자리표시자에 계속 쓴다.
+        executions = await conn.fetch(
+            """
+            UPDATE chat_turn_executions
+               SET status = 'cancelled',
+                   completed_at = COALESCE(completed_at, NOW()),
+                   updated_at = NOW(),
+                   lease_expires_at = NULL,
+                   owner_instance = NULL,
+                   error_message = COALESCE(error_message, 'retracted_by_user')
+             WHERE user_message_id = $1
+               AND status IN ('running', 'retrying', 'interrupted')
+         RETURNING id, assistant_message_id
+            """,
+            mid,
+        )
+        execution_ids = [r["id"] for r in executions]
+
+        # 세션이 그 실행을 현재 실행으로 붙들고 있으면 놓아준다. 남겨두면
+        # 다음 지시가 "이미 응답 중" 으로 막힌다.
+        if execution_ids:
+            await conn.execute(
+                """
+                UPDATE chat_sessions
+                   SET current_execution_id = NULL, updated_at = NOW()
+                 WHERE id = $1 AND current_execution_id = ANY($2::uuid[])
+                """,
+                session_id, execution_ids,
+            )
+
+        # ② 이미 실행된 도구를 모은다. 되돌릴 수 없는 것들이므로 숨기지 않는다.
+        tool_rows = await conn.fetch(
+            """
+            SELECT tools_called
+              FROM chat_messages
+             WHERE session_id = $1
+               AND role = 'assistant'
+               AND created_at >= $2
+               AND tools_called IS NOT NULL
+               AND tools_called::text NOT IN ('[]', 'null', '{}')
+               AND ($3::uuid[] IS NULL OR execution_id = ANY($3::uuid[]) OR execution_id IS NULL)
+             ORDER BY created_at ASC
+             LIMIT 20
+            """,
+            session_id, msg["created_at"], execution_ids or None,
+        )
+        tools_ran: list[str] = []
+        for row in tool_rows:
+            raw = row["tools_called"]
+            try:
+                parsed = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                continue
+            if isinstance(parsed, list):
+                for item in parsed:
+                    name = item.get("name") if isinstance(item, dict) else str(item)
+                    if name and name not in tools_ran:
+                        tools_ran.append(str(name))
+
+        # ③ 지시와 그 답변을 소프트 삭제한다. 지우지 않는 이유 — 무엇을
+        #    회수했는지 나중에 물을 수 있어야 한다. 읽기 모델이 이미 거른다.
+        #    **답변은 이 지시의 것만 내린다.** 실행으로 묶인 것이 있으면 그것을
+        #    쓰고, 없으면 바로 다음 답변 한 건까지만 — 세션 전체를 내리면
+        #    회수가 아니라 대화 파괴다. `execution_id` 가 없는 과거 행이
+        #    있어 두 경로를 다 둔다.
+        next_assistant_id = None
+        if not execution_ids:
+            next_assistant_id = await conn.fetchval(
+                """
+                SELECT id FROM chat_messages
+                 WHERE session_id = $1 AND tenant_id = $3 AND role = 'assistant'
+                   AND created_at > $2 AND deleted_at IS NULL
+                 ORDER BY created_at ASC LIMIT 1
+                """,
+                session_id, msg["created_at"], tenant_uuid,
+            )
+        hidden = await conn.execute(
+            """
+            UPDATE chat_messages
+               SET deleted_at = NOW(), edited_at = NOW()
+             WHERE tenant_id = $3
+               AND deleted_at IS NULL
+               AND session_id = $2
+               AND (
+                    id = $1
+                 OR ($4::uuid[] IS NOT NULL AND role = 'assistant'
+                     AND execution_id = ANY($4::uuid[]))
+                 OR ($5::uuid IS NOT NULL AND id = $5::uuid)
+               )
+            """,
+            mid, session_id, tenant_uuid, execution_ids or None, next_assistant_id,
+        )
+
+        # ④ 이 지시에 딸려 대기 중인 추가지시도 함께 무른다.
+        cancelled = await conn.execute(
+            """
+            UPDATE chat_messages
+               SET intent = 'interrupt_cancelled', edited_at = NOW()
+             WHERE session_id = $1
+               AND role = 'user'
+               AND intent = ANY($2::text[])
+               AND created_at >= $3
+               AND NOT EXISTS (
+                   SELECT 1 FROM chat_turn_executions te WHERE te.user_message_id = chat_messages.id
+               )
+            """,
+            session_id,
+            ["queued_interrupt", "interrupt_needs_confirm", "interrupt_confirmed"],
+            msg["created_at"],
+        )
+
+    def _n(result: str) -> int:
+        try:
+            return int(str(result).split()[-1])
+        except (ValueError, IndexError):
+            return 0
+
+    # ⑤ 모델의 기억은 DB 밖에도 있다. CLI 릴레이 세션(--resume)의 JSONL 에
+    #    그대로 남아, DB 에서 지워도 다음 턴에 모델이 계속 본다. 그 연결을
+    #    끊어 다음 턴이 DB 이력만 보고 시작하게 한다. 비용은 그 한 턴의
+    #    프롬프트가 커지는 것뿐이다.
+    relay_cleared = False
+    try:
+        from app.services.model_selector import _relay_clear_aads_session_for_oauth_fallback
+        await _relay_clear_aads_session_for_oauth_fallback(str(session_id))
+        relay_cleared = True
+    except Exception as relay_err:
+        logger.warning(
+            "retract_relay_clear_failed session=%s error=%s",
+            str(session_id)[:8], str(relay_err)[:160],
+        )
+
+    # 화면 개수는 여기서 맞춘다. 소프트 삭제라 DELETE 카운트가 없다.
+    hidden_count = _n(hidden)
+    if hidden_count:
+        async with get_pool().acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE chat_sessions
+                   SET message_count = GREATEST(message_count - $2, 0), updated_at = NOW()
+                 WHERE id = $1 AND tenant_id = $3
+                """,
+                session_id, hidden_count, tenant_uuid,
+            )
+
+    logger.info(
+        "message_retracted session=%s message=%s hidden=%d executions=%d "
+        "interrupts_cancelled=%d tools_ran=%d relay_cleared=%s",
+        str(session_id)[:8], str(mid)[:8], hidden_count, len(execution_ids),
+        _n(cancelled), len(tools_ran), relay_cleared,
+    )
+    return {
+        "retracted": True,
+        "session_id": str(session_id),
+        "hidden_messages": hidden_count,
+        "stopped_executions": len(execution_ids),
+        "cancelled_interrupts": _n(cancelled),
+        # 되돌릴 수 없는 것. 화면이 이것을 그대로 보여준다.
+        "tools_already_run": tools_ran,
+        "relay_memory_cleared": relay_cleared,
+    }
 
 
 async def delete_message_and_response(message_id: str, tenant_id: Optional[str] = None) -> int:
