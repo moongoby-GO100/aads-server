@@ -5182,7 +5182,12 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
         state["_last_flush_ts"] = _now_flush
         # 스트리밍 중임을 나타내는 마커 + 현재 진행상황
         streaming_note = f"\n\n⏳ _생성 중... (도구 {tool_count}회 호출{', 최근: ' + last_tool if last_tool else ''})_"
-        display_content = (content + streaming_note) if content else f"⏳ _AI가 응답을 생성 중입니다... (도구 {tool_count}회 호출 중)_"
+        # 본문이 비는 구간이 있다. 모델이 도구를 부르는 동안에는 텍스트
+        # 토큰이 안 나오기 때문이다(2026-09-16 실측: 도구 67회 / 본문 496자).
+        # 그때 화면에 남는 것이 이 한 줄이므로, 숫자만 주지 말고 지금 무엇을
+        # 하고 있는지 같이 적는다 — 새로고침·세션 이동 후에도 보이는 값이다.
+        _tool_hint = f", 최근: {last_tool}" if last_tool else ""
+        display_content = (content + streaming_note) if content else f"⏳ _AI가 응답을 생성 중입니다... (도구 {tool_count}회 호출 중{_tool_hint})_"
 
         pool = get_pool()
         _sid = uuid.UUID(session_id)
