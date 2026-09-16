@@ -9,7 +9,15 @@ CONTAINER_MCP_CONFIG=""
 CREDENTIAL_FILE="${CLAUDE_SLOT_CREDENTIALS_FILE:-}"
 CREDENTIAL_LOCK_FILE="${CLAUDE_SLOT_CREDENTIAL_LOCK_FILE:-}"
 OAUTH_SLOT="${CLAUDE_OAUTH_SLOT:-}"
-REFRESH_LOCK_WINDOW_SEC="${CLAUDE_SLOT_REFRESH_LOCK_WINDOW_SEC:-6000}"
+# 만료까지 이 시간 안으로 들어오면 배타 잠금을 잡는다 — 갱신이 겹쳐 refresh
+# token 이 서로를 무효화하는 것을 막기 위해서다.
+#
+# 기본값이 6000초(100분)였다. 토큰 수명이 약 8시간이니 **수명의 20%** 구간에서
+# 배타 잠금이 걸린다는 뜻이고, 그동안 같은 슬롯의 다른 호출은 전부 줄을 선다.
+# 2026-09-16 그 구간에 걸린 호출 하나가 6분 48초를 쥐고 있어 신규 채팅창까지
+# 응답하지 못했다. 갱신에 실제로 필요한 것은 몇 초다. 600초면 충분하고,
+# 배타 구간이 수명의 2% 로 줄어든다.
+REFRESH_LOCK_WINDOW_SEC="${CLAUDE_SLOT_REFRESH_LOCK_WINDOW_SEC:-600}"
 CONTAINER_CREDENTIAL_HOME=""
 # 대화 기록 영속 저장소(컨테이너 안 경로). /root/aads/data/claude-sessions 가
 # 여기에 마운트돼 있어 컨테이너 교체를 넘어 살아남는다.
@@ -129,11 +137,31 @@ if [[ -n "$CREDENTIAL_FILE" ]]; then
     mkdir -p -- "$(dirname "$CREDENTIAL_LOCK_FILE")"
     exec 9>"$CREDENTIAL_LOCK_FILE"
     chmod 600 "$CREDENTIAL_LOCK_FILE"
+    # 잠금 대기에 반드시 상한을 둔다.
+    #
+    # 2026-09-16 실측: 토큰 갱신이 필요해 배타 잠금을 잡은 호출 하나가 **모델
+    # 호출이 끝날 때까지** 잠금을 쥐고 있었다(6분 48초). 같은 슬롯을 쓰는 다른
+    # 세션 9개가 전부 flock -s 에서 막혀, 신규 채팅창조차 응답하지 못했다.
+    # 무한 대기는 한 호출의 지연을 전체 장애로 키운다.
+    #
+    # 배타를 못 잡으면 다른 호출이 이미 갱신 중이라는 뜻이다. 그 결과를 쓰면
+    # 되므로 공유로 내려간다. 공유마저 시간이 차면 잠금 없이 진행한다 —
+    # 자격증명은 위에서 이미 검증했고, 되쓰기는 .sync 잠금과 digest 비교가
+    # 따로 지킨다(sync_container_credential). 막혀서 못 하는 것보다 낫다.
+    _excl_wait="${CLAUDE_SLOT_EXCLUSIVE_LOCK_WAIT_SEC:-300}"
+    _shared_wait="${CLAUDE_SLOT_SHARED_LOCK_WAIT_SEC:-120}"
     if credential_requires_exclusive_lock "$CREDENTIAL_FILE"; then
-        flock -x 9
+        if ! flock -x -w "$_excl_wait" 9; then
+            echo "slot${OAUTH_SLOT:-?}: exclusive lock wait exceeded ${_excl_wait}s — 공유 모드로 진행" >&2
+            LOCK_MODE="shared"
+            flock -s -w "$_shared_wait" 9 \
+                || echo "slot${OAUTH_SLOT:-?}: shared lock wait exceeded ${_shared_wait}s — 잠금 없이 진행" >&2
+        fi
     else
         LOCK_MODE="shared"
-        flock -s 9
+        if ! flock -s -w "$_shared_wait" 9; then
+            echo "slot${OAUTH_SLOT:-?}: shared lock wait exceeded ${_shared_wait}s — 잠금 없이 진행" >&2
+        fi
     fi
     ORIGINAL_CREDENTIAL_DIGEST="$(sha256sum "$CREDENTIAL_FILE" | awk '{print $1}')"
 
