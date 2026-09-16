@@ -685,6 +685,72 @@ classify_push_state() {
     fi
 }
 
+# ── stale_base 자동 rebase (AADS-RUNNER-PUSH-AUTO-REBASE) ──────────────
+# 2026-09-16 하루에 같은 원인으로 세 건이 멈췄다(cd394808 외). 승인과 push
+# 사이에 origin/main 이 전진하면 승인 SHA 는 non-fast-forward 가 된다.
+# force push 는 금지이고, "사람이 그때그때 rebase 한다" 는 규칙으로만 남는다 —
+# 규칙으로만 남은 것은 또 일어난다(R-ERRBOOK).
+#
+# 다만 **양쪽이 건드린 파일이 하나도 겹치지 않으면** 옮겨 붙이는 것은 안전하다.
+# 한 파일이라도 겹치면 하지 않는다. 텍스트로 안 겹쳐도 같은 파일이면 의미가
+# 충돌할 수 있고, 그 판단은 사람 몫이다.
+#
+# 성공하면 새 SHA 를 stdout 으로 돌려주고 0, 그 외에는 1 을 돌려준다.
+# 내부 로그는 전부 stderr 로 보낸다 — stdout 은 SHA 전용이다.
+# 실패해도 워크트리는 원래 SHA 로 되돌린다.
+attempt_stale_base_rebase() {
+    local repo="$1" sha="$2" job_id="$3" remote_branch="${4:-main}"
+    local remote_sha="" base="" job_files="" inc_files="" overlap="" new_sha="" n_commits=""
+
+    [[ "${AUTO_REBASE_STALE_BASE:-1}" == "0" ]] && return 1
+
+    # 격리 워크트리에서만 한다. 라이브 저장소를 rebase 하면 다른 세션 작업이 날아간다.
+    [[ "$repo" == "/tmp/aads-wt-${job_id}" ]] || return 1
+    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+
+    remote_sha=$(git -C "$repo" ls-remote origin "refs/heads/${remote_branch}" 2>/dev/null | awk 'NR==1{print $1}') || true
+    [[ "$remote_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+    git -C "$repo" fetch --quiet origin "${remote_branch}" 2>/dev/null || true
+    git -C "$repo" cat-file -e "${remote_sha}^{commit}" 2>/dev/null || return 1
+
+    base=$(git -C "$repo" merge-base "$sha" "$remote_sha" 2>/dev/null) || return 1
+    [[ -n "$base" ]] || return 1
+
+    # 옮겨 붙일 커밋 수가 많으면 하지 않는다 — 그 규모는 사람이 봐야 한다.
+    n_commits=$(git -C "$repo" rev-list --count "${base}..${sha}" 2>/dev/null || echo 999)
+    [[ "$n_commits" -ge 1 && "$n_commits" -le 3 ]] || return 1
+
+    job_files=$(git -C "$repo" diff --name-only "$base" "$sha" 2>/dev/null | sort -u)
+    inc_files=$(git -C "$repo" diff --name-only "$base" "$remote_sha" 2>/dev/null | sort -u)
+    [[ -n "$job_files" ]] || return 1
+    overlap=$(comm -12 <(printf '%s\n' "$job_files") <(printf '%s\n' "$inc_files") | head -5)
+    if [[ -n "$overlap" ]]; then
+        log "  AUTO_REBASE_SKIP job=$job_id — 같은 파일을 양쪽이 건드림: $(printf '%s' "$overlap" | tr '\n' ' ')" >&2
+        return 1
+    fi
+
+    if ! git -C "$repo" rebase --quiet --onto "$remote_sha" "$base" "$sha" >/dev/null 2>&1; then
+        git -C "$repo" rebase --abort >/dev/null 2>&1 || true
+        git -C "$repo" checkout --detach "$sha" >/dev/null 2>&1 || true
+        log "  AUTO_REBASE_FAIL job=$job_id — rebase 실패, 원래 SHA 로 되돌림" >&2
+        return 1
+    fi
+
+    new_sha=$(git -C "$repo" rev-parse HEAD 2>/dev/null) || true
+    [[ "$new_sha" =~ ^[0-9a-f]{40}$ ]] || { git -C "$repo" checkout --detach "$sha" >/dev/null 2>&1 || true; return 1; }
+
+    # 옮겨 붙인 결과가 실제로 fast-forward 인지 확인한다. 아니면 되돌린다.
+    if [[ "$(classify_push_state "$repo" "$new_sha" "$remote_branch")" != "fast_forward" ]]; then
+        git -C "$repo" checkout --detach "$sha" >/dev/null 2>&1 || true
+        log "  AUTO_REBASE_REVERT job=$job_id — rebase 후에도 fast-forward 가 아님" >&2
+        return 1
+    fi
+
+    log "  AUTO_REBASE_OK job=$job_id ${sha:0:8} -> ${new_sha:0:8} (겹친 파일 0, 커밋 ${n_commits}개)" >&2
+    printf '%s' "$new_sha"
+    return 0
+}
+
 # ── 지시서가 배포를 금지했는가 (AADS-RUNNER-DEPLOY-DIRECTIVE-GATE) ──────
 # 0 = 금지(배포하지 마라), 1 = 제약 없음.
 # 오탐(배포해도 되는데 건너뜀)은 사람이 별도 승인으로 배포하면 끝이지만,
@@ -2506,17 +2572,27 @@ deploy_job() {
         log "  PUSH_ALREADY_PRESENT job=$job_id sha=$current_sha — origin/main 에 이미 포함되어 push 생략"
         record_git_diagnostics "$job_id" "push_already_present" "$worktree_dir" 0 "" "" >/dev/null
     elif [[ "$push_state" == "stale_base" ]]; then
-        stale_detail="push_stale_base: 승인 SHA(${current_sha}) 의 base 가 origin/main 보다 낡아 non-fast-forward 입니다. force push 는 금지이므로 자동 복구하지 않습니다 — 최신 origin/main 위에서 재작업 후 재승인하십시오."
-        db_update "UPDATE pipeline_jobs SET status='error', phase='push_stale_base',
-                   error_detail=$(sql_escape "$stale_detail"),
-                   review_feedback=COALESCE(review_feedback,'') || E'\n[자동] push 사전판별 stale_base — 최신 origin/main 기준 재작업 필요',
-                   completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
-        record_git_diagnostics "$job_id" "push_stale_base" "$worktree_dir" 1 "" "" >/dev/null
-        record_runner_event "$job_id" "job_terminal" "error" "push_stale_base" "" "" "" "" "{\"error_detail\":\"push_stale_base\"}"
-        post_to_chat "$session_id" "🔴 [Pipeline Runner] push 중단 — 승인 SHA 의 base 가 낡음(non-fast-forward): $job_id (${stale_detail:0:400})"
-        _release_deploy_lock "$project" "$job_id"
-        promote_next_queued "$project"
-        return 1
+        # 겹치는 파일이 없으면 최신 origin/main 위로 옮겨 붙인다. 겹치면 사람이 본다.
+        local rebased_sha=""
+        if rebased_sha=$(attempt_stale_base_rebase "$worktree_dir" "$current_sha" "$job_id"); then
+            log "  PUSH_AUTO_REBASED job=$job_id ${current_sha} -> ${rebased_sha}"
+            record_runner_event "$job_id" "push_stale_base_rebased" "info" "auto_rebase" "" "" "" "" "{\"from\":\"${current_sha}\",\"to\":\"${rebased_sha}\"}"
+            db_update "UPDATE pipeline_jobs SET commit_hash='${rebased_sha}', updated_at=NOW() WHERE job_id='${job_id}';"
+            current_sha="$rebased_sha"
+            push_state="fast_forward"
+        else
+            stale_detail="push_stale_base: 승인 SHA(${current_sha}) 의 base 가 origin/main 보다 낡아 non-fast-forward 입니다. force push 는 금지이므로 자동 복구하지 않습니다 — 최신 origin/main 위에서 재작업 후 재승인하십시오."
+            db_update "UPDATE pipeline_jobs SET status='error', phase='push_stale_base',
+                       error_detail=$(sql_escape "$stale_detail"),
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[자동] push 사전판별 stale_base — 최신 origin/main 기준 재작업 필요',
+                       completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+            record_git_diagnostics "$job_id" "push_stale_base" "$worktree_dir" 1 "" "" >/dev/null
+            record_runner_event "$job_id" "job_terminal" "error" "push_stale_base" "" "" "" "" "{\"error_detail\":\"push_stale_base\"}"
+            post_to_chat "$session_id" "🔴 [Pipeline Runner] push 중단 — 승인 SHA 의 base 가 낡음(non-fast-forward): $job_id (${stale_detail:0:400})"
+            _release_deploy_lock "$project" "$job_id"
+            promote_next_queued "$project"
+            return 1
+        fi
     fi
 
     if [[ "$push_skipped" != "true" ]]; then
