@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-09-16T16:10:22.565199+09:00",
-  "root": "/tmp/aads-wt-runner-cd394808",
+  "generated_at": "2026-09-16T16:38:58.471057+09:00",
+  "root": "/tmp/aads-wt-runner-168bac82",
   "api_roots": [
     "/api/v1/fact-check",
     "/api/v1/documents",
@@ -13,13 +13,13 @@
     "router_dir_files": 87,
     "router_modules": 81,
     "include_router_calls": 82,
-    "mounted_routes": 880,
+    "mounted_routes": 886,
     "namespaces": 82,
     "frontend_files": 232,
     "frontend_calls_resolved": 337,
-    "sql_tables_referenced": 219,
-    "graph_nodes": 758,
-    "graph_edges": 1151
+    "sql_tables_referenced": 220,
+    "graph_nodes": 759,
+    "graph_edges": 1152
   },
   "nodes": [
     {
@@ -2120,7 +2120,7 @@
     {
       "id": "app/api/kakao_bot.py",
       "kind": "router_module",
-      "routes": 42
+      "routes": 48
     },
     {
       "id": "app/api/lessons.py",
@@ -3091,6 +3091,12 @@
       "kind": "table",
       "defined": true,
       "users": 2
+    },
+    {
+      "id": "table:kakaobot_settings",
+      "kind": "table",
+      "defined": true,
+      "users": 1
     },
     {
       "id": "table:kakaobot_templates",
@@ -4752,7 +4758,7 @@
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/health/api-keys",
-      "lineno": 6006
+      "lineno": 6009
     },
     {
       "from": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
@@ -4760,7 +4766,7 @@
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/chat/workspaces/{}/roles",
-      "lineno": 6155
+      "lineno": 6158
     },
     {
       "from": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
@@ -4768,7 +4774,7 @@
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/ops/health-check",
-      "lineno": 8827
+      "lineno": 8846
     },
     {
       "from": "/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/InquiryForm.tsx",
@@ -9310,6 +9316,11 @@
     },
     {
       "from": "app/api/kakao_bot.py",
+      "to": "table:kakaobot_settings",
+      "kind": "queries"
+    },
+    {
+      "from": "app/api/kakao_bot.py",
       "to": "table:kakaobot_templates",
       "kind": "queries"
     },
@@ -10855,66 +10866,6 @@
   },
   "findings": [
     {
-      "rule": "ROUTE_MISSING",
-      "key": "/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:50",
-      "file": "/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx",
-      "lineno": 50,
-      "method": "GET",
-      "path": "/api/v1/kakao-bot/history",
-      "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:50` GET `/api/v1/kakao-bot/history` — 일치하는 라우트 없음",
-      "severity": "P0"
-    },
-    {
-      "rule": "ROUTE_MISSING",
-      "key": "/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:51",
-      "file": "/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx",
-      "lineno": 51,
-      "method": "GET",
-      "path": "/api/v1/kakao-bot/history/stats",
-      "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:51` GET `/api/v1/kakao-bot/history/stats` — 일치하는 라우트 없음",
-      "severity": "P0"
-    },
-    {
-      "rule": "ROUTE_MISSING",
-      "key": "/root/aads/aads-dashboard/src/app/kakaobot/page.tsx:39",
-      "file": "/root/aads/aads-dashboard/src/app/kakaobot/page.tsx",
-      "lineno": 39,
-      "method": "GET",
-      "path": "/api/v1/kakao-bot/stats",
-      "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/page.tsx:39` GET `/api/v1/kakao-bot/stats` — 일치하는 라우트 없음",
-      "severity": "P0"
-    },
-    {
-      "rule": "ROUTE_MISSING",
-      "key": "/root/aads/aads-dashboard/src/app/kakaobot/scheduled/page.tsx:51",
-      "file": "/root/aads/aads-dashboard/src/app/kakaobot/scheduled/page.tsx",
-      "lineno": 51,
-      "method": "POST",
-      "path": "/api/v1/kakao-bot/scheduled/{}/cancel",
-      "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/scheduled/page.tsx:51` POST `/api/v1/kakao-bot/scheduled/{}/cancel` — 일치하는 라우트 없음",
-      "severity": "P0"
-    },
-    {
-      "rule": "ROUTE_MISSING",
-      "key": "/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:67",
-      "file": "/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx",
-      "lineno": 67,
-      "method": "GET",
-      "path": "/api/v1/kakao-bot/settings",
-      "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:67` GET `/api/v1/kakao-bot/settings` — 일치하는 라우트 없음",
-      "severity": "P0"
-    },
-    {
-      "rule": "ROUTE_MISSING",
-      "key": "/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:81",
-      "file": "/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx",
-      "lineno": 81,
-      "method": "PUT",
-      "path": "/api/v1/kakao-bot/settings",
-      "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:81` PUT `/api/v1/kakao-bot/settings` — 일치하는 라우트 없음",
-      "severity": "P0"
-    },
-    {
       "rule": "ROUTE_SHADOWED",
       "key": "app/main.py GET /api/v1/ops/codex-usage",
       "entrypoint": "app/main.py",
@@ -12268,73 +12219,73 @@
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 5342,
+      "lineno": 5345,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sessionId}/resume`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 5455,
+      "lineno": 5458,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/executions/${executionId}/events?last_event_id=${encodeURIComponent(replayLastEventId)}`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 7508,
+      "lineno": 7527,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/image/generate`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 8026,
+      "lineno": 8045,
       "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): fetchUrl"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 8351,
+      "lineno": 8370,
       "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): retry with backoff"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 8737,
+      "lineno": 8756,
       "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): resumeUrl"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 9178,
+      "lineno": 9197,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sid}/stop`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 9247,
+      "lineno": 9266,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sid}/stop`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 9340,
+      "lineno": 9359,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/messages/${msgId}`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 9375,
+      "lineno": 9394,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/messages/${msgId}`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 9446,
+      "lineno": 9465,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/messages/${msgId}/regenerate?mode=${encodeURIComponent(mode)}`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 10195,
+      "lineno": 10214,
       "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): url.toString()"
     },
     {

@@ -1395,7 +1395,7 @@ async def aligo_ai_reply_sms(req: AligoAiReplyRequest, background_tasks: Backgro
 # ══════════════════════════════════════════════════════════════════════════
 
 import json as _json_mod
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 
 
 # ── 공통 헬퍼 ──────────────────────────────────────────────────────────
@@ -2132,3 +2132,461 @@ async def wake_all_agents(user=Depends(get_current_user)):
         r["label"] = agent["label"]
         results.append(r)
     return {"status": "success", "results": results, "count": len(results)}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# AADS-AAG-DEBT-002 — 화면이 부르는데 없던 경로 6개
+#
+# 2026-09-16 AAG 스캔이 ROUTE_MISSING(P0) 으로 잡은 것들이다. 여섯 곳 모두
+# 호출부가 `r.ok ? r.json() : null` 로 실패를 삼키기 때문에 404 가 나도
+# 에러가 뜨지 않고 숫자만 0 으로 굳는다 — 그래서 반년 가까이 아무도 몰랐다.
+# 같은 이유로 여기서는 파라미터가 범위를 벗어나도 422 를 돌려주지 않는다.
+# 422 역시 호출부에서는 "조용히 빈 화면" 과 구분되지 않기 때문이다(DEBT-001).
+#
+# 응답 키는 지시서의 `{"items": ...}` 가 아니라 **호출부가 실제로 읽는 키**를
+# 쓴다: history/stats 는 `history`, settings 는 `settings`. 계약의 정본은
+# 화면이다 — 키를 새로 만들면 라우트만 생기고 화면은 그대로 빈다.
+# ══════════════════════════════════════════════════════════════════════════
+
+_KST = timezone(timedelta(hours=9))
+
+# 발송 이력의 원장은 kakaobot_scheduled 다. 별도 history 테이블을 만들지 않은 것은
+# 실제로 발송을 기록하는 곳이 여기 하나뿐이기 때문이다(app/services/kakaobot_scheduler.py).
+# 테이블을 하나 더 두면 원장이 둘이 되고, 둘은 반드시 어긋난다.
+_HISTORY_STATUSES = ("sent", "failed")
+
+_KAKAO_SETTINGS_DDL = """
+CREATE TABLE IF NOT EXISTS kakaobot_settings (
+    user_id VARCHAR(100) PRIMARY KEY,
+    auto_send_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    default_tone VARCHAR(20) NOT NULL DEFAULT 'friendly',
+    send_channel VARCHAR(20) NOT NULL DEFAULT 'kakao',
+    send_time VARCHAR(5) NOT NULL DEFAULT '09:00',
+    birthday_days_before INTEGER NOT NULL DEFAULT 0,
+    anniversary_days_before INTEGER NOT NULL DEFAULT 0,
+    greeting_frequency VARCHAR(20) NOT NULL DEFAULT 'monthly',
+    marketing_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+"""
+_KAKAO_SETTINGS_TABLE_CREATED = False
+
+
+async def _ensure_kakao_settings_table() -> None:
+    """설정 테이블 자동 생성 (최초 1회). 정본 스키마는 migrations/20260916_kakaobot_settings.sql."""
+    global _KAKAO_SETTINGS_TABLE_CREATED
+    if _KAKAO_SETTINGS_TABLE_CREATED:
+        return
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(_KAKAO_SETTINGS_DDL)
+        _KAKAO_SETTINGS_TABLE_CREATED = True
+    except Exception as e:
+        logger.error("kakaobot_settings: 테이블 생성 실패: %s", e)
+
+
+# ── 순수 헬퍼 (DB 없이 검증 가능) ──────────────────────────────────────
+
+
+def _kakao_clamp_int(value, default: int, minimum: int, maximum: int) -> int:
+    """범위 밖 값은 422 가 아니라 잘라낸다. 호출부가 res.ok 만 보기 때문이다."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, n))
+
+
+def _kakao_iso(value) -> Optional[str]:
+    """타임스탬프를 KST ISO 문자열로. 이미 문자열이면 그대로 둔다."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    try:
+        return value.astimezone(_KST).isoformat()
+    except Exception:
+        return str(value)
+
+
+def _kakao_json(value):
+    """jsonb 컬럼. asyncpg 는 코덱 설정에 따라 str 로도 dict 로도 준다."""
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return _json_mod.loads(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _kakao_send_channel(send_result) -> str:
+    """발송 채널. 지금 자동 발송 경로는 알리고 SMS 하나뿐이라 그것이 기본값이다."""
+    obj = _kakao_json(send_result)
+    if isinstance(obj, dict):
+        channel = str(obj.get("channel") or "").strip()
+        if channel:
+            return channel
+    return "sms"
+
+
+def _kakao_history_items(rows) -> List[dict]:
+    """발송 이력 행 → 화면이 읽는 모양. id 는 문자열이다(HistoryItem.id: string)."""
+    items = []
+    for row in rows:
+        r = dict(row)
+        items.append({
+            "id": str(r.get("id")),
+            "contact_name": r.get("contact_name") or "",
+            "message": r.get("message") or "",
+            "category": r.get("category") or "custom",
+            "sent_at": _kakao_iso(r.get("sent_at") or r.get("scheduled_at")),
+            "status": r.get("status") or "unknown",
+            "channel": _kakao_send_channel(r.get("send_result")),
+        })
+    return items
+
+
+def _kakao_month_sequence(today: date, months: int) -> List[str]:
+    """today 가 속한 달로 끝나는 연속된 달 라벨 'YYYY-MM' 목록."""
+    labels = []
+    year, month = today.year, today.month
+    for _ in range(months):
+        labels.append(f"{year:04d}-{month:02d}")
+        month -= 1
+        if month == 0:
+            year, month = year - 1, 12
+    labels.reverse()
+    return labels
+
+
+def _kakao_history_stats(rows, today: date, months: int = 12) -> dict:
+    """(month, category, cnt) 집계 행 → 화면 통계.
+
+    by_month 는 발송이 0 인 달도 채운다. 빈 달을 빼면 막대 차트의 x 축이
+    조용히 압축돼 "매달 꾸준히 보냈다" 처럼 보인다 — DEBT-001 의 cost-trend 와
+    같은 함정이다.
+    """
+    by_month_raw: dict[str, int] = {}
+    by_category: dict[str, int] = {}
+    total = 0
+    for row in rows:
+        r = dict(row)
+        cnt = int(r.get("cnt") or 0)
+        month = str(r.get("month") or "")
+        category = str(r.get("category") or "custom")
+        total += cnt
+        if month:
+            by_month_raw[month] = by_month_raw.get(month, 0) + cnt
+        by_category[category] = by_category.get(category, 0) + cnt
+
+    labels = _kakao_month_sequence(today, months)
+    return {
+        "total_sent": total,
+        "this_month": by_month_raw.get(f"{today.year:04d}-{today.month:02d}", 0),
+        "by_category": dict(sorted(by_category.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "by_month": [{"month": m, "count": by_month_raw.get(m, 0)} for m in labels],
+    }
+
+
+def _kakao_days_until(anniv_date: date, today: date) -> Optional[int]:
+    """올해(지났으면 내년) 기준 남은 일수. 2/29 처럼 올해 없는 날짜는 None."""
+    if not isinstance(anniv_date, date):
+        return None
+    try:
+        nxt = anniv_date.replace(year=today.year)
+    except ValueError:
+        return None
+    if (nxt - today).days < 0:
+        try:
+            nxt = anniv_date.replace(year=today.year + 1)
+        except ValueError:
+            return None
+    return (nxt - today).days
+
+
+def _kakao_upcoming_count(dates, today: date, within_days: int = 30) -> int:
+    """N일 이내로 다가온 기념일 수."""
+    count = 0
+    for d in dates:
+        diff = _kakao_days_until(d, today)
+        if diff is not None and 0 <= diff <= within_days:
+            count += 1
+    return count
+
+
+_KAKAO_TONES = ("friendly", "formal", "witty", "professional")
+_KAKAO_CHANNELS = ("kakao", "sms", "both")
+_KAKAO_GREETING_FREQUENCIES = ("weekly", "biweekly", "monthly", "off")
+
+# 화면의 DEFAULT_SETTINGS 와 같은 값이어야 한다
+# (aads-dashboard/src/app/kakaobot/settings/page.tsx).
+_KAKAO_SETTINGS_DEFAULTS: dict = {
+    "auto_send_enabled": True,
+    "default_tone": "friendly",
+    "send_channel": "kakao",
+    "send_time": "09:00",
+    "birthday_days_before": 0,
+    "anniversary_days_before": 0,
+    "greeting_frequency": "monthly",
+    "marketing_enabled": False,
+}
+
+_SEND_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def _kakao_choice(value, allowed, default: str) -> str:
+    """허용 목록 밖이면 기본값. 드롭다운이 보내는 값이라 422 로 막을 이유가 없다."""
+    if value is None:
+        return default
+    v = str(value).strip()
+    return v if v in allowed else default
+
+
+def _kakao_send_time(value, default: str = "09:00") -> str:
+    """HH:MM 만 받는다. `<input type="time">` 이 보내는 형식."""
+    if value is None:
+        return default
+    v = str(value).strip()
+    return v if _SEND_TIME_RE.match(v) else default
+
+
+def _kakao_settings_payload(row) -> dict:
+    """설정 행 → 화면 모양. 행이 없으면(첫 방문) 기본값 그대로."""
+    merged = dict(_KAKAO_SETTINGS_DEFAULTS)
+    if row is None:
+        return merged
+    r = dict(row)
+    return {
+        "auto_send_enabled": bool(r.get("auto_send_enabled", merged["auto_send_enabled"])),
+        "default_tone": _kakao_choice(r.get("default_tone"), _KAKAO_TONES, merged["default_tone"]),
+        "send_channel": _kakao_choice(r.get("send_channel"), _KAKAO_CHANNELS, merged["send_channel"]),
+        "send_time": _kakao_send_time(r.get("send_time"), merged["send_time"]),
+        "birthday_days_before": _kakao_clamp_int(
+            r.get("birthday_days_before"), default=merged["birthday_days_before"], minimum=0, maximum=30,
+        ),
+        "anniversary_days_before": _kakao_clamp_int(
+            r.get("anniversary_days_before"), default=merged["anniversary_days_before"], minimum=0, maximum=30,
+        ),
+        "greeting_frequency": _kakao_choice(
+            r.get("greeting_frequency"), _KAKAO_GREETING_FREQUENCIES, merged["greeting_frequency"],
+        ),
+        "marketing_enabled": bool(r.get("marketing_enabled", merged["marketing_enabled"])),
+    }
+
+
+def _kakao_merge_settings(current: dict, incoming: dict) -> dict:
+    """부분 수정. None 으로 온 필드는 지금 값을 유지한다."""
+    base = dict(current)
+    for key, value in incoming.items():
+        if value is None or key not in base:
+            continue
+        base[key] = value
+    return _kakao_settings_payload(base)
+
+
+class KakaoSettingsUpdate(BaseModel):
+    """설정 수정 — 화면은 전체를 보내지만 부분 수정도 받는다."""
+    auto_send_enabled: Optional[bool] = None
+    default_tone: Optional[str] = None
+    send_channel: Optional[str] = None
+    send_time: Optional[str] = None
+    birthday_days_before: Optional[int] = None
+    anniversary_days_before: Optional[int] = None
+    greeting_frequency: Optional[str] = None
+    marketing_enabled: Optional[bool] = None
+
+
+# ── 발송 이력 ──────────────────────────────────────────────────────────
+
+
+@router.get("/history")
+async def kakao_history(
+    current_user: dict = Depends(get_current_user),
+    status: Optional[str] = Query(default=None, description="sent | failed"),
+    limit: int = Query(50, description="1~500, 벗어나면 잘라낸다"),
+    offset: int = Query(0, description="0 이상, 벗어나면 잘라낸다"),
+):
+    """발송 이력 목록 — kakaobot_scheduled 중 실제로 발송을 시도한 건."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    limit = _kakao_clamp_int(limit, default=50, minimum=1, maximum=500)
+    offset = _kakao_clamp_int(offset, default=0, minimum=0, maximum=100_000)
+    user_id = str(current_user["user_id"])
+
+    if status in _HISTORY_STATUSES:
+        status_clause = "AND s.status = $2"
+        vals = [user_id, status, limit, offset]
+    else:
+        status_clause = "AND s.status = ANY($2::text[])"
+        vals = [user_id, list(_HISTORY_STATUSES), limit, offset]
+
+    query = f"""
+        SELECT s.id, s.message, s.status, s.sent_at, s.scheduled_at, s.send_result,
+               c.name AS contact_name,
+               COALESCE(t.category, 'custom') AS category
+          FROM kakaobot_scheduled s
+          JOIN kakaobot_contacts c ON c.id = s.contact_id
+          LEFT JOIN kakaobot_templates t ON t.id = s.template_id
+         WHERE s.user_id = $1 {status_clause}
+         ORDER BY COALESCE(s.sent_at, s.scheduled_at) DESC
+         LIMIT $3 OFFSET $4
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, *vals)
+
+    items = _kakao_history_items(rows)
+    return {"count": len(items), "limit": limit, "offset": offset, "history": items}
+
+
+@router.get("/history/stats")
+async def kakao_history_stats(
+    current_user: dict = Depends(get_current_user),
+    months: int = Query(12, description="월별 추이 구간 (1~36, 벗어나면 잘라낸다)"),
+):
+    """발송 이력 통계 — 총/이번 달/카테고리별/월별."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    months = _kakao_clamp_int(months, default=12, minimum=1, maximum=36)
+    user_id = str(current_user["user_id"])
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT to_char(s.sent_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM') AS month,
+                      COALESCE(t.category, 'custom') AS category,
+                      COUNT(*) AS cnt
+                 FROM kakaobot_scheduled s
+                 LEFT JOIN kakaobot_templates t ON t.id = s.template_id
+                WHERE s.user_id = $1 AND s.status = 'sent' AND s.sent_at IS NOT NULL
+                GROUP BY 1, 2""",
+            user_id,
+        )
+
+    return _kakao_history_stats(rows, datetime.now(_KST).date(), months=months)
+
+
+# ── 대시보드 요약 ──────────────────────────────────────────────────────
+
+
+@router.get("/stats")
+async def kakao_stats(current_user: dict = Depends(get_current_user)):
+    """카카오봇 대시보드 상단 카드 5개."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    user_id = str(current_user["user_id"])
+
+    async with pool.acquire() as conn:
+        counts = await conn.fetchrow(
+            """SELECT
+                 (SELECT COUNT(*) FROM kakaobot_contacts WHERE user_id = $1) AS total_contacts,
+                 (SELECT COUNT(*) FROM kakaobot_templates
+                   WHERE user_id = $1 OR is_system = TRUE) AS total_templates,
+                 (SELECT COUNT(*) FROM kakaobot_scheduled
+                   WHERE user_id = $1 AND status = 'pending') AS total_scheduled,
+                 (SELECT COUNT(*) FROM kakaobot_scheduled
+                   WHERE user_id = $1 AND status = 'sent') AS total_sent""",
+            user_id,
+        )
+        # 음력·윤일 처리가 파이썬 쪽에 있어(upcoming_anniversaries) 날짜만 받아 센다.
+        anniv_rows = await conn.fetch(
+            "SELECT date FROM kakaobot_anniversaries WHERE user_id = $1", user_id,
+        )
+
+    row = dict(counts) if counts else {}
+    return {
+        "total_contacts": int(row.get("total_contacts") or 0),
+        "total_templates": int(row.get("total_templates") or 0),
+        "total_scheduled": int(row.get("total_scheduled") or 0),
+        "total_sent": int(row.get("total_sent") or 0),
+        "upcoming_anniversaries": _kakao_upcoming_count(
+            [r["date"] for r in anniv_rows], datetime.now(_KST).date(),
+        ),
+    }
+
+
+# ── 예약 취소 (POST) ───────────────────────────────────────────────────
+
+
+@router.post("/scheduled/{scheduled_id}/cancel")
+async def cancel_scheduled_post(scheduled_id: int, current_user: dict = Depends(get_current_user)):
+    """예약 발송 취소 — 화면이 부르는 POST 경로.
+
+    DELETE /scheduled/{id} 와 같은 일을 한다. 화면을 DELETE 로 바꾸지 않은 것은
+    이미 나가 있는 대시보드가 POST 를 부르고 있고, 서버가 뒤따라가는 편이
+    배포 순서에 의존하지 않기 때문이다. 다만 소유자 검사는 여기서 더 조인다 —
+    DELETE 쪽은 user_id 를 보지 않아 남의 예약도 취소된다(별건, 미수정).
+    """
+    await _ensure_saas_tables()
+    pool = _pool()
+    user_id = str(current_user["user_id"])
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """UPDATE kakaobot_scheduled
+                  SET status = 'cancelled', updated_at = NOW()
+                WHERE id = $1 AND user_id = $2 AND status = 'pending'
+            RETURNING id, status""",
+            scheduled_id, user_id,
+        )
+    if row is None:
+        raise HTTPException(status_code=404, detail="예약을 찾을 수 없거나 이미 처리됨")
+    return {"status": "cancelled", "id": scheduled_id}
+
+
+# ── 설정 ──────────────────────────────────────────────────────────────
+
+
+@router.get("/settings")
+async def kakao_settings_get(current_user: dict = Depends(get_current_user)):
+    """카카오봇 발송 설정 조회. 저장한 적이 없으면 기본값을 돌려준다."""
+    await _ensure_kakao_settings_table()
+    pool = _pool()
+    user_id = str(current_user["user_id"])
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM kakaobot_settings WHERE user_id = $1", user_id,
+        )
+    return {"settings": _kakao_settings_payload(row)}
+
+
+@router.put("/settings")
+async def kakao_settings_put(
+    req: KakaoSettingsUpdate, current_user: dict = Depends(get_current_user),
+):
+    """카카오봇 발송 설정 저장 (UPSERT)."""
+    await _ensure_kakao_settings_table()
+    pool = _pool()
+    user_id = str(current_user["user_id"])
+    async with pool.acquire() as conn:
+        current = _kakao_settings_payload(
+            await conn.fetchrow("SELECT * FROM kakaobot_settings WHERE user_id = $1", user_id)
+        )
+        merged = _kakao_merge_settings(current, req.model_dump(exclude_unset=True))
+        await conn.execute(
+            """INSERT INTO kakaobot_settings
+                 (user_id, auto_send_enabled, default_tone, send_channel, send_time,
+                  birthday_days_before, anniversary_days_before, greeting_frequency,
+                  marketing_enabled)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               ON CONFLICT (user_id) DO UPDATE SET
+                 auto_send_enabled = EXCLUDED.auto_send_enabled,
+                 default_tone = EXCLUDED.default_tone,
+                 send_channel = EXCLUDED.send_channel,
+                 send_time = EXCLUDED.send_time,
+                 birthday_days_before = EXCLUDED.birthday_days_before,
+                 anniversary_days_before = EXCLUDED.anniversary_days_before,
+                 greeting_frequency = EXCLUDED.greeting_frequency,
+                 marketing_enabled = EXCLUDED.marketing_enabled,
+                 updated_at = NOW()""",
+            user_id,
+            merged["auto_send_enabled"], merged["default_tone"], merged["send_channel"],
+            merged["send_time"], merged["birthday_days_before"],
+            merged["anniversary_days_before"], merged["greeting_frequency"],
+            merged["marketing_enabled"],
+        )
+    return {"status": "saved", "settings": merged}
