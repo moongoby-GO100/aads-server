@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-16T14:09:22.521579+09:00",
+  "generated_at": "2026-09-16T14:16:46.551472+09:00",
   "root": "/root/aads/aads-server",
   "api_roots": [
     "/api/v1/fact-check",
@@ -9,17 +9,17 @@
     "/api/v1"
   ],
   "stats": {
-    "app_py_files": 380,
-    "router_dir_files": 86,
-    "router_modules": 80,
-    "include_router_calls": 81,
-    "mounted_routes": 873,
-    "namespaces": 81,
+    "app_py_files": 381,
+    "router_dir_files": 87,
+    "router_modules": 81,
+    "include_router_calls": 82,
+    "mounted_routes": 874,
+    "namespaces": 82,
     "frontend_files": 232,
     "frontend_calls_resolved": 337,
-    "sql_tables_referenced": 217,
-    "graph_nodes": 755,
-    "graph_edges": 1145
+    "sql_tables_referenced": 218,
+    "graph_nodes": 757,
+    "graph_edges": 1148
   },
   "nodes": [
     {
@@ -2273,6 +2273,11 @@
       "routes": 8
     },
     {
+      "id": "app/api/unni_naengmyeon.py",
+      "kind": "router_module",
+      "routes": 1
+    },
+    {
       "id": "app/api/user_api_keys.py",
       "kind": "router_module",
       "routes": 4
@@ -3502,6 +3507,12 @@
       "users": 3
     },
     {
+      "id": "table:unni_naengmyeon_inquiries",
+      "kind": "table",
+      "defined": true,
+      "users": 1
+    },
+    {
       "id": "table:user_api_keys",
       "kind": "table",
       "defined": true,
@@ -3646,553 +3657,560 @@
       "to": "app/api/health.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3536
+      "lineno": 3539
     },
     {
       "from": "app/main.py",
       "to": "app/api/project_dashboard.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3537
+      "lineno": 3540
     },
     {
       "from": "app/main.py",
       "to": "app/api/projects.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3538
+      "lineno": 3541
     },
     {
       "from": "app/main.py",
       "to": "app/api/checkpoints.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3539
+      "lineno": 3542
     },
     {
       "from": "app/main.py",
       "to": "app/api/stream.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3540
+      "lineno": 3543
     },
     {
       "from": "app/main.py",
       "to": "app/api/auth.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3541
+      "lineno": 3544
     },
     {
       "from": "app/main.py",
       "to": "app/api/context.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3542
+      "lineno": 3545
     },
     {
       "from": "app/main.py",
       "to": "app/api/chat.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3543
+      "lineno": 3546
     },
     {
       "from": "app/main.py",
       "to": "app/api/visual_qa.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3544
+      "lineno": 3547
     },
     {
       "from": "app/main.py",
       "to": "app/api/mobile_qa.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3545
+      "lineno": 3548
     },
     {
       "from": "app/main.py",
       "to": "app/api/memory.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3546
+      "lineno": 3549
     },
     {
       "from": "app/main.py",
       "to": "app/api/conversations.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3547
+      "lineno": 3550
     },
     {
       "from": "app/main.py",
       "to": "app/api/directives.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3549
+      "lineno": 3552
     },
     {
       "from": "app/main.py",
       "to": "app/api/watchdog.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3550
+      "lineno": 3553
     },
     {
       "from": "app/main.py",
       "to": "app/api/approval.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3551
+      "lineno": 3554
     },
     {
       "from": "app/main.py",
       "to": "app/api/documents.py",
       "kind": "mounts",
       "prefix": "/api/v1/documents",
-      "lineno": 3552
+      "lineno": 3555
     },
     {
       "from": "app/main.py",
       "to": "app/api/channels.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3553
+      "lineno": 3556
     },
     {
       "from": "app/main.py",
       "to": "app/api/managers.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3554
+      "lineno": 3557
     },
     {
       "from": "app/main.py",
       "to": "app/api/ops.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3555
+      "lineno": 3558
     },
     {
       "from": "app/main.py",
       "to": "app/api/lessons.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3556
+      "lineno": 3559
     },
     {
       "from": "app/main.py",
       "to": "app/api/strategy.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3557
+      "lineno": 3560
     },
     {
       "from": "app/main.py",
       "to": "app/api/plans.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3558
+      "lineno": 3561
     },
     {
       "from": "app/main.py",
       "to": "app/api/debate_logs.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3559
+      "lineno": 3562
     },
     {
       "from": "app/main.py",
       "to": "app/api/artifacts.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3560
+      "lineno": 3563
     },
     {
       "from": "app/main.py",
       "to": "app/api/directive_drafts.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3561
+      "lineno": 3564
     },
     {
       "from": "app/main.py",
       "to": "app/api/handovers.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3562
+      "lineno": 3565
     },
     {
       "from": "app/main.py",
       "to": "app/api/briefing.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3563
+      "lineno": 3566
     },
     {
       "from": "app/main.py",
       "to": "app/api/governance.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3564
+      "lineno": 3567
     },
     {
       "from": "app/main.py",
       "to": "app/api/task_monitor.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3565
+      "lineno": 3568
     },
     {
       "from": "app/main.py",
       "to": "app/api/qa.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3566
+      "lineno": 3569
     },
     {
       "from": "app/main.py",
       "to": "app/routers/chat.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3567
+      "lineno": 3570
     },
     {
       "from": "app/main.py",
       "to": "app/api/image.py",
       "kind": "mounts",
       "prefix": "/api/v1/image",
-      "lineno": 3568
+      "lineno": 3571
     },
     {
       "from": "app/main.py",
       "to": "app/api/fact_check.py",
       "kind": "mounts",
       "prefix": "/api/v1/fact-check",
-      "lineno": 3569
+      "lineno": 3572
     },
     {
       "from": "app/main.py",
       "to": "app/api/pipeline_runner.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3570
+      "lineno": 3573
     },
     {
       "from": "app/main.py",
       "to": "app/api/code_review.py",
       "kind": "mounts",
       "prefix": "",
-      "lineno": 3571
+      "lineno": 3574
     },
     {
       "from": "app/main.py",
       "to": "app/api/quality.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3572
+      "lineno": 3575
     },
     {
       "from": "app/main.py",
       "to": "app/api/memory_monitor.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3573
+      "lineno": 3576
     },
     {
       "from": "app/main.py",
       "to": "app/api/pc_agent.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3574
+      "lineno": 3577
     },
     {
       "from": "app/main.py",
       "to": "app/api/pc_ollama_bridge.py",
       "kind": "mounts",
       "prefix": "",
-      "lineno": 3575
+      "lineno": 3578
     },
     {
       "from": "app/main.py",
       "to": "app/api/assistant.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3576
+      "lineno": 3579
     },
     {
       "from": "app/main.py",
       "to": "app/api/voice.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3577
+      "lineno": 3580
     },
     {
       "from": "app/main.py",
       "to": "app/api/local_models.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3578
+      "lineno": 3581
     },
     {
       "from": "app/main.py",
       "to": "app/api/device.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3579
+      "lineno": 3582
     },
     {
       "from": "app/main.py",
       "to": "app/api/kakao_bot.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3580
+      "lineno": 3583
     },
     {
       "from": "app/main.py",
       "to": "app/api/agenda.py",
       "kind": "mounts",
       "prefix": "/api/v1/agenda",
-      "lineno": 3581
+      "lineno": 3584
     },
     {
       "from": "app/main.py",
       "to": "app/api/hot_reload.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3582
+      "lineno": 3585
     },
     {
       "from": "app/main.py",
       "to": "app/api/admin.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3583
+      "lineno": 3586
     },
     {
       "from": "app/main.py",
       "to": "app/api/admin_users.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3584
+      "lineno": 3587
     },
     {
       "from": "app/main.py",
       "to": "app/api/design_modifications.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3585
+      "lineno": 3588
     },
     {
       "from": "app/main.py",
       "to": "app/api/yeoljeong_finance.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3586
-    },
-    {
-      "from": "app/main.py",
-      "to": "app/api/yeoljeong_dashboard.py",
-      "kind": "mounts",
-      "prefix": "/api/v1",
-      "lineno": 3587
-    },
-    {
-      "from": "app/main.py",
-      "to": "app/api/yeoljeong_inventory.py",
-      "kind": "mounts",
-      "prefix": "/api/v1",
-      "lineno": 3588
-    },
-    {
-      "from": "app/main.py",
-      "to": "app/api/yeoljeong_accounting.py",
-      "kind": "mounts",
-      "prefix": "/api/v1",
       "lineno": 3589
     },
     {
       "from": "app/main.py",
-      "to": "app/api/yeoljeong_ops.py",
+      "to": "app/api/unni_naengmyeon.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3590
     },
     {
       "from": "app/main.py",
-      "to": "app/api/credential_vault.py",
+      "to": "app/api/yeoljeong_dashboard.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3591
     },
     {
       "from": "app/main.py",
-      "to": "app/api/google_sheets.py",
+      "to": "app/api/yeoljeong_inventory.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3592
     },
     {
       "from": "app/main.py",
-      "to": "app/api/notifications.py",
+      "to": "app/api/yeoljeong_accounting.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3593
     },
     {
       "from": "app/main.py",
-      "to": "app/api/llm_keys.py",
+      "to": "app/api/yeoljeong_ops.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3594
     },
     {
       "from": "app/main.py",
-      "to": "app/api/llm_models.py",
+      "to": "app/api/credential_vault.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3595
     },
     {
       "from": "app/main.py",
-      "to": "app/api/llm_report.py",
+      "to": "app/api/google_sheets.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3596
     },
     {
       "from": "app/main.py",
-      "to": "app/api/llm_admin.py",
+      "to": "app/api/notifications.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3597
     },
     {
       "from": "app/main.py",
-      "to": "app/api/user_api_keys.py",
+      "to": "app/api/llm_keys.py",
       "kind": "mounts",
-      "prefix": "",
+      "prefix": "/api/v1",
       "lineno": 3598
     },
     {
       "from": "app/main.py",
-      "to": "app/api/user_project_servers.py",
+      "to": "app/api/llm_models.py",
       "kind": "mounts",
-      "prefix": "",
+      "prefix": "/api/v1",
       "lineno": 3599
     },
     {
       "from": "app/main.py",
-      "to": "app/api/braming.py",
+      "to": "app/api/llm_report.py",
       "kind": "mounts",
-      "prefix": "",
+      "prefix": "/api/v1",
       "lineno": 3600
     },
     {
       "from": "app/main.py",
-      "to": "app/api/project_docs.py",
+      "to": "app/api/llm_admin.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3601
     },
     {
       "from": "app/main.py",
-      "to": "app/api/files.py",
+      "to": "app/api/user_api_keys.py",
       "kind": "mounts",
-      "prefix": "/api/v1",
+      "prefix": "",
       "lineno": 3602
     },
     {
       "from": "app/main.py",
-      "to": "app/api/terminal.py",
+      "to": "app/api/user_project_servers.py",
       "kind": "mounts",
-      "prefix": "/api/v1",
+      "prefix": "",
       "lineno": 3603
     },
     {
       "from": "app/main.py",
-      "to": "app/api/browser_bridge.py",
+      "to": "app/api/braming.py",
       "kind": "mounts",
-      "prefix": "/api/v1",
+      "prefix": "",
       "lineno": 3604
     },
     {
       "from": "app/main.py",
-      "to": "app/api/external_chat.py",
+      "to": "app/api/project_docs.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3605
     },
     {
       "from": "app/main.py",
-      "to": "app/api/local_media_router.py",
+      "to": "app/api/files.py",
       "kind": "mounts",
-      "prefix": "",
+      "prefix": "/api/v1",
       "lineno": 3606
     },
     {
       "from": "app/main.py",
-      "to": "app/api/ohvis_harness.py",
+      "to": "app/api/terminal.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3607
     },
     {
       "from": "app/main.py",
-      "to": "app/api/ohvis_llmops.py",
+      "to": "app/api/browser_bridge.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3608
     },
     {
       "from": "app/main.py",
-      "to": "app/api/ohvis_tasks.py",
+      "to": "app/api/external_chat.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3609
     },
     {
       "from": "app/main.py",
-      "to": "app/api/loops.py",
+      "to": "app/api/local_media_router.py",
       "kind": "mounts",
-      "prefix": "/api/v1",
+      "prefix": "",
       "lineno": 3610
     },
     {
       "from": "app/main.py",
-      "to": "app/api/browser_tasks.py",
+      "to": "app/api/ohvis_harness.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3611
     },
     {
       "from": "app/main.py",
-      "to": "app/api/browser_recipes.py",
+      "to": "app/api/ohvis_llmops.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3612
     },
     {
       "from": "app/main.py",
-      "to": "app/api/authenticated_site_collector.py",
+      "to": "app/api/ohvis_tasks.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3613
     },
     {
       "from": "app/main.py",
-      "to": "app/routers/agent_vault.py",
+      "to": "app/api/loops.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3614
     },
     {
       "from": "app/main.py",
-      "to": "app/routers/goals.py",
+      "to": "app/api/browser_tasks.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3615
+    },
+    {
+      "from": "app/main.py",
+      "to": "app/api/browser_recipes.py",
+      "kind": "mounts",
+      "prefix": "/api/v1",
+      "lineno": 3616
+    },
+    {
+      "from": "app/main.py",
+      "to": "app/api/authenticated_site_collector.py",
+      "kind": "mounts",
+      "prefix": "/api/v1",
+      "lineno": 3617
+    },
+    {
+      "from": "app/main.py",
+      "to": "app/routers/agent_vault.py",
+      "kind": "mounts",
+      "prefix": "/api/v1",
+      "lineno": 3618
+    },
+    {
+      "from": "app/main.py",
+      "to": "app/routers/goals.py",
+      "kind": "mounts",
+      "prefix": "/api/v1",
+      "lineno": 3619
     },
     {
       "from": "app/yeoljeong_main.py",
@@ -4531,6 +4549,11 @@
     {
       "from": "app/api/yeoljeong_finance.py",
       "to": "ns:/api/v1/yeoljeong-finance",
+      "kind": "owns"
+    },
+    {
+      "from": "app/api/unni_naengmyeon.py",
+      "to": "ns:/api/v1/unni-naengmyeon",
       "kind": "owns"
     },
     {
@@ -10395,6 +10418,11 @@
       "kind": "queries"
     },
     {
+      "from": "app/api/unni_naengmyeon.py",
+      "to": "table:unni_naengmyeon_inquiries",
+      "kind": "queries"
+    },
+    {
       "from": "app/api/user_api_keys.py",
       "to": "table:user_api_keys",
       "kind": "queries"
@@ -10766,6 +10794,9 @@
     "/api/v1/terminal": [
       "app/api/terminal.py"
     ],
+    "/api/v1/unni-naengmyeon": [
+      "app/api/unni_naengmyeon.py"
+    ],
     "/api/v1/user": [
       "app/api/user_api_keys.py",
       "app/api/user_project_servers.py"
@@ -10802,16 +10833,6 @@
     ]
   },
   "findings": [
-    {
-      "rule": "ROUTE_MISSING",
-      "key": "/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/InquiryForm.tsx:21",
-      "file": "/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/InquiryForm.tsx",
-      "lineno": 21,
-      "method": "POST",
-      "path": "/api/v1/unni-naengmyeon/inquiries",
-      "detail": "`/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/InquiryForm.tsx:21` POST `/api/v1/unni-naengmyeon/inquiries` — 일치하는 라우트 없음",
-      "severity": "P0"
-    },
     {
       "rule": "ROUTE_MISSING",
       "key": "/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:50",
@@ -10870,16 +10891,6 @@
       "method": "PUT",
       "path": "/api/v1/kakao-bot/settings",
       "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:81` PUT `/api/v1/kakao-bot/settings` — 일치하는 라우트 없음",
-      "severity": "P0"
-    },
-    {
-      "rule": "ROUTE_MISSING",
-      "key": "/root/aads/aads-dashboard/src/app/unni-naengmyeon/InquiryForm.tsx:21",
-      "file": "/root/aads/aads-dashboard/src/app/unni-naengmyeon/InquiryForm.tsx",
-      "lineno": 21,
-      "method": "POST",
-      "path": "/api/v1/unni-naengmyeon/inquiries",
-      "detail": "`/root/aads/aads-dashboard/src/app/unni-naengmyeon/InquiryForm.tsx:21` POST `/api/v1/unni-naengmyeon/inquiries` — 일치하는 라우트 없음",
       "severity": "P0"
     },
     {

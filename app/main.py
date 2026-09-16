@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.logging_config import configure_logging
 
-from app.api import health, projects, checkpoints, stream, auth, context, chat, visual_qa, mobile_qa, memory, terminal, browser_bridge, design_modifications, google_sheets, yeoljeong_finance, notifications
+from app.api import health, projects, checkpoints, stream, auth, context, chat, visual_qa, mobile_qa, memory, terminal, browser_bridge, design_modifications, google_sheets, yeoljeong_finance, notifications, unni_naengmyeon
 from app.api import yeoljeong_dashboard, yeoljeong_inventory, yeoljeong_accounting, yeoljeong_ops
 from app.api.channels import router as channels_router
 from app.api.managers import router as managers_router
@@ -3433,6 +3433,9 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/ops/codex-usage",  # Codex 사용량 (읽기전용)
     "/api/v1/ops/claude-max-usage",  # Claude Max 사용량 (읽기전용)
     "/api/v1/external/chat",  # 외부 서비스 임베드 채팅: 자체 service-token/HMAC 인증
+    # 언니냉면·고명희냉면 브랜드 페이지의 공개 문의 폼. 로그인 없는 손님이 쓰는
+    # 경로라 인증을 면제하고, 대신 라우터가 IP 레이트리밋(10분 5회)과 honeypot 을 건다.
+    "/api/v1/unni-naengmyeon/inquiries",
     "/api/v1/ops/locks",        # 내부 서비스 잠금 API (pipeline-runner.sh 전용)
     "/api/v1/ops/active-work",  # 내부 활성 작업 조회
     "/static",  # 정적 파일 (기술문서/보고서/갤러리)
@@ -3584,6 +3587,7 @@ app.include_router(admin_router, prefix="/api/v1", tags=["admin"])
 app.include_router(admin_users_router, prefix="/api/v1", tags=["admin-users"])
 app.include_router(design_modifications.router, prefix="/api/v1", tags=["design-modifications"])
 app.include_router(yeoljeong_finance.router, prefix="/api/v1", tags=["yeoljeong-finance"])
+app.include_router(unni_naengmyeon.router, prefix="/api/v1", tags=["unni-naengmyeon"])
 app.include_router(yeoljeong_dashboard.router, prefix="/api/v1", tags=["yeoljeong-dashboard"])
 app.include_router(yeoljeong_inventory.router, prefix="/api/v1", tags=["yeoljeong-inventory"])
 app.include_router(yeoljeong_accounting.router, prefix="/api/v1", tags=["yeoljeong-accounting"])

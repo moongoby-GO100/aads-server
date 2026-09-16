@@ -1,6 +1,6 @@
 # AAG L1/L2 — AADS 아키텍처 결함 리포트
 
-생성 2026-09-16 14:09 KST · 결함 107건 · 판정 불가(UNRESOLVED) 110건
+생성 2026-09-16 14:16 KST · 결함 105건 · 판정 불가(UNRESOLVED) 110건
 
 UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 결함으로 세면
 숫자가 부풀고, 부풀린 숫자는 아무도 손대지 않아 규칙 전체가 무시된다.
@@ -9,16 +9,16 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 
 | 대상 | 수 |
 |---|---|
-| 앱 파이썬 파일 | 380 |
-| 라우터 디렉터리 파일 | 86 |
-| APIRouter 정의 모듈 | 80 |
-| include_router 호출 | 81 |
-| 마운트된 라우트 | 873 |
-| 네임스페이스 | 81 |
+| 앱 파이썬 파일 | 381 |
+| 라우터 디렉터리 파일 | 87 |
+| APIRouter 정의 모듈 | 81 |
+| include_router 호출 | 82 |
+| 마운트된 라우트 | 874 |
+| 네임스페이스 | 82 |
 | 프런트 파일 | 232 |
 | 해석된 프런트 호출 | 337 |
-| SQL 참조 테이블 | 217 |
-| 그래프 노드/엣지 | 755 / 1145 |
+| SQL 참조 테이블 | 218 |
+| 그래프 노드/엣지 | 757 / 1148 |
 
 ## 규칙별 건수
 
@@ -29,10 +29,10 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 | `ORPHAN_ROUTER` | P2 | 1 |
 | `TABLE_NO_MODEL` | P1 | 44 |
 | `PATH_DRIFT` | P1 | 1 |
-| `ROUTE_MISSING` | P0 | 14 |
+| `ROUTE_MISSING` | P0 | 12 |
 | `STALE_BACKUP` | P2 | 37 |
 
-| **합계** | | **107** |
+| **합계** | | **105** |
 
 ## DUP_MODULE (1건)
 
@@ -105,16 +105,14 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 
 - [P1] `/root/aads/aads-dashboard/src/lib/api.ts:522` POST `/api/v1/chat/messages` — 경로는 있으나 메서드가 GET 다 (/api/v1/chat/messages)
 
-## ROUTE_MISSING (14건)
+## ROUTE_MISSING (12건)
 
-- [P0] `/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/InquiryForm.tsx:21` POST `/api/v1/unni-naengmyeon/inquiries` — 일치하는 라우트 없음
 - [P0] `/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:50` GET `/api/v1/kakao-bot/history` — 일치하는 라우트 없음
 - [P0] `/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:51` GET `/api/v1/kakao-bot/history/stats` — 일치하는 라우트 없음
 - [P0] `/root/aads/aads-dashboard/src/app/kakaobot/page.tsx:39` GET `/api/v1/kakao-bot/stats` — 일치하는 라우트 없음
 - [P0] `/root/aads/aads-dashboard/src/app/kakaobot/scheduled/page.tsx:51` POST `/api/v1/kakao-bot/scheduled/{}/cancel` — 일치하는 라우트 없음
 - [P0] `/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:67` GET `/api/v1/kakao-bot/settings` — 일치하는 라우트 없음
 - [P0] `/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:81` PUT `/api/v1/kakao-bot/settings` — 일치하는 라우트 없음
-- [P0] `/root/aads/aads-dashboard/src/app/unni-naengmyeon/InquiryForm.tsx:21` POST `/api/v1/unni-naengmyeon/inquiries` — 일치하는 라우트 없음
 - [P0] `/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx:139` GET `/api/v1/ops/cost-trend` — 일치하는 라우트 없음
 - [P0] `/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx:140` GET `/api/v1/ops/project-stats` — 일치하는 라우트 없음
 - [P0] `/root/aads/aads-dashboard/src/components/chat/ArtifactDashboard.tsx:100` GET `/api/v1/ops/status` — 일치하는 라우트 없음
