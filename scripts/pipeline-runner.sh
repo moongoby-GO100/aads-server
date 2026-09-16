@@ -301,7 +301,28 @@ lookup_error_book() {
 }
 
 db_update() {
-    printf '%s' "$1" | _psql_cmd >/dev/null 2>&1
+    # psql 은 SQL 이 실패해도 종료코드 0 을 돌려준다(ON_ERROR_STOP 없을 때).
+    # 여기에 stderr 까지 버리고 있었으므로 **쓰기 실패가 완전히 보이지 않았다.**
+    #
+    # 2026-09-16 runner-1bf4a718 (AADS-AAG-001-R2, L 사이즈 33분 작업)이 이렇게 사라졌다:
+    #   06:02:05 AI_REVIEW_HOLD  → status='review_hold' UPDATE 가 적용되지 않음
+    #   06:03:02 WATCHDOG_DEAD_PROCESS → status 가 아직 'running' 이라 error 로 전환
+    # 행을 열어보면 review_feedback 에 [AI Reviewer] 줄이 없고 watchdog 줄만 있다.
+    # result_output·git_diff 도 0바이트다 — 그 UPDATE 는 통째로 실패했다.
+    # 결과: "리뷰 인프라 장애(재검수 가능)" 가 "프로세스 사망" 으로 둔갑하고
+    # 33분치 산출물과 diff 가 DB 에서 사라졌다.
+    #
+    # 실패를 치료하지는 못해도 **보이게는 만든다.** 원인을 모르는 채 조용히
+    # 지나가는 쪽이 훨씬 비싸다.
+    #
+    # 종료코드는 언제나 0 이다 — 이 스크립트는 `set -e` 로 돈다. 여기서
+    # 실패를 반환하면 DB 한 줄 때문에 러너 전체가 죽는다.
+    local _rc=0 _out=""
+    _out=$(printf '%s' "$1" | _psql_cmd -v ON_ERROR_STOP=1 2>&1) || _rc=$?
+    if (( _rc != 0 )); then
+        log "  DB_UPDATE_FAILED rc=${_rc} sql_head=$(printf '%s' "$1" | head -c 160 | tr '\n' ' ') err=$(printf '%s' "$_out" | tail -c 400 | tr '\n' ' ')"
+    fi
+    return 0
 }
 
 record_runner_event() {
@@ -2225,6 +2246,21 @@ ${output:0:1500}
                    git_diff=$(sql_escape "$git_diff"),
                    review_feedback=COALESCE(review_feedback,'') || E'\n[AI Reviewer] ${review_hold_note} — ${review_error_detail}',
                    completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+        # 위 UPDATE 는 result_output·git_diff 를 통째로 싣는다. 그게 어떤 이유로든
+        # 실패하면 행은 여전히 status='running' 이고, 60초 안에 watchdog 이
+        # 'process_died' 로 덮어쓴다(runner-1bf4a718 이 그렇게 사라졌다).
+        # 그래서 **적용됐는지 읽어서 확인하고**, 아니면 큰 payload 를 뺀
+        # 최소 문장으로 한 번 더 건다. 상태 한 줄이 diff 보다 중요하다.
+        local _hold_now
+        _hold_now=$(db_exec "SELECT status FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null || true)
+        _hold_now="${_hold_now// /}"
+        if [[ "$_hold_now" != "$review_hold_status" ]]; then
+            log "  REVIEW_HOLD_WRITE_MISSED job=$job_id status='${_hold_now}' expected='${review_hold_status}' — payload 없이 재시도"
+            db_update "UPDATE pipeline_jobs SET status='${review_hold_status}', phase='${review_hold_phase}',
+                       error_detail=$(sql_escape "$review_error_detail"),
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[AI Reviewer] ${review_hold_note} — ${review_error_detail}',
+                       completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+        fi
         record_runner_event "$job_id" "job_terminal" "$review_hold_status" "$review_hold_phase" "$job_model" "" "$job_size" "" "{\"error_detail\":\"${review_hold_phase}\",\"verdict\":\"${review_verdict}\",\"flag_category\":\"${review_flag_category}\",\"policy\":\"FLAG+hold\"}"
         if [[ "$review_infra_failure" == "true" ]]; then
             post_to_chat "$session_id" "🟠 [Pipeline Runner] AI 리뷰 인프라 장애로 승인 보류: $job_id — ${review_error_detail}
