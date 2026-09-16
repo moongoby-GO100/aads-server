@@ -215,7 +215,10 @@ async def _check_db() -> Dict[str, Any]:
 async def _check_github_pat() -> Dict[str, Any]:
     """GitHub PAT 검증. 미설정 시 severity: warning (기능에 필수 아님)."""
     import httpx
-    pat = GITHUB_PAT or os.getenv("GITHUB_TOKEN", "")
+    from app.core.llm_key_provider import get_api_key
+
+    # 레지스트리(llm_api_keys) 우선, DB 장애 시 env 폴백. 모듈 로드 시점 env 는 최후순위.
+    pat = await get_api_key("GITHUB_TOKEN", fallback_env="GITHUB_TOKEN") or GITHUB_PAT
     if not pat:
         return {"ok": False, "error": "PAT not configured", "severity": "warning"}
     try:

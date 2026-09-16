@@ -1496,7 +1496,10 @@ class ToolExecutor:
 
         url = f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
         headers: Dict[str, str] = {}
-        pat = os.getenv("GITHUB_PAT", os.getenv("GITHUB_TOKEN", ""))
+        from app.core.llm_key_provider import get_api_key
+
+        # 레지스트리(llm_api_keys) 우선, DB 장애 시 env 폴백.
+        pat = await get_api_key("GITHUB_TOKEN", fallback_env="GITHUB_TOKEN") or os.getenv("GITHUB_PAT", "")
         if pat:
             headers["Authorization"] = f"token {pat}"
 

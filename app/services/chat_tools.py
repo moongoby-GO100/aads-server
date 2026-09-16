@@ -312,8 +312,13 @@ async def read_github_file(message: str, workspace_id: str) -> Dict[str, Any]:
 
     raw_url = f"https://raw.githubusercontent.com/moongoby-GO100/{repo}/{branch}/{path}"
     headers: Dict[str, str] = {}
-    if _GITHUB_PAT:
-        headers["Authorization"] = f"token {_GITHUB_PAT}"
+    from app.core.llm_key_provider import get_api_key
+
+    # 레지스트리(llm_api_keys) 우선, DB 장애 시 env 폴백. _GITHUB_PAT 은 모듈 로드
+    # 시점에 고정되므로 키 교체가 반영되지 않는다 — 최후순위로만 쓴다.
+    _pat = await get_api_key("GITHUB_TOKEN", fallback_env="GITHUB_TOKEN") or _GITHUB_PAT
+    if _pat:
+        headers["Authorization"] = f"token {_pat}"
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
