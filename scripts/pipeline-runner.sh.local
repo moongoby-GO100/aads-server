@@ -1189,7 +1189,29 @@ promote_next_queued() {
 }
 
 cleanup_blocked_dependencies() {
-    local blocked_existing blocked_missing
+    local released blocked_existing blocked_missing
+
+    # ── 자동 부여된 의존성은 부모가 죽으면 풀어준다 (AADS-RUNNER-AUTODEP-RELEASE) ──
+    # 2026-09-16, 잡 하나가 error 로 끝나자 뒤에 줄 서 있던 잡 4개가 연쇄로 취소됐다
+    # (5a2953e2 → 863c0791, 97dcd84b → e7597fb8). 네 건 모두 사람이 건 의존성이 아니라
+    # **같은 파일을 만진다는 이유로 시스템이 자동으로 건 것**이었다. 서로 다른 세션의
+    # 작업이 남의 실패에 끌려 죽었다.
+    #
+    # 자동 의존성의 목적은 같은 파일을 동시에 고치지 않게 줄을 세우는 것 하나뿐이다.
+    # 부모가 terminal 로 끝났으면 그 파일을 더 건드리지 않는다 — 줄 설 이유가 사라진다.
+    # 그래서 취소가 아니라 **의존성만 풀고 대기열에 그대로 남긴다.**
+    # 사람이 명시한 depends_on 은 "저게 끝나야 이게 의미가 있다" 는 뜻이므로 종전대로 취소한다.
+    released=$(db_exec "UPDATE pipeline_jobs p SET depends_on=NULL,
+                        review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 이 ' || dep.status || ' 로 끝나 같은 파일을 더 건드리지 않는다 — 자동 부여된 의존성을 풀고 단독 실행한다',
+                        updated_at=NOW()
+                        FROM pipeline_jobs dep
+                        WHERE p.depends_on = dep.job_id
+                          AND p.status='queued'
+                          AND p.phase IN ('queued','coding')
+                          AND dep.status IN ('error','rejected','rejected_done','cancelled')
+                          AND p.logs @> '[{\"event\": \"file_conflict_auto_dependency\"}]'::jsonb
+                        RETURNING p.job_id;" 2>/dev/null) || true
+
     blocked_existing=$(db_exec "UPDATE pipeline_jobs p SET status='cancelled',
                                 phase='blocked_dependency',
                                 error_detail='blocked_dependency: parent ' || p.depends_on || ' is ' || dep.status,
@@ -1200,6 +1222,7 @@ cleanup_blocked_dependencies() {
                                   AND p.status='queued'
                                   AND p.phase IN ('queued','coding')
                                   AND dep.status IN ('error','rejected','rejected_done','cancelled')
+                                  AND NOT (p.logs @> '[{\"event\": \"file_conflict_auto_dependency\"}]'::jsonb)
                                 RETURNING p.job_id;" 2>/dev/null) || true
     blocked_missing=$(db_exec "UPDATE pipeline_jobs p SET status='cancelled',
                                phase='blocked_dependency',
@@ -1209,11 +1232,15 @@ cleanup_blocked_dependencies() {
                                WHERE p.status='queued'
                                  AND p.phase IN ('queued','coding')
                                  AND p.depends_on IS NOT NULL
+                                 AND NOT (p.logs @> '[{\"event\": \"file_conflict_auto_dependency\"}]'::jsonb)
                                  AND NOT EXISTS (
                                      SELECT 1 FROM pipeline_jobs dep
                                      WHERE dep.job_id = p.depends_on
                                  )
                                RETURNING p.job_id;" 2>/dev/null) || true
+    if [[ -n "$released" ]]; then
+        log "  AUTODEP_RELEASED ${released//$'\n'/,} — 부모가 terminal 이라 자동 의존성 해제, 대기열 유지"
+    fi
     if [[ -n "$blocked_existing$blocked_missing" ]]; then
         log "  BLOCKED_DEPENDENCY_CLEANUP existing=${blocked_existing//$'\n'/,} missing=${blocked_missing//$'\n'/,}"
     fi
@@ -2710,8 +2737,36 @@ deploy_job() {
             if [[ "$target_repo" == "aads-dashboard" ]]; then
                 DASHBOARD_CHANGED=true
             elif [ -n "$(git -C /root/aads/aads-dashboard status --porcelain 2>/dev/null)" ]; then
-                log "  BLOCK aads-dashboard shared worktree changes — 별도 isolated runner job 필요"
-                _build_fail="${_build_fail:+${_build_fail};}aads-dashboard:isolated_worktree_required"
+                # 대시보드 공유 워킹트리가 더럽다. **이 잡이 만든 것인지** 부터 가른다.
+                #
+                # 2026-09-16: runner-168bac82(AADS-AAG-DEBT-002) 는 대시보드 파일을
+                # 하나도 건드리지 않았는데, 다른 세션이 남긴 UsageBar.tsx 미커밋 1건
+                # 때문에 build_fail 이 됐다. 백엔드 push 는 이미 성공한 뒤였다.
+                # 남이 남긴 dirty 로 남의 잡을 죽이면, 그 파일이 커밋될 때까지
+                # **모든 AADS 백엔드 배포가 인질이 된다.**
+                #
+                # 판정: 이 잡이 시작한 뒤에 바뀐 dirty 파일이 하나라도 있으면 이 잡을
+                # 의심하고 막는다(원래 의도 — 공유 워크트리에 직접 쓴 잡을 잡는다).
+                # 시작 전부터 더러웠으면 빌드만 건너뛰고 실패로 보지 않는다.
+                # 시작 시각을 못 읽으면 예전처럼 막는다 — 모르면 안전한 쪽.
+                local _dash_dirty _dash_started _dash_recent=0 _dash_f _dash_m
+                _dash_dirty=$(git -C /root/aads/aads-dashboard status --porcelain 2>/dev/null \
+                    | sed 's/^...//' | head -20 | tr '\n' ',' | sed 's/,$//')
+                _dash_started=$(db_exec "SELECT COALESCE(EXTRACT(EPOCH FROM started_at)::bigint,0) FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -cd '0-9')
+                if [[ "${_dash_started:-0}" -gt 0 ]]; then
+                    while IFS= read -r _dash_f; do
+                        [[ -n "$_dash_f" ]] || continue
+                        [[ -e "/root/aads/aads-dashboard/${_dash_f}" ]] || continue
+                        _dash_m=$(stat -c %Y "/root/aads/aads-dashboard/${_dash_f}" 2>/dev/null || echo 0)
+                        [[ "${_dash_m:-0}" -ge "$_dash_started" ]] && _dash_recent=$((_dash_recent + 1))
+                    done < <(git -C /root/aads/aads-dashboard status --porcelain 2>/dev/null | sed 's/^...//')
+                fi
+                if [[ "${_dash_started:-0}" -le 0 || "${_dash_recent:-0}" -gt 0 ]]; then
+                    log "  BLOCK aads-dashboard shared worktree changes — 이 잡 이후 변경 ${_dash_recent}건: ${_dash_dirty}"
+                    _build_fail="${_build_fail:+${_build_fail};}aads-dashboard:isolated_worktree_required"
+                else
+                    log "  WARN aads-dashboard dirty — 이 잡과 무관(시작 전부터 미커밋), 빌드 생략하고 실패로 보지 않음: ${_dash_dirty}"
+                fi
                 DASHBOARD_CHANGED=false
             else
                 DASHBOARD_CHANGED=false
