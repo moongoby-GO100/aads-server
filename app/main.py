@@ -2708,6 +2708,8 @@ async def lifespan(app: FastAPI):
     # 한 실행을 몇 번까지 다시 잡을지. 정상 재개는 한 자릿수면 충분하고,
     # 이 값을 넘긴다는 것은 재개해도 같은 자리에서 다시 끝난다는 뜻이다.
     _RESUME_MAX_OWNER_EPOCH = int(os.getenv("AADS_EXECUTION_RESUME_MAX_OWNER_EPOCH", "20"))
+    # 시작 후 이 시간이 지난 실행은 재개하지 않고 수거한다.
+    _RESUME_MAX_AGE_HOURS = max(1, int(os.getenv("AADS_EXECUTION_MAX_AGE_HOURS", "2")))
 
     async def _resume_pending_executions_once(
         max_rows: int = 5,
@@ -2777,6 +2779,20 @@ async def lifespan(app: FastAPI):
                     ) ph ON TRUE
                     WHERE te.status IN ('running', 'retrying')
                       AND te.updated_at > NOW() - INTERVAL '2 hours'
+                      -- **시작 시각** 기준 상한. updated_at 만으로는 못 막는다.
+                      --
+                      -- 2026-09-17 실측. 버려진 실행이 retrying 인 채로 며칠씩
+                      -- 남았다(13.7h·42.9h·48.4h·58.2h·65.7h). updated_at 창을
+                      -- 벗어나면 스캐너 눈에서 사라질 뿐 행은 그대로 살아 있고,
+                      -- 무언가 그 행을 건드려 updated_at 이 갱신되는 순간 다시
+                      -- 창 안으로 들어와 5초 주기 재개가 시작된다 — 한 실행이
+                      -- 13시간 42분 휴면 뒤 6초 간격으로 12회 되살아났다.
+                      --
+                      -- owner_epoch 상한(어제 도입)으로는 이런 느린 루프를 못
+                      -- 잡는다. 며칠을 버텨도 epoch 는 12~17 에 머물기 때문이다.
+                      -- 재개는 시작 후 몇 분 안에 의미가 있지, 이틀 뒤에 되살릴
+                      -- 이유가 없다.
+                      AND te.started_at > NOW() - ($6::int * INTERVAL '1 hour')
                       -- 더 새 사용자 메시지에 밀려난 턴은 재개 대상이 아니다.
                       -- 재개해봐야 그 자리에서 다시 밀려나고, 스캐너가 5초 뒤
                       -- 또 집어간다. 2026-09-16 실측: 한 실행이 349회·3시간 13분.
@@ -2826,6 +2842,7 @@ async def lifespan(app: FastAPI):
                         "interrupted_auto_resume_cancelled:%",
                     ],
                     _RESUME_MAX_OWNER_EPOCH,
+                    _RESUME_MAX_AGE_HOURS,
                 )
 
                 for row in rows:
@@ -3068,17 +3085,82 @@ async def lifespan(app: FastAPI):
             min_stale_seconds=_startup_stale_seconds,
         )
 
+    async def _reap_abandoned_executions_once():
+        """시작 후 오래된 실행을 종결한다.
+
+        조회에서 제외하는 것만으로는 부족하다. 제외는 "못 본 척" 일 뿐 행은
+        retrying 인 채 살아 있고, 무언가 그 행을 건드리면 다시 재개 대상이
+        된다 — 2026-09-17 실측: 13시간 42분 휴면 뒤 6초 간격으로 되살아났다.
+        누군가 종결을 찍어줘야 끝난다.
+
+        **cancelled 로 내린다.** interrupted 는 _claim_execution_lease 의
+        WHERE 에 그대로 들어 있어 2초 만에 다시 집어간다(2026-09-16 실측).
+
+        자리표시자도 함께 정리한다. 내용이 있으면 살리고, 없으면 안내로 바꾼다 —
+        지우면 대표님이 "버블이 아예 안 나온다" 고 보시게 된다.
+        """
+        from app.core.db_pool import get_pool as _gp_reap
+
+        async with _gp_reap().acquire() as conn:
+            rows = await conn.fetch(
+                """
+                UPDATE chat_turn_executions
+                SET status = 'cancelled',
+                    completed_at = COALESCE(completed_at, NOW()),
+                    updated_at = NOW(),
+                    lease_expires_at = NULL,
+                    owner_instance = NULL,
+                    error_message = COALESCE(error_message, 'reaped_abandoned_execution')
+                -- **running/retrying 만** 수거한다. interrupted 는 이미 표시가
+                -- 끝난 과거 기록이고, 전수로 잡으면 5,580건(최고 145일)을
+                -- 다시 쓰게 된다(2026-09-17 실측). 문제는 끝나지 않는 쪽이다.
+                -- 오래된 interrupted 가 되살아나는 경로는 _claim_execution_lease
+                -- 의 나이 상한이 따로 막는다.
+                WHERE status IN ('running', 'retrying')
+                  AND started_at < NOW() - ($1::int * INTERVAL '1 hour')
+                RETURNING id, session_id, assistant_message_id, owner_epoch
+                """,
+                _RESUME_MAX_AGE_HOURS,
+            )
+            if not rows:
+                return
+            await conn.execute(
+                """
+                UPDATE chat_messages
+                SET model_used = 'interrupted',
+                    intent = CASE WHEN length(COALESCE(content, '')) > 50
+                                  THEN 'interrupted_partial' ELSE 'interruption_notice' END,
+                    content = CASE WHEN length(COALESCE(content, '')) > 50 THEN content
+                                   ELSE '응답이 중단되었습니다. 같은 질문을 다시 보내주세요.' END,
+                    edited_at = NOW()
+                WHERE id = ANY($1::uuid[])
+                  AND intent = 'streaming_placeholder'
+                """,
+                [r["assistant_message_id"] for r in rows if r["assistant_message_id"]],
+            )
+            logger.warning(
+                "execution_reaped count=%d max_age_hours=%d epochs=%s",
+                len(rows), _RESUME_MAX_AGE_HOURS,
+                sorted({int(r["owner_epoch"] or 0) for r in rows}),
+            )
+
     async def _periodic_execution_resume_scanner():
         import asyncio as _prs_asyncio
         _periodic_stale_seconds = int(os.getenv("AADS_EXECUTION_RESUME_STALE_SECONDS", "8"))
+        # 수거는 자주 돌 이유가 없다. 재개 주기(5초)와 같이 돌리면 DB 쓰기만 는다.
+        _reap_every = max(1, int(os.getenv("AADS_EXECUTION_REAP_EVERY_TICKS", "60")))  # 5초 × 60 = 5분
         await _prs_asyncio.sleep(5)
+        _tick = 0
         while True:
             try:
                 await _prs_asyncio.sleep(5)
+                _tick += 1
                 await _resume_pending_executions_once(
                     max_rows=5,
                     min_stale_seconds=_periodic_stale_seconds,
                 )
+                if _tick % _reap_every == 0 and _is_execution_resume_owner():
+                    await _reap_abandoned_executions_once()
             except Exception as _e:
                 logger.warning(f"execution_resume_scanner_error: {_e}")
 

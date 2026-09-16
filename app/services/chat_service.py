@@ -44,6 +44,9 @@ _EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX
 # 위 가드가 발동하지 않는다 — 2026-09-16 실측 owner_epoch 524 대 retry_count 1.
 # 정상 운영은 한 자릿수이고, 배포 전환이 겹쳐도 수십을 넘지 않는다.
 _EXECUTION_MAX_OWNER_EPOCH = max(10, int(os.getenv("AADS_EXECUTION_MAX_OWNER_EPOCH", "50")))
+# 시작 후 이 시간이 지난 실행에는 소유권을 주지 않는다. app/main.py 의 수거기와
+# 같은 값을 쓴다 — 한쪽만 바꾸면 수거되기 전에 되살아나는 창이 생긴다.
+_EXECUTION_MAX_AGE_HOURS = max(1, int(os.getenv("AADS_EXECUTION_MAX_AGE_HOURS", "2")))
 _RESUME_INCOMPLETE_STREAM_MAX_RETRIES = max(
     0, int(os.getenv("AADS_RESUME_INCOMPLETE_STREAM_MAX_RETRIES", "2"))
 )
@@ -225,6 +228,11 @@ async def _claim_execution_lease(
         WHERE id = $1
           AND status IN ('running', 'retrying', 'interrupted')
           AND ($6::boolean OR COALESCE(owner_epoch, 0) < $7::int)
+          -- 나이 상한. epoch 상한만으로는 **느린 루프**를 못 잡는다 —
+          -- 2026-09-17 실측: 며칠을 버틴 실행들의 epoch 는 12~17 이었고,
+          -- 그중 하나는 13시간 42분 휴면 뒤 되살아났다. 재개는 시작 후 몇 분
+          -- 안에 의미가 있지 이틀 뒤에 되살릴 이유가 없다.
+          AND ($6::boolean OR started_at > NOW() - ($8::int * INTERVAL '1 hour'))
           AND (
               owner_instance IS NULL
               OR lease_expires_at IS NULL
@@ -239,6 +247,7 @@ async def _claim_execution_lease(
         error_message,
         bool(allow_any_epoch),
         _EXECUTION_MAX_OWNER_EPOCH,
+        _EXECUTION_MAX_AGE_HOURS,
     )
     if not row:
         return None
