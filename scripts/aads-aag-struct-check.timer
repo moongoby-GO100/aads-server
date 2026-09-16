@@ -1,0 +1,13 @@
+[Unit]
+Description=AADS AAG L1/L2 structural architecture check timer
+
+[Timer]
+# 스캔 1회 19.6초. L3(행위)보다 무거워 30분이 아니라 2시간 주기로 둔다.
+OnBootSec=10min
+OnUnitActiveSec=2h
+AccuracySec=5min
+Persistent=true
+Unit=aads-aag-struct-check.service
+
+[Install]
+WantedBy=timers.target
