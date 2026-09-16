@@ -237,6 +237,22 @@ class _FakeDB:
         if "SET superseded_by" in q:  # _mark_superseded_failures
             return []
 
+        # `advance_goal` 은 같은 `sequence_order` 의 A/B 변형을 **전부 함께**
+        # 착수한다(857a70c8). 그래서 단건 fetchrow 가 아니라 이 fetch 로
+        # 바뀌었는데 가짜 연결은 예전 모양만 알고 있었다.
+        if ("FROM milestones WHERE goal_id" in q and "status = 'pending'" in q
+                and "MIN(sequence_order)" in q):
+            open_ms = [m for m in self.milestones
+                       if m["goal_id"] == args[0] and m["status"] == "pending"]
+            if not open_ms:
+                return []
+            lowest = min(m["sequence_order"] for m in open_ms)
+            return [
+                {"id": m["id"]}
+                for m in sorted(open_ms, key=lambda m: (m.get("variant") or ""))
+                if m["sequence_order"] == lowest
+            ]
+
         raise AssertionError(f"unhandled fetch query: {q[:160]}")
 
     async def fetchrow(self, query, *args):
@@ -299,6 +315,18 @@ class _FakeDB:
             return {"goal_id": ms["goal_id"], "milestone_status": ms["status"],
                     "goal_status": goal["status"], "is_next_open": not earlier_open}
 
+        # `_current_open` 은 'review' 도 **열린 것**으로 본다. 담당이 완료를
+        # 신고하고 주도의 확인을 기다리는 동안 목표가 다음 단계로 넘어가면
+        # 확인이 무의미해지기 때문이다(857a70c8). 가짜 연결이 그 상태를
+        # 모르면 이 질의에서 멈춘다 — 2026-09-17 실측으로 실제로 멈춰 있었다.
+        if "FROM milestones WHERE goal_id" in q and "status IN ('in_progress', 'review')" in q:
+            found = sorted(
+                (m for m in self.milestones
+                 if m["goal_id"] == args[0] and m["status"] in ("in_progress", "review")),
+                key=lambda m: m["sequence_order"],
+            )
+            return {"id": found[0]["id"]} if found else None
+
         if "FROM milestones WHERE goal_id" in q and "status = 'in_progress'" in q:
             found = sorted(
                 (m for m in self.milestones if m["goal_id"] == args[0] and m["status"] == "in_progress"),
@@ -354,10 +382,16 @@ class _FakeDB:
             return "UPDATE 0"
 
         if "UPDATE milestones SET status = 'in_progress'" in q:
-            ms = self._milestone(args[0])
-            if ms:
-                ms["status"] = "in_progress"
-            return "UPDATE 1"
+            # `advance_goal` 은 A/B 변형을 한꺼번에 여는 `WHERE id = ANY($1)`
+            # 을 쓴다(857a70c8). 단건 id 만 받던 가짜는 리스트를 넘겨받고
+            # 조용히 **아무것도 안 바꾼 채 "UPDATE 1" 을 돌려주고 있었다** —
+            # 그래서 마일스톤이 열리지 않았는데 테스트는 성공으로 보였다.
+            ids = args[0] if isinstance(args[0], (list, tuple)) else [args[0]]
+            for ms_id in ids:
+                ms = self._milestone(ms_id)
+                if ms:
+                    ms["status"] = "in_progress"
+            return f"UPDATE {len(ids)}"
 
         if "UPDATE goals SET status = 'completed'" in q:
             goal = self._goal(args[0])

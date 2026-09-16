@@ -5478,6 +5478,13 @@ async def _stream_anthropic(
         _cache_create = getattr(final_msg.usage, 'cache_creation_input_tokens', 0) or 0
         if _cache_read or _cache_create:
             logger.info(f"prompt_cache: read={_cache_read} create={_cache_create} input={input_tokens} turn={_turn}")
+        # 로그로만 흘리면 사후에 셀 수가 없다. 턴 누산기에 더해
+        # chat_turn_timing 에 남긴다 — 도구 루프로 여러 번 호출되므로 누적이다.
+        try:
+            from app.services.turn_timing import add_cache_tokens as _add_cache
+            _add_cache(_cache_read, _cache_create)
+        except Exception:  # noqa: BLE001 — 계측이 응답을 막으면 본말전도다
+            pass
 
         # Tool Use 처리
         tool_use_blocks = [b for b in final_msg.content if b.type == "tool_use"]
