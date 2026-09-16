@@ -365,7 +365,9 @@ async def llm_overview() -> dict[str, Any]:
                 "bound": bool(binding and binding.get("bound")),
                 "needs_login": bool(binding and binding.get("needs_login")),
                 "login_in_progress": bool(binding and binding.get("login_in_progress")),
-                "login_target": (f"anthropic:{slot[4:]}" if provider == "anthropic" and slot else None)
+                # 릴레이 규약은 'claude:<슬롯번호>' 와 'codex:<KEY_NAME>' 이다.
+                # provider 이름(anthropic)을 그대로 쓰면 resolve_target 이 거절한다.
+                "login_target": (f"claude:{slot[4:]}" if provider == "anthropic" and slot else None)
                                 or (f"codex:{row['key_name']}" if provider == "codex" else None),
                 "subscription": (binding or {}).get("subscription"),
                 "rate_limited_until": row["rate_limited_until"].isoformat() if row["rate_limited_until"] else None,
