@@ -40,6 +40,10 @@ _EXECUTION_OWNER_INSTANCE = os.getenv(
 _EXECUTION_LEASE_SECONDS = max(20, int(os.getenv("AADS_EXECUTION_LEASE_SECONDS", "45")))
 _EXECUTION_HEARTBEAT_SECONDS = max(2, int(os.getenv("AADS_EXECUTION_HEARTBEAT_SECONDS", "5")))
 _EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "5")))
+# 한 실행에 소유권을 몇 번까지 줄지. retry_count 는 재개 경로에서 오르지 않아
+# 위 가드가 발동하지 않는다 — 2026-09-16 실측 owner_epoch 524 대 retry_count 1.
+# 정상 운영은 한 자릿수이고, 배포 전환이 겹쳐도 수십을 넘지 않는다.
+_EXECUTION_MAX_OWNER_EPOCH = max(10, int(os.getenv("AADS_EXECUTION_MAX_OWNER_EPOCH", "50")))
 _RESUME_INCOMPLETE_STREAM_MAX_RETRIES = max(
     0, int(os.getenv("AADS_RESUME_INCOMPLETE_STREAM_MAX_RETRIES", "2"))
 )
@@ -192,8 +196,17 @@ async def _claim_execution_lease(
     *,
     status: Optional[str] = None,
     error_message: Optional[str] = None,
+    allow_any_epoch: bool = False,
 ) -> Optional[int]:
-    """Atomically acquire an expired/self-owned execution and return its fence epoch."""
+    """Atomically acquire an expired/self-owned execution and return its fence epoch.
+
+    epoch 상한이 여기 있는 이유 — 2026-09-16, 재개 스캐너 조회에만 상한을 걸었더니
+    구멍이 남았다. 스캐너가 제외한 `interrupted` 실행을 **다른 호출자**가 2초 만에
+    다시 집어가 epoch 가 계속 올랐다(419 → 420, 실측). 재개 경로가 여섯 군데라
+    조회마다 막으면 반드시 하나를 빠뜨린다. 소유권을 주는 자리 한 곳에서 막는다.
+
+    사람이 명시적으로 되살리는 경로(수동 재개)는 allow_any_epoch 로 통과시킨다.
+    """
     eid = uuid.UUID(str(execution_id))
     row = await conn.fetchrow(
         """
@@ -211,6 +224,7 @@ async def _claim_execution_lease(
             updated_at = NOW()
         WHERE id = $1
           AND status IN ('running', 'retrying', 'interrupted')
+          AND ($6::boolean OR COALESCE(owner_epoch, 0) < $7::int)
           AND (
               owner_instance IS NULL
               OR lease_expires_at IS NULL
@@ -223,6 +237,8 @@ async def _claim_execution_lease(
         _EXECUTION_LEASE_SECONDS,
         status,
         error_message,
+        bool(allow_any_epoch),
+        _EXECUTION_MAX_OWNER_EPOCH,
     )
     if not row:
         return None

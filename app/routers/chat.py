@@ -3889,6 +3889,9 @@ async def resume_interrupted(
                 uuid.UUID(row["execution_id"]),
                 status="retrying",
                 error_message="manual_resume_claimed",
+                # 사람이 버튼을 눌러 되살리는 자리다. epoch 상한은 자동 재개가
+                # 무한히 도는 것을 막으려는 것이지, 수동 복구까지 막을 이유는 없다.
+                allow_any_epoch=True,
             )
             if owner_epoch is None:
                 return {
