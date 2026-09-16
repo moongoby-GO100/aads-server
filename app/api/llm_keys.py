@@ -283,6 +283,36 @@ def _fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()[:12]
 
 
+def _usage_windows(provider: str, row: Any, slot_row: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """계정의 한도 창을 창 길이와 함께 돌려준다.
+
+    두 provider 의 창 구성이 다르다 — 코덱스는 주간(10080분) 하나, 클로드는
+    5시간(300분)과 주간을 같이 쓴다. 화면이 'primary/secondary' 라는 이름으로
+    추측하면 안 된다. 코덱스의 primary 는 주간이고 클로드의 primary 는 5시간이라,
+    같은 이름이 다른 창을 가리킨다. 그래서 window_minutes 를 붙여 내려준다.
+    """
+    out: list[dict[str, Any]] = []
+    if provider == "anthropic":
+        for key in ("primary", "secondary"):
+            win = (slot_row or {}).get(key) or {}
+            if win.get("used_percent") is None:
+                continue
+            out.append({
+                "window_minutes": win.get("window_minutes"),
+                "used_percent": float(win["used_percent"]),
+                "resets_at": win.get("resets_at"),
+            })
+        return out
+
+    if row["used_percent"] is not None:
+        out.append({
+            "window_minutes": 10080,
+            "used_percent": float(row["used_percent"]),
+            "resets_at": row["resets_at"].isoformat() if row["resets_at"] else None,
+        })
+    return out
+
+
 def _account_state(row: Any, binding: dict[str, Any] | None, now: datetime) -> str:
     """행 하나의 상태를 서버가 정한다. 화면은 색만 칠한다."""
     if not row["is_active"]:
@@ -335,6 +365,17 @@ async def llm_overview() -> dict[str, Any]:
         bindings = None
         logger.warning("llm_keys.overview.bindings_unavailable")
 
+    # 클로드는 5시간 창과 주간 창을 따로 쓴다. 코덱스는 주간 하나뿐이다.
+    # 슬롯별 스냅샷은 oauth_usage_tracker 가 이미 모으고 있으므로 가져다 쓴다.
+    slot_usage: dict[str, dict[str, Any]] = {}
+    try:
+        from app.services.oauth_usage_tracker import get_slot_usage_all
+
+        for row in await get_slot_usage_all():
+            slot_usage[f"slot{row.get('slot')}"] = row
+    except Exception:
+        logger.warning("llm_keys.overview.slot_usage_unavailable")
+
     # anthropic 키 ↔ 슬롯 매핑. 릴레이 슬롯 규약과 같은 순서다(priority 오름차순).
     slot_of: dict[str, str] = {}
     anthropic_rows = [r for r in rows if normalize_provider(r["provider"]) == "anthropic"]
@@ -371,6 +412,7 @@ async def llm_overview() -> dict[str, Any]:
                                 or (f"codex:{row['key_name']}" if provider == "codex" else None),
                 "subscription": (binding or {}).get("subscription"),
                 "rate_limited_until": row["rate_limited_until"].isoformat() if row["rate_limited_until"] else None,
+                "windows": _usage_windows(provider, row, slot_usage.get(slot or "")),
                 "used_percent": float(row["used_percent"]) if row["used_percent"] is not None else None,
                 "resets_at": row["resets_at"].isoformat() if row["resets_at"] else None,
                 "snapshot_age_hours": (round((now - row["snapshot_at"]).total_seconds() / 3600, 1)
