@@ -3394,39 +3394,75 @@ async def ops_cost_trend(
     days = _clamp_int(days, default=7, minimum=1, maximum=90)
     project_label = normalize_project_label(project) if project else None
 
-    conditions = [
-        "recorded_at >= (date_trunc('day', NOW() AT TIME ZONE 'Asia/Seoul')"
-        " - (INTERVAL '1 day' * ($1::int - 1))) AT TIME ZONE 'Asia/Seoul'"
-    ]
-    params: list = [days]
+    # 어느 테이블을 읽느냐가 이 엔드포인트의 전부다.
+    #
+    # `cost_tracking` 은 **2026-03-11 이후 한 행도 늘지 않았다**(총 220행).
+    # `task_cost_log` 도 2026-03-05 에서 멈췄고, `llmops_traces` 는 7일간
+    # 50,986 트레이스가 쌓이지만 `cost_usd` 가 전부 0 이다.
+    # 지금 실제 비용이 적히는 곳은 `oauth_usage_log` 하나뿐이다
+    # (최근 2일 1,303행 · 합계 $1,732.50, 2026-09-16 실측).
+    #
+    # 여기서 `cost_tracking` 을 읽으면 엔드포인트는 200 을 주고 차트는
+    # 7일 내내 0 을 그린다 — **고장인데 고장으로 안 보이는** 형태다.
+    # 그래서 기본 경로는 살아 있는 원장을 읽는다.
+    #
+    # 다만 `oauth_usage_log` 에는 project 컬럼이 없다(계정 슬롯·모델 단위 기록).
+    # 프로젝트별 비용을 물으면 그 축을 가진 유일한 테이블인 `cost_tracking`
+    # 으로 간다. 그 값이 3월에 멈춰 있다는 사실은 응답에 그대로 적어 보낸다 —
+    # 조용히 0 을 돌려주는 것보다 낫다.
+    now_kst = datetime.now(KST)
     if project_label:
-        conditions.append("project = $2")
-        params.append(project_label)
-    where = "WHERE " + " AND ".join(conditions)
+        source = "cost_tracking"
+        sql = """
+            SELECT DATE(recorded_at AT TIME ZONE 'Asia/Seoul') AS day,
+                   COALESCE(SUM(cost_usd), 0) AS cost,
+                   COUNT(*)::int AS records
+            FROM cost_tracking
+            WHERE recorded_at >= (date_trunc('day', NOW() AT TIME ZONE 'Asia/Seoul')
+                  - (INTERVAL '1 day' * ($1::int - 1))) AT TIME ZONE 'Asia/Seoul'
+              AND project = $2
+            GROUP BY day ORDER BY day
+        """
+        params: list = [days, project_label]
+    else:
+        source = "oauth_usage_log"
+        sql = """
+            SELECT DATE(created_at AT TIME ZONE 'Asia/Seoul') AS day,
+                   COALESCE(SUM(cost_usd), 0) AS cost,
+                   COUNT(*)::int AS records
+            FROM oauth_usage_log
+            WHERE created_at >= (date_trunc('day', NOW() AT TIME ZONE 'Asia/Seoul')
+                  - (INTERVAL '1 day' * ($1::int - 1))) AT TIME ZONE 'Asia/Seoul'
+            GROUP BY day ORDER BY day
+        """
+        params = [days]
+
     try:
         conn = await _get_conn()
         try:
-            rows = await conn.fetch(f"""
-                SELECT DATE(recorded_at AT TIME ZONE 'Asia/Seoul') AS day,
-                       COALESCE(SUM(cost_usd), 0) AS cost,
-                       COUNT(*)::int AS records
-                FROM cost_tracking {where}
-                GROUP BY day ORDER BY day
-            """, *params)
+            rows = await conn.fetch(sql, *params)
         finally:
             await conn.close()
     except Exception as e:
-        logger.error("ops_cost_trend_error", error=str(e))
+        logger.error("ops_cost_trend_error", error=str(e), source=source)
         raise HTTPException(status_code=500, detail=str(e))
 
-    items = _cost_trend_items([dict(r) for r in rows], days, datetime.now(KST).date())
-    return {
+    items = _cost_trend_items([dict(r) for r in rows], days, now_kst.date())
+    payload = {
         "items": items,
         "days": days,
         "project": project_label,
+        "source": source,
         "total_usd": round(sum(i["cost"] for i in items), 6),
-        "generated_at": datetime.now(KST).isoformat(),
+        "generated_at": now_kst.isoformat(),
     }
+    if project_label:
+        payload["source_note"] = (
+            "프로젝트별 비용은 cost_tracking 에만 축이 있는데 이 테이블은 "
+            "2026-03-11 이후 기록이 멈췄다. 최근 값이 0 이면 비용이 0 이 아니라 "
+            "기록이 없는 것이다."
+        )
+    return payload
 
 
 @router.get("/ops/project-stats")
