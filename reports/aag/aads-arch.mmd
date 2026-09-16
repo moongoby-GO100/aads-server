@@ -1,0 +1,253 @@
+graph LR
+  classDef dbl fill:#ffd7d7,stroke:#c00,stroke-width:2px;
+  n_app_main_py["app/main.py"]
+  n_app_yeoljeong_main_py["app/yeoljeong_main.py"]
+  n_ns_api_v1_projects(["/api/v1/projects ⚠2+"])
+  n_app_api_checkpoints_py["app/api/checkpoints.py"]
+  n_app_api_checkpoints_py --> n_ns_api_v1_projects
+  n_app_api_project_dashboard_py["app/api/project_dashboard.py"]
+  n_app_api_project_dashboard_py --> n_ns_api_v1_projects
+  n_app_api_projects_py["app/api/projects.py"]
+  n_app_api_projects_py --> n_ns_api_v1_projects
+  n_app_api_stream_py["app/api/stream.py"]
+  n_app_api_stream_py --> n_ns_api_v1_projects
+  class n_ns_api_v1_projects dbl;
+  n_ns_api_v1_admin(["/api/v1/admin ⚠2+"])
+  n_app_api_admin_py["app/api/admin.py"]
+  n_app_api_admin_py --> n_ns_api_v1_admin
+  n_app_api_admin_users_py["app/api/admin_users.py"]
+  n_app_api_admin_users_py --> n_ns_api_v1_admin
+  n_app_api_design_modifications_py["app/api/design_modifications.py"]
+  n_app_api_design_modifications_py --> n_ns_api_v1_admin
+  class n_ns_api_v1_admin dbl;
+  n_ns_api_v1_chat(["/api/v1/chat ⚠2+"])
+  n_app_api_chat_py["app/api/chat.py"]
+  n_app_api_chat_py --> n_ns_api_v1_chat
+  n_app_api_directive_drafts_py["app/api/directive_drafts.py"]
+  n_app_api_directive_drafts_py --> n_ns_api_v1_chat
+  n_app_routers_chat_py["app/routers/chat.py"]
+  n_app_routers_chat_py --> n_ns_api_v1_chat
+  class n_ns_api_v1_chat dbl;
+  n_ns_api_v1_ohvis(["/api/v1/ohvis ⚠2+"])
+  n_app_api_ohvis_harness_py["app/api/ohvis_harness.py"]
+  n_app_api_ohvis_harness_py --> n_ns_api_v1_ohvis
+  n_app_api_ohvis_llmops_py["app/api/ohvis_llmops.py"]
+  n_app_api_ohvis_llmops_py --> n_ns_api_v1_ohvis
+  n_app_api_ohvis_tasks_py["app/api/ohvis_tasks.py"]
+  n_app_api_ohvis_tasks_py --> n_ns_api_v1_ohvis
+  class n_ns_api_v1_ohvis dbl;
+  n_ns_api_v1_ops(["/api/v1/ops ⚠2+"])
+  n_app_api_hot_reload_py["app/api/hot_reload.py"]
+  n_app_api_hot_reload_py --> n_ns_api_v1_ops
+  n_app_api_memory_monitor_py["app/api/memory_monitor.py"]
+  n_app_api_memory_monitor_py --> n_ns_api_v1_ops
+  n_app_api_ops_py["app/api/ops.py"]
+  n_app_api_ops_py --> n_ns_api_v1_ops
+  class n_ns_api_v1_ops dbl;
+  n_ns_api_v1_settings(["/api/v1/settings ⚠2+"])
+  n_app_api_directives_py["app/api/directives.py"]
+  n_app_api_directives_py --> n_ns_api_v1_settings
+  n_app_api_pipeline_runner_py["app/api/pipeline_runner.py"]
+  n_app_api_pipeline_runner_py --> n_ns_api_v1_settings
+  n_app_routers_chat_py["app/routers/chat.py"]
+  n_app_routers_chat_py --> n_ns_api_v1_settings
+  class n_ns_api_v1_settings dbl;
+  n_ns_api_v1_directives(["/api/v1/directives ⚠2+"])
+  n_app_api_directives_py["app/api/directives.py"]
+  n_app_api_directives_py --> n_ns_api_v1_directives
+  n_app_api_ops_py["app/api/ops.py"]
+  n_app_api_ops_py --> n_ns_api_v1_directives
+  class n_ns_api_v1_directives dbl;
+  n_ns_api_v1_llm_models(["/api/v1/llm-models ⚠2+"])
+  n_app_api_llm_models_py["app/api/llm_models.py"]
+  n_app_api_llm_models_py --> n_ns_api_v1_llm_models
+  n_app_api_llm_report_py["app/api/llm_report.py"]
+  n_app_api_llm_report_py --> n_ns_api_v1_llm_models
+  class n_ns_api_v1_llm_models dbl;
+  n_ns_api_v1_user(["/api/v1/user ⚠2+"])
+  n_app_api_user_api_keys_py["app/api/user_api_keys.py"]
+  n_app_api_user_api_keys_py --> n_ns_api_v1_user
+  n_app_api_user_project_servers_py["app/api/user_project_servers.py"]
+  n_app_api_user_project_servers_py --> n_ns_api_v1_user
+  class n_ns_api_v1_user dbl;
+  n_ns_api_v1_agenda_(["/api/v1/agenda/"])
+  n_app_api_agenda_py["app/api/agenda.py"]
+  n_app_api_agenda_py --> n_ns_api_v1_agenda_
+  n_ns_api_v1_agenda_search(["/api/v1/agenda/search"])
+  n_app_api_agenda_py["app/api/agenda.py"]
+  n_app_api_agenda_py --> n_ns_api_v1_agenda_search
+  n_ns_api_v1_agenda_sessions(["/api/v1/agenda/sessions"])
+  n_app_api_agenda_py["app/api/agenda.py"]
+  n_app_api_agenda_py --> n_ns_api_v1_agenda_sessions
+  n_ns_api_v1_agenda___(["/api/v1/agenda/{}"])
+  n_app_api_agenda_py["app/api/agenda.py"]
+  n_app_api_agenda_py --> n_ns_api_v1_agenda___
+  n_ns_api_v1_agent_vault(["/api/v1/agent-vault"])
+  n_app_routers_agent_vault_py["app/routers/agent_vault.py"]
+  n_app_routers_agent_vault_py --> n_ns_api_v1_agent_vault
+  n_ns_api_v1_approval(["/api/v1/approval"])
+  n_app_api_approval_py["app/api/approval.py"]
+  n_app_api_approval_py --> n_ns_api_v1_approval
+  n_ns_api_v1_approvals(["/api/v1/approvals"])
+  n_app_api_project_docs_py["app/api/project_docs.py"]
+  n_app_api_project_docs_py --> n_ns_api_v1_approvals
+  n_ns_api_v1_artifacts(["/api/v1/artifacts"])
+  n_app_api_artifacts_py["app/api/artifacts.py"]
+  n_app_api_artifacts_py --> n_ns_api_v1_artifacts
+  n_ns_api_v1_assistant(["/api/v1/assistant"])
+  n_app_api_assistant_py["app/api/assistant.py"]
+  n_app_api_assistant_py --> n_ns_api_v1_assistant
+  n_ns_api_v1_auth(["/api/v1/auth"])
+  n_app_api_auth_py["app/api/auth.py"]
+  n_app_api_auth_py --> n_ns_api_v1_auth
+  n_ns_api_v1_authenticated_site_collector(["/api/v1/authenticated-site-collector"])
+  n_app_api_authenticated_site_collector_py["app/api/authenticated_site_collector.py"]
+  n_app_api_authenticated_site_collector_py --> n_ns_api_v1_authenticated_site_collector
+  n_ns_api_v1_braming(["/api/v1/braming"])
+  n_app_api_braming_py["app/api/braming.py"]
+  n_app_api_braming_py --> n_ns_api_v1_braming
+  n_ns_api_v1_briefing(["/api/v1/briefing"])
+  n_app_api_briefing_py["app/api/briefing.py"]
+  n_app_api_briefing_py --> n_ns_api_v1_briefing
+  n_ns_api_v1_browser_bridge(["/api/v1/browser-bridge"])
+  n_app_api_browser_bridge_py["app/api/browser_bridge.py"]
+  n_app_api_browser_bridge_py --> n_ns_api_v1_browser_bridge
+  n_ns_api_v1_browser_recipes(["/api/v1/browser-recipes"])
+  n_app_api_browser_recipes_py["app/api/browser_recipes.py"]
+  n_app_api_browser_recipes_py --> n_ns_api_v1_browser_recipes
+  n_ns_api_v1_browser_tasks(["/api/v1/browser-tasks"])
+  n_app_api_browser_tasks_py["app/api/browser_tasks.py"]
+  n_app_api_browser_tasks_py --> n_ns_api_v1_browser_tasks
+  n_ns_api_v1_changes(["/api/v1/changes"])
+  n_app_api_project_docs_py["app/api/project_docs.py"]
+  n_app_api_project_docs_py --> n_ns_api_v1_changes
+  n_ns_api_v1_channels(["/api/v1/channels"])
+  n_app_api_channels_py["app/api/channels.py"]
+  n_app_api_channels_py --> n_ns_api_v1_channels
+  n_ns_api_v1_context(["/api/v1/context"])
+  n_app_api_context_py["app/api/context.py"]
+  n_app_api_context_py --> n_ns_api_v1_context
+  n_ns_api_v1_conversations(["/api/v1/conversations"])
+  n_app_api_conversations_py["app/api/conversations.py"]
+  n_app_api_conversations_py --> n_ns_api_v1_conversations
+  n_ns_api_v1_dashboard(["/api/v1/dashboard"])
+  n_app_api_project_dashboard_py["app/api/project_dashboard.py"]
+  n_app_api_project_dashboard_py --> n_ns_api_v1_dashboard
+  n_ns_api_v1_debate_logs(["/api/v1/debate-logs"])
+  n_app_api_debate_logs_py["app/api/debate_logs.py"]
+  n_app_api_debate_logs_py --> n_ns_api_v1_debate_logs
+  n_ns_api_v1_devices(["/api/v1/devices"])
+  n_app_api_device_py["app/api/device.py"]
+  n_app_api_device_py --> n_ns_api_v1_devices
+  n_ns_api_v1_documents_(["/api/v1/documents/"])
+  n_app_api_documents_py["app/api/documents.py"]
+  n_app_api_documents_py --> n_ns_api_v1_documents_
+  n_ns_api_v1_documents___(["/api/v1/documents/{}"])
+  n_app_api_documents_py["app/api/documents.py"]
+  n_app_api_documents_py --> n_ns_api_v1_documents___
+  n_ns_api_v1_e2e(["/api/v1/e2e"])
+  n_app_api_credential_vault_py["app/api/credential_vault.py"]
+  n_app_api_credential_vault_py --> n_ns_api_v1_e2e
+  n_ns_api_v1_external(["/api/v1/external"])
+  n_app_api_external_chat_py["app/api/external_chat.py"]
+  n_app_api_external_chat_py --> n_ns_api_v1_external
+  n_ns_api_v1_fact_check_verify(["/api/v1/fact-check/verify"])
+  n_app_api_fact_check_py["app/api/fact_check.py"]
+  n_app_api_fact_check_py --> n_ns_api_v1_fact_check_verify
+  n_ns_api_v1_fact_check_verify_batch(["/api/v1/fact-check/verify-batch"])
+  n_app_api_fact_check_py["app/api/fact_check.py"]
+  n_app_api_fact_check_py --> n_ns_api_v1_fact_check_verify_batch
+  n_ns_api_v1_files(["/api/v1/files"])
+  n_app_api_files_py["app/api/files.py"]
+  n_app_api_files_py --> n_ns_api_v1_files
+  n_ns_api_v1_goals(["/api/v1/goals"])
+  n_app_routers_goals_py["app/routers/goals.py"]
+  n_app_routers_goals_py --> n_ns_api_v1_goals
+  n_app_main_py --> n_app_api_admin_py
+  n_app_main_py --> n_app_api_admin_users_py
+  n_app_main_py --> n_app_api_agenda_py
+  n_app_main_py --> n_app_api_approval_py
+  n_app_main_py --> n_app_api_artifacts_py
+  n_app_main_py --> n_app_api_assistant_py
+  n_app_main_py --> n_app_api_auth_py
+  n_app_main_py --> n_app_api_authenticated_site_collector_py
+  n_app_main_py --> n_app_api_braming_py
+  n_app_main_py --> n_app_api_briefing_py
+  n_app_main_py --> n_app_api_browser_bridge_py
+  n_app_main_py --> n_app_api_browser_recipes_py
+  n_app_main_py --> n_app_api_browser_tasks_py
+  n_app_main_py --> n_app_api_channels_py
+  n_app_main_py --> n_app_api_chat_py
+  n_app_main_py --> n_app_api_checkpoints_py
+  n_app_main_py --> n_app_api_context_py
+  n_app_main_py --> n_app_api_conversations_py
+  n_app_main_py --> n_app_api_credential_vault_py
+  n_app_main_py --> n_app_api_debate_logs_py
+  n_app_main_py --> n_app_api_design_modifications_py
+  n_app_main_py --> n_app_api_device_py
+  n_app_main_py --> n_app_api_directive_drafts_py
+  n_app_main_py --> n_app_api_directives_py
+  n_app_main_py --> n_app_api_documents_py
+  n_app_main_py --> n_app_api_external_chat_py
+  n_app_main_py --> n_app_api_fact_check_py
+  n_app_main_py --> n_app_api_files_py
+  n_app_main_py --> n_app_api_hot_reload_py
+  n_app_main_py --> n_app_api_llm_models_py
+  n_app_main_py --> n_app_api_llm_report_py
+  n_app_main_py --> n_app_api_memory_monitor_py
+  n_app_main_py --> n_app_api_ohvis_harness_py
+  n_app_main_py --> n_app_api_ohvis_llmops_py
+  n_app_main_py --> n_app_api_ohvis_tasks_py
+  n_app_main_py --> n_app_api_ops_py
+  n_app_main_py --> n_app_api_pipeline_runner_py
+  n_app_main_py --> n_app_api_project_dashboard_py
+  n_app_main_py --> n_app_api_project_docs_py
+  n_app_main_py --> n_app_api_projects_py
+  n_app_main_py --> n_app_api_stream_py
+  n_app_main_py --> n_app_api_user_api_keys_py
+  n_app_main_py --> n_app_api_user_project_servers_py
+  n_app_main_py --> n_app_routers_agent_vault_py
+  n_app_main_py --> n_app_routers_chat_py
+  n_app_main_py --> n_app_routers_goals_py
+  n_app_yeoljeong_main_py --> n_app_api_auth_py
+  n_aads_dashboard_src_app_chat_page_tsx[/"aads-dashboard/src/app/chat/page.tsx"/]
+  n_aads_dashboard_src_app_chat_page_tsx -. 1건 .-> n_ns_api_v1_chat
+  n_aads_dashboard_src_app_chat_page_tsx[/"aads-dashboard/src/app/chat/page.tsx"/]
+  n_aads_dashboard_src_app_chat_page_tsx -. 1건 .-> n_ns_api_v1_ops
+  n_aads_dashboard_src_app_chat_page_tsx[/"aads-dashboard/src/app/chat/page.tsx"/]
+  n_aads_dashboard_src_app_chat_page_tsx -. 2건 .-> n_ns_api_v1_settings
+  n_aads_dashboard_src_components_Header_tsx[/"aads-dashboard/src/components/Header.tsx"/]
+  n_aads_dashboard_src_components_Header_tsx -. 2건 .-> n_ns_api_v1_ops
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 25건 .-> n_ns_api_v1_admin
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 1건 .-> n_ns_api_v1_agenda_
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 1건 .-> n_ns_api_v1_agenda___
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 2건 .-> n_ns_api_v1_auth
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 6건 .-> n_ns_api_v1_channels
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 21건 .-> n_ns_api_v1_chat
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 2건 .-> n_ns_api_v1_context
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 5건 .-> n_ns_api_v1_conversations
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 7건 .-> n_ns_api_v1_dashboard
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 1건 .-> n_ns_api_v1_directives
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 1건 .-> n_ns_api_v1_documents_
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 1건 .-> n_ns_api_v1_documents___
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 4건 .-> n_ns_api_v1_llm_models
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 25건 .-> n_ns_api_v1_ops
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 9건 .-> n_ns_api_v1_projects
+  n_aads_dashboard_src_lib_api_ts[/"aads-dashboard/src/lib/api.ts"/]
+  n_aads_dashboard_src_lib_api_ts -. 2건 .-> n_ns_api_v1_settings
+  %% 네임스페이스 81개 중 상위 40개만 표시

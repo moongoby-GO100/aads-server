@@ -1,0 +1,130 @@
+# AAG L1/L2 — AADS 본체 아키텍처 추출 규칙
+#
+# 이 파일이 규칙의 정본이다. scan_aads.py 는 값을 하드코딩하지 않고 여기서 읽는다.
+# (파일이 없으면 scan_aads.py 의 DEFAULT_RULES 로 떨어지되, 그때는 경고를 남긴다 —
+#  규칙이 조용히 기본값으로 도는 것이 가장 위험한 실패 모드다.)
+
+version: 1
+
+# ── 스캔 범위 ────────────────────────────────────────────────────────────
+scan:
+  # 라우터 모듈이 사는 디렉터리. DUP_MODULE 은 이 목록 사이의 파일명 충돌을 본다.
+  router_dirs:
+    - app/api
+    - app/routers
+
+  # 앱 코드 전체(SQL 추출 대상).
+  app_roots:
+    - app
+
+  # STALE_BACKUP 을 볼 범위.
+  backup_roots:
+    - app
+    - scripts
+    - migrations
+    - tools
+    - config
+    - docker
+
+  # 스키마 정의(CREATE TABLE)를 찾을 곳.
+  schema_roots:
+    - migrations
+    - scripts
+    - docker
+
+  exclude_dir_names:
+    - __pycache__
+    - node_modules
+    - .git
+    - .next
+    - venv
+    - .venv
+
+# ── 엔트리포인트 ────────────────────────────────────────────────────────
+# primary 에 마운트되지 않은 라우터만 ORPHAN_ROUTER 후보다.
+# secondary 는 별도 프로세스로 뜨는 보조 앱 — 여기 마운트된 것은 고아가 아니다.
+entrypoints:
+  primary: app/main.py
+  secondary:
+    - app/yeoljeong_main.py
+
+# ── 프런트엔드 ──────────────────────────────────────────────────────────
+frontend:
+  roots:
+    - aads-dashboard/src
+  extensions: [".ts", ".tsx"]
+
+  # `process.env.X || "기본값"` 의 X 이름. 기본값 문자열에서 base path 를 뽑는다.
+  base_env_names:
+    - NEXT_PUBLIC_API_URL
+
+  # base 상수를 아예 못 찾았을 때 쓰는 최후 기본값. 비우면 UNRESOLVED 로 간다.
+  fallback_base: ""
+
+  # 호출 진입점. 첫 인자를 URL 식으로 읽는다.
+  call_names:
+    - fetch
+    - EventSource
+
+  # base 를 스스로 붙이는 래퍼 함수. `request("/health")` 처럼 상대 경로만 받는다.
+  # 값은 그 래퍼가 쓰는 base 상수 이름.
+  path_helpers:
+    request: BASE_URL
+
+  # `import { BASE_URL } from "@/lib/api"` 를 따라가기 위한 tsconfig paths 대응.
+  path_aliases:
+    "@/": aads-dashboard/src/
+
+# ── STALE_BACKUP 판정 ───────────────────────────────────────────────────
+# 파일명 끝이 아래 정규식 중 하나에 걸리면 낡은 사본으로 본다.
+backup_patterns:
+  - '\.bak$'
+  - '\.bak[._-].*$'
+  - '\.backup$'
+  - '\.orig$'
+  - '\.old$'
+  - '\.save$'
+  - '\.disabled$'
+  - '~$'
+  - '\.bak_.*$'
+  - '_backup\.[A-Za-z0-9]+$'
+  - '\.[A-Za-z0-9]+\.bak\..*$'
+
+# ── SQL 테이블 추출 ─────────────────────────────────────────────────────
+sql:
+  # 이 접두로 시작하는 이름은 테이블이 아니라 CTE/별칭일 가능성이 커서 제외한다.
+  # PostgreSQL 시스템 카탈로그. 앱 테이블이 아니므로 TABLE_NO_MODEL 대상이 아니다.
+  # (스키마 수식 없이 `FROM pg_proc` 로 쓰여서 이름만으로는 구분되지 않는다.)
+  ignore_tables:
+    - pg_catalog
+    - information_schema
+    - pg_namespace
+    - pg_proc
+    - pg_class
+    - pg_type
+    - pg_indexes
+    - pg_stat_activity
+    - pg_tables
+  # 스키마 정의가 코드 밖(운영 DB 수동 생성 등)에 있는 것으로 이미 확인된 테이블.
+  # 여기에 넣으면 TABLE_NO_MODEL 에서 빠진다. 추측으로 넣지 마라 (R-ERRBOOK).
+  known_external_tables: []
+
+# ── 규칙 심각도 ─────────────────────────────────────────────────────────
+# P0 = 지금 장애를 낼 수 있다 / P1 = 사고로 이어지는 구조 부채 / P2 = 정리 대상
+severity:
+  DUP_MODULE: P1
+  DOUBLE_MOUNT: P1
+  ORPHAN_ROUTER: P2
+  TABLE_NO_MODEL: P1
+  PATH_DRIFT: P1
+  ROUTE_MISSING: P0
+  STALE_BACKUP: P2
+
+# ── 출력 ────────────────────────────────────────────────────────────────
+output:
+  graph_json: reports/aag/aads-graph.json
+  mermaid: reports/aag/aads-arch.mmd
+  findings_md: reports/aag/aads-findings.md
+  # 머메이드는 노드가 많으면 사람이 못 읽는다. 네임스페이스 단위로 접고,
+  # 그 위에서도 이만큼을 넘으면 건수만 적는다.
+  mermaid_max_namespaces: 40
