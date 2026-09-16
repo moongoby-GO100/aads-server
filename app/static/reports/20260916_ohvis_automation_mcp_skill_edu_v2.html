@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>오비스(OBYS) 자동화 · MCP 도구 · 스킬 교육자료 v2 — 2026-09-16</title>
+<style>
+:root{
+  --ink:#16191d; --ink2:#454c55; --ink3:#6b7480;
+  --line:#e2e6ea; --bg:#ffffff; --bg2:#f6f8fa; --bg3:#eef2f6;
+  --good:#1a7f45; --goodbg:#e7f5ec;
+  --bad:#b3261e; --badbg:#fdecea;
+  --warn:#8a5a00; --warnbg:#fff4e0;
+  --acc:#1b5fbe; --accbg:#e8f0fc;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg2);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  line-height:1.72;font-size:15.5px;-webkit-text-size-adjust:100%}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px 90px}
+header{background:linear-gradient(135deg,#10233f,#1b3b6b);color:#fff;padding:44px 20px 38px;margin-bottom:26px}
+header .inner{max-width:1080px;margin:0 auto}
+header h1{margin:0 0 10px;font-size:29px;letter-spacing:-.5px;line-height:1.35}
+header p{margin:0;color:#c3d4ea;font-size:14.5px}
+.badges{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
+.badge{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);
+  border-radius:999px;padding:4px 12px;font-size:12.5px;color:#eaf1fa}
+section{background:var(--bg);border:1px solid var(--line);border-radius:12px;
+  padding:26px 28px;margin-bottom:22px}
+h2{font-size:21px;margin:0 0 6px;letter-spacing:-.3px;padding-bottom:12px;border-bottom:2px solid var(--ink);}
+h2 .num{color:var(--acc);font-weight:800;margin-right:8px}
+h3{font-size:17px;margin:28px 0 8px;color:var(--ink)}
+h4{font-size:15px;margin:20px 0 6px;color:var(--ink2)}
+p{margin:10px 0}
+ul,ol{margin:10px 0;padding-left:22px}
+li{margin:5px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:var(--bg3);font-weight:700;font-size:13.5px;white-space:nowrap}
+tbody tr:nth-child(even){background:#fafbfc}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+code{background:var(--bg3);padding:1.5px 6px;border-radius:4px;font-size:13px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all}
+pre{background:#12161b;color:#e6edf3;padding:16px 18px;border-radius:9px;overflow-x:auto;
+  font-size:13px;line-height:1.62;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre .c{color:#7d8792}
+pre .k{color:#7ee0a5}
+pre .s{color:#ffd898}
+blockquote{margin:14px 0;padding:12px 16px;background:var(--bg2);
+  border-left:4px solid var(--acc);color:var(--ink2);font-size:14.5px}
+.tag{display:inline-block;border-radius:5px;padding:1px 8px;font-size:12px;font-weight:700;white-space:nowrap}
+.t-good{background:var(--goodbg);color:var(--good)}
+.t-bad{background:var(--badbg);color:var(--bad)}
+.t-warn{background:var(--warnbg);color:var(--warn)}
+.t-acc{background:var(--accbg);color:var(--acc)}
+.src{color:var(--ink3);font-size:12.5px}
+.callout{border-radius:9px;padding:14px 18px;margin:16px 0;font-size:14.5px}
+.c-bad{background:var(--badbg);border:1px solid #f3c7c3}
+.c-good{background:var(--goodbg);border:1px solid #bfe3cd}
+.c-warn{background:var(--warnbg);border:1px solid #f0dcb4}
+.c-acc{background:var(--accbg);border:1px solid #c6d9f4}
+.toc{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin-bottom:22px}
+.toc ol{columns:2;column-gap:34px;margin:8px 0 0;padding-left:20px}
+.toc a{color:var(--acc);text-decoration:none}
+.toc a:hover{text-decoration:underline}
+.bar{background:var(--bg3);border-radius:4px;height:16px;position:relative;min-width:80px}
+.bar span{display:block;height:100%;border-radius:4px;background:var(--acc)}
+.bar.r span{background:#c0392b}
+.bar.g span{background:#1a7f45}
+.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin:18px 0}
+.kpi div{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:14px 16px}
+.kpi b{display:block;font-size:24px;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.kpi small{color:var(--ink3);font-size:12.5px;display:block;margin-top:2px}
+.kpi .red{color:var(--bad)} .kpi .green{color:var(--good)} .kpi .blue{color:var(--acc)}
+footer{color:var(--ink3);font-size:13px;text-align:center;padding:28px 20px 10px}
+@media(max-width:720px){
+  .toc ol{columns:1}
+  section{padding:20px 17px}
+  header h1{font-size:23px}
+  table{font-size:13px} th,td{padding:7px 8px}
+}
+</style>
+</head>
+<body>
+<header><div class="inner">
+  <h1>오비스(OBYS) 자동화 · MCP 도구 · 스킬 완전 교육자료 v2</h1>
+  <p>작성 2026-09-16 16:3x KST · 대상 CEO moongoby · 작성 OBYS CTO AI (claude-opus-5)</p>
+  <div class="badges">
+    <span class="badge">실측 기준 2026-09-16 16:25~16:33 KST</span>
+    <span class="badge">MCP 도구 135개</span>
+    <span class="badge">스킬 파일 3 + DB 9</span>
+    <span class="badge">모든 수치에 출처 표기</span>
+    <span class="badge">목표 15건·마일스톤 120건 실측</span>
+  </div>
+</div></header>
+
+<div class="wrap">
+
+<div class="toc">
+  <h3 style="margin:0">목차</h3>
+  <ol>
+    <li><a href="#s1">오비스(OBYS)란 무엇인가</a></li>
+    <li><a href="#s2">오비스 자동화 지도 — 실측 현황</a></li>
+    <li><a href="#s3">MCP 도구 상세 — 원리부터 운영까지</a></li>
+    <li><a href="#s4">스킬(Skill)이란 무엇인가</a></li>
+    <li><a href="#s5">MCP · 스킬 · 서브에이전트 · 루프 · 크론 비교</a></li>
+    <li><a href="#s6">목표(Goal) 오케스트레이션 — 자동화의 최상층</a></li>
+    <li><a href="#s7">지금 오비스에서 자동화가 필요한 것 (조사 결과)</a></li>
+    <li><a href="#s8">오비스의 잘된 점</a></li>
+    <li><a href="#s9">오비스의 못된 점</a></li>
+    <li><a href="#s10">개선점 — 실행 설계</a></li>
+    <li><a href="#s11">부록 — 실측 근거 원본</a></li>
+  </ol>
+</div>
+
+<!-- ============ 1 ============ -->
+<section id="s1">
+<h2><span class="num">01</span>오비스(OBYS)란 무엇인가</h2>
+
+<p><strong>오비스는 브랜드 이름이고, AADS는 그 기술 플랫폼 이름</strong>입니다. 영문 표기와 명칭 유래는 CEO가 2026-09-16 직접 정정한 내용을 정본으로 사용합니다.</p>
+
+<table>
+<thead><tr><th>항목</th><th>확정 내용</th></tr></thead>
+<tbody>
+<tr><td>사용자 호출명</td><td><strong>오비스</strong></td></tr>
+<tr><td>영문 브랜드</td><td><strong>OBYS</strong> — <strong>Oh Beyong Yong's System</strong> (오병용의 시스템)</td></tr>
+<tr><td>기술 플랫폼명</td><td><strong>AADS</strong> (유지)</td></tr>
+<tr><td>공식 표기</td><td>OBYS powered by AADS</td></tr>
+<tr><td>브랜드 정의</td><td>CEO의 지시를 이해하고 조사·개발·검증·배포까지 실행하는 자율 AI 기술 파트너</td></tr>
+<tr><td>식별자 원칙</td><td>DB 테이블·API 경로·컨테이너는 <code>AADS</code> 유지. CEO가 직접 명명한 <code>ohvis_*</code> 는 예외 허용</td></tr>
+</tbody>
+</table>
+<p class="src">[출처] <code>docs/agenda/AADS-OHVIS-BRAND-DECISION.md</code>, CEO 정정 2026-09-16</p>
+
+<h3>오비스를 구성하는 5개 엔진</h3>
+<p>"오비스에서 자동화가 필요한 것"을 판단하려면 먼저 오비스가 어떤 부품으로 되어 있는지를 알아야 합니다. DB 테이블과 코드로 실재가 확인된 것만 적습니다.</p>
+
+<table>
+<thead><tr><th>엔진</th><th>하는 일</th><th>실체(테이블/파일)</th><th>현재 적재량</th></tr></thead>
+<tbody>
+<tr><td><strong>① Harness</strong><br>(실행 추적)</td><td>모든 에이전트 실행 단계를 trace 로 남김</td><td><code>ohvis_harness_traces</code><br><code>app/services/ohvis_harness.py</code></td><td class="num">51,038건</td></tr>
+<tr><td><strong>② Task</strong><br>(작업 단위)</td><td>채팅 턴 → 작업 객체로 승격, 판정·비용 기록</td><td><code>ohvis_tasks</code><br><code>app/services/ohvis_task_manager.py</code></td><td class="num">707건</td></tr>
+<tr><td><strong>③ Loop</strong><br>(반복 자동화)</td><td>"성공할 때까지", "N분마다" 를 엔진이 반복 실행</td><td><code>ohvis_loops</code><br><code>ohvis_loop_definitions</code></td><td class="num">18건 / 정의 5개</td></tr>
+<tr><td><strong>④ Wiki</strong><br>(지식·오류사전)</td><td>축적된 지식 페이지 + 오류 원인 사전</td><td><code>ohvis_wiki_pages</code><br><code>ohvis_wiki_error_book</code></td><td class="num">1,694 / 73건</td></tr>
+<tr><td><strong>⑤ LLMOps</strong><br>(도구 계측)</td><td>LLM 호출·도구 호출의 비용·위험·승인 추적</td><td><code>llmops_tool_calls</code><br><code>app/api/ohvis_llmops.py</code></td><td class="num">13,526건</td></tr>
+</tbody>
+</table>
+<p class="src">[출처] query_database 실측, 2026-09-16 16:26~16:30 KST</p>
+</section>
+
+<!-- ============ 2 ============ -->
+<section id="s2">
+<h2><span class="num">02</span>오비스 자동화 지도 — 실측 현황</h2>
+
+<div class="kpi">
+  <div><b class="blue">135</b><small>MCP 도구 (tool_registry.py)</small></div>
+  <div><b class="blue">12</b><small>스킬 (파일 3 + DB 9)</small></div>
+  <div><b class="blue">21</b><small>crontab 자동화 항목</small></div>
+  <div><b class="red">0</b><small>실행 중인 OBYS 루프</small></div>
+  <div><b class="red">0</b><small>스킬 실행 이력(ops_skill_runs)</small></div>
+  <div><b class="red">0</b><small>오류사전 fix_commit 기록</small></div>
+</div>
+
+<p>오비스의 자동화는 <strong>3개 층</strong>으로 실재합니다. 그런데 실측하면 <strong>맨 아래 층(crontab)만 실제로 돌고, 위의 두 층은 만들어졌지만 멈춰 있습니다.</strong></p>
+
+<table>
+<thead><tr><th>층</th><th>무엇</th><th>설계 의도</th><th>실측 가동 상태</th><th>판정</th></tr></thead>
+<tbody>
+<tr>
+  <td>상층</td><td><strong>스킬 (ops_skill_library)</strong></td>
+  <td>업무 절차를 이름 하나로 재현</td>
+  <td>9개 등록 · 전부 enabled · 실행 이력 <strong>0건</strong> · 버전 <strong>0건</strong></td>
+  <td><span class="tag t-bad">미가동</span></td>
+</tr>
+<tr>
+  <td>중층</td><td><strong>루프 (ohvis_loops)</strong></td>
+  <td>"될 때까지/주기적으로" 를 엔진이 반복</td>
+  <td>정의 5개 전부 is_active=true · 인스턴스 18건 중 running <strong>0건</strong> (cancelled 9 / completed 7 / paused 2, 마지막 완료 2026-07-31)</td>
+  <td><span class="tag t-bad">휴면</span></td>
+</tr>
+<tr>
+  <td>하층</td><td><strong>crontab (호스트)</strong></td>
+  <td>인프라 보호·정리·동기화</td>
+  <td>21개 항목 실제 가동 중 (디스크 가드 10분, 컨테이너 워치독 5분, 슬롯 워치독 2분 등)</td>
+  <td><span class="tag t-good">가동</span></td>
+</tr>
+</tbody>
+</table>
+<p class="src">[출처] query_database(ohvis_loops / ohvis_loop_definitions / ops_skill_library / ops_skill_runs), <code>crontab -l</code> 실측, 2026-09-16 16:27~16:30 KST</p>
+
+<div class="callout c-warn">
+<strong>이 지도가 말하는 것.</strong> 오비스는 자동화 엔진을 <em>만드는 데</em> 성공했고 <em>쓰는 데</em> 실패했습니다.
+가장 지능적인 층(스킬·루프)이 0건이고, 가장 원시적인 층(crontab)이 시스템을 떠받치고 있습니다.
+자동화가 필요한 것을 찾을 때 "새로 만들 것"보다 <strong>"이미 만들었는데 안 돌고 있는 것"을 먼저 켜는 것</strong>이 비용 대비 효과가 압도적입니다.
+</div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section id="s3">
+<h2><span class="num">03</span>MCP 도구 상세 — 원리부터 운영까지</h2>
+
+<h3>3-1. MCP 가 무엇인가</h3>
+<p><strong>MCP(Model Context Protocol)</strong> 는 Anthropic 이 공개한 개방 표준으로, <strong>AI 모델과 외부 시스템을 연결하는 규격</strong>입니다. 흔히 "AI 계의 USB-C" 로 설명합니다. AI 가 서버·DB·브라우저·파일에 접근하려면 그때마다 전용 연동 코드를 짜야 했는데, MCP 는 그 연결 방식을 하나로 통일합니다.</p>
+
+<h4>왜 필요한가 — M×N 문제</h4>
+<table>
+<thead><tr><th>구분</th><th>MCP 이전</th><th>MCP 이후</th></tr></thead>
+<tbody>
+<tr><td>연동 비용</td><td>모델 M개 × 시스템 N개 = <strong>M×N 개</strong> 어댑터</td><td>M+N 개 (각자 MCP 규격만 지키면 됨)</td></tr>
+<tr><td>도구 추가</td><td>모델별로 재작성</td><td>서버에 도구 하나 추가 → 모든 MCP 클라이언트가 즉시 사용</td></tr>
+<tr><td>권한 통제</td><td>연동마다 제각각</td><td>서버 한 곳에서 화이트리스트·승인·감사 일괄 적용</td></tr>
+<tr><td>오비스 적용</td><td colspan="2">채팅·Pipeline Runner·서브에이전트가 <strong>같은 135개 도구</strong>를 공유합니다. 도구 하나를 고치면 세 경로 모두에 반영됩니다.</td></tr>
+</tbody>
+</table>
+
+<h4>MCP 의 3대 구성요소</h4>
+<table>
+<thead><tr><th>요소</th><th>의미</th><th>누가 주도</th><th>오비스 사례</th></tr></thead>
+<tbody>
+<tr><td><strong>Tools</strong> (도구)</td><td>모델이 <em>실행</em>하는 동작</td><td>모델이 판단해 호출</td><td><code>run_remote_command</code>, <code>query_database</code></td></tr>
+<tr><td><strong>Resources</strong> (자원)</td><td>모델이 <em>읽는</em> 데이터</td><td>클라이언트/앱이 붙임</td><td>HANDOVER 문서, context_docs 캐시</td></tr>
+<tr><td><strong>Prompts</strong> (프롬프트)</td><td>재사용 가능한 <em>지시 템플릿</em></td><td>사용자가 선택</td><td>L1~L5 프롬프트 에셋, 지시서 포맷 v2.0</td></tr>
+</tbody>
+</table>
+
+<h4>호출이 일어나는 순서</h4>
+<pre><span class="c"># MCP 도구 호출 1회의 전체 수명주기</span>
+[1] 세션 시작   클라이언트 → 서버:  tools/list        <span class="c"># 어떤 도구가 있나</span>
+[2] 모델 판단   "서버 디스크를 봐야겠다" → 도구 선택
+[3] 호출        tools/call { name:"<span class="k">run_remote_command</span>",
+                             arguments:{ project:"AADS", command:"df -h" } }
+[4] 게이트      화이트리스트 · 위험등급 · 승인상태 검사   <span class="c"># 차단되면 여기서 끝</span>
+[5] 실행        SSH 실행 → stdout 최대 50KB 절단
+[6] 계측        <span class="k">llmops_tool_calls</span> INSERT (tool_name, risk_tier, status…)
+[7] 반환        결과 텍스트가 모델 컨텍스트로 들어감
+[8] 재판단      모델이 결과를 읽고 다음 도구를 부르거나 답변 생성</pre>
+
+<h3>3-2. 오비스의 MCP 도구 135개 — 계층 구조</h3>
+<p>오비스는 도구를 <strong>비용과 위험 순서로 T1~T7</strong> 로 계층화하고, "내부 → 외부 → 고비용" 순으로 고르도록 프롬프트에 강제합니다. 이것이 CEO 지시 "비용 효율 최우선" 의 구현체입니다.</p>
+
+<table>
+<thead><tr><th>계층</th><th>성격</th><th>지연</th><th>대표 도구</th><th>선택 규칙</th></tr></thead>
+<tbody>
+<tr><td><strong>T1</strong> 즉시 읽기</td><td>무료·읽기전용</td><td>&lt;3초</td><td><code>read_remote_file</code> <code>query_database</code> <code>list_remote_dir</code> <code>search_chat_history</code></td><td>코드·DB 확인은 <strong>무조건 여기서 시작</strong></td></tr>
+<tr><td><strong>T2</strong> 분석·AI</td><td>LLM 추가 호출</td><td>3~15초</td><td><code>deep_research</code> <code>code_explorer</code> <code>run_agent_team</code> <code>run_debate</code></td><td>T1 으로 안 풀릴 때만</td></tr>
+<tr><td><strong>T3</strong> 액션·실행</td><td><span class="tag t-bad">상태 변경</span></td><td>수초~수시간</td><td><code>pipeline_runner_submit</code> <code>write_remote_file</code> <code>run_remote_command</code> <code>git_remote_push</code></td><td>1~2파일은 직접 write, 대규모는 Runner</td></tr>
+<tr><td><strong>T4</strong> 외부 검색</td><td>외부 API 과금</td><td>3~10초</td><td><code>search_naver</code> <code>gemini_grounding_search</code> <code>jina_read</code> <code>fetch_url</code></td><td>한국어는 Naver 1순위</td></tr>
+<tr><td><strong>T5</strong> 브라우저</td><td>실제 화면 조작</td><td>5~60초</td><td><code>browser_navigate</code> <code>browser_snapshot</code> <code>capture_screenshot</code></td><td>화면 근거가 필요한 E2E 전용</td></tr>
+<tr><td><strong>T6</strong> 스케줄·태스크</td><td>비동기 위임</td><td>즉시 반환</td><td><code>schedule_task</code> <code>check_task_status</code> <code>terminate_task</code></td><td>오래 걸리는 일은 위임 후 폴링</td></tr>
+<tr><td><strong>T7</strong> 미디어 생성</td><td><span class="tag t-warn">고비용</span></td><td>10초~수분</td><td><code>generate_image</code> <code>generate_video</code> <code>generate_music</code></td><td>CEO 명시 요청 시에만</td></tr>
+</tbody>
+</table>
+<p class="src">[출처] <code>app/services/tool_registry.py</code> 3,569줄 · 도구 정의 135개 (<code>grep -o '"name": "…"' | wc -l</code>), 2026-09-16 16:29 KST</p>
+
+<h3>3-3. 실제로 무엇을 얼마나 쓰는가 (최근 7일)</h3>
+<table>
+<thead><tr><th>순위</th><th>도구</th><th class="num">호출수</th><th>비중</th><th>계층</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>run_remote_command</code></td><td class="num">5,441</td><td><div class="bar"><span style="width:100%"></span></div></td><td>T3</td></tr>
+<tr><td>2</td><td><code>query_database</code></td><td class="num">1,393</td><td><div class="bar"><span style="width:25.6%"></span></div></td><td>T1</td></tr>
+<tr><td>3</td><td><code>pipeline_runner_status</code></td><td class="num">1,096</td><td><div class="bar"><span style="width:20.1%"></span></div></td><td>T3</td></tr>
+<tr><td>4</td><td><code>query_project_database</code></td><td class="num">819</td><td><div class="bar"><span style="width:15.0%"></span></div></td><td>T1</td></tr>
+<tr><td>5</td><td><code>ToolSearch</code></td><td class="num">622</td><td><div class="bar"><span style="width:11.4%"></span></div></td><td>—</td></tr>
+<tr><td>6</td><td><code>read_remote_file</code></td><td class="num">558</td><td><div class="bar"><span style="width:10.3%"></span></div></td><td>T1</td></tr>
+<tr><td>7</td><td><code>todo_write</code></td><td class="num">478</td><td><div class="bar"><span style="width:8.8%"></span></div></td><td>—</td></tr>
+<tr><td>8</td><td><code>read_task_logs</code></td><td class="num">252</td><td><div class="bar"><span style="width:4.6%"></span></div></td><td>T6</td></tr>
+<tr><td>9</td><td><code>check_task_status</code></td><td class="num">172</td><td><div class="bar"><span style="width:3.2%"></span></div></td><td>T6</td></tr>
+<tr><td>10</td><td><code>health_check</code></td><td class="num">103</td><td><div class="bar"><span style="width:1.9%"></span></div></td><td>T1</td></tr>
+</tbody>
+</table>
+<p class="src">[출처] <code>llmops_tool_calls</code> 최근 7일 집계, 총 13,526건 누적, 2026-09-16 16:29 KST</p>
+
+<div class="callout c-warn">
+<strong>읽어야 할 신호.</strong> 1위 <code>run_remote_command</code> 가 5,441회로 2위의 3.9배입니다.
+이것은 "셸로 직접 때려서 확인하는" 패턴이 압도적이라는 뜻이고, 곧 <strong>그 반복 절차들이 스킬로 묶이지 않았다</strong>는 증거입니다.
+셸 호출 5,441회 중 상당수는 "디스크 확인 → 컨테이너 확인 → 로그 확인" 같은 <em>같은 3~5단계의 반복</em>입니다. 자동화 1순위 후보입니다.
+</div>
+
+<h3>3-4. 도구 안전장치 — 무엇이 막히는가</h3>
+<table>
+<thead><tr><th>계층</th><th>차단 대상</th><th>구현 위치</th></tr></thead>
+<tbody>
+<tr><td>파괴 명령 3종</td><td><code>rm -rf /</code>, <code>mkfs /dev/sda|vda</code>, fork bomb</td><td>MCP 서버 게이트</td></tr>
+<tr><td>AADS 전용 가드</td><td><code>supervisorctl restart aads-api</code>, <code>aads-server</code> 컨테이너 stop/kill/rm, <code>nginx -s stop</code></td><td>MCP 서버 게이트</td></tr>
+<tr><td>Docker 가드</td><td><code>compose down</code> / <code>--force-recreate</code> / 서비스명 없는 <code>up</code><br>→ <code>up·build·restart</code> 는 <strong>deploy.sh bluegreen 으로 자동 전환</strong></td><td>MCP 서버 게이트</td></tr>
+<tr><td>민감파일</td><td><code>.env</code>, <code>.ssh</code>, credentials 쓰기 차단</td><td><code>write_remote_file</code></td></tr>
+<tr><td>Git</td><td>force push 차단</td><td><code>git_remote_push</code></td></tr>
+<tr><td>DB</td><td>SELECT 외 전부 차단 (1,000자 제한)</td><td><code>query_database</code></td></tr>
+</tbody>
+</table>
+<div class="callout c-good">
+<strong>이 설계가 왜 옳은가.</strong> 규칙을 문서에만 적으면 에이전트는 자기가 쓴 규칙도 어깁니다.
+실제로 2026-09-14 "릴리스 중 병행 빌드 금지" 를 AGENTS.md 에 써넣은 세션이 같은 날 그 규칙을 어겨 배포 #414 를 죽였습니다.
+그래서 오비스는 <code>docker compose up</code> 을 <strong>차단</strong>하는 대신 <strong>deploy.sh 로 자동 치환</strong>합니다 — 금지가 아니라 <em>대체</em>가 지켜지는 유일한 방식입니다.
+<span class="src">[출처] CLAUDE.md R-ERRBOOK, 커밋 a679652</span>
+</div>
+
+<h3>3-5. 도구를 쓸 때의 실전 규칙 (오비스 실패 이력 기반)</h3>
+<table>
+<thead><tr><th>도구</th><th>실측 실패율</th><th>실패 원인</th><th>대응 규칙</th></tr></thead>
+<tbody>
+<tr><td><code>patch_remote_file</code></td><td class="num">72.6%</td><td>old_string 이 실제 파일과 불일치(줄번호·공백 포함)</td><td>반드시 <code>read_remote_file</code> 먼저 → 실패 시 <code>write_remote_file</code> 전체 교체</td></tr>
+<tr><td><code>terminate_task</code></td><td class="num">60.6%</td><td>이미 done/error 인 작업을 종료 시도</td><td><code>check_task_status</code> 먼저</td></tr>
+<tr><td><code>run_remote_command</code></td><td class="num">40.9%</td><td>복합 명령(<code>python3 -c</code>, <code>tee</code>, 긴 체인) · 50초 타임아웃</td><td>단일 명령으로 쪼갠다</td></tr>
+<tr><td><code>write_remote_file</code></td><td class="num">2.4%</td><td>—</td><td>patch 실패 시 <strong>우선 대안</strong></td></tr>
+</tbody>
+</table>
+<p class="src">[출처] 세션 프롬프트 "도구 오류율 전략" 누적 통계. <span class="tag t-warn">주의</span> 이 수치는 프롬프트에 주입된 과거 누적값이며, 아래 3-6 에서 설명하듯 <code>llmops_tool_calls</code> 로는 <strong>재현 검증이 불가능</strong>합니다.</p>
+
+<h3>3-6. <span class="tag t-bad">결함</span> 도구 계측이 반쪽만 돈다</h3>
+<p>MCP 도구 운영의 핵심은 "무엇이 얼마나 실패하는가" 를 아는 것입니다. 오비스는 이 계측을 켜 두었지만 <strong>실패를 기록하지 않습니다.</strong></p>
+
+<table>
+<thead><tr><th>컬럼</th><th>기대</th><th>실측 (13,526행 전수)</th><th>판정</th></tr></thead>
+<tbody>
+<tr><td><code>status</code></td><td>success / error 혼재</td><td><strong>100% 'success'</strong> — error 0건</td><td><span class="tag t-bad">실패 미기록</span></td></tr>
+<tr><td><code>latency_ms</code></td><td>호출별 지연</td><td><strong>NULL 13,526건</strong> (채워진 행 0)</td><td><span class="tag t-bad">미수집</span></td></tr>
+<tr><td><code>error</code></td><td>실패 사유</td><td><strong>NULL 13,526건</strong></td><td><span class="tag t-bad">미수집</span></td></tr>
+<tr><td><code>risk_tier</code></td><td>read / write / deploy / financial</td><td><strong>100% 'read'</strong> — <code>write_remote_file</code>·<code>pipeline_runner_submit</code>·<code>db_safe_write</code> 까지 전부 read</td><td><span class="tag t-bad">분류 미작동</span></td></tr>
+<tr><td><code>approval_state</code></td><td>required / approved / …</td><td><strong>100% 'not_required'</strong></td><td><span class="tag t-bad">승인 게이트 무력</span></td></tr>
+</tbody>
+</table>
+<p class="src">[출처] <code>SELECT status, count(*), count(latency_ms), count(error) FROM llmops_tool_calls GROUP BY status</code>, 2026-09-16 16:29 KST</p>
+
+<div class="callout c-bad">
+<strong>파급.</strong> <code>tool_metrics(period='7d')</code> 를 호출하면 <code>total_calls: 0, failure_rate_pct: 0.0</code> 이 돌아옵니다.
+같은 시각 <code>llmops_tool_calls</code> 에는 7일치 13,526건이 들어 있습니다.
+즉 <strong>계측 테이블과 계측 조회 도구가 서로 다른 곳을 보고 있습니다.</strong>
+그래서 3-5 의 실패율 72.6% / 60.6% 같은 수치는 프롬프트에 박제된 채 <em>검증도 갱신도 되지 않습니다</em>.
+<span class="src">[출처] tool_metrics 도구 호출 결과 vs query_database 실측, 2026-09-16 16:27 KST</span>
+</div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section id="s4">
+<h2><span class="num">04</span>스킬(Skill)이란 무엇인가</h2>
+
+<h3>4-1. 한 문장 정의</h3>
+<blockquote>
+<strong>도구</strong>는 "무엇을 할 수 있는가" 이고, <strong>스킬</strong>은 "이 조직에서는 그 일을 이렇게 한다" 입니다.<br>
+도구는 <em>능력</em>, 스킬은 <em>절차 지식</em>입니다.
+</blockquote>
+
+<p>스킬은 AI 가 특정 업무를 만났을 때 <strong>자동으로 펼쳐 읽는 접힌 설명서</strong>입니다. Anthropic 의 Agent Skills 규격이며, 폴더 하나 + <code>SKILL.md</code> 파일 하나로 성립합니다.</p>
+
+<h3>4-2. 왜 프롬프트에 다 넣지 않고 스킬로 빼는가 — Progressive Disclosure</h3>
+<table>
+<thead><tr><th>단계</th><th>언제 로드</th><th>컨텍스트 비용</th><th>내용</th></tr></thead>
+<tbody>
+<tr><td><strong>1단계</strong> 메타데이터</td><td>세션 시작 시 <strong>항상</strong></td><td>수십 토큰</td><td><code>name</code> + <code>description</code> 만</td></tr>
+<tr><td><strong>2단계</strong> 본문</td><td>관련 작업을 만났을 때</td><td>수백~수천 토큰</td><td><code>SKILL.md</code> 전문</td></tr>
+<tr><td><strong>3단계</strong> 참조파일</td><td>본문이 지시할 때</td><td>필요한 만큼</td><td><code>references/</code>, 스크립트, 템플릿</td></tr>
+</tbody>
+</table>
+<p>이 구조 덕분에 스킬을 100개 등록해도 <strong>평소 컨텍스트 비용은 거의 0</strong> 입니다. 필요한 순간에만 펼쳐집니다. 모든 절차를 시스템 프롬프트에 때려 넣는 방식과의 결정적 차이입니다.</p>
+
+<h3>4-3. SKILL.md 의 구조 — 오비스 실물</h3>
+<pre><span class="c">--- (YAML frontmatter: 여기까지가 항상 로드되는 1단계)</span>
+<span class="k">name</span>: <span class="s">sales-channel-collector</span>
+<span class="k">description</span>: <span class="s">PC Agent 기반 판매채널 자동수집을 실행, 진단, 확장,
+             다른 프로젝트로 이식할 때 사용합니다.</span>
+<span class="k">allowed-tools</span>: <span class="s">Bash, Read, Glob, Grep, Edit, Write</span>
+<span class="c">---</span>
+# 판매채널 자동수집 스킬
+
+## 목적
+FOOD/열정국밥 판매채널 자동수집은 PC Agent 브라우저 세션, 포털별 collector,
+표준 원장 writer, 상태 ledger가 결합된 기능이다. …
+
+## 먼저 읽을 파일        <span class="c">← 3단계로 가는 포인터</span>
+- docs/plans/20260821_SALES_CHANNEL_PC_AGENT_COLLECTION_ARCHITECTURE.md
+- app/services/yeoljeong_delivery_collectors.py
+- 관련 테스트: tests/unit/test_yeoljeong_delivery_collectors.py
+
+## 불변 원칙            <span class="c">← 절대 어기면 안 되는 것</span>
+- CAPTCHA, OTP, 본인인증, 기기 인증, 약관 동의는 우회하지 않는다. …</pre>
+<p class="src">[출처] <code>/root/aads/aads-server/.claude/skills/sales-channel-collector/SKILL.md</code> 실측 100줄, 2026-09-16 16:31 KST</p>
+
+<h4>좋은 SKILL.md 의 4요소</h4>
+<table>
+<thead><tr><th>요소</th><th>역할</th><th>나쁜 예</th><th>좋은 예</th></tr></thead>
+<tbody>
+<tr><td><code>description</code></td><td>AI 가 <em>언제</em> 이 스킬을 꺼낼지 판단하는 유일한 근거</td><td>"판매 관련 스킬"</td><td>"…실행, 진단, 확장, 이식할 때 사용합니다" (동사로 트리거 명시)</td></tr>
+<tr><td>먼저 읽을 파일</td><td>탐색 비용 제거</td><td>없음 → AI 가 grep 으로 헤맴</td><td>정본 기획서·서비스 파일·테스트 경로 명시</td></tr>
+<tr><td>불변 원칙</td><td>사고 방지</td><td>"조심할 것"</td><td>"CAPTCHA·OTP 는 우회하지 않는다" + 예외 조건</td></tr>
+<tr><td><code>allowed-tools</code></td><td>권한 최소화</td><td>생략(전체 허용)</td><td>Bash, Read, Glob, Grep, Edit, Write 로 한정</td></tr>
+</tbody>
+</table>
+
+<h3>4-4. 오비스의 스킬 — 두 갈래로 나뉘어 있다</h3>
+<p>여기에 오비스의 구조적 문제가 있습니다. <strong>스킬이 파일과 DB 두 군데에 따로 존재하고, 서로 모릅니다.</strong></p>
+
+<h4>(A) 파일 스킬 — <code>.claude/skills/</code> 3개</h4>
+<table>
+<thead><tr><th>스킬</th><th class="num">줄수</th><th>용도</th><th>성숙도</th></tr></thead>
+<tbody>
+<tr><td><code>handoff</code></td><td class="num">12</td><td>컨텍스트 부족 시 상태를 TPP 에 저장</td><td><span class="tag t-warn">뼈대만</span></td></tr>
+<tr><td><code>tpp</code></td><td class="num">17</td><td>진행중 TPP 이어서 작업</td><td><span class="tag t-warn">뼈대만</span></td></tr>
+<tr><td><code>sales-channel-collector</code></td><td class="num">100</td><td>PC Agent 판매채널 자동수집</td><td><span class="tag t-good">완성형</span></td></tr>
+</tbody>
+</table>
+
+<h4>(B) DB 스킬 — <code>ops_skill_library</code> 9개</h4>
+<table>
+<thead><tr><th>slug</th><th>프로젝트</th><th>위험등급</th><th>인텐트</th><th class="num">실행이력</th></tr></thead>
+<tbody>
+<tr><td><code>aads-bluegreen-release</code></td><td>AADS</td><td><span class="tag t-bad">deploy</span></td><td>deploy, release, ops</td><td class="num">0</td></tr>
+<tr><td><code>runner-recovery</code></td><td>전 6개</td><td><span class="tag t-warn">write</span></td><td>task_query, pipeline, recovery</td><td class="num">0</td></tr>
+<tr><td><code>kis-broker-health</code></td><td>KIS</td><td><span class="tag t-bad">financial</span></td><td>ops, finance, health</td><td class="num">0</td></tr>
+<tr><td><code>go100-market-open-check</code></td><td>GO100</td><td><span class="tag t-bad">financial</span></td><td>ops, finance, audit</td><td class="num">0</td></tr>
+<tr><td><code>sf-video-pipeline-health</code></td><td>SF</td><td><span class="tag t-acc">read</span></td><td>ops, video, health</td><td class="num">0</td></tr>
+<tr><td><code>nas-image-job-health</code></td><td>NAS</td><td><span class="tag t-acc">read</span></td><td>ops, image, health</td><td class="num">0</td></tr>
+<tr><td><code>ntv2-merchant-contract</code></td><td>NTV2</td><td><span class="tag t-warn">write</span></td><td>contract, merchant, docs</td><td class="num">0</td></tr>
+<tr><td><code>authenticated-site-collector</code></td><td>AADS, CEO</td><td><span class="tag t-warn">auth</span></td><td>browser_collection, pc_agent</td><td class="num">0</td></tr>
+<tr><td><code>store-assistant-channel-collector</code></td><td>AADS, CEO</td><td><span class="tag t-warn">auth</span></td><td>browser_collection, marketing</td><td class="num">0</td></tr>
+</tbody>
+</table>
+<p class="src">[출처] <code>ops_skill_library</code> 9행 · <code>ops_skill_runs</code> 0행 · <code>ops_skill_versions</code> 0행, 2026-09-16 16:28 KST</p>
+
+<div class="callout c-bad">
+<strong>핵심 결함.</strong> DB 스킬 9개는 전부 <code>enabled=true</code>, <code>source_path='builtin:…'</code> 입니다.
+즉 <strong>파일 실체 없이 DB 행으로만 존재</strong>합니다. 그리고 <code>ops_skill_runs</code> 는 <strong>0건</strong> — 등록 이후 단 한 번도 실행되지 않았습니다.
+<code>ops_skill_versions</code> 도 0건이라 버전 관리·롤백 경로가 없습니다.
+<br><br>
+반대로 파일 스킬 3개는 실제로 쓰이지만 <strong>DB 에 등록되어 있지 않아</strong> 위험등급·프로젝트 스코프·감사 추적이 붙지 않습니다.
+<strong>두 시스템이 서로를 모릅니다.</strong>
+</div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section id="s5">
+<h2><span class="num">05</span>MCP · 스킬 · 서브에이전트 · 루프 · 크론 비교</h2>
+
+<p>다섯 가지가 자주 혼동됩니다. <strong>무엇을 언제 쓰는가</strong>를 한 표로 정리합니다.</p>
+
+<table>
+<thead><tr>
+<th>수단</th><th>본질</th><th>누가 호출</th><th>상태 보존</th><th>적합한 일</th><th>부적합한 일</th>
+</tr></thead>
+<tbody>
+<tr>
+<td><strong>MCP 도구</strong></td><td>단일 동작</td><td>모델이 매 턴 판단</td><td>없음 (1회성)</td>
+<td>파일 읽기, 명령 실행, DB 조회</td><td>여러 단계 절차의 순서 보장</td>
+</tr>
+<tr>
+<td><strong>스킬</strong></td><td>절차 지식</td><td>모델이 description 보고 자동 선택 / 사용자가 <code>/name</code></td><td>없음 (지식만 주입)</td>
+<td>"이 조직의 배포는 이렇게 한다" 같은 반복 절차</td><td>실행 자체 — 스킬은 지시서일 뿐 실행은 도구가 함</td>
+</tr>
+<tr>
+<td><strong>서브에이전트</strong></td><td>독립 컨텍스트 작업자</td><td>부모 에이전트</td><td>자체 컨텍스트</td>
+<td>병렬 탐색, 대량 파일 조사 (결과만 회수)</td><td>부모 대화 맥락이 꼭 필요한 일</td>
+</tr>
+<tr>
+<td><strong>OBYS 루프</strong></td><td>조건 만족까지 반복</td><td>엔진이 주기적으로</td><td><span class="tag t-good">DB 보존</span></td>
+<td>"성공할 때까지 재시도", "5분마다 감시"</td><td>1회성 작업</td>
+</tr>
+<tr>
+<td><strong>crontab</strong></td><td>시각 기반 트리거</td><td>OS</td><td>없음 (로그만)</td>
+<td>LLM 판단이 필요 없는 정리·동기화</td><td>판단·분기가 필요한 일</td>
+</tr>
+</tbody>
+</table>
+
+<h4>판단 흐름</h4>
+<pre>이 일을 한 번만 하나?          → <span class="k">예</span>: MCP 도구 직접 호출
+  ↓ 아니오
+매번 같은 <span class="s">절차</span>를 밟나?         → <span class="k">예</span>: 스킬로 절차를 고정
+  ↓ 아니오
+같은 절차를 <span class="s">주기적으로</span> 도나?    → <span class="k">예</span>: LLM 판단 필요하면 OBYS 루프
+                                        판단 불필요하면 crontab
+  ↓ 아니오
+컨텍스트를 나눠야 할 만큼 큰가? → <span class="k">예</span>: 서브에이전트 병렬 실행</pre>
+
+<div class="callout c-acc">
+<strong>가장 강한 조합은 스킬 + 루프입니다.</strong>
+스킬이 "무엇을 어떤 순서로" 를 고정하고, 루프가 "될 때까지 / 주기적으로" 를 담당합니다.
+오비스는 <strong>둘 다 만들어 놓고 둘 다 0건</strong>입니다. 그래서 그 자리를 crontab 21개와 <code>run_remote_command</code> 5,441회가 대신 메우고 있습니다.
+</div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section id="s6">
+<h2><span class="num">06</span>목표(Goal) 오케스트레이션 — 오비스 자동화의 최상층</h2>
+
+<p>앞의 다섯 장은 <strong>"어떻게 시키는가"</strong> 를 다뤘습니다. 크론은 <em>언제</em>, MCP는 <em>무슨 손으로</em>, 스킬은 <em>어떤 절차로</em>, 서브에이전트는 <em>누가 나눠서</em> 를 정합니다. 이 장은 그 위에 있는 층 — <strong>"무엇을 이루려고 하는가"</strong> 를 기계가 기억하고 스스로 밀고 가게 만드는 구조입니다. 오비스에서 이것을 <strong>목표(Goal) 오케스트레이션</strong>, 코드상으로는 <strong>Goal Control Loop</strong> 라고 부릅니다.</p>
+
+<div class="callout c-acc">
+<strong>한 줄 정의.</strong> 대표님이 <em>"이걸 이루자"</em> 한 번 말하면, 시스템이 그것을 <strong>마일스톤으로 쪼개고 → 담당에게 말을 걸고 → 근거를 모아 완료를 판정하고 → 다음 단계를 스스로 개시하고 → 결과를 대표님께 보고</strong>하는 폐루프. 지시 한 건이 끝나면 사라지는 자동화가 아니라, <strong>목표가 끝날 때까지 살아 있는 자동화</strong>입니다.
+</div>
+
+<h3>6.1 지금 오비스에 실제로 들어 있는 것 (실측)</h3>
+
+<div class="kpi">
+  <div><b class="blue">15</b><small>등록된 목표 (활성 11)</small></div>
+  <div><b>120</b><small>마일스톤 (진행중 24)</small></div>
+  <div><b>282</b><small>작업 링크(근거)</small></div>
+  <div><b class="green">60초</b><small>제어 루프 주기</small></div>
+  <div><b>2,766</b><small>목표 엔진 코드 줄수</small></div>
+  <div><b>29</b><small>REST 엔드포인트</small></div>
+</div>
+<p class="src">[출처] DB 조회 <code>goals / milestones / goal_task_links</code>, <code>app/services/goal_*.py</code> 8개 파일 wc -l 합계, <code>app/routers/goals.py</code> 915줄 · <code>@router</code> 29개 — 2026-09-16 16:5x KST 실측</p>
+
+<h3>6.2 4층 데이터 구조 — 목표는 어떻게 "쪼개져" 저장되는가</h3>
+
+<table>
+<thead><tr><th>층</th><th>테이블</th><th>뜻</th><th>실측 행수</th><th>핵심 컬럼</th></tr></thead>
+<tbody>
+<tr><td><strong>1. 목표</strong></td><td><code>goals</code></td><td>이루려는 것. 대표님 말 한 줄이 여기 들어온다</td><td class="num">15</td><td><code>success_criteria</code>, <code>deadline</code>, <code>owner_session_id</code>, <code>cost_limit_usd</code>, <code>approval_policy</code></td></tr>
+<tr><td><strong>2. 마일스톤</strong></td><td><code>milestones</code></td><td>목표를 이루기 위한 단계. 순서와 상태를 가진다</td><td class="num">120</td><td><code>status</code>(pending→in_progress→review→completed)</td></tr>
+<tr><td><strong>3. 근거 링크</strong></td><td><code>goal_task_links</code></td><td>"이 단계는 이 작업이 증명한다" 는 연결</td><td class="num">282</td><td><code>task_type</code>, <code>link_state</code>, <code>last_job_status</code>, <code>release_sha</code></td></tr>
+<tr><td><strong>4. 실제 작업</strong></td><td><code>pipeline_jobs</code> / 채팅 세션</td><td>러너가 돌린 작업, 담당 세션이 한 일</td><td class="num">—</td><td>커밋 SHA → 배포 이력까지 추적</td></tr>
+</tbody>
+</table>
+
+<p>중요한 것은 <strong>3층(근거 링크)</strong> 입니다. 오비스는 <em>"다 했습니다"</em> 라는 말만으로 마일스톤을 완료 처리하지 않습니다. <strong>작업이 실제로 끝났고, 그 커밋이 실제 배포에 들어갔는지</strong>까지 확인한 뒤에야 완료로 올립니다. 이 확인을 <code>release_evidence</code> 가 담당하며, 커밋이 인증된 배포의 <strong>exact 또는 ancestor</strong> 로 확인될 때만 링크를 completed 로 승격합니다.</p>
+<p class="src">[출처] <code>app/main.py</code> 618~628행 주석 — "promotes a link to completed solely when the job's commit is recorded as exact/ancestor provenance of a certified deploy_run"</p>
+
+<h3>6.3 60초마다 도는 8단계 폐루프</h3>
+
+<p>목표 엔진은 <strong>60초마다 한 번</strong> 아래 8단계를 순서대로 돕니다. 각 단계는 독립된 파일이 담당하며, 하나가 실패해도 나머지는 계속 돕니다(<code>try/except</code> 개별 방어).</p>
+
+<table>
+<thead><tr><th>#</th><th>단계</th><th>하는 일</th><th>담당 파일</th></tr></thead>
+<tbody>
+<tr><td class="num">1</td><td><strong>재조정</strong> reconcile</td><td>러너 작업이 끝났는데 링크가 running 으로 남은 것을 맞춘다 (멱등, 절대 삭제 안 함)</td><td><code>goal_link_reconciler.py</code> (304줄)</td></tr>
+<tr><td class="num">2</td><td><strong>배포 근거</strong></td><td>커밋이 실제 배포에 포함됐는지 확인 후에만 링크를 완료로 승격</td><td><code>release_evidence.py</code></td></tr>
+<tr><td class="num">3</td><td><strong>전진</strong> advance</td><td>완료 판정 → 다음 마일스톤 자동 개시 (상태기계 본체)</td><td><code>goal_manager.py</code> (1,221줄)</td></tr>
+<tr><td class="num">4</td><td><strong>착수 지시</strong> dispatch</td><td>in_progress 된 마일스톤의 담당 세션에게 <strong>실제로 말을 건다</strong></td><td><code>goal_dispatch.py</code> (239줄)</td></tr>
+<tr><td class="num">5</td><td><strong>완료 확인</strong> review</td><td>담당이 신고한 완료를 주도(Lead)가 확인. 없으면 review 에서 영원히 멈춘다</td><td><code>milestone_review.py</code> (267줄)</td></tr>
+<tr><td class="num">6</td><td><strong>기한 점검</strong></td><td>마감이 다가오면 알린다. <strong>알리되 멈추지는 않는다</strong></td><td><code>orchestration_limits.py</code></td></tr>
+<tr><td class="num">7</td><td><strong>보고</strong> report</td><td>진행·완료·이탈을 대표님께 밀어 올린다</td><td><code>goal_report.py</code> (172줄)</td></tr>
+<tr><td class="num">8</td><td><strong>기록</strong></td><td><code>goal_control_cycle_done</code> 로그에 9개 수치를 남긴다</td><td><code>app/main.py</code> 678~689</td></tr>
+</tbody>
+</table>
+
+<h4>왜 "울타리" 가 두 겹인가</h4>
+<p>블루/그린 배포 중에는 API 프로세스가 <strong>잠깐 두 개</strong> 존재합니다. 두 프로세스가 같은 목표를 동시에 전진시키면 마일스톤이 두 번 완료되거나 담당에게 지시가 두 번 갑니다. 그래서 울타리를 두 겹 칩니다.</p>
+<pre><span class="c"># 1차: 라우팅된 활성 슬롯에서만 실행</span>
+<span class="c"># 2차: PostgreSQL 자문 잠금 — 겹치면 그냥 건너뛴다</span>
+SELECT pg_try_advisory_lock(hashtext(<span class="s">'aads_goal_control_cycle'</span>))
+<span class="c"># 3차: 스케줄러 자체 방어</span>
+max_instances=1, coalesce=True, interval=60s</pre>
+<p class="src">[출처] <code>app/main.py</code> 595~606행, 1217~1225행. 주기는 환경변수 <code>AADS_GOAL_CONTROL_INTERVAL_SECONDS</code>(기본 60, 최소 30초)로 조정</p>
+
+<h3>6.4 목표를 움직이는 입구 3개</h3>
+
+<table>
+<thead><tr><th>입구</th><th>무엇</th><th>누가 쓰나</th><th>대표 기능</th></tr></thead>
+<tbody>
+<tr><td><strong>화면</strong></td><td><code>/goals</code> 대시보드</td><td>대표님</td><td>목표판(board) 보기, 담당 지정, 개입, 승인정책 변경</td></tr>
+<tr><td><strong>API</strong></td><td>REST 29개 엔드포인트</td><td>러너·외부 연동</td><td><code>POST /goals/{id}/advance</code>, <code>/link-task</code>, <code>/check-completion</code>, <code>/halt</code>, <code>/reconcile</code></td></tr>
+<tr><td><strong>도구</strong></td><td>MCP 9종</td><td>AI 에이전트</td><td><code>report_milestone_done</code>, <code>confirm_milestone</code>, <code>propose_next_steps</code>, <code>add_agenda</code> 외 5종</td></tr>
+</tbody>
+</table>
+
+<p>특히 <strong>MCP 도구 2개가 목표 루프의 핵심 손잡이</strong>입니다. 3장에서 배운 MCP가 여기서 목표 엔진과 붙습니다.</p>
+<ul>
+<li><code>report_milestone_done</code> — <strong>담당 AI가 "끝냈습니다, 근거는 이것입니다" 라고 신고</strong>하는 도구</li>
+<li><code>confirm_milestone</code> — <strong>주도 AI가 그 근거를 보고 확인/반려</strong>하는 도구</li>
+</ul>
+<p>이 두 개가 있어야 <strong>채팅 세션으로 굴러가는 마일스톤</strong>(러너 작업이 아니라 사람·AI 대화로 진행되는 단계)이 완료될 수 있습니다. 러너 작업은 커밋·배포가 자동 근거가 되지만, 대화로 하는 일은 신고가 유일한 근거이기 때문입니다.</p>
+<p class="src">[출처] <code>app/services/tool_registry.py</code> 316·344·3092·3116·3136·3148·3171·3189·3282행, <code>app/services/milestone_review.py</code> 모듈 주석</p>
+
+<h3>6.5 지금 오비스의 목표 현황 — 실측 11건</h3>
+
+<table>
+<thead><tr><th>프로젝트</th><th>목표</th><th>진행률</th><th>마일스톤</th><th>담당 지정</th></tr></thead>
+<tbody>
+<tr><td>AADS</td><td>AAG 아키텍처 거버넌스 폐루프 구축</td><td><div class="bar g"><span style="width:33%"></span></div> 33%</td><td>6 (완료 2)</td><td><span class="tag t-good">있음</span></td></tr>
+<tr><td>AADS</td><td>채팅 시스템 안정화 및 응답 가독성 개선</td><td><div class="bar g"><span style="width:25%"></span></div> 25%</td><td>4 (완료 1)</td><td><span class="tag t-bad">없음</span></td></tr>
+<tr><td>GO100</td><td>#310 전략카드 일일 누적수익 3% 확보</td><td><div class="bar r"><span style="width:2%"></span></div> 0%</td><td>30 (완료 0)</td><td><span class="tag t-good">있음</span></td></tr>
+<tr><td>GO100</td><td>#119 상한가따라잡기 일일 수익률 3%</td><td><div class="bar r"><span style="width:2%"></span></div> 0%</td><td>15 (완료 0)</td><td><span class="tag t-good">있음</span></td></tr>
+<tr><td>GO100</td><td>주식 투자로 순자산 100억원 달성</td><td><div class="bar r"><span style="width:2%"></span></div> 0%</td><td>14 (완료 0)</td><td><span class="tag t-good">있음</span></td></tr>
+<tr><td>GO100</td><td>실매매엔진 통합 및 안정화</td><td><div class="bar r"><span style="width:2%"></span></div> 0%</td><td>3 (완료 0)</td><td><span class="tag t-bad">없음</span></td></tr>
+<tr><td>FOOD</td><td>매장비서 인사관리(HR) 완성</td><td><div class="bar r"><span style="width:2%"></span></div> 0%</td><td>7 (완료 0)</td><td><span class="tag t-good">있음</span></td></tr>
+<tr><td>KIS</td><td>자동매매 수익률 최적화</td><td><div class="bar r"><span style="width:2%"></span></div> 0%</td><td>3 (완료 0)</td><td><span class="tag t-bad">없음</span></td></tr>
+<tr><td>SF</td><td>ShortFlow 콘텐츠 파이프라인 자동화</td><td><div class="bar r"><span style="width:2%"></span></div> 0%</td><td>3 (완료 0)</td><td><span class="tag t-bad">없음</span></td></tr>
+<tr><td>NTV2</td><td>NewTalk V2 도매 플랫폼 런칭</td><td><div class="bar r"><span style="width:2%"></span></div> 0%</td><td>3 (완료 0)</td><td><span class="tag t-bad">없음</span></td></tr>
+<tr><td>NAS</td><td>NAS 이미지 처리 자동화 안정화</td><td><div class="bar r"><span style="width:2%"></span></div> 0%</td><td>3 (완료 0)</td><td><span class="tag t-bad">없음</span></td></tr>
+</tbody>
+</table>
+<p class="src">[출처] DB 조회 <code>goals × milestones</code> 집계, 2026-09-16 16:5x KST. 진행률 0% 막대는 시각적 최소폭 2% 로 표시</p>
+
+<h3>6.6 진단 — 무엇이 돌고 무엇이 멈춰 있는가</h3>
+
+<p>목표 루프는 <strong>죽어 있지 않습니다.</strong> 최근 2시간 동안 <strong>37회</strong> 정상 완주했고, 오늘 마일스톤 2건을 완료 처리했으며 보고 4건을 올렸습니다. 문제는 <strong>그 성과가 한 프로젝트에만 몰려 있다</strong>는 것입니다.</p>
+
+<table>
+<thead><tr><th>프로젝트</th><th>마일스톤</th><th>24시간 내 변동</th><th>누적 완료</th><th>판정</th></tr></thead>
+<tbody>
+<tr><td>AADS</td><td class="num">17</td><td class="num">6</td><td class="num">6</td><td><span class="tag t-good">완주함</span></td></tr>
+<tr><td>GO100</td><td class="num">84</td><td class="num">32</td><td class="num">0</td><td><span class="tag t-warn">돌지만 완료 0</span></td></tr>
+<tr><td>FOOD</td><td class="num">7</td><td class="num">7</td><td class="num">0</td><td><span class="tag t-warn">돌지만 완료 0</span></td></tr>
+<tr><td>KIS / SF / NAS / NTV2</td><td class="num">12</td><td class="num">0</td><td class="num">0</td><td><span class="tag t-bad">정지</span></td></tr>
+</tbody>
+</table>
+<p class="src">[출처] DB 조회 <code>milestones × goals</code> 24시간 변동 집계 + <code>docker logs aads-server --since 2h | grep goal_control_cycle_done</code> 37건, 2026-09-16 16:5x KST</p>
+
+<h4>원인 3가지 — 로그와 DB로 확인한 것</h4>
+
+<table>
+<thead><tr><th>#</th><th>원인</th><th>실측 근거</th><th>결과</th></tr></thead>
+<tbody>
+<tr><td class="num">1</td><td><strong>완료를 증명할 근거 링크가 사실상 없다</strong></td><td>살아있는(<code>link_state='active'</code>) 링크 28건 중 <strong>마일스톤에 묶인 것은 1건</strong>. 나머지 27건은 <code>milestone_id</code> 가 비어 있는 담당 세션 바인딩</td><td>진행중 마일스톤 24건이 판정 재료 없이 대기</td></tr>
+<tr><td class="num">2</td><td><strong>담당이 완료 신고를 하지 않는다</strong></td><td>최근 2시간 <code>review_asked=0</code>, <code>milestone_notes</code> 테이블 <strong>0행</strong> — <code>report_milestone_done</code> 실사용 흔적 없음</td><td>마일스톤이 review 단계에 도달하지 못함</td></tr>
+<tr><td class="num">3</td><td><strong>담당 없는 목표가 6건</strong></td><td>활성 11건 중 <code>owner_session_id IS NULL</code> 6건 (AADS 채팅안정화, GO100 실매매엔진, KIS, SF, NAS, NTV2)</td><td>4단계 dispatch 가 말을 걸 상대가 없음 → <code>dispatched=0</code></td></tr>
+</tbody>
+</table>
+
+<div class="callout c-bad">
+<strong>한 문장 요약.</strong> 목표 엔진은 매분 정확히 돌고 있지만, <strong>대부분의 목표에는 "누가" 와 "무엇으로 끝났다고 볼 것인가" 가 비어 있습니다.</strong> 엔진 결함이 아니라 <strong>입력 결손</strong>입니다. 그래서 고칠 곳도 코드가 아니라 <em>목표 등록 절차</em>입니다.
+</div>
+
+<h4>참고 — 레거시 링크 233건</h4>
+<p><code>goal_task_links</code> 282건 중 <strong>233건은 <code>link_state='orphan'</code></strong> 입니다. 9월 7~9일에 만들어진 링크로, 참조하던 <code>pipeline_jobs</code> 행이 지금은 존재하지 않습니다. 재조정기가 <strong>삭제하지 않고 orphan 으로 표시만</strong> 해 둔 상태이며(멱등·비파괴 원칙), 현재 판정에는 영향을 주지 않습니다. 다만 화면 통계에서 "작업 282건" 처럼 보이게 만들어 <strong>실제 규모를 왜곡</strong>합니다.</p>
+<p class="src">[출처] DB 조회 <code>goal_task_links GROUP BY link_state, status</code> — active 28 / detached 21 / orphan 233, 2026-09-16 16:5x KST</p>
+
+<h3>6.7 개선안 — 목표 루프를 전 프로젝트로 살리는 5가지</h3>
+
+<table>
+<thead><tr><th>#</th><th>조치</th><th>왜</th><th>완료기준</th></tr></thead>
+<tbody>
+<tr><td><strong>G1</strong></td><td>활성 목표 6건에 <strong>담당 세션 지정</strong> (<code>POST /goals/{id}/owners</code>)</td><td>dispatch 가 말을 걸 상대가 없어 4단계가 통째로 무효</td><td><code>owner_session_id IS NULL</code> 인 활성 목표 0건</td></tr>
+<tr><td><strong>G2</strong></td><td>목표 등록 시 <strong>완료 근거 형식을 필수 입력</strong>으로 (커밋·배포·수치·보고서 중 택1)</td><td>근거 정의가 없으면 상태기계가 영원히 판정 불가</td><td>신규 목표 100%가 <code>success_criteria</code> 채움 + 마일스톤당 링크 ≥ 1</td></tr>
+<tr><td><strong>G3</strong></td><td>담당 에이전트 프롬프트에 <strong><code>report_milestone_done</code> 호출 의무</strong> 삽입</td><td>도구는 있는데 호출한 적이 없음(<code>milestone_notes</code> 0행)</td><td>주 단위 <code>review_asked &gt; 0</code>, review 상태 마일스톤 발생</td></tr>
+<tr><td><strong>G4</strong></td><td><strong>정지 프로젝트 4건</strong>(KIS·SF·NAS·NTV2) 목표를 재점검 — 살릴지 보관(archive)할지 결정</td><td>24시간 변동 0 = 목표판이 현실을 반영하지 않음. 죽은 목표가 화면을 채우면 지표 신뢰가 무너짐</td><td>각 목표가 active 재개 또는 archived 중 하나로 확정</td></tr>
+<tr><td><strong>G5</strong></td><td><strong>orphan 링크 233건 화면 제외</strong> + 주 1회 정리 리포트</td><td>실제 근거 28건인데 282건으로 보임 — 규모 왜곡</td><td>대시보드 집계가 <code>link_state='active'</code> 기준으로만 계산</td></tr>
+</tbody>
+</table>
+
+<h3>6.8 대표님 사용법 — 이렇게 말씀하시면 됩니다</h3>
+
+<p>목표 기능은 <strong>특별한 문법이 필요 없습니다.</strong> 다만 세 가지를 한 문장에 담으시면 시스템이 곧바로 폐루프로 바꿉니다.</p>
+
+<pre><span class="c"># ① 무엇을(목표)  ② 언제까지(기한)  ③ 무엇을 보면 끝인가(완료근거)</span>
+
+<span class="k">"GO100 #310 전략카드를 이번 달 말까지 일일 누적수익 3% 로 올려라.</span>
+<span class="k"> 완료 근거는 5거래일 연속 백테스트 3% 이상 + 실계좌 검증 보고서다.</span>
+<span class="k"> 담당은 GO100 러너로 붙이고, 주간으로 보고해라."</span>
+
+<span class="c"># → goals 1행 + milestones N행 + 담당 지정 + 보고 주기까지 한 번에 생성된다</span></pre>
+
+<p>반대로 <strong>"~해줘" 로 끝나는 단건 지시</strong>는 목표가 아니라 작업으로 처리됩니다. 둘 다 필요합니다 — 단건은 빠르고, 목표는 잊히지 않습니다. 구분 기준은 하나입니다: <strong>오늘 끝나면 작업, 여러 날에 걸쳐 여러 단계가 필요하면 목표.</strong></p>
+
+<div class="callout c-good">
+<strong>다른 층과의 관계.</strong> 5장 비교표에 한 줄을 더하면 이렇게 됩니다 — <strong>크론</strong>은 시간이 오면 돈다, <strong>루프</strong>는 조건이 맞을 때까지 돈다, <strong>서브에이전트</strong>는 일을 나눠 돈다, 그리고 <strong>목표 루프</strong>는 <em>목적을 이룰 때까지</em> 돕니다. 오비스에서 자동화의 최상층이자, 대표님이 손을 떼도 시스템이 방향을 잃지 않게 하는 유일한 장치입니다.
+</div>
+
+</section>
+
+<!-- ============ 7 ============ -->
+<section id="s7">
+<h2><span class="num">07</span>지금 오비스에서 자동화가 필요한 것 (조사 결과)</h2>
+
+<p>"필요하다고 느껴지는 것" 이 아니라 <strong>실측 손실이 확인된 것</strong>만 우선순위로 올립니다. 각 항목에 근거 수치를 붙였습니다.</p>
+
+<h3>6-1. 자동화 후보 — 손실 크기 순</h3>
+<table>
+<thead><tr>
+<th>#</th><th>자동화 대상</th><th>지금 무슨 일이 일어나나 (실측)</th><th>현재 처리 방식</th><th>손실</th><th>우선</th>
+</tr></thead>
+<tbody>
+<tr>
+<td>1</td><td><strong>채팅 프론트 Unhandled Promise 3종</strong></td>
+<td>오류사전 candidate 3건이 각각 <strong>193 / 175 / 159회</strong> 재발 = <strong>527회</strong>. 전체 재발 609회의 <strong>86.5%</strong></td>
+<td>자동 기록만 됨. 원인 규명은 <strong>사람이 promote</strong> — 아직 0건</td>
+<td>CEO 가 채팅에서 직접 겪는 "응답 사라짐"</td><td><span class="tag t-bad">P0</span></td>
+</tr>
+<tr>
+<td>2</td><td><strong>Pipeline Runner 실패 연쇄 차단</strong></td>
+<td>2026-09-16 하루 23건 중 <strong>error 14 / cancelled 6 / 성공 0</strong>. cancelled 6건은 전부 <code>blocked_dependency</code> — 부모 실패가 자식으로 연쇄</td>
+<td>실패하면 CEO 에게 알림 → 사람이 재제출</td>
+<td>하루치 러너 작업 전량 소실</td><td><span class="tag t-bad">P0</span></td>
+</tr>
+<tr>
+<td>3</td><td><strong>도구 실패·지연 계측</strong></td>
+<td><code>llmops_tool_calls</code> 13,526건 전부 status='success', latency NULL, risk_tier 전부 'read'. <code>tool_metrics</code> 는 0 반환</td>
+<td>실패율이 프롬프트에 <strong>수동 하드코딩</strong>(72.6% 등)되어 갱신 안 됨</td>
+<td>어느 도구가 실제로 깨지는지 모름</td><td><span class="tag t-bad">P0</span></td>
+</tr>
+<tr>
+<td>4</td><td><strong>오류사전 promote</strong></td>
+<td>73건 전수 중 <code>fix_commit</code> 보유 <strong>0건</strong>. 즉 "무엇을 고쳐서 막았나" 가 한 건도 없음</td>
+<td>규칙(R-ERRBOOK)에 "사람이 promote" 로만 명시</td>
+<td>같은 원인을 세 세션이 처음부터 재추적</td><td><span class="tag t-warn">P1</span></td>
+</tr>
+<tr>
+<td>5</td><td><strong>ohvis_tasks stale 정리</strong></td>
+<td>707건 중 <strong>stale 199건(28.1%)</strong>. 마지막 stale 2026-09-15</td>
+<td>migration 151 로 cleanup 은 있으나 <code>stale_cleaned</code> 는 3건뿐</td>
+<td>작업 현황 집계가 28% 오염</td><td><span class="tag t-warn">P1</span></td>
+</tr>
+<tr>
+<td>6</td><td><strong>반복 셸 진단 → 스킬화</strong></td>
+<td><code>run_remote_command</code> 7일 <strong>5,441회</strong>, 2위의 3.9배</td>
+<td>매 세션이 같은 진단 3~5단계를 처음부터 침</td>
+<td>토큰·시간 반복 소모</td><td><span class="tag t-warn">P1</span></td>
+</tr>
+<tr>
+<td>7</td><td><strong>위키 출처·링크 그래프</strong></td>
+<td><code>ohvis_wiki_pages</code> 1,694건인데 <code>ohvis_wiki_sources</code> 0 / <code>ohvis_wiki_links</code> 0</td>
+<td>페이지만 쌓고 근거·연결은 미수집</td>
+<td>지식이 검증 불가·탐색 불가</td><td><span class="tag t-acc">P2</span></td>
+</tr>
+<tr>
+<td>8</td><td><strong>죽은 crontab 항목 회수</strong></td>
+<td>21개 중 2개가 <code>*/5 * 3 8 *</code> — <strong>2026-08-03 하루 전용</strong> GO100_CARD119 감시가 그대로 잔류</td>
+<td>없음 (수동)</td>
+<td>내년 8/3 에 유령 실행</td><td><span class="tag t-acc">P2</span></td>
+</tr>
+<tr>
+<td>9</td><td><strong>재기동 불가 서비스 에스컬레이션</strong></td>
+<td>contabo14 <code>go100-ws-nxt-am</code> <strong>634회</strong> 실패 누적</td>
+<td>워치독이 무한 재시작만 반복</td>
+<td>634회 재시도해도 안 살아남</td><td><span class="tag t-warn">P1</span></td>
+</tr>
+</tbody>
+</table>
+<p class="src">[출처] 1·4 <code>ohvis_wiki_error_book</code> · 2 <code>pipeline_jobs</code> · 3 <code>llmops_tool_calls</code>+tool_metrics · 5 <code>ohvis_tasks</code> · 6 7일 도구 집계 · 7 <code>ohvis_wiki_*</code> · 8 <code>crontab -l</code> — 전부 2026-09-16 16:26~16:31 KST 실측. 9 는 <span class="tag t-warn">시스템 상태 배너 인용</span>, 직접 재조회 미실시.</p>
+
+<h3>6-2. "자동화된 것" vs "자동화가 필요한 것" 비교</h3>
+<table>
+<thead><tr><th>업무 영역</th><th>자동화 수준</th><th>수단</th><th>남은 수동 구간</th></tr></thead>
+<tbody>
+<tr><td>디스크·컨테이너 보호</td><td><span class="tag t-good">완전</span></td><td>crontab (disk_guard 10분, container_watchdog 5분, slot_watchdog 2분)</td><td>—</td></tr>
+<tr><td>인증 토큰 유지</td><td><span class="tag t-good">완전</span></td><td>crontab (claude_token_keeper 10분, codex_auth_sync 30분)</td><td>—</td></tr>
+<tr><td>좀비 프로세스 회수</td><td><span class="tag t-good">완전</span></td><td>crontab (reap_stale_processes 매시 17분)</td><td>—</td></tr>
+<tr><td>배포 안전장치</td><td><span class="tag t-good">완전</span></td><td>MCP 게이트가 <code>compose up</code> → <code>deploy.sh bluegreen</code> 치환</td><td>—</td></tr>
+<tr><td>커밋 품질 게이트</td><td><span class="tag t-warn">부분</span></td><td>pre-commit 6단계</td><td>③ruff 는 호스트에 미설치 → <strong>실제로는 건너뜀</strong></td></tr>
+<tr><td>러너 실행</td><td><span class="tag t-warn">부분</span></td><td>submit → 자율수행 → 검수</td><td><strong>실패 후 복구는 전부 수동</strong> (오늘 20건)</td></tr>
+<tr><td>오류 원인 규명</td><td><span class="tag t-bad">없음</span></td><td>자동 기록만 (candidate)</td><td><strong>promote 100% 수동</strong>, 실행 0건</td></tr>
+<tr><td>도구 품질 관측</td><td><span class="tag t-bad">없음</span></td><td>—</td><td>실패·지연 미수집, 수치 하드코딩</td></tr>
+<tr><td>절차 재사용</td><td><span class="tag t-bad">없음</span></td><td>스킬 12개 등록</td><td><strong>실행 0건</strong>, 매번 셸로 재구성</td></tr>
+<tr><td>주기 감시(LLM 판단)</td><td><span class="tag t-bad">없음</span></td><td>루프 정의 5개 active</td><td><strong>실행 중 0건</strong>, 마지막 완료 2026-07-31</td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ============ 8 ============ -->
+<section id="s8">
+<h2><span class="num">08</span>오비스의 잘된 점</h2>
+
+<table>
+<thead><tr><th>#</th><th>잘된 점</th><th>근거 (실측)</th><th>왜 중요한가</th></tr></thead>
+<tbody>
+<tr>
+<td>1</td><td><strong>규칙을 문서가 아니라 코드로 강제</strong></td>
+<td>MCP 게이트가 <code>docker compose up</code> 을 <code>deploy.sh bluegreen</code> 으로 자동 치환. <code>supervisorctl restart aads-api</code> 차단</td>
+<td>에이전트는 자기가 쓴 규칙도 어깁니다(2026-09-14 배포 #414). <strong>치환</strong>만이 실제로 지켜지는 방식입니다</td>
+</tr>
+<tr>
+<td>2</td><td><strong>도구 계층화로 비용 통제</strong></td>
+<td>T1~T7 + "내부→외부→고비용" 강제. 7일 상위 10개 중 5개가 무료 T1</td>
+<td>CEO 지시 "비용 효율 최우선" 이 프롬프트 수사가 아니라 라우팅 규칙으로 구현됨</td>
+</tr>
+<tr>
+<td>3</td><td><strong>전 서버 단일 오류사전</strong></td>
+<td><code>ohvis_wiki_error_book</code> 73건을 4개 서버가 공유, 서버별 사본 금지 명문화</td>
+<td>같은 실패를 세 세션이 "러너 계정 문제" 로 오진했던 사고(2026-09-14)의 구조적 해법</td>
+</tr>
+<tr>
+<td>4</td><td><strong>실행 추적의 압도적 적재</strong></td>
+<td><code>ohvis_harness_traces</code> <strong>51,038건</strong>, <code>ohvis_wiki_pages</code> 1,694건</td>
+<td>사후 분석의 원자재가 이미 충분합니다. 분석 자동화만 붙이면 됩니다</td>
+</tr>
+<tr>
+<td>5</td><td><strong>인프라 자기보호가 촘촘함</strong></td>
+<td>crontab 21개 — 슬롯 2분 / 컨테이너 5분 / 디스크 10분 / 좀비 회수 매시</td>
+<td>가장 자주 시스템을 죽이는 요인(디스크·좀비·슬롯)이 전부 덮여 있습니다</td>
+</tr>
+<tr>
+<td>6</td><td><strong>의존성 연쇄 차단이 작동</strong></td>
+<td>오늘 cancelled 6건이 전부 <code>blocked_dependency: parent … is error</code> 로 <em>정확히</em> 중단됨</td>
+<td>부모가 깨졌는데 자식이 잘못된 베이스 위에서 계속 도는 최악은 막았습니다</td>
+</tr>
+<tr>
+<td>7</td><td><strong>핸드오버 정본을 DB 로 단일화</strong></td>
+<td>R-HANDOVER-DB — <code>project_handover_entries</code> 가 정본, MD 는 호환 포맷</td>
+<td>파일에만 적고 "완료" 하는 누수 경로를 규격으로 막았습니다</td>
+</tr>
+</tbody>
+</table>
+</section>
+
+<!-- ============ 9 ============ -->
+<section id="s9">
+<h2><span class="num">09</span>오비스의 못된 점</h2>
+
+<div class="callout c-bad">
+<strong>한 문장 요약.</strong> 오비스의 결함은 "기능이 없다" 가 아니라 <strong>"만들어 놓고 켜지 않았다"</strong> 입니다.
+아래 7건 중 5건이 <em>구현은 존재하는데 실행 이력이 0</em> 인 유형입니다. 신규 개발이 아니라 <strong>배선 연결</strong>이 필요합니다.
+</div>
+
+<table>
+<thead><tr><th>#</th><th>못된 점</th><th>실측 증거</th><th>사용자 영향</th><th>유형</th></tr></thead>
+<tbody>
+<tr>
+<td>1</td><td><strong>스킬 시스템 전면 미가동</strong></td>
+<td><code>ops_skill_library</code> 9개 enabled / <code>ops_skill_runs</code> <strong>0</strong> / <code>ops_skill_versions</code> <strong>0</strong>. 9개 전부 <code>source_path='builtin:…'</code> — 파일 실체 없음</td>
+<td>절차가 재사용되지 않아 매 세션이 셸로 재구성</td><td>미배선</td>
+</tr>
+<tr>
+<td>2</td><td><strong>루프 엔진 휴면</strong></td>
+<td>정의 5개 전부 <code>is_active=true</code> 인데 실행 인스턴스 <strong>running 0</strong>. cancelled 9 / completed 7 / paused 2, 마지막 완료 <strong>2026-07-31</strong></td>
+<td>"될 때까지" 자동화가 사실상 없음 → 사람이 재제출</td><td>미배선</td>
+</tr>
+<tr>
+<td>3</td><td><strong>도구 계측이 실패를 못 봄</strong></td>
+<td>13,526건 전수 status='success', latency NULL, error NULL, risk_tier 전부 'read', approval 전부 'not_required'</td>
+<td>위험한 도구(write/deploy)가 read 로 기록 → 승인 게이트가 무력</td><td>계측 결함</td>
+</tr>
+<tr>
+<td>4</td><td><strong>계측 도구가 다른 곳을 봄</strong></td>
+<td><code>tool_metrics(7d)</code> = <code>total_calls: 0</code>. 같은 시각 DB 에는 13,526건</td>
+<td>실패율 수치가 프롬프트에 박제된 채 영구 미갱신</td><td>배선 불일치</td>
+</tr>
+<tr>
+<td>5</td><td><strong>오류사전에 fix 가 하나도 없음</strong></td>
+<td>73건 전수 <code>fix_commit</code> <strong>0건</strong>. 총 재발 609회</td>
+<td>재발 시 "고친 게 되돌아갔는지 / 다른 경로가 같은 버그를 밟았는지" 판별 불가</td><td>운영 누락</td>
+</tr>
+<tr>
+<td>6</td><td><strong>최다 재발 3건이 방치 상태</strong></td>
+<td>candidate 3건 = 193+175+159 = <strong>527회</strong>. 전부 채팅 프론트 Unhandled Promise:<br>① 409 <code>chat_command_failed_use_new_key</code> ② "중단된 응답이 없습니다" ③ "재시도 한도 초과(retry_count=5)"</td>
+<td><strong>CEO 가 채팅에서 직접 겪는 불편의 원인</strong>이 사전에 원인 미기입 상태로 쌓임</td><td>운영 누락</td>
+</tr>
+<tr>
+<td>7</td><td><strong>러너 오늘 성공률 0%</strong></td>
+<td>2026-09-16 23건 = error 14 / cancelled 6 / rejected_done 1 / queued 1 / running 1. <strong>성공 0</strong>.<br>확인된 사유: <code>push_stale_base</code>(non-fast-forward), <code>review_failed</code>(score 0.39), <code>blocked_dependency</code> 연쇄 6건.<br>다수 error 행은 <code>error_detail</code> 이 <strong>빈 문자열</strong></td>
+<td>자동 개발 파이프라인이 하루 종일 산출물 0</td><td>기능 장애</td>
+</tr>
+</tbody>
+</table>
+<p class="src">[출처] 전 항목 query_database 실측, 2026-09-16 16:26~16:31 KST</p>
+
+<h3>못된 점의 공통 뿌리 — 3가지</h3>
+<table>
+<thead><tr><th>뿌리</th><th>설명</th><th>해당 항목</th></tr></thead>
+<tbody>
+<tr><td><strong>완성을 "코드 머지" 로 정의함</strong></td><td>테이블·API·DB 행까지 만들고 "완료" 보고. 첫 실행·실사용 검증이 완료 기준에 없음</td><td>#1 #2 #4</td></tr>
+<tr><td><strong>성공 경로만 계측함</strong></td><td>성공 시 INSERT 하고 실패 시 예외로 빠져나가는 구조. 그래서 status 가 100% success</td><td>#3 #7(error_detail 공백)</td></tr>
+<tr><td><strong>"사람이 한다" 로 남긴 절차는 실행되지 않음</strong></td><td>R-ERRBOOK 은 promote 를 사람 몫으로 남겼고, 결과는 fix 0건 / candidate 527회 방치</td><td>#5 #6</td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ============ 10 ============ -->
+<section id="s10">
+<h2><span class="num">10</span>개선점 — 실행 설계</h2>
+
+<h3>9-1. P0 — 즉시</h3>
+<table>
+<thead><tr><th>개선</th><th>구체 조치</th><th>완료기준(측정 가능)</th></tr></thead>
+<tbody>
+<tr>
+<td><strong>A. 도구 계측 실패 경로 복구</strong></td>
+<td><code>tool_executor.py</code> 의 도구 호출을 try/finally 로 감싸 <strong>실패 시에도</strong> <code>llmops_tool_calls</code> INSERT. <code>latency_ms</code>=경과시간, <code>error</code>=예외 요지, <code>risk_tier</code>=레지스트리 선언값 사용(하드코딩 'read' 제거)</td>
+<td>24시간 뒤 <code>SELECT status, count(*) … GROUP BY status</code> 에 <strong>error 행이 존재</strong>하고 <code>count(latency_ms) &gt; 0</code></td>
+</tr>
+<tr>
+<td><strong>B. <code>tool_metrics</code> 배선 교정</strong></td>
+<td><code>tool_metrics</code> 의 조회원을 <code>llmops_tool_calls</code> 로 맞춘다</td>
+<td><code>tool_metrics(period='7d')</code> 의 <code>total_calls</code> 가 DB 7일 집계와 <strong>±1% 이내 일치</strong></td>
+</tr>
+<tr>
+<td><strong>C. 채팅 Unhandled Promise 3종 근본조치</strong></td>
+<td>candidate 3건(<code>auto.3e011ced4fef</code> / <code>auto.03c23a23356d</code> / <code>auto.1a7913c28927</code>)의 재현 경로를 프론트에서 추적 → 409 재시도 정책·중단응답 복구·retry_count 리셋 UX 를 수정하고 <strong>fix_commit 과 함께 promote</strong></td>
+<td>3건 status='active' + <code>fix_commit</code> 보유, 배포 후 7일 재발 증가분 <strong>0</strong></td>
+</tr>
+<tr>
+<td><strong>D. 러너 실패 사유 필수 기록</strong></td>
+<td>오늘 error 14건 중 다수가 <code>error_detail</code> 공백. error 전이 시 사유 문자열을 <strong>필수</strong>로 요구</td>
+<td>이후 error 행의 <code>error_detail</code> 공백률 <strong>0%</strong></td>
+</tr>
+</tbody>
+</table>
+
+<h3>9-2. P1 — 단기</h3>
+<table>
+<thead><tr><th>개선</th><th>구체 조치</th><th>완료기준</th></tr></thead>
+<tbody>
+<tr>
+<td><strong>E. 스킬 단일화</strong></td>
+<td>파일 스킬 3개를 <code>ops_skill_library</code> 에 등록(<code>source_path</code> 를 실제 <code>.claude/skills/*/SKILL.md</code> 로), DB 전용 builtin 9개는 SKILL.md 실물로 내려쓴다. 스킬 사용 시 <code>ops_skill_runs</code> 기록</td>
+<td><code>ops_skill_runs</code> <strong>&gt; 0</strong>, <code>source_path</code> 가 <code>builtin:</code> 인 행 <strong>0</strong></td>
+</tr>
+<tr>
+<td><strong>F. 루프 3개 재가동</strong></td>
+<td><code>server-health-monitor</code>(30분) · <code>disk-usage-monitor</code>(1시간) · <code>deploy-until-success</code>(5회) 를 실제 인스턴스로 기동. 비용 상한은 정의값(0.15~0.30 USD) 유지</td>
+<td><code>ohvis_loops</code> 에 status='running' <strong>≥3</strong>, <code>ohvis_loop_iterations</code> 증가 확인</td>
+</tr>
+<tr>
+<td><strong>G. 반복 진단 스킬화</strong></td>
+<td><code>run_remote_command</code> 7일 5,441회를 명령 패턴별로 군집화 → 상위 3개 패턴을 <code>ops-quick-diagnose</code> 스킬로 고정</td>
+<td>스킬 도입 4주 뒤 <code>run_remote_command</code> 주간 호출 <strong>20% 이상 감소</strong></td>
+</tr>
+<tr>
+<td><strong>H. 오류사전 promote 반자동</strong></td>
+<td>recurrence_count 임계(예 20회) 초과 candidate 를 매일 CEO 채팅에 <strong>1건씩</strong> 원인 규명 과제로 밀어넣는다</td>
+<td>candidate 중 20회 초과 행 <strong>0</strong> 유지, <code>fix_commit</code> 보유율 월 +10%p</td>
+</tr>
+<tr>
+<td><strong>I. stale task 정리 주기화</strong></td>
+<td>migration 151 cleanup 을 실제 주기 실행에 연결 (stale 199건 소급 처리 포함)</td>
+<td><code>ohvis_tasks</code> stale 비율 <strong>28.1% → 5% 이하</strong></td>
+</tr>
+<tr>
+<td><strong>J. 재기동 불가 서비스 에스컬레이션</strong></td>
+<td>워치독에 "N회(예 20회) 연속 실패 시 재시작 중단 + 텔레그램 에스컬레이션" 규칙 추가. <code>go100-ws-nxt-am</code> 634회는 즉시 원인 조사로 전환</td>
+<td>동일 서비스 재시작 시도 상한 도달 시 <strong>알림 1회 + 자동 중단</strong></td>
+</tr>
+</tbody>
+</table>
+
+<h3>9-3. P2 — 중기</h3>
+<table>
+<thead><tr><th>개선</th><th>구체 조치</th><th>완료기준</th></tr></thead>
+<tbody>
+<tr><td><strong>K. 위키 출처·링크 채우기</strong></td><td>1,694 페이지에 <code>ohvis_wiki_sources</code>(근거 URL·파일·쿼리) 와 <code>ohvis_wiki_links</code>(페이지 간 관계) 를 생성 시점에 함께 기록</td><td>신규 페이지의 sources 보유율 <strong>90% 이상</strong></td></tr>
+<tr><td><strong>L. 죽은 crontab 회수</strong></td><td><code>*/5 * 3 8 *</code> GO100_CARD119 2줄 제거, 한시적 항목에 만료일 주석 규칙 도입</td><td><code>crontab -l</code> 에 날짜 고정 유령 항목 <strong>0</strong></td></tr>
+<tr><td><strong>M. ruff 게이트 복구</strong></td><td>pre-commit ③단계가 호스트에 ruff 미설치로 <strong>건너뛰는 중</strong> → ruff 설치 또는 컨테이너 경유 실행</td><td>pre-commit 로그에 ruff 실행 결과가 남고 skip 경고 <strong>소멸</strong></td></tr>
+<tr><td><strong>N. "완료" 정의 변경</strong></td><td>기능 완료 기준에 <strong>"첫 실행 1건 이상 성공"</strong> 을 넣는다. 실행 이력 0건이면 완료 보고 불가</td><td>신규 기능 머지 시 실행 이력 테이블에 <strong>≥1행</strong></td></tr>
+</tbody>
+</table>
+
+<div class="callout c-acc">
+<strong>N 이 가장 중요합니다.</strong> #1~#4 결함(스킬 0건, 루프 0건, 계측 반쪽, tool_metrics 0)은 전부 같은 뿌리에서 나왔습니다 — <em>실행 없이 완료로 선언한 것</em>.
+A~M 을 다 고쳐도 N 을 안 바꾸면 다음 기능이 같은 자리에 또 쌓입니다.
+</div>
+</section>
+
+<!-- ============ 11 ============ -->
+<section id="s11">
+<h2><span class="num">11</span>부록 — 실측 근거 원본</h2>
+
+<h4>수집 시각</h4>
+<p>2026-09-16 <strong>16:26 ~ 16:33 KST</strong>, 서버 contabo116(5.104.86.116) / AADS PostgreSQL</p>
+
+<h4>사용한 조회</h4>
+<pre><span class="c">-- OBYS 엔진 적재량</span>
+SELECT 'ohvis_loops',count(*) FROM ohvis_loops UNION ALL … ;
+  → loops 18 / loop_definitions 5 / loop_iterations 36 / tasks 707
+    harness_traces 51,038 / wiki_pages 1,694 / wiki_error_book 73
+    wiki_sources 0 / wiki_links 0
+
+<span class="c">-- 루프 가동 상태</span>
+SELECT status,count(*) FROM ohvis_loops GROUP BY status;
+  → cancelled 9 / completed 7 / paused 2   <span class="c">(running 0, 마지막 완료 2026-07-31)</span>
+
+<span class="c">-- 작업 상태</span>
+SELECT status,count(*) FROM ohvis_tasks GROUP BY status;
+  → done 498 / stale 199 / running 6 / stale_cleaned 3 / error 1
+
+<span class="c">-- 스킬</span>
+SELECT count(*) FROM ops_skill_library;   → 9  (전부 enabled, source_path='builtin:…')
+SELECT count(*) FROM ops_skill_runs;      → 0
+SELECT count(*) FROM ops_skill_versions;  → 0
+
+<span class="c">-- 도구 계측 전수 점검</span>
+SELECT status,count(*),count(latency_ms),count(error) FROM llmops_tool_calls GROUP BY status;
+  → success 13,526 / latency 0 / error 0
+SELECT risk_tier,approval_state,count(*) FROM llmops_tool_calls GROUP BY 1,2;
+  → read / not_required / 13,526      <span class="c">(단일 조합)</span>
+
+<span class="c">-- 오류사전</span>
+SELECT count(*),count(*) FILTER (WHERE metadata ? 'fix_commit'),sum(recurrence_count)
+  FROM ohvis_wiki_error_book;   → 73 / 0 / 609
+SELECT error_key,recurrence_count FROM ohvis_wiki_error_book WHERE status='candidate';
+  → auto.3e011ced4fef 193 / auto.03c23a23356d 175 / auto.1a7913c28927 159
+
+<span class="c">-- 러너 (전 행이 2026-09-16 생성분)</span>
+SELECT status,count(*) FROM pipeline_jobs GROUP BY status;
+  → error 14 / cancelled 6 / rejected_done 1 / queued 1 / running 1</pre>
+
+<h4>셸 실측</h4>
+<pre>grep -o '"name": "[a-z_0-9]*"' app/services/tool_registry.py | wc -l   → <span class="k">135</span>
+wc -l app/services/tool_registry.py app/services/tool_executor.py    → 3,569 / 5,849
+ls .claude/skills/                                                   → handoff, sales-channel-collector, tpp
+wc -l .claude/skills/*/SKILL.md                                      → 12 / 100 / 17
+crontab -l | grep -v '^#' | wc -l                                    → <span class="k">21</span> 항목
+docker inspect aads-server --format '{{range .Mounts}}…'             → app/static 마운트 확인</pre>
+
+<h4>미검증으로 남긴 것</h4>
+<ul>
+<li><code>go100-ws-nxt-am</code> 634회 — 세션 상태 배너 인용값. contabo14 에서 직접 재조회하지 않았습니다.</li>
+<li>도구 실패율 72.6% / 60.6% / 40.9% — 프롬프트 주입 누적값. <code>llmops_tool_calls</code> 가 실패를 기록하지 않아 <strong>독립 검증 불가</strong>.</li>
+<li><code>pipeline_jobs</code> 가 2026-09-16 생성분만 보유하는 이유(일일 정리인지 최근 재생성인지) 미확인. 따라서 "성공 0" 은 <strong>오늘 하루 기준</strong>으로만 읽어야 합니다.</li>
+</ul>
+</section>
+
+<footer>
+OBYS powered by AADS · 교육자료 v2 · 2026-09-16 작성 · 모든 수치 [출처] 표기 · 미검증 항목 별도 분리
+</footer>
+</div>
+</body>
+</html>
