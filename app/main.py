@@ -577,6 +577,26 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("model_registry_periodic_sync_failed", error=str(e))
 
+        # 한 단계가 멎으면 **오케스트레이션 전체가 멎는다.**
+        #
+        # 2026-09-17 실측. 23:49:21(UTC) 에 시작한 사이클이 담당 세션에 지시를
+        # 넣는 `send_message_stream` 에서 돌아오지 않았고, 이 잡은
+        # `max_instances=1` 이라 그 뒤 5분 넘게 매 분 이것만 찍었다:
+        #
+        #     Execution of job ... skipped: maximum number of running instances reached (1)
+        #
+        # 그 사이 마일스톤 확정(`confirm_milestone`)이 들어왔는데도
+        # `goals.progress` 는 0.0 인 채였고 다음 마일스톤도 열리지 않았다 —
+        # 그 갱신은 이 사이클 안의 `advance_active_goals` 에서만 일어나기
+        # 때문이다. 즉 **담당 한 명의 긴 턴이 전 프로젝트의 목표 진행을 멈춘다.**
+        #
+        # 그래서 바깥(LLM 스트림)을 기다리는 단계마다 시간 상한을 건다. 상한에
+        # 걸리면 그 주기만 거르고 다음 주기에 다시 온다 — 멎은 채로 기다리는
+        # 것보다 한 번 거르는 편이 낫다 (R-BG "시간 상한을 건다").
+        _GOAL_STAGE_TIMEOUT = float(
+            os.getenv("AADS_GOAL_CONTROL_STAGE_TIMEOUT_SECONDS", "120")
+        )
+
         async def _run_goal_control_cycle():
             """Reconcile goal evidence and advance active AADS goals.
 
@@ -587,6 +607,8 @@ async def lifespan(app: FastAPI):
             lock_conn = None
             lock_acquired = False
             try:
+                import asyncio
+
                 from app.core.db_pool import get_pool
                 from app.services.goal_link_reconciler import reconcile
                 from app.services.goal_manager import goal_state_machine
@@ -640,7 +662,13 @@ async def lifespan(app: FastAPI):
                 try:
                     from app.services.goal_dispatch import dispatch_pending_milestones
 
-                    dispatched = await dispatch_pending_milestones(None)
+                    dispatched = await asyncio.wait_for(
+                        dispatch_pending_milestones(None), _GOAL_STAGE_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    # 담당의 답이 길어진 것이지 실패가 아니다. 보낸 기록은
+                    # 이미 남았으므로 다음 주기가 이어받는다.
+                    logger.warning("goal_dispatch_timeout", limit=_GOAL_STAGE_TIMEOUT)
                 except Exception as e_disp:
                     logger.warning("goal_dispatch_failed", error=str(e_disp)[:200])
 
@@ -652,7 +680,11 @@ async def lifespan(app: FastAPI):
                 try:
                     from app.services.milestone_review import ask_pending_reviews
 
-                    reviewed = await ask_pending_reviews(None)
+                    reviewed = await asyncio.wait_for(
+                        ask_pending_reviews(None), _GOAL_STAGE_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("milestone_review_timeout", limit=_GOAL_STAGE_TIMEOUT)
                 except Exception as e_rev:
                     logger.warning("milestone_review_failed", error=str(e_rev)[:200])
 
@@ -671,7 +703,11 @@ async def lifespan(app: FastAPI):
                 try:
                     from app.services.goal_report import report_goal_events
 
-                    reported = await report_goal_events(None)
+                    reported = await asyncio.wait_for(
+                        report_goal_events(None), _GOAL_STAGE_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("goal_report_timeout", limit=_GOAL_STAGE_TIMEOUT)
                 except Exception as e_rep:
                     logger.warning("goal_report_failed", error=str(e_rep)[:200])
 
