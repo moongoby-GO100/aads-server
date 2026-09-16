@@ -183,6 +183,19 @@ def test_markdown_reports_zero_findings_explicitly():
     assert "지적 없음" in out
 
 
+def test_behavior_check_runs_on_a_timer_not_only_by_hand():
+    """수동 실행으로만 두면 사람이 기억할 때만 돈다 — R-ERRBOOK 의 '규칙으로만 기록' 함정."""
+    service = (ROOT / "scripts" / "aads-aag-behavior-check.service").read_text(encoding="utf-8")
+    timer = (ROOT / "scripts" / "aads-aag-behavior-check.timer").read_text(encoding="utf-8")
+
+    assert "tools/aag/behavior_check.py" in service
+    # 지적 있음(1)은 실패가 아니고, 실행 불가(2)만 실패여야 한다
+    assert "SuccessExitStatus=0 1" in service
+    assert "OnUnitActiveSec=30min" in timer
+    assert "Persistent=true" in timer
+    assert "Unit=aads-aag-behavior-check.service" in timer
+
+
 def test_markdown_renders_table_for_findings():
     findings = [{"rule": "PUSH_FAIL", "severity": "P1", "job_id": "a", "project": "NTV2",
                  "at": _at(10), "detail": "테스트"}]

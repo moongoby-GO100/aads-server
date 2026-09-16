@@ -664,6 +664,26 @@ classify_push_state() {
     fi
 }
 
+# ── 지시서가 배포를 금지했는가 (AADS-RUNNER-DEPLOY-DIRECTIVE-GATE) ──────
+# 0 = 금지(배포하지 마라), 1 = 제약 없음.
+# 오탐(배포해도 되는데 건너뜀)은 사람이 별도 승인으로 배포하면 끝이지만,
+# 미탐(금지인데 배포함)은 오늘처럼 운영 중인 안전장치를 되돌린다.
+# 그래서 애매하면 건너뛰는 쪽으로 판정한다.
+instruction_forbids_deploy() {
+    local text="$1" lowered="" pat=""
+    [[ -n "$text" ]] || return 1
+    lowered=$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')
+    for pat in \
+        "배포 금지" "배포금지" "배포·재기동 절대 금지" "배포/재기동 금지" \
+        "재기동 금지" "재기동금지" "커밋까지만" "커밋 까지만" \
+        "push 까지만" "push까지만" "do not deploy" "no deploy" "deploy 금지"; do
+        case "$lowered" in
+            *"$pat"*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
 verify_isolated_job_worktree() {
     local job_id="$1" repo="$2" expected_main="$3"
     local expected_path="/tmp/aads-wt-${job_id}" repo_root common_dir main_root
@@ -2494,6 +2514,26 @@ deploy_job() {
     fi
     log "  GIT_PUSH_OK job=$job_id sha=$current_sha worktree=$worktree_dir"
     db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
+
+    # ── 지시서의 배포 금지 제약 강제 (AADS-RUNNER-DEPLOY-DIRECTIVE-GATE) ──
+    # 2026-09-16 11:06 GO100 runner-1791da41 의 지시서에는 "커밋까지만, 배포·재기동
+    # 절대 금지" 가 명시돼 있었는데 승인 즉시 push→빌드→배포가 돌았고, 그 배포가
+    # 헬스체크에 실패해 11:09 에 P0 청산 안전장치를 자동 revert 시켰다.
+    # 사람이 쓴 제약은 코드가 막지 않으면 지켜지지 않는다(R-ERRBOOK).
+    local job_instruction=""
+    job_instruction=$(db_exec "SELECT COALESCE(instruction,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null) || job_instruction=""
+    if instruction_forbids_deploy "$job_instruction"; then
+        log "  DEPLOY_SKIPPED_BY_DIRECTIVE job=$job_id — 지시서가 배포를 금지함, push 까지만 수행"
+        db_update "UPDATE pipeline_jobs SET status='done', phase='push_only_by_directive',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[게이트] 지시서의 배포 금지 제약에 따라 push 까지만 수행하고 빌드·배포를 건너뜀',
+                   deployed_at=NULL, completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+        record_runner_event "$job_id" "job_terminal" "done" "push_only_by_directive" "" "" "" "" "{\"reason\":\"deploy_forbidden_by_instruction\"}"
+        post_to_chat "$session_id" "✅ [Pipeline Runner] 지시서 제약에 따라 push 까지만 수행했습니다 (빌드·배포 건너뜀): $job_id — 릴리스가 필요하면 별도 승인 후 진행하십시오."
+        _release_deploy_lock "$project" "$job_id"
+        _notify_ai "$job_id"
+        promote_next_queued "$project"
+        return 0
+    fi
 
     # ═══ 무중단 배포 v3.0 — build→swap→healthcheck→rollback ═══
     # 원칙: 빌드 중 기존 서비스 유지, 빌드 성공 후에만 교체, 실패 시 롤백
