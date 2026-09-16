@@ -377,3 +377,48 @@ def test_autoheal_record_outcome_noop_without_run_id():
     env_prefix = 'DEPLOY_RUN_ID=""\n'
     out = _call('autoheal_record_outcome "escalated" "disk_full" "x" && echo "NOOP_OK"', env_prefix=env_prefix)
     assert "NOOP_OK" in out
+
+
+def _sql_capture_env(sql_log) -> str:
+    """deploy_db_exec 가 실행한 SQL 을 파일로 받아 두는 공통 스텁."""
+    return (
+        'DEPLOY_RUN_ID="4242"\n'
+        'audit_control() { :; }\n'
+        'sql_escape() { echo "$1"; }\n'
+        'deploy_db_available() { return 0; }\n'
+        f'deploy_db_exec() {{ printf "%s\\n" "$1" >> "{sql_log}"; }}\n'
+    )
+
+
+def test_dirty_reroute_is_recorded_as_superseded_not_blocked(tmp_path):
+    """dirty 게이트 중단은 실패가 아니라 경로 변경으로 원장에 남아야 한다.
+
+    2026-09-16 11:20 KST 실측: 최근 3일 deploy_runs blocked 27건이 전부
+    preflight/dirty_worktree 였고 후속 런은 모두 success 였다. 원본 행이
+    blocked 로 남으면 대시보드에서 실패한 배포로 읽힌다.
+    """
+    sql_log = tmp_path / "sql.log"
+    _call(
+        'AUTOHEAL_LAST_REMEDIATION="route_clean_worktree"; '
+        'autoheal_record_outcome "retry_launched" "dirty_worktree" "release=abc"',
+        env_prefix=_sql_capture_env(sql_log),
+    )
+    sql = sql_log.read_text(encoding="utf-8")
+    assert "SET status = 'superseded'" in sql
+    assert "superseded_by_autoheal_reroute" in sql
+    # 진짜로 막힌 배포를 덮지 않도록 조건이 좁혀져 있어야 한다.
+    assert "AND status = 'blocked'" in sql
+    assert "AND phase = 'preflight'" in sql
+
+
+def test_non_dirty_retry_keeps_original_status(tmp_path):
+    """dirty 재라우팅이 아닌 재시도는 원장 status 를 바꾸면 안 된다."""
+    sql_log = tmp_path / "sql.log"
+    _call(
+        'AUTOHEAL_LAST_REMEDIATION="disk_reclaim"; '
+        'autoheal_record_outcome "retry_launched" "disk_full" "release=abc"',
+        env_prefix=_sql_capture_env(sql_log),
+    )
+    sql = sql_log.read_text(encoding="utf-8")
+    assert "superseded_by_autoheal_reroute" not in sql
+    assert "CONCAT_WS" in sql

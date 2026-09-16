@@ -383,6 +383,27 @@ autoheal_record_outcome() {
          WHERE id = ${DEPLOY_RUN_ID};
     " >/dev/null 2>&1 || true
     autoheal_log "결과 기록: deploy_runs#${DEPLOY_RUN_ID} ← ${outcome}/${cause}"
+
+    # dirty 게이트에서 멈춘 배포는 "실패" 가 아니라 "경로 변경" 이다.
+    # 직접 배포가 미커밋 작업 때문에 preflight 에서 멈추면 같은 릴리스가
+    # 큐 워커의 clean worktree 로 다시 태워지고, 원본 행만 blocked 로 남는다.
+    # 2026-09-16 11:20 KST 실측: 최근 3일 blocked 27건이 전부 이 경로였고
+    # 후속 런은 모두 success 였다. 대시보드에는 실패로 보이므로 원장을
+    # 바로잡는다. 재개가 실제로 기동된 경우에만, preflight/blocked 행에만
+    # 적용한다 — 진짜로 막힌 배포를 덮지 않기 위해서다.
+    if [[ "$outcome" == "retry_launched" && "$cause" == "dirty_worktree" \
+          && "$AUTOHEAL_LAST_REMEDIATION" == "route_clean_worktree" ]]; then
+        deploy_db_exec "
+            UPDATE deploy_runs
+               SET status = 'superseded',
+                   phase = 'superseded_by_autoheal_reroute',
+                   updated_at = NOW()
+             WHERE id = ${DEPLOY_RUN_ID}
+               AND status = 'blocked'
+               AND phase = 'preflight';
+        " >/dev/null 2>&1 || true
+        autoheal_log "원장 보정: deploy_runs#${DEPLOY_RUN_ID} blocked → superseded (clean worktree 재기동)"
+    fi
 }
 
 autoheal_escalate() {
