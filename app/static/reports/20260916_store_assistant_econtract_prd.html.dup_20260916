@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>전자 근로계약서 강화·자동작성 PRD · 2026-09-16</title>
+<style>
+  :root{--bg:#0f1115;--panel:#171a21;--line:#272c36;--text:#e6e9ef;--muted:#9aa3b2;
+    --accent:#4f8cff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--chip:#1f2430;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",Roboto,sans-serif;
+    line-height:1.7;font-size:15px}
+  .wrap{max-width:1140px;margin:0 auto;padding:32px 20px 96px}
+  header.doc{border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:28px}
+  h1{font-size:27px;margin:0 0 8px;letter-spacing:-0.5px}
+  .meta{color:var(--muted);font-size:13px}
+  h2{font-size:21px;margin:44px 0 12px;padding-top:16px;border-top:1px solid var(--line)}
+  h3{font-size:17px;margin:26px 0 8px;color:#cfd6e4}
+  h4{font-size:15px;margin:18px 0 6px;color:#b9c2d0}
+  p{margin:8px 0}
+  table{width:100%;border-collapse:collapse;margin:12px 0 18px;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#1c2029;color:#cfd6e4;font-weight:600}
+  tbody tr:nth-child(even){background:#13161c}
+  code{background:var(--chip);padding:1px 6px;border-radius:4px;font-size:12.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  pre{background:#0c0e13;border:1px solid var(--line);border-radius:8px;padding:14px 16px;
+    overflow-x:auto;font-size:12.5px;line-height:1.55}
+  pre code{background:none;padding:0}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:16px 0}
+  .danger{border-color:#5c2b2b;background:#1d1416}
+  .good{border-color:#2b4d33;background:#131c16}
+  .tag{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11.5px;
+    border:1px solid var(--line);background:var(--chip);color:var(--muted);white-space:nowrap}
+  .t-ok{color:var(--ok);border-color:#2b4d33}
+  .t-warn{color:var(--warn);border-color:#4d4222}
+  .t-bad{color:var(--bad);border-color:#5c2b2b}
+  .t-p0{color:#fff;background:#8b2020;border-color:#8b2020}
+  .t-p1{color:#fff;background:#8a5a12;border-color:#8a5a12}
+  .t-p2{color:#cfd6e4;background:#2c3444;border-color:#2c3444}
+  ul,ol{margin:8px 0 8px 20px;padding:0}
+  li{margin:4px 0}
+  .quote{border-left:3px solid var(--accent);padding:6px 0 6px 14px;color:#c3ccdb;margin:14px 0}
+  .src{color:var(--muted);font-size:12px}
+  nav.toc{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:20px 0 8px}
+  nav.toc a{color:#9fc0ff;text-decoration:none;font-size:13.5px}
+  nav.toc li{margin:3px 0}
+  .clause{background:#0c0e13;border:1px solid var(--line);border-left:3px solid var(--ok);
+    border-radius:6px;padding:10px 14px;margin:8px 0;font-size:13.5px}
+  .clause.bad{border-left-color:var(--bad)}
+  footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+  @media print{body{background:#fff;color:#000}.panel,nav.toc,.clause{background:#fff}
+    th{background:#eee;color:#000}pre{background:#f6f6f6;color:#000}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>전자 근로계약서 강화 · 자동작성 — 기획 · 설계 · PRD</h1>
+  <div class="meta">
+    문서 ID <code>FOOD-LAYOUT-HR-002</code> ·
+    작성 2026-09-16 17:0x KST ·
+    작성자 AADS CTO AI ·
+    대상 <code>app/static/apps/yeoljeong-finance</code> 계약 모듈 ·
+    상위 목표 <code>매장비서 인사관리(HR) 완성</code> · <b>버전 v1.1</b>
+    <br><span style="color:#d29922">v1.1 개정 (2026-09-16 17:1x KST) — CEO 지시 "수습 90%가 최저임금 이상일 때만 적용되게" 반영. §3 수습 특례/계약감액 구분, §4.1 조항 문안 + §4.2 감액률 실측표, §5 B6 + §5.1 검증 규격 신규.</span>
+  </div>
+</header>
+
+<div class="panel">
+  <b>결론부터.</b> 사업주를 실제로 지키는 것은 <b>센 조항이 아니라 빠짐없는 기재와 교부 증거</b>다.
+  현재 매장비서 계약 모듈은 서식·검증·전자서명이 이미 상당히 잘 만들어져 있고, 위법 조항도 넣지 않았다.
+  <b>비어 있는 것은 ①교부 증거 ②자동 작성 트리거 ③근로조건 변경 감지</b> 세 가지이며,
+  2026-09 퇴직금 분쟁에서 사업주가 밀린 지점이 정확히 이 셋이다.
+  본 PRD는 적법한 방어조항 12개를 추가하고, <b>무효 조항 9종은 시스템이 아예 저장을 막는다</b>.
+</div>
+
+<nav class="toc">
+  <b style="font-size:13px;color:var(--muted)">목차</b>
+  <ol>
+    <li><a href="#s1">1. "유리하게"를 어떻게 해석했는가</a></li>
+    <li><a href="#s2">2. 현재 구현 실측</a></li>
+    <li><a href="#s3">3. 법적 근거 (2026-09-16 확인)</a></li>
+    <li><a href="#s4">4. 내용 보완 — 적법 방어조항 12</a></li>
+    <li><a href="#s5">5. 무효·위험 조항 차단목록 9</a></li>
+    <li><a href="#s6">6. 자동 작성 설계</a></li>
+    <li><a href="#s7">7. 데이터 모델 · API</a></li>
+    <li><a href="#s8">8. 화면 설계</a></li>
+    <li><a href="#s9">9. 마일스톤</a></li>
+    <li><a href="#s10">10. 검증 기준 · 리스크</a></li>
+  </ol>
+</nav>
+
+<h2 id="s1">1. "유리하게"를 어떻게 해석했는가</h2>
+
+<p>지시는 <b>"우리에게 유리하게, 법에 저촉되지 않게"</b> 였다. 이 둘은 흔히 충돌한다고 오해되지만, 근로계약에서는 거의 충돌하지 않는다. 이유가 있다.</p>
+
+<div class="panel danger">
+  <b>강한 조항은 사업주를 지키지 못한다.</b><br>
+  위약금 예정, 경업금지, 임금 상계, 사직 강제 같은 조항은 <b>넣어도 무효</b>다. 무효인 데서 끝나지 않는다 —
+  근기법 제20조 위반은 <b>500만원 이하 벌금</b>이고, 근로감독이나 노동위원회 단계에서
+  "사용자가 근로자에게 불리한 조항을 넣으려 했다"는 <b>정황 증거</b>로 쓰인다.
+  즉 넣는 순간 방어력이 올라가는 게 아니라 <b>내려간다</b>.
+</div>
+
+<div class="panel good">
+  <b>실제로 사업주를 지키는 것.</b><br>
+  ① <b>교부 증거</b> — 언제 누구에게 무엇을 줬는지 기록이 남는 것<br>
+  ② <b>빠짐없는 기재</b> — 소정근로시간·근로일별 시간·임금구성이 숫자로 확정되어 있는 것<br>
+  ③ <b>변경 시점마다 새 계약</b> — 조건이 바뀔 때 공백 없이 다시 쓰는 것<br>
+  ④ <b>객관적 평가 기록</b> — 수습·징계·해고 판단의 근거가 문서로 남는 것
+</div>
+
+<p>2026-09 이용훈 씨 건을 보면 분명하다. 사업주가 진 이유는 조항이 약해서가 아니라
+<b>4월 근로조건 변경 때 계약서를 안 썼고, 근무시간 기록이 브라우저에만 있었기</b> 때문이다.
+아무리 센 조항을 넣었어도 그 계약서가 없으면 아무 소용이 없었다.</p>
+
+<p>따라서 본 PRD의 "유리하게"는 <b>증거력 극대화 + 분쟁 소지 사전 제거</b>로 정의한다.</p>
+
+<h2 id="s2">2. 현재 구현 실측</h2>
+<p class="src">contabo116 <code>/root/aads/aads-server</code> 소스 직접 조회, 2026-09-16 17:0x KST.</p>
+
+<h3>2.1 이미 잘 되어 있는 것 <span class="tag t-ok">유지</span></h3>
+
+<table>
+<thead><tr><th style="width:20%">항목</th><th style="width:44%">구현 내용</th><th>근거 (파일:행)</th></tr></thead>
+<tbody>
+<tr><td>계약 유형 5종</td><td><code>part_time</code>(단시간) / <code>regular</code>(정규) / <code>manager</code>(점장) / <code>freelancer</code>(용역) / <code>confidentiality</code>(보안서약)</td><td><code>yeoljeong_finance_service.py:343-344</code></td></tr>
+<tr><td>자동 채움</td><td>승인 직원 정보 + 입사서류(주소·생년월일·계좌·보건증) + 사업자 설정(상호·등록번호·대표·주소)을 자동 주입</td><td><code>_fill_contract_reference_data()</code> <code>:2454-2507</code></td></tr>
+<tr><td>필수값 검증</td><td>14개 항목 누락 시 400 차단. 이메일·연락처·사업자등록번호 형식 검증</td><td><code>_validate_contract_payload()</code> <code>:2521-2711</code></td></tr>
+<tr><td>최저임금 검증</td><td>2026년 10,320원 기준 환산시급 계산 → 미달 시 <b>저장 차단</b></td><td><code>:2667-2681</code></td></tr>
+<tr><td>비과세 식대 검증</td><td>월 20만원 초과 차단. <b>식사 제공 시 현금식대 비과세 분류 금지</b></td><td><code>:2656-2660</code></td></tr>
+<tr><td>연소자 보호</td><td>만 18세 미만이면 친권자 성명·연락처·동의 확인 필수</td><td><code>:2587-2601</code></td></tr>
+<tr><td>외국인 근로자</td><td>국적·체류자격·외국인등록번호(마스킹) 필수 입력</td><td><code>:2682-2692</code></td></tr>
+<tr><td>사업자·지점 정합성</td><td>지점과 사업자가 불일치하면 저장 차단</td><td><code>_contract_business()</code> <code>:2447-2450</code></td></tr>
+<tr><td><b>전자서명 무결성</b></td><td>본인 계정 인증 → <b>관리자 대리서명 금지</b> → 동의 버전 확인 → 이름 일치 검증 → PNG 자필서명 SHA256 → 계약 스냅샷 SHA256 → IP·UA 감사기록 → 토큰 해시화 폐기</td><td><code>sign_contract()</code> <code>:2829-2875</code></td></tr>
+<tr><td>서명본 불변</td><td>서명 완료 계약은 삭제 불가, 재서명 요청 불가</td><td><code>:2782-2783</code>, <code>:2884-2885</code></td></tr>
+</tbody>
+</table>
+
+<p><b>평가:</b> 전자서명 무결성 설계는 고용노동부 「전자근로계약의 유효 요건」 행정해석이 요구하는 수준을 이미 충족한다. 여기는 손댈 필요가 없다.</p>
+
+<h3>2.2 비어 있는 것 <span class="tag t-bad">보완 대상</span></h3>
+
+<table>
+<thead><tr><th style="width:5%">#</th><th style="width:22%">공백</th><th style="width:33%">근거</th><th>사업주 노출 위험</th></tr></thead>
+<tbody>
+<tr><td>C1</td><td><b>교부 증거가 없다</b></td><td>계약 본문에는 "서명 완료본을 근로자에게 교부한다"고 적혀 있으나(<code>index.html:5000</code>), <code>yeoljeong_contracts</code> 22개 컬럼에 교부일시·열람일시 컬럼이 <b>없다</b></td><td><b>근기법 제17조② 위반</b>. 근로자가 "못 받았다"고 하면 반박 수단이 없다</td></tr>
+<tr><td>C2</td><td><b>자동 작성 트리거 0개</b></td><td>소스 전체에서 계약 자동생성 로직 grep 결과 <b>0건</b>. 관리자가 수동으로 폼을 열어야만 생성</td><td>계약 공백 발생. draft 25건 방치(서명완료 2/29 = 6.9%)의 직접 원인</td></tr>
+<tr><td>C3</td><td>근로조건 변경 감지 없음</td><td>변경 이력 테이블 부재</td><td><b>이용훈 건의 패인.</b> 기간제법 제17조 위반 과태료 최대 500만원</td></tr>
+<tr><td>C4</td><td>기간제 2년 초과 감시 없음</td><td>미구현</td><td>기간제법 제4조② — 2년 초과 시 <b>무기계약 자동 전환</b>. 모르고 넘어가면 해고가 불가능해짐</td></tr>
+<tr><td>C5</td><td>서명 독촉 알림 없음</td><td><code>yeoljeong_notifications</code> 0행</td><td>requested 상태로 방치 → 근무는 하는데 계약은 미서명</td></tr>
+<tr><td>C6</td><td>계약서 버전 관리 체계 없음</td><td><code>template_version</code> 컬럼은 있으나 값 관리·마이그레이션 없음</td><td>법 개정 시 어느 직원이 구버전인지 식별 불가</td></tr>
+<tr><td>C7</td><td>수습 조항이 기본 "해당 없음"</td><td><code>index.html:4993</code></td><td>수습 미설정 상태에서 채용하면 <b>수습 해고의 완화된 정당성 기준을 못 쓴다</b></td></tr>
+<tr><td>C8</td><td>연장근로 사전 서면합의 항목 없음</td><td><code>overtimeTerms</code>는 서술형 문구뿐</td><td>5인 이상 전환 시 근기법 제53조① 합의 부존재</td></tr>
+<tr><td>C9</td><td>무효 조항 차단 로직 없음</td><td>자유 텍스트 필드에 무엇이든 입력 가능</td><td>다른 담당자가 위약금 조항을 써넣어도 시스템이 못 막는다</td></tr>
+</tbody>
+</table>
+
+<h2 id="s3">3. 법적 근거 (2026-09-16 확인)</h2>
+
+<table>
+<thead><tr><th style="width:26%">근거</th><th style="width:44%">내용</th><th>출처</th></tr></thead>
+<tbody>
+<tr><td>근로기준법 제17조<br>(시행 2026-08-20)</td><td>근로조건 명시 서면을 <b>전자문서를 포함</b>하여 근로자에게 <b>교부</b>하여야 한다</td><td>[국가법령정보센터, 법률 제21373호, 2026-02-19] ✅</td></tr>
+<tr><td>전자근로계약의 유효 요건</td><td>전자근로계약의 효력·교부 요건에 관한 행정해석</td><td>[고용노동부 근로기준정책과-1797, 2023-06-01] ✅</td></tr>
+<tr><td>전자근로계약의 효력 등</td><td>전자문서 방식 근로계약 체결의 효력</td><td>[고용노동부 근로기준정책과-6384, 2016-10-12] ✅</td></tr>
+<tr><td>전자계약 보관 실무</td><td>서명 이후 <b>어느 일방이 임의 수정할 수 없도록 읽기전용으로 저장</b>하는 것이 분쟁 예방에 유리</td><td>[한국외식업중앙회 실무해설] ⚠️ 단일 출처</td></tr>
+<tr><td><b>최저임금법 제5조②</b></td><td>고용노동부장관이 고시한 <b>단순노무 직종은 수습 감액 대상에서 제외</b> — 수습 여부·계약기간과 무관하게 최저임금 100% 지급</td><td>[고용노동부 고시자료] + [노무법인 해설] ✅ 2소스</td></tr>
+</tbody>
+</table>
+
+<div class="panel">
+  <b>수습 감액 — 두 가지를 구분해야 합니다. <span class="tag t-warn">v1.1 개정</span></b><br><br>
+  <b>① 최저임금법 제5조②의 "수습 감액 특례"(= 최저임금의 90%, 즉 최저임금 <u>미만</u> 지급)</b><br>
+  음식점 홀서빙·주방보조는 한국표준직업분류상 <b>단순노무 종사자</b>라 이 특례를 쓸 수 없습니다.
+  이 경로로 "수습 3개월 90%"를 넣으면 최저임금법 위반(3년 이하 징역 또는 2천만원 이하 벌금)입니다.<br><br>
+  <b>② 계약임금의 일정 비율을 수습기간에 적용하되, 그 결과가 최저임금 <u>이상</u>인 경우</b><br>
+  이것은 최저임금법이 금지하는 대상이 아니라 <b>근로계약 자유의 영역</b>입니다. 적법합니다.
+  계약서에 사전 명시하고, 환산시급이 최저임금 이상이면 문제되지 않습니다.<br><br>
+  <b>본 PRD는 ②만 채택합니다.</b> 시스템이 매 계약마다 환산시급을 계산해
+  <b>최저임금 미만이면 저장을 차단</b>하므로, ①에 해당하는 계약은 구조적으로 만들어질 수 없습니다. (§4 D2, §5 B6, §5.1)
+</div>
+
+<h2 id="s4">4. 내용 보완 — 적법 방어조항 12</h2>
+
+<p>아래 12개는 전부 <b>강행법규에 저촉되지 않으면서 사업주 방어력을 실질적으로 올리는</b> 조항이다. 기존 서식에 추가하거나 기존 문구를 구체화한다.</p>
+
+<table>
+<thead><tr><th style="width:5%">#</th><th style="width:20%">조항</th><th style="width:38%">내용</th><th>방어 효과 / 근거</th></tr></thead>
+<tbody>
+<tr><td>D1</td><td><b>근로일별 시간 확정</b> <span class="tag t-p0">P0</span></td><td>요일별 시작·종료·휴게시각을 <b>표로</b> 확정 기재. 서술형 문장 금지</td><td>주휴수당·퇴직금 산정 다툼을 원천 차단. 기간제법 제17조 필수기재</td></tr>
+<tr><td>D2</td><td><b>수습기간 + 감액률 + 평가기준</b> <span class="tag t-p0">P0</span></td><td>수습 3개월 명시. <b>계약임금의 90~100% 범위에서 감액률 설정 가능하되, 환산시급이 최저임금 미만이면 시스템이 저장 차단</b>. 평가항목(근태·위생·고객응대·조리숙련·보안준수)을 계약서에 열거</td><td>인건비 절감 + 수습 부적격 해고는 통상해고보다 <b>정당성 기준이 완화</b>됨(판례). 단 감액률과 평가기준이 <b>사전에 계약서에 명시</b>되어야 함</td></tr>
+<tr><td>D3</td><td><b>교부 확인</b> <span class="tag t-p0">P0</span></td><td>서명 직후 "계약서 사본을 수령하였음" 체크 + 전자교부 동의 + 열람 로그</td><td>근기법 제17조② 이행 증거. C1 해소</td></tr>
+<tr><td>D4</td><td>근무표 변경 사전통지</td><td>근무표는 매월 사전 지정, 변경 시 <b>OO일 전 통지</b>. 근로자 동의 절차 명시</td><td>근무 변경을 둘러싼 분쟁 예방. 일방 변경 주장 차단</td></tr>
+<tr><td>D5</td><td>연장근로 사전 서면합의</td><td>연장·야간·휴일근로는 <b>사전 승인 후 근태 기록</b>되어야 인정. 무단 연장은 근로시간 불인정</td><td>근기법 제53조① 합의 확보 + 사후 연장수당 청구 방어</td></tr>
+<tr><td>D6</td><td>겸업 신고의무</td><td>동종 음식업 겸업 시 <b>사전 신고</b>(금지 아님). 근로제공에 지장을 주는 경우 협의</td><td>전면 금지는 무효 소지. <b>신고의무는 유효</b></td></tr>
+<tr><td>D7</td><td>비밀유지 (재직·퇴직 후)</td><td>레시피·원가·거래처·POS/배달앱 계정·고객정보에 한정. <b>기간과 대상을 특정</b></td><td>범위를 특정해야 유효. 포괄적 비밀유지는 무효 소지</td></tr>
+<tr><td>D8</td><td>회사 자산 반납</td><td>유니폼·열쇠·카드·계정 권한을 퇴직일까지 반납. <b>미반납 시 임금 상계 조항은 넣지 않음</b>(별도 청구)</td><td>임금 상계는 근기법 제43조 위반. 반납의무만 두면 유효</td></tr>
+<tr><td>D9</td><td>인수인계 노력의무</td><td>퇴직 희망일 <b>30일 전 통보하도록 노력한다</b> (강제 아님)</td><td>민법 제660조상 강제 불가. <b>"노력한다"</b> 표현으로 유효하게 유지</td></tr>
+<tr><td>D10</td><td>징계·해고 절차</td><td>무단결근·위생 중대위반 시 <b>사실확인 → 소명기회 → 서면통지</b> 3단계 명시</td><td>5인 이상 전환 시 부당해고 방어의 핵심. 지금 넣어두면 그때 자동 적용</td></tr>
+<tr><td>D11</td><td>상시근로자수 연동</td><td>5인 이상 전환 시 연차·연장가산·해고제한을 <b>즉시 적용</b>한다고 명시 <span class="tag t-ok">이미 있음</span></td><td>기존 <code>regular.terms</code>에 존재. 전 유형으로 확대만 하면 됨</td></tr>
+<tr><td>D12</td><td>개인정보 처리 동의</td><td>수집 항목·목적·보유기간(퇴직 후 3년)·제3자 제공(4대보험·세무) 명시</td><td>개인정보보호법 준수 + 근기법 제42조 3년 보존과 정합</td></tr>
+</tbody>
+</table>
+
+<h3>4.1 D2 수습 조항 — 실제 문안 <span class="tag t-warn">v1.1 개정</span></h3>
+<div class="clause">
+<b>제O조 (수습)</b><br>
+① 입사일부터 3개월을 수습기간으로 한다.<br>
+② 수습기간 중 임금은 본 계약 제O조에서 정한 임금의 <b>OO%</b>로 한다. 다만 그 금액을 시간급으로 환산한 액이 <b>해당 연도 최저임금액에 미달하는 경우에는 최저임금액을 지급</b>한다.<br>
+③ 사용자는 수습기간 중 다음 항목을 객관적 기록에 근거하여 평가한다: 출근율 및 근태 준수, 위생수칙 이행, 고객응대, 조리·홀 업무 숙련도, 보안·계정관리 준수.<br>
+④ 평가 결과 업무 적격성이 인정되지 않는 경우 사용자는 수습기간 만료 전 사유를 서면으로 통지하고 근로계약을 종료할 수 있다. 이 경우에도 근로기준법 제26조의 해고예고 규정을 준수한다.<br>
+⑤ 수습기간은 계속근로기간에 산입한다.
+</div>
+<p class="src">
+②의 <b>단서(최저임금 하한 보장)가 핵심</b>이다. 이 문장이 있으면 계산 착오나 최저임금 인상으로 감액분이 최저임금 아래로 내려가도 <b>조항 자체가 무효가 되지 않고</b> 최저임금이 자동 적용된다. 단서가 없으면 조항 전체가 다투어진다.<br>
+③의 평가항목 열거도 핵심이다. 사후에 만든 기준은 인정받기 어렵고, 계약서에 사전 명시된 기준만 수습 부적격의 근거가 된다. ⑤는 법적으로 당연하므로 명시해도 불리하지 않고, 누락하면 오히려 다툼거리가 된다.
+</p>
+
+<h3>4.2 수습 감액률 실측 — 어느 계약에 90%를 쓸 수 있나 <span class="tag t-warn">v1.1 신규</span></h3>
+<p>기존 검증 코드(<code>yeoljeong_finance_service.py:2675</code>)와 동일한 산식으로 계산했다.
+월 유급환산시간 = (주 소정근로시간 + min(8, 주/5)) × 365 ÷ 7 ÷ 12. 2026년 최저임금 시간급 10,320원 기준.</p>
+
+<table>
+<thead><tr><th style="width:26%">계약 유형</th><th style="width:12%">감액률</th><th style="width:16%">수습기 월급</th><th style="width:14%">환산시급</th><th>판정</th></tr></thead>
+<tbody>
+<tr><td rowspan="4"><b>정규직 표준(현 서식)</b><br>월 3,000,000원 / 주 52.5시간<br><span class="src">월 유급환산 262.89시간</span></td>
+    <td>100%</td><td>3,000,000원</td><td>11,412원</td><td><span class="tag t-ok">통과</span></td></tr>
+<tr><td>95%</td><td>2,850,000원</td><td>10,841원</td><td><span class="tag t-ok">통과</span></td></tr>
+<tr><td>92%</td><td>2,760,000원</td><td>10,499원</td><td><span class="tag t-ok">통과</span></td></tr>
+<tr><td><b>90%</b></td><td>2,700,000원</td><td><b>10,271원</b></td><td><span class="tag t-bad">차단</span> 최저임금 49원 미달</td></tr>
+<tr><td rowspan="2"><b>점장 주40시간</b><br>월 3,000,000원<br><span class="src">월 유급환산 208.57시간</span></td>
+    <td>95%</td><td>2,850,000원</td><td>13,664원</td><td><span class="tag t-ok">통과</span></td></tr>
+<tr><td><b>90%</b></td><td>2,700,000원</td><td>12,945원</td><td><span class="tag t-ok">통과</span></td></tr>
+</tbody>
+</table>
+
+<div class="panel danger">
+  <b>⚠️ 실측 결과 — 현재 정규직 표준 서식에 90%를 넣으면 차단됩니다.</b><br>
+  월 300만원 / 주 52.5시간 구조에서 90%는 환산시급 <b>10,271원</b>으로 최저임금 10,320원에
+  <b>49원</b> 모자랍니다. 주 52.5시간이라는 긴 소정근로시간 때문입니다.<br><br>
+  선택지 셋:
+  <ul>
+    <li><b>95% 적용</b> — 환산시급 10,841원, 수습 3개월간 월 15만원 절감 <span class="tag t-ok">권장</span></li>
+    <li><b>90% 유지하려면 계약 월급을 3,014,437원 이상으로</b> — 절감액이 사실상 사라짐 <span class="tag t-bad">비권장</span></li>
+    <li>주 소정근로시간 단축 — 운영 영향이 커서 이 목적만으로는 <span class="tag t-bad">비권장</span></li>
+  </ul>
+  점장직(주 40시간)은 90%도 환산시급 12,945원으로 여유 있게 통과합니다.
+</div>
+
+<p><b>시급제 단시간근로자</b>는 계약시급이 <b>11,467원 이상</b>일 때만 90% 적용이 가능하다
+(10,320 ÷ 0.9). 현재 매장 알바 시급이 이보다 낮으면 감액 자체가 불가능하므로
+<b>단시간 계약은 감액률 100% 고정</b>을 기본값으로 둔다.</p>
+
+<h2 id="s5">5. 무효·위험 조항 차단목록 9</h2>
+
+<p>아래 9종은 <b>시스템이 저장을 거부</b>한다. 자유 텍스트 필드에 키워드가 감지되면 400을 반환하고 대체 문구를 제안한다.</p>
+
+<table>
+<thead><tr><th style="width:5%">#</th><th style="width:22%">금지 조항</th><th style="width:26%">위반 법령·제재</th><th>대체 문구 (시스템 제안)</th></tr></thead>
+<tbody>
+<tr><td>B1</td><td>위약금·손해배상액 예정<br><span class="src">"중도퇴사 시 OO만원 배상"</span></td><td>근기법 제20조 — <b>500만원 이하 벌금</b></td><td>실제 발생한 손해는 민사상 별도 청구 (예정액 미기재)</td></tr>
+<tr><td>B2</td><td>강제저금·예치금</td><td>근기법 제22조 — 500만원 이하 벌금</td><td>삭제. 대체 조항 없음</td></tr>
+<tr><td>B3</td><td>임금 상계<br><span class="src">"손해액을 급여에서 공제"</span></td><td>근기법 제43조 전액지급 원칙</td><td>D8 자산반납 의무 + 별도 청구</td></tr>
+<tr><td>B4</td><td>사직 강제<br><span class="src">"수리 전 퇴사 불가"</span></td><td>민법 제660조 — 강제 불가</td><td>D9 "30일 전 통보하도록 <b>노력한다</b>"</td></tr>
+<tr><td>B5</td><td>경업금지<br><span class="src">"퇴직 후 O년 동종업 금지"</span></td><td>일반 음식점 직원에게는 <b>보호할 영업비밀 부재로 무효 가능성 높음</b></td><td>D6 겸업 <b>신고</b>의무 + D7 <b>범위 특정</b> 비밀유지</td></tr>
+<tr><td>B6</td><td><b>수습 감액 결과가 최저임금 미만</b> <span class="tag t-warn">v1.1 개정</span></td><td>최저임금법 제6조 — 최저임금 미만 지급 금지. <b>3년 이하 징역 또는 2천만원 이하 벌금</b><br><span class="src">단순노무 직종은 제5조② 감액 특례를 쓸 수 없으므로 하한이 최저임금 100%</span></td><td>감액률을 올리거나(90→95%) 계약임금을 올린다. 시스템이 <b>통과 가능한 최소 감액률과 최소 계약임금을 함께 제시</b></td></tr>
+<tr><td>B7</td><td>퇴직금 분할약정<br><span class="src">"월급에 퇴직금 포함"</span></td><td>판례상 무효 — <b>퇴직금을 다시 지급</b>해야 함</td><td>퇴직 시 근퇴법 제8조에 따라 별도 산정·지급</td></tr>
+<tr><td>B8</td><td>연차 사전 포기</td><td>근기법 제60조 — 사전 포기 무효<br><span class="src">(5인 미만은 연차 자체가 미적용이나, 5인 전환 시 문제)</span></td><td>D11 상시근로자수 연동 조항</td></tr>
+<tr><td>B9</td><td>포괄임금 남용<br><span class="src">근로시간 미특정 + 수당 일체 포함</span></td><td>근로시간 산정이 가능한 매장근무는 <b>포괄임금 무효</b></td><td>D1 근로일별 시간 확정 + 임금구성 항목별 기재</td></tr>
+</tbody>
+</table>
+
+<h3>5.1 B6 수습 감액 검증 규격 <span class="tag t-warn">v1.1 신규</span></h3>
+<p>CEO 지시 <b>"수습 90%가 최저임금 이상일 때만 적용되게"</b>를 코드 규격으로 옮긴 것이다.
+기존 최저임금 검증(<code>:2667-2681</code>)은 <code>contract_type=='regular'</code>이고 <code>contract_date_year=='2026'</code>일 때만 돌았다.
+이 제약을 걷어내고 <b>수습 임금에 대해 별도로 한 번 더</b> 검증한다.</p>
+
+<pre><code># 신규 필드
+probation_enabled     BOOLEAN   -- 수습 적용 여부
+probation_months      INT       -- 기본 3
+probation_wage_rate   INT       -- 90~100 (기본 100)
+probation_wage        BIGINT    -- 산출값, 저장 시 고정
+
+# 검증 (계약 저장 · 서명 요청 두 시점 모두)
+def validate_probation(payload):
+    if not probation_enabled or probation_wage_rate >= 100:
+        return                                   # 감액 없음 → 검증 불요
+
+    if not (90 &lt;= probation_wage_rate &lt;= 100):
+        raise 400 "수습 감액률은 90~100% 범위로 입력하십시오"
+
+    monthly_paid_hours = (weekly_hours + min(8, weekly_hours/5)) * 365/7/12
+    probation_wage     = floor(contract_wage * probation_wage_rate / 100)
+    hourly             = probation_wage / monthly_paid_hours   # 시급제는 시급 직접 사용
+
+    MIN_WAGE = settings.minimum_hourly_wage[contract_year]     # 2026 → 10,320
+
+    if hourly &lt; MIN_WAGE:
+        min_rate = ceil(MIN_WAGE * monthly_paid_hours / contract_wage * 100)
+        min_wage_needed = ceil(MIN_WAGE * monthly_paid_hours / (probation_wage_rate/100))
+        raise 400 (
+          f"수습 임금 {probation_wage:,}원의 환산시급 {hourly:,.0f}원이 "
+          f"{contract_year}년 최저임금 {MIN_WAGE:,}원에 미달합니다. "
+          f"감액률을 {min_rate}% 이상으로 올리거나 "
+          f"계약 임금을 {min_wage_needed:,}원 이상으로 조정하십시오."
+        )</code></pre>
+
+<div class="panel good">
+  <b>이 규격의 방어 효과.</b><br>
+  ① <b>위법 계약이 구조적으로 생성 불가</b> — 저장 단계에서 막히므로 서명까지 갈 수 없다.<br>
+  ② <b>최저임금 인상에 자동 대응</b> — <code>MIN_WAGE</code>를 <code>yeoljeong_settings</code>에서 읽으므로
+     2027년 고시가 나오면 설정값만 바꾸면 되고, 기존 계약의 수습 조항 단서(§4.1 ②)가 하한을 자동 보장한다.<br>
+  ③ <b>거부가 아니라 대안 제시</b> — "안 됩니다"로 끝내지 않고 통과 가능한 최소 감액률과 최소 계약임금을 숫자로 돌려준다.
+</div>
+
+<p class="src">※ 최저임금 산입범위: 2024년부터 매월 지급되는 정기상여금과 <b>현금성 복리후생비(식대 포함)는 전액 산입</b>된다
+[고용노동부 · 노무사 해설 2소스 확인, 2026-09-16]. 다만 <b>현물 급식, 연장·야간·휴일 가산임금은 산입 제외</b>
+[고용노동부 최저임금제도 안내]. 따라서 <code>meal_provision == 'employer_meal'</code>(현물 식사 제공)인 경우
+그 가액은 환산시급 계산에 넣지 않는다 — 기존 코드가 <code>base_salary</code>만 쓰는 것과 정합한다.</p>
+
+<div class="panel">
+  <b>차단 방식.</b> 단순 키워드 매칭은 오탐이 난다("손해배상"이 적법한 맥락에도 쓰임).
+  따라서 <b>①정규식 후보 탐지 → ②관리자에게 경고 표시 + 사유·근거 조문 안내 → ③"그래도 저장" 불가(하드 차단)</b> 3단계로 한다.
+  B1·B2·B3·B6·B7은 하드 차단, B4·B5·B8·B9는 경고 후 대체 문구 자동 치환을 제안한다.
+</div>
+
+<h2 id="s6">6. 자동 작성 설계</h2>
+
+<h3>6.1 자동 생성 트리거 4종</h3>
+
+<table>
+<thead><tr><th style="width:6%">#</th><th style="width:20%">트리거</th><th style="width:34%">동작</th><th>해결하는 공백</th></tr></thead>
+<tbody>
+<tr><td>T1</td><td><b>직원 승인 직후</b></td><td>가입요청 <code>status→approved</code> 순간, 해당 직원의 지점·고용형태에 맞는 계약 draft를 <b>자동 생성</b>하고 승인 화면에 "계약서 작성" 버튼을 띄운다</td><td>C2 — 승인은 됐는데 계약이 없는 상태 제거</td></tr>
+<tr><td>T2</td><td><b>근로조건 변경 등록</b></td><td><code>yeoljeong_employment_terms</code>에 새 이력이 들어오면 <b>변경분을 반영한 새 계약 draft 자동 생성</b> + 이전 계약 <code>superseded</code> 표시 + 퇴직급여 감소 고지 필요 여부 판정</td><td>C3 — <b>이용훈 건 재발 방지의 핵심</b></td></tr>
+<tr><td>T3</td><td><b>법 개정·서식 개정</b></td><td><code>template_version</code>이 올라가면 재직자 중 구버전 서명자를 목록화하고 재계약 draft를 일괄 생성</td><td>C6</td></tr>
+<tr><td>T4</td><td><b>계약 만료 D-30</b></td><td>기간제 계약 만료 30일 전 갱신 draft 생성. <b>누적 2년 초과 시 무기계약 전환 경고</b>를 함께 표시</td><td>C4</td></tr>
+</tbody>
+</table>
+
+<h3>6.2 자동 채움 확장</h3>
+<p>기존 <code>_fill_contract_reference_data()</code>가 이미 직원·사업자 정보를 채운다. 여기에 3개 소스를 추가한다.</p>
+<table>
+<thead><tr><th style="width:24%">추가 소스</th><th style="width:34%">채우는 항목</th><th>비고</th></tr></thead>
+<tbody>
+<tr><td><b>근태 실적</b><br><code>yeoljeong_attendance_records</code></td><td>근로일별 시작·종료·휴게 시각(D1), 주 소정근로시간</td><td>M1 완료 후 연결. <b>실제 근무 실적에서 역산</b>하므로 형식적 기재가 아니라 사실과 일치</td></tr>
+<tr><td><b>근로조건 이력</b><br><code>yeoljeong_employment_terms</code></td><td>고용형태, 임금유형, 임금액, 주 소정근로시간, 근무요일</td><td>M4 산출물</td></tr>
+<tr><td><b>조항 라이브러리</b><br><code>yeoljeong_contract_clauses</code></td><td>D1~D12 표준 조항을 유형별로 주입</td><td>신규. 조항을 코드가 아니라 <b>데이터</b>로 관리해 법 개정 시 코드 수정 불필요</td></tr>
+</tbody>
+</table>
+
+<h3>6.3 자동 작성 흐름</h3>
+<pre><code>[트리거 발생] T1 직원승인 / T2 조건변경 / T3 서식개정 / T4 만료임박
+   ↓
+[1] 계약 유형 결정
+    주15h 미만 또는 주5일 미만 → part_time
+    주40h 전일제                → regular
+    관리 직무                   → manager
+   ↓
+[2] 조항 라이브러리에서 해당 유형 + 현행 template_version 조항 주입 (D1~D12)
+   ↓
+[3] 자동 채움
+    직원 정보 ← employee_join_requests + onboarding_documents
+    사업자 정보 ← settings.businesses
+    근로시간  ← attendance_records (최근 4주 실적) 또는 employment_terms
+    임금      ← employment_terms
+   ↓
+[4] 검증 (기존 _validate_contract_payload 확장)
+    기존: 필수 14항목 · 최저임금 · 비과세식대 · 연소자 · 외국인
+    추가: 무효조항 B1~B9 스캔 · 근로일별 시간 표 존재 · 기간제 2년 누적
+   ↓
+[5] draft 저장 + 관리자 알림 "확인 후 서명요청" (yeoljeong_notifications)
+   ↓
+[6] 관리자 검토 → 서명 요청 → 직원 서명 (기존 sign_contract 그대로)
+   ↓
+[7] ★신규★ 교부 (D3)
+    서명 완료 즉시 읽기전용 PDF 생성 → 직원에게 전달
+    delivered_at / delivery_method / viewed_at 기록
+    근로자 "수령 확인" 체크 → acknowledged_at 기록</code></pre>
+
+<div class="panel">
+  <b>자동 작성의 경계.</b> 시스템은 <b>draft까지만</b> 만든다. 서명 요청은 관리자가 내용을 확인한 뒤 누른다.
+  계약서는 법률 문서이므로 사람 확인 없이 서명 요청까지 자동으로 보내지 않는다 —
+  잘못된 임금액이 자동으로 서명까지 가면 되돌리기 어렵다(서명본은 수정·삭제 불가).
+</div>
+
+<h2 id="s7">7. 데이터 모델 · API</h2>
+
+<h3>7.1 기존 테이블 컬럼 추가</h3>
+<pre><code>-- 교부 증거 (D3, C1) — 근기법 제17조② 이행 증거
+ALTER TABLE yeoljeong_contracts
+  ADD COLUMN delivered_at      TIMESTAMPTZ,   -- 교부 시각
+  ADD COLUMN delivery_method   TEXT,          -- app|email|print
+  ADD COLUMN delivery_target   TEXT,          -- 마스킹된 수신처
+  ADD COLUMN viewed_at         TIMESTAMPTZ,   -- 근로자 최초 열람
+  ADD COLUMN acknowledged_at   TIMESTAMPTZ,   -- 수령 확인 체크
+  ADD COLUMN pdf_sha256        TEXT,          -- 읽기전용 PDF 해시
+  ADD COLUMN supersedes_id     TEXT,          -- 이전 계약 (T2 변경 체인)
+  ADD COLUMN superseded_at     TIMESTAMPTZ,
+  ADD COLUMN auto_generated_by TEXT,          -- T1|T2|T3|T4|manual
+  ADD COLUMN clause_set_version TEXT;         -- 주입된 조항 세트 버전</code></pre>
+
+<h3>7.2 신규 테이블</h3>
+<pre><code>-- 조항 라이브러리 (D1~D12를 데이터로 관리)
+CREATE TABLE yeoljeong_contract_clauses (
+  id            TEXT PRIMARY KEY,
+  clause_key    TEXT NOT NULL,        -- D1..D12
+  contract_type TEXT NOT NULL,        -- part_time|regular|manager|freelancer|common
+  version       TEXT NOT NULL,        -- v1, v2 ...
+  title         TEXT NOT NULL,
+  body          TEXT NOT NULL,
+  legal_basis   TEXT,                 -- 근거 조문
+  is_required   BOOLEAN DEFAULT TRUE,
+  effective_from DATE NOT NULL,
+  effective_to   DATE,
+  created_by TEXT, created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (clause_key, contract_type, version)
+);
+
+-- 무효조항 차단 규칙 (B1~B9)
+CREATE TABLE yeoljeong_contract_prohibited_rules (
+  id           TEXT PRIMARY KEY,
+  rule_key     TEXT NOT NULL,         -- B1..B9
+  pattern      TEXT NOT NULL,         -- 탐지 정규식
+  severity     TEXT NOT NULL,         -- block|warn
+  law_basis    TEXT NOT NULL,
+  penalty      TEXT,
+  suggestion   TEXT NOT NULL,         -- 대체 문구
+  enabled      BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT now()
+);</code></pre>
+<p class="src">차단 규칙을 코드가 아니라 DB에 두는 이유: 법 개정·판례 변경 시 배포 없이 갱신할 수 있고, 어떤 규칙이 언제부터 적용됐는지 감사 추적이 남는다.</p>
+
+<h3>7.3 API</h3>
+<table>
+<thead><tr><th style="width:8%">메서드</th><th style="width:36%">경로</th><th>설명</th></tr></thead>
+<tbody>
+<tr><td>POST</td><td><code>/hr/contracts/auto-draft</code></td><td>트리거 기반 계약 draft 자동 생성 (T1~T4)</td></tr>
+<tr><td>POST</td><td><code>/hr/contracts/validate-clauses</code></td><td>무효조항 B1~B9 스캔 (저장 전 사전 점검)</td></tr>
+<tr><td>GET</td><td><code>/hr/contracts/clauses</code></td><td>조항 라이브러리 조회 (유형·버전별)</td></tr>
+<tr><td>POST</td><td><code>/hr/contracts/{id}/deliver</code></td><td><b>교부 실행</b> — PDF 생성·전달·증거 기록</td></tr>
+<tr><td>POST</td><td><code>/hr/contracts/{id}/acknowledge</code></td><td>근로자 수령 확인</td></tr>
+<tr><td>GET</td><td><code>/hr/contracts/{id}/pdf</code></td><td>읽기전용 PDF (열람 시 <code>viewed_at</code> 기록)</td></tr>
+<tr><td>GET</td><td><code>/hr/contracts/gaps</code></td><td>계약 공백 인원 — 재직 중 유효 서명계약 없는 직원</td></tr>
+<tr><td>GET</td><td><code>/hr/contracts/expiring</code></td><td>만료 임박 + 기간제 2년 누적 경고</td></tr>
+</tbody>
+</table>
+
+<h2 id="s8">8. 화면 설계</h2>
+
+<h3>8.1 계약 작성 화면 개편</h3>
+<p>현재는 긴 폼 하나다. 이를 <b>3단계</b>로 나눈다 — 사장님이 채울 것과 시스템이 채운 것을 눈으로 구분하기 위해서다.</p>
+<pre><code>[1단계] 대상 선택          직원 선택 → 나머지 자동 채움 (읽기전용 표시)
+[2단계] 확인할 것만         ■ 근로일별 시간표  ■ 임금  ■ 수습 적용 여부
+                           ← 사장님이 실제로 판단해야 하는 것은 이 3개뿐
+[3단계] 조항 확인           D1~D12 자동 주입 (접힌 상태, 펼쳐서 확인 가능)
+                           ⛔ 무효조항 감지 시 여기서 적색 경고
+
+           [A4 미리보기]  [저장]  [서명요청]</code></pre>
+
+<h3>8.2 계약 공백 경보 (인사 홈)</h3>
+<pre><code>┌────────────────────────────────────────────────────────┐
+│ ⛔ 계약 공백 2명                                        │
+│    김OO — 4/1 근로조건 변경, 새 계약 미서명 (168일 경과) │
+│    이OO — 승인 후 계약 미작성 (12일 경과)                │
+│                                   → [자동 생성된 draft 확인] │
+├────────────────────────────────────────────────────────┤
+│ ⚠ 교부 미완료 3건 — 서명은 됐으나 교부 기록 없음          │
+│                                   → [일괄 교부]          │
+├────────────────────────────────────────────────────────┤
+│ ⚠ 기간제 2년 임박 1명 — 박OO (2026-11-30 도달)           │
+│    도달 시 무기계약 전환                → [갱신 검토]     │
+└────────────────────────────────────────────────────────┘</code></pre>
+
+<h3>8.3 직원 화면 (모바일)</h3>
+<p>서명 요청이 오면 푸시 → 계약서 전문 열람 → 자필서명 → <b>"사본을 받았습니다" 확인</b> → 내 계약서 보관함에서 언제든 재열람. 재열람이 가능해야 교부가 형식이 아니라 실질이 된다.</p>
+
+<h2 id="s9">9. 마일스톤</h2>
+
+<p>상위 목표 <code>매장비서 인사관리(HR) 완성</code>에 <b>M8</b>로 추가한다. M4(법규 경보·계약 무결성)와 영역이 겹치므로 의존 관계를 명시한다.</p>
+
+<table>
+<thead><tr><th style="width:8%">M</th><th style="width:24%">내용</th><th style="width:10%">의존</th><th>완료 기준</th></tr></thead>
+<tbody>
+<tr><td><b>M8-1</b></td><td>교부 증거 + 읽기전용 PDF <span class="tag t-p0">P0</span></td><td>없음</td><td>서명 완료 계약 1건을 교부 → <code>delivered_at</code>·<code>pdf_sha256</code> 기록, 직원 계정에서 열람 시 <code>viewed_at</code> 기록, 수령확인 시 <code>acknowledged_at</code> 기록 재현</td></tr>
+<tr><td><b>M8-2</b></td><td>조항 라이브러리 + D1~D12 <span class="tag t-p0">P0</span></td><td>없음</td><td><code>yeoljeong_contract_clauses</code>에 D1~D12 적재, 신규 계약 생성 시 유형별 조항 자동 주입 확인</td></tr>
+<tr><td><b>M8-3</b></td><td>무효조항 차단 B1~B9 <span class="tag t-p0">P0</span></td><td>M8-2 후</td><td>"중도 퇴사 시 300만원을 배상한다" 입력 → <b>HTTP 400 + 근기법 제20조 안내 + 대체문구 제안</b> 재현. B1~B9 각각 1건씩 테스트</td></tr>
+<tr><td><b>M8-4</b></td><td>자동 작성 T1·T2 <span class="tag t-p0">P0</span></td><td>M4·M8-2 후</td><td>직원 승인 시 draft 자동 생성 확인. <b>근로조건 변경 등록 시 새 draft + 이전 계약 superseded + 감소고지 판정</b> 재현</td></tr>
+<tr><td>M8-5</td><td>자동 작성 T3·T4 <span class="tag t-p1">P1</span></td><td>M8-4 후</td><td>서식 개정 시 구버전 서명자 목록화, 만료 D-30 갱신 draft, 기간제 2년 누적 경고</td></tr>
+<tr><td>M8-6</td><td>계약 작성 3단계 UI <span class="tag t-p1">P1</span></td><td>M8-2 후</td><td>3단계 화면 스크린샷, 자동채움 항목 읽기전용 표시 확인</td></tr>
+</tbody>
+</table>
+
+<h2 id="s10">10. 검증 기준 · 리스크</h2>
+
+<h3>10.1 회귀 검증 — 이용훈 시나리오 (M8-4 필수)</h3>
+<pre><code>입력: 2026-04-01 근로조건 변경 등록
+      김OO, 월급 3,000,000원 주40h → 시급제 주20시간(4h × 5일)
+      변경 사유: 건강
+
+기대 동작:
+  1. part_time 계약 draft 자동 생성 (T2)
+  2. 근로일별 시간표 자동 채움 (4h × 월~금)
+  3. 이전 regular 계약 → superseded_at 기록, supersedes_id 연결
+  4. 근퇴법 제32조⑤ 판정: 주 20시간 단축 ≥ 5시간 → 감소고지 필요 = TRUE
+  5. 인사 홈 적색 경보: "서명 전 근무 시 계약 공백"
+  6. 서명 완료 후 교부 → delivered_at 기록
+
+→ 이 6단계가 2026-04-01에 작동했다면 현재 분쟁의 쟁점 ①②가 존재하지 않는다.</code></pre>
+
+<h3>10.2 검증 항목</h3>
+<table>
+<thead><tr><th style="width:24%">항목</th><th>기준</th></tr></thead>
+<tbody>
+<tr><td>단위 테스트</td><td><code>bash scripts/run_unit_tests.sh tests/unit/test_yeoljeong_contract_clauses.py</code> 전체 PASS</td></tr>
+<tr><td>무효조항 차단</td><td>B1~B9 각 1건 입력 → 400 응답 + 근거 조문 + 대체문구 반환</td></tr>
+<tr><td>적법조항 통과</td><td>D1~D12 전체 포함 계약 → 정상 저장 (오탐 0건)</td></tr>
+<tr><td>교부 증거</td><td>서명→교부→열람→수령확인 4단계 타임스탬프 전부 기록</td></tr>
+<tr><td>PDF 불변</td><td>교부 PDF의 <code>pdf_sha256</code>이 서명 스냅샷 해시와 정합</td></tr>
+<tr><td>화면 검증</td><td><code>capture_screenshot</code>으로 계약 작성 3단계 + 경보 배너 캡처</td></tr>
+<tr><td>기존 회귀</td><td><code>test_yeoljeong_finance_service.py</code> 등 기존 204건 PASS 유지</td></tr>
+</tbody>
+</table>
+
+<h3>10.3 리스크</h3>
+<table>
+<thead><tr><th style="width:5%">#</th><th style="width:26%">리스크</th><th style="width:8%">영향</th><th>완화책</th></tr></thead>
+<tbody>
+<tr><td>R1</td><td>무효조항 차단이 <b>오탐</b>을 내 정상 계약 저장을 막음</td><td><span class="tag t-warn">중간</span></td><td>B1·B2·B3·B6·B7만 하드 차단, 나머지는 경고. 정규식은 DB 관리라 즉시 조정 가능. 오탐 1건이라도 나오면 severity를 warn으로 내린다</td></tr>
+<tr><td>R2</td><td>자동 생성 draft의 임금액이 틀린 채로 서명까지 감</td><td><span class="tag t-bad">높음</span></td><td><b>자동화는 draft까지만.</b> 서명 요청은 반드시 사람이 누른다(§6.3). 서명본은 수정·삭제 불가이므로 이 경계를 낮추지 않는다</td></tr>
+<tr><td>R3</td><td>기존 서명 완료 2건이 구서식이라 D1~D12 미적용</td><td><span class="tag t-warn">중간</span></td><td>소급 재계약은 강제하지 않는다. T3로 재직자 재계약 draft를 만들되 근로자 동의 하에 진행</td></tr>
+<tr><td>R4</td><td>조항 문구가 법 개정에 뒤처짐</td><td><span class="tag t-warn">중간</span></td><td>조항을 DB(<code>effective_from</code>/<code>effective_to</code>)로 관리. 최저임금·과태료 금액은 <code>yeoljeong_settings</code>로 외부화</td></tr>
+<tr><td>R5</td><td>본 PRD의 법령 해석 오류</td><td><span class="tag t-bad">높음</span></td><td>§3 근거는 2026-09-16 확인분이며 <b>시행 전 공인노무사 1회 검토를 전제</b>로 한다. 특히 D2 수습 조항과 B5 경업금지 판단은 반드시 검토받는다</td></tr>
+<tr><td>R6</td><td>교부를 앱 내 열람으로만 처리 시 "못 봤다" 주장</td><td><span class="tag t-warn">중간</span></td><td>열람 로그 + 수령확인 체크 + <b>요청 시 인쇄본 교부</b> 3중. 인쇄본 교부도 <code>delivery_method='print'</code>로 기록</td></tr>
+</tbody>
+</table>
+
+<div class="panel danger">
+  <b>⚠️ 이 문서의 한계를 분명히 밝힌다.</b><br>
+  본 PRD는 <b>시스템 설계 문서이지 법률 자문이 아니다.</b> §4의 조항 문안과 §5의 무효 판단은
+  2026-09-16 기준 법령·행정해석·실무해설을 근거로 정리한 것이며,
+  <b>실제 계약서에 적용하기 전 공인노무사 또는 노무법인의 검토를 반드시 거쳐야 한다.</b>
+  특히 D2(수습), D6(겸업), D7(비밀유지), B5(경업금지)는 구체적 사실관계에 따라 판단이 갈린다.
+  검토 비용은 통상 20~30만원 수준이며, 과태료 1건(최대 500만원) 대비 충분히 정당화된다.
+</div>
+
+<h2>부록. 현재 서식에서 이미 잘 쓴 문구</h2>
+<p>기존 담당자가 만든 문구 중 <b>법적으로 정확하고 사업주에게도 유리한</b> 것들이다. 그대로 유지한다.</p>
+<div class="clause">
+"해고·계약해지는 법령상 제한, 해고예고, 소명 기회, 서면 통지 기준을 준수하며 <b>위약금 또는 손해배상 예정액을 미리 정하지 않는다</b>."
+<span class="src">— 근기법 제20조를 정확히 반영. 위약예정 금지를 계약서에 명시해두면 오히려 분쟁에서 사업주의 선의를 보여준다.</span>
+</div>
+<div class="clause">
+"상시근로자 수 변동으로 <b>강행법규의 적용 범위가 달라지면 변경된 법정 기준을 적용한다</b>."
+<span class="src">— D11. 5인 이상 전환 시 자동 적용 조항. 이 문구가 없으면 전환 시점에 계약을 다시 써야 한다.</span>
+</div>
+<div class="clause">
+"실제 운영이 고정 근무, 상시 지휘감독, 대체인력 제한, 매장 상시업무 편입 등 <b>근로자성에 해당하면 근로계약 전환 여부를 즉시 검토한다</b>."
+<span class="src">— 프리랜서 계약의 위장도급 리스크를 스스로 관리하겠다는 선언. 실제로 가장 위험한 지점을 정확히 짚었다.</span>
+</div>
+
+<footer>
+FOOD-LAYOUT-HR-002 · 전자 근로계약서 강화·자동작성 PRD v1.0 · 2026-09-16 작성 · AADS CTO AI<br>
+구현상황 수치는 2026-09-16 17:0x KST 소스 실측값. 법령 근거는 같은 날짜 확인분이며 시행 전 공인노무사 검토를 전제로 한다.<br>
+관련 문서: <a href="/reports/20260916_store_assistant_hr_prd.html" style="color:#9fc0ff">매장비서 인사관리(HR) 완성 PRD (FOOD-LAYOUT-HR-001)</a>
+</footer>
+
+</div>
+</body>
+</html>
