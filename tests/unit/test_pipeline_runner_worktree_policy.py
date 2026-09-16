@@ -79,7 +79,9 @@ def test_pipeline_runner_records_masked_push_diagnostics():
     assert "record_git_diagnostics()" in script
     for field in ("exit_code", "branch", "head_sha", "origin_url", "status", "stdout", "stderr"):
         assert f"{field}=" in script
-    assert "push_fail: ${push_diag:0:1800}" in script
+    # 2026-09-16: push 사전판별(classify_push_state) 도입으로 진단 문자열에
+    # 판별 상태(state/recheck)가 함께 실린다. 진단 본문 길이는 1800→1700 으로 줄었다.
+    assert "push_fail(state=${push_state}/recheck=${push_recheck:-none}): ${push_diag:0:1700}" in script
 
 
 def test_local_pipeline_runner_template_stays_synced_with_primary_runner():

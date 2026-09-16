@@ -632,6 +632,38 @@ record_git_diagnostics() {
     printf '%s' "$diagnostics"
 }
 
+# ── push 대상 조상관계 사전 판별 (AADS-RUNNER-PUSH-STALE-BASE) ──────────
+# origin/main 과 승인 SHA 의 조상 관계로 push 가능 여부를 미리 가른다.
+#   already_present : 승인 SHA 가 이미 origin/main 에 포함 → push 불필요(멱등)
+#   fast_forward    : origin/main 이 승인 SHA 의 조상 → 정상 push 가능
+#   stale_base      : 어느 쪽도 조상이 아님 → base 가 낡음(non-fast-forward)
+#   fetch_fail      : 원격 조회 실패 → 판별 불가, 기존 push 경로로 진행
+# force push 는 어떤 경우에도 하지 않는다. stale_base 는 재작업/재승인 대상이다.
+classify_push_state() {
+    local repo="$1" sha="$2" remote_branch="${3:-main}"
+    local remote_sha=""
+    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "fetch_fail"; return 0; }
+    remote_sha=$(git -C "$repo" ls-remote origin "refs/heads/${remote_branch}" 2>/dev/null | awk 'NR==1{print $1}') || true
+    if [[ ! "$remote_sha" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "fetch_fail"
+        return 0
+    fi
+    if ! git -C "$repo" cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+        git -C "$repo" fetch --quiet origin "${remote_branch}" 2>/dev/null || true
+    fi
+    if ! git -C "$repo" cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+        echo "fetch_fail"
+        return 0
+    fi
+    if git -C "$repo" merge-base --is-ancestor "$sha" "$remote_sha" 2>/dev/null; then
+        echo "already_present"
+    elif git -C "$repo" merge-base --is-ancestor "$remote_sha" "$sha" 2>/dev/null; then
+        echo "fast_forward"
+    else
+        echo "stale_base"
+    fi
+}
+
 verify_isolated_job_worktree() {
     local job_id="$1" repo="$2" expected_main="$3"
     local expected_path="/tmp/aads-wt-${job_id}" repo_root common_dir main_root
@@ -2392,28 +2424,63 @@ deploy_job() {
     git -C "$worktree_dir" diff-tree --no-commit-id --name-only -r "$current_sha" 2>/dev/null | grep -q '\.py$' && _py_changed="true"
 
     local lock_file="/tmp/pipeline-deploy-${project}.lock" push_out push_err push_exit=0 push_diag="" push_lock_fd=""
-    push_out=$(mktemp "/tmp/pipeline-push-${job_id}.out.XXXXXX")
-    push_err=$(mktemp "/tmp/pipeline-push-${job_id}.err.XXXXXX")
-    if ! exec {push_lock_fd}>"$lock_file"; then
-        push_exit=75
-        echo "failed to open push lock fd: $lock_file" >"$push_err"
-    else
-        {
-            if flock -w 300 "$push_lock_fd"; then
-                git -C "$worktree_dir" push origin "${current_sha}:refs/heads/main" || push_exit=$?
-            else
-                push_exit=75
-            fi
-        } >"$push_out" 2>"$push_err"
-        exec {push_lock_fd}>&-
+    local push_state="" push_recheck="" push_skipped="false" stale_detail=""
+
+    # ── push 전 사전 판별 — non-fast-forward 를 불투명한 거부로 만들지 않는다 ──
+    push_state=$(classify_push_state "$worktree_dir" "$current_sha")
+    log "  PUSH_PRECHECK job=$job_id sha=$current_sha state=$push_state"
+
+    if [[ "$push_state" == "already_present" ]]; then
+        push_skipped="true"
+        log "  PUSH_ALREADY_PRESENT job=$job_id sha=$current_sha — origin/main 에 이미 포함되어 push 생략"
+        record_git_diagnostics "$job_id" "push_already_present" "$worktree_dir" 0 "" "" >/dev/null
+    elif [[ "$push_state" == "stale_base" ]]; then
+        stale_detail="push_stale_base: 승인 SHA(${current_sha}) 의 base 가 origin/main 보다 낡아 non-fast-forward 입니다. force push 는 금지이므로 자동 복구하지 않습니다 — 최신 origin/main 위에서 재작업 후 재승인하십시오."
+        db_update "UPDATE pipeline_jobs SET status='error', phase='push_stale_base',
+                   error_detail=$(sql_escape "$stale_detail"),
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[자동] push 사전판별 stale_base — 최신 origin/main 기준 재작업 필요',
+                   completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+        record_git_diagnostics "$job_id" "push_stale_base" "$worktree_dir" 1 "" "" >/dev/null
+        record_runner_event "$job_id" "job_terminal" "error" "push_stale_base" "" "" "" "" "{\"error_detail\":\"push_stale_base\"}"
+        post_to_chat "$session_id" "🔴 [Pipeline Runner] push 중단 — 승인 SHA 의 base 가 낡음(non-fast-forward): $job_id (${stale_detail:0:400})"
+        _release_deploy_lock "$project" "$job_id"
+        promote_next_queued "$project"
+        return 1
     fi
-    push_diag=$(record_git_diagnostics "$job_id" "$([[ "$push_exit" -eq 0 ]] && echo push_succeeded || echo push_failed)" \
-        "$worktree_dir" "$push_exit" "$(tail -30 "$push_out")" "$(tail -30 "$push_err")")
-    rm -f "$push_out" "$push_err"
+
+    if [[ "$push_skipped" != "true" ]]; then
+        push_out=$(mktemp "/tmp/pipeline-push-${job_id}.out.XXXXXX")
+        push_err=$(mktemp "/tmp/pipeline-push-${job_id}.err.XXXXXX")
+        if ! exec {push_lock_fd}>"$lock_file"; then
+            push_exit=75
+            echo "failed to open push lock fd: $lock_file" >"$push_err"
+        else
+            {
+                if flock -w 300 "$push_lock_fd"; then
+                    git -C "$worktree_dir" push origin "${current_sha}:refs/heads/main" || push_exit=$?
+                else
+                    push_exit=75
+                fi
+            } >"$push_out" 2>"$push_err"
+            exec {push_lock_fd}>&-
+        fi
+        # push 실패 시 1회 재판별 — 동시 push 경합으로 이미 반영된 경우는 성공 처리
+        if [[ "$push_exit" -ne 0 ]]; then
+            push_recheck=$(classify_push_state "$worktree_dir" "$current_sha")
+            log "  PUSH_RECHECK job=$job_id exit=$push_exit state=$push_recheck"
+            if [[ "$push_recheck" == "already_present" ]]; then
+                log "  PUSH_RACE_RESOLVED job=$job_id — push 는 거부됐으나 승인 SHA 가 origin/main 에 이미 존재"
+                push_exit=0
+            fi
+        fi
+        push_diag=$(record_git_diagnostics "$job_id" "$([[ "$push_exit" -eq 0 ]] && echo push_succeeded || echo push_failed)" \
+            "$worktree_dir" "$push_exit" "$(tail -30 "$push_out")" "$(tail -30 "$push_err")")
+        rm -f "$push_out" "$push_err"
+    fi
 
     if [[ "$push_exit" -ne 0 ]]; then
         local push_error_detail
-        push_error_detail="push_fail: ${push_diag:0:1800}"
+        push_error_detail="push_fail(state=${push_state}/recheck=${push_recheck:-none}): ${push_diag:0:1700}"
         db_update "UPDATE pipeline_jobs SET status='error', phase='push_fail',
                    error_detail=$(sql_escape "$push_error_detail"),
                    review_feedback=COALESCE(review_feedback,'') || E'\n[자동] isolated worktree git push 실패 — 진단은 error_detail/logs 참조',
