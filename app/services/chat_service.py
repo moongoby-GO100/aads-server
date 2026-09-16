@@ -13001,6 +13001,22 @@ async def send_message_stream(
                 base_system_prompt=system_prompt,
             )
             system_prompt = _compiled_prompt.system_prompt
+            # 턴 계측을 **컴파일이 확정된 이 지점**에서 찍는다.
+            #
+            # 전송 직전(`_stream_attempt` 루프)에도 같은 계측이 있지만 그 지점은
+            # 지금 실행 경로가 아니다 — 2026-09-16 실측으로 7일 375턴의
+            # `model`·`intent`·`execution_id` 가 전부 NULL 이었고 `prompt_chars`
+            # 는 18,000자대로 남았는데, 같은 턴의 provenance 는 36,546자였다.
+            # 경로가 갈려도 여기는 반드시 지나므로 계측이 비지 않는다.
+            _timer.prompt_chars = len(system_prompt or "")
+            _timer.model = str(_prompt_model_id or "")
+            _timer.intent = str(intent or "")
+            _timer.execution_id = _execution_id_str or None
+            try:
+                from app.services.context_builder import take_rag_ms as _take_rag_ms
+                _timer.rag_ms = _take_rag_ms(str(session_id))
+            except Exception:
+                pass
             _prov = _compiled_prompt.provenance
             _prov["context_policy"] = {
                 "raw_history_messages": len(raw_messages),
@@ -13226,11 +13242,22 @@ async def send_message_stream(
                 # ctx_done 직후에 재면 그 뒤에 붙는 응답모드·reply_to·테넌트·
                 # 멘션 블록이 빠져 실제보다 작게 기록된다 — 24시간 평균이
                 # 18,069자로 남았지만 provenance 실측은 34,000~40,000자였다.
-                _timer.prompt_chars = len(system_prompt or "")
+                # 컴파일 확정 지점에서 이미 적어 둔 값을 **깎지 않는다.**
+                # 이 지점이 더 작게 나오는 턴이 실측으로 존재한다(7일 277턴
+                # 평균 18,970자 vs provenance 33,971자). 큰 쪽을 남긴다.
+                _timer.prompt_chars = max(
+                    int(_timer.prompt_chars or 0), len(system_prompt or "")
+                )
                 _timer.history_count = len(messages or [])
                 try:
-                    _timer.model = str(_attempt_model_override or getattr(intent_result, "model", "") or "")
-                    _timer.intent = str(getattr(intent_result, "intent", "") or "")
+                    # 빈 문자열로 덮으면 NULLIF 가 NULL 로 만든다 —
+                    # 7일 398턴 중 model 이 남은 것이 13턴뿐이었던 이유다.
+                    _m = str(_attempt_model_override or getattr(intent_result, "model", "") or "")
+                    _i = str(getattr(intent_result, "intent", "") or "")
+                    if _m:
+                        _timer.model = _m
+                    if _i:
+                        _timer.intent = _i
                 except Exception:
                     pass
                 _timer.mark("request_sent")

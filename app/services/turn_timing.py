@@ -45,7 +45,7 @@ class TurnTimer:
     """한 턴의 구간을 잰다. 쓰는 쪽이 `mark()` 만 부르면 된다."""
 
     __slots__ = ("t0", "marks", "session_id", "execution_id", "model", "intent",
-                 "prompt_chars", "history_count", "tool_calls", "_saved")
+                 "prompt_chars", "history_count", "tool_calls", "rag_ms", "_saved")
 
     def __init__(self, session_id: str) -> None:
         self.t0 = time.perf_counter()
@@ -57,6 +57,10 @@ class TurnTimer:
         self.prompt_chars = 0
         self.history_count = 0
         self.tool_calls = 0
+        # Auto-RAG 는 컨텍스트 빌더 **안쪽**에서 끝난다. 바깥에서 mark 로는
+        # 잡을 수 없어 `rag_done` 이 한 번도 찍히지 않았고, 7일 375턴이 전부
+        # NULL 이었다(2026-09-16 실측). 빌더가 직접 잰 값을 받아 적는다.
+        self.rag_ms: Optional[int] = None
         self._saved = False
 
     def mark(self, name: str) -> None:
@@ -100,7 +104,8 @@ class TurnTimer:
                 """,
                 self.session_id, self.execution_id or "", self.model, self.intent,
                 self._ms("ctx_done"),
-                self._span("ctx_start", "rag_done") or self._ms("rag_done"),
+                self.rag_ms if self.rag_ms is not None
+                else (self._span("ctx_start", "rag_done") or self._ms("rag_done")),
                 self._span("request_sent", "first_token"),
                 self._ms("first_token"),
                 self._ms("done"),
