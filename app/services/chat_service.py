@@ -2014,6 +2014,16 @@ def _normalize_interrupt_content(content: Any) -> str:
     return re.sub(r"^\[추가 지시\]\s*", "", str(content or "")).strip()
 
 
+# 미소비 추가지시를 다음 턴에 되살릴 수 있는 시간창.
+# 설계 근거: docs/prd/20260916_CHAT_INTERRUPT_QUEUE_PRD.md 3절.
+INTERRUPT_RECOVERY_WINDOW = timedelta(minutes=30)
+
+# 한 턴이 수거하는 추가지시 상한. 프로세스 큐 pop 은 무제한인데 DB 복구만
+# 5 였다 — 2026-09-16 실측에서 한 실행이 10건을 삼킨 적이 있어, 스트림이
+# 끊겼을 때 6건째부터 복구되지 않는 비대칭이 있었다.
+INTERRUPT_COLLECT_LIMIT = 20
+
+
 async def _fetch_persisted_interrupts(
     session_id: str,
     *,
@@ -2034,6 +2044,44 @@ async def _fetch_persisted_interrupts(
     rows: list[Any] = []
     try:
         async with get_pool().acquire() as conn:
+            # 창을 넘긴 미소비 지시는 먼저 내려놓는다.
+            #
+            # 2026-09-16 실측: 09-15 16:16 에 들어온 '[추가 지시] 배포해' 가
+            # 미소비로 남아 있었고, 수거 조건에 시간 제한이 없어 그 세션의
+            # 다음 턴이 언제 돌든 그 지시를 먹을 수 있었다. 하루 전 '배포해'
+            # 가 오늘 답변에 끼어드는 것은 복구가 아니라 사고다.
+            #
+            # 30분은 정상 복구(스트림이 죽어 다음 턴에 되살리는 경로,
+            # 최근 7일 recovered_interrupt 44건)를 살리는 값이다.
+            try:
+                await conn.execute(
+                    """
+                    UPDATE chat_messages m
+                       SET intent = 'interrupt_expired',
+                           edited_at = NOW()
+                     WHERE m.session_id = $1
+                       AND m.role = 'user'
+                       AND m.content LIKE '[추가 지시]%%'
+                       AND COALESCE(m.intent, '') IN ('', 'queued_interrupt')
+                       AND m.created_at <= NOW() - $2::interval
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM chat_turn_executions te
+                            WHERE te.user_message_id = m.id
+                       )
+                    """,
+                    sid,
+                    INTERRUPT_RECOVERY_WINDOW,
+                )
+            except Exception as expire_exc:
+                # 만료 표시는 청소다. 실패해도 아래 수거 조건이 같은 시간창을
+                # 쓰므로 묵은 지시가 새 답변에 들어가지는 않는다.
+                logger.warning(
+                    "interrupt_expire_mark_failed session=%s error=%s",
+                    str(session_id)[:8],
+                    str(expire_exc)[:160],
+                )
+
             rows = await conn.fetch(
                 """
                 SELECT id, content, attachments
@@ -2042,6 +2090,7 @@ async def _fetch_persisted_interrupts(
                    AND m.role = 'user'
                    AND m.content LIKE '[추가 지시]%%'
                    AND COALESCE(m.intent, '') IN ('', 'queued_interrupt')
+                   AND m.created_at > NOW() - $3::interval
                    AND NOT EXISTS (
                        SELECT 1
                          FROM chat_turn_executions te
@@ -2052,6 +2101,7 @@ async def _fetch_persisted_interrupts(
                 """,
                 sid,
                 limit,
+                INTERRUPT_RECOVERY_WINDOW,
             )
             if rows:
                 consumed_ids = [r["id"] for r in rows]
