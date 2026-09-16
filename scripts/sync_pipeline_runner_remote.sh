@@ -30,9 +30,7 @@ ONLY_TARGET=""
 # 실행 중 스크립트 파일을 덮어쓰는 것 자체도 bash 지연 읽기 때문에 위험하다.
 IGNORE_BUSY="${AADS_RUNNER_SYNC_IGNORE_BUSY:-0}"
 DEFERRED=0
-PG_CONTAINER="${PG_CONTAINER:-aads-postgres}"
-PGUSER="${PGUSER:-aads}"
-PGDATABASE="${PGDATABASE:-aads}"
+# DB 접속 기본값은 runner_busy_lib.sh 가 소유한다(두 벌로 두지 않는다).
 
 usage() {
     cat <<'EOF'
@@ -122,28 +120,19 @@ remote_runner_host_name() {
     printf '%s' "$name"
 }
 
-# 해당 러너 호스트가 붙잡고 있는 작업 수. 조회 실패/이름 미상이면 빈 문자열.
-db_active_job_count() {
-    local host_name="$1" out=""
-    [[ -n "$host_name" ]] || { printf ''; return 0; }
-    out=$(docker exec -i "$PG_CONTAINER" psql -U "$PGUSER" -d "$PGDATABASE" \
-            -q -t -A -P footer=off \
-            -c "SELECT count(*) FROM pipeline_jobs WHERE status IN ('claimed','running','deploying') AND runner_host='${host_name}';" \
-            </dev/null 2>/dev/null | tr -d '[:space:]') || out=""
-    [[ "$out" =~ ^[0-9]+$ ]] || out=""
-    printf '%s' "$out"
+# 러너 서비스가 지금 살아 있는가. inactive/failed 면 그 호스트의 in-flight 는 좀비다.
+# `|| true` 는 원격에서 붙인다 — systemctl is-active 는 비활성일 때 exit 3 이라
+# 로컬에서 `|| state=""` 로 받으면 "inactive" 문자열까지 지워진다.
+remote_service_active() {
+    local host="$1" service="$2" state=""
+    state=$(ssh_run "$host" "systemctl is-active '$service' 2>/dev/null || true" 2>/dev/null | tr -d '[:space:]') || state=""
+    printf '%s' "$state"
 }
 
-# 0 = 미루기, 1 = 진행.
-# 판별 불가(빈 문자열)도 미룬다 — 타이머가 5분마다 다시 시도하므로 비용은 지연뿐이고,
-# 잘못 진행하면 실행 중인 P0 작업이 처음부터 다시 돌아간다.
-should_defer_for_busy() {
-    local busy_count="$1" ignore_busy="${2:-0}"
-    [[ "$ignore_busy" == "1" ]] && return 1
-    [[ "$busy_count" =~ ^[0-9]+$ ]] || return 0
-    [[ "$busy_count" -gt 0 ]] && return 0
-    return 1
-}
+# busy 판정 규칙(db_active_job_count / should_defer_for_busy)은 로컬 재시작
+# 래퍼와 공유한다. 두 경로가 다른 답을 내면 한쪽이 반드시 사고를 낸다.
+# shellcheck source=scripts/runner_busy_lib.sh
+source "${SCRIPT_DIR}/runner_busy_lib.sh"
 
 default_targets() {
     cat <<EOF
@@ -202,11 +191,12 @@ sync_one_target() {
     fi
 
     # 실행 중인 러너는 건드리지 않는다 — 파일 교체도, 재시작도 미룬다.
-    local runner_host_name busy_count
+    local runner_host_name busy_count service_state
     runner_host_name=$(remote_runner_host_name "$host" "$service")
     busy_count=$(db_active_job_count "$runner_host_name")
-    if should_defer_for_busy "$busy_count" "$IGNORE_BUSY"; then
-        log "${name}: sync deferred — runner host=${runner_host_name:-unknown} active_jobs=${busy_count:-unknown}"
+    service_state=$(remote_service_active "$host" "$service")
+    if should_defer_for_busy "$busy_count" "$IGNORE_BUSY" "$service_state"; then
+        log "${name}: sync deferred — runner host=${runner_host_name:-unknown} active_jobs=${busy_count:-unknown} service=${service_state:-unknown}"
         DEFERRED=$((DEFERRED + 1))
         return 0
     fi
@@ -283,7 +273,7 @@ sync_one_target() {
 main() {
     # The timer must never publish edits from an in-progress shared worktree.
     local source_file committed_sha working_sha
-    for source_file in scripts/pipeline-runner.sh scripts/claude_model_contract.py scripts/sync_pipeline_runner_remote.sh; do
+    for source_file in scripts/pipeline-runner.sh scripts/claude_model_contract.py scripts/sync_pipeline_runner_remote.sh scripts/runner_busy_lib.sh; do
         committed_sha=$(git -C "$REPO_ROOT" show "HEAD:${source_file}" 2>/dev/null | sha256sum | awk '{print $1}') || {
             log "source not committed: ${source_file}; sync deferred"
             return 0
