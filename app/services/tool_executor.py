@@ -4779,10 +4779,15 @@ class ToolExecutor:
             "numbers": inp.get("numbers"),
             "refs": inp.get("refs") or [],
         }
+        # 세션을 찾는 길은 한 벌이어야 한다(`ask_session` 과 같은 이유).
+        # `session_id` 는 도구 스키마에 없으므로 `inp` 에는 절대 들어오지
+        # 않는다 — 그래서 여기는 항상 빈 문자열이었고 `reported_by` 가
+        # 전건 NULL 이었다. 누가 신고했는지 원장에 남지 않으면 판정도
+        # 자기확인 차단도 근거를 잃는다.
         return await report_done(
             str(inp.get("milestone_id") or ""),
             evidence,
-            str(inp.get("session_id") or ""),
+            _resolve_bound_chat_session_id(inp.get("session_id")),
         )
 
     async def _confirm_milestone(self, inp: Dict[str, Any]) -> Any:
@@ -4791,7 +4796,9 @@ class ToolExecutor:
         from app.services.milestone_review import confirm
 
         mid = str(inp.get("milestone_id") or "")
-        sid = str(inp.get("session_id") or "")
+        # 빈 문자열이면 아래 자기확인 차단이 **절대 발동하지 않는다.**
+        # 스키마에 session_id 가 없으므로 실제로 한 번도 발동한 적이 없었다.
+        sid = _resolve_bound_chat_session_id(inp.get("session_id"))
         if mid and sid:
             own = await get_pool().fetchval(
                 "SELECT 1 FROM milestones m JOIN chat_sessions s ON s.id = $2::uuid "

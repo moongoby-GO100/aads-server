@@ -137,7 +137,13 @@ def test_goal_control_cycle_is_registered_on_active_only_scheduler() -> None:
 
     assert "async def _run_goal_control_cycle():" in source
     assert "await reconcile(" in source
-    assert 'advance_active_goals("AADS")' in source
+    # 프로젝트를 박으면 나머지가 방치된다. 2026-09-14 여기가 `"AADS"` 로
+    # 고정돼 있어 GO100·NAS·NTV2·SF 의 활성 목표가 스케줄러에서 통째로
+    # 빠졌고, 코드는 그때 `None`(전 프로젝트)으로 고쳐졌다. 이 단정만
+    # `"AADS"` 로 남아 실패하고 있었다 — 단정을 코드에 맞춰 되돌리면
+    # 같은 사고가 재발하므로, 여기서는 **고정하지 않았다는 것**을 검사한다.
+    assert "advance_active_goals(None)" in source
+    assert 'advance_active_goals("AADS")' not in source
     assert "pg_try_advisory_lock(hashtext('aads_goal_control_cycle'))" in source
     assert "pg_advisory_unlock(hashtext('aads_goal_control_cycle'))" in source
     assert 'id="goal_control_cycle"' in source

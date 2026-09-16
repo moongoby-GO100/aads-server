@@ -59,8 +59,18 @@ async def report_done(
         )
         if not row:
             return {"error": "milestone_not_found"}
-        if row["status"] not in ("in_progress", "review"):
-            return {"error": f"cannot_report_from_{row['status']}"}
+        # 착수 표시가 없어도 신고는 받는다. 2026-09-17 실측으로 GO100 활성
+        # 마일스톤 55건 중 42건이 `pending` 이었고, 담당 세션은 일을 끝내도
+        # `cannot_report_from_pending` 으로 신고 자체가 막혔다 — 담당들이
+        # "마일스톤 검증이 불가하다" 고 올린 것이 이 게이트다.
+        # `pending` → `review` 로 바로 올리고 착수 시각만 채운다. 막는 것은
+        # **이미 끝난 것** 뿐이다. 끝난 것을 되돌리는 것은 판정의 일이다.
+        if row["status"] in ("completed", "archived", "failed"):
+            return {
+                "error": f"cannot_report_from_{row['status']}",
+                "message": "이미 판정이 끝난 마일스톤이다. 되돌릴 일이면 "
+                           "주도나 대표님이 상태를 되돌려야 한다.",
+            }
 
         summary = str((evidence or {}).get("summary") or "").strip()
         if len(summary) < 20:
@@ -81,6 +91,7 @@ async def report_done(
 
         await conn.execute(
             "UPDATE milestones SET status = 'review', reported_at = NOW(), "
+            "started_at = COALESCE(started_at, NOW()), "
             "reported_by = NULLIF($2,'')::uuid, evidence = $3::jsonb, "
             "review_asked_at = NULL, review_ask_count = 0, updated_at = NOW() "
             "WHERE id = $1::uuid",
@@ -110,7 +121,17 @@ async def confirm(
         if not row:
             return {"error": "milestone_not_found"}
         if row["status"] != "review":
-            return {"error": f"not_in_review (status={row['status']})"}
+            # 사유만 던지면 주도 세션은 "검증이 불가하다" 로 끝낸다.
+            # 무엇을 해야 확인 대기가 되는지 같이 준다.
+            return {
+                "error": "not_in_review",
+                "status": row["status"],
+                "message": "아직 담당이 완료를 신고하지 않았다(현재 "
+                           f"{row['status']}). 판정은 신고 뒤에만 한다 — "
+                           "담당이 `report_milestone_done(milestone_id, "
+                           "summary, numbers, refs)` 로 근거를 올리게 하라. "
+                           "담당이 응답하지 않으면 `ask_session` 으로 물어라.",
+            }
 
         if ok:
             new = "failed" if negative else "completed"
@@ -140,6 +161,21 @@ async def confirm(
 
 
 async def _lead_session(conn: Any, goal_id: str) -> Optional[str]:
+    """주도 세션. **`goals.owner_session_id` 가 정본이다.**
+
+    예전에는 `goal_task_links` 에서 `role_key LIKE '%Lead'` 인 세션만 찾았다.
+    주도가 `Lead` 로 끝나지 않는 목표(#119 는 CTO 가 주도다)에서는 항상
+    빈손으로 돌아왔고, 그러면 `to_ceo` 가 참이 되어 **모든 확인 요청이
+    주도를 건너뛰고 대표님께 올라갔다** [실측 2026-09-17: 활성 목표 11건 중
+    주도가 `%Lead` 인 것은 1건].
+    """
+    lead = await conn.fetchval(
+        "SELECT g.owner_session_id::text FROM goals g "
+        "WHERE g.id = $1::uuid AND g.owner_session_id IS NOT NULL",
+        goal_id,
+    )
+    if lead:
+        return lead
     return await conn.fetchval(
         "SELECT s.id::text FROM goal_task_links l "
         "JOIN chat_sessions s ON s.id = l.task_id::uuid "
@@ -204,6 +240,7 @@ async def ask_pending_reviews(project: Optional[str] = None) -> Dict[str, int]:
             SELECT m.id::text AS milestone_id, m.title, m.completion_criteria,
                    m.evidence, m.review_ask_count, m.review_asked_at,
                    COALESCE(m.owner_role_key, '') AS owner,
+                   m.owner_session_id::text AS owner_session,
                    g.id::text AS goal_id, g.title AS goal_title, g.project
             FROM milestones m
             JOIN goals g ON g.id = m.goal_id
@@ -219,10 +256,24 @@ async def ask_pending_reviews(project: Optional[str] = None) -> Dict[str, int]:
 
         for row in rows:
             lead = await _lead_session(conn, row["goal_id"])
+            lead_role = ""
+            if lead:
+                lead_role = await conn.fetchval(
+                    "SELECT COALESCE(role_key, '') FROM chat_sessions "
+                    "WHERE id = $1::uuid",
+                    lead,
+                ) or ""
             # 주도 자신의 마일스톤이면 자기 확인이 된다 — 대표님께 올린다.
+            # 역할명이 'Lead' 로 끝나는지 보는 것으로는 못 잡았다. #119 는
+            # 주도가 CTO 이고 CTO 가 맡은 마일스톤이 3건이다 — 예전 판정은
+            # 그걸 자기확인이 아니라고 보고 주도에게 자기 것을 보냈다.
+            self_confirm = bool(
+                (lead and row["owner_session"] and lead == row["owner_session"])
+                or (lead_role and row["owner"] and lead_role == row["owner"])
+            )
             to_ceo = (
                 int(row["review_ask_count"] or 0) >= _REVIEW_MAX_ASK
-                or (row["owner"] or "").endswith("Lead")
+                or self_confirm
                 or not lead
             )
 
@@ -239,7 +290,7 @@ async def ask_pending_reviews(project: Optional[str] = None) -> Dict[str, int]:
                     logger.warning("review_escalate_failed", error=str(exc)[:160])
                 escalated += 1
 
-            if lead and not (row["owner"] or "").endswith("Lead"):
+            if lead and not self_confirm:
                 try:
                     from app.services import chat_service as cs
 
