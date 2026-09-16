@@ -1296,8 +1296,15 @@ def git_ignored_files(repo_root: Path) -> set[str]:
     found: set[str] = set()
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo_root), "ls-files", "--others", "--ignored",
-             "--exclude-standard"],
+            # core.quotePath=false 가 없으면 git 은 비ASCII 경로를
+            # `"app/static/reports/\355\225\234\352\270\200.html.bak_aads"` 처럼
+            # 이스케이프해 내놓는다. 그 문자열은 실제 경로와 한 글자도 맞지 않아
+            # **한글 이름 파일만 무시 목록에서 새어 나간다.**
+            # 2026-09-16 실측: 워킹트리와 깨끗한 체크아웃의 STALE_BACKUP 이
+            # 정확히 3 벌어졌고, 그 3개가 전부 한글 파일명의 `.bak_aads` 였다.
+            # 게이트가 "커밋 내용으로만 결정된다" 는 전제를 이 한 줄이 깨고 있었다.
+            ["git", "-C", str(repo_root), "-c", "core.quotePath=false",
+             "ls-files", "--others", "--ignored", "--exclude-standard"],
             capture_output=True, text=True, timeout=60,
         )
         if proc.returncode == 0:
