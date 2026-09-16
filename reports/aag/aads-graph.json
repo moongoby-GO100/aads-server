@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-09-16T16:38:58.471057+09:00",
-  "root": "/tmp/aads-wt-runner-168bac82",
+  "generated_at": "2026-09-16T17:14:22.371469+09:00",
+  "root": "/root/aads/aads-server",
   "api_roots": [
     "/api/v1/fact-check",
     "/api/v1/documents",
@@ -13,7 +13,7 @@
     "router_dir_files": 87,
     "router_modules": 81,
     "include_router_calls": 82,
-    "mounted_routes": 886,
+    "mounted_routes": 885,
     "namespaces": 82,
     "frontend_files": 232,
     "frontend_calls_resolved": 337,
@@ -2205,7 +2205,7 @@
     {
       "id": "app/api/ops.py",
       "kind": "router_module",
-      "routes": 74
+      "routes": 73
     },
     {
       "id": "app/api/pc_agent.py",
@@ -10866,26 +10866,6 @@
   },
   "findings": [
     {
-      "rule": "ROUTE_SHADOWED",
-      "key": "app/main.py GET /api/v1/ops/codex-usage",
-      "entrypoint": "app/main.py",
-      "method": "GET",
-      "path": "/api/v1/ops/codex-usage",
-      "winner": {
-        "module": "app/api/ops.py",
-        "lineno": 2677
-      },
-      "shadowed": [
-        {
-          "module": "app/api/ops.py",
-          "lineno": 2877
-        }
-      ],
-      "same_module": true,
-      "detail": "`app/main.py` 에 `GET /api/v1/ops/codex-usage` 가 2번 등록됐다 — `app/api/ops.py:2677` 만 살고 `app/api/ops.py:2877` 는 도달 불가다(FastAPI 는 먼저 등록된 라우트를 쓴다). 예외가 나지 않으므로 HTTP 로는 보이지 않는다",
-      "severity": "P0"
-    },
-    {
       "rule": "DOUBLE_MOUNT",
       "key": "/api/v1/admin",
       "entrypoint": "app/main.py",
@@ -10989,10 +10969,10 @@
       "owner_route_counts": {
         "app/api/hot_reload.py": 2,
         "app/api/memory_monitor.py": 5,
-        "app/api/ops.py": 72
+        "app/api/ops.py": 71
       },
       "exact_conflicts": [],
-      "detail": "네임스페이스 `/api/v1/ops` 를 3개 모듈이 소유 — `app/api/hot_reload.py`(2개 라우트), `app/api/memory_monitor.py`(5개 라우트), `app/api/ops.py`(72개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)",
+      "detail": "네임스페이스 `/api/v1/ops` 를 3개 모듈이 소유 — `app/api/hot_reload.py`(2개 라우트), `app/api/memory_monitor.py`(5개 라우트), `app/api/ops.py`(71개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)",
       "severity": "P1"
     },
     {
@@ -11596,244 +11576,6 @@
       "key": "app/api/ceo_chat.py",
       "module": "app/api/ceo_chat.py",
       "detail": "`app/api/ceo_chat.py` 이 APIRouter 를 정의하지만 어떤 엔트리포인트에도 include_router 되지 않았다 — 죽은 코드이거나 등록 누락이다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/ceo_chat.py.bak",
-      "path": "app/api/ceo_chat.py.bak",
-      "detail": "`app/api/ceo_chat.py.bak` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/chat.py.bak.T073",
-      "path": "app/api/chat.py.bak.T073",
-      "detail": "`app/api/chat.py.bak.T073` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/context.py.bak.T089",
-      "path": "app/api/context.py.bak.T089",
-      "detail": "`app/api/context.py.bak.T089` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/context.py.bak.T090",
-      "path": "app/api/context.py.bak.T090",
-      "detail": "`app/api/context.py.bak.T090` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/context.py.bak.T091",
-      "path": "app/api/context.py.bak.T091",
-      "detail": "`app/api/context.py.bak.T091` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/context.py.bak.T107",
-      "path": "app/api/context.py.bak.T107",
-      "detail": "`app/api/context.py.bak.T107` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/conversations.py.bak.T077",
-      "path": "app/api/conversations.py.bak.T077",
-      "detail": "`app/api/conversations.py.bak.T077` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/conversations.py.bak.T089",
-      "path": "app/api/conversations.py.bak.T089",
-      "detail": "`app/api/conversations.py.bak.T089` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/kakao_bot.py.bak",
-      "path": "app/api/kakao_bot.py.bak",
-      "detail": "`app/api/kakao_bot.py.bak` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/llm_keys.py.bak_aads188",
-      "path": "app/api/llm_keys.py.bak_aads188",
-      "detail": "`app/api/llm_keys.py.bak_aads188` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/memory.py.bak_20260305",
-      "path": "app/api/memory.py.bak_20260305",
-      "detail": "`app/api/memory.py.bak_20260305` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/pipeline_runner.py.bak_model",
-      "path": "app/api/pipeline_runner.py.bak_model",
-      "detail": "`app/api/pipeline_runner.py.bak_model` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/project_dashboard.py.bak",
-      "path": "app/api/project_dashboard.py.bak",
-      "detail": "`app/api/project_dashboard.py.bak` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/project_dashboard.py.bak.T058",
-      "path": "app/api/project_dashboard.py.bak.T058",
-      "detail": "`app/api/project_dashboard.py.bak.T058` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/project_dashboard.py.bak.T068",
-      "path": "app/api/project_dashboard.py.bak.T068",
-      "detail": "`app/api/project_dashboard.py.bak.T068` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/project_dashboard.py.bak.T070",
-      "path": "app/api/project_dashboard.py.bak.T070",
-      "detail": "`app/api/project_dashboard.py.bak.T070` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/project_dashboard.py.bak.T072",
-      "path": "app/api/project_dashboard.py.bak.T072",
-      "detail": "`app/api/project_dashboard.py.bak.T072` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/project_dashboard.py.bak.T074",
-      "path": "app/api/project_dashboard.py.bak.T074",
-      "detail": "`app/api/project_dashboard.py.bak.T074` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/project_dashboard.py.bak.T078",
-      "path": "app/api/project_dashboard.py.bak.T078",
-      "detail": "`app/api/project_dashboard.py.bak.T078` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/project_dashboard.py.bak.T080",
-      "path": "app/api/project_dashboard.py.bak.T080",
-      "detail": "`app/api/project_dashboard.py.bak.T080` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/project_dashboard.py.bak.T081",
-      "path": "app/api/project_dashboard.py.bak.T081",
-      "detail": "`app/api/project_dashboard.py.bak.T081` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/project_dashboard.py.bak.T082",
-      "path": "app/api/project_dashboard.py.bak.T082",
-      "detail": "`app/api/project_dashboard.py.bak.T082` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/project_dashboard.py.bak.T089",
-      "path": "app/api/project_dashboard.py.bak.T089",
-      "detail": "`app/api/project_dashboard.py.bak.T089` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/project_dashboard.py.bak.T090",
-      "path": "app/api/project_dashboard.py.bak.T090",
-      "detail": "`app/api/project_dashboard.py.bak.T090` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/api/project_dashboard.py.bak.T107",
-      "path": "app/api/project_dashboard.py.bak.T107",
-      "detail": "`app/api/project_dashboard.py.bak.T107` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/auth.py.bak_manual",
-      "path": "app/auth.py.bak_manual",
-      "detail": "`app/auth.py.bak_manual` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/main.py.bak.T048",
-      "path": "app/main.py.bak.T048",
-      "detail": "`app/main.py.bak.T048` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/main.py.bak_pool_fix",
-      "path": "app/main.py.bak_pool_fix",
-      "detail": "`app/main.py.bak_pool_fix` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/models/pc_agent.py.bak",
-      "path": "app/models/pc_agent.py.bak",
-      "detail": "`app/models/pc_agent.py.bak` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/services/sandbox.py.bak",
-      "path": "app/services/sandbox.py.bak",
-      "detail": "`app/services/sandbox.py.bak` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/static/apps/yeoljeong-finance/index.html.bak-20260714-1605-static-short",
-      "path": "app/static/apps/yeoljeong-finance/index.html.bak-20260714-1605-static-short",
-      "detail": "`app/static/apps/yeoljeong-finance/index.html.bak-20260714-1605-static-short` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "scripts/claude-oauth-wrapper.sh.bak_20260326_122801",
-      "path": "scripts/claude-oauth-wrapper.sh.bak_20260326_122801",
-      "detail": "`scripts/claude-oauth-wrapper.sh.bak_20260326_122801` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "scripts/pipeline-runner.sh.bak.litellm",
-      "path": "scripts/pipeline-runner.sh.bak.litellm",
-      "detail": "`scripts/pipeline-runner.sh.bak.litellm` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "scripts/pipeline-runner.sh.bak_litellm_fix",
-      "path": "scripts/pipeline-runner.sh.bak_litellm_fix",
-      "detail": "`scripts/pipeline-runner.sh.bak_litellm_fix` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
       "severity": "P2"
     }
   ],
