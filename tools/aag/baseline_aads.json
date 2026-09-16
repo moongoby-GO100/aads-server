@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-16T15:44:33.176739+09:00",
+  "generated_at": "2026-09-16T16:11:00.472886+09:00",
   "note": "AAG L1/L2 고정선. 이 숫자는 '허용치'가 아니라 '현재 빚'이다. 줄이는 방향으로만 갱신한다. 늘려서 통과시키려면 왜 늘었는지를 먼저 적어라.",
   "scope": {
     "app_py_files": 381,
@@ -17,17 +17,19 @@
   "findings_by_rule": {
     "DUP_MODULE": 1,
     "DOUBLE_MOUNT": 9,
+    "ROUTE_SHADOWED": 1,
     "ORPHAN_ROUTER": 1,
     "TABLE_NO_MODEL": 44,
     "PATH_DRIFT": 1,
     "ROUTE_MISSING": 6,
     "STALE_BACKUP": 34
   },
-  "findings_total": 96,
+  "findings_total": 97,
   "unresolved_total": 110,
   "unresolved_by_kind": {
     "FRONTEND_URL": 58,
     "FRONTEND_VAR_SEGMENT": 1,
     "SQL_TABLE": 51
-  }
+  },
+  "note_last_increase": "2026-09-16 96→97. 부채가 는 게 아니라 규칙이 하나 늘었다(ROUTE_SHADOWED, P0). 한 모듈이 같은 METHOD+경로를 두 번 등록하면 뒤엣것이 조용히 죽는데 DOUBLE_MOUNT 는 소유 모듈이 2개 이상일 때만 돌아서 이 경우를 보지 못했다. 첫 적발: app/api/ops.py 의 GET /api/v1/ops/codex-usage (2677, 2877). 진단 전용 과제라 app/** 는 고치지 않았다 — 이 1건은 갚아야 할 빚이다."
 }

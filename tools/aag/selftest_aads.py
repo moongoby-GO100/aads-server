@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AAG L1/L2 추출기 자가검증 — 합성 저장소를 만들어 규칙 6종이 실제로 걸리는지 본다.
+"""AAG L1/L2 추출기 자가검증 — 합성 저장소를 만들어 규칙 7종이 실제로 걸리는지 본다.
 
 단위테스트(`tests/unit/test_aag_scan_aads.py`)가 순수 함수를 보는 것과 달리
 여기서는 **스캐너를 통째로** 돌린다. 규칙이 하나씩은 맞는데 조립하면 0건이
@@ -8,6 +8,7 @@
 합성 저장소에는 실제 AADS 에서 실패를 냈던 함정을 그대로 심는다.
   - 독스트링 안의 `include_router` (grep 파서라면 여기서 오탐)
   - exact 충돌 0건인 네임스페이스 공유 (exact 만 세면 못 잡는다)
+  - 한 모듈이 같은 METHOD+경로를 두 번 등록 (소유자가 1개라 DOUBLE_MOUNT 밖)
   - `NEXT_PUBLIC_API_URL` 기본값 합성이 필요한 프런트 호출
 
 종료코드: 0 전부 통과 / 1 실패 있음.
@@ -57,6 +58,7 @@ sql:
 severity:
   DUP_MODULE: P1
   DOUBLE_MOUNT: P1
+  ROUTE_SHADOWED: P0
   ORPHAN_ROUTER: P2
   TABLE_NO_MODEL: P1
   PATH_DRIFT: P1
@@ -72,7 +74,7 @@ output:
 FILES: dict[str, str] = {
     "app/main.py": '''
 from fastapi import FastAPI
-from app.api import alpha, dup, notes
+from app.api import alpha, dup, notes, shadow
 from app.routers.dup import router as dup_v2_router
 
 app = FastAPI()
@@ -80,13 +82,15 @@ app.include_router(alpha.router, prefix="/api/v1")
 app.include_router(dup.router, prefix="/api/v1")
 app.include_router(dup_v2_router, prefix="/api/v1")
 app.include_router(notes.router, prefix="/api/v1")
+app.include_router(shadow.router, prefix="/api/v1")
 ''',
     "app/side_main.py": '''
 from fastapi import FastAPI
-from app.api import sidecar
+from app.api import sidecar, sidecar_same
 
 app = FastAPI()
 app.include_router(sidecar.router, prefix="/api/v1")
+app.include_router(sidecar_same.router, prefix="/api/v1")
 ''',
     "app/api/__init__.py": "",
     "app/api/alpha.py": '''
@@ -166,6 +170,39 @@ async def list_notes(conn):
     return "update failed"
 ''',
     "app/api/old.py.bak": "router = None\n",
+    # 한 모듈이 같은 METHOD+경로를 두 번 등록한다 — 뒤엣것은 등록조차 되지
+    # 않고 죽는다. 함수 이름이 다르므로 ruff F811 로는 잡히지 않는다.
+    "app/api/shadow.py": '''
+from fastapi import APIRouter
+
+router = APIRouter(prefix="/shadow")
+
+
+@router.get("/dup")
+async def dup_winner():
+    return {"which": "first"}
+
+
+@router.post("/dup")
+async def other_method_is_fine():
+    return {}
+
+
+@router.get("/dup")
+async def dup_loser():
+    return {"which": "second"}
+''',
+    # 다른 엔트리포인트(= 다른 ASGI 앱)의 같은 경로는 충돌이 아니다.
+    "app/api/sidecar_same.py": '''
+from fastapi import APIRouter
+
+router = APIRouter()
+
+
+@router.get("/shadow/dup")
+async def same_path_other_app():
+    return {}
+''',
     "migrations/001_init.sql": "CREATE TABLE IF NOT EXISTS known_table (id uuid primary key);\n",
     "web/src/lib/api.ts": '''
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://example.test/api/v1";
@@ -251,6 +288,7 @@ def main() -> int:
         chk.check_true("PATH_DRIFT 1건 이상", counts.get("PATH_DRIFT", 0) >= 1)
         chk.check_true("ROUTE_MISSING 1건 이상", counts.get("ROUTE_MISSING", 0) >= 1)
         chk.check_true("TABLE_NO_MODEL 1건 이상", counts.get("TABLE_NO_MODEL", 0) >= 1)
+        chk.check("ROUTE_SHADOWED", counts.get("ROUTE_SHADOWED"), 1)
 
         graph = json.loads((root / "out" / "graph.json").read_text(encoding="utf-8"))
         findings = graph["findings"]
@@ -287,13 +325,33 @@ def main() -> int:
         chk.check_true("동적 테이블명은 UNRESOLVED", "SQL_TABLE" in kinds)
         chk.check_true("해석 불가 URL 은 UNRESOLVED", "FRONTEND_URL" in kinds)
 
-        print("[7] 0건 가드 — 빈 디렉터리는 '위반 0건' 이 아니라 exit 2")
+        print("[7] ROUTE_SHADOWED — 같은 앱에 두 번 등록된 라우트만 잡는가")
+        shadowed = by_rule("ROUTE_SHADOWED")
+        chk.check("정확히 1건", len(shadowed), 1)
+        if shadowed:
+            f = shadowed[0]
+            chk.check("METHOD+경로", (f["method"], f["path"]),
+                      ("GET", "/api/v1/shadow/dup"))
+            chk.check("엔트리포인트", f["entrypoint"], "app/main.py")
+            chk.check("한 모듈 안의 중복", f["same_module"], True)
+            # 소스에서 먼저 온 쪽이 이긴다. ast.walk 순서를 그대로 쓰면 여기서 뒤집힌다.
+            chk.check("먼저 등록된 쪽이 살아남는다",
+                      f["winner"]["lineno"] < f["shadowed"][0]["lineno"], True)
+            chk.check("죽은 라우트 1개", len(f["shadowed"]), 1)
+            chk.check("P0", f["severity"], "P0")
+        paths = {(x["entrypoint"], x["method"], x["path"]) for x in shadowed}
+        chk.check_true("다른 엔트리포인트의 같은 경로는 충돌 아님",
+                       ("app/side_main.py", "GET", "/api/v1/shadow/dup") not in paths)
+        chk.check_true("METHOD 가 다르면 충돌 아님",
+                       ("app/main.py", "POST", "/api/v1/shadow/dup") not in paths)
+
+        print("[8] 0건 가드 — 빈 디렉터리는 '위반 0건' 이 아니라 exit 2")
         empty = tmp / "empty"
         empty.mkdir()
         code_empty, _ = run_scan(empty, rules)
         chk.check("빈 저장소 종료코드", code_empty, 2)
 
-        print("[8] 결함이 없는 저장소는 exit 0")
+        print("[9] 결함이 없는 저장소는 exit 0")
         clean = tmp / "clean"
         (clean / "app/api").mkdir(parents=True)
         (clean / "app/routers").mkdir(parents=True)
@@ -332,6 +390,7 @@ def main() -> int:
             print(f"  - {f}")
         return 1
     print(f"selftest 전부 통과 ({chk.passed}건)")
+    print("ALL SELF-TESTS PASSED")
     return 0
 
 

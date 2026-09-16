@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-09-16T16:09:04.727592+09:00",
-  "root": "/root/aads/aads-server",
+  "generated_at": "2026-09-16T16:10:22.565199+09:00",
+  "root": "/tmp/aads-wt-runner-cd394808",
   "api_roots": [
     "/api/v1/fact-check",
     "/api/v1/documents",
@@ -10912,6 +10912,26 @@
       "method": "PUT",
       "path": "/api/v1/kakao-bot/settings",
       "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:81` PUT `/api/v1/kakao-bot/settings` — 일치하는 라우트 없음",
+      "severity": "P0"
+    },
+    {
+      "rule": "ROUTE_SHADOWED",
+      "key": "app/main.py GET /api/v1/ops/codex-usage",
+      "entrypoint": "app/main.py",
+      "method": "GET",
+      "path": "/api/v1/ops/codex-usage",
+      "winner": {
+        "module": "app/api/ops.py",
+        "lineno": 2677
+      },
+      "shadowed": [
+        {
+          "module": "app/api/ops.py",
+          "lineno": 2877
+        }
+      ],
+      "same_module": true,
+      "detail": "`app/main.py` 에 `GET /api/v1/ops/codex-usage` 가 2번 등록됐다 — `app/api/ops.py:2677` 만 살고 `app/api/ops.py:2877` 는 도달 불가다(FastAPI 는 먼저 등록된 라우트를 쓴다). 예외가 나지 않으므로 HTTP 로는 보이지 않는다",
       "severity": "P0"
     },
     {

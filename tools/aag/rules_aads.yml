@@ -126,6 +126,9 @@ sql:
 severity:
   DUP_MODULE: P1
   DOUBLE_MOUNT: P1
+  # 등록된 라우트가 조용히 죽는다 — HTTP 로는 200 이 오므로(먼저 등록된
+  # 쪽이 응답) 운영에서 발견되지 않는다. 그래서 P0 다.
+  ROUTE_SHADOWED: P0
   ORPHAN_ROUTER: P2
   TABLE_NO_MODEL: P1
   PATH_DRIFT: P1

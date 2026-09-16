@@ -1,6 +1,6 @@
 # AAG L1/L2 — AADS 아키텍처 결함 리포트
 
-생성 2026-09-16 16:09 KST · 결함 96건 · 판정 불가(UNRESOLVED) 110건
+생성 2026-09-16 16:10 KST · 결함 97건 · 판정 불가(UNRESOLVED) 110건
 
 UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 결함으로 세면
 숫자가 부풀고, 부풀린 숫자는 아무도 손대지 않아 규칙 전체가 무시된다.
@@ -26,13 +26,14 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 |---|---|---|
 | `DUP_MODULE` | P1 | 1 |
 | `DOUBLE_MOUNT` | P1 | 9 |
+| `ROUTE_SHADOWED` | P0 | 1 |
 | `ORPHAN_ROUTER` | P2 | 1 |
 | `TABLE_NO_MODEL` | P1 | 44 |
 | `PATH_DRIFT` | P1 | 1 |
 | `ROUTE_MISSING` | P0 | 6 |
 | `STALE_BACKUP` | P2 | 34 |
 
-| **합계** | | **96** |
+| **합계** | | **97** |
 
 ## DUP_MODULE (1건)
 
@@ -49,6 +50,10 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 - [P1] 네임스페이스 `/api/v1/projects` 를 4개 모듈이 소유 — `app/api/checkpoints.py`(5개 라우트), `app/api/project_dashboard.py`(4개 라우트), `app/api/projects.py`(7개 라우트), `app/api/stream.py`(1개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
 - [P1] 네임스페이스 `/api/v1/settings` 를 3개 모듈이 소유 — `app/api/directives.py`(2개 라우트), `app/api/pipeline_runner.py`(2개 라우트), `app/routers/chat.py`(7개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
 - [P1] 네임스페이스 `/api/v1/user` 를 2개 모듈이 소유 — `app/api/user_api_keys.py`(4개 라우트), `app/api/user_project_servers.py`(4개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
+
+## ROUTE_SHADOWED (1건)
+
+- [P0] `app/main.py` 에 `GET /api/v1/ops/codex-usage` 가 2번 등록됐다 — `app/api/ops.py:2677` 만 살고 `app/api/ops.py:2877` 는 도달 불가다(FastAPI 는 먼저 등록된 라우트를 쓴다). 예외가 나지 않으므로 HTTP 로는 보이지 않는다
 
 ## ORPHAN_ROUTER (1건)
 

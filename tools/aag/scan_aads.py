@@ -843,6 +843,11 @@ def parse_router_module(rel_path: str, source: str) -> ModuleInfo:
                 path=join_path(info.router_vars[holder.id], raw),
                 lineno=dec.lineno,
             ))
+    # ast.walk 는 너비 우선이라 소스 순서를 보장하지 않는다. FastAPI 는 모듈이
+    # 실행되는 순서(=소스 순서)로 라우트를 등록하고, 같은 METHOD+경로가 두 번
+    # 등록되면 **먼저 온 쪽이 이긴다**. ROUTE_SHADOWED 가 "어느 쪽이 죽었나" 를
+    # 말하려면 이 순서가 실제 등록 순서와 같아야 한다.
+    info.routes.sort(key=lambda r: r.lineno)
     return info
 
 
@@ -1210,6 +1215,57 @@ def find_double_mounts(mounted_routes: Iterable[dict], api_roots: Sequence[str])
     return findings
 
 
+def find_route_shadowed(mounted_routes: Iterable[dict]) -> list[dict]:
+    """같은 엔트리포인트에 METHOD+경로가 두 번 등록된 경우 — 뒤엣것은 죽는다.
+
+    FastAPI 는 매칭되는 **첫 번째** 라우트를 쓴다. 같은 METHOD+경로를 두 번
+    등록해도 예외가 나지 않고 조용히 뒤엣것이 무시된다.
+
+    DOUBLE_MOUNT 로는 이걸 못 잡는다. 그 규칙은 네임스페이스 소유자가 2개
+    이상일 때만 돌고 `exact_conflicts` 도 서로 **다른 모듈** 일 때만 세기
+    때문에, 한 모듈이 같은 경로를 두 번 쓴 경우는 소유자가 1개라 아예 검사
+    대상에서 빠진다. 2026-09-16 `app/api/ops.py` 의
+    `GET /api/v1/ops/codex-usage` 가 그랬다(2677, 2877) — 마스킹·30초 캐시가
+    붙은 나중 구현이 등록조차 되지 않은 채 죽어 있었고, 함수 이름이 달라
+    ruff F811 도 잡지 못했다.
+
+    엔트리포인트별로 센다. `app/main.py` 와 `app/yeoljeong_main.py` 는 서로
+    다른 ASGI 앱이므로 같은 경로를 가져도 충돌이 아니다.
+    """
+    by_key: dict[tuple[str, str, str], list[dict]] = {}
+    for r in mounted_routes:
+        key = (r["entrypoint"], r["method"], normalize_route(r["full_path"]))
+        by_key.setdefault(key, []).append(r)
+
+    findings = []
+    for (entrypoint, method, path), routes in sorted(by_key.items()):
+        if len(routes) < 2:
+            continue
+        # mounted_routes 는 include_router 순서 → 모듈 내 소스 순서로 쌓인다.
+        # 따라서 첫 번째가 FastAPI 가 실제로 쓰는 라우트다.
+        winner, *shadowed = routes
+        where = ", ".join(f"`{r['module']}:{r['lineno']}`" for r in shadowed)
+        findings.append({
+            "rule": "ROUTE_SHADOWED",
+            "key": f"{entrypoint} {method} {path}",
+            "entrypoint": entrypoint,
+            "method": method,
+            "path": path,
+            "winner": {"module": winner["module"], "lineno": winner["lineno"]},
+            "shadowed": [
+                {"module": r["module"], "lineno": r["lineno"]} for r in shadowed
+            ],
+            "same_module": len({r["module"] for r in routes}) == 1,
+            "detail": (
+                f"`{entrypoint}` 에 `{method} {path}` 가 {len(routes)}번 등록됐다 — "
+                f"`{winner['module']}:{winner['lineno']}` 만 살고 {where} 는 "
+                f"도달 불가다(FastAPI 는 먼저 등록된 라우트를 쓴다). "
+                f"예외가 나지 않으므로 HTTP 로는 보이지 않는다"
+            ),
+        })
+    return findings
+
+
 def find_orphan_routers(
     router_modules: Iterable[str],
     mounted_by: dict[str, list[str]],
@@ -1559,6 +1615,7 @@ class Scan:
         raw: list[dict] = []
         raw += find_dup_modules(self.router_dir_files, self.rules["scan"]["router_dirs"])
         raw += find_double_mounts(self.mounted_routes, self.api_roots)
+        raw += find_route_shadowed(self.mounted_routes)
         raw += find_orphan_routers(self.modules, self.mounted_by)
         raw += find_table_no_model(
             self.table_refs, self.defined_tables, self.rules["sql"]["known_external_tables"]
@@ -1648,8 +1705,8 @@ class Scan:
 # 출력
 # ══════════════════════════════════════════════════════════════════════
 
-RULE_ORDER = ["DUP_MODULE", "DOUBLE_MOUNT", "ORPHAN_ROUTER", "TABLE_NO_MODEL",
-              "PATH_DRIFT", "ROUTE_MISSING", "STALE_BACKUP"]
+RULE_ORDER = ["DUP_MODULE", "DOUBLE_MOUNT", "ROUTE_SHADOWED", "ORPHAN_ROUTER",
+              "TABLE_NO_MODEL", "PATH_DRIFT", "ROUTE_MISSING", "STALE_BACKUP"]
 
 
 def counts_by_rule(findings: Sequence[dict]) -> dict[str, int]:
@@ -1917,6 +1974,16 @@ def main(argv: list[str] | None = None) -> int:
         written = [str(graph_path), str(mmd_path), str(md_path)]
 
     if args.write_baseline:
+        # 고정선을 올린 이유(note_last_increase)는 다시 스캔한다고 알 수 있는 게
+        # 아니다. 사람이 적은 것이므로 덮어쓰지 말고 이어 간다 — 이유가 사라지면
+        # 남는 건 "언젠가 늘어난 숫자" 뿐이고, 그건 허용치와 구분되지 않는다.
+        prior = {}
+        try:
+            prior = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+        if prior.get("note_last_increase"):
+            baseline.setdefault("note_last_increase", prior["note_last_increase"])
         Path(args.baseline).write_text(
             json.dumps(baseline, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )

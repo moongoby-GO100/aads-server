@@ -7,6 +7,7 @@
 
 import importlib.util
 import sys
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -480,6 +481,88 @@ def test_routes_on_different_entrypoints_do_not_collide():
         _route("app/api/auth2.py", "GET", "/api/v1/auth/me", entry="app/yeoljeong_main.py"),
     ]
     assert sc.find_double_mounts(routes, ["/api/v1"]) == []
+
+
+def test_route_shadowed_catches_a_duplicate_inside_one_module():
+    """AADS 실측 — `app/api/ops.py` 가 `GET /ops/codex-usage` 를 두 번 등록했다.
+
+    소유 모듈이 1개라 DOUBLE_MOUNT 는 이 네임스페이스를 아예 보지 않는다.
+    함수 이름이 달라 ruff F811 도 조용하다. 여기서 안 잡으면 아무도 안 잡는다.
+    """
+    routes = [
+        dict(_route("app/api/ops.py", "GET", "/api/v1/ops/codex-usage"), lineno=2677),
+        dict(_route("app/api/ops.py", "GET", "/api/v1/ops/codex-usage"), lineno=2877),
+    ]
+    findings = sc.find_route_shadowed(routes)
+    assert len(findings) == 1
+    assert findings[0]["method"] == "GET"
+    assert findings[0]["path"] == "/api/v1/ops/codex-usage"
+    assert findings[0]["same_module"] is True
+    assert findings[0]["winner"] == {"module": "app/api/ops.py", "lineno": 2677}
+    assert findings[0]["shadowed"] == [{"module": "app/api/ops.py", "lineno": 2877}]
+
+
+def test_route_shadowed_keeps_the_first_registered_route():
+    """FastAPI 는 먼저 등록된 라우트를 쓴다 — 순서를 뒤집으면 승자도 뒤집힌다."""
+    routes = [
+        dict(_route("app/api/b.py", "GET", "/api/v1/x/y"), lineno=9),
+        dict(_route("app/api/a.py", "GET", "/api/v1/x/y"), lineno=3),
+    ]
+    findings = sc.find_route_shadowed(routes)
+    assert findings[0]["winner"]["module"] == "app/api/b.py"
+    assert findings[0]["same_module"] is False
+
+
+def test_route_shadowed_ignores_different_methods_on_the_same_path():
+    routes = [
+        _route("app/api/ops.py", "GET", "/api/v1/ops/thing"),
+        _route("app/api/ops.py", "POST", "/api/v1/ops/thing"),
+    ]
+    assert sc.find_route_shadowed(routes) == []
+
+
+def test_route_shadowed_ignores_the_same_path_on_another_entrypoint():
+    """`app/main.py` 와 `app/yeoljeong_main.py` 는 서로 다른 ASGI 앱이다."""
+    routes = [
+        _route("app/api/a.py", "GET", "/api/v1/shared/thing"),
+        _route("app/api/b.py", "GET", "/api/v1/shared/thing",
+               entry="app/yeoljeong_main.py"),
+    ]
+    assert sc.find_route_shadowed(routes) == []
+
+
+def test_route_shadowed_matches_paths_after_param_normalization():
+    """`{id}` 와 `{task_id}` 는 같은 라우트다 — 이름만 다르면 여전히 가려진다."""
+    routes = [
+        dict(_route("app/api/a.py", "PATCH", "/api/v1/tasks/{id}"), lineno=10),
+        dict(_route("app/api/a.py", "PATCH", "/api/v1/tasks/{task_id}"), lineno=40),
+    ]
+    findings = sc.find_route_shadowed(routes)
+    assert len(findings) == 1
+    assert findings[0]["shadowed"] == [{"module": "app/api/a.py", "lineno": 40}]
+
+
+def test_parsed_routes_come_back_in_source_order():
+    """ast.walk 는 너비 우선이라 중첩 함수가 섞이면 소스 순서가 깨진다.
+
+    순서가 깨지면 ROUTE_SHADOWED 가 "어느 쪽이 죽었나" 를 거꾸로 말한다.
+    """
+    info = sc.parse_router_module("app/api/s.py", textwrap.dedent("""
+        from fastapi import APIRouter
+        router = APIRouter()
+
+        @router.get("/a")
+        async def a():
+            def inner():
+                pass
+            return {}
+
+        @router.get("/b")
+        async def b():
+            return {}
+    """))
+    assert [r.path for r in info.routes] == ["/a", "/b"]
+    assert [r.lineno for r in info.routes] == sorted(r.lineno for r in info.routes)
 
 
 def test_orphan_router_is_the_unmounted_module():
