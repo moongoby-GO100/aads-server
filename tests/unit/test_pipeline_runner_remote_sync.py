@@ -79,6 +79,19 @@ def test_busy_rule_lives_in_one_place_shared_by_both_restart_paths():
         assert 'source "${SCRIPT_DIR}/runner_busy_lib.sh"' in caller
 
 
+def test_uncommitted_guard_covers_every_sourced_file():
+    """타이머는 미커밋 소스를 배포하지 않는다 — source 하는 라이브러리도 같은 규칙을 받아야 한다."""
+    sync = _sync_script()
+
+    guard = sync[sync.index("for source_file in") : sync.index("; do", sync.index("for source_file in"))]
+    for required in (
+        "scripts/pipeline-runner.sh",
+        "scripts/sync_pipeline_runner_remote.sh",
+        "scripts/runner_busy_lib.sh",
+    ):
+        assert required in guard
+
+
 def test_busy_gate_exists_and_is_configurable():
     script = _sync_script()
 
