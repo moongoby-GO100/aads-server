@@ -340,6 +340,34 @@ def url_path_of(raw: str) -> str:
     return s
 
 
+_ABS_URL_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://([^/?#]*)", re.S)
+
+
+def external_host_of(raw: str, internal_hosts: Sequence[str]) -> str | None:
+    """절대 URL 이고 호스트가 우리 것이 아니면 그 호스트, 아니면 None.
+
+    2026-09-16: `fetch("https://raw.githubusercontent.com/...")` 두 건이
+    ROUTE_MISSING(P0) 으로 잡혔다. 남의 서버에 대고 쏘는 호출을 우리 백엔드
+    라우트 계약으로 재는 것은 틀렸고, 틀린 P0 가 섞이면 나머지 진짜 P0 도
+    같이 무시된다. 외부 오리진은 계약 대상에서 뺀다.
+    """
+    # 허용 목록이 비어 있으면 아무것도 외부로 보지 않는다. 비었을 때 전부
+    # 외부로 처리하면 규칙 파일 한 줄이 빠진 순간 실제 부채가 통째로 사라진다.
+    if not internal_hosts:
+        return None
+    m = _ABS_URL_RE.match(raw.strip())
+    if not m:
+        return None
+    host = (m.group(1) or "").split("@")[-1].split(":")[0].lower()
+    if not host:
+        return None
+    for allowed in internal_hosts:
+        a = allowed.strip().lower()
+        if a and (host == a or host.endswith("." + a)):
+            return None
+    return host
+
+
 def resolve_base_expr(expr: str, base_env_names: Sequence[str]) -> str | None:
     """`process.env.NEXT_PUBLIC_API_URL || "https://host/api/v1"` → `/api/v1`.
 
@@ -552,10 +580,11 @@ def resolve_call_url(
     consts: dict[str, str],
     base_env_names: Sequence[str],
     allow_relative: bool = False,
+    internal_hosts: Sequence[str] = (),
 ) -> tuple[str, str, str]:
     """호출 첫 인자 식 → (상태, 경로, 사유).
 
-    상태는 "resolved" 또는 "unresolved". 판정 불가한 것을 억지로 경로로 만들면
+    상태는 "resolved" | "unresolved" | "external". 판정 불가한 것을 억지로 경로로 만들면
     결함 통계가 오염되므로 UNRESOLVED 로 따로 뺀다(결함 수에서 제외).
 
     변수 보간은 **완전한 한 세그먼트**일 때만 `{}` 로 바꾼다.
@@ -573,6 +602,9 @@ def resolve_call_url(
     if parts is None:
         q = _QUOTED_RE.match(expr.strip())
         if q:
+            ext = external_host_of(q.group(2), internal_hosts)
+            if ext:
+                return "external", "", f"외부 오리진 {ext}"
             return _finish(url_path_of(q.group(2)))
         parts = split_concat(expr)
     if parts is None:
@@ -602,6 +634,9 @@ def resolve_call_url(
     joined = "".join(pieces)
     if joined.startswith(_VAR_MARK):
         return "unresolved", "", "base 를 알 수 없는 변수로 시작"
+    ext = external_host_of(joined, internal_hosts)
+    if ext:
+        return "external", "", f"외부 오리진 {ext}"
     path = url_path_of(joined)
     if _VAR_MARK not in path:
         return _finish(path)
@@ -646,7 +681,47 @@ def classify_frontend_call(
         if len(fe_segs) > len(be_segs) and be_segs and fe_segs[-len(be_segs):] == be_segs:
             extra = "/" + "/".join(fe_segs[: len(fe_segs) - len(be_segs)])
             return "PATH_DRIFT", f"접두 {extra} 가 더 붙었다 (실제 라우트 {be})"
+
+    # 프런트 `{}` 자리에 백엔드 리터럴이 오는 경우 — 판정 불가지 결함이 아니다.
+    # 2026-09-16: `/api/v1/loops/{}/{}` 가 P0 로 잡혔는데 실제 action 값은
+    # pause|resume|cancel 셋뿐이고 셋 다 백엔드에 있다. 변수 값을 모른다는
+    # 이유로 없는 결함을 세면 P0 통계가 오염된다 — UNRESOLVED 로 뺀다.
+    if "{}" in fe_segs:
+        for be in all_paths:
+            be_segs = segments(be)
+            if len(be_segs) != len(fe_segs):
+                continue
+            if all(f == "{}" or f == b or b == "{}" for f, b in zip(fe_segs, be_segs)):
+                return "VAR_SEGMENT", f"변수 세그먼트라 확정 불가 (후보 {be})"
+
     return "ROUTE_MISSING", "일치하는 라우트 없음"
+
+
+_NEXT_DYNAMIC_RE = re.compile(r"^\[.*\]$")
+
+
+def collect_next_route_handlers(fe_files: Sequence[str]) -> list[str]:
+    """Next.js `app/**/route.ts` 가 스스로 서빙하는 URL 경로 목록.
+
+    `src/app/runtime/dashboard-slot/route.ts` → `/runtime/dashboard-slot`.
+    라우트 그룹 `(group)` 은 URL 에 나타나지 않고 동적 세그먼트 `[id]` 는 `{}` 다.
+    이걸 모르면 프런트가 자기 자신에게 쏘는 호출이 백엔드 ROUTE_MISSING 으로 잡힌다.
+    """
+    out: list[str] = []
+    for rel in fe_files:
+        parts = rel.replace("\\", "/").split("/")
+        if not parts or not parts[-1].startswith("route."):
+            continue
+        if "app" not in parts[:-1]:
+            continue
+        idx = len(parts[:-1]) - 1 - parts[:-1][::-1].index("app")
+        segs: list[str] = []
+        for seg in parts[idx + 1:-1]:
+            if seg.startswith("(") and seg.endswith(")"):
+                continue
+            segs.append("{}" if _NEXT_DYNAMIC_RE.match(seg) else seg)
+        out.append("/" + "/".join(segs))
+    return sorted(set(out))
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1405,6 +1480,8 @@ class Scan:
         aliases: dict[str, str] = dict(fe.get("path_aliases") or {})
         call_names = list(fe["call_names"]) + list(helpers)
         known = set(self.fe_files)
+        self.external_calls: list[dict] = []
+        self.fe_self_routes = collect_next_route_handlers(self.fe_files)
 
         texts: dict[str, str] = {}
         consts_by_file: dict[str, dict[str, str]] = {}
@@ -1433,8 +1510,14 @@ class Scan:
             for call in find_ts_calls(text, call_names):
                 is_helper = call["callee"] in helpers
                 status, path, why = resolve_call_url(
-                    call["url_expr"], consts, fe["base_env_names"], allow_relative=is_helper
+                    call["url_expr"], consts, fe["base_env_names"], allow_relative=is_helper,
+                    internal_hosts=fe.get("internal_hosts") or [],
                 )
+                if status == "external":
+                    self.external_calls.append({
+                        "module": rel, "lineno": call["lineno"], "detail": why,
+                    })
+                    continue
                 if status == "resolved" and is_helper:
                     base = consts.get(helpers[call["callee"]], fe.get("fallback_base") or "")
                     path = normalize_route(join_path(base, path))
@@ -1478,6 +1561,19 @@ class Scan:
         for call in self.fe_calls:
             verdict, why = classify_frontend_call(call["method"], call["path"], self.routes_by_method)
             if verdict == "OK":
+                continue
+            # 프런트가 스스로 서빙하는 route handler(Next.js app/**/route.ts)는
+            # 백엔드 계약 대상이 아니다. 2026-09-16 `/runtime/dashboard-slot`
+            # 한 건이 이 이유로 P0 에 섞여 있었다(실제 라우트는 대시보드 안에 있다).
+            if any(route_matches(call["path"], self_route)
+                   for self_route in self.fe_self_routes):
+                continue
+            if verdict == "VAR_SEGMENT":
+                self.unresolved.append({
+                    "kind": "FRONTEND_VAR_SEGMENT", "module": call["file"],
+                    "lineno": call["lineno"],
+                    "detail": f"{call['method']} {call['path']} — {why}",
+                })
                 continue
             raw.append({
                 "rule": verdict,

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-16T13:24:06.587318+09:00",
+  "generated_at": "2026-09-16T14:09:22.521579+09:00",
   "root": "/root/aads/aads-server",
   "api_roots": [
     "/api/v1/fact-check",
@@ -16,10 +16,10 @@
     "mounted_routes": 873,
     "namespaces": 81,
     "frontend_files": 232,
-    "frontend_calls_resolved": 339,
+    "frontend_calls_resolved": 337,
     "sql_tables_referenced": 217,
-    "graph_nodes": 756,
-    "graph_edges": 1147
+    "graph_nodes": 755,
+    "graph_edges": 1145
   },
   "nodes": [
     {
@@ -1926,11 +1926,6 @@
       "id": "ns:/api/v1/yeoljeong-ops",
       "kind": "namespace",
       "path": "/api/v1/yeoljeong-ops"
-    },
-    {
-      "id": "ns:/moongoby-GO100",
-      "kind": "namespace",
-      "path": "/moongoby-GO100"
     },
     {
       "id": "ns:/pc-ollama",
@@ -4721,22 +4716,6 @@
       "method": "GET",
       "path": "/api/v1/assistant/readiness",
       "lineno": 54
-    },
-    {
-      "from": "/root/aads/aads-dashboard/src/app/channels/page.tsx",
-      "to": "ns:/moongoby-GO100",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/moongoby-GO100/aads-docs/main/shared/trigger-messages.json",
-      "lineno": 131
-    },
-    {
-      "from": "/root/aads/aads-dashboard/src/app/channels/page.tsx",
-      "to": "ns:/moongoby-GO100",
-      "kind": "calls",
-      "method": "GET",
-      "path": "/moongoby-GO100/aads-docs/main/shared/project-docs.json",
-      "lineno": 185
     },
     {
       "from": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
@@ -10825,36 +10804,6 @@
   "findings": [
     {
       "rule": "ROUTE_MISSING",
-      "key": "/root/aads/aads-dashboard/src/app/admin/loops/page.tsx:65",
-      "file": "/root/aads/aads-dashboard/src/app/admin/loops/page.tsx",
-      "lineno": 65,
-      "method": "POST",
-      "path": "/api/v1/loops/{}/{}",
-      "detail": "`/root/aads/aads-dashboard/src/app/admin/loops/page.tsx:65` POST `/api/v1/loops/{}/{}` — 일치하는 라우트 없음",
-      "severity": "P0"
-    },
-    {
-      "rule": "ROUTE_MISSING",
-      "key": "/root/aads/aads-dashboard/src/app/channels/page.tsx:131",
-      "file": "/root/aads/aads-dashboard/src/app/channels/page.tsx",
-      "lineno": 131,
-      "method": "GET",
-      "path": "/moongoby-GO100/aads-docs/main/shared/trigger-messages.json",
-      "detail": "`/root/aads/aads-dashboard/src/app/channels/page.tsx:131` GET `/moongoby-GO100/aads-docs/main/shared/trigger-messages.json` — 일치하는 라우트 없음",
-      "severity": "P0"
-    },
-    {
-      "rule": "ROUTE_MISSING",
-      "key": "/root/aads/aads-dashboard/src/app/channels/page.tsx:185",
-      "file": "/root/aads/aads-dashboard/src/app/channels/page.tsx",
-      "lineno": 185,
-      "method": "GET",
-      "path": "/moongoby-GO100/aads-docs/main/shared/project-docs.json",
-      "detail": "`/root/aads/aads-dashboard/src/app/channels/page.tsx:185` GET `/moongoby-GO100/aads-docs/main/shared/project-docs.json` — 일치하는 라우트 없음",
-      "severity": "P0"
-    },
-    {
-      "rule": "ROUTE_MISSING",
       "key": "/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/InquiryForm.tsx:21",
       "file": "/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/InquiryForm.tsx",
       "lineno": 21,
@@ -10921,16 +10870,6 @@
       "method": "PUT",
       "path": "/api/v1/kakao-bot/settings",
       "detail": "`/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:81` PUT `/api/v1/kakao-bot/settings` — 일치하는 라우트 없음",
-      "severity": "P0"
-    },
-    {
-      "rule": "ROUTE_MISSING",
-      "key": "/root/aads/aads-dashboard/src/app/ops/page.tsx:544",
-      "file": "/root/aads/aads-dashboard/src/app/ops/page.tsx",
-      "lineno": 544,
-      "method": "GET",
-      "path": "/runtime/dashboard-slot",
-      "detail": "`/root/aads/aads-dashboard/src/app/ops/page.tsx:544` GET `/runtime/dashboard-slot` — 일치하는 라우트 없음",
       "severity": "P0"
     },
     {
@@ -12630,6 +12569,12 @@
       "module": "/root/aads/aads-dashboard/src/services/taskApi.ts",
       "lineno": 10,
       "detail": "fetch() URL 해석 불가 — 변수가 경로 세그먼트 일부에만 붙어 경로를 확정할 수 없음: `${BASE_URL}${path}`"
+    },
+    {
+      "kind": "FRONTEND_VAR_SEGMENT",
+      "module": "/root/aads/aads-dashboard/src/app/admin/loops/page.tsx",
+      "lineno": 65,
+      "detail": "POST /api/v1/loops/{}/{} — 변수 세그먼트라 확정 불가 (후보 /api/v1/loops/{}/safety)"
     }
   ]
 }

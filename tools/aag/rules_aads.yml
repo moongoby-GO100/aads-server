@@ -65,6 +65,14 @@ frontend:
   # base 상수를 아예 못 찾았을 때 쓰는 최후 기본값. 비우면 UNRESOLVED 로 간다.
   fallback_base: ""
 
+  # 우리 서비스 호스트. 여기 없는 절대 URL(raw.githubusercontent.com 등)은
+  # 남의 서버라서 백엔드 라우트 계약으로 재지 않는다 — EXTERNAL 로 뺀다.
+  internal_hosts:
+    - aads.newtalk.kr
+    - newtalk.kr
+    - localhost
+    - 127.0.0.1
+
   # 호출 진입점. 첫 인자를 URL 식으로 읽는다.
   call_names:
     - fetch

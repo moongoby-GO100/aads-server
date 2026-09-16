@@ -618,3 +618,72 @@ def test_missing_rules_file_warns_instead_of_silently_defaulting():
     rules, warnings = sc.load_rules(ROOT / "tools" / "aag" / "no-such-rules.yml")
     assert warnings and "기본값" in warnings[0]
     assert rules["entrypoints"]["primary"] == "app/main.py"
+
+
+# ── 2026-09-16 ROUTE_MISSING 오탐 4/18 제거 ────────────────────────────
+# 라이브 OpenAPI(696 경로) 대조로 확인한 결과 18건 중 4건이 우리 백엔드 계약과
+# 무관했다. P0 에 오탐이 섞이면 진짜 P0 까지 같이 무시된다.
+
+HOSTS = ["aads.newtalk.kr", "newtalk.kr", "localhost", "127.0.0.1"]
+
+
+def test_external_origin_is_not_measured_against_backend_routes():
+    """`fetch("https://raw.githubusercontent.com/...")` 가 P0 로 잡혔던 건."""
+    status, path, why = sc.resolve_call_url(
+        '"https://raw.githubusercontent.com/moongoby-GO100/aads-docs/main/x.json"',
+        {}, ["NEXT_PUBLIC_API_URL"], internal_hosts=HOSTS,
+    )
+    assert status == "external"
+    assert "raw.githubusercontent.com" in why
+    assert path == ""
+
+
+def test_our_own_absolute_url_is_still_measured():
+    status, path, _ = sc.resolve_call_url(
+        '"https://aads.newtalk.kr/api/v1/ops/health-check"',
+        {}, ["NEXT_PUBLIC_API_URL"], internal_hosts=HOSTS,
+    )
+    assert status == "resolved"
+    assert path == "/api/v1/ops/health-check"
+
+
+def test_subdomain_of_internal_host_counts_as_ours():
+    status, _, _ = sc.resolve_call_url(
+        '"https://pick.newtalk.kr/api/v1/x"', {}, [], internal_hosts=HOSTS
+    )
+    assert status == "resolved"
+
+
+def test_next_route_handlers_become_frontend_served_paths():
+    """`/runtime/dashboard-slot` 은 대시보드가 스스로 서빙한다(백엔드에 없다)."""
+    routes = sc.collect_next_route_handlers([
+        "/root/aads/aads-dashboard/src/app/runtime/dashboard-slot/route.ts",
+        "/root/aads/aads-dashboard/src/app/(admin)/loops/[id]/route.ts",
+        "/root/aads/aads-dashboard/src/app/ops/page.tsx",
+        "/root/aads/aads-dashboard/src/lib/api.ts",
+    ])
+    assert routes == ["/loops/{}", "/runtime/dashboard-slot"]
+
+
+def test_variable_segment_is_unresolved_not_route_missing():
+    """`/api/v1/loops/{}/{}` 의 실제 action 은 pause|resume|cancel 셋뿐이고
+    셋 다 백엔드에 있다. 값을 모른다는 이유로 없는 결함을 세지 않는다."""
+    routes = {"POST": ["/api/v1/loops/{}/pause", "/api/v1/loops/{}/cancel"]}
+    verdict, why = sc.classify_frontend_call("POST", "/api/v1/loops/{}/{}", routes)
+    assert verdict == "VAR_SEGMENT"
+    assert "확정 불가" in why
+
+
+def test_empty_internal_hosts_hides_nothing():
+    """규칙에서 internal_hosts 가 빠져도 부채가 조용히 사라지면 안 된다."""
+    status, _, _ = sc.resolve_call_url(
+        '"https://raw.githubusercontent.com/x/y.json"', {}, [], internal_hosts=[]
+    )
+    assert status == "resolved"
+
+
+def test_variable_segment_with_no_candidate_is_still_route_missing():
+    """후보가 하나도 없으면 변수여도 결함이다 — 면죄부로 쓰이면 안 된다."""
+    routes = {"POST": ["/api/v1/other/{}/pause"]}
+    verdict, _ = sc.classify_frontend_call("POST", "/api/v1/loops/{}/{}", routes)
+    assert verdict == "ROUTE_MISSING"
