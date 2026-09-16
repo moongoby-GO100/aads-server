@@ -86,11 +86,25 @@ _SCOPE_PATH_RE = re.compile(
 # public 심볼 삭제는 아래 `_removed_preservation_symbols` 가 별도로 계속 차단하고,
 # 추가 0 / 삭제 N 인 순수 삭제 diff 도 아래 elif 가 그대로 차단한다.
 _PRESERVATION_NET_REMOVAL_TOLERANCE = 0
+# 순삭제 기준만으로는 1추가/2삭제처럼 줄을 합치는 외과적 수정이 아직 걸린다
+# (2026-09-16 실측: chat-direct-7fc58510 은 18추가/19삭제, 순삭제 1줄로 차단됐다).
+# 아래 두 조건을 모두 만족하는 아주 작은 diff 만 비율 게이트에서 면제한다.
+# 면제돼도 public 심볼 삭제 게이트·범위 게이트·본 LLM 리뷰는 그대로 돈다.
+_PRESERVATION_SMALL_DIFF_MAX_LINES = 10
+_PRESERVATION_SMALL_DIFF_NET_REMOVAL = 2
 
 _DELETED_SYMBOL_RE = re.compile(
     r"^-[ \t]*((?:async[ \t]+def|def|class)[ \t]+[A-Za-z_][A-Za-z0-9_]*|@router\.[A-Za-z_]+)",
     re.MULTILINE,
 )
+# 테스트 함수 **리네임**을 삭제로 오판하던 것을 막는다(runner-27087189, FLAG 0.30 —
+# def test_card310_is_unchanged_by_card119_global_buy_evaluator 하나로 326추가/20삭제
+# diff 전체가 차단됐다). 테스트 파일의 test_* 함수는 외부에서 이름으로 호출하는
+# 계약이 아니므로, 같은 파일 diff 안에서 새 테스트 함수가 생겼다면 삭제가 아니라 리네임이다.
+# 운영 코드의 public 심볼 리네임은 호출부를 깨는 실제 계약 변경이라 계속 게이트에 남긴다.
+_TEST_FILE_PATH_RE = re.compile(r"(?:^|/)(?:tests?/|test_[^/]*\.py$|[^/]*_test\.py$)")
+_TEST_FUNCTION_RE = re.compile(r"(?:async[ \t]+def|def)[ \t]+test_[A-Za-z0-9_]*")
+_DIFF_HEADER_PATH_RE = re.compile(r"^diff --git a/(\S+) b/(\S+)")
 
 
 def _parse_review_json(raw: str) -> Optional[dict]:
@@ -539,6 +553,15 @@ def _removed_preservation_symbols(diff: str) -> list[str]:
             )
         )
         deleted_counts, added_counts = Counter(deletions), Counter(additions)
+        header = _DIFF_HEADER_PATH_RE.match(file_diff)
+        in_test_file = bool(header and _TEST_FILE_PATH_RE.search(header.group(2)))
+        # 같은 파일 diff 에서 새로 생긴 테스트 함수 = 리네임 짝 후보.
+        rename_pool: Counter = Counter()
+        if in_test_file:
+            for symbol, count in added_counts.items():
+                surplus = count - deleted_counts[symbol]
+                if surplus > 0 and _TEST_FUNCTION_RE.fullmatch(symbol):
+                    rename_pool[symbol] = surplus
         for symbol in deletions:
             private_function = re.fullmatch(r"(?:async def|def) _(?!_)[A-Za-z0-9_]+", symbol)
             preserved = (
@@ -546,6 +569,13 @@ def _removed_preservation_symbols(diff: str) -> list[str]:
                 and private_function
                 and deleted_counts[symbol] == added_counts[symbol] == 1
             )
+            if not preserved and in_test_file and _TEST_FUNCTION_RE.fullmatch(symbol):
+                # 사라진 테스트 함수 이름을 같은 파일에서 다른 이름으로 다시 추가했으면
+                # 삭제가 아니라 리네임이다. 짝이 없으면(순수 삭제) 그대로 게이트에 남는다.
+                pair = next((name for name, left in rename_pool.items() if left > 0), None)
+                if pair is not None:
+                    rename_pool[pair] -= 1
+                    preserved = True
             if not preserved:
                 removed.append(symbol)
     return removed
@@ -560,10 +590,18 @@ def _precheck_preservation_gate(diff: str, instruction: str, files_changed: Opti
         "deletions": deletions,
     }
 
+    net_removal = deletions - additions
+    # 아주 작은 diff 는 비율만으로 판정할 근거가 못 된다(하한 임계치).
+    small_surgical_diff = (
+        additions + deletions <= _PRESERVATION_SMALL_DIFF_MAX_LINES
+        and net_removal <= _PRESERVATION_SMALL_DIFF_NET_REMOVAL
+    )
+
     if (
         additions > 0
         and deletions > additions * 0.5
-        and (deletions - additions) > _PRESERVATION_NET_REMOVAL_TOLERANCE
+        and net_removal > _PRESERVATION_NET_REMOVAL_TOLERANCE
+        and not small_surgical_diff
     ):
         issues.append(
             f"삭제 라인({deletions})이 추가 라인({additions})의 50%를 초과하고 순삭제가 "

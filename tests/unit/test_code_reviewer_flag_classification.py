@@ -442,3 +442,91 @@ def test_real_symbol_deletions_are_still_detected(deleted_line, expected):
     symbols = reviewer._removed_preservation_symbols(_file_diff(deleted_line))
 
     assert symbols == [expected]
+
+
+def _test_file_diff(body, path="tests/unit/test_card310_guard.py"):
+    return (
+        f"diff --git a/{path} b/{path}\n"
+        f"--- a/{path}\n+++ b/{path}\n"
+        "@@ -1,6 +1,6 @@\n"
+        f"{body}"
+    )
+
+
+def test_test_function_rename_is_not_symbol_removal():
+    """테스트 함수 리네임은 삭제가 아니다.
+
+    2026-09-16: runner-27087189 이 326추가/20삭제 diff 에서
+    def test_card310_is_unchanged_by_card119_global_buy_evaluator 하나가
+    리네임됐다는 이유로 FLAG(0.30) 처리돼 GO100 #310 P0 작업이 장중 지연됐다.
+    """
+    reviewer = _load_reviewer()
+    diff = _test_file_diff(
+        "-def test_card310_is_unchanged_by_card119_global_buy_evaluator():\n"
+        "+def test_card310_is_unchanged_by_card119_buy_evaluator():\n"
+        "     assert True\n"
+    )
+
+    assert reviewer._removed_preservation_symbols(diff) == []
+    assert reviewer._precheck_preservation_gate(diff, "", None) is None
+
+
+def test_test_function_deletion_without_replacement_stays_gated():
+    """짝이 되는 새 테스트 함수가 없으면 종전대로 삭제로 본다."""
+    reviewer = _load_reviewer()
+    diff = _test_file_diff(
+        "-def test_card310_is_unchanged_by_card119_global_buy_evaluator():\n"
+        "-    assert True\n"
+        "+value = 1\n"
+    )
+
+    verdict = reviewer._precheck_preservation_gate(diff, "", None)
+
+    assert verdict is not None
+    assert verdict.flag_category == "PRESERVATION_HARD_GATE"
+    assert verdict.feedback["deleted_symbols"] == [
+        "def test_card310_is_unchanged_by_card119_global_buy_evaluator"
+    ]
+
+
+def test_production_public_rename_is_not_treated_as_rename():
+    """운영 코드의 public 심볼 리네임은 호출부를 깨므로 계속 게이트에 남는다."""
+    reviewer = _load_reviewer()
+    verdict = reviewer._precheck_preservation_gate(
+        _symbol_diff("def public_api():", "def public_api_v2():"), "", None
+    )
+
+    assert verdict is not None
+    assert verdict.flag_category == "PRESERVATION_HARD_GATE"
+
+
+def test_small_diff_below_absolute_floor_is_not_blocked_by_deletion_ratio():
+    """1추가/2삭제처럼 줄을 합치는 소규모 수정은 하한 임계치로 면제한다."""
+    reviewer = _load_reviewer()
+    diff = (
+        "diff --git a/app/main.py b/app/main.py\n"
+        "--- a/app/main.py\n+++ b/app/main.py\n"
+        "@@ -1,2 +1,1 @@\n"
+        "-    if a:\n"
+        "-        return b\n"
+        "+    return b if a else None\n"
+    )
+
+    assert reviewer._precheck_preservation_gate(diff, "", None) is None
+
+
+def test_absolute_floor_does_not_cover_diffs_above_line_budget():
+    """하한 임계치는 아주 작은 diff 에만 적용된다(5추가/7삭제=12줄은 종전대로 차단)."""
+    reviewer = _load_reviewer()
+    body = "".join(f"-old_{i} = {i}\n" for i in range(7))
+    body += "".join(f"+new_{i} = {i}\n" for i in range(5))
+    diff = (
+        "diff --git a/app/main.py b/app/main.py\n"
+        "--- a/app/main.py\n+++ b/app/main.py\n"
+        "@@ -1,7 +1,5 @@\n" + body
+    )
+
+    verdict = reviewer._precheck_preservation_gate(diff, "", None)
+
+    assert verdict is not None
+    assert verdict.flag_category == "PRESERVATION_HARD_GATE"
