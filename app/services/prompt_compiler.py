@@ -211,6 +211,45 @@ class CompiledPrompt:
     provenance: dict[str, Any]
 
 
+# ── 프롬프트 토큰 예산 — 2026-09-16 실측 ────────────────────────────────────
+#
+# **글자 수로 토큰을 추정하지 마라.** 그날 두 번 틀렸고, 둘 다 우선순위를
+# 거꾸로 잡게 만들었다.
+#
+#   추정            실측        배수
+#   도구 25,000tok  1,768tok    14배 과대   (글자 수 ÷ 3 으로 계산)
+#   메모리 14,700   2,700       5.4배 과대  (총량 − 자산합 뺄셈)
+#
+# 실측 계수: 한국어 혼합 프롬프트 36,546자 = 26,677토큰 → **약 1.37자/토큰**.
+# (기존 코드의 ÷1.5 는 과소 추정이다)
+#
+# 한 턴 입력 44,343토큰의 실제 분해 (질문·히스토리 제외):
+#
+#   AADS 시스템 프롬프트   26,677  60.2%
+#     ├ 프롬프트 자산 16,359자 ≈ 11,900   ← global 15개가 자산의 82%. 최대 절감처
+#     └ context_builder 17,788자 ≈ 12,983
+#          layer1  9,000자 ≈ 6,570 / memory 3,702자 ≈ 2,700
+#          preload 3,300자 ≈ 2,400 / 기타 1,786자 ≈ 1,300
+#   CLI 자체 프롬프트      13,258  29.9%   손댈 수 없음
+#   Task/Agent              2,664   6.0%   차단하면 서브에이전트가 죽는다(실측)
+#   MCP 도구 142개          1,768   4.0%   상주 11개로 줄여도 1,727 절감뿐
+#
+# 측정 방법: claude -p --output-format stream-json --verbose 로 usage 의
+# input+cache_creation+cache_read 합을 읽고, 옵션을 하나씩 빼며 차분을 본다.
+# 오류 사전: prompt.token_budget_estimated_by_chars
+# 설계: aads-docs/docs/PRD-PROMPT-CONTEXT-RETRIEVAL-v1.0.md
+
+
+def _section_chars_snapshot() -> dict:
+    """직전 턴의 구간별 자수. 조립은 context_builder 가 하고 기록은 여기서 한다."""
+    try:
+        from app.services.context_builder import _SECTION_CHARS_LAST
+
+        return dict(_SECTION_CHARS_LAST)
+    except Exception:
+        return {}
+
+
 class PromptCompiler:
     async def compile(
         self,
@@ -403,6 +442,18 @@ async def record_prompt_provenance(
 ) -> None:
     if not await _table_exists(conn, "compiled_prompt_provenance"):
         return
+
+    # 구간별 자수는 **여기서** 채운다. 컴파일 시점에 넣으면 아직 조립 전이라
+    # 비어 있거나 직전 턴 값이 들어간다(2026-09-16 실측: 전부 `{}`).
+    # 이 함수는 조립이 끝난 뒤 호출되므로 그때 값이 맞다.
+    # 총량만 남기면 구간 크기를 뺄셈으로 추정하게 되고, 그 추정이 틀린다 —
+    # 파일 상단 예산표와 오류 사전 prompt.token_budget_estimated_by_chars 참고.
+    try:
+        sections = _section_chars_snapshot()
+        if sections:
+            compiled_prompt.provenance["section_chars"] = sections
+    except Exception:
+        pass
 
     await conn.execute(
         """

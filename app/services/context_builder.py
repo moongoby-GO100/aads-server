@@ -329,6 +329,18 @@ def _take_late_rag(session_id: str) -> str:
     return _late_rag.pop(session_id, "")
 
 
+# Auto-RAG 가 실제로 몇 ms 를 쓰는지는 이 빌더 안쪽에서만 알 수 있다.
+# ContextVar 는 쓸 수 없다 — `asyncio.gather` 로 갈라진 태스크에서 set 해도
+# 부모 컨텍스트로 돌아오지 않는다. `_late_rag` 와 같은 세션 키 방식으로 둔다.
+_rag_ms: Dict[str, int] = {}
+_RAG_MS_MAX = 200
+
+
+def take_rag_ms(session_id: str) -> Optional[int]:
+    """이번 턴 Auto-RAG 소요(ms). 한 번 꺼내면 지운다."""
+    return _rag_ms.pop(session_id, None)
+
+
 async def _build_auto_rag_layer_bounded(
     last_user_message: str,
     session_id: str,
@@ -341,6 +353,11 @@ async def _build_auto_rag_layer_bounded(
     2026-09-14 하루 종일 고친 것이 전부 그런 종류였다.
     """
     carried = _take_late_rag(session_id)
+    _rag_t0 = time.perf_counter()
+
+    def _record_rag_ms() -> None:
+        if len(_rag_ms) < _RAG_MS_MAX:
+            _rag_ms[session_id] = int((time.perf_counter() - _rag_t0) * 1000)
 
     task = asyncio.create_task(
         _build_auto_rag_layer(last_user_message, session_id, project, current_message_ids)
@@ -355,6 +372,7 @@ async def _build_auto_rag_layer_bounded(
         except Exception as exc:
             logger.debug("auto_rag_failed: %s", str(exc)[:160])
             block = ""
+        _record_rag_ms()
         return (carried + block) if carried else block
 
     # 늦은 것은 백그라운드에서 끝내 다음 턴에 쓰도록 담아 둔다.
@@ -379,6 +397,7 @@ async def _build_auto_rag_layer_bounded(
         "지금 답이 과거 기록에 의존해야 하는 내용이면 그렇다고 밝혀라.\n"
         "</auto_rag_context>"
     )
+    _record_rag_ms()
     return (carried + note) if carried else note
 
 
@@ -603,6 +622,12 @@ def _normalize_workspace(name: str) -> str:
 
 # ─── 메인 빌더 ──────────────────────────────────────────────────────────────
 
+# 직전 턴의 구간별 자수. provenance 기록부(prompt_compiler)가 읽어 간다.
+# 조립과 기록이 다른 모듈이라 값을 넘길 경로가 없어 모듈 수준에 둔다 —
+# 한 프로세스가 한 턴씩 처리하므로 섞이지 않는다.
+_SECTION_CHARS_LAST: dict[str, int] = {}
+
+
 async def build_messages_context(
     workspace_name: str,
     session_id: str,
@@ -735,9 +760,36 @@ async def build_messages_context(
     _kst_now = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST (%A)")
     system_prompt = layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer + artifact_layer + "\n\n" + _layer4 + f"\n\n<currentTime>\n{_kst_now}\n</currentTime>"
 
-    # 토큰 절감 측정 로깅
+    # 구간별 계측.
+    #
+    # 총량(system_prompt_chars)만 남기면 무엇을 줄여야 할지 알 수 없다.
+    # 2026-09-16, "도구 142개가 25,000토큰" 이라고 글자 수로 추정해 우선순위를
+    # 거꾸로 잡았다. 실측하니 도구는 1,768토큰이고 시스템 프롬프트가 26,677토큰
+    # 이었다 — 14배 틀렸다. 구간별로 남겨야 다음에 같은 실수를 안 한다.
+    #
+    # 토큰 환산은 실측 계수를 쓴다. 한국어 혼합 프롬프트에서 36,546자가
+    # 26,677토큰이었으므로 약 1.37자/토큰이다. 기존 1.5 는 과소 추정이었다.
+    _sections = {
+        "layer1": len(layer1),
+        "layer2": len(layer2),
+        "memory": len(memory_layer),
+        "preload": len(preload_layer),
+        "auto_rag": len(auto_rag_layer),
+        "artifact": len(artifact_layer),
+        "layer4": len(_layer4),
+    }
     _sp_chars = len(system_prompt)
-    logger.info("system_prompt_tokens chars=%d est_tokens=%d", _sp_chars, int(_sp_chars / 1.5))
+    logger.info(
+        "system_prompt_sections chars=%d est_tokens=%d %s",
+        _sp_chars,
+        int(_sp_chars / 1.37),
+        " ".join(f"{k}={v}" for k, v in sorted(_sections.items(), key=lambda x: -x[1])),
+    )
+    try:
+        _SECTION_CHARS_LAST.clear()
+        _SECTION_CHARS_LAST.update(_sections)
+    except Exception:
+        pass
 
     # Layer D: 임시 문서 컨텍스트 (현재 턴에만 주입, 다음 턴 제거)
     if document_context:

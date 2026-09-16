@@ -1731,6 +1731,26 @@ async def handle_stream(request):
                 "qa": {"description": "테스트 실행, 변경사항 검증, 서비스 헬스체크 등 품질 검증이 필요할 때 사용.", "prompt": "당신은 QA 엔지니어입니다. MCP 도구를 사용하여 시스템 상태를 검증하세요.", "model": "sonnet"},
             })
 
+            # ── 옵션별 토큰 비용 — 2026-09-16 실측 ────────────────────────────
+            #
+            # 질문 한 줄("Reply with exactly: OK")로 옵션을 하나씩 바꿔가며
+            # usage(input+cache_creation+cache_read) 합을 잰 값이다.
+            #
+            #   CLI 맨 상태                      20,440 토큰
+            #   내장도구 전부 차단               13,258   ← 아래 목록이 7,182 절감 중
+            #   현행(이 cmd 그대로)              17,690
+            #   현행 + TodoWrite 차단            17,690   ← **절감 0**
+            #   현행 + Task·TodoWrite 차단       15,026   ← 2,664 절감
+            #
+            # Task 를 빼고 싶어지겠지만 **빼면 안 된다.** Agent 와 Task 는 같은
+            # 기능의 두 이름이라 Task 를 막으면 --agents 서브에이전트가 통째로
+            # 죽는다(실측: ListAgents 만 남고 "서브에이전트를 사용할 수 없습니다").
+            # 14일간 Agent 호출 144회로 실사용 중이다.
+            #
+            # --agents 제거는 170 토큰뿐이라 가치가 없다.
+            # 남은 13,258 은 CLI 자체 시스템 프롬프트라 우리가 손댈 수 없다.
+            # 실제 덩어리는 AADS 시스템 프롬프트(26,677토큰)다 —
+            # app/services/prompt_compiler.py 상단 예산표 참고.
             cmd = _claude_argv_for_slot(claude_meta, slot) + ["-p", "--output-format", "stream-json", "--verbose",
                    "--model", cli_model, "--mcp-config", mcp_config_path, "--strict-mcp-config",
                    "--allowedTools", "Agent,mcp__aads-tools__*",
