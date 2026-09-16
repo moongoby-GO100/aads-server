@@ -1,0 +1,30 @@
+{
+  "_README": [
+    "고쳐진 버전이 없어 당장 올릴 수 없는 취약점만 여기 적는다.",
+    "고칠 수 있는데 귀찮아서 적는 곳이 아니다 — no_fix_available 이 false 면 예외로 받지 않는다.",
+    "expires 는 필수다. 만료가 지나면 check_dependency_vulns.py 가 예외를 무시하고",
+    "취약점을 되살리며 '재판단 필요' 로 출력한다. 영구 예외는 방치와 같다.",
+    "검증: python3 scripts/check_dependency_vulns.py"
+  ],
+  "acknowledgements": [
+    {
+      "package": "chromadb",
+      "ecosystem": "PyPI",
+      "version": "1.5.9",
+      "id": "*",
+      "no_fix_available": true,
+      "expires": "2026-12-16",
+      "approved_by": "CEO 승인 2026-09-17 (업그레이드 지시 → 상향 대상 부재 확인 후 완화로 전환)",
+      "reason": "패치본 없음. 1.5.9 가 PyPI 최신(2026-05-05)이고 advisory 는 last_affected=1.5.9 로 끝난다. AADS 는 PersistentClient 임베디드 사용이라 CVE 성립 조건인 HTTP 서버가 없다.",
+      "evidence": [
+        "PyPI chromadb latest=1.5.9, 1.5.9 초과 릴리스 0건 (2026-09-17 조회)",
+        "OSV GHSA-f4j7-r4q5-qw2c / GHSA-36p7-vc44-83pf: fixed 이벤트 없음, last_affected=1.5.9",
+        "app/services/code_indexer_service.py:102 chromadb.PersistentClient — HTTP 서버 미사용",
+        "서버 실측: chroma 프로세스 0개, 8000/8001 리슨 없음 (호스트·컨테이너 양쪽)",
+        "trust_remote_code 참조 app/·scripts/ 전체 0건 (두 CVE 공통 트리거)",
+        "노출 조건은 tests/unit/test_chromadb_embedded_only.py 가 코드로 고정"
+      ],
+      "revisit": "만료일에 PyPI 최신 버전과 advisory 의 fixed 이벤트를 다시 확인한다. 패치가 나왔으면 예외를 지우고 즉시 상향한다."
+    }
+  ]
+}

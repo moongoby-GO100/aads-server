@@ -20,7 +20,9 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
+import os
 import subprocess
 import sys
 import urllib.error
@@ -30,6 +32,48 @@ OSV_BATCH = "https://api.osv.dev/v1/querybatch"
 OSV_VULN = "https://api.osv.dev/v1/vulns/"
 TIMEOUT = 30
 SEVERITY_ORDER = {"": 0, "LOW": 1, "MODERATE": 2, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+
+
+def load_acks(path: str) -> tuple[list[dict], list[dict]]:
+    """예외 목록을 (유효, 만료) 로 나눠 돌려준다.
+
+    왜 만료를 강제하는가. 예외는 한 번 적으면 영원히 남는다 — 그러면 일일 점검은
+    빨간 줄만 늘어난 채 아무도 안 보는 보고서가 되거나, 예외에 묻혀 새 취약점을
+    놓친다. 만료가 지난 예외는 **무시하고 취약점을 되살린다.** 다시 판단하게
+    만드는 것이 목적이다.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            items = json.load(fh).get("acknowledgements") or []
+    except FileNotFoundError:
+        return [], []
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"WARN: 예외 목록 읽기 실패 ({exc}) — 예외 없이 진행", file=sys.stderr)
+        return [], []
+
+    today = datetime.date.today().isoformat()
+    live, expired = [], []
+    for it in items:
+        # 만료일이 없는 예외는 받지 않는다. 영구 예외는 예외가 아니라 방치다.
+        if not it.get("expires"):
+            print(f"WARN: expires 없는 예외 무시: {it.get('package')} {it.get('id')}", file=sys.stderr)
+            continue
+        (live if it["expires"] >= today else expired).append(it)
+    return live, expired
+
+
+def is_acked(finding: dict, acks: list[dict]) -> dict | None:
+    for a in acks:
+        if a.get("package") != finding["package"]:
+            continue
+        if a.get("ecosystem") and a["ecosystem"] != finding["ecosystem"]:
+            continue
+        if a.get("id") not in (None, "*", finding["id"]):
+            continue
+        if a.get("version") and a["version"] != finding["version"]:
+            continue
+        return a
+    return None
 
 
 def _post(url: str, payload: dict) -> dict:
@@ -149,9 +193,19 @@ def main() -> int:
         help="이 등급 이상이면 exit 1 (LOW/MODERATE/HIGH/CRITICAL). 생략 시 1건이라도 있으면 exit 1",
     )
     ap.add_argument("--json", action="store_true")
+    ap.add_argument(
+        "--ack-file",
+        default=os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "security",
+            "vuln_acknowledgements.json",
+        ),
+        help="고쳐진 버전이 없어 당장 올릴 수 없는 항목의 예외 목록(만료일 필수)",
+    )
     args = ap.parse_args()
 
     threshold = SEVERITY_ORDER.get(args.severity.upper(), 0)
+    acks, expired_acks = load_acks(args.ack_file)
     ecosystems = [
         ("PyPI", collect_pypi(args.container)),
         ("npm", collect_npm(args.npm_lock)),
@@ -186,20 +240,54 @@ def main() -> int:
                 )
 
     findings.sort(key=lambda f: -SEVERITY_ORDER.get(f["severity"], 0))
-    blocking = [f for f in findings if SEVERITY_ORDER.get(f["severity"], 0) >= threshold]
+    for f in findings:
+        a = is_acked(f, acks)
+        f["acknowledged"] = bool(a)
+        f["ack_reason"] = (a or {}).get("reason", "")
+        f["ack_expires"] = (a or {}).get("expires", "")
+
+    open_findings = [f for f in findings if not f["acknowledged"]]
+    acked_findings = [f for f in findings if f["acknowledged"]]
+    blocking = [f for f in open_findings if SEVERITY_ORDER.get(f["severity"], 0) >= threshold]
 
     if args.json:
-        print(json.dumps({"scanned": scanned, "findings": findings}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {
+                    "scanned": scanned,
+                    "findings": findings,
+                    "open": len(open_findings),
+                    "acknowledged": len(acked_findings),
+                    "expired_acks": expired_acks,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     else:
-        print(f"OSV.dev 점검 — 패키지 {scanned}개, 취약점 {len(findings)}건")
-        if not findings:
-            print("  ✅ 알려진 취약점 없음")
-        for f in findings:
+        print(
+            f"OSV.dev 점검 — 패키지 {scanned}개, 취약점 {len(findings)}건 "
+            f"(조치대상 {len(open_findings)} / 예외 {len(acked_findings)})"
+        )
+        if not open_findings:
+            print("  ✅ 조치 대상 취약점 없음")
+        for f in open_findings:
             sev = f["severity"] or "UNSPEC"
             print(f"  [{sev:8}] {f['ecosystem']:5} {f['package']}=={f['version']}  {f['id']}")
             if f["summary"]:
                 print(f"             {f['summary']}")
             print(f"             {f['url']}")
+        for f in acked_findings:
+            sev = f["severity"] or "UNSPEC"
+            print(
+                f"  [예외 {sev:8}] {f['package']}=={f['version']} {f['id']} "
+                f"(만료 {f['ack_expires']}) {f['ack_reason'][:80]}"
+            )
+        for a in expired_acks:
+            print(
+                f"  ⚠️ 만료된 예외 — 재판단 필요: {a.get('package')} {a.get('id')} "
+                f"(만료일 {a.get('expires')})"
+            )
 
     if scanned == 0:
         print("ERROR: 점검한 패키지가 0개 — 수집 경로를 확인하라", file=sys.stderr)
