@@ -23,18 +23,33 @@ DRY_RUN=0
 RESTART_SERVICES=1
 SYNC_REMOTE_UNITS="${AADS_RUNNER_SYNC_UNITS:-0}"
 ONLY_TARGET=""
+# 원격 러너가 작업 실행 중이면 설치와 재시작을 모두 미룬다
+# (AADS-RUNNER-SYNC-BUSY-DEFER, 2026-09-16).
+# 근거: 10:28:51 KST 동기화 재시작이 GO100 runner-1791da41(P0) 을
+# runner_shutdown_requeued 로 되돌려 6분 16초치 LLM 작업을 처음부터 다시 시켰다.
+# 실행 중 스크립트 파일을 덮어쓰는 것 자체도 bash 지연 읽기 때문에 위험하다.
+IGNORE_BUSY="${AADS_RUNNER_SYNC_IGNORE_BUSY:-0}"
+DEFERRED=0
+PG_CONTAINER="${PG_CONTAINER:-aads-postgres}"
+PGUSER="${PGUSER:-aads}"
+PGDATABASE="${PGDATABASE:-aads}"
 
 usage() {
     cat <<'EOF'
-Usage: sync_pipeline_runner_remote.sh [--dry-run] [--no-restart] [--target NAME]
+Usage: sync_pipeline_runner_remote.sh [--dry-run] [--no-restart] [--target NAME] [--ignore-busy]
 
 Targets:
   contabo14  /root/scripts/pipeline-runner.sh  aads-pipeline-runner.service
   cafe24_114 /root/scripts/pipeline-runner.sh  aads-pipeline-litellm-runner.service
 
+Options:
+  --ignore-busy                 sync even if the remote runner has in-flight jobs
+                                (this requeues them — use only when the runner is stuck)
+
 Environment:
   CANONICAL_RUNNER              local canonical runner script
   AADS_RUNNER_SYNC_UNITS        set to 1 to also install remote service units
+  AADS_RUNNER_SYNC_IGNORE_BUSY  same as --ignore-busy
   AADS_RUNNER_SYNC_TARGETS      optional newline target records:
                                 name|ssh_host|remote_runner|service|service_unit
 EOF
@@ -48,6 +63,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-restart)
             RESTART_SERVICES=0
+            shift
+            ;;
+        --ignore-busy)
+            IGNORE_BUSY=1
             shift
             ;;
         --target)
