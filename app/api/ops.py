@@ -3006,3 +3006,630 @@ async def get_prompt_profile():
         "sections": profile_sections(),
         "workspaces": profile_all_workspaces(),
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AADS-AAG-DEBT-001 — 대시보드가 부르는데 없던 /ops 조회 엔드포인트 6종
+#
+# 2026-09-16 AAG 스캔이 ROUTE_MISSING(P0) 으로 잡은 6건이다. 호출부가 전부
+# `Promise.allSettled` + `res.ok` 검사라 404 가 예외로 올라오지 않고 화면만 조용히
+# 비었다 — 콘솔에도 안 남는다. 인증 미들웨어가 라우팅보다 먼저 401 을 돌려주므로
+# HTTP 로도 404 와 구분되지 않았다.
+#
+# 응답은 호출부의 `Array.isArray(d) ? d : d.items || []` 관례에 맞춰
+# 전부 {"items": [...]} 로 통일한다 (ArtifactChart.tsx:144 실측).
+#
+# 아래 순수 함수(파라미터 클램프·행 직렬화)는 DB 없이 단위테스트한다 —
+# tests/unit/test_ops_dashboard_endpoints.py.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# pipeline_jobs 는 큐 테이블이고 끝난 작업은 pipeline_cleanup 이
+# pipeline_jobs_archive 로 옮긴다(migrations/20260915_pipeline_jobs_archive.sql —
+# "프로젝트별 성공률을 pipeline_jobs 로 산출할 방법이 없다"). 큐만 세면 completed 가
+# 구조적으로 0 이 되므로 집계·이력은 두 테이블을 job_id 로 중복 제거해 합쳐 본다.
+_PIPELINE_DONE_STATUSES = frozenset({"done", "completed", "success"})
+_PIPELINE_FAILED_STATUSES = frozenset({"error", "failed", "rejected", "rejected_done"})
+_PIPELINE_CANCELLED_STATUSES = frozenset({"cancelled", "canceled"})
+
+# code_reviews.verdict 는 APPROVE / FLAG / REQUEST_CHANGES 세 값이다(실측 16,501행).
+# /ops 화면은 verdict === "PASS" 만 통과로 그리므로 여기서 정규화해 넘긴다.
+# 원본은 raw_verdict 로 같이 실어 보내 판정 근거를 잃지 않는다.
+_QA_PASS_VERDICTS = frozenset({"APPROVE", "APPROVED", "PASS", "PASS_TIMEOUT"})
+
+_CIRCUIT_TO_SERVER_STATUS = {"closed": "ok", "half_open": "warn", "open": "error"}
+_CIRCUIT_SEVERITY = {"closed": 1, "half_open": 2, "open": 3}
+
+# 지시서 머리말에서 제목을 뽑을 때 쓴다. `_pipeline_title` 참고.
+_TITLE_TOKEN_RE = re.compile(r"TITLE:[ \t]*(.+)", re.IGNORECASE)
+_INSTRUCTION_KEY_RE = re.compile(
+    r"\s+(?:PRIORITY|SIZE|TASK_ID|PARENT|ASSIGNEE|DUE|OWNER|LABELS)\s*:", re.IGNORECASE
+)
+
+
+def _clamp_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    """범위를 벗어난 값은 422 로 막지 않고 잘라낸다.
+
+    이 6개는 위젯이 고정 파라미터로 부르는 조회 전용 경로다. 상한을 넘겼다고
+    422 를 돌려주면 호출부가 `res.ok` 만 보고 다시 조용히 빈 화면이 된다 —
+    고치려던 증상 그대로다. 잘라내고 실제 적용값을 응답에 실어 보낸다.
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, n))
+
+
+def _iso_or_none(value: Any) -> Optional[str]:
+    """타임스탬프를 KST ISO 문자열로. 이미 문자열이면 그대로 둔다."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    try:
+        return value.astimezone(KST).isoformat()
+    except Exception:
+        return str(value)
+
+
+def _coerce_json(value: Any) -> Any:
+    """jsonb 컬럼. asyncpg 는 코덱 설정에 따라 str 로도 dict 로도 준다."""
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return json.loads(value)
+        except Exception:
+            return None
+    return None
+
+
+def _truncate(text: str, max_len: int) -> str:
+    text = " ".join((text or "").split())
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
+
+def _cost_trend_items(rows: List[Dict[str, Any]], days: int, today) -> List[Dict[str, Any]]:
+    """일자별 비용을 빈 날 0 으로 메워 days 개 연속 점으로 만든다.
+
+    LineChart 는 점 배열을 그대로 그린다 — 비용이 0 인 날을 빼면 x 축이
+    소리 없이 압축돼 추이가 왜곡된다.
+    """
+    by_day: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        key = str(row.get("day"))[:10]
+        by_day[key] = row
+    items: List[Dict[str, Any]] = []
+    for offset in range(days - 1, -1, -1):
+        day = today - timedelta(days=offset)
+        key = day.isoformat()
+        hit = by_day.get(key)
+        items.append({
+            "date": key,
+            "cost": round(float(hit.get("cost") or 0), 6) if hit else 0.0,
+            "records": int(hit.get("records") or 0) if hit else 0,
+        })
+    return items
+
+
+def _project_stat_items(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """(project, status, cnt) 행을 프로젝트별 건수/상태 분포로 접는다."""
+    acc: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        project = (row.get("project") or "UNKNOWN").strip() or "UNKNOWN"
+        status = (row.get("status") or "unknown").strip().lower() or "unknown"
+        cnt = int(row.get("cnt") or 0)
+        entry = acc.setdefault(project, {
+            "project": project, "total": 0, "completed": 0,
+            "failed": 0, "cancelled": 0, "active": 0, "by_status": {},
+        })
+        entry["total"] += cnt
+        entry["by_status"][status] = entry["by_status"].get(status, 0) + cnt
+        if status in _PIPELINE_DONE_STATUSES:
+            entry["completed"] += cnt
+        elif status in _PIPELINE_FAILED_STATUSES:
+            entry["failed"] += cnt
+        elif status in _PIPELINE_CANCELLED_STATUSES:
+            entry["cancelled"] += cnt
+        else:
+            entry["active"] += cnt
+    return sorted(acc.values(), key=lambda e: (-e["total"], e["project"]))
+
+
+def _pipeline_title(instruction: Optional[str], max_len: int = 120) -> str:
+    """지시서 본문에서 제목 한 줄을 뽑는다.
+
+    러너 지시서 머리말은 두 형태로 들어온다(둘 다 실측):
+      - 줄바꿈형  `TASK_ID: X\\nTITLE: Y\\nPRIORITY: ...`  (아카이브 행)
+      - 한 줄형   `TASK_ID: X TITLE: Y PRIORITY: ...`      (현재 큐 행)
+    그래서 줄머리 매칭만으로는 한 줄형에서 제목을 통째로 놓친다. TITLE 토큰을
+    찾아 다음 키 앞에서 끊고, 없으면 첫 비어 있지 않은 줄로 떨어진다.
+
+    정규식은 둘 다 중첩 반복이 없다 — 지시서 본문은 길고, 중첩 반복을 쓰면
+    백트래킹이 폭발한다(R-BG 3).
+    """
+    text = instruction or ""
+    fallback = ""
+    for line in text.splitlines()[:10]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = _TITLE_TOKEN_RE.search(stripped)
+        if match:
+            title = match.group(1)
+            cut = _INSTRUCTION_KEY_RE.search(title)
+            if cut:
+                title = title[: cut.start()]
+            title = title.strip()
+            if title:
+                return _truncate(title, max_len)
+        if not fallback:
+            fallback = stripped.lstrip("#").strip()
+    return _truncate(fallback, max_len)
+
+
+def _pipeline_history_items(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [{
+        "task_id": row.get("job_id"),
+        "title": _pipeline_title(row.get("instruction")),
+        "status": (row.get("status") or "unknown"),
+        "project": (row.get("project") or "UNKNOWN"),
+        "phase": row.get("phase"),
+        "created_at": _iso_or_none(row.get("created_at")),
+        "completed_at": _iso_or_none(row.get("completed_at")),
+        "source": row.get("source") or "live",
+    } for row in rows]
+
+
+def _qa_detail(feedback: Any, flag_category: Optional[str], max_len: int = 300) -> str:
+    """리뷰 피드백에서 사람이 읽을 한 줄. 없으면 flag_category 로 떨어진다."""
+    obj = _coerce_json(feedback)
+    text = ""
+    if isinstance(obj, dict):
+        issues = obj.get("issues")
+        if isinstance(issues, list) and issues:
+            text = str(issues[0])
+        elif obj.get("summary"):
+            text = str(obj["summary"])
+        elif obj.get("reason"):
+            text = str(obj["reason"])
+    elif isinstance(obj, list) and obj:
+        text = str(obj[0])
+    if not text:
+        text = flag_category or ""
+    return _truncate(text, max_len)
+
+
+def _qa_result_items(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        raw_verdict = (row.get("verdict") or "").strip().upper()
+        cycle = int(row.get("review_cycle") or 1)
+        score = row.get("score")
+        items.append({
+            "task_id": row.get("job_id"),
+            "project": (row.get("project") or "UNKNOWN"),
+            "verdict": "PASS" if raw_verdict in _QA_PASS_VERDICTS else "FAIL",
+            "raw_verdict": raw_verdict or None,
+            "score": float(score) if score is not None else None,
+            "retry_count": max(cycle - 1, 0),
+            "needs_retry": bool(row.get("needs_retry")),
+            "flag_category": row.get("flag_category"),
+            "detail": _qa_detail(row.get("feedback"), row.get("flag_category")),
+            "created_at": _iso_or_none(row.get("created_at")),
+        })
+    return items
+
+
+def _screenshot_url(after_path: Optional[str]) -> Optional[str]:
+    """브라우저가 실제로 읽을 수 있는 경로만 screenshot_url 로 내보낸다.
+
+    design_reviews.after_path 는 서버 파일시스템 경로일 수 있고, 그대로 <img src>
+    에 넣으면 깨진 이미지가 뜬다. 정적 경로/절대 URL 일 때만 준다.
+    """
+    path = (after_path or "").strip()
+    if not path:
+        return None
+    if path.startswith(("http://", "https://", "/static/")):
+        return path
+    return None
+
+
+def _design_review_items(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        issues = _coerce_json(row.get("issues_json")) or []
+        detail = ""
+        if isinstance(issues, list) and issues:
+            detail = _truncate(str(issues[0]), 300)
+        elif isinstance(issues, dict):
+            detail = _truncate(json.dumps(issues, ensure_ascii=False), 300)
+        cost = row.get("cost_usd")
+        item = {
+            "id": row.get("id"),
+            "task_id": row.get("task_id"),
+            "project": (row.get("project") or "UNKNOWN"),
+            "verdict": (row.get("verdict") or "PENDING").strip().upper(),
+            "page_url": row.get("page_url"),
+            "before_path": row.get("before_path"),
+            "after_path": row.get("after_path"),
+            "reviewer_model": row.get("reviewer_model"),
+            "cost_usd": float(cost) if cost is not None else None,
+            "issues": issues,
+            "scores": _coerce_json(row.get("scores_json")) or {},
+            "detail": detail,
+            "created_at": _iso_or_none(row.get("created_at")),
+        }
+        url = _screenshot_url(row.get("after_path"))
+        if url:
+            item["screenshot_url"] = url
+        items.append(item)
+    return items
+
+
+def _worst_circuit(circuit_states: Optional[List[Dict[str, Any]]], threshold: int) -> Dict[str, Any]:
+    """위젯은 서킷브레이커를 한 덩어리로 그린다 — 가장 나쁜 서버를 대표로 올린다."""
+    worst: Optional[Dict[str, Any]] = None
+    worst_rank = -1
+    for state in circuit_states or []:
+        name = (state.get("state") or "closed").strip().lower()
+        rank = _CIRCUIT_SEVERITY.get(name, 0)
+        if rank > worst_rank:
+            worst_rank = rank
+            worst = {
+                "server": state.get("server"),
+                "state": name,
+                "fail_count": int(state.get("failure_count") or 0),
+            }
+    if worst is None:
+        worst = {"server": None, "state": "closed", "fail_count": 0}
+    worst["threshold"] = threshold
+    return worst
+
+
+def _ops_status_servers(
+    health: Optional[Dict[str, Any]],
+    circuit_states: Optional[List[Dict[str, Any]]],
+    servers_meta: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """서버 카드. 프로브를 새로 쏘지 않고 health-check + 서킷브레이커만 읽는다.
+
+    위젯이 30초마다 폴링하므로 여기서 SSH 프로브를 돌리면 폴링 주기마다
+    3대에 접속하게 된다. 값이 없는 칸은 키 자체를 빼야 한다 —
+    호출부가 `srv.cpu !== undefined` 로 판정해서 null 을 넣으면 "null%" 가 뜬다.
+    """
+    by_server: Dict[str, Dict[str, Any]] = {}
+    for state in circuit_states or []:
+        key = str(state.get("server") or "").strip()
+        if key:
+            by_server[key] = state
+
+    health = health or {}
+    infra = health.get("infra") or {}
+    out: List[Dict[str, Any]] = []
+    for meta in servers_meta:
+        entry: Dict[str, Any] = {
+            "id": meta.get("id"),
+            "name": meta.get("display_name") or meta.get("id"),
+            "ip": meta.get("host"),
+            "status": "unknown",
+        }
+        if meta.get("type") == "local":
+            if health.get("error"):
+                entry["status"] = "error"
+            elif health.get("pipeline_healthy"):
+                entry["status"] = "ok"
+            else:
+                entry["status"] = "warn"
+            if infra.get("memory_pct") is not None:
+                entry["mem"] = infra["memory_pct"]
+            if infra.get("disk_pct") is not None:
+                entry["disk"] = infra["disk_pct"]
+            if infra.get("load_1m") is not None:
+                entry["load_1m"] = infra["load_1m"]
+        else:
+            state = by_server.get(str(meta.get("id")))
+            if state is None:
+                for legacy in meta.get("legacy_ids") or []:
+                    if str(legacy) in by_server:
+                        state = by_server[str(legacy)]
+                        break
+            if state is not None:
+                name = (state.get("state") or "").strip().lower()
+                entry["status"] = _CIRCUIT_TO_SERVER_STATUS.get(name, "unknown")
+                entry["fail_count"] = int(state.get("failure_count") or 0)
+        out.append(entry)
+    return out
+
+
+def _ops_status_payload(
+    health: Optional[Dict[str, Any]],
+    circuit_states: Optional[List[Dict[str, Any]]],
+    servers_meta: List[Dict[str, Any]],
+    threshold: int,
+) -> Dict[str, Any]:
+    health = health or {}
+    return {
+        "servers": _ops_status_servers(health, circuit_states, servers_meta),
+        "circuit_breaker": _worst_circuit(circuit_states, threshold),
+        "circuit_breakers": list(circuit_states or []),
+        "pipeline_healthy": bool(health.get("pipeline_healthy")),
+        "maintenance_active": bool(health.get("maintenance_active")),
+        "stalled_count": int(health.get("stalled_count") or 0),
+        "active_count": int(health.get("active_count") or 0),
+        "running_count": int(health.get("running_count") or 0),
+        "completed_today": int(health.get("completed_today") or 0),
+        "error_count": int(health.get("error_count") or 0),
+        "issues": health.get("issues") or [],
+        "checked_at": health.get("checked_at") or datetime.now(KST).isoformat(),
+    }
+
+
+def _server_meta_list() -> List[Dict[str, Any]]:
+    """server_registry 정본에서 카드 3장을 만든다. 별칭 중복 집계를 피해
+    CANONICAL_SERVER_IDS 만 순회한다(레지스트리 직접 순회 금지)."""
+    from app.services.server_registry import CANONICAL_SERVER_IDS
+
+    metas: List[Dict[str, Any]] = []
+    for sid in CANONICAL_SERVER_IDS:
+        cfg = get_server_config(sid) or {}
+        metas.append({
+            "id": sid,
+            "host": cfg.get("host"),
+            "display_name": cfg.get("display_name") or sid,
+            "type": cfg.get("type", "ssh"),
+            "legacy_ids": cfg.get("legacy_ids") or [],
+        })
+    return metas
+
+
+@router.get("/ops/cost-trend")
+async def ops_cost_trend(
+    days: int = Query(7, description="집계 일수 (1~90, 벗어나면 잘라낸다)"),
+    project: Optional[str] = None,
+):
+    """일자별 비용 추이 — 채팅 아티팩트 비용 차트(ArtifactChart)."""
+    days = _clamp_int(days, default=7, minimum=1, maximum=90)
+    project_label = normalize_project_label(project) if project else None
+
+    conditions = [
+        "recorded_at >= (date_trunc('day', NOW() AT TIME ZONE 'Asia/Seoul')"
+        " - (INTERVAL '1 day' * ($1::int - 1))) AT TIME ZONE 'Asia/Seoul'"
+    ]
+    params: list = [days]
+    if project_label:
+        conditions.append("project = $2")
+        params.append(project_label)
+    where = "WHERE " + " AND ".join(conditions)
+    try:
+        conn = await _get_conn()
+        try:
+            rows = await conn.fetch(f"""
+                SELECT DATE(recorded_at AT TIME ZONE 'Asia/Seoul') AS day,
+                       COALESCE(SUM(cost_usd), 0) AS cost,
+                       COUNT(*)::int AS records
+                FROM cost_tracking {where}
+                GROUP BY day ORDER BY day
+            """, *params)
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.error("ops_cost_trend_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+    items = _cost_trend_items([dict(r) for r in rows], days, datetime.now(KST).date())
+    return {
+        "items": items,
+        "days": days,
+        "project": project_label,
+        "total_usd": round(sum(i["cost"] for i in items), 6),
+        "generated_at": datetime.now(KST).isoformat(),
+    }
+
+
+@router.get("/ops/project-stats")
+async def ops_project_stats(
+    days: int = Query(30, description="집계 일수 (1~365, 벗어나면 잘라낸다)"),
+):
+    """프로젝트별 파이프라인 건수/상태 분포 — 채팅 아티팩트 완료율 차트."""
+    days = _clamp_int(days, default=30, minimum=1, maximum=365)
+    try:
+        conn = await _get_conn()
+        try:
+            rows = await conn.fetch("""
+                SELECT project, status, COUNT(*)::int AS cnt
+                FROM (
+                    SELECT DISTINCT ON (job_id) job_id, project, status
+                    FROM (
+                        SELECT job_id, project, status, 0 AS src
+                        FROM pipeline_jobs
+                        WHERE created_at >= NOW() - (INTERVAL '1 day' * $1::int)
+                        UNION ALL
+                        SELECT job_id, project, status, 1 AS src
+                        FROM pipeline_jobs_archive
+                        WHERE created_at >= NOW() - (INTERVAL '1 day' * $1::int)
+                    ) u
+                    ORDER BY job_id, src
+                ) j
+                GROUP BY project, status
+            """, days)
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.error("ops_project_stats_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+    items = _project_stat_items([dict(r) for r in rows])
+    return {
+        "items": items,
+        "days": days,
+        "total": sum(i["total"] for i in items),
+        "generated_at": datetime.now(KST).isoformat(),
+    }
+
+
+@router.get("/ops/status")
+async def ops_status():
+    """운영 상태 요약 — 서버 카드 + 서킷브레이커 (ArtifactDashboard).
+
+    상태를 새로 계산하지 않는다. 기존 /ops/health-check 와 서킷브레이커 상태를
+    그대로 접어서 위젯이 읽는 모양으로만 바꾼다 (중복 구현 금지).
+    """
+    from app.services.circuit_breaker import FAILURE_THRESHOLD, get_all_states
+
+    health: Dict[str, Any] = {}
+    circuit_states: List[Dict[str, Any]] = []
+    try:
+        health = await health_check()
+    except Exception as e:
+        logger.error("ops_status_health_error", error=str(e))
+        health = {"error": str(e), "pipeline_healthy": False}
+    try:
+        circuit_states = await get_all_states()
+    except Exception as e:
+        logger.warning("ops_status_circuit_error", error=str(e))
+
+    return _ops_status_payload(health, circuit_states, _server_meta_list(), FAILURE_THRESHOLD)
+
+
+@router.get("/ops/pipeline-history")
+async def ops_pipeline_history(
+    limit: int = Query(10, description="조회 건수 (1~100, 벗어나면 잘라낸다)"),
+    project: Optional[str] = None,
+):
+    """최근 파이프라인 작업 이력 — 큐(pipeline_jobs) + 아카이브 합본."""
+    limit = _clamp_int(limit, default=10, minimum=1, maximum=100)
+    project_label = normalize_project_label(project) if project else None
+
+    params: list = [limit]
+    project_filter = ""
+    if project_label:
+        project_filter = "WHERE project = $2"
+        params.append(project_label)
+    try:
+        conn = await _get_conn()
+        try:
+            rows = await conn.fetch(f"""
+                SELECT job_id, project, status, phase, instruction,
+                       created_at, completed_at, source
+                FROM (
+                    SELECT DISTINCT ON (job_id)
+                           job_id, project, status, phase, instruction,
+                           created_at, completed_at, source
+                    FROM (
+                        SELECT job_id, project, status, phase, instruction,
+                               created_at, completed_at, 'live' AS source, 0 AS src
+                        FROM pipeline_jobs
+                        UNION ALL
+                        SELECT job_id, project, status,
+                               row_data->>'phase' AS phase,
+                               row_data->>'instruction' AS instruction,
+                               created_at,
+                               NULLIF(row_data->>'completed_at', '')::timestamptz AS completed_at,
+                               'archive' AS source, 1 AS src
+                        FROM pipeline_jobs_archive
+                    ) u
+                    ORDER BY job_id, src
+                ) j
+                {project_filter}
+                ORDER BY created_at DESC NULLS LAST
+                LIMIT $1::int
+            """, *params)
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.error("ops_pipeline_history_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+    items = _pipeline_history_items([dict(r) for r in rows])
+    return {
+        "items": items,
+        "limit": limit,
+        "project": project_label,
+        "count": len(items),
+        "generated_at": datetime.now(KST).isoformat(),
+    }
+
+
+@router.get("/ops/qa-results")
+async def ops_qa_results(
+    limit: int = Query(20, description="조회 건수 (1~200, 벗어나면 잘라낸다)"),
+    project: Optional[str] = None,
+):
+    """최근 QA(코드리뷰) 판정 — /ops 패널 QA Results 섹션.
+
+    출처는 code_reviews 다. design_qa_scores 는 디자인 수정요청(request_id)
+    점수표라 task_id/project/판정 계약이 없고 행도 0건이다 — 2026-09-16 스키마
+    직접 조회로 확인했다.
+    """
+    limit = _clamp_int(limit, default=20, minimum=1, maximum=200)
+    project_label = normalize_project_label(project) if project else None
+
+    params: list = [limit]
+    where = ""
+    if project_label:
+        where = "WHERE project = $2"
+        params.append(project_label)
+    try:
+        conn = await _get_conn()
+        try:
+            rows = await conn.fetch(f"""
+                SELECT job_id, project, verdict, score, review_cycle,
+                       needs_retry, flag_category, feedback, created_at
+                FROM code_reviews
+                {where}
+                ORDER BY created_at DESC
+                LIMIT $1::int
+            """, *params)
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.error("ops_qa_results_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+    items = _qa_result_items([dict(r) for r in rows])
+    return {
+        "items": items,
+        "limit": limit,
+        "project": project_label,
+        "count": len(items),
+        "source_table": "code_reviews",
+        "generated_at": datetime.now(KST).isoformat(),
+    }
+
+
+@router.get("/ops/design-reviews")
+async def ops_design_reviews(
+    limit: int = Query(10, description="조회 건수 (1~100, 벗어나면 잘라낸다)"),
+):
+    """최근 디자인 리뷰 판정 — /ops 패널 Design Reviews 섹션."""
+    limit = _clamp_int(limit, default=10, minimum=1, maximum=100)
+    try:
+        conn = await _get_conn()
+        try:
+            rows = await conn.fetch("""
+                SELECT d.id, d.task_id, d.page_url, d.before_path, d.after_path,
+                       d.verdict, d.issues_json, d.scores_json, d.reviewer_model,
+                       d.cost_usd, d.created_at,
+                       COALESCE(j.project, a.project) AS project
+                FROM design_reviews d
+                LEFT JOIN pipeline_jobs j ON j.job_id = d.task_id
+                LEFT JOIN pipeline_jobs_archive a ON a.job_id = d.task_id
+                ORDER BY d.created_at DESC NULLS LAST
+                LIMIT $1::int
+            """, limit)
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.error("ops_design_reviews_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+    items = _design_review_items([dict(r) for r in rows])
+    return {
+        "items": items,
+        "limit": limit,
+        "count": len(items),
+        "generated_at": datetime.now(KST).isoformat(),
+    }

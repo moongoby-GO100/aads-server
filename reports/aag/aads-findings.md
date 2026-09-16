@@ -1,6 +1,6 @@
 # AAG L1/L2 — AADS 아키텍처 결함 리포트
 
-생성 2026-09-16 14:16 KST · 결함 105건 · 판정 불가(UNRESOLVED) 110건
+생성 2026-09-16 15:47 KST · 결함 96건 · 판정 불가(UNRESOLVED) 110건
 
 UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 결함으로 세면
 숫자가 부풀고, 부풀린 숫자는 아무도 손대지 않아 규칙 전체가 무시된다.
@@ -13,12 +13,12 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 | 라우터 디렉터리 파일 | 87 |
 | APIRouter 정의 모듈 | 81 |
 | include_router 호출 | 82 |
-| 마운트된 라우트 | 874 |
+| 마운트된 라우트 | 880 |
 | 네임스페이스 | 82 |
 | 프런트 파일 | 232 |
 | 해석된 프런트 호출 | 337 |
-| SQL 참조 테이블 | 218 |
-| 그래프 노드/엣지 | 757 / 1148 |
+| SQL 참조 테이블 | 219 |
+| 그래프 노드/엣지 | 758 / 1151 |
 
 ## 규칙별 건수
 
@@ -29,10 +29,10 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 | `ORPHAN_ROUTER` | P2 | 1 |
 | `TABLE_NO_MODEL` | P1 | 44 |
 | `PATH_DRIFT` | P1 | 1 |
-| `ROUTE_MISSING` | P0 | 12 |
-| `STALE_BACKUP` | P2 | 37 |
+| `ROUTE_MISSING` | P0 | 6 |
+| `STALE_BACKUP` | P2 | 34 |
 
-| **합계** | | **105** |
+| **합계** | | **96** |
 
 ## DUP_MODULE (1건)
 
@@ -45,7 +45,7 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 - [P1] 네임스페이스 `/api/v1/directives` 를 2개 모듈이 소유 — `app/api/directives.py`(3개 라우트), `app/api/ops.py`(1개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
 - [P1] 네임스페이스 `/api/v1/llm-models` 를 2개 모듈이 소유 — `app/api/llm_models.py`(9개 라우트), `app/api/llm_report.py`(2개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
 - [P1] 네임스페이스 `/api/v1/ohvis` 를 3개 모듈이 소유 — `app/api/ohvis_harness.py`(5개 라우트), `app/api/ohvis_llmops.py`(12개 라우트), `app/api/ohvis_tasks.py`(8개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
-- [P1] 네임스페이스 `/api/v1/ops` 를 3개 모듈이 소유 — `app/api/hot_reload.py`(2개 라우트), `app/api/memory_monitor.py`(5개 라우트), `app/api/ops.py`(66개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
+- [P1] 네임스페이스 `/api/v1/ops` 를 3개 모듈이 소유 — `app/api/hot_reload.py`(2개 라우트), `app/api/memory_monitor.py`(5개 라우트), `app/api/ops.py`(72개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
 - [P1] 네임스페이스 `/api/v1/projects` 를 4개 모듈이 소유 — `app/api/checkpoints.py`(5개 라우트), `app/api/project_dashboard.py`(4개 라우트), `app/api/projects.py`(7개 라우트), `app/api/stream.py`(1개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
 - [P1] 네임스페이스 `/api/v1/settings` 를 3개 모듈이 소유 — `app/api/directives.py`(2개 라우트), `app/api/pipeline_runner.py`(2개 라우트), `app/routers/chat.py`(7개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
 - [P1] 네임스페이스 `/api/v1/user` 를 2개 모듈이 소유 — `app/api/user_api_keys.py`(4개 라우트), `app/api/user_project_servers.py`(4개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
@@ -105,7 +105,7 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 
 - [P1] `/root/aads/aads-dashboard/src/lib/api.ts:522` POST `/api/v1/chat/messages` — 경로는 있으나 메서드가 GET 다 (/api/v1/chat/messages)
 
-## ROUTE_MISSING (12건)
+## ROUTE_MISSING (6건)
 
 - [P0] `/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:50` GET `/api/v1/kakao-bot/history` — 일치하는 라우트 없음
 - [P0] `/root/aads/aads-dashboard/src/app/kakaobot/history/page.tsx:51` GET `/api/v1/kakao-bot/history/stats` — 일치하는 라우트 없음
@@ -113,14 +113,8 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 - [P0] `/root/aads/aads-dashboard/src/app/kakaobot/scheduled/page.tsx:51` POST `/api/v1/kakao-bot/scheduled/{}/cancel` — 일치하는 라우트 없음
 - [P0] `/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:67` GET `/api/v1/kakao-bot/settings` — 일치하는 라우트 없음
 - [P0] `/root/aads/aads-dashboard/src/app/kakaobot/settings/page.tsx:81` PUT `/api/v1/kakao-bot/settings` — 일치하는 라우트 없음
-- [P0] `/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx:139` GET `/api/v1/ops/cost-trend` — 일치하는 라우트 없음
-- [P0] `/root/aads/aads-dashboard/src/components/chat/ArtifactChart.tsx:140` GET `/api/v1/ops/project-stats` — 일치하는 라우트 없음
-- [P0] `/root/aads/aads-dashboard/src/components/chat/ArtifactDashboard.tsx:100` GET `/api/v1/ops/status` — 일치하는 라우트 없음
-- [P0] `/root/aads/aads-dashboard/src/components/chat/ArtifactDashboard.tsx:101` GET `/api/v1/ops/pipeline-history` — 일치하는 라우트 없음
-- [P0] `/root/aads/aads-dashboard/src/lib/api.ts:475` GET `/api/v1/ops/qa-results` — 일치하는 라우트 없음
-- [P0] `/root/aads/aads-dashboard/src/lib/api.ts:476` GET `/api/v1/ops/design-reviews` — 일치하는 라우트 없음
 
-## STALE_BACKUP (37건)
+## STALE_BACKUP (34건)
 
 - [P2] `app/api/ceo_chat.py.bak` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
 - [P2] `app/api/chat.py.bak.T073` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
@@ -153,9 +147,6 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 - [P2] `app/models/pc_agent.py.bak` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
 - [P2] `app/services/sandbox.py.bak` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
 - [P2] `app/static/apps/yeoljeong-finance/index.html.bak-20260714-1605-static-short` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
-- [P2] `app/static/reports/식당창업_혜택_총정리_2026.html.bak_aads` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
-- [P2] `app/static/reports/언니냉면_육수OEM_문의메일_초안.html.bak_aads` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
-- [P2] `app/static/reports/열정국밥_중화점_인수전환_체크리스트.html.bak_aads` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
 - [P2] `scripts/claude-oauth-wrapper.sh.bak_20260326_122801` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
 - [P2] `scripts/pipeline-runner.sh.bak.litellm` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
 - [P2] `scripts/pipeline-runner.sh.bak_litellm_fix` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
