@@ -1731,8 +1731,21 @@ ${safe_instruction}"
             effective_model="unverified"
             log "MODEL_CONTRACT job=$job_id requested=$current_model cli_model=$claude_cli_model verification=cli_argument_only"
             local claude_args=(--model "$claude_cli_model" -p --output-format text)
-            if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-                claude_args+=(--dangerously-skip-permissions)
+            # ── root 에서도 파일을 쓸 수 있어야 한다 (AADS-RUNNER-ROOT-WRITE, 2026-09-16) ──
+            # 실측 2026-09-16 11:5x KST, CLI 2.1.273:
+            #   플래그만 주면  → "--dangerously-skip-permissions cannot be used with
+            #                     root/sudo privileges for security reasons" 로 거부
+            #   플래그를 빼면  → -p 비대화 모드에서 Write/Edit 이 전량 승인 대기로 막힘
+            #                     ("requested permissions to write ... but you haven't granted it yet")
+            # 그래서 runner-57ef70e9(대시보드 Mermaid), runner-dc19afb7 / runner-c2055401
+            # (AADS AAG) 세 건이 산출물 0건으로 끝났다. NTV2 는 codex --sandbox 분기라 무사했고
+            # AADS 만 조용히 빈손으로 끝나 실패로 보이지도 않았다.
+            # IS_SANDBOX=1 을 함께 주면 두 경로가 모두 열린다(probe 로 파일 생성 확인).
+            # 자식 프로세스에만 주입한다 — 러너 셸 전체에 걸지 않는다.
+            claude_args+=(--dangerously-skip-permissions)
+            local claude_root_env=()
+            if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+                claude_root_env=(env IS_SANDBOX=1)
             fi
             if [[ -n "$slot_cred_file" ]]; then
                 # timeout 을 래퍼 안쪽에 두어야 한다. 바깥에 두면 래퍼만 죽고
@@ -1751,11 +1764,13 @@ ${safe_instruction}"
                     -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_AUTH_TOKEN_2 \
                     -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL \
                     "$CLAUDE_SLOT_CREDENTIAL_WRAPPER" \
+                    ${claude_root_env[@]+"${claude_root_env[@]}"} \
                     timeout "$MAX_RUNTIME" "$RUNNER_CLAUDE_CLI_BIN" "${claude_args[@]}" "$safe_instruction" \
                     < /dev/null > "$output_file" 2> "$err_file" &
             else
-                timeout "$MAX_RUNTIME" "$RUNNER_CLAUDE_CLI_BIN" "${claude_args[@]}" "$safe_instruction" \
-                    > "$output_file" 2> "$err_file" &
+                ${claude_root_env[@]+"${claude_root_env[@]}"} \
+                    timeout "$MAX_RUNTIME" "$RUNNER_CLAUDE_CLI_BIN" "${claude_args[@]}" "$safe_instruction" \
+                    < /dev/null > "$output_file" 2> "$err_file" &
             fi
             local claude_pid=$!
         fi

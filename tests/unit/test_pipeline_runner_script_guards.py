@@ -48,7 +48,9 @@ def test_pipeline_runner_cli_invocation_avoids_known_noninteractive_failures():
 
     assert "exec --sandbox workspace-write --ephemeral -C \"$workdir\"" in script
     assert "exec --full-auto --ephemeral -C \"$workdir\"" not in script
-    assert "if [[ \"${EUID:-$(id -u)}\" -ne 0 ]]; then" in script
+    # 2026-09-16: root 에서 플래그를 빼던 분기(-ne 0)가 파일 쓰기를 통째로 막았다.
+    # 이제 플래그는 항상 붙이고, root 일 때 IS_SANDBOX=1 을 자식에만 주입한다.
+    assert "if [[ \"${EUID:-$(id -u)}\" -eq 0 ]]; then" in script
     assert "claude_args+=(--dangerously-skip-permissions)" in script
     assert "claude --model \"$current_model\" --dangerously-skip-permissions" not in script
 
