@@ -63,7 +63,27 @@ _CAFE24_114: Dict[str, Any] = {
     "legacy_ids": ["114"],
 }
 
+_JINAH244: Dict[str, Any] = {
+    "id": "jinah244",
+    "host": "5.104.85.244",
+    "ssh_alias": "jinah244",
+    "ssh_port": 22,
+    "type": "ssh",
+    "provider": "Contabo",
+    "projects": ["ACCT"],
+    "directive_base": "/root/.genspark/directives",
+    "http_health_urls": [],
+    "display_name": "jinah244 (ACCT 진아실장)",
+    "legacy_ids": ["244"],
+}
+
 # 정규 서버 ID 목록 — 순회/집계는 항상 이 리스트 기준
+#
+# ⚠ jinah244 는 **일부러 여기에 넣지 않았다** (2026-09-16). 이 리스트를 도는 쪽은
+#   헬스체크·워치독·대시보드 집계다. 244 는 http_health_urls 가 없고 서비스 구성이
+#   다른 셋과 달라, 넣는 순간 "죽은 서비스" 로 매시 잡히며 오탐 알림이 나간다.
+#   호스트 조회(get_server_host)만 필요해서 레지스트리에만 올린다. 헬스체크 대상에
+#   넣으려면 http_health_urls 를 먼저 채우고 별도로 결정하라.
 CANONICAL_SERVER_IDS: List[str] = ["contabo116", "contabo14", "cafe24_114"]
 
 # 구 ID → 신 ID 별칭
@@ -83,7 +103,9 @@ SERVER_REGISTRY: Dict[str, Dict[str, Any]] = {
     "contabo116": _CONTABO116,
     "contabo14": _CONTABO14,
     "cafe24_114": _CAFE24_114,
+    "jinah244": _JINAH244,
     # ── 하위호환 별칭 (기존 코드 보호용, 신규 사용 금지) ──
+    "244": _JINAH244,
     "68": _CONTABO116,
     "211": _CONTABO14,
     "114": _CAFE24_114,

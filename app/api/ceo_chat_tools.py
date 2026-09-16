@@ -1486,6 +1486,7 @@ TOOL_DEFINITIONS: List[Dict] = [
             "- GO100: PostgreSQL (contabo14)\n"
             "- SF: MariaDB (cafe24_114, SSH 터널)\n"
             "- NTV2: MySQL 8.0 (cafe24_114, SSH 터널)\n"
+            "- ACCT: PostgreSQL 16 (jinah244 진아실장 회계 원장, SSH 터널, 읽기전용 롤)\n"
             "보안: SELECT/WITH/EXPLAIN만 허용. DML/DDL 차단. password/token 컬럼 자동 마스킹.\n"
             "예: query_project_database(project='GO100', query='SELECT * FROM users LIMIT 5')"
         ),
@@ -1495,7 +1496,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["GO100", "SF", "NTV2"],
+                    "enum": ["GO100", "SF", "NTV2", "ACCT"],
                 },
                 "query": {
                     "type": "string",

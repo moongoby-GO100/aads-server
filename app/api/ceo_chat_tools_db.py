@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # ─── 프로젝트별 DB 설정 ──────────────────────────────────────────────────────
 
-_SUPPORTED_PROJECTS = ("AADS", "GO100", "SF", "NTV2")
+_SUPPORTED_PROJECTS = ("AADS", "GO100", "SF", "NTV2", "ACCT")
 
 # KIS는 GO100으로 통합됨 — 레거시 요청 리다이렉트용 별칭 매핑
 _PROJECT_ALIAS = {"KIS": "GO100"}
@@ -47,12 +47,16 @@ _DEFAULT_DB_TYPE: Dict[str, str] = {
     "GO100": "postgresql",
     "SF": "mysql",
     "NTV2": "mysql",
+    "ACCT": "postgresql",
 }
 
 _DEFAULT_DB_ENDPOINT: Dict[str, Tuple[str, str]] = {
     "GO100": (get_server_host("contabo14"), "5432"),
     "SF": ("127.0.0.1", "3306"),
     "NTV2": ("127.0.0.1", "3307"),
+    # ACCT(진아실장, jinah244)의 PostgreSQL 은 listen_addresses=localhost 라 밖에서
+    # 붙을 수 없다. 포트를 열지 않고 SSH 터널로만 간다 — 아래 _SSH_TUNNEL_PROJECTS 참조.
+    "ACCT": ("127.0.0.1", "5432"),
 }
 
 _LEGACY_DB_HOST_ALIAS: Dict[str, str] = {
@@ -165,6 +169,18 @@ _SSH_TUNNEL_PROJECTS: Dict[str, Dict[str, Any]] = {
         ssh_key="/root/.ssh/id_ed25519_newtalk",
         remote_host="127.0.0.1",
         remote_port=3307,
+    ),
+    # ACCT — PostgreSQL 이지만 터널을 탄다. jinah244 의 postgres 는 localhost 에만
+    # 귀를 열어 두었고, 812만 행짜리 회계 원장을 공인 IP 로 꺼낼 이유가 없다.
+    # 계정은 읽기 전용 롤(acct_ro)만 쓴다.
+    "ACCT": _ssh_tunnel_config(
+        "ACCT",
+        ssh_host=get_server_host("jinah244"),
+        ssh_port=22,
+        ssh_user="root",
+        ssh_key="/root/.ssh/id_ed25519",
+        remote_host="127.0.0.1",
+        remote_port=5432,
     ),
 }
 
@@ -408,10 +424,17 @@ async def _get_pg_pool(project: str):
         if not config or not config["database"]:
             raise ValueError(f"프로젝트 {project} DB 설정 없음")
 
+        host, port = config["host"], config["port"]
+        if resolved in _SSH_TUNNEL_PROJECTS:
+            # 터널을 타는 PostgreSQL 프로젝트(ACCT). _ensure_ssh_tunnel 은 동기이고
+            # 최악 6초를 기다리므로 이벤트 루프에서 직접 부르지 않는다.
+            local_port = await asyncio.to_thread(_ensure_ssh_tunnel, resolved)
+            host, port = "127.0.0.1", str(local_port)
+
         try:
             dsn = (
                 f"postgresql://{config['user']}:{config['password']}"
-                f"@{config['host']}:{config['port']}/{config['database']}"
+                f"@{host}:{port}/{config['database']}"
             )
             pool = await asyncpg.create_pool(
                 dsn, min_size=1, max_size=_MAX_POOL_SIZE,
@@ -512,6 +535,11 @@ async def _query_postgresql(project: str, q: str) -> List[Dict[str, Any]]:
                     await _discard_pg_pool(project, pool)
                 else:
                     await _discard_pg_pool(project)
+                # 터널 프로젝트는 터널이 죽어서 풀이 깨졌을 수 있다. 풀만 버리고
+                # 같은 죽은 포트로 다시 붙으면 재시도가 똑같이 실패한다.
+                tunnel_target = _PROJECT_ALIAS.get(project, project)
+                if tunnel_target in _SSH_TUNNEL_PROJECTS:
+                    await asyncio.to_thread(_drop_ssh_tunnel, tunnel_target)
                 last_error = exc
                 continue
             raise

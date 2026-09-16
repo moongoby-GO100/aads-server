@@ -124,6 +124,15 @@ services:
       - NTV2_DB_USER=${NTV2_DB_USER:-}
       - NTV2_DB_PASSWORD=${NTV2_DB_PASSWORD:-}
       - NTV2_DB_TYPE=${NTV2_DB_TYPE:-mysql}
+      # ACCT(진아실장 회계 원장, jinah244) — postgres 가 localhost 에만 귀를 열어
+      # 두어 SSH 터널로만 붙는다. HOST/PORT 는 터널 종단이라 코드가 무시하고
+      # 127.0.0.1:<임시포트> 로 덮어쓴다. 계정은 읽기 전용 롤만 쓴다.
+      - ACCT_DB_HOST=${ACCT_DB_HOST:-127.0.0.1}
+      - ACCT_DB_PORT=${ACCT_DB_PORT:-5432}
+      - ACCT_DB_NAME=${ACCT_DB_NAME:-}
+      - ACCT_DB_USER=${ACCT_DB_USER:-}
+      - ACCT_DB_PASSWORD=${ACCT_DB_PASSWORD:-}
+      - ACCT_DB_TYPE=${ACCT_DB_TYPE:-postgresql}
       - AADS_BROWSER_BRIDGE_STATE_DIR=/app/browser-bridge-state
       - PC_AGENT_DEFAULT_AGENT_ID=${PC_AGENT_DEFAULT_AGENT_ID:-7f99c528-24d}
       - PC_AGENT_DEFAULT_HOSTNAME=${PC_AGENT_DEFAULT_HOSTNAME:-DESKTOP-ICU55HK}
