@@ -3525,20 +3525,27 @@ async def interrupt_session(
                 # (page.tsx duplicatePending) POST 는 그대로 나가 행이 두 개
                 # 생겼다. 2026-09-16 08:28:10·08:29:59 실측 — 동일 문구 2행,
                 # 버블 1개. 실제로는 지시가 두 번 병합돼 들어간다.
+                # 접두를 떼고 비교한다. 같은 지시라도 접두가 '[추가 지시]' 일 때와
+                # '[추가 지시 · 12:26 KST]' 일 때가 있어(에이전트 경유) 문자열을
+                # 통째로 맞추면 중복이 안 걸린다.
+                #
+                # 창은 30초가 아니라 2분이다. 2026-09-16 실측 중복쌍이
+                # 12:24:54 / 12:26:26 으로 **92초** 벌어져 있어 30초로는 못 잡았다.
+                # 진행 중 답변을 기다리다 다시 보내는 간격이 그 정도다.
                 duplicate_of = await conn.fetchval(
                     """
                     SELECT id
                       FROM chat_messages
                      WHERE session_id = $1
                        AND role = 'user'
-                       AND content = $2
+                       AND regexp_replace(content, '^\\[[^\\]]*\\]\\s*', '') = $2
                        AND COALESCE(intent, '') IN ('', 'queued_interrupt')
-                       AND created_at > NOW() - INTERVAL '30 seconds'
+                       AND created_at > NOW() - INTERVAL '120 seconds'
                      ORDER BY created_at DESC
                      LIMIT 1
                     """,
                     session_id,
-                    f"[추가 지시] {req.content}",
+                    (req.content or "").strip(),
                 )
                 if duplicate_of:
                     interrupt_message_id = duplicate_of
@@ -3664,7 +3671,7 @@ async def cancel_queued_interrupts(
                    edited_at = NOW()
              WHERE m.session_id = $1
                AND m.role = 'user'
-               AND m.content LIKE '[추가 지시]%'
+               AND m.content LIKE '[추가 지시%'
                AND COALESCE(m.intent, '') IN ('', 'queued_interrupt')
                AND ($2::uuid[] IS NULL OR m.id = ANY($2::uuid[]))
                AND NOT EXISTS (
@@ -3683,7 +3690,7 @@ async def cancel_queued_interrupts(
               FROM chat_messages m
              WHERE m.session_id = $1
                AND m.role = 'user'
-               AND m.content LIKE '[추가 지시]%'
+               AND m.content LIKE '[추가 지시%'
                AND COALESCE(m.intent, '') IN ('interrupt_applied', 'interrupt_completed', 'recovered_interrupt')
                AND ($2::uuid[] IS NULL OR m.id = ANY($2::uuid[]))
                AND m.created_at > NOW() - INTERVAL '30 minutes'

@@ -2011,7 +2011,10 @@ async def _apply_deferred_interrupts_to_state(
 
 
 def _normalize_interrupt_content(content: Any) -> str:
-    return re.sub(r"^\[추가 지시\]\s*", "", str(content or "")).strip()
+    # 접두는 '[추가 지시]' 만이 아니다. 실제로는 '[추가 지시 · 12:26 KST]' 처럼
+    # 시각·출처가 붙어 온다. 닫는 대괄호를 바로 요구하면 그 형태가 안 걸려
+    # 시각 문구가 그대로 모델 프롬프트에 섞인다(2026-09-16 실측 45건).
+    return re.sub(r"^\[추가 지시[^\]]*\]\s*", "", str(content or "")).strip()
 
 
 # 미소비 추가지시를 다음 턴에 되살릴 수 있는 시간창.
@@ -2061,7 +2064,7 @@ async def _fetch_persisted_interrupts(
                            edited_at = NOW()
                      WHERE m.session_id = $1
                        AND m.role = 'user'
-                       AND m.content LIKE '[추가 지시]%%'
+                       AND m.content LIKE '[추가 지시%%'
                        AND COALESCE(m.intent, '') IN ('', 'queued_interrupt')
                        AND m.created_at <= NOW() - $2::interval
                        AND NOT EXISTS (
@@ -2088,7 +2091,7 @@ async def _fetch_persisted_interrupts(
                   FROM chat_messages m
                  WHERE m.session_id = $1
                    AND m.role = 'user'
-                   AND m.content LIKE '[추가 지시]%%'
+                   AND m.content LIKE '[추가 지시%%'
                    AND COALESCE(m.intent, '') IN ('', 'queued_interrupt')
                    AND m.created_at > NOW() - $3::interval
                    AND NOT EXISTS (
@@ -4112,9 +4115,20 @@ async def _execution_has_newer_user_message(conn, session_id: str, execution_id:
             FROM chat_messages
             WHERE session_id = te.session_id
               AND role = 'user'
-              AND COALESCE(intent, '') NOT IN ('system_trigger')
+              -- 추가지시는 '더 새 사용자 메시지' 가 아니다. 진행 중 턴을 밀어내면
+              -- 그 턴이 만들던 답변이 통째로 버려진다(실측 54,301자 사례).
+              --
+              -- 접두 문자열로 판정하던 것을 intent 로 옮긴다. 접두는 종류가
+              -- 계속 는다 — '[추가 지시]', '[추가 지시 · 12:26 KST]',
+              -- '[CEO 지시 · …]', '[CEO 승인 · …]' 가 2026-09-16 하루에 다 나왔고,
+              -- 닫는 대괄호를 요구하던 패턴에 45건이 걸리지 않아 전부 일반
+              -- 메시지로 취급됐다. intent 는 접수 시점에 이미 찍혀 있다.
+              AND COALESCE(intent, '') NOT IN (
+                  'system_trigger', 'queued_interrupt', 'interrupt_completed',
+                  'recovered_interrupt', 'interrupt_expired'
+              )
               AND content NOT LIKE '[시스템]%%'
-              AND content NOT LIKE '[추가 지시]%%'
+              AND content NOT LIKE '[추가 지시%%'
             ORDER BY created_at DESC
             LIMIT 1
         ) latest_user ON TRUE
@@ -7652,7 +7666,7 @@ async def _resume_single_stream(
                               AND m.created_at > COALESCE(um.created_at, te.created_at)
                               AND (
                                     COALESCE(m.intent, '') = 'interrupt_applied'
-                                 OR m.content LIKE '[추가 지시]%'
+                                 OR m.content LIKE '[추가 지시%'
                               )
                             ORDER BY m.created_at ASC
                             LIMIT 5
@@ -11824,7 +11838,7 @@ async def send_message_stream(
                         FROM chat_messages m
                         WHERE m.session_id = $1
                           AND m.role = 'user'
-                          AND m.content LIKE '[추가 지시]%%'
+                          AND m.content LIKE '[추가 지시%%'
                           AND COALESCE(m.intent, '') <> 'recovered_interrupt'
                           AND NOT EXISTS (
                               SELECT 1
@@ -11847,11 +11861,9 @@ async def send_message_stream(
                     _orphan_lines: list[str] = []
                     _orphan_ids: list[uuid.UUID] = []
                     for _orphan in _orphan_interrupt_rows:
-                        _orphan_text = re.sub(
-                            r"^\[추가 지시\]\s*",
-                            "",
-                            str(_orphan["content"] or ""),
-                        ).strip()
+                        # 접두에 시각·출처가 붙는다. _normalize_interrupt_content 와
+                        # 같은 패턴을 쓴다 — 한쪽만 고치면 또 어긋난다.
+                        _orphan_text = _normalize_interrupt_content(_orphan["content"])
                         if not _orphan_text or _orphan_text in content:
                             continue
                         _orphan_lines.append(f"[이전 추가 지시] {_orphan_text}")

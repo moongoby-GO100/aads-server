@@ -2705,6 +2705,10 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning(f"execution_resume_owner_selfheal_failed: {exc}")
 
+    # 한 실행을 몇 번까지 다시 잡을지. 정상 재개는 한 자릿수면 충분하고,
+    # 이 값을 넘긴다는 것은 재개해도 같은 자리에서 다시 끝난다는 뜻이다.
+    _RESUME_MAX_OWNER_EPOCH = int(os.getenv("AADS_EXECUTION_RESUME_MAX_OWNER_EPOCH", "20"))
+
     async def _resume_pending_executions_once(
         max_rows: int = 5,
         *,
@@ -2773,6 +2777,18 @@ async def lifespan(app: FastAPI):
                     ) ph ON TRUE
                     WHERE te.status IN ('running', 'retrying')
                       AND te.updated_at > NOW() - INTERVAL '2 hours'
+                      -- 더 새 사용자 메시지에 밀려난 턴은 재개 대상이 아니다.
+                      -- 재개해봐야 그 자리에서 다시 밀려나고, 스캐너가 5초 뒤
+                      -- 또 집어간다. 2026-09-16 실측: 한 실행이 349회·3시간 13분.
+                      -- _should_auto_resume_interrupted_reason 이 같은 사유를
+                      -- 이미 막고 있는데, 그 검사는 interrupted 경로에만 걸려
+                      -- 이 retrying 경로는 그냥 지나갔다.
+                      AND COALESCE(te.error_message, '') NOT LIKE '%superseded%'
+                      AND COALESCE(te.error_message, '') NOT LIKE '%newer_user%'
+                      -- owner_epoch 상한. retry_count 는 이 경로에서 오르지
+                      -- 않아 재시도 예산 가드(기본 5)가 영영 발동하지 않는다.
+                      -- 사유가 무엇이든 한 실행을 무한히 잡지 않게 못을 박는다.
+                      AND COALESCE(te.owner_epoch, 0) < $5::int
                       AND (
                           te.owner_instance IS NULL
                           OR te.lease_expires_at IS NULL
@@ -2809,6 +2825,7 @@ async def lifespan(app: FastAPI):
                         "interrupted_auto_retry_scheduled:%",
                         "interrupted_auto_resume_cancelled:%",
                     ],
+                    _RESUME_MAX_OWNER_EPOCH,
                 )
 
                 for row in rows:
