@@ -44,6 +44,9 @@ _ENABLED = os.getenv("GOAL_DISPATCH_ENABLED", "true").lower() in ("1", "true", "
 _MAX_PER_CYCLE = int(os.getenv("GOAL_DISPATCH_MAX_PER_CYCLE", "2"))
 _MAX_DISPATCH = int(os.getenv("GOAL_DISPATCH_MAX_RETRY", "3"))
 _RETRY_AFTER_MIN = int(os.getenv("GOAL_DISPATCH_RETRY_AFTER_MIN", "30"))
+# 담당 세션 생성 승인 요청은 한 사이클에 이만큼까지. 카드가 한꺼번에 열 장
+# 올라오면 대표님은 읽지 않고 누르신다.
+_OWNER_REQUEST_PER_CYCLE = int(os.getenv("GOAL_OWNER_REQUEST_PER_CYCLE", "3"))
 
 # 답으로 세지 않는 표시. 진행중·중단 안내는 담당이 쓴 것이 아니다.
 _NOT_AN_ANSWER = ("⏳", "⚠️ _응답 생성이", "_AI가 응답을 생성 중")
@@ -80,15 +83,118 @@ def _build_message(row: Any) -> str:
     return "\n".join(body)
 
 
+async def _note(conn, milestone_id: str, note: str) -> None:
+    """사유를 남긴다 — **값이 달라질 때만.**
+
+    `dispatch_count` 는 건드리지 않는다. 담당이 없어서 못 보낸 것은
+    "미룬 것" 이지 "보냈는데 답이 없는 것" 이 아니다. 여기서 횟수를 올리면
+    말을 걸어 본 적도 없는 마일스톤이 재시도 한도를 다 쓰고 포기 처리된다.
+    """
+    await conn.execute(
+        "UPDATE milestones SET dispatch_note = $2, updated_at = NOW() "
+        " WHERE id = $1::uuid AND dispatch_note IS DISTINCT FROM $2",
+        milestone_id, note,
+    )
+
+
+async def _requester_session(conn, row: Any) -> str:
+    """승인 요청을 올릴 세션. **주도가 정본이다.**
+
+    주도가 없으면 같은 워크스페이스의 최근 활성 세션으로 폴백한다. 카드는
+    누군가의 이름으로 올라가야 하고, 그 대화에 결정이 돌아간다 —
+    올릴 곳이 없으면 대표님은 카드를 보시고도 맥락을 알 수 없다.
+    """
+    lead = str(row["goal_lead_session_id"] or "").strip()
+    if lead:
+        return lead
+    fallback = await conn.fetchval(
+        """
+        SELECT s.id::text FROM chat_sessions s
+         WHERE s.role_key IS NOT NULL
+           AND s.workspace_id = (
+                 SELECT s2.workspace_id FROM goal_task_links l
+                   JOIN chat_sessions s2 ON s2.id = l.task_id::uuid
+                  WHERE l.goal_id = $1::uuid AND l.task_type = 'chat_session'
+                    AND COALESCE(l.link_state, 'active') = 'active'
+                  ORDER BY l.created_at DESC LIMIT 1)
+         ORDER BY s.updated_at DESC LIMIT 1
+        """,
+        row["goal_id"],
+    )
+    return str(fallback or "")
+
+
+async def _handle_missing_owner(conn, row: Any, *, remaining: int) -> int:
+    """담당 세션이 없는 마일스톤 하나를 처리한다. 올린 요청 수를 돌려준다.
+
+    **여기서 세션을 만들지 않는다.** 만드는 것은 CEO 가 승인 카드를 누른
+    뒤 `provision_owner_session` 하나뿐이다 — 채팅창이 대표님 모르게
+    늘어나면 안 된다는 원칙(`add_goal_owner`)은 그대로다.
+    """
+    milestone_id = row["milestone_id"]
+    role = str(row["owner_role_key"] or "").strip()
+
+    # 역할조차 안 적힌 마일스톤은 요청 대상이 아니다. 누구를 만들지 모른다.
+    if not role:
+        await _note(conn, milestone_id, "담당 역할이 지정되지 않음")
+        return 0
+
+    requester = await _requester_session(conn, row)
+    if not requester:
+        await _note(conn, milestone_id, "주도 세션이 없어 승인 요청을 올릴 곳이 없음")
+        return 0
+
+    if remaining <= 0:
+        await _note(
+            conn, milestone_id,
+            f"담당 세션 없음(role={role}) — 이번 주기 요청 상한 초과, 다음 주기에 올림",
+        )
+        return 0
+
+    try:
+        from app.services.owner_session_provision import request_owner_session
+
+        result = await request_owner_session(
+            goal_id=row["goal_id"], role_key=role,
+            project=str(row["project"] or ""), requester_session_id=requester,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # 요청 하나가 실패해도 사이클 전체를 멈추지 않는다. 나머지
+        # 마일스톤 발송까지 같이 죽으면 한 건의 오류가 전부를 막는다.
+        logger.warning(
+            "goal_owner_request_failed",
+            milestone=str(milestone_id)[:8], role=role, error=str(exc)[:160],
+        )
+        await _note(conn, milestone_id, f"담당 세션 없음(role={role}) — 승인 요청 실패")
+        return 0
+
+    if result.get("error"):
+        logger.warning(
+            "goal_owner_request_rejected",
+            milestone=str(milestone_id)[:8], role=role, why=str(result["error"])[:160],
+        )
+        await _note(conn, milestone_id, f"담당 세션 없음(role={role}) — {result['error']}")
+        return 0
+
+    await _note(conn, milestone_id, f"담당 세션 없음(role={role}) — 생성 승인 요청함")
+    logger.info(
+        "goal_owner_request_open",
+        milestone=str(milestone_id)[:8], role=role,
+        request=str(result.get("request_id") or "")[:8],
+        reused=bool(result.get("reused")),
+    )
+    return 1
+
+
 async def dispatch_pending_milestones(project: str | None = None) -> dict[str, int]:
     """착수했는데 담당이 모르는 마일스톤에 지시를 넣는다."""
     if not _ENABLED:
-        return {"sent": 0, "skipped": 0, "gave_up": 0}
+        return {"sent": 0, "skipped": 0, "gave_up": 0, "owner_requests": 0}
 
     from app.core.db_pool import get_pool
 
     pool = get_pool()
-    sent = skipped = gave_up = 0
+    sent = skipped = gave_up = owner_requests = 0
     # 한 세션에 한 주기 한 번만. 세션이 목표 두 개에 참여하면 양쪽에서
     # 동시에 지시가 나갈 수 있는데, 담당은 그걸 두 개의 새 대화로 받는다.
     # 어느 쪽부터 할지 모른 채 섞어서 답한다.
@@ -101,6 +207,8 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                    m.description, m.completion_criteria,
                    m.dispatch_count, m.dispatched_at,
                    g.title AS goal_title, g.project, g.id::text AS goal_id,
+                   COALESCE(m.owner_role_key, '') AS owner_role_key,
+                   COALESCE(g.owner_session_id::text, '') AS goal_lead_session_id,
                    COALESCE(m.owner_session_id, s.id) AS session_id
             FROM milestones m
             JOIN goals g ON g.id = m.goal_id
@@ -120,11 +228,27 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
         )
 
         for row in rows:
-            if sent >= _MAX_PER_CYCLE:
-                break
             if not row["session_id"]:
-                # 담당이 안 정해진 마일스톤. 말을 걸 곳이 없다.
+                # 담당이 안 정해진 마일스톤. 말을 걸 곳이 **아직** 없다.
+                #
+                # 2026-09-17 이전에는 여기서 그냥 넘어갔다. 기록이 어디에도
+                # 남지 않아서, 담당 없는 마일스톤은 착수 상태로 열린 채
+                # 영원히 방치됐다 — 아무도 그런 것이 있는 줄 몰랐다.
+                # 이제 사유를 남기고, 주도 세션이 생성 승인을 요청한다.
                 skipped += 1
+                owner_requests += await _handle_missing_owner(
+                    conn, row, remaining=_OWNER_REQUEST_PER_CYCLE - owner_requests,
+                )
+                continue
+
+            # 발송 상한은 담당 없는 건을 처리한 **뒤에** 본다. 먼저 보면
+            # 발송이 상한에 차는 사이클마다 승인 요청이 통째로 밀린다.
+            #
+            # `break` 가 아니라 `continue` 인 이유도 같다. 상한에 찼다고
+            # 루프를 끊으면 뒤에 남은 담당 없는 마일스톤이 이번 사이클에
+            # 아예 보이지 않는다 — 발송이 바쁜 목표일수록 담당 공백이
+            # 영원히 안 드러난다. 한 사이클 20건이라 도는 비용은 없다.
+            if sent >= _MAX_PER_CYCLE:
                 continue
 
             # 상한 셋을 본다. **미루는 것과 포기하는 것은 다르다** —
@@ -234,6 +358,12 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 project=row["project"],
             )
 
-    if sent or gave_up:
-        logger.info("goal_dispatch_cycle", sent=sent, skipped=skipped, gave_up=gave_up)
-    return {"sent": sent, "skipped": skipped, "gave_up": gave_up}
+    if sent or gave_up or owner_requests:
+        logger.info(
+            "goal_dispatch_cycle", sent=sent, skipped=skipped, gave_up=gave_up,
+            owner_requests=owner_requests,
+        )
+    return {
+        "sent": sent, "skipped": skipped, "gave_up": gave_up,
+        "owner_requests": owner_requests,
+    }

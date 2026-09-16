@@ -943,7 +943,18 @@ async def approvals_pending(
              # 제안 카드(next_step)는 "이걸 할까요" 한 건이다. 도구 카드와
              # 같은 선택지를 주면 1회성 제안에 "최대 20회" 권한이 붙는다
              # (2026-09-15 실측 — 제안 승인 문구에 그대로 찍혀 나왔다).
+             #
+             # 담당 세션 생성(goal_owner)도 1회성이다. **한 번 만들면 끝**
+             # 이므로 "이 대화 동안 최대 50회" 같은 반복 권한이 붙을 자리가
+             # 없다. 붙으면 승인 한 번에 채팅창이 계속 늘어난다 — 대표님이
+             # 모르게 늘어나지 않는다는 원칙이 그대로 무너진다(2026-09-17).
              "choices": (
+                 [
+                     {"key": "single", "label": "세션 생성 승인",
+                      "params": {"decision": "approved", "scope": "single", "hours": 2}},
+                     {"key": "reject", "label": "거절",
+                      "params": {"decision": "rejected"}},
+                 ] if r["gate_source"] == "goal_owner" else (
                  [
                      {"key": "single", "label": "지금 실행",
                       "params": {"decision": "approved", "scope": "single", "hours": 2}},
@@ -973,7 +984,7 @@ async def approvals_pending(
                          {"key": "reject", "label": "거부",
                           "params": {"decision": "rejected"}},
                      ]
-                 )
+                 ))
              )}
             for r in rows
         ],
@@ -1190,6 +1201,55 @@ _SESSION_UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
 )
 
+# 담당 세션 생성 카드. 문자열을 두 벌로 적지 않는다 — 한쪽만 고치면
+# 승인은 되는데 세션은 안 생기는, 제일 알아채기 어려운 실패가 된다.
+_OWNER_SESSION_ACTION = "create_owner_session"
+
+
+def _owner_session_note(
+    *, head: str, approved: bool, summary: str, result: Optional[Dict[str, Any]]
+) -> str:
+    """담당 세션 생성 결정을 주도 대화에 적는다.
+
+    **이 건은 이미 끝났다.** 다른 카드는 "승인했으니 이어서 하라" 지만
+    여기서는 서버가 생성까지 마친 뒤에 적는 글이다. 그래서 무엇이 생겼는지
+    (제목·마일스톤 수·프롬프트 유무)를 사실로 적고, 할 일을 시키지 않는다.
+    """
+    if not approved:
+        return (
+            f"**{head}** — 담당 세션 생성\n\n"
+            f"- 요청: {(summary or '')[:300]}\n\n"
+            "채팅창을 만들지 않습니다. 해당 마일스톤에는 '담당 세션 생성 거절됨' 을 "
+            "남겼습니다 — 기존 담당에게 붙이거나 역할을 다시 정해야 합니다."
+        )
+
+    result = result or {}
+    if result.get("error"):
+        return (
+            f"**{head}** — 담당 세션 생성\n\n"
+            f"- 요청: {(summary or '')[:300]}\n"
+            f"- ⚠️ 승인은 기록됐으나 **생성에 실패했습니다**: {str(result['error'])[:300]}\n\n"
+            "마일스톤은 여전히 담당이 없습니다. 원인을 확인해야 합니다."
+        )
+
+    made = "새로 만들었습니다" if result.get("created") else "이미 있던 채팅창을 연결했습니다"
+    lines = [
+        f"**{head}** — 담당 세션 생성",
+        "",
+        f"- 채팅창: \"{result.get('session_title') or ''}\" — {made}",
+        f"- 넘겨받은 마일스톤: {int(result.get('linked_milestones') or 0)}건",
+    ]
+    if result.get("has_prompt"):
+        lines.append("- 역할 프롬프트: 있음")
+    else:
+        lines.append(
+            "- ⚠️ 역할 프롬프트가 없습니다 — 이 담당은 자기가 무엇을 하는 사람인지 "
+            "모르는 채로 시작합니다"
+        )
+    lines.append("")
+    lines.append("맡은 마일스톤은 다음 발송 주기에 그 담당에게 전달됩니다.")
+    return "\n".join(lines)
+
 
 async def _notify_chat_of_approval_decision(
     *,
@@ -1201,6 +1261,8 @@ async def _notify_chat_of_approval_decision(
     scope: str,
     grant_executions: int,
     hours: int,
+    owner_scope: Optional[Dict[str, Any]] = None,
+    owner_result: Optional[Dict[str, Any]] = None,
 ) -> None:
     """결정을 그 대화에 남기고, 남은 대기 건이 없으면 막힌 작업을 이어서 돌린다.
 
@@ -1220,9 +1282,32 @@ async def _notify_chat_of_approval_decision(
 
     approved = decision == "approved"
     head = "✅ 승인" if approved else "⛔ 거절"
+    is_owner_session = (tool or "") == _OWNER_SESSION_ACTION
     # 제안 카드는 도구 이름(`next_step`)을 보여 봐야 뜻이 없다.
-    label = "다음 단계" if (tool or "") == "next_step" else f"`{tool}`"
-    if approved:
+    label = {
+        "next_step": "다음 단계",
+        _OWNER_SESSION_ACTION: "담당 세션 생성",
+    }.get(tool or "", f"`{tool}`")
+
+    if is_owner_session:
+        # 거절도 결론이다. 남기지 않으면 그 마일스톤은 "승인 요청함" 에
+        # 멈춘 채로 보이고, 다음 사람은 아직 대기 중인 줄 안다.
+        if not approved:
+            try:
+                from app.services.owner_session_provision import (
+                    note_owner_session_rejected,
+                )
+
+                await note_owner_session_rejected(owner_scope or {})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "owner_session_reject_note_failed request=%s error=%s",
+                    request_id[:8], str(exc)[:160],
+                )
+        note = _owner_session_note(
+            head=head, approved=approved, summary=summary, result=owner_result,
+        )
+    elif approved:
         scope_label = {
             "single": "이번 건만 (1회)",
             "mission": f"같은 대상 작업 (최대 {grant_executions}회)",
@@ -1281,7 +1366,36 @@ async def _notify_chat_of_approval_decision(
         # 제안 카드(next_step)는 "막혀서 멈춘 것" 이 아니라 "이걸 할까요" 다.
         # 같은 문구로 이어 붙이면 담당이 있지도 않은 중단 지점을 찾는다.
         is_proposal = (tool or "") == "next_step"
-        if approved and is_proposal:
+        if is_owner_session:
+            # 여기서 "막혀서 중단된 작업을 이어서 수행하세요" 를 쓰면 안 된다.
+            # 서버가 이미 실행을 끝냈다 — 주도는 있지도 않은 중단 지점을
+            # 찾다가 엉뚱한 것을 다시 한다. 사실과 다음 흐름만 알린다.
+            made = (owner_result or {})
+            if not approved:
+                prompt = (
+                    "[시스템] 대표님이 담당 세션 생성을 거절했습니다.\n"
+                    f"요청: {(summary or '')[:300]}\n\n"
+                    "새 채팅창은 만들지 마세요. 이미 있는 담당에게 그 마일스톤을 "
+                    "붙이거나, 담당 역할을 다시 정해서 올리세요."
+                )
+            elif made.get("error"):
+                prompt = (
+                    "[시스템] 담당 세션 생성이 승인됐으나 생성에 실패했습니다.\n"
+                    f"실패 사유: {str(made['error'])[:300]}\n\n"
+                    "마일스톤은 여전히 담당이 없습니다. 원인을 확인하고 보고하세요. "
+                    "직접 세션을 만들지는 마세요 — 생성은 승인 경로로만 합니다."
+                )
+            else:
+                prompt = (
+                    "[시스템] 대표님이 승인해 담당 세션이 준비됐습니다.\n"
+                    f"채팅창: \"{made.get('session_title') or ''}\" · "
+                    f"넘겨받은 마일스톤 {int(made.get('linked_milestones') or 0)}건 · "
+                    f"역할 프롬프트 {'있음' if made.get('has_prompt') else '없음'}\n\n"
+                    "해당 담당에게는 다음 발송 주기에 마일스톤이 자동으로 전달됩니다. "
+                    "지금 그 담당에게 따로 말을 걸 필요는 없습니다. "
+                    "역할 프롬프트가 없다면 무엇을 하는 담당인지 정리해 올리세요."
+                )
+        elif approved and is_proposal:
             prompt = (
                 f"[시스템] 대표님이 다음 단계를 승인했습니다.\n"
                 f"승인된 제안: {(summary or '')[:500]}\n\n"
@@ -1397,6 +1511,25 @@ async def approvals_decide(
                                      THEN split_part(a.work_key, ':', 1) || ':'
                                           || split_part(a.work_key, ':', 2)
                                      ELSE '' END)
+                             -- 담당 세션 생성 카드는 승인된 뒤에 **서버가
+                             -- 직접 실행**한다. 어느 목표의 어느 역할인지가
+                             -- 여기서 지워지면 승인 즉시 되살릴 방법이 없다
+                             -- (jsonb_build_object 는 나머지 키를 버린다).
+                             || CASE WHEN a.action_type = 'create_owner_session'
+                                     THEN jsonb_build_object(
+                                         'goal_id',
+                                         COALESCE(a.approval_scope->>'goal_id', ''),
+                                         'role_key',
+                                         COALESCE(a.approval_scope->>'role_key', ''),
+                                         'workspace_id',
+                                         COALESCE(a.approval_scope->>'workspace_id', ''),
+                                         'requester_session_id',
+                                         COALESCE(
+                                             a.approval_scope->>'requester_session_id', ''),
+                                         'has_prompt',
+                                         COALESCE(a.approval_scope->'has_prompt',
+                                                  'false'::jsonb))
+                                     ELSE '{}'::jsonb END
                         ELSE a.approval_scope END,
                    expires_at = CASE WHEN $2 = 'approved'
                                      THEN now() + make_interval(hours => $7)
@@ -1405,7 +1538,8 @@ async def approvals_decide(
              WHERE a.id = eff.id
             RETURNING a.id::text, a.action_type, a.decision, a.max_executions,
                       a.approval_scope->>'scope' AS scope,
-                      a.requested_by, a.action_summary
+                      a.requested_by, a.action_summary,
+                      a.approval_scope::text AS scope_json
             """,
             request_id, decision, reason, decided_by,
             scope, grant_executions, hours,
@@ -1427,6 +1561,34 @@ async def approvals_decide(
         request_id[:8], row["action_type"], decision, scope, effective_scope,
         hours, grant_executions, decided_by[:8],
     )
+    # 담당 세션 생성은 **서버가 여기서 끝낸다.** 승인만 기록하고 생성을
+    # 담당 대화에 맡기면, 그 대화가 아직 없으므로 아무 일도 일어나지 않는다
+    # (2026-09-17 CEO 지시 — "내가 승인 후 생성할 수 있게").
+    #
+    # DB 결정 UPDATE 직후에 실행한다. 생성이 실패해도 **결정은 되돌리지
+    # 않는다** — 대표님이 누르신 사실은 기록으로 남아야 하고, 실패는 실패대로
+    # 주도 대화에 적어 사람이 볼 수 있게 한다.
+    owner_scope: Optional[Dict[str, Any]] = None
+    owner_result: Optional[Dict[str, Any]] = None
+    if row["action_type"] == _OWNER_SESSION_ACTION:
+        try:
+            owner_scope = json.loads(row["scope_json"] or "{}")
+        except Exception:  # noqa: BLE001
+            owner_scope = {}
+        if decision == "approved":
+            try:
+                from app.services.owner_session_provision import (
+                    provision_owner_session,
+                )
+
+                owner_result = await provision_owner_session(owner_scope)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "owner_session_provision_failed request=%s error=%s",
+                    request_id[:8], str(exc)[:200],
+                )
+                owner_result = {"error": str(exc)[:200]}
+
     # 결정은 대화로 돌아간다 — 누른 결과가 화면에 보이고, 막힌 작업이 이어진다.
     await _notify_chat_of_approval_decision(
         session_id=row["requested_by"],
@@ -1437,16 +1599,21 @@ async def approvals_decide(
         scope=effective_scope,
         grant_executions=grant_executions,
         hours=hours,
+        owner_scope=owner_scope,
+        owner_result=owner_result,
     )
     # 승인에는 반드시 시간 상한이 붙는다. 승인해 둔 것이 며칠 뒤 다른
     # 맥락에서 쓰이면 CEO 가 승인한 그 변경이 아니다.
-    return {
+    resp = {
         "id": row["id"],
         "decision": row["decision"],
         "scope": row["scope"] or ("single" if decision == "approved" else ""),
         "valid_hours": hours if decision == "approved" else 0,
         "max_executions": row["max_executions"] if decision == "approved" else 0,
     }
+    if owner_result is not None:
+        resp["owner_session"] = owner_result
+    return resp
 
 
 @router.post("/approvals/decide-bulk")
