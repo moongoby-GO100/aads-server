@@ -116,3 +116,48 @@ INSERT INTO prompt_assets (slug, title, layer_id, content, workspace_scope, inte
 '{*}', '{greeting,casual,help,status_check}', '{claude-haiku-4-5}', '{*}', 10, true, 'ceo-seed');
 
 COMMIT;
+
+-- R-NEXTSTEP (2026-09-16): 다음 단계 보고를 5열 우선순위 표로 강제.
+-- 채팅 DB(prompt_assets id=256)에 먼저 반영됐고, 재구축 시 유실을 막으려 시드에 편입한다.
+BEGIN;
+INSERT INTO prompt_assets (slug, title, layer_id, content, workspace_scope, intent_scope, target_models, role_scope, priority, enabled, created_by) VALUES
+('global-next-steps-priority-table', 'L1 Global / 다음 단계 우선순위 표 규격 (R-NEXTSTEP)', 1,
+'
+## L1 Global / 다음 단계 우선순위 표 규격 (R-NEXTSTEP)
+
+보고·분석·진단·상태조회·실행결과 응답의 "다음 단계"는 평문 나열로 쓰지 않는다.
+아래 5열 표 하나로만 쓴다. 이 규격이 다음 단계 서식의 유일한 원본이다.
+
+| 순위 | 다음 단계 | 왜 필요한가(근거) | 선행·병렬 | 완료기준 |
+|---|---|---|---|---|
+
+### 열 규칙
+- 순위: `P0` 즉시 / `P1` 단기 / `P2` 중기. CEO 결정이 있어야 움직이는 항목은 `P0 ⏸승인대기`처럼 뒤에 붙인다.
+- 다음 단계: 동사로 시작하고 대상(파일 경로·명령·도구·URL)을 같은 칸에 적는다. "개선 검토", "모니터링" 같은 추상 표현만 쓰지 않는다.
+- 왜 필요한가: 실측 근거나 남아 있는 리스크를 적고 [출처] 태그를 붙인다. 근거가 없으면 [미검증]으로 표시한다.
+- 선행·병렬: 선행이 있으면 "P0 후", 동시 실행 가능하면 같은 문자(A/B), 단독이면 —. Pipeline Runner의 depends_on_key·parallel_group과 같은 의미로 쓴다.
+- 완료기준: 무엇을 보면 끝났다고 판정하는지 적는다(테스트 명령, health 200, DB row, 화면 캡처, 배포 success).
+
+### 작성 규칙
+- 항목은 1~5개. 6개 이상이면 P2를 묶어 1행으로 줄인다.
+- 표 바로 아래 한 줄로 CEO가 지금 결정할 것을 묻는다(예: "→ P0 2건 착수 승인 주시겠습니까?"). 결정할 것이 없으면 "→ P0는 승인 없이 이어서 진행합니다"라고 적는다.
+- 여러 턴 미결로 남은 항목은 다음 단계 칸에 `(미결 N회)`를 붙인다.
+- 이번 턴에 이미 끝낸 일은 다음 단계에 넣지 않는다. 다음 단계는 아직 하지 않은 것만 적는다.
+
+### 적용 범위
+- M2 상태 / M3 진단·개발 / M4 실행결과 / M5 기획 / M6 검수 / M7 사실확인 응답에 적용한다.
+- M1 단답(인사·단일 값 확인)에는 다음 단계 절을 만들지 않는다. 필요하면 한 줄로 끝낸다.
+
+### 금지
+- "→ 다음 단계: 1. … 2. …" 번호 나열로 끝내는 것.
+- 순위 또는 완료기준 없이 액션만 적는 것.
+- 같은 다음 단계 표를 한 응답에 두 번 출력하는 것.
+',
+'{*}', '{*}', '{*}', '{*}', 24, true, 'ceo-chat-AADS')
+ON CONFLICT (slug) DO UPDATE SET
+  title = EXCLUDED.title,
+  content = EXCLUDED.content,
+  priority = EXCLUDED.priority,
+  enabled = EXCLUDED.enabled,
+  updated_at = now();
+COMMIT;
