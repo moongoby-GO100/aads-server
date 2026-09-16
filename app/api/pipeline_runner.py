@@ -1149,6 +1149,147 @@ async def submit_job(
     return JobSubmitResponse(job_id=job_id, status="queued", message=msg)
 
 
+# ── 끝난 작업은 큐 테이블에 남지 않는다 (AADS-RUNNER-ARCHIVE-VISIBILITY) ──
+# `pipeline_cleanup` 이 1시간마다 종료 작업(done/error/cancelled/rejected/
+# rejected_done)을 `pipeline_jobs_archive` 로 옮긴다
+# (app/services/pipeline_cleanup.py — 큐 테이블을 작게 유지하려는 원래 목적).
+#
+# 그런데 이 API 는 큐 테이블만 읽었다. 그래서 한두 시간 지나면
+# **자기가 낸 작업이 통째로 사라진 것처럼** 보였다.
+#
+# 2026-09-16 실측: 세션 b749ff17 이 낸 5건(runner-168bac82 외)이 18:26 에 전부
+# 아카이브로 옮겨졌다. `chat_session_id` 는 아카이브 안에 멀쩡히 남아 있었는데도
+# `pipeline_runner_status` 는 0건을 냈고, 세션 연결이 끊긴 것처럼 읽혔다.
+# **링크가 끊긴 게 아니라 보는 테이블이 하나 모자랐다.**
+#
+# 아카이브 행은 `row_data`(jsonb)에 원본 컬럼을 담고 있다. 다만 용량 때문에
+# `git_diff`·`logs`·`result_output` 은 빼고 저장하므로 그 세 개는 복원되지 않는다.
+_ARCHIVE_OMITTED_FIELDS = ("git_diff", "logs", "result_output")
+
+
+async def _archive_table_exists(conn) -> bool:
+    return bool(await conn.fetchval(
+        "SELECT to_regclass('public.pipeline_jobs_archive') IS NOT NULL"
+    ))
+
+
+def _archived_job_item(data: dict, *, detail: bool) -> dict:
+    """아카이브 row_data 를 API 응답 모양으로 되돌린다.
+
+    타임스탬프는 jsonb 안에서 이미 ISO 문자열이므로 그대로 쓴다.
+    """
+    status = data.get("status") or ""
+    phase = data.get("phase") or ""
+    error_detail = data.get("error_detail")
+    instruction = data.get("instruction") or ""
+    item = {
+        "job_id": data.get("job_id"),
+        "project": data.get("project"),
+        "instruction": instruction if detail else instruction[:200],
+        "status": status,
+        "phase": phase,
+        "cycle": data.get("cycle"),
+        "error_detail": error_detail,
+        "created_at": data.get("created_at"),
+        "updated_at": data.get("updated_at"),
+        "started_at": data.get("started_at"),
+        "depends_on": data.get("depends_on"),
+        "chat_session_id": data.get("chat_session_id"),
+        "model": data.get("model") or "",
+        "worker_model": data.get("worker_model") or "",
+        "actual_model": data.get("actual_model") or "",
+        "size": data.get("size") or "M",
+        "auth_recovery_state": data.get("auth_recovery_state") or "",
+        "auth_recovery_metadata": data.get("auth_recovery_metadata") or {},
+        # 조회한 쪽이 "왜 diff 가 없지" 로 다시 헤매지 않도록 출처를 밝힌다.
+        "archived": True,
+        "archive_note": (
+            "종료 후 아카이브로 이관된 작업이다. "
+            f"용량 때문에 {', '.join(_ARCHIVE_OMITTED_FIELDS)} 는 보관하지 않는다 — "
+            "diff 는 커밋에서 복원하라."
+        ),
+        **_runner_display_status(status, phase, error_detail,
+                                 data.get("auth_recovery_state")),
+    }
+    if detail:
+        item.update({
+            "max_cycles": data.get("max_cycles"),
+            "result_output": "",
+            "git_diff": "",
+            "review_feedback": data.get("review_feedback"),
+            "commit_hash": data.get("commit_hash"),
+            "actual_changed_files": data.get("actual_changed_files") or [],
+        })
+    return item
+
+
+async def _fetch_archived_job(conn, job_id: str, tenant_id: str) -> dict | None:
+    if not await _archive_table_exists(conn):
+        return None
+    data = await conn.fetchval(
+        """
+        SELECT row_data FROM pipeline_jobs_archive
+        WHERE job_id = $1 AND row_data->>'tenant_id' = $2
+        """,
+        job_id, tenant_id,
+    )
+    if not data:
+        return None
+    if isinstance(data, str):
+        import json as _json
+        data = _json.loads(data)
+    return _archived_job_item(data, detail=True)
+
+
+async def _fetch_archived_jobs(
+    conn, *, tenant_id: str, status: str | None, project: str | None,
+    session_id: str | None, limit: int, exclude_ids: set[str],
+) -> list[dict]:
+    """큐에서 빠진 작업을 목록에 채워 넣는다.
+
+    세션 필터가 있을 때가 특히 중요하다 — 그때가 바로 "내 작업 어디 갔나" 를
+    묻는 상황이고, 큐에는 최근 1시간 것만 남아 있다.
+    """
+    import json as _json
+    if limit <= 0 or not await _archive_table_exists(conn):
+        return []
+    conditions = ["row_data->>'tenant_id' = $1"]
+    params: list = [tenant_id]
+    idx = 2
+    if status:
+        conditions.append(f"status = ${idx}")
+        params.append(status)
+        idx += 1
+    if project:
+        conditions.append(f"project = ${idx}")
+        params.append(project)
+        idx += 1
+    if session_id:
+        conditions.append(f"row_data->>'chat_session_id' = ${idx}")
+        params.append(session_id)
+        idx += 1
+    rows = await conn.fetch(
+        f"""
+        SELECT row_data FROM pipeline_jobs_archive
+        WHERE {' AND '.join(conditions)}
+        ORDER BY created_at DESC
+        LIMIT ${idx}
+        """,
+        *params, limit + len(exclude_ids),
+    )
+    out: list[dict] = []
+    for r in rows:
+        data = r["row_data"]
+        if isinstance(data, str):
+            data = _json.loads(data)
+        if data.get("job_id") in exclude_ids:
+            continue
+        out.append(_archived_job_item(data, detail=False))
+        if len(out) >= limit:
+            break
+    return out
+
+
 @router.get("/pipeline/jobs", tags=["pipeline-runner"])
 async def list_jobs(
     status: Optional[str] = Query(None, max_length=30),
@@ -1235,6 +1376,18 @@ async def list_jobs(
             if health_probe:
                 item["health_probe"] = health_probe
             results.append(item)
+
+        # 큐가 모자라면 아카이브에서 채운다 — 끝난 작업은 1시간 뒤 큐에서 빠진다.
+        if len(results) < limit:
+            results.extend(await _fetch_archived_jobs(
+                conn,
+                tenant_id=_tenant_id(context),
+                status=status,
+                project=project,
+                session_id=session_id,
+                limit=limit - len(results),
+                exclude_ids={item["job_id"] for item in results},
+            ))
     return results
 
 
@@ -1479,6 +1632,11 @@ async def get_job(
         )
 
     if not row:
+        # 큐에 없으면 아카이브를 본다. 없어진 게 아니라 옮겨진 것이다.
+        async with pool.acquire() as conn:
+            archived = await _fetch_archived_job(conn, job_id, _tenant_id(context))
+        if archived:
+            return archived
         raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다")
 
     result = {
