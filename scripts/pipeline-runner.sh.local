@@ -2813,16 +2813,34 @@ deploy_job() {
         NTV2)   health_url="http://localhost:8080" ;;
     esac
 
+    # ── 예산 기반 헬스체크 (AADS-RUNNER-HEALTH-BUDGET, 2026-09-16) ──────────
+    # 기존은 sleep 10 × 3 = 최대 약 63초였다. 그런데 실측은 이렇다:
+    #   11:06:34 systemctl restart go100
+    #   11:06:37 gunicorn Listening at 127.0.0.1:8002   ← 소켓은 3초 만에 열린다
+    #   11:07:53 uvicorn "Application startup complete"  ← 앱은 79초 걸린다
+    # 헬스체크는 11:06:56 / 11:07:16 / 11:07:37 에 돌고 11:07:43 에 FAIL 로 단정했다.
+    # **준비 완료 10초 전에 포기하고** 승인된 GO100 P0 청산 안전장치를 git revert 로
+    # 되돌렸다(runner-1791da41). 소켓이 열리는 시점과 앱이 준비되는 시점은 다르다.
+    # 예산을 넉넉히 두고 짧게 폴링하면 빠른 서비스는 오히려 더 빨리 통과한다
+    # (첫 확인이 10초 뒤 → 5초 뒤).
+    local health_budget_sec="${HEALTH_CHECK_BUDGET_SEC:-180}"
+    local health_interval_sec="${HEALTH_CHECK_INTERVAL_SEC:-5}"
     if [[ -n "$health_url" ]]; then
         health_ok="FAIL"
-        for _retry in 1 2 3; do
-            sleep 10
+        local _waited=0
+        while (( _waited < health_budget_sec )); do
+            sleep "$health_interval_sec"
+            _waited=$(( _waited + health_interval_sec ))
             if curl -sf -m 10 -o /dev/null "$health_url"; then
                 health_ok="OK"
+                log "  HEALTH_OK job=$job_id after=${_waited}s url=$health_url"
                 break
             fi
-            log "  헬스체크 재시도 ${_retry}/3 job=$job_id"
+            if (( _waited % 30 == 0 )); then
+                log "  헬스체크 대기 ${_waited}/${health_budget_sec}s job=$job_id url=$health_url"
+            fi
         done
+        [[ "$health_ok" == "OK" ]] || log "  HEALTH_FAIL job=$job_id budget=${health_budget_sec}s url=$health_url"
     fi
 
     # ═══ 프론트엔드 헬스체크 (GO100/SF/NTV2) ═══
