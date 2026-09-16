@@ -317,10 +317,16 @@ db_update() {
     #
     # 종료코드는 언제나 0 이다 — 이 스크립트는 `set -e` 로 돈다. 여기서
     # 실패를 반환하면 DB 한 줄 때문에 러너 전체가 죽는다.
-    local _rc=0 _out=""
+    local _rc=0 _out="" _sql_head="" _err_tail=""
     _out=$(printf '%s' "$1" | _psql_cmd -v ON_ERROR_STOP=1 2>&1) || _rc=$?
     if (( _rc != 0 )); then
-        log "  DB_UPDATE_FAILED rc=${_rc} sql_head=$(printf '%s' "$1" | head -c 160 | tr '\n' ' ') err=$(printf '%s' "$_out" | tail -c 400 | tr '\n' ' ')"
+        # head -c 는 pipe 의 읽기 끝을 먼저 닫아 pipefail 환경에서 진단 자체가
+        # Broken pipe 를 만들 수 있다. Bash substring 으로 잘라 원래 DB 오류만 남긴다.
+        _sql_head="${1:0:160}"
+        _err_tail="${_out: -400}"
+        _sql_head="${_sql_head//$'\n'/ }"
+        _err_tail="${_err_tail//$'\n'/ }"
+        log "  DB_UPDATE_FAILED rc=${_rc} sql_head=${_sql_head} err=${_err_tail}"
     fi
     return 0
 }
@@ -553,6 +559,10 @@ _notify_db_failure() {
 # C1: SQL 안전 — dollar-quoting (내부에 $esc$가 없는 한 안전)
 sql_escape() {
     local val="$1"
+    # 모델 출력과 diff 를 byte 단위(head -c)로 제한하면 마지막 UTF-8 문자가
+    # 중간에서 잘릴 수 있다. PostgreSQL은 그 한 바이트 때문에 UPDATE 전체를
+    # 거부한다(runner-a6626b7f). DB 경계에서 유효한 UTF-8만 통과시킨다.
+    val=$(printf '%s' "$val" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true
     # $esc$ 토큰이 포함되면 제거 (인젝션 방지)
     val="${val//\$esc\$/}"
     echo "\$esc\$${val}\$esc\$"
@@ -2401,8 +2411,29 @@ ${output:0:1500}
                result_output=$(sql_escape "$output"),
                git_diff=$(sql_escape "$git_diff"),
                error_detail=NULL,
+               runner_pid=NULL,
                approval_requested_at=NOW(),
                updated_at=NOW() WHERE job_id='${job_id}';"
+    # 큰 payload 또는 인코딩 문제로 UPDATE가 실패해도 승인 상태와 커밋은
+    # 잃으면 안 된다. event 를 쓰기 전에 실제 상태를 읽어 확인하고, 실패 시
+    # payload 없는 최소 UPDATE로 한 번 더 전이한다.
+    local _approval_now
+    _approval_now=$(db_exec "SELECT status FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null || true)
+    _approval_now="${_approval_now// /}"
+    if [[ "$_approval_now" != "awaiting_approval" ]]; then
+        log "  APPROVAL_WRITE_MISSED job=$job_id status='${_approval_now}' — payload 없이 재시도"
+        db_update "UPDATE pipeline_jobs SET phase='awaiting_approval',
+                   status='awaiting_approval', error_detail=NULL, runner_pid=NULL,
+                   approval_requested_at=NOW(), updated_at=NOW()
+                   WHERE job_id='${job_id}' AND commit_hash='${approval_commit_sha}';"
+        _approval_now=$(db_exec "SELECT status FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null || true)
+        _approval_now="${_approval_now// /}"
+    fi
+    if [[ "$_approval_now" != "awaiting_approval" ]]; then
+        _fail_job "$job_id" "$session_id" "approval_state_persist_failed" "승인 상태 DB 저장 실패 — commit ${approval_commit_sha} worktree 보존"
+        _release_work_lock "$project" "$job_id" "$parallel_group"
+        return 1
+    fi
     record_runner_event "$job_id" "approval_requested" "awaiting_approval" "awaiting_approval" "$job_model" "" "$job_size" "" "{\"commit_hash\":\"${approval_commit_sha}\",\"review_verdict\":\"${review_verdict}\"}"
 
     local diff_summary="${git_diff:0:3000}"

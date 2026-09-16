@@ -17,6 +17,7 @@ watchdog 에 잡혔다.
 원인을 고치는 것과 별개로, **다음에 또 실패하면 로그에 남아야 한다.**
 """
 
+import subprocess
 from pathlib import Path
 
 
@@ -73,3 +74,37 @@ def test_review_hold_verifies_the_write_landed():
         retry = window[window.index("REVIEW_HOLD_WRITE_MISSED"):]
         assert "result_output=" not in retry, f"{name}: 재시도가 다시 payload 를 싣는다"
         assert "git_diff=" not in retry, f"{name}: 재시도가 다시 diff 를 싣는다"
+
+
+def test_sql_escape_drops_invalid_utf8_before_postgres():
+    """head -c가 한글을 중간 절단해도 PostgreSQL UPDATE 전체가 실패하면 안 된다."""
+    for name in SCRIPTS:
+        script = _read_script(name)
+        start = script.index("sql_escape() {")
+        end = script.index("\n}", start)
+        body = script[start:end]
+
+        assert "iconv -f UTF-8 -t UTF-8 -c" in body, f"{name}: DB 경계 UTF-8 정제가 없다"
+        completed = subprocess.run(
+            ["bash", "-c", f"{body}\n}}\nbad=$(printf 'ok\\354')\nsql_escape \"$bad\""],
+            check=True,
+            capture_output=True,
+        )
+        assert completed.stdout == b"$esc$ok$esc$\n", f"{name}: 잘린 UTF-8 바이트가 제거되지 않았다"
+
+
+def test_approval_transition_verifies_write_and_retries_without_payload():
+    """승인 전환 UPDATE가 실패하면 event를 쓰거나 worker가 끝나기 전에 복구한다."""
+    for name in SCRIPTS:
+        script = _read_script(name)
+        transition = script.index("SET phase='awaiting_approval'")
+        event = script.index('record_runner_event "$job_id" "approval_requested"', transition)
+        window = script[transition:event]
+
+        assert "APPROVAL_WRITE_MISSED" in window, f"{name}: 승인 전환 쓰기 확인이 없다"
+        assert "SELECT status FROM pipeline_jobs WHERE job_id=" in window
+        assert "approval_state_persist_failed" in window
+        assert "runner_pid=NULL" in window
+        retry = window[window.index("APPROVAL_WRITE_MISSED"):]
+        assert "result_output=" not in retry, f"{name}: 승인 전환 재시도가 output을 다시 싣는다"
+        assert "git_diff=" not in retry, f"{name}: 승인 전환 재시도가 diff를 다시 싣는다"
