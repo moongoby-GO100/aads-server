@@ -264,6 +264,263 @@ class AccountLoginCode(BaseModel):
     code: str
 
 
+# 구독 OAuth 로 붙는 provider. 이쪽은 키를 붙여넣어 등록할 수 없다 — access 토큰만
+# 넣으면 약 8시간 뒤 401 로 죽는다(2026-09-15 ANTHROPIC_AUTH_TOKEN_3 사고).
+SUBSCRIPTION_PROVIDERS = ("anthropic", "codex")
+
+# 드롭다운에 정식 이름으로만 노출할 provider. 별칭(claude/google/dashscope…)은 감춘다.
+CANONICAL_PROVIDERS = (
+    "anthropic", "codex", "openai", "gemini", "groq", "deepseek", "openrouter",
+    "qwen", "kimi", "minimax", "litellm", "cerebras", "together", "mistral",
+    "nvidia", "sambanova", "huggingface", "tavily", "kling",
+)
+
+
+def _fingerprint(value: str) -> str:
+    """값 비교용 지문. 평문은 어디에도 남기지 않는다 (R-KEY)."""
+    import hashlib
+
+    return hashlib.sha256(value.encode()).hexdigest()[:12]
+
+
+def _account_state(row: Any, binding: dict[str, Any] | None, now: datetime) -> str:
+    """행 하나의 상태를 서버가 정한다. 화면은 색만 칠한다."""
+    if not row["is_active"]:
+        return "inactive"
+    if binding is None:
+        return "unknown"          # 릴레이 무응답 — 등록 정보는 살리고 상태만 비운다
+    if binding.get("needs_login"):
+        return "needs_login"
+    limited = row["rate_limited_until"]
+    if limited and limited > now:
+        return "rate_limited"
+    return "ok"
+
+
+@router.get("/overview")
+async def llm_overview() -> dict[str, Any]:
+    """설정 화면 '통합 계정 카드' 의 단일 데이터원.
+
+    화면이 /llm-keys · /codex-usage · /account-bindings 를 따로 부르고 프론트에서
+    키 이름으로 이어 붙이던 것을 서버로 옮긴다. 2026-09-16 오전, 그렇게 조인하던
+    수집기가 계정을 갈아탄 세션의 이전 기록을 새 계정에 귀속시켜 멀쩡한 계정을
+    껐다. 합치는 곳이 두 군데면 같은 실수가 두 번 난다.
+    설계: aads-docs/docs/PRD-SETTINGS-UNIFIED-ACCOUNT-CARD-v1.0.md
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT k.id, k.provider, k.key_name, k.encrypted_value, k.label, k.priority,
+                   k.is_active, k.rate_limited_until, k.notes,
+                   s.used_percent, s.resets_at, s.snapshot_at,
+                   s.ok_72h, s.limit_72h, s.collected_at
+            FROM llm_api_keys k
+            LEFT JOIN codex_usage_snapshots s ON s.key_name = k.key_name
+            ORDER BY k.provider, k.priority, k.id
+            """
+        )
+
+    # 바인딩은 호스트의 릴레이만 안다. 실패해도 화면 전체를 죽이지 않는다.
+    bindings: dict[str, dict[str, Any]] | None
+    try:
+        payload = await _relay_call("GET", "/account-bindings")
+        bindings = {}
+        for b in payload.get("bindings", []):
+            target = str(b.get("target", ""))
+            kind, _, name = target.partition(":")
+            key = name if kind == "codex" else f"slot{name}"
+            bindings[key] = b
+    except HTTPException:
+        bindings = None
+        logger.warning("llm_keys.overview.bindings_unavailable")
+
+    # anthropic 키 ↔ 슬롯 매핑. 릴레이 슬롯 규약과 같은 순서다(priority 오름차순).
+    slot_of: dict[str, str] = {}
+    anthropic_rows = [r for r in rows if normalize_provider(r["provider"]) == "anthropic"]
+    for idx, r in enumerate(sorted(anthropic_rows, key=lambda x: (x["priority"], x["id"])), start=1):
+        slot_of[r["key_name"]] = f"slot{idx}"
+
+    now = datetime.now(timezone.utc)
+    accounts: list[dict[str, Any]] = []
+    providers: dict[str, dict[str, Any]] = {}
+
+    for row in rows:
+        provider = normalize_provider(row["provider"])
+        try:
+            masked = _mask(decrypt_value(row["encrypted_value"]))
+        except Exception:
+            masked = "****"
+
+        if provider in SUBSCRIPTION_PROVIDERS:
+            slot = slot_of.get(row["key_name"])
+            bkey = slot if provider == "anthropic" else row["key_name"]
+            binding = bindings.get(bkey) if bindings is not None else None
+            accounts.append({
+                "key_name": row["key_name"], "provider": provider, "label": row["label"],
+                "priority": row["priority"], "is_active": row["is_active"],
+                "kind": "subscription", "masked_value": masked,
+                "slot": slot,
+                "state": _account_state(row, binding, now),
+                "bound": bool(binding and binding.get("bound")),
+                "needs_login": bool(binding and binding.get("needs_login")),
+                "login_in_progress": bool(binding and binding.get("login_in_progress")),
+                "login_target": (f"anthropic:{slot[4:]}" if provider == "anthropic" and slot else None)
+                                or (f"codex:{row['key_name']}" if provider == "codex" else None),
+                "subscription": (binding or {}).get("subscription"),
+                "rate_limited_until": row["rate_limited_until"].isoformat() if row["rate_limited_until"] else None,
+                "used_percent": float(row["used_percent"]) if row["used_percent"] is not None else None,
+                "resets_at": row["resets_at"].isoformat() if row["resets_at"] else None,
+                "snapshot_age_hours": (round((now - row["snapshot_at"]).total_seconds() / 3600, 1)
+                                       if row["snapshot_at"] else None),
+                "ok_72h": row["ok_72h"] or 0, "limit_72h": row["limit_72h"] or 0,
+                "notes": row["notes"],
+            })
+        else:
+            p = providers.setdefault(provider, {"provider": provider, "key_count": 0, "usable": 0, "keys": []})
+            limited = bool(row["rate_limited_until"] and row["rate_limited_until"] > now)
+            state = "inactive" if not row["is_active"] else ("rate_limited" if limited else "ok")
+            p["key_count"] += 1
+            p["usable"] += 1 if state == "ok" else 0
+            p["keys"].append({
+                "id": row["id"], "key_name": row["key_name"], "label": row["label"],
+                "priority": row["priority"], "masked_value": masked,
+                "is_active": row["is_active"], "state": state, "notes": row["notes"],
+            })
+
+    def usable(kind: str) -> dict[str, int]:
+        sel = [a for a in accounts if a["provider"] == kind]
+        return {"usable": sum(1 for a in sel if a["state"] == "ok"), "total": len(sel)}
+
+    collected = [row["collected_at"] for row in rows if row["collected_at"]]
+    return {
+        "summary": {
+            "action_required": sum(1 for a in accounts if a["state"] in ("needs_login", "rate_limited")),
+            "codex": usable("codex"),
+            "anthropic": usable("anthropic"),
+            "subscription_total": len(accounts),
+            "apikey_total": sum(p["key_count"] for p in providers.values()),
+            "total": len(rows),
+            "bindings_available": bindings is not None,
+            "collected_at": max(collected).isoformat() if collected else None,
+        },
+        "accounts": accounts,
+        "providers": sorted(providers.values(), key=lambda p: (-p["key_count"], p["provider"])),
+    }
+
+
+@router.get("/providers")
+async def provider_options() -> dict[str, Any]:
+    """키 추가 드롭다운 목록. 쓰는 것 먼저, 안 쓰는 정식 provider 다음."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT provider, count(*) AS n FROM llm_api_keys WHERE is_active "
+            "GROUP BY provider ORDER BY count(*) DESC, provider"
+        )
+    used = [{"provider": normalize_provider(r["provider"]), "key_count": r["n"],
+             "kind": "subscription" if normalize_provider(r["provider"]) in SUBSCRIPTION_PROVIDERS else "apikey"}
+            for r in rows]
+    used_names = {u["provider"] for u in used}
+    unused = [{"provider": p, "key_count": 0,
+               "kind": "subscription" if p in SUBSCRIPTION_PROVIDERS else "apikey"}
+              for p in CANONICAL_PROVIDERS if p not in used_names]
+    return {"used": used, "unused": unused}
+
+
+@router.get("/new-key-defaults")
+async def new_key_defaults(provider: str) -> dict[str, Any]:
+    """provider 를 고르면 나머지를 서버가 채워준다.
+
+    키 이름 규칙은 provider 마다 다르다 — ANTHROPIC_AUTH_TOKEN_3,
+    CODEX_OAUTH_JINAH, GEMINI_API_KEY_JINAH2. 하드코딩하지 않고 그 provider 의
+    기존 이름에서 공통 접두를 뽑아 다음 번호를 붙인다.
+    """
+    provider = normalize_provider(provider)
+    if not provider:
+        raise HTTPException(status_code=400, detail="provider is required")
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT key_name, priority FROM llm_api_keys "
+            "WHERE provider = $1 AND is_active ORDER BY priority, id",
+            provider,
+        )
+
+    names = [r["key_name"] for r in rows]
+    used_priorities = sorted({r["priority"] for r in rows})
+    next_priority = next((n for n in range(1, len(used_priorities) + 2) if n not in used_priorities), 1)
+
+    if names:
+        # 공통 접두 = 기존 이름들의 최장 공통 앞부분. 끝의 구분자·숫자는 떼어낸다.
+        prefix = names[0]
+        for n in names[1:]:
+            i = 0
+            while i < min(len(prefix), len(n)) and prefix[i] == n[i]:
+                i += 1
+            prefix = prefix[:i]
+        prefix = prefix.rstrip("_0123456789") or f"{provider.upper()}_API_KEY"
+    else:
+        prefix = f"{provider.upper()}_API_KEY"
+
+    # 기존 키가 하나라도 있으면 반드시 접미를 붙인다. 접두만 쓰면 codex 처럼
+    # 이름이 MAIN/JINAH 로 갈린 provider 에서 'CODEX_OAUTH' 같은 맨 이름이 나온다.
+    existing = set(names)
+    if not names:
+        suggested = prefix
+    else:
+        n = 2
+        while f"{prefix}_{n}" in existing:
+            n += 1
+        suggested = f"{prefix}_{n}"
+
+    kind = "subscription" if provider in SUBSCRIPTION_PROVIDERS else "apikey"
+    login_targets: list[dict[str, Any]] = []
+    if kind == "subscription":
+        try:
+            payload = await _relay_call("GET", "/account-bindings")
+            want = "claude" if provider == "anthropic" else "codex"
+            login_targets = [
+                {"target": b["target"], "account": b["account"], "needs_login": b["needs_login"]}
+                for b in payload.get("bindings", [])
+                if str(b.get("target", "")).startswith(want + ":")
+            ]
+        except HTTPException:
+            login_targets = []
+
+    return {
+        "provider": provider,
+        "kind": kind,
+        "suggested_key_name": suggested,
+        "used_priorities": used_priorities,
+        "next_priority": next_priority,
+        "existing_count": len(names),
+        "login_targets": login_targets,
+    }
+
+
+class DuplicateCheck(BaseModel):
+    value: str
+
+
+@router.post("/check-duplicate")
+async def check_duplicate(body: DuplicateCheck) -> dict[str, Any]:
+    """같은 값이 이미 등록돼 있는지. 지문으로만 비교한다 (R-KEY)."""
+    target = _fingerprint(body.value.strip())
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT key_name, provider, encrypted_value FROM llm_api_keys")
+    for row in rows:
+        try:
+            if _fingerprint(decrypt_value(row["encrypted_value"])) == target:
+                return {"duplicate": True, "key_name": row["key_name"],
+                        "provider": normalize_provider(row["provider"])}
+        except Exception:
+            continue
+    return {"duplicate": False}
+
+
 @router.get("/account-bindings")
 async def account_bindings() -> dict[str, Any]:
     """구독 계정의 런타임 바인딩 상태. DB 등록과 별개로 파일 존재를 본다."""

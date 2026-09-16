@@ -2631,7 +2631,13 @@ async def handle_health(request):
             sem_value = _semaphore._value
     except Exception:
         pass
+    # 주계정 슬롯. 대시보드 계정 전환 UI 가 현재 선택을 알아야 한다.
+    try:
+        _, _, current_oauth, _, _ = _read_oauth_tokens()
+    except Exception:
+        current_oauth = ""
     health = {"status": "ok", "port": PORT, "sessions": len(_session_map),
+              "current_oauth": current_oauth,
               "claude_model_contract": {"version": CONTRACT_VERSION, "models": sorted(EXACT_MODEL_IDS)},
               "auth_mode": "direct_oauth" if _DIRECT_OAUTH_ENABLED else "litellm_proxy",
               "claude_cmd_mode": _resolve_cli_command("claude").get("mode", "unknown"),
@@ -2912,8 +2918,15 @@ async def handle_oauth_switch(request):
     slot = body.get("slot")
     if not slot:
         slot = {"naver": "2", "gmail": "1"}.get(body.get("primary", "").lower())
-    if slot not in ("1", "2"):
-        return web.json_response({"error": "slot must be '1' or '2'"}, status=400)
+    # 2026-09-16: 1/2 한정이던 것을 자격증명이 있는 슬롯 전체로 넓혔다. slot3(진아)이
+    # 생겼기 때문이다. 자격증명이 없는 슬롯으로 넘기면 그 순간부터 모든 호출이
+    # 죽으므로 파일 유무를 먼저 본다. 암묵 선택 차단(위 _EXTRA_SLOT_AUTH 주석)은
+    # 그대로다 — 여기는 호출자가 명시적으로 지목한 경우다.
+    if not re.fullmatch(r"[0-9]{1,3}", str(slot or "")):
+        return web.json_response({"error": "slot must be a number"}, status=400)
+    if not _slot_credentials_path(slot).exists():
+        return web.json_response(
+            {"error": f"slot{slot} 자격증명이 없다 — 먼저 로그인해라"}, status=409)
     try:
         text = _ENV_OAUTH_FILE.read_text()
         new_text = re.sub(r"CURRENT_OAUTH=\d+", "CURRENT_OAUTH=" + slot, text)

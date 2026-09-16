@@ -2712,6 +2712,73 @@ async def get_codex_cli_usage():
     return normalized
 
 
+@router.get("/ops/claude-accounts")
+async def get_claude_accounts():
+    """클로드 슬롯 목록과 현재 주계정.
+
+    대시보드의 계정 전환 UI 가 이 경로를 부르는데 **엔드포인트가 없어 404 였다**
+    (2026-09-16 확인). 프론트가 try/catch 로 삼켜 빈 카드로 보였다.
+    슬롯 자격증명은 호스트 파일이라 릴레이가 안다 — 여기서는 프록시만 한다.
+    설계: aads-docs/docs/PRD-SETTINGS-UNIFIED-ACCOUNT-CARD-v1.0.md
+    """
+    headers = {}
+    secret = _load_relay_secret()
+    if secret:
+        headers["X-Claude-Relay-Secret"] = secret
+    accounts = []
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=2.0)) as client:
+            resp = await client.get(f"{_CLAUDE_RELAY_URL}/account-bindings", headers=headers)
+            health = await client.get(f"{_CLAUDE_RELAY_URL}/health", headers=headers)
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": "relay_unreachable", "detail": str(exc)[:200], "accounts": []}
+
+    for b in (resp.json().get("bindings", []) if resp.status_code < 400 else []):
+        target = str(b.get("target", ""))
+        if not target.startswith("claude:"):
+            continue
+        accounts.append({
+            "id": int(target.split(":", 1)[1]),
+            "label": b.get("account", ""),
+            "subscription": b.get("subscription"),
+            "has_token": bool(b.get("bound")),
+            "needs_login": bool(b.get("needs_login")),
+        })
+
+    current = 1
+    try:
+        current = int((health.json() or {}).get("current_oauth") or 1)
+    except Exception:
+        pass
+    return {"ok": True, "accounts": accounts, "current_account": current}
+
+
+class ClaudeAccountSwitch(BaseModel):
+    account: int
+
+
+@router.post("/ops/claude-account/switch")
+async def switch_claude_account(body: ClaudeAccountSwitch):
+    """주계정 전환. 자격증명이 없는 슬롯은 릴레이가 409 로 막는다."""
+    headers = {"Content-Type": "application/json"}
+    secret = _load_relay_secret()
+    if secret:
+        headers["X-Claude-Relay-Secret"] = secret
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=2.0)) as client:
+            resp = await client.post(f"{_CLAUDE_RELAY_URL}/oauth/switch",
+                                     headers=headers, json={"slot": str(body.account)})
+    except httpx.HTTPError as exc:
+        return {"ok": False, "detail": f"릴레이에 닿지 못했다: {str(exc)[:160]}"}
+    try:
+        payload = resp.json()
+    except ValueError:
+        return {"ok": False, "detail": "릴레이 응답을 읽을 수 없다"}
+    if resp.status_code >= 400:
+        return {"ok": False, "detail": payload.get("error") or "전환 실패"}
+    return {"ok": True, "current_account": body.account, "label": f"slot{body.account}"}
+
+
 # ─── 계정별 LLM 사용량 현황 API (AADS-190C) ──────────────────────────────
 @router.get("/ops/account-usage")
 async def get_llm_account_usage():
