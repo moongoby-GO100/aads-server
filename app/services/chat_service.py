@@ -2099,40 +2099,45 @@ async def sweep_stale_interrupts(
     이유는 회수가 지금까지 **그 세션의 다음 턴이 돌 때만** 시도됐기 때문이다.
     세션이 멈추면 아무도 돌지 않아 23시간이 지나도 그대로였다.
     """
-    params: list[Any] = [INTERRUPT_RECOVERY_WINDOW, INTERRUPT_CONFIRM_WINDOW]
-    scope = ""
-    if session_id:
-        params.append(uuid.UUID(str(session_id)))
-        scope = " AND m.session_id = $3"
+    # **쿼리마다 자기가 쓰는 인자만 넘긴다.** 두 쿼리에 같은 목록을 넘겼더니
+    # 만료 쿼리가 $1 을 쓰지 않아 `could not determine data type of parameter
+    # $1` 로 매 주기 실패했다(2026-09-17 운영 로그). asyncpg 는 문장마다 따로
+    # 준비하므로, 문장에서 참조되지 않는 인자는 타입을 정할 수 없다.
+    _uid = uuid.UUID(str(session_id)) if session_id else None
 
     # 오래된 것부터 내린다. 한 쿼리로 합치지 않는 이유는 두 구간의 경계가
     # 겹칠 때 어느 쪽이 이기는지 SQL 로 읽히지 않기 때문이다.
     expired = await conn.execute(
-        f"""
+        """
         UPDATE chat_messages m
            SET intent = 'interrupt_expired', edited_at = NOW()
          WHERE m.role = 'user'
            AND m.intent IN ('queued_interrupt', 'interrupt_needs_confirm')
-           AND m.created_at <= NOW() - $2::interval
+           AND m.created_at <= NOW() - $1::interval
+           AND ($2::uuid IS NULL OR m.session_id = $2::uuid)
            AND NOT EXISTS (
                SELECT 1 FROM chat_turn_executions te WHERE te.user_message_id = m.id
-           ){scope}
+           )
         """,
-        *params,
+        INTERRUPT_CONFIRM_WINDOW,
+        _uid,
     )
     needs_confirm = await conn.execute(
-        f"""
+        """
         UPDATE chat_messages m
            SET intent = 'interrupt_needs_confirm', edited_at = NOW()
          WHERE m.role = 'user'
            AND m.intent = 'queued_interrupt'
            AND m.created_at <= NOW() - $1::interval
            AND m.created_at > NOW() - $2::interval
+           AND ($3::uuid IS NULL OR m.session_id = $3::uuid)
            AND NOT EXISTS (
                SELECT 1 FROM chat_turn_executions te WHERE te.user_message_id = m.id
-           ){scope}
+           )
         """,
-        *params,
+        INTERRUPT_RECOVERY_WINDOW,
+        INTERRUPT_CONFIRM_WINDOW,
+        _uid,
     )
 
     def _n(result: str) -> int:

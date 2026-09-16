@@ -2410,3 +2410,31 @@ def test_retract_does_not_hide_the_whole_session():
     assert "created_at >" not in hide_stmt
     # 다음 답변 한 건은 LIMIT 1 로 미리 고른다.
     assert "ORDER BY created_at ASC LIMIT 1" in retract
+
+
+def test_sweep_statements_use_every_parameter_they_are_given():
+    """문장이 안 쓰는 인자를 넘기면 asyncpg 가 타입을 못 정한다.
+
+    2026-09-17 운영 로그: 두 쿼리에 같은 인자 목록을 넘겼더니 만료 쿼리가
+    $1 을 참조하지 않아 `could not determine data type of parameter $1` 로
+    5분마다 실패했다. 배치는 조용히 죽어 있었고 대기 지시는 그대로였다.
+
+    각 문장의 자리표시자가 $1 부터 빈틈없이 이어지는지 본다.
+    """
+    import re as _re
+
+    service = Path(chat_service.__file__).read_text(encoding="utf-8")
+    sweep = service.split("async def sweep_stale_interrupts", 1)[1].split(
+        "\nasync def ", 1
+    )[0]
+
+    statements = _re.findall(r'"""(.*?)"""', sweep, _re.S)
+    sql_statements = [s for s in statements if "UPDATE chat_messages" in s]
+    assert len(sql_statements) == 2, "만료/확인대기 두 문장이 있어야 한다"
+
+    for sql in sql_statements:
+        indexes = {int(n) for n in _re.findall(r"\$(\d+)", sql)}
+        assert indexes, "자리표시자가 없다"
+        assert indexes == set(range(1, max(indexes) + 1)), (
+            f"자리표시자가 끊겼다: {sorted(indexes)} — 안 쓰는 인자를 넘기고 있다"
+        )
