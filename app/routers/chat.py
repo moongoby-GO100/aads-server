@@ -3521,23 +3521,51 @@ async def interrupt_session(
             import json as _json
             pool = get_pool()
             async with pool.acquire() as conn:
-                async with conn.transaction():
-                    interrupt_message_id = await conn.fetchval(
-                        """INSERT INTO chat_messages
-                           (session_id, role, content, intent, attachments)
-                           VALUES ($1, 'user', $2, 'queued_interrupt', $3::jsonb)
-                           RETURNING id""",
-                        session_id,
-                        f"[추가 지시] {req.content}",
-                        _json.dumps(req.attachments or []),
+                # 같은 문구를 연달아 보내면 화면은 한 건으로 접어 보여주는데
+                # (page.tsx duplicatePending) POST 는 그대로 나가 행이 두 개
+                # 생겼다. 2026-09-16 08:28:10·08:29:59 실측 — 동일 문구 2행,
+                # 버블 1개. 실제로는 지시가 두 번 병합돼 들어간다.
+                duplicate_of = await conn.fetchval(
+                    """
+                    SELECT id
+                      FROM chat_messages
+                     WHERE session_id = $1
+                       AND role = 'user'
+                       AND content = $2
+                       AND COALESCE(intent, '') IN ('', 'queued_interrupt')
+                       AND created_at > NOW() - INTERVAL '30 seconds'
+                     ORDER BY created_at DESC
+                     LIMIT 1
+                    """,
+                    session_id,
+                    f"[추가 지시] {req.content}",
+                )
+                if duplicate_of:
+                    interrupt_message_id = duplicate_of
+                    logger.info(
+                        "interrupt_duplicate_suppressed",
+                        session_id=sid,
+                        message_id=str(duplicate_of),
+                        content=req.content[:100],
                     )
-                    updated = await conn.execute(
-                        "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
-                        session_id,
-                    )
-                    if updated != "UPDATE 1":
-                        raise RuntimeError("interrupt receipt session update did not match")
-            logger.info("interrupt_saved_to_db", session_id=sid, intent="queued_interrupt", content=req.content[:100])
+                else:
+                    async with conn.transaction():
+                        interrupt_message_id = await conn.fetchval(
+                            """INSERT INTO chat_messages
+                               (session_id, role, content, intent, attachments)
+                               VALUES ($1, 'user', $2, 'queued_interrupt', $3::jsonb)
+                               RETURNING id""",
+                            session_id,
+                            f"[추가 지시] {req.content}",
+                            _json.dumps(req.attachments or []),
+                        )
+                        updated = await conn.execute(
+                            "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
+                            session_id,
+                        )
+                        if updated != "UPDATE 1":
+                            raise RuntimeError("interrupt receipt session update did not match")
+                    logger.info("interrupt_saved_to_db", session_id=sid, intent="queued_interrupt", content=req.content[:100])
         except Exception as e:
             logger.error("interrupt_db_save_failed", session_id=sid, error=str(e))
             raise HTTPException(
@@ -3549,9 +3577,10 @@ async def interrupt_session(
                 },
             ) from e
 
-        push_interrupt(sid, req.content, req.attachments if req.attachments else None)
-        logger.info("interrupt_queued", session_id=sid, content=req.content[:100],
-                     attachments=len(req.attachments))
+        if not duplicate_of:
+            push_interrupt(sid, req.content, req.attachments if req.attachments else None)
+            logger.info("interrupt_queued", session_id=sid, content=req.content[:100],
+                         attachments=len(req.attachments))
 
         # 접수 응답에 대상 실행/세대를 실어 보낸다. 내구성 커맨드 래퍼가 이
         # 값을 chat_commands 에 찍고(지시↔응답 연결), 프론트는 이 값으로
@@ -3579,13 +3608,108 @@ async def interrupt_session(
 
         return {
             "queued": True,
-            "message": "추가 지시가 현재 스트림 종료 전 또는 다음 도구 완료 시점에 반영됩니다.",
+            "duplicate": bool(duplicate_of),
+            "message": (
+                "같은 추가 지시가 방금 접수되어 있어 한 건으로 처리했습니다."
+                if duplicate_of
+                else "추가 지시가 현재 스트림 종료 전 또는 다음 도구 완료 시점에 반영됩니다."
+            ),
             "message_id": str(interrupt_message_id) if interrupt_message_id else None,
             "execution_id": target_execution_id,
             "generation_id": target_generation_id,
         }
     else:
         return {"queued": False, "message": "현재 AI가 응답 생성 중이 아닙니다. 일반 메시지로 전송하세요."}
+
+
+class CancelInterruptRequest(BaseModel):
+    message_ids: Optional[List[str]] = Field(default=None, max_length=50)
+
+
+@router.post("/chat/sessions/{session_id}/interrupt/cancel", tags=["chat-session"])
+async def cancel_queued_interrupts(
+    session_id: UUID,
+    payload: Optional[CancelInterruptRequest] = None,
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """아직 반영되지 않은 추가 지시를 무른다.
+
+    화면의 "✕ 취소" 는 2026-09-16 까지 로컬 카운터만 지웠다. 서버 행과
+    프로세스 큐는 그대로 남아, 취소했다고 생각한 지시가 그대로 답변에
+    들어갔다. 취소는 화면에서 지우는 일이 아니라 접수를 무르는 일이다.
+
+    이미 소비된 지시(interrupt_applied 이후)는 되돌리지 않는다 — 모델이
+    이미 읽었다. 몇 건이 그랬는지 숫자로 돌려주고 화면이 그대로 말한다.
+    """
+    if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
+
+    sid = str(session_id)
+    target_ids: list[UUID] = []
+    if payload and payload.message_ids:
+        for raw in payload.message_ids:
+            try:
+                target_ids.append(UUID(str(raw)))
+            except (TypeError, ValueError):
+                continue
+
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            UPDATE chat_messages m
+               SET intent = 'interrupt_cancelled',
+                   edited_at = NOW()
+             WHERE m.session_id = $1
+               AND m.role = 'user'
+               AND m.content LIKE '[추가 지시]%'
+               AND COALESCE(m.intent, '') IN ('', 'queued_interrupt')
+               AND ($2::uuid[] IS NULL OR m.id = ANY($2::uuid[]))
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM chat_turn_executions te
+                    WHERE te.user_message_id = m.id
+               )
+         RETURNING m.id, m.content
+            """,
+            session_id,
+            target_ids or None,
+        )
+        already_applied = await conn.fetchval(
+            """
+            SELECT COUNT(*)
+              FROM chat_messages m
+             WHERE m.session_id = $1
+               AND m.role = 'user'
+               AND m.content LIKE '[추가 지시]%'
+               AND COALESCE(m.intent, '') IN ('interrupt_applied', 'interrupt_completed', 'recovered_interrupt')
+               AND ($2::uuid[] IS NULL OR m.id = ANY($2::uuid[]))
+               AND m.created_at > NOW() - INTERVAL '30 minutes'
+            """,
+            session_id,
+            target_ids or None,
+        )
+
+    contents = [str(r["content"] or "") for r in rows]
+    from app.core.interrupt_queue import cancel_interrupts
+
+    dropped = cancel_interrupts(sid, contents if target_ids else None)
+
+    logger.info(
+        "interrupt_cancelled",
+        session_id=sid,
+        cancelled=len(rows),
+        queue_dropped=dropped,
+        already_applied=int(already_applied or 0),
+    )
+    return {
+        "cancelled": len(rows),
+        "queue_dropped": dropped,
+        "already_applied": int(already_applied or 0),
+        "message_ids": [str(r["id"]) for r in rows],
+    }
 
 
 class ResumeInterruptedRequest(BaseModel):

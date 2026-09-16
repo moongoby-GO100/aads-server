@@ -1830,7 +1830,7 @@ async def _apply_deferred_interrupts_to_state(
     from app.services.model_selector import call_stream
 
     for interrupt_pass in range(2):
-        interrupts = await _collect_queued_interrupts(session_id, limit=5)
+        interrupts = await _collect_queued_interrupts(session_id, limit=INTERRUPT_COLLECT_LIMIT)
 
         if not interrupts:
             break
@@ -13431,7 +13431,7 @@ async def send_message_stream(
         # 도구 루프가 없는 긴 텍스트 스트림에서는 model_selector 내부 인터럽트 체크 지점이 없다.
         # 이 경우 최종 저장 전에 남은 CEO 추가 지시를 한 번 더 반영해 현재 버블을 교체한다.
         for _deferred_interrupt_pass in range(2):
-            _deferred_interrupts = await _collect_queued_interrupts(session_id, limit=5)
+            _deferred_interrupts = await _collect_queued_interrupts(session_id, limit=INTERRUPT_COLLECT_LIMIT)
             if not _deferred_interrupts:
                 break
 
