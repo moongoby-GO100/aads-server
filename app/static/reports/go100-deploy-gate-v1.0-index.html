@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GO100 세션통제·배포게이트 문서 버전 인덱스</title>
+<style>
+:root{--bg:#0f1115;--fg:#e6e8eb;--mut:#9aa4b2;--acc:#4da3ff;--ok:#34c759;--bad:#ff453a;--line:#242a33;--card:#161a21}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",sans-serif}
+.wrap{max-width:880px;margin:0 auto;padding:36px 20px 80px}
+h1{font-size:25px;margin:0 0 6px}
+h2{font-size:18px;margin:34px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+.meta{color:var(--mut);font-size:13px;margin-bottom:24px}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+th,td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+th{background:var(--card);color:var(--mut);font-weight:600}
+a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
+code{background:#1c222b;padding:2px 6px;border-radius:4px;font-size:13px;color:#ffd479}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:16px 0}
+.badge{display:inline-block;padding:2px 9px;border-radius:5px;font-size:12px;font-weight:600}
+.b-cur{background:#12301a;color:#4ade80}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.mut{color:var(--mut)}
+ul{padding-left:20px}li{margin:6px 0}
+.foot{margin-top:46px;padding-top:16px;border-top:1px solid var(--line);color:var(--mut);font-size:13px}
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>GO100 세션 통제 · 배포 게이트 — 문서 버전 인덱스</h1>
+<div class="meta">
+최종 갱신 2026-09-16 11:47 KST · 관리자 백억이(GO100 PM/CTO) ·
+목표 달성 시까지 버전 관리
+</div>
+
+<div class="card">
+<b>이 문서군이 다루는 것.</b>
+#310 실매매를 실전 테스트하는 동안 ①담당 세션을 실제로 통제하고
+②배포가 실매매 엔진을 죽이지 않게 하는 체계.
+2026-09-16 하루에 실제로 난 사고 2건에서 출발했다.
+</div>
+
+<h2>현재 버전 — v1.0</h2>
+<table>
+<tr><th>문서</th><th>내용</th><th>상태</th></tr>
+<tr>
+<td><a href="./go100-deploy-gate-v1.0-plan.html">📘 기획·설계서</a></td>
+<td>문제 정의(세션 통제 / 배포 안전), 3단 통제 루프, 4단 게이트 흐름, 구조적 결함 4건, 브랜치 분기</td>
+<td><span class="badge b-cur">v1.0 현행</span></td>
+</tr>
+<tr>
+<td><a href="./go100-deploy-gate-v1.0-prd.html">📗 PRD</a></td>
+<td>G1~G4 규격, 인터페이스·종료코드, 완료 기준, 금지 사항, 우선순위</td>
+<td><span class="badge b-cur">v1.0 현행</span></td>
+</tr>
+</table>
+
+<h2>변경 이력</h2>
+<table>
+<tr><th>버전</th><th>일자</th><th>변경</th></tr>
+<tr>
+<td><b>v1.0</b></td>
+<td>2026-09-16</td>
+<td>최초 작성. CEO 지시 "전체 프로젝트 세션 통제 + 배포 전 의존성 확인, 꼼꼼하고 빠르게"에 대한 기획·설계·PRD.</td>
+</tr>
+</table>
+
+<h2>근거가 된 당일 사고</h2>
+<table>
+<tr><th>사고</th><th>원인</th><th>영향</th><th>차단 지점</th></tr>
+<tr>
+<td>go100-card119 크래시루프</td>
+<td>릴리스 <code>928511b13-staleq20260916</code> 에 <code>exit_lock.py</code> 누락, <code>live_engine.py:113</code> 이 import</td>
+<td class="bad">실매매 엔진 1분 36초 사망, 재시작 5회</td>
+<td><b>G2</b> 임포트 실재 검증</td>
+</tr>
+<tr>
+<td>청산가 게이트 오탐 롤백</td>
+<td>health-check 윈도우 &lt; 기동 시간(78초) → 기동 도중 FAIL 판정</td>
+<td class="bad">정상 코드가 <code>git revert</code> 됨, 실매매 미투입</td>
+<td><b>G4</b> 기동 신호 대기</td>
+</tr>
+</table>
+
+<h2>연결된 목표</h2>
+<ul>
+<li>목표 <code>250a271f</code> — 「#310 전략카드 일일 누적수익 3% 확보」 (주도 <code>StrategyCardLead</code>, 마일스톤 16건)</li>
+<li>2026-09-16 실적: 11왕복 3승 8패 · 순손익 <span class="bad">-1,557.57원</span> · 건별 합산 <span class="bad">-2.304%</span> · 중단선 -4.0%까지 1.70%p</li>
+<li>당일 청산 11건 중 <b>파동 고점 매도 0건</b> — 목표의 핵심 경로가 아직 실행되지 않음</li>
+</ul>
+
+<h2>집행 상태</h2>
+<table>
+<tr><th>항목</th><th>담당</th><th>상태</th></tr>
+<tr><td>브랜치 분기 해소 (ahead 3 / behind 3)</td><td>OpsInfraOwner</td><td class="mut">지시 발송, 회신 대기</td></tr>
+<tr><td>G2 · G4 구현</td><td>Pipeline Runner</td><td class="mut">제출</td></tr>
+<tr><td>G1 · G3 추가</td><td>OpsInfraOwner</td><td class="mut">15:30 이후</td></tr>
+<tr><td>C1~C4 구조 결함</td><td>OpsInfraOwner</td><td class="mut">시점 분리 판정 대기</td></tr>
+</table>
+
+<div class="foot">
+GO100 · contabo14 (5.104.86.14) · <code>/root/kis-autotrade-v4</code><br>
+핸드오버 정본: <code>go100.session-control-and-deploy-gate-plan-20260916</code><br>
+수치 출처는 전부 당일 서버·DB 실측. 추정치 없음.
+</div>
+
+</div></body></html>

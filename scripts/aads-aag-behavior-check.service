@@ -1,0 +1,19 @@
+[Unit]
+# AAG L3 — 실행 기록에서 설계 사고를 찾는다.
+# 수동 실행으로만 두면 사람이 기억할 때만 돈다. R-ERRBOOK: 규칙으로만 기록된 것은 또 일어난다.
+Description=AADS AAG L3 runtime behavior check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/aads/aads-server
+# 종료코드 1 = 지적 있음(정상 동작). oneshot 이 실패로 보이지 않게 허용한다.
+# 종료코드 2 = 실행 불가(수집 실패) — 이것만 실패로 남는다.
+SuccessExitStatus=0 1
+ExecStart=/usr/bin/python3 /root/aads/aads-server/tools/aag/behavior_check.py --hours 24 --out /var/log/aads-pipeline/aag-behavior-latest.md
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aads-aag-behavior
+TimeoutStartSec=180

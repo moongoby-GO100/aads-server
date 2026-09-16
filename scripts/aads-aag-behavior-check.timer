@@ -1,0 +1,12 @@
+[Unit]
+Description=AADS AAG L3 runtime behavior check timer
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+AccuracySec=1min
+Persistent=true
+Unit=aads-aag-behavior-check.service
+
+[Install]
+WantedBy=timers.target

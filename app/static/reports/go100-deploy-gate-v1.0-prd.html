@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GO100 배포 전 의존성 검증 게이트 PRD v1.0</title>
+<style>
+:root{--bg:#0f1115;--fg:#e6e8eb;--mut:#9aa4b2;--acc:#4da3ff;--ok:#34c759;--warn:#ff9f0a;--bad:#ff453a;--line:#242a33;--card:#161a21}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:26px;margin:0 0 6px;letter-spacing:-.3px}
+h2{font-size:19px;margin:38px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:16px;margin:24px 0 8px;color:var(--acc)}
+.meta{color:var(--mut);font-size:13px;margin-bottom:22px}
+.badge{display:inline-block;padding:2px 9px;border-radius:5px;font-size:12px;font-weight:600;margin-right:6px}
+.b-p0{background:#3a1416;color:#ff6b61}
+.b-ok{background:#12301a;color:#4ade80}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:var(--card);color:var(--mut);font-weight:600}
+code{background:#1c222b;padding:2px 6px;border-radius:4px;font-size:13px;color:#ffd479}
+pre{background:#12161d;border:1px solid var(--line);border-radius:8px;padding:14px;overflow:auto;font-size:13px;line-height:1.55}
+pre code{background:none;padding:0;color:#d8dee9}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.mut{color:var(--mut)}
+ul{padding-left:20px}li{margin:5px 0}
+.foot{margin-top:50px;padding-top:16px;border-top:1px solid var(--line);color:var(--mut);font-size:13px}
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>GO100 배포 전 의존성 검증 게이트 — PRD v1.0</h1>
+<div class="meta">
+<span class="badge b-p0">P0</span>
+문서 ID <code>GO100-DEPLOY-GATE-PRD-v1.0</code> ·
+작성 2026-09-16 11:40 KST ·
+작성자 백억이(GO100 PM/CTO) ·
+승인권자 CEO ·
+집행 담당 <code>OpsInfraOwner</code>
+</div>
+
+<div class="card">
+<b>한 줄 요약.</b> 릴리스를 서비스에 붙이기 <b>전에</b> 4단 게이트를 통과시킨다.
+목표 소요 <b>90초</b>. 통과하지 못하면 핀 전환 자체를 하지 않는다.
+2026-09-16 하루에 실제로 일어난 사고 2건(실매매 엔진 사망 1분 36초, 정상 코드의 오탐 롤백)을
+이 게이트가 각각 G2·G4에서 막는다.
+</div>
+
+<h2>1. 배경 — 오늘 실제로 일어난 일</h2>
+
+<table>
+<tr><th>시각(KST)</th><th>사건</th><th>근거</th></tr>
+<tr><td>11:06:12</td><td><code>runner-1791da41</code> 승인 → <code>58a57ca08</code> push</td><td>runner_events <code>approval_decision</code></td></tr>
+<tr><td>11:07:56</td><td>배포로 <code>go100.service</code> 재기동</td><td>journalctl</td></tr>
+<tr><td>11:07:45</td><td><span class="bad">health-check FAIL</span> → 자동 <code>git revert a3e738aa8</code></td><td>runner_events</td></tr>
+<tr><td>11:09:14~15</td><td>uvicorn <code>Application startup complete</code> — <b>기동에 78초</b></td><td>journalctl</td></tr>
+<tr><td>11:09:43</td><td><span class="bad">go100-card119 크래시루프 시작</span></td><td>journalctl</td></tr>
+<tr><td>11:11:19</td><td>card119 복구 (릴리스 핀 <code>f1d67ff73</code> 교체)</td><td>systemctl</td></tr>
+<tr><td>11:14:10</td><td><code>claudebot</code> 이 <code>d91cd108f</code> Reapply 푸시</td><td>git log</td></tr>
+</table>
+
+<h3>사고 1 — 릴리스에 파일이 빠졌다</h3>
+<pre><code>ModuleNotFoundError: No module named
+  'backend.app.services.go100.live_trading.exit_lock'
+  at /opt/go100/backend-releases/928511b13-staleq20260916/
+     backend/app/services/go100/live_trading/live_engine.py:113</code></pre>
+<ul>
+<li>워킹트리 <code>exit_lock.py</code> 존재(11,524바이트) · git tracked <span class="ok">yes</span> · HEAD 존재 <span class="ok">yes</span></li>
+<li>문제 릴리스 디렉터리에만 <span class="bad">부재</span> → 릴리스 복사 단계 누락</li>
+<li>결과: #119 실매매 엔진이 15초 간격으로 5회 재시작, <b>1분 36초 사망</b></li>
+</ul>
+
+<h3>사고 2 — 정상 코드가 오탐으로 되돌려졌다</h3>
+<ul>
+<li>health-check 대기 윈도우 &lt; go100 기동 시간(<b>78초</b>)</li>
+<li>기동 도중 판정 → FAIL → 자동 revert</li>
+<li>현재 실측: <code>/health</code> 200, <code>/api/health</code> 200, <code>NRestarts=0</code> — <b>API는 처음부터 멀쩡했다</b></li>
+</ul>
+
+<h2>2. 목표와 비목표</h2>
+<table>
+<tr><th>구분</th><th>내용</th></tr>
+<tr><td><b>목표</b></td><td>릴리스 핀 전환 전에 import 실재·정합·계약을 확인하고, 기동 완료를 <b>기다려서</b> 판정한다. 총 90초 이내.</td></tr>
+<tr><td><b>목표</b></td><td>실매매 중 배포로 인한 엔진 사망을 0으로 만든다.</td></tr>
+<tr><td><b>비목표</b></td><td>전체 테스트 스위트 실행. 느려서 실전 테스트 속도를 죽인다.</td></tr>
+<tr><td><b>비목표</b></td><td>배포 자체를 어렵게 만드는 것. CEO 지시는 "꼼꼼하면서 <b>빠르게</b>".</td></tr>
+</table>
+
+<h2>3. 게이트 4단 규격</h2>
+
+<h3>G1 — 정합 확인 (목표 10초)</h3>
+<table>
+<tr><th>항목</th><th>규격</th></tr>
+<tr><td>검사</td><td><code>git status --porcelain</code> 비어 있고, <code>git rev-list --left-right --count origin/main...HEAD</code> 가 <code>0 0</code></td></tr>
+<tr><td>실패 시</td><td>배포 <b>중단</b>. 분기 상태에서 릴리스를 만들면 무엇이 올라갔는지 사후에 알 수 없다.</td></tr>
+<tr><td>현재 값</td><td><code>main...origin/main [ahead 3, behind 3]</code> — <span class="bad">지금 이 게이트를 통과하지 못한다</span></td></tr>
+<tr><td>우회</td><td><code>GO100_GATE_ALLOW_DIVERGED=1</code> (사유 로그 필수). 기본 미허용.</td></tr>
+</table>
+
+<h3>G2 — 임포트 실재 검증 (목표 20초) <span class="badge b-p0">핵심</span></h3>
+<table>
+<tr><th>항목</th><th>규격</th></tr>
+<tr><td>시점</td><td>릴리스 디렉터리 생성 <b>직후</b>, 핀 전환 <b>전</b></td></tr>
+<tr><td>검사 1</td><td>릴리스 디렉터리에서 <code>python -m compileall -q backend/app/services/go100</code></td></tr>
+<tr><td>검사 2</td><td>진입 모듈 import 드라이런 3종:<br>
+<code>backend.app.services.go100.live_trading</code><br>
+<code>backend.app.services.go100.live_trading.card310_scheduler</code><br>
+<code>backend.app.services.go100.live_trading.card119_limitup_scheduler</code></td></tr>
+<tr><td>실행 조건</td><td>반드시 <b>그 릴리스 디렉터리를 cwd 로</b> 실행. 워킹트리에서 돌리면 누락을 못 잡는다(오늘 사고의 본질).</td></tr>
+<tr><td>실패 시</td><td>핀 전환 <b>중단</b>. 릴리스 디렉터리는 남겨 두고 누락 파일명을 로그에 남긴다.</td></tr>
+<tr><td>오늘 사고</td><td>이 검사 하나로 <code>exit_lock.py</code> 누락이 핀 전환 전에 잡힌다.</td></tr>
+</table>
+
+<h3>G3 — 계약 테스트 선별 실행 (목표 40초)</h3>
+<table>
+<tr><th>항목</th><th>규격</th></tr>
+<tr><td>대상</td><td>실매매 경로만:<br>
+<code>tests/unit/test_exit_price_sanity.py</code><br>
+<code>tests/go100/test_scalping_monitor.py</code><br>
+<code>tests/go100/test_card310_live_order_safety_p0.py</code><br>
+<code>tests/go100/test_card310_entry_exit_safeguards.py</code></td></tr>
+<tr><td>선존재 실패</td><td><code>tests/go100/KNOWN_FAILURES.txt</code> 에 고정. 이 목록에 있는 실패는 차단 사유가 아니다.</td></tr>
+<tr><td>실패 시</td><td>목록에 없는 <b>신규 실패</b>가 1건이라도 있으면 중단.</td></tr>
+<tr><td>근거</td><td>전량 실행은 608 passed / 5 failed 에 수 분이 걸린다. 실전 테스트 속도를 죽인다.</td></tr>
+</table>
+
+<h3>G4 — 기동 확인 (가변, 상한 180초) <span class="badge b-p0">핵심</span></h3>
+<table>
+<tr><th>항목</th><th>규격</th></tr>
+<tr><td>방식</td><td><b>고정 타임아웃 금지.</b> 재기동 후 <code>journalctl -u &lt;svc&gt; -f</code> 에서 기동 완료 신호가 나올 때까지 대기, 나오면 즉시 통과</td></tr>
+<tr><td>신호</td><td>API: <code>Application startup complete</code> / 스케줄러: 첫 루프 로그</td></tr>
+<tr><td>2차 확인</td><td>신호 확인 후 <code>/health</code> 200 (경로는 <code>/health</code>·<code>/api/health</code>. <code>/api/v1/ops/health-check</code> 는 GO100 에서 <b>404</b> — AADS 경로다)</td></tr>
+<tr><td>상한</td><td>180초. 초과 시에만 롤백.</td></tr>
+<tr><td>근거</td><td>실측 기동 78초. 지금 윈도우는 그보다 짧아 정상 배포를 계속 되돌린다.</td></tr>
+</table>
+
+<h2>4. 인터페이스</h2>
+<pre><code>scripts/go100/release_gate.sh &lt;release_dir&gt; [--service go100-card310] [--skip-g3]
+
+종료코드
+  0  전 단계 통과 — 핀 전환 허용
+  1  G1 정합 실패 (분기/더티)
+  2  G2 임포트 실패 (파일 누락·문법 오류)   ← 오늘 card119 사고
+  3  G3 신규 테스트 실패
+  4  G4 기동 실패 (180초 내 신호 없음)
+
+로그: /root/kis-autotrade-v4/logs/release_gate.log (단계별 소요시간 기록)</code></pre>
+
+<h2>5. 구조적 결함 — 게이트만으로는 부족한 부분</h2>
+<table>
+<tr><th>#</th><th>결함</th><th>실측 근거</th><th>조치</th></tr>
+<tr><td>C1</td><td>릴리스 생성 스크립트가 <b>없다</b></td><td><code>grep -rl backend-releases</code> → 저장소·<code>/opt</code>·<code>/usr/local/bin</code> 전부 <b>0건</b></td><td>저장소에 <code>scripts/go100/make_release.sh</code> 신설. 게이트를 그 안에서 호출.</td></tr>
+<tr><td>C2</td><td>릴리스 <b>247개</b> 누적</td><td><code>ls /opt/go100/backend-releases | wc -l</code></td><td>최근 10개 + 현재 핀만 보존</td></tr>
+<tr><td>C3</td><td>card310 drop-in <b>30개</b></td><td>대부분 <code>.bak_</code>/<code>.retired_</code>. 실제 핀 <code>zzzz-release-current.conf</code> 의 Description 은 <code>212c68922</code> 인데 WorkingDirectory 는 <code>60ddea588</code></td><td>핀 1개만 유지. Description 을 WorkingDirectory 에서 자동 생성.</td></tr>
+<tr><td>C4</td><td>자동커밋이 <code>git push origin master</code> 시도</td><td>브랜치는 <code>main</code> → 실패. 이번에 <code>1e6d4cd8c</code> 가 그렇게 생겨 ahead 2→3</td><td>브랜치명을 <code>git rev-parse --abbrev-ref HEAD</code> 로 결정</td></tr>
+</table>
+
+<h2>6. 우선순위와 시점</h2>
+<table>
+<tr><th>순위</th><th>항목</th><th>시점</th><th>이유</th></tr>
+<tr><td><b>P0</b></td><td>브랜치 분기 해소</td><td>즉시</td><td>게이트가 양쪽에 다른 SHA 로 존재 → 머지 충돌 확정. <code>f1d67ff73</code> 미푸시분 소실 위험.</td></tr>
+<tr><td><b>P0</b></td><td>G2 + G4 투입</td><td>즉시(무중단)</td><td>오늘 사고 2건을 직접 막음. 스크립트 신설이라 런타임 영향 없음.</td></tr>
+<tr><td>P1</td><td>G1 + G3 추가</td><td>15:30 이후</td><td>차단력 낮고 시간 소요</td></tr>
+<tr><td>P1</td><td>C1 릴리스 스크립트 표준화</td><td>15:30 이후</td><td>재발 방지 본체</td></tr>
+<tr><td>P2</td><td>C2·C3·C4</td><td>익일</td><td>위험도 낮음</td></tr>
+</table>
+
+<h2>7. 완료 기준 (검증 가능한 것만)</h2>
+<ul>
+<li><b>G2 검증</b>: <code>exit_lock.py</code> 를 임의 릴리스 사본에서 제거 → 게이트가 <b>종료코드 2</b> 로 중단. 핀 전환 미실행.</li>
+<li><b>G4 검증</b>: 재기동 후 <code>startup complete</code> 까지 78초 걸려도 <b>통과</b>. 롤백 0건.</li>
+<li><b>속도 검증</b>: <code>release_gate.log</code> 의 4단 합산이 <b>90초 이내</b>.</li>
+<li><b>회귀 검증</b>: 게이트 투입 후 첫 3회 배포에서 엔진 크래시루프 <b>0건</b>, 오탐 롤백 <b>0건</b>.</li>
+</ul>
+
+<h2>8. 금지 사항</h2>
+<ul>
+<li>게이트가 <b>손절·강제청산 경로를 막는 일이 없어야 한다</b>. 게이트는 배포 시점에만 동작하고 런타임 판정에 개입하지 않는다.</li>
+<li>장중(08:50~15:30) <code>go100-card310</code> 재기동은 CEO 또는 StrategyCardLead 판정 없이 하지 않는다.</li>
+<li>게이트 실패를 <code>--force</code> 로 넘기는 옵션을 만들지 않는다. 우회는 G1 환경변수 1개뿐이며 사유 로그가 남는다.</li>
+</ul>
+
+<div class="foot">
+GO100 · contabo14 · <code>/root/kis-autotrade-v4</code><br>
+관련 문서: <a href="./go100-deploy-gate-v1.0-index.html" style="color:var(--acc)">버전 인덱스</a> ·
+<a href="./go100-deploy-gate-v1.0-plan.html" style="color:var(--acc)">기획·설계서</a><br>
+핸드오버 정본: <code>go100.session-control-and-deploy-gate-plan-20260916</code>
+</div>
+
+</div></body></html>

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GO100 세션 통제 + 배포 게이트 기획·설계서 v1.0</title>
+<style>
+:root{--bg:#0f1115;--fg:#e6e8eb;--mut:#9aa4b2;--acc:#4da3ff;--ok:#34c759;--warn:#ff9f0a;--bad:#ff453a;--line:#242a33;--card:#161a21}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:26px;margin:0 0 6px;letter-spacing:-.3px}
+h2{font-size:19px;margin:38px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:16px;margin:24px 0 8px;color:var(--acc)}
+.meta{color:var(--mut);font-size:13px;margin-bottom:22px}
+.badge{display:inline-block;padding:2px 9px;border-radius:5px;font-size:12px;font-weight:600;margin-right:6px}
+.b-p0{background:#3a1416;color:#ff6b61}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:var(--card);color:var(--mut);font-weight:600}
+code{background:#1c222b;padding:2px 6px;border-radius:4px;font-size:13px;color:#ffd479}
+pre{background:#12161d;border:1px solid var(--line);border-radius:8px;padding:14px;overflow:auto;font-size:13px;line-height:1.55}
+pre code{background:none;padding:0;color:#d8dee9}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.mut{color:var(--mut)}
+ul{padding-left:20px}li{margin:5px 0}
+.foot{margin-top:50px;padding-top:16px;border-top:1px solid var(--line);color:var(--mut);font-size:13px}
+a{color:var(--acc)}
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>GO100 세션 통제 + 배포 게이트 — 기획·설계서 v1.0</h1>
+<div class="meta">
+<span class="badge b-p0">P0</span>
+문서 ID <code>GO100-CONTROL-GATE-PLAN-v1.0</code> ·
+작성 2026-09-16 11:45 KST ·
+작성자 백억이(GO100 PM/CTO) ·
+근거는 전부 당일 실측
+</div>
+
+<div class="card">
+<b>CEO 지시(2026-09-16 11:3x).</b>
+"너는 백억이 투자분석 전체 프로젝트 세션을 컨트롤할 수 있어야 한다. 조치해.
+배포 전 모든 의존성 확인, 오류가 있으면 안 된다. 지금은 실매매로 모든 걸 실전 테스트 중이다.
+시간이 부족해 꼼꼼하면서 빠르게 테스트를 진행해야 한다."
+</div>
+
+<h2>1. 문제 정의 — 두 축</h2>
+<table>
+<tr><th>축</th><th>증상</th><th>실측</th></tr>
+<tr><td><b>A. 세션 통제</b></td><td>담당에게 지시가 나가도 답이 돌아오지 않는다</td><td>릴레이 최근 5시간 <code>answered</code> <b>0 / 34</b> (pending 15, failed 19)</td></tr>
+<tr><td><b>B. 배포 안전</b></td><td>배포가 실매매 엔진을 죽이고, 정상 코드는 오탐으로 되돌려진다</td><td>card119 1분 36초 사망 · 게이트 커밋 revert 후 재적용</td></tr>
+</table>
+
+<h2>2. A축 — 세션 통제 설계</h2>
+
+<h3>2.1 진단: 권한 문제가 아니라 회수 문제</h3>
+<table>
+<tr><th>담당</th><th>최근 6h 메시지</th><th>릴레이 상태</th><th>실질 회신</th></tr>
+<tr><td>StrategyCardLead</td><td>37</td><td>pending 2</td><td class="ok">11:08</td></tr>
+<tr><td>LiveTradingOwner</td><td>26</td><td>failed 7 / pending 2</td><td class="ok">10:53</td></tr>
+<tr><td>OpsInfraOwner</td><td>25</td><td>failed 6 / pending 2</td><td class="ok">10:49</td></tr>
+<tr><td>WaveEngineOwner</td><td>17</td><td>pending 2</td><td class="ok">10:59</td></tr>
+<tr><td>DataEngineOwner</td><td>15</td><td>failed 2 / pending 3</td><td class="ok">10:45</td></tr>
+<tr><td>BacktestEngineOwner</td><td>11</td><td>failed 2 / pending 2</td><td class="ok">09:50</td></tr>
+<tr><td>StockDiscoveryOwner</td><td>2</td><td>pending 1</td><td class="ok">09:28</td></tr>
+<tr><td>MLModelOwner</td><td>4</td><td>pending 1</td><td class="bad">무회신</td></tr>
+</table>
+<p>담당들은 그 시간에 메시지 <b>157건</b>을 쓰고 있었다. 일을 안 하는 게 아니라
+<b>릴레이가 답을 회수하지 못한다.</b> 그리고 <code>pending</code> 이 남아 있으면
+같은 담당에게 2시간 동안 재질문이 막힌다(<code>already_in_flight</code>).</p>
+
+<h3>2.2 설계: 릴레이에 의존하지 않는 3단 통제 루프</h3>
+<table>
+<tr><th>단계</th><th>수단</th><th>릴레이 의존</th></tr>
+<tr><td><b>발신</b></td><td><code>ask_session</code> → 막히면 <code>chat_messages</code> 에 <code>[추가 지시]</code>(<code>intent=queued_interrupt</code>) 직접 주입</td><td>없음</td></tr>
+<tr><td><b>회수</b></td><td><code>chat_messages</code> 를 role_key 로 직접 SELECT — 담당의 최신 완성 회신을 읽는다</td><td><b>없음</b></td></tr>
+<tr><td><b>검증</b></td><td>담당 주장을 GO100 서버 실측(<code>systemctl</code>·<code>git</code>·DB)으로 교차 확인</td><td>없음</td></tr>
+</table>
+
+<div class="card">
+<b>검증 단계가 핵심이다.</b> 오늘 담당 주장 3건이 교차검증에서 뒤집혔다 —
+<code>go100-background</code> 가 #310 을 매매한다는 전제, 게이트 롤백 상태,
+미청산 건수. 회수만으로는 통제가 아니다.
+</div>
+
+<h3>2.3 통제 대상 범위</h3>
+<p>#310 하네스 8명 — <code>StrategyCardLead</code>(주도) ·
+<code>WaveEngineOwner</code> · <code>LiveTradingOwner</code> · <code>DataEngineOwner</code> ·
+<code>StockDiscoveryOwner</code> · <code>BacktestEngineOwner</code> · <code>MLModelOwner</code> ·
+<code>OpsInfraOwner</code>.
+목표 <code>250a271f</code> 「#310 전략카드 일일 누적수익 3% 확보」 마일스톤 16건에 담당이 붙어 있다.</p>
+
+<h3>2.4 개선 요청 (AADS 소관, 별건)</h3>
+<ul>
+<li><code>session_relay.pending</code> 에 타임아웃이 없다 → 답이 안 오면 그 줄기가 2시간 잠긴다</li>
+<li>담당 답이 <code>chat_messages</code> 에 완성본으로 있는데 <code>answered</code> 로 전이되지 않는다</li>
+<li><code>streaming_placeholder</code> 로 끝난 응답이 내용이 있어도 폐기된다</li>
+</ul>
+
+<h2>3. B축 — 배포 게이트 설계</h2>
+
+<h3>3.1 사고 연쇄 (2026-09-16)</h3>
+<pre><code>11:06:12  runner-1791da41 승인 → 58a57ca08 push
+11:07:56  go100.service 재기동
+11:07:45  health-check FAIL → 자동 revert a3e738aa8      ← 오탐
+11:09:14  uvicorn Application startup complete (기동 78초)
+11:09:43  go100-card119 크래시루프 시작                    ← exit_lock.py 누락
+11:11:19  card119 복구 (핀 f1d67ff73 교체)
+11:14:10  claudebot d91cd108f Reapply 푸시</code></pre>
+
+<h3>3.2 설계 원칙 — "꼼꼼하되 빠르게"를 어떻게 양립시키나</h3>
+<table>
+<tr><th>원칙</th><th>구현</th><th>얻는 것</th></tr>
+<tr><td>넓게 얕게가 아니라 <b>좁게 깊게</b></td><td>실매매 경로만 검사. 전체 테스트 스위트는 안 돌린다</td><td>40초 vs 수 분</td></tr>
+<tr><td>사후가 아니라 <b>사전</b></td><td>핀 전환 <b>전</b>에 릴리스 디렉터리를 검사</td><td>엔진이 죽고 나서 알던 것을 죽기 전에 안다</td></tr>
+<tr><td>고정 대기가 아니라 <b>신호 대기</b></td><td>기동 완료 로그를 기다린다(상한 180초)</td><td>78초 기동을 오탐으로 죽이지 않는다</td></tr>
+<tr><td>우회로를 <b>만들지 않는다</b></td><td><code>--force</code> 없음. 우회는 G1 환경변수 1개, 사유 로그 필수</td><td>게이트가 형식이 되지 않는다</td></tr>
+</table>
+
+<h3>3.3 4단 게이트 흐름</h3>
+<pre><code>[커밋 확정]
+     │
+     ├─ G1 정합 (10초)  git clean? ahead/behind 0?      실패 → exit 1
+     │
+[릴리스 디렉터리 생성]
+     │
+     ├─ G2 임포트 실재 (20초)                            실패 → exit 2  ★ card119 사고 차단
+     │     cd &lt;release_dir&gt;
+     │     python -m compileall -q backend/app/services/go100
+     │     python -c "import backend.app.services.go100.live_trading"
+     │     python -c "import ...card310_scheduler"
+     │     python -c "import ...card119_limitup_scheduler"
+     │
+     ├─ G3 계약 테스트 (40초)  실매매 4개 파일만          신규실패 → exit 3
+     │
+[핀 전환 + 재기동]
+     │
+     └─ G4 기동 확인 (가변, 상한 180초)                  실패 → exit 4  ★ 오탐 롤백 차단
+           journalctl 에서 "Application startup complete" 대기
+           → /health 200 확인</code></pre>
+
+<h3>3.4 왜 G2 를 릴리스 디렉터리에서 돌려야 하나</h3>
+<div class="card">
+오늘 사고의 본질이 여기 있다. <code>exit_lock.py</code> 는
+<b>워킹트리에 있었고 git 에도 있었다</b>. 워킹트리에서 import 테스트를 했다면 통과했을 것이다.
+없었던 곳은 <b>릴리스 디렉터리뿐</b>이고, 서비스가 읽는 것은 그 디렉터리다.
+검사는 반드시 <b>실행될 그 경로에서</b> 해야 한다.
+</div>
+
+<h2>4. 구조적 결함 4건</h2>
+<table>
+<tr><th>#</th><th>결함</th><th>실측</th><th>왜 위험한가</th></tr>
+<tr><td>C1</td><td>릴리스 생성 스크립트 부재</td><td><code>grep -rl backend-releases</code> → 저장소·<code>/opt</code>·<code>/usr/local/bin</code> <b>0건</b></td><td>매번 애드혹 생성 → 오늘 같은 파일 누락이 반복된다</td></tr>
+<tr><td>C2</td><td>릴리스 247개 누적</td><td><code>ls | wc -l</code> = 247</td><td>어느 것이 정본인지 사람이 판단해야 한다</td></tr>
+<tr><td>C3</td><td>card310 drop-in 30개</td><td>실제 핀 Description <code>212c68922</code> ≠ WorkingDirectory <code>60ddea588</code></td><td>파일명 <code>z</code> 개수로 우선순위를 다투고, 설명과 실제가 다르다</td></tr>
+<tr><td>C4</td><td>자동커밋이 <code>push origin master</code></td><td>브랜치는 <code>main</code>. 이번에 <code>1e6d4cd8c</code> 생성, ahead 2→3</td><td>로컬에만 쌓여 서버 유실 시 소실된다</td></tr>
+</table>
+
+<h2>5. 브랜치 분기 — 선결 과제</h2>
+<pre><code>main...origin/main [ahead 3, behind 3]
+
+로컬 전용   f1d67ff73  card119 stale-quote 방어  ← card119 가 이 릴리스로 가동 중
+            a547afe2e  청산가 게이트 (로컬 재적용본)
+            1e6d4cd8c  Chat-Finalize 자동커밋
+
+origin 전용 58a57ca08  청산가 게이트 (원본)
+            a3e738aa8  자동 revert
+            d91cd108f  Reapply</code></pre>
+<p class="bad"><b>게이트가 양쪽에 서로 다른 SHA 로 존재한다. 단순 머지는 충돌이 확정이다.</b>
+그리고 <code>f1d67ff73</code> 는 origin 어디에도 없는데 실매매 엔진이 그것으로 돌고 있다.</p>
+
+<h2>6. 실행 순서</h2>
+<table>
+<tr><th>순위</th><th>항목</th><th>담당</th><th>시점</th></tr>
+<tr><td><b>P0</b></td><td>브랜치 분기 해소</td><td>OpsInfraOwner</td><td>즉시</td></tr>
+<tr><td><b>P0</b></td><td>G2 + G4 구현·투입</td><td>Pipeline Runner → OpsInfraOwner 검증</td><td>즉시(런타임 무영향)</td></tr>
+<tr><td>P1</td><td>G1 + G3 추가</td><td>OpsInfraOwner</td><td>15:30 이후</td></tr>
+<tr><td>P1</td><td>C1 릴리스 스크립트 표준화</td><td>OpsInfraOwner</td><td>15:30 이후</td></tr>
+<tr><td>P2</td><td>C2 · C3 · C4</td><td>OpsInfraOwner</td><td>익일</td></tr>
+</table>
+
+<h2>7. 목표와의 연결</h2>
+<p>이 게이트는 목표(#310 일 3%)를 직접 올리지 않는다. <b>목표 작업이 사고로 중단되는 것을 막는다.</b>
+2026-09-16 실적은 11왕복 3승 8패, 순손익 -1,557.57원, 건별 합산 -2.304%.
+같은 날 배포 사고로 엔진이 1분 36초 죽었고, 청산가 게이트는 오탐 롤백으로 실매매에 투입되지 못했다.
+<b>개선이 실매매에 도달하지 못하면 목표는 움직이지 않는다.</b> 이 문서는 그 도달 경로를 고치는 것이다.</p>
+
+<div class="foot">
+GO100 · contabo14 · <code>/root/kis-autotrade-v4</code><br>
+관련 문서: <a href="./go100-deploy-gate-v1.0-index.html">버전 인덱스</a> ·
+<a href="./go100-deploy-gate-v1.0-prd.html">PRD v1.0</a><br>
+핸드오버 정본: <code>go100.session-control-and-deploy-gate-plan-20260916</code>
+</div>
+
+</div></body></html>
