@@ -644,7 +644,14 @@ def test_wp04_and_wp03_writers_are_preserved():
     import inspect
 
     params = inspect.signature(chat_service._claim_execution_lease).parameters
-    assert list(params) == ["conn", "execution_id", "status", "error_message"]
+    assert list(params)[:4] == ["conn", "execution_id", "status", "error_message"]
+    # 뒤에 붙는 것은 기본값 있는 키워드 전용이어야 한다. 그래야 호출부 여섯
+    # 군데를 고치지 않고도 동작이 그대로다 — allow_any_epoch(2026-09-16, 수동
+    # 재개만 epoch 상한을 넘기는 예외)가 그렇게 들어왔다.
+    for name in list(params)[4:]:
+        extra = params[name]
+        assert extra.kind is inspect.Parameter.KEYWORD_ONLY, name
+        assert extra.default is not inspect.Parameter.empty, name
 
 
 def test_transport_models_round_trip_the_command_and_generation_payloads():

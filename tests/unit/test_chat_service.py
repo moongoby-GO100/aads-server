@@ -1658,7 +1658,19 @@ async def test_additional_instruction_message_does_not_supersede_execution():
         str(uuid.uuid4()),
     )
     query = conn.fetchrow.await_args.args[0]
-    assert "content NOT LIKE '[추가 지시]%%'" in query
+    # 접두 문자열이 아니라 intent 로 가린다. 접두는 계속 늘어난다 — 2026-09-16
+    # 하루에만 '[추가 지시]', '[추가 지시 · 12:26 KST]', '[CEO 지시 · …]',
+    # '[CEO 승인 · …]' 네 가지가 나왔고, 뒤 셋이 패턴을 빠져나가 진행 중인 턴
+    # 45건을 밀어냈다. intent 는 접수 시점에 찍히므로 접두가 무엇이든 안 샌다.
+    assert "COALESCE(intent, '') NOT IN (" in query
+    for intent in (
+        "system_trigger",
+        "queued_interrupt",
+        "interrupt_completed",
+        "recovered_interrupt",
+        "interrupt_expired",
+    ):
+        assert f"'{intent}'" in query
 
 
 @pytest.mark.asyncio
@@ -2073,8 +2085,13 @@ async def test_collect_queued_interrupts_recovers_db_saved_interrupt_without_mem
             "attachments": [{"type": "text", "name": "note.txt"}],
         }
     ]
-    conn.execute.assert_awaited_once()
-    assert "interrupt_applied" in conn.execute.await_args.args[0]
+    # 두 번 실행된다: ① 창(30분)을 넘긴 미소비 지시를 interrupt_expired 로
+    # 내려놓고 ② 이번에 먹은 것을 interrupt_applied 로 표시한다. ①이 없으면
+    # 어제 들어온 '[추가 지시] 배포해' 가 오늘 답변에 끼어든다(2026-09-16 실측).
+    statements = [call.args[0] for call in conn.execute.await_args_list]
+    assert len(statements) == 2
+    assert any("interrupt_expired" in sql for sql in statements)
+    assert any("interrupt_applied" in sql for sql in statements)
 
 
 def test_keyword_fallback_routes_only_explicit_discussion_queries():

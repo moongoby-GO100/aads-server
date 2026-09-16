@@ -46,7 +46,11 @@ _EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX
 _EXECUTION_MAX_OWNER_EPOCH = max(10, int(os.getenv("AADS_EXECUTION_MAX_OWNER_EPOCH", "50")))
 # 시작 후 이 시간이 지난 실행에는 소유권을 주지 않는다. app/main.py 의 수거기와
 # 같은 값을 쓴다 — 한쪽만 바꾸면 수거되기 전에 되살아나는 창이 생긴다.
-_EXECUTION_MAX_AGE_HOURS = max(1, int(os.getenv("AADS_EXECUTION_MAX_AGE_HOURS", "2")))
+#
+# 6시간인 이유 — 2026-09-17 실측. 최근 30일 완료된 턴 4,284건의 지속시간은
+# p99 77.4분, 최대 289.5분(4시간 50분)이었다. 2시간으로 잡으면 정상 종료된
+# 긴 턴 8건의 재개를 막았을 것이다. 관측된 최대값 위에 여유를 둔다.
+_EXECUTION_MAX_AGE_HOURS = max(1, int(os.getenv("AADS_EXECUTION_MAX_AGE_HOURS", "6")))
 _RESUME_INCOMPLETE_STREAM_MAX_RETRIES = max(
     0, int(os.getenv("AADS_RESUME_INCOMPLETE_STREAM_MAX_RETRIES", "2"))
 )

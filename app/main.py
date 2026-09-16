@@ -2709,7 +2709,15 @@ async def lifespan(app: FastAPI):
     # 이 값을 넘긴다는 것은 재개해도 같은 자리에서 다시 끝난다는 뜻이다.
     _RESUME_MAX_OWNER_EPOCH = int(os.getenv("AADS_EXECUTION_RESUME_MAX_OWNER_EPOCH", "20"))
     # 시작 후 이 시간이 지난 실행은 재개하지 않고 수거한다.
-    _RESUME_MAX_AGE_HOURS = max(1, int(os.getenv("AADS_EXECUTION_MAX_AGE_HOURS", "2")))
+    #
+    # 6시간인 이유 — 2026-09-17 실측. 최근 30일 완료된 턴 4,284건의 지속시간은
+    # p99 77.4분, **최대 289.5분(4시간 50분)** 이었다. 2시간으로 잡으면 정상
+    # 종료된 긴 턴 8건을 잘랐을 것이다. 관측된 최대값 위에 여유를 둔다.
+    _RESUME_MAX_AGE_HOURS = max(1, int(os.getenv("AADS_EXECUTION_MAX_AGE_HOURS", "6")))
+    # 수거 전에 "정말 멈췄나"를 한 번 더 본다. 하트비트가 이 시간 이상 멈춰
+    # 있어야 수거 대상이다. 장시간 정상 턴 8건은 전부 끝까지 하트비트가
+    # 갱신됐다(289.5분 실행 → 289.5분까지 갱신, 2026-09-17 실측).
+    _REAP_IDLE_MINUTES = max(5, int(os.getenv("AADS_EXECUTION_REAP_IDLE_MINUTES", "30")))
 
     async def _resume_pending_executions_once(
         max_rows: int = 5,
@@ -3098,6 +3106,17 @@ async def lifespan(app: FastAPI):
 
         자리표시자도 함께 정리한다. 내용이 있으면 살리고, 없으면 안내로 바꾼다 —
         지우면 대표님이 "버블이 아예 안 나온다" 고 보시게 된다.
+
+        **나이만으로 자르지 않는다.** 90초 주기 stale_execution_watchdog 이
+        이미 같은 일을 하되 `_active_bg_tasks` 에 있는 세션을 건너뛴다. 그
+        표는 프로세스 로컬이라 슬롯이 바뀌면 비고, 재개 루프가 계속 태스크를
+        새로 띄우면 영원히 건너뛴다 — 살아남은 행들이 그쪽이다. 이 수거기는
+        그 표를 보지 않는 대신, DB 에 남는 하트비트로 "정말 멈췄나"를 본다.
+
+        살아 있는 리스를 건드리면 정상 턴을 자른다. 실측(2026-09-17): 2시간을
+        넘겨 **정상 완료된** 턴이 최근 30일 8건(최대 289.5분)이었고, 8건 모두
+        끝까지 하트비트가 갱신되고 있었다. 그래서 리스 만료 + 하트비트 정지를
+        함께 요구한다.
         """
         from app.core.db_pool import get_pool as _gp_reap
 
@@ -3118,9 +3137,14 @@ async def lifespan(app: FastAPI):
                 -- 의 나이 상한이 따로 막는다.
                 WHERE status IN ('running', 'retrying')
                   AND started_at < NOW() - ($1::int * INTERVAL '1 hour')
+                  -- 아직 일하고 있는 턴은 건드리지 않는다. 둘 다 만족해야 한다.
+                  AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+                  AND COALESCE(heartbeat_at, updated_at, started_at)
+                        < NOW() - ($2::int * INTERVAL '1 minute')
                 RETURNING id, session_id, assistant_message_id, owner_epoch
                 """,
                 _RESUME_MAX_AGE_HOURS,
+                _REAP_IDLE_MINUTES,
             )
             if not rows:
                 return
