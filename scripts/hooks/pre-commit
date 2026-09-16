@@ -450,6 +450,25 @@ if [ -f "tools/aag/scan_aads.py" ]; then
     fi
 fi
 
+# ── .env 중복 키 게이트 (R-KEY) ──────────────────────────────────────
+# 2026-09-16, aads-server/.env 의 122~125행 블록이 126~129행에 통째로 다시
+# 붙여넣어져 4개 키가 두 벌이 됐다. 값이 같아 사고는 나지 않았지만, 달랐다면
+# docker compose 는 뒤 줄을 채택하므로 "고쳤는데 반영이 안 된다"가 된다.
+# .env 는 .gitignore 대상이라 스테이지 파일 검사로는 잡히지 않는다 —
+# 이 게이트는 커밋하는 순간의 작업 디렉터리 상태를 본다.
+ENV_DUP_SCRIPT="/root/aads/aads-server/scripts/check_env_duplicates.sh"
+if [ -x "$ENV_DUP_SCRIPT" ]; then
+    if ! ENV_DUP_OUT=$("$ENV_DUP_SCRIPT" 2>&1); then
+        echo -e "${RED}❌ .env 중복 키 감지 — 커밋 차단${NC}"
+        echo "$ENV_DUP_OUT"
+        if [ "${ALLOW_ENV_DUP:-0}" != "1" ]; then
+            echo -e "${YELLOW}  긴급 우회: ALLOW_ENV_DUP=1 git commit -m \"...\"${NC}"
+            exit 1
+        fi
+        echo -e "${YELLOW}  ALLOW_ENV_DUP=1 — 우회하고 진행합니다${NC}"
+    fi
+fi
+
 # ── 감사: hook 통과 서명 (--no-verify 우회 감지용) ──────────────────
 HOOK_SIG="hook-verified:$(date +%s)"
 # 호스트 경로 고정. 쓰기 불가(ex. 컨테이너 RO mount)면 git rev-parse fallback.

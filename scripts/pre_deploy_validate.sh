@@ -25,6 +25,22 @@ notify() {
     fi
 }
 
+# 0. .env 중복 키 감지 (2026-09-16 추가)
+# .env 는 .gitignore 대상이라 커밋 경로로는 파일 자체를 볼 기회가 없다.
+# 5분 주기로 도는 이 스크립트가 파일을 직접 보는 유일한 자리다.
+# 같은 중복을 매 5분 알리지 않도록 해시로 한 번만 통지한다.
+ENV_DUP_STATE="/tmp/aads_env_dup_hash"
+ENV_DUP=$(/root/aads/aads-server/scripts/check_env_duplicates.sh --quiet 2>/dev/null)
+if [ -n "$ENV_DUP" ]; then
+    ENV_DUP_HASH=$(echo "$ENV_DUP" | md5sum | cut -d' ' -f1)
+    if [ ! -f "$ENV_DUP_STATE" ] || [ "$(cat "$ENV_DUP_STATE")" != "$ENV_DUP_HASH" ]; then
+        echo "$ENV_DUP_HASH" > "$ENV_DUP_STATE"
+        notify "⚠️ .env 중복 키 감지 — ${ENV_DUP} (키 이름은 서버에서 check_env_duplicates.sh 로 확인)"
+    fi
+else
+    rm -f "$ENV_DUP_STATE"
+fi
+
 # 최근 5분 내 수정된 .py 파일 목록
 CHANGED=$(find "$APP_DIR" -name "*.py" -mmin -5 -type f 2>/dev/null)
 if [ -z "$CHANGED" ]; then
