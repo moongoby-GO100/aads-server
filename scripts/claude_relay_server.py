@@ -45,6 +45,7 @@ CODEX_BIN = os.getenv("CODEX_BIN", "codex")
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+from scripts import account_login  # noqa: E402
 from scripts.claude_model_contract import (  # noqa: E402
     CONTRACT_VERSION, EXACT_MODEL_IDS, ModelObservation, resolve_model, session_key,
 )
@@ -235,6 +236,9 @@ _SLOT_HOME_ROOT = Path(os.getenv("CLAUDE_RELAY_SLOT_HOME_ROOT", "/root/.claude-r
 # 래퍼가 아닌 실제 CLI. 슬롯 모드에서 래퍼 우회에 쓴다.
 _REAL_CLAUDE_BIN = Path(os.getenv("CLAUDE_REAL_BIN", "/usr/bin/claude"))
 _CODEX_HOME_ROOT = Path(os.getenv("CODEX_HOME_ROOT", "/root/.codex-relay"))
+# 계정 단위 홈(클로드의 슬롯에 대응). 세션 홈과 층이 다르다 — 세션은 작업 격리,
+# 계정 홈은 자격증명 격리다. PRD-LLM-ACCOUNT-RUNTIME-BINDING-v1.0.md 0장 참고.
+_CODEX_ACCOUNTS_ROOT = Path(os.getenv("CODEX_ACCOUNTS_ROOT", "/root/.codex-accounts"))
 _AADS_API_OAUTH_STATE_URL = os.getenv(
     "CLAUDE_RELAY_OAUTH_STATE_URL",
     "http://127.0.0.1:8100/api/v1/health/claude-relay/oauth-state",
@@ -730,7 +734,10 @@ def _build_claude_env(token, slot=None, cli_mode=""):
             _slot_credentials_path(slot).with_name(".credentials.lock")
         )
         auth_source = "slot_credentials"
-    elif slot in ("1", "2") and _slot_credentials_path(slot).exists():
+    elif slot and _slot_credentials_path(slot).exists():
+        # 2026-09-16: 슬롯 1/2 로 한정돼 있던 것을 자격증명 파일이 있는 모든
+        # 슬롯으로 넓혔다. 슬롯3(진아) 을 추가해도 이 분기에 걸리지 않아
+        # 깨진 자격증명이 낡은 env 토큰 뒤에 숨는 문제가 있었다.
         # Do not hide a malformed credential behind a potentially stale env
         # access token. _pick_auth normally excludes this slot before execution.
         env["HOME"] = _ensure_relay_home()
@@ -1396,6 +1403,64 @@ def _parse_codex_tool_event(event, session_id=""):
     return None
 
 
+def _codex_accounts():
+    """계정 홈 목록을 우선순위 순으로 돌려준다.
+
+    상태(priority, rate_limited_until)는 codex_usage.py 가 DB 에서 내려받아
+    state.json 에 써 둔다. 릴레이가 DB 나 API 에 직접 붙지 않는 이유는
+    _read_db_oauth_rows() 주석과 같다 — 조회가 실패해도 인증이 끊기면 안 된다.
+    """
+    out = []
+    state = {}
+    try:
+        with open(_CODEX_ACCOUNTS_ROOT / "state.json") as fh:
+            state = {a.get("key_name"): a for a in (json.load(fh).get("accounts") or [])}
+    except (OSError, ValueError):
+        pass  # 상태가 없으면 디렉터리 순서만 보고 고른다
+
+    now = time.time()
+    for home in sorted(_CODEX_ACCOUNTS_ROOT.glob("*/auth.json")):
+        key_name = home.parent.name
+        meta = state.get(key_name, {})
+        if meta.get("is_active") is False:
+            continue
+        until = meta.get("rate_limited_until_epoch")
+        if until and float(until) > now:
+            continue
+        out.append((int(meta.get("priority", 99)), key_name, home))
+    out.sort()
+    return out
+
+
+def _pick_codex_account(session_id, codex_dir):
+    """세션에 계정 하나를 고정 배정한다.
+
+    한 세션이 중간에 계정을 갈아타면 한도 추적도 로그 추적도 깨진다. 그래서
+    한 번 고른 계정을 세션 홈에 적어두고 다음 턴에도 같은 것을 쓴다. 단 그
+    계정이 한도에 걸렸으면 다시 고른다.
+    """
+    marker = codex_dir / "account.json"
+    available = _codex_accounts()
+    if not available:
+        return None, "none"
+
+    try:
+        pinned = json.loads(marker.read_text()).get("key_name")
+    except (OSError, ValueError):
+        pinned = None
+    if pinned:
+        for _, key_name, auth_path in available:
+            if key_name == pinned:
+                return auth_path, "pinned"
+
+    _, key_name, auth_path = available[0]
+    try:
+        marker.write_text(json.dumps({"key_name": key_name, "bound_at": time.time()}))
+    except OSError as exc:
+        logger.warning("codex account marker 기록 실패 session=%s err=%s", session_id, exc)
+    return auth_path, ("rebound" if pinned else "new")
+
+
 def _build_codex_home(session_id, mcp_cfg=None):
     _CODEX_HOME_ROOT.mkdir(parents=True, exist_ok=True)
     safe_session = re.sub(r"[^A-Za-z0-9_.-]+", "_", session_id or "default")
@@ -1403,17 +1468,31 @@ def _build_codex_home(session_id, mcp_cfg=None):
     codex_dir = home / ".codex"
     codex_dir.mkdir(parents=True, exist_ok=True)
 
-    # auth.json을 기본 Codex HOME(/root/.codex)에서 세션 HOME으로 심볼릭 링크
-    # → HOME 분리로 인한 401 Unauthorized 방지 (ChatGPT Plus OAuth 공유)
-    default_auth = Path("/root/.codex/auth.json")
+    # auth.json 을 계정 홈에서 세션 HOME 으로 심볼릭 링크
+    # → HOME 분리로 인한 401 Unauthorized 방지 (ChatGPT OAuth 공유)
+    #
+    # 2026-09-16 이전에는 /root/.codex/auth.json 으로 고정돼 있었다. 그래서
+    # DB 에 코덱스 계정을 더 등록해도(CODEX_OAUTH_JINAH) CLI 는 계속 한 계정만
+    # 봤고, 그 계정 하나가 주간 한도를 다 썼다. 계정 홈에서 고르도록 바꾼다.
+    # 설계: aads-docs/docs/PRD-LLM-ACCOUNT-RUNTIME-BINDING-v1.0.md
+    account_auth, how = _pick_codex_account(session_id, codex_dir)
+    default_auth = account_auth or Path("/root/.codex/auth.json")
+    if account_auth is None:
+        # 계정 홈이 하나도 없으면 옛 경로로 돌아간다. 계정 관리가 덜 끝난
+        # 상태에서 코덱스 호출 자체가 죽는 것이 더 나쁘다.
+        how = "legacy"
     session_auth = codex_dir / "auth.json"
     if default_auth.exists():
         try:
             if session_auth.is_symlink() or session_auth.exists():
                 session_auth.unlink()
             session_auth.symlink_to(default_auth)
+            logger.info("codex_account_bound session=%s account=%s how=%s",
+                        session_id, default_auth.parent.name, how)
         except Exception as exc:
             logger.warning("Codex auth.json symlink 실패 session=%s err=%s", session_id, exc)
+    else:
+        logger.error("codex 자격증명 파일이 없다 path=%s session=%s", default_auth, session_id)
 
     mcp_cfg = mcp_cfg if mcp_cfg is not None else _load_mcp_template(session_id)
     server_cfg = (mcp_cfg.get("mcpServers", {}) or {}).get("aads-tools", {})
@@ -2756,6 +2835,75 @@ async def handle_codex_usage(request):
     return web.json_response({"cached": False, "ttl_sec": _CODEX_USAGE_CACHE_TTL, **payload})
 
 
+def _relay_secret_ok(request):
+    expected = _load_relay_secret()
+    if not expected:
+        return True
+    return request.headers.get("X-Claude-Relay-Secret", "") == expected
+
+
+async def handle_account_login_start(request):
+    """OAuth 재로그인을 시작한다 — 화면의 '재로그인' 버튼이 여기를 부른다.
+
+    자격증명 파일을 만들 수 있는 것은 각 CLI 뿐이고 그 파일은 호스트에 있다.
+    API 컨테이너에는 마운트돼 있지 않아 릴레이(호스트 프로세스)가 대신 띄운다.
+    """
+    if not _relay_secret_ok(request):
+        return web.json_response({"error": "invalid relay secret"}, status=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid JSON"}, status=400)
+    try:
+        result = await account_login.start(str(body.get("target", "")))
+    except account_login.LoginError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    logger.info("account_login_start target=%s state=%s", result["target"], result["state"])
+    return web.json_response(result)
+
+
+async def handle_account_bindings(request):
+    """계정이 런타임에 닿아 있는지 — 화면의 '로그인 필요' 배지 판정에 쓴다."""
+    if not _relay_secret_ok(request):
+        return web.json_response({"error": "invalid relay secret"}, status=403)
+    return web.json_response({"bindings": account_login.bindings()})
+
+
+async def handle_account_login_status(request):
+    if not _relay_secret_ok(request):
+        return web.json_response({"error": "invalid relay secret"}, status=403)
+    result = account_login.get(request.match_info["login_id"])
+    if not result:
+        return web.json_response({"error": "unknown login_id"}, status=404)
+    return web.json_response(result)
+
+
+async def handle_account_login_code(request):
+    """클로드는 stdin 으로 코드를 받는다. 화면에서 받은 값을 그대로 넘긴다."""
+    if not _relay_secret_ok(request):
+        return web.json_response({"error": "invalid relay secret"}, status=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid JSON"}, status=400)
+    try:
+        result = await account_login.submit_code(
+            request.match_info["login_id"], str(body.get("code", "")))
+    except account_login.LoginError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response(result)
+
+
+async def handle_account_login_cancel(request):
+    if not _relay_secret_ok(request):
+        return web.json_response({"error": "invalid relay secret"}, status=403)
+    try:
+        result = await account_login.cancel(request.match_info["login_id"])
+    except account_login.LoginError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response(result)
+
+
 async def handle_oauth_switch(request):
     try:
         body = await request.json()
@@ -2860,6 +3008,11 @@ def create_app():
     app.router.add_get("/leases", handle_leases)
     app.router.add_get("/codex-usage", handle_codex_usage)
     app.router.add_post("/oauth/switch", handle_oauth_switch)
+    app.router.add_get("/account-bindings", handle_account_bindings)
+    app.router.add_post("/account-login", handle_account_login_start)
+    app.router.add_get("/account-login/{login_id}", handle_account_login_status)
+    app.router.add_post("/account-login/{login_id}/code", handle_account_login_code)
+    app.router.add_delete("/account-login/{login_id}", handle_account_login_cancel)
     app.router.add_get("/sessions", handle_sessions)
     app.router.add_delete("/sessions/{aads_session_id}", handle_reset_session)
     return app

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import asyncpg
@@ -160,6 +161,137 @@ async def list_llm_keys() -> list[dict[str, Any]]:
             }
         )
     return result
+
+
+@router.get("/codex-usage")
+async def codex_usage() -> dict[str, Any]:
+    """코덱스 계정별 사용량. 대시보드 '코덱스 사용량' 카드의 데이터원이다.
+
+    ChatGPT 구독 인증이라 API 청구 대시보드가 없고 CLI 에도 usage 서브커맨드가
+    없다. 사용량 원본은 호스트의 rollout 파일이고, scripts/codex_usage.py 가
+    10분마다 긁어 codex_usage_snapshots 에 올린다. 여기서는 그 표만 읽는다.
+    설계: aads-docs/docs/PRD-LLM-ACCOUNT-RUNTIME-BINDING-v1.0.md
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT k.key_name, k.label, k.priority, k.is_active, k.rate_limited_until,
+                   s.used_percent, s.window_minutes, s.resets_at, s.snapshot_at,
+                   s.ok_72h, s.limit_72h, s.sessions, s.collected_at
+            FROM llm_api_keys k
+            LEFT JOIN codex_usage_snapshots s ON s.key_name = k.key_name
+            WHERE k.provider = 'codex'
+            ORDER BY k.priority, k.id
+            """
+        )
+
+    now = datetime.now(timezone.utc)
+    accounts: list[dict[str, Any]] = []
+    for row in rows:
+        limited_until = row["rate_limited_until"]
+        limited = bool(limited_until and limited_until > now)
+        # 스냅샷이 얼마나 낡았는지는 반드시 같이 준다. 한도에 걸린 호출은 사용률을
+        # 갱신해주지 않아, 숫자만 보면 남아 있는 것처럼 오해한다.
+        age_hours = round((now - row["snapshot_at"]).total_seconds() / 3600, 1) if row["snapshot_at"] else None
+        accounts.append(
+            {
+                "key_name": row["key_name"],
+                "label": row["label"],
+                "priority": row["priority"],
+                "is_active": row["is_active"],
+                "rate_limited": limited,
+                "rate_limited_until": limited_until.isoformat() if limited_until else None,
+                "used_percent": float(row["used_percent"]) if row["used_percent"] is not None else None,
+                "window_minutes": row["window_minutes"],
+                "resets_at": row["resets_at"].isoformat() if row["resets_at"] else None,
+                "snapshot_age_hours": age_hours,
+                "ok_72h": row["ok_72h"] or 0,
+                "limit_72h": row["limit_72h"] or 0,
+                "sessions": row["sessions"] or 0,
+                "collected_at": row["collected_at"].isoformat() if row["collected_at"] else None,
+                "has_snapshot": row["collected_at"] is not None,
+            }
+        )
+
+    usable = [a for a in accounts if a["is_active"] and not a["rate_limited"]]
+    return {
+        "accounts": accounts,
+        "usable_count": len(usable),
+        "total_count": len(accounts),
+        "collected_at": max(
+            (a["collected_at"] for a in accounts if a["collected_at"]), default=None
+        ),
+    }
+
+
+async def _relay_call(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """릴레이(호스트 프로세스)로 넘긴다.
+
+    자격증명 파일은 호스트에 있고 이 컨테이너에는 마운트돼 있지 않다. CLI 를
+    띄울 수 있는 것은 호스트에서 도는 릴레이뿐이라, 재로그인은 전부 프록시다.
+    경로/시크릿 규약은 app/api/ops.py 의 codex-usage 프록시와 같게 맞춘다.
+    """
+    import httpx
+
+    from app.api.ops import _CLAUDE_RELAY_URL, _load_relay_secret
+
+    headers: dict[str, str] = {}
+    secret = _load_relay_secret()
+    if secret:
+        headers["X-Claude-Relay-Secret"] = secret
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=2.0)) as client:
+            resp = await client.request(method, f"{_CLAUDE_RELAY_URL}{path}",
+                                        headers=headers, json=payload)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail=f"릴레이에 닿지 못했다: {str(exc)[:200]}") from exc
+    try:
+        body = resp.json()
+    except ValueError:
+        raise HTTPException(status_code=502, detail="릴레이 응답을 읽을 수 없다") from None
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=body.get("error") or "로그인 요청 실패")
+    return body
+
+
+class AccountLoginStart(BaseModel):
+    # 'codex:<KEY_NAME>' 또는 'claude:<slot 번호>'
+    target: str
+
+
+class AccountLoginCode(BaseModel):
+    code: str
+
+
+@router.get("/account-bindings")
+async def account_bindings() -> dict[str, Any]:
+    """구독 계정의 런타임 바인딩 상태. DB 등록과 별개로 파일 존재를 본다."""
+    return await _relay_call("GET", "/account-bindings")
+
+
+@router.post("/account-login")
+async def start_account_login(body: AccountLoginStart) -> dict[str, Any]:
+    """구독 계정 재로그인 시작. 화면의 '재로그인' 버튼이 부른다."""
+    result = await _relay_call("POST", "/account-login", {"target": body.target})
+    logger.info("llm_keys.account_login_start", extra={"target": body.target, "state": result.get("state")})
+    return result
+
+
+@router.get("/account-login/{login_id}")
+async def get_account_login(login_id: str) -> dict[str, Any]:
+    return await _relay_call("GET", f"/account-login/{login_id}")
+
+
+@router.post("/account-login/{login_id}/code")
+async def submit_account_login_code(login_id: str, body: AccountLoginCode) -> dict[str, Any]:
+    """클로드 로그인은 stdin 으로 코드를 받는다 — 화면 입력값을 그대로 넘긴다."""
+    return await _relay_call("POST", f"/account-login/{login_id}/code", {"code": body.code})
+
+
+@router.delete("/account-login/{login_id}")
+async def cancel_account_login(login_id: str) -> dict[str, Any]:
+    return await _relay_call("DELETE", f"/account-login/{login_id}")
 
 
 @router.post("")
