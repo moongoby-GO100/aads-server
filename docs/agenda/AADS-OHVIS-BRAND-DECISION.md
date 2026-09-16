@@ -45,7 +45,7 @@
 |---|---|---|
 | 2026-07-24 | 최초 결정 — 호칭 `오비스`, 영문 `OHVIS`, 유래 "OH + JARVIS의 VIS" | CEO moongoby |
 | 2026-09-16 | **영문 브랜드를 `OBYS` 로 정정. 뜻은 `Oh Byeong Yong's System(오병용의 시스템)`** | CEO moongoby |
-| 2026-09-16 | 로마자 1차 재정정 — `Oh Byung Yong` → `Oh Beyong Yong` (이 표기도 오기였음) | CEO moongoby |
+| 2026-09-16 | 로마자 1차 재정정 — `Oh Byung Yong` → `Oh Byeong Yong` (이 표기도 오기였음) | CEO moongoby |
 | 2026-09-17 | **로마자 최종 확정 — `Oh Byeong Yong`.** `Byung`·`Beyong` 은 모두 폐기된 오기 | CEO moongoby |
 
 ### 2026-09-16 정정에 따른 표기 규칙

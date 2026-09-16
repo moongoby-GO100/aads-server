@@ -40,6 +40,18 @@ logger = structlog.get_logger(__name__)
 
 _DEFAULT_COST_LIMIT = float(os.getenv("GOAL_COST_LIMIT_USD", "20"))
 _MAX_LOAD_RATIO = float(os.getenv("GOAL_DISPATCH_MAX_LOAD_RATIO", "2.0"))
+
+# 오케스트레이션이 만든 턴만 골라내는 표시.
+#
+# 골 스케줄러가 담당에게 말을 걸 때 `intent_override="system_trigger"` 를
+# 붙인다(`goal_dispatch`, `milestone_review`, `goal_intervene` 세 곳 모두).
+# 그 턴의 답장에도 같은 값이 남으므로, 이 intent 만 세면 기계가 돌린 비용과
+# 대표님이 직접 하신 대화를 가를 수 있다.
+_ORCH_INTENTS = [
+    s.strip()
+    for s in os.getenv("GOAL_COST_INTENTS", "system_trigger").split(",")
+    if s.strip()
+]
 _LOAD_CACHE_TTL = float(os.getenv("GOAL_LOAD_CACHE_TTL", "60"))
 
 _load_cache: dict[str, tuple[float, Optional[float]]] = {}
@@ -71,6 +83,19 @@ async def refresh_goal_cost(goal_id: str) -> float:
         # 그냥 합하면 양쪽 목표가 같은 대화를 각자 자기 비용으로 세고,
         # 둘 다 실제보다 빨리 상한에 닿는다. 어느 턴이 어느 목표의 일인지는
         # 알 수 없으므로 참여 목표 수로 나눈다 — 합치면 실제 총액과 맞는다.
+        # **그리고 오케스트레이션이 만든 턴만 센다.**
+        #
+        # 시각 기준만으로는 모자랐다. 담당 세션은 대표님이 직접 쓰시는 창
+        # 그대로라서 첫 지시 뒤에도 대표님 대화가 계속 쌓인다. 2026-09-17
+        # 실측: #119 에 잡힌 123.85 USD 중 `system_trigger` 몫은 **8.41 USD**
+        # 뿐이었고 나머지는 전부 대표님 대화였다. #310 도 85.54 중 2.72 였다.
+        #
+        # 그래서 두 목표가 이틀 만에 20 USD 상한에 닿았고, 그 뒤로 모든
+        # 마일스톤 지시가 `goal_dispatch_cost_gated` 로 막혔다 — 사이클은
+        # 60초마다 돌면서 `dispatched=0` 만 찍고 있었다. 누적은 리셋되지
+        # 않으므로 이 계산이 틀리면 게이트는 한 번 닫히고 **영영 안 열린다.**
+        # 상한을 올리는 것은 증상만 미루는 것이고, 세는 대상을 좁히는 것이
+        # 원인을 고치는 것이다.
         spent = await pool.fetchval(
             """
             SELECT COALESCE(SUM(m.cost / GREATEST(gc.n, 1)), 0)::numeric(12,4)
@@ -89,8 +114,9 @@ async def refresh_goal_cost(goal_id: str) -> float:
                 GROUP BY l.task_id
             ) gc ON gc.sid = m.session_id
             WHERE m.created_at >= $2
+              AND m.intent = ANY($3::text[])
             """,
-            goal_id, started,
+            goal_id, started, _ORCH_INTENTS,
         )
     spent = float(spent or 0)
     await pool.execute(
