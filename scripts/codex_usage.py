@@ -59,12 +59,22 @@ def psql(sql: str) -> list[list[str]]:
     return [line.split("|") for line in out.stdout.strip().splitlines() if line]
 
 
-def _session_account(session_home: Path) -> str:
-    """세션이 어느 계정으로 돌았는지. 표식이 없으면 옛 방식이라 MAIN 이다."""
+def _session_account(session_home: Path) -> tuple[str, float]:
+    """세션이 어느 계정으로 돌았는지와 그 계정이 배정된 시각.
+
+    배정 시각이 필요한 이유 — 세션은 계정보다 오래 산다. 한도에 걸린 계정에서
+    다른 계정으로 갈아탄 세션의 홈에는 **이전 계정 시절의 rollout 이 그대로
+    남아** 있다. 2026-09-16 실측: 한 세션의 rollout 109건 중 107건이 배정 이전
+    것이었고, 그 안의 MAIN 한도 실패가 새로 배정된 JINAH 에 귀속돼 멀쩡한
+    계정이 '한도정지' 로 꺼졌다. 배정 시각 이전 기록은 이전 계정 몫으로 돌린다.
+
+    표식이 없으면 계정 홈 도입 전이므로 전부 MAIN 이다.
+    """
     try:
-        return json.loads((session_home / ".codex" / "account.json").read_text())["key_name"]
-    except (OSError, ValueError, KeyError):
-        return MAIN_KEY_NAME
+        marker = json.loads((session_home / ".codex" / "account.json").read_text())
+        return marker["key_name"], float(marker.get("bound_at") or 0)
+    except (OSError, ValueError, KeyError, TypeError):
+        return MAIN_KEY_NAME, 0.0
 
 
 def _scan_rollout(path: Path) -> dict:
@@ -112,19 +122,22 @@ def collect(max_files_per_home: int = 40) -> dict:
             "ok": 0, "limit": 0, "limit_at": None, "sessions": 0,
         })
 
-    homes = [(h, _session_account(h)) for h in RELAY_ROOT.glob("*") if h.is_dir()]
-    homes.append((LEGACY_HOME.parent, MAIN_KEY_NAME))  # /root/.codex 자체
+    homes = [(h, *_session_account(h)) for h in RELAY_ROOT.glob("*") if h.is_dir()]
+    homes.append((LEGACY_HOME.parent, MAIN_KEY_NAME, 0.0))  # /root/.codex 자체
 
     cutoff = time.time() - 72 * 3600
-    for home, key_name in homes:
+    for home, key_name, bound_at in homes:
         codex_dir = home / ".codex" if (home / ".codex").is_dir() else home
         files = sorted(codex_dir.glob("sessions/*/*/*/rollout-*.jsonl"),
                        key=os.path.getmtime, reverse=True)
         if not files:
             continue
-        rec = slot(key_name)
-        rec["sessions"] += len(files)
+        for f in files:
+            # 배정 이전 기록은 이전 계정(=MAIN) 몫이다. _session_account 주석 참고.
+            # 세션 수도 같은 기준으로 센다 — 한쪽만 다른 기준이면 표가 어긋난다.
+            slot(key_name if os.path.getmtime(f) >= bound_at else MAIN_KEY_NAME)["sessions"] += 1
         for f in files[:max_files_per_home]:
+            rec = slot(key_name if os.path.getmtime(f) >= bound_at else MAIN_KEY_NAME)
             got = _scan_rollout(f)
             rec["tokens"] += got["tokens"]
             if os.path.getmtime(f) >= cutoff:
@@ -291,6 +304,22 @@ def push_snapshots(accounts: list[dict], usage: dict) -> None:
         ))
 
 
+def push_rate_limit_epoch(key_name: str, resets_at) -> None:
+    """실시간 조회가 알려준 복귀 시각을 그대로 적는다."""
+    if not resets_at:
+        return
+    stamp = datetime.fromtimestamp(int(resets_at), KST).strftime("%Y-%m-%d %H:%M:%S%z")
+    psql("UPDATE llm_api_keys SET rate_limited_until='%s', updated_at=NOW() "
+         "WHERE key_name='%s' AND provider='codex'" % (stamp, key_name))
+
+
+def clear_rate_limit(key_name: str) -> None:
+    """계정이 지금 멀쩡하면 남은 정지 표시를 지운다."""
+    psql("UPDATE llm_api_keys SET rate_limited_until=NULL, updated_at=NOW() "
+         "WHERE key_name='%s' AND provider='codex' AND rate_limited_until IS NOT NULL"
+         % key_name)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sync", action="store_true", help="DB 와 state.json 을 갱신한다")
@@ -301,17 +330,11 @@ def main() -> int:
     accounts = db_accounts()
     now = time.time()
 
-    if args.sync:
-        for a in accounts:
-            u = usage.get(a["key_name"], {})
-            if u.get("limit_at"):
-                a["rate_limit_note"] = push_rate_limit(a["key_name"], u["limit_at"])
-        accounts = db_accounts()
-
     for a in accounts:
         u = usage.get(a["key_name"], {})
         # 실시간 조회를 먼저 쓴다. 실패하면 rollout 수집값으로 되돌아간다.
         live = live_rate_limits(ACCOUNTS_ROOT / a["key_name"])
+        a["live"] = live
         if live:
             u = dict(u)
             u["snapshot"] = live
@@ -339,6 +362,27 @@ def main() -> int:
         a["tokens_recent"] = u.get("tokens", 0)
 
     if args.sync:
+        # 한도 상태는 **실시간 조회가 우선**이다. rollout 에서 읽은 실패 기록은
+        # 과거이고, 계정 홈이 바뀐 세션에서는 이전 계정 몫이 섞일 수 있다.
+        # 계정이 지금 멀쩡하다고 답하면 남아 있던 정지 표시를 지운다 — 이게
+        # 없으면 한 번 잘못 찍힌 정지가 스스로 풀리지 않는다(2026-09-16 실측).
+        for a in accounts:
+            live = a.get("live")
+            if live is not None:
+                if live.get("rate_limit_reached"):
+                    push_rate_limit_epoch(a["key_name"], (live.get("primary") or {}).get("resets_at"))
+                else:
+                    clear_rate_limit(a["key_name"])
+                continue
+            u = usage.get(a["key_name"], {})
+            if u.get("limit_at"):
+                push_rate_limit(a["key_name"], u["limit_at"])
+        accounts_db = {r["key_name"]: r for r in db_accounts()}
+        for a in accounts:
+            fresh = accounts_db.get(a["key_name"])
+            if fresh:
+                a["rate_limited_until_epoch"] = fresh["rate_limited_until_epoch"]
+
         # 릴레이는 state.json 만 읽고, API/대시보드는 DB 만 읽는다. 둘 다 여기서 쓴다.
         write_state(accounts)
         push_snapshots(accounts, usage)
