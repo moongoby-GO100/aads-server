@@ -295,13 +295,63 @@ def test_duplicate_private_names_are_ambiguous_and_remain_gated():
 def test_private_edits_do_not_bypass_deletion_ratio_or_scope_gates():
     reviewer = _load_reviewer()
     diff = _symbol_diff("def _worker():", "def _worker(epoch):")
+    # _symbol_diff 는 4추가/1삭제다. 비율 게이트는 순삭제가 있을 때만 걸리므로
+    # 삭제 6줄을 더해 4추가/7삭제(순삭제 3줄)로 만든다.
+    net_removal = diff + "-old = 1\n-old = 2\n-old = 3\n-old = 4\n-old = 5\n-old = 6\n"
     for candidate, instruction in [
-        (diff + "-old = 1\n-old = 2\n-old = 3\n", ""),
+        (net_removal, ""),
         (diff, "EXACT AUTHORIZED FILES: app/other.py"),
     ]:
         verdict = reviewer._precheck_preservation_gate(candidate, instruction, None)
         assert verdict is not None
         assert verdict.flag_category == "PRESERVATION_HARD_GATE"
+
+
+def test_surgical_in_place_edit_is_not_blocked_by_deletion_ratio():
+    """1추가/1삭제 외과적 수정은 기존 구현을 지운 것이 아니므로 통과해야 한다.
+
+    2026-09-16: `deletions > additions * 0.5` 만 보던 시절 `1 > 0.5` 로 항상 참이 돼
+    GO100 P0 핫픽스 러너가 연속 차단됐다(runner-ae30c8d2 / runner-8c04cd98).
+    """
+    reviewer = _load_reviewer()
+    one_line = (
+        "diff --git a/app/main.py b/app/main.py\n"
+        "--- a/app/main.py\n+++ b/app/main.py\n"
+        "@@ -1,1 +1,1 @@\n"
+        "-    if int(card_id or 0) != 119:\n"
+        "+    if int(card_id or 0) not in (119, 310):\n"
+    )
+
+    assert reviewer._precheck_preservation_gate(one_line, "", None) is None
+
+
+def test_balanced_in_place_rewrite_is_not_blocked_by_deletion_ratio():
+    """추가 == 삭제 인 제자리 재작성도 순삭제가 없으므로 통과해야 한다."""
+    reviewer = _load_reviewer()
+    body = "".join(f"-old_{i} = {i}\n+new_{i} = {i}\n" for i in range(10))
+    diff = (
+        "diff --git a/app/main.py b/app/main.py\n"
+        "--- a/app/main.py\n+++ b/app/main.py\n"
+        "@@ -1,10 +1,10 @@\n" + body
+    )
+
+    assert reviewer._precheck_preservation_gate(diff, "", None) is None
+
+
+def test_net_removal_still_triggers_deletion_ratio_gate():
+    """순삭제가 1줄이라도 있으면 종전대로 차단한다(게이트를 무력화하지 않는다)."""
+    reviewer = _load_reviewer()
+    diff = (
+        "diff --git a/app/main.py b/app/main.py\n"
+        "--- a/app/main.py\n+++ b/app/main.py\n"
+        "@@ -1,4 +1,3 @@\n"
+        "-old_a = 1\n-old_b = 2\n-old_c = 3\n-old_d = 4\n+new_a = 1\n"
+    )
+
+    verdict = reviewer._precheck_preservation_gate(diff, "", None)
+
+    assert verdict is not None
+    assert verdict.flag_category == "PRESERVATION_HARD_GATE"
 
 
 def test_private_signature_change_still_requires_semantic_review():

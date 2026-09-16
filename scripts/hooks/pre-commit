@@ -450,6 +450,46 @@ if [ -f "tools/aag/scan_aads.py" ]; then
     fi
 fi
 
+# ── AAG L1/L2 구조 게이트 (아키텍처 부채 래칫) ──────────────────────
+#
+# 추출기(tools/aag/scan_aads.py)를 만들어 놓고 아무 데서도 돌리지 않으면
+# baseline 은 만든 날부터 썩는다. L3(행위)는 systemd 타이머로 도는데
+# L1/L2(구조)는 배선이 없었다 — 2026-09-16 실측으로 확인했다.
+#
+# 그날 스캔이 낸 ROUTE_MISSING 12건은 전부 진짜였다: 대시보드가 부르는
+# `/api/v1/ops/qa-results` 같은 경로가 백엔드에 아예 없다(grep 0건).
+# 이런 건 라우팅 표면을 건드리는 커밋에서 생긴다.
+#
+# 전체 스캔은 19.6초다. 매 커밋에 걸면 무관한 커밋까지 느려지므로
+# **라우팅 표면을 건드린 커밋에서만** 돈다.
+# 종료코드 1 = 고정선보다 늘었다 / 2 = 스캔 불가. 2 를 통과시키면
+# 게이트가 죽은 날에도 초록불이 켜지므로 둘 다 차단한다.
+if [ -f "tools/aag/scan_aads.py" ]; then
+    AAG_TOUCHED=$(git diff --cached --name-only --diff-filter=ACMR \
+        | grep -E '^(app/api/|app/routers/|app/main\.py|app/yeoljeong_main\.py|tools/aag/)' || true)
+    if [ -n "$AAG_TOUCHED" ]; then
+        AAG_OUT=$(timeout 180 python3 tools/aag/scan_aads.py --check-baseline --no-write 2>&1)
+        AAG_RC=$?
+        if [ "$AAG_RC" -ne 0 ]; then
+            if [ "$AAG_RC" -eq 2 ]; then
+                echo -e "${RED}[AAG 구조 게이트] 스캔 불가 — '위반 0건' 이 아니라 '점검 못함' 입니다${NC}"
+            else
+                echo -e "${RED}[AAG 구조 게이트] 아키텍처 부채가 고정선보다 늘었습니다${NC}"
+            fi
+            echo "$AAG_OUT" | tail -20 | sed 's/^/  /'
+            echo -e "${YELLOW}  고친 뒤 재커밋하거나, 늘어난 이유를 적고 고정선을 갱신하십시오:${NC}"
+            echo -e "${YELLOW}    python3 tools/aag/scan_aads.py --write-baseline${NC}"
+            echo -e "${YELLOW}  긴급 우회: ALLOW_AAG_REGRESSION=1 git commit -m \"...\"${NC}"
+            if [ "${ALLOW_AAG_REGRESSION:-0}" != "1" ]; then
+                exit 1
+            fi
+            echo -e "${YELLOW}  ALLOW_AAG_REGRESSION=1 — 우회하고 진행합니다${NC}"
+        else
+            echo "[AAG 구조 게이트] 고정선 대비 증가 없음"
+        fi
+    fi
+fi
+
 # ── 감사: hook 통과 서명 (--no-verify 우회 감지용) ──────────────────
 HOOK_SIG="hook-verified:$(date +%s)"
 # 호스트 경로 고정. 쓰기 불가(ex. 컨테이너 RO mount)면 git rev-parse fallback.

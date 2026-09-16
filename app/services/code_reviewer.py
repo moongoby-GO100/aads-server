@@ -78,6 +78,15 @@ _SCOPE_PATH_RE = re.compile(
     r"((?:/?[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+|"
     r"[A-Za-z0-9_.-]+\.(?:py|pyi|js|jsx|ts|tsx|sql|md|json|ya?ml|toml|sh|html|css))"
 )
+# 삭제/추가 비율 게이트가 허용하는 순삭제(삭제-추가) 줄 수.
+# 2026-09-16: 1추가/1삭제짜리 외과적 핫픽스가 `1 > 0.5` 로 매번 차단돼
+# GO100 P0 러너 3건(runner-ae30c8d2 / runner-8c04cd98 / 그 외)이 연속 실패했다.
+# 제자리 수정(추가 == 삭제)은 기존 구현을 지운 것이 아니므로 비율만으로 막으면
+# 안 된다. 실제로 줄이 사라지는 diff(순삭제 > 0)만 게이트에 걸린다.
+# public 심볼 삭제는 아래 `_removed_preservation_symbols` 가 별도로 계속 차단하고,
+# 추가 0 / 삭제 N 인 순수 삭제 diff 도 아래 elif 가 그대로 차단한다.
+_PRESERVATION_NET_REMOVAL_TOLERANCE = 0
+
 _DELETED_SYMBOL_RE = re.compile(
     r"^-[ \t]*((?:async[ \t]+def|def|class)[ \t]+[A-Za-z_][A-Za-z0-9_]*|@router\.[A-Za-z_]+)",
     re.MULTILINE,
@@ -551,9 +560,14 @@ def _precheck_preservation_gate(diff: str, instruction: str, files_changed: Opti
         "deletions": deletions,
     }
 
-    if additions > 0 and deletions > additions * 0.5:
+    if (
+        additions > 0
+        and deletions > additions * 0.5
+        and (deletions - additions) > _PRESERVATION_NET_REMOVAL_TOLERANCE
+    ):
         issues.append(
-            f"삭제 라인({deletions})이 추가 라인({additions})의 50%를 초과했습니다. 기존 구현 조사표와 삭제 사유가 필요합니다."
+            f"삭제 라인({deletions})이 추가 라인({additions})의 50%를 초과하고 순삭제가 "
+            f"{deletions - additions}줄입니다. 기존 구현 조사표와 삭제 사유가 필요합니다."
         )
     elif additions == 0 and deletions > 0:
         issues.append(f"추가 없이 삭제 라인({deletions})만 존재합니다. 삭제 사유가 필요합니다.")
