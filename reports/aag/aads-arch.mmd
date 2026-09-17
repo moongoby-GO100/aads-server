@@ -2,6 +2,16 @@ graph LR
   classDef dbl fill:#ffd7d7,stroke:#c00,stroke-width:2px;
   n_app_main_py["app/main.py"]
   n_app_yeoljeong_main_py["app/yeoljeong_main.py"]
+  n_ns_api_v1_ohvis(["/api/v1/ohvis ⚠2+"])
+  n_app_api_ohvis_console_py["app/api/ohvis_console.py"]
+  n_app_api_ohvis_console_py --> n_ns_api_v1_ohvis
+  n_app_api_ohvis_harness_py["app/api/ohvis_harness.py"]
+  n_app_api_ohvis_harness_py --> n_ns_api_v1_ohvis
+  n_app_api_ohvis_llmops_py["app/api/ohvis_llmops.py"]
+  n_app_api_ohvis_llmops_py --> n_ns_api_v1_ohvis
+  n_app_api_ohvis_tasks_py["app/api/ohvis_tasks.py"]
+  n_app_api_ohvis_tasks_py --> n_ns_api_v1_ohvis
+  class n_ns_api_v1_ohvis dbl;
   n_ns_api_v1_projects(["/api/v1/projects ⚠2+"])
   n_app_api_checkpoints_py["app/api/checkpoints.py"]
   n_app_api_checkpoints_py --> n_ns_api_v1_projects
@@ -28,14 +38,6 @@ graph LR
   n_app_routers_chat_py["app/routers/chat.py"]
   n_app_routers_chat_py --> n_ns_api_v1_chat
   class n_ns_api_v1_chat dbl;
-  n_ns_api_v1_ohvis(["/api/v1/ohvis ⚠2+"])
-  n_app_api_ohvis_harness_py["app/api/ohvis_harness.py"]
-  n_app_api_ohvis_harness_py --> n_ns_api_v1_ohvis
-  n_app_api_ohvis_llmops_py["app/api/ohvis_llmops.py"]
-  n_app_api_ohvis_llmops_py --> n_ns_api_v1_ohvis
-  n_app_api_ohvis_tasks_py["app/api/ohvis_tasks.py"]
-  n_app_api_ohvis_tasks_py --> n_ns_api_v1_ohvis
-  class n_ns_api_v1_ohvis dbl;
   n_ns_api_v1_ops(["/api/v1/ops ⚠2+"])
   n_app_api_hot_reload_py["app/api/hot_reload.py"]
   n_app_api_hot_reload_py --> n_ns_api_v1_ops
@@ -70,6 +72,9 @@ graph LR
   n_app_api_user_project_servers_py["app/api/user_project_servers.py"]
   n_app_api_user_project_servers_py --> n_ns_api_v1_user
   class n_ns_api_v1_user dbl;
+  n_ns_api_v1_acct_purchase(["/api/v1/acct-purchase"])
+  n_app_api_acct_purchase_py["app/api/acct_purchase.py"]
+  n_app_api_acct_purchase_py --> n_ns_api_v1_acct_purchase
   n_ns_api_v1_agenda_(["/api/v1/agenda/"])
   n_app_api_agenda_py["app/api/agenda.py"]
   n_app_api_agenda_py --> n_ns_api_v1_agenda_
@@ -160,9 +165,7 @@ graph LR
   n_ns_api_v1_files(["/api/v1/files"])
   n_app_api_files_py["app/api/files.py"]
   n_app_api_files_py --> n_ns_api_v1_files
-  n_ns_api_v1_goals(["/api/v1/goals"])
-  n_app_routers_goals_py["app/routers/goals.py"]
-  n_app_routers_goals_py --> n_ns_api_v1_goals
+  n_app_main_py --> n_app_api_acct_purchase_py
   n_app_main_py --> n_app_api_admin_py
   n_app_main_py --> n_app_api_admin_users_py
   n_app_main_py --> n_app_api_agenda_py
@@ -195,6 +198,7 @@ graph LR
   n_app_main_py --> n_app_api_llm_models_py
   n_app_main_py --> n_app_api_llm_report_py
   n_app_main_py --> n_app_api_memory_monitor_py
+  n_app_main_py --> n_app_api_ohvis_console_py
   n_app_main_py --> n_app_api_ohvis_harness_py
   n_app_main_py --> n_app_api_ohvis_llmops_py
   n_app_main_py --> n_app_api_ohvis_tasks_py
@@ -208,7 +212,6 @@ graph LR
   n_app_main_py --> n_app_api_user_project_servers_py
   n_app_main_py --> n_app_routers_agent_vault_py
   n_app_main_py --> n_app_routers_chat_py
-  n_app_main_py --> n_app_routers_goals_py
   n_app_yeoljeong_main_py --> n_app_api_auth_py
   n__root_aads_aads_dashboard_src_app_assistant_page_tsx[/"/root/aads/aads-dashboard/src/app/assistant/page.tsx"/]
   n__root_aads_aads_dashboard_src_app_assistant_page_tsx -. 1건 .-> n_ns_api_v1_assistant
@@ -249,11 +252,11 @@ graph LR
   n__root_aads_aads_dashboard_src_components_chat_SessionSummaryCard_tsx[/"/root/aads/aads-dashboard/src/components/chat/SessionSummaryCard.tsx"/]
   n__root_aads_aads_dashboard_src_components_chat_SessionSummaryCard_tsx -. 1건 .-> n_ns_api_v1_chat
   n__root_aads_aads_dashboard_src_components_chat_UsageBar_tsx[/"/root/aads/aads-dashboard/src/components/chat/UsageBar.tsx"/]
-  n__root_aads_aads_dashboard_src_components_chat_UsageBar_tsx -. 2건 .-> n_ns_api_v1_ops
+  n__root_aads_aads_dashboard_src_components_chat_UsageBar_tsx -. 4건 .-> n_ns_api_v1_ops
   n__root_aads_aads_dashboard_src_components_chat_UsageBar_tsx[/"/root/aads/aads-dashboard/src/components/chat/UsageBar.tsx"/]
-  n__root_aads_aads_dashboard_src_components_chat_UsageBar_tsx -. 2건 .-> n_ns_api_v1_settings
+  n__root_aads_aads_dashboard_src_components_chat_UsageBar_tsx -. 1건 .-> n_ns_api_v1_settings
   n__root_aads_aads_dashboard_src_components_settings_LlmAccountCard_tsx[/"/root/aads/aads-dashboard/src/components/settings/LlmAccountCard.tsx"/]
-  n__root_aads_aads_dashboard_src_components_settings_LlmAccountCard_tsx -. 2건 .-> n_ns_api_v1_ops
+  n__root_aads_aads_dashboard_src_components_settings_LlmAccountCard_tsx -. 1건 .-> n_ns_api_v1_ops
   n__root_aads_aads_dashboard_src_hooks_useChatSSE_ts[/"/root/aads/aads-dashboard/src/hooks/useChatSSE.ts"/]
   n__root_aads_aads_dashboard_src_hooks_useChatSSE_ts -. 1건 .-> n_ns_api_v1_chat
   n__root_aads_aads_dashboard_src_hooks_useSSE_ts[/"/root/aads/aads-dashboard/src/hooks/useSSE.ts"/]
@@ -297,13 +300,11 @@ graph LR
   n__root_aads_aads_dashboard_src_lib_api_ts[/"/root/aads/aads-dashboard/src/lib/api.ts"/]
   n__root_aads_aads_dashboard_src_lib_api_ts -. 1건 .-> n_ns_api_v1_documents___
   n__root_aads_aads_dashboard_src_lib_api_ts[/"/root/aads/aads-dashboard/src/lib/api.ts"/]
-  n__root_aads_aads_dashboard_src_lib_api_ts -. 16건 .-> n_ns_api_v1_goals
-  n__root_aads_aads_dashboard_src_lib_api_ts[/"/root/aads/aads-dashboard/src/lib/api.ts"/]
   n__root_aads_aads_dashboard_src_lib_api_ts -. 9건 .-> n_ns_api_v1_llm_models
   n__root_aads_aads_dashboard_src_lib_api_ts[/"/root/aads/aads-dashboard/src/lib/api.ts"/]
-  n__root_aads_aads_dashboard_src_lib_api_ts -. 8건 .-> n_ns_api_v1_ohvis
+  n__root_aads_aads_dashboard_src_lib_api_ts -. 11건 .-> n_ns_api_v1_ohvis
   n__root_aads_aads_dashboard_src_lib_api_ts[/"/root/aads/aads-dashboard/src/lib/api.ts"/]
-  n__root_aads_aads_dashboard_src_lib_api_ts -. 27건 .-> n_ns_api_v1_ops
+  n__root_aads_aads_dashboard_src_lib_api_ts -. 31건 .-> n_ns_api_v1_ops
   n__root_aads_aads_dashboard_src_lib_api_ts[/"/root/aads/aads-dashboard/src/lib/api.ts"/]
   n__root_aads_aads_dashboard_src_lib_api_ts -. 9건 .-> n_ns_api_v1_projects
   n__root_aads_aads_dashboard_src_lib_api_ts[/"/root/aads/aads-dashboard/src/lib/api.ts"/]
@@ -322,4 +323,4 @@ graph LR
   n__root_aads_aads_dashboard_src_services_taskApi_ts -. 1건 .-> n_ns_api_v1_directives
   n__root_aads_aads_dashboard_src_services_taskApi_ts[/"/root/aads/aads-dashboard/src/services/taskApi.ts"/]
   n__root_aads_aads_dashboard_src_services_taskApi_ts -. 1건 .-> n_ns_api_v1_ops
-  %% 네임스페이스 82개 중 상위 40개만 표시
+  %% 네임스페이스 84개 중 상위 40개만 표시

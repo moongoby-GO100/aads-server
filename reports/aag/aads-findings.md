@@ -1,6 +1,6 @@
 # AAG L1/L2 — AADS 아키텍처 결함 리포트
 
-생성 2026-09-16 17:14 KST · 결함 56건 · 판정 불가(UNRESOLVED) 110건
+생성 2026-09-18 06:54 KST · 결함 58건 · 판정 불가(UNRESOLVED) 110건
 
 UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 결함으로 세면
 숫자가 부풀고, 부풀린 숫자는 아무도 손대지 않아 규칙 전체가 무시된다.
@@ -9,16 +9,16 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 
 | 대상 | 수 |
 |---|---|
-| 앱 파이썬 파일 | 381 |
-| 라우터 디렉터리 파일 | 87 |
-| APIRouter 정의 모듈 | 81 |
-| include_router 호출 | 82 |
-| 마운트된 라우트 | 885 |
-| 네임스페이스 | 82 |
-| 프런트 파일 | 232 |
-| 해석된 프런트 호출 | 337 |
-| SQL 참조 테이블 | 220 |
-| 그래프 노드/엣지 | 759 / 1152 |
+| 앱 파이썬 파일 | 394 |
+| 라우터 디렉터리 파일 | 90 |
+| APIRouter 정의 모듈 | 84 |
+| include_router 호출 | 85 |
+| 마운트된 라우트 | 904 |
+| 네임스페이스 | 84 |
+| 프런트 파일 | 237 |
+| 해석된 프런트 호출 | 344 |
+| SQL 참조 테이블 | 227 |
+| 그래프 노드/엣지 | 781 / 1200 |
 
 ## 규칙별 건수
 
@@ -28,12 +28,12 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 | `DOUBLE_MOUNT` | P1 | 9 |
 | `ROUTE_SHADOWED` | P0 | 0 |
 | `ORPHAN_ROUTER` | P2 | 1 |
-| `TABLE_NO_MODEL` | P1 | 44 |
+| `TABLE_NO_MODEL` | P1 | 46 |
 | `PATH_DRIFT` | P1 | 1 |
 | `ROUTE_MISSING` | P0 | 0 |
 | `STALE_BACKUP` | P2 | 0 |
 
-| **합계** | | **56** |
+| **합계** | | **58** |
 
 ## DUP_MODULE (1건)
 
@@ -42,11 +42,11 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 ## DOUBLE_MOUNT (9건)
 
 - [P1] 네임스페이스 `/api/v1/admin` 를 3개 모듈이 소유 — `app/api/admin.py`(31개 라우트), `app/api/admin_users.py`(1개 라우트), `app/api/design_modifications.py`(8개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
-- [P1] 네임스페이스 `/api/v1/chat` 를 3개 모듈이 소유 — `app/api/chat.py`(4개 라우트), `app/api/directive_drafts.py`(4개 라우트), `app/routers/chat.py`(78개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
+- [P1] 네임스페이스 `/api/v1/chat` 를 3개 모듈이 소유 — `app/api/chat.py`(4개 라우트), `app/api/directive_drafts.py`(4개 라우트), `app/routers/chat.py`(81개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
 - [P1] 네임스페이스 `/api/v1/directives` 를 2개 모듈이 소유 — `app/api/directives.py`(3개 라우트), `app/api/ops.py`(1개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
 - [P1] 네임스페이스 `/api/v1/llm-models` 를 2개 모듈이 소유 — `app/api/llm_models.py`(9개 라우트), `app/api/llm_report.py`(2개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
-- [P1] 네임스페이스 `/api/v1/ohvis` 를 3개 모듈이 소유 — `app/api/ohvis_harness.py`(5개 라우트), `app/api/ohvis_llmops.py`(12개 라우트), `app/api/ohvis_tasks.py`(8개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
-- [P1] 네임스페이스 `/api/v1/ops` 를 3개 모듈이 소유 — `app/api/hot_reload.py`(2개 라우트), `app/api/memory_monitor.py`(5개 라우트), `app/api/ops.py`(71개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
+- [P1] 네임스페이스 `/api/v1/ohvis` 를 4개 모듈이 소유 — `app/api/ohvis_console.py`(2개 라우트), `app/api/ohvis_harness.py`(5개 라우트), `app/api/ohvis_llmops.py`(12개 라우트), `app/api/ohvis_tasks.py`(8개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
+- [P1] 네임스페이스 `/api/v1/ops` 를 3개 모듈이 소유 — `app/api/hot_reload.py`(2개 라우트), `app/api/memory_monitor.py`(5개 라우트), `app/api/ops.py`(76개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
 - [P1] 네임스페이스 `/api/v1/projects` 를 4개 모듈이 소유 — `app/api/checkpoints.py`(5개 라우트), `app/api/project_dashboard.py`(4개 라우트), `app/api/projects.py`(7개 라우트), `app/api/stream.py`(1개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
 - [P1] 네임스페이스 `/api/v1/settings` 를 3개 모듈이 소유 — `app/api/directives.py`(2개 라우트), `app/api/pipeline_runner.py`(2개 라우트), `app/routers/chat.py`(7개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
 - [P1] 네임스페이스 `/api/v1/user` 를 2개 모듈이 소유 — `app/api/user_api_keys.py`(4개 라우트), `app/api/user_project_servers.py`(4개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
@@ -55,13 +55,14 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 
 - [P2] `app/api/ceo_chat.py` 이 APIRouter 를 정의하지만 어떤 엔트리포인트에도 include_router 되지 않았다 — 죽은 코드이거나 등록 누락이다
 
-## TABLE_NO_MODEL (44건)
+## TABLE_NO_MODEL (46건)
 
 - [P1] 테이블 `aads_conversations` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/project_dashboard.py`)
 - [P1] 테이블 `agent_activity_log` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/cross_validator.py`)
 - [P1] 테이블 `agent_registry` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/project_dashboard.py`)
 - [P1] 테이블 `ai_persona_references` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/image.py`)
 - [P1] 테이블 `api_tokens` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/device.py`)
+- [P1] 테이블 `atom_record` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/acct_purchase.py`)
 - [P1] 테이블 `auto_trade_orders` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/tool_registry.py`)
 - [P1] 테이블 `bridge_activity_log` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`, `app/services/cross_validator.py`)
 - [P1] 테이블 `ceo_chat_messages` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ceo_chat.py`)
@@ -71,7 +72,7 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 - [P1] 테이블 `ceo_session_summaries` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ceo_chat.py`)
 - [P1] 테이블 `checkpoint_logs` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/checkpoints.py`)
 - [P1] 테이블 `checkpoints` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/projects.py`)
-- [P1] 테이블 `claude_max_usage_snapshot` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/oauth_usage_tracker.py`)
+- [P1] 테이블 `claude_max_usage_snapshot` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/account_primary.py`, `app/services/oauth_usage_tracker.py`)
 - [P1] 테이블 `commit_log` 을 3개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`, `app/services/cross_validator.py`, `app/services/health_checker.py`)
 - [P1] 테이블 `cost_tracking` 을 3개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`, `app/services/cross_validator.py`, `app/services/tenant_usage_limits.py`)
 - [P1] 테이블 `deploy_recent_durations` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/deploy_observability.py`)
@@ -88,7 +89,7 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 - [P1] 테이블 `llm_fallback_chains` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/core/llm_fallback_engine.py`)
 - [P1] 테이블 `llm_key_health_log` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/llm_admin.py`)
 - [P1] 테이블 `maintenance_schedule` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`)
-- [P1] 테이블 `ohvis_tasks` 을 3개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ohvis_tasks.py`, `app/services/ohvis_task_manager.py`, `app/services/temporal_controller.py`)
+- [P1] 테이블 `ohvis_tasks` 을 4개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ohvis_console.py`, `app/api/ohvis_tasks.py`, `app/services/ohvis_task_manager.py`)
 - [P1] 테이블 `orders` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/tool_registry.py`)
 - [P1] 테이블 `pipeline_c_jobs` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/main.py`)
 - [P1] 테이블 `pipeline_jobs` 을 23개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/admin.py`, `app/api/ceo_chat_tools.py`, `app/api/ops.py`)
@@ -97,6 +98,7 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 - [P1] 테이블 `server_env_history` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`, `app/services/cross_validator.py`)
 - [P1] 테이블 `session_blueprints` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/prompt_compiler.py`)
 - [P1] 테이블 `session_relay` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/session_relay.py`)
+- [P1] 테이블 `source_file` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/acct_purchase.py`)
 - [P1] 테이블 `system_metrics` 을 3개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/channels.py`, `app/api/ops.py`, `app/services/cross_validator.py`)
 - [P1] 테이블 `task_cost_log` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/project_dashboard.py`)
 - [P1] 테이블 `task_tracking` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ceo_chat.py`)
@@ -104,7 +106,7 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 
 ## PATH_DRIFT (1건)
 
-- [P1] `/root/aads/aads-dashboard/src/lib/api.ts:522` POST `/api/v1/chat/messages` — 경로는 있으나 메서드가 GET 다 (/api/v1/chat/messages)
+- [P1] `/root/aads/aads-dashboard/src/lib/api.ts:651` POST `/api/v1/chat/messages` — 경로는 있으나 메서드가 GET 다 (/api/v1/chat/messages)
 
 ## UNRESOLVED (결함 아님 — 판정 불가)
 
@@ -121,14 +123,14 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 - `/root/aads/aads-dashboard/src/app/chat/RunnerHostStatus.tsx:55` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/pipeline/runner/status?window_hours=1`
 - `/root/aads/aads-dashboard/src/app/chat/api.ts:80` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${BASE_URL}${path}`
 - `/root/aads/aads-dashboard/src/app/chat/api.ts:162` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작: `${BASE_URL}/chat/files/upload?session_id=${sessionId}&uploaded_by=user`
-- `/root/aads/aads-dashboard/src/app/chat/page.tsx:5345` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sessionId}/resume`
-- `/root/aads/aads-dashboard/src/app/chat/page.tsx:5458` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/executions/${executionId}/events?last_event_id=${encodeURIComponent(replayLastEventId)}`
-- `/root/aads/aads-dashboard/src/app/chat/page.tsx:7527` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/image/generate`
-- `/root/aads/aads-dashboard/src/app/chat/page.tsx:8045` fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): fetchUrl
-- `/root/aads/aads-dashboard/src/app/chat/page.tsx:8370` fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): retry with backoff
-- `/root/aads/aads-dashboard/src/app/chat/page.tsx:8756` fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): resumeUrl
-- `/root/aads/aads-dashboard/src/app/chat/page.tsx:9197` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sid}/stop`
-- `/root/aads/aads-dashboard/src/app/chat/page.tsx:9266` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sid}/stop`
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:5708` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sessionId}/resume`
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:5821` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/executions/${executionId}/events?last_event_id=${encodeURIComponent(replayLastEventId)}`
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:7890` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/image/generate`
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:8408` fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): fetchUrl
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:8733` fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): retry with backoff
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:9119` fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): resumeUrl
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:9560` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sid}/stop`
+- `/root/aads/aads-dashboard/src/app/chat/page.tsx:9629` fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sid}/stop`
 - … 외 38건
 
 ### FRONTEND_VAR_SEGMENT (1건)
@@ -152,8 +154,8 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 - `app/services/llmops_evaluator.py:261` 테이블 이름이 런타임 보간이라 확정 불가
 - `app/services/llmops_evaluator.py:316` 테이블 이름이 런타임 보간이라 확정 불가
 - `app/services/llmops_store.py:442` 테이블 이름이 런타임 보간이라 확정 불가
-- `app/services/llmops_store.py:1203` 테이블 이름이 런타임 보간이라 확정 불가
-- `app/services/llmops_store.py:1201` 테이블 이름이 런타임 보간이라 확정 불가
+- `app/services/llmops_store.py:1208` 테이블 이름이 런타임 보간이라 확정 불가
+- `app/services/llmops_store.py:1206` 테이블 이름이 런타임 보간이라 확정 불가
 - `app/services/llmops_store.py:201` 테이블 이름이 런타임 보간이라 확정 불가
 - … 외 31건
 

@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ACCT 매입자료 관리 — 라일론</title>
+<style>
+  :root{
+    --bg:#f4f6f9;--panel:#fff;--line:#d8dee7;--line2:#eaeef4;--ink:#16202e;--ink2:#5b6b80;--ink3:#8a98ab;
+    --accent:#1b4fd8;--accent-soft:#e8eefc;--ok:#0a7a4b;--ok-soft:#e4f5ec;--warn:#a85c00;--warn-soft:#fdf1df;
+    --err:#b3261e;--err-soft:#fbe9e7;--hold:#5b3fb5;--hold-soft:#efeafc;--head:#eef2f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-size:13px;line-height:1.45;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",sans-serif}
+  header.top{background:#0f1b2d;color:#fff;padding:8px 14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  header.top .brand{font-weight:700}
+  header.top select{background:#1b2a41;color:#fff;border:1px solid #33445e;border-radius:4px;padding:4px 8px;font-size:12px;max-width:340px}
+  header.top .who{margin-left:auto;font-size:12px;color:#9fb0c9}
+  nav.tabs{display:flex;gap:2px;background:#e3e9f1;padding:0 10px;border-bottom:1px solid var(--line);overflow-x:auto}
+  nav.tabs button{border:1px solid transparent;border-bottom:none;background:transparent;padding:8px 14px;font-size:12.5px;
+    cursor:pointer;color:var(--ink2);white-space:nowrap;border-radius:5px 5px 0 0}
+  nav.tabs button.on{background:var(--panel);color:var(--accent);font-weight:700;border-color:var(--line)}
+  .wrap{padding:10px 12px 40px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;margin-bottom:10px}
+  .panel>.ph{padding:7px 10px;border-bottom:1px solid var(--line2);font-weight:700;font-size:12.5px;display:flex;gap:8px;align-items:center}
+  .panel>.ph .sub{font-weight:400;color:var(--ink3);font-size:11.5px}
+  .pb{padding:10px}
+  .filters{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:7px 10px}
+  .f label{display:block;font-size:11px;color:var(--ink2);margin-bottom:3px}
+  .f input,.f select{width:100%;padding:5px 7px;border:1px solid var(--line);border-radius:4px;font-size:12.5px;background:#fff}
+  .btnrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px;align-items:center}
+  button.b{padding:6px 12px;border:1px solid var(--line);background:#fff;border-radius:4px;cursor:pointer;font-size:12.5px}
+  button.b:hover{background:#f2f5fa}
+  button.b.pri{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  .hint{color:var(--ink3);font-size:11.5px}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+  .kpi{border:1px solid var(--line);border-radius:6px;padding:8px 10px;background:#fbfcfe}
+  .kpi .k{font-size:11px;color:var(--ink2)}
+  .kpi .v{font-size:17px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums}
+  .kpi .d{font-size:11px;color:var(--ink3)}
+  .gridwrap{overflow:auto;max-height:540px;border-top:1px solid var(--line2)}
+  table.grid{border-collapse:separate;border-spacing:0;width:100%;font-size:12px;white-space:nowrap}
+  table.grid th{position:sticky;top:0;z-index:3;background:var(--head);border-bottom:1px solid var(--line);
+    border-right:1px solid var(--line2);padding:6px 7px;text-align:center;font-weight:700;color:#33465f}
+  table.grid td{border-bottom:1px solid var(--line2);border-right:1px solid var(--line2);padding:4px 7px}
+  table.grid tbody tr:hover{background:#f6f9ff}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  td.c{text-align:center}
+  td.neg{color:var(--err)}
+  tfoot td{position:sticky;bottom:0;background:#f7f9fc;border-top:2px solid var(--line);font-weight:700;
+    font-variant-numeric:tabular-nums;padding:6px 7px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px}
+  .badge{display:inline-block;padding:1px 6px;border-radius:9px;font-size:11px;font-weight:600;border:1px solid transparent}
+  .b-ok{background:var(--ok-soft);color:var(--ok);border-color:#bfe3d0}
+  .b-warn{background:var(--warn-soft);color:var(--warn);border-color:#f0d6ac}
+  .b-err{background:var(--err-soft);color:var(--err);border-color:#f0c2bd}
+  .b-hold{background:var(--hold-soft);color:var(--hold);border-color:#d5c9f4}
+  .b-mute{background:#eef1f6;color:var(--ink2);border-color:#dde3ec}
+  .bar{height:7px;background:#e7ecf4;border-radius:4px;overflow:hidden}
+  .bar>i{display:block;height:100%;background:var(--accent)}
+  .hide{display:none}
+  #gate{max-width:420px;margin:60px auto;background:#fff;border:1px solid var(--line);border-radius:8px;padding:22px}
+  #gate h2{margin:0 0 6px;font-size:16px}
+  #gate p{margin:0 0 14px;color:var(--ink2);font-size:12.5px}
+  #gate input{width:100%;padding:8px;border:1px solid var(--line);border-radius:4px;margin-bottom:8px;font-size:13px}
+  #err{background:var(--err-soft);border:1px solid #f0c2bd;color:var(--err);border-radius:5px;padding:8px 10px;margin:10px 0;font-size:12.5px}
+  .srcnote{background:#fffdf2;border:1px solid #efe4bd;border-radius:5px;padding:7px 9px;font-size:11.5px;color:#6a5a23;margin-bottom:9px}
+</style>
+</head>
+<body>
+
+<!-- 로그인 게이트 -->
+<div id="gate" class="hide">
+  <h2>매입자료 관리</h2>
+  <p>회계 원장 데이터를 보려면 로그인해 주세요. 로그인 정보는 이 브라우저에만 저장됩니다.</p>
+  <input id="gEmail" type="email" placeholder="이메일" autocomplete="username"/>
+  <input id="gPw" type="password" placeholder="비밀번호" autocomplete="current-password"/>
+  <button class="b pri" style="width:100%" onclick="login()">로그인</button>
+  <div id="gErr" class="hide" style="color:var(--err);font-size:12px;margin-top:8px"></div>
+</div>
+
+<div id="app" class="hide">
+<header class="top">
+  <span class="brand">ACCT 회계원장 · 매입자료 관리</span>
+  <select id="snap" onchange="loadAll()"></select>
+  <span class="who" id="who"></span>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-t="list" class="on">① 매입전표 리스트</button>
+  <button data-t="acct">② 계정과목</button>
+  <button data-t="card">③ 카드 마스터</button>
+  <button data-t="vendor">④ 거래처</button>
+  <button data-t="valid">⑤ 검증·오류함</button>
+  <button data-t="month">⑥ 월별 집계</button>
+</nav>
+
+<div class="wrap">
+  <div id="err" class="hide"></div>
+
+  <section id="t-list">
+    <div class="srcnote" id="srcnote"></div>
+    <div class="panel">
+      <div class="ph">조회 조건</div>
+      <div class="pb">
+        <div class="filters">
+          <div class="f"><label>회계월</label><select id="fYm"><option value="">전체</option></select></div>
+          <div class="f"><label>전표상태</label><select id="fStatus">
+            <option value="">전체</option><option value="2">확정</option><option value="1">미확인</option>
+            <option value="5">보류</option><option value="3">제외(중복/취소)</option></select></div>
+          <div class="f"><label>계정과목</label><select id="fAcct"><option value="">전체</option></select></div>
+          <div class="f"><label>카드</label><select id="fCard"><option value="">전체</option></select></div>
+          <div class="f"><label>거래처 / 사업자번호</label><input id="fVendor" placeholder="예: 페이스북"/></div>
+          <div class="f"><label>사용내역(적요)</label><input id="fRemark" placeholder="예: 광고충전"/></div>
+          <div class="f"><label>국내/해외</label><select id="fDnf"><option value="">전체</option><option>국내</option><option>해외</option></select></div>
+          <div class="f"><label>합계금액 이상</label><input id="fMin" type="number" placeholder="0"/></div>
+          <div class="f"><label>표시 건수</label><select id="fLimit"><option>100</option><option>200</option><option>500</option></select></div>
+        </div>
+        <div class="btnrow">
+          <button class="b pri" onclick="loadTxn(0)">조회</button>
+          <button class="b" onclick="resetF()">조건 초기화</button>
+          <button class="b" onclick="exportCsv()">CSV 내보내기</button>
+          <span class="hint" id="cntHint"></span>
+        </div>
+      </div>
+    </div>
+    <div class="panel"><div class="pb"><div class="kpis" id="kpis"></div></div></div>
+    <div class="panel">
+      <div class="ph">매입전표 <span class="sub">계정과목·사용내역·카드번호·부가세 전 필드</span></div>
+      <div class="gridwrap">
+        <table class="grid">
+          <thead><tr>
+            <th>상태</th><th>전표일자</th><th>전표번호</th><th>카드(사)</th><th>카드번호</th>
+            <th>거래처</th><th>사업자번호</th><th>업태</th><th>국내외</th><th>적요(사용내역)</th>
+            <th>차변코드</th><th>차변 계정과목</th><th>대변코드</th><th>대변 계정과목</th>
+            <th>공급가액</th><th>부가세</th><th>합계</th>
+          </tr></thead>
+          <tbody id="txnBody"></tbody>
+          <tfoot><tr id="txnFoot"></tr></tfoot>
+        </table>
+      </div>
+      <div class="btnrow" style="padding:8px 10px">
+        <button class="b" onclick="page(-1)">◀ 이전</button>
+        <button class="b" onclick="page(1)">다음 ▶</button>
+        <span class="hint" id="pageHint"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="t-acct" class="hide"><div class="panel">
+    <div class="ph">계정과목 마스터 <span class="sub">차변 기준 실사용 계정</span></div>
+    <div class="gridwrap"><table class="grid">
+      <thead><tr><th>계정코드</th><th>계정과목</th><th>사용건수</th><th>사용금액(원)</th><th>비중</th></tr></thead>
+      <tbody id="acctBody"></tbody><tfoot><tr id="acctFoot"></tr></tfoot>
+    </table></div></div>
+  </section>
+
+  <section id="t-card" class="hide"><div class="panel">
+    <div class="ph">법인카드 마스터 <span class="sub">카드번호는 앞 4 / 뒤 4 자리만 노출(PAN 마스킹)</span></div>
+    <div class="gridwrap"><table class="grid">
+      <thead><tr><th>카드사코드</th><th>카드사/별칭</th><th>카드번호(마스킹)</th><th>전표건수</th><th>사용금액(원)</th></tr></thead>
+      <tbody id="cardBody"></tbody>
+    </table></div></div>
+  </section>
+
+  <section id="t-vendor" class="hide"><div class="panel">
+    <div class="ph">거래처 원장 <span class="sub">금액 상위</span></div>
+    <div class="gridwrap"><table class="grid">
+      <thead><tr><th>거래처명</th><th>사업자등록번호</th><th>업태/업종</th><th>국내외</th><th>거래건수</th><th>합계금액(원)</th></tr></thead>
+      <tbody id="vendorBody"></tbody>
+    </table></div></div>
+  </section>
+
+  <section id="t-valid" class="hide"><div class="panel">
+    <div class="ph">검증 규칙 · 오류함 <span class="sub">건수는 선택 스냅샷 실집계</span></div>
+    <div class="gridwrap"><table class="grid">
+      <thead><tr><th>규칙</th><th>내용</th><th>판정</th><th>대상 건수</th><th>조치</th></tr></thead>
+      <tbody id="validBody"></tbody>
+    </table></div></div>
+  </section>
+
+  <section id="t-month" class="hide"><div class="panel">
+    <div class="ph">월별 집계</div>
+    <div class="gridwrap"><table class="grid">
+      <thead><tr><th>회계월</th><th>전표건수</th><th>확정금액(원)</th><th>전체금액(원)</th><th>확정률</th><th>진행</th></tr></thead>
+      <tbody id="monthBody"></tbody><tfoot><tr id="monthFoot"></tr></tfoot>
+    </table></div></div>
+  </section>
+</div>
+</div>
+
+<script>
+const API="/api/v1/acct-purchase";
+const TOKEN_KEYS=["acct_token","aads_token","access_token","token"];
+let token=TOKEN_KEYS.map(k=>localStorage.getItem(k)).find(Boolean)||"";
+let sfid=null,offset=0,lastCount=0;
+const n=v=>(v==null?"":Number(v).toLocaleString("ko-KR"));
+
+function showErr(m){const e=document.getElementById("err");e.textContent=m;e.classList.remove("hide");}
+function clearErr(){document.getElementById("err").classList.add("hide");}
+function gate(show){document.getElementById("gate").classList.toggle("hide",!show);
+  document.getElementById("app").classList.toggle("hide",show);}
+
+async function api(path){
+  const r=await fetch(API+path,{headers:{Authorization:"Bearer "+token}});
+  if(r.status===401||r.status===403){gate(true);throw new Error("auth");}
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(j.detail||("HTTP "+r.status));
+  return j;
+}
+
+async function login(){
+  const email=document.getElementById("gEmail").value.trim();
+  const pw=document.getElementById("gPw").value;
+  const ge=document.getElementById("gErr");
+  try{
+    const r=await fetch("/api/v1/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({email,password:pw})});
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.detail||"로그인 실패");
+    token=j.access_token||j.token||(j.data&&j.data.access_token);
+    if(!token)throw new Error("토큰을 받지 못했습니다");
+    localStorage.setItem("acct_token",token);
+    ge.classList.add("hide");gate(false);loadAll();
+  }catch(e){ge.textContent=e.message;ge.classList.remove("hide");}
+}
+
+/* 탭 */
+document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#tabs button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  ["list","acct","card","vendor","valid","month"].forEach(t=>
+    document.getElementById("t-"+t).classList.toggle("hide",t!==b.dataset.t));
+});
+
+function resetF(){["fYm","fStatus","fAcct","fCard","fVendor","fRemark","fDnf","fMin"].forEach(i=>document.getElementById(i).value="");loadTxn(0);}
+function qs(){
+  const g=i=>document.getElementById(i).value;
+  const p=new URLSearchParams({source_file_id:sfid,limit:g("fLimit")||100,offset:offset});
+  [["ym","fYm"],["status","fStatus"],["account","fAcct"],["card_code","fCard"],
+   ["vendor","fVendor"],["remark","fRemark"],["domestic","fDnf"],["min_amount","fMin"]]
+   .forEach(([k,i])=>{const v=g(i);if(v)p.set(k,v);});
+  return p.toString();
+}
+function page(d){const lim=Number(document.getElementById("fLimit").value||100);
+  const nx=offset+d*lim;if(nx<0)return;if(d>0&&lastCount<lim)return;offset=nx;loadTxn(offset);}
+
+let ROWS=[];
+async function loadTxn(off){
+  offset=off||0;clearErr();
+  try{
+    const j=await api("/transactions?"+qs());
+    ROWS=j.items;lastCount=j.items.length;
+    document.getElementById("txnBody").innerHTML=j.items.map(r=>{
+      const cls={"2":"b-ok","1":"b-warn","3":"b-err","5":"b-hold"}[r.status_code]||"b-mute";
+      const neg=v=>v<0?" neg":"";
+      return '<tr><td class="c"><span class="badge '+cls+'">'+r.status_label+'</span></td>'+
+        '<td class="c">'+(r.txn_date||"")+'</td><td class="mono">'+r.voucher_no+'</td>'+
+        '<td>'+(r.card_name||'<span class="badge b-mute">미지정</span>')+'</td>'+
+        '<td class="mono">'+(r.card_no_masked||"—")+'</td>'+
+        '<td>'+(r.vendor||"")+'</td>'+
+        '<td class="mono">'+(r.vendor_biz_no||'<span class="badge b-warn">미등록</span>')+'</td>'+
+        '<td>'+(r.vendor_biz_cond||"—")+'</td><td class="c">'+(r.domestic||"")+'</td>'+
+        '<td>'+(r.remark||'<span class="badge b-warn">누락</span>')+'</td>'+
+        '<td class="mono c">'+(r.debit_code||"")+'</td><td>'+(r.debit_name||"")+'</td>'+
+        '<td class="mono c">'+(r.credit_code||"")+'</td><td>'+(r.credit_name||"")+'</td>'+
+        '<td class="num'+neg(r.supply_amount)+'">'+n(r.supply_amount)+'</td>'+
+        '<td class="num'+neg(r.vat_amount)+'">'+n(r.vat_amount)+'</td>'+
+        '<td class="num'+neg(r.total_amount)+'">'+n(r.total_amount)+'</td></tr>';
+    }).join("")||'<tr><td colspan="17" class="c" style="padding:20px;color:#8a98ab">조건에 맞는 전표가 없습니다</td></tr>';
+    const t=j.totals;
+    document.getElementById("txnFoot").innerHTML=
+      '<td colspan="2">필터 합계</td><td>'+n(t.count)+'건</td><td colspan="11"></td>'+
+      '<td class="num">'+n(t.supply_amount)+'</td><td class="num">'+n(t.vat_amount)+'</td><td class="num">'+n(t.total_amount)+'</td>';
+    document.getElementById("cntHint").textContent="조회 "+j.count+"건 / 조건 전체 "+n(t.count)+"건";
+    document.getElementById("pageHint").textContent=(offset+1)+" ~ "+(offset+j.count)+" 행";
+  }catch(e){if(e.message!=="auth")showErr("전표 조회 실패: "+e.message);}
+}
+
+function exportCsv(){
+  const cols=["txn_date","voucher_no","card_name","card_no_masked","vendor","vendor_biz_no","vendor_biz_cond",
+    "domestic","remark","debit_code","debit_name","credit_code","credit_name","supply_amount","vat_amount",
+    "total_amount","status_label"];
+  const csv=[cols.join(",")].concat(ROWS.map(r=>cols.map(c=>'"'+String(r[c]==null?"":r[c]).replace(/"/g,'""')+'"').join(","))).join("\n");
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob(["﻿"+csv],{type:"text/csv"}));
+  a.download="acct_purchase_"+sfid+".csv";a.click();
+}
+
+async function loadAll(){
+  sfid=document.getElementById("snap").value||sfid;
+  clearErr();
+  try{
+    const [sum,acc,card,ven,val,mon]=await Promise.all([
+      api("/summary?source_file_id="+sfid),api("/accounts?source_file_id="+sfid),
+      api("/cards?source_file_id="+sfid),api("/vendors?source_file_id="+sfid+"&limit=50"),
+      api("/validations?source_file_id="+sfid),api("/monthly?source_file_id="+sfid)]);
+
+    document.getElementById("kpis").innerHTML=[
+      ["전체 전표",n(sum.total_count)+" 건","선택 스냅샷 기준"],
+      ["전체 금액",n(sum.total_amount)+" 원","카드승인 기준"]
+    ].concat(sum.buckets.map(b=>[b.status_label,n(b.count)+" 건",n(b.total_amount)+" 원"]))
+     .map(k=>'<div class="kpi"><div class="k">'+k[0]+'</div><div class="v">'+k[1]+'</div><div class="d">'+k[2]+'</div></div>').join("");
+
+    const fa=document.getElementById("fAcct");fa.innerHTML='<option value="">전체</option>';
+    acc.items.forEach(a=>fa.innerHTML+='<option value="'+a.code+'">'+a.code+' '+(a.name||"")+'</option>');
+    const mx=Math.max(1,...acc.items.map(a=>a.total_amount));
+    document.getElementById("acctBody").innerHTML=acc.items.map(a=>
+      '<tr><td class="mono c">'+(a.code||"")+'</td><td>'+(a.name||"")+'</td><td class="num">'+n(a.count)+'</td>'+
+      '<td class="num">'+n(a.total_amount)+'</td><td style="width:140px"><div class="bar"><i style="width:'+
+      (a.total_amount/mx*100).toFixed(1)+'%"></i></div></td></tr>').join("");
+    document.getElementById("acctFoot").innerHTML='<td colspan="2">합계</td><td class="num">'+
+      n(acc.items.reduce((s,a)=>s+a.count,0))+'</td><td class="num">'+
+      n(acc.items.reduce((s,a)=>s+a.total_amount,0))+'</td><td></td>';
+
+    const fc=document.getElementById("fCard");fc.innerHTML='<option value="">전체</option>';
+    card.items.forEach(c=>{if(c.card_code)fc.innerHTML+='<option value="'+c.card_code+'">'+c.card_name+'</option>';});
+    document.getElementById("cardBody").innerHTML=card.items.map(c=>
+      '<tr><td class="mono c">'+(c.card_code||"")+'</td><td>'+(c.card_name||"")+'</td>'+
+      '<td class="mono">'+(c.card_no_masked||'<span class="badge b-warn">미매핑</span>')+'</td>'+
+      '<td class="num">'+n(c.count)+'</td><td class="num">'+n(c.total_amount)+'</td></tr>').join("");
+
+    document.getElementById("vendorBody").innerHTML=ven.items.map(v=>
+      '<tr><td>'+(v.vendor||"")+'</td><td class="mono">'+(v.biz_no||'<span class="badge b-warn">없음</span>')+'</td>'+
+      '<td>'+(v.biz_cond||"—")+'</td><td class="c">'+(v.domestic||"")+'</td>'+
+      '<td class="num">'+n(v.count)+'</td><td class="num">'+n(v.total_amount)+'</td></tr>').join("");
+
+    document.getElementById("validBody").innerHTML=val.rules.map(r=>
+      '<tr><td class="c mono">'+r.code+'</td><td>'+r.title+'</td><td class="c">'+
+      (r.level==="error"?'<span class="badge b-err">오류</span>':'<span class="badge b-warn">경고</span>')+
+      '</td><td class="num">'+n(r.count)+'</td><td>'+r.action+'</td></tr>').join("");
+
+    const fy=document.getElementById("fYm");fy.innerHTML='<option value="">전체</option>';
+    mon.items.forEach(m=>fy.innerHTML+='<option value="'+m.ym+'">'+m.ym.slice(0,4)+'년 '+m.ym.slice(4)+'월</option>');
+    document.getElementById("monthBody").innerHTML=mon.items.map(m=>{
+      const p=m.total_amount?m.confirmed_amount/m.total_amount*100:0;
+      return '<tr><td class="c">'+m.ym+'</td><td class="num">'+n(m.count)+'</td><td class="num">'+n(m.confirmed_amount)+
+      '</td><td class="num">'+n(m.total_amount)+'</td><td class="num">'+p.toFixed(1)+'%</td>'+
+      '<td style="width:150px"><div class="bar"><i style="width:'+Math.max(0,Math.min(100,p)).toFixed(1)+'%"></i></div></td></tr>';}).join("");
+    document.getElementById("monthFoot").innerHTML='<td>합계</td><td class="num">'+n(mon.items.reduce((s,m)=>s+m.count,0))+
+      '</td><td class="num">'+n(mon.items.reduce((s,m)=>s+m.confirmed_amount,0))+'</td><td class="num">'+
+      n(mon.items.reduce((s,m)=>s+m.total_amount,0))+'</td><td colspan="2"></td>';
+
+    await loadTxn(0);
+  }catch(e){if(e.message!=="auth")showErr("데이터 조회 실패: "+e.message);}
+}
+
+async function boot(){
+  if(!token){gate(true);return;}
+  try{
+    const snaps=await api("/snapshots");
+    gate(false);
+    const sel=document.getElementById("snap");
+    sel.innerHTML=snaps.snapshots.map(s=>'<option value="'+s.id+'">'+
+      s.abs_path.split("/").pop()+" · "+(s.mtime_kst||"").slice(0,10)+'</option>').join("");
+    sfid=String(snaps.default_source_file_id);
+    if([...sel.options].some(o=>o.value===sfid))sel.value=sfid;else sfid=sel.value;
+    document.getElementById("srcnote").innerHTML=
+      "데이터 출처: 진아서버(jinah244) <code>acct</code> DB · <code>source_file</code> #"+sfid+
+      " → <code>atom_record</code> pivot · 카드번호는 앞 4/뒤 4자리만 노출";
+    document.getElementById("who").textContent="회계기간 2026 · 읽기 전용 조회";
+    await loadAll();
+  }catch(e){if(e.message!=="auth")showErr("초기화 실패: "+e.message);}
+}
+boot();
+</script>
+</body>
+</html>

@@ -1,37 +1,35 @@
 {
-  "generated_at": "2026-09-16T17:08:58.677961+09:00",
+  "generated_at": "2026-09-18T06:54:20.166169+09:00",
   "note": "AAG L1/L2 고정선. 이 숫자는 '허용치'가 아니라 '현재 빚'이다. 줄이는 방향으로만 갱신한다. 늘려서 통과시키려면 왜 늘었는지를 먼저 적어라.",
   "scope": {
-    "app_py_files": 381,
-    "router_dir_files": 87,
-    "router_modules": 81,
-    "include_router_calls": 82,
-    "mounted_routes": 885,
-    "namespaces": 82,
-    "frontend_files": 232,
-    "frontend_calls_resolved": 337,
-    "sql_tables_referenced": 220,
-    "graph_nodes": 759,
-    "graph_edges": 1152
+    "app_py_files": 394,
+    "router_dir_files": 90,
+    "router_modules": 84,
+    "include_router_calls": 85,
+    "mounted_routes": 904,
+    "namespaces": 84,
+    "frontend_files": 237,
+    "frontend_calls_resolved": 344,
+    "sql_tables_referenced": 227,
+    "graph_nodes": 781,
+    "graph_edges": 1200
   },
   "findings_by_rule": {
     "DUP_MODULE": 1,
     "DOUBLE_MOUNT": 9,
     "ROUTE_SHADOWED": 0,
     "ORPHAN_ROUTER": 1,
-    "TABLE_NO_MODEL": 44,
+    "TABLE_NO_MODEL": 46,
     "PATH_DRIFT": 1,
     "ROUTE_MISSING": 0,
-    "STALE_BACKUP": 34
+    "STALE_BACKUP": 0
   },
-  "findings_total": 90,
+  "findings_total": 58,
   "unresolved_total": 110,
   "unresolved_by_kind": {
     "FRONTEND_URL": 58,
     "FRONTEND_VAR_SEGMENT": 1,
     "SQL_TABLE": 51
   },
-  "note_last_increase": "2026-09-16 96→97. 부채가 는 게 아니라 규칙이 하나 늘었다(ROUTE_SHADOWED, P0). 한 모듈이 같은 METHOD+경로를 두 번 등록하면 뒤엣것이 조용히 죽는데 DOUBLE_MOUNT 는 소유 모듈이 2개 이상일 때만 돌아서 이 경우를 보지 못했다. 첫 적발: app/api/ops.py 의 GET /api/v1/ops/codex-usage (2677, 2877).",
-  "note_last_decrease": "2026-09-16 97→90, P0 두 규칙을 0 으로 갚았다. ROUTE_MISSING 6→0 (de77e96d, 카카오봇 화면이 부르던 /api/v1/kakao-bot/* 6개 신설). ROUTE_SHADOWED 1→0 (4114cbdb, 넉 달째 도달 불가였던 구 codex-usage 핸들러와 전용 헬퍼 161줄 제거). 두 건 모두 회귀 테스트를 같이 넣었다 — tests/unit/test_kakaobot_debt002.py, tests/unit/test_route_no_shadowing.py. 남은 90건의 87%는 TABLE_NO_MODEL 44 + STALE_BACKUP 34 다.",
-  "note_stale_backup_pending": "STALE_BACKUP 34 는 이 고정선을 쓴 시점(17:08) 기준이다. 같은 시각 다른 세션이 .gitignore 에 `*.bak`/`*.bak_*`/`*.bak.*` 를 넣고 추적 중이던 사본 37개를 git rm 하는 작업을 진행 중이며, 그것이 커밋되면 이 규칙은 0 이 된다(17:1x 실측 스캔에서 이미 0, 합계 56). 여기서 미리 0 으로 내리지 않는 이유는, 저쪽 작업이 아직 커밋 전이라 되돌아갈 수 있고 고정선을 실제보다 낮게 잡으면 남의 커밋이 헛되이 막히기 때문이다. 저 커밋과 함께 0 으로 래칫하라."
+  "note_last_increase": "2026-09-16 96→97. 부채가 는 게 아니라 규칙이 하나 늘었다(ROUTE_SHADOWED, P0). 한 모듈이 같은 METHOD+경로를 두 번 등록하면 뒤엣것이 조용히 죽는데 DOUBLE_MOUNT 는 소유 모듈이 2개 이상일 때만 돌아서 이 경우를 보지 못했다. 첫 적발: app/api/ops.py 의 GET /api/v1/ops/codex-usage (2677, 2877)."
 }
