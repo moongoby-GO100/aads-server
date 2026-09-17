@@ -26,19 +26,38 @@
 #   그대로이므로 서명을 옮기는 것이 맞다 — 새로 만들어 주는 것이 아니다.
 #
 #   서명이 **없던** 커밋은 그대로 없다. 이 훅은 우회 수단이 아니다.
+#
+#   rebase 하는 자리가 두 곳이다. (1) 라이브 저장소에서 에이전트가 직접 친
+#   `git pull --rebase` (2) 러너의 `attempt_stale_base_rebase` — 격리
+#   워크트리에서 돈다. (2)의 커밋은 본체에서 만들어져 서명이 본체에 있으므로,
+#   옛 서명은 양쪽을 다 뒤지고 새 서명은 본체에 쓴다.
 
 _gd=$(git rev-parse --git-dir 2>/dev/null) || exit 0
 [ -z "$_gd" ] && exit 0
-MARK_DIR="$_gd/hook_verified"
-[ -d "$MARK_DIR" ] || exit 0
+_common=$(git rev-parse --git-common-dir 2>/dev/null)
+[ -z "$_common" ] && _common="$_gd"
+
+# 옛 서명은 어디에 있을지 모른다. 러너는 격리 워크트리에서 rebase 하는데
+# (`attempt_stale_base_rebase`), 그 커밋은 본체에서 만들어져 서명이 본체
+# `.git/hook_verified/` 에 있다. 워크트리만 보면 못 찾는다.
+_find_old() {
+    [ -f "$_gd/hook_verified/$1" ] && { echo "$_gd/hook_verified/$1"; return 0; }
+    [ -f "$_common/hook_verified/$1" ] && { echo "$_common/hook_verified/$1"; return 0; }
+    ls "$_common"/worktrees/*/hook_verified/"$1" 2>/dev/null | head -1
+}
+
+# 새 서명은 본체에 쓴다 — pre-push 가 어디서 돌든 보이는 자리다.
+WRITE_DIR="$_common/hook_verified"
+mkdir -p "$WRITE_DIR" 2>/dev/null || exit 0
 
 carried=0
 while read -r old_sha new_sha _rest; do
     [ -z "$old_sha" ] || [ -z "$new_sha" ] && continue
     [ "$old_sha" = "$new_sha" ] && continue
-    [ -f "$MARK_DIR/$old_sha" ] || continue
-    [ -f "$MARK_DIR/$new_sha" ] && continue
-    cp -f "$MARK_DIR/$old_sha" "$MARK_DIR/$new_sha" 2>/dev/null && carried=$((carried + 1))
+    src=$(_find_old "$old_sha")
+    [ -n "$src" ] && [ -f "$src" ] || continue
+    [ -f "$WRITE_DIR/$new_sha" ] && continue
+    cp -f "$src" "$WRITE_DIR/$new_sha" 2>/dev/null && carried=$((carried + 1))
 done
 
 if [ "$carried" -gt 0 ]; then
