@@ -32,7 +32,7 @@ PG_CONTAINER="${PG_CONTAINER:-aads-postgres}"
 AADS_API_URL="${AADS_API_URL:-http://127.0.0.1:8100}"
 
 SWEEP_BATCH="${SWEEP_BATCH:-5}"                      # 1회 실행당 재검수 건수
-SWEEP_MAX_RETRY="${SWEEP_MAX_RETRY:-6}"              # 잡당 자동 재검수 상한
+SWEEP_MAX_RETRY="${SWEEP_MAX_RETRY:-10}"             # 잡당 자동 재검수 상한 (CEO 지시 2026-09-17: 6→10)
 SWEEP_BACKOFF_BASE_MIN="${SWEEP_BACKOFF_BASE_MIN:-10}"
 SWEEP_BACKOFF_MAX_MIN="${SWEEP_BACKOFF_MAX_MIN:-360}"
 # 연속으로 이만큼 인프라 사유 실패가 나오면 그때 배치를 멈춘다(진짜 회로 개방).
