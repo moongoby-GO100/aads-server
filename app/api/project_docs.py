@@ -911,6 +911,7 @@ async def approvals_pending(
             """
             SELECT id::text, action_type, action_summary, risk_level,
                    gate_source, tier, requested_by, work_key,
+                   source_message_id::text AS source_message_id,
                    to_char(created_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') AS at,
                    decision,
                    GREATEST(0, EXTRACT(EPOCH FROM (expires_at - now()))::int / 60)
@@ -937,6 +938,10 @@ async def approvals_pending(
              "tier": r["tier"], "requested_by": r["requested_by"],
              "work_key": r["work_key"], "at": r["at"],
              "expires_in_min": r["expires_in_min"],
+             # 어느 응답 버블 아래에 붙일 카드인가. 없으면 화면은 기존대로
+             # 팝업으로만 띄운다 — 붙일 자리를 모르는 카드를 아무 데나
+             # 붙이면 회장님이 다른 답변의 제안을 승인하시게 된다.
+             "source_message_id": r["source_message_id"],
              # 승인 UI 가 그대로 그릴 수 있게 선택지를 서버가 내려준다.
              # 화면마다 다른 규칙을 적어 두면 한쪽이 반드시 낡는다.
              #

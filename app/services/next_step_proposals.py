@@ -84,6 +84,38 @@ async def _covered_by_existing_grant(conn, session_id: str, tool: str) -> Option
     return row["id"] if row else None
 
 
+async def _current_bubble_id(conn, session_id: str) -> Optional[str]:
+    """이 제안이 붙을 응답 버블(assistant 메시지)을 찾는다.
+
+    호출 시점은 턴이 아직 흐르는 중이라 그 턴의 `streaming_placeholder` 가
+    살아 있다. 그것이 지금 회장님 화면에서 자라고 있는 버블이다.
+
+    없으면(이미 확정됐거나 placeholder 를 안 쓰는 경로) 가장 최근 assistant
+    메시지로 떨어진다. 그것도 없으면 None 을 주고, 화면은 기존처럼 팝업으로만
+    띄운다 — **붙일 자리를 모르면 안 붙이는 편이 낫다.** 아무 데나 붙이면
+    회장님이 다른 답변의 제안을 승인하시게 된다.
+
+    세 층을 프롬프트/도구 인자로 넘겨받지 않고 여기서 직접 찾는 이유는,
+    넘겨받으려면 chat_service → model_selector → tool_executor 를 관통해야
+    하고 그 경로 어디서든 빠지면 조용히 None 이 되기 때문이다.
+    """
+    try:
+        row = await conn.fetchval(
+            """
+            SELECT id::text FROM chat_messages
+            WHERE session_id = $1::uuid
+              AND role = 'assistant'
+            ORDER BY (intent = 'streaming_placeholder') DESC, created_at DESC
+            LIMIT 1
+            """,
+            session_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("next_step_bubble_lookup_failed error=%s", str(exc)[:160])
+        return None
+    return row or None
+
+
 def _normalize(step: Any, index: int) -> Optional[Dict[str, str]]:
     """제안 하나를 정리한다. 제목이 없으면 버린다."""
     if not isinstance(step, dict):
@@ -164,6 +196,8 @@ async def propose(
         if not tid:
             return {"error": "tenant 를 찾지 못했습니다"}
 
+        bubble_id = await _current_bubble_id(conn, session_id)
+
         for step in normalized:
             grant_id = await _covered_by_existing_grant(conn, session_id, step["tool"])
             if grant_id:
@@ -190,14 +224,16 @@ async def propose(
                     INSERT INTO agent_permission_requests
                         (tenant_id, work_key, origin, action_type, action_summary,
                          risk_level, decision, requested_by, approval_scope,
-                         max_executions, expires_at, created_at, gate_source, tier)
+                         max_executions, expires_at, created_at, gate_source, tier,
+                         source_message_id)
                     VALUES ($1::uuid, $2, 'chat_session', $3, $4,
                             $5, 'pending', $6, '{"scope": "single_call"}'::jsonb,
-                            1, now() + interval '24 hours', now(), $7, 'approve')
+                            1, now() + interval '24 hours', now(), $7, 'approve',
+                            NULLIF($8, '')::uuid)
                     RETURNING id::text
                     """,
                     tid, work_key, ACTION_TYPE, _summary_of(step, context),
-                    step["risk"], session_id, GATE_SOURCE,
+                    step["risk"], session_id, GATE_SOURCE, bubble_id or "",
                 )
                 cards.append({"id": str(new_id), "title": step["title"]})
             except Exception as exc:  # noqa: BLE001

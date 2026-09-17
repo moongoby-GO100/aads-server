@@ -3637,6 +3637,15 @@ async def _stream_cli_relay_once(
                             _cc = int(_u.get("cache_creation_input_tokens") or 0)
                             _cr = int(_u.get("cache_read_input_tokens") or 0)
                             _cost = float(event.get("total_cost_usd") or 0)
+                            # 턴 계측에도 같은 값을 넘긴다. SDK 경로에만 훅을
+                            # 걸어 뒀더니 이 릴레이 경로로 온 턴은 캐시 토큰이
+                            # 0 으로 남았다(2026-09-17 배포 직후 첫 표본에서
+                            # 확인). 채팅은 대부분 이 경로로 온다.
+                            try:
+                                from app.services.turn_timing import add_cache_tokens as _add_cache
+                                _add_cache(_cr, _cc)
+                            except Exception:  # noqa: BLE001
+                                pass
                             _used_model = event["aads_model_contract"]["actual_model"]
                             # usage/total_cost_usd cover the whole invocation,
                             # including subagents; never replace with the first model.
