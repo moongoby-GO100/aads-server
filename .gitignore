@@ -68,6 +68,7 @@ playwright/.auth/
 
 # Server-local task/runtime artifacts
 .tmp-*/
+runner-artifacts/
 app/data/yeoljeong_finance/contracts.json
 app/data/yeoljeong_finance/.delivery_sync.lock
 app/data/yeoljeong_finance/.bank_auto_collect.lock

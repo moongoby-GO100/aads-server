@@ -2072,6 +2072,7 @@ $out_tail")
         _cleanup_artifacts "$job_id"
         # worktree 정리
         if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
+            _preserve_worktree_patch "$job_id" "/tmp/aads-wt-${job_id}"
             cd "${main_workdir:-/tmp}"
             git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
             log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
@@ -2385,6 +2386,7 @@ ${output:0:1500}
             if [[ "$review_infra_failure" == "true" ]]; then
                 log "  WORKTREE_PRESERVED_FOR_REREVIEW: $worktree_dir"
             else
+                _preserve_worktree_patch "$job_id" "$worktree_dir"
                 cd "${main_workdir:-/tmp}"
                 git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
                 log "  WORKTREE_CLEANUP: $worktree_dir"
@@ -2534,6 +2536,32 @@ _notify_ai() {
          -H "x-monitor-key: internal-pipeline-call" \
          --max-time 10 2>/dev/null) || notify_http_code="fail"
     log "  NOTIFY_AI job=$job_id http=$notify_http_code"
+}
+
+# AADS-RUNNER-ARTIFACT-PRESERVE: 실패/반려로 워크트리를 force 삭제하기 전
+# untracked 포함 전체 diff를 용량 제한 없이 보존한다. 기존 git_diff 컬럼은
+# `git diff HEAD | head -c 50000`(staged diff만, 50KB 상한)이라 신규 untracked
+# 파일과 초과분이 워크트리 삭제 후 복구 불가능하게 사라졌다.
+_preserve_worktree_patch() {
+    local job_id="$1" worktree_dir="$2"
+    [[ -d "$worktree_dir" ]] || return 0
+    mkdir -p /root/aads/runner-artifacts
+    local patch_file="/root/aads/runner-artifacts/${job_id}.patch"
+    (
+        cd "$worktree_dir" || exit 0
+        git add -A >/dev/null 2>&1
+        git diff HEAD > "$patch_file" 2>/dev/null
+        if [[ ! -s "$patch_file" ]]; then
+            # reject_job 등에서 이미 전부 커밋된 경우 working-tree diff는 비어도
+            # base 대비 committed diff는 남아 있을 수 있다 — 빈 파일을 남기지 않는다.
+            local base_ref
+            base_ref=$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main 2>/dev/null || true)
+            if [[ -n "$base_ref" && "$base_ref" != "$(git rev-parse HEAD 2>/dev/null)" ]]; then
+                git diff "${base_ref}..HEAD" > "$patch_file" 2>/dev/null
+            fi
+        fi
+    )
+    log "  ARTIFACT_PRESERVED job=$job_id path=$patch_file"
 }
 
 # H3: 임시파일 정리
@@ -3225,6 +3253,7 @@ reject_job() {
     # v2.2: 해당 Runner의 변경사항만 선택적 원복 (다른 Runner의 배포된 변경 보호)
     local worktree_dir="/tmp/aads-wt-${job_id}"
     if [[ -d "$worktree_dir" ]]; then
+        _preserve_worktree_patch "$job_id" "$worktree_dir"
         cd "$workdir"
         git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
         log "  REJECT_WORKTREE_CLEANUP: $worktree_dir"

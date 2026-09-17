@@ -170,10 +170,44 @@ def test_installed_hooks_stay_synced_with_repo_copies():
     installed_dir = _REPO / ".git" / "hooks"
     if not installed_dir.is_dir():
         return  # 컨테이너 마운트 등 .git 이 없는 환경
-    for name in ("pre-commit", "commit-msg"):
+    # post-rewrite·pre-push 도 게이트의 일부다. 2026-09-17, post-rewrite 가
+    # 없어서 rebase 가 pre-commit 서명을 떨어뜨렸고 push 가 막혔다.
+    for name in ("pre-commit", "commit-msg", "pre-push", "post-rewrite"):
         installed = installed_dir / name
         if not installed.exists():
             continue
         assert installed.read_text(encoding="utf-8") == \
             (_REPO / "scripts" / "hooks" / name).read_text(encoding="utf-8"), \
             "%s: 설치본과 저장소본이 다릅니다 — cp scripts/hooks/%s .git/hooks/" % (name, name)
+
+
+def test_post_rewrite_hook_carries_signature_but_is_not_a_bypass():
+    """rebase 가 서명을 떨어뜨리는 것을 막되, 없던 서명을 만들지는 않는다.
+
+    2026-09-17 실측: `pull --rebase --autostash` 가 세 커밋을 재작성해
+    서명이 고아가 됐고(1d871e4a→5b8764c1 등) push 가 막혔다. 그 오진이
+    에이전트를 ALLOW_FORCE_PUSH=1 로 몰았다 — 게이트가 거짓 양성을 내면
+    무력화된다.
+    """
+    hook = (_REPO / "scripts" / "hooks" / "post-rewrite").read_text(encoding="utf-8")
+
+    # 옛 SHA 에 서명이 있을 때만 옮긴다.
+    assert '[ -f "$MARK_DIR/$old_sha" ] || continue' in hook
+    # 새로 만들지 않는다 — touch/echo 로 서명을 생성하면 우회가 된다.
+    assert "touch " not in hook
+    assert "cp -f" in hook
+
+
+def test_pre_push_also_looks_at_worktree_signatures():
+    """워크트리에서 커밋하면 서명이 .git/worktrees/<name>/hook_verified 에 쓰인다.
+
+    본체만 보면 러너가 워크트리에서 커밋할 때마다 거짓 양성이 난다
+    (2026-09-17 실측: aads-wt-runner-* 다수 존재).
+    """
+    hook = (_REPO / "scripts" / "hooks" / "pre-push").read_text(encoding="utf-8")
+
+    assert "--git-common-dir" in hook
+    assert "worktrees/*/hook_verified" in hook
+    assert "_has_mark" in hook
+    # 차단 메시지가 --no-verify 를 단정하지 않는다 — 그 오진이 우회를 불렀다.
+    assert "rebase 로 서명이 떨어져 나갔나" in hook

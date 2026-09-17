@@ -74,6 +74,41 @@ docs/knowledge/AADS-KNOWLEDGE.md — 아키텍처, 파이프라인, 교차검증
 - **테스트 실패 시 테스트를 삭제하지 말고 수정**. 코드 변경으로 기존 테스트가 깨지면, 코드 + 테스트를 같이 수정하여 커밋.
 - **커밋 전 반드시 확인**: `git log -1`로 커밋 성공 확인. "완료" 보고는 커밋+푸시 후에만.
 
+## push 가 "서명 없음" 으로 막힐 때 (R-PUSH)
+
+**`ALLOW_FORCE_PUSH=1` 을 먼저 떠올리지 마라.** 거의 항상 rebase 때문이다.
+
+2026-09-17 실측. pre-push 가 세 커밋을 "pre-commit 서명이 없다"고 막았는데,
+셋 다 `--no-verify` 로 만든 것이 아니었다. reflog 에 답이 있었다.
+
+```
+HEAD@{03:35:04}: pull --rebase --autostash origin main (pick): …
+```
+
+같은 제목·같은 초로 SHA 가 둘씩 생겼다 — `1d871e4a→5b8764c1`,
+`71432ec0→f1f2987e`, `3edf27c3→76679cb7`. 앞쪽(서명 있음)은 rebase 로
+사라지고 뒤쪽(서명 없음)만 남았다. **rebase 가 만든 커밋은 pre-commit 을
+거치지 않으므로 새 서명도 생기지 않는다.**
+
+방아쇠는 **push 경합**이다. 다른 세션이 먼저 push 하면 non-fast-forward 가
+나고, 에이전트가 반사적으로 `git pull --rebase` 를 친다. 그 순간 아직
+push 안 된 **남의 커밋까지** 재작성되어 서명이 날아간다.
+
+막혔을 때 순서.
+
+1. **`git reflog | head -20`** — `pull --rebase` 가 보이면 이 경우다.
+2. **`ls -l .git/hooks/post-rewrite`** — 이 훅이 서명을 새 SHA 로 옮긴다.
+   없으면 `cp scripts/hooks/post-rewrite .git/hooks/ && chmod +x .git/hooks/post-rewrite`.
+3. 그래도 없으면 **정말 `--no-verify`** 다. `git commit --amend --no-edit`.
+
+`ALLOW_FORCE_PUSH=1` 은 CEO 승인 사항이다. **게이트가 거짓 양성을 내면
+무력화된다** — 우회가 습관이 되면 진짜 위반도 같이 통과한다. 훅 자신이
+2026-09-14 에 같은 경고를 남겼고, 그 오진이 실제로 우회를 불렀다.
+
+서명은 `.git/hook_verified/<sha>` 다. 워크트리에서 커밋하면
+`.git/worktrees/<name>/hook_verified/<sha>` 에 쓰이므로 pre-push 는 양쪽을
+본다(2026-09-17 보강). 오류 사전: `git.rebase_strips_precommit_signature`.
+
 ## Docker 절대 규칙 (R-DOCKER)
 - **`docker compose up -d` 전체 실행 절대 금지** — postgres/litellm/aads-server가 동시 재생성되어 채팅 시스템 전체가 중단됨.
 - **단일 서비스만 재시작**: `docker compose up -d --no-deps <서비스명>` 또는 `docker compose restart <서비스명>`
@@ -168,7 +203,7 @@ contabo116 은 컨테이너 경유, 원격 서버는 PGHOST 터널로 붙는다 
   - 건너뛰는 경우(ruff 미설치)에는 hook 이 노란 경고를 남긴다 — 조용히 통과하지 않는다.
 - **commit-msg: 같은 제목의 커밋이 최근 3일 안에 있으면 차단**. 중단된 턴이 재개되며 이미 커밋한 패치를 다시 얹는 사고가 2026-09-15 하루에 세 번 있었고(a9603307 이 되돌림), 같은 제목이 유일한 사전 신호였다.
   - 이어지는 별개 작업이면 제목을 구분하거나 `ALLOW_DUP_COMMIT=1 git commit -m "..."`. 중복 검사 자체를 넘기는 것도 같은 변수다.
-  - hook 은 `scripts/hooks/` 가 정본이고 `.git/hooks/` 는 설치본이다. **저장소본만 고치면 게이트는 옛 코드로 돈다** — 고친 뒤 `cp scripts/hooks/{pre-commit,commit-msg} .git/hooks/`. 동기화 여부는 `tests/unit/test_dup_guard.py` 가 검사한다.
+  - hook 은 `scripts/hooks/` 가 정본이고 `.git/hooks/` 는 설치본이다. **저장소본만 고치면 게이트는 옛 코드로 돈다** — 고친 뒤 `cp scripts/hooks/{pre-commit,commit-msg,pre-push,post-rewrite} .git/hooks/`. 동기화 여부는 `tests/unit/test_dup_guard.py` 가 검사한다.
 
 ## 현재 상태
 - Phase: Phase 2 운영

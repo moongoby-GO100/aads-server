@@ -1,0 +1,47 @@
+#!/bin/bash
+# post-rewrite hook: 재작성된 커밋에 pre-commit 서명을 따라 보낸다.
+#
+# 왜 (2026-09-17)
+#   pre-push 가 "pre-commit 서명이 없는 커밋" 으로 push 를 막는 일이 반복됐다.
+#   지목된 커밋은 --no-verify 로 만든 것이 아니었다. reflog 실측:
+#
+#     HEAD@{03:35:04}: pull --rebase --autostash origin main (pick): …
+#
+#   같은 제목·같은 초로 SHA 가 둘씩 생겼다 —
+#     1d871e4a→5b8764c1 · 71432ec0→f1f2987e · 3edf27c3→76679cb7
+#   앞쪽(서명 있음)은 rebase 로 사라지고 뒤쪽(서명 없음)만 남았다.
+#   rebase 가 만든 커밋은 pre-commit 을 거치지 않으므로 새 서명도 없다.
+#
+#   방아쇠는 push 경합이다. 다른 세션이 먼저 push 하면 non-fast-forward 가
+#   나고, 에이전트가 반사적으로 `git pull --rebase` 를 친다. 그 순간 아직
+#   push 안 된 **남의 커밋까지** 재작성되어 서명이 날아간다.
+#
+#   게이트가 거짓 양성을 내면 무력화된다 — 훅 자신이 2026-09-14 에 같은
+#   경고를 남겼고, 그 오진이 에이전트를 ALLOW_FORCE_PUSH=1 로 몰았다.
+#   우회를 배운 에이전트는 진짜 --no-verify 도 같이 통과시킨다.
+#
+# 무엇을 하나
+#   git 은 rebase / commit --amend 뒤 이 훅에 "옛SHA 새SHA" 쌍을 stdin 으로
+#   준다. 옛 SHA 의 서명이 있으면 새 SHA 로 복사한다. 검증을 통과한 내용은
+#   그대로이므로 서명을 옮기는 것이 맞다 — 새로 만들어 주는 것이 아니다.
+#
+#   서명이 **없던** 커밋은 그대로 없다. 이 훅은 우회 수단이 아니다.
+
+_gd=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+[ -z "$_gd" ] && exit 0
+MARK_DIR="$_gd/hook_verified"
+[ -d "$MARK_DIR" ] || exit 0
+
+carried=0
+while read -r old_sha new_sha _rest; do
+    [ -z "$old_sha" ] || [ -z "$new_sha" ] && continue
+    [ "$old_sha" = "$new_sha" ] && continue
+    [ -f "$MARK_DIR/$old_sha" ] || continue
+    [ -f "$MARK_DIR/$new_sha" ] && continue
+    cp -f "$MARK_DIR/$old_sha" "$MARK_DIR/$new_sha" 2>/dev/null && carried=$((carried + 1))
+done
+
+if [ "$carried" -gt 0 ]; then
+    echo "[post-rewrite] pre-commit 서명 ${carried}건을 재작성된 커밋으로 옮겼습니다."
+fi
+exit 0
