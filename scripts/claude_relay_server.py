@@ -607,13 +607,26 @@ def _pick_auth(preferred_slot=None, allow_auth_recovery=False):
     elif _last_429_slot:
         first_slot = "2" if _last_429_slot == 1 else "1"
     else:
-        first_slot = current if current in ("1", "2") else "1"
+        # `current` 는 DB priority 1순위 슬롯이다 — 설정 화면의 주계정 전환이
+        # 바꾸는 바로 그 값이다. 예전에는 여기서 ("1","2") 로 좁혀, 슬롯 3·4 를
+        # 주계정으로 올려도 CLI 는 계속 슬롯 1 로 돌았다. 대표님이 고른 계정이
+        # 쓰이지 않은 것이므로 좁히지 않는다(2026-09-17).
+        #
+        # 자동 *폴백* 은 여전히 1·2 안에서만 한다. 아래 주석대로, 아무도 고르지
+        # 않았는데 남의 계정으로 새는 일은 막아야 한다.
+        first_slot = "1"
+        if current and current != "1":
+            if tokens.get(current) or _slot_credentials_path(current).exists():
+                first_slot = current
 
     ordered_slots = [first_slot]
     # Auto-selection stays inside the two AADS slots.  An extra slot is reached
-    # only by an explicit request from the caller.
+    # only by an explicit request from the caller, or by being the operator's
+    # chosen primary (DB priority) — never by silent spillover.
     if not explicitly_requested:
-        ordered_slots.append("2" if first_slot == "1" else "1")
+        for fallback in ("1", "2"):
+            if fallback != first_slot:
+                ordered_slots.append(fallback)
     for slot in ordered_slots:
         credential_path = _slot_credentials_path(slot)
         status = _slot_auth_status(slot, env_fallback_available=bool(tokens.get(slot)))
@@ -2947,14 +2960,22 @@ async def handle_oauth_switch(request):
     if not _slot_credentials_path(slot).exists():
         return web.json_response(
             {"error": f"slot{slot} 자격증명이 없다 — 먼저 로그인해라"}, status=409)
+    # 이 파일은 DB 가 비었을 때만 읽히는 레거시 폴백이다(_read_oauth_tokens 는
+    # DB 행이 있으면 그쪽 priority 로 current 를 정하고 먼저 돌아간다). 파일이
+    # 없다고 전환을 실패로 돌리면, 정작 효력이 있는 DB 경로까지 같이 막힌다 —
+    # 2026-09-17 설정 화면의 주계정 전환이 그래서 500 만 내고 있었다.
     try:
-        text = _ENV_OAUTH_FILE.read_text()
-        new_text = re.sub(r"CURRENT_OAUTH=\d+", "CURRENT_OAUTH=" + slot, text)
-        if new_text != text:
-            _ENV_OAUTH_FILE.write_text(new_text)
-            logger.info("OAuth switched: CURRENT_OAUTH=%s", slot)
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        if _ENV_OAUTH_FILE.exists():
+            text = _ENV_OAUTH_FILE.read_text()
+            new_text = re.sub(r"CURRENT_OAUTH=\d+", "CURRENT_OAUTH=" + slot, text)
+            if new_text != text:
+                _ENV_OAUTH_FILE.write_text(new_text)
+                logger.info("OAuth switched: CURRENT_OAUTH=%s", slot)
+        else:
+            logger.info("OAuth switch: %s 없음 — DB priority 기준으로만 전환한다 (slot=%s)",
+                        _ENV_OAUTH_FILE, slot)
+    except OSError as e:
+        logger.warning("OAuth switch: 레거시 파일 갱신 실패 (%s) — 계속 진행한다", e)
     global _last_429_slot
     _last_429_slot = 0
     _DB_OAUTH_CACHE["rows"] = None
