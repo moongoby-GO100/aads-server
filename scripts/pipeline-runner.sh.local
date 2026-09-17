@@ -2257,6 +2257,60 @@ ${_untracked_files}"
 
     # 같은 이유로 ${git_diff//[[:space:]]/} 를 쓰지 않는다 — 43KB 에 11초다.
     if [[ ! "$git_diff" =~ [^[:space:]] ]]; then
+        # AADS-RUNNER-NOCHANGES-GUARD-P1-R5 (2026-09-18): diff 0건이 "진짜 변경 없음"인지
+        # "커밋 직전 레이스"인지 즉시 구분할 수 없다. runner-71bc9b4e 실측에서는 이 판정
+        # 77초 뒤에 커밋이 origin/main 에 나타났다 — 기본 5회 × 25초 = 125초 재확인으로
+        # 이 레이스를 덮는다. 재시도 중 diff 가 생기면 정상 경로로 빠져나간다.
+        local _recheck_attempt=0
+        local _recheck_max="${NO_CHANGES_RECHECK_MAX_ATTEMPTS:-5}"
+        local _recheck_sleep="${NO_CHANGES_RECHECK_SLEEP_SECONDS:-25}"
+        local _recheck_start_ts
+        _recheck_start_ts=$(date +%s)
+        local _recheck_signaled=0
+        trap '_recheck_signaled=1' TERM INT
+        while [[ "$_recheck_attempt" -lt "$_recheck_max" ]]; do
+            _recheck_attempt=$((_recheck_attempt + 1))
+            sleep "$_recheck_sleep"
+            if [[ "$_recheck_signaled" -eq 1 ]]; then
+                trap - TERM INT
+                log "  NO_CHANGES_RECHECK_SIGNALED job=$job_id attempt=$_recheck_attempt"
+                return 130
+            fi
+            cd "$workdir"
+            _current_head=$(git rev-parse HEAD 2>/dev/null) || _current_head=""
+            if [[ -n "$pre_exec_sha" && -n "$_current_head" && "$pre_exec_sha" != "$_current_head" ]]; then
+                git_diff=$(git diff "${pre_exec_sha}..${_current_head}" 2>/dev/null | head -c 45000) || true
+                local _uncommitted=""
+                _uncommitted=$(git diff HEAD 2>/dev/null | head -c 5000) || true
+                [[ -n "${_uncommitted//[[:space:]]/}" ]] && git_diff="${git_diff}
+${_uncommitted}"
+            else
+                git_diff=$(git diff HEAD 2>/dev/null | head -c 50000) || true
+            fi
+            if [[ "$git_diff" =~ [^[:space:]] ]]; then
+                break
+            fi
+        done
+        trap - TERM INT
+        if [[ "$git_diff" =~ [^[:space:]] ]]; then
+            local _recheck_elapsed=$(( $(date +%s) - _recheck_start_ts ))
+            log "  NO_CHANGES_RECHECK_RECOVERED job=$job_id attempts=$_recheck_attempt elapsed=${_recheck_elapsed}s"
+            actual_changed_files=$(git diff --name-only "${pre_exec_sha}..${_current_head}" 2>/dev/null) || true
+            local _uncommitted_files=""
+            _uncommitted_files=$(git diff --name-only HEAD 2>/dev/null) || true
+            [[ -n "$_uncommitted_files" ]] && actual_changed_files="${actual_changed_files}
+${_uncommitted_files}"
+            _untracked_files=$(git ls-files --others --exclude-standard 2>/dev/null) || true
+            [[ -n "$_untracked_files" ]] && actual_changed_files="${actual_changed_files}
+${_untracked_files}"
+            actual_changed_files=$(printf '%s\n' "$actual_changed_files" | sed '/^[[:space:]]*$/d' | sort -u)
+            record_actual_changed_files "$job_id" "$actual_changed_files" "$worktree_dir" "$parallel_group"
+        fi
+    fi
+
+    if [[ ! "$git_diff" =~ [^[:space:]] ]]; then
+        local _recheck_elapsed=$(( $(date +%s) - _recheck_start_ts ))
+        log "  NO_CHANGES_RECHECK_EXHAUSTED job=$job_id attempts=${_recheck_attempt} elapsed=${_recheck_elapsed}s"
         if is_read_only_instruction "$instruction" && [[ -n "${output//[[:space:]]/}" ]]; then
             log "  NO_CHANGES_READ_ONLY job=$job_id target=$target_repo — done 처리"
             db_update "UPDATE pipeline_jobs SET status='done', phase='done',
@@ -2289,6 +2343,36 @@ ${output:0:1500}
             log "  DEPLOY_ONLY_BYPASS job=$job_id target=$target_repo — no_changes 게이트 우회, 정상 진행"
             record_runner_event "$job_id" "deploy_only_bypass" "running" "no_changes_bypass" "$job_model" "" "$job_size" "" "{\"deploy_only\":true,\"changed_files\":0}"
         else
+            # 케이스 B (커밋 누락): 재확인까지 diff 는 0건이지만 워크트리에 미커밋
+            # 변경이 남아있으면 "진짜 변경 없음"이 아니다 — no_changes 로 종결하면
+            # 그 패치가 워크트리 삭제와 함께 소실된다(2026-09-18 4건 실측).
+            local _dirty_status=""
+            _dirty_status=$(git status --porcelain 2>/dev/null) || true
+            if [[ -n "${_dirty_status//[[:space:]]/}" ]]; then
+                log "  UNCOMMITTED_WORKTREE_CHANGES job=$job_id worktree=$worktree_dir"
+                local _dirty_detail
+                _dirty_detail=$(printf 'worktree=%s\n%s' "$worktree_dir" "$(printf '%s\n' "$_dirty_status" | head -20)")
+                db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                           error_detail='uncommitted_worktree_changes',
+                           result_output=$(sql_escape "$output"),
+                           review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 파일은 수정됐으나 커밋되지 않음 — 워크트리 보존, 회수 필요\n' || $(sql_escape "$_dirty_detail"),
+                           completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+                record_runner_event "$job_id" "job_terminal" "error" "error" "$job_model" "" "$job_size" "" "{\"error_detail\":\"uncommitted_worktree_changes\"}"
+                post_to_chat "$session_id" "🔴 [Pipeline Runner] 커밋 누락 감지: $job_id — 워크트리(${worktree_dir})에 미커밋 변경이 남아있어 회수가 필요합니다.
+
+\`\`\`
+$(printf '%s\n' "$_dirty_status" | head -20)
+\`\`\`"
+                _release_work_lock "$project" "$job_id" "$parallel_group"
+                _cleanup_artifacts "$job_id"
+                _preserve_worktree_patch "$job_id" "$worktree_dir"
+                _notify_ai "$job_id"
+                promote_next_queued "$project"
+                _current_job_id=""
+                _current_session_id=""
+                rm -f /tmp/.pipeline_current_job
+                return 1
+            fi
             log "  NO_CHANGES job=$job_id target=$target_repo — awaiting_approval 차단, cancelled 처리"
             local no_change_reason="no_changes"
             if [[ -f "$output_file" ]]; then

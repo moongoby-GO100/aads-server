@@ -60,7 +60,12 @@ def test_deploy_only_bypass_does_not_cancel_the_job():
         # 아니라 no_changes 게이트 바로 앞의 occurrence 를 찾는다.
         bypass_start = script.rfind("if is_deploy_only_instruction", 0, cancel_start)
         assert bypass_start != -1
-        bypass_block = script[bypass_start:cancel_start]
+        # bypass 분기 자체(if...then 본문)만 잘라낸다. else 이후는
+        # AADS-RUNNER-NOCHANGES-GUARD-P1-R5 의 커밋 누락(uncommitted_worktree_changes)
+        # 판정이라 별도 관심사다 — 거기엔 정당한 return 1 이 있다.
+        bypass_else = script.index("else", bypass_start)
+        assert bypass_else < cancel_start
+        bypass_block = script[bypass_start:bypass_else]
 
         assert "status='cancelled'" not in bypass_block
         assert "return 1" not in bypass_block
