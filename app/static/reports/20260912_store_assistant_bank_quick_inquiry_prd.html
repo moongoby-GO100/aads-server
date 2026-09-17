@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>매장비서 은행 빠른조회·간편조회 PRD</title>
+  <title>오비서 은행 빠른조회·간편조회 PRD</title>
   <style>
     :root{--bg:#f5f7fa;--p:#fff;--ink:#172126;--muted:#66727a;--line:#d9e0e4;--brand:#0f766e;--ok:#18794e;--warn:#a15c00}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 system-ui,-apple-system,"Segoe UI","Malgun Gothic",sans-serif}main{max-width:1160px;margin:auto;padding:36px 18px 70px}header,section{background:var(--p);border:1px solid var(--line);border-radius:10px;padding:22px;margin-bottom:16px}h1{font-size:32px;line-height:1.2;margin:4px 0 10px}h2{font-size:21px;margin:0 0 12px}h3{font-size:16px;margin:20px 0 8px}.k{color:var(--brand);font-size:12px;font-weight:900;letter-spacing:.08em}.lead{font-size:17px}.chips{display:flex;gap:7px;flex-wrap:wrap}.chips span{background:#eaf6f3;color:var(--brand);font-size:12px;font-weight:800;border-radius:999px;padding:3px 9px}table{width:100%;border-collapse:collapse;font-size:13.5px}th,td{border-bottom:1px solid var(--line);padding:9px;text-align:left;vertical-align:top}th{background:#f7f9fa;color:var(--muted)}code{background:#edf1f3;padding:2px 5px;border-radius:4px}pre{background:#10252c;color:#ddf5ef;padding:15px;border-radius:8px;overflow:auto}.ok{color:var(--ok);font-weight:800}.warn{color:var(--warn);font-weight:800}.priority{font-weight:900;color:#175cd3}ul,ol{padding-left:22px}@media(max-width:760px){h1{font-size:26px}table{display:block;overflow:auto}}
   </style>
@@ -10,7 +10,7 @@
 <body><main>
   <header>
     <div class="k">PRODUCT REQUIREMENTS DOCUMENT · v2.0</div>
-    <h1>매장비서 은행 빠른조회·간편조회 PRD</h1>
+    <h1>오비서 은행 빠른조회·간편조회 PRD</h1>
     <p class="lead">대표와 경리 담당자가 은행 사이트에 매일 접속하지 않아도 등록 계좌의 거래를 자동 수집하고, 실패 시 이유와 다음 행동을 한 화면에서 확인하게 만드는 제품 요구사항입니다.</p>
     <div class="chips"><span>2026-09-12 KST</span><span>신한·IBK 1차</span><span>POST 비동기 요청</span><span>실데이터 원장</span></div>
   </header>
@@ -85,7 +85,7 @@ GET /api/v1/yeoljeong-finance/bank-summary</pre>
 
   <section><h2>7. BankAPI 비교 기준</h2>
     <p><a href="https://bankapi.co.kr/docs">BankAPI 공식 문서</a>는 일반 은행 거래 조회 <code>POST /v1/transactions</code>, 신한 로그인 기반 조회 <code>POST /v1/transactions/login</code>, 동일 계좌 5분 제한, 해외 IP 403, 요청 처리 후 자격·거래정보 무저장 원칙을 설명합니다. [공식 문서, 2026-09-12 열람]</p>
-    <table><thead><tr><th>항목</th><th>BankAPI 참고</th><th>매장비서 결정</th></tr></thead><tbody>
+    <table><thead><tr><th>항목</th><th>BankAPI 참고</th><th>오비서 결정</th></tr></thead><tbody>
       <tr><td>호출 경험</td><td>REST POST 후 응답</td><td>REST POST 후 비동기 job, GET 상태</td></tr>
       <tr><td>실행 위치</td><td>국내 IP 요구</td><td>국내 Windows PC Agent</td></tr>
       <tr><td>저장</td><td>서비스 측 무저장</td><td>자격은 Vault, 거래는 우리 회계 원장에 명시 저장</td></tr>

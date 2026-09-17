@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>매장비서 은행 빠른조회·간편조회 기술 설계서</title>
+  <title>오비서 은행 빠른조회·간편조회 기술 설계서</title>
   <style>
     :root{--bg:#f4f7f9;--paper:#fff;--ink:#182024;--muted:#66727a;--line:#d9e1e5;--brand:#0f766e;--nav:#18333b;--ok:#18794e;--warn:#a15c00;--bad:#b42318;--soft:#edf7f5}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 system-ui,-apple-system,"Segoe UI","Malgun Gothic",sans-serif}main{max-width:1180px;margin:auto;padding:36px 18px 72px}header,section{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:22px;margin-bottom:16px}h1{margin:4px 0 10px;font-size:32px;line-height:1.2}h2{margin:0 0 14px;font-size:21px;color:var(--nav)}h3{margin:22px 0 8px;font-size:16px}.kicker{font-size:12px;font-weight:900;color:var(--brand);letter-spacing:.08em}.lead{font-size:17px}.meta{display:flex;gap:8px;flex-wrap:wrap}.meta span,.tag{padding:3px 9px;border-radius:999px;background:var(--soft);color:var(--brand);font-size:12px;font-weight:800}.warn{border-left:5px solid var(--warn)}.ok{border-left:5px solid var(--ok)}table{width:100%;border-collapse:collapse;font-size:13.5px}th,td{border-bottom:1px solid var(--line);padding:9px;text-align:left;vertical-align:top}th{background:#f7f9fa;color:var(--muted)}code{background:#eef2f4;padding:2px 5px;border-radius:4px}pre{background:#10252c;color:#d8f3ec;padding:16px;border-radius:8px;overflow:auto;line-height:1.5}.flow{display:grid;grid-template-columns:repeat(6,minmax(145px,1fr));gap:8px;overflow:auto}.flow div{background:#f7fafb;border:1px solid var(--line);border-radius:8px;padding:12px;min-height:105px}.status-ok{color:var(--ok);font-weight:800}.status-warn{color:var(--warn);font-weight:800}.status-plan{color:#175cd3;font-weight:800}@media(max-width:760px){h1{font-size:26px}.flow{grid-template-columns:1fr}table{display:block;overflow-x:auto}}
   </style>
@@ -11,7 +11,7 @@
 <body><main>
   <header>
     <div class="kicker">STORE ASSISTANT · BANK QUICK INQUIRY · DESIGN v2.0</div>
-    <h1>매장비서 은행 빠른조회·간편조회 기술 설계서</h1>
+    <h1>오비서 은행 빠른조회·간편조회 기술 설계서</h1>
     <p class="lead">은행에 신청해 둔 빠른조회/간편조회 계좌를 국내 Windows PC Agent에서 조회하고, AADS 서버가 POST 요청·작업 큐·감사·거래 원장·통계를 담당하는 보존형 설계입니다.</p>
     <div class="meta"><span>기준 시각 2026-09-12 KST</span><span>신한·IBK 우선</span><span>기존 기능 보존</span><span>비밀값 API 비노출</span></div>
   </header>
@@ -35,7 +35,7 @@
   <section>
     <h2>3. 목표 아키텍처</h2>
     <div class="flow">
-      <div><strong>1. 매장비서 UI/스케줄</strong><br>계좌 ID와 조회기간만 POST</div>
+      <div><strong>1. 오비서 UI/스케줄</strong><br>계좌 ID와 조회기간만 POST</div>
       <div><strong>2. Hermes Gate</strong><br>관리자 권한·사업자 범위·5분 제한·중복 방지</div>
       <div><strong>3. AADS Queue</strong><br>비밀값 없는 job, DB lease와 상태 저장</div>
       <div><strong>4. 국내 PC Agent</strong><br>전용 브라우저·보안프로그램·은행 화면 실행</div>
