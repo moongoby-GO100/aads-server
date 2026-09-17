@@ -26,14 +26,30 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = (ROOT / "app" / "services" / "goal_dispatch.py").read_text(encoding="utf-8")
 
 RECORD = "UPDATE milestones SET dispatched_at = NOW(), "
-SEND = "cs.send_message_stream("
+SEND = "_spawn_send("
 
 
 def test_dispatch_is_recorded_before_the_stream_starts() -> None:
-    assert SRC.index(RECORD) < SRC.index(SEND), (
-        "발송 기록이 스트림 뒤에 있다 — 상한(asyncio.wait_for)에 취소되면 "
-        "기록이 사라지고 다음 주기가 같은 지시를 또 보낸다"
+    """스트림이 태스크로 나갔어도 순서는 그대로다 — 기록이 먼저다.
+
+    태스크화로 사이클 상한에 취소될 일은 줄었지만 순서를 바꿔도 되는
+    것은 아니다. 발송 태스크가 서버 종료로 끊기거나 실패해도 기록이
+    남아 있어야 다음 주기가 중복 발송이 아니라 재알림으로 이어받는다.
+    """
+    body = inspect.getsource(goal_dispatch.dispatch_pending_milestones)
+
+    assert body.index(RECORD) < body.index(SEND), (
+        "발송 기록이 발송 뒤에 있다 — 태스크가 끊기면 기록이 사라지고 "
+        "다음 주기가 같은 지시를 또 보낸다"
     )
+
+
+def test_the_send_task_does_not_record_dispatch_itself() -> None:
+    """기록은 사이클의 커넥션으로 한 번만. 태스크가 또 적으면 두 번 센다."""
+    task = inspect.getsource(goal_dispatch._send_milestone)
+
+    assert RECORD not in task
+    assert "dispatch_count = dispatch_count + 1" not in task
 
 
 def test_one_attempt_increments_the_counter_once() -> None:
@@ -44,7 +60,7 @@ def test_one_attempt_increments_the_counter_once() -> None:
 
 def test_send_failure_still_leaves_a_reason() -> None:
     """실패를 조용히 넘기면 '보냈는데 아무 일도 안 일어남' 이 침묵으로 끝난다."""
-    body = inspect.getsource(goal_dispatch.dispatch_pending_milestones)
+    body = inspect.getsource(goal_dispatch._send_milestone)
 
     assert "goal_dispatch_send_failed" in body
     assert "발송 실패" in body

@@ -42,7 +42,7 @@ def test_gate_does_not_skip_forever() -> None:
     assert gated < expired, "상한 초과 경로가 게이트 앞에 있다"
     # 상한을 넘긴 경로는 `continue` 로 빠지지 않고 발송으로 이어져야 한다.
     tail = body[expired:]
-    assert "cs.send_message_stream(" in tail, (
+    assert "_spawn_send(" in tail, (
         "상한을 넘겼는데도 발송 경로로 이어지지 않는다"
     )
 

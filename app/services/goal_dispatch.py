@@ -62,6 +62,32 @@ _LOAD_DEFER_MAX_MIN = int(os.getenv("GOAL_DISPATCH_LOAD_DEFER_MAX_MIN", "30"))
 # 올라오면 대표님은 읽지 않고 누르신다.
 _OWNER_REQUEST_PER_CYCLE = int(os.getenv("GOAL_OWNER_REQUEST_PER_CYCLE", "3"))
 
+# 발송 태스크의 **자체** 시간 상한. 사이클 상한(main.py 의 120초)과 별개다.
+#
+# 스트림 소비를 사이클에서 떼어내면 사이클 상한이 더는 이 태스크를 끊지
+# 않는다. 그렇다고 상한이 없어도 되는 것은 아니다 — 상한 없는 백그라운드는
+# 만들지 않는다(R-BG). 2026-09-14 에 `python3 -` 하나가 10시간 12분 동안
+# CPU 를 태우고 출력 0바이트였던 것이 상한 없는 백그라운드였다.
+_SEND_TIMEOUT = float(os.getenv("AADS_GOAL_DISPATCH_SEND_TIMEOUT_SECONDS", "600"))
+# 동시에 몇 건까지 LLM 을 때릴지. 한 사이클 조회 상한이 20건이므로 상한이
+# 없으면 20개 스트림이 한꺼번에 열린다.
+_SEND_CONCURRENCY = int(os.getenv("AADS_GOAL_DISPATCH_CONCURRENCY", "3"))
+
+# 띄운 태스크의 **강한 참조**. asyncio 는 태스크를 약하게만 들고 있어서
+# 여기에 담아 두지 않으면 GC 가 실행 중인 태스크를 거둬간다.
+_send_tasks: set[asyncio.Task] = set()
+# 세마포어는 루프마다 하나다. import 시점에 만들면 루프가 바뀐 뒤(재기동·
+# 테스트) 쓸 수 없는 객체가 남는다.
+_send_gate: tuple[Any, asyncio.Semaphore] | None = None
+
+
+def _send_semaphore() -> asyncio.Semaphore:
+    global _send_gate
+    loop = asyncio.get_running_loop()
+    if _send_gate is None or _send_gate[0] is not loop:
+        _send_gate = (loop, asyncio.Semaphore(_SEND_CONCURRENCY))
+    return _send_gate[1]
+
 # 답으로 세지 않는 표시. 진행중·중단 안내는 담당이 쓴 것이 아니다.
 _NOT_AN_ANSWER = ("⏳", "⚠️ _응답 생성이", "_AI가 응답을 생성 중")
 
@@ -285,6 +311,100 @@ async def _clear_load_defer(conn: Any, milestone_id: str) -> None:
     )
 
 
+async def _note_detached(milestone_id: str, note: str) -> None:
+    """태스크에서 사유를 남긴다 — 사이클의 커넥션은 이미 풀로 돌아갔다.
+
+    여기서 터져도 발송 태스크를 죽이지 않는다. 사유를 못 남긴 것이
+    발송 실패 로그까지 같이 삼킬 이유는 없다.
+    """
+    try:
+        from app.core.db_pool import get_pool
+
+        async with get_pool().acquire() as conn:
+            await _note(conn, milestone_id, note)
+    except Exception as exc:  # noqa: BLE001 - 기록 실패가 태스크를 죽이면 안 된다
+        logger.warning(
+            "goal_dispatch_note_failed",
+            milestone=milestone_id[:8], error=str(exc)[:160],
+        )
+
+
+async def _send_milestone(
+    *,
+    milestone_id: str,
+    session_id: str,
+    message: str,
+    attempt: int,
+    project: str | None,
+) -> None:
+    """지시를 넣고 스트림이 끝날 때까지 기다린다 — **사이클 밖에서.**
+
+    사이클은 이 함수를 태스크로 띄우기만 하고 다음 마일스톤으로 넘어간다.
+    그래서 담당 한 명의 긴 응답이 뒤 마일스톤을 자르지 못한다.
+    """
+
+    async def _consume() -> None:
+        # 세마포어를 상한 **안에서** 잡는다. 밖에 두면 순서를 기다리는
+        # 동안에는 상한이 안 걸려 결국 상한 없는 대기가 된다.
+        async with _send_semaphore():
+            from app.services import chat_service as cs
+
+            async for _chunk in cs.send_message_stream(
+                session_id=session_id,
+                content=message,
+                intent_override="system_trigger",
+                response_mode="quality",
+            ):
+                pass
+
+    try:
+        await asyncio.wait_for(_consume(), _SEND_TIMEOUT)
+    except TimeoutError:
+        # 발송 기록은 사이클에서 이미 남았다. 담당이 답을 못 하면
+        # `_RETRY_AFTER_MIN` 뒤 재알림이 이어받는다.
+        logger.warning(
+            "goal_dispatch_send_timeout",
+            milestone=milestone_id[:8], session=session_id[:8],
+            attempt=attempt, limit=_SEND_TIMEOUT,
+        )
+        return
+    except asyncio.CancelledError:
+        # 이제 사이클 상한은 이 경로에 닿지 않는다. 남는 취소 경로는
+        # 서버 종료다. `CancelledError` 는 `Exception` 의 하위가 아니므로
+        # 여기서 잡지 않으면 아무 흔적 없이 사라진다 — 2026-09-17 M4 가
+        # 그랬다. 잡아서 남기고 다시 던진다.
+        logger.warning(
+            "goal_dispatch_cancelled",
+            milestone=milestone_id[:8], session=session_id[:8],
+            attempt=attempt,
+            note="스트림이 취소됐다(종료 등) — 답이 없으면 재알림된다",
+        )
+        raise
+    except Exception as exc:
+        # 횟수는 사이클에서 이미 올렸다. 여기서 또 올리면 한 번의 시도가
+        # 재시도 한도를 두 칸 깎는다. 사유만 남긴다.
+        logger.warning(
+            "goal_dispatch_send_failed",
+            milestone=milestone_id[:8], error=str(exc)[:160],
+        )
+        await _note_detached(milestone_id, f"발송 실패: {str(exc)[:200]}")
+        return
+
+    logger.info(
+        "goal_dispatch_sent",
+        milestone=milestone_id[:8], session=session_id[:8],
+        attempt=attempt, project=project,
+    )
+
+
+def _spawn_send(**kwargs: Any) -> asyncio.Task:
+    """태스크를 띄우고 **참조를 붙든다.**"""
+    task = asyncio.create_task(_send_milestone(**kwargs))
+    _send_tasks.add(task)
+    task.add_done_callback(_send_tasks.discard)
+    return task
+
+
 async def dispatch_pending_milestones(project: str | None = None) -> dict[str, int]:
     """착수했는데 담당이 모르는 마일스톤에 지시를 넣는다."""
     if not _ENABLED:
@@ -465,64 +585,35 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 row["milestone_id"], row["session_id"],
             )
 
-            try:
-                from app.services import chat_service as cs
-
-                async for _chunk in cs.send_message_stream(
-                    session_id=str(row["session_id"]),
-                    content=_build_message(row),
-                    intent_override="system_trigger",
-                    response_mode="quality",
-                ):
-                    pass
-            except asyncio.CancelledError:
-                # 상위 상한(`_GOAL_STAGE_TIMEOUT`)이 이 코루틴을 끊는 경로다.
-                # `CancelledError` 는 `Exception` 의 하위가 아니므로 아래 포괄
-                # except 에 걸리지 않는다 — 여기서 잡지 않으면 이 경로는 아무
-                # 흔적도 남기지 않고 사라진다. 2026-09-17 M4 가 그랬다:
-                # `goal_dispatch_timeout` 은 사이클 쪽에만 찍히고, 어느
-                # 마일스톤이 끊겼는지는 어디에도 없었다.
-                #
-                # 발송 기록은 위에서 이미 남았으므로 중복 발송은 나가지 않고,
-                # 담당이 답을 못 하면 `_RETRY_AFTER_MIN` 뒤 재알림이 이어받는다.
-                # **DB 를 다시 건드리지 않는다** — 취소 중에는 그 await 도 곧
-                # 취소되어 사유가 남지 않는다. 이 경로의 기록은 이 로그다.
-                logger.warning(
-                    "goal_dispatch_cancelled",
-                    milestone=row["milestone_id"][:8],
-                    session=str(row["session_id"])[:8],
-                    attempt=count + 1,
-                    note="상위 상한으로 스트림이 끊겼다 — 답이 없으면 재알림된다",
-                )
-                raise
-            except Exception as exc:
-                # 횟수는 위에서 이미 올렸다. 여기서 또 올리면 한 번의 시도가
-                # 재시도 한도를 두 칸 깎는다. 사유만 남긴다.
-                logger.warning(
-                    "goal_dispatch_send_failed",
-                    milestone=row["milestone_id"][:8],
-                    error=str(exc)[:160],
-                )
-                await _note(
-                    conn, row["milestone_id"], f"발송 실패: {str(exc)[:200]}",
-                )
-                continue
-
-            sent += 1
-            touched.add(str(row["session_id"]))
-            logger.info(
-                "goal_dispatch_sent",
-                milestone=row["milestone_id"][:8],
-                session=str(row["session_id"])[:8],
+            # 스트림 소비는 **사이클에서 떼어낸다.**
+            #
+            # 2026-09-17 실측. 이 루프 전체가 상위에서
+            # `asyncio.wait_for(..., 120초)` 로 감싸여 돈다(main.py). 첫
+            # 담당의 응답이 120초를 넘기면 루프가 통째로 취소되고, 뒤에
+            # 남은 마일스톤은 그 사이클에 한 건도 못 나갔다. 끊긴 담당의
+            # 턴은 `interrupted_partial` 로 죽었다.
+            #
+            # 이제 사이클은 태스크만 띄우고 다음 건으로 넘어간다. 태스크는
+            # 자체 상한(`_SEND_TIMEOUT`)과 동시 실행 상한
+            # (`_SEND_CONCURRENCY`) 아래에서 혼자 끝난다.
+            _spawn_send(
+                milestone_id=row["milestone_id"],
+                session_id=str(row["session_id"]),
+                message=_build_message(row),
                 attempt=count + 1,
                 project=row["project"],
             )
+
+            sent += 1
+            touched.add(str(row["session_id"]))
 
     if sent or gave_up or owner_requests or links_repaired:
         logger.info(
             "goal_dispatch_cycle", sent=sent, skipped=skipped, gave_up=gave_up,
             owner_requests=owner_requests, links_repaired=links_repaired,
         )
+    # `sent` 는 이제 "스트림을 끝까지 소비한 수" 가 아니라 "발송 태스크를
+    # 띄운 수" 다 — 실제 완료는 `goal_dispatch_sent` 로그가 알린다.
     return {
         "sent": sent, "skipped": skipped, "gave_up": gave_up,
         "owner_requests": owner_requests, "links_repaired": links_repaired,
