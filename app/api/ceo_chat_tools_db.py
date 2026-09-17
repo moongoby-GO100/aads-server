@@ -1053,3 +1053,87 @@ async def list_project_databases() -> Dict[str, Any]:
 
         result[project] = info
     return result
+
+
+# ─── ACCT 전용 신규 도구 (acct_app 커넥션, FORCE RLS 테이블 조회) ─────────────
+
+async def query_acct_database(
+    sql: str, acct_tenant_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    ACCT DB를 acct_app 전용 커넥션으로 조회한다.
+
+    tenant_company/company/source_file 등 FORCE ROW LEVEL SECURITY 테이블은
+    query_project_database 가 쓰는 acct_ro 풀로는 정책을 통과하지 못한다.
+    이 도구는 별도 DSN(ACCT_DATABASE_URL)으로 연결해 app.current_tenant_id
+    GUC를 세팅한 뒤 SELECT만 실행한다. query_project_database/
+    normalize_tenant_scope 등 기존 함수는 건드리지 않는다.
+
+    Args:
+        sql: SELECT/WITH/EXPLAIN 쿼리
+        acct_tenant_id: 숫자 tenant id. 주어지면 SET LOCAL app.current_tenant_id 로 스코프 적용
+
+    Returns:
+        {"rows": list[dict], "columns": list[str], "row_count": int}
+    """
+    import asyncpg
+
+    error = validate_query(sql)
+    if error:
+        return {"error": error}
+
+    tenant_value: Optional[str] = None
+    if acct_tenant_id is not None:
+        tenant_value = str(acct_tenant_id).strip() or None
+        if tenant_value and not _TENANT_ID_RE.match(tenant_value):
+            return {"error": "acct_tenant_id 는 숫자만 허용합니다"}
+
+    dsn = os.getenv("ACCT_DATABASE_URL")
+    if not dsn:
+        return {"error": "ACCT_DATABASE_URL 환경변수가 설정되지 않았습니다"}
+
+    q = sql.strip().rstrip(";")
+
+    try:
+        conn = await asyncpg.connect(dsn, timeout=_PG_POOL_CONNECT_TIMEOUT_SECONDS)
+    except Exception:
+        logger.exception("query_acct_database: 연결 실패")
+        return {"error": "ACCT DB 연결 실패 (상세 내용은 서버 로그 참조)"}
+
+    try:
+        async with conn.transaction():
+            await conn.execute("SET LOCAL default_transaction_read_only = on")
+            await conn.execute(
+                "SELECT set_config('statement_timeout', $1, true)",
+                str(max(1, _PROJECT_DB_QUERY_TIMEOUT_SECONDS) * 1000),
+            )
+            if tenant_value:
+                # 검증된 숫자값도 바인드 파라미터로만 전달한다.
+                await conn.execute(
+                    "SELECT set_config('app.current_tenant_id', $1, true)",
+                    tenant_value,
+                )
+            rows = await conn.fetch(q, timeout=_PROJECT_DB_QUERY_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        logger.error(f"query_acct_database: TIMEOUT | query={q[:80]}")
+        return {"error": f"DB 쿼리 시간 초과: {_PROJECT_DB_QUERY_TIMEOUT_SECONDS}초 초과"}
+    except Exception as exc:
+        safe_msg = str(exc)
+        if any(kw in safe_msg.lower() for kw in ("password", "postgresql://", "credentials")):
+            safe_msg = "쿼리 실행 오류가 발생했습니다 (상세 내용은 서버 로그 참조)"
+        logger.error(f"query_acct_database: FAIL | error={safe_msg}")
+        return {"error": f"ACCT DB 쿼리 실패: {safe_msg}"}
+    finally:
+        await conn.close()
+
+    result_rows = [{k: _serialize_value(v) for k, v in dict(r).items()} for r in rows]
+    result_rows = _mask_sensitive_values(result_rows)
+    columns = list(result_rows[0].keys()) if result_rows else []
+
+    logger.info(f"query_acct_database: OK | rows={len(result_rows)} query={q[:80]}")
+
+    return {
+        "rows": result_rows,
+        "columns": columns,
+        "row_count": len(result_rows),
+    }
