@@ -105,7 +105,12 @@ async def _current_bubble_id(conn, session_id: str) -> Optional[str]:
             SELECT id::text FROM chat_messages
             WHERE session_id = $1::uuid
               AND role = 'assistant'
-            ORDER BY (intent = 'streaming_placeholder') DESC, created_at DESC
+            -- COALESCE 를 벗기지 마라. intent 가 NULL 이면 비교 결과가 NULL 이고,
+            -- DESC 정렬에서 NULL 은 맨 앞에 온다(NULLS FIRST 가 기본). 그러면
+            -- intent 없는 **옛 답변**이 지금 흐르는 placeholder 를 제치고 1등이
+            -- 된다 — 2026-09-17 첫 실증에서 카드 2장이 50분 전 버블에 붙었다.
+            ORDER BY COALESCE(intent = 'streaming_placeholder', false) DESC,
+                     created_at DESC
             LIMIT 1
             """,
             session_id,

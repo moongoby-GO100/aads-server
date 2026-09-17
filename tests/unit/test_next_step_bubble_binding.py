@@ -57,7 +57,9 @@ def test_흐르는_중인_placeholder_를_먼저_고른다():
     conn = _Conn(result="x")
     asyncio.run(_current_bubble_id(conn, "sess-1"))
     assert "streaming_placeholder" in conn.sql
-    assert "ORDER BY (intent = 'streaming_placeholder') DESC" in conn.sql
+    # COALESCE 없이 쓰면 intent NULL 인 옛 답변이 NULLS FIRST 로 1등이 된다.
+    # 2026-09-17 첫 실증에서 카드 2장이 50분 전 버블에 붙은 원인이 이것이었다.
+    assert "COALESCE(intent = 'streaming_placeholder', false) DESC" in conn.sql
     assert "role = 'assistant'" in conn.sql
 
 
@@ -72,3 +74,19 @@ def test_조회가_실패해도_제안_자체를_막지_않는다():
     여기서 예외를 올리면 다음 단계 제안이 통째로 사라진다."""
     conn = _Conn(raises=RuntimeError("relation does not exist"))
     assert asyncio.run(_current_bubble_id(conn, "sess-1")) is None
+
+
+def test_intent_이_NULL_인_옛_답변에_붙지_않는다():
+    """정렬절에 COALESCE 가 없으면 NULL 이 NULLS FIRST 로 1등이 된다.
+
+    SQL 문자열로 지킨다 — 이 경로는 실제 DB 를 태워야 값이 갈리는데,
+    유닛 테스트는 DB 없이 돈다. 문자열 검사가 유일하게 남는 방어선이다.
+    """
+    conn = _Conn(result="x")
+    asyncio.run(_current_bubble_id(conn, "sess-1"))
+    sql = conn.sql
+    assert "COALESCE(intent = 'streaming_placeholder', false)" in sql
+    # 맨 앞 정렬키가 placeholder 여야 한다 — created_at 이 먼저 오면
+    # 흐르는 중인 버블을 고르지 못한다.
+    order = sql[sql.index("ORDER BY"):]
+    assert order.index("COALESCE") < order.index("created_at")
