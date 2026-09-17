@@ -229,6 +229,14 @@ async def _current_bubble_id(conn, session_id: str) -> Optional[str]:
               AND COALESCE(intent, '') NOT IN
                   ('pipeline_runner', 'runner_notification', 'ai_review_warning')
               AND COALESCE(content, '') NOT LIKE '%[Pipeline Runner]%'
+              -- 흐르는 중인 버블이 없으면(또는 그것이 숨김이면) **이번 턴의
+              -- 답변에만** 붙인다. 위 조건으로 숨김 placeholder 를 뺐으므로
+              -- 이 절이 없으면 이전 턴의 확정 답변으로 떨어지고, 회장님은
+              -- 다른 답변 아래에서 이번 제안을 승인하시게 된다(2026-09-17
+              -- 에 카드 2장이 50분 전 버블에 붙은 것과 같은 사고).
+              -- 모르면 붙이지 않는다 — 그 카드는 팝업으로 간다.
+              AND (COALESCE(intent, '') = 'streaming_placeholder'
+                   OR created_at > now() - interval '15 minutes')
             -- COALESCE 를 벗기지 마라. intent 가 NULL 이면 비교 결과가 NULL 이고,
             -- DESC 정렬에서 NULL 은 맨 앞에 온다(NULLS FIRST 가 기본). 그러면
             -- intent 없는 **옛 답변**이 지금 흐르는 placeholder 를 제치고 1등이

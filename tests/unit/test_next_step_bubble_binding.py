@@ -114,3 +114,16 @@ def test_러너_진행_메시지에는_붙지_않는다():
     for intent in ("pipeline_runner", "runner_notification", "ai_review_warning"):
         assert intent in conn.sql
     assert "[Pipeline Runner]" in conn.sql
+
+
+def test_흐르는_버블이_없으면_옛_답변에_떨어지지_않는다():
+    """숨김 placeholder 를 후보에서 뺀 뒤의 안전장치.
+
+    흐르는 중인 버블이 없으면 최근 15분 안의 답변에만 붙인다. 없으면
+    None → 팝업이다. 이 절이 빠지면 이전 턴 답변으로 떨어져 회장님이
+    **다른 답변 아래에서** 이번 제안을 승인하시게 된다.
+    """
+    conn = _Conn(result="x")
+    asyncio.run(_current_bubble_id(conn, "sess-1"))
+    assert "created_at > now() - interval '15 minutes'" in conn.sql
+    assert "COALESCE(intent, '') = 'streaming_placeholder'" in conn.sql
