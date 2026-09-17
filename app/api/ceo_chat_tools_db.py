@@ -284,6 +284,8 @@ def _get_project_db_config(project: str) -> Optional[Dict[str, str]]:
 # SET 문은 _FORBIDDEN_SQL 이 막으므로 도구가 트랜잭션 안에서 set_config 로 넣어 준다.
 _TENANT_SCOPE_PROJECTS = {"ACCT"}
 _TENANT_ID_RE = re.compile(r"^[0-9]{1,18}$")
+# RLS 정책·가드 함수(acct_current_tenant())가 읽는 GUC 이름. 두 조회 경로가 같은 이름을 써야 한다.
+_ACCT_TENANT_GUC = "acct.tenant_id"
 
 
 def normalize_tenant_scope(project: str, tenant_id: Any) -> Tuple[Optional[str], Optional[str]]:
@@ -553,7 +555,7 @@ async def _query_postgresql(
                         if tenant_id:
                             # 숫자 검증 뒤에도 값은 반드시 바인드 파라미터로 전달한다.
                             await conn.execute(
-                                "SELECT set_config('acct.tenant_id', $1, true)",
+                                f"SELECT set_config('{_ACCT_TENANT_GUC}', $1, true)",
                                 tenant_id,
                             )
                         try:
@@ -1066,12 +1068,12 @@ async def query_acct_database(
     tenant_company/company/source_file 등 FORCE ROW LEVEL SECURITY 테이블은
     query_project_database 가 쓰는 acct_ro 풀로는 정책을 통과하지 못한다.
     이 도구는 acct_app 자격증명으로 기존 ACCT SSH 터널을 재사용해 연결하고,
-    app.current_tenant_id GUC를 세팅한 뒤 SELECT만 실행한다.
+    acct.tenant_id GUC를 세팅한 뒤 SELECT만 실행한다.
     ACCT_DATABASE_URL이 있으면 하위 호환을 위해 우선 사용한다.
 
     Args:
         sql: SELECT/WITH/EXPLAIN 쿼리
-        acct_tenant_id: 숫자 tenant id. 주어지면 SET LOCAL app.current_tenant_id 로 스코프 적용
+        acct_tenant_id: 숫자 tenant id. 주어지면 SET LOCAL acct.tenant_id 로 스코프 적용
 
     Returns:
         {"rows": list[dict], "columns": list[str], "row_count": int}
@@ -1131,7 +1133,7 @@ async def query_acct_database(
             if tenant_value:
                 # 검증된 숫자값도 바인드 파라미터로만 전달한다.
                 await conn.execute(
-                    "SELECT set_config('app.current_tenant_id', $1, true)",
+                    f"SELECT set_config('{_ACCT_TENANT_GUC}', $1, true)",
                     tenant_value,
                 )
             rows = await conn.fetch(q, timeout=_PROJECT_DB_QUERY_TIMEOUT_SECONDS)
