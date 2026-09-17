@@ -270,6 +270,10 @@ def _pending_rows(gate_source):
         "gate_source": gate_source, "tier": "approve", "requested_by": LEAD,
         "work_key": "owner-session:AADS:운영인프라담당", "at": "09-17 10:00",
         "decision": "pending", "expires_in_min": 120,
+        # 카드를 어느 응답 버블 아래에 붙일지 — `approvals_pending` 이 읽는
+        # 열이다(project_docs.py). 가짜 행에서 빼면 KeyError 로 죽는데, 그건
+        # 선택지 규칙이 깨진 것이 아니라 이 표본이 낡은 것이다.
+        "source_message_id": None,
     }]
 
 
