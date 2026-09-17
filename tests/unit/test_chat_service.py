@@ -261,6 +261,22 @@ def test_normalize_tool_events_accepts_legacy_names_and_codex_events():
     ]
 
 
+def test_normalize_tool_events_preserves_call_timestamps_for_latency():
+    """at 이 보존돼야 llmops_tool_calls.latency_ms 를 계산할 수 있다.
+
+    2026-09-17: 계측 복구 배포 이후에도 이 경로를 탄 trace 만 latency 가 NULL 이었다.
+    원인은 정규화가 tool_use/tool_result 의 at(호출·수신 시각)을 떨어뜨린 것이다.
+    """
+    events = chat_service.normalize_tool_events([
+        {"type": "tool_use", "tool_name": "query_database", "tool_use_id": "t1", "at": 1000.0},
+        {"type": "tool_result", "tool_name": "query_database", "tool_use_id": "t1", "content": "ok", "at": 1002.5},
+    ])
+
+    assert events[0]["at"] == 1000.0
+    assert events[1]["at"] == 1002.5
+    assert events[1]["tool_use_id"] == "t1"
+
+
 def test_actionable_quoted_instruction_is_promoted_from_missed_reply_complaint():
     content = (
         "내가 지시한 지시내용에 응답이 없는데\n"
