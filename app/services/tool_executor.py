@@ -1597,12 +1597,15 @@ class ToolExecutor:
         """프로젝트별 원격 DB SELECT 쿼리 (KIS/GO100/SF/NTV2). Yellow 등급."""
         try:
             from app.api.ceo_chat_tools_db import query_project_database
+            # ACCT 전용 숫자 tenant_id만 통과 — execute()가 주입한 AADS UUID는 무시
+            raw_tenant = inp.get("tenant_id")
+            acct_tenant = raw_tenant if (raw_tenant and str(raw_tenant).strip().isdigit()) else None
             return await query_project_database(
                 project=inp.get("project", ""),
                 query=inp.get("query", ""),
                 limit=inp.get("limit", 100),
                 db_name=inp.get("db_name"),
-                tenant_id=inp.get("tenant_id"),
+                tenant_id=acct_tenant,
             )
         except Exception as e:
             return {"error": str(e)}
