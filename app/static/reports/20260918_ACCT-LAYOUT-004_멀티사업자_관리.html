@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>멀티 사업자 관리 — 기획·설계·목업 (ACCT-LAYOUT-004)</title>
+<style>
+:root{
+  --bg:#f6f7f9; --card:#fff; --ink:#15181d; --ink2:#5b6270; --line:#e3e6eb;
+  --brand:#2f6df6; --brand-weak:#eaf1ff; --ok:#12805c; --ok-weak:#e6f5ef;
+  --warn:#9a6b00; --warn-weak:#fdf3df; --bad:#c0392b; --bad-weak:#fdecea;
+  --r:12px; --shadow:0 1px 2px rgba(20,24,31,.06),0 8px 24px rgba(20,24,31,.06);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",sans-serif;}
+.wrap{max-width:1180px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:28px;line-height:1.3;margin:0 0 6px;letter-spacing:-.4px}
+h2{font-size:20px;margin:40px 0 12px;padding-top:14px;border-top:1px solid var(--line)}
+h3{font-size:16px;margin:24px 0 8px}
+p{margin:8px 0}
+.sub{color:var(--ink2);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;box-shadow:var(--shadow);margin:14px 0}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;background:var(--card)}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:#f0f2f6;font-weight:600}
+code{background:#eef0f4;padding:1px 6px;border-radius:5px;font-size:13px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:#12161d;color:#e7ebf2;padding:14px 16px;border-radius:10px;overflow:auto;font-size:13px;line-height:1.6}
+.tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:999px;font-weight:600}
+.t-ok{background:var(--ok-weak);color:var(--ok)} .t-warn{background:var(--warn-weak);color:var(--warn)}
+.t-bad{background:var(--bad-weak);color:var(--bad)} .t-info{background:var(--brand-weak);color:var(--brand)}
+.grid{display:grid;gap:14px}
+.g3{grid-template-columns:repeat(3,1fr)} .g2{grid-template-columns:repeat(2,1fr)}
+@media(max-width:840px){.g3,.g2{grid-template-columns:1fr}}
+.kpi{font-size:26px;font-weight:700;letter-spacing:-.5px}
+.kpi-l{font-size:12.5px;color:var(--ink2)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:18px 0 0}
+.tab{padding:9px 16px;border:1px solid var(--line);background:var(--card);border-radius:999px;cursor:pointer;font-size:14px;font-weight:600;color:var(--ink2)}
+.tab[aria-selected=true]{background:var(--brand);border-color:var(--brand);color:#fff}
+.panel{display:none} .panel.on{display:block}
+/* ── 목업 전용 ── */
+.app{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--card);box-shadow:var(--shadow)}
+.topbar{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:#fbfcfe}
+.logo{font-weight:700;font-size:15px;letter-spacing:-.3px}
+.switcher{position:relative;margin-left:4px}
+.sw-btn{display:flex;align-items:center;gap:9px;border:1px solid var(--line);background:var(--card);
+  border-radius:10px;padding:7px 12px;cursor:pointer;font-size:14px;font-weight:600;min-width:250px;text-align:left}
+.sw-btn .biz{flex:1}
+.sw-btn .cap{display:block;font-size:11px;color:var(--ink2);font-weight:500}
+.sw-menu{position:absolute;top:calc(100% + 6px);left:0;width:340px;background:var(--card);
+  border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:8px;z-index:20}
+.sw-menu[hidden]{display:none}
+.sw-search{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:13px}
+.sw-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;cursor:pointer}
+.sw-item:hover{background:#f2f5fa}
+.sw-item.sel{background:var(--brand-weak)}
+.av{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:12px;font-weight:700;color:#fff}
+.sw-item .nm{flex:1;font-size:13.5px;font-weight:600}
+.sw-item .rl{font-size:11.5px;color:var(--ink2)}
+.badge{background:var(--bad);color:#fff;border-radius:999px;font-size:11px;padding:1px 7px;font-weight:700}
+.sw-foot{border-top:1px solid var(--line);margin-top:6px;padding-top:6px}
+.sw-foot .sw-item{color:var(--brand);font-weight:600;font-size:13.5px}
+.body{padding:18px}
+.crumb{font-size:12.5px;color:var(--ink2);margin-bottom:10px}
+.tile{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--card)}
+.tile.click{cursor:pointer} .tile.click:hover{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-weak)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.mini{font-size:12.5px;color:var(--ink2)}
+.bar{height:6px;border-radius:999px;background:#eceff4;overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;background:var(--brand)}
+.steps{counter-reset:s;margin:0;padding:0;list-style:none}
+.steps li{counter-increment:s;position:relative;padding:10px 0 10px 40px;border-bottom:1px dashed var(--line)}
+.steps li::before{content:counter(s);position:absolute;left:0;top:10px;width:26px;height:26px;border-radius:50%;
+  background:var(--brand-weak);color:var(--brand);font-weight:700;font-size:13px;display:grid;place-items:center}
+.note{border-left:3px solid var(--brand);background:var(--brand-weak);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0;font-size:14px}
+.note.w{border-color:var(--warn);background:var(--warn-weak)}
+.note.b{border-color:var(--bad);background:var(--bad-weak)}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:28px;background:#15181d;color:#fff;
+  padding:11px 18px;border-radius:10px;font-size:14px;opacity:0;transition:.25s;pointer-events:none;z-index:99}
+.toast.on{opacity:1}
+.foot{margin-top:40px;color:var(--ink2);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>멀티 사업자 관리 — 기획 · 설계 · 목업</h1>
+<p class="sub">ACCT-LAYOUT-004 · 2026-09-18 작성 · 통합 경영관리시스템(ACCT 회계원장 + 매장비서 SaaS)<br>
+CEO 지시: <b>"사용자가 여러 사업자를 관리할 때 각각 로그인해서 관리하는 건 불편하다 — 기획에 반영하라"</b></p>
+
+<div class="card">
+<h3 style="margin-top:0">결론 3줄</h3>
+<p>1. <b>재로그인은 지금도 필요 없습니다.</b> 전환 API(<code>POST /auth/tenants/{id}/switch</code>)는 이미 배포돼 있고 오늘 실호출로 200을 확인했습니다. 없는 것은 <b>그 API를 쓰는 화면</b>입니다.</p>
+<p>2. <b>이미 35명이 두 개 이상 사업자에 소속돼 있습니다</b>(전체 88명 중). 즉 이 문제는 앞으로의 가정이 아니라 지금 발생 중인 불편입니다.</p>
+<p>3. 분리 단위는 <b>tenant(계약) → company(사업자등록번호)</b> 2층입니다. 사업자별 DB 분리는 하지 않습니다(RLS 유지).</p>
+</div>
+
+<h2>1. 실측 — 지금 무엇이 있고 무엇이 없나</h2>
+<table>
+<tr><th>구성요소</th><th>현재 상태</th><th>근거</th><th>판정</th></tr>
+<tr><td>계정 ↔ 사업자 N:N 테이블</td><td><code>tenant_memberships</code> 123행(active 84)</td><td>AADS DB 조회</td><td><span class="tag t-ok">있음</span></td></tr>
+<tr><td>2개 이상 소속 사용자</td><td><b>35명</b> / 전체 88명</td><td>AADS DB 조회</td><td><span class="tag t-warn">불편 발생 중</span></td></tr>
+<tr><td>내 사업자 목록 API</td><td><code>GET /api/v1/auth/tenants</code> → <code>{current_tenant_id, tenants[]}</code></td><td>실호출 200</td><td><span class="tag t-ok">있음</span></td></tr>
+<tr><td>사업자 전환 API</td><td><code>POST /auth/tenants/{id}/switch</code> → <code>{tenant, membership, token}</code> 새 JWT 재발급</td><td>실호출 200</td><td><span class="tag t-ok">있음</span></td></tr>
+<tr><td>사업자 추가 API</td><td><code>POST /auth/tenants</code> → 201 + 새 토큰</td><td>실호출 201</td><td><span class="tag t-ok">있음</span></td></tr>
+<tr><td><b>사업자 스위처 UI</b></td><td>전 화면 어디에도 없음</td><td>화면 점검</td><td><span class="tag t-bad">없음 — 이번 과제</span></td></tr>
+<tr><td><b>통합(전 사업자) 뷰</b></td><td>없음 — 한 번에 한 사업자만</td><td>화면 점검</td><td><span class="tag t-bad">없음 — 이번 과제</span></td></tr>
+<tr><td><b>사업자 단위 권한</b></td><td><code>membership(tenant_id, company_id, user_id, role_code)</code> 스키마는 있으나 <b>데이터 0건</b></td><td>ACCT DB 조회</td><td><span class="tag t-bad">미사용 — 이번 과제</span></td></tr>
+<tr><td>회계 사업자 마스터</td><td>ACCT <code>company</code> 4건, <code>tenant_company</code> 연결 존재</td><td>ACCT DB 조회</td><td><span class="tag t-ok">있음</span></td></tr>
+<tr><td>SaaS tenant ↔ ACCT company 매핑</td><td>연결 컬럼·규칙 없음</td><td>스키마 점검</td><td><span class="tag t-bad">없음 — 이번 과제</span></td></tr>
+</table>
+
+<div class="note b"><b>핵심 진단.</b> 백엔드는 멀티 사업자를 감당할 수 있는데, 화면이 "사용자 1명 = 사업자 1개"를 전제로 만들어져 있습니다.
+그래서 두 번째 사업자를 보려면 <b>로그아웃 → 재로그인</b>밖에 길이 없었습니다. 고칠 지점은 인증이 아니라 <b>화면과 스코프 전달 방식</b>입니다.</div>
+
+<h2>2. 설계 — 왜 2층(tenant / company)인가</h2>
+<div class="grid g3">
+  <div class="card"><div class="kpi-l">1층</div><div class="kpi">tenant</div>
+    <p class="mini">계약·구독·결제·초대의 단위. 요금제가 붙고 사용량이 집계되는 곳. 세무사무소·프랜차이즈 본부가 여기에 해당합니다.</p></div>
+  <div class="card"><div class="kpi-l">2층</div><div class="kpi">company</div>
+    <p class="mini">사업자등록번호 1개 = 장부 1벌. 마감·시산표·부가세 신고가 이 축으로 떨어집니다. 라일론, 열정국밥 성신여대점이 여기입니다.</p></div>
+  <div class="card"><div class="kpi-l">연결</div><div class="kpi">membership</div>
+    <p class="mini"><code>(user, tenant, company, role)</code>. company가 NULL이면 "그 tenant의 모든 사업자", 값이 있으면 "그 사업자만". 한 줄로 두 범위를 표현합니다.</p></div>
+</div>
+
+<h3>왜 사업자마다 계정을 따로 만들지 않는가</h3>
+<table>
+<tr><th>안</th><th>내용</th><th>장점</th><th>리스크</th><th>판정</th></tr>
+<tr><td>A. 사업자별 계정</td><td>사업자 수만큼 로그인 계정</td><td>구현 없음(현 상태)</td><td>비밀번호 N벌, 알림 분산, 통합 손익 불가 — <b>지금 CEO가 지적한 그 불편</b></td><td><span class="tag t-bad">폐기</span></td></tr>
+<tr><td>B. 계정 1개 + 사업자 전환</td><td>로그인 1회, 상단에서 전환</td><td>이미 API 존재, 통합 뷰 가능</td><td>스코프 누수 시 타 사업자 데이터 노출 → RLS로 차단</td><td><span class="tag t-ok">권장</span></td></tr>
+<tr><td>C. 계정 1개 + 전 사업자 동시 표시</td><td>전환 없이 모든 사업자 합산만</td><td>전환 조작 없음</td><td>마감·전표 입력은 반드시 사업자 1개로 확정돼야 함(오귀속 위험)</td><td><span class="tag t-warn">통합 대시보드에서만 부분 채택</span></td></tr>
+</table>
+<p><b>권장은 B + C 부분 채택입니다.</b> 조회·요약은 전 사업자 합산(C)을 허용하고, <b>쓰기(전표·마감·급여)는 반드시 현재 사업자 스코프에서만</b> 허용합니다.
+오늘 ACCT에서 <code>source_file</code> 17,776건이 귀속 근거 없이 남아 있는 상태를 보면, 쓰기 경로의 사업자 확정은 타협할 수 없습니다.</p>
+
+<h2>3. 목업 — 실제로 눌러보실 수 있습니다</h2>
+<div class="tabs" role="tablist">
+  <div class="tab" role="tab" aria-selected="true" data-p="p1">① 사업자 스위처</div>
+  <div class="tab" role="tab" aria-selected="false" data-p="p2">② 통합 대시보드</div>
+  <div class="tab" role="tab" aria-selected="false" data-p="p3">③ 사업자 추가 마법사</div>
+  <div class="tab" role="tab" aria-selected="false" data-p="p4">④ 권한·멤버 관리</div>
+</div>
+
+<!-- ① 스위처 -->
+<div class="panel on" id="p1">
+  <div class="app" style="margin-top:14px">
+    <div class="topbar">
+      <div class="logo">경영관리</div>
+      <div class="switcher">
+        <button class="sw-btn" id="swBtn" aria-haspopup="listbox" aria-expanded="false">
+          <span class="av" id="swAv" style="background:#2f6df6">라</span>
+          <span class="biz"><span id="swName">라일론</span><span class="cap" id="swRole">소유자 · 사업자번호 123-45-67890</span></span>
+          <span aria-hidden="true">▾</span>
+        </button>
+        <div class="sw-menu" id="swMenu" hidden role="listbox">
+          <input class="sw-search" id="swQ" placeholder="사업자 검색  (⌘K / Ctrl+K)">
+          <div id="swList"></div>
+          <div class="sw-foot">
+            <div class="sw-item" onclick="go('p3')"><span class="av" style="background:#e3e6eb;color:#5b6270">＋</span><span class="nm">사업자 추가</span></div>
+            <div class="sw-item" onclick="go('p2')"><span class="av" style="background:#12805c">전</span><span class="nm">전체 사업자 통합 보기</span></div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-left:auto" class="mini">김대표 · <span id="swCount">4</span>개 사업자</div>
+    </div>
+    <div class="body">
+      <div class="crumb">홈 › <span id="bcName">라일론</span> › 매입자료</div>
+      <div class="grid g3">
+        <div class="tile"><div class="kpi-l">이번 달 매입</div><div class="kpi" id="k1">84,320,000원</div></div>
+        <div class="tile"><div class="kpi-l">미처리 전표</div><div class="kpi" id="k2">37건</div></div>
+        <div class="tile"><div class="kpi-l">부족 데이터</div><div class="kpi" id="k3">12건</div></div>
+      </div>
+      <p class="mini" style="margin-top:14px">전환하면 화면 전체가 그 사업자 스코프로 바뀝니다 — 재로그인 없음. 서버는 새 JWT를 즉시 재발급합니다.</p>
+    </div>
+  </div>
+  <h3>동작 규칙</h3>
+  <ul>
+    <li><b>어디서나 같은 자리.</b> 스위처는 모든 화면 좌상단에 고정합니다. 화면마다 위치가 달라지면 전환 자체를 못 찾습니다.</li>
+    <li><b>최근 사용순 + 검색.</b> 사업자가 5개를 넘어가면 목록은 스크롤이 됩니다. <code>⌘K</code>로 바로 검색·전환합니다.</li>
+    <li><b>배지로 할 일을 먼저 알린다.</b> 전환하기 전에 어느 사업자에 미처리가 쌓였는지 목록에서 보입니다.</li>
+    <li><b>전환 후 같은 화면을 유지한다.</b> 매입자료를 보다가 전환하면 그 사업자의 매입자료로 갑니다(홈으로 튕기지 않음).</li>
+    <li><b>권한 없는 메뉴는 숨기지 않고 비활성 + 사유 표시.</b> "왜 안 보이지"가 문의의 대부분입니다.</li>
+  </ul>
+</div>
+
+<!-- ② 통합 -->
+<div class="panel" id="p2">
+  <div class="app" style="margin-top:14px">
+    <div class="topbar"><div class="logo">경영관리</div>
+      <div class="sw-btn" style="cursor:default"><span class="av" style="background:#12805c">전</span>
+        <span class="biz">전체 사업자<span class="cap">통합 보기 · 4개 사업자 합산</span></span></div>
+      <div style="margin-left:auto" class="mini">2026년 9월</div></div>
+    <div class="body">
+      <div class="grid g3">
+        <div class="tile"><div class="kpi-l">합산 매출</div><div class="kpi">412,880,000원</div><div class="mini">전월 대비 +6.2%</div></div>
+        <div class="tile"><div class="kpi-l">합산 매입</div><div class="kpi">289,140,000원</div><div class="mini">전월 대비 +3.1%</div></div>
+        <div class="tile"><div class="kpi-l">미처리 합계</div><div class="kpi" style="color:var(--bad)">96건</div><div class="mini">3개 사업자에 분포</div></div>
+      </div>
+      <h3>사업자별 현황 <span class="mini">— 카드를 누르면 그 사업자로 전환됩니다</span></h3>
+      <div class="grid g2" id="bizCards"></div>
+    </div>
+  </div>
+  <div class="note"><b>쓰기는 여기서 막습니다.</b> 통합 화면에서는 전표 등록·마감·급여 확정 버튼을 노출하지 않습니다.
+  합산 화면의 "등록" 버튼은 어느 사업자 장부에 들어갈지가 모호해서, 오귀속을 만드는 가장 쉬운 경로가 됩니다.</div>
+</div>
+
+<!-- ③ 추가 -->
+<div class="panel" id="p3">
+  <div class="app" style="margin-top:14px"><div class="body">
+    <h3 style="margin-top:0">사업자 추가</h3>
+    <ol class="steps">
+      <li><b>사업자등록번호 입력</b> — 10자리. 국세청 진위확인 API로 상호·업태·과세유형을 자동 채웁니다. <span class="mini">중복 검사: 같은 번호가 이미 있으면 "추가" 대신 <b>기존 사업자 참여 요청</b>으로 분기합니다.</span></li>
+      <li><b>회계 장부 생성</b> — ACCT <code>company</code> 1행 + <code>tenant_company</code> 연결 1행을 만듭니다. 회계연도·기준통화·업종을 이때 확정합니다.</li>
+      <li><b>권한 부여</b> — 만든 사람에게 해당 company의 <code>owner</code> <code>membership</code>을 부여합니다. <span class="mini">현재 이 테이블이 0건이라 사업자 단위 권한이 사실상 없습니다 — 이 단계가 그 공백을 메웁니다.</span></li>
+      <li><b>수집 연동</b> — 카드·계좌·홈택스 연결(선택). 건너뛰어도 장부는 즉시 사용 가능합니다.</li>
+      <li><b>완료</b> — 스위처에 새 사업자가 붙고 자동 전환됩니다.</li>
+    </ol>
+    <div class="note w"><b>플랜 한도를 여기서 알린다.</b> free 플랜은 사업자 1개까지입니다. 2개째를 만들 때 결제를 요구하지 말고,
+    먼저 "무엇이 늘어나는지"를 보여준 뒤 업그레이드를 제안합니다. 한도 초과는 생성 실패(500)가 아니라 <b>402 + 업그레이드 안내</b>로 처리합니다.</div>
+  </div></div>
+</div>
+
+<!-- ④ 권한 -->
+<div class="panel" id="p4">
+  <h3>역할 × 범위 매트릭스</h3>
+  <table>
+    <tr><th>역할</th><th>범위</th><th>조회</th><th>전표 입력</th><th>마감</th><th>멤버 초대</th><th>결제·플랜</th></tr>
+    <tr><td><b>owner</b></td><td>tenant 전체</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    <tr><td><b>admin</b></td><td>tenant 전체</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>❌</td></tr>
+    <tr><td><b>accountant</b></td><td>지정 사업자만</td><td>✅</td><td>✅</td><td>✅</td><td>❌</td><td>❌</td></tr>
+    <tr><td><b>staff</b></td><td>지정 사업자만</td><td>✅</td><td>✅(당월)</td><td>❌</td><td>❌</td><td>❌</td></tr>
+    <tr><td><b>viewer</b></td><td>지정 사업자만</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td></tr>
+  </table>
+  <p><b>세무사무소 시나리오.</b> 외부 회계사에게 <code>accountant</code> + <code>company_id = 라일론</code> 한 줄만 주면, 그 사람의 스위처에는 라일론만 뜹니다.
+  계정을 새로 파거나 비밀번호를 공유할 필요가 없습니다. 관계를 끊을 때도 <code>status='revoked'</code> 한 줄입니다.</p>
+</div>
+
+<h2>4. API 계약 — 이미 있는 것과 새로 필요한 것</h2>
+<table>
+<tr><th>엔드포인트</th><th>용도</th><th>상태</th></tr>
+<tr><td><code>GET /api/v1/auth/tenants</code></td><td>내 사업자 목록 + 현재 스코프</td><td><span class="tag t-ok">있음(200 실측)</span></td></tr>
+<tr><td><code>POST /api/v1/auth/tenants/{id}/switch</code></td><td>전환 — 새 JWT 재발급</td><td><span class="tag t-ok">있음(200 실측)</span></td></tr>
+<tr><td><code>POST /api/v1/auth/tenants</code></td><td>사업자 추가</td><td><span class="tag t-ok">있음(201 실측)</span></td></tr>
+<tr><td><code>POST /auth/tenants/{id}/invites</code> · <code>/members</code></td><td>초대·멤버 조회</td><td><span class="tag t-ok">있음</span></td></tr>
+<tr><td><code>GET /api/v1/acct/companies</code></td><td>현재 tenant의 사업자(company) 목록 + 배지 수치</td><td><span class="tag t-bad">신규</span></td></tr>
+<tr><td><code>POST /api/v1/acct/companies</code></td><td>사업자 추가 2~3단계(company + tenant_company + membership)</td><td><span class="tag t-bad">신규</span></td></tr>
+<tr><td><code>GET /api/v1/acct/overview?scope=all</code></td><td>통합 대시보드 합산</td><td><span class="tag t-bad">신규</span></td></tr>
+<tr><td>공통 헤더 <code>X-Company-Id</code></td><td>company 스코프 전달 → <code>set_config('acct.company_id')</code></td><td><span class="tag t-bad">신규</span></td></tr>
+</table>
+
+<h3>스코프 전달 경로 (쓰기 안전장치)</h3>
+<pre>브라우저          JWT.tenant_id  +  X-Company-Id 헤더
+   ↓
+FastAPI 의존성    membership 조회로 (user, tenant, company) 권한 검증
+   ↓              ── 권한 없으면 403, 여기서 끝 ──
+PostgreSQL        set_config('acct.tenant_id', …) , set_config('acct.company_id', …)
+   ↓
+FORCE ROW LEVEL SECURITY  ← 앱이 실수해도 DB가 한 번 더 막는다</pre>
+<p class="mini">ACCT는 이미 37개 테이블 중 20개가 FORCE RLS입니다. 새 화면도 같은 방식에 태웁니다 — 사업자별 DB를 나누지 않는 이유가 이것입니다.</p>
+
+<h2>5. 단계 계획</h2>
+<table>
+<tr><th>단계</th><th>범위</th><th>완료기준</th><th>규모</th></tr>
+<tr><td>P1</td><td>스위처 UI + <code>GET /auth/tenants</code> 연결 + 전환 시 화면 유지</td><td>재로그인 없이 4개 사업자 전환, 전환 후 같은 메뉴 유지</td><td>S</td></tr>
+<tr><td>P2</td><td><code>company</code> 축 도입 — <code>X-Company-Id</code> + membership 시딩(현재 0건)</td><td>회계사 계정이 지정 사업자만 조회, 타 사업자 403</td><td>M</td></tr>
+<tr><td>P3</td><td>통합 대시보드(<code>scope=all</code>) + 사업자별 배지</td><td>합산 수치가 사업자별 합과 일치, 쓰기 버튼 미노출</td><td>M</td></tr>
+<tr><td>P4</td><td>사업자 추가 마법사 + 플랜 한도(402 분기)</td><td>사업자번호 입력 → 장부 생성 → 자동 전환까지 1화면</td><td>S</td></tr>
+</table>
+
+<h2>6. 확인이 필요한 결정 2건</h2>
+<table>
+<tr><th>#</th><th>결정 사항</th><th>권장안</th><th>근거</th></tr>
+<tr><td>1</td><td>한 tenant 안에 여러 사업자를 둘지, 사업자마다 tenant를 팔지</td><td><b>한 tenant 안에 여러 company</b>(요금은 사업자 수로 과금)</td><td>프랜차이즈·다점포는 통합 손익이 목적입니다. tenant를 나누면 합산이 불가능해집니다.</td></tr>
+<tr><td>2</td><td>free 플랜의 사업자 한도</td><td><b>1개</b>, 2개째부터 유료</td><td>사업자 수가 곧 장부 수 = 저장·수집 비용입니다. 사용자 수보다 과금 단위로 정직합니다.</td></tr>
+</table>
+
+<div class="foot">
+ACCT-LAYOUT-004 · 작성 2026-09-18 · 근거: AADS DB(<code>tenant_memberships</code>·<code>saas_users</code>) 조회, ACCT DB(<code>membership</code>·<code>company</code>·<code>tenant_company</code>) 조회, 인증 API 실호출(200/201)<br>
+연관 문서: ACCT-LAYOUT-001 매입자료 화면 PRD · ACCT-LAYOUT-003 사용자 회원가입 PRD
+</div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script>
+const BIZ=[
+ {id:'t1',n:'라일론',r:'소유자',c:'123-45-67890',col:'#2f6df6',ab:'라',badge:37,sales:'182,400,000원',buy:'84,320,000원',miss:12,pct:74},
+ {id:'t2',n:'열정국밥 성신여대점',r:'소유자',c:'214-88-01123',col:'#12805c',ab:'열',badge:24,sales:'96,220,000원',buy:'71,900,000원',miss:31,pct:58},
+ {id:'t3',n:'언니냉면',r:'관리자',c:'미등록',col:'#9a6b00',ab:'언',badge:35,sales:'88,140,000원',buy:'70,410,000원',miss:44,pct:41},
+ {id:'t4',n:'중화요리 미아점',r:'회계사',c:'305-12-44902',col:'#7b4fd1',ab:'중',badge:0,sales:'46,120,000원',buy:'62,510,000원',miss:0,pct:96}
+];
+let cur=BIZ[0];
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');setTimeout(()=>t.classList.remove('on'),1800);}
+function drawList(q=''){
+  $('#swList').innerHTML=BIZ.filter(b=>b.n.includes(q)||b.c.includes(q)).map(b=>`
+    <div class="sw-item ${b.id===cur.id?'sel':''}" onclick="pick('${b.id}')" role="option">
+      <span class="av" style="background:${b.col}">${b.ab}</span>
+      <span class="nm">${b.n}<span class="rl">${b.r} · ${b.c}</span></span>
+      ${b.badge?`<span class="badge">${b.badge}</span>`:''}
+    </div>`).join('')||'<div class="mini" style="padding:10px">검색 결과 없음</div>';
+}
+function pick(id){
+  cur=BIZ.find(b=>b.id===id);
+  $('#swName').textContent=cur.n; $('#swAv').textContent=cur.ab; $('#swAv').style.background=cur.col;
+  $('#swRole').textContent=`${cur.r} · 사업자번호 ${cur.c}`;
+  $('#bcName').textContent=cur.n;
+  $('#k1').textContent=cur.buy; $('#k2').textContent=cur.badge+'건'; $('#k3').textContent=cur.miss+'건';
+  $('#swMenu').hidden=true; $('#swBtn').setAttribute('aria-expanded','false');
+  drawList(); toast(`${cur.n} 으로 전환했습니다 — 재로그인 없음`);
+}
+$('#swBtn').onclick=e=>{e.stopPropagation();const m=$('#swMenu');m.hidden=!m.hidden;
+  $('#swBtn').setAttribute('aria-expanded',String(!m.hidden)); if(!m.hidden){drawList();$('#swQ').focus();}};
+$('#swQ').oninput=e=>drawList(e.target.value);
+document.onclick=()=>{$('#swMenu').hidden=true;$('#swBtn').setAttribute('aria-expanded','false');};
+$('#swMenu').onclick=e=>e.stopPropagation();
+document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){
+  e.preventDefault();$('#swMenu').hidden=false;drawList();$('#swQ').focus();}});
+$('#bizCards').innerHTML=BIZ.map(b=>`
+  <div class="tile click" onclick="go('p1');pick('${b.id}')">
+    <div class="row"><b>${b.n}</b>${b.badge?`<span class="badge">미처리 ${b.badge}</span>`:'<span class="tag t-ok">처리 완료</span>'}</div>
+    <div class="mini" style="margin-top:6px">매출 ${b.sales} · 매입 ${b.buy} · 부족데이터 ${b.miss}건</div>
+    <div class="bar"><i style="width:${b.pct}%"></i></div>
+    <div class="mini" style="margin-top:6px">이달 장부 정리율 ${b.pct}%</div>
+  </div>`).join('');
+function go(p){$$('.tab').forEach(t=>t.setAttribute('aria-selected',String(t.dataset.p===p)));
+  $$('.panel').forEach(x=>x.classList.toggle('on',x.id===p));window.scrollTo({top:$('.tabs').offsetTop-20,behavior:'smooth'});}
+$$('.tab').forEach(t=>t.onclick=()=>go(t.dataset.p));
+drawList();
+</script>
+</body>
+</html>

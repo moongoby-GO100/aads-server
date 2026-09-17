@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ACCT — 라일론 매입자료 관리</title>
+<style>
+:root {
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --danger: #dc2626;
+  --success: #16a34a;
+  --warn: #d97706;
+  --gray-50: #f9fafb;
+  --gray-100: #f3f4f6;
+  --gray-200: #e5e7eb;
+  --gray-300: #d1d5db;
+  --gray-500: #6b7280;
+  --gray-700: #374151;
+  --gray-900: #111827;
+  --card-bg: #fff;
+  --border: #e5e7eb;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Pretendard', -apple-system, sans-serif; background: var(--gray-50); color: var(--gray-900); font-size: 14px; }
+
+/* Layout */
+.shell { display: flex; min-height: 100vh; }
+.sidebar { width: 220px; background: #1e293b; color: #cbd5e1; flex-shrink: 0; }
+.sidebar-logo { padding: 20px 16px; border-bottom: 1px solid #334155; }
+.sidebar-logo .brand { font-size: 18px; font-weight: 700; color: #fff; }
+.sidebar-logo .sub { font-size: 11px; color: #94a3b8; margin-top: 2px; }
+.sidebar-menu { padding: 8px 0; }
+.menu-group { padding: 16px 16px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; color: #64748b; letter-spacing: .8px; }
+.menu-item { display: flex; align-items: center; gap: 10px; padding: 9px 16px; cursor: pointer; transition: background .15s; font-size: 13px; }
+.menu-item:hover { background: #334155; }
+.menu-item.active { background: #2563eb; color: #fff; }
+.menu-item .icon { width: 16px; text-align: center; opacity: .8; }
+
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.topbar { background: #fff; border-bottom: 1px solid var(--border); padding: 0 24px; height: 56px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+.topbar-left { display: flex; align-items: center; gap: 8px; }
+.breadcrumb { font-size: 13px; color: var(--gray-500); }
+.breadcrumb .current { color: var(--gray-900); font-weight: 500; }
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+.tenant-badge { background: #eff6ff; color: #2563eb; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+.user-badge { background: var(--gray-100); border-radius: 20px; padding: 4px 12px; font-size: 12px; }
+
+.content { flex: 1; overflow-y: auto; padding: 24px; }
+
+/* Page header */
+.page-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; }
+.page-title { font-size: 20px; font-weight: 700; }
+.page-subtitle { font-size: 13px; color: var(--gray-500); margin-top: 4px; }
+.btn-group { display: flex; gap: 8px; }
+
+/* Buttons */
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: background .15s; }
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-outline { background: #fff; color: var(--gray-700); border: 1px solid var(--border); }
+.btn-outline:hover { background: var(--gray-50); }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn-danger { background: var(--danger); color: #fff; }
+
+/* KPI cards */
+.kpi-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 20px; }
+.kpi-card { background: #fff; border-radius: 10px; padding: 16px 18px; border: 1px solid var(--border); }
+.kpi-label { font-size: 11px; color: var(--gray-500); font-weight: 500; text-transform: uppercase; letter-spacing: .5px; }
+.kpi-value { font-size: 22px; font-weight: 700; margin-top: 6px; }
+.kpi-sub { font-size: 11px; color: var(--gray-500); margin-top: 4px; }
+.kpi-delta { font-size: 11px; font-weight: 600; }
+.kpi-delta.up { color: var(--danger); }
+.kpi-delta.down { color: var(--success); }
+
+/* Filter bar */
+.filter-card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.filter-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.filter-group { display: flex; flex-direction: column; gap: 4px; }
+.filter-group label { font-size: 11px; font-weight: 600; color: var(--gray-500); }
+.filter-group select, .filter-group input { padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; background: #fff; color: var(--gray-900); min-width: 120px; }
+.filter-group input[type="date"] { min-width: 130px; }
+.filter-actions { display: flex; gap: 6px; margin-left: auto; }
+
+/* Tabs */
+.tab-row { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin-bottom: 16px; }
+.tab { padding: 10px 18px; font-size: 13px; font-weight: 500; color: var(--gray-500); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; }
+.tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+/* Table */
+.table-card { background: #fff; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.table-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.table-toolbar-left { display: flex; align-items: center; gap: 10px; }
+.table-info { font-size: 12px; color: var(--gray-500); }
+.search-box { display: flex; align-items: center; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.search-box input { border: none; outline: none; padding: 6px 10px; font-size: 13px; width: 200px; }
+.search-box .search-icon { padding: 0 10px; color: var(--gray-500); }
+table { width: 100%; border-collapse: collapse; }
+thead { background: var(--gray-50); }
+th { padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 600; color: var(--gray-500); text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+td { padding: 11px 12px; border-bottom: 1px solid var(--gray-100); font-size: 13px; vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: #f8faff; }
+.amount { text-align: right; font-family: 'SF Mono', monospace; font-size: 13px; }
+.amount.out { color: var(--danger); font-weight: 500; }
+.amount.in { color: var(--success); font-weight: 500; }
+
+/* Badges */
+.badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.badge-blue { background: #eff6ff; color: #2563eb; }
+.badge-green { background: #f0fdf4; color: #16a34a; }
+.badge-orange { background: #fff7ed; color: #ea580c; }
+.badge-red { background: #fef2f2; color: #dc2626; }
+.badge-gray { background: var(--gray-100); color: var(--gray-700); }
+.badge-purple { background: #faf5ff; color: #7c3aed; }
+.badge-teal { background: #f0fdfa; color: #0d9488; }
+
+/* Card detail */
+.card-number { font-family: 'SF Mono', monospace; font-size: 12px; color: var(--gray-700); background: var(--gray-100); padding: 2px 6px; border-radius: 4px; letter-spacing: .5px; }
+
+/* Pagination */
+.pagination { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-top: 1px solid var(--border); }
+.page-info { font-size: 12px; color: var(--gray-500); }
+.page-btns { display: flex; gap: 4px; }
+.page-btn { padding: 5px 10px; border: 1px solid var(--border); border-radius: 5px; font-size: 12px; cursor: pointer; background: #fff; }
+.page-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+/* Side panel */
+.side-panel { position: fixed; right: 0; top: 0; bottom: 0; width: 480px; background: #fff; border-left: 1px solid var(--border); z-index: 100; overflow-y: auto; box-shadow: -4px 0 24px rgba(0,0,0,.08); transform: translateX(0); }
+.panel-header { padding: 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; background: #fff; }
+.panel-title { font-size: 16px; font-weight: 600; }
+.panel-body { padding: 20px; }
+.panel-section { margin-bottom: 24px; }
+.panel-section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--gray-500); letter-spacing: .6px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.info-item { }
+.info-label { font-size: 11px; color: var(--gray-500); margin-bottom: 3px; }
+.info-value { font-size: 13px; font-weight: 500; }
+.info-value.mono { font-family: 'SF Mono', monospace; }
+
+/* Journal table */
+.journal-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.journal-table th { background: var(--gray-50); padding: 7px 10px; text-align: left; font-size: 10px; font-weight: 600; color: var(--gray-500); border-bottom: 1px solid var(--border); }
+.journal-table td { padding: 8px 10px; border-bottom: 1px solid var(--gray-100); }
+.journal-table .debit { text-align: right; color: var(--danger); font-family: monospace; }
+.journal-table .credit { text-align: right; color: var(--success); font-family: monospace; }
+.journal-total { background: var(--gray-50); font-weight: 700; }
+
+/* Summary tabs */
+.summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+.summary-table { background: #fff; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.summary-table-title { padding: 12px 14px; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
+.summary-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 14px; border-bottom: 1px solid var(--gray-100); font-size: 12px; }
+.summary-row:last-child { border-bottom: none; }
+.summary-row .bar { height: 4px; background: #eff6ff; border-radius: 2px; margin-top: 3px; }
+.summary-row .bar-fill { height: 4px; background: var(--primary); border-radius: 2px; }
+.sum-label { flex: 1; }
+.sum-val { font-family: monospace; font-size: 12px; font-weight: 600; text-align: right; min-width: 90px; }
+
+/* Progress */
+.progress { height: 6px; background: var(--gray-100); border-radius: 3px; margin-top: 4px; }
+.progress-fill { height: 6px; background: var(--primary); border-radius: 3px; }
+
+/* Checkbox */
+input[type="checkbox"] { width: 14px; height: 14px; cursor: pointer; }
+
+/* Status dot */
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+.dot-green { background: var(--success); }
+.dot-orange { background: var(--warn); }
+.dot-gray { background: var(--gray-300); }
+
+/* Action menu */
+.action-cell { display: flex; gap: 4px; }
+.action-btn { padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); background: #fff; font-size: 11px; cursor: pointer; color: var(--gray-700); }
+.action-btn:hover { background: var(--gray-50); }
+
+@media (max-width: 1200px) { .kpi-row { grid-template-columns: repeat(3, 1fr); } }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<!-- Sidebar -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="brand">ACCT</div>
+    <div class="sub">통합 경영관리시스템</div>
+  </div>
+  <div class="sidebar-menu">
+    <div class="menu-group">회계</div>
+    <div class="menu-item"><span class="icon">📊</span> 대시보드</div>
+    <div class="menu-item"><span class="icon">📄</span> 전표 관리</div>
+    <div class="menu-item active"><span class="icon">🛒</span> 매입자료</div>
+    <div class="menu-item"><span class="icon">💰</span> 매출자료</div>
+    <div class="menu-item"><span class="icon">💳</span> 카드 내역</div>
+    <div class="menu-item"><span class="icon">🏦</span> 계좌 내역</div>
+    <div class="menu-group">결산</div>
+    <div class="menu-item"><span class="icon">📋</span> 원장 조회</div>
+    <div class="menu-item"><span class="icon">🗂</span> 계정과목표</div>
+    <div class="menu-item"><span class="icon">🔒</span> 마감 관리</div>
+    <div class="menu-group">설정</div>
+    <div class="menu-item"><span class="icon">🏢</span> 사업자 정보</div>
+    <div class="menu-item"><span class="icon">👤</span> 거래처 관리</div>
+    <div class="menu-item"><span class="icon">⚙️</span> 시스템 설정</div>
+  </div>
+</aside>
+
+<!-- Main -->
+<div class="main">
+  <!-- Topbar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="breadcrumb">회계 / <span class="current">매입자료 관리</span></span>
+    </div>
+    <div class="topbar-right">
+      <span class="tenant-badge">🏢 라일론 (주)</span>
+      <span class="user-badge">👤 CEO moongoby</span>
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="content">
+    <!-- Page header -->
+    <div class="page-header">
+      <div>
+        <div class="page-title">매입자료 관리</div>
+        <div class="page-subtitle">카드·계좌 매입전표 · 계정과목 분류 · 분개 연동 | 2026년 1~9월 기준</div>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-outline">⬇ 엑셀 내보내기</button>
+        <button class="btn btn-outline">📁 파일 업로드</button>
+        <button class="btn btn-primary">✚ 매입전표 입력</button>
+      </div>
+    </div>
+
+    <!-- KPI -->
+    <div class="kpi-row">
+      <div class="kpi-card">
+        <div class="kpi-label">총 매입액 (VAT 별도)</div>
+        <div class="kpi-value" style="color:#1e40af">587,420,000</div>
+        <div class="kpi-sub">원 · 2026년 누계 <span class="kpi-delta up">▲ 12.3%</span></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">부가세 (VAT)</div>
+        <div class="kpi-value" style="color:#dc2626">58,742,000</div>
+        <div class="kpi-sub">원 · 공제 가능 금액</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">이번 달 매입</div>
+        <div class="kpi-value" style="color:#d97706">62,340,000</div>
+        <div class="kpi-sub">원 · 9월 · 전표 47건</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">미분류 건수</div>
+        <div class="kpi-value" style="color:#7c3aed">23</div>
+        <div class="kpi-sub">건 · 계정과목 미배정 <span class="kpi-delta up">⚠ 처리 필요</span></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">전표 연동률</div>
+        <div class="kpi-value" style="color:#16a34a">91.4%</div>
+        <div class="kpi-sub">자동 분개 완료 비율</div>
+      </div>
+    </div>
+
+    <!-- Filter -->
+    <div class="filter-card">
+      <div class="filter-row">
+        <div class="filter-group">
+          <label>기간 (시작)</label>
+          <input type="date" value="2026-09-01">
+        </div>
+        <div class="filter-group">
+          <label>기간 (종료)</label>
+          <input type="date" value="2026-09-17">
+        </div>
+        <div class="filter-group">
+          <label>채널</label>
+          <select>
+            <option>전체</option>
+            <option>법인카드</option>
+            <option>체크카드</option>
+            <option>계좌이체</option>
+            <option>현금영수증</option>
+            <option>세금계산서</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>카드번호</label>
+          <select>
+            <option>전체</option>
+            <option>신한 **** **** 8821</option>
+            <option>국민 **** **** 4472</option>
+            <option>삼성 **** **** 3309</option>
+            <option>하나 **** **** 7761</option>
+            <option>우리 **** **** 5530</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>계정과목</label>
+          <select>
+            <option>전체</option>
+            <option>상품매입 (145)</option>
+            <option>원부자재 (146)</option>
+            <option>광고선전비 (824)</option>
+            <option>택배·운반비 (831)</option>
+            <option>수수료비용 (835)</option>
+            <option>복리후생비 (811)</option>
+            <option>소모품비 (819)</option>
+            <option>통신비 (820)</option>
+            <option>접대비 (813)</option>
+            <option>미분류</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>분개 상태</label>
+          <select>
+            <option>전체</option>
+            <option>완료</option>
+            <option>미완료</option>
+            <option>검토 필요</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>거래처 검색</label>
+          <input type="text" placeholder="거래처명 입력">
+        </div>
+        <div class="filter-actions">
+          <button class="btn btn-primary">🔍 검색</button>
+          <button class="btn btn-outline">초기화</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tab-row">
+      <div class="tab active">매입 목록 (2,646건)</div>
+      <div class="tab">계정과목별 집계</div>
+      <div class="tab">카드별 집계</div>
+      <div class="tab">거래처 원장</div>
+    </div>
+
+    <!-- 집계 요약 -->
+    <div class="summary-grid">
+      <div class="summary-table">
+        <div class="summary-table-title">
+          <span>계정과목별 매입액 (9월)</span>
+          <span style="font-size:11px;color:#6b7280">단위: 원</span>
+        </div>
+        <div class="summary-row">
+          <div class="sum-label">
+            <div>상품매입 (145)</div>
+            <div class="progress"><div class="progress-fill" style="width:72%"></div></div>
+          </div>
+          <div class="sum-val">34,800,000</div>
+        </div>
+        <div class="summary-row">
+          <div class="sum-label">
+            <div>원부자재 (146)</div>
+            <div class="progress"><div class="progress-fill" style="width:48%;background:#7c3aed"></div></div>
+          </div>
+          <div class="sum-val">12,450,000</div>
+        </div>
+        <div class="summary-row">
+          <div class="sum-label">
+            <div>광고선전비 (824)</div>
+            <div class="progress"><div class="progress-fill" style="width:28%;background:#d97706"></div></div>
+          </div>
+          <div class="sum-val">6,900,000</div>
+        </div>
+        <div class="summary-row">
+          <div class="sum-label">
+            <div>택배·운반비 (831)</div>
+            <div class="progress"><div class="progress-fill" style="width:18%;background:#16a34a"></div></div>
+          </div>
+          <div class="sum-val">4,210,000</div>
+        </div>
+        <div class="summary-row">
+          <div class="sum-label">
+            <div>미분류</div>
+            <div class="progress"><div class="progress-fill" style="width:6%;background:#dc2626"></div></div>
+          </div>
+          <div class="sum-val" style="color:#dc2626">3,980,000</div>
+        </div>
+      </div>
+      <div class="summary-table">
+        <div class="summary-table-title">
+          <span>카드별 사용액 (9월)</span>
+          <span style="font-size:11px;color:#6b7280">단위: 원</span>
+        </div>
+        <div class="summary-row">
+          <div class="sum-label">
+            <div>신한 법인카드 *8821</div>
+            <div class="progress"><div class="progress-fill" style="width:60%"></div></div>
+          </div>
+          <div class="sum-val">28,340,000</div>
+        </div>
+        <div class="summary-row">
+          <div class="sum-label">
+            <div>국민 법인카드 *4472</div>
+            <div class="progress"><div class="progress-fill" style="width:38%;background:#7c3aed"></div></div>
+          </div>
+          <div class="sum-val">17,920,000</div>
+        </div>
+        <div class="summary-row">
+          <div class="sum-label">
+            <div>삼성 법인카드 *3309</div>
+            <div class="progress"><div class="progress-fill" style="width:22%;background:#d97706"></div></div>
+          </div>
+          <div class="sum-val">8,660,000</div>
+        </div>
+        <div class="summary-row">
+          <div class="sum-label">
+            <div>하나 법인카드 *7761</div>
+            <div class="progress"><div class="progress-fill" style="width:15%;background:#16a34a"></div></div>
+          </div>
+          <div class="sum-val">5,430,000</div>
+        </div>
+        <div class="summary-row">
+          <div class="sum-label">
+            <div>기타 (계좌이체 등)</div>
+            <div class="progress"><div class="progress-fill" style="width:8%;background:#94a3b8"></div></div>
+          </div>
+          <div class="sum-val">1,990,000</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="table-card">
+      <div class="table-toolbar">
+        <div class="table-toolbar-left">
+          <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input type="text" placeholder="거래처명, 적요, 카드번호 검색">
+          </div>
+          <span class="table-info">총 2,646건 · 9월 47건 표시 중</span>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm btn-outline">🏷 일괄 계정 배정</button>
+          <button class="btn btn-sm btn-outline">✅ 일괄 분개</button>
+          <button class="btn btn-sm btn-outline">⬇ 선택 내보내기</button>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th><input type="checkbox"></th>
+            <th>#</th>
+            <th>거래일자</th>
+            <th>채널</th>
+            <th>카드번호</th>
+            <th>거래처 (가맹점명)</th>
+            <th>적요 (사용내역)</th>
+            <th>계정과목</th>
+            <th>공급가액</th>
+            <th>VAT</th>
+            <th>합계</th>
+            <th>분개</th>
+            <th>관리</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2646</td>
+            <td>2026-09-17</td>
+            <td><span class="badge badge-blue">법인카드</span></td>
+            <td><span class="card-number">신한 *8821</span></td>
+            <td><b>동대문패션타운(주)</b></td>
+            <td>가을 트레이닝세트 원단 매입</td>
+            <td><span class="badge badge-purple">원부자재 146</span></td>
+            <td class="amount out">3,800,000</td>
+            <td class="amount" style="color:#d97706">380,000</td>
+            <td class="amount out">4,180,000</td>
+            <td><span class="dot dot-green"></span><span style="font-size:11px">완료</span></td>
+            <td><div class="action-cell"><button class="action-btn">보기</button><button class="action-btn">수정</button></div></td>
+          </tr>
+          <tr>
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2645</td>
+            <td>2026-09-17</td>
+            <td><span class="badge badge-teal">계좌이체</span></td>
+            <td><span class="card-number">기업 4521</span></td>
+            <td><b>CJ대한통운</b></td>
+            <td>9월 2주차 배송비 정산</td>
+            <td><span class="badge badge-green">택배운반비 831</span></td>
+            <td class="amount out">1,840,000</td>
+            <td class="amount" style="color:#d97706">184,000</td>
+            <td class="amount out">2,024,000</td>
+            <td><span class="dot dot-green"></span><span style="font-size:11px">완료</span></td>
+            <td><div class="action-cell"><button class="action-btn">보기</button><button class="action-btn">수정</button></div></td>
+          </tr>
+          <tr>
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2644</td>
+            <td>2026-09-16</td>
+            <td><span class="badge badge-blue">법인카드</span></td>
+            <td><span class="card-number">국민 *4472</span></td>
+            <td><b>메타 코리아 (Meta)</b></td>
+            <td>Facebook/Instagram 광고비 9월</td>
+            <td><span class="badge badge-orange">광고선전비 824</span></td>
+            <td class="amount out">2,500,000</td>
+            <td class="amount" style="color:#d97706">250,000</td>
+            <td class="amount out">2,750,000</td>
+            <td><span class="dot dot-green"></span><span style="font-size:11px">완료</span></td>
+            <td><div class="action-cell"><button class="action-btn">보기</button><button class="action-btn">수정</button></div></td>
+          </tr>
+          <tr>
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2643</td>
+            <td>2026-09-16</td>
+            <td><span class="badge badge-blue">법인카드</span></td>
+            <td><span class="card-number">신한 *8821</span></td>
+            <td><b>네이버 광고</b></td>
+            <td>스마트스토어 광고 9월</td>
+            <td><span class="badge badge-orange">광고선전비 824</span></td>
+            <td class="amount out">1,800,000</td>
+            <td class="amount" style="color:#d97706">180,000</td>
+            <td class="amount out">1,980,000</td>
+            <td><span class="dot dot-green"></span><span style="font-size:11px">완료</span></td>
+            <td><div class="action-cell"><button class="action-btn">보기</button><button class="action-btn">수정</button></div></td>
+          </tr>
+          <tr style="background:#fffbeb">
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2642</td>
+            <td>2026-09-15</td>
+            <td><span class="badge badge-blue">법인카드</span></td>
+            <td><span class="card-number">삼성 *3309</span></td>
+            <td><b>ZARA KOREA (주)</b></td>
+            <td>트렌드 리서치 샘플 구매</td>
+            <td><span class="badge badge-red">⚠ 미분류</span></td>
+            <td class="amount out">340,000</td>
+            <td class="amount" style="color:#d97706">34,000</td>
+            <td class="amount out">374,000</td>
+            <td><span class="dot dot-orange"></span><span style="font-size:11px;color:#d97706">미완료</span></td>
+            <td><div class="action-cell"><button class="action-btn" style="color:#2563eb;border-color:#2563eb">배정</button><button class="action-btn">수정</button></div></td>
+          </tr>
+          <tr>
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2641</td>
+            <td>2026-09-15</td>
+            <td><span class="badge badge-blue">법인카드</span></td>
+            <td><span class="card-number">신한 *8821</span></td>
+            <td><b>도매꾹 (BtoB)</b></td>
+            <td>피그먼트 긴팔 원단 250m</td>
+            <td><span class="badge badge-purple">원부자재 146</span></td>
+            <td class="amount out">4,750,000</td>
+            <td class="amount" style="color:#d97706">475,000</td>
+            <td class="amount out">5,225,000</td>
+            <td><span class="dot dot-green"></span><span style="font-size:11px">완료</span></td>
+            <td><div class="action-cell"><button class="action-btn">보기</button><button class="action-btn">수정</button></div></td>
+          </tr>
+          <tr>
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2640</td>
+            <td>2026-09-14</td>
+            <td><span class="badge badge-gray">현금영수증</span></td>
+            <td><span class="card-number">현금</span></td>
+            <td><b>우체국쇼핑</b></td>
+            <td>박스·포장재 소모품 구입</td>
+            <td><span class="badge badge-gray">소모품비 819</span></td>
+            <td class="amount out">218,000</td>
+            <td class="amount" style="color:#d97706">21,800</td>
+            <td class="amount out">239,800</td>
+            <td><span class="dot dot-green"></span><span style="font-size:11px">완료</span></td>
+            <td><div class="action-cell"><button class="action-btn">보기</button><button class="action-btn">수정</button></div></td>
+          </tr>
+          <tr>
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2639</td>
+            <td>2026-09-14</td>
+            <td><span class="badge badge-blue">법인카드</span></td>
+            <td><span class="card-number">국민 *4472</span></td>
+            <td><b>(주)카페24</b></td>
+            <td>쇼핑몰 호스팅·PG 수수료 9월</td>
+            <td><span class="badge badge-teal">수수료비용 835</span></td>
+            <td class="amount out">430,000</td>
+            <td class="amount" style="color:#d97706">43,000</td>
+            <td class="amount out">473,000</td>
+            <td><span class="dot dot-green"></span><span style="font-size:11px">완료</span></td>
+            <td><div class="action-cell"><button class="action-btn">보기</button><button class="action-btn">수정</button></div></td>
+          </tr>
+          <tr style="background:#fffbeb">
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2638</td>
+            <td>2026-09-13</td>
+            <td><span class="badge badge-blue">법인카드</span></td>
+            <td><span class="card-number">하나 *7761</span></td>
+            <td><b>스타벅스코리아</b></td>
+            <td>거래처 미팅 음료</td>
+            <td><span class="badge badge-red">⚠ 미분류</span></td>
+            <td class="amount out">68,000</td>
+            <td class="amount" style="color:#d97706">0</td>
+            <td class="amount out">68,000</td>
+            <td><span class="dot dot-orange"></span><span style="font-size:11px;color:#d97706">미완료</span></td>
+            <td><div class="action-cell"><button class="action-btn" style="color:#2563eb;border-color:#2563eb">배정</button><button class="action-btn">수정</button></div></td>
+          </tr>
+          <tr>
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2637</td>
+            <td>2026-09-13</td>
+            <td><span class="badge badge-blue">법인카드</span></td>
+            <td><span class="card-number">신한 *8821</span></td>
+            <td><b>만화경 의류 (주)</b></td>
+            <td>트레이닝세트 완제품 매입 200pcs</td>
+            <td><span class="badge badge-blue">상품매입 145</span></td>
+            <td class="amount out">6,200,000</td>
+            <td class="amount" style="color:#d97706">620,000</td>
+            <td class="amount out">6,820,000</td>
+            <td><span class="dot dot-green"></span><span style="font-size:11px">완료</span></td>
+            <td><div class="action-cell"><button class="action-btn">보기</button><button class="action-btn">수정</button></div></td>
+          </tr>
+          <tr>
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2636</td>
+            <td>2026-09-12</td>
+            <td><span class="badge badge-blue">법인카드</span></td>
+            <td><span class="card-number">삼성 *3309</span></td>
+            <td><b>모델리스트 촬영스튜디오</b></td>
+            <td>신상품 촬영 스튜디오 대관</td>
+            <td><span class="badge badge-orange">광고선전비 824</span></td>
+            <td class="amount out">550,000</td>
+            <td class="amount" style="color:#d97706">55,000</td>
+            <td class="amount out">605,000</td>
+            <td><span class="dot dot-green"></span><span style="font-size:11px">완료</span></td>
+            <td><div class="action-cell"><button class="action-btn">보기</button><button class="action-btn">수정</button></div></td>
+          </tr>
+          <tr>
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2635</td>
+            <td>2026-09-12</td>
+            <td><span class="badge badge-blue">법인카드</span></td>
+            <td><span class="card-number">국민 *4472</span></td>
+            <td><b>쿠팡로지스틱스</b></td>
+            <td>로켓배송 입고비 정산</td>
+            <td><span class="badge badge-green">택배운반비 831</span></td>
+            <td class="amount out">720,000</td>
+            <td class="amount" style="color:#d97706">72,000</td>
+            <td class="amount out">792,000</td>
+            <td><span class="dot dot-green"></span><span style="font-size:11px">완료</span></td>
+            <td><div class="action-cell"><button class="action-btn">보기</button><button class="action-btn">수정</button></div></td>
+          </tr>
+          <tr>
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2634</td>
+            <td>2026-09-11</td>
+            <td><span class="badge badge-teal">세금계산서</span></td>
+            <td><span class="card-number">세금계산서</span></td>
+            <td><b>(주)성안섬유</b></td>
+            <td>코튼 스판 원단 300m 세금계산서</td>
+            <td><span class="badge badge-purple">원부자재 146</span></td>
+            <td class="amount out">3,200,000</td>
+            <td class="amount" style="color:#d97706">320,000</td>
+            <td class="amount out">3,520,000</td>
+            <td><span class="dot dot-green"></span><span style="font-size:11px">완료</span></td>
+            <td><div class="action-cell"><button class="action-btn">보기</button><button class="action-btn">수정</button></div></td>
+          </tr>
+          <tr>
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2633</td>
+            <td>2026-09-10</td>
+            <td><span class="badge badge-blue">법인카드</span></td>
+            <td><span class="card-number">신한 *8821</span></td>
+            <td><b>무신사 파트너스</b></td>
+            <td>무신사 스토어 입점 수수료 8월분</td>
+            <td><span class="badge badge-teal">수수료비용 835</span></td>
+            <td class="amount out">1,240,000</td>
+            <td class="amount" style="color:#d97706">124,000</td>
+            <td class="amount out">1,364,000</td>
+            <td><span class="dot dot-green"></span><span style="font-size:11px">완료</span></td>
+            <td><div class="action-cell"><button class="action-btn">보기</button><button class="action-btn">수정</button></div></td>
+          </tr>
+          <tr>
+            <td><input type="checkbox"></td>
+            <td style="color:#6b7280;font-size:11px">2632</td>
+            <td>2026-09-09</td>
+            <td><span class="badge badge-blue">법인카드</span></td>
+            <td><span class="card-number">하나 *7761</span></td>
+            <td><b>직원 식대 (배달의민족)</b></td>
+            <td>직원 회식·식대</td>
+            <td><span class="badge badge-gray">복리후생비 811</span></td>
+            <td class="amount out">185,000</td>
+            <td class="amount" style="color:#d97706">0</td>
+            <td class="amount out">185,000</td>
+            <td><span class="dot dot-green"></span><span style="font-size:11px">완료</span></td>
+            <td><div class="action-cell"><button class="action-btn">보기</button><button class="action-btn">수정</button></div></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="pagination">
+        <div class="page-info">1 – 15 / 2,646건 · 페이지당 <select style="border:1px solid #e5e7eb;border-radius:4px;padding:2px 4px;font-size:12px"><option>15</option><option>30</option><option>50</option></select></div>
+        <div class="page-btns">
+          <button class="page-btn">◀</button>
+          <button class="page-btn active">1</button>
+          <button class="page-btn">2</button>
+          <button class="page-btn">3</button>
+          <button class="page-btn">…</button>
+          <button class="page-btn">177</button>
+          <button class="page-btn">▶</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Side Panel: 전표 상세 -->
+<div class="side-panel">
+  <div class="panel-header">
+    <div>
+      <div class="panel-title">매입 전표 상세</div>
+      <div style="font-size:12px;color:#6b7280;margin-top:2px">#2646 · 2026-09-17</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span class="badge badge-green">✅ 분개 완료</span>
+      <button class="btn btn-sm btn-outline">✏ 수정</button>
+      <button style="background:none;border:none;font-size:18px;cursor:pointer;color:#6b7280">✕</button>
+    </div>
+  </div>
+  <div class="panel-body">
+
+    <div class="panel-section">
+      <div class="panel-section-title">거래 기본 정보</div>
+      <div class="info-grid">
+        <div class="info-item">
+          <div class="info-label">거래일자</div>
+          <div class="info-value">2026-09-17 (수)</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">채널</div>
+          <div class="info-value"><span class="badge badge-blue">법인카드</span></div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">카드번호</div>
+          <div class="info-value mono">신한카드 4517-86**-****-8821</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">카드 별칭</div>
+          <div class="info-value">라일론 법인1호</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">거래처 (가맹점)</div>
+          <div class="info-value">동대문패션타운(주)</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">사업자번호</div>
+          <div class="info-value mono">106-81-43222</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-section-title">사용내역 및 금액</div>
+      <div class="info-grid">
+        <div class="info-item" style="grid-column:1/-1">
+          <div class="info-label">적요 (사용내역)</div>
+          <div class="info-value">가을 트레이닝세트 원단 매입 — 폴리에스터 밴딩원단 85m·코튼스판 40m</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">공급가액</div>
+          <div class="info-value" style="color:#dc2626;font-size:16px;font-family:monospace">3,800,000 원</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">VAT (10%)</div>
+          <div class="info-value" style="color:#d97706;font-family:monospace">380,000 원</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">합계금액</div>
+          <div class="info-value" style="font-size:16px;font-weight:700;font-family:monospace">4,180,000 원</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">통화</div>
+          <div class="info-value">KRW</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-section-title">계정과목 분류</div>
+      <div class="info-grid">
+        <div class="info-item">
+          <div class="info-label">계정과목</div>
+          <div class="info-value"><span class="badge badge-purple">원부자재 (146)</span></div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">분류 방법</div>
+          <div class="info-value">AI 자동 분류 (신뢰도 94%)</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">부가세 공제</div>
+          <div class="info-value" style="color:#16a34a">✅ 가능</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">기간귀속</div>
+          <div class="info-value">2026-09 (9월)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-section-title">분개 (전표) — journal_line</div>
+      <table class="journal-table">
+        <thead>
+          <tr>
+            <th>계정코드</th>
+            <th>계정명</th>
+            <th>차변 (Debit)</th>
+            <th>대변 (Credit)</th>
+            <th>적요</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>146</td>
+            <td>원부자재</td>
+            <td class="debit">3,800,000</td>
+            <td>—</td>
+            <td>동대문패션타운 원단</td>
+          </tr>
+          <tr>
+            <td>135</td>
+            <td>부가세 대급금</td>
+            <td class="debit">380,000</td>
+            <td>—</td>
+            <td>VAT 10%</td>
+          </tr>
+          <tr>
+            <td>253</td>
+            <td>미지급금</td>
+            <td>—</td>
+            <td class="credit">4,180,000</td>
+            <td>법인카드 *8821</td>
+          </tr>
+          <tr class="journal-total">
+            <td colspan="2" style="text-align:right">합계</td>
+            <td class="debit">4,180,000</td>
+            <td class="credit">4,180,000</td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-section-title">원본 파일 · 증빙</div>
+      <div style="background:var(--gray-50);border-radius:8px;padding:14px;display:flex;align-items:center;gap:10px;border:1px solid var(--border)">
+        <span style="font-size:24px">📄</span>
+        <div>
+          <div style="font-weight:500;font-size:13px">카드사_신한_202609_statement.pdf</div>
+          <div style="font-size:11px;color:#6b7280">source_file id:2891 · 2026-09-17 · 1.2MB</div>
+        </div>
+        <button class="btn btn-sm btn-outline" style="margin-left:auto">다운로드</button>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn btn-outline" style="flex:1">이전 전표</button>
+      <button class="btn btn-primary" style="flex:1">다음 전표 →</button>
+    </div>
+  </div>
+</div>
+
+</div>
+</body>
+</html>
