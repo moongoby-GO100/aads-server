@@ -550,6 +550,11 @@ is_read_only_instruction() {
     printf '%s' "$instruction" | grep -Eiq 'read-only|do not modify|no file changes|읽기[[:space:]]*전용|파일[[:space:]]*수정[[:space:]]*금지|수정하지|변경하지'
 }
 
+is_deploy_only_instruction() {
+    local instruction="${1:-}"
+    printf '%s' "$instruction" | head -20 | grep -qF 'DEPLOY_ONLY: true'
+}
+
 # P1: DB 연결 실패 감지 및 텔레그램 알림
 _notify_db_failure() {
     local err_msg="$1"
@@ -2244,35 +2249,40 @@ ${output:0:1500}
             rm -f /tmp/.pipeline_current_job
             return 0
         fi
-        log "  NO_CHANGES job=$job_id target=$target_repo — awaiting_approval 차단, cancelled 처리"
-        local no_change_reason="no_changes"
-        if [[ -f "$output_file" ]]; then
-            local out_first
-            out_first=$(head -1 "$output_file" 2>/dev/null | tr '\r' ' ' | head -c 60)
-            if [[ -n "${out_first//[[:space:]]/}" ]]; then
-                no_change_reason="no_changes: ${out_first}"
+        if is_deploy_only_instruction "$instruction"; then
+            log "  DEPLOY_ONLY_BYPASS job=$job_id target=$target_repo — no_changes 게이트 우회, 정상 진행"
+            record_runner_event "$job_id" "deploy_only_bypass" "running" "no_changes_bypass" "$job_model" "" "$job_size" "" "{\"deploy_only\":true,\"changed_files\":0}"
+        else
+            log "  NO_CHANGES job=$job_id target=$target_repo — awaiting_approval 차단, cancelled 처리"
+            local no_change_reason="no_changes"
+            if [[ -f "$output_file" ]]; then
+                local out_first
+                out_first=$(head -1 "$output_file" 2>/dev/null | tr '\r' ' ' | head -c 60)
+                if [[ -n "${out_first//[[:space:]]/}" ]]; then
+                    no_change_reason="no_changes: ${out_first}"
+                fi
             fi
+            db_update "UPDATE pipeline_jobs SET status='cancelled', phase='no_changes',
+                       error_detail=$(sql_escape "$no_change_reason"),
+                       result_output=$(sql_escape "$output"),
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 변경사항 0건 — 실제 대상 저장소에 반영된 diff가 없어 승인 대기로 보내지 않음',
+                       completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+            record_runner_event "$job_id" "job_terminal" "cancelled" "no_changes" "$job_model" "" "$job_size" "" "{\"reason\":\"no_changes\",\"changed_files\":0}"
+            post_to_chat "$session_id" "⚠️ [Pipeline Runner] 변경사항 0건으로 작업 종결: $job_id — 실제 대상 저장소(${target_repo})에 diff가 없어 승인 대기로 보내지 않았습니다."
+            _release_work_lock "$project" "$job_id" "$parallel_group"
+            _cleanup_artifacts "$job_id"
+            if [[ -d "$worktree_dir" ]]; then
+                cd "${main_workdir:-/tmp}"
+                git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
+                log "  WORKTREE_CLEANUP: $worktree_dir"
+            fi
+            _notify_ai "$job_id"
+            promote_next_queued "$project"
+            _current_job_id=""
+            _current_session_id=""
+            rm -f /tmp/.pipeline_current_job
+            return 1
         fi
-        db_update "UPDATE pipeline_jobs SET status='cancelled', phase='no_changes',
-                   error_detail=$(sql_escape "$no_change_reason"),
-                   result_output=$(sql_escape "$output"),
-                   review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 변경사항 0건 — 실제 대상 저장소에 반영된 diff가 없어 승인 대기로 보내지 않음',
-                   completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
-        record_runner_event "$job_id" "job_terminal" "cancelled" "no_changes" "$job_model" "" "$job_size" "" "{\"reason\":\"no_changes\",\"changed_files\":0}"
-        post_to_chat "$session_id" "⚠️ [Pipeline Runner] 변경사항 0건으로 작업 종결: $job_id — 실제 대상 저장소(${target_repo})에 diff가 없어 승인 대기로 보내지 않았습니다."
-        _release_work_lock "$project" "$job_id" "$parallel_group"
-        _cleanup_artifacts "$job_id"
-        if [[ -d "$worktree_dir" ]]; then
-            cd "${main_workdir:-/tmp}"
-            git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
-            log "  WORKTREE_CLEANUP: $worktree_dir"
-        fi
-        _notify_ai "$job_id"
-        promote_next_queued "$project"
-        _current_job_id=""
-        _current_session_id=""
-        rm -f /tmp/.pipeline_current_job
-        return 1
     fi
 
     # ═══ AI Reviewer 단계 — CEO 승인 전 독립 AI 리뷰 ═══

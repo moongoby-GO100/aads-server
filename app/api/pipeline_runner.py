@@ -1873,6 +1873,11 @@ async def notify_completion(job_id: str):
         return {"status": "error", "detail": str(e), "promoted_job_id": promoted_job_id}
 
 
+def _is_deploy_only_instruction(instruction: str) -> bool:
+    lines = (instruction or "").splitlines()[:20]
+    return "DEPLOY_ONLY: true" in "\n".join(lines)
+
+
 @router.post("/pipeline/jobs/{job_id}/approve", tags=["pipeline-runner"])
 async def approve_or_reject(
     job_id: str,
@@ -1902,7 +1907,7 @@ async def approve_or_reject(
                 decision_ts_clause = "rejected_at = NOW(),"
             row = await conn.fetchrow(
                 f"""
-                SELECT job_id, project, status, phase, git_diff,
+                SELECT job_id, project, status, phase, git_diff, instruction,
                        {commit_hash_expr} AS commit_hash,
                        {actual_files_expr} AS actual_changed_files
                 FROM pipeline_jobs
@@ -1917,14 +1922,15 @@ async def approve_or_reject(
 
             latest_review = None
             if req.action == "approve":
+                deploy_only = _is_deploy_only_instruction(row["instruction"])
                 git_diff = row["git_diff"] or ""
                 commit_hash = (row["commit_hash"] or "").strip()
                 changed_files = row["actual_changed_files"] or []
-                if "diff --git " not in git_diff:
+                if not deploy_only and "diff --git " not in git_diff:
                     raise HTTPException(status_code=409, detail="승인 차단: 유효한 git diff가 없습니다")
-                if not re.match(r"^[0-9a-f]{40}$", commit_hash):
+                if not deploy_only and not re.match(r"^[0-9a-f]{40}$", commit_hash):
                     raise HTTPException(status_code=409, detail="승인 차단: 승인용 commit_hash가 없습니다")
-                if not changed_files:
+                if not deploy_only and not changed_files:
                     raise HTTPException(status_code=409, detail="승인 차단: 실제 변경 파일 목록이 없습니다")
                 latest_review = await conn.fetchrow(
                     """
@@ -1936,16 +1942,17 @@ async def approve_or_reject(
                     """,
                     job_id,
                 )
-                if not latest_review:
-                    raise HTTPException(status_code=409, detail="승인 차단: AI 리뷰 결과가 없습니다")
-                if latest_review["verdict"] != "APPROVE":
-                    detail = (
-                        f"승인 차단: AI 리뷰 미통과 "
-                        f"({latest_review['verdict']}, score={latest_review['score']})"
-                    )
-                    if latest_review["flag_category"]:
-                        detail += f", category={latest_review['flag_category']}"
-                    raise HTTPException(status_code=409, detail=detail)
+                if not deploy_only:
+                    if not latest_review:
+                        raise HTTPException(status_code=409, detail="승인 차단: AI 리뷰 결과가 없습니다")
+                    if latest_review["verdict"] != "APPROVE":
+                        detail = (
+                            f"승인 차단: AI 리뷰 미통과 "
+                            f"({latest_review['verdict']}, score={latest_review['score']})"
+                        )
+                        if latest_review["flag_category"]:
+                            detail += f", category={latest_review['flag_category']}"
+                        raise HTTPException(status_code=409, detail=detail)
 
             result = await conn.execute(
                 f"""
