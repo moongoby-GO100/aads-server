@@ -1524,6 +1524,30 @@ TOOL_DEFINITIONS: List[Dict] = [
         },
     },
     {
+        "name": "query_acct_database",
+        "description": (
+            "ACCT DB를 acct_app 전용 커넥션으로 직접 SELECT 조회.\n"
+            "tenant_company/company/source_file 등 FORCE ROW LEVEL SECURITY 테이블은 "
+            "query_project_database 가 쓰는 acct_ro 풀로는 정책을 통과하지 못하므로 이 도구를 사용한다.\n"
+            "보안: SELECT/WITH/EXPLAIN만 허용, DML/DDL 차단, password/token 컬럼 자동 마스킹, 읽기전용 트랜잭션.\n"
+            "예: query_acct_database(sql='SELECT * FROM tenant_company LIMIT 5', acct_tenant_id='3')"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sql": {
+                    "type": "string",
+                    "description": "SELECT/WITH/EXPLAIN SQL 쿼리",
+                },
+                "acct_tenant_id": {
+                    "type": "string",
+                    "description": "숫자 tenant id. 주어지면 SET LOCAL app.current_tenant_id 로 RLS 스코프 적용 (FORCE RLS 테이블 조회 시 필수)",
+                },
+            },
+            "required": ["sql"],
+        },
+    },
+    {
         "name": "list_project_databases",
         "description": "설정된 프로젝트 DB 목록 및 연결 상태 조회. 각 프로젝트의 호스트/포트/DB종류/연결 성공 여부 반환.",
         "input_schema": {
@@ -5979,6 +6003,12 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             db_name=params.get("db_name", ""),
             limit=params.get("limit", 100),
             tenant_id=params.get("tenant_id"),
+            acct_tenant_id=params.get("acct_tenant_id"),
+        ), ensure_ascii=False, default=str)
+    elif name == "query_acct_database":
+        from app.api.ceo_chat_tools_db import query_acct_database
+        return json.dumps(await query_acct_database(
+            sql=params.get("sql", ""),
             acct_tenant_id=params.get("acct_tenant_id"),
         ), ensure_ascii=False, default=str)
     elif name == "list_project_databases":
