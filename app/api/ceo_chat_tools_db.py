@@ -530,9 +530,11 @@ async def _query_postgresql(
                             str(max(1, _PROJECT_DB_QUERY_TIMEOUT_SECONDS) * 1000),
                         )
                         if tenant_id:
+                            # tenant_id는 ^[0-9]{1,18}$ 검증 통과 — 숫자만, 인젝션 불가
                             await conn.execute(
-                                "SELECT set_config('acct.tenant_id', $1, true)",
-                                tenant_id,
+                                "SELECT set_config('acct.tenant_id', '"
+                                + tenant_id
+                                + "', true)"
                             )
                         try:
                             rows = await conn.fetch(q, timeout=_PROJECT_DB_QUERY_TIMEOUT_SECONDS)
