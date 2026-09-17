@@ -3231,6 +3231,7 @@ async def lifespan(app: FastAPI):
         _periodic_stale_seconds = int(os.getenv("AADS_EXECUTION_RESUME_STALE_SECONDS", "8"))
         # 수거는 자주 돌 이유가 없다. 재개 주기(5초)와 같이 돌리면 DB 쓰기만 는다.
         _reap_every = max(1, int(os.getenv("AADS_EXECUTION_REAP_EVERY_TICKS", "60")))  # 5초 × 60 = 5분
+        _relay_every = max(1, int(os.getenv("AADS_RELAY_QUEUE_EVERY_TICKS", "6")))  # 5초 × 6 = 30초
         await _prs_asyncio.sleep(5)
         _tick = 0
         while True:
@@ -3241,6 +3242,14 @@ async def lifespan(app: FastAPI):
                     max_rows=5,
                     min_stale_seconds=_periodic_stale_seconds,
                 )
+                # 릴레이 대기열은 자주 봐야 한다. 대상이 한가해진 뒤 5분을
+                # 더 기다리면 그 사이 새 턴이 시작돼 다시 바빠진다.
+                if _tick % _relay_every == 0 and _is_execution_resume_owner():
+                    try:
+                        from app.services.session_relay import dispatch_queued_relays
+                        await dispatch_queued_relays()
+                    except Exception as _re:
+                        logger.warning(f"session_relay_queue_dispatch_error: {_re}")
                 if _tick % _reap_every == 0 and _is_execution_resume_owner():
                     await _reap_abandoned_executions_once()
                     # 같은 5분 주기에 얹는다. 둘 다 "턴을 기다리지 않는 청소"

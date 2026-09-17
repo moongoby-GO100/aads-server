@@ -1147,3 +1147,63 @@ def test_my_milestones_matches_owner_by_session_and_by_role():
     assert "include_done" in handler
     # 시각은 KST 로 내려간다 — 서버 로컬이 Europe/Berlin 이다.
     assert "_kst_iso(" in handler
+
+
+# ---------------------------------------------------------------------------
+# 세션 릴레이 대기열 (2026-09-17, 대표님 "2번은 즉시 반영해")
+#
+# ask_session 이 target_busy 로 반려하고 끝내던 것을 대기열로 바꿨다.
+# 실측: session_relay 123건 중 회신 8건(6.5%). 반려는 오탐이 아니었고
+# (running 9건 전부 리스 유효), 문제는 오래 일하는 세션에 영영 못 닿는 것.
+# ---------------------------------------------------------------------------
+
+
+def test_busy_target_is_queued_not_rejected():
+    from pathlib import Path
+
+    src = Path("app/services/session_relay.py").read_text(encoding="utf-8")
+    # 함수 이름은 ask 다. 도구 이름(ask_session)과 다르다.
+    ask = src.split("async def ask(", 1)[1].split("\nasync def ", 1)[0]
+    busy = ask.split("_target_is_busy(tgt", 1)[1].split("origin = await", 1)[0]
+
+    # 반려하지 않는다.
+    assert '"error": "target_busy"' not in busy
+    # 대기열에 넣고, 보냈다고 알린다.
+    assert "'queued'" in busy
+    assert '"sent": True' in busy
+    assert '"queued": True' in busy
+
+
+def test_queued_relays_have_a_dispatcher():
+    """대기열만 만들고 배달 주체를 안 두면 반려가 침묵으로 바뀔 뿐이다.
+
+    오늘 오전 추가지시 회수에서 같은 실수를 봤다 — 회수가 그 세션의 다음
+    턴이 돌 때만 일어나, 세션이 멈추면 23시간을 그대로 남았다.
+    """
+    from pathlib import Path
+
+    src = Path("app/services/session_relay.py").read_text(encoding="utf-8")
+    main = Path("app/main.py").read_text(encoding="utf-8")
+
+    assert "async def dispatch_queued_relays" in src
+    dispatch = src.split("async def dispatch_queued_relays", 1)[1]
+    # 대상당 한 건만. 두 건을 연달아 보내면 두 번째가 첫 번째를 밀어낸다.
+    assert "DISTINCT ON (target_session_id)" in dispatch
+    # 바쁘면 건너뛴다.
+    assert "_target_is_busy" in dispatch
+    # queued 인 동안만 집는다 — 두 프로세스가 같이 돌아도 한 번만 나간다.
+    assert "status='pending' WHERE id=$1::uuid AND status='queued'" in dispatch
+    # 묵은 것은 버린다. 여섯 시간 전 질문을 지금 보내면 맥락이 다르다.
+    assert "queue_expired" in dispatch
+
+    # 주기 호출이 실제로 걸려 있어야 한다.
+    assert "dispatch_queued_relays()" in main
+    assert "_relay_every" in main
+
+
+def test_relay_status_migration_allows_queued():
+    from pathlib import Path
+
+    sql = Path("migrations/20260917_session_relay_queued.sql").read_text(encoding="utf-8")
+    assert "'queued'::text" in sql
+    assert "session_relay_status_chk" in sql
