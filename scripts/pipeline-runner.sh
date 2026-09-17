@@ -974,6 +974,16 @@ deploy_git_preflight() {
     ahead="${counts%% *}"
     behind="${counts##* }"
 
+    # behind>0, ahead=0, dirty=0 이면 순수 fast-forward 상황 → 자동 동기화 후 재판정 (AADS-DEPLOY-PREFLIGHT-FFONLY-20260917-R2)
+    if [[ "${behind:-999}" -gt 0 && "${ahead:-999}" -eq 0 && "${dirty:-999}" -eq 0 ]]; then
+        if git -C "$main_workdir" pull --ff-only origin main >/dev/null 2>&1; then
+            log "  DEPLOY_PREFLIGHT_FFONLY_SYNC: behind=${behind} ahead=0 dirty=0 → pull --ff-only 성공"
+            counts=$(git_ahead_behind_counts "$main_workdir" "origin/main") || counts="999 999"
+            ahead="${counts%% *}"
+            behind="${counts##* }"
+        fi
+    fi
+
     # origin/main 동기화 상태는 여전히 엄격 (behind/ahead != 0 이면 차단)
     if [[ "${behind:-999}" -ne 0 || "${ahead:-999}" -ne 0 ]]; then
         _fail_job "$job_id" "$session_id" "deploy_preflight_git_state" \
