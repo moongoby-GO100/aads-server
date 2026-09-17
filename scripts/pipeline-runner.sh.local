@@ -977,6 +977,9 @@ prepare_clean_job_worktree() {
     return 0
 }
 
+# "무관한 dirty" 판정: main workdir dirty 파일 ∩ job_target_files(대상 파일) == ∅.
+# 겹치면 무관하지 않음 → 차단. 상시 dirty(goals.py, acct-purchase-mockup.html 등
+# 2026-09-18 실측 4파일)는 대상 파일이 아니므로 보통 무관 판정을 받는다.
 deploy_git_preflight() {
     local job_id="$1" project="$2" session_id="$3" main_workdir="$4"
 
@@ -1003,6 +1006,33 @@ deploy_git_preflight() {
     counts=$(git_ahead_behind_counts "$main_workdir" "origin/main") || counts="999 999"
     ahead="${counts%% *}"
     behind="${counts##* }"
+
+    # behind>0, ahead=0 이면 자동 FF 대상 (AADS-DEPLOY-PREFLIGHT-FFONLY-DIRTY-SCOPED-20260918).
+    # dirty 파일이 있어도 이번 job 의 배포 대상 파일과 겹치지 않으면 FF 를 시도한다.
+    # 겹치면 시도하지 않고 아래 behind/ahead 검사에서 그대로 차단된다.
+    if [[ "${behind:-999}" -gt 0 && "${ahead:-999}" -eq 0 ]]; then
+        local ff_ok=1 ff_dirty_paths ff_target_files ff_overlap
+        if [[ "${dirty:-999}" -ne 0 ]]; then
+            ff_dirty_paths=$(git_dirty_paths "$main_workdir")
+            ff_target_files=$(job_target_files "$job_id")
+            ff_overlap=$(comm -12 <(printf '%s\n' "$ff_dirty_paths") <(printf '%s\n' "$ff_target_files") 2>/dev/null)
+            [[ -n "${ff_overlap//[[:space:]]/}" ]] && ff_ok=0
+        fi
+        if [[ "$ff_ok" -eq 1 ]]; then
+            if git -C "$main_workdir" merge --ff-only origin/main >/dev/null 2>&1; then
+                log "  DEPLOY_PREFLIGHT_FFONLY_SYNC: behind=${behind} ahead=0 dirty=${dirty:-0} → merge --ff-only 성공"
+                counts=$(git_ahead_behind_counts "$main_workdir" "origin/main") || counts="999 999"
+                ahead="${counts%% *}"
+                behind="${counts##* }"
+                dirty=$(git_dirty_count "$main_workdir")
+            else
+                git -C "$main_workdir" merge --abort >/dev/null 2>&1 || true
+                _fail_job "$job_id" "$session_id" "deploy_preflight_ff_conflict" \
+                    "배포 차단: fast-forward 중 충돌 발생 (behind=${behind}, dirty=${dirty:-0})"
+                return 1
+            fi
+        fi
+    fi
 
     # origin/main 동기화 상태는 여전히 엄격 (behind/ahead != 0 이면 차단)
     if [[ "${behind:-999}" -ne 0 || "${ahead:-999}" -ne 0 ]]; then
