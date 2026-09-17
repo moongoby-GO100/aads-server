@@ -55,31 +55,132 @@ def _work_key(session_id: str, title: str) -> str:
     return f"{(session_id or '')[:8]}:{ACTION_TYPE}:{digest}"
 
 
-async def _covered_by_existing_grant(conn, session_id: str, tool: str) -> Optional[str]:
-    """이미 받아 둔 미션·골 승인이 이 도구를 덮고 있으면 그 승인 id 를 준다."""
-    if not tool:
-        return None
+async def _session_project(conn, session_id: str) -> str:
+    """이 세션이 속한 프로젝트 키(대문자). 모르면 빈 문자열."""
+    if not session_id:
+        return ""
+    try:
+        val = await conn.fetchval(
+            "SELECT UPPER(COALESCE(w.project_key, '')) "
+            "  FROM chat_sessions s "
+            "  LEFT JOIN chat_workspaces w ON w.id = s.workspace_id "
+            " WHERE s.id = $1::uuid",
+            session_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("next_step_project_lookup_failed error=%s", str(exc)[:160])
+        return ""
+    return str(val or "")
+
+
+async def _covered_by_existing_grant(
+    conn, session_id: str, tool: str, project: str = "",
+) -> Optional[str]:
+    """이미 받아 둔 승인이 이 제안을 덮고 있으면 그 승인 id 를 준다.
+
+    2026-09-17 대표님 지적 — "승인 팝업이 목표 진행시에도 계속 뜬다".
+
+    원인은 여기였다. 범위가 `mission`·`goal` 두 개일 때 쓴 조회가 그대로
+    남아 있었는데, 그 사이 `session`·`project` 두 범위가 붙었다
+    (`live_trading_guard.is_approved` 참고). 그래서 대표님이 "이 프로젝트
+    전체 100회" 를 눌러 두셔도 다음 단계 카드는 계속 올라왔다 — 실측으로
+    24시간에 next_step 카드 197장.
+
+    **범위 목록은 `live_trading_guard.is_approved` 와 같이 움직여야 한다.**
+    한쪽만 늘리면 그 범위는 실행 게이트만 통과하고 제안 카드는 계속 묻는다.
+    """
     try:
         row = await conn.fetchrow(
             """
-            SELECT id::text AS id
-            FROM agent_permission_requests
-            WHERE decision = 'approved'
-              AND expires_at > now()
-              AND action_type = $2
-              AND approval_scope->>'scope' IN ('mission', 'goal')
-              AND COALESCE((approval_scope->>'used')::int, 0)
-                  < COALESCE(max_executions, 1)
-              -- 미션 승인은 그 대화 안에서만 유효하다. 골 승인은 목표를
-              -- 따라가므로 세션을 묶지 않는다.
-              AND (approval_scope->>'scope' <> 'mission' OR requested_by = $1)
-            ORDER BY decided_at DESC
+            SELECT r.id::text AS id
+            FROM agent_permission_requests r
+            WHERE r.decision = 'approved'
+              AND r.expires_at > now()
+              -- 그 도구를 덮는 승인이거나, 다음 단계 자체를 덮는 승인이거나.
+              -- 대표님이 제안 카드에 "이 프로젝트 전체" 를 누르시면 그 승인의
+              -- action_type 은 도구 이름이 아니라 'next_step' 이다. 그것만
+              -- 보던 옛 조회는 그 승인을 영영 찾지 못했다(2026-09-17).
+              AND r.action_type = ANY($2::text[])
+              AND COALESCE((r.approval_scope->>'used')::int, 0)
+                  < COALESCE(r.max_executions, 1)
+              AND (
+                    -- 골 승인은 목표를 따라가므로 세션을 묶지 않는다.
+                    r.approval_scope->>'scope' = 'goal'
+                    -- 미션·세션 승인은 그 대화 안에서만 유효하다.
+                 OR (r.approval_scope->>'scope' IN ('mission', 'session')
+                     AND r.requested_by = $1)
+                    -- 프로젝트 승인은 세션을 넘는다. 프로젝트를 모르는
+                    -- 호출($3 = '')은 여기에 걸리지 않는다.
+                 OR ($3 <> '' AND r.approval_scope->>'scope' = 'project'
+                     AND (
+                          UPPER(COALESCE(r.approval_scope->>'project', '')) = $3
+                          -- 옛 카드는 project 를 비워 두고 저장됐다. 그때는
+                          -- 승인을 올린 세션의 프로젝트로 판정한다.
+                       OR (COALESCE(r.approval_scope->>'project', '') = ''
+                           AND r.requested_by ~ '^[0-9a-fA-F-]{36}$'
+                           AND EXISTS (
+                               SELECT 1 FROM chat_sessions s2
+                               LEFT JOIN chat_workspaces w2
+                                      ON w2.id = s2.workspace_id
+                                WHERE s2.id = r.requested_by::uuid
+                                  AND UPPER(COALESCE(w2.project_key, '')) = $3))))
+              )
+            -- 넓은 것부터 쓴다.
+            ORDER BY CASE COALESCE(r.approval_scope->>'scope', 'single')
+                         WHEN 'goal' THEN 0 WHEN 'project' THEN 1
+                         WHEN 'session' THEN 2 ELSE 3 END,
+                     r.decided_at DESC
             LIMIT 1
             """,
-            session_id, tool,
+            session_id,
+            [t for t in ((tool or "").strip(), ACTION_TYPE) if t],
+            (project or "").upper(),
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("next_step_coverage_check_failed error=%s", str(exc)[:160])
+        return None
+    return row["id"] if row else None
+
+
+async def _goal_policy_covers(conn, session_id: str, risk: str) -> Optional[str]:
+    """목표에 걸어 둔 승인 설정이 이 제안을 덮는가. 덮으면 목표 id.
+
+    2026-09-17 대표님 지적 — "목표 승인설정이 되면 자동승인 범위안에서는
+    자동으로 진행되어야 하는거 아닌가".
+
+    맞다. 그런데 그 설정(`goals.approval_policy`)은 실행 게이트
+    (`live_trading_guard.goal_policy_allows`)만 보고 있었고, 제안 카드는
+    보지 않았다. 그래서 목표를 진행하는 내내 "이걸 할까요" 가 계속 떴다.
+
+    두 가지는 그대로 지킨다.
+
+    1. **횟수 상한을 본다.** 설정에 남은 횟수가 없으면 다시 묻는다.
+    2. **여기서 세지 않는다.** 이 함수는 "물어볼 필요가 있나" 만 보는
+       읽기 전용이다. 실제 소비는 도구가 실행될 때 실행 게이트가 센다.
+       여기서 같이 세면 한 번의 일에 두 번 깎인다.
+    """
+    if not session_id:
+        return None
+    field = "auto_approve_critical" if risk == "critical" else "auto_approve_high"
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT g.id::text AS id, g.title
+            FROM goal_task_links l
+            JOIN goals g ON g.id = l.goal_id
+            WHERE l.task_type = 'chat_session' AND l.task_id = $1
+              AND COALESCE(l.link_state, 'active') = 'active'
+              AND g.status IN ('draft', 'active', 'blocked')
+              AND COALESCE((g.approval_policy->>$2)::boolean, false)
+              AND COALESCE((g.approval_policy->>'used')::int, 0)
+                  < COALESCE((g.approval_policy->>'max_executions')::int, 0)
+            ORDER BY g.updated_at DESC
+            LIMIT 1
+            """,
+            session_id, field,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("next_step_goal_policy_failed error=%s", str(exc)[:160])
         return None
     return row["id"] if row else None
 
@@ -202,11 +303,29 @@ async def propose(
             return {"error": "tenant 를 찾지 못했습니다"}
 
         bubble_id = await _current_bubble_id(conn, session_id)
+        project = await _session_project(conn, session_id)
+        # 목표 승인 설정은 위험도마다 답이 다르다. 한 번 보고 재사용한다 —
+        # 제안 다섯 개에 같은 조회를 다섯 번 돌릴 이유가 없다.
+        goal_cache: Dict[str, Optional[str]] = {}
 
         for step in normalized:
-            grant_id = await _covered_by_existing_grant(conn, session_id, step["tool"])
+            grant_id = await _covered_by_existing_grant(
+                conn, session_id, step["tool"], project,
+            )
             if grant_id:
                 auto.append({"title": step["title"], "grant_id": grant_id[:8]})
+                continue
+
+            risk = step["risk"]
+            if risk not in goal_cache:
+                goal_cache[risk] = await _goal_policy_covers(conn, session_id, risk)
+            goal_id = goal_cache[risk]
+            if goal_id:
+                auto.append({
+                    "title": step["title"],
+                    "grant_id": goal_id[:8],
+                    "via": "goal_policy",
+                })
                 continue
 
             work_key = _work_key(session_id, step["title"])
@@ -232,13 +351,19 @@ async def propose(
                          max_executions, expires_at, created_at, gate_source, tier,
                          source_message_id)
                     VALUES ($1::uuid, $2, 'chat_session', $3, $4,
-                            $5, 'pending', $6, '{"scope": "single_call"}'::jsonb,
+                            $5, 'pending', $6,
+                            -- 프로젝트를 같이 남긴다. 승인 화면이 "이 프로젝트
+                            -- 전체" 를 눌러도 여기가 비어 있으면 다음 카드가
+                            -- 그 승인을 찾지 못한다(2026-09-17).
+                            jsonb_build_object('scope', 'single_call',
+                                               'project', $9::text),
                             1, now() + interval '24 hours', now(), $7, 'approve',
                             NULLIF($8, '')::uuid)
                     RETURNING id::text
                     """,
                     tid, work_key, ACTION_TYPE, _summary_of(step, context),
                     step["risk"], session_id, GATE_SOURCE, bubble_id or "",
+                    project,
                 )
                 cards.append({"id": str(new_id), "title": step["title"]})
             except Exception as exc:  # noqa: BLE001
