@@ -13779,7 +13779,7 @@ async def send_message_stream(
                 full_response = _previous_response
 
         # 9.5 Layer ④: Output Validator — 빈 약속 응답 감지 및 재시도 (AADS-188C Phase 3)
-        from app.services.output_validator import validate_response
+        from app.services.output_validator import should_retry_without_tools, validate_response
         _validation = validate_response(
             response_text=full_response,
             tools_called=bool(tools_called),
@@ -13796,25 +13796,18 @@ async def send_message_stream(
                 f"output_validator: {_validation.violation_type} — {_validation.message} "
                 f"(intent={intent}, model={model_used}, tokens_out={output_tokens})"
             )
-            if _validation.violation_type == "PROGRESS_ONLY_RESPONSE" and tools_called:
-                await _save_interrupted_partial_message(
-                    session_id=session_id,
-                    content=full_response,
-                    reason="output_validator_progress_only_no_retry",
-                    execution_id=_execution_id_str,
+            # 진행 문구만 남고 끝난 턴은 포기하지 않고 '도구 없이' 한 번 더 쓰게 한다.
+            # 도구 루프를 재실행하지 않으므로 비용은 LLM 왕복 1회뿐이고,
+            # 이 재시도가 비거나 또 실패하면 아래 기존 경로가 부분응답을 보존한다.
+            _retry_without_tools = should_retry_without_tools(
+                _validation.violation_type, bool(tools_called)
+            )
+            if _retry_without_tools:
+                logger.warning(
+                    "output_validator_progress_only_retry_without_tools session=%s tools=%s",
+                    session_id[:8] if session_id else "unknown",
+                    len(tools_called) if isinstance(tools_called, list) else bool(tools_called),
                 )
-                if _execution_id_str:
-                    async with get_pool().acquire() as _conn:
-                        await _mark_execution_interrupted(
-                            _conn,
-                            session_id,
-                            _execution_id_str,
-                            "output_validator_progress_only_no_retry",
-                            partial_content=full_response,
-                            delete_empty_placeholder=False,
-                        )
-                yield f"data: {json.dumps({'type': 'error', 'content': '최종 완료보고가 아니라 진행 안내로 끝나 완료 처리하지 않았습니다. 중간 응답은 보존했습니다.', 'recoverable': True, 'reason': _validation.violation_type, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
-                return
             # F8: validator 거부 시 거부된 응답은 DB 저장/화면 노출 안 함 — 버블 중복 방지
             yield f"data: {json.dumps({'type': 'stream_reset', 'reason': _validation.violation_type})}\n\n"
             # DB 저장 시 재시도 응답만 사용하도록 원본 응답 별도 보관
@@ -13831,7 +13824,7 @@ async def send_message_stream(
                 intent_result=intent_result,
                 system_prompt=system_prompt,
                 messages=_retry_messages,
-                tools=tools_for_api,
+                tools=None if _retry_without_tools else tools_for_api,
                 model_override=model_override,
                 session_id=session_id,
             ):

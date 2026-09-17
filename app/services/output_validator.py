@@ -825,3 +825,15 @@ def check_inconsistent_data(
         )
 
     return None
+
+
+def should_retry_without_tools(violation_type: str, tools_called: bool) -> bool:
+    """도구를 이미 돌린 턴이 진행 문구만 남기고 끝났을 때, 도구 없이 한 번 더 쓰게 할지.
+
+    2026-09-17 실측: 24시간 중단 턴 55건 중 11건이
+    output_validator_progress_only_no_retry 였다. 도구 루프를 다시 태우는 비용
+    때문에 재시도를 막아 두었는데, 그 대가로 대표님 화면에는 본문 없는 오류만
+    남았다. 도구를 끄고 한 번만 다시 쓰게 하면 루프를 재실행하지 않고도
+    본문을 얻는다 — 실패하면 기존 부분응답 보존 경로로 그대로 떨어진다.
+    """
+    return violation_type == "PROGRESS_ONLY_RESPONSE" and bool(tools_called)
