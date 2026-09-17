@@ -811,6 +811,7 @@ ensure_approved_job_worktree() {
 
 commit_job_worktree_for_approval() {
     local job_id="$1" session_id="$2" worktree_dir="$3" main_workdir="$4" instruction="$5"
+    local pre_exec_sha="${6:-}"
     if ! verify_isolated_job_worktree "$job_id" "$worktree_dir" "$main_workdir"; then
         _fail_job "$job_id" "$session_id" "approval_worktree_not_isolated" "BLOCK: awaiting_approval 거부 — runner isolated worktree 검증 실패 (${worktree_dir})"
         return 1
@@ -819,18 +820,36 @@ commit_job_worktree_for_approval() {
         _fail_job "$job_id" "$session_id" "approval_commit_stage_failed" "awaiting_approval 거부 — runner worktree stage 실패"
         return 1
     }
-    local commit_msg="Pipeline-Runner: ${job_id} — ${instruction:0:80}" commit_out commit_err exit_code=0
-    commit_out=$(mktemp "/tmp/pipeline-approval-commit-${job_id}.out.XXXXXX")
-    commit_err=$(mktemp "/tmp/pipeline-approval-commit-${job_id}.err.XXXXXX")
-    ALLOW_AUTH_COMMIT=1 git -C "$worktree_dir" commit -m "$commit_msg" >"$commit_out" 2>"$commit_err" || exit_code=$?
-    if [[ "$exit_code" -ne 0 ]]; then
-        local detail
-        detail=$(record_git_diagnostics "$job_id" "approval_commit_failed" "$worktree_dir" "$exit_code" "$(tail -20 "$commit_out")" "$(tail -20 "$commit_err")")
-        _fail_job "$job_id" "$session_id" "approval_commit_failed" "awaiting_approval 거부 — commit 실패: ${detail:0:1000}"
-        rm -f "$commit_out" "$commit_err"
-        return 1
+    # 워커가 격리 워크트리 안에서 자기 변경을 이미 커밋해 두는 경우가 있다.
+    # 그러면 스테이징에 남는 것이 없어 git commit 이 1 을 반환하고, 그것을
+    # 실패로 처리하면 멀쩡한 산출물이 통째로 버려진다 — 2026-09-17 13:08 KST
+    # runner-66b4d212(GO100, 리뷰 0.96 APPROVE)가 그렇게 error 로 끝났고
+    # 43줄짜리 결과물은 detached HEAD 에 남아 아무도 회수하지 않았다.
+    # 새 커밋이 필요 없을 뿐이므로 그 HEAD 를 승인 커밋으로 채택한다.
+    # 정말 아무 일도 하지 않은 잡(HEAD 가 작업 시작 SHA 그대로)만 실패다.
+    local adopted_sha=""
+    if git -C "$worktree_dir" diff --cached --quiet 2>/dev/null; then
+        adopted_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
+        if [[ ! "$adopted_sha" =~ ^[0-9a-f]{40}$ || -z "$pre_exec_sha" || "$adopted_sha" == "$pre_exec_sha" ]]; then
+            adopted_sha=""
+        fi
     fi
-    rm -f "$commit_out" "$commit_err"
+    if [[ -n "$adopted_sha" ]]; then
+        log "  APPROVAL_COMMIT_ADOPTED_EXISTING job=$job_id sha=$adopted_sha (워커가 워크트리에서 이미 커밋)"
+    else
+        local commit_msg="Pipeline-Runner: ${job_id} — ${instruction:0:80}" commit_out commit_err exit_code=0
+        commit_out=$(mktemp "/tmp/pipeline-approval-commit-${job_id}.out.XXXXXX")
+        commit_err=$(mktemp "/tmp/pipeline-approval-commit-${job_id}.err.XXXXXX")
+        ALLOW_AUTH_COMMIT=1 git -C "$worktree_dir" commit -m "$commit_msg" >"$commit_out" 2>"$commit_err" || exit_code=$?
+        if [[ "$exit_code" -ne 0 ]]; then
+            local detail
+            detail=$(record_git_diagnostics "$job_id" "approval_commit_failed" "$worktree_dir" "$exit_code" "$(tail -20 "$commit_out")" "$(tail -20 "$commit_err")")
+            _fail_job "$job_id" "$session_id" "approval_commit_failed" "awaiting_approval 거부 — commit 실패: ${detail:0:1000}"
+            rm -f "$commit_out" "$commit_err"
+            return 1
+        fi
+        rm -f "$commit_out" "$commit_err"
+    fi
     local commit_sha head_sha
     commit_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
     head_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
@@ -2405,7 +2424,7 @@ ${output:0:1500}
     fi
 
     local approval_commit_sha=""
-    approval_commit_sha=$(commit_job_worktree_for_approval "$job_id" "$session_id" "$worktree_dir" "$main_workdir" "$instruction") || {
+    approval_commit_sha=$(commit_job_worktree_for_approval "$job_id" "$session_id" "$worktree_dir" "$main_workdir" "$instruction" "$pre_exec_sha") || {
         _release_work_lock "$project" "$job_id" "$parallel_group"
         _cleanup_artifacts "$job_id"
         promote_next_queued "$project"

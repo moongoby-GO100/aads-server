@@ -36,6 +36,23 @@ def test_pipeline_runner_ai_review_holds_before_approval():
         assert "_notify_ai \"$job_id\"" in script[fail_close:commit_gate]
 
 
+def test_pipeline_runner_adopts_worker_commit_instead_of_failing_approval():
+    """워커가 워크트리에서 이미 커밋했으면 그 HEAD 를 승인 커밋으로 채택한다."""
+    for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
+        script = _read_script(script_name)
+
+        assert 'local pre_exec_sha="${6:-}"' in script
+        assert (
+            'commit_job_worktree_for_approval "$job_id" "$session_id" '
+            '"$worktree_dir" "$main_workdir" "$instruction" "$pre_exec_sha"'
+        ) in script
+        assert 'git -C "$worktree_dir" diff --cached --quiet' in script
+        assert "APPROVAL_COMMIT_ADOPTED_EXISTING" in script
+        # 정말 아무 변경도 없는 잡(HEAD 가 작업 시작 SHA 그대로)은 여전히 실패다.
+        assert '"$adopted_sha" == "$pre_exec_sha"' in script
+        assert 'approval_commit_failed' in script
+
+
 def test_local_pipeline_runner_template_stays_synced_with_primary_runner():
     primary = _read_script("pipeline-runner.sh")
     local_template = _read_script("pipeline-runner.sh.local")
