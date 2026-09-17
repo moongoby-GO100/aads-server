@@ -4749,6 +4749,17 @@ def _format_messages_as_text(messages: List[Dict[str, Any]], has_resume: bool = 
             parts.append("[%s]\n%s" % (role_label, _compact(role, content)))
         return "\n\n".join(parts)
 
+    # 서비스 릴레이 호출(AI 코드리뷰·지시서 초안 등)은 메시지가 user 1건뿐이고
+    # 그 1건이 프롬프트 전문이다. 여기에 _compact 1,600자 압축을 적용하면 본문
+    # 가운데가 "...[지시 축소]..." 로 사라진다 — 2026-09-18 실측으로 AI 리뷰어가
+    # diff 를 보지 못한 채 "diff가 축소되어 전체 변경사항을 확인할 수 없음" 사유로
+    # REQUEST_CHANGES 를 냈고, 같은 패치가 4회 연속 0.52~0.54 로 반려됐다.
+    # 대화 이력 압축은 유지하되, 단일 프롬프트는 원문 그대로 넘긴다.
+    if len(messages) == 1 and messages[0].get("role") == "user":
+        single_prompt = _extract_text(messages[0].get("content", ""))
+        if single_prompt.strip():
+            return single_prompt
+
     # --resume 있으면: CLI 자체 대화상태만 믿지 않고 최근 턴을 명시 주입한다.
     # 모델 변경, CLI session map 누락/오염, 긴 러너 보고 뒤 후속지시에서 이전 응답 누락을 방어한다.
     if has_resume:
