@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>사용자(사업자) 회원가입 목업 — ACCT-LAYOUT-003</title>
+<style>
+  :root{--bg:#f4f6f9;--panel:#fff;--line:#d8dee7;--line2:#eef1f6;--ink:#16202e;--ink2:#5b6b80;--ink3:#8a98ab;
+    --accent:#1b4fd8;--accent-soft:#e8eefc;--ok:#0a7a4b;--ok-soft:#e4f5ec;--warn:#a85c00;--warn-soft:#fdf1df;
+    --err:#b3261e;--err-soft:#fbe9e7;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.55;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",sans-serif}
+  header.top{background:#0f1b2d;color:#fff;padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  header.top b{letter-spacing:-.2px}
+  header.top .sub{color:#9fb0c9;font-size:12px}
+  nav.steps{display:flex;gap:2px;background:#e3e9f1;padding:0 12px;overflow-x:auto;border-bottom:1px solid var(--line)}
+  nav.steps button{border:1px solid transparent;border-bottom:none;background:transparent;padding:9px 14px;
+    font-size:12.5px;color:var(--ink2);cursor:pointer;white-space:nowrap;border-radius:6px 6px 0 0}
+  nav.steps button.on{background:#fff;color:var(--accent);font-weight:700;border-color:var(--line)}
+  .wrap{max-width:1180px;margin:0 auto;padding:16px 14px 50px}
+  .row{display:grid;grid-template-columns:420px 1fr;gap:16px;align-items:start}
+  @media(max-width:900px){.row{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px 22px}
+  .card h2{margin:0 0 4px;font-size:17px}
+  .card .lead{color:var(--ink2);font-size:13px;margin-bottom:16px}
+  .prog{display:flex;gap:6px;margin-bottom:16px}
+  .prog i{height:4px;flex:1;background:#e3e9f1;border-radius:2px}
+  .prog i.on{background:var(--accent)}
+  label.fl{display:block;font-size:12.5px;color:var(--ink2);margin:12px 0 4px}
+  input,select{width:100%;padding:10px 11px;border:1px solid var(--line);border-radius:6px;font-size:14px;background:#fff}
+  input:focus,select:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+  .btn{width:100%;padding:11px;border:none;border-radius:6px;background:var(--accent);color:#fff;
+    font-weight:700;font-size:14.5px;cursor:pointer;margin-top:18px}
+  .btn.ghost{background:#fff;color:var(--ink2);border:1px solid var(--line);font-weight:600;margin-top:8px}
+  .meter{height:5px;border-radius:3px;background:#e7ecf4;margin-top:6px;overflow:hidden}
+  .meter > i{display:block;height:100%;width:34%;background:#e08a1e}
+  .hintline{font-size:11.5px;color:var(--ink3);margin-top:5px}
+  .agree{border:1px solid var(--line2);border-radius:7px;padding:10px 12px;margin-top:14px}
+  .agree div{display:flex;gap:8px;align-items:center;padding:4px 0;font-size:13px}
+  .agree .all{border-bottom:1px solid var(--line2);padding-bottom:8px;margin-bottom:4px;font-weight:700}
+  .req{color:var(--err);font-size:11.5px}
+  .opt{color:var(--ink3);font-size:11.5px}
+  .code{display:flex;gap:8px;margin-top:8px}
+  .code input{text-align:center;font-size:22px;letter-spacing:6px;font-family:ui-monospace,Menlo,monospace}
+  .alert{border-radius:7px;padding:10px 12px;font-size:12.5px;margin-top:14px}
+  .a-warn{background:var(--warn-soft);border:1px solid #f0d6ac;color:var(--warn)}
+  .a-err{background:var(--err-soft);border:1px solid #f0c2bd;color:var(--err)}
+  .a-ok{background:var(--ok-soft);border:1px solid #bfe3d0;color:var(--ok)}
+  .notes h3{font-size:13.5px;margin:0 0 8px}
+  .notes table{width:100%;border-collapse:collapse;font-size:12.5px}
+  .notes th,.notes td{border:1px solid var(--line2);padding:6px 9px;text-align:left;vertical-align:top}
+  .notes th{background:#f5f7fb;color:#3b4d66;width:132px;font-weight:600}
+  .chip{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;font-weight:600;
+    background:#eef1f6;color:var(--ink2);border:1px solid #dde3ec}
+  .chip.err{background:var(--err-soft);color:var(--err);border-color:#f0c2bd}
+  .chip.ok{background:var(--ok-soft);color:var(--ok);border-color:#bfe3d0}
+  .hide{display:none}
+  .invrow{display:grid;grid-template-columns:1fr 120px 34px;gap:6px;margin-top:8px}
+  .invrow button{border:1px solid var(--line);background:#fff;border-radius:6px;cursor:pointer}
+  .done{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line2);font-size:13px}
+  .done b{display:block}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <b>통합 경영관리시스템 — 사업자 회원가입</b>
+  <span class="sub">ACCT-LAYOUT-003 목업 · 실제 저장 없음(화면 검토용)</span>
+</header>
+
+<nav class="steps" id="nav">
+  <button data-s="1" class="on">① 계정 만들기</button>
+  <button data-s="2">② 이메일 인증</button>
+  <button data-s="3">③ 사업자 등록</button>
+  <button data-s="4">④ 팀 초대(선택)</button>
+  <button data-s="5">⑤ 완료·연결 상태</button>
+  <button data-s="6">현재 구현(AS-IS) 비교</button>
+</nav>
+
+<div class="wrap">
+
+<!-- ① -->
+<section id="s1" class="row">
+  <div class="card">
+    <div class="prog"><i class="on"></i><i></i><i></i><i></i></div>
+    <h2>계정 만들기</h2>
+    <div class="lead">사업자 정보는 다음 단계에서 받습니다. 지금은 3가지만.</div>
+    <label class="fl">이메일</label>
+    <input value="owner@lylon.co.kr" />
+    <label class="fl">비밀번호</label>
+    <input type="password" value="············" />
+    <div class="meter"><i></i></div>
+    <div class="hintline">10자 이상 · 영문/숫자/기호 중 2종 이상 · 흔한 비밀번호 차단</div>
+    <label class="fl">이름</label>
+    <input value="정지호" />
+
+    <div class="agree">
+      <div class="all"><input type="checkbox" style="width:auto" checked /> 전체 동의</div>
+      <div><input type="checkbox" style="width:auto" checked /> 만 14세 이상입니다 <span class="req">필수</span></div>
+      <div><input type="checkbox" style="width:auto" checked /> 서비스 이용약관 <span class="req">필수</span></div>
+      <div><input type="checkbox" style="width:auto" checked /> 개인정보 수집·이용 <span class="req">필수</span></div>
+      <div><input type="checkbox" style="width:auto" /> 마케팅 정보 수신 <span class="opt">선택</span></div>
+    </div>
+
+    <button class="btn">인증 메일 받기</button>
+    <div class="alert a-err">이미 가입된 이메일입니다. <u>로그인하기</u> 또는 <u>비밀번호 찾기</u></div>
+  </div>
+  <div class="card notes">
+    <h3>설계 근거</h3>
+    <table>
+      <tr><th>왜 3개만</th><td>사업자번호를 첫 화면에서 요구하면 이탈합니다. 계정을 먼저 만들고, 회계 데이터 연결은 그 다음에 설득합니다.</td></tr>
+      <tr><th>동의 이력</th><td>현재 DB에 동의 기록 테이블이 <b>없습니다</b>. 체크박스를 눌러도 남는 곳이 없어 분쟁 시 입증 불가 → <code>saas_user_consents</code> 신설(약관 버전·IP·시각 저장).</td></tr>
+      <tr><th>중복 이메일</th><td>가입 단계에서만 409로 알려줍니다. 로그인·비밀번호 찾기에서는 계정 존재 여부를 노출하지 않습니다(계정 열거 방지).</td></tr>
+      <tr><th>실측</th><td>현재 가입 API는 <code>email·password·name</code>만 받고 <b>즉시 로그인 가능</b>합니다 (<code>app/api/auth.py:140</code>).</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ② -->
+<section id="s2" class="row hide">
+  <div class="card">
+    <div class="prog"><i class="on"></i><i class="on"></i><i></i><i></i></div>
+    <h2>이메일 인증</h2>
+    <div class="lead"><b>owner@lylon.co.kr</b> 로 6자리 코드를 보냈습니다.</div>
+    <div class="code"><input maxlength="6" value="418 205" /></div>
+    <div class="hintline">남은 시간 09:12 · 5회까지 시도할 수 있습니다</div>
+    <button class="btn">인증하고 계속</button>
+    <button class="btn ghost">코드 다시 받기 (52초 후 가능)</button>
+    <button class="btn ghost">이메일 주소 바꾸기</button>
+    <div class="alert a-warn">메일이 안 왔다면 스팸함을 확인해 주세요. 그래도 없으면 주소를 바꿔 다시 받을 수 있습니다.</div>
+  </div>
+  <div class="card notes">
+    <h3>설계 근거</h3>
+    <table>
+      <tr><th>왜 강제</th><td>실측 <b>88명 중 3명(3.4%)</b>만 인증 완료. 인증이 선택이라 비밀번호 재설정·중요 알림이 도달하지 않습니다.</td></tr>
+      <tr><th>미인증 상태</th><td>로그인은 되지만 <b>회계 데이터 API는 403</b>. 화면은 "인증하면 열립니다" 배너로 이어하기를 제공합니다.</td></tr>
+      <tr><th>보안</th><td>코드는 해시로 저장, 10분 만료, 재발송 60초 쿨다운·시간당 5회.</td></tr>
+      <tr><th>선행 리스크</th><td>초대 메일이 <b>0건</b>이라 발송 채널이 한 번도 검증된 적 없습니다. 이 단계 착수 전 실발송 테스트 필요 <span class="chip err">미검증</span></td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ③ -->
+<section id="s3" class="row hide">
+  <div class="card">
+    <div class="prog"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></div>
+    <h2>사업자 등록</h2>
+    <div class="lead">회계 데이터를 연결하려면 사업자 정보가 필요합니다.</div>
+    <label class="fl">사업자등록번호</label>
+    <input value="113-85-21083" />
+    <div class="hintline">입력하면 형식·체크섬을 즉시 확인합니다</div>
+    <label class="fl">상호</label>
+    <input value="라일론 (LYLON)" />
+    <label class="fl">대표자</label>
+    <input value="정지호" />
+    <label class="fl">과세유형</label>
+    <select><option>일반과세자</option><option>간이과세자</option><option>면세사업자</option><option>법인</option></select>
+    <label class="fl">업태 / 업종</label>
+    <input value="도소매 / 전자상거래(의류)" />
+    <label class="fl">개업일</label>
+    <input value="2014-03-11" />
+    <label class="fl">사업장 주소</label>
+    <input value="서울특별시 ○○구 ○○로 00" />
+    <button class="btn">등록하고 계속</button>
+    <div class="alert a-warn">이미 등록된 사업자입니다. 이 사업자의 관리자에게 <u>초대를 요청</u>하세요.</div>
+  </div>
+  <div class="card notes">
+    <h3>설계 근거</h3>
+    <table>
+      <tr><th>핵심 키</th><td><code>yeoljeong_businesses.acct_company_id</code> 신설. 이 값이 채워져야 가입자가 <b>매입자료 화면에서 자기 전표</b>를 봅니다. 없으면 "연결 대기" 표시.</td></tr>
+      <tr><th>수집 항목 근거</th><td>기존 <code>yeoljeong_businesses</code> 컬럼(사업자번호·대표자·과세유형·개업일·주소)과 ACCT <code>company</code>(biz_no·fiscal_year) 를 그대로 채우도록 맞췄습니다.</td></tr>
+      <tr><th>진위확인</th><td>10자리 체크섬까지는 자체 검증. 국세청 진위확인 API 키 보유 여부 <span class="chip err">미확인</span> — 없으면 체크섬까지만.</td></tr>
+      <tr><th>건너뛰기</th><td>허용합니다. 단 대시보드 상단에 이어하기 배너가 계속 뜹니다(막다른 화면 금지).</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ④ -->
+<section id="s4" class="row hide">
+  <div class="card">
+    <div class="prog"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></div>
+    <h2>팀 초대 <span class="chip">선택</span></h2>
+    <div class="lead">지금 넘어가도 됩니다. 설정 &gt; 팀에서 언제든 추가할 수 있습니다.</div>
+    <div class="invrow"><input value="kyung@lylon.co.kr" /><select><option>관리자</option><option>입력자</option><option>열람자</option></select><button>×</button></div>
+    <div class="invrow"><input value="md@lylon.co.kr" /><select><option selected>입력자</option><option>관리자</option><option>열람자</option></select><button>×</button></div>
+    <div class="invrow"><input placeholder="이메일 추가" /><select><option>열람자</option></select><button>+</button></div>
+    <button class="btn">초대 보내고 완료</button>
+    <button class="btn ghost">건너뛰기</button>
+  </div>
+  <div class="card notes">
+    <h3>역할 권한</h3>
+    <table>
+      <tr><th>관리자</th><td>전표 확정·마감, 팀 초대. 결제·사업자 정보는 대표만.</td></tr>
+      <tr><th>입력자</th><td>전표 입력·수정. 확정 불가.</td></tr>
+      <tr><th>열람자</th><td>조회·내보내기만.</td></tr>
+      <tr><th>실측</th><td><code>tenant_invites</code> 테이블·API는 이미 있으나 실제 초대 <b>0건</b>. 이 화면이 그 기능의 첫 사용처가 됩니다.</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ⑤ -->
+<section id="s5" class="row hide">
+  <div class="card">
+    <h2>가입 완료</h2>
+    <div class="lead">라일론(113-85-21083) 워크스페이스가 준비됐습니다.</div>
+    <div class="alert a-ok">회계 데이터 연결됨 — 매입전표 2,646건이 조회 가능합니다.</div>
+    <div style="margin-top:16px">
+      <div class="done"><span>1.</span><span><b>매입자료 확인하기</b>부족 데이터가 있는 전표부터 정리하면 빠릅니다.</span></div>
+      <div class="done"><span>2.</span><span><b>카드 등록 확인</b>법인카드 16장이 인식됐습니다.</span></div>
+      <div class="done"><span>3.</span><span><b>팀원 초대</b>2명에게 초대 메일을 보냈습니다(수락 대기).</span></div>
+    </div>
+    <button class="btn">매입자료 화면으로</button>
+  </div>
+  <div class="card notes">
+    <h3>연결 실패했을 때</h3>
+    <table>
+      <tr><th>사유 표시</th><td>"사업자번호가 회계원장에 없습니다" 처럼 <b>무엇이 없는지</b> 적습니다. "오류 발생"으로 끝내지 않습니다.</td></tr>
+      <tr><th>다음 행동</th><td>재시도 · 사업자번호 수정 · 담당자 문의 3가지를 같은 화면에 둡니다.</td></tr>
+      <tr><th>대기 상태</th><td>연결 전에도 화면은 열되 데이터 영역에 "연결 대기" 안내와 이어하기 버튼을 둡니다.</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ⑥ -->
+<section id="s6" class="hide">
+  <div class="card notes">
+    <h3>현재 구현(AS-IS) vs 이 기획(TO-BE)</h3>
+    <table>
+      <tr><th>항목</th><th style="width:auto">현재</th><th style="width:auto">기획</th></tr>
+      <tr><td>수집 항목</td><td>이메일·비밀번호·이름</td><td>+ 약관동의 이력 · 사업자 7항목</td></tr>
+      <tr><td>이메일 인증</td><td>없음 (88명 중 3명만 인증) <span class="chip err">3.4%</span></td><td>필수 — 미인증은 회계 API 403</td></tr>
+      <tr><td>사업자 연결</td><td>없음 — 사업자 4건은 수기 등록</td><td><code>acct_company_id</code> 매핑으로 자동</td></tr>
+      <tr><td>비밀번호 재설정</td><td>없음</td><td>메일 토큰 방식 (1회용·만료)</td></tr>
+      <tr><td>마지막 로그인</td><td>기록 <b>0건</b> — 휴면 판별 불가</td><td>로그인마다 갱신 → 1년 휴면 전환</td></tr>
+      <tr><td>직원 초대</td><td>API 존재, 실사용 <b>0건</b></td><td>가입 4단계에 배치 + 실발송 검증</td></tr>
+      <tr><td>탈퇴</td><td><code>deleted_at</code> 컬럼만</td><td>본인확인 후 30일 유예 → 파기</td></tr>
+    </table>
+    <p style="font-size:12.5px;color:var(--ink2);margin-top:12px">
+      수치는 전부 <b>2026-09-18 DB 실측</b>입니다. 상세 설계는
+      <code>docs/prd/ACCT-LAYOUT-003_사용자회원가입_PRD.md</code> 를 보십시오.
+    </p>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.querySelectorAll("#nav button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#nav button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on");
+  for(let i=1;i<=6;i++){
+    const el=document.getElementById("s"+i);
+    el.classList.toggle("hide", String(i)!==b.dataset.s);
+  }
+});
+</script>
+</body>
+</html>

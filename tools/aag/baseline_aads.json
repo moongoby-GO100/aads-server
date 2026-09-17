@@ -1,18 +1,18 @@
 {
-  "generated_at": "2026-09-18T06:54:20.166169+09:00",
+  "generated_at": "2026-09-18T08:13:52.324934+09:00",
   "note": "AAG L1/L2 고정선. 이 숫자는 '허용치'가 아니라 '현재 빚'이다. 줄이는 방향으로만 갱신한다. 늘려서 통과시키려면 왜 늘었는지를 먼저 적어라.",
   "scope": {
     "app_py_files": 394,
     "router_dir_files": 90,
     "router_modules": 84,
-    "include_router_calls": 85,
-    "mounted_routes": 904,
+    "include_router_calls": 86,
+    "mounted_routes": 916,
     "namespaces": 84,
     "frontend_files": 237,
     "frontend_calls_resolved": 344,
     "sql_tables_referenced": 227,
     "graph_nodes": 781,
-    "graph_edges": 1200
+    "graph_edges": 1201
   },
   "findings_by_rule": {
     "DUP_MODULE": 1,
@@ -21,10 +21,10 @@
     "ORPHAN_ROUTER": 1,
     "TABLE_NO_MODEL": 46,
     "PATH_DRIFT": 1,
-    "ROUTE_MISSING": 0,
+    "ROUTE_MISSING": 1,
     "STALE_BACKUP": 0
   },
-  "findings_total": 58,
+  "findings_total": 59,
   "unresolved_total": 110,
   "unresolved_by_kind": {
     "FRONTEND_URL": 58,

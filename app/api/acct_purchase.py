@@ -50,6 +50,47 @@ _STATUS_LABEL = {
     "5": "보류",
 }
 
+# 부족(결측) 데이터 규칙 — key: (라벨, pivot 결과에 적용할 SQL 조건, 왜 문제인가)
+# 화면의 "부족 데이터" 필터와 결측 배지, /missing-summary 가 모두 이 표 하나를 쓴다.
+_MISSING_RULES: Dict[str, tuple] = {
+    "bizno": (
+        "사업자번호 없음",
+        "vendor_biz_no IS NULL",
+        "거래처 원장·세무신고 귀속 불가",
+    ),
+    "bizno_format": (
+        "사업자번호 형식 불일치",
+        "vendor_biz_no IS NOT NULL AND vendor_biz_no NOT LIKE '%-%'",
+        "거래처 매칭이 표기 차이로 실패",
+    ),
+    "remark": (
+        "적요(사용내역) 없음",
+        "remark IS NULL OR remark = ''",
+        "지출 목적 확인 불가 — 증빙 소명 불가",
+    ),
+    "dept": (
+        "부서·브랜드 태그 없음",
+        "remark IS NULL OR remark NOT LIKE '%-%'",
+        "비용 귀속처 불명 — 브랜드별 손익 산출 불가",
+    ),
+    "account": (
+        "계정과목 없음",
+        "debit_code IS NULL",
+        "분개 불가 — 전표 확정 불가",
+    ),
+    "bizcond": (
+        "업태·업종 없음",
+        "vendor_biz_cond IS NULL",
+        "접대비·복리후생 판정 근거 부족",
+    ),
+    "card": (
+        "카드 미지정",
+        "card_code IS NULL",
+        "카드사 명세서 대조 불가",
+    ),
+}
+
+
 # rec_idx pivot 대상 — alias: (field_key, 숫자여부)
 _TXN_FIELDS: Dict[str, tuple] = {
     "txn_date": ("da_sbook", False),
@@ -137,6 +178,7 @@ def _where(
     domestic: Optional[str],
     card_code: Optional[str],
     min_amount: Optional[int],
+    missing: Optional[str] = None,
 ) -> str:
     conds: List[str] = []
     if ym:
@@ -160,7 +202,42 @@ def _where(
         conds.append(f"card_code = {_lit(card_code)}")
     if min_amount:
         conds.append(f"coalesce(total_amount, 0) >= {_int(min_amount, 0, 10**12, 0)}")
+    if missing:
+        key = str(missing).strip()
+        if key == "any":
+            conds.append(
+                "(" + " OR ".join(f"({rule[1]})" for rule in _MISSING_RULES.values()) + ")"
+            )
+        elif key in _MISSING_RULES:
+            conds.append(f"({_MISSING_RULES[key][1]})")
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"missing 은 any 또는 {', '.join(_MISSING_RULES)} 중 하나여야 합니다",
+            )
     return (" WHERE " + " AND ".join(conds)) if conds else ""
+
+
+def _missing_fields(row: Dict[str, Any]) -> List[str]:
+    """전표 1행에서 비어 있는 항목의 라벨을 뽑는다(화면 배지·검색 결과 표시용)."""
+    biz = row.get("vendor_biz_no")
+    remark = row.get("remark")
+    found: List[str] = []
+    if not biz:
+        found.append("bizno")
+    elif "-" not in str(biz):
+        found.append("bizno_format")
+    if not remark:
+        found.append("remark")
+    elif "-" not in str(remark):
+        found.append("dept")
+    if not row.get("debit_code"):
+        found.append("account")
+    if not row.get("vendor_biz_cond"):
+        found.append("bizcond")
+    if not row.get("card_code"):
+        found.append("card")
+    return found
 
 
 async def _card_master() -> Dict[str, Dict[str, Any]]:
@@ -236,15 +313,24 @@ async def list_transactions(
     domestic: Optional[str] = None,
     card_code: Optional[str] = None,
     min_amount: Optional[int] = None,
+    missing: Optional[str] = Query(
+        None,
+        description="부족 데이터만 조회. any 또는 bizno/bizno_format/remark/dept/account/bizcond/card",
+    ),
     limit: int = 100,
     offset: int = 0,
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """매입전표 리스트 — 계정과목·사용내역(적요)·카드번호·부가세까지 전 필드."""
+    """매입전표 리스트 — 계정과목·사용내역(적요)·카드번호·부가세까지 전 필드.
+
+    각 행에 `missing_fields`(비어 있는 항목)를 함께 내려보내 화면이 결측을
+    배지로 표시할 수 있게 한다. `missing` 파라미터로 결측 행만 골라 볼 수 있다.
+    """
     sfid = _int(source_file_id, 1, 10**9, _DEFAULT_SOURCE_FILE_ID)
     take = _int(limit, 1, 500, 100)
     skip = _int(offset, 0, 10**6, 0)
-    where = _where(ym, status, account, vendor, remark, domestic, card_code, min_amount)
+    where = _where(ym, status, account, vendor, remark, domestic, card_code,
+                   min_amount, missing)
 
     base = f"WITH p AS (\n{_pivot_cte(sfid)}\n)"
     rows = await _fetch(
@@ -292,6 +378,7 @@ async def list_transactions(
                 "total_amount": _to_int(row.get("total_amount")),
                 "status_code": status_code or None,
                 "status_label": _STATUS_LABEL.get(status_code, "기타"),
+                "missing_fields": _missing_fields(row),
             }
         )
 
@@ -473,6 +560,54 @@ async def monthly(
             }
             for row in rows
         ],
+    }
+
+
+@router.get("/missing-summary")
+async def missing_summary(
+    source_file_id: int = Query(_DEFAULT_SOURCE_FILE_ID),
+    current_user: dict = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """부족(결측) 데이터 현황 — 항목별 건수·비율과 바로 쓸 검색 키."""
+    sfid = _int(source_file_id, 1, 10**9, _DEFAULT_SOURCE_FILE_ID)
+    filters = ",\n".join(
+        f"       count(*) FILTER (WHERE {rule[1]}) AS {key}"
+        for key, rule in _MISSING_RULES.items()
+    )
+    any_cond = " OR ".join(f"({rule[1]})" for rule in _MISSING_RULES.values())
+    row = (
+        await _fetch(
+            f"WITH p AS (\n{_pivot_cte(sfid)}\n)\n"
+            "SELECT count(*) AS total,\n"
+            f"{filters},\n"
+            f"       count(*) FILTER (WHERE {any_cond}) AS any_missing\n"
+            "  FROM p"
+        )
+    )[0]
+
+    total = _to_int(row.get("total"))
+    items = []
+    for key, (label, _cond, impact) in _MISSING_RULES.items():
+        cnt = _to_int(row.get(key))
+        items.append(
+            {
+                "key": key,
+                "label": label,
+                "impact": impact,
+                "count": cnt,
+                "ratio_percent": round(cnt / total * 100, 1) if total else 0.0,
+                "filter": f"missing={key}",
+            }
+        )
+    items.sort(key=lambda x: x["count"], reverse=True)
+    any_missing = _to_int(row.get("any_missing"))
+    return {
+        "source_file_id": sfid,
+        "total": total,
+        "any_missing": any_missing,
+        "complete": total - any_missing,
+        "complete_ratio_percent": round((total - any_missing) / total * 100, 1) if total else 0.0,
+        "items": items,
     }
 
 

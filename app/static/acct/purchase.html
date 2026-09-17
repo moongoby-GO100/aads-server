@@ -94,6 +94,7 @@
   <button data-t="vendor">④ 거래처</button>
   <button data-t="valid">⑤ 검증·오류함</button>
   <button data-t="month">⑥ 월별 집계</button>
+  <button data-t="missing">⑦ 부족 데이터</button>
 </nav>
 
 <div class="wrap">
@@ -115,6 +116,17 @@
           <div class="f"><label>사용내역(적요)</label><input id="fRemark" placeholder="예: 광고충전"/></div>
           <div class="f"><label>국내/해외</label><select id="fDnf"><option value="">전체</option><option>국내</option><option>해외</option></select></div>
           <div class="f"><label>합계금액 이상</label><input id="fMin" type="number" placeholder="0"/></div>
+          <div class="f"><label>부족 데이터</label><select id="fMissing">
+            <option value="">전체(결측 무관)</option>
+            <option value="any">부족 데이터가 있는 행</option>
+            <option value="bizno">사업자번호 없음</option>
+            <option value="bizno_format">사업자번호 형식 불일치</option>
+            <option value="remark">적요(사용내역) 없음</option>
+            <option value="dept">부서·브랜드 태그 없음</option>
+            <option value="account">계정과목 없음</option>
+            <option value="bizcond">업태·업종 없음</option>
+            <option value="card">카드 미지정</option>
+          </select></div>
           <div class="f"><label>표시 건수</label><select id="fLimit"><option>100</option><option>200</option><option>500</option></select></div>
         </div>
         <div class="btnrow">
@@ -134,7 +146,7 @@
             <th>상태</th><th>전표일자</th><th>전표번호</th><th>카드(사)</th><th>카드번호</th>
             <th>거래처</th><th>사업자번호</th><th>업태</th><th>국내외</th><th>적요(사용내역)</th>
             <th>차변코드</th><th>차변 계정과목</th><th>대변코드</th><th>대변 계정과목</th>
-            <th>공급가액</th><th>부가세</th><th>합계</th>
+            <th>공급가액</th><th>부가세</th><th>합계</th><th>부족 데이터</th>
           </tr></thead>
           <tbody id="txnBody"></tbody>
           <tfoot><tr id="txnFoot"></tr></tfoot>
@@ -178,6 +190,17 @@
       <thead><tr><th>규칙</th><th>내용</th><th>판정</th><th>대상 건수</th><th>조치</th></tr></thead>
       <tbody id="validBody"></tbody>
     </table></div></div>
+  </section>
+
+  <section id="t-missing" class="hide">
+    <div class="panel">
+      <div class="ph">부족 데이터 현황 <span class="sub">항목을 누르면 해당 행만 골라 ① 리스트로 이동합니다</span></div>
+      <div class="pb"><div class="kpis" id="missKpis"></div></div>
+      <div class="gridwrap"><table class="grid">
+        <thead><tr><th>부족 항목</th><th>건수</th><th>비율</th><th>무엇이 막히나</th><th>검색</th></tr></thead>
+        <tbody id="missBody"></tbody>
+      </table></div>
+    </div>
   </section>
 
   <section id="t-month" class="hide"><div class="panel">
@@ -229,16 +252,21 @@ async function login(){
 /* 탭 */
 document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("#tabs button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
-  ["list","acct","card","vendor","valid","month"].forEach(t=>
+  ["list","acct","card","vendor","valid","month","missing"].forEach(t=>
     document.getElementById("t-"+t).classList.toggle("hide",t!==b.dataset.t));
 });
 
-function resetF(){["fYm","fStatus","fAcct","fCard","fVendor","fRemark","fDnf","fMin"].forEach(i=>document.getElementById(i).value="");loadTxn(0);}
+const MISSING_LABEL={bizno:"사업자번호",bizno_format:"사업자번호 형식",remark:"적요",
+  dept:"부서·브랜드",account:"계정과목",bizcond:"업태",card:"카드"};
+function resetF(){["fYm","fStatus","fAcct","fCard","fVendor","fRemark","fDnf","fMin","fMissing"].forEach(i=>document.getElementById(i).value="");loadTxn(0);}
+function findMissing(key){document.getElementById("fMissing").value=key;
+  document.querySelector('#tabs button[data-t="list"]').click();loadTxn(0);}
 function qs(){
   const g=i=>document.getElementById(i).value;
   const p=new URLSearchParams({source_file_id:sfid,limit:g("fLimit")||100,offset:offset});
   [["ym","fYm"],["status","fStatus"],["account","fAcct"],["card_code","fCard"],
-   ["vendor","fVendor"],["remark","fRemark"],["domestic","fDnf"],["min_amount","fMin"]]
+   ["vendor","fVendor"],["remark","fRemark"],["domestic","fDnf"],["min_amount","fMin"],
+   ["missing","fMissing"]]
    .forEach(([k,i])=>{const v=g(i);if(v)p.set(k,v);});
   return p.toString();
 }
@@ -266,12 +294,16 @@ async function loadTxn(off){
         '<td class="mono c">'+(r.credit_code||"")+'</td><td>'+(r.credit_name||"")+'</td>'+
         '<td class="num'+neg(r.supply_amount)+'">'+n(r.supply_amount)+'</td>'+
         '<td class="num'+neg(r.vat_amount)+'">'+n(r.vat_amount)+'</td>'+
-        '<td class="num'+neg(r.total_amount)+'">'+n(r.total_amount)+'</td></tr>';
-    }).join("")||'<tr><td colspan="17" class="c" style="padding:20px;color:#8a98ab">조건에 맞는 전표가 없습니다</td></tr>';
+        '<td class="num'+neg(r.total_amount)+'">'+n(r.total_amount)+'</td>'+
+        '<td>'+((r.missing_fields&&r.missing_fields.length)
+          ? r.missing_fields.map(k=>'<span class="badge b-warn" style="margin-right:3px">'+
+              (MISSING_LABEL[k]||k)+'</span>').join("")
+          : '<span class="badge b-ok">완전</span>')+'</td></tr>';
+    }).join("")||'<tr><td colspan="18" class="c" style="padding:20px;color:#8a98ab">조건에 맞는 전표가 없습니다</td></tr>';
     const t=j.totals;
     document.getElementById("txnFoot").innerHTML=
       '<td colspan="2">필터 합계</td><td>'+n(t.count)+'건</td><td colspan="11"></td>'+
-      '<td class="num">'+n(t.supply_amount)+'</td><td class="num">'+n(t.vat_amount)+'</td><td class="num">'+n(t.total_amount)+'</td>';
+      '<td class="num">'+n(t.supply_amount)+'</td><td class="num">'+n(t.vat_amount)+'</td><td class="num">'+n(t.total_amount)+'</td><td></td>';
     document.getElementById("cntHint").textContent="조회 "+j.count+"건 / 조건 전체 "+n(t.count)+"건";
     document.getElementById("pageHint").textContent=(offset+1)+" ~ "+(offset+j.count)+" 행";
   }catch(e){if(e.message!=="auth")showErr("전표 조회 실패: "+e.message);}
@@ -291,10 +323,11 @@ async function loadAll(){
   sfid=document.getElementById("snap").value||sfid;
   clearErr();
   try{
-    const [sum,acc,card,ven,val,mon]=await Promise.all([
+    const [sum,acc,card,ven,val,mon,miss]=await Promise.all([
       api("/summary?source_file_id="+sfid),api("/accounts?source_file_id="+sfid),
       api("/cards?source_file_id="+sfid),api("/vendors?source_file_id="+sfid+"&limit=50"),
-      api("/validations?source_file_id="+sfid),api("/monthly?source_file_id="+sfid)]);
+      api("/validations?source_file_id="+sfid),api("/monthly?source_file_id="+sfid),
+      api("/missing-summary?source_file_id="+sfid)]);
 
     document.getElementById("kpis").innerHTML=[
       ["전체 전표",n(sum.total_count)+" 건","선택 스냅샷 기준"],
@@ -340,6 +373,15 @@ async function loadAll(){
     document.getElementById("monthFoot").innerHTML='<td>합계</td><td class="num">'+n(mon.items.reduce((s,m)=>s+m.count,0))+
       '</td><td class="num">'+n(mon.items.reduce((s,m)=>s+m.confirmed_amount,0))+'</td><td class="num">'+
       n(mon.items.reduce((s,m)=>s+m.total_amount,0))+'</td><td colspan="2"></td>';
+
+    document.getElementById("missKpis").innerHTML=[
+      ["전체 전표",n(miss.total)+" 건","선택 스냅샷"],
+      ["부족 데이터 있는 행",n(miss.any_missing)+" 건",(100-miss.complete_ratio_percent).toFixed(1)+"%"],
+      ["완전한 행",n(miss.complete)+" 건",miss.complete_ratio_percent+"%"]
+    ].map(k=>'<div class="kpi"><div class="k">'+k[0]+'</div><div class="v">'+k[1]+'</div><div class="d">'+k[2]+'</div></div>').join("");
+    document.getElementById("missBody").innerHTML=miss.items.map(m=>
+      '<tr><td>'+m.label+'</td><td class="num">'+n(m.count)+'</td><td class="num">'+m.ratio_percent+'%</td>'+
+      '<td>'+m.impact+'</td><td class="c"><button class="b" onclick="findMissing(\''+m.key+'\')">이 행만 보기</button></td></tr>').join("");
 
     await loadTxn(0);
   }catch(e){if(e.message!=="auth")showErr("데이터 조회 실패: "+e.message);}
