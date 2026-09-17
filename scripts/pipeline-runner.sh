@@ -1411,9 +1411,17 @@ post_to_chat() {
     fi
     local safe_content
     safe_content=$(sql_escape "$content")
-    db_update "INSERT INTO chat_messages (id, session_id, role, content, created_at)
+    # intent 를 명시한다. 2026-09-17 까지 이 INSERT 는 intent 를 비워 뒀고,
+    # 화면은 러너 메시지를 본문 문자열('[Pipeline Runner]')로만 알아볼 수
+    # 있었다. 그 결과 7일간 525건이 전부 숨김으로 묻혀, 러너가 32분을
+    # 일하는 동안 대화창은 완전히 조용했다(세션 9fa305c5 실측).
+    #
+    # is_hidden 은 그대로 true 로 둔다 — DB 트리거가 intent='pipeline_runner'
+    # + model_used 빈값이면 숨김으로 찍는다. 메시지 수·목록 미리보기를
+    # 건드리지 않으려는 것이고, 화면 노출은 조회 필터가 따로 허용한다.
+    db_update "INSERT INTO chat_messages (id, session_id, role, content, intent, created_at)
                VALUES (gen_random_uuid(), '${session_id}'::uuid, 'assistant',
-                       ${safe_content}, NOW());" || true
+                       ${safe_content}, 'pipeline_runner', NOW());" || true
 }
 
 # C4: 원자적 Job 클레임 — UPDATE ... RETURNING으로 동시 실행 방지

@@ -310,7 +310,11 @@ def test_visible_message_filter_keeps_runner_ai_followup_visible():
 def test_visible_message_filter_hides_streaming_placeholder_by_default_for_active_session():
     default_filter = chat_service._visible_message_filter(is_active=True, include_streaming=False)
 
-    assert "AND is_hidden = FALSE" in default_filter
+    # 숨김 조건은 남아 있되, 러너 진행만 예외로 열어 준다(2026-09-17).
+    # 예외 없이 `AND is_hidden = FALSE` 이던 것이 러너 메시지 525건을
+    # 화면에서 통째로 지워, 러너가 32분을 일해도 대화가 조용했다.
+    assert "is_hidden = FALSE" in default_filter
+    assert "'pipeline_runner'" in default_filter
     assert "AND intent IS DISTINCT FROM 'streaming_placeholder'" in default_filter
 
 
@@ -2438,3 +2442,39 @@ def test_sweep_statements_use_every_parameter_they_are_given():
         assert indexes == set(range(1, max(indexes) + 1)), (
             f"자리표시자가 끊겼다: {sorted(indexes)} — 안 쓰는 인자를 넘기고 있다"
         )
+
+
+def test_runner_progress_reaches_the_chat_in_both_fetch_modes():
+    """러너 진행이 화면에 닿아야 한다.
+
+    2026-09-17 실측: 최근 7일 러너 메시지 525건(21개 세션)이 숨김률 100%
+    였고, 그래서 러너에 넘긴 턴은 화면이 완전히 조용했다. 세션 9fa305c5 에서
+    대표님이 08:14 에 지시한 뒤 32분간 보인 것은 본인 메시지 하나뿐이었다.
+
+    이력 조회에서도 같이 내려보내야 한다 — 진행 중일 때만 보이고 다시 열면
+    사라지면 "아까 있던 것이 없어졌다" 가 된다.
+    """
+    live = chat_service._visible_message_filter(True, True)
+    history = chat_service._visible_message_filter(False, False)
+
+    for mode, predicate in (("live", live), ("history", history)):
+        assert "'pipeline_runner'" in predicate, mode
+        assert "'runner_notification'" in predicate, mode
+    # 본문 문자열이 아니라 intent 로 고른다. 같은 날 추가지시 회수에서 접두
+    # 판정 때문에 대표님 지시 7건을 놓쳤다.
+    assert "[Pipeline Runner]" not in live
+    assert "[Pipeline Runner]" not in history
+
+
+def test_runner_writer_records_its_intent():
+    """러너가 직접 INSERT 하므로 거기서 intent 를 찍어야 한다.
+
+    이 INSERT 가 intent 를 비워 두면 화면은 본문 문자열로만 러너를 알아볼 수
+    있고, 그러면 다시 접두 판정으로 돌아간다.
+    """
+    runner = Path("scripts/pipeline-runner.sh").read_text(encoding="utf-8")
+    post = runner.split("post_to_chat() {", 1)[1].split("\n}", 1)[0]
+
+    assert "INSERT INTO chat_messages" in post
+    assert "'pipeline_runner'" in post
+    assert "intent" in post

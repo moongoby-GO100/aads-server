@@ -9099,6 +9099,24 @@ _AUTO_MESSAGE_EXCLUDE_FILTER = (
 )
 
 
+# 러너 진행 메시지. 숨김(is_hidden=true)으로 남겨 메시지 수·목록 미리보기는
+# 건드리지 않되, 대화창에는 내려보낸다 — 화면이 연속 구간을 한 줄로 접는다.
+#
+# 2026-09-17 실측: 최근 7일 러너 메시지 525건(21개 세션)이 숨김률 100% 였고,
+# 그래서 러너에 넘긴 턴은 화면이 완전히 조용했다. 세션 9fa305c5 에서 대표님이
+# 08:14 에 지시한 뒤 32분 동안 보인 것은 본인 메시지 하나뿐이었다. 그동안
+# AI 리뷰 경고(1,209자)·작업 완료 보고(3,888자)·배포 시작이 전부 숨겨졌다.
+#
+# 본문 문자열이 아니라 intent 로 고른다 — 같은 날 추가지시 회수에서 접두
+# 판정 때문에 대표님 지시 7건을 놓쳤다.
+_RUNNER_PROGRESS_INTENTS = ("pipeline_runner", "runner_notification")
+
+
+def _runner_progress_allow_sql() -> str:
+    quoted = ", ".join(f"'{i}'" for i in _RUNNER_PROGRESS_INTENTS)
+    return f" OR intent IN ({quoted})"
+
+
 def _visible_message_filter(is_active: bool, include_streaming: bool) -> str:
     hidden_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate'"
     if include_streaming:
@@ -9113,10 +9131,13 @@ def _visible_message_filter(is_active: bool, include_streaming: bool) -> str:
             " OR (role = 'assistant'"
             "     AND intent IN ('runner_response', 'interrupted_partial', '_archived_partial')"
             "     AND length(COALESCE(content, '')) > 200)"
+            + _runner_progress_allow_sql() +
             ")"
         )
     else:
-        hidden_filter += " AND is_hidden = FALSE"
+        # 이력 조회에서도 같이 내려보낸다. 진행 중일 때만 보이고 나중에 다시
+        # 열면 사라지면, 대표님은 "아까 있던 것이 없어졌다" 를 보시게 된다.
+        hidden_filter += " AND (is_hidden = FALSE" + _runner_progress_allow_sql() + ")"
     if is_active and not include_streaming:
         # 활성 스트리밍 중에는 SSE 버블과 DB placeholder 중복 렌더링을 막는다.
         hidden_filter += " AND intent IS DISTINCT FROM 'streaming_placeholder'"
