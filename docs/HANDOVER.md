@@ -692,3 +692,47 @@ MCP 원격 쓰기 도구(`write_remote_file`/`patch_remote_file`)는 **활성 AP
   서빙 경로는 `/reports/` 다. `/static/reports/` 는 404.
 - 미완료: main 이 origin 대비 7커밋 앞섬(6건은 타 세션 작업). 푸시는 CEO 확인 후.
   DB 핸드오버(`handover_write`)는 tenant 미바인딩으로 실패 — 이 파일 기록만 있음.
+
+## 2026-09-17 — AADS-VISION-UNIFY-20260917-R2 STEP 0 분류표
+
+비전 입력 통합 R2. `design_auditor.py` 는 읽기만 하고 **수정하지 않는다**(R1 반려 사유).
+
+### 1. `app/core/document_context.py`
+
+| 대상 | 위치(수정 전) | 분류 | 근거 |
+|---|---|---|---|
+| `extract_image_blocks(file_contents)` | 419-440 | **위임(내부 구현만 교체)** | 함수명·시그니처·반환 타입(`List[Dict]`)·block 의 `type`/`source` 키 유지. 본문만 변환 파이프라인 경유로 교체하고 `extra_paths` 를 Optional 로 추가 |
+| `IMAGE_EXTENSIONS`, `IMAGE_MEDIA_TYPES`, `IMAGE_MAX_BYTES` | 39-48 | 유지 | 기존 네이티브 경로가 그대로 쓴다 |
+| `extract_file_contents` | 57- | 유지 | 손대지 않음 |
+| `build_ephemeral_document_layer` / `build_file_reference_summary` | 340-416 | 유지 | 손대지 않음 |
+| `detect_file_rereference` / `lookup_session_files` / `build_rereference_context` | 444- | 유지 | 손대지 않음 |
+| `CONVERTIBLE_IMAGE_EXTENSIONS` / `UNSUPPORTED_IMAGE_EXTENSIONS` / `PDF_MAX_BYTES` / `VISION_MAX_DIMENSION` / `SENSITIVE_PATH_PREFIXES` | — | **신규** | bmp·tiff 변환, heic 건너뜀, PDF document block, 리샘플 상한, 민감 경로 차단 |
+| `_is_sensitive_path` / `_downscale_to_limit` / `_build_block_from_bytes` / `_read_path_bytes` | — | **신규** | 모두 모듈 private. 외부 호출자 없음 |
+
+삭제 0건.
+
+### 2. `app/services/chat_service.py`
+
+grep 결과 inline image block 직접 조립 지점 3곳:
+
+| 위치(수정 전) | 분류 | 근거 |
+|---|---|---|
+| 11748-11757 첨부파일 `_file_contents` 루프 | **위임** | `extract_image_blocks(_file_contents)` 호출로 교체. `_vision_images` 변수명·`[VISION] N image(s) extracted` 로그 유지 |
+| 11826-11836 `uploaded_files` 이미지 루프 | **위임** | 동일 함수에 합성 엔트리 1건을 넘겨 교체. `_uf_ref_lines` 문구 유지 |
+| 11765-11781 `file_id` 디스크 로드 루프 | **유지** | 지시서가 "2곳" 으로 한정하고 "이 함수의 다른 코드는 건드리지 마라" 고 못박음. `extra_paths` 로 옮길 수 있으나 이번 범위 밖 — 다음 작업 후보로 남긴다 |
+| `_analyze_videos_with_gemini` / `process_video_with_gemini` / PDF pdfplumber 경로 | 유지 | 이미지 경로가 아님 |
+
+삭제 0건. `_image_files` 지역 변수는 위임으로 흡수되어 사라지지만, 해당 루프 밖 참조가 없음을 grep 으로 확인했다(11748/11749 두 줄이 전부).
+
+### 3. `app/core/anthropic_client.py`
+
+| 대상 | 분류 | 근거 |
+|---|---|---|
+| `call_llm_with_fallback(prompt, model, max_tokens, system, tenant_id, user_id)` 221-228 | **위임** | 맨 뒤에 `images: Optional[list] = None` 추가. 기본값 None 이면 기존 동작 100% 동일 |
+| Claude OAuth 루프(`msgs = [{"role":"user","content": prompt}]`) | 위임 | `images` 가 있을 때만 content 를 block 배열로 승격 |
+| `_try_user_key_claude` | **위임** | 같은 방식으로 Optional `images` 전달 (BYOK 경로도 이미지 유지) |
+| `_call_litellm` / `_call_dashscope` | **위임** | Optional `images` 를 받아 OpenAI 호환 `image_url` 포맷으로 변환. 미전달 시 기존 문자열 content 그대로 |
+| `_call_litellm_messages` / `_call_dashscope_messages` / `call_background_llm` / 그 외 | 유지 | 손대지 않음 |
+| `_to_openai_image_content` | **신규** | Anthropic image/document block → `image_url` 변환 헬퍼 |
+
+기존 호출자는 전부 `images` 미지정 → 수정 0건. `ANTHROPIC_API_KEY` 신규 참조 없음(R-AUTH).

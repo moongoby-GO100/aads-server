@@ -11736,6 +11736,7 @@ async def send_message_stream(
         if attachments:
             from app.core.document_context import (
                 extract_file_contents,
+                extract_image_blocks,
                 build_ephemeral_document_layer,
                 build_file_reference_summary,
             )
@@ -11745,16 +11746,9 @@ async def send_message_stream(
             logger.info(f"[ATTACH] extracted {_readable_count} files, ~{_total_tokens} tokens")
 
             # Vision: 이미지 파일 추출 → Claude Vision API content blocks 구성
-            _image_files = [f for f in _file_contents if f.get("is_image") and f.get("base64_data")]
-            for _img in _image_files:
-                _vision_images.append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": _img["media_type"],
-                        "data": _img["base64_data"],
-                    },
-                })
+            # 포맷 변환(bmp/tiff→png)·5MB 초과 리샘플·중복 제거는
+            # extract_image_blocks 한 곳에 모아 둔다 (AADS-VISION-UNIFY).
+            _vision_images.extend(extract_image_blocks(_file_contents))
             if _vision_images:
                 logger.info(f"[VISION] {len(_vision_images)} image(s) extracted for Vision API")
 
@@ -11827,14 +11821,15 @@ async def send_message_stream(
                 data = uf.get("data", b"")
                 mime = uf.get("mime_type", "application/octet-stream")
                 if mime.startswith("image/"):
-                    _vision_images.append({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": mime,
-                            "data": _uf_b64.b64encode(data).decode(),
-                        },
-                    })
+                    from app.core.document_context import extract_image_blocks
+                    _vision_images.extend(extract_image_blocks([{
+                        "name": fname,
+                        "ext": Path(fname).suffix.lower(),
+                        "is_image": True,
+                        "readable": True,
+                        "media_type": mime,
+                        "base64_data": _uf_b64.b64encode(data).decode(),
+                    }]))
                     _uf_ref_lines.append(f"- [이미지: {fname}] (Vision API 분석)")
                 elif mime.startswith("video/"):
                     _vtext = await process_video_with_gemini(uf, content)

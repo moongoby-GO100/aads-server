@@ -13,6 +13,8 @@ Ephemeral Document Context — 파일 첨부 시 대화 맥락 보호 시스템.
 from __future__ import annotations
 
 import base64
+import hashlib
+import io
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -46,6 +48,23 @@ IMAGE_MEDIA_TYPES: Dict[str, str] = {
 }
 # Vision API 이미지 크기 제한 (5MB)
 IMAGE_MAX_BYTES = int(os.getenv("VISION_IMAGE_MAX_BYTES", str(5 * 1024 * 1024)))
+
+# Pillow 로 PNG 변환 후에야 Vision 에 넣을 수 있는 포맷.
+# Anthropic 이 직접 받는 것은 jpeg/png/gif/webp 넷뿐이다.
+CONVERTIBLE_IMAGE_EXTENSIONS = frozenset({".bmp", ".tiff", ".tif", ".ico", ".ppm", ".pcx"})
+
+# Pillow 가 기본 빌드로 열지 못하는 포맷. pillow_heif 는 이 서버에 없다.
+# 추측으로 OCR 하지 않고 건너뛴다 — 틀린 텍스트를 넣는 것이 안 넣는 것보다 나쁘다.
+UNSUPPORTED_IMAGE_EXTENSIONS = frozenset({".heic", ".heif", ".avif", ".jxl", ".svg"})
+
+# PDF 는 document block 으로 그대로 올린다 (Anthropic 한도 32MB).
+PDF_MAX_BYTES = int(os.getenv("VISION_PDF_MAX_BYTES", str(32 * 1024 * 1024)))
+
+# Vision 이 내부적으로 리사이즈하는 장변 상한. 이보다 크게 보내봐야 토큰만 쓴다.
+VISION_MAX_DIMENSION = int(os.getenv("VISION_IMAGE_MAX_DIMENSION", "1568"))
+
+# extra_paths 로 디스크를 읽을 때 접근을 거부할 경로.
+SENSITIVE_PATH_PREFIXES = ("/etc", "/root/.ssh", "/proc", "/run/secrets")
 
 
 def estimate_tokens(text: str) -> int:
@@ -416,27 +435,210 @@ def build_file_reference_summary(
     return "\n".join(summaries)
 
 
+def _is_sensitive_path(path: str) -> bool:
+    """extra_paths 로 읽어서는 안 되는 경로인가."""
+    try:
+        resolved = os.path.realpath(path)
+    except Exception:
+        return True
+    for prefix in SENSITIVE_PATH_PREFIXES:
+        if resolved == prefix or resolved.startswith(prefix + os.sep):
+            return True
+    return False
+
+
+def _downscale_to_limit(raw: bytes, name: str) -> Optional[bytes]:
+    """장변 VISION_MAX_DIMENSION 이하로 리샘플 + PNG 재인코딩하여 크기 한도에 맞춘다.
+
+    한 번에 안 맞으면 장변을 0.75배씩 줄이며 최대 5회 재시도한다.
+    끝내 못 맞추면 None (호출자가 건너뛴다).
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.warning(f"[Vision] Pillow unavailable — cannot resize {name}")
+        return None
+
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            im.load()
+            if im.mode not in ("RGB", "RGBA", "L"):
+                im = im.convert("RGBA" if "A" in im.getbands() else "RGB")
+            limit = VISION_MAX_DIMENSION
+            for _ in range(6):
+                work = im.copy()
+                work.thumbnail((limit, limit), Image.LANCZOS)
+                buf = io.BytesIO()
+                work.save(buf, format="PNG", optimize=True)
+                data = buf.getvalue()
+                if len(data) <= IMAGE_MAX_BYTES:
+                    return data
+                limit = int(limit * 0.75) or 1
+    except Exception as e:
+        logger.warning(f"[Vision] resize failed: {name} — {type(e).__name__}: {e}")
+        return None
+
+    logger.warning(f"[Vision] resize could not reach limit: {name} — skipped")
+    return None
+
+
+def _convert_to_png(raw: bytes, name: str) -> Optional[bytes]:
+    """bmp/tiff/ico 등 → PNG 바이트. 실패 시 None."""
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.warning(f"[Vision] Pillow unavailable — cannot convert {name}")
+        return None
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            im.load()
+            if im.mode not in ("RGB", "RGBA", "L"):
+                im = im.convert("RGBA" if "A" in im.getbands() else "RGB")
+            buf = io.BytesIO()
+            im.save(buf, format="PNG", optimize=True)
+            return buf.getvalue()
+    except Exception as e:
+        logger.warning(f"[Vision] convert failed: {name} — {type(e).__name__}: {e}")
+        return None
+
+
+def _build_block_from_bytes(
+    raw: bytes,
+    name: str,
+    ext: str,
+    media_type: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """원본 바이트 하나 → Anthropic content block 하나.
+
+    포맷 변환(bmp→png), 5MB 초과 리샘플, PDF document block, 미지원 포맷 건너뜀을
+    이 함수 한 곳에서 처리한다. 반환 block 의 키 구조는 기존과 동일하다.
+    """
+    ext = (ext or "").lower()
+    if not raw:
+        return None
+
+    if ext in UNSUPPORTED_IMAGE_EXTENSIONS:
+        logger.info(f"[Vision] [unsupported_image_format: {ext}] {name} — skipped")
+        return None
+
+    if ext in PDF_EXTENSIONS or media_type == "application/pdf":
+        if len(raw) > PDF_MAX_BYTES:
+            logger.warning(
+                f"[Vision] pdf too large: {name} size={len(raw)} > {PDF_MAX_BYTES} — skipped"
+            )
+            return None
+        return {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": base64.b64encode(raw).decode("utf-8"),
+            },
+        }
+
+    original_size = len(raw)
+    resized = False
+
+    if ext in CONVERTIBLE_IMAGE_EXTENSIONS:
+        converted = _convert_to_png(raw, name)
+        if converted is None:
+            return None
+        raw = converted
+        media_type = "image/png"
+        logger.info(f"[Vision] converted to PNG: {name} ({ext}) {original_size}→{len(raw)} bytes")
+    elif ext in IMAGE_EXTENSIONS:
+        media_type = media_type or IMAGE_MEDIA_TYPES.get(ext, "image/jpeg")
+    elif media_type and media_type.startswith("image/"):
+        # 확장자는 모르지만 mime 이 이미지라고 말한다 (uploaded_files 경로)
+        pass
+    else:
+        logger.info(f"[Vision] [unsupported_image_format: {ext or 'unknown'}] {name} — skipped")
+        return None
+
+    if len(raw) > IMAGE_MAX_BYTES:
+        shrunk = _downscale_to_limit(raw, name)
+        if shrunk is None:
+            return None
+        raw = shrunk
+        media_type = "image/png"
+        resized = True
+
+    if resized:
+        logger.info(
+            f"[Vision] image block prepared: {name} resized=True "
+            f"original_size={original_size} final_size={len(raw)}"
+        )
+    else:
+        logger.debug(f"[Vision] image block prepared: {name} ({media_type})")
+
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": media_type or "image/jpeg",
+            "data": base64.b64encode(raw).decode("utf-8"),
+        },
+    }
+
+
 def extract_image_blocks(
     file_contents: List[Dict[str, Any]],
+    extra_paths: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Claude Vision API 형식의 이미지 content block 목록 추출.
 
+    Args:
+        file_contents: extract_file_contents() 결과 (또는 같은 모양의 dict 목록)
+        extra_paths: 디스크 절대경로 목록. 지정하면 같은 변환 파이프라인을 통과해
+            blocks 뒤에 덧붙는다. 미지정(None)이면 기존과 완전히 같은 동작.
+
     Returns:
         list of {"type": "image", "source": {"type": "base64", "media_type": ..., "data": ...}}
+        (PDF 는 {"type": "document", ...})
     """
-    blocks = []
-    for f in file_contents:
-        if f.get("is_image") and f.get("readable") and f.get("base64_data"):
-            blocks.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": f.get("media_type", "image/jpeg"),
-                    "data": f["base64_data"],
-                },
-            })
-            logger.debug(f"[Vision] image block prepared: {f['name']} ({f.get('media_type')})")
+    blocks: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    def _append(raw: bytes, name: str, ext: str, media_type: Optional[str]) -> None:
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest in seen:
+            logger.debug(f"[Vision] duplicate skipped: {name}")
+            return
+        block = _build_block_from_bytes(raw, name, ext, media_type)
+        if block is None:
+            return
+        seen.add(digest)
+        blocks.append(block)
+
+    for f in file_contents or []:
+        if not f.get("readable", True) or not f.get("base64_data"):
+            continue
+        media_type = f.get("media_type")
+        is_pdf = (f.get("ext", "").lower() in PDF_EXTENSIONS) or media_type == "application/pdf"
+        if not f.get("is_image") and not is_pdf:
+            continue
+        try:
+            raw = base64.b64decode(f["base64_data"])
+        except Exception as e:
+            logger.warning(f"[Vision] base64 decode failed: {f.get('name')} — {e}")
+            continue
+        _append(raw, f.get("name", "unknown"), f.get("ext", ""), media_type)
+
+    for path in extra_paths or []:
+        if _is_sensitive_path(path):
+            logger.warning(f"[Vision] sensitive path refused: {path}")
+            continue
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read()
+        except Exception as e:
+            logger.warning(f"[Vision] extra_path read failed: {path} — {type(e).__name__}: {e}")
+            continue
+        name = os.path.basename(path)
+        ext = os.path.splitext(path)[1].lower()
+        _append(raw, name, ext, None)
+
     return blocks
 
 

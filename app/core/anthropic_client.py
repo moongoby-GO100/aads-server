@@ -134,12 +134,42 @@ async def _get_user_api_key(user_id: str, provider: str) -> Optional[str]:
         return None
 
 
+def _user_content(prompt: str, images: Optional[list] = None):
+    """Anthropic user 메시지 content. images 가 없으면 기존처럼 문자열 그대로."""
+    if not images:
+        return prompt
+    return [{"type": "text", "text": prompt}] + list(images)
+
+
+def _to_openai_image_content(prompt: str, images: list) -> list:
+    """Anthropic image/document block → OpenAI 호환 content 배열 (LiteLLM/Gemini 폴백용).
+
+    LiteLLM 프록시는 base64 를 data URL 로 받는다. PDF document block 은
+    OpenAI 호환 스키마에 대응물이 없으므로 한 줄 안내 텍스트로 낮춘다.
+    """
+    parts: list = [{"type": "text", "text": prompt}]
+    for block in images or []:
+        if not isinstance(block, dict):
+            continue
+        source = block.get("source") or {}
+        if block.get("type") == "image" and source.get("type") == "base64":
+            media_type = source.get("media_type", "image/jpeg")
+            parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{source.get('data', '')}"},
+            })
+        elif block.get("type") == "document":
+            parts.append({"type": "text", "text": "[첨부 PDF — 이 경로에서는 전달되지 않음]"})
+    return parts
+
+
 async def _try_user_key_claude(
     prompt: str,
     model: str,
     max_tokens: int,
     system: Optional[str],
     user_id: str,
+    images: Optional[list] = None,
 ) -> Optional[str]:
     """BYOK: 사용자 본인 Anthropic API 키로 직접 호출 시도.
 
@@ -156,7 +186,7 @@ async def _try_user_key_claude(
         # 판별/분기는 auth_provider.create_anthropic_client 하나로 모은다.
         from app.core.auth_provider import create_anthropic_client
         client = create_anthropic_client(user_key)
-        msgs = [{"role": "user", "content": prompt}]
+        msgs = [{"role": "user", "content": _user_content(prompt, images)}]
         kwargs = {"model": model, "max_tokens": max_tokens, "messages": msgs}
         if system:
             kwargs["system"] = system
@@ -225,6 +255,7 @@ async def call_llm_with_fallback(
     system: Optional[str] = None,
     tenant_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    images: Optional[list] = None,
 ) -> Optional[str]:
     """Claude 호출 + 실패 시 qwen/LiteLLM 폴백. 백그라운드 평가/추출용.
 
@@ -239,6 +270,10 @@ async def call_llm_with_fallback(
     2순위: Claude moongoby@gmail (slot:gmail, FALLBACK)
     3순위: qwen3-235b (DashScope)
 
+    images 가 주어지면(Anthropic image/document block 목록) Claude 경로는 그대로
+    전달하고, LiteLLM/DashScope 폴백 경로는 OpenAI 호환 image_url 로 변환한다.
+    기본값 None 이면 기존 동작과 완전히 동일하다.
+
     Returns: 응답 텍스트 또는 None (전부 실패 시)
     """
     if tenant_id:
@@ -247,7 +282,7 @@ async def call_llm_with_fallback(
         await check_tenant_usage_limit(tenant_id, operation=f"llm:{model}", projected_calls=1)
 
     if user_id and model.startswith("claude"):
-        _user_text = await _try_user_key_claude(prompt, model, max_tokens, system, user_id)
+        _user_text = await _try_user_key_claude(prompt, model, max_tokens, system, user_id, images)
         if _user_text is not None:
             return _user_text
 
@@ -255,8 +290,8 @@ async def call_llm_with_fallback(
     if not model.startswith("claude"):
         try:
             if model.startswith("qwen"):
-                return await _call_dashscope(prompt, model, max_tokens, system)
-            return await _call_litellm(prompt, model, max_tokens, system)
+                return await _call_dashscope(prompt, model, max_tokens, system, images)
+            return await _call_litellm(prompt, model, max_tokens, system, images)
         except Exception as e:
             logger.warning("litellm_bg_error: model=%s error=%s", model, str(e)[:80])
             from app.core.llm_fallback_engine import get_bg_fallback_models
@@ -265,7 +300,7 @@ async def call_llm_with_fallback(
                 if _fb_model == model:
                     continue
                 try:
-                    _text = await _call_litellm(prompt, _fb_model, max_tokens, system)
+                    _text = await _call_litellm(prompt, _fb_model, max_tokens, system, images)
                     if _text:
                         logger.info("bg_llm_last_resort_ok: model=%s", _fb_model)
                         return _text
@@ -289,7 +324,7 @@ async def call_llm_with_fallback(
             t0 = time.monotonic()
             try:
                 client = create_anthropic_client(token=key)
-                msgs = [{"role": "user", "content": prompt}]
+                msgs = [{"role": "user", "content": _user_content(prompt, images)}]
                 kwargs = {"model": model, "max_tokens": max_tokens, "messages": msgs}
                 if system:
                     kwargs["system"] = system
@@ -405,7 +440,7 @@ async def call_llm_with_fallback(
     # 3순위: qwen3-235b (DashScope)
     if _DASHSCOPE_API_KEY:
         try:
-            return await _call_dashscope(prompt, "qwen3-235b", max_tokens, system)
+            return await _call_dashscope(prompt, "qwen3-235b", max_tokens, system, images)
         except Exception as e:
             logger.warning("qwen3_235b_fallback_error: %s", str(e)[:80])
 
@@ -415,7 +450,7 @@ async def call_llm_with_fallback(
         _fb_list = await _get_fb()
         for _fb_model in (_fb_list or _BG_FALLBACK_MODELS_ENV):
             try:
-                _text = await _call_litellm(prompt, _fb_model, max_tokens, system)
+                _text = await _call_litellm(prompt, _fb_model, max_tokens, system, images)
                 if _text:
                     logger.info("bg_llm_last_resort_ok: model=%s", _fb_model)
                     return _text
@@ -694,6 +729,7 @@ async def _call_dashscope(
     model: str,
     max_tokens: int = 256,
     system: Optional[str] = None,
+    images: Optional[list] = None,
 ) -> str:
     """DashScope API 직접 호출 (OpenAI 호환). 일시 오류 시 3회 빠른 재시도."""
     if not _DASHSCOPE_ENABLED:
@@ -701,7 +737,10 @@ async def _call_dashscope(
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+    messages.append({
+        "role": "user",
+        "content": _to_openai_image_content(prompt, images) if images else prompt,
+    })
 
     body = {
         "model": model,
@@ -786,6 +825,7 @@ async def _call_litellm(
     model: str,
     max_tokens: int = 256,
     system: Optional[str] = None,
+    images: Optional[list] = None,
 ) -> str:
     """LiteLLM 프록시 경유 텍스트 생성 (OpenAI 호환 API). 일시 오류 시 3회 빠른 재시도."""
     _lc = get_litellm_config()
@@ -794,7 +834,10 @@ async def _call_litellm(
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+    messages.append({
+        "role": "user",
+        "content": _to_openai_image_content(prompt, images) if images else prompt,
+    })
 
     body = {
         "model": model,
