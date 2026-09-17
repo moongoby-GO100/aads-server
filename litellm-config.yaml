@@ -437,6 +437,26 @@ router_settings:
   - deepseek-chat:
     - qwen3-coder-plus
     - gemini-2.5-flash
+  # 2026-09-17: minimax/kimi 그룹은 폴백이 없어 429(Token Plan 소진)가 그대로
+  # 러너 최종 실패가 됐다(runner-21631503). 크로스 프로바이더 폴백을 붙인다.
+  - minimax-m2.7:
+    - minimax-m2.5
+    - qwen3-coder-plus
+    - deepseek-chat
+    - gemini-2.5-flash
+  - minimax-m2.5:
+    - qwen3-coder-plus
+    - deepseek-chat
+    - gemini-2.5-flash
+  - kimi-k2.6:
+    - kimi-k2.5
+    - qwen3-coder-plus
+    - deepseek-chat
+    - gemini-2.5-flash
+  - kimi-k2.5:
+    - qwen3-coder-plus
+    - deepseek-chat
+    - gemini-2.5-flash
 litellm_settings:
   drop_params: true
   set_verbose: true

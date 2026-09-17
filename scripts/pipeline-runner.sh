@@ -492,6 +492,16 @@ normalize_runner_model() {
             # do not crash the polling runner while building its model cycle.
             python3 "$CLAUDE_MODEL_CONTRACT" "$model" || printf '%s\n' "$model"
             ;;
+        groq-*|minimax-*|kimi-*|qwen*|deepseek-*|gemini-*|dashscope-*|openrouter-*|glm-*)
+            # AADS-RUNNER-LITELLM-PREFIX (2026-09-17)
+            # runner_model_config 의 AI_REVIEW 목록은 provider 정보 없이 원시 id 를
+            # 담는다("groq-gpt-oss-120b"). 접두사가 없으면 러너가 이를 Claude CLI
+            # 모델로 해석해 MODEL_CONTRACT_REJECTED 로 통째로 건너뛴다.
+            # 2026-09-17 실측: ACCT 러너(jinah244)에서 Claude 주간한도·Gemini 키
+            # 정지·kimi/minimax 한도·deepseek 잔액부족으로 20개 사다리가 전멸했는데,
+            # 유일하게 200 을 돌려주던 groq 두 개가 바로 이 이유로 시도조차 되지 않았다.
+            echo "litellm:${model}"
+            ;;
         "")
             echo "auto"
             ;;
