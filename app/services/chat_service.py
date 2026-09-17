@@ -7620,6 +7620,14 @@ async def _resume_single_stream(
     try:
         _current_execution_id.set(execution_id)
         _current_stream_event_id.set(None)
+        # 재개 턴도 세션에 묶는다. 이 줄이 없어서 이어받은 턴의 도구가
+        # missing_session_id 로 떨어졌다 — 2026-09-17 todo_write 실측.
+        # 정상 경로는 스트림 진입 때 세우지만 재개는 새 태스크라 contextvar 가 빈다.
+        from app.services.tool_executor import (
+            current_chat_session_id as _resume_bound_session,
+        )
+
+        _resume_bound_session.set(session_id)
         pool = get_pool()
         sid = uuid.UUID(session_id)
 
