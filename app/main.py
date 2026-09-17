@@ -29,6 +29,7 @@ from app.api.briefing import router as briefing_router
 from app.api.documents import router as documents_router
 from app.api.governance import router as governance_router
 from app.api.ops import router as ops_router
+from app.api.internal_token import router as internal_token_router
 from app.api.admin import router as admin_router
 from app.api.admin_users import router as admin_users_router
 from app.api.lessons import router as lessons_router
@@ -3749,6 +3750,7 @@ app.include_router(documents_router, prefix="/api/v1/documents", tags=["document
 app.include_router(channels_router, prefix="/api/v1", tags=["channels"])
 app.include_router(managers_router, prefix="/api/v1", tags=["managers"])
 app.include_router(ops_router, prefix="/api/v1", tags=["ops"])
+app.include_router(internal_token_router, prefix="/api/v1", tags=["internal"])
 app.include_router(lessons_router, prefix="/api/v1", tags=["lessons"])
 app.include_router(strategy_router, prefix="/api/v1", tags=["strategy"])
 app.include_router(plans_router, prefix="/api/v1", tags=["plans"])

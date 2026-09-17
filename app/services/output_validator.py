@@ -837,3 +837,5 @@ def should_retry_without_tools(violation_type: str, tools_called: bool) -> bool:
     본문을 얻는다 — 실패하면 기존 부분응답 보존 경로로 그대로 떨어진다.
     """
     return violation_type == "PROGRESS_ONLY_RESPONSE" and bool(tools_called)
+
+
