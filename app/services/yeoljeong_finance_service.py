@@ -14,6 +14,7 @@ import fcntl
 import hashlib
 import io
 import json
+import math
 import mimetypes
 import os
 import re
@@ -2514,6 +2515,45 @@ def _contract_payload_value(payload: dict[str, Any], snake_key: str, camel_key: 
     return value
 
 
+MIN_WAGE_2026 = 10320
+
+
+def _monthly_paid_hours(weekly_hours: float) -> float:
+    """주 소정근로시간에서 월 유급환산시간(주휴 포함)을 구한다."""
+    return (weekly_hours + min(8, weekly_hours / 5)) * 365 / 7 / 12
+
+
+def _probation_wage_rate(payload: dict[str, Any]) -> float | None:
+    """수습기간 임금 감액률(%). 감액이 없으면 None 을 돌려준다.
+
+    명시 필드(probation_wage_rate)를 먼저 보고, 없으면 수습기간 자유기재
+    문구에서 '90%' 같은 표기를 읽는다. 프런트에 숫자 입력칸이 생기기 전에도
+    최저임금 미만 감액이 저장되지 않게 하기 위함이다.
+    """
+    raw = _contract_payload_value(payload, "probation_wage_rate", "probationWageRate")
+    rate: float | None = None
+    if raw is not None and str(raw).strip() != "":
+        try:
+            rate = float(str(raw).strip().rstrip("%"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="수습기간 임금 감액률은 숫자로 입력하십시오")
+    else:
+        text = str(_contract_payload_value(payload, "probation_period", "probationPeriod") or "")
+        match = re.search(r"(\d{1,3}(?:\.\d+)?)\s*%", text)
+        if match:
+            rate = float(match.group(1))
+    if rate is None:
+        return None
+    if rate <= 0 or rate > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="수습기간 임금 감액률은 0 초과 100 이하로 입력하십시오",
+        )
+    if rate >= 100:
+        return None
+    return rate
+
+
 def _missing_contract_value(value: Any) -> bool:
     return str(value or "").strip() in {"", "-", "미등록", "기초등록 필요"}
 
@@ -2678,6 +2718,24 @@ def _validate_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 raise HTTPException(
                     status_code=400,
                     detail=f"과세 기본급 기준 환산시급 {int(conservative_hourly):,}원은 2026년 최저임금 10,320원보다 낮습니다",
+                )
+        # 수습 감액은 감액 후 환산시급이 최저임금 이상일 때만 허용한다.
+        # 최저임금법 제5조②(수습 감액 특례)는 단순노무 직종에 적용되지 않으므로,
+        # 음식점에서 쓸 수 있는 것은 '계약임금을 낮추되 최저임금은 넘는' 경우뿐이다.
+        probation_rate = _probation_wage_rate(result)
+        if probation_rate is not None and weekly_match and base_salary > 0 and contract_date_year == "2026":
+            probation_weekly = float(weekly_match.group(1)) + float(weekly_match.group(2) or 0) / 60
+            probation_paid_hours = _monthly_paid_hours(probation_weekly)
+            probation_hourly = (base_salary * probation_rate / 100) / probation_paid_hours
+            if probation_hourly < MIN_WAGE_2026:
+                min_base = math.ceil(MIN_WAGE_2026 * probation_paid_hours * 100 / probation_rate)
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"수습 {probation_rate:g}% 적용 시 환산시급 {int(probation_hourly):,}원으로 "
+                        f"2026년 최저임금 {MIN_WAGE_2026:,}원에 미달합니다. "
+                        f"이 감액률을 쓰려면 계약 월급이 최소 {min_base:,}원 이상이어야 합니다"
+                    ),
                 )
         foreign_worker = str(
             _contract_payload_value(result, "foreign_worker", "foreignWorker") or ""
