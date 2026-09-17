@@ -87,8 +87,11 @@ nginx-aads-upstream.conf
 nginx-aads-upstream.conf.dashboard.bak
 
 # Backup files
+# `*.bak` 가 빠져 있어서 `app/api/ceo_chat.py.bak` 같은 접미사 없는 사본이
+# 37개나 커밋돼 있었다(2026-09-16, AAG STALE_BACKUP 로 검출). ignore 는
+# 이미 추적 중인 파일에는 적용되지 않으므로 git rm 과 함께 고쳐야 한다.
+*.bak
 *.bak_*
-*.bak.*
 *.bak.*
 app/static/gallery/media-*.jpg
 app/static/gallery/media-*.jpg
