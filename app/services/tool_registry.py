@@ -694,6 +694,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "description": "DB 이름 (미지정 시 프로젝트 메인 DB 사용). NTV2 V1 DB 조회 시: project=NTV2, db_name=autoda",
                 },
+                "tenant_id": {
+                    "type": "string",
+                    "description": "ACCT 전용 tenant 스코프(숫자). tenant_company 등 RLS 테이블 조회 시 필수. 예: '7'(중화점)",
+                },
             },
             "required": ["project", "query"],
         },
