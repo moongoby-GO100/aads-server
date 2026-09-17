@@ -56,6 +56,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "run_agent_team": False,              # 멀티에이전트 팀 — 핵심 오케스트레이션
     "run_debate": True,                    # 다관점 토론 — 온디맨드 (CEO 요청 시)
     "ask_session": True,                   # 세션 간 협업 — 담당끼리 묻고 답함 (2026-09-14)
+    "my_milestones": True,                 # 내 목표·마일스톤 조회 (2026-09-17)
     "report_milestone_done": True,         # 마일스톤 완료 신고 (2026-09-14)
     "confirm_milestone": True,             # 마일스톤 완료 판정 — 주도 (2026-09-14)
     "save_note": True,
@@ -312,6 +313,35 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
 
 _TOOLS: Dict[str, Dict[str, Any]] = {
     # ── 협업 그룹 ────────────────────────────────────────────────────────────
+    "my_milestones": {
+        "name": "my_milestones",
+        "description": (
+            "이 대화가 맡은 목표와 마일스톤을 봅니다. **마일스톤 id 를 얻는 "
+            "유일한 방법입니다** — `report_milestone_done` 과 "
+            "`confirm_milestone` 은 id 를 받아야 하는데, 지금까지 그 id 는 "
+            "착수 지시 메시지에만 있었습니다. 그 메시지를 놓쳤거나 대화가 "
+            "길어져 밀려났으면 아무것도 할 수 없었습니다. "
+            "맡은 것이 무엇인지, 어디까지 왔는지 물으면 먼저 이것을 부르세요."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "enum": ["mine", "lead", "all"],
+                    "description": (
+                        "mine = 내가 담당인 것(기본) · lead = 내가 주도인 목표의 "
+                        "전체 마일스톤 · all = 둘 다"
+                    ),
+                },
+                "include_done": {
+                    "type": "boolean",
+                    "description": "끝난 것도 포함할지. 기본 false — 할 일만 본다.",
+                },
+            },
+            "required": [],
+        },
+    },
     "report_milestone_done": {
         "name": "report_milestone_done",
         "description": (

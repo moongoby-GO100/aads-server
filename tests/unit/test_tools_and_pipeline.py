@@ -1105,3 +1105,45 @@ class TestNormalizeTenantScope:
         from app.api.ceo_chat_tools_db import normalize_tenant_scope
 
         assert normalize_tenant_scope("ACCT", None) == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# 마일스톤 조회 (2026-09-17)
+#
+# 대표님 "목표 마일스톤에 접근이 안된다고 세션들에서 보고가 오는데".
+# 확인해 보니 세션이 쓸 수 있는 목표 도구는 report_milestone_done 과
+# confirm_milestone 둘뿐이었고, 둘 다 milestone_id 를 받아야 하는데
+# 그 id 를 얻을 방법이 없었다. id 는 착수 지시 메시지에만 실려 왔다.
+# ---------------------------------------------------------------------------
+
+
+def test_sessions_can_read_their_own_milestones():
+    """쓰기 도구만 있고 읽기 도구가 없으면 id 를 못 구해 아무것도 못 한다."""
+    from app.services.tool_registry import ToolRegistry
+
+    names = {t["name"] for t in ToolRegistry().get_tools("all")}
+    assert "my_milestones" in names
+    # 짝이 되는 쓰기 도구도 그대로 있어야 한다.
+    assert "report_milestone_done" in names
+    assert "confirm_milestone" in names
+
+
+def test_my_milestones_matches_owner_by_session_and_by_role():
+    """담당은 세션 직접(owner_session_id)과 역할(owner_role_key) 둘로 붙는다.
+
+    2026-09-17 실측 138건 중 76건이 owner_session_id 가 비어 역할로만
+    걸린다. 한쪽만 보면 절반 넘게 "맡은 것이 없다" 가 된다.
+    """
+    from pathlib import Path
+
+    src = Path("app/services/tool_executor.py").read_text(encoding="utf-8")
+    handler = src.split("async def _my_milestones", 1)[1].split("\n    async def ", 1)[0]
+
+    assert "m.owner_session_id = $1::uuid" in handler
+    assert "m.owner_role_key = $2" in handler
+    assert "g.owner_session_id = $1::uuid" in handler
+    assert "g.owner_role_key = $2" in handler
+    # 끝난 것은 기본으로 빼되, 요청하면 보여준다.
+    assert "include_done" in handler
+    # 시각은 KST 로 내려간다 — 서버 로컬이 Europe/Berlin 이다.
+    assert "_kst_iso(" in handler

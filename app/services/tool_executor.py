@@ -19,7 +19,7 @@ import shutil
 import subprocess
 import uuid
 from collections import OrderedDict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import httpx
@@ -112,6 +112,24 @@ current_chat_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
 current_tenant_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "current_tenant_id", default=""
 )
+
+
+_KST = timezone(timedelta(hours=9))
+
+
+def _kst_iso(value: Any) -> Optional[str]:
+    """DB 시각을 KST ISO 문자열로. 도구가 돌려주는 시각은 항상 한국시간이다.
+
+    이 서버의 로컬 타임존은 Europe/Berlin 이라 그대로 내려보내면 8~9시간
+    어긋난다. offset 이 없는 값이 섞여 들어온 적이 있어 naive 는 UTC 로 본다.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(_KST).isoformat()
+    return str(value)
 
 
 def _resolve_bound_chat_session_id(explicit_session_id: Any = "") -> str:
@@ -946,6 +964,7 @@ class ToolExecutor:
             # AI-to-AI: 다관점 토론
             "run_debate":             self._run_debate,
             "ask_session":            self._ask_session,
+            "my_milestones":          self._my_milestones,
             "report_milestone_done":  self._report_milestone_done,
             "confirm_milestone":      self._confirm_milestone,
             # AADS-190: 내보내기 + 스케줄러
@@ -4770,6 +4789,115 @@ class ToolExecutor:
             max_concurrent=inp.get("max_concurrent", 5),
             cost_limit_usd=inp.get("cost_limit_usd", 10.0),
         )
+
+    async def _my_milestones(self, inp: Dict[str, Any]) -> Any:
+        """이 대화가 맡은 목표·마일스톤을 돌려준다.
+
+        왜 필요한가 — 2026-09-17 대표님 "목표 마일스톤에 접근이 안된다고
+        세션들에서 보고가 오는데". 확인해 보니 세션이 쓸 수 있는 목표 관련
+        도구는 `report_milestone_done` 과 `confirm_milestone` 둘뿐이었고,
+        **둘 다 `milestone_id` 를 받아야 하는데 그 id 를 얻을 방법이
+        없었다.** id 는 착수 지시 메시지에만 실려 왔고, 그 메시지를 놓치면
+        (오늘만 릴레이 123건 중 회신 8건) 담당은 자기가 뭘 맡았는지도 모른다.
+
+        담당은 두 가지로 붙는다 — `owner_session_id`(세션 직접)와
+        `owner_role_key`(역할). 실측 138건 중 76건이 `owner_session_id` 가
+        비어 있어 역할로만 걸리므로, 둘 다 봐야 한다.
+        """
+        from app.core.db_pool import get_pool
+
+        sid = _resolve_bound_chat_session_id(inp.get("session_id"))
+        if not sid:
+            return {
+                "error": "session_unresolved",
+                "message": "이 도구가 어느 대화에서 불렸는지 서버가 알지 못했습니다.",
+            }
+
+        scope = str(inp.get("scope") or "mine").strip().lower()
+        if scope not in ("mine", "lead", "all"):
+            scope = "mine"
+        include_done = bool(inp.get("include_done"))
+
+        pool = get_pool()
+        me = await pool.fetchrow(
+            "SELECT id::text AS id, coalesce(role_key,'') AS role_key, coalesce(title,'') AS title "
+            "FROM chat_sessions WHERE id = $1::uuid",
+            sid,
+        )
+        if not me:
+            return {"error": "session_not_found", "message": "이 대화를 찾지 못했습니다."}
+
+        rows = await pool.fetch(
+            """
+            SELECT m.id::text AS milestone_id,
+                   m.title,
+                   m.status,
+                   m.sequence_order,
+                   coalesce(m.completion_criteria, '') AS completion_criteria,
+                   m.due_date,
+                   m.reported_at,
+                   coalesce(m.review_note, '') AS review_note,
+                   g.id::text AS goal_id,
+                   g.title AS goal_title,
+                   coalesce(g.project, '') AS project,
+                   (g.owner_session_id = $1::uuid
+                    OR (g.owner_role_key <> '' AND g.owner_role_key = $2)) AS i_am_lead,
+                   (m.owner_session_id = $1::uuid
+                    OR (coalesce(m.owner_role_key,'') <> '' AND m.owner_role_key = $2)) AS i_am_owner
+              FROM milestones m
+              JOIN goals g ON g.id = m.goal_id
+             WHERE (
+                     m.owner_session_id = $1::uuid
+                  OR (coalesce(m.owner_role_key,'') <> '' AND m.owner_role_key = $2)
+                  OR g.owner_session_id = $1::uuid
+                  OR (coalesce(g.owner_role_key,'') <> '' AND g.owner_role_key = $2)
+                   )
+               AND ($3::boolean OR m.status NOT IN ('done', 'confirmed', 'cancelled'))
+             ORDER BY g.title, m.sequence_order NULLS LAST, m.created_at
+             LIMIT 200
+            """,
+            sid, me["role_key"], include_done,
+        )
+
+        def _pick(r) -> bool:
+            if scope == "mine":
+                return bool(r["i_am_owner"])
+            if scope == "lead":
+                return bool(r["i_am_lead"])
+            return True
+
+        items = [
+            {
+                "milestone_id": r["milestone_id"],
+                "title": r["title"],
+                "status": r["status"],
+                "goal": r["goal_title"],
+                "goal_id": r["goal_id"],
+                "project": r["project"],
+                "completion_criteria": r["completion_criteria"],
+                # 시각은 KST 로 내려보낸다 — 서버 로컬이 Europe/Berlin 이라
+                # 그대로 두면 8~9시간 어긋난다.
+                "due_date": _kst_iso(r["due_date"]),
+                "reported_at": _kst_iso(r["reported_at"]),
+                "review_note": r["review_note"],
+                "role": "담당" if r["i_am_owner"] else ("주도" if r["i_am_lead"] else "-"),
+            }
+            for r in rows if _pick(r)
+        ]
+
+        return {
+            "session": {"id": me["id"], "role_key": me["role_key"], "title": me["title"]},
+            "scope": scope,
+            "include_done": include_done,
+            "count": len(items),
+            "milestones": items,
+            "message": (
+                f"{len(items)}건입니다. 완료 신고는 report_milestone_done(milestone_id, summary, …) 입니다."
+                if items else
+                "맡은 마일스톤이 없습니다. 담당이 세션이 아니라 역할(owner_role_key)로 "
+                "걸려 있을 수 있으니, 이 대화의 role_key 가 맞는지 확인하세요."
+            ),
+        }
 
     async def _report_milestone_done(self, inp: Dict[str, Any]) -> Any:
         """담당이 완료를 신고한다. 완료가 아니라 확인 대기가 된다."""
