@@ -45,6 +45,19 @@ _ENABLED = os.getenv("GOAL_DISPATCH_ENABLED", "true").lower() in ("1", "true", "
 _MAX_PER_CYCLE = int(os.getenv("GOAL_DISPATCH_MAX_PER_CYCLE", "2"))
 _MAX_DISPATCH = int(os.getenv("GOAL_DISPATCH_MAX_RETRY", "3"))
 _RETRY_AFTER_MIN = int(os.getenv("GOAL_DISPATCH_RETRY_AFTER_MIN", "30"))
+# 부하 때문에 미루는 데에도 **상한**을 둔다.
+#
+# 2026-09-17 실측. contabo14 는 장중에 매매 엔진 둘과 postgres·러너가 같이
+# 돌아 부하가 3.6~4.2배로 유지된다. 부하 게이트 기준은 2.0배다. 그래서
+# GO100 은 09:09 KST 이후 사이클마다 19건이 통째로 `goal_dispatch_load_gated`
+# 로 밀렸다 — 장이 열려 있는 동안, 즉 목표가 가장 움직여야 하는 시간에
+# 오케스트레이션이 통째로 멎었다.
+#
+# 미루기는 기다림이어야지 정지가 아니다. 한 마일스톤이 이만큼 연속으로
+# 밀리면 부하와 무관하게 내보낸다. 비용 게이트가 누적 상한에 닿아 영구히
+# 잠겼던 것과 같은 종류의 결함이다 — 상한 있는 게이트에는 빠져나갈 문이
+# 있어야 한다.
+_LOAD_DEFER_MAX_MIN = int(os.getenv("GOAL_DISPATCH_LOAD_DEFER_MAX_MIN", "30"))
 # 담당 세션 생성 승인 요청은 한 사이클에 이만큼까지. 카드가 한꺼번에 열 장
 # 올라오면 대표님은 읽지 않고 누르신다.
 _OWNER_REQUEST_PER_CYCLE = int(os.getenv("GOAL_OWNER_REQUEST_PER_CYCLE", "3"))
@@ -242,6 +255,36 @@ async def repair_owner_links(conn) -> int:
     return inserted
 
 
+async def _load_defer_minutes(conn: Any, row: Any) -> float:
+    """부하로 **연속해서** 밀린 시간(분).
+
+    처음 밀리는 건이면 시작 시각을 DB 에 남긴다. 메모리에 두면 배포·재기동
+    때마다 0 으로 돌아가고, 하루에 몇 번씩 배포하는 서버에서는 상한이
+    영원히 오지 않는다 — 그러면 상한을 둔 의미가 없다.
+    """
+    since = row["load_deferred_since"]
+    if since is None:
+        await conn.execute(
+            "UPDATE milestones SET load_deferred_since = NOW() "
+            "WHERE id = $1::uuid AND load_deferred_since IS NULL",
+            row["milestone_id"],
+        )
+        return 0.0
+    waited = await conn.fetchval(
+        "SELECT EXTRACT(EPOCH FROM (NOW() - $1::timestamptz)) / 60", since,
+    )
+    return float(waited or 0.0)
+
+
+async def _clear_load_defer(conn: Any, milestone_id: str) -> None:
+    """부하가 풀렸다. 다음에 또 밀리면 그때부터 다시 센다."""
+    await conn.execute(
+        "UPDATE milestones SET load_deferred_since = NULL "
+        "WHERE id = $1::uuid AND load_deferred_since IS NOT NULL",
+        milestone_id,
+    )
+
+
 async def dispatch_pending_milestones(project: str | None = None) -> dict[str, int]:
     """착수했는데 담당이 모르는 마일스톤에 지시를 넣는다."""
     if not _ENABLED:
@@ -261,11 +304,19 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
         # 지시를 받아도 자기 화면에서 그 목표를 찾을 수 없다.
         links_repaired = await repair_owner_links(conn)
 
+        # 부하로 밀린 시각을 적어 둘 칸. 없으면 만든다(있으면 아무 일도
+        # 안 한다). 마이그레이션 파일이 안 돈 서버에서도 게이트가 상한
+        # 없이 도는 일이 없도록 여기서 보장한다.
+        await conn.execute(
+            "ALTER TABLE milestones ADD COLUMN IF NOT EXISTS "
+            "load_deferred_since timestamptz"
+        )
+
         rows = await conn.fetch(
             """
             SELECT m.id::text AS milestone_id, m.title AS milestone_title,
                    m.description, m.completion_criteria,
-                   m.dispatch_count, m.dispatched_at,
+                   m.dispatch_count, m.dispatched_at, m.load_deferred_since,
                    g.title AS goal_title, g.project, g.id::text AS goal_id,
                    COALESCE(m.owner_role_key, '') AS owner_role_key,
                    COALESCE(g.owner_session_id::text, '') AS goal_lead_session_id,
@@ -338,12 +389,25 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
 
             ok, why = await load_gate(row["project"])
             if not ok:
-                logger.info(
-                    "goal_dispatch_load_gated",
+                waited = await _load_defer_minutes(conn, row)
+                if waited < _LOAD_DEFER_MAX_MIN:
+                    logger.info(
+                        "goal_dispatch_load_gated",
+                        milestone=row["milestone_id"][:8], why=why,
+                        waited_min=round(waited, 1),
+                    )
+                    skipped += 1
+                    continue
+                # 상한을 넘겼다. 부하는 여전하지만 **더 미루지 않는다** —
+                # 계속 미루면 장중 내내 한 건도 안 나간다.
+                logger.warning(
+                    "goal_dispatch_load_defer_expired",
                     milestone=row["milestone_id"][:8], why=why,
+                    waited_min=round(waited, 1),
+                    limit_min=_LOAD_DEFER_MAX_MIN,
                 )
-                skipped += 1
-                continue
+            elif row["load_deferred_since"] is not None:
+                await _clear_load_defer(conn, row["milestone_id"])
 
             count = int(row["dispatch_count"] or 0)
             if count >= _MAX_DISPATCH:
@@ -396,7 +460,8 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
             await conn.execute(
                 "UPDATE milestones SET dispatched_at = NOW(), "
                 "dispatched_session_id = $2, dispatch_count = dispatch_count + 1, "
-                "dispatch_note = NULL, updated_at = NOW() WHERE id = $1::uuid",
+                "dispatch_note = NULL, load_deferred_since = NULL, "
+                "updated_at = NOW() WHERE id = $1::uuid",
                 row["milestone_id"], row["session_id"],
             )
 
