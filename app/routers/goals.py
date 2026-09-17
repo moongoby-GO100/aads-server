@@ -68,6 +68,7 @@ class GoalCreateRequest(BaseModel):
     success_criteria: Optional[str] = None
     parent_goal_id: Optional[str] = None
     milestones: Optional[list[MilestoneCreateRequest]] = None
+    owner_session_id: Optional[str] = None  # 생성과 동시에 담당 세션 연결
     activate: bool = False
 
 
@@ -122,6 +123,26 @@ async def create_goal(req: GoalCreateRequest):
             )
     if req.activate:
         result = await goal_state_machine.activate_goal(result["goal_id"])
+    if req.owner_session_id:
+        from app.core.database import get_db_pool
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO goal_task_links "
+                "  (goal_id, task_type, task_id, status, bind_source, bound_by, link_state) "
+                "VALUES ($1::uuid, 'chat_session', $2, 'active', 'auto', 'system', 'active') "
+                "ON CONFLICT (goal_id, task_type, task_id) WHERE goal_id IS NOT NULL "
+                "DO UPDATE SET link_state = 'active', detach_reason = NULL, "
+                "              bind_source = 'auto', bound_by = 'system', updated_at = NOW() "
+                "  WHERE goal_task_links.link_state IS DISTINCT FROM 'active' "
+                "     OR goal_task_links.detach_reason IS NOT NULL",
+                result["goal_id"], req.owner_session_id,
+            )
+            await conn.execute(
+                "UPDATE goals SET owner_session_id = $2::uuid, updated_at = NOW() "
+                "WHERE id = $1::uuid AND owner_session_id IS NULL",
+                result["goal_id"], req.owner_session_id,
+            )
     return result
 
 
