@@ -279,6 +279,27 @@ def _get_project_db_config(project: str) -> Optional[Dict[str, str]]:
     }
 
 
+# ACCT 는 tenant_company 가 FORCE RLS 이고 정책이 acct_current_tenant() 를 부른다.
+# 이 함수는 GUC 미설정 시 EXCEPTION 을 던지므로, 스코프 없이 조회하면 무조건 실패한다.
+# SET 문은 _FORBIDDEN_SQL 이 막으므로 도구가 트랜잭션 안에서 set_config 로 넣어 준다.
+_TENANT_SCOPE_PROJECTS = {"ACCT"}
+_TENANT_ID_RE = re.compile(r"^[0-9]{1,18}$")
+
+
+def normalize_tenant_scope(project: str, tenant_id: Any) -> Tuple[Optional[str], Optional[str]]:
+    """(정규화된 tenant_id, 오류메시지) 를 돌려준다. 값이 없으면 (None, None)."""
+    if tenant_id is None:
+        return None, None
+    value = str(tenant_id).strip()
+    if not value:
+        return None, None
+    if project not in _TENANT_SCOPE_PROJECTS:
+        return None, f"tenant_id 는 {', '.join(sorted(_TENANT_SCOPE_PROJECTS))} 전용입니다 (요청: {project})"
+    if not _TENANT_ID_RE.match(value):
+        return None, "tenant_id 는 숫자만 허용합니다"
+    return value, None
+
+
 # ─── SQL 검증 ────────────────────────────────────────────────────────────────
 
 def validate_query(query: str) -> Optional[str]:
@@ -480,7 +501,9 @@ async def _borrow_pg_pool(project: str):
             _pool_drain_condition.notify_all()
 
 
-async def _query_postgresql(project: str, q: str) -> List[Dict[str, Any]]:
+async def _query_postgresql(
+    project: str, q: str, tenant_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """PostgreSQL 쿼리 실행. C2: read-only 트랜잭션으로 안전하게 실행."""
     last_error: Optional[Exception] = None
 
@@ -506,6 +529,11 @@ async def _query_postgresql(project: str, q: str) -> List[Dict[str, Any]]:
                             "SELECT set_config('statement_timeout', $1, true)",
                             str(max(1, _PROJECT_DB_QUERY_TIMEOUT_SECONDS) * 1000),
                         )
+                        if tenant_id:
+                            await conn.execute(
+                                "SELECT set_config('acct.tenant_id', $1, true)",
+                                tenant_id,
+                            )
                         try:
                             rows = await conn.fetch(q, timeout=_PROJECT_DB_QUERY_TIMEOUT_SECONDS)
                         except asyncio.TimeoutError as exc:
@@ -837,6 +865,7 @@ async def query_project_database(
     query: str,
     limit: int = 100,
     db_name: Optional[str] = None,
+    tenant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     프로젝트별 원격 DB에 SELECT 쿼리 실행.
@@ -846,6 +875,7 @@ async def query_project_database(
         query: SELECT SQL 쿼리
         limit: 반환 행 수 (기본 100, 최대 1000)
         db_name: DB 이름 (미지정 시 프로젝트 메인 DB)
+        tenant_id: ACCT 전용 tenant 스코프(숫자). tenant_company 등 RLS 테이블 조회 시 필요.
 
     Returns:
         {"project": str, "rows": list, "row_count": int, "columns": list}
@@ -859,6 +889,10 @@ async def query_project_database(
     if error:
         return {"error": error}
 
+    scope, scope_err = normalize_tenant_scope(project, tenant_id)
+    if scope_err:
+        return {"error": scope_err}
+
     limit = max(1, min(limit, 1000))
     q = query.strip().rstrip(";")
     if "LIMIT" not in q.upper():
@@ -870,7 +904,7 @@ async def query_project_database(
 
         if db_type == "postgresql":
             result_rows = await asyncio.wait_for(
-                _query_postgresql(project, q),
+                _query_postgresql(project, q, tenant_id=scope),
                 timeout=max(1, _PROJECT_DB_QUERY_TIMEOUT_SECONDS + _PG_POOL_ACQUIRE_TIMEOUT_SECONDS + 5),
             )
         else:
@@ -895,6 +929,7 @@ async def query_project_database(
             "columns": columns,
             "query": q,
             "timeout_seconds": _PROJECT_DB_QUERY_TIMEOUT_SECONDS if db_type == "postgresql" else _MYSQL_READ_TIMEOUT_SECONDS,
+            "tenant_scope": scope,
         }
 
     except ProjectDbTimeoutError as e:

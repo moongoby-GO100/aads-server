@@ -1077,3 +1077,31 @@ class TestRegressions:
         assert len(tool_refs) > 10, (
             f"도구 매핑이 너무 적음 ({len(tool_refs)}개) — 파싱 오류 확인 필요"
         )
+
+
+class TestNormalizeTenantScope:
+    """ACCT tenant_company RLS 스코프 정규화 (AADS-ACCT-TENANT-SCOPE)."""
+
+    def test_acct_valid_tenant_id(self):
+        from app.api.ceo_chat_tools_db import normalize_tenant_scope
+
+        assert normalize_tenant_scope("ACCT", "7") == ("7", None)
+
+    def test_acct_injection_attempt_rejected(self):
+        from app.api.ceo_chat_tools_db import normalize_tenant_scope
+
+        scope, error = normalize_tenant_scope("ACCT", "7; DROP TABLE tenant_company")
+        assert scope is None
+        assert error is not None
+
+    def test_non_acct_project_rejected(self):
+        from app.api.ceo_chat_tools_db import normalize_tenant_scope
+
+        scope, error = normalize_tenant_scope("GO100", "7")
+        assert scope is None
+        assert error is not None
+
+    def test_no_tenant_id_passthrough(self):
+        from app.api.ceo_chat_tools_db import normalize_tenant_scope
+
+        assert normalize_tenant_scope("ACCT", None) == (None, None)

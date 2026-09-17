@@ -1572,6 +1572,7 @@ class ToolExecutor:
                 query=inp.get("query", ""),
                 limit=inp.get("limit", 100),
                 db_name=inp.get("db_name"),
+                tenant_id=inp.get("tenant_id"),
             )
         except Exception as e:
             return {"error": str(e)}
