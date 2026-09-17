@@ -152,7 +152,7 @@ async def _pair_in_flight(origin: str, target: str) -> bool:
     try:
         n = await get_pool().fetchval(
             "SELECT count(*) FROM session_relay "
-            "WHERE status = 'pending' AND created_at > now() - interval '2 hours' "
+            "WHERE status IN ('pending', 'queued') AND created_at > now() - interval '2 hours' "
             "AND ((origin_session_id = $1::uuid AND target_session_id = $2::uuid) "
             "  OR (origin_session_id = $2::uuid AND target_session_id = $1::uuid))",
             origin, target,
@@ -379,9 +379,40 @@ async def ask(origin_session_id: str, target: str, question: str,
     if await _pair_in_flight(origin_session_id, tgt["id"]):
         return {"sent": False, "error": "already_in_flight",
                 "message": f"{tgt.get('role_key') or tgt['title']} 와(과) 이미 주고받는 중입니다. 답을 기다리세요."}
+    # 바쁘면 **반려하지 않고 대기열에 넣는다.**
+    #
+    # 2026-09-17 대표님 "목표 마일스톤에 접근이 안된다고 세션들에서 보고가
+    # 오는데". 실측: session_relay 123건 중 회신 8건(6.5%). 세션 d19a0e9e 는
+    # 목표관리자에게 두 번 보내 두 번 다 target_busy 로 반려됐고 "마일스톤
+    # 문제는 아직 전달되지 않았습니다" 로 끝났다.
+    #
+    # 반려가 오탐이어서가 아니다 — 그 순간 running 9건 전부 리스가 살아 있는
+    # 진짜 작업 중이었다. 문제는 **오래 일하는 세션에는 영영 못 닿는다**는
+    # 것이다. 목표관리자 36분, #119 전략관리자 52분째였고, 그 사이 도착한
+    # 질문은 전부 버려졌다.
+    #
+    # 끼어들지 않는다는 원래 판단은 그대로 지킨다(진행 중 응답이 깨진다).
+    # 지금 보내지 않을 뿐, 끝나면 보낸다.
     if await _target_is_busy(tgt["id"]):
-        return {"sent": False, "error": "target_busy",
-                "message": f"{tgt.get('role_key') or tgt['title']} 가 지금 다른 작업 중입니다. 끝난 뒤 다시 물으세요."}
+        queued_id = str(uuid.uuid4())
+        await pool.execute(
+            "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status) "
+            "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'queued')",
+            queued_id, origin_session_id, tgt["id"], hop, question[:2000],
+        )
+        logger.info("session_relay_queued relay=%s origin=%s target=%s",
+                    queued_id[:8], origin_session_id[:8], tgt["id"][:8])
+        return {
+            "sent": True,
+            "queued": True,
+            "relay_id": queued_id,
+            "target_session": tgt["id"],
+            "target_role": tgt.get("role_key") or tgt["title"],
+            "hop": hop,
+            "message": f"{tgt.get('role_key') or tgt['title']} 가 지금 다른 작업 중이라 "
+                       "대기열에 넣었습니다. 그 작업이 끝나면 자동으로 전달되고 답은 이 "
+                       "대화에 들어옵니다 — 기다리지 말고 다른 일을 계속하세요.",
+        }
 
     origin = await pool.fetchrow(
         "SELECT title, coalesce(role_key,'') AS role_key FROM chat_sessions WHERE id = $1::uuid",
@@ -416,3 +447,85 @@ async def ask(origin_session_id: str, target: str, question: str,
         "message": f"{tgt.get('role_key') or tgt['title']} 에게 보냈습니다. "
                    "답은 이 대화에 자동으로 들어옵니다 — 기다리지 말고 다른 일을 계속하세요.",
     }
+
+
+# 대기열에 넣은 질문을 대상이 한가해지면 배달한다.
+#
+# 대기열만 만들고 배달하는 주체를 안 두면 반려가 침묵으로 바뀔 뿐이다 —
+# 오늘 오전 추가지시 회수에서 같은 실수를 봤다(회수 시도가 그 세션의 다음
+# 턴이 돌 때만 일어나, 세션이 멈추면 23시간을 그대로 남았다).
+_RELAY_QUEUE_MAX_AGE_HOURS = max(1, int(os.getenv("SESSION_RELAY_QUEUE_MAX_AGE_HOURS", "6")))
+_RELAY_QUEUE_BATCH = max(1, int(os.getenv("SESSION_RELAY_QUEUE_BATCH", "3")))
+
+
+async def dispatch_queued_relays() -> Dict[str, int]:
+    """대상이 한가해진 대기 질문을 배달한다.
+
+    한 번에 여러 건을 같은 대상에 보내지 않는다 — 배달하는 순간 그 대상은
+    바빠지고, 두 번째 건이 진행 중인 답변을 밀어낸다. 대상당 한 건만 집는다.
+    """
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    sent = 0
+    expired = 0
+
+    # 너무 묵은 것은 버린다. 여섯 시간 전 질문을 지금 보내면 맥락이 달라져
+    # 엉뚱한 답이 온다 — 답이 없는 것보다 나쁘다.
+    exp = await pool.execute(
+        "UPDATE session_relay SET status='failed', "
+        "error='queue_expired: 대상이 오래 바빠 배달 못 함' "
+        "WHERE status='queued' AND created_at <= now() - ($1::int * interval '1 hour')",
+        _RELAY_QUEUE_MAX_AGE_HOURS,
+    )
+    try:
+        expired = int(str(exp).split()[-1])
+    except (ValueError, IndexError):
+        expired = 0
+
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT ON (target_session_id)
+               id::text AS id, origin_session_id::text AS origin, target_session_id::text AS target,
+               question
+          FROM session_relay
+         WHERE status = 'queued'
+         ORDER BY target_session_id, created_at ASC
+         LIMIT $1
+        """,
+        _RELAY_QUEUE_BATCH,
+    )
+    for r in rows:
+        if await _target_is_busy(r["target"]):
+            continue
+        # 'queued' 인 동안만 집는다. 두 프로세스가 같이 돌아도 한 번만 나간다.
+        claimed = await pool.execute(
+            "UPDATE session_relay SET status='pending' WHERE id=$1::uuid AND status='queued'",
+            r["id"],
+        )
+        if str(claimed).split()[-1] != "1":
+            continue
+
+        origin = await pool.fetchrow(
+            "SELECT title, coalesce(role_key,'') AS role_key FROM chat_sessions WHERE id = $1::uuid",
+            r["origin"],
+        )
+        tgt_role = await pool.fetchval(
+            "SELECT coalesce(role_key,'') FROM chat_sessions WHERE id = $1::uuid", r["target"]
+        )
+        prompt = _build_question(
+            origin["title"] if origin else "", origin["role_key"] if origin else "",
+            r["origin"], tgt_role or "", r["question"], "",
+        )
+        task = asyncio.create_task(
+            _run_relay(r["id"], r["target"], prompt, r["origin"], r["question"])
+        )
+        _running.add(task)
+        task.add_done_callback(_running.discard)
+        sent += 1
+        logger.info("session_relay_queue_dispatched relay=%s target=%s",
+                    r["id"][:8], r["target"][:8])
+
+    if sent or expired:
+        logger.info("session_relay_queue_swept sent=%d expired=%d", sent, expired)
+    return {"sent": sent, "expired": expired}
