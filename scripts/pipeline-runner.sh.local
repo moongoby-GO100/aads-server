@@ -853,14 +853,25 @@ commit_job_worktree_for_approval() {
     # 43줄짜리 결과물은 detached HEAD 에 남아 아무도 회수하지 않았다.
     # 새 커밋이 필요 없을 뿐이므로 그 HEAD 를 승인 커밋으로 채택한다.
     # 정말 아무 일도 하지 않은 잡(HEAD 가 작업 시작 SHA 그대로)만 실패다.
-    local adopted_sha=""
+    local adopted_sha="" deploy_only_no_commit=0
     if git -C "$worktree_dir" diff --cached --quiet 2>/dev/null; then
         adopted_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
-        if [[ ! "$adopted_sha" =~ ^[0-9a-f]{40}$ || -z "$pre_exec_sha" || "$adopted_sha" == "$pre_exec_sha" ]]; then
+        if [[ ! "$adopted_sha" =~ ^[0-9a-f]{40}$ || -z "$pre_exec_sha" ]]; then
             adopted_sha=""
+        elif [[ "$adopted_sha" == "$pre_exec_sha" ]]; then
+            # DEPLOY_ONLY job 은 정의상 코드 변경/커밋을 만들지 않으므로
+            # HEAD == pre_exec_sha 가 정상이다 — "아무 일도 하지 않은 잡" 판정에서 제외한다.
+            if is_deploy_only_instruction "$instruction"; then
+                deploy_only_no_commit=1
+            else
+                adopted_sha=""
+            fi
         fi
     fi
-    if [[ -n "$adopted_sha" ]]; then
+    if [[ -n "$adopted_sha" && "$deploy_only_no_commit" -eq 1 ]]; then
+        log "  DEPLOY_ONLY_APPROVAL_NO_COMMIT job=$job_id sha=$adopted_sha (DEPLOY_ONLY, 변경 없음 — 커밋 생략)"
+        record_runner_event "$job_id" "deploy_only_approval_no_commit" "running" "deploy_only_no_commit" "" "" "" "" "{\"deploy_only\":true,\"changed_files\":0}"
+    elif [[ -n "$adopted_sha" ]]; then
         log "  APPROVAL_COMMIT_ADOPTED_EXISTING job=$job_id sha=$adopted_sha (워커가 워크트리에서 이미 커밋)"
     else
         local commit_msg="Pipeline-Runner: ${job_id} — ${instruction:0:80}" commit_out commit_err exit_code=0

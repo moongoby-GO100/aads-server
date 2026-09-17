@@ -54,8 +54,12 @@ def test_deploy_only_bypass_does_not_cancel_the_job():
     for script_name in SCRIPTS:
         script = _read_script(script_name)
 
-        bypass_start = script.index("if is_deploy_only_instruction")
         cancel_start = script.index("NO_CHANGES job=$job_id")
+        # commit_job_worktree_for_approval() 에도 별도의
+        # "if is_deploy_only_instruction" 분기가 있으므로, 첫 occurrence 가
+        # 아니라 no_changes 게이트 바로 앞의 occurrence 를 찾는다.
+        bypass_start = script.rfind("if is_deploy_only_instruction", 0, cancel_start)
+        assert bypass_start != -1
         bypass_block = script[bypass_start:cancel_start]
 
         assert "status='cancelled'" not in bypass_block
