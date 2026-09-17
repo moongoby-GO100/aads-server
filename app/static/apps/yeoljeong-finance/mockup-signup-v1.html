@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>매장비서 회원가입 목업 v1 — 2026-09-17</title>
+<style>
+  :root{
+    --bg:#0f1115; --surface:#171a21; --surface2:#1e222b; --line:#2b3140;
+    --text:#e8eaef; --muted:#9aa3b2; --brand:#e0533d; --brand-weak:#3a1f1a;
+    --ok:#3fa96b; --warn:#d8a13a; --danger:#d15353; --radius:14px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+       line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding:24px 16px 64px}
+  header.doc{border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:24px}
+  header.doc h1{font-size:20px;margin:0 0 6px}
+  header.doc p{margin:0;color:var(--muted);font-size:13px}
+  .legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .tag{font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+  .tag.new{border-color:var(--brand);color:#f0a08f;background:var(--brand-weak)}
+  .screens{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:20px}
+  .screen{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;display:flex;flex-direction:column}
+  .screen > h2{margin:0;font-size:13px;letter-spacing:.02em;padding:11px 14px;background:var(--surface2);
+               border-bottom:1px solid var(--line);color:var(--muted);font-weight:600}
+  .phone{padding:16px 14px 20px}
+  .steps{display:flex;gap:6px;margin-bottom:16px}
+  .steps i{flex:1;height:4px;border-radius:2px;background:var(--line);font-style:normal}
+  .steps i.on{background:var(--brand)}
+  .title{font-size:19px;font-weight:700;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 16px}
+  label{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
+  input,select{width:100%;background:#12151b;border:1px solid var(--line);color:var(--text);
+        border-radius:10px;padding:13px 12px;font-size:15px;min-height:48px}
+  input:focus,select:focus{outline:2px solid var(--brand);outline-offset:1px;border-color:transparent}
+  .hint{font-size:11.5px;color:var(--muted);margin-top:6px}
+  .hint.err{color:var(--danger)}
+  .hint.ok{color:var(--ok)}
+  .meter{height:5px;border-radius:3px;background:var(--line);margin-top:8px;overflow:hidden}
+  .meter > span{display:block;height:100%;width:62%;background:var(--warn)}
+  button.cta{width:100%;margin-top:20px;background:var(--brand);color:#fff;border:0;border-radius:11px;
+        padding:15px;font-size:15px;font-weight:700;min-height:52px;cursor:pointer}
+  button.ghost{width:100%;margin-top:9px;background:transparent;color:var(--muted);border:1px solid var(--line);
+        border-radius:11px;padding:12px;font-size:13px;min-height:44px;cursor:pointer}
+  .row{display:flex;gap:8px;align-items:flex-end}
+  .row input{flex:1}
+  .row button{white-space:nowrap;background:var(--surface2);color:var(--text);border:1px solid var(--line);
+        border-radius:10px;padding:13px 14px;font-size:13px;min-height:48px;cursor:pointer}
+  .code{display:flex;gap:8px;margin-top:6px}
+  .code input{text-align:center;font-size:20px;letter-spacing:.2em;padding:14px 8px}
+  .pick{display:flex;flex-direction:column;gap:9px;margin-top:10px}
+  .pick .opt{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;
+        padding:13px;background:#12151b;cursor:pointer}
+  .pick .opt.sel{border-color:var(--brand);background:var(--brand-weak)}
+  .pick .opt b{display:block;font-size:14px}
+  .pick .opt span{font-size:12px;color:var(--muted)}
+  .done{text-align:center;padding:12px 0 0}
+  .done .mark{width:62px;height:62px;border-radius:50%;background:var(--brand-weak);border:2px solid var(--brand);
+        margin:6px auto 16px;display:flex;align-items:center;justify-content:center;font-size:28px;color:var(--brand)}
+  .track{margin:18px 0 0;padding:0;list-style:none;text-align:left}
+  .track li{display:flex;gap:10px;padding:9px 0;font-size:13px;border-bottom:1px dashed var(--line)}
+  .track li:last-child{border-bottom:0}
+  .track .dot{width:18px;height:18px;border-radius:50%;border:2px solid var(--line);flex:0 0 18px;margin-top:2px}
+  .track .dot.on{background:var(--ok);border-color:var(--ok)}
+  .track .dot.now{border-color:var(--warn)}
+  .track small{display:block;color:var(--muted);font-size:11.5px}
+  .banner{background:var(--brand-weak);border:1px solid var(--brand);border-radius:11px;padding:12px;font-size:12.5px;margin-bottom:14px}
+  .banner b{color:#f0a08f}
+  table.adm{width:100%;border-collapse:collapse;font-size:12.5px}
+  table.adm th,table.adm td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line)}
+  table.adm th{color:var(--muted);font-weight:600;font-size:11.5px}
+  .pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+  .pill.wait{border-color:var(--warn);color:var(--warn)}
+  .pill.ok{border-color:var(--ok);color:var(--ok)}
+  .btn-s{font-size:11.5px;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface2);
+        color:var(--text);cursor:pointer;min-height:32px}
+  .btn-s.acc{border-color:var(--ok);color:var(--ok)}
+  .notes{margin-top:34px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+  .notes h2{font-size:15px;margin:0 0 12px}
+  .notes table{width:100%;border-collapse:collapse;font-size:13px}
+  .notes th,.notes td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  .notes th{color:var(--muted);font-size:12px}
+  code{background:#12151b;border:1px solid var(--line);border-radius:6px;padding:1px 5px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>매장비서(FOOD) 회원가입 — 화면 목업 v1</h1>
+  <p>작성 2026-09-17 KST · 대상 <code>fb.newtalk.kr</code> · 대응 PRD <code>prd-signup-v1.html</code> · 상태: 설계안(미구현)</p>
+  <div class="legend">
+    <span class="tag">S1 계정 만들기</span>
+    <span class="tag new">S2 휴대폰 본인확인 (신규)</span>
+    <span class="tag new">S3 소속 매장 선택 (신규)</span>
+    <span class="tag">S4 신청 완료·승인 대기</span>
+    <span class="tag new">S5 관리자 승인함 (개편)</span>
+    <span class="tag new">S6 비밀번호 재설정 (신규)</span>
+  </div>
+</header>
+
+<div class="screens">
+
+  <!-- S1 -->
+  <section class="screen">
+    <h2>S1 · 계정 만들기 (모바일 우선)</h2>
+    <div class="phone">
+      <div class="steps"><i class="on"></i><i></i><i></i><i></i></div>
+      <p class="title">직원 회원가입</p>
+      <p class="sub">근무하실 매장 담당자가 승인하면 바로 출퇴근·급여 확인을 쓰실 수 있습니다.</p>
+
+      <label for="m-name">이름</label>
+      <input id="m-name" value="김성실" placeholder="실명">
+
+      <label for="m-email">이메일 (로그인 아이디)</label>
+      <input id="m-email" type="email" value="sungsil@example.com">
+      <div class="hint ok">사용 가능한 이메일입니다</div>
+
+      <label for="m-pw">비밀번호</label>
+      <input id="m-pw" type="password" value="········">
+      <div class="meter"><span></span></div>
+      <div class="hint">영문·숫자 포함 8자 이상 · 현재 강도 보통</div>
+
+      <label for="m-pw2">비밀번호 확인</label>
+      <input id="m-pw2" type="password" value="········">
+
+      <button class="cta">다음 — 본인확인</button>
+      <button class="ghost">이미 계정이 있습니다 · 로그인</button>
+    </div>
+  </section>
+
+  <!-- S2 -->
+  <section class="screen">
+    <h2>S2 · 휴대폰 본인확인 <span class="tag new">신규</span></h2>
+    <div class="phone">
+      <div class="steps"><i class="on"></i><i class="on"></i><i></i><i></i></div>
+      <p class="title">휴대폰 번호 확인</p>
+      <p class="sub">근로계약·급여명세 통지에 쓰이는 번호입니다. 매장 담당자가 본인 여부를 확인할 때도 이 번호를 봅니다.</p>
+
+      <label for="m-tel">휴대폰 번호</label>
+      <div class="row">
+        <input id="m-tel" inputmode="tel" value="010-2345-6789">
+        <button type="button">인증번호</button>
+      </div>
+      <div class="hint">인증번호를 보냈습니다 · 남은 시간 02:47</div>
+
+      <label>인증번호 6자리</label>
+      <div class="code"><input value="418 3 0 2" aria-label="인증번호"></div>
+      <div class="hint err">번호가 오지 않으면 재발송을 눌러 주세요 (남은 재발송 2회)</div>
+
+      <button class="cta">확인하고 다음</button>
+      <button class="ghost">번호가 없어요 — 매장 담당자 초대링크로 가입</button>
+    </div>
+  </section>
+
+  <!-- S3 -->
+  <section class="screen">
+    <h2>S3 · 소속 매장 선택 <span class="tag new">신규</span></h2>
+    <div class="phone">
+      <div class="steps"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></div>
+      <p class="title">어느 매장에서 일하시나요?</p>
+      <p class="sub">선택한 매장의 담당자에게 승인 요청이 갑니다. 승인 전까지는 내 정보만 보입니다.</p>
+
+      <label for="m-biz">사업자</label>
+      <select id="m-biz">
+        <option>열정국밥 (4개 매장)</option>
+        <option>언니냉면</option>
+      </select>
+
+      <label>근무 매장</label>
+      <div class="pick">
+        <div class="opt sel"><div class="dot on"></div><div><b>성신여대점</b><span>서울 성북구 · 담당자 박점장</span></div></div>
+        <div class="opt"><div class="dot"></div><div><b>중화점</b><span>서울 중랑구 · 담당자 이점장</span></div></div>
+        <div class="opt"><div class="dot"></div><div><b>미아점</b><span>서울 강북구 · 담당자 최점장</span></div></div>
+      </div>
+
+      <label for="m-date">입사(예정)일</label>
+      <input id="m-date" type="date" value="2026-09-22">
+
+      <button class="cta">가입 신청 보내기</button>
+      <button class="ghost">매장을 못 찾겠어요</button>
+    </div>
+  </section>
+
+  <!-- S4 -->
+  <section class="screen">
+    <h2>S4 · 신청 완료 · 승인 대기</h2>
+    <div class="phone">
+      <div class="steps"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></div>
+      <div class="done">
+        <div class="mark">✓</div>
+        <p class="title">가입 신청을 보냈습니다</p>
+        <p class="sub">성신여대점 박점장님이 확인 중입니다. 승인되면 알림을 보내 드립니다.</p>
+      </div>
+      <ul class="track">
+        <li><span class="dot on"></span><div>계정 생성<small>2026-09-17 17:20 완료</small></div></li>
+        <li><span class="dot on"></span><div>휴대폰 본인확인<small>010-2345-6789 확인됨</small></div></li>
+        <li><span class="dot now"></span><div>매장 담당자 승인<small>대기 중 · 보통 1영업일 이내</small></div></li>
+        <li><span class="dot"></span><div>입사서류 등록<small>승인 후 열립니다 (신분증·통장사본)</small></div></li>
+        <li><span class="dot"></span><div>근로계약 서명<small>담당자가 작성하면 알림이 갑니다</small></div></li>
+      </ul>
+      <button class="ghost">담당자에게 승인 재요청</button>
+      <button class="ghost">잘못 신청했어요 · 매장 바꾸기</button>
+    </div>
+  </section>
+
+  <!-- S5 -->
+  <section class="screen" style="grid-column:span 2">
+    <h2>S5 · 관리자 승인함 (개편) <span class="tag new">가입요청·계정 한 화면</span></h2>
+    <div class="phone">
+      <div class="banner"><b>승인 대기 3건</b> · 이 중 1건은 본인확인이 끝나지 않았습니다. 승인하면 그 즉시 해당 매장 소속으로 연결됩니다.</div>
+      <table class="adm">
+        <thead><tr><th>신청자</th><th>매장</th><th>본인확인</th><th>신청일</th><th>상태</th><th></th></tr></thead>
+        <tbody>
+          <tr>
+            <td>김성실<small style="display:block;color:var(--muted)">sungsil@example.com</small></td>
+            <td>성신여대점</td><td><span class="pill ok">완료</span></td><td>09-17 17:20</td>
+            <td><span class="pill wait">대기</span></td>
+            <td><button class="btn-s acc">승인</button> <button class="btn-s">반려</button></td>
+          </tr>
+          <tr>
+            <td>박믿음<small style="display:block;color:var(--muted)">mideum@example.com</small></td>
+            <td>중화점</td><td><span class="pill wait">미완료</span></td><td>09-17 11:02</td>
+            <td><span class="pill wait">대기</span></td>
+            <td><button class="btn-s" disabled>승인 불가</button> <button class="btn-s">본인확인 재요청</button></td>
+          </tr>
+          <tr>
+            <td>최근면<small style="display:block;color:var(--muted)">geunmyeon@example.com</small></td>
+            <td>미아점</td><td><span class="pill ok">완료</span></td><td>09-16 09:41</td>
+            <td><span class="pill ok">승인됨</span></td>
+            <td><button class="btn-s">서류 검수</button></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="hint" style="margin-top:12px">승인 시 <code>tenant_memberships</code> 연결 + <code>yeoljeong_employee_join_requests.status=approved</code> 를 한 트랜잭션으로 처리하고, 실패하면 둘 다 되돌립니다.</div>
+    </div>
+  </section>
+
+  <!-- S6 -->
+  <section class="screen">
+    <h2>S6 · 비밀번호 재설정 <span class="tag new">신규</span></h2>
+    <div class="phone">
+      <p class="title">비밀번호를 잊으셨나요</p>
+      <p class="sub">가입할 때 확인한 휴대폰 번호로 재설정 링크를 보내 드립니다. 이메일로도 받을 수 있습니다.</p>
+      <label for="m-find">이메일 또는 휴대폰 번호</label>
+      <input id="m-find" value="sungsil@example.com">
+      <button class="cta">재설정 링크 받기</button>
+      <div class="hint" style="margin-top:14px">링크는 30분간 유효하며 1회만 사용할 수 있습니다. 재설정하면 기존 로그인 세션이 모두 해제됩니다.</div>
+      <button class="ghost">매장 담당자에게 도움 요청</button>
+    </div>
+  </section>
+
+</div>
+
+<div class="notes">
+  <h2>목업이 지금 화면과 다른 점 (설계 의도)</h2>
+  <table>
+    <tr><th style="width:24%">항목</th><th style="width:38%">현재 (2026-09-17 실측)</th><th>목업 v1</th></tr>
+    <tr><td>본인확인</td><td>없음. 아무 이메일로 즉시 계정 생성 + 토큰 발급</td><td>S2 휴대폰 인증을 통과해야 신청 가능. 미인증 계정은 관리자 승인 버튼 자체가 비활성</td></tr>
+    <tr><td>소속 매장</td><td>가입 시 지점은 참고값. 가입자마다 새 워크스페이스가 생김</td><td>S3에서 사업자·매장을 고르고, 승인 시 그 매장 소속으로 연결. 개인 워크스페이스를 만들지 않음</td></tr>
+    <tr><td>가입요청 생성</td><td>계정 생성과 가입요청이 따로 호출됨 — 중간에 끊기면 계정만 남음</td><td>S3 제출 한 번으로 계정·본인확인·가입요청을 하나로 묶어 처리</td></tr>
+    <tr><td>가입 후 안내</td><td>가입 직후 무엇을 기다려야 하는지 화면에 없음</td><td>S4 진행 추적 5단계 — 지금 어디에 멈춰 있고 다음에 무엇이 열리는지 표시</td></tr>
+    <tr><td>비밀번호 정책</td><td>서버 6자 / 화면 8자 불일치</td><td>서버·화면 모두 8자 + 강도 표시. 재설정 경로(S6) 제공</td></tr>
+    <tr><td>관리자 화면</td><td>가입요청 목록에 본인확인 여부가 없음</td><td>S5에서 본인확인 상태를 같이 보여 주고 미확인 건은 승인 차단</td></tr>
+  </table>
+</div>
+
+</div>
+</body>
+</html>

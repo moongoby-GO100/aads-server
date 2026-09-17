@@ -1439,12 +1439,18 @@ def normalize_tool_events(tools_called: Any) -> List[Dict[str, Any]]:
         if event_type == "tool_use":
             if not tool_name:
                 continue
-            normalized.append({
+            use_payload = {
                 "type": "tool_use",
                 "tool_name": tool_name,
                 "tool_use_id": str(item.get("tool_use_id") or ""),
                 "tool_input": item.get("tool_input") if isinstance(item.get("tool_input"), dict) else {},
-            })
+            }
+            # at 은 호출 시각(epoch)이다. 여기서 떨어뜨리면 tool_result 의 at 과
+            # 짝지어 계산하는 llmops_tool_calls.latency_ms 가 NULL 로 남는다.
+            # 2026-09-17 컷오버 후에도 이 경로를 탄 trace 만 latency 가 비어 있었다.
+            if item.get("at") is not None:
+                use_payload["at"] = item["at"]
+            normalized.append(use_payload)
         elif event_type == "tool_result":
             if not tool_name:
                 continue
@@ -1459,6 +1465,8 @@ def normalize_tool_events(tools_called: Any) -> List[Dict[str, Any]]:
                     payload[key] = item.get(key)
             if item.get("latency_ms") is not None:
                 payload["latency_ms"] = item["latency_ms"]
+            if item.get("at") is not None:
+                payload["at"] = item["at"]
             normalized.append(payload)
         elif event_type == "thinking":
             text = str(item.get("thinking") or item.get("content") or "").strip()

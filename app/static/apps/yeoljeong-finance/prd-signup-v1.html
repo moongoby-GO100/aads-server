@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>매장비서 회원가입 PRD v1 — 2026-09-17</title>
+<style>
+  :root{--bg:#0f1115;--surface:#171a21;--line:#2b3140;--text:#e8eaef;--muted:#9aa3b2;
+        --brand:#e0533d;--ok:#3fa96b;--warn:#d8a13a;--danger:#d15353}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);line-height:1.65;
+       font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}
+  .wrap{max-width:960px;margin:0 auto;padding:28px 18px 80px}
+  h1{font-size:23px;margin:0 0 6px}
+  h2{font-size:17px;margin:38px 0 12px;padding-top:14px;border-top:1px solid var(--line)}
+  h3{font-size:14px;margin:22px 0 8px;color:var(--muted)}
+  p,li{font-size:14px}
+  .meta{color:var(--muted);font-size:13px;margin:0 0 4px}
+  .lead{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--brand);
+        border-radius:10px;padding:14px 16px;margin:20px 0 8px;font-size:14px}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;font-weight:600;background:var(--surface)}
+  code{background:#12151b;border:1px solid var(--line);border-radius:6px;padding:1px 5px;font-size:12.5px}
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--danger)}
+  .p0{color:var(--danger);font-weight:700} .p1{color:var(--warn);font-weight:700} .p2{color:var(--muted);font-weight:700}
+  ul{padding-left:18px} li{margin:4px 0}
+  a{color:#f0a08f}
+  .src{color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>매장비서(FOOD) 회원가입 — 기획·설계 PRD v1</h1>
+<p class="meta">작성 2026-09-17 KST · 작성자 CTO AI · 대상 서비스 <code>fb.newtalk.kr</code> (컨테이너 <code>yeoljeong-finance</code>, 127.0.0.1:8110)</p>
+<p class="meta">목업 <a href="./mockup-signup-v1.html">mockup-signup-v1.html</a> · 연결 목표 “매장비서 인사관리(HR) 완성” · 마일스톤 M9-1~M9-4</p>
+
+<div class="lead">
+  <b>한 줄 결론.</b> 회원가입은 <b>지금 됩니다</b> — 2026-09-17 17:20 KST 에 실제 계정을 만들어 토큰 발급과 로그인까지 확인했습니다(점검 계정은 즉시 삭제).
+  다만 <b>본인확인이 없고</b>, 가입자마다 <b>빈 워크스페이스가 생기며</b>, 비밀번호를 잊으면 <b>복구 경로가 없습니다</b>.
+  이 PRD 는 “되게 하는 것”이 아니라 “믿고 쓰게 하는 것”을 범위로 합니다.
+</div>
+
+<h2>1. 현황 실측 (2026-09-17 17:1x~17:2x KST)</h2>
+<table>
+  <tr><th style="width:26%">확인 항목</th><th style="width:34%">방법</th><th>결과</th></tr>
+  <tr><td>가입 화면</td><td><code>GET https://fb.newtalk.kr/</code></td><td class="ok">302 → <code>/static/apps/yeoljeong-finance/index.html</code>, 로그인 게이트에 “직원 회원가입” 진입점 존재 (index.html:2457, 4469~4505)</td></tr>
+  <tr><td>가입 API 입력검증</td><td><code>POST /api/v1/auth/register</code> (password 누락)</td><td class="ok">422 <code>Field required</code></td></tr>
+  <tr><td>실제 가입 E2E</td><td>정상 payload 로 신규 계정 생성</td><td class="ok">200 — JWT·user_id·tenant_id 발급, <code>onboarding_required=true</code></td></tr>
+  <tr><td>가입 계정 로그인</td><td><code>POST /api/v1/auth/login</code></td><td class="ok">200 — 동일 계정 토큰 재발급</td></tr>
+  <tr><td>점검 계정 정리</td><td><code>db_safe_write</code> 4회</td><td class="ok">membership·chat_workspace·tenant·user 각 1행 삭제, 사용자 88→87 원복</td></tr>
+  <tr><td>계정 규모</td><td><code>saas_users</code></td><td>87명 (최근 30일 5명) · 이메일 인증 완료 <b>3명</b></td></tr>
+  <tr><td>직원 연결</td><td><code>yeoljeong_employee_join_requests</code></td><td>17건 (approved 14 / pending 3) — 계정 87개 대비 <span class="warn">20%</span>만 매장에 연결</td></tr>
+  <tr><td>테넌트</td><td><code>tenants</code> / <code>tenant_memberships</code></td><td>87 / 122 — <b>사용자 수 = 테넌트 수</b></td></tr>
+</table>
+
+<h2>2. 문제점 — 무엇이 위험한가</h2>
+<table>
+  <tr><th>#</th><th style="width:22%">문제</th><th style="width:30%">근거 (실측)</th><th>사용자·운영 영향</th></tr>
+  <tr><td class="p0">P0</td><td>본인확인 부재</td><td><code>register()</code> auth.py:140-184 에 인증 절차 없음. <code>@aads.local</code> 가짜 도메인으로 즉시 가입 성공. 87명 중 이메일 인증 3명</td><td>실재하지 않는 사람이 계정을 만들 수 있고, 매장 담당자는 승인 화면에서 본인 여부를 확인할 근거가 없다. 근로계약·급여 통지가 미확인 주체에게 나간다</td></tr>
+  <tr><td class="p0">P0</td><td>가입자마다 새 조직 생성</td><td>가입 1건이 <code>tenants</code> 1행 + <code>chat_workspaces</code> 1행을 만든다(삭제 시 FK <code>fk_chat_workspaces_tenant</code> 로 확인). tenants 87 = users 87</td><td>직원은 “내 매장”에 들어가야 하는데 자기 전용 빈 조직으로 들어간다. 데이터가 87개 조직으로 흩어지고, 매장 기준 집계·권한이 어긋난다</td></tr>
+  <tr><td class="p0">P0</td><td>가입과 가입요청이 분리</td><td>계정 생성은 <code>/auth/register</code>, 가입요청은 <code>/employees/join-requests</code>(yeoljeong_finance.py:385) 로 프론트가 두 번 호출</td><td>두 번째 호출이 실패하면 <b>계정만 있고 매장에 연결되지 않은</b> 고아 계정이 남는다. 실제로 계정 87 대 요청 17의 격차가 이 구조와 무관하지 않다</td></tr>
+  <tr><td class="p1">P1</td><td>비밀번호 복구 불가</td><td>auth.py 라우트 전수 — register/login/impersonate/tenants/invites/me 뿐. 재설정 엔드포인트 없음</td><td>비밀번호를 잊은 직원은 관리자 대리 로그인 외 방법이 없다. 운영 부담이 사람에게 전가된다</td></tr>
+  <tr><td class="p1">P1</td><td>비밀번호 정책 불일치</td><td>서버 <code>min 6자</code>(auth.py:49-54) vs 화면 <code>minlength=8</code>(index.html:4493)</td><td>API 를 직접 호출하면 6자 비밀번호 계정이 만들어진다. 화면 규칙이 실제 보호선이 아니다</td></tr>
+  <tr><td class="p1">P1</td><td>가입 폼이 받는 값이 API 에 없음</td><td>폼은 지점·연락처·생년월일·주소를 수집(index.html:4482-4491)하나 <code>RegisterRequest</code> 는 email·password·name·organization_name·team_invites 만 받는다</td><td>직원이 입력한 값이 가입 시점에 저장되지 않아 승인 화면에서 판단 근거가 비어 있다</td></tr>
+  <tr><td class="p2">P2</td><td>테스트 계정 운영 DB 잔존</td><td><code>saas_users</code> 87명 중 e2e/test/probe 패턴 <b>30명(34%)</b>, e2e-* 테넌트 7개</td><td>사용자 수·전환율 등 운영 지표가 실제와 다르다. 정리 기준이 없으면 계속 쌓인다</td></tr>
+</table>
+
+<h2>3. 목표와 범위</h2>
+<h3>목표</h3>
+<ul>
+  <li>직원이 <b>휴대폰 본인확인</b>을 거쳐 <b>자기 매장에 소속된 상태로</b> 가입을 마친다.</li>
+  <li>가입 직후 화면에서 <b>지금 어디까지 왔고 다음에 무엇이 열리는지</b> 알 수 있다.</li>
+  <li>비밀번호를 잊어도 <b>사람 개입 없이</b> 스스로 복구한다.</li>
+  <li>관리자는 승인 화면에서 <b>본인확인 여부를 보고</b> 승인한다.</li>
+</ul>
+<h3>범위 밖 (이번 버전에서 하지 않는 것)</h3>
+<ul>
+  <li>소셜 로그인(카카오·네이버) — 본인확인 수단이 갖춰진 뒤 별도 검토.</li>
+  <li>사업주(점주) 셀프 가입으로 새 사업자를 만드는 흐름 — 현재는 CEO/관리자가 개설한다.</li>
+  <li>ACCT 회계원장 계정 통합 — 통합 목표 M4 의 company 매핑이 선행돼야 한다.</li>
+</ul>
+
+<h2>4. 사용자 흐름 (설계)</h2>
+<table>
+  <tr><th style="width:12%">단계</th><th style="width:30%">사용자가 하는 일</th><th>시스템이 하는 일</th></tr>
+  <tr><td>S1 계정</td><td>이름·이메일·비밀번호 입력</td><td>이메일 중복 즉시 확인, 비밀번호 8자 + 강도 표시. 아직 계정을 만들지 않는다(임시 세션에 보관)</td></tr>
+  <tr><td>S2 본인확인</td><td>휴대폰 번호 입력 → 인증번호 6자리</td><td>인증 성공 시에만 다음 단계 진입. 재발송 3회·유효 3분 제한</td></tr>
+  <tr><td>S3 매장 선택</td><td>사업자 → 근무 매장 → 입사예정일 선택 후 제출</td><td><b>한 트랜잭션</b>으로 계정 생성 + 본인확인 기록 + 가입요청 생성. 개인 테넌트는 만들지 않는다</td></tr>
+  <tr><td>S4 대기</td><td>진행 상황 확인, 필요 시 재요청</td><td>5단계 추적 표시(계정→본인확인→승인→서류→계약). 담당자에게 알림 발송</td></tr>
+  <tr><td>S5 승인</td><td>관리자가 승인/반려</td><td>승인 시 <code>tenant_memberships</code> 연결 + <code>join_request.status=approved</code> 동시 반영. 본인확인 미완료 건은 승인 버튼 비활성</td></tr>
+</table>
+
+<h2>5. API 설계</h2>
+<table>
+  <tr><th style="width:30%">엔드포인트</th><th style="width:12%">구분</th><th>내용</th></tr>
+  <tr><td><code>POST /auth/signup/verify-phone/request</code></td><td>신규</td><td>휴대폰 인증번호 발송. 응답에 <code>verification_id</code>·만료시각. 동일 번호 시간당 5회 제한</td></tr>
+  <tr><td><code>POST /auth/signup/verify-phone/confirm</code></td><td>신규</td><td>코드 검증 → 단기 <code>signup_ticket</code> 발급(30분)</td></tr>
+  <tr><td><code>POST /auth/register</code></td><td>변경</td><td><code>signup_ticket</code>·<code>branch_id</code>·<code>join_date</code> 필수화. 티켓 없으면 4xx. 계정+가입요청을 한 트랜잭션으로 생성하고 <b>개인 tenant 생성을 하지 않음</b>. 비밀번호 최소 8자</td></tr>
+  <tr><td><code>PATCH /employees/join-requests/{id}</code></td><td>변경</td><td>승인 시 멤버십 연결까지 같은 트랜잭션에서 처리. 본인확인 미완료 건은 409</td></tr>
+  <tr><td><code>POST /auth/password/reset-request</code></td><td>신규</td><td>이메일 또는 휴대폰으로 재설정 링크. 존재하지 않는 계정도 동일 응답(계정 존재 노출 방지)</td></tr>
+  <tr><td><code>POST /auth/password/reset-confirm</code></td><td>신규</td><td>토큰 1회용·30분 만료. 성공 시 해당 사용자 기존 JWT 무효화(<code>auth_revoked_tokens</code> 활용)</td></tr>
+</table>
+
+<h2>6. 데이터 모델 변경</h2>
+<ul>
+  <li><code>saas_users</code> — <code>phone</code>, <code>phone_verified_at</code> 추가. 기존 <code>email_verified_at</code> 은 유지하되 필수 조건에서 제외.</li>
+  <li><code>signup_phone_verifications</code> (신규) — <code>id, phone, code_hash, expires_at, attempts, consumed_at</code>.</li>
+  <li><code>password_reset_tokens</code> (신규) — <code>id, user_id, token_hash, expires_at, used_at, requested_ip</code>.</li>
+  <li><code>yeoljeong_employee_join_requests</code> — <code>branch_id</code>, <code>join_date</code>, <code>phone_verified</code> 스냅샷 컬럼 확인 후 보강.</li>
+  <li><b>기존 데이터</b>: 개인 테넌트 87개 중 실사용 없는 건의 정리 기준을 M9-4 에서 별도 합의. 이번 PRD 는 <b>신규 가입이 더 만들지 않게</b> 하는 것까지를 범위로 한다.</li>
+</ul>
+
+<h2>7. 완료 기준 (마일스톤)</h2>
+<table>
+  <tr><th style="width:10%">ID</th><th style="width:28%">제목</th><th style="width:12%">기한</th><th>판정 기준</th></tr>
+  <tr><td class="p0">M9-1</td><td>본인확인 + 비밀번호 정책 일치</td><td>2026-10-10</td><td>미인증 register 호출 4xx 재현 · 7자 비밀번호 422 재현 · 신규행 본인확인 NOT NULL 100%</td></tr>
+  <tr><td class="p0">M9-2</td><td>가입 원자화 (계정·요청·소속)</td><td>2026-10-10</td><td>가입 1건에 users +1 / join_requests +1 / <b>tenants +0</b> · 중간 실패 시 전부 롤백 재현 · 승인 1건에 memberships +1 과 status=approved 동시 반영</td></tr>
+  <tr><td class="p1">M9-3</td><td>비밀번호 재설정·복구</td><td>2026-10-20</td><td>요청→재설정→신규 로그인 200 · 재사용 토큰 4xx · 30분 초과 4xx · 재설정 후 기존 JWT 로 <code>/auth/me</code> 401</td></tr>
+  <tr><td class="p1">M9-4</td><td>화면 v1 적용 + 계정 정리</td><td>2026-10-31</td><td>가입 1~4단계 캡처 4장 · 승인 대기 화면 캡처 · 테스트 계정 잔존 0건 (기준: 87명 중 30명)</td></tr>
+</table>
+
+<h2>8. 리스크</h2>
+<table>
+  <tr><th style="width:26%">리스크</th><th>대응</th></tr>
+  <tr><td>SMS 발송 수단 미확보</td><td>본인확인 구현의 선행 조건. 발송 채널(알림톡/SMS 사업자)과 건당 비용을 M9-1 착수 전에 확정해야 한다. <b>미결 — CEO 결정 필요</b></td></tr>
+  <tr><td>기존 87개 개인 테넌트</td><td>삭제는 <code>chat_workspaces</code> FK 를 함께 다뤄야 한다(이번 점검에서 실제로 걸렸다). 신규 차단을 먼저 하고 정리는 별도 작업으로 분리</td></tr>
+  <tr><td>가입 단계 증가에 따른 이탈</td><td>S1~S3 를 한 화면 스크롤이 아니라 3단계로 쪼개되 각 단계 입력값을 임시 보관해 뒤로 가기에서 사라지지 않게 한다</td></tr>
+  <tr><td>운영 중 변경</td><td>register 는 현재 살아 있는 경로다. 스키마 추가 → 이중 경로 지원 → 구 경로 차단 순서로 배포하고, 각 단계마다 실제 가입 1건으로 검증한다</td></tr>
+</table>
+
+<p class="src" style="margin-top:34px">근거: contabo116 컨테이너 실측, aads DB 조회, <code>app/api/auth.py</code>·<code>app/api/yeoljeong_finance.py</code>·<code>app/static/apps/yeoljeong-finance/index.html</code> 코드 확인 (2026-09-17 17:1x~17:2x KST). 점검용으로 생성한 계정 1건은 같은 세션에서 삭제했다.</p>
+
+</div>
+</body>
+</html>
