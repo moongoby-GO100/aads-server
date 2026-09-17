@@ -206,6 +206,19 @@ async def _current_bubble_id(conn, session_id: str) -> Optional[str]:
             SELECT id::text FROM chat_messages
             WHERE session_id = $1::uuid
               AND role = 'assistant'
+              -- 화면에 버블로 그려지는 것에만 붙인다. 2026-09-18 실측으로
+              -- 48시간 11장이 **아무 화면에도 없었다** — 7장은 숨김 메시지
+              -- (`is_hidden`: 러너 진행·중단 조각)에, 4장은 이미 지워진
+              -- 메시지에 붙어 있었다. 붙을 자리가 화면에 없으면 인라인으로
+              -- 안 보이고, 화면은 source_message_id 가 있다는 이유로
+              -- 팝업에서도 빼 버린다. 그래서 카드가 통째로 사라진다.
+              AND is_hidden IS NOT TRUE
+              AND deleted_at IS NULL
+              -- 러너 진행 메시지는 대화에서 한 줄로 접히므로 카드가 붙을
+              -- 자리가 없다(대시보드 isRunnerChatMessage → runnerGroup).
+              AND COALESCE(intent, '') NOT IN
+                  ('pipeline_runner', 'runner_notification', 'ai_review_warning')
+              AND COALESCE(content, '') NOT LIKE '%[Pipeline Runner]%'
             -- COALESCE 를 벗기지 마라. intent 가 NULL 이면 비교 결과가 NULL 이고,
             -- DESC 정렬에서 NULL 은 맨 앞에 온다(NULLS FIRST 가 기본). 그러면
             -- intent 없는 **옛 답변**이 지금 흐르는 placeholder 를 제치고 1등이

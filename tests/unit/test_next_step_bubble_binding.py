@@ -90,3 +90,27 @@ def test_intent_이_NULL_인_옛_답변에_붙지_않는다():
     # 흐르는 중인 버블을 고르지 못한다.
     order = sql[sql.index("ORDER BY"):]
     assert order.index("COALESCE") < order.index("created_at")
+
+
+def test_숨김이거나_지워진_메시지에는_붙지_않는다():
+    """붙을 자리가 화면에 없으면 카드는 **어느 화면에도** 남지 않는다.
+
+    2026-09-18 실측. 48시간 동안 11장이 그렇게 사라졌다 — 7장은 숨김
+    메시지(러너 진행·중단 조각), 4장은 이미 지워진 메시지에 붙어 있었다.
+    인라인은 버블이 없어 못 그리고, 팝업은 source_message_id 가 있다는
+    이유로 그 카드를 제외한다.
+    """
+    conn = _Conn(result="x")
+    asyncio.run(_current_bubble_id(conn, "sess-1"))
+    assert "is_hidden IS NOT TRUE" in conn.sql
+    assert "deleted_at IS NULL" in conn.sql
+
+
+def test_러너_진행_메시지에는_붙지_않는다():
+    """러너 진행은 대화에서 한 줄로 접힌다(대시보드 runnerGroup).
+    접힌 줄 안에는 승인 버튼을 그릴 자리가 없다."""
+    conn = _Conn(result="x")
+    asyncio.run(_current_bubble_id(conn, "sess-1"))
+    for intent in ("pipeline_runner", "runner_notification", "ai_review_warning"):
+        assert intent in conn.sql
+    assert "[Pipeline Runner]" in conn.sql

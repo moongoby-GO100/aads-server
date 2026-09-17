@@ -909,20 +909,33 @@ async def approvals_pending(
     try:
         rows = await get_pool().fetch(
             """
-            SELECT id::text, action_type, action_summary, risk_level,
-                   gate_source, tier, requested_by, work_key,
-                   source_message_id::text AS source_message_id,
-                   to_char(created_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') AS at,
-                   decision,
-                   GREATEST(0, EXTRACT(EPOCH FROM (expires_at - now()))::int / 60)
+            SELECT r.id::text, r.action_type, r.action_summary, r.risk_level,
+                   r.gate_source, r.tier, r.requested_by, r.work_key,
+                   -- 붙을 버블이 화면에 없으면 **없다고 답한다.** 그래야 화면이
+                   -- 이 카드를 팝업·하단 카드로 되돌린다.
+                   --
+                   -- 2026-09-18. 붙을 자리가 사라진 카드(메시지가 지워졌거나
+                   -- 숨김 메시지에 붙은 카드)는 인라인으로도 안 뜨고,
+                   -- source_message_id 가 있다는 이유로 팝업에서도 빠져서
+                   -- 어느 화면에도 없었다 — 48시간 11장.
+                   CASE
+                     WHEN m.id IS NULL THEN NULL
+                     WHEN m.is_hidden IS TRUE THEN NULL
+                     WHEN m.deleted_at IS NOT NULL THEN NULL
+                     ELSE r.source_message_id::text
+                   END AS source_message_id,
+                   to_char(r.created_at AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') AS at,
+                   r.decision,
+                   GREATEST(0, EXTRACT(EPOCH FROM (r.expires_at - now()))::int / 60)
                        AS expires_in_min
-            FROM agent_permission_requests
-            WHERE decision = 'pending' AND tier = 'approve'
-              AND expires_at > now()
-              AND ($2 = '' OR requested_by = $2)
-            ORDER BY CASE risk_level WHEN 'critical' THEN 0 WHEN 'high' THEN 1
-                                     ELSE 2 END,
-                     created_at DESC
+            FROM agent_permission_requests r
+            LEFT JOIN chat_messages m ON m.id = r.source_message_id
+            WHERE r.decision = 'pending' AND r.tier = 'approve'
+              AND r.expires_at > now()
+              AND ($2 = '' OR r.requested_by = $2)
+            ORDER BY CASE r.risk_level WHEN 'critical' THEN 0 WHEN 'high' THEN 1
+                                       ELSE 2 END,
+                     r.created_at DESC
             LIMIT $1
             """,
             limit, session_id,
