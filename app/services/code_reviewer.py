@@ -57,6 +57,11 @@ _REVIEW_TOTAL_DEADLINE_SEC = int(os.environ.get("REVIEW_TOTAL_DEADLINE_SEC", "85
 # 쓸 이유가 없다. 재검수 스위퍼가 이 경로를 쓴다 — 동기 경로에서 상한에 걸린
 # 작업이 재검수에서도 똑같이 걸리면 복구 경로가 아무 의미가 없다.
 _REVIEW_ASYNC_DEADLINE_SEC = int(os.environ.get("REVIEW_ASYNC_DEADLINE_SEC", "240"))
+# 리뷰 프롬프트에 넣는 diff 상한(문자수). 리뷰 모델은 200K 컨텍스트인데 종전
+# 10KB 하드코딩은 그 0.5%도 쓰지 않았다. 실측(2026-09-17): runner 리뷰 287건 중
+# 196건(68%)이 절단된 채 심사됐고 승인율이 41.8% → 22.4% 로 떨어졌다. 반려 사유는
+# 코드 결함이 아니라 "diff 가 잘려 확인 불가"였다 (AADS-REVIEWER-DIFF-TRUNCATION-P0).
+REVIEW_DIFF_MAX_CHARS = int(os.environ.get("REVIEW_DIFF_MAX_CHARS", "200000"))
 
 _DIFF_HEADER_RE = re.compile(r"^diff --git a\/.+ b\/.+$", re.MULTILINE)
 _DIFF_HUNK_RE = re.compile(r"^@@ .+ @@$", re.MULTILINE)
@@ -533,6 +538,53 @@ def _diff_line_counts(diff: str) -> tuple[int, int]:
     return additions, deletions
 
 
+def _diff_stat_summary(diff: str) -> str:
+    """diff --git 헤더 기준 파일별 +/- 라인 수 요약을 만든다.
+
+    호출부가 `git diff --stat` 을 넘겨주지 않으므로, 절단이 필요한 큰 diff 에서도
+    리뷰어가 전체 변경 규모를 파악할 수 있게 diff 텍스트에서 직접 집계한다.
+    """
+    diff = diff or ""
+    headers = list(_DIFF_HEADER_RE.finditer(diff))
+    if not headers:
+        additions, deletions = _diff_line_counts(diff)
+        return f"전체 변경: +{additions} -{deletions}"
+
+    lines = ["파일별 변경 요약 (diff --stat 대체):"]
+    for idx, match in enumerate(headers):
+        section_start = match.end()
+        section_end = headers[idx + 1].start() if idx + 1 < len(headers) else len(diff)
+        additions, deletions = _diff_line_counts(diff[section_start:section_end])
+        header_match = re.match(r"^diff --git a/(.+?) b/(.+)$", match.group(0))
+        path = header_match.group(2).strip() if header_match else "?"
+        lines.append(f"  {path} | +{additions} -{deletions}")
+    return "\n".join(lines)
+
+
+def _truncate_diff_for_review(diff: str) -> tuple[str, bool]:
+    """diff 를 리뷰 프롬프트 상한(REVIEW_DIFF_MAX_CHARS) 안으로 다듬는다.
+
+    앞부분만 남기면 뒤쪽 변경이 통째로 보이지 않아 리뷰어가 "잘려서 확인 불가"를
+    근거로 반려한다. 파일별 stat 요약을 앞에 붙이고, 본문은 앞 60% + 뒤 40% 를
+    남겨 중간만 생략한다.
+    """
+    diff = diff or ""
+    if len(diff) <= REVIEW_DIFF_MAX_CHARS:
+        return diff, False
+
+    stat_summary = _diff_stat_summary(diff)
+    head_len = int(REVIEW_DIFF_MAX_CHARS * 0.6)
+    tail_len = REVIEW_DIFF_MAX_CHARS - head_len
+    head = diff[:head_len]
+    tail = diff[-tail_len:] if tail_len > 0 else ""
+    omitted = len(diff) - head_len - tail_len
+    marker = (
+        f"\n... [diff 중간 {omitted}자 생략 — 전체 {len(diff)}자 중 "
+        f"{head_len + tail_len}자 표시. 생략 구간은 '확인 불가'이지 '결함'이 아니다] ...\n"
+    )
+    return f"{stat_summary}\n\n{head}{marker}{tail}", True
+
+
 def _removed_preservation_symbols(diff: str) -> list[str]:
     """Keep hard gates for removals, without calling private edits deletions.
 
@@ -743,17 +795,23 @@ async def review_code_diff(
         )
         return preservation_precheck
 
-    # diff 크기 제한 (10KB)
-    truncated_diff = diff[:10000]
-    if len(diff) > 10000:
-        truncated_diff += "\n... [diff 일부 생략]"
+    # diff 크기 제한 — _truncate_diff_for_review() 가 REVIEW_DIFF_MAX_CHARS 기준으로
+    # stat 요약 + 앞 60% + 뒤 40% 패턴으로 다듬는다.
+    truncated_diff, was_truncated = _truncate_diff_for_review(diff)
+    truncation_notice = (
+        "\n[절단 고지] 위 diff 는 길이 제한으로 일부가 생략됐다.\n"
+        "- 생략 구간을 근거로 REQUEST_CHANGES 나 PRESERVATION_HARD_GATE 를 내지 마라.\n"
+        "- 보이는 코드의 실제 결함만 판정하라.\n"
+        "- 생략 구간 확인이 꼭 필요하면 verdict=FLAG, needs_retry=true 로 내고"
+        " issues 에 확인이 필요한 파일/함수명을 구체적으로 적어라.\n"
+    ) if was_truncated else ""
 
     prompt = f"""다음 코드 변경사항을 리뷰하세요.
 
 프로젝트: {project}
 작업 지시: {instruction[:500]}
 변경 파일: {', '.join(files_changed or [])}
-
+{truncation_notice}
 ```diff
 {truncated_diff}
 ```
