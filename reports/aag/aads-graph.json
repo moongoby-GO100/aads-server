@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-18T08:13:52.324934+09:00",
+  "generated_at": "2026-09-18T08:19:47.358171+09:00",
   "root": "/root/aads/aads-server",
   "api_roots": [
     "/api/v1/fact-check",
@@ -12000,6 +12000,13 @@
       "key": "app/api/ceo_chat.py",
       "module": "app/api/ceo_chat.py",
       "detail": "`app/api/ceo_chat.py` 이 APIRouter 를 정의하지만 어떤 엔트리포인트에도 include_router 되지 않았다 — 죽은 코드이거나 등록 누락이다",
+      "severity": "P2"
+    },
+    {
+      "rule": "STALE_BACKUP",
+      "key": "app/services/live_trading_guard.py.bak_aads",
+      "path": "app/services/live_trading_guard.py.bak_aads",
+      "detail": "`app/services/live_trading_guard.py.bak_aads` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
       "severity": "P2"
     }
   ],
