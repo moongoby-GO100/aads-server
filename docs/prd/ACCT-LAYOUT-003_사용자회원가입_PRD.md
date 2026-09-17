@@ -1,7 +1,7 @@
 # ACCT-LAYOUT-003 — 사용자(사업자) 회원가입 PRD
 
 - 작성: 2026-09-18 KST
-- 범위: 통합 경영관리시스템(ACCT 회계원장 + 매장비서) SaaS **신규 사업자 가입**
+- 범위: 통합 경영관리시스템(ACCT 회계원장 + 오비서) SaaS **신규 사업자 가입**
 - 목업: `/static/preview/signup-flow-mockup.html`
 - 선행 문서: `docs/SAAS_USER_ACCESS_AND_BRIEFING_POLICY.md`(접근·브리핑 정책)
 
@@ -47,7 +47,7 @@ POST /api/v1/auth/register  { email, password, name, organization_name?, team_in
 
 | # | 결함 | 사용자/사업 영향 |
 |---|---|---|
-| G-1 | 사업자 정보 미수집 | 회계원장(ACCT `company.biz_no`)과 매장비서(`yeoljeong_businesses`)에 연결할 키가 없어, 가입해도 **자기 회계 데이터를 볼 수 없음** |
+| G-1 | 사업자 정보 미수집 | 회계원장(ACCT `company.biz_no`)과 오비서(`yeoljeong_businesses`)에 연결할 키가 없어, 가입해도 **자기 회계 데이터를 볼 수 없음** |
 | G-2 | 이메일 인증 미강제 | 오타·타인 메일 가입 방치, 비밀번호 재설정 경로 신뢰 불가 (실측 3/88) |
 | G-3 | 약관·개인정보 동의 이력 미저장 | 동의 받은 기록이 DB에 없음 — 분쟁·점검 시 입증 불가 |
 | G-4 | 비밀번호 재설정 없음 | 잊으면 복구 경로가 없음(운영자 수기 개입) |

@@ -1,8 +1,8 @@
 # ACCT-LAYOUT-001 — 매입자료 화면 PRD / 설계서
 
 - 작성: 2026-09-17 21:0x KST
-- 프로젝트: ACCT(회계원장) + FOOD(매장비서) 통합 경영관리시스템
-- 상위 목표: `통합 경영관리시스템 구축 — ACCT 회계원장 + 매장비서(FOOD) 단일 서비스`
+- 프로젝트: ACCT(회계원장) + FOOD(오비서) 통합 경영관리시스템
+- 상위 목표: `통합 경영관리시스템 구축 — ACCT 회계원장 + 오비서(FOOD) 단일 서비스`
 - 마일스톤: M6 매입자료 화면
 - 상태: 설계 확정 대기(CEO 승인 2건 — DB 분리 방식, Phase 1 착수)
 - 목업: https://fb.newtalk.kr/static/preview/acct-purchase-mockup.html
@@ -11,7 +11,7 @@
 
 ## 0. 한 장 요약
 
-매장비서에서 **식자재·소모품 매입 전표를 등록/승인**하고, 승인된 전표가 **ACCT 회계원장의
+오비서에서 **식자재·소모품 매입 전표를 등록/승인**하고, 승인된 전표가 **ACCT 회계원장의
 분개 초안(`journal_draft`)으로 자동 전송**되는 화면과 파이프라인을 만든다.
 
 지금은 매입 데이터를 넣을 **테이블만 있고(0건) API·화면이 전혀 없다**. 그 결과 매입은
@@ -21,7 +21,7 @@
 
 | # | 결정 | 근거 |
 |---|---|---|
-| D1 | 매장비서 DB를 AADS 본체 DB에서 **분리**한다 | CEO 지시 + 장애 전파·스키마 간섭 차단 |
+| D1 | 오비서 DB를 AADS 본체 DB에서 **분리**한다 | CEO 지시 + 장애 전파·스키마 간섭 차단 |
 | D2 | **회원별/사업자별 DB 분리는 하지 않는다.** 단일 DB + RLS 로 논리 격리한다 | ACCT 가 이미 같은 방식으로 20개 테이블 FORCE RLS 운영 중 [실측] |
 | D3 | 매입→회계 연동은 직접 INSERT 가 아니라 **outbox_event → journal_draft** 비동기 경로 | 두 DB가 분리되므로 분산 트랜잭션 불가. ACCT 에 outbox 테이블이 이미 존재 [실측] |
 
@@ -155,16 +155,16 @@ period_lock, raw_document, source_connection, tenant_company
 
 ### 4.5 그럼 무엇을 분리하는가 — **서비스 단위 분리** (CEO 지시 채택)
 
-현재 문제: 매장비서 28개 테이블이 **AADS 본체와 같은 `aads` DB**에 들어 있다.
+현재 문제: 오비서 28개 테이블이 **AADS 본체와 같은 `aads` DB**에 들어 있다.
 
 ```
 yeoljeong_* 27개 + saas_users  →  전부 contabo116 aads-postgres / aads
 ```
 
 이건 실제로 위험하다:
-- AADS 본체 마이그레이션·장애가 **매장비서 서비스로 그대로 전파**된다.
+- AADS 본체 마이그레이션·장애가 **오비서 서비스로 그대로 전파**된다.
 - 테이블 이름이 `yeoljeong_` 접두사로만 구분돼 실수로 섞일 여지가 있다.
-- 백업/복구 단위가 붙어 있어 "매장비서만 되돌리기"가 불가능하다.
+- 백업/복구 단위가 붙어 있어 "오비서만 되돌리기"가 불가능하다.
 
 **권장: 같은 PostgreSQL 인스턴스 안에 별도 database `yeoljeong` 를 만든다.**
 
@@ -172,9 +172,9 @@ yeoljeong_* 27개 + saas_users  →  전부 contabo116 aads-postgres / aads
 |---|---|---|---|---|
 | S1 | contabo116 **같은 인스턴스, 별도 database** | 장애·스키마 격리 확보. 이전 비용 최소 | 인스턴스 자원은 여전히 공유 | ✅ **권장** |
 | S2 | contabo116 **별도 컨테이너/인스턴스** | 자원까지 격리 | 메모리 추가, 운영 대상 +1 | 대안(트래픽 증가 시) |
-| S3 | jinah244 로 이전해 ACCT 와 합침 | 회계 연동이 같은 DB 트랜잭션 | 진아 서버 단일 장애점. 매장비서 트래픽이 원장에 영향 | ❌ 비권장 |
+| S3 | jinah244 로 이전해 ACCT 와 합침 | 회계 연동이 같은 DB 트랜잭션 | 진아 서버 단일 장애점. 오비서 트래픽이 원장에 영향 | ❌ 비권장 |
 
-S3 를 비권장하는 이유가 중요하다 — 매입 화면은 **매장비서 쪽 업무 시스템**이고,
+S3 를 비권장하는 이유가 중요하다 — 매입 화면은 **오비서 쪽 업무 시스템**이고,
 회계원장은 **기록의 정본**이다. 둘을 같은 DB 에 넣으면 업무 시스템의 쓰기 부하와 버그가
 원장 무결성에 직접 닿는다. 분리하고 outbox 로 잇는 편이 맞다(D3).
 
@@ -185,7 +185,7 @@ contabo116                                   jinah244
 ┌─────────────────────────┐                 ┌──────────────────────────┐
 │ aads-postgres           │                 │ acct DB                  │
 │  ├ aads      (AADS 본체) │                 │  tenant / company        │
-│  └ yeoljeong (매장비서)  │  outbox 소비    │  journal_draft ←─────────┤
+│  └ yeoljeong (오비서)  │  outbox 소비    │  journal_draft ←─────────┤
 │     테이블에 tenant_id   │ ──────────────> │  journal_entry           │
 │     + FORCE RLS          │   (SSH 터널)    │  period_lock             │
 └─────────────────────────┘                 │  20개 테이블 FORCE RLS   │
@@ -247,7 +247,7 @@ CREATE UNIQUE INDEX ux_po_invoice ON purchase_order (tenant_id, invoice_number)
 
 **오늘 실측으로 매핑이 확정 가능함을 확인했다.** 이름이 1:1 로 붙는다.
 
-| 매장비서 `business_id` | 사업자명 | 사업자번호 | ACCT `tenant_id` |
+| 오비서 `business_id` | 사업자명 | 사업자번호 | ACCT `tenant_id` |
 |---|---|---|---|
 | `biz-junghwa` | 열정국밥 중화점 | 710-86-04499 | **7** |
 | `biz-mia` | 열정국밥_미아점 | 874-21-02160 | **8** |
@@ -257,7 +257,7 @@ CREATE UNIQUE INDEX ux_po_invoice ON purchase_order (tenant_id, invoice_number)
 ```sql
 CREATE TABLE tenant_business_map (
   tenant_id     bigint NOT NULL,          -- ACCT tenant.id
-  business_id   text   NOT NULL,          -- 매장비서 business_id
+  business_id   text   NOT NULL,          -- 오비서 business_id
   company_id    bigint,                   -- ACCT company.id (없으면 생성 필요)
   registration_no text,
   verified_at   timestamptz,
@@ -406,7 +406,7 @@ RLS 가 테넌트 경계를, 애플리케이션 권한이 역할 경계를 담�
 | Phase | 내용 | Size | 선행 | 검증 기준 |
 |---|---|---|---|---|
 | **M0** | 식별자 브리지 — `tenant_business_map` 생성·시드(4건), company 부재분 생성 | S | — | 4행 verified_at NOT NULL |
-| **P0** | DB 분리 — `yeoljeong` database 생성, 28테이블 이전, 앱 DSN 전환 | M | CEO 승인 | 매장비서 API 48종 전부 200, 데이터 건수 이전 전후 일치 |
+| **P0** | DB 분리 — `yeoljeong` database 생성, 28테이블 이전, 앱 DSN 전환 | M | CEO 승인 | 오비서 API 48종 전부 200, 데이터 건수 이전 전후 일치 |
 | **P1** | 스키마 확장 + RLS + API 7종 | M | P0 | 단위테스트 통과, RLS 교차접근 차단 테스트 |
 | **P2** | 화면 3종 (목록·등록·전송확인) | M | P1 | 화면 캡처 3장, 모바일 폭 375px 검증 |
 | **P3** | outbox 워커 + 분개 룰 + 마감 연동 | M | P1, M1 마감잠금 | 전표 1건 → `journal_draft` 생성 E2E, 중복 실행 시 1건 유지 |
@@ -437,7 +437,7 @@ RLS 가 테넌트 경계를, 애플리케이션 권한이 역할 경계를 담�
 
 | # | 리스크 | 영향 | 완화 |
 |---|---|---|---|
-| R1 | DB 분리 중 매장비서 중단 | 서비스 정지 | 논리복제로 선복사 → 짧은 전환창만 사용. 롤백은 DSN 원복 |
+| R1 | DB 분리 중 오비서 중단 | 서비스 정지 | 논리복제로 선복사 → 짧은 전환창만 사용. 롤백은 DSN 원복 |
 | R2 | company 미생성(7·8·10) | 분개 전송 전부 실패 | M0 에서 선확인·생성 |
 | R3 | 계정과목 마스터 부재 | 분개 코드 임의값 | 회계 담당 확정 필요 — **P3 착수 전 블로킹 항목** |
 | R4 | 사업자번호 2곳 미등록 | 매핑 검증 키 부재 | M0 에서 등록 |
@@ -459,7 +459,7 @@ RLS 가 테넌트 경계를, 애플리케이션 권한이 역할 경계를 담�
 | 사실 | 출처 |
 |---|---|
 | `yeoljeong_purchase_orders` 14컬럼 | information_schema.columns |
-| 매장비서 28테이블 / 배달매출 3,789 | pg_class |
+| 오비서 28테이블 / 배달매출 3,789 | pg_class |
 | 사업자 4 / 지점 5 / 매핑 후보 | `yeoljeong_businesses` |
 | ACCT 37테이블 중 20개 FORCE RLS | pg_class (acct DB) |
 | `journal_draft`·`outbox_event`·`period_lock` 컬럼 | information_schema (acct DB) |

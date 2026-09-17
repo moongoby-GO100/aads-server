@@ -1,6 +1,6 @@
 (() => {
   const config = {
-    appName: "매장비서",
+    appName: "오비서",
     updatedAt: "2026-07-16 11:23:56 KST",
     modulePhase: "phase-1-manifest",
     docs: {

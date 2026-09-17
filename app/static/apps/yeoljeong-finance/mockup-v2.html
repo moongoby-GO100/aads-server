@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#111827">
-  <title>매장비서 · 통합 경영 대시보드 시안</title>
+  <title>오비서 · 통합 경영 대시보드 시안</title>
   <style>
     :root {
       color-scheme: light;
@@ -365,7 +365,7 @@
 <body>
   <div class="app">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">M</span>매장비서</div>
+      <div class="brand"><span class="brand-mark">오</span>오비서</div>
       <div class="workspace">
         <div class="workspace-label">현재 사업자</div>
         <button data-action="business-switch">
@@ -923,7 +923,7 @@
     }
 
     const authProofPanel = () => `<aside class="auth-side">
-      <div class="auth-brand"><span class="brand-mark">M</span>매장비서 <span class="sample-badge">FB 시안</span></div>
+      <div class="auth-brand"><span class="brand-mark">오</span>오비서 <span class="sample-badge">FB 시안</span></div>
       <h2>돈, 직원, 세무 권한을 한 계정에서 분리합니다</h2>
       <p>대표자는 전체 사업자를 보고, 점장은 자기 지점만 보고, 직원은 본인 서류와 계약만 처리하는 로그인 구조입니다.</p>
       <div class="auth-side-list">
@@ -936,7 +936,7 @@
     const authSecurityStrip = () => `<div class="auth-security-strip"><span>2단계 인증</span><span>사업자별 권한</span><span>접속 감사로그</span></div>`;
     const authShell = (title, description, form, links, step = "", ctaLabel = "다음 단계", nextView = "", shellClass = "") => `
       <section class="auth-shell${shellClass ? ` ${shellClass}` : ""}"><div class="auth-layout">${authProofPanel()}<article class="card auth-card">
-        <div class="auth-brand"><span class="brand-mark">M</span>매장비서 <span class="sample-badge">UX 시안</span></div>
+        <div class="auth-brand"><span class="brand-mark">오</span>오비서 <span class="sample-badge">UX 시안</span></div>
         ${step}
         <h2>${title}</h2><p>${description}</p>
         <form class="auth-form" data-auth-form${nextView ? ` data-next-view="${nextView}"` : ""}>${form}<button type="submit" class="primary">${ctaLabel}</button></form>
@@ -972,7 +972,7 @@
       },
       "auth-login": {
         title: "로그인",
-        html: () => authShell("매장비서 로그인", "대표자·점장·직원·외부 담당자별 권한을 분리해 접속하는 FB 공개 로그인 시안입니다.", `<div class="auth-grid">${authField("login-email","이메일 또는 휴대폰","text","name@company.com")}${authField("login-password","비밀번호","password","8자 이상")}${authSelect("login-role","접속 역할",["대표자/관리자","점장","직원","세무·노무 외부 담당자"])}${authField("login-tenant","조직 코드","text","직원은 사업장 코드 입력","",false)}</div>${authSecurityStrip()}<label class="agreement"><input type="checkbox">로그인 상태 유지 · 공용 PC에서는 선택하지 않음</label>`, `${authLink("auth-signup","대표자 회원가입")}${authLink("auth-invite","직원 회원가입")}${authLink("auth-forgot","비밀번호 찾기")}${authLink("auth-onboarding","사업자 등록")}`, "", "로그인", "home")
+        html: () => authShell("오비서 로그인", "대표자·점장·직원·외부 담당자별 권한을 분리해 접속하는 FB 공개 로그인 시안입니다.", `<div class="auth-grid">${authField("login-email","이메일 또는 휴대폰","text","name@company.com")}${authField("login-password","비밀번호","password","8자 이상")}${authSelect("login-role","접속 역할",["대표자/관리자","점장","직원","세무·노무 외부 담당자"])}${authField("login-tenant","조직 코드","text","직원은 사업장 코드 입력","",false)}</div>${authSecurityStrip()}<label class="agreement"><input type="checkbox">로그인 상태 유지 · 공용 PC에서는 선택하지 않음</label>`, `${authLink("auth-signup","대표자 회원가입")}${authLink("auth-invite","직원 회원가입")}${authLink("auth-forgot","비밀번호 찾기")}${authLink("auth-onboarding","사업자 등록")}`, "", "로그인", "home")
       },
       "auth-signup": {
         title: "회원가입",
@@ -1337,7 +1337,7 @@
       const view = views[slug] || authScreens[slug] || views.home;
       closeDetail();
       pageTitle.textContent = view.title;
-      document.title = `매장비서 · ${view.title} 시안`;
+      document.title = `오비서 · ${view.title} 시안`;
       viewRoot.innerHTML = view.html();
       window.scrollTo(0, 0);
       document.querySelectorAll("[data-view]").forEach((item) => item.classList.toggle("active", item.dataset.view === slug));

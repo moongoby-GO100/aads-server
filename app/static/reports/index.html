@@ -75,7 +75,7 @@ footer{text-align:center;padding:32px 0;color:var(--text2);font-size:.8rem;borde
 <button onclick="setFilter('mockup',this)">UI 목업</button>
 <button onclick="setFilter('analysis',this)">분석/보고</button>
 <button onclick="setFilter('biz',this)">사업</button>
-<button onclick="setFilter('store',this)">매장비서</button>
+<button onclick="setFilter('store',this)">오비서</button>
 </div>
 
 <div id="content"></div>
@@ -146,14 +146,14 @@ const docs = [
   {cat:"biz",title:"Seoul Audio 구독자 성장 상세 기획서",file:"seoul-audio-subscriber-growth-plan-20260612.html",date:"2026-06-12",size:"39KB",desc:"구독자 성장 전략"},
   {cat:"biz",title:"열정국밥 중화점 인수전환 체크리스트",file:"%EC%97%B4%EC%A0%95%EA%B5%AD%EB%B0%A5_%EC%A4%91%ED%99%94%EC%A0%90_%EC%9D%B8%EC%88%98%EC%A0%84%ED%99%98_%EC%B2%B4%ED%81%AC%EB%A6%AC%EC%8A%A4%ED%8A%B8.html",date:"2026-07-15",size:"53KB",desc:"법인설립~사업자등록 상세"},
 
-  // === 매장비서 ===
-  {cat:"store",title:"매장비서 아키텍처·디자인 기획서",file:"20260716_yeoljeong_store_assistant_architecture_design.html",date:"2026-07-16",size:"8KB",desc:"아키텍처 설계"},
-  {cat:"store",title:"매장비서 아키텍처·디자인 기획서 (상세)",file:"20260716_yeoljeong_store_assistant_architecture_design_plan.html",date:"2026-07-16",size:"22KB",desc:"상세 기획"},
-  {cat:"store",title:"매장비서 JSON 원장 DB 전환 설계",file:"20260716_yeoljeong_store_assistant_db_transition_plan.html",date:"2026-07-16",size:"7KB",desc:"DB 전환 설계"},
-  {cat:"store",title:"매장비서 문서 인덱스",file:"20260716_yeoljeong_store_assistant_docs_index.html",date:"2026-07-16",size:"5KB",desc:"문서 목록"},
-  {cat:"store",title:"매장비서 기술문서",file:"20260716_yeoljeong_store_assistant_technical.html",date:"2026-07-16",size:"7KB",desc:"기술 명세"},
-  {cat:"store",title:"매장비서 기술문서 (복본)",file:"20260716_yeoljeong_store_assistant_technical_doc.html",date:"2026-07-16",size:"7KB",desc:"기술 명세 복본"},
-  {cat:"store",title:"매장비서 A4 계약서 출력 E2E",file:"yeoljeong-contract-a4-e2e.html",date:"2026-07-16",size:"9KB",desc:"A4 인쇄 계약서 검증"}
+  // === 오비서 ===
+  {cat:"store",title:"오비서 아키텍처·디자인 기획서",file:"20260716_yeoljeong_store_assistant_architecture_design.html",date:"2026-07-16",size:"8KB",desc:"아키텍처 설계"},
+  {cat:"store",title:"오비서 아키텍처·디자인 기획서 (상세)",file:"20260716_yeoljeong_store_assistant_architecture_design_plan.html",date:"2026-07-16",size:"22KB",desc:"상세 기획"},
+  {cat:"store",title:"오비서 JSON 원장 DB 전환 설계",file:"20260716_yeoljeong_store_assistant_db_transition_plan.html",date:"2026-07-16",size:"7KB",desc:"DB 전환 설계"},
+  {cat:"store",title:"오비서 문서 인덱스",file:"20260716_yeoljeong_store_assistant_docs_index.html",date:"2026-07-16",size:"5KB",desc:"문서 목록"},
+  {cat:"store",title:"오비서 기술문서",file:"20260716_yeoljeong_store_assistant_technical.html",date:"2026-07-16",size:"7KB",desc:"기술 명세"},
+  {cat:"store",title:"오비서 기술문서 (복본)",file:"20260716_yeoljeong_store_assistant_technical_doc.html",date:"2026-07-16",size:"7KB",desc:"기술 명세 복본"},
+  {cat:"store",title:"오비서 A4 계약서 출력 E2E",file:"yeoljeong-contract-a4-e2e.html",date:"2026-07-16",size:"9KB",desc:"A4 인쇄 계약서 검증"}
 ];
 
 const catMeta = {
@@ -163,7 +163,7 @@ const catMeta = {
   analysis:{label:"분석/보고", icon:"📊",color:"var(--accent4)", tagClass:"tag-analysis"},
   biz:     {label:"사업",     icon:"💼",color:"var(--accent5)", tagClass:"tag-biz"},
   llm:     {label:"LLM",     icon:"🤖",color:"var(--accent6)", tagClass:"tag-llm"},
-  store:   {label:"매장비서",  icon:"🏪",color:"#ec4899",       tagClass:"tag-store"}
+  store:   {label:"오비서",  icon:"🏪",color:"#ec4899",       tagClass:"tag-store"}
 };
 
 function updateStats() {
