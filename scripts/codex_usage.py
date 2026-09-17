@@ -323,8 +323,18 @@ def clear_rate_limit(key_name: str) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sync", action="store_true", help="DB 와 state.json 을 갱신한다")
+    ap.add_argument("--state-only", action="store_true",
+                    help="사용량 수집 없이 DB 의 priority/한도만 state.json 으로 내린다")
     ap.add_argument("--json", action="store_true", help="기계 판독용 출력")
     args = ap.parse_args()
+
+    if args.state_only:
+        # 주계정 조정기가 2분마다 부른다. collect() 는 CLI 를 돌려 비싸므로
+        # 여기서는 DB 값만 내린다 — 릴레이가 보는 것은 이 파일뿐이다.
+        accounts = db_accounts()
+        write_state(accounts)
+        print("state.json 갱신: %d개 계정" % len(accounts))
+        return 0
 
     usage = collect()
     accounts = db_accounts()

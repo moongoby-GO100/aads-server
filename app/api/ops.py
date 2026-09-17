@@ -2882,6 +2882,102 @@ async def set_company_oauth_slot(project_key: str, body: CompanySlotAssign):
     return result
 
 
+# ─── 주계정: 수동 선택 / 자동 규칙 ────────────────────────────────────
+class AccountPrimaryRequest(BaseModel):
+    provider: str
+    mode: Optional[str] = None       # auto | manual
+    key_name: Optional[str] = None   # manual 일 때 고른 계정
+
+
+def _iso(value) -> Optional[str]:
+    return value.isoformat() if value is not None else None
+
+
+@router.get("/ops/account-primary")
+async def get_account_primary():
+    """provider 별 주계정 + 모드. 설정 화면의 자동/수동 토글이 이걸 본다."""
+    from app.services import account_primary
+
+    out: Dict[str, Any] = {"ok": True, "providers": {}}
+    for provider in account_primary.PROVIDERS:
+        try:
+            mode = await account_primary.get_mode(provider)
+            accounts = await account_primary.usage_view(provider)
+        except Exception as exc:
+            logger.warning("account_primary_view_failed", provider=provider, error=str(exc)[:160])
+            out["providers"][provider] = {"mode": "manual", "primary": "", "accounts": []}
+            continue
+        out["providers"][provider] = {
+            "mode": mode,
+            "primary": accounts[0]["key_name"] if accounts else "",
+            "accounts": [{
+                "key_name": a["key_name"],
+                "label": a["label"],
+                "priority": a["priority"],
+                "is_active": a["is_active"],
+                "has_quota": a["has_quota"],
+                "headroom_pct": a["headroom_pct"],
+                "resets_at": _iso(a["resets_at"]),
+                "rate_limited_until": _iso(a["rate_limited_until"]),
+            } for a in accounts],
+        }
+    return out
+
+
+@router.post("/ops/account-primary/reconcile")
+async def reconcile_account_primary():
+    """자동 모드인 provider 만 규칙대로 다시 세운다. 2분 크론이 부른다."""
+    from app.services import account_primary
+
+    results = []
+    for provider in account_primary.PROVIDERS:
+        try:
+            results.append(await account_primary.reconcile(provider))
+        except Exception as exc:
+            logger.warning("account_primary_reconcile_failed",
+                           provider=provider, error=str(exc)[:160])
+            results.append({"provider": provider, "error": str(exc)[:160]})
+    return {"ok": True, "results": results}
+
+
+@router.post("/ops/account-primary")
+async def set_account_primary(body: AccountPrimaryRequest):
+    """수동이면 고른 계정을 1순위로, 자동이면 규칙대로 즉시 다시 세운다."""
+    from app.services import account_primary
+
+    provider = (body.provider or "").strip().lower()
+    if provider not in account_primary.PROVIDERS:
+        raise HTTPException(status_code=400, detail="provider 는 anthropic 또는 codex 다")
+
+    mode = (body.mode or "").strip().lower()
+    if mode == account_primary.AUTO:
+        await account_primary.set_mode(provider, account_primary.AUTO)
+        result = await account_primary.reconcile(provider)
+        return {"ok": True, **result}
+
+    key_name = (body.key_name or "").strip()
+    if not key_name:
+        raise HTTPException(status_code=400, detail="수동 전환에는 key_name 이 필요하다")
+    result = await account_primary.set_manual(provider, key_name)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=str(result.get("error") or "전환 실패"))
+
+    # 클로드는 릴레이 기본값도 같이 맞춘다. 릴레이가 안 떠 있어도 DB 가 본체라
+    # 전환 자체는 유효하므로 실패를 삼킨다.
+    if provider == "anthropic":
+        try:
+            from app.core.auth_provider import _sync_relay_current_slot, get_oauth_key_records_async
+
+            records = await get_oauth_key_records_async(include_rate_limited=True)
+            slot = next((r.get("slot", "") for r in records
+                         if r.get("key_name") == key_name), "")
+            if slot:
+                await _sync_relay_current_slot(str(slot))
+        except Exception as exc:
+            logger.warning("account_primary_relay_sync_failed", error=str(exc)[:160])
+    return result
+
+
 # ─── 계정별 LLM 사용량 현황 API (AADS-190C) ──────────────────────────────
 @router.get("/ops/account-usage")
 async def get_llm_account_usage():
