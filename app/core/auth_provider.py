@@ -131,9 +131,16 @@ _KEY_NAME_SLOTS = {
     "ANTHROPIC_AUTH_TOKEN": "1",
     "ANTHROPIC_AUTH_TOKEN_2": "2",
     "ANTHROPIC_AUTH_TOKEN_3": "3",
+    # 슬롯 4(라일론, thelylon14@gmail.com — Claude Max 20x)는 2026-09-17 대표님이
+    # contabo116 에서 직접 CLI 로그인해 들여온 AADS 계정이다. 이름 매핑이 없으면
+    # _assign_slots 의 3순위가 슬롯 1·2 만 훑고 빈 슬롯("")을 주는데, 빈 슬롯은
+    # 주소 지정이 불가능해 폴백에서 조용히 사라진다. 슬롯 3 때와 같은 사고가
+    # 실제로 재현됐다 — 등록 직후 slot="" 로 떨어져 있었다.
+    "ANTHROPIC_AUTH_TOKEN_4": "4",
     "env_oauth_1": "1",
     "env_oauth_2": "2",
     "env_oauth_3": "3",
+    "env_oauth_4": "4",
 }
 
 
