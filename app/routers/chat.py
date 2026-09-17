@@ -193,6 +193,7 @@ async def _get_streaming_status_revisions(session_id: UUID, conn) -> dict:
         "AND m.intent IS DISTINCT FROM '_deleted_duplicate' "
         f"{svc._AUTO_MESSAGE_EXCLUDE_FILTER}"
     )
+    runner_progress_predicate = svc._runner_progress_intent_list_sql("m")
     row = await conn.fetchrow(
         f"""
         SELECT
@@ -210,7 +211,10 @@ async def _get_streaming_status_revisions(session_id: UUID, conn) -> dict:
             FROM chat_messages m
             WHERE m.session_id = $1
               AND m.intent IS DISTINCT FROM 'streaming_placeholder'
-              {visible_message_filter}
+              -- 러너 진행도 세어야 화면이 갱신을 알아챈다. 이것을 빼 두면
+              -- 조회 필터만 열어 봐야 클라이언트가 다시 가져올 이유가 없어,
+              -- 진행 중에는 여전히 조용하다(2026-09-17).
+              AND ({runner_progress_predicate} OR (TRUE {visible_message_filter}))
         ) AS msg
         CROSS JOIN (
             SELECT

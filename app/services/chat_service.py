@@ -9109,12 +9109,24 @@ _AUTO_MESSAGE_EXCLUDE_FILTER = (
 #
 # 본문 문자열이 아니라 intent 로 고른다 — 같은 날 추가지시 회수에서 접두
 # 판정 때문에 대표님 지시 7건을 놓쳤다.
-_RUNNER_PROGRESS_INTENTS = ("pipeline_runner", "runner_notification")
+#
+# `ai_review_warning` 도 넣는다(2026-09-17, 대표님 "넣어"). 첫 적용 뒤 같은
+# 세션에서 20분 침묵이 또 났고, 그 20분의 내용물이 정확히 이것이었다 —
+# AI 리뷰가 REQUEST_CHANGES 를 두 번 내고 그때마다 고쳐 올리는 중이었다
+# (09:01 1,212자 · 09:09 1,231자). 러너 시작·완료만 열고 리뷰 결과를 닫아
+# 두면 "무엇 때문에 오래 걸리는가" 가 여전히 안 보인다.
+_RUNNER_PROGRESS_INTENTS = ("pipeline_runner", "runner_notification", "ai_review_warning")
+
+
+def _runner_progress_intent_list_sql(alias: str = "") -> str:
+    """러너 진행 intent 의 SQL IN 목록. 조회·갱신감지가 같은 것을 본다."""
+    prefix = f"{alias}." if alias else ""
+    quoted = ", ".join(f"'{i}'" for i in _RUNNER_PROGRESS_INTENTS)
+    return f"{prefix}intent IN ({quoted})"
 
 
 def _runner_progress_allow_sql() -> str:
-    quoted = ", ".join(f"'{i}'" for i in _RUNNER_PROGRESS_INTENTS)
-    return f" OR intent IN ({quoted})"
+    return f" OR {_runner_progress_intent_list_sql()}"
 
 
 def _visible_message_filter(is_active: bool, include_streaming: bool) -> str:

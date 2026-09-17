@@ -2460,6 +2460,9 @@ def test_runner_progress_reaches_the_chat_in_both_fetch_modes():
     for mode, predicate in (("live", live), ("history", history)):
         assert "'pipeline_runner'" in predicate, mode
         assert "'runner_notification'" in predicate, mode
+        # 리뷰 결과가 빠지면 "왜 오래 걸리나" 가 여전히 안 보인다 —
+        # 2026-09-17 세션 9fa305c5 의 20분 침묵이 REQUEST_CHANGES 2회였다.
+        assert "'ai_review_warning'" in predicate, mode
     # 본문 문자열이 아니라 intent 로 고른다. 같은 날 추가지시 회수에서 접두
     # 판정 때문에 대표님 지시 7건을 놓쳤다.
     assert "[Pipeline Runner]" not in live
@@ -2478,3 +2481,18 @@ def test_runner_writer_records_its_intent():
     assert "INSERT INTO chat_messages" in post
     assert "'pipeline_runner'" in post
     assert "intent" in post
+
+
+def test_message_revision_counts_runner_progress():
+    """갱신 감지가 러너 진행을 세야 화면이 다시 가져온다.
+
+    조회 필터만 열고 이 카운터를 그대로 두면, 클라이언트는 바뀐 줄을 모르고
+    진행 중에는 여전히 조용하다(2026-09-17).
+    """
+    router = Path("app/routers/chat.py").read_text(encoding="utf-8")
+    block = router.split("async def _get_streaming_status_revisions", 1)[1].split(
+        "\nasync def ", 1
+    )[0]
+
+    assert "_runner_progress_intent_list_sql" in block
+    assert "runner_progress_predicate" in block
