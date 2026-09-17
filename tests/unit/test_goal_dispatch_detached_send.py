@@ -39,6 +39,10 @@ class _Conn:
     async def fetchval(self, *_args, **_kwargs):
         return False
 
+    async def fetchrow(self, *_args, **_kwargs):
+        # 발송 직전의 소유권 UPDATE. 경합이 없으면 늘 잡힌다.
+        return {"dispatch_count": 1}
+
 
 class _Pool:
     def __init__(self, conn: _Conn) -> None:

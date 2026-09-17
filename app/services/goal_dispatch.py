@@ -30,6 +30,25 @@
 
 한 사이클에 보내는 건수도 제한한다(`_MAX_PER_CYCLE`). 마일스톤이 한꺼번에
 열려도 세션 열 개에 동시에 말을 걸지 않는다.
+
+## 같은 지시를 두 번 보내지 않는 법
+
+위 네 겹은 전부 **혼자 도는 사이클**을 전제로 한다. 조회가 "아직 안 보냈다"
+를 읽고, 보내고, 기록한다 — 그 사이에 아무도 없다는 전제다.
+
+2026-09-17 22:28~22:33Z, 그 전제가 깨졌다. GO100 #119 의 마일스톤 둘이
+세 사이클 연속 `attempt=1` 로 나갔고 담당 세션은 같은 착수 지시를 2회씩
+받았다. 발송 간격 3분, 재시도 간격은 30분이다. 조회 조건은 지켜졌다 —
+발송 시점마다 `dispatched_at` 이 실제로 NULL 이었다. 즉 앞 사이클이 남긴
+기록이 조회와 발송 사이에 지워졌고, **무조건 UPDATE 는 그것을 못 알아챈다.**
+
+그래서 겹을 둘 더 둔다.
+
+5. **기록이 아니라 소유권을 잡는다.** 발송 직전의 UPDATE 에 "재시도 창
+   안에 기록이 없을 때만" 조건을 달고 `RETURNING` 으로 확인한다. 비면 이미
+   누가 가져간 것이므로 **보내지 않고** `goal_dispatch_claim_lost` 를 남긴다.
+6. **사이클이 겹치지 않게 한다.** 도는 사이클이 있으면 즉시 돌아가고
+   `goal_dispatch_cycle_skipped_overlap` 를 남긴다.
 """
 from __future__ import annotations
 
@@ -79,6 +98,8 @@ _send_tasks: set[asyncio.Task] = set()
 # 세마포어는 루프마다 하나다. import 시점에 만들면 루프가 바뀐 뒤(재기동·
 # 테스트) 쓸 수 없는 객체가 남는다.
 _send_gate: tuple[Any, asyncio.Semaphore] | None = None
+# 사이클 재진입 방지. 세마포어와 같은 이유로 루프마다 하나다.
+_cycle_gate: tuple[Any, asyncio.Lock] | None = None
 
 
 def _send_semaphore() -> asyncio.Semaphore:
@@ -88,16 +109,42 @@ def _send_semaphore() -> asyncio.Semaphore:
         _send_gate = (loop, asyncio.Semaphore(_SEND_CONCURRENCY))
     return _send_gate[1]
 
+
+def _cycle_lock() -> asyncio.Lock:
+    """사이클 하나가 도는 동안 다음 사이클을 들여보내지 않는다.
+
+    스케줄러(`max_instances=1`)와 advisory lock 이 이미 겹침을 막고 있지만,
+    그 둘은 **`_run_goal_control_cycle` 을 지키는 울타리**다. 이 함수는
+    거기서만 불리는 것이 아니고(수동 호출·테스트·다른 경로), 울타리가
+    하나라도 열리면 같은 행을 두 사이클이 집는다.
+
+    울타리는 지켜야 할 것 바로 옆에 하나 더 두는 편이 싸다.
+    """
+    global _cycle_gate
+    loop = asyncio.get_running_loop()
+    if _cycle_gate is None or _cycle_gate[0] is not loop:
+        _cycle_gate = (loop, asyncio.Lock())
+    return _cycle_gate[1]
+
+
 # 답으로 세지 않는 표시. 진행중·중단 안내는 담당이 쓴 것이 아니다.
 _NOT_AN_ANSWER = ("⏳", "⚠️ _응답 생성이", "_AI가 응답을 생성 중")
 
 
-def _build_message(row: Any) -> str:
+def _build_message(row: Any, *, sent_before: int | None = None) -> str:
+    """지시문. `sent_before` 는 **소유권을 잡고 읽은** 발송 횟수다.
+
+    조회 시점의 `row["dispatch_count"]` 를 그대로 믿으면, 조회와 발송
+    사이에 횟수가 바뀐 경우 "착수" 와 "재알림" 이 뒤바뀐다. 잡은 뒤의
+    실측값이 있으면 그것을 쓴다.
+    """
     goal = row["goal_title"]
     title = row["milestone_title"]
     desc = (row["description"] or "").strip()
     criteria = (row["completion_criteria"] or "").strip()
-    again = int(row["dispatch_count"] or 0) > 0
+    if sent_before is None:
+        sent_before = int(row["dispatch_count"] or 0)
+    again = sent_before > 0
 
     head = "[목표 진행 — 재알림]" if again else "[목표 진행 — 착수]"
     body = [
@@ -336,6 +383,7 @@ async def _send_milestone(
     message: str,
     attempt: int,
     project: str | None,
+    count_after: int | None = None,
 ) -> None:
     """지시를 넣고 스트림이 끝날 때까지 기다린다 — **사이클 밖에서.**
 
@@ -390,10 +438,17 @@ async def _send_milestone(
         await _note_detached(milestone_id, f"발송 실패: {str(exc)[:200]}")
         return
 
+    # `count_after` 는 소유권을 잡은 UPDATE 가 **DB 에서 돌려준** 횟수다.
+    #
+    # 2026-09-17 22:28~22:33Z 실측. 로그에는 `attempt` 밖에 없었고 네 건이
+    # 전부 `attempt=1` 이었다. 그런데 DB 의 `dispatch_count` 는 1 이었다 —
+    # 발송은 두 번, 카운트는 한 번. 로그만으로는 "조회가 0 을 읽었다" 와
+    # "기록이 지워졌다" 를 구분할 수 없었고, 원인 추적이 DB 대조로 넘어갔다.
+    # 실측값을 같이 남기면 그 대조가 로그 안에서 끝난다.
     logger.info(
         "goal_dispatch_sent",
         milestone=milestone_id[:8], session=session_id[:8],
-        attempt=attempt, project=project,
+        attempt=attempt, count_after=count_after, project=project,
     )
 
 
@@ -410,211 +465,267 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
     if not _ENABLED:
         return {"sent": 0, "skipped": 0, "gave_up": 0, "owner_requests": 0}
 
-    from app.core.db_pool import get_pool
+    # 사이클이 겹치면 같은 행을 두 번 집는다.
+    #
+    # 조건부 UPDATE 가 발송 자체는 막지만, 겹친 사이클은 그 전에 이미
+    # 조회·게이트·링크 복원을 통째로 한 벌 더 돌린다. 그 비용도 쓸데없고,
+    # 무엇보다 "한 번에 하나" 라는 가정 위에 서 있는 것들(`touched`,
+    # `_MAX_PER_CYCLE`, `_OWNER_REQUEST_PER_CYCLE`)이 전부 두 배가 된다.
+    #
+    # 기다리지 않고 **즉시 돌아간다.** 이미 도는 사이클이 같은 일을 하고
+    # 있으므로 줄을 서 봐야 한 박자 늦게 같은 일을 또 하는 것뿐이다.
+    lock = _cycle_lock()
+    if lock.locked():
+        logger.info("goal_dispatch_cycle_skipped_overlap", project=project or "ALL")
+        return {
+            "sent": 0, "skipped": 0, "gave_up": 0,
+            "owner_requests": 0, "links_repaired": 0, "overlap_skipped": 1,
+        }
 
-    pool = get_pool()
-    sent = skipped = gave_up = owner_requests = 0
-    # 한 세션에 한 주기 한 번만. 세션이 목표 두 개에 참여하면 양쪽에서
-    # 동시에 지시가 나갈 수 있는데, 담당은 그걸 두 개의 새 대화로 받는다.
-    # 어느 쪽부터 할지 모른 채 섞어서 답한다.
-    touched: set[str] = set()
+    async with lock:
+        from app.core.db_pool import get_pool
 
-    async with pool.acquire() as conn:
-        # 지시를 보내기 전에 연결고리부터 메운다. 링크가 없으면 담당은
-        # 지시를 받아도 자기 화면에서 그 목표를 찾을 수 없다.
-        links_repaired = await repair_owner_links(conn)
+        pool = get_pool()
+        sent = skipped = gave_up = owner_requests = 0
+        # 한 세션에 한 주기 한 번만. 세션이 목표 두 개에 참여하면 양쪽에서
+        # 동시에 지시가 나갈 수 있는데, 담당은 그걸 두 개의 새 대화로 받는다.
+        # 어느 쪽부터 할지 모른 채 섞어서 답한다.
+        touched: set[str] = set()
 
-        # 부하로 밀린 시각을 적어 둘 칸. 없으면 만든다(있으면 아무 일도
-        # 안 한다). 마이그레이션 파일이 안 돈 서버에서도 게이트가 상한
-        # 없이 도는 일이 없도록 여기서 보장한다.
-        await conn.execute(
-            "ALTER TABLE milestones ADD COLUMN IF NOT EXISTS "
-            "load_deferred_since timestamptz"
-        )
+        async with pool.acquire() as conn:
+            # 지시를 보내기 전에 연결고리부터 메운다. 링크가 없으면 담당은
+            # 지시를 받아도 자기 화면에서 그 목표를 찾을 수 없다.
+            links_repaired = await repair_owner_links(conn)
 
-        rows = await conn.fetch(
-            """
-            SELECT m.id::text AS milestone_id, m.title AS milestone_title,
-                   m.description, m.completion_criteria,
-                   m.dispatch_count, m.dispatched_at, m.load_deferred_since,
-                   g.title AS goal_title, g.project, g.id::text AS goal_id,
-                   COALESCE(m.owner_role_key, '') AS owner_role_key,
-                   COALESCE(g.owner_session_id::text, '') AS goal_lead_session_id,
-                   COALESCE(m.owner_session_id, s.id) AS session_id
-            FROM milestones m
-            JOIN goals g ON g.id = m.goal_id
-            LEFT JOIN chat_sessions s
-                   ON m.owner_session_id IS NULL
-                  AND m.owner_role_key IS NOT NULL
-                  AND s.role_key = m.owner_role_key
-            WHERE m.status = 'in_progress'
-              AND g.status = 'active'
-              AND ($1::text IS NULL OR g.project = $1)
-              AND (m.dispatched_at IS NULL
-                   OR m.dispatched_at < NOW() - ($2 || ' minutes')::interval)
-            ORDER BY m.dispatched_at NULLS FIRST, m.sequence_order
-            LIMIT 20
-            """,
-            project, str(_RETRY_AFTER_MIN),
-        )
-
-        for row in rows:
-            if not row["session_id"]:
-                # 담당이 안 정해진 마일스톤. 말을 걸 곳이 **아직** 없다.
-                #
-                # 2026-09-17 이전에는 여기서 그냥 넘어갔다. 기록이 어디에도
-                # 남지 않아서, 담당 없는 마일스톤은 착수 상태로 열린 채
-                # 영원히 방치됐다 — 아무도 그런 것이 있는 줄 몰랐다.
-                # 이제 사유를 남기고, 주도 세션이 생성 승인을 요청한다.
-                skipped += 1
-                owner_requests += await _handle_missing_owner(
-                    conn, row, remaining=_OWNER_REQUEST_PER_CYCLE - owner_requests,
-                )
-                continue
-
-            # 발송 상한은 담당 없는 건을 처리한 **뒤에** 본다. 먼저 보면
-            # 발송이 상한에 차는 사이클마다 승인 요청이 통째로 밀린다.
-            #
-            # `break` 가 아니라 `continue` 인 이유도 같다. 상한에 찼다고
-            # 루프를 끊으면 뒤에 남은 담당 없는 마일스톤이 이번 사이클에
-            # 아예 보이지 않는다 — 발송이 바쁜 목표일수록 담당 공백이
-            # 영원히 안 드러난다. 한 사이클 20건이라 도는 비용은 없다.
-            if sent >= _MAX_PER_CYCLE:
-                continue
-
-            # 상한 셋을 본다. **미루는 것과 포기하는 것은 다르다** —
-            # 아래 셋은 전부 미루기이므로 `dispatch_count` 를 올리지 않는다.
-            # 올리면 부하나 비용 때문에 미룬 것이 재시도 한도를 헛되이 깎는다.
-            from app.services.orchestration_limits import (
-                cost_gate, load_gate, owner_paused,
+            # 부하로 밀린 시각을 적어 둘 칸. 없으면 만든다(있으면 아무 일도
+            # 안 한다). 마이그레이션 파일이 안 돈 서버에서도 게이트가 상한
+            # 없이 도는 일이 없도록 여기서 보장한다.
+            await conn.execute(
+                "ALTER TABLE milestones ADD COLUMN IF NOT EXISTS "
+                "load_deferred_since timestamptz"
             )
 
-            if str(row["session_id"]) in touched:
-                skipped += 1
-                continue
+            rows = await conn.fetch(
+                """
+                SELECT m.id::text AS milestone_id, m.title AS milestone_title,
+                       m.description, m.completion_criteria,
+                       m.dispatch_count, m.dispatched_at, m.load_deferred_since,
+                       g.title AS goal_title, g.project, g.id::text AS goal_id,
+                       COALESCE(m.owner_role_key, '') AS owner_role_key,
+                       COALESCE(g.owner_session_id::text, '') AS goal_lead_session_id,
+                       COALESCE(m.owner_session_id, s.id) AS session_id
+                FROM milestones m
+                JOIN goals g ON g.id = m.goal_id
+                LEFT JOIN chat_sessions s
+                       ON m.owner_session_id IS NULL
+                      AND m.owner_role_key IS NOT NULL
+                      AND s.role_key = m.owner_role_key
+                WHERE m.status = 'in_progress'
+                  AND g.status = 'active'
+                  AND ($1::text IS NULL OR g.project = $1)
+                  AND (m.dispatched_at IS NULL
+                       OR m.dispatched_at < NOW() - ($2 || ' minutes')::interval)
+                ORDER BY m.dispatched_at NULLS FIRST, m.sequence_order
+                LIMIT 20
+                """,
+                project, str(_RETRY_AFTER_MIN),
+            )
 
-            paused, why = await owner_paused(row["goal_id"], str(row["session_id"]))
-            if paused:
-                skipped += 1
-                continue
+            for row in rows:
+                if not row["session_id"]:
+                    # 담당이 안 정해진 마일스톤. 말을 걸 곳이 **아직** 없다.
+                    #
+                    # 2026-09-17 이전에는 여기서 그냥 넘어갔다. 기록이 어디에도
+                    # 남지 않아서, 담당 없는 마일스톤은 착수 상태로 열린 채
+                    # 영원히 방치됐다 — 아무도 그런 것이 있는 줄 몰랐다.
+                    # 이제 사유를 남기고, 주도 세션이 생성 승인을 요청한다.
+                    skipped += 1
+                    owner_requests += await _handle_missing_owner(
+                        conn, row, remaining=_OWNER_REQUEST_PER_CYCLE - owner_requests,
+                    )
+                    continue
 
-            ok, why = await cost_gate(row["goal_id"])
-            if not ok:
-                logger.info(
-                    "goal_dispatch_cost_gated",
-                    milestone=row["milestone_id"][:8], why=why,
+                # 발송 상한은 담당 없는 건을 처리한 **뒤에** 본다. 먼저 보면
+                # 발송이 상한에 차는 사이클마다 승인 요청이 통째로 밀린다.
+                #
+                # `break` 가 아니라 `continue` 인 이유도 같다. 상한에 찼다고
+                # 루프를 끊으면 뒤에 남은 담당 없는 마일스톤이 이번 사이클에
+                # 아예 보이지 않는다 — 발송이 바쁜 목표일수록 담당 공백이
+                # 영원히 안 드러난다. 한 사이클 20건이라 도는 비용은 없다.
+                if sent >= _MAX_PER_CYCLE:
+                    continue
+
+                # 상한 셋을 본다. **미루는 것과 포기하는 것은 다르다** —
+                # 아래 셋은 전부 미루기이므로 `dispatch_count` 를 올리지 않는다.
+                # 올리면 부하나 비용 때문에 미룬 것이 재시도 한도를 헛되이 깎는다.
+                from app.services.orchestration_limits import (
+                    cost_gate, load_gate, owner_paused,
                 )
-                skipped += 1
-                continue
 
-            ok, why = await load_gate(row["project"])
-            if not ok:
-                waited = await _load_defer_minutes(conn, row)
-                if waited < _LOAD_DEFER_MAX_MIN:
+                if str(row["session_id"]) in touched:
+                    skipped += 1
+                    continue
+
+                paused, why = await owner_paused(row["goal_id"], str(row["session_id"]))
+                if paused:
+                    skipped += 1
+                    continue
+
+                ok, why = await cost_gate(row["goal_id"])
+                if not ok:
                     logger.info(
-                        "goal_dispatch_load_gated",
+                        "goal_dispatch_cost_gated",
+                        milestone=row["milestone_id"][:8], why=why,
+                    )
+                    skipped += 1
+                    continue
+
+                ok, why = await load_gate(row["project"])
+                if not ok:
+                    waited = await _load_defer_minutes(conn, row)
+                    if waited < _LOAD_DEFER_MAX_MIN:
+                        logger.info(
+                            "goal_dispatch_load_gated",
+                            milestone=row["milestone_id"][:8], why=why,
+                            waited_min=round(waited, 1),
+                        )
+                        skipped += 1
+                        continue
+                    # 상한을 넘겼다. 부하는 여전하지만 **더 미루지 않는다** —
+                    # 계속 미루면 장중 내내 한 건도 안 나간다.
+                    logger.warning(
+                        "goal_dispatch_load_defer_expired",
                         milestone=row["milestone_id"][:8], why=why,
                         waited_min=round(waited, 1),
+                        limit_min=_LOAD_DEFER_MAX_MIN,
                     )
-                    skipped += 1
-                    continue
-                # 상한을 넘겼다. 부하는 여전하지만 **더 미루지 않는다** —
-                # 계속 미루면 장중 내내 한 건도 안 나간다.
-                logger.warning(
-                    "goal_dispatch_load_defer_expired",
-                    milestone=row["milestone_id"][:8], why=why,
-                    waited_min=round(waited, 1),
-                    limit_min=_LOAD_DEFER_MAX_MIN,
-                )
-            elif row["load_deferred_since"] is not None:
-                await _clear_load_defer(conn, row["milestone_id"])
+                elif row["load_deferred_since"] is not None:
+                    await _clear_load_defer(conn, row["milestone_id"])
 
-            count = int(row["dispatch_count"] or 0)
-            if count >= _MAX_DISPATCH:
+                count = int(row["dispatch_count"] or 0)
+                if count >= _MAX_DISPATCH:
+                    if row["dispatched_at"] is not None:
+                        await conn.execute(
+                            "UPDATE milestones SET dispatch_note = $2, updated_at = NOW() "
+                            "WHERE id = $1::uuid AND dispatch_note IS DISTINCT FROM $2",
+                            row["milestone_id"],
+                            f"{_MAX_DISPATCH}회 보냈으나 답이 확인되지 않음 — 사람이 확인해야 한다",
+                        )
+                    gave_up += 1
+                    continue
+
+                # 보낸 뒤에 **진짜 답**이 왔는지 본다.
                 if row["dispatched_at"] is not None:
-                    await conn.execute(
-                        "UPDATE milestones SET dispatch_note = $2, updated_at = NOW() "
-                        "WHERE id = $1::uuid AND dispatch_note IS DISTINCT FROM $2",
-                        row["milestone_id"],
-                        f"{_MAX_DISPATCH}회 보냈으나 답이 확인되지 않음 — 사람이 확인해야 한다",
+                    answered = await conn.fetchval(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1 FROM chat_messages
+                            WHERE session_id = $1 AND role = 'assistant'
+                              AND created_at > $2
+                              AND length(content) > 40
+                              AND content NOT LIKE '⏳%'
+                              AND content NOT LIKE '⚠️ _응답 생성이%'
+                        )
+                        """,
+                        row["session_id"], row["dispatched_at"],
                     )
-                gave_up += 1
-                continue
+                    if answered:
+                        skipped += 1
+                        continue
 
-            # 보낸 뒤에 **진짜 답**이 왔는지 본다.
-            if row["dispatched_at"] is not None:
-                answered = await conn.fetchval(
-                    """
-                    SELECT EXISTS (
-                        SELECT 1 FROM chat_messages
-                        WHERE session_id = $1 AND role = 'assistant'
-                          AND created_at > $2
-                          AND length(content) > 40
-                          AND content NOT LIKE '⏳%'
-                          AND content NOT LIKE '⚠️ _응답 생성이%'
-                    )
-                    """,
-                    row["session_id"], row["dispatched_at"],
+                # **보내기 전에 기록한다.** 순서가 뒤집히면 기록이 사라진다.
+                #
+                # 2026-09-17 실측. 여기는 스트림을 끝까지 소비한 **뒤에**
+                # 기록하고 있었다. 그런데 이 코루틴은 상위 사이클에서
+                # `asyncio.wait_for(..., 120초)` 로 감싸여 돈다(main.py). 상한이
+                # 먼저 터지면 코루틴이 취소되고 뒤에 있던 UPDATE 는 실행되지
+                # 않는다. 지시는 담당 세션에 이미 들어갔는데 `dispatched_at` 은
+                # NULL 로 남는다.
+                #
+                # 라일론 목표 M4 에서 그대로 일어났다. 10:17:12 에 발송된 지시가
+                # 기록되지 않아 다음 주기가 10:20:09 에 **같은 지시를 다시**
+                # 보냈고, 첫 턴은 `interrupted_partial` 로 죽었다. 담당은 같은
+                # 일을 두 번 받고 LLM 비용은 두 번 든다.
+                #
+                # 그래서 순서를 바꾼다. 못 보냈는데 보냈다고 적히는 쪽이
+                # 나은가 — 그렇다. 그건 다음 주기가 "재알림" 으로 복구한다.
+                # 반대는 복구되지 않고 중복 발송을 계속 만든다.
+                #
+                # **그리고 기록이 아니라 소유권으로 잡는다.**
+                #
+                # 2026-09-17 22:28~22:33Z 실측. GO100 #119 의 마일스톤
+                # 05fdc2bb·d195f3d2 가 세 사이클 연속 `attempt=1` 로 나갔고,
+                # 담당 세션 둘에 같은 "[목표 진행 — 착수]" 가 2회씩 실제로
+                # 들어갔다(chat_messages 07:28:44·07:31:42, 07:29:46·07:32:30 KST).
+                # 발송 간격은 3분 — 재시도 간격은 30분이다.
+                #
+                # 조회 조건은 지켜졌다. 그 사이클의 `skipped=8` 은 담당이 없어
+                # 건너뛴 8건(sequence_order 1~4)과 정확히 맞고, 정렬이
+                # `dispatched_at NULLS FIRST, sequence_order` 이므로 seq 5·6 이
+                # 아홉째·열째로 잡히려면 **그 시점에 `dispatched_at` 이 NULL**
+                # 이어야 한다. 즉 사이클이 30분 창을 어긴 것이 아니라, 앞
+                # 사이클이 남긴 발송 기록이 조회와 발송 사이에 지워졌다.
+                #
+                # 무조건 UPDATE 는 그것을 알아챌 방법이 없다 — 누가 지웠든
+                # 덮어쓰고 보낸다. 조건부 UPDATE 는 알아챈다. 재시도 창 안에
+                # 이미 기록이 있으면 `RETURNING` 이 비고, 그러면 **보내지
+                # 않는다.** 경합에서 둘 다 보내는 대신 한 쪽만 보낸다.
+                claimed = await conn.fetchrow(
+                    "UPDATE milestones SET dispatched_at = NOW(), "
+                    "dispatched_session_id = $2, dispatch_count = dispatch_count + 1, "
+                    "dispatch_note = NULL, load_deferred_since = NULL, "
+                    "updated_at = NOW() WHERE id = $1::uuid "
+                    "  AND status = 'in_progress' "
+                    "  AND (dispatched_at IS NULL "
+                    "       OR dispatched_at < NOW() - ($3 || ' minutes')::interval) "
+                    "RETURNING dispatch_count",
+                    row["milestone_id"], row["session_id"], str(_RETRY_AFTER_MIN),
                 )
-                if answered:
+                if claimed is None:
+                    # 다른 사이클이 이미 가져갔거나, 그 사이 마일스톤이
+                    # 진행중에서 빠졌다. 어느 쪽이든 여기서 보내면 중복이다.
+                    logger.info(
+                        "goal_dispatch_claim_lost",
+                        milestone=str(row["milestone_id"])[:8],
+                        session=str(row["session_id"])[:8],
+                        why="이미 재시도 창 안에 발송 기록이 있거나 진행중이 아니다",
+                    )
                     skipped += 1
                     continue
 
-            # **보내기 전에 기록한다.** 순서가 뒤집히면 기록이 사라진다.
-            #
-            # 2026-09-17 실측. 여기는 스트림을 끝까지 소비한 **뒤에**
-            # 기록하고 있었다. 그런데 이 코루틴은 상위 사이클에서
-            # `asyncio.wait_for(..., 120초)` 로 감싸여 돈다(main.py). 상한이
-            # 먼저 터지면 코루틴이 취소되고 뒤에 있던 UPDATE 는 실행되지
-            # 않는다. 지시는 담당 세션에 이미 들어갔는데 `dispatched_at` 은
-            # NULL 로 남는다.
-            #
-            # 라일론 목표 M4 에서 그대로 일어났다. 10:17:12 에 발송된 지시가
-            # 기록되지 않아 다음 주기가 10:20:09 에 **같은 지시를 다시**
-            # 보냈고, 첫 턴은 `interrupted_partial` 로 죽었다. 담당은 같은
-            # 일을 두 번 받고 LLM 비용은 두 번 든다.
-            #
-            # 그래서 순서를 바꾼다. 못 보냈는데 보냈다고 적히는 쪽이
-            # 나은가 — 그렇다. 그건 다음 주기가 "재알림" 으로 복구한다.
-            # 반대는 복구되지 않고 중복 발송을 계속 만든다.
-            await conn.execute(
-                "UPDATE milestones SET dispatched_at = NOW(), "
-                "dispatched_session_id = $2, dispatch_count = dispatch_count + 1, "
-                "dispatch_note = NULL, load_deferred_since = NULL, "
-                "updated_at = NOW() WHERE id = $1::uuid",
-                row["milestone_id"], row["session_id"],
+                count_after = int(claimed["dispatch_count"] or 0)
+
+                # 스트림 소비는 **사이클에서 떼어낸다.**
+                #
+                # 2026-09-17 실측. 이 루프 전체가 상위에서
+                # `asyncio.wait_for(..., 120초)` 로 감싸여 돈다(main.py). 첫
+                # 담당의 응답이 120초를 넘기면 루프가 통째로 취소되고, 뒤에
+                # 남은 마일스톤은 그 사이클에 한 건도 못 나갔다. 끊긴 담당의
+                # 턴은 `interrupted_partial` 로 죽었다.
+                #
+                # 이제 사이클은 태스크만 띄우고 다음 건으로 넘어간다. 태스크는
+                # 자체 상한(`_SEND_TIMEOUT`)과 동시 실행 상한
+                # (`_SEND_CONCURRENCY`) 아래에서 혼자 끝난다.
+                _spawn_send(
+                    milestone_id=row["milestone_id"],
+                    session_id=str(row["session_id"]),
+                    message=_build_message(row, sent_before=count_after - 1),
+                    attempt=count_after,
+                    project=row["project"],
+                    count_after=count_after,
+                )
+
+                sent += 1
+                touched.add(str(row["session_id"]))
+
+        if sent or gave_up or owner_requests or links_repaired:
+            logger.info(
+                "goal_dispatch_cycle", sent=sent, skipped=skipped, gave_up=gave_up,
+                owner_requests=owner_requests, links_repaired=links_repaired,
             )
-
-            # 스트림 소비는 **사이클에서 떼어낸다.**
-            #
-            # 2026-09-17 실측. 이 루프 전체가 상위에서
-            # `asyncio.wait_for(..., 120초)` 로 감싸여 돈다(main.py). 첫
-            # 담당의 응답이 120초를 넘기면 루프가 통째로 취소되고, 뒤에
-            # 남은 마일스톤은 그 사이클에 한 건도 못 나갔다. 끊긴 담당의
-            # 턴은 `interrupted_partial` 로 죽었다.
-            #
-            # 이제 사이클은 태스크만 띄우고 다음 건으로 넘어간다. 태스크는
-            # 자체 상한(`_SEND_TIMEOUT`)과 동시 실행 상한
-            # (`_SEND_CONCURRENCY`) 아래에서 혼자 끝난다.
-            _spawn_send(
-                milestone_id=row["milestone_id"],
-                session_id=str(row["session_id"]),
-                message=_build_message(row),
-                attempt=count + 1,
-                project=row["project"],
-            )
-
-            sent += 1
-            touched.add(str(row["session_id"]))
-
-    if sent or gave_up or owner_requests or links_repaired:
-        logger.info(
-            "goal_dispatch_cycle", sent=sent, skipped=skipped, gave_up=gave_up,
-            owner_requests=owner_requests, links_repaired=links_repaired,
-        )
-    # `sent` 는 이제 "스트림을 끝까지 소비한 수" 가 아니라 "발송 태스크를
-    # 띄운 수" 다 — 실제 완료는 `goal_dispatch_sent` 로그가 알린다.
-    return {
-        "sent": sent, "skipped": skipped, "gave_up": gave_up,
-        "owner_requests": owner_requests, "links_repaired": links_repaired,
-    }
+        # `sent` 는 이제 "스트림을 끝까지 소비한 수" 가 아니라 "발송 태스크를
+        # 띄운 수" 다 — 실제 완료는 `goal_dispatch_sent` 로그가 알린다.
+        return {
+            "sent": sent, "skipped": skipped, "gave_up": gave_up,
+            "owner_requests": owner_requests, "links_repaired": links_repaired,
+        }
