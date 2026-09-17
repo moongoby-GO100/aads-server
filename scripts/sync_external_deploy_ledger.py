@@ -350,6 +350,34 @@ RETURNING id, (xmax = 0) AS inserted
 """
 
 
+# UPSERT 의 DO UPDATE 가 실제로 건드리는 열만 비교한다. request_payload 는
+# 같은 내용이라도 직렬화 차이로 달라 보일 수 있어 판단 기준에서 뺀다 — 아래
+# 열이 모두 같으면 갱신해도 원장에 보이는 값은 그대로다.
+_COMPARE_COLUMNS = (
+    "status", "phase", "release_sha", "phase_completed_at",
+    "current_slot", "candidate_slot", "error_summary",
+    "release_title", "release_summary",
+)
+
+_ROW_KEYS = {
+    "phase_completed_at": "completed_at",   # 수집 행에서의 이름이 다르다
+}
+
+
+def _comparable(row: dict[str, Any]) -> tuple:
+    return tuple(row.get(_ROW_KEYS.get(col, col)) for col in _COMPARE_COLUMNS)
+
+
+def _existing_rows(cur, projects: list[str]) -> dict[tuple, tuple]:
+    cur.execute(
+        "SELECT project, runner_job_id, %s FROM deploy_runs "
+        "WHERE runner_job_id IS NOT NULL AND project = ANY(%%s)"
+        % ", ".join(_COMPARE_COLUMNS),
+        (projects,),
+    )
+    return {(r[0], r[1]): tuple(r[2:]) for r in cur.fetchall()}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="외부 프로젝트 배포를 중앙 원장에 동기화")
     parser.add_argument("--days", type=int, default=14, help="며칠치를 동기화할지 (기본 14)")
@@ -392,10 +420,23 @@ def main() -> int:
         password=env.get("AADS_DB_PASSWORD", ""),
         connect_timeout=10,
     )
-    inserted = updated = 0
+    inserted = updated = skipped = 0
     try:
         with conn, conn.cursor() as cur:
+            existing = _existing_rows(cur, list(targets))
             for row in all_rows:
+                key = (row["project"], row["runner_job_id"])
+                if key in existing and existing[key] == _comparable(row):
+                    # 바뀐 게 없으면 UPSERT 자체를 보내지 않는다.
+                    #
+                    # ON CONFLICT DO UPDATE 는 충돌을 알아채기 **전에** id 시퀀스를
+                    # 먼저 뽑는다. 그래서 "갱신만 했다" 는 호출도 번호를 하나씩
+                    # 태운다. 이 동기화가 15분마다 같은 10건을 다시 넣으면서
+                    # 하루 약 1,000번호가 행 없이 증발했고, deploy_runs 최대
+                    # 번호가 4,599 인데 실제 행은 823 건이었다(2026-09-17 실측).
+                    # 번호로 배포 횟수를 가늠할 수 없게 된 것이 실제 피해다.
+                    skipped += 1
+                    continue
                 params = dict(row)
                 params["payload"] = json.dumps(row["payload"], ensure_ascii=False)
                 cur.execute(UPSERT_SQL, params)
@@ -406,7 +447,8 @@ def main() -> int:
                     updated += 1
     finally:
         conn.close()
-    print(f"[apply] 신규 {inserted}건 / 갱신 {updated}건 / 합계 {len(all_rows)}건")
+    print(f"[apply] 신규 {inserted}건 / 갱신 {updated}건 / 변화없음 {skipped}건 "
+          f"/ 합계 {len(all_rows)}건")
     return 0
 
 
