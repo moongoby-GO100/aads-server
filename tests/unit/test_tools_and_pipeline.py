@@ -1106,6 +1106,37 @@ class TestNormalizeTenantScope:
 
         assert normalize_tenant_scope("ACCT", None) == (None, None)
 
+    def test_acct_alias_has_priority(self):
+        from app.api.ceo_chat_tools_db import normalize_acct_tenant_scope
+
+        assert normalize_acct_tenant_scope("ACCT", "8", "7") == ("7", None)
+
+    def test_numeric_legacy_tenant_fallback(self):
+        from app.api.ceo_chat_tools_db import normalize_acct_tenant_scope
+
+        assert normalize_acct_tenant_scope("ACCT", "7") == ("7", None)
+
+    def test_global_uuid_tenant_is_ignored(self):
+        from app.api.ceo_chat_tools_db import normalize_acct_tenant_scope
+
+        assert normalize_acct_tenant_scope(
+            "ACCT", "2d701a8c-9596-4757-8588-faa4f7837112"
+        ) == (None, None)
+
+    def test_invalid_explicit_acct_alias_is_rejected(self):
+        from app.api.ceo_chat_tools_db import normalize_acct_tenant_scope
+
+        scope, error = normalize_acct_tenant_scope("ACCT", acct_tenant_id="7; DROP")
+        assert scope is None
+        assert error == "tenant_id 는 숫자만 허용합니다"
+
+    def test_acct_alias_rejected_for_other_project(self):
+        from app.api.ceo_chat_tools_db import normalize_acct_tenant_scope
+
+        scope, error = normalize_acct_tenant_scope("GO100", acct_tenant_id="7")
+        assert scope is None
+        assert error is not None
+
 
 # ---------------------------------------------------------------------------
 # 마일스톤 조회 (2026-09-17)

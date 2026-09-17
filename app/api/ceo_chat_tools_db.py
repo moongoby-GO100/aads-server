@@ -300,6 +300,27 @@ def normalize_tenant_scope(project: str, tenant_id: Any) -> Tuple[Optional[str],
     return value, None
 
 
+def normalize_acct_tenant_scope(
+    project: str,
+    tenant_id: Any = None,
+    acct_tenant_id: Any = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """ACCT 스코프 별칭을 우선하고 전역 tenant UUID는 조용히 무시한다.
+
+    ``normalize_tenant_scope`` 는 기존 공개 계약을 보존한다. 신규 호출은
+    ``acct_tenant_id`` 를 명시적으로 검증하고, 없을 때만 숫자 ``tenant_id`` 를
+    하위 호환 fallback 으로 사용한다.
+    """
+    acct_value = str(acct_tenant_id).strip() if acct_tenant_id is not None else ""
+    if acct_value:
+        return normalize_tenant_scope(project, acct_value)
+
+    tenant_value = str(tenant_id).strip() if tenant_id is not None else ""
+    if not tenant_value or not _TENANT_ID_RE.fullmatch(tenant_value):
+        return None, None
+    return normalize_tenant_scope(project, tenant_value)
+
+
 # ─── SQL 검증 ────────────────────────────────────────────────────────────────
 
 def validate_query(query: str) -> Optional[str]:
@@ -530,11 +551,10 @@ async def _query_postgresql(
                             str(max(1, _PROJECT_DB_QUERY_TIMEOUT_SECONDS) * 1000),
                         )
                         if tenant_id:
-                            # tenant_id는 ^[0-9]{1,18}$ 검증 통과 — 숫자만, 인젝션 불가
+                            # 숫자 검증 뒤에도 값은 반드시 바인드 파라미터로 전달한다.
                             await conn.execute(
-                                "SELECT set_config('acct.tenant_id', '"
-                                + tenant_id
-                                + "', true)"
+                                "SELECT set_config('acct.tenant_id', $1, true)",
+                                tenant_id,
                             )
                         try:
                             rows = await conn.fetch(q, timeout=_PROJECT_DB_QUERY_TIMEOUT_SECONDS)
@@ -868,6 +888,7 @@ async def query_project_database(
     limit: int = 100,
     db_name: Optional[str] = None,
     tenant_id: Optional[str] = None,
+    acct_tenant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     프로젝트별 원격 DB에 SELECT 쿼리 실행.
@@ -877,7 +898,8 @@ async def query_project_database(
         query: SELECT SQL 쿼리
         limit: 반환 행 수 (기본 100, 최대 1000)
         db_name: DB 이름 (미지정 시 프로젝트 메인 DB)
-        tenant_id: ACCT 전용 tenant 스코프(숫자). tenant_company 등 RLS 테이블 조회 시 필요.
+        tenant_id: ACCT 스코프 하위 호환 fallback. 전역 UUID는 무시됨.
+        acct_tenant_id: ACCT 전용 tenant 스코프(숫자). tenant_company 등 RLS 조회 시 우선 사용.
 
     Returns:
         {"project": str, "rows": list, "row_count": int, "columns": list}
@@ -891,7 +913,7 @@ async def query_project_database(
     if error:
         return {"error": error}
 
-    scope, scope_err = normalize_tenant_scope(project, tenant_id)
+    scope, scope_err = normalize_acct_tenant_scope(project, tenant_id, acct_tenant_id)
     if scope_err:
         return {"error": scope_err}
 

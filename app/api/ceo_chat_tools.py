@@ -1488,7 +1488,7 @@ TOOL_DEFINITIONS: List[Dict] = [
             "- NTV2: MySQL 8.0 (cafe24_114, SSH 터널)\n"
             "- ACCT: PostgreSQL 16 (jinah244 진아실장 회계 원장, SSH 터널, 읽기전용 롤)\n"
             "보안: SELECT/WITH/EXPLAIN만 허용. DML/DDL 차단. password/token 컬럼 자동 마스킹.\n"
-            "ACCT RLS 테이블(tenant_company 등)은 tenant_id 를 함께 넘겨야 조회됩니다.\n"
+            "ACCT RLS 테이블(tenant_company 등)은 acct_tenant_id 를 함께 넘겨야 조회됩니다.\n"
             "예: query_project_database(project='GO100', query='SELECT * FROM users LIMIT 5')"
         ),
         "input_schema": {
@@ -1511,9 +1511,13 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "type": "string",
                     "description": "DB 이름 (미지정 시 프로젝트 메인 DB). NTV2의 autoda DB 접근 시 사용.",
                 },
+                "acct_tenant_id": {
+                    "type": "string",
+                    "description": "ACCT 전용 RLS 스코프 숫자 ID. tenant_company 등 조회 시 사용. tenant_id는 AADS 전역 UUID와 충돌할 수 있어 acct_tenant_id를 우선 사용.",
+                },
                 "tenant_id": {
                     "type": "string",
-                    "description": "ACCT 전용 tenant 스코프(숫자). tenant_company 등 RLS 테이블 조회 시 필수. 예: '7'(중화점)",
+                    "description": "(deprecated, 호환용 fallback) ACCT 전용 tenant 스코프 숫자 ID. 신규 호출은 acct_tenant_id 사용 권장.",
                 },
             },
             "required": ["project", "query"],
@@ -5975,6 +5979,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             db_name=params.get("db_name", ""),
             limit=params.get("limit", 100),
             tenant_id=params.get("tenant_id"),
+            acct_tenant_id=params.get("acct_tenant_id"),
         ), ensure_ascii=False, default=str)
     elif name == "list_project_databases":
         from app.api.ceo_chat_tools_db import list_project_databases

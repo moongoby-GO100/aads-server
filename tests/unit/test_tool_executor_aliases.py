@@ -2,6 +2,55 @@ import pytest
 
 
 @pytest.mark.asyncio
+async def test_project_db_prefers_acct_tenant_alias(monkeypatch):
+    from app.api import ceo_chat_tools_db
+    from app.services.tool_executor import ToolExecutor
+
+    captured = {}
+
+    async def fake_query_project_database(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        ceo_chat_tools_db, "query_project_database", fake_query_project_database
+    )
+
+    result = await ToolExecutor()._query_project_database(
+        {"project": "ACCT", "query": "SELECT 1", "tenant_id": "8", "acct_tenant_id": "7"}
+    )
+
+    assert result == {"ok": True}
+    assert captured["acct_tenant_id"] == "7"
+
+
+@pytest.mark.asyncio
+async def test_project_db_ignores_global_tenant_uuid(monkeypatch):
+    from app.api import ceo_chat_tools_db
+    from app.services.tool_executor import ToolExecutor
+
+    captured = {}
+
+    async def fake_query_project_database(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        ceo_chat_tools_db, "query_project_database", fake_query_project_database
+    )
+
+    await ToolExecutor()._query_project_database(
+        {
+            "project": "ACCT",
+            "query": "SELECT 1",
+            "tenant_id": "2d701a8c-9596-4757-8588-faa4f7837112",
+        }
+    )
+
+    assert captured["acct_tenant_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_query_db_alias_dispatches_to_query_database(monkeypatch):
     from app.services.tool_executor import ToolExecutor
 

@@ -724,9 +724,13 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "description": "DB 이름 (미지정 시 프로젝트 메인 DB 사용). NTV2 V1 DB 조회 시: project=NTV2, db_name=autoda",
                 },
+                "acct_tenant_id": {
+                    "type": "string",
+                    "description": "ACCT 전용 RLS 스코프 숫자 ID. tenant_company 등 조회 시 사용. tenant_id는 AADS 전역 UUID와 충돌할 수 있어 acct_tenant_id를 우선 사용.",
+                },
                 "tenant_id": {
                     "type": "string",
-                    "description": "ACCT 전용 tenant 스코프(숫자). tenant_company 등 RLS 테이블 조회 시 필수. 예: '7'(중화점)",
+                    "description": "(deprecated, 호환용 fallback) ACCT 전용 tenant 스코프 숫자 ID. 신규 호출은 acct_tenant_id 사용 권장.",
                 },
             },
             "required": ["project", "query"],
