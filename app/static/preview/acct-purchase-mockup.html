@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>매입자료 화면 목업 — ACCT-LAYOUT-001</title>
+<style>
+:root{
+  --bg:#f5f6f8; --surface:#fff; --line:#e3e6ea; --line2:#eef0f3;
+  --ink:#1b1f24; --ink2:#5b646e; --ink3:#8b949e;
+  --brand:#2563eb; --brand-w:#eff4ff;
+  --ok:#0f9d58; --ok-w:#e8f6ee; --warn:#c77700; --warn-w:#fdf3e2;
+  --err:#d32f2f; --err-w:#fdeded; --r:10px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  font-size:14px;line-height:1.55}
+.wrap{max-width:1180px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:19px;margin:0 0 4px}
+.sub{color:var(--ink2);font-size:13px;margin-bottom:18px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px;border-bottom:1px solid var(--line)}
+.tab{padding:9px 16px;border:1px solid transparent;border-bottom:none;border-radius:8px 8px 0 0;
+  cursor:pointer;color:var(--ink2);font-weight:600;font-size:13px;background:none}
+.tab.on{background:var(--surface);border-color:var(--line);color:var(--brand);margin-bottom:-1px}
+.screen{display:none}.screen.on{display:block}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:14px}
+.card h2{font-size:14px;margin:0 0 12px;display:flex;align-items:center;gap:8px}
+.card h2 small{font-weight:400;color:var(--ink3);font-size:12px}
+.row{display:flex;gap:12px;flex-wrap:wrap}
+.col{flex:1;min-width:280px}
+/* 요약 타일 */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px}
+.tile .lab{color:var(--ink2);font-size:12px;margin-bottom:6px}
+.tile .val{font-size:22px;font-weight:700;letter-spacing:-.02em}
+.tile .delta{font-size:12px;margin-top:4px;color:var(--ink3)}
+.tile .val.warn{color:var(--warn)}
+/* 배너 */
+.banner{display:flex;gap:10px;align-items:flex-start;background:var(--err-w);
+  border:1px solid #f5c2c2;border-radius:var(--r);padding:12px 14px;margin-bottom:14px}
+.banner .t{font-weight:700;color:var(--err);font-size:13px}
+.banner .d{color:#8c3a3a;font-size:12.5px;margin-top:2px}
+/* 필터 */
+.filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+select,input[type=text],input[type=date],input[type=number]{
+  border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;
+  background:var(--surface);color:var(--ink);font-family:inherit}
+input:focus,select:focus{outline:2px solid var(--brand-w);border-color:var(--brand)}
+.chip{padding:7px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);
+  font-size:12.5px;cursor:pointer;color:var(--ink2)}
+.chip.on{background:var(--brand-w);border-color:#c3d6fb;color:var(--brand);font-weight:600}
+/* 표 */
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-size:12px;color:var(--ink2);font-weight:600;
+  padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:11px 10px;border-bottom:1px solid var(--line2);font-size:13px}
+tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tbody tr:hover{background:#fafbfc}
+/* 배지 */
+.b{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11.5px;font-weight:600;white-space:nowrap}
+.b.ok{background:var(--ok-w);color:var(--ok)}
+.b.warn{background:var(--warn-w);color:var(--warn)}
+.b.err{background:var(--err-w);color:var(--err)}
+.b.gray{background:#eef0f3;color:var(--ink2)}
+.b.blue{background:var(--brand-w);color:var(--brand)}
+/* 버튼 */
+.btn{padding:9px 16px;border-radius:8px;border:1px solid var(--line);background:var(--surface);
+  font-size:13px;font-weight:600;cursor:pointer;color:var(--ink);font-family:inherit;min-height:40px}
+.btn.pri{background:var(--brand);border-color:var(--brand);color:#fff}
+.btn.sm{padding:5px 11px;font-size:12px;min-height:32px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+/* 폼 */
+.f{margin-bottom:12px}
+.f label{display:block;font-size:12.5px;color:var(--ink2);margin-bottom:5px;font-weight:600}
+.f label .req{color:var(--err)}
+.f input,.f select{width:100%}
+.hint{font-size:12px;color:var(--ink3);margin-top:4px}
+.hint.warn{color:var(--warn)}
+/* 증빙 */
+.drop{border:2px dashed var(--line);border-radius:var(--r);padding:26px;text-align:center;color:var(--ink3);background:#fafbfc}
+.thumb{margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:10px;display:flex;
+  gap:10px;align-items:center;background:var(--surface)}
+.thumb .ph{width:52px;height:64px;background:linear-gradient(160deg,#dfe4ea,#c9d0d8);border-radius:4px;flex:none}
+/* 합계바 */
+.sumbar{position:sticky;bottom:0;background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r);padding:12px 16px;display:flex;gap:18px;align-items:center;
+  flex-wrap:wrap;box-shadow:0 -2px 10px rgba(0,0,0,.05);margin-top:14px}
+.sumbar .s{font-size:12.5px;color:var(--ink2)}
+.sumbar .s b{display:block;font-size:17px;color:var(--ink);font-variant-numeric:tabular-nums}
+.sumbar .sp{flex:1}
+/* 분개 */
+.je{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.je .h{background:#f7f8fa;padding:9px 12px;font-size:12px;font-weight:700;color:var(--ink2);border-bottom:1px solid var(--line)}
+.je .h.r{border-left:1px solid var(--line)}
+.je .side{padding:0}
+.je .side.r{border-left:1px solid var(--line)}
+.je .l{display:flex;justify-content:space-between;padding:11px 12px;border-bottom:1px solid var(--line2);font-size:13px;gap:8px}
+.je .l .nm{color:var(--ink)}
+.je .l .am{font-variant-numeric:tabular-nums;font-weight:600}
+.je .tot{display:flex;justify-content:space-between;padding:11px 12px;background:#f7f8fa;font-weight:700;font-size:13px}
+.balance{margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--ok-w);color:var(--ok);
+  font-size:12.5px;font-weight:600}
+/* 모바일 프레임 */
+.phone{width:375px;max-width:100%;border:10px solid #23272c;border-radius:30px;overflow:hidden;background:var(--bg)}
+.phone .bar{background:#23272c;color:#fff;font-size:11px;padding:5px 14px;display:flex;justify-content:space-between}
+.phone .body{height:600px;overflow-y:auto;padding:12px}
+.mcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:9px}
+.mcard .r1{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
+.mcard .sup{font-weight:700;font-size:14px}
+.mcard .amt{font-weight:700;font-size:15px;font-variant-numeric:tabular-nums}
+.mcard .r2{display:flex;justify-content:space-between;color:var(--ink2);font-size:12px}
+.fab{position:sticky;bottom:10px;float:right;width:56px;height:56px;border-radius:50%;
+  background:var(--brand);color:#fff;font-size:26px;border:none;box-shadow:0 4px 12px rgba(37,99,235,.4);cursor:pointer}
+.tabbar{display:flex;border-top:1px solid var(--line);background:var(--surface)}
+.tabbar div{flex:1;text-align:center;padding:9px 0;font-size:11px;color:var(--ink3)}
+.tabbar div.on{color:var(--brand);font-weight:700}
+.note{background:#fffdf5;border:1px solid #f0e4c0;border-radius:var(--r);padding:12px 14px;
+  font-size:12.5px;color:#6b5a2a;margin-bottom:14px}
+.note b{color:#8a6d1f}
+@media(max-width:700px){.je{grid-template-columns:1fr}.je .side.r,.je .h.r{border-left:none;border-top:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>매입자료 화면 목업</h1>
+  <div class="sub">ACCT-LAYOUT-001 · 매장비서(FOOD) × 회계원장(ACCT) · 2026-09-17 · <b>목업입니다 — 실데이터 아님</b></div>
+
+  <div class="note">
+    <b>이 목업의 데이터는 예시값입니다.</b> 사업장 4곳(열정국밥 중화점·미아점·성신여대점, 언니냉면)과
+    지점 5개는 실제 등록 현황을 반영했고, 매입 전표는 아직 <b>0건</b>이므로 화면의 전표는 전부 가상입니다.
+  </div>
+
+  <div class="tabs">
+    <button class="tab on" data-s="s1">① 매입 목록</button>
+    <button class="tab" data-s="s2">② 매입 등록 / 상세</button>
+    <button class="tab" data-s="s3">③ 회계 전송 확인</button>
+    <button class="tab" data-s="s4">④ 모바일 (점장)</button>
+  </div>
+
+<!-- ============ 화면 1 ============ -->
+<div class="screen on" id="s1">
+  <div class="banner">
+    <div>
+      <div class="t">회계 전송 실패 2건 — 확인이 필요합니다</div>
+      <div class="d">9/12 대성축산, 9/15 한양청과. 사유: 회계원장 연결 지연 · 전표는 보관돼 있습니다.</div>
+    </div>
+    <div style="flex:1"></div>
+    <button class="btn sm">모두 재전송</button>
+  </div>
+
+  <div class="tiles">
+    <div class="tile"><div class="lab">이번 달 매입</div><div class="val">18,742,000</div><div class="delta">전월 대비 +6.2%</div></div>
+    <div class="tile"><div class="lab">매입 부가세</div><div class="val">1,612,400</div><div class="delta">공제 대상 기준</div></div>
+    <div class="tile"><div class="lab">원가율</div><div class="val warn">38.4%</div><div class="delta">목표 35% · 3.4%p 초과</div></div>
+    <div class="tile"><div class="lab">회계 미전송</div><div class="val">5건</div><div class="delta">대기 3 · 실패 2</div></div>
+  </div>
+
+  <div class="card">
+    <h2>매입 내역 <small>2026년 9월 · 전체 사업장</small></h2>
+    <div class="filters" style="margin-bottom:14px">
+      <select><option>2026년 9월</option><option>2026년 8월</option></select>
+      <select><option>전체 사업장</option><option>열정국밥 중화점</option><option>열정국밥_미아점</option><option>열정국밥 성신여대점</option><option>언니냉면</option></select>
+      <input type="text" placeholder="거래처 검색" style="width:150px">
+      <span class="chip on">전체</span>
+      <span class="chip">전송완료</span>
+      <span class="chip">대기</span>
+      <span class="chip">실패</span>
+      <div style="flex:1"></div>
+      <button class="btn">엑셀 내려받기</button>
+      <button class="btn pri">+ 매입 등록</button>
+    </div>
+    <table>
+      <thead><tr>
+        <th>일자</th><th>사업장</th><th>거래처</th><th>증빙</th>
+        <th class="num">공급가액</th><th class="num">부가세</th><th class="num">합계</th>
+        <th>결제</th><th>회계</th><th></th>
+      </tr></thead>
+      <tbody>
+        <tr><td>09-17</td><td>중화점</td><td>대성축산</td><td><span class="b blue">세금계산서</span></td>
+            <td class="num">1,700,000</td><td class="num">170,000</td><td class="num">1,870,000</td>
+            <td><span class="b gray">외상</span></td><td><span class="b ok">전송완료</span></td><td><button class="btn sm">보기</button></td></tr>
+        <tr><td>09-16</td><td>미아점</td><td>한양청과</td><td><span class="b gray">계산서(면세)</span></td>
+            <td class="num">840,000</td><td class="num">—</td><td class="num">840,000</td>
+            <td><span class="b gray">외상</span></td><td><span class="b err">전송실패</span></td><td><button class="btn sm">재전송</button></td></tr>
+        <tr><td>09-15</td><td>성신여대점</td><td>CJ프레시웨이</td><td><span class="b blue">세금계산서</span></td>
+            <td class="num">2,310,000</td><td class="num">231,000</td><td class="num">2,541,000</td>
+            <td><span class="b gray">외상</span></td><td><span class="b ok">전송완료</span></td><td><button class="btn sm">보기</button></td></tr>
+        <tr><td>09-14</td><td>언니냉면</td><td>이마트 트레이더스</td><td><span class="b warn">카드</span></td>
+            <td class="num">327,273</td><td class="num">32,727</td><td class="num">360,000</td>
+            <td><span class="b gray">카드</span></td><td><span class="b warn">전송대기</span></td><td><button class="btn sm">보기</button></td></tr>
+        <tr><td>09-12</td><td>중화점</td><td>대성축산</td><td><span class="b blue">세금계산서</span></td>
+            <td class="num">1,455,000</td><td class="num">145,500</td><td class="num">1,600,500</td>
+            <td><span class="b gray">외상</span></td><td><span class="b err">전송실패</span></td><td><button class="btn sm">재전송</button></td></tr>
+        <tr><td>09-10</td><td>미아점</td><td>삼립식품</td><td><span class="b blue">세금계산서</span></td>
+            <td class="num">612,000</td><td class="num">61,200</td><td class="num">673,200</td>
+            <td><span class="b gray">외상</span></td><td><span class="b ok">전송완료</span></td><td><button class="btn sm">보기</button></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card" style="color:var(--ink2);font-size:12.5px">
+    <b style="color:var(--ink)">설계 의도</b> · 목록이 기본 진입 화면입니다. 실패 건은 목록에 묻히면 영영 처리되지 않으므로
+    <b>상단 고정 배너</b>로 끌어올립니다. 원가율 타일은 목표치를 넘으면 주황으로 바뀌어, 사장이 숫자를 찾지 않아도 보이게 합니다.
+  </div>
+</div>
+
+<!-- ============ 화면 2 ============ -->
+<div class="screen" id="s2">
+  <div class="row">
+    <div class="col" style="flex:1.15">
+      <div class="card">
+        <h2>기본 정보</h2>
+        <div class="row">
+          <div class="col" style="min-width:150px"><div class="f"><label>매입일자 <span class="req">*</span></label><input type="date" value="2026-09-17"></div></div>
+          <div class="col" style="min-width:150px"><div class="f"><label>사업장 <span class="req">*</span></label>
+            <select><option>열정국밥 중화점</option><option>열정국밥_미아점</option><option>열정국밥 성신여대점</option><option>언니냉면</option></select></div></div>
+        </div>
+        <div class="row">
+          <div class="col" style="min-width:150px"><div class="f"><label>매장</label><select><option>중화점 본점</option></select></div></div>
+          <div class="col" style="min-width:150px"><div class="f"><label>거래처 <span class="req">*</span></label>
+            <input type="text" value="대성축산"><div class="hint">최근 사용: 대성축산 · 한양청과 · CJ프레시웨이</div></div></div>
+        </div>
+        <div class="row">
+          <div class="col" style="min-width:150px"><div class="f"><label>증빙유형 <span class="req">*</span></label>
+            <select><option>세금계산서</option><option>계산서(면세)</option><option>신용카드</option><option>현금영수증</option><option>증빙없음</option></select></div></div>
+          <div class="col" style="min-width:150px"><div class="f"><label>세금계산서 번호</label>
+            <input type="text" value="20260917-00412"><div class="hint">같은 번호가 이미 있으면 등록 시 알려드립니다</div></div></div>
+        </div>
+        <div class="row">
+          <div class="col" style="min-width:150px"><div class="f"><label>과세구분 <span class="req">*</span></label>
+            <select><option>과세 (10%)</option><option>면세</option><option>영세율</option></select></div></div>
+          <div class="col" style="min-width:150px"><div class="f"><label>결제조건</label>
+            <select><option>외상 (지급예정일 지정)</option><option>즉시 계좌이체</option><option>카드</option><option>현금</option></select></div></div>
+        </div>
+        <div class="f"><label>지급 예정일</label><input type="date" value="2026-10-10" style="max-width:200px"></div>
+      </div>
+
+      <div class="card">
+        <h2>품목 <small>수량 × 단가를 넣으면 공급가·부가세가 자동 계산됩니다</small></h2>
+        <table>
+          <thead><tr><th style="width:38%">품목명</th><th class="num">수량</th><th>단위</th>
+            <th class="num">단가</th><th class="num">공급가액</th><th class="num">부가세</th><th></th></tr></thead>
+          <tbody>
+            <tr><td>돼지고기 앞다리</td><td class="num">20</td><td>kg</td><td class="num">8,500</td>
+                <td class="num">170,000</td><td class="num">17,000</td><td><button class="btn sm">삭제</button></td></tr>
+            <tr><td>대파</td><td class="num">15</td><td>단</td><td class="num">3,200</td>
+                <td class="num">48,000</td><td class="num">4,800</td><td><button class="btn sm">삭제</button></td></tr>
+            <tr><td>양파 (15kg)</td><td class="num">6</td><td>망</td><td class="num">18,000</td>
+                <td class="num">108,000</td><td class="num">10,800</td><td><button class="btn sm">삭제</button></td></tr>
+            <tr><td><input type="text" placeholder="품목명 입력"></td>
+                <td><input type="number" placeholder="0" style="width:70px;text-align:right"></td>
+                <td><input type="text" placeholder="kg" style="width:56px"></td>
+                <td><input type="number" placeholder="0" style="width:90px;text-align:right"></td>
+                <td class="num" style="color:var(--ink3)">0</td><td class="num" style="color:var(--ink3)">0</td>
+                <td><button class="btn sm pri">추가</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="col" style="flex:.85">
+      <div class="card">
+        <h2>증빙 첨부 <small>사진 · PDF</small></h2>
+        <div class="drop">파일을 끌어놓거나 눌러서 선택<br><span style="font-size:12px">모바일에서는 바로 촬영됩니다</span></div>
+        <div class="thumb"><div class="ph"></div>
+          <div><div style="font-weight:600">세금계산서_대성축산_0917.jpg</div>
+          <div class="hint">1.2MB · 방금 업로드</div></div></div>
+      </div>
+      <div class="card">
+        <h2>회계 처리 예상</h2>
+        <div style="font-size:13px;color:var(--ink2);line-height:2">
+          계정과목 <b style="color:var(--ink);float:right">원재료비</b><br>
+          부가세 처리 <b style="color:var(--ink);float:right">부가세대급금 (공제)</b><br>
+          상대계정 <b style="color:var(--ink);float:right">외상매입금</b>
+        </div>
+        <div class="hint" style="margin-top:10px">등록 후 [회계 전송] 화면에서 분개를 확인하고 수정할 수 있습니다.</div>
+      </div>
+      <div class="card">
+        <h2>메모</h2>
+        <div class="f"><input type="text" placeholder="예: 주말 대비 추가 발주"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sumbar">
+    <div class="s">공급가액<b>326,000</b></div>
+    <div class="s">부가세<b>32,600</b></div>
+    <div class="s">합계<b style="color:var(--brand)">358,600</b></div>
+    <div class="sp"></div>
+    <button class="btn">임시저장</button>
+    <button class="btn pri">등록하고 회계 전송</button>
+  </div>
+</div>
+
+<!-- ============ 화면 3 ============ -->
+<div class="screen" id="s3">
+  <div class="row">
+    <div class="col" style="flex:.8">
+      <div class="card">
+        <h2>전표 요약</h2>
+        <table>
+          <tbody>
+            <tr><td style="color:var(--ink2);width:40%">매입일자</td><td><b>2026-09-17</b></td></tr>
+            <tr><td style="color:var(--ink2)">사업장</td><td>열정국밥 중화점</td></tr>
+            <tr><td style="color:var(--ink2)">거래처</td><td>대성축산</td></tr>
+            <tr><td style="color:var(--ink2)">증빙</td><td><span class="b blue">세금계산서</span> 20260917-00412</td></tr>
+            <tr><td style="color:var(--ink2)">공급가액</td><td class="num" style="text-align:left">326,000원</td></tr>
+            <tr><td style="color:var(--ink2)">부가세</td><td class="num" style="text-align:left">32,600원</td></tr>
+            <tr><td style="color:var(--ink2)">합계</td><td><b>358,600원</b></td></tr>
+            <tr><td style="color:var(--ink2)">회계 상태</td><td><span class="b warn">전송대기</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>마감 확인</h2>
+        <div style="display:flex;gap:9px;align-items:center;font-size:13px">
+          <span class="b ok">2026-09 마감 전</span> <span style="color:var(--ink2)">전송 가능합니다</span>
+        </div>
+        <div class="hint warn" style="margin-top:9px">마감된 월의 전표는 전송·수정이 차단되며, 마감 해제 요청 경로를 안내합니다.</div>
+      </div>
+    </div>
+
+    <div class="col" style="flex:1.2">
+      <div class="card">
+        <h2>분개 미리보기 <small>계정과목은 수정할 수 있습니다</small></h2>
+        <div class="je">
+          <div class="h">차변 (Debit)</div><div class="h r">대변 (Credit)</div>
+          <div class="side">
+            <div class="l"><span class="nm">원재료비<br><span class="hint">식자재 매입</span></span><span class="am">326,000</span></div>
+            <div class="l"><span class="nm">부가세대급금<br><span class="hint">매입세액 공제분</span></span><span class="am">32,600</span></div>
+            <div class="tot"><span>차변 합계</span><span>358,600</span></div>
+          </div>
+          <div class="side r">
+            <div class="l"><span class="nm">외상매입금<br><span class="hint">대성축산 · 지급예정 10-10</span></span><span class="am">358,600</span></div>
+            <div class="l" style="color:var(--ink3)"><span class="nm">—</span><span class="am">—</span></div>
+            <div class="tot"><span>대변 합계</span><span>358,600</span></div>
+          </div>
+        </div>
+        <div class="balance">차변 = 대변 358,600원 — 분개가 일치합니다</div>
+        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn">계정과목 변경</button>
+          <button class="btn">전표 수정</button>
+          <div style="flex:1"></div>
+          <button class="btn pri">회계원장으로 전송</button>
+        </div>
+        <div class="hint" style="margin-top:10px">
+          전송하면 회계원장에 <b>분개 초안</b>으로 들어갑니다. 최종 확정(전기)은 경리 담당이 원장에서 처리합니다.
+          같은 전표를 두 번 보내도 초안은 한 건만 생깁니다.
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>전송 이력</h2>
+        <table>
+          <thead><tr><th>시각</th><th>결과</th><th>내용</th></tr></thead>
+          <tbody>
+            <tr><td>09-17 20:41</td><td><span class="b gray">대기</span></td><td>전송 대기열 등록</td></tr>
+            <tr><td>09-15 18:22</td><td><span class="b err">실패</span></td><td>회계원장 연결 지연 — 3회 중 2회차 재시도 예정</td></tr>
+            <tr><td>09-15 18:20</td><td><span class="b ok">성공</span></td><td>분개 초안 생성 (2026-09-15 매입분)</td></tr>
+          </tbody>
+        </table>
+        <div class="hint" style="margin-top:10px">실패해도 전표는 사라지지 않습니다. 연결이 돌아오면 자동으로 다시 시도합니다.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 화면 4 ============ -->
+<div class="screen" id="s4">
+  <div class="row">
+    <div class="col" style="flex:none">
+      <div class="phone">
+        <div class="bar"><span>9:41</span><span>매장비서</span><span>100%</span></div>
+        <div class="body">
+          <div style="font-weight:700;font-size:17px;margin-bottom:3px">매입</div>
+          <div style="color:var(--ink2);font-size:12.5px;margin-bottom:12px">중화점 · 2026년 9월</div>
+
+          <div class="banner" style="padding:10px 12px;margin-bottom:12px">
+            <div><div class="t" style="font-size:12.5px">전송 실패 1건</div>
+            <div class="d" style="font-size:12px">9/12 대성축산</div></div>
+            <div style="flex:1"></div><button class="btn sm">재전송</button>
+          </div>
+
+          <div class="tiles" style="grid-template-columns:1fr 1fr;gap:9px;margin-bottom:12px">
+            <div class="tile" style="padding:11px"><div class="lab">이번 달</div><div class="val" style="font-size:17px">6,240,000</div></div>
+            <div class="tile" style="padding:11px"><div class="lab">원가율</div><div class="val warn" style="font-size:17px">38.4%</div></div>
+          </div>
+
+          <div style="display:flex;gap:6px;margin-bottom:10px;overflow-x:auto">
+            <span class="chip on">전체</span><span class="chip">대기</span><span class="chip">실패</span>
+          </div>
+
+          <div class="mcard">
+            <div class="r1"><span class="sup">대성축산</span><span class="amt">1,870,000</span></div>
+            <div class="r2"><span>09-17 · 세금계산서</span><span class="b ok">전송완료</span></div>
+          </div>
+          <div class="mcard">
+            <div class="r1"><span class="sup">한양청과</span><span class="amt">840,000</span></div>
+            <div class="r2"><span>09-16 · 계산서(면세)</span><span class="b err">전송실패</span></div>
+          </div>
+          <div class="mcard">
+            <div class="r1"><span class="sup">CJ프레시웨이</span><span class="amt">2,541,000</span></div>
+            <div class="r2"><span>09-15 · 세금계산서</span><span class="b ok">전송완료</span></div>
+          </div>
+          <div class="mcard">
+            <div class="r1"><span class="sup">이마트 트레이더스</span><span class="amt">360,000</span></div>
+            <div class="r2"><span>09-14 · 카드</span><span class="b warn">전송대기</span></div>
+          </div>
+          <button class="fab">+</button>
+          <div style="clear:both;height:6px"></div>
+        </div>
+        <div class="tabbar"><div>홈</div><div>매출</div><div class="on">매입</div><div>근태</div><div>더보기</div></div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card">
+        <h2>모바일 설계 원칙</h2>
+        <table>
+          <tbody>
+            <tr><td style="width:34%;color:var(--ink2)">첫 진입</td><td>하단 탭 <b>[매입]</b> → 이번 달·내 매장이 기본 필터. 설정 없이 바로 업무.</td></tr>
+            <tr><td style="color:var(--ink2)">등록 속도</td><td>우하단 <b>+</b> (엄지 도달 범위) → 거래처·금액·촬영 <b>30초 목표</b></td></tr>
+            <tr><td style="color:var(--ink2)">표 대신 카드</td><td>좁은 폭에서 가로 스크롤 표는 못 읽습니다. 카드로 바꾸고 핵심 3개(거래처·금액·상태)만 노출.</td></tr>
+            <tr><td style="color:var(--ink2)">터치 타깃</td><td>모든 버튼 높이 <b>40px 이상</b>, FAB 56px</td></tr>
+            <tr><td style="color:var(--ink2)">세션 만료</td><td>입력값 로컬 보관 → 재로그인 후 <b>작성 중이던 전표로 복귀</b></td></tr>
+            <tr><td style="color:var(--ink2)">네트워크 끊김</td><td>"임시저장됨" 배지 + [다시 전송]. 막다른 화면을 만들지 않습니다.</td></tr>
+            <tr><td style="color:var(--ink2)">용어</td><td>화면에는 업무 용어만 — "사업장", "매장", "회계 전송". 내부 식별자는 API·로그에만.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>반복 사용 경로</h2>
+        <div style="font-size:13px;color:var(--ink2);line-height:1.9">
+          같은 거래처에서 비슷한 품목을 반복 매입하는 것이 실제 패턴입니다.<br>
+          → 전표 상세에 <b>[복사 등록]</b>. 품목까지 프리필하고 날짜·수량만 고칩니다.<br>
+          → 거래처 목록은 <b>최근 사용 순</b>. 가나다순은 실제로 아무도 안 씁니다.<br>
+          → 계정과목을 바꾸면 그 거래처의 다음 등록에 학습 반영합니다.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+<script>
+document.querySelectorAll('.tab').forEach(function(t){
+  t.addEventListener('click',function(){
+    document.querySelectorAll('.tab').forEach(function(x){x.classList.remove('on')});
+    document.querySelectorAll('.screen').forEach(function(x){x.classList.remove('on')});
+    t.classList.add('on');
+    document.getElementById(t.dataset.s).classList.add('on');
+    window.scrollTo(0,0);
+  });
+});
+document.querySelectorAll('.chip').forEach(function(c){
+  c.addEventListener('click',function(){
+    var sibs=c.parentNode.querySelectorAll('.chip');
+    sibs.forEach(function(x){x.classList.remove('on')});
+    c.classList.add('on');
+  });
+});
+</script>
+</body>
+</html>
