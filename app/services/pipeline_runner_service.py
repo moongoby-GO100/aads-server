@@ -126,6 +126,13 @@ _LITELLM_RUNNER_PATH: Dict[str, str] = {
 _SSH_MAX_RETRIES = 3
 _SSH_RETRY_BASE_DELAY = 2   # 초 (지수 백오프: 2, 4, 8)
 
+# AADS-RUNNER-DEPLOY-LOCK-QUEUE-P0: deploy lock 즉시 재시도 백오프 + 재큐잉 상한.
+# 3회 소진 시 terminal error 로 끝내면 이미 CEO 승인된 diff 가 push 되지 못하고
+# 폐기된다(2026-09-17 실측, runner-1ceec46f/3961f858). 상한까지는 status=queued 로 재큐잉한다.
+_DEPLOY_LOCK_BACKOFF_SEC = (10, 30, 60)
+_DEPLOY_LOCK_MAX_REQUEUE = int(os.getenv("DEPLOY_LOCK_MAX_REQUEUE", "5"))
+_DEPLOY_LOCK_MAX_WAIT_SEC = int(os.getenv("DEPLOY_LOCK_MAX_WAIT_SEC", "900"))  # 15분
+
 # 프로젝트별 서비스 재시작 명령
 _RESTART_CMD: Dict[str, str] = {
     "KIS":   "kill -HUP $(cat /run/gunicorn-kis-v41.pid)",       # gunicorn graceful reload (무중단)
@@ -1049,22 +1056,47 @@ class PipelineCJob:
                 _deploy_lock = acquire_deploy_lock(self.project, self.job_id, timeout=600)
                 if not _deploy_lock["acquired"]:
                     _holder = _deploy_lock.get("holder", "unknown")
-                    for _dl_retry in range(3):
-                        self._log("deploy_lock_wait", f"배포 잠금 대기 ({_dl_retry+1}/3): holder={_holder}")
-                        await asyncio.sleep(min(30 * (_dl_retry + 1), 90))
-                        _deploy_lock = acquire_deploy_lock(self.project, self.job_id, timeout=600)
+                    _dl_requeue = 0
+                    _dl_waited_sec = 0
+                    while not _deploy_lock["acquired"]:
+                        for _dl_retry, _dl_backoff in enumerate(_DEPLOY_LOCK_BACKOFF_SEC):
+                            self._log(
+                                "deploy_lock_wait",
+                                f"배포 잠금 대기 ({_dl_retry+1}/{len(_DEPLOY_LOCK_BACKOFF_SEC)}): holder={_holder}",
+                            )
+                            await asyncio.sleep(_dl_backoff)
+                            _dl_waited_sec += _dl_backoff
+                            _deploy_lock = acquire_deploy_lock(self.project, self.job_id, timeout=600)
+                            if _deploy_lock["acquired"]:
+                                break
                         if _deploy_lock["acquired"]:
                             break
-                    else:
-                        self._log("deploy_lock_fail", f"배포 잠금 획득 실패: holder={_holder}")
-                        self.status = "error"
-                        self.error_msg = f"deploy_lock_fail: {_holder}가 배포 중"
-                        await self._save_to_db()
-                        await self._post_to_chat(
-                            f"⚠️ **[배포 잠금 실패]** `{self.job_id}` — {_holder}가 배포 중입니다."
+                        _holder = _deploy_lock.get("holder", "unknown")
+                        _dl_requeue += 1
+                        if _dl_requeue > _DEPLOY_LOCK_MAX_REQUEUE or _dl_waited_sec >= _DEPLOY_LOCK_MAX_WAIT_SEC:
+                            self._log(
+                                "deploy_lock_fail",
+                                f"배포 잠금 획득 실패 (재큐잉 {_dl_requeue - 1}/{_DEPLOY_LOCK_MAX_REQUEUE} 소진, "
+                                f"누적대기 {_dl_waited_sec}s): holder={_holder}",
+                            )
+                            self.status = "error"
+                            self.error_msg = f"deploy_lock_fail: {_holder}가 배포 중"
+                            await self._save_to_db()
+                            await self._post_to_chat(
+                                f"⚠️ **[배포 잠금 실패]** `{self.job_id}` — {_holder}가 배포 중입니다 "
+                                f"(재큐잉 {_DEPLOY_LOCK_MAX_REQUEUE}회/누적대기 {_dl_waited_sec}s 소진)."
+                            )
+                            await self._notify_push_status("error")
+                            return {"error": self.error_msg}
+                        # 승인/커밋 상태는 self 에 그대로 남아있다 — status 만 queued 로 되돌려
+                        # CEO 화면에서 "폐기"가 아니라 "배포 대기"로 보이게 한다.
+                        self.status = "queued"
+                        self.review_feedback = (self.review_feedback or "") + (
+                            f"\n[배포대기] deploy lock 점유로 재큐잉 {_dl_requeue}/{_DEPLOY_LOCK_MAX_REQUEUE} "
+                            f"(holder={_holder})"
                         )
-                        await self._notify_push_status("error")
-                        return {"error": self.error_msg}
+                        await self._save_to_db()
+                    self.status = "running"
 
             # Phase 5: 푸시 (commit은 Runner가 작업 완료 시 이미 수행)
             # cross-process flock으로 Chat-Direct git 작업과 충돌 방지
