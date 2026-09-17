@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>스마트 브라우저 아키텍처 — AADS Work Execution Layer</title>
+<style>
+:root{--bg:#0f1115;--panel:#161a21;--line:#262c36;--tx:#e6e9ef;--dim:#9aa4b2;--acc:#4da3ff;--ok:#34d399;--warn:#fbbf24;--bad:#f87171}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:-apple-system,BlinkMacSystemFont,"Pretendard","Noto Sans KR",sans-serif;line-height:1.7}
+.wrap{max-width:1000px;margin:0 auto;padding:40px 24px 80px}
+header{border-bottom:1px solid var(--line);padding-bottom:24px;margin-bottom:32px}
+h1{font-size:28px;margin:0 0 8px}
+h2{font-size:20px;margin:40px 0 12px;padding-left:10px;border-left:3px solid var(--acc)}
+.meta{color:var(--dim);font-size:13px}
+.nav{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.nav a{font-size:13px;padding:6px 12px;border:1px solid var(--line);border-radius:6px;color:var(--acc);text-decoration:none}
+.nav a.cur{background:var(--acc);color:#0b1220;border-color:var(--acc)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:16px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:#1b212b;color:var(--dim);font-weight:600}
+code{background:#1b212b;padding:2px 6px;border-radius:4px;font-size:13px}
+pre{background:#12161d;border:1px solid var(--line);border-radius:8px;padding:14px;overflow-x:auto;font-size:12.5px;line-height:1.5}
+.layer{border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:10px 0;background:linear-gradient(180deg,#171c24,#12161d)}
+.layer b{color:var(--acc)}
+.layer span{display:inline-block;font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:6px;padding:3px 8px;margin:4px 6px 0 0}
+.tag{display:inline-block;font-size:11px;padding:2px 7px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+footer{margin-top:56px;border-top:1px solid var(--line);padding-top:18px;color:var(--dim);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>아키텍처 설계서 — 스마트 브라우저</h1>
+  <div class="meta">문서 v1.0 · 2026-09-17 KST · 대상 저장소 <code>/root/aads/aads-server</code> (contabo116) · 기존 자산 재사용 설계</div>
+  <div class="nav">
+    <a href="20260917_smart_browser_plan.html">① 기획서</a>
+    <a href="20260917_smart_browser_prd.html">② PRD</a>
+    <a class="cur" href="20260917_smart_browser_architecture.html">③ 아키텍처</a>
+  </div>
+</header>
+
+<h2>1. 4계층 구조</h2>
+<div class="layer"><b>④ 지시 계층</b> — 채팅 한 줄을 레시피 선택/생성으로 번역
+  <div><span>ceo_chat 도구</span><span>레시피 매칭(도메인+의도)</span><span>TODO 진행률 노출</span></div></div>
+<div class="layer"><b>③ 기록 계층</b> — 무엇을 왜 했는지 남긴다
+  <div><span>work_recipes(YAML)</span><span>recipe_runs</span><span>recipe_run_steps(append-only)</span><span>스크린샷 증거</span></div></div>
+<div class="layer"><b>② 권한 계층</b> — 위험을 사람에게 올린다
+  <div><span>행위 등급 판정</span><span>승인 카드(propose_next_steps)</span><span>도메인 허용목록</span><span>credential_vault 범위 제한</span></div></div>
+<div class="layer"><b>① 실행 계층</b> — 이미 있는 것 (3,182줄 + 2,411줄)
+  <div><span>browser_bridge(Playwright)</span><span>PC Agent(Windows)</span><span>WebMCP 어댑터(신규)</span><span>사내 API 직접 호출</span></div></div>
+
+<h2>2. 컴포넌트 배치</h2>
+<pre>[채팅 세션] --지시--> [Recipe Orchestrator]  (신규: app/services/work_recipe/)
+                              |
+        +---------------------+-----------------+----------------+
+        |                     |                 |                |
+   [Recipe Store]      [Risk Gate]        [Executor]       [Audit Writer]
+   work_recipes DB     등급판정/승인카드    ↓                recipe_run_steps
+                                    +-----------------------+
+                                    |          |            |
+                            browser_bridge  PC Agent   WebMCP Adapter
+                            (Playwright)    (Windows)  (navigator.modelContext)
+                                    |
+                              [대상 사이트]</pre>
+
+<h2>3. 신규 vs 재사용</h2>
+<table>
+<tr><th>컴포넌트</th><th>구분</th><th>위치(예정)</th><th>근거</th></tr>
+<tr><td>browser_bridge</td><td class="ok">재사용</td><td><code>app/browser_bridge/</code> 3,182줄</td><td>이미 운영 중, 루프백·경로 가드 보유 [코드 실측]</td></tr>
+<tr><td>PC Agent</td><td class="ok">재사용</td><td><code>app/services/pc_agent_manager.py</code> 2,411줄</td><td>로컬 실행 경로 확보 [코드 실측]</td></tr>
+<tr><td>credential_vault</td><td class="warn">재사용 + 범위 제한 추가</td><td><code>app/core/credential_vault.py</code> 1,000줄</td><td>도메인×레시피 스코프 필드 추가 필요</td></tr>
+<tr><td>Recipe Orchestrator / Store / Executor</td><td class="acc">신규</td><td><code>app/services/work_recipe/</code></td><td>현재 성공 경로를 저장하는 구조가 0건</td></tr>
+<tr><td>Risk Gate</td><td class="acc">신규</td><td><code>app/services/work_recipe/risk_gate.py</code></td><td>기존 승인 카드(<code>propose_next_steps</code>) 재사용해 UI 신규 개발 없음</td></tr>
+<tr><td>WebMCP Adapter</td><td class="acc">신규(P2)</td><td><code>app/services/work_recipe/webmcp.py</code></td><td>표준 실험 단계 — 어댑터로 격리 <span class="tag">OpenAI 공식 2026-08-25</span></td></tr>
+</table>
+
+<h2>4. 실행 시퀀스</h2>
+<pre>[학습 1회차]
+지시 → 레시피 없음 → LLM 탐색 실행(브리지 도구 호출) → 성공
+     → 호출 순서·선택자·검증조건을 YAML로 직렬화 → work_recipes v1 저장
+
+[재생 2회차 이후]
+지시 → 도메인+의도로 레시피 매칭 → Risk Gate 사전 스캔
+     → READ/WRITE_INTERNAL 단계는 즉시 실행 (LLM 호출 0)
+     → WRITE_EXTERNAL/IRREVERSIBLE 도달 시 실행 중단 + 승인 카드 발행
+     → 승인 수신 후 재개 → 검증조건 확인 → recipe_runs.success
+
+[실패 복구]
+단계 실패(선택자 없음/타임아웃) → 스냅샷 1장 + 실패 단계만 LLM 전달
+     → 대체 경로 성공 시 해당 단계만 교체 → version+1 저장 (전체 재학습 금지)</pre>
+
+<h2>5. 보안 통제</h2>
+<table>
+<tr><th>위협</th><th>통제</th><th>구현 지점</th></tr>
+<tr><td>프롬프트 인젝션(BragJack 유형)</td><td>페이지 텍스트를 <code>&lt;untrusted_page_content&gt;</code>로 감싸 데이터로만 취급. 도구 인자는 레시피에 선언된 값·사용자 입력에서만 생성</td><td>Executor 입력 경계 <span class="tag">Dark Reading 2026-09-16</span></td></tr>
+<tr><td>도메인 이탈</td><td>레시피 <code>domain</code> 외 이동 시 즉시 중단 + 감사 1행</td><td>Risk Gate</td></tr>
+<tr><td>크리덴셜 남용</td><td>vault 조회를 (도메인×레시피) 스코프로 제한, 사용 시 감사 필수, 값은 로그·스크린샷에서 마스킹</td><td>credential_vault 래퍼</td></tr>
+<tr><td>무단 위험행위</td><td>등급 <code>WRITE_EXTERNAL</code> 이상은 승인 레코드 없으면 실행 불가(코드 차단, 문서 규칙 아님)</td><td>Risk Gate + DB 제약</td></tr>
+<tr><td>증거 조작</td><td><code>recipe_run_steps</code> append-only 트리거</td><td>마이그레이션</td></tr>
+</table>
+<div class="card">R-ERRBOOK 원칙 적용: 위 통제는 <b>전부 코드 차단</b>으로 구현한다. “규칙으로만 기록”한 항목은 재발한다는 것이 사내 실측 결론이다.</div>
+
+<h2>6. 배포·운영</h2>
+<table>
+<tr><th>항목</th><th>방식</th></tr>
+<tr><td>릴리스</td><td>Pipeline Runner → AI 리뷰 → CEO 승인 → <code>deploy.sh bluegreen</code> (R-DOCKER)</td></tr>
+<tr><td>브리지 프로세스</td><td>운영 컨테이너에는 <code>playwright</code> 미설치 — 브리지는 별도 프로세스로 동작 [컨테이너 실측]. 경계를 유지한다</td></tr>
+<tr><td>정적 문서</td><td><code>app/static/reports/</code> → <code>https://aads.newtalk.kr/reports/&lt;파일&gt;</code></td></tr>
+<tr><td>백그라운드</td><td>모든 실행에 <code>timeout</code> 부여, 세션 종료 전 회수 (R-BG)</td></tr>
+<tr><td>테스트</td><td><code>bash scripts/run_unit_tests.sh</code> — 레시피 재생·인젝션 픽스처 포함</td></tr>
+</table>
+
+<h2>7. 확장 포인트</h2>
+<table>
+<tr><th>확장</th><th>방법</th><th>시점</th></tr>
+<tr><td>자사 사이트 에이전트화</td><td>NTV2 주문 화면에 WebMCP 도구 선언 → 좌표 클릭 제거</td><td>P2</td></tr>
+<tr><td>타 프로젝트 이식</td><td>레시피 스키마는 프로젝트 무관 — SF/KIS/GO100에 그대로 적용</td><td>P2</td></tr>
+<tr><td>외부 서비스 제공</td><td>Executor를 HTTP API로 노출(사내 인증 전제)</td><td>P3</td></tr>
+<tr><td>로컬 혼합 작업</td><td>PC Agent 단계 타입 추가(<code>action: pc_execute</code>)</td><td>P3</td></tr>
+</table>
+
+<h2>8. 미검증 항목 (착수 전 확인 필요)</h2>
+<table>
+<tr><th>항목</th><th>확인 방법</th><th>상태</th></tr>
+<tr><td>브리지에 인젝션 경로가 실제로 존재하는가</td><td>페이지 텍스트→도구 인자 전파 경로 코드 추적</td><td class="warn">미검증</td></tr>
+<tr><td>credential_vault 자동 로그인 범위</td><td><code>credential_vault.py</code> 호출자 전수 grep</td><td class="warn">미검증</td></tr>
+<tr><td>브리지 감사 로그 존재 여부</td><td>브리지 실행 로그 스키마 확인</td><td class="warn">미검증</td></tr>
+</table>
+
+<footer>
+문서 3종: <a href="20260917_smart_browser_plan.html" style="color:#4da3ff">기획서</a> ·
+<a href="20260917_smart_browser_prd.html" style="color:#4da3ff">PRD</a> ·
+<a href="20260917_smart_browser_architecture.html" style="color:#4da3ff">아키텍처</a>
+</footer>
+</div>
+</body>
+</html>
