@@ -33,6 +33,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
 
@@ -186,6 +187,61 @@ async def _handle_missing_owner(conn, row: Any, *, remaining: int) -> int:
     return 1
 
 
+async def repair_owner_links(conn) -> int:
+    """주도·담당은 정해졌는데 **화면 연결고리가 없는** 목표를 이어 붙인다.
+
+    2026-09-17 실측. 라일론 목표(NTV2, P0)는 `goals.owner_session_id` 와
+    마일스톤 6건의 `owner_session_id` 가 전부 채워져 있었는데도 다섯 개 창
+    **어디에도 보이지 않았다.** 화면 조회(`GET /goals/for-session/{sid}`)가
+    `goal_task_links` 를 FROM 기준 표로 쓰기 때문이다. 목표를 API 가 아니라
+    DB 직접 시드로 만들면 그 표가 비고, 목표는 등록됐는데 주도도 담당도
+    자기 목표를 못 보는 상태가 된다 — 그날 대표님이 "안 뜨지?" 로 먼저
+    알아채셨다.
+
+    소유자가 정해진 것과 화면에 뜨는 것이 서로 다른 표에 적히는 구조라면,
+    한쪽만 채워진 상태를 매 주기 메워 주는 편이 맞다. 시드 스크립트마다
+    링크 INSERT 를 기억해 넣으라고 규칙으로 적어 두는 것은 또 잊힌다.
+
+    **뗀 것은 다시 붙이지 않는다.** 이미 줄이 있으면(`detached` 포함) 손대지
+    않는다 — 대표님이 손으로 떼신 담당을 스케줄러가 되살리면 그건 복원이
+    아니라 되돌리기다.
+    """
+    result = await conn.execute(
+        """
+        INSERT INTO goal_task_links (goal_id, task_type, task_id, status,
+                                     bind_source, bound_by, link_state)
+        SELECT o.goal_id, 'chat_session', o.sid, 'active',
+               'auto_repair', 'goal_dispatch', 'active'
+          FROM (
+                SELECT g.id AS goal_id, g.owner_session_id::text AS sid
+                  FROM goals g
+                 WHERE g.owner_session_id IS NOT NULL
+                   AND g.status IN ('draft', 'active', 'blocked')
+                UNION
+                SELECT m.goal_id, m.owner_session_id::text
+                  FROM milestones m
+                  JOIN goals g2 ON g2.id = m.goal_id
+                 WHERE m.owner_session_id IS NOT NULL
+                   AND g2.status IN ('draft', 'active', 'blocked')
+               ) o
+          JOIN chat_sessions s ON s.id = o.sid::uuid
+         WHERE NOT EXISTS (
+                SELECT 1 FROM goal_task_links l
+                 WHERE l.goal_id = o.goal_id
+                   AND l.task_type = 'chat_session'
+                   AND l.task_id = o.sid
+               )
+        """
+    )
+    try:
+        inserted = int(str(result).split()[-1])
+    except (ValueError, IndexError):
+        inserted = 0
+    if inserted:
+        logger.info("goal_owner_links_repaired", inserted=inserted)
+    return inserted
+
+
 async def dispatch_pending_milestones(project: str | None = None) -> dict[str, int]:
     """착수했는데 담당이 모르는 마일스톤에 지시를 넣는다."""
     if not _ENABLED:
@@ -201,6 +257,10 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
     touched: set[str] = set()
 
     async with pool.acquire() as conn:
+        # 지시를 보내기 전에 연결고리부터 메운다. 링크가 없으면 담당은
+        # 지시를 받아도 자기 화면에서 그 목표를 찾을 수 없다.
+        links_repaired = await repair_owner_links(conn)
+
         rows = await conn.fetch(
             """
             SELECT m.id::text AS milestone_id, m.title AS milestone_title,
@@ -316,6 +376,30 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                     skipped += 1
                     continue
 
+            # **보내기 전에 기록한다.** 순서가 뒤집히면 기록이 사라진다.
+            #
+            # 2026-09-17 실측. 여기는 스트림을 끝까지 소비한 **뒤에**
+            # 기록하고 있었다. 그런데 이 코루틴은 상위 사이클에서
+            # `asyncio.wait_for(..., 120초)` 로 감싸여 돈다(main.py). 상한이
+            # 먼저 터지면 코루틴이 취소되고 뒤에 있던 UPDATE 는 실행되지
+            # 않는다. 지시는 담당 세션에 이미 들어갔는데 `dispatched_at` 은
+            # NULL 로 남는다.
+            #
+            # 라일론 목표 M4 에서 그대로 일어났다. 10:17:12 에 발송된 지시가
+            # 기록되지 않아 다음 주기가 10:20:09 에 **같은 지시를 다시**
+            # 보냈고, 첫 턴은 `interrupted_partial` 로 죽었다. 담당은 같은
+            # 일을 두 번 받고 LLM 비용은 두 번 든다.
+            #
+            # 그래서 순서를 바꾼다. 못 보냈는데 보냈다고 적히는 쪽이
+            # 나은가 — 그렇다. 그건 다음 주기가 "재알림" 으로 복구한다.
+            # 반대는 복구되지 않고 중복 발송을 계속 만든다.
+            await conn.execute(
+                "UPDATE milestones SET dispatched_at = NOW(), "
+                "dispatched_session_id = $2, dispatch_count = dispatch_count + 1, "
+                "dispatch_note = NULL, updated_at = NOW() WHERE id = $1::uuid",
+                row["milestone_id"], row["session_id"],
+            )
+
             try:
                 from app.services import chat_service as cs
 
@@ -326,28 +410,39 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                     response_mode="quality",
                 ):
                     pass
+            except asyncio.CancelledError:
+                # 상위 상한(`_GOAL_STAGE_TIMEOUT`)이 이 코루틴을 끊는 경로다.
+                # `CancelledError` 는 `Exception` 의 하위가 아니므로 아래 포괄
+                # except 에 걸리지 않는다 — 여기서 잡지 않으면 이 경로는 아무
+                # 흔적도 남기지 않고 사라진다. 2026-09-17 M4 가 그랬다:
+                # `goal_dispatch_timeout` 은 사이클 쪽에만 찍히고, 어느
+                # 마일스톤이 끊겼는지는 어디에도 없었다.
+                #
+                # 발송 기록은 위에서 이미 남았으므로 중복 발송은 나가지 않고,
+                # 담당이 답을 못 하면 `_RETRY_AFTER_MIN` 뒤 재알림이 이어받는다.
+                # **DB 를 다시 건드리지 않는다** — 취소 중에는 그 await 도 곧
+                # 취소되어 사유가 남지 않는다. 이 경로의 기록은 이 로그다.
+                logger.warning(
+                    "goal_dispatch_cancelled",
+                    milestone=row["milestone_id"][:8],
+                    session=str(row["session_id"])[:8],
+                    attempt=count + 1,
+                    note="상위 상한으로 스트림이 끊겼다 — 답이 없으면 재알림된다",
+                )
+                raise
             except Exception as exc:
-                # 보내는 것 자체가 실패해도 횟수를 올린다. 올리지 않으면
-                # 같은 오류로 매 사이클마다 재시도하며 폭주한다.
+                # 횟수는 위에서 이미 올렸다. 여기서 또 올리면 한 번의 시도가
+                # 재시도 한도를 두 칸 깎는다. 사유만 남긴다.
                 logger.warning(
                     "goal_dispatch_send_failed",
                     milestone=row["milestone_id"][:8],
                     error=str(exc)[:160],
                 )
-                await conn.execute(
-                    "UPDATE milestones SET dispatched_at = NOW(), "
-                    "dispatch_count = dispatch_count + 1, dispatch_note = $2, "
-                    "updated_at = NOW() WHERE id = $1::uuid",
-                    row["milestone_id"], f"발송 실패: {str(exc)[:200]}",
+                await _note(
+                    conn, row["milestone_id"], f"발송 실패: {str(exc)[:200]}",
                 )
                 continue
 
-            await conn.execute(
-                "UPDATE milestones SET dispatched_at = NOW(), "
-                "dispatched_session_id = $2, dispatch_count = dispatch_count + 1, "
-                "dispatch_note = NULL, updated_at = NOW() WHERE id = $1::uuid",
-                row["milestone_id"], row["session_id"],
-            )
             sent += 1
             touched.add(str(row["session_id"]))
             logger.info(
@@ -358,12 +453,12 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 project=row["project"],
             )
 
-    if sent or gave_up or owner_requests:
+    if sent or gave_up or owner_requests or links_repaired:
         logger.info(
             "goal_dispatch_cycle", sent=sent, skipped=skipped, gave_up=gave_up,
-            owner_requests=owner_requests,
+            owner_requests=owner_requests, links_repaired=links_repaired,
         )
     return {
         "sent": sent, "skipped": skipped, "gave_up": gave_up,
-        "owner_requests": owner_requests,
+        "owner_requests": owner_requests, "links_repaired": links_repaired,
     }
