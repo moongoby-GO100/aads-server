@@ -260,6 +260,22 @@ def test_pipeline_runner_watchdog_uses_phase_budget_and_stops_terminal_review():
         assert '_release_work_lock "$t_project" "$t_job" "$t_scope"' in script
 
 
+def test_pipeline_runner_watchdog_tracks_stable_job_subshell_not_cli_child():
+    """A normal model fallback must not look like a dead job to watchdog."""
+    for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
+        script = _read_script(script_name)
+
+        running_transition = script.index("SET status='running', phase='claude_code_work'")
+        job_started = script.index('record_runner_event "$job_id" "job_started"', running_transition)
+        transition = script[running_transition:job_started]
+
+        assert "runner_pid=${BASHPID}" in transition
+        assert "SET runner_pid=${claude_pid}" not in script
+        # CLI 자식 PID 는 버리지 않는다 — claude/codex 두 실행 경로의
+        # cli_process_started 이벤트에 진단용으로 남는다.
+        assert script.count(r'\"pid\":${claude_pid}') >= 2
+
+
 def test_pipeline_runner_separates_review_infra_failure_from_code_rejection():
     """리뷰 인프라 장애는 코드 반려와 구분하고 산출물 worktree를 보존한다."""
     for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):

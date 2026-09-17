@@ -1589,8 +1589,13 @@ run_job() {
     # FIX(INVALID_GIT_DIFF): Claude 실행 전 HEAD SHA 캡처
     local pre_exec_sha
     pre_exec_sha=$(git -C "$workdir" rev-parse HEAD 2>/dev/null) || pre_exec_sha=""
+    # runner_pid must identify the stable per-job subshell, not a short-lived
+    # model CLI child. During model fallback the child exits normally before
+    # the next attempt starts; publishing that PID lets the watchdog race the
+    # fallback loop and misclassify a live job as process_died.
     db_update "UPDATE pipeline_jobs SET status='running', phase='claude_code_work',
-               started_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+               runner_pid=${BASHPID}, started_at=NOW(), updated_at=NOW()
+               WHERE job_id='${job_id}';"
     record_runner_event "$job_id" "job_started" "running" "claude_code_work" "$job_model" "" "$job_size" "" "{\"runner_host\":\"${RUNNER_HOSTNAME}\",\"parallel_group\":\"${parallel_group:-}\"}"
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
 
@@ -1910,8 +1915,8 @@ ${safe_instruction}"
         local cli_started_ms
         cli_started_ms=$(date +%s%3N 2>/dev/null || date +%s000)
         record_runner_event "$job_id" "cli_process_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "0" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"token_slot\":\"${token_slot}\",\"runner_kind\":\"${runner_kind}\",\"pid\":${claude_pid},\"workdir\":\"${workdir}\"}"
-        # runner_pid 기록 (watchdog 프로세스 생존 확인용)
-        db_update "UPDATE pipeline_jobs SET runner_pid=${claude_pid}, updated_at=NOW() WHERE job_id='${job_id}';"
+        # The CLI child PID is recorded in runner_events for diagnostics. Keep
+        # pipeline_jobs.runner_pid on BASHPID so watchdog tracks the whole job.
 
         wait_runner_cli_process "$job_id" "$claude_pid" "$output_file" "$err_file" "$current_model" "$effective_model" "$job_size" "$((attempt+1))" "$total_attempts" "$cycle_num" "$runner_kind" "$cli_started_ms" "0" || exit_code=$?
 
@@ -1955,7 +1960,6 @@ ${safe_instruction}"
                 local retry_started_ms
                 retry_started_ms=$(date +%s%3N 2>/dev/null || date +%s000)
                 record_runner_event "$job_id" "cli_process_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "0" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"runner_kind\":\"codex_cli\",\"pid\":${claude_pid},\"retry\":${_codex_retry},\"workdir\":\"${workdir}\"}"
-                db_update "UPDATE pipeline_jobs SET runner_pid=${claude_pid}, updated_at=NOW() WHERE job_id='${job_id}';"
                 wait_runner_cli_process "$job_id" "$claude_pid" "$output_file" "$err_file" "$current_model" "$effective_model" "$job_size" "$((attempt+1))" "$total_attempts" "$cycle_num" "codex_cli" "$retry_started_ms" "$_codex_retry" || exit_code=$?
             done
             if [[ $_codex_retry -ge 12 && $exit_code -ne 0 ]]; then

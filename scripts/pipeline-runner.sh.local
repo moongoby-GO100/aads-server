@@ -1411,9 +1411,17 @@ post_to_chat() {
     fi
     local safe_content
     safe_content=$(sql_escape "$content")
-    db_update "INSERT INTO chat_messages (id, session_id, role, content, created_at)
+    # intent 를 명시한다. 2026-09-17 까지 이 INSERT 는 intent 를 비워 뒀고,
+    # 화면은 러너 메시지를 본문 문자열('[Pipeline Runner]')로만 알아볼 수
+    # 있었다. 그 결과 7일간 525건이 전부 숨김으로 묻혀, 러너가 32분을
+    # 일하는 동안 대화창은 완전히 조용했다(세션 9fa305c5 실측).
+    #
+    # is_hidden 은 그대로 true 로 둔다 — DB 트리거가 intent='pipeline_runner'
+    # + model_used 빈값이면 숨김으로 찍는다. 메시지 수·목록 미리보기를
+    # 건드리지 않으려는 것이고, 화면 노출은 조회 필터가 따로 허용한다.
+    db_update "INSERT INTO chat_messages (id, session_id, role, content, intent, created_at)
                VALUES (gen_random_uuid(), '${session_id}'::uuid, 'assistant',
-                       ${safe_content}, NOW());" || true
+                       ${safe_content}, 'pipeline_runner', NOW());" || true
 }
 
 # C4: 원자적 Job 클레임 — UPDATE ... RETURNING으로 동시 실행 방지
@@ -1581,8 +1589,13 @@ run_job() {
     # FIX(INVALID_GIT_DIFF): Claude 실행 전 HEAD SHA 캡처
     local pre_exec_sha
     pre_exec_sha=$(git -C "$workdir" rev-parse HEAD 2>/dev/null) || pre_exec_sha=""
+    # runner_pid must identify the stable per-job subshell, not a short-lived
+    # model CLI child. During model fallback the child exits normally before
+    # the next attempt starts; publishing that PID lets the watchdog race the
+    # fallback loop and misclassify a live job as process_died.
     db_update "UPDATE pipeline_jobs SET status='running', phase='claude_code_work',
-               started_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+               runner_pid=${BASHPID}, started_at=NOW(), updated_at=NOW()
+               WHERE job_id='${job_id}';"
     record_runner_event "$job_id" "job_started" "running" "claude_code_work" "$job_model" "" "$job_size" "" "{\"runner_host\":\"${RUNNER_HOSTNAME}\",\"parallel_group\":\"${parallel_group:-}\"}"
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
 
@@ -1902,8 +1915,8 @@ ${safe_instruction}"
         local cli_started_ms
         cli_started_ms=$(date +%s%3N 2>/dev/null || date +%s000)
         record_runner_event "$job_id" "cli_process_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "0" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"token_slot\":\"${token_slot}\",\"runner_kind\":\"${runner_kind}\",\"pid\":${claude_pid},\"workdir\":\"${workdir}\"}"
-        # runner_pid 기록 (watchdog 프로세스 생존 확인용)
-        db_update "UPDATE pipeline_jobs SET runner_pid=${claude_pid}, updated_at=NOW() WHERE job_id='${job_id}';"
+        # The CLI child PID is recorded in runner_events for diagnostics. Keep
+        # pipeline_jobs.runner_pid on BASHPID so watchdog tracks the whole job.
 
         wait_runner_cli_process "$job_id" "$claude_pid" "$output_file" "$err_file" "$current_model" "$effective_model" "$job_size" "$((attempt+1))" "$total_attempts" "$cycle_num" "$runner_kind" "$cli_started_ms" "0" || exit_code=$?
 
@@ -1947,7 +1960,6 @@ ${safe_instruction}"
                 local retry_started_ms
                 retry_started_ms=$(date +%s%3N 2>/dev/null || date +%s000)
                 record_runner_event "$job_id" "cli_process_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "0" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"runner_kind\":\"codex_cli\",\"pid\":${claude_pid},\"retry\":${_codex_retry},\"workdir\":\"${workdir}\"}"
-                db_update "UPDATE pipeline_jobs SET runner_pid=${claude_pid}, updated_at=NOW() WHERE job_id='${job_id}';"
                 wait_runner_cli_process "$job_id" "$claude_pid" "$output_file" "$err_file" "$current_model" "$effective_model" "$job_size" "$((attempt+1))" "$total_attempts" "$cycle_num" "codex_cli" "$retry_started_ms" "$_codex_retry" || exit_code=$?
             done
             if [[ $_codex_retry -ge 12 && $exit_code -ne 0 ]]; then
@@ -2064,6 +2076,7 @@ $out_tail")
         _cleanup_artifacts "$job_id"
         # worktree 정리
         if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
+            _preserve_worktree_patch "$job_id" "/tmp/aads-wt-${job_id}"
             cd "${main_workdir:-/tmp}"
             git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
             log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
@@ -2377,6 +2390,7 @@ ${output:0:1500}
             if [[ "$review_infra_failure" == "true" ]]; then
                 log "  WORKTREE_PRESERVED_FOR_REREVIEW: $worktree_dir"
             else
+                _preserve_worktree_patch "$job_id" "$worktree_dir"
                 cd "${main_workdir:-/tmp}"
                 git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
                 log "  WORKTREE_CLEANUP: $worktree_dir"
@@ -2526,6 +2540,32 @@ _notify_ai() {
          -H "x-monitor-key: internal-pipeline-call" \
          --max-time 10 2>/dev/null) || notify_http_code="fail"
     log "  NOTIFY_AI job=$job_id http=$notify_http_code"
+}
+
+# AADS-RUNNER-ARTIFACT-PRESERVE: 실패/반려로 워크트리를 force 삭제하기 전
+# untracked 포함 전체 diff를 용량 제한 없이 보존한다. 기존 git_diff 컬럼은
+# `git diff HEAD | head -c 50000`(staged diff만, 50KB 상한)이라 신규 untracked
+# 파일과 초과분이 워크트리 삭제 후 복구 불가능하게 사라졌다.
+_preserve_worktree_patch() {
+    local job_id="$1" worktree_dir="$2"
+    [[ -d "$worktree_dir" ]] || return 0
+    mkdir -p /root/aads/runner-artifacts
+    local patch_file="/root/aads/runner-artifacts/${job_id}.patch"
+    (
+        cd "$worktree_dir" || exit 0
+        git add -A >/dev/null 2>&1
+        git diff HEAD > "$patch_file" 2>/dev/null
+        if [[ ! -s "$patch_file" ]]; then
+            # reject_job 등에서 이미 전부 커밋된 경우 working-tree diff는 비어도
+            # base 대비 committed diff는 남아 있을 수 있다 — 빈 파일을 남기지 않는다.
+            local base_ref
+            base_ref=$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main 2>/dev/null || true)
+            if [[ -n "$base_ref" && "$base_ref" != "$(git rev-parse HEAD 2>/dev/null)" ]]; then
+                git diff "${base_ref}..HEAD" > "$patch_file" 2>/dev/null
+            fi
+        fi
+    )
+    log "  ARTIFACT_PRESERVED job=$job_id path=$patch_file"
 }
 
 # H3: 임시파일 정리
@@ -3217,6 +3257,7 @@ reject_job() {
     # v2.2: 해당 Runner의 변경사항만 선택적 원복 (다른 Runner의 배포된 변경 보호)
     local worktree_dir="/tmp/aads-wt-${job_id}"
     if [[ -d "$worktree_dir" ]]; then
+        _preserve_worktree_patch "$job_id" "$worktree_dir"
         cd "$workdir"
         git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
         log "  REJECT_WORKTREE_CLEANUP: $worktree_dir"
