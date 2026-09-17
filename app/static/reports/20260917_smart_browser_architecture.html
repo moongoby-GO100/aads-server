@@ -34,12 +34,13 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:18px;color:v
 <div class="wrap">
 <header>
   <h1>아키텍처 설계서 — 스마트 브라우저</h1>
-  <div class="meta">문서 v1.0 · 2026-09-17 KST · 대상 저장소 <code>/root/aads/aads-server</code> (contabo116) · 기존 자산 재사용 설계</div>
+  <div class="meta">문서 v2.0 · 2026-09-17 KST · 오비스 자율실행·차단 시 질문·안전 재개 아키텍처</div>
   <div class="nav">
     <a href="20260917_smart_browser_plan.html">① 기획서</a>
     <a href="20260917_smart_browser_prd.html">② PRD</a>
-    <a class="cur" href="20260917_smart_browser_architecture.html">③ 아키텍처</a>
-    <a href="20260917_smart_browser_mockup_interactive.html">④ 화면 목업</a>
+    <a href="20260917_smart_browser_design.html">③ 상세설계</a>
+    <a class="cur" href="20260917_smart_browser_architecture.html">④ 아키텍처</a>
+    <a href="20260917_smart_browser_mockup_interactive.html">⑤ 화면 목업</a>
   </div>
 </header>
 
@@ -131,10 +132,51 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:18px;color:v
 <tr><td>브리지 감사 로그 존재 여부</td><td>브리지 실행 로그 스키마 확인</td><td class="warn">미검증</td></tr>
 </table>
 
+<h2>9. v2.0 논리 아키텍처</h2>
+<pre>사용자 채팅 / 오비스 실행 화면
+          │
+          ▼
+Ohvis Orchestrator ─ Intent Planner ─ Preflight Resolver
+          │                    ├─ NEEDS_ACCOUNT → Credential Broker → Vault
+          │                    ├─ NEEDS_RECIPE  → Recipe Registry / Draft
+          │                    └─ NEEDS_APPROVAL→ Policy + Approval Gate
+          ▼
+Recipe Player ─────────────── Browser Bridge / PC Agent
+          │                              │
+          ├─ Evidence / Append-only Audit┤
+          └─ Conversation Resume / Report┘</pre>
+<table><tr><th>계층</th><th>책임</th><th>신뢰 경계</th></tr>
+<tr><td>Ohvis Orchestrator</td><td>목표 분해, 상태 전이, 진행·완료 보고</td><td>모델 출력은 계획 후보일 뿐 실행 권한이 아님</td></tr>
+<tr><td>Intent Planner</td><td>사이트·출력·위험등급·필수값 계획</td><td>페이지 텍스트를 시스템 지시로 해석 금지</td></tr>
+<tr><td>Preflight Resolver</td><td>계정·레시피·입력·승인 blocker 판정</td><td>질문 중복 방지 키 유지</td></tr>
+<tr><td>Credential Broker/Vault</td><td>안전 등록, scope, 로그인 세션</td><td>비밀은 Vault 밖으로 반환하지 않음</td></tr>
+<tr><td>Recipe Registry/Player</td><td>버전 레시피 등록·결정적 재생</td><td>미승인 draft 실행 금지</td></tr>
+<tr><td>Policy/Approval Gate</td><td>A/B/C 승인과 4단계 위험 정책</td><td>scope·preview hash·만료 확인</td></tr>
+<tr><td>Browser Bridge/PC Agent</td><td>웹/로컬 도구 실행</td><td>도구·도메인 allowlist</td></tr>
+<tr><td>Evidence/Audit</td><td>단계 결과·스크린샷·승인 1:1 기록</td><td>append-only, 중첩 시크릿 마스킹</td></tr>
+<tr><td>Conversation Resume</td><td>checkpoint·resume·idempotency</td><td>완료된 외부행위 재실행 금지</td></tr></table>
+
+<h2>10. 실행 시퀀스</h2>
+<pre>1. message → intent plan → PREFLIGHT
+2. account/recipe/input/policy 확인
+3. blocker 없음: READ 자동 실행
+4. blocker 있음: 상태·checkpoint 저장 → 질문/승인 카드 1개
+5. 답변/승인: scope와 hash 재검증 → resume_token 소비
+6. Browser Bridge 실행 → 단계별 evidence/audit append
+7. VERIFYING → 결과·변경·미완료·후속 제안 보고</pre>
+
+<h2>11. 장애·보안 설계</h2>
+<table><tr><th>위험</th><th>차단 장치</th><th>복구</th></tr><tr><td>중복 주문/결제</td><td>tenant+recipe+idempotency_key UNIQUE</td><td>기존 외부 결과 조회 후 보고</td></tr><tr><td>세션 만료</td><td>AUTH_EXPIRED 분류와 checkpoint</td><td>로그인만 복구 후 다음 미실행 단계</td></tr><tr><td>UI 변경</td><td>선택자 실패·화면 fingerprint</td><td>복구 draft 생성, B 재승인 후 버전 갱신</td></tr><tr><td>프롬프트 인젝션</td><td>페이지 입력 taint, 지시 승격 금지</td><td>차단 로그와 안전 단계 지속/중단</td></tr><tr><td>도메인 이탈</td><td>레시피·계정 scope allowlist</td><td>PAUSED 후 사용자 보고</td></tr><tr><td>비밀 노출</td><td>Vault reference, URL/JSON/header/증거 마스킹</td><td>로그 폐기·자격증명 회전</td></tr></table>
+
+<h2>12. 구현 상태 경계</h2>
+<table><tr><th>구성</th><th>상태</th><th>비고</th></tr><tr><td>레시피 엔진·DB 4테이블</td><td class="ok">완료</td><td>운영 E2E 데이터는 아직 0건</td></tr><tr><td>P1 DB 감사 컬럼</td><td class="ok">반영</td><td>url/selector_hash/screenshot_path/approval_id 존재</td></tr><tr><td>Policy/Approval/Injection 코드</td><td class="bad">미구현</td><td>보안 결함 반려 후 재작업 실패</td></tr><tr><td>Ohvis Orchestrator/Resume</td><td class="bad">미구현</td><td>선행 의존 실패로 P2 취소</td></tr><tr><td>사이트 3종 연결</td><td class="bad">미구현</td><td>계정·collector·실행 E2E 없음</td></tr></table>
+
 <footer>
-문서 3종: <a href="20260917_smart_browser_plan.html" style="color:#4da3ff">기획서</a> ·
+문서 5종: <a href="20260917_smart_browser_plan.html" style="color:#4da3ff">기획서</a> ·
 <a href="20260917_smart_browser_prd.html" style="color:#4da3ff">PRD</a> ·
-<a href="20260917_smart_browser_architecture.html" style="color:#4da3ff">아키텍처</a>
+<a href="20260917_smart_browser_design.html" style="color:#4da3ff">상세설계</a> ·
+<a href="20260917_smart_browser_architecture.html" style="color:#4da3ff">아키텍처</a> ·
+<a href="20260917_smart_browser_mockup_interactive.html" style="color:#4da3ff">화면 목업</a>
 </footer>
 </div>
 </body>

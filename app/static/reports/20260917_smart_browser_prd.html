@@ -33,12 +33,13 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:18px;color:v
 <div class="wrap">
 <header>
   <h1>PRD — 스마트 브라우저 (Work Execution Layer)</h1>
-  <div class="meta">문서 v1.0 · 2026-09-17 KST · TASK 계열 <code>AADS-SB-*</code> · 전제 문서: 기획서 v1.0</div>
+  <div class="meta">문서 v2.0 · 2026-09-17 KST · 핵심 원칙 Ask Only When Blocked · 전제 문서: 기획서 v2.0</div>
   <div class="nav">
     <a href="20260917_smart_browser_plan.html">① 기획서</a>
     <a class="cur" href="20260917_smart_browser_prd.html">② PRD</a>
-    <a href="20260917_smart_browser_architecture.html">③ 아키텍처</a>
-    <a href="20260917_smart_browser_mockup_interactive.html">④ 화면 목업</a>
+    <a href="20260917_smart_browser_design.html">③ 상세설계</a>
+    <a href="20260917_smart_browser_architecture.html">④ 아키텍처</a>
+    <a href="20260917_smart_browser_mockup_interactive.html">⑤ 화면 목업</a>
   </div>
 </header>
 
@@ -162,10 +163,31 @@ verify:
 <tr><td>M3 (P2)</td><td>FR-8~9</td><td>NTV2 주문 등록 무좌표 성공</td><td>NTV2 저장소 별도 릴리스</td></tr>
 </table>
 
+<h2>10. v2.0 추가 기능 요구사항</h2>
+<table><tr><th>ID</th><th>요구사항</th><th>우선순위</th></tr>
+<tr><td>FR-11</td><td>자연어에서 의도·대상 사이트·출력·위험등급을 자동 계획한다.</td><td>P0</td></tr>
+<tr><td>FR-12</td><td>계정·레시피·필수입력·승인 사전점검 후 가능한 단계는 질문 없이 실행한다.</td><td>P0</td></tr>
+<tr><td>FR-13</td><td>blocker 하나당 질문은 1회이며 권장안과 2~3개 선택지를 제공한다.</td><td>P0</td></tr>
+<tr><td>FR-14</td><td>계정 저장(A), 레시피 등록(B), 실제 행위(C) 승인을 독립 scope/token으로 관리한다.</td><td>P0</td></tr>
+<tr><td>FR-15</td><td>checkpoint_id·resume_token·idempotency_key로 로그인/승인 후 안전 재개한다.</td><td>P0</td></tr>
+<tr><td>FR-16</td><td>계정 비밀값은 채팅·로그·레시피에 저장하지 않고 Vault 등록 세션으로만 받는다.</td><td>P0</td></tr>
+<tr><td>FR-17</td><td>레시피가 없으면 dry-run의 단계·권한·위험·증거·변수를 제시하고 B 승인 후 v1을 등록한다.</td><td>P1</td></tr>
+<tr><td>FR-18</td><td>오비스는 시작·진행·차단·완료·실패를 채팅과 실행 화면에 일관되게 보고한다.</td><td>P1</td></tr>
+<tr><td>FR-19</td><td>에이블리 조회, 쿠팡 주문, 쿠팡 서플라이 분석의 정상·계정없음·레시피없음·세션만료·승인거부 흐름을 지원한다.</td><td>P1</td></tr></table>
+
+<h2>11. 위험·승인 정책 v2.0</h2>
+<table><tr><th>등급</th><th>예시</th><th>정책</th></tr><tr><td>READ</td><td>주문/광고 조회·분석</td><td>자동 실행+증거</td></tr><tr><td>WRITE_INTERNAL</td><td>초안·내부 메모</td><td>정책에 따라 자동+감사</td></tr><tr><td>WRITE_EXTERNAL</td><td>장바구니·외부 제출·예산 변경</td><td>실행 직전 C 승인</td></tr><tr><td>IRREVERSIBLE</td><td>주문·결제·삭제·계약</td><td>금액·판매자·수량·배송·결제수단 미리보기와 확인문구</td></tr></table>
+
+<h2>12. v2.0 수용 기준</h2>
+<table><tr><th>ID</th><th>Given / When</th><th>Then</th></tr>
+<tr><td>AC-07</td><td>계정 없는 READ 요청</td><td>질문 1회, Vault 등록 후 checkpoint 재개</td></tr><tr><td>AC-08</td><td>A 승인만 존재</td><td>레시피 등록·구매 실행 0건</td></tr><tr><td>AC-09</td><td>B 승인만 존재</td><td>외부 변경·결제 0건</td></tr><tr><td>AC-10</td><td>동일 주문 키 재시도</td><td>외부 주문 1건</td></tr><tr><td>AC-11</td><td>결제 미리보기 변경</td><td>기존 승인 폐기·재확인</td></tr><tr><td>AC-12</td><td>반복 READ 실행</td><td>2회차 llm_calls=0</td></tr><tr><td>AC-13</td><td>시크릿 포함 중첩 JSON/URL</td><td>로그·감사·화면 노출 0건</td></tr><tr><td>AC-14</td><td>세션 만료</td><td>로그인 복구 후 완료 단계 중복 실행 0건</td></tr><tr><td>AC-15</td><td>페이지 인젝션</td><td>도구 호출 승격 0건</td></tr><tr><td>AC-16</td><td>승인 거부</td><td>외부 변경 0건·checkpoint 유지</td></tr><tr><td>AC-17</td><td>모바일 화면</td><td>상태·차단·승인·재시도와 44px 터치영역</td></tr><tr><td>AC-18</td><td>E2E</td><td>계정없음→등록→재개와 결제승인 캡처</td></tr></table>
+
 <footer>
-문서 3종: <a href="20260917_smart_browser_plan.html" style="color:#4da3ff">기획서</a> ·
+문서 5종: <a href="20260917_smart_browser_plan.html" style="color:#4da3ff">기획서</a> ·
 <a href="20260917_smart_browser_prd.html" style="color:#4da3ff">PRD</a> ·
-<a href="20260917_smart_browser_architecture.html" style="color:#4da3ff">아키텍처</a>
+<a href="20260917_smart_browser_design.html" style="color:#4da3ff">상세설계</a> ·
+<a href="20260917_smart_browser_architecture.html" style="color:#4da3ff">아키텍처</a> ·
+<a href="20260917_smart_browser_mockup_interactive.html" style="color:#4da3ff">화면 목업</a>
 </footer>
 </div>
 </body>

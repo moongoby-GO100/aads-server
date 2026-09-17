@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>오비스 스마트 브라우저 상세 설계서 v2.0</title>
+<style>
+:root{--bg:#0f1115;--panel:#161a21;--line:#303744;--tx:#e6e9ef;--dim:#a8b1bf;--acc:#4da3ff;--ok:#34d399;--warn:#fbbf24;--bad:#f87171}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font-family:-apple-system,BlinkMacSystemFont,"Pretendard","Noto Sans KR",sans-serif;line-height:1.65}.wrap{max-width:1080px;margin:auto;padding:36px 22px 80px}header{border-bottom:1px solid var(--line);padding-bottom:22px}h1{font-size:28px;margin:0 0 8px}h2{font-size:20px;margin:38px 0 12px;padding-left:10px;border-left:3px solid var(--acc)}h3{font-size:16px;color:var(--dim);margin-top:24px}.meta,.note{color:var(--dim);font-size:13px}.nav{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}.nav a{font-size:13px;padding:7px 11px;border:1px solid var(--line);border-radius:7px;color:var(--acc);text-decoration:none}.nav a.cur{background:var(--acc);color:#08111d}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:17px 19px;margin:14px 0}table{width:100%;border-collapse:collapse;margin:13px 0;font-size:13.5px}th,td{border:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:top}th{background:#1d232d;color:var(--dim)}code,pre{background:#12161d;border-radius:6px}code{padding:2px 5px}pre{border:1px solid var(--line);padding:14px;overflow:auto;white-space:pre-wrap}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}ul,ol{padding-left:21px}footer{margin-top:48px;border-top:1px solid var(--line);padding-top:16px;color:var(--dim);font-size:12px}@media(max-width:720px){.wrap{padding:22px 14px 64px}h1{font-size:23px}table{display:block;overflow-x:auto}.nav a{min-height:44px;display:flex;align-items:center}}
+</style>
+</head>
+<body><main class="wrap">
+<header><h1>오비스 스마트 브라우저 — 상세 설계서</h1>
+<div class="meta">v2.0 · 2026-09-17 KST · 핵심 계약: Ask Only When Blocked · 문서 범위: 제품/대화/API/데이터/보안/복구</div>
+<nav class="nav" aria-label="스마트 브라우저 문서"><a href="20260917_smart_browser_plan.html">① 기획서</a><a href="20260917_smart_browser_prd.html">② PRD</a><a class="cur" href="20260917_smart_browser_design.html">③ 상세설계</a><a href="20260917_smart_browser_architecture.html">④ 아키텍처</a><a href="20260917_smart_browser_mockup_interactive.html">⑤ 화면 목업</a></nav></header>
+
+<section class="card"><strong>설계 결론</strong><p>오비스는 사용자의 자연어 목표를 받아 스스로 계획하고, 계정·레시피·권한을 사전점검한 뒤 안전한 범위는 즉시 실행한다. 질문은 실행을 막는 정보가 없을 때만 한 번 묻고, 답을 받으면 저장된 체크포인트에서 재개한다. 계정 승인, 레시피 승인, 실제 외부행위 승인은 서로 독립이며 절대 합쳐 쓰지 않는다.</p></section>
+
+<h2>1. 사용자와 핵심 여정</h2>
+<table><tr><th>사용자</th><th>첫 실행</th><th>반복 실행</th><th>실패 복구</th></tr>
+<tr><td>CEO/업무 책임자</td><td>채팅에 목표만 지시 → 오비스가 계획·위험도·필수 입력을 판단</td><td>등록 레시피는 READ 자동 실행, 결과·증거만 보고</td><td>막힌 원인 하나와 권장 선택지를 제시하고 승인/입력 후 checkpoint 재개</td></tr>
+<tr><td>운영 담당자</td><td>Vault에 계정을 안전하게 등록하거나 현재 브라우저에서 직접 로그인</td><td>수집 결과·마지막 오류·재시도 상태를 한 화면에서 확인</td><td>세션 만료면 로그인만 복구하고 완료 단계는 재실행하지 않음</td></tr>
+<tr><td>관리자</td><td>Admin/Settings에서 도메인·계정·레시피 scope 설정</td><td>감사 로그와 승인 정책 관리</td><td>계정 폐기, 레시피 비활성화, 실행 중단</td></tr></table>
+
+<h2>2. Ask Only When Blocked 대화 계약</h2>
+<ol><li><b>먼저 판단:</b> 의도, 대상 사이트, 출력물, 위험등급, 계정/레시피/권한 보유 여부를 내부적으로 확인한다.</li><li><b>가능한 것은 실행:</b> READ와 정책상 허용된 WRITE_INTERNAL은 자동 실행하고 증거를 남긴다.</li><li><b>막힐 때만 질문:</b> 한 blocker당 질문 1회, 2~3개 선택지, 권장안 우선. 이미 받은 값은 재질문하지 않는다.</li><li><b>체크포인트 재개:</b> <code>resume_token</code>, <code>checkpoint_id</code>, <code>idempotency_key</code>로 마지막 안전 지점부터 이어간다.</li><li><b>완료 보고:</b> 결과, 변경 내용, 증거, 실패/보류, 후속 제안을 구분한다.</li></ol>
+<pre>사용자: "쿠팡에서 열정국밥에 쌈장 주문해줘"
+오비스: 상품 검색과 조건 비교는 자동 수행
+→ 계정 없음: "쿠팡 계정이 없습니다. 권장: Vault에 안전 등록 / 현재 브라우저에서 직접 로그인 / 중단"
+→ 레시피 없음: 단계·권한·위험·증거가 담긴 dry-run을 제시하고 등록 승인 요청
+→ 결제 직전: 상품·판매자·수량·총액·배송지·결제수단을 보여주고 IRREVERSIBLE 승인 요청
+→ 승인 후: 같은 idempotency_key로 한 번만 주문하고 주문번호·증거를 보고</pre>
+
+<h2>3. 세 종류 승인 — 상호 대체 금지</h2>
+<table><tr><th>승인</th><th>대상</th><th>언제</th><th>효력/비효력</th></tr>
+<tr><td>A. 계정 저장·사용</td><td>Vault 저장, 도메인×계정×레시피 scope</td><td>계정 최초 등록·범위 확대</td><td>로그인 사용만 허용. 레시피 등록이나 구매를 허용하지 않음</td></tr>
+<tr><td>B. 레시피 등록·갱신</td><td>예상 단계, 변수, 권한, 위험 단계, 증거 정책</td><td>신규 학습, UI 변경 복구 후 버전 증가</td><td>실행 절차만 신뢰. 외부 쓰기·결제를 허용하지 않음</td></tr>
+<tr><td>C. 실제 행위</td><td>외부 제출, 광고 예산 변경, 주문·결제·삭제·계약</td><td>행위 직전</td><td>해당 run/step 1회만 허용. 계정/레시피 범위를 넓히지 않음</td></tr></table>
+
+<h2>4. 상태 머신과 복구</h2>
+<pre>RECEIVED → PREFLIGHT ─┬→ NEEDS_ACCOUNT ─┐
+                     ├→ NEEDS_RECIPE  ─┤
+                     ├→ NEEDS_INPUT   ─┤→ READY → RUNNING → VERIFYING → COMPLETED
+                     └→ NEEDS_APPROVAL─┘                       └→ FAILED / PAUSED
+</pre>
+<table><tr><th>상태</th><th>저장값</th><th>재개 규칙</th></tr>
+<tr><td>NEEDS_ACCOUNT</td><td>blocker_id, required_domain, account_scope, checkpoint_id</td><td>Vault 저장·로그인 테스트 성공 후 checkpoint부터 재개</td></tr>
+<tr><td>NEEDS_RECIPE</td><td>draft_id, planned_steps, variables, risk_summary</td><td>B 승인으로 v1 등록 후 첫 미실행 단계부터 시작</td></tr>
+<tr><td>NEEDS_APPROVAL</td><td>approval_id, step_id, preview_hash, expires_at</td><td>미리보기 hash가 그대로일 때만 1회 재개</td></tr>
+<tr><td>FAILED/PAUSED</td><td>last_safe_step, evidence, retry_count, failure_class</td><td>이미 성공한 외부 행위는 재실행하지 않고 검증부터 수행</td></tr></table>
+
+<h2>5. 계정 미등록·레시피 미등록 흐름</h2>
+<h3>5.1 계정</h3><ol><li>Credential Broker가 Vault를 조회한다.</li><li>없으면 비밀값을 채팅으로 요구하지 않고, 안전 등록 세션·현재 브라우저 직접 로그인·중단 3개를 제시한다.</li><li>Vault만 암호화 저장하고 채팅·로그·레시피·스크린샷에는 마스킹한다.</li><li>도메인×계정×레시피 scope와 만료시간을 A 승인으로 고정한다.</li><li>로그인 테스트 후 세션을 저장하고 원래 checkpoint에서 재개한다.</li></ol>
+<h3>5.2 레시피</h3><ol><li>Intent Planner가 dry-run을 만들고 단계, 입력 변수, 권한, 위험 단계, 증거를 표시한다.</li><li>B 승인을 받아 버전 v1로 등록한다.</li><li>사이트 UI 변경 감지 시 자동 복구 초안을 만들되, v2 갱신은 다시 B 승인을 받는다.</li><li>READ 반복 실행은 2회차부터 <code>llm_calls=0</code>을 목표로 한다.</li></ol>
+
+<h2>6. 사용자 예시 3종</h2>
+<table><tr><th>지시</th><th>자동</th><th>막힘/질문</th><th>별도 승인</th><th>완료 보고</th></tr>
+<tr><td>에이블리 오늘 주문 수집 확인</td><td>수집 상태·오늘 주문·누락 대조</td><td>계정 없음, 레시피 없음, 세션 만료</td><td>A/B만 필요. READ 자체는 C 불필요</td><td>수집 시각, 주문 건수, 누락/실패, 증거 링크</td></tr>
+<tr><td>쿠팡 쌈장 주문</td><td>검색·조건 비교·후보 추천</td><td>계정/배송지/수량 등 필수값 부족</td><td>장바구니·외부 제출은 정책에 따라 C, 최종 주문·결제는 IRREVERSIBLE 재확인</td><td>상품·판매자·수량·총액·배송·주문번호</td></tr>
+<tr><td>쿠팡 서플라이 광고 분석</td><td>성과 조회·분석·방향 제안</td><td>계정/기간/목표가 없음</td><td>조회는 자동, 예산 변경·캠페인 중단은 C</td><td>근거 지표, 권장 방향, 적용 여부, 다음 점검일</td></tr></table>
+
+<h2>7. API·이벤트 계약</h2>
+<table><tr><th>계약</th><th>입력</th><th>출력/이벤트</th><th>보안</th></tr>
+<tr><td><code>POST /ohvis/browser/intents:plan</code></td><td>user_message, context</td><td>intent_plan, preflight requirements</td><td>페이지 텍스트를 지시로 승격 금지</td></tr>
+<tr><td><code>POST /ohvis/browser/blockers/{id}:answer</code></td><td>choice, non_secret_fields</td><td>blocker.resolved</td><td>비밀값 금지</td></tr>
+<tr><td><code>POST /ohvis/browser/credentials:sessions</code></td><td>domain, account_label, scope</td><td>one_time_registration_url</td><td>비밀은 Vault 직행, 응답 마스킹</td></tr>
+<tr><td><code>POST /ohvis/browser/recipes:draft</code></td><td>intent_plan</td><td>draft_id, steps, risks</td><td>등록 전 실행 금지</td></tr>
+<tr><td><code>POST /ohvis/browser/recipes/{id}:approve</code></td><td>draft_hash</td><td>recipe.versioned</td><td>B 승인 토큰 1회 사용</td></tr>
+<tr><td><code>POST /ohvis/browser/runs</code></td><td>recipe_id, variables, idempotency_key</td><td>run_id, state, resume_token</td><td>중복 키 동일 결과 반환</td></tr>
+<tr><td><code>POST /ohvis/browser/runs/{id}:approve</code></td><td>approval_id, preview_hash, confirm_text</td><td>run.resumed</td><td>C 승인 scope는 해당 step 1회</td></tr>
+<tr><td><code>GET /ohvis/browser/runs/{id}/report</code></td><td>run_id</td><td>result, evidence, changes, followups</td><td>시크릿 마스킹</td></tr></table>
+
+<h2>8. 데이터 계약</h2>
+<p><span class="ok">현재 존재:</span> <code>work_recipes</code>, <code>recipe_runs</code>, <code>recipe_run_steps</code>, <code>recipe_approvals</code>. 아래 항목은 구현 전 <span class="warn">제안</span>이다.</p>
+<table><tr><th>제안 객체/컬럼</th><th>목적</th><th>필수 제약</th></tr>
+<tr><td>browser_intent_plans</td><td>자연어 의도·사이트·출력·위험도 보존</td><td>원문 내 시크릿 마스킹</td></tr>
+<tr><td>browser_blockers</td><td>한 blocker당 한 질문과 답변 이력</td><td>dedupe_key UNIQUE, answered_at</td></tr>
+<tr><td>browser_run_checkpoints</td><td>resume_token, last_safe_step, snapshot</td><td>token hash 저장, tenant/run FK</td></tr>
+<tr><td>credential_bindings</td><td>Vault credential의 domain×recipe scope</td><td>비밀값 저장 금지, credential reference만</td></tr>
+<tr><td>recipe_runs.idempotency_key</td><td>중복 주문·결제 방지</td><td>tenant+recipe+key UNIQUE</td></tr>
+<tr><td>recipe_approvals.approval_kind</td><td>A/B/C 승인 분리</td><td>ACCOUNT/RECIPE/ACTION CHECK</td></tr></table>
+
+<h2>9. 보안·신뢰 경계</h2>
+<ul><li>웹 페이지와 모델 출력은 모두 불신 입력이다. 허용된 레시피/도구/도메인으로만 실행한다.</li><li>Vault는 비밀의 유일한 저장소다. URL query, JSON 중첩값, 헤더, 스크린샷 OCR까지 마스킹한다.</li><li>READ → WRITE_INTERNAL → WRITE_EXTERNAL → IRREVERSIBLE 등급을 낮출 수 없다.</li><li>최종 주문·결제는 preview hash와 실제 DOM/금액이 다르면 승인을 폐기한다.</li><li><code>recipe_run_steps</code>와 증거 메타데이터는 append-only로 운영한다.</li><li>도메인 이탈, 새 탭, 다운로드, 파일 업로드는 별도 정책 검사를 거친다.</li></ul>
+
+<h2>10. 오비스 보고 규격</h2>
+<table><tr><th>시점</th><th>필수 내용</th></tr><tr><td>시작 전</td><td>복잡하거나 위험한 경우에만 계획·예상 변경·승인 지점</td></tr><tr><td>진행 중</td><td>현재 단계, 완료/남은 단계, blocker가 있을 때 질문 1개</td></tr><tr><td>완료</td><td>결과, 변경 내역, 증거 링크/스크린샷, 실패·보류, 후속 제안</td></tr><tr><td>실패</td><td>마지막 안전 checkpoint, 재실행 금지 단계, 복구 선택지</td></tr></table>
+
+<h2>11. 수용 기준 (Given / When / Then)</h2>
+<table><tr><th>ID</th><th>Given / When</th><th>Then</th></tr>
+<tr><td>AC-01</td><td>계정 없음 / READ 업무 요청</td><td>질문 1회, 권장안+2~3선택지</td></tr><tr><td>AC-02</td><td>Vault 등록 완료 / 재개</td><td>처음부터가 아닌 checkpoint에서 재개</td></tr>
+<tr><td>AC-03</td><td>A 승인 / 레시피 없음</td><td>B 승인 없이 레시피 등록 0건</td></tr><tr><td>AC-04</td><td>B 승인 / 결제 단계</td><td>C 승인 없이 결제 0건</td></tr>
+<tr><td>AC-05</td><td>C 승인 / scope 불일치</td><td>계정·레시피 범위 확대 0건</td></tr><tr><td>AC-06</td><td>같은 READ 업무 2회차</td><td><code>llm_calls=0</code>, 결과 검증 성공</td></tr>
+<tr><td>AC-07</td><td>같은 주문 키 2회 전송</td><td>외부 주문 1건, 동일 결과 반환</td></tr><tr><td>AC-08</td><td>가격/판매자/배송 변경</td><td>기존 C 승인 폐기, 재확인</td></tr>
+<tr><td>AC-09</td><td>세션 만료</td><td>로그인 복구 후 완료 단계 재실행 0건</td></tr><tr><td>AC-10</td><td>페이지 인젝션</td><td>페이지 문구의 도구 승격 0건, 차단 로그</td></tr>
+<tr><td>AC-11</td><td>허용목록 밖 도메인 이동</td><td>이동 차단, PAUSED</td></tr><tr><td>AC-12</td><td>중첩 JSON·URL에 비밀 포함</td><td>채팅·로그·감사·스크린샷 메타 노출 0건</td></tr>
+<tr><td>AC-13</td><td>승인 거부</td><td>외부 변경 0건, checkpoint 보존</td></tr><tr><td>AC-14</td><td>UI 변경 후 자동 복구</td><td>새 버전은 B 재승인 전 활성화 금지</td></tr>
+<tr><td>AC-15</td><td>모바일 첫 화면</td><td>현재 상태·막힘·승인·재시도 확인, 44px 터치 영역</td></tr><tr><td>AC-16</td><td>완료 보고</td><td>결과·증거·변경·미완료가 분리 표시</td></tr>
+<tr><td>AC-17</td><td>위험 단계 실행</td><td>승인 레코드와 실행 로그 1:1</td></tr><tr><td>AC-18</td><td>화면 E2E</td><td>계정없음→등록→재개 및 결제 승인 캡처 확보</td></tr></table>
+
+<h2>12. 현재 구현 판정 (2026-09-17 작성 시점)</h2>
+<table><tr><th>범위</th><th>판정</th><th>근거</th></tr>
+<tr><td>레시피 스키마·재생 모듈</td><td class="ok">완료</td><td>P0 커밋 존재, 운영 DB 4테이블 존재. 단 운영 E2E 데이터는 0건</td></tr>
+<tr><td>P1 감사 컬럼</td><td class="ok">DB 반영</td><td>url/selector_hash/screenshot_path/approval_id 컬럼 존재</td></tr>
+<tr><td>승인 게이트·인젝션 방어 코드</td><td class="bad">미구현</td><td>원 러너 보안 결함 반려, 재작업 러너 실패</td></tr>
+<tr><td>오비스 의도 라우터·자동실행 루프</td><td class="bad">미구현</td><td>P2 선행 의존 실패로 취소</td></tr>
+<tr><td>에이블리/쿠팡/쿠팡 서플라이 연결</td><td class="bad">미구현</td><td>계정·collector·실행 레시피 검증 없음</td></tr>
+<tr><td>인터랙티브 화면 목업</td><td class="ok">완료</td><td>정적 프로토타입이며 실제 계정/주문 실행 화면은 아님</td></tr></table>
+
+<footer>관련 문서: <a href="20260917_smart_browser_plan.html">기획서</a> · <a href="20260917_smart_browser_prd.html">PRD</a> · <a href="20260917_smart_browser_architecture.html">아키텍처</a> · <a href="20260917_smart_browser_mockup_interactive.html">화면 목업</a></footer>
+</main></body></html>
