@@ -124,8 +124,8 @@ async def create_goal(req: GoalCreateRequest):
     if req.activate:
         result = await goal_state_machine.activate_goal(result["goal_id"])
     if req.owner_session_id:
-        from app.core.database import get_db_pool
-        pool = await get_db_pool()
+        from app.core.db_pool import get_pool
+        pool = get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 "INSERT INTO goal_task_links "
