@@ -552,6 +552,9 @@ def normalize_tool_call(call: Any, index: int = 0) -> dict[str, Any]:
         latency_ms = int(latency) if latency is not None else None
     except (TypeError, ValueError):
         latency_ms = None
+    called_at = payload.get("called_at") or payload.get("created_at")
+    if isinstance(called_at, (int, float)):
+        called_at = datetime.fromtimestamp(float(called_at), tz=timezone.utc)
     return {
         "tool_name": str(payload.get("tool_name") or payload.get("name") or "unknown")[:120],
         "risk_tier": str(payload.get("risk_tier") or "read")[:30],
@@ -563,6 +566,7 @@ def normalize_tool_call(call: Any, index: int = 0) -> dict[str, Any]:
         "latency_ms": latency_ms,
         "error": clip(payload.get("error"), ERROR_LIMIT) if payload.get("error") else None,
         "metadata": payload.get("metadata") or {},
+        "created_at": called_at,
     }
 
 
@@ -584,9 +588,9 @@ async def record_tool_calls(
                 f"""
                 INSERT INTO {TOOL_CALL_TABLE} (
                     trace_id, tool_name, risk_tier, approval_state, status,
-                    sequence, input_summary, output_summary, latency_ms, error, metadata
+                    sequence, input_summary, output_summary, latency_ms, error, metadata, created_at
                 )
-                VALUES ($1::text, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+                VALUES ($1::text, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, COALESCE($12::timestamptz, NOW()))
                 """,
                 trace_id,
                 item["tool_name"],
@@ -599,6 +603,7 @@ async def record_tool_calls(
                 item["latency_ms"],
                 item["error"],
                 _as_json(item["metadata"]),
+                item["created_at"],
             )
             inserted += 1
         except Exception as exc:  # noqa: BLE001

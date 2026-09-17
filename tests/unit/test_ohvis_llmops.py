@@ -148,6 +148,7 @@ def test_migration_seed_uses_upsert() -> None:
 def test_record_trace_returns_id_and_writes_tool_calls(monkeypatch) -> None:
     conn = FakeConn(table_exists=True)
     _patch_pool(monkeypatch, conn)
+    called_at_epoch = 1_800_000_000.25
 
     trace_id = asyncio.run(
         record_trace(
@@ -158,7 +159,12 @@ def test_record_trace_returns_id_and_writes_tool_calls(monkeypatch) -> None:
             output_summary="green 슬롯 healthy",
             cost_usd=0.0123,
             latency_ms=1500,
-            tool_calls=[{"tool_name": "query_database", "risk_tier": "read"}],
+            tool_calls=[{
+                "tool_name": "query_database",
+                "risk_tier": "read",
+                "latency_ms": 1234,
+                "called_at": called_at_epoch,
+            }],
         )
     )
 
@@ -169,7 +175,58 @@ def test_record_trace_returns_id_and_writes_tool_calls(monkeypatch) -> None:
     assert args[2] == "AADS"
     assert args[7] == "success"
     assert len(conn.executed) == 1, "tool call 1건이 기록되어야 한다"
-    assert f"INSERT INTO {llmops_store.TOOL_CALL_TABLE}" in conn.executed[0][0]
+    tool_query, tool_args = conn.executed[0]
+    assert f"INSERT INTO {llmops_store.TOOL_CALL_TABLE}" in tool_query
+    assert "latency_ms, error, metadata, created_at" in tool_query
+    assert tool_args[8] == 1234
+    assert tool_args[11].timestamp() == pytest.approx(called_at_epoch)
+
+
+def test_chat_trace_pairs_tool_use_and_result_latency(monkeypatch) -> None:
+    recorded: dict = {}
+
+    async def fake_record_trace(**kwargs):
+        recorded.update(kwargs)
+        return "trace-1"
+
+    async def fake_find_promotion_candidates(*args, **kwargs):
+        return []
+
+    async def fake_promote_trace_to_dataset(*args, **kwargs):
+        return {"promoted": False}
+
+    monkeypatch.setattr(llmops_store, "record_trace", fake_record_trace)
+    monkeypatch.setattr(llmops_store, "find_promotion_candidates", fake_find_promotion_candidates)
+    monkeypatch.setattr(llmops_store, "promote_trace_to_dataset", fake_promote_trace_to_dataset)
+
+    from app.services.llmops_chat_hook import record_chat_trace
+
+    asyncio.run(record_chat_trace(
+        session_id="11111111-2222-3333-4444-555555555555",
+        execution_id="exec-1",
+        project="AADS",
+        ai_response="ok",
+        tools_called=[
+            {
+                "type": "tool_use",
+                "tool_name": "query_database",
+                "tool_use_id": "toolu_1",
+                "at": 100.0,
+            },
+            {
+                "type": "tool_result",
+                "tool_name": "query_database",
+                "tool_use_id": "toolu_1",
+                "at": 101.25,
+            },
+        ],
+    ))
+
+    tool_calls = recorded["tool_calls"]
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["tool_name"] == "query_database"
+    assert tool_calls[0]["latency_ms"] == 1250
+    assert tool_calls[0]["called_at"] == 100.0
 
 
 def test_record_trace_marks_error_status_and_classifies(monkeypatch) -> None:

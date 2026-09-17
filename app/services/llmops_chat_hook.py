@@ -27,16 +27,46 @@ async def record_chat_trace(
 
         tool_list = None
         if tools_called:
-            tool_list = [
-                {
-                    "tool_name": (
-                        (tc.get("name") or tc.get("tool_name") or "unknown")
-                        if isinstance(tc, dict) else str(tc)
-                    ),
-                    "status": tc.get("status", "success") if isinstance(tc, dict) else "success",
+            # tool_use 와 tool_result 를 tool_use_id 로 짝지어 한 행으로 만든다.
+            # 이전에는 두 종류를 그대로 20건까지 잘라 넣어 latency_ms 가 항상
+            # 비었고(24시간 2,849건 전부 NULL), 도구 지연과 모델 왕복을 가를
+            # 수 없었다. 2026-09-17.
+            rows: list[dict] = []
+            by_id: dict[str, dict] = {}
+            for tc in tools_called:
+                if not isinstance(tc, dict):
+                    rows.append({"tool_name": str(tc), "status": "success"})
+                    continue
+                use_id = str(tc.get("tool_use_id") or "")
+                if tc.get("type") == "tool_result":
+                    target = by_id.pop(use_id, None) if use_id else None
+                    if target is None:
+                        continue
+                    started = target.pop("_at", None)
+                    ended = tc.get("at")
+                    if started is not None and ended is not None:
+                        try:
+                            target["latency_ms"] = max(0, int((float(ended) - float(started)) * 1000))
+                        except (TypeError, ValueError):
+                            pass
+                    if tc.get("is_error"):
+                        target["status"] = "error"
+                        target["error"] = str(tc.get("error_type") or tc.get("content") or "tool_error")[:500]
+                    continue
+                row = {
+                    "tool_name": (tc.get("name") or tc.get("tool_name") or "unknown"),
+                    "status": tc.get("status", "success"),
+                    # created_at 을 호출 시각으로 남긴다. 기록은 턴 종료 시
+                    # 일괄로 일어나므로 INSERT 시점은 호출 시각이 아니다.
+                    "called_at": tc.get("at"),
+                    "_at": tc.get("at"),
                 }
-                for tc in tools_called[:20]
-            ]
+                rows.append(row)
+                if use_id:
+                    by_id[use_id] = row
+            for row in rows:
+                row.pop("_at", None)
+            tool_list = rows[:20]
         has_response = bool(ai_response and ai_response.strip())
         status = "error" if error or not has_response else "success"
         sid = session_id if len(str(session_id)) >= 32 else None

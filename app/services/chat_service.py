@@ -1338,7 +1338,22 @@ def _tool_result_event_snapshot(event: Dict[str, Any], content_limit: int = 500)
         payload["cancel_scope"] = event.get("cancel_scope", "")
     if event.get("raw_error"):
         payload["raw_error"] = str(event.get("raw_error", ""))[:content_limit]
+    # 도구 결과 수신 시각(epoch). 짝이 되는 tool_use 의 at 과의 차이가
+    # llmops_tool_calls.latency_ms 가 된다. 2026-09-17 이전에는 이 값이 없어
+    # 24시간 2,849건이 전부 latency_ms=NULL 이었다.
+    payload["at"] = _bg_time.time()
     return payload
+
+
+def _tool_use_event_snapshot(event: Dict[str, Any]) -> Dict[str, Any]:
+    """tool_use 이벤트를 저장/전달용으로 정규화. at 은 호출 시각(epoch)이다."""
+    return {
+        "type": "tool_use",
+        "tool_name": event.get("tool_name", ""),
+        "tool_use_id": event.get("tool_use_id", ""),
+        "tool_input": event.get("tool_input", {}),
+        "at": _bg_time.time(),
+    }
 
 
 async def _retry_background_finalize_step(
@@ -1442,6 +1457,8 @@ def normalize_tool_events(tools_called: Any) -> List[Dict[str, Any]]:
             for key in ("is_error", "error_type", "cancel_scope", "raw_error"):
                 if item.get(key):
                     payload[key] = item.get(key)
+            if item.get("latency_ms") is not None:
+                payload["latency_ms"] = item["latency_ms"]
             normalized.append(payload)
         elif event_type == "thinking":
             text = str(item.get("thinking") or item.get("content") or "").strip()
@@ -6336,7 +6353,7 @@ async def with_background_completion(
                         elif _t == "tool_use":
                             state["tool_count"] += 1
                             state["last_tool"] = _d.get("tool_name", "")
-                            state["tool_events"].append({"type": "tool_use", "tool_name": _d.get("tool_name", ""), "tool_use_id": _d.get("tool_use_id", ""), "tool_input": _d.get("tool_input", {})})
+                            state["tool_events"].append(_tool_use_event_snapshot(_d))
                             state["first_response_at"] = state.get("first_response_at") or _bg_time.monotonic()
                         elif _t == "tool_result":
                             state["last_tool"] = _d.get("tool_name", "")
@@ -6479,7 +6496,7 @@ async def with_background_completion(
                                     elif _t == "tool_use":
                                         state["tool_count"] += 1
                                         state["last_tool"] = _d.get("tool_name", "")
-                                        state["tool_events"].append({"type": "tool_use", "tool_name": _d.get("tool_name", ""), "tool_use_id": _d.get("tool_use_id", ""), "tool_input": _d.get("tool_input", {})})
+                                        state["tool_events"].append(_tool_use_event_snapshot(_d))
                                     elif _t == "tool_result":
                                         state["last_tool"] = _d.get("tool_name", "")
                                         state["tool_events"].append(_tool_result_event_snapshot(_d))
@@ -13450,7 +13467,7 @@ async def send_message_stream(
                         # 않아 24시간 192턴이 전부 0 이었다(2026-09-16 실측).
                         # 그래서 "응답이 느린 게 도구 때문인가"에 수치로 답할 수 없었다.
                         _timer.tool_calls += 1
-                        tools_called.append({"type": "tool_use", "tool_name": event["tool_name"], "tool_use_id": event.get("tool_use_id", ""), "tool_input": event.get("tool_input", {})})
+                        tools_called.append(_tool_use_event_snapshot(event))
                         yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
                     elif etype == "tool_result":
                         tool_result_payload = _tool_result_event_snapshot(event)
@@ -13720,7 +13737,7 @@ async def send_message_stream(
                     thinking_summary += event.get("thinking", "")
                     yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
                 elif etype == "tool_use":
-                    tools_called.append({"type": "tool_use", "tool_name": event["tool_name"], "tool_use_id": event.get("tool_use_id", ""), "tool_input": event.get("tool_input", {})})
+                    tools_called.append(_tool_use_event_snapshot(event))
                     yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
                 elif etype == "tool_result":
                     tool_result_payload = _tool_result_event_snapshot(event)
@@ -13820,7 +13837,7 @@ async def send_message_stream(
                     thinking_summary += event.get("thinking", "")
                     yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
                 elif etype == "tool_use":
-                    tools_called.append({"type": "tool_use", "tool_name": event["tool_name"], "tool_use_id": event.get("tool_use_id", ""), "tool_input": event.get("tool_input", {})})
+                    tools_called.append(_tool_use_event_snapshot(event))
                     yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
                 elif etype == "tool_result":
                     tool_result_payload = _tool_result_event_snapshot(event)
