@@ -26,7 +26,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from app.api.ceo_chat_tools_db import query_acct_database
 from app.auth import get_current_user
@@ -194,6 +197,20 @@ def _to_int(value: Any) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return 0
+
+
+# 화면 자체는 데이터를 담고 있지 않다(빈 껍데기 + JS). 데이터 엔드포인트는 전부 인증을
+# 요구하므로 이 라우트는 열어 둔다. aads.newtalk.kr 의 /static 은 대시보드가 가져가므로,
+# 회계 데이터가 붙는 도메인에서 같은 출처로 화면을 서빙하기 위해 API 쪽에 둔다.
+_UI_PATH = Path(__file__).resolve().parents[1] / "static" / "acct" / "purchase.html"
+
+
+@router.get("/ui", include_in_schema=False)
+async def ui() -> FileResponse:
+    """매입자료 관리 화면(HTML 셸)."""
+    if not _UI_PATH.exists():
+        raise HTTPException(status_code=404, detail="화면 파일을 찾을 수 없습니다")
+    return FileResponse(_UI_PATH, media_type="text/html")
 
 
 @router.get("/snapshots")
