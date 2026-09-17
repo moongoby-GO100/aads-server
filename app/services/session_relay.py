@@ -506,6 +506,20 @@ async def dispatch_queued_relays() -> Dict[str, int]:
         if str(claimed).split()[-1] != "1":
             continue
 
+        # 시스템이 보낸 알림은 회신할 곳이 없다.
+        #
+        # 발신자가 세션이 아니므로 `_run_relay` 를 태우면 답을 만들어
+        # 존재하지 않는 세션에 넣으려다 실패한다. 배달 대기열(대상이
+        # 한가해질 때까지 기다린다)만 같이 쓰고, 그 다음은 갈라진다.
+        if r["origin"] == SYSTEM_ORIGIN_SESSION_ID:
+            task = asyncio.create_task(_run_notification(r["id"], r["target"], r["question"]))
+            _running.add(task)
+            task.add_done_callback(_running.discard)
+            sent += 1
+            logger.info("session_relay_notify_dispatched relay=%s target=%s",
+                        r["id"][:8], r["target"][:8])
+            continue
+
         origin = await pool.fetchrow(
             "SELECT title, coalesce(role_key,'') AS role_key FROM chat_sessions WHERE id = $1::uuid",
             r["origin"],
@@ -529,3 +543,334 @@ async def dispatch_queued_relays() -> Dict[str, int]:
     if sent or expired:
         logger.info("session_relay_queue_swept sent=%d expired=%d", sent, expired)
     return {"sent": sent, "expired": expired}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 시스템 발신 알림 — 외부 시스템이 담당 세션에 직접 알린다
+#
+# 2026-09-17 CEO: "텔레그램은 알림에서 제외한다. 담당 세션에 알림 주고
+# 조치할 수 있게 해라." 그런데 세션에 무언가를 넣는 경로가 `ask_session`
+# 도구 하나뿐이었다 — `grep -rn "session_relay" app --include=*.py` 의
+# app/api 참조가 0건이다. 외부 스크립트(GO100 cron, contabo14)가 알림을
+# 넣을 HTTP 경로가 없으니, 텔레그램만 끄면 알림이 그대로 사라진다.
+#
+# **기존 ask 흐름은 건드리지 않는다.** 홉 상한·같은 쌍 중복·busy 큐잉은
+# 담당끼리 주고받을 때 루프를 막으려고 만든 것인데, 시스템 알림에 그대로
+# 걸면 알림이 버려진다.
+#
+#   - `_pair_in_flight`: 5분 간격 cron 이면 앞 건이 pending 인 동안 뒤 건이
+#     전부 반려된다. 알림은 같은 쌍이 연달아 오는 것이 정상이다.
+#   - `_current_hop`: 알림을 hop=1 로 넣으면 그 세션이 나중에 다른 담당에게
+#     물을 때 hop 이 2 에서 시작한다. 알림 때문에 협업 예산이 깎인다.
+#
+# 그래서 발신자를 고정 UUID 로 두고(`SYSTEM_ORIGIN_SESSION_ID`) hop=0 으로
+# 넣는다. 배달은 같은 대기열(`dispatch_queued_relays`)이 한다 — 대상이
+# 작업 중이면 기다렸다가 넣는 성질이 알림에도 그대로 필요하기 때문이다.
+# 다른 점은 회신이 없다는 것뿐이다. 보낸 쪽이 세션이 아니므로 답을 돌려줄
+# 곳이 없다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 실제 세션이 아니다. `session_relay.origin_session_id` 는 NOT NULL 이고
+# FK 가 없어서 이 값을 그대로 넣을 수 있다. 전부 0 이 아닌 값을 쓰는 이유는
+# 빈 uuid 가 "값을 못 채웠다" 로도 읽히기 때문이다 — 의도한 값임이 보여야 한다.
+SYSTEM_ORIGIN_SESSION_ID = "00000000-0000-0000-0000-0000000a1e27"
+
+NOTIFY_DEDUP_WINDOW_SEC = max(1, int(os.getenv("SESSION_RELAY_NOTIFY_DEDUP_SEC", "300")))
+NOTIFY_BODY_LIMIT = int(os.getenv("SESSION_RELAY_NOTIFY_BODY_CHARS", "4000"))
+
+_SEVERITY_LABEL = {
+    "info": "ℹ️ 알림",
+    "warn": "⚠️ 경고",
+    "critical": "🚨 긴급",
+}
+
+# dedup_key 컬럼은 migrations/20260917_session_relay_notify.sql 이 만든다.
+# 이미지가 먼저 뜨고 DB 자산이 나중에 적용되는 순서를 견뎌야 한다 —
+# 컬럼이 아직 없다고 알림 자체가 죽으면 안 된다(중복 방지만 쉰다).
+_dedup_column_ready: Optional[bool] = None
+
+
+async def _has_dedup_column() -> bool:
+    global _dedup_column_ready
+    if _dedup_column_ready is not None:
+        return _dedup_column_ready
+    from app.core.db_pool import get_pool
+
+    try:
+        found = await get_pool().fetchval(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'session_relay' AND column_name = 'dedup_key'"
+        )
+        _dedup_column_ready = bool(found)
+    except Exception:
+        return False
+    if not _dedup_column_ready:
+        logger.warning(
+            "session_relay_notify_dedup_column_missing: "
+            "migrations/20260917_session_relay_notify.sql 미적용 — 중복 방지가 쉬는 중"
+        )
+    return _dedup_column_ready
+
+
+def _auto_dedup_key(target_role: str, title: str, body: str, project: str) -> str:
+    """dedup_key 를 안 준 호출도 같은 알림이면 막는다.
+
+    cron 이 키를 붙이는 것을 잊는 쪽이 정상에 가깝다. 역할·제목·본문·프로젝트가
+    5분 안에 글자 하나까지 같으면 그것은 재전송이지 새 소식이 아니다.
+    """
+    import hashlib
+
+    raw = "\x1f".join([target_role or "", title or "", body or "", project or ""])
+    return "auto:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+async def _resolve_role_session(target_role: str, tenant_id: str,
+                                project: str = "") -> Dict[str, Any]:
+    """역할 키로 담당 세션 하나를 고른다.
+
+    `_resolve_target` 은 "부른 세션과 같은 워크스페이스" 로 범위를 좁히는데,
+    시스템 알림에는 부른 세션이 없다. 대신 **테넌트**로 좁히고, project 를
+    주면 `chat_workspaces.project_key` 로 한 번 더 좁힌다.
+
+    같은 역할의 세션이 여럿이면 **가장 최근에 움직인 것** 하나만 고른다.
+    전부에 넣으면 같은 알림에 담당 셋이 각자 조치해 서로를 덮어쓴다.
+    고른 근거를 남길 수 있게 후보 수도 같이 돌려준다.
+    """
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    role = (target_role or "").strip()
+    if not role:
+        return {"session": None, "candidates": 0, "matched_by": ""}
+
+    proj = (project or "").strip().upper()
+    # 조회 세 갈래가 같은 범위 조건을 쓴다. 한 곳에서만 고치면 갈래마다
+    # 범위가 달라진다 — 그 편차가 "왜 이 세션에 갔지" 의 원인이 된다.
+    scope = (
+        "s.tenant_id = $2::uuid "
+        "AND ($3 = '' OR EXISTS ("
+        "    SELECT 1 FROM chat_workspaces w "
+        "     WHERE w.id = s.workspace_id AND upper(coalesce(w.project_key,'')) = $3"
+        "))"
+    )
+    cols = "s.id::text AS id, s.title, s.role_key, s.workspace_id::text AS workspace_id"
+
+    async def _pick(where: str, matched_by: str) -> Optional[Dict[str, Any]]:
+        rows = await pool.fetch(
+            f"SELECT {cols} FROM chat_sessions s WHERE {scope} AND ({where}) "
+            "ORDER BY s.updated_at DESC LIMIT 5",
+            role, tenant_id, proj,
+        )
+        if not rows:
+            return None
+        return {
+            "session": dict(rows[0]),
+            "candidates": len(rows),
+            "matched_by": matched_by,
+        }
+
+    # 1) 역할 키. 대소문자만 다른 등록(cto / CTO)이 실제로 섞여 있다.
+    hit = await _pick("lower(coalesce(s.role_key,'')) = lower($1)", "role_key")
+    if hit:
+        return hit
+
+    # 2) 한글 별칭 — prompt_assets.role_scope 에 영문 키와 같이 등록돼 있다.
+    hit = await _pick(
+        "s.role_key IS NOT NULL AND EXISTS ("
+        "  SELECT 1 FROM prompt_assets a "
+        "   WHERE a.enabled AND a.role_scope @> ARRAY[$1]::text[] "
+        "     AND a.role_scope @> ARRAY[s.role_key]::text[])",
+        "role_alias",
+    )
+    if hit:
+        return hit
+
+    # 3) 세션 제목. 사람과 외부 스크립트는 화면에 보이는 이름으로 부른다.
+    hit = await _pick("s.role_key IS NOT NULL AND s.title ILIKE '%' || $1 || '%'", "title")
+    if hit:
+        return hit
+
+    return {"session": None, "candidates": 0, "matched_by": ""}
+
+
+async def _recent_duplicate(dedup_key: str) -> Optional[str]:
+    """같은 dedup_key 가 창 안에 이미 들어왔으면 그 relay id 를 준다."""
+    from app.core.db_pool import get_pool
+
+    if not dedup_key or not await _has_dedup_column():
+        return None
+    try:
+        prior = await get_pool().fetchval(
+            "SELECT id::text FROM session_relay "
+            " WHERE origin_session_id = $1::uuid AND dedup_key = $2 "
+            "   AND created_at > now() - ($3::int * interval '1 second') "
+            " ORDER BY created_at DESC LIMIT 1",
+            SYSTEM_ORIGIN_SESSION_ID, dedup_key, NOTIFY_DEDUP_WINDOW_SEC,
+        )
+        return str(prior) if prior else None
+    except Exception as exc:
+        # 중복 검사가 실패했다고 알림을 버리지 않는다. 중복이 한 번 더 가는
+        # 것보다 긴급 알림이 사라지는 쪽이 훨씬 나쁘다.
+        logger.warning("session_relay_notify_dedup_check_failed error=%s", str(exc)[:200])
+        return None
+
+
+def _build_notification(target_role: str, title: str, body: str,
+                        project: str, severity: str, source: str) -> str:
+    """담당이 읽고 **조치할 수 있는** 형태로 만든다.
+
+    제목만 던지면 담당은 무엇을 하라는 건지 모른다. `_run_relay` 의 회신이
+    "이제 할 일" 을 붙이는 것과 같은 이유다 — 2026-09-14 실측에서 안내 없는
+    회신 뒤 실행이 0건이었다.
+    """
+    label = _SEVERITY_LABEL.get(severity, _SEVERITY_LABEL["info"])
+    head = f"[{label} — {project or '시스템'}] {title.strip()}"
+    lines = [head, "", (body or "").strip()[:NOTIFY_BODY_LIMIT]]
+    meta = [f"담당: {target_role}"]
+    if source:
+        meta.append(f"발신: {source}")
+    lines += [
+        "",
+        "── 알림 정보 ──",
+        " · ".join(meta),
+        "",
+        "── 이제 할 일 ──",
+        "이 알림은 사람이 아니라 시스템이 보냈습니다. 내용을 확인하고 "
+        "본인 담당 범위에서 조치하세요. 조치가 불가능하거나 다른 담당의 판단이 "
+        "필요하면 `ask_session` 으로 물으세요. 확인만 하고 끝내지 마세요.",
+    ]
+    return "\n".join(lines)
+
+
+async def _run_notification(relay_id: str, target_session_id: str, message: str) -> None:
+    """알림을 담당 세션에 넣는다. 회신은 없다.
+
+    `_run_relay` 와 갈라지는 지점이 여기다. 보낸 쪽이 세션이 아니라 외부
+    시스템이므로 답을 돌려줄 곳이 없다 — 답을 기다리지 않고, 답이 비어도
+    실패로 보지 않는다. 알림은 **도착이 목적**이고 조치는 담당이 한다.
+    """
+    from app.core.db_pool import get_pool
+    from app.services import chat_service as cs
+
+    pool = get_pool()
+    try:
+        async for chunk in cs.send_message_stream(
+            session_id=target_session_id,
+            content=message,
+            intent_override="system_trigger",
+            response_mode="quality",
+        ):
+            del chunk
+
+        await pool.execute(
+            "UPDATE session_relay SET status='answered', answered_at=now() WHERE id=$1::uuid",
+            relay_id,
+        )
+        logger.info("session_relay_notify_delivered relay=%s target=%s",
+                    relay_id[:8], target_session_id[:8])
+    except Exception as exc:
+        logger.warning("session_relay_notify_failed relay=%s error=%s",
+                       relay_id[:8], str(exc)[:200])
+        try:
+            await pool.execute(
+                "UPDATE session_relay SET status='failed', error=$2 WHERE id=$1::uuid",
+                relay_id, str(exc)[:500],
+            )
+        except Exception:
+            pass
+
+
+async def notify(target_role: str, title: str, body: str, *, tenant_id: str,
+                 project: str = "", severity: str = "info",
+                 dedup_key: str = "", source: str = "") -> Dict[str, Any]:
+    """외부 시스템의 알림을 담당 세션 대기열에 넣는다.
+
+    즉시 넣지 않고 `queued` 로 둔다. 대상이 응답 중일 때 밀어 넣으면 그
+    응답이 통째로 버려지기 때문이다(`stale_superseded_by_newer_user_message`).
+    배달은 `dispatch_queued_relays()` 가 30초마다 집어 간다.
+    """
+    from app.core.db_pool import get_pool
+
+    role = (target_role or "").strip()
+    if not role:
+        return {"queued": False, "error": "target_role_required",
+                "message": "어느 담당에게 보낼지 적어야 합니다."}
+    if not (title or "").strip():
+        return {"queued": False, "error": "title_required",
+                "message": "알림 제목이 비어 있습니다."}
+    if not tenant_id:
+        return {"queued": False, "error": "tenant_required",
+                "message": "테넌트를 특정하지 못했습니다."}
+
+    sev = (severity or "info").strip().lower()
+    if sev not in _SEVERITY_LABEL:
+        sev = "info"
+
+    key = (dedup_key or "").strip() or _auto_dedup_key(role, title, body, project)
+    prior = await _recent_duplicate(key)
+    if prior:
+        logger.info("session_relay_notify_deduped key=%s prior=%s", key[:24], prior[:8])
+        return {
+            "queued": False, "deduplicated": True, "error": "duplicate",
+            "relay_id": prior, "dedup_key": key,
+            "message": f"같은 알림이 {NOTIFY_DEDUP_WINDOW_SEC}초 안에 이미 전달됐습니다.",
+        }
+
+    found = await _resolve_role_session(role, tenant_id, project)
+    tgt = found.get("session")
+    if not tgt:
+        # 폴백은 "조용히 버리기" 가 아니다. 알림이 갈 곳이 없다는 사실
+        # 자체가 운영 사고이므로 로그로 남기고 호출자에게 실패를 돌려준다.
+        logger.warning(
+            "session_relay_notify_target_not_found role=%s project=%s tenant=%s severity=%s title=%s",
+            role[:40], (project or "-")[:16], str(tenant_id)[:8], sev, title.strip()[:80],
+        )
+        return {
+            "queued": False, "error": "target_not_found",
+            "message": f"'{role}' 담당 세션을 찾지 못했습니다. "
+                       "role_key 를 확인하거나 해당 담당 대화를 먼저 만드세요.",
+        }
+    if tgt["id"] == SYSTEM_ORIGIN_SESSION_ID:
+        return {"queued": False, "error": "self_target", "message": "시스템 발신자에게는 보낼 수 없습니다."}
+
+    message = _build_notification(
+        tgt.get("role_key") or role, title, body, project, sev, source,
+    )
+
+    pool = get_pool()
+    relay_id = str(uuid.uuid4())
+    # hop=0 — 알림은 협업 홉을 소모하지 않는다. 담당이 이 알림을 받고
+    # 다른 담당에게 물으면 그때 hop 이 1 부터 시작해야 한다.
+    if await _has_dedup_column():
+        await pool.execute(
+            "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, "
+            "question, status, dedup_key) "
+            "VALUES ($1::uuid, $2::uuid, $3::uuid, 0, $4, 'queued', $5)",
+            relay_id, SYSTEM_ORIGIN_SESSION_ID, tgt["id"], message, key,
+        )
+    else:
+        await pool.execute(
+            "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, "
+            "question, status) "
+            "VALUES ($1::uuid, $2::uuid, $3::uuid, 0, $4, 'queued')",
+            relay_id, SYSTEM_ORIGIN_SESSION_ID, tgt["id"], message,
+        )
+
+    logger.info(
+        "session_relay_notify_queued relay=%s target=%s role=%s matched_by=%s "
+        "candidates=%d severity=%s",
+        relay_id[:8], tgt["id"][:8], (tgt.get("role_key") or role)[:40],
+        found.get("matched_by", ""), int(found.get("candidates", 0)), sev,
+    )
+    return {
+        "queued": True,
+        "relay_id": relay_id,
+        "target_session": tgt["id"],
+        "target_role": tgt.get("role_key") or tgt["title"],
+        "target_title": tgt.get("title") or "",
+        "matched_by": found.get("matched_by", ""),
+        "candidates": int(found.get("candidates", 0)),
+        "severity": sev,
+        "dedup_key": key,
+        "message": "담당 세션 대기열에 넣었습니다. 그 세션이 한가해지면 자동으로 전달됩니다.",
+    }
