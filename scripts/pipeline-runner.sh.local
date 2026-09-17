@@ -835,6 +835,11 @@ ensure_approved_job_worktree() {
     return 0
 }
 
+# 계약: stdout 은 40자 hex commit SHA 단 하나만 낸다 — 호출부가
+# `approval_commit_sha=$(commit_job_worktree_for_approval ...)` 로 그대로
+# 캡처한다. 정보성 로그는 반드시 stderr(`log ... >&2`)로 보내라 — 2026-09-18
+# runner-09a6fe14 가 stdout 오염(로그 한 줄이 SHA 앞에 섞임)으로
+# approval_commit_sha_mismatch 처리돼 죽었다.
 commit_job_worktree_for_approval() {
     local job_id="$1" session_id="$2" worktree_dir="$3" main_workdir="$4" instruction="$5"
     local pre_exec_sha="${6:-}"
@@ -869,10 +874,10 @@ commit_job_worktree_for_approval() {
         fi
     fi
     if [[ -n "$adopted_sha" && "$deploy_only_no_commit" -eq 1 ]]; then
-        log "  DEPLOY_ONLY_APPROVAL_NO_COMMIT job=$job_id sha=$adopted_sha (DEPLOY_ONLY, 변경 없음 — 커밋 생략)"
-        record_runner_event "$job_id" "deploy_only_approval_no_commit" "running" "deploy_only_no_commit" "" "" "" "" "{\"deploy_only\":true,\"changed_files\":0}"
+        log "  DEPLOY_ONLY_APPROVAL_NO_COMMIT job=$job_id sha=$adopted_sha (DEPLOY_ONLY, 변경 없음 — 커밋 생략)" >&2
+        record_runner_event "$job_id" "deploy_only_approval_no_commit" "running" "deploy_only_no_commit" "" "" "" "" "{\"deploy_only\":true,\"changed_files\":0}" >/dev/null
     elif [[ -n "$adopted_sha" ]]; then
-        log "  APPROVAL_COMMIT_ADOPTED_EXISTING job=$job_id sha=$adopted_sha (워커가 워크트리에서 이미 커밋)"
+        log "  APPROVAL_COMMIT_ADOPTED_EXISTING job=$job_id sha=$adopted_sha (워커가 워크트리에서 이미 커밋)" >&2
     else
         local commit_msg="Pipeline-Runner: ${job_id} — ${instruction:0:80}" commit_out commit_err exit_code=0
         commit_out=$(mktemp "/tmp/pipeline-approval-commit-${job_id}.out.XXXXXX")
@@ -2476,6 +2481,15 @@ ${output:0:1500}
         rm -f /tmp/.pipeline_current_job
         return 1
     }
+    # 방어: 함수 계약(stdout=SHA 전용)이 다른 경로에서 깨져 로그 줄이
+    # 섞여 들어와도, 캡처값 안에 40자 hex 가 있으면 그것만 취해 살린다.
+    # 2026-09-18 runner-09a6fe14 가 바로 이 오염으로 approval_commit_sha_mismatch
+    # 처리돼 죽었다 — 정규화 없이 문자열을 그대로 비교하면 재발한다.
+    local _raw_approval_commit_sha="$approval_commit_sha"
+    approval_commit_sha=$(printf '%s' "$approval_commit_sha" | tr -d '\r' | grep -oE '[0-9a-f]{40}' | tail -n1) || true
+    if [[ "$approval_commit_sha" != "$_raw_approval_commit_sha" ]]; then
+        log "  APPROVAL_SHA_STDOUT_SANITIZED job=$job_id"
+    fi
     if [[ -z "$approval_commit_sha" || "$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)" != "$approval_commit_sha" ]]; then
         _fail_job "$job_id" "$session_id" "approval_commit_sha_mismatch" "awaiting_approval 거부 — 저장 commit SHA와 runner worktree HEAD 불일치"
         _release_work_lock "$project" "$job_id" "$parallel_group"
