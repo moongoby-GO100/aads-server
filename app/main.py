@@ -3648,6 +3648,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/ops/hot-reload",  # 내부 hot-reload (127.0.0.1 전용)
     "/api/v1/ops/active-streams",  # 내부 스트림 drain 감지 (deploy.sh 전용)
     "/api/v1/image/gallery",  # AI 모델 이미지 갤러리 (공개 읽기전용)
+    "/api/v1/acct-purchase/ui",  # 매입자료 화면 HTML 셸 (데이터 API 는 인증 유지)
     "/api/v1/ops/usage-stats",  # 사용량 통계 (읽기전용)
     "/api/v1/ops/codex-usage",  # Codex 사용량 (읽기전용)
     "/api/v1/ops/claude-max-usage",  # Claude Max 사용량 (읽기전용)
