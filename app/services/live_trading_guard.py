@@ -323,6 +323,20 @@ async def request_approval(
             logger.warning("live_trading_gate_no_tenant session=%s", session_id[:8])
             return None
 
+        # 어느 답변 버블 아래에 붙을 카드인가. 2026-09-18 까지 게이트 카드는
+        # 이 값을 아예 채우지 않아 24시간 164건(run_remote_command 74 /
+        # db_safe_write 86 / patch_remote_file 4)이 전부 팝업에만 떴고,
+        # source_message_id 를 쓰는 코드는 next_step_proposals.py 한 곳뿐이었다.
+        # 판정 규칙은 그 한 곳에서만 관리한다 — 두 벌로 두면 한쪽이 낡는다.
+        bubble_id = None
+        if session_id:
+            try:
+                from app.services.next_step_proposals import _current_bubble_id
+                bubble_id = await _current_bubble_id(pool, session_id)
+            except Exception as exc:  # noqa: BLE001 — 카드 생성을 막지 않는다
+                logger.warning("live_trading_gate_bubble_lookup_failed", error=str(exc)[:200])
+                bubble_id = None
+
         # 기본 만료가 10분이다. CEO 가 10분 안에 못 보면 요청이 사라진다 —
         # 그러면 담당은 막히기만 하고 승인받을 방법이 없다. 24시간으로 둔다.
         return await pool.fetchval(
@@ -330,9 +344,11 @@ async def request_approval(
             INSERT INTO agent_permission_requests
                 (tenant_id, work_key, origin, action_type, action_summary,
                  risk_level, decision, requested_by, approval_scope,
-                 max_executions, expires_at, created_at, gate_source, tier)
+                 max_executions, expires_at, created_at, gate_source, tier,
+                 source_message_id)
             VALUES ($1::uuid, $2, 'chat_session', $3, $4, $7, $8, $5,
-                    $6::jsonb, 1, now() + interval '24 hours', now(), $9, $10)
+                    $6::jsonb, 1, now() + interval '24 hours', now(), $9, $10,
+                    $11::uuid)
             RETURNING id::text
             """,
             tid, work_key, tool_name,
@@ -355,6 +371,7 @@ async def request_approval(
             # 대상이 그 사이에 묻힌다.
             "pending" if tier == TIER_APPROVE else "notified",
             gate_source, tier,
+            bubble_id,
         )
     except Exception as exc:
         logger.warning("live_trading_gate_request_failed", error=str(exc))

@@ -212,7 +212,17 @@ async def _current_bubble_id(conn, session_id: str) -> Optional[str]:
               -- 메시지에 붙어 있었다. 붙을 자리가 화면에 없으면 인라인으로
               -- 안 보이고, 화면은 source_message_id 가 있다는 이유로
               -- 팝업에서도 빼 버린다. 그래서 카드가 통째로 사라진다.
-              AND is_hidden IS NOT TRUE
+              -- 2026-09-18 재수정. 07:19 에 넣은 `is_hidden IS NOT TRUE` 가
+              -- **지금 흐르는 placeholder 를 같이 잘랐다.** 스트리밍 중인
+              -- placeholder 는 항상 is_hidden=true 이므로 아래 ORDER BY 의
+              -- streaming_placeholder 우선 절이 죽은 코드가 됐고, 카드는
+              -- 직전 확정 버블에 붙었다 — 07:24:46 실측으로 14시간 전
+              -- (2026-09-17 17:43) 답변에 2장이 붙어 화면에서 사라졌다.
+              -- 살아 있는 placeholder 는 예외로 받고, 확정되지 못하고 죽은
+              -- placeholder(30분 초과)만 거른다.
+              AND (is_hidden IS NOT TRUE
+                   OR (COALESCE(intent, '') = 'streaming_placeholder'
+                       AND created_at > now() - interval '30 minutes'))
               AND deleted_at IS NULL
               -- 러너 진행 메시지는 대화에서 한 줄로 접히므로 카드가 붙을
               -- 자리가 없다(대시보드 isRunnerChatMessage → runnerGroup).
