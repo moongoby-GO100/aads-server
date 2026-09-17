@@ -524,7 +524,7 @@ def _model_spec_from_routing(provider: str, model_id: str) -> str:
 
 
 async def _get_model_cycle_for_size(conn, size: str) -> list[str]:
-    """size 설정 → AI_REVIEW 설정 → runner_llm/llm 라우팅 순으로 중복 제거한 폴백 체인."""
+    """size 설정 → AI_REVIEW 설정 → runner_llm 라우팅 순으로 폴백 체인을 만든다."""
     import json as _json_model
     from app.services.model_registry import filter_executable_models
 
@@ -550,10 +550,9 @@ async def _get_model_cycle_for_size(conn, size: str) -> list[str]:
         """
         SELECT route_key, provider, model_id
         FROM model_routing_preferences
-        WHERE route_key IN ('runner_llm', 'llm')
+        WHERE route_key = 'runner_llm'
           AND is_enabled = TRUE
-        ORDER BY CASE route_key WHEN 'runner_llm' THEN 0 ELSE 1 END,
-                 is_default DESC,
+        ORDER BY is_default DESC,
                  display_order ASC,
                  provider ASC,
                  model_id ASC

@@ -182,7 +182,8 @@ def test_pipeline_runner_general_claim_uses_admin_model_column():
     assert "get_db_model_cycle \"$job_size\"" in script
     assert "c.size='AI_REVIEW'" in script
     assert "model_routing_preferences" in script
-    assert "route_key IN ('runner_llm','llm')" in script
+    assert "route_key = 'runner_llm'" in script
+    assert "route_key IN ('runner_llm','llm')" not in script
     assert "DB_MODEL_CONFIG_OVERRIDE" in script
 
 
@@ -193,10 +194,13 @@ def test_pipeline_runner_api_uses_review_routing_fallback_chain():
 
     assert "_get_model_cycle_for_size" in api
     assert "effective_by_size" in api
-    assert "route_key IN ('runner_llm', 'llm')" in api
-    assert "CASE route_key WHEN 'runner_llm' THEN 2 ELSE 3 END" in service
+    assert "route_key = 'runner_llm'" in api
+    assert "route_key IN ('runner_llm', 'llm')" not in api
+    assert "SELECT 2 AS group_order" in service
+    assert "route_key = 'runner_llm'" in service
     assert "AI_REVIEW" in reviewer
-    assert "route_key IN ('runner_llm', 'llm')" in reviewer
+    assert "route_key = 'runner_llm'" in reviewer
+    assert "route_key IN ('runner_llm', 'llm')" not in reviewer
 
 
 def test_pipeline_runner_allows_codex_56_cli_models_without_fallback():

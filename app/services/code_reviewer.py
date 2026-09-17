@@ -248,10 +248,9 @@ async def _get_review_models() -> list[str]:
                 """
                 SELECT route_key, provider, model_id
                 FROM model_routing_preferences
-                WHERE route_key IN ('runner_llm', 'llm')
+                WHERE route_key = 'runner_llm'
                   AND is_enabled = TRUE
-                ORDER BY CASE route_key WHEN 'runner_llm' THEN 0 ELSE 1 END,
-                         is_default DESC,
+                ORDER BY is_default DESC,
                          display_order ASC,
                          provider ASC,
                          model_id ASC

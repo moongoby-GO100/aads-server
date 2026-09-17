@@ -419,7 +419,7 @@ get_db_model_cycle() {
         WHERE c.size='AI_REVIEW'
           AND '${size}' <> 'AI_REVIEW'
         UNION ALL
-        SELECT CASE route_key WHEN 'runner_llm' THEN 2 ELSE 3 END AS group_order,
+        SELECT 2 AS group_order,
                CASE
                  WHEN provider IN ('codex','openai') AND model_id LIKE 'gpt-%' THEN 'codex:' || model_id
                  WHEN provider = 'anthropic' THEN model_id
@@ -429,7 +429,9 @@ get_db_model_cycle() {
                END AS value,
                row_number() OVER (PARTITION BY route_key ORDER BY is_default DESC, display_order ASC, provider ASC, model_id ASC) AS ord
         FROM model_routing_preferences
-        WHERE route_key IN ('runner_llm','llm')
+        -- 일반 chat llm 라우트에는 PC/Vision 등 코드 러너와 호환되지 않는
+        -- 모델도 포함된다. 러너는 검증된 runner_llm 라우트만 폴백한다.
+        WHERE route_key = 'runner_llm'
           AND is_enabled = TRUE
     ), ranked AS (
         SELECT value, MIN(group_order * 1000 + ord) AS rank

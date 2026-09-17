@@ -351,7 +351,7 @@ def list_jobs(chat_session_id: str = None) -> list:
 
 
 async def _get_db_model_config(size: str) -> list[str]:
-    """DB 설정 → AI_REVIEW → runner_llm/llm 라우팅 순서로 실행 후보 조회."""
+    """DB 설정 → AI_REVIEW → runner_llm 라우팅 순서로 실행 후보 조회."""
     try:
         from app.core.db_pool import get_pool
         from app.services.model_registry import filter_executable_models
@@ -391,7 +391,7 @@ async def _get_db_model_config(size: str) -> list[str]:
                 SELECT group_order, model, priority, NULL::text AS provider
                 FROM config_models
                 UNION ALL
-                SELECT CASE route_key WHEN 'runner_llm' THEN 2 ELSE 3 END AS group_order,
+                SELECT 2 AS group_order,
                        model_id AS model,
                        row_number() OVER (
                            PARTITION BY route_key
@@ -399,7 +399,7 @@ async def _get_db_model_config(size: str) -> list[str]:
                        ) AS priority,
                        provider
                 FROM model_routing_preferences
-                WHERE route_key IN ('runner_llm', 'llm')
+                WHERE route_key = 'runner_llm'
                   AND is_enabled = TRUE
                 ORDER BY group_order, priority
                 """,
