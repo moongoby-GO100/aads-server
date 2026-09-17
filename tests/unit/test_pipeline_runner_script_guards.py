@@ -1,3 +1,6 @@
+import os
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -6,6 +9,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _read_script(name: str) -> str:
     return (ROOT / "scripts" / name).read_text(encoding="utf-8")
+
+
+def _extract_function(script: str, name: str) -> str:
+    start = script.index(f"{name}() {{")
+    return script[start:script.index("\n}\n", start)]
 
 
 def test_pipeline_runner_scripts_keep_git_diff_precheck_guards():
@@ -18,6 +26,60 @@ def test_pipeline_runner_scripts_keep_git_diff_precheck_guards():
         assert "INVALID_GIT_DIFF" in script
         assert "AI_REVIEW_PRECHECK_FAIL" in script
         assert "review_needs_retry=\"true\"" in script
+
+
+def test_looks_like_git_diff_never_pipes_into_grep():
+    """`printf | grep -q` + `set -o pipefail` 는 유효한 diff 를 반려한다.
+
+    grep -q 가 첫 줄에서 매치하고 즉시 빠져나가면, 아직 50KB 를 쓰고 있던 printf
+    가 EPIPE/SIGPIPE 로 죽어 종료코드 141 이 되고 pipefail 이 그것을 파이프라인
+    결과로 삼는다. 2026-09-17 runner-5b77fc1f 가 그렇게 INVALID_GIT_DIFF 로
+    반려됐다 — 저장된 git_diff 43,837자는 정상 diff 였다.
+    """
+    for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
+        body = _extract_function(_read_script(script_name), "looks_like_git_diff")
+        # 주석에는 이 사고를 설명하느라 `printf | grep` 이 그대로 적혀 있다.
+        # 검사 대상은 실행되는 줄뿐이다.
+        code = "\n".join(
+            line for line in body.splitlines() if not line.lstrip().startswith("#")
+        )
+
+        assert "| grep" not in code
+        assert "printf" not in code
+        assert code.count("<<<") >= 4
+        # 43KB diff 하나에 11.3초가 걸리던 공백 제거 치환도 되돌아오면 안 된다.
+        assert "//[[:space:]]/" not in code
+
+
+def test_looks_like_git_diff_accepts_large_diff_under_pipefail():
+    """50KB 가 넘는 diff 를 pipefail 아래에서 실제로 실행해 0 을 받는다."""
+    body = _extract_function(_read_script("pipeline-runner.sh"), "looks_like_git_diff") + "\n}\n"
+
+    diff = "diff --git a/big.py b/big.py\n--- a/big.py\n+++ b/big.py\n@@ -0,0 +1 @@\n"
+    diff += "".join(f"+line {i} 한글 본문 줄\n" for i in range(4000))
+    assert len(diff.encode("utf-8")) > 50_000
+
+    runner_path = payload_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".sh", encoding="utf-8", delete=False
+        ) as fh:
+            fh.write('set -eo pipefail\n' + body + '\nlooks_like_git_diff "$(cat "$1")"\n')
+            runner_path = fh.name
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".diff", encoding="utf-8", delete=False
+        ) as fh:
+            fh.write(diff)
+            payload_path = fh.name
+
+        proc = subprocess.run(
+            ["bash", runner_path, payload_path], capture_output=True, timeout=60
+        )
+        assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")[-500:]
+    finally:
+        for path in (runner_path, payload_path):
+            if path and os.path.exists(path):
+                os.unlink(path)
 
 
 def test_pipeline_runner_ai_review_holds_before_approval():

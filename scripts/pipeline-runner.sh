@@ -582,15 +582,24 @@ sql_escape() {
 
 looks_like_git_diff() {
     local content="$1"
-    [[ -z "${content//[[:space:]]/}" ]] && return 1
+    # 공백 여부 판정에 ${content//[[:space:]]/} 를 쓰면 43KB diff 하나에 11.3초가
+    # 걸린다(2026-09-17 실측). =~ 는 첫 비공백 문자에서 멈춘다 — 0.013초.
+    [[ "$content" =~ [^[:space:]] ]] || return 1
 
-    if printf '%s\n' "$content" | grep -q '^diff --git a/.* b/.*$'; then
+    # grep 을 파이프로 먹이지 않는다. `printf | grep -q` 는 grep 이 첫 줄에서
+    # 매치하고 즉시 빠져나가므로, 아직 50KB 를 쓰고 있던 printf 가 EPIPE/SIGPIPE
+    # 로 죽는다(종료코드 141). 이 스크립트는 `set -o pipefail` 이라 그 141 이
+    # 파이프라인 결과가 되고, **유효한 diff 인데 INVALID_GIT_DIFF 로 반려**된다.
+    # 2026-09-17 runner-5b77fc1f 가 그렇게 죽었다 — 저장된 git_diff 43,837자는
+    # 정상 diff 였고 테스트·gitleaks 도 통과한 상태였다.
+    # here-string 은 파이프라인이 아니므로 grep 자신의 종료코드만 남는다.
+    if grep -q '^diff --git a/.* b/.*$' <<< "$content"; then
         return 0
     fi
 
-    if printf '%s\n' "$content" | grep -q '^--- ' \
-        && printf '%s\n' "$content" | grep -q '^+++ ' \
-        && printf '%s\n' "$content" | grep -q '^@@ '; then
+    if grep -q '^--- ' <<< "$content" \
+        && grep -q '^+++ ' <<< "$content" \
+        && grep -q '^@@ ' <<< "$content"; then
         return 0
     fi
 
@@ -2205,7 +2214,8 @@ ${_untracked_files}"
     actual_changed_files=$(printf '%s\n' "$actual_changed_files" | sed '/^[[:space:]]*$/d' | sort -u)
     record_actual_changed_files "$job_id" "$actual_changed_files" "$worktree_dir" "$parallel_group"
 
-    if [[ -z "${git_diff//[[:space:]]/}" ]]; then
+    # 같은 이유로 ${git_diff//[[:space:]]/} 를 쓰지 않는다 — 43KB 에 11초다.
+    if [[ ! "$git_diff" =~ [^[:space:]] ]]; then
         if is_read_only_instruction "$instruction" && [[ -n "${output//[[:space:]]/}" ]]; then
             log "  NO_CHANGES_READ_ONLY job=$job_id target=$target_repo — done 처리"
             db_update "UPDATE pipeline_jobs SET status='done', phase='done',
