@@ -9,7 +9,7 @@ import logging
 import pytest
 
 from app.core import document_context as dc
-from app.core.document_context import IMAGE_MAX_BYTES, extract_image_blocks
+from app.core.document_context import IMAGE_MAX_BYTES, build_vision_blocks, extract_image_blocks
 
 PIL = pytest.importorskip("PIL")
 from PIL import Image  # noqa: E402
@@ -289,3 +289,118 @@ def test_openai_fallback_converts_to_image_url():
     assert parts[0] == {"type": "text", "text": "look"}
     assert parts[1]["type"] == "image_url"
     assert parts[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+# ── 7. build_vision_blocks: 단일 출입구와 하위호환 래퍼 ──────────────
+
+def test_extract_image_blocks_delegates_to_build_vision_blocks(monkeypatch):
+    """구 이름은 새 구현으로 위임만 한다 — 로직이 두 벌로 갈라지지 않게."""
+    seen = {}
+
+    def _spy(file_contents, extra_paths=None):
+        seen["args"] = (file_contents, extra_paths)
+        return ["sentinel"]
+
+    monkeypatch.setattr(dc, "build_vision_blocks", _spy)
+    entries = [_entry("a.png", ".png", _img_bytes("PNG"), "image/png")]
+
+    assert dc.extract_image_blocks(entries, extra_paths=["/tmp/x.png"]) == ["sentinel"]
+    assert seen["args"] == (entries, ["/tmp/x.png"])
+
+
+def test_build_vision_blocks_matches_legacy_name():
+    entries = [_entry("a.png", ".png", _img_bytes("PNG"), "image/png")]
+    assert build_vision_blocks(entries) == extract_image_blocks(entries)
+
+
+def test_build_vision_blocks_handles_mixed_sources(tmp_path):
+    """첨부 + 디스크 경로 + 미지원 포맷이 섞여도 되는 것만 통과한다."""
+    path = tmp_path / "disk.bmp"
+    path.write_bytes(_img_bytes("BMP", color=(5, 5, 200)))
+
+    blocks = build_vision_blocks(
+        [
+            _entry("a.png", ".png", _img_bytes("PNG"), "image/png"),
+            _entry("bad.heic", ".heic", b"\x00\x01ftypheic", "image/heic"),
+        ],
+        extra_paths=[str(path)],
+    )
+    assert [b["source"]["media_type"] for b in blocks] == ["image/png", "image/png"]
+
+
+def test_build_vision_blocks_empty_inputs():
+    assert build_vision_blocks([]) == []
+    assert build_vision_blocks([], extra_paths=[]) == []
+
+
+def test_heif_uses_pillow_heif_when_available(monkeypatch):
+    """pillow_heif 가 있으면 PNG 로 변환해 싣는다 (없으면 기존대로 건너뜀)."""
+    monkeypatch.setattr(dc, "_convert_heif_to_png", lambda raw, name: _img_bytes("PNG"))
+    blocks = build_vision_blocks([_entry("p.heic", ".heic", b"\x00\x01ftypheic", "image/heic")])
+
+    assert len(blocks) == 1
+    assert blocks[0]["source"]["media_type"] == "image/png"
+
+
+def test_heif_missing_dependency_logs_reason(caplog):
+    """이 서버에는 pillow_heif 가 없다 — 건너뛰되 사유를 남겨야 한다."""
+    if dc._convert_heif_to_png(b"\x00", "probe") is not None:
+        pytest.skip("pillow_heif 설치됨 — 변환 경로는 별도 테스트가 덮는다")
+
+    with caplog.at_level(logging.INFO, logger="app.core.document_context"):
+        blocks = build_vision_blocks([_entry("p.heic", ".heic", b"\x00\x01ftypheic", "image/heic")])
+
+    assert blocks == []
+    log = "\n".join(r.getMessage() for r in caplog.records)
+    assert "[unsupported_image_format: .heic]" in log
+    assert "pillow_heif" in log
+
+
+# ── 8. 러너 이미지 경로 → vision block (anthropic_client) ────────────
+
+def test_normalize_images_converts_paths(tmp_path):
+    from app.core.anthropic_client import _normalize_images
+
+    path = tmp_path / "shot.png"
+    path.write_bytes(_img_bytes("PNG"))
+    existing = build_vision_blocks([_entry("a.png", ".png", _img_bytes("PNG", color=(1, 2, 3)), "image/png")])
+
+    out = _normalize_images(existing + [str(path)])
+
+    assert len(out) == 2
+    assert all(b["type"] == "image" for b in out)
+    assert out[0] == existing[0]
+
+
+def test_normalize_images_passthrough_and_empty():
+    from app.core.anthropic_client import _normalize_images
+
+    blocks = build_vision_blocks([_entry("a.png", ".png", _img_bytes("PNG"), "image/png")])
+    assert _normalize_images(blocks) is blocks
+    assert _normalize_images(None) is None
+    assert _normalize_images([]) == []
+
+
+def test_normalize_images_skips_bad_path(tmp_path):
+    from app.core.anthropic_client import _normalize_images
+
+    assert _normalize_images([str(tmp_path / "missing.png")]) == []
+    assert _normalize_images(["/etc/passwd"]) == []
+
+
+@pytest.mark.asyncio
+async def test_call_llm_with_fallback_accepts_image_path(tmp_path, monkeypatch):
+    captured = []
+    ac = _install_fake_claude(monkeypatch, captured)
+    path = tmp_path / "runner.png"
+    path.write_bytes(_img_bytes("PNG"))
+
+    out = await ac.call_llm_with_fallback(
+        "check", model="claude-haiku-4-5-20251001", images=[str(path)],
+    )
+
+    assert out == "ok"
+    content = captured[0]["messages"][0]["content"]
+    assert content[0] == {"type": "text", "text": "check"}
+    assert content[1]["type"] == "image"
+    assert content[1]["source"]["media_type"] == "image/png"

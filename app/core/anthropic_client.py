@@ -141,6 +141,41 @@ def _user_content(prompt: str, images: Optional[list] = None):
     return [{"type": "text", "text": prompt}] + list(images)
 
 
+def _normalize_images(images: Optional[list]) -> Optional[list]:
+    """images 목록에 섞인 파일 경로를 vision block 으로 바꾼다 (AADS-VISION-UNIFY).
+
+    러너·서브에이전트는 스크린샷을 만들어 두고 디스크 경로만 넘긴다. 경로를
+    그대로 messages 에 실으면 Anthropic 이 400 을 내므로, document_context 의
+    변환 파이프라인(포맷 변환·5MB 축소·PDF document block·중복 제거)을 그대로 태운다.
+    이미 만들어진 block(dict)만 들어오면 원본을 그대로 돌려주므로 기존 호출은 동작이 같다.
+    """
+    if not images:
+        return images
+    if all(isinstance(b, dict) for b in images):
+        return images
+
+    blocks: list = []
+    paths: list = []
+    for item in images:
+        if isinstance(item, dict):
+            blocks.append(item)
+        elif isinstance(item, (str, os.PathLike)):
+            paths.append(os.fspath(item))
+        else:
+            logger.warning("vision_block_ignored: type=%s", type(item).__name__)
+
+    if paths:
+        try:
+            from app.core.document_context import build_vision_blocks
+
+            converted = build_vision_blocks([], extra_paths=paths)
+            logger.info("vision_paths_converted: paths=%d blocks=%d", len(paths), len(converted))
+            blocks.extend(converted)
+        except Exception as e:
+            logger.warning("vision_path_convert_failed: %s", str(e)[:120])
+    return blocks
+
+
 def _to_openai_image_content(prompt: str, images: list) -> list:
     """Anthropic image/document block → OpenAI 호환 content 배열 (LiteLLM/Gemini 폴백용).
 
@@ -272,10 +307,13 @@ async def call_llm_with_fallback(
 
     images 가 주어지면(Anthropic image/document block 목록) Claude 경로는 그대로
     전달하고, LiteLLM/DashScope 폴백 경로는 OpenAI 호환 image_url 로 변환한다.
-    기본값 None 이면 기존 동작과 완전히 동일하다.
+    러너가 넘기는 디스크 경로(str/Path)가 섞여 있으면 build_vision_blocks 로
+    먼저 block 으로 변환한다. 기본값 None 이면 기존 동작과 완전히 동일하다.
 
     Returns: 응답 텍스트 또는 None (전부 실패 시)
     """
+    images = _normalize_images(images)
+
     if tenant_id:
         from app.services.tenant_usage_limits import check_tenant_usage_limit
 

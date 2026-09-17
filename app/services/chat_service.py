@@ -11736,7 +11736,7 @@ async def send_message_stream(
         if attachments:
             from app.core.document_context import (
                 extract_file_contents,
-                extract_image_blocks,
+                build_vision_blocks,
                 build_ephemeral_document_layer,
                 build_file_reference_summary,
             )
@@ -11747,8 +11747,8 @@ async def send_message_stream(
 
             # Vision: 이미지 파일 추출 → Claude Vision API content blocks 구성
             # 포맷 변환(bmp/tiff→png)·5MB 초과 리샘플·중복 제거는
-            # extract_image_blocks 한 곳에 모아 둔다 (AADS-VISION-UNIFY).
-            _vision_images.extend(extract_image_blocks(_file_contents))
+            # build_vision_blocks 한 곳에 모아 둔다 (AADS-VISION-UNIFY).
+            _vision_images.extend(build_vision_blocks(_file_contents))
             if _vision_images:
                 logger.info(f"[VISION] {len(_vision_images)} image(s) extracted for Vision API")
 
@@ -11821,8 +11821,8 @@ async def send_message_stream(
                 data = uf.get("data", b"")
                 mime = uf.get("mime_type", "application/octet-stream")
                 if mime.startswith("image/"):
-                    from app.core.document_context import extract_image_blocks
-                    _vision_images.extend(extract_image_blocks([{
+                    from app.core.document_context import build_vision_blocks
+                    _vision_images.extend(build_vision_blocks([{
                         "name": fname,
                         "ext": Path(fname).suffix.lower(),
                         "is_image": True,

@@ -57,6 +57,11 @@ CONVERTIBLE_IMAGE_EXTENSIONS = frozenset({".bmp", ".tiff", ".tif", ".ico", ".ppm
 # 추측으로 OCR 하지 않고 건너뛴다 — 틀린 텍스트를 넣는 것이 안 넣는 것보다 나쁘다.
 UNSUPPORTED_IMAGE_EXTENSIONS = frozenset({".heic", ".heif", ".avif", ".jxl", ".svg"})
 
+# iPhone 기본 포맷. pillow_heif 가 깔려 있으면 PNG 로 열 수 있고,
+# 없으면 사유를 남기고 건너뛴다 (UNSUPPORTED 보다 먼저 판정한다).
+HEIF_EXTENSIONS = frozenset({".heic", ".heif"})
+HEIF_MEDIA_TYPES = frozenset({"image/heic", "image/heif"})
+
 # PDF 는 document block 으로 그대로 올린다 (Anthropic 한도 32MB).
 PDF_MAX_BYTES = int(os.getenv("VISION_PDF_MAX_BYTES", str(32 * 1024 * 1024)))
 
@@ -502,6 +507,20 @@ def _convert_to_png(raw: bytes, name: str) -> Optional[bytes]:
         return None
 
 
+def _convert_heif_to_png(raw: bytes, name: str) -> Optional[bytes]:
+    """heic/heif → PNG 바이트. pillow_heif 가 없으면 None (호출자가 사유를 남긴다)."""
+    try:
+        import pillow_heif  # type: ignore
+    except ImportError:
+        return None
+    try:
+        pillow_heif.register_heif_opener()
+    except Exception as e:
+        logger.warning(f"[Vision] pillow_heif register failed: {name} — {type(e).__name__}: {e}")
+        return None
+    return _convert_to_png(raw, name)
+
+
 def _build_block_from_bytes(
     raw: bytes,
     name: str,
@@ -516,6 +535,19 @@ def _build_block_from_bytes(
     ext = (ext or "").lower()
     if not raw:
         return None
+
+    if ext in HEIF_EXTENSIONS or media_type in HEIF_MEDIA_TYPES:
+        converted = _convert_heif_to_png(raw, name)
+        if converted is None:
+            logger.info(
+                f"[Vision] [unsupported_image_format: {ext or '.heic'}] {name} — "
+                "pillow_heif 미설치로 건너뜀"
+            )
+            return None
+        raw = converted
+        ext = ".png"
+        media_type = "image/png"
+        logger.info(f"[Vision] converted HEIF to PNG: {name}")
 
     if ext in UNSUPPORTED_IMAGE_EXTENSIONS:
         logger.info(f"[Vision] [unsupported_image_format: {ext}] {name} — skipped")
@@ -592,6 +624,34 @@ def extract_image_blocks(
         file_contents: extract_file_contents() 결과 (또는 같은 모양의 dict 목록)
         extra_paths: 디스크 절대경로 목록. 지정하면 같은 변환 파이프라인을 통과해
             blocks 뒤에 덧붙는다. 미지정(None)이면 기존과 완전히 같은 동작.
+
+    Returns:
+        list of {"type": "image", "source": {"type": "base64", "media_type": ..., "data": ...}}
+        (PDF 는 {"type": "document", ...})
+    """
+    return build_vision_blocks(file_contents, extra_paths=extra_paths)
+
+
+def build_vision_blocks(
+    file_contents: List[Dict[str, Any]],
+    extra_paths: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """첨부 목록 + 디스크 경로 → Anthropic vision content block 목록.
+
+    비전 입력을 만드는 단 하나의 출입구다 (AADS-VISION-UNIFY). 호출처마다
+    image block 을 인라인으로 만들면 포맷 변환·크기 한도·중복 제거가 제각각이 된다.
+
+    - png/jpg/jpeg/gif/webp → 네이티브 image block (원본 그대로)
+    - bmp/tiff/ico/ppm/pcx → Pillow 로 PNG 변환 후 image block
+    - 5MB 초과 → 장변 VISION_MAX_DIMENSION 으로 축소해 전송 (버리지 않는다)
+    - pdf → Anthropic 네이티브 document block (PDF_MAX_BYTES 초과 시 건너뜀)
+    - heic/heif → pillow_heif 가 있으면 PNG 변환, 없으면 사유를 남기고 건너뜀
+    - SHA-256 으로 같은 바이트를 두 번 싣지 않는다
+
+    Args:
+        file_contents: extract_file_contents() 결과 (또는 같은 모양의 dict 목록)
+        extra_paths: 디스크 절대경로 목록. 같은 변환 파이프라인을 통과해
+            blocks 뒤에 덧붙는다. 민감 경로(SENSITIVE_PATH_PREFIXES)는 거부한다.
 
     Returns:
         list of {"type": "image", "source": {"type": "base64", "media_type": ..., "data": ...}}
