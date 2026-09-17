@@ -1065,9 +1065,9 @@ async def query_acct_database(
 
     tenant_company/company/source_file 등 FORCE ROW LEVEL SECURITY 테이블은
     query_project_database 가 쓰는 acct_ro 풀로는 정책을 통과하지 못한다.
-    이 도구는 별도 DSN(ACCT_DATABASE_URL)으로 연결해 app.current_tenant_id
-    GUC를 세팅한 뒤 SELECT만 실행한다. query_project_database/
-    normalize_tenant_scope 등 기존 함수는 건드리지 않는다.
+    이 도구는 acct_app 자격증명으로 기존 ACCT SSH 터널을 재사용해 연결하고,
+    app.current_tenant_id GUC를 세팅한 뒤 SELECT만 실행한다.
+    ACCT_DATABASE_URL이 있으면 하위 호환을 위해 우선 사용한다.
 
     Args:
         sql: SELECT/WITH/EXPLAIN 쿼리
@@ -1089,13 +1089,34 @@ async def query_acct_database(
             return {"error": "acct_tenant_id 는 숫자만 허용합니다"}
 
     dsn = os.getenv("ACCT_DATABASE_URL")
-    if not dsn:
-        return {"error": "ACCT_DATABASE_URL 환경변수가 설정되지 않았습니다"}
+    app_user = os.getenv("ACCT_DB_APP_USER")
+    app_password = os.getenv("ACCT_DB_APP_PASSWORD")
+    if not dsn and (not app_user or not app_password):
+        return {
+            "error": (
+                "ACCT_DB_APP_USER / ACCT_DB_APP_PASSWORD 환경변수가 "
+                "설정되지 않았습니다"
+            )
+        }
 
     q = sql.strip().rstrip(";")
 
     try:
-        conn = await asyncpg.connect(dsn, timeout=_PG_POOL_CONNECT_TIMEOUT_SECONDS)
+        if dsn:
+            conn = await asyncpg.connect(
+                dsn,
+                timeout=_PG_POOL_CONNECT_TIMEOUT_SECONDS,
+            )
+        else:
+            local_port = await asyncio.to_thread(_ensure_ssh_tunnel, "ACCT")
+            conn = await asyncpg.connect(
+                host="127.0.0.1",
+                port=local_port,
+                database=os.getenv("ACCT_DB_NAME"),
+                user=app_user,
+                password=app_password,
+                timeout=_PG_POOL_CONNECT_TIMEOUT_SECONDS,
+            )
     except Exception:
         logger.exception("query_acct_database: 연결 실패")
         return {"error": "ACCT DB 연결 실패 (상세 내용은 서버 로그 참조)"}
@@ -1118,7 +1139,10 @@ async def query_acct_database(
         logger.error(f"query_acct_database: TIMEOUT | query={q[:80]}")
         return {"error": f"DB 쿼리 시간 초과: {_PROJECT_DB_QUERY_TIMEOUT_SECONDS}초 초과"}
     except Exception as exc:
-        safe_msg = str(exc)
+        safe_msg = _redact_ssh_key_paths(str(exc))
+        for secret in (dsn, app_user, app_password):
+            if secret:
+                safe_msg = safe_msg.replace(secret, "<redacted>")
         if any(kw in safe_msg.lower() for kw in ("password", "postgresql://", "credentials")):
             safe_msg = "쿼리 실행 오류가 발생했습니다 (상세 내용은 서버 로그 참조)"
         logger.error(f"query_acct_database: FAIL | error={safe_msg}")
