@@ -160,3 +160,47 @@ async def set_projects(slot: str, projects: List[str], by: str = "CEO") -> Dict[
 
     logger.info("slot_projects_set slot=%s projects=%s by=%s", slot, keys, by)
     return {"ok": True, "slot": slot, "projects": keys}
+
+
+async def set_company_slot(project: str, slot: Optional[str], by: str = "CEO") -> Dict[str, object]:
+    """이 회사가 쓸 계정을 정한다. slot 이 비면 배정 해제(= 자동 순서).
+
+    화면은 슬롯이 아니라 회사를 기준으로 고른다 — "이 회사는 내 계정" 이
+    대표님이 실제로 하시는 판단이기 때문이다. 저장 구조는 슬롯→회사 이므로
+    여기서 뒤집는다. 한 회사가 두 슬롯에 걸리면 둘 다 '우선' 이 되어 순서가
+    흔들리므로, 새로 배정하기 전에 다른 슬롯에서 먼저 뺀다.
+    """
+    from app.core.db_pool import get_pool
+
+    key = str(project or "").strip().upper()
+    if not key:
+        return {"ok": False, "error": "project_required"}
+    target = str(slot or "").strip()
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "DELETE FROM oauth_slot_projects WHERE project_key = $1", key)
+            if target:
+                await conn.execute(
+                    "INSERT INTO oauth_slot_projects (slot, project_key, created_by) "
+                    "VALUES ($1, $2, $3)",
+                    target, key, by[:100],
+                )
+    invalidate()
+
+    try:
+        from app.services import ohvis_alert
+
+        await ohvis_alert.notify(
+            "%s 계정 배정 %s" % (key, "변경" if target else "해제"),
+            ("%s 는 이제 슬롯 %s 를 먼저 씁니다." % (key, target)) if target
+            else "%s 의 배정을 없앴습니다 — 다시 자동 순서로 돕니다." % key,
+            severity=ohvis_alert.INFO, category="oauth_slot", project="AADS",
+        )
+    except Exception:
+        pass
+
+    logger.info("slot_company_set project=%s slot=%s by=%s", key, target or "-", by)
+    return {"ok": True, "project": key, "slot": target}

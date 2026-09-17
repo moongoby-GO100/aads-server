@@ -211,7 +211,10 @@ def _rebuild_runtime_state(records: List[Dict[str, str]]) -> None:
 
 
 async def _sync_relay_current_slot(slot: str) -> None:
-    if slot not in ("1", "2"):
+    # 릴레이는 자격증명이 있는 슬롯이면 전부 받는다(2026-09-16 확장). 여기서
+    # 1·2 로 좁혀 두면 슬롯 3·4 를 주계정으로 올려도 릴레이 기본값만 옛 계정에
+    # 남아, 슬롯을 지정하지 않는 호출이 딴 계정으로 샌다.
+    if not slot:
         return
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
@@ -311,6 +314,35 @@ def set_token_order(primary: str) -> bool:
     return False
 
 
+def select_record_by_alias(
+    records: List[Dict[str, str]], primary: str
+) -> Optional[Dict[str, str]]:
+    """"slot4" · "라일론" · "ANTHROPIC_AUTH_TOKEN_4" 중 무엇으로 불러도 찾는다.
+
+    별명이 슬롯 1·2 에만 있어서 슬롯 3·4 는 "slot3"/"slot4" 로 부르면 조용히
+    빈손이 돌아왔다. 설정 화면의 주계정 전환이 그 슬롯들에서 아무 일도 하지
+    않은 원인이다(2026-09-17 실측).
+    """
+    wanted = (primary or "").strip().lower()
+    if not wanted:
+        return None
+    for record in records or []:
+        label = str(record.get("label", "")).strip().lower()
+        key_name = str(record.get("key_name", "")).strip().lower()
+        slot = str(record.get("slot", "")).strip().lower()
+        aliases = {label, key_name, slot}
+        if slot:
+            aliases.add("slot%s" % slot)
+        if slot == "1":
+            aliases.update({"gmail", "primary"})
+        elif slot == "2":
+            aliases.update({"naver", "fallback"})
+        aliases.discard("")
+        if wanted in aliases or (label and wanted in label):
+            return record
+    return None
+
+
 async def set_token_order_async(primary: str) -> bool:
     """DB priority를 기준으로 Anthropic 키 순서를 영구 변경."""
     wanted = (primary or "").strip().lower()
@@ -324,19 +356,7 @@ async def set_token_order_async(primary: str) -> bool:
     if not records:
         return False
 
-    selected = None
-    for record in records:
-        label = str(record.get("label", "")).strip().lower()
-        key_name = str(record.get("key_name", "")).strip().lower()
-        slot = str(record.get("slot", "")).strip().lower()
-        aliases = {label, key_name, slot}
-        if slot == "1":
-            aliases.update({"gmail", "primary", "slot1"})
-        elif slot == "2":
-            aliases.update({"naver", "fallback", "slot2"})
-        if wanted in aliases or wanted in label:
-            selected = record
-            break
+    selected = select_record_by_alias(records, wanted)
 
     if not selected:
         return False
@@ -360,7 +380,7 @@ async def set_token_order_async(primary: str) -> bool:
     invalidate_key_cache()
     refreshed = await get_oauth_key_records_async(include_rate_limited=True)
     preferred_slot = refreshed[0].get("slot", "") if refreshed else ""
-    if preferred_slot in ("1", "2"):
+    if preferred_slot:
         await _sync_relay_current_slot(preferred_slot)
     logger.info(
         "auth_provider: db token order switched to %s (slot=%s)",

@@ -2759,24 +2759,127 @@ class ClaudeAccountSwitch(BaseModel):
 
 @router.post("/ops/claude-account/switch")
 async def switch_claude_account(body: ClaudeAccountSwitch):
-    """주계정 전환. 자격증명이 없는 슬롯은 릴레이가 409 로 막는다."""
+    """주계정 전환 — 채팅이 실제로 이 계정을 먼저 쓰게 만든다.
+
+    예전에는 릴레이의 CURRENT_OAUTH 만 바꿨는데, 그것은 호출자가 슬롯을
+    지정하지 않았을 때 쓰는 릴레이의 기본값일 뿐이다. 채팅은 슬롯을 항상
+    명시해서 부르고(model_selector), 그 순서는 DB priority 가 정한다. 그래서
+    버튼을 눌러도 채팅이 쓰는 계정은 그대로였다 — 2026-09-17 대표님 지적.
+
+    이제 DB priority 를 바꾸는 것이 본체이고, 릴레이 기본값 동기화는 곁가지다.
+    자격증명이 없는 슬롯은 릴레이가 409 로 막으므로 그것만 하드 실패로 본다.
+    """
+    slot = str(body.account)
     headers = {"Content-Type": "application/json"}
     secret = _load_relay_secret()
     if secret:
         headers["X-Claude-Relay-Secret"] = secret
+
+    # 1) 자격증명 확인 + 릴레이 기본값 동기화 (닿지 않아도 전환은 계속한다)
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=2.0)) as client:
             resp = await client.post(f"{_CLAUDE_RELAY_URL}/oauth/switch",
-                                     headers=headers, json={"slot": str(body.account)})
+                                     headers=headers, json={"slot": slot})
+        if resp.status_code == 409:
+            detail = "자격증명 없음"
+            try:
+                detail = resp.json().get("error") or detail
+            except ValueError:
+                pass
+            return {"ok": False, "detail": detail}
+        if resp.status_code >= 400:
+            logger.warning("claude_account_switch_relay_warn",
+                           slot=slot, status=resp.status_code, body=resp.text[:200])
     except httpx.HTTPError as exc:
-        return {"ok": False, "detail": f"릴레이에 닿지 못했다: {str(exc)[:160]}"}
+        logger.warning("claude_account_switch_relay_unreachable", slot=slot, error=str(exc)[:160])
+
+    # 2) 여기가 실제로 채팅을 바꾸는 곳이다.
+    from app.core.auth_provider import get_oauth_key_records_async, set_token_order_async
+
+    if not await set_token_order_async(f"slot{slot}"):
+        return {"ok": False, "detail": f"슬롯 {slot} 계정을 찾지 못했다"}
+
+    records = await get_oauth_key_records_async(include_rate_limited=True)
+    order = [
+        {"slot": r.get("slot", ""), "label": r.get("label", "")}
+        for r in records if r.get("slot")
+    ]
+    label = next((r["label"] for r in order if r["slot"] == slot), f"slot{slot}")
+    return {"ok": True, "current_account": body.account, "label": label, "order": order}
+
+
+# ─── 회사별 계정(슬롯) 배정 ────────────────────────────────────────────
+#
+# 배정은 "우선" 이지 "전용" 이 아니다 — 배정 슬롯이 막히면 배정 없는 슬롯으로
+# 내려간다(app/services/slot_projects.py). 화면도 그렇게 설명해야 한다.
+class CompanySlotAssign(BaseModel):
+    slot: Optional[str] = None
+
+
+@router.get("/ops/oauth-slot-projects")
+async def get_oauth_slot_projects():
+    """회사별 계정 배정 현황 — 설정 화면이 이 한 벌로 표를 그린다."""
+    from app.core.auth_provider import LAST_RESORT_SLOTS, get_oauth_key_records_async
+    from app.core.db_pool import get_pool
+    from app.services.slot_projects import slot_project_map
+
+    mapping = await slot_project_map(force=True)
+    company_slot: Dict[str, str] = {}
+    for slot, keys in mapping.items():
+        for key in keys:
+            company_slot[str(key).upper()] = str(slot)
+
+    companies: List[Dict[str, Any]] = []
     try:
-        payload = resp.json()
-    except ValueError:
-        return {"ok": False, "detail": "릴레이 응답을 읽을 수 없다"}
-    if resp.status_code >= 400:
-        return {"ok": False, "detail": payload.get("error") or "전환 실패"}
-    return {"ok": True, "current_account": body.account, "label": f"slot{body.account}"}
+        rows = await get_pool().fetch(
+            "SELECT DISTINCT ON (project_key) project_key, name, created_at "
+            "FROM chat_workspaces WHERE COALESCE(project_key, '') <> '' "
+            "ORDER BY project_key, created_at"
+        )
+        companies = [
+            {
+                "project_key": str(r["project_key"]).upper(),
+                "name": r["name"] or str(r["project_key"]),
+                "slot": company_slot.get(str(r["project_key"]).upper(), ""),
+            }
+            for r in rows
+        ]
+    except Exception as exc:
+        logger.warning("oauth_slot_projects_companies_failed", error=str(exc)[:160])
+
+    accounts: List[Dict[str, Any]] = []
+    try:
+        for record in await get_oauth_key_records_async(include_rate_limited=True):
+            slot = str(record.get("slot", "") or "")
+            if not slot:
+                continue
+            accounts.append({
+                "slot": slot,
+                "label": record.get("label") or f"slot{slot}",
+                "key_name": record.get("key_name", ""),
+                "priority": record.get("priority", 0),
+                "last_resort": slot in LAST_RESORT_SLOTS,
+                "rate_limited": bool(record.get("rate_limited_until")),
+            })
+        accounts.sort(key=lambda a: (a["last_resort"], a["priority"], a["slot"]))
+    except Exception as exc:
+        logger.warning("oauth_slot_projects_accounts_failed", error=str(exc)[:160])
+
+    return {"ok": True, "companies": companies, "accounts": accounts}
+
+
+@router.put("/ops/oauth-slot-projects/{project_key}")
+async def set_company_oauth_slot(project_key: str, body: CompanySlotAssign):
+    """이 회사가 먼저 쓸 계정을 정한다. slot 이 비면 자동 순서로 되돌린다."""
+    from app.services.slot_projects import set_company_slot
+
+    slot = (body.slot or "").strip()
+    if slot and not re.fullmatch(r"[0-9]{1,3}", slot):
+        raise HTTPException(status_code=400, detail="slot 은 숫자여야 한다")
+    result = await set_company_slot(project_key, slot or None, by="CEO")
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=str(result.get("error") or "배정 실패"))
+    return result
 
 
 # ─── 계정별 LLM 사용량 현황 API (AADS-190C) ──────────────────────────────
