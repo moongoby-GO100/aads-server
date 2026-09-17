@@ -203,7 +203,11 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id request_id; do
         verdict=$(jq -r '.verdict // empty' "$resp_file" 2>/dev/null || echo "")
         score=$(jq -r '.score // 0.0' "$resp_file" 2>/dev/null || echo "0.0")
         category=$(jq -r '.flag_category // empty' "$resp_file" 2>/dev/null || echo "")
-        issues=$(jq -r '(.issues // []) | join("; ")' "$resp_file" 2>/dev/null || echo "")
+        # issues 는 jsonb 컬럼인데 asyncpg 가 파싱하지 않아 API 가 "문자열" 로 돌려준다.
+        # 예전 `join("; ")` 는 문자열에 대해 jq 오류를 내고 2>/dev/null 로 삼켜져 항상 빈 값이 됐다.
+        # 그 결과 REQUEST_CHANGES 확정 반려에 사유가 한 줄도 남지 않아 재제출 지시서를 쓸 수 없었다
+        # (2026-09-17 runner-65233eb7 실측). 문자열이면 한 번 더 파싱한다.
+        issues=$(jq -r '(.issues // []) | (if type=="string" then (fromjson? // []) else . end) | if type=="array" then join("; ") else tostring end' "$resp_file" 2>/dev/null || echo "")
     fi
     [[ "$score" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || score="0.0"
 
