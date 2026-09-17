@@ -2855,6 +2855,29 @@ async def lifespan(app: FastAPI):
                           OR te.lease_expires_at IS NULL
                           OR te.lease_expires_at <= NOW()
                       )
+                      -- 살아서 심장이 뛰는 턴은 건드리지 않는다.
+                      --
+                      -- 위의 lease 가드는 실측상 무력하다 — lease_expires_at 이
+                      -- 한 번도 기록되지 않아(2026-09-17 실행 4건 전부 NULL)
+                      -- `IS NULL` 가지가 항상 참이 된다. 그래서 판정은 사실상
+                      -- updated_at·placeholder edited_at 두 값에만 걸리는데,
+                      -- 도구를 오래 도는 턴은 그 둘이 갱신되지 않는 구간이
+                      -- 길어 8초 문턱을 그냥 넘는다.
+                      --
+                      -- 2026-09-17 실측: 응답 중이던 세션 ac5278a7 이
+                      -- 18:34~18:39 사이 **1분에 한 번씩** 스캐너에 끌려가
+                      -- "보존된 내용이 없습니다" 알림만 남긴 interrupted 실행을
+                      -- 5건 만들었다. 24시간 중단 70건 중 superseded 가 36건,
+                      -- 그중 23건이 본문 없이 끝났다 — 유실의 최대 원인이다.
+                      --
+                      -- heartbeat_at 은 스트림을 실제로 돌리는 컨테이너가 계속
+                      -- 갱신한다. 그 값이 신선하면 블루/그린 어느 슬롯이 주인이든
+                      -- 그 턴은 살아 있는 것이므로 재개 대상이 아니다.
+                      -- NULL 이면 예전 동작 그대로 둔다(옛 행 호환).
+                      AND (
+                          te.heartbeat_at IS NULL
+                          OR te.heartbeat_at < NOW() - ($2::int * INTERVAL '1 second')
+                      )
                       AND (
                           GREATEST(
                               te.updated_at,
