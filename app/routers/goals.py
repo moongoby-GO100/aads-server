@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -9,6 +10,48 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 router = APIRouter()
+
+_SESSION_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def resolve_session_ref(ref: str) -> str:
+    """세션 링크나 세션 ID 에서 세션 id 를 꺼낸다.
+
+    2026-09-17 대표님 지시 — "목표카드에 주도가 등록 안 되어 있으면 내가 직접
+    세션링크를 등록할 수 있게 해줘".
+
+    후보 목록은 **이미 붙어 있는 세션이 있어야** 워크스페이스를 알 수 있었다.
+    그래서 담당이 하나도 없는 목표는 목록이 비고, 붙일 방법이 없었다.
+    링크를 그대로 받으면 그 막다른 길이 사라진다.
+
+    받는 형태 — 대표님이 주소창에서 복사하시는 것 전부:
+      https://aads.newtalk.kr/chat#<세션ID>
+      https://aads.newtalk.kr/chat?session=<세션ID>
+      /chat/<세션ID>
+      <세션ID>
+
+    맨 뒤 UUID 를 쓴다. 링크에 워크스페이스 id 가 함께 붙는 형태에서도
+    세션 id 가 뒤에 오기 때문이다.
+    """
+    text = (ref or "").strip()
+    if not text:
+        raise HTTPException(
+            status_code=400, detail="세션 링크 또는 세션 ID를 넣어 주십시오"
+        )
+    found = _SESSION_UUID_RE.findall(text)
+    if not found:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "링크에서 세션 ID를 찾지 못했습니다. "
+                "예: https://aads.newtalk.kr/chat#0a1b2c3d-.... "
+                "담당 채팅창을 열고 주소창을 그대로 붙여넣어 주십시오."
+            ),
+        )
+    return found[-1].lower()
 
 
 class MilestoneCreateRequest(BaseModel):
@@ -90,7 +133,11 @@ class GoalDocRequest(BaseModel):
 
 
 class AddOwnerRequest(BaseModel):
-    session_id: str
+    # 둘 중 하나면 된다. session_ref 는 대표님이 붙여넣으신 채팅창 주소다.
+    session_id: Optional[str] = None
+    session_ref: Optional[str] = Field(
+        None, description="세션 링크(https://.../chat#<세션ID>) 또는 세션 ID"
+    )
     role_key: Optional[str] = None
     as_lead: bool = False
 
@@ -356,7 +403,28 @@ async def goal_owner_candidates(goal_id: str):
     """
     from app.core.db_pool import get_pool
 
-    rows = await get_pool().fetch(
+    pool = get_pool()
+    linked_ws = [
+        r["workspace_id"] for r in await pool.fetch(
+            "SELECT DISTINCT s.workspace_id FROM goal_task_links l "
+            "JOIN chat_sessions s ON s.id = l.task_id::uuid "
+            "WHERE l.goal_id = $1::uuid AND l.task_type = 'chat_session' "
+            "  AND COALESCE(l.link_state,'active') = 'active' "
+            "  AND l.task_id ~ '^[0-9a-fA-F-]{36}$' "
+            "  AND s.workspace_id IS NOT NULL",
+            goal_id,
+        )
+    ]
+    project_ws = [
+        r["id"] for r in await pool.fetch(
+            "SELECT w.id FROM chat_workspaces w JOIN goals g ON g.id = $1::uuid "
+            " WHERE COALESCE(g.project,'') <> '' "
+            "   AND upper(COALESCE(w.project_key,'')) = upper(g.project)",
+            goal_id,
+        )
+    ]
+
+    rows = await pool.fetch(
         """
         SELECT s.id::text AS session_id, s.title,
                COALESCE(s.role_key, '') AS role_key,
@@ -367,11 +435,12 @@ async def goal_owner_candidates(goal_id: str):
                      AND a.role_scope @> ARRAY[s.role_key]::text[]
                ) AS has_prompt
         FROM chat_sessions s
-        WHERE s.workspace_id = (
-                SELECT s2.workspace_id FROM goal_task_links l2
-                JOIN chat_sessions s2 ON s2.id = l2.task_id::uuid
-                WHERE l2.goal_id = $1::uuid AND l2.task_type = 'chat_session'
-                LIMIT 1
+        WHERE s.workspace_id = ANY(
+                -- 이미 붙어 있는 세션이 있으면 그 워크스페이스,
+                -- 하나도 없으면 목표의 프로젝트 워크스페이스로 떨어진다.
+                -- 이 폴백이 없을 때 담당 0명인 목표는 후보가 영원히 비었다.
+                CASE WHEN cardinality($2::uuid[]) > 0
+                     THEN $2::uuid[] ELSE $3::uuid[] END
               )
           AND NOT EXISTS (
                 SELECT 1 FROM goal_task_links l
@@ -382,9 +451,15 @@ async def goal_owner_candidates(goal_id: str):
         ORDER BY s.updated_at DESC
         LIMIT 40
         """,
-        goal_id,
+        goal_id, linked_ws, project_ws,
     )
-    return {"candidates": [dict(r) for r in rows]}
+    return {
+        "candidates": [dict(r) for r in rows],
+        # 화면이 "왜 비었는지" 를 말할 수 있어야 한다. 빈 목록만 보여 주면
+        # 대표님은 붙일 창이 없는 것인지 조회가 깨진 것인지 알 수 없다.
+        "scope": "linked" if linked_ws else ("project" if project_ws else "none"),
+        "accepts_link": True,
+    }
 
 
 @router.post("/goals/{goal_id}/owners")
@@ -399,36 +474,61 @@ async def add_goal_owner(goal_id: str, req: AddOwnerRequest):
     """
     from app.core.db_pool import get_pool
 
+    sid = resolve_session_ref(req.session_ref or req.session_id or "")
+
     pool = get_pool()
     async with pool.acquire() as conn:
+        goal = await conn.fetchrow(
+            "SELECT title, COALESCE(project,'') AS project "
+            "FROM goals WHERE id = $1::uuid",
+            goal_id,
+        )
+        if not goal:
+            raise HTTPException(status_code=404, detail="goal_not_found")
+
         sess = await conn.fetchrow(
-            "SELECT id::text, title, COALESCE(role_key,'') AS role_key "
-            "FROM chat_sessions WHERE id = $1::uuid",
-            req.session_id,
+            "SELECT s.id::text, s.title, COALESCE(s.role_key,'') AS role_key, "
+            "       COALESCE(w.project_key,'') AS project_key, "
+            "       COALESCE(w.display_name, w.name, '') AS workspace "
+            "FROM chat_sessions s "
+            "LEFT JOIN chat_workspaces w ON w.id = s.workspace_id "
+            "WHERE s.id = $1::uuid",
+            sid,
         )
         if not sess:
-            raise HTTPException(status_code=404, detail="session_not_found")
+            raise HTTPException(
+                status_code=404,
+                detail=f"그런 세션이 없습니다 ({sid}). 링크를 다시 확인해 주십시오.",
+            )
 
         role = (req.role_key or sess["role_key"] or "").strip()
         if role and role != sess["role_key"]:
             await conn.execute(
                 "UPDATE chat_sessions SET role_key = $2, updated_at = NOW() WHERE id = $1::uuid",
-                req.session_id, role,
+                sid, role,
             )
 
+        # 뗐다가 다시 붙이는 경우 DO NOTHING 이면 link_state 가 detached 로
+        # 남아 화면에 담당이 나타나지 않는다. 다시 살려 준다.
         await conn.execute(
             "INSERT INTO goal_task_links (goal_id, task_type, task_id, status, "
             "       bind_source, bound_by, link_state) "
             "VALUES ($1::uuid, 'chat_session', $2, 'active', 'manual', 'ceo', 'active') "
-            "ON CONFLICT DO NOTHING",
-            goal_id, req.session_id,
+            "ON CONFLICT (goal_id, task_type, task_id) WHERE goal_id IS NOT NULL "
+            "DO UPDATE SET link_state = 'active', detach_reason = NULL, "
+            "              bind_source = 'manual', bound_by = 'ceo', updated_at = NOW() "
+            # 이미 붙어 있는 줄은 건드리지 않는다. 같은 창을 두 번 붙이셔도
+            # updated_at 만 흔들려 "방금 바뀐 것" 처럼 보이는 일이 없다.
+            "         WHERE goal_task_links.link_state IS DISTINCT FROM 'active' "
+            "            OR goal_task_links.detach_reason IS NOT NULL",
+            goal_id, sid,
         )
 
         if req.as_lead:
             await conn.execute(
                 "UPDATE goals SET owner_role_key = NULLIF($2,''), "
                 "owner_session_id = $3::uuid, updated_at = NOW() WHERE id = $1::uuid",
-                goal_id, role, req.session_id,
+                goal_id, role, sid,
             )
 
         has_prompt = bool(role) and bool(await conn.fetchval(
@@ -437,14 +537,26 @@ async def add_goal_owner(goal_id: str, req: AddOwnerRequest):
             role,
         ))
 
-    return {
-        "added": True, "session": sess["title"], "role_key": role,
-        "as_lead": req.as_lead, "has_prompt": has_prompt,
-        "warning": (
-            None if has_prompt else
+    # 링크로 직접 붙이면 워크스페이스가 다를 수 있다. 막지는 않는다 —
+    # 대표님이 그 창을 보고 고르신 것이다. 다만 말은 해 드린다.
+    notes = []
+    if not has_prompt:
+        notes.append(
             f"'{role or '(역할 없음)'}' 역할 프롬프트가 없습니다. 이 담당은 "
             "자기가 무엇을 하는 사람인지 모르는 채로 시작합니다."
-        ),
+        )
+    if (sess["project_key"] and goal["project"]
+            and sess["project_key"].upper() != goal["project"].upper()):
+        notes.append(
+            f"이 창은 {sess['project_key']} 워크스페이스이고 목표는 "
+            f"{goal['project']} 입니다. 맥락이 섞일 수 있습니다."
+        )
+
+    return {
+        "added": True, "session": sess["title"], "session_id": sid,
+        "workspace": sess["workspace"], "role_key": role,
+        "as_lead": req.as_lead, "has_prompt": has_prompt,
+        "warning": "\n".join(notes) or None,
     }
 
 
@@ -542,7 +654,8 @@ async def set_goal_approval_policy(goal_id: str, req: GoalApprovalPolicyRequest)
 
 
 class GoalLeadRequest(BaseModel):
-    session_id: str = Field(..., description="주도로 세울 세션")
+    session_id: Optional[str] = Field(None, description="주도로 세울 세션")
+    session_ref: Optional[str] = Field(None, description="세션 링크로 지정할 때")
 
 
 @router.post("/goals/{goal_id}/lead")
@@ -558,12 +671,14 @@ async def set_goal_lead(goal_id: str, req: GoalLeadRequest):
     """
     from app.core.db_pool import get_pool
 
+    sid = resolve_session_ref(req.session_ref or req.session_id or "")
+
     pool = get_pool()
     async with pool.acquire() as conn:
         sess = await conn.fetchrow(
             "SELECT id::text, title, COALESCE(role_key,'') AS role_key "
             "FROM chat_sessions WHERE id = $1::uuid",
-            req.session_id,
+            sid,
         )
         if not sess:
             raise HTTPException(status_code=404, detail="session_not_found")
@@ -573,7 +688,7 @@ async def set_goal_lead(goal_id: str, req: GoalLeadRequest):
             "SELECT 1 FROM goal_task_links WHERE goal_id = $1::uuid "
             "  AND task_type = 'chat_session' AND task_id = $2 "
             "  AND COALESCE(link_state,'active') = 'active' LIMIT 1",
-            goal_id, req.session_id,
+            goal_id, sid,
         )
         if not linked:
             raise HTTPException(
@@ -585,7 +700,7 @@ async def set_goal_lead(goal_id: str, req: GoalLeadRequest):
             "UPDATE goals SET owner_session_id = $2::uuid, "
             "       owner_role_key = NULLIF($3,''), updated_at = NOW() "
             " WHERE id = $1::uuid RETURNING id::text",
-            goal_id, req.session_id, sess["role_key"],
+            goal_id, sid, sess["role_key"],
         )
         if not updated:
             raise HTTPException(status_code=404, detail="goal_not_found")
