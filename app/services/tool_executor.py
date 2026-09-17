@@ -146,7 +146,14 @@ def _resolve_bound_chat_session_id(explicit_session_id: Any = "") -> str:
 
 
 async def resolve_bound_tenant_id(explicit_tenant_id: Any = "", explicit_session_id: Any = "") -> str:
-    tenant_id = str(current_tenant_id.get("") or explicit_tenant_id or "").strip()
+    tenant_id = str(current_tenant_id.get("") or "").strip()
+    if not tenant_id and explicit_tenant_id:
+        _explicit = str(explicit_tenant_id).strip()
+        try:
+            uuid.UUID(_explicit)
+            tenant_id = _explicit
+        except (ValueError, AttributeError):
+            pass  # ACCT 등 다른 DB의 숫자 tenant_id — AADS UUID tenant_id가 아님
     if tenant_id:
         return tenant_id
     session_id = _resolve_bound_chat_session_id(explicit_session_id)
@@ -772,7 +779,11 @@ class ToolExecutor:
                 )
 
             # tenant_id 는 위(게이트 앞)에서 이미 해석했다.
-            if tenant_id:
+            # ACCT 프로젝트의 tenant_id는 정수("7" 등) — AADS UUID tenant와 다르다.
+            # check_tenant_usage_limit은 AADS tenants.id(UUID)를 받으므로
+            # 정수형 tenant_id는 건너뛴다.
+            _is_uuid_tenant = bool(tenant_id and "-" in str(tenant_id))
+            if tenant_id and _is_uuid_tenant:
                 from app.services.tenant_usage_limits import TenantUsageLimitExceeded, check_tenant_usage_limit
 
                 try:
