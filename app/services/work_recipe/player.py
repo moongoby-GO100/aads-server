@@ -192,6 +192,9 @@ class RecipePlayer:
 
         stop_index: int | None = None
         for index, (phase, step) in enumerate(planned):
+            guard_hook = getattr(self._recorder, "before_step", None)  # P1 승인 게이트/도메인 가드
+            if guard_hook is not None:
+                await _maybe_await(guard_hook(run_id=result.run_id, step=step, phase=phase))
             if risk_rank(step.risk) > self._max_risk_rank:
                 # 승인 게이트는 P1. 여기서는 실행하지 않고 멈추는 것까지만 한다.
                 blocked = StepResult(
