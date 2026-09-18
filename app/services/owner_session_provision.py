@@ -320,6 +320,7 @@ async def provision_owner_session(approval_scope: Dict[str, Any]) -> Dict[str, A
                 WITH upd AS (
                     UPDATE milestones
                        SET owner_session_id = $3::uuid, dispatch_note = NULL,
+                           dispatch_blocked_at = NULL,
                            updated_at = NOW()
                      WHERE goal_id = $1::uuid
                        AND owner_role_key = $2
@@ -384,11 +385,14 @@ async def note_owner_session_rejected(approval_scope: Dict[str, Any]) -> int:
                 """
                 WITH upd AS (
                     UPDATE milestones
-                       SET dispatch_note = '담당 세션 생성 거절됨', updated_at = NOW()
+                       SET dispatch_note = '담당 세션 생성 거절됨',
+                           dispatch_blocked_at = COALESCE(dispatch_blocked_at, NOW()),
+                           updated_at = NOW()
                      WHERE goal_id = $1::uuid
                        AND owner_role_key = $2
                        AND owner_session_id IS NULL
-                       AND dispatch_note IS DISTINCT FROM '담당 세션 생성 거절됨'
+                       AND (dispatch_note IS DISTINCT FROM '담당 세션 생성 거절됨'
+                            OR dispatch_blocked_at IS NULL)
                     RETURNING 1
                 )
                 SELECT count(*)::int FROM upd

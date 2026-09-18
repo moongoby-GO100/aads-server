@@ -22,7 +22,8 @@
     마일스톤 막힘        주도 채팅창 + 텔레그램   ← 대표님 판단이 필요하다
     목표 달성/실패       주도 채팅창 + 텔레그램
 
-"막힘" 은 `goal_dispatch` 가 재시도 한도까지 보냈는데도 답이 확인되지 않은
+"막힘" 은 `goal_dispatch` 가 재시도 한도까지 보냈는데도 답이 확인되지 않아
+`dispatch_blocked_at` 이 기록된
 경우다. **조용히 포기하지 않는다** 는 규칙의 마지막 고리다 — 기계가 못
 하면 사람에게 넘긴다.
 
@@ -113,7 +114,7 @@ async def report_goal_events(project: str | None = None) -> dict[str, int]:
         rows = await conn.fetch(
             """
             SELECT m.id::text AS subject_id, m.title, m.status,
-                   m.dispatch_count, m.dispatch_note,
+                   m.dispatch_count, m.dispatch_note, m.dispatch_blocked_at,
                    g.id::text AS goal_id, g.title AS goal_title, g.project,
                    CASE WHEN m.status = 'completed' THEN 'milestone_completed'
                         ELSE 'milestone_stuck' END AS event
@@ -121,7 +122,7 @@ async def report_goal_events(project: str | None = None) -> dict[str, int]:
             JOIN goals g ON g.id = m.goal_id
             WHERE ($1::text IS NULL OR g.project = $1)
               AND (m.status = 'completed'
-                   OR (m.status = 'in_progress' AND m.dispatch_note IS NOT NULL))
+                   OR (m.status = 'in_progress' AND m.dispatch_blocked_at IS NOT NULL))
               AND NOT EXISTS (
                   SELECT 1 FROM goal_report_log r
                   WHERE r.goal_id = g.id AND r.subject_id = m.id

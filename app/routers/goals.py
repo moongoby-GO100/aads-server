@@ -222,7 +222,8 @@ async def goal_board(goal_id: str):
                    (lm.content LIKE '⏳%') AS working,
                    (lm.content LIKE '⚠️ _응답 생성이%') AS interrupted,
                    ms.title AS milestone, ms.dispatched_at, ms.dispatch_count,
-                   ms.dispatch_note, ms.id::text AS milestone_id, ms.variant,
+                   ms.dispatch_note, ms.dispatch_blocked_at,
+                   ms.id::text AS milestone_id, ms.variant,
                    ms.status AS milestone_status,
                    op.reason AS paused_reason,
                    (SELECT count(*) FROM milestone_notes n
@@ -250,7 +251,7 @@ async def goal_board(goal_id: str):
             state = "멈춤"
         elif r["milestone_status"] == "review":
             state = "확인 대기"
-        elif r["dispatch_note"]:
+        elif r["dispatch_blocked_at"]:
             state = "막힘"
         elif r["interrupted"]:
             state = "응답 끊김"
@@ -300,7 +301,7 @@ async def goal_board(goal_id: str):
             """
             SELECT id::text, title, status, sequence_order, variant,
                    completion_criteria, evidence, review_note,
-                   dispatch_note, dispatch_count, review_ask_count,
+                   dispatch_note, dispatch_blocked_at, dispatch_count, review_ask_count,
                    COALESCE(owner_role_key, '') AS owner_role_key,
                    (SELECT count(*) FROM milestone_notes n
                      WHERE n.milestone_id = milestones.id AND n.answered_at IS NULL) AS open_notes
@@ -393,7 +394,7 @@ async def goals_for_session(session_id: str):
                (g.owner_session_id = s.id) AS is_lead,
                s.role_key,
                ms.id::text AS milestone_id, ms.title AS milestone,
-               ms.dispatch_note
+               ms.dispatch_note, ms.dispatch_blocked_at
         FROM goal_task_links l
         JOIN goals g ON g.id = l.goal_id
         JOIN chat_sessions s ON s.id = l.task_id::uuid
@@ -829,7 +830,8 @@ async def restart_owner(goal_id: str, session_id: str):
             ), done AS (
                 UPDATE milestones m
                    SET dispatched_at = NULL, dispatch_count = 0,
-                       dispatch_note = NULL, updated_at = NOW()
+                       dispatch_note = NULL, dispatch_blocked_at = NULL,
+                       updated_at = NOW()
                   FROM target t
                  WHERE m.id = t.id
                 RETURNING m.id

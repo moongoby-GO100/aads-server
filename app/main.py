@@ -2387,6 +2387,7 @@ async def lifespan(app: FastAPI):
                     ("chat_messages", "execution_id", "UUID DEFAULT NULL"),
                     ("chat_messages", "is_hidden", "BOOLEAN NOT NULL DEFAULT FALSE"),
                     ("chat_sessions", "current_execution_id", "UUID DEFAULT NULL"),
+                    ("milestones", "dispatch_blocked_at", "TIMESTAMPTZ DEFAULT NULL"),
                     ("tool_results_archive", "is_error", "BOOLEAN DEFAULT FALSE"),
                     ("tool_results_archive", "result_summary", "TEXT"),
                     ("tool_results_archive", "latency_ms", "INTEGER DEFAULT 0"),

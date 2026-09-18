@@ -134,7 +134,7 @@ async def rewind(milestone_id: str, reason: str = "") -> dict[str, Any]:
            SET status = 'pending', started_at = NULL, completed_at = NULL,
                dispatched_at = NULL, dispatched_session_id = NULL,
                dispatch_count = 0,
-               dispatch_note = NULLIF($2, ''),
+               dispatch_note = NULLIF($2, ''), dispatch_blocked_at = NULL,
                updated_at = NOW()
           FROM prev
          WHERE m.id = prev.id

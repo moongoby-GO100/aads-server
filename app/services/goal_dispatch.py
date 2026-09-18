@@ -24,7 +24,8 @@
 2. **답이 없으면 다시 보낸다.** `_RETRY_AFTER_MIN` 이 지나야 재시도한다.
    너무 빨리 다시 보내면 아직 생각 중인 담당을 방해한다.
 3. **한도가 있다.** `_MAX_DISPATCH` 회를 넘으면 더 보내지 않고
-   `dispatch_note` 에 사유를 남긴다. 무한 재시도는 폭주다.
+   `dispatch_blocked_at` 을 세운다. `dispatch_note` 는 사람이 읽는 사유일
+   뿐 막힘 판정 근거가 아니다. 무한 재시도는 폭주다.
 4. **조용히 포기하지 않는다.** 한도를 넘긴 건은 기록에 남아 사람이 볼 수
    있다. 이것이 없으면 "보냈는데 아무 일도 안 일어남" 이 침묵으로 끝난다.
 
@@ -186,6 +187,16 @@ async def _note(conn, milestone_id: str, note: str) -> None:
         "UPDATE milestones SET dispatch_note = $2, updated_at = NOW() "
         " WHERE id = $1::uuid AND dispatch_note IS DISTINCT FROM $2",
         milestone_id, note,
+    )
+
+
+async def _clear_answered_block(conn, milestone_id: str) -> None:
+    """답이 확인되면 과거의 차단 신호와 설명 메모를 함께 치운다."""
+    await conn.execute(
+        "UPDATE milestones SET dispatch_blocked_at = NULL, dispatch_note = NULL, "
+        "updated_at = NOW() WHERE id = $1::uuid "
+        "AND (dispatch_blocked_at IS NOT NULL OR dispatch_note IS NOT NULL)",
+        milestone_id,
     )
 
 
@@ -553,12 +564,17 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 "ALTER TABLE milestones ADD COLUMN IF NOT EXISTS "
                 "load_deferred_since timestamptz"
             )
+            await conn.execute(
+                "ALTER TABLE milestones ADD COLUMN IF NOT EXISTS "
+                "dispatch_blocked_at timestamptz"
+            )
 
             rows = await conn.fetch(
                 """
                 SELECT m.id::text AS milestone_id, m.title AS milestone_title,
                        m.description, m.completion_criteria,
                        m.dispatch_count, m.dispatched_at, m.load_deferred_since,
+                       m.dispatch_blocked_at,
                        g.title AS goal_title, g.project, g.id::text AS goal_id,
                        COALESCE(m.owner_role_key, '') AS owner_role_key,
                        COALESCE(g.owner_session_id::text, '') AS goal_lead_session_id,
@@ -651,18 +667,6 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 elif row["load_deferred_since"] is not None:
                     await _clear_load_defer(conn, row["milestone_id"])
 
-                count = int(row["dispatch_count"] or 0)
-                if count >= _MAX_DISPATCH:
-                    if row["dispatched_at"] is not None:
-                        await conn.execute(
-                            "UPDATE milestones SET dispatch_note = $2, updated_at = NOW() "
-                            "WHERE id = $1::uuid AND dispatch_note IS DISTINCT FROM $2",
-                            row["milestone_id"],
-                            f"{_MAX_DISPATCH}회 보냈으나 답이 확인되지 않음 — 사람이 확인해야 한다",
-                        )
-                    gave_up += 1
-                    continue
-
                 # 보낸 뒤에 **진짜 답**이 왔는지 본다.
                 if row["dispatched_at"] is not None:
                     answered = await conn.fetchval(
@@ -679,8 +683,23 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                         row["session_id"], row["dispatched_at"],
                     )
                     if answered:
+                        await _clear_answered_block(conn, row["milestone_id"])
                         skipped += 1
                         continue
+
+                count = int(row["dispatch_count"] or 0)
+                if count >= _MAX_DISPATCH:
+                    if row["dispatched_at"] is not None:
+                        await conn.execute(
+                            "UPDATE milestones SET dispatch_blocked_at = "
+                            "COALESCE(dispatch_blocked_at, NOW()), dispatch_note = $2, "
+                            "updated_at = NOW() WHERE id = $1::uuid AND "
+                            "(dispatch_blocked_at IS NULL OR dispatch_note IS DISTINCT FROM $2)",
+                            row["milestone_id"],
+                            f"{_MAX_DISPATCH}회 보냈으나 답이 확인되지 않음 — 사람이 확인해야 한다",
+                        )
+                    gave_up += 1
+                    continue
 
                 # **보내기 전에 기록한다.** 순서가 뒤집히면 기록이 사라진다.
                 #
@@ -728,6 +747,7 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                     "UPDATE milestones SET dispatched_at = NOW(), "
                     "dispatched_session_id = $2, dispatch_count = dispatch_count + 1, "
                     "dispatch_note = NULL, load_deferred_since = NULL, "
+                    "dispatch_blocked_at = NULL, "
                     "updated_at = NOW() WHERE id = $1::uuid "
                     "  AND status = 'in_progress' "
                     "  AND (dispatched_at IS NULL "
