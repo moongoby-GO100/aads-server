@@ -7,6 +7,16 @@
 --       재시작은 채팅 전체를 끊으므로(R-DOCKER), 재시작 없이 DDL 을 DB 안에
 --       남기는 이벤트 트리거로 대신한다.
 --
+-- 적용 대상: aads, obys, litellm (contabo116 aads-postgres) / acct (jinah244)
+--
+-- SECURITY DEFINER 인 이유 (2026-09-19 보강): 이벤트 트리거 함수는 DDL 을 실행한
+--   그 역할의 권한으로 돈다. acct DB 처럼 소유자(postgres)와 앱 역할(acct_app)이
+--   다른 DB 에서는 앱이 DDL 을 칠 때 ddl_audit_log INSERT 가 권한 거부로 실패하고,
+--   **이벤트 트리거가 실패하면 원래 DDL 까지 롤백된다.** 감사 장치가 서비스를
+--   멈추게 하는 셈이다. 그래서 소유자 권한으로 고정한다.
+-- SET search_path 인 이유: 함수 본문의 ddl_audit_log 는 호출자의 search_path 로
+--   해석된다. public 이 빠진 세션이 DDL 을 치면 같은 이유로 DDL 이 막힌다.
+--
 -- 되돌리기: DROP EVENT TRIGGER trg_ddl_audit_command_end, trg_ddl_audit_drop;
 
 CREATE TABLE IF NOT EXISTS ddl_audit_log (
@@ -41,6 +51,8 @@ $$;
 CREATE OR REPLACE FUNCTION ddl_audit_command_end()
 RETURNS event_trigger
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
 AS $$
 DECLARE
     r record;
@@ -49,10 +61,10 @@ BEGIN
         CONTINUE WHEN ddl_audit_is_noise(r.schema_name, r.object_identity);
         INSERT INTO ddl_audit_log (
             event, command_tag, object_type, object_identity,
-            query, app_name, client_addr
+            query, db_user, app_name, client_addr
         ) VALUES (
             'ddl_command_end', r.command_tag, r.object_type, r.object_identity,
-            current_query(), current_setting('application_name', true), inet_client_addr()
+            current_query(), session_user, current_setting('application_name', true), inet_client_addr()
         );
     END LOOP;
 END;
@@ -61,6 +73,8 @@ $$;
 CREATE OR REPLACE FUNCTION ddl_audit_drop()
 RETURNS event_trigger
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
 AS $$
 DECLARE
     r record;
@@ -70,10 +84,10 @@ BEGIN
         CONTINUE WHEN ddl_audit_is_noise(r.schema_name, r.object_identity);
         INSERT INTO ddl_audit_log (
             event, command_tag, object_type, object_identity,
-            query, app_name, client_addr
+            query, db_user, app_name, client_addr
         ) VALUES (
             'sql_drop', tg_tag, r.object_type, r.object_identity,
-            current_query(), current_setting('application_name', true), inet_client_addr()
+            current_query(), session_user, current_setting('application_name', true), inet_client_addr()
         );
     END LOOP;
 END;
