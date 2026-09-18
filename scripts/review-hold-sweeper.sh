@@ -83,13 +83,17 @@ sql_escape() {
     printf '%s' "\$esc\$${val}\$esc\$"
 }
 
-# NULL commit_hash 를 가진 레거시 review_hold 산출물을 승인 가능한 커밋으로
-# 복구한다. 실제 변경이 없으면 빈 커밋을 만들지 않으며, 훅도 우회하지 않는다.
+# NULL commit_hash 를 가진 review_hold 산출물에 승인용 commit_hash 를 채운다.
+# 값의 출처는 오직 보존된 워크트리의 기존 HEAD 다 — 스위퍼는 새 커밋을 만들지
+# 않는다. AI 검수가 승인한 diff 는 review_hold 진입 시점의 git_diff 컬럼이므로,
+# 그 뒤 워크트리에 쌓인 미커밋 변경을 스위퍼가 임의로 커밋하면 검수받지 않은
+# 내용이 승인 큐로 올라갈 수 있다(AADS-SWEEPER-COMMITHASH-P0). 워크트리가
+# 없거나 dirty 하면 승격하지 않고 사유를 review_feedback 에 남긴다.
 RECOVERED_COMMIT_SHA=""
 ensure_review_hold_commit() {
     local job_id="$1"
     local worktree_dir="/tmp/aads-wt-${job_id}"
-    local current_sha commit_out commit_err exit_code=0 persisted_sha
+    local current_sha persisted_sha reason note
     RECOVERED_COMMIT_SHA=""
 
     persisted_sha=$(db_query "SELECT COALESCE(commit_hash,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]') || persisted_sha=""
@@ -97,75 +101,43 @@ ensure_review_hold_commit() {
         RECOVERED_COMMIT_SHA="$persisted_sha"
         return 0
     fi
+
     if [[ ! -d "$worktree_dir" ]] || [[ "$(git -C "$worktree_dir" rev-parse --is-inside-work-tree 2>/dev/null || true)" != "true" ]]; then
+        reason="워크트리 없음(${worktree_dir}) — commit_hash 를 채울 수 없어 승격하지 않음"
         log "  REVIEW_HOLD_NO_ARTIFACT ${job_id} worktree=${worktree_dir} — 승격하지 않음"
-        return 1
-    fi
-    if [[ -z "$(git -C "$worktree_dir" status --porcelain 2>/dev/null)" ]]; then
-        log "  REVIEW_HOLD_NO_ARTIFACT ${job_id} worktree=${worktree_dir} — 커밋할 변경 없음, 빈 커밋 금지"
-        return 1
-    fi
-    if ! git -C "$worktree_dir" add -A >/dev/null 2>&1; then
-        log "  REVIEW_HOLD_COMMIT_FAILED ${job_id} — stage 실패, 승격하지 않음"
-        return 1
-    fi
-    if git -C "$worktree_dir" diff --cached --quiet 2>/dev/null; then
-        log "  REVIEW_HOLD_NO_ARTIFACT ${job_id} worktree=${worktree_dir} — staged 변경 없음, 빈 커밋 금지"
-        return 1
+    elif [[ -n "$(git -C "$worktree_dir" status --porcelain 2>/dev/null)" ]]; then
+        reason="워크트리 dirty(미커밋 변경 있음) — 검수받은 diff 와 다를 수 있어 승격하지 않음"
+        log "  REVIEW_HOLD_DIRTY ${job_id} worktree=${worktree_dir} — 승격하지 않음"
+    else
+        current_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
+        if [[ "$current_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            db_exec "UPDATE pipeline_jobs SET commit_hash='${current_sha}', updated_at=NOW()
+                     WHERE job_id='${job_id}' AND status IN ('review_hold','awaiting_approval')
+                       AND commit_hash IS NULL;"
+            persisted_sha=$(db_query "SELECT COALESCE(commit_hash,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]') || persisted_sha=""
+            if [[ "$persisted_sha" == "$current_sha" ]]; then
+                RECOVERED_COMMIT_SHA="$current_sha"
+                log "  REVIEW_HOLD_COMMIT_RECOVERED ${job_id} sha=${current_sha}"
+                return 0
+            fi
+            reason="commit_hash DB 저장 확인 실패"
+            log "  REVIEW_HOLD_COMMIT_FAILED ${job_id} — ${reason}"
+        else
+            reason="워크트리에 HEAD 커밋 없음"
+            log "  REVIEW_HOLD_COMMIT_FAILED ${job_id} — ${reason}"
+        fi
     fi
 
-    commit_out=$(mktemp "/tmp/review-hold-commit-${job_id}.out.XXXXXX")
-    commit_err=$(mktemp "/tmp/review-hold-commit-${job_id}.err.XXXXXX")
-    ALLOW_AUTH_COMMIT=1 git -C "$worktree_dir" commit -m "Pipeline-Runner: ${job_id} — review_hold artifact recovery" >"$commit_out" 2>"$commit_err" || exit_code=$?
-    if [[ "$exit_code" -ne 0 ]]; then
-        log "  REVIEW_HOLD_COMMIT_FAILED ${job_id} exit=${exit_code} — $(tail -1 "$commit_err")"
-        rm -f "$commit_out" "$commit_err"
-        return 1
-    fi
-    rm -f "$commit_out" "$commit_err"
-
-    current_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
-    if [[ ! "$current_sha" =~ ^[0-9a-f]{40}$ ]]; then
-        log "  REVIEW_HOLD_COMMIT_FAILED ${job_id} — commit SHA 검증 실패, 승격하지 않음"
-        return 1
-    fi
-    db_exec "UPDATE pipeline_jobs SET commit_hash='${current_sha}', updated_at=NOW()
-             WHERE job_id='${job_id}' AND status IN ('review_hold','awaiting_approval')
-               AND commit_hash IS NULL;"
-    persisted_sha=$(db_query "SELECT COALESCE(commit_hash,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]') || persisted_sha=""
-    if [[ "$persisted_sha" != "$current_sha" ]]; then
-        log "  REVIEW_HOLD_COMMIT_FAILED ${job_id} — commit_hash DB 저장 확인 실패, 승격하지 않음"
-        return 1
-    fi
-    RECOVERED_COMMIT_SHA="$current_sha"
-    log "  REVIEW_HOLD_COMMIT_RECOVERED ${job_id} sha=${current_sha}"
-    return 0
-}
-
-# 이미 수동 회수되어 origin/main 에 반영된 AADS 사고 잡은 reject 하지 않고
-# 검증된 라이브 SHA만 보강한다. GO100 사고 잡은 남아 있는 워크트리에서 같은
-# 복구 함수를 태우며 승인/푸시/배포 상태는 건드리지 않는다.
-repair_known_commit_gap_jobs() {
-    local repo_root recovered_sha="78fef4c7" recovered_full_sha=""
-    repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-    if git -C "$repo_root" cat-file -e "${recovered_sha}^{commit}" 2>/dev/null \
-       && git -C "$repo_root" merge-base --is-ancestor "$recovered_sha" origin/main 2>/dev/null; then
-        recovered_full_sha=$(git -C "$repo_root" rev-parse "$recovered_sha" 2>/dev/null || true)
-        db_exec "UPDATE pipeline_jobs SET commit_hash='${recovered_full_sha}', updated_at=NOW()
-                 WHERE job_id='runner-061e59d7' AND commit_hash IS NULL
-                   AND status='awaiting_approval' AND length('${recovered_full_sha}')=40;"
-    fi
-    ensure_review_hold_commit "runner-2136ce20" || true
+    note=$(sql_escape "[자동재검수] 승격 보류 — ${reason}")
+    db_exec "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n' || ${note}, updated_at=NOW()
+             WHERE job_id='${job_id}' AND status='review_hold';"
+    return 1
 }
 
 # 재시도 추적 컬럼 — 멱등 생성
 db_exec "ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_retry_count INTEGER NOT NULL DEFAULT 0;"
 db_exec "ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_retry_last_at TIMESTAMPTZ;"
 db_exec "ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_request_id UUID;"
-
-if [[ "$DRY_RUN" != "1" ]]; then
-    repair_known_commit_gap_jobs
-fi
 
 select_sql="SELECT job_id, project, COALESCE(review_retry_count,0), COALESCE(chat_session_id,''), COALESCE(review_request_id::text,'')
 FROM pipeline_jobs

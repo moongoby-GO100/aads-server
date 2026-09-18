@@ -81,3 +81,61 @@ def test_review_hold_sweeper_stops_after_three_consecutive_unreachable():
     stop_log = script.index("API 도달 불가 — 이번 스위프 중단", circuit)
     stop_break = script.index("break", stop_log)
     assert gate < circuit < stop_log < stop_break
+
+
+# AADS-SWEEPER-COMMITHASH-P0: 재검수를 통과해 awaiting_approval 로 승격되는
+# 잡은 commit_hash 가 채워져 있어야 승인 API(app/api/pipeline_runner.py:1967)를
+# 통과할 수 있다. 승격 직전에 ensure_review_hold_commit 이 그 값을 보장한다.
+
+
+def test_review_hold_sweeper_promotion_is_gated_on_commit_hash():
+    script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+
+    approve = script.index('if [[ "$verdict" == "APPROVE" ]]')
+    recover = script.index('ensure_review_hold_commit "$job_id"', approve)
+    recover_fail = script.index("continue", recover)
+    promote = script.index("SET status='awaiting_approval'", recover)
+
+    assert approve < recover < recover_fail < promote
+    assert "commit_hash='${current_sha}'" in script
+
+
+def test_review_hold_sweeper_refuses_promotion_without_worktree():
+    script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+    helper = script[script.index("ensure_review_hold_commit() {"):script.index(
+        "# 재시도 추적 컬럼"
+    )]
+
+    no_worktree = helper.index('[[ ! -d "$worktree_dir" ]]')
+    reason = helper.index('reason="워크트리 없음', no_worktree)
+    refuse = helper.index("return 1", reason)
+
+    assert no_worktree < reason < refuse
+    assert "review_feedback" in helper[reason:]
+
+
+def test_review_hold_sweeper_refuses_promotion_when_worktree_dirty():
+    script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+    helper = script[script.index("ensure_review_hold_commit() {"):script.index(
+        "# 재시도 추적 컬럼"
+    )]
+
+    dirty_check = helper.index('git -C "$worktree_dir" status --porcelain')
+    dirty_reason = helper.index('reason="워크트리 dirty', dirty_check)
+
+    assert dirty_check < dirty_reason
+    assert 'git -C "$worktree_dir" commit -m' not in helper
+    assert 'git -C "$worktree_dir" add -A' not in helper
+
+
+def test_review_hold_sweeper_uses_existing_head_when_worktree_clean():
+    script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+    helper = script[script.index("ensure_review_hold_commit() {"):script.index(
+        "# 재시도 추적 컬럼"
+    )]
+
+    head_read = helper.index('git -C "$worktree_dir" rev-parse HEAD')
+    persist = helper.index("commit_hash='${current_sha}'", head_read)
+    recovered = helper.index('RECOVERED_COMMIT_SHA="$current_sha"', persist)
+
+    assert head_read < persist < recovered
