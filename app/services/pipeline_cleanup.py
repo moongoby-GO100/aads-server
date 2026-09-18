@@ -35,7 +35,12 @@ async def cleanup_stale_jobs() -> dict:
     async with pool.acquire() as conn:
         # DELETE ... RETURNING 을 CTE 로 감싸 한 문장으로 옮긴다 — 중간에 끊겨도
         # 옮기지 않은 채 지워지는 일이 없다.
-        # git_diff/logs/result_output 은 용량이 커서 뺀다 (diff 는 git 에서 복원된다).
+        # logs/result_output 은 용량이 커서 항상 뺀다.
+        # git_diff 는 원래 'git 에서 복원된다'는 전제로 항상 뺐지만, 실측(2026-09-18)
+        # 결과 pipeline_jobs_archive 1,137건 중 987건은 commit_hash 가 없는(실패·반려)
+        # 잡이라 복원할 커밋 자체가 없다. commit_hash 가 없는 잡에 한해 git_diff 를
+        # 남기되, 무한정 커지지 않도록 262144자(관측된 최대 44,752자의 여유 상한)에서
+        # 자르고 잘렸다는 표시를 남긴다. commit_hash 가 있는 잡은 기존대로 git_diff 를 뺀다.
         result = await conn.execute(
             """
             WITH moved AS (
@@ -47,7 +52,23 @@ async def cleanup_stale_jobs() -> dict:
             INSERT INTO pipeline_jobs_archive
                 (job_id, project, status, runner_host, created_at, updated_at, row_data)
             SELECT job_id, project, status, runner_host, created_at, updated_at,
-                   to_jsonb(moved) - 'git_diff' - 'logs' - 'result_output'
+                   CASE
+                       WHEN moved.commit_hash IS NULL OR moved.commit_hash = '' THEN
+                           jsonb_set(
+                               to_jsonb(moved) - 'logs' - 'result_output',
+                               '{git_diff}',
+                               to_jsonb(
+                                   CASE
+                                       WHEN length(moved.git_diff) > 262144
+                                       THEN left(moved.git_diff, 262144)
+                                            || E'\\n…[truncated at 262144 chars]'
+                                       ELSE moved.git_diff
+                                   END
+                               )
+                           )
+                       ELSE
+                           to_jsonb(moved) - 'git_diff' - 'logs' - 'result_output'
+                   END
             FROM moved
             ON CONFLICT (job_id) DO NOTHING
             """,
