@@ -7,9 +7,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-INDEX = ROOT / "app/static/apps/yeoljeong-finance/index.html"
-V2_JS = ROOT / "app/static/apps/yeoljeong-finance/modules/store-assistant-v2.js"
-V2_CSS = ROOT / "app/static/apps/yeoljeong-finance/modules/store-assistant-v2.css"
+INDEX = ROOT / "app/static/apps/obys/index.html"
+V2_JS = ROOT / "app/static/apps/obys/modules/store-assistant-v2.js"
+V2_CSS = ROOT / "app/static/apps/obys/modules/store-assistant-v2.css"
 
 
 class _Ids(HTMLParser):

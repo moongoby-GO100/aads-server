@@ -10,7 +10,7 @@
 - Reloaded `aads-nginx` after `nginx -t` passed.
 
 ## Verification
-- `https://aads.newtalk.kr/login?redirect=%2Funni-naengmyeon%2Frecipes`: `302` to `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?redirect=%2Funni-naengmyeon%2Frecipes`.
+- `https://aads.newtalk.kr/login?redirect=%2Funni-naengmyeon%2Frecipes`: `302` to `https://fb.newtalk.kr/static/apps/obys/index.html?redirect=%2Funni-naengmyeon%2Frecipes`.
 - `https://aads.newtalk.kr/login?redirect=https%3A%2F%2Ffb.newtalk.kr%2Funni-naengmyeon%2Frecipes`: `302` to the same FB store assistant URL.
 - `https://aads.newtalk.kr/login`: remains the normal AADS dashboard login.
 - `https://unni.newtalk.kr/unni-naengmyeon/recipes`: ends at the FB store assistant login page, not the AADS login page.

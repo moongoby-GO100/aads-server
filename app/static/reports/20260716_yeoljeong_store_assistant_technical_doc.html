@@ -41,7 +41,7 @@
       <table>
         <thead><tr><th>구분</th><th>현재 사용</th><th>근거 파일</th></tr></thead>
         <tbody>
-          <tr><td>프론트 언어</td><td><code>HTML</code>, <code>CSS</code>, <code>Vanilla JavaScript</code></td><td><code>app/static/apps/yeoljeong-finance/index.html</code></td></tr>
+          <tr><td>프론트 언어</td><td><code>HTML</code>, <code>CSS</code>, <code>Vanilla JavaScript</code></td><td><code>app/static/apps/obys/index.html</code></td></tr>
           <tr><td>백엔드</td><td><code>Python</code>, <code>FastAPI</code>, <code>Pydantic</code></td><td><code>app/api/yeoljeong_finance.py</code>, <code>app/services/yeoljeong_finance_service.py</code></td></tr>
           <tr><td>운영 서버</td><td>AADS 서버68, FastAPI 정적 서빙 <code>/static</code></td><td><code>app/main.py</code>의 <code>StaticFiles</code> mount</td></tr>
           <tr><td>저장소</td><td>JSON 파일 기반 원장 + 일부 PostgreSQL 설정 우선</td><td><code>app/data/yeoljeong_finance/*.json</code>, <code>migrations/113_yeoljeong_finance_settings.sql</code></td></tr>
@@ -55,9 +55,9 @@
       <table>
         <thead><tr><th>목적</th><th>소스 경로</th><th>운영 접근 경로</th></tr></thead>
         <tbody>
-          <tr><td>오비서 앱 원본</td><td><code>app/static/apps/yeoljeong-finance/index.html</code></td><td><code>/static/apps/yeoljeong-finance/index.html</code></td></tr>
-          <tr><td>프론트 모듈 매니페스트</td><td><code>app/static/apps/yeoljeong-finance/modules/app-config.js</code></td><td><code>/static/apps/yeoljeong-finance/modules/app-config.js</code></td></tr>
-          <tr><td>대시보드 공개 복사본</td><td><code>/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html</code></td><td><code>/apps/yeoljeong-finance/index.html</code></td></tr>
+          <tr><td>오비서 앱 원본</td><td><code>app/static/apps/obys/index.html</code></td><td><code>/static/apps/obys/index.html</code></td></tr>
+          <tr><td>프론트 모듈 매니페스트</td><td><code>app/static/apps/obys/modules/app-config.js</code></td><td><code>/static/apps/obys/modules/app-config.js</code></td></tr>
+          <tr><td>대시보드 공개 복사본</td><td><code>/root/aads/aads-dashboard/public/apps/obys/index.html</code></td><td><code>/apps/obys/index.html</code></td></tr>
           <tr><td>문서 원본</td><td><code>app/static/reports/20260716_yeoljeong_store_assistant_*.html</code></td><td><code>/static/reports/20260716_yeoljeong_store_assistant_*.html</code></td></tr>
           <tr><td>대시보드 문서 복사본</td><td><code>/root/aads/aads-dashboard/public/reports/20260716_yeoljeong_store_assistant_*.html</code></td><td><code>/public/reports/20260716_yeoljeong_store_assistant_*.html</code></td></tr>
         </tbody>
@@ -77,16 +77,16 @@
     <section>
       <h2>4. 업데이트 관리 절차</h2>
       <ol>
-        <li>앱 수정은 <code>app/static/apps/yeoljeong-finance/index.html</code>을 기준으로 진행합니다.</li>
+        <li>앱 수정은 <code>app/static/apps/obys/index.html</code>을 기준으로 진행합니다.</li>
         <li>기능 분리는 <code>modules/app-config.js</code>에 대상 모듈을 먼저 등록한 뒤, 인증/설정/직원/계약/급여/배달 수집 순서로 외부 모듈 파일로 이동합니다.</li>
-        <li>운영 노출 복사본 <code>/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html</code>과 <code>/root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/index.html</code>을 동기화합니다.</li>
+        <li>운영 노출 복사본 <code>/root/aads/aads-dashboard/public/apps/obys/index.html</code>과 <code>/root/aads/aads-dashboard/public/static/apps/obys/index.html</code>을 동기화합니다.</li>
         <li>문서 수정은 <code>app/static/reports</code> 원본을 먼저 갱신한 뒤 <code>public/reports</code>로 복사합니다.</li>
         <li>검증은 최소 <code>python3 -m py_compile</code>, HTML inline script parser, 공개 URL 마커 확인을 수행합니다.</li>
         <li>작업 내역은 <code>HANDOVER.md</code>에 KST 시각과 함께 남깁니다.</li>
       </ol>
       <pre>python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py
 node --check /tmp/yeoljeong-finance-script.js
-curl -fsSL https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html</pre>
+curl -fsSL https://fb.newtalk.kr/static/apps/obys/index.html</pre>
     </section>
 
     <section>

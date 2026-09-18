@@ -16,7 +16,7 @@
 | 포털 collector | `app/services/yeoljeong_delivery_collectors.py` | 배민, 쿠팡이츠, 요기요, 땡겨요 `PORTAL_CONFIG`와 `sales/settlements/reviews/ads` 파서 보유 |
 | orchestration | `app/services/yeoljeong_finance_service.py` | 계정 선택, 권한 체크, PC Agent work session, lock, 상태 원장, 원장 upsert 담당 |
 | 자동 실행 CLI | `scripts/yeoljeong_auto_collect.py` | 전체 지점/서비스 루프, 타임아웃, retry, blocked 상태 분류, 은행/금융 계정 동시 수집 옵션 보유 |
-| UI | `app/static/apps/yeoljeong-finance/index.html` | 판매채널 등록, 준비상태, 수집 실행, 업로드 폴백 화면 존재 |
+| UI | `app/static/apps/obys/index.html` | 판매채널 등록, 준비상태, 수집 실행, 업로드 폴백 화면 존재 |
 | 테스트 | `tests/unit/test_yeoljeong_delivery_collectors.py`, `tests/unit/test_yeoljeong_finance_service.py` | 4개 포털 구성, 결정적 정규화, PC Agent 세션 우선, all scope 수집, stale session 재생성 검증 |
 
 ## 3. 목표
@@ -62,7 +62,7 @@ CEO/매장비서 UI
 
 | 계층 | 책임 | 대표 파일 |
 |------|------|-----------|
-| UI/Command | 수집 범위, 채널, 기간, 수동 업로드 입력 | `app/static/apps/yeoljeong-finance/index.html`, `scripts/yeoljeong_auto_collect.py` |
+| UI/Command | 수집 범위, 채널, 기간, 수동 업로드 입력 | `app/static/apps/obys/index.html`, `scripts/yeoljeong_auto_collect.py` |
 | Orchestrator | 권한, 지점 scope, 계정 선택, lock, retry/status, 원장 병합 | `app/services/yeoljeong_finance_service.py` |
 | Browser Session | PC Agent work key 생성, session 재사용/재생성, 일반 Chrome 보호 | `app/services/yeoljeong_finance_service.py`, `app/services/pc_agent_manager.py`, `pc_agent/commands/browser_auto.py` |
 | Collector Adapter | 포털별 URL, selector, export/copy/table 파싱 | `app/services/yeoljeong_delivery_collectors.py` |

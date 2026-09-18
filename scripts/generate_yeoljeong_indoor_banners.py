@@ -94,7 +94,7 @@ def save_meta(name: str, image: Image.Image, physical_mm: tuple[int, int], role:
     image.save(path, dpi=(DPI, DPI), optimize=True)
     return {
         "file": name,
-        "url": f"/static/apps/yeoljeong-finance/assets/prints/{name}",
+        "url": f"/static/apps/obys/assets/prints/{name}",
         "pixels": list(image.size),
         "dpi": DPI,
         "physical_mm": list(physical_mm),

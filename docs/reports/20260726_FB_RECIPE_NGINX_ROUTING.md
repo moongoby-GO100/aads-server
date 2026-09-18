@@ -15,7 +15,7 @@
 - `docker exec aads-nginx nginx -t`: passed
 - `https://fb.newtalk.kr/unni-naengmyeon/recipes`: `307` to `/login?redirect=%2Funni-naengmyeon%2Frecipes`
 - `https://fb.newtalk.kr/login?redirect=%2Funni-naengmyeon%2Frecipes`: `200`
-- `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=20260722.2135`: `200`
+- `https://fb.newtalk.kr/static/apps/obys/index.html?v=20260722.2135`: `200`
 - `https://unni.newtalk.kr/unni-naengmyeon/recipes`: `307` to `https://fb.newtalk.kr/unni-naengmyeon/recipes`
 
 ## Notes

@@ -24,7 +24,7 @@
 | `app/services/yeoljeong_bank_browser_connector.py` | 1 (신설) + 2 (수정) | +367 → +120/-30 | 브라우저 커넥터 핵심 모듈 |
 | `app/services/yeoljeong_finance_service.py` | 1 | +190/-18 | browser 연결 타입 라우팅 추가 |
 | `app/api/yeoljeong_finance.py` | 1 | +4 | browser_session_id/browser_work_key 페이로드 |
-| `app/static/apps/yeoljeong-finance/index.html` | 1 | +49/-5 | 매장비서 정적 UI: isActionRequired 분기 + collectBody 브라우저 필드 |
+| `app/static/apps/obys/index.html` | 1 | +49/-5 | 매장비서 정적 UI: isActionRequired 분기 + collectBody 브라우저 필드 |
 | `deploy.sh` | 1 | +57/-1 | 다운타임 측정 프로브 |
 | `tests/unit/test_bank_browser_connector.py` | 1 (신설) | +468 | 38개 단위 테스트 |
 | `tests/unit/test_yeoljeong_bank_browser_connector.py` | 1 (신설) + 2 (수정) | +589 → +111 | 22→28개 (6개 추가) |
@@ -87,7 +87,7 @@
 
 ### 매장비서 정적 UI 연결 상세 확인
 
-이번 P0 작업에서 `app/static/apps/yeoljeong-finance/index.html`에 다음 3가지를 구현했다:
+이번 P0 작업에서 `app/static/apps/obys/index.html`에 다음 3가지를 구현했다:
 
 | 변경 항목 | 코드 근거 | 코드 완료 여부 | 실E2E 여부 |
 |-----------|----------|--------------|----------|

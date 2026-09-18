@@ -45,7 +45,7 @@
 <h2>1. 현황 실측 (2026-09-17 17:1x~17:2x KST)</h2>
 <table>
   <tr><th style="width:26%">확인 항목</th><th style="width:34%">방법</th><th>결과</th></tr>
-  <tr><td>가입 화면</td><td><code>GET https://fb.newtalk.kr/</code></td><td class="ok">302 → <code>/static/apps/yeoljeong-finance/index.html</code>, 로그인 게이트에 “직원 회원가입” 진입점 존재 (index.html:2457, 4469~4505)</td></tr>
+  <tr><td>가입 화면</td><td><code>GET https://fb.newtalk.kr/</code></td><td class="ok">302 → <code>/static/apps/obys/index.html</code>, 로그인 게이트에 “직원 회원가입” 진입점 존재 (index.html:2457, 4469~4505)</td></tr>
   <tr><td>가입 API 입력검증</td><td><code>POST /api/v1/auth/register</code> (password 누락)</td><td class="ok">422 <code>Field required</code></td></tr>
   <tr><td>실제 가입 E2E</td><td>정상 payload 로 신규 계정 생성</td><td class="ok">200 — JWT·user_id·tenant_id 발급, <code>onboarding_required=true</code></td></tr>
   <tr><td>가입 계정 로그인</td><td><code>POST /api/v1/auth/login</code></td><td class="ok">200 — 동일 계정 토큰 재발급</td></tr>
@@ -130,7 +130,7 @@
   <tr><td>운영 중 변경</td><td>register 는 현재 살아 있는 경로다. 스키마 추가 → 이중 경로 지원 → 구 경로 차단 순서로 배포하고, 각 단계마다 실제 가입 1건으로 검증한다</td></tr>
 </table>
 
-<p class="src" style="margin-top:34px">근거: contabo116 컨테이너 실측, aads DB 조회, <code>app/api/auth.py</code>·<code>app/api/yeoljeong_finance.py</code>·<code>app/static/apps/yeoljeong-finance/index.html</code> 코드 확인 (2026-09-17 17:1x~17:2x KST). 점검용으로 생성한 계정 1건은 같은 세션에서 삭제했다.</p>
+<p class="src" style="margin-top:34px">근거: contabo116 컨테이너 실측, aads DB 조회, <code>app/api/auth.py</code>·<code>app/api/yeoljeong_finance.py</code>·<code>app/static/apps/obys/index.html</code> 코드 확인 (2026-09-17 17:1x~17:2x KST). 점검용으로 생성한 계정 1건은 같은 세션에서 삭제했다.</p>
 
 </div>
 </body>

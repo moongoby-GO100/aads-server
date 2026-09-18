@@ -3628,7 +3628,7 @@ from __
 ## [2026-07-16 10:07:02 KST] [aads-server] app/services/chat_service.py
 - Chat-Direct 수정: patch:         tenant_uuid = _require_tenant_uu→        tenant_uuid = _require_tenant_uu
 
-## [2026-07-16 10:10:01 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+## [2026-07-16 10:10:01 KST] [aads-server] app/static/apps/obys/index.html
 - Chat-Direct 수정: 매장비서 계약서 미리보기를 A4 출력 문서 레이아웃으로 보강하고 표준근로계약서/3.3% 프리랜서 용역계약서 조항 분기 및 `A4 인쇄/PDF` 버튼을 추가.
 
 ## [2026-07-16 10:10:01 KST] [aads-server] app/services/yeoljeong_finance_service.py
@@ -3658,12 +3658,12 @@ from __
 - Chat-Direct 수정: 매장비서 기술문서의 AADS 대시보드 공개 경로를 실제 200 응답 경로인 `/public/reports/...`로 보정.
 
 ## [2026-07-16 11:08:28 KST] [aads-server] app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html
-- Chat-Direct 수정: 문서 인덱스의 매장비서 앱 링크를 대시보드 도메인에서도 깨지지 않도록 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`로 보정.
+- Chat-Direct 수정: 문서 인덱스의 매장비서 앱 링크를 대시보드 도메인에서도 깨지지 않도록 `https://fb.newtalk.kr/static/apps/obys/index.html`로 보정.
 
 ## [2026-07-16 11:08:28 KST] [aads-server] HANDOVER.md
 - Chat-Direct 수정: `document_report_unverified_by_ledger` 지적에 따른 문서/링크/URL/문법 재검증 결과와 미배포 제한사항을 ledger에 추가 기록.
 
-## [2026-07-16 11:12:51 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+## [2026-07-16 11:12:51 KST] [aads-server] app/static/apps/obys/index.html
 - Chat-Direct 수정: 매장비서 앱 상단 `기획` 링크를 검증된 `20260716_yeoljeong_store_assistant_architecture_design_plan.html` 경로로 통일.
 
 ## [2026-07-16 11:12:51 KST] [aads-server] app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html
@@ -4145,7 +4145,7 @@ def mock_d
 ## 2026-07-28 07:00 KST
 
 ## [2026-07-29 07:13:22 KST] [aads-server] docs/HANDOVER.md
-- Chat-Direct 수정: run_remote_command: curl -I https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html
+- Chat-Direct 수정: run_remote_command: curl -I https://fb.newtalk.kr/static/apps/obys/mockup-v2.html
 
 ## [2026-07-30 08:28:49 KST] [aads-server] tests/unit/test_yeoljeong_finance_print_static.py
 - Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -t -A -F"|" -c "SELECT s.id, s.cr
@@ -4180,7 +4180,7 @@ def mock_d
 ## [2026-07-30 09:23:53 KST] [aads-server] app/services/loop_executor.py
 - Chat-Direct 수정: write: app/services/loop_executor.py
 
-## [2026-07-30 09:24:06 KST] [aads-server] app/static/apps/yeoljeong-finance/mockup-v2.html
+## [2026-07-30 09:24:06 KST] [aads-server] app/static/apps/obys/mockup-v2.html
 - Chat-Direct 수정: run_remote_command: grep -n "parallel_group\|depends_on\|_project_locks\|lock\|conflict\|concurrent\
 
 ## [2026-07-30 09:26:21 KST] [aads-server] app/services/model_selector.py
@@ -4207,10 +4207,10 @@ async def test():
 ## [2026-07-30 09:34:00 KST] [aads-server] app/data/yeoljeong_finance/settings.json
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
 
-## [2026-07-30 09:34:07 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+## [2026-07-30 09:34:07 KST] [aads-server] app/static/apps/obys/index.html
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
 
-## [2026-07-30 09:34:12 KST] [aads-server] app/static/apps/yeoljeong-finance/mockup-v2.html
+## [2026-07-30 09:34:12 KST] [aads-server] app/static/apps/obys/mockup-v2.html
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
 
 ## [2026-07-30 09:34:18 KST] [aads-server] app/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html
@@ -4885,7 +4885,7 @@ fro
 ## [2026-08-18 19:52:07 KST] [aads-server] app/main.py
 - Chat-Direct 수정: patch: app.include_router(project_docs_router, →app.include_router(project_docs_router, 
 
-## [2026-08-18 19:55:48 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+## [2026-08-18 19:55:48 KST] [aads-server] app/static/apps/obys/index.html
 - Chat-Direct 수정: run_remote_command: ls -la /root/aads/aads-server/app/api/files.py /root/aads/aads-dashboard/src/lib
 
 ## [2026-08-18 19:59:27 KST] [aads-server] app/main.py
@@ -5694,20 +5694,20 @@ from app.services.yeoljeong_fin
 ## [2026-08-27 11:46:32 KST] [aads-server] pc_agent/commands/browser_auto.py
 - Chat-Direct 수정: run_remote_command: ls -l /root/aads/aads-server/.delivery_sync.lock
 
-## [2026-08-27 11:54:39 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+## [2026-08-27 11:54:39 KST] [aads-server] app/static/apps/obys/index.html
 - Chat-Direct 수정: run_remote_command: date
 
-## [2026-08-27 12:43:57 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+## [2026-08-27 12:43:57 KST] [aads-server] app/static/apps/obys/index.html
 - Chat-Direct 수정: patch:     let deliverySettlements = Array.isAr→    let deliverySettlements = Array.isAr
 
-## [2026-08-27 12:45:00 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+## [2026-08-27 12:45:00 KST] [aads-server] app/static/apps/obys/index.html
 - Chat-Direct 수정: patch:       saveState();
       renderAll();
   →      saveState();
       renderAll();
 
 
-## [2026-08-27 12:52:19 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+## [2026-08-27 12:52:19 KST] [aads-server] app/static/apps/obys/index.html
 - Chat-Direct 수정: 판매채널 DB 원장 연동 UI 보강. `/sales`, `/settlements`, `/reviews`, `/collection-status`를 함께 불러와 판매채널 수집 현황 KPI, 사업자·지점별 원장 테이블, 자동수집 점검표에 DB 건수/금액/최신상태/조치 버튼을 표시.
 
 ## [2026-08-30 20:03:39 KST] [aads-server] , r.scalar())\n            except Exception as e:\n                print(sql, ERR, type(e).__name__, e)\n                await db.rollback()\nasyncio.run(main())\nPY

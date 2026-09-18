@@ -1725,7 +1725,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - Changes:
   - `docker-compose.prod.yml`: reserves `62405e70-e98` (`DANHAROO-MAIN`) as the bank auto-collect default and excludes it from delivery auto-collect; excludes the delivery PC from bank auto-collect.
   - `app/main.py` and `scripts/yeoljeong_auto_collect.py`: removed fallback from bank agent selection to `YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID`.
-  - `app/services/yeoljeong_bank_browser_connector.py`, `app/services/yeoljeong_finance_service.py`, and `app/static/apps/yeoljeong-finance/index.html`: changed Shinhan business easyview defaults to the exact hash login URL.
+  - `app/services/yeoljeong_bank_browser_connector.py`, `app/services/yeoljeong_finance_service.py`, and `app/static/apps/obys/index.html`: changed Shinhan business easyview defaults to the exact hash login URL.
   - Regression tests added for DANHAROO-MAIN bank reservation, delivery exclusion, no bank-to-delivery fallback, and existing financial-exclusive runtime contract.
 - Verification before commit:
   - `python3 -m py_compile app/main.py app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` passed.
@@ -1756,7 +1756,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - Proceed with the next step: remove remaining `bizbank.shinhan.com` defaults, store/use `https://bank.shinhan.com/rib/easy/index.jsp#210000000000` for Shinhan business easy account inquiry, and keep the banking collector on the Windows Collector runtime contract.
 - Changes:
   - `app/services/authenticated_site_collector.py`: added Shinhan easyview constants, canonicalizes `BANKING/shinhan.easyview` profiles to `https://bank.shinhan.com`, stores the exact hash login/entry URL in metadata, records `bizbank.shinhan.com` as a forbidden legacy origin, and exposes this in the financial runtime contract's `entry_url_policy`.
-  - `app/static/apps/yeoljeong-finance/index.html` and `mockup-v2.html`: changed Shinhan default login URL from `bizbank.shinhan.com` to `https://bank.shinhan.com/rib/easy/index.jsp#210000000000`; the default collection mode is now `bank-quick-service`.
+  - `app/static/apps/obys/index.html` and `mockup-v2.html`: changed Shinhan default login URL from `bizbank.shinhan.com` to `https://bank.shinhan.com/rib/easy/index.jsp#210000000000`; the default collection mode is now `bank-quick-service`.
   - `app/services/yeoljeong_bank_browser_connector.py`: kept the ID/PW-ready guard so a main page already on `#210000000000` ignores stale YESKEY/fincert tabs instead of cycling back into certificate handling.
   - Tests updated to assert Windows Collector financial-exclusive execution, Shinhan entry URL policy, legacy `bizbank` canonicalization, and stale fincert-tab ignore behavior.
 - Verification before commit:
@@ -3054,7 +3054,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - The finance service reads DB ledger tables first and seeds missing file rows into DB when needed.
   - Live PostgreSQL counts at 12:47 KST: sales 816, settlements 999, reviews 2,147, collection status 3,233.
 - Changes:
-  - `app/static/apps/yeoljeong-finance/index.html`: the integrations page now loads sales, reviews, settlements, and collection statuses together instead of settlements only.
+  - `app/static/apps/obys/index.html`: the integrations page now loads sales, reviews, settlements, and collection statuses together instead of settlements only.
   - Added sales channel ledger summary KPIs/table and refresh action using DB ledger API results.
   - Sales channel readiness rows now show collected DB sales/settlement/review counts, amounts, last collection status, and actionable next steps per service/business/branch.
   - Sales operations summary now separates local/manual sales from DB-collected sales so accounting totals are not silently double-counted.
@@ -3667,13 +3667,13 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `app/services/yeoljeong_finance_service.py`: added file-based bank account and bank transaction ledgers, owner-only file writes, masked account-number handling, sensitive-key rejection, idempotent transaction import by `source_hash`, date/direction filters, and bank summary aggregation.
   - `app/services/yeoljeong_finance_service.py`: added Korean bank CSV parsing into the dedicated bank ledger, with deposit/withdrawal header mapping and idempotent duplicate exclusion.
   - `app/api/yeoljeong_finance.py`: added bank account create/list/update, bank transaction manual/import/list, and bank summary endpoints under the existing Yeoljeong finance router.
-  - `app/static/apps/yeoljeong-finance/index.html`: linked the store assistant UI to server bank accounts, bank summary, bank-account selection, and bank-ledger CSV import from the existing import modal.
+  - `app/static/apps/obys/index.html`: linked the store assistant UI to server bank accounts, bank summary, bank-account selection, and bank-ledger CSV import from the existing import modal.
   - `tests/unit/test_yeoljeong_finance_service.py` and `tests/unit/test_yeoljeong_finance_api.py`: added targeted regression coverage for masking, permissions, validation, idempotency, filtering, summary totals, CSV import, API flow, and sensitive payload rejection.
   - `docs/handover-notes/2026-08-20_yeoljeong_bank_sync_phase1.md`: added detailed phase 1 handover and explicit out-of-scope items.
 - Verification:
   - `.venv-playwright/bin/python -m compileall app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` passed.
   - `.venv-playwright/bin/python -m pytest` for 16 new bank service/API tests passed: 16 passed in 2.10s.
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` passed.
+  - `python3 -m html.parser app/static/apps/obys/index.html` passed.
   - Inline JS syntax check passed: `inline-script-ok 1`.
   - Full two-file pytest run was not used as the final signal because it pulled in older non-bank tests and ran long; the targeted new-bank suite was used as the acceptance check.
 - Deployment status:
@@ -4247,12 +4247,12 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - Request: Make the integration detail filters match the existing category/status design and clarify why Jungwha branch rows appear in a lower list.
 - Changes:
-  - `app/static/apps/yeoljeong-finance/index.html`: restyled the service and business/branch multi-select filters as compact dropdown controls with selected-count badges, hardened the hidden native multi-select fallback, and wrapped the filter row in the same restrained panel language used by the category/status controls.
-  - `app/static/apps/yeoljeong-finance/index.html`: renamed the lower sales-channel section to `판매채널 자동수집 점검표`, added copy clarifying that it is not the main integration list, and added summary badges for total check rows, registered accounts, ready rows, blocked rows, and missing rows.
+  - `app/static/apps/obys/index.html`: restyled the service and business/branch multi-select filters as compact dropdown controls with selected-count badges, hardened the hidden native multi-select fallback, and wrapped the filter row in the same restrained panel language used by the category/status controls.
+  - `app/static/apps/obys/index.html`: renamed the lower sales-channel section to `판매채널 자동수집 점검표`, added copy clarifying that it is not the main integration list, and added summary badges for total check rows, registered accounts, ready rows, blocked rows, and missing rows.
   - `app/services/yeoljeong_finance_service.py`: fixed delivery account selection so canonical service accounts win over stale duplicate rows when otherwise equally eligible, while still preferring non-upload/browser-capable accounts over upload placeholders.
 - Verification:
   - `node -e ... new Function(inline script)` passed: 1 inline script parsed.
-  - `git diff --check -- app/static/apps/yeoljeong-finance/index.html app/services/yeoljeong_finance_service.py` passed.
+  - `git diff --check -- app/static/apps/obys/index.html app/services/yeoljeong_finance_service.py` passed.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_service.py` passed: 81 passed.
   - DB check: `yeoljeong_platform_accounts` contains Jungwha rows for Baemin 5, IBK business 2, and Shinhan business 1.
 - Status:
@@ -4263,10 +4263,10 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - Request: Make the integration filters match the existing category/status design and explain why Jungwha branch rows were separated in the lower list.
 - Changes:
-  - `app/static/apps/yeoljeong-finance/index.html`: reuses the resolved server auth token from `aads_token`, `fb_access_token`, and both cookies; refreshes the server session before auto-loading integration accounts; clears stale auth on 401/403 so the app does not show the local fallback list as if it were complete.
+  - `app/static/apps/obys/index.html`: reuses the resolved server auth token from `aads_token`, `fb_access_token`, and both cookies; refreshes the server session before auto-loading integration accounts; clears stale auth on 401/403 so the app does not show the local fallback list as if it were complete.
   - `tests/unit/test_yeoljeong_finance_api.py`: updated the existing redirect/auth-cookie regression to validate the shared `serverAuthToken()` resolver instead of a removed inline expression.
 - Verification:
-  - `curl -L https://fb.newtalk.kr/apps/yeoljeong-finance` contains `multi-select-control`, `판매채널 자동수집 준비 현황`, and `ensureServerAccountsForIntegrations`.
+  - `curl -L https://fb.newtalk.kr/apps/obys` contains `multi-select-control`, `판매채널 자동수집 준비 현황`, and `ensureServerAccountsForIntegrations`.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py` passed: 5 passed.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py` passed after copying the current test file into the running container test path: 19 passed.
   - Active and green backend health checks on `127.0.0.1:8100/health` and `127.0.0.1:8102/health` returned `status: ok`.
@@ -4278,14 +4278,14 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - Request: Fix the integration detail list showing only four Mia branch rows, add multi-select dropdowns for service and business/branch, and prepare sales-channel-first collection status checks per business and sales site.
 - Changes:
-  - `app/static/apps/yeoljeong-finance/index.html`: added service and business/branch multi-select filters, query filtering, server account auto-refresh when entering the integration view, branch-scoped integration filtering, and a sales-channel readiness table with per-row collection/action buttons.
+  - `app/static/apps/obys/index.html`: added service and business/branch multi-select filters, query filtering, server account auto-refresh when entering the integration view, branch-scoped integration filtering, and a sales-channel readiness table with per-row collection/action buttons.
   - `tests/unit/test_yeoljeong_finance_print_static.py`: added static regression assertions for the new filters, server-account refresh hook, and row-level sync CTAs.
 - Verification:
   - Commit `c9c2cd86 fix(food): show branch-scoped integration filters` is pushed to `origin/main`.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py` passed: 5 passed.
   - Inline script syntax check passed through `node --check`.
   - Active slot `aads-server` on `127.0.0.1:8100` is healthy and serves the new HTML with `integrationServiceFilter`, `integrationBusinessBranchFilter`, `ensureServerAccountsForIntegrations`, `salesChannelReadinessRows`, and `data-sync-integration-id`.
-  - Production `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` HTTP 200, last-modified `Tue, 18 Aug 2026 09:43:51 GMT`, and contains the new filter/readiness markers.
+  - Production `https://fb.newtalk.kr/static/apps/obys/index.html` HTTP 200, last-modified `Tue, 18 Aug 2026 09:43:51 GMT`, and contains the new filter/readiness markers.
   - Playwright smoke check on the active slot found desktop/mobile page errors 0 and the new filter/readiness DOM nodes present.
 - Data finding:
   - Local platform account ledger currently has `중화점` rows: Baemin 5, IBK business 2, Shinhan business 1. Several rows still require credentials, portal action, or upload fallback before live collection can succeed.
@@ -4319,7 +4319,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `yeoljeong_platform_accounts` contains active Jungwha/Baemin row `83c5b12f-0b3d-46b6-bcbe-b5c00dc0fd51` with `business_id=biz-junghwa`, `branch=중화점`, `username=yunhee1`, `collection_mode=browser-automation`.
   - The DB payload intentionally excludes secret fields. The protected `platform_accounts.json` row for `yunhee1` currently has no `password_enc`, so live collection stops at `credential_required`.
 - Changes committed and pushed:
-  - `app/static/apps/yeoljeong-finance/index.html`: stopped forcing delivery integrations to Mia business scope; selected branch/business scope is preserved.
+  - `app/static/apps/obys/index.html`: stopped forcing delivery integrations to Mia business scope; selected branch/business scope is preserved.
   - `app/services/yeoljeong_finance_service.py`: delivery sync now prefers a matching saved browser-automation account over the canonical `acct-baemin` upload placeholder.
   - Regression tests added in `tests/unit/test_yeoljeong_finance_api.py` and `tests/unit/test_yeoljeong_finance_service.py`.
 - Verification:
@@ -4375,7 +4375,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - Request: Continue the interrupted deploy/E2E step and report whether the Yeoljeong finance integration settings screen is actually reflected in production.
 - Confirmed:
   - `HEAD` and `origin/main` both point to `bce3f452 fix(food): settle integration save fallback status`.
-  - External production HTML `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` returns HTTP 200 and contains `fallbackSyncStatus`, `persistInitialNormalizedSettings`, stale-running recovery text, and the fallback sync message.
+  - External production HTML `https://fb.newtalk.kr/static/apps/obys/index.html` returns HTTP 200 and contains `fallbackSyncStatus`, `persistInitialNormalizedSettings`, stale-running recovery text, and the fallback sync message.
   - `aads-server:8100`, `aads-server-green:8102`, `aads-dashboard`, and `aads-dashboard-green` are healthy.
 - Final data correction:
   - `app/data/yeoljeong_finance/settings.json` still had one default Mia Baemin UI integration with `lastSyncStatus=running` and `portalStatus=running`.
@@ -4397,13 +4397,13 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - Because of that, stale `running` fields could be hidden or overwritten before the stale-state normalizer and row rendering verified the actual user state.
   - Server `list_accounts()` returned public normalized status, but did not persist stale `running` rows back to the protected platform account ledger.
 - Changes:
-  - `app/static/apps/yeoljeong-finance/index.html`: changed integration/settings merge so existing items override defaults by id while still adding default rows when missing.
+  - `app/static/apps/obys/index.html`: changed integration/settings merge so existing items override defaults by id while still adding default rows when missing.
   - `app/services/yeoljeong_finance_service.py`: `list_accounts()` now persists stale `running` account statuses to `credential_required`, `upload_required`, or `blocked` when the 60s live window has passed.
   - `tests/unit/test_yeoljeong_finance_print_static.py`: added a regression assertion for existing-item merge precedence.
   - `tests/unit/test_yeoljeong_finance_service.py`: added persistence assertions for stale `running` normalization.
 - Verification:
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py -q` -> 65 passed.
-  - Production browser E2E on `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html#integrations`: forced stale `running` state for `int-baemin` and `int-marketbom`, ran deployed JS normalizer/render, observed `credential_required` and `upload_required`; row text had no `실행중`.
+  - Production browser E2E on `https://fb.newtalk.kr/static/apps/obys/index.html#integrations`: forced stale `running` state for `int-baemin` and `int-marketbom`, ran deployed JS normalizer/render, observed `credential_required` and `upload_required`; row text had no `실행중`.
   - External production API E2E with JWT: `GET https://fb.newtalk.kr/api/v1/yeoljeong-finance/accounts` -> HTTP 200, 8 accounts, `running_count=0`, `secret_leak_count=0`.
   - External static verification: deployed HTML contains `normalizeStaleIntegrationSyncStatuses`, both stale-recovery messages, and `연동 응답 지연`.
 - Deploy:
@@ -4419,14 +4419,14 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - The production static file was already pushed, but the detailed integration table had a duplicate older button template that did not switch its label to "실행중...".
   - A failed or blocked API request could leave the optimistic row state as `running`, so the screen still looked stuck.
 - Changes:
-  - `app/static/apps/yeoljeong-finance/index.html`: added 15s `financeApi()` abort handling for stalled yeoljeong-finance API calls.
-  - `app/static/apps/yeoljeong-finance/index.html`: updated the detailed integration table action buttons to show `실행중...` while the clicked row is running.
-  - `app/static/apps/yeoljeong-finance/index.html`: added `integrationSyncTimers` watchdog that converts a row from `running` to `확인필요` with `연동 응답 지연: 서버 응답이 없어 확인이 필요합니다.` after 20s with no result.
+  - `app/static/apps/obys/index.html`: added 15s `financeApi()` abort handling for stalled yeoljeong-finance API calls.
+  - `app/static/apps/obys/index.html`: updated the detailed integration table action buttons to show `실행중...` while the clicked row is running.
+  - `app/static/apps/obys/index.html`: added `integrationSyncTimers` watchdog that converts a row from `running` to `확인필요` with `연동 응답 지연: 서버 응답이 없어 확인이 필요합니다.` after 20s with no result.
   - `tests/unit/test_yeoljeong_finance_print_static.py`: added static regression assertions for timeout/watchdog/dynamic button text.
 - Verification:
   - Host JS syntax check passed: extracted inline script from `index.html` and ran `node --check /tmp/yeoljeong-index-script.js`.
   - Container pytest passed: `docker exec aads-server sh -lc "python -m pytest tests/unit/test_yeoljeong_finance_print_static.py -q"` -> 5 passed.
-  - External production static check passed: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=227676e4` contains `integrationSyncTimers`, `연동 응답 지연`, `API 응답 지연`, and both detailed/card row dynamic `실행중...` button templates.
+  - External production static check passed: `https://fb.newtalk.kr/static/apps/obys/index.html?v=227676e4` contains `integrationSyncTimers`, `연동 응답 지연`, `API 응답 지연`, and both detailed/card row dynamic `실행중...` button templates.
   - Direct Browser Bridge E2E passed on production URL with E2E local token: opened `#auth-invite`, clicked first `[data-sync-integration-id]`, observed row button change to `실행중...`, waited 24s, then observed the same row recover to `확인필요` with `연동 응답 지연: 서버 응답이 없어 확인이 필요합니다.`
 - Deploy:
   - Commits pushed to `origin/main`: `db28144c fix(food): keep integration sync feedback responsive`, `227676e4 fix(food): prevent stuck integration sync state`.
@@ -4440,10 +4440,10 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - Request: CEO reported that the previous final report conflicted with commit/push/deploy/document ledgers and that clicking "저장 후 연동 실행" still appeared to do nothing.
 - Verified:
   - `HEAD` and `origin/main` matched `679991cb0ddba158dfaa0a648e4d11d9692c28be` before this follow-up patch.
-  - Production `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` returned HTTP 200 and contained the prior sync feedback markers.
+  - Production `https://fb.newtalk.kr/static/apps/obys/index.html` returned HTTP 200 and contained the prior sync feedback markers.
   - AADS blue/green containers were healthy.
 - Fix:
-  - `app/static/apps/yeoljeong-finance/index.html`
+  - `app/static/apps/obys/index.html`
     - Added `previewIntegrationFromForm()` so a new integration row is shown as `running` immediately before server save/sync returns.
     - Updated save flow to reuse the optimistic row instead of creating a duplicate after server response.
     - Added a click handler for `[data-integration-connect-form] button[type='submit']` so the drawer status changes immediately to "저장 후 연동 실행 요청을 접수했습니다." and shows a clear required-field message when browser validation blocks submit.
@@ -4464,13 +4464,13 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - Changes:
   - `app/api/yeoljeong_finance.py`: `SyncPayload` now accepts `account_id`; account upsert auto-sync now passes the saved account id for both delivery and bank/card sync.
   - `app/services/yeoljeong_finance_service.py`: financial account matching and delivery account candidate selection now filter by explicit `account_id` when provided.
-  - `app/static/apps/yeoljeong-finance/index.html`: row action buttons now use `type="button"`, show "실행중..." while running, pass `account_id` from `serverAccountId`, return sync results, and write blocked/failure messages back to the row instead of leaving the screen unchanged.
+  - `app/static/apps/obys/index.html`: row action buttons now use `type="button"`, show "실행중..." while running, pass `account_id` from `serverAccountId`, return sync results, and write blocked/failure messages back to the row instead of leaving the screen unchanged.
   - `tests/unit/test_yeoljeong_finance_api.py`: updated auto-sync regression expectations to include the saved account id.
 - Verification:
   - Host syntax check passed: `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_print_static.py`.
   - Host JS syntax check passed: extracted inline script from `index.html` and ran `node --check /tmp/yeoljeong-finance-index.js`.
   - Current-image pytest with host repo mounted passed: `docker run --rm -e JWT_SECRET_KEY=test-secret -e DATABASE_URL=sqlite:///tmp/test.db -v /root/aads/aads-server:/app -w /app --entrypoint python aads-server-aads-server -m pytest tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py -q` -> 82 passed, 1 warning.
-  - Production static URL check passed: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` -> HTTP 200 and contains `account_id: item.serverAccountId`, `실행중...`, `markIntegrationFailed`, and `type="button" data-sync-integration`.
+  - Production static URL check passed: `https://fb.newtalk.kr/static/apps/obys/index.html` -> HTTP 200 and contains `account_id: item.serverAccountId`, `실행중...`, `markIntegrationFailed`, and `type="button" data-sync-integration`.
   - Running container runtime check passed: `SyncPayload(account_id='acct-test', services=['baemin']).model_dump()` returned `account_id='acct-test'`.
 - Pending:
   - Worktree still contains unrelated pre-existing dirty files outside this request: `app/data/yeoljeong_finance/settings.json`, `docs/CHANGELOG-*`, `nginx-aads-upstream.conf.dashboard.bak`, and OEM mail helper/report files.
@@ -4479,16 +4479,16 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - Request: Fix the integration settings screen so saved integration rows are grouped/searchable, edit pages show existing baseline values, and "저장 후 연동 실행" / row sync clicks visibly update the screen.
 - Changes:
-  - `app/static/apps/yeoljeong-finance/index.html`: added field notes under integration setup inputs so edit pages show existing masked baseline values such as platform store code and business number, and show "existing Vault registered" for password/account-password/API-secret fields without exposing plaintext secrets.
-  - `app/static/apps/yeoljeong-finance/index.html`: added per-row `data-sync-integration-id` handling so "수집 실행" and "거래 연동" use the selected row's business/branch instead of only the currently selected global scope.
-  - `app/static/apps/yeoljeong-finance/index.html`: sync result updates now match by `account_id`/business/branch and show the result message in the "최근 동기화" table cell, so failures such as upload/credential-required are visible immediately.
-  - `app/static/apps/yeoljeong-finance/index.html`: save-after-sync toast is no longer overwritten by the generic save message; it reports counts or "확인필요" details.
+  - `app/static/apps/obys/index.html`: added field notes under integration setup inputs so edit pages show existing masked baseline values such as platform store code and business number, and show "existing Vault registered" for password/account-password/API-secret fields without exposing plaintext secrets.
+  - `app/static/apps/obys/index.html`: added per-row `data-sync-integration-id` handling so "수집 실행" and "거래 연동" use the selected row's business/branch instead of only the currently selected global scope.
+  - `app/static/apps/obys/index.html`: sync result updates now match by `account_id`/business/branch and show the result message in the "최근 동기화" table cell, so failures such as upload/credential-required are visible immediately.
+  - `app/static/apps/obys/index.html`: save-after-sync toast is no longer overwritten by the generic save message; it reports counts or "확인필요" details.
   - `tests/unit/test_yeoljeong_finance_print_static.py`: added static regression assertions for edit baseline value notes and row-level sync wiring.
 - Verification:
   - Container pytest passed: `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py` -> 4 passed.
   - Inline JS syntax check passed: `node --check /tmp/yeoljeong_index_inline.js`.
-  - Diff whitespace check passed: `git diff --check -- app/static/apps/yeoljeong-finance/index.html tests/unit/test_yeoljeong_finance_print_static.py`.
-  - Production URL check passed: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` -> HTTP 200 and contained `data-sync-integration-id`, `setIntegrationExistingValue`, `latestSyncMessage`, and `저장 후 연동 실행 완료`.
+  - Diff whitespace check passed: `git diff --check -- app/static/apps/obys/index.html tests/unit/test_yeoljeong_finance_print_static.py`.
+  - Production URL check passed: `https://fb.newtalk.kr/static/apps/obys/index.html` -> HTTP 200 and contained `data-sync-integration-id`, `setIntegrationExistingValue`, `latestSyncMessage`, and `저장 후 연동 실행 완료`.
   - Playwright E2E against production URL passed in the `aads-server` container: opened 연동관리, filtered 판매사이트/search, opened saved-row 수정 page, verified existing baseline notes, clicked row 수집 실행, and verified `파일필요` plus API result message appeared.
 - Pending:
   - Worktree still contains unrelated pre-existing dirty files outside this request: `app/data/yeoljeong_finance/settings.json`, `docs/CHANGELOG-*`, `nginx-aads-upstream.conf.dashboard.bak`, and OEM mail helper/report files.
@@ -4499,7 +4499,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - Changes:
   - `app/api/yeoljeong_finance.py`: `/accounts` accepts `account_id`/`server_account_id` for edit saves.
   - `app/services/yeoljeong_finance_service.py`: account upsert can update an explicit existing account id and preserves encrypted password/account/business-number secrets when the edit form does not re-enter them.
-  - `app/static/apps/yeoljeong-finance/index.html`: edit-save flow now preserves existing masked account/business registration values, server account id, status fields, and saved metadata when unchanged values are not re-entered.
+  - `app/static/apps/obys/index.html`: edit-save flow now preserves existing masked account/business registration values, server account id, status fields, and saved metadata when unchanged values are not re-entered.
   - Added stale server-account fallback: if a saved UI row points to an old server account id, the save path retries the same service/username/business/branch upsert instead of leaving the edit as a failed save.
   - Added category/status/search filters to the integration detail table, and reused the same filtered result in the settings-tab integration cards.
   - `tests/unit/test_yeoljeong_finance_service.py` and `tests/unit/test_yeoljeong_finance_print_static.py`: added regression checks for edit-save preservation and integration list filters.
@@ -4507,7 +4507,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - Container pytest passed: `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py` -> 63 passed.
   - Container pytest passed: `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py tests/unit/test_yeoljeong_delivery_collectors.py` -> 30 passed, 1 Starlette deprecation warning.
   - Inline JS syntax check passed: `node -e "...new vm.Script(...)"` -> 2 inline scripts parsed.
-  - Public URL status check passed before final deploy: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` -> HTTP 200.
+  - Public URL status check passed before final deploy: `https://fb.newtalk.kr/static/apps/obys/index.html` -> HTTP 200.
 - Pending:
   - Browser click E2E was not run because the host has `playwright-core` but no browser executable, and the container has Python Playwright but no bundled browser path. Static, API, and screenshot verification were used instead.
   - Worktree still contains unrelated pre-existing dirty files outside this request.
@@ -4518,12 +4518,12 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - Changes:
   - `app/api/yeoljeong_finance.py`: `POST /api/v1/yeoljeong-finance/accounts` now runs delivery platform sync immediately when `auto_sync=true`, not only bank/card transaction sync.
   - `app/services/yeoljeong_finance_service.py`: account list responses now include `credential_requirements`; sync results update the saved platform account status/message/last sync time so the UI can show "credential required", "upload required", or connector status after a run.
-  - `app/static/apps/yeoljeong-finance/index.html`: delivery platforms now default to `browser-automation`; save flow applies delivery sync results with `applySyncPayload()` and bank/card sync results with `applyFinancialSyncPayload()`. The saved integration row shows `필요정보` when password, PC Agent session, bank account password, business number, or upload fallback is missing.
+  - `app/static/apps/obys/index.html`: delivery platforms now default to `browser-automation`; save flow applies delivery sync results with `applySyncPayload()` and bank/card sync results with `applyFinancialSyncPayload()`. The saved integration row shows `필요정보` when password, PC Agent session, bank account password, business number, or upload fallback is missing.
   - Tests updated for delivery auto-sync and UI static assertions.
 - Verification:
   - Container pytest with updated test files: `python -m pytest tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py` passed: 80 passed, 1 warning.
   - Node inline JS parse check passed: `inline-js-ok`.
-  - Public static URL check: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` returned HTTP 200.
+  - Public static URL check: `https://fb.newtalk.kr/static/apps/obys/index.html` returned HTTP 200.
 - Pending:
   - Backend process reload/deploy is required before the new `/accounts` delivery auto-sync branch is live in the running API worker. Static `index.html` is bind-mounted and visible to the public URL, but Python route changes need an approved deploy/reload.
   - Successful real Baemin collection still requires CEO to enter the missing Baemin password or provide an authenticated PC Agent/browser storage session in integration settings.
@@ -4532,12 +4532,12 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - Request: Recheck E2E and make the production FB integration management page match `mockup-v2.html#integrations` exactly for the integration add/setup/edit flow.
 - Changes:
-  - `app/static/apps/yeoljeong-finance/index.html`: changed integration setup form field generators from plain label wrappers to the same `.field`/`.wide` grid markup used by the design mockup, and added `data-search-form data-integration-setup-form` to the operational connect form.
+  - `app/static/apps/obys/index.html`: changed integration setup form field generators from plain label wrappers to the same `.field`/`.wide` grid markup used by the design mockup, and added `data-search-form data-integration-setup-form` to the operational connect form.
   - Existing service-specific forms and saved-list edit flow were preserved: sales channel, bank account, card/PG, supplier, tax, and edit drawer still use the same `/accounts`, `/transactions/sync`, and import fallback hooks.
 - Verification:
   - Production container: `python -m pytest tests/unit/test_yeoljeong_finance_print_static.py -q` passed: 4 passed.
   - Inline JS parse check with Node `vm.Script` passed: 1 script parsed.
-  - External production HTML check confirmed the `.field` form markup, setup form marker, edit button marker, and add-menu marker are live at `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`.
+  - External production HTML check confirmed the `.field` form markup, setup form marker, edit button marker, and add-menu marker are live at `https://fb.newtalk.kr/static/apps/obys/index.html`.
   - Playwright E2E on production URL passed by injecting a test auth token, opening `integrations`, clicking `+ 연동 추가`, verifying menu choices, opening `판매채널 추가`, and verifying saved-list `수정` opens the edit drawer. Result: add form 16 `.field` wrappers, edit buttons 14, edit form 16 `.field` wrappers. Screenshot: `/tmp/yeoljeong-integrations-e2e.png`.
 - Pending:
   - No request-scope pending item. Worktree still has unrelated pre-existing dirty files: `app/data/yeoljeong_finance/settings.json`, `docs/CHANGELOG-go100-direct.md`, `nginx-aads-upstream.conf`, `nginx-aads-upstream.conf.dashboard.bak`.
@@ -4714,10 +4714,10 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - Baemin implementation commits already on `origin/main`: `f0c1b690 fix: clarify baemin integration sync states`, `959bd37e Fix Baemin delivery sync reporting`, `162d90b2 docs: record Baemin collection final verification`, `a167653c docs: reconcile Baemin collection verification`.
   - Dirty worktree remains, but Baemin code/UI/test/HANDOVER target files had no uncommitted diff before this entry. Runtime JSON ledgers and protected account/settings JSON are operational data and are not committed.
 - Verification rerun:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` passed.
+  - `python3 -m html.parser app/static/apps/obys/index.html` passed.
   - Node inline script parse passed: `inline scripts ok 1`.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` passed: 59 passed.
-  - `curl -I https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` returned HTTP 200.
+  - `curl -I https://fb.newtalk.kr/static/apps/obys/index.html` returned HTTP 200.
   - External Baemin login URL returned HTTP 403 from Cloudflare/Baemin.
 - Live Jung-hwa sync rerun:
   - Payload: `services=["baemin"]`, `business_id=biz-junghwa`, `branch=중화점`, `date_from=2026-08-01`, `date_to=2026-08-04`.
@@ -4737,7 +4737,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `docker ps --format ...` shows `aads-server`, `aads-server-green`, `aads-dashboard`, `aads-dashboard-green`, PostgreSQL, Redis, LiteLLM, and Nginx running healthy where healthchecks exist.
   - `docker exec aads-server python -m py_compile app/services/yeoljeong_delivery_collectors.py app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` passed.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` passed: 59 passed.
-  - `curl -I https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` returned HTTP 200.
+  - `curl -I https://fb.newtalk.kr/static/apps/obys/index.html` returned HTTP 200.
   - `docker exec aads-server curl -I https://biz-member.baemin.com/login?returnUrl=https%3A%2F%2Fself.baemin.com%2F` returned HTTP 403 from Cloudflare/Baemin.
 - Live Jung-hwa Baemin sync:
   - Payload: `services=["baemin"]`, `business_id=biz-junghwa`, `branch=중화점`, `date_from=2026-08-01`, `date_to=2026-08-04`.
@@ -4755,11 +4755,11 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - Request: Continue the Jung-hwa branch Baemin integration work until the final reporting contract is satisfied.
 - Current code state:
   - `HEAD` and `origin/main` both point to `959bd37e Fix Baemin delivery sync reporting`.
-  - The commit contains `app/services/yeoljeong_delivery_collectors.py`, `app/services/yeoljeong_finance_service.py`, `app/static/apps/yeoljeong-finance/index.html`, `tests/unit/test_yeoljeong_delivery_collectors.py`, `tests/unit/test_yeoljeong_finance_service.py`, and this handover.
+  - The commit contains `app/services/yeoljeong_delivery_collectors.py`, `app/services/yeoljeong_finance_service.py`, `app/static/apps/obys/index.html`, `tests/unit/test_yeoljeong_delivery_collectors.py`, `tests/unit/test_yeoljeong_finance_service.py`, and this handover.
 - Runtime verification:
   - `docker exec aads-server python -m py_compile app/services/yeoljeong_delivery_collectors.py app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` passed.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` passed: 59 passed.
-  - `curl -I https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` returned HTTP 200 and `Last-Modified: Mon, 03 Aug 2026 21:04:16 GMT`.
+  - `curl -I https://fb.newtalk.kr/static/apps/obys/index.html` returned HTTP 200 and `Last-Modified: Mon, 03 Aug 2026 21:04:16 GMT`.
   - `docker exec aads-server curl -I https://biz-member.baemin.com/login?returnUrl=https%3A%2F%2Fself.baemin.com%2F` returned HTTP 403 from Cloudflare/Baemin.
 - Account and ledger state:
   - Jung-hwa Baemin account `83c5b12f-0b3d-46b6-bcbe-b5c00dc0fd51` is registered for `business_id=biz-junghwa`, `branch=중화점`, `collection_mode=browser-automation`, and local protected `password_enc` exists.
@@ -4795,13 +4795,13 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 ## 2026-08-03 07:14 KST - FB 연동설정 페이지 최종 원장 재검증
 
 - 요청: 이전 완료보고의 커밋/푸시/배포/문서 원장 충돌을 해소하고, `index.html#auth-invite` 연동설정 페이지가 디자인기획안 기준으로 운영 반영됐는지 끝까지 검증.
-- 대상: `app/static/apps/yeoljeong-finance/index.html`의 연동 상세 드로어와 입력폼. 이번 재검증에서 기능 코드는 추가 변경하지 않았고, 원장 문서만 보정한다.
-- 커밋/푸시 확인: `HEAD`와 `origin/main`은 `4fac936a8e6625cb7772a11254b1e7113ebbb219`로 일치한다. 해당 커밋은 `HANDOVER.md`와 `app/static/apps/yeoljeong-finance/index.html`만 포함한다.
-- 운영 확인: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`은 HTTP 200, `Last-Modified: Sun, 02 Aug 2026 22:08:08 GMT`를 반환한다. 외부 HTML에서 `modal integration-detail-modal`, `연동 설정 페이지`, `credential-grid`, `detail-grid`, `drawer-actions`, `신한 간편서비스`, `IBK 빠른서비스`, `data-integration-connect-form`, `/accounts`, `/transactions/sync` 표식을 확인했다.
+- 대상: `app/static/apps/obys/index.html`의 연동 상세 드로어와 입력폼. 이번 재검증에서 기능 코드는 추가 변경하지 않았고, 원장 문서만 보정한다.
+- 커밋/푸시 확인: `HEAD`와 `origin/main`은 `4fac936a8e6625cb7772a11254b1e7113ebbb219`로 일치한다. 해당 커밋은 `HANDOVER.md`와 `app/static/apps/obys/index.html`만 포함한다.
+- 운영 확인: `https://fb.newtalk.kr/static/apps/obys/index.html`은 HTTP 200, `Last-Modified: Sun, 02 Aug 2026 22:08:08 GMT`를 반환한다. 외부 HTML에서 `modal integration-detail-modal`, `연동 설정 페이지`, `credential-grid`, `detail-grid`, `drawer-actions`, `신한 간편서비스`, `IBK 빠른서비스`, `data-integration-connect-form`, `/accounts`, `/transactions/sync` 표식을 확인했다.
 - 검증:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - Node 인라인 스크립트 `new Function()` 문법 검사 성공(`inline scripts ok 1`).
-  - `git diff --check app/static/apps/yeoljeong-finance/index.html HANDOVER.md docs/HANDOVER.md` 성공.
+  - `git diff --check app/static/apps/obys/index.html HANDOVER.md docs/HANDOVER.md` 성공.
   - 운영 컨테이너 `docker exec aads-server python3 -m pytest tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py tests/unit/test_yeoljeong_finance_service.py` 결과 71 passed, 1 warning.
   - 컨테이너 상태: `aads-server`, `aads-dashboard`, `aads-server-green`, `aads-dashboard-green`, `aads-postgres`, `aads-litellm`, `aads-nginx`, `aads-redis` 정상/healthy 확인.
   - Browser Bridge는 공개 URL 탐색과 스크린샷 캡처 성공. 단, 인증 전 화면까지만 확인되어 관리자 로그인 후 `+ 연동 추가` 실제 클릭 E2E는 미수행했다.
@@ -4821,20 +4821,20 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 ## 2026-07-30 08:44 KST - FB mockup integrations add-flow settings page
 
-- Request: In `https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html#integrations`, make `+ 연동 추가` open the same detailed integration settings-page design instead of a simple service list.
-- Scope: `app/static/apps/yeoljeong-finance/mockup-v2.html` only for UI behavior, plus this handover entry. The main `/root/aads/aads-server` worktree had unrelated dirty files, so this change was prepared in isolated worktree `/tmp/aads-mockup-integration-20260730`.
+- Request: In `https://fb.newtalk.kr/static/apps/obys/mockup-v2.html#integrations`, make `+ 연동 추가` open the same detailed integration settings-page design instead of a simple service list.
+- Scope: `app/static/apps/obys/mockup-v2.html` only for UI behavior, plus this handover entry. The main `/root/aads/aads-server` worktree had unrelated dirty files, so this change was prepared in isolated worktree `/tmp/aads-mockup-integration-20260730`.
 - UI: Added `integrationSetupForm()` with the `연동 설정 페이지` band, Shinhan/IBK/sales/supplier preset cards, business/branch/service fields, ID/password/account/business-number/security fields, collection scope, Vault/security cards, and `저장 후 연동 테스트` CTA.
 - Behavior: The existing `+ 연동 추가` / `data-action="connect"` path now opens that form directly. Preset buttons update service, display label, URL, and collection mode inside the drawer.
-- Validation: `python3 -m html.parser app/static/apps/yeoljeong-finance/mockup-v2.html` passed; inline script parsing with Node `new Function(...)` passed for 1 script; `git diff --check` passed; local HTTP returned `200 190804`; DOM markers found `integrationSetupForm`, `연동 설정 페이지`, preset buttons, `사업자등록번호`, `계좌/가맹점번호`, and `저장 후 연동 테스트`.
-- Deployment: Full blue-green build was intentionally not run from `/root/aads/aads-server` because that worktree contained unrelated dirty files. Instead, both running slots received only the verified static file via `docker cp` after backing up `/app/app/static/apps/yeoljeong-finance/mockup-v2.html` to `/tmp/mockup-v2.html.bak-be35a7ae`.
-- Production verification at 2026-07-30 08:50 KST: `aads-server` and `aads-server-green` both report SHA-256 `98f58af4c100361a3e5627c89cd653a901bf7877319eae619827be6c15523b0d` for the file; both `http://localhost:8100/api/v1/health` and `http://localhost:8102/api/v1/health` returned `status:"ok"`; external `https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html?cb=be35a7ae` returned HTTP 200 and included the new markers.
-- Browser verification: Public Browser Bridge opened `https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html?cb=be35a7ae#integrations`, clicked `.hero-actions [data-action="connect"]`, and the snapshot showed `외부 서비스 연동 추가`, `연동 설정 페이지`, Shinhan/IBK/sales/supplier preset cards, `계좌/가맹점번호`, `사업자등록번호`, and `저장 후 연동 테스트`.
+- Validation: `python3 -m html.parser app/static/apps/obys/mockup-v2.html` passed; inline script parsing with Node `new Function(...)` passed for 1 script; `git diff --check` passed; local HTTP returned `200 190804`; DOM markers found `integrationSetupForm`, `연동 설정 페이지`, preset buttons, `사업자등록번호`, `계좌/가맹점번호`, and `저장 후 연동 테스트`.
+- Deployment: Full blue-green build was intentionally not run from `/root/aads/aads-server` because that worktree contained unrelated dirty files. Instead, both running slots received only the verified static file via `docker cp` after backing up `/app/app/static/apps/obys/mockup-v2.html` to `/tmp/mockup-v2.html.bak-be35a7ae`.
+- Production verification at 2026-07-30 08:50 KST: `aads-server` and `aads-server-green` both report SHA-256 `98f58af4c100361a3e5627c89cd653a901bf7877319eae619827be6c15523b0d` for the file; both `http://localhost:8100/api/v1/health` and `http://localhost:8102/api/v1/health` returned `status:"ok"`; external `https://fb.newtalk.kr/static/apps/obys/mockup-v2.html?cb=be35a7ae` returned HTTP 200 and included the new markers.
+- Browser verification: Public Browser Bridge opened `https://fb.newtalk.kr/static/apps/obys/mockup-v2.html?cb=be35a7ae#integrations`, clicked `.hero-actions [data-action="connect"]`, and the snapshot showed `외부 서비스 연동 추가`, `연동 설정 페이지`, Shinhan/IBK/sales/supplier preset cards, `계좌/가맹점번호`, `사업자등록번호`, and `저장 후 연동 테스트`.
 
 ## 2026-07-30 08:27 KST - Yeoljeong contract legal template and A4 print update
 
 - Request: Review Korean standard employment contract and freelancer contract forms, revise the Yeoljeong finance contract editor so previews/prints are A4-sized and legally safer.
 - Sources checked: MOEL 2025 revised standard employment contract notice (`bbs_seq=20250300356`) and 2026 minimum wage 10,320 KRW/hour notice.
-- Scope: `app/static/apps/yeoljeong-finance/index.html`, `app/static/apps/yeoljeong-finance/mockup-v2.html`, and `docs/HANDOVER.md`; unrelated dirty worktree files were preserved.
+- Scope: `app/static/apps/obys/index.html`, `app/static/apps/obys/mockup-v2.html`, and `docs/HANDOVER.md`; unrelated dirty worktree files were preserved.
 - UI/template changes: Added legal basis/checklist blocks to the production A4 contract preview, kept A4 paper CSS at `@page { size: A4 portrait; margin: 0; }` and `.contract-a4-paper { width: 210mm; min-height: 297mm; }`, changed freelancer party/account/signature labels to `수급인`/`정산계좌`/`수급인 서명`, and added freelancer misclassification warning copy.
 - Contract content changes: Employment templates now explicitly surface Labor Standards Act Article 17 checklist items: wage, prescribed working hours, holidays, annual paid leave, wage components/calculation/payment method, workplace/job, contract period, and contract delivery. Freelancer templates now require service scope, deliverables, inspection, fee/payment/3.3% withholding, cost allocation, confidentiality, termination, and worker-status conversion review when direct supervision or fixed attendance exists.
 - Validation: `git diff --check` passed; Node VM parsed 2 inline scripts in production HTML and 1 inline script in mockup HTML; local HTTP returned `200 467861`; DOM assertions passed for A4 CSS, 210mm paper, legal basis, law checklist, freelancer warning, freelancer signature, and print button.
@@ -4842,12 +4842,12 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 ## 2026-07-30 08:06 KST - FB integrations detailed action design rollout
 
-- Request: Apply every detailed action/button design from `https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html#integrations` to production `index.html#auth-invite`, including DB/API-connected operation paths.
-- Scope: `app/static/apps/yeoljeong-finance/index.html` and `tests/unit/test_yeoljeong_finance_print_static.py`. Existing unrelated dirty worktree files were preserved.
+- Request: Apply every detailed action/button design from `https://fb.newtalk.kr/static/apps/obys/mockup-v2.html#integrations` to production `index.html#auth-invite`, including DB/API-connected operation paths.
+- Scope: `app/static/apps/obys/index.html` and `tests/unit/test_yeoljeong_finance_print_static.py`. Existing unrelated dirty worktree files were preserved.
 - UI: Added `integrationDetailModal` and responsive detail layouts for `connect`, `sales-channel-connect`, `bank-connect`, `supplier-connect`, `tax-connect`, `receipt-upload`, `credential-vault`, `integration-audit`, `integration-guide`, `recommended-connectors`, `pos-connect`, `review-connect`, `hr-connect`, and `pg-connect`.
 - API wiring: Detail CTAs route into the existing operational paths: `data-integration-preset` opens the server-backed `/accounts` Vault save form, `data-sync-integration` runs delivery `/sync`, `data-sync-financial-integration` runs `/transactions/sync`, and `data-open-import` opens the import modal for `/transactions/import` or integration-evidence upload.
 - Validation:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` passed.
+  - `python3 -m html.parser app/static/apps/obys/index.html` passed.
   - `node -e "... new Function(inline script) ..."` passed with 1 inline script.
   - Local direct assertion run for `tests/unit/test_yeoljeong_finance_print_static.py` passed 3 test functions.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py` passed on the running container's mounted test set.
@@ -4855,10 +4855,10 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 ## 2026-07-30 07:37 KST - FB integrations deployment ledger verification
 
 - Request: Previous closeout report conflicted with commit/push/deploy/document ledger; continue verification for `fb.newtalk.kr` Yeoljeong finance `#auth-invite` integration management page until all remaining checks are complete.
-- Commit/push verification: feature commit `660b659fdfa76afc68baf22a3409b0af58bd214b` (`feat: align FB integration management page`) contains only `HANDOVER.md` and `app/static/apps/yeoljeong-finance/index.html`; follow-up ledger commit `54e61eb58267c762663a8c4accf8e63a44877997` was pushed to `origin/main` to record deployment verification.
-- Deployment verification: `aads-server`, Blue slot `127.0.0.1:8100`, and Green slot `127.0.0.1:8102` are healthy and serve `/static/apps/yeoljeong-finance/index.html` with local SHA-256 `245db13739abac248d3e8adc342a5d46bd9b2a25b9a90c22375a3e4eb4f9a1a3`. External `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` returns HTTP 200 and `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`; its raw SHA differs because Cloudflare injects a hidden `cdn-cgi/challenge-platform` script/link into the public response.
+- Commit/push verification: feature commit `660b659fdfa76afc68baf22a3409b0af58bd214b` (`feat: align FB integration management page`) contains only `HANDOVER.md` and `app/static/apps/obys/index.html`; follow-up ledger commit `54e61eb58267c762663a8c4accf8e63a44877997` was pushed to `origin/main` to record deployment verification.
+- Deployment verification: `aads-server`, Blue slot `127.0.0.1:8100`, and Green slot `127.0.0.1:8102` are healthy and serve `/static/apps/obys/index.html` with local SHA-256 `245db13739abac248d3e8adc342a5d46bd9b2a25b9a90c22375a3e4eb4f9a1a3`. External `https://fb.newtalk.kr/static/apps/obys/index.html` returns HTTP 200 and `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`; its raw SHA differs because Cloudflare injects a hidden `cdn-cgi/challenge-platform` script/link into the public response.
 - Feature verification: the production HTML contains `id="integrationsView"`, `은행 빠른계좌조회`, `신한은행 간편서비스`, `IBK기업은행 빠른서비스`, `/transactions/sync`, `/transactions/import`, and the Shinhan/IBK preset buttons. Static route inspection confirms `#auth-invite` opens `setView("integrations")`.
-- Test verification: `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` passed; inline JS extraction with `new Function(...)` passed; `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_service.py -q` returned 68 passed, 1 warning.
+- Test verification: `python3 -m html.parser app/static/apps/obys/index.html` passed; inline JS extraction with `new Function(...)` passed; `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_service.py -q` returned 68 passed, 1 warning.
 - Limit: Authenticated browser click E2E was not run because this workspace has no Playwright/Puppeteer/jsdom browser package installed. Public unauthenticated API calls correctly return 401; authenticated API behavior is covered by the unit tests above.
 
 ## 2026-07-30 00:24 KST - response duration footer JSON payload fix
@@ -4923,14 +4923,14 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 요청: 신한은행 간편서비스/IBK 빠른서비스 자격값을 설정에서 등록하면 은행거래·카드거래 연동이 즉시 실행될 수 있게 최종 확인·조치.
 - 확인: 공식 경로 기준 신한 간편조회와 IBK 빠른조회 입력 흐름을 재확인했다. AADS에는 `shinhan_business`, `ibk_business`, `card_pg` 금융 거래 동기화 서비스와 `/api/v1/yeoljeong-finance/transactions/sync`가 존재한다.
 - 원인: `/accounts` 저장 API가 `auto_sync=true`일 때 금융 동기화 결과를 반환하지만, UI가 그 결과를 배달앱 수집 처리 함수 `applySyncPayload()`로 넘겨 저장 직후 금융 연동 상태가 정확히 반영되지 않았다.
-- 조치: `app/static/apps/yeoljeong-finance/index.html`에서 저장 직후 `result.sync`를 `applyFinancialSyncPayload()`로 처리하고, 반영 건수 또는 `connector_not_configured`/확인필요 상태를 즉시 토스트로 보여주도록 수정했다. 회귀 테스트에 잘못된 함수 재사용 차단 검증을 추가했다.
-- 검증: `docker run --rm -e JWT_SECRET_KEY=test-secret -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py` → 68 passed. 운영 외부 HTML `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`에서 `applyFinancialSyncPayload(result.sync)` 응답 확인. 직접 서비스 호출에서 필수값 암호화 저장 및 `connector_not_configured` 상태 확인.
+- 조치: `app/static/apps/obys/index.html`에서 저장 직후 `result.sync`를 `applyFinancialSyncPayload()`로 처리하고, 반영 건수 또는 `connector_not_configured`/확인필요 상태를 즉시 토스트로 보여주도록 수정했다. 회귀 테스트에 잘못된 함수 재사용 차단 검증을 추가했다.
+- 검증: `docker run --rm -e JWT_SECRET_KEY=test-secret -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py` → 68 passed. 운영 외부 HTML `https://fb.newtalk.kr/static/apps/obys/index.html`에서 `applyFinancialSyncPayload(result.sync)` 응답 확인. 직접 서비스 호출에서 필수값 암호화 저장 및 `connector_not_configured` 상태 확인.
 - 한계: 은행 사이트 실시간 조회 Playwright 커넥터는 아직 미구현이다. 따라서 관리자 값 등록 즉시 AADS 계정 Vault 저장·동기화 판정까지는 동작하고, 실제 은행 사이트 로그인/엑셀 자동 다운로드는 별도 커넥터 구현과 실계정 검증이 필요하다.
 
 ## 2026-07-28 07:42 KST - Yeoljeong employee self-signup auth gate continuity check
 
 - 요청: 중단된 `#auth-invite` 화면 작업을 이어서 진행. 목표는 직원 초대 중심이 아니라 직원 직접 회원가입/가입요청/입사서류 제출 흐름을 기본 화면으로 고정하는 것.
-- 확인: `app/static/apps/yeoljeong-finance/index.html`의 비로그인 auth gate는 `직원 회원가입`을 기본 제목과 active tab으로 표시하고, `회원가입 후 입사서류 등록` CTA를 제공한다. 초대 수락 폼은 `hidden` 상태의 보조 흐름으로 남아 있다.
+- 확인: `app/static/apps/obys/index.html`의 비로그인 auth gate는 `직원 회원가입`을 기본 제목과 active tab으로 표시하고, `회원가입 후 입사서류 등록` CTA를 제공한다. 초대 수락 폼은 `hidden` 상태의 보조 흐름으로 남아 있다.
 - 흐름: 직원 가입 시 `signupToServer()`가 `accountType === "employee"`이면 서버 회원가입 후 `submitEmployeeSignupJoinRequest()` 또는 전화번호 초대 수락을 실행하고, `forceEmployeePendingSession()` 후 `setView("onboarding")`으로 입사서류 화면에 진입한다.
 - 테스트 보강: `tests/unit/test_yeoljeong_finance_api.py`에 `test_employee_auth_gate_prioritizes_self_signup_over_invites`를 추가해 auth gate 기본값, 초대 보조 상태, 직원 가입 후 onboarding 이동 문자열을 회귀 방지한다.
 - 검증: `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py tests/unit/test_yeoljeong_finance_service.py` 통과. `docker run --rm -e JWT_SECRET_KEY=test-secret -e AADS_DB_URL=sqlite:///tmp/aads-test.db -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py -q` 결과 70 passed, 1 warning. 신규 직원 회원가입/은행 빠른조회 회귀 테스트 3건도 별도 실행해 3 passed. `git diff --check`는 대상 파일 기준 통과. `node` 인라인 스크립트 파싱 `inline_script_parse_ok:2` 통과. 로컬 정적 HTTP `http://127.0.0.1:8799/index.html`은 200 응답이며 핵심 DOM 문자열을 확인했다.
@@ -4943,7 +4943,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 공식 확인: 신한 간편서비스 URL(`https://bank.shinhan.com/rib/easy/index.jsp`)과 IBK 빠른조회 URL(`https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp`)을 확인했다. IBK 기업뱅킹 메뉴에는 `빠른조회서비스신청/해제`, `거래내역조회`, `거래내역서` 항목이 존재한다.
 - Backend: `app/api/yeoljeong_finance.py`의 `AccountUpsertPayload`에 `account_no`, `account_password`, `business_registration_no` write-only 필드를 추가했다. `app/services/yeoljeong_finance_service.py`는 신한/IBK `bank-quick-service` 모드에서 로그인 비밀번호, 조회용 계좌번호, 계좌비밀번호, 사업자번호가 모두 Vault 암호화 필드로 저장될 때만 등록되도록 검증한다. 공개 응답에는 마스킹값만 반환한다.
 - Import: 은행 거래 CSV 외에 엑셀에서 복사한 탭 구분 표도 서버 파서와 정적 앱 파서가 처리하도록 보강했다. `거래일자/거래시간/기재내용/맡기신금액/찾으신금액/계좌번호`류 헤더를 거래 원장 필드로 매핑한다.
-- UI: `app/static/apps/yeoljeong-finance/index.html`의 연동관리 폼에 조회용 계좌번호, 계좌비밀번호, 사업자번호 입력을 추가하고 신한/IBK 기본 수집 방식을 `은행 간편/빠른조회`로 변경했다. 연결 카드에는 사업자번호 마스킹값과 간편/빠른조회 수집 방식이 표시된다.
+- UI: `app/static/apps/obys/index.html`의 연동관리 폼에 조회용 계좌번호, 계좌비밀번호, 사업자번호 입력을 추가하고 신한/IBK 기본 수집 방식을 `은행 간편/빠른조회`로 변경했다. 연결 카드에는 사업자번호 마스킹값과 간편/빠른조회 수집 방식이 표시된다.
 - 한계: 실제 은행 사이트 접속/조회 Playwright 커넥터는 아직 연결하지 않았다. `/transactions/sync`는 자격증명 준비 여부를 판정하되, 실조회 커넥터 미연결 시 `connector_not_configured`로 보고하고 은행 엑셀/CSV 또는 엑셀 복사표 반영을 대체 경로로 안내한다.
 - 검증: `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과. `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py -q` 결과 65 passed, 1 warning. `git diff --check` 통과.
 - 배포/커밋: CEO의 명시 커밋·푸시·배포 승인 전이라 로컬 변경만 수행했다. 기존 dirty worktree의 무관 변경은 보존했다.
@@ -5029,7 +5029,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - 요청: 언니냉면 직원용 레시피 페이지가 FB 로그인 후 열리지 않고 FB 대시보드로 빠지는 문제를 즉시 조치.
 - 원인: FB 매장비서 앱이 `redirect=/unni-naengmyeon/recipes`를 기억하지만, 이미 로그인된 직원 세션에서는 앱 초기화 시 해당 redirect를 소비하지 않았다. 또한 기존 세션이 localStorage에만 있고 `fb_access_token` 쿠키가 없으면 Next 레시피 서버가 인증을 읽지 못해 다시 FB 앱으로 돌아가는 루프가 발생할 수 있었다.
-- 반영: `app/static/apps/yeoljeong-finance/index.html`에 `syncServerAuthCookieFromStorage()`를 추가해 기존 FB 로그인 토큰을 `fb_access_token` 쿠키로 복원하고, 앱 초기화 시 레시피 redirect가 있고 로그인 상태이면 즉시 `/unni-naengmyeon/recipes`로 이동하도록 수정했다. HTTPS에서는 `Secure` 쿠키 속성도 붙인다.
+- 반영: `app/static/apps/obys/index.html`에 `syncServerAuthCookieFromStorage()`를 추가해 기존 FB 로그인 토큰을 `fb_access_token` 쿠키로 복원하고, 앱 초기화 시 레시피 redirect가 있고 로그인 상태이면 즉시 `/unni-naengmyeon/recipes`로 이동하도록 수정했다. HTTPS에서는 `Secure` 쿠키 속성도 붙인다.
 - 테스트: `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py -q` 결과 11 passed, 1 warning. `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과. `git diff --check` 통과.
 - 배포/검증: 커밋·푸시 후 AADS blue/green 배포와 공개 HTTP 검증을 수행한다. 완료 결과는 최종 보고에 남긴다.
 - 범위 제외: 기존 미커밋 `app/main.py`, `docs/CHANGELOG-direct-edit.md`, 대시보드 `public/manager/env_*`는 이번 레시피 조치와 무관해 보존한다.
@@ -5037,18 +5037,18 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 ## 2026-07-27 08:18 KST - FOOD FB employee signup flow final audit
 
 - 요청: 직원초대보다 직원 직접 회원가입을 우선하는 흐름이 FB 화면에 실제 반영됐는지 확인하고, 미완료였던 커밋/푸시/문서/배포 상태를 최종 정정.
-- 반영 확인: 커밋 `5aab005a Improve employee signup first flow`가 `origin/main`에 포함되어 있고, 현재 `main`/`origin/main` HEAD는 `caa7e712 fix(fb): add unni recipe shortcuts`로 일치한다. `5aab005a`는 `app/static/apps/yeoljeong-finance/index.html`과 `docs/HANDOVER.md`를 변경해 로그인 게이트, 회원가입 CTA, 직원관리 상단 흐름을 `직원 회원가입 -> 가입요청 자동 생성 -> 입사서류 업로드 -> 관리자 승인 후 계약` 기준으로 재배치했다.
-- 공개 검증: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`은 HTTP 200이며 공개 HTML에서 `직원 회원가입`, `가입요청 자동 생성`, `입사서류 업로드`, `관리자 승인 후 계약`, `초대 링크(보조)`, `회원가입 후 입사서류 등록` 문구를 확인했다. Browser Bridge 캡처는 `https://aads.newtalk.kr/screenshots/screenshot_20260727_081629_d561af.png`.
-- 품질 검증: 로컬/공개 HTML 인라인 JavaScript는 `new Function()` 기반 구문 검사를 통과했고, `git diff --check -- app/static/apps/yeoljeong-finance/index.html HANDOVER.md docs/HANDOVER.md`도 통과했다.
+- 반영 확인: 커밋 `5aab005a Improve employee signup first flow`가 `origin/main`에 포함되어 있고, 현재 `main`/`origin/main` HEAD는 `caa7e712 fix(fb): add unni recipe shortcuts`로 일치한다. `5aab005a`는 `app/static/apps/obys/index.html`과 `docs/HANDOVER.md`를 변경해 로그인 게이트, 회원가입 CTA, 직원관리 상단 흐름을 `직원 회원가입 -> 가입요청 자동 생성 -> 입사서류 업로드 -> 관리자 승인 후 계약` 기준으로 재배치했다.
+- 공개 검증: `https://fb.newtalk.kr/static/apps/obys/index.html`은 HTTP 200이며 공개 HTML에서 `직원 회원가입`, `가입요청 자동 생성`, `입사서류 업로드`, `관리자 승인 후 계약`, `초대 링크(보조)`, `회원가입 후 입사서류 등록` 문구를 확인했다. Browser Bridge 캡처는 `https://aads.newtalk.kr/screenshots/screenshot_20260727_081629_d561af.png`.
+- 품질 검증: 로컬/공개 HTML 인라인 JavaScript는 `new Function()` 기반 구문 검사를 통과했고, `git diff --check -- app/static/apps/obys/index.html HANDOVER.md docs/HANDOVER.md`도 통과했다.
 - 배포 상태: 이번 건은 정적 HTML 경로가 공개 서버에서 즉시 제공되는 변경이라 API blue/green deploy는 실행하지 않았다. `deploy.sh`를 통한 정식 blue/green은 작업트리에 별도 unrelated dirty 파일이 남아 있어 안전상 보류했다. 공개 URL 반영은 HTTP/본문/브라우저 캡처로 검증 완료.
 - 남은 리스크: 작업트리에는 FOOD 데이터, nginx/dashboard, 스크립트 등 이번 요청과 무관한 미커밋 변경이 남아 있다. 이 변경들은 보존했고, 직원 회원가입 흐름 완료 판정에는 포함하지 않는다.
 
 ## 2026-07-27 07:57 KST - FOOD FB screen unni links
 
 - 요청: FB 화면에 언니냉면 홈페이지 경로와 레시피 페이지 메뉴 추가.
-- 반영: `app/static/apps/yeoljeong-finance/index.html` 상단 액션에 `언니냉면 홈`(`https://unni.newtalk.kr/`)과 `레시피`(`https://fb.newtalk.kr/unni-naengmyeon/recipes`) 링크를 추가했다.
+- 반영: `app/static/apps/obys/index.html` 상단 액션에 `언니냉면 홈`(`https://unni.newtalk.kr/`)과 `레시피`(`https://fb.newtalk.kr/unni-naengmyeon/recipes`) 링크를 추가했다.
 - 반영: 주요 화면 탭에 `레시피` 외부 메뉴를 추가하고, 내부 탭 전환 로직은 `.tab[data-view]`에만 바인딩되도록 분리했다. 비로그인 클릭은 토스트 안내 후 차단해 기존 FB 로그인 보호 흐름을 유지한다.
-- 검증: 인라인 JS `node --check` 통과. 운영 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` HTTP 200 및 신규 DOM 문자열 포함 확인. `https://fb.newtalk.kr/unni-naengmyeon/recipes` 비로그인 요청은 `307 /static/apps/yeoljeong-finance/index.html?redirect=%2Funni-naengmyeon%2Frecipes`로 보호 유지.
+- 검증: 인라인 JS `node --check` 통과. 운영 URL `https://fb.newtalk.kr/static/apps/obys/index.html` HTTP 200 및 신규 DOM 문자열 포함 확인. `https://fb.newtalk.kr/unni-naengmyeon/recipes` 비로그인 요청은 `307 /static/apps/obys/index.html?redirect=%2Funni-naengmyeon%2Frecipes`로 보호 유지.
 - 상태: 서버 정적 파일 직접 반영으로 운영 응답에 포함됨. 커밋/푸시/무중단 배포는 기존 미커밋 변경이 같은 파일과 작업트리에 섞여 있어 미수행.
 
 ## 2026-07-27 07:35 KST - AADS-LAYOUT-001 P0 반영: 루프 비용 상한 모델별 자동 조정
@@ -5065,10 +5065,10 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 ## 2026-07-27 07:37 KST - FOOD FB login page design refresh
 
-- 대상: `app/static/apps/yeoljeong-finance/index.html` (`https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` 로그인 게이트).
+- 대상: `app/static/apps/obys/index.html` (`https://fb.newtalk.kr/static/apps/obys/index.html` 로그인 게이트).
 - 반영: 로그인 첫 화면에 `열정국밥 매장비서` 브랜드 락업, 운영관리 로그인 제목, 판매사이트/입금대사/직원서류/권한분리 요약, 접근 범위 보안 안내, 입력 focus/버튼/모바일 반응형 스타일을 추가했다.
 - 범위: 정적 HTML/CSS 디자인 보강만 수행했다. 인증 API, 계정 저장, 판매사이트 연동 데이터, 기존 미커밋 운영 데이터는 수정하지 않았다.
-- 검증: `python3` HTMLParser 파싱 통과, `git diff --check -- app/static/apps/yeoljeong-finance/index.html` 통과, 로컬 정적 HTTP `http://127.0.0.1:18087/index.html` 200 OK 및 핵심 DOM 텍스트 포함 확인.
+- 검증: `python3` HTMLParser 파싱 통과, `git diff --check -- app/static/apps/obys/index.html` 통과, 로컬 정적 HTTP `http://127.0.0.1:18087/index.html` 200 OK 및 핵심 DOM 텍스트 포함 확인.
 - 미검증: Playwright Chromium 바이너리와 시스템 브라우저가 없어 픽셀 스크린샷 검증은 미실행. 커밋, 푸시, 배포는 아직 수행하지 않았다.
 
 ## 2026-07-27 07:19 KST - AADS-LAYOUT-001 OHVIS 루프 시스템 기획서 커밋/푸시
@@ -5092,7 +5092,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 ## 2026-07-26 20:04 KST - FOOD 연동관리 설정 R2
 
-- 반영: `app/static/apps/yeoljeong-finance/index.html`, `app/api/yeoljeong_finance.py`, `app/services/yeoljeong_finance_service.py`.
+- 반영: `app/static/apps/obys/index.html`, `app/api/yeoljeong_finance.py`, `app/services/yeoljeong_finance_service.py`.
 - 내용: 설정/연동관리 화면에 판매사이트 4사, POS, 신한은행 기업/기업은행 기업, 쿠팡/마켓봄/뉴통/발주고/기타 매입처, 거래내역서·영수증 사진/OCR, 홈택스, 계산서/증빙 업로드, 카드사/PG, 공과금, 세무대리인/회계프로그램 채널을 등록 가능하게 보강했다. 서비스 선택 시 URL, 수집방식, 수집대상, 필수 확인값, 메모가 자동 프리셋되고 현황 카드에 표시된다.
 - API: `/api/v1/yeoljeong-finance/accounts`가 `category`, `data_scope`, `required_proof`, `auto_sync` payload를 허용하도록 보강했다.
 - 검증: `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py`, 인라인 JS `node --check`, `git diff --check` 통과. `.venv/bin/python` symlink 깨짐으로 FastAPI import/pytest는 미실행.
@@ -5177,20 +5177,20 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 ## 2026-07-24 13:30 KST - 열정국밥 실내용 배너 300DPI 산출물 추가
 
 - 배경: 중단된 FOOD 배너 작업을 이어 받아 B-1 상단 소형 이미지 제거, B-2 냉면 비주얼 교체, INDOOR P4 유리 부착 타공 안전영역 검수 산출물을 운영 정적 경로에 추가했다.
-- 조치: `scripts/generate_yeoljeong_indoor_banners.py`를 추가해 300DPI PNG 3종과 `manifest.json`, 검수/다운로드 페이지 `app/static/apps/yeoljeong-finance/banners.html`을 재현 가능하게 생성한다.
+- 조치: `scripts/generate_yeoljeong_indoor_banners.py`를 추가해 300DPI PNG 3종과 `manifest.json`, 검수/다운로드 페이지 `app/static/apps/obys/banners.html`을 재현 가능하게 생성한다.
 - 산출물: `indoor-b1-glass-pickup-clean-300dpi.png`(364×515mm, 4299×6083px), `indoor-b2-cold-noodle-visual-300dpi.png`(364×515mm, 4299×6083px), `indoor-p4-glass-pickup-perforation-safe-300dpi.png`(297×420mm, 3508×4961px).
 - 주의: 채팅 첨부 원본 `indoor-p4-glass-pickup-300dpi`는 업로드 저장소에서 조회되지 않았다. B-2도 기존 냉면 사진 원본이 명시 파일명으로 발견되지 않아 이번 산출물은 검수용 대체 비주얼이며, 고해상도 촬영 원본 수급 시 같은 스크립트에서 이미지 레이어만 교체하면 된다.
-- 검증: 생성 스크립트 compile, HTML parser, `git diff --check`, PNG DPI 메타데이터/manifest/검수 페이지 링크 직접 검증을 통과했다. 로컬 active API 정적 응답은 `banners.html` HTTP 200, P4 PNG Range HTTP 206이며, 공개 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/banners.html`도 HTTP 200, 공개 P4 PNG Range도 HTTP 206을 반환했다.
+- 검증: 생성 스크립트 compile, HTML parser, `git diff --check`, PNG DPI 메타데이터/manifest/검수 페이지 링크 직접 검증을 통과했다. 로컬 active API 정적 응답은 `banners.html` HTTP 200, P4 PNG Range HTTP 206이며, 공개 `https://fb.newtalk.kr/static/apps/obys/banners.html`도 HTTP 200, 공개 P4 PNG Range도 HTTP 206을 반환했다.
 - 롤백: 신규 `banners.html`, `assets/prints/*`, 생성 스크립트, 테스트, 이 HANDOVER 항목만 되돌리면 기존 운영 `index.html`과 API에는 영향이 없다.
 
 ## 2026-07-23 14:07 KST - 매장비서 통합 경영 대시보드 UX 시안
 
-- 기존 운영 앱과 분리된 브라우저 검토용 `app/static/apps/yeoljeong-finance/mockup-v2.html`을 추가했다. 기존 `index.html`, 운영 데이터, API는 변경하지 않았다.
+- 기존 운영 앱과 분리된 브라우저 검토용 `app/static/apps/obys/mockup-v2.html`을 추가했다. 기존 `index.html`, 운영 데이터, API는 변경하지 않았다.
 - 다사업자·다지점 전환을 전역 컨텍스트로 두고, 첫 화면을 통합 매출·정산 예정액·가용 현금·예상 세금, 8일 현금흐름, 오늘 처리할 일 중심의 경영 콕핏으로 재설계했다.
 - 배달 플랫폼 자동매출 집계, 은행 입금 매칭, 계약·근태·급여 예외, 세무 일정·증빙 수집률·경영 보고서를 한 화면에 배치했다.
 - 데스크톱 사이드바와 모바일 하단 탐색을 각각 제공하며, 메뉴·기간·업무 버튼에 시안용 상호작용과 안내 토스트를 구현했다. 표시 금액과 인물은 모두 샘플 데이터다.
 - 검증: Python HTML parser·인라인 JavaScript 문법·필수 DOM ID·`git diff --check` 통과. 로컬 정적 응답은 HTTP `200`/`33,195 bytes`, 공개 URL과 공개 health는 모두 HTTP `200`이었다. Browser Bridge ARIA 스냅샷에서 전체 KPI·현금흐름·오늘 할 일·매출/정산·직원/급여·세무/보고 영역을 확인했고, 메뉴 클릭 후 제목과 안내 토스트 변경도 확인했다.
-- 배포: 커밋 `23010f2d`를 `origin/main`에 push하고 2026-07-23 14:12 KST에 0ms hot reload를 완료했다. 공개 시안 URL은 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html`이다.
+- 배포: 커밋 `23010f2d`를 `origin/main`에 push하고 2026-07-23 14:12 KST에 0ms hot reload를 완료했다. 공개 시안 URL은 `https://fb.newtalk.kr/static/apps/obys/mockup-v2.html`이다.
 - 롤백: 신규 시안 파일과 이 HANDOVER 항목만 되돌리면 되며 기존 운영 앱에는 영향이 없다.
 
 ## 2026-07-23 10:50 KST - PC Agent internal AADS session auth final recovery
@@ -5264,7 +5264,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 ## 2026-07-22 KST - 매장비서 정규직 표준계약·사업자 도장 반영
 
-- `app/static/apps/yeoljeong-finance/index.html`
+- `app/static/apps/obys/index.html`
   - 상시 5인 미만 정규직 표준 기본값(주 5일, 21:00~09:00, 휴게 1.5시간, 월 3,000,000원)을 추가했다.
   - 식사 제공 여부에 따라 `과세 기본급 3,000,000원` 또는 `과세 기본급 2,800,000원 + 조건부 비과세 식대 200,000원`을 자동 계산하되 모든 금액은 수정 가능하게 했다.
   - 급여 구성 합계, 식대 한도/식사 제공 조건, 2026년 최저임금 환산을 저장 전에 검증한다.
@@ -5294,7 +5294,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 직원은 A4 계약서 전체, 이름 확인, 자필서명 캔버스, 명시적 동의를 한 화면에서 확인·제출한다.
   - 서명 완료본 A4 미리보기에 자필서명 이미지와 서명시각을 표시한다.
 - 변경 파일: `app/api/yeoljeong_finance.py`, `app/services/yeoljeong_finance_service.py`,
-  `app/static/apps/yeoljeong-finance/index.html`, 관련 단위·정적 테스트.
+  `app/static/apps/obys/index.html`, 관련 단위·정적 테스트.
 - 검증: 실제 HTTP 라우트 서명 왕복을 포함한 관련 pytest 49건, Ruff, Python compile,
   인라인 JavaScript 문법, `git diff --check` 통과.
 - 배포/롤백(2026-07-22 16:12 KST): 격리 커밋 `5a8663e0`을 릴리스 워크트리
@@ -5331,7 +5331,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 사업자별 승인 직원을 필수 선택하고 이름·이메일·주소·지점·사업자 정보를 자동채운다. 자동 입력 후 사용자가 수정한 값은 보존한다.
 - 서명요청 후 계약 내용을 수정하면 기존 서명 토큰을 폐기하고 작성중으로 되돌린다. 서명 완료 시 계약 스냅샷과 SHA-256을 저장하고 이후 수정·삭제·재서명을 차단한다.
 - 기존 미완성 계약서는 필수조건 보완 전 서명요청할 수 없다. 기존 DB 행을 자동 변경하거나 삭제하지 않는다.
-- 변경 대상: `app/services/yeoljeong_finance_service.py`, `app/static/apps/yeoljeong-finance/index.html`, 관련 단위/API 테스트.
+- 변경 대상: `app/services/yeoljeong_finance_service.py`, `app/static/apps/obys/index.html`, 관련 단위/API 테스트.
 - 검증: 격리 릴리스 컨테이너에서 매장비서 서비스/API/수집기 및 파이프라인 회귀 `95 passed`, Ruff·Python compile·인라인 JavaScript 구문·Git diff 검사를 통과했다.
 - 배포: 코드 커밋 `8cd77689`을 `origin/main`에 push하고 릴리스 워크트리 `/root/aads/contract-release-20260722-W5YnMr`를 Green `8102`에 격리 마운트했다. 운영 데이터와 Vault는 기존 경로를 유지했으며 Blue `8100`은 롤백 대기로 보존했다.
 - 운영 E2E: Green 헬스와 외부 헬스 200, 실제 Chromium에서 프리랜서 선택 시 `3.3%/건별 용역비` 자동 연동, A4 모달 폭 `793.7px(210mm)`, 계약 작성→서명요청→서명→SHA-256 스냅샷→수정 409 차단을 확인했다.
@@ -5347,10 +5347,10 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 검증: 격리 Green 컨테이너 복제본에서 매장비서 서비스/API/수집기 테스트 30건과 파이프라인 회귀 56건 통과. Python `py_compile`, 정적 앱 JavaScript 구문 검사 통과. Green API 및 운영 화면 E2E는 배포 후 재검증한다.
 - 배포: 커밋 `b57f2f61`을 `main`에 push하고 영구 release worktree `/root/aads/aads-server-release-b57f2f61`로 Blue(:8100)를 재생성했다. 운영 데이터 원장은 `/root/aads/aads-server/app/data/yeoljeong_finance`를 별도 영속 마운트했다. 2026-07-21 19:10 KST 기준 Blue active, Green(:8102) rollback 대기 상태다.
 - 운영 E2E: 공개 페이지 HTTP 200, A4 모달 793.7px(210mm) 폭·최소 297mm 높이 렌더링, 하영훈/중화점 실제 서류 2건과 작성필요 2건의 사업자 범위 조회, 기존 업로드 파일 392,144 bytes 존재를 확인했다.
-- 변경 대상: `app/services/yeoljeong_finance_service.py`, `app/api/yeoljeong_finance.py`, `app/static/apps/yeoljeong-finance/index.html`, 관련 단위 테스트.
+- 변경 대상: `app/services/yeoljeong_finance_service.py`, `app/api/yeoljeong_finance.py`, `app/static/apps/obys/index.html`, 관련 단위 테스트.
 
 ## 2026-07-21 KST - 매장비서 계약서 A4 출력 보완
-- `app/static/apps/yeoljeong-finance/index.html`: 화면 미리보기를 A4 비율(210×297mm)로 맞추고, 인쇄 시 계약서 카드만 A4 portrait/12mm 여백으로 출력되도록 `@page` 및 print 전용 스타일을 추가했다.
+- `app/static/apps/obys/index.html`: 화면 미리보기를 A4 비율(210×297mm)로 맞추고, 인쇄 시 계약서 카드만 A4 portrait/12mm 여백으로 출력되도록 `@page` 및 print 전용 스타일을 추가했다.
 - `tests/unit/test_yeoljeong_finance_print_static.py`: A4 크기, 인쇄 대상 카드, 브라우저 인쇄 동작을 정적 회귀 검증한다.
 - 범위: 계약서 출력 CSS/검증만 변경했으며 HR·배달 원장과 인증 로직은 변경하지 않았다.
 
@@ -5363,7 +5363,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 실수집 상태: 배민은 보안 위배 페이지, 쿠팡이츠는 Access Denied로 서버 headless 접근이 차단됐다. 요기요는 로그인 미완료, 땡겨요는 로그인 후 데이터 메뉴를 찾지 못해 실데이터 대사는 미완료다. PC Browser Bridge 연결 또는 포털별 로그인 흐름 추가 보정이 필요하다.
 
 ## 2026-07-21 09:59 KST - 매장비서 사업자별 직원 계약서 자동채움 격리 릴리스
-- 대상: `app/services/yeoljeong_finance_service.py`, `app/api/yeoljeong_finance.py`, `app/static/apps/yeoljeong-finance/index.html`, `tests/unit/test_yeoljeong_finance_service.py`.
+- 대상: `app/services/yeoljeong_finance_service.py`, `app/api/yeoljeong_finance.py`, `app/static/apps/obys/index.html`, `tests/unit/test_yeoljeong_finance_service.py`.
 - 계약서 작성 시 선택 사업자 소속의 승인된 가입 직원만 조회·선택하도록 API와 화면을 범위화했다.
 - 저장 시 `employee_request_id`의 승인 상태와 사업자 소유권을 다시 검증하며, 직원명·이메일·주소·지점과 사용자 상호·사업자등록번호·대표자·주소·근무장소의 빈 값만 자동채운다. 사용자가 수정한 값은 덮어쓰지 않는다.
 - 플랫폼 계정 DB JSONB payload에는 `password`/`password_enc`가 기록되지 않도록 저장 경계를 보강했다. 암호문은 로컬 보호 원장에만 유지한다.
@@ -5582,7 +5582,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py`: 통과.
   - `git diff --check`: 통과.
   - root 환경 guard 시뮬레이션: `CLAUDE_PERMISSION_ARGS=empty`.
-  - 공개 매장비서 HTML: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` HTTP 200.
+  - 공개 매장비서 HTML: `https://fb.newtalk.kr/static/apps/obys/index.html` HTTP 200.
   - 비인증 storage-status API: `https://fb.newtalk.kr/api/v1/yeoljeong-finance/storage-status` HTTP 401.
   - JSON `platform_accounts.json`: 총 4건, 원문 `password` 0건, `password_enc` 비어 있지 않은 값 0건, `password_masked` 4건.
   - PostgreSQL `yeoljeong_platform_accounts`: active 4건, 원문 `password` 0건, `password_enc` 비어 있지 않은 값 0건.
@@ -5603,7 +5603,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 러너: 현재 세션 활성 작업 0건, 최근 매장비서 DB 호환 러너 `runner-dc0ea80b`, `runner-02bd3c91`는 모두 `rejected_done`.
   - 서버68: `HEALTHY`, DB OK, disk 50%, pending/running directive 0건.
   - 컨테이너: `aads-server`, `aads-dashboard`, `aads-dashboard-green`, `aads-server-green`, `aads-postgres` healthy.
-  - 공개 URL: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` HTTP 200, 비인증 `/api/v1/yeoljeong-finance/storage-status` HTTP 401.
+  - 공개 URL: `https://fb.newtalk.kr/static/apps/obys/index.html` HTTP 200, 비인증 `/api/v1/yeoljeong-finance/storage-status` HTTP 401.
   - 플랫폼 계정 저장 상태: JSON active 4건과 PostgreSQL active 4건 모두 원문 `password` 없음. 단, 현재 `password_enc` 값도 비어 있어 자동 로그인을 위해서는 비밀번호 재등록이 필요하다.
   - 컨테이너 수동 회귀 중 DB 우선 저장소에 생성된 검증 부산물 2건(`legacy`, `7e3756f5-a3b1-429d-b752-44628bdfeb02`)은 `deleted_at` 소프트 삭제로 정리했고, 최종 활성 플랫폼 계정은 4건으로 재확인했다.
 - 검증:
@@ -5651,7 +5651,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 보안: 앱/문서/API/서비스/HANDOVER/CHANGELOG/migrations 대상 CEO 제공 원문 비밀번호 패턴 검색 0건.
 - 검증:
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py`: 통과.
-  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - `node --check app/static/apps/obys/modules/app-config.js`: 통과.
   - `git diff --check`: 통과.
 - 완료/보류:
   - 최종 보고용 ledger는 이 항목으로 최신 실측값을 반영했다.
@@ -5670,7 +5670,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 검증:
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
   - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py /app/app/main.py`: 통과.
-  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - `node --check app/static/apps/obys/modules/app-config.js`: 통과.
   - 매장비서 inline script `node --check /tmp/yeoljeong-finance-inline-final.js`: 통과.
   - HTML parser: 앱/문서 7개 `html_parse_ok 7`.
   - `git diff --check`: 통과.
@@ -5768,7 +5768,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 ## 2026-07-18 09:36 KST - Yeoljeong store assistant final verification recheck
 - 배경: CEO가 이전 응답이 `document_report_unverified_by_ledger` 완료 조건을 충족하지 못했다고 지적해, 매장비서 문서화/업데이트 관리/DB 전환 설계 작업의 현재 상태를 다시 실측하고 최종 보고 근거를 재기록했다.
 - 재확인 결과:
-  - 매장비서 앱 원본과 문서 HTML은 로컬에 존재한다: `app/static/apps/yeoljeong-finance/index.html`, `app/static/apps/yeoljeong-finance/modules/app-config.js`, `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`, `app/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`, `app/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`, `app/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`, `app/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html`.
+  - 매장비서 앱 원본과 문서 HTML은 로컬에 존재한다: `app/static/apps/obys/index.html`, `app/static/apps/obys/modules/app-config.js`, `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`, `app/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`, `app/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`, `app/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`, `app/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html`.
   - 관리자 총괄 링크는 매장비서 앱 상단 `문서`, `기술`, `기획`, `DB전환` 링크와 AADS 대시보드 사이드바 `매장비서 문서` 링크로 확인했다.
   - 현재 구현 방식은 `HTML/CSS/Vanilla JS` 정적 SPA, `FastAPI/Pydantic` API, 설정 일부 `PostgreSQL`, HR/계약/급여/배달 원장 `JSON` 혼합 구조다.
   - 운영 PostgreSQL에는 `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings` 3개 테이블만 존재한다. HR/계약/급여/배달 원장 DB 테이블은 아직 운영 적용 전이다.
@@ -5776,12 +5776,12 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 기준 시각: `TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST'` → `2026-07-18 09:36:47 KST`.
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
   - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py /app/app/main.py`: 통과.
-  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - `node --check app/static/apps/obys/modules/app-config.js`: 통과.
   - 매장비서 앱 inline script 추출 후 `node --check /tmp/yeoljeong-finance-inline-final-check.js`: 통과.
   - HTML parser 검증: 매장비서 앱과 문서 6개 모두 `<html>`/`</html>` marker 확인 및 parser 통과.
   - `migrations/115_yeoljeong_finance_hr_ledgers.sql`: 호스트 파일을 PostgreSQL 표준입력으로 전달해 `BEGIN`/`CREATE TABLE`/`CREATE INDEX`/`ROLLBACK` dry-run 통과.
   - 공개 URL HTTP 200 및 `매장비서` 마커 확인:
-    - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607180935`
+    - `https://fb.newtalk.kr/static/apps/obys/index.html?v=202607180935`
     - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html?v=202607180935`
     - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html?v=202607180935`
     - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html?v=202607180935`
@@ -5859,7 +5859,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
     - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`
     - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical.html`
     - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design.html`
-    - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`
+    - `https://fb.newtalk.kr/static/apps/obys/index.html`
   - 운영 DB 테이블: `yeoljeong_businesses=3`, `yeoljeong_branches=3`, `yeoljeong_settings=1`.
   - JSON 원장: `employee_join_requests=10`, `onboarding_documents=23`, `contracts=4`, `payroll_statements=2`, `platform_accounts=4`.
   - 플랫폼 계정 파일 보안 집계: `plain_password_fields=0`, `encrypted_fields=0`, `masked_fields=4`. 비밀번호 원문은 출력하지 않았다.
@@ -5930,11 +5930,11 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 검증:
   - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:31:21 KST`.
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
-  - `node --check /root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/modules/app-config.js` 통과.
+  - `node --check /root/aads/aads-dashboard/public/static/apps/obys/modules/app-config.js` 통과.
   - 앱 inline script `node --check /tmp/yeoljeong-finance-inline-final.js` 통과.
   - HTML parser 검증: 매장비서 앱, 문서 인덱스, 기술문서, 아키텍처 기획서, DB 전환 설계서 모두 통과.
   - 공개 URL HTTP 200 확인:
-    - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`
+    - `https://fb.newtalk.kr/static/apps/obys/index.html`
     - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`
     - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`
     - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`
@@ -5972,11 +5972,11 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 조치:
   - `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`에 DB 전환 설계서와 프론트 모듈화 현황이 연결되어 있음을 확인했다.
   - `app/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`에 직원 가입, 입사서류, 계약서, 급여, 배달앱 계정, 감사로그 기준 PostgreSQL 전환 설계가 정리되어 있음을 확인했다.
-  - `app/static/apps/yeoljeong-finance/modules/app-config.js` 매니페스트가 앱 문서 링크를 `data-doc-key`로 제어하고, 단일 HTML을 단계적으로 `auth/settings/employee/contracts/payroll/delivery` 모듈로 분리할 기준점으로 연결되어 있음을 확인했다.
+  - `app/static/apps/obys/modules/app-config.js` 매니페스트가 앱 문서 링크를 `data-doc-key`로 제어하고, 단일 HTML을 단계적으로 `auth/settings/employee/contracts/payroll/delivery` 모듈로 분리할 기준점으로 연결되어 있음을 확인했다.
   - 앱 원본과 대시보드 공개 복사본 2개, 매니페스트 원본과 공개 복사본 2개, DB 전환 설계서 원본과 공개 복사본 2개가 `cmp` 기준 동일함을 확인했다.
 - 검증:
   - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:26:52 KST`.
-  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js` 통과.
+  - `node --check app/static/apps/obys/modules/app-config.js` 통과.
   - 앱 HTML inline script `node --check /tmp/yeoljeong-finance-inline-check.js` 통과.
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
   - HTML parser 검증: 매장비서 앱, 문서 인덱스, DB 전환 설계서, 기술문서, 아키텍처 기획서 모두 통과.
@@ -5991,12 +5991,12 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 조치:
   - 매장비서 관리자 상단에 `문서`, `기획`, `DB전환` 링크를 노출했다.
   - `app/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`을 추가해 직원/입사서류/계약서/급여/배달앱 계정 JSON 원장의 PostgreSQL 전환 설계를 문서화했다.
-  - `app/static/apps/yeoljeong-finance/modules/app-config.js`를 추가해 프론트 모듈화 1차 매니페스트를 구성했다. 현재 단일 HTML 기능은 유지하고, 인증/설정/직원/계약/급여/배달수집 모듈 분리 대상만 안정적으로 등록했다.
+  - `app/static/apps/obys/modules/app-config.js`를 추가해 프론트 모듈화 1차 매니페스트를 구성했다. 현재 단일 HTML 기능은 유지하고, 인증/설정/직원/계약/급여/배달수집 모듈 분리 대상만 안정적으로 등록했다.
   - 문서 인덱스와 기술문서를 최신 KST 기준으로 갱신하고, 대시보드 공개 복사본에도 동기화했다.
 - 검증:
   - `TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST'`: `2026-07-16 11:23:56 KST`.
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
-  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js` 통과.
+  - `node --check app/static/apps/obys/modules/app-config.js` 통과.
   - 매장비서 HTML inline script `node --check /tmp/yeoljeong-finance-inline.js` 통과.
   - 공개 앱 HTML에서 `app-config.js`, `DB전환` 링크 확인.
   - 공개 DB 전환 설계 문서에서 `매장비서 JSON 원장 DB 전환 설계`, `yeoljeong_contracts`, `완료 기준` 마커 확인.
@@ -6018,10 +6018,10 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
   - HTML parser 검증: 매장비서 앱 HTML, 문서 인덱스, 기술문서, 호환 기술문서, 아키텍처 문서, 아키텍처 plan 문서, 대시보드 공개 문서 인덱스 2개 모두 통과.
   - 앱 HTML inline script `node --check /tmp/yeoljeong-finance-inline.js` 통과.
-  - 앱 HTML 복사본 동기화: `app/static/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/index.html` `cmp` 통과.
+  - 앱 HTML 복사본 동기화: `app/static/apps/obys/index.html`, `/root/aads/aads-dashboard/public/apps/obys/index.html`, `/root/aads/aads-dashboard/public/static/apps/obys/index.html` `cmp` 통과.
   - 문서 인덱스 복사본 동기화: `app/static/reports/...docs_index.html`, `/root/aads/aads-dashboard/public/reports/...docs_index.html`, `/root/aads/aads-dashboard/public/static/reports/...docs_index.html` `cmp` 통과.
   - 공개 URL HTTP 200 및 `매장비서` 본문 마커 확인:
-    - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607161111`
+    - `https://fb.newtalk.kr/static/apps/obys/index.html?v=202607161111`
     - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html?v=202607161112`
     - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical.html?v=202607161112`
     - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html?v=202607161111`
@@ -6033,11 +6033,11 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 커밋/푸시/정식 `deploy.sh`는 수행하지 않았다.
 
 ## 2026-07-16 10:47 KST - Yeoljeong onboarding tab final verification
-- 배경: CEO가 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` 입사서류 탭에 승인 직원이 표시되지 않는 문제의 조치 완료 여부를 재확인했다.
+- 배경: CEO가 `https://fb.newtalk.kr/static/apps/obys/index.html` 입사서류 탭에 승인 직원이 표시되지 않는 문제의 조치 완료 여부를 재확인했다.
 - 최종 확인:
   - 운영 데이터에는 `하영훈 / dudgns3738@naver.com / 중화점 / status=approved`가 존재하고, 해당 직원의 업로드 입사서류는 0건이다.
   - 활성 `aads-server` 컨테이너 서비스 함수 기준 관리자/직원 본인 모두 하영훈 필수서류 4건을 `status=missing`, `missing_document=True`로 반환한다.
-  - 공개 정적 HTML `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`에는 `mergeOnboardingMissingRows`, `작성 필요`, `업로드 대기`, `/employees/approved` 마커가 반영되어 있다.
+  - 공개 정적 HTML `https://fb.newtalk.kr/static/apps/obys/index.html`에는 `mergeOnboardingMissingRows`, `작성 필요`, `업로드 대기`, `/employees/approved` 마커가 반영되어 있다.
   - 공개 도메인 인증 API `https://fb.newtalk.kr/api/v1/yeoljeong-finance/onboarding/documents`는 관리자 토큰 기준 200이며, 하영훈 placeholder 4건을 반환한다.
 - 검증:
   - `python3 -m py_compile app/services/yeoljeong_finance_service.py` 통과.
@@ -6092,7 +6092,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `app/services/yeoljeong_finance_service.py`에 3개 사업자/3개 지점 canonical master를 고정하고, `biz-corp`, `branch-common` 등 기준 밖 항목이 저장/조회/DB 적재 단계에서 재유입되지 않도록 정규화했다.
   - `/api/v1/yeoljeong-finance/settings` 조회/저장을 DB 우선, JSON 폴백 구조로 연결했다.
   - `migrations/113_yeoljeong_finance_settings.sql`을 추가하고 운영 DB에 `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings`를 적용했다.
-  - `app/static/apps/yeoljeong-finance/index.html`의 기본값, 화면 문구, localStorage 병합 로직을 3개 사업자 기준으로 맞췄다.
+  - `app/static/apps/obys/index.html`의 기본값, 화면 문구, localStorage 병합 로직을 3개 사업자 기준으로 맞췄다.
   - `app/data/yeoljeong_finance/settings.json` seed를 3개 사업자 기준으로 정리하고 기존 외부 연동 6건은 `biz-mia` 기준으로 보존했다.
 - 검증:
   - DB 조회: `yeoljeong_businesses` 활성 3건, `yeoljeong_branches` 활성 3건.
@@ -6107,13 +6107,13 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 ## 2026-07-16 06:16 KST - Yeoljeong store assistant login transition hardening
 - 배경: 서버 재시작으로 직전 응답이 중단되어, 열정국밥 매장비서 로그인 후 화면 이동 정체 조치 상태를 재실측했다.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`과 `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html`의 로그인 성공 흐름에서 `refreshFinanceSession()` 동기 대기를 제거했다.
+  - `app/static/apps/obys/index.html`과 `/root/aads/aads-dashboard/public/apps/obys/index.html`의 로그인 성공 흐름에서 `refreshFinanceSession()` 동기 대기를 제거했다.
   - 로그인 토큰 저장과 `saveAuthSession()` 직후 로그인 모달을 닫고 기본 화면으로 전환한 뒤, `refreshFinanceSessionInBackground()`로 권한/세션 보강을 백그라운드 처리하도록 변경했다.
   - 운영 `aads-dashboard`, `aads-dashboard-green`, `aads-server-green` 컨테이너의 대응 정적 파일을 재시작 없이 동기화했다.
 - 검증:
   - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 06:13:54 KST`.
-  - `curl -L https://aads.newtalk.kr/apps/yeoljeong-finance`에서 `refreshFinanceSessionInBackground` 반영 확인.
-  - `docker exec aads-dashboard`, `docker exec aads-dashboard-green` 기준 `/app/public/apps/yeoljeong-finance/index.html`에 동일 수정 반영 확인.
+  - `curl -L https://aads.newtalk.kr/apps/obys`에서 `refreshFinanceSessionInBackground` 반영 확인.
+  - `docker exec aads-dashboard`, `docker exec aads-dashboard-green` 기준 `/app/public/apps/obys/index.html`에 동일 수정 반영 확인.
   - `node -e` HTML inline script parse 검증 결과 `js-parse-ok 1`.
   - `/api/v1/yeoljeong-finance/session` 비인증 호출은 `401 application/json`으로 정상 차단된다.
 - 남은 제한:
@@ -6124,15 +6124,15 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 배경: CEO가 열정국밥 매장비서 수정 필요사항 P0~P1 즉시 조치를 지시했다.
 - 조치:
   - `app/api/yeoljeong_finance.py`, `app/services/yeoljeong_finance_service.py`에 배달 수집 보조 라우트(`/sales`, `/reviews`, `/collection-status`, `/automation`)를 보존 추가했다.
-  - `app/static/apps/yeoljeong-finance/index.html` 및 대시보드 public/static 정적 HTML 2개 경로에 직원 승인 후 서버 세션 권한이 브라우저 로컬 pending 캐시보다 우선되도록 보정했다.
-  - 운영 `aads-dashboard`, `aads-dashboard-green` 컨테이너의 `/app/public/apps/yeoljeong-finance/index.html`, `/app/public/static/apps/yeoljeong-finance/index.html`을 백업 후 정적 파일만 동기화했다. 백업 파일은 각 경로의 `.bak-20260716-p0p1`.
+  - `app/static/apps/obys/index.html` 및 대시보드 public/static 정적 HTML 2개 경로에 직원 승인 후 서버 세션 권한이 브라우저 로컬 pending 캐시보다 우선되도록 보정했다.
+  - 운영 `aads-dashboard`, `aads-dashboard-green` 컨테이너의 `/app/public/apps/obys/index.html`, `/app/public/static/apps/obys/index.html`을 백업 후 정적 파일만 동기화했다. 백업 파일은 각 경로의 `.bak-20260716-p0p1`.
 - 검증:
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py` 통과.
   - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py /app/app/main.py` 통과.
   - 컨테이너 서비스 스모크: 직원 가입요청 `employee_pending` → 승인 후 `employee`, 계약 저장 성공, 급여 net_pay `99000`.
   - 운영 OpenAPI `yeoljeong-finance` 라우트 27개 노출, 필수 HR/계약/급여/배달 보조 라우트 누락 0개.
   - HTML 스크립트 문법 검사 3개 경로 모두 `node --check` 통과.
-  - `https://aads.newtalk.kr/apps/yeoljeong-finance/index.html` HTTP 200 및 `serverApprovedEmployee` 코드 4건 반영 확인.
+  - `https://aads.newtalk.kr/apps/obys/index.html` HTTP 200 및 `serverApprovedEmployee` 코드 4건 반영 확인.
 - 남은 제한:
   - 이번 조치는 정적 파일 컨테이너 동기화까지 완료했지만 git commit/push는 수행하지 않았다.
   - 기존 미커밋 `docs/CHANGELOG-direct-edit.md`, `scripts/build_dashboard_now.sh`, `scripts/fix_dashboard_auth_race.py`는 이번 범위와 무관해 보존한다.
@@ -9101,13 +9101,13 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 확인:
   - 대시보드 정적 앱 기준 계약서 화면에는 승인 직원 선택, 4대보험/3.3% 구분, 외국인 채용 여부, 근무조건, 임금조건, 보안/위생, 프리랜서 조항, 계약서 미리보기 카드가 구현돼 있다.
   - 백엔드 OpenAPI에는 `/api/v1/yeoljeong-finance/employees/*`, `/onboarding/documents`, `/contracts`, `/contracts/signing`, `/payroll` 경로가 등록돼 있고, 비인증 호출은 401로 차단된다.
-  - `fb.newtalk.kr`가 `/static/apps/yeoljeong-finance/index.html`로 리다이렉트되지만 백엔드 정적 파일이 없어 404가 발생하던 상태를 확인했다.
+  - `fb.newtalk.kr`가 `/static/apps/obys/index.html`로 리다이렉트되지만 백엔드 정적 파일이 없어 404가 발생하던 상태를 확인했다.
 - 조치:
-  - `/root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/index.html`을 `app/static/apps/yeoljeong-finance/index.html`에 동기화했다.
-  - 동일 파일을 `aads-server`, `aads-server-green` 컨테이너의 `/app/app/static/apps/yeoljeong-finance/index.html`에 동기화했다.
+  - `/root/aads/aads-dashboard/public/static/apps/obys/index.html`을 `app/static/apps/obys/index.html`에 동기화했다.
+  - 동일 파일을 `aads-server`, `aads-server-green` 컨테이너의 `/app/app/static/apps/obys/index.html`에 동기화했다.
 - 검증:
   - `curl -L https://fb.newtalk.kr/` 결과 `200 text/html`.
-  - `curl https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` 결과 `200 text/html`.
+  - `curl https://fb.newtalk.kr/static/apps/obys/index.html` 결과 `200 text/html`.
   - active/green 컨테이너 정적 파일 해시 모두 `042d2adcd1883c6f4d47458c9ed5599f3b5098ddc6fdcdb7c5cad9c1755c6a92`.
   - `curl http://127.0.0.1:8100/api/v1/health` 결과 `status=ok`.
 - 남은 상태:
@@ -9125,7 +9125,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - API E2E 22단계 모두 통과.
   - 컨테이너 문법검사: `python -m py_compile /app/app/services/yeoljeong_finance_service.py /app/app/api/yeoljeong_finance.py` 통과.
   - 저장 데이터 확인: 가입요청 1건, 서류 4건, 계약 1건, 급여 1건.
-  - 공개 정적 앱 `https://aads.newtalk.kr/static/apps/yeoljeong-finance/index.html` 200 OK, 공개 헬스체크 200 OK.
+  - 공개 정적 앱 `https://aads.newtalk.kr/static/apps/obys/index.html` 200 OK, 공개 헬스체크 200 OK.
 - 보류:
   - 호스트와 컨테이너에 `pytest` 모듈이 없어 `tests/unit/test_yeoljeong_finance_service.py` pytest 실행은 불가했다.
   - 스크린샷 캡처 도구는 localhost 연결 거부 및 공개 URL SSH 인자 길이 오류로 실패해 브라우저 시각 검증은 HTTP/API 검증으로 대체했다.
@@ -9134,7 +9134,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 ## 2026-07-16 10:10 KST - Yeoljeong employee contract A4 print templates
 - 배경: CEO가 직원계약서를 A4 출력 디자인으로 적용하고, 표준근로계약서와 3.3% 프리랜서 용역계약서를 테스트 계정에 실제 반영해 출력 디자인 E2E 검증을 요청했다.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html` 계약서 미리보기를 A4 용지 크기(`210mm x 297mm`), 표/조항/서명란 기반 출력 문서로 변경했다.
+  - `app/static/apps/obys/index.html` 계약서 미리보기를 A4 용지 크기(`210mm x 297mm`), 표/조항/서명란 기반 출력 문서로 변경했다.
   - 계약서 작성 화면에 `A4 인쇄/PDF` 버튼을 추가하고 `@page size: A4` 및 print media 규칙을 적용했다.
   - 표준근로계약서는 고용노동부 표준근로계약서 필수 기재 축인 당사자, 계약기간, 근무장소, 업무내용, 소정근로시간, 휴게, 휴일, 임금, 사회보험/세무, 휴가/퇴직/전자서명 조항을 A4 문서에 반영했다.
   - 3.3% 프리랜서 용역계약서는 기존 `reports/contracts/20260615_freelancer_service_contract_template.md`와 `docs/contracts/20260615_프리랜서_외주계약서_전자계약_초안.md` 구조를 참고해 독립계약자 지위, 용역 범위, 검수, 3.3% 원천징수, 비밀유지, 지식재산권, 계약 변경/해지 조항을 분리했다.
@@ -9148,7 +9148,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
   - `node --check /tmp/yeoljeong-inline.js` 통과.
   - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py` 통과.
-  - `curl https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607161010`에서 `A4 인쇄/PDF`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `3.3% 프리랜서 용역계약서` 문구 확인.
+  - `curl https://fb.newtalk.kr/static/apps/obys/index.html?v=202607161010`에서 `A4 인쇄/PDF`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `3.3% 프리랜서 용역계약서` 문구 확인.
   - `curl -I https://fb.newtalk.kr/static/reports/yeoljeong-contract-a4-e2e.html` 200 OK.
   - 정적 리포트 구조 검사: A4 paper 2개, `@page size: A4`, 표준근로계약서/3.3% 용역계약서 문구 확인.
 - 보류:
@@ -9162,7 +9162,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 10:14:46 KST`.
   - `git status --short`: 계약서 관련 변경 파일과 테스트 데이터가 워킹트리에 남아 있으며, unrelated 변경도 함께 존재한다.
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
-  - 공개 앱 HTML 조회: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607161013` 247,889 bytes, `A4 인쇄/PDF`, `contract-paper`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `majangbiseo-freelancer-2026-07-a4`, `표준근로계약서`, `3.3% 프리랜서 용역계약서` 모두 확인.
+  - 공개 앱 HTML 조회: `https://fb.newtalk.kr/static/apps/obys/index.html?v=202607161013` 247,889 bytes, `A4 인쇄/PDF`, `contract-paper`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `majangbiseo-freelancer-2026-07-a4`, `표준근로계약서`, `3.3% 프리랜서 용역계약서` 모두 확인.
   - 공개 A4 리포트 조회: `https://fb.newtalk.kr/static/reports/yeoljeong-contract-a4-e2e.html?v=202607161013` 8,315 bytes, `class="paper"` 2개, `@page { size: A4`, 표준근로계약서, 3.3% 프리랜서 용역계약서, E2E 테스트 직원명 2건 확인.
   - 컨테이너 내부 직접 서비스 E2E: `aads-server`에서 임시 `YEOLJEONG_FINANCE_DATA_DIR=/tmp/yf-contract-verify-202607161014`로 표준근로계약서와 프리랜서 용역계약서를 저장하고 서명요청까지 실행해 `DIRECT_SERVICE_E2E_OK` 확인.
   - 운영 컨테이너 상태: `aads-server`, `aads-dashboard`, `aads-dashboard-green`, `aads-postgres` 모두 healthy.
@@ -9178,7 +9178,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 ## 2026-07-16 10:20 KST - Yeoljeong employee contract A4 final ledger reconciliation
 - 배경: CEO가 직전 응답이 `document_report_unverified_by_ledger` 위반이라고 지적해, 계약서 A4 작업의 남은 확인/조치/검증을 계속 수행했다.
 - 추가 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`에는 A4 계약서 변경이 있었으나 `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html`에는 이전 버전이 남아 있는 불일치를 확인했다.
+  - `app/static/apps/obys/index.html`에는 A4 계약서 변경이 있었으나 `/root/aads/aads-dashboard/public/apps/obys/index.html`에는 이전 버전이 남아 있는 불일치를 확인했다.
   - 운영 경로 차이에 따라 예전 계약서 화면이 보일 수 있어, A4 버전 HTML을 대시보드 public 원본에도 동기화했다.
   - 동기화 후 두 파일의 sha256은 모두 `c00153e5649854b15cb893ed28ca0bc6ae6807d1060343f5a0d828b5d266c925`로 일치한다.
 - 최신 검증:
@@ -9186,7 +9186,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
   - `docker exec aads-server python3 -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py` 통과.
   - 로컬 앱 HTML inline script 파서 검증: `JS_PARSE_OK 1`.
-  - 공개 앱 HTML 조회: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607161020` 247,889 bytes, `A4 인쇄/PDF`, `210mm`, `297mm`, `@page`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `3.3% 프리랜서 용역계약서` 모두 확인.
+  - 공개 앱 HTML 조회: `https://fb.newtalk.kr/static/apps/obys/index.html?v=202607161020` 247,889 bytes, `A4 인쇄/PDF`, `210mm`, `297mm`, `@page`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `3.3% 프리랜서 용역계약서` 모두 확인.
   - 공개 A4 리포트 조회: `https://fb.newtalk.kr/static/reports/yeoljeong-contract-a4-e2e.html?v=202607161020` 8,315 bytes, `class="paper"`, `@page { size: A4`, `표준근로계약서`, `3.3% 프리랜서 용역계약서`, E2E 테스트 직원명 2건 확인.
   - 운영 컨테이너 내부 직접 서비스 E2E: `DIRECT_SERVICE_E2E_OK /tmp/yf-a4-e2e-ge7910dz 79d1a169-2bad-428a-ba79-eee331ea0840 f8f5d1cf-5523-4f93-b2f4-833988a147cd`.
 - 실제 데이터:
@@ -9202,11 +9202,11 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 배경: CEO가 이전 완료보고의 ledger 검증 누락을 재지적해, 최종 보고 직전 공개 URL/컨테이너/문서 상태를 다시 확인했다.
 - 최신 검증:
   - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 10:23:19 KST`.
-  - `cmp -s /root/aads/aads-server/app/static/apps/yeoljeong-finance/index.html /root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html` 통과.
+  - `cmp -s /root/aads/aads-server/app/static/apps/obys/index.html /root/aads/aads-dashboard/public/apps/obys/index.html` 통과.
   - 두 정적 앱 파일 sha256은 모두 `c00153e5649854b15cb893ed28ca0bc6ae6807d1060343f5a0d828b5d266c925`로 일치한다.
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
   - 컨테이너 내부 직접 서비스 E2E: `DIRECT_A4_CONTRACT_E2E_OK majangbiseo-employment-2026-07-a4 majangbiseo-freelancer-2026-07-a4 requested`.
-  - 공개 앱 HTML `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607161023` 다운로드 성공, 247,889 bytes, `A4 인쇄/PDF`, `210mm`, `297mm`, `@page`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `majangbiseo-freelancer-2026-07-a4`, `표준근로계약서`, `3.3% 프리랜서 용역계약서` 모두 확인.
+  - 공개 앱 HTML `https://fb.newtalk.kr/static/apps/obys/index.html?v=202607161023` 다운로드 성공, 247,889 bytes, `A4 인쇄/PDF`, `210mm`, `297mm`, `@page`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `majangbiseo-freelancer-2026-07-a4`, `표준근로계약서`, `3.3% 프리랜서 용역계약서` 모두 확인.
   - 공개 A4 리포트 `https://fb.newtalk.kr/static/reports/yeoljeong-contract-a4-e2e.html?v=202607161023` 다운로드 성공, 8,316 bytes, `class="paper"` 2개, `@page { size: A4`, 표준근로계약서, 3.3% 프리랜서 용역계약서, E2E 테스트 직원명 2건 확인.
   - 운영 컨테이너 상태: `aads-server Up 3 hours (healthy)`, `aads-server-green Up 3 hours (healthy)`.
 - 남은 제한:
@@ -9220,9 +9220,9 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST'`: `2026-07-16 10:24:41 KST`.
   - `git status --short` 기준 계약서 관련 파일과 별도 unrelated 변경이 함께 존재한다. 이번 작업 범위 외 변경은 되돌리지 않았다.
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
-  - 공개 앱 HTML `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607161024`: HTTP 200, 269,485 bytes 다운로드, 저장 HTML 기준 247,889 characters, `A4 인쇄/PDF`, `210mm`, `297mm`, `@page`, `contract-paper`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `majangbiseo-freelancer-2026-07-a4`, `표준근로계약서`, `3.3% 프리랜서 용역계약서` 모두 확인.
+  - 공개 앱 HTML `https://fb.newtalk.kr/static/apps/obys/index.html?v=202607161024`: HTTP 200, 269,485 bytes 다운로드, 저장 HTML 기준 247,889 characters, `A4 인쇄/PDF`, `210mm`, `297mm`, `@page`, `contract-paper`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `majangbiseo-freelancer-2026-07-a4`, `표준근로계약서`, `3.3% 프리랜서 용역계약서` 모두 확인.
   - 공개 A4 리포트 `https://fb.newtalk.kr/static/reports/yeoljeong-contract-a4-e2e.html?v=202607161024`: HTTP 200, 10,472 bytes 다운로드, 저장 HTML 기준 8,315 characters, `class="paper"` 2개와 `@page { size: A4`, E2E 테스트 직원명 2건 확인.
-  - 정적 앱 원본 동기화 확인: `app/static/apps/yeoljeong-finance/index.html`과 `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html` sha256 모두 `c00153e5649854b15cb893ed28ca0bc6ae6807d1060343f5a0d828b5d266c925`.
+  - 정적 앱 원본 동기화 확인: `app/static/apps/obys/index.html`과 `/root/aads/aads-dashboard/public/apps/obys/index.html` sha256 모두 `c00153e5649854b15cb893ed28ca0bc6ae6807d1060343f5a0d828b5d266c925`.
   - `app/data/yeoljeong_finance/contracts.json`에서 테스트 계약 2건 확인: `b306224b-d01a-4254-a675-3fe224abcee6`는 `standard_employment_contract / majangbiseo-employment-2026-07-a4 / 표준근로계약서 / requested`, `c485c3da-9cd0-47d2-ad27-4519081b3c79`는 `freelancer_service_contract / majangbiseo-freelancer-2026-07-a4 / 3.3% 프리랜서 용역계약서 / requested`.
 - 남은 제한:
   - 커밋/푸시/정식 `deploy.sh`/재시작은 수행하지 않았다.
@@ -9236,7 +9236,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 기존 화면은 계약서/급여/서류 탭에서 실제 원장 행만 렌더링해, 승인 완료 직원이 후속 작업 대상으로 표시되지 않았다.
 - 조치:
   - `app/services/yeoljeong_finance_service.py`의 승인 직원 API가 각 직원별 `onboarding_document_count`, `contract_count`, `payroll_statement_count`, `needs_*` 상태를 반환하도록 보강했다.
-  - `app/static/apps/yeoljeong-finance/index.html`에 공통 `maskedEmail`, `displayEmail`, `approvedEmployeesMissing` 로직을 추가했다.
+  - `app/static/apps/obys/index.html`에 공통 `maskedEmail`, `displayEmail`, `approvedEmployeesMissing` 로직을 추가했다.
   - 직원관리 서류 검수, 계약서, 급여내역서 탭에 승인됐지만 원장이 없는 직원을 `미등록`/`작성 필요` 행으로 표시하도록 수정했다.
   - `서류등록 안내`, `계약작성`, `급여작성` 버튼을 추가해 승인 직원 정보가 각 작성 폼에 자동 채워지도록 연결했다.
   - 상단 인증/총괄관리자 상태 표시의 이메일은 원문 대신 마스킹 값으로 표시하도록 수정했다.
@@ -9246,20 +9246,20 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `node --check /tmp/yeoljeong-finance-script.js` 통과.
   - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py` 통과.
   - 컨테이너 서비스 직접 검증: 승인 직원 8명, 하영훈은 `onboarding_document_count=0`, `contract_count=0`, `payroll_statement_count=0`, `needs_onboarding_documents=True`, `needs_contract=True`, `needs_payroll=True`.
-  - 공개 앱 HTML `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`에서 `maskedEmail`, `작성필요`, `startContractForEmployee` 마커 확인.
+  - 공개 앱 HTML `https://fb.newtalk.kr/static/apps/obys/index.html`에서 `maskedEmail`, `작성필요`, `startContractForEmployee` 마커 확인.
 - 제한:
   - 커밋/푸시/정식 `deploy.sh`/프로세스 재시작은 수행하지 않았다.
   - 화면 클릭 E2E/스크린샷은 수행하지 않았고, 공개 HTML 마커와 컨테이너 서비스 검증으로 대체했다.
 
 ## 2026-07-16 10:34 KST - Yeoljeong onboarding tab missing approved employee rows
-- 배경: CEO가 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` 입사서류 탭 리스트에 실제 가입 직원이 나오지 않는다고 지적했다.
+- 배경: CEO가 `https://fb.newtalk.kr/static/apps/obys/index.html` 입사서류 탭 리스트에 실제 가입 직원이 나오지 않는다고 지적했다.
 - 원인 확인:
   - `employee_join_requests.json`에는 `하영훈 / 중화점 / status=approved` 레코드가 존재한다.
   - 동일 직원의 `onboarding_documents.json` 업로드 문서는 0건이라, 기존 `/onboarding/documents` 응답과 화면은 실제 업로드 문서만 렌더링했다.
   - 따라서 “승인 직원이 입사서류 탭에 안 보임”은 데이터 저장 실패가 아니라 필수서류 미제출 상태를 목록 행으로 만들지 않는 설계 누락이었다.
 - 조치:
   - `app/services/yeoljeong_finance_service.py`에 승인/가입 직원별 필수 입사서류 미제출 placeholder 생성 로직을 추가했다.
-  - `app/static/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html`을 동기화했다.
+  - `app/static/apps/obys/index.html`, `/root/aads/aads-dashboard/public/static/apps/obys/index.html`, `/root/aads/aads-dashboard/public/apps/obys/index.html`을 동기화했다.
   - 프론트 `loadOnboardingDocuments()`가 관리자 입사서류 탭 진입 시 승인 직원 목록을 함께 읽고, 업로드 문서가 없는 필수서류를 `작성 필요` 행으로 합치게 했다.
   - `missing` 행은 파일 열기/삭제 버튼을 노출하지 않고 `업로드 대기`로 표시한다.
 - 검증:
@@ -9277,7 +9277,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 ## 2026-07-16 11:01 KST - Yeoljeong store assistant technical/design documents
 - 배경: CEO가 매장비서 개발환경 언어 보고, 기술문서 저장/업데이트 관리, 아키텍처·디자인·모달 기획 HTML 문서화, 관리자 총괄 파일 링크 연결, 현재 기술 선택의 적정성 보고를 요청했다.
 - 확인한 현재 개발환경:
-  - 프론트는 단일 정적 SPA(`app/static/apps/yeoljeong-finance/index.html`) 기반의 `HTML/CSS/Vanilla JavaScript`.
+  - 프론트는 단일 정적 SPA(`app/static/apps/obys/index.html`) 기반의 `HTML/CSS/Vanilla JavaScript`.
   - 백엔드는 `FastAPI/Pydantic` 기반 API(`app/api/yeoljeong_finance.py`, `app/services/yeoljeong_finance_service.py`).
   - HR/계약/급여 원장은 `app/data/yeoljeong_finance/*.json`, 설정 일부는 PostgreSQL 우선 + JSON 폴백 구조.
   - FastAPI는 `app/main.py`에서 `app/static`을 `/static`으로 mount한다.
@@ -9298,7 +9298,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 공개 문서 인덱스 `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html?v=202607161056`: HTTP 조회 및 핵심 링크 확인.
   - 공개 기술문서 `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical.html?v=202607161102`: `FastAPI`, `업데이트 관리 절차` 마커 확인.
   - 공개 아키텍처 문서 `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design.html?v=202607161056`: `아키텍처·디자인 기획서`, `권장 개선 로드맵` 마커 확인.
-  - 공개 매장비서 앱 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607161102`: `문서`, `기획` 링크 마커 확인.
+  - 공개 매장비서 앱 `https://fb.newtalk.kr/static/apps/obys/index.html?v=202607161102`: `문서`, `기획` 링크 마커 확인.
 - 기술 판정:
   - 현재 방식은 빠른 MVP/운영 검증에는 적합하다.
   - 장기 최선안은 아니다. 실사용자가 늘기 전 JSON 원장을 PostgreSQL로 전환하고, 단일 HTML은 모듈화 또는 Next.js 앱으로 분리하는 것이 권장된다.
@@ -9330,7 +9330,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 문서 원본/대시보드 공개 복사본의 HTML inline script 검증을 재수행했다.
 - 검증:
   - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:01:53 KST`.
-  - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`: HTTP 200.
+  - `https://fb.newtalk.kr/static/apps/obys/index.html`: HTTP 200.
   - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`: HTTP 200.
   - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`: HTTP 200.
   - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`: HTTP 200.
@@ -9345,7 +9345,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 배경: CEO가 이전 응답의 완료보고가 `document_report_unverified_by_ledger` 조건을 충족하지 못했다고 지적해 문서/링크/검증/상태를 다시 확인했다.
 - 추가 조치:
   - `app/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`의 AADS 대시보드 공개 문서 경로를 실제 200 응답 경로인 `/public/reports/...`로 보정했다.
-  - `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`의 매장비서 앱 링크를 대시보드 도메인에서도 깨지지 않도록 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` 절대 URL로 보정했다.
+  - `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`의 매장비서 앱 링크를 대시보드 도메인에서도 깨지지 않도록 `https://fb.newtalk.kr/static/apps/obys/index.html` 절대 URL로 보정했다.
   - 보정한 문서를 호환 파일명(`technical.html`)과 대시보드 공개 경로(`/root/aads/aads-dashboard/public/reports`, `/root/aads/aads-dashboard/public/static/reports`)에 동기화했다.
 - 재검증:
   - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:08:28 KST`.
@@ -9374,7 +9374,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - HEAD 커밋 포함 파일: `HANDOVER.md`, `docs/CHANGELOG-direct-edit.md`.
   - 문서/DB전환/모듈화 본문 커밋: `7c481fd4 docs: document yeoljeong store assistant architecture`.
 - 공개 URL 재검증:
-  - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`: HTTP 200.
+  - `https://fb.newtalk.kr/static/apps/obys/index.html`: HTTP 200.
   - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`: HTTP 200.
   - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical.html`: HTTP 200.
   - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`: HTTP 200.
@@ -9384,7 +9384,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py`: 통과.
   - HTML parser: 매장비서 앱 HTML 및 `20260716_yeoljeong_store_assistant*.html` 6개 통과.
   - `node --check /tmp/yeoljeong-finance-inline.js`: 통과.
-  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - `node --check app/static/apps/obys/modules/app-config.js`: 통과.
   - `python3 -m pytest tests/unit/test_yeoljeong_finance_service.py -q`: 실패. 사유는 호스트에 `pytest` 모듈 미설치.
 - DB 상태:
   - PostgreSQL 실제 테이블: `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings`.
@@ -9474,7 +9474,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 대시보드 큐: pending 0, running 0.
 - 직접 보완:
   - 매장비서 관리자 상단 문서 링크에 `기술` 직접 링크를 추가했다.
-  - 반영 파일: `app/static/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html`.
+  - 반영 파일: `app/static/apps/obys/index.html`, `/root/aads/aads-dashboard/public/static/apps/obys/index.html`, `/root/aads/aads-dashboard/public/apps/obys/index.html`.
 - 문서/URL 검증:
   - `/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`: HTTP 200.
   - `/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`: HTTP 200.
@@ -9523,14 +9523,14 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 반영:
   - PostgreSQL `yeoljeong_businesses`: `biz-junghwa`, `biz-mia` 사업자 정보를 사진값으로 갱신.
   - PostgreSQL `yeoljeong_settings.data.accounts`: `acct-sungshin-ibk` 계좌 1건 반영.
-  - 파일 seed 동기화: `app/services/yeoljeong_finance_service.py`, `app/data/yeoljeong_finance/settings.json`, `app/static/apps/yeoljeong-finance/index.html`.
-  - 대시보드 공개 복사본 동기화: `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/index.html`.
+  - 파일 seed 동기화: `app/services/yeoljeong_finance_service.py`, `app/data/yeoljeong_finance/settings.json`, `app/static/apps/obys/index.html`.
+  - 대시보드 공개 복사본 동기화: `/root/aads/aads-dashboard/public/apps/obys/index.html`, `/root/aads/aads-dashboard/public/static/apps/obys/index.html`.
   - 운영 컨테이너 동기화: `aads-dashboard`, `aads-dashboard-green`의 `/app/public/apps/...` 및 `/app/public/static/apps/...` HTML 복사. 서버 컨테이너 `aads-server`, `aads-server-green` 정적 파일은 최신값 확인.
 - 검증:
   - `python3 -m json.tool app/data/yeoljeong_finance/settings.json`: 통과.
   - `python3 -m py_compile app/services/yeoljeong_finance_service.py`: 통과.
   - DB SELECT 기준 `biz-junghwa=710-86-04499`, `biz-mia=874-21-02160`, `acct-sungshin-ibk=005-106576-01-017` 확인.
-  - 운영 URL `https://aads.newtalk.kr/apps/yeoljeong-finance/index.html` 및 `/static/apps/yeoljeong-finance/index.html` 본문에서 `710-86-04499`, `874-21-02160`, `005-106576-01-017` 확인.
+  - 운영 URL `https://aads.newtalk.kr/apps/obys/index.html` 및 `/static/apps/obys/index.html` 본문에서 `710-86-04499`, `874-21-02160`, `005-106576-01-017` 확인.
 ## 2026-07-20 11:03 KST - Chat session switch loading latency investigation and local optimization
 
 - 배경: CEO가 채팅 세션 이동 시 로딩이 너무 느리다고 보고했고, 이전 완료보고가 commit/push/deploy/document ledger와 충돌해 실제 상태를 재검증했다.
@@ -9587,16 +9587,16 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`: 갱신 기준을 `2026-07-18 09:29:32 KST`로 정정하고, 검증되지 않은 AADS 사이드바 연결 표현을 "별도 승인 후 적용"으로 수정.
   - `app/static/reports/20260716_yeoljeong_store_assistant_technical.html`: 업데이트 관리 절차에 `public/static/reports` 동기화 기준 추가.
   - `app/static/reports/20260716_yeoljeong_store_assistant_architecture_design.html`: 갱신 기준을 현재 재검증 시각으로 정정.
-  - `app/static/apps/yeoljeong-finance/modules/app-config.js`: `updatedAt`을 `2026-07-18 09:29:32 KST`로 정정.
+  - `app/static/apps/obys/modules/app-config.js`: `updatedAt`을 `2026-07-18 09:29:32 KST`로 정정.
   - `app/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html`: 현재 구현 방식 판정, 최선안, P0/P1/P2 우선순위 개선안을 HTML 보고서로 고정하고 문서 인덱스에 연결.
   - 별칭 문서 `*_technical_doc.html`, `*_architecture_design_plan.html`와 대시보드 `public/reports`, `public/static/reports` 복사본을 동일 내용으로 동기화.
 - 검증:
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
-  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - `node --check app/static/apps/obys/modules/app-config.js`: 통과.
   - HTML inline script 추출 후 `node --check /tmp/yeoljeong-finance-inline.js`: 통과.
   - 운영 URL HTTP 200 확인:
-    - `/static/apps/yeoljeong-finance/index.html`
-    - `/static/apps/yeoljeong-finance/modules/app-config.js`
+    - `/static/apps/obys/index.html`
+    - `/static/apps/obys/modules/app-config.js`
     - `/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`
     - `/static/reports/20260716_yeoljeong_store_assistant_technical.html`
     - `/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`
@@ -9621,7 +9621,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `dashboard_query(filter_status=all)`: pending 0, running 0, checked_at `2026-07-18 09:35 KST`.
 - 문서/링크 확인:
   - 매장비서 앱 상단 관리자 영역에 `/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`, 기술문서, 아키텍처/디자인 기획서, DB 전환 문서 링크가 존재.
-  - `app/static/apps/yeoljeong-finance/modules/app-config.js`가 문서 매니페스트와 phase-1 모듈화 매니페스트를 제공.
+  - `app/static/apps/obys/modules/app-config.js`가 문서 매니페스트와 phase-1 모듈화 매니페스트를 제공.
   - 운영 URL 7개 HTTP 200 확인: 앱 HTML, app-config.js, 문서 인덱스, 기술문서, 아키텍처/디자인 기획서, DB 전환 설계, 개선 우선순위 보고서.
 - DB/저장소 확인:
   - PostgreSQL `yeoljeong_%` 테이블은 `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings` 3개.
@@ -9640,7 +9640,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - P0 코드 조치:
   - app/services/yeoljeong_finance_service.py: 플랫폼 비밀번호 암호화 저장/응답 비노출, 기존 평문 호환 마이그레이션, 3개 사업자·지점 연결 검증, 배달 원장 관리자 권한, 63일 수집 기간 제한, 원장 결정적 ID upsert, 은행/카드 CSV 가져오기 회귀 복구.
   - app/services/yeoljeong_delivery_collectors.py: 배민·쿠팡이츠·요기요·땡겨요 포털 어댑터, 매출·정산·리뷰 표/파일 정규화, CAPTCHA·OTP·기기인증 시 portal_action_required 중단, 임시 다운로드 정리.
-  - app/api/yeoljeong_finance.py, app/static/apps/yeoljeong-finance/index.html: 사업자·지점·기간을 자동수집/정산 CSV API에 전달하도록 계약 정합화.
+  - app/api/yeoljeong_finance.py, app/static/apps/obys/index.html: 사업자·지점·기간을 자동수집/정산 CSV API에 전달하도록 계약 정합화.
   - fallback JSON 및 공개 정적 HTML/보관본에서 실제 로그인 ID, 전체 계좌번호, 암호문을 제거하거나 마스킹했다. Git 과거 이력은 재작성하지 않았다.
 - 테스트 안전:
   - tests/unit/test_yeoljeong_finance_service.py에 autouse 저장소/DB 격리 fixture를 추가했다.
@@ -9914,7 +9914,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 ## 2026-07-26 20:05 KST - 열정국밥 연동관리 설정 페이지 실제 연결 보강
 
 - 요청: 연동관리 페이지에 판매사이트(배민/쿠팡이츠/요기요/땡겨요), 은행(신한 기업/기업은행 기업), 매입처(쿠팡/마켓봄/뉴통/발주고/추가 주문프로그램), 주문프로그램 없는 매입처의 거래내역서·영수증 사진 등록, 홈택스 계산서 연동, 추가 운영 항목을 반영.
-- 조치: `app/static/apps/yeoljeong-finance/index.html`의 연동관리 폼을 판매사이트/은행/매입처/세무·계산서/기타 운영 optgroup으로 확장하고, 서비스별 기본 URL·수집방식·수집대상·필요확인값·메모 프리셋을 적용했다.
+- 조치: `app/static/apps/obys/index.html`의 연동관리 폼을 판매사이트/은행/매입처/세무·계산서/기타 운영 optgroup으로 확장하고, 서비스별 기본 URL·수집방식·수집대상·필요확인값·메모 프리셋을 적용했다.
 - 조치: 판매 4사는 기존 `/sync` 자동 수집 버튼으로 연결하고, 은행 엑셀·매입처 거래내역서·영수증 사진·홈택스/계산서 PDF·카드/PG·공과금·회계프로그램 파일은 `증빙 서버 등록` 흐름으로 연결했다.
 - 조치: `app/api/yeoljeong_finance.py`에 `/integration-evidence` 목록/업로드/다운로드 API를 추가하고, `app/services/yeoljeong_finance_service.py`에 `integration_evidence` JSON 원장과 파일 저장소, 확인필요 거래 자동 생성 로직을 추가했다.
 - 보안/권한: 외부 계정 비밀번호는 기존 Vault 암호화 저장 경로를 유지하고, 연동 증빙 업로드·조회·다운로드는 관리자 권한에서만 허용한다. 업로드 파일은 15MB 제한과 안전 파일명 처리를 적용한다.
@@ -9925,12 +9925,12 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - 요청: 언니냉면 직원용 레시피 페이지를 AADS 로그인 권한이 아니라 FB 로그인 권한으로 접근하게 하고, FB 로그인 후 레시피 페이지로 복귀하도록 보완.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`에 `fb_access_token` 전용 쿠키/스토리지 키를 추가했다.
+  - `app/static/apps/obys/index.html`에 `fb_access_token` 전용 쿠키/스토리지 키를 추가했다.
   - 로그인, 회원가입, 직원 초대수락 성공 시 기존 서버 API용 `aads_token`과 함께 레시피 보호 전용 `fb_access_token`을 발급한다.
   - 로그아웃 시 두 토큰을 함께 삭제한다.
 - 검증:
   - 인라인 JavaScript 문법 파싱 `node -e ... new Function(script)` 통과. inline scripts parsed: 1.
-  - `git diff --check -- app/static/apps/yeoljeong-finance/index.html` 통과.
+  - `git diff --check -- app/static/apps/obys/index.html` 통과.
 - 배포 주의:
   - 이 파일은 FastAPI 정적앱으로 서빙되므로 서버 blue/green 배포 또는 정적 파일 반영 확인이 필요하다.
   - 대시보드 레시피 보호 변경은 별도 aads-dashboard 커밋/배포와 함께 적용한다.
@@ -9941,8 +9941,8 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `fix(fb): issue recipe access token` 커밋 `60d0b080`을 생성했고, 이후 문서 커밋들과 함께 `origin/main`에 포함됐다.
 - 운영 반영:
   - `docker-compose.prod.yml` 기준 `aads-server`와 `aads-server-green`은 `/root/aads/aads-server/app:/app/app:rw` bind mount를 사용한다.
-  - 양 컨테이너에서 `/app/app/static/apps/yeoljeong-finance/index.html` 안의 `FB_ACCESS_TOKEN_KEY`, `persistServerAuthToken`, `fb_access_token` 코드가 확인됐다.
-  - 외부 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?redirect=/unni-naengmyeon/recipes` HTML에서도 `FB_ACCESS_TOKEN_KEY`, `fb_access_token`, `persistServerAuthToken`, `followPostLoginRedirect`가 확인됐다.
+  - 양 컨테이너에서 `/app/app/static/apps/obys/index.html` 안의 `FB_ACCESS_TOKEN_KEY`, `persistServerAuthToken`, `fb_access_token` 코드가 확인됐다.
+  - 외부 `https://fb.newtalk.kr/static/apps/obys/index.html?redirect=/unni-naengmyeon/recipes` HTML에서도 `FB_ACCESS_TOKEN_KEY`, `fb_access_token`, `persistServerAuthToken`, `followPostLoginRedirect`가 확인됐다.
 - 검증:
   - 대시보드 레시피 비로그인 경로는 FB 매장비서 앱으로 이동한다.
   - `aads_token` 단독 쿠키 요청도 FB 로그인 앱으로 이동하여 AADS 공용 로그인만으로는 레시피 접근이 열리지 않는다.
@@ -9990,12 +9990,12 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `app/api/yeoljeong_finance.py`에 `/transactions`, `/transactions/import`, `/transactions/sync` API를 추가했다.
   - `app/services/yeoljeong_finance_service.py`에 은행/카드 거래 서비스(`shinhan_business`, `ibk_business`, `card_pg`) 범위 검증, 사업자/지점 스코프, CSV 거래 원장 반영, 자동연동 실행 상태 보고를 추가했다.
   - 외부 계정 비밀필드를 `password` 외 `api_key`, `client_secret`, `certificate_password`까지 확장하고, 응답/DB payload에는 원문이 노출되지 않도록 암호화 필드만 유지했다.
-  - `app/static/apps/yeoljeong-finance/index.html` 설정 화면에 기관/은행 코드, 계좌/가맹점번호, 정산주기, API Key/Client Secret 입력란과 `은행/카드 거래 연동 실행`, `은행/카드 CSV 서버반영` 버튼을 추가했다.
+  - `app/static/apps/obys/index.html` 설정 화면에 기관/은행 코드, 계좌/가맹점번호, 정산주기, API Key/Client Secret 입력란과 `은행/카드 거래 연동 실행`, `은행/카드 CSV 서버반영` 버튼을 추가했다.
   - 은행 입금은 월마감 `bank`, 은행 출금은 `expense`, 카드/PG 거래는 `sales` 유형으로 화면 거래원장에 반영한다.
 - 검증:
   - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` 성공.
   - HTML inline script parse 성공: `inline scripts parsed: 1`.
-  - `git diff --check -- app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py app/static/apps/yeoljeong-finance/index.html tests/unit/test_yeoljeong_finance_service.py` 성공.
+  - `git diff --check -- app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py app/static/apps/obys/index.html tests/unit/test_yeoljeong_finance_service.py` 성공.
   - 운영 컨테이너 기준 `docker exec aads-server python -m pytest -q /app/tests/unit/test_yeoljeong_finance_service.py /app/tests/unit/test_yeoljeong_finance_api_contract.py /app/tests/unit/test_yeoljeong_finance_api.py` 결과 62 passed, 1 warning.
   - 외부 헬스 `https://fb.newtalk.kr/api/v1/health` HTTP 200.
 - 한계:
@@ -10006,7 +10006,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - 요청: 중단된 `#auth-invite` 화면 재설계 작업을 이어서 진행.
 - 확인:
-  - `app/static/apps/yeoljeong-finance/index.html`의 인증 게이트는 이미 직원 직접 회원가입 중심으로 바뀌어 있었다.
+  - `app/static/apps/obys/index.html`의 인증 게이트는 이미 직원 직접 회원가입 중심으로 바뀌어 있었다.
   - 가입 성공 시 `signupToServer()`가 직원 가입요청을 만들고 `onboarding` 탭으로 이동해 입사서류 등록을 유도한다.
   - 다만 기획서에 명시된 `#auth-invite`, `#auth-employee-profile`, `#auth-employee-documents` 해시 진입은 실제 JS 라우팅에 연결되어 있지 않았다.
 - 조치:
@@ -10033,7 +10033,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - IBK 빠른서비스 URL: `https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp`.
   - IBK 기업 빠른서비스 화면은 계좌번호, 계좌비밀번호, 주민/사업자등록번호 입력 기반 조회를 노출한다.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html` 연동관리 화면에 `은행 간편/빠른조회` 수집 방식과 조회용 계좌번호, 계좌비밀번호, 사업자번호 등록 필드를 반영했다.
+  - `app/static/apps/obys/index.html` 연동관리 화면에 `은행 간편/빠른조회` 수집 방식과 조회용 계좌번호, 계좌비밀번호, 사업자번호 등록 필드를 반영했다.
   - `app/services/yeoljeong_finance_service.py`에서 신한/IBK 은행 계정은 `bank-quick-service`로 정규화하고, 로그인 비밀번호·계좌번호·계좌비밀번호·사업자번호 누락 시 저장을 차단한다.
   - 해당 비밀값은 `password_enc`, `account_no_enc`, `account_password_enc`, `business_registration_no_enc`로 암호화 저장하며 API/DB payload 응답에는 원문을 제외한다.
   - `app/api/yeoljeong_finance.py`에서 은행/카드 계정 저장 시 `auto_sync=true`이면 `/transactions/sync`를 즉시 실행해 화면의 최근수집/상태 메시지가 바로 갱신되도록 했다.
@@ -10049,14 +10049,14 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 ## 2026-07-29 07:58 KST - FB 매장비서 mockup-v2 디자인 운영 반영
 
-- 요청: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html` 기준 디자인을 운영 FB 매장비서 화면에 즉시 반영.
+- 요청: `https://fb.newtalk.kr/static/apps/obys/mockup-v2.html` 기준 디자인을 운영 FB 매장비서 화면에 즉시 반영.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`의 로그인 후 앱 레이아웃을 좌측 사이드바 + 상단 빠른 필터 + 통합 홈 구조로 개편했다.
+  - `app/static/apps/obys/index.html`의 로그인 후 앱 레이아웃을 좌측 사이드바 + 상단 빠른 필터 + 통합 홈 구조로 개편했다.
   - 시안의 IA를 실제 기능에 매핑했다: 통합 홈, 매출·정산, 경영 리포트, 직원·승인함, 입사서류, 계약서, 근태, 급여내역서, 사업자·연동 관리.
   - 기존 계약서, 입사서류, 은행/카드 연동, 배달 정산, 직원 승인 기능의 DOM id와 API 호출 경로는 유지했다.
   - 통합 홈에 운영 요약 카드와 승인함 바로가기 카드를 추가하고, 카드 클릭 시 실제 탭으로 전환되도록 `[data-view]` 단축 이벤트를 보강했다.
 - 검증:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - `node -e ... new Function(inline script)` 결과 `inline scripts syntax ok: 1`.
   - 배포 후 외부 URL과 스크린샷으로 운영 반영 여부를 확인해야 한다.
 
@@ -10068,7 +10068,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - P0/P1/P2 Pipeline Runner(`runner-d945680a`, `runner-1e1576fe`, `runner-17137bbd`)는 로그 0건/죽은 PID 또는 의존 차단으로 진행 불가 상태였다.
 - 조치:
   - 스톨 러너 3건을 종료하고 직접 구현으로 전환했다.
-  - `app/static/apps/yeoljeong-finance/index.html` 좌측 IA를 mockup-v2 기준 15개 메뉴로 확장했다.
+  - `app/static/apps/obys/index.html` 좌측 IA를 mockup-v2 기준 15개 메뉴로 확장했다.
   - 신규 운영 페이지를 추가했다: 할 일·알림, 경영 리포트, 경영자료·보관, 매출·정산, 입금·계좌, 재고·발주, 세무·회계, 통합 승인함, 알림센터, 사업자·지점, 연동 관리, 원가·마진, 권한·감사로그.
   - 기존 계약서, 입사서류, 근태, 급여내역서, 거래 입력, 월마감, 설정 화면은 보존하고 새 페이지에서 기존 데이터와 기능으로 이동할 수 있게 연결했다.
   - 신규 페이지는 현재 거래 원장, 근태, 입사서류, 계약서, 급여내역서, 사업자/지점, 연동 설정을 읽어 요약·대기열·표를 렌더링한다.
@@ -10079,7 +10079,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - 배포/운영 확인:
   - 커밋 `d666788198f3bf55a4bb30440607cf02c7ecc3fb`를 `origin/main`에 푸시했다.
   - `deploy_safe(mode=reload)` 성공, hot reload 78개, post health 정상.
-  - 외부 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` HTTP 200 및 신규 메뉴 문자열 확인 완료.
+  - 외부 `https://fb.newtalk.kr/static/apps/obys/index.html` HTTP 200 및 신규 메뉴 문자열 확인 완료.
   - `https://fb.newtalk.kr/api/v1/health` 응답 `status=ok`.
   - `capture_screenshot`은 timeout으로 실패하여 브라우저 캡처 검증은 미실행, HTTP/헬스/HTML 표식 검증으로 대체했다.
 - 주의:
@@ -10090,15 +10090,15 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - 요청: `index.html#auth-invite` 연동관리 페이지를 `mockup-v2.html#integrations` 디자인과 동일한 구조로 적용하고 DB/API 연동까지 완료.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`의 `integrationsView`를 mockup-v2 기준으로 재구성했다: KPI, 연동 설정 바로가기, 조건별 필수 입력값, 서비스별 설정 판단표, 카테고리별 자동화 현황, 빠른 설정, 수기 증빙 등록, 오류·재연결 큐, 연동 목록 상세.
+  - `app/static/apps/obys/index.html`의 `integrationsView`를 mockup-v2 기준으로 재구성했다: KPI, 연동 설정 바로가기, 조건별 필수 입력값, 서비스별 설정 판단표, 카테고리별 자동화 현황, 빠른 설정, 수기 증빙 등록, 오류·재연결 큐, 연동 목록 상세.
   - 신한은행 간편서비스와 IBK기업은행 빠른서비스 필수값을 화면에 명시했다: 아이디, 비밀번호, 조회용 계좌번호, 계좌비밀번호, 사업자번호, 빠른/간편조회 신청계좌 여부.
   - 연동 카드와 빠른 설정 버튼을 기존 `integrationForm` 프리셋으로 연결해 관리자가 선택하면 실제 계정 저장 폼으로 이동하고 은행별 기본 URL/수집방식/필수 증빙이 자동 입력되도록 했다.
   - 연동 목록 상세의 조치 버튼을 기존 API 흐름에 연결했다: 배달앱은 `/sync`, 은행/카드는 `/transactions/sync`, 수기 증빙은 업로드/import 흐름.
   - `#auth-invite` 해시는 로그인 상태에서 연동관리 화면으로 열리도록 변경했고, 직원 가입 버튼은 `#auth-employee-profile`로 분리해 기존 온보딩 흐름을 보존했다.
 - 검증:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - 인라인 스크립트 추출 후 `node --check /tmp/yf-inline-0.js` 성공.
-  - `git diff --check -- app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `git diff --check -- app/static/apps/obys/index.html` 성공.
   - 로컬 `pytest`는 PATH에 없고 `.venv/bin/python` 링크도 없어 실행 불가. `python3` 직접 서비스 호출은 `structlog` 의존성 미설치로 실패했다.
 - 운영 주의:
   - 은행 실시간 외부 로그인/엑셀 다운로드 커넥터가 아직 연결되지 않은 경우 서버는 가상 거래를 만들지 않고 `connector_not_configured` 또는 수기 CSV/엑셀 업로드 대체 상태를 반환한다.
@@ -10108,13 +10108,13 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - 요청: `mockup-v2.html#integrations`의 세부 상세버튼별 디자인을 운영 `index.html`에도 모두 반영.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`에 연동관리 전용 상세 모달을 추가했다.
+  - `app/static/apps/obys/index.html`에 연동관리 전용 상세 모달을 추가했다.
   - 세부 버튼을 상세 패널로 연결했다: 설정 가이드, 판매채널 추가, 은행 계좌 연결, 매입처 등록, 계산서 수집, 사진 등록, 보안 보관 정책, 상세 점검, 추가 권장 연동, POS·키오스크, 리뷰·CS, 노무·4대보험, 카드·PG.
   - 상세 패널 내부 CTA는 기존 운영 흐름으로 연결했다: 계정 저장 프리셋, 배달/은행/카드 동기화, 수기 증빙 업로드, 직원/급여 화면 이동.
   - POS 파일 업로드 분류를 추가해 `POS 파일 등록` 버튼이 실제 가져오기 모달에서 `matepos` 서비스로 열리도록 했다.
 - 검증:
   - `docker exec aads-server-green python -m pytest tests/unit/test_yeoljeong_finance_print_static.py -q` 결과 3 passed.
-  - 공개 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`에서 `integrationDetailModal`, `recommended-connectors`, `pos-connect`, `review-connect`, `hr-connect`, `pg-connect` 표식 확인 완료.
+  - 공개 URL `https://fb.newtalk.kr/static/apps/obys/index.html`에서 `integrationDetailModal`, `recommended-connectors`, `pos-connect`, `review-connect`, `hr-connect`, `pg-connect` 표식 확인 완료.
   - Blue/Green `/health` 모두 `status=ok`.
 - 배포:
   - 커밋 `143e7a78`를 `origin/main`에 반영했다.
@@ -10128,13 +10128,13 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - 요청: `mockup-v2.html#integrations` 기준으로 `index.html#auth-invite`의 `연동 추가` 안쪽 연동설정 페이지까지 같은 디자인으로 반영.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`의 `+ 연동 추가` 클릭 결과를 단순 선택 목록에서 시안형 설정 페이지 모달로 변경했다.
+  - `app/static/apps/obys/index.html`의 `+ 연동 추가` 클릭 결과를 단순 선택 목록에서 시안형 설정 페이지 모달로 변경했다.
   - 모달 안에 서비스 프리셋, 사업자/지점, ID/PW, 계좌번호, 계좌비밀번호, 사업자번호, API Key, 인증서 비밀번호, 수집방식, 상태, 메모 입력을 추가했다.
   - 기존 기초등록 폼과 신규 모달 폼이 같은 `saveIntegrationConnection()` 저장 로직을 사용하도록 공용화했다.
   - 관리자 권한 상태에서는 `/accounts` Vault 저장 후 은행/카드 계정의 `result.sync`를 반영하고, 기존 `/transactions/sync` 수동 실행 경로도 유지했다.
   - `설정 폼 열기`와 신한/IBK/카드/판매채널 프리셋 버튼이 구형 설정 화면으로 빠지지 않고 모달 안에서 즉시 값이 자동채움되도록 변경했다.
 - 검증:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - `node -e ... new Function(inline script)` 결과 `inline scripts ok 1`.
   - `rg`로 `data-integration-connect-form`, `연동 설정 페이지`, `저장 후 연동 실행`, `saveIntegrationConnection` 표식 확인 완료.
 - 운영 주의:
@@ -10145,13 +10145,13 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - 요청: 이전 완료보고의 커밋/푸시/배포 원장 충돌을 실제 상태로 재확인하고 최종 완료 조건을 보정.
 - 확인:
-  - 기능 커밋 `0dff9c8b`(`feat: add FB integration setup modal`)은 `app/static/apps/yeoljeong-finance/index.html`과 `HANDOVER.md`만 포함하며 `origin/main`에 포함돼 있다.
+  - 기능 커밋 `0dff9c8b`(`feat: add FB integration setup modal`)은 `app/static/apps/obys/index.html`과 `HANDOVER.md`만 포함하며 `origin/main`에 포함돼 있다.
   - 현재 `HEAD`와 `origin/main`은 `80769051cd2f68e8c9b2a171421ecc13b5a5429b`로 일치한다.
-  - 운영 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html#auth-invite`는 HTTP 200이며 `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`를 반환한다.
+  - 운영 URL `https://fb.newtalk.kr/static/apps/obys/index.html#auth-invite`는 HTTP 200이며 `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`를 반환한다.
   - 운영 HTML 본문에서 `연동 설정 페이지`, `data-integration-connect-form`, `저장 후 연동 실행`, `shinhan_business`, `ibk_business`, `connector_not_configured` 표식을 확인했다.
   - AADS Blue `8100`과 Green `8102` `/health`는 모두 `status=ok`, `aads-server`와 `aads-server-green` 컨테이너는 healthy 상태다.
 - 검증:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - `node -e ... new Function(inline script)` 결과 `inline_script_parse_ok:1`.
   - `docker run --rm -e JWT_SECRET_KEY=test-secret -e AADS_DB_URL=sqlite:///tmp/aads-test.db -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py::test_bank_quick_service_ui_collects_required_vault_fields tests/unit/test_yeoljeong_finance_api_contract.py tests/unit/test_yeoljeong_finance_service.py::test_upsert_bank_quick_service_requires_account_password_and_business_no -q` 결과 5 passed, 1 warning.
   - 전체 `tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py tests/unit/test_yeoljeong_finance_service.py`는 69 passed, 2 failed, 1 warning. 실패 2건은 계약서 미리보기 고정 문자열(`최신양식 v2026.07.23`, `contractClause("용역 기간 및 장소"`) 관련 기존 테스트로, 이번 연동설정 기능 실패는 아니다.
@@ -10169,13 +10169,13 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - 요청: `mockup-v2.html#integrations`의 연동설정 입력폼 디자인을 운영 `index.html#auth-invite`에도 동일하게 반영.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`의 연동설정 드로어 폼을 시안형 구조로 확장했다.
+  - `app/static/apps/obys/index.html`의 연동설정 드로어 폼을 시안형 구조로 확장했다.
   - 서비스 프리셋, 안내 카드, 사업자/지점, 계정 ID/PW, 비밀번호 확인, 인증 담당자, 2차 인증 수단, 일회용 인증번호, 인증 만료일, 계좌번호, 계좌비밀번호, 사업자번호, API Key/Secret, 보조 연결 방식, 수집 방식, 수집 범위, 권한 범위, 실패 대체, 메모 입력을 한 화면에 배치했다.
   - 판매채널 추가, 은행 계좌 연결, 매입처 등록, 홈택스·계산서, POS, 리뷰·CS, 카드·PG 상세 버튼이 설명 화면을 거치지 않고 바로 `data-integration-connect-form` 입력폼을 열도록 변경했다.
   - `saveIntegrationConnection()`은 기존 `/accounts` Vault 저장 및 `/transactions/sync` 반영 경로를 유지하고, 비밀번호 확인 불일치 검증을 추가했다.
   - `AccountUpsertPayload`와 `upsert_account()`에 `auth_owner`, `mfa_method`, `credential_expires_at`, `fallback_auth`, `sync_scope`, `permission_scope`, `failure_fallback` 저장 필드를 추가했다.
 - 검증:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - 인라인 스크립트 `new Function()` 문법 검사 결과 `inline scripts ok: 1`.
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 성공.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_api_contract.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_service.py` 결과 71 passed, 1 warning.
@@ -10188,13 +10188,13 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - 요청: 운영 `index.html#auth-invite`의 연동설정 페이지가 `mockup-v2.html#integrations` 디자인기획 페이지와 달라 보이는 문제를 동일 디자인 기준으로 재반영.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`의 연동 상세 드로어 폭을 넓히고, 시안의 안내 밴드, 프리셋 스트립, `credential-grid`, `detail-grid`, `drawer-actions` 구조를 운영 입력폼에 맞췄다.
+  - `app/static/apps/obys/index.html`의 연동 상세 드로어 폭을 넓히고, 시안의 안내 밴드, 프리셋 스트립, `credential-grid`, `detail-grid`, `drawer-actions` 구조를 운영 입력폼에 맞췄다.
   - 후순위 공용 `.modal` 규칙이 연동설정 드로어 폭을 덮어쓰지 않도록 `.modal.integration-detail-modal` 우선순위 규칙을 추가했다.
   - 연동설정 입력폼을 시안 순서대로 `연동 구분 → 사업자 → 지점 → 표시명 → 로그인 URL → ID/PW → 계좌/계좌비밀번호 → 사업자번호 → 수집 방식/범위 → 검증 메모`로 재배치했다.
   - 운영 저장/API에 필요한 고급값은 hidden 기본값으로 유지해 기존 `/accounts` Vault 저장과 `/transactions/sync` 실행 경로가 끊기지 않게 했다.
   - `연동 추가` 선택 리스트에 설명 문구를 화면 표시하도록 복구해 디자인기획안의 설명형 선택 버튼과 맞췄다.
 - 검증:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - Node `new Function()` 인라인 스크립트 문법 검사 성공(`inline scripts parsed: 1`).
   - 로컬 표식 검증: `credential-grid`, `detail-grid`, `drawer-actions`, `data-integration-connect-form`, `신한 간편서비스`, `IBK 빠른서비스`, `/accounts`, `/transactions/sync` 확인.
   - 컨테이너 내부 `pytest`는 배포 전 컨테이너 코드 기준으로 실행되어 기존 mockup/정적 문자열 실패가 섞였다. 기능 관련 운영 API 테스트는 배포 후 재확인 필요.
@@ -10211,7 +10211,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 시안과 동일하게 `연동 구분`, `소속 사업자`, `대상 지점`, `표시명`, `로그인/관리 URL`, `아이디/업로드 기준명`, `비밀번호`, `계좌/가맹점번호`, `계좌비밀번호/API Secret`, `사업자등록번호`, `수집 방식`, `수집 범위`, `검증 메모` 순서로 정리했다.
   - 기존 `/accounts` Vault 저장과 `/transactions/sync` 거래 연동 API 연결은 유지했다.
 - 검증:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - Node `new Function()` 인라인 스크립트 문법 검사 성공(`inline scripts ok: 1`).
   - 직접 정적 assert 성공: 연동 상세 드로어, 신한/IBK 프리셋, `data-integration-connect-form`, `/transactions/sync`, `/transactions/import`, 시안 필수 입력명 확인.
   - 컨테이너 내부 `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py tests/unit/test_yeoljeong_finance_api.py -q` 결과 18 passed, 1 warning.
@@ -10226,7 +10226,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 운영 `integrationConnectFormHtml()`이 판매채널, 은행, 매입처, 홈택스, 카드/PG를 하나의 공통 계좌/가맹점 폼으로 렌더링했다.
   - 프리셋 버튼 또는 `연동 구분` 변경 시 기존 폼 DOM을 다시 그리지 않고 값만 바꿔, 판매채널 선택 후에도 은행 필드가 남을 수 있었다.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`의 연동설정 폼을 서비스 유형별로 분리했다.
+  - `app/static/apps/obys/index.html`의 연동설정 폼을 서비스 유형별로 분리했다.
   - 판매채널: 플랫폼 매장코드, 계정 ID, 비밀번호, 2차 인증 수단, API 토큰, 정산 CSV 대체 경로, 권한 범위.
   - 은행: 기업뱅킹 ID/PW, 조회 계좌번호, 계좌비밀번호, 사업자등록번호, 계좌 용도, 인증서 비밀번호, OTP/보안카드, 조회 전용 권한.
   - 매입처: 주문 프로그램 ID/PW, API Key, 거래처 코드, 거래명세서 OCR/영수증 사진 대체, 승인 흐름.
@@ -10235,7 +10235,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `rerenderIntegrationConnectForm()`을 추가해 프리셋 버튼과 서비스 select 변경 시 폼을 서비스별 입력폼으로 즉시 교체하도록 했다.
   - 기존 `/accounts` Vault 저장과 `/transactions/sync` 실행에 쓰는 `name` 값은 유지해 API 연동을 끊지 않았다.
 - 검증:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - Node `new Function()` 인라인 스크립트 문법 검사 성공(`scripts_ok=1`).
   - 직접 정적 assert 성공: 판매채널 전용 `플랫폼 매장코드`, `2차 인증 수단`, `정산 CSV 업로드 대기열` 확인.
   - 직접 정적 assert 성공: 은행 전용 `조회 계좌번호`, `계좌비밀번호`, `사업자등록번호` 확인.
@@ -10260,7 +10260,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 마스킹된 계좌번호/사업자번호, 기존 Vault 상태, 비밀번호 마스킹 값을 수정 저장 시 보존하도록 했다.
   - 기존 `/accounts` Vault 저장과 `/transactions/sync`, `/transactions/import` 연결은 유지했다.
 - 검증:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - Node `new Function()` 인라인 스크립트 문법 검사 성공(`inline scripts ok: 1`).
   - `python3` 직접 호출로 `tests/unit/test_yeoljeong_finance_print_static.py`의 `test_*` 함수 전체 실행 성공.
   - 로컬 `python3 -m pytest tests/unit/test_yeoljeong_finance_print_static.py`는 현재 환경에 pytest 미설치로 실행 불가.
@@ -10273,17 +10273,17 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 운영 `+ 연동 추가`의 `connect` 기본 경로가 서비스 선택 메뉴가 아니라 `shinhan_business` 기본 입력폼을 바로 열어 판매채널/은행/매입처 선택 메뉴가 사라진 것처럼 보였다.
   - 저장 리스트 `수정` 버튼은 존재했지만 신규 등록 폼과 같은 제목/상태로 열려 수정 페이지인지 명확하지 않았다.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/mockup-v2.html`을 Git HEAD 기준으로 원복해 기준 디자인 시안을 보존했다.
-  - 운영 `app/static/apps/yeoljeong-finance/index.html`의 `connect` 기본 화면을 `integrationAddLandingHtml()`로 되돌렸다.
+  - `app/static/apps/obys/mockup-v2.html`을 Git HEAD 기준으로 원복해 기준 디자인 시안을 보존했다.
+  - 운영 `app/static/apps/obys/index.html`의 `connect` 기본 화면을 `integrationAddLandingHtml()`로 되돌렸다.
   - 연동추가 메뉴에 판매채널, 은행 계좌, 카드/PG, 매입처, 기타 매입처 수기 증빙, 홈택스, 추가 권장 연동 후보를 각각 노출했다.
   - 각 메뉴는 기존 서비스별 전용 입력폼(`sales-channel-connect`, `bank-connect`, `supplier-connect`, `tax-connect`, `pg-connect`, `receipt-upload`)으로 이동한다.
   - 입력된 연동 리스트의 `수정` 버튼은 `연동 설정 수정` 드로어와 수정 모드 배너로 열리며, 기존 `editIntegrationId` 기준으로 같은 항목을 갱신한다.
   - 기존 `/accounts`, `/transactions/sync`, `/transactions/import` API 연결은 유지했다.
 - 검증:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - Node `new Function()` 인라인 스크립트 문법 검사 성공(`inline scripts ok: 1`).
   - 직접 정적 assert 성공: `body: integrationAddLandingHtml()`, 판매채널/은행 계좌/카드PG/매입처/기타 매입처 메뉴, `연동 설정 수정`, `is-editing`, `data-edit-integration` 확인.
-  - `git diff --quiet -- app/static/apps/yeoljeong-finance/mockup-v2.html` 성공.
+  - `git diff --quiet -- app/static/apps/obys/mockup-v2.html` 성공.
   - 로컬 `python3 -m pytest tests/unit/test_yeoljeong_finance_print_static.py`는 현재 환경에 pytest 미설치로 실행 불가.
 
 ## 2026-08-04 06:00 KST - 중화점 배민 자동수집 실행 경로 보강
@@ -10297,12 +10297,12 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `app/services/yeoljeong_delivery_collectors.py`에 배민 보안 차단 페이지 감지(`BAEMIN_SECURITY_BLOCKED`)를 추가했다.
   - 배민 계정의 로그인 URL이 `self.baemin.com`만 저장되어 있어도 실제 로그인 URL(`biz-member.baemin.com/login`)을 우선 사용하도록 보정했다.
   - `app/services/yeoljeong_finance_service.py`의 `/sync` 응답에 수집된 `sales`, `settlements`, `reviews`, 화면 즉시 반영용 `records`, `portal_status`, `portal_message`, `collection_mode`를 포함하도록 보강했다.
-  - `app/static/apps/yeoljeong-finance/index.html`이 `succeeded` 상태와 배민 보안차단 메시지, 매출/정산/리뷰 반영 건수를 표시하도록 수정했다.
+  - `app/static/apps/obys/index.html`이 `succeeded` 상태와 배민 보안차단 메시지, 매출/정산/리뷰 반영 건수를 표시하도록 수정했다.
   - 운영 데이터의 중화점 배민 계정은 `browser-automation`으로 전환했다. 암호화된 계정 데이터 파일은 커밋 대상에서 제외한다.
 - 검증:
   - `docker exec aads-server python -m py_compile app/services/yeoljeong_delivery_collectors.py app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` 성공.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` 결과 59 passed.
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - Node 인라인 스크립트 문법 검사 성공(`inline-js-ok 2`).
   - 실제 중화점 배민 수집 실행 결과: `BAEMIN_SECURITY_BLOCKED`, totals `sales=0`, `settlements=0`, `reviews=0`.
 - 운영 주의:
@@ -10329,10 +10329,10 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `app/services/yeoljeong_delivery_collectors.py`에 HTML table, 탭/CSV 복사 표 파서 `parse_portal_export()`를 추가했다.
   - `app/services/yeoljeong_finance_service.py`에 `import_delivery_portal_text()`를 추가해 배민 매출/정산/리뷰 원장에 `pc-browser-parse` 방식으로 upsert하고 수집상태를 기록하도록 했다.
   - `app/api/yeoljeong_finance.py`에 `POST /api/v1/yeoljeong-finance/delivery/import`를 추가했다.
-  - `app/static/apps/yeoljeong-finance/index.html`의 데이터 가져오기 모달에 `.html/.htm/.txt` 파일 읽기, `PC 파싱 대상` 선택, `배민 PC 파싱 반영` 버튼을 추가했다.
+  - `app/static/apps/obys/index.html`의 데이터 가져오기 모달에 `.html/.htm/.txt` 파일 읽기, `PC 파싱 대상` 선택, `배민 PC 파싱 반영` 버튼을 추가했다.
   - 매장비서 상태에는 기존 `applySyncPayload()` 경로로 매출, 정산, 리뷰가 즉시 반영된다.
 - 검증:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - Node 인라인 JS 문법 검사 성공(`inline scripts ok 1`).
   - `python3 -m compileall -q app/services/yeoljeong_delivery_collectors.py app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` 성공.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_api.py` 성공: 22 passed, 1 warning.
@@ -10444,19 +10444,19 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 ## 2026-08-05 07:33 KST - FB 연동관리 mockup-v2 integrations 운영 동일화
 
-- 요청: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html#integrations` 디자인과 입력 폼을 운영 `index.html#auth-invite`에 동일하게 반영.
+- 요청: `https://fb.newtalk.kr/static/apps/obys/mockup-v2.html#integrations` 디자인과 입력 폼을 운영 `index.html#auth-invite`에 동일하게 반영.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`의 연동관리 KPI를 시안과 같은 4개 카드로 정리했다.
+  - `app/static/apps/obys/index.html`의 연동관리 KPI를 시안과 같은 4개 카드로 정리했다.
   - 연동 설정 바로가기 4개 카드에 시안형 로고, 상태 배지, 서비스 설명, 태그 구조를 반영했다.
   - 빠른 설정을 시안과 같은 4개 버튼(판매채널 추가, 은행 계좌 연결, 매입처 등록, 계산서 수집)으로 정리했다.
   - `+ 연동 추가` 드로어는 메뉴 선택 화면을 유지하고, 판매채널/은행/매입처/홈택스별 전용 입력폼으로 이동하도록 유지했다.
   - 연동 목록 상세 테이블을 시안의 8열 구조(구분, 서비스, 사업자·지점, 수집 데이터, 필수 인증값, 최근 동기화, 상태, 설정)로 바꾸고, 저장된 연동마다 `수정` 버튼을 항상 노출해 우측 수정 페이지를 열도록 했다.
   - 기준 시안 파일 `mockup-v2.html`은 수정하지 않았다.
 - 검증:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - 인라인 `<script>` `new Function()` 파싱 성공.
   - DOM 구간 검증 성공: 연동관리 4 KPI, 4 서비스 카드, 4 빠른설정, 8열 목록, 드로어 설정/수정 표식 확인.
-  - 외부 운영 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?codex_check=202608050744#auth-invite` 응답에서 신규 표식 확인.
+  - 외부 운영 URL `https://fb.newtalk.kr/static/apps/obys/index.html?codex_check=202608050744#auth-invite` 응답에서 신규 표식 확인.
 - 남은 주의:
   - 비로그인 브라우저 E2E는 게이트 화면에서 막혀 내부 연동관리 클릭 검증을 수행하지 못했다. HTML/API 표식 검증으로 대체했다.
 
@@ -10468,10 +10468,10 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 기존 서비스별 전용 폼 구조는 유지했다: 판매채널, 은행 계좌, 카드/PG, 매입처, 기타 매입처, 홈택스가 각각 별도 설정 페이지로 진입한다.
   - 입력된 연동 목록의 `수정` 버튼과 `연동 설정 수정` 드로어는 기존 행을 `data-edit-integration-id` 기준으로 갱신하는 구조로 유지했다.
 - 검증:
-  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `python3 -m html.parser app/static/apps/obys/index.html` 성공.
   - 인라인 `<script>` `new Function()` 파싱 성공.
   - 운영 컨테이너 테스트 `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py -q` 성공: 4 passed.
-  - 외부 운영 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?codex_check=202608050758#auth-invite` 응답에서 `판매채널 추가`, `은행 계좌 연결`, `매입처 등록`, `기타 매입처 연동`, `연동 설정 수정`, `data-edit-integration`, `/accounts`, `/transactions/sync` 표식 확인.
+  - 외부 운영 URL `https://fb.newtalk.kr/static/apps/obys/index.html?codex_check=202608050758#auth-invite` 응답에서 `판매채널 추가`, `은행 계좌 연결`, `매입처 등록`, `기타 매입처 연동`, `연동 설정 수정`, `data-edit-integration`, `/accounts`, `/transactions/sync` 표식 확인.
 
 ## 2026-08-05 19:05 KST - FB 연동설정 저장 후 연동실행 무반응 보정 및 운영 배포
 
@@ -10480,7 +10480,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 이전 피드백 커밋 `ec9a8164`가 로컬에는 있었지만 `origin/main`에 푸시되지 않아 운영 URL에 반영되지 않았다.
   - 동적 연동설정 모달 submit 경로가 저장 완료 후 모달을 닫는 구조였고, 버튼/상태 영역에 즉시 진행 피드백이 없어 사용자가 무반응으로 인식할 수 있었다.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`에 `data-integration-submit-status` 상태 영역을 추가했다.
+  - `app/static/apps/obys/index.html`에 `data-integration-submit-status` 상태 영역을 추가했다.
   - `setIntegrationSubmitFeedback()`을 추가해 저장 클릭 즉시 버튼을 `저장·연동 실행중...`으로 바꾸고 중복 클릭을 막도록 했다.
   - 동적 모달 저장 경로는 `saveIntegrationConnection(modalForm, { resetAfterSave: false })`로 바꿔 저장/연동 결과가 모달 안에 남게 했다.
   - `tests/unit/test_yeoljeong_finance_print_static.py`에 회귀 assert를 추가했다.
@@ -10492,7 +10492,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 로컬 `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/services/yeoljeong_delivery_collectors.py` 성공.
   - 로컬 정적 assert 성공: 운영 HTML에 `data-integration-submit-status`, `저장·연동 실행중...`, `resetAfterSave: false` 존재.
   - 배포 컨테이너 `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py tests/unit/test_yeoljeong_finance_api.py -q` 성공: 22 passed, 1 warning.
-  - 외부 운영 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?deploy=94b0bce2`에서 신규 표식 확인.
+  - 외부 운영 URL `https://fb.newtalk.kr/static/apps/obys/index.html?deploy=94b0bce2`에서 신규 표식 확인.
   - Playwright UI 검증: 관리자 세션 모양만 localStorage에 주입해 연동설정 폼을 열고 submit 클릭 시 상태 영역에 실패/진행 메시지가 표시되며 모달이 열린 상태로 유지됨을 확인했다. 실제 운영 자격증명은 사용하지 않았다.
 - 남은 주의:
   - 비로그인 브라우저에서는 인증 게이트 때문에 연동관리 뷰가 숨겨진다.
@@ -10506,7 +10506,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 2026-08-05 19:17 KST 기준 로컬 `HEAD`와 `origin/main`은 `f27d559a`로 일치했다.
   - Nginx upstream은 `aads_api` active를 `127.0.0.1:8102`, `127.0.0.1:8100` backup으로 전환한 상태였다.
   - `aads-server-green:8102`, `aads-server:8100` 모두 healthy였고 양쪽 슬롯 모두 `저장·연동 실행중...`, `저장 후 연동 실행 요청을 접수했습니다.` 표식을 서빙했다.
-  - 외부 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`은 HTTP 200, `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`, `cf-cache-status: DYNAMIC`으로 응답했다.
+  - 외부 URL `https://fb.newtalk.kr/static/apps/obys/index.html`은 HTTP 200, `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`, `cf-cache-status: DYNAMIC`으로 응답했다.
 - 조치:
   - 운영 기능 코드는 이미 `f27d559a`로 푸시 및 blue-green 반영되어 추가 런타임 코드는 수정하지 않았다.
   - `tests/unit/test_yeoljeong_finance_nginx.py`의 Cache-Control 개수 기대값이 현재 `nginx-fb.conf` 구성과 맞지 않아 4회에서 6회로 보정했다. `/`, `/login`, 정적 HTML 각각 HTTP/HTTPS 양쪽에서 no-store를 부여하는 현재 설정이 기준이다.
@@ -10522,12 +10522,12 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 
 - 요청: 연동설정 저장 후 `연동 실행` 상태가 오래 `running`처럼 보이는 다음 단계 조치와 E2E 검증.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`에 `normalizeStaleIntegrationSyncStatuses()`를 추가해 localStorage에 남은 오래된 `running` 상태를 로딩 시 `upload_required`, `credential_required`, `blocked`로 정리하도록 했다.
+  - `app/static/apps/obys/index.html`에 `normalizeStaleIntegrationSyncStatuses()`를 추가해 localStorage에 남은 오래된 `running` 상태를 로딩 시 `upload_required`, `credential_required`, `blocked`로 정리하도록 했다.
   - `app/services/yeoljeong_finance_service.py`의 공개 계정 상태도 `last_sync_status/portal_status=running`이 60초 이상 지난 경우 실제 필요 상태로 정규화하도록 보강했다. 실행 시작 60초 이내의 실제 진행 상태는 `running`으로 유지한다.
   - 회귀 테스트에 서버 상태 정규화와 정적 HTML 표식 검증을 추가했다.
 - 검증:
   - `node --check /tmp/yeoljeong-index-script.js` 성공.
-  - `git diff --check -- app/services/yeoljeong_finance_service.py app/static/apps/yeoljeong-finance/index.html tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py` 성공.
+  - `git diff --check -- app/services/yeoljeong_finance_service.py app/static/apps/obys/index.html tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py` 성공.
   - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py -q` 성공: 66 passed.
 - 배포/E2E:
   - 이 항목 작성 시점에는 아직 커밋/푸시/배포 전이다. 커밋 후 blue-green 배포 및 운영 브라우저 E2E 결과를 최종 보고에 별도 기재한다.
@@ -10539,12 +10539,12 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 브라우저 메모리 상태는 `normalizeStaleIntegrationSyncStatuses()`로 정리되지만, 초기 로딩 직후 localStorage 원본이 즉시 저장되지 않으면 새로고침 시 오래된 `running` 상태가 반복될 수 있었다.
   - `저장 후 연동 실행` 클릭 경로에서 자동화 권한/서버 Vault가 없는 경우에도 중간 `markIntegrationRunning()` 상태가 저장 배열에 남아 최종 안내 문구와 localStorage 상태가 불일치했다.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`에 `persistInitialNormalizedSettings()`를 추가해 로딩 정규화가 발생한 경우 즉시 localStorage에 정리 상태를 저장하도록 했다.
+  - `app/static/apps/obys/index.html`에 `persistInitialNormalizedSettings()`를 추가해 로딩 정규화가 발생한 경우 즉시 localStorage에 정리 상태를 저장하도록 했다.
   - `saveState()`에서도 내부 정규화 플래그가 저장 데이터에 남지 않도록 제거했다.
   - 자동수집 응답(`pendingAutoSync`)이 있는 경우에만 `markIntegrationRunning()`을 적용하고, 자동화 권한/커넥터가 없는 저장은 즉시 `credential_required` 또는 `connector_not_configured`로 배열 항목에 병합 저장하도록 보정했다.
   - `tests/unit/test_yeoljeong_finance_print_static.py`에 정적 회귀 표식을 추가했다.
 - 검증:
-  - `git diff --check -- app/static/apps/yeoljeong-finance/index.html tests/unit/test_yeoljeong_finance_print_static.py` 성공.
+  - `git diff --check -- app/static/apps/obys/index.html tests/unit/test_yeoljeong_finance_print_static.py` 성공.
   - 인라인 `<script>` 추출 후 `node --check --input-type=commonjs -` 성공.
   - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py -q` 성공: 66 passed.
   - 로컬 HTML 라우팅 기반 Playwright E2E 성공: stale `running` 2건이 각각 `upload_required`, `credential_required`로 저장 정리되고, `저장 후 연동 실행` 신규 항목이 최종 `credential_required`로 표시/저장됨을 확인했다.
@@ -10583,14 +10583,14 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - 운영 브라우저 E2E에서 `서버 계정 자동 반영 실패: 인증이 필요합니다. Bearer 토큰을 제공하세요.`가 재현됐다.
   - 정적 앱이 `aads_token` localStorage만 헤더로 사용해 `fb_access_token` 또는 쿠키 기반 세션을 가진 경우 서버 계정 자동 병합이 실패할 수 있었고, 만료 토큰도 stale 로그인 UI로 남았다.
 - 조치:
-  - `app/static/apps/yeoljeong-finance/index.html`에 `serverAuthToken()`/`cookieValue()`를 추가해 `aads_token`, `fb_access_token`, 쿠키 토큰을 같은 인증 소스로 사용하도록 했다.
+  - `app/static/apps/obys/index.html`에 `serverAuthToken()`/`cookieValue()`를 추가해 `aads_token`, `fb_access_token`, 쿠키 토큰을 같은 인증 소스로 사용하도록 했다.
   - 서버 계정 불러오기 전 `refreshFinanceSession()`을 먼저 수행하게 하여 권한 세션 복구 후 `/accounts`를 호출하도록 했다.
   - 401/403/인증 오류 시 로컬 토큰과 auth session을 정리해 stale 로그인 상태로 서버 계정 병합을 시도하지 않도록 했다.
   - `tests/unit/test_yeoljeong_finance_api.py`에 연동계정 인증 토큰 해석과 세션 우선 로딩 회귀 테스트를 추가했다.
 - 검증:
   - `docker run --rm --env-file .env -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py::test_integration_accounts_use_resolved_auth_token_and_session_first_load tests/unit/test_yeoljeong_finance_api.py::test_account_upsert_runs_delivery_sync_when_auto_sync_enabled` 성공: 2 passed.
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 성공.
-  - `git diff --check -- app/static/apps/yeoljeong-finance/index.html tests/unit/test_yeoljeong_finance_api.py` 성공.
+  - `git diff --check -- app/static/apps/obys/index.html tests/unit/test_yeoljeong_finance_api.py` 성공.
   - 배포와 운영 브라우저 재검증 결과는 후속 커밋/배포 완료 후 최종 보고에 반영한다.
 
 ## 2026-08-19 11:01 KST - 채팅 응답 끊김/버블 조기 완료 P0-P2 긴급 조치
@@ -11014,7 +11014,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
 - Changes:
   - `app/services/yeoljeong_finance_service.py` adds `collect_bank_account_transactions`, branch-aware bank ledger filtering, safe connector status handling, idempotent collection import, and simple existing-transaction match annotation.
   - `app/api/yeoljeong_finance.py` adds `POST /yeoljeong-finance/bank-accounts/{account_id}/collect` and propagates `branch_id` to bank transactions/summary queries.
-  - `app/static/apps/yeoljeong-finance/index.html` routes Shinhan/IBK bank ledger sync through the bank collect API before the legacy card/PG transaction sync path.
+  - `app/static/apps/obys/index.html` routes Shinhan/IBK bank ledger sync through the bank collect API before the legacy card/PG transaction sync path.
   - `tests/unit/test_yeoljeong_finance_service.py` covers collect ingest, duplicate collection idempotency, branch summary, and unconfigured open-banking safety.
 - Verification:
   - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` succeeded.
@@ -11098,18 +11098,18 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - PostgreSQL has no dedicated bank account/transaction tables yet. Existing bank connector metadata is in `yeoljeong_platform_accounts.payload`; the bank ledger path uses secure JSON files `bank_accounts.json` / `bank_transactions.json`.
   - A UI payload bug mapped quick-service bank accounts to `connection_type: "mock"`, which could prevent later browser collection classification.
 - Changes:
-  - `app/static/apps/yeoljeong-finance/index.html` now stores quick-service/open-banking bank accounts as `connection_type: "browser"` with `connector_type: "bank-browser"`, while bank Excel mode remains `csv`.
+  - `app/static/apps/obys/index.html` now stores quick-service/open-banking bank accounts as `connection_type: "browser"` with `connector_type: "bank-browser"`, while bank Excel mode remains `csv`.
 - Verification:
   - DB schema check found Yeoljeong tables and no bank-specific table; `yeoljeong_platform_accounts` contained 42 rows and 3 bank-service rows with masked account numbers.
   - Dummy isolated service save confirmed platform and bank-account records persist with masked account numbers, no plaintext password/account password/account number in response or files, and `bank_accounts.json` mode `0600`.
   - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_service.py::test_create_bank_account_masks_and_never_stores_raw_number tests/unit/test_yeoljeong_finance_service.py::test_bank_accounts_file_has_owner_only_permissions tests/unit/test_yeoljeong_finance_service.py::test_upsert_bank_quick_service_requires_account_password_and_business_no tests/unit/test_yeoljeong_bank_browser_connector.py::test_collect_bank_account_browser_with_session_imports_rows tests/unit/test_yeoljeong_auto_collect.py::test_run_collectors_collects_auto_sync_bank_accounts -q` succeeded: 5 passed.
   - `.venv-playwright/bin/python -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` succeeded.
-  - `node -e` extracted and parsed inline scripts from `app/static/apps/yeoljeong-finance/index.html`: scripts ok 2.
+  - `node -e` extracted and parsed inline scripts from `app/static/apps/obys/index.html`: scripts ok 2.
   - `git diff --check` for the touched bank/input files succeeded.
 - Remaining:
   - Not committed, pushed, or deployed in this step.
   - Operating URL/API returned 401 without a Bearer token, confirming auth protection but preventing unauthenticated browser E2E.
-  - Screenshot capture for `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` timed out, so this entry relies on source/API/unit verification.
+  - Screenshot capture for `https://fb.newtalk.kr/static/apps/obys/index.html` timed out, so this entry relies on source/API/unit verification.
 
 ## 2026-08-21 07:04 KST - Yeoljeong delivery ads auto-collection scope
 
@@ -11174,7 +11174,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - Added regression tests for custom business/branch persistence, custom bank-account scope, and static UI normalization.
 - Verification:
   - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py -q` succeeded: 120 passed.
-  - `git diff --check -- app/services/yeoljeong_finance_service.py app/static/apps/yeoljeong-finance/index.html tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py` succeeded.
+  - `git diff --check -- app/services/yeoljeong_finance_service.py app/static/apps/obys/index.html tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py` succeeded.
   - Direct bank collection call for the registered account returned 0 imported rows with `BANK_BROWSER_SESSION_REQUIRED`, so no bank transaction ledger was created.
 - Remaining:
   - Not committed, pushed, or deployed in this step.
@@ -11511,7 +11511,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - DB ledger tables exist and contain collected rows: `yeoljeong_delivery_sales` 817, `yeoljeong_delivery_reviews` 2,148, `yeoljeong_delivery_settlements` 999, `yeoljeong_delivery_collection_status` 3,239.
   - The static app had API loaders for sales/reviews/status partly staged, but the user-facing integration view still emphasized account readiness instead of actual DB ledger counts and collection outcomes.
 - Changes:
-  - `app/static/apps/yeoljeong-finance/index.html`: added a "판매채널 수집 데이터 현황" panel with DB-backed sales, settlement, review, status, and action summaries.
+  - `app/static/apps/obys/index.html`: added a "판매채널 수집 데이터 현황" panel with DB-backed sales, settlement, review, status, and action summaries.
   - Bound `/sales`, `/settlements`, `/reviews`, and `/collection-status` refreshes into login, business switching, manual refresh, and post-sync flows.
   - Updated the sales-channel readiness table to show actual DB ledger counts, latest collection status, and actionable next steps per service/business/branch.
   - Restored the audit permission-level markers required by the static contract test.
@@ -11519,7 +11519,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `node -e` static script syntax check succeeded.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py -q` succeeded: 157 passed.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py -q` succeeded: 15 passed.
-  - `curl -I http://127.0.0.1:8100/static/apps/yeoljeong-finance/index.html` returned HTTP 200 and the served HTML contained `판매채널 수집 데이터 현황` and `deliveryLedgerSummaryBadge`.
+  - `curl -I http://127.0.0.1:8100/static/apps/obys/index.html` returned HTTP 200 and the served HTML contained `판매채널 수집 데이터 현황` and `deliveryLedgerSummaryBadge`.
 - Remaining:
   - Browser E2E screenshot was not run because no browser-control tool was available in this turn; HTTP/static/API-contract verification was used instead.
   - Commit, push, and deploy were not performed in this chat turn.
@@ -13500,15 +13500,15 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
 - CEO request:
   - Continue the unfinished bank credential work, fix errors immediately, verify, and provide a final completion report.
 - Change implemented:
-  - `app/static/apps/yeoljeong-finance/index.html`: the integration settings save flow now creates/locates a bank account and then calls `POST /bank-accounts/{id}/credentials` with bank quick-service credentials.
-  - `app/static/apps/yeoljeong-finance/index.html`: bank integrations can persist credentials even when the bank quick-service screen does not use a separate login ID.
+  - `app/static/apps/obys/index.html`: the integration settings save flow now creates/locates a bank account and then calls `POST /bank-accounts/{id}/credentials` with bank quick-service credentials.
+  - `app/static/apps/obys/index.html`: bank integrations can persist credentials even when the bank quick-service screen does not use a separate login ID.
   - `app/services/yeoljeong_finance_service.py`: IBK quick-service credential registration now creates an internal identifier from service/business/branch/masked-account when no login ID is supplied.
   - `app/services/yeoljeong_finance_service.py`: IBK quick-service no longer requires a login password; it requires account number, account password, and business registration number. Shinhan still requires login password as before.
 - Verification:
   - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_service.py -k 'save_ibk_bank_credentials or upsert_bank_quick_service_requires_account_password_and_business_no or ibk_quick_service' -q`: 3 passed.
   - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_api.py -k 'bank_account_and_ledger_http_flow or bank_account_rejects_extra_sensitive_field or integration_form_persists_bank_credentials' -q`: 3 passed.
   - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_bank_browser_connector.py -k 'bank or ibk or shinhan or integration_form_persists_bank_credentials' -q`: 124 passed.
-  - `node` inline script parse for `app/static/apps/yeoljeong-finance/index.html`: passed.
+  - `node` inline script parse for `app/static/apps/obys/index.html`: passed.
   - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py`: passed.
 - Current operational data state:
   - `bank_accounts.json` has the Junghwa IBK account row ending `4014`.

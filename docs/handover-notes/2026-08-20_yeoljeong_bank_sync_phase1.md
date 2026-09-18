@@ -50,7 +50,7 @@ platform_match(optional), settlement_match(optional), source, source_hash, impor
 `account_status_counts`, 계좌별 `{transaction_count,total_in,total_out,net,status,last_synced_at}`.
 사업자/지점 스코프는 `_normalize_bank_scope`로 CANONICAL 사업자·지점 정합성 검증.
 
-### 운영 화면 (`app/static/apps/yeoljeong-finance/index.html`)
+### 운영 화면 (`app/static/apps/obys/index.html`)
 - 로그인 후 서버 은행계좌와 은행 요약을 불러와 `입금·계좌` 화면에 표시.
 - 연동관리에서 은행 서비스를 저장할 때 `bank_accounts` 원장에도 마스킹 계좌를 등록.
 - 데이터 가져오기 모달에 `은행 원장 계좌` 선택을 추가하고, 신한/IBK 은행 CSV 반영은
@@ -62,7 +62,7 @@ platform_match(optional), settlement_match(optional), source, source_hash, impor
   - `tests/unit/test_yeoljeong_finance_service.py` (은행 섹션)
   - `tests/unit/test_yeoljeong_finance_api.py::test_bank_account_and_ledger_http_flow`,
     `::test_bank_account_rejects_extra_sensitive_field`
-- `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` → OK
+- `python3 -m html.parser app/static/apps/obys/index.html` → OK
 - 인라인 JS 구문 검사 → `inline-script-ok 1`
 - 기존 finance 서비스 테스트(네트워크/PC Agent 미의존분) 63건 통과, 회귀 없음.
   ※ delivery/pc_agent/ddangyo 계열 테스트는 이 샌드박스에 `structlog`/실DB/실네트워크가 없어

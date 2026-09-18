@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import app.auth as auth_module
-from app.api import acct_purchase, auth, yeoljeong_finance
+from app.api import acct_purchase, auth, obys_finance
 
 
 app = FastAPI(
@@ -73,7 +73,7 @@ async def jwt_auth_middleware(request: Request, call_next):
 
 @app.get("/", include_in_schema=False)
 async def root_redirect():
-    return RedirectResponse("/static/apps/yeoljeong-finance/index.html")
+    return RedirectResponse("/static/apps/obys/index.html")
 
 
 @app.get("/health/live", include_in_schema=False)
@@ -87,7 +87,7 @@ async def api_live_health_check():
 
 
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
-app.include_router(yeoljeong_finance.router, prefix="/api/v1", tags=["yeoljeong-finance"])
+app.include_router(obys_finance.router, prefix="/api/v1", tags=["yeoljeong-finance"])
 app.include_router(acct_purchase.router, prefix="/api/v1", tags=["acct-purchase"])
 
 _static_dir = pathlib.Path(__file__).resolve().parent / "static"

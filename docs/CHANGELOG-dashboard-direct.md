@@ -971,52 +971,52 @@ with open(p
 ## [2026-08-04 19:13:08 KST] [aads-dashboard] HANDOVER.md
 - Chat-Direct 수정: run_remote_command: cat /root/aads/aads-server/.active_container /root/aads/aads-server/.active_port
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/apps/yeoljeong-finance/index.html
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/apps/obys/index.html
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/assets/prints/indoor-b1-glass-pickup-clean-300dpi.png
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/assets/prints/indoor-b1-glass-pickup-clean-300dpi.png
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/assets/prints/indoor-b2-cold-noodle-visual-300dpi.png
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/assets/prints/indoor-b2-cold-noodle-visual-300dpi.png
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/assets/prints/indoor-p4-glass-pickup-perforation-safe-300dpi.png
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/assets/prints/indoor-p4-glass-pickup-perforation-safe-300dpi.png
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/assets/prints/manifest.json
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/assets/prints/manifest.json
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/assets/stamps/biz-junghwa.png
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/assets/stamps/biz-junghwa.png
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/assets/stamps/biz-mia.png
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/assets/stamps/biz-mia.png
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/assets/stamps/biz-sungshin.png
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/assets/stamps/biz-sungshin.png
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/banners.html
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/banners.html
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/haemyeon-duct-plan-20260730.html
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/haemyeon-duct-plan-20260730.html
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/index.html
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/index.html
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/index.html.bak-20260714-1605-static-short
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/index.html.bak-20260714-1605-static-short
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/index.html.pre-restore-20260714-162155
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/index.html.pre-restore-20260714-162155
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/index.html.pre-sync-20260714-165533
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/index.html.pre-sync-20260714-165533
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/mockup-v2.html
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/mockup-v2.html
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
-## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/modules/app-config.js
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/obys/modules/app-config.js
 - Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
 
 ## [2026-08-05 19:39:20 KST] [aads-dashboard] public/brands/unni-naengmyeon/menu/cheese-donkatsu-thumb-67380488L.jpg

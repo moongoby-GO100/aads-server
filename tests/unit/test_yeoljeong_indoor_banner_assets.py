@@ -41,4 +41,4 @@ def test_indoor_banner_review_page_links_every_asset() -> None:
     assert "INDOOR P4 유리 부착 타공 안전영역" in html
     for path in PRINT_DIR.glob("*-300dpi.png"):
         assert path.name in html
-        assert f'href="/static/apps/yeoljeong-finance/assets/prints/{path.name}"' in html
+        assert f'href="/static/apps/obys/assets/prints/{path.name}"' in html
