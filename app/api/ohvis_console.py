@@ -87,6 +87,15 @@ _MAX_TEXT = 500
 # 오비스 창으로 결과를 돌려보낸다. 문구를 바꾸면 대화 로그 검색이 끊긴다.
 COMMAND_MESSAGE_PREFIX = "[오비스 창 지시]"
 
+# 오비스 전용 세션을 찾을 때 쓰는 표식. title 이 아니라 tags 로 찾는다 —
+# 대표님이 대화 제목을 바꿔도(챗 UI 는 제목 수정이 자유롭다) 흔들리지 않는다.
+# (AADS-OHVIS-CONSOLE-SESSION-ROUTING-P0) 이전에는 폴백이 "테넌트 안에서 가장
+# 최근 갱신된 아무 세션" 을 골랐다 — 화면이 session_id 를 안 보내면 다른 담당의
+# 워커 세션(예: "라일론 상세페이지 자동생성 담당")으로 지시가 새었다.
+OHVIS_SESSION_TAG = "ohvis_console"
+OHVIS_WORKSPACE_NAME = "오비스"
+OHVIS_SESSION_TITLE = "오비스 창"
+
 
 async def require_console_admin(
     context: TenantContext = Depends(require_viewer),
@@ -208,6 +217,12 @@ async def _resolve_session_id(
     요청된 세션이 이 테넌트 것이 아니면 무시한다. 남의 세션 로그를 세션 id
     하나로 열어 볼 수 있으면 `ohvis_tasks` 에는 테넌트 컬럼이 없으므로
     막을 방법이 없다.
+
+    폴백은 **오비스 전용 세션 고정**이다(AADS-OHVIS-CONSOLE-SESSION-ROUTING-P0).
+    예전에는 "테넌트 안에서 가장 최근 갱신된 아무 세션" 을 골랐는데, 다른 담당의
+    워커 세션이 CEO 채팅보다 자주 갱신되면 그쪽으로 지시가 샜다 — 실측 사고는
+    지시가 "라일론 상세페이지 자동생성 담당" 세션으로 들어간 것이었다. 전용
+    세션이 없으면 여기서 만든다.
     """
     if requested is not None:
         owned = await conn.fetchval(
@@ -221,15 +236,58 @@ async def _resolve_session_id(
         if owned is not None:
             return owned
 
-    return await conn.fetchval(
+    dedicated = await conn.fetchval(
         """
         SELECT id FROM chat_sessions
          WHERE tenant_id IS NOT DISTINCT FROM $1::uuid
-         ORDER BY (user_id = $2) DESC, updated_at DESC NULLS LAST
+           AND $2 = ANY(tags)
+         ORDER BY updated_at DESC NULLS LAST
          LIMIT 1
         """,
         tenant_id,
+        OHVIS_SESSION_TAG,
+    )
+    if dedicated is not None:
+        return dedicated
+
+    return await _create_dedicated_session(conn, tenant_id, user_id)
+
+
+async def _create_dedicated_session(conn: Any, tenant_id: str, user_id: str) -> UUID | None:
+    """오비스 전용 세션이 없으면 하나 만든다.
+
+    워크스페이스도 이름으로 get-or-create 한다 — `external_chat_gateway.py` 의
+    `resolve_workspace_id()` 와 같은 패턴이다(새 규약을 만들지 않는다).
+    """
+    workspace_id = await conn.fetchval(
+        "SELECT id FROM chat_workspaces WHERE tenant_id = $1::uuid AND name = $2 LIMIT 1",
+        tenant_id,
+        OHVIS_WORKSPACE_NAME,
+    )
+    if workspace_id is None:
+        workspace_id = await conn.fetchval(
+            """
+            INSERT INTO chat_workspaces (tenant_id, name, files, settings, color, icon)
+            VALUES ($1::uuid, $2, '[]'::jsonb, '{}'::jsonb, '#6366F1', '🛰️')
+            RETURNING id
+            """,
+            tenant_id,
+            OHVIS_WORKSPACE_NAME,
+        )
+    if workspace_id is None:
+        return None
+
+    return await conn.fetchval(
+        """
+        INSERT INTO chat_sessions (tenant_id, user_id, workspace_id, title, tags)
+        VALUES ($1::uuid, $2, $3, $4, ARRAY[$5]::text[])
+        RETURNING id
+        """,
+        tenant_id,
         user_id,
+        workspace_id,
+        OHVIS_SESSION_TITLE,
+        OHVIS_SESSION_TAG,
     )
 
 
@@ -620,8 +678,9 @@ async def run_console_command(
             conn, tenant_id, _user_id(context), body.session_id
         )
     if session_uuid is None:
-        # 붙을 채팅 세션이 없으면 FK 때문에 행도 못 만든다. 500 으로 터뜨리지
-        # 않고 화면이 읽을 수 있는 사유를 준다.
+        # 전용 세션이 없으면 _resolve_session_id 가 만든다 — 그 생성마저
+        # 실패한 경우에만 여기 온다. 세션이 없으면 FK 때문에 행도 못 만든다.
+        # 500 으로 터뜨리지 않고 화면이 읽을 수 있는 사유를 준다.
         raise HTTPException(status_code=409, detail="no_chat_session")
 
     task_id = await create_ohvis_task(

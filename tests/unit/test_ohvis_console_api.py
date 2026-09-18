@@ -72,6 +72,10 @@ class FakeConn:
         row, self._row = self._row, None
         return row
 
+    async def execute(self, query, *args):
+        self.queries.append((query, args))
+        return "OK"
+
 
 class FakePool:
     def __init__(self, conn: FakeConn):
@@ -324,7 +328,7 @@ def test_conversation_orders_oldest_first_and_derives_quick_commands():
 def test_session_resolver_rejects_a_session_from_another_tenant():
     """ohvis_tasks 에는 tenant 컬럼이 없다 — 세션 소유 검사가 유일한 경계다."""
     session = console._uuid_or_none("3f8b3f2c-0000-4000-8000-000000000001")
-    fallback = console._uuid_or_none("3f8b3f2c-0000-4000-8000-0000000000ff")
+    dedicated = console._uuid_or_none("3f8b3f2c-0000-4000-8000-0000000000ff")
 
     # 요청한 세션이 내 테넌트 것이면 그대로 쓴다
     conn = FakeConn(values=[session])
@@ -333,15 +337,62 @@ def test_session_resolver_rejects_a_session_from_another_tenant():
     assert "tenant_id IS NOT DISTINCT FROM $2::uuid" in owned_query
     assert owned_args == (session, TENANT)
 
-    # 남의 테넌트 세션이면(소유 조회가 빈손) 최근 내 세션으로 떨어진다
-    conn2 = FakeConn(values=[None, fallback])
-    assert asyncio.run(console._resolve_session_id(conn2, TENANT, "u-1", session)) == fallback
+    # 남의 테넌트 세션이면(소유 조회가 빈손) 오비스 전용 세션으로 떨어진다 —
+    # (AADS-OHVIS-CONSOLE-SESSION-ROUTING-P0) "아무 최신 세션" 이 아니다.
+    conn2 = FakeConn(values=[None, dedicated])
+    assert asyncio.run(console._resolve_session_id(conn2, TENANT, "u-1", session)) == dedicated
     assert len(conn2.queries) == 2
-    assert "ORDER BY (user_id = $2) DESC" in conn2.queries[1][0]
+    assert "$2 = ANY(tags)" in conn2.queries[1][0]
+    assert conn2.queries[1][1] == (TENANT, console.OHVIS_SESSION_TAG)
 
 
-def test_session_resolver_returns_none_when_tenant_has_no_session():
-    conn = FakeConn(values=[None])
+def test_session_resolver_picks_dedicated_ohvis_session_not_arbitrary_latest():
+    """(a) session_id 미전달 시 오비스 전용 세션이 선택된다.
+
+    예전 폴백("테넌트 안에서 가장 최근 갱신된 아무 세션")은 무관한 워커 세션
+    (예: "라일론 상세페이지 자동생성 담당")을 고를 수 있었다 — 실측 사고.
+    """
+    dedicated = console._uuid_or_none("3f8b3f2c-0000-4000-8000-0000000000dd")
+    conn = FakeConn(values=[dedicated])
+
+    result = asyncio.run(console._resolve_session_id(conn, TENANT, "u-1", None))
+
+    assert result == dedicated
+    query, args = conn.queries[0]
+    assert "tenant_id IS NOT DISTINCT FROM $1::uuid" in query
+    assert "$2 = ANY(tags)" in query
+    assert args == (TENANT, console.OHVIS_SESSION_TAG)
+    # 예전 폴백 쿼리(아무 최신 세션)는 더 이상 없다
+    assert "ORDER BY (user_id" not in query
+
+
+def test_session_resolver_creates_dedicated_session_when_none_exists():
+    """(b) 전용 세션이 없으면 워크스페이스+세션을 만들고 그 id 로 task 가 만들어진다."""
+    new_workspace = console._uuid_or_none("3f8b3f2c-0000-4000-8000-0000000000ee")
+    new_session = console._uuid_or_none("3f8b3f2c-0000-4000-8000-0000000000fe")
+    # 순서: 전용 세션 조회(없음) → 워크스페이스 조회(없음) → 워크스페이스 생성 → 세션 생성
+    conn = FakeConn(values=[None, None, new_workspace, new_session])
+
+    result = asyncio.run(console._resolve_session_id(conn, TENANT, "u-1", None))
+
+    assert result == new_session
+    assert len(conn.queries) == 4
+    ws_lookup_query, ws_lookup_args = conn.queries[1]
+    assert "chat_workspaces" in ws_lookup_query and "name = $2" in ws_lookup_query
+    assert ws_lookup_args == (TENANT, console.OHVIS_WORKSPACE_NAME)
+    ws_insert_query, ws_insert_args = conn.queries[2]
+    assert "INSERT INTO chat_workspaces" in ws_insert_query
+    assert ws_insert_args == (TENANT, console.OHVIS_WORKSPACE_NAME)
+    session_insert_query, session_insert_args = conn.queries[3]
+    assert "INSERT INTO chat_sessions" in session_insert_query
+    assert session_insert_args == (
+        TENANT, "u-1", new_workspace, console.OHVIS_SESSION_TITLE, console.OHVIS_SESSION_TAG,
+    )
+
+
+def test_session_resolver_returns_none_when_dedicated_session_creation_fails():
+    """워크스페이스 생성마저 실패하면 None 을 돌려준다 — command 엔드포인트가 409 로 닫는다."""
+    conn = FakeConn(values=[None, None, None])
     assert asyncio.run(console._resolve_session_id(conn, TENANT, "u-1", None)) is None
 
 
@@ -837,3 +888,167 @@ def test_browser_tasks_reference_page_is_untouched():
     source = page.read_text()
     assert "getOhvisConsoleSummary" not in source
     assert "ohvis/console" not in source
+
+
+# ────────────────────────── 6. 트리거 회신 수집 (AADS-OHVIS-CONSOLE-SESSION-ROUTING-P0)
+#
+# "세션의 마지막 assistant 메시지" 를 그대로 답으로 채택하면, 그 사이 러너
+# 알림 같은 다른 자동 메시지가 끼어들었을 때 그 알림 문구가 답변으로 표시된다.
+# 이 절은 두 가지만 본다: (c) ⏳/⚠️ 안내문을 답으로 채택하지 않는다,
+# (d) 채택할 답이 없으면 done 대신 error 로 닫는다.
+
+
+def test_progress_and_interrupt_placeholders_are_never_adopted_as_the_reply():
+    """순수 필터 단위 테스트 — 알려진 진행/중단 안내문은 전부 걸러진다."""
+    from app.services import chat_service
+
+    for placeholder in (
+        "⏳ _AI가 응답을 생성 중입니다... (도구 2회 호출 중)_",
+        "⚠️ 응답이 중단되었습니다. 다시 시도해 주세요.",
+        "⚠️ 응답 생성에 실패했습니다. 동일한 지시를 다시 보내주세요.",
+        "⚠️ 장시간 응답이 중단되었습니다. 동일한 지시를 다시 보내주세요.",
+        chat_service._INTERRUPT_MARKER_GENERIC,
+        chat_service._RESUME_FAIL_SUFFIX,
+        "",
+    ):
+        assert chat_service._is_progress_or_interrupt_only(placeholder) is True, placeholder
+
+    assert chat_service._is_progress_or_interrupt_only("서버 헬스체크 결과: 정상입니다.") is False
+
+
+class _FakeChatConn:
+    """`trigger_ai_reaction` 내부 DB 왕복을 대본대로 돌려주는 커넥션."""
+
+    def __init__(self, values: list):
+        self._values = list(values)
+        self.queries: list[tuple[str, tuple]] = []
+
+    async def fetchval(self, query, *args):
+        self.queries.append((query, args))
+        return self._values.pop(0) if self._values else None
+
+    async def execute(self, query, *args):
+        self.queries.append((query, args))
+        return "OK"
+
+
+class _FakeChatPool:
+    def __init__(self, conn: _FakeChatConn):
+        self._conn = conn
+
+    def acquire(self):
+        conn = self._conn
+
+        class _Ctx:
+            async def __aenter__(self):
+                return conn
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return _Ctx()
+
+
+async def _empty_stream(**kwargs):
+    """`send_message_stream` 대역 — 아무 것도 만들지 않는 async generator."""
+    return
+    yield  # pragma: no cover
+
+
+def _patch_trigger_ai_reaction_plumbing(monkeypatch, chat_service, conn: _FakeChatConn):
+    """게이트(활성 슬롯·라이브 실행 여부)를 통과시키고 DB 왕복을 대본 커넥션으로 돌린다."""
+    monkeypatch.setattr(chat_service, "get_pool", lambda: _FakeChatPool(conn))
+    monkeypatch.setattr(chat_service, "_is_local_active_api_slot", lambda: True)
+
+    async def _no_live_execution(_sid):
+        return False
+
+    monkeypatch.setattr(chat_service, "_session_has_live_execution", _no_live_execution)
+    monkeypatch.setattr(chat_service, "send_message_stream", _empty_stream)
+
+
+def _run_trigger_and_wait(chat_service, session_id: str, message: str, task_id: str) -> None:
+    async def _drive():
+        task = await chat_service.trigger_ai_reaction(session_id, message, task_id)
+        assert task is not None, "트리거가 게이트에 막혀 태스크를 못 띄웠다"
+        await task
+
+    asyncio.run(_drive())
+
+
+def test_trigger_reply_collection_rejects_a_stray_placeholder_and_closes_as_error(monkeypatch):
+    """(c) 세션이 바쁠 때 끼어든 진행/중단 안내문을 답으로 채택하지 않는다."""
+    import uuid as _uuid
+
+    from app.services import chat_service
+
+    session_id = str(_uuid.uuid4())
+    # 순서: 중단-재개 검사(없음) → 트리거 시작 시각 → 마지막 assistant 메시지
+    conn = _FakeChatConn([
+        None,
+        datetime(2026, 9, 19, 7, 0, tzinfo=timezone.utc),
+        "⚠️ 응답이 중단되었습니다. 다시 시도해 주세요.",
+    ])
+    completed: dict = {}
+
+    async def fake_complete(task_id, status="done", result=None, ohvis_judgement=None):
+        completed.update(task_id=task_id, status=status, result=result)
+        return True
+
+    _patch_trigger_ai_reaction_plumbing(monkeypatch, chat_service, conn)
+    monkeypatch.setattr("app.services.ohvis_task_manager.complete_task", fake_complete)
+
+    _run_trigger_and_wait(chat_service, session_id, "[오비스 창 지시] 안녕", "task-c1")
+
+    assert completed["status"] == "error"
+    assert completed["result"] is None
+
+
+def test_trigger_reply_collection_closes_as_error_when_nothing_new_was_found(monkeypatch):
+    """(d) 이번 트리거로 만든 답이 없으면 done 대신 error 로 닫는다."""
+    import uuid as _uuid
+
+    from app.services import chat_service
+
+    session_id = str(_uuid.uuid4())
+    conn = _FakeChatConn([None, datetime(2026, 9, 19, 7, 0, tzinfo=timezone.utc), None])
+    completed: dict = {}
+
+    async def fake_complete(task_id, status="done", result=None, ohvis_judgement=None):
+        completed.update(task_id=task_id, status=status, result=result)
+        return True
+
+    _patch_trigger_ai_reaction_plumbing(monkeypatch, chat_service, conn)
+    monkeypatch.setattr("app.services.ohvis_task_manager.complete_task", fake_complete)
+
+    _run_trigger_and_wait(chat_service, session_id, "[오비스 창 지시] 안녕", "task-d1")
+
+    assert completed["status"] == "error"
+    assert completed["result"] is None
+
+
+def test_trigger_reply_collection_accepts_a_real_new_answer(monkeypatch):
+    """회귀 방지 — 진짜 새 답은 여전히 done 으로 채택된다."""
+    import uuid as _uuid
+
+    from app.services import chat_service
+
+    session_id = str(_uuid.uuid4())
+    conn = _FakeChatConn([
+        None,
+        datetime(2026, 9, 19, 7, 0, tzinfo=timezone.utc),
+        "서버 헬스체크 결과: 정상입니다.",
+    ])
+    completed: dict = {}
+
+    async def fake_complete(task_id, status="done", result=None, ohvis_judgement=None):
+        completed.update(task_id=task_id, status=status, result=result)
+        return True
+
+    _patch_trigger_ai_reaction_plumbing(monkeypatch, chat_service, conn)
+    monkeypatch.setattr("app.services.ohvis_task_manager.complete_task", fake_complete)
+
+    _run_trigger_and_wait(chat_service, session_id, "[오비스 창 지시] 안녕", "task-e1")
+
+    assert completed["status"] == "done"
+    assert completed["result"] == {"ai_reaction": "서버 헬스체크 결과: 정상입니다."}

@@ -2633,6 +2633,33 @@ def _looks_terminal_interrupt_content(content: str) -> bool:
     return str(content or "").rstrip().endswith(_INTERRUPT_MARKER)
 
 
+_OHVIS_REACTION_PLACEHOLDER_MARKERS = (
+    _INTERRUPT_MARKER_SUPERSEDED,
+    _INTERRUPT_MARKER_EXHAUSTED,
+    _INTERRUPT_MARKER_PROVIDER,
+    _INTERRUPT_MARKER_STOPPED,
+    _INTERRUPT_MARKER_GENERIC,
+    _RESUME_FAIL_SUFFIX,
+    _RESUME_FAIL_SUFFIX_ALT,
+)
+
+
+def _is_progress_or_interrupt_only(content: str) -> bool:
+    """오비스 트리거 회신으로 채택하기 전 필터(AADS-OHVIS-CONSOLE-SESSION-ROUTING-P0).
+
+    ⏳ 진행 중 · ⚠️ 중단 안내만 있는 메시지는 CEO 지시에 대한 답이 아니다 —
+    실측 사고에서는 세션이 바쁠 때 "[Pipeline Runner] 작업 시작…" 같은 다른
+    자동 메시지가 마지막 assistant 메시지가 되어 그대로 답변처럼 표시됐다.
+    """
+    text = _strip_streaming_progress_markers(content)
+    for marker in _OHVIS_REACTION_PLACEHOLDER_MARKERS:
+        text = text.replace(marker, "").strip()
+    if not text:
+        return True
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return bool(lines) and all(ln.startswith(("⏳", "⚠️")) for ln in lines)
+
+
 def _current_asyncio_task_or_none():
     try:
         return _heartbeat_asyncio.current_task()
@@ -11332,7 +11359,13 @@ async def trigger_ai_reaction(
 
     async def _consume_stream():
         _reaction_summary = ""
+        _trigger_started_at = None
         try:
+            try:
+                async with get_pool().acquire() as _start_conn:
+                    _trigger_started_at = await _start_conn.fetchval("SELECT NOW()")
+            except Exception:
+                _trigger_started_at = None
             async for _ in send_message_stream(
                 session_id=session_id,
                 content=safe_message,
@@ -11341,22 +11374,26 @@ async def trigger_ai_reaction(
                 pass  # 스트림 전체 소비 → DB에 AI 응답 자동 저장
             # message_count 보정 + P1-2 AI 반응 텍스트 조회 (task_card용)
             try:
-                from app.core.db_pool import get_pool
-                pool = get_pool()
-                async with pool.acquire() as _conn:
+                async with get_pool().acquire() as _conn:
                     await _conn.execute(
                         "UPDATE chat_sessions SET message_count = "
                         "(SELECT COUNT(*) FROM chat_messages WHERE session_id = $1), "
                         "updated_at = NOW() WHERE id = $1",
                         uuid.UUID(session_id),
                     )
+                    # 세션의 "마지막 assistant 메시지" 가 아니라 **이 트리거 이후**
+                    # 생성된 메시지만 본다 — 세션이 다른 일로 바쁘면 그 사이 다른
+                    # 자동 메시지가 끼어들어 마지막 자리를 차지할 수 있다
+                    # (AADS-OHVIS-CONSOLE-SESSION-ROUTING-P0).
                     _last_ai = await _conn.fetchval(
                         "SELECT content FROM chat_messages "
                         "WHERE session_id = $1 AND role = 'assistant' "
+                        "AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz) "
                         "ORDER BY created_at DESC LIMIT 1",
                         uuid.UUID(session_id),
+                        _trigger_started_at,
                     )
-                    if _last_ai:
+                    if _last_ai and not _is_progress_or_interrupt_only(str(_last_ai)):
                         _reaction_summary = str(_last_ai)[:2000]
             except Exception as _mc_err:
                 logger.warning(f"trigger_ai_reaction: post_stream_update failed session={session_id[:8]}: {_mc_err}")
@@ -11368,10 +11405,15 @@ async def trigger_ai_reaction(
             if ohvis_task_id:
                 try:
                     from app.services.ohvis_task_manager import complete_task as _otm_done
-                    _judgement = _reaction_summary[:500] if _reaction_summary else "오비스 자동 확인 완료"
-                    await _otm_done(ohvis_task_id, status="done",
-                                    result={"ai_reaction": _reaction_summary} if _reaction_summary else None,
-                                    ohvis_judgement=_judgement)
+                    if _reaction_summary:
+                        await _otm_done(ohvis_task_id, status="done",
+                                        result={"ai_reaction": _reaction_summary},
+                                        ohvis_judgement=_reaction_summary[:500])
+                    else:
+                        # 이번 트리거로 생성된 답을 찾지 못했다 — 화면이 "돌고 있다"고
+                        # 거짓 보고하지 않도록 error 로 닫는다.
+                        await _otm_done(ohvis_task_id, status="error", result=None,
+                                        ohvis_judgement="오비스 자동 확인 실패 — 트리거 응답을 찾지 못했습니다")
                 except Exception as _otm_e:
                     logger.warning("ohvis_task_complete_failed: %s", _otm_e)
             # 큐에 대기 중인 트리거가 있으면 다음 것 처리
