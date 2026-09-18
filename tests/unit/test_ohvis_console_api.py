@@ -119,12 +119,13 @@ def test_router_is_registered_under_ohvis_console():
 def test_console_delegates_writes_to_existing_services():
     """SQL 을 여기서 다시 쓰지 않는다 — 기록도 승인도 기존 서비스에 위임한다.
 
-    2026-09-18 에 라우트가 셋이 됐다(summary / 승인결정 / command). 늘어난 것은
-    **실행 트리거**이고, 지시 기록 자체는 여전히 `ohvis_task_manager.create_task()`
-    가 한다 — 그래서 INSERT 문은 이 모듈에 한 줄도 없다.
+    2026-09-18 에 라우트가 넷이 됐다(summary / command / 승인결정 / recipes/run,
+    레시피 오케스트레이터 신설분). 늘어난 것은 모두 **실행 트리거**이고, 지시
+    기록 자체는 여전히 `ohvis_task_manager.create_task()` 가 한다 — 그래서
+    INSERT 문은 이 모듈에 한 줄도 없다.
     """
     source = Path("app/api/ohvis_console.py").read_text()
-    assert len(console.router.routes) == 3
+    assert len(console.router.routes) == 4
     assert "INSERT INTO ohvis_tasks" not in source
     assert "INSERT INTO recipe_approvals" not in source
     assert "UPDATE recipe_approvals" not in source
