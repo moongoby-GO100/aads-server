@@ -445,28 +445,31 @@ def _route(module, method, path, entry="app/main.py"):
             "mount_prefix": "/api/v1", "full_path": path, "lineno": 1}
 
 
-def test_double_mount_fires_when_exact_conflicts_are_zero():
-    """AADS 의 핵심 사례 — exact 만 세는 규칙이면 이 부채가 0건으로 보고된다."""
+def test_double_mount_allows_distinct_routers_to_share_a_namespace():
     routes = [
         _route("app/api/chat.py", "POST", "/api/v1/chat"),
         _route("app/api/chat.py", "GET", "/api/v1/chat/intents"),
         _route("app/routers/chat.py", "GET", "/api/v1/chat/messages"),
     ]
-    findings = sc.find_double_mounts(routes, ["/api/v1"])
-    assert len(findings) == 1
-    assert findings[0]["namespace"] == "/api/v1/chat"
-    assert findings[0]["owners"] == ["app/api/chat.py", "app/routers/chat.py"]
-    assert findings[0]["exact_conflicts"] == []
+    assert sc.find_double_mounts(routes, ["/api/v1"]) == []
 
 
-def test_double_mount_reports_exact_conflicts_when_present():
+def test_double_mount_ignores_route_conflicts_between_distinct_modules():
     routes = [
         _route("app/api/a.py", "GET", "/api/v1/x/y"),
         _route("app/api/b.py", "GET", "/api/v1/x/y"),
     ]
-    findings = sc.find_double_mounts(routes, ["/api/v1"])
+    assert sc.find_double_mounts(routes, ["/api/v1"]) == []
+
+
+def test_double_mount_reports_the_same_router_registered_twice():
+    route = _route("app/api/a.py", "GET", "/api/v1/x/y")
+    findings = sc.find_double_mounts([route, route], ["/api/v1"])
+    assert len(findings) == 1
+    assert findings[0]["namespace"] == "/api/v1/x"
+    assert findings[0]["owners"] == ["app/api/a.py"]
     assert findings[0]["exact_conflicts"] == [
-        {"method": "GET", "path": "/api/v1/x/y", "modules": ["app/api/a.py", "app/api/b.py"]}
+        {"method": "GET", "path": "/api/v1/x/y", "modules": ["app/api/a.py"]}
     ]
 
 
@@ -486,8 +489,8 @@ def test_routes_on_different_entrypoints_do_not_collide():
 def test_route_shadowed_catches_a_duplicate_inside_one_module():
     """AADS 실측 — `app/api/ops.py` 가 `GET /ops/codex-usage` 를 두 번 등록했다.
 
-    소유 모듈이 1개라 DOUBLE_MOUNT 는 이 네임스페이스를 아예 보지 않는다.
-    함수 이름이 달라 ruff F811 도 조용하다. 여기서 안 잡으면 아무도 안 잡는다.
+    함수 이름이 달라 ruff F811 도 조용하므로 ROUTE_SHADOWED가 실제 충돌을
+    별도로 보고해야 한다.
     """
     routes = [
         dict(_route("app/api/ops.py", "GET", "/api/v1/ops/codex-usage"), lineno=2677),

@@ -2,7 +2,7 @@ graph LR
   classDef dbl fill:#ffd7d7,stroke:#c00,stroke-width:2px;
   n_app_main_py["app/main.py"]
   n_app_yeoljeong_main_py["app/yeoljeong_main.py"]
-  n_ns_api_v1_ohvis(["/api/v1/ohvis ⚠2+"])
+  n_ns_api_v1_ohvis(["/api/v1/ohvis"])
   n_app_api_ohvis_console_py["app/api/ohvis_console.py"]
   n_app_api_ohvis_console_py --> n_ns_api_v1_ohvis
   n_app_api_ohvis_harness_py["app/api/ohvis_harness.py"]
@@ -11,8 +11,7 @@ graph LR
   n_app_api_ohvis_llmops_py --> n_ns_api_v1_ohvis
   n_app_api_ohvis_tasks_py["app/api/ohvis_tasks.py"]
   n_app_api_ohvis_tasks_py --> n_ns_api_v1_ohvis
-  class n_ns_api_v1_ohvis dbl;
-  n_ns_api_v1_projects(["/api/v1/projects ⚠2+"])
+  n_ns_api_v1_projects(["/api/v1/projects"])
   n_app_api_checkpoints_py["app/api/checkpoints.py"]
   n_app_api_checkpoints_py --> n_ns_api_v1_projects
   n_app_api_project_dashboard_py["app/api/project_dashboard.py"]
@@ -21,57 +20,52 @@ graph LR
   n_app_api_projects_py --> n_ns_api_v1_projects
   n_app_api_stream_py["app/api/stream.py"]
   n_app_api_stream_py --> n_ns_api_v1_projects
-  class n_ns_api_v1_projects dbl;
-  n_ns_api_v1_admin(["/api/v1/admin ⚠2+"])
+  n_ns_api_v1_admin(["/api/v1/admin"])
   n_app_api_admin_py["app/api/admin.py"]
   n_app_api_admin_py --> n_ns_api_v1_admin
   n_app_api_admin_users_py["app/api/admin_users.py"]
   n_app_api_admin_users_py --> n_ns_api_v1_admin
   n_app_api_design_modifications_py["app/api/design_modifications.py"]
   n_app_api_design_modifications_py --> n_ns_api_v1_admin
-  class n_ns_api_v1_admin dbl;
-  n_ns_api_v1_chat(["/api/v1/chat ⚠2+"])
+  n_ns_api_v1_chat(["/api/v1/chat"])
   n_app_api_chat_py["app/api/chat.py"]
   n_app_api_chat_py --> n_ns_api_v1_chat
   n_app_api_directive_drafts_py["app/api/directive_drafts.py"]
   n_app_api_directive_drafts_py --> n_ns_api_v1_chat
   n_app_routers_chat_py["app/routers/chat.py"]
   n_app_routers_chat_py --> n_ns_api_v1_chat
-  class n_ns_api_v1_chat dbl;
-  n_ns_api_v1_ops(["/api/v1/ops ⚠2+"])
+  n_ns_api_v1_ops(["/api/v1/ops"])
   n_app_api_hot_reload_py["app/api/hot_reload.py"]
   n_app_api_hot_reload_py --> n_ns_api_v1_ops
   n_app_api_memory_monitor_py["app/api/memory_monitor.py"]
   n_app_api_memory_monitor_py --> n_ns_api_v1_ops
   n_app_api_ops_py["app/api/ops.py"]
   n_app_api_ops_py --> n_ns_api_v1_ops
-  class n_ns_api_v1_ops dbl;
-  n_ns_api_v1_settings(["/api/v1/settings ⚠2+"])
+  n_ns_api_v1_settings(["/api/v1/settings"])
   n_app_api_directives_py["app/api/directives.py"]
   n_app_api_directives_py --> n_ns_api_v1_settings
   n_app_api_pipeline_runner_py["app/api/pipeline_runner.py"]
   n_app_api_pipeline_runner_py --> n_ns_api_v1_settings
   n_app_routers_chat_py["app/routers/chat.py"]
   n_app_routers_chat_py --> n_ns_api_v1_settings
-  class n_ns_api_v1_settings dbl;
-  n_ns_api_v1_directives(["/api/v1/directives ⚠2+"])
+  n_ns_api_v1_directives(["/api/v1/directives"])
   n_app_api_directives_py["app/api/directives.py"]
   n_app_api_directives_py --> n_ns_api_v1_directives
   n_app_api_ops_py["app/api/ops.py"]
   n_app_api_ops_py --> n_ns_api_v1_directives
-  class n_ns_api_v1_directives dbl;
-  n_ns_api_v1_llm_models(["/api/v1/llm-models ⚠2+"])
+  n_ns_api_v1_llm_models(["/api/v1/llm-models"])
   n_app_api_llm_models_py["app/api/llm_models.py"]
   n_app_api_llm_models_py --> n_ns_api_v1_llm_models
   n_app_api_llm_report_py["app/api/llm_report.py"]
   n_app_api_llm_report_py --> n_ns_api_v1_llm_models
-  class n_ns_api_v1_llm_models dbl;
-  n_ns_api_v1_user(["/api/v1/user ⚠2+"])
+  n_ns_api_v1_user(["/api/v1/user"])
   n_app_api_user_api_keys_py["app/api/user_api_keys.py"]
   n_app_api_user_api_keys_py --> n_ns_api_v1_user
   n_app_api_user_project_servers_py["app/api/user_project_servers.py"]
   n_app_api_user_project_servers_py --> n_ns_api_v1_user
-  class n_ns_api_v1_user dbl;
+  n_ns_api_v1_aag(["/api/v1/aag"])
+  n_app_api_aag_py["app/api/aag.py"]
+  n_app_api_aag_py --> n_ns_api_v1_aag
   n_ns_api_v1_acct_purchase(["/api/v1/acct-purchase"])
   n_app_api_acct_purchase_py["app/api/acct_purchase.py"]
   n_app_api_acct_purchase_py --> n_ns_api_v1_acct_purchase
@@ -162,9 +156,7 @@ graph LR
   n_ns_api_v1_fact_check_verify_batch(["/api/v1/fact-check/verify-batch"])
   n_app_api_fact_check_py["app/api/fact_check.py"]
   n_app_api_fact_check_py --> n_ns_api_v1_fact_check_verify_batch
-  n_ns_api_v1_files(["/api/v1/files"])
-  n_app_api_files_py["app/api/files.py"]
-  n_app_api_files_py --> n_ns_api_v1_files
+  n_app_main_py --> n_app_api_aag_py
   n_app_main_py --> n_app_api_acct_purchase_py
   n_app_main_py --> n_app_api_admin_py
   n_app_main_py --> n_app_api_admin_users_py
@@ -193,7 +185,6 @@ graph LR
   n_app_main_py --> n_app_api_documents_py
   n_app_main_py --> n_app_api_external_chat_py
   n_app_main_py --> n_app_api_fact_check_py
-  n_app_main_py --> n_app_api_files_py
   n_app_main_py --> n_app_api_hot_reload_py
   n_app_main_py --> n_app_api_llm_models_py
   n_app_main_py --> n_app_api_llm_report_py
@@ -324,4 +315,4 @@ graph LR
   n__root_aads_aads_dashboard_src_services_taskApi_ts -. 1건 .-> n_ns_api_v1_directives
   n__root_aads_aads_dashboard_src_services_taskApi_ts[/"/root/aads/aads-dashboard/src/services/taskApi.ts"/]
   n__root_aads_aads_dashboard_src_services_taskApi_ts -. 1건 .-> n_ns_api_v1_ops
-  %% 네임스페이스 84개 중 상위 40개만 표시
+  %% 네임스페이스 85개 중 상위 40개만 표시

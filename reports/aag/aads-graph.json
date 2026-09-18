@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-09-18T14:46:09.051843+09:00",
-  "root": "/root/aads/aads-server",
+  "generated_at": "2026-09-18T15:24:40.257222+09:00",
+  "root": "/tmp/aads-wt-runner-f0391267",
   "api_roots": [
     "/api/v1/fact-check",
     "/api/v1/documents",
@@ -9,17 +9,17 @@
     "/api/v1"
   ],
   "stats": {
-    "app_py_files": 394,
-    "router_dir_files": 90,
-    "router_modules": 84,
-    "include_router_calls": 87,
-    "mounted_routes": 933,
-    "namespaces": 84,
+    "app_py_files": 396,
+    "router_dir_files": 91,
+    "router_modules": 85,
+    "include_router_calls": 88,
+    "mounted_routes": 936,
+    "namespaces": 85,
     "frontend_files": 237,
     "frontend_calls_resolved": 345,
-    "sql_tables_referenced": 228,
-    "graph_nodes": 782,
-    "graph_edges": 1204
+    "sql_tables_referenced": 229,
+    "graph_nodes": 786,
+    "graph_edges": 1208
   },
   "nodes": [
     {
@@ -1071,6 +1071,10 @@
       "kind": "module"
     },
     {
+      "id": "app/services/aag_tools.py",
+      "kind": "module"
+    },
+    {
       "id": "app/services/ab_test_runner.py",
       "kind": "module"
     },
@@ -1563,6 +1567,11 @@
       "kind": "module"
     },
     {
+      "id": "ns:/api/v1/aag",
+      "kind": "namespace",
+      "path": "/api/v1/aag"
+    },
+    {
       "id": "ns:/api/v1/acct-purchase",
       "kind": "namespace",
       "path": "/api/v1/acct-purchase"
@@ -1986,6 +1995,11 @@
       "id": "ns:/runtime",
       "kind": "namespace",
       "path": "/runtime"
+    },
+    {
+      "id": "app/api/aag.py",
+      "kind": "router_module",
+      "routes": 3
     },
     {
       "id": "app/api/acct_purchase.py",
@@ -2412,6 +2426,12 @@
       "kind": "table",
       "defined": false,
       "users": 1
+    },
+    {
+      "id": "table:aag_graph_snapshots",
+      "kind": "table",
+      "defined": true,
+      "users": 2
     },
     {
       "id": "table:ab_test_log",
@@ -3782,581 +3802,588 @@
       "to": "app/api/health.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3759
+      "lineno": 3760
     },
     {
       "from": "app/main.py",
       "to": "app/api/project_dashboard.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3760
+      "lineno": 3761
     },
     {
       "from": "app/main.py",
       "to": "app/api/projects.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3761
+      "lineno": 3762
     },
     {
       "from": "app/main.py",
       "to": "app/api/checkpoints.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3762
+      "lineno": 3763
     },
     {
       "from": "app/main.py",
       "to": "app/api/stream.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3763
+      "lineno": 3764
     },
     {
       "from": "app/main.py",
       "to": "app/api/auth.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3764
+      "lineno": 3765
     },
     {
       "from": "app/main.py",
       "to": "app/api/context.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3765
+      "lineno": 3766
     },
     {
       "from": "app/main.py",
       "to": "app/api/chat.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3766
+      "lineno": 3767
     },
     {
       "from": "app/main.py",
       "to": "app/api/visual_qa.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3767
+      "lineno": 3768
     },
     {
       "from": "app/main.py",
       "to": "app/api/mobile_qa.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3768
+      "lineno": 3769
     },
     {
       "from": "app/main.py",
       "to": "app/api/memory.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3769
+      "lineno": 3770
     },
     {
       "from": "app/main.py",
       "to": "app/api/conversations.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3770
+      "lineno": 3771
     },
     {
       "from": "app/main.py",
       "to": "app/api/directives.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3772
+      "lineno": 3773
     },
     {
       "from": "app/main.py",
       "to": "app/api/watchdog.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3773
+      "lineno": 3774
     },
     {
       "from": "app/main.py",
       "to": "app/api/approval.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3774
+      "lineno": 3775
     },
     {
       "from": "app/main.py",
       "to": "app/api/documents.py",
       "kind": "mounts",
       "prefix": "/api/v1/documents",
-      "lineno": 3775
+      "lineno": 3776
     },
     {
       "from": "app/main.py",
       "to": "app/api/channels.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3776
+      "lineno": 3777
     },
     {
       "from": "app/main.py",
       "to": "app/api/managers.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3777
+      "lineno": 3778
     },
     {
       "from": "app/main.py",
       "to": "app/api/ops.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3778
+      "lineno": 3779
     },
     {
       "from": "app/main.py",
       "to": "app/api/internal_token.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3779
+      "lineno": 3780
     },
     {
       "from": "app/main.py",
       "to": "app/api/lessons.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3780
+      "lineno": 3781
     },
     {
       "from": "app/main.py",
       "to": "app/api/strategy.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3781
+      "lineno": 3782
     },
     {
       "from": "app/main.py",
       "to": "app/api/plans.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3782
+      "lineno": 3783
     },
     {
       "from": "app/main.py",
       "to": "app/api/debate_logs.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3783
+      "lineno": 3784
     },
     {
       "from": "app/main.py",
       "to": "app/api/artifacts.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3784
+      "lineno": 3785
     },
     {
       "from": "app/main.py",
       "to": "app/api/directive_drafts.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3785
+      "lineno": 3786
     },
     {
       "from": "app/main.py",
       "to": "app/api/handovers.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3786
+      "lineno": 3787
     },
     {
       "from": "app/main.py",
       "to": "app/api/briefing.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3787
+      "lineno": 3788
     },
     {
       "from": "app/main.py",
       "to": "app/api/governance.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3788
+      "lineno": 3789
     },
     {
       "from": "app/main.py",
       "to": "app/api/task_monitor.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3789
+      "lineno": 3790
     },
     {
       "from": "app/main.py",
       "to": "app/api/qa.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3790
+      "lineno": 3791
     },
     {
       "from": "app/main.py",
       "to": "app/routers/chat.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3791
+      "lineno": 3792
     },
     {
       "from": "app/main.py",
       "to": "app/api/image.py",
       "kind": "mounts",
       "prefix": "/api/v1/image",
-      "lineno": 3792
+      "lineno": 3793
     },
     {
       "from": "app/main.py",
       "to": "app/api/fact_check.py",
       "kind": "mounts",
       "prefix": "/api/v1/fact-check",
-      "lineno": 3793
+      "lineno": 3794
     },
     {
       "from": "app/main.py",
       "to": "app/api/pipeline_runner.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3794
+      "lineno": 3795
     },
     {
       "from": "app/main.py",
       "to": "app/api/code_review.py",
       "kind": "mounts",
       "prefix": "",
-      "lineno": 3795
+      "lineno": 3796
     },
     {
       "from": "app/main.py",
       "to": "app/api/quality.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3796
+      "lineno": 3797
     },
     {
       "from": "app/main.py",
       "to": "app/api/memory_monitor.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3797
+      "lineno": 3798
     },
     {
       "from": "app/main.py",
       "to": "app/api/pc_agent.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3798
+      "lineno": 3799
     },
     {
       "from": "app/main.py",
       "to": "app/api/pc_ollama_bridge.py",
       "kind": "mounts",
       "prefix": "",
-      "lineno": 3799
+      "lineno": 3800
     },
     {
       "from": "app/main.py",
       "to": "app/api/assistant.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3800
+      "lineno": 3801
     },
     {
       "from": "app/main.py",
       "to": "app/api/voice.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3801
+      "lineno": 3802
     },
     {
       "from": "app/main.py",
       "to": "app/api/local_models.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3802
+      "lineno": 3803
     },
     {
       "from": "app/main.py",
       "to": "app/api/device.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3803
+      "lineno": 3804
     },
     {
       "from": "app/main.py",
       "to": "app/api/kakao_bot.py",
       "kind": "mounts",
       "prefix": "/api/v1",
-      "lineno": 3804
-    },
-    {
-      "from": "app/main.py",
-      "to": "app/api/agenda.py",
-      "kind": "mounts",
-      "prefix": "/api/v1/agenda",
       "lineno": 3805
     },
     {
       "from": "app/main.py",
-      "to": "app/api/hot_reload.py",
+      "to": "app/api/aag.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3806
     },
     {
       "from": "app/main.py",
-      "to": "app/api/admin.py",
+      "to": "app/api/agenda.py",
       "kind": "mounts",
-      "prefix": "/api/v1",
+      "prefix": "/api/v1/agenda",
       "lineno": 3807
     },
     {
       "from": "app/main.py",
-      "to": "app/api/admin_users.py",
+      "to": "app/api/hot_reload.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3808
     },
     {
       "from": "app/main.py",
-      "to": "app/api/design_modifications.py",
+      "to": "app/api/admin.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3809
     },
     {
       "from": "app/main.py",
-      "to": "app/api/obys_finance.py",
+      "to": "app/api/admin_users.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3810
     },
     {
       "from": "app/main.py",
-      "to": "app/api/unni_naengmyeon.py",
+      "to": "app/api/design_modifications.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3811
     },
     {
       "from": "app/main.py",
-      "to": "app/api/obys_dashboard.py",
+      "to": "app/api/obys_finance.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3812
     },
     {
       "from": "app/main.py",
-      "to": "app/api/obys_inventory.py",
+      "to": "app/api/unni_naengmyeon.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3813
     },
     {
       "from": "app/main.py",
-      "to": "app/api/obys_accounting.py",
+      "to": "app/api/obys_dashboard.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3814
     },
     {
       "from": "app/main.py",
-      "to": "app/api/obys_ops.py",
+      "to": "app/api/obys_inventory.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3815
     },
     {
       "from": "app/main.py",
-      "to": "app/api/acct_purchase.py",
+      "to": "app/api/obys_accounting.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3816
     },
     {
       "from": "app/main.py",
-      "to": "app/api/credential_vault.py",
+      "to": "app/api/obys_ops.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3817
     },
     {
       "from": "app/main.py",
-      "to": "app/api/google_sheets.py",
+      "to": "app/api/acct_purchase.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3818
     },
     {
       "from": "app/main.py",
-      "to": "app/api/notifications.py",
+      "to": "app/api/credential_vault.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3819
     },
     {
       "from": "app/main.py",
-      "to": "app/api/llm_keys.py",
+      "to": "app/api/google_sheets.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3820
     },
     {
       "from": "app/main.py",
-      "to": "app/api/llm_models.py",
+      "to": "app/api/notifications.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3821
     },
     {
       "from": "app/main.py",
-      "to": "app/api/llm_report.py",
+      "to": "app/api/llm_keys.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3822
     },
     {
       "from": "app/main.py",
-      "to": "app/api/llm_admin.py",
+      "to": "app/api/llm_models.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3823
     },
     {
       "from": "app/main.py",
-      "to": "app/api/user_api_keys.py",
+      "to": "app/api/llm_report.py",
       "kind": "mounts",
-      "prefix": "",
+      "prefix": "/api/v1",
       "lineno": 3824
     },
     {
       "from": "app/main.py",
-      "to": "app/api/user_project_servers.py",
+      "to": "app/api/llm_admin.py",
       "kind": "mounts",
-      "prefix": "",
+      "prefix": "/api/v1",
       "lineno": 3825
     },
     {
       "from": "app/main.py",
-      "to": "app/api/braming.py",
+      "to": "app/api/user_api_keys.py",
       "kind": "mounts",
       "prefix": "",
       "lineno": 3826
     },
     {
       "from": "app/main.py",
-      "to": "app/api/project_docs.py",
+      "to": "app/api/user_project_servers.py",
       "kind": "mounts",
-      "prefix": "/api/v1",
+      "prefix": "",
       "lineno": 3827
     },
     {
       "from": "app/main.py",
-      "to": "app/api/files.py",
+      "to": "app/api/braming.py",
       "kind": "mounts",
-      "prefix": "/api/v1",
+      "prefix": "",
       "lineno": 3828
     },
     {
       "from": "app/main.py",
-      "to": "app/api/terminal.py",
+      "to": "app/api/project_docs.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3829
     },
     {
       "from": "app/main.py",
-      "to": "app/api/browser_bridge.py",
+      "to": "app/api/files.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3830
     },
     {
       "from": "app/main.py",
-      "to": "app/api/external_chat.py",
+      "to": "app/api/terminal.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3831
     },
     {
       "from": "app/main.py",
-      "to": "app/api/local_media_router.py",
+      "to": "app/api/browser_bridge.py",
       "kind": "mounts",
-      "prefix": "",
+      "prefix": "/api/v1",
       "lineno": 3832
     },
     {
       "from": "app/main.py",
-      "to": "app/api/ohvis_harness.py",
+      "to": "app/api/external_chat.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3833
     },
     {
       "from": "app/main.py",
-      "to": "app/api/ohvis_llmops.py",
+      "to": "app/api/local_media_router.py",
       "kind": "mounts",
-      "prefix": "/api/v1",
+      "prefix": "",
       "lineno": 3834
     },
     {
       "from": "app/main.py",
-      "to": "app/api/ohvis_tasks.py",
+      "to": "app/api/ohvis_harness.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3835
     },
     {
       "from": "app/main.py",
-      "to": "app/api/ohvis_console.py",
+      "to": "app/api/ohvis_llmops.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3836
     },
     {
       "from": "app/main.py",
-      "to": "app/api/loops.py",
+      "to": "app/api/ohvis_tasks.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3837
     },
     {
       "from": "app/main.py",
-      "to": "app/api/browser_tasks.py",
+      "to": "app/api/ohvis_console.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3838
     },
     {
       "from": "app/main.py",
-      "to": "app/api/browser_recipes.py",
+      "to": "app/api/loops.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3839
     },
     {
       "from": "app/main.py",
-      "to": "app/api/authenticated_site_collector.py",
+      "to": "app/api/browser_tasks.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3840
     },
     {
       "from": "app/main.py",
-      "to": "app/routers/agent_vault.py",
+      "to": "app/api/browser_recipes.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3841
     },
     {
       "from": "app/main.py",
-      "to": "app/routers/goals.py",
+      "to": "app/api/authenticated_site_collector.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3842
+    },
+    {
+      "from": "app/main.py",
+      "to": "app/routers/agent_vault.py",
+      "kind": "mounts",
+      "prefix": "/api/v1",
+      "lineno": 3843
+    },
+    {
+      "from": "app/main.py",
+      "to": "app/routers/goals.py",
+      "kind": "mounts",
+      "prefix": "/api/v1",
+      "lineno": 3844
     },
     {
       "from": "app/yeoljeong_main.py",
@@ -4674,6 +4701,11 @@
     {
       "from": "app/api/kakao_bot.py",
       "to": "ns:/api/v1/kakao-bot",
+      "kind": "owns"
+    },
+    {
+      "from": "app/api/aag.py",
+      "to": "ns:/api/v1/aag",
       "kind": "owns"
     },
     {
@@ -7654,6 +7686,16 @@
     {
       "from": "app/api/project_dashboard.py",
       "to": "table:aads_conversations",
+      "kind": "queries"
+    },
+    {
+      "from": "app/api/aag.py",
+      "to": "table:aag_graph_snapshots",
+      "kind": "queries"
+    },
+    {
+      "from": "app/services/aag_tools.py",
+      "to": "table:aag_graph_snapshots",
       "kind": "queries"
     },
     {
@@ -11008,6 +11050,9 @@
     }
   ],
   "namespace_owners": {
+    "/api/v1/aag": [
+      "app/api/aag.py"
+    ],
     "/api/v1/acct-purchase": [
       "app/api/acct_purchase.py"
     ],
@@ -11280,175 +11325,6 @@
   },
   "findings": [
     {
-      "rule": "DOUBLE_MOUNT",
-      "key": "/api/v1/admin",
-      "entrypoint": "app/main.py",
-      "namespace": "/api/v1/admin",
-      "owners": [
-        "app/api/admin.py",
-        "app/api/admin_users.py",
-        "app/api/design_modifications.py"
-      ],
-      "owner_route_counts": {
-        "app/api/admin.py": 31,
-        "app/api/admin_users.py": 1,
-        "app/api/design_modifications.py": 8
-      },
-      "exact_conflicts": [],
-      "detail": "네임스페이스 `/api/v1/admin` 를 3개 모듈이 소유 — `app/api/admin.py`(31개 라우트), `app/api/admin_users.py`(1개 라우트), `app/api/design_modifications.py`(8개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)",
-      "severity": "P1"
-    },
-    {
-      "rule": "DOUBLE_MOUNT",
-      "key": "/api/v1/chat",
-      "entrypoint": "app/main.py",
-      "namespace": "/api/v1/chat",
-      "owners": [
-        "app/api/chat.py",
-        "app/api/directive_drafts.py",
-        "app/routers/chat.py"
-      ],
-      "owner_route_counts": {
-        "app/api/chat.py": 4,
-        "app/api/directive_drafts.py": 4,
-        "app/routers/chat.py": 81
-      },
-      "exact_conflicts": [],
-      "detail": "네임스페이스 `/api/v1/chat` 를 3개 모듈이 소유 — `app/api/chat.py`(4개 라우트), `app/api/directive_drafts.py`(4개 라우트), `app/routers/chat.py`(81개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)",
-      "severity": "P1"
-    },
-    {
-      "rule": "DOUBLE_MOUNT",
-      "key": "/api/v1/directives",
-      "entrypoint": "app/main.py",
-      "namespace": "/api/v1/directives",
-      "owners": [
-        "app/api/directives.py",
-        "app/api/ops.py"
-      ],
-      "owner_route_counts": {
-        "app/api/directives.py": 3,
-        "app/api/ops.py": 1
-      },
-      "exact_conflicts": [],
-      "detail": "네임스페이스 `/api/v1/directives` 를 2개 모듈이 소유 — `app/api/directives.py`(3개 라우트), `app/api/ops.py`(1개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)",
-      "severity": "P1"
-    },
-    {
-      "rule": "DOUBLE_MOUNT",
-      "key": "/api/v1/llm-models",
-      "entrypoint": "app/main.py",
-      "namespace": "/api/v1/llm-models",
-      "owners": [
-        "app/api/llm_models.py",
-        "app/api/llm_report.py"
-      ],
-      "owner_route_counts": {
-        "app/api/llm_models.py": 9,
-        "app/api/llm_report.py": 2
-      },
-      "exact_conflicts": [],
-      "detail": "네임스페이스 `/api/v1/llm-models` 를 2개 모듈이 소유 — `app/api/llm_models.py`(9개 라우트), `app/api/llm_report.py`(2개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)",
-      "severity": "P1"
-    },
-    {
-      "rule": "DOUBLE_MOUNT",
-      "key": "/api/v1/ohvis",
-      "entrypoint": "app/main.py",
-      "namespace": "/api/v1/ohvis",
-      "owners": [
-        "app/api/ohvis_console.py",
-        "app/api/ohvis_harness.py",
-        "app/api/ohvis_llmops.py",
-        "app/api/ohvis_tasks.py"
-      ],
-      "owner_route_counts": {
-        "app/api/ohvis_console.py": 3,
-        "app/api/ohvis_harness.py": 5,
-        "app/api/ohvis_llmops.py": 12,
-        "app/api/ohvis_tasks.py": 8
-      },
-      "exact_conflicts": [],
-      "detail": "네임스페이스 `/api/v1/ohvis` 를 4개 모듈이 소유 — `app/api/ohvis_console.py`(3개 라우트), `app/api/ohvis_harness.py`(5개 라우트), `app/api/ohvis_llmops.py`(12개 라우트), `app/api/ohvis_tasks.py`(8개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)",
-      "severity": "P1"
-    },
-    {
-      "rule": "DOUBLE_MOUNT",
-      "key": "/api/v1/ops",
-      "entrypoint": "app/main.py",
-      "namespace": "/api/v1/ops",
-      "owners": [
-        "app/api/hot_reload.py",
-        "app/api/memory_monitor.py",
-        "app/api/ops.py"
-      ],
-      "owner_route_counts": {
-        "app/api/hot_reload.py": 2,
-        "app/api/memory_monitor.py": 5,
-        "app/api/ops.py": 76
-      },
-      "exact_conflicts": [],
-      "detail": "네임스페이스 `/api/v1/ops` 를 3개 모듈이 소유 — `app/api/hot_reload.py`(2개 라우트), `app/api/memory_monitor.py`(5개 라우트), `app/api/ops.py`(76개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)",
-      "severity": "P1"
-    },
-    {
-      "rule": "DOUBLE_MOUNT",
-      "key": "/api/v1/projects",
-      "entrypoint": "app/main.py",
-      "namespace": "/api/v1/projects",
-      "owners": [
-        "app/api/checkpoints.py",
-        "app/api/project_dashboard.py",
-        "app/api/projects.py",
-        "app/api/stream.py"
-      ],
-      "owner_route_counts": {
-        "app/api/checkpoints.py": 5,
-        "app/api/project_dashboard.py": 4,
-        "app/api/projects.py": 7,
-        "app/api/stream.py": 1
-      },
-      "exact_conflicts": [],
-      "detail": "네임스페이스 `/api/v1/projects` 를 4개 모듈이 소유 — `app/api/checkpoints.py`(5개 라우트), `app/api/project_dashboard.py`(4개 라우트), `app/api/projects.py`(7개 라우트), `app/api/stream.py`(1개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)",
-      "severity": "P1"
-    },
-    {
-      "rule": "DOUBLE_MOUNT",
-      "key": "/api/v1/settings",
-      "entrypoint": "app/main.py",
-      "namespace": "/api/v1/settings",
-      "owners": [
-        "app/api/directives.py",
-        "app/api/pipeline_runner.py",
-        "app/routers/chat.py"
-      ],
-      "owner_route_counts": {
-        "app/api/directives.py": 2,
-        "app/api/pipeline_runner.py": 2,
-        "app/routers/chat.py": 7
-      },
-      "exact_conflicts": [],
-      "detail": "네임스페이스 `/api/v1/settings` 를 3개 모듈이 소유 — `app/api/directives.py`(2개 라우트), `app/api/pipeline_runner.py`(2개 라우트), `app/routers/chat.py`(7개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)",
-      "severity": "P1"
-    },
-    {
-      "rule": "DOUBLE_MOUNT",
-      "key": "/api/v1/user",
-      "entrypoint": "app/main.py",
-      "namespace": "/api/v1/user",
-      "owners": [
-        "app/api/user_api_keys.py",
-        "app/api/user_project_servers.py"
-      ],
-      "owner_route_counts": {
-        "app/api/user_api_keys.py": 4,
-        "app/api/user_project_servers.py": 4
-      },
-      "exact_conflicts": [],
-      "detail": "네임스페이스 `/api/v1/user` 를 2개 모듈이 소유 — `app/api/user_api_keys.py`(4개 라우트), `app/api/user_project_servers.py`(4개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)",
-      "severity": "P1"
-    },
-    {
       "rule": "DUP_MODULE",
       "key": "chat.py",
       "modules": [
@@ -11466,549 +11342,6 @@
       "method": "POST",
       "path": "/api/v1/chat/messages",
       "detail": "`/root/aads/aads-dashboard/src/lib/api.ts:651` POST `/api/v1/chat/messages` — 경로는 있으나 메서드가 GET 다 (/api/v1/chat/messages)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "aads_conversations",
-      "table": "aads_conversations",
-      "users": [
-        "app/api/project_dashboard.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `aads_conversations` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/project_dashboard.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "agent_activity_log",
-      "table": "agent_activity_log",
-      "users": [
-        "app/services/cross_validator.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `agent_activity_log` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/cross_validator.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "agent_registry",
-      "table": "agent_registry",
-      "users": [
-        "app/api/project_dashboard.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `agent_registry` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/project_dashboard.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "ai_persona_references",
-      "table": "ai_persona_references",
-      "users": [
-        "app/api/image.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `ai_persona_references` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/image.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "api_tokens",
-      "table": "api_tokens",
-      "users": [
-        "app/api/device.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `api_tokens` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/device.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "atom_record",
-      "table": "atom_record",
-      "users": [
-        "app/api/acct_purchase.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `atom_record` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/acct_purchase.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "auto_trade_orders",
-      "table": "auto_trade_orders",
-      "users": [
-        "app/services/tool_registry.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `auto_trade_orders` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/tool_registry.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "bridge_activity_log",
-      "table": "bridge_activity_log",
-      "users": [
-        "app/api/ops.py",
-        "app/services/cross_validator.py"
-      ],
-      "user_count": 2,
-      "detail": "테이블 `bridge_activity_log` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`, `app/services/cross_validator.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "ceo_chat_messages",
-      "table": "ceo_chat_messages",
-      "users": [
-        "app/api/ceo_chat.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `ceo_chat_messages` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ceo_chat.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "ceo_chat_sessions",
-      "table": "ceo_chat_sessions",
-      "users": [
-        "app/api/ceo_chat.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `ceo_chat_sessions` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ceo_chat.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "ceo_decision_log",
-      "table": "ceo_decision_log",
-      "users": [
-        "app/services/cross_validator.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `ceo_decision_log` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/cross_validator.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "ceo_facts",
-      "table": "ceo_facts",
-      "users": [
-        "app/api/ceo_chat.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `ceo_facts` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ceo_chat.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "ceo_session_summaries",
-      "table": "ceo_session_summaries",
-      "users": [
-        "app/api/ceo_chat.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `ceo_session_summaries` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ceo_chat.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "checkpoint_logs",
-      "table": "checkpoint_logs",
-      "users": [
-        "app/checkpoints.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `checkpoint_logs` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/checkpoints.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "checkpoints",
-      "table": "checkpoints",
-      "users": [
-        "app/api/projects.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `checkpoints` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/projects.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "claude_max_usage_snapshot",
-      "table": "claude_max_usage_snapshot",
-      "users": [
-        "app/services/account_primary.py",
-        "app/services/oauth_usage_tracker.py"
-      ],
-      "user_count": 2,
-      "detail": "테이블 `claude_max_usage_snapshot` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/account_primary.py`, `app/services/oauth_usage_tracker.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "commit_log",
-      "table": "commit_log",
-      "users": [
-        "app/api/ops.py",
-        "app/services/cross_validator.py",
-        "app/services/health_checker.py"
-      ],
-      "user_count": 3,
-      "detail": "테이블 `commit_log` 을 3개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`, `app/services/cross_validator.py`, `app/services/health_checker.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "cost_tracking",
-      "table": "cost_tracking",
-      "users": [
-        "app/api/ops.py",
-        "app/services/cross_validator.py",
-        "app/services/tenant_usage_limits.py"
-      ],
-      "user_count": 3,
-      "detail": "테이블 `cost_tracking` 을 3개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`, `app/services/cross_validator.py`, `app/services/tenant_usage_limits.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "deploy_recent_durations",
-      "table": "deploy_recent_durations",
-      "users": [
-        "app/services/deploy_observability.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `deploy_recent_durations` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/deploy_observability.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "directive_lifecycle",
-      "table": "directive_lifecycle",
-      "users": [
-        "app/api/briefing.py",
-        "app/api/channels.py",
-        "app/api/ops.py",
-        "app/api/task_monitor.py",
-        "app/core/memory_recall.py",
-        "app/services/alert_manager.py",
-        "app/services/chat_tools.py",
-        "app/services/context_builder.py"
-      ],
-      "user_count": 16,
-      "detail": "테이블 `directive_lifecycle` 을 16개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/briefing.py`, `app/api/channels.py`, `app/api/ops.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "directive_model_config",
-      "table": "directive_model_config",
-      "users": [
-        "app/api/directives.py",
-        "app/services/directive_draft_service.py"
-      ],
-      "user_count": 2,
-      "detail": "테이블 `directive_model_config` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/directives.py`, `app/services/directive_draft_service.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "doc_chunks",
-      "table": "doc_chunks",
-      "users": [
-        "app/api/project_docs.py",
-        "app/services/doc_index.py"
-      ],
-      "user_count": 2,
-      "detail": "테이블 `doc_chunks` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/project_docs.py`, `app/services/doc_index.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "escalation_recovery",
-      "table": "escalation_recovery",
-      "users": [
-        "app/api/ops.py",
-        "app/services/escalation_engine.py",
-        "app/services/project_healing.py",
-        "app/services/recovery_graph.py"
-      ],
-      "user_count": 4,
-      "detail": "테이블 `escalation_recovery` 을 4개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`, `app/services/escalation_engine.py`, `app/services/project_healing.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "governance_emergency_actions",
-      "table": "governance_emergency_actions",
-      "users": [
-        "app/api/admin.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `governance_emergency_actions` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/admin.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "intent_temperatures",
-      "table": "intent_temperatures",
-      "users": [
-        "app/services/intent_router.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `intent_temperatures` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/intent_router.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "jobs",
-      "table": "jobs",
-      "users": [
-        "app/api/admin.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `jobs` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/admin.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "kg_entities",
-      "table": "kg_entities",
-      "users": [
-        "app/core/knowledge_graph.py",
-        "app/core/memory_recall.py",
-        "app/services/kg_query.py"
-      ],
-      "user_count": 3,
-      "detail": "테이블 `kg_entities` 을 3개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/core/knowledge_graph.py`, `app/core/memory_recall.py`, `app/services/kg_query.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "kg_relations",
-      "table": "kg_relations",
-      "users": [
-        "app/core/knowledge_graph.py",
-        "app/core/memory_recall.py",
-        "app/services/kg_query.py"
-      ],
-      "user_count": 3,
-      "detail": "테이블 `kg_relations` 을 3개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/core/knowledge_graph.py`, `app/core/memory_recall.py`, `app/services/kg_query.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "lessons",
-      "table": "lessons",
-      "users": [
-        "app/api/lessons.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `lessons` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/lessons.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "llm_fallback_chains",
-      "table": "llm_fallback_chains",
-      "users": [
-        "app/core/llm_fallback_engine.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `llm_fallback_chains` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/core/llm_fallback_engine.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "llm_key_health_log",
-      "table": "llm_key_health_log",
-      "users": [
-        "app/api/llm_admin.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `llm_key_health_log` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/llm_admin.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "maintenance_schedule",
-      "table": "maintenance_schedule",
-      "users": [
-        "app/api/ops.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `maintenance_schedule` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "ohvis_tasks",
-      "table": "ohvis_tasks",
-      "users": [
-        "app/api/ohvis_console.py",
-        "app/api/ohvis_tasks.py",
-        "app/services/ohvis_task_manager.py",
-        "app/services/temporal_controller.py"
-      ],
-      "user_count": 4,
-      "detail": "테이블 `ohvis_tasks` 을 4개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ohvis_console.py`, `app/api/ohvis_tasks.py`, `app/services/ohvis_task_manager.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "orders",
-      "table": "orders",
-      "users": [
-        "app/services/tool_registry.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `orders` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/tool_registry.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "pipeline_c_jobs",
-      "table": "pipeline_c_jobs",
-      "users": [
-        "app/main.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `pipeline_c_jobs` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/main.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "pipeline_jobs",
-      "table": "pipeline_jobs",
-      "users": [
-        "app/api/admin.py",
-        "app/api/ceo_chat_tools.py",
-        "app/api/ops.py",
-        "app/api/pipeline_runner.py",
-        "app/api/qa.py",
-        "app/api/task_monitor.py",
-        "app/main.py",
-        "app/routers/chat.py"
-      ],
-      "user_count": 23,
-      "detail": "테이블 `pipeline_jobs` 을 23개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/admin.py`, `app/api/ceo_chat_tools.py`, `app/api/ops.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "project_tasks",
-      "table": "project_tasks",
-      "users": [
-        "app/api/context.py",
-        "app/api/project_dashboard.py"
-      ],
-      "user_count": 2,
-      "detail": "테이블 `project_tasks` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/context.py`, `app/api/project_dashboard.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "prompt_versions",
-      "table": "prompt_versions",
-      "users": [
-        "app/api/admin.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `prompt_versions` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/admin.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "server_env_history",
-      "table": "server_env_history",
-      "users": [
-        "app/api/ops.py",
-        "app/services/cross_validator.py"
-      ],
-      "user_count": 2,
-      "detail": "테이블 `server_env_history` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`, `app/services/cross_validator.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "session_blueprints",
-      "table": "session_blueprints",
-      "users": [
-        "app/services/prompt_compiler.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `session_blueprints` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/prompt_compiler.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "session_relay",
-      "table": "session_relay",
-      "users": [
-        "app/services/session_relay.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `session_relay` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/session_relay.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "source_file",
-      "table": "source_file",
-      "users": [
-        "app/api/acct_purchase.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `source_file` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/acct_purchase.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "system_metrics",
-      "table": "system_metrics",
-      "users": [
-        "app/api/channels.py",
-        "app/api/ops.py",
-        "app/services/cross_validator.py"
-      ],
-      "user_count": 3,
-      "detail": "테이블 `system_metrics` 을 3개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/channels.py`, `app/api/ops.py`, `app/services/cross_validator.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "task_cost_log",
-      "table": "task_cost_log",
-      "users": [
-        "app/api/project_dashboard.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `task_cost_log` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/project_dashboard.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "task_tracking",
-      "table": "task_tracking",
-      "users": [
-        "app/api/ceo_chat.py"
-      ],
-      "user_count": 1,
-      "detail": "테이블 `task_tracking` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ceo_chat.py`)",
-      "severity": "P1"
-    },
-    {
-      "rule": "TABLE_NO_MODEL",
-      "key": "yeoljeong_bank_transactions",
-      "table": "yeoljeong_bank_transactions",
-      "users": [
-        "app/services/yeoljeong_accounting_service.py",
-        "app/services/yeoljeong_dashboard_service.py"
-      ],
-      "user_count": 2,
-      "detail": "테이블 `yeoljeong_bank_transactions` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/yeoljeong_accounting_service.py`, `app/services/yeoljeong_dashboard_service.py`)",
       "severity": "P1"
     },
     {

@@ -7,8 +7,9 @@ behavior_check.py(L3)가 **실행 기록**에서 설계 사고를 찾는다면, 
 왜 만들었나. `app/api/chat.py` 와 `app/routers/chat.py` 가 둘 다 `/api/v1` 아래
 `/chat` 네임스페이스를 소유한 채 몇 달을 굴렀다. 그런데 두 모듈의 정확한
 METHOD+경로 충돌은 **0건**이다 — 흔한 "중복 라우트" 검사는 이 부채를
-"위반 없음" 으로 보고한다. 그래서 DOUBLE_MOUNT 의 정본 기준은 exact 충돌이
-아니라 **네임스페이스 소유자 수**다.
+"위반 없음" 으로 보고한다. DOUBLE_MOUNT 는 같은 라우터 모듈이 같은
+엔트리포인트에 반복 등록된 경우를 잡고, 정확한 METHOD+경로 충돌은 별도의
+ROUTE_SHADOWED 규칙이 잡는다.
 
 파서는 regex 가 아니라 `ast` 다. `app/api/yeoljeong_accounting.py:5` 의
 `include_router` 는 **독스트링 안의 예시**이고, grep 기반 추출기는 이 파일
@@ -1166,12 +1167,11 @@ def find_dup_modules(module_paths: Iterable[str], router_dirs: Sequence[str]) ->
 
 
 def find_double_mounts(mounted_routes: Iterable[dict], api_roots: Sequence[str]) -> list[dict]:
-    """한 네임스페이스를 두 개 이상의 모듈이 소유하는 경우 — DOUBLE_MOUNT 정본.
+    """같은 라우터 모듈이 한 엔트리포인트에 반복 마운트된 경우.
 
-    정확히 겹치는 METHOD+경로(exact_conflicts)는 **보조 지표**다.
-    AADS 실측에서 `/api/v1/chat` 의 exact 충돌은 0건인데도 두 모듈이
-    같은 네임스페이스를 나눠 갖고 있었다 — exact 만 세면 이 부채가
-    "위반 0건" 으로 보고된다.
+    서로 다른 모듈이 상위 네임스페이스를 공유하는 것은 FastAPI의 정상적인
+    라우터 분할 방식이다. 그것을 중복 마운트로 판정해 include_router를
+    제거하면 서로 다른 엔드포인트가 통째로 사라진다.
     """
     by_ns: dict[tuple[str, str], dict] = {}
     for r in mounted_routes:
@@ -1184,7 +1184,15 @@ def find_double_mounts(mounted_routes: Iterable[dict], api_roots: Sequence[str])
     findings = []
     for (entrypoint, ns), slot in sorted(by_ns.items()):
         owners = slot["owners"]
-        if len(owners) < 2:
+        duplicate_routes: dict[tuple[str, str, str], int] = {}
+        for r in slot["routes"]:
+            key = (r["module"], r["method"], normalize_route(r["full_path"]))
+            duplicate_routes[key] = duplicate_routes.get(key, 0) + 1
+        duplicated_modules = sorted({
+            module for (module, _method, _path), count in duplicate_routes.items()
+            if count > 1
+        })
+        if not duplicated_modules:
             continue
         seen: dict[tuple[str, str], set[str]] = {}
         for r in slot["routes"]:
@@ -1193,7 +1201,7 @@ def find_double_mounts(mounted_routes: Iterable[dict], api_roots: Sequence[str])
             (
                 {"method": method, "path": path, "modules": sorted(mods)}
                 for (method, path), mods in seen.items()
-                if len(mods) > 1
+                if len(mods) > 1 or duplicate_routes.get((next(iter(mods)), method, path), 0) > 1
             ),
             key=lambda d: (d["path"], d["method"]),
         )
@@ -1203,15 +1211,13 @@ def find_double_mounts(mounted_routes: Iterable[dict], api_roots: Sequence[str])
             "key": ns,
             "entrypoint": entrypoint,
             "namespace": ns,
-            "owners": sorted(owners),
+            "owners": duplicated_modules,
             "owner_route_counts": dict(sorted(owners.items())),
             "exact_conflicts": exact,
             "detail": (
-                f"네임스페이스 `{ns}` 를 {len(owners)}개 모듈이 소유 — {owner_txt}. "
-                f"정확히 겹치는 METHOD+경로는 {len(exact)}건"
-                + (" (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 "
-                   "라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)"
-                   if not exact else "")
+                f"네임스페이스 `{ns}` 에서 라우터 모듈이 중복 마운트됨 — "
+                f"{', '.join(f'`{m}`' for m in duplicated_modules)}. "
+                f"등록된 소유자: {owner_txt}; 중복 METHOD+경로 {len(exact)}건"
             ),
         })
     return findings

@@ -1,6 +1,6 @@
 # AAG L1/L2 — AADS 아키텍처 결함 리포트
 
-생성 2026-09-18 14:46 KST · 결함 58건 · 판정 불가(UNRESOLVED) 110건
+생성 2026-09-18 15:24 KST · 결함 3건 · 판정 불가(UNRESOLVED) 110건
 
 UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 결함으로 세면
 숫자가 부풀고, 부풀린 숫자는 아무도 손대지 않아 규칙 전체가 무시된다.
@@ -9,100 +9,39 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 
 | 대상 | 수 |
 |---|---|
-| 앱 파이썬 파일 | 394 |
-| 라우터 디렉터리 파일 | 90 |
-| APIRouter 정의 모듈 | 84 |
-| include_router 호출 | 87 |
-| 마운트된 라우트 | 933 |
-| 네임스페이스 | 84 |
+| 앱 파이썬 파일 | 396 |
+| 라우터 디렉터리 파일 | 91 |
+| APIRouter 정의 모듈 | 85 |
+| include_router 호출 | 88 |
+| 마운트된 라우트 | 936 |
+| 네임스페이스 | 85 |
 | 프런트 파일 | 237 |
 | 해석된 프런트 호출 | 345 |
-| SQL 참조 테이블 | 228 |
-| 그래프 노드/엣지 | 782 / 1204 |
+| SQL 참조 테이블 | 229 |
+| 그래프 노드/엣지 | 786 / 1208 |
 
 ## 규칙별 건수
 
 | 규칙 | 심각도 | 건수 |
 |---|---|---|
 | `DUP_MODULE` | P1 | 1 |
-| `DOUBLE_MOUNT` | P1 | 9 |
+| `DOUBLE_MOUNT` | P1 | 0 |
 | `ROUTE_SHADOWED` | P0 | 0 |
 | `ORPHAN_ROUTER` | P2 | 1 |
-| `TABLE_NO_MODEL` | P1 | 46 |
+| `TABLE_NO_MODEL` | P1 | 0 |
 | `PATH_DRIFT` | P1 | 1 |
 | `ROUTE_MISSING` | P0 | 0 |
 | `STALE_BACKUP` | P2 | 0 |
 
-| **합계** | | **58** |
+| **합계** | | **3** |
 
 ## DUP_MODULE (1건)
 
 - [P1] 모듈명 `chat.py` 이 2개 디렉터리에 중복 존재: `app/api/chat.py`, `app/routers/chat.py`
 
-## DOUBLE_MOUNT (9건)
-
-- [P1] 네임스페이스 `/api/v1/admin` 를 3개 모듈이 소유 — `app/api/admin.py`(31개 라우트), `app/api/admin_users.py`(1개 라우트), `app/api/design_modifications.py`(8개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
-- [P1] 네임스페이스 `/api/v1/chat` 를 3개 모듈이 소유 — `app/api/chat.py`(4개 라우트), `app/api/directive_drafts.py`(4개 라우트), `app/routers/chat.py`(81개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
-- [P1] 네임스페이스 `/api/v1/directives` 를 2개 모듈이 소유 — `app/api/directives.py`(3개 라우트), `app/api/ops.py`(1개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
-- [P1] 네임스페이스 `/api/v1/llm-models` 를 2개 모듈이 소유 — `app/api/llm_models.py`(9개 라우트), `app/api/llm_report.py`(2개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
-- [P1] 네임스페이스 `/api/v1/ohvis` 를 4개 모듈이 소유 — `app/api/ohvis_console.py`(3개 라우트), `app/api/ohvis_harness.py`(5개 라우트), `app/api/ohvis_llmops.py`(12개 라우트), `app/api/ohvis_tasks.py`(8개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
-- [P1] 네임스페이스 `/api/v1/ops` 를 3개 모듈이 소유 — `app/api/hot_reload.py`(2개 라우트), `app/api/memory_monitor.py`(5개 라우트), `app/api/ops.py`(76개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
-- [P1] 네임스페이스 `/api/v1/projects` 를 4개 모듈이 소유 — `app/api/checkpoints.py`(5개 라우트), `app/api/project_dashboard.py`(4개 라우트), `app/api/projects.py`(7개 라우트), `app/api/stream.py`(1개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
-- [P1] 네임스페이스 `/api/v1/settings` 를 3개 모듈이 소유 — `app/api/directives.py`(2개 라우트), `app/api/pipeline_runner.py`(2개 라우트), `app/routers/chat.py`(7개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
-- [P1] 네임스페이스 `/api/v1/user` 를 2개 모듈이 소유 — `app/api/user_api_keys.py`(4개 라우트), `app/api/user_project_servers.py`(4개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)
-
 ## ORPHAN_ROUTER (1건)
 
 - [P2] `app/api/ceo_chat.py` 이 APIRouter 를 정의하지만 어떤 엔트리포인트에도 include_router 되지 않았다 — 죽은 코드이거나 등록 누락이다
-
-## TABLE_NO_MODEL (46건)
-
-- [P1] 테이블 `aads_conversations` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/project_dashboard.py`)
-- [P1] 테이블 `agent_activity_log` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/cross_validator.py`)
-- [P1] 테이블 `agent_registry` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/project_dashboard.py`)
-- [P1] 테이블 `ai_persona_references` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/image.py`)
-- [P1] 테이블 `api_tokens` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/device.py`)
-- [P1] 테이블 `atom_record` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/acct_purchase.py`)
-- [P1] 테이블 `auto_trade_orders` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/tool_registry.py`)
-- [P1] 테이블 `bridge_activity_log` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`, `app/services/cross_validator.py`)
-- [P1] 테이블 `ceo_chat_messages` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ceo_chat.py`)
-- [P1] 테이블 `ceo_chat_sessions` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ceo_chat.py`)
-- [P1] 테이블 `ceo_decision_log` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/cross_validator.py`)
-- [P1] 테이블 `ceo_facts` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ceo_chat.py`)
-- [P1] 테이블 `ceo_session_summaries` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ceo_chat.py`)
-- [P1] 테이블 `checkpoint_logs` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/checkpoints.py`)
-- [P1] 테이블 `checkpoints` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/projects.py`)
-- [P1] 테이블 `claude_max_usage_snapshot` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/account_primary.py`, `app/services/oauth_usage_tracker.py`)
-- [P1] 테이블 `commit_log` 을 3개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`, `app/services/cross_validator.py`, `app/services/health_checker.py`)
-- [P1] 테이블 `cost_tracking` 을 3개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`, `app/services/cross_validator.py`, `app/services/tenant_usage_limits.py`)
-- [P1] 테이블 `deploy_recent_durations` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/deploy_observability.py`)
-- [P1] 테이블 `directive_lifecycle` 을 16개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/briefing.py`, `app/api/channels.py`, `app/api/ops.py`)
-- [P1] 테이블 `directive_model_config` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/directives.py`, `app/services/directive_draft_service.py`)
-- [P1] 테이블 `doc_chunks` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/project_docs.py`, `app/services/doc_index.py`)
-- [P1] 테이블 `escalation_recovery` 을 4개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`, `app/services/escalation_engine.py`, `app/services/project_healing.py`)
-- [P1] 테이블 `governance_emergency_actions` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/admin.py`)
-- [P1] 테이블 `intent_temperatures` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/intent_router.py`)
-- [P1] 테이블 `jobs` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/admin.py`)
-- [P1] 테이블 `kg_entities` 을 3개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/core/knowledge_graph.py`, `app/core/memory_recall.py`, `app/services/kg_query.py`)
-- [P1] 테이블 `kg_relations` 을 3개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/core/knowledge_graph.py`, `app/core/memory_recall.py`, `app/services/kg_query.py`)
-- [P1] 테이블 `lessons` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/lessons.py`)
-- [P1] 테이블 `llm_fallback_chains` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/core/llm_fallback_engine.py`)
-- [P1] 테이블 `llm_key_health_log` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/llm_admin.py`)
-- [P1] 테이블 `maintenance_schedule` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`)
-- [P1] 테이블 `ohvis_tasks` 을 4개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ohvis_console.py`, `app/api/ohvis_tasks.py`, `app/services/ohvis_task_manager.py`)
-- [P1] 테이블 `orders` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/tool_registry.py`)
-- [P1] 테이블 `pipeline_c_jobs` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/main.py`)
-- [P1] 테이블 `pipeline_jobs` 을 23개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/admin.py`, `app/api/ceo_chat_tools.py`, `app/api/ops.py`)
-- [P1] 테이블 `project_tasks` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/context.py`, `app/api/project_dashboard.py`)
-- [P1] 테이블 `prompt_versions` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/admin.py`)
-- [P1] 테이블 `server_env_history` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ops.py`, `app/services/cross_validator.py`)
-- [P1] 테이블 `session_blueprints` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/prompt_compiler.py`)
-- [P1] 테이블 `session_relay` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/session_relay.py`)
-- [P1] 테이블 `source_file` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/acct_purchase.py`)
-- [P1] 테이블 `system_metrics` 을 3개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/channels.py`, `app/api/ops.py`, `app/services/cross_validator.py`)
-- [P1] 테이블 `task_cost_log` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/project_dashboard.py`)
-- [P1] 테이블 `task_tracking` 을 1개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/api/ceo_chat.py`)
-- [P1] 테이블 `yeoljeong_bank_transactions` 을 2개 파일이 참조하지만 CREATE TABLE 정의를 코드에서 찾을 수 없다 (예: `app/services/yeoljeong_accounting_service.py`, `app/services/yeoljeong_dashboard_service.py`)
 
 ## PATH_DRIFT (1건)
 

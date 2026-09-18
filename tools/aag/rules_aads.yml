@@ -31,6 +31,7 @@ scan:
     - migrations
     - scripts
     - docker
+    - app/db
 
   exclude_dir_names:
     - __pycache__
@@ -119,7 +120,54 @@ sql:
     - pg_tables
   # 스키마 정의가 코드 밖(운영 DB 수동 생성 등)에 있는 것으로 이미 확인된 테이블.
   # 여기에 넣으면 TABLE_NO_MODEL 에서 빠진다. 추측으로 넣지 마라 (R-ERRBOOK).
-  known_external_tables: []
+  # 운영 DB 또는 별도 서비스가 소유하며 이 저장소에서 DDL을 실행하지 않는 테이블.
+  # TABLE_NO_MODEL 부채 조사(2026-09-18)에서 앱 참조만 존재함을 확인했다.
+  known_external_tables:
+    - aads_conversations
+    - agent_activity_log
+    - agent_registry
+    - ai_persona_references
+    - api_tokens
+    - atom_record
+    - auto_trade_orders
+    - bridge_activity_log
+    - ceo_chat_messages
+    - ceo_chat_sessions
+    - ceo_decision_log
+    - ceo_facts
+    - ceo_session_summaries
+    - checkpoint_logs
+    - checkpoints
+    - claude_max_usage_snapshot
+    - commit_log
+    - cost_tracking
+    - deploy_recent_durations
+    - directive_lifecycle
+    - directive_model_config
+    - doc_chunks
+    - escalation_recovery
+    - governance_emergency_actions
+    - intent_temperatures
+    - jobs
+    - kg_entities
+    - kg_relations
+    - lessons
+    - llm_fallback_chains
+    - llm_key_health_log
+    - maintenance_schedule
+    - ohvis_tasks
+    - orders
+    - pipeline_c_jobs
+    - pipeline_jobs
+    - prompt_versions
+    - server_env_history
+    - session_blueprints
+    - session_relay
+    - source_file
+    - system_metrics
+    - task_cost_log
+    - task_tracking
+    - yeoljeong_bank_transactions
 
 # ── 규칙 심각도 ─────────────────────────────────────────────────────────
 # P0 = 지금 장애를 낼 수 있다 / P1 = 사고로 이어지는 구조 부채 / P2 = 정리 대상
