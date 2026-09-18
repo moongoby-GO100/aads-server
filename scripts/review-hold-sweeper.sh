@@ -83,15 +83,89 @@ sql_escape() {
     printf '%s' "\$esc\$${val}\$esc\$"
 }
 
-# NULL commit_hash 를 가진 review_hold 산출물에 승인용 commit_hash 를 채운다.
-# 값의 출처는 오직 보존된 워크트리의 기존 HEAD 다 — 스위퍼는 새 커밋을 만들지
-# 않는다. AI 검수가 승인한 diff 는 review_hold 진입 시점의 git_diff 컬럼이므로,
-# 그 뒤 워크트리에 쌓인 미커밋 변경을 스위퍼가 임의로 커밋하면 검수받지 않은
-# 내용이 승인 큐로 올라갈 수 있다(AADS-SWEEPER-COMMITHASH-P0). 워크트리가
-# 없거나 dirty 하면 승격하지 않고 사유를 review_feedback 에 남긴다.
+# ─── SHARED-BLOCK BEGIN: job_diff_contract ────────────────────────────
+# 이 블록은 pipeline-runner.sh 와 review-hold-sweeper.sh 에 **같은 본문으로**
+# 복제된다. 공유 파일을 source 하지 않는 이유는 순환 의존 때문이다 —
+# 러너 스크립트는 최상단에서 flock 을 잡고 말미에서 main 을 호출하므로,
+# 스위퍼가 그것을 source 하면 스위퍼가 러너를 기동시킨다. 반대로 러너가
+# 스위퍼를 source 하면 스위퍼의 flock/배치가 러너 안에서 돈다.
+# 그래서 복제하되 갈라지지 못하게 막는다: 두 사본이 한 바이트라도 달라지면
+# tests/unit/test_review_hold_commit_gap.py 가 즉시 실패한다.
+#
+# capture_job_diff_text
+#   러너가 pipeline_jobs.git_diff 에 저장하는 값을 그대로 만든다
+#   (base..HEAD 45000B + 미커밋 5000B, base 가 없거나 HEAD 와 같으면 50000B).
+#   스위퍼는 이 함수로 워크트리를 다시 읽어 "검수받은 diff 와 같은가" 를 본다.
+#   `|| true` 는 게으름이 아니다 — head 가 상한에서 읽기를 닫으면 git 은
+#   SIGPIPE(141)로 죽고 pipefail 이 그것을 그대로 돌려준다. 여기서 값을 비우면
+#   45KB 를 넘는 diff 가 통째로 사라진다. 잘린 앞부분은 이미 캡처돼 있다.
+# normalize_job_diff
+#   두 diff 가 같은 변경인지 비교하기 위한 정규화. blob 해시(index 줄)와
+#   CR·줄끝 공백·빈 줄만 지운다. 내용 줄은 건드리지 않는다 — 여기서 과하게
+#   지우면 "다른 변경" 이 "같다" 로 통과해 검수받지 않은 코드가 승인 큐로 샌다.
+#   마지막 awk 는 끝줄 개행을 한 벌로 맞춘다. DB 에서 읽은 값(psql 이 개행을
+#   덧붙인다)과 워크트리에서 읽은 값(명령치환이 개행을 지운다)을 그대로 해시하면
+#   내용이 같아도 늘 달라진다.
+# resolve_job_base_sha
+#   러너의 pre_exec_sha(워크트리 생성 시점 HEAD)는 DB 에 남지 않는다.
+#   워크트리는 origin/main 에서 detach 로 만들어지므로 분기점(merge-base)이
+#   그 값과 같다.
+capture_job_diff_text() {
+    local repo="$1" base_sha="${2:-}"
+    local head_sha="" diff_text="" uncommitted=""
+    head_sha=$(git -C "$repo" rev-parse HEAD 2>/dev/null) || head_sha=""
+    if [[ -n "$base_sha" && -n "$head_sha" && "$base_sha" != "$head_sha" ]]; then
+        diff_text=$(git -C "$repo" diff "${base_sha}..${head_sha}" 2>/dev/null | head -c 45000) || true
+        uncommitted=$(git -C "$repo" diff HEAD 2>/dev/null | head -c 5000) || true
+        if [[ -n "${uncommitted//[[:space:]]/}" ]]; then
+            diff_text="${diff_text}
+${uncommitted}"
+        fi
+    else
+        diff_text=$(git -C "$repo" diff HEAD 2>/dev/null | head -c 50000) || true
+    fi
+    printf '%s' "$diff_text"
+    return 0
+}
+
+normalize_job_diff() {
+    sed -e 's/\r$//' \
+        -e 's/[[:space:]]*$//' \
+        -e '/^index [0-9a-f]\{4,\}\.\./d' \
+        -e '/^similarity index /d' \
+        -e '/^dissimilarity index /d' \
+      | sed -e '/^$/d' \
+      | awk '{ print }'
+    return 0
+}
+
+resolve_job_base_sha() {
+    local repo="$1" base=""
+    base=$(git -C "$repo" merge-base HEAD origin/main 2>/dev/null) || base=""
+    [[ -n "$base" ]] || base=$(git -C "$repo" merge-base HEAD main 2>/dev/null) || base=""
+    [[ "$base" =~ ^[0-9a-f]{40}$ ]] || base=""
+    printf '%s' "$base"
+    return 0
+}
+# ─── SHARED-BLOCK END: job_diff_contract ──────────────────────────────
+
+# review_hold 산출물의 승인용 commit_hash 를 확정한다. 값의 출처는 오직 보존된
+# 워크트리의 기존 HEAD 다 — 스위퍼는 새 리비전을 만들지 않는다.
+# AI 검수가 승인한 것은 review_hold 진입 시점의 git_diff 이므로, 그 뒤 워크트리에
+# 쌓인 변경을 스위퍼가 임의로 확정하면 검수받지 않은 내용이 승인 큐로 올라간다
+# (AADS-SWEEPER-COMMITHASH-P0).
+#
+# dirty 워크트리는 예전에 여기서 끝났다. 승격도 종결도 하지 않고 review_hold 에
+# 남겨 두었으므로 다음 주기에 같은 잡이 다시 뽑혀 같은 판정을 받았다 — 검수 LLM
+# 비용만 쓰고 상태는 그대로인 무한 재검수다(AADS-REVIEWHOLD-DIRTY-STRAND-P0).
+# 이제는 셋 중 하나로 반드시 끝낸다:
+#   0  … 승격 가능(persisted SHA 또는 clean HEAD)
+#   10 … 워크트리 변경 == 검수받은 diff → 러너에게 넘김(재검수 대상에서 빠짐)
+#   11 … 구조적 terminal(산출물 없음 / diff drift) → 재검수 제외
+#   1  … 판정 불가(일시적) → 다음 주기 재시도
 RECOVERED_COMMIT_SHA=""
 ensure_review_hold_commit() {
-    local job_id="$1"
+    local job_id="$1" score="${2:-0.0}" attempt="${3:-0}"
     local worktree_dir="/tmp/aads-wt-${job_id}"
     local current_sha persisted_sha reason note
     RECOVERED_COMMIT_SHA=""
@@ -103,35 +177,125 @@ ensure_review_hold_commit() {
     fi
 
     if [[ ! -d "$worktree_dir" ]] || [[ "$(git -C "$worktree_dir" rev-parse --is-inside-work-tree 2>/dev/null || true)" != "true" ]]; then
-        reason="워크트리 없음(${worktree_dir}) — commit_hash 를 채울 수 없어 승격하지 않음"
-        log "  REVIEW_HOLD_NO_ARTIFACT ${job_id} worktree=${worktree_dir} — 승격하지 않음"
-    elif [[ -n "$(git -C "$worktree_dir" status --porcelain 2>/dev/null)" ]]; then
-        reason="워크트리 dirty(미커밋 변경 있음) — 검수받은 diff 와 다를 수 있어 승격하지 않음"
-        log "  REVIEW_HOLD_DIRTY ${job_id} worktree=${worktree_dir} — 승격하지 않음"
-    else
-        current_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
-        if [[ "$current_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            db_exec "UPDATE pipeline_jobs SET commit_hash='${current_sha}', updated_at=NOW()
-                     WHERE job_id='${job_id}' AND status IN ('review_hold','awaiting_approval')
-                       AND commit_hash IS NULL;"
-            persisted_sha=$(db_query "SELECT COALESCE(commit_hash,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]') || persisted_sha=""
-            if [[ "$persisted_sha" == "$current_sha" ]]; then
-                RECOVERED_COMMIT_SHA="$current_sha"
-                log "  REVIEW_HOLD_COMMIT_RECOVERED ${job_id} sha=${current_sha}"
-                return 0
-            fi
-            reason="commit_hash DB 저장 확인 실패"
-            log "  REVIEW_HOLD_COMMIT_FAILED ${job_id} — ${reason}"
-        else
-            reason="워크트리에 HEAD 커밋 없음"
-            log "  REVIEW_HOLD_COMMIT_FAILED ${job_id} — ${reason}"
-        fi
+        # 산출물이 없으면 재검수를 몇 번 더 돌려도 결과가 같다. 구조적 terminal.
+        log "  REVIEW_HOLD_NO_ARTIFACT ${job_id} worktree=${worktree_dir} — 산출물 없음, 재검수 종결"
+        terminate_review_hold "$job_id" "review_hold_no_artifact" \
+            "산출물 워크트리 없음(${worktree_dir}) — 복구 경로가 없어 재검수 종결"
+        return 11
     fi
+
+    if [[ -n "$(git -C "$worktree_dir" status --porcelain 2>/dev/null)" ]]; then
+        log "  REVIEW_HOLD_DIRTY ${job_id} worktree=${worktree_dir} — 검수받은 diff 와 대조 후 판정"
+        # `|| dirty_rc=$?` 없이 그냥 부르면 errexit 가 비-0 반환에 스위퍼를 통째로
+        # 끝낸다. 10/11 은 정상 판정이지 오류가 아니다.
+        local dirty_rc=0
+        review_hold_dirty_recovery "$job_id" "$worktree_dir" "$score" "$attempt" || dirty_rc=$?
+        return "$dirty_rc"
+    fi
+
+    current_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
+    if [[ "$current_sha" =~ ^[0-9a-f]{40}$ ]]; then
+        db_exec "UPDATE pipeline_jobs SET commit_hash='${current_sha}', updated_at=NOW()
+                 WHERE job_id='${job_id}' AND status IN ('review_hold','awaiting_approval')
+                   AND commit_hash IS NULL;"
+        persisted_sha=$(db_query "SELECT COALESCE(commit_hash,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]') || persisted_sha=""
+        if [[ "$persisted_sha" == "$current_sha" ]]; then
+            RECOVERED_COMMIT_SHA="$current_sha"
+            log "  REVIEW_HOLD_COMMIT_RECOVERED ${job_id} sha=${current_sha}"
+            return 0
+        fi
+        reason="commit_hash DB 저장 확인 실패"
+    else
+        reason="워크트리에 HEAD 리비전 없음"
+    fi
+    log "  REVIEW_HOLD_COMMIT_FAILED ${job_id} — ${reason}"
 
     note=$(sql_escape "[자동재검수] 승격 보류 — ${reason}")
     db_exec "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n' || ${note}, updated_at=NOW()
              WHERE job_id='${job_id}' AND status='review_hold';"
     return 1
+}
+
+# 재검수에서 영구히 제외되는 종결. 상태를 error 로 굳히고 review_flag_category 를
+# 비워 select 대상에서 빠지게 한다(둘 중 하나만으로도 빠지지만, 나중에 상태 조건이
+# 바뀌어도 재검수로 되돌아오지 않도록 둘 다 건다).
+terminate_review_hold() {
+    local job_id="$1" detail="$2" reason="$3"
+    local note
+    note=$(sql_escape "[자동재검수] 종결(${detail}) — ${reason}")
+    db_exec "UPDATE pipeline_jobs
+             SET status='error', phase='${detail}',
+                 error_detail='${detail}',
+                 review_flag_category=NULL,
+                 review_needs_retry=FALSE,
+                 review_request_id=NULL,
+                 review_feedback=COALESCE(review_feedback,'') || E'\n' || ${note},
+                 completed_at=NOW(), updated_at=NOW()
+             WHERE job_id='${job_id}' AND status='review_hold';"
+    return 0
+}
+
+# dirty 워크트리 판정 — 계약 1~3.
+#
+# 검수받은 것은 DB 의 git_diff 다. 워크트리를 러너와 **같은 규칙으로** 다시 읽어
+# (capture_job_diff_text) 같은 정규화를 건 뒤(normalize_job_diff) 해시를 비교한다.
+#   같다  → 워크트리에는 검수받은 변경만 있다. 표시만 남기고 러너에게 넘긴다.
+#           확정은 러너의 기존 커밋 경로가 한다 — 그 경로만 pre-commit 훅을 거친다.
+#   다르다 → 검수 뒤에 누가 손댔거나 다른 작업이 섞였다. 승인 큐로 올릴 수 없고,
+#           재검수를 반복해도 같은 결론이므로 terminal 로 끝낸다.
+review_hold_dirty_recovery() {
+    local job_id="$1" worktree_dir="$2" score="${3:-0.0}" attempt="${4:-0}"
+    local base_sha stored_file live_file stored_hash live_hash note now_flag
+
+    base_sha=$(resolve_job_base_sha "$worktree_dir")
+    stored_file=$(mktemp /tmp/review-sweep-stored.XXXXXX)
+    live_file=$(mktemp /tmp/review-sweep-live.XXXXXX)
+    db_query "SELECT COALESCE(git_diff,'') FROM pipeline_jobs WHERE job_id='${job_id}';" > "$stored_file" 2>/dev/null || true
+    capture_job_diff_text "$worktree_dir" "$base_sha" > "$live_file" 2>/dev/null || true
+
+    stored_hash=$(normalize_job_diff < "$stored_file" | sha256sum | cut -d' ' -f1)
+    live_hash=$(normalize_job_diff < "$live_file" | sha256sum | cut -d' ' -f1)
+    local stored_bytes live_bytes
+    stored_bytes=$(wc -c < "$stored_file" | tr -d '[:space:]')
+    live_bytes=$(wc -c < "$live_file" | tr -d '[:space:]')
+    rm -f "$stored_file" "$live_file"
+
+    # 한쪽이 비어 있으면 "같다" 가 아니라 "비교하지 못했다" 다. 빈 diff 두 개의
+    # 해시가 우연히 같다고 승격시키면 아무 변경 없는 잡이 승인 큐로 올라간다.
+    if [[ "$stored_bytes" == "0" || "$live_bytes" == "0" ]]; then
+        log "  REVIEW_HOLD_DIFF_UNCOMPARABLE ${job_id} stored=${stored_bytes}B live=${live_bytes}B — 다음 주기로 보류"
+        note=$(sql_escape "[자동재검수] 복구 보류 — diff 대조 불가(stored=${stored_bytes}B live=${live_bytes}B)")
+        db_exec "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n' || ${note}, updated_at=NOW()
+                 WHERE job_id='${job_id}' AND status='review_hold';"
+        return 1
+    fi
+
+    if [[ "$stored_hash" != "$live_hash" ]]; then
+        log "  REVIEW_HOLD_DIFF_DRIFT ${job_id} stored=${stored_hash:0:12} live=${live_hash:0:12} — 재검수 종결"
+        terminate_review_hold "$job_id" "review_hold_diff_drift" \
+            "워크트리 변경이 검수받은 git_diff 와 다름(stored=${stored_hash:0:12}/${stored_bytes}B live=${live_hash:0:12}/${live_bytes}B)"
+        return 11
+    fi
+
+    # 동일 — 러너에게 넘긴다. review_flag_category 를 비워 재검수 대상에서 빼고,
+    # phase 는 'review_hold' 그대로 둔다(대시보드 보드 상태가 phase 로 판정한다).
+    note=$(sql_escape "[자동재검수] PASS score=${score} attempt=${attempt} — dirty 산출물 diff 일치(${live_hash:0:12}), 러너 커밋 경로 대기 ($(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M KST'))")
+    db_exec "UPDATE pipeline_jobs
+             SET review_verdict='APPROVE', review_score=${score},
+                 review_flag_category=NULL, review_needs_retry=FALSE,
+                 review_request_id=NULL,
+                 error_detail='review_hold_recovery_pending',
+                 review_retry_count=${attempt}, review_retry_last_at=NOW(),
+                 review_feedback=COALESCE(review_feedback,'') || E'\n' || ${note},
+                 updated_at=NOW()
+             WHERE job_id='${job_id}' AND status='review_hold';"
+    now_flag=$(db_query "SELECT COALESCE(error_detail,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]') || now_flag=""
+    if [[ "$now_flag" != "review_hold_recovery_pending" ]]; then
+        log "  REVIEW_HOLD_RECOVERY_WRITE_MISSED ${job_id} error_detail='${now_flag}' — 다음 주기 재시도"
+        return 1
+    fi
+    log "  REVIEW_HOLD_RECOVERY_HANDOFF ${job_id} sha_base=${base_sha:0:12} — 러너 커밋 경로로 재진입 대기"
+    return 10
 }
 
 # 재시도 추적 컬럼 — 멱등 생성
@@ -162,7 +326,7 @@ if [[ -z "${rows//[[:space:]]/}" ]]; then
     exit 0
 fi
 
-total=0; promoted=0; rejected=0; retried=0; consec_infra=0; consec_unreachable=0
+total=0; promoted=0; rejected=0; retried=0; handed=0; terminated=0; consec_infra=0; consec_unreachable=0
 
 # 인프라 사유 실패 처리 — 재시도 예산을 실제로 소비하고 다음 작업으로 넘어간다.
 #
@@ -328,7 +492,15 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id request_id; do
             rm -f "$diff_file" "$ins_file" "$payload_file" "$resp_file"
             continue
         fi
-        if ! ensure_review_hold_commit "$job_id"; then
+        # 승격 전 산출물 확정. 0 이 아니면 이 잡은 이번 주기에 승격하지 않는다 —
+        # 10(러너 인계) / 11(terminal 종결) 은 이미 헬퍼가 DB 에 기록했다.
+        commit_gate_rc=0
+        ensure_review_hold_commit "$job_id" "$score" "$next_retry" || commit_gate_rc=$?
+        if [[ "$commit_gate_rc" -ne 0 ]]; then
+            case "$commit_gate_rc" in
+                10) handed=$((handed + 1)) ;;
+                11) terminated=$((terminated + 1)) ;;
+            esac
             rm -f "$diff_file" "$ins_file" "$payload_file" "$resp_file"
             continue
         fi
@@ -385,4 +557,4 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id request_id; do
     rm -f "$diff_file" "$ins_file" "$payload_file" "$resp_file"
 done <<< "$rows"
 
-log "sweep done: scanned=${total} promoted=${promoted} rejected=${rejected} retried=${retried}"
+log "sweep done: scanned=${total} promoted=${promoted} rejected=${rejected} retried=${retried} handoff=${handed} terminal=${terminated}"

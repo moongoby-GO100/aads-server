@@ -102,3 +102,140 @@ def test_review_hold_sweeper_excludes_twice_failed_model_from_next_review():
     assert "ORDER BY created_at DESC" in script
     assert "[REVIEW_EXCLUDE_MODELS: %s]" in script
     assert "MODEL_EXCLUDED" in script
+
+
+# ── AADS-REVIEWHOLD-DIRTY-STRAND-P0 ──────────────────────────────────────
+
+
+def _sweeper() -> str:
+    return (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+
+
+def _runner() -> str:
+    return (ROOT / "scripts" / "pipeline-runner.sh").read_text(encoding="utf-8")
+
+
+def _code_only(text: str) -> str:
+    """주석 줄을 뺀 실행 줄만 — 금지 문자열 단언이 설명문에 걸리지 않게."""
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+def test_sweeper_never_creates_a_revision_itself():
+    """계약 6 — 확정은 러너의 커밋 경로만 한다. 스위퍼가 직접 만들면 pre-commit
+    훅(API 키 탐지·ruff·단위테스트)을 거치지 않은 리비전이 승인 큐로 올라간다."""
+    script = _sweeper()
+
+    assert "git commit" not in script
+    assert "--no-verify" not in script
+    assert "--allow-empty" not in script
+    assert "git -C \"$worktree_dir\" add" not in script
+
+
+def test_dirty_match_records_recovery_flag_without_promoting():
+    """계약 2 — 같으면 표시만 남긴다. 승인 큐(awaiting_approval)로 직접 올리지 않는다."""
+    script = _sweeper()
+    fn_start = script.index("review_hold_dirty_recovery() {")
+    fn_end = script.index("# 재시도 추적 컬럼", fn_start)
+    body = script[fn_start:fn_end]
+
+    handoff = body.index("error_detail='review_hold_recovery_pending'")
+    assert "review_flag_category=NULL" in body[:handoff + 400]
+    # 재검수 대상 select 는 review_flag_category 로 거른다 — 비워야 무한 재검수가 멈춘다.
+    assert "status='awaiting_approval'" not in body
+    assert body.index("return 10") > handoff
+
+
+def test_diff_drift_is_terminal_and_excluded_from_re_review():
+    """계약 3 — 다르면 error/review_hold_diff_drift 로 종결하고 재검수에서 뺀다."""
+    script = _sweeper()
+
+    assert "review_hold_diff_drift" in script
+    terminate = script[script.index("terminate_review_hold() {"):script.index(
+        "# dirty 워크트리 판정"
+    )]
+    assert "status='error'" in terminate
+    assert "error_detail='${detail}'" in terminate
+    assert "review_flag_category=NULL" in terminate
+    assert "review_needs_retry=FALSE" in terminate
+
+
+def test_no_artifact_is_structurally_terminal():
+    """계약 4 — 산출물이 없으면 몇 번을 다시 검수해도 결과가 같다. terminal 로 끝낸다."""
+    script = _sweeper()
+    helper = script[script.index("ensure_review_hold_commit() {"):script.index(
+        "terminate_review_hold() {"
+    )]
+
+    no_artifact = helper.index("REVIEW_HOLD_NO_ARTIFACT")
+    terminate = helper.index('terminate_review_hold "$job_id" "review_hold_no_artifact"', no_artifact)
+    assert no_artifact < terminate < helper.index("return 11", terminate) + 1
+
+
+def test_preserved_behaviours_survive_the_recovery_rework():
+    """계약 5 — 기존 보존 항목이 리팩터에 쓸려나가지 않았는지 한 자리에서 본다."""
+    script = _sweeper()
+
+    # persisted 40자 SHA 우선
+    assert "persisted_sha\" =~ ^[0-9a-f]{40}$" in script
+    # clean HEAD 승격
+    assert "commit_hash='${current_sha}'" in script
+    # 2회 연속 실패 모델 제외
+    assert "[REVIEW_EXCLUDE_MODELS: %s]" in script
+    # http=000 은 재시도 예산을 쓰지 않는다
+    assert "retry 미차감" in script
+
+
+def test_runner_claims_recovery_flag_and_uses_existing_commit_path():
+    """계약 2 — 재진입은 러너의 기존 커밋 경로(commit_job_worktree_for_approval)로만."""
+    script = _runner()
+    claim = script.index("claim_review_hold_recovery_job() {")
+    worker = script.index("recover_review_hold_job() {", claim)
+    body = _code_only(script[worker:script.index("# ── 작업 실행 ", worker)])
+
+    assert "error_detail='review_hold_recovery_pending'" in script[claim:worker]
+    assert "error_detail='review_hold_recovery_committing'" in script[claim:worker]
+    assert "FOR UPDATE SKIP LOCKED" in script[claim:worker]
+    # 커밋은 기존 경로가 만든다 — 복구 함수가 직접 리비전을 만들지 않는다.
+    assert 'commit_job_worktree_for_approval "$job_id"' in body
+    assert "git -C \"$worktree_dir\" commit" not in body
+    assert "--no-verify" not in body
+    # 성공하면 승인 대기로만 간다. push 는 기존 승인 경로(deploy_job)가 한다.
+    assert "status='awaiting_approval'" in body
+    assert "git push" not in body
+
+
+def test_runner_recovery_claim_is_wired_into_the_main_loop():
+    script = _runner()
+    main_start = script.index("\nmain() {")
+    main_body = script[main_start:script.index("\n_reap_bg_jobs() {", main_start)]
+
+    assert 'hold_recovery=$(claim_review_hold_recovery_job "$project_filter"' in main_body
+    assert 'recover_review_hold_job "$job_id" "$project" "$session_id" &' in main_body
+    # 유휴 판정에도 포함돼야 복구 직후 즉시 재폴링한다.
+    assert '-n "$hold_recovery"' in main_body
+
+
+def test_runner_terminates_stalled_recovery_instead_of_waiting_forever():
+    """러너가 복구 도중 재시작되면 표시만 남는다 — 영원히 기다리지 않는다."""
+    script = _runner()
+    stuck = script.index("_recover_stuck_jobs() {")
+    body = script[stuck:script.index("\n_cleanup_old_artifacts() {", stuck)]
+
+    assert "review_hold_recovery_stalled" in body
+    assert "error_detail='review_hold_recovery_committing'" in body
+    assert "INTERVAL '30 minutes'" in body
+
+
+def test_recovery_keeps_phase_review_hold_for_the_dashboard_board():
+    """대시보드 보드 상태(_TASK_BOARD_STATUS_SQL)는 phase='review_hold' 로 이 칸을
+    판정한다. 복구 대기 중에 phase 를 바꾸면 멀쩡한 잡이 보드에서 error 로 보인다."""
+    admin = (ROOT / "app" / "api" / "admin.py").read_text(encoding="utf-8")
+    assert "\"WHEN phase = 'review_hold'" in admin
+
+    script = _sweeper()
+    fn_start = script.index("review_hold_dirty_recovery() {")
+    body = _code_only(script[fn_start:script.index("# 재시도 추적 컬럼", fn_start)])
+    assert "phase='review_hold_recovery'" not in body
+    assert "SET phase=" not in body

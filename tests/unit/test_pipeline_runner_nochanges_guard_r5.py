@@ -38,6 +38,17 @@ def _extract_no_changes_block(script: str) -> str:
     return script[start:end]
 
 
+def _extract_diff_contract_block(script: str) -> str:
+    """재확인 루프가 쓰는 git_diff 캡처는 공유 블록에 있다(job_diff_contract).
+
+    하니스에 스텁을 두지 않고 진짜 본문을 얹는다 — 캡처 규칙이 바뀌면 여기서도
+    같이 깨져야 한다.
+    """
+    start = script.index("# ─── SHARED-BLOCK BEGIN: job_diff_contract")
+    end = script.index("# ─── SHARED-BLOCK END: job_diff_contract")
+    return script[start:end]
+
+
 # ── 정적 계약 ────────────────────────────────────────────────────────────
 
 
@@ -170,6 +181,7 @@ def harness_file(tmp_path):
     fn_file = tmp_path / "harness.sh"
     fn_file.write_text(
         "set -eo pipefail\n"
+        + _extract_diff_contract_block(_read_script())
         + REAL_STUBS.format(
             log_file=str(log_file), db_log=str(db_log),
             event_log=str(event_log), chat_log=str(chat_log),

@@ -126,6 +126,21 @@ def test_aads_target_routing_is_fail_closed_for_execution_deploy_and_rollback():
     script = _runner_script()
 
     assert "fail_invalid_aads_target()" in script
-    # pre-validation, execution, approved deployment, and rejection/rollback all
-    # reject the identical malformed/ambiguous TARGET decision before choosing a repo.
-    assert script.count('fail_invalid_aads_target "$job_id" "$session_id"') == 4
+    # Every entry point that resolves a repo from the instruction rejects the
+    # identical malformed/ambiguous TARGET decision before choosing one.
+    # Asserting the guard per entry point instead of counting call sites: a new
+    # entry point that *does* guard itself used to fail this test for being new.
+    entry_points = (
+        "pre_validate() {",
+        "run_job() {",
+        "deploy_job() {",
+        "reject_job() {",
+        "recover_review_hold_job() {",
+    )
+    for fn in entry_points:
+        start = script.index(fn)
+        body = script[start:script.index("\n}\n", start)]
+        assert "resolve_project_workdir" in body, f"{fn} 이 repo 를 고르지 않는다"
+        assert 'fail_invalid_aads_target "$job_id" "$session_id"' in body, (
+            f"{fn} 에 TARGET fail-closed 가드가 없다"
+        )

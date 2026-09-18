@@ -939,6 +939,72 @@ ensure_approved_job_worktree() {
     return 0
 }
 
+# ─── SHARED-BLOCK BEGIN: job_diff_contract ────────────────────────────
+# 이 블록은 pipeline-runner.sh 와 review-hold-sweeper.sh 에 **같은 본문으로**
+# 복제된다. 공유 파일을 source 하지 않는 이유는 순환 의존 때문이다 —
+# 러너 스크립트는 최상단에서 flock 을 잡고 말미에서 main 을 호출하므로,
+# 스위퍼가 그것을 source 하면 스위퍼가 러너를 기동시킨다. 반대로 러너가
+# 스위퍼를 source 하면 스위퍼의 flock/배치가 러너 안에서 돈다.
+# 그래서 복제하되 갈라지지 못하게 막는다: 두 사본이 한 바이트라도 달라지면
+# tests/unit/test_review_hold_commit_gap.py 가 즉시 실패한다.
+#
+# capture_job_diff_text
+#   러너가 pipeline_jobs.git_diff 에 저장하는 값을 그대로 만든다
+#   (base..HEAD 45000B + 미커밋 5000B, base 가 없거나 HEAD 와 같으면 50000B).
+#   스위퍼는 이 함수로 워크트리를 다시 읽어 "검수받은 diff 와 같은가" 를 본다.
+#   `|| true` 는 게으름이 아니다 — head 가 상한에서 읽기를 닫으면 git 은
+#   SIGPIPE(141)로 죽고 pipefail 이 그것을 그대로 돌려준다. 여기서 값을 비우면
+#   45KB 를 넘는 diff 가 통째로 사라진다. 잘린 앞부분은 이미 캡처돼 있다.
+# normalize_job_diff
+#   두 diff 가 같은 변경인지 비교하기 위한 정규화. blob 해시(index 줄)와
+#   CR·줄끝 공백·빈 줄만 지운다. 내용 줄은 건드리지 않는다 — 여기서 과하게
+#   지우면 "다른 변경" 이 "같다" 로 통과해 검수받지 않은 코드가 승인 큐로 샌다.
+#   마지막 awk 는 끝줄 개행을 한 벌로 맞춘다. DB 에서 읽은 값(psql 이 개행을
+#   덧붙인다)과 워크트리에서 읽은 값(명령치환이 개행을 지운다)을 그대로 해시하면
+#   내용이 같아도 늘 달라진다.
+# resolve_job_base_sha
+#   러너의 pre_exec_sha(워크트리 생성 시점 HEAD)는 DB 에 남지 않는다.
+#   워크트리는 origin/main 에서 detach 로 만들어지므로 분기점(merge-base)이
+#   그 값과 같다.
+capture_job_diff_text() {
+    local repo="$1" base_sha="${2:-}"
+    local head_sha="" diff_text="" uncommitted=""
+    head_sha=$(git -C "$repo" rev-parse HEAD 2>/dev/null) || head_sha=""
+    if [[ -n "$base_sha" && -n "$head_sha" && "$base_sha" != "$head_sha" ]]; then
+        diff_text=$(git -C "$repo" diff "${base_sha}..${head_sha}" 2>/dev/null | head -c 45000) || true
+        uncommitted=$(git -C "$repo" diff HEAD 2>/dev/null | head -c 5000) || true
+        if [[ -n "${uncommitted//[[:space:]]/}" ]]; then
+            diff_text="${diff_text}
+${uncommitted}"
+        fi
+    else
+        diff_text=$(git -C "$repo" diff HEAD 2>/dev/null | head -c 50000) || true
+    fi
+    printf '%s' "$diff_text"
+    return 0
+}
+
+normalize_job_diff() {
+    sed -e 's/\r$//' \
+        -e 's/[[:space:]]*$//' \
+        -e '/^index [0-9a-f]\{4,\}\.\./d' \
+        -e '/^similarity index /d' \
+        -e '/^dissimilarity index /d' \
+      | sed -e '/^$/d' \
+      | awk '{ print }'
+    return 0
+}
+
+resolve_job_base_sha() {
+    local repo="$1" base=""
+    base=$(git -C "$repo" merge-base HEAD origin/main 2>/dev/null) || base=""
+    [[ -n "$base" ]] || base=$(git -C "$repo" merge-base HEAD main 2>/dev/null) || base=""
+    [[ "$base" =~ ^[0-9a-f]{40}$ ]] || base=""
+    printf '%s' "$base"
+    return 0
+}
+# ─── SHARED-BLOCK END: job_diff_contract ──────────────────────────────
+
 # 계약: stdout 은 40자 hex commit SHA 단 하나만 낸다 — 호출부가
 # `approval_commit_sha=$(commit_job_worktree_for_approval ...)` 로 그대로
 # 캡처한다. 정보성 로그는 반드시 stderr(`log ... >&2`)로 보내라 — 2026-09-18
@@ -1747,6 +1813,91 @@ claim_rejected_job() {
              RETURNING job_id, project, chat_session_id;"
 }
 
+# ── review_hold dirty 산출물 복구 (AADS-REVIEWHOLD-DIRTY-STRAND-P0) ──
+#
+# 검수 전 커밋(commit_job_worktree_for_approval)이 도입되기 전 버전의 러너가
+# 남긴 review_hold 잡은 워크트리가 dirty 하고 commit_hash 가 NULL 이다.
+# 스위퍼는 그 워크트리를 커밋하지 못한다 — 스위퍼가 커밋을 만들면 pre-commit
+# 훅(API 키 탐지·ruff·단위테스트)을 거치지 않은 리비전이 승인 큐로 올라간다.
+# 그래서 역할을 나눈다:
+#   스위퍼: 재검수 APPROVE + "워크트리 변경 == 검수받은 git_diff" 확정 →
+#           error_detail='review_hold_recovery_pending' 표시만 남긴다.
+#   러너(여기): 그 표시를 보고 **기존 커밋 경로로만** 재진입한다.
+# 두 프로세스는 DB 플래그로만 만난다 — 어느 쪽도 상대 스크립트를 부르지 않는다.
+#
+# phase 는 'review_hold' 그대로 둔다. 대시보드 보드 상태(_TASK_BOARD_STATUS_SQL)가
+# phase='review_hold' 로 이 칸을 판정하므로, 여기서 phase 를 바꾸면 복구 대기 중인
+# 잡이 보드에서 'error' 로 보인다.
+claim_review_hold_recovery_job() {
+    local filter="$1"
+    db_exec "UPDATE pipeline_jobs SET error_detail='review_hold_recovery_committing', updated_at=NOW()
+             WHERE job_id = (
+                SELECT job_id FROM pipeline_jobs
+                WHERE status='review_hold'
+                  AND error_detail='review_hold_recovery_pending'
+                  AND commit_hash IS NULL $filter
+                ORDER BY updated_at ASC LIMIT 1
+                FOR UPDATE SKIP LOCKED
+             )
+             RETURNING job_id, project, chat_session_id;"
+}
+
+recover_review_hold_job() {
+    local job_id="$1" project="$2" session_id="$3"
+    local worktree_dir="/tmp/aads-wt-${job_id}"
+    local instruction main_workdir base_sha commit_sha raw_commit_sha now_status
+
+    instruction=$(get_job_instruction "$job_id")
+    if ! main_workdir=$(resolve_project_workdir "$project" "$instruction"); then
+        fail_invalid_aads_target "$job_id" "$session_id"
+        return 1
+    fi
+
+    # 산출물이 사라졌으면 복구할 것이 없다 — 구조적 terminal.
+    if [[ ! -d "$worktree_dir" ]] || [[ "$(git -C "$worktree_dir" rev-parse --is-inside-work-tree 2>/dev/null || true)" != "true" ]]; then
+        log "  REVIEW_HOLD_RECOVERY_NO_ARTIFACT job=$job_id worktree=$worktree_dir"
+        db_update "UPDATE pipeline_jobs SET status='error', phase='review_hold_no_artifact',
+                   error_detail='review_hold_no_artifact',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[Runner] review_hold 복구 불가 — 워크트리 소실: ${worktree_dir}',
+                   completed_at=NOW(), updated_at=NOW()
+                   WHERE job_id='${job_id}' AND status='review_hold';"
+        record_runner_event "$job_id" "job_terminal" "error" "review_hold_no_artifact" "" "" "" "" "{\"error_detail\":\"review_hold_no_artifact\"}"
+        _notify_ai "$job_id"
+        return 1
+    fi
+
+    base_sha=$(resolve_job_base_sha "$worktree_dir")
+    log "▶ REVIEW_HOLD_RECOVERY job=$job_id project=$project worktree=$worktree_dir base=${base_sha:0:12}"
+
+    # 기존 승인 커밋 경로 그대로 — pre-commit 훅을 거치고 --no-verify 를 쓰지 않는다.
+    raw_commit_sha=$(commit_job_worktree_for_approval "$job_id" "$session_id" "$worktree_dir" "$main_workdir" "$instruction" "$base_sha") || return 1
+    commit_sha=$(printf '%s' "$raw_commit_sha" | tr -d '\r' | grep -oE '[0-9a-f]{40}' | tail -n1) || commit_sha=""
+    if [[ -z "$commit_sha" || "$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)" != "$commit_sha" ]]; then
+        _fail_job "$job_id" "$session_id" "review_hold_recovery_sha_mismatch" "review_hold 복구 커밋 SHA 와 runner worktree HEAD 불일치"
+        return 1
+    fi
+
+    db_update "UPDATE pipeline_jobs SET status='awaiting_approval', phase='awaiting_approval',
+               commit_hash='${commit_sha}',
+               error_detail=NULL, runner_pid=NULL,
+               approval_requested_at=NOW(),
+               review_feedback=COALESCE(review_feedback,'') || E'\n[Runner] review_hold 산출물 복구 커밋 완료 — ${commit_sha}',
+               updated_at=NOW()
+               WHERE job_id='${job_id}' AND status='review_hold';"
+    now_status=$(db_exec "SELECT status FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null || true)
+    now_status="${now_status// /}"
+    if [[ "$now_status" != "awaiting_approval" ]]; then
+        _fail_job "$job_id" "$session_id" "review_hold_recovery_persist_failed" "복구 커밋 ${commit_sha} 은 만들었으나 승인 상태 저장 실패 — 워크트리 보존"
+        return 1
+    fi
+
+    log "  REVIEW_HOLD_RECOVERED job=$job_id sha=$commit_sha — 승인 대기로 이동"
+    record_runner_event "$job_id" "approval_requested" "awaiting_approval" "awaiting_approval" "" "" "" "" "{\"commit_hash\":\"${commit_sha}\",\"source\":\"review_hold_recovery\"}"
+    post_to_chat "$session_id" "🔁 [Pipeline Runner] review_hold 산출물 복구 완료: $job_id — 재검수를 통과한 diff 그대로 커밋(${commit_sha:0:8})하고 승인 대기로 옮겼습니다. 푸시·배포는 기존 승인 경로에서 진행됩니다."
+    _notify_ai "$job_id"
+    return 0
+}
+
 # ── 작업 실행 ─────────────────────────────────────────────────────────
 run_job() {
     local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-auto}" job_size="${7:-M}" parallel_group="${8:-}"
@@ -2466,15 +2617,10 @@ $out_tail")
     local git_diff=""
     local _current_head=""
     _current_head=$(git rev-parse HEAD 2>/dev/null) || _current_head=""
-    if [[ -n "$pre_exec_sha" && -n "$_current_head" && "$pre_exec_sha" != "$_current_head" ]]; then
-        git_diff=$(git diff "${pre_exec_sha}..${_current_head}" 2>/dev/null | head -c 45000) || true
-        local _uncommitted=""
-        _uncommitted=$(git diff HEAD 2>/dev/null | head -c 5000) || true
-        [[ -n "${_uncommitted//[[:space:]]/}" ]] && git_diff="${git_diff}
-${_uncommitted}"
-    else
-        git_diff=$(git diff HEAD 2>/dev/null | head -c 50000) || true
-    fi
+    # git_diff 캡처 규칙은 SHARED-BLOCK(job_diff_contract)에만 둔다. 스위퍼가
+    # review_hold 워크트리를 다시 읽어 같은 diff 인지 판정할 때 여기와 한 글자도
+    # 다르면 멀쩡한 산출물이 drift 로 폐기된다.
+    git_diff=$(capture_job_diff_text "$workdir" "$pre_exec_sha")
     local actual_changed_files=""
     if [[ -n "$pre_exec_sha" && -n "$_current_head" && "$pre_exec_sha" != "$_current_head" ]]; then
         actual_changed_files=$(git diff --name-only "${pre_exec_sha}..${_current_head}" 2>/dev/null) || true
@@ -2515,15 +2661,7 @@ ${_untracked_files}"
             fi
             cd "$workdir"
             _current_head=$(git rev-parse HEAD 2>/dev/null) || _current_head=""
-            if [[ -n "$pre_exec_sha" && -n "$_current_head" && "$pre_exec_sha" != "$_current_head" ]]; then
-                git_diff=$(git diff "${pre_exec_sha}..${_current_head}" 2>/dev/null | head -c 45000) || true
-                local _uncommitted=""
-                _uncommitted=$(git diff HEAD 2>/dev/null | head -c 5000) || true
-                [[ -n "${_uncommitted//[[:space:]]/}" ]] && git_diff="${git_diff}
-${_uncommitted}"
-            else
-                git_diff=$(git diff HEAD 2>/dev/null | head -c 50000) || true
-            fi
+            git_diff=$(capture_job_diff_text "$workdir" "$pre_exec_sha")
             if [[ "$git_diff" =~ [^[:space:]] ]]; then
                 break
             fi
@@ -3855,6 +3993,23 @@ _recover_stuck_jobs() {
         done <<< "$stuck"
     fi
 
+    # review_hold 복구 커밋이 러너 재시작/크래시로 중단된 경우.
+    # 표시만 남고 아무도 집지 않는 상태로 영원히 두지 않는다 — 산출물은
+    # 워크트리에 그대로 있으므로 종결해도 되살릴 수 있다.
+    local hold_recovery_stalled
+    hold_recovery_stalled=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='review_hold_recovery_failed',
+                                     error_detail='review_hold_recovery_stalled',
+                                     review_feedback=COALESCE(review_feedback,'') || E'\n[Runner] review_hold 복구 커밋 30분 초과 — 종결(워크트리 산출물은 보존)',
+                                     completed_at=NOW(), updated_at=NOW()
+                                     WHERE status='review_hold'
+                                       AND error_detail='review_hold_recovery_committing'
+                                       AND updated_at < NOW() - INTERVAL '30 minutes'
+                                       $filter
+                                     RETURNING job_id;" 2>/dev/null) || true
+    if [[ -n "$hold_recovery_stalled" ]]; then
+        log "  REVIEW_HOLD_RECOVERY_STALLED: $hold_recovery_stalled"
+    fi
+
     # H4: 승인 대기 타임아웃
     local expired
     expired=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
@@ -4074,6 +4229,19 @@ main() {
             fi
         fi
 
+        # 4) review_hold dirty 산출물 복구 — 스위퍼가 diff 동일성을 확정한 건만
+        local hold_recovery
+        hold_recovery=$(claim_review_hold_recovery_job "$project_filter" 2>/dev/null) || true
+
+        if [[ -n "$hold_recovery" ]]; then
+            IFS=$'\x1e' read -r job_id project session_id <<< "$hold_recovery"
+            if [[ -n "$job_id" && -n "$project" ]]; then
+                recover_review_hold_job "$job_id" "$project" "$session_id" &
+                _bg_jobs[$!]="${job_id}|${session_id}"
+                log "  BG_HOLD_RECOVERY: job=$job_id pid=$! (parallel)"
+            fi
+        fi
+
         # 주기적 정리 (STUCK_CHECK_INTERVAL 초마다 — BUG-7: 동적 주기)
         _cycle=$((_cycle + 1))
         if (( _cycle % _stuck_check_cycles == 0 )); then
@@ -4086,7 +4254,7 @@ main() {
         fi
 
         # P2-2: 적응형 폴링 — 작업 발견 시 즉시 재폴링, 유휴 시에만 대기
-        if [[ -n "$pending" || -n "$approved" || -n "$rejected" ]]; then
+        if [[ -n "$pending" || -n "$approved" || -n "$rejected" || -n "$hold_recovery" ]]; then
             sleep 1  # 작업 발견 — 1초 후 즉시 재폴링 (기존 5초 → 80% 지연 감소)
         else
             sleep "$POLL_INTERVAL"
