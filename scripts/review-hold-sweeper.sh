@@ -206,6 +206,41 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id request_id; do
     db_query "SELECT COALESCE(git_diff,'') FROM pipeline_jobs WHERE job_id='${job_id}';" > "$diff_file" 2>/dev/null || true
     db_query "SELECT COALESCE(instruction,'') FROM pipeline_jobs WHERE job_id='${job_id}';" > "$ins_file" 2>/dev/null || true
 
+    # 동일 모델이 2회 연속 NO_RESPONSE/PARSER_FAILURE면 다음 재검수에서 제외
+    same_model_twice=$(db_query "SELECT CASE WHEN COUNT(*) = 2 AND MIN(model_used) = MAX(model_used) THEN 'yes' ELSE 'no' END FROM (SELECT model_used FROM code_reviews WHERE job_id='${job_id}' AND flag_category IN ('REVIEW_MODEL_NO_RESPONSE','REVIEW_PARSER_FAILURE') ORDER BY created_at DESC LIMIT 2) t" 2>/dev/null | tr -d '[:space:]' || echo "no")
+    excluded_model=$(db_query "SELECT COALESCE(model_used,'') FROM code_reviews WHERE job_id='${job_id}' AND flag_category IN ('REVIEW_MODEL_NO_RESPONSE','REVIEW_PARSER_FAILURE') ORDER BY created_at DESC LIMIT 1" 2>/dev/null | tr -d '[:space:]' || echo "")
+    if [[ "$same_model_twice" == "yes" && -n "$excluded_model" ]]; then
+        printf '\n[REVIEW_EXCLUDE_MODELS: %s]\n' "$excluded_model" >> "$ins_file"
+        log "  MODEL_EXCLUDED ${job_id} model=${excluded_model}"
+    fi
+
+    # 동일 모델이 REVIEW_MODEL_NO_RESPONSE/REVIEW_PARSER_FAILURE 로 2회 연속
+    # 실패했으면 다음 재검수에서 그 모델을 제외한다. 지시서에
+    # [REVIEW_EXCLUDE_MODELS: <model>] 주석을 붙이면 code_reviewer.py 가
+    # _review_attempt_models() 에서 해당 모델을 후보 목록에서 뺀다.
+    excluded_model=$(db_query "
+        SELECT COALESCE(model_used,'')
+        FROM code_reviews
+        WHERE job_id='${job_id}'
+          AND flag_category IN ('REVIEW_MODEL_NO_RESPONSE','REVIEW_PARSER_FAILURE')
+        ORDER BY created_at DESC
+        LIMIT 2
+    " 2>/dev/null | sort -u | head -1 || echo "")
+    same_model_twice=$(db_query "
+        SELECT CASE WHEN COUNT(*) = 2 AND MIN(model_used) = MAX(model_used) THEN 'yes' ELSE 'no' END
+        FROM (
+            SELECT model_used FROM code_reviews
+            WHERE job_id='${job_id}'
+              AND flag_category IN ('REVIEW_MODEL_NO_RESPONSE','REVIEW_PARSER_FAILURE')
+            ORDER BY created_at DESC
+            LIMIT 2
+        ) t
+    " 2>/dev/null | tr -d '[:space:]' || echo "no")
+    if [[ "$same_model_twice" == "yes" && -n "$excluded_model" ]]; then
+        printf '\n[REVIEW_EXCLUDE_MODELS: %s]\n' "$excluded_model" >> "$ins_file"
+        log "  MODEL_EXCLUDED ${job_id} model=${excluded_model}"
+    fi
+
     if [[ ! -s "$diff_file" ]]; then
         log "  SKIP $job_id — git_diff 비어 있음"
         rm -f "$diff_file" "$ins_file" "$payload_file" "$resp_file"
