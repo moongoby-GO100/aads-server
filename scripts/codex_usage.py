@@ -305,14 +305,14 @@ def push_rate_limit(key_name: str, retry_text: str) -> str:
 _SNAPSHOT_UPSERT = """
 INSERT INTO codex_usage_snapshots
 (key_name, used_percent, window_minutes, resets_at, snapshot_at,
- ok_72h, limit_72h, sessions, tokens_recent, collected_at)
-VALUES ('{k}', {used}, {win}, {resets}, {snap_at}, {ok}, {lim}, {sess}, {tok}, NOW())
+ ok_72h, limit_72h, sessions, tokens_recent, auth_usable, collected_at)
+VALUES ('{k}', {used}, {win}, {resets}, {snap_at}, {ok}, {lim}, {sess}, {tok}, {auth}, NOW())
 ON CONFLICT (key_name) DO UPDATE SET
 used_percent=EXCLUDED.used_percent, window_minutes=EXCLUDED.window_minutes,
 resets_at=EXCLUDED.resets_at, snapshot_at=EXCLUDED.snapshot_at,
 ok_72h=EXCLUDED.ok_72h, limit_72h=EXCLUDED.limit_72h,
 sessions=EXCLUDED.sessions, tokens_recent=EXCLUDED.tokens_recent,
-collected_at=NOW()
+auth_usable=EXCLUDED.auth_usable, collected_at=NOW()
 """
 
 
@@ -331,6 +331,10 @@ def push_snapshots(accounts: list[dict], usage: dict) -> None:
             snap_at=(f"'{u['ts']}'" if u.get("ts") else "NULL"),
             ok=a.get("ok_72h", 0), lim=a.get("limit_72h", 0),
             sess=a.get("sessions", 0), tok=a.get("tokens_recent", 0),
+            # 한도가 남아도 자격증명이 죽었으면 쓸 수 없는 계정이다. API 컨테이너는
+            # 호스트의 auth.json 을 못 보므로 이 값이 유일한 판단 근거다
+            # (2026-09-19: JINAH 한도 37% 인데 토큰 만료로 호출이 전부 실패했다).
+            auth="TRUE" if a.get("has_auth") else "FALSE",
         ))
 
 

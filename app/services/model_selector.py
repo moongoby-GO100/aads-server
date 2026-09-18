@@ -628,6 +628,10 @@ async def _codex_account_with_headroom() -> str:
               AND k.is_active
               AND (k.rate_limited_until IS NULL OR k.rate_limited_until <= NOW())
               AND COALESCE(s.used_percent, 0) < 100
+              -- 한도가 남아도 자격증명이 죽었으면 쓸 수 없다. 2026-09-19 실측:
+              -- CODEX_OAUTH_JINAH 는 37% 인데 access_token 이 만료돼 호출이 전부
+              -- 실패했다. 한도만 보고 통과시키면 codex 로 보냈다가 빈 응답을 받는다.
+              AND COALESCE(s.auth_usable, TRUE)
             ORDER BY k.priority, k.id
             LIMIT 1
             """
