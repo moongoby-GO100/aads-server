@@ -31,7 +31,12 @@ fi
 # 운영 컨테이너는 블루그린이라 실제 이름이 aads-server-blue / aads-server-green 이다.
 # 컷오버 창에는 별칭 aads-server 가 잠깐 사라질 수 있으므로 폴백 사슬로 찾는다:
 #   $AADS_TEST_IMAGE_SOURCE → aads-server → .active_container 값 →
-#   docker ps 로 찾은 healthy 한 aads-server-* 컨테이너.
+#   docker ps 로 찾은 healthy 한 aads-server-* 컨테이너 →
+#   health 필터 없는 aads-server-* 컨테이너(교체 중이라 아직 starting 이어도
+#   이미지 자체는 멀쩡하다) → 컨테이너가 하나도 없을 때 이미지 태그 직접 조회.
+#
+# 마지막 후보만 "image:" 접두를 달아 종류를 구분한다 — 컨테이너 후보는 이름 그대로
+# docker inspect 로, image: 후보는 접두를 뗀 값을 이미지 참조로 바로 쓴다.
 resolve_test_image_candidates() {
     local candidates=()
 
@@ -51,6 +56,17 @@ resolve_test_image_candidates() {
         [ -n "$bg_name" ] && candidates+=("$bg_name")
     done < <(docker ps --filter "name=aads-server-" --filter "health=healthy" --format '{{.Names}}' 2>/dev/null)
 
+    # health 필터 없는 판 — 컷오버 중 새 컨테이너가 아직 starting 이어도 이미지는 쓸 수 있다.
+    local bg_name_any
+    while IFS= read -r bg_name_any; do
+        [ -n "$bg_name_any" ] && candidates+=("$bg_name_any")
+    done < <(docker ps --filter "name=aads-server-" --format '{{.Names}}' 2>/dev/null)
+
+    # 컨테이너가 하나도 없을 때의 마지막 폴백 — 이미지 태그를 직접 조회한다.
+    local latest_image
+    latest_image="$(docker images --format '{{.Repository}}:{{.Tag}}' --filter "reference=aads-server:*" 2>/dev/null | head -1)"
+    [ -n "$latest_image" ] && candidates+=("image:$latest_image")
+
     # 중복 제거(순서 보존) — 같은 후보를 두 번 조회하지 않는다.
     local seen=":" out=() c
     for c in "${candidates[@]}"; do
@@ -69,17 +85,48 @@ if [ ${#RUNTIME_CANDIDATES[@]} -eq 0 ]; then
     exit 2
 fi
 
+# 컷오버 창이 대체로 30초 안쪽이라 5초 간격 3회(15초)로는 창을 못 넘길 때가 있었다.
+# 6회(30초)로 늘려 창을 넘기도록 한다.
+RETRY_ATTEMPTS=6
+RETRY_INTERVAL_SECONDS=5
+
 IMAGE=""
-for attempt in 1 2 3; do
+for attempt in $(seq 1 "$RETRY_ATTEMPTS"); do
     for candidate in "${RUNTIME_CANDIDATES[@]}"; do
-        IMAGE="$(docker inspect -f '{{.Config.Image}}' "$candidate" 2>/dev/null)"
+        case "$candidate" in
+            image:*)
+                IMAGE="${candidate#image:}"
+                ;;
+            *)
+                IMAGE="$(docker inspect -f '{{.Config.Image}}' "$candidate" 2>/dev/null)"
+                ;;
+        esac
         [ -n "$IMAGE" ] && break 2
     done
-    [ "$attempt" -lt 3 ] && sleep 5
+    [ "$attempt" -lt "$RETRY_ATTEMPTS" ] && sleep "$RETRY_INTERVAL_SECONDS"
 done
 
 if [ -z "$IMAGE" ]; then
-    echo "[run_unit_tests] 기준 이미지를 찾지 못했습니다 (5초 간격 3회 재시도) — 시도한 후보: ${RUNTIME_CANDIDATES[*]}" >&2
+    {
+        echo "[run_unit_tests] 기준 이미지를 찾지 못했습니다 (${RETRY_INTERVAL_SECONDS}초 간격 ${RETRY_ATTEMPTS}회 재시도) — 시도한 후보와 실패 사유:"
+        for candidate in "${RUNTIME_CANDIDATES[@]}"; do
+            case "$candidate" in
+                image:*)
+                    ref="${candidate#image:}"
+                    echo "  - image:$ref -> image not found"
+                    ;;
+                *)
+                    if docker inspect "$candidate" >/dev/null 2>&1; then
+                        echo "  - container:$candidate -> 컨테이너는 있으나 이미지 조회 실패"
+                    else
+                        echo "  - container:$candidate -> no such container"
+                    fi
+                    ;;
+            esac
+        done
+        echo "[run_unit_tests] docker ps --filter name=aads-server 요약:"
+        docker ps --filter "name=aads-server" --format '  {{.Names}}  {{.Status}}' 2>/dev/null
+    } >&2
     exit 2
 fi
 

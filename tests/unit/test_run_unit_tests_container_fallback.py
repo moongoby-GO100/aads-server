@@ -27,14 +27,15 @@ def test_run_unit_tests_keeps_container_fallback_chain_and_retry_guards():
     assert 'candidates+=("aads-server")' in script
     assert 'docker ps --filter "name=aads-server-" --filter "health=healthy" --format' in script
 
-    # exit 2 의미는 완화되지 않고, 실패 시 시도한 후보를 stderr 에 남긴다.
-    assert "시도한 후보: ${RUNTIME_CANDIDATES[*]}" in script
+    # exit 2 의미는 완화되지 않고, 실패 시 시도한 후보와 실패 사유를 stderr 에 남긴다.
+    assert "시도한 후보와 실패 사유:" in script
     assert script.count("exit 2") >= 4
 
-    # 이미지 조회는 5초 간격으로 3회까지 재시도한 뒤에 포기한다.
+    # 이미지 조회는 5초 간격으로 6회까지 재시도한 뒤에 포기한다(컷오버 창을 넘기려고 3→6회로 늘렸다).
     retry_block = script[script.index("IMAGE=\"\"") : script.index("if [ -z \"$IMAGE\" ]")]
-    assert "for attempt in 1 2 3; do" in retry_block
-    assert 'sleep 5' in retry_block
+    assert 'RETRY_ATTEMPTS=6' in script
+    assert 'for attempt in $(seq 1 "$RETRY_ATTEMPTS"); do' in retry_block
+    assert 'sleep "$RETRY_INTERVAL_SECONDS"' in retry_block
 
 
 def _run_resolve_candidates(env_overrides, active_container_content=None, docker_ps_names=()):
