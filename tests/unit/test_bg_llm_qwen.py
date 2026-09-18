@@ -2,8 +2,8 @@
 AADS-204: Background LLM qwen-turbo 전환 품질 테스트.
 
 검증 항목:
-1. call_background_llm() 정상 호출 (DashScope 성공)
-2. call_background_llm() DashScope 실패 시 claude-haiku 폴백
+1. call_background_llm() 정상 호출 (1순위 groq-gpt-oss-120b / LiteLLM 성공)
+2. call_background_llm() 1순위 실패 시 claude-haiku 폴백
 3. call_llm_with_fallback(model="qwen-turbo") → _call_dashscope 라우팅
 4. 10개 서비스 모듈 import 정상
 5. 10개 서비스의 모델 설정값 qwen-turbo 확인
@@ -19,44 +19,44 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 # ── 픽스처: 연속 실패 카운터 리셋 ────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
-def reset_bg_qwen_fail_streak():
-    """각 테스트 전후로 모듈 수준 qwen 실패 카운터를 리셋."""
+def reset_bg_primary_fail_streak():
+    """각 테스트 전후로 모듈 수준 1순위 실패 카운터를 리셋."""
     import app.core.anthropic_client as ac
-    ac._bg_qwen_fail_streak = 0
+    ac._bg_primary_fail_streak = 0
     yield
-    ac._bg_qwen_fail_streak = 0
+    ac._bg_primary_fail_streak = 0
 
 
 # ── Test 1: call_background_llm() 정상 호출 ──────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_call_background_llm_success():
-    """call_background_llm() 정상 호출 — DashScope 응답 시뮬레이션, 반환값 비어있지 않음."""
+    """call_background_llm() 정상 호출 — 1순위 groq(LiteLLM) 응답, 반환값 비어있지 않음."""
     from app.core.anthropic_client import call_background_llm
 
     with patch(
-        "app.core.anthropic_client._call_dashscope",
-        new=AsyncMock(return_value="qwen response text"),
-    ) as mock_ds:
+        "app.core.anthropic_client._call_litellm",
+        new=AsyncMock(return_value="groq response text"),
+    ) as mock_ll:
         result = await call_background_llm("테스트 프롬프트")
 
     assert result, "call_background_llm() returned empty string"
-    assert result == "qwen response text"
-    mock_ds.assert_called_once()
-    args, kwargs = mock_ds.call_args
-    assert args[1] == "qwen-turbo", f"모델이 qwen-turbo가 아님: {args[1]}"
+    assert result == "groq response text"
+    mock_ll.assert_called_once()
+    args, kwargs = mock_ll.call_args
+    assert args[1] == "groq-gpt-oss-120b", f"1순위 모델이 groq-gpt-oss-120b가 아님: {args[1]}"
 
 
-# ── Test 2: DashScope 실패 시 claude-haiku 폴백 ──────────────────────────────
+# ── Test 2: 1순위 실패 시 claude-haiku 폴백 ─────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_call_background_llm_dashscope_fail_haiku_fallback():
-    """DashScope exception 발생 시 claude-haiku 폴백 호출됨 확인."""
+async def test_call_background_llm_primary_fail_haiku_fallback():
+    """1순위(groq/LiteLLM) exception 발생 시 claude-haiku 폴백 호출됨 확인."""
     from app.core.anthropic_client import call_background_llm
 
     with patch(
-        "app.core.anthropic_client._call_dashscope",
-        new=AsyncMock(side_effect=Exception("DashScope timeout")),
+        "app.core.anthropic_client._call_litellm",
+        new=AsyncMock(side_effect=Exception("LiteLLM timeout")),
     ) as mock_ds, patch(
         "app.core.anthropic_client.call_llm_with_fallback",
         new=AsyncMock(return_value="haiku fallback response"),

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-18T08:19:47.358171+09:00",
+  "generated_at": "2026-09-18T14:46:09.051843+09:00",
   "root": "/root/aads/aads-server",
   "api_roots": [
     "/api/v1/fact-check",
@@ -12,14 +12,14 @@
     "app_py_files": 394,
     "router_dir_files": 90,
     "router_modules": 84,
-    "include_router_calls": 86,
-    "mounted_routes": 916,
+    "include_router_calls": 87,
+    "mounted_routes": 933,
     "namespaces": 84,
     "frontend_files": 237,
-    "frontend_calls_resolved": 344,
-    "sql_tables_referenced": 227,
-    "graph_nodes": 781,
-    "graph_edges": 1201
+    "frontend_calls_resolved": 345,
+    "sql_tables_referenced": 228,
+    "graph_nodes": 782,
+    "graph_edges": 1204
   },
   "nodes": [
     {
@@ -2248,9 +2248,34 @@
       "routes": 4
     },
     {
+      "id": "app/api/obys_accounting.py",
+      "kind": "router_module",
+      "routes": 14
+    },
+    {
+      "id": "app/api/obys_dashboard.py",
+      "kind": "router_module",
+      "routes": 5
+    },
+    {
+      "id": "app/api/obys_finance.py",
+      "kind": "router_module",
+      "routes": 60
+    },
+    {
+      "id": "app/api/obys_inventory.py",
+      "kind": "router_module",
+      "routes": 14
+    },
+    {
+      "id": "app/api/obys_ops.py",
+      "kind": "router_module",
+      "routes": 13
+    },
+    {
       "id": "app/api/ohvis_console.py",
       "kind": "router_module",
-      "routes": 2
+      "routes": 3
     },
     {
       "id": "app/api/ohvis_harness.py",
@@ -2366,31 +2391,6 @@
       "id": "app/api/watchdog.py",
       "kind": "router_module",
       "routes": 5
-    },
-    {
-      "id": "app/api/yeoljeong_accounting.py",
-      "kind": "router_module",
-      "routes": 14
-    },
-    {
-      "id": "app/api/yeoljeong_dashboard.py",
-      "kind": "router_module",
-      "routes": 5
-    },
-    {
-      "id": "app/api/yeoljeong_finance.py",
-      "kind": "router_module",
-      "routes": 60
-    },
-    {
-      "id": "app/api/yeoljeong_inventory.py",
-      "kind": "router_module",
-      "routes": 12
-    },
-    {
-      "id": "app/api/yeoljeong_ops.py",
-      "kind": "router_module",
-      "routes": 13
     },
     {
       "id": "app/routers/agent_vault.py",
@@ -3758,6 +3758,12 @@
       "users": 1
     },
     {
+      "id": "table:yeoljeong_stock_balances",
+      "kind": "table",
+      "defined": true,
+      "users": 1
+    },
+    {
       "id": "table:yeoljeong_stock_movements",
       "kind": "table",
       "defined": true,
@@ -4123,7 +4129,7 @@
     },
     {
       "from": "app/main.py",
-      "to": "app/api/yeoljeong_finance.py",
+      "to": "app/api/obys_finance.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3810
@@ -4137,28 +4143,28 @@
     },
     {
       "from": "app/main.py",
-      "to": "app/api/yeoljeong_dashboard.py",
+      "to": "app/api/obys_dashboard.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3812
     },
     {
       "from": "app/main.py",
-      "to": "app/api/yeoljeong_inventory.py",
+      "to": "app/api/obys_inventory.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3813
     },
     {
       "from": "app/main.py",
-      "to": "app/api/yeoljeong_accounting.py",
+      "to": "app/api/obys_accounting.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3814
     },
     {
       "from": "app/main.py",
-      "to": "app/api/yeoljeong_ops.py",
+      "to": "app/api/obys_ops.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 3815
@@ -4361,7 +4367,7 @@
     },
     {
       "from": "app/yeoljeong_main.py",
-      "to": "app/api/yeoljeong_finance.py",
+      "to": "app/api/obys_finance.py",
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 90
@@ -4372,6 +4378,13 @@
       "kind": "mounts",
       "prefix": "/api/v1",
       "lineno": 91
+    },
+    {
+      "from": "app/yeoljeong_main.py",
+      "to": "app/api/obys_inventory.py",
+      "kind": "mounts",
+      "prefix": "/api/v1",
+      "lineno": 92
     },
     {
       "from": "app/api/health.py",
@@ -4699,7 +4712,7 @@
       "kind": "owns"
     },
     {
-      "from": "app/api/yeoljeong_finance.py",
+      "from": "app/api/obys_finance.py",
       "to": "ns:/api/v1/yeoljeong-finance",
       "kind": "owns"
     },
@@ -4709,22 +4722,22 @@
       "kind": "owns"
     },
     {
-      "from": "app/api/yeoljeong_dashboard.py",
+      "from": "app/api/obys_dashboard.py",
       "to": "ns:/api/v1/yeoljeong-dashboard",
       "kind": "owns"
     },
     {
-      "from": "app/api/yeoljeong_inventory.py",
+      "from": "app/api/obys_inventory.py",
       "to": "ns:/api/v1/yeoljeong-inventory",
       "kind": "owns"
     },
     {
-      "from": "app/api/yeoljeong_accounting.py",
+      "from": "app/api/obys_accounting.py",
       "to": "ns:/api/v1/yeoljeong-accounting",
       "kind": "owns"
     },
     {
-      "from": "app/api/yeoljeong_ops.py",
+      "from": "app/api/obys_ops.py",
       "to": "ns:/api/v1/yeoljeong-ops",
       "kind": "owns"
     },
@@ -4908,7 +4921,7 @@
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/health/api-keys",
-      "lineno": 6392
+      "lineno": 6407
     },
     {
       "from": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
@@ -4916,7 +4929,7 @@
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/chat/workspaces/{}/roles",
-      "lineno": 6541
+      "lineno": 6556
     },
     {
       "from": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
@@ -4924,7 +4937,7 @@
       "kind": "calls",
       "method": "GET",
       "path": "/api/v1/ops/health-check",
-      "lineno": 9229
+      "lineno": 9244
     },
     {
       "from": "/root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/InquiryForm.tsx",
@@ -7557,6 +7570,14 @@
       "method": "POST",
       "path": "/api/v1/ohvis/console/command",
       "lineno": 1237
+    },
+    {
+      "from": "/root/aads/aads-dashboard/src/lib/api.ts",
+      "to": "ns:/api/v1/ohvis",
+      "kind": "calls",
+      "method": "POST",
+      "path": "/api/v1/ohvis/tasks",
+      "lineno": 1250
     },
     {
       "from": "/root/aads/aads-dashboard/src/lib/sse.ts",
@@ -10972,6 +10993,11 @@
     },
     {
       "from": "app/services/yeoljeong_inventory_service.py",
+      "to": "table:yeoljeong_stock_balances",
+      "kind": "queries"
+    },
+    {
+      "from": "app/services/yeoljeong_inventory_service.py",
       "to": "table:yeoljeong_stock_movements",
       "kind": "queries"
     },
@@ -11234,35 +11260,25 @@
       "app/api/watchdog.py"
     ],
     "/api/v1/yeoljeong-accounting": [
-      "app/api/yeoljeong_accounting.py"
+      "app/api/obys_accounting.py"
     ],
     "/api/v1/yeoljeong-dashboard": [
-      "app/api/yeoljeong_dashboard.py"
+      "app/api/obys_dashboard.py"
     ],
     "/api/v1/yeoljeong-finance": [
-      "app/api/yeoljeong_finance.py"
+      "app/api/obys_finance.py"
     ],
     "/api/v1/yeoljeong-inventory": [
-      "app/api/yeoljeong_inventory.py"
+      "app/api/obys_inventory.py"
     ],
     "/api/v1/yeoljeong-ops": [
-      "app/api/yeoljeong_ops.py"
+      "app/api/obys_ops.py"
     ],
     "/pc-ollama": [
       "app/api/pc_ollama_bridge.py"
     ]
   },
   "findings": [
-    {
-      "rule": "ROUTE_MISSING",
-      "key": "/root/aads/aads-dashboard/src/lib/api.ts:1237",
-      "file": "/root/aads/aads-dashboard/src/lib/api.ts",
-      "lineno": 1237,
-      "method": "POST",
-      "path": "/api/v1/ohvis/console/command",
-      "detail": "`/root/aads/aads-dashboard/src/lib/api.ts:1237` POST `/api/v1/ohvis/console/command` — 일치하는 라우트 없음",
-      "severity": "P0"
-    },
     {
       "rule": "DOUBLE_MOUNT",
       "key": "/api/v1/admin",
@@ -11347,13 +11363,13 @@
         "app/api/ohvis_tasks.py"
       ],
       "owner_route_counts": {
-        "app/api/ohvis_console.py": 2,
+        "app/api/ohvis_console.py": 3,
         "app/api/ohvis_harness.py": 5,
         "app/api/ohvis_llmops.py": 12,
         "app/api/ohvis_tasks.py": 8
       },
       "exact_conflicts": [],
-      "detail": "네임스페이스 `/api/v1/ohvis` 를 4개 모듈이 소유 — `app/api/ohvis_console.py`(2개 라우트), `app/api/ohvis_harness.py`(5개 라우트), `app/api/ohvis_llmops.py`(12개 라우트), `app/api/ohvis_tasks.py`(8개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)",
+      "detail": "네임스페이스 `/api/v1/ohvis` 를 4개 모듈이 소유 — `app/api/ohvis_console.py`(3개 라우트), `app/api/ohvis_harness.py`(5개 라우트), `app/api/ohvis_llmops.py`(12개 라우트), `app/api/ohvis_tasks.py`(8개 라우트). 정확히 겹치는 METHOD+경로는 0건 (0건이어도 부채다 — 한 네임스페이스의 주인이 둘이면 라우트 추가 시 어느 쪽에 넣을지가 매번 우연에 맡겨진다)",
       "severity": "P1"
     },
     {
@@ -12001,13 +12017,6 @@
       "module": "app/api/ceo_chat.py",
       "detail": "`app/api/ceo_chat.py` 이 APIRouter 를 정의하지만 어떤 엔트리포인트에도 include_router 되지 않았다 — 죽은 코드이거나 등록 누락이다",
       "severity": "P2"
-    },
-    {
-      "rule": "STALE_BACKUP",
-      "key": "app/services/live_trading_guard.py.bak_aads",
-      "path": "app/services/live_trading_guard.py.bak_aads",
-      "detail": "`app/services/live_trading_guard.py.bak_aads` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다",
-      "severity": "P2"
     }
   ],
   "unresolved": [
@@ -12392,73 +12401,73 @@
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 5728,
+      "lineno": 5743,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sessionId}/resume`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 5841,
+      "lineno": 5856,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/executions/${executionId}/events?last_event_id=${encodeURIComponent(replayLastEventId)}`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 7910,
+      "lineno": 7925,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/image/generate`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 8428,
+      "lineno": 8443,
       "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): fetchUrl"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 8753,
+      "lineno": 8768,
       "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): retry with backoff"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 9139,
+      "lineno": 9154,
       "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): resumeUrl"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 9580,
+      "lineno": 9595,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sid}/stop`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 9649,
+      "lineno": 9664,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/sessions/${sid}/stop`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 9742,
+      "lineno": 9757,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/messages/${msgId}`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 9777,
+      "lineno": 9792,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/messages/${msgId}`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 9848,
+      "lineno": 9863,
       "detail": "fetch() URL 해석 불가 — base 를 알 수 없는 변수로 시작 — `BASE_URL` 은 `./api` 에서 import 되는데 그 모듈이 스캔 범위 안에 없다: `${BASE_URL}/chat/messages/${msgId}/regenerate?mode=${encodeURIComponent(mode)}`"
     },
     {
       "kind": "FRONTEND_URL",
       "module": "/root/aads/aads-dashboard/src/app/chat/page.tsx",
-      "lineno": 10692,
+      "lineno": 10707,
       "detail": "fetch() URL 해석 불가 — URL 이 문자열/템플릿이 아님 (변수 또는 함수 결과): url.toString()"
     },
     {

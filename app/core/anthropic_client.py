@@ -49,6 +49,11 @@ _BG_FALLBACK_MODELS_ENV = [
     ).split(",")
     if m.strip()
 ]
+# AADS-204(2026-09-18): 배경 LLM 1순위 = Groq 무료 모델(input/output $0).
+# 종전 1순위 qwen-turbo(DashScope)는 계정 연체로 400 Access denied — 30일 8,255회
+# 전량 실패하고 claude-haiku 폴백으로 OAuth 정액 한도를 잠식했다.
+# 되돌릴 때는 LLM_BG_PRIMARY_MODEL=qwen-turbo 로 바꾸고 reload-api.sh 만 실행한다.
+_BG_PRIMARY_MODEL = os.getenv("LLM_BG_PRIMARY_MODEL", "groq-gpt-oss-120b")
 _CLAUDE_RETRY_BASE_SEC = 2.0
 _CLAUDE_RETRY_MAX_DELAY_SEC = 30.0
 _CLAUDE_RETRY_JITTER_SEC = 1.5
@@ -65,7 +70,7 @@ def _retry_delay(attempt: int, status_code: int | None = None) -> float:
     delay = min(base * (2 ** min(attempt, 6)), _CLAUDE_RETRY_MAX_DELAY_SEC)
     return delay + random.uniform(0, _CLAUDE_RETRY_JITTER_SEC)
 
-_bg_qwen_fail_streak: int = 0  # qwen-turbo 연속 실패 카운터 (AADS-204)
+_bg_primary_fail_streak: int = 0  # 배경 LLM 1순위 연속 실패 카운터 (AADS-204)
 
 
 # ── LiteLLM 응답 래퍼 (Anthropic Message 호환) ──────────────────────
@@ -507,36 +512,45 @@ async def call_background_llm(
     max_tokens: int = 1000,
     tenant_id: Optional[str] = None,
 ) -> str:
-    """배경 서비스용 LLM 호출 — qwen-turbo(DashScope) 1순위, claude-haiku 폴백.
+    """배경 서비스용 LLM 호출 — groq-gpt-oss-120b(무료) 1순위, claude-haiku 폴백.
 
     compaction, memory_manager, fact_extractor, experience_learner,
     quality_feedback_loop, self_evaluator, smart_search, code_reviewer 등
     OAuth 한도를 소비하지 않는 배경 작업에서 사용.
+    1순위 모델은 LLM_BG_PRIMARY_MODEL 로 바꿀 수 있다(_BG_PRIMARY_MODEL).
     """
-    global _bg_qwen_fail_streak
+    global _bg_primary_fail_streak
     if tenant_id:
         from app.services.tenant_usage_limits import check_tenant_usage_limit
 
         await check_tenant_usage_limit(tenant_id, operation="background_llm", projected_calls=1)
     t0 = time.time()
 
-    # 1순위: qwen-turbo (DashScope 직접)
+    # 1순위: _BG_PRIMARY_MODEL (기본 groq-gpt-oss-120b, LiteLLM 경유 / 무료)
+    # qwen* 로 되돌린 경우에만 DashScope 직접 경로를 탄다.
+    _primary = _BG_PRIMARY_MODEL
     try:
-        result = await _call_dashscope(prompt, "qwen-turbo", max_tokens, system or None)
+        if _primary.startswith("qwen"):
+            result = await _call_dashscope(prompt, _primary, max_tokens, system or None)
+        else:
+            result = await _call_litellm(prompt, _primary, max_tokens, system or None)
         if result:
-            _bg_qwen_fail_streak = 0
+            _bg_primary_fail_streak = 0
             await _bg_llm_log(
-                "background", "qwen-turbo", True,
+                "background", _primary, True,
                 latency_ms=int((time.time() - t0) * 1000),
                 tenant_id=tenant_id,
             )
             return result
     except Exception as e:
-        logger.warning("call_background_llm_qwen_failed: %s", str(e)[:80])
-        _bg_qwen_fail_streak += 1
-        await _bg_llm_log("background", "qwen-turbo", False, error_code="qwen_failed", tenant_id=tenant_id)
-        if _bg_qwen_fail_streak >= 3:  # qwen-turbo 조기 감지를 위해 3회로 낮춤 (AADS-204)
-            await _notify_bg_llm_alert(_bg_qwen_fail_streak)
+        logger.warning("call_background_llm_primary_failed: model=%s error=%s", _primary, str(e)[:80])
+        _bg_primary_fail_streak += 1
+        await _bg_llm_log(
+            "background", _primary, False,
+            error_code="bg_primary_failed", tenant_id=tenant_id,
+        )
+        if _bg_primary_fail_streak >= 3:  # 조기 감지를 위해 3회 (AADS-204)
+            await _notify_bg_llm_alert(_bg_primary_fail_streak, _primary)
 
     # 2순위: claude-haiku (OAuth 폴백)
     fallback = await call_llm_with_fallback(
@@ -577,16 +591,17 @@ async def _bg_llm_log(
         logger.debug("bg_llm_log_failed: %s", str(e)[:80])
 
 
-async def _notify_bg_llm_alert(streak: int) -> None:
-    """qwen-turbo 연속 실패 시 텔레그램 긴급알림."""
+async def _notify_bg_llm_alert(streak: int, model: str = "") -> None:
+    """배경 LLM 1순위 연속 실패 시 텔레그램 긴급알림."""
     try:
         from app.services.telegram_bot import get_telegram_bot
         bot = get_telegram_bot()
+        _model = model or _BG_PRIMARY_MODEL
         if bot and bot.is_ready:
             await bot.send_message(
-                f"\U0001f6a8 *qwen-turbo 연속 실패 ({streak}회)*\n"
-                f"Background LLM이 {streak}회 연속 실패했습니다.\n"
-                f"claude-haiku 폴백 중. DashScope API 상태 확인 필요. (AADS-204)"
+                f"\U0001f6a8 *배경 LLM 1순위 연속 실패 ({streak}회)*\n"
+                f"model={_model} 이 {streak}회 연속 실패했습니다.\n"
+                f"claude-haiku 폴백 중 — 프로바이더 상태 확인 필요. (AADS-204)"
             )
     except Exception as e:
         logger.debug("bg_llm_alert_failed: %s", str(e)[:80])

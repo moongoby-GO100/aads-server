@@ -127,3 +127,5 @@ def test_흐르는_버블이_없으면_옛_답변에_떨어지지_않는다():
     asyncio.run(_current_bubble_id(conn, "sess-1"))
     assert "created_at > now() - interval '15 minutes'" in conn.sql
     assert "COALESCE(intent, '') = 'streaming_placeholder'" in conn.sql
+
+
