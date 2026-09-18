@@ -3388,9 +3388,17 @@ async def _acquire_pw_context(
     browser_session_id: str = "",
     browser_work_key: str = "",
     url: str = "about:blank",
-    prefer_headless: bool = False,
+    prefer_headless: bool = True,
 ) -> Tuple[Any, Optional[str]]:
-    """Playwright 컨텍스트 싱글턴 취득. 실패 시 (None, 에러메시지)."""
+    """Playwright 컨텍스트 싱글턴 취득. 실패 시 (None, 에러메시지).
+
+    ``browser_session_id``/``browser_work_key``를 명시하지 않으면 서버
+    Playwright(headless)를 기본으로 쓴다 — PC Agent가 이미 전역 active
+    세션이어도 일반 사이트 조작이 거기로 딸려가지 않게 한다(정책:
+    "일반 사이트는 서버 Playwright 1순위, PC Agent는 로컬 PC 필수 작업만").
+    PC Agent를 쓰려면 호출마다 browser_session_id 또는 browser_work_key를
+    명시해야 한다.
+    """
     from app.browser_bridge.aads_adapter import acquire_browser_context
 
     return await acquire_browser_context(
@@ -4156,6 +4164,21 @@ async def tool_capture_screenshot(
     )
     if err:
         return err
+    if not browser_session_id and not capture_work_key:
+        route_used = "server_playwright"
+    else:
+        from app.browser_bridge.service import get_browser_bridge_service as _gbs_route
+
+        _route_session = (
+            _gbs_route().sessions.get(browser_session_id)
+            if browser_session_id
+            else _gbs_route().sessions.find_by_work_key(capture_work_key)
+        )
+        route_used = (
+            f"browser_bridge:{_route_session.endpoint.kind.value}"
+            if _route_session
+            else "browser_bridge:unresolved"
+        )
     cleanup_work_key = capture_work_key if close_on_complete and capture_work_key and not browser_session_id else ""
     cleanup_summary = ""
     try:
@@ -4215,9 +4238,11 @@ async def tool_capture_screenshot(
             result_message = f"[ERROR] 호스트에 스크린샷 저장 실패 (exit={proc.returncode})"
         else:
             image_url = f"https://aads.newtalk.kr/screenshots/{filename}"
-            result_message = f"스크린샷 저장 완료.\n\n![{url} 스크린샷]({image_url})"
+            result_message = (
+                f"스크린샷 저장 완료.\n\n![{url} 스크린샷]({image_url})\n\nroute_used: {route_used}"
+            )
     except Exception as e:
-        result_message = f"[ERROR] 스크린샷 캡처 실패: {e}"
+        result_message = f"[ERROR] 스크린샷 캡처 실패: {e}\n\nroute_used: {route_used}"
     finally:
         if cleanup_work_key:
             try:

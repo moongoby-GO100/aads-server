@@ -1,12 +1,28 @@
 """AADS-facing adapter around the reusable Browser Bridge service."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from typing import Any, Optional
 
 from .service import get_browser_bridge_service
 
 logger = logging.getLogger(__name__)
+
+# 서버 Playwright(headless) 경로가 막히면(브라우저 바이너리 깨짐 등) 빨리
+# 실패해야 한다. 여기서 막히면 바깥쪽 도구 타임아웃(최대 210s)을 통째로
+# 태우고서야 에러가 드러난다 — AADS-BROWSER-SERVER-PATH-401-P1.
+_HEADLESS_LAUNCH_TIMEOUT_SECONDS = float(
+    os.getenv("AADS_BROWSER_HEADLESS_LAUNCH_TIMEOUT_SECONDS", "25")
+)
+
+
+async def _headless_context_with_timeout(service: Any) -> Any:
+    return await asyncio.wait_for(
+        service._headless_fallback_context(),
+        timeout=_HEADLESS_LAUNCH_TIMEOUT_SECONDS,
+    )
 
 
 async def acquire_browser_context(
@@ -20,9 +36,16 @@ async def acquire_browser_context(
     # active LOCAL_AGENT/CDP session become its implicit execution target.
     if prefer_headless and not browser_session_id and not browser_work_key:
         try:
-            return await service._headless_fallback_context(), None
+            return await _headless_context_with_timeout(service), None
+        except asyncio.TimeoutError:
+            return None, (
+                "[브라우저 도구 사용 불가] server_playwright(headless) 초기화가 "
+                f"{_HEADLESS_LAUNCH_TIMEOUT_SECONDS:.0f}s 안에 끝나지 않았습니다. "
+                "PC Agent로 조용히 전환하지 않습니다 — 필요하면 browser_work_key로 "
+                "PC Agent 세션을 명시적으로 지정하세요."
+            )
         except Exception as exc:
-            return None, f"[브라우저 도구 사용 불가] {exc}"
+            return None, f"[브라우저 도구 사용 불가] server_playwright(headless) 초기화 실패: {exc}"
     if browser_work_key and not browser_session_id:
         try:
             session = await service.ensure_work_session(
@@ -40,7 +63,13 @@ async def acquire_browser_context(
             # outright. Use a fresh server-side headless context explicitly;
             # session_id=None could otherwise select a stale active session.
             try:
-                return await service._headless_fallback_context(), None
+                return await _headless_context_with_timeout(service), None
+            except asyncio.TimeoutError:
+                return None, (
+                    f"[브라우저 업무 세션 확보 실패] {exc}; "
+                    f"headless fallback도 {_HEADLESS_LAUNCH_TIMEOUT_SECONDS:.0f}s 안에 "
+                    "끝나지 않았습니다"
+                )
             except Exception as fallback_exc:
                 return None, (
                     f"[브라우저 업무 세션 확보 실패] {exc}; "
