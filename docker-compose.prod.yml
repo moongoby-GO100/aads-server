@@ -108,6 +108,10 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - BRAVE_API_KEY=${BRAVE_API_KEY}
       - DOCKER_HOST=tcp://aads-socket-proxy:2375
+      # AI 검수 모델 1회 시도 한도. 기본 45초는 40KB diff 에서 경계선이다 —
+      # 2026-09-19 runner-1b282742 가 sonnet-5·haiku·groq 3종 모두 45초에 잘려
+      # REVIEW_MODEL_NO_RESPONSE → review_hold 로 큐 전체가 멈췄다.
+      - REVIEW_LLM_TIMEOUT_SEC=${REVIEW_LLM_TIMEOUT_SEC:-90}
       - AADS_CONTAINER_NAME=aads-server
       - AADS_PUBLIC_PORT=8100
       - AADS_RELAY_DESIRED_MAX_CONCURRENT=${CLAUDE_RELAY_MAX_CONCURRENT:-15}
@@ -210,6 +214,9 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - BRAVE_API_KEY=${BRAVE_API_KEY}
       - DOCKER_HOST=tcp://aads-socket-proxy:2375
+      # blue 슬롯과 같은 값을 유지한다 — 한쪽만 바꾸면 슬롯이 바뀔 때마다
+      # 검수 한도가 달라져 재현되지 않는 review_hold 가 생긴다.
+      - REVIEW_LLM_TIMEOUT_SEC=${REVIEW_LLM_TIMEOUT_SEC:-90}
       - AADS_CONTAINER_NAME=aads-server-green
       - AADS_PUBLIC_PORT=8102
       - AADS_RELAY_DESIRED_MAX_CONCURRENT=${CLAUDE_RELAY_MAX_CONCURRENT:-15}
