@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-09-18T15:39:22.151952+09:00",
-  "root": "/tmp/aads-wt-runner-e749bbbc",
+  "generated_at": "2026-09-18T17:00:58.138771+09:00",
+  "root": "/root/aads/aads-server",
   "api_roots": [
     "/api/v1/fact-check",
     "/api/v1/documents",
@@ -9,11 +9,11 @@
     "/api/v1"
   ],
   "stats": {
-    "app_py_files": 396,
+    "app_py_files": 400,
     "router_dir_files": 91,
     "router_modules": 85,
     "include_router_calls": 88,
-    "mounted_routes": 936,
+    "mounted_routes": 937,
     "namespaces": 85,
     "frontend_files": 237,
     "frontend_calls_resolved": 345,
@@ -2289,7 +2289,7 @@
     {
       "id": "app/api/ohvis_console.py",
       "kind": "router_module",
-      "routes": 3
+      "routes": 4
     },
     {
       "id": "app/api/ohvis_harness.py",
@@ -11638,25 +11638,25 @@
     {
       "kind": "SQL_TABLE",
       "module": "app/services/yeoljeong_finance_service.py",
-      "lineno": 5359,
+      "lineno": 5363,
       "detail": "테이블 이름이 런타임 보간이라 확정 불가"
     },
     {
       "kind": "SQL_TABLE",
       "module": "app/services/yeoljeong_finance_service.py",
-      "lineno": 716,
+      "lineno": 720,
       "detail": "테이블 이름이 런타임 보간이라 확정 불가"
     },
     {
       "kind": "SQL_TABLE",
       "module": "app/services/yeoljeong_finance_service.py",
-      "lineno": 1005,
+      "lineno": 1009,
       "detail": "테이블 이름이 런타임 보간이라 확정 불가"
     },
     {
       "kind": "SQL_TABLE",
       "module": "app/services/yeoljeong_finance_service.py",
-      "lineno": 762,
+      "lineno": 766,
       "detail": "테이블 이름이 런타임 보간이라 확정 불가"
     },
     {
