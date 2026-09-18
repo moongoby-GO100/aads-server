@@ -80,7 +80,12 @@ ROOTS = [
     ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/docs/technical", "GO100", "GO100 기술문서(contabo14)"),
     ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/docs/plans", "GO100", "GO100 기획문서(contabo14)"),
     ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/docs/operations", "GO100", "GO100 운영문서(contabo14)"),
-    ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/docs", "KIS", "KIS 문서(contabo14)"),
+    # kis-autotrade-v4 는 이름과 달리 GO100 의 워크디렉터리다. docs/ 879개 중
+    # 파일명이 GO100 로 시작하는 것이 213개, KIS 로 시작하는 것은 2개뿐이고
+    # 상위 문서(ARCHITECTURE.md 등)도 전부 GO100 내용이다. 그래서 docs/ 전체를
+    # GO100 으로 본다. 실제 KIS 문서는 kis-api-portal/ 아래에만 있다.
+    ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/docs/kis-api-portal", "KIS", "KIS 문서(contabo14)"),
+    ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/docs", "GO100", "GO100 문서(contabo14)"),
     ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/report", "GO100", "GO100 리포트(contabo14)"),
     ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/reports", "GO100", "GO100 리포트(contabo14)"),
     ("/root/aads/_remote_docs/cafe24_114/shortflow/docs", "SF", "SF 문서(cafe24_114)"),
