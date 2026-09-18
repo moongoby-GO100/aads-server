@@ -1,0 +1,167 @@
+graph LR
+  classDef dbl fill:#ffd7d7,stroke:#c00,stroke-width:2px;
+  n_backend_app_main_py["backend/app/main.py"]
+  n_ns_api_v1_auth(["/api/v1/auth"])
+  n_backend_app_api_v1_auth_router_py["backend/app/api/v1/auth_router.py"]
+  n_backend_app_api_v1_auth_router_py --> n_ns_api_v1_auth
+  n_backend_app_api_v1_social_auth_router_py["backend/app/api/v1/social_auth_router.py"]
+  n_backend_app_api_v1_social_auth_router_py --> n_ns_api_v1_auth
+  n_ns_api_v1_dashboard_summary(["/api/v1/dashboard/summary"])
+  n_backend_app_api_v1_dashboard_router_py["backend/app/api/v1/dashboard_router.py"]
+  n_backend_app_api_v1_dashboard_router_py --> n_ns_api_v1_dashboard_summary
+  n_backend_app_routers_v4_compat_py["backend/app/routers/v4_compat.py"]
+  n_backend_app_routers_v4_compat_py --> n_ns_api_v1_dashboard_summary
+  n_ns_api_v1_reports(["/api/v1/reports"])
+  n_backend_app_routers_report_router_py["backend/app/routers/report_router.py"]
+  n_backend_app_routers_report_router_py --> n_ns_api_v1_reports
+  n_backend_app_routers_v4_compat_py["backend/app/routers/v4_compat.py"]
+  n_backend_app_routers_v4_compat_py --> n_ns_api_v1_reports
+  n_ns_api_v4_backtest(["/api/v4/backtest"])
+  n_backend_app_api_v4_backtest_api_py["backend/app/api/v4_backtest_api.py"]
+  n_backend_app_api_v4_backtest_api_py --> n_ns_api_v4_backtest
+  n_backend_app_routers_v4_backtest_py["backend/app/routers/v4_backtest.py"]
+  n_backend_app_routers_v4_backtest_py --> n_ns_api_v4_backtest
+  n_ns_api_v4_dashboard(["/api/v4/dashboard"])
+  n_backend_app_api_v4_position_api_py["backend/app/api/v4_position_api.py"]
+  n_backend_app_api_v4_position_api_py --> n_ns_api_v4_dashboard
+  n_backend_app_routers_v4_dashboard_py["backend/app/routers/v4_dashboard.py"]
+  n_backend_app_routers_v4_dashboard_py --> n_ns_api_v4_dashboard
+  n_ns_api_v4_fund(["/api/v4/fund"])
+  n_backend_app_api_v4_position_api_py["backend/app/api/v4_position_api.py"]
+  n_backend_app_api_v4_position_api_py --> n_ns_api_v4_fund
+  n_backend_app_routers_fund_py["backend/app/routers/fund.py"]
+  n_backend_app_routers_fund_py --> n_ns_api_v4_fund
+  n_ns_api_v4_positions(["/api/v4/positions"])
+  n_backend_app_api_v4_position_api_py["backend/app/api/v4_position_api.py"]
+  n_backend_app_api_v4_position_api_py --> n_ns_api_v4_positions
+  n_backend_app_routers_v4_trading_py["backend/app/routers/v4_trading.py"]
+  n_backend_app_routers_v4_trading_py --> n_ns_api_v4_positions
+  n_ns_api_v4_system(["/api/v4/system"])
+  n_backend_app_routers_system_py["backend/app/routers/system.py"]
+  n_backend_app_routers_system_py --> n_ns_api_v4_system
+  n_backend_app_routers_v4_system_py["backend/app/routers/v4_system.py"]
+  n_backend_app_routers_v4_system_py --> n_ns_api_v4_system
+  n_ns_api_v4_universe(["/api/v4/universe"])
+  n_backend_app_routers_universe_py["backend/app/routers/universe.py"]
+  n_backend_app_routers_universe_py --> n_ns_api_v4_universe
+  n_backend_app_routers_v4_backtest_py["backend/app/routers/v4_backtest.py"]
+  n_backend_app_routers_v4_backtest_py --> n_ns_api_v4_universe
+  n_ns_account_snapshots(["/account-snapshots"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_account_snapshots
+  n_ns_activate_model(["/activate-model"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_activate_model
+  n_ns_ai_pipeline(["/ai-pipeline"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_ai_pipeline
+  n_ns_api_go100_admin_account_snapshots(["/api/go100/admin/account-snapshots"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_api_go100_admin_account_snapshots
+  n_ns_api_go100_admin_activate_model(["/api/go100/admin/activate-model"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_api_go100_admin_activate_model
+  n_ns_api_go100_admin_ai_pipeline(["/api/go100/admin/ai-pipeline"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_api_go100_admin_ai_pipeline
+  n_ns_api_go100_admin_api(["/api/go100/admin/api"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_api_go100_admin_api
+  n_ns_api_go100_admin_data_status(["/api/go100/admin/data-status"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_api_go100_admin_data_status
+  n_ns_api_go100_admin_errors(["/api/go100/admin/errors"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_api_go100_admin_errors
+  n_ns_api_go100_admin_feature_status(["/api/go100/admin/feature-status"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_api_go100_admin_feature_status
+  n_ns_api_go100_admin_model_status(["/api/go100/admin/model-status"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_api_go100_admin_model_status
+  n_ns_api_go100_admin_pipeline_health(["/api/go100/admin/pipeline-health"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_api_go100_admin_pipeline_health
+  n_ns_api_go100_admin_signal_timeline(["/api/go100/admin/signal-timeline"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_api_go100_admin_signal_timeline
+  n_ns_api_go100_admin_trade_detail(["/api/go100/admin/trade-detail"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_api_go100_admin_trade_detail
+  n_ns_api_go100_admin_trading_status(["/api/go100/admin/trading-status"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_api_go100_admin_trading_status
+  n_ns_api_go100_admin_users(["/api/go100/admin/users"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_api_go100_admin_users
+  n_ns_api_go100_admin_war_room(["/api/go100/admin/war-room"])
+  n_backend_app_api_v1_go100_admin_router_py["backend/app/api/v1/go100_admin_router.py"]
+  n_backend_app_api_v1_go100_admin_router_py --> n_ns_api_go100_admin_war_room
+  n_ns_api_go100_analyst_report(["/api/go100/analyst-report"])
+  n_backend_app_routers_go100_analyst_report_external_router_py["backend/app/routers/go100/analyst_report_external_router.py"]
+  n_backend_app_routers_go100_analyst_report_external_router_py --> n_ns_api_go100_analyst_report
+  n_ns_api_go100_commander_agent(["/api/go100/commander/agent"])
+  n_backend_app_api_v1_go100_commander_router_py["backend/app/api/v1/go100_commander_router.py"]
+  n_backend_app_api_v1_go100_commander_router_py --> n_ns_api_go100_commander_agent
+  n_ns_api_go100_commander_critiques(["/api/go100/commander/critiques"])
+  n_backend_app_api_v1_go100_commander_router_py["backend/app/api/v1/go100_commander_router.py"]
+  n_backend_app_api_v1_go100_commander_router_py --> n_ns_api_go100_commander_critiques
+  n_ns_api_go100_commander_debates(["/api/go100/commander/debates"])
+  n_backend_app_api_v1_go100_commander_router_py["backend/app/api/v1/go100_commander_router.py"]
+  n_backend_app_api_v1_go100_commander_router_py --> n_ns_api_go100_commander_debates
+  n_ns_api_go100_commander_org_chart(["/api/go100/commander/org-chart"])
+  n_backend_app_api_v1_go100_commander_router_py["backend/app/api/v1/go100_commander_router.py"]
+  n_backend_app_api_v1_go100_commander_router_py --> n_ns_api_go100_commander_org_chart
+  n_ns_api_go100_commander_performance(["/api/go100/commander/performance"])
+  n_backend_app_api_v1_go100_commander_router_py["backend/app/api/v1/go100_commander_router.py"]
+  n_backend_app_api_v1_go100_commander_router_py --> n_ns_api_go100_commander_performance
+  n_ns_api_go100_etf(["/api/go100/etf"])
+  n_backend_app_routers_go100_etf_router_py["backend/app/routers/go100/etf_router.py"]
+  n_backend_app_routers_go100_etf_router_py --> n_ns_api_go100_etf
+  n_ns_api_go100_limitup_tracker(["/api/go100/limitup-tracker"])
+  n_backend_app_routers_go100_limitup_tracker_router_py["backend/app/routers/go100/limitup_tracker_router.py"]
+  n_backend_app_routers_go100_limitup_tracker_router_py --> n_ns_api_go100_limitup_tracker
+  n_ns_api_go100_momentum(["/api/go100/momentum"])
+  n_backend_app_routers_go100_momentum_router_py["backend/app/routers/go100/momentum_router.py"]
+  n_backend_app_routers_go100_momentum_router_py --> n_ns_api_go100_momentum
+  n_ns_api_go100_pdf(["/api/go100/pdf"])
+  n_backend_app_routers_go100_pdf_router_py["backend/app/routers/go100/pdf_router.py"]
+  n_backend_app_routers_go100_pdf_router_py --> n_ns_api_go100_pdf
+  n_ns_api_go100_trade(["/api/go100/trade"])
+  n_backend_app_routers_go100_go100_trade_router_py["backend/app/routers/go100/go100_trade_router.py"]
+  n_backend_app_routers_go100_go100_trade_router_py --> n_ns_api_go100_trade
+  n_ns_api_go100_wave_analysis(["/api/go100/wave-analysis"])
+  n_backend_app_routers_go100_wave_analysis_router_py["backend/app/routers/go100/wave_analysis_router.py"]
+  n_backend_app_routers_go100_wave_analysis_router_py --> n_ns_api_go100_wave_analysis
+  n_ns_api_go100_wave_engine(["/api/go100/wave-engine"])
+  n_backend_app_routers_go100_wave_engine_health_router_py["backend/app/routers/go100/wave_engine_health_router.py"]
+  n_backend_app_routers_go100_wave_engine_health_router_py --> n_ns_api_go100_wave_engine
+  n_ns_api_go100_wave_signals(["/api/go100/wave-signals"])
+  n_backend_app_routers_go100_wave_signals_router_py["backend/app/routers/go100/wave_signals_router.py"]
+  n_backend_app_routers_go100_wave_signals_router_py --> n_ns_api_go100_wave_signals
+  n_backend_app_main_py --> n_backend_app_api_v1_auth_router_py
+  n_backend_app_main_py --> n_backend_app_api_v1_dashboard_router_py
+  n_backend_app_main_py --> n_backend_app_api_v1_go100_admin_router_py
+  n_backend_app_main_py --> n_backend_app_api_v1_go100_commander_router_py
+  n_backend_app_main_py --> n_backend_app_api_v1_social_auth_router_py
+  n_backend_app_main_py --> n_backend_app_api_v4_backtest_api_py
+  n_backend_app_main_py --> n_backend_app_api_v4_position_api_py
+  n_backend_app_main_py --> n_backend_app_routers_fund_py
+  n_backend_app_main_py --> n_backend_app_routers_go100_analyst_report_external_router_py
+  n_backend_app_main_py --> n_backend_app_routers_go100_etf_router_py
+  n_backend_app_main_py --> n_backend_app_routers_go100_go100_trade_router_py
+  n_backend_app_main_py --> n_backend_app_routers_go100_limitup_tracker_router_py
+  n_backend_app_main_py --> n_backend_app_routers_go100_momentum_router_py
+  n_backend_app_main_py --> n_backend_app_routers_go100_pdf_router_py
+  n_backend_app_main_py --> n_backend_app_routers_go100_wave_analysis_router_py
+  n_backend_app_main_py --> n_backend_app_routers_go100_wave_engine_health_router_py
+  n_backend_app_main_py --> n_backend_app_routers_go100_wave_signals_router_py
+  n_backend_app_main_py --> n_backend_app_routers_report_router_py
+  n_backend_app_main_py --> n_backend_app_routers_system_py
+  n_backend_app_main_py --> n_backend_app_routers_universe_py
+  n_backend_app_main_py --> n_backend_app_routers_v4_backtest_py
+  n_backend_app_main_py --> n_backend_app_routers_v4_compat_py
+  n_backend_app_main_py --> n_backend_app_routers_v4_dashboard_py
+  n_backend_app_main_py --> n_backend_app_routers_v4_system_py
+  n_backend_app_main_py --> n_backend_app_routers_v4_trading_py
+  %% 네임스페이스 136개 중 상위 40개만 표시

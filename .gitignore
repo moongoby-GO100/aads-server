@@ -115,3 +115,7 @@ uploads/
 backups/**/*.sql
 backups/**/*.sql.gz
 backups/**/*.dump
+
+# AAG GO100 그래프 — 생성 산출물이고, 노드 key(테이블명)가 gitleaks generic-api-key
+# 오탐을 내 커밋이 막힌다(2026-09-19). scripts/aag_go100_refresh.sh 가 6시간마다 재생성한다.
+reports/aag/go100-graph.json

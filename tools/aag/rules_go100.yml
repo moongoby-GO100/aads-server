@@ -1,0 +1,137 @@
+# AAG L1/L2 — GO100(kis-autotrade-v4) 아키텍처 추출 규칙
+#
+# 정본은 이 파일이다. 스캐너(scan_aads.py)는 값을 하드코딩하지 않고 여기서 읽는다.
+# 적용 대상: contabo14(5.104.86.14) /root/kis-autotrade-v4
+# 실행:
+#   python3 /root/aag-go100/scan_aads.py \
+#       --root /root/kis-autotrade-v4 \
+#       --rules /root/aag-go100/rules_go100.yml \
+#       --out-dir /root/aag-go100/out
+#
+# 저장소 안에 산출물을 쓰지 않는다 — 러너의 UNTRACKED_IGNORED_RESCUE 가
+# 추적되지 않은 파일을 남의 커밋으로 끌어가는 경로가 있어서다(2026-09-19 실측).
+
+version: 1
+
+# ── 스캔 범위 ────────────────────────────────────────────────────────────
+scan:
+  # 라우터 모듈이 사는 디렉터리. DUP_MODULE 은 이 목록 사이의 파일명 충돌을 본다.
+  router_dirs:
+    - backend/app/api
+    - backend/app/routers
+
+  # 앱 코드 전체(SQL 추출 대상).
+  app_roots:
+    - backend/app
+
+  # STALE_BACKUP 을 볼 범위. data/logs/backup 류는 아래 exclude 로 빠진다.
+  backup_roots:
+    - backend/app
+    - backend/scripts
+    - backend/migrations
+    - scripts
+    - migrations
+    - config
+    - configs
+    - deploy
+    - systemd
+
+  # 스키마 정의(CREATE TABLE)를 찾을 곳.
+  schema_roots:
+    - migrations
+    - backend/migrations
+    - scripts
+    - backend/scripts
+    - deploy
+
+  exclude_dir_names:
+    - __pycache__
+    - node_modules
+    - .git
+    - .next
+    - venv
+    - .venv
+    - backup
+    - backups
+    - ops-backups
+    - docs_cache
+    - test-results
+    - artifacts
+    - data
+    - logs
+    - tmp
+    - patches
+    - review
+
+# ── 엔트리포인트 ────────────────────────────────────────────────────────
+# primary 에 마운트되지 않은 라우터만 ORPHAN_ROUTER 후보다.
+entrypoints:
+  primary: backend/app/main.py
+  secondary: []
+
+# ── 프런트엔드 ──────────────────────────────────────────────────────────
+# GO100 대시보드는 Next/TS 가 아니라 정적 JS(frontend/dashboard/app.js) 다.
+# 1차 적용에서는 프런트 계약(PATH_DRIFT/ROUTE_MISSING) 검사를 끄고 백엔드
+# 구조만 본다. roots 를 비워 두면 zero_target_guard 가 "설정됐는데 0파일"
+# 오탐을 내지 않는다. JS 계약 검사는 별도 규칙으로 확장한다.
+frontend:
+  roots: []
+  extensions: [".js"]
+  base_env_names: []
+  fallback_base: ""
+  internal_hosts:
+    - localhost
+    - 127.0.0.1
+    - 5.104.86.14
+  call_names:
+    - fetch
+    - EventSource
+  path_helpers: {}
+  path_aliases: {}
+
+# ── STALE_BACKUP 판정 ───────────────────────────────────────────────────
+backup_patterns:
+  - '\.bak$'
+  - '\.bak[._-].*$'
+  - '\.backup$'
+  - '\.orig$'
+  - '\.old$'
+  - '\.save$'
+  - '\.disabled$'
+  - '~$'
+  - '\.bak_.*$'
+  - '_backup\.[A-Za-z0-9]+$'
+  - '\.[A-Za-z0-9]+\.bak\..*$'
+
+# ── SQL 테이블 추출 ─────────────────────────────────────────────────────
+sql:
+  ignore_tables:
+    - pg_catalog
+    - information_schema
+    - pg_namespace
+    - pg_proc
+    - pg_class
+    - pg_type
+    - pg_indexes
+    - pg_stat_activity
+    - pg_tables
+  # 확인한 것만 넣는다. 추측으로 채우면 진짜 결함이 가려진다 (R-ERRBOOK).
+  known_external_tables: []
+
+# ── 규칙 심각도 ─────────────────────────────────────────────────────────
+severity:
+  DUP_MODULE: P1
+  DOUBLE_MOUNT: P1
+  ROUTE_SHADOWED: P0
+  ORPHAN_ROUTER: P2
+  TABLE_NO_MODEL: P1
+  PATH_DRIFT: P1
+  ROUTE_MISSING: P0
+  STALE_BACKUP: P2
+
+# ── 출력 ────────────────────────────────────────────────────────────────
+output:
+  graph_json: reports/aag/go100-graph.json
+  mermaid: reports/aag/go100-arch.mmd
+  findings_md: reports/aag/go100-findings.md
+  mermaid_max_namespaces: 40

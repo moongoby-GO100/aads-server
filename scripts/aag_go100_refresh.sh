@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════════
+# AAG GO100 스냅샷 갱신 (contabo116 에서 실행 → contabo14 스캔 → 결과 회수)
+#
+# 왜 116 에서 도는가: 116→14 SSH 는 이미 열려 있고(claude-lease-push 가 쓴다),
+# 반대 방향은 보장되지 않는다. 스캐너 정본은 이 저장소의 tools/aag 이므로
+# 매 실행마다 14 로 밀어넣어 사본이 낡지 않게 한다.
+#
+# 산출물은 GO100 저장소 안에 쓰지 않는다 — 러너의 UNTRACKED_IGNORED_RESCUE 가
+# 추적되지 않은 파일을 남의 커밋으로 끌어가는 경로가 있다(2026-09-19 실측).
+#
+# 실행: cron (6시간 주기). 수동 1회 실행도 같은 명령이다.
+#   bash /root/aads/aads-server/scripts/aag_go100_refresh.sh
+# ═══════════════════════════════════════════════════════════════════════
+set -eo pipefail
+
+REMOTE="${AAG_GO100_REMOTE:-root@5.104.86.14}"
+REMOTE_DIR="${AAG_GO100_REMOTE_DIR:-/root/aag-go100}"
+REPO_DIR="${AAG_GO100_REPO_DIR:-/root/aads/aads-server}"
+TARGET_ROOT="${AAG_GO100_TARGET_ROOT:-/root/kis-autotrade-v4}"
+OUT_DIR="${REPO_DIR}/reports/aag"
+LOG="${AAG_GO100_LOG:-/var/log/aads-pipeline/aag-go100.log}"
+SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=15)
+
+mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S %Z')] $*" | tee -a "$LOG"; }
+
+# 중복 실행 방지 — 스캔이 주기보다 길어져도 겹치지 않는다.
+exec 9>"/tmp/aag-go100-refresh.lock"
+if ! flock -n 9; then
+    log "already running — skip"
+    exit 0
+fi
+
+log "START remote=${REMOTE} target=${TARGET_ROOT}"
+
+# 1) 스캐너·규칙 정본을 원격으로 동기화 (사본 드리프트 방지)
+ssh "${SSH_OPTS[@]}" "$REMOTE" "mkdir -p ${REMOTE_DIR}/out"
+scp "${SSH_OPTS[@]}" -q \
+    "${REPO_DIR}/tools/aag/scan_aads.py" \
+    "${REPO_DIR}/tools/aag/brief.py" \
+    "${REPO_DIR}/tools/aag/rules_go100.yml" \
+    "${REMOTE}:${REMOTE_DIR}/"
+
+# 2) 원격 스캔. 시간 상한을 반드시 건다 (R-BG).
+if ! ssh "${SSH_OPTS[@]}" "$REMOTE" \
+        "cd ${REMOTE_DIR} && timeout 900 python3 scan_aads.py --root ${TARGET_ROOT} --rules ${REMOTE_DIR}/rules_go100.yml --out-dir ${REMOTE_DIR}/out --json" \
+        > /tmp/aag-go100-scan.json 2>/tmp/aag-go100-scan.err; then
+    log "SCAN_FAILED — $(tail -3 /tmp/aag-go100-scan.err | tr '\n' ' ')"
+    exit 1
+fi
+
+# 3) 산출물 회수. 세 파일이 모두 와야 성공으로 본다.
+scp "${SSH_OPTS[@]}" -q \
+    "${REMOTE}:${REMOTE_DIR}/out/go100-graph.json" \
+    "${REMOTE}:${REMOTE_DIR}/out/go100-findings.md" \
+    "${REMOTE}:${REMOTE_DIR}/out/go100-arch.mmd" \
+    "${OUT_DIR}/"
+
+for f in go100-graph.json go100-findings.md go100-arch.mmd; do
+    [[ -s "${OUT_DIR}/${f}" ]] || { log "MISSING_ARTIFACT ${f}"; exit 1; }
+done
+
+summary=$(python3 -c "
+import json,collections,sys
+g=json.load(open('${OUT_DIR}/go100-graph.json'))
+c=collections.Counter(f.get('severity') for f in g['findings'])
+print('generated=%s findings=%d %s routes=%s' % (
+    g['generated_at'], len(g['findings']),
+    ' '.join('%s=%d' % kv for kv in sorted(c.items())),
+    g['stats'].get('mounted_routes')))
+" 2>/dev/null || echo "summary_unavailable")
+
+log "DONE ${summary}"
