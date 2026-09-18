@@ -11,6 +11,7 @@
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -311,3 +312,141 @@ def test_runner_brief_condition_is_project_generic():
     assert "-f \"$main_workdir/tools/aag/brief.py\"" in block
     assert 'cd "$main_workdir"' in block
     assert '--project "$project"' in block
+
+
+# ── 리더 호스트 공용화 (AADS-AAG-BRIEF-003) ──────────────────────────────
+#
+# 아래 테스트들은 pipeline-runner.sh 의 브리프 블록을 텍스트로 잘라 실제 bash 로
+# 실행한다("경로 결정 로직" 검증). brief.py 대역은 인자를 마커 파일에 기록하는
+# 가짜 python3 로 갈음해 3957행짜리 러너 전체를 띄우지 않는다.
+
+
+def _extract_brief_block() -> str:
+    """실행 가능한 형태로 자른다 — 주석 줄 중간이 아니라 줄 시작부터."""
+    src = RUNNER.read_text(encoding="utf-8")
+    marker = src.index("AAG 착수 브리프")
+    start = src.rfind("\n", 0, marker) + 1
+    end = src.index("H7:", marker)
+    return src[start:end]
+
+
+def _write_fake_python3(bin_dir: Path, marker: Path) -> None:
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    stub = bin_dir / "python3"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf %s "$1" > "{marker}"\n'
+        'echo "- stub brief line"\n',
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+
+
+def _run_wiring(tmp_path, main_workdir, *, aag_brief_bin=None, fake_bin_dir=None,
+                 instruction="app/api/chat.py 를 고쳐라", project="ACCT"):
+    block = _extract_brief_block()
+    script = f"""
+set -uo pipefail
+log() {{ :; }}
+record_runner_event() {{ :; }}
+run_block() {{
+{block}
+printf 'BIN=[%s]\\nSRC=[%s]\\nOUT=[%s]\\n' "$aag_brief_bin" "$aag_brief_source" "${{aag_out:-}}"
+}}
+ARTIFACT_DIR="{tmp_path}"
+job_id="testjob"
+project="{project}"
+safe_instruction="{instruction}"
+current_model="model"
+job_size="S"
+main_workdir="{main_workdir}"
+run_block
+"""
+    env = dict(os.environ)
+    if fake_bin_dir is not None:
+        env["PATH"] = f"{fake_bin_dir}:{env['PATH']}"
+    if aag_brief_bin is not None:
+        env["AAG_BRIEF_BIN"] = str(aag_brief_bin)
+    else:
+        env.pop("AAG_BRIEF_BIN", None)
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                           timeout=30, env=env)
+
+
+def test_runner_prefers_repo_copy_when_present(tmp_path):
+    """저장소본이 있으면 호스트 공용 사본(AAG_BRIEF_BIN)보다 우선한다."""
+    main_workdir = tmp_path / "repo"
+    (main_workdir / "tools" / "aag").mkdir(parents=True)
+    repo_brief = main_workdir / "tools" / "aag" / "brief.py"
+    repo_brief.write_text("# repo stub", encoding="utf-8")
+    host_brief = tmp_path / "host-aag-brief.py"
+    host_brief.write_text("# host stub", encoding="utf-8")
+
+    bin_dir = tmp_path / "bin"
+    marker = tmp_path / "invoked.marker"
+    _write_fake_python3(bin_dir, marker)
+
+    res = _run_wiring(tmp_path, main_workdir, aag_brief_bin=host_brief, fake_bin_dir=bin_dir)
+
+    assert res.returncode == 0, res.stderr
+    assert f"BIN=[{repo_brief}]" in res.stdout
+    assert "SRC=[repo]" in res.stdout
+    assert marker.read_text(encoding="utf-8") == str(repo_brief)
+
+
+def test_runner_falls_back_to_host_copy_when_repo_copy_missing(tmp_path):
+    """저장소본이 없으면 AAG_BRIEF_BIN(호스트 공용 사본)을 쓴다."""
+    main_workdir = tmp_path / "repo"
+    main_workdir.mkdir()
+    host_brief = tmp_path / "host-aag-brief.py"
+    host_brief.write_text("# host stub", encoding="utf-8")
+
+    bin_dir = tmp_path / "bin"
+    marker = tmp_path / "invoked.marker"
+    _write_fake_python3(bin_dir, marker)
+
+    res = _run_wiring(tmp_path, main_workdir, aag_brief_bin=host_brief, fake_bin_dir=bin_dir)
+
+    assert res.returncode == 0, res.stderr
+    assert f"BIN=[{host_brief}]" in res.stdout
+    assert "SRC=[host]" in res.stdout
+    assert marker.read_text(encoding="utf-8") == str(host_brief)
+
+
+def test_runner_brief_noop_when_neither_copy_exists(tmp_path):
+    """둘 다 없으면 브리프 블록은 아무것도 하지 않는다 — python3 도 호출되지 않는다."""
+    main_workdir = tmp_path / "repo"
+    main_workdir.mkdir()
+    missing_host_bin = tmp_path / "does-not-exist.py"
+
+    bin_dir = tmp_path / "bin"
+    marker = tmp_path / "invoked.marker"
+    _write_fake_python3(bin_dir, marker)
+
+    res = _run_wiring(tmp_path, main_workdir, aag_brief_bin=missing_host_bin, fake_bin_dir=bin_dir)
+
+    assert res.returncode == 0, res.stderr
+    assert "BIN=[]" in res.stdout
+    assert "SRC=[]" in res.stdout
+    assert "OUT=[]" in res.stdout
+    assert not marker.exists()
+
+
+def test_runner_renders_acct_brief_from_host_copy_only(tmp_path):
+    """저장소에 brief.py 가 없어도 호스트 공용 사본만으로 ACCT 브리프가 실제 렌더된다."""
+    main_workdir = tmp_path / "repo"
+    graph_dir = main_workdir / "reports" / "aag"
+    graph_dir.mkdir(parents=True)
+    (graph_dir / "acct-graph.json").write_text(
+        json.dumps(_graph(), ensure_ascii=False), encoding="utf-8")
+
+    host_brief = tmp_path / "host" / "aag-brief.py"
+    host_brief.parent.mkdir(parents=True)
+    host_brief.write_text(BRIEF.read_text(encoding="utf-8"), encoding="utf-8")
+
+    res = _run_wiring(tmp_path, main_workdir, aag_brief_bin=host_brief)
+
+    assert res.returncode == 0, res.stderr
+    assert "SRC=[host]" in res.stdout
+    assert "[AAG 착수 브리프 — ACCT]" in res.stdout
+    assert "app/api/chat.py" in res.stdout

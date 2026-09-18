@@ -218,6 +218,12 @@ sync_one_target() {
         return "$contract_status"
     fi
 
+    # AAG 브리프 리더(호스트 공용, AADS-AAG-BRIEF-003) — subprocess 로 매 job 마다 fresh 실행되므로
+    # 갱신에 재시작이 필요 없다(changed 에 반영하지 않는다). brief.py 는 프로젝트 저장소마다 복제하지 않는다.
+    local aag_brief_status=0
+    sync_remote_file_if_changed "$name" "$host" "${REPO_ROOT}/tools/aag/brief.py" "$(dirname "$remote_runner")/aag-brief.py" "0644" || aag_brief_status=$?
+    [[ "$aag_brief_status" == "0" || "$aag_brief_status" == "1" ]] || return "$aag_brief_status"
+
     if [[ "$current_sha" != "$local_sha" ]]; then
         changed=1
         if [[ "$DRY_RUN" == "1" ]]; then
@@ -273,7 +279,7 @@ sync_one_target() {
 main() {
     # The timer must never publish edits from an in-progress shared worktree.
     local source_file committed_sha working_sha
-    for source_file in scripts/pipeline-runner.sh scripts/claude_model_contract.py scripts/sync_pipeline_runner_remote.sh scripts/runner_busy_lib.sh; do
+    for source_file in scripts/pipeline-runner.sh scripts/claude_model_contract.py scripts/sync_pipeline_runner_remote.sh scripts/runner_busy_lib.sh tools/aag/brief.py; do
         committed_sha=$(git -C "$REPO_ROOT" show "HEAD:${source_file}" 2>/dev/null | sha256sum | awk '{print $1}') || {
             log "source not committed: ${source_file}; sync deferred"
             return 0
