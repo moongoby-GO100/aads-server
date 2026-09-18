@@ -1,6 +1,6 @@
 # AAG L1/L2 — AADS 아키텍처 결함 리포트
 
-생성 2026-09-18 08:13 KST · 결함 59건 · 판정 불가(UNRESOLVED) 110건
+생성 2026-09-18 08:19 KST · 결함 60건 · 판정 불가(UNRESOLVED) 110건
 
 UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 결함으로 세면
 숫자가 부풀고, 부풀린 숫자는 아무도 손대지 않아 규칙 전체가 무시된다.
@@ -31,9 +31,9 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 | `TABLE_NO_MODEL` | P1 | 46 |
 | `PATH_DRIFT` | P1 | 1 |
 | `ROUTE_MISSING` | P0 | 1 |
-| `STALE_BACKUP` | P2 | 0 |
+| `STALE_BACKUP` | P2 | 1 |
 
-| **합계** | | **59** |
+| **합계** | | **60** |
 
 ## DUP_MODULE (1건)
 
@@ -111,6 +111,10 @@ UNRESOLVED 는 **결함 수에 포함하지 않는다**. 판정 못 한 것을 �
 ## ROUTE_MISSING (1건)
 
 - [P0] `/root/aads/aads-dashboard/src/lib/api.ts:1237` POST `/api/v1/ohvis/console/command` — 일치하는 라우트 없음
+
+## STALE_BACKUP (1건)
+
+- [P2] `app/services/live_trading_guard.py.bak_aads` 은 편집 중 남긴 사본 형식이다 — 저장소에 남으면 검색·grep 결과에 섞여 낡은 코드를 읽게 된다
 
 ## UNRESOLVED (결함 아님 — 판정 불가)
 
