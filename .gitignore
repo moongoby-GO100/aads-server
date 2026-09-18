@@ -110,3 +110,8 @@ exports/
 
 # 런타임 업로드 저장소 — 채팅 산출물 사본이 쌓인다(git 대상 아님)
 uploads/
+
+# 백업 덤프는 커밋하지 않는다 (README 만 추적)
+backups/**/*.sql
+backups/**/*.sql.gz
+backups/**/*.dump
