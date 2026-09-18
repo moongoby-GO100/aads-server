@@ -2415,6 +2415,12 @@ $(printf '%s\n' "$_dirty_status" | head -20)
     fi
 
     # ═══ AI Reviewer 단계 — CEO 승인 전 독립 AI 리뷰 ═══
+    # git_diff 는 DB 저장 상한(45-50KB)으로 잘려 있을 수 있다. 잘린 채로
+    # review_failed 등에서 워크트리가 삭제되면 git apply 로 복구할 방법이
+    # 없다(runner-1f09e9e5, 저장 48,400자 = 상한 절단 실측). 잘렸으면 전량을
+    # 파일로 남긴다.
+    _persist_full_diff_if_truncated "$job_id" "$worktree_dir" "$pre_exec_sha" "$_current_head" "$git_diff"
+
     local review_verdict="APPROVE"
     local review_score="1.0"
     local review_flag_category=""
@@ -2572,18 +2578,21 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             post_to_chat "$session_id" "🟠 [Pipeline Runner] AI 리뷰 인프라 장애로 승인 보류: $job_id — ${review_error_detail}
 코드 반려가 아니라 리뷰 시스템 장애입니다. 작업 산출물(worktree)은 재검수를 위해 보존했습니다: ${worktree_dir}"
         else
-            post_to_chat "$session_id" "🔴 [Pipeline Runner] AI 리뷰 미통과로 승인 대기 차단: $job_id — ${review_error_detail}"
+            post_to_chat "$session_id" "🔴 [Pipeline Runner] AI 리뷰 미통과로 승인 대기 차단: $job_id — ${review_error_detail}
+리뷰가 오판이었을 수 있습니다. 작업 산출물(worktree)은 ${ARTIFACT_MAX_AGE_HOURS}시간 보존 후 자동 회수됩니다: ${worktree_dir}"
         fi
         _release_work_lock "$project" "$job_id" "$parallel_group"
         _cleanup_artifacts "$job_id"
+        # AADS-RUNNER-REJECTED-ARTIFACT-PRESERVE (2026-09-18): review_failed(코드 반려)도
+        # review_infra_failed 와 동일하게 워크트리를 즉시 삭제하지 않는다. 리뷰는 틀릴 수
+        # 있고(runner-1f09e9e5 실측), 삭제 후에는 되살릴 수 없었다. 회수는 기존 스테일
+        # 워크트리 정리(_cleanup_old_artifacts, ARTIFACT_MAX_AGE_HOURS 기본 24시간)에 맡긴다.
         if [[ -d "$worktree_dir" ]]; then
             if [[ "$review_infra_failure" == "true" ]]; then
                 log "  WORKTREE_PRESERVED_FOR_REREVIEW: $worktree_dir"
             else
                 _preserve_worktree_patch "$job_id" "$worktree_dir"
-                cd "${main_workdir:-/tmp}"
-                git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
-                log "  WORKTREE_CLEANUP: $worktree_dir"
+                log "  WORKTREE_PRESERVED_REJECTED: $worktree_dir (retention=${ARTIFACT_MAX_AGE_HOURS}h, 자동회수: _cleanup_old_artifacts)"
             fi
         fi
         _notify_ai "$job_id"
@@ -2765,6 +2774,38 @@ _preserve_worktree_patch() {
         fi
     )
     log "  ARTIFACT_PRESERVED job=$job_id path=$patch_file"
+}
+
+# AADS-RUNNER-REJECTED-ARTIFACT-PRESERVE (2026-09-18): pipeline_jobs.git_diff 는
+# DB 저장을 위해 45-50KB(head -c)로 잘린다. runner-1f09e9e5 실측: 저장 길이
+# 48,400자 = 상한 절단이라 git apply 재적용이 불가능했다. 잘렸으면(전량 diff가
+# 저장된 값보다 길면) 전량을 파일로 남긴다 — 워크트리(보존 기간 동안)와
+# 로그 디렉터리(워크트리 회수 후에도 남음) 두 곳.
+_persist_full_diff_if_truncated() {
+    local job_id="$1" worktree_dir="$2" base_sha="$3" head_sha="$4" stored_diff="${5:-}"
+    [[ -d "$worktree_dir" ]] || return 0
+
+    local full_diff=""
+    if [[ -n "$base_sha" && -n "$head_sha" && "$base_sha" != "$head_sha" ]]; then
+        full_diff=$(git -C "$worktree_dir" diff "${base_sha}..${head_sha}" 2>/dev/null) || true
+        local _uncommitted=""
+        _uncommitted=$(git -C "$worktree_dir" diff HEAD 2>/dev/null) || true
+        [[ -n "${_uncommitted//[[:space:]]/}" ]] && full_diff="${full_diff}
+${_uncommitted}"
+    else
+        full_diff=$(git -C "$worktree_dir" diff HEAD 2>/dev/null) || true
+    fi
+
+    # 저장된(잘렸을 수 있는) 값보다 전량이 길지 않으면 잘리지 않은 것이다.
+    [[ ${#full_diff} -gt ${#stored_diff} ]] || return 0
+
+    local log_dir="/root/aads/aads-server/logs/runner-diff"
+    mkdir -p "$log_dir" 2>/dev/null || true
+    local worktree_patch="${worktree_dir}/.runner_full_diff.patch"
+    local log_patch="${log_dir}/${job_id}.patch"
+    printf '%s' "$full_diff" > "$worktree_patch" 2>/dev/null || true
+    printf '%s' "$full_diff" > "$log_patch" 2>/dev/null || true
+    log "  FULL_DIFF_TRUNCATED job=$job_id db_bytes=${#stored_diff} full_bytes=${#full_diff} patch=${log_patch}"
 }
 
 # H3: 임시파일 정리
