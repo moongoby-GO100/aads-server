@@ -49,6 +49,7 @@ from app.services.ohvis_task_manager import complete_task as complete_ohvis_task
 from app.services.ohvis_task_manager import create_task as create_ohvis_task
 from app.services.work_recipe.approval import (
     ApprovalError,
+    ApprovalRequired,
     ConfirmationRequired,
     get_approval,
     list_pending,
@@ -56,6 +57,7 @@ from app.services.work_recipe.approval import (
 )
 from app.services.work_recipe.audit import mask_secrets
 from app.services.work_recipe.guard import requires_confirmation
+from app.services.work_recipe.orchestrator import run_directive
 
 router = APIRouter(prefix="/ohvis/console", tags=["ohvis-console"])
 logger = structlog.get_logger()
@@ -110,6 +112,13 @@ class ApprovalDecisionIn(BaseModel):
     decision: str = Field(min_length=1, max_length=20, description="approve | reject")
     confirm_text: str = Field(default="", max_length=300)
     reason: str = Field(default="", max_length=1000)
+
+
+class RecipeRunIn(BaseModel):
+    directive: str = Field(min_length=1, max_length=2000)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    browser_session_id: str | None = Field(default=None, max_length=200)
+    browser_work_key: str | None = Field(default=None, max_length=120)
 
 
 # ───────────────────────────────────────────────────────────── 값 다듬기
@@ -682,3 +691,32 @@ async def decide_console_approval(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return {"status": "decided", "approval": _approval_card(updated)}
+
+
+@router.post("/recipes/run")
+async def run_console_recipe(
+    body: RecipeRunIn,
+    context: TenantContext = Depends(require_console_admin),
+) -> dict[str, Any]:
+    """저장된 레시피와 정확히 연결되는 지시만 실제 브라우저에서 실행한다."""
+    try:
+        result = await run_directive(
+            body.directive,
+            _tenant_id(context),
+            inputs=body.inputs,
+            browser_session_id=body.browser_session_id,
+            browser_work_key=body.browser_work_key,
+            triggered_by=_decided_by(context),
+        )
+    except ApprovalRequired as exc:
+        return {
+            "status": "approval_required",
+            "approval_id": exc.approval_id,
+            "run_id": str(exc.run_id) if exc.run_id else None,
+            "risk": exc.risk_level,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=_text(exc, 300)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="matching_recipe_not_found")
+    return result.to_dict()
