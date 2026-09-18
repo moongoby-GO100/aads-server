@@ -49,11 +49,16 @@
    누가 가져간 것이므로 **보내지 않고** `goal_dispatch_claim_lost` 를 남긴다.
 6. **사이클이 겹치지 않게 한다.** 도는 사이클이 있으면 즉시 돌아가고
    `goal_dispatch_cycle_skipped_overlap` 를 남긴다.
+7. **기록을 지우는 쪽도 자취를 남긴다.** 5번은 증상을 막을 뿐 누가 지웠는지
+   알려주지 않는다. 발송 기록을 되돌리는 모든 경로가 `note_record_reset` 을
+   불러 `goal_dispatch_record_reset` 를 남긴다 — 지우기 전 값과 호출 위치를
+   같이 적는다.
 """
 from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from typing import Any
 
 import structlog
@@ -181,6 +186,50 @@ async def _note(conn, milestone_id: str, note: str) -> None:
         "UPDATE milestones SET dispatch_note = $2, updated_at = NOW() "
         " WHERE id = $1::uuid AND dispatch_note IS DISTINCT FROM $2",
         milestone_id, note,
+    )
+
+
+def note_record_reset(
+    milestone_id: str,
+    *,
+    reason: str,
+    where: str,
+    prev_dispatched_at: Any = None,
+    prev_dispatch_count: Any = None,
+) -> None:
+    """발송 기록을 **되돌리는** 쪽이 남기는 자취.
+
+    `dispatched_at` 을 NULL 로 만들거나 `dispatch_count` 를 0 으로 내리는
+    것은 "이 마일스톤에 다시 지시를 보내라" 는 뜻이다. 그 자체는 정상
+    기능이지만, 기록이 사라졌을 때 **누가 지웠는지 로그에 아무것도 남지
+    않는다** 는 것이 2026-09-17 중복 발송에서 원인 특정을 막았다. 조건부
+    소유권 UPDATE 가 중복 발송은 이미 막지만(위 5번), 그것은 증상을 막는
+    것이지 지우는 주체를 알려주지 않는다.
+
+    그래서 되돌리는 세 경로(`restart_owner`, `rewind`, 반려)가 전부 이
+    함수를 부른다. 호출 위치는 인자로 받은 이름(`where`)과 **실제 프레임**
+    양쪽을 남긴다 — 새 경로가 생기면서 `where` 를 복사해 붙이고 고치지
+    않는 일이 흔하고, 그때 프레임이 정본이 된다.
+
+    지우기 **전** 값을 같이 남기는 것이 핵심이다. "몇 시의 발송 기록이
+    지워졌는가" 가 사이클 로그와 맞춰 볼 수 있는 유일한 열쇠다.
+    """
+    caller = sys._getframe(1)
+    prev_at = prev_dispatched_at
+    if hasattr(prev_at, "isoformat"):
+        prev_at = prev_at.isoformat()
+    logger.info(
+        "goal_dispatch_record_reset",
+        milestone=str(milestone_id)[:8],
+        reason=(reason or "")[:160],
+        where=where,
+        called_from="%s:%d" % (
+            os.path.basename(caller.f_code.co_filename), caller.f_lineno,
+        ),
+        prev_dispatched_at=str(prev_at or ""),
+        prev_dispatch_count=(
+            int(prev_dispatch_count) if prev_dispatch_count is not None else None
+        ),
     )
 
 
@@ -670,6 +719,11 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 # 덮어쓰고 보낸다. 조건부 UPDATE 는 알아챈다. 재시도 창 안에
                 # 이미 기록이 있으면 `RETURNING` 이 비고, 그러면 **보내지
                 # 않는다.** 경합에서 둘 다 보내는 대신 한 쪽만 보낸다.
+                # `$3` 은 위 조회 SQL 의 `$2` 와 **같은 `_RETRY_AFTER_MIN`** 이다.
+                # 두 조건식이 어긋나면 소유권 획득이 영원히 실패하거나(조회보다
+                # 좁을 때) 영원히 통과한다(넓을 때) — 어느 쪽이든 조용히
+                # 망가진다. 이 대응은 테스트가 정적으로 고정한다
+                # (`tests/unit/test_goal_dispatch_record_reset.py`).
                 claimed = await conn.fetchrow(
                     "UPDATE milestones SET dispatched_at = NOW(), "
                     "dispatched_session_id = $2, dispatch_count = dispatch_count + 1, "
@@ -684,10 +738,23 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 if claimed is None:
                     # 다른 사이클이 이미 가져갔거나, 그 사이 마일스톤이
                     # 진행중에서 빠졌다. 어느 쪽이든 여기서 보내면 중복이다.
-                    logger.info(
+                    #
+                    # **WARNING 이다.** 소유권을 놓쳤다는 것은 이 사이클과
+                    # 겹쳐 도는 다른 주체가 실제로 있었다는 뜻이고, 그것이
+                    # 바로 2026-09-17 중복 발송의 조건이다. INFO 로 남기면
+                    # 초당 수백 줄 사이에 묻혀 "봉쇄가 몇 번 걸렸는가" 를
+                    # 사후에 셀 수 없다.
+                    #
+                    # 이번 사이클이 **조회에서 읽은** 값을 같이 남긴다.
+                    # 기록이 지워지는 경로를 좁히려면 "조회가 본 값" 과
+                    # "발송 직전 DB 값" 의 차이가 필요하다 — 이번 사건에서
+                    # 그 대조를 하려고 DB 를 직접 뒤져야 했다.
+                    logger.warning(
                         "goal_dispatch_claim_lost",
                         milestone=str(row["milestone_id"])[:8],
                         session=str(row["session_id"])[:8],
+                        read_count=count,
+                        read_dispatched_at=str(row["dispatched_at"] or ""),
                         why="이미 재시도 창 안에 발송 기록이 있거나 진행중이 아니다",
                     )
                     skipped += 1

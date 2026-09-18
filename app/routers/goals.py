@@ -810,16 +810,34 @@ async def restart_owner(goal_id: str, session_id: str):
     """
     from app.core.db_pool import get_pool
 
+    from app.services.goal_dispatch import note_record_reset
+
     pool = get_pool()
     async with pool.acquire() as conn:
-        n = await conn.fetchval(
+        # `fetchval ... RETURNING 1` 은 여러 건을 지워도 한 건만 돌려줬다.
+        # UPDATE 범위는 그대로 두고(조건식 동일) **지운 건 전부**를 받는다 —
+        # 되돌린 마일스톤 하나하나가 로그에 남아야 추적이 된다.
+        # CTE `target` 은 UPDATE 전 스냅샷이므로 옛 값이 나온다.
+        reset = await conn.fetch(
             """
-            UPDATE milestones SET dispatched_at = NULL, dispatch_count = 0,
-                   dispatch_note = NULL, updated_at = NOW()
-            WHERE goal_id = $1::uuid AND status = 'in_progress'
-              AND (owner_session_id = $2::uuid
-                   OR owner_role_key = (SELECT role_key FROM chat_sessions WHERE id = $2::uuid))
-            RETURNING 1
+            WITH target AS (
+                SELECT id, dispatched_at, dispatch_count
+                  FROM milestones
+                 WHERE goal_id = $1::uuid AND status = 'in_progress'
+                   AND (owner_session_id = $2::uuid
+                        OR owner_role_key = (SELECT role_key FROM chat_sessions WHERE id = $2::uuid))
+            ), done AS (
+                UPDATE milestones m
+                   SET dispatched_at = NULL, dispatch_count = 0,
+                       dispatch_note = NULL, updated_at = NOW()
+                  FROM target t
+                 WHERE m.id = t.id
+                RETURNING m.id
+            )
+            SELECT t.id::text AS milestone_id,
+                   t.dispatched_at AS prev_dispatched_at,
+                   t.dispatch_count AS prev_dispatch_count
+              FROM target t WHERE t.id IN (SELECT id FROM done)
             """,
             goal_id, session_id,
         )
@@ -827,7 +845,16 @@ async def restart_owner(goal_id: str, session_id: str):
             "DELETE FROM owner_pause WHERE goal_id = $1::uuid AND session_id = $2::uuid",
             goal_id, session_id,
         )
-    return {"restarted": bool(n), "resumed": True}
+
+    for r in reset:
+        note_record_reset(
+            r["milestone_id"],
+            reason=f"담당 재시작 API — goal={goal_id[:8]} session={session_id[:8]}",
+            where="app/routers/goals.py:restart_owner",
+            prev_dispatched_at=r["prev_dispatched_at"],
+            prev_dispatch_count=r["prev_dispatch_count"],
+        )
+    return {"restarted": bool(reset), "resumed": True}
 
 
 @router.post("/goals/halt")

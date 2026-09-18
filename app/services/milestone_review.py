@@ -114,8 +114,11 @@ async def confirm(
 
     pool = get_pool()
     async with pool.acquire() as conn:
+        # 발송 기록도 같이 읽는다 — 반려 경로가 이것을 지우므로,
+        # 지우기 전 값을 로그에 남기려면 여기서 받아 둬야 한다.
         row = await conn.fetchrow(
-            "SELECT status, title, goal_id::text AS goal_id FROM milestones WHERE id = $1::uuid",
+            "SELECT status, title, goal_id::text AS goal_id, "
+            "dispatched_at, dispatch_count FROM milestones WHERE id = $1::uuid",
             milestone_id,
         )
         if not row:
@@ -152,6 +155,18 @@ async def confirm(
                 "review_asked_at = NULL, review_ask_count = 0, updated_at = NOW() "
                 "WHERE id = $1::uuid",
                 milestone_id, reason,
+            )
+            # 기록을 지운 자취를 남긴다. 반려는 정상 기능이지만, 지운 것이
+            # 로그에 없으면 다음 사이클의 재발송이 "중복" 인지 "반려에 따른
+            # 재지시" 인지 구분되지 않는다.
+            from app.services.goal_dispatch import note_record_reset
+
+            note_record_reset(
+                milestone_id,
+                reason=f"검증 반려(confirmer={confirmer}) — {reason}".strip(" —"),
+                where="app/services/milestone_review.py:confirm",
+                prev_dispatched_at=row["dispatched_at"],
+                prev_dispatch_count=row["dispatch_count"],
             )
     logger.info(
         "milestone_confirmed", milestone=milestone_id[:8],

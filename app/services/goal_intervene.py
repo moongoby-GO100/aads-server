@@ -121,21 +121,43 @@ async def rewind(milestone_id: str, reason: str = "") -> dict[str, Any]:
     from app.core.db_pool import get_pool
 
     pool = get_pool()
+    # 지우기 **전** 값을 같이 돌려받는다. CTE `prev` 는 UPDATE 전 스냅샷을
+    # 들고 있으므로 `RETURNING` 에서 참조하면 옛 값이 나온다 — 발송 기록이
+    # 언제 것이었는지를 남겨야 사이클 로그와 맞춰 볼 수 있다.
     row = await pool.fetchrow(
         """
-        UPDATE milestones
+        WITH prev AS (
+            SELECT id, dispatched_at, dispatch_count
+              FROM milestones WHERE id = $1::uuid
+        )
+        UPDATE milestones m
            SET status = 'pending', started_at = NULL, completed_at = NULL,
                dispatched_at = NULL, dispatched_session_id = NULL,
                dispatch_count = 0,
                dispatch_note = NULLIF($2, ''),
                updated_at = NOW()
-         WHERE id = $1::uuid
-        RETURNING title, goal_id::text AS goal_id
+          FROM prev
+         WHERE m.id = prev.id
+        RETURNING m.title, m.goal_id::text AS goal_id,
+                  prev.dispatched_at AS prev_dispatched_at,
+                  prev.dispatch_count AS prev_dispatch_count
         """,
         milestone_id, reason,
     )
     if not row:
         return {"error": "milestone_not_found"}
+
+    # 발송 기록을 되돌렸다는 자취. 없으면 다음 사이클이 같은 마일스톤을
+    # 다시 집었을 때 "왜 또 나갔는가" 를 로그만으로 설명할 수 없다.
+    from app.services.goal_dispatch import note_record_reset
+
+    note_record_reset(
+        milestone_id,
+        reason=f"rewind(pending 으로 되돌림) — {reason}".strip(" —"),
+        where="app/services/goal_intervene.py:rewind",
+        prev_dispatched_at=row["prev_dispatched_at"],
+        prev_dispatch_count=row["prev_dispatch_count"],
+    )
 
     # 같은 사건을 다시 보고할 수 있게 기록도 지운다.
     await pool.execute(
