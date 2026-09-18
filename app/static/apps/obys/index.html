@@ -2725,7 +2725,7 @@
           <div class="side-label">운영</div>
           <button class="tab" data-view="employees">직원관리</button>
           <button class="tab" data-view="payroll">급여관리</button>
-          <button class="tab" data-view="inventory">재고·발주</button>
+          <button class="tab" data-view="inventory">매입·재고</button>
           <button class="tab" data-view="tax">세무·회계</button>
           <button class="tab" data-view="approvals">통합 승인함</button>
           <button class="tab" data-view="alerts">알림센터</button>
@@ -2947,14 +2947,68 @@
       <section id="inventoryView" class="hidden">
         <div class="grid content-grid">
           <section class="panel">
-            <div class="panel-head"><h2 class="panel-title">재고·발주</h2><button type="button" data-view="integrations">매입처 연동</button></div>
+            <div class="panel-head"><h2 class="panel-title">매입·재고</h2><button type="button" data-view="integrations">매입처 연동</button></div>
             <div class="panel-body"><div id="inventorySummaryRows" class="progress-list"></div></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">발주 작성</h2>
+              <span class="muted" id="inventoryDraftState">작성 중인 발주는 자동 보관됩니다.</span>
+            </div>
+            <div class="panel-body">
+              <form id="inventoryOrderForm" class="v2-form" autocomplete="off">
+                <label class="v2-field">매입처
+                  <input type="text" name="supplier" id="inventoryOrderSupplier" placeholder="예: 마켓봄">
+                </label>
+                <label class="v2-field">품목
+                  <select name="item_id" id="inventoryOrderItem"><option value="">품목 선택</option></select>
+                </label>
+                <label class="v2-field">수량
+                  <input type="number" inputmode="decimal" min="0" step="0.01" name="quantity" id="inventoryOrderQuantity" placeholder="0">
+                </label>
+                <label class="v2-field">금액
+                  <input type="number" inputmode="numeric" min="0" step="1" name="total_amount" id="inventoryOrderAmount" placeholder="0">
+                </label>
+                <label class="v2-field v2-field-wide">메모
+                  <input type="text" name="memo" id="inventoryOrderMemo" placeholder="배송 요청 등">
+                </label>
+                <div class="v2-actions">
+                  <button type="submit" class="primary v2-touch" id="inventoryOrderSubmit">발주 등록</button>
+                  <button type="button" class="v2-touch" id="inventoryOrderReset">작성 내용 비우기</button>
+                </div>
+              </form>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">재고 실사</h2>
+              <span class="badge info" id="inventoryStocktakeBadge">실사 0건</span>
+            </div>
+            <div class="panel-body">
+              <form id="inventoryStocktakeForm" class="v2-form" autocomplete="off">
+                <label class="v2-field">품목
+                  <select name="item_id" id="stocktakeItem"><option value="">품목 선택</option></select>
+                </label>
+                <label class="v2-field">실사 수량
+                  <input type="number" inputmode="decimal" min="0" step="0.01" name="counted_quantity" id="stocktakeQuantity" placeholder="0">
+                </label>
+                <label class="v2-field v2-field-wide">메모
+                  <input type="text" name="memo" id="stocktakeMemo" placeholder="실사 사유">
+                </label>
+                <div class="v2-actions">
+                  <button type="submit" class="primary v2-touch" id="stocktakeSubmit">실사 반영</button>
+                </div>
+              </form>
+              <div class="table-wrap">
+                <table><thead><tr><th>실사일</th><th>품목</th><th class="num">장부</th><th class="num">실사</th><th class="num">차이</th><th>실행자</th></tr></thead><tbody id="stockBalanceRows"></tbody></table>
+              </div>
+            </div>
           </section>
           <section class="panel">
             <div class="panel-head"><h2 class="panel-title">매입·발주 근거</h2></div>
             <div class="panel-body">
               <div class="table-wrap">
-                <table><thead><tr><th>일자</th><th>매입처</th><th>채널</th><th class="num">금액</th><th>상태</th></tr></thead><tbody id="inventoryRows"></tbody></table>
+                <table><thead><tr><th>일자</th><th>매입처</th><th>채널</th><th class="num">금액</th><th>상태</th><th>입고</th></tr></thead><tbody id="inventoryRows"></tbody></table>
               </div>
             </div>
           </section>

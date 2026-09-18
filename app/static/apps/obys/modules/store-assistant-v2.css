@@ -76,3 +76,44 @@ a:focus-visible, [role="button"]:focus-visible, [tabindex]:focus-visible {
   .topbar-inner { padding: 10px 12px; }
   main { padding: 12px 12px 24px; }
 }
+
+/* 매입·재고 — 모바일 한 손 조작.
+   주요 버튼은 52px 이상으로 두어 장갑 낀 손이나 한 손 엄지로도 빗나가지 않게 한다. */
+.v2-touch { min-height: 52px; }
+.v2-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 12px;
+  margin-bottom: 14px;
+}
+.v2-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.v2-field input, .v2-field select {
+  min-height: 48px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--ink);
+  font-size: 15px;
+}
+.v2-field-wide { grid-column: 1 / -1; }
+.v2-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.v2-actions button { flex: 1 1 160px; }
+#inventoryDraftState { font-size: 12px; }
+
+@media (max-width: 760px) {
+  .v2-form { grid-template-columns: 1fr; }
+  .v2-field input, .v2-field select { min-height: 52px; font-size: 16px; }
+  .v2-actions button { flex: 1 1 100%; min-height: 52px; }
+  #inventoryRows button, #stockBalanceRows button { min-height: 52px; width: 100%; }
+}

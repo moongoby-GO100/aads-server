@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import app.auth as auth_module
-from app.api import acct_purchase, auth, obys_finance
+from app.api import acct_purchase, auth, obys_finance, obys_inventory
 
 
 app = FastAPI(
@@ -89,6 +89,7 @@ async def api_live_health_check():
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 app.include_router(obys_finance.router, prefix="/api/v1", tags=["yeoljeong-finance"])
 app.include_router(acct_purchase.router, prefix="/api/v1", tags=["acct-purchase"])
+app.include_router(obys_inventory.router, prefix="/api/v1", tags=["yeoljeong-inventory"])
 
 _static_dir = pathlib.Path(__file__).resolve().parent / "static"
 if _static_dir.is_dir():
