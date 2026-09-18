@@ -146,4 +146,50 @@ else
     fi
 fi
 
+# ── 계정 홈 감시 (2026-09-19 추가) ──
+#
+# 지금까지 이 스크립트는 /root/.codex/auth.json 하나만 봤다. 계정 홈
+# (/root/.codex-accounts/<KEY>/auth.json)은 감시 대상 밖이었고, 갱신은
+# "codex CLI 가 그 홈으로 실행되면 알아서" 하는 사용 종속 방식이었다.
+# 그래서 CODEX_OAUTH_JINAH 토큰이 2026-09-19 04:41 KST 에 만료되는 동안
+# 로그에는 MAIN 의 "잔여 3.26일" 만 30분마다 찍혔다. 그 구멍을 막는다.
+check_account_homes() {
+    local root="${CODEX_ACCOUNTS_ROOT:-/root/.codex-accounts}"
+    [[ -d "$root" ]] || return 0
+    local home name file rem rem_int prc
+    for home in "$root"/*/; do
+        file="${home}auth.json"
+        name="$(basename "$home")"
+        # MAIN 은 /root/.codex/auth.json 심볼릭 링크다 — 위 메인 로직이 이미 본다.
+        [[ -L "$file" ]] && continue
+        if [[ ! -f "$file" ]]; then
+            log "ACCOUNT $name: auth.json 없음 — 대화형 재로그인 필요"
+            send_telegram "🔴 [Codex Auth] ${name} 인증 파일 없음 — CODEX_HOME=${home%/} codex login --device-auth"
+            continue
+        fi
+        rem="$(get_token_remaining_days "$file")" || rem="-1"
+        log "ACCOUNT $name: access_token 잔여 ${rem}일"
+        if [[ "$rem" == "-1" ]]; then
+            send_telegram "🔴 [Codex Auth] ${name} auth.json 파싱 실패"
+            continue
+        fi
+        rem_int=${rem%%.*}
+        if (( rem_int < 1 )); then
+            log "ACCOUNT $name: 만료/임박 — 계정 홈 프리웜 갱신 시도"
+            prc=0
+            CODEX_HOME="${home%/}" prewarm_codex || prc=$?
+            if [[ $prc -eq 0 ]]; then
+                log "ACCOUNT $name: 갱신 성공 — 잔여 $(get_token_remaining_days "$file")일"
+            elif [[ $prc -eq 2 ]]; then
+                log "ACCOUNT $name: 사용량 한도 — 인증은 유효, 조치 불필요"
+            else
+                log "ACCOUNT $name: 자동 갱신 실패 — refresh_token 이 무효일 수 있다"
+                send_telegram "🔴 [Codex Auth] ${name} 자동 갱신 실패 — CODEX_HOME=${home%/} codex login --device-auth 필요"
+            fi
+        fi
+    done
+}
+
+check_account_homes || log "ACCOUNT_SCAN: 예외 발생 — 건너뜀"
+
 exit 0

@@ -30,6 +30,7 @@ usage/status 서브커맨드가 없다(doctor 는 설치 진단 전용). 한도 
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -229,6 +230,24 @@ def live_rate_limits(account_home: Path, timeout: int = 25) -> dict | None:
             pass
 
 
+def auth_usable(path: Path) -> bool:
+    """auth.json 이 '있다'가 아니라 '지금 쓸 수 있다'를 판정한다.
+
+    2026-09-19: CODEX_OAUTH_JINAH 의 access_token 이 04:41 KST 에 만료됐는데
+    has_auth 는 파일 존재만 봐서 true 였다. 러너(codex_pick_account_home)가
+    그 계정을 1순위로 골라 매 시도를 401 로 태웠다. 만료분은 false 로 준다.
+    """
+    try:
+        payload = json.loads(path.read_text())
+        token = (payload.get("tokens") or {}).get("access_token") or ""
+        chunk = token.split(".")[1]
+        chunk += "=" * (-len(chunk) % 4)
+        exp = json.loads(base64.urlsafe_b64decode(chunk)).get("exp", 0)
+    except Exception:  # noqa: BLE001 — 파일 없음/형식 변경 모두 '못 쓴다'로 본다
+        return False
+    return float(exp) > time.time() + 60
+
+
 def db_accounts() -> list[dict]:
     rows = psql(
         "SELECT key_name, COALESCE(label,''), priority, is_active, "
@@ -239,7 +258,7 @@ def db_accounts() -> list[dict]:
         "key_name": r[0], "label": r[1], "priority": int(r[2]),
         "is_active": r[3] == "t",
         "rate_limited_until_epoch": int(r[4]) if r[4] else None,
-        "has_auth": (ACCOUNTS_ROOT / r[0] / "auth.json").exists(),
+        "has_auth": auth_usable(ACCOUNTS_ROOT / r[0] / "auth.json"),
     } for r in rows]
 
 
