@@ -255,15 +255,30 @@ def _line_is_exec_command(line: str) -> bool:
     return stripped.startswith(_EXEC_COMMAND_PREFIXES)
 
 
+def _line_prefix_has_exec_command(prefix: str) -> bool:
+    """매치 시작 위치 이전, 같은 줄 부분 문자열에 실행 명령 토큰이 있는지 판정.
+
+    `_line_is_exec_command()` 는 줄이 명령으로 "시작"하는 경우만 잡는다.
+    "4. 신규 단위테스트 추가 후 `bash <스크립트> <테스트파일>` 확인." 처럼
+    목록 번호·설명 문장 뒤에 명령이 오면 줄 전체는 명령으로 시작하지 않으므로
+    놓친다(AADS-RUNNERGUARD-VERIFY-PATH-MIDLINE-P1). 매치 앞의 같은 줄
+    부분 문자열만 보고 명령 토큰이 등장하는지 확인해 이 경우를 잡는다 —
+    앞선 문장이나 다른 줄에 등장한 경로는 건드리지 않는다.
+    """
+    cleaned = prefix.lstrip("`$#->* \t")
+    return any(token in cleaned for token in _EXEC_COMMAND_PREFIXES)
+
+
 def _extract_target_files(instruction: str) -> set[str]:
     """Extract explicit target files from a runner instruction.
 
     검증/실행 명령의 인자로 등장한 경로(예: 검증 명령 줄의
     `scripts/run_unit_tests.sh tests/unit/test_a.py`)는 제외한다 — 그런
     경로는 실제 수정 대상이 아니라 두 지시서를 오탐으로 충돌시켜 큐 전체를
-    직렬화한다(AADS-RUNNERGUARD-VERIFY-PATH-FALSEPOSITIVE-R2). 판정은 파일명이
-    아니라 "그 경로가 속한 줄이 실행 명령으로 시작하는가"이므로, 같은 파일이라도
-    수정 대상으로 명시된 문장에서는 그대로 남는다.
+    직렬화한다(AADS-RUNNERGUARD-VERIFY-PATH-FALSEPOSITIVE-R2). 판정은 "그 경로가
+    속한 줄이 실행 명령으로 시작하는가" 뿐 아니라 "매치 이전, 같은 줄에 실행 명령
+    토큰이 등장하는가"도 함께 본다(AADS-RUNNERGUARD-VERIFY-PATH-MIDLINE-P1). 같은
+    파일이라도 수정 대상으로 명시된 문장, 또는 다른 줄에서는 그대로 남는다.
     """
     files: set[str] = set()
     text = instruction or ""
@@ -273,6 +288,10 @@ def _extract_target_files(instruction: str) -> set[str]:
         line_idx = text.count("\n", 0, match.start())
         line = lines[line_idx] if 0 <= line_idx < len(lines) else ""
         if _line_is_exec_command(line):
+            continue
+        line_start = text.rfind("\n", 0, match.start()) + 1
+        prefix_on_line = text[line_start:match.start()]
+        if _line_prefix_has_exec_command(prefix_on_line):
             continue
         normalized = _normalize_target_file_path(match.group(0))
         if normalized:
