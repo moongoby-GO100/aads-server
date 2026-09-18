@@ -14,11 +14,13 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.core.obys_db import obys_db_url
+
 KST = timezone(timedelta(hours=9))
 
 
 def _db_url() -> str:
-    return os.getenv("DATABASE_URL", "postgresql://aads:aads@localhost:5432/aads")
+    return obys_db_url()
 
 
 def _now() -> datetime:

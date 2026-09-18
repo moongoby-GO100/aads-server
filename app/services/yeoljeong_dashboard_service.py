@@ -7,13 +7,15 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from app.core.obys_db import obys_db_url
+
 logger = logging.getLogger(__name__)
 KST = timezone(timedelta(hours=9))
 SALES_PERIODS = {"daily", "weekly", "monthly"}
 
 
 def _db_url() -> str:
-    return os.getenv("DATABASE_URL", "postgresql://aads:aads@localhost:5432/aads")
+    return obys_db_url()
 
 
 def _today_kst() -> date:

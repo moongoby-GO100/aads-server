@@ -103,6 +103,7 @@ services:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql://aads:aads2026secure@aads-postgres:5432/aads
+      - OBYS_DATABASE_URL=${OBYS_DATABASE_URL:-}
       - TZ=Asia/Seoul
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - BRAVE_API_KEY=${BRAVE_API_KEY}
@@ -306,6 +307,7 @@ services:
       - AADS_SERVICE_ROLE=yeoljeong-finance
       - DATABASE_URL=${YEOLJEONG_FINANCE_DATABASE_URL:-postgresql://aads:aads2026secure@aads-postgres:5432/aads}
       - YEOLJEONG_FINANCE_DATABASE_URL=${YEOLJEONG_FINANCE_DATABASE_URL:-postgresql://aads:aads2026secure@aads-postgres:5432/aads}
+      - OBYS_DATABASE_URL=${OBYS_DATABASE_URL:-}
       - YEOLJEONG_FINANCE_DATA_DIR=/app/yeoljeong-data
       - TZ=Asia/Seoul
       - VAULT_ENCRYPTION_KEY=${VAULT_ENCRYPTION_KEY:-}
