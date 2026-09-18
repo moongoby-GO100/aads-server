@@ -27,13 +27,6 @@ graph LR
   n_app_api_admin_users_py --> n_ns_api_v1_admin
   n_app_api_design_modifications_py["app/api/design_modifications.py"]
   n_app_api_design_modifications_py --> n_ns_api_v1_admin
-  n_ns_api_v1_chat(["/api/v1/chat"])
-  n_app_api_chat_py["app/api/chat.py"]
-  n_app_api_chat_py --> n_ns_api_v1_chat
-  n_app_api_directive_drafts_py["app/api/directive_drafts.py"]
-  n_app_api_directive_drafts_py --> n_ns_api_v1_chat
-  n_app_routers_chat_py["app/routers/chat.py"]
-  n_app_routers_chat_py --> n_ns_api_v1_chat
   n_ns_api_v1_ops(["/api/v1/ops"])
   n_app_api_hot_reload_py["app/api/hot_reload.py"]
   n_app_api_hot_reload_py --> n_ns_api_v1_ops
@@ -48,6 +41,11 @@ graph LR
   n_app_api_pipeline_runner_py --> n_ns_api_v1_settings
   n_app_routers_chat_py["app/routers/chat.py"]
   n_app_routers_chat_py --> n_ns_api_v1_settings
+  n_ns_api_v1_chat(["/api/v1/chat"])
+  n_app_api_directive_drafts_py["app/api/directive_drafts.py"]
+  n_app_api_directive_drafts_py --> n_ns_api_v1_chat
+  n_app_routers_chat_py["app/routers/chat.py"]
+  n_app_routers_chat_py --> n_ns_api_v1_chat
   n_ns_api_v1_directives(["/api/v1/directives"])
   n_app_api_directives_py["app/api/directives.py"]
   n_app_api_directives_py --> n_ns_api_v1_directives
@@ -172,7 +170,6 @@ graph LR
   n_app_main_py --> n_app_api_browser_recipes_py
   n_app_main_py --> n_app_api_browser_tasks_py
   n_app_main_py --> n_app_api_channels_py
-  n_app_main_py --> n_app_api_chat_py
   n_app_main_py --> n_app_api_checkpoints_py
   n_app_main_py --> n_app_api_context_py
   n_app_main_py --> n_app_api_conversations_py
