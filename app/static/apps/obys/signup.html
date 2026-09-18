@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>오비서 사업자 회원가입</title>
+<link rel="stylesheet" href="/static/apps/obys/modules/store-assistant-v2.css">
+<style>
+  :root{
+    --ink:#1b232e; --muted:#6b7684; --line:#e3e8ef; --bg:#f5f7fa;
+    --blue:#2f6fed; --blue-ink:#1b4ec2; --green:#11966b; --red:#d1453b; --amber:#b7791f;
+    --shadow:0 2px 10px rgba(27,35,46,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:Pretendard,"Noto Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+       font-size:15px;line-height:1.55;}
+  a{color:var(--blue-ink)}
+  .wrap{max-width:560px;margin:0 auto;padding:20px 16px 64px}
+  header.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
+  .brand{font-weight:700;font-size:18px}
+  .brand span{display:block;font-weight:400;font-size:12px;color:var(--muted)}
+  .steps{display:flex;gap:8px;margin-bottom:16px}
+  .steps li{flex:1;list-style:none;padding:8px 6px;border-radius:10px;background:#fff;border:1px solid var(--line);
+            text-align:center;font-size:12px;color:var(--muted)}
+  .steps li[aria-current="step"]{border-color:var(--blue);color:var(--blue-ink);font-weight:700;background:#edf4ff}
+  .steps li[data-done="1"]{color:var(--green);border-color:#bfe6d6;background:#eaf8f2}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px}
+  .card h1{font-size:19px;margin:0 0 4px}
+  .card p.lead{margin:0 0 16px;color:var(--muted);font-size:13px}
+  label{display:block;margin-bottom:12px;font-size:13px;font-weight:600}
+  label .hint{display:block;font-weight:400;color:var(--muted);font-size:12px;margin-top:2px}
+  input[type=text],input[type=email],input[type=password],input[type=date],select{
+    width:100%;min-height:46px;margin-top:6px;padding:10px 12px;border:1px solid var(--line);
+    border-radius:10px;font-size:15px;background:#fff;color:var(--ink)}
+  input:focus,select:focus{outline:3px solid rgba(47,111,237,.28);outline-offset:1px;border-color:var(--blue)}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  @media (max-width:420px){.row2{grid-template-columns:1fr}}
+  .consents{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px;background:#fcfdff}
+  .consent-all{border-bottom:1px dashed var(--line);padding-bottom:10px;margin-bottom:8px;font-weight:700}
+  .consents label{display:flex;gap:10px;align-items:flex-start;margin:0 0 8px;font-weight:500;font-size:14px}
+  .consents input[type=checkbox]{width:22px;height:22px;min-height:22px;margin:1px 0 0;flex:0 0 auto}
+  .consents .req{color:var(--blue-ink);font-weight:700}
+  .consents .opt{color:var(--muted)}
+  button{min-height:48px;border-radius:10px;border:1px solid var(--line);background:#fff;color:var(--ink);
+         font-size:15px;font-weight:600;cursor:pointer;padding:0 14px}
+  button.primary{background:var(--blue);border-color:var(--blue);color:#fff;width:100%}
+  button.primary:disabled{background:#a9c0f2;border-color:#a9c0f2;cursor:not-allowed}
+  button.ghost{width:100%;margin-top:8px;background:#fff}
+  .meter{height:6px;border-radius:999px;background:#eef1f6;margin-top:6px;overflow:hidden}
+  .meter i{display:block;height:100%;width:0;background:var(--red);transition:width .2s}
+  .meter[data-level="2"] i{background:var(--amber)}
+  .meter[data-level="3"] i{background:var(--green)}
+  .note{font-size:12px;color:var(--muted);margin-top:10px}
+  .alert{border-radius:10px;padding:11px 12px;font-size:13px;margin-bottom:14px;display:none}
+  .alert.show{display:block}
+  .alert.err{background:#fff0f0;border:1px solid #f3c9c6;color:#93231c}
+  .alert.warn{background:#fff8e5;border:1px solid #f0dca8;color:#7a5410}
+  .alert.ok{background:#eaf8f2;border:1px solid #bfe6d6;color:#0c6e50}
+  .alert a{font-weight:700}
+  .done-list{margin:14px 0 0;padding-left:18px;font-size:14px}
+  .done-list li{margin-bottom:6px}
+  .kv{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .kv:last-child{border-bottom:0}
+  .kv b{font-weight:600}
+  .hidden{display:none!important}
+  footer.foot{margin-top:18px;font-size:12px;color:var(--muted);text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">오비서 사업자 회원가입<span>대표님 계정을 만들고 사업자를 연결합니다</span></div>
+    <a href="/static/apps/obys/index.html">← 앱으로</a>
+  </header>
+
+  <ol class="steps" id="steps">
+    <li data-step="1" aria-current="step">1. 계정 만들기</li>
+    <li data-step="2">2. 사업자 등록</li>
+    <li data-step="3">3. 완료</li>
+  </ol>
+
+  <!-- STEP 1 -->
+  <section class="card" id="step1">
+    <h1>계정 만들기</h1>
+    <p class="lead">대표님 본인 계정입니다. 직원 가입은 앱 화면의 <b>직원 회원가입</b>을 사용하십시오.</p>
+    <div class="alert err" id="err1"></div>
+    <form id="accountForm" novalidate>
+      <label>이메일
+        <input name="email" type="email" autocomplete="username" inputmode="email" placeholder="owner@example.com" required>
+      </label>
+      <div class="row2">
+        <label>대표자 이름
+          <input name="name" type="text" autocomplete="name" placeholder="홍길동" required>
+        </label>
+        <label>사업자명(조직명)
+          <input name="organizationName" type="text" autocomplete="organization" placeholder="예: 열정국밥" required>
+        </label>
+      </div>
+      <label>비밀번호
+        <input name="password" type="password" autocomplete="new-password" required>
+        <span class="hint">10자 이상, 영문·숫자·기호 중 2종 이상</span>
+        <span class="meter" id="pwMeter" data-level="0"><i></i></span>
+      </label>
+      <label>비밀번호 확인
+        <input name="passwordConfirm" type="password" autocomplete="new-password" required>
+      </label>
+
+      <div class="consents">
+        <label class="consent-all"><input type="checkbox" id="consentAll"><span>약관 전체 동의</span></label>
+        <label><input type="checkbox" data-consent="terms" checked-required><span><span class="req">[필수]</span> 서비스 이용약관 동의</span></label>
+        <label><input type="checkbox" data-consent="privacy"><span><span class="req">[필수]</span> 개인정보 수집·이용 동의 (이메일·이름·사업자정보·접속기록)</span></label>
+        <label><input type="checkbox" data-consent="age14"><span><span class="req">[필수]</span> 만 14세 이상입니다</span></label>
+        <label><input type="checkbox" data-consent="marketing"><span><span class="opt">[선택]</span> 마케팅·소식 수신 동의</span></label>
+      </div>
+
+      <button class="primary" type="submit" id="submit1">계정 만들고 다음</button>
+      <button class="ghost" type="button" onclick="location.href='/static/apps/obys/index.html'">이미 계정이 있습니다 — 로그인</button>
+    </form>
+    <p class="note">동의 기록은 시각·IP와 함께 저장됩니다. 이메일 인증 단계는 아직 제공되지 않습니다(메일 발송 채널 미연결).</p>
+  </section>
+
+  <!-- STEP 2 -->
+  <section class="card hidden" id="step2">
+    <h1>사업자 등록</h1>
+    <p class="lead">회계·정산 데이터를 연결하려면 사업자 정보가 필요합니다. 나중에 설정에서도 등록할 수 있습니다.</p>
+    <div class="alert ok show" id="ok2">계정이 생성되어 로그인된 상태입니다.</div>
+    <div class="alert err" id="err2"></div>
+    <form id="businessForm" novalidate>
+      <label>사업자등록번호
+        <input name="registrationNo" type="text" inputmode="numeric" placeholder="000-00-00000" maxlength="12" required>
+        <span class="hint" id="bizHint">10자리 숫자를 입력하면 국세청 검증규칙으로 형식을 확인합니다.</span>
+      </label>
+      <div class="row2">
+        <label>상호
+          <input name="name" type="text" placeholder="예: 열정국밥 중화점" required>
+        </label>
+        <label>대표자
+          <input name="representative" type="text" placeholder="홍길동" required>
+        </label>
+      </div>
+      <div class="row2">
+        <label>구분
+          <select name="entityType">
+            <option value="individual">개인사업자</option>
+            <option value="corporation">법인사업자</option>
+          </select>
+        </label>
+        <label>과세유형
+          <select name="taxType">
+            <option>일반과세</option>
+            <option>간이과세</option>
+            <option>면세</option>
+          </select>
+        </label>
+      </div>
+      <div class="row2">
+        <label>개업일
+          <input name="openedAt" type="date">
+        </label>
+        <label>지점명
+          <input name="branchName" type="text" placeholder="예: 중화점">
+        </label>
+      </div>
+      <label>사업장 주소
+        <input name="address" type="text" placeholder="도로명 주소" required>
+      </label>
+      <button class="primary" type="submit" id="submit2">사업자 저장하고 완료</button>
+      <button class="ghost" type="button" id="skipBiz">나중에 등록하고 대시보드로</button>
+    </form>
+    <p class="note">사업자 정보를 등록하기 전까지 회계 데이터 화면은 “연결 대기”로 표시됩니다.</p>
+  </section>
+
+  <!-- STEP 3 -->
+  <section class="card hidden" id="step3">
+    <h1>가입이 끝났습니다</h1>
+    <p class="lead">아래 상태를 확인하고 대시보드로 들어가십시오.</p>
+    <div id="summary"></div>
+    <ol class="done-list">
+      <li>지점·계좌를 등록하면 입금 대사가 시작됩니다.</li>
+      <li>판매채널·은행 연동을 등록하면 매출과 정산이 자동 수집됩니다.</li>
+      <li>직원은 앱의 <b>직원 회원가입</b>으로 들어오고, 대표님이 승인합니다.</li>
+    </ol>
+    <br>
+    <button class="primary" type="button" onclick="location.href='/static/apps/obys/index.html'">대시보드로 이동</button>
+  </section>
+
+  <footer class="foot">오비서 · 통합 경영관리시스템</footer>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var SERVER_AUTH_TOKEN_KEY = "aads_token";
+  var FB_ACCESS_TOKEN_KEY = "fb_access_token";
+  var AUTH_USER_KEY = "yeoljeong-finance-auth-user";
+  var CONSENT_VERSION = "2026-09-19";
+
+  var els = {
+    steps: document.getElementById("steps"),
+    step1: document.getElementById("step1"),
+    step2: document.getElementById("step2"),
+    step3: document.getElementById("step3"),
+    err1: document.getElementById("err1"),
+    err2: document.getElementById("err2"),
+    accountForm: document.getElementById("accountForm"),
+    businessForm: document.getElementById("businessForm"),
+    submit1: document.getElementById("submit1"),
+    submit2: document.getElementById("submit2"),
+    skipBiz: document.getElementById("skipBiz"),
+    consentAll: document.getElementById("consentAll"),
+    pwMeter: document.getElementById("pwMeter"),
+    bizHint: document.getElementById("bizHint"),
+    summary: document.getElementById("summary")
+  };
+  var created = { email: "", organizationName: "", business: null };
+
+  function consentBoxes(){ return Array.prototype.slice.call(document.querySelectorAll("[data-consent]")); }
+  function requiredConsents(){ return ["terms","privacy","age14"]; }
+
+  function showStep(n){
+    els.step1.classList.toggle("hidden", n !== 1);
+    els.step2.classList.toggle("hidden", n !== 2);
+    els.step3.classList.toggle("hidden", n !== 3);
+    Array.prototype.forEach.call(els.steps.children, function(li){
+      var s = Number(li.dataset.step);
+      if (s === n) li.setAttribute("aria-current","step"); else li.removeAttribute("aria-current");
+      if (s < n) li.dataset.done = "1"; else delete li.dataset.done;
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function showError(el, html){
+    if (!html) { el.classList.remove("show"); el.innerHTML = ""; return; }
+    el.innerHTML = html;
+    el.classList.add("show");
+    el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  // 비밀번호 강도: 10자 이상 + 영문/숫자/기호 중 2종 이상 (PRD §5)
+  function passwordClasses(pw){
+    var n = 0;
+    if (/[A-Za-z]/.test(pw)) n++;
+    if (/[0-9]/.test(pw)) n++;
+    if (/[^A-Za-z0-9]/.test(pw)) n++;
+    return n;
+  }
+  function passwordLevel(pw){
+    if (!pw) return 0;
+    var cls = passwordClasses(pw);
+    if (pw.length < 10 || cls < 2) return 1;
+    if (pw.length >= 14 && cls >= 3) return 3;
+    return 2;
+  }
+  function renderPasswordMeter(){
+    var pw = els.accountForm.password.value || "";
+    var lv = passwordLevel(pw);
+    els.pwMeter.dataset.level = String(lv);
+    els.pwMeter.firstElementChild.style.width = (lv * 33.4) + "%";
+  }
+
+  // 국세청 사업자등록번호 검증규칙
+  function validBizNo(raw){
+    var d = String(raw || "").replace(/[^0-9]/g, "");
+    if (d.length !== 10) return false;
+    var w = [1,3,7,1,3,7,1,3,5], sum = 0, i;
+    for (i = 0; i < 9; i++) sum += Number(d[i]) * w[i];
+    sum += Math.floor((Number(d[8]) * 5) / 10);
+    return ((10 - (sum % 10)) % 10) === Number(d[9]);
+  }
+  function formatBizNo(raw){
+    var d = String(raw || "").replace(/[^0-9]/g, "").slice(0, 10);
+    if (d.length > 5) return d.slice(0,3) + "-" + d.slice(3,5) + "-" + d.slice(5);
+    if (d.length > 3) return d.slice(0,3) + "-" + d.slice(3);
+    return d;
+  }
+
+  function persistToken(token){
+    try {
+      localStorage.setItem(SERVER_AUTH_TOKEN_KEY, token);
+      localStorage.setItem(FB_ACCESS_TOKEN_KEY, token);
+    } catch (e) { /* 프라이빗 모드 등 — 쿠키로 대체 */ }
+    var secure = window.location.protocol === "https:" ? "; Secure" : "";
+    document.cookie = SERVER_AUTH_TOKEN_KEY + "=" + token + "; path=/; max-age=604800; SameSite=Lax" + secure;
+    document.cookie = FB_ACCESS_TOKEN_KEY + "=" + token + "; path=/; max-age=604800; SameSite=Lax" + secure;
+  }
+  function token(){
+    try { return localStorage.getItem(SERVER_AUTH_TOKEN_KEY) || ""; } catch (e) { return ""; }
+  }
+  function authHeaders(){
+    var h = { "Content-Type": "application/json" };
+    var t = token();
+    if (t) h.Authorization = "Bearer " + t;
+    return h;
+  }
+  async function api(path, options){
+    options = options || {};
+    var res = await fetch(path, { ...options, headers: { ...authHeaders(), ...(options.headers || {}) } });
+    var payload = await res.json().catch(function(){ return {}; });
+    if (!res.ok) {
+      var err = new Error(payload.detail || payload.message || ("요청 실패 (" + res.status + ")"));
+      err.status = res.status;
+      throw err;
+    }
+    return payload;
+  }
+
+  function escapeHtml(v){
+    return String(v == null ? "" : v).replace(/[&<>"']/g, function(c){
+      return ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[c];
+    });
+  }
+
+  /* ---------- STEP 1 ---------- */
+  els.accountForm.password.addEventListener("input", renderPasswordMeter);
+
+  els.consentAll.addEventListener("change", function(){
+    consentBoxes().forEach(function(b){ b.checked = els.consentAll.checked; });
+  });
+  consentBoxes().forEach(function(b){
+    b.addEventListener("change", function(){
+      els.consentAll.checked = consentBoxes().every(function(x){ return x.checked; });
+    });
+  });
+
+  els.accountForm.addEventListener("submit", async function(ev){
+    ev.preventDefault();
+    showError(els.err1, "");
+    var f = els.accountForm;
+    var email = String(f.email.value || "").trim().toLowerCase();
+    var name = String(f.name.value || "").trim();
+    var org = String(f.organizationName.value || "").trim();
+    var pw = String(f.password.value || "");
+    var pw2 = String(f.passwordConfirm.value || "");
+
+    if (!email || email.indexOf("@") < 0 || email.split("@")[1].indexOf(".") < 0)
+      return showError(els.err1, "이메일 형식을 확인해 주십시오.");
+    if (!name) return showError(els.err1, "대표자 이름을 입력해 주십시오.");
+    if (!org) return showError(els.err1, "사업자명(조직명)을 입력해 주십시오.");
+    if (pw.length < 10 || passwordClasses(pw) < 2)
+      return showError(els.err1, "비밀번호는 10자 이상, 영문·숫자·기호 중 2종 이상이어야 합니다.");
+    if (pw !== pw2) return showError(els.err1, "비밀번호 확인이 일치하지 않습니다.");
+
+    var agreedKeys = consentBoxes().filter(function(b){ return b.checked; })
+                                   .map(function(b){ return b.dataset.consent; });
+    var missing = requiredConsents().filter(function(k){ return agreedKeys.indexOf(k) < 0; });
+    if (missing.length) return showError(els.err1, "필수 약관에 동의해야 가입할 수 있습니다.");
+
+    var consents = consentBoxes().map(function(b){
+      return { consent_key: b.dataset.consent, version: CONSENT_VERSION, agreed: b.checked };
+    }).filter(function(c){ return c.agreed || requiredConsents().indexOf(c.consent_key) >= 0; });
+
+    els.submit1.disabled = true;
+    els.submit1.textContent = "계정을 만드는 중…";
+    try {
+      var payload = await api("/api/v1/auth/register", {
+        method: "POST",
+        body: JSON.stringify({
+          email: email, password: pw, name: name,
+          organization_name: org, consents: consents
+        })
+      });
+      if (!payload.token) throw new Error("토큰이 발급되지 않았습니다. 잠시 후 다시 시도해 주십시오.");
+      persistToken(payload.token);
+      try {
+        localStorage.setItem(AUTH_USER_KEY, JSON.stringify({
+          user: { id: payload.user_id || "", email: payload.email || email, name: payload.name || name,
+                  tenant_id: payload.tenant_id || "", is_admin: false },
+          tenant: payload.tenant || (payload.tenant_id ? { id: payload.tenant_id } : null)
+        }));
+      } catch (e) { /* 저장 실패해도 토큰 쿠키로 진행된다 */ }
+      created.email = payload.email || email;
+      created.organizationName = org;
+      els.businessForm.name.value = org;
+      els.businessForm.representative.value = name;
+      showStep(2);
+    } catch (e) {
+      if (e.status === 409) {
+        showError(els.err1, "이미 가입된 이메일입니다. <a href=\"/static/apps/obys/index.html\">로그인 화면으로 이동</a>하거나 다른 이메일을 사용하십시오.");
+      } else {
+        showError(els.err1, escapeHtml(e.message) + " — 입력값은 그대로 두었습니다. 다시 시도해 주십시오.");
+      }
+    } finally {
+      els.submit1.disabled = false;
+      els.submit1.textContent = "계정 만들고 다음";
+    }
+  });
+
+  /* ---------- STEP 2 ---------- */
+  els.businessForm.registrationNo.addEventListener("input", function(ev){
+    var el = ev.target;
+    el.value = formatBizNo(el.value);
+    var digits = el.value.replace(/[^0-9]/g, "");
+    if (digits.length < 10) {
+      els.bizHint.textContent = "10자리 숫자를 입력하면 국세청 검증규칙으로 형식을 확인합니다.";
+      els.bizHint.style.color = "";
+    } else if (validBizNo(digits)) {
+      els.bizHint.textContent = "형식 확인됨 (국세청 검증규칙 통과)";
+      els.bizHint.style.color = "var(--green)";
+    } else {
+      els.bizHint.textContent = "사업자등록번호 형식이 올바르지 않습니다. 숫자를 다시 확인해 주십시오.";
+      els.bizHint.style.color = "var(--red)";
+    }
+  });
+
+  function slug(prefix){
+    return prefix + "-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
+
+  async function saveBusiness(biz, branchName){
+    // 기존 설정을 먼저 읽어 병합한다. 신규 테넌트는 비어 있는 것이 정상이다.
+    var current = {};
+    try {
+      var got = await api("/api/v1/yeoljeong-finance/settings", { method: "GET" });
+      current = (got && got.settings) || {};
+    } catch (e) { current = {}; }
+
+    var businesses = Array.isArray(current.businesses) ? current.businesses.slice() : [];
+    var branches = Array.isArray(current.branches) ? current.branches.slice() : [];
+    businesses.push(biz);
+    if (branchName) {
+      branches.push({ id: slug("branch"), name: branchName, businessId: biz.id,
+                      status: "active", phone: "", address: biz.address || "" });
+    }
+    var next = { ...current, businesses: businesses, branches: branches };
+    return api("/api/v1/yeoljeong-finance/settings", { method: "PUT", body: JSON.stringify(next) });
+  }
+
+  function renderSummary(){
+    var b = created.business;
+    var rows = [
+      ["계정", created.email],
+      ["조직", created.organizationName],
+      ["사업자", b ? (b.name + " · " + b.registrationNo) : "미등록 — 설정에서 언제든 등록할 수 있습니다"],
+      ["회계 데이터 연결", b ? "등록됨 — 지점·계좌를 추가하면 대사가 시작됩니다" : "연결 대기"],
+      ["이메일 인증", "미제공 (메일 발송 채널 미연결)"]
+    ];
+    els.summary.innerHTML = rows.map(function(r){
+      return '<div class="kv"><b>' + escapeHtml(r[0]) + "</b><span>" + escapeHtml(r[1]) + "</span></div>";
+    }).join("");
+  }
+
+  els.businessForm.addEventListener("submit", async function(ev){
+    ev.preventDefault();
+    showError(els.err2, "");
+    var f = els.businessForm;
+    var regNo = String(f.registrationNo.value || "").trim();
+    var digits = regNo.replace(/[^0-9]/g, "");
+    if (!validBizNo(digits))
+      return showError(els.err2, "사업자등록번호가 검증규칙을 통과하지 못했습니다. 숫자 10자리를 다시 확인해 주십시오.");
+    if (!String(f.name.value || "").trim()) return showError(els.err2, "상호를 입력해 주십시오.");
+    if (!String(f.representative.value || "").trim()) return showError(els.err2, "대표자를 입력해 주십시오.");
+    if (!String(f.address.value || "").trim()) return showError(els.err2, "사업장 주소를 입력해 주십시오.");
+
+    var biz = {
+      id: slug("biz"),
+      entityType: f.entityType.value,
+      name: String(f.name.value).trim(),
+      registrationNo: formatBizNo(digits),
+      representative: String(f.representative.value).trim(),
+      taxType: f.taxType.value,
+      openedAt: f.openedAt.value || "",
+      address: String(f.address.value).trim(),
+      memo: "회원가입 단계에서 등록"
+    };
+
+    els.submit2.disabled = true;
+    els.submit2.textContent = "저장 중…";
+    try {
+      await saveBusiness(biz, String(f.branchName.value || "").trim());
+      created.business = biz;
+      renderSummary();
+      showStep(3);
+    } catch (e) {
+      showError(els.err2, escapeHtml(e.message) +
+        ' — 계정은 이미 만들어졌습니다. 다시 시도하거나 <a href="#" id="skipInline">나중에 등록</a>할 수 있습니다.');
+      var inline = document.getElementById("skipInline");
+      if (inline) inline.addEventListener("click", function(x){ x.preventDefault(); created.business = null; renderSummary(); showStep(3); });
+    } finally {
+      els.submit2.disabled = false;
+      els.submit2.textContent = "사업자 저장하고 완료";
+    }
+  });
+
+  els.skipBiz.addEventListener("click", function(){
+    created.business = null;
+    renderSummary();
+    showStep(3);
+  });
+
+  // 이미 로그인된 상태로 들어오면 2단계부터 시작한다(중복 가입 방지).
+  if (token()) {
+    (async function(){
+      try {
+        var me = await api("/api/v1/yeoljeong-finance/session", { method: "GET" });
+        var email = (me && me.user && me.user.email) || "";
+        if (email) {
+          created.email = email;
+          created.organizationName = (me.tenant && me.tenant.name) || "";
+          document.getElementById("ok2").innerHTML =
+            "이미 <b>" + escapeHtml(email) + "</b> 계정으로 로그인되어 있습니다. 사업자 등록부터 이어서 진행합니다.";
+          showStep(2);
+        }
+      } catch (e) { /* 만료 토큰이면 1단계 그대로 진행한다 */ }
+    })();
+  }
+})();
+</script>
+</body>
+</html>
