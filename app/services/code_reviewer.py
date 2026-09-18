@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 _REVIEW_MODEL = "qwen-turbo"
 _REVIEW_MODEL_FALLBACK = _REVIEW_MODEL  # DB 조회 실패 시 기본값
+_REVIEW_OAUTH_FALLBACK_MODEL = "claude-haiku-4-5-20251001"  # gitleaks:allow
+_REVIEW_LITELLM_FALLBACK_MODEL = "litellm:gemini-2.5-flash-lite"
 _REVIEW_PARSE_MAX_ATTEMPTS = 3  # P0: JSON 파싱 실패 시 즉시 REVIEW_PARSER_FAILURE 대신 재시도 후 폴백
 # DB에 여러 독립 리뷰 모델이 등록되어 있으면 앞쪽 모델 장애만으로 뒤쪽의 정상
 # 모델을 영구히 건너뛰지 않는다. 다만 잘못된 설정이 요청 시간을 무한히 늘리지
@@ -82,6 +84,9 @@ _SCOPE_PATH_RE = re.compile(
     r"(?:^|[\s,`'\"(])"
     r"((?:/?[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+|"
     r"[A-Za-z0-9_.-]+\.(?:py|pyi|js|jsx|ts|tsx|sql|md|json|ya?ml|toml|sh|html|css))"
+)
+_EXCLUDED_REVIEW_MODELS_RE = re.compile(
+    r"^\s*\[REVIEW_EXCLUDE_MODELS:\s*([^\]]+)\]\s*$", re.MULTILINE
 )
 # 삭제/추가 비율 게이트가 허용하는 순삭제(삭제-추가) 줄 수.
 # 2026-09-16: 1추가/1삭제짜리 외과적 핫픽스가 `1 > 0.5` 로 매번 차단돼
@@ -286,6 +291,28 @@ async def _get_review_models() -> list[str]:
         return [_REVIEW_MODEL_FALLBACK]
 
 
+def _review_attempt_models(models: list[str], instruction: str) -> list[str]:
+    """Build a distinct failover chain and honor job-scoped sweeper exclusions."""
+    excluded: set[str] = set()
+    for match in _EXCLUDED_REVIEW_MODELS_RE.finditer(instruction or ""):
+        excluded.update(part.strip() for part in match.group(1).split(",") if part.strip())
+
+    candidates = [
+        *models,
+        _REVIEW_OAUTH_FALLBACK_MODEL,
+        _REVIEW_LITELLM_FALLBACK_MODEL,
+    ]
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = str(candidate or "").strip()
+        if not normalized or normalized in seen or normalized in excluded:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+    return ordered
+
+
 @dataclass
 class ReviewVerdict:
     """코드 리뷰 판정 결과."""
@@ -437,7 +464,9 @@ async def _call_review_model(
     provider, separator, bare_model = normalized.partition(":")
     provider = provider.lower() if separator else ""
     if provider in {"codex", "claude"} or (
-        not provider and (normalized.startswith("gpt-") or normalized.startswith("claude-"))
+        not provider
+        and normalized != _REVIEW_OAUTH_FALLBACK_MODEL
+        and (normalized.startswith("gpt-") or normalized.startswith("claude-"))
     ):
         from app.services.directive_draft_service import _call_configured_model
 
@@ -833,24 +862,17 @@ async def review_code_diff(
 위 기준에 따라 JSON으로 판정하세요."""
 
     try:
-        review_models = await _get_review_models()
+        configured_models = await _get_review_models()
+        review_models = _review_attempt_models(configured_models, instruction)
         used_model = review_models[0] if review_models else _REVIEW_MODEL_FALLBACK
 
-        # P0: 응답 실패(예외/빈 응답)와 JSON 파싱 실패를 하나의 재시도 루프로 묶어
-        # 모델 목록을 순환하며 최대 _REVIEW_PARSE_MAX_ATTEMPTS회까지 시도한다.
-        # 단일 모델만 설정된 경우(운영 기본값)에도 같은 모델을 재호출한다 —
-        # LLM이 가끔 비-JSON 텍스트를 반환해도 첫 실패에 바로 review_hold로
-        # 보내지 않기 위함.
+        # 응답 실패와 JSON 파싱 실패는 같은 모델을 다시 부르지 않고 다음 모델로
+        # 넘긴다. 끝의 두 후보는 중앙 Anthropic OAuth 1→2 체인과 Gemini LiteLLM
+        # 순서를 고정해 단일 DB 모델 설정에서도 실제 폴백이 일어나게 한다.
         result_text = None
         details = None
         parse_fail_count = 0
-        # 기존에는 모델이 4개 이상이어도 고정 3회만 돌아 네 번째 이후의 정상
-        # Codex/로컬 모델에 도달하지 못했다. 최소 파싱 재시도 수는 보장하되,
-        # 등록 모델 수만큼 순회하고 운영 상한을 넘기지 않는다.
-        attempt_limit = min(
-            max(_REVIEW_PARSE_MAX_ATTEMPTS, len(review_models)),
-            max(_REVIEW_PARSE_MAX_ATTEMPTS, _REVIEW_MODEL_MAX_ATTEMPTS),
-        )
+        attempt_limit = min(len(review_models), _REVIEW_MODEL_MAX_ATTEMPTS)
         _review_started_at = time.monotonic()
         for attempt_no in range(1, attempt_limit + 1):
             _elapsed = time.monotonic() - _review_started_at
@@ -867,7 +889,10 @@ async def review_code_diff(
                 )
                 break
             _attempt_timeout = min(float(_REVIEW_LLM_TIMEOUT_SEC), _remaining)
-            model = review_models[(attempt_no - 1) % len(review_models)] if review_models else _REVIEW_MODEL_FALLBACK
+            model = review_models[attempt_no - 1]
+            # 빈 응답이어도 마지막으로 실제 호출한 모델을 기록해야 스위퍼가
+            # 다음 재검수에서 정확한 실패 모델을 제외할 수 있다.
+            used_model = model
             try:
                 # P0: 리뷰 모델이 실패하면 call_llm_with_fallback 이 Claude 429 재시도(최대 60회)와
                 # LiteLLM 폴백 체인을 순회하며 수 분간 반환되지 않는 경우가 있다. 그동안 러너의
@@ -894,7 +919,6 @@ async def review_code_diff(
             if not result_text:
                 continue
 
-            used_model = model
             details = _parse_review_json(result_text)
             if details is not None:
                 break

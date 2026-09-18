@@ -1,8 +1,8 @@
 """
-중앙 Anthropic 클라이언트 팩토리 + LiteLLM/DashScope 폴백.
+중앙 Anthropic 클라이언트 팩토리 + LiteLLM 폴백.
 
 OAuth 토큰으로 Anthropic API 직접 호출.
-Claude 실패 시 qwen3-235b/LiteLLM 체인으로 자동 폴백.
+Claude OAuth 계정 실패 시 Gemini/LiteLLM 체인으로 자동 폴백.
 비Claude 모델(qwen-turbo 등)은 DashScope API 직접 또는 LiteLLM 프록시로 라우팅.
 백그라운드 시스템(self_evaluator, fact_extractor, compaction 등)에서 사용.
 """
@@ -308,7 +308,7 @@ async def call_llm_with_fallback(
     0순위: 사용자 본인 API 키 (BYOK, user_id 제공 시)
     1순위: Claude moong76@gmail (slot:naver, PRIMARY)
     2순위: Claude moongoby@gmail (slot:gmail, FALLBACK)
-    3순위: qwen3-235b (DashScope)
+    3순위: Gemini (LiteLLM 프록시)
 
     images 가 주어지면(Anthropic image/document block 목록) Claude 경로는 그대로
     전달하고, LiteLLM/DashScope 폴백 경로는 OpenAI 호환 image_url 로 변환한다.
@@ -480,14 +480,18 @@ async def call_llm_with_fallback(
 
     _lc = get_litellm_config()
 
-    # 3순위: qwen3-235b (DashScope)
-    if _DASHSCOPE_API_KEY:
+    # 3순위: 외부 모델은 반드시 LiteLLM 프록시를 통한다.
+    if _lc.get("key"):
         try:
-            return await _call_dashscope(prompt, "qwen3-235b", max_tokens, system, images)
+            _gemini_text = await _call_litellm(
+                prompt, "gemini-2.5-flash-lite", max_tokens, system, images
+            )
+            if _gemini_text:
+                return _gemini_text
         except Exception as e:
-            logger.warning("qwen3_235b_fallback_error: %s", str(e)[:80])
+            logger.warning("gemini_litellm_fallback_error: %s", str(e)[:80])
 
-    # 4순위(최종): LiteLLM 저비용 체인 — Claude OAuth 만료 시 가용성 유지
+    # 최종: 운영 DB의 LiteLLM 저비용 체인 — Claude OAuth/Gemini 실패 시 가용성 유지
     if _lc.get("key"):
         from app.core.llm_fallback_engine import get_bg_fallback_models as _get_fb
         _fb_list = await _get_fb()
@@ -502,7 +506,7 @@ async def call_llm_with_fallback(
                     "bg_llm_last_resort_error: model=%s error=%s", _fb_model, str(e)[:80]
                 )
 
-    logger.error("all_bg_llm_failed: claude+qwen3+litellm_chain exhausted")
+    logger.error("all_bg_llm_failed: claude+gemini_litellm_chain exhausted")
     return None
 
 

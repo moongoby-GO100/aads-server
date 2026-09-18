@@ -149,6 +149,13 @@ async def _review_code_diff_holds_when_review_models_return_no_response():
     assert verdict.flag_category == "REVIEW_MODEL_NO_RESPONSE"
     assert verdict.failure_stage == "review_llm"
     assert verdict.needs_retry is True
+    called_models = [call.kwargs["model"] for call in anthropic_mod.call_llm_with_fallback.await_args_list]
+    assert called_models == [
+        "qwen-turbo",
+        reviewer._REVIEW_OAUTH_FALLBACK_MODEL,
+        "gemini-2.5-flash-lite",
+    ]
+    assert len(called_models) == len(set(called_models))
     mock_save.assert_awaited_once()
 
 
@@ -185,6 +192,13 @@ async def _review_code_diff_holds_when_review_response_is_unparseable():
     assert verdict.flag_category == "REVIEW_PARSER_FAILURE"
     assert verdict.failure_stage == "review_json_parse"
     assert verdict.needs_retry is True
+    called_models = [call.kwargs["model"] for call in anthropic_mod.call_llm_with_fallback.await_args_list]
+    assert called_models == [
+        "qwen-turbo",
+        reviewer._REVIEW_OAUTH_FALLBACK_MODEL,
+        "gemini-2.5-flash-lite",
+    ]
+    assert len(called_models) == len(set(called_models))
     mock_save.assert_awaited_once()
 
 
