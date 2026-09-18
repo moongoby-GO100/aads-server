@@ -2452,6 +2452,32 @@ $(printf '%s\n' "$_dirty_status" | head -20)
     # 파일로 남긴다.
     _persist_full_diff_if_truncated "$job_id" "$worktree_dir" "$pre_exec_sha" "$_current_head" "$git_diff"
 
+    # 리뷰 판정과 산출물 보존을 분리한다. 리뷰가 실패하거나 인프라 장애로
+    # review_hold 에 머물러도 이 SHA 로 결과를 복구할 수 있어야 한다.
+    # 변경사항 0건은 위 no_changes 경로에서 이미 종결되므로 빈 커밋은 만들지 않는다.
+    local approval_commit_sha=""
+    approval_commit_sha=$(commit_job_worktree_for_approval "$job_id" "$session_id" "$worktree_dir" "$main_workdir" "$instruction" "$pre_exec_sha") || {
+        _release_work_lock "$project" "$job_id" "$parallel_group"
+        _cleanup_artifacts "$job_id"
+        promote_next_queued "$project"
+        _current_job_id=""
+        _current_session_id=""
+        rm -f /tmp/.pipeline_current_job
+        return 1
+    }
+    # 방어: 함수 계약(stdout=SHA 전용)이 다른 경로에서 깨져 로그 줄이
+    # 섞여 들어와도, 캡처값 안에 40자 hex 가 있으면 그것만 취해 살린다.
+    local _raw_approval_commit_sha="$approval_commit_sha"
+    approval_commit_sha=$(printf '%s' "$approval_commit_sha" | tr -d '\r' | grep -oE '[0-9a-f]{40}' | tail -n1) || true
+    if [[ "$approval_commit_sha" != "$_raw_approval_commit_sha" ]]; then
+        log "  APPROVAL_SHA_STDOUT_SANITIZED job=$job_id"
+    fi
+    if [[ -z "$approval_commit_sha" || "$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)" != "$approval_commit_sha" ]]; then
+        _fail_job "$job_id" "$session_id" "approval_commit_sha_mismatch" "검수 전 산출물 커밋 SHA와 runner worktree HEAD 불일치"
+        _release_work_lock "$project" "$job_id" "$parallel_group"
+        return 1
+    fi
+
     local review_verdict="APPROVE"
     local review_score="1.0"
     local review_flag_category=""
@@ -2631,31 +2657,6 @@ $(printf '%s\n' "$_dirty_status" | head -20)
         _current_job_id=""
         _current_session_id=""
         rm -f /tmp/.pipeline_current_job
-        return 1
-    fi
-
-    local approval_commit_sha=""
-    approval_commit_sha=$(commit_job_worktree_for_approval "$job_id" "$session_id" "$worktree_dir" "$main_workdir" "$instruction" "$pre_exec_sha") || {
-        _release_work_lock "$project" "$job_id" "$parallel_group"
-        _cleanup_artifacts "$job_id"
-        promote_next_queued "$project"
-        _current_job_id=""
-        _current_session_id=""
-        rm -f /tmp/.pipeline_current_job
-        return 1
-    }
-    # 방어: 함수 계약(stdout=SHA 전용)이 다른 경로에서 깨져 로그 줄이
-    # 섞여 들어와도, 캡처값 안에 40자 hex 가 있으면 그것만 취해 살린다.
-    # 2026-09-18 runner-09a6fe14 가 바로 이 오염으로 approval_commit_sha_mismatch
-    # 처리돼 죽었다 — 정규화 없이 문자열을 그대로 비교하면 재발한다.
-    local _raw_approval_commit_sha="$approval_commit_sha"
-    approval_commit_sha=$(printf '%s' "$approval_commit_sha" | tr -d '\r' | grep -oE '[0-9a-f]{40}' | tail -n1) || true
-    if [[ "$approval_commit_sha" != "$_raw_approval_commit_sha" ]]; then
-        log "  APPROVAL_SHA_STDOUT_SANITIZED job=$job_id"
-    fi
-    if [[ -z "$approval_commit_sha" || "$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)" != "$approval_commit_sha" ]]; then
-        _fail_job "$job_id" "$session_id" "approval_commit_sha_mismatch" "awaiting_approval 거부 — 저장 commit SHA와 runner worktree HEAD 불일치"
-        _release_work_lock "$project" "$job_id" "$parallel_group"
         return 1
     fi
 

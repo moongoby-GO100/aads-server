@@ -1847,6 +1847,37 @@ run_job() {
         # H6: instruction 크기 제한 (50KB)
         local safe_instruction="${instruction:0:50000}"
 
+        # AAG 착수 브리프 (AADS-AAG-BRIEF-001/002/003): 정적분석이 이미 아는 사실을 워커에게 먼저 준다.
+        # 실행 파일: ① 저장소 사본(있으면 그것이 정답) ② 호스트 공용 사본(AAG_BRIEF_BIN, 기본
+        # /root/scripts/aag-brief.py) — brief.py 는 러너 것이라 프로젝트 저장소마다 복제하지 않는다.
+        # 브리프 생성 실패가 본 작업을 실패시켜서는 안 되므로 전부 `|| true` 로 흘린다.
+        local aag_brief="" aag_step0_hint="" aag_brief_lines=0
+        local aag_brief_bin="" aag_brief_source=""
+        if [[ -f "$main_workdir/tools/aag/brief.py" ]]; then
+            aag_brief_bin="$main_workdir/tools/aag/brief.py"
+            aag_brief_source="repo"
+        elif [[ -f "${AAG_BRIEF_BIN:-/root/scripts/aag-brief.py}" ]]; then
+            aag_brief_bin="${AAG_BRIEF_BIN:-/root/scripts/aag-brief.py}"
+            aag_brief_source="host"
+        fi
+        if [[ -n "$aag_brief_bin" ]]; then
+            local aag_ins="$ARTIFACT_DIR/${job_id}.aaginst" aag_out=""
+            printf '%s' "$safe_instruction" > "$aag_ins" 2>/dev/null || true
+            aag_out=$(cd "$main_workdir" && timeout 20 python3 "$aag_brief_bin" \
+                        --instruction-file "$aag_ins" --project "$project" 2>/dev/null) || aag_out=""
+            rm -f "$aag_ins" 2>/dev/null || true
+            if [[ -n "$aag_out" ]]; then
+                aag_brief=$'\n'"$aag_out"
+                aag_step0_hint='- 아래 [AAG 착수 브리프] 가 있으면 그것을 먼저 읽어라. 거기 적힌 파일·경로·테이블은 다시 찾지 마라.'$'\n'
+                aag_brief_lines=$(printf '%s' "$aag_out" | grep -c '^- ' || true)
+                log "  AAG_BRIEF_OK job=$job_id project=$project source=$aag_brief_source bytes=${#aag_out} nodes=${aag_brief_lines}"
+                record_runner_event "$job_id" "aag_brief_attached" "running" "claude_code_work" "$current_model" "" "$job_size" "" "{\"project\":\"${project}\",\"source\":\"${aag_brief_source}\",\"bytes\":${#aag_out},\"nodes\":${aag_brief_lines}}"
+            else
+                log "  AAG_BRIEF_SKIP job=$job_id project=$project source=$aag_brief_source reason=no_output_or_timeout"
+                record_runner_event "$job_id" "aag_brief_attached" "running" "claude_code_work" "$current_model" "" "$job_size" "" "{\"project\":\"${project}\",\"source\":\"${aag_brief_source}\",\"bytes\":0,\"nodes\":0,\"skipped_reason\":\"no_output_or_timeout\"}"
+            fi
+        fi
+
         # H7: 빌드/배포 가드 v2.1 — Claude Code가 직접 배포하지 않도록 방지
         safe_instruction="[필수 규칙 — 반드시 준수]
 1. 코드 수정만 수행하세요. 파일 생성/수정/삭제만 허용됩니다.
@@ -1870,9 +1901,9 @@ run_job() {
    - 중앙 클라이언트: anthropic_client.py의 call_llm_with_fallback() 사용
 
 위 규칙을 위반하면 작업이 거부됩니다.
-
+${aag_brief}
 [STEP 0 기존 구현 조사 — 코드 수정 전 필수]
-- 대상 파일의 기존 함수/클래스/엔드포인트/스케줄러/DB 접점 목록을 먼저 확인하세요.
+${aag_step0_hint}- 대상 파일의 기존 함수/클래스/엔드포인트/스케줄러/DB 접점 목록을 먼저 확인하세요.
 - 각 항목을 [유지 | 수정 | 신규 | 삭제(사유 필수)]로 분류해 RESULT에 기록하세요.
 - 기존 구현을 새 구현으로 통째 대체하지 말고 필요한 개선분만 반영하세요.
 - 삭제가 필요하면 삭제 대상, 호출처 영향, 롤백 방법을 RESULT에 명시하세요.
@@ -2421,6 +2452,32 @@ $(printf '%s\n' "$_dirty_status" | head -20)
     # 파일로 남긴다.
     _persist_full_diff_if_truncated "$job_id" "$worktree_dir" "$pre_exec_sha" "$_current_head" "$git_diff"
 
+    # 리뷰 판정과 산출물 보존을 분리한다. 리뷰가 실패하거나 인프라 장애로
+    # review_hold 에 머물러도 이 SHA 로 결과를 복구할 수 있어야 한다.
+    # 변경사항 0건은 위 no_changes 경로에서 이미 종결되므로 빈 커밋은 만들지 않는다.
+    local approval_commit_sha=""
+    approval_commit_sha=$(commit_job_worktree_for_approval "$job_id" "$session_id" "$worktree_dir" "$main_workdir" "$instruction" "$pre_exec_sha") || {
+        _release_work_lock "$project" "$job_id" "$parallel_group"
+        _cleanup_artifacts "$job_id"
+        promote_next_queued "$project"
+        _current_job_id=""
+        _current_session_id=""
+        rm -f /tmp/.pipeline_current_job
+        return 1
+    }
+    # 방어: 함수 계약(stdout=SHA 전용)이 다른 경로에서 깨져 로그 줄이
+    # 섞여 들어와도, 캡처값 안에 40자 hex 가 있으면 그것만 취해 살린다.
+    local _raw_approval_commit_sha="$approval_commit_sha"
+    approval_commit_sha=$(printf '%s' "$approval_commit_sha" | tr -d '\r' | grep -oE '[0-9a-f]{40}' | tail -n1) || true
+    if [[ "$approval_commit_sha" != "$_raw_approval_commit_sha" ]]; then
+        log "  APPROVAL_SHA_STDOUT_SANITIZED job=$job_id"
+    fi
+    if [[ -z "$approval_commit_sha" || "$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)" != "$approval_commit_sha" ]]; then
+        _fail_job "$job_id" "$session_id" "approval_commit_sha_mismatch" "검수 전 산출물 커밋 SHA와 runner worktree HEAD 불일치"
+        _release_work_lock "$project" "$job_id" "$parallel_group"
+        return 1
+    fi
+
     local review_verdict="APPROVE"
     local review_score="1.0"
     local review_flag_category=""
@@ -2600,31 +2657,6 @@ $(printf '%s\n' "$_dirty_status" | head -20)
         _current_job_id=""
         _current_session_id=""
         rm -f /tmp/.pipeline_current_job
-        return 1
-    fi
-
-    local approval_commit_sha=""
-    approval_commit_sha=$(commit_job_worktree_for_approval "$job_id" "$session_id" "$worktree_dir" "$main_workdir" "$instruction" "$pre_exec_sha") || {
-        _release_work_lock "$project" "$job_id" "$parallel_group"
-        _cleanup_artifacts "$job_id"
-        promote_next_queued "$project"
-        _current_job_id=""
-        _current_session_id=""
-        rm -f /tmp/.pipeline_current_job
-        return 1
-    }
-    # 방어: 함수 계약(stdout=SHA 전용)이 다른 경로에서 깨져 로그 줄이
-    # 섞여 들어와도, 캡처값 안에 40자 hex 가 있으면 그것만 취해 살린다.
-    # 2026-09-18 runner-09a6fe14 가 바로 이 오염으로 approval_commit_sha_mismatch
-    # 처리돼 죽었다 — 정규화 없이 문자열을 그대로 비교하면 재발한다.
-    local _raw_approval_commit_sha="$approval_commit_sha"
-    approval_commit_sha=$(printf '%s' "$approval_commit_sha" | tr -d '\r' | grep -oE '[0-9a-f]{40}' | tail -n1) || true
-    if [[ "$approval_commit_sha" != "$_raw_approval_commit_sha" ]]; then
-        log "  APPROVAL_SHA_STDOUT_SANITIZED job=$job_id"
-    fi
-    if [[ -z "$approval_commit_sha" || "$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)" != "$approval_commit_sha" ]]; then
-        _fail_job "$job_id" "$session_id" "approval_commit_sha_mismatch" "awaiting_approval 거부 — 저장 commit SHA와 runner worktree HEAD 불일치"
-        _release_work_lock "$project" "$job_id" "$parallel_group"
         return 1
     fi
 

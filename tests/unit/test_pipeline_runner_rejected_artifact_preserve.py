@@ -17,9 +17,9 @@ def _runner_script() -> str:
 
 
 def _review_failed_branch(script: str) -> str:
-    # review_verdict != APPROVE 처리 블록 시작부터 approval 커밋 단계 직전까지.
+    # review_verdict != APPROVE 처리 블록 시작부터 승인 상태 전이 직전까지.
     start = script.index("if [[ \"$review_verdict\" != \"APPROVE\" ]]; then")
-    end = script.index("local approval_commit_sha=\"\"", start)
+    end = script.index("db_update \"UPDATE pipeline_jobs SET phase='awaiting_approval'", start)
     return script[start:end]
 
 

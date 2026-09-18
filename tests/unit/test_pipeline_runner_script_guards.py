@@ -82,20 +82,20 @@ def test_looks_like_git_diff_accepts_large_diff_under_pipefail():
                 os.unlink(path)
 
 
-def test_pipeline_runner_ai_review_holds_before_approval():
+def test_pipeline_runner_commits_artifact_before_ai_review_and_holds_before_approval():
     for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
         script = _read_script(script_name)
 
-        fail_close = script.index("AI_REVIEW_HOLD")
         commit_gate = script.index("approval_commit_sha=$(commit_job_worktree_for_approval")
+        fail_close = script.index("AI_REVIEW_HOLD", commit_gate)
         approval_transition = script.index("SET phase='awaiting_approval'")
 
-        assert fail_close < commit_gate < approval_transition
+        assert commit_gate < fail_close < approval_transition
         assert "if [[ \"$review_verdict\" != \"APPROVE\" ]]" in script
         assert "review_hold_status=\"review_hold\"" in script
         assert "review_hold_phase=\"review_hold\"" in script
         assert "승인 대기 차단" in script
-        assert "_notify_ai \"$job_id\"" in script[fail_close:commit_gate]
+        assert "_notify_ai \"$job_id\"" in script[fail_close:approval_transition]
 
 
 def test_pipeline_runner_adopts_worker_commit_instead_of_failing_approval():
