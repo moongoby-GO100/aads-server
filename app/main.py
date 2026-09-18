@@ -3674,6 +3674,10 @@ _MONITOR_KEY_PATHS = (
 # require the normal AADS JWT middleware.
 _SERVICE_AUTH_EXACT_PATHS = {
     "/api/v1/ohvis/llmops/trace-ingest",
+    # NTV2 가 AADS DB 의 LLM 토큰을 빌려쓰는 내부 경로. 라우터 자신이
+    # X-Internal-Secret 을 검증하므로(app/api/internal_token.py) 여기서는
+    # 정확 경로 하나만 면제한다 — prefix 로 넓히면 /internal/* 전체가 열린다.
+    "/api/v1/internal/service-token",
 }
 
 # Public read-only routes must be listed individually. Never place the
