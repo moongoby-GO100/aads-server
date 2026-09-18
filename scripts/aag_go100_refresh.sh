@@ -79,4 +79,14 @@ print('generated=%s findings=%d %s routes=%s' % (
     g['stats'].get('mounted_routes')))
 " 2>/dev/null || echo "summary_unavailable")
 
+# 4) DB 적재. 이게 없으면 스캔은 도는데 `aag_findings` 는 영원히 local_graph
+#    폴백으로만 답한다 — 2026-09-19 `aag_graph_snapshots` 0건의 원인이 바로
+#    생산자 부재였다. 적재가 실패해도 산출물 회수는 성공으로 남긴다(파일은
+#    이미 최신이다). 대신 로그에 남겨 조용히 낡지 않게 한다.
+if python3 "${REPO_DIR}/scripts/aag_snapshot_push.py" >>"$LOG" 2>&1; then
+    log "SNAPSHOT_PUSHED"
+else
+    log "SNAPSHOT_PUSH_FAILED — aag_findings 가 local_graph 폴백으로 답한다"
+fi
+
 log "DONE ${summary}"
