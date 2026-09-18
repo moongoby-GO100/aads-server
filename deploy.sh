@@ -1912,7 +1912,17 @@ sync_standby_slot_after_drain() {
         curl -sf -X POST "http://127.0.0.1:${old_port}/api/v1/pc-agent/graceful-shutdown" \
             -H "Content-Type: application/json" 2>/dev/null || true
 
-        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-600}"
+        # 기본 600초 → 180초 (2026-09-19).
+        #
+        # 이 대기는 타임아웃돼도 스트림을 끊지 않는다 — BLOCKED 로 물러나
+        # 대기 슬롯을 구버전 그대로 둘 뿐이다(아래 return 2). 그러니 길게
+        # 기다려서 얻는 것은 "운 좋게 스트림이 0이 되는 경우" 하나뿐인데,
+        # 채팅이 상시 도는 이 시스템에서는 그 순간이 거의 오지 않는다.
+        #
+        # 실측 #4719: 600초를 다 기다리고도 `active streams=1` 로 BLOCKED.
+        # 그 10분 동안 배포 락을 잡아 다음 배포 #4721 이 통째로 밀렸다.
+        # 어차피 물러날 것이라면 빨리 물러나 락을 놓는 편이 낫다.
+        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-180}"
         local drain_interval="${AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-5}"
         local elapsed=0
         local active="0"
