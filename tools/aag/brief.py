@@ -386,11 +386,17 @@ def build_sections(
     # ── ⚠ 이 범위에 이미 걸린 결함 ──
     lines = []
     for f in relevant_findings(graph.get("findings", []), seed_set, related, seed_ns, seed_tables, nodes, deadline):
-        sev = f.get("severity", "?")
-        detail = str(f.get("detail", "")).replace("\n", " ")
+        nf = normalize_finding(f)
+        if nf is None:
+            continue
+        sev = nf.get("severity", "?")
+        detail = str(nf.get("detail", "")).replace("\n", " ")
         if len(detail) > 220:
             detail = detail[:217] + "…"
-        lines.append(f"- [{sev}] {f.get('rule')} `{f.get('key', '')}` — {detail}")
+        line = f"- [{sev}] {nf.get('rule')} `{nf.get('key', '')}`"
+        if detail:
+            line += f" — {detail}"
+        lines.append(line)
     if lines:
         sections.append((PRI_FINDINGS, "## ⚠ 이 범위에 이미 걸린 결함", lines))
 
@@ -409,6 +415,27 @@ def build_sections(
         sections.append((PRI_UNRESOLVED, "## 판정 불가(UNRESOLVED)", lines))
 
     return sections
+
+
+FINDING_ALIASES: dict[str, list[str]] = {
+    "key": ["key", "path", "name"],
+    "detail": ["detail", "what", "message", "msg", "note"],
+}
+
+
+def normalize_finding(f: dict) -> dict | None:
+    """finding 원소의 프로젝트별 별칭을 흡수한다. key 를 합성할 수 없으면 None(그 줄 생략)."""
+    key = next((f[a] for a in FINDING_ALIASES["key"] if f.get(a)), None)
+    if key is None:
+        file, lineno = f.get("file"), f.get("lineno")
+        key = f"{file}:{lineno}" if file and lineno else file
+    if key is None:
+        return None
+    detail = next((f[a] for a in FINDING_ALIASES["detail"] if f.get(a)), "")
+    out = dict(f)
+    out["key"] = key
+    out["detail"] = detail
+    return out
 
 
 def relevant_findings(

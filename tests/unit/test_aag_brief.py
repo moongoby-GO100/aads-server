@@ -153,6 +153,54 @@ def test_related_findings_appear_and_unrelated_do_not(tmp_path):
     assert "unrelated_table" not in out
 
 
+# ── finding 별칭 흡수 (AADS-AAG-BRIEF-004) — 프로젝트마다 다른 키 ──────────
+
+
+def _write_graph(tmp_path, graph: dict, name: str = "custom-graph.json") -> Path:
+    path = tmp_path / name
+    path.write_text(json.dumps(graph, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_aads_shaped_finding_unchanged(tmp_path):
+    """key/detail 이 있는 기존(AADS) 모양은 한 글자도 안 바뀐다 — 회귀 고정."""
+    res = _run(tmp_path, "app/api/chat.py 의 스트리밍 응답을 고쳐라")
+
+    assert "- [P1] DUP_MODULE `chat.py` — 모듈명 `chat.py` 이 2개 디렉터리에 중복 존재" in res.stdout
+
+
+def test_acct_shaped_finding_renders_without_blanks(tmp_path):
+    """key/detail 없이 what/gate_lineno 를 쓰는 ACCT 모양도 빈칸 없이 렌더된다."""
+    graph = _graph()
+    graph["findings"] = [{"rule": "AUTH_BYPASS", "file": "app/api/chat.py", "lineno": 2266,
+                           "gate_lineno": 2270, "method": "POST",
+                           "what": "인증 없이 접근 가능", "severity": "P0"}]
+    res = _run(tmp_path, "app/api/chat.py 를 고쳐라", graph=_write_graph(tmp_path, graph))
+
+    assert "- [P0] AUTH_BYPASS `app/api/chat.py:2266` — 인증 없이 접근 가능" in res.stdout
+    assert "``" not in res.stdout
+
+
+def test_finding_without_detail_has_no_dash_separator(tmp_path):
+    graph = _graph()
+    graph["findings"] = [{"rule": "NO_DETAIL", "file": "app/api/chat.py",
+                           "key": "app/api/chat.py", "severity": "P2"}]
+    res = _run(tmp_path, "app/api/chat.py 를 고쳐라", graph=_write_graph(tmp_path, graph))
+
+    assert "- [P2] NO_DETAIL `app/api/chat.py`\n" in res.stdout
+    assert "NO_DETAIL `app/api/chat.py` —" not in res.stdout
+
+
+def test_finding_without_key_or_file_is_skipped_not_crashed(tmp_path):
+    graph = _graph()
+    graph["findings"] = [{"rule": "ORPHAN_RULE", "severity": "P3", "modules": ["app/api/chat.py"]}]
+    res = _run(tmp_path, "app/api/chat.py 를 고쳐라", graph=_write_graph(tmp_path, graph))
+
+    assert res.returncode == 0
+    assert "ORPHAN_RULE" not in res.stdout
+    assert "Traceback" not in res.stderr
+
+
 def test_unresolved_section_is_scoped(tmp_path):
     res = _run(tmp_path, "app/routers/chat.py 를 고쳐라")
 
