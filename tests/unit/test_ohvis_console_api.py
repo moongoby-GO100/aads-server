@@ -116,15 +116,21 @@ def test_router_is_registered_under_ohvis_console():
     assert 'app.include_router(ohvis_console_router, prefix="/api/v1"' in main_source
 
 
-def test_console_does_not_duplicate_existing_task_or_approval_endpoints():
-    """지시 생성·승인 판단은 기존 경로에 위임한다 (지시서 2항)."""
+def test_console_delegates_writes_to_existing_services():
+    """SQL 을 여기서 다시 쓰지 않는다 — 기록도 승인도 기존 서비스에 위임한다.
+
+    2026-09-18 에 라우트가 셋이 됐다(summary / 승인결정 / command). 늘어난 것은
+    **실행 트리거**이고, 지시 기록 자체는 여전히 `ohvis_task_manager.create_task()`
+    가 한다 — 그래서 INSERT 문은 이 모듈에 한 줄도 없다.
+    """
     source = Path("app/api/ohvis_console.py").read_text()
-    # 같은 뜻의 생성 엔드포인트를 새로 만들지 않았다 — 라우트는 둘뿐이다
-    assert len(console.router.routes) == 2
+    assert len(console.router.routes) == 3
     assert "INSERT INTO ohvis_tasks" not in source
     assert "INSERT INTO recipe_approvals" not in source
     assert "UPDATE recipe_approvals" not in source
-    # 승인 판단은 서비스 호출로만 한다
+    # 기록·완료·승인 판단은 전부 서비스 호출이다
+    assert "create_ohvis_task(" in source
+    assert "complete_ohvis_task(" in source
     assert "resolve_approval(" in source
     assert "list_pending(" in source
 
@@ -524,6 +530,211 @@ def test_decision_translates_service_errors(monkeypatch, raised, expected_status
     assert caught.value.status_code == expected_status
 
 
+# ──────────────────────────────── 4-b. 지시 실행 (AADS-OHVIS-CONSOLE-COMMAND)
+#
+# 이 절이 지키는 것은 하나다: **보낸 지시가 실제로 실행되는가.**
+# 2026-09-18, 화면은 `POST /ohvis/tasks` 로 지시를 보냈고 그 경로는 INSERT 만
+# 했다. pending 을 claim 하는 워커가 저장소에 없었으므로 행 하나
+# (`e41f2c94-9571-4831-b687-f5997c1d91fe`)가 8분 뒤에도 pending·판단 NULL 로
+# 남아 있었다. 실행 경로는 `trigger_ai_reaction()` 이고 이 테스트들은 그 체인이
+# 끊기지 않았는지만 본다.
+
+
+SESSION_MINE = console._uuid_or_none("3f8b3f2c-0000-4000-8000-0000000000aa")
+SESSION_THEIRS = console._uuid_or_none("3f8b3f2c-0000-4000-8000-0000000000bb")
+
+
+def _command_pool(monkeypatch, values: list) -> FakeConn:
+    conn = FakeConn(values=values)
+    monkeypatch.setattr(console, "get_pool", lambda: FakePool(conn))
+    return conn
+
+
+def test_command_is_behind_the_internal_admin_gate():
+    """무인증·비관리자가 부르면 안 된다 — 이 라우트는 임의 문자열을 CEO 채팅
+    세션에 밀어 넣는다. 게이트가 빠지면 그대로 원격 프롬프트 인젝션이다."""
+    import inspect
+
+    gate = inspect.signature(console.run_console_command).parameters["context"].default
+    assert gate.dependency is console.require_console_admin
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(console.require_console_admin(context=ctx(admin=False)))
+    assert caught.value.status_code == 403
+
+
+def test_command_falls_back_to_own_tenant_session(monkeypatch):
+    """남의 테넌트 세션 id 를 실어 보내도 내 테넌트 세션으로 떨어진다.
+
+    `ohvis_tasks` 에는 tenant 컬럼이 없다 — 세션 소유 검사가 유일한 경계다.
+    """
+    # 소유 조회가 빈손(남의 세션) → 내 최근 세션으로 폴백
+    conn = _command_pool(monkeypatch, [None, SESSION_MINE])
+    created: dict = {}
+    dispatched: dict = {}
+
+    async def fake_create(*, session_id, title, task_type):
+        created.update(session_id=session_id, title=title, task_type=task_type)
+        return "task-1"
+
+    async def fake_dispatch(session_id, title, task_id):
+        dispatched.update(session_id=session_id, title=title, task_id=task_id)
+
+    monkeypatch.setattr(console, "create_ohvis_task", fake_create)
+    monkeypatch.setattr(console, "_dispatch_ai_reaction", fake_dispatch)
+
+    body = console.ConsoleCommandIn(title="서버 헬스체크 결과만 보고해", session_id=SESSION_THEIRS)
+    result = asyncio.run(console.run_console_command(body, context=ctx()))
+
+    assert conn.queries[0][1] == (SESSION_THEIRS, TENANT)
+    assert created["session_id"] == str(SESSION_MINE)
+    assert dispatched["session_id"] == str(SESSION_MINE)
+    assert result["session_id"] == str(SESSION_MINE)
+
+
+def test_command_409s_when_the_tenant_has_no_chat_session(monkeypatch):
+    _command_pool(monkeypatch, [None])
+
+    async def unreachable(**kwargs):
+        raise AssertionError("세션이 없으면 행을 만들면 안 된다 (FK 위반)")
+
+    monkeypatch.setattr(console, "create_ohvis_task", unreachable)
+
+    body = console.ConsoleCommandIn(title="아무거나")
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(console.run_console_command(body, context=ctx()))
+    assert caught.value.status_code == 409
+    assert caught.value.detail == "no_chat_session"
+
+
+def test_command_creates_a_running_row_and_triggers_the_ai(monkeypatch):
+    """성공 경로. 행이 running 으로 생기고 트리거가 **그 task_id 로** 나간다.
+
+    task_id 를 빠뜨리면 반응이 끝나도 `complete_task()` 가 돌지 않아서 행이
+    영원히 running 이다 — 화면은 "돌고 있다" 고 거짓말한다.
+    """
+    _command_pool(monkeypatch, [SESSION_MINE])
+    created: dict = {}
+    triggered: dict = {}
+
+    async def fake_create(*, session_id, title, task_type):
+        created.update(session_id=session_id, title=title, task_type=task_type)
+        return "task-42"
+
+    async def fake_trigger(session_id, system_message, ohvis_task_id=None, **kwargs):
+        triggered.update(
+            session_id=session_id, system_message=system_message, ohvis_task_id=ohvis_task_id
+        )
+        return None
+
+    from app.services import chat_service
+
+    monkeypatch.setattr(console, "create_ohvis_task", fake_create)
+    monkeypatch.setattr(chat_service, "trigger_ai_reaction", fake_trigger)
+
+    body = console.ConsoleCommandIn(title="  서버 헬스체크 결과만 보고해  ", session_id=SESSION_MINE)
+    result = asyncio.run(console.run_console_command(body, context=ctx()))
+
+    # 기록: ohvis_task_manager.create_task 가 status='running' 으로 넣는다
+    assert created == {
+        "session_id": str(SESSION_MINE),
+        "title": "서버 헬스체크 결과만 보고해",
+        "task_type": "ceo_directive",
+    }
+    # 실행: 같은 task_id 로 채팅 트리거가 나갔다
+    assert triggered["ohvis_task_id"] == "task-42"
+    assert triggered["session_id"] == str(SESSION_MINE)
+    assert triggered["system_message"] == "[오비스 창 지시] 서버 헬스체크 결과만 보고해"
+    assert result == {
+        "task_id": "task-42",
+        "session_id": str(SESSION_MINE),
+        "status": "running",
+    }
+
+
+def test_command_marks_the_row_error_and_502s_when_the_trigger_blows_up(monkeypatch):
+    """트리거가 실패했는데 행이 running 으로 남으면 그것이 이번 결함이다."""
+    _command_pool(monkeypatch, [SESSION_MINE])
+    closed: dict = {}
+
+    async def fake_create(*, session_id, title, task_type):
+        return "task-99"
+
+    async def boom(session_id, system_message, ohvis_task_id=None, **kwargs):
+        raise RuntimeError("no running event loop")
+
+    async def fake_complete(task_id, *, status=None, result=None, ohvis_judgement=None):
+        closed.update(task_id=task_id, status=status, result=result)
+        return True
+
+    from app.services import chat_service
+
+    monkeypatch.setattr(console, "create_ohvis_task", fake_create)
+    monkeypatch.setattr(chat_service, "trigger_ai_reaction", boom)
+    monkeypatch.setattr(console, "complete_ohvis_task", fake_complete)
+
+    body = console.ConsoleCommandIn(title="헬스체크")
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(console.run_console_command(body, context=ctx()))
+
+    assert caught.value.status_code == 502
+    assert "ai_reaction_dispatch_failed" in caught.value.detail
+    assert closed["task_id"] == "task-99"
+    assert closed["status"] == "error"
+    assert "no running event loop" in closed["result"]["error"]
+
+
+def test_command_rejects_blank_and_oversized_titles(monkeypatch):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        console.ConsoleCommandIn(title="")
+    with pytest.raises(ValidationError):
+        console.ConsoleCommandIn(title="가" * 501)
+
+    _command_pool(monkeypatch, [SESSION_MINE])
+
+    async def unreachable(**kwargs):
+        raise AssertionError("공백만 있는 지시로 행을 만들면 안 된다")
+
+    monkeypatch.setattr(console, "create_ohvis_task", unreachable)
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(console.run_console_command(console.ConsoleCommandIn(title="   "), context=ctx()))
+    assert caught.value.status_code == 422
+
+
+def test_ohvis_task_http_writes_stay_ungated_and_uncalled_by_the_dashboard():
+    """`POST /ohvis/tasks`·`PATCH /ohvis/tasks/{id}` 는 **아직 무인증이다**.
+
+    이 테스트는 "닫혔다" 가 아니라 **"열려 있다"** 를 고정한다. 게이트를 붙이려면
+    두 공개 함수의 시그니처를 바꿔야 하는데, 그건 이 작업(콘솔 지시 실행 결선)의
+    범위 밖이라 손대지 않았다. 대신 지금 실제로 성립하는 완화책 하나를 못 박는다:
+    **대시보드에는 그 경로를 부르는 코드가 없다.** 지시는 관리자 게이트가 붙은
+    `POST /ohvis/console/command` 로만 나간다.
+
+    그러니 이 테스트가 깨지는 방향은 둘이고 뜻이 서로 다르다.
+      - `_admin` 이 생겨서 깨졌다 → 게이트가 붙었다는 뜻이다. 이 테스트를
+        "게이트가 있다" 쪽으로 뒤집어라.
+      - 화면에 `createOhvisTask(` 호출이 되살아나서 깨졌다 → 무인증 경로로
+        지시가 다시 새는 것이다. 화면을 되돌려라.
+    """
+    import inspect
+
+    from app.api import ohvis_tasks
+
+    for endpoint in (ohvis_tasks.create_task, ohvis_tasks.update_task):
+        assert "_admin" not in inspect.signature(endpoint).parameters, (
+            f"{endpoint.__name__} 에 인증 게이트가 붙었다 — 이 테스트를 뒤집어라"
+        )
+
+    # 경로 문자열(`/ohvis/tasks`)은 api.ts 안에만 있다. 화면이 그 경로에 닿는
+    # 유일한 손잡이가 `createOhvisTask` 이므로, 호출이 없는지만 보면 된다
+    # — 주석에 경로 이름이 나오는 것까지 막으면 거짓 양성이 난다.
+    page_source = DASHBOARD_PAGE.read_text()
+    assert "createOhvisTask(" not in page_source
+    assert "api.createOhvisTask" not in page_source
+
+
 # ────────────────────────────────────────────── 5. 대시보드 화면 정적 검사
 
 
@@ -534,9 +745,21 @@ def test_ohvis_route_exists_and_uses_the_single_summary_endpoint():
     assert "getOhvisConsoleSummary" in source
     assert "getOhvisConsoleSummary" in api_source
     assert "/ohvis/console/summary" in api_source
-    # 지시 전송은 기존 POST /ohvis/tasks 를 그대로 쓴다
-    assert "createOhvisTask" in source
-    assert '"/ohvis/tasks"' in api_source
+    # 지시 전송은 실행까지 거는 콘솔 라우트로만 나간다. 기록만 하던
+    # POST /ohvis/tasks 로 돌아가면 지시가 다시 pending 으로 굳는다.
+    assert "runOhvisConsoleCommand" in source
+    assert "runOhvisConsoleCommand" in api_source
+    assert '"/ohvis/console/command"' in api_source
+    # 화면(page.tsx)에서는 기록 전용 경로가 사라져야 한다 — 이게 결함의 본체였다.
+    assert "createOhvisTask" not in source
+    # 하지만 api.ts 의 **공개 심볼은 지운다**가 아니라 **표시한다**. 지우면
+    # 리포지터리 밖 호출자가 조용히 깨지고, 같은 이름이 나중에 다른 뜻으로
+    # 되살아난다. 선언은 그대로 두고 위에 @deprecated 만 붙인다.
+    assert "createOhvisTask" in api_source
+    marker = api_source.index("createOhvisTask:")
+    preamble = api_source[max(0, marker - 800) : marker]
+    assert "@deprecated" in preamble, "createOhvisTask 선언 위에 @deprecated 표시가 없다"
+    assert "runOhvisConsoleCommand" in preamble, "@deprecated 는 대체 경로를 가리켜야 한다"
     # 승인 결정은 콘솔 위임 라우트로
     assert "decideOhvisConsoleApproval" in source
     assert "/ohvis/console/approvals/" in api_source

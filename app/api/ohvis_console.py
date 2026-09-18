@@ -9,7 +9,13 @@
 1회씩 커넥션 셋을 잡는다. 화면이 한 벌이면 호출도 한 벌이다.
 
 **같은 뜻의 API 를 새로 만들지 않는다** (지시서 2항):
-  - 지시 전송  → `app/api/ohvis_tasks.py` 의 `POST /ohvis/tasks` 를 그대로 쓴다.
+  - 지시 전송  → `POST /ohvis/console/command`. 기록은 `ohvis_task_manager.create_task()`,
+    실행은 `chat_service.trigger_ai_reaction()` — 둘 다 기존 계약이고 여기서는
+    **잇기만** 한다. 2026-09-18 까지는 화면이 `POST /ohvis/tasks` 를 직접 불렀는데
+    그 경로는 INSERT 만 하고 pending 을 소비하는 워커가 저장소에 없어서, 보낸
+    지시가 영원히 pending 으로 남았다(`e41f2c94` 가 그 증거다). 그러니 실행
+    트리거가 붙은 이 경로만 쓴다 — 그리고 그 트리거는 원격 프롬프트 주입이
+    되므로 관리자 게이트 밖에 두지 않는다.
   - 승인 결정  → `app/services/work_recipe/approval.py` 의 `resolve_approval()`.
     이 계약에는 HTTP 표면이 하나도 없었으므로(2026-09-17 실측: `recipe_approvals`
     를 다루는 라우트가 저장소에 없다) 여기서 **얇은 위임 라우트 하나만** 얹는다.
@@ -39,6 +45,8 @@ from pydantic import BaseModel, Field
 from app.auth import TenantRole, require_tenant_role
 from app.core.db_pool import get_pool
 from app.services.loop_controller import list_active_loops
+from app.services.ohvis_task_manager import complete_task as complete_ohvis_task
+from app.services.ohvis_task_manager import create_task as create_ohvis_task
 from app.services.work_recipe.approval import (
     ApprovalError,
     ConfirmationRequired,
@@ -73,6 +81,10 @@ LOOP_FAILED_STATUSES = frozenset({"failed"})
 
 _MAX_TEXT = 500
 
+# 지시를 채팅으로 흘려보낼 때 붙는 표식. AI 가 "어디서 온 지시인지" 를 알아야
+# 오비스 창으로 결과를 돌려보낸다. 문구를 바꾸면 대화 로그 검색이 끊긴다.
+COMMAND_MESSAGE_PREFIX = "[오비스 창 지시]"
+
 
 async def require_console_admin(
     context: TenantContext = Depends(require_viewer),
@@ -84,6 +96,14 @@ async def require_console_admin(
     if not context.get("user", {}).get("is_internal_admin"):
         raise HTTPException(status_code=403, detail="internal_admin_required")
     return context
+
+
+class ConsoleCommandIn(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    # 화면이 보내는 세션은 **참고값**이다. 실제 세션은 서버가 고른다
+    # (`_resolve_session_id`) — 남의 테넌트 세션 id 를 실어 보내도 내 테넌트
+    # 세션으로 떨어진다.
+    session_id: UUID | None = None
 
 
 class ApprovalDecisionIn(BaseModel):
@@ -539,6 +559,97 @@ async def get_console_summary(
         "reports": reports,
     }
     return payload
+
+
+async def _dispatch_ai_reaction(session_id: str, title: str, task_id: str) -> None:
+    """지시를 채팅 세션에 넣고 AI 가 도구로 조치하게 만든다.
+
+    `trigger_ai_reaction()` 은 메시지를 넣고 소비 태스크를 띄운 뒤 바로 돌아온다
+    (`_consume_stream` 은 별도 태스크다). 그래서 await 해도 요청이 AI 응답을
+    기다리지 않는다 — 대신 **띄우는 데 실패한 것**은 여기서 바로 알 수 있다.
+    이걸 `create_task()` 로 던져 버리면 실패가 로그에만 남고 행은 running 으로
+    굳는다. Pipeline Runner 가 같은 인자로 부르는 그 함수다.
+
+    `ohvis_task_id` 를 넘기면 반응이 끝날 때 `complete_task()` 가 판단·결과를
+    그 행에 적는다 — 오비스 창이 결과를 보는 유일한 경로다.
+
+    chat_service 는 여기서 늦게 가져온다. 모듈 최상단에서 가져오면 라우터
+    임포트가 채팅 스택 전체를 끌고 온다.
+    """
+    from app.services.chat_service import trigger_ai_reaction
+
+    await trigger_ai_reaction(
+        session_id=session_id,
+        system_message=f"{COMMAND_MESSAGE_PREFIX} {title}",
+        ohvis_task_id=task_id,
+    )
+
+
+@router.post("/command", status_code=202)
+async def run_console_command(
+    body: ConsoleCommandIn,
+    context: TenantContext = Depends(require_console_admin),
+) -> dict[str, Any]:
+    """오비스 창에서 내린 지시 한 건 — 기록하고 **실행까지 건다**.
+
+    기록만 하던 것이 이 결함의 전부였다. 그래서 여기서는 두 가지를 한 흐름에
+    묶는다: `ohvis_tasks` 행(running) 과 채팅 세션 트리거. 행만 남고 트리거가
+    실패하면 그 행을 error 로 닫고 502 를 돌려준다 — pending/running 으로
+    방치하면 화면은 "돌고 있다" 고 거짓말한다.
+
+    게이트는 라우터 전체의 `require_console_admin` 이다. 이 엔드포인트는 임의
+    문자열을 CEO 채팅 세션에 밀어 넣으므로, 인증이 없으면 그대로 원격 프롬프트
+    인젝션이 된다.
+    """
+    tenant_id = _tenant_id(context)
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="empty_title")
+
+    async with get_pool().acquire() as conn:
+        session_uuid = await _resolve_session_id(
+            conn, tenant_id, _user_id(context), body.session_id
+        )
+    if session_uuid is None:
+        # 붙을 채팅 세션이 없으면 FK 때문에 행도 못 만든다. 500 으로 터뜨리지
+        # 않고 화면이 읽을 수 있는 사유를 준다.
+        raise HTTPException(status_code=409, detail="no_chat_session")
+
+    task_id = await create_ohvis_task(
+        session_id=str(session_uuid),
+        title=title,
+        task_type="ceo_directive",
+    )
+    if not task_id:
+        # create_task 는 예외를 삼키고 None 을 준다 — 그 None 이 여기서 끝이다.
+        raise HTTPException(status_code=502, detail="ohvis_task_create_failed")
+
+    try:
+        await _dispatch_ai_reaction(str(session_uuid), title, task_id)
+    except Exception as exc:
+        reason = _text(str(exc), 300)
+        logger.warning(
+            "ohvis_console_command_dispatch_failed",
+            task_id=task_id,
+            session_id=str(session_uuid),
+            error=reason,
+        )
+        await complete_ohvis_task(
+            task_id,
+            status="error",
+            result={"error": reason, "summary": f"지시를 실행하지 못했습니다: {reason}"},
+            ohvis_judgement="실행 트리거 실패",
+        )
+        raise HTTPException(
+            status_code=502, detail=f"ai_reaction_dispatch_failed: {reason}"
+        ) from exc
+
+    logger.info(
+        "ohvis_console_command_dispatched",
+        task_id=task_id,
+        session_id=str(session_uuid),
+    )
+    return {"task_id": task_id, "session_id": str(session_uuid), "status": "running"}
 
 
 @router.post("/approvals/{approval_id}/decision")
