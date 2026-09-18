@@ -346,6 +346,9 @@ async def create_saas_user(
     name: Optional[str] = None,
     *,
     attach_internal_tenant: bool = False,
+    consents: Optional[list[dict]] = None,
+    ip: Optional[str] = None,
+    user_agent: Optional[str] = None,
 ) -> Optional[dict]:
     if not BCRYPT_AVAILABLE:
         log.error('bcrypt_unavailable', detail='bcrypt not installed')
@@ -372,10 +375,36 @@ async def create_saas_user(
                         row['default_tenant_id'],
                         row['id'],
                     )
+                if row and consents:
+                    for consent in consents:
+                        await conn.execute(
+                            """INSERT INTO saas_user_consents
+                                   (user_id, consent_key, version, agreed, ip, user_agent)
+                               VALUES ($1, $2, $3, $4, $5::inet, $6)""",
+                            row['id'],
+                            consent['consent_key'],
+                            consent['version'],
+                            consent['agreed'],
+                            ip,
+                            user_agent,
+                        )
             return dict(row) if row else None
     except Exception as e:
         log.error('create_saas_user_failed', error=str(e))
         return None
+
+
+async def update_saas_user_last_login(user_id: str) -> None:
+    """로그인 성공 시 last_login_at 갱신. 실패해도 로그인 자체는 막지 않는다."""
+    try:
+        pool = await _ensure_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE saas_users SET last_login_at = now() WHERE id = $1",
+                user_id,
+            )
+    except Exception as e:
+        log.error('update_last_login_failed', user_id=user_id, error=str(e))
 
 
 async def authenticate_saas_user(email: str, password: str) -> Optional[dict]:

@@ -545,6 +545,104 @@ PY
     printf '%s' "$cred"
 }
 
+# DB(llm_api_keys) 기반 Anthropic 계정 사다리 (AADS-RUNNER-SLOT4, 2026-09-19)
+#
+# 왜 필요한가. 여기는 오래도록 `i % 2 + 1` 로 계정1·2만 돌았다. 그런데 대표님
+# 계정은 DB 에 4개가 등록돼 있고 우선순위 1번(슬롯4)은 한도가 남아 있었다.
+# 2026-09-19 05:36~05:44 KST 실측: 계정1·2 가 동시에 주간한도(해제 09-19 23:59 /
+# 09-23 02:59 KST)에 걸린 동안 사다리 15칸 중 claude 8칸이 전부 헛시도로 탔고,
+# 슬롯3·4 는 단 한 번도 시도되지 않았다. 한도가 남았는데 러너만 멈춰 있었다.
+#
+# 규칙 셋.
+#  1. rate_limited_until 이 지난/비어 있는 계정만 돌려준다 — 죽은 계정을 때리지 않는다.
+#  2. priority 오름차순 — 대표님이 대시보드에서 정한 순서가 그대로 사다리가 된다.
+#  3. 실제로 쓸 수 있는 슬롯만 남긴다. 슬롯3·4 는 .env 에 고정 토큰이 없으므로
+#     릴레이 슬롯 자격증명(refresh 가능)이 있을 때만 유효하다.
+# 조회 실패 시 아무것도 출력하지 않고 1 을 반환해 호출측이 기존 2슬롯 경로로 폴백한다.
+get_db_anthropic_slots() {
+    local rows
+    rows=$(db_exec "SELECT CASE key_name
+                             WHEN 'ANTHROPIC_AUTH_TOKEN'   THEN '1'
+                             WHEN 'ANTHROPIC_AUTH_TOKEN_2' THEN '2'
+                             WHEN 'ANTHROPIC_AUTH_TOKEN_3' THEN '3'
+                             WHEN 'ANTHROPIC_AUTH_TOKEN_4' THEN '4'
+                             ELSE '' END AS slot
+                    FROM llm_api_keys
+                    WHERE provider='anthropic'
+                      AND is_active = TRUE
+                      AND (rate_limited_until IS NULL OR rate_limited_until <= NOW())
+                    ORDER BY priority ASC, id ASC;" 2>/dev/null) || return 1
+    [[ -z "$rows" ]] && return 1
+    local slot out=""
+    while IFS= read -r slot; do
+        slot="${slot//[^0-9]/}"
+        [[ -z "$slot" ]] && continue
+        if [[ -n "$(slot_credentials_file "$slot" || true)" ]]; then
+            out+="${slot}"$'\n'
+        elif [[ "$slot" == "1" && -n "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
+            out+="${slot}"$'\n'
+        elif [[ "$slot" == "2" && -n "${ANTHROPIC_AUTH_TOKEN_2:-}" ]]; then
+            out+="${slot}"$'\n'
+        fi
+    done <<< "$rows"
+    [[ -z "$out" ]] && return 1
+    printf '%s' "$out"
+}
+
+# 한도가 남은 Codex 계정의 홈 디렉터리를 stdout 으로 돌려준다.
+#
+# 전역 쿨다운 마커(/tmp/aads-codex-auth-disabled-until) 하나가 codex 전체를
+# 막고 있었다. 2026-09-19 실측: CODEX_OAUTH_JINAH(priority 1)는 한도가 남아
+# 있는데도 MAIN 계정이 터뜨린 마커 때문에 사다리의 codex 6칸이 통째로 skip 됐다.
+# 계정 홈은 materialize_codex_accounts.py 가 만들어 두고, CODEX_HOME 으로
+# 계정을 고르는 방식은 codex_usage.py 가 이미 쓰고 있는 것과 같다.
+codex_pick_account_home() {
+    local state="${AADS_CODEX_ACCOUNTS_STATE:-/root/.codex-accounts/state.json}"
+    [[ -f "$state" ]] || return 1
+    python3 - "$state" <<'PY' || return 1
+import json
+import os
+import sys
+import time
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+now = time.time()
+best = None
+for acct in payload.get("accounts", []):
+    if not isinstance(acct, dict):
+        continue
+    if not acct.get("is_active") or not acct.get("has_auth"):
+        continue
+    until = acct.get("rate_limited_until_epoch")
+    try:
+        if until is not None and float(until) > now:
+            continue
+    except (TypeError, ValueError):
+        continue
+    try:
+        prio = int(acct.get("priority", 9999))
+    except (TypeError, ValueError):
+        prio = 9999
+    name = acct.get("key_name") or ""
+    if not name:
+        continue
+    if best is None or prio < best[0]:
+        best = (prio, name)
+
+if best is None:
+    raise SystemExit(1)
+home = os.path.join(os.path.dirname(os.path.abspath(sys.argv[1])), best[1])
+if not os.path.isdir(home):
+    raise SystemExit(1)
+print(home)
+PY
+}
+
 is_read_only_instruction() {
     local instruction="${1:-}"
     printf '%s' "$instruction" | grep -Eiq 'read-only|do not modify|no file changes|읽기[[:space:]]*전용|파일[[:space:]]*수정[[:space:]]*금지|수정하지|변경하지'
@@ -1780,13 +1878,31 @@ run_job() {
         _slot_first=2
         log "  SLOT_DEPRIORITIZE job=$job_id 계정1 한도소진(until=$_slot1_until) → 계정2 우선"
     fi
-    for ((i=0; i<${#MODEL_CYCLE[@]}; i++)); do
-        if [[ "$_slot_first" == "2" ]]; then
-            TOKEN_CYCLE+=($(( (i + 1) % 2 + 1 )))
-        else
-            TOKEN_CYCLE+=($(( i % 2 + 1 )))
-        fi
-    done
+    # AADS-RUNNER-SLOT4 (2026-09-19): 계정 사다리를 DB 에서 받는다.
+    # 한도가 남은 계정만 priority 순으로 돈다. DB 조회가 실패하거나 남은 계정이
+    # 하나도 없으면 아래 기존 2슬롯 경로로 조용히 폴백한다(동작 보존).
+    local AVAIL_SLOTS=() _db_slot_line="" _db_slots=""
+    _db_slots=$(get_db_anthropic_slots) || _db_slots=""
+    if [[ -n "$_db_slots" ]]; then
+        while IFS= read -r _db_slot_line; do
+            [[ -n "$_db_slot_line" ]] && AVAIL_SLOTS+=("$_db_slot_line")
+        done <<< "$_db_slots"
+    fi
+    if [[ ${#AVAIL_SLOTS[@]} -gt 0 ]]; then
+        log "  DB_SLOT_CYCLE job=$job_id available=${AVAIL_SLOTS[*]} (llm_api_keys priority 순)"
+        for ((i=0; i<${#MODEL_CYCLE[@]}; i++)); do
+            TOKEN_CYCLE+=("${AVAIL_SLOTS[$(( i % ${#AVAIL_SLOTS[@]} ))]}")
+        done
+    else
+        log "  DB_SLOT_CYCLE_FAIL job=$job_id → 기존 2슬롯 경로로 폴백"
+        for ((i=0; i<${#MODEL_CYCLE[@]}; i++)); do
+            if [[ "$_slot_first" == "2" ]]; then
+                TOKEN_CYCLE+=($(( (i + 1) % 2 + 1 )))
+            else
+                TOKEN_CYCLE+=($(( i % 2 + 1 )))
+            fi
+        done
+    fi
     # AADS-RUNNER-SLOT-LEASE (2026-09-14): 대여 토큰을 job 마다 다시 읽는다.
     # 스크립트 상단의 source 는 데몬 기동 시 딱 한 번만 돈다. 슬롯이 없는 서버
     # (contabo14 / cafe24_114)는 contabo116 이 10분마다 밀어 넣는 임시 accessToken 으로
@@ -1800,7 +1916,7 @@ run_job() {
     # C-4: 빈 토큰 가드 — 둘 다 비어있으면 즉시 실패 처리
     # 단, 슬롯 자격증명이 살아 있으면 고정 토큰이 없어도 실행 가능하므로 차단하지 않는다.
     local _slot_cred_available=""
-    _slot_cred_available="$(slot_credentials_file 1 || slot_credentials_file 2 || true)"
+    _slot_cred_available="$(slot_credentials_file 1 || slot_credentials_file 2 || slot_credentials_file 3 || slot_credentials_file 4 || true)"
     if [[ -z "$TOKEN_1" && -z "$TOKEN_2" && -z "$_slot_cred_available" ]]; then
         log "FATAL: ANTHROPIC_AUTH_TOKEN / _2 모두 비어있음 — job=$job_id 실패 처리"
         db_update "UPDATE pipeline_jobs SET status='error', phase='token_missing',
@@ -1933,8 +2049,18 @@ ${safe_instruction}"
         record_runner_event "$job_id" "model_attempt_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"token_slot\":\"${token_slot}\"}"
         local runner_kind="claude_cli"
         if [[ "$current_model" == codex:* ]]; then
+            # AADS-RUNNER-CODEX-ACCOUNT (2026-09-19)
+            # 쿨다운 마커는 계정이 아니라 codex 전체를 막는다. 한도가 남은 계정이
+            # 있으면 그 계정 홈으로 실행하고 마커는 보지 않는다 — 마커를 보는 것은
+            # 쓸 수 있는 계정이 하나도 없을 때뿐이다.
+            local _codex_home=""
+            _codex_home="$(codex_pick_account_home || true)"
+            if [[ -n "$_codex_home" ]]; then
+                export CODEX_HOME="$_codex_home"
+                log "  CODEX_ACCOUNT job=$job_id model=$current_model home=$(basename "$_codex_home")"
+            fi
             local codex_disabled_until=""
-            if codex_disabled_until=$(codex_auth_disabled_until); then
+            if [[ -z "$_codex_home" ]] && codex_disabled_until=$(codex_auth_disabled_until); then
                 log "  CODEX_AUTH_DISABLED_SKIP job=$job_id model=$current_model until_epoch=$codex_disabled_until"
                 db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} skip: auth cooldown active until ${codex_disabled_until}' WHERE job_id='${job_id}';"
                 record_runner_event "$job_id" "model_attempt_skipped" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "" "{\"reason\":\"codex_auth_cooldown\",\"until_epoch\":\"${codex_disabled_until}\"}"
@@ -2148,8 +2274,9 @@ ${safe_instruction}"
         if [[ $attempt -lt $total_attempts ]]; then
             local next_model="${MODEL_CYCLE[$attempt]}"
             local next_token="${TOKEN_CYCLE[$attempt]}"
-            local acct_label="계정1(Naver)"
-            [[ "$next_token" == "2" ]] && acct_label="계정2(Gmail)"
+            # 슬롯 번호가 곧 llm_api_keys 의 계정이다. 예전 고정 라벨
+            # (계정1=Naver/계정2=Gmail)은 슬롯이 4개로 늘면서 사실과 어긋난다.
+            local acct_label="계정${next_token}"
             local wait_sec=$(( 3 + attempt * 2 ))  # 5초~15초 점진 증가
             log "  RETRY job=$job_id attempt=$((attempt+1))/$total_attempts next=$next_model($acct_label) wait=${wait_sec}s exit=$exit_code"
             sleep "$wait_sec"

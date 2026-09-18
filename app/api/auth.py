@@ -1,5 +1,5 @@
 """JWT 인증 API 라우터 — SaaS 회원가입 + 로그인"""
-from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
@@ -31,12 +31,22 @@ class OnboardingInviteRequest(BaseModel):
         return v
 
 
+REQUIRED_CONSENT_KEYS = {"terms", "privacy", "age14"}
+
+
+class ConsentItem(BaseModel):
+    consent_key: str
+    version: str
+    agreed: bool
+
+
 class RegisterRequest(BaseModel):
     email: str
     password: str
     name: Optional[str] = None
     organization_name: Optional[str] = None
     team_invites: list[OnboardingInviteRequest] = Field(default_factory=list)
+    consents: list[ConsentItem] = Field(default_factory=list)
 
     @field_validator("email")
     @classmethod
@@ -138,10 +148,18 @@ def _assert_path_tenant(context: dict, tenant_id: str) -> None:
 
 
 @router.post("/auth/register", response_model=AuthResponse)
-async def register(req: RegisterRequest):
+async def register(req: RegisterRequest, request: Request):
     """SaaS 회원가입"""
     if not auth_module.JWT_AVAILABLE:
         raise HTTPException(status_code=503, detail="JWT 인증 모듈 미설치 (pip install PyJWT)")
+
+    if req.consents:
+        # consents 를 보냈다면 필수 3종(terms/privacy/age14)이 모두 agreed=true 여야 한다.
+        # 일부만 보내거나 false 로 보내면 거절한다. 아예 안 보내면 기존 클라이언트 호환을 위해 통과시킨다.
+        agreed_keys = {c.consent_key for c in req.consents if c.agreed}
+        missing = sorted(REQUIRED_CONSENT_KEYS - agreed_keys)
+        if missing:
+            raise HTTPException(status_code=400, detail=f"필수 동의 항목입니다: {', '.join(missing)}")
 
     await auth_module.require_saas_schema_ready()
 
@@ -149,7 +167,15 @@ async def register(req: RegisterRequest):
     if existing:
         raise HTTPException(status_code=409, detail="이미 등록된 이메일입니다")
 
-    user = await auth_module.create_saas_user(req.email, req.password, req.name, attach_internal_tenant=False)
+    user = await auth_module.create_saas_user(
+        req.email,
+        req.password,
+        req.name,
+        attach_internal_tenant=False,
+        consents=[c.model_dump() for c in req.consents] or None,
+        ip=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
     if not user:
         raise HTTPException(status_code=500, detail="회원가입 처리 중 오류가 발생했습니다")
 
@@ -195,6 +221,7 @@ async def login(req: LoginRequest):
     if saas_user:
         uid = str(saas_user["id"])  # DB returns int, JWT/response need str
         tenant_id = await auth_module.resolve_login_tenant_for_user(saas_user)
+        await auth_module.update_saas_user_last_login(uid)
         token = auth_module.create_token(uid, saas_user["email"], tenant_id=tenant_id)
         return AuthResponse(
             token=token,
