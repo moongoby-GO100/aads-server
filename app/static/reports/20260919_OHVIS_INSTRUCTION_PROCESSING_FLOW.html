@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>오비스 지시 처리 흐름 — 해석·응답·모델별 차이 전수 보고서 (2026-09-19)</title>
+<style>
+:root{--bg:#0f1419;--panel:#161c23;--line:#2a323c;--txt:#e6edf3;--dim:#9aa7b4;--acc:#4da3ff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--pur:#bc8cff;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;line-height:1.75;font-size:16px}
+.wrap{max-width:1120px;margin:0 auto;padding:28px 18px 96px}
+header.doc{border-bottom:2px solid var(--acc);padding-bottom:18px;margin-bottom:28px}
+h1{font-size:1.6rem;margin:0 0 8px;letter-spacing:-.02em}
+h2{font-size:1.22rem;margin:46px 0 12px;padding-left:10px;border-left:4px solid var(--acc)}
+h3{font-size:1.02rem;margin:26px 0 10px;color:#cfe3ff}
+h4{font-size:.95rem;margin:18px 0 8px;color:var(--dim)}
+.meta{color:var(--dim);font-size:.88rem}
+.meta b{color:var(--txt)}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:.9rem;display:block;overflow-x:auto;white-space:nowrap}
+@media(min-width:800px){table{display:table;white-space:normal}}
+th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:#1b2430;color:#cfe3ff;font-weight:600}
+tr:nth-child(even) td{background:#12181f}
+code,kbd{font-family:var(--mono);background:#1b2430;padding:1px 5px;border-radius:4px;font-size:.87em;color:#a5d6ff}
+pre{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:14px;overflow-x:auto;font-family:var(--mono);font-size:.8rem;line-height:1.5;color:#c9d1d9}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:16px 0}
+.card.ok{border-left:4px solid var(--ok)}
+.card.warn{border-left:4px solid var(--warn)}
+.card.bad{border-left:4px solid var(--bad)}
+.card.acc{border-left:4px solid var(--acc)}
+.b{display:inline-block;padding:1px 8px;border-radius:99px;font-size:.74rem;font-weight:700;border:1px solid}
+.b.ok{color:var(--ok);border-color:var(--ok)}
+.b.warn{color:var(--warn);border-color:var(--warn)}
+.b.bad{color:var(--bad);border-color:var(--bad)}
+.b.acc{color:var(--acc);border-color:var(--acc)}
+.b.pur{color:var(--pur);border-color:var(--pur)}
+.src{color:var(--dim);font-size:.8rem;font-family:var(--mono)}
+ul,ol{padding-left:22px}
+li{margin:4px 0}
+/* ── 도식 ───────────────────────────────────────── */
+.flow{margin:20px 0}
+.step{display:flex;gap:12px;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:8px;padding:10px 14px;align-items:flex-start}
+.step.g{border-left-color:var(--ok)}
+.step.w{border-left-color:var(--warn)}
+.step.p{border-left-color:var(--pur)}
+.step .n{flex:0 0 auto;width:30px;height:30px;border-radius:50%;background:#1b2430;border:1px solid var(--acc);color:var(--acc);font-weight:700;font-size:.82rem;display:flex;align-items:center;justify-content:center;margin-top:2px}
+.step .t{flex:1 1 auto;min-width:0}
+.step .t b{display:block;font-size:.96rem}
+.step .t span{display:block;color:var(--dim);font-size:.84rem;line-height:1.55}
+.dn{text-align:center;color:#3d4b5a;font-size:1.1rem;line-height:1.3;margin:2px 0}
+.lane{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;margin:16px 0}
+.box{flex:1 1 150px;min-width:140px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:.86rem}
+.box b{display:block;color:#cfe3ff;font-size:.9rem;margin-bottom:3px}
+.box span{color:var(--dim);font-size:.8rem;line-height:1.5;display:block}
+.box.ok{border-color:#245c34}.box.warn{border-color:#5c4a16}.box.bad{border-color:#5c2422}.box.acc{border-color:#1f4a7a}.box.pur{border-color:#4b3a6b}
+.ar{flex:0 0 auto;align-self:center;color:#3d4b5a;font-size:1.2rem;font-weight:700}
+.grid{display:grid;grid-template-columns:1fr;gap:10px;margin:14px 0}
+@media(min-width:760px){.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:1fr 1fr 1fr}.grid.c4{grid-template-columns:repeat(4,1fr)}}
+.kv{display:flex;gap:8px;font-size:.86rem;padding:4px 0;border-bottom:1px dashed #222b35}
+.kv b{flex:0 0 150px;color:var(--dim);font-weight:600}
+.toc{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 18px}
+.toc a{color:var(--acc);text-decoration:none;font-size:.9rem}
+.toc li{margin:3px 0}
+.diag{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:16px 14px;overflow-x:auto;font-family:var(--mono);font-size:.78rem;line-height:1.65;color:#c9d1d9;white-space:pre}
+hr{border:0;border-top:1px solid var(--line);margin:34px 0}
+.small{font-size:.84rem;color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+<h1>오비스(OHVIS) 지시 처리 흐름 — 해석 · 응답 · 모델별 차이 전수 보고서</h1>
+<p class="meta">
+<b>작성</b> 2026-09-19 06:0x KST &nbsp;|&nbsp;
+<b>대상</b> AADS 채팅 파이프라인 (contabo116 · <code>/root/aads/aads-server</code>) &nbsp;|&nbsp;
+<b>근거</b> 소스 코드 실측 + PostgreSQL 실측(7일/2일/3일 구간) &nbsp;|&nbsp;
+<b>수신</b> CEO moongoby
+</p>
+<p class="meta">본 문서의 모든 수치는 조회 시점 실측값이며, 추정값은 <span class="b warn">미검증</span> 으로 따로 표기했습니다.</p>
+</header>
+
+<div class="toc">
+<b>목차</b>
+<ol>
+<li><a href="#s0">결론 요약</a></li>
+<li><a href="#s1">오비스에서 "지시"는 무엇인가 — 5종 분류</a></li>
+<li><a href="#s2">전체 처리 흐름 도식 (수신 → 렌더)</a></li>
+<li><a href="#s3">① 지시 파악 — 인텐트 확정 4중 안전망</a></li>
+<li><a href="#s4">② 응답 설정 — 프롬프트 5레이어 컴파일</a></li>
+<li><a href="#s5">③ 모델 결정 — 4단 우선순위와 폴백 사다리</a></li>
+<li><a href="#s6">④ 모델별 응답이 어떻게 달라지는가 (실측 비교)</a></li>
+<li><a href="#s7">⑤ 도구 선택 · 실행 · 승인 게이트</a></li>
+<li><a href="#s8">⑥ 응답 후처리 4중 게이트와 채팅창 렌더링</a></li>
+<li><a href="#s9">진단 — 확인된 문제점 6건</a></li>
+<li><a href="#s10">개선 권장안과 검증 기준</a></li>
+<li><a href="#s11">근거 목록 (파일·줄·쿼리)</a></li>
+</ol>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<h2 id="s0">1. 결론 요약</h2>
+
+<div class="card acc">
+<p><b>오비스는 CEO의 한 문장을 "대화"가 아니라 <u>실행 계약</u>으로 해석합니다.</b> 메시지가 들어오면 ①66종 인텐트 중 하나로 확정하고 → ②그 인텐트에 맞춰 시스템 프롬프트를 5개 레이어로 조립하고 → ③모델을 4단 우선순위로 정하고 → ④인텐트별 도구 묶음을 붙여 실행하고 → ⑤4중 검증 게이트를 통과해야 답이 화면에 남습니다.</p>
+<p style="margin-bottom:0"><b>모델별 차이의 실체는 "프롬프트가 달라서"가 아니라 "실행 백엔드가 달라서"입니다.</b> 프롬프트 자산 154개 중 모델별 변형(<code>model_variants</code>)을 실제로 쓰는 자산은 <b>0건</b>이고, 모델별 L5 자산 14개 중 현재 운영 모델(<code>claude-opus-5</code>)에 실제로 붙는 것은 <b>provider 단위 1건뿐</b>입니다 [DB 실측]. 차이는 전부 ㉮백엔드 경로(CLI 릴레이 / Codex 릴레이 / Agent SDK / LiteLLM) ㉯도구 호출 횟수 ㉰thinking 지원 여부에서 발생합니다.</p>
+</div>
+
+<div class="grid c4">
+<div class="box acc"><b>66</b><span>정의된 인텐트 수<br><code>INTENT_MAP</code></span></div>
+<div class="box acc"><b>154</b><span>프롬프트 자산(L1~L5)<br>활성 152</span></div>
+<div class="box acc"><b>138</b><span>등록 도구<br>인텐트별 선별 주입</span></div>
+<div class="box acc"><b>36,462자</b><span>opus-5 턴 평균 시스템 프롬프트<br>자산 21개 적용</span></div>
+</div>
+
+<h3>가장 먼저 보셔야 할 3가지</h3>
+<table>
+<thead><tr><th>#</th><th>사실</th><th>실측 근거</th><th>의미</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>같은 질문이라도 <b>모델을 바꾸면 답의 길이가 최대 22배, 도구 호출이 최대 49회까지 달라진다</b></td><td>7일 assistant 메시지: haiku 평균 132자·도구 0회 / opus-5 1,531자·10.1회 / Codex GPT-5.6 Sol 2,788자·49.1회 [DB]</td><td>"모델 설정"은 말투가 아니라 <b>일을 얼마나 하느냐</b>를 바꾼다</td></tr>
+<tr><td>2</td><td>인텐트 거버넌스 테이블(<code>intent_policies</code>)이 <b>현재 어떤 경로로도 적용되지 않는다</b></td><td>2일 전수: 모든 턴이 명시 지정(claude-opus-5) 또는 mixture→DB기본으로 진입 → <code>model_selector.py:2084</code> 게이트가 정책 분기를 건너뜀 [DB+코드]</td><td>설정 화면의 인텐트별 모델 지정이 <b>실효가 없다</b></td></tr>
+<tr><td>3</td><td>모델별 프롬프트 차별화가 <b>사실상 작동하지 않는다</b></td><td>L5 자산 <code>model-claude-opus</code> 의 target이 <code>claude-opus-4-6/4-7</code> — 운영 모델은 <code>claude-opus-5</code>. 3일간 opus-5 턴에 적용된 model-* 자산은 <code>model-provider-anthropic</code> 1건뿐 [DB]</td><td>모델 특성에 맞춘 지시가 <b>안 붙은 채</b> 돌고 있다</td></tr>
+</tbody>
+</table>
+
+<!-- ══════════════════════════════════════════════ -->
+<h2 id="s1">2. 오비스에서 "지시"는 무엇인가 — 5종 분류</h2>
+
+<p>CEO께서 채팅창에 쓰신 한 줄은 오비스 안에서 <b>서로 다른 5개 경로</b> 중 하나로 갈라집니다. 겉보기에는 같은 채팅이지만 저장 위치·권한·되돌리기 방법이 전부 다릅니다.</p>
+
+<table>
+<thead><tr><th>#</th><th>지시 종류</th><th>무엇인가</th><th>어디에 남는가</th><th>실행 주체</th><th>되돌리기</th></tr></thead>
+<tbody>
+<tr><td>①</td><td><span class="b acc">대화 지시</span></td><td>채팅창에 직접 쓰는 평문 지시. 오비스가 인텐트로 해석해 그 자리에서 도구를 돌린다</td><td><code>chat_messages</code> + <code>chat_executions</code></td><td>현재 세션(이 대화)</td><td>턴 중단 / 추가 지시로 정정</td></tr>
+<tr><td>②</td><td><span class="b pur">지시서(DIRECTIVE)</span></td><td><code>&gt;&gt;&gt;DIRECTIVE_START … &gt;&gt;&gt;DIRECTIVE_END</code> 블록. 러너에게 넘기는 공식 작업 계약</td><td><code>directive_drafts</code> / <code>directive_lifecycle</code> / <code>pipeline_jobs</code></td><td>Pipeline Runner (독립 프로세스)</td><td>검수 반려 → reset + 피드백</td></tr>
+<tr><td>③</td><td><span class="b warn">절대 지시(규칙)</span></td><td>"앞으로 항상 ~하라" 형태. 다음 턴부터 시스템 프롬프트에 상주 주입된다</td><td><code>prompt_assets</code> / CEO-DIRECTIVES / <code>&lt;ceo_rules&gt;</code> 블록</td><td>모든 세션·모든 모델</td><td>자산 비활성화(enabled=false)</td></tr>
+<tr><td>④</td><td><span class="b ok">승인 결정</span></td><td>응답 하단 카드의 승인/거부 버튼. 이미 제안된 다음 단계를 발동시킨다</td><td><code>agent_permission_requests</code></td><td><code>live_trading_guard</code> 게이트 통과 후 도구</td><td>승인 취소 / 만료</td></tr>
+<tr><td>⑤</td><td><span class="b bad">중단·정정 지시</span></td><td>스트리밍 중 끼어드는 추가 지시. 다음 턴 앞에 <code>[이전 추가 지시]</code>로 주입된다</td><td><code>interrupt_queue</code> → 다음 턴 메시지</td><td>진행 중 턴을 인터럽트</td><td>자동 소비(1회성)</td></tr>
+</tbody>
+</table>
+
+<div class="card warn">
+<b>핵심 구분</b> — ①은 <u>지금 이 대화가 처리</u>하고, ②는 <u>다른 프로세스에 위임</u>하며, ③은 <u>앞으로의 모든 대화를 바꿉니다</u>. "이거 시켜"는 ②로, "앞으로 이렇게 해"는 ③으로 가야 하는데 둘 다 같은 채팅창에서 입력되기 때문에, 오비스는 인텐트 분류 단계에서 이 갈림길을 판정합니다. 잘못 갈리면 "시켰는데 안 했다"(②가 ①로 처리됨) 또는 "말했는데 또 그런다"(③이 ①로 처리됨)가 발생합니다.</div>
+
+<h3>지시 5종 분기 도식</h3>
+<div class="diag">CEO 입력 (채팅창 1줄)
+   │
+   ├─ ">>>DIRECTIVE_START" 포함  ──────────────▶ ② 지시서   ─▶ directive_drafts ─▶ Pipeline Runner ─▶ 검수 ─▶ CEO 승인 ─▶ push
+   │     (directive_draft_service.py:82 정규식)
+   │
+   ├─ "시켜 / 자율작업 / 파이프라인" 키워드   ──▶ intent=pipeline_runner ─▶ ② 와 동일 경로(초안 자동 생성)
+   │
+   ├─ "앞으로 / 절대 / 금지 / 항상" + 규칙형 ──▶ ③ 절대 지시 ─▶ prompt_assets 등록 ─▶ 다음 턴부터 상주
+   │
+   ├─ 승인 카드 버튼 클릭                     ──▶ ④ 승인 결정 ─▶ agent_permission_requests(status=approved) ─▶ 도구 실행
+   │
+   └─ 그 외 평문                              ──▶ ① 대화 지시 ─▶ 인텐트 분류(66종) ─▶ 도구 실행 ─▶ 응답
+         └ 스트리밍 중 입력이면 ──────────────▶ ⑤ 중단·정정 ─▶ interrupt_queue ─▶ 다음 턴 선두 주입</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<h2 id="s2">3. 전체 처리 흐름 도식 (수신 → 렌더)</h2>
+
+<p>대화 지시(①) 한 건이 화면에 답으로 남기까지 <b>15단계</b>를 지납니다. 아래는 <code>chat_service.send_message_stream()</code> (15,722줄 중 11,640행~) 의 실제 실행 순서입니다.</p>
+
+<div class="flow">
+<div class="step g"><div class="n">0</div><div class="t"><b>즉시 수신 확인 (Tier 1 ACK)</b><span>인텐트 분류 <u>전에</u> 키워드 22종(<code>수정·배포·구현·분석·보고·조치·확인하고…</code>)만 보고 "✅ 요청을 수신했습니다"를 먼저 흘린다. 분류·DB 조회를 기다리면 체감 지연이 그대로 침묵이 되기 때문. <span class="src">chat_service.py:11740</span></span></div></div>
+<div class="dn">▼</div>
+<div class="step"><div class="n">1</div><div class="t"><b>첨부·URL·인용 처리</b><span>이미지/영상/문서 첨부는 Ephemeral Document Context로, 메시지 내 URL은 자동 크롤링으로, 답글 인용은 <code>[REPLY_TO]</code> 스코프 블록으로 변환한다.</span></div></div>
+<div class="dn">▼</div>
+<div class="step"><div class="n">2</div><div class="t"><b>중단 잔여물 회수</b><span>이전 턴이 끊겨 남은 partial 메시지와 미소비 인터럽트(<code>[이전 추가 지시]</code>)를 현재 메시지 앞에 합친다. 이래서 "아까 시킨 것"이 다음 턴에 살아난다.</span></div></div>
+<div class="dn">▼</div>
+<div class="step"><div class="n">3</div><div class="t"><b>사용자 메시지 저장 + 실행(execution) 생성</b><span>중복 전송 방어(idempotency_key), 실행 리스(lease) 확보. 동시 세션이 같은 턴을 두 번 돌리는 것을 막는다.</span></div></div>
+<div class="dn">▼</div>
+<div class="step p"><div class="n">4</div><div class="t"><b>인텐트 분류 + 시맨틱 캐시 병렬 조회</b><span>LLM 분류기와 유사질문 캐시를 <code>asyncio.gather</code>로 동시에 던진다. → <a href="#s3">§4 상세</a></span></div></div>
+<div class="dn">▼</div>
+<div class="step"><div class="n">5</div><div class="t"><b>3계층 컨텍스트 조립</b><span><code>build_messages_context()</code>가 히스토리·메모리·워크스페이스 프리로드·RAG를 토큰 예산 안에서 합친다. 넘치면 자동 압축.</span></div></div>
+<div class="dn">▼</div>
+<div class="step p"><div class="n">6</div><div class="t"><b>프롬프트 5레이어 컴파일 + provenance 기록</b><span><code>PromptCompiler().compile()</code>이 워크스페이스·인텐트·역할·모델 4축으로 자산을 선별해 붙이고, 무엇이 붙었는지 <code>compiled_prompt_provenance</code>에 남긴다. → <a href="#s4">§5 상세</a></span></div></div>
+<div class="dn">▼</div>
+<div class="step"><div class="n">7</div><div class="t"><b>응답 모드 블록 주입 (fast / quality)</b><span>fast로 설정돼 있어도 메시지에 "문제점·개선안·원인·근거·확인하고·왜·어떻게" 등 <b>39개 트리거</b> 중 하나가 있으면 quality로 승격된다. <span class="src">chat_service.py:772-832</span></span></div></div>
+<div class="dn">▼</div>
+<div class="step"><div class="n">8</div><div class="t"><b>도구 목록 선별</b><span>등록 138개 중 <u>인텐트에 매핑된 그룹 + 코어 14개</u>만 API에 넘긴다. 전부 넘기면 프롬프트가 부풀고 오호출이 는다. → <a href="#s7">§8 상세</a></span></div></div>
+<div class="dn">▼</div>
+<div class="step w"><div class="n">9</div><div class="t"><b>모델 결정 + 백엔드 선택</b><span><code>model_selector.call_stream()</code>. 4단 우선순위로 모델을 정하고, 모델에 따라 6개 백엔드 중 하나로 보낸다. → <a href="#s5">§6 상세</a></span></div></div>
+<div class="dn">▼</div>
+<div class="step w"><div class="n">10</div><div class="t"><b>스트리밍 + 도구 루프</b><span>delta/thinking/tool_use/tool_result 이벤트를 SSE로 흘리면서, 도구 호출이 나오면 실행 결과를 다시 모델에 먹인다. 실패 시 최대 3회 즉시 재시도(0.5s→1s 백오프).</span></div></div>
+<div class="dn">▼</div>
+<div class="step g"><div class="n">11</div><div class="t"><b>Output Validator</b><span>"확인하겠습니다"로 끝나는 <u>빈 약속 응답</u>·진행 서술만 남은 응답을 잡아 재시도시킨다. <span class="src">output_validator.py</span></span></div></div>
+<div class="dn">▼</div>
+<div class="step g"><div class="n">12</div><div class="t"><b>Response Critic</b><span>별도 LLM이 완결성·근거·수치 출처를 채점해 <code>REGENERATE</code> 판정을 내면 피드백을 붙여 다시 생성한다.</span></div></div>
+<div class="dn">▼</div>
+<div class="step g"><div class="n">13</div><div class="t"><b>Completion Contract</b><span>커밋·푸시·배포·문서기록 상태가 빠진 실행형 응답을 잡아 완료 상태 절을 강제한다. (fast 모드에서는 생략)</span></div></div>
+<div class="dn">▼</div>
+<div class="step"><div class="n">14</div><div class="t"><b>저장 · 렌더 · 사후 학습</b><span>최종 본문 저장, SSE <code>done</code> 송신, 임베딩 생성, 관찰(ai_observations)·TODO 갱신·다음단계 승인카드 생성.</span></div></div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<h2 id="s3">4. ① 지시 파악 — 인텐트 확정 4중 안전망</h2>
+
+<p>오비스가 "이 지시가 무슨 뜻인가"를 정하는 단계입니다. <b>LLM 하나에 맡기지 않습니다.</b> 앞뒤로 3중의 규칙 보정이 감싸고 있고, 가장 바깥에 60초 캐시가 있습니다.</p>
+
+<h3>판정 순서 (위에서 먼저 걸리면 아래는 보지 않음)</h3>
+<div class="diag">┌─ [0] 맥락 후속 오버라이드 ─────────────────────────────────────────┐
+│  직전 assistant 응답이 실행/조치형이고, 지금 메시지가 짧은 후속 지시   │
+│  ("그럼 진행해", "그거 해줘")  →  직전 인텐트를 그대로 승계           │
+│  _contextual_followup_override()          intent_router.py:642       │
+└──────────────────────────┬─────────────────────────────────────────┘
+                           │ 미적용
+┌──────────────────────────▼─────────────────────────────────────────┐
+│  [1] Redis 캐시 조회  (키=메시지앞100자 SHA256, TTL 60초)             │
+│      맥락 의존 오분류를 막으려 일부러 짧게 잡음                        │
+└──────────────────────────┬─────────────────────────────────────────┘
+                           │ miss
+┌──────────────────────────▼─────────────────────────────────────────┐
+│  [2] PC Agent 후속 오버라이드 (PC 제어 대화 연속성)                   │
+└──────────────────────────┬─────────────────────────────────────────┘
+                           │ 미적용
+┌──────────────────────────▼─────────────────────────────────────────┐
+│  [3] LLM 분류  ── qwen-turbo (LiteLLM 경유)                         │
+│      · max_tokens 80 / temperature 0.1 / timeout 5초                │
+│      · 짧은 메시지(≤30자)면 직전 대화 3건을 컨텍스트로 동봉            │
+│      · 출력: {"intent":"…","confidence":0.0~1.0}                    │
+│                                                                     │
+│      ┌ 보정 A: casual/greeting 판정 + 명령형 어미("~하라/해줘")        │
+│      │         → _command_override() 로 status_check/execute 승격    │
+│      ├ 보정 B: casual 판정인데 직전 턴이 도구를 쓰고 있었고 ≤30자      │
+│      │         → status_check 로 승격                                │
+│      └ 보정 C: discussion 판정인데 명시적 토론 요청이 아니면           │
+│                → code_modify / status_check 로 강등(토론 남용 방지)   │
+└──────────────────────────┬─────────────────────────────────────────┘
+                           │ 예외/타임아웃
+┌──────────────────────────▼─────────────────────────────────────────┐
+│  [4] 키워드 폴백  ── 44개 규칙을 HEAD → SEARCH → TAIL 순서로 매칭     │
+│      순서가 곧 우선순위. 앞쪽(PC제어·인사·작업조회)이 먼저 이긴다      │
+└─────────────────────────────────────────────────────────────────────┘</div>
+
+<div class="card warn">
+<b>왜 "확인하고 보고해"가 casual이 아니라 status_check인가</b> — 분류 프롬프트에 <b>CEO 명령형 전용 규칙</b>이 따로 박혀 있습니다. <code>"확인하고 보고하라", "점검하라", "체크해" → status_check (casual이 절대 아님)</code>. CEO 화법의 짧은 명령이 잡담으로 분류되면 도구를 하나도 안 쓰고 끝나기 때문에, 규칙·보정·폴백 세 군데에 중복으로 박아 두었습니다. <span class="src">intent_router.py:468-473</span></div>
+
+<h3>인텐트 66종의 성격별 분포</h3>
+<table>
+<thead><tr><th>성격</th><th>수</th><th>대표 인텐트</th><th>기본 모델(코드)</th><th>도구</th><th>확장사고</th></tr></thead>
+<tbody>
+<tr><td>대화·잡담</td><td>2</td><td>casual, greeting</td><td>DB 기본값(auto)</td><td>✕</td><td>✕</td></tr>
+<tr><td>전략·기획·판단</td><td>7</td><td>strategy, planning, decision, discussion, cto_strategy</td><td>claude-opus</td><td>✕</td><td>✓</td></tr>
+<tr><td>상태·조회</td><td>9</td><td>status_check, health_check, task_query, dashboard, cost_report</td><td>claude-sonnet</td><td>✓ all</td><td>✓</td></tr>
+<tr><td>코드·실행</td><td>10</td><td>code_task, code_modify, execute, code_exec, pipeline_runner</td><td>claude-opus</td><td>✓ all</td><td>✓</td></tr>
+<tr><td>진단·분석</td><td>9</td><td>diagnosis, complex_analysis, cto_code_analysis, analyze_changes</td><td>claude-opus</td><td>✓ all</td><td>✓</td></tr>
+<tr><td>검색(네이버 특화)</td><td>8</td><td>news_search, blog_search, shop_search, local_search …</td><td><b>qwen-turbo</b></td><td>✓ all</td><td>✕</td></tr>
+<tr><td>브라우저·PC 제어</td><td>6</td><td>browser, pc_control, pc_screenshot, pc_kakao</td><td>claude-opus / sonnet</td><td>✓ all</td><td>✓</td></tr>
+<tr><td>기타(문서·아젠다·미디어 등)</td><td>15</td><td>file_read, url_read, deep_crawl, agenda_manage …</td><td>혼합</td><td>✓ all</td><td>혼합</td></tr>
+</tbody>
+</table>
+<p class="small">출처: <code>INTENT_MAP</code> 66개 항목 전수 [코드 실측]. "기본 모델(코드)"는 DB 정책·명시 지정이 없을 때만 유효합니다 — 실제로는 §6의 우선순위가 이깁니다.</p>
+
+<h3>실측 — 지난 7일 실제로 무슨 인텐트가 돌았나</h3>
+<table>
+<thead><tr><th>인텐트</th><th>건수</th><th>성격</th></tr></thead>
+<tbody>
+<tr><td><code>claude_code_terminal</code></td><td>3,331</td><td>터미널 세션 연동(시스템)</td></tr>
+<tr><td><code>pipeline_runner</code></td><td>1,379</td><td>러너 위임 — 지시서 경로</td></tr>
+<tr><td><code>stale_empty_placeholder</code></td><td>1,415</td><td><span class="b bad">중단 잔여물</span></td></tr>
+<tr><td><code>runner_response</code> / <code>approval_decision</code></td><td>413 / 333</td><td>러너 회신·승인 결정</td></tr>
+<tr><td><code>status_check</code></td><td>172</td><td>CEO 상태 조회 — 대화 지시 1위</td></tr>
+<tr><td><code>casual</code> / <code>execute</code> / <code>task_query</code></td><td>106 / 92 / 18</td><td>대화 지시</td></tr>
+</tbody>
+</table>
+<p class="small">[DB 실측, 7일, <code>chat_messages.intent</code>] — <b>CEO의 실제 대화 지시보다 시스템 인텐트가 압도적으로 많습니다.</b> 즉 오비스 채팅창은 이미 "대화창"이 아니라 <u>러너·터미널·승인의 관제 콘솔</u>로 쓰이고 있습니다.</p>
+
+<!-- ══════════════════════════════════════════════ -->
+<h2 id="s4">5. ② 응답 설정 — 프롬프트 5레이어 컴파일</h2>
+
+<p>인텐트가 정해지면, 그 인텐트에 맞는 <b>행동 규칙 묶음</b>이 시스템 프롬프트로 조립됩니다. 이것이 "응답 설정"의 실체입니다. 레이어는 5개이고, 각 자산은 4개 축(워크스페이스·인텐트·역할·모델)으로 스코프가 걸립니다.</p>
+
+<div class="diag">              ┌──────────────── 선별 조건 (SQL 4중 필터) ────────────────┐
+              │ workspace_scope ∋ 'CEO'   ∧  intent_scope ∋ 'status_check' │
+              │ role_scope ∋ 역할          ∧  target_models ∩ 모델키 집합   │
+              │ ORDER BY layer_id, priority, slug                          │
+              └────────────────────────────┬───────────────────────────────┘
+                                           ▼
+  L1 Global      전 프로젝트 절대 규칙        17개(활성16) ─ 행동원칙·완료계약·서식·비용·검색·승인
+  L2 Project     프로젝트 도메인 컨텍스트       9개 ─ 서버·경로·DB 계약, 고위험 영역
+  L3 Role        역할 전문성                 103개(활성102) ─ CTO/PM/개발/QA/Ops 별 행동 방식
+  L4 Task        작업 유형별 절차              11개 ─ 보고/검수/배포/리서치 포맷
+  L5 Model       모델별 실행 특성              14개 ─ provider·capability·cost 티어별 지침
+                                           ▼
+              최종 시스템 프롬프트 (opus-5 실측 평균 36,462자 / 자산 21개)
+                                           ▼
+              compiled_prompt_provenance 에 무엇이 붙었는지 전량 기록</div>
+
+<h3>레이어별 실측</h3>
+<table>
+<thead><tr><th>레이어</th><th>자산</th><th>활성</th><th>모델 스코프 지정</th><th>model_variants 사용</th><th>역할</th></tr></thead>
+<tbody>
+<tr><td>L1 Global</td><td>17</td><td>16</td><td>11</td><td class="b bad">0</td><td>절대 규칙 — 다른 레이어와 충돌 시 승리</td></tr>
+<tr><td>L2 Project</td><td>9</td><td>9</td><td>9</td><td class="b bad">0</td><td>프로젝트 서버·경로·금지사항</td></tr>
+<tr><td>L3 Role</td><td>103</td><td>102</td><td>88</td><td class="b bad">0</td><td>역할별 전문성 — 자산의 67%</td></tr>
+<tr><td>L4 Task</td><td>11</td><td>11</td><td>5</td><td class="b bad">0</td><td>작업 유형별 절차</td></tr>
+<tr><td>L5 Model</td><td>14</td><td>14</td><td>14</td><td class="b bad">0</td><td>모델별 실행 특성</td></tr>
+<tr><td><b>합계</b></td><td><b>154</b></td><td><b>152</b></td><td><b>127</b></td><td><b>0</b></td><td>—</td></tr>
+</tbody>
+</table>
+<p class="small">[DB 실측, <code>prompt_assets</code> 전수] — <code>model_variants</code>(같은 자산을 모델별로 다른 문장으로 내보내는 설계)는 <b>154개 전부 비어 있습니다.</b> 설계는 있으나 한 번도 쓰인 적이 없습니다.</p>
+
+<h3>토큰 예산 — 글자 수로 추정하면 틀린다</h3>
+<div class="card">
+<p>2026-09-16 실측 계수: <b>한국어 혼합 프롬프트 36,546자 = 26,677토큰 ≈ 1.37자/토큰</b>. 한 턴 입력 44,343토큰의 실제 분해는 다음과 같습니다.</p>
+<div class="kv"><b>AADS 시스템 프롬프트</b><span>26,677 토큰 (60.2%) — 이 중 프롬프트 자산 11,900, context_builder 12,983</span></div>
+<div class="kv"><b>CLI 자체 프롬프트</b><span>13,258 토큰 (29.9%) — 손댈 수 없는 영역</span></div>
+<div class="kv"><b>Task/Agent 정의</b><span>2,664 토큰 (6.0%) — 차단하면 서브에이전트가 죽는다</span></div>
+<div class="kv"><b>MCP 도구 142개</b><span>1,768 토큰 (4.0%) — 상주 11개로 줄여도 절감은 1,727뿐</span></div>
+<p style="margin-bottom:0" class="small">즉 <b>비용·지연의 최대 항은 도구가 아니라 L1 global 자산</b>입니다(자산의 82%). 도구를 쳐내는 최적화는 효과가 거의 없습니다. <span class="src">prompt_compiler.py:214-240 주석, 실측 기록</span></p>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<h2 id="s5">6. ③ 모델 결정 — 4단 우선순위와 폴백 사다리</h2>
+
+<h3>6-1. 어떤 모델로 답할지 정하는 4단 우선순위</h3>
+<div class="diag">[1순위] 사용자 명시 지정 (채팅창 모델 선택기)
+          model_override 가 'mixture'/'auto'/'' 가 아니면 → 그대로 확정, 아래 전부 무시
+          ▼ (없으면)
+[2순위] DB 기본 모델 (mixture/auto 로 들어온 경우)
+          model_routing_preferences WHERE route_key='llm' AND is_default   [현재: anthropic / claude-opus-5]
+          ▼ (명시도 DB기본도 아닌 경우에만)
+[3순위] 인텐트 거버넌스 정책        ← ⚠ 현재 도달하지 않음 (아래 §10 F2)
+          intent_policies.default_model / allowed_models / cascade_downgrade
+          ▼
+[4순위] 코드 하드코딩 INTENT_MAP
+          strategy→claude-opus, status_check→claude-sonnet, news_search→qwen-turbo …</div>
+
+<div class="card bad">
+<b>⚠ 실측으로 확인된 결함</b> — <code>model_selector.py:2084</code> 의 게이트가 <code>if not _explicit_model_requested <b>and not _db_default_applied</b>:</code> 입니다. mixture(자동)로 들어오면 2순위에서 <code>_db_default_applied=True</code> 가 되어 <b>3순위 정책 분기 자체를 건너뜁니다.</b> 명시 지정이면 1순위에서 확정되어 역시 건너뜁니다. 결과적으로 <b>intent_policies는 어떤 입력으로도 도달하지 않습니다.</b><br>
+근거 [DB 2일 전수]: 정책상 <code>status_check→claude-sonnet-4-6</code>, <code>casual→codex:gpt-5.5</code> 인데, 실제 실행은 status_check 219턴·casual 133턴이 전부 <code>claude-opus-5</code>. (selected=claude-opus-5 명시 또는 selected=mixture→executed=claude-opus-5)</div>
+
+<h3>6-2. 모델 → 실행 백엔드 6종</h3>
+<p>모델이 정해지면 <b>어느 경로로 실행하느냐</b>가 갈립니다. 여기가 모델별 체감 차이의 진짜 발생 지점입니다.</p>
+<table>
+<thead><tr><th>백엔드</th><th>해당 모델</th><th>인증</th><th>도구</th><th>특성</th></tr></thead>
+<tbody>
+<tr><td><code>_stream_cli_relay</code><br><span class="b acc">주 경로</span></td><td>claude-opus / sonnet / haiku / fable</td><td>Anthropic OAuth 슬롯 1~4</td><td>MCP 전체</td><td>Claude CLI를 릴레이로 호출. 세션 <code>--resume</code>으로 도구 이력 유지. 슬롯 한도 소진 시 300초 쿨다운</td></tr>
+<tr><td><code>_stream_codex_relay</code></td><td>gpt-6-astra, gpt-5.6-sol/terra/luna, gpt-5.5, gpt-5.3-codex</td><td>ChatGPT Plus OAuth</td><td>MCP 전체</td><td>Codex CLI. 주간 한도 소진 시 <b>에러가 아니라 200+0토큰</b>을 반환 → 사후 검출 필요</td></tr>
+<tr><td><code>_stream_agent_sdk</code></td><td>claude 계열(자율 실행 인텐트)</td><td>OAuth</td><td>SDK 내장</td><td>execute/code_modify 인텐트에서 자율 다단계 실행</td></tr>
+<tr><td><code>_stream_anthropic</code></td><td>claude 계열(CLI 비활성 시)</td><td>API</td><td>Tool Use</td><td>직접 SDK. 프롬프트 캐시 사용</td></tr>
+<tr><td><code>_stream_litellm</code><br>(anthropic/openai 두 갈래)</td><td>gemini, qwen, deepseek, kimi, minimax, groq, openrouter, gpt-4o/5</td><td>LiteLLM 프록시</td><td>모델별 상이</td><td>비-Claude 전부. 한국어 검색 인텐트의 qwen-turbo가 여기</td></tr>
+<tr><td><code>_stream_pc_ollama_provider</code> / <code>_stream_antigravity_relay</code></td><td>pc-gemma4, pc-qwen3 / antigravity*</td><td>로컬 브리지 / 릴레이</td><td>제한적</td><td>CEO PC GPU 경유(현재 <code>is_enabled=false</code>) / antigravity 3종 활성</td></tr>
+</tbody>
+</table>
+
+<h3>6-3. 실패하면 어디로 떨어지는가 — 폴백 사다리</h3>
+<div class="diag">요청 모델 = claude-opus
+   │
+   ├─(a) 동급 다운그레이드  _MODEL_DOWNGRADE
+   │      fable-5-1 → fable-5 → opus → sonnet        (명시 지정이면 다운그레이드 금지)
+   │      opus → [opus]  ·  sonnet-5 → [sonnet-5, sonnet]
+   │
+   ├─(b) 슬롯 순회  OAuth slot 1 → 2 → 3 → 4
+   │      · 주간한도 소진 슬롯은 사전 배제(턴 중간 교체 시 CLI 세션 매핑이 끊겨
+   │        도구 이력이 사라지고 같은 작업을 다시 하는 사고가 있었음 — 2026-09-12)
+   │      · 429 발생 시 해당 슬롯 300초 쿨다운
+   │
+   ├─(c) Agent SDK 전환  (CLI 릴레이 전부 실패 시)
+   │
+   ├─(d) 교차 제공사 동급 폴백  _SAMEGRADE_FALLBACK
+   │      opus → gpt-5.6-sol   ·   sonnet → gpt-5.5   ·   haiku → gpt-5.4-mini
+   │      fable-5-1 → gpt-5.6-sol → opus
+   │
+   └─(e) 최후 강등  opus → sonnet 재시도</div>
+<p class="small">근거: <code>model_selector.py:2353-2373</code> (다운그레이드·동급 폴백 맵), <code>:141-142</code>(쿨다운 300초), <code>:2384</code>(명시 지정 시 다운그레이드 차단).</p>
+
+<!-- ══════════════════════════════════════════════ -->
+<h2 id="s6">7. ④ 모델별 응답이 어떻게 달라지는가 (실측)</h2>
+
+<p><b>CEO 질문의 핵심입니다.</b> 결론부터 적으면 — 차이는 말투가 아니라 <u>작업량</u>에서 납니다.</p>
+
+<h3>7-1. 실측 비교표 (지난 7일, assistant 메시지 전수)</h3>
+<table>
+<thead><tr><th>모델</th><th>메시지</th><th>평균 응답 길이</th><th>최대</th><th>평균 도구 호출</th><th>백엔드</th><th>비용(in/out, $/M)</th></tr></thead>
+<tbody>
+<tr><td><b>claude-opus-5</b> <span class="b acc">현 기본</span></td><td>4,529</td><td>1,531자</td><td>104,066자</td><td><b>10.1회</b></td><td>CLI 릴레이</td><td>5.0 / 25.0</td></tr>
+<tr><td>claude-sonnet-5</td><td>475</td><td>934자</td><td>15,016자</td><td>6.0회</td><td>CLI 릴레이</td><td>3.0 / 15.0</td></tr>
+<tr><td>claude-sonnet-4-6</td><td>317</td><td>2,989자</td><td>12,007자</td><td>20.0회</td><td>CLI 릴레이</td><td>3.0 / 15.0</td></tr>
+<tr><td>claude-haiku-4-5</td><td>144</td><td><b>132자</b></td><td>3,662자</td><td><b>0.0회</b></td><td>CLI 릴레이</td><td>1.0 / 5.0</td></tr>
+<tr><td>GPT-5.6 Sol (Codex CLI)</td><td>86</td><td>2,788자</td><td>10,762자</td><td><b>49.1회</b></td><td>Codex 릴레이</td><td>미등록</td></tr>
+<tr><td>gpt-5.6-sol (API 표기)</td><td>58</td><td>2,859자</td><td>22,934자</td><td>40.4회</td><td>Codex 릴레이</td><td>미등록</td></tr>
+<tr><td>claude-fable-5-1</td><td>11</td><td>3,115자</td><td>6,658자</td><td>43.4회</td><td>CLI 릴레이</td><td>10.0 / 50.0</td></tr>
+<tr><td>mixture(자동)</td><td>134</td><td>3,132자</td><td>13,388자</td><td>21.5회</td><td>DB 기본으로 위임</td><td>—</td></tr>
+</tbody>
+</table>
+<p class="small">[DB 실측, <code>chat_messages</code> role='assistant', 7일] · 비용은 <code>_COST_MAP</code> [코드]. Codex 계열은 OAuth 정액이라 <code>_COST_MAP</code>에 단가가 없습니다(<span class="b warn">미측정</span>).</p>
+
+<div class="card warn">
+<b>읽는 법</b> — haiku가 "간결한 게 아니라" <b>도구를 한 번도 쓰지 않습니다</b>(평균 0.0회). 그래서 132자로 끝납니다. 실측 조회가 필요한 CEO 지시를 haiku에 주면 <u>확인 없이 답</u>이 돌아옵니다. 반대로 Codex Sol은 도구를 49회까지 부르지만 그만큼 한 턴이 길어집니다. <b>"정확성이 좋은 모델"은 opus/sonnet, "빠른 모델"은 haiku가 아니라 sonnet 입니다</b> — haiku는 빠른 게 아니라 <u>일을 안 하는</u> 쪽에 가깝습니다.</div>
+
+<h3>7-2. 차이가 발생하는 4개 지점</h3>
+<table>
+<thead><tr><th>#</th><th>지점</th><th>모델별로 무엇이 달라지나</th><th>현재 상태</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><b>실행 백엔드</b></td><td>CLI 릴레이는 세션 resume·MCP 도구 전체 / LiteLLM 경유는 도구 지원이 모델마다 다름 / Codex는 한도 소진 시 빈 응답</td><td class="b ok">작동</td></tr>
+<tr><td>2</td><td><b>확장사고(thinking)</b></td><td>Claude 계열만 <code>thinking</code> 이벤트 송출. max_tokens가 32,768 → <b>128,000</b>으로 바뀜</td><td class="b ok">작동</td></tr>
+<tr><td>3</td><td><b>L5 모델 자산</b></td><td>provider/capability/cost 티어별 지침 문장이 프롬프트에 추가됨</td><td class="b bad">사실상 미작동</td></tr>
+<tr><td>4</td><td><b>인텐트별 temperature</b></td><td>인텐트마다 0.1~0.5 (casual 0.1, report 0.5). governance ON이면 <code>intent_temperatures</code> DB값 우선</td><td class="b warn">부분</td></tr>
+</tbody>
+</table>
+
+<h3>7-3. L5 모델 자산이 왜 안 붙는가 — 키 매칭 도식</h3>
+<div class="diag">모델 id "claude-opus-5"
+   │
+   └─▶ _infer_model_keys_from_text()  →  키 집합 생성
+          claude-opus-5 · provider:anthropic · family:claude
+          capability:tools · capability:coding · performance:deep · cost:high
+                              │
+                              ▼  target_models 와 교집합 검사
+   L5 자산 14개                 매칭?
+   ├ model-provider-anthropic  [provider:anthropic, family:claude]   ✅ 적용  (3일 1,082턴)
+   ├ model-claude-opus         [claude-opus-4-6, claude-opus-4-7]    ❌ 미적용 ← 모델 id가 5세대로 올라갔는데
+   ├ model-claude-sonnet       [claude-sonnet-4-6, claude-sonnet-4-7]❌         자산 target이 4세대에 멈춤
+   ├ model-claude-haiku        [claude-haiku-4-5]                    ❌
+   ├ model-capability-thinking [capability:thinking]                 ❌ ← 키 생성기가 claude에
+   │                                                                      capability:thinking 을 안 만든다
+   └ (provider별 9종: codex/gemini/openai/qwen/groq/kimi/deepseek/minimax) — 해당 모델일 때만
+
+  결과: 3일간 claude-opus-5 턴에서 실제 적용된 model-* 자산 = model-provider-anthropic 1건 (1,082회)</div>
+<p class="small">[DB 실측, <code>compiled_prompt_provenance</code> → <code>applied_assets</code> 전개, 3일] · 코드: <code>prompt_compiler.py:84-97</code>(Claude 분기는 tools/coding/performance/cost만 생성하고 <code>capability:thinking</code>은 생성하지 않음).</p>
+
+<h3>7-4. 프롬프트 규모 — 모델별 실측</h3>
+<table>
+<thead><tr><th>모델</th><th>턴</th><th>평균 시스템 프롬프트</th><th>평균 적용 자산</th></tr></thead>
+<tbody>
+<tr><td>claude-opus-5</td><td>1,513</td><td>36,462자</td><td>21개</td></tr>
+<tr><td>codex:gpt-5.6-sol</td><td>402</td><td>34,519자</td><td>20개</td></tr>
+<tr><td>gpt-5.6-sol</td><td>55</td><td>34,874자</td><td>20개</td></tr>
+<tr><td>claude-sonnet-5</td><td>14</td><td>35,968자</td><td>21개</td></tr>
+<tr><td>claude-fable-5</td><td>6</td><td>34,239자</td><td>20개</td></tr>
+<tr><td>gpt-6-astra</td><td>3</td><td>35,190자</td><td>20개</td></tr>
+</tbody>
+</table>
+<p class="small">[DB 실측, 7일] — 모델 간 차이는 <b>자산 1개, 약 2,000자</b>뿐입니다. 이 1개가 §7-3의 provider 자산입니다. 즉 <b>현재 모델별 프롬프트 차별화는 provider 한 줄 수준</b>입니다.</p>
+
+<!-- ══════════════════════════════════════════════ -->
+<h2 id="s7">8. ⑤ 도구 선택 · 실행 · 승인 게이트</h2>
+
+<h3>8-1. 도구는 전부 주지 않는다</h3>
+<div class="diag">등록 도구 138개
+   │
+   ├─ _CORE_TOOLS 14개  (인텐트와 무관하게 항상 주입)
+   │    todo_write · handover_write · handover_search · read_remote_file
+   │    query_database · query_project_database · list_remote_dir · run_remote_command
+   │    capture_screenshot · pipeline_runner_submit/status/approve
+   │    check_task_status · read_task_logs
+   │
+   └─ _INTENT_TOOL_MAP (56개 인텐트 → 12개 그룹)
+        search/news_search/…      → [search, crawl]
+        code_task/code_modify     → [action, research, meta]
+        design/design_fix         → [action, browser, meta]
+        code_exec/code_explorer   → [action, research]
+        (미등록 인텐트는 get_eager_tools() 로 폴백)</div>
+
+<h3>8-2. 도구 실행 전 3단 보안 + 승인 게이트</h3>
+<div class="lane">
+<div class="box bad"><b>1. 차단 정규식</b><span>rm -rf / · mkfs · fork bomb · 시크릿 경로 쓰기 — 승인 여부와 무관하게 무조건 차단</span></div>
+<div class="ar">▶</div>
+<div class="box warn"><b>2. AADS 전용 가드</b><span>supervisorctl로 aads-api 제어, 컨테이너 stop/kill, compose down 차단. up/build/restart는 deploy.sh bluegreen으로 자동 전환</span></div>
+<div class="ar">▶</div>
+<div class="box acc"><b>3. Tier 판정</b><span>live_trading_guard.classify_tier() → TIER_PASS(통과) / TIER_NOTIFY(알림만) / TIER_APPROVE(승인 대기)</span></div>
+<div class="ar">▶</div>
+<div class="box ok"><b>4. 승인 카드</b><span>TIER_APPROVE면 agent_permission_requests에 pending으로 쌓이고, 응답 버블 아래 버튼으로 노출</span></div>
+</div>
+<p class="small">실매매(KIS/GO100) 주문·자금 설정 경로는 <code>critical</code>로 분류되어 예외 없이 <code>TIER_APPROVE</code>입니다. <span class="src">live_trading_guard.py:221-267</span></p>
+
+<!-- ══════════════════════════════════════════════ -->
+<h2 id="s8">9. ⑥ 응답 후처리 4중 게이트와 채팅창 렌더링</h2>
+
+<h3>9-1. 답이 화면에 남기 전에 통과해야 하는 4개 게이트</h3>
+<table>
+<thead><tr><th>순서</th><th>게이트</th><th>무엇을 잡는가</th><th>걸리면</th><th>fast 모드</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>output_validator</code></td><td>"확인하겠습니다"로 끝나는 빈 약속 / 진행 서술만 남은 응답 / 빈 응답</td><td>retry_prompt를 붙여 재생성. 진행문만 있으면 <b>도구 없이</b> 재시도</td><td>우회</td></tr>
+<tr><td>2</td><td><code>response_critic</code></td><td>근거·완결성·수치 출처 부족 (별도 LLM 채점)</td><td><code>REGENERATE</code> 판정 시 피드백 동봉 후 스트림 리셋·재생성</td><td>생략</td></tr>
+<tr><td>3</td><td><code>response_completion_contract</code></td><td>커밋/푸시/배포/문서기록 상태 누락, 미완료 미고지</td><td>완료 상태 절을 강제 보정하거나 이어쓰기 요구</td><td>생략</td></tr>
+<tr><td>4</td><td><code>next_step_proposals</code></td><td>승인이 필요한 다음 단계</td><td><code>cards</code>(승인 필요)/<code>auto</code>(자동)로 분류해 버튼 생성</td><td>동일</td></tr>
+</tbody>
+</table>
+
+<div class="card">
+<b>CEO께서 종종 보시는 "⚠️ 완료 상태 보정" 문구의 정체</b>가 3번 게이트입니다. 응답 본문이 커밋·푸시 상태를 적지 않은 채 끝나면, 시스템이 workspace ledger와 git status를 대조해 <u>사후에 경고를 덧붙입니다</u>. 즉 그 경고는 모델이 쓴 게 아니라 <b>계약 위반 감지기가 붙인 것</b>입니다.</div>
+
+<h3>9-2. SSE 이벤트 → 화면 매핑</h3>
+<table>
+<thead><tr><th>이벤트</th><th>언제</th><th>화면에서 무엇으로 보이나</th></tr></thead>
+<tbody>
+<tr><td><code>task_plan</code></td><td>턴 시작 직후(분류 전)</td><td>"✅ 요청을 수신했습니다. 분석 및 도구 준비 중…"</td></tr>
+<tr><td><code>thinking</code></td><td>확장사고 델타</td><td>접힌 사고 블록 (Claude 계열만)</td></tr>
+<tr><td><code>tool_use</code></td><td>도구 호출 시작</td><td>"🔧 도구 N회 호출" 카운터 — <b>TODO를 등록하지 않으면 이 숫자만 보인다</b></td></tr>
+<tr><td><code>tool_result</code></td><td>도구 반환</td><td>결과 스니펫(500자 제한)</td></tr>
+<tr><td><code>delta</code></td><td>본문 토큰</td><td>본문 스트리밍</td></tr>
+<tr><td><code>stream_reset</code></td><td>critic 재생성</td><td>본문이 지워지고 다시 써짐</td></tr>
+<tr><td><code>done</code> / <code>error</code></td><td>종료</td><td>최종 저장 / 오류 배너 + 자동 재개 예약</td></tr>
+</tbody>
+</table>
+
+<!-- ══════════════════════════════════════════════ -->
+<h2 id="s9">10. 진단 — 확인된 문제점 6건</h2>
+
+<table>
+<thead><tr><th>#</th><th>문제점</th><th>원인</th><th>근거</th><th>사용자 영향</th></tr></thead>
+<tbody>
+<tr><td>F1</td><td><b>인텐트 거버넌스(intent_policies)가 완전히 무력</b></td><td><code>model_selector.py:2084</code> 게이트가 명시 지정·DB기본 두 경로 모두에서 정책 분기를 건너뜀</td><td>2일 전수: status_check 219턴·casual 133턴이 정책값(sonnet-4-6/gpt-5.5)이 아닌 claude-opus-5로 실행 [DB]</td><td>설정 화면에서 인텐트별 모델을 바꿔도 <b>아무 일도 일어나지 않음</b>. 잡담까지 최고가 모델로 처리되어 비용 과다</td></tr>
+<tr><td>F2</td><td><b>L5 모델 자산이 현행 모델에 안 붙음</b></td><td>자산 target이 <code>claude-opus-4-6/4-7</code>에 멈춰 있는데 운영 모델은 <code>claude-opus-5</code></td><td>3일간 opus-5 턴에 적용된 model-* 자산 = provider 1건뿐 [DB]</td><td>모델 특성에 맞춘 지시(길이·도구 사용 성향 보정)가 전달되지 않음</td></tr>
+<tr><td>F3</td><td><b>model_variants 설계가 0% 활용</b></td><td>자산 154개 전부 variants 비어 있음 — 모델별 문장 분기 경로가 코드에만 존재</td><td>prompt_assets 전수 [DB]</td><td>"모델별로 다르게 지시" 기능이 실질적으로 없음</td></tr>
+<tr><td>F4</td><td><b>거버넌스 등록률 10.6%</b></td><td>인텐트 66종 중 <code>intent_policies</code> 등록은 7종(casual·greeting·status_check·task_query·dashboard·code_modify·report)</td><td>intent_policies 전수 7행 [DB]</td><td>F1이 고쳐져도 나머지 59종은 여전히 코드 하드코딩</td></tr>
+<tr><td>F5</td><td><b>haiku가 도구를 전혀 쓰지 않음</b></td><td>haiku 라우팅 인텐트가 greeting/casual로 한정돼 있고, 도구 그룹이 붙지 않음</td><td>7일 144건 평균 도구 0.0회·132자 [DB]</td><td>비용 절감 목적으로 haiku를 확대하면 <b>실측 없는 답변</b>이 늘어남</td></tr>
+<tr><td>F6</td><td><b>중단 잔여 메시지 누적</b></td><td>스트리밍 중단 시 placeholder가 정리되지 않고 남음</td><td>7일 <code>stale_empty_placeholder</code> 1,415건 [DB]</td><td>채팅 이력·검색·요약 품질 저하. 인텐트 통계 왜곡</td></tr>
+</tbody>
+</table>
+
+<!-- ══════════════════════════════════════════════ -->
+<h2 id="s10">11. 개선 권장안과 검증 기준</h2>
+
+<table>
+<thead><tr><th>순위</th><th>조치</th><th>대상</th><th>병렬</th><th>검증 기준(완료 판정)</th></tr></thead>
+<tbody>
+<tr><td><span class="b bad">P0</span></td><td>거버넌스 게이트 수정 — <code>_db_default_applied</code> 를 정책 스킵 조건에서 제외하고, "명시 지정만 정책을 이긴다"로 축소</td><td><code>model_selector.py:2084</code></td><td>A</td><td>mixture로 status_check 1턴 실행 후 <code>compiled_prompt_provenance.provenance-&gt;&gt;'model'</code> 이 정책값과 일치. 단위 테스트 추가 후 <code>run_unit_tests.sh</code> 전체 PASS</td></tr>
+<tr><td><span class="b bad">P0</span></td><td>L5 자산 target 갱신 — <code>claude-opus-5 / claude-sonnet-5 / claude-fable-5-1</code> 추가, <code>capability:thinking</code> 키 생성 로직 보강</td><td><code>prompt_assets</code> L5 3행 + <code>prompt_compiler.py:84-97</code></td><td>A</td><td>다음 턴 provenance의 applied_assets에 <code>model-claude-opus</code> 포함. 자산 수 21→22</td></tr>
+<tr><td><span class="b warn">P1</span></td><td>인텐트 정책 등록 확대 — 사용 빈도 상위 15종(execute·pipeline_runner·diagnosis·code_task·search 등) 추가</td><td><code>intent_policies</code></td><td>B (P0 후)</td><td>등록률 10.6% → 33% 이상, 각 행의 default_model이 현행 모델 id</td></tr>
+<tr><td><span class="b warn">P1</span></td><td>haiku 라우팅 정책 명문화 — "도구 불요 인텐트 전용"을 코드 주석이 아니라 정책 행의 <code>tool_allowlist</code>로 고정</td><td><code>intent_policies.tool_allowlist</code></td><td>B</td><td>haiku 턴의 도구 호출 0회가 <u>의도된 설정</u>임이 DB로 증명됨</td></tr>
+<tr><td><span class="b acc">P2</span></td><td>중단 잔여물 정리 배치 — <code>stale_empty_placeholder</code> 1,415건 아카이브 + 생성 경로 보강</td><td><code>chat_messages</code> / <code>cleanup_stale_streaming_placeholders</code></td><td>C</td><td>잔여 건수 100건 미만, 7일 신규 증가율 90% 감소</td></tr>
+</tbody>
+</table>
+
+<div class="card ok">
+<b>권장 순서에 대한 판단</b> — P0 2건을 먼저 하는 이유는, F1·F2를 두면 <b>그 위에 쌓는 모든 모델 튜닝이 반영되지 않기 때문</b>입니다. 지금 상태에서 "인텐트별 모델을 이렇게 바꾸자"는 결정을 내려도 실행 경로에 닿지 않습니다. 반대로 P0 2건은 각각 코드 1줄 조건 수정 + DB 3행 갱신 수준이고, 되돌리기는 이전 값 복원으로 끝납니다.</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<h2 id="s11">12. 근거 목록</h2>
+
+<h4>코드 (contabo116 · /root/aads/aads-server)</h4>
+<table>
+<thead><tr><th>파일</th><th>줄</th><th>확인 내용</th></tr></thead>
+<tbody>
+<tr><td><code>app/services/intent_router.py</code></td><td>57-138 / 140-238 / 383-475 / 478-600</td><td>INTENT_MAP 66종 / INTENT_RULES 44종 / 분류 프롬프트 / classify() 4중 안전망</td></tr>
+<tr><td><code>app/services/prompt_compiler.py</code></td><td>71-133 / 214-240 / 253-379</td><td>모델키 생성 / 토큰 예산 실측 주석 / 5레이어 SQL 선별</td></tr>
+<tr><td><code>app/services/model_selector.py</code></td><td>984-1075 / 1969-2110 / 2353-2373 / 3501·4125·4419·2886</td><td>비용표 / call_stream 라우팅 / 폴백 맵 / 백엔드 6종</td></tr>
+<tr><td><code>app/services/chat_service.py</code></td><td>767-877 / 11640-14100</td><td>응답 모드 판정 / 턴 파이프라인 15단계</td></tr>
+<tr><td><code>app/services/tool_registry.py</code></td><td>3489-3592</td><td>CORE 14개 · INTENT_TOOL_MAP 56 · 그룹 12</td></tr>
+<tr><td><code>app/services/live_trading_guard.py</code></td><td>221-267</td><td>TIER_PASS / NOTIFY / APPROVE 판정</td></tr>
+<tr><td><code>app/services/directive_draft_service.py</code></td><td>82 / 147-364</td><td>DIRECTIVE 블록 정규식 · 검증 · 폴백 생성</td></tr>
+</tbody>
+</table>
+
+<h4>DB 조회 (PostgreSQL, 2026-09-19 06:0x KST 시점)</h4>
+<pre>-- 레이어별 자산·모델스코프·variants
+SELECT layer_id, count(*), count(*) FILTER (WHERE model_variants::text &lt;&gt; '{}') FROM prompt_assets GROUP BY 1;
+
+-- 모델별 프롬프트 규모·적용 자산 수 (7일)
+SELECT provenance-&gt;&gt;'model', count(*), avg(system_prompt_chars),
+       avg(jsonb_array_length(provenance-&gt;'applied_assets'))
+FROM compiled_prompt_provenance WHERE created_at &gt; now()-interval '7 days' GROUP BY 1;
+
+-- 모델별 실제 응답 길이·도구 호출 (7일)
+SELECT model_used, count(*), avg(length(content)),
+       avg(jsonb_array_length(tools_called))
+FROM chat_messages WHERE role='assistant' AND created_at &gt; now()-interval '7 days' GROUP BY 1;
+
+-- 정책 대비 실제 실행 모델 (2일 전수)
+SELECT provenance-&gt;&gt;'intent', provenance-&gt;&gt;'selected_model_id',
+       provenance-&gt;&gt;'execution_model_id', count(*)
+FROM compiled_prompt_provenance WHERE created_at &gt; now()-interval '2 days' GROUP BY 1,2,3;</pre>
+
+<hr>
+<p class="small">본 보고서는 조회 전용으로 작성되었으며 코드·DB·설정을 변경하지 않았습니다. 개선안(P0~P2)은 <b>미실행</b> 상태이며 CEO 승인 후 착수합니다.</p>
+
+</div>
+</body>
+</html>
