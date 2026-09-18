@@ -588,10 +588,11 @@ def _truncate_diff_for_review(diff: str) -> tuple[str, bool]:
 def _removed_preservation_symbols(diff: str) -> list[str]:
     """Keep hard gates for removals, without calling private edits deletions.
 
-    Match a private function only when it occurs exactly once on each side
-    of the same file diff. This covers signature edits and indentation moves;
-    it does not certify behavior, which still goes through the normal review.
-    Public APIs, classes, routes and ambiguous duplicate names remain gated.
+    Match a declaration only when it occurs exactly once on each side of the
+    same file diff. This covers signature edits and indentation moves, for
+    public and private declarations alike; it does not certify behavior, which
+    still goes through the normal review. Renames, routes whose path is not in
+    the symbol, and ambiguous duplicate names remain gated.
     """
     removed: list[str] = []
     for file_diff in re.split(r"(?=^diff --git )", diff or "", flags=re.MULTILINE):
@@ -614,10 +615,23 @@ def _removed_preservation_symbols(diff: str) -> list[str]:
                 if surplus > 0 and _TEST_FUNCTION_RE.fullmatch(symbol):
                     rename_pool[symbol] = surplus
         for symbol in deletions:
-            private_function = re.fullmatch(r"(?:async def|def) _(?!_)[A-Za-z0-9_]+", symbol)
+            # 같은 파일 diff 에서 같은 선언이 정확히 한 번 사라지고 한 번 다시
+            # 생겼으면 그것은 삭제가 아니라 시그니처 재작성·들여쓰기 이동이다.
+            # 종전에는 이 면제를 private 함수(_foo)로만 한정했고, 그래서 공개
+            # 함수의 여러 줄 시그니처 전환이 통째로 "삭제"로 잡혔다.
+            # 2026-09-18 실측 — runner-3eeda0e6 / runner-2872d735 두 건이
+            #   -async def create_task(req: CreateTaskRequest):
+            #   +async def create_task(
+            # 이 한 쌍 때문에 302추가/6삭제 diff 전체를 FLAG 0.3 으로 잃었다.
+            # 진짜 삭제(+ 쪽 없음)와 리네임(+ 쪽 이름 다름)은 개수가 맞지 않아
+            # 그대로 게이트에 남는다. 경로가 심볼 문자열에 담기지 않는
+            # @router.* 는 이름만으로 동일성을 판정할 수 없으므로 면제하지 않는다.
+            declaration = re.fullmatch(
+                r"(?:async[ \t]+def|def|class)[ \t]+[A-Za-z_][A-Za-z0-9_]*", symbol
+            )
             preserved = (
                 file_diff.startswith("diff --git ")
-                and private_function
+                and declaration
                 and deleted_counts[symbol] == added_counts[symbol] == 1
             )
             if not preserved and in_test_file and _TEST_FUNCTION_RE.fullmatch(symbol):

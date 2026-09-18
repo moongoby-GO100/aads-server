@@ -263,13 +263,20 @@ def test_private_callback_edit_is_not_symbol_removal(old, new):
     assert reviewer._precheck_preservation_gate(_symbol_diff(old, new), "", None) is None
 
 
+# 2026-09-18 정책 변경 — 같은 파일 diff 에서 한 번 사라지고 한 번 다시 생긴 **선언**은
+# public 이어도 삭제가 아니다(시그니처 재작성). 종전에는 아래 세 쌍이 이 목록에 있었다.
+#   ("def public_api():", "def public_api(epoch):")
+#   ("class PublicType:", "class PublicType(Base):")
+#   ("def __call__(self):", "def __call__(self, epoch):")
+# 그 때문에 runner-1f09e9e5(오비서 O3, 553추가/81삭제) · runner-3eeda0e6 ·
+# runner-2872d735 가 LLM 리뷰를 받아보지도 못하고 FLAG 0.3 으로 통째로 폐기됐다.
+# 인자 추가는 계약 변경이지만 "구현 삭제" 가 아니므로 하드 게이트가 아니라 리뷰가 볼 몫이다.
+# 면제 범위는 tests/unit/test_code_reviewer_public_signature_preservation.py 가 고정한다.
+# 리네임(+ 쪽 이름 다름) · @router 경로 변경 · async 여부 변경은 여기 그대로 남긴다.
 @pytest.mark.parametrize("old,new", [
     ("def _removed():", "def _different():"),
-    ("def public_api():", "def public_api(epoch):"),
-    ("class PublicType:", "class PublicType(Base):"),
     ('@router.get("/old")', '@router.get("/new")'),
     ("async def _worker():", "def _worker():"),
-    ("def __call__(self):", "def __call__(self, epoch):"),
 ])
 def test_real_or_public_contract_changes_remain_gated(old, new):
     reviewer = _load_reviewer()
