@@ -121,13 +121,21 @@ def collect(max_files_per_home: int = 40) -> dict:
         return acc.setdefault(key_name, {
             "snapshot": None, "ts": None, "tokens": 0,
             "ok": 0, "limit": 0, "limit_at": None, "sessions": 0,
+            "last_used": 0.0,
         })
+
+    def mark_used(key_name, when):
+        rec = slot(key_name)
+        if when and when > rec["last_used"]:
+            rec["last_used"] = float(when)
 
     homes = [(h, *_session_account(h)) for h in RELAY_ROOT.glob("*") if h.is_dir()]
     homes.append((LEGACY_HOME.parent, MAIN_KEY_NAME, 0.0))  # /root/.codex 자체
 
     cutoff = time.time() - 72 * 3600
     for home, key_name, bound_at in homes:
+        # 배정 자체가 사용의 하한이다. 막 배정된 세션은 아직 rollout 이 없다.
+        mark_used(key_name, bound_at)
         codex_dir = home / ".codex" if (home / ".codex").is_dir() else home
         files = sorted(codex_dir.glob("sessions/*/*/*/rollout-*.jsonl"),
                        key=os.path.getmtime, reverse=True)
@@ -136,7 +144,10 @@ def collect(max_files_per_home: int = 40) -> dict:
         for f in files:
             # 배정 이전 기록은 이전 계정(=MAIN) 몫이다. _session_account 주석 참고.
             # 세션 수도 같은 기준으로 센다 — 한쪽만 다른 기준이면 표가 어긋난다.
-            slot(key_name if os.path.getmtime(f) >= bound_at else MAIN_KEY_NAME)["sessions"] += 1
+            mtime = os.path.getmtime(f)
+            owner = key_name if mtime >= bound_at else MAIN_KEY_NAME
+            slot(owner)["sessions"] += 1
+            mark_used(owner, mtime)
         for f in files[:max_files_per_home]:
             rec = slot(key_name if os.path.getmtime(f) >= bound_at else MAIN_KEY_NAME)
             got = _scan_rollout(f)
@@ -332,6 +343,27 @@ def push_rate_limit_epoch(key_name: str, resets_at) -> None:
          "WHERE key_name='%s' AND provider='codex'" % (stamp, key_name))
 
 
+def push_last_used(accounts: list[dict]) -> None:
+    """어느 계정이 실제로 돌았는지를 llm_api_keys.last_used_at 에 남긴다.
+
+    구독 슬롯 화면은 이 컬럼을 본다. 릴레이는 DB 에 붙지 않으므로(조회가 실패해도
+    인증이 끊기면 안 된다 — _codex_accounts 주석) 계정 배정을 아는 쪽이 대신 적는다.
+    2026-09-19 실측: 릴레이 세션 20개가 전부 JINAH 로 돌고 있는데 두 계정 모두
+    last_used_at 이 NULL 이라, 화면만 보고는 어느 계정이 도는지 알 수 없었다.
+
+    되돌아가지 않게 더 최근일 때만 쓴다(여러 서버가 같은 표를 갱신한다).
+    """
+    for a in accounts:
+        used = a.get("last_used_epoch")
+        if not used:
+            continue
+        stamp = datetime.fromtimestamp(int(used), KST).strftime("%Y-%m-%d %H:%M:%S%z")
+        psql("UPDATE llm_api_keys SET last_used_at='%s', updated_at=NOW() "
+             "WHERE key_name='%s' AND provider='codex' "
+             "AND (last_used_at IS NULL OR last_used_at < '%s')"
+             % (stamp, a["key_name"], stamp))
+
+
 def clear_rate_limit(key_name: str) -> None:
     """계정이 지금 멀쩡하면 남은 정지 표시를 지운다."""
     psql("UPDATE llm_api_keys SET rate_limited_until=NULL, updated_at=NOW() "
@@ -389,6 +421,7 @@ def main() -> int:
         a["limit_72h"] = u.get("limit", 0)
         a["sessions"] = u.get("sessions", 0)
         a["tokens_recent"] = u.get("tokens", 0)
+        a["last_used_epoch"] = u.get("last_used") or None
 
     if args.sync:
         # 한도 상태는 **실시간 조회가 우선**이다. rollout 에서 읽은 실패 기록은
