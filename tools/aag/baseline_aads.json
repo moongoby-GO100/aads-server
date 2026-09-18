@@ -24,6 +24,13 @@
     "ROUTE_MISSING": 1,
     "STALE_BACKUP": 0
   },
+  "exceptions": [
+    {
+      "rule": "ORPHAN_ROUTER",
+      "file": "app/api/ceo_chat.py",
+      "reason": "intentional_no_mount"
+    }
+  ],
   "findings_total": 59,
   "unresolved_total": 110,
   "unresolved_by_kind": {

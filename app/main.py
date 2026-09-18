@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.logging_config import configure_logging
 
-from app.api import health, projects, checkpoints, stream, auth, context, chat, visual_qa, mobile_qa, memory, terminal, browser_bridge, design_modifications, google_sheets, obys_finance, notifications, unni_naengmyeon
+from app.api import health, projects, checkpoints, stream, auth, context, visual_qa, mobile_qa, memory, terminal, browser_bridge, design_modifications, google_sheets, obys_finance, notifications, unni_naengmyeon
 from app.api import obys_dashboard, obys_inventory, obys_accounting, obys_ops
 from app.api import acct_purchase
 from app.api.channels import router as channels_router
@@ -3765,7 +3765,6 @@ app.include_router(checkpoints.router, prefix="/api/v1", tags=["checkpoints"])
 app.include_router(stream.router, prefix="/api/v1", tags=["stream"])
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 app.include_router(context.router, prefix="/api/v1", tags=["context"])
-app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
 app.include_router(visual_qa.router, prefix="/api/v1", tags=["visual-qa"])
 app.include_router(mobile_qa.router, prefix="/api/v1", tags=["mobile-qa"])
 app.include_router(memory.router, prefix="/api/v1", tags=["memory"])
