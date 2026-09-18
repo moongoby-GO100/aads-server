@@ -69,6 +69,25 @@ ROOTS = [
     ("/root/kis-autotrade-v4/docs/plans", "GO100", "기획문서"),
     ("/root/kis-autotrade-v4/docs/operations", "GO100", "운영문서"),
     ("/root/kis-autotrade-v4/report", "GO100", "리포트"),
+
+    # 원격 서버에서 당겨온 문서 — scripts/sync_remote_docs.sh 가 채운다.
+    # 서버마다 색인기 사본을 두지 않는다. 문서를 한 곳으로 모으고 색인은
+    # contabo116 에서만 돈다(2026-09-19).
+    #
+    # 좁은 경로를 먼저 둔다. collect() 는 같은 파일을 **먼저 만난 root** 의
+    # 프로젝트로 확정하므로, docs 를 먼저 두면 그 아래가 전부 KIS 가 된다.
+    ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/docs/go100", "GO100", "GO100 문서(contabo14)"),
+    ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/docs/technical", "GO100", "GO100 기술문서(contabo14)"),
+    ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/docs/plans", "GO100", "GO100 기획문서(contabo14)"),
+    ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/docs/operations", "GO100", "GO100 운영문서(contabo14)"),
+    ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/docs", "KIS", "KIS 문서(contabo14)"),
+    ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/report", "GO100", "GO100 리포트(contabo14)"),
+    ("/root/aads/_remote_docs/contabo14/kis-autotrade-v4/reports", "GO100", "GO100 리포트(contabo14)"),
+    ("/root/aads/_remote_docs/cafe24_114/shortflow/docs", "SF", "SF 문서(cafe24_114)"),
+    ("/root/aads/_remote_docs/cafe24_114/shortflow/reports", "SF", "SF 리포트(cafe24_114)"),
+    ("/root/aads/_remote_docs/cafe24_114/newtalk-v2/docs", "NTV2", "NTV2 문서(cafe24_114)"),
+    ("/root/aads/_remote_docs/cafe24_114/newtalk-v2/reports", "NTV2", "NTV2 리포트(cafe24_114)"),
+    ("/root/aads/_remote_docs/cafe24_114/nas-image", "NAS", "NAS 문서(cafe24_114)"),
 ]
 
 # 경로에 이 조각이 들어가면 제외한다. 전부 "같은 문서의 다른 사본"이 생기는
@@ -250,8 +269,40 @@ def cmd_scan(_args) -> None:
         print(f"   {k:<20} {v:>5}개")
 
 
+def record_run(srv: str, docs: int, changed: int, chunks: int, secs: float) -> None:
+    """색인이 '돌았다'는 사실 자체를 남긴다.
+
+    doc_chunks.indexed_at 은 컬럼 기본값 now() 로 INSERT 시점에만 찍힌다.
+    cmd_index 는 sha256 이 바뀐 문서만 INSERT 하므로, 문서가 하루 동안
+    하나도 안 바뀌면 색인이 정상 동작해도 MAX(indexed_at) 이 전진하지 않는다.
+    그러면 "색인이 멈췄다" 와 "문서가 안 바뀌었다" 를 구분할 수 없다.
+
+    2026-09-19 실측 — GO100 파티션이 09-14 이후 5일째 그대로였는데 원인은
+    색인 정지가 아니라 문서 무변경이었다. 최신 시각만 보고 정지로 오진했다.
+
+    테이블은 여기서 만든다. 이 스크립트는 모든 서버 공용이고 마이그레이션이
+    돌지 않는 서버에서도 실행되므로, 별도 migration 에 두면 그쪽에서 INSERT 가
+    실패해 색인 자체가 죽는다.
+    """
+    psql(
+        "CREATE TABLE IF NOT EXISTS doc_index_runs ("
+        " id bigserial PRIMARY KEY,"
+        " server text NOT NULL,"
+        " ran_at timestamptz NOT NULL DEFAULT now(),"
+        " docs integer NOT NULL,"
+        " changed integer NOT NULL,"
+        " chunks integer NOT NULL,"
+        " seconds numeric(10,2) NOT NULL);"
+        "CREATE INDEX IF NOT EXISTS doc_index_runs_ran_at_idx"
+        " ON doc_index_runs (ran_at DESC);"
+        "INSERT INTO doc_index_runs (server,docs,changed,chunks,seconds)"
+        f" VALUES ({lit(srv)},{int(docs)},{int(changed)},{int(chunks)},{secs:.2f});"
+    )
+
+
 def cmd_index(args) -> None:
     srv = server_name()
+    t0 = time.time()
     docs = collect()
     if args.limit:
         docs = docs[: args.limit]
@@ -268,6 +319,7 @@ def cmd_index(args) -> None:
     changed = [d for d in docs if known.get(d["path"]) != d["sha256"]]
     print(f"[index_docs] 변경/신규 {len(changed):,}개 (그대로 {len(docs)-len(changed):,}개 건너뜀)")
     if not changed:
+        record_run(srv, len(docs), 0, 0, time.time() - t0)
         return
 
     live = {d["path"] for d in docs}
