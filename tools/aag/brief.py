@@ -31,12 +31,20 @@ from typing import Any
 
 KST = timezone(timedelta(hours=9))
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
 # 타이머 최신본이 1순위, 저장소 커밋본이 2순위다. 타이머(2시간)가 도는 서버에서는
 # 커밋본보다 항상 새롭다.
 TIMER_GRAPH = Path("/var/log/aads-pipeline/aag-struct/aads-graph.json")
-REPO_GRAPH_REL = Path("reports/aag/aads-graph.json")
+
+# 프로젝트별 그래프 탐색 경로 — CWD 기준(러너가 각 프로젝트 워크디렉터리에서 호출한다).
+# `*` 를 포함한 항목은 glob 으로 풀어 최신(mtime) 1개를 쓴다. 여기 없는 프로젝트는
+# DEFAULT_GRAPH_CANDIDATES 로 폴백한다. 표는 여기 하나로만 모은다 — 흩지 마라.
+GRAPH_GLOB_PATTERN = "reports/aag/*-graph.json"
+PROJECT_GRAPH_CANDIDATES: dict[str, list[str]] = {
+    "AADS": [str(TIMER_GRAPH), "reports/aag/aads-graph.json"],
+    "ACCT": ["reports/aag/acct-graph.json"],
+    "NTV2": ["reports/aag/ntv2-graph.json", GRAPH_GLOB_PATTERN],
+}
+DEFAULT_GRAPH_CANDIDATES: list[str] = [GRAPH_GLOB_PATTERN]
 
 DEFAULT_MAX_BYTES = 6000
 TIME_BUDGET_SEC = 15.0
@@ -55,7 +63,6 @@ FOOTER = (
     "DUP_MODULE/DOUBLE_MOUNT 로 표시된 파일은 **둘 중 죽은 쪽을 고치고 있지 않은지** 먼저 확인하라."
 )
 
-HEADER_TITLE = "[AAG 착수 브리프 — 이 작업과 연결된 아키텍처 사실]"
 TRUNCATED_MARK = "(브리프 일부 생략)"
 
 # 중첩 반복을 쓰지 않는다 (R-BG #3). `(?:[\w/]+/)+` 형태는 대용량 입력에서
@@ -93,7 +100,17 @@ class Deadline:
 # ── 그래프 로딩 ────────────────────────────────────────────────────────
 
 
-def resolve_graph_path(explicit: str | None) -> tuple[Path | None, str]:
+def _resolve_glob_candidate(pattern: str) -> Path | None:
+    try:
+        matches = [p for p in Path.cwd().glob(pattern) if p.is_file()]
+    except OSError:
+        return None
+    if not matches:
+        return None
+    return max(matches, key=lambda p: p.stat().st_mtime)
+
+
+def resolve_graph_path(explicit: str | None, project: str) -> tuple[Path | None, str]:
     """쓸 그래프 파일을 고른다. 없으면 (None, 사유)."""
     if explicit:
         p = Path(explicit)
@@ -103,13 +120,20 @@ def resolve_graph_path(explicit: str | None) -> tuple[Path | None, str]:
             return p, ""
         return None, f"지정한 그래프 없음: {p}"
 
-    for cand in (TIMER_GRAPH, REPO_ROOT / REPO_GRAPH_REL, Path.cwd() / REPO_GRAPH_REL):
+    for cand in PROJECT_GRAPH_CANDIDATES.get(project, DEFAULT_GRAPH_CANDIDATES):
+        if "*" in cand:
+            found = _resolve_glob_candidate(cand)
+            if found is not None:
+                return found, ""
+            continue
+        p = Path(cand)
         try:
-            if cand.is_file():
-                return cand, ""
+            resolved = p if p.is_absolute() else Path.cwd() / p
+            if resolved.is_file():
+                return resolved, ""
         except OSError:
             continue
-    return None, "그래프 파일 없음 (타이머 산출물·저장소 사본 모두 부재)"
+    return None, f"그래프 파일 없음 (project={project})"
 
 
 def load_graph(path: Path) -> tuple[dict[str, Any] | None, str]:
@@ -444,10 +468,11 @@ def render(
     sections: list[tuple[int, str, list[str]]],
     max_bytes: int,
     partial: bool,
+    project: str,
 ) -> str:
     now = datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")
     header = (
-        f"{HEADER_TITLE}\n"
+        f"[AAG 착수 브리프 — {project}]\n"
         f"생성 {now} · 그래프 {graph.get('generated_at', '?')} · "
         f"노드 {len(graph.get('nodes', []))} / 엣지 {len(graph.get('edges', []))} 중 관련분만\n"
     )
@@ -502,6 +527,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="AAG 착수 브리프 생성기")
     ap.add_argument("--instruction-file", required=True)
     ap.add_argument("--graph", default=None)
+    ap.add_argument("--project", default="AADS")
     ap.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     ap.add_argument("--hops", type=int, default=1)
     args = ap.parse_args(argv)
@@ -518,7 +544,7 @@ def main(argv: list[str] | None = None) -> int:
         print("[aag-brief] 지시서가 비었다", file=sys.stderr)
         return 0
 
-    graph_path, why = resolve_graph_path(args.graph)
+    graph_path, why = resolve_graph_path(args.graph, args.project)
     if graph_path is None:
         print(f"[aag-brief] {why}", file=sys.stderr)
         return 0
@@ -543,7 +569,7 @@ def main(argv: list[str] | None = None) -> int:
         print("[aag-brief] 관련 사실 0건", file=sys.stderr)
         return 0
 
-    text = render(graph, sections, max(500, args.max_bytes), partial=deadline.hit)
+    text = render(graph, sections, max(500, args.max_bytes), partial=deadline.hit, project=args.project)
     sys.stdout.write(text)
     if deadline.hit:
         print("[aag-brief] 시간 상한(15초) 초과 — 부분 결과만 출력했다", file=sys.stderr)

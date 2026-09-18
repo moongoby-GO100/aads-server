@@ -207,6 +207,74 @@ def test_graph_with_wrong_shape_does_not_crash(tmp_path):
     assert res.stdout == ""
 
 
+# ── 프로젝트 일반화 (AADS-AAG-BRIEF-002) ────────────────────────────────
+
+
+def test_project_header_is_stamped(tmp_path):
+    """머리글에 프로젝트 키가 찍혀야 다른 프로젝트 브리프와 구분된다."""
+    res = _run(tmp_path, "app/api/chat.py 를 고쳐라", extra=["--project", "AADS"])
+
+    assert "[AAG 착수 브리프 — AADS]" in res.stdout
+
+
+def test_project_acct_resolves_named_graph_by_cwd(tmp_path):
+    """--graph 없이 --project ACCT 만으로 CWD 기준 acct-graph.json 을 찾는다."""
+    graph_dir = tmp_path / "reports" / "aag"
+    graph_dir.mkdir(parents=True)
+    (graph_dir / "acct-graph.json").write_text(json.dumps(_graph(), ensure_ascii=False), encoding="utf-8")
+    ins = tmp_path / "ins.txt"
+    ins.write_text("app/api/chat.py 를 고쳐라", encoding="utf-8")
+
+    res = subprocess.run(
+        [sys.executable, str(BRIEF), "--instruction-file", str(ins), "--project", "ACCT"],
+        capture_output=True, text=True, timeout=60, cwd=tmp_path,
+    )
+
+    assert res.returncode == 0
+    assert "[AAG 착수 브리프 — ACCT]" in res.stdout
+    assert "app/api/chat.py" in res.stdout
+
+
+def test_unknown_project_without_graph_is_silent_success(tmp_path):
+    """그래프가 없는 프로젝트(등록 안 된 키)도 본 작업을 막지 않는다 — exit 0, 빈 출력."""
+    ins = tmp_path / "ins.txt"
+    ins.write_text("app/api/chat.py 를 고쳐라", encoding="utf-8")
+
+    res = subprocess.run(
+        [sys.executable, str(BRIEF), "--instruction-file", str(ins), "--project", "NO_SUCH_PROJECT"],
+        capture_output=True, text=True, timeout=60, cwd=tmp_path,
+    )
+
+    assert res.returncode == 0
+    assert res.stdout == ""
+
+
+def test_explicit_graph_overrides_project_default(tmp_path):
+    """`--graph` 가 주어지면 프로젝트 기본 경로에 있는 그래프보다 우선한다."""
+    graph_dir = tmp_path / "reports" / "aag"
+    graph_dir.mkdir(parents=True)
+    decoy = _graph()
+    decoy["generated_at"] = "DECOY"
+    (graph_dir / "aads-graph.json").write_text(json.dumps(decoy, ensure_ascii=False), encoding="utf-8")
+
+    explicit_graph = tmp_path / "explicit.json"
+    real = _graph()
+    real["generated_at"] = "EXPLICIT"
+    explicit_graph.write_text(json.dumps(real, ensure_ascii=False), encoding="utf-8")
+
+    ins = tmp_path / "ins.txt"
+    ins.write_text("app/api/chat.py 를 고쳐라", encoding="utf-8")
+
+    res = subprocess.run(
+        [sys.executable, str(BRIEF), "--instruction-file", str(ins),
+         "--graph", str(explicit_graph), "--project", "AADS"],
+        capture_output=True, text=True, timeout=60, cwd=tmp_path,
+    )
+
+    assert "EXPLICIT" in res.stdout
+    assert "DECOY" not in res.stdout
+
+
 # ── 러너 배선 ─────────────────────────────────────────────────────────
 
 
@@ -230,3 +298,16 @@ def test_runner_injects_brief_before_step0():
 
     # STEP 0 첫 줄 힌트는 브리프가 있을 때만 붙는다(빈 변수 = 빈 줄 아님).
     assert "${aag_step0_hint}- 대상 파일의 기존" in src
+
+
+def test_runner_brief_condition_is_project_generic():
+    """AADS 하드코딩을 걷어내고 파일 존재 여부로 판정해야 ACCT/NTV2 도 브리프를 받는다."""
+    src = RUNNER.read_text(encoding="utf-8")
+    block_start = src.index("AAG 착수 브리프")
+    block_end = src.index("H7:", block_start)
+    block = src[block_start:block_end]
+
+    assert '"$project" == "AADS"' not in block
+    assert "-f \"$main_workdir/tools/aag/brief.py\"" in block
+    assert 'cd "$main_workdir"' in block
+    assert '--project "$project"' in block
