@@ -76,7 +76,7 @@ _LITELLM_FALLBACK_MODELS = {
 }
 
 # Codex CLI 가용 모델 (Codex catalog, 2026-04-28)
-_CODEX_AVAILABLE_MODELS = {"default", "gpt-6-astra", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-tela"}
+_CODEX_AVAILABLE_MODELS = {"default", "gpt-6-astra", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
 _TERMINAL_JOB_STATUSES = {
     "done",
     "error",
@@ -540,12 +540,12 @@ class PipelineCJob:
         # AI가 선택한 모델 (sonnet/opus/haiku, 빈 문자열이면 기본 sonnet)
         self.model = model if model in ("sonnet", "opus", "haiku") else ""
         # AADS-211: 직접 모델 지정 (worker_model)
-        # Codex 모델 유효성 검증 — 미지원 모델은 gpt-5.6-tela로 폴백
+        # Codex 모델 유효성 검증 — 미지원 모델은 gpt-5.6-terra로 폴백
         if worker_model and worker_model.startswith("codex:"):
             codex_name = worker_model.split(":", 1)[1]
             if not _is_codex_model_allowed(codex_name):
-                logger.warning("Codex model '%s' is not a GPT model id, fallback to gpt-5.6-tela", codex_name)
-                worker_model = "codex:gpt-5.6-tela"
+                logger.warning("Codex model '%s' is not a GPT model id, fallback to gpt-5.6-terra", codex_name)
+                worker_model = "codex:gpt-5.6-terra"
         self.worker_model = worker_model
         # AADS-211: 병렬 실행 그룹
         self.parallel_group = parallel_group
@@ -784,7 +784,7 @@ class PipelineCJob:
                 )
                 work_result = await self._run_litellm_fallback(enriched_instruction, override_model=_direct_model)
             elif _wm.startswith("codex:"):
-                _codex_model = _wm.split(":", 1)[1] or "gpt-5.6-tela"
+                _codex_model = _wm.split(":", 1)[1] or "gpt-5.6-terra"
                 self._log("codex_direct", f"Codex CLI 직접 실행 (CEO 명시 지정, model={_codex_model})")
                 await self._post_to_chat(
                     f"🤖 **[Codex Runner 시작]** `{self.job_id}`\n"
@@ -945,7 +945,7 @@ class PipelineCJob:
                 # 재작업 실패 시 Codex CLI 폴백 (LiteLLM 유료 비활성화, CEO 지시 2026-09-11)
                 if work_result.get("error") and self.project == "AADS":
                     self._log("codex_fallback_attempt", f"재작업 실패 → Codex CLI 폴백: {work_result['error'][:100]}")
-                    work_result = await self._run_codex_cli(revision_instruction, override_model="gpt-5.6-tela")
+                    work_result = await self._run_codex_cli(revision_instruction, override_model="gpt-5.6-terra")
 
                 if work_result.get("error"):
                     self._log("error", f"재작업 오류: {work_result['error']}")
@@ -1727,10 +1727,10 @@ class PipelineCJob:
 
     async def _run_codex_cli(self, instruction: str, override_model: str = "") -> dict:
         """Codex CLI 실행. ChatGPT Plus OAuth 기반."""
-        codex_model = override_model or "gpt-5.6-tela"
+        codex_model = override_model or "gpt-5.6-terra"
         if not _is_codex_model_allowed(codex_model):
-            logger.warning("pipeline_c_codex_invalid_model job=%s model=%s -> gpt-5.6-tela", self.job_id, codex_model)
-            codex_model = "gpt-5.6-tela"
+            logger.warning("pipeline_c_codex_invalid_model job=%s model=%s -> gpt-5.6-terra", self.job_id, codex_model)
+            codex_model = "gpt-5.6-terra"
 
         self.actual_model = f"codex:{codex_model}"
         self._log("codex_runner", f"Codex CLI 시작 (project={self.project}, model={codex_model})")
@@ -1884,7 +1884,7 @@ class PipelineCJob:
 
         if spec.startswith("codex:"):
             self._log("model_attempt", f"DB 모델 시도: {spec}")
-            return await self._run_codex_cli(instruction, override_model=spec.split(":", 1)[1] or "gpt-5.6-tela")
+            return await self._run_codex_cli(instruction, override_model=spec.split(":", 1)[1] or "gpt-5.6-terra")
 
         if spec.startswith("litellm:"):
             self._log("model_attempt", f"DB 모델 시도: {spec}")
