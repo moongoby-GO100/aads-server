@@ -1847,6 +1847,27 @@ run_job() {
         # H6: instruction 크기 제한 (50KB)
         local safe_instruction="${instruction:0:50000}"
 
+        # AAG 착수 브리프 (AADS-AAG-BRIEF-001): 정적분석이 이미 아는 사실을 워커에게 먼저 준다.
+        # 브리프 생성 실패가 본 작업을 실패시켜서는 안 되므로 전부 `|| true` 로 흘린다.
+        local aag_brief="" aag_step0_hint="" aag_brief_lines=0
+        if [[ "$project" == "AADS" ]]; then
+            local aag_ins="$ARTIFACT_DIR/${job_id}.aaginst" aag_out=""
+            printf '%s' "$safe_instruction" > "$aag_ins" 2>/dev/null || true
+            aag_out=$(cd "${PROJECT_WORKDIR[AADS]}" && timeout 20 python3 tools/aag/brief.py \
+                        --instruction-file "$aag_ins" 2>/dev/null) || aag_out=""
+            rm -f "$aag_ins" 2>/dev/null || true
+            if [[ -n "$aag_out" ]]; then
+                aag_brief=$'\n'"$aag_out"
+                aag_step0_hint='- 아래 [AAG 착수 브리프] 가 있으면 그것을 먼저 읽어라. 거기 적힌 파일·경로·테이블은 다시 찾지 마라.'$'\n'
+                aag_brief_lines=$(printf '%s' "$aag_out" | grep -c '^- ' || true)
+                log "  AAG_BRIEF_OK job=$job_id bytes=${#aag_out} nodes=${aag_brief_lines}"
+                record_runner_event "$job_id" "aag_brief_attached" "running" "claude_code_work" "$current_model" "" "$job_size" "" "{\"bytes\":${#aag_out},\"nodes\":${aag_brief_lines}}"
+            else
+                log "  AAG_BRIEF_SKIP job=$job_id reason=no_output_or_timeout"
+                record_runner_event "$job_id" "aag_brief_attached" "running" "claude_code_work" "$current_model" "" "$job_size" "" "{\"bytes\":0,\"nodes\":0,\"skipped_reason\":\"no_output_or_timeout\"}"
+            fi
+        fi
+
         # H7: 빌드/배포 가드 v2.1 — Claude Code가 직접 배포하지 않도록 방지
         safe_instruction="[필수 규칙 — 반드시 준수]
 1. 코드 수정만 수행하세요. 파일 생성/수정/삭제만 허용됩니다.
@@ -1870,9 +1891,9 @@ run_job() {
    - 중앙 클라이언트: anthropic_client.py의 call_llm_with_fallback() 사용
 
 위 규칙을 위반하면 작업이 거부됩니다.
-
+${aag_brief}
 [STEP 0 기존 구현 조사 — 코드 수정 전 필수]
-- 대상 파일의 기존 함수/클래스/엔드포인트/스케줄러/DB 접점 목록을 먼저 확인하세요.
+${aag_step0_hint}- 대상 파일의 기존 함수/클래스/엔드포인트/스케줄러/DB 접점 목록을 먼저 확인하세요.
 - 각 항목을 [유지 | 수정 | 신규 | 삭제(사유 필수)]로 분류해 RESULT에 기록하세요.
 - 기존 구현을 새 구현으로 통째 대체하지 말고 필요한 개선분만 반영하세요.
 - 삭제가 필요하면 삭제 대상, 호출처 영향, 롤백 방법을 RESULT에 명시하세요.
