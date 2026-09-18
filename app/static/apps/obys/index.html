@@ -2562,6 +2562,14 @@
     }
   </style>
   <link rel="stylesheet" href="/static/apps/obys/modules/store-assistant-v2.css">
+  <style>
+    /* 사업자(대표) 회원가입 진입 — 로그인 전에만 보인다. 헤더의 로그인/회원가입 버튼은
+       renderAuthState 가 항상 hidden 으로 두므로 별도 앵커로 노출한다. */
+    .owner-signup-cta{display:none}
+    body.signed-out .owner-signup-cta{display:inline-flex;align-items:center;justify-content:center;
+      min-height:44px;padding:0 12px;border-radius:8px;text-decoration:none;font-weight:700;
+      color:#fff;background:#2f6fed;border:1px solid #2f6fed}
+  </style>
 </head>
 <body class="signed-out">
   <div class="shell">
@@ -2607,7 +2615,8 @@
             </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end">
               <button id="loginBtn" class="primary" type="button">로그인</button>
-              <button id="signupBtn" type="button">회원가입</button>
+              <button id="signupBtn" type="button">직원 회원가입</button>
+              <a id="ownerSignupHeaderBtn" class="owner-signup-cta" href="/static/apps/obys/signup.html">사업자 회원가입</a>
               <button id="logoutBtn" class="hidden" type="button">로그아웃</button>
             </div>
           </div>
@@ -2630,6 +2639,10 @@
           <p>관리자는 운영 화면으로, 직원은 승인 상태에 맞는 직원 화면으로 들어갑니다.</p>
           <div class="auth-summary compact" aria-label="권한 구분 요약">
             <div>
+              <strong>대표(사업자)</strong>
+              <span>처음이면 사업자 회원가입 — 계정과 사업자를 함께 등록</span>
+            </div>
+            <div>
               <strong>관리자</strong>
               <span>사업자, 연동, 직원 승인, 계약, 급여 관리</span>
             </div>
@@ -2646,6 +2659,7 @@
           <div class="auth-mode-tabs" role="tablist" aria-label="인증 방식">
             <button id="authModeLogin" class="active" type="button" role="tab" aria-selected="true">로그인</button>
             <button id="authModeSignup" type="button" role="tab" aria-selected="false">직원 회원가입</button>
+            <a id="authModeOwnerSignup" href="/static/apps/obys/signup.html" role="tab" aria-selected="false" style="display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 12px;border-radius:8px;text-decoration:none;font-weight:600;color:#1b4ec2;background:#edf4ff;border:1px solid #c7dbff">사업자 회원가입</a>
           </div>
           <form id="gateLoginForm" class="panel-body">
             <label>이메일
@@ -2656,7 +2670,8 @@
             </label>
             <button class="primary" type="submit">로그인</button>
             <button id="openSignupFromGateBtn" type="button">직원 회원가입</button>
-            <p class="auth-help">관리자는 로그인 후 자동화, 설정, 직원 서류 검수와 계약 작성을 사용할 수 있습니다.</p>
+            <a id="ownerSignupFromGateBtn" href="/static/apps/obys/signup.html" style="display:flex;align-items:center;justify-content:center;min-height:44px;margin-top:8px;border-radius:8px;text-decoration:none;font-weight:700;color:#fff;background:#2f6fed;border:1px solid #2f6fed">사업자 회원가입 (대표님 · 신규 사업자)</a>
+            <p class="auth-help">대표님은 <b>사업자 회원가입</b>으로 계정과 사업자를 함께 등록합니다. 직원은 <b>직원 회원가입</b> 후 대표님 승인을 받습니다.</p>
           </form>
           <form id="gateSignupForm" class="panel-body hidden">
             <input name="name" type="hidden">
@@ -4666,8 +4681,9 @@
           <button class="primary" type="submit">로그인</button>
         </form>
         <button id="openSignupFromLoginBtn" type="button">직원 회원가입 먼저 하기</button>
+        <a id="ownerSignupFromLoginBtn" href="/static/apps/obys/signup.html" style="display:flex;align-items:center;justify-content:center;min-height:44px;margin-top:8px;border-radius:8px;text-decoration:none;font-weight:700;color:#1b4ec2;background:#edf4ff;border:1px solid #c7dbff">사업자 회원가입 (대표님)</a>
         <div class="settings-note">
-          기존 관리자는 로그인하고, 신규 직원은 회원가입 후 가입요청과 입사서류 등록을 진행합니다.
+          대표님이 처음 오셨다면 <b>사업자 회원가입</b>, 기존 관리자는 로그인, 신규 직원은 <b>직원 회원가입</b> 후 가입요청과 입사서류 등록을 진행합니다.
         </div>
       </div>
     </section>
