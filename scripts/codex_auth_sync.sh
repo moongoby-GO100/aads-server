@@ -104,34 +104,56 @@ remaining_int=${remaining%%.*}
 
 log "CHECK: access_token 잔여 ${remaining}일"
 
-# 1. 만료됨 또는 1일 이내 → 프리웜으로 갱신 시도
-if (( remaining_int < 1 )); then
-    log "ALERT: 토큰 만료 임박 (${remaining}일) — 프리웜 갱신 시도"
-    send_telegram "🟡 [Codex Auth] contabo116 토큰 ${remaining}일 남음 — 자동 갱신 시도 중"
+# OAuth refresh_token 으로 직접 갱신한다 — 재로그인 없이 끝내는 유일한 경로.
+#
+# 2026-09-19: 이 스크립트를 만든 09-12 이후 PREWARM 이 **한 번도 발동하지 않았다**
+# (로그 전수 0건). 갱신을 codex CLI 실행에 맡겨 뒀는데 CLI 는 토큰이 실제로
+# 만료돼야 갱신한다. 그 사이 같은 refresh_token 사본을 가진 다른 서버가 먼저
+# 갱신하면 회전이 소진돼 나머지는 401 refresh_token_reused 로 영구 무효가 된다
+# — CODEX_OAUTH_JINAH 가 정확히 그렇게 죽었고 재로그인 외에 복구가 없었다.
+#
+# 그래서 마스터(contabo116)가 **만료 3일 전에 선제 갱신하고 즉시 배포**한다.
+# 원격이 스스로 갱신할 일이 없어지면 회전 충돌도 사라진다.
+oauth_refresh_file() {
+    local file="${1:-$AUTH_FILE}" out
+    out=$(CODEX_AUTH_FILE="$file" timeout 60 python3 \
+          /root/aads/aads-server/scripts/codex_token_refresh.py --apply 2>&1) || true
+    if grep -q "AUTH_FILE_UPDATED" <<< "$out"; then
+        log "OAUTH_REFRESH: $file 갱신 성공 — $(grep -o '새 access_token 만료: .*' <<< "$out" | head -1)"
+        return 0
+    fi
+    log "OAUTH_REFRESH: $file 갱신 실패 — $(tr '\n' ' ' <<< "$out" | cut -c1-200)"
+    return 1
+}
 
-    prewarm_codex; prewarm_rc=$?
-    if [[ $prewarm_rc -eq 0 ]]; then
-        new_remaining=$(get_token_remaining_days)
-        log "RENEWED: 갱신 후 잔여 ${new_remaining}일"
-        send_telegram "✅ [Codex Auth] contabo116 토큰 자동 갱신 성공 — ${new_remaining}일 남음"
-        # 갱신된 토큰을 전서버에 동기화
-        sync_to_remote "contabo14" "$HOST_211" "$PORT_211"
-        sync_to_remote "cafe24_114" "$HOST_114" "$PORT_114"
-    elif [[ $prewarm_rc -eq 2 ]]; then
-        send_telegram "🟡 [Codex Auth] contabo116 사용량 한도로 프리웜 보류 — 인증은 정상, 조치 불필요"
-    else
-        send_telegram "🔴 [Codex Auth] contabo116 토큰 자동 갱신 실패 — CEO 수동 인증 필요: codex login --device-auth"
+# 1. 만료 3일 이내 → refresh_token 으로 선제 갱신 (재로그인 불필요)
+if (( remaining_int < WARN_DAYS )); then
+    log "ALERT: 토큰 잔여 ${remaining}일 — OAuth 선제 갱신 시도"
+
+    refresh_ok=0
+    oauth_refresh_file "$AUTH_FILE" && refresh_ok=1
+
+    if [[ $refresh_ok -eq 0 ]]; then
+        # refresh_token 이 무효면 프리웜으로 한 번 더 — CLI 가 다른 경로로
+        # 갱신해 둔 토큰이 파일에 있을 수 있다.
+        prewarm_codex; prewarm_rc=$?
+        if [[ $prewarm_rc -eq 0 ]]; then
+            refresh_ok=1
+        elif [[ $prewarm_rc -eq 2 ]]; then
+            send_telegram "🟡 [Codex Auth] contabo116 사용량 한도로 갱신 보류 — 인증은 정상, 조치 불필요"
+        else
+            send_telegram "🔴 [Codex Auth] contabo116 토큰 자동 갱신 실패 — CEO 수동 인증 필요: codex login --device-auth"
+        fi
     fi
 
-# 2. 3일 이내 → 경고만
-elif (( remaining_int < WARN_DAYS )); then
-    log "WARN: 토큰 ${remaining}일 남음 — 3일 이내 만료 예정"
-    # 하루 1회만 알림 (중복 방지)
-    TODAY=$(date +%Y%m%d)
-    WARN_FLAG="/tmp/codex_auth_warn_${TODAY}"
-    if [[ ! -f "$WARN_FLAG" ]]; then
-        send_telegram "🟡 [Codex Auth] 전서버 Codex 토큰 ${remaining}일 남음 — 만료 전 자동 갱신 예정"
-        touch "$WARN_FLAG"
+    if [[ $refresh_ok -eq 1 ]]; then
+        new_remaining=$(get_token_remaining_days)
+        log "RENEWED: 갱신 후 잔여 ${new_remaining}일"
+        send_telegram "✅ [Codex Auth] contabo116 토큰 자동 갱신 성공 — ${new_remaining}일 남음 (재로그인 불필요)"
+        # 회전된 토큰을 즉시 배포한다. 늦으면 원격이 옛 토큰으로 갱신을 시도해
+        # 회전이 어긋난다 — 이 즉시성이 이 설계의 핵심이다.
+        sync_to_remote "contabo14" "$HOST_211" "$PORT_211"
+        sync_to_remote "cafe24_114" "$HOST_114" "$PORT_114"
     fi
 
 # 3. 3일 이상 → 정상, 동기화만 확인
@@ -174,8 +196,14 @@ check_account_homes() {
             continue
         fi
         rem_int=${rem%%.*}
-        if (( rem_int < 1 )); then
-            log "ACCOUNT $name: 만료/임박 — 계정 홈 프리웜 갱신 시도"
+        if (( rem_int < WARN_DAYS )); then
+            log "ACCOUNT $name: 만료 ${WARN_DAYS}일 이내 — OAuth 선제 갱신 시도"
+            # 계정 홈도 마스터와 같은 방식으로 refresh_token 을 직접 쓴다.
+            # CLI 실행(프리웜)에 기대면 계정이 안 도는 동안 조용히 만료한다.
+            if oauth_refresh_file "$file"; then
+                log "ACCOUNT $name: 갱신 성공 — 잔여 $(get_token_remaining_days "$file")일"
+                continue
+            fi
             prc=0
             CODEX_HOME="${home%/}" prewarm_codex || prc=$?
             if [[ $prc -eq 0 ]]; then

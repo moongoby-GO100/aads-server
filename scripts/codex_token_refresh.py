@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Test OAuth2 refresh token flow for Codex CLI."""
-import json, urllib.request, urllib.parse, base64, time, sys
+import json, os, urllib.request, urllib.parse, base64, time, sys
 from datetime import datetime, timezone, timedelta
 
-AUTH_FILE = "/root/.codex/auth.json"
+# 대상 파일을 인자/환경변수로 받는다. 계정 홈(/root/.codex-accounts/<KEY>)도
+# 같은 방식으로 갱신해야 하는데 경로가 박혀 있으면 MAIN 밖으로 못 나간다.
+AUTH_FILE = os.getenv("CODEX_AUTH_FILE", "") or next(
+    (a for a in sys.argv[1:] if not a.startswith("-")), "/root/.codex/auth.json"
+)
 TOKEN_URL = "https://auth.openai.com/oauth/token"
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 KST = timezone(timedelta(hours=9))
