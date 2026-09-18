@@ -1418,15 +1418,24 @@ cleanup_blocked_dependencies() {
     # 부모가 terminal 로 끝났으면 그 파일을 더 건드리지 않는다 — 줄 설 이유가 사라진다.
     # 그래서 취소가 아니라 **의존성만 풀고 대기열에 그대로 남긴다.**
     # 사람이 명시한 depends_on 은 "저게 끝나야 이게 의미가 있다" 는 뜻이므로 종전대로 취소한다.
+    # 2026-09-19 추가 — cancelled 는 실패가 아니다.
+    #
+    # 이날 배치 릴리스 체인 5건이 통째로 멈췄다. 선두가 cancelled(중복이라 OPS 가
+    # 거둔 것)로 끝나자 뒤의 4건이 "선행 작업이 cancelled 라 자동 진행 불가"로
+    # 연쇄 취소 대상이 됐다. 그런데 cancelled 는 대부분 **중복·대체·수동 회수**이고,
+    # "이 일을 하지 말라"는 뜻이 아니다. 뒤 작업은 여전히 해야 한다.
+    # 그래서 명시적 depends_on 이라도 부모가 cancelled 면 **취소하지 않고 의존성만 푼다.**
+    # 진짜 실패(error/rejected/rejected_done)는 종전대로 뒤를 막는다.
     released=$(db_exec "UPDATE pipeline_jobs p SET depends_on=NULL,
-                        review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 이 ' || dep.status || ' 로 끝나 같은 파일을 더 건드리지 않는다 — 자동 부여된 의존성을 풀고 단독 실행한다',
+                        review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 이 ' || dep.status || CASE WHEN dep.status='cancelled' THEN ' 로 끝났다 — 취소는 실패가 아니므로 의존성만 풀고 단독 실행한다' ELSE ' 로 끝나 같은 파일을 더 건드리지 않는다 — 자동 부여된 의존성을 풀고 단독 실행한다' END,
                         updated_at=NOW()
                         FROM pipeline_jobs dep
                         WHERE p.depends_on = dep.job_id
                           AND p.status='queued'
                           AND p.phase IN ('queued','coding')
                           AND dep.status IN ('error','rejected','rejected_done','cancelled')
-                          AND p.logs @> '[{\"event\": \"file_conflict_auto_dependency\"}]'::jsonb
+                          AND (p.logs @> '[{\"event\": \"file_conflict_auto_dependency\"}]'::jsonb
+                               OR dep.status = 'cancelled')
                         RETURNING p.job_id;" 2>/dev/null) || true
 
     blocked_existing=$(db_exec "UPDATE pipeline_jobs p SET status='cancelled',
@@ -1438,7 +1447,7 @@ cleanup_blocked_dependencies() {
                                 WHERE p.depends_on = dep.job_id
                                   AND p.status='queued'
                                   AND p.phase IN ('queued','coding')
-                                  AND dep.status IN ('error','rejected','rejected_done','cancelled')
+                                  AND dep.status IN ('error','rejected','rejected_done')
                                   AND NOT (p.logs @> '[{\"event\": \"file_conflict_auto_dependency\"}]'::jsonb)
                                 RETURNING p.job_id;" 2>/dev/null) || true
     blocked_missing=$(db_exec "UPDATE pipeline_jobs p SET status='cancelled',
@@ -1460,6 +1469,39 @@ cleanup_blocked_dependencies() {
     fi
     if [[ -n "$blocked_existing$blocked_missing" ]]; then
         log "  BLOCKED_DEPENDENCY_CLEANUP existing=${blocked_existing//$'\n'/,} missing=${blocked_missing//$'\n'/,}"
+    fi
+
+    apply_batch_release_directive
+}
+
+# 배치 릴리스 창이 열려 있으면 새로 들어온 잡에도 같은 지시를 붙인다.
+#
+# 2026-09-18 에 대기 잡 4건을 "커밋·푸시까지만" 으로 묶어 배포를 1회로 줄였는데,
+# 편입이 **수동 UPDATE** 라 그 뒤 들어온 잡은 매번 샜다. 09-18 에 2건, 09-19 에
+# runner-90cf3402 가 또 샜다 — 샌 잡은 자기 혼자 배포해 "배포가 잦다" 는 문제를
+# 되살린다. 제출 경로(API·MCP·수동 INSERT)가 여럿이라 한 곳을 고쳐서는 못 막는다.
+# 큐를 보는 이 자리에서 붙이면 경로와 무관하게 걸린다.
+#
+# 창의 정의: 같은 프로젝트에 배치 지시를 단 잡이 아직 살아 있으면(queued/running/
+# review_hold) 창이 열린 것으로 본다. 그 잡들이 모두 끝나면 자동으로 닫힌다.
+# 릴리스 잡(DEPLOY_ONLY)에는 붙이지 않는다 — 붙이면 자기가 자기를 막는다.
+apply_batch_release_directive() {
+    local attached
+    attached=$(db_exec "UPDATE pipeline_jobs p
+                        SET instruction = p.instruction || E'\n\n## [OPS 배치 릴리스 지시 — 자동 부착]\n이 잡은 커밋까지만 수행한다. 빌드·배포·재기동은 금지한다.\npush 이후의 릴리스는 별도 DEPLOY_ONLY 잡이 최신 origin/main 을 1회 배포하여 이 잡을 포함해 일괄 반영한다.',
+                            updated_at=NOW()
+                        WHERE p.status='queued'
+                          AND p.phase IN ('queued','coding')
+                          AND p.instruction NOT ILIKE '%OPS 배치 릴리스 지시%'
+                          AND p.instruction NOT ILIKE '%DEPLOY_ONLY%'
+                          AND EXISTS (SELECT 1 FROM pipeline_jobs q
+                                      WHERE q.project = p.project
+                                        AND q.job_id <> p.job_id
+                                        AND q.status IN ('queued','running','review_hold')
+                                        AND q.instruction ILIKE '%OPS 배치 릴리스 지시%')
+                        RETURNING p.job_id;" 2>/dev/null) || true
+    if [[ -n "$attached" ]]; then
+        log "  BATCH_DIRECTIVE_ATTACHED ${attached//$'\n'/,} — 배치 릴리스 창이 열려 있어 커밋·푸시까지만 수행하도록 편입"
     fi
 }
 
