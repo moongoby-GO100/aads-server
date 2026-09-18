@@ -43,10 +43,18 @@ scp "${SSH_OPTS[@]}" -q \
     "${REMOTE}:${REMOTE_DIR}/"
 
 # 2) 원격 스캔. 시간 상한을 반드시 건다 (R-BG).
-if ! ssh "${SSH_OPTS[@]}" "$REMOTE" \
-        "cd ${REMOTE_DIR} && timeout 900 python3 scan_aads.py --root ${TARGET_ROOT} --rules ${REMOTE_DIR}/rules_go100.yml --out-dir ${REMOTE_DIR}/out --json" \
-        > /tmp/aag-go100-scan.json 2>/tmp/aag-go100-scan.err; then
-    log "SCAN_FAILED — $(tail -3 /tmp/aag-go100-scan.err | tr '\n' ' ')"
+#
+# 종료코드 계약: 0=결함 없음 / 1=결함 있음 / 2=실행 불가(scan_aads.py:2070).
+# 1 을 실패로 읽으면 결함이 하나라도 있는 한 갱신이 영원히 안 돈다 — 실제로
+# 첫 실행이 그렇게 죽었다(2026-09-19). "점검 못 함"과 "위반 있음"을 구분한다.
+set +e
+ssh "${SSH_OPTS[@]}" "$REMOTE" \
+    "cd ${REMOTE_DIR} && timeout 900 python3 scan_aads.py --root ${TARGET_ROOT} --rules ${REMOTE_DIR}/rules_go100.yml --out-dir ${REMOTE_DIR}/out --json" \
+    > /tmp/aag-go100-scan.json 2>/tmp/aag-go100-scan.err
+scan_rc=$?
+set -e
+if (( scan_rc >= 2 )); then
+    log "SCAN_FAILED rc=${scan_rc} — $(grep -v SyntaxWarning /tmp/aag-go100-scan.err | tail -3 | tr '\n' ' ')"
     exit 1
 fi
 
