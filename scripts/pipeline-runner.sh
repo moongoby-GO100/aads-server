@@ -2384,7 +2384,20 @@ $out_tail")
     # 파일시스템에서 직접 찾아 -f 로 intent-to-add 한다. 표준 목록이 비지 않는
     # 일반 저장소(AADS/KIS/GO100/SF/NTV2)에서는 이 블록이 아예 실행되지 않으므로
     # 기존 동작에 영향이 없다.
-    if [[ -z "${_new_untracked//[[:space:]]/}" && -n "${worktree_dir:-}" && -e "${worktree_dir}/.git" ]]; then
+    # v2.5 (2026-09-19, runner-48377212 반려 원인 수정):
+    # v2.4 는 "표준 목록이 비지 않는 일반 저장소에서는 이 블록이 실행되지 않는다"고
+    # 가정했지만 틀렸다. 추적 파일만 고친 job 은 일반 저장소에서도 표준 목록이 비므로
+    # 블록이 그대로 돌고, --exclude-standard 없는 git ls-files --others 가
+    # .pytest_cache/ · .ruff_cache/ 같은 .gitignore 된 테스트 캐시를 긁어 add -fN 했다.
+    # 그 결과 runner-48377212 는 변경 15개 중 8개가 캐시 파일이 되어 리뷰에서
+    # REQUEST_CHANGES(0.655) 로 반려됐다(runner.log UNTRACKED_IGNORED_RESCUE files=8).
+    # 이 rescue 는 .gitignore 가 '*' 화이트리스트인 저장소(ACCT) 전용이므로,
+    # "처음 보는 이름의 파일조차 ignored 로 걸리는 저장소" 일 때만 돌도록 게이트를 건다.
+    local _whitelist_ignore_repo=0
+    if printf '%s\n' "__aads_ignore_probe_$$" | git check-ignore --stdin -q 2>/dev/null; then
+        _whitelist_ignore_repo=1
+    fi
+    if [[ -z "${_new_untracked//[[:space:]]/}" && -n "${worktree_dir:-}" && -e "${worktree_dir}/.git" && $_whitelist_ignore_repo -eq 1 ]]; then
         # --exclude-standard 를 뺀 untracked 목록에서 시작한다. 갓 만든 워크트리에는
         # 추적 파일만 체크아웃돼 있으므로 여기 남는 것은 이번 작업이 만든 파일뿐이다.
         # 그래도 안전하게 워크트리 생성시각(.git mtime)보다 새 것만 통과시킨다.
@@ -2392,7 +2405,10 @@ $out_tail")
         local _ignored_cand=""
         _ignored_cand=$(git ls-files --others 2>/dev/null \
             | grep -vE '(^|/)(node_modules|__pycache__|\.venv|venv|dist|build|\.next)/' \
-            | grep -vE '\.(pyc|pyo|log)$') || true
+            | grep -vE '(^|/)\.[A-Za-z0-9_.-]+_cache/' \
+            | grep -vE '(^|/)(\.git|\.tox|\.nox|\.eggs|\.idea|\.vscode|\.turbo|htmlcov|coverage|\.gradle|target)/' \
+            | grep -vE '(^|/)(\.coverage|\.DS_Store|coverage\.xml)$' \
+            | grep -vE '\.(pyc|pyo|pyd|log|orig|rej|bak|swp|tmp)$') || true
         local _ignored_new=""
         if [[ -n "${_ignored_cand//[[:space:]]/}" ]]; then
             _ignored_new=$(printf '%s\n' "$_ignored_cand" | while IFS= read -r _f; do
