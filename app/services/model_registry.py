@@ -1702,11 +1702,21 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
     pool = get_pool()
     async with pool.acquire() as conn:
         key_rows = await _fetch_key_rows(conn)
+        manual_rows = await conn.fetch(
+            "SELECT provider, model_id FROM llm_models WHERE activation_source = 'manual' AND is_active = TRUE"
+        )
+    manual_active_keys = {(r["provider"], r["model_id"]) for r in manual_rows}
     template_rows, provider_rows = build_registry_snapshots(key_rows)
     key_state = _build_key_state(key_rows)
     normalized_providers = _collect_provider_normalizations(key_state)
     discovered_rows, discovery_runs = await discover_provider_model_rows(key_rows)
     model_rows = _merge_model_rows(template_rows, discovered_rows)
+    for row in model_rows:
+        if (row["provider"], row["model_id"]) in manual_active_keys:
+            row["is_active"] = True
+            row["is_selectable"] = True
+            row["is_executable"] = True
+            row["activation_source"] = "manual"
     review_required_providers = sorted(
         {
             row["provider"]
