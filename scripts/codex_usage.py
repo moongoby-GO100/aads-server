@@ -448,6 +448,7 @@ def main() -> int:
         # 릴레이는 state.json 만 읽고, API/대시보드는 DB 만 읽는다. 둘 다 여기서 쓴다.
         write_state(accounts)
         push_snapshots(accounts, usage)
+        push_last_used(accounts)
 
     if args.json:
         print(json.dumps(accounts, ensure_ascii=False, indent=2))

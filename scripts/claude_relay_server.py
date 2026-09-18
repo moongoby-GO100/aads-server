@@ -2742,20 +2742,24 @@ _CODEX_USAGE_CACHE_TTL = int(os.getenv("CODEX_USAGE_CACHE_TTL_SEC", "60"))
 _CODEX_USAGE_RPC_TIMEOUT = float(os.getenv("CODEX_USAGE_RPC_TIMEOUT_SEC", "8"))
 
 
-async def _query_codex_rate_limits():
+async def _query_codex_rate_limits(account_home=None):
     """codex app-server JSON-RPC로 account/rateLimits/read 호출.
 
-    호스트 ~/.codex/auth.json 사용 (auth_mode=chatgpt). 응답 파싱은 방어적으로
-    처리하여 codex CLI 업데이트로 스키마 변경 시에도 빈 응답으로 안전하게 fallback.
+    account_home 을 주면 그 계정 홈을 CODEX_HOME 으로 지정해 **계정별로** 묻는다
+    (codex_usage.live_rate_limits 와 같은 방식). 주지 않으면 예전대로 호스트
+    ~/.codex/auth.json 한 계정만 본다. 응답 파싱은 방어적으로 처리하여 codex CLI
+    업데이트로 스키마 변경 시에도 빈 응답으로 안전하게 fallback.
     """
     codex_meta = _resolve_cli_command("codex")
     codex_argv = list(codex_meta.get("argv") or []) or ["codex"]
+    env = dict(os.environ, CODEX_HOME=str(account_home)) if account_home else None
     try:
         proc = await asyncio.create_subprocess_exec(
             *(codex_argv + ["app-server"]),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
     except FileNotFoundError as exc:
         return {"error": "codex_bin_not_found", "detail": str(exc)}
@@ -2851,6 +2855,69 @@ async def _query_codex_rate_limits():
     return out
 
 
+def _codex_primary_used_percent(payload):
+    """주 한도(limit_id='codex')의 사용률. 없으면 첫 항목, 그것도 없으면 None."""
+    limits = payload.get("limits") or []
+    chosen = None
+    for lim in limits:
+        if str(lim.get("limit_id") or "").lower() in ("codex", "codex_cli", "primary"):
+            chosen = lim
+            break
+    if chosen is None and limits:
+        chosen = limits[0]
+    if chosen is None:
+        return None
+    pct = (chosen.get("primary") or {}).get("used_percent")
+    try:
+        return float(pct) if pct is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def _query_codex_rate_limits_all():
+    """계정별로 한도를 묻고, 지금 쓸 수 있는 계정의 값을 대표로 올린다.
+
+    예전에는 레거시 홈(/root/.codex) 하나만 봤다. 계정이 둘 이상이면 그 값으로
+    codex 전체를 판단하는 것은 틀린다 — 2026-09-19 실측: CODEX_OAUTH_MAIN 100%,
+    CODEX_OAUTH_JINAH 37% 인데 소비자(model_selector preflight)가 100% 를 보고
+    codex 를 통째로 건너뛰어 채팅에서 Sol 을 골라도 Claude 로 우회했다.
+
+    계정 순회는 _codex_accounts() 와 같은 우선순위이므로, 여기서 고른 계정은
+    실제로 릴레이가 세션에 바인딩할 계정과 같다. `limits`/`raw_plan_type` 키는
+    기존 소비자를 위해 그대로 두고 그 계정의 값을 담는다.
+    """
+    accounts = _codex_accounts()
+    if not accounts:
+        return await _query_codex_rate_limits()
+
+    out = {"ok": True, "accounts": []}
+    best = None
+    fallback = None
+    for _priority, key_name, auth_path in accounts:
+        payload = await _query_codex_rate_limits(auth_path.parent)
+        out["accounts"].append({
+            "key_name": key_name,
+            "used_percent": _codex_primary_used_percent(payload),
+            **payload,
+        })
+        if payload.get("error"):
+            continue
+        if fallback is None:
+            fallback = payload
+        if best is None:
+            used = _codex_primary_used_percent(payload)
+            if used is None or used < 100.0:
+                best = payload
+
+    chosen = best or fallback
+    if chosen is None:
+        # 전부 실패했으면 옛 경로라도 답을 준다. 조회 실패로 codex 를 막지 않는다.
+        return await _query_codex_rate_limits()
+    out["raw_plan_type"] = chosen.get("raw_plan_type")
+    out["limits"] = chosen.get("limits") or []
+    return out
+
+
 async def handle_codex_usage(request):
     """AADS-193: /codex-usage — shared secret 보호 + 60초 캐시."""
     # shared secret 검증
@@ -2866,8 +2933,8 @@ async def handle_codex_usage(request):
     if cached and (now - cache_ts) < _CODEX_USAGE_CACHE_TTL:
         return web.json_response({"cached": True, "age_sec": round(now - cache_ts, 1),
                                   "ttl_sec": _CODEX_USAGE_CACHE_TTL, **cached})
-    # 라이브 호출
-    payload = await _query_codex_rate_limits()
+    # 라이브 호출 — 계정별로 묻는다(계정 하나만 보면 나머지 한도를 잃는다).
+    payload = await _query_codex_rate_limits_all()
     payload["fetched_at"] = int(now)
     _CODEX_USAGE_CACHE["payload"] = payload
     _CODEX_USAGE_CACHE["ts"] = now
