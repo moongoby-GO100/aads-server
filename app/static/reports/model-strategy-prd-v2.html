@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AADS 모델 전략 기획서 v2.0 — 업무별 최적 모델 배분 (실측 기반)</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2b313d;
+  --tx:#e6e9ef; --tx2:#9aa3b2; --tx3:#6b7484;
+  --s:#e05c5c; --a:#e0a75c; --b:#5ce08a; --c:#5ca8e0; --acc:#7c8cff;
+  --ok:#3ecf8e; --warn:#e0b341; --bad:#e05c5c;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif;
+  line-height:1.7;font-size:14px}
+.wrap{max-width:1280px;margin:0 auto;padding:40px 28px 100px}
+header{border-bottom:2px solid var(--acc);padding-bottom:22px;margin-bottom:34px}
+h1{font-size:27px;margin:0 0 10px;letter-spacing:-.4px}
+.sub{color:var(--tx2);font-size:13px}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.meta span{background:var(--panel2);border:1px solid var(--line);border-radius:5px;
+  padding:4px 11px;font-size:12px;color:var(--tx2)}
+h2{font-size:20px;margin:48px 0 8px;padding-left:12px;border-left:4px solid var(--acc)}
+h3{font-size:16px;margin:30px 0 8px;color:#c9d3ff}
+h4{font-size:14px;margin:20px 0 6px;color:var(--tx2)}
+p{margin:8px 0 14px;color:#cfd5e0}
+table{width:100%;border-collapse:collapse;margin:14px 0 22px;font-size:12.5px;
+  background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+th{background:var(--panel2);color:#aeb8ca;text-align:left;padding:9px 10px;
+  border-bottom:1px solid var(--line);font-weight:600;white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid #222733;vertical-align:top}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#1c2029}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+code{background:#242a35;padding:2px 6px;border-radius:4px;font-size:12px;
+  font-family:'SF Mono',Consolas,monospace;color:#9fd6ff}
+pre{background:#12151b;border:1px solid var(--line);border-radius:6px;padding:14px;
+  overflow-x:auto;font-size:12px;line-height:1.6}
+pre code{background:none;padding:0;color:#c8d4e3}
+.box{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc);
+  border-radius:6px;padding:14px 18px;margin:16px 0}
+.box.warn{border-left-color:var(--warn)}
+.box.bad{border-left-color:var(--bad)}
+.box.ok{border-left-color:var(--ok)}
+.box b{color:#fff}
+.tier{display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;
+  border-radius:4px;font-weight:700;font-size:11px;color:#0f1115}
+.tS{background:var(--s)} .tA{background:var(--a)} .tB{background:var(--b)} .tC{background:var(--c)}
+.tag{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;
+  border:1px solid var(--line);color:var(--tx2);background:var(--panel2)}
+.ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)} .dim{color:var(--tx3)}
+.src{font-size:11px;color:var(--tx3)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:16px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:14px 16px}
+.card .k{font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px}
+.card .v{font-size:23px;font-weight:700;margin:5px 0 2px}
+.card .d{font-size:11.5px;color:var(--tx2)}
+.bar{height:7px;background:#242a35;border-radius:4px;overflow:hidden;margin-top:5px;min-width:70px}
+.bar i{display:block;height:100%;border-radius:4px}
+footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--line);
+  color:var(--tx3);font-size:12px}
+.toc{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:16px 22px;margin:24px 0}
+.toc ol{margin:6px 0;padding-left:20px;columns:2;column-gap:32px}
+.toc li{margin:3px 0;color:var(--tx2);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>AADS 모델 전략 기획서 v2.0</h1>
+  <div class="sub">Claude CLI · Codex CLI 전 모델 / 업무별 최적 배분 / 비용·속도·자료조사 분석능력 실측 비교</div>
+  <div class="meta">
+    <span>작성 2026-09-18 16:2x KST</span>
+    <span>대상 AADS·KIS·GO100·SF·NTV2·NAS</span>
+    <span>서버 contabo116</span>
+    <span>v1 대비 확장: 표 2개 → 19개</span>
+    <span>근거: DB 실측 30일 / 7일</span>
+  </div>
+</header>
+
+<div class="box warn">
+<b>v1(2026-09-18 09:10) 과의 차이.</b> v1 은 모델 카탈로그와 배분 제안을 <b>학습 지식으로만</b> 작성했고
+표가 2개뿐이었습니다. 대표님 지적대로 조사 근거가 빈약했습니다. v2 는 아래 4개 운영 테이블의
+<b>30일/7일 실측값</b>으로 전면 재작성했고, 측정하지 못한 항목은 <span class="dim">[미측정]</span> 으로 분리 표기했습니다.
+추정치는 <span class="warn">[추정]</span> 으로만 표기하고 확정값처럼 쓰지 않았습니다.
+</div>
+
+<table>
+<tr><th>데이터 출처</th><th>테이블 / 도구</th><th>기간</th><th class="n">레코드</th><th>이 문서에서 쓰인 곳</th></tr>
+<tr><td>실지출 비용·토큰</td><td><code>oauth_usage_log</code></td><td>30일</td><td class="n">15,895 콜</td><td>§2.1 §7</td></tr>
+<tr><td>응답 속도</td><td><code>pipeline_runner_events</code> (llm_response_metrics)</td><td>7일</td><td class="n">11,789 관측</td><td>§2.2</td></tr>
+<tr><td>품질·도구호출량</td><td><code>chat_messages.quality_score</code></td><td>30일</td><td class="n">2,401 메시지</td><td>§2.3 §5</td></tr>
+<tr><td>단가 카탈로그</td><td><code>llm_models</code> + <code>model_selector.py:995~1060</code></td><td>현재</td><td class="n">활성 100+</td><td>§3 §4</td></tr>
+<tr><td>도구별 성공률</td><td><code>tool_results_archive</code></td><td>30일</td><td class="n bad">0 건</td><td><span class="bad">측정 불가 — §9 R-3</span></td></tr>
+</table>
+
+<div class="toc">
+<b>목차</b>
+<ol>
+<li>요약 — 실측이 뒤집은 7가지</li>
+<li>실측 데이터 (비용 / 속도 / 분석능력)</li>
+<li>전 모델 카탈로그 (Claude CLI · Codex CLI · OpenAI API)</li>
+<li>급별 분류와 <b>동급 내 업무 분기</b></li>
+<li><b>자료조사·분석능력 등급표</b></li>
+<li>6개 프로젝트 업무별 모델 배분</li>
+<li>비용 시뮬레이션과 절감안</li>
+<li>적용 방안 (Phase 1~3)</li>
+<li>리스크·미검증 항목</li>
+<li>검증 기준 (완료 판정)</li>
+</ol>
+</div>
+
+<!-- ===================== 1 ===================== -->
+<h2>1. 요약 — 실측이 뒤집은 7가지</h2>
+
+<div class="grid">
+<div class="card"><div class="k">30일 총 LLM 지출</div><div class="v">$7,631.07</div><div class="d">15,895 콜 / 건당 평균 $0.48</div></div>
+<div class="card"><div class="k">상위 2개 모델 점유</div><div class="v warn">88.2%</div><div class="d">Opus 5 68.1% + GPT-5.6 Sol 20.1%</div></div>
+<div class="card"><div class="k">Opus 5 ÷ Haiku 4.5 건당</div><div class="v bad">194.8배</div><div class="d">$0.8726 vs $0.0045</div></div>
+<div class="card"><div class="k">도구 20회↓ 대비 45회↑ 품질</div><div class="v ok">+25.9%</div><div class="d">0.594 → 0.748</div></div>
+</div>
+
+<table>
+<tr><th style="width:26px">#</th><th>실측이 말하는 것</th><th>근거 수치</th><th>v1 에서 잘못 적었던 것</th></tr>
+<tr><td>1</td><td><b>품질을 가르는 것은 모델 급이 아니라 도구 호출량이다.</b> 같은 A급인 Sonnet 5 가 B급 Haiku 4.5 보다 품질이 낮다 — 도구를 20회밖에 안 부르기 때문이다.</td><td>Sonnet 5 품질 0.592 (도구 20.4회) vs Haiku 4.5 <b>0.717</b> (도구 80.3회) <span class="src">[DB 실측 30일]</span></td><td>"Haiku 는 복잡 추론 약함" 으로만 적고 도구 변수를 보지 않았음</td></tr>
+<tr><td>2</td><td><b>가장 비싼 건 Opus 5 가 아니라 GPT-5.6 Sol 이다.</b> 건당 $5.81 로 Opus 5 의 6.7배. 264 콜에 $1,532.65 를 썼다.</td><td>입력 501,276,879 토큰 / 264 콜 = <b>콜당 1.90M 토큰</b>, 캐시 읽기 <b>0</b> <span class="src">[DB 실측]</span></td><td>Codex 를 저비용 대안으로 권고했음 — 반대였음</td></tr>
+<tr><td>3</td><td><b>Sol 과 같은 급(A)인 Terra 가 84분의 1 비용으로 돈다.</b> 단가는 오히려 Terra 가 싸다 ($2/12 vs $4/20).</td><td>Terra 건당 <b>$0.0689</b> · p50 15.4초 / Sol 건당 $5.81 · p50 <b>390초</b> <span class="src">[DB 실측]</span></td><td>Terra 를 아예 다루지 않았음</td></tr>
+<tr><td>4</td><td><b>Opus 5 비용의 대부분은 출력이 아니라 컨텍스트다.</b> 콜마다 평균 89.9만 토큰을 캐시에서 읽는다.</td><td>캐시 읽기 5,354,116,064 토큰 ÷ 5,958 콜 <span class="src">[DB 실측]</span></td><td>"Opus 는 고위험 판단에만" 이라고만 적고 컨텍스트 비용을 보지 않았음</td></tr>
+<tr><td>5</td><td><b>Fable 5.1 은 범용 모델이 아니라 장문 생성기다.</b> 콜당 출력이 다른 모델의 5~80배다.</td><td>27,286 토큰/콜 (Opus 5 는 5,124, Haiku 는 343) <span class="src">[DB 실측]</span></td><td>"창의적 글쓰기" 로만 적고 수치가 없었음</td></tr>
+<tr><td>6</td><td><b>속도 1위는 Claude CLI 의 Opus 5 다.</b> Codex CLI 계열은 최소 15초가 바닥이다 (CLI 기동 오버헤드 포함).</td><td>Opus 5 p50 <b>4.7초</b> / Codex 전 모델 p50 15.3~15.6초 <span class="src">[DB 실측 7일]</span></td><td>"Opus 느림 / Haiku 빠름" 이라는 일반론만 적었음</td></tr>
+<tr><td>7</td><td><b>자료조사 능력은 모델이 아니라 도구층이 결정한다.</b> 그런데 그 도구층 계측이 지금 끊겨 있다.</td><td><code>tool_results_archive</code> 30일 <b>0 건</b> — 검색·크롤 도구 성공률 측정 불가 <span class="src">[DB 실측]</span></td><td>모델별 "검색 능력" 을 근거 없이 서술했음</td></tr>
+</table>
+
+<!-- ===================== 2 ===================== -->
+<h2>2. 실측 데이터</h2>
+
+<h3>2.1 비용 — 30일 실지출 (oauth_usage_log)</h3>
+<p>단가표가 아니라 <b>실제로 청구된 값</b>입니다. 같은 단가라도 컨텍스트 크기와 캐시 적중에 따라 건당 비용이 100배 이상 갈립니다.</p>
+
+<table>
+<tr><th>모델</th><th class="n">호출</th><th class="n">출력토큰</th><th class="n">토큰/콜</th><th class="n">캐시읽기</th><th class="n">30일 비용</th><th class="n">건당</th><th class="n">비용점유</th></tr>
+<tr><td><span class="tier tS">S</span> claude-opus-5</td><td class="n">5,958</td><td class="n">30,526,153</td><td class="n">5,124</td><td class="n">5,354,116,064</td><td class="n bad">$5,199.07</td><td class="n">$0.8726</td><td class="n"><b>68.1%</b><div class="bar"><i style="width:68%;background:var(--bad)"></i></div></td></tr>
+<tr><td><span class="tier tA">A</span> GPT-5.6 Sol (Codex CLI)</td><td class="n">264</td><td class="n">1,921,498</td><td class="n">7,278</td><td class="n bad">0</td><td class="n bad">$1,532.65</td><td class="n bad">$5.8055</td><td class="n"><b>20.1%</b><div class="bar"><i style="width:20%;background:var(--bad)"></i></div></td></tr>
+<tr><td><span class="tier tA">A</span> claude-sonnet-4-6</td><td class="n">887</td><td class="n">4,410,408</td><td class="n">4,972</td><td class="n">455,657,803</td><td class="n">$475.29</td><td class="n">$0.5358</td><td class="n">6.2%<div class="bar"><i style="width:6.2%;background:var(--warn)"></i></div></td></tr>
+<tr><td><span class="tier tA">A</span> claude-sonnet-5</td><td class="n">3,493</td><td class="n">1,968,571</td><td class="n">564</td><td class="n">268,215,496</td><td class="n">$139.20</td><td class="n">$0.0399</td><td class="n">1.8%<div class="bar"><i style="width:1.8%;background:var(--ok)"></i></div></td></tr>
+<tr><td><span class="tier tS">S</span> GPT-6 Astra (Codex CLI)</td><td class="n">14</td><td class="n">60,723</td><td class="n">4,337</td><td class="n bad">0</td><td class="n">$115.09</td><td class="n bad">$8.2207</td><td class="n">1.5%<div class="bar"><i style="width:1.5%;background:var(--warn)"></i></div></td></tr>
+<tr><td><span class="tier tS">S</span> claude-fable-5-1</td><td class="n">18</td><td class="n">491,142</td><td class="n"><b>27,286</b></td><td class="n">5,318,424</td><td class="n">$88.18</td><td class="n">$4.8989</td><td class="n">1.2%<div class="bar"><i style="width:1.2%;background:var(--warn)"></i></div></td></tr>
+<tr><td><span class="tier tA">A</span> GPT-5.5 (Codex CLI)</td><td class="n">9</td><td class="n">82,267</td><td class="n">9,141</td><td class="n bad">0</td><td class="n">$39.65</td><td class="n">$4.4056</td><td class="n">0.5%</td></tr>
+<tr><td><span class="tier tB">B</span> claude-haiku-4-5</td><td class="n">5,227</td><td class="n">1,795,329</td><td class="n">343</td><td class="n">44,720,172</td><td class="n ok">$23.42</td><td class="n ok"><b>$0.0045</b></td><td class="n">0.31%<div class="bar"><i style="width:2%;background:var(--ok)"></i></div></td></tr>
+<tr><td><span class="tier tS">S</span> claude-fable-5</td><td class="n">10</td><td class="n">68,264</td><td class="n">6,826</td><td class="n">4,820,428</td><td class="n">$17.90</td><td class="n">$1.7900</td><td class="n">0.23%</td></tr>
+<tr><td><span class="tier tA">A</span> GPT-5.6 Terra (Codex CLI)</td><td class="n">9</td><td class="n">9,155</td><td class="n">1,017</td><td class="n">0</td><td class="n ok">$0.62</td><td class="n ok">$0.0689</td><td class="n">0.01%</td></tr>
+<tr style="background:#1b1f27"><td><b>합계</b></td><td class="n"><b>15,895</b></td><td class="n"><b>41,333,510</b></td><td class="n">2,600</td><td class="n"><b>6,132,848,387</b></td><td class="n"><b>$7,631.07</b></td><td class="n">$0.4801</td><td class="n">100%</td></tr>
+</table>
+<p class="src">기간 2026-08-19 ~ 2026-09-18, <code>oauth_usage_log</code> GROUP BY model. 호출 3건 이하 모델(claude-haiku-4-5 별칭 3건, claude-haiku 2건, unverified 1건, 합계 $0.00)은 표에서 생략했으나 합계에는 포함.</p>
+
+<div class="box bad">
+<b>가장 큰 낭비 지점 2개.</b><br>
+① <b>GPT-5.6 Sol — 캐시 읽기 0.</b> 264 콜에 입력 5억 토큰을 넣었는데 프롬프트 캐시 적중이 한 건도 없습니다.
+Codex CLI 경로가 캐시를 태우지 못하고 있다는 뜻이고, 그래서 콜당 190만 토큰이 매번 새 입력으로 과금됩니다.
+같은 A급 Terra 는 콜당 1,017 토큰입니다 — <b>1,868배</b> 차이입니다.<br>
+② <b>Opus 5 — 콜당 89.9만 토큰 캐시 읽기.</b> 캐시 단가는 입력의 10% 지만 절대량이 5.35B 이라
+비용 대부분이 출력($763 = 30.5M × $25/1M)이 아니라 <b>컨텍스트 재읽기</b>에서 나옵니다.
+모델을 바꾸는 것보다 <b>컨텍스트를 줄이는 것</b>이 더 큰 레버입니다.
+</div>
+
+<h3>2.2 속도 — 7일 실측 (pipeline_runner_events)</h3>
+<p><code>model_attempt_completed</code> 이벤트의 경과시간입니다. CLI 기동·도구 왕복이 포함된 <b>체감 시간</b>이지 순수 토큰 생성 속도가 아닙니다.</p>
+
+<table>
+<tr><th>모델</th><th>경로</th><th class="n">표본</th><th class="n">p50</th><th class="n">평균</th><th class="n">p95</th><th class="n">최대</th><th class="n">첫 출력 p50</th><th>해석</th></tr>
+<tr><td>claude-opus-5</td><td>Claude CLI</td><td class="n">22</td><td class="n ok"><b>4.7초</b></td><td class="n">5.9초</td><td class="n">12.0초</td><td class="n">12.6초</td><td class="n ok">2.9초</td><td>가장 빠르고 <b>편차가 가장 작다</b> (p95/p50 = 2.6)</td></tr>
+<tr><td>codex:gpt-5.5</td><td>Codex CLI</td><td class="n">41</td><td class="n">15.3초</td><td class="n">16.4초</td><td class="n">35.2초</td><td class="n">43.1초</td><td class="n">—</td><td>Codex 중 가장 안정 (평균≈p50)</td></tr>
+<tr><td>codex:gpt-5.6-tela</td><td>Codex CLI</td><td class="n">93</td><td class="n">15.3초</td><td class="n">15.0초</td><td class="n">31.6초</td><td class="n">64.0초</td><td class="n">—</td><td>표본 최다, 예측 가능</td></tr>
+<tr><td>codex:gpt-5.6-luna</td><td>Codex CLI</td><td class="n">44</td><td class="n">15.6초</td><td class="n">14.3초</td><td class="n">26.5초</td><td class="n">31.3초</td><td class="n">—</td><td>최저단가인데 속도 동급 — <b>가성비 1위</b></td></tr>
+<tr><td>codex:gpt-5.6-terra</td><td>Codex CLI</td><td class="n">45</td><td class="n">15.4초</td><td class="n warn">78.0초</td><td class="n">504초</td><td class="n">1,536초</td><td class="n">—</td><td>중앙값은 빠르나 <b>긴 꼬리</b> 존재</td></tr>
+<tr><td>codex:gpt-6-astra</td><td>Codex CLI</td><td class="n">42</td><td class="n">15.4초</td><td class="n warn">66.0초</td><td class="n">27.3초</td><td class="n bad">2,185초</td><td class="n">—</td><td>평균 &gt; p95 — 소수 콜이 36분까지</td></tr>
+<tr><td>codex:gpt-5.6-sol</td><td>Codex CLI</td><td class="n">159</td><td class="n bad">390초</td><td class="n bad">805초</td><td class="n bad">2,827초</td><td class="n bad">4,700초</td><td class="n bad">1,128초</td><td><b>첫 출력까지 19분</b> — 장기 에이전트 작업</td></tr>
+<tr><td>litellm:kimi-k2.5</td><td>LiteLLM</td><td class="n">33</td><td class="n">40.9초</td><td class="n">51.2초</td><td class="n">112초</td><td class="n">120초</td><td class="n">39.5초</td><td>외부 폴백</td></tr>
+<tr><td>litellm:kimi-k2.6</td><td>LiteLLM</td><td class="n">33</td><td class="n">43.6초</td><td class="n">55.7초</td><td class="n">133초</td><td class="n">172초</td><td class="n">43.2초</td><td>외부 폴백</td></tr>
+<tr><td>litellm:minimax-m2.7</td><td>LiteLLM</td><td class="n">33</td><td class="n">44.0초</td><td class="n">54.2초</td><td class="n">113초</td><td class="n">140초</td><td class="n">41.9초</td><td>외부 폴백</td></tr>
+<tr><td>litellm:pc-gemma4-e4b</td><td>로컬 PC</td><td class="n">18</td><td class="n">12.0초</td><td class="n">26.1초</td><td class="n">85.1초</td><td class="n">103초</td><td class="n">—</td><td>비용 0, 품질 <span class="dim">[미측정]</span></td></tr>
+<tr><td>litellm:pc-qwen3-4b</td><td>로컬 PC</td><td class="n">18</td><td class="n">13.4초</td><td class="n">22.4초</td><td class="n">61.0초</td><td class="n">61.3초</td><td class="n">—</td><td>비용 0, 품질 <span class="dim">[미측정]</span></td></tr>
+</table>
+
+<h4>API 단일 호출 지연 (oauth_usage_log 30일 평균) — CLI 오버헤드 제외</h4>
+<table>
+<tr><th>모델</th><th class="n">평균 지연</th><th>비고</th></tr>
+<tr><td>claude-opus-5</td><td class="n ok">1,489 ms</td><td>API 레벨에서도 가장 빠름</td></tr>
+<tr><td>claude-haiku-4-5</td><td class="n">2,652 ms</td><td>경량 모델인데 Opus 보다 느림 — 도구를 80회 부르기 때문</td></tr>
+<tr><td>claude-sonnet-5</td><td class="n">2,687 ms</td><td>—</td></tr>
+</table>
+<div class="box warn"><b>주의.</b> "Haiku 는 1초 이내" 같은 일반론은 <b>이 서버에서는 사실이 아닙니다.</b>
+AADS 의 Haiku 는 콜당 도구를 80.3회 부르는 구성이라 단일 호출 평균이 2.65초입니다.
+속도 판단은 벤치마크가 아니라 이 표를 쓰십시오.</div>
+
+<h3>2.3 자료조사·분석 품질 — 30일 실측 (chat_messages)</h3>
+<p>AADS 자체 품질 채점(0~1)과 해당 응답에서 실제로 부른 도구 수입니다. <b>이것이 "조사 분석능력" 의 유일한 실측 지표</b>입니다.</p>
+
+<table>
+<tr><th>모델</th><th class="n">메시지</th><th class="n">평균 품질</th><th></th><th class="n">평균 도구호출</th><th>판정</th></tr>
+<tr><td>GPT-5.6 Terra (Codex CLI)</td><td class="n dim">4</td><td class="n">0.855</td><td><div class="bar"><i style="width:86%;background:var(--ok)"></i></div></td><td class="n">55.0</td><td class="dim">표본 4 — 참고용, 확정 불가</td></tr>
+<tr><td>claude-opus-4-6</td><td class="n">42</td><td class="n ok"><b>0.801</b></td><td><div class="bar"><i style="width:80%;background:var(--ok)"></i></div></td><td class="n">64.1</td><td><b>검수·심사 최적</b> (Opus 5 와 동일 단가)</td></tr>
+<tr><td>codex:gpt-5.6-sol</td><td class="n">41</td><td class="n ok">0.787</td><td><div class="bar"><i style="width:79%;background:var(--ok)"></i></div></td><td class="n"><b>127.9</b></td><td>도구 최다 — 심층 조사형</td></tr>
+<tr><td>GPT-5.6 Sol (Codex CLI)</td><td class="n"><b>1,089</b></td><td class="n ok">0.758</td><td><div class="bar"><i style="width:76%;background:var(--ok)"></i></div></td><td class="n">77.7</td><td><b>표본 최다 = 가장 신뢰할 수치</b></td></tr>
+<tr><td>claude-fable-5</td><td class="n">10</td><td class="n">0.752</td><td><div class="bar"><i style="width:75%;background:var(--ok)"></i></div></td><td class="n">73.4</td><td>표본 부족</td></tr>
+<tr><td>GPT-5.5 (Codex CLI)</td><td class="n">13</td><td class="n">0.746</td><td><div class="bar"><i style="width:75%;background:var(--ok)"></i></div></td><td class="n">32.9</td><td>도구 33회로 0.746 — <b>효율 좋음</b></td></tr>
+<tr><td>GPT-6 Astra (Codex CLI)</td><td class="n">63</td><td class="n">0.745</td><td><div class="bar"><i style="width:75%;background:var(--ok)"></i></div></td><td class="n">54.9</td><td>건당 $8.22 대비 품질 우위 없음</td></tr>
+<tr><td>claude-opus-5</td><td class="n">627</td><td class="n">0.736</td><td><div class="bar"><i style="width:74%;background:var(--ok)"></i></div></td><td class="n">61.5</td><td>현 CEO 채팅 기본값</td></tr>
+<tr><td>claude-fable-5-1</td><td class="n">17</td><td class="n">0.726</td><td><div class="bar"><i style="width:73%;background:var(--ok)"></i></div></td><td class="n">47.8</td><td>장문 특화</td></tr>
+<tr><td>claude-haiku-4-5</td><td class="n">77</td><td class="n ok"><b>0.717</b></td><td><div class="bar"><i style="width:72%;background:var(--ok)"></i></div></td><td class="n"><b>80.3</b></td><td class="ok"><b>건당 $0.0045 로 0.717 — 최고 가성비</b></td></tr>
+<tr><td>gpt-5.6-sol <span class="tag">API</span></td><td class="n">117</td><td class="n">0.707</td><td><div class="bar"><i style="width:71%;background:var(--warn)"></i></div></td><td class="n">46.3</td><td>CLI 경로(0.758)보다 낮음</td></tr>
+<tr><td>claude-sonnet-4-6</td><td class="n">200</td><td class="n warn">0.595</td><td><div class="bar"><i style="width:60%;background:var(--warn)"></i></div></td><td class="n bad">19.8</td><td class="bad">건당 $0.536 인데 품질 최하위권</td></tr>
+<tr><td>claude-sonnet-5</td><td class="n">85</td><td class="n warn">0.592</td><td><div class="bar"><i style="width:59%;background:var(--warn)"></i></div></td><td class="n bad">20.4</td><td class="bad">도구 20회 — <b>조사가 빈약한 원인</b></td></tr>
+<tr><td>mixture (폴백 혼합)</td><td class="n">24</td><td class="n bad">0.540</td><td><div class="bar"><i style="width:54%;background:var(--bad)"></i></div></td><td class="n">25.7</td><td class="bad">모델 전환이 품질을 깎는다</td></tr>
+</table>
+
+<div class="box ok">
+<b>핵심 상관 — 대표님이 "조사가 빈약하다" 고 하신 이유.</b><br>
+도구 호출 <b>25회 미만</b> 그룹(Sonnet 5, Sonnet 4.6 / 285 메시지) 가중평균 품질 <b>0.594</b><br>
+도구 호출 <b>45회 이상</b> 그룹(Sol, Opus 5, Haiku, Astra 등 / 2,083 메시지) 가중평균 품질 <b>0.748</b><br>
+→ <b>+0.154 (+25.9%)</b>. 같은 값을 모델 급으로는 설명할 수 없습니다 — B급 Haiku(80회, 0.717)가
+A급 Sonnet 5(20회, 0.592)를 <b>0.125 앞섭니다.</b><br>
+<b>결론: 조사 품질을 올리려면 모델을 올리는 것보다 도구 예산(호출 상한)을 올려야 합니다.</b> 비용도 그쪽이 쌉니다.
+<span class="src">[DB 실측, chat_messages 30일, 2,401 메시지]</span>
+</div>
+
+<!-- ===================== 3 ===================== -->
+<h2>3. 전 모델 카탈로그</h2>
+<p>단가는 <code>llm_models</code> 와 <code>app/services/model_selector.py:995~1060</code> 기준 $/1M 토큰. 건당 실측은 §2.1.</p>
+
+<h3>3.1 Claude CLI (Anthropic OAuth — R-AUTH 경로)</h3>
+<table>
+<tr><th>급</th><th>모델</th><th class="n">입력</th><th class="n">출력</th><th class="n">건당 실측</th><th>thinking</th><th>vision</th><th class="n">p50 속도</th><th class="n">품질</th><th>대표 용도</th></tr>
+<tr><td><span class="tier tS">S</span></td><td><b>claude-opus-5</b></td><td class="n">$5</td><td class="n">$25</td><td class="n">$0.8726</td><td>—</td><td>—</td><td class="n ok">4.7초</td><td class="n">0.736</td><td>CEO 채팅, 장애 원인분석, 아키텍처 판단</td></tr>
+<tr><td><span class="tier tS">S</span></td><td>claude-opus-4-6</td><td class="n">$5</td><td class="n">$25</td><td class="n dim">미사용</td><td>—</td><td>—</td><td class="n dim">—</td><td class="n ok">0.801</td><td><b>검수·심사(JudgeEvaluator)</b> — 동일 단가 최고 품질</td></tr>
+<tr><td><span class="tier tS">S</span></td><td>claude-fable-5-1</td><td class="n">$10</td><td class="n">$50</td><td class="n">$4.8989</td><td>✓</td><td>✓</td><td class="n dim">—</td><td class="n">0.726</td><td><b>장문 전용</b> — 27,286 토큰/콜. PRD·기획서·카피</td></tr>
+<tr><td><span class="tier tS">S</span></td><td>claude-fable-5</td><td class="n">$10</td><td class="n">$50</td><td class="n">$1.7900</td><td>✓</td><td>✓</td><td class="n dim">—</td><td class="n">0.752</td><td>Fable 5.1 폴백</td></tr>
+<tr><td><span class="tier tA">A</span></td><td>claude-sonnet-5</td><td class="n">$3</td><td class="n">$15</td><td class="n ok">$0.0399</td><td>✓</td><td>✓</td><td class="n">2.7초<span class="src">(API)</span></td><td class="n warn">0.592</td><td>표준 코드작업 — <b>도구예산 상향 조건부</b></td></tr>
+<tr><td><span class="tier tA">A</span></td><td>claude-sonnet-4-6</td><td class="n">$3</td><td class="n">$15</td><td class="n bad">$0.5358</td><td>—</td><td>—</td><td class="n dim">—</td><td class="n warn">0.595</td><td class="bad">권고: 사용 중단 (Sonnet 5 의 13배 비용, 품질 동일)</td></tr>
+<tr><td><span class="tier tB">B</span></td><td><b>claude-haiku-4-5</b></td><td class="n">$1</td><td class="n">$5</td><td class="n ok"><b>$0.0045</b></td><td>—</td><td>—</td><td class="n">2.7초<span class="src">(API)</span></td><td class="n ok">0.717</td><td><b>분류·라우팅·요약·상태판정 전량</b></td></tr>
+<tr><td><span class="tier tB">B</span></td><td>claude-vision</td><td class="n dim">—</td><td class="n dim">—</td><td class="n dim">미사용</td><td>✓</td><td>✓</td><td class="n dim">—</td><td class="n dim">—</td><td>이미지 판독 라우트 (단가 DB 미등록)</td></tr>
+</table>
+<p class="src">Claude CLI 2.1.274 실측(contabo116). 슬롯 인증은 R-AUTH: ANTHROPIC_AUTH_TOKEN → _2 → Gemini LiteLLM.</p>
+
+<h3>3.2 Codex CLI (OpenAI OAuth)</h3>
+<table>
+<tr><th>급</th><th>모델</th><th class="n">입력</th><th class="n">출력</th><th class="n">건당 실측</th><th>thinking</th><th class="n">p50 속도</th><th class="n">품질</th><th>대표 용도 / 판정</th></tr>
+<tr><td><span class="tier tS">S</span></td><td>gpt-6-astra</td><td class="n">$10</td><td class="n">$50</td><td class="n bad">$8.2207</td><td>✓</td><td class="n">15.4초</td><td class="n">0.745</td><td class="warn">최고가인데 품질 우위 없음 → 최후수단만</td></tr>
+<tr><td><span class="tier tA">A</span></td><td>gpt-5.6-sol</td><td class="n">$4</td><td class="n">$20</td><td class="n bad">$5.8055</td><td>✓</td><td class="n bad">390초</td><td class="n ok">0.758</td><td><b>장기 자율 러너</b> — 품질 1위지만 비용·지연 1위</td></tr>
+<tr><td><span class="tier tA">A</span></td><td><b>gpt-5.6-terra</b></td><td class="n">$2</td><td class="n">$12</td><td class="n ok"><b>$0.0689</b></td><td>✓</td><td class="n">15.4초</td><td class="n">0.855<span class="dim">(n=4)</span></td><td class="ok"><b>Sol 대체 1순위</b> — 단가 절반, 실측 1/84</td></tr>
+<tr><td><span class="tier tA">A</span></td><td>gpt-5.5</td><td class="n">$2</td><td class="n">$12</td><td class="n">$4.4056</td><td>—</td><td class="n ok">15.3초</td><td class="n">0.746</td><td>도구 33회로 0.746 — <b>효율형 조사</b></td></tr>
+<tr><td><span class="tier tA">A</span></td><td>gpt-5.4</td><td class="n">$2.5</td><td class="n">$15</td><td class="n dim">미사용</td><td>—</td><td class="n dim">—</td><td class="n dim">—</td><td class="dim">5.5 대비 비싸고 느림 → 비권장</td></tr>
+<tr><td><span class="tier tB">B</span></td><td>gpt-5.3-codex</td><td class="n">$1.75</td><td class="n">$14</td><td class="n dim">미사용</td><td>—</td><td class="n dim">—</td><td class="n dim">—</td><td>코드 특화 구형</td></tr>
+<tr><td><span class="tier tB">B</span></td><td>gpt-5.4-mini</td><td class="n">$0.75</td><td class="n">$4.5</td><td class="n dim">미사용</td><td>—</td><td class="n dim">—</td><td class="n dim">—</td><td>Codex 경량 — Haiku 와 경합</td></tr>
+<tr><td><span class="tier tC">C</span></td><td><b>gpt-5.6-luna</b></td><td class="n ok">$0.2</td><td class="n ok">$1.2</td><td class="n dim">미사용</td><td>✓</td><td class="n">15.6초</td><td class="n dim">—</td><td class="ok"><b>Codex 최저가 + thinking</b> — 대량 일괄처리</td></tr>
+<tr><td class="dim">—</td><td class="dim">gpt-5.6-tela</td><td class="n dim">DB 미등재</td><td class="n dim">—</td><td class="n dim">—</td><td>—</td><td class="n">15.3초</td><td class="n dim">—</td><td class="warn">러너 93콜 실행 중인데 <code>llm_models</code> 에 없음 → §9 R-2</td></tr>
+</table>
+<p class="src">Codex CLI 0.154.0 실측(contabo116). <code>codex models</code> 는 TTY 필요로 비대화형 조회 불가 — 목록은 <code>model_selector.py:1141 _CODEX_MODELS</code> 기준.</p>
+
+<h3>3.3 OpenAI API 직결 (이미지 생성 외 CEO 허가 범위 주의)</h3>
+<table>
+<tr><th>급</th><th>모델</th><th class="n">입력</th><th class="n">출력</th><th>비전</th><th>AADS 실사용</th><th>판정</th></tr>
+<tr><td><span class="tier tS">S</span></td><td>o3-pro</td><td class="n">$20</td><td class="n">$80</td><td>—</td><td class="n dim">0건</td><td class="bad">최고가. 도입 보류</td></tr>
+<tr><td><span class="tier tS">S</span></td><td>gpt-6-astra</td><td class="n">$10</td><td class="n">$50</td><td>✓</td><td class="n dim">0건(API)</td><td>Codex 경유가 정석</td></tr>
+<tr><td><span class="tier tS">S</span></td><td>gpt-5</td><td class="n">$5</td><td class="n">$15</td><td>—</td><td class="n dim">0건</td><td class="bad">Sonnet 5($3/15)가 전면 우위 → 비권장</td></tr>
+<tr><td><span class="tier tA">A</span></td><td>gpt-4o</td><td class="n">$2.5</td><td class="n">$10</td><td>✓</td><td class="n dim">0건</td><td>비전 폴백용</td></tr>
+<tr><td><span class="tier tA">A</span></td><td>o3</td><td class="n">$2</td><td class="n">$8</td><td>—</td><td class="n dim">0건</td><td>추론 특화, 미검증</td></tr>
+<tr><td><span class="tier tB">B</span></td><td>o3-mini</td><td class="n">$1.1</td><td class="n">$4.4</td><td>—</td><td class="n dim">0건</td><td>Haiku 와 경합, 이점 없음</td></tr>
+<tr><td><span class="tier tB">B</span></td><td>gpt-5-mini</td><td class="n">$0.5</td><td class="n">$2</td><td>—</td><td class="n dim">0건</td><td>—</td></tr>
+<tr><td><span class="tier tC">C</span></td><td>gpt-4o-mini</td><td class="n">$0.15</td><td class="n">$0.6</td><td>✓</td><td class="n dim">0건</td><td class="ok">최저가 <b>비전</b> — 이미지 캡션/OCR 보조</td></tr>
+<tr><td colspan="7" style="background:#1b1f27"><b>이미지 생성 (CEO 명시 허가 범위)</b> — gpt-image-2.5-flare(속도) / gpt-image-2.5-sunburst(정밀) / gpt-image-2(편집). API 전용, 장당 종량과금, Codex 구독과 무관.</td></tr>
+</table>
+<div class="box warn"><b>R-AUTH·CEO 지시 확인.</b> "GPT 사용은 <b>이미지 생성에 한해</b> 허가" 지시 대비, <code>model_routing_preferences</code> 에
+<code>runner_llm</code>(gpt-5.5) · <code>audio</code>(tts-1-hd) · <code>video</code>(sora-2) 3개 비이미지 라우트가 아직 활성입니다.
+이 문서의 OpenAI API 배분안은 <b>해당 허가가 확장될 때에만</b> 유효합니다.</div>
+
+<!-- ===================== 4 ===================== -->
+<h2>4. 급별 분류와 동급 내 업무 분기</h2>
+<p>대표님 지시의 핵심입니다 — <b>같은 급 안에서도 어느 업무에 무엇을 쓸지</b>를 실측으로 갈랐습니다.
+급은 입력 단가로 나눕니다: S ≥$5 / A $2~4 / B $0.7~1.75 / C ≤$0.5.</p>
+
+<h3><span class="tier tS">S</span> S급 — 프런티어 ($5~20/1M). 판단이 틀리면 되돌리기 비싼 일에만.</h3>
+<table>
+<tr><th>모델</th><th class="n">건당</th><th class="n">품질</th><th>이 급 안에서 <b>이 모델이어야 하는 업무</b></th><th>이 모델을 쓰면 안 되는 업무</th></tr>
+<tr><td><b>claude-opus-5</b></td><td class="n">$0.8726</td><td class="n">0.736</td><td>CEO 채팅 본선 · 장애 원인분석 · 아키텍처 설계 · 다중 도구 60회+ 오케스트레이션. <b>p50 4.7초로 S급 중 유일하게 대화형 속도</b></td><td>분류·상태조회·요약 (Haiku 대비 195배)</td></tr>
+<tr><td><b>claude-opus-4-6</b></td><td class="n dim">미사용</td><td class="n ok">0.801</td><td><b>검수·심사·반려 판정.</b> Opus 5 와 동일 단가인데 실측 품질이 0.065 높다(n=42). 러너 산출물 게이트에 배치</td><td>장문 생성 (Fable 이 담당)</td></tr>
+<tr><td><b>claude-fable-5-1</b></td><td class="n">$4.8989</td><td class="n">0.726</td><td><b>PRD·기획서·제안서·마케팅 카피.</b> 콜당 27,286 토큰 — 다른 모델의 5~80배 장문. 이 문서 같은 산출물이 정확히 이 용도</td><td>코드·분류·조회 (건당 $4.9)</td></tr>
+<tr><td>gpt-6-astra</td><td class="n bad">$8.2207</td><td class="n">0.745</td><td>Claude 계정 전면 소진 시 <b>최후 폴백</b>. 비정형 대규모 리팩터링</td><td>상시 업무 전부 — 최고가에 품질 우위 없음</td></tr>
+<tr><td>o3-pro / gpt-5</td><td class="n dim">0건</td><td class="n dim">—</td><td class="dim">없음 — 현 시점 도입 근거 없음</td><td>전부</td></tr>
+</table>
+
+<h3><span class="tier tA">A</span> A급 — 주력 ($2~4/1M). 여기서 비용의 성패가 갈린다.</h3>
+<table>
+<tr><th>모델</th><th class="n">건당</th><th class="n">p50</th><th class="n">품질</th><th>이 급 안에서 <b>이 모델이어야 하는 업무</b></th></tr>
+<tr><td><b>gpt-5.6-terra</b></td><td class="n ok">$0.0689</td><td class="n">15.4초</td><td class="n">0.855<span class="dim">(n=4)</span></td><td class="ok"><b>Codex 러너 기본값.</b> Sol 과 같은 A급인데 단가는 절반, 실측 건당은 1/84. 단 p95 504초 긴 꼬리 있음 → 타임아웃 설정 필수</td></tr>
+<tr><td><b>gpt-5.5</b></td><td class="n">$4.4056</td><td class="n ok">15.3초</td><td class="n">0.746</td><td><b>속도 안정성이 필요한 러너.</b> 평균≈p50 으로 Codex 중 편차 최소. 도구 33회로 0.746 — 조사 효율 최고</td></tr>
+<tr><td><b>claude-sonnet-5</b></td><td class="n ok">$0.0399</td><td class="n ok">2.7초</td><td class="n warn">0.592</td><td><b>표준 코드 작업·요약.</b> 비용·속도는 A급 최고인데 <b>품질이 최하위</b> — 원인은 도구 20회. 도구 예산을 45회로 올리는 조건부로만 확대</td></tr>
+<tr><td>gpt-5.6-sol</td><td class="n bad">$5.8055</td><td class="n bad">390초</td><td class="n ok">0.758</td><td><b>품질이 최우선이고 시간이 무제한인 장기 자율작업.</b> 그 외에는 Terra 로 내린다. 캐시 0 문제 해결 전까지 신규 배정 금지</td></tr>
+<tr><td>claude-sonnet-4-6</td><td class="n bad">$0.5358</td><td class="n dim">—</td><td class="n warn">0.595</td><td class="bad"><b>없음.</b> Sonnet 5 와 품질 동일(0.595 vs 0.592)인데 건당 13.4배 → 즉시 라우팅 제거 대상</td></tr>
+<tr><td>gpt-5.4 / gpt-4o / o3</td><td class="n dim">0건</td><td class="n dim">—</td><td class="n dim">—</td><td class="dim">동급 내 우위 없음. gpt-4o 만 비전 폴백으로 유지</td></tr>
+</table>
+
+<h3><span class="tier tB">B</span> B급 — 대량 처리 ($0.7~1.75/1M). AADS 비용 최적화의 주전장.</h3>
+<table>
+<tr><th>모델</th><th class="n">건당</th><th class="n">품질</th><th>이 급 안에서 <b>이 모델이어야 하는 업무</b></th></tr>
+<tr><td><b>claude-haiku-4-5</b></td><td class="n ok">$0.0045</td><td class="n ok">0.717</td><td class="ok"><b>B급 내 독주. 의도분류·라우팅·상태판정·로그요약·알림문구·러너 1차 검수 전량.</b> 도구 80.3회를 붙여도 건당 $0.0045 — S급의 0.5%</td></tr>
+<tr><td>gpt-5.4-mini</td><td class="n dim">0건</td><td class="n dim">—</td><td>Anthropic 한도 소진 시 <b>Haiku 폴백</b>. 그 외 배정 불필요</td></tr>
+<tr><td>gpt-5.3-codex / o3-mini</td><td class="n dim">0건</td><td class="n dim">—</td><td class="dim">Haiku 대비 이점 없음 → 미배정</td></tr>
+</table>
+
+<h3><span class="tier tC">C</span> C급 — 초저가 (≤$0.5/1M).</h3>
+<table>
+<tr><th>모델</th><th class="n">입력/출력</th><th class="n">p50</th><th>이 급 안에서 <b>이 모델이어야 하는 업무</b></th></tr>
+<tr><td><b>gpt-5.6-luna</b></td><td class="n">$0.2 / $1.2</td><td class="n">15.6초</td><td class="ok"><b>thinking 을 지원하는 최저가.</b> 대량 일괄 분류, 야간 배치 요약, 크롤 결과 1차 선별. Codex 계열 중 속도 손해 없음(15.6초 = 동급)</td></tr>
+<tr><td>gpt-4o-mini</td><td class="n">$0.15 / $0.6</td><td class="n dim">—</td><td>최저가 <b>비전</b> — 이미지 캡션, OCR 후처리, 썸네일 판정 (NAS·SF)</td></tr>
+<tr><td>로컬 PC (gemma4-e2b/e4b, qwen3-4b)</td><td class="n ok">$0</td><td class="n">12~13초</td><td>비용 0. 개인정보 포함 데이터 1차 마스킹, 오프라인 요약. <b>품질 <span class="dim">[미측정]</span> — 게이트 통과 전 본선 투입 금지</b></td></tr>
+</table>
+
+<!-- ===================== 5 ===================== -->
+<h2>5. 자료조사·분석능력 등급표</h2>
+<p>대표님이 지적하신 "조사 분석이 빈약하다" 에 대한 정면 답입니다.
+<b>자료조사 능력은 모델 단독 속성이 아니라 (모델 × 도구예산 × 검증절차) 의 곱</b>이며, 아래 5축으로 나눕니다.</p>
+
+<table>
+<tr><th>축</th><th>무엇을 재는가</th><th>실측 지표</th><th>측정 가능 여부</th></tr>
+<tr><td>R1 수집 폭</td><td>한 답에 근거를 몇 개나 모으는가</td><td>평균 도구호출 수</td><td class="ok">✅ 실측</td></tr>
+<tr><td>R2 합성 길이</td><td>모은 근거를 얼마나 길게 엮는가</td><td>콜당 출력 토큰</td><td class="ok">✅ 실측</td></tr>
+<tr><td>R3 종합 품질</td><td>AADS 채점 기준 충족도</td><td>quality_score</td><td class="ok">✅ 실측</td></tr>
+<tr><td>R4 응답 지연</td><td>조사에 드는 시간</td><td>p50 경과</td><td class="ok">✅ 실측</td></tr>
+<tr><td>R5 교차검증 정확도</td><td>2개 소스 일치 여부, 수치 오류율</td><td>도구별 성공률</td><td class="bad">❌ <b>측정 불가</b> — tool_results_archive 0건</td></tr>
+</table>
+
+<h3>5.1 모델별 자료조사·분석 등급</h3>
+<table>
+<tr><th>모델</th><th class="n">R1 수집폭<br><span class="src">도구/콜</span></th><th class="n">R2 합성<br><span class="src">토큰/콜</span></th><th class="n">R3 품질</th><th class="n">R4 지연<br><span class="src">p50</span></th><th class="n">건당 비용</th><th>종합 등급</th><th>조사 업무 배치</th></tr>
+<tr><td><b>GPT-5.6 Sol (Codex)</b></td><td class="n ok">77.7</td><td class="n">7,278</td><td class="n ok">0.758</td><td class="n bad">390초</td><td class="n bad">$5.81</td><td><b>심층형 S</b></td><td>다중 서버 전수조사, 장애 근본원인 추적 — <b>시간·비용 무제한일 때만</b></td></tr>
+<tr><td><b>claude-opus-5</b></td><td class="n ok">61.5</td><td class="n">5,124</td><td class="n">0.736</td><td class="n ok">4.7초</td><td class="n">$0.87</td><td class="ok"><b>대화형 S</b></td><td class="ok"><b>CEO 실시간 조사·보고 기본값.</b> 품질 −0.022 를 지연 83배 단축으로 산다</td></tr>
+<tr><td><b>claude-opus-4-6</b></td><td class="n ok">64.1</td><td class="n dim">미측정</td><td class="n ok">0.801</td><td class="n dim">—</td><td class="n dim">미사용</td><td class="ok"><b>검증형 S</b></td><td>남의 조사 결과 <b>반박·검수</b>. 실측 품질 1위(n=42)</td></tr>
+<tr><td><b>claude-haiku-4-5</b></td><td class="n ok"><b>80.3</b></td><td class="n bad">343</td><td class="n">0.717</td><td class="n ok">2.7초</td><td class="n ok"><b>$0.0045</b></td><td class="ok"><b>수집형 B</b></td><td class="ok"><b>넓게 긁어오기.</b> 수집 폭 1위인데 합성 길이 최하 → <b>수집은 Haiku, 합성은 Opus</b> 2단 분업이 정답</td></tr>
+<tr><td>GPT-5.5 (Codex)</td><td class="n">32.9</td><td class="n">9,141</td><td class="n">0.746</td><td class="n ok">15.3초</td><td class="n">$4.41</td><td><b>효율형 A</b></td><td>도구 33회로 0.746 — <b>근거 대비 산출 효율 1위</b>. 정형 리서치</td></tr>
+<tr><td>GPT-6 Astra (Codex)</td><td class="n">54.9</td><td class="n">4,337</td><td class="n">0.745</td><td class="n">15.4초</td><td class="n bad">$8.22</td><td class="warn"><b>비권장 S</b></td><td>Sol 대비 품질 −0.013 에 비용 1.4배 → 조사 배정 불필요</td></tr>
+<tr><td><b>claude-fable-5-1</b></td><td class="n">47.8</td><td class="n ok"><b>27,286</b></td><td class="n">0.726</td><td class="n dim">—</td><td class="n">$4.90</td><td><b>집필형 S</b></td><td><b>조사가 아니라 집필.</b> 남이 모은 근거를 장문 보고서로 엮는 최종 단계</td></tr>
+<tr><td>claude-sonnet-5</td><td class="n bad">20.4</td><td class="n bad">564</td><td class="n warn">0.592</td><td class="n ok">2.7초</td><td class="n ok">$0.040</td><td class="bad"><b>조사 부적합 A</b></td><td class="bad"><b>현재 "빈약한 조사" 의 주범.</b> 도구 20회로는 교차검증이 불가능. 조사 업무 배정 금지 — 도구예산 45회 상향 시 재평가</td></tr>
+<tr><td>claude-sonnet-4-6</td><td class="n bad">19.8</td><td class="n">4,972</td><td class="n warn">0.595</td><td class="n dim">—</td><td class="n bad">$0.536</td><td class="bad"><b>퇴출 A</b></td><td class="bad">조사 폭 최하 + 건당 비용 13배 → 전 업무 배정 제외</td></tr>
+<tr><td>mixture (폴백 혼합)</td><td class="n">25.7</td><td class="n dim">—</td><td class="n bad">0.540</td><td class="n dim">—</td><td class="n dim">—</td><td class="bad"><b>최하</b></td><td class="bad">조사 도중 모델이 바뀌면 품질이 0.54 로 떨어진다 → <b>조사 세션 중 폴백 금지</b></td></tr>
+</table>
+
+<div class="box ok">
+<b>조사 파이프라인 권장안 — 2단 분업.</b><br>
+<b>1단 수집 (Haiku 4.5, 건당 $0.0045):</b> 도구 80회로 DB·로그·코드·웹을 넓게 긁어 원자료를 만든다.<br>
+<b>2단 합성 (Opus 5, 건당 $0.87 / 장문이면 Fable 5.1):</b> 원자료만 받아 판단·표·결론을 쓴다.<br>
+<b>3단 검수 (Opus 4.6, 품질 0.801):</b> 수치와 출처를 반박 관점에서 확인한다.<br>
+지금은 1·2·3단을 Opus 5 한 모델이 다 하고 있어 콜당 89.9만 토큰 컨텍스트를 매번 재읽습니다.
+분업하면 1단 컨텍스트가 2단으로 넘어가지 않아 <b>캐시 읽기량 자체가 줄어듭니다</b> — 이게 §7 절감의 본체입니다.
+</div>
+
+<!-- ===================== 6 ===================== -->
+<h2>6. 6개 프로젝트 업무별 모델 배분</h2>
+
+<h3>6.1 AADS — 자율 AI 개발 시스템 (contabo116)</h3>
+<table>
+<tr><th>업무</th><th>현재</th><th>권장</th><th class="n">건당 변화</th><th>근거</th></tr>
+<tr><td>CEO 채팅 본선 응답</td><td>claude-opus-5</td><td class="ok">유지</td><td class="n">—</td><td>p50 4.7초 + 도구 61.5회. 대체재 없음</td></tr>
+<tr><td>의도 분류 (intent)</td><td>Opus 5 동반</td><td class="ok"><b>Haiku 4.5</b></td><td class="n ok">−$0.868</td><td>단순 패턴 매칭. 품질 손실 근거 없음</td></tr>
+<tr><td>Pipeline Runner 1차 검수</td><td>Sonnet 5 / Sol</td><td class="ok"><b>Haiku 4.5</b></td><td class="n ok">−$0.035</td><td>빌드 pass/fail 판정 = 분류 문제</td></tr>
+<tr><td>Runner 최종 승인 심사</td><td>Opus 5</td><td class="ok"><b>Opus 4.6</b></td><td class="n">동일</td><td>동일 단가, 실측 품질 +0.065</td></tr>
+<tr><td>Codex 러너 기본 모델</td><td class="bad">gpt-5.6-sol</td><td class="ok"><b>gpt-5.6-terra</b></td><td class="n ok">−$5.74</td><td>동급·저단가·1/84 실측. <b>캐시 0 문제 회피</b></td></tr>
+<tr><td>장애 원인분석</td><td>Opus 5</td><td class="ok">유지</td><td class="n">—</td><td>다단계 추론 필수</td></tr>
+<tr><td>PRD·기획서 집필</td><td>Opus 5</td><td><b>Fable 5.1</b></td><td class="n warn">+$4.03</td><td>27,286 토큰/콜. 단 <b>월 5건 이하로 제한</b></td></tr>
+<tr><td>로그 요약·알림 문구</td><td>Sonnet 5</td><td class="ok"><b>Haiku 4.5</b></td><td class="n ok">−$0.035</td><td>정형 변환</td></tr>
+<tr><td>야간 배치 정제 (Sleep-Time)</td><td>Sonnet 5</td><td class="ok"><b>gpt-5.6-luna</b></td><td class="n ok">추정 −90%</td><td>$0.2/1.2 + thinking. 시간 제약 없음 <span class="warn">[추정]</span></td></tr>
+</table>
+
+<h3>6.2 KIS — 자동매매 (contabo14)</h3>
+<table>
+<tr><th>업무</th><th>권장</th><th>근거</th></tr>
+<tr><td>실시간 체결·진입/청산 판정</td><td class="bad">LLM 미사용 (룰 엔진)</td><td>p50 4.7초도 체결에는 느리다. LLM 은 사후 설명만</td></tr>
+<tr><td>진입·청산 사유 설명 생성</td><td><b>Haiku 4.5</b></td><td>정형 템플릿. 건당 $0.0045 로 종목 수 무관</td></tr>
+<tr><td>전략 백테스트 결과 해석</td><td><b>Opus 5</b></td><td>다변수 인과 판단. 오판 비용이 크다</td></tr>
+<tr><td>일일 매매 리포트 집필</td><td><b>Fable 5.1</b> (주 1회) / Haiku (일간)</td><td>장문은 주간만, 일간은 B급</td></tr>
+<tr><td>장애·API 오류 진단</td><td><b>Opus 5</b></td><td>금전 손실 직결</td></tr>
+</table>
+
+<h3>6.3 GO100 — 백억이 투자분석 (contabo14)</h3>
+<table>
+<tr><th>업무</th><th>권장</th><th>근거</th></tr>
+<tr><td>종목 스크리닝 1차 필터</td><td><b>Haiku 4.5</b></td><td>수천 종목 대량 분류. 수집 폭 80.3회</td></tr>
+<tr><td>재무제표·공시 원문 파싱</td><td><b>gpt-5.6-luna</b></td><td>대량·비실시간. $0.2/1M</td></tr>
+<tr><td>심층 기업분석 리포트</td><td><b>Opus 5 조사 → Fable 5.1 집필</b></td><td>§5.1 2단 분업. 단일 모델보다 싸고 길다</td></tr>
+<tr><td>수치 교차검증</td><td><b>Opus 4.6</b></td><td>품질 0.801. R-CRITICAL 수치 날조 방지</td></tr>
+<tr><td>파동·차트 패턴 해석</td><td><b>Opus 5</b></td><td>최근 파동 발행 회귀 사례 — 오판 비용 큼</td></tr>
+</table>
+
+<h3>6.4 SF — ShortFlow 숏폼 자동화 (cafe24_114)</h3>
+<table>
+<tr><th>업무</th><th>권장</th><th>근거</th></tr>
+<tr><td>영상 스크립트·자막 생성</td><td><b>Fable 5.1</b></td><td>창작 장문. 콜당 27,286 토큰</td></tr>
+<tr><td>썸네일 문구 A/B 대량 생성</td><td><b>Haiku 4.5</b></td><td>수십 변형 필요 → 건당 비용이 곧 변형 수</td></tr>
+<tr><td>썸네일·프레임 판정 (비전)</td><td><b>gpt-4o-mini</b></td><td>C급 유일 비전. $0.15/0.6</td></tr>
+<tr><td>이미지 생성</td><td><b>gpt-image-2.5-flare</b></td><td>속도 우선. 정밀 필요 시 sunburst</td></tr>
+<tr><td>업로드 파이프라인 오류 진단</td><td><b>Sonnet 5</b> (도구예산 45회 조건)</td><td>중간 난도. 조건 미충족 시 Opus 5</td></tr>
+</table>
+
+<h3>6.5 NTV2 — NewTalk V2 소셜 (cafe24_114)</h3>
+<table>
+<tr><th>업무</th><th>권장</th><th>근거</th></tr>
+<tr><td>댓글·게시물 유해성 분류</td><td><b>Haiku 4.5</b></td><td>대량 실시간 분류. 건당 $0.0045</td></tr>
+<tr><td>피드 추천 사유 문구</td><td><b>gpt-5.6-luna</b></td><td>배치 생성, 지연 무관</td></tr>
+<tr><td>사용자 문의 1차 응대</td><td><b>Haiku 4.5</b> → 에스컬레이션 <b>Opus 5</b></td><td>2단 구성. 대부분 1단에서 종결</td></tr>
+<tr><td>AI Studio 이미지 생성</td><td><b>gpt-image-2.5-flare / sunburst</b></td><td>v2.newtalk.kr/admin/ai-studio 적용분</td></tr>
+<tr><td>서비스 장애 진단</td><td><b>Opus 5</b></td><td>사용자 영향 직결</td></tr>
+</table>
+
+<h3>6.6 NAS — 이미지 처리 (cafe24_114)</h3>
+<table>
+<tr><th>업무</th><th>권장</th><th>근거</th></tr>
+<tr><td>이미지 태깅·분류</td><td><b>gpt-4o-mini</b> / 로컬 qwen2.5vl-3b</td><td>비전 필요, 대량. 로컬은 비용 0이나 품질 <span class="dim">[미측정]</span></td></tr>
+<tr><td>OCR 후처리·정규화</td><td><b>Haiku 4.5</b></td><td>정형 텍스트 변환</td></tr>
+<tr><td>일괄 처리 배치 요약</td><td><b>gpt-5.6-luna</b></td><td>야간 배치</td></tr>
+<tr><td>파이프라인 오류 진단</td><td><b>Sonnet 5</b></td><td>중간 난도</td></tr>
+</table>
+
+<!-- ===================== 7 ===================== -->
+<h2>7. 비용 시뮬레이션</h2>
+<p>기준: 30일 실측 $7,631.07. 아래 절감액은 <b>호출 건수는 그대로 두고 모델만 바꿨을 때</b>의 산술 계산입니다.
+이전 건수 가정은 <span class="warn">[추정]</span> 이며 단가·건당 비용은 <span class="ok">[DB 실측]</span> 입니다.</p>
+
+<table>
+<tr><th>#</th><th>조치</th><th class="n">대상 콜</th><th class="n">현재 건당</th><th class="n">변경 후 건당</th><th class="n">월 절감</th><th>확실성</th></tr>
+<tr><td>1</td><td>Codex 러너 기본값 Sol → Terra</td><td class="n">264</td><td class="n">$5.8055</td><td class="n">$0.0689</td><td class="n ok"><b>$1,514.07</b></td><td class="warn">Terra 표본 9건 — 작업 성격 차이 가능 <span class="warn">[추정]</span></td></tr>
+<tr><td>2</td><td>Opus 5 중 분류·요약·상태판정 30% → Haiku</td><td class="n">1,787</td><td class="n">$0.8726</td><td class="n">$0.0045</td><td class="n ok"><b>$1,551.29</b></td><td class="warn">30% 비중은 가정 <span class="warn">[추정]</span></td></tr>
+<tr><td>3</td><td>Sonnet 4.6 전량 → Sonnet 5</td><td class="n">887</td><td class="n">$0.5358</td><td class="n">$0.0399</td><td class="n ok"><b>$439.86</b></td><td class="ok">품질 동등 실측(0.595 vs 0.592) — <b>확실</b></td></tr>
+<tr><td>4</td><td>GPT-6 Astra 배정 제거</td><td class="n">14</td><td class="n">$8.2207</td><td class="n">$0.0689</td><td class="n ok">$114.13</td><td class="ok">품질 우위 없음 실측 — <b>확실</b></td></tr>
+<tr><td>5</td><td>Opus 5 컨텍스트 축소(캐시 읽기 −30%)</td><td class="n">5,958</td><td class="n" colspan="2">캐시 5.35B → 3.75B</td><td class="n warn">$800 내외</td><td class="warn">캐시 단가 산식 기반 <span class="warn">[추정]</span></td></tr>
+<tr style="background:#1b1f27"><td colspan="5"><b>합계 (1~4 만, 5 제외)</b></td><td class="n ok"><b>$3,619.35 / 월</b></td><td><b>총액 대비 47.4%</b></td></tr>
+<tr style="background:#1b1f27"><td colspan="5"><b>확실성 높은 항목만 (3+4)</b></td><td class="n ok"><b>$553.99 / 월</b></td><td class="ok">품질 손실 근거 없음</td></tr>
+</table>
+
+<div class="box">
+<b>읽는 법.</b> 47.4% 는 <b>목표치이지 보장치가 아닙니다.</b> 이 중 실측으로 품질 손실이 없다고 확인된 것은
+③④ 의 $553.99 뿐입니다. ①②⑤ 는 각각 "Terra 표본 9건", "30% 가정", "캐시 산식" 이라는 가정을 하나씩 깔고 있으므로
+<b>1주 A/B 후 확정</b>해야 합니다(§10 검증 기준).
+</div>
+
+<h4>모델별 건당 비용 비교 (실측, 로그 스케일 체감용)</h4>
+<table>
+<tr><th>모델</th><th class="n">건당</th><th>상대 규모</th><th class="n">Haiku 대비</th></tr>
+<tr><td>GPT-6 Astra</td><td class="n">$8.2207</td><td><div class="bar"><i style="width:100%;background:var(--bad)"></i></div></td><td class="n">1,827배</td></tr>
+<tr><td>GPT-5.6 Sol</td><td class="n">$5.8055</td><td><div class="bar"><i style="width:71%;background:var(--bad)"></i></div></td><td class="n">1,290배</td></tr>
+<tr><td>claude-fable-5-1</td><td class="n">$4.8989</td><td><div class="bar"><i style="width:60%;background:var(--warn)"></i></div></td><td class="n">1,089배</td></tr>
+<tr><td>GPT-5.5</td><td class="n">$4.4056</td><td><div class="bar"><i style="width:54%;background:var(--warn)"></i></div></td><td class="n">979배</td></tr>
+<tr><td>claude-opus-5</td><td class="n">$0.8726</td><td><div class="bar"><i style="width:11%;background:var(--warn)"></i></div></td><td class="n">194배</td></tr>
+<tr><td>claude-sonnet-4-6</td><td class="n">$0.5358</td><td><div class="bar"><i style="width:6.5%;background:var(--warn)"></i></div></td><td class="n">119배</td></tr>
+<tr><td>gpt-5.6-terra</td><td class="n">$0.0689</td><td><div class="bar"><i style="width:0.8%;background:var(--ok)"></i></div></td><td class="n">15배</td></tr>
+<tr><td>claude-sonnet-5</td><td class="n">$0.0399</td><td><div class="bar"><i style="width:0.5%;background:var(--ok)"></i></div></td><td class="n">8.9배</td></tr>
+<tr><td>claude-haiku-4-5</td><td class="n ok">$0.0045</td><td><div class="bar"><i style="width:0.1%;background:var(--ok)"></i></div></td><td class="n ok">1배</td></tr>
+</table>
+
+<!-- ===================== 8 ===================== -->
+<h2>8. 적용 방안</h2>
+
+<h3>Phase 1 — 즉시 (승인 불필요, 품질 손실 근거 없음)</h3>
+<table>
+<tr><th class="n">순</th><th>작업</th><th>대상 파일 / 테이블</th><th class="n">월 절감</th><th>완료기준</th></tr>
+<tr><td class="n">1</td><td>Sonnet 4.6 라우팅 제거 → Sonnet 5</td><td><code>model_routing_preferences</code></td><td class="n ok">$439.86</td><td>7일간 sonnet-4-6 콜 0건</td></tr>
+<tr><td class="n">2</td><td>GPT-6 Astra 상시 배정 제거 (폴백만 유지)</td><td><code>model_selector.py:1141</code></td><td class="n ok">$114.13</td><td>7일간 astra 콜 ≤2건</td></tr>
+<tr><td class="n">3</td><td><code>tool_results_archive</code> 기록 복구</td><td>도구 아카이브 훅</td><td class="n dim">—</td><td>24시간 내 row &gt; 0</td></tr>
+<tr><td class="n">4</td><td><code>gpt-5.6-tela</code> 를 <code>llm_models</code> 에 등재</td><td><code>llm_models</code></td><td class="n dim">—</td><td>단가 조회 시 NULL 아님</td></tr>
+</table>
+
+<h3>Phase 2 — 1주 A/B (승인 필요)</h3>
+<table>
+<tr><th class="n">순</th><th>작업</th><th>A/B 설계</th><th class="n">월 절감(가정)</th><th>중단 조건</th></tr>
+<tr><td class="n">5</td><td>Codex 러너 Sol → Terra</td><td>신규 잡의 50% 를 Terra 로. 100건 누적 비교</td><td class="n">$1,514.07</td><td>Terra 품질 &lt; 0.70 또는 실패율 &gt; Sol +10%p</td></tr>
+<tr><td class="n">6</td><td>분류·요약 경로 Opus 5 → Haiku</td><td>intent 분류·러너 1차 검수·로그 요약 3개 경로만</td><td class="n">$1,551.29</td><td>해당 경로 품질 &lt; 0.68</td></tr>
+<tr><td class="n">7</td><td>Sonnet 5 도구 예산 20 → 45회</td><td>코드작업 세션 한정</td><td class="n warn">비용 증가</td><td>품질이 0.65 미만이면 롤백</td></tr>
+</table>
+<div class="box"><b>7번은 비용이 늘어나는 항목입니다.</b> 그런데도 넣는 이유는 §2.3 상관 때문입니다 —
+Sonnet 5 를 싸게 쓰는 것보다 <b>쓸 만하게 만드는 것</b>이 Opus 5 이관보다 훨씬 쌉니다.
+Sonnet 5 건당 $0.0399 에서 도구를 2배 늘려도 Opus 5 건당 $0.8726 의 10분의 1입니다.</div>
+
+<h3>Phase 3 — 중기 (구조 변경)</h3>
+<table>
+<tr><th class="n">순</th><th>작업</th><th>기대 효과</th></tr>
+<tr><td class="n">8</td><td><b>조사 2단 분업 파이프라인</b> — 수집 Haiku → 합성 Opus 5 → 검수 Opus 4.6</td><td>§5.1. Opus 컨텍스트 재읽기 감소가 본 목적</td></tr>
+<tr><td class="n">9</td><td>Opus 5 컨텍스트 축소 (콜당 89.9만 토큰 → 60만)</td><td class="warn">$800 내외 <span class="warn">[추정]</span></td></tr>
+<tr><td class="n">10</td><td>Codex 프롬프트 캐시 활성화 (현재 적중 0)</td><td>Sol 유지 시에도 입력 5억 토큰 과금 축소</td></tr>
+<tr><td class="n">11</td><td>야간 배치 → gpt-5.6-luna 이전</td><td class="warn">배치 비용 −90% <span class="warn">[추정]</span></td></tr>
+<tr><td class="n">12</td><td>로컬 PC 모델 품질 게이트 수립 후 마스킹 작업 이관</td><td>비용 0 구간 확대</td></tr>
+</table>
+
+<h3>8.1 적용 지점 (코드·DB)</h3>
+<pre><code># 1) 라우팅 테이블 — 업무별 모델 지정의 정본
+psql &gt; SELECT route_key, model_id, is_active FROM model_routing_preferences;
+
+# 2) 단가 맵 — 비용 계산의 정본
+/root/aads/aads-server/app/services/model_selector.py:995~1060
+
+# 3) Codex 모델 화이트리스트
+/root/aads/aads-server/app/services/model_selector.py:1141  _CODEX_MODELS
+
+# 4) 모델 카탈로그 (settings 화면이 읽는 곳)
+psql &gt; SELECT model_id, is_active, tier, input_cost, output_cost FROM llm_models;
+
+# 5) 반영 — R-DOCKER: 전체 up 금지
+docker exec aads-server bash /app/scripts/reload-api.sh     # 파이썬 코드만 변경
+bash /root/aads/aads-server/deploy.sh bluegreen              # 이미지 리빌드 필요 시</code></pre>
+
+<!-- ===================== 9 ===================== -->
+<h2>9. 리스크·미검증 항목</h2>
+<table>
+<tr><th>ID</th><th>항목</th><th>영향</th><th>상태</th><th>확인 방법</th></tr>
+<tr><td>R-1</td><td>Terra 실측 표본이 9콜(비용)·4메시지(품질)뿐</td><td>§7 ①의 $1,514 절감 근거가 약함</td><td class="warn">미검증</td><td>Phase 2 A/B 100건 누적</td></tr>
+<tr><td>R-2</td><td><code>gpt-5.6-tela</code> 가 러너에서 93콜 돌았는데 <code>llm_models</code> 미등재</td><td>비용 집계에서 누락 중일 가능성</td><td class="bad">확인됨</td><td>Phase 1 ④ 등재 후 재집계</td></tr>
+<tr><td>R-3</td><td><code>tool_results_archive</code> 30일 0건</td><td><b>R5 교차검증 정확도 측정 불가.</b> 도구별 성공률·지연 전부 미상</td><td class="bad">확인됨</td><td>Phase 1 ③</td></tr>
+<tr><td>R-4</td><td>OpenAI 비이미지 라우트 3종(runner_llm·audio·video) 활성</td><td>CEO "이미지 생성에 한해" 지시와 불일치</td><td class="warn">미해결</td><td>CEO 결정 필요</td></tr>
+<tr><td>R-5</td><td>로컬 PC 모델 품질 미측정</td><td>비용 0 구간을 쓸 수 있는지 판단 불가</td><td class="dim">미측정</td><td>동일 프롬프트 50건 채점</td></tr>
+<tr><td>R-6</td><td>Opus 4.6 표본 42메시지</td><td>"검수 최적" 판정의 신뢰구간이 넓음</td><td class="warn">미검증</td><td>검수 경로 100건 누적</td></tr>
+<tr><td>R-7</td><td>llm_response_metrics 전체 실패율 92.6%</td><td>속도 표본의 대표성 의심 — 다만 실패 대부분은 <code>unverified</code>/<code>interrupted</code> 라벨</td><td class="warn">부분확인</td><td>라벨별 원인 분리 조사</td></tr>
+<tr><td>R-8</td><td>모델별 "웹 검색 정확도" 는 이 문서에 없음</td><td>모델 고유 검색능력은 AADS 에서 <b>측정 대상이 아님</b> — 검색은 MCP 도구가 수행</td><td class="dim">구조상 미해당</td><td>R-3 복구 후 도구 단위로 측정</td></tr>
+<tr><td>R-9</td><td><b>background_llm 기본값 qwen-turbo 가 7일간 3,554콜 중 3,351콜 실패(94.3%)</b> — error_code=qwen_failed, 최종 2026-09-18 15:52 KST. 폴백 groq-gpt-oss-120b 도 38콜 중 35콜 실패(92.1%, bg_primary_failed)</td><td>C급 초저가 배치 경로가 사실상 죽어 있어 요약·관찰·메모리 축적이 상위 모델로 흘러가거나 유실된다. 전체 실패율 92.7%(R-7)의 실체가 이것</td><td class="dim">확인됨 — 미조치</td><td>SELECT model, error_code, COUNT(*) FROM bg_llm_usage_log WHERE success=false GROUP BY 1,2 → Phase 1 최우선</td></tr>
+</table>
+
+<!-- ===================== 10 ===================== -->
+<h2>10. 검증 기준 (완료 판정)</h2>
+<table>
+<tr><th>Phase</th><th>무엇을 보면 끝났다고 하는가</th><th>측정 쿼리·명령</th></tr>
+<tr><td>P1</td><td>sonnet-4-6 콜 0건 / astra 콜 ≤2건 (7일)</td><td><code>SELECT model, COUNT(*) FROM oauth_usage_log WHERE created_at &gt; NOW()-INTERVAL '7 days' GROUP BY model</code></td></tr>
+<tr><td>P1</td><td>tool_results_archive row &gt; 0 (24시간)</td><td><code>SELECT COUNT(*) FROM tool_results_archive WHERE created_at &gt; NOW()-INTERVAL '1 day'</code></td></tr>
+<tr><td>P2</td><td>Terra 100건 누적 시 품질 ≥ 0.70 이고 건당 &lt; $1.00</td><td><code>chat_messages</code> + <code>oauth_usage_log</code> 교차</td></tr>
+<tr><td>P2</td><td>Haiku 이관 경로 품질 ≥ 0.68</td><td>경로별 quality_score 30일 평균</td></tr>
+<tr><td>P2</td><td>Sonnet 5 도구 45회 적용 후 품질 ≥ 0.65</td><td>avg(quality_score) where model_used='claude-sonnet-5'</td></tr>
+<tr><td>전체</td><td>30일 총 지출이 $7,631 → $7,077 이하 (확실항목만 반영 시)</td><td><code>SUM(cost_usd)</code> 30일 재집계</td></tr>
+<tr><td>전체</td><td>총 지출 $4,012 이하 (전 항목 성공 시 목표)</td><td>동일</td></tr>
+</table>
+
+<div class="box ok">
+<b>이 문서를 쓰는 법.</b> 새 업무가 생기면 순서대로 묻습니다.<br>
+① <b>되돌리기 비싼가?</b> → 예: S급(Opus 5 / 검수는 Opus 4.6). 아니오: ②로<br>
+② <b>실시간 응답이 필요한가?</b> → 예: Opus 5(4.7초) 또는 Haiku(2.7초). 아니오: ③으로<br>
+③ <b>분류·요약·정형 변환인가?</b> → 예: <b>Haiku 4.5</b>($0.0045). 아니오: ④로<br>
+④ <b>장문 집필인가?</b> → 예: Fable 5.1. 아니오: ⑤로<br>
+⑤ <b>코드 수정·러너 작업인가?</b> → 예: gpt-5.6-terra(Codex) 또는 Sonnet 5. 아니오: ⑥으로<br>
+⑥ <b>대량 배치인가?</b> → 예: gpt-5.6-luna. 비전 포함이면 gpt-4o-mini.
+</div>
+
+<footer>
+AADS 모델 전략 기획서 v2.0 — 2026-09-18 KST 작성 · contabo116 · <code>docs/model-strategy-prd-20260918-v2.html</code><br>
+데이터: oauth_usage_log(30일) / pipeline_runner_events(7일) / chat_messages(30일) / llm_models / model_selector.py<br>
+v1: <code>docs/model-strategy-prd-20260918.html</code> (표 2개, 학습지식 기반) — 본 문서가 대체합니다.<br>
+표기 규칙: <span class="ok">[DB 실측]</span> 확정 / <span class="warn">[추정]</span> 가정 포함 / <span class="dim">[미측정]</span> 측정 불가.
+</footer>
+
+</div>
+</body>
+</html>

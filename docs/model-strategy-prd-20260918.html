@@ -1,0 +1,1120 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 모델 전략 기획서 — AADS v1.0 (2026-09-18)</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --bg2: #1a1d2e;
+    --bg3: #242740;
+    --border: #2e3250;
+    --text: #e2e8f0;
+    --text2: #94a3b8;
+    --accent: #6366f1;
+    --accent2: #8b5cf6;
+    --green: #10b981;
+    --yellow: #f59e0b;
+    --red: #ef4444;
+    --blue: #3b82f6;
+    --orange: #f97316;
+    --pink: #ec4899;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif; font-size: 14px; line-height: 1.6; }
+  .container { max-width: 1400px; margin: 0 auto; padding: 32px 24px; }
+
+  /* Header */
+  .header { background: linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #1e1b4b 100%); border: 1px solid #4338ca; border-radius: 16px; padding: 40px; margin-bottom: 32px; position: relative; overflow: hidden; }
+  .header::before { content: ''; position: absolute; top: -50%; right: -10%; width: 400px; height: 400px; background: radial-gradient(circle, rgba(99,102,241,0.15) 0%, transparent 70%); }
+  .header h1 { font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 8px; }
+  .header .subtitle { color: #a5b4fc; font-size: 15px; margin-bottom: 16px; }
+  .meta-row { display: flex; gap: 24px; flex-wrap: wrap; }
+  .meta-item { background: rgba(99,102,241,0.15); border: 1px solid #4338ca; border-radius: 8px; padding: 6px 14px; font-size: 12px; color: #c7d2fe; }
+  .meta-item span { color: #fff; font-weight: 600; }
+
+  /* Section */
+  .section { margin-bottom: 40px; }
+  .section-title { font-size: 20px; font-weight: 700; color: #fff; margin-bottom: 4px; display: flex; align-items: center; gap: 10px; }
+  .section-title::before { content: ''; display: inline-block; width: 4px; height: 20px; background: var(--accent); border-radius: 2px; }
+  .section-desc { color: var(--text2); font-size: 13px; margin-bottom: 20px; margin-left: 14px; }
+
+  /* Cards grid */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; transition: border-color 0.2s; }
+  .card:hover { border-color: var(--accent); }
+  .card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .card-icon { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+  .card-title { font-weight: 700; color: #fff; font-size: 15px; }
+  .card-id { font-size: 11px; color: var(--text2); font-family: monospace; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin: 2px; }
+  .tag-green { background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
+  .tag-blue { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+  .tag-yellow { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
+  .tag-red { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+  .tag-purple { background: rgba(139,92,246,0.15); color: #a78bfa; border: 1px solid rgba(139,92,246,0.3); }
+  .tag-orange { background: rgba(249,115,22,0.15); color: #fb923c; border: 1px solid rgba(249,115,22,0.3); }
+
+  /* Cost bar */
+  .cost-bar { margin-top: 10px; }
+  .cost-label { font-size: 11px; color: var(--text2); margin-bottom: 4px; display: flex; justify-content: space-between; }
+  .bar-track { background: var(--bg3); border-radius: 4px; height: 6px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+
+  /* Table */
+  .table-wrap { overflow-x: auto; border-radius: 12px; border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; }
+  thead { background: var(--bg3); }
+  th { padding: 12px 16px; text-align: left; font-size: 12px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+  td { padding: 12px 16px; border-top: 1px solid var(--border); vertical-align: top; font-size: 13px; }
+  tr:hover td { background: rgba(99,102,241,0.04); }
+  .td-model { font-family: monospace; font-size: 12px; color: #a5b4fc; font-weight: 600; }
+  .td-name { font-weight: 600; color: #fff; }
+  .td-desc { color: var(--text2); font-size: 12px; line-height: 1.5; }
+
+  /* Project section */
+  .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 20px; }
+  .project-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+  .project-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+  .project-icon { width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+  .project-name { font-weight: 700; color: #fff; font-size: 16px; }
+  .project-server { font-size: 11px; color: var(--text2); }
+  .task-list { padding: 16px 20px; }
+  .task-item { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(46,50,80,0.5); }
+  .task-item:last-child { border-bottom: none; }
+  .task-model { min-width: 90px; }
+  .task-model-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .model-haiku { background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
+  .model-sonnet { background: rgba(99,102,241,0.15); color: #a5b4fc; border: 1px solid rgba(99,102,241,0.3); }
+  .model-opus { background: rgba(139,92,246,0.15); color: #c4b5fd; border: 1px solid rgba(139,92,246,0.3); }
+  .model-gpt-image { background: rgba(249,115,22,0.15); color: #fb923c; border: 1px solid rgba(249,115,22,0.3); }
+  .model-o4mini { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+  .model-gpt41 { background: rgba(236,72,153,0.15); color: #f472b6; border: 1px solid rgba(236,72,153,0.3); }
+  .task-content { flex: 1; }
+  .task-title { font-size: 13px; color: var(--text); font-weight: 500; }
+  .task-example { font-size: 11px; color: var(--text2); margin-top: 2px; font-style: italic; }
+
+  /* Strategy */
+  .strategy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .strategy-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .strategy-title { font-weight: 700; color: #fff; margin-bottom: 12px; font-size: 15px; }
+  .step { display: flex; gap: 12px; margin-bottom: 14px; }
+  .step-num { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .step-content { flex: 1; }
+  .step-title { font-weight: 600; color: #fff; font-size: 13px; }
+  .step-desc { color: var(--text2); font-size: 12px; margin-top: 2px; }
+  .step-code { font-family: monospace; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 11px; color: #a5b4fc; margin-top: 6px; display: block; }
+
+  /* Cost table */
+  .cost-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .cost-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; text-align: center; }
+  .cost-name { font-size: 12px; color: var(--text2); margin-bottom: 4px; }
+  .cost-model { font-family: monospace; font-size: 11px; color: #a5b4fc; margin-bottom: 8px; }
+  .cost-price { font-size: 20px; font-weight: 700; color: #fff; }
+  .cost-unit { font-size: 11px; color: var(--text2); }
+  .cost-savings { font-size: 11px; color: var(--green); margin-top: 6px; font-weight: 600; }
+
+  /* Decision matrix */
+  .matrix-cell-best { background: rgba(16,185,129,0.1); color: #34d399; font-weight: 700; }
+  .matrix-cell-good { background: rgba(59,130,246,0.08); color: #60a5fa; }
+  .matrix-cell-poor { background: rgba(239,68,68,0.05); color: #f87171; }
+  .matrix-cell-na { color: #4b5563; }
+
+  /* Next steps */
+  .nextstep { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .nextstep-header { background: var(--bg3); padding: 12px 20px; display: grid; grid-template-columns: 80px 1fr 160px 100px 200px; gap: 12px; font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; }
+  .nextstep-row { padding: 14px 20px; border-top: 1px solid var(--border); display: grid; grid-template-columns: 80px 1fr 160px 100px 200px; gap: 12px; align-items: start; }
+  .nextstep-row:hover { background: rgba(99,102,241,0.04); }
+  .priority { display: inline-block; padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; }
+  .p0 { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+  .p1 { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
+  .p2 { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+  .exec-auto { color: #34d399; font-size: 11px; font-weight: 600; }
+  .exec-approve { color: #fbbf24; font-size: 11px; font-weight: 600; }
+  .nextstep-text { font-size: 13px; color: var(--text); }
+  .nextstep-sub { font-size: 11px; color: var(--text2); margin-top: 2px; }
+
+  /* Divider */
+  .divider { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+
+  /* Footer */
+  .footer { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; flex-wrap: gap: 12px; margin-top: 32px; }
+  .footer-text { color: var(--text2); font-size: 12px; }
+
+  @media (max-width: 768px) {
+    .strategy-grid { grid-template-columns: 1fr; }
+    .project-grid { grid-template-columns: 1fr; }
+    .nextstep-header, .nextstep-row { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- HEADER -->
+  <div class="header">
+    <h1>🤖 AI 모델 전략 기획서 (PRD)</h1>
+    <div class="subtitle">Claude CLI × Codex CLI — AADS 6개 프로젝트 업무별 최적 모델 배분 전략</div>
+    <div class="meta-row">
+      <div class="meta-item">작성일 <span>2026-09-18 KST</span></div>
+      <div class="meta-item">버전 <span>v1.0</span></div>
+      <div class="meta-item">담당 <span>AADS PM/CTO AI</span></div>
+      <div class="meta-item">프로젝트 <span>AADS · KIS · GO100 · SF · NTV2 · NAS</span></div>
+      <div class="meta-item">상태 <span>설계 완료, 승인 대기</span></div>
+    </div>
+  </div>
+
+  <!-- OVERVIEW -->
+  <div class="section">
+    <div class="section-title">목적 및 배경</div>
+    <div class="section-desc">
+      현재 AADS는 대부분의 LLM 호출을 Claude Sonnet 단일 모델로 처리하고 있습니다.
+      분류·라우팅처럼 단순 반복 작업까지 Sonnet이 담당하면 비용이 과다 지출됩니다.
+      이 기획서는 Claude CLI와 Codex CLI(OpenAI)가 지원하는 전체 모델을 정리하고,
+      6개 프로젝트의 업무 성격에 맞게 최적 모델을 배분하는 전략을 제시합니다.
+    </div>
+  </div>
+
+  <!-- SECTION 1: CLAUDE CLI MODELS -->
+  <div class="section">
+    <div class="section-title">1. Claude CLI 지원 모델 전체 목록</div>
+    <div class="section-desc">Anthropic Claude 5 패밀리 (2025~2026 현재 최신, 학습 데이터 기준)</div>
+
+    <div class="cards">
+      <div class="card" style="border-color:#4338ca;">
+        <div class="card-header">
+          <div class="card-icon" style="background:rgba(139,92,246,0.2);">🧠</div>
+          <div>
+            <div class="card-title">Claude Opus 5</div>
+            <div class="card-id">claude-opus-5</div>
+          </div>
+        </div>
+        <div style="color:var(--text2);font-size:12px;margin-bottom:10px;">최고 지능, 복잡한 추론·설계·고위험 의사결정 특화. 응답 가장 느림.</div>
+        <div>
+          <span class="tag tag-purple">최고 추론</span>
+          <span class="tag tag-red">최고가</span>
+          <span class="tag tag-blue">아키텍처 설계</span>
+        </div>
+        <div class="cost-bar">
+          <div class="cost-label"><span>비용 수준</span><span style="color:#c4b5fd;">$15 / $75 per MTok</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:100%;background:linear-gradient(90deg,#7c3aed,#9333ea);"></div></div>
+        </div>
+      </div>
+
+      <div class="card" style="border-color:#1e3a5f;">
+        <div class="card-header">
+          <div class="card-icon" style="background:rgba(99,102,241,0.2);">⚡</div>
+          <div>
+            <div class="card-title">Claude Sonnet 5</div>
+            <div class="card-id">claude-sonnet-5</div>
+          </div>
+        </div>
+        <div style="color:var(--text2);font-size:12px;margin-bottom:10px;">Opus 5급 추론을 절반 비용으로. 코드 생성·코드리뷰·일반 개발 최적.</div>
+        <div>
+          <span class="tag tag-blue">균형형</span>
+          <span class="tag tag-green">코드 생성</span>
+          <span class="tag tag-yellow">중간 비용</span>
+        </div>
+        <div class="cost-bar">
+          <div class="cost-label"><span>비용 수준</span><span style="color:#60a5fa;">$3 / $15 per MTok</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:40%;background:linear-gradient(90deg,#3b82f6,#6366f1);"></div></div>
+        </div>
+      </div>
+
+      <div class="card" style="border-color:#1e3a5f;">
+        <div class="card-header">
+          <div class="card-icon" style="background:rgba(99,102,241,0.15);">🔄</div>
+          <div>
+            <div class="card-title">Claude Sonnet 4.6 <span style="font-size:10px;color:#34d399;">(현재 운영)</span></div>
+            <div class="card-id">claude-sonnet-4-6</div>
+          </div>
+        </div>
+        <div style="color:var(--text2);font-size:12px;margin-bottom:10px;">현재 AADS CEO Chat 기본 모델. Sonnet 5 전환 전 안정 운영 버전.</div>
+        <div>
+          <span class="tag tag-green">현재 기본</span>
+          <span class="tag tag-blue">CEO Chat</span>
+          <span class="tag tag-yellow">안정성</span>
+        </div>
+        <div class="cost-bar">
+          <div class="cost-label"><span>비용 수준</span><span style="color:#60a5fa;">$3 / $15 per MTok</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:40%;background:linear-gradient(90deg,#3b82f6,#6366f1);"></div></div>
+        </div>
+      </div>
+
+      <div class="card" style="border-color:#14532d;">
+        <div class="card-header">
+          <div class="card-icon" style="background:rgba(16,185,129,0.2);">🚀</div>
+          <div>
+            <div class="card-title">Claude Haiku 4.5</div>
+            <div class="card-id">claude-haiku-4-5-20251001</div>
+          </div>
+        </div>
+        <div style="color:var(--text2);font-size:12px;margin-bottom:10px;">초고속 응답(&lt;1초), 최저가. 대량 반복 분류·라우팅·요약·템플릿 전용.</div>
+        <div>
+          <span class="tag tag-green">최저가</span>
+          <span class="tag tag-green">초고속</span>
+          <span class="tag tag-orange">대량처리</span>
+        </div>
+        <div class="cost-bar">
+          <div class="cost-label"><span>비용 수준</span><span style="color:#34d399;">$0.25 / $1.25 per MTok</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:8%;background:linear-gradient(90deg,#10b981,#34d399);"></div></div>
+        </div>
+      </div>
+
+      <div class="card" style="border-color:#3b2c1e;">
+        <div class="card-header">
+          <div class="card-icon" style="background:rgba(249,115,22,0.2);">✨</div>
+          <div>
+            <div class="card-title">Claude Fable 5.1</div>
+            <div class="card-id">claude-fable-5-1</div>
+          </div>
+        </div>
+        <div style="color:var(--text2);font-size:12px;margin-bottom:10px;">스토리텔링·창의적 콘텐츠·마케팅 카피 특화. 감성적 문체 우수.</div>
+        <div>
+          <span class="tag tag-orange">창의성</span>
+          <span class="tag tag-orange">마케팅</span>
+          <span class="tag tag-yellow">콘텐츠</span>
+        </div>
+        <div class="cost-bar">
+          <div class="cost-label"><span>비용 수준</span><span style="color:#fb923c;">$3 / $15 per MTok</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:40%;background:linear-gradient(90deg,#f97316,#fb923c);"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 2: CODEX CLI MODELS -->
+  <div class="section">
+    <div class="section-title">2. Codex CLI (OpenAI) 지원 모델 전체 목록</div>
+    <div class="section-desc">OpenAI Codex CLI 기준 — 코딩 에이전트 + 이미지 생성 (현재 AADS OpenAI API 연결됨)</div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>모델 ID</th>
+            <th>별칭</th>
+            <th>특성</th>
+            <th>비용 수준</th>
+            <th>적합 업무</th>
+            <th>AADS 연결 여부</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="td-model">o4-mini</td>
+            <td class="td-name">O4 Mini</td>
+            <td class="td-desc">Codex CLI 기본값. 추론+코딩 효율 최적. 대부분 코딩 작업 커버.</td>
+            <td><span class="tag tag-green">저~중</span></td>
+            <td class="td-desc">자동화 스크립트, PR 리뷰, 일반 코딩</td>
+            <td><span class="tag tag-yellow">미연결</span></td>
+          </tr>
+          <tr>
+            <td class="td-model">o3</td>
+            <td class="td-name">O3</td>
+            <td class="td-desc">최고 추론 모델. 복잡한 알고리즘·아키텍처 문제에 탁월.</td>
+            <td><span class="tag tag-red">고</span></td>
+            <td class="td-desc">복잡한 버그 분석, 금융 알고리즘 설계</td>
+            <td><span class="tag tag-yellow">미연결</span></td>
+          </tr>
+          <tr>
+            <td class="td-model">o3-mini</td>
+            <td class="td-name">O3 Mini</td>
+            <td class="td-desc">O3보다 빠르고 저렴. 중간 복잡도 코딩에 적합.</td>
+            <td><span class="tag tag-yellow">중</span></td>
+            <td class="td-desc">중간 복잡도 개발, 코드 리팩터링</td>
+            <td><span class="tag tag-yellow">미연결</span></td>
+          </tr>
+          <tr>
+            <td class="td-model">gpt-4.1</td>
+            <td class="td-name">GPT-4.1</td>
+            <td class="td-desc">대용량 컨텍스트(1M토큰). 대규모 코드베이스 한 번에 분석.</td>
+            <td><span class="tag tag-yellow">중</span></td>
+            <td class="td-desc">대규모 코드베이스 전수 분석, 문서화</td>
+            <td><span class="tag tag-yellow">미연결</span></td>
+          </tr>
+          <tr>
+            <td class="td-model">gpt-4.1-mini</td>
+            <td class="td-name">GPT-4.1 Mini</td>
+            <td class="td-desc">빠르고 저렴한 범용. 일반 요약·조회에 적합.</td>
+            <td><span class="tag tag-green">저~중</span></td>
+            <td class="td-desc">문서 요약, 설정 파일 생성, 단순 수정</td>
+            <td><span class="tag tag-yellow">미연결</span></td>
+          </tr>
+          <tr>
+            <td class="td-model">gpt-4.1-nano</td>
+            <td class="td-name">GPT-4.1 Nano</td>
+            <td class="td-desc">최속·최저가. 단순 분류·태깅·키워드 추출만 가능.</td>
+            <td><span class="tag tag-green">최저</span></td>
+            <td class="td-desc">대량 태깅, 간단 분류, 키워드 추출</td>
+            <td><span class="tag tag-yellow">미연결</span></td>
+          </tr>
+          <tr>
+            <td class="td-model">gpt-4o</td>
+            <td class="td-name">GPT-4o</td>
+            <td class="td-desc">멀티모달 기본. 이미지+텍스트 동시 처리 가능.</td>
+            <td><span class="tag tag-yellow">중~고</span></td>
+            <td class="td-desc">이미지 분석, UI 스크린샷 판독, vision QA</td>
+            <td><span class="tag tag-yellow">미연결</span></td>
+          </tr>
+          <tr>
+            <td class="td-model">gpt-4o-mini</td>
+            <td class="td-name">GPT-4o Mini</td>
+            <td class="td-desc">빠른 멀티모달. 이미지 분류·간단 vision 작업에 효율적.</td>
+            <td><span class="tag tag-green">저~중</span></td>
+            <td class="td-desc">이미지 자동 분류, 썸네일 QA, 간단 OCR</td>
+            <td><span class="tag tag-yellow">미연결</span></td>
+          </tr>
+          <tr>
+            <td class="td-model">codex-mini-latest</td>
+            <td class="td-name">Codex Mini</td>
+            <td class="td-desc">코드 생성 특화 소형 모델. 자동완성·단순 함수 생성 최적.</td>
+            <td><span class="tag tag-green">저</span></td>
+            <td class="td-desc">코드 자동완성, 단순 유틸 함수, boilerplate</td>
+            <td><span class="tag tag-yellow">미연결</span></td>
+          </tr>
+          <tr style="background:rgba(249,115,22,0.04);">
+            <td class="td-model">gpt-image-2.5-flare</td>
+            <td class="td-name">GPT-Image-2.5 Flare</td>
+            <td class="td-desc">이미지 생성 속도 우선. 소셜/상품 이미지 대량 생성에 최적.</td>
+            <td><span class="tag tag-yellow">중</span></td>
+            <td class="td-desc">썸네일, OG 이미지, 소셜 카드</td>
+            <td><span class="tag tag-green">✅ 연결됨 (1순위)</span></td>
+          </tr>
+          <tr style="background:rgba(249,115,22,0.04);">
+            <td class="td-model">gpt-image-2.5-sunburst</td>
+            <td class="td-name">GPT-Image-2.5 Sunburst</td>
+            <td class="td-desc">이미지 생성 품질 우선. 고품질 일러스트·공식 이미지에 최적.</td>
+            <td><span class="tag tag-yellow">중~고</span></td>
+            <td class="td-desc">공식 배너, 고품질 일러스트, 브랜드 이미지</td>
+            <td><span class="tag tag-green">✅ 연결됨</span></td>
+          </tr>
+          <tr style="background:rgba(249,115,22,0.04);">
+            <td class="td-model">gpt-image-2</td>
+            <td class="td-name">GPT-Image-2</td>
+            <td class="td-desc">이미지 편집 특화. 배경 제거, 인페인팅, 스타일 변환.</td>
+            <td><span class="tag tag-yellow">중</span></td>
+            <td class="td-desc">이미지 편집, 배경 제거, 합성</td>
+            <td><span class="tag tag-yellow">비활성 (재활성화 대기)</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- SECTION 3: PROJECT MAPPING -->
+  <div class="section">
+    <div class="section-title">3. 6개 프로젝트별 업무-모델 배분 상세</div>
+    <div class="section-desc">각 업무의 성격(반복성, 창의성, 비전 필요 여부)에 따라 최적 모델 지정</div>
+
+    <div class="project-grid">
+
+      <!-- AADS -->
+      <div class="project-card">
+        <div class="project-header">
+          <div class="project-icon" style="background:rgba(99,102,241,0.2);">🤖</div>
+          <div>
+            <div class="project-name">AADS — 자율 AI 개발 시스템</div>
+            <div class="project-server">contabo116 · FastAPI + Next.js</div>
+          </div>
+        </div>
+        <div class="task-list">
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">Pipeline Runner 결과 1차 분류</div>
+              <div class="task-example">빌드 로그 → pass/fail/review_hold 패턴 매칭 판정</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">CEO 메시지 의도 분류 (intent)</div>
+              <div class="task-example">"됐나?" → status_check / "해줘" → execute 즉시 판정</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">작업 규모 자동 산정 (XS/S/M/L/XL)</div>
+              <div class="task-example">지시서 텍스트 분석 → worker_model 자동 추천</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">Watchdog 알림 우선순위 판단</div>
+              <div class="task-example">CPU/오류 임계값 초과 → 긴급/일반/참고 분류</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-sonnet">Sonnet 4.6</span></div>
+            <div class="task-content">
+              <div class="task-title">CEO Chat 대화 (현재 운영)</div>
+              <div class="task-example">복잡한 지시 해석, 다단계 작업 계획 수립</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-opus">Opus 5</span></div>
+            <div class="task-content">
+              <div class="task-title">아키텍처 설계·장애 심층 분석</div>
+              <div class="task-example">신규 서비스 설계, P0 장애 원인 추적, 보안 리뷰</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-gpt-image">Image-2.5 Flare</span></div>
+            <div class="task-content">
+              <div class="task-title">대시보드 OG 이미지·공지 카드 생성</div>
+              <div class="task-example">aads.newtalk.kr 공유용 카드 이미지 자동 생성</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- KIS -->
+      <div class="project-card">
+        <div class="project-header">
+          <div class="project-icon" style="background:rgba(16,185,129,0.2);">📈</div>
+          <div>
+            <div class="project-name">KIS — 자동매매 시스템</div>
+            <div class="project-server">contabo14 · Python + DB</div>
+          </div>
+        </div>
+        <div class="task-list">
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">종목 스크리너 1차 필터링</div>
+              <div class="task-example">RSI&lt;30·거래량 2배 등 조건 → "매수후보/제외" 수백 종목 초고속 판정</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">매매 신호 분류 (매수/매도/홀드)</div>
+              <div class="task-example">기술지표 세트 → 3분류 빠른 판정, 실시간 대응</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">종목 뉴스 감성 분류</div>
+              <div class="task-example">삼성전자(005930) 뉴스 5건 → 긍정/부정/중립 초고속 분류</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">일일 거래 요약 텔레그램 리포트</div>
+              <div class="task-example">체결 데이터 → 템플릿 기반 요약 생성</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-gpt-image">GPT-4o</span></div>
+            <div class="task-content">
+              <div class="task-title">재무제표·공시 이미지 수치 추출</div>
+              <div class="task-example">PDF/이미지 공시 → 매출·영업이익 숫자 추출 (vision)</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-gpt-image">GPT-4o</span></div>
+            <div class="task-content">
+              <div class="task-title">차트 패턴 시각 분석</div>
+              <div class="task-example">캔들차트 이미지 → 헤드앤숄더·삼각수렴 패턴 인식</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-o4mini">o4-mini</span></div>
+            <div class="task-content">
+              <div class="task-title">전략 코드 자동화 스크립트 생성</div>
+              <div class="task-example">새 전략 지표 → Python 코드 자동 생성, 백테스트 코드</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- GO100 -->
+      <div class="project-card">
+        <div class="project-header">
+          <div class="project-icon" style="background:rgba(245,158,11,0.2);">💰</div>
+          <div>
+            <div class="project-name">GO100 — 백억이 투자분석</div>
+            <div class="project-server">contabo14 · Python + PostgreSQL</div>
+          </div>
+        </div>
+        <div class="task-list">
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">뉴스 헤드라인 긍부정 분류</div>
+              <div class="task-example">네이버·한국경제 뉴스 50건 → 긍정/부정/중립 초고속 처리</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">투자 시그널 단순 판단</div>
+              <div class="task-example">파동 카운트 완료 + RSI 과매도 → "진입 검토" 플래그</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">포트폴리오 일일 요약</div>
+              <div class="task-example">전일 수익률·보유 종목·체결 내역 → 텔레그램 요약</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-opus">Opus 5</span></div>
+            <div class="task-content">
+              <div class="task-title">복잡한 파동 이론 분석</div>
+              <div class="task-example">엘리어트 파동 3~5파 구분, 목표가 산출 추론</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-gpt-image">Image-2.5</span></div>
+            <div class="task-content">
+              <div class="task-title">주간 성과 리포트 이미지 생성</div>
+              <div class="task-example">수익률·보유 종목 시각화 카드 이미지</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-gpt41">GPT-4.1</span></div>
+            <div class="task-content">
+              <div class="task-title">IR 자료·공시 대량 분석</div>
+              <div class="task-example">장문 공시 PDF → 핵심 수치 일괄 추출 (1M 컨텍스트 활용)</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SF -->
+      <div class="project-card">
+        <div class="project-header">
+          <div class="project-icon" style="background:rgba(236,72,153,0.2);">🎬</div>
+          <div>
+            <div class="project-name">SF — ShortFlow 숏폼 동영상 자동화</div>
+            <div class="project-server">cafe24_114:7916 · Python</div>
+          </div>
+        </div>
+        <div class="task-list">
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">영상 태그 자동 생성</div>
+              <div class="task-example">제목·스크립트 → "#트렌드 #챌린지" 태그 5개 즉시 생성</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">숏폼 카테고리 분류</div>
+              <div class="task-example">영상 제목·설명 → 뷰티/음식/일상/게임 분류</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">댓글 스팸 필터링</div>
+              <div class="task-example">링크 포함/반복패턴/욕설 → 스팸 여부 실시간 판정</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-gpt-image">Image-2.5 Flare</span></div>
+            <div class="task-content">
+              <div class="task-title">썸네일 자동 생성</div>
+              <div class="task-example">영상 제목 → 시각적 임팩트 높은 썸네일 이미지 자동 생성</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-gpt-image">Image-2.5 Flare</span></div>
+            <div class="task-content">
+              <div class="task-title">시작 자막 카드 이미지 생성</div>
+              <div class="task-example">영상 도입부 텍스트 카드 이미지 자동 생성</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-sonnet">Fable 5.1</span></div>
+            <div class="task-content">
+              <div class="task-title">숏폼 스크립트 아이디어 생성</div>
+              <div class="task-example">트렌드 키워드 → 감성적·바이럴 스크립트 초안</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- NTV2 -->
+      <div class="project-card">
+        <div class="project-header">
+          <div class="project-icon" style="background:rgba(59,130,246,0.2);">📱</div>
+          <div>
+            <div class="project-name">NTV2 — NewTalk V2 소셜플랫폼</div>
+            <div class="project-server">cafe24_114 · Next.js + FastAPI</div>
+          </div>
+        </div>
+        <div class="task-list">
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">댓글 유해성 분류 (DAU 대량)</div>
+              <div class="task-example">게시글 댓글 → 스팸/혐오/정상 실시간 판정 (Sonnet 대비 90% 절감)</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">기사 카테고리 자동 태깅</div>
+              <div class="task-example">기사 본문 → 정치/경제/문화/스포츠 자동 분류</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">검색 쿼리 의도 분류</div>
+              <div class="task-example">"삼성 주가" → 주식 정보 검색 의도 분류, 관련 콘텐츠 추천</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-gpt-image">Image-2.5 Flare</span></div>
+            <div class="task-content">
+              <div class="task-title">기사 대표 이미지 자동 생성</div>
+              <div class="task-example">뉴스 제목 → 기사 대표 이미지 자동 생성 (v2.newtalk.kr/admin/ai-studio)</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-gpt-image">Image-2.5 Flare</span></div>
+            <div class="task-content">
+              <div class="task-title">OG (오픈그래프) 이미지 자동화</div>
+              <div class="task-example">기사 공유 시 노출되는 카드 이미지 자동 생성</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-gpt-image">Image-2.5 Sunburst</span></div>
+            <div class="task-content">
+              <div class="task-title">프로필 아바타 고품질 생성</div>
+              <div class="task-example">신규 가입자 개성 있는 기본 프로필 이미지 생성</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- NAS -->
+      <div class="project-card">
+        <div class="project-header">
+          <div class="project-icon" style="background:rgba(16,185,129,0.2);">🖼️</div>
+          <div>
+            <div class="project-name">NAS — 이미지처리</div>
+            <div class="project-server">cafe24_114 · Python</div>
+          </div>
+        </div>
+        <div class="task-list">
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">이미지 처리 결과 품질 판단</div>
+              <div class="task-example">배치 처리 완료 이미지 → OK/재처리 필요 빠른 분류</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-haiku">Haiku 4.5</span></div>
+            <div class="task-content">
+              <div class="task-title">이미지 메타데이터 태그 자동 생성</div>
+              <div class="task-example">파일명·EXIF → 카테고리/태그 텍스트 생성</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-gpt-image">GPT-4o-mini</span></div>
+            <div class="task-content">
+              <div class="task-title">이미지 내용 설명 (alt text) 생성</div>
+              <div class="task-example">이미지 파일 → 상세 설명 텍스트 자동 생성 (vision)</div>
+            </div>
+          </div>
+          <div class="task-item">
+            <div class="task-model"><span class="task-model-badge model-gpt-image">Image-2 (편집)</span></div>
+            <div class="task-content">
+              <div class="task-title">이미지 편집·변형 자동화</div>
+              <div class="task-example">배경 제거, 스타일 변환, 인페인팅 (gpt-image-2 edit)</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- SECTION 4: DECISION MATRIX -->
+  <div class="section">
+    <div class="section-title">4. 모델 선택 의사결정 매트릭스</div>
+    <div class="section-desc">업무 성격 × 모델별 적합도 (⭐⭐⭐ = 최적 / ⭐⭐ = 적합 / ⭐ = 가능 / — = 부적합)</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>업무 성격</th>
+            <th>Haiku 4.5</th>
+            <th>Sonnet 5</th>
+            <th>Opus 5</th>
+            <th>Fable 5.1</th>
+            <th>o4-mini</th>
+            <th>gpt-4.1</th>
+            <th>gpt-4o</th>
+            <th>Image-2.5</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="td-name">단순 분류·라우팅 (대량)</td>
+            <td class="matrix-cell-best">⭐⭐⭐</td>
+            <td class="matrix-cell-good">⭐⭐</td>
+            <td class="matrix-cell-poor">⭐</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-good">⭐⭐</td>
+            <td class="matrix-cell-good">⭐⭐</td>
+            <td class="matrix-cell-poor">⭐</td>
+            <td class="matrix-cell-na">—</td>
+          </tr>
+          <tr>
+            <td class="td-name">코드 생성·리팩터링</td>
+            <td class="matrix-cell-poor">⭐</td>
+            <td class="matrix-cell-best">⭐⭐⭐</td>
+            <td class="matrix-cell-good">⭐⭐</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-best">⭐⭐⭐</td>
+            <td class="matrix-cell-good">⭐⭐</td>
+            <td class="matrix-cell-poor">⭐</td>
+            <td class="matrix-cell-na">—</td>
+          </tr>
+          <tr>
+            <td class="td-name">복잡한 추론·아키텍처 설계</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-good">⭐⭐</td>
+            <td class="matrix-cell-best">⭐⭐⭐</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-good">⭐⭐</td>
+            <td class="matrix-cell-poor">⭐</td>
+            <td class="matrix-cell-poor">⭐</td>
+            <td class="matrix-cell-na">—</td>
+          </tr>
+          <tr>
+            <td class="td-name">창의적 콘텐츠·마케팅 카피</td>
+            <td class="matrix-cell-poor">⭐</td>
+            <td class="matrix-cell-good">⭐⭐</td>
+            <td class="matrix-cell-good">⭐⭐</td>
+            <td class="matrix-cell-best">⭐⭐⭐</td>
+            <td class="matrix-cell-poor">⭐</td>
+            <td class="matrix-cell-good">⭐⭐</td>
+            <td class="matrix-cell-poor">⭐</td>
+            <td class="matrix-cell-na">—</td>
+          </tr>
+          <tr>
+            <td class="td-name">이미지 생성 (속도 우선)</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-best">⭐⭐⭐ Flare</td>
+          </tr>
+          <tr>
+            <td class="td-name">이미지 생성 (품질 우선)</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-best">⭐⭐⭐ Sunburst</td>
+          </tr>
+          <tr>
+            <td class="td-name">이미지+텍스트 vision 분석</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-best">⭐⭐⭐</td>
+            <td class="matrix-cell-na">—</td>
+          </tr>
+          <tr>
+            <td class="td-name">대용량 코드베이스 분석</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-good">⭐⭐</td>
+            <td class="matrix-cell-good">⭐⭐</td>
+            <td class="matrix-cell-na">—</td>
+            <td class="matrix-cell-good">⭐⭐</td>
+            <td class="matrix-cell-best">⭐⭐⭐</td>
+            <td class="matrix-cell-poor">⭐</td>
+            <td class="matrix-cell-na">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- SECTION 5: IMPLEMENTATION STRATEGY -->
+  <div class="section">
+    <div class="section-title">5. 적용 방안 — 단계별 구현 전략</div>
+    <div class="section-desc">현재 AADS model_selector + LiteLLM 구조를 활용한 단계적 전환</div>
+
+    <div class="strategy-grid">
+      <div class="strategy-card">
+        <div class="strategy-title">🟢 Phase 1 — 즉시 적용 (1주 이내)</div>
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <div class="step-title">Pipeline Runner 결과 분류 → Haiku</div>
+            <div class="step-desc">현재 Sonnet 담당하는 pass/fail 분류 Haiku로 교체. 비용 80% 절감 예상.</div>
+            <code class="step-code">model_selector.py: TASK_CLASSIFY → claude-haiku-4-5-20251001</code>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <div class="step-title">NTV2 댓글 유해성 분류 → Haiku</div>
+            <div class="step-desc">DAU 규모에서 Sonnet → Haiku 전환 시 월 비용 절감 최대.</div>
+            <code class="step-code">NTV2 moderation_api → model=claude-haiku-4-5</code>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <div class="step-title">gpt-image-2.5 → NTV2 OG 이미지 파이프라인 연결</div>
+            <div class="step-desc">OpenAI API 이미 연결됨. 기사 업로드 시 이미지 자동 생성 트리거.</div>
+            <code class="step-code">image_generator.py: provider=openai, model=gpt-image-2.5-flare</code>
+          </div>
+        </div>
+      </div>
+
+      <div class="strategy-card">
+        <div class="strategy-title">🟡 Phase 2 — 단기 (2~4주)</div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-content">
+            <div class="step-title">KIS 뉴스 감성 분류 → Haiku / 차트 분석 → GPT-4o</div>
+            <div class="step-desc">분류는 Haiku, 이미지 차트 패턴 인식은 GPT-4o vision으로 분리.</div>
+            <code class="step-code">kis_llm_router.py: text_classify→haiku, vision→gpt-4o</code>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">5</div>
+          <div class="step-content">
+            <div class="step-title">Codex CLI o4-mini → AADS Pipeline Runner 보조</div>
+            <div class="step-desc">코드 수정 작업의 초안 생성에 o4-mini 투입. Sonnet이 최종 검수.</div>
+            <code class="step-code">pipeline_runner: draft_model=o4-mini, review_model=sonnet-5</code>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">6</div>
+          <div class="step-content">
+            <div class="step-title">SF 썸네일 자동화 파이프라인</div>
+            <div class="step-desc">영상 업로드 시 gpt-image-2.5-flare로 썸네일 자동 생성.</div>
+            <code class="step-code">sf_pipeline.py: on_upload → generate_thumbnail(model=flare)</code>
+          </div>
+        </div>
+      </div>
+
+      <div class="strategy-card">
+        <div class="strategy-title">🔵 Phase 3 — 중기 (1~2개월)</div>
+        <div class="step">
+          <div class="step-num">7</div>
+          <div class="step-content">
+            <div class="step-title">GO100 Opus 5 도입 — 복잡한 파동 분석</div>
+            <div class="step-desc">엘리어트 파동 3~5파 구분·목표가 산출 등 고난이도 추론에만 Opus 5 한정 사용.</div>
+            <code class="step-code">go100_analyzer.py: if task==WAVE_ANALYSIS: model=claude-opus-5</code>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">8</div>
+          <div class="step-content">
+            <div class="step-title">gpt-4.1 도입 — GO100 대규모 IR 분석</div>
+            <div class="step-desc">1M 컨텍스트 활용해 장문 공시·사업보고서 한 번에 처리.</div>
+            <code class="step-code">go100_ir_reader.py: model=gpt-4.1, context_limit=1M</code>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">9</div>
+          <div class="step-content">
+            <div class="step-title">Fable 5.1 도입 — SF 스크립트 생성</div>
+            <div class="step-desc">트렌드 키워드 → 감성·바이럴 숏폼 스크립트 자동 생성.</div>
+            <code class="step-code">sf_script_gen.py: model=claude-fable-5-1</code>
+          </div>
+        </div>
+      </div>
+
+      <div class="strategy-card">
+        <div class="strategy-title">💡 AADS 모델 라우팅 아키텍처</div>
+        <div class="step">
+          <div class="step-num">A</div>
+          <div class="step-content">
+            <div class="step-title">model_selector.py — 중앙 라우팅</div>
+            <div class="step-desc">업무 유형(task_type) 기준으로 자동 모델 선택. CEO가 직접 지정 가능.</div>
+            <code class="step-code">TASK_CLASSIFY → haiku<br>TASK_CODE → sonnet-5 or o4-mini<br>TASK_DESIGN → opus-5<br>TASK_IMAGE → gpt-image-2.5-flare</code>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">B</div>
+          <div class="step-content">
+            <div class="step-title">LiteLLM 프록시 경유 (Codex CLI 모델)</div>
+            <div class="step-desc">o4-mini, gpt-4.1 등 OpenAI 모델은 LITELLM_BASE_URL 경유 통일.</div>
+            <code class="step-code">litellm: model=openai/o4-mini<br>api_base=$LITELLM_BASE_URL</code>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">C</div>
+          <div class="step-content">
+            <div class="step-title">비용 모니터링 자동화</div>
+            <div class="step-desc">모델별 호출 횟수·토큰 DB 기록 → 주간 비용 리포트 자동 생성.</div>
+            <code class="step-code">llm_usage_log → cost_report.py → 텔레그램 주간 발송</code>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 6: COST ESTIMATE -->
+  <div class="section">
+    <div class="section-title">6. 모델별 비용 비교 (Input 기준 per MTok)</div>
+    <div class="section-desc">Haiku 전환 시 반복 분류 업무에서 Sonnet 대비 최대 90% 절감 가능 [미측정, 추정치]</div>
+    <div class="cost-grid">
+      <div class="cost-card">
+        <div class="cost-name">Claude Haiku 4.5</div>
+        <div class="cost-model">claude-haiku-4-5</div>
+        <div class="cost-price">$0.25</div>
+        <div class="cost-unit">per MTok (Input)</div>
+        <div class="cost-savings">⬇️ Sonnet 대비 92% 절감</div>
+      </div>
+      <div class="cost-card">
+        <div class="cost-name">Claude Sonnet 5 / 4.6</div>
+        <div class="cost-model">claude-sonnet-5</div>
+        <div class="cost-price">$3.00</div>
+        <div class="cost-unit">per MTok (Input)</div>
+        <div class="cost-savings">현재 기본 모델</div>
+      </div>
+      <div class="cost-card">
+        <div class="cost-name">Claude Opus 5</div>
+        <div class="cost-model">claude-opus-5</div>
+        <div class="cost-price">$15.00</div>
+        <div class="cost-unit">per MTok (Input)</div>
+        <div class="cost-savings">고난이도 작업만 한정</div>
+      </div>
+      <div class="cost-card">
+        <div class="cost-name">Claude Fable 5.1</div>
+        <div class="cost-model">claude-fable-5-1</div>
+        <div class="cost-price">$3.00</div>
+        <div class="cost-unit">per MTok (Input)</div>
+        <div class="cost-savings">창의 콘텐츠 전용</div>
+      </div>
+      <div class="cost-card">
+        <div class="cost-name">O4 Mini (Codex)</div>
+        <div class="cost-model">o4-mini</div>
+        <div class="cost-price">~$1.10</div>
+        <div class="cost-unit">per MTok (Input)</div>
+        <div class="cost-savings">코딩 에이전트 기본</div>
+      </div>
+      <div class="cost-card">
+        <div class="cost-name">GPT-4.1</div>
+        <div class="cost-model">gpt-4.1</div>
+        <div class="cost-price">~$2.00</div>
+        <div class="cost-unit">per MTok (Input)</div>
+        <div class="cost-savings">1M 컨텍스트 강점</div>
+      </div>
+      <div class="cost-card">
+        <div class="cost-name">GPT-4o</div>
+        <div class="cost-model">gpt-4o</div>
+        <div class="cost-price">~$2.50</div>
+        <div class="cost-unit">per MTok (Input)</div>
+        <div class="cost-savings">vision 분석 전용</div>
+      </div>
+      <div class="cost-card">
+        <div class="cost-name">GPT-Image-2.5 Flare</div>
+        <div class="cost-model">gpt-image-2.5-flare</div>
+        <div class="cost-price">~$0.04</div>
+        <div class="cost-unit">per 이미지</div>
+        <div class="cost-savings">✅ AADS 연결 완료</div>
+      </div>
+    </div>
+    <div style="color:var(--text2);font-size:11px;margin-top:12px;">※ 비용은 Anthropic/OpenAI 공시 기준 추정치 [미측정]. 실제 호출 후 llm_usage_log DB로 확인 필요.</div>
+  </div>
+
+  <!-- SECTION 7: NEXT STEPS -->
+  <div class="section">
+    <div class="section-title">7. 다음 단계 우선순위</div>
+    <div class="nextstep">
+      <div class="nextstep-header">
+        <div>순위</div>
+        <div>다음 단계</div>
+        <div>근거</div>
+        <div>선행·병렬</div>
+        <div>완료기준</div>
+      </div>
+      <div class="nextstep-row">
+        <div><span class="priority p0">P0 🟡승인</span></div>
+        <div>
+          <div class="nextstep-text">Pipeline Runner 결과 분류 Haiku 전환</div>
+          <div class="nextstep-sub">model_selector.py TASK_CLASSIFY → haiku-4-5</div>
+        </div>
+        <div class="nextstep-sub">하루 수백 건 단순 분류, Sonnet 비용 80%↓ 예상 [미측정]</div>
+        <div class="nextstep-sub">—</div>
+        <div class="nextstep-sub">분류 정확도 95% 이상, health 200</div>
+      </div>
+      <div class="nextstep-row">
+        <div><span class="priority p0">P0 🟡승인</span></div>
+        <div>
+          <div class="nextstep-text">NTV2 댓글 유해성 분류 Haiku 전환</div>
+          <div class="nextstep-sub">NTV2 moderation API → haiku</div>
+        </div>
+        <div class="nextstep-sub">DAU 규모 최대 비용 절감 항목 [미측정]</div>
+        <div class="nextstep-sub">—</div>
+        <div class="nextstep-sub">A/B 정확도 비교, 분류 저하 없음 확인</div>
+      </div>
+      <div class="nextstep-row">
+        <div><span class="priority p1">P1 🟢자동</span></div>
+        <div>
+          <div class="nextstep-text">gpt-image-2.5 → NTV2 기사 OG 이미지 파이프라인 연결</div>
+          <div class="nextstep-sub">v2.newtalk.kr 기사 업로드 트리거</div>
+        </div>
+        <div class="nextstep-sub">API 이미 연결됨(key 활성화 완료). 파이프라인 연결만 남음</div>
+        <div class="nextstep-sub">P0 병렬 가능</div>
+        <div class="nextstep-sub">기사 업로드 시 OG 이미지 자동 생성 확인</div>
+      </div>
+      <div class="nextstep-row">
+        <div><span class="priority p1">P1 🟡승인</span></div>
+        <div>
+          <div class="nextstep-text">KIS 뉴스 분류 Haiku + 차트 GPT-4o 분리 연결</div>
+          <div class="nextstep-sub">kis_llm_router.py 이중 라우팅</div>
+        </div>
+        <div class="nextstep-sub">KIS 실시간 처리 속도 2배↑ 기대, vision 신규 기능 추가</div>
+        <div class="nextstep-sub">P0 후</div>
+        <div class="nextstep-sub">KIS 분류 정확도 유지 + GPT-4o 차트 인식 테스트</div>
+      </div>
+      <div class="nextstep-row">
+        <div><span class="priority p2">P2 🟡승인</span></div>
+        <div>
+          <div class="nextstep-text">SF 썸네일 자동화 + GO100 gpt-4.1 IR 분석 연결</div>
+          <div class="nextstep-sub">SF pipeline, GO100 ir_reader.py</div>
+        </div>
+        <div class="nextstep-sub">콘텐츠 생산 효율화, 대규모 공시 분석 신규 기능</div>
+        <div class="nextstep-sub">P1 후</div>
+        <div class="nextstep-sub">SF 썸네일 생성 확인 + GO100 공시 추출 정확도 검증</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div class="footer">
+    <div class="footer-text">AADS 모델 전략 기획서 v1.0 · 2026-09-18 KST · PM/CTO AI 작성</div>
+    <div class="footer-text">경로: /root/aads/aads-server/docs/model-strategy-prd-20260918.html</div>
+  </div>
+
+</div>
+</body>
+</html>
