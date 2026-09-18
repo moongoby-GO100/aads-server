@@ -119,13 +119,18 @@ def test_router_is_registered_under_ohvis_console():
 def test_console_delegates_writes_to_existing_services():
     """SQL 을 여기서 다시 쓰지 않는다 — 기록도 승인도 기존 서비스에 위임한다.
 
-    2026-09-18 에 라우트가 넷이 됐다(summary / command / 승인결정 / recipes/run,
-    레시피 오케스트레이터 신설분). 늘어난 것은 모두 **실행 트리거**이고, 지시
-    기록 자체는 여전히 `ohvis_task_manager.create_task()` 가 한다 — 그래서
-    INSERT 문은 이 모듈에 한 줄도 없다.
+    라우트 **개수**를 세지 않는다. 2026-09-18 에 command 와 recipes/run 이
+    차례로 붙으면서 `== 3` 하드코딩이 두 번 깨졌고, 두 번 다 계약 위반이
+    아니라 단순 카운트 불일치였다. 지켜야 할 것은 "필수 경로가 살아 있는가"와
+    "여기서 SQL 을 다시 쓰지 않는가" 둘뿐이므로 그것만 단언한다.
     """
     source = Path("app/api/ohvis_console.py").read_text()
-    assert len(console.router.routes) == 4
+    assert {
+        "/ohvis/console/summary",
+        "/ohvis/console/command",
+        "/ohvis/console/approvals/{approval_id}/decision",
+        "/ohvis/console/recipes/run",
+    } <= {route.path for route in console.router.routes}
     assert "INSERT INTO ohvis_tasks" not in source
     assert "INSERT INTO recipe_approvals" not in source
     assert "UPDATE recipe_approvals" not in source
