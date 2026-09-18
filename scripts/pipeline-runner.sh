@@ -1136,6 +1136,18 @@ classify_error() {
         echo "oom_killed"
     elif echo "$combined" | grep -qi "authentication\|unauthorized\| 401 "; then
         echo "auth_error"
+    elif echo "$combined" | grep -qi "hit your weekly limit\|weekly limit\|usage limit reached\|hit your limit"; then
+        # 계정 주간/사용 한도 소진 — 일시적 429(rate_limit)와 구분한다.
+        # 한도는 해제 시각까지 재시도해도 소용이 없고, 빈 실패 1건마다 LLM 15회가
+        # 소모된다. 2026-09-19 05:37~05:44 KST 러너 4건 연속 실패가 전부
+        # type=unknown 으로 기록돼 원장만 보고는 원인을 알 수 없었다.
+        local quota_line=""
+        quota_line=$(printf '%s\n' "$combined" | grep -iE -m1 "hit your (weekly )?limit|weekly limit|usage limit" | head -c 120)
+        if [[ -n "${quota_line//[[:space:]]/}" ]]; then
+            echo "llm_quota_exhausted: ${quota_line}"
+        else
+            echo "llm_quota_exhausted"
+        fi
     elif echo "$combined" | grep -qi "rate limit\|429\|quota exceeded"; then
         local rate_line=""
         rate_line=$(printf '%s\n' "$combined" | grep -iE -m1 "rate limit|429|quota exceeded|too many requests|you've hit your limit" | head -c 80)
