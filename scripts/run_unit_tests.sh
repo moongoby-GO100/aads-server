@@ -16,7 +16,7 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TESTDEPS_DIR="${AADS_TESTDEPS_DIR:-/root/aads/.testdeps}"
-RUNTIME_CONTAINER="${AADS_TEST_IMAGE_SOURCE:-aads-server}"
+ACTIVE_CONTAINER_FILE="${AADS_ACTIVE_CONTAINER_FILE:-/root/aads/aads-server/.active_container}"
 
 targets=("$@")
 if [ ${#targets[@]} -eq 0 ]; then
@@ -28,9 +28,58 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 2
 fi
 
-IMAGE="$(docker inspect -f '{{.Config.Image}}' "$RUNTIME_CONTAINER" 2>/dev/null)"
+# 운영 컨테이너는 블루그린이라 실제 이름이 aads-server-blue / aads-server-green 이다.
+# 컷오버 창에는 별칭 aads-server 가 잠깐 사라질 수 있으므로 폴백 사슬로 찾는다:
+#   $AADS_TEST_IMAGE_SOURCE → aads-server → .active_container 값 →
+#   docker ps 로 찾은 healthy 한 aads-server-* 컨테이너.
+resolve_test_image_candidates() {
+    local candidates=()
+
+    if [ -n "${AADS_TEST_IMAGE_SOURCE:-}" ]; then
+        candidates+=("$AADS_TEST_IMAGE_SOURCE")
+    fi
+    candidates+=("aads-server")
+
+    if [ -f "$ACTIVE_CONTAINER_FILE" ]; then
+        local active
+        active="$(tr -d '[:space:]' < "$ACTIVE_CONTAINER_FILE" 2>/dev/null)"
+        [ -n "$active" ] && candidates+=("$active")
+    fi
+
+    local bg_name
+    while IFS= read -r bg_name; do
+        [ -n "$bg_name" ] && candidates+=("$bg_name")
+    done < <(docker ps --filter "name=aads-server-" --filter "health=healthy" --format '{{.Names}}' 2>/dev/null)
+
+    # 중복 제거(순서 보존) — 같은 후보를 두 번 조회하지 않는다.
+    local seen=":" out=() c
+    for c in "${candidates[@]}"; do
+        case "$seen" in
+            *":$c:"*) continue ;;
+        esac
+        seen="${seen}${c}:"
+        out+=("$c")
+    done
+    printf '%s\n' "${out[@]}"
+}
+
+mapfile -t RUNTIME_CANDIDATES < <(resolve_test_image_candidates)
+if [ ${#RUNTIME_CANDIDATES[@]} -eq 0 ]; then
+    echo "[run_unit_tests] 기준 컨테이너 후보가 없습니다 — 단위 테스트를 실행할 수 없습니다." >&2
+    exit 2
+fi
+
+IMAGE=""
+for attempt in 1 2 3; do
+    for candidate in "${RUNTIME_CANDIDATES[@]}"; do
+        IMAGE="$(docker inspect -f '{{.Config.Image}}' "$candidate" 2>/dev/null)"
+        [ -n "$IMAGE" ] && break 2
+    done
+    [ "$attempt" -lt 3 ] && sleep 5
+done
+
 if [ -z "$IMAGE" ]; then
-    echo "[run_unit_tests] ${RUNTIME_CONTAINER} 컨테이너 이미지를 찾지 못했습니다 — 단위 테스트를 실행할 수 없습니다." >&2
+    echo "[run_unit_tests] 기준 이미지를 찾지 못했습니다 (5초 간격 3회 재시도) — 시도한 후보: ${RUNTIME_CANDIDATES[*]}" >&2
     exit 2
 fi
 
