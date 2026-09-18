@@ -192,7 +192,11 @@ def test_post_rewrite_hook_carries_signature_but_is_not_a_bypass():
     hook = (_REPO / "scripts" / "hooks" / "post-rewrite").read_text(encoding="utf-8")
 
     # 옛 SHA 에 서명이 있을 때만 옮긴다.
-    assert '[ -f "$MARK_DIR/$old_sha" ] || continue' in hook
+    # 2026-09-19: 훅이 워크트리까지 뒤지도록 보강되며(_find_old) MARK_DIR 변수가
+    # 사라졌는데 이 단정이 옛 리터럴을 그대로 봐서 실패하고 있었다. 검사 대상은
+    # 변수 이름이 아니라 "찾은 서명이 있을 때만 복사한다"는 계약이다.
+    assert '_find_old "$old_sha"' in hook
+    assert '[ -n "$src" ] && [ -f "$src" ] || continue' in hook
     # 새로 만들지 않는다 — touch/echo 로 서명을 생성하면 우회가 된다.
     assert "touch " not in hook
     assert "cp -f" in hook

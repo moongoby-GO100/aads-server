@@ -545,6 +545,104 @@ PY
     printf '%s' "$cred"
 }
 
+# DB(llm_api_keys) 기반 Anthropic 계정 사다리 (AADS-RUNNER-SLOT4, 2026-09-19)
+#
+# 왜 필요한가. 여기는 오래도록 `i % 2 + 1` 로 계정1·2만 돌았다. 그런데 대표님
+# 계정은 DB 에 4개가 등록돼 있고 우선순위 1번(슬롯4)은 한도가 남아 있었다.
+# 2026-09-19 05:36~05:44 KST 실측: 계정1·2 가 동시에 주간한도(해제 09-19 23:59 /
+# 09-23 02:59 KST)에 걸린 동안 사다리 15칸 중 claude 8칸이 전부 헛시도로 탔고,
+# 슬롯3·4 는 단 한 번도 시도되지 않았다. 한도가 남았는데 러너만 멈춰 있었다.
+#
+# 규칙 셋.
+#  1. rate_limited_until 이 지난/비어 있는 계정만 돌려준다 — 죽은 계정을 때리지 않는다.
+#  2. priority 오름차순 — 대표님이 대시보드에서 정한 순서가 그대로 사다리가 된다.
+#  3. 실제로 쓸 수 있는 슬롯만 남긴다. 슬롯3·4 는 .env 에 고정 토큰이 없으므로
+#     릴레이 슬롯 자격증명(refresh 가능)이 있을 때만 유효하다.
+# 조회 실패 시 아무것도 출력하지 않고 1 을 반환해 호출측이 기존 2슬롯 경로로 폴백한다.
+get_db_anthropic_slots() {
+    local rows
+    rows=$(db_exec "SELECT CASE key_name
+                             WHEN 'ANTHROPIC_AUTH_TOKEN'   THEN '1'
+                             WHEN 'ANTHROPIC_AUTH_TOKEN_2' THEN '2'
+                             WHEN 'ANTHROPIC_AUTH_TOKEN_3' THEN '3'
+                             WHEN 'ANTHROPIC_AUTH_TOKEN_4' THEN '4'
+                             ELSE '' END AS slot
+                    FROM llm_api_keys
+                    WHERE provider='anthropic'
+                      AND is_active = TRUE
+                      AND (rate_limited_until IS NULL OR rate_limited_until <= NOW())
+                    ORDER BY priority ASC, id ASC;" 2>/dev/null) || return 1
+    [[ -z "$rows" ]] && return 1
+    local slot out=""
+    while IFS= read -r slot; do
+        slot="${slot//[^0-9]/}"
+        [[ -z "$slot" ]] && continue
+        if [[ -n "$(slot_credentials_file "$slot" || true)" ]]; then
+            out+="${slot}"$'\n'
+        elif [[ "$slot" == "1" && -n "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
+            out+="${slot}"$'\n'
+        elif [[ "$slot" == "2" && -n "${ANTHROPIC_AUTH_TOKEN_2:-}" ]]; then
+            out+="${slot}"$'\n'
+        fi
+    done <<< "$rows"
+    [[ -z "$out" ]] && return 1
+    printf '%s' "$out"
+}
+
+# 한도가 남은 Codex 계정의 홈 디렉터리를 stdout 으로 돌려준다.
+#
+# 전역 쿨다운 마커(/tmp/aads-codex-auth-disabled-until) 하나가 codex 전체를
+# 막고 있었다. 2026-09-19 실측: CODEX_OAUTH_JINAH(priority 1)는 한도가 남아
+# 있는데도 MAIN 계정이 터뜨린 마커 때문에 사다리의 codex 6칸이 통째로 skip 됐다.
+# 계정 홈은 materialize_codex_accounts.py 가 만들어 두고, CODEX_HOME 으로
+# 계정을 고르는 방식은 codex_usage.py 가 이미 쓰고 있는 것과 같다.
+codex_pick_account_home() {
+    local state="${AADS_CODEX_ACCOUNTS_STATE:-/root/.codex-accounts/state.json}"
+    [[ -f "$state" ]] || return 1
+    python3 - "$state" <<'PY' || return 1
+import json
+import os
+import sys
+import time
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+now = time.time()
+best = None
+for acct in payload.get("accounts", []):
+    if not isinstance(acct, dict):
+        continue
+    if not acct.get("is_active") or not acct.get("has_auth"):
+        continue
+    until = acct.get("rate_limited_until_epoch")
+    try:
+        if until is not None and float(until) > now:
+            continue
+    except (TypeError, ValueError):
+        continue
+    try:
+        prio = int(acct.get("priority", 9999))
+    except (TypeError, ValueError):
+        prio = 9999
+    name = acct.get("key_name") or ""
+    if not name:
+        continue
+    if best is None or prio < best[0]:
+        best = (prio, name)
+
+if best is None:
+    raise SystemExit(1)
+home = os.path.join(os.path.dirname(os.path.abspath(sys.argv[1])), best[1])
+if not os.path.isdir(home):
+    raise SystemExit(1)
+print(home)
+PY
+}
+
 is_read_only_instruction() {
     local instruction="${1:-}"
     printf '%s' "$instruction" | grep -Eiq 'read-only|do not modify|no file changes|읽기[[:space:]]*전용|파일[[:space:]]*수정[[:space:]]*금지|수정하지|변경하지'
@@ -1136,6 +1234,18 @@ classify_error() {
         echo "oom_killed"
     elif echo "$combined" | grep -qi "authentication\|unauthorized\| 401 "; then
         echo "auth_error"
+    elif echo "$combined" | grep -qi "hit your weekly limit\|weekly limit\|usage limit reached\|hit your limit"; then
+        # 계정 주간/사용 한도 소진 — 일시적 429(rate_limit)와 구분한다.
+        # 한도는 해제 시각까지 재시도해도 소용이 없고, 빈 실패 1건마다 LLM 15회가
+        # 소모된다. 2026-09-19 05:37~05:44 KST 러너 4건 연속 실패가 전부
+        # type=unknown 으로 기록돼 원장만 보고는 원인을 알 수 없었다.
+        local quota_line=""
+        quota_line=$(printf '%s\n' "$combined" | grep -iE -m1 "hit your (weekly )?limit|weekly limit|usage limit" | head -c 120)
+        if [[ -n "${quota_line//[[:space:]]/}" ]]; then
+            echo "llm_quota_exhausted: ${quota_line}"
+        else
+            echo "llm_quota_exhausted"
+        fi
     elif echo "$combined" | grep -qi "rate limit\|429\|quota exceeded"; then
         local rate_line=""
         rate_line=$(printf '%s\n' "$combined" | grep -iE -m1 "rate limit|429|quota exceeded|too many requests|you've hit your limit" | head -c 80)
@@ -1308,15 +1418,24 @@ cleanup_blocked_dependencies() {
     # 부모가 terminal 로 끝났으면 그 파일을 더 건드리지 않는다 — 줄 설 이유가 사라진다.
     # 그래서 취소가 아니라 **의존성만 풀고 대기열에 그대로 남긴다.**
     # 사람이 명시한 depends_on 은 "저게 끝나야 이게 의미가 있다" 는 뜻이므로 종전대로 취소한다.
+    # 2026-09-19 추가 — cancelled 는 실패가 아니다.
+    #
+    # 이날 배치 릴리스 체인 5건이 통째로 멈췄다. 선두가 cancelled(중복이라 OPS 가
+    # 거둔 것)로 끝나자 뒤의 4건이 "선행 작업이 cancelled 라 자동 진행 불가"로
+    # 연쇄 취소 대상이 됐다. 그런데 cancelled 는 대부분 **중복·대체·수동 회수**이고,
+    # "이 일을 하지 말라"는 뜻이 아니다. 뒤 작업은 여전히 해야 한다.
+    # 그래서 명시적 depends_on 이라도 부모가 cancelled 면 **취소하지 않고 의존성만 푼다.**
+    # 진짜 실패(error/rejected/rejected_done)는 종전대로 뒤를 막는다.
     released=$(db_exec "UPDATE pipeline_jobs p SET depends_on=NULL,
-                        review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 이 ' || dep.status || ' 로 끝나 같은 파일을 더 건드리지 않는다 — 자동 부여된 의존성을 풀고 단독 실행한다',
+                        review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 이 ' || dep.status || CASE WHEN dep.status='cancelled' THEN ' 로 끝났다 — 취소는 실패가 아니므로 의존성만 풀고 단독 실행한다' ELSE ' 로 끝나 같은 파일을 더 건드리지 않는다 — 자동 부여된 의존성을 풀고 단독 실행한다' END,
                         updated_at=NOW()
                         FROM pipeline_jobs dep
                         WHERE p.depends_on = dep.job_id
                           AND p.status='queued'
                           AND p.phase IN ('queued','coding')
                           AND dep.status IN ('error','rejected','rejected_done','cancelled')
-                          AND p.logs @> '[{\"event\": \"file_conflict_auto_dependency\"}]'::jsonb
+                          AND (p.logs @> '[{\"event\": \"file_conflict_auto_dependency\"}]'::jsonb
+                               OR dep.status = 'cancelled')
                         RETURNING p.job_id;" 2>/dev/null) || true
 
     blocked_existing=$(db_exec "UPDATE pipeline_jobs p SET status='cancelled',
@@ -1328,7 +1447,7 @@ cleanup_blocked_dependencies() {
                                 WHERE p.depends_on = dep.job_id
                                   AND p.status='queued'
                                   AND p.phase IN ('queued','coding')
-                                  AND dep.status IN ('error','rejected','rejected_done','cancelled')
+                                  AND dep.status IN ('error','rejected','rejected_done')
                                   AND NOT (p.logs @> '[{\"event\": \"file_conflict_auto_dependency\"}]'::jsonb)
                                 RETURNING p.job_id;" 2>/dev/null) || true
     blocked_missing=$(db_exec "UPDATE pipeline_jobs p SET status='cancelled',
@@ -1350,6 +1469,39 @@ cleanup_blocked_dependencies() {
     fi
     if [[ -n "$blocked_existing$blocked_missing" ]]; then
         log "  BLOCKED_DEPENDENCY_CLEANUP existing=${blocked_existing//$'\n'/,} missing=${blocked_missing//$'\n'/,}"
+    fi
+
+    apply_batch_release_directive
+}
+
+# 배치 릴리스 창이 열려 있으면 새로 들어온 잡에도 같은 지시를 붙인다.
+#
+# 2026-09-18 에 대기 잡 4건을 "커밋·푸시까지만" 으로 묶어 배포를 1회로 줄였는데,
+# 편입이 **수동 UPDATE** 라 그 뒤 들어온 잡은 매번 샜다. 09-18 에 2건, 09-19 에
+# runner-90cf3402 가 또 샜다 — 샌 잡은 자기 혼자 배포해 "배포가 잦다" 는 문제를
+# 되살린다. 제출 경로(API·MCP·수동 INSERT)가 여럿이라 한 곳을 고쳐서는 못 막는다.
+# 큐를 보는 이 자리에서 붙이면 경로와 무관하게 걸린다.
+#
+# 창의 정의: 같은 프로젝트에 배치 지시를 단 잡이 아직 살아 있으면(queued/running/
+# review_hold) 창이 열린 것으로 본다. 그 잡들이 모두 끝나면 자동으로 닫힌다.
+# 릴리스 잡(DEPLOY_ONLY)에는 붙이지 않는다 — 붙이면 자기가 자기를 막는다.
+apply_batch_release_directive() {
+    local attached
+    attached=$(db_exec "UPDATE pipeline_jobs p
+                        SET instruction = p.instruction || E'\n\n## [OPS 배치 릴리스 지시 — 자동 부착]\n이 잡은 커밋까지만 수행한다. 빌드·배포·재기동은 금지한다.\npush 이후의 릴리스는 별도 DEPLOY_ONLY 잡이 최신 origin/main 을 1회 배포하여 이 잡을 포함해 일괄 반영한다.',
+                            updated_at=NOW()
+                        WHERE p.status='queued'
+                          AND p.phase IN ('queued','coding')
+                          AND p.instruction NOT ILIKE '%OPS 배치 릴리스 지시%'
+                          AND p.instruction NOT ILIKE '%DEPLOY_ONLY%'
+                          AND EXISTS (SELECT 1 FROM pipeline_jobs q
+                                      WHERE q.project = p.project
+                                        AND q.job_id <> p.job_id
+                                        AND q.status IN ('queued','running','review_hold')
+                                        AND q.instruction ILIKE '%OPS 배치 릴리스 지시%')
+                        RETURNING p.job_id;" 2>/dev/null) || true
+    if [[ -n "$attached" ]]; then
+        log "  BATCH_DIRECTIVE_ATTACHED ${attached//$'\n'/,} — 배치 릴리스 창이 열려 있어 커밋·푸시까지만 수행하도록 편입"
     fi
 }
 
@@ -1768,13 +1920,31 @@ run_job() {
         _slot_first=2
         log "  SLOT_DEPRIORITIZE job=$job_id 계정1 한도소진(until=$_slot1_until) → 계정2 우선"
     fi
-    for ((i=0; i<${#MODEL_CYCLE[@]}; i++)); do
-        if [[ "$_slot_first" == "2" ]]; then
-            TOKEN_CYCLE+=($(( (i + 1) % 2 + 1 )))
-        else
-            TOKEN_CYCLE+=($(( i % 2 + 1 )))
-        fi
-    done
+    # AADS-RUNNER-SLOT4 (2026-09-19): 계정 사다리를 DB 에서 받는다.
+    # 한도가 남은 계정만 priority 순으로 돈다. DB 조회가 실패하거나 남은 계정이
+    # 하나도 없으면 아래 기존 2슬롯 경로로 조용히 폴백한다(동작 보존).
+    local AVAIL_SLOTS=() _db_slot_line="" _db_slots=""
+    _db_slots=$(get_db_anthropic_slots) || _db_slots=""
+    if [[ -n "$_db_slots" ]]; then
+        while IFS= read -r _db_slot_line; do
+            [[ -n "$_db_slot_line" ]] && AVAIL_SLOTS+=("$_db_slot_line")
+        done <<< "$_db_slots"
+    fi
+    if [[ ${#AVAIL_SLOTS[@]} -gt 0 ]]; then
+        log "  DB_SLOT_CYCLE job=$job_id available=${AVAIL_SLOTS[*]} (llm_api_keys priority 순)"
+        for ((i=0; i<${#MODEL_CYCLE[@]}; i++)); do
+            TOKEN_CYCLE+=("${AVAIL_SLOTS[$(( i % ${#AVAIL_SLOTS[@]} ))]}")
+        done
+    else
+        log "  DB_SLOT_CYCLE_FAIL job=$job_id → 기존 2슬롯 경로로 폴백"
+        for ((i=0; i<${#MODEL_CYCLE[@]}; i++)); do
+            if [[ "$_slot_first" == "2" ]]; then
+                TOKEN_CYCLE+=($(( (i + 1) % 2 + 1 )))
+            else
+                TOKEN_CYCLE+=($(( i % 2 + 1 )))
+            fi
+        done
+    fi
     # AADS-RUNNER-SLOT-LEASE (2026-09-14): 대여 토큰을 job 마다 다시 읽는다.
     # 스크립트 상단의 source 는 데몬 기동 시 딱 한 번만 돈다. 슬롯이 없는 서버
     # (contabo14 / cafe24_114)는 contabo116 이 10분마다 밀어 넣는 임시 accessToken 으로
@@ -1788,7 +1958,7 @@ run_job() {
     # C-4: 빈 토큰 가드 — 둘 다 비어있으면 즉시 실패 처리
     # 단, 슬롯 자격증명이 살아 있으면 고정 토큰이 없어도 실행 가능하므로 차단하지 않는다.
     local _slot_cred_available=""
-    _slot_cred_available="$(slot_credentials_file 1 || slot_credentials_file 2 || true)"
+    _slot_cred_available="$(slot_credentials_file 1 || slot_credentials_file 2 || slot_credentials_file 3 || slot_credentials_file 4 || true)"
     if [[ -z "$TOKEN_1" && -z "$TOKEN_2" && -z "$_slot_cred_available" ]]; then
         log "FATAL: ANTHROPIC_AUTH_TOKEN / _2 모두 비어있음 — job=$job_id 실패 처리"
         db_update "UPDATE pipeline_jobs SET status='error', phase='token_missing',
@@ -1921,8 +2091,18 @@ ${safe_instruction}"
         record_runner_event "$job_id" "model_attempt_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"token_slot\":\"${token_slot}\"}"
         local runner_kind="claude_cli"
         if [[ "$current_model" == codex:* ]]; then
+            # AADS-RUNNER-CODEX-ACCOUNT (2026-09-19)
+            # 쿨다운 마커는 계정이 아니라 codex 전체를 막는다. 한도가 남은 계정이
+            # 있으면 그 계정 홈으로 실행하고 마커는 보지 않는다 — 마커를 보는 것은
+            # 쓸 수 있는 계정이 하나도 없을 때뿐이다.
+            local _codex_home=""
+            _codex_home="$(codex_pick_account_home || true)"
+            if [[ -n "$_codex_home" ]]; then
+                export CODEX_HOME="$_codex_home"
+                log "  CODEX_ACCOUNT job=$job_id model=$current_model home=$(basename "$_codex_home")"
+            fi
             local codex_disabled_until=""
-            if codex_disabled_until=$(codex_auth_disabled_until); then
+            if [[ -z "$_codex_home" ]] && codex_disabled_until=$(codex_auth_disabled_until); then
                 log "  CODEX_AUTH_DISABLED_SKIP job=$job_id model=$current_model until_epoch=$codex_disabled_until"
                 db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} skip: auth cooldown active until ${codex_disabled_until}' WHERE job_id='${job_id}';"
                 record_runner_event "$job_id" "model_attempt_skipped" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "" "{\"reason\":\"codex_auth_cooldown\",\"until_epoch\":\"${codex_disabled_until}\"}"
@@ -2136,8 +2316,9 @@ ${safe_instruction}"
         if [[ $attempt -lt $total_attempts ]]; then
             local next_model="${MODEL_CYCLE[$attempt]}"
             local next_token="${TOKEN_CYCLE[$attempt]}"
-            local acct_label="계정1(Naver)"
-            [[ "$next_token" == "2" ]] && acct_label="계정2(Gmail)"
+            # 슬롯 번호가 곧 llm_api_keys 의 계정이다. 예전 고정 라벨
+            # (계정1=Naver/계정2=Gmail)은 슬롯이 4개로 늘면서 사실과 어긋난다.
+            local acct_label="계정${next_token}"
             local wait_sec=$(( 3 + attempt * 2 ))  # 5초~15초 점진 증가
             log "  RETRY job=$job_id attempt=$((attempt+1))/$total_attempts next=$next_model($acct_label) wait=${wait_sec}s exit=$exit_code"
             sleep "$wait_sec"
@@ -2245,7 +2426,20 @@ $out_tail")
     # 파일시스템에서 직접 찾아 -f 로 intent-to-add 한다. 표준 목록이 비지 않는
     # 일반 저장소(AADS/KIS/GO100/SF/NTV2)에서는 이 블록이 아예 실행되지 않으므로
     # 기존 동작에 영향이 없다.
-    if [[ -z "${_new_untracked//[[:space:]]/}" && -n "${worktree_dir:-}" && -e "${worktree_dir}/.git" ]]; then
+    # v2.5 (2026-09-19, runner-48377212 반려 원인 수정):
+    # v2.4 는 "표준 목록이 비지 않는 일반 저장소에서는 이 블록이 실행되지 않는다"고
+    # 가정했지만 틀렸다. 추적 파일만 고친 job 은 일반 저장소에서도 표준 목록이 비므로
+    # 블록이 그대로 돌고, --exclude-standard 없는 git ls-files --others 가
+    # .pytest_cache/ · .ruff_cache/ 같은 .gitignore 된 테스트 캐시를 긁어 add -fN 했다.
+    # 그 결과 runner-48377212 는 변경 15개 중 8개가 캐시 파일이 되어 리뷰에서
+    # REQUEST_CHANGES(0.655) 로 반려됐다(runner.log UNTRACKED_IGNORED_RESCUE files=8).
+    # 이 rescue 는 .gitignore 가 '*' 화이트리스트인 저장소(ACCT) 전용이므로,
+    # "처음 보는 이름의 파일조차 ignored 로 걸리는 저장소" 일 때만 돌도록 게이트를 건다.
+    local _whitelist_ignore_repo=0
+    if printf '%s\n' "__aads_ignore_probe_$$" | git check-ignore --stdin -q 2>/dev/null; then
+        _whitelist_ignore_repo=1
+    fi
+    if [[ -z "${_new_untracked//[[:space:]]/}" && -n "${worktree_dir:-}" && -e "${worktree_dir}/.git" && $_whitelist_ignore_repo -eq 1 ]]; then
         # --exclude-standard 를 뺀 untracked 목록에서 시작한다. 갓 만든 워크트리에는
         # 추적 파일만 체크아웃돼 있으므로 여기 남는 것은 이번 작업이 만든 파일뿐이다.
         # 그래도 안전하게 워크트리 생성시각(.git mtime)보다 새 것만 통과시킨다.
@@ -2253,7 +2447,10 @@ $out_tail")
         local _ignored_cand=""
         _ignored_cand=$(git ls-files --others 2>/dev/null \
             | grep -vE '(^|/)(node_modules|__pycache__|\.venv|venv|dist|build|\.next)/' \
-            | grep -vE '\.(pyc|pyo|log)$') || true
+            | grep -vE '(^|/)\.[A-Za-z0-9_.-]+_cache/' \
+            | grep -vE '(^|/)(\.git|\.tox|\.nox|\.eggs|\.idea|\.vscode|\.turbo|htmlcov|coverage|\.gradle|target)/' \
+            | grep -vE '(^|/)(\.coverage|\.DS_Store|coverage\.xml)$' \
+            | grep -vE '\.(pyc|pyo|pyd|log|orig|rej|bak|swp|tmp)$') || true
         local _ignored_new=""
         if [[ -n "${_ignored_cand//[[:space:]]/}" ]]; then
             _ignored_new=$(printf '%s\n' "$_ignored_cand" | while IFS= read -r _f; do

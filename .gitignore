@@ -115,3 +115,8 @@ uploads/
 backups/**/*.sql
 backups/**/*.sql.gz
 backups/**/*.dump
+
+# 백업 덤프는 커밋하지 않는다 (README 만 추적)
+backups/**/*.sql
+backups/**/*.sql.gz
+backups/**/*.dump

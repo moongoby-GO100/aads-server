@@ -37,8 +37,10 @@ def _extract_function(script: str, name: str) -> str:
 
 def _extract_call_site_snippet(script: str) -> str:
     start = script.index('local approval_commit_sha=""')
+    # 2026-09-19: 러너의 실패 메시지가 "검수 전 산출물 커밋 SHA…" 로 바뀐 뒤 이 marker 가
+    # 갱신되지 않아 ValueError(substring not found) 로 이 파일 3건이 깨져 있었다.
     marker = (
-        'approval_commit_sha_mismatch" "awaiting_approval 거부 — 저장 commit SHA와 '
+        'approval_commit_sha_mismatch" "검수 전 산출물 커밋 SHA와 '
         "runner worktree HEAD 불일치\"\n"
         '        _release_work_lock "$project" "$job_id" "$parallel_group"\n'
         "        return 1\n"
