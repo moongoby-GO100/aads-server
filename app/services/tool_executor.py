@@ -951,6 +951,8 @@ class ToolExecutor:
             "search_all_projects":    self._search_all_projects,
             # AADS-188B: 시맨틱 코드 검색
             "semantic_code_search":   self._semantic_code_search,
+            "aag_findings":           self._aag_findings,
+            "aag_brief":              self._aag_brief,
             # AADS-188C Phase 2: 메타 도구 (Orchestrator)
             "check_directive_status": self._check_directive_status,
             "delegate_to_agent":      self._delegate_to_agent,
@@ -5532,6 +5534,23 @@ class ToolExecutor:
             "results": results,
             "total": len(results),
         }
+
+    async def _aag_findings(self, inp: Dict[str, Any]) -> str:
+        from app.services.aag_tools import aag_findings_text
+
+        return await aag_findings_text(
+            project=str(inp.get("project") or "AADS"),
+            rule=inp.get("rule"), severity=inp.get("severity"),
+            path_prefix=inp.get("path_prefix"), limit=inp.get("limit", 50),
+        )
+
+    async def _aag_brief(self, inp: Dict[str, Any]) -> str:
+        from app.services.aag_tools import aag_brief_text
+
+        return await aag_brief_text(
+            project=str(inp.get("project") or "AADS"),
+            target=str(inp.get("target") or ""),
+        )
 
     # ── 첨부파일 재읽기 도구 ─────────────────────────────────────────────────
 

@@ -45,6 +45,8 @@ _DEFER_LOADING: Dict[str, bool] = {
     "semantic_code_search": True,
     "analyze_changes": True,
     "inspect_service": True,
+    "aag_findings": True,
+    "aag_brief": True,
     # ── Tier 3: 액션/실행 ────────────────────────────────────────────────
     "directive_create": False,           # 지시서 — 핵심 액션
     "generate_directive": False,
@@ -2440,6 +2442,35 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         ],
         "defer_loading": True,
     },
+    "aag_findings": {
+        "name": "aag_findings",
+        "description": "코드를 고치기 전에 그 파일이 어느 라우트·테이블·결함과 닿아 있는지 먼저 확인할 때 사용한다. 최신 AAG 스냅샷의 결함을 조건별로 조회한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "프로젝트 이름 (예: AADS, ACCT)"},
+                "rule": {"type": "string", "description": "AAG 규칙 필터"},
+                "severity": {"type": "string", "description": "심각도 필터 (예: P1)"},
+                "path_prefix": {"type": "string", "description": "파일 경로 접두사 필터"},
+                "limit": {"type": "integer", "default": 50, "minimum": 1, "maximum": 200},
+            },
+            "required": ["project"],
+        },
+        "defer_loading": True,
+    },
+    "aag_brief": {
+        "name": "aag_brief",
+        "description": "코드를 고치기 전에 그 파일이 어느 라우트·테이블·결함과 닿아 있는지 먼저 확인할 때 사용한다. 정본 brief.py로 대상 지시서 또는 파일의 착수 브리프를 만든다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "프로젝트 이름 (예: AADS, ACCT)"},
+                "target": {"type": "string", "description": "지시서 문장 또는 파일 경로"},
+            },
+            "required": ["project", "target"],
+        },
+        "defer_loading": True,
+    },
     # ── Pipeline Runner: 호스트 독립 실행 (권장) ────────────────────────────
     "pipeline_runner_submit": {
         "name": "pipeline_runner_submit",
@@ -3446,7 +3477,7 @@ _GROUPS: Dict[str, List[str]] = {
     # AADS-186E-2: 메모리 도구 그룹 (+ Memory Upgrade F5/F12)
     "memory": ["save_note", "recall_notes", "delete_note", "learn_pattern", "observe", "query_timeline", "recall_tool_result", "query_decision_graph"],
     # AADS-186E-3 / AADS-188B: 딥리서치 + 코드탐색 + 시맨틱 검색 도구 그룹
-    "research": ["deep_research", "code_explorer", "analyze_changes", "search_all_projects", "semantic_code_search"],
+    "research": ["deep_research", "code_explorer", "analyze_changes", "search_all_projects", "semantic_code_search", "aag_findings", "aag_brief"],
     # CEO 아젠다 관리 도구 그룹
     "agenda": ["add_agenda", "list_agendas", "get_agenda", "update_agenda", "decide_agenda", "search_agendas"],
     # run_debate is intentionally excluded from broad tool exposure. Debate is

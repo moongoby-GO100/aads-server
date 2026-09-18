@@ -54,6 +54,7 @@ from app.api.local_models import router as local_models_router
 from app.api.local_media_router import router as local_media_router
 from app.api.device import router as device_router
 from app.api.kakao_bot import router as kakao_bot_router
+from app.api.aag import router as aag_router
 from app.api.agenda import router as agenda_router
 from app.api.assistant import router as assistant_router
 from app.api.hot_reload import router as hot_reload_router
@@ -3802,6 +3803,7 @@ app.include_router(voice_router, prefix="/api/v1", tags=["voice"])
 app.include_router(local_models_router, prefix="/api/v1", tags=["local-models"])
 app.include_router(device_router, prefix="/api/v1", tags=["device"])
 app.include_router(kakao_bot_router, prefix="/api/v1", tags=["kakao-bot"])
+app.include_router(aag_router, prefix="/api/v1", tags=["aag"])
 app.include_router(agenda_router, prefix="/api/v1/agenda", tags=["agenda"])
 app.include_router(hot_reload_router, prefix="/api/v1", tags=["hot-reload"])
 app.include_router(admin_router, prefix="/api/v1", tags=["admin"])

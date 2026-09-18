@@ -28,6 +28,8 @@ import os
 import re
 import subprocess
 import sys
+import socket
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1905,6 +1907,26 @@ def zero_target_guard(scan: Scan) -> list[str]:
     return empty
 
 
+def push_snapshot(payload: dict[str, Any]) -> None:
+    """Best-effort delivery; scanner status must never depend on the API."""
+    base = os.getenv("AADS_API_BASE", "http://127.0.0.1:8000").rstrip("/")
+    headers = {"Content-Type": "application/json"}
+    tenant_id = os.getenv("AADS_TENANT_ID", "").strip()
+    if tenant_id:
+        headers["X-Tenant-ID"] = tenant_id
+    request = urllib.request.Request(
+        f"{base}/api/v1/aag/snapshot",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 — configured internal API
+            response.read()
+    except Exception as exc:  # noqa: BLE001 — explicitly best-effort
+        print(f"[AAG] 경고: 스냅샷 전송 실패 — {exc}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     here = Path(__file__).resolve().parent
     ap = argparse.ArgumentParser(description="AAG L1/L2 AADS 아키텍처 추출기")
@@ -1918,6 +1940,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--check-baseline", action="store_true",
                     help="고정선보다 결함이 늘었으면 종료코드 1")
     ap.add_argument("--no-write", action="store_true", help="리포트 파일을 쓰지 않는다")
+    ap.add_argument("--push-snapshot", action="store_true", help="스캔 요약과 결함을 AADS API로 전송")
     args = ap.parse_args(argv)
 
     root = Path(args.root).resolve()
@@ -1990,6 +2013,16 @@ def main(argv: list[str] | None = None) -> int:
         written.append(args.baseline)
 
     counts = counts_by_rule(scan.findings)
+    push_enabled = args.push_snapshot or os.getenv("AAG_PUSH_SNAPSHOT", "").lower() in {"1", "true", "yes", "on"}
+    if push_enabled:
+        push_snapshot({
+            "project": "AADS", "host": socket.gethostname(),
+            "generated_at": baseline["generated_at"],
+            "commit_sha": os.getenv("AADS_COMMIT_SHA") or os.getenv("GIT_COMMIT"),
+            "stats": baseline["scope"], "findings": scan.findings,
+            "unresolved": scan.unresolved, "node_count": len(scan.nodes),
+            "edge_count": len(scan.edges),
+        })
     if args.json:
         print(json.dumps({
             "scope": baseline["scope"],
