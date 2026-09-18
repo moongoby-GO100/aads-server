@@ -2147,7 +2147,7 @@ async def call_stream(
     _intent = getattr(intent_result, "intent", "")
     _model_locked = getattr(intent_result, "model_locked", False)
     _explicit_model_requested = bool(_effective_override) or bool(_model_locked)
-    if not _explicit_model_requested and not _db_default_applied:
+    if not _explicit_model_requested:
         _policy_model, _policy_reason = await _resolve_governed_intent_model(
             intent=_intent,
             current_model=model,
