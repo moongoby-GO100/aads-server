@@ -181,6 +181,16 @@ _SPECIAL_TARGET_RE = re.compile(
     re.IGNORECASE,
 )
 _PATH_TRAILING_CHARS = ".,;:)]}'\"`"
+_EXEC_COMMAND_PREFIXES = (
+    "bash ",
+    "sh ",
+    "python3 -m pytest",
+    "pytest ",
+    "npm ",
+    "npx ",
+    "curl ",
+    "docker ",
+)
 
 
 def _max_concurrent_per_project() -> int:
@@ -234,11 +244,36 @@ def _normalize_target_file_path(path: str) -> str:
     return f"server:{value}"
 
 
+def _line_is_exec_command(line: str) -> bool:
+    """검증/실행 명령으로 시작하는 줄인지 판정.
+
+    마크다운 인라인 코드(백틱)·목록 기호·쉘 프롬프트 장식은 명령 여부 판정 전에
+    벗겨낸다 — 지시서가 `` `bash scripts/run_unit_tests.sh ...` `` 처럼
+    백틱으로 감싸는 경우가 흔하다.
+    """
+    stripped = line.strip().lstrip("`$#->* \t").strip()
+    return stripped.startswith(_EXEC_COMMAND_PREFIXES)
+
+
 def _extract_target_files(instruction: str) -> set[str]:
-    """Extract explicit target files from a runner instruction."""
+    """Extract explicit target files from a runner instruction.
+
+    검증/실행 명령의 인자로 등장한 경로(예: 검증 명령 줄의
+    `scripts/run_unit_tests.sh tests/unit/test_a.py`)는 제외한다 — 그런
+    경로는 실제 수정 대상이 아니라 두 지시서를 오탐으로 충돌시켜 큐 전체를
+    직렬화한다(AADS-RUNNERGUARD-VERIFY-PATH-FALSEPOSITIVE-R2). 판정은 파일명이
+    아니라 "그 경로가 속한 줄이 실행 명령으로 시작하는가"이므로, 같은 파일이라도
+    수정 대상으로 명시된 문장에서는 그대로 남는다.
+    """
     files: set[str] = set()
-    matches = list(_TARGET_FILE_RE.finditer(instruction or "")) + list(_SPECIAL_TARGET_RE.finditer(instruction or ""))
+    text = instruction or ""
+    lines = text.splitlines()
+    matches = list(_TARGET_FILE_RE.finditer(text)) + list(_SPECIAL_TARGET_RE.finditer(text))
     for match in matches:
+        line_idx = text.count("\n", 0, match.start())
+        line = lines[line_idx] if 0 <= line_idx < len(lines) else ""
+        if _line_is_exec_command(line):
+            continue
         normalized = _normalize_target_file_path(match.group(0))
         if normalized:
             files.add(normalized)
