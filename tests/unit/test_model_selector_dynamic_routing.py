@@ -2,11 +2,30 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import time
 
 import pytest
 
 from app.services import model_selector
 from app.services.intent_router import IntentResult, get_model_for_override
+
+
+@pytest.fixture(autouse=True)
+def _codex_quota_headroom(monkeypatch):
+    """codex 한도 preflight 를 '여유 있음'으로 고정한다.
+
+    이 파일의 라우팅 테스트는 릴레이 `/codex-usage` 에 실제로 붙고 있었다.
+    2026-09-19 주계정(CODEX_OAUTH_MAIN)이 100% 가 되자 codex 라우팅 테스트
+    3개가 코드 변경 없이 깨졌다 — 테스트가 운영 계정의 잔여 한도에 의존하면
+    게이트가 무작위로 붉어진다. 한도 판정 자체는 _codex_quota_exhausted 전용
+    테스트에서 보고, 여기서는 캐시를 채워 네트워크 호출을 없앤다.
+    """
+    monkeypatch.setattr(
+        model_selector,
+        "_CODEX_QUOTA_CACHE",
+        {"ts": time.time(), "blocked": False, "detail": ""},
+        raising=False,
+    )
 
 
 def test_anthropic_registry_model_ids_are_normalized_to_runtime_aliases():
@@ -831,6 +850,10 @@ async def test_call_stream_routes_registry_codex_backend_without_static_allowlis
         captured["model"] = model
         captured["system_prompt"] = system_prompt
         captured["session_id"] = session_id
+        # 내용 없이 done 만 내면 call_stream 이 codex_empty_response 로 승격해
+        # 폴백을 태운다(주간 한도 소진 때 나타나는 증상). 여기서 보려는 것은
+        # 라우팅이므로 정상 응답과 같게 delta 를 한 번 낸다.
+        yield {"type": "delta", "content": "ok"}
         yield {"type": "done", "model": model, "cost": "0", "input_tokens": 1, "output_tokens": 1}
 
     monkeypatch.setattr(model_selector, "_get_db_key", _fake_get_db_key)

@@ -606,6 +606,37 @@ _CODEX_QUOTA_CACHE: Dict[str, Any] = {"ts": 0.0, "blocked": False, "detail": ""}
 _CODEX_QUOTA_TTL_SEC = int(os.getenv("AADS_CODEX_QUOTA_TTL_SEC", "60"))
 
 
+async def _codex_account_with_headroom() -> str:
+    """한도가 남아 있는 다른 코덱스 계정 이름. 없으면 빈 문자열.
+
+    판단 근거는 `codex_usage_snapshots`(계정별 수집본) + `llm_api_keys` 다.
+    릴레이 `/codex-usage` 는 계정 하나만 보므로 여기서 보완한다.
+    """
+    try:
+        from app.db import get_pool  # type: ignore
+    except ImportError:
+        from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT k.key_name, s.used_percent
+            FROM llm_api_keys k
+            JOIN codex_usage_snapshots s ON s.key_name = k.key_name
+            WHERE k.provider = 'codex'
+              AND k.is_active
+              AND (k.rate_limited_until IS NULL OR k.rate_limited_until <= NOW())
+              AND COALESCE(s.used_percent, 0) < 100
+            ORDER BY k.priority, k.id
+            LIMIT 1
+            """
+        )
+    if not row:
+        return ""
+    return "%s=%s%%" % (row["key_name"], row["used_percent"])
+
+
 async def _codex_quota_exhausted() -> Tuple[bool, str]:
     """Codex 주간 한도가 소진되었는가. (차단여부, 사유) 반환."""
     now = _time_mod.time()
@@ -643,6 +674,21 @@ async def _codex_quota_exhausted() -> Tuple[bool, str]:
                     detail = "%s=%s%%" % (chosen.get("limit_id") or "codex", pct)
     except Exception as e:
         logger.debug("codex quota lookup failed: %s", str(e)[:120])
+
+    # 릴레이의 /codex-usage 는 레거시 홈(/root/.codex) 한 계정만 본다. 계정이
+    # 둘 이상이면 그 값으로 codex 전체를 막는 것은 틀린다 — 2026-09-19 실측:
+    # CODEX_OAUTH_MAIN 100%, CODEX_OAUTH_JINAH 37% 인데 preflight 가 codex 를
+    # 통째로 건너뛰어 채팅에서 Sol 을 골라도 Claude 로 우회했다. 한도가 남은
+    # 계정이 하나라도 있으면 막지 않는다(릴레이가 계정을 골라 바인딩한다).
+    if blocked:
+        try:
+            other = await _codex_account_with_headroom()
+        except Exception as e:  # 조회 실패로 서비스를 멈추지 않는다
+            logger.debug("codex account headroom lookup failed: %s", str(e)[:120])
+            other = ""
+        if other:
+            logger.info("codex_preflight_pass: %s 소진이지만 %s 에 한도 남음", detail, other)
+            blocked, detail = False, ""
 
     _CODEX_QUOTA_CACHE.update({"ts": now, "blocked": blocked, "detail": detail})
     return blocked, detail
@@ -1134,7 +1180,14 @@ _GROQ_MODELS = {"groq-qwen3-32b", "groq-kimi-k2", "groq-llama4-scout", "groq-lla
 # OpenAI 모델 (LiteLLM/OpenAI-compatible 경유)
 _OPENAI_MODELS = {"gpt-6-astra", "gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"}
 _OPENAI_REASONING_MODELS = {"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5", "o3", "o3-mini", "o3-pro"}
-_OPENAI_NO_CUSTOM_SAMPLING_MODELS = {"gpt-6-astra"}
+# OpenAI 직결 경로는 LiteLLM 프록시와 달리 파라미터를 번역해 주지 않는다.
+# 2026-09-19 실측: gpt-5.6-sol 채팅이 매 턴 HTTP 400 으로 죽고 "[... 실행 불가 →
+# Codex CLI 전환]" 배너만 남았다. 세 제약이 동시에 걸려 있었다.
+#   1) max_tokens 불가 → max_completion_tokens
+#   2) tools 배열 128개 상한
+#   3) temperature 커스텀값 불가 (기본 1만 허용)
+_OPENAI_NO_CUSTOM_SAMPLING_MODELS = {"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+_OPENAI_DIRECT_MAX_TOOLS = 128
 _OPENAI_RESPONSES_TOOL_REQUIRED_MODELS = {"gpt-6-astra"}
 
 # Codex CLI 모델 (ChatGPT Plus OAuth, relay /codex-stream 경유)
@@ -1424,6 +1477,19 @@ async def _get_registered_model_row(model_id: str, provider: str | None = None) 
     rows = await _list_registered_models(active_only=False)
     normalized_provider = str(provider or "").strip().lower()
     target_model = str(model_id or "").strip()
+
+    # 같은 model_id 가 provider='codex'(구독 CLI)와 provider='openai'(종량 API)로
+    # 둘 다 등록돼 있다. _fetch_registry_rows 정렬이 metadata.raw.created 있는 행을
+    # 먼저 주므로 openai 행이 늘 먼저 잡혔다 — 채팅에서 Sol 을 고르면 구독이 아니라
+    # api.openai.com 직결로 나갔다. 2026-09-19 실측: 그 경로는 max_tokens 를 받지
+    # 않아 매 턴 400 이고("Unsupported parameter: 'max_tokens'"), 응답 앞에
+    # "[gpt-5.6-sol 실행 불가 → Codex CLI 전환]" 배너가 붙었다.
+    # CEO 지시는 "CLI 모델만 사용" 이므로 provider 를 명시하지 않았으면 구독 CLI 행을
+    # 먼저 본다. provider 를 붙여 부른 쪽(openai:...)은 그대로 그 행을 받는다.
+    if not normalized_provider and target_model in _CODEX_MODELS:
+        for row in rows:
+            if row.get("provider") == "codex" and str(row.get("model_id") or "").strip() == target_model:
+                return row
 
     def _candidate_ids(row: Dict[str, Any]) -> set[str]:
         metadata = _coerce_metadata(row.get("metadata"))
@@ -3269,10 +3335,17 @@ async def _stream_litellm_openai(
                     "stream": True,
                     **extra_params,
                 }
+                # OpenAI 직결(api.openai.com)일 때만 제약을 맞춘다. LiteLLM 프록시
+                # 경유는 프록시가 번역하므로 건드리지 않는다.
+                _openai_direct = "api.openai.com" in (route_base_url or "")
+                if _openai_direct and model in _OPENAI_REASONING_MODELS:
+                    req_body["max_completion_tokens"] = req_body.pop("max_tokens")
                 if model not in _OPENAI_NO_CUSTOM_SAMPLING_MODELS:
                     req_body["temperature"] = _ctx_temperature.get(0.2)
                 if _oai_tools:
-                    req_body["tools"] = _oai_tools
+                    req_body["tools"] = (
+                        _oai_tools[:_OPENAI_DIRECT_MAX_TOOLS] if _openai_direct else _oai_tools
+                    )
 
                 async with client.stream(
                     "POST",
@@ -4153,6 +4226,11 @@ async def _stream_codex_relay_once(
     if image_attachments:
         req_body["image_attachments"] = image_attachments
     display_model = _CODEX_MODEL_DISPLAY.get(model, model)
+    # 2026-09-19 실측: 코덱스 계정 refresh_token 이 무효가 되면 CLI 가 401 만 찍고
+    # 본문 없이 끝난다. 릴레이는 그래도 200 + {"result":""} 를 돌려주므로 여기서
+    # done 을 내면 채팅에는 빈 말풍선만 남고 폴백도 돌지 않는다. 출력이 하나도
+    # 없었으면 done 이 아니라 error 로 올려 상위 폴백(Claude)이 돌게 한다.
+    _saw_output = False
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
             try:
@@ -4181,6 +4259,8 @@ async def _stream_codex_relay_once(
                         continue
                     evt_type = event.get("type", "")
                     if evt_type == "assistant" and event.get("subtype") == "text":
+                        if event.get("text"):
+                            _saw_output = True
                         yield {"type": "delta", "content": event.get("text", "")}
                     elif evt_type == "thinking":
                         yield {"type": "thinking", "thinking": event.get("thinking", "")}
@@ -4244,6 +4324,24 @@ async def _stream_codex_relay_once(
                     elif evt_type == "result":
                         in_tok = event.get("input_tokens", 0)
                         out_tok = event.get("output_tokens", 0)
+                        if (
+                            not _saw_output
+                            and not str(event.get("result") or "").strip()
+                            and not int(in_tok or 0)
+                            and not int(out_tok or 0)
+                        ):
+                            logger.warning(
+                                "codex_empty_result: model=%s session=%s — CLI 가 출력 없이 종료",
+                                model, (session_id or "default")[:8],
+                            )
+                            yield {
+                                "type": "error",
+                                "content": (
+                                    "codex_empty_result: Codex CLI 가 출력 없이 종료했다 "
+                                    "(계정 인증 또는 구독 한도를 확인해라)"
+                                ),
+                            }
+                            return
                         cost = _estimate_cost(model, in_tok, out_tok)
                         # Claude 와 별도 쿼터를 쓰지만, 경로별 소비 비교가 되어야
                         # 어떤 작업을 어디로 보낼지 판단할 수 있다.
