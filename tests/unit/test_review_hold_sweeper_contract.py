@@ -61,6 +61,17 @@ def test_review_hold_sweeper_unreachable_enqueue_does_not_spend_retry_count():
     assert "retry 미차감" in script[gate:update_end + 400]
 
 
+def test_review_hold_sweeper_skips_terminal_job_before_approve_promotion():
+    script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+
+    approve = script.index('if [[ "$verdict" == "APPROVE" ]]; then')
+    terminal_guard = script.index('if [[ "$current_status" == "done" || "$current_status" == "error" ]]; then', approve)
+    promote = script.index("SET status='awaiting_approval'", terminal_guard)
+
+    assert approve < terminal_guard < promote
+    assert 'log "  SWEEPER_SKIP_DONE job=${job_id} status=${current_status}"' in script[terminal_guard:promote]
+
+
 def test_review_hold_sweeper_http_500_still_spends_retry_count():
     script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
 

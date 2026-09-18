@@ -14,7 +14,8 @@ def _source(path: str) -> str:
 
 def test_awaiting_approval_notifies_session_ai_without_visible_runner_chat_dependency():
     source = _source("app/api/pipeline_runner.py")
-    branch = source.split('if status == "awaiting_approval":', 1)[1].split(
+    notify_fn = source.split("async def notify_completion", 1)[1]
+    branch = notify_fn.split('if status == "awaiting_approval":', 1)[1].split(
         'elif status == "done":', 1
     )[0]
 
@@ -41,7 +42,7 @@ def test_chat_interrupt_and_bluegreen_drain_contracts_remain_enabled():
 
     assert "_apply_deferred_interrupts_to_state" in chat_source
     assert "deferred_interrupt_apply" in chat_source
-    assert 'AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "3"' in chat_source
+    assert 'AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "5"' in chat_source
     assert 'deploy_phase_start "active_slot_drain" "running"' in deploy_source
     assert "while [[ $DRAIN_ELAPSED -lt 60 ]]" in deploy_source
     assert "sync_standby_slot_after_drain" in deploy_source
@@ -82,6 +83,11 @@ async def test_awaiting_approval_dispatches_internal_ai_trigger(monkeypatch):
                 return {"job_id": "runner-abcd1234"}
             raise AssertionError(query)
 
+        async def fetchval(self, query, *_args):
+            if "SELECT status FROM pipeline_jobs" in query:
+                return "awaiting_approval"
+            raise AssertionError(query)
+
     class _Pool:
         def acquire(self):
             return _Acquire()
@@ -110,3 +116,60 @@ async def test_awaiting_approval_dispatches_internal_ai_trigger(monkeypatch):
     assert calls[0][2] == "ohvis-test-task"
     assert "AI 검수 대기 상태" in calls[0][1]
     assert "작업 패널의 diff·테스트·변경 파일·승인 메타데이터" in calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_done_job_notification_is_a_noop(monkeypatch):
+    from app.api import pipeline_runner
+    import app.core.db_pool as db_pool
+    import app.services.pipeline_runner_service as pipeline_runner_service
+
+    class _Acquire:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def fetchrow(self, query, *_args):
+            if "SELECT status FROM pipeline_jobs" in query:
+                return {"status": "done"}
+            if "SELECT job_id, project, status" in query:
+                return {
+                    "job_id": "runner-done1234",
+                    "project": "AADS",
+                    "status": "done",
+                    "phase": "done",
+                    "chat_session_id": "11111111-1111-4111-8111-111111111111",
+                    "error_detail": None,
+                    "output_preview": "complete",
+                    "instruction_preview": "no-op",
+                }
+            raise AssertionError(query)
+
+        async def fetch(self, *_args):
+            return []
+
+    class _Pool:
+        def acquire(self):
+            return _Acquire()
+
+    async def _noop_goal_update(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(db_pool, "get_pool", lambda: _Pool())
+    monkeypatch.setattr(
+        pipeline_runner_service,
+        "_update_linked_goal_state_with_phase",
+        _noop_goal_update,
+    )
+    monkeypatch.setattr(
+        pipeline_runner,
+        "logger",
+        SimpleNamespace(info=lambda *_args, **_kwargs: None, warning=lambda *_args, **_kwargs: None),
+    )
+
+    result = await pipeline_runner.notify_completion("runner-done1234")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "terminal status: done"

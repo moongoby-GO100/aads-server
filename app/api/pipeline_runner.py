@@ -1810,6 +1810,18 @@ async def notify_completion(job_id: str):
                     "pipeline_runner.goal_state_update_fail", job_id=orphan_job_id, error=str(exc),
                 )
 
+    # AADS-STALE-TRIGGER-SUPPRESS-P1: terminal jobs must never re-enter the
+    # approval/review notification path.  Keep the terminal-side effects above
+    # (queue promotion and goal reconciliation), but stop before any chat task
+    # or notification claim can be created.
+    if status in ("done", "error"):
+        logger.info("pipeline_runner.notify_terminal_suppressed", job_id=job_id, status=status)
+        return {
+            "status": "skipped",
+            "reason": f"terminal status: {status}",
+            "promoted_job_id": promoted_job_id,
+        }
+
     session_id = row["chat_session_id"]
     if not session_id or not _UUID_RE.match(session_id):
         return {"status": "skipped", "reason": "session_id 없음", "promoted_job_id": promoted_job_id}
@@ -1830,6 +1842,7 @@ async def notify_completion(job_id: str):
                     )
                 )
                 WHERE job_id = $1
+                  AND status = 'awaiting_approval'
                   AND NOT EXISTS (
                     SELECT 1
                     FROM jsonb_array_elements(COALESCE(logs, '[]'::jsonb)) AS log
@@ -1889,6 +1902,36 @@ async def notify_completion(job_id: str):
         logger.info("pipeline_runner.trigger_sent", job_id=job_id, session_id=session_id, status=status)
 
         async def _trigger_with_ohvis():
+            # The job can become terminal after the notification claim but
+            # before this background task runs.  Re-read it immediately before
+            # delivery so a stale approval/review trigger is never sent.
+            async with pool.acquire() as conn:
+                current_status = await conn.fetchval(
+                    "SELECT status FROM pipeline_jobs WHERE job_id = $1", job_id
+                )
+                if current_status in ("done", "error"):
+                    await conn.execute(
+                        """
+                        UPDATE pipeline_jobs
+                        SET logs = COALESCE(logs, '[]'::jsonb) || jsonb_build_array(
+                            jsonb_build_object(
+                                'ts', NOW()::text,
+                                'event', 'notify_ai_suppressed',
+                                'status', $2::text,
+                                'source', 'pipeline_notify_terminal_guard'
+                            )
+                        )
+                        WHERE job_id = $1
+                        """,
+                        job_id,
+                        current_status,
+                    )
+                    logger.info(
+                        "pipeline_runner.notify_terminal_suppressed",
+                        job_id=job_id,
+                        status=current_status,
+                    )
+                    return
             _otid = None
             try:
                 _otid = await _ohvis_create(

@@ -319,6 +319,15 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id request_id; do
     log "  REVIEW $job_id project=$project http=$http_code verdict=${verdict:-none} score=$score category=${category:-none} retry=${next_retry}/${SWEEP_MAX_RETRY}"
 
     if [[ "$verdict" == "APPROVE" ]]; then
+        # AADS-STALE-TRIGGER-SUPPRESS-P1: the job may have reached a terminal
+        # state while its asynchronous review request was in flight.  Do not
+        # promote it or create an approval notification in that case.
+        current_status=$(db_query "SELECT COALESCE(status,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]') || current_status=""
+        if [[ "$current_status" == "done" || "$current_status" == "error" ]]; then
+            log "  SWEEPER_SKIP_DONE job=${job_id} status=${current_status}"
+            rm -f "$diff_file" "$ins_file" "$payload_file" "$resp_file"
+            continue
+        fi
         if ! ensure_review_hold_commit "$job_id"; then
             rm -f "$diff_file" "$ins_file" "$payload_file" "$resp_file"
             continue
