@@ -45,3 +45,39 @@ def test_review_hold_sweeper_service_uses_active_bluegreen_route():
 
     assert "Environment=AADS_API_URL=http://127.0.0.1\n" in service
     assert "AADS_API_URL=http://127.0.0.1:8100" not in service
+
+
+def test_review_hold_sweeper_unreachable_enqueue_does_not_spend_retry_count():
+    script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+
+    gate = script.index('if [[ "$unreachable" == "1" ]]; then')
+    update_stmt = script.index("db_exec ", gate)
+    update_end = script.index("\n", update_stmt)
+    update_line = script[update_stmt:update_end]
+
+    assert "review_retry_last_at=NOW()" in update_line
+    assert "review_retry_count" not in update_line
+    assert "ENQUEUE_UNREACHABLE" in script[gate:update_end + 400]
+    assert "retry 미차감" in script[gate:update_end + 400]
+
+
+def test_review_hold_sweeper_http_500_still_spends_retry_count():
+    script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+
+    infra_retry_start = script.index("infra_retry() {")
+    infra_retry_end = script.index("\n}", infra_retry_start)
+    block = script[infra_retry_start:infra_retry_end]
+
+    assert "review_retry_count=${nxt}" in block
+
+
+def test_review_hold_sweeper_stops_after_three_consecutive_unreachable():
+    script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+
+    assert 'if [[ "$consec_unreachable" -ge 3 ]]; then' in script
+    assert "API 도달 불가 — 이번 스위프 중단" in script
+    gate = script.index('if [[ "$unreachable" == "1" ]]; then')
+    circuit = script.index('if [[ "$consec_unreachable" -ge 3 ]]; then', gate)
+    stop_log = script.index("API 도달 불가 — 이번 스위프 중단", circuit)
+    stop_break = script.index("break", stop_log)
+    assert gate < circuit < stop_log < stop_break

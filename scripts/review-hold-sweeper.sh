@@ -111,7 +111,7 @@ if [[ -z "${rows//[[:space:]]/}" ]]; then
     exit 0
 fi
 
-total=0; promoted=0; rejected=0; retried=0; consec_infra=0
+total=0; promoted=0; rejected=0; retried=0; consec_infra=0; consec_unreachable=0
 
 # 인프라 사유 실패 처리 — 재시도 예산을 실제로 소비하고 다음 작업으로 넘어간다.
 #
@@ -215,13 +215,34 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id request_id; do
     # 실패가 SWEEP_INFRA_CIRCUIT 회 쌓였을 때만 "인프라가 죽었다" 로 보고 배치를
     # 멈춘다.
     infra_reason=""
-    if [[ "$request_status" == "failed" ]]; then
+    unreachable=0
+    if [[ "$http_code" == "000" || -z "$http_code" ]]; then
+        # enqueue 자체가 서버에 닿지 못한 경우(연결 실패) — 검수 모델이 답을
+        # 못 준 것과 달리 "시도"가 아니었다. review_retry_count 를 올리면
+        # 배포 컷오버 창처럼 연결이 잠깐 막히는 구간에서 정상 잡까지 재시도
+        # 예산을 다 태우고 review_hold 에 영구 방치된다.
+        unreachable=1
+        infra_reason="enqueue_http=${http_code:-000} request_status=${request_status:-unknown} verdict=${verdict:-none}"
+    elif [[ "$request_status" == "failed" ]]; then
         infra_reason="request_status=failed"
     elif [[ "$http_code" != "202" || -z "$verdict" ]]; then
         infra_reason="enqueue_http=${http_code} request_status=${request_status:-unknown} verdict=${verdict:-none}"
     elif [[ "$verdict" == "FLAG" && ",REVIEW_API_UNAVAILABLE,REVIEW_MODEL_NO_RESPONSE,REVIEW_PARSER_FAILURE,REVIEW_TIMEOUT," == *",${category},"* ]]; then
         infra_reason="category=${category}"
     fi
+
+    if [[ "$unreachable" == "1" ]]; then
+        db_exec "UPDATE pipeline_jobs SET review_retry_last_at=NOW() WHERE job_id='${job_id}' AND status='review_hold';"
+        consec_unreachable=$((consec_unreachable + 1))
+        log "  ENQUEUE_UNREACHABLE ${job_id} project=${project} ${infra_reason} (retry 미차감, consec=${consec_unreachable}/3)"
+        rm -f "$diff_file" "$ins_file" "$payload_file" "$resp_file"
+        if [[ "$consec_unreachable" -ge 3 ]]; then
+            log "  API 도달 불가 — 이번 스위프 중단 (retry budget preserved; batch stopped)"
+            break
+        fi
+        continue
+    fi
+    consec_unreachable=0
 
     if [[ -n "$infra_reason" ]]; then
         infra_retry "$job_id" "$project" "$retry_count" "$infra_reason"
