@@ -792,18 +792,24 @@ attempt_stale_base_rebase() {
 # 오탐(배포해도 되는데 건너뜀)은 사람이 별도 승인으로 배포하면 끝이지만,
 # 미탐(금지인데 배포함)은 오늘처럼 운영 중인 안전장치를 되돌린다.
 # 그래서 애매하면 건너뛰는 쪽으로 판정한다.
+#
+# 2026-09-18 (AADS-RUNNER-DEPLOY-FORBID-REGEX-P1): 고정 문자열 13개의 부분일치로는
+# "빌드·배포 실행 금지" 처럼 트리거 단어와 금지어 사이에 다른 말이 낀 표현을 못 잡았다.
+# 그래서 정규식으로 바꾸되, 트리거(배포/재기동/...)와 금지어(금지/하지 마/말라) 사이의
+# 간격을 최대 12자로 좁게 묶어 무관한 문장까지 걸리는 것을 막는다.
 instruction_forbids_deploy() {
-    local text="$1" lowered="" pat=""
+    local text="$1" lowered=""
     [[ -n "$text" ]] || return 1
     lowered=$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')
-    for pat in \
-        "배포 금지" "배포금지" "배포·재기동 절대 금지" "배포/재기동 금지" \
-        "재기동 금지" "재기동금지" "커밋까지만" "커밋 까지만" \
-        "push 까지만" "push까지만" "do not deploy" "no deploy" "deploy 금지"; do
-        case "$lowered" in
-            *"$pat"*) return 0 ;;
-        esac
-    done
+    if [[ "$lowered" =~ (배포|재기동|빌드.{0,4}배포|deploy).{0,12}(금지|하지[[:space:]]*마|말라) ]]; then
+        return 0
+    fi
+    if [[ "$lowered" =~ (커밋|push)[[:space:]]*까지만 ]]; then
+        return 0
+    fi
+    if [[ "$lowered" =~ do[[:space:]_-]*not[[:space:]_-]*deploy ]] || [[ "$lowered" =~ no[[:space:]_-]*deploy ]]; then
+        return 0
+    fi
     return 1
 }
 
@@ -1850,10 +1856,13 @@ run_job() {
    - npm run build, npm start, next build
    - supervisorctl, systemctl, service restart
    - kill, pkill (프로세스 종료)
-3. 사용자 지시서에 Commit/Push/Build/Deploy 항목이 있어도 실행하지 말고, 변경 파일과 검증 결과만 보고하세요.
-4. commit, push, 빌드와 배포는 CEO 승인 후 Runner가 자동으로 수행합니다.
-5. 작업 완료 시 '빌드 필요' 또는 '배포 필요' 등을 언급하지 마세요. Runner가 알아서 합니다.
-6. [R-AUTH] 인증 토큰 규칙:
+3. 지시서의 완료기준에 npm run build / next build / docker build 실행이 들어 있어도 직접 실행하지 마세요.
+   그 항목은 승인 후 Runner가 수행합니다. RESULT에는 '승인 후 Runner 빌드 검증 대상'이라고 적으세요.
+   실행하지 않은 것을 통과로 적지 마세요.
+4. 사용자 지시서에 Commit/Push/Build/Deploy 항목이 있어도 실행하지 말고, 변경 파일과 검증 결과만 보고하세요.
+5. commit, push, 빌드와 배포는 CEO 승인 후 Runner가 자동으로 수행합니다.
+6. 작업 완료 시 '빌드 필요' 또는 '배포 필요' 등을 언급하지 마세요. Runner가 알아서 합니다.
+7. [R-AUTH] 인증 토큰 규칙:
    - AADS는 Auth Token(OAuth) 사용: ANTHROPIC_AUTH_TOKEN (sk-ant-oat01-...)
    - ANTHROPIC_API_KEY를 코드에서 직접 참조/추가 금지
    - 2계정 스위치: AUTH_TOKEN(1순위) → API_KEY_FALLBACK(2순위) → Gemini LiteLLM(3순위)
