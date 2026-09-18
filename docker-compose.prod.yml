@@ -306,7 +306,7 @@ services:
       - LOG_LEVEL=INFO
       - AADS_SERVICE_ROLE=yeoljeong-finance
       - DATABASE_URL=${YEOLJEONG_FINANCE_DATABASE_URL:-postgresql://aads:aads2026secure@aads-postgres:5432/aads}
-      - YEOLJEONG_FINANCE_DATABASE_URL=${YEOLJEONG_FINANCE_DATABASE_URL:-postgresql://aads:aads2026secure@aads-postgres:5432/aads}
+      - YEOLJEONG_FINANCE_DATABASE_URL=${YEOLJEONG_FINANCE_DATABASE_URL:-}
       - OBYS_DATABASE_URL=${OBYS_DATABASE_URL:-}
       - YEOLJEONG_FINANCE_DATA_DIR=/app/yeoljeong-data
       - TZ=Asia/Seoul
@@ -357,7 +357,8 @@ services:
       - LOG_LEVEL=INFO
       - AADS_SERVICE_ROLE=yeoljeong-finance-worker
       - DATABASE_URL=${YEOLJEONG_FINANCE_DATABASE_URL:-postgresql://aads:aads2026secure@aads-postgres:5432/aads}
-      - YEOLJEONG_FINANCE_DATABASE_URL=${YEOLJEONG_FINANCE_DATABASE_URL:-postgresql://aads:aads2026secure@aads-postgres:5432/aads}
+      - YEOLJEONG_FINANCE_DATABASE_URL=${YEOLJEONG_FINANCE_DATABASE_URL:-}
+      - OBYS_DATABASE_URL=${OBYS_DATABASE_URL:-}
       - YEOLJEONG_FINANCE_DATA_DIR=/app/yeoljeong-data
       - TZ=Asia/Seoul
       - VAULT_ENCRYPTION_KEY=${VAULT_ENCRYPTION_KEY:-}
