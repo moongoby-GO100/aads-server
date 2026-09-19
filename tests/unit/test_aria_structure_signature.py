@@ -152,6 +152,23 @@ def test_required_state_change_blocks_but_unspecified_state_change_is_allowed():
     assert blocked["reason"] == "critical_required_state_changed"
 
 
+def test_required_state_check_precedes_empty_normalized_structure():
+    result = assess_revisit(
+        previous=None,
+        current_nodes=[{"role": "status", "accessible_name": "Price $12.99"}],
+        area_key="catalog-search",
+        template={
+            "required_states": {
+                "role": "button",
+                "name": "Search",
+                "states": {"disabled": False},
+            },
+        },
+    )
+    assert result["decision"] == "human_gateway"
+    assert result["reason"] == "critical_required_state_changed"
+
+
 def test_missing_required_anchor_goes_to_human_gateway_and_ambiguous_goes_to_rediscovery():
     result = assess_revisit(
         previous=None, current_nodes=[{"role": "button", "accessible_name": "Search"}], area_key="catalog-search",

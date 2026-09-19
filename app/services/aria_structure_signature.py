@@ -281,14 +281,14 @@ def assess_revisit(
     if missing:
         return {"decision": "human_gateway", "reason": "critical_required_anchor_missing", "similarity": 0.0,
                 "human_gateway_required": True, "signature": signature}
-    tokens = [_node_token(node) for node in current]
-    if not current or len(tokens) != len(set(tokens)):
-        return {"decision": "rediscover", "reason": "ambiguous_aria_structure", "similarity": 0.0,
-                "human_gateway_required": False, "signature": signature}
     required_state_rules = _required_state_rules(template)
     if any(not _required_state_present(rule, current_nodes) for rule in required_state_rules):
         return {"decision": "human_gateway", "reason": "critical_required_state_changed", "similarity": 0.0,
                 "human_gateway_required": True, "signature": signature}
+    tokens = [_node_token(node) for node in current]
+    if not current or len(tokens) != len(set(tokens)):
+        return {"decision": "rediscover", "reason": "ambiguous_aria_structure", "similarity": 0.0,
+                "human_gateway_required": False, "signature": signature}
     if not previous:
         return {"decision": "rediscover", "reason": "no_prior_signature", "similarity": 0.0,
                 "human_gateway_required": False, "signature": signature}
