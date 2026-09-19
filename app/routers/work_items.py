@@ -1,0 +1,256 @@
+"""M14 work-item review, approval, and capability-grant API."""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Header, HTTPException
+from pydantic import BaseModel, Field
+
+from app.auth import TenantRole, require_tenant_role
+from app.core.goal_work_hierarchy_policy import (
+    goal_work_hierarchy_enabled,
+    workflow_approval_enabled,
+)
+from app.services.goal_work_hierarchy import resolve_actor_scope
+from app.services.goal_workflow_approval import (
+    approval_preview,
+    create_change_set,
+    create_grant,
+    decide_change_set,
+    execute_change_set,
+    preview_grant,
+    reserve_grant_use,
+    review_item,
+    revoke_grant,
+    route_change_set,
+    submit_review,
+)
+
+router = APIRouter()
+member = require_tenant_role(TenantRole.MEMBER)
+viewer = require_tenant_role(TenantRole.VIEWER)
+member_dependency = Depends(member)
+viewer_dependency = Depends(viewer)
+
+
+class ChangeSetRequest(BaseModel):
+    base_version: int = Field(ge=1)
+    patch: list[dict[str, Any]]
+    action: Literal["create", "update", "assign", "cancel", "execute", "accept"] = "update"
+    rationale: str = Field(min_length=1)
+    expected_effect: str = Field(min_length=1)
+    rollback_plan: str = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    environment: Literal["dev", "staging", "production"] = "dev"
+    risk_factors: list[str] = Field(default_factory=list)
+
+
+class ExecuteRequest(BaseModel):
+    execution_key: str = Field(min_length=1, max_length=300)
+    owner_instance: str = Field(min_length=1)
+    owner_epoch: int = Field(ge=1)
+
+
+class ReviewRequest(BaseModel):
+    reason: str = ""
+
+
+class DecisionRequest(BaseModel):
+    approve: bool
+    reason: str = ""
+    bulk: bool = False
+
+
+class GrantRequest(BaseModel):
+    principal_session_id: UUID
+    assignment_id: UUID
+    approved_by: UUID
+    requested_by: UUID | None = None
+    milestone_id: UUID | None = None
+    epic_id: UUID | None = None
+    story_id: UUID | None = None
+    actions: list[str] = Field(min_length=1)
+    tool_groups: list[str] = Field(default_factory=list)
+    max_risk_tier: Literal["A0", "A1", "A2"] = "A1"
+    environments: list[Literal["dev", "staging", "production"]] = Field(default_factory=lambda: ["dev"])
+    conditions: dict[str, Any] = Field(default_factory=dict)
+    max_executions: int = Field(default=1, ge=1)
+    max_files: int = Field(default=0, ge=0)
+    max_rows: int = Field(default=0, ge=0)
+    max_cost_usd: float = Field(default=0, ge=0)
+    max_parallel: int = Field(default=1, ge=1)
+    max_duration_seconds: int = Field(default=0, ge=0)
+    valid_from: datetime
+    expires_at: datetime
+    idle_timeout_seconds: int | None = Field(default=None, ge=1)
+    delegation_depth: Literal[0, 1] = 0
+    parent_grant_id: UUID | None = None
+    revocation_strategy: Literal["cancel_now", "finish_current", "compensate"] = "cancel_now"
+
+
+class RevokeRequest(BaseModel):
+    reason: str = Field(min_length=1)
+
+
+class SimulationRequest(BaseModel):
+    input: dict[str, Any]
+
+
+def _identity(context: dict[str, Any]) -> tuple[str, str, bool]:
+    user = context.get("user", {})
+    return (str(context.get("tenant", {}).get("id") or ""), str(user.get("user_id") or ""),
+            bool(user.get("is_internal_admin")))
+
+
+def _require_m14() -> None:
+    if not goal_work_hierarchy_enabled() or not workflow_approval_enabled():
+        raise HTTPException(404, detail={"code": "goal_workflow_approval_disabled"})
+
+
+async def _actor(conn: Any, context: dict[str, Any], session_id: str | None):
+    tenant, user, admin = _identity(context)
+    return await resolve_actor_scope(conn, tenant_id=tenant, user_id=user,
+                                     actor_session_id=session_id, internal_admin=admin)
+
+
+@router.post("/work-items/{item_id}/change-sets", status_code=201)
+async def post_change_set(item_id: str, req: ChangeSetRequest, context=member_dependency,
+                          session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        actor = await _actor(conn, context, session_id)
+        result = await create_change_set(conn, tenant_id=tenant, actor=actor, target_id=item_id,
+                                         payload=req.model_dump(mode="json"))
+        routing = await route_change_set(conn, tenant_id=tenant, change_set_id=result["id"])
+    return {"change_set": result, **routing}
+
+
+@router.post("/work-item-change-sets/{change_set_id}/execute")
+async def post_execute(change_set_id: str, req: ExecuteRequest, context=member_dependency,
+                       session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        actor = await _actor(conn, context, session_id)
+        return await execute_change_set(conn, tenant_id=tenant, change_set_id=change_set_id,
+                                        actor=actor, **req.model_dump())
+
+
+@router.post("/work-item-change-sets/{change_set_id}/decision")
+async def post_decision(change_set_id: str, req: DecisionRequest, context=member_dependency,
+                        session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        return await decide_change_set(conn, tenant_id=tenant, change_set_id=change_set_id,
+                                       actor=await _actor(conn, context, session_id), **req.model_dump())
+
+
+@router.get("/work-items/{item_id}/approval-preview")
+async def get_approval_preview(item_id: str, context=viewer_dependency):
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn:
+        return await approval_preview(conn, tenant_id=tenant, item_id=item_id)
+
+
+@router.post("/work-items/{item_id}/submit-review")
+async def post_submit_review(item_id: str, context=member_dependency,
+                             session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        return await submit_review(conn, tenant_id=tenant, item_id=item_id,
+                                   actor=await _actor(conn, context, session_id))
+
+
+async def _review(item_id: str, req: ReviewRequest, accept: bool, context: dict[str, Any], session_id: str | None):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        return await review_item(conn, tenant_id=tenant, item_id=item_id,
+                                 actor=await _actor(conn, context, session_id), accept=accept, reason=req.reason)
+
+
+@router.post("/work-items/{item_id}/accept")
+async def post_accept(item_id: str, req: ReviewRequest, context=member_dependency,
+                      session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    return await _review(item_id, req, True, context, session_id)
+
+
+@router.post("/work-items/{item_id}/request-changes")
+async def post_request_changes(item_id: str, req: ReviewRequest, context=member_dependency,
+                               session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    return await _review(item_id, req, False, context, session_id)
+
+
+@router.post("/goals/{goal_id}/auto-approval-grants/preview")
+async def post_grant_preview(goal_id: str, req: GrantRequest, context=member_dependency,
+                             session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    _require_m14()
+    if not session_id:
+        raise HTTPException(403, detail={"code": "project_scope_denied"})
+    return preview_grant(req.model_dump(mode="json"), actor_session_id=session_id)
+
+
+@router.post("/goals/{goal_id}/auto-approval-grants", status_code=201)
+async def post_grant(goal_id: str, req: GrantRequest, context=member_dependency,
+                     session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        return await create_grant(conn, tenant_id=tenant, goal_id=goal_id,
+                                  actor=await _actor(conn, context, session_id),
+                                  payload=req.model_dump(mode="json"))
+
+
+@router.get("/goals/{goal_id}/auto-approval-grants")
+async def get_grants(goal_id: str, context=viewer_dependency):
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    rows = await get_pool().fetch(
+        """SELECT *,max_executions-used_executions AS remaining_uses FROM goal_auto_approval_grants
+           WHERE tenant_id=$1::uuid AND goal_id=$2::uuid ORDER BY issued_at DESC""", tenant, goal_id)
+    return [dict(row) for row in rows]
+
+
+@router.post("/auto-approval-grants/{grant_id}/revoke")
+async def post_revoke(grant_id: str, req: RevokeRequest, context=member_dependency,
+                      session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        return await revoke_grant(conn, tenant_id=tenant, grant_id=grant_id,
+                                  actor=await _actor(conn, context, session_id), reason=req.reason)
+
+
+@router.get("/auto-approval-grants/{grant_id}/usage")
+async def get_usage(grant_id: str, context=viewer_dependency):
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    rows = await get_pool().fetch(
+        "SELECT * FROM goal_auto_approval_uses WHERE tenant_id=$1::uuid AND grant_id=$2::uuid ORDER BY reserved_at",
+        tenant, grant_id)
+    return [dict(row) for row in rows]
+
+
+@router.post("/goal-policy/simulate")
+async def post_simulate(req: SimulationRequest, context=member_dependency,
+                        session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        return await reserve_grant_use(conn, tenant_id=tenant,
+                                       actor=await _actor(conn, context, session_id),
+                                       request=req.input, simulate=True)

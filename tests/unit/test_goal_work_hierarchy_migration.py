@@ -6,7 +6,7 @@ UP = (ROOT / "migrations/20260919_goal_work_hierarchy_m12.sql").read_text()
 DOWN = (ROOT / "migrations/rollback/20260919_goal_work_hierarchy_m12.down.sql").read_text()
 
 
-def test_m12_tables_and_no_router_are_present():
+def test_m12_tables_remain_present_after_m14_router_is_added():
     for table in (
         "work_items", "work_item_dependencies", "work_item_evidence",
         "project_role_assignments", "work_item_change_sets", "work_item_events",
@@ -14,7 +14,8 @@ def test_m12_tables_and_no_router_are_present():
         "goal_approval_policy_versions",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in UP
-    assert not (ROOT / "app/routers/work_items.py").exists()
+    # M12 originally shipped schema-only; M14 now owns this dedicated router.
+    assert (ROOT / "app/routers/work_items.py").exists()
 
 
 def test_work_item_scope_status_and_idempotency_contract():
