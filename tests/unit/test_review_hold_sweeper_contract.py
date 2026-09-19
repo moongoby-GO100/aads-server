@@ -115,6 +115,15 @@ def test_exhausted_review_is_handed_to_origin_session_once_with_bound_evidence()
     assert "pipeline_review_adjudicate" in fn
     assert "q.status IN ('pending','claimed')" in fn
     assert "review_origin_adjudication_pending" in fn
+    assert "ORIGIN_ADJUDICATION_RETRY_THRESHOLD" in script
+    assert "REVIEW_ORIGIN_ADJUDICATION_RETRY_THRESHOLD:-3" in script
+    assert "handoff_rows=$(db_query" in script
+    assert "error_detail,'') <> 'review_origin_adjudication_pending'" in script
+    pre_handoff = script.split("handoff_rows=$(db_query", 1)[1].split('if ! rows=$(db_query', 1)[0]
+    assert 'if [[ "$DRY_RUN" == "1" ]]' in pre_handoff
+    assert pre_handoff.index('if [[ "$DRY_RUN" == "1" ]]') < pre_handoff.index(
+        'enqueue_origin_adjudication "$handoff_job" "$handoff_project"'
+    )
     assert script.count('enqueue_origin_adjudication "$jid" "$proj"') == 1
     assert script.count('enqueue_origin_adjudication "$job_id" "$project"') == 1
 

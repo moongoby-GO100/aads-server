@@ -33,6 +33,7 @@ AADS_API_URL="${AADS_API_URL:-http://127.0.0.1:8100}"
 
 SWEEP_BATCH="${SWEEP_BATCH:-5}"                      # 1회 실행당 재검수 건수
 SWEEP_MAX_RETRY="${SWEEP_MAX_RETRY:-10}"             # 잡당 자동 재검수 상한 (CEO 지시 2026-09-17: 6→10)
+ORIGIN_ADJUDICATION_RETRY_THRESHOLD="${REVIEW_ORIGIN_ADJUDICATION_RETRY_THRESHOLD:-3}"
 SWEEP_BACKOFF_BASE_MIN="${SWEEP_BACKOFF_BASE_MIN:-10}"
 SWEEP_BACKOFF_MAX_MIN="${SWEEP_BACKOFF_MAX_MIN:-360}"
 # 연속으로 이만큼 인프라 사유 실패가 나오면 그때 배치를 멈춘다(진짜 회로 개방).
@@ -309,22 +310,13 @@ WHERE status='review_hold'
   AND review_flag_category IN (${INFRA_CATEGORIES})
   AND COALESCE(git_diff,'') <> ''
   AND COALESCE(review_retry_count,0) < ${SWEEP_MAX_RETRY}
+  AND COALESCE(error_detail,'') <> 'review_origin_adjudication_pending'
   AND (review_retry_last_at IS NULL
        OR review_retry_last_at < NOW() - ((LEAST(${SWEEP_BACKOFF_MAX_MIN},
             (${SWEEP_BACKOFF_BASE_MIN} * POWER(2, COALESCE(review_retry_count,0)))::int))::text || ' minutes')::interval)
 -- 큰 diff 한 건이 복구 창을 독점하지 않도록 작은 것부터 처리한다.
 ORDER BY length(COALESCE(git_diff,'')) ASC, updated_at ASC
 LIMIT ${SWEEP_BATCH};"
-
-if ! rows=$(db_query "$select_sql"); then
-    log "review_hold 대상 조회 실패 — 대상 없음으로 오인하지 않고 중단합니다"
-    exit 1
-fi
-
-if [[ -z "${rows//[[:space:]]/}" ]]; then
-    log "no eligible review_hold job (infra category, backoff 만족)"
-    exit 0
-fi
 
 total=0; promoted=0; rejected=0; retried=0; handed=0; terminated=0; consec_infra=0; consec_unreachable=0
 
@@ -348,8 +340,8 @@ infra_retry() {
     retried=$((retried + 1))
     consec_infra=$((consec_infra + 1))
     log "  INFRA_RETRY ${jid} project=${proj} retry=${nxt}/${SWEEP_MAX_RETRY} ${reason}"
-    if [[ "$nxt" -ge "$SWEEP_MAX_RETRY" ]]; then
-        log "  EXHAUSTED ${jid} — 자동 재검수 상한 도달, 원 세션 판정 이관"
+    if [[ "$nxt" -ge "$ORIGIN_ADJUDICATION_RETRY_THRESHOLD" ]]; then
+        log "  ORIGIN_THRESHOLD ${jid} — 연속 무응답 판정 상한 도달, 원 세션 판정 이관"
         enqueue_origin_adjudication "$jid" "$proj"
     fi
 }
@@ -377,7 +369,7 @@ WITH target AS (
        AND j.project='${proj}'
        AND j.status='review_hold'
        AND j.review_flag_category IN (${INFRA_CATEGORIES})
-       AND COALESCE(j.review_retry_count,0) >= ${SWEEP_MAX_RETRY}
+       AND COALESCE(j.review_retry_count,0) >= ${ORIGIN_ADJUDICATION_RETRY_THRESHOLD}
        AND COALESCE(j.commit_hash,'') ~ '^[0-9a-fA-F]{7,64}$'
        AND COALESCE(j.git_diff,'') <> ''
 ), marked AS (
@@ -407,6 +399,38 @@ RETURNING id::text;" 2>/dev/null | tr -d '[:space:]') || deferred_id=""
         log "  ORIGIN_ADJUDICATION_DEDUPED_OR_BLOCKED ${jid} project=${proj}"
     fi
 }
+
+# 이전 주기에 이미 임계치를 넘긴 작업도 백오프 만료를 기다리지 않고 먼저
+# 원 세션으로 이관한다. 이렇게 해야 배포 직후 정책이 적용되면 기존 적체도 즉시
+# 줄고, select_sql 의 일반 모델 재시도와 동시에 같은 작업을 잡지 않는다.
+handoff_rows=$(db_query "
+SELECT job_id, project
+  FROM pipeline_jobs
+ WHERE status='review_hold'
+   AND review_flag_category IN (${INFRA_CATEGORIES})
+   AND COALESCE(review_retry_count,0) >= ${ORIGIN_ADJUDICATION_RETRY_THRESHOLD}
+   AND COALESCE(error_detail,'') <> 'review_origin_adjudication_pending'
+ ORDER BY updated_at ASC
+ LIMIT ${SWEEP_BATCH};" 2>/dev/null) || handoff_rows=""
+if [[ "$DRY_RUN" == "1" ]]; then
+    [[ -z "${handoff_rows//[[:space:]]/}" ]] || log "DRY_RUN origin adjudication candidates present"
+else
+    while IFS=$'\x1e' read -r handoff_job handoff_project; do
+        [[ -z "$handoff_job" ]] && continue
+        [[ "$handoff_job" =~ ^runner-[0-9a-f]{6,32}$ ]] || continue
+        enqueue_origin_adjudication "$handoff_job" "$handoff_project"
+    done <<< "$handoff_rows"
+fi
+
+if ! rows=$(db_query "$select_sql"); then
+    log "review_hold 대상 조회 실패 — 대상 없음으로 오인하지 않고 중단합니다"
+    exit 1
+fi
+
+if [[ -z "${rows//[[:space:]]/}" ]]; then
+    log "no eligible review_hold job (infra category, backoff 만족); origin_handoff=${handed}"
+    exit 0
+fi
 
 while IFS=$'\x1e' read -r job_id project retry_count session_id request_id; do
     [[ -z "$job_id" ]] && continue
@@ -604,8 +628,8 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id request_id; do
                      review_feedback=COALESCE(review_feedback,'') || E'\n' || ${note}
                  WHERE job_id='${job_id}' AND status='review_hold';"
         retried=$((retried + 1))
-        if [[ "$next_retry" -ge "$SWEEP_MAX_RETRY" ]]; then
-            log "  EXHAUSTED $job_id — 자동 재검수 상한 도달, 원 세션 판정 이관"
+        if [[ "$next_retry" -ge "$ORIGIN_ADJUDICATION_RETRY_THRESHOLD" ]]; then
+            log "  ORIGIN_THRESHOLD $job_id — 연속 무응답 판정 상한 도달, 원 세션 판정 이관"
             enqueue_origin_adjudication "$job_id" "$project"
         fi
     fi

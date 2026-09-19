@@ -2609,9 +2609,12 @@ async def adjudicate_review_from_origin_session(
                 raise HTTPException(status_code=409, detail="리뷰 인프라 장애 작업만 원 세션 폴백이 가능합니다")
 
             try:
-                retry_threshold = max(1, int(os.getenv("REVIEW_SWEEP_MAX_RETRY", "10")))
+                retry_threshold = max(
+                    1,
+                    int(os.getenv("REVIEW_ORIGIN_ADJUDICATION_RETRY_THRESHOLD", "3")),
+                )
             except ValueError:
-                retry_threshold = 10
+                retry_threshold = 3
             if int(row["review_retry_count"] or 0) < retry_threshold:
                 raise HTTPException(status_code=409, detail="자동 재검수 상한에 도달하지 않았습니다")
 
