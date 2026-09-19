@@ -305,33 +305,150 @@ async def create_browser_task(
     current_step: str = "",
 ) -> dict[str, Any]:
     normalized_work_key = normalize_work_key(work_key)
-    async with get_pool().acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO browser_tasks (tenant_id, user_id, session_id, work_key, target_url, status, current_step)
-            VALUES ($1, $2, $3, $4, $5, 'queued', $6)
-            RETURNING *
-            """,
-            _tenant_uuid(tenant_id),
-            user_id,
-            _nullable_uuid(session_id),
+    try:
+        async with get_pool().acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO browser_tasks (tenant_id, user_id, session_id, work_key, target_url, status, current_step)
+                VALUES ($1, $2, $3, $4, $5, 'queued', $6)
+                RETURNING *
+                """,
+                _tenant_uuid(tenant_id),
+                user_id,
+                _nullable_uuid(session_id),
+                normalized_work_key,
+                target_url,
+                current_step,
+            )
+            await append_browser_task_event(
+                conn=conn,
+                tenant_id=tenant_id,
+                task_id=str(row["id"]),
+                event_type="created",
+                payload={
+                    "work_key": normalized_work_key,
+                    "target_url": target_url,
+                    "session_id": session_id or "",
+                    "current_step": current_step,
+                },
+            )
+        return _task_to_dict(row)
+    except Exception as exc:
+        logger.warning(
+            "browser_task_create_failed work_key=%s target_url=%s err=%s",
             normalized_work_key,
             target_url,
-            current_step,
+            exc,
         )
-        await append_browser_task_event(
-            conn=conn,
-            tenant_id=tenant_id,
-            task_id=str(row["id"]),
-            event_type="created",
-            payload={
-                "work_key": normalized_work_key,
-                "target_url": target_url,
-                "session_id": session_id or "",
-                "current_step": current_step,
-            },
+        return {
+            "id": "",
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "session_id": session_id or "",
+            "work_key": normalized_work_key,
+            "target_url": target_url,
+            "status": "creation_failed",
+            "current_step": current_step,
+            "requires_approval": False,
+            "approval_request_id": None,
+            "result": {},
+            "error": str(exc),
+        }
+
+
+STEP_EVENT_TYPES = {
+    "route_decided",
+    "navigate",
+    "action",
+    "capture",
+    "done",
+    "failed",
+    "route_fallback",
+}
+
+
+async def record_browser_task_step(
+    *,
+    tenant_id: str,
+    task_id: str,
+    step: str,
+    narration: str,
+    guide: str,
+    route: str = "",
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """작업 단계(step)를 이벤트로 남기고 current_step 을 갱신한다.
+
+    DB 오류가 나도 이 함수는 예외를 올리지 않는다 — 단계 기록 실패가
+    브라우저 작업 자체를 막아서는 안 된다(경고 로그만 남긴다).
+    """
+    payload = {
+        "step": step,
+        "narration": narration,
+        "guide": guide,
+        "route": route,
+        **(extra or {}),
+    }
+    try:
+        async with get_pool().acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE browser_tasks
+                   SET current_step = $3,
+                       updated_at = NOW()
+                 WHERE tenant_id = $1 AND id = $2
+                """,
+                _tenant_uuid(tenant_id),
+                uuid.UUID(task_id),
+                step[:500],
+            )
+            await append_browser_task_event(
+                conn=conn,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                event_type=step,
+                payload=payload,
+            )
+    except Exception as exc:
+        logger.warning(
+            "browser_task_step_record_failed task_id=%s step=%s err=%s",
+            task_id,
+            step,
+            exc,
         )
-    return _task_to_dict(row)
+
+
+async def list_browser_task_steps(*, tenant_id: str, task_id: str, limit: int = 100) -> list[dict[str, Any]]:
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT *
+              FROM browser_task_events
+             WHERE tenant_id = $1
+               AND task_id = $2
+               AND event_type = ANY($3::text[])
+             ORDER BY created_at ASC
+             LIMIT $4
+            """,
+            _tenant_uuid(tenant_id),
+            uuid.UUID(task_id),
+            sorted(STEP_EVENT_TYPES),
+            max(1, min(limit, 500)),
+        )
+    steps = []
+    for row in rows:
+        event = _event_to_dict(row)
+        payload = event.get("payload") or {}
+        steps.append(
+            {
+                "step": payload.get("step") or event.get("event_type", ""),
+                "narration": payload.get("narration", ""),
+                "guide": payload.get("guide", ""),
+                "route": payload.get("route", ""),
+                "created_at": event.get("created_at", ""),
+            }
+        )
+    return steps
 
 
 def _should_cleanup_browser_session(task: dict[str, Any]) -> bool:
@@ -905,18 +1022,98 @@ async def capture_browser_task_live_frame(*, tenant_id: str, task_id: str) -> di
     if not work_key:
         return {"status": "skipped", "reason": "work_key_missing"}
 
+    target_url = str(task.get("target_url") or "")
+    await record_browser_task_step(
+        tenant_id=tenant_id,
+        task_id=task_id,
+        step="route_decided",
+        narration="서버 브라우저(Playwright)로 먼저 접근을 시도합니다.",
+        guide="잠시만 기다려 주세요. 접근이 막히면 대표님 PC 창으로 자동 전환합니다.",
+        route="self_hosted_playwright",
+    )
+    await record_browser_task_step(
+        tenant_id=tenant_id,
+        task_id=task_id,
+        step="navigate",
+        narration=f"{target_url or '대상 페이지'}로 이동 중입니다.",
+        guide="이동이 끝나면 화면을 캡처합니다.",
+        route="self_hosted_playwright",
+    )
+
     self_hosted = await _capture_self_hosted_playwright_frame(task)
     if self_hosted.get("status") == "captured":
+        await record_browser_task_step(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            step="capture",
+            narration="서버 브라우저 화면을 캡처했습니다.",
+            guide="대시보드에서 캡처된 화면을 확인하실 수 있습니다.",
+            route="self_hosted_playwright",
+        )
+        await record_browser_task_step(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            step="done",
+            narration="서버 브라우저로 작업을 완료했습니다.",
+            guide="추가로 필요한 조작이 있으면 말씀해 주세요.",
+            route="self_hosted_playwright",
+        )
         return self_hosted
+
+    fail_reason = str(self_hosted.get("reason") or self_hosted.get("message") or "unknown_error")
+    fail_diagnosis = self_hosted.get("access_diagnosis") or {}
+    await record_browser_task_step(
+        tenant_id=tenant_id,
+        task_id=task_id,
+        step="route_fallback",
+        narration=f"서버 경로가 {fail_reason}(으)로 막혀 대표님 PC 창으로 전환합니다.",
+        guide="PC 브라우저 창이 뜨면 확인해 주세요. 별도 조작은 필요 없습니다.",
+        route="pc_agent",
+        extra={"fallback_reason": fail_reason, "http_status": fail_diagnosis.get("http_status")},
+    )
+    await record_browser_task_step(
+        tenant_id=tenant_id,
+        task_id=task_id,
+        step="navigate",
+        narration=f"PC 에이전트로 {target_url or '대상 페이지'} 이동을 시도합니다.",
+        guide="PC 브라우저 창을 확인해 주세요.",
+        route="pc_agent",
+    )
 
     pc_agent = await _capture_pc_agent_frame(tenant_id=tenant_id, task=task)
     if pc_agent.get("status") == "captured":
         pc_agent["fallback_from"] = self_hosted
+        await record_browser_task_step(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            step="capture",
+            narration="PC 에이전트 화면을 캡처했습니다.",
+            guide="대시보드에서 캡처된 화면을 확인하실 수 있습니다.",
+            route="pc_agent",
+        )
+        await record_browser_task_step(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            step="done",
+            narration="PC 에이전트 경유로 작업을 완료했습니다.",
+            guide="추가로 필요한 조작이 있으면 말씀해 주세요.",
+            route="pc_agent",
+        )
         return pc_agent
     diagnosis = self_hosted.get("access_diagnosis") or classify_playwright_access(
         status="skipped",
         reason=str(self_hosted.get("reason") or pc_agent.get("reason") or "all_capture_backends_failed"),
         message=str(self_hosted.get("message") or pc_agent.get("message") or ""),
+    )
+    pc_fail_reason = str(pc_agent.get("reason") or "unknown_error")
+    await record_browser_task_step(
+        tenant_id=tenant_id,
+        task_id=task_id,
+        step="failed",
+        narration=f"서버 브라우저({fail_reason})와 PC 에이전트({pc_fail_reason}) 접근이 모두 실패했습니다.",
+        guide="네트워크 상태를 확인하시거나 잠시 후 다시 시도해 주세요.",
+        route="none",
+        extra={"self_hosted_reason": fail_reason, "pc_agent_reason": pc_fail_reason},
     )
     return {
         "status": "skipped",

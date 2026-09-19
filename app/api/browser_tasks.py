@@ -16,6 +16,7 @@ from app.services.browser_task_gateway import (
     get_browser_task,
     get_browser_task_live_frame,
     list_browser_task_events,
+    list_browser_task_steps,
     list_browser_tasks,
     list_permission_requests,
     request_task_permission,
@@ -128,7 +129,11 @@ async def api_create_browser_task(
         session_id=session_id,
         current_step=body.current_step,
     )
-    return {"status": "created", "task": task, "profile": profile_info(body.work_key, body.target_url)}
+    return {
+        "status": "created" if task.get("id") else "creation_failed",
+        "task": task,
+        "profile": profile_info(body.work_key, body.target_url),
+    }
 
 
 @router.post("/access-check")
@@ -161,6 +166,19 @@ async def api_list_browser_task_events(
         raise HTTPException(status_code=404, detail="browser_task_not_found")
     events = await list_browser_task_events(tenant_id=_tenant_id(context), task_id=task_id, limit=limit)
     return {"events": events, "count": len(events)}
+
+
+@router.get("/{task_id}/steps")
+async def api_list_browser_task_steps(
+    task_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    context: TenantContext = Depends(require_viewer),
+) -> dict[str, Any]:
+    task = await get_browser_task(tenant_id=_tenant_id(context), task_id=task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="browser_task_not_found")
+    steps = await list_browser_task_steps(tenant_id=_tenant_id(context), task_id=task_id, limit=limit)
+    return {"steps": steps, "count": len(steps)}
 
 
 @router.get("/{task_id}/live-frame")

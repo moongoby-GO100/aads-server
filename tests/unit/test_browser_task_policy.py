@@ -337,6 +337,213 @@ async def test_live_frame_capture_uses_pc_agent_as_fallback(monkeypatch):
     assert result["fallback_from"]["reason"] == "unsupported_target_url"
 
 
+@pytest.mark.asyncio
+async def test_live_frame_capture_records_route_decided_navigate_capture_done(monkeypatch):
+    tenant_id = "00000000-0000-0000-0000-000000000002"
+    task_id = "00000000-0000-0000-0000-000000000001"
+    recorded: list[dict] = []
+
+    async def fake_get_browser_task(*, tenant_id: str, task_id: str):
+        return {
+            "id": task_id,
+            "tenant_id": tenant_id,
+            "work_key": "ohvis-login",
+            "target_url": "https://aads.newtalk.kr/login",
+            "current_step": "login",
+        }
+
+    async def fake_self_hosted(task):
+        return {"status": "captured", "source": "self_hosted_playwright", "frame": {"task_id": task["id"]}}
+
+    async def fake_record_step(**kwargs):
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(browser_gateway, "get_browser_task", fake_get_browser_task)
+    monkeypatch.setattr(browser_gateway, "_capture_self_hosted_playwright_frame", fake_self_hosted)
+    monkeypatch.setattr(browser_gateway, "record_browser_task_step", fake_record_step)
+
+    result = await browser_gateway.capture_browser_task_live_frame(tenant_id=tenant_id, task_id=task_id)
+
+    assert result["status"] == "captured"
+    steps = [call["step"] for call in recorded]
+    assert steps == ["route_decided", "navigate", "capture", "done"]
+    for call in recorded:
+        assert call["narration"].strip()
+        assert call["guide"].strip()
+        assert call["route"] == "self_hosted_playwright"
+
+
+def _pc_only_live_frame_fixture():
+    """Shared setup for a legacy PC-only task whose self-hosted Playwright capture is skipped."""
+    tenant_id = "00000000-0000-0000-0000-000000000002"
+    task_id = "00000000-0000-0000-0000-000000000001"
+    recorded: list[dict] = []
+
+    async def fake_get_browser_task(*, tenant_id: str, task_id: str):
+        return {
+            "id": task_id,
+            "tenant_id": tenant_id,
+            "work_key": "pc-only",
+            "target_url": "about:blank",
+            "current_step": "legacy session",
+        }
+
+    async def fake_self_hosted(task):
+        return {"status": "skipped", "reason": "unsupported_target_url"}
+
+    return tenant_id, task_id, recorded, fake_get_browser_task, fake_self_hosted
+
+
+@pytest.mark.asyncio
+async def test_live_frame_capture_records_route_fallback_with_reason(monkeypatch):
+    tenant_id, task_id, recorded, fake_get_browser_task, fake_self_hosted = _pc_only_live_frame_fixture()
+
+    async def fake_pc_agent(*, tenant_id: str, task: dict):
+        return {"status": "captured", "source": "pc_agent_browser_screenshot", "frame": {"task_id": task["id"]}}
+
+    async def fake_record_step(**kwargs):
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(browser_gateway, "get_browser_task", fake_get_browser_task)
+    monkeypatch.setattr(browser_gateway, "_capture_self_hosted_playwright_frame", fake_self_hosted)
+    monkeypatch.setattr(browser_gateway, "_capture_pc_agent_frame", fake_pc_agent)
+    monkeypatch.setattr(browser_gateway, "record_browser_task_step", fake_record_step)
+
+    result = await browser_gateway.capture_browser_task_live_frame(tenant_id=tenant_id, task_id=task_id)
+
+    assert result["status"] == "captured"
+    steps = [call["step"] for call in recorded]
+    assert steps == ["route_decided", "navigate", "route_fallback", "navigate", "capture", "done"]
+    fallback_call = recorded[2]
+    assert fallback_call["route"] == "pc_agent"
+    assert "unsupported_target_url" in fallback_call["narration"]
+    assert "PC" in fallback_call["narration"]
+
+
+@pytest.mark.asyncio
+async def test_live_frame_capture_records_failed_when_both_backends_fail(monkeypatch):
+    tenant_id, task_id, recorded, fake_get_browser_task, fake_self_hosted = _pc_only_live_frame_fixture()
+
+    async def fake_pc_agent(*, tenant_id: str, task: dict):
+        return {"status": "skipped", "reason": "pc_agent_offline"}
+
+    async def fake_record_step(**kwargs):
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(browser_gateway, "get_browser_task", fake_get_browser_task)
+    monkeypatch.setattr(browser_gateway, "_capture_self_hosted_playwright_frame", fake_self_hosted)
+    monkeypatch.setattr(browser_gateway, "_capture_pc_agent_frame", fake_pc_agent)
+    monkeypatch.setattr(browser_gateway, "record_browser_task_step", fake_record_step)
+
+    result = await browser_gateway.capture_browser_task_live_frame(tenant_id=tenant_id, task_id=task_id)
+
+    assert result["status"] == "skipped"
+    steps = [call["step"] for call in recorded]
+    assert steps[-1] == "failed"
+    failed_call = recorded[-1]
+    assert "unsupported_target_url" in failed_call["narration"]
+    assert "pc_agent_offline" in failed_call["narration"]
+    assert failed_call["guide"].strip()
+
+
+@pytest.mark.asyncio
+async def test_record_browser_task_step_never_raises_when_pool_unavailable(monkeypatch):
+    def fake_get_pool():
+        raise RuntimeError("DB pool이 초기화되지 않았습니다")
+
+    monkeypatch.setattr(browser_gateway, "get_pool", fake_get_pool)
+
+    await browser_gateway.record_browser_task_step(
+        tenant_id="00000000-0000-0000-0000-000000000002",
+        task_id="00000000-0000-0000-0000-000000000001",
+        step="navigate",
+        narration="이동 중입니다.",
+        guide="기다려 주세요.",
+        route="self_hosted_playwright",
+    )
+
+
+class _FakeAcquireCM:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class _FakePool:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def acquire(self):
+        return _FakeAcquireCM(self._conn)
+
+
+class _FakeConn:
+    def __init__(self, fetch_rows=None):
+        self.executed: list[tuple] = []
+        self._fetch_rows = fetch_rows or []
+
+    async def execute(self, query, *args):
+        self.executed.append((query, args))
+
+    async def fetch(self, query, *args):
+        return self._fetch_rows
+
+    async def fetchrow(self, query, *args):
+        raise AssertionError("fetchrow should not be called in this fake")
+
+
+@pytest.mark.asyncio
+async def test_list_browser_task_steps_maps_payload_fields(monkeypatch):
+    from datetime import datetime, timezone
+
+    row = {
+        "id": "00000000-0000-0000-0000-000000000003",
+        "tenant_id": "00000000-0000-0000-0000-000000000002",
+        "task_id": "00000000-0000-0000-0000-000000000001",
+        "event_type": "route_decided",
+        "payload": '{"step": "route_decided", "narration": "서버로 시도합니다.", "guide": "기다려 주세요.", "route": "self_hosted_playwright"}',
+        "created_at": datetime(2026, 9, 19, 8, 30, tzinfo=timezone.utc),
+    }
+    conn = _FakeConn(fetch_rows=[row])
+    monkeypatch.setattr(browser_gateway, "get_pool", lambda: _FakePool(conn))
+
+    steps = await browser_gateway.list_browser_task_steps(
+        tenant_id="00000000-0000-0000-0000-000000000002",
+        task_id="00000000-0000-0000-0000-000000000001",
+    )
+
+    assert len(steps) == 1
+    assert steps[0]["step"] == "route_decided"
+    assert steps[0]["narration"] == "서버로 시도합니다."
+    assert steps[0]["guide"] == "기다려 주세요."
+    assert steps[0]["route"] == "self_hosted_playwright"
+    assert steps[0]["created_at"]
+
+
+@pytest.mark.asyncio
+async def test_create_browser_task_tolerates_db_failure_and_warns(monkeypatch, caplog):
+    def fake_get_pool():
+        raise RuntimeError("DB pool이 초기화되지 않았습니다")
+
+    monkeypatch.setattr(browser_gateway, "get_pool", fake_get_pool)
+
+    task = await browser_gateway.create_browser_task(
+        tenant_id="00000000-0000-0000-0000-000000000002",
+        user_id="ceo@example.com",
+        work_key="ohvis-login",
+        target_url="https://aads.newtalk.kr/login",
+    )
+
+    assert task["id"] == ""
+    assert task["status"] == "creation_failed"
+    assert task["work_key"] == "ohvis-login"
+
+
 def test_browser_recipe_normalizes_concurrency_and_resource_policy():
     recipe = normalize_recipe_payload(
         {
