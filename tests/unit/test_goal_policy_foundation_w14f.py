@@ -25,6 +25,11 @@ KEY = SigningKey("decision-test", 1, b"w14f-test-key-material-must-be-32-bytes")
 ZERO_HASH = "sha256:" + "0" * 64
 
 
+@pytest.fixture(autouse=True)
+def enable_auto_execution(monkeypatch):
+    monkeypatch.setenv("GOAL_POLICY_AUTO_ENABLED", "true")
+
+
 class FakeConnection:
     def __init__(self, *, state=None, fail_write=False, rows=None):
         self.state = state
@@ -92,6 +97,7 @@ def execution_state(envelope):
         "ancestor_revocation_epoch": envelope["ancestor_revocation_epoch"],
         "kill_switch_active": False, "policy_active": True, "assignment_active": True,
         "grant_chain_active": True,
+        "grant_scope_active": True, "grant_budget_active": True,
     }
 
 
@@ -100,6 +106,25 @@ def test_t36_cedar_diagnostic_discards_allow_auto():
     assert envelope["result"] == "APPROVAL_REQUIRED"
     assert envelope["automation_eligibility"] == "MANDATORY_HUMAN"
     assert "policy_evaluation_error" in envelope["reason_codes"]
+
+
+def test_engine_deny_is_authoritative_and_never_auto():
+    envelope = asyncio.run(evaluate_and_persist(
+        FakeConnection(), request(), signing_key=KEY, original_engine_result="Deny",
+    ))
+    assert envelope["boundary_decision"] == "DENY"
+    assert envelope["effective_application_result"] == "DENY"
+    assert "engine_denied" in envelope["reason_codes"]
+
+
+def test_executor_rechecks_auto_kill_switch(monkeypatch):
+    value = request()
+    envelope = evaluate(FakeConnection(), value)
+    monkeypatch.setenv("GOAL_POLICY_AUTO_ENABLED", "false")
+    assert asyncio.run(verify_immediately_before_execution(
+        FakeConnection(state=execution_state(envelope)), envelope, signing_key=KEY,
+        expected_input=expected_input(value),
+    )) == (False, "auto_execution_disabled")
 
 
 def test_t38_ledger_failure_never_returns_auto():
@@ -240,6 +265,20 @@ def test_mutable_epoch_tampering_breaks_the_envelope_signature():
     )) == (False, "invalid_decision_signature")
 
 
+@pytest.mark.parametrize("field", [
+    "original_engine_result", "boundary_decision", "risk_tier", "matched_grant_id",
+])
+def test_all_execution_authoritative_fields_are_signed(field):
+    value = request(grant_id=str(uuid4()), grant_version=1)
+    envelope = evaluate(FakeConnection(), value)
+    tampered = deepcopy(envelope)
+    tampered[field] = "tampered"
+    assert asyncio.run(verify_immediately_before_execution(
+        FakeConnection(state=execution_state(envelope)), tampered, signing_key=KEY,
+        expected_input=expected_input(value),
+    )) == (False, "invalid_decision_signature")
+
+
 def test_t53_same_idempotency_key_with_different_grant_is_conflict():
     existing = {"id": str(uuid4()), "grant_id": str(uuid4()), "grant_version": 1,
                 "reservation_state": "reserved"}
@@ -247,6 +286,18 @@ def test_t53_same_idempotency_key_with_different_grant_is_conflict():
         asyncio.run(reserve_single_grant(
             FakeConnection(rows=[existing]), tenant_id=str(uuid4()), project="AADS",
             execution_key="same", decision_id=str(uuid4()), grant_id=str(uuid4()), grant_version=1,
+        ))
+    assert (exc.value.status_code, exc.value.code) == (409, "idempotency_key_reused")
+
+
+def test_same_idempotency_key_requires_identical_decision_body():
+    grant_id = str(uuid4())
+    existing = {"id": str(uuid4()), "project": "AADS", "decision_id": str(uuid4()),
+                "grant_id": grant_id, "grant_version": 1, "reservation_state": "reserved"}
+    with pytest.raises(PolicyContractError) as exc:
+        asyncio.run(reserve_single_grant(
+            FakeConnection(rows=[existing]), tenant_id=str(uuid4()), project="AADS",
+            execution_key="same", decision_id=str(uuid4()), grant_id=grant_id, grant_version=1,
         ))
     assert (exc.value.status_code, exc.value.code) == (409, "idempotency_key_reused")
 

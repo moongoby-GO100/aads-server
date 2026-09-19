@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import math
+import os
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -268,9 +269,12 @@ class SigningKey:
 def _signature_payload(envelope: Mapping[str, Any]) -> dict[str, Any]:
     signed_fields = (
         "decision_id", "tenant_id", "project", "principal_session_id",
-        "assignment_id", "target_type", "target_id", "action",
+        "workspace_kind", "assignment_id", "target_type", "target_id", "action",
+        "base_version", "environment", "boundary_decision", "approval_route",
+        "automation_eligibility", "risk_tier", "result", "reason_codes",
         "decision_input_hash", "patch_hash", "precondition_snapshot_hash",
-        "effective_application_result", "policy_version", "target_version",
+        "original_engine_result", "effective_application_result", "policy_version",
+        "matched_grant_id", "grant_version", "remaining_uses", "target_version",
         "kill_switch_epoch", "deny_policy_epoch", "assignment_epoch",
         "grant_revocation_epoch", "ancestor_revocation_epoch", "decided_at",
         "canonicalization_version", "hash_algorithm", "signature_key_id",
@@ -363,6 +367,9 @@ async def evaluate_and_persist(
     eligibility = AutomationEligibility(request.automation_eligibility)
     route = ApprovalRoute(request.approval_route)
     reasons = list(dict.fromkeys(reason_codes))
+    if str(original_engine_result).strip().upper() != "ALLOW":
+        boundary, eligibility, route = BoundaryDecision.DENY, AutomationEligibility.NOT_EXECUTABLE, ApprovalRoute.NONE
+        reasons.append("engine_denied")
     if entity_resolution_status in {"partial", "failed"}:
         boundary, eligibility, route = BoundaryDecision.DENY, AutomationEligibility.NOT_EXECUTABLE, ApprovalRoute.NONE
         reasons.append("entity_resolution_failed")
@@ -462,15 +469,26 @@ async def evaluate_and_persist(
 
 async def verify_immediately_before_execution(
     conn: Any, envelope: Mapping[str, Any], *, signing_key: SigningKey,
-    expected_input: Mapping[str, Any], accepted_results: Sequence[str] = (ApplicationResult.AUTO,),
+    expected_input: Mapping[str, Any],
+    accepted_results: Sequence[str] = (ApplicationResult.AUTO,),
+    auto_enabled: bool | None = None,
 ) -> tuple[bool, str | None]:
     """Re-read every mutable fence and authenticate the decision at execution time."""
+    enabled = auto_enabled
+    if enabled is None:
+        enabled = os.getenv("GOAL_POLICY_AUTO_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    if not enabled:
+        return False, "auto_execution_disabled"
     if envelope.get("canonicalization_version") != CANONICALIZATION_VERSION:
         return False, "unsupported_canonicalization_version"
     if envelope.get("hash_algorithm") != HASH_ALGORITHM or not verify_envelope_signature(envelope, signing_key):
         return False, "invalid_decision_signature"
     if envelope.get("effective_application_result") not in accepted_results:
         return False, "decision_not_auto"
+    if str(envelope.get("original_engine_result", "")).strip().upper() != "ALLOW":
+        return False, "engine_denied"
+    if envelope.get("risk_tier") == "A3":
+        return False, "a3_requires_human"
     if canonical_hash(expected_input) != envelope.get("decision_input_hash"):
         return False, "decision_input_mismatch"
     identity_fields = (
@@ -481,16 +499,32 @@ async def verify_immediately_before_execution(
         if envelope.get(name) != expected_input.get(name):
             return False, "decision_identity_mismatch"
     state = await conn.fetchrow(
-        """SELECT target_version,policy_version::text,precondition_snapshot_hash,
-                  kill_switch_epoch,deny_policy_epoch,assignment_epoch,
-                  grant_revocation_epoch,ancestor_revocation_epoch,
-                  kill_switch_active,policy_active,assignment_active,grant_chain_active
-             FROM goal_policy_execution_fences($1::uuid,$2::uuid,$3::uuid,$4::uuid)""",
+        """SELECT *
+             FROM goal_policy_execution_fences_v2($1::uuid,$2::uuid,$3::uuid,$4::uuid)""",
         envelope["decision_id"], expected_input["tenant_id"],
         expected_input["target_id"], expected_input["assignment_id"],
     )
     if not state:
         return False, "entity_resolution_failed"
+    persisted_fields = (
+        "tenant_id", "project", "principal_session_id", "assignment_id", "target_type",
+        "target_id", "action", "base_version", "environment", "boundary_decision",
+        "automation_eligibility", "risk_tier", "effective_application_result",
+        "original_engine_result", "decision_input_hash", "patch_hash",
+        "matched_grant_id", "grant_version",
+        "canonicalization_version", "hash_algorithm", "signature_algorithm",
+        "signature_key_id", "signature_key_version", "signature",
+    )
+    for name in persisted_fields:
+        if name in state and str(state[name]) != str(envelope.get(name)):
+            return False, "persisted_decision_mismatch"
+    for state_name, envelope_name in (
+        ("decision_policy_version", "policy_version"),
+        ("decision_precondition_snapshot_hash", "precondition_snapshot_hash"),
+        ("decision_target_version", "target_version"),
+    ):
+        if state_name in state and str(state[state_name]) != str(envelope.get(envelope_name)):
+            return False, "persisted_decision_mismatch"
     if state.get("kill_switch_active"):
         return False, "kill_switch_active"
     if not state.get("policy_active", False):
@@ -499,6 +533,10 @@ async def verify_immediately_before_execution(
         return False, "stale_assignment"
     if not state.get("grant_chain_active", False):
         return False, "stale_grant_chain"
+    if not state.get("grant_scope_active", False):
+        return False, "stale_grant_scope"
+    if not state.get("grant_budget_active", False):
+        return False, "grant_budget_exhausted"
     comparisons = {
         "target_version": envelope.get("target_version"),
         "policy_version": envelope.get("policy_version"),
@@ -530,13 +568,16 @@ async def reserve_single_grant(
 ) -> Mapping[str, Any]:
     """Atomically reserve one grant; never composes grants or uses SKIP LOCKED."""
     existing = await conn.fetchrow(
-        """SELECT id::text,grant_id::text,grant_version,reservation_state
+        """SELECT id::text,project,decision_id::text,grant_id::text,grant_version,reservation_state
              FROM goal_auto_approval_use_reservations
             WHERE tenant_id=$1::uuid AND execution_key=$2""",
         tenant_id, execution_key,
     )
     if existing:
-        if str(existing["grant_id"]) != grant_id or int(existing["grant_version"]) != grant_version:
+        if (str(existing.get("project", project)) != project
+                or str(existing.get("decision_id", decision_id)) != decision_id
+                or str(existing["grant_id"]) != grant_id
+                or int(existing["grant_version"]) != grant_version):
             raise PolicyContractError(409, "idempotency_key_reused")
         return existing
     grant = await conn.fetchrow(
