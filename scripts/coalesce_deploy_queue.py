@@ -10,7 +10,6 @@ persists every inclusion before marking the older request superseded.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import re
 import subprocess
@@ -87,7 +86,11 @@ def _psql(sql: str, *, capture: bool = True) -> str:
 def _decode_json(value: str) -> tuple[str, ...]:
     if not value:
         return ()
-    decoded = base64.b64decode(value).decode("utf-8")
+    # PostgreSQL's base64 encoder inserts newlines every 76 characters.  The
+    # queue reader is line-oriented, so a long manifest used to be split into
+    # invalid rows and silently disappear from classification.  Hex is longer
+    # but deliberately single-line in PostgreSQL and therefore lossless here.
+    decoded = bytes.fromhex(value).decode("utf-8")
     payload = json.loads(decoded)
     return tuple(str(item) for item in payload) if isinstance(payload, list) else ()
 
@@ -98,8 +101,8 @@ def _load_items(project: str, component: str, target_env: str) -> list[QueueItem
             raise ValueError(f"unsafe lane value: {value!r}")
     rows = _psql(f"""
         SELECT dr.id, dr.release_sha, dr.phase, dr.deploy_type, dr.approval_policy,
-               encode(convert_to(COALESCE(drm.changed_files, '[]'::jsonb)::text, 'UTF8'), 'base64'),
-               encode(convert_to(COALESCE(drm.risk_flags, '[]'::jsonb)::text, 'UTF8'), 'base64')
+               encode(convert_to(COALESCE(drm.changed_files, '[]'::jsonb)::text, 'UTF8'), 'hex'),
+               encode(convert_to(COALESCE(drm.risk_flags, '[]'::jsonb)::text, 'UTF8'), 'hex')
           FROM deploy_runs dr
           LEFT JOIN LATERAL (
               SELECT changed_files, risk_flags

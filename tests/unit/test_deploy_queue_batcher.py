@@ -14,6 +14,7 @@ SPEC.loader.exec_module(MODULE)
 QueueItem = MODULE.QueueItem
 classify_batch = MODULE.classify_batch
 apply_decision = MODULE._apply_decision
+decode_json = MODULE._decode_json
 
 OBSERVABILITY_PATH = Path(__file__).parents[2] / "app/services/deploy_observability.py"
 OBSERVABILITY_SPEC = importlib.util.spec_from_file_location("deploy_observability_batch_test", OBSERVABILITY_PATH)
@@ -25,6 +26,16 @@ OBSERVABILITY_SPEC.loader.exec_module(OBSERVABILITY)
 
 def item(run_id: int, sha: str, *, files=("app/main.py",), flags=(), policy="auto_if_green"):
     return QueueItem(run_id, sha, "queued_for_deploy", "api_bluegreen", policy, files, flags)
+
+
+def test_long_manifest_payload_uses_single_line_hex_transport():
+    files = [f"app/services/feature_{index}.py" for index in range(40)]
+    encoded = json.dumps(files).encode("utf-8").hex()
+
+    assert decode_json(encoded) == tuple(files)
+    source = SCRIPT.read_text()
+    assert "'hex'" in source
+    assert "'base64'" not in source
 
 
 def test_batches_only_proven_low_risk_ancestors(monkeypatch, tmp_path):
