@@ -1,8 +1,9 @@
 """Fail-closed G6 candidate -> shadow -> active promotion policy."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 MANDATORY_SUITES = frozenset({"security", "functional", "aria", "freshness", "regression", "audit"})
 CRITICAL_SUITES = frozenset({"security", "freshness"})

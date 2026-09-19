@@ -309,8 +309,8 @@ async def add_skill_version(*, tenant_id: str, skill_id: str,
     normalized = validate_skill_manifest(manifest)
     if str(normalized["skill_id"]) != skill_id:
         raise SkillRegistryError("skill_id_mismatch")
-    if normalized["status"] == "active":
-        raise SkillRegistryError("active_requires_promotion")
+    if normalized["status"] != "candidate":
+        raise SkillRegistryError("candidate_required_for_new_version")
     digest = _sha256(normalized)
     from app.core.db_pool import get_pool
     async with get_pool().acquire() as conn:

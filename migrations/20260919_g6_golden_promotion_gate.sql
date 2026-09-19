@@ -1,7 +1,7 @@
 -- G6 reproducible golden/regression promotion gate for every learned artifact.
 CREATE TABLE IF NOT EXISTS browser_learned_artifacts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL,
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     artifact_type TEXT NOT NULL CHECK (artifact_type IN ('page_template','site_skill','recovery')),
     artifact_key TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
@@ -24,9 +24,53 @@ CREATE TABLE IF NOT EXISTS browser_learned_artifact_versions (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_browser_artifact_one_active
     ON browser_learned_artifact_versions (artifact_id) WHERE status='active';
 
+CREATE OR REPLACE FUNCTION enforce_browser_learned_version_lifecycle()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    expected_hash TEXT;
+BEGIN
+    expected_hash := 'sha256:' || encode(digest(convert_to(NEW.payload::text, 'UTF8'), 'sha256'), 'hex');
+    IF NEW.payload_sha256 IS DISTINCT FROM expected_hash THEN
+        RAISE EXCEPTION 'learned artifact payload hash mismatch';
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.status <> 'candidate' OR NEW.previous_active_id IS NOT NULL THEN
+            RAISE EXCEPTION 'learned artifact versions must enter as candidate';
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF NEW.artifact_id IS DISTINCT FROM OLD.artifact_id
+       OR NEW.version IS DISTINCT FROM OLD.version
+       OR NEW.payload IS DISTINCT FROM OLD.payload
+       OR NEW.payload_sha256 IS DISTINCT FROM OLD.payload_sha256 THEN
+        RAISE EXCEPTION 'learned artifact version payload is immutable';
+    END IF;
+    IF NEW.status IS DISTINCT FROM OLD.status
+       AND (OLD.status, NEW.status) NOT IN (
+           ('candidate','shadow'), ('candidate','quarantined'),
+           ('shadow','active'), ('shadow','quarantined'),
+           ('active','deprecated'), ('deprecated','active')
+       ) THEN
+        RAISE EXCEPTION 'learned artifact lifecycle bypass';
+    END IF;
+    IF NEW.status = 'active' AND NEW.activated_at IS NULL THEN
+        RAISE EXCEPTION 'active learned artifact requires activation evidence';
+    END IF;
+    IF NEW.status = 'quarantined' AND COALESCE(NEW.quarantine_reason, '') = '' THEN
+        RAISE EXCEPTION 'quarantined learned artifact requires reason';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_browser_learned_version_lifecycle ON browser_learned_artifact_versions;
+CREATE TRIGGER trg_browser_learned_version_lifecycle
+BEFORE INSERT OR UPDATE ON browser_learned_artifact_versions
+FOR EACH ROW EXECUTE FUNCTION enforce_browser_learned_version_lifecycle();
+
 CREATE TABLE IF NOT EXISTS browser_promotion_ledgers (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL,
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     artifact_type TEXT NOT NULL,
     artifact_id UUID NOT NULL,
     version_id UUID NOT NULL,
@@ -62,6 +106,12 @@ BEGIN
           ('sha256:' || encode(digest(convert_to(NEW.content, 'UTF8'), 'sha256'), 'hex')) THEN
         RAISE EXCEPTION 'skill version persisted contract mismatch';
     END IF;
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.status <> 'candidate' THEN
+            RAISE EXCEPTION 'skill versions must enter as candidate';
+        END IF;
+        RETURN NEW;
+    END IF;
     IF NEW.status IS DISTINCT FROM OLD.status THEN
         IF (OLD.status, NEW.status) NOT IN (
             ('candidate','shadow'), ('candidate','quarantined'),
@@ -80,3 +130,8 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+
+DROP TRIGGER IF EXISTS trg_ops_skill_version_immutable ON ops_skill_versions;
+CREATE TRIGGER trg_ops_skill_version_immutable
+BEFORE INSERT OR UPDATE ON ops_skill_versions
+FOR EACH ROW EXECUTE FUNCTION prevent_ops_skill_version_contract_mutation();
