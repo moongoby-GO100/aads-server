@@ -8886,7 +8886,7 @@ async def update_workspace(workspace_id: str, data: Dict[str, Any], tenant_id: O
                 uuid.UUID(workspace_id),
                 tenant_uuid,
             )
-            return _row_to_dict(row) if row else None
+            return await _guard_artifact_for_display(_row_to_dict(row), str(tenant_uuid)) if row else None
         sets.append(f"updated_at = NOW()")
         vals.append(uuid.UUID(workspace_id))
         where_clause = f"id = ${idx}"
@@ -8897,7 +8897,7 @@ async def update_workspace(workspace_id: str, data: Dict[str, Any], tenant_id: O
             f"UPDATE chat_workspaces SET {', '.join(sets)} WHERE {where_clause} RETURNING *",
             *vals,
         )
-        return _row_to_dict(row) if row else None
+        return await _guard_artifact_for_display(_row_to_dict(row), str(tenant_uuid)) if row else None
 
 
 async def delete_workspace(workspace_id: str, tenant_id: Optional[str] = None) -> bool:
@@ -15201,7 +15201,7 @@ async def list_artifacts(
             )
         else:
             return []
-        return [_row_to_dict(r) for r in rows]
+        return [await _guard_artifact_for_display(_row_to_dict(r), str(tenant_uuid)) for r in rows]
 
 
 async def get_artifact(artifact_id: str, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -15212,7 +15212,35 @@ async def get_artifact(artifact_id: str, tenant_id: Optional[str] = None) -> Opt
             uuid.UUID(artifact_id),
             tenant_uuid,
         )
-        return _row_to_dict(row) if row else None
+        return await _guard_artifact_for_display(_row_to_dict(row), str(tenant_uuid)) if row else None
+
+
+async def _guard_artifact_for_display(artifact: Dict[str, Any], tenant_id: str) -> Dict[str, Any]:
+    """Keep live values out of artifact content unless final freshness passes."""
+    from app.services.live_fact_gate import guard_payload_for_display
+
+    metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
+    guarded = await guard_payload_for_display(
+        {"metadata": metadata, "content": artifact.get("content", "")},
+        tenant_id=tenant_id,
+    )
+    gate = guarded.get("freshness_gate")
+    if not gate:
+        return artifact
+    result = dict(artifact)
+    result["metadata"] = {**metadata, "freshness_gate": gate}
+    # Free-form text cannot be safely patched when a price/stock changed between
+    # extraction and display. Replace it with verified structured facts.
+    result["content"] = json.dumps(
+        {
+            "message": "실시간 사실을 표시 직전에 재검증했습니다.",
+            "freshness_status": gate["status"],
+            "facts": gate["facts"],
+            "retry_action": gate.get("retry_action"),
+        },
+        ensure_ascii=False,
+    )
+    return result
 
 
 async def update_artifact(artifact_id: str, data: Dict[str, Any], tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:

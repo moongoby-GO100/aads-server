@@ -59,6 +59,12 @@ def _db_url() -> str:
     return os.getenv("DATABASE_URL", "").replace("postgresql://", "postgres://")
 
 
+async def _display_content(content: dict, tenant_id: str) -> dict:
+    from app.services.live_fact_gate import guard_payload_for_display
+
+    return await guard_payload_for_display(content, tenant_id=tenant_id)
+
+
 # ─── 엔드포인트 ───────────────────────────────────────────────────────────────
 
 @router.post("/artifacts", response_model=ArtifactResponse, status_code=201,
@@ -121,7 +127,7 @@ async def create_artifact(
         project_id=row["project_id"],
         artifact_type=row["artifact_type"],
         artifact_name=row["artifact_name"],
-        content=json.loads(row["content"]),
+        content=await _display_content(json.loads(row["content"]), _tenant_id(context)),
         source_agent=row["source_agent"],
         source_task=row["source_task"],
         version=row["version"],
@@ -189,7 +195,7 @@ async def list_artifacts(
                 "project_id": r["project_id"],
                 "artifact_type": r["artifact_type"],
                 "artifact_name": r["artifact_name"],
-                "content": json.loads(r["content"]),
+                "content": await _display_content(json.loads(r["content"]), _tenant_id(context)),
                 "source_agent": r["source_agent"],
                 "source_task": r["source_task"],
                 "version": r["version"],
@@ -242,7 +248,7 @@ async def get_artifact(
         project_id=row["project_id"],
         artifact_type=row["artifact_type"],
         artifact_name=row["artifact_name"],
-        content=json.loads(row["content"]),
+        content=await _display_content(json.loads(row["content"]), _tenant_id(context)),
         source_agent=row["source_agent"],
         source_task=row["source_task"],
         version=row["version"],

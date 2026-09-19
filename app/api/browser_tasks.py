@@ -112,6 +112,12 @@ def _session_id_from_request(request: Request) -> str | None:
     return value or None
 
 
+async def _display(payload: dict[str, Any], context: TenantContext) -> dict[str, Any]:
+    from app.services.live_fact_gate import guard_payload_for_display
+
+    return await guard_payload_for_display(payload, tenant_id=_tenant_id(context))
+
+
 @router.get("")
 async def api_list_browser_tasks(
     status: str | None = None,
@@ -119,7 +125,8 @@ async def api_list_browser_tasks(
     context: TenantContext = Depends(require_viewer),
 ) -> dict[str, Any]:
     tasks = await list_browser_tasks(tenant_id=_tenant_id(context), status=status, limit=limit)
-    return {"tasks": tasks, "count": len(tasks)}
+    displayed = [await _display(task, context) for task in tasks]
+    return {"tasks": displayed, "count": len(displayed)}
 
 
 @router.post("")
@@ -186,7 +193,7 @@ async def api_get_browser_task(
     task = await get_browser_task(tenant_id=_tenant_id(context), task_id=task_id)
     if not task:
         raise HTTPException(status_code=404, detail="browser_task_not_found")
-    return task
+    return await _display(task, context)
 
 
 @router.get("/{task_id}/events")
@@ -199,7 +206,8 @@ async def api_list_browser_task_events(
     if not task:
         raise HTTPException(status_code=404, detail="browser_task_not_found")
     events = await list_browser_task_events(tenant_id=_tenant_id(context), task_id=task_id, limit=limit)
-    return {"events": events, "count": len(events)}
+    displayed = [await _display(event, context) for event in events]
+    return {"events": displayed, "count": len(displayed)}
 
 
 @router.get("/{task_id}/steps")
@@ -232,7 +240,7 @@ async def api_get_browser_task_live_frame(
     events = []
     if event_limit:
         events = await list_browser_task_events(tenant_id=_tenant_id(context), task_id=task_id, limit=event_limit)
-    return {"task": task, "frame": frame, "events": events, "capture": capture_result}
+    return await _display({"task": task, "frame": frame, "events": events, "capture": capture_result}, context)
 
 
 @router.post("/{task_id}/live-frame")
@@ -310,7 +318,7 @@ async def api_update_browser_task_status(
     )
     if not task:
         raise HTTPException(status_code=404, detail="browser_task_not_found")
-    return {"status": "updated", "task": task}
+    return await _display({"status": "updated", "task": task}, context)
 
 
 @router.post("/{task_id}/permissions")

@@ -6,19 +6,19 @@ an ``ObservationEnvelope`` and can never acquire execution authority here.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import logging
-from typing import Any, Mapping
-
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 TRUSTED_COMMAND_SOURCES = frozenset({"user_directive", "approved_recipe", "internal_control"})
 OBSERVATION_SOURCES = frozenset({
     "page_text", "dom", "DOM", "aria", "ARIA", "ocr", "OCR",
-    "screenshot_ocr", "downloaded_file", "file", "rag", "RAG",
+    "screenshot_ocr", "downloaded_file", "file", "rag", "RAG", "api_response",
 })
 UNTRUSTED_PAGE_DATA = "UNTRUSTED_PAGE_DATA"
 PAGE_DATA_COMMAND_ATTEMPT = "PAGE_DATA_COMMAND_ATTEMPT"

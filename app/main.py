@@ -77,6 +77,7 @@ from app.api.ohvis_console import router as ohvis_console_router
 from app.api.ohvis_recipes import router as ohvis_recipes_router
 from app.api.loops import router as loops_router
 from app.api.browser_tasks import router as browser_tasks_router
+from app.api.live_facts import router as live_facts_router
 from app.api.browser_recipes import router as browser_recipes_router
 from app.api.authenticated_site_collector import router as authenticated_site_collector_router
 from app.routers.chat import router as chat_v2_router
@@ -3845,6 +3846,7 @@ app.include_router(ohvis_console_router, prefix="/api/v1", tags=["ohvis-console"
 app.include_router(ohvis_recipes_router, prefix="/api/v1", tags=["ohvis-recipes"])
 app.include_router(loops_router, prefix="/api/v1", tags=["loops"])
 app.include_router(browser_tasks_router, prefix="/api/v1", tags=["browser-tasks"])
+app.include_router(live_facts_router, prefix="/api/v1", tags=["live-facts"])
 app.include_router(browser_recipes_router, prefix="/api/v1", tags=["browser-recipes"])
 app.include_router(authenticated_site_collector_router, prefix="/api/v1", tags=["authenticated-site-collector"])
 app.include_router(agent_vault_router, prefix="/api/v1", tags=["agent-vault"])

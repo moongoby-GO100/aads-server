@@ -125,9 +125,10 @@ async def read_tokens_after(stream_id: str, last_id: str = "0") -> List[Dict[str
         result = []
         for entry_id, fields in entries:
             raw_index = fields.get("idx")
+            from app.services.live_fact_gate import sanitize_sse_event
             result.append({
                 "id": entry_id,
-                "data": fields.get("data", ""),
+                "data": sanitize_sse_event(fields.get("data", "")),
                 "done": fields.get("done") == "true",
                 "idx": int(raw_index) if str(raw_index).isdigit() else None,
                 "ts": fields.get("ts"),
