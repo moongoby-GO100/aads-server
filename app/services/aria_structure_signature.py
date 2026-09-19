@@ -271,10 +271,7 @@ def assess_revisit(
 ) -> dict[str, Any]:
     """Choose reuse, rediscovery, or Human Gateway without treating ambiguity as success."""
     template = template or {}
-    if not current_nodes:
-        return {"decision": "rediscover", "reason": "aria_missing_dom_fallback_required", "similarity": 0.0,
-                "human_gateway_required": False, "signature": None}
-    signature = build_partial_signature(current_nodes, area_key=area_key, template=template)
+    signature = build_partial_signature(current_nodes or [], area_key=area_key, template=template)
     current = signature["structure"]["nodes"]
     required = template.get("required_anchors") if isinstance(template.get("required_anchors"), Sequence) else []
     missing = [anchor for anchor in required if isinstance(anchor, Mapping) and not _required_anchor_present(anchor, current)]
@@ -285,6 +282,9 @@ def assess_revisit(
     if any(not _required_state_present(rule, current_nodes) for rule in required_state_rules):
         return {"decision": "human_gateway", "reason": "critical_required_state_changed", "similarity": 0.0,
                 "human_gateway_required": True, "signature": signature}
+    if not current_nodes:
+        return {"decision": "rediscover", "reason": "aria_missing_dom_fallback_required", "similarity": 0.0,
+                "human_gateway_required": False, "signature": None}
     tokens = [_node_token(node) for node in current]
     if not current or len(tokens) != len(set(tokens)):
         return {"decision": "rediscover", "reason": "ambiguous_aria_structure", "similarity": 0.0,
