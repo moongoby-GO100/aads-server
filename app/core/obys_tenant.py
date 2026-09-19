@@ -18,10 +18,15 @@ from app.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 
-#: 기본 허용 테넌트 — 열정국밥 운영관리, AADS Internal.
+#: 기본 허용 테넌트 — 기존 열정국밥 자료의 귀속이 확인된 테넌트만.
 _DEFAULT_LEGACY_TENANT_IDS = (
     "15055cac-71b0-45ec-b714-7093dde189ff",
-    "2d701a8c-9596-4757-8588-faa4f7837112",
+)
+
+_TENANT_SCOPED_PREFIXES = (
+    "/api/v1/yeoljeong-finance/tenant-registry",
+    "/api/v1/yeoljeong-finance/uploads",
+    "/api/v1/yeoljeong-finance/uploaded-ledger",
 )
 
 
@@ -41,6 +46,11 @@ async def require_legacy_obys_access(
     """
     tenant_id = str((user or {}).get("tenant_id") or "").strip()
     if tenant_id and tenant_id in _allowed_tenant_ids():
+        return user
+
+    # These routes bind every query to the JWT tenant.  Role flags deliberately
+    # do not affect this decision, so owner/admin cannot cross the boundary.
+    if tenant_id and any(request.url.path.startswith(prefix) for prefix in _TENANT_SCOPED_PREFIXES):
         return user
 
     logger.warning(

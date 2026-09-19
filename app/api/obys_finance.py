@@ -5,18 +5,29 @@ import logging
 import threading
 from functools import partial
 from typing import Any
+from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
 from app.core.obys_tenant import require_legacy_obys_access
+from app.services import obys_upload_service as upload_svc
+from app.services import yeoljeong_finance_service as svc
 from app.services.yeoljeong_bank_collector_harness import (
     run_shinhan_windows_collector_harness,
 )
-from app.services import yeoljeong_finance_service as svc
 
 router = APIRouter(
     prefix="/yeoljeong-finance",
@@ -28,6 +39,31 @@ logger = logging.getLogger(__name__)
 
 class GenericPayload(BaseModel):
     model_config = {"extra": "allow"}
+
+
+class TenantBusinessPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    id: str = ""
+    name: str
+    entity_type: str = "individual"
+    registration_no: str = ""
+    representative: str = ""
+    tax_type: str = ""
+    opened_at: str = ""
+    address: str = ""
+    memo: str = ""
+
+
+class TenantBusinessUpdatePayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    name: str | None = None
+    entity_type: str | None = None
+    registration_no: str | None = None
+    representative: str | None = None
+    tax_type: str | None = None
+    opened_at: str | None = None
+    address: str | None = None
+    memo: str | None = None
 
 
 class InviteCreate(BaseModel):
@@ -544,6 +580,29 @@ async def save_settings(payload: GenericPayload, current_user: dict = Depends(ge
     return await svc.save_settings_persisted(payload.model_dump(), current_user)
 
 
+@router.get("/tenant-registry/businesses")
+async def list_tenant_businesses(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    businesses = await upload_svc.list_businesses(user=current_user)
+    return {"businesses": businesses, "count": len(businesses)}
+
+
+@router.post("/tenant-registry/businesses", status_code=201)
+async def create_tenant_business(
+    payload: TenantBusinessPayload,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    return {"business": await upload_svc.create_business(user=current_user, payload=payload.model_dump())}
+
+
+@router.patch("/tenant-registry/businesses/{business_id}")
+async def update_tenant_business(
+    business_id: str,
+    payload: TenantBusinessUpdatePayload,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    return {"business": await upload_svc.update_business(user=current_user, business_id=business_id, payload=payload.model_dump(exclude_unset=True))}
+
+
 @router.get("/storage-status")
 async def get_storage_status(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return await svc.get_storage_status(current_user)
@@ -643,6 +702,59 @@ async def download_integration_evidence(evidence_id: str, current_user: dict = D
 @router.get("/sales")
 async def list_sales(business_id: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"sales": await run_in_threadpool(svc.list_sales, current_user, business_id)}
+
+
+@router.post("/uploads", status_code=201)
+async def upload_ledger_file(
+    business_id: str = Form(...),
+    category: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    chunks: list[bytes] = []
+    size = 0
+    try:
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > upload_svc.MAX_BYTES:
+                raise HTTPException(status_code=413, detail="파일은 10MB 이하여야 합니다")
+            chunks.append(chunk)
+    finally:
+        await file.close()
+    return await upload_svc.create_upload(user=current_user, business_id=business_id, category=category, filename=file.filename or "upload.bin", content_type=file.content_type or "application/octet-stream", data=b"".join(chunks))
+
+
+@router.get("/uploads")
+async def list_ledger_uploads(
+    business_id: str,
+    category: str | None = None,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    uploads = await upload_svc.list_uploads(user=current_user, business_id=business_id, category=category)
+    return {"uploads": uploads, "count": len(uploads)}
+
+
+@router.get("/uploaded-ledger")
+async def list_uploaded_ledger(
+    business_id: str,
+    category: str,
+    limit: int = 500,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    rows = await upload_svc.list_ledger_rows(user=current_user, business_id=business_id, category=category, limit=limit)
+    return {"rows": rows, "count": len(rows)}
+
+
+@router.get("/uploads/{upload_id}/download")
+async def download_ledger_upload(upload_id: UUID, current_user: dict = Depends(get_current_user)) -> FileResponse:
+    path, filename, content_type = await upload_svc.download_path(user=current_user, upload_id=upload_id)
+    return FileResponse(path, media_type=content_type, filename=filename)
+
+
+@router.delete("/uploads/{upload_id}")
+async def delete_ledger_upload(upload_id: UUID, current_user: dict = Depends(get_current_user)) -> dict[str, bool]:
+    await upload_svc.delete_upload(user=current_user, upload_id=upload_id)
+    return {"ok": True}
 
 
 @router.get("/reviews")

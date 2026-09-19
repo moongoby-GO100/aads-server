@@ -19,7 +19,7 @@ from app.core.obys_tenant import (
 )
 
 ALLOWED_TENANT = _DEFAULT_LEGACY_TENANT_IDS[0]
-OTHER_ALLOWED_TENANT = _DEFAULT_LEGACY_TENANT_IDS[1]
+AADS_INTERNAL_TENANT = "2d701a8c-9596-4757-8588-faa4f7837112"
 
 
 def _request(path: str = "/api/v1/yeoljeong-finance/settings") -> SimpleNamespace:
@@ -37,10 +37,28 @@ class TestDefaultAllowList:
         result = await require_legacy_obys_access(_request(), user)
         assert result is user
 
-    async def test_other_default_allowed_tenant_passes(self):
-        user = {"tenant_id": OTHER_ALLOWED_TENANT}
-        result = await require_legacy_obys_access(_request(), user)
+    async def test_aads_internal_only_passes_tenant_scoped_routes(self):
+        user = {"tenant_id": AADS_INTERNAL_TENANT, "is_admin": True}
+        result = await require_legacy_obys_access(
+            _request("/api/v1/yeoljeong-finance/tenant-registry/businesses"), user
+        )
         assert result is user
+
+        with pytest.raises(HTTPException) as exc_info:
+            await require_legacy_obys_access(_request(), user)
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/v1/yeoljeong-finance/uploads",
+            "/api/v1/yeoljeong-finance/uploads/00000000-0000-0000-0000-000000000001/download",
+            "/api/v1/yeoljeong-finance/uploaded-ledger",
+        ],
+    )
+    async def test_new_tenant_can_enter_only_scoped_upload_routes(self, path):
+        user = {"tenant_id": "00000000-0000-0000-0000-000000000123", "is_admin": True}
+        assert await require_legacy_obys_access(_request(path), user) is user
 
     async def test_non_allowed_tenant_is_403(self):
         user = {"tenant_id": "some-other-tenant"}
