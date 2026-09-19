@@ -19,11 +19,12 @@ from app.core.db_pool import get_pool
 _SENSITIVE_WORD = re.compile(
     r"(?:password|passwd|passcode|secret|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|"
     r"authorization|bearer|otp|one[ _-]?time|cookie|session[_ -]?id|card[_ -]?number|"
-    r"resident|ssn|주민등록|비밀번호|인증번호|카드번호)",
+    r"resident|foreigner|alien[_ -]?registration|ssn|rrn|cvv|cvc|bank[_ -]?account|"
+    r"account[_ -]?number|주민등록|외국인등록|비밀번호|인증번호|카드번호|계좌번호|보안코드)",
     re.IGNORECASE,
 )
 _SENSITIVE_VALUE = re.compile(
-    r"(?:\b\d{6}[- ]?[1-4]\d{6}\b|\b(?:\d[ -]?){13,19}\b|"
+    r"(?:\b\d{6}[- ]?[1-8]\d{6}\b|\b(?:\d[ -]?){13,19}\b|"
     r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b|"
     r"\b(?:sk|pk|api)[_-][A-Za-z0-9_-]{16,}\b)",
     re.IGNORECASE,

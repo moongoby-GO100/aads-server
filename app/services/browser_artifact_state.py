@@ -42,10 +42,16 @@ def build_browser_artifact_status(
         "pc_agent_browser_screenshot": "Windows PC",
         "human_gateway": "Human",
     }.get(source, "Browser" if source else "대기")
+    progress = metadata.get("progress_percent", result.get("progress_percent", task.get("progress_percent")))
+    try:
+        progress_percent = max(0, min(100, int(progress))) if progress is not None else None
+    except (TypeError, ValueError):
+        progress_percent = None
     return {
         "current_url": str((frame or {}).get("current_url") or task.get("target_url") or ""),
         "execution_actor": actor,
         "current_step": str((frame or {}).get("current_step") or task.get("current_step") or "대기 중"),
+        "progress_percent": progress_percent,
         "learning_state": learning_state,
         "freshness_status": freshness_status,
         "evidence_count": len(knowledge.get("evidence_refs") or freshness.get("facts") or []),
