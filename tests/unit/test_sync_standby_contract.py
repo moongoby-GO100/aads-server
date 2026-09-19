@@ -12,6 +12,7 @@ def test_partial_release_schedules_host_side_standby_retry():
     assert "schedule_standby_sync_retry()" in DEPLOY
     assert 'schedule_standby_sync_retry "$DEPLOY_RUN_ID"' in DEPLOY
     assert "systemd-run" in DEPLOY
+    assert "systemd-run --no-block" in DEPLOY
     assert "--deploy-run-id" in DEPLOY
 
 

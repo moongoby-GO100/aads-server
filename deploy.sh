@@ -1699,7 +1699,10 @@ schedule_standby_sync_retry() {
         echo "[deploy.sh] ⚠️ standby retry script missing: ${sync_script}"
         return 1
     }
-    if systemd-run --unit="$unit" --collect --property=Type=oneshot \
+    # The retry must be detached.  Without --no-block systemd-run waits for the
+    # oneshot to finish while this deploy still owns aads-deploy.flock; the
+    # retry then waits on that same lock and deadlocks the whole release queue.
+    if systemd-run --no-block --unit="$unit" --collect --property=Type=oneshot \
         /bin/bash -lc "set +e; for _attempt in \$(seq 1 120); do '${sync_script}' --deploy-run-id '${run_id}'; _rc=\$?; [[ \$_rc -eq 0 ]] && exit 0; [[ \$_rc -eq 2 || \$_rc -eq 3 ]] || exit \$_rc; sleep 30; done; exit 3" \
         >/dev/null 2>&1; then
         echo "[deploy.sh] standby 동기화 재시도 예약: unit=${unit}, run=${run_id}"
