@@ -1,4 +1,6 @@
 -- G6 reproducible golden/regression promotion gate for every learned artifact.
+-- Included in the M7-M11 release chain so candidate-only learning always has
+-- its promotion lifecycle installed before the site-learning extension.
 CREATE TABLE IF NOT EXISTS browser_learned_artifacts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
