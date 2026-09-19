@@ -52,6 +52,23 @@ def test_display_fact_requires_evidence_and_revalidation_timestamp():
     assert gate.display_fact(_record(revalidated_at=None), now=NOW)["freshness_status"] == "UNAVAILABLE"
 
 
+def test_display_fact_decodes_asyncpg_jsonb_and_rejects_hash_mismatch():
+    value = {"amount": 1000, "currency": "KRW"}
+    decoded = gate.display_fact(
+        _record(observed_value=json.dumps(value), observed_value_hash=gate.value_hash(value)),
+        now=NOW,
+    )
+    conflicted = gate.display_fact(
+        _record(observed_value=json.dumps(value), observed_value_hash="0" * 64),
+        now=NOW,
+    )
+
+    assert decoded["freshness_status"] == "CURRENT"
+    assert decoded["value"] == value
+    assert conflicted["freshness_status"] == "CONFLICT"
+    assert conflicted["value"] is None
+
+
 def test_source_url_drops_query_credentials_and_rejects_userinfo():
     assert gate.normalize_source_url("HTTPS://Shop.Example/items/1?token=secret#part") == "https://shop.example/items/1"
     try:

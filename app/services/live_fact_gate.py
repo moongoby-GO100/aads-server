@@ -63,6 +63,16 @@ def _canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 
 
+def _json_value(value: Any) -> Any:
+    """Normalize asyncpg JSON/JSONB text without guessing about plain strings."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return value
+
+
 def value_hash(value: Any) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
 
@@ -117,9 +127,17 @@ def display_fact(
     """Return a display-safe fact. Non-current facts never include the value."""
     instant = (now or datetime.now(UTC)).astimezone(UTC)
     status = str(record.get("freshness_status") or FreshnessStatus.UNAVAILABLE)
+    observed_value = _json_value(record.get("observed_value", record.get("value")))
+    observed_value_hash = str(
+        record.get("observed_value_hash") or record.get("value_hash") or ""
+    )
     expires_at = _as_utc(record.get("expires_at"))
     evidence_id = str(record.get("evidence_id") or "")
-    if not _context_matches(record, expected_context):
+    if (
+        not _context_matches(record, expected_context)
+        or observed_value_hash
+        and observed_value_hash != value_hash(observed_value)
+    ):
         status = FreshnessStatus.CONFLICT
     elif not expires_at or expires_at <= instant:
         status = FreshnessStatus.STALE
@@ -138,7 +156,7 @@ def display_fact(
         "freshness_status": str(status),
         "retry_action": {"action": "revalidate_fact", "fact_id": str(record.get("id") or "")},
     }
-    safe["value"] = record.get("observed_value") if status == FreshnessStatus.CURRENT else None
+    safe["value"] = observed_value if status == FreshnessStatus.CURRENT else None
     return safe
 
 
@@ -233,7 +251,11 @@ async def _persist_revalidation(
     record: Mapping[str, Any], *, status: FreshnessStatus, now: datetime,
     evidence: Mapping[str, Any],
 ) -> dict[str, Any]:
-    value = evidence.get("value") if status == FreshnessStatus.CURRENT else record.get("observed_value")
+    value = (
+        evidence.get("value")
+        if status == FreshnessStatus.CURRENT
+        else _json_value(record.get("observed_value"))
+    )
     observed_at = _as_utc(evidence.get("observed_at")) or now
     expires_at = _as_utc(evidence.get("expires_at")) or record.get("expires_at")
     evidence_id = str(evidence.get("evidence_id") or record.get("evidence_id") or "")
