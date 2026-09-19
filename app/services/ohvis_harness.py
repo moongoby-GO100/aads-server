@@ -8,12 +8,22 @@ tables have not been migrated yet.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import importlib.util
+import inspect
 import json
 import re
+import time
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from jsonschema import Draft202012Validator, SchemaError, ValidationError
+
+if TYPE_CHECKING:
+    from app.services.channel_router import ActionIntent
 
 
 PROJECTS = ("AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "CEO")
@@ -74,6 +84,411 @@ RISK_POLICIES: dict[str, dict[str, Any]] = {
         "examples": ["drop_table", "truncate", "force_push", "shutdown"],
     },
 }
+
+SKILL_VERSION_STATES = frozenset({"draft", "candidate", "shadow", "active", "retired"})
+HIGH_RISK_TIERS = frozenset({"write", "deploy", "auth", "financial", "destructive"})
+_EXECUTOR_NAME_RE = re.compile(r"^[a-z][a-z0-9_.-]{2,119}$")
+SkillExecutor = Callable[[Mapping[str, Any]], Any | Awaitable[Any]]
+_SKILL_EXECUTORS: dict[str, SkillExecutor] = {}
+
+
+class SkillRegistryError(ValueError):
+    """Stable, API-safe failure raised by the executable skill registry."""
+
+    def __init__(self, code: str, detail: str = "", *, status_code: int = 422) -> None:
+        self.code = code
+        self.detail = detail or code
+        self.status_code = status_code
+        super().__init__(self.detail)
+
+
+def register_skill_executor(name: str, executor: SkillExecutor) -> None:
+    """Register a code-owned callable; DB values can only select from this map.
+
+    Registration is deliberately explicit.  This module never evaluates code or
+    imports a module named by a manifest.
+    """
+    if not _EXECUTOR_NAME_RE.fullmatch(name) or not callable(executor):
+        raise ValueError("invalid skill executor registration")
+    existing = _SKILL_EXECUTORS.get(name)
+    if existing is not None and existing is not executor:
+        raise ValueError(f"skill executor already registered: {name}")
+    _SKILL_EXECUTORS[name] = executor
+
+
+def unregister_skill_executor(name: str, *, executor: SkillExecutor | None = None) -> None:
+    """Test/plugin cleanup without allowing a caller to replace another owner."""
+    existing = _SKILL_EXECUTORS.get(name)
+    if existing is not None and (executor is None or existing is executor):
+        del _SKILL_EXECUTORS[name]
+
+
+def _contract_echo_executor(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Side-effect-free executor used for registry/API contract verification."""
+    return {"input": dict(payload)}
+
+
+register_skill_executor("ohvis.contract-echo", _contract_echo_executor)
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _sha256(value: Any) -> str:
+    return "sha256:" + hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def validate_skill_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and normalize the immutable executable contract."""
+    if not isinstance(manifest, Mapping):
+        raise SkillRegistryError("invalid_manifest", "manifest must be an object")
+    required = {
+        "skill_id", "version", "input_schema", "output_schema", "executor",
+        "allowed_tools", "timeout_seconds", "retry", "idempotency",
+        "preconditions", "postconditions", "evidence", "risk_tier", "status", "provenance",
+    }
+    missing = sorted(required - set(manifest))
+    if missing:
+        raise SkillRegistryError("manifest_fields_missing", ", ".join(missing))
+    normalized = dict(manifest)
+    if not str(normalized["skill_id"]).strip() or not str(normalized["version"]).strip():
+        raise SkillRegistryError("invalid_skill_identity")
+    executor = str(normalized["executor"])
+    if not _EXECUTOR_NAME_RE.fullmatch(executor):
+        raise SkillRegistryError("invalid_executor")
+    for key in ("input_schema", "output_schema"):
+        schema = normalized[key]
+        if not isinstance(schema, Mapping):
+            raise SkillRegistryError("invalid_json_schema", f"{key} must be an object")
+        try:
+            Draft202012Validator.check_schema(schema)
+        except SchemaError as exc:
+            raise SkillRegistryError("invalid_json_schema", f"{key}: {exc.message}") from exc
+    for key in ("allowed_tools", "preconditions", "postconditions", "evidence"):
+        if not isinstance(normalized[key], list):
+            raise SkillRegistryError("invalid_manifest_field", key)
+        if any(not isinstance(v, str) or not v for v in normalized[key]):
+            raise SkillRegistryError("invalid_manifest_field", key)
+    if normalized["status"] not in SKILL_VERSION_STATES:
+        raise SkillRegistryError("invalid_version_status")
+    if normalized["risk_tier"] not in RISK_POLICIES:
+        raise SkillRegistryError("invalid_risk_tier")
+    timeout = normalized["timeout_seconds"]
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 300:
+        raise SkillRegistryError("invalid_timeout")
+    retry = normalized["retry"]
+    if not isinstance(retry, Mapping) or set(retry) - {"max_attempts", "backoff_seconds"}:
+        raise SkillRegistryError("invalid_retry_policy")
+    attempts = retry.get("max_attempts", 1)
+    backoff = retry.get("backoff_seconds", 0)
+    if not isinstance(attempts, int) or isinstance(attempts, bool) or not 1 <= attempts <= 5:
+        raise SkillRegistryError("invalid_retry_policy")
+    if not isinstance(backoff, (int, float)) or isinstance(backoff, bool) or not 0 <= backoff <= 30:
+        raise SkillRegistryError("invalid_retry_policy")
+    idempotency = normalized["idempotency"]
+    idempotency_modes = {"required", "optional", "forbidden"}
+    if not isinstance(idempotency, Mapping) or idempotency.get("mode") not in idempotency_modes:
+        raise SkillRegistryError("invalid_idempotency_policy")
+    if attempts > 1 and idempotency.get("mode") != "required":
+        raise SkillRegistryError("retry_requires_idempotency")
+    provenance = normalized["provenance"]
+    if not isinstance(provenance, Mapping) or not provenance.get("source"):
+        raise SkillRegistryError("invalid_provenance")
+    normalized["retry"] = {"max_attempts": attempts, "backoff_seconds": float(backoff)}
+    normalized["idempotency"] = dict(idempotency)
+    normalized["provenance"] = dict(provenance)
+    return normalized
+
+
+def _validate_instance(schema: Mapping[str, Any], value: Any, code: str) -> None:
+    try:
+        Draft202012Validator(schema).validate(value)
+    except ValidationError as exc:
+        path = ".".join(str(item) for item in exc.absolute_path) or "$"
+        raise SkillRegistryError(code, f"{path}: {exc.message}") from exc
+
+
+def _row_dict(row: Any) -> dict[str, Any]:
+    return dict(row) if row is not None else {}
+
+
+async def create_skill(*, tenant_id: str, slug: str, title: str, description: str,
+                       projects: list[str], intents: list[str], actor: str) -> dict[str, Any]:
+    from app.core.db_pool import get_pool
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO ops_skill_library
+               (tenant_id,slug,title,description,projects,intents,source_path,metadata)
+               VALUES($1::uuid,$2,$3,$4,$5::text[],$6::text[],$7,$8::jsonb)
+               RETURNING *""",
+            tenant_id, slug, title, description, projects, intents,
+            f"site-skill:{slug}", json.dumps({"created_by": actor, "canonical": "site_skill"}),
+        )
+        return _row_dict(row)
+
+
+async def list_skill_manifests(*, tenant_id: str, slug: str | None = None,
+                               status: str | None = None) -> list[dict[str, Any]]:
+    from app.core.db_pool import get_pool
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT l.id::text AS skill_id,l.slug,l.title,l.description,l.projects,l.intents,
+                      l.enabled,v.id::text AS version_id,v.version,v.status,v.manifest,
+                      v.content_sha256,v.created_at
+               FROM ops_skill_library l LEFT JOIN ops_skill_versions v ON v.skill_id=l.id
+               WHERE l.tenant_id=$1::uuid AND ($2::text IS NULL OR l.slug=$2)
+                 AND ($3::text IS NULL OR v.status=$3)
+               ORDER BY l.slug,v.created_at DESC""",
+            tenant_id, slug, status,
+        )
+        return [_row_dict(row) for row in rows]
+
+
+async def update_skill(*, tenant_id: str, skill_id: str, title: str,
+                       description: str, projects: list[str], intents: list[str]) -> dict[str, Any]:
+    from app.core.db_pool import get_pool
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """UPDATE ops_skill_library SET title=$3,description=$4,projects=$5::text[],
+                      intents=$6::text[],updated_at=clock_timestamp()
+               WHERE tenant_id=$1::uuid AND id=$2::uuid RETURNING *""",
+            tenant_id, skill_id, title, description, projects, intents,
+        )
+        if not row:
+            raise SkillRegistryError("skill_not_found", status_code=404)
+        return _row_dict(row)
+
+
+async def disable_skill(*, tenant_id: str, skill_id: str) -> dict[str, Any]:
+    """Soft-delete a canonical skill while preserving immutable runs/versions."""
+    from app.core.db_pool import get_pool
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """UPDATE ops_skill_library SET enabled=FALSE,updated_at=clock_timestamp()
+               WHERE tenant_id=$1::uuid AND id=$2::uuid RETURNING *""", tenant_id, skill_id,
+        )
+        if not row:
+            raise SkillRegistryError("skill_not_found", status_code=404)
+        return _row_dict(row)
+
+
+async def add_skill_version(*, tenant_id: str, skill_id: str,
+                            manifest: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = validate_skill_manifest(manifest)
+    if str(normalized["skill_id"]) != skill_id:
+        raise SkillRegistryError("skill_id_mismatch")
+    if normalized["status"] == "active":
+        raise SkillRegistryError("active_requires_promotion")
+    digest = _sha256(normalized)
+    from app.core.db_pool import get_pool
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO ops_skill_versions
+               (skill_id,version,content_sha256,content,status,manifest)
+               SELECT l.id,$3,$4,$5,$6,$7::jsonb FROM ops_skill_library l
+               WHERE l.id=$2::uuid AND l.tenant_id=$1::uuid
+               RETURNING *""",
+            tenant_id, skill_id, normalized["version"], digest, _canonical_json(normalized),
+            normalized["status"], json.dumps(normalized),
+        )
+        if not row:
+            raise SkillRegistryError("skill_not_found", status_code=404)
+        return _row_dict(row)
+
+
+async def validate_stored_skill(*, tenant_id: str, skill_id: str, version: str) -> dict[str, Any]:
+    from app.core.db_pool import get_pool
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT v.manifest,v.content_sha256 FROM ops_skill_versions v
+               JOIN ops_skill_library l ON l.id=v.skill_id
+               WHERE l.tenant_id=$1::uuid AND l.id=$2::uuid AND v.version=$3""",
+            tenant_id, skill_id, version,
+        )
+    if not row:
+        raise SkillRegistryError("skill_version_not_found", status_code=404)
+    manifest = validate_skill_manifest(row["manifest"])
+    return {"valid": _sha256(manifest) == row["content_sha256"], "manifest": manifest,
+            "executor_registered": manifest["executor"] in _SKILL_EXECUTORS}
+
+
+async def promote_skill_version(*, tenant_id: str, skill_id: str, version: str,
+                                actor: str, evidence: list[str]) -> dict[str, Any]:
+    if not evidence:
+        raise SkillRegistryError("promotion_evidence_required")
+    from app.core.db_pool import get_pool
+    async with get_pool().acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            """SELECT v.id,v.status,v.manifest FROM ops_skill_versions v
+                   JOIN ops_skill_library l ON l.id=v.skill_id
+                   WHERE l.tenant_id=$1::uuid AND l.id=$2::uuid AND v.version=$3 FOR UPDATE""",
+            tenant_id, skill_id, version,
+        )
+        if not row:
+            raise SkillRegistryError("skill_version_not_found", status_code=404)
+        manifest = validate_skill_manifest(row["manifest"])
+        if row["status"] not in {"candidate", "shadow"}:
+            raise SkillRegistryError("version_not_promotable", status_code=409)
+        if manifest["executor"] not in _SKILL_EXECUTORS:
+            raise SkillRegistryError("executor_not_registered", status_code=409)
+        await conn.execute(
+            """UPDATE ops_skill_versions SET status='retired'
+                   WHERE skill_id=$1::uuid AND status='active'""", skill_id,
+        )
+        updated_manifest = {**manifest, "status": "active"}
+        updated_digest = _sha256(updated_manifest)
+        updated = await conn.fetchrow(
+            """UPDATE ops_skill_versions SET status='active',manifest=$2::jsonb,
+                          content=$3,content_sha256=$4,promoted_at=clock_timestamp(),
+                          promoted_by=$5,promotion_evidence=$6::jsonb
+                   WHERE id=$1 RETURNING *""",
+            row["id"], json.dumps(updated_manifest), _canonical_json(updated_manifest),
+            updated_digest, actor, json.dumps(evidence),
+        )
+        return _row_dict(updated)
+
+
+def _approval_matches(approval: Mapping[str, Any] | None, *, tenant_id: str,
+                      skill_id: str, version: str, input_hash: str,
+                      channel_provenance: Mapping[str, Any]) -> bool:
+    if not approval or approval.get("decision") != "approved":
+        return False
+    scope = approval.get("approval_scope") or {}
+    if isinstance(scope, str):
+        scope = json.loads(scope)
+    used = int(scope.get("used", 0))
+    maximum = int(approval.get("max_executions", 1))
+    return (
+        str(approval.get("tenant_id")) == tenant_id
+        and scope.get("skill_id") == skill_id
+        and scope.get("version") == version
+        and scope.get("input_hash") == input_hash
+        and scope.get("channel_router_provenance") == dict(channel_provenance)
+        and used < maximum
+    )
+
+
+async def execute_skill(
+    *, tenant_id: str, skill_id: str, version: str,
+    input_data: Mapping[str, Any], idempotency_key: str | None,
+    action_intent: ActionIntent, approval_id: str | None = None,
+) -> dict[str, Any]:
+    """Execute only an active, schema-valid, code-registered skill version."""
+    from app.services.channel_router import ChannelRouter
+
+    ChannelRouter().validate_action_intent(action_intent, capability="skill.execute")
+    if action_intent.tenant_id != tenant_id:
+        raise SkillRegistryError("tenant_mismatch", status_code=403)
+    expected_payload = {"skill_id": skill_id, "version": version, "input": dict(input_data)}
+    if dict(action_intent.payload) != expected_payload:
+        raise SkillRegistryError("action_intent_payload_mismatch", status_code=403)
+    input_hash = _sha256(input_data)
+    from app.core.db_pool import get_pool
+    async with get_pool().acquire() as conn:  # noqa: SIM117 - asyncpg transaction typing.
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """SELECT l.slug,l.risk_tier,v.id AS version_id,v.manifest
+                   FROM ops_skill_library l JOIN ops_skill_versions v ON v.skill_id=l.id
+                   WHERE l.tenant_id=$1::uuid AND l.id=$2::uuid AND v.version=$3
+                     AND v.status='active' AND l.enabled IS TRUE FOR SHARE""",
+                tenant_id, skill_id, version,
+            )
+            if not row:
+                raise SkillRegistryError("active_skill_version_not_found", status_code=404)
+            manifest = validate_skill_manifest(row["manifest"])
+            executor = _SKILL_EXECUTORS.get(manifest["executor"])
+            if executor is None:
+                raise SkillRegistryError("executor_not_registered", status_code=409)
+            _validate_instance(
+                manifest["input_schema"], input_data, "input_schema_validation_failed"
+            )
+            mode = manifest["idempotency"]["mode"]
+            if mode == "required" and not idempotency_key:
+                raise SkillRegistryError("idempotency_key_required")
+            if mode == "forbidden" and idempotency_key:
+                raise SkillRegistryError("idempotency_key_forbidden")
+            if idempotency_key:
+                existing = await conn.fetchrow(
+                    """SELECT * FROM ops_skill_runs WHERE tenant_id=$1::uuid
+                       AND idempotency_key=$2 FOR UPDATE""", tenant_id, idempotency_key,
+                )
+                if existing:
+                    wrong_input = existing["input_hash"] != input_hash
+                    wrong_skill = str(existing["skill_id"]) != skill_id
+                    if wrong_input or wrong_skill:
+                        raise SkillRegistryError("idempotency_conflict", status_code=409)
+                    return _row_dict(existing)
+            approval = None
+            if manifest["risk_tier"] in HIGH_RISK_TIERS:
+                approval = await conn.fetchrow(
+                    """SELECT id::text,tenant_id::text,decision,approval_scope,max_executions
+                       FROM agent_permission_requests
+                       WHERE id=$1::uuid AND tenant_id=$2::uuid
+                         AND expires_at > clock_timestamp() FOR UPDATE""",
+                    approval_id, tenant_id,
+                ) if approval_id else None
+                if not _approval_matches(_row_dict(approval) if approval else None,
+                                         tenant_id=tenant_id, skill_id=skill_id,
+                                         version=version, input_hash=input_hash,
+                                         channel_provenance=action_intent.authenticated_provenance):
+                    raise SkillRegistryError("human_gateway_approval_required", status_code=403)
+                await conn.execute(
+                    """UPDATE agent_permission_requests
+                       SET approval_scope=jsonb_set(approval_scope,'{used}',
+                           to_jsonb(COALESCE((approval_scope->>'used')::int,0)+1),true),
+                           updated_at=clock_timestamp()
+                       WHERE id=$1::uuid""", approval_id,
+                )
+            run = await conn.fetchrow(
+                """INSERT INTO ops_skill_runs
+                   (tenant_id,skill_id,skill_version_id,skill_slug,project,status,input,input_hash,
+                    idempotency_key,policy_decision,channel_provenance,approval_id)
+                   VALUES($1::uuid,$2::uuid,$3,$4,$5,'running',$6::jsonb,$7,$8,
+                          $9::jsonb,$10::jsonb,$11::uuid)
+                   RETURNING id::text""",
+                tenant_id, skill_id, row["version_id"], row["slug"],
+                (manifest.get("provenance") or {}).get("project"),
+                json.dumps(input_data), input_hash,
+                idempotency_key, json.dumps(RISK_POLICIES[manifest["risk_tier"]]),
+                json.dumps(dict(action_intent.authenticated_provenance)), approval_id,
+            )
+    started = time.monotonic()
+    attempts = manifest["retry"]["max_attempts"]
+    result: Any = None
+    error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            if inspect.iscoroutinefunction(executor):
+                value = executor(input_data)
+            else:
+                value = asyncio.to_thread(executor, input_data)
+            result = await asyncio.wait_for(value, timeout=manifest["timeout_seconds"])
+            _validate_instance(
+                manifest["output_schema"], result, "output_schema_validation_failed"
+            )
+            _canonical_json(result)  # JSONB persistence must be possible before success.
+            error = None
+            break
+        except Exception as exc:  # noqa: BLE001 - executor failures are persisted uniformly.
+            error = exc
+            if attempt < attempts and manifest["retry"]["backoff_seconds"]:
+                await asyncio.sleep(manifest["retry"]["backoff_seconds"])
+    latency_ms = int((time.monotonic() - started) * 1000)
+    status = "failed" if error else "succeeded"
+    output = {} if error else result
+    async with get_pool().acquire() as conn:
+        updated = await conn.fetchrow(
+            """UPDATE ops_skill_runs SET status=$2,output=$3::jsonb,error=$4,
+                      result_hash=$5,evidence=$6::jsonb,latency_ms=$7,cost_usd=0,
+                      completed_at=clock_timestamp() WHERE id=$1::uuid RETURNING *""",
+            run["id"], status, json.dumps(output), str(error)[:2000] if error else None,
+            _sha256(output) if error is None else None,
+            json.dumps(manifest["evidence"]), latency_ms,
+        )
+    if error:
+        raise SkillRegistryError("skill_execution_failed", str(error), status_code=502) from error
+    return _row_dict(updated)
 
 
 @dataclass(frozen=True)
