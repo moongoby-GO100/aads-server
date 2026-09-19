@@ -7,11 +7,13 @@
 
 DB 스키마: scripts/sql/20260917_work_recipe_schema.sql
 """
+
 from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from urllib.parse import urlparse
 
 from app.core.db_pool import get_pool
@@ -35,8 +37,7 @@ def normalize_domain(value: str) -> str:
     if text.startswith("[") and "]" in text:  # IPv6
         return text.split("]", 1)[0] + "]"
     text = text.split(":", 1)[0]
-    if text.startswith("www."):
-        text = text[4:]
+    text = text.removeprefix("www.")
     return text
 
 
@@ -114,39 +115,49 @@ async def save_recipe(
 ) -> dict[str, Any]:
     """레시피를 새 버전으로 저장한다. 기존 행은 건드리지 않는다."""
     domain = normalize_domain(recipe.domain)
-    async with get_pool().acquire() as conn:
-        async with conn.transaction():
-            scoped_tenant = _tenant_uuid(tenant_id)
-            lock_key = f"{scoped_tenant or GLOBAL_TENANT_SENTINEL}:{domain}:{recipe.name}"
-            await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lock_key)
-            version = int(await conn.fetchval(
+    async with get_pool().acquire() as conn, conn.transaction():
+        scoped_tenant = _tenant_uuid(tenant_id)
+        lock_key = f"{scoped_tenant or GLOBAL_TENANT_SENTINEL}:{domain}:{recipe.name}"
+        await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lock_key)
+        version = int(
+            await conn.fetchval(
                 """
                 SELECT COALESCE(MAX(version), 0) + 1 FROM work_recipes
                  WHERE COALESCE(tenant_id, $1) = COALESCE($2::uuid, $1)
                    AND domain=$3 AND name=$4
                 """,
-                GLOBAL_TENANT_SENTINEL, scoped_tenant, domain, recipe.name,
-            ))
-            spec = recipe.to_dict()
-            spec["version"] = version
-            row = await conn.fetchrow(
-                """
+                GLOBAL_TENANT_SENTINEL,
+                scoped_tenant,
+                domain,
+                recipe.name,
+            )
+        )
+        spec = recipe.to_dict()
+        spec["version"] = version
+        row = await conn.fetchrow(
+            """
                 INSERT INTO work_recipes (
                     tenant_id, name, domain, version, description,
                     spec, yaml_source, max_risk, created_by
                 ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
                 RETURNING *
                 """,
-                scoped_tenant, recipe.name, domain, version, recipe.description,
-                json.dumps(spec, ensure_ascii=False),
-                yaml_source if yaml_source is not None else recipe.to_yaml(),
-                recipe.max_risk(), created_by,
-            )
+            scoped_tenant,
+            recipe.name,
+            domain,
+            version,
+            recipe.description,
+            json.dumps(spec, ensure_ascii=False),
+            yaml_source if yaml_source is not None else recipe.to_yaml(),
+            recipe.max_risk(),
+            created_by,
+        )
     result = row_to_dict(row)
     # NULL-scoped global recipes are intentionally left in their legacy
     # namespace at runtime; migration backfill preserves them losslessly.
     if tenant_id is not None:
         from app.services.ovis_recipe import sync_legacy_reference
+
         result["ovis_recipe_ref"] = await sync_legacy_reference(
             tenant_id=tenant_id,
             canonical_key=f"work:{domain}:{recipe.name}",
@@ -155,7 +166,11 @@ async def save_recipe(
             source_type="work_recipe",
             source_id=result["id"],
             definition=result,
-            approval_scope={"legacy": "work_recipe", "tenant_id": str(tenant_id), "max_risk": recipe.max_risk()},
+            approval_scope={
+                "legacy": "work_recipe",
+                "tenant_id": str(tenant_id),
+                "max_risk": recipe.max_risk(),
+            },
         )
     return result
 
@@ -190,7 +205,7 @@ async def get_recipe_row(
             f"""
             SELECT *
               FROM work_recipes
-             WHERE {' AND '.join(where)}
+             WHERE {" AND ".join(where)}
              ORDER BY version DESC
              LIMIT 1
             """,
@@ -266,7 +281,9 @@ class DatabaseRunRecorder:
     않고, 운영에서는 이 클래스를 넘긴다.
     """
 
-    def __init__(self, *, tenant_id: Any = None, triggered_by: str = "", task_id: str | None = None) -> None:
+    def __init__(
+        self, *, tenant_id: Any = None, triggered_by: str = "", task_id: str | None = None
+    ) -> None:
         self.tenant_id = tenant_id
         self.triggered_by = triggered_by
         self.task_id = task_id
@@ -354,10 +371,7 @@ class DatabaseRunRecorder:
 def _maskable(recipe: WorkRecipe, inputs: Mapping[str, Any]) -> dict[str, Any]:
     """secret 로 선언된 입력은 값 대신 마스크를 기록한다."""
     secrets = {item.name for item in recipe.inputs if item.secret}
-    return {
-        key: ("***" if key in secrets else _safe_json(value))
-        for key, value in inputs.items()
-    }
+    return {key: ("***" if key in secrets else _safe_json(value)) for key, value in inputs.items()}
 
 
 def _safe_json(value: Any) -> Any:

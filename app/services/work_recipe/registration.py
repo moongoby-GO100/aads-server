@@ -1,4 +1,5 @@
 """Recorded WorkRecipe dry-run and B-scope registration approval."""
+
 from __future__ import annotations
 
 import hashlib
@@ -55,7 +56,8 @@ def build_dry_run(recipe: WorkRecipe, *, proposed_version: int) -> dict[str, Any
                 "evidence": "screenshot_or_step_audit",
             }
             for step in recipe.steps
-        ] + [
+        ]
+        + [
             {
                 "seq": step.seq,
                 "phase": "verify",
@@ -78,9 +80,7 @@ async def request_registration(
     """Persist a dry-run draft. It is not visible to the recipe player yet."""
     tenant = _tenant_uuid(tenant_id)
     domain = store.normalize_domain(recipe.domain)
-    proposed_version = await store.next_version(
-        name=recipe.name, domain=domain, tenant_id=tenant
-    )
+    proposed_version = await store.next_version(name=recipe.name, domain=domain, tenant_id=tenant)
     spec = recipe.to_dict()
     spec["version"] = proposed_version
     canonical = json.dumps(spec, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -135,74 +135,90 @@ async def decide_registration(
         raise RegistrationError("decision must be approve or reject")
     tenant = _tenant_uuid(tenant_id)
 
-    async with get_pool().acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """
+    async with get_pool().acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            """
                 SELECT * FROM work_recipe_registration_requests
                  WHERE id=$1::uuid AND tenant_id=$2
                  FOR UPDATE
                 """,
-                str(registration_id),
-                tenant,
-            )
-            if row is None:
-                raise RegistrationError("registration_not_found")
-            if str(row["status"]) != "pending":
-                raise RegistrationError(f"registration_already_decided:{row['status']}")
+            str(registration_id),
+            tenant,
+        )
+        if row is None:
+            raise RegistrationError("registration_not_found")
+        if str(row["status"]) != "pending":
+            raise RegistrationError(f"registration_already_decided:{row['status']}")
 
-            if verdict == "reject":
-                updated = await conn.fetchrow(
-                    """
+        if verdict == "reject":
+            updated = await conn.fetchrow(
+                """
                     UPDATE work_recipe_registration_requests
                        SET status='rejected', decided_by=$3, decision_reason=$4,
                            decided_at=NOW(), updated_at=NOW()
                      WHERE id=$1::uuid AND tenant_id=$2
                      RETURNING *
                     """,
-                    str(registration_id), tenant, str(decided_by or ""), str(reason or ""),
-                )
-                return _row(updated)
+                str(registration_id),
+                tenant,
+                str(decided_by or ""),
+                str(reason or ""),
+            )
+            return _row(updated)
 
-            spec = _json_object(row["spec"])
-            recipe = parse_recipe(spec)
-            lock_key = f"{tenant}:{row['domain']}:{row['name']}"
-            await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lock_key)
-            version = int(await conn.fetchval(
+        spec = _json_object(row["spec"])
+        recipe = parse_recipe(spec)
+        lock_key = f"{tenant}:{row['domain']}:{row['name']}"
+        await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lock_key)
+        version = int(
+            await conn.fetchval(
                 """
                 SELECT COALESCE(MAX(version), 0) + 1 FROM work_recipes
                  WHERE tenant_id=$1 AND domain=$2 AND name=$3
                 """,
-                tenant, str(row["domain"]), str(row["name"]),
-            ))
-            stored_spec = recipe.to_dict()
-            stored_spec["version"] = version
-            recipe_row = await conn.fetchrow(
-                """
+                tenant,
+                str(row["domain"]),
+                str(row["name"]),
+            )
+        )
+        stored_spec = recipe.to_dict()
+        stored_spec["version"] = version
+        recipe_row = await conn.fetchrow(
+            """
                 INSERT INTO work_recipes (
                     tenant_id, name, domain, version, description, spec,
                     yaml_source, max_risk, enabled, created_by
                 ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,TRUE,$9)
                 RETURNING *
                 """,
-                tenant, recipe.name, store.normalize_domain(recipe.domain), version,
-                recipe.description, json.dumps(stored_spec, ensure_ascii=False),
-                recipe.to_yaml(), recipe.max_risk(), str(decided_by or ""),
-            )
-            updated = await conn.fetchrow(
-                """
+            tenant,
+            recipe.name,
+            store.normalize_domain(recipe.domain),
+            version,
+            recipe.description,
+            json.dumps(stored_spec, ensure_ascii=False),
+            recipe.to_yaml(),
+            recipe.max_risk(),
+            str(decided_by or ""),
+        )
+        updated = await conn.fetchrow(
+            """
                 UPDATE work_recipe_registration_requests
                    SET status='approved', decided_by=$3, decision_reason=$4,
                        recipe_id=$5, decided_at=NOW(), updated_at=NOW()
                  WHERE id=$1::uuid AND tenant_id=$2
                  RETURNING *
                 """,
-                str(registration_id), tenant, str(decided_by or ""), str(reason or ""),
-                recipe_row["id"],
-            )
+            str(registration_id),
+            tenant,
+            str(decided_by or ""),
+            str(reason or ""),
+            recipe_row["id"],
+        )
     result = _row(updated)
     result["recipe"] = store.row_to_dict(recipe_row)
     from app.services.ovis_recipe import sync_legacy_reference
+
     result["recipe"]["ovis_recipe_ref"] = await sync_legacy_reference(
         tenant_id=tenant,
         canonical_key=f"work:{store.normalize_domain(recipe.domain)}:{recipe.name}",

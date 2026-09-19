@@ -5,12 +5,25 @@ module deliberately stores a lossless snapshot and a stable reference rather
 than attempting to translate browser, work, and Site Skill payloads into a
 lowest-common-denominator schema.
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
 from collections.abc import Mapping
 from typing import Any
+
+_VALID_STATUSES = frozenset(
+    {
+        "draft",
+        "candidate",
+        "shadow",
+        "active",
+        "archived",
+        "deprecated",
+        "quarantined",
+    }
+)
 
 
 def canonical_json(value: Any) -> str:
@@ -43,21 +56,28 @@ async def sync_legacy_reference(
     payload = dict(definition)
     scope = dict(approval_scope or {})
     checksum = recipe_checksum(payload)
+    normalized_tenant = str(tenant_id) if tenant_id else None
+    normalized_status = str(status or "draft").strip().lower()
+    if normalized_status not in _VALID_STATUSES:
+        normalized_status = "draft"
     try:
-        async with get_pool().acquire() as conn:
-            async with conn.transaction():
-                recipe = await conn.fetchrow(
-                    """
+        async with get_pool().acquire() as conn, conn.transaction():
+            recipe = await conn.fetchrow(
+                """
                     INSERT INTO ovis_recipes (tenant_id, canonical_key)
                     VALUES ($1::uuid, $2)
-                    ON CONFLICT (tenant_id, canonical_key) DO UPDATE
+                    ON CONFLICT (
+                        COALESCE(tenant_id, '00000000-0000-0000-0000-000000000000'::uuid),
+                        canonical_key
+                    ) DO UPDATE
                         SET updated_at=clock_timestamp()
                     RETURNING id
                     """,
-                    str(tenant_id), canonical_key,
-                )
-                version_row = await conn.fetchrow(
-                    """
+                normalized_tenant,
+                canonical_key,
+            )
+            version_row = await conn.fetchrow(
+                """
                     INSERT INTO ovis_recipe_versions
                         (recipe_id, version, status, definition, definition_sha256, approval_scope)
                     VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb)
@@ -65,20 +85,27 @@ async def sync_legacy_reference(
                        SET updated_at=ovis_recipe_versions.updated_at
                     RETURNING id
                     """,
-                    recipe["id"], version, status, canonical_json(payload), checksum, canonical_json(scope),
-                )
-                await conn.execute(
-                    """
+                recipe["id"],
+                version,
+                normalized_status,
+                canonical_json(payload),
+                checksum,
+                canonical_json(scope),
+            )
+            await conn.execute(
+                """
                     INSERT INTO ovis_recipe_legacy_refs
                         (ovis_recipe_version_id, source_type, source_id, rollback_definition)
                     VALUES ($1, $2, $3, $4::jsonb)
-                    ON CONFLICT (source_type, source_id) DO UPDATE
-                       SET ovis_recipe_version_id=EXCLUDED.ovis_recipe_version_id,
-                           rollback_definition=EXCLUDED.rollback_definition,
+                    ON CONFLICT (source_type, source_id, ovis_recipe_version_id) DO UPDATE
+                       SET rollback_definition=EXCLUDED.rollback_definition,
                            updated_at=clock_timestamp()
                     """,
-                    version_row["id"], source_type, str(source_id), canonical_json(payload),
-                )
+                version_row["id"],
+                source_type,
+                str(source_id),
+                canonical_json(payload),
+            )
     except Exception as exc:
         # Undefined-table is expected before the additive migration.  Do not
         # hide a real database failure once OVISRecipe exists.

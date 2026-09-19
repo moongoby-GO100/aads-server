@@ -1,4 +1,5 @@
 """Browser recipe registry for API-less authenticated admin automation."""
+
 from __future__ import annotations
 
 import hashlib
@@ -10,7 +11,6 @@ from urllib.parse import urlparse
 from app.core.db_pool import get_pool
 from app.services.browser_permission_policy import classify_browser_action, mask_sensitive_value
 from app.services.managed_browser import normalize_origin, normalize_work_key
-
 
 ALLOWED_RUNTIMES = {"pc_agent", "self_hosted_playwright", "external_sandbox", "auto"}
 ALLOWED_QUEUE_STRATEGIES = {"fifo", "priority", "latest_only", "reject_on_conflict"}
@@ -86,12 +86,12 @@ def normalize_concurrency_policy(policy: dict[str, Any] | None) -> dict[str, Any
     if queue_strategy not in ALLOWED_QUEUE_STRATEGIES:
         queue_strategy = "fifo"
     conflict_keys = [
-        str(key).strip()
-        for key in _json_list(item.get("conflict_keys"))
-        if str(key).strip()
+        str(key).strip() for key in _json_list(item.get("conflict_keys")) if str(key).strip()
     ]
     return {
-        "max_parallel_runs": _int_between(item.get("max_parallel_runs"), default=1, minimum=1, maximum=20),
+        "max_parallel_runs": _int_between(
+            item.get("max_parallel_runs"), default=1, minimum=1, maximum=20
+        ),
         "queue_strategy": queue_strategy,
         "conflict_keys": conflict_keys[:20] or ["work_key", "origin"],
     }
@@ -104,10 +104,18 @@ def normalize_resource_policy(policy: dict[str, Any] | None) -> dict[str, Any]:
         runtime = "auto"
     return {
         "runtime": runtime,
-        "max_browser_contexts": _int_between(item.get("max_browser_contexts"), default=1, minimum=1, maximum=50),
-        "max_memory_mb": _int_between(item.get("max_memory_mb"), default=1024, minimum=256, maximum=32768),
-        "max_runtime_seconds": _int_between(item.get("max_runtime_seconds"), default=900, minimum=30, maximum=86400),
-        "artifact_budget_mb": _int_between(item.get("artifact_budget_mb"), default=256, minimum=1, maximum=10240),
+        "max_browser_contexts": _int_between(
+            item.get("max_browser_contexts"), default=1, minimum=1, maximum=50
+        ),
+        "max_memory_mb": _int_between(
+            item.get("max_memory_mb"), default=1024, minimum=256, maximum=32768
+        ),
+        "max_runtime_seconds": _int_between(
+            item.get("max_runtime_seconds"), default=900, minimum=30, maximum=86400
+        ),
+        "artifact_budget_mb": _int_between(
+            item.get("artifact_budget_mb"), default=256, minimum=1, maximum=10240
+        ),
     }
 
 
@@ -189,7 +197,9 @@ def build_recipe_dry_run_plan(recipe: dict[str, Any], *, target_url: str = "") -
         "recipe_id": normalized["recipe_id"],
         "version": normalized["version"],
         "version_hash": version_hash,
-        "target_origin": normalize_origin(target_url) if target_url else normalized["allowed_origins"][0],
+        "target_origin": normalize_origin(target_url)
+        if target_url
+        else normalized["allowed_origins"][0],
         "runtime": normalized["resource_policy"]["runtime"],
         "runtime_plan": build_runtime_execution_plan(normalized, target_url=target_url),
         "concurrency_policy": normalized["concurrency_policy"],
@@ -201,7 +211,9 @@ def build_recipe_dry_run_plan(recipe: dict[str, Any], *, target_url: str = "") -
     }
 
 
-def build_recipe_concurrency_key(recipe: dict[str, Any], *, target_url: str = "", work_key: str = "") -> str:
+def build_recipe_concurrency_key(
+    recipe: dict[str, Any], *, target_url: str = "", work_key: str = ""
+) -> str:
     normalized = normalize_recipe_payload(recipe)
     policy = normalized["concurrency_policy"]
     origin = normalize_origin(target_url) if target_url else normalized["allowed_origins"][0]
@@ -213,7 +225,7 @@ def build_recipe_concurrency_key(recipe: dict[str, Any], *, target_url: str = ""
         "origin": origin,
         "runtime": normalized["resource_policy"]["runtime"],
     }
-    parts = [f"{key}:{values[key]}" for key in policy["conflict_keys"] if key in values and values[key]]
+    parts = [f"{key}:{values[key]}" for key in policy["conflict_keys"] if values.get(key)]
     if not parts:
         parts = [f"work_key:{values['work_key']}", f"origin:{values['origin']}"]
     return "|".join(parts)
@@ -252,7 +264,9 @@ def _recipe_requires_pc_agent(recipe: dict[str, Any]) -> tuple[bool, list[str]]:
 def build_runtime_execution_plan(recipe: dict[str, Any], *, target_url: str = "") -> dict[str, Any]:
     normalized = normalize_recipe_payload(recipe)
     configured_runtime = normalized["resource_policy"]["runtime"]
-    candidate_target = target_url or (normalized["allowed_origins"][0] if normalized["allowed_origins"] else "")
+    candidate_target = target_url or (
+        normalized["allowed_origins"][0] if normalized["allowed_origins"] else ""
+    )
     self_hosted_eligible = _http_target_url(candidate_target)
     pc_agent_required, pc_agent_reasons = _recipe_requires_pc_agent(normalized)
     fallback_config = _json_dict(normalized.get("fallbacks"))
@@ -272,7 +286,12 @@ def build_runtime_execution_plan(recipe: dict[str, Any], *, target_url: str = ""
         primary_runtime = "pc_agent"
 
     fallback_runtimes: list[str] = []
-    for runtime in [*configured_fallbacks, "pc_agent", "self_hosted_playwright", "external_sandbox"]:
+    for runtime in [
+        *configured_fallbacks,
+        "pc_agent",
+        "self_hosted_playwright",
+        "external_sandbox",
+    ]:
         if runtime != primary_runtime and runtime not in fallback_runtimes:
             fallback_runtimes.append(runtime)
 
@@ -283,7 +302,8 @@ def build_runtime_execution_plan(recipe: dict[str, Any], *, target_url: str = ""
         "self_hosted_eligible": self_hosted_eligible,
         "pc_agent_required": pc_agent_required,
         "pc_agent_reasons": pc_agent_reasons,
-        "access_probe_supported": primary_runtime in {"self_hosted_playwright", "auto"} or self_hosted_eligible,
+        "access_probe_supported": primary_runtime in {"self_hosted_playwright", "auto"}
+        or self_hosted_eligible,
         "notes": [
             "서버 Playwright 접근 실패는 access-check/live-frame diagnosis로 분류합니다.",
             "OTP/CAPTCHA/인증서는 승인 토큰 범위 안에서만 자동 입력 또는 모델 판독을 허용합니다.",
@@ -302,7 +322,9 @@ def evaluate_recipe_run_admission(
     policy = normalized["concurrency_policy"]
     max_parallel_runs = policy["max_parallel_runs"]
     queue_strategy = policy["queue_strategy"]
-    concurrency_key = build_recipe_concurrency_key(normalized, target_url=target_url, work_key=work_key)
+    concurrency_key = build_recipe_concurrency_key(
+        normalized, target_url=target_url, work_key=work_key
+    )
     can_start = active_runs < max_parallel_runs
     if can_start:
         decision = "start"
@@ -355,11 +377,19 @@ def _row_to_recipe(row: Any) -> dict[str, Any]:
         "fallbacks",
     ):
         if key in item:
-            item[key] = _json_dict(item[key]) if key.endswith("_policy") or key in {"challenge_policy", "capture_rules", "upload_rules", "verifier", "fallbacks"} else _json_list(item[key])
+            item[key] = (
+                _json_dict(item[key])
+                if key.endswith("_policy")
+                or key
+                in {"challenge_policy", "capture_rules", "upload_rules", "verifier", "fallbacks"}
+                else _json_list(item[key])
+            )
     return mask_sensitive_value(item)
 
 
-async def upsert_browser_recipe(*, tenant_id: str, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def upsert_browser_recipe(
+    *, tenant_id: str, user_id: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     recipe = normalize_recipe_payload(payload)
     recipe["version_hash"] = compute_recipe_hash(recipe)
     async with get_pool().acquire() as conn:
@@ -427,6 +457,7 @@ async def upsert_browser_recipe(*, tenant_id: str, user_id: str, payload: dict[s
     # OVISRecipe reference is synchronized after its committed legacy write so
     # pre-migration deployments retain their existing behavior.
     from app.services.ovis_recipe import sync_legacy_reference
+
     result["ovis_recipe_ref"] = await sync_legacy_reference(
         tenant_id=tenant_id,
         canonical_key=f"browser:{recipe['recipe_id']}",
@@ -438,12 +469,18 @@ async def upsert_browser_recipe(*, tenant_id: str, user_id: str, payload: dict[s
         source_type="browser_recipe",
         source_id=result["id"],
         definition=result,
-        approval_scope={"legacy": "browser_recipe", "tenant_id": str(tenant_id), "version": recipe["version"]},
+        approval_scope={
+            "legacy": "browser_recipe",
+            "tenant_id": str(tenant_id),
+            "version": recipe["version"],
+        },
     )
     return result
 
 
-async def list_browser_recipes(*, tenant_id: str, service: str | None = None, enabled: bool | None = None) -> list[dict[str, Any]]:
+async def list_browser_recipes(
+    *, tenant_id: str, service: str | None = None, enabled: bool | None = None
+) -> list[dict[str, Any]]:
     args: list[Any] = [uuid.UUID(str(tenant_id))]
     where = ["tenant_id = $1"]
     if service:
@@ -457,7 +494,7 @@ async def list_browser_recipes(*, tenant_id: str, service: str | None = None, en
             f"""
             SELECT *
               FROM browser_recipes
-             WHERE {' AND '.join(where)}
+             WHERE {" AND ".join(where)}
              ORDER BY service, recipe_id, version DESC
             """,
             *args,
@@ -465,7 +502,9 @@ async def list_browser_recipes(*, tenant_id: str, service: str | None = None, en
     return [_row_to_recipe(row) for row in rows]
 
 
-async def get_browser_recipe(*, tenant_id: str, recipe_id: str, version: str = "v1") -> dict[str, Any] | None:
+async def get_browser_recipe(
+    *, tenant_id: str, recipe_id: str, version: str = "v1"
+) -> dict[str, Any] | None:
     async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
             """

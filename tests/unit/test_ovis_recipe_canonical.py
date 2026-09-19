@@ -12,7 +12,9 @@ def test_ovis_recipe_checksum_is_stable_for_key_order():
 
 def test_canonical_migration_preserves_legacy_rows_and_provides_rollback_reference():
     root = Path(__file__).resolve().parents[2]
-    sql = (root / "migrations" / "20260919_m6_ovis_recipe_canonical.sql").read_text(encoding="utf-8")
+    sql = (root / "migrations" / "20260919_m6_ovis_recipe_canonical.sql").read_text(
+        encoding="utf-8"
+    )
     assert "BEGIN;" in sql and "COMMIT;" in sql
     assert "CREATE TABLE IF NOT EXISTS ovis_recipes" in sql
     assert "CREATE TABLE IF NOT EXISTS ovis_recipe_versions" in sql
@@ -22,7 +24,13 @@ def test_canonical_migration_preserves_legacy_rows_and_provides_rollback_referen
     assert "FROM work_recipes" in sql
     assert "ops_skill_versions" in sql
     assert "skill_version_id UUID NULL REFERENCES ops_skill_versions" in sql
-    assert "promotion_artifact_id UUID NULL REFERENCES browser_learned_artifacts" in sql
+    assert "promotion_artifact_id UUID NULL" in sql
+    assert "to_regclass('public.browser_learned_artifacts')" in sql
+    assert "fk_ovis_recipe_versions_promotion_artifact" in sql
+    assert "IS NOT DISTINCT FROM w.tenant_id" in sql
+    assert "COALESCE(tenant_id, '00000000-0000-0000-0000-000000000000'::uuid)" in sql
+    assert "UNIQUE (source_type, source_id, ovis_recipe_version_id)" in sql
+    assert "'candidate','shadow','active'" in sql
     assert "DELETE FROM" not in sql.upper()
     assert "UPDATE browser_recipes" not in sql.upper()
     assert "UPDATE work_recipes" not in sql.upper()
@@ -42,7 +50,7 @@ def test_work_recipe_save_serializes_same_identity_version_allocation():
     root = Path(__file__).resolve().parents[2]
     source = (root / "app/services/work_recipe/store.py").read_text(encoding="utf-8")
     assert "pg_advisory_xact_lock" in source
-    assert "async with conn.transaction()" in source
+    assert "conn.transaction()" in source
 
 
 def test_browser_adapter_uses_content_addressed_canonical_version_for_legacy_overwrites():
