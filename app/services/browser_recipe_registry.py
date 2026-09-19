@@ -422,7 +422,25 @@ async def upsert_browser_recipe(*, tenant_id: str, user_id: str, payload: dict[s
             recipe["version_hash"],
             user_id,
         )
-    return _row_to_recipe(row)
+    result = _row_to_recipe(row)
+    # Legacy BrowserRecipe remains the API adapter during rollout.  The shared
+    # OVISRecipe reference is synchronized after its committed legacy write so
+    # pre-migration deployments retain their existing behavior.
+    from app.services.ovis_recipe import sync_legacy_reference
+    result["ovis_recipe_ref"] = await sync_legacy_reference(
+        tenant_id=tenant_id,
+        canonical_key=f"browser:{recipe['recipe_id']}",
+        # A legacy caller may overwrite `v1`; the canonical contract converts
+        # that mutable label into an immutable content-addressed version while
+        # retaining the caller's label inside the lossless definition.
+        version=f"{recipe['version']}@{recipe['version_hash'][:16]}",
+        status=str(result.get("version_status") or ("active" if recipe["enabled"] else "archived")),
+        source_type="browser_recipe",
+        source_id=result["id"],
+        definition=result,
+        approval_scope={"legacy": "browser_recipe", "tenant_id": str(tenant_id), "version": recipe["version"]},
+    )
+    return result
 
 
 async def list_browser_recipes(*, tenant_id: str, service: str | None = None, enabled: bool | None = None) -> list[dict[str, Any]]:

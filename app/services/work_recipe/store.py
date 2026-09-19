@@ -114,29 +114,50 @@ async def save_recipe(
 ) -> dict[str, Any]:
     """레시피를 새 버전으로 저장한다. 기존 행은 건드리지 않는다."""
     domain = normalize_domain(recipe.domain)
-    version = await next_version(name=recipe.name, domain=domain, tenant_id=tenant_id)
-    spec = recipe.to_dict()
-    spec["version"] = version
     async with get_pool().acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO work_recipes (
-                tenant_id, name, domain, version, description,
-                spec, yaml_source, max_risk, created_by
-            ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
-            RETURNING *
-            """,
-            _tenant_uuid(tenant_id),
-            recipe.name,
-            domain,
-            version,
-            recipe.description,
-            json.dumps(spec, ensure_ascii=False),
-            yaml_source if yaml_source is not None else recipe.to_yaml(),
-            recipe.max_risk(),
-            created_by,
+        async with conn.transaction():
+            scoped_tenant = _tenant_uuid(tenant_id)
+            lock_key = f"{scoped_tenant or GLOBAL_TENANT_SENTINEL}:{domain}:{recipe.name}"
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lock_key)
+            version = int(await conn.fetchval(
+                """
+                SELECT COALESCE(MAX(version), 0) + 1 FROM work_recipes
+                 WHERE COALESCE(tenant_id, $1) = COALESCE($2::uuid, $1)
+                   AND domain=$3 AND name=$4
+                """,
+                GLOBAL_TENANT_SENTINEL, scoped_tenant, domain, recipe.name,
+            ))
+            spec = recipe.to_dict()
+            spec["version"] = version
+            row = await conn.fetchrow(
+                """
+                INSERT INTO work_recipes (
+                    tenant_id, name, domain, version, description,
+                    spec, yaml_source, max_risk, created_by
+                ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
+                RETURNING *
+                """,
+                scoped_tenant, recipe.name, domain, version, recipe.description,
+                json.dumps(spec, ensure_ascii=False),
+                yaml_source if yaml_source is not None else recipe.to_yaml(),
+                recipe.max_risk(), created_by,
+            )
+    result = row_to_dict(row)
+    # NULL-scoped global recipes are intentionally left in their legacy
+    # namespace at runtime; migration backfill preserves them losslessly.
+    if tenant_id is not None:
+        from app.services.ovis_recipe import sync_legacy_reference
+        result["ovis_recipe_ref"] = await sync_legacy_reference(
+            tenant_id=tenant_id,
+            canonical_key=f"work:{domain}:{recipe.name}",
+            version=str(version),
+            status="active",
+            source_type="work_recipe",
+            source_id=result["id"],
+            definition=result,
+            approval_scope={"legacy": "work_recipe", "tenant_id": str(tenant_id), "max_risk": recipe.max_risk()},
         )
-    return row_to_dict(row)
+    return result
 
 
 async def get_recipe_row(

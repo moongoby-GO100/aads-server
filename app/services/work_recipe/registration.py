@@ -202,6 +202,23 @@ async def decide_registration(
             )
     result = _row(updated)
     result["recipe"] = store.row_to_dict(recipe_row)
+    from app.services.ovis_recipe import sync_legacy_reference
+    result["recipe"]["ovis_recipe_ref"] = await sync_legacy_reference(
+        tenant_id=tenant,
+        canonical_key=f"work:{store.normalize_domain(recipe.domain)}:{recipe.name}",
+        version=str(version),
+        status="active",
+        source_type="work_recipe",
+        source_id=recipe_row["id"],
+        definition=result["recipe"],
+        approval_scope={
+            "legacy": "work_recipe_registration",
+            "registration_id": str(registration_id),
+            "requested_by": str(row["requested_by"]),
+            "decided_by": str(decided_by or ""),
+            "decision": "approved",
+        },
+    )
     return result
 
 
