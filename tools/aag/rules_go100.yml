@@ -117,6 +117,10 @@ sql:
     - pg_tables
     - pg_locks
     - pg_stat_user_tables
+    # card_trades_router.py assembles one SQL statement from separate string
+    # fragments.  The WITH fragment declares this MATERIALIZED CTE and a later
+    # fragment joins it, so per-literal extraction cannot see the declaration.
+    - s4_cfg_latest
   # 운영 DB(contabo14 public 스키마)에 실재하지만 이 저장소에 CREATE TABLE 이
   # 없는 것들. 2026-09-19 pg_class 대조로 확인한 것만 넣었다 — 추측으로 채우면
   # 진짜 결함이 가려진다 (R-ERRBOOK).

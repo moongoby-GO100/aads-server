@@ -733,6 +733,12 @@ def test_shipped_rules_file_loads_without_warnings():
     assert set(sc.RULE_ORDER) <= set(rules["severity"])
 
 
+def test_go100_rules_ignore_split_materialized_cte_alias():
+    rules, warnings = sc.load_rules(ROOT / "tools" / "aag" / "rules_go100.yml")
+    assert warnings == []
+    assert "s4_cfg_latest" in rules["sql"]["ignore_tables"]
+
+
 def test_missing_rules_file_warns_instead_of_silently_defaulting():
     rules, warnings = sc.load_rules(ROOT / "tools" / "aag" / "no-such-rules.yml")
     assert warnings and "기본값" in warnings[0]
