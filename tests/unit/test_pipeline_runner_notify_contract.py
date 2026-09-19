@@ -44,10 +44,17 @@ def test_chat_interrupt_and_bluegreen_drain_contracts_remain_enabled():
     assert "deferred_interrupt_apply" in chat_source
     assert 'AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "5"' in chat_source
     assert 'deploy_phase_start "active_slot_drain" "running"' in deploy_source
-    assert 'AADS_DEPLOY_PRE_CUTOVER_DRAIN_MAX_WAIT:-0' in deploy_source
+    # A live response on the currently routed slot must not serialize a
+    # blue/green release. Nginx keeps that connection on the old worker while
+    # new traffic moves to the healthy candidate; only standby convergence is
+    # deferred until the old slot's DB-fenced leases drain.
+    assert 'AADS_DEPLOY_PRE_CUTOVER_DRAIN_MAX_WAIT:-0}' in deploy_source
     assert "pre-cutover wait disabled" in deploy_source
     assert 'while [[ $DRAIN_ELAPSED -lt "$PRE_CUTOVER_DRAIN_MAX_WAIT" ]]' in deploy_source
+    assert "existing streams remain on the old worker/slot" in deploy_source
     assert "sync_standby_slot_after_drain" in deploy_source
+    assert 'schedule_standby_sync_retry "$DEPLOY_RUN_ID"' in deploy_source
+    assert 'FINAL_DEPLOY_STATUS="success_partial"' in deploy_source
 
 
 @pytest.mark.asyncio
