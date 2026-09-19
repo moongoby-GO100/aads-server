@@ -313,3 +313,182 @@ async def delete_upload(*, user: dict[str, Any], upload_id: UUID) -> bool:
         return True
     finally:
         await conn.close()
+
+
+def _ledger_category(category: str) -> str:
+    value = str(category or "").strip().lower()
+    if value not in {"sales", "purchase"}:
+        raise HTTPException(status_code=400, detail="원장 구분은 sales 또는 purchase여야 합니다")
+    return value
+
+
+def _money_parts(payload: dict[str, Any]) -> tuple[Decimal, Decimal, Decimal]:
+    try:
+        supply = Decimal(str(payload.get("supply_amount", 0)))
+        tax = Decimal(str(payload.get("tax_amount", 0)))
+        total = Decimal(str(payload.get("total_amount", 0)))
+    except InvalidOperation as exc:
+        raise HTTPException(status_code=422, detail="금액 형식이 올바르지 않습니다") from exc
+    maximum = Decimal("9999999999999999.99")
+    if any(not value.is_finite() or value < 0 or value > maximum for value in (supply, tax, total)):
+        raise HTTPException(status_code=422, detail="금액은 0 이상 허용 범위 이하여야 합니다")
+    if supply + tax != total:
+        raise HTTPException(status_code=422, detail="합계는 공급가와 세액의 합이어야 합니다")
+    return supply, tax, total
+
+
+def _iso_date(value: Any, field: str = "occurred_on") -> date:
+    try:
+        return date.fromisoformat(str(value or "")[:10])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"{field} 날짜 형식이 올바르지 않습니다") from exc
+
+
+def _iso_datetime(value: Any) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="occurred_at 일시 형식이 올바르지 않습니다") from exc
+    if parsed.tzinfo is None:
+        raise HTTPException(status_code=422, detail="occurred_at에는 시간대가 필요합니다")
+    return parsed
+
+
+async def list_manual_entries(*, user: dict[str, Any], business_id: str, category: str, date_from: str | None = None, date_to: str | None = None) -> list[dict[str, Any]]:
+    tenant_id, category = _tenant(user), _ledger_category(category)
+    start = _iso_date(date_from, "date_from") if date_from else None
+    end = _iso_date(date_to, "date_to") if date_to else None
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant_id, business_id)
+        rows = await conn.fetch("""SELECT id,business_id,category,occurred_on,counterparty,description,supply_amount,tax_amount,total_amount,source,created_at,updated_at FROM yeoljeong_manual_ledger_entries WHERE tenant_id=$1 AND business_id=$2 AND category=$3 AND deleted_at IS NULL AND ($4::date IS NULL OR occurred_on >= $4) AND ($5::date IS NULL OR occurred_on <= $5) ORDER BY occurred_on DESC,created_at DESC LIMIT 1000""", tenant_id, business_id, category, start, end)
+        return [dict(row) for row in rows]
+    finally:
+        await conn.close()
+
+
+async def create_manual_entry(*, user: dict[str, Any], category: str, payload: dict[str, Any]) -> dict[str, Any]:
+    tenant_id, category = _tenant(user), _ledger_category(category)
+    business_id, occurred = str(payload.get("business_id") or "").strip(), _iso_date(payload.get("occurred_on"))
+    supply, tax, total = _money_parts(payload)
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant_id, business_id)
+        row = await conn.fetchrow("""INSERT INTO yeoljeong_manual_ledger_entries (id,tenant_id,business_id,category,occurred_on,counterparty,description,supply_amount,tax_amount,total_amount,source,created_by,updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'manual',$11,$11) RETURNING *""", uuid4(), tenant_id, business_id, category, occurred, str(payload.get("counterparty") or "").strip(), str(payload.get("description") or "").strip(), supply, tax, total, _actor(user))
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+async def get_manual_entry(*, user: dict[str, Any], category: str, entry_id: UUID) -> dict[str, Any]:
+    tenant_id, category = _tenant(user), _ledger_category(category)
+    conn = await _connect()
+    try:
+        row = await conn.fetchrow("SELECT * FROM yeoljeong_manual_ledger_entries WHERE id=$1 AND tenant_id=$2 AND category=$3 AND deleted_at IS NULL", entry_id, tenant_id, category)
+        if not row:
+            raise HTTPException(status_code=404, detail="원장 항목을 찾을 수 없습니다")
+        await _require_business(conn, tenant_id, row["business_id"])
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+async def update_manual_entry(*, user: dict[str, Any], category: str, entry_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
+    current = await get_manual_entry(user=user, category=category, entry_id=entry_id)
+    merged = {**current, **payload}
+    supply, tax, total = _money_parts(merged)
+    occurred = _iso_date(merged.get("occurred_on"))
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        row = await conn.fetchrow("""UPDATE yeoljeong_manual_ledger_entries SET occurred_on=$4,counterparty=$5,description=$6,supply_amount=$7,tax_amount=$8,total_amount=$9,updated_by=$10,updated_at=NOW() WHERE id=$1 AND tenant_id=$2 AND category=$3 AND source='manual' AND deleted_at IS NULL RETURNING *""", entry_id, tenant_id, _ledger_category(category), occurred, str(merged.get("counterparty") or "").strip(), str(merged.get("description") or "").strip(), supply, tax, total, _actor(user))
+        if not row:
+            raise HTTPException(status_code=404, detail="수정 가능한 수기 원장을 찾을 수 없습니다")
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+async def delete_manual_entry(*, user: dict[str, Any], category: str, entry_id: UUID) -> None:
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        command = await conn.execute("UPDATE yeoljeong_manual_ledger_entries SET deleted_at=NOW(),updated_by=$4,updated_at=NOW() WHERE id=$1 AND tenant_id=$2 AND category=$3 AND source='manual' AND deleted_at IS NULL", entry_id, tenant_id, _ledger_category(category), _actor(user))
+        if command.endswith(" 0"):
+            raise HTTPException(status_code=404, detail="삭제 가능한 수기 원장을 찾을 수 없습니다")
+    finally:
+        await conn.close()
+
+
+def _public_card(row: Any) -> dict[str, Any]:
+    value = dict(row)
+    value["card_number_masked"] = f"**** **** **** {value.pop('card_last4')}"
+    return value
+
+
+async def list_card_transactions(*, user: dict[str, Any], business_id: str, date_from: str | None = None, date_to: str | None = None) -> list[dict[str, Any]]:
+    tenant_id = _tenant(user)
+    start = _iso_date(date_from, "date_from") if date_from else None
+    end = _iso_date(date_to, "date_to") if date_to else None
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant_id, business_id)
+        rows = await conn.fetch("""SELECT id,business_id,occurred_at,merchant,description,supply_amount,tax_amount,total_amount,card_last4,source,created_at,updated_at FROM yeoljeong_card_transactions WHERE tenant_id=$1 AND business_id=$2 AND deleted_at IS NULL AND ($3::date IS NULL OR occurred_at::date >= $3) AND ($4::date IS NULL OR occurred_at::date <= $4) ORDER BY occurred_at DESC LIMIT 1000""", tenant_id, business_id, start, end)
+        return [_public_card(row) for row in rows]
+    finally:
+        await conn.close()
+
+
+async def create_card_transaction(*, user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    tenant_id, business_id = _tenant(user), str(payload.get("business_id") or "").strip()
+    supply, tax, total = _money_parts(payload)
+    last4 = str(payload.get("card_last4") or "")
+    if not re.fullmatch(r"\d{4}", last4):
+        raise HTTPException(status_code=422, detail="카드번호는 last4 네 자리만 입력하십시오")
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant_id, business_id)
+        row = await conn.fetchrow("""INSERT INTO yeoljeong_card_transactions (id,tenant_id,business_id,occurred_at,merchant,description,supply_amount,tax_amount,total_amount,card_last4,source,created_by,updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'manual',$11,$11) RETURNING *""", uuid4(), tenant_id, business_id, _iso_datetime(payload.get("occurred_at")), str(payload.get("merchant") or "").strip(), str(payload.get("description") or "").strip(), supply, tax, total, last4, _actor(user))
+        return _public_card(row)
+    finally:
+        await conn.close()
+
+
+async def get_card_transaction(*, user: dict[str, Any], transaction_id: UUID) -> dict[str, Any]:
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        row = await conn.fetchrow("SELECT * FROM yeoljeong_card_transactions WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL", transaction_id, tenant_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="카드 거래를 찾을 수 없습니다")
+        await _require_business(conn, tenant_id, row["business_id"])
+        return _public_card(row)
+    finally:
+        await conn.close()
+
+
+async def update_card_transaction(*, user: dict[str, Any], transaction_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
+    current = await get_card_transaction(user=user, transaction_id=transaction_id)
+    merged = {**current, **payload}
+    supply, tax, total = _money_parts(merged)
+    last4 = str(payload.get("card_last4") or str(current.get("card_number_masked") or "")[-4:])
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        row = await conn.fetchrow("""UPDATE yeoljeong_card_transactions SET occurred_at=$3,merchant=$4,description=$5,supply_amount=$6,tax_amount=$7,total_amount=$8,card_last4=$9,updated_by=$10,updated_at=NOW() WHERE id=$1 AND tenant_id=$2 AND source='manual' AND deleted_at IS NULL RETURNING *""", transaction_id, tenant_id, _iso_datetime(merged.get("occurred_at")), str(merged.get("merchant") or "").strip(), str(merged.get("description") or "").strip(), supply, tax, total, last4, _actor(user))
+        if not row:
+            raise HTTPException(status_code=404, detail="수정 가능한 카드 거래를 찾을 수 없습니다")
+        return _public_card(row)
+    finally:
+        await conn.close()
+
+
+async def delete_card_transaction(*, user: dict[str, Any], transaction_id: UUID) -> None:
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        command = await conn.execute("UPDATE yeoljeong_card_transactions SET deleted_at=NOW(),updated_by=$3,updated_at=NOW() WHERE id=$1 AND tenant_id=$2 AND source='manual' AND deleted_at IS NULL", transaction_id, tenant_id, _actor(user))
+        if command.endswith(" 0"):
+            raise HTTPException(status_code=404, detail="삭제 가능한 카드 거래를 찾을 수 없습니다")
+    finally:
+        await conn.close()

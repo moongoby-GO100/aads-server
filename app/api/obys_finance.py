@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from decimal import Decimal
 from functools import partial
 from typing import Any
 from uuid import UUID
@@ -39,6 +40,50 @@ logger = logging.getLogger(__name__)
 
 class GenericPayload(BaseModel):
     model_config = {"extra": "allow"}
+
+
+class ManualLedgerPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    business_id: str = Field(min_length=3, max_length=64)
+    occurred_on: str = Field(min_length=10, max_length=10)
+    counterparty: str = Field(default="", max_length=200)
+    description: str = Field(default="", max_length=500)
+    supply_amount: Decimal = Field(default=Decimal("0"), ge=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
+    tax_amount: Decimal = Field(default=Decimal("0"), ge=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
+    total_amount: Decimal = Field(ge=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
+
+
+class ManualLedgerUpdatePayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    occurred_on: str | None = Field(default=None, min_length=10, max_length=10)
+    counterparty: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=500)
+    supply_amount: Decimal | None = Field(default=None, ge=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
+    tax_amount: Decimal | None = Field(default=None, ge=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
+    total_amount: Decimal | None = Field(default=None, ge=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
+
+
+class CardTransactionPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    business_id: str = Field(min_length=3, max_length=64)
+    occurred_at: str = Field(min_length=10, max_length=40)
+    merchant: str = Field(default="", max_length=200)
+    description: str = Field(default="", max_length=500)
+    supply_amount: Decimal = Field(default=Decimal("0"), ge=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
+    tax_amount: Decimal = Field(default=Decimal("0"), ge=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
+    total_amount: Decimal = Field(ge=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
+    card_last4: str = Field(pattern=r"^\d{4}$")
+
+
+class CardTransactionUpdatePayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    occurred_at: str | None = Field(default=None, min_length=10, max_length=40)
+    merchant: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=500)
+    supply_amount: Decimal | None = Field(default=None, ge=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
+    tax_amount: Decimal | None = Field(default=None, ge=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
+    total_amount: Decimal | None = Field(default=None, ge=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
+    card_last4: str | None = Field(default=None, pattern=r"^\d{4}$")
 
 
 class TenantBusinessPayload(BaseModel):
@@ -743,6 +788,60 @@ async def list_uploaded_ledger(
 ) -> dict[str, Any]:
     rows = await upload_svc.list_ledger_rows(user=current_user, business_id=business_id, category=category, limit=limit)
     return {"rows": rows, "count": len(rows)}
+
+
+@router.get("/ledger-entries")
+async def list_manual_ledger_entries(business_id: str, category: str, date_from: str | None = None, date_to: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    rows = await upload_svc.list_manual_entries(user=current_user, business_id=business_id, category=category, date_from=date_from, date_to=date_to)
+    return {"entries": rows, "count": len(rows)}
+
+
+@router.post("/ledger-entries/{category}", status_code=201)
+async def create_manual_ledger_entry(category: str, payload: ManualLedgerPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"entry": await upload_svc.create_manual_entry(user=current_user, category=category, payload=payload.model_dump())}
+
+
+@router.get("/ledger-entries/{category}/{entry_id}")
+async def get_manual_ledger_entry(category: str, entry_id: UUID, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"entry": await upload_svc.get_manual_entry(user=current_user, category=category, entry_id=entry_id)}
+
+
+@router.patch("/ledger-entries/{category}/{entry_id}")
+async def update_manual_ledger_entry(category: str, entry_id: UUID, payload: ManualLedgerUpdatePayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"entry": await upload_svc.update_manual_entry(user=current_user, category=category, entry_id=entry_id, payload=payload.model_dump(exclude_unset=True))}
+
+
+@router.delete("/ledger-entries/{category}/{entry_id}")
+async def delete_manual_ledger_entry(category: str, entry_id: UUID, current_user: dict = Depends(get_current_user)) -> dict[str, bool]:
+    await upload_svc.delete_manual_entry(user=current_user, category=category, entry_id=entry_id)
+    return {"ok": True}
+
+
+@router.get("/card-transactions")
+async def list_card_transactions(business_id: str, date_from: str | None = None, date_to: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    rows = await upload_svc.list_card_transactions(user=current_user, business_id=business_id, date_from=date_from, date_to=date_to)
+    return {"card_transactions": rows, "count": len(rows)}
+
+
+@router.post("/card-transactions", status_code=201)
+async def create_card_transaction(payload: CardTransactionPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"card_transaction": await upload_svc.create_card_transaction(user=current_user, payload=payload.model_dump())}
+
+
+@router.get("/card-transactions/{transaction_id}")
+async def get_card_transaction(transaction_id: UUID, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"card_transaction": await upload_svc.get_card_transaction(user=current_user, transaction_id=transaction_id)}
+
+
+@router.patch("/card-transactions/{transaction_id}")
+async def update_card_transaction(transaction_id: UUID, payload: CardTransactionUpdatePayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"card_transaction": await upload_svc.update_card_transaction(user=current_user, transaction_id=transaction_id, payload=payload.model_dump(exclude_unset=True))}
+
+
+@router.delete("/card-transactions/{transaction_id}")
+async def delete_card_transaction(transaction_id: UUID, current_user: dict = Depends(get_current_user)) -> dict[str, bool]:
+    await upload_svc.delete_card_transaction(user=current_user, transaction_id=transaction_id)
+    return {"ok": True}
 
 
 @router.get("/uploads/{upload_id}/download")

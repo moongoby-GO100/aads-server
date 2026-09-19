@@ -24,9 +24,12 @@ _DEFAULT_LEGACY_TENANT_IDS = (
 )
 
 _TENANT_SCOPED_PREFIXES = (
+    "/api/v1/yeoljeong-finance/session",
     "/api/v1/yeoljeong-finance/tenant-registry",
     "/api/v1/yeoljeong-finance/uploads",
     "/api/v1/yeoljeong-finance/uploaded-ledger",
+    "/api/v1/yeoljeong-finance/ledger-entries",
+    "/api/v1/yeoljeong-finance/card-transactions",
 )
 
 
