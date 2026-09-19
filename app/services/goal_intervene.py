@@ -56,22 +56,26 @@ async def halt(on: bool, reason: str = "") -> dict[str, Any]:
     return {"halted": on, "reason": reason}
 
 
-async def _owner_sessions(conn: Any, goal_id: str) -> list[dict]:
+async def _owner_sessions(conn: Any, goal_id: str, tenant_id: str) -> list[dict]:
     rows = await conn.fetch(
         """
         SELECT s.id::text AS id, COALESCE(s.role_key, '') AS role_key, s.title
         FROM goal_task_links l
         JOIN chat_sessions s ON s.id = l.task_id::uuid
+        JOIN goals g ON g.id = l.goal_id
         WHERE l.goal_id = $1::uuid AND l.task_type = 'chat_session'
+          AND g.tenant_id = $2::uuid AND s.tenant_id = $2::uuid
           AND COALESCE(l.link_state, 'active') = 'active'
         ORDER BY (s.role_key LIKE '%Lead') DESC, s.role_key
         """,
-        goal_id,
+        goal_id, tenant_id,
     )
     return [dict(r) for r in rows]
 
 
-async def direct(goal_id: str, message: str, roles: Optional[list[str]] = None) -> dict[str, Any]:
+async def direct(
+    goal_id: str, message: str, roles: Optional[list[str]] = None, *, tenant_id: str,
+) -> dict[str, Any]:
     """목표에 묶인 담당들에게 대표님 지시를 동시에 넣는다.
 
     주도를 거치지 않는다. 주도가 이미 뿌린 지시와 어긋날 수 있는데, 그때
@@ -82,7 +86,12 @@ async def direct(goal_id: str, message: str, roles: Optional[list[str]] = None) 
 
     pool = get_pool()
     async with pool.acquire() as conn:
-        targets = await _owner_sessions(conn, goal_id)
+        if not await conn.fetchval(
+            "SELECT 1 FROM goals WHERE id = $1::uuid AND tenant_id = $2::uuid",
+            goal_id, tenant_id,
+        ):
+            return {"error": "goal_not_found"}
+        targets = await _owner_sessions(conn, goal_id, tenant_id)
 
     if roles:
         want = {r.strip() for r in roles if r.strip()}
@@ -112,7 +121,9 @@ async def direct(goal_id: str, message: str, roles: Optional[list[str]] = None) 
     return {"sent": sent, "failed": failed}
 
 
-async def rewind(milestone_id: str, reason: str = "") -> dict[str, Any]:
+async def rewind(
+    milestone_id: str, reason: str = "", *, tenant_id: Optional[str] = None,
+) -> dict[str, Any]:
     """마일스톤을 되돌린다. 발송 기록도 지워야 다시 지시가 나간다.
 
     기록을 안 지우면 `dispatch_count` 가 한도에 걸린 채로 남아서 되돌려도
@@ -129,6 +140,7 @@ async def rewind(milestone_id: str, reason: str = "") -> dict[str, Any]:
         WITH prev AS (
             SELECT id, dispatched_at, dispatch_count
               FROM milestones WHERE id = $1::uuid
+                AND ($3::uuid IS NULL OR tenant_id = $3::uuid)
         )
         UPDATE milestones m
            SET status = 'pending', started_at = NULL, completed_at = NULL,
@@ -142,7 +154,7 @@ async def rewind(milestone_id: str, reason: str = "") -> dict[str, Any]:
                   prev.dispatched_at AS prev_dispatched_at,
                   prev.dispatch_count AS prev_dispatch_count
         """,
-        milestone_id, reason,
+        milestone_id, reason, tenant_id,
     )
     if not row:
         return {"error": "milestone_not_found"}
@@ -161,7 +173,11 @@ async def rewind(milestone_id: str, reason: str = "") -> dict[str, Any]:
 
     # 같은 사건을 다시 보고할 수 있게 기록도 지운다.
     await pool.execute(
-        "DELETE FROM goal_report_log WHERE subject_id = $1::uuid", milestone_id
+        "DELETE FROM goal_report_log r WHERE r.subject_id = $1::uuid "
+        "AND ($2::uuid IS NULL OR EXISTS ("
+        "    SELECT 1 FROM milestones m WHERE m.id = r.subject_id "
+        "      AND m.tenant_id = $2::uuid))",
+        milestone_id, tenant_id,
     )
     logger.info("goal_rewind", milestone=milestone_id[:8], reason=reason[:120])
     return {"milestone": row["title"], "goal_id": row["goal_id"], "status": "pending"}

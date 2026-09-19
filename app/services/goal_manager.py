@@ -461,7 +461,7 @@ class GoalStateMachine:
 
     async def update_task_status_with_phase(
         self, task_type: str, task_id: str, status: str, phase: Optional[str] = None,
-        project: Optional[str] = None,
+        project: Optional[str] = None, tenant_id: Optional[str] = None,
     ) -> dict[str, Any]:
         pool = await self._pool()
         async with pool.acquire() as conn:
@@ -494,19 +494,27 @@ class GoalStateMachine:
                 f"""
                 UPDATE goal_task_links SET {', '.join(status_sets)}
                 WHERE task_type = $1 AND task_id = $2
+                  AND ($4::uuid IS NULL OR EXISTS (
+                      SELECT 1 FROM goals g
+                      WHERE g.id = goal_task_links.goal_id AND g.tenant_id = $4::uuid
+                  ))
                   {active_link_predicate(columns)}{preserve_certified}
                 """,
-                task_type, task_id, normalized,
+                task_type, task_id, normalized, tenant_id,
             )
             links = await conn.fetch(
                 f"""
                 SELECT DISTINCT milestone_id, goal_id
                 FROM goal_task_links
                 WHERE task_type = $1 AND task_id = $2
+                  AND ($3::uuid IS NULL OR EXISTS (
+                      SELECT 1 FROM goals g
+                      WHERE g.id = goal_task_links.goal_id AND g.tenant_id = $3::uuid
+                  ))
                   {active_link_predicate(columns)}
                   {superseded_link_predicate(columns)}
                 """,
-                task_type, task_id,
+                task_type, task_id, tenant_id,
             )
             results = []
             for link in links:
@@ -517,8 +525,13 @@ class GoalStateMachine:
                         """
                         SELECT superseded_by IS NOT NULL FROM goal_task_links
                         WHERE milestone_id = $1::uuid AND task_type = $2 AND task_id = $3
+                          AND ($4::uuid IS NULL OR EXISTS (
+                              SELECT 1 FROM goals g
+                              WHERE g.id = goal_task_links.goal_id
+                                AND g.tenant_id = $4::uuid
+                          ))
                         """,
-                        str(link["milestone_id"]), task_type, task_id,
+                        str(link["milestone_id"]), task_type, task_id, tenant_id,
                     ):
                         r = await self.check_milestone_completion(str(link["milestone_id"]))
                         results.append(r)
@@ -528,8 +541,9 @@ class GoalStateMachine:
                         UPDATE milestones
                         SET status = 'blocked', updated_at = NOW()
                         WHERE id = $1::uuid AND status IN ('pending', 'in_progress')
+                          AND ($2::uuid IS NULL OR tenant_id = $2::uuid)
                         """,
-                        str(link["milestone_id"]),
+                        str(link["milestone_id"]), tenant_id,
                     )
                     if link["goal_id"]:
                         await conn.execute(
@@ -537,8 +551,9 @@ class GoalStateMachine:
                             UPDATE goals
                             SET status = 'blocked', updated_at = NOW()
                             WHERE id = $1::uuid AND status IN ('draft', 'active')
+                              AND ($2::uuid IS NULL OR tenant_id = $2::uuid)
                             """,
-                            str(link["goal_id"]),
+                            str(link["goal_id"]), tenant_id,
                         )
                     results.append({
                         "milestone_id": str(link["milestone_id"]),
@@ -911,17 +926,23 @@ class GoalStateMachine:
             )
             return {"goal_id": goal_id, "status": status, "advanced": status == "completed"}
 
-    async def advance_active_goals(self, project: Optional[str] = None) -> dict[str, Any]:
+    async def advance_active_goals(
+        self, project: Optional[str] = None, *, tenant_id: Optional[str] = None,
+    ) -> dict[str, Any]:
         pool = await self._pool()
         async with pool.acquire() as conn:
             if project:
                 rows = await conn.fetch(
-                    "SELECT id FROM goals WHERE project = $1 AND status IN ('draft', 'active') ORDER BY created_at",
-                    project,
+                    "SELECT id FROM goals WHERE project = $1 "
+                    "AND ($2::uuid IS NULL OR tenant_id = $2::uuid) "
+                    "AND status IN ('draft', 'active') ORDER BY created_at",
+                    project, tenant_id,
                 )
             else:
                 rows = await conn.fetch(
-                    "SELECT id FROM goals WHERE status IN ('draft', 'active') ORDER BY project, created_at"
+                    "SELECT id FROM goals WHERE ($1::uuid IS NULL OR tenant_id = $1::uuid) "
+                    "AND status IN ('draft', 'active') ORDER BY project, created_at",
+                    tenant_id,
                 )
         results = [await self.advance_goal(str(row["id"])) for row in rows]
         advanced = sum(1 for item in results if item.get("advanced"))

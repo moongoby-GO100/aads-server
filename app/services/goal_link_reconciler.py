@@ -54,7 +54,9 @@ async def _has_schema(conn) -> bool:
     return {"link_state", "bind_source", "superseded_by"}.issubset(columns)
 
 
-async def _load_candidates(conn, project: Optional[str], limit: int) -> list[dict[str, Any]]:
+async def _load_candidates(
+    conn, project: Optional[str], limit: int, tenant_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
     """링크 + 연결된 작업 + 목표 프로젝트를 한 번에 읽는다 (읽기 전용)."""
     rows = await conn.fetch(
         """
@@ -80,11 +82,13 @@ async def _load_candidates(conn, project: Optional[str], limit: int) -> list[dic
         LEFT JOIN goals g ON g.id = l.goal_id
         LEFT JOIN milestones m ON m.id = l.milestone_id
         WHERE ($1::text IS NULL OR g.project = $1::text OR j.project = $1::text)
+          AND ($3::uuid IS NULL OR g.tenant_id = $3::uuid)
         ORDER BY l.created_at DESC
         LIMIT $2
         """,
         project,
         min(max(limit, 1), MAX_LIMIT) * 4,  # 후보는 넉넉히 읽고, 수정 건수만 limit 으로 제한
+        tenant_id,
     )
     return [dict(r) for r in rows]
 
@@ -190,6 +194,7 @@ async def reconcile(
     limit: int = DEFAULT_LIMIT,
     detach_legacy: bool = False,
     actor: str = "goal_link_reconciler",
+    tenant_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """goal_task_links 를 pipeline_jobs 기준으로 재조정한다.
 
@@ -202,7 +207,7 @@ async def reconcile(
     pool = get_pool()
     async with pool.acquire() as conn:
         schema_ready = await _has_schema(conn)
-        candidates = await _load_candidates(conn, project, limit)
+        candidates = await _load_candidates(conn, project, limit, tenant_id)
         actions = plan_actions(candidates, detach_legacy=detach_legacy)
         counts = summarize(actions)
 
@@ -253,8 +258,12 @@ async def reconcile(
                         SET status = $2, last_job_status = $2,
                             reconciled_at = NOW(), updated_at = NOW()
                         WHERE id = $1::uuid AND status IS DISTINCT FROM $2
+                          AND ($3::uuid IS NULL OR EXISTS (
+                              SELECT 1 FROM goals g WHERE g.id = goal_task_links.goal_id
+                                AND g.tenant_id = $3::uuid
+                          ))
                         """,
-                        action["link_id"], action["to_status"],
+                        action["link_id"], action["to_status"], tenant_id,
                     )
                 else:
                     await conn.execute(
@@ -263,9 +272,13 @@ async def reconcile(
                         SET link_state = $2, detach_reason = $3,
                             reconciled_at = NOW(), updated_at = NOW()
                         WHERE id = $1::uuid AND COALESCE(link_state, 'active') <> $2
+                          AND ($4::uuid IS NULL OR EXISTS (
+                              SELECT 1 FROM goals g WHERE g.id = goal_task_links.goal_id
+                                AND g.tenant_id = $4::uuid
+                          ))
                         """,
                         action["link_id"], action["new_link_state"],
-                        f"[{actor}] {action['reason']}"[:500],
+                        f"[{actor}] {action['reason']}"[:500], tenant_id,
                     )
                 repaired += 1
                 if action.get("milestone_id"):

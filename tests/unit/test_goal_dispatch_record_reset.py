@@ -334,8 +334,13 @@ def test_restart_owner_traces_every_milestone_it_clears(monkeypatch) -> None:
     ]
 
     class _RestartConn(_Conn):
+        async def fetchval(self, query: str, *_a):
+            assert "tenant_id = $2::uuid" in query
+            return 1
+
         async def fetch(self, query: str, *_a):
             assert "WITH target" in query, "지운 건 전부를 받아 오지 않는다"
+            assert "tenant_id = $3::uuid" in query
             return cleared
 
     monkeypatch.setattr(
@@ -346,6 +351,7 @@ def test_restart_owner_traces_every_milestone_it_clears(monkeypatch) -> None:
         goals_router.restart_owner(
             "36da9794-0000-0000-0000-000000000000",
             "15782f6e-0000-0000-0000-000000000000",
+            {"tenant": {"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}},
         )
     )
 

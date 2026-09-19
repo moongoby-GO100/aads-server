@@ -253,7 +253,9 @@ async def has_release_schema(conn) -> bool:
     return _release_schema_cache
 
 
-async def _load_links(conn, project: Optional[str], limit: int) -> list[dict[str, Any]]:
+async def _load_links(
+    conn, project: Optional[str], limit: int, tenant_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
     """완료로 승격될 수 있는 pipeline/release 링크 참조를 읽는다."""
     rows = await conn.fetch(
         """
@@ -277,11 +279,13 @@ async def _load_links(conn, project: Optional[str], limit: int) -> list[dict[str
           AND l.task_type IN ('pipeline_job', 'release')
           AND (CASE WHEN l.task_type = 'release' THEN l.task_id ELSE j.commit_hash END) IS NOT NULL
           AND ($1::text IS NULL OR g.project = $1::text OR j.project = $1::text)
+          AND ($3::uuid IS NULL OR g.tenant_id = $3::uuid)
         ORDER BY l.created_at DESC
         LIMIT $2
         """,
         project,
         limit,
+        tenant_id,
     )
     return [dict(r) for r in rows]
 
@@ -326,6 +330,7 @@ async def reconcile_release_links(
     dry_run: bool = True,
     limit: int = DEFAULT_LIMIT,
     actor: str = "release_evidence",
+    tenant_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """인증된 릴리스에 포함된 작업의 링크를 완료로 승격하고 목표를 전진시킨다.
 
@@ -360,7 +365,7 @@ async def reconcile_release_links(
             result["error"] = "migration_170_required"
             return result
 
-        links = await _load_links(conn, project, limit)
+        links = await _load_links(conn, project, limit, tenant_id)
         refs = sorted({
             ref for link in links
             if (ref := normalize_source_ref(link.get("commit_ref") or link.get("commit_hash")))
@@ -411,11 +416,16 @@ async def reconcile_release_links(
                         updated_at = NOW()
                     WHERE id = $1::uuid
                       AND release_deploy_run_id IS DISTINCT FROM $2::bigint
+                      AND ($5::uuid IS NULL OR EXISTS (
+                          SELECT 1 FROM goals g WHERE g.id = goal_task_links.goal_id
+                            AND g.tenant_id = $5::uuid
+                      ))
                     """,
                     action["link_id"],
                     action["deploy_run_id"],
                     action["release_sha"],
                     action["relationship"],
+                    tenant_id,
                 )
                 if _rows_affected(status) == 0:
                     action["applied"] = False

@@ -43,6 +43,8 @@ GOAL_ID = "1a00d8d3-1126-4a6e-8ed2-8a43f5502250"
 CHILD_GOAL_ID = "380c796f-2524-4bfc-b9d8-a382a20096e9"
 MS1 = "8519fd43-7070-49b0-8d85-1d053046cc1d"
 MS2 = "9629fd43-7070-49b0-8d85-1d053046cc2e"
+TENANT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+TENANT_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
 SHA_RELEASE = "a" * 40
 SHA_TASK_ANCESTOR = "b" * 40
@@ -151,6 +153,7 @@ class _FakeDB:
         self.provenance: list[dict] = []
         self.link_columns = link_columns
         self.executed: list[str] = []
+        self.queries: list[tuple[str, tuple]] = []
 
     # -- 커넥션/풀 프로토콜 -------------------------------------------------
     def acquire(self):
@@ -168,6 +171,7 @@ class _FakeDB:
     # -- 조회 ---------------------------------------------------------------
     async def fetch(self, query, *args):
         q = " ".join(query.split())
+        self.queries.append((q, args))
         if "information_schema.columns" in q and "goal_task_links" in q:
             names = [
                 "bind_source", "bound_by", "link_state", "detach_reason",
@@ -180,7 +184,7 @@ class _FakeDB:
             return [{"column_name": n} for n in names]
 
         if "FROM goal_task_links l" in q and "JOIN pipeline_jobs j" in q:
-            project, limit = args
+            project, limit, tenant_id = args
             out = []
             for link in self.links:
                 if (link.get("link_state") or "active") != "active" or link.get("superseded_by"):
@@ -191,6 +195,8 @@ class _FakeDB:
                 if not commit_ref:
                     continue
                 goal = self._goal(link.get("goal_id"))
+                if tenant_id and (not goal or goal.get("tenant_id") != tenant_id):
+                    continue
                 goal_project = goal["project"] if goal else None
                 job_project = (job or {}).get("project")
                 if project and goal_project != project and job_project != project:
@@ -353,12 +359,15 @@ class _FakeDB:
     # -- 갱신 ---------------------------------------------------------------
     async def execute(self, query, *args):
         q = " ".join(query.split())
+        self.queries.append((q, args))
         self.executed.append(q)
 
         if "UPDATE goal_task_links" in q and "release_deploy_run_id = $2::bigint" in q:
-            link_id, run_id, release_sha, relationship = args
+            link_id, run_id, release_sha, relationship, tenant_id = args
             link = self._link(link_id)
-            if link is None or link.get("release_deploy_run_id") == run_id:
+            goal = self._goal(link.get("goal_id")) if link else None
+            if (link is None or link.get("release_deploy_run_id") == run_id
+                    or (tenant_id and (not goal or goal.get("tenant_id") != tenant_id))):
                 return "UPDATE 0"
             link.update({
                 "status": "completed", "last_job_status": "completed",
@@ -457,7 +466,8 @@ def traces(monkeypatch):
 
 
 def _seed_release_scenario(fake, *, relationship="ancestor", certified=True, task_sha=SHA_TASK_ANCESTOR):
-    fake.goals.append({"id": GOAL_ID, "project": "AADS", "title": "채팅 안정화",
+    fake.goals.append({"id": GOAL_ID, "tenant_id": TENANT_A,
+                       "project": "AADS", "title": "채팅 안정화",
                        "status": "active", "progress": 0.0, "parent_goal_id": None})
     fake.milestones += [
         {"id": MS1, "goal_id": GOAL_ID, "sequence_order": 1, "status": "in_progress", "auto_advance": True},
@@ -622,6 +632,37 @@ def test_release_evidence_never_marks_goals_or_milestones_directly(db):
     assert len(direct) == 1
     assert all("UPDATE goals" not in q for q in direct)
     assert all("UPDATE milestones" not in q for q in direct)
+
+
+def test_release_evidence_is_tenant_fenced_for_reads_and_mutations(db):
+    _seed_release_scenario(db)
+
+    foreign = asyncio.run(
+        reconcile_release_links("AADS", dry_run=False, tenant_id=TENANT_B)
+    )
+
+    assert foreign["completed"] == 0
+    assert db.links[0]["status"] == "running"
+    link_reads = [item for item in db.queries if "FROM goal_task_links l" in item[0]]
+    assert link_reads
+    assert "g.tenant_id = $3::uuid" in link_reads[-1][0]
+    assert link_reads[-1][1][-1] == TENANT_B
+
+    db.queries.clear()
+    own = asyncio.run(
+        reconcile_release_links("AADS", dry_run=False, tenant_id=TENANT_A)
+    )
+
+    assert own["completed"] == 1
+    assert db.links[0]["status"] == "completed"
+    mutations = [
+        item for item in db.queries
+        if "UPDATE goal_task_links" in item[0]
+        and "release_deploy_run_id = $2::bigint" in item[0]
+    ]
+    assert mutations
+    assert "g.tenant_id = $5::uuid" in mutations[-1][0]
+    assert mutations[-1][1][-1] == TENANT_A
 
 
 # ─── 동작 검증: 제로 마일스톤 / 부모 게이트 ─────────────────────────────────

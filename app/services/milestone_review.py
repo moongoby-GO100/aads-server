@@ -103,7 +103,7 @@ async def report_done(
 
 async def confirm(
     milestone_id: str, ok: bool, reason: str = "", negative: bool = False,
-    confirmer: str = "lead",
+    confirmer: str = "lead", tenant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """주도(또는 대표님)가 판정한다.
 
@@ -118,8 +118,9 @@ async def confirm(
         # 지우기 전 값을 로그에 남기려면 여기서 받아 둬야 한다.
         row = await conn.fetchrow(
             "SELECT status, title, goal_id::text AS goal_id, "
-            "dispatched_at, dispatch_count FROM milestones WHERE id = $1::uuid",
-            milestone_id,
+            "dispatched_at, dispatch_count FROM milestones "
+            "WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid)",
+            milestone_id, tenant_id,
         )
         if not row:
             return {"error": "milestone_not_found"}
@@ -141,8 +142,9 @@ async def confirm(
             await conn.execute(
                 "UPDATE milestones SET status = $2, "
                 "completed_at = CASE WHEN $2 = 'completed' THEN NOW() ELSE NULL END, "
-                "review_note = NULLIF($3,''), updated_at = NOW() WHERE id = $1::uuid",
-                milestone_id, new, reason,
+                "review_note = NULLIF($3,''), updated_at = NOW() "
+                "WHERE id = $1::uuid AND ($4::uuid IS NULL OR tenant_id = $4::uuid)",
+                milestone_id, new, reason, tenant_id,
             )
         else:
             new = "in_progress"
@@ -153,8 +155,8 @@ async def confirm(
                 "evidence = NULL, review_note = NULLIF($2,''), "
                 "dispatched_at = NULL, dispatch_count = 0, "
                 "review_asked_at = NULL, review_ask_count = 0, updated_at = NOW() "
-                "WHERE id = $1::uuid",
-                milestone_id, reason,
+                "WHERE id = $1::uuid AND ($3::uuid IS NULL OR tenant_id = $3::uuid)",
+                milestone_id, reason, tenant_id,
             )
             # 기록을 지운 자취를 남긴다. 반려는 정상 기능이지만, 지운 것이
             # 로그에 없으면 다음 사이클의 재발송이 "중복" 인지 "반려에 따른

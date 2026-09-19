@@ -213,6 +213,24 @@ def _tenant_identity(context: dict[str, Any]) -> tuple[str, str, bool]:
     return tenant_id, str(user.get("user_id") or ""), bool(user.get("is_internal_admin"))
 
 
+def _tenant_id(context: dict[str, Any]) -> str:
+    """Return the authenticated tenant id; the dependency fails closed upstream."""
+    if not isinstance(context, dict):
+        raise HTTPException(status_code=401, detail="tenant_context_required")
+    tenant_id = str(context.get("tenant", {}).get("id") or "").strip()
+    if not tenant_id:
+        raise HTTPException(status_code=401, detail="tenant_context_required")
+    return tenant_id
+
+
+async def _require_tenant_goal(conn: Any, goal_id: str, tenant_id: str) -> None:
+    if not await conn.fetchval(
+        "SELECT 1 FROM goals WHERE id = $1::uuid AND tenant_id = $2::uuid",
+        goal_id, tenant_id,
+    ):
+        raise HTTPException(status_code=404, detail="goal_not_found")
+
+
 @router.post("/goals/{goal_id}/work-items", status_code=201)
 async def create_goal_work_item(
     goal_id: str,
@@ -309,7 +327,9 @@ async def create_goal_project_assignment(
 
 
 @router.get("/goals/{goal_id}/board")
-async def goal_board(goal_id: str):
+async def goal_board(
+    goal_id: str, context: dict[str, Any] = Depends(require_tenant_viewer),
+):
     """담당별 현재 상태. 창 8개를 열지 않아도 되게.
 
     **활동 판정을 DB 로만 한다.** `is_streaming()` 은 프로세스 메모리라
@@ -318,14 +338,15 @@ async def goal_board(goal_id: str):
     """
     from app.core.db_pool import get_pool
 
+    tenant_id = _tenant_id(context)
     pool = get_pool()
     async with pool.acquire() as conn:
         goal = await conn.fetchrow(
             "SELECT id::text, project, title, status, progress, "
             "       COALESCE(owner_role_key, '') AS owner_role_key, "
             "       COALESCE(owner_session_id::text, '') AS owner_session_id "
-            "FROM goals WHERE id = $1::uuid",
-            goal_id,
+            "FROM goals WHERE id = $1::uuid AND tenant_id = $2::uuid",
+            goal_id, tenant_id,
         )
         if not goal:
             raise HTTPException(status_code=404, detail="goal_not_found")
@@ -337,6 +358,7 @@ async def goal_board(goal_id: str):
                 FROM goal_task_links l
                 JOIN chat_sessions s ON s.id = l.task_id::uuid
                 WHERE l.goal_id = $1::uuid AND l.task_type = 'chat_session'
+                  AND s.tenant_id = $2::uuid
                   AND COALESCE(l.link_state, 'active') = 'active'
             ),
             last_msg AS (
@@ -370,7 +392,7 @@ async def goal_board(goal_id: str):
                        OR (ms.owner_session_id IS NULL AND ms.owner_role_key = b.role_key))
             ORDER BY (b.role_key LIKE '%Lead') DESC, b.role_key
             """,
-            goal_id,
+            goal_id, tenant_id,
         )
 
     # 주도 정본을 먼저 꺼낸다. 세션 지정이 우선, 없으면 역할키.
@@ -438,15 +460,15 @@ async def goal_board(goal_id: str):
                    (SELECT count(*) FROM milestone_notes n
                      WHERE n.milestone_id = milestones.id AND n.answered_at IS NULL) AS open_notes
             FROM milestones
-            WHERE goal_id = $1::uuid
+            WHERE goal_id = $1::uuid AND tenant_id = $2::uuid
             ORDER BY sequence_order, COALESCE(variant, '')
             """,
-            goal_id,
+            goal_id, tenant_id,
         )
 
     from app.services.direction_guard import is_halted
 
-    docs = await goal_documents(goal_id)
+    docs = await goal_documents(goal_id, context)
     return {
         "goal": dict(goal),
         "halted": await is_halted(),
@@ -460,17 +482,23 @@ async def goal_board(goal_id: str):
 
 
 @router.get("/goals/{goal_id}/documents")
-async def goal_documents(goal_id: str):
+async def goal_documents(
+    goal_id: str, context: dict[str, Any] = Depends(require_tenant_viewer),
+):
     """목표의 설계 문서. 없으면 없다고 답한다 — 빈 것과 안 쓴 것은 다르다."""
     from app.core.db_pool import get_pool
 
-    rows = await get_pool().fetch(
-        "SELECT kind, doc_path, title, note, created_at FROM goal_documents "
-        "WHERE goal_id = $1::uuid "
-        "ORDER BY CASE kind WHEN 'plan' THEN 0 WHEN 'prd' THEN 1 "
-        "                   WHEN 'report' THEN 2 ELSE 3 END, created_at",
-        goal_id,
-    )
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await _require_tenant_goal(conn, goal_id, _tenant_id(context))
+        rows = await conn.fetch(
+            "SELECT d.kind, d.doc_path, d.title, d.note, d.created_at "
+            "FROM goal_documents d JOIN goals g ON g.id = d.goal_id "
+            "WHERE d.goal_id = $1::uuid AND g.tenant_id = $2::uuid "
+            "ORDER BY CASE d.kind WHEN 'plan' THEN 0 WHEN 'prd' THEN 1 "
+            "                     WHEN 'report' THEN 2 ELSE 3 END, d.created_at",
+            goal_id, _tenant_id(context),
+        )
     docs = [dict(r) for r in rows]
     kinds = {d["kind"] for d in docs}
     return {
@@ -483,7 +511,10 @@ async def goal_documents(goal_id: str):
 
 
 @router.post("/goals/{goal_id}/documents")
-async def add_goal_document(goal_id: str, req: GoalDocRequest):
+async def add_goal_document(
+    goal_id: str, req: GoalDocRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     """문서를 목표에 잇는다. `doc_path` 는 doc_chunks 와 같은 규격이다."""
     from app.core.db_pool import get_pool
 
@@ -493,21 +524,27 @@ async def add_goal_document(goal_id: str, req: GoalDocRequest):
     if req.kind not in ("plan", "prd", "report", "reference"):
         raise HTTPException(status_code=400, detail="kind must be plan|prd|report|reference")
 
-    row = await get_pool().fetchrow(
-        """
-        INSERT INTO goal_documents (goal_id, kind, doc_path, title, note, created_by)
-        VALUES ($1::uuid, $2, $3, $4, $5, 'ceo')
-        ON CONFLICT (goal_id, doc_path) DO UPDATE
-           SET kind = EXCLUDED.kind, title = EXCLUDED.title, note = EXCLUDED.note
-        RETURNING kind, doc_path, title
-        """,
-        goal_id, req.kind, path, req.title, req.note,
-    )
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await _require_tenant_goal(conn, goal_id, _tenant_id(context))
+        row = await conn.fetchrow(
+            """
+            INSERT INTO goal_documents (goal_id, kind, doc_path, title, note, created_by)
+            SELECT g.id, $2, $3, $4, $5, 'ceo' FROM goals g
+             WHERE g.id = $1::uuid AND g.tenant_id = $6::uuid
+            ON CONFLICT (goal_id, doc_path) DO UPDATE
+               SET kind = EXCLUDED.kind, title = EXCLUDED.title, note = EXCLUDED.note
+            RETURNING kind, doc_path, title
+            """,
+            goal_id, req.kind, path, req.title, req.note, _tenant_id(context),
+        )
     return dict(row)
 
 
 @router.get("/goals/for-session/{session_id}")
-async def goals_for_session(session_id: str):
+async def goals_for_session(
+    session_id: str, context: dict[str, Any] = Depends(require_tenant_viewer),
+):
     """이 세션이 참여 중인 목표와 맡은 마일스톤.
 
     담당이 자기 창에서 "내가 무슨 목표에 묶여 있는지" 를 봐야 한다.
@@ -515,7 +552,14 @@ async def goals_for_session(session_id: str):
     """
     from app.core.db_pool import get_pool
 
-    rows = await get_pool().fetch(
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if not await conn.fetchval(
+            "SELECT 1 FROM chat_sessions WHERE id = $1::uuid AND tenant_id = $2::uuid",
+            session_id, _tenant_id(context),
+        ):
+            raise HTTPException(status_code=404, detail="session_not_found")
+        rows = await conn.fetch(
         """
         SELECT DISTINCT ON (g.id)
                g.id::text AS goal_id, g.title, g.status, g.project,
@@ -538,10 +582,11 @@ async def goals_for_session(session_id: str):
           AND l.task_id = $1
           AND COALESCE(l.link_state, 'active') = 'active'
           AND g.status IN ('draft', 'active', 'blocked')
+          AND g.tenant_id = $2::uuid AND s.tenant_id = $2::uuid
         ORDER BY g.id, ms.sequence_order NULLS LAST
         """,
-        session_id,
-    )
+            session_id, _tenant_id(context),
+        )
 
     from app.services.direction_guard import is_halted
 
@@ -549,7 +594,9 @@ async def goals_for_session(session_id: str):
 
 
 @router.get("/goals/{goal_id}/candidates")
-async def goal_owner_candidates(goal_id: str):
+async def goal_owner_candidates(
+    goal_id: str, context: dict[str, Any] = Depends(require_tenant_viewer),
+):
     """붙일 수 있는 세션 — **같은 워크스페이스**의 아직 안 묶인 것만.
 
     프로젝트를 넘어 붙이면 맥락이 섞인다. `ask_session` 이 워크스페이스
@@ -557,7 +604,10 @@ async def goal_owner_candidates(goal_id: str):
     """
     from app.core.db_pool import get_pool
 
+    tenant_id = _tenant_id(context)
     pool = get_pool()
+    async with pool.acquire() as conn:
+        await _require_tenant_goal(conn, goal_id, tenant_id)
     linked_ws = [
         r["workspace_id"] for r in await pool.fetch(
             "SELECT DISTINCT s.workspace_id FROM goal_task_links l "
@@ -565,16 +615,17 @@ async def goal_owner_candidates(goal_id: str):
             "WHERE l.goal_id = $1::uuid AND l.task_type = 'chat_session' "
             "  AND COALESCE(l.link_state,'active') = 'active' "
             "  AND l.task_id ~ '^[0-9a-fA-F-]{36}$' "
-            "  AND s.workspace_id IS NOT NULL",
-            goal_id,
+            "  AND s.workspace_id IS NOT NULL AND s.tenant_id = $2::uuid",
+            goal_id, tenant_id,
         )
     ]
     project_ws = [
         r["id"] for r in await pool.fetch(
             "SELECT w.id FROM chat_workspaces w JOIN goals g ON g.id = $1::uuid "
             " WHERE COALESCE(g.project,'') <> '' "
-            "   AND upper(COALESCE(w.project_key,'')) = upper(g.project)",
-            goal_id,
+            "   AND upper(COALESCE(w.project_key,'')) = upper(g.project) "
+            "   AND g.tenant_id = $2::uuid AND w.tenant_id = $2::uuid",
+            goal_id, tenant_id,
         )
     ]
 
@@ -589,7 +640,7 @@ async def goal_owner_candidates(goal_id: str):
                      AND a.role_scope @> ARRAY[s.role_key]::text[]
                ) AS has_prompt
         FROM chat_sessions s
-        WHERE s.workspace_id = ANY(
+        WHERE s.tenant_id = $4::uuid AND s.workspace_id = ANY(
                 -- 이미 붙어 있는 세션이 있으면 그 워크스페이스,
                 -- 하나도 없으면 목표의 프로젝트 워크스페이스로 떨어진다.
                 -- 이 폴백이 없을 때 담당 0명인 목표는 후보가 영원히 비었다.
@@ -605,7 +656,7 @@ async def goal_owner_candidates(goal_id: str):
         ORDER BY s.updated_at DESC
         LIMIT 40
         """,
-        goal_id, linked_ws, project_ws,
+        goal_id, linked_ws, project_ws, tenant_id,
     )
     return {
         "candidates": [dict(r) for r in rows],
@@ -617,7 +668,10 @@ async def goal_owner_candidates(goal_id: str):
 
 
 @router.post("/goals/{goal_id}/owners")
-async def add_goal_owner(goal_id: str, req: AddOwnerRequest):
+async def add_goal_owner(
+    goal_id: str, req: AddOwnerRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     """이미 있는 세션을 담당으로 붙인다. **세션을 만들지는 않는다.**
 
     채팅창이 늘어나는 것을 대표님이 모르시는 상태가 되면 안 된다.
@@ -630,12 +684,13 @@ async def add_goal_owner(goal_id: str, req: AddOwnerRequest):
 
     sid = resolve_session_ref(req.session_ref or req.session_id or "")
 
+    tenant_id = _tenant_id(context)
     pool = get_pool()
     async with pool.acquire() as conn:
         goal = await conn.fetchrow(
             "SELECT title, COALESCE(project,'') AS project "
-            "FROM goals WHERE id = $1::uuid",
-            goal_id,
+            "FROM goals WHERE id = $1::uuid AND tenant_id = $2::uuid",
+            goal_id, tenant_id,
         )
         if not goal:
             raise HTTPException(status_code=404, detail="goal_not_found")
@@ -646,8 +701,9 @@ async def add_goal_owner(goal_id: str, req: AddOwnerRequest):
             "       COALESCE(w.display_name, w.name, '') AS workspace "
             "FROM chat_sessions s "
             "LEFT JOIN chat_workspaces w ON w.id = s.workspace_id "
-            "WHERE s.id = $1::uuid",
-            sid,
+            "WHERE s.id = $1::uuid AND s.tenant_id = $2::uuid "
+            "AND (w.id IS NULL OR w.tenant_id = $2::uuid)",
+            sid, tenant_id,
         )
         if not sess:
             raise HTTPException(
@@ -658,8 +714,9 @@ async def add_goal_owner(goal_id: str, req: AddOwnerRequest):
         role = (req.role_key or sess["role_key"] or "").strip()
         if role and role != sess["role_key"]:
             await conn.execute(
-                "UPDATE chat_sessions SET role_key = $2, updated_at = NOW() WHERE id = $1::uuid",
-                sid, role,
+                "UPDATE chat_sessions SET role_key = $2, updated_at = NOW() "
+                "WHERE id = $1::uuid AND tenant_id = $3::uuid",
+                sid, role, tenant_id,
             )
 
         # 뗐다가 다시 붙이는 경우 DO NOTHING 이면 link_state 가 detached 로
@@ -667,7 +724,10 @@ async def add_goal_owner(goal_id: str, req: AddOwnerRequest):
         await conn.execute(
             "INSERT INTO goal_task_links (goal_id, task_type, task_id, status, "
             "       bind_source, bound_by, link_state) "
-            "VALUES ($1::uuid, 'chat_session', $2, 'active', 'manual', 'ceo', 'active') "
+            "SELECT g.id, 'chat_session', s.id::text, 'active', "
+            "       'manual', 'ceo', 'active' FROM goals g, chat_sessions s "
+            " WHERE g.id = $1::uuid AND s.id = $2::uuid "
+            "   AND g.tenant_id = $3::uuid AND s.tenant_id = $3::uuid "
             "ON CONFLICT (goal_id, task_type, task_id) WHERE goal_id IS NOT NULL "
             "DO UPDATE SET link_state = 'active', detach_reason = NULL, "
             "              bind_source = 'manual', bound_by = 'ceo', updated_at = NOW() "
@@ -675,14 +735,15 @@ async def add_goal_owner(goal_id: str, req: AddOwnerRequest):
             # updated_at 만 흔들려 "방금 바뀐 것" 처럼 보이는 일이 없다.
             "         WHERE goal_task_links.link_state IS DISTINCT FROM 'active' "
             "            OR goal_task_links.detach_reason IS NOT NULL",
-            goal_id, sid,
+            goal_id, sid, tenant_id,
         )
 
         if req.as_lead:
             await conn.execute(
                 "UPDATE goals SET owner_role_key = NULLIF($2,''), "
-                "owner_session_id = $3::uuid, updated_at = NOW() WHERE id = $1::uuid",
-                goal_id, role, sid,
+                "owner_session_id = $3::uuid, updated_at = NOW() "
+                "WHERE id = $1::uuid AND tenant_id = $4::uuid",
+                goal_id, role, sid, tenant_id,
             )
 
         has_prompt = bool(role) and bool(await conn.fetchval(
@@ -721,14 +782,16 @@ class GoalApprovalPolicyRequest(BaseModel):
 
 
 @router.get("/goals/{goal_id}/approval-policy")
-async def get_goal_approval_policy(goal_id: str):
+async def get_goal_approval_policy(
+    goal_id: str, context: dict[str, Any] = Depends(require_tenant_viewer),
+):
     """이 목표에 걸린 승인 설정."""
     from app.core.db_pool import get_pool
 
     row = await get_pool().fetchrow(
         "SELECT COALESCE(approval_policy, '{}'::jsonb) AS p, title, status "
-        "FROM goals WHERE id = $1::uuid",
-        goal_id,
+        "FROM goals WHERE id = $1::uuid AND tenant_id = $2::uuid",
+        goal_id, _tenant_id(context),
     )
     if not row:
         raise HTTPException(status_code=404, detail="goal_not_found")
@@ -745,7 +808,10 @@ async def get_goal_approval_policy(goal_id: str):
 
 
 @router.post("/goals/{goal_id}/approval-policy")
-async def set_goal_approval_policy(goal_id: str, req: GoalApprovalPolicyRequest):
+async def set_goal_approval_policy(
+    goal_id: str, req: GoalApprovalPolicyRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     """이 목표 동안 미리 승인해 둘 범위를 정한다.
 
     2026-09-15 대표님 지시 — "실매매 코드 수정도 골 달성시까지 승인",
@@ -780,9 +846,10 @@ async def set_goal_approval_policy(goal_id: str, req: GoalApprovalPolicyRequest)
         "       || jsonb_build_object('used', CASE WHEN $3 THEN 0 "
         "              ELSE COALESCE((approval_policy->>'used')::int, 0) END), "
         "       updated_at = NOW() "
-        " WHERE id = $1::uuid RETURNING id::text AS id, title",
+        " WHERE id = $1::uuid AND tenant_id = $4::uuid "
+        " RETURNING id::text AS id, title",
         goal_id, json.dumps(payload),
-        bool(req.auto_approve_high or req.auto_approve_critical),
+        bool(req.auto_approve_high or req.auto_approve_critical), _tenant_id(context),
     )
     if not row:
         raise HTTPException(status_code=404, detail="goal_not_found")
@@ -813,7 +880,10 @@ class GoalLeadRequest(BaseModel):
 
 
 @router.post("/goals/{goal_id}/lead")
-async def set_goal_lead(goal_id: str, req: GoalLeadRequest):
+async def set_goal_lead(
+    goal_id: str, req: GoalLeadRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     """이미 붙어 있는 담당을 주도로 바꾼다.
 
     2026-09-15 대표님 지적 — "#119 전략관리자가 주도인데 담당으로 들어가
@@ -827,22 +897,25 @@ async def set_goal_lead(goal_id: str, req: GoalLeadRequest):
 
     sid = resolve_session_ref(req.session_ref or req.session_id or "")
 
+    tenant_id = _tenant_id(context)
     pool = get_pool()
     async with pool.acquire() as conn:
+        await _require_tenant_goal(conn, goal_id, tenant_id)
         sess = await conn.fetchrow(
             "SELECT id::text, title, COALESCE(role_key,'') AS role_key "
-            "FROM chat_sessions WHERE id = $1::uuid",
-            sid,
+            "FROM chat_sessions WHERE id = $1::uuid AND tenant_id = $2::uuid",
+            sid, tenant_id,
         )
         if not sess:
             raise HTTPException(status_code=404, detail="session_not_found")
 
         # 붙어 있지 않은 세션을 주도로 세우면 목표 현황에 나오지 않는다.
         linked = await conn.fetchval(
-            "SELECT 1 FROM goal_task_links WHERE goal_id = $1::uuid "
+            "SELECT 1 FROM goal_task_links l JOIN goals g ON g.id = l.goal_id "
+            "WHERE l.goal_id = $1::uuid AND g.tenant_id = $3::uuid "
             "  AND task_type = 'chat_session' AND task_id = $2 "
             "  AND COALESCE(link_state,'active') = 'active' LIMIT 1",
-            goal_id, sid,
+            goal_id, sid, tenant_id,
         )
         if not linked:
             raise HTTPException(
@@ -853,8 +926,8 @@ async def set_goal_lead(goal_id: str, req: GoalLeadRequest):
         updated = await conn.fetchval(
             "UPDATE goals SET owner_session_id = $2::uuid, "
             "       owner_role_key = NULLIF($3,''), updated_at = NOW() "
-            " WHERE id = $1::uuid RETURNING id::text",
-            goal_id, sid, sess["role_key"],
+            " WHERE id = $1::uuid AND tenant_id = $4::uuid RETURNING id::text",
+            goal_id, sid, sess["role_key"], tenant_id,
         )
         if not updated:
             raise HTTPException(status_code=404, detail="goal_not_found")
@@ -864,29 +937,40 @@ async def set_goal_lead(goal_id: str, req: GoalLeadRequest):
 
 
 @router.delete("/goals/{goal_id}/owners/{session_id}")
-async def remove_goal_owner(goal_id: str, session_id: str):
+async def remove_goal_owner(
+    goal_id: str, session_id: str,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     """목표에서 뗀다. **세션은 지우지 않는다** — 링크만 끊는다."""
     from app.core.db_pool import get_pool
 
+    tenant_id = _tenant_id(context)
     pool = get_pool()
     async with pool.acquire() as conn:
+        await _require_tenant_goal(conn, goal_id, tenant_id)
         holding = await conn.fetchval(
             "SELECT title FROM milestones WHERE goal_id = $1::uuid "
             "  AND status IN ('in_progress','review') "
             "  AND (owner_session_id = $2::uuid "
-            "       OR owner_role_key = (SELECT role_key FROM chat_sessions WHERE id = $2::uuid)) "
+            "       OR owner_role_key = (SELECT role_key FROM chat_sessions "
+            "          WHERE id = $2::uuid AND tenant_id = $3::uuid)) "
+            "  AND tenant_id = $3::uuid "
             "LIMIT 1",
-            goal_id, session_id,
+            goal_id, session_id, tenant_id,
         )
         await conn.execute(
             "UPDATE goal_task_links SET link_state = 'detached', "
             "       detach_reason = 'ceo_removed', updated_at = NOW() "
-            "WHERE goal_id = $1::uuid AND task_type = 'chat_session' AND task_id = $2",
-            goal_id, session_id,
+            "WHERE goal_id = $1::uuid AND task_type = 'chat_session' AND task_id = $2 "
+            "AND EXISTS (SELECT 1 FROM goals g WHERE g.id = goal_task_links.goal_id "
+            "            AND g.tenant_id = $3::uuid)",
+            goal_id, session_id, tenant_id,
         )
         await conn.execute(
-            "DELETE FROM owner_pause WHERE goal_id = $1::uuid AND session_id = $2::uuid",
-            goal_id, session_id,
+            "DELETE FROM owner_pause p USING goals g "
+            "WHERE p.goal_id = $1::uuid AND p.session_id = $2::uuid "
+            "AND g.id = p.goal_id AND g.tenant_id = $3::uuid",
+            goal_id, session_id, tenant_id,
         )
     return {
         "removed": True,
@@ -899,7 +983,10 @@ async def remove_goal_owner(goal_id: str, session_id: str):
 
 
 @router.post("/goals/{goal_id}/owners/{session_id}/pause")
-async def pause_owner(goal_id: str, session_id: str, req: InterveneRequest):
+async def pause_owner(
+    goal_id: str, session_id: str, req: InterveneRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     """이 담당에게 **새 지시를 보내지 않는다.** 진행 중 응답은 끝까지 둔다.
 
     끊으면 지금까지 한 것이 사라진다. 2026-09-14 배포로 두 번 끊어서
@@ -912,30 +999,51 @@ async def pause_owner(goal_id: str, session_id: str, req: InterveneRequest):
     if not reason:
         # 이유 없이 멈춘 카드는 사흘 뒤에 왜 멈췄는지 아무도 모른다.
         raise HTTPException(status_code=400, detail="reason required")
-    await get_pool().execute(
-        "INSERT INTO owner_pause (goal_id, session_id, reason) "
-        "VALUES ($1::uuid, $2::uuid, $3) "
-        "ON CONFLICT (goal_id, session_id) DO UPDATE "
-        "   SET reason = EXCLUDED.reason, paused_at = NOW()",
-        goal_id, session_id, reason,
-    )
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await _require_tenant_goal(conn, goal_id, _tenant_id(context))
+        if not await conn.fetchval(
+            "SELECT 1 FROM chat_sessions WHERE id = $1::uuid AND tenant_id = $2::uuid",
+            session_id, _tenant_id(context),
+        ):
+            raise HTTPException(status_code=404, detail="session_not_found")
+        await conn.execute(
+            "INSERT INTO owner_pause (goal_id, session_id, reason) "
+            "SELECT g.id, s.id, $3 FROM goals g, chat_sessions s "
+            "WHERE g.id = $1::uuid AND s.id = $2::uuid "
+            "  AND g.tenant_id = $4::uuid AND s.tenant_id = $4::uuid "
+            "ON CONFLICT (goal_id, session_id) DO UPDATE "
+            "   SET reason = EXCLUDED.reason, paused_at = NOW()",
+            goal_id, session_id, reason, _tenant_id(context),
+        )
     return {"paused": True, "reason": reason}
 
 
 @router.delete("/goals/{goal_id}/owners/{session_id}/pause")
-async def resume_owner(goal_id: str, session_id: str):
+async def resume_owner(
+    goal_id: str, session_id: str,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     """멈춤을 푼다. 밀린 지시가 있으면 다음 주기에 나간다."""
     from app.core.db_pool import get_pool
 
-    await get_pool().execute(
-        "DELETE FROM owner_pause WHERE goal_id = $1::uuid AND session_id = $2::uuid",
-        goal_id, session_id,
-    )
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await _require_tenant_goal(conn, goal_id, _tenant_id(context))
+        await conn.execute(
+            "DELETE FROM owner_pause p USING goals g "
+            "WHERE p.goal_id = $1::uuid AND p.session_id = $2::uuid "
+            "AND g.id = p.goal_id AND g.tenant_id = $3::uuid",
+            goal_id, session_id, _tenant_id(context),
+        )
     return {"paused": False}
 
 
 @router.post("/goals/{goal_id}/owners/{session_id}/restart")
-async def restart_owner(goal_id: str, session_id: str):
+async def restart_owner(
+    goal_id: str, session_id: str,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     """발송 기록을 지우고 처음부터 다시 지시한다.
 
     멈춰 있었다면 같이 푼다 — 재시작을 눌렀는데 멈춘 채로 있으면
@@ -945,8 +1053,10 @@ async def restart_owner(goal_id: str, session_id: str):
 
     from app.services.goal_dispatch import note_record_reset
 
+    tenant_id = _tenant_id(context)
     pool = get_pool()
     async with pool.acquire() as conn:
+        await _require_tenant_goal(conn, goal_id, tenant_id)
         # `fetchval ... RETURNING 1` 은 여러 건을 지워도 한 건만 돌려줬다.
         # UPDATE 범위는 그대로 두고(조건식 동일) **지운 건 전부**를 받는다 —
         # 되돌린 마일스톤 하나하나가 로그에 남아야 추적이 된다.
@@ -956,9 +1066,11 @@ async def restart_owner(goal_id: str, session_id: str):
             WITH target AS (
                 SELECT id, dispatched_at, dispatch_count
                   FROM milestones
-                 WHERE goal_id = $1::uuid AND status = 'in_progress'
+                 WHERE goal_id = $1::uuid AND tenant_id = $3::uuid
+                   AND status = 'in_progress'
                    AND (owner_session_id = $2::uuid
-                        OR owner_role_key = (SELECT role_key FROM chat_sessions WHERE id = $2::uuid))
+                        OR owner_role_key = (SELECT role_key FROM chat_sessions
+                            WHERE id = $2::uuid AND tenant_id = $3::uuid))
             ), done AS (
                 UPDATE milestones m
                    SET dispatched_at = NULL, dispatch_count = 0,
@@ -973,11 +1085,13 @@ async def restart_owner(goal_id: str, session_id: str):
                    t.dispatch_count AS prev_dispatch_count
               FROM target t WHERE t.id IN (SELECT id FROM done)
             """,
-            goal_id, session_id,
+            goal_id, session_id, tenant_id,
         )
         await conn.execute(
-            "DELETE FROM owner_pause WHERE goal_id = $1::uuid AND session_id = $2::uuid",
-            goal_id, session_id,
+            "DELETE FROM owner_pause p USING goals g "
+            "WHERE p.goal_id = $1::uuid AND p.session_id = $2::uuid "
+            "AND g.id = p.goal_id AND g.tenant_id = $3::uuid",
+            goal_id, session_id, tenant_id,
         )
 
     for r in reset:
@@ -992,27 +1106,41 @@ async def restart_owner(goal_id: str, session_id: str):
 
 
 @router.post("/goals/halt")
-async def goal_halt(req: InterveneRequest):
+async def goal_halt(
+    req: InterveneRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     """전체 정지를 걸거나 푼다. 실제로 막는 것은 direction_guard 다."""
     from app.services.goal_intervene import halt
 
     if req.on is None:
         raise HTTPException(status_code=400, detail="on required")
+    if not bool(context.get("user", {}).get("is_internal_admin")):
+        raise HTTPException(status_code=403, detail="internal_admin_required")
     return await halt(bool(req.on), req.reason or "")
 
 
 @router.post("/goals/{goal_id}/direct")
-async def goal_direct(goal_id: str, req: InterveneRequest):
+async def goal_direct(
+    goal_id: str, req: InterveneRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     """대표님 지시를 담당 전원에게 동시에. 주도를 거치지 않는다."""
     from app.services.goal_intervene import direct
 
     if not (req.message or "").strip():
         raise HTTPException(status_code=400, detail="message required")
-    return await direct(goal_id, req.message, req.roles)
+    result = await direct(goal_id, req.message, req.roles, tenant_id=_tenant_id(context))
+    if result.get("error") == "goal_not_found":
+        raise HTTPException(status_code=404, detail="goal_not_found")
+    return result
 
 
 @router.post("/goals/milestones/{milestone_id}/confirm")
-async def confirm_milestone_api(milestone_id: str, req: ConfirmRequest):
+async def confirm_milestone_api(
+    milestone_id: str, req: ConfirmRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     """대표님이 우측 패널에서 바로 판정한다.
 
     주도가 도구로 하는 것과 같은 경로를 쓴다 — 판정 규칙이 두 벌이면
@@ -1027,10 +1155,11 @@ async def confirm_milestone_api(milestone_id: str, req: ConfirmRequest):
 
     result = await confirm(
         milestone_id, ok=req.ok, reason=reason,
-        negative=req.negative, confirmer="ceo",
+        negative=req.negative, confirmer="ceo", tenant_id=_tenant_id(context),
     )
     if result.get("error"):
-        raise HTTPException(status_code=400, detail=result["error"])
+        status_code = 404 if result["error"] == "milestone_not_found" else 400
+        raise HTTPException(status_code=status_code, detail=result["error"])
 
     # 판정을 담당에게 알린다. 승인이든 반려든 담당은 결과를 알아야 한다.
     try:
@@ -1040,8 +1169,9 @@ async def confirm_milestone_api(milestone_id: str, req: ConfirmRequest):
         sid = await get_pool().fetchval(
             "SELECT COALESCE(m.owner_session_id::text, s.id::text) "
             "FROM milestones m LEFT JOIN chat_sessions s ON s.role_key = m.owner_role_key "
-            "WHERE m.id = $1::uuid LIMIT 1",
-            milestone_id,
+            "WHERE m.id = $1::uuid AND m.tenant_id = $2::uuid "
+            "AND (s.id IS NULL OR s.tenant_id = $2::uuid) LIMIT 1",
+            milestone_id, _tenant_id(context),
         )
         if sid:
             verdict = "완료로 확정" if req.ok and not req.negative else (
@@ -1070,11 +1200,16 @@ async def confirm_milestone_api(milestone_id: str, req: ConfirmRequest):
 
 
 @router.post("/goals/milestones/{milestone_id}/rewind")
-async def goal_rewind(milestone_id: str, req: InterveneRequest):
+async def goal_rewind(
+    milestone_id: str, req: InterveneRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     """마일스톤을 되돌리고 발송 기록을 지운다 — 그래야 다시 지시가 나간다."""
     from app.services.goal_intervene import rewind
 
-    result = await rewind(milestone_id, req.reason or "")
+    result = await rewind(
+        milestone_id, req.reason or "", tenant_id=_tenant_id(context),
+    )
     if result.get("error"):
         raise HTTPException(status_code=404, detail=result["error"])
     return result
@@ -1140,19 +1275,28 @@ async def advance_goal(goal_id: str):
 
 
 @router.post("/goals/advance")
-async def advance_active_goals(project: Optional[str] = Query(None)):
+async def advance_active_goals(
+    project: Optional[str] = Query(None),
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     from app.services.goal_manager import goal_state_machine
-    return await goal_state_machine.advance_active_goals(project)
+    return await goal_state_machine.advance_active_goals(
+        project, tenant_id=_tenant_id(context),
+    )
 
 
 @router.post("/goals/task-status")
-async def update_task_status(req: TaskStatusRequest):
+async def update_task_status(
+    req: TaskStatusRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     from app.services.goal_manager import goal_state_machine
     return await goal_state_machine.update_task_status_with_phase(
         task_type=req.task_type,
         task_id=req.task_id,
         status=req.status,
         phase=req.phase,
+        tenant_id=_tenant_id(context),
     )
 
 
@@ -1165,6 +1309,7 @@ async def reconcile_goal_links(
         False,
         description="프로젝트만 보고 붙은 레거시 링크까지 회수 — 운영자가 명시할 때만",
     ),
+    context: dict[str, Any] = Depends(require_tenant_member),
 ):
     """goal_task_links 를 pipeline_jobs 기준으로 재조정한다.
 
@@ -1179,6 +1324,7 @@ async def reconcile_goal_links(
         dry_run=dry_run,
         limit=limit,
         detach_legacy=detach_legacy,
+        tenant_id=_tenant_id(context),
     )
 
 
@@ -1187,6 +1333,7 @@ async def reconcile_release_evidence(
     project: Optional[str] = Query(None, description="프로젝트 코드 (미지정 시 전체)"),
     dry_run: bool = Query(True, description="true(기본)면 계획만 반환하고 DB 를 쓰지 않는다"),
     limit: int = Query(200, ge=1, le=2000, description="한 번에 검사할 최대 링크 수"),
+    context: dict[str, Any] = Depends(require_tenant_member),
 ):
     """인증된 배포에 포함된 작업 커밋으로 goal_task_links 를 완료 승격한다.
 
@@ -1198,7 +1345,9 @@ async def reconcile_release_evidence(
     """
     from app.services.release_evidence import reconcile_release_links
 
-    return await reconcile_release_links(project, dry_run=dry_run, limit=limit)
+    return await reconcile_release_links(
+        project, dry_run=dry_run, limit=limit, tenant_id=_tenant_id(context),
+    )
 
 
 @router.put("/goals/{goal_id}")
