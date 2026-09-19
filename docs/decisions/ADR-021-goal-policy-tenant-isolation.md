@@ -24,6 +24,14 @@ first governed-store statement. Context must never be session-scoped. Background
 workers derive the tenant from the claimed envelope and set it inside the same
 transaction; a cross-tenant claim is not supported.
 
+`app.current_tenant_id` is request scope, not authentication. PostgreSQL custom
+settings are caller-settable, so the repository must derive this UUID only from
+the trusted server-side authentication/claim envelope. It must never accept a
+tenant UUID from a query, request body, tool argument, or model output. RLS
+protects the trusted repository path from omitted predicates; it is not a
+sandbox for a compromised runtime identity. Least-privilege statement grants,
+separate service identities, and prevention of arbitrary SQL remain mandatory.
+
 ## Measured current state
 
 At this decision point, `app/core/db_pool.py` creates a shared asyncpg pool and
@@ -38,9 +46,10 @@ new stores fail closed until that contract is used.
 
 Composite foreign keys prevent cross-tenant relationships but cannot prevent a
 valid SQL role from reading another tenant's independent rows. Repository-only
-enforcement likewise cannot cover ad-hoc SQL or a missed predicate. RLS supplies
-the required database boundary while composite keys continue to protect object
-relationships.
+enforcement likewise cannot cover a missed predicate. RLS supplies a
+database-enforced row boundary after trusted tenant binding, while composite
+keys continue to protect object relationships. It does not make ad-hoc SQL safe
+because ad-hoc SQL can change a custom setting.
 
 ## Compatibility and rollback
 
@@ -70,6 +79,9 @@ accepted as tenant-isolation evidence because PostgreSQL superusers bypass RLS.
 
 - A misconfigured superuser or `BYPASSRLS` runtime identity defeats RLS; release
   role verification is mandatory.
+- A compromised runtime identity or arbitrary-SQL capability can change the
+  custom tenant setting. Service authentication and SQL capability controls are
+  therefore part of the boundary.
 - Tables outside the ten-store boundary retain their existing isolation model.
 - Existing M14 writers need transaction-local tenant context before this migration
   is activated for runtime traffic.

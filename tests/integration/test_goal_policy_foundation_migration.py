@@ -217,6 +217,12 @@ async def _exercise() -> None:
                GRANT USAGE ON SCHEMA public TO aads_w12_runtime_test;
                GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO aads_w12_runtime_test;"""
         )
+        role_flags = await admin.fetchrow(
+            "SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname='aads_w12_runtime_test'"
+        )
+        assert role_flags is not None
+        assert not role_flags["rolsuper"]
+        assert not role_flags["rolbypassrls"]
         switch_a = uuid4()
         await admin.execute("SET ROLE aads_w12_runtime_test")
 
