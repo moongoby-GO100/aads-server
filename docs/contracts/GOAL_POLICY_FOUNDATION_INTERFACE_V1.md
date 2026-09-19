@@ -1,6 +1,6 @@
 # Goal Policy Foundation Interface v1
 
-- 상태: **승인 대기 (B-04)**
+- 상태: **승인 (B-04, 2026-09-19 17:09 KST)**
 - 대상: W-14F evaluator / executor
 - PRD: `docs/prd/20260919_GOAL_WORK_HIERARCHY_APPROVAL_PRD.md` v1.2
 - 원칙: 본 계약 승인 전 W-14F 구현 및 추가 운영 migration 금지
@@ -197,3 +197,9 @@ shadow 권한 확대, A3 AUTO, ledger 누락, 이중 소비, revoke/kill switch 
 승인 이벤트에는 문서 commit SHA, 승인자 session UUID, 승인 시각, 승인한 contract
 version, 관련 ADR 목록을 기록한다. 승인 전 상태는 `pending`이며 이 문서만으로
 승인을 추정하지 않는다.
+
+- 승인 범위 판정: `propose_next_steps` auto grant `82320385`
+- 승인 세션: `1fa84036-b12d-4497-97f5-076a32645a20`
+- 승인 시각: 2026-09-19 17:09 KST
+- 계약 버전: v1
+- 후속 차단: B-02/B-02R 독립 ACCEPT 전 W-14F 구현·운영 migration 금지
