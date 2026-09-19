@@ -58,7 +58,9 @@ async def ingest_graph(
     repository_id, target_ref = repository_id.strip(), target_ref.strip()
     governance_scope = governance_scope.strip()
     run_id = run_id or uuid4()
-    graph_body = graph_content(graph)
+    if stable_key_version != STABLE_KEY_VERSION:
+        raise IngestConflictError("unsupported stable key version")
+    graph_body = graph_content(graph, project=project)
     content_hash = content_fingerprint(graph_body)
     input_hash = input_fingerprint(
         project=project, repository_id=repository_id, target_ref=target_ref,

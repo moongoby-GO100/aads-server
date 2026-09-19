@@ -108,3 +108,19 @@ run, observation, snapshot, graph body, finding identity/occurrence, audit, evid
 - v2 write/read 모두 `AAG_V2_ENABLED` 기본 off fence를 공유한다. tenant/RBAC 변경은 없다.
 - rollback은 flag off로 신규 접근을 차단하는 방식이며, additive table은 감사·재처리 근거로
   보존한다. pointer 복구는 authoritative observation과 ref/order evidence로 재구축한다.
+
+## 11. V11-3 stable-key baseline and rule lifecycle
+
+- 모든 v1.1 finding은 `aag-stable-key-v1:<sha256>` 키를 갖는다. 키 입력은 project,
+  rule, semantic target, normalized repository-relative path, route/table/symbol contract이며
+  line number와 설명 문구는 evidence로만 남아 키를 바꾸지 않는다.
+- 동일 입력은 collection 순서·실행 시각과 무관하게 같은 stable key set과 content
+  fingerprint를 생성한다. 수신자가 canonical identity와 다른 키를 보내면 ingest를 거부한다.
+- 신규 baseline gate는 count 증가가 아니라 stable key set 차이를 평가한다. `enforced`
+  rule의 예외 없는 신규 key만 차단하고, 신규/`warn_only` rule은 관측 경고로 남긴다.
+- approved baseline의 identity와 finding membership은 DB trigger로 불변이다. 교체 시 기존
+  baseline은 `superseded`로 보존하고 독립 승인된 신규 baseline을 활성화한다.
+- 신규 rule은 `warn_only`로 시작한다. 최소 2회 관측, 통과한 golden fixture digest,
+  제안자와 다른 승인자가 모두 확인해야 `enforced`로 승격된다.
+- rollback은 신규 rule을 enforce하지 않고 warn-only로 유지하거나 직전 approved baseline을
+  계속 사용한다. additive table과 audit evidence는 삭제하지 않는다.

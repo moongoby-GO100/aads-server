@@ -28,14 +28,20 @@ import hashlib
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
-import socket
 import urllib.request
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
+
+try:
+    from tools.aag.v2_contract import STABLE_KEY_VERSION, normalize_findings
+except ModuleNotFoundError:  # direct `python tools/aag/scan_aads.py` execution
+    from v2_contract import STABLE_KEY_VERSION, normalize_findings
 
 KST = timezone(timedelta(hours=9))
 SCANNER_VERSION = "aag-scanner-v1.1"
@@ -1747,7 +1753,10 @@ class Scan:
 
         for f in raw:
             f["severity"] = sev.get(f["rule"], "P2")
-        self.findings = sorted(raw, key=lambda f: (f["severity"], f["rule"], str(f.get("key", ""))))
+        self.findings = normalize_findings(os.getenv("AAG_PROJECT", "AADS"), raw)
+        self.findings.sort(
+            key=lambda f: (f["severity"], f["rule"], f["stable_finding_key"])
+        )
 
     # ── 그래프 ─────────────────────────────────────────────────────
     def build_graph(self) -> None:
@@ -1952,6 +1961,10 @@ def build_baseline(scan: Scan) -> dict[str, Any]:
             "graph_edges": len(scan.edges),
         },
         "findings_by_rule": counts_by_rule(scan.findings),
+        "stable_key_version": STABLE_KEY_VERSION,
+        "stable_finding_keys": sorted(
+            finding["stable_finding_key"] for finding in scan.findings
+        ),
         "findings_total": len(scan.findings),
         "unresolved_total": len(scan.unresolved),
         "unresolved_by_kind": {
@@ -1963,6 +1976,18 @@ def build_baseline(scan: Scan) -> dict[str, Any]:
 
 def compare_baseline(current: dict, saved: dict) -> list[str]:
     """고정선 대비 증가분. 줄어든 것은 지적하지 않는다."""
+    saved_keys = saved.get("stable_finding_keys")
+    current_keys = current.get("stable_finding_keys")
+    if isinstance(saved_keys, list) and isinstance(current_keys, list):
+        if saved.get("stable_key_version") != current.get("stable_key_version"):
+            return [
+                ("stable key version 불일치: "
+                 f"{saved.get('stable_key_version')} → {current.get('stable_key_version')}")
+            ]
+        return [
+            f"NEW_STABLE_FINDING: {key}"
+            for key in sorted(set(current_keys) - set(saved_keys))
+        ]
     regressions = []
     for rule, count in current["findings_by_rule"].items():
         before = saved.get("findings_by_rule", {}).get(rule)

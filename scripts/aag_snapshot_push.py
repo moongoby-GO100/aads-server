@@ -106,7 +106,7 @@ def _v2_statement(project: str, graph: dict) -> str | None:
     }:
         return None
 
-    body = graph_content(graph)
+    body = graph_content(graph, project=project)
     content_hash = content_fingerprint(body)
     input_hash = input_fingerprint(
         project=project,

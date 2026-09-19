@@ -31,6 +31,11 @@ scan_aads = importlib.util.module_from_spec(_spec)
 sys.modules["aag_scan_aads"] = scan_aads  # dataclass 가 모듈을 되찾을 수 있어야 한다
 _spec.loader.exec_module(scan_aads)
 
+try:
+    from tools.aag.v2_contract import content_fingerprint  # noqa: E402
+except ModuleNotFoundError:
+    from v2_contract import content_fingerprint  # noqa: E402
+
 
 RULES_YML = """
 version: 1
@@ -293,6 +298,23 @@ def main() -> int:
 
         graph = json.loads((root / "out" / "graph.json").read_text(encoding="utf-8"))
         findings = graph["findings"]
+        first_keys = [finding.get("stable_finding_key") for finding in findings]
+        chk.check_true("모든 finding에 stable key", all(first_keys))
+        code_second, _ = run_scan(root, rules)
+        graph_second = json.loads(
+            (root / "out" / "graph.json").read_text(encoding="utf-8")
+        )
+        chk.check("동일 입력 2회 종료코드", code_second, code)
+        chk.check(
+            "동일 입력 2회 stable key 집합",
+            [finding.get("stable_finding_key") for finding in graph_second["findings"]],
+            first_keys,
+        )
+        chk.check(
+            "동일 입력 2회 content fingerprint",
+            content_fingerprint(graph_second, project="AADS"),
+            content_fingerprint(graph, project="AADS"),
+        )
 
         def by_rule(rule: str) -> list[dict]:
             return [f for f in findings if f["rule"] == rule]

@@ -10,7 +10,7 @@
 | FR-004 | 수정 | v2 filter/pagination/pinning | AAG v2 API·tool service | AT-098~102 | planned |
 | FR-005 | 수정 | authoritative brief+limitation | brief v2 API·renderer | AT-034~038, 100~102 | planned |
 | FR-006 | 보강 | hourly+DB lock/heartbeat | refresh scheduler·scan_runs | AT-009, 93~97 | partial |
-| FR-007 | 대체 | stable key-set baseline gate | baseline/gate service | AT-025~033 | planned |
+| FR-007 | 대체 | stable key-set baseline gate | `aag_baseline.py`, stable baseline migration, scanner gate | AT-025~033 | implemented-v11-3 |
 | FR-008 | 보강 | snapshot/commit pinned injection | pipeline runner wiring | AT-035, 47, 93 | partial |
 | FR-009 | 유지·보강 | typed document identity/hash | goals/document API+CI | AT-001~002, 118~120 | partial |
 | FR-010 | 보강 | atomic publish, source-behind/out-of-order 상태 | scanner/ingest/publish | AT-006, 15~24 | implemented-v11-2 (coverage planned) |
@@ -18,8 +18,9 @@
 | FR-012 | 보강 | immutable milestone evidence | goal evidence integration | AT-047~050 | planned |
 | FR-013 | 보강 | project RBAC+metric scope | auth/aggregate services | AT-039~040, 111~113 | planned |
 | FR-014 | 보강 | four-axis UI+recovery action | goal/ops UI | AT-018~024, 88~92, 117 | planned |
-| FR-015~019 | 추가 | brief policy, analyzer, coverage, miss, lifecycle | runner/AAG governance services | AT-034~038, 47~65 | planned |
-| FR-020~023 | 추가 | fixture, approval/audit, override, API dual-run | CI/migrations/v2 routes | AT-059~086 | approval-gated |
+| FR-015~018 | 추가 | brief policy, analyzer, coverage, miss | runner/AAG governance services | AT-034~038, 47~58 | planned |
+| FR-019~020 | 추가 | warn-only rule lifecycle, golden fixture determinism | baseline service, scanner selftest | AT-059~065 | implemented-v11-3 |
+| FR-021~023 | 추가 | approval/audit, override, API dual-run | governance migrations/v2 routes | AT-059~086 | partial / approval-gated |
 | FR-024~030 | 추가 | doc CI, history, rescan, aggregate, restore, drift, onboarding | CI/UI/ops services | AT-085~125 | planned |
 | NFR-001~008 | 유지·보강 | freshness, determinism, safety, security, traceability, accessibility | scanner/API/UI | AT-006, 18~24, 39~46, 87~97 | partial |
 | NFR-009~014 | 추가 | atomicity, compatibility, recovery, integrity, ref/scope isolation, observability | v2 data/API/ops | AT-011~024, 77~81; ops observability planned | partial |
@@ -54,6 +55,15 @@
 - DB 정본: `migrations/20260919_aag_v1_1_foundation.sql` →
   `migrations/20260919_aag_v1_1_latest_pointers.sql`. 운영 적용 여부와 별개로 이 순서가
   handover 기준이며 migration은 `BEGIN`/`ROLLBACK` 검증 대상이다.
+
+### V11-3 구현 evidence
+
+- AT-025~033: line/prose와 분리된 versioned stable finding key, key-set digest,
+  enforced/warn-only/exception 분리 gate, approved baseline identity·membership 불변 trigger.
+- AT-059~065: 신규 rule의 warn-only 시작, 최소 2회 관측·golden fixture digest·독립
+  승인 후 enforce 승격, 합성 fixture 동일 입력 2회 stable key/content fingerprint 결정성.
+- DB 정본: `migrations/20260919_aag_v1_1_stable_baseline_rule_lifecycle.sql`.
+  legacy count baseline은 읽기 호환만 유지하고 신규 baseline은 stable key set을 사용한다.
 
 ## 운영 evidence 최소 키
 
