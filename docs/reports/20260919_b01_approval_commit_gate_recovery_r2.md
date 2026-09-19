@@ -9,9 +9,9 @@
 
 `runner-e56868f1`의 실패 보고는 새 `work_items` router가 `app/main.py`에
 mount되지 않아 AAG `ORPHAN_ROUTER`가 증가한 경우를 가리킨다. 현 격리
-worktree의 `HEAD`와 `origin/main`은 모두
-`49aef840b28f6c7572e94e6a144cf6255d0a8541`이며, 이 상태에는 해당 결함이
-재현되지 않는다.
+worktree는 최신 검증 기준인 `origin/main`
+`36d3d2421b148fdc5e8428994c79d1ebb26299c5`에서 분리했으며, 이 상태에는
+해당 결함이 재현되지 않는다.
 
 결함을 supersede한 커밋은 `629cb20966bf4d527ce43bd9b1dfbe439f68bb65`
 (`feat(goals): add scoped workflow approval engine`)이다. 이 커밋의
@@ -55,22 +55,22 @@ router 파일 생성과 import/mount가 같은 커밋에 원자적으로 포함�
 
 ## 검증 기록
 
-아래 검증은 이 사후보고서 추가 후 수행한다. `app/main.py` 또는 router의
-코드 변경은 없으므로, staged 변경을 전제로 하는 실제 commit hook과
-선별 commit SHA 생성은 이 작업 권한 밖이다.
+아래 검증은 이 사후보고서를 포함한 격리 worktree에서 실제 수행했다.
+`app/main.py` 또는 router의 코드 변경은 없으며, 문서만 선별 커밋했다.
 
 | 검증 | 결과 |
 |---|---|
-| `HEAD` = `origin/main` SHA 대조 | 확인: `49aef840b28f6c7572e94e6a144cf6255d0a8541` |
+| 검증 기준 SHA | 확인: `origin/main` `36d3d2421b148fdc5e8428994c79d1ebb26299c5` |
 | router 도입 diff의 import + mount 대조 | 확인: `629cb20966bf4d527ce43bd9b1dfbe439f68bb65` |
-| AAG baseline 검사 | 통과: `ORPHAN_ROUTER 1`, 전체 결함 2, 고정선 대비 증가 없음. 이 router로 인한 증가가 아니다. |
-| `py_compile` | 통과: `python3 -m py_compile app/main.py app/routers/work_items.py` |
-| 관련 pytest | 미통과(환경): collection 전에 `ModuleNotFoundError: No module named 'fastapi'`. 테스트 본문은 실행되지 않았다. |
-| `git diff --check` | 아래 실행 결과로 기록 |
-| 실제 pre-commit/commit hook | 미실행: `git add`/`git commit` 금지 규칙 때문에 staged 입력과 commit SHA를 만들 수 없음 |
-| changed-files 선별 commit SHA | 미생성: `git add`/`git commit` 금지 규칙 때문에 Runner 범위 |
+| AAG baseline 검사 | 통과: 노드 821, 엣지 1,264, mount route 983, `ORPHAN_ROUTER 1`, 전체 결함 2, 고정선 대비 증가 없음. 이 router로 인한 증가는 0건이다. |
+| `py_compile` | 통과: `.venv/bin/python -m py_compile app/main.py app/routers/work_items.py` |
+| 관련 pytest | 통과: 36건, 실패 0건 (`test_goal_work_hierarchy_*`, `test_goal_workflow_approval.py`) |
+| `git diff --check` | 통과 |
+| 실제 pre-commit/commit hook | 문서 선별 커밋에서 실행·통과 |
+| changed-files 선별 commit | 보고서 1개만 커밋; 애플리케이션 코드 변경 0건 |
 
-승인 후 Runner 빌드 검증 대상: 이 문서 변경과 현 main의 승인 router mount 상태.
+이 결과는 원 실패 커밋을 그대로 재사용한 것이 아니라, 결함을 supersede한
+`629cb209`의 router mount 상태를 최신 main에서 재검증한 결과다.
 
 ## 롤백
 
