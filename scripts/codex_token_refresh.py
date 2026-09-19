@@ -8,6 +8,10 @@ from datetime import datetime, timezone, timedelta
 AUTH_FILE = os.getenv("CODEX_AUTH_FILE", "") or next(
     (a for a in sys.argv[1:] if not a.startswith("-")), "/root/.codex/auth.json"
 )
+# 계정 홈의 auth.json 은 메인 파일을 가리키는 심볼릭 링크일 수 있다(116 의
+# CODEX_OAUTH_MAIN, 244 의 CODEX_OAUTH_JINAH). os.replace 는 링크 자체를 실파일로
+# 갈아치우므로, 링크를 따라간 실체 경로에 쓴다 — 아니면 통일해 둔 구조가 조용히 깨진다.
+AUTH_FILE = os.path.realpath(AUTH_FILE)
 TOKEN_URL = "https://auth.openai.com/oauth/token"
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 KST = timezone(timedelta(hours=9))
