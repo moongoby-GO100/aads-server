@@ -254,7 +254,11 @@ def test_original_migration_checksum_is_immutable_and_contract_is_additive():
     contract = root / "migrations" / "20260919_qwen3_doc_embeddings_contract.sql"
     rollback = root / "migrations" / "rollback" / "20260919_qwen3_doc_embeddings_contract.sql"
     assert hashlib.sha256(original.read_bytes()).hexdigest() == "2b506b402daa181f5fd3207153d87f114d17315de4f6aa978f47a9d164a0b41c"
-    assert "ALTER TABLE doc_chunk_embeddings_qwen3" in contract.read_text()
+    contract_sql = contract.read_text()
+    assert "ALTER TABLE doc_chunk_embeddings_qwen3" in contract_sql
+    assert ") NOT VALID;" in contract_sql
+    assert "qwen3-doc-v1" in contract_sql
+    assert "VALIDATE CONSTRAINT doc_chunk_embeddings_qwen3_contract_ck" in contract_sql
     assert "DROP CONSTRAINT" in rollback.read_text()
 
 
