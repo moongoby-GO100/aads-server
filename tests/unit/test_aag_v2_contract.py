@@ -299,6 +299,11 @@ def test_latest_pointer_migration_is_additive_and_repeatable():
     assert "CREATE TABLE IF NOT EXISTS aag_latest_pointers" in sql
     assert "ADD COLUMN IF NOT EXISTS" in sql
     assert "PRIMARY KEY (project, repository_id, target_ref, governance_scope)" in sql
+    assert "ADD COLUMN IF NOT EXISTS expected_target_ref_head_sha TEXT" in sql
+    assert "ADD COLUMN IF NOT EXISTS verification_status TEXT" in sql
+    assert sql.index("ADD COLUMN IF NOT EXISTS verification_status TEXT") < sql.index(
+        "DROP CONSTRAINT IF EXISTS aag_snapshot_observations_verification_status_check"
+    )
     assert "DROP TABLE" not in sql
     assert "TRUNCATE" not in sql
 

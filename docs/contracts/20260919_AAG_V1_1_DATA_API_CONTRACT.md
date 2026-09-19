@@ -89,6 +89,9 @@ run, observation, snapshot, graph body, finding identity/occurrence, audit, evid
 - DB handover 정본 migration 순서는 `20260919_aag_v1_1_foundation.sql` 다음
   `20260919_aag_v1_1_latest_pointers.sql`이다. 두 파일은 additive·반복 적용 가능하며
   legacy `aag_graph_snapshots`를 변경하지 않는다.
+- 이미 초기 foundation draft가 적용된 운영 호스트에서는 release asset diff가
+  `latest_pointers.sql`만 재실행할 수 있으므로, 해당 migration이 누락된
+  `expected_target_ref_head_sha`와 `verification_status`를 자체 backfill한다.
 - `aag_ref_heads`와 `aag_latest_pointers`의 격리 키는
   `(project, repository_id, target_ref, governance_scope)`이다.
 - ingest는 격리 키의 PostgreSQL advisory transaction lock을 획득한 뒤 같은 transaction에서

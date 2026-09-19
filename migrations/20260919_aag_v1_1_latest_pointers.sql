@@ -46,6 +46,31 @@ ALTER TABLE aag_latest_pointers
     ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
+-- Some production hosts applied the first foundation draft before the
+-- ref-head columns were added.  Release assets execute only SQL files changed
+-- by the new release, so V11-2 must reconcile those additive foundation
+-- columns itself instead of assuming the older migration will be replayed.
+ALTER TABLE aag_scan_runs
+    ADD COLUMN IF NOT EXISTS expected_target_ref_head_sha TEXT;
+UPDATE aag_scan_runs
+   SET expected_target_ref_head_sha=resolved_commit_sha
+ WHERE expected_target_ref_head_sha IS NULL;
+ALTER TABLE aag_scan_runs
+    ALTER COLUMN expected_target_ref_head_sha SET NOT NULL;
+
+ALTER TABLE aag_snapshot_observations
+    ADD COLUMN IF NOT EXISTS expected_target_ref_head_sha TEXT,
+    ADD COLUMN IF NOT EXISTS verification_status TEXT;
+UPDATE aag_snapshot_observations
+   SET expected_target_ref_head_sha=resolved_commit_sha
+ WHERE expected_target_ref_head_sha IS NULL;
+UPDATE aag_snapshot_observations
+   SET verification_status=CASE WHEN authoritative THEN 'verified' ELSE 'unknown' END
+ WHERE verification_status IS NULL;
+ALTER TABLE aag_snapshot_observations
+    ALTER COLUMN expected_target_ref_head_sha SET NOT NULL,
+    ALTER COLUMN verification_status SET NOT NULL;
+
 ALTER TABLE aag_snapshot_observations
     DROP CONSTRAINT IF EXISTS aag_snapshot_observations_verification_status_check;
 ALTER TABLE aag_snapshot_observations
