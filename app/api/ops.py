@@ -2814,6 +2814,8 @@ async def switch_claude_account(body: ClaudeAccountSwitch):
 # 내려간다(app/services/slot_projects.py). 화면도 그렇게 설명해야 한다.
 class CompanySlotAssign(BaseModel):
     slot: Optional[str] = None
+    provider: str = "anthropic"
+    account: Optional[str] = None
 
 
 @router.get("/ops/oauth-slot-projects")
@@ -2821,13 +2823,19 @@ async def get_oauth_slot_projects():
     """회사별 계정 배정 현황 — 설정 화면이 이 한 벌로 표를 그린다."""
     from app.core.auth_provider import LAST_RESORT_SLOTS, get_oauth_key_records_async
     from app.core.db_pool import get_pool
-    from app.services.slot_projects import slot_project_map
+    from app.services.slot_projects import (
+        assignment_account,
+        assignment_provider,
+        slot_project_map,
+    )
 
     mapping = await slot_project_map(force=True)
-    company_slot: Dict[str, str] = {}
+    company_assignments: Dict[str, Dict[str, str]] = {}
     for slot, keys in mapping.items():
         for key in keys:
-            company_slot[str(key).upper()] = str(slot)
+            company_assignments.setdefault(str(key).upper(), {})[
+                assignment_provider(str(slot))
+            ] = assignment_account(str(slot))
 
     companies: List[Dict[str, Any]] = []
     try:
@@ -2840,7 +2848,13 @@ async def get_oauth_slot_projects():
             {
                 "project_key": str(r["project_key"]).upper(),
                 "name": r["name"] or str(r["project_key"]),
-                "slot": company_slot.get(str(r["project_key"]).upper(), ""),
+                "assignments": company_assignments.get(
+                    str(r["project_key"]).upper(), {}
+                ),
+                # 이전 대시보드가 배포 중 잠시 API를 호출해도 Claude 배정은 유지한다.
+                "slot": company_assignments.get(
+                    str(r["project_key"]).upper(), {}
+                ).get("anthropic", ""),
             }
             for r in rows
         ]
@@ -2854,6 +2868,8 @@ async def get_oauth_slot_projects():
             if not slot:
                 continue
             accounts.append({
+                "provider": "anthropic",
+                "account": slot,
                 "slot": slot,
                 "label": record.get("label") or f"slot{slot}",
                 "key_name": record.get("key_name", ""),
@@ -2865,18 +2881,64 @@ async def get_oauth_slot_projects():
     except Exception as exc:
         logger.warning("oauth_slot_projects_accounts_failed", error=str(exc)[:160])
 
+    try:
+        rows = await get_pool().fetch(
+            "SELECT key_name, label, priority, rate_limited_until "
+            "FROM llm_api_keys WHERE provider = 'codex' AND is_active "
+            "ORDER BY priority, id"
+        )
+        now = datetime.now(timezone.utc)
+        for row in rows:
+            key_name = str(row["key_name"])
+            limited_until = row["rate_limited_until"]
+            accounts.append({
+                "provider": "codex",
+                "account": key_name,
+                "slot": "",
+                "label": row["label"] or key_name,
+                "key_name": key_name,
+                "priority": row["priority"],
+                "last_resort": False,
+                "rate_limited": bool(limited_until and limited_until > now),
+            })
+    except Exception as exc:
+        logger.warning("oauth_slot_projects_codex_accounts_failed", error=str(exc)[:160])
+
     return {"ok": True, "companies": companies, "accounts": accounts}
 
 
 @router.put("/ops/oauth-slot-projects/{project_key}")
 async def set_company_oauth_slot(project_key: str, body: CompanySlotAssign):
     """이 회사가 먼저 쓸 계정을 정한다. slot 이 비면 자동 순서로 되돌린다."""
+    from app.core.auth_provider import get_oauth_key_records_async
+    from app.core.db_pool import get_pool
     from app.services.slot_projects import set_company_slot
 
-    slot = (body.slot or "").strip()
-    if slot and not re.fullmatch(r"[0-9]{1,3}", slot):
-        raise HTTPException(status_code=400, detail="slot 은 숫자여야 한다")
-    result = await set_company_slot(project_key, slot or None, by="CEO")
+    provider = (body.provider or "anthropic").strip().lower()
+    account = (body.account if body.account is not None else body.slot or "").strip()
+    if provider not in {"anthropic", "codex"}:
+        raise HTTPException(status_code=400, detail="지원하지 않는 구독 provider 입니다")
+
+    if account:
+        if provider == "anthropic":
+            if not re.fullmatch(r"[0-9]{1,3}", account):
+                raise HTTPException(status_code=400, detail="Claude slot 은 숫자여야 합니다")
+            allowed = {
+                str(record.get("slot") or "")
+                for record in await get_oauth_key_records_async(include_rate_limited=True)
+            }
+        else:
+            rows = await get_pool().fetch(
+                "SELECT key_name FROM llm_api_keys "
+                "WHERE provider = 'codex' AND is_active"
+            )
+            allowed = {str(row["key_name"]) for row in rows}
+        if account not in allowed:
+            raise HTTPException(status_code=400, detail="등록된 활성 구독 계정이 아닙니다")
+
+    result = await set_company_slot(
+        project_key, account or None, by="CEO", provider=provider,
+    )
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=str(result.get("error") or "배정 실패"))
     return result

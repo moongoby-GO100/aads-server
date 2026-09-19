@@ -31,6 +31,37 @@ logger = structlog.get_logger(__name__)
 _CACHE_TTL_SEC = 30.0
 _cache: Dict[str, object] = {"at": 0.0, "map": {}}
 
+_PROVIDER_PREFIX = {
+    "anthropic": "",
+    "codex": "codex:",
+}
+
+
+def assignment_key(provider: str, account: str) -> str:
+    """DB 에 저장할 provider-safe 계정 식별자.
+
+    기존 Claude 데이터는 숫자 슬롯 그대로 유지하고, Codex 계정은
+    ``codex:CODEX_OAUTH_*`` 로 namespacing 한다. 테이블 마이그레이션 없이 두
+    provider 를 같은 회사에 동시에 배정하면서 기존 소비자도 깨지지 않는다.
+    """
+    normalized = str(provider or "").strip().lower()
+    value = str(account or "").strip()
+    if normalized not in _PROVIDER_PREFIX:
+        raise ValueError("unsupported_provider")
+    if not value:
+        return ""
+    return f"{_PROVIDER_PREFIX[normalized]}{value}"
+
+
+def assignment_provider(slot: str) -> str:
+    return "codex" if str(slot or "").startswith(_PROVIDER_PREFIX["codex"]) else "anthropic"
+
+
+def assignment_account(slot: str) -> str:
+    value = str(slot or "")
+    prefix = _PROVIDER_PREFIX["codex"]
+    return value[len(prefix):] if value.startswith(prefix) else value
+
 
 async def slot_project_map(force: bool = False) -> Dict[str, Set[str]]:
     """{슬롯: {프로젝트…}}. 배정이 없는 슬롯은 아예 키가 없다."""
@@ -116,6 +147,13 @@ async def order_slots_for_project(slots: List[str], project: str) -> List[str]:
     return mine + free
 
 
+async def order_codex_accounts_for_project(accounts: List[str], project: str) -> List[str]:
+    """Codex key_name 목록에 회사 배정을 적용하고 key_name 목록으로 돌려준다."""
+    encoded = [assignment_key("codex", account) for account in accounts]
+    ordered = await order_slots_for_project(encoded, project)
+    return [assignment_account(slot) for slot in ordered]
+
+
 async def is_assigned(slot: str, project: str) -> bool:
     """이 프로젝트에 이 슬롯이 배정돼 있나 (최후 수단 스위치 면제 판정)."""
     mapping = await slot_project_map()
@@ -162,7 +200,12 @@ async def set_projects(slot: str, projects: List[str], by: str = "CEO") -> Dict[
     return {"ok": True, "slot": slot, "projects": keys}
 
 
-async def set_company_slot(project: str, slot: Optional[str], by: str = "CEO") -> Dict[str, object]:
+async def set_company_slot(
+    project: str,
+    slot: Optional[str],
+    by: str = "CEO",
+    provider: str = "anthropic",
+) -> Dict[str, object]:
     """이 회사가 쓸 계정을 정한다. slot 이 비면 배정 해제(= 자동 순서).
 
     화면은 슬롯이 아니라 회사를 기준으로 고른다 — "이 회사는 내 계정" 이
@@ -175,13 +218,23 @@ async def set_company_slot(project: str, slot: Optional[str], by: str = "CEO") -
     key = str(project or "").strip().upper()
     if not key:
         return {"ok": False, "error": "project_required"}
-    target = str(slot or "").strip()
+    normalized_provider = str(provider or "").strip().lower()
+    try:
+        target = assignment_key(normalized_provider, str(slot or "").strip())
+    except ValueError:
+        return {"ok": False, "error": "unsupported_provider"}
 
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute(
-                "DELETE FROM oauth_slot_projects WHERE project_key = $1", key)
+            if normalized_provider == "codex":
+                await conn.execute(
+                    "DELETE FROM oauth_slot_projects "
+                    "WHERE project_key = $1 AND slot LIKE 'codex:%'", key)
+            else:
+                await conn.execute(
+                    "DELETE FROM oauth_slot_projects "
+                    "WHERE project_key = $1 AND slot NOT LIKE 'codex:%'", key)
             if target:
                 await conn.execute(
                     "INSERT INTO oauth_slot_projects (slot, project_key, created_by) "
@@ -194,13 +247,27 @@ async def set_company_slot(project: str, slot: Optional[str], by: str = "CEO") -
         from app.services import ohvis_alert
 
         await ohvis_alert.notify(
-            "%s 계정 배정 %s" % (key, "변경" if target else "해제"),
-            ("%s 는 이제 슬롯 %s 를 먼저 씁니다." % (key, target)) if target
-            else "%s 의 배정을 없앴습니다 — 다시 자동 순서로 돕니다." % key,
+            "%s %s 계정 배정 %s" % (
+                key, normalized_provider, "변경" if target else "해제"),
+            ("%s 는 이제 %s 계정 %s 를 먼저 씁니다."
+             % (key, normalized_provider, assignment_account(target))) if target
+            else "%s 의 %s 배정을 없앴습니다 — 다시 자동 순서로 돕니다."
+                 % (key, normalized_provider),
             severity=ohvis_alert.INFO, category="oauth_slot", project="AADS",
         )
     except Exception:
         pass
 
-    logger.info("slot_company_set project=%s slot=%s by=%s", key, target or "-", by)
-    return {"ok": True, "project": key, "slot": target}
+    account = assignment_account(target)
+    logger.info(
+        "slot_company_set project=%s provider=%s account=%s by=%s",
+        key, normalized_provider, account or "-", by,
+    )
+    return {
+        "ok": True,
+        "project": key,
+        "provider": normalized_provider,
+        "account": account,
+        # legacy caller compatibility: Claude still expects `slot`.
+        "slot": account if normalized_provider == "anthropic" else "",
+    }

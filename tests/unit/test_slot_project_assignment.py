@@ -58,6 +58,63 @@ def test_unknown_project_keeps_only_free_slots(monkeypatch):
     assert out == ["1", "2"], out
 
 
+def test_codex_assignment_is_namespaced_and_ordered(monkeypatch):
+    """Claude 숫자 슬롯과 Codex key_name은 같은 회사에 독립 배정할 수 있다."""
+    _patch_map(monkeypatch, {
+        "2": {"ACCT"},
+        "codex:CODEX_OAUTH_JINAH": {"ACCT"},
+    })
+
+    acct = asyncio.run(slot_projects.order_codex_accounts_for_project(
+        ["CODEX_OAUTH_MAIN", "CODEX_OAUTH_JINAH"], "ACCT",
+    ))
+    other = asyncio.run(slot_projects.order_codex_accounts_for_project(
+        ["CODEX_OAUTH_MAIN", "CODEX_OAUTH_JINAH"], "GO100",
+    ))
+
+    assert acct == ["CODEX_OAUTH_JINAH", "CODEX_OAUTH_MAIN"]
+    assert other == ["CODEX_OAUTH_MAIN"]
+    assert slot_projects.assignment_key("anthropic", "2") == "2"
+    assert slot_projects.assignment_key("codex", "CODEX_OAUTH_MAIN") == "codex:CODEX_OAUTH_MAIN"
+
+
+def test_saving_codex_assignment_preserves_claude_assignment(monkeypatch):
+    statements = []
+
+    class _Context:
+        async def __aenter__(self):
+            return connection
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Connection:
+        def transaction(self):
+            return _Context()
+
+        async def execute(self, query, *args):
+            statements.append((" ".join(query.split()), args))
+
+    class _Pool:
+        def acquire(self):
+            return _Context()
+
+    connection = _Connection()
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _Pool())
+
+    async def _notify(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.services.ohvis_alert.notify", _notify)
+    result = asyncio.run(slot_projects.set_company_slot(
+        "ACCT", "CODEX_OAUTH_JINAH", provider="codex",
+    ))
+
+    assert result["account"] == "CODEX_OAUTH_JINAH"
+    assert "slot LIKE 'codex:%'" in statements[0][0]
+    assert statements[1][1][:2] == ("codex:CODEX_OAUTH_JINAH", "ACCT")
+
+
 def test_lookup_failure_falls_back_to_global_order(monkeypatch):
     """못 읽었을 때 배정이 있는 것으로 보면 프로젝트가 슬롯을 통째로 잃는다."""
     def _boom():

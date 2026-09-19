@@ -1445,7 +1445,7 @@ def _codex_accounts():
     return out
 
 
-def _pick_codex_account(session_id, codex_dir):
+def _pick_codex_account(session_id, codex_dir, account_order=None):
     """세션에 계정 하나를 고정 배정한다.
 
     한 세션이 중간에 계정을 갈아타면 한도 추적도 로그 추적도 깨진다. 그래서
@@ -1454,6 +1454,12 @@ def _pick_codex_account(session_id, codex_dir):
     """
     marker = codex_dir / "account.json"
     available = _codex_accounts()
+    if account_order is not None:
+        requested = [str(name) for name in account_order if str(name).strip()]
+        rank = {name: index for index, name in enumerate(requested)}
+        # API가 회사 배정에 따라 제외한 계정은 여기서 다시 후보로 살리지 않는다.
+        available = [item for item in available if item[1] in rank]
+        available.sort(key=lambda item: rank[item[1]])
     if not available:
         return None, "none"
 
@@ -1461,7 +1467,7 @@ def _pick_codex_account(session_id, codex_dir):
         pinned = json.loads(marker.read_text()).get("key_name")
     except (OSError, ValueError):
         pinned = None
-    if pinned:
+    if pinned and (not account_order or pinned == available[0][1]):
         for _, key_name, auth_path in available:
             if key_name == pinned:
                 return auth_path, "pinned"
@@ -1474,7 +1480,7 @@ def _pick_codex_account(session_id, codex_dir):
     return auth_path, ("rebound" if pinned else "new")
 
 
-def _build_codex_home(session_id, mcp_cfg=None):
+def _build_codex_home(session_id, mcp_cfg=None, account_order=None):
     _CODEX_HOME_ROOT.mkdir(parents=True, exist_ok=True)
     safe_session = re.sub(r"[^A-Za-z0-9_.-]+", "_", session_id or "default")
     home = _CODEX_HOME_ROOT / safe_session
@@ -1488,7 +1494,9 @@ def _build_codex_home(session_id, mcp_cfg=None):
     # DB 에 코덱스 계정을 더 등록해도(CODEX_OAUTH_JINAH) CLI 는 계속 한 계정만
     # 봤고, 그 계정 하나가 주간 한도를 다 썼다. 계정 홈에서 고르도록 바꾼다.
     # 설계: aads-docs/docs/PRD-LLM-ACCOUNT-RUNTIME-BINDING-v1.0.md
-    account_auth, how = _pick_codex_account(session_id, codex_dir)
+    account_auth, how = _pick_codex_account(
+        session_id, codex_dir, account_order=account_order,
+    )
     default_auth = account_auth or Path("/root/.codex/auth.json")
     if account_auth is None:
         # 계정 홈이 하나도 없으면 옛 경로로 돌아간다. 계정 관리가 덜 끝난
@@ -2215,6 +2223,9 @@ async def handle_codex_stream(request):
     image_attachments = body.get("image_attachments", [])
     model = body.get("model", "gpt-5.5")
     session_id = body.get("session_id", "")
+    account_order = body.get("account_order")
+    if account_order is not None and not isinstance(account_order, list):
+        return web.json_response({"error": "account_order must be a list"}, status=400)
     if not messages_text:
         return web.json_response({"error": "messages_text required"}, status=400)
     codex_model = _CODEX_MODEL_MAP.get(model)
@@ -2311,7 +2322,9 @@ async def handle_codex_stream(request):
                     (session_id or "default")[:8],
                 )
                 return response
-            codex_home = _build_codex_home(session_id, mcp_cfg=mcp_template)
+            codex_home = _build_codex_home(
+                session_id, mcp_cfg=mcp_template, account_order=account_order,
+            )
             _codex_cwd = _resolve_codex_cwd(codex_project)
             codex_image_paths = _materialize_codex_image_attachments(image_attachments, session_id)
             cmd = list(codex_meta.get("argv", []) or []) + [

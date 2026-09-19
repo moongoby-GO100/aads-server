@@ -641,6 +641,32 @@ async def _codex_account_with_headroom() -> str:
     return "%s=%s%%" % (row["key_name"], row["used_percent"])
 
 
+async def _codex_account_order_for_project(project: str) -> Optional[List[str]]:
+    """회사 배정을 반영한 Codex 계정 순서.
+
+    ``None`` 은 DB 조회 실패라 릴레이의 기존 전역 순서를 유지하라는 뜻이고,
+    빈 목록은 현재 사용할 수 있는 활성 계정이 없다는 뜻이다.
+    """
+    try:
+        try:
+            from app.db import get_pool  # type: ignore
+        except ImportError:
+            from app.core.db_pool import get_pool
+        from app.services.slot_projects import order_codex_accounts_for_project
+
+        rows = await get_pool().fetch(
+            "SELECT key_name FROM llm_api_keys "
+            "WHERE provider = 'codex' AND is_active "
+            "AND (rate_limited_until IS NULL OR rate_limited_until <= NOW()) "
+            "ORDER BY priority, id"
+        )
+        accounts = [str(row["key_name"]) for row in rows]
+        return await order_codex_accounts_for_project(accounts, project)
+    except Exception as exc:
+        logger.warning("codex_company_account_order_failed: %s", str(exc)[:160])
+        return None
+
+
 async def _codex_quota_exhausted() -> Tuple[bool, str]:
     """Codex 주간 한도가 소진되었는가. (차단여부, 사유) 반환."""
     now = _time_mod.time()
@@ -4210,6 +4236,7 @@ async def _stream_codex_relay_once(
     formatted = _format_messages_for_llm(messages, has_resume=False)
     formatted, image_attachments = _extract_codex_prompt_and_images(formatted)
     relay_project = await _resolve_codex_project(session_id)
+    account_order = await _codex_account_order_for_project(relay_project)
     req_body = {
         "model": model,
         "system_prompt": system_prompt,
@@ -4227,6 +4254,8 @@ async def _stream_codex_relay_once(
             if t.get("name")
         ],
     }
+    if account_order is not None:
+        req_body["account_order"] = account_order
     if image_attachments:
         req_body["image_attachments"] = image_attachments
     display_model = _CODEX_MODEL_DISPLAY.get(model, model)
