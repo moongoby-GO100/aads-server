@@ -149,6 +149,23 @@ def test_recursive_cte_name_is_not_a_table():
     assert sc.extract_sql_tables(sql) == {"datasets"}
 
 
+def test_materialized_cte_names_are_not_tables():
+    """GO100 쿼리의 AS MATERIALIZED/NOT MATERIALIZED CTE가 테이블로 새지 않는다."""
+    sql = """
+        SELECT * FROM (
+            WITH active_symbols AS MATERIALIZED (SELECT code FROM stock_universe),
+                 target AS NOT MATERIALIZED (SELECT code FROM active_symbols)
+            SELECT * FROM target
+        ) scoped JOIN real_table ON true
+    """
+    assert sc.extract_sql_tables(sql) == {"stock_universe", "real_table"}
+
+
+def test_sql_keywords_after_from_are_not_tables():
+    assert sc.extract_sql_tables("SELECT TRIM(BOTH ' ' FROM code) FROM stocks") == {"stocks"}
+    assert sc.extract_sql_tables("SELECT * FROM stocks WHERE code BETWEEN '1' AND '9'") == {"stocks"}
+
+
 def test_string_literal_inside_sql_is_not_a_table():
     """`'Runner/review primary from settings order'` 가 `settings` 를 만들었다."""
     sql = (

@@ -234,7 +234,9 @@ _TABLE_REF_RE = re.compile(
 # `WITH x AS (…), y AS (…)` 의 y 를 놓치면 CTE 이름이 테이블로 둔갑한다.
 # `\b` 를 콤마 앞에 두면 `),\n  y AS (` 에서 경계가 성립하지 않아 매칭이 빠진다.
 _CTE_RE = re.compile(
-    r"(?:\bwith\b(?:\s+recursive\b)?|,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+as\s*\(", re.I
+    r"(?:\bwith\b(?:\s+recursive\b)?|,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+as\s*"
+    r"(?:(?:not\s+)?materialized\s*)?\(",
+    re.I,
 )
 
 # 동적 테이블명(f-string 보간)이 있던 자리. UNRESOLVED 로 분리한다.
@@ -242,7 +244,10 @@ _DYNAMIC_TABLE_RE = re.compile(
     r"\b(?:from|join|insert\s+into|update|delete\s+from)\s+\{\}", re.I
 )
 
-_SQL_NOISE = {"select", "where", "values", "set", "lateral", "dual", "only", "table"}
+_SQL_NOISE = {
+    "select", "where", "values", "set", "lateral", "dual", "only", "table",
+    "and", "both",
+}
 
 
 def sql_preprocess(sql: str) -> str:
