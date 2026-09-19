@@ -15,6 +15,7 @@
 import asyncio
 import importlib.util
 import sys
+import types
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -72,6 +73,66 @@ def test_async_review_request_passes_the_longer_deadline():
     assert "deadline_sec=_REVIEW_ASYNC_DEADLINE_SEC" in source
 
 
+def test_cli_review_models_use_the_configured_model_relay():
+    asyncio.run(_cli_review_models_use_the_configured_model_relay())
+
+
+async def _cli_review_models_use_the_configured_model_relay():
+    reviewer = _load_reviewer()
+    relay = AsyncMock(return_value="ok")
+    central = AsyncMock(return_value="wrong-route")
+    directive_module = types.ModuleType("app.services.directive_draft_service")
+    directive_module._call_configured_model = relay
+    anthropic_module = types.ModuleType("app.core.anthropic_client")
+    anthropic_module.call_llm_with_fallback = central
+
+    with patch.dict(
+        sys.modules,
+        {
+            "app.services.directive_draft_service": directive_module,
+            "app.core.anthropic_client": anthropic_module,
+        },
+    ):
+        result = await reviewer._call_review_model(
+            model="codex:gpt-5.6-sol", prompt="review", system="system", max_tokens=64,
+        )
+
+    assert result == "ok"
+    relay.assert_awaited_once_with(
+        model_candidate="codex:gpt-5.6-sol",
+        prompt="review",
+        max_tokens=64,
+        system="system",
+        tenant_id=None,
+        user_id=None,
+    )
+    central.assert_not_awaited()
+
+
+def test_litellm_review_models_stay_on_central_r_auth():
+    asyncio.run(_litellm_review_models_stay_on_central_r_auth())
+
+
+async def _litellm_review_models_stay_on_central_r_auth():
+    reviewer = _load_reviewer()
+    central = AsyncMock(return_value="ok")
+    anthropic_module = types.ModuleType("app.core.anthropic_client")
+    anthropic_module.call_llm_with_fallback = central
+
+    with patch.dict(sys.modules, {"app.core.anthropic_client": anthropic_module}):
+        result = await reviewer._call_review_model(
+            model="litellm:gemini-2.5-flash-lite", prompt="review", system="system", max_tokens=64,
+        )
+
+    assert result == "ok"
+    central.assert_awaited_once_with(
+        prompt="review",
+        model="gemini-2.5-flash-lite",
+        system="system",
+        max_tokens=64,
+    )
+
+
 def test_remaining_budget_is_spent_instead_of_breaking_early():
     asyncio.run(_remaining_budget_is_spent_instead_of_breaking_early())
 
@@ -112,6 +173,44 @@ async def _remaining_budget_is_spent_instead_of_breaking_early():
             instruction="test",
             files_changed=["a.py"],
             deadline_sec=3,
+        )
+
+    assert attempted == ["slow-model", "fast-model"]
+    assert verdict.verdict == "APPROVE"
+
+
+def test_first_model_cannot_consume_the_entire_sync_deadline():
+    asyncio.run(_first_model_cannot_consume_the_entire_sync_deadline())
+
+
+async def _first_model_cannot_consume_the_entire_sync_deadline():
+    reviewer = _load_reviewer()
+    attempted: list[str] = []
+
+    async def call_model(*, model, **_kwargs):
+        attempted.append(model)
+        if model == "slow-model":
+            await asyncio.sleep(10)
+        return VALID_REVIEW_JSON
+
+    with patch.object(reviewer, "_REVIEW_LLM_TIMEOUT_SEC", 2), patch.object(
+        reviewer, "_REVIEW_MIN_ATTEMPT_SEC", 1
+    ), patch.object(
+        reviewer,
+        "_get_review_models",
+        new=AsyncMock(return_value=["slow-model", "fast-model"]),
+    ), patch.object(
+        reviewer, "_save_review_result", new=AsyncMock()
+    ), patch.object(
+        reviewer, "_call_review_model", new=call_model
+    ):
+        verdict = await reviewer.review_code_diff(
+            project="AADS",
+            job_id="runner-test-fallback-reserve",
+            diff=SAMPLE_DIFF,
+            instruction="test",
+            files_changed=["a.py"],
+            deadline_sec=4,
         )
 
     assert attempted == ["slow-model", "fast-model"]

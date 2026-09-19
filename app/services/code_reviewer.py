@@ -516,12 +516,33 @@ async def _call_review_model(
     system: str,
     max_tokens: int,
 ) -> object:
-    """Call the central R-AUTH client; external models remain LiteLLM-routed."""
+    """Route CLI model IDs through their relay and API IDs through R-AUTH.
+
+    ``call_llm_with_fallback`` treats every non-Claude model name as a
+    LiteLLM model.  Removing the ``codex:``/``claude:`` prefix therefore sends
+    CLI-only model IDs such as ``gpt-5.6-sol`` to the wrong provider.  Keep
+    those IDs on the configured-model relay, which also owns OAuth slot
+    selection and refresh.  API/LiteLLM models continue through the central
+    R-AUTH client.
+    """
     normalized = str(model or "").strip()
     provider, separator, bare_model = normalized.partition(":")
     provider = provider.lower() if separator else ""
-    if provider in {"codex", "claude"}:
-        normalized = bare_model
+    if provider in {"codex", "claude"} or (
+        not provider
+        and normalized != _REVIEW_OAUTH_FALLBACK_MODEL
+        and (normalized.startswith("gpt-") or normalized.startswith("claude-"))
+    ):
+        from app.services.directive_draft_service import _call_configured_model
+
+        return await _call_configured_model(
+            model_candidate=normalized,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            system=system,
+            tenant_id=None,
+            user_id=None,
+        )
 
     from app.core.anthropic_client import call_llm_with_fallback
 
@@ -933,7 +954,19 @@ async def review_code_diff(
                     job_id, _elapsed, attempt_no - 1, attempt_limit, total_deadline,
                 )
                 break
-            _attempt_timeout = min(float(_REVIEW_LLM_TIMEOUT_SEC), _remaining)
+            # Keep enough of the total deadline for at least one fallback.
+            # A host-level REVIEW_LLM_TIMEOUT_SEC=90 with the synchronous
+            # 85-second deadline previously let the first broken route consume
+            # the entire budget, so the fallback list was never reached.
+            _fallback_reserve = (
+                float(_REVIEW_MIN_ATTEMPT_SEC)
+                if attempt_no < attempt_limit
+                else 0.0
+            )
+            _attempt_timeout = min(
+                float(_REVIEW_LLM_TIMEOUT_SEC),
+                max(float(_REVIEW_MIN_ATTEMPT_SEC), _remaining - _fallback_reserve),
+            )
             model = review_models[attempt_no - 1]
             # 빈 응답이어도 마지막으로 실제 호출한 모델을 기록해야 스위퍼가
             # 다음 재검수에서 정확한 실패 모델을 제외할 수 있다.
