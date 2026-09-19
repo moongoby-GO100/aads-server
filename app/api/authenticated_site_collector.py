@@ -14,10 +14,13 @@ from app.services.authenticated_site_collector import (
     build_collector_recipe_dry_run,
     collector_overview,
     create_collection_job,
+    get_account_login_status,
     list_jobs,
     list_site_profiles,
     mark_collection_job_action_required,
     normalize_recipe_extension,
+    request_first_login,
+    recover_account_login,
     resume_collection_job,
     upsert_site_profile,
 )
@@ -102,6 +105,15 @@ class CollectorChallengeIn(BaseModel):
     approval_scope: dict[str, Any] = Field(default_factory=dict)
 
 
+class AccountFirstLoginIn(BaseModel):
+    site_profile_id: str = Field(min_length=1, max_length=80)
+    account_label: str = Field(default="default", min_length=1, max_length=200)
+    # Opaque Agent Vault credential UUID. Credentials must be entered through
+    # the vault endpoint and are never accepted by this control-plane API.
+    vault_reference: str = Field(min_length=1, max_length=80)
+    work_key: str = Field(default="", max_length=120)
+
+
 def _tenant_id(context: TenantContext) -> str:
     return str(context["tenant"]["id"])
 
@@ -147,6 +159,59 @@ async def api_upsert_site_profile(
         payload=body.model_dump(),
     )
     return {"status": "saved", "site": profile}
+
+
+@router.post("/accounts/first-login")
+async def api_request_account_first_login(
+    body: AccountFirstLoginIn,
+    context: TenantContext = Depends(require_member),
+) -> dict[str, Any]:
+    """Create the tenant-scoped A-scope account approval exactly once."""
+    try:
+        return await request_first_login(
+            tenant_id=_tenant_id(context), user_id=_user_id(context),
+            site_profile_id=body.site_profile_id, account_label=body.account_label,
+            vault_reference=body.vault_reference, work_key=body.work_key,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if detail in {"site_profile_not_found", "vault_reference_not_found"} else 409
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/accounts/{site_profile_id}/{account_label}/status")
+async def api_account_login_status(
+    site_profile_id: str,
+    account_label: str,
+    context: TenantContext = Depends(require_viewer),
+) -> dict[str, Any]:
+    try:
+        account = await get_account_login_status(
+            tenant_id=_tenant_id(context), site_profile_id=site_profile_id, account_label=account_label,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not account:
+        raise HTTPException(status_code=404, detail="account_login_not_found")
+    return {"status": "ok", "account": account}
+
+
+@router.post("/accounts/{site_profile_id}/{account_label}/recovery")
+async def api_recover_account_login(
+    site_profile_id: str,
+    account_label: str,
+    context: TenantContext = Depends(require_member),
+) -> dict[str, Any]:
+    try:
+        result = await recover_account_login(
+            tenant_id=_tenant_id(context), user_id=_user_id(context),
+            site_profile_id=site_profile_id, account_label=account_label,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not result:
+        raise HTTPException(status_code=404, detail="account_login_not_found")
+    return result
 
 
 @router.get("/recipes")

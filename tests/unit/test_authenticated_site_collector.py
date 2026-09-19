@@ -1,4 +1,5 @@
 import importlib
+from pathlib import Path
 
 import pytest
 
@@ -530,3 +531,58 @@ def test_collector_api_challenge_then_resume(collector_modules):
     assert challenge.json()["job"]["challenge"]["approval_scope"]["captcha_value"] == "***MASKED***"
     assert resumed.status_code == 200
     assert resumed.json()["job"]["status"] == "queued"
+
+
+def test_account_first_login_api_is_tenant_scoped_and_idempotent(collector_modules, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import app.api.authenticated_site_collector as api_module
+
+    api_module = importlib.reload(api_module)
+    calls = []
+
+    async def first_login(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "approval_requested",
+            "idempotent": len(calls) > 1,
+            "account": {"vault_reference": kwargs["vault_reference"], "approval": {"id": "approval-a"}},
+        }
+
+    monkeypatch.setattr(api_module, "request_first_login", first_login)
+    app = FastAPI()
+    app.include_router(api_module.router)
+    app.dependency_overrides[api_module.require_member] = lambda: {
+        "tenant": {"id": "00000000-0000-0000-0000-000000000001"},
+        "membership": {"user_id": "ceo"},
+    }
+    client = TestClient(app)
+    body = {
+        "site_profile_id": "00000000-0000-0000-0000-000000000010",
+        "account_label": "primary",
+        "vault_reference": "00000000-0000-0000-0000-000000000099",
+    }
+
+    first = client.post("/authenticated-site-collector/accounts/first-login", json=body)
+    second = client.post("/authenticated-site-collector/accounts/first-login", json=body)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["account"]["approval"]["id"] == second.json()["account"]["approval"]["id"]
+    assert second.json()["idempotent"] is True
+    assert {call["tenant_id"] for call in calls} == {"00000000-0000-0000-0000-000000000001"}
+
+
+def test_account_approval_migration_is_additive_and_keeps_only_vault_reference():
+    sql = (
+        Path(__file__).parents[2]
+        / "migrations"
+        / "20260919_authenticated_site_account_approval_scope.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "ADD COLUMN IF NOT EXISTS credential_approval_request_id" in sql
+    assert "ADD COLUMN IF NOT EXISTS credential_scope" in sql
+    assert "Opaque Agent Vault credential id only" in sql
+    assert "DROP TABLE" not in sql.upper()
+    assert "TRUNCATE" not in sql.upper()
