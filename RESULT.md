@@ -156,3 +156,35 @@ Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks
 | 빌드 검증 | 승인 후 Runner 빌드 검증 대상 |
 | commit/push/deploy | 실행하지 않음 |
 | AADS handover DB evidence | DB 변경/기록을 수행하지 않음 — 사용자 규칙상 파일 수정 외 작업 금지 |
+
+---
+
+# AADS-SMARTBROWSER-G4-ARIA-PARTIAL-SIGNATURE-20260919
+
+## STEP 0 — 기존 구현 조사 및 분류
+
+| 항목 | 분류 | 반영/판단 |
+|---|---|---|
+| `browser_recipes` 및 `browser_recipe_registry`의 recipe/version tenant 정본 | 유지 | 사이트·페이지 템플릿 정본을 새 테이블로 복제하지 않는다. `capture_rules.aria_signature`만 읽어 재방문 정책을 적용한다. |
+| `normalize_recipe_payload`, `get_browser_recipe`, `plan_browser_recipe_run`, `create_browser_recipe_run` | 유지 | 실행·큐·승인 흐름을 변경하지 않는다. |
+| `browser_page_structure_signatures` migration | 신규 | tenant·recipe·version·page/area별 signature version, hash, similarity, reason, decision과 Human Gateway 필요 여부를 additive하게 저장한다. |
+| `aria_structure_signature` | 신규 | ARIA subtree의 role/안정 이름 해시/state/의미 관계/stable data attribute만 정규화하고 재사용·재탐색·Human Gateway를 판정한다. |
+| `tests/unit/test_aria_structure_signature.py` | 신규 | 허용 변화, 필수 anchor/role 변경, ambiguity, ARIA 부재 폴백, 동적·개인화 텍스트 배제를 회귀한다. |
+| 삭제 | 0건 | 호출처 영향 없음. 롤백은 신규 서비스·migration·테스트 변경만 되돌리면 된다. |
+
+## 변경 및 보안 경계
+
+- raw accessible name, raw relationship id, DOM id, 가격·재고·광고·시각·개인화 텍스트는 시그니처에 저장하지 않는다. 안정적인 이름은 정규화 후 SHA-256 해시만 저장한다.
+- `data-testid`, `data-test`, `data-qa`, `data-cy`, `data-component`만 허용하며 값도 해시로 저장한다. 형제 순서는 정렬해 비교한다.
+- ARIA 부재·중복 구조는 `rediscover`, 필수 anchor 삭제는 `human_gateway`로 판정한다. similarity가 recipe template의 threshold 이상일 때만 `reuse`다.
+- 모든 DB 조회/저장은 `tenant_id`와 recipe/version/page/area 범위로 제한한다. 서명 이력에 사용자 맞춤 텍스트를 보관하지 않는다.
+
+## 검증
+
+| 항목 | 결과 |
+|---|---|
+| focused regression | `pytest -q tests/unit/test_aria_structure_signature.py` — **4 passed** (pytest 설정 경고 1건) |
+| affected regression | `tests/unit/test_browser_task_policy.py` 포함 실행은 환경의 `asyncpg` 미설치로 collection 실패. 변경 전 의존성 문제이며 통과로 처리하지 않음. |
+| migration/DB handover evidence | DB 변경·handover 기록 미수행 — 사용자 규칙상 파일 작업 외 실행 금지. migration은 Runner 적용 대상. |
+| 빌드 검증 | 승인 후 Runner 빌드 검증 대상 |
+| commit/push/deploy | 모두 미실행 |
