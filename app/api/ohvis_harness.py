@@ -19,6 +19,7 @@ from app.services.ohvis_harness import (
     get_harness_status,
     list_skill_manifests,
     promote_skill_version,
+    rollback_skill_version,
     recommend_hermes_improvements,
     search_wiki,
     update_skill,
@@ -74,7 +75,12 @@ class SkillVersionRequest(BaseModel):
 
 class SkillPromoteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    evidence: list[str] = Field(min_length=1, max_length=100)
+    idempotency_key: str = Field(min_length=8, max_length=200)
+    evidence: list[dict[str, Any]] = Field(min_length=1, max_length=100)
+    focused_results: dict[str, Any]
+    affected_regressions: dict[str, Any]
+    candidate_metrics: dict[str, Any]
+    active_metrics: dict[str, Any]
 
 
 class SkillExecuteRequest(BaseModel):
@@ -85,6 +91,13 @@ class SkillExecuteRequest(BaseModel):
     approval_id: str | None = None
     session_id: str = Field(min_length=1, max_length=100)
     correlation_id: str = Field(min_length=1, max_length=100)
+
+
+class SkillRollbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    idempotency_key: str = Field(min_length=8, max_length=200)
+    reason: str = Field(min_length=1, max_length=1000)
+    evidence: list[dict[str, Any]] = Field(min_length=1, max_length=100)
 
 
 class SkillFindRequest(BaseModel):
@@ -203,7 +216,7 @@ async def ohvis_promote_skill_version(
     try:
         return await promote_skill_version(
             tenant_id=_tenant_id(context), skill_id=skill_id, version=version,
-            actor=_actor(context), evidence=req.evidence,
+            actor=_actor(context), **req.model_dump(),
         )
     except SkillRegistryError as exc:
         _raise_registry_error(exc)
@@ -226,6 +239,20 @@ async def ohvis_execute_skill(
             tenant_id=_tenant_id(context), skill_id=skill_id, version=req.version,
             input_data=req.input, idempotency_key=req.idempotency_key,
             action_intent=intent, approval_id=req.approval_id,
+        )
+    except SkillRegistryError as exc:
+        _raise_registry_error(exc)
+
+
+@router.post("/ohvis/harness/skills/{skill_id}/rollback", tags=["ohvis-harness"])
+async def ohvis_rollback_skill_version(
+    skill_id: str,
+    req: SkillRollbackRequest,
+    context: TenantContext = tenant_admin_dependency,
+):
+    try:
+        return await rollback_skill_version(
+            tenant_id=_tenant_id(context), skill_id=skill_id, actor=_actor(context), **req.model_dump()
         )
     except SkillRegistryError as exc:
         _raise_registry_error(exc)

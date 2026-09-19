@@ -85,7 +85,7 @@ RISK_POLICIES: dict[str, dict[str, Any]] = {
     },
 }
 
-SKILL_VERSION_STATES = frozenset({"draft", "candidate", "shadow", "active", "retired"})
+SKILL_VERSION_STATES = frozenset({"draft", "candidate", "shadow", "active", "deprecated", "quarantined"})
 HIGH_RISK_TIERS = frozenset({"write", "deploy", "auth", "financial", "destructive"})
 _EXECUTOR_NAME_RE = re.compile(r"^[a-z][a-z0-9_.-]{2,119}$")
 SkillExecutor = Callable[[Mapping[str, Any]], Any | Awaitable[Any]]
@@ -345,11 +345,38 @@ async def validate_stored_skill(*, tenant_id: str, skill_id: str, version: str) 
 
 
 async def promote_skill_version(*, tenant_id: str, skill_id: str, version: str,
-                                actor: str, evidence: list[str]) -> dict[str, Any]:
+                                actor: str, evidence: list[dict[str, Any]],
+                                idempotency_key: str,
+                                focused_results: Mapping[str, Any],
+                                affected_regressions: Mapping[str, Any],
+                                candidate_metrics: Mapping[str, Any],
+                                active_metrics: Mapping[str, Any]) -> dict[str, Any]:
     if not evidence:
         raise SkillRegistryError("promotion_evidence_required")
+    evidence_types = {
+        str(item.get("type")) for item in evidence if isinstance(item, Mapping)
+    }
+    if "aads_handover_db" not in evidence_types:
+        raise SkillRegistryError("aads_handover_db_evidence_required")
+    release_evidence = next(
+        (item for item in evidence if isinstance(item, Mapping) and item.get("type") == "release_state"), None
+    )
+    if not release_evidence or any(key not in release_evidence for key in ("commit", "push", "deploy")):
+        raise SkillRegistryError("actual_commit_push_deploy_state_required")
+    from app.services.golden_promotion_gate import evaluate_promotion_gate
+    decision = evaluate_promotion_gate(
+        focused_results=focused_results, affected_regressions=affected_regressions,
+        candidate_metrics=candidate_metrics, active_metrics=active_metrics,
+    )
     from app.core.db_pool import get_pool
     async with get_pool().acquire() as conn, conn.transaction():
+        prior = await conn.fetchrow(
+            """SELECT decision,to_status,reason_codes FROM browser_promotion_ledgers
+               WHERE tenant_id=$1::uuid AND idempotency_key=$2 FOR UPDATE""",
+            tenant_id, idempotency_key,
+        )
+        if prior:
+            return {"idempotent": True, **_row_dict(prior)}
         row = await conn.fetchrow(
             """SELECT v.id,v.status,v.manifest,v.content,v.content_sha256 FROM ops_skill_versions v
                    JOIN ops_skill_library l ON l.id=v.skill_id
@@ -364,16 +391,50 @@ async def promote_skill_version(*, tenant_id: str, skill_id: str, version: str,
         _enforce_executable_risk_policy(manifest)
         if manifest["executor"] not in _SKILL_EXECUTORS:
             raise SkillRegistryError("executor_not_registered", status_code=409)
+        target_status = "shadow" if row["status"] == "candidate" else "active"
+        if not decision.passed:
+            quarantined_manifest = _manifest_for_status(manifest, "quarantined")
+            await conn.execute(
+                """UPDATE ops_skill_versions SET status='quarantined',manifest=$2::jsonb,
+                          content=$3,content_sha256=$4,quarantine_reason=$5 WHERE id=$1""",
+                row["id"], json.dumps(quarantined_manifest), _canonical_json(quarantined_manifest),
+                _sha256(quarantined_manifest), ";".join(decision.reasons),
+            )
+            await _write_promotion_ledger(
+                conn, tenant_id=tenant_id, skill_id=skill_id, version_id=str(row["id"]),
+                idempotency_key=idempotency_key, actor=actor, from_status=row["status"],
+                to_status="quarantined", decision="blocked", reasons=decision.reasons,
+                focused_results=focused_results, affected_regressions=affected_regressions,
+                candidate_metrics=candidate_metrics, active_metrics=active_metrics, evidence=evidence,
+            )
+            return {"status": "quarantined", "reasons": list(decision.reasons)}
+        if target_status == "shadow":
+            shadow_manifest = _manifest_for_status(manifest, "shadow")
+            updated = await conn.fetchrow(
+                """UPDATE ops_skill_versions SET status='shadow',manifest=$2::jsonb,
+                          content=$3,content_sha256=$4,promotion_evidence=$5::jsonb
+                   WHERE id=$1 RETURNING *""",
+                row["id"], json.dumps(shadow_manifest), _canonical_json(shadow_manifest),
+                _sha256(shadow_manifest), json.dumps(evidence),
+            )
+            await _write_promotion_ledger(
+                conn, tenant_id=tenant_id, skill_id=skill_id, version_id=str(row["id"]),
+                idempotency_key=idempotency_key, actor=actor, from_status="candidate",
+                to_status="shadow", decision="promoted", reasons=(), focused_results=focused_results,
+                affected_regressions=affected_regressions, candidate_metrics=candidate_metrics,
+                active_metrics=active_metrics, evidence=evidence,
+            )
+            return _row_dict(updated)
         active_rows = await conn.fetch(
             """SELECT id,status,manifest,content,content_sha256 FROM ops_skill_versions
                WHERE skill_id=$1::uuid AND status='active' FOR UPDATE""", skill_id,
         )
         for active in active_rows:
             active_manifest = _validate_persisted_skill_version(active)
-            retired_manifest = _manifest_for_status(active_manifest, "retired")
+            retired_manifest = _manifest_for_status(active_manifest, "deprecated")
             await conn.execute(
                 """UPDATE ops_skill_versions
-                   SET status='retired',manifest=$2::jsonb,content=$3,content_sha256=$4
+                   SET status='deprecated',manifest=$2::jsonb,content=$3,content_sha256=$4
                    WHERE id=$1""",
                 active["id"], json.dumps(retired_manifest), _canonical_json(retired_manifest),
                 _sha256(retired_manifest),
@@ -383,12 +444,91 @@ async def promote_skill_version(*, tenant_id: str, skill_id: str, version: str,
         updated = await conn.fetchrow(
             """UPDATE ops_skill_versions SET status='active',manifest=$2::jsonb,
                           content=$3,content_sha256=$4,promoted_at=clock_timestamp(),
-                          promoted_by=$5,promotion_evidence=$6::jsonb
+                          promoted_by=$5,promotion_evidence=$6::jsonb,previous_active_id=$7
                    WHERE id=$1 RETURNING *""",
             row["id"], json.dumps(updated_manifest), _canonical_json(updated_manifest),
-            updated_digest, actor, json.dumps(evidence),
+            updated_digest, actor, json.dumps(evidence), active_rows[0]["id"] if active_rows else None,
+        )
+        await _write_promotion_ledger(
+            conn, tenant_id=tenant_id, skill_id=skill_id, version_id=str(row["id"]),
+            idempotency_key=idempotency_key, actor=actor, from_status="shadow", to_status="active",
+            decision="promoted", reasons=(), focused_results=focused_results,
+            affected_regressions=affected_regressions, candidate_metrics=candidate_metrics,
+            active_metrics=active_metrics, evidence=evidence,
         )
         return _row_dict(updated)
+
+
+async def _write_promotion_ledger(conn: Any, *, tenant_id: str, skill_id: str,
+                                  version_id: str, idempotency_key: str, actor: str,
+                                  from_status: str, to_status: str, decision: str,
+                                  reasons: Any, focused_results: Mapping[str, Any],
+                                  affected_regressions: Mapping[str, Any],
+                                  candidate_metrics: Mapping[str, Any], active_metrics: Mapping[str, Any],
+                                  evidence: list[dict[str, Any]]) -> None:
+    await conn.execute(
+        """INSERT INTO browser_promotion_ledgers
+           (tenant_id,artifact_type,artifact_id,version_id,idempotency_key,requested_by,
+            from_status,to_status,decision,reason_codes,focused_results,affected_regressions,
+            candidate_metrics,active_metrics,evidence)
+           VALUES($1::uuid,'site_skill',$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9::jsonb,
+                  $10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb)""",
+        tenant_id, skill_id, version_id, idempotency_key, actor, from_status, to_status,
+        decision, json.dumps(list(reasons)), json.dumps(dict(focused_results)),
+        json.dumps(dict(affected_regressions)), json.dumps(dict(candidate_metrics)),
+        json.dumps(dict(active_metrics)), json.dumps(evidence),
+    )
+
+
+async def rollback_skill_version(*, tenant_id: str, skill_id: str, actor: str,
+                                 idempotency_key: str, reason: str,
+                                 evidence: list[dict[str, Any]]) -> dict[str, Any]:
+    """Atomically restore previous_active; learned evidence is never deleted."""
+    if not reason or not evidence:
+        raise SkillRegistryError("rollback_reason_and_evidence_required")
+    from app.core.db_pool import get_pool
+    async with get_pool().acquire() as conn, conn.transaction():
+        prior = await conn.fetchrow(
+            """SELECT decision,to_status,reason_codes FROM browser_promotion_ledgers
+               WHERE tenant_id=$1::uuid AND idempotency_key=$2 FOR UPDATE""",
+            tenant_id, idempotency_key,
+        )
+        if prior:
+            return {"idempotent": True, **_row_dict(prior)}
+        current = await conn.fetchrow(
+            """SELECT v.* FROM ops_skill_versions v JOIN ops_skill_library l ON l.id=v.skill_id
+               WHERE l.tenant_id=$1::uuid AND v.skill_id=$2::uuid AND v.status='active' FOR UPDATE""",
+            tenant_id, skill_id,
+        )
+        if not current or not current["previous_active_id"]:
+            raise SkillRegistryError("previous_active_not_available", status_code=409)
+        previous = await conn.fetchrow(
+            "SELECT * FROM ops_skill_versions WHERE id=$1 AND skill_id=$2::uuid FOR UPDATE",
+            current["previous_active_id"], skill_id,
+        )
+        if not previous or previous["status"] != "deprecated":
+            raise SkillRegistryError("previous_active_invalid", status_code=409)
+        current_manifest = _manifest_for_status(_validate_persisted_skill_version(current), "deprecated")
+        previous_manifest = _manifest_for_status(_validate_persisted_skill_version(previous), "active")
+        await conn.execute(
+            """UPDATE ops_skill_versions SET status='deprecated',manifest=$2::jsonb,
+               content=$3,content_sha256=$4 WHERE id=$1""",
+            current["id"], json.dumps(current_manifest), _canonical_json(current_manifest), _sha256(current_manifest),
+        )
+        restored = await conn.fetchrow(
+            """UPDATE ops_skill_versions SET status='active',manifest=$2::jsonb,
+               content=$3,content_sha256=$4,promoted_at=clock_timestamp(),promoted_by=$5
+               WHERE id=$1 RETURNING *""",
+            previous["id"], json.dumps(previous_manifest), _canonical_json(previous_manifest),
+            _sha256(previous_manifest), actor,
+        )
+        await _write_promotion_ledger(
+            conn, tenant_id=tenant_id, skill_id=skill_id, version_id=str(current["id"]),
+            idempotency_key=idempotency_key, actor=actor, from_status="active",
+            to_status="active", decision="rolled_back", reasons=(reason,),
+            focused_results={}, affected_regressions={}, candidate_metrics={}, active_metrics={}, evidence=evidence,
+        )
+        return _row_dict(restored)
 
 
 def _approval_matches(approval: Mapping[str, Any] | None, *, tenant_id: str,
