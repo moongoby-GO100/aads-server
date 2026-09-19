@@ -83,3 +83,25 @@ run, observation, snapshot, graph body, finding identity/occurrence, audit, evid
 - API: `/api/v1/aag/v2/snapshots`; `AAG_V2_ENABLED=1`에서만 열리며 기본값은 off다.
 - rollback: flag를 off로 되돌리면 v2 ingest를 즉시 중지한다. 실제 DB migration 적용과
   v2 활성화는 배포·운영 승인 뒤 진행하며 v1 API와 legacy row는 그대로 유지한다.
+
+## 10. V11-2 authoritative latest publish
+
+- DB handover 정본 migration 순서는 `20260919_aag_v1_1_foundation.sql` 다음
+  `20260919_aag_v1_1_latest_pointers.sql`이다. 두 파일은 additive·반복 적용 가능하며
+  legacy `aag_graph_snapshots`를 변경하지 않는다.
+- `aag_ref_heads`와 `aag_latest_pointers`의 격리 키는
+  `(project, repository_id, target_ref, governance_scope)`이다.
+- ingest는 격리 키의 PostgreSQL advisory transaction lock을 획득한 뒤 같은 transaction에서
+  candidate insert, ready 전환, observation insert, authoritative pointer 갱신 순으로 수행한다.
+  어느 단계든 실패하면 publish 전체가 rollback되고 별도 실패 run만 기록한다.
+- 같은 content는 기존 ready snapshot과 `first_published_at`을 보존하고 새 observation의
+  `verified_at` 및 authoritative pointer의 freshness만 갱신한다.
+- `resolved_commit_sha != expected_target_ref_head_sha`는 `source_behind`, 현재 pointer보다
+  `generated_at`이 오래된 실행은 `out_of_order`다. 두 observation은 보존하지만 pointer와
+  ref-head freshness를 갱신하지 않는다.
+- `GET /api/v1/aag/v2/latest`는 project/repository_id/target_ref/governance_scope를 정확히
+  지정하며 snapshot, observation, run, ref, commit, source, authoritative,
+  generated_at, verified_at, freshness, limitation을 반환한다.
+- v2 write/read 모두 `AAG_V2_ENABLED` 기본 off fence를 공유한다. tenant/RBAC 변경은 없다.
+- rollback은 flag off로 신규 접근을 차단하는 방식이며, additive table은 감사·재처리 근거로
+  보존한다. pointer 복구는 authoritative observation과 ref/order evidence로 재구축한다.

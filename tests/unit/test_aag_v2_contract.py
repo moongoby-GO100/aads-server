@@ -50,6 +50,19 @@ def test_input_fingerprint_changes_with_resolved_commit():
     assert first != second
 
 
+def test_input_fingerprint_isolates_governance_scope():
+    common = {
+        "project": "GO100", "repository_id": "kis-autotrade-v4",
+        "target_ref": "refs/heads/main", "resolved_commit_sha": "1" * 40,
+        "expected_target_ref_head_sha": "1" * 40,
+        "scanner_version": "aag-scanner-v1.1", "ruleset_digest": "a" * 64,
+        "scan_scope_digest": "b" * 64,
+    }
+    assert input_fingerprint(governance_scope="default", **common) != input_fingerprint(
+        governance_scope="release", **common
+    )
+
+
 def test_v11_foundation_migration_is_additive_and_immutable():
     sql = (ROOT / "migrations/20260919_aag_v1_1_foundation.sql").read_text(encoding="utf-8")
     assert "CREATE TABLE IF NOT EXISTS aag_scan_runs" in sql
@@ -122,11 +135,16 @@ class _Transaction:
 
 
 class _Connection:
-    def __init__(self, *, existing_snapshot=False, existing_run=None):
+    def __init__(
+        self, *, existing_snapshot=False, existing_run=None, previous=None,
+        fail_pointer=False,
+    ):
         self.snapshot_id = uuid4()
         self.observation_id = uuid4()
         self.existing_snapshot = existing_snapshot
         self.existing_run = existing_run
+        self.previous = previous
+        self.fail_pointer = fail_pointer
         self.executed = []
 
     def transaction(self):
@@ -148,10 +166,15 @@ class _Connection:
         self.executed.append((" ".join(sql.split()), args))
         if "FROM aag_scan_runs" in sql:
             return self.existing_run
+        if "FROM aag_latest_pointers" in sql:
+            return self.previous
         raise AssertionError(sql)
 
     async def execute(self, sql, *args):
         self.executed.append((" ".join(sql.split()), args))
+        if self.fail_pointer and "INSERT INTO aag_latest_pointers" in sql:
+            self.fail_pointer = False
+            raise RuntimeError("injected pointer failure")
 
 
 class _Pool:
@@ -192,6 +215,8 @@ def test_ingest_reuses_content_but_records_fresh_observation(monkeypatch):
     assert result.result == "no_change_success"
     assert result.authoritative is True
     assert any("INSERT INTO aag_snapshot_observations" in sql for sql, _ in connection.executed)
+    assert any("INSERT INTO aag_latest_pointers" in sql for sql, _ in connection.executed)
+    assert not any("first_published_at=NOW()" in sql for sql, _ in connection.executed)
 
 
 def test_ingest_old_commit_cannot_be_authoritative(monkeypatch):
@@ -205,6 +230,89 @@ def test_ingest_old_commit_cannot_be_authoritative(monkeypatch):
     assert result.result == "source_behind"
     assert result.authoritative is False
     assert result.verification_status == "commit_mismatch"
+    assert not any("INSERT INTO aag_latest_pointers" in sql for sql, _ in connection.executed)
+
+
+def test_ingest_out_of_order_observation_preserves_pointer(monkeypatch):
+    connection = _Connection(existing_snapshot=True, previous={
+        "generated_at": "2026-09-19T17:00:00+09:00",
+        "resolved_commit_sha": "1" * 40,
+        "head_commit_sha": "1" * 40,
+        "head_generated_at": "2026-09-19T17:00:00+09:00",
+    })
+    monkeypatch.setattr(aag_ingest_v2, "get_pool", lambda: _Pool(connection))
+
+    result = asyncio.run(aag_ingest_v2.ingest_graph(**_ingest_kwargs()))
+
+    assert result.result == "out_of_order"
+    assert result.authoritative is False
+    assert result.verification_status == "out_of_order"
+    assert not any("INSERT INTO aag_latest_pointers" in sql for sql, _ in connection.executed)
+
+
+def test_publish_sequence_is_fenced_and_atomic(monkeypatch):
+    connection = _Connection()
+    monkeypatch.setattr(aag_ingest_v2, "get_pool", lambda: _Pool(connection))
+
+    asyncio.run(aag_ingest_v2.ingest_graph(**_ingest_kwargs()))
+    statements = [sql for sql, _ in connection.executed]
+
+    lock = next(i for i, sql in enumerate(statements) if "pg_advisory_xact_lock" in sql)
+    candidate = next(i for i, sql in enumerate(statements) if "INSERT INTO aag_graph_snapshots_v2" in sql)
+    ready = next(i for i, sql in enumerate(statements) if "first_published_at=NOW()" in sql)
+    observation = next(i for i, sql in enumerate(statements) if "INSERT INTO aag_snapshot_observations" in sql)
+    pointer = next(i for i, sql in enumerate(statements) if "INSERT INTO aag_latest_pointers" in sql)
+    assert lock < candidate < ready < observation < pointer
+
+
+def test_pointer_failure_records_failed_run(monkeypatch):
+    connection = _Connection(fail_pointer=True)
+    monkeypatch.setattr(aag_ingest_v2, "get_pool", lambda: _Pool(connection))
+
+    with pytest.raises(RuntimeError, match="injected pointer failure"):
+        asyncio.run(aag_ingest_v2.ingest_graph(**_ingest_kwargs()))
+
+    statements = [sql for sql, _ in connection.executed]
+    assert any("'ingest_failed'" in sql for sql in statements)
+
+
+def test_pointer_queries_include_complete_isolation_key(monkeypatch):
+    connection = _Connection(existing_snapshot=True)
+    monkeypatch.setattr(aag_ingest_v2, "get_pool", lambda: _Pool(connection))
+
+    asyncio.run(aag_ingest_v2.ingest_graph(**_ingest_kwargs(
+        project="AADS", repository_id="repo-b", target_ref="refs/heads/release",
+        governance_scope="regulated",
+    )))
+
+    pointer_args = next(
+        args for sql, args in connection.executed if "INSERT INTO aag_latest_pointers" in sql
+    )
+    assert pointer_args[:4] == ("AADS", "repo-b", "refs/heads/release", "regulated")
+
+
+def test_latest_pointer_migration_is_additive_and_repeatable():
+    sql = (ROOT / "migrations/20260919_aag_v1_1_latest_pointers.sql").read_text(
+        encoding="utf-8"
+    )
+    assert "CREATE TABLE IF NOT EXISTS aag_ref_heads" in sql
+    assert "CREATE TABLE IF NOT EXISTS aag_latest_pointers" in sql
+    assert "ADD COLUMN IF NOT EXISTS" in sql
+    assert "PRIMARY KEY (project, repository_id, target_ref, governance_scope)" in sql
+    assert "DROP TABLE" not in sql
+    assert "TRUNCATE" not in sql
+
+
+def test_latest_read_api_contract_is_feature_fenced():
+    source = (ROOT / "app/api/aag.py").read_text(encoding="utf-8")
+    latest = source[source.index('@router.get("/v2/latest")'):]
+    assert "_require_v2_enabled()" in latest
+    for field in (
+        '"snapshot"', '"observation_id"', '"run_id"', '"ref"', '"commit"',
+        '"source"', '"authoritative"', '"generated_at"', '"verified_at"',
+        '"freshness"', '"limitation"',
+    ):
+        assert field in latest
 
 
 def test_run_id_retry_is_idempotent_and_input_is_immutable(monkeypatch):

@@ -237,14 +237,15 @@ async def store_snapshot_v2(
     }
 
 
-@router.get("/v2/snapshots/latest")
+@router.get("/v2/latest")
 async def get_latest_snapshot_v2(
     project: str,
     repository_id: str,
     target_ref: str,
     user: CurrentUser,
+    governance_scope: str = "default",
 ) -> dict[str, Any]:
-    """Return only an authoritative snapshot inside the caller's project grant."""
+    """Return the project-authorized atomic pointer for one repository/ref/scope."""
     _require_v2_enabled()
     project = normalize_project(project)
     try:
@@ -253,21 +254,62 @@ async def get_latest_snapshot_v2(
         raise _governance_error(exc) from exc
     async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
-            """SELECT s.id AS snapshot_id,o.id AS observation_id,o.project,o.repository_id,
-                      o.target_ref,o.resolved_commit_sha,o.authoritative,o.verified_at,
-                      s.generated_at,s.stats,s.nodes,s.edges,s.findings,s.unresolved
-                 FROM aag_snapshot_observations o
-                 JOIN aag_graph_snapshots_v2 s ON s.id=o.snapshot_id
-                WHERE o.project=$1 AND o.repository_id=$2 AND o.target_ref=$3
-                  AND o.authoritative=TRUE AND o.verification_status='verified'
-                  AND s.publish_status='ready' AND s.project=o.project
-                  AND s.repository_id=o.repository_id
-                ORDER BY o.verified_at DESC LIMIT 1""",
-            project, repository_id, target_ref,
+            """SELECT p.snapshot_id, p.observation_id, p.run_id,
+                      p.project, p.repository_id, p.target_ref, p.governance_scope,
+                      p.resolved_commit_sha, p.expected_target_ref_head_sha,
+                      p.generated_at, p.verified_at, s.content_fingerprint,
+                      s.canonicalization_version, s.stable_key_version,
+                      s.stats, s.nodes, s.edges, s.findings, s.unresolved,
+                      s.node_count, s.edge_count, s.finding_count,
+                      s.first_published_at
+                 FROM aag_latest_pointers p
+                 JOIN aag_graph_snapshots_v2 s
+                   ON s.id=p.snapshot_id AND s.project=p.project
+                  AND s.repository_id=p.repository_id
+                 JOIN aag_snapshot_observations o
+                   ON o.id=p.observation_id AND o.snapshot_id=p.snapshot_id
+                  AND o.run_id=p.run_id AND o.project=p.project
+                  AND o.repository_id=p.repository_id AND o.target_ref=p.target_ref
+                  AND o.governance_scope=p.governance_scope
+                  AND o.resolved_commit_sha=p.resolved_commit_sha
+                WHERE p.project=$1 AND p.repository_id=$2 AND p.target_ref=$3
+                  AND p.governance_scope=$4 AND s.publish_status='ready'
+                  AND o.authoritative=TRUE AND o.verification_status='verified'""",
+            project, repository_id.strip(), target_ref.strip(), governance_scope.strip(),
         )
     if not row:
-        raise HTTPException(status_code=404, detail="authoritative snapshot not found")
-    return {"schema_version": "aag-v2", "source": "central", **dict(row)}
+        raise HTTPException(status_code=404, detail="No authoritative AAG v2 snapshot")
+    freshness_minutes = stale_minutes(row["verified_at"])
+    return {
+        "schema_version": "aag-v2",
+        "snapshot": {
+            "id": str(row["snapshot_id"]),
+            "content_fingerprint": row["content_fingerprint"],
+            "canonicalization_version": row["canonicalization_version"],
+            "stable_key_version": row["stable_key_version"],
+            "stats": row["stats"], "nodes": row["nodes"], "edges": row["edges"],
+            "findings": row["findings"], "unresolved": row["unresolved"],
+            "node_count": row["node_count"], "edge_count": row["edge_count"],
+            "finding_count": row["finding_count"],
+        },
+        "observation_id": str(row["observation_id"]),
+        "run_id": str(row["run_id"]),
+        "ref": {
+            "project": row["project"], "repository_id": row["repository_id"],
+            "target_ref": row["target_ref"], "governance_scope": row["governance_scope"],
+        },
+        "commit": {
+            "resolved": row["resolved_commit_sha"],
+            "expected_ref_head": row["expected_target_ref_head_sha"],
+        },
+        "source": "central_db",
+        "authoritative": True,
+        "generated_at": row["generated_at"],
+        "verified_at": row["verified_at"],
+        "first_published_at": row["first_published_at"],
+        "freshness": {"status": "fresh", "age_minutes": freshness_minutes},
+        "limitation": [],
+    }
 
 
 @router.post("/v2/exceptions", status_code=201)
