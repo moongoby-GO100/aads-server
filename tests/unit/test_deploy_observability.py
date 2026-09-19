@@ -344,7 +344,7 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "AADS_DEPLOY_STALE_HEARTBEAT_TTL_SECONDS:-90" in script
     assert "AADS_DEPLOY_DEFAULT_ESTIMATE_MS:-600000" in script
     assert "FROM deploy_history" in script
-    assert "AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-1800" in script
+    assert "AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180" in script
     # ee9aeeef(RC9)에서 standby 동기화 상한이 600→300초로 조정됐다.
     # 값이 아니라 "상한이 존재한다"는 계약을 고정한다.
     assert re.search(r"AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-\d+", script)
@@ -412,11 +412,11 @@ def test_deploy_script_keeps_five_minute_monitoring_default():
     assert "if (( MONITOR_MIN_SECONDS < 300 )); then" in script
     assert 'MONITOR_SECONDS="$MONITOR_MIN_SECONDS"' in script
     assert "docker logs \"$ACTIVE_CONTAINER\" --since \"$MONITOR_SINCE\"" in script
-    assert "record_deploy \"success\"" in script
-    # rindex: record_deploy "success" 는 시그널 트랩(전환 후 인터럽트 처리)에도
-    # 나오므로 first occurrence 를 쓰면 순서 계약이 아니라 트랩 위치를 재게 된다.
-    # 검증 대상은 "최종 성공 기록이 5분 모니터링 게이트 뒤에 온다"는 것이다.
-    assert script.index("deploy_phase_start \"p0p1_monitoring\"") < script.rindex("record_deploy \"success\"")
+    assert 'record_deploy "$FINAL_DEPLOY_STATUS"' in script
+    # 최종 성공/부분성공 판정은 5분 모니터링 뒤에만 기록한다.
+    assert script.index("deploy_phase_start \"p0p1_monitoring\"") < script.rindex(
+        'record_deploy "$FINAL_DEPLOY_STATUS"'
+    )
 
 
 def test_dockerfile_keeps_runtime_image_bounded():

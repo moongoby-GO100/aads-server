@@ -145,12 +145,13 @@ def test_deploy_db_exec_preserves_successful_query_output():
 def test_standby_sync_failure_cannot_be_certified_as_partial_success():
     deploy_script = (Path(__file__).parents[2] / "deploy.sh").read_text()
     failure_path = deploy_script.split(
-        'if ! sync_standby_slot_after_drain "$OLD_CONTAINER"', 1
+        'case "${_standby_rc:-0}" in', 1
     )[1].split('HEALTH_URL="http://localhost:${NEW_PORT}', 1)[0]
+    hard_failure = failure_path.split("*)", 1)[1]
 
-    assert 'record_deploy "failed" "$MODE"' in failure_path
-    assert "exit 1" in failure_path
-    assert "success_partial" not in failure_path
+    assert 'record_deploy "failed" "$MODE"' in hard_failure
+    assert "exit 1" in hard_failure
+    assert "success_partial" not in hard_failure
 
 
 def test_standby_drain_timeout_preserves_streams_but_blocks_certification():
@@ -163,5 +164,7 @@ def test_standby_drain_timeout_preserves_streams_but_blocks_certification():
     )[1].split("\n        fi", 1)[0]
 
     assert "release not certified" in timeout_path
-    assert "return 1" in timeout_path
+    # return 2 means cutover succeeded but certification is deferred; the
+    # caller must persist success_partial and must not recreate the busy slot.
+    assert "return 2" in timeout_path
     assert "release stays certified" not in timeout_path

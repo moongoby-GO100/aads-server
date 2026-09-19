@@ -650,7 +650,7 @@ deploy_observe_update() {
             updated_at=NOW(),
             last_heartbeat_at=NOW(),
             phase_completed_at=CASE
-                WHEN '$status_sql' IN ('success', 'completed', 'failed', 'blocked') THEN NOW()
+                WHEN '$status_sql' IN ('success', 'success_partial', 'completed', 'failed', 'blocked') THEN NOW()
                 ELSE phase_completed_at
             END,
             duration_ms=${elapsed_ms},
@@ -668,7 +668,7 @@ deploy_observe_update() {
             updated_at=NOW(),
             started_at=COALESCE(started_at, to_timestamp(${DEPLOY_START_EPOCH})),
             completed_at=CASE
-                WHEN '$status_sql' IN ('success', 'completed', 'failed', 'blocked') THEN NOW()
+                WHEN '$status_sql' IN ('success', 'success_partial', 'completed', 'failed', 'blocked') THEN NOW()
                 ELSE completed_at
             END,
             duration_ms=${elapsed_ms},
@@ -2359,7 +2359,11 @@ case "$MODE" in
         reconcile_inactive_target_recovery_executions "$NEW_CONTAINER"
         TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
         if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]] && [[ "${AADS_DEPLOY_ALLOW_BUSY_TARGET:-false}" != "true" ]]; then
-            local_target_drain_max="${AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-1800}"
+            # A busy inactive slot must not be restarted, because that would cut
+            # the response it still owns. Bound the wait, however: after three
+            # minutes fail closed and let the queued release retry later instead
+            # of occupying the deployment lane for up to thirty minutes.
+            local_target_drain_max="${AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180}"
             local_target_drain_interval="${AADS_DEPLOY_TARGET_DRAIN_POLL_SECONDS:-10}"
             local_target_elapsed=0
             if [[ ! "$local_target_drain_max" =~ ^[0-9]+$ ]]; then
@@ -2789,28 +2793,36 @@ while [[ "$MONITOR_ELAPSED" -lt "$MONITOR_SECONDS" ]]; do
 done
 deploy_phase_end "p0p1_monitoring" "success" "seconds=${MONITOR_ELAPSED}"
 
-echo "[deploy.sh] ✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
-notify "✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
 stop_downtime_monitor
+FINAL_DEPLOY_STATUS="success"
+FINAL_DEPLOY_ERROR=""
+if [[ "${STANDBY_SYNC_DEFERRED:-false}" == "true" ]]; then
+    # Cutover is healthy, but the old slot is still serving a live stream and
+    # therefore cannot yet be replaced by the immutable release image. Keep the
+    # run explicitly uncertified until both digests match.
+    FINAL_DEPLOY_STATUS="success_partial"
+    FINAL_DEPLOY_ERROR="standby sync deferred: active streams"
+    echo "[deploy.sh] ⚠️ 트래픽 전환 성공, 릴리스 인증 보류 — standby same-digest 미충족"
+    notify "⚠️ 트래픽 전환 성공, 릴리스 인증 보류 — standby 동기화 필요"
+else
+    echo "[deploy.sh] ✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
+    notify "✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
+fi
 for _final_try in 1 2 3; do
-    deploy_observe_update "success" "completed" ""
+    deploy_observe_update "$FINAL_DEPLOY_STATUS" "completed" "$FINAL_DEPLOY_ERROR"
     _final_status="$(deploy_db_exec "SELECT status FROM deploy_runs WHERE id=${DEPLOY_RUN_ID}")"
-    if [[ "${_final_status:-}" == "success" ]]; then
+    if [[ "${_final_status:-}" == "$FINAL_DEPLOY_STATUS" ]]; then
         break
     fi
-    echo "[deploy.sh] ⚠️ final success DB update retry ${_final_try}/3 (got status=${_final_status:-empty})"
+    echo "[deploy.sh] ⚠️ final status DB update retry ${_final_try}/3 (expected=${FINAL_DEPLOY_STATUS}; got=${_final_status:-empty})"
     sleep 2
 done
-if [[ "${STANDBY_SYNC_DEFERRED:-false}" == "true" ]]; then
-    # 트래픽은 새 릴리스가 받고 있으나 대기 슬롯이 구버전이다. 폴백이 일어나면
-    # 이번 수정이 빠진 이미지로 돌아가므로, 성공과는 구분해 남긴다.
-    record_deploy "success_partial" "$MODE" "standby sync deferred: active streams"
-else
-    record_deploy "success" "$MODE" ""
-fi
-# RC8: ensure final success persisted — override stale_auto if deploy_db_exec failed mid-run
+record_deploy "$FINAL_DEPLOY_STATUS" "$MODE" "$FINAL_DEPLOY_ERROR"
+# RC8: persist the chosen terminal state without upgrading an uncertified
+# success_partial run to success.
 for _final_retry in 1 2 3; do
-    deploy_db_exec "UPDATE deploy_runs SET status='success', phase='completed', updated_at=NOW(), last_heartbeat_at=NOW(), error_summary=NULL WHERE id=${DEPLOY_RUN_ID} AND status != 'success';" >/dev/null 2>&1 && break
+    _final_error_sql="$(sql_escape "$FINAL_DEPLOY_ERROR")"
+    deploy_db_exec "UPDATE deploy_runs SET status='${FINAL_DEPLOY_STATUS}', phase='completed', phase_completed_at=NOW(), updated_at=NOW(), last_heartbeat_at=NOW(), error_summary=NULLIF('${_final_error_sql}', '') WHERE id=${DEPLOY_RUN_ID} AND status != '${FINAL_DEPLOY_STATUS}';" >/dev/null 2>&1 && break
     sleep 2
 done
 
@@ -2823,7 +2835,9 @@ done
 # nginx 전환 락은 이미 해제된 뒤라 락 범위가 바뀌지 않는다.
 # 실패해도 배포는 이미 인증됐으므로 비치명적으로 넘어간다: 증거가 없으면 목표가
 # 전진하지 않을 뿐이고, 잘못 전진하지는 않는다(fail closed).
-if [[ -x "${COMPOSE_DIR}/scripts/record-release-provenance.sh" ]] && [[ -n "${DEPLOY_RUN_ID:-}" ]]; then
+if [[ "$FINAL_DEPLOY_STATUS" == "success" ]] \
+    && [[ -x "${COMPOSE_DIR}/scripts/record-release-provenance.sh" ]] \
+    && [[ -n "${DEPLOY_RUN_ID:-}" ]]; then
     "${COMPOSE_DIR}/scripts/record-release-provenance.sh" \
         --repo "$COMPOSE_DIR" \
         --deploy-run-id "$DEPLOY_RUN_ID" \
