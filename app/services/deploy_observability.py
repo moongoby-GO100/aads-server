@@ -18,7 +18,7 @@ logger = structlog.get_logger()
 ACTIVE_STATUSES = ("running", "verifying", "syncing_standby")
 QUEUED_STATUSES = ("queued", "awaiting_approval")
 TERMINAL_PIPELINE_STATUSES = ("done", "error", "cancelled", "rejected_done")
-PROJECTS = ("AADS", "FOOD", "GO100", "KIS", "SF", "NTV2", "NAS")
+PROJECTS = ("AADS", "FOOD", "GO100", "KIS", "SF", "NTV2", "NAS", "ACCT")
 DEFAULT_COMPONENT = "api"
 DEFAULT_TARGET_ENV = "production"
 DEPLOY_STALL_SECONDS = max(
@@ -53,6 +53,10 @@ PROJECT_REPO_PATHS = {
     "NTV2": (
         os.getenv("NTV2_REPO_PATH", ""),
         "/var/www/newtalk",
+    ),
+    "ACCT": (
+        os.getenv("ACCT_REPO_PATH", ""),
+        "/srv/biseo/회계비서/회계비서",
     ),
 }
 
