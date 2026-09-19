@@ -45,10 +45,59 @@ _QWEN_CACHE_TTL = int(os.getenv("QWEN_QUERY_CACHE_TTL", "300"))
 _QWEN_CACHE_MAX = int(os.getenv("QWEN_QUERY_CACHE_MAX", "500"))
 _QWEN_TOP_N = int(os.getenv("QWEN_SEARCH_TOP_N", "30"))
 _QWEN_SHADOW_TIMEOUT = float(os.getenv("QWEN_SHADOW_TIMEOUT_SECONDS", "10"))
+_QWEN_SHADOW_MAX_IN_FLIGHT = max(1, int(os.getenv("QWEN_SHADOW_MAX_IN_FLIGHT", "2")))
+_QWEN_SHADOW_QUEUE_MAX = max(0, int(os.getenv("QWEN_SHADOW_QUEUE_MAX", "16")))
 _QWEN_URL = os.getenv("QWEN_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 _query_cache: "OrderedDict[str, tuple[float, List[float]]]" = OrderedDict()
 _query_cache_lock = asyncio.Lock()
 _shadow_tasks: set[asyncio.Task[Any]] = set()
+_shadow_semaphore = asyncio.BoundedSemaphore(_QWEN_SHADOW_MAX_IN_FLIGHT)
+_shadow_reserved = 0
+_shadow_metrics = {"created": 0, "completed": 0, "dropped": 0, "timeout": 0, "error": 0}
+
+
+def shadow_metrics() -> Dict[str, int]:
+    """Return shadow-only scheduler counters for health/structured-log consumers."""
+    return dict(_shadow_metrics)
+
+
+def _schedule_shadow(observe: Any) -> bool:
+    """Schedule a bounded, best-effort shadow observation without delaying the API.
+
+    Reservations include active work and queued work.  This matters because merely
+    retaining tasks in a set still permits one task (and eventually one HTTP
+    connection) per request while Ollama is slow or unavailable.
+    """
+    global _shadow_reserved
+    capacity = _QWEN_SHADOW_MAX_IN_FLIGHT + _QWEN_SHADOW_QUEUE_MAX
+    if _shadow_reserved >= capacity:
+        _shadow_metrics["dropped"] += 1
+        logger.info("doc_qwen_shadow_dropped", reason="saturated", **shadow_metrics())
+        return False
+    _shadow_reserved += 1
+    _shadow_metrics["created"] += 1
+
+    async def run_observation() -> None:
+        global _shadow_reserved
+        try:
+            async with _shadow_semaphore:
+                await observe()
+            _shadow_metrics["completed"] += 1
+            logger.info("doc_qwen_shadow_completed", **shadow_metrics())
+        except asyncio.TimeoutError:
+            _shadow_metrics["timeout"] += 1
+            logger.warning("doc_qwen_shadow_timeout", **shadow_metrics())
+        except Exception as exc:  # Shadow failures must never affect the request.
+            _shadow_metrics["error"] += 1
+            logger.warning("doc_qwen_shadow_failed", error=str(exc), **shadow_metrics())
+        finally:
+            _shadow_reserved -= 1
+
+    task = asyncio.create_task(run_observation(), name="doc-qwen-shadow")
+    _shadow_tasks.add(task)
+    task.add_done_callback(_shadow_tasks.discard)
+    logger.info("doc_qwen_shadow_created", **shadow_metrics())
+    return True
 
 
 def _require_loopback(url: str) -> None:
@@ -292,20 +341,15 @@ async def search_docs(
         return await search_docs_qwen3(vector, top_k=limit, project=project)
 
     async def observe_shadow() -> None:
-        try:
-            rows = await asyncio.wait_for(qwen(), timeout=_QWEN_SHADOW_TIMEOUT)
-            logger.info("doc_qwen_shadow", qwen3=len(rows))
-        except Exception as exc:
-            logger.warning("doc_qwen_shadow_failed", error=str(exc))
+        rows = await asyncio.wait_for(qwen(), timeout=_QWEN_SHADOW_TIMEOUT)
+        logger.info("doc_qwen_shadow", qwen3=len(rows))
 
     if mode == "legacy":
         return (await legacy())[:limit]
     if mode == "shadow":
         rows = await legacy()
         if query_text:
-            task = asyncio.create_task(observe_shadow(), name="doc-qwen-shadow")
-            _shadow_tasks.add(task)
-            task.add_done_callback(_shadow_tasks.discard)
+            _schedule_shadow(observe_shadow)
         return rows[:limit]
     if mode == "hybrid":
         legacy_result, qwen_result = await asyncio.gather(

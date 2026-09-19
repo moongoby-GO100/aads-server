@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import inspect
 
 import pytest
@@ -243,6 +244,18 @@ def test_migration_is_isolated_and_idempotent():
     assert "UPDATE doc_chunks SET embedding" not in sql
     assert "qwen3-doc-v2-payload4000" in sql
     assert "digest(left(" in sql and "4000" in sql
+
+
+def test_original_migration_checksum_is_immutable_and_contract_is_additive():
+    from pathlib import Path
+
+    root = Path(__file__).parents[2]
+    original = root / "migrations" / "20260919_qwen3_doc_embeddings.sql"
+    contract = root / "migrations" / "20260919_qwen3_doc_embeddings_contract.sql"
+    rollback = root / "migrations" / "rollback" / "20260919_qwen3_doc_embeddings_contract.sql"
+    assert hashlib.sha256(original.read_bytes()).hexdigest() == "2b506b402daa181f5fd3207153d87f114d17315de4f6aa978f47a9d164a0b41c"
+    assert "ALTER TABLE doc_chunk_embeddings_qwen3" in contract.read_text()
+    assert "DROP CONSTRAINT" in rollback.read_text()
 
 
 def test_worker_claim_and_sync_are_idempotent_and_lease_safe():
