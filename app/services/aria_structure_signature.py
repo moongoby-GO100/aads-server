@@ -57,7 +57,9 @@ def _name_hash(value: Any) -> str | None:
     return _digest(name) if name else None
 
 
-def _stable_states(node: Mapping[str, Any]) -> dict[str, bool | str]:
+def _stable_states(
+    node: Mapping[str, Any], *, template: Mapping[str, Any] | None = None,
+) -> dict[str, bool | str]:
     states = node.get("states") if isinstance(node.get("states"), Mapping) else node
     result: dict[str, bool | str] = {}
     for key in _STATE_KEYS:
@@ -68,10 +70,77 @@ def _stable_states(node: Mapping[str, Any]) -> dict[str, bool | str]:
             and value in {"page", "step", "location", "date", "time"}
         ):
             result[key] = value
-    return result
+    if template is None:
+        return result
+    configured = _configured_state_keys(template)
+    return {key: value for key, value in result.items() if key in configured}
 
 
-def _relation_targets(value: Any) -> list[dict[str, str]]:
+def _observed_states(node: Mapping[str, Any]) -> dict[str, bool | str]:
+    return _stable_states(node)
+
+
+def _template_name_hashes(template: Mapping[str, Any]) -> frozenset[str]:
+    """Return hashes for names the recipe explicitly approved for persistence."""
+    approved: set[str] = set()
+    names: list[Any] = []
+    required = template.get("required_anchors")
+    if isinstance(required, Sequence) and not isinstance(required, (str, bytes)):
+        names.extend(anchor for anchor in required if isinstance(anchor, Mapping))
+    stable_names = template.get("stable_names")
+    if isinstance(stable_names, Sequence) and not isinstance(stable_names, (str, bytes)):
+        names.extend(stable_names)
+    for item in names:
+        value = (
+            item.get("name") or item.get("accessible_name") or item.get("label")
+            if isinstance(item, Mapping) else item
+        )
+        name_hash = _name_hash(value)
+        if name_hash:
+            approved.add(name_hash)
+    return frozenset(approved)
+
+
+def _state_keys_from(value: Any) -> set[str]:
+    if isinstance(value, Mapping):
+        candidates = value.keys()
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        candidates = value
+    else:
+        candidates = ()
+    return {str(key).lower() for key in candidates if str(key).lower() in _STATE_KEYS}
+
+
+def _required_state_rules(template: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Collect state assertions, including state-bearing required anchors."""
+    rules: list[Mapping[str, Any]] = []
+    anchors = template.get("required_anchors")
+    if isinstance(anchors, Sequence) and not isinstance(anchors, (str, bytes)):
+        rules.extend(
+            anchor for anchor in anchors
+            if isinstance(anchor, Mapping) and isinstance(anchor.get("states"), Mapping)
+        )
+    required = template.get("required_states")
+    if isinstance(required, Mapping):
+        if any(key in required for key in ("role", "name", "accessible_name", "label", "states")):
+            rules.append(required)
+        else:
+            rules.append({"states": required})
+    elif isinstance(required, Sequence) and not isinstance(required, (str, bytes)):
+        rules.extend(rule for rule in required if isinstance(rule, Mapping))
+    return rules
+
+
+def _configured_state_keys(template: Mapping[str, Any]) -> frozenset[str]:
+    keys = _state_keys_from(template.get("stable_states"))
+    for rule in _required_state_rules(template):
+        keys.update(_state_keys_from(rule.get("states")))
+    return frozenset(keys)
+
+
+def _relation_targets(
+    value: Any, *, approved_name_hashes: frozenset[str],
+) -> list[dict[str, str]]:
     """Keep only semantic targets; raw relationship IDs are deliberately dropped."""
     values = value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else [value]
     result: list[dict[str, str]] = []
@@ -82,13 +151,15 @@ def _relation_targets(value: Any) -> list[dict[str, str]]:
         name = _name_hash(target.get("name") or target.get("accessible_name") or target.get("label"))
         if role:
             item = {"role": role}
-            if name:
+            if name in approved_name_hashes:
                 item["name_hash"] = name
             result.append(item)
     return sorted(result, key=_canonical)
 
 
-def _normalize_node(node: Mapping[str, Any]) -> dict[str, Any] | None:
+def _normalize_node(
+    node: Mapping[str, Any], *, approved_name_hashes: frozenset[str], state_keys: frozenset[str],
+) -> dict[str, Any] | None:
     role = str(node.get("role") or "").strip().lower()
     if not role:
         return None
@@ -98,20 +169,18 @@ def _normalize_node(node: Mapping[str, Any]) -> dict[str, Any] | None:
     # A supplied but non-stable name denotes exactly the volatile/personalized
     # content this signature must exclude; retaining its role would still make
     # price or ad insertion look like a structural change.
-    if str(raw_name or "").strip() and not name_hash:
-        return None
-    if name_hash:
+    if name_hash in approved_name_hashes:
         item["name_hash"] = name_hash
     landmark = str(node.get("landmark") or node.get("parent_role") or "").strip().lower()
     if landmark:
         item["landmark"] = landmark
-    states = _stable_states(node)
+    states = _stable_states(node, template={"stable_states": list(state_keys)})
     if states:
         item["states"] = states
     relations = node.get("relationships") if isinstance(node.get("relationships"), Mapping) else {}
     normalized_relations: dict[str, list[dict[str, str]]] = {}
     for key in _RELATION_KEYS:
-        targets = _relation_targets(relations.get(key))
+        targets = _relation_targets(relations.get(key), approved_name_hashes=approved_name_hashes)
         if targets:
             normalized_relations[key] = targets
     if normalized_relations:
@@ -128,9 +197,17 @@ def _normalize_node(node: Mapping[str, Any]) -> dict[str, Any] | None:
     return item
 
 
-def build_partial_signature(nodes: Sequence[Mapping[str, Any]], *, area_key: str) -> dict[str, Any]:
+def build_partial_signature(
+    nodes: Sequence[Mapping[str, Any]], *, area_key: str, template: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Normalize an ARIA interaction subtree without retaining sibling order/text."""
-    normalized = [item for node in nodes if isinstance(node, Mapping) if (item := _normalize_node(node))]
+    template = template or {}
+    approved_name_hashes = _template_name_hashes(template)
+    state_keys = _configured_state_keys(template)
+    normalized = [
+        item for node in nodes if isinstance(node, Mapping)
+        if (item := _normalize_node(node, approved_name_hashes=approved_name_hashes, state_keys=state_keys))
+    ]
     normalized.sort(key=_canonical)  # advertisements and unstable sibling ordering do not affect identity.
     structure = {"area_key": str(area_key), "nodes": normalized}
     return {
@@ -151,6 +228,27 @@ def _required_anchor_present(anchor: Mapping[str, Any], nodes: Sequence[Mapping[
     return any(node.get("role") == role and (not name_hash or node.get("name_hash") == name_hash) for node in nodes)
 
 
+def _required_state_present(rule: Mapping[str, Any], nodes: Sequence[Mapping[str, Any]]) -> bool:
+    role = str(rule.get("role") or "").strip().lower()
+    name_hash = _name_hash(rule.get("name") or rule.get("accessible_name") or rule.get("label"))
+    expected = rule.get("states") if isinstance(rule.get("states"), Mapping) else {}
+    expected = {key: value for key, value in expected.items() if str(key).lower() in _STATE_KEYS}
+    if not expected:
+        return True
+    for node in nodes:
+        if not isinstance(node, Mapping):
+            continue
+        if role and str(node.get("role") or "").strip().lower() != role:
+            continue
+        raw_name = node.get("accessible_name") or node.get("name") or node.get("label")
+        if name_hash and _name_hash(raw_name) != name_hash:
+            continue
+        observed = _observed_states(node)
+        if all(observed.get(str(key).lower()) == value for key, value in expected.items()):
+            return True
+    return False
+
+
 def assess_revisit(
     *, previous: Mapping[str, Any] | None, current_nodes: Sequence[Mapping[str, Any]] | None,
     area_key: str, template: Mapping[str, Any] | None = None,
@@ -160,7 +258,7 @@ def assess_revisit(
     if not current_nodes:
         return {"decision": "rediscover", "reason": "aria_missing_dom_fallback_required", "similarity": 0.0,
                 "human_gateway_required": False, "signature": None}
-    signature = build_partial_signature(current_nodes, area_key=area_key)
+    signature = build_partial_signature(current_nodes, area_key=area_key, template=template)
     current = signature["structure"]["nodes"]
     tokens = [_node_token(node) for node in current]
     if not current or len(tokens) != len(set(tokens)):
@@ -170,6 +268,10 @@ def assess_revisit(
     missing = [anchor for anchor in required if isinstance(anchor, Mapping) and not _required_anchor_present(anchor, current)]
     if missing:
         return {"decision": "human_gateway", "reason": "critical_required_anchor_missing", "similarity": 0.0,
+                "human_gateway_required": True, "signature": signature}
+    required_state_rules = _required_state_rules(template)
+    if any(not _required_state_present(rule, current_nodes) for rule in required_state_rules):
+        return {"decision": "human_gateway", "reason": "critical_required_state_changed", "similarity": 0.0,
                 "human_gateway_required": True, "signature": signature}
     if not previous:
         return {"decision": "rediscover", "reason": "no_prior_signature", "similarity": 0.0,

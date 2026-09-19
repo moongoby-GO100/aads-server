@@ -15,6 +15,7 @@ assess_revisit = aria_signature.assess_revisit
 build_partial_signature = aria_signature.build_partial_signature
 normalize_accessible_name = aria_signature.normalize_accessible_name
 record_revisit_signature = aria_signature.record_revisit_signature
+stable_states = aria_signature._stable_states
 
 
 def _nodes():
@@ -33,7 +34,7 @@ def test_stable_aria_signature_excludes_dynamic_id_price_ad_and_personalized_tex
     ], area_key="catalog-search")
     rendered = str(signature["structure"])
     assert "random-12345" not in rendered and "12.99" not in rendered and "alice" not in rendered.lower()
-    assert len(signature["structure"]["nodes"]) == 2
+    assert len(signature["structure"]["nodes"]) == 5
     assert normalize_accessible_name(" Product   Search ") == "product search"
 
 
@@ -42,6 +43,65 @@ def test_allowed_dynamic_changes_reuse_and_unstable_sibling_order_is_ignored():
     result = assess_revisit(previous=prior, current_nodes=list(reversed(_nodes())), area_key="catalog-search")
     assert result["decision"] == "reuse"
     assert result["similarity"] == 1.0
+
+
+def test_stable_states_compatibility_wrapper_preserves_legacy_call_and_scopes_templates():
+    node = {"states": {"disabled": True, "checked": True, "unknown": True}}
+    assert stable_states(node) == {"disabled": True, "checked": True}
+    assert stable_states(node, template={"stable_states": ["disabled"]}) == {"disabled": True}
+
+
+def test_default_signature_excludes_runtime_states_and_unapproved_accessible_names():
+    first = build_partial_signature(_nodes(), area_key="catalog-search")
+    changed = build_partial_signature([
+        {
+            "role": "searchbox", "accessible_name": "홍길동의 상품 검색",
+            "states": {"required": False, "checked": True},
+            "attributes": {"data-testid": "catalog-search"},
+        },
+        {"role": "button", "accessible_name": "계정별 주문 2026", "states": {"disabled": True}},
+    ], area_key="catalog-search")
+    assert first["signature_hash"] == changed["signature_hash"]
+    assert "name_hash" not in str(changed["structure"])
+    assert "states" not in str(changed["structure"])
+
+
+def test_template_approved_names_and_states_are_the_only_signature_inputs():
+    template = {
+        "stable_names": ["Product search"],
+        "stable_states": ["disabled"],
+        "required_anchors": [{"role": "searchbox", "name": "Product search"}],
+    }
+    signature = build_partial_signature(_nodes(), area_key="catalog-search", template=template)
+    rendered = str(signature["structure"])
+    assert "name_hash" in rendered and "states" in rendered
+    assert "Search" not in rendered
+
+
+def test_required_state_change_blocks_but_unspecified_state_change_is_allowed():
+    template = {
+        "required_anchors": [{"role": "button", "name": "Search", "states": {"disabled": False}}],
+    }
+    prior = build_partial_signature(_nodes(), area_key="catalog-search", template=template)
+    allowed = assess_revisit(
+        previous=prior,
+        current_nodes=[
+            {"role": "searchbox", "accessible_name": "Product search", "states": {"checked": True},
+             "attributes": {"data-testid": "catalog-search"}},
+            {"role": "button", "accessible_name": "Search", "states": {"disabled": False, "pressed": True}},
+        ], area_key="catalog-search", template=template,
+    )
+    assert allowed["decision"] == "reuse"
+    blocked = assess_revisit(
+        previous=prior,
+        current_nodes=[
+            {"role": "searchbox", "accessible_name": "Product search",
+             "attributes": {"data-testid": "catalog-search"}},
+            {"role": "button", "accessible_name": "Search", "states": {"disabled": True}},
+        ], area_key="catalog-search", template=template,
+    )
+    assert blocked["decision"] == "human_gateway"
+    assert blocked["reason"] == "critical_required_state_changed"
 
 
 def test_missing_required_anchor_goes_to_human_gateway_and_ambiguous_goes_to_rediscovery():
