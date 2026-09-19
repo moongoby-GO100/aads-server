@@ -44,7 +44,9 @@ def test_chat_interrupt_and_bluegreen_drain_contracts_remain_enabled():
     assert "deferred_interrupt_apply" in chat_source
     assert 'AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "5"' in chat_source
     assert 'deploy_phase_start "active_slot_drain" "running"' in deploy_source
-    assert "while [[ $DRAIN_ELAPSED -lt 60 ]]" in deploy_source
+    assert 'AADS_DEPLOY_PRE_CUTOVER_DRAIN_MAX_WAIT:-0' in deploy_source
+    assert "pre-cutover wait disabled" in deploy_source
+    assert 'while [[ $DRAIN_ELAPSED -lt "$PRE_CUTOVER_DRAIN_MAX_WAIT" ]]' in deploy_source
     assert "sync_standby_slot_after_drain" in deploy_source
 
 
