@@ -59,6 +59,33 @@ def test_worker_has_atomic_claim_lease_recovery_and_throttle():
         worker.require_safe_database_url("postgresql://user@db.example/aads")
 
 
+def test_worker_reuses_protected_runner_pg_environment_without_copying_secret():
+    from scripts import qwen3_embedding_worker as worker
+
+    env = {
+        "QWEN_DATABASE_URL": "postgresql://SET_ME@127.0.0.1:15433/aads",
+        "PGHOST": "127.0.0.1",
+        "PGPORT": "15433",
+        "PGUSER": "worker@example",
+        "PGDATABASE": "aads",
+        "PGPASSWORD": "p@ss:/word",
+    }
+    resolved = worker.resolve_database_url(env)
+    parsed = worker.urlparse(resolved)
+    assert parsed.hostname == "127.0.0.1"
+    assert parsed.port == 15433
+    assert parsed.username == "worker%40example"
+    assert parsed.password == "p%40ss%3A%2Fword"
+    worker.require_safe_database_url(resolved)
+
+
+def test_worker_prefers_non_placeholder_explicit_database_url():
+    from scripts import qwen3_embedding_worker as worker
+
+    explicit = "postgresql://worker:secret@127.0.0.1:15433/aads"
+    assert worker.resolve_database_url({"QWEN_DATABASE_URL": explicit}) == explicit
+
+
 def test_worker_null_metadata_hash_contract():
     from scripts import qwen3_embedding_worker as worker
 

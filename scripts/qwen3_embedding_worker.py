@@ -10,7 +10,7 @@ import os
 import socket
 import time
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -21,12 +21,34 @@ QWEN_DOCUMENT_INSTRUCTION = "Represent this English document for retrieval: "
 QWEN_DOCUMENT_PAYLOAD_MAX_CHARS = 4000
 
 OLLAMA_URL = os.getenv("QWEN_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
-DATABASE_URL = os.getenv("QWEN_DATABASE_URL", "")
 WORKER_SITE = os.getenv("QWEN_WORKER_SITE", "").strip().lower()
 LEASE_SECONDS = int(os.getenv("QWEN_LEASE_SECONDS", "90"))
 HEARTBEAT_SECONDS = 15
 MAX_CONCURRENCY = int(os.getenv("QWEN_MAX_CONCURRENCY", "3"))
 ALLOWED_SITES = {"cafe24_114", "jinah244"}
+
+
+def resolve_database_url(environ: dict[str, str] | None = None) -> str:
+    """Use an explicit worker DSN or the existing runner PG tunnel settings.
+
+    Remote workers already receive PG* credentials through the runner's protected
+    environment file. Reusing those values avoids copying a second database secret.
+    The shipped SET_ME example is deliberately treated as unset.
+    """
+    env = os.environ if environ is None else environ
+    explicit = env.get("QWEN_DATABASE_URL", "").strip()
+    if explicit and "SET_ME" not in explicit.upper():
+        return explicit
+
+    required = ("PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD")
+    if not all(env.get(key, "").strip() for key in required):
+        return ""
+    user = quote(env["PGUSER"], safe="")
+    password = quote(env["PGPASSWORD"], safe="")
+    host = env["PGHOST"].strip()
+    port = env["PGPORT"].strip()
+    database = quote(env["PGDATABASE"], safe="")
+    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
 
 
 def log_event(event: str, **fields: Any) -> None:
@@ -85,11 +107,12 @@ def payload_sha256(payload: str) -> str:
 
 async def create_pool() -> Any:
     """Create a tiny standalone pool so remote hosts need no AADS checkout."""
-    require_safe_database_url(DATABASE_URL)
+    database_url = resolve_database_url()
+    require_safe_database_url(database_url)
     import asyncpg
 
     return await asyncpg.create_pool(
-        dsn=DATABASE_URL,
+        dsn=database_url,
         min_size=1,
         max_size=max(2, MAX_CONCURRENCY + 1),
         timeout=10,

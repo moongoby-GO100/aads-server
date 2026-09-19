@@ -8,6 +8,8 @@ ConditionHost=!contabo14
 Type=simple
 User=root
 WorkingDirectory=/opt/aads-qwen3-worker/current
+# Reuse the protected PG* settings that already point at the loopback SSH tunnel.
+EnvironmentFile=-/root/.config/aads-runner.env
 EnvironmentFile=-/etc/aads/qwen3-embedding-worker.env
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/aads-qwen3-worker/current/.venv/bin/python /opt/aads-qwen3-worker/current/qwen3_embedding_worker.py
