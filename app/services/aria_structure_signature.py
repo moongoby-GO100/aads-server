@@ -276,15 +276,15 @@ def assess_revisit(
                 "human_gateway_required": False, "signature": None}
     signature = build_partial_signature(current_nodes, area_key=area_key, template=template)
     current = signature["structure"]["nodes"]
-    tokens = [_node_token(node) for node in current]
-    if not current or len(tokens) != len(set(tokens)):
-        return {"decision": "rediscover", "reason": "ambiguous_aria_structure", "similarity": 0.0,
-                "human_gateway_required": False, "signature": signature}
     required = template.get("required_anchors") if isinstance(template.get("required_anchors"), Sequence) else []
     missing = [anchor for anchor in required if isinstance(anchor, Mapping) and not _required_anchor_present(anchor, current)]
     if missing:
         return {"decision": "human_gateway", "reason": "critical_required_anchor_missing", "similarity": 0.0,
                 "human_gateway_required": True, "signature": signature}
+    tokens = [_node_token(node) for node in current]
+    if not current or len(tokens) != len(set(tokens)):
+        return {"decision": "rediscover", "reason": "ambiguous_aria_structure", "similarity": 0.0,
+                "human_gateway_required": False, "signature": signature}
     required_state_rules = _required_state_rules(template)
     if any(not _required_state_present(rule, current_nodes) for rule in required_state_rules):
         return {"decision": "human_gateway", "reason": "critical_required_state_changed", "similarity": 0.0,
