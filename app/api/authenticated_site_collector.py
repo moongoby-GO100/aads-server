@@ -190,7 +190,11 @@ async def api_account_login_status(
             tenant_id=_tenant_id(context), site_profile_id=site_profile_id, account_label=account_label,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        detail = str(exc)
+        status_code = 404 if detail == "vault_reference_not_found" else 409
+        if detail == "collector_account_login_unavailable":
+            status_code = 503
+        raise HTTPException(status_code=status_code, detail=detail) from exc
     if not account:
         raise HTTPException(status_code=404, detail="account_login_not_found")
     return {"status": "ok", "account": account}

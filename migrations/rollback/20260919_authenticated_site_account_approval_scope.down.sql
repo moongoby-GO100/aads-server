@@ -5,5 +5,7 @@
 
 DROP INDEX IF EXISTS idx_authenticated_site_accounts_tenant_approval;
 ALTER TABLE authenticated_site_accounts
+    DROP CONSTRAINT IF EXISTS fk_authenticated_site_accounts_tenant_approval,
     DROP COLUMN IF EXISTS credential_scope,
     DROP COLUMN IF EXISTS credential_approval_request_id;
+DROP INDEX IF EXISTS uq_agent_permission_requests_tenant_id_id;

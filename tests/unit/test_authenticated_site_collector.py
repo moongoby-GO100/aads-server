@@ -1,5 +1,7 @@
 import importlib
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -586,3 +588,128 @@ def test_account_approval_migration_is_additive_and_keeps_only_vault_reference()
     assert "Opaque Agent Vault credential id only" in sql
     assert "DROP TABLE" not in sql.upper()
     assert "TRUNCATE" not in sql.upper()
+
+
+class _AsyncContext:
+    def __init__(self, value=None):
+        self.value = value
+
+    async def __aenter__(self):
+        return self.value
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+class _CollectorPool:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def acquire(self):
+        return _AsyncContext(self.conn)
+
+
+async def test_first_login_rejects_client_work_key_outside_vault_scope(collector_modules, monkeypatch):
+    collector, _queue_module = collector_modules
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+    profile_id = "00000000-0000-0000-0000-000000000010"
+    vault_id = UUID("00000000-0000-0000-0000-000000000099")
+
+    class Conn:
+        def __init__(self):
+            self.calls = []
+
+        def transaction(self):
+            return _AsyncContext()
+
+        async def fetchrow(self, query, *args):
+            self.calls.append((query, args))
+            if "FROM authenticated_site_profiles" in query:
+                return {
+                    "id": profile_id,
+                    "site_key": "meta.business",
+                    "base_origin": "https://business.facebook.com",
+                }
+            if "FROM agent_vault_credentials" in query:
+                assert args == (vault_id, UUID(tenant_id))
+                assert "tenant_id=$2" in query and "is_active=TRUE" in query
+                return {
+                    "id": vault_id,
+                    "work_key": "approved-vault-work",
+                    "origin": "https://business.facebook.com",
+                }
+            raise AssertionError(f"unexpected SQL after scope mismatch: {query}")
+
+    conn = Conn()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://enabled-for-test")
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _CollectorPool(conn))
+
+    with pytest.raises(ValueError, match="vault_reference_work_key_mismatch"):
+        await collector.request_first_login(
+            tenant_id=tenant_id,
+            user_id="ceo",
+            site_profile_id=profile_id,
+            account_label="primary",
+            vault_reference=str(vault_id),
+            work_key="client-selected-work",
+        )
+
+    assert len(conn.calls) == 2
+
+
+async def test_recovery_refuses_connected_account_before_new_approval(collector_modules, monkeypatch):
+    collector, _queue_module = collector_modules
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+    profile_id = "00000000-0000-0000-0000-000000000010"
+
+    class Conn:
+        def __init__(self):
+            self.fetches = 0
+
+        def transaction(self):
+            return _AsyncContext()
+
+        async def fetchrow(self, query, *args):
+            self.fetches += 1
+            assert "FOR UPDATE OF a" in query
+            assert args == (UUID(tenant_id), profile_id, "primary")
+            return {
+                "id": UUID("00000000-0000-0000-0000-000000000020"),
+                "tenant_id": UUID(tenant_id),
+                "site_profile_id": UUID(profile_id),
+                "site_key": "meta.business",
+                "base_origin": "https://business.facebook.com",
+                "account_label": "primary",
+                "login_status": "connected",
+                "approval_decision": "rejected",
+                "approval_expires_at": datetime.now(timezone.utc),
+                "vault_reference": "00000000-0000-0000-0000-000000000099",
+                "credential_scope": {},
+            }
+
+    conn = Conn()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://enabled-for-test")
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _CollectorPool(conn))
+
+    with pytest.raises(ValueError, match="account_recovery_not_required"):
+        await collector.recover_account_login(
+            tenant_id=tenant_id,
+            user_id="ceo",
+            site_profile_id=profile_id,
+            account_label="primary",
+        )
+
+    assert conn.fetches == 1
+
+
+def test_account_approval_migration_enforces_same_tenant_foreign_key():
+    sql = (
+        Path(__file__).parents[2]
+        / "migrations"
+        / "20260919_authenticated_site_account_approval_scope.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "UNIQUE INDEX IF NOT EXISTS uq_agent_permission_requests_tenant_id_id" in sql
+    assert "FOREIGN KEY (tenant_id, credential_approval_request_id)" in sql
+    assert "REFERENCES agent_permission_requests(tenant_id, id)" in sql
+    assert "ON DELETE SET NULL (credential_approval_request_id)" in sql

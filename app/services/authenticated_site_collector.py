@@ -815,7 +815,11 @@ async def request_first_login(
                 )
                 if not vault:
                     raise ValueError("vault_reference_not_found")
-                selected_work_key = normalize_work_key(work_key or str(vault["work_key"]))
+                vault_work_key = normalize_work_key(str(vault["work_key"]))
+                requested_work_key = normalize_work_key(work_key) if str(work_key or "").strip() else vault_work_key
+                if requested_work_key != vault_work_key:
+                    raise ValueError("vault_reference_work_key_mismatch")
+                selected_work_key = vault_work_key
                 if normalize_origin(str(vault["origin"])) != normalize_origin(str(profile["base_origin"])):
                     raise ValueError("vault_reference_origin_mismatch")
                 scope = _account_approval_scope(
@@ -825,40 +829,53 @@ async def request_first_login(
                     conn, tenant=tenant, site_profile_id=str(site_profile_id), account_label=label,
                 )
                 if existing:
-                    if str(existing["vault_reference"] or "") != reference:
+                    existing_reference = str(existing["vault_reference"] or "")
+                    if existing_reference not in {"", reference}:
                         # A prior approval must never silently expand to a new
                         # credential reference; use an explicit recovery flow.
                         raise ValueError("account_vault_reference_change_requires_recovery")
-                    return {
-                        "status": "approval_requested",
-                        "account": _account_login_out(existing),
-                        "idempotent": True,
-                    }
-                account = await conn.fetchrow(
-                    """
-                    INSERT INTO authenticated_site_accounts (
-                        tenant_id, site_profile_id, account_label, vault_reference,
-                        login_status, metadata, credential_scope, updated_at
-                    ) VALUES ($1,$2::uuid,$3,$4,'action_required','{}'::jsonb,$5::jsonb,NOW())
-                    ON CONFLICT (tenant_id, site_profile_id, account_label) DO UPDATE
-                       SET updated_at=NOW()
-                    RETURNING *
-                    """,
-                    tenant, str(site_profile_id), label, reference, json.dumps(scope, ensure_ascii=False),
-                )
+                    if existing["credential_approval_request_id"] is not None:
+                        return {
+                            "status": "approval_requested",
+                            "account": _account_login_out(existing),
+                            "idempotent": True,
+                        }
+                    account = await conn.fetchrow(
+                        """
+                        UPDATE authenticated_site_accounts
+                           SET vault_reference=$4, login_status='action_required',
+                               credential_scope=$5::jsonb, updated_at=NOW()
+                         WHERE tenant_id=$1 AND site_profile_id=$2::uuid AND account_label=$3
+                        RETURNING *
+                        """,
+                        tenant, str(site_profile_id), label, reference,
+                        json.dumps(scope, ensure_ascii=False),
+                    )
+                else:
+                    account = await conn.fetchrow(
+                        """
+                        INSERT INTO authenticated_site_accounts (
+                            tenant_id, site_profile_id, account_label, vault_reference,
+                            login_status, metadata, credential_scope, updated_at
+                        ) VALUES ($1,$2::uuid,$3,$4,'action_required','{}'::jsonb,$5::jsonb,NOW())
+                        RETURNING *
+                        """,
+                        tenant, str(site_profile_id), label, reference, json.dumps(scope, ensure_ascii=False),
+                    )
                 approval_id = account["credential_approval_request_id"]
                 if approval_id is None:
                     approval = await conn.fetchrow(
                         """
                         INSERT INTO agent_permission_requests (
                             tenant_id, work_key, origin, action_type, action_summary,
-                            risk_level, reason, requested_by
-                        ) VALUES ($1,$2,$3,$4,$5,'medium',$6,$7)
+                            risk_level, reason, requested_by, approval_scope
+                        ) VALUES ($1,$2,$3,$4,$5,'medium',$6,$7,$8::jsonb)
                         RETURNING id
                         """,
                         tenant, selected_work_key, scope["origin"], ACCOUNT_CREDENTIAL_APPROVAL_ACTION,
                         f"A-scope account credential approval for {scope['site_key']}/{label}",
                         "Vault reference only; recipe registration requires separate B-scope approval.", user_id,
+                        json.dumps(scope, ensure_ascii=False),
                     )
                     approval_id = approval["id"]
                     await conn.execute(
@@ -873,7 +890,7 @@ async def request_first_login(
         raise
     except Exception as exc:
         raise ValueError("collector_account_login_unavailable") from exc
-    return {"status": "approval_requested", "account": _account_login_out(row), "idempotent": bool(account["credential_approval_request_id"])}
+    return {"status": "approval_requested", "account": _account_login_out(row), "idempotent": False}
 
 
 async def get_account_login_status(*, tenant_id: str, site_profile_id: str, account_label: str) -> dict[str, Any] | None:
@@ -924,24 +941,54 @@ async def recover_account_login(*, tenant_id: str, user_id: str, site_profile_id
                     return None
                 if row["approval_decision"] == "pending" and row["approval_expires_at"] and row["approval_expires_at"] > datetime.now(timezone.utc):
                     return {"status": "approval_pending", "account": _account_login_out(row)}
+                if row["login_status"] == "connected":
+                    raise ValueError("account_recovery_not_required")
+                if row["login_status"] == "disabled":
+                    raise ValueError("account_recovery_disabled")
+                if row["approval_decision"] == "approved":
+                    return {"status": "approval_approved", "account": _account_login_out(row)}
                 scope = _json_dict(row["credential_scope"])
-                recovery_origin = str(scope.get("origin") or normalize_origin(str(row["base_origin"])))
+                try:
+                    vault_id = uuid.UUID(str(row["vault_reference"] or ""))
+                except ValueError as exc:
+                    raise ValueError("vault_reference_invalid") from exc
+                vault = await conn.fetchrow(
+                    """SELECT id, work_key, origin FROM agent_vault_credentials
+                         WHERE id=$1 AND tenant_id=$2 AND is_active=TRUE""",
+                    vault_id, tenant,
+                )
+                if not vault:
+                    raise ValueError("vault_reference_not_found")
+                recovery_origin = normalize_origin(str(row["base_origin"]))
+                if normalize_origin(str(vault["origin"])) != recovery_origin:
+                    raise ValueError("vault_reference_origin_mismatch")
+                vault_work_key = normalize_work_key(str(vault["work_key"]))
+                if scope.get("work_key") and normalize_work_key(str(scope["work_key"])) != vault_work_key:
+                    raise ValueError("vault_reference_work_key_mismatch")
+                recovery_scope = _account_approval_scope(
+                    profile={"site_key": row["site_key"], "base_origin": row["base_origin"]},
+                    work_key=vault_work_key,
+                    vault_reference=str(vault_id),
+                )
                 approval = await conn.fetchrow(
                     """
                     INSERT INTO agent_permission_requests (
                         tenant_id, work_key, origin, action_type, action_summary,
-                        risk_level, reason, requested_by
-                    ) VALUES ($1,$2,$3,$4,$5,'medium',$6,$7) RETURNING id
+                        risk_level, reason, requested_by, approval_scope
+                    ) VALUES ($1,$2,$3,$4,$5,'medium',$6,$7,$8::jsonb) RETURNING id
                     """,
-                    tenant, str(scope.get("work_key") or ""), recovery_origin,
+                    tenant, vault_work_key, recovery_origin,
                     ACCOUNT_CREDENTIAL_APPROVAL_ACTION,
                     f"A-scope account credential recovery for {row['site_key']}/{label}",
                     "Vault reference only; recipe registration remains a separate B-scope approval.", user_id,
+                    json.dumps(recovery_scope, ensure_ascii=False),
                 )
                 await conn.execute(
                     """UPDATE authenticated_site_accounts
-                          SET credential_approval_request_id=$1, login_status='action_required', updated_at=NOW()
+                          SET credential_approval_request_id=$1, login_status='action_required',
+                              credential_scope=$4::jsonb, updated_at=NOW()
                         WHERE id=$2 AND tenant_id=$3""", approval["id"], row["id"], tenant,
+                    json.dumps(recovery_scope, ensure_ascii=False),
                 )
                 refreshed = await _account_login_row(
                     conn, tenant=tenant, site_profile_id=site_profile_id, account_label=label,
