@@ -127,7 +127,10 @@ async def claim(conn: Any, owner: str, limit: int) -> list[Any]:
         """
         WITH picked AS (
           SELECT q.id FROM doc_chunk_embeddings_qwen3 q
-          WHERE (q.state IN ('pending','error') OR
+          WHERE q.model_id = $4
+            AND q.instruction_version = $5
+            AND q.dimension = $6
+            AND (q.state IN ('pending','error') OR
                  (q.state='processing' AND q.lease_expires_at < now()))
           ORDER BY q.updated_at FOR UPDATE SKIP LOCKED LIMIT $1
         )
@@ -137,7 +140,8 @@ async def claim(conn: Any, owner: str, limit: int) -> list[Any]:
             updated_at=now()
         FROM picked WHERE q.id=picked.id
         RETURNING q.id, q.chunk_id
-        """, limit, owner, LEASE_SECONDS,
+        """, limit, owner, LEASE_SECONDS, QWEN_MODEL_ID,
+        QWEN_INSTRUCTION_VERSION, QWEN_DIMENSION,
     )
 
 

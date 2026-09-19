@@ -41,6 +41,9 @@ def test_worker_has_atomic_claim_lease_recovery_and_throttle():
     src = inspect.getsource(worker.claim)
     assert "FOR UPDATE SKIP LOCKED" in src
     assert "lease_expires_at < now()" in src
+    assert "q.model_id = $4" in src
+    assert "q.instruction_version = $5" in src
+    assert "q.dimension = $6" in src
     assert worker.desired_concurrency(20, 8, 8000, 1) == 0
     assert worker.desired_concurrency(1, 8, 8000, 1) > 0
     assert worker.bounded_concurrency(0, 3) == 1
