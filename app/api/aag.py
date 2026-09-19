@@ -5,14 +5,14 @@ import json
 import logging
 import os
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.db_pool import get_pool
 from app.auth import get_current_user
+from app.core.db_pool import get_pool
 from app.services.aag_governance import (
     AAGAuthorizationError,
     AAGWorkflowError,
@@ -21,8 +21,9 @@ from app.services.aag_governance import (
     create_exception,
     decide_exception,
     normalize_project,
-    require_project_role,
+    record_override_verification,
     request_override,
+    require_project_role,
 )
 from app.services.aag_ingest_v2 import IngestConflictError, ingest_graph
 from app.services.aag_tools import filter_findings, stale_minutes
@@ -30,6 +31,7 @@ from tools.aag.v2_contract import CANONICALIZATION_VERSION, STABLE_KEY_VERSION
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/aag", tags=["aag"])
+CurrentUser = Annotated[dict[str, Any], Depends(get_current_user)]
 
 _AAG_SNAPSHOT_DDL = """
 CREATE TABLE IF NOT EXISTS aag_graph_snapshots (
@@ -86,6 +88,8 @@ class SnapshotV2In(BaseModel):
 
 
 class ExceptionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     project: str = Field(min_length=1, max_length=100)
     stable_finding_key: str = Field(min_length=1, max_length=500)
     reason: str = Field(min_length=3, max_length=2000)
@@ -93,28 +97,42 @@ class ExceptionRequest(BaseModel):
 
 
 class DecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     approve: bool
     reason: str = Field(min_length=3, max_length=2000)
 
 
 class OverrideApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     project: str = Field(min_length=1, max_length=100)
-    verifier_id: str = Field(min_length=1, max_length=255)
-    verification: dict[str, Any]
+    reason: str = Field(min_length=3, max_length=2000)
+
+
+class OverrideVerificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project: str = Field(min_length=1, max_length=100)
+    passed: bool
+    verified_commit_sha: str = Field(pattern=r"^[0-9a-f]{7,64}$")
+    evidence: dict[str, Any] = Field(min_length=1)
     reason: str = Field(min_length=3, max_length=2000)
 
 
 class OverrideRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     request_id: UUID
     project: str = Field(min_length=1, max_length=100)
     repository_id: str = Field(min_length=1, max_length=255)
     target_ref: str = Field(min_length=1, max_length=255)
-    commit_sha: str = Field(min_length=7, max_length=64)
+    commit_sha: str = Field(pattern=r"^[0-9a-f]{7,64}$")
     reason: str = Field(min_length=3, max_length=2000)
     expires_at: datetime
     previous_healthy_snapshot_id: UUID
     fallback_snapshot_id: UUID | None = None
-    rollback_plan: dict[str, Any]
+    rollback_plan: dict[str, Any] = Field(min_length=1)
     replay_nonce: str = Field(min_length=16, max_length=500)
 
 
@@ -224,7 +242,7 @@ async def get_latest_snapshot_v2(
     project: str,
     repository_id: str,
     target_ref: str,
-    user: dict[str, Any] = Depends(get_current_user),
+    user: CurrentUser,
 ) -> dict[str, Any]:
     """Return only an authoritative snapshot inside the caller's project grant."""
     _require_v2_enabled()
@@ -242,7 +260,8 @@ async def get_latest_snapshot_v2(
                  JOIN aag_graph_snapshots_v2 s ON s.id=o.snapshot_id
                 WHERE o.project=$1 AND o.repository_id=$2 AND o.target_ref=$3
                   AND o.authoritative=TRUE AND o.verification_status='verified'
-                  AND s.publish_status='ready'
+                  AND s.publish_status='ready' AND s.project=o.project
+                  AND s.repository_id=o.repository_id
                 ORDER BY o.verified_at DESC LIMIT 1""",
             project, repository_id, target_ref,
         )
@@ -253,8 +272,9 @@ async def get_latest_snapshot_v2(
 
 @router.post("/v2/exceptions", status_code=201)
 async def request_exception(
-    body: ExceptionRequest, user: dict[str, Any] = Depends(get_current_user),
+    body: ExceptionRequest, user: CurrentUser,
 ) -> dict[str, Any]:
+    _require_v2_enabled()
     actor = _actor(user)
     try:
         await require_project_role(actor, body.project, {"proposer", "admin"})
@@ -270,8 +290,9 @@ async def request_exception(
 @router.post("/v2/exceptions/{exception_id}/decision")
 async def exception_decision(
     exception_id: UUID, body: DecisionRequest,
-    user: dict[str, Any] = Depends(get_current_user),
+    user: CurrentUser,
 ) -> dict[str, Any]:
+    _require_v2_enabled()
     actor = _actor(user)
     async with get_pool().acquire() as conn:
         project = await conn.fetchval(
@@ -287,26 +308,43 @@ async def exception_decision(
         raise _governance_error(exc) from exc
 
 
+@router.post("/v2/overrides/{override_id}/verify")
+async def override_verification(
+    override_id: UUID, body: OverrideVerificationRequest, user: CurrentUser,
+) -> dict[str, Any]:
+    _require_v2_enabled()
+    actor = _actor(user)
+    try:
+        await require_project_role(actor, body.project, {"approver", "admin"})
+        return await record_override_verification(
+            override_id=override_id, project=body.project, verifier_id=actor,
+            verified_commit_sha=body.verified_commit_sha, passed=body.passed,
+            evidence=body.evidence, reason=body.reason,
+        )
+    except (AAGAuthorizationError, AAGWorkflowError) as exc:
+        raise _governance_error(exc) from exc
+
+
 @router.post("/v2/overrides/{override_id}/approve")
 async def override_approval(
     override_id: UUID, body: OverrideApprovalRequest,
-    user: dict[str, Any] = Depends(get_current_user),
+    user: CurrentUser,
 ) -> dict[str, Any]:
+    _require_v2_enabled()
     actor = _actor(user)
     try:
         await require_project_role(actor, body.project, {"approver", "admin"})
         return await approve_override(override_id=override_id, project=body.project,
-                                      approver_id=actor,
-                                      verifier_id=body.verifier_id,
-                                      verification=body.verification, reason=body.reason)
+                                      approver_id=actor, reason=body.reason)
     except (AAGAuthorizationError, AAGWorkflowError) as exc:
         raise _governance_error(exc) from exc
 
 
 @router.post("/v2/overrides", status_code=201)
 async def create_override_request(
-    body: OverrideRequest, user: dict[str, Any] = Depends(get_current_user),
+    body: OverrideRequest, user: CurrentUser,
 ) -> dict[str, Any]:
+    _require_v2_enabled()
     actor = _actor(user)
     try:
         await require_project_role(actor, body.project, {"proposer", "admin"})
