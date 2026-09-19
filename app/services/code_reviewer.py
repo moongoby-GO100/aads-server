@@ -7,6 +7,7 @@ Developer(Claude Sonnet)와 다른 모델로 에코챔버 방지.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -190,6 +191,68 @@ def _parse_review_json(raw: str) -> Optional[dict]:
         return json.loads(fixed)
     except Exception:
         return None
+
+
+def _extract_review_text(response: object) -> tuple[str, dict]:
+    """Normalize central-client response shapes and retain bounded evidence."""
+    source = type(response).__name__
+    value: object = response
+    if isinstance(response, dict):
+        source = "dict"
+        choices = response.get("choices")
+        if isinstance(choices, list) and choices:
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+            message = choice.get("message") if isinstance(choice, dict) else {}
+            value = message.get("content") if isinstance(message, dict) else None
+            source = "openai_choices"
+        else:
+            value = response.get("content", response.get("text"))
+    elif not isinstance(response, str) and response is not None:
+        value = getattr(response, "content", getattr(response, "text", None))
+
+    if isinstance(value, list):
+        parts: list[str] = []
+        for block in value:
+            if isinstance(block, dict):
+                part = block.get("text") or block.get("content")
+            else:
+                part = getattr(block, "text", None)
+            if isinstance(part, str):
+                parts.append(part)
+        value = "".join(parts)
+        source += "_blocks"
+
+    text = value.strip() if isinstance(value, str) else ""
+    return text, {
+        "response_shape": source,
+        "response_chars": len(text),
+        "response_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest() if text else None,
+        "raw_preview": text[:500],
+    }
+
+
+_REVIEW_SCORE_FIELDS = (
+    "correctness", "security", "scope_compliance", "preservation", "quality",
+)
+
+
+def _validate_review_details(details: object) -> Optional[dict]:
+    """Accept only a complete structured verdict; malformed HTTP 200s fail closed."""
+    if not isinstance(details, dict):
+        return None
+    if str(details.get("verdict") or "").upper() not in {
+        "APPROVE", "REQUEST_CHANGES", "FLAG",
+    }:
+        return None
+    try:
+        scores = [float(details[field]) for field in _REVIEW_SCORE_FIELDS]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if any(score < 0.0 or score > 1.0 for score in scores):
+        return None
+    if not isinstance(details.get("issues"), list):
+        return None
+    return details
 
 
 _SUSPICIOUS_INPUT_PATTERNS: list[tuple[re.Pattern[str], str, str, bool, str]] = [
@@ -452,32 +515,13 @@ async def _call_review_model(
     prompt: str,
     system: str,
     max_tokens: int,
-) -> Optional[str]:
-    """Route CLI model IDs to their real relay and API IDs to the central client.
-
-    ``call_llm_with_fallback`` treats every non-Claude name as a LiteLLM model.
-    Sending ``codex:*`` there therefore produces HTTP 400 instead of reaching
-    the Codex CLI relay. Claude CLI IDs also need the relay so its DB-priority
-    OAuth slot selection and refresh-capable credentials are honored.
-    """
+) -> object:
+    """Call the central R-AUTH client; external models remain LiteLLM-routed."""
     normalized = str(model or "").strip()
     provider, separator, bare_model = normalized.partition(":")
     provider = provider.lower() if separator else ""
-    if provider in {"codex", "claude"} or (
-        not provider
-        and normalized != _REVIEW_OAUTH_FALLBACK_MODEL
-        and (normalized.startswith("gpt-") or normalized.startswith("claude-"))
-    ):
-        from app.services.directive_draft_service import _call_configured_model
-
-        return await _call_configured_model(
-            model_candidate=normalized,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            system=system,
-            tenant_id=None,
-            user_id=None,
-        )
+    if provider in {"codex", "claude"}:
+        normalized = bare_model
 
     from app.core.anthropic_client import call_llm_with_fallback
 
@@ -872,6 +916,7 @@ async def review_code_diff(
         result_text = None
         details = None
         parse_fail_count = 0
+        attempt_evidence: list[dict] = []
         attempt_limit = min(len(review_models), _REVIEW_MODEL_MAX_ATTEMPTS)
         _review_started_at = time.monotonic()
         for attempt_no in range(1, attempt_limit + 1):
@@ -898,7 +943,7 @@ async def review_code_diff(
                 # LiteLLM 폴백 체인을 순회하며 수 분간 반환되지 않는 경우가 있다. 그동안 러너의
                 # ai_review 요청과 재검수 스위퍼가 함께 묶여 review_hold 가 누적됐다.
                 # 시도당 상한을 두고 다음 모델/재시도로 넘긴다.
-                result_text = await asyncio.wait_for(
+                raw_response = await asyncio.wait_for(
                     _call_review_model(
                         prompt=prompt,
                         model=model,
@@ -907,23 +952,35 @@ async def review_code_diff(
                     ),
                     timeout=_attempt_timeout,
                 )
+                result_text, response_evidence = _extract_review_text(raw_response)
+                response_evidence.update({"model": model, "outcome": "response" if result_text else "empty"})
+                attempt_evidence.append(response_evidence)
             except asyncio.TimeoutError:
                 logger.warning("review_model_timeout: model=%s attempt=%s/%s limit=%.0fs",
                                model, attempt_no, attempt_limit, _attempt_timeout)
                 result_text = None
+                attempt_evidence.append({"model": model, "outcome": "timeout", "timeout_sec": round(_attempt_timeout, 3)})
             except Exception as model_err:
                 logger.warning("review_model_failed: model=%s attempt=%s/%s error=%s",
                                model, attempt_no, attempt_limit, str(model_err)[:60])
                 result_text = None
+                attempt_evidence.append({
+                    "model": model,
+                    "outcome": "error",
+                    "error_type": type(model_err).__name__,
+                    "error_preview": str(model_err)[:200],
+                })
 
             if not result_text:
                 continue
 
-            details = _parse_review_json(result_text)
+            details = _validate_review_details(_parse_review_json(result_text))
             if details is not None:
+                attempt_evidence[-1]["outcome"] = "valid"
                 break
 
             parse_fail_count += 1
+            attempt_evidence[-1]["outcome"] = "invalid_structure"
             logger.warning(
                 "code_reviewer_json_parse_failed: job_id=%s model=%s attempt=%s/%s preview=%r",
                 job_id, model, attempt_no, attempt_limit, (result_text or "")[:200]
@@ -931,7 +988,7 @@ async def review_code_diff(
             if attempt_no < attempt_limit:
                 await asyncio.sleep(2 * attempt_no)
 
-        if not result_text:
+        if not result_text and parse_fail_count == 0:
             logger.warning(f"code_reviewer_no_response: job_id={job_id}")
             verdict = _build_review_verdict(
                 verdict="FLAG",
@@ -941,6 +998,7 @@ async def review_code_diff(
                     "리뷰 AI가 응답하지 않았습니다.",
                     "코드 품질을 검증하지 못했으므로 승인 대기로 넘기면 안 됩니다.",
                 ],
+                feedback={"attempt_evidence": attempt_evidence},
                 flag_category="REVIEW_MODEL_NO_RESPONSE",
                 failure_stage="review_llm",
                 needs_retry=True,
@@ -974,6 +1032,7 @@ async def review_code_diff(
                     "raw_preview": (result_text or "")[:500],
                     "summary": f"리뷰 응답 파싱 실패 ({parse_fail_count}회 재시도) — 승인 보류 필요",
                     "parse_attempts": parse_fail_count,
+                    "attempt_evidence": attempt_evidence,
                 },
                 flag_category="REVIEW_PARSER_FAILURE",
                 failure_stage="review_json_parse",

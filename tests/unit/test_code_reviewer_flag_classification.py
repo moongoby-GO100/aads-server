@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 import sys
 import types
 import pytest
@@ -202,6 +203,57 @@ async def _review_code_diff_holds_when_review_response_is_unparseable():
     mock_save.assert_awaited_once()
 
 
+def test_review_code_diff_extracts_structured_openai_response():
+    asyncio.run(_review_code_diff_extracts_structured_openai_response())
+
+
+async def _review_code_diff_extracts_structured_openai_response():
+    reviewer = _load_reviewer()
+    fixture = {
+        "verdict": "APPROVE",
+        "correctness": 0.9,
+        "security": 0.9,
+        "scope_compliance": 0.9,
+        "preservation": 0.9,
+        "quality": 0.9,
+        "issues": [],
+        "summary": "fixture accepted",
+    }
+    response = {"choices": [{"message": {"content": json.dumps(fixture)}}]}
+    with patch.object(reviewer, "_get_review_models", new=AsyncMock(return_value=["qwen-turbo"])), patch.object(
+        reviewer, "_call_review_model", new=AsyncMock(return_value=response)
+    ), patch.object(reviewer, "_save_review_result", new=AsyncMock()) as mock_save:
+        verdict = await reviewer.review_code_diff(
+            project="AADS",
+            job_id="runner-structured-fixture",
+            diff="diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n x = 1\n+y = 2\n",
+            instruction="테스트",
+            files_changed=["a.py"],
+        )
+
+    assert verdict.verdict == "APPROVE"
+    assert verdict.feedback["summary"] == "fixture accepted"
+    mock_save.assert_awaited_once()
+
+
+def test_review_code_diff_rejects_parseable_but_incomplete_verdict():
+    reviewer = _load_reviewer()
+    assert reviewer._validate_review_details({"verdict": "APPROVE", "issues": []}) is None
+
+
+def test_review_response_extraction_preserves_bounded_evidence():
+    reviewer = _load_reviewer()
+    text, evidence = reviewer._extract_review_text(
+        {"content": [{"type": "text", "text": "  {\"verdict\":\"FLAG\"}  "}]}
+    )
+
+    assert text == '{"verdict":"FLAG"}'
+    assert evidence["response_shape"] == "dict_blocks"
+    assert evidence["response_chars"] == len(text)
+    assert len(evidence["response_sha256"]) == 64
+    assert evidence["raw_preview"] == text
+
+
 def test_preservation_gate_ignores_incidental_instruction_paths():
     reviewer = _load_reviewer()
     instruction = """Use PRD: docs/reports/20260908_langsmith_self_hosted_ohvis_prd.md.
@@ -380,7 +432,8 @@ def test_private_signature_change_still_requires_semantic_review():
         reviewer = _load_reviewer()
         client = types.ModuleType("app.core.anthropic_client")
         client.call_llm_with_fallback = AsyncMock(return_value='{"verdict":"FLAG",'
-            '"correctness":0.1,"security":0.1,"quality":0.1,'
+            '"correctness":0.1,"security":0.1,"scope_compliance":0.1,'
+            '"preservation":0.1,"quality":0.1,'
             '"issues":["behavior changed"],"summary":"reject"}')
         with patch.dict(sys.modules, {
             "app": types.ModuleType("app"),
