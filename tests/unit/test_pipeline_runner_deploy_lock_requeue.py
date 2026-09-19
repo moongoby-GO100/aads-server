@@ -7,6 +7,7 @@ import asyncio
 
 import pytest
 
+from app.services import deploy_lock, pipeline_runner_service
 from app.services.pipeline_runner_service import (
     PipelineCJob,
     _DEPLOY_LOCK_MAX_REQUEUE,
@@ -44,9 +45,7 @@ def _patch_instant_sleep(monkeypatch):
     async def _instant_sleep(*_a, **_k):
         return await orig_sleep(0)
 
-    monkeypatch.setattr(
-        "app.services.pipeline_runner_service.asyncio.sleep", _instant_sleep
-    )
+    monkeypatch.setattr(pipeline_runner_service.asyncio, "sleep", _instant_sleep)
 
 
 def test_deploy_lock_miss_requeues_instead_of_terminal_error(monkeypatch):
@@ -65,9 +64,7 @@ def test_deploy_lock_miss_requeues_instead_of_terminal_error(monkeypatch):
             return {"acquired": False, "holder": "other-job-1"}
         return {"acquired": True, "holder": None}
 
-    monkeypatch.setattr(
-        "app.services.deploy_lock.acquire_deploy_lock", _fake_acquire
-    )
+    monkeypatch.setattr(deploy_lock, "acquire_deploy_lock", _fake_acquire)
 
     # 락 획득 이후 코드는 실제 git push를 시도한다 — 여기서는 그 이후 흐름을 검증
     # 대상이 아니므로 예외를 던져 approve()가 push 실패 분기로 즉시 빠지게 한다.
@@ -98,9 +95,7 @@ def test_deploy_lock_miss_exceeds_cap_becomes_terminal_error(monkeypatch):
         calls["n"] += 1
         return {"acquired": False, "holder": "other-job-2"}
 
-    monkeypatch.setattr(
-        "app.services.deploy_lock.acquire_deploy_lock", _always_fail_acquire
-    )
+    monkeypatch.setattr(deploy_lock, "acquire_deploy_lock", _always_fail_acquire)
 
     result = asyncio.run(job.approve())
 

@@ -147,6 +147,24 @@ def test_direct_deploy_intake_preserves_requests_for_host_classification():
     assert "supersede_older_queued_deploy_requests" not in text
 
 
+def test_direct_release_includes_only_git_verified_queued_ancestors_before_preflight():
+    text = (Path(__file__).parents[2] / "deploy.sh").read_text()
+    fn = text.split("include_queued_ancestors_in_direct_release() {", 1)[1].split("\n}\n", 1)[0]
+
+    assert "merge-base --is-ancestor" in fn
+    assert "deploy_batch_inclusions" in fn
+    assert "current_release_contains_queued_ancestor" in fn
+    assert "ON CONFLICT (included_run_id) DO NOTHING" in fn
+    assert "status='superseded'" in fn
+    assert "phase='included_in_release_batch'" in fn
+    assert "id=${included_run_id}" in fn
+    assert "status='queued'" in fn
+    call = text.index("include_queued_ancestors_in_direct_release\n")
+    preflight = text.index('deploy_phase_start "preflight" "running"', call)
+    disk_gate = text.index("require_build_disk_free", preflight)
+    assert call < preflight < disk_gate
+
+
 class _Transaction:
     async def __aenter__(self):
         return self

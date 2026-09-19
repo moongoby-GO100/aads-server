@@ -1517,6 +1517,22 @@ cleanup_blocked_dependencies() {
                                   AND p.phase IN ('queued','coding')
                                   AND dep.status IN ('error','rejected','rejected_done')
                                   AND NOT (p.logs @> '[{\"event\": \"file_conflict_auto_dependency\"}]'::jsonb)
+                                  -- 릴리스 잡(DEPLOY_ONLY)은 앞 잡이 실패해도 죽이지 않는다.
+                                  -- 2026-09-19 실측: runner-30757edd 가 선행 runner-e345161d
+                                  -- 의 error 에 끌려 blocked_dependency 로 취소됐다. 그 잡의
+                                  -- 일은 '앞에서 push 된 것들을 한 번에 배포하는 것' 이므로,
+                                  -- 앞 잡 하나가 실패해도 이미 push 된 커밋은 여전히 배포해야
+                                  -- 한다. 릴리스 잡까지 죽으면 배포 주체가 사라져 큐가 통째로
+                                  -- 방치된다 — 오늘 실제로 그렇게 됐다.
+                                  AND p.instruction NOT ILIKE '%DEPLOY_ONLY%'
+                                  -- 릴리스 잡(DEPLOY_ONLY)은 앞 잡이 실패해도 죽이지 않는다.
+                                  -- 2026-09-19 실측: runner-30757edd 가 선행 runner-e345161d
+                                  -- 의 error 에 끌려 blocked_dependency 로 취소됐다. 그 잡의
+                                  -- 일은 '앞에서 push 된 것들을 한 번에 배포하는 것' 이므로,
+                                  -- 앞 잡 하나가 실패해도 이미 push 된 커밋은 여전히 배포해야
+                                  -- 한다. 릴리스 잡까지 죽으면 배포 주체가 사라져 큐가 통째로
+                                  -- 방치된다 — 오늘 실제로 그렇게 됐다.
+                                  AND p.instruction NOT ILIKE '%DEPLOY_ONLY%'
                                 RETURNING p.job_id;" 2>/dev/null) || true
     blocked_missing=$(db_exec "UPDATE pipeline_jobs p SET status='cancelled',
                                phase='blocked_dependency',
@@ -1527,6 +1543,8 @@ cleanup_blocked_dependencies() {
                                  AND p.phase IN ('queued','coding')
                                  AND p.depends_on IS NOT NULL
                                  AND NOT (p.logs @> '[{\"event\": \"file_conflict_auto_dependency\"}]'::jsonb)
+                                 AND p.instruction NOT ILIKE '%DEPLOY_ONLY%'
+                                 AND p.instruction NOT ILIKE '%DEPLOY_ONLY%'
                                  AND NOT EXISTS (
                                      SELECT 1 FROM pipeline_jobs dep
                                      WHERE dep.job_id = p.depends_on

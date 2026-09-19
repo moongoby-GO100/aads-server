@@ -913,6 +913,86 @@ claim_latest_queued_deploy_request() {
     fi
 }
 
+include_queued_ancestors_in_direct_release() {
+    if [[ "${AADS_DEPLOY_QUEUE_WORKER:-false}" == "true" ]] || ! deploy_db_available; then
+        return 0
+    fi
+    if [[ ! "${DEPLOY_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
+        echo "[deploy.sh] ⚠️ direct release inclusion skipped: deploy_run_id unavailable"
+        return 0
+    fi
+
+    local queued_rows included_run_id included_sha included_sha_sql release_sha_sql
+    queued_rows="$(
+        deploy_db_exec "
+            SELECT id::text || '|' || release_sha
+              FROM deploy_runs
+             WHERE project='AADS'
+               AND component='api'
+               AND target_env='production'
+               AND status='queued'
+               AND phase IN ('queued_for_deploy', 'waiting_batch_predecessor')
+               AND id <> ${DEPLOY_RUN_ID}
+             ORDER BY created_at ASC, id ASC;
+        "
+    )"
+    [[ -z "${queued_rows//[[:space:]]/}" ]] && return 0
+
+    release_sha_sql="$(sql_escape "${AADS_RELEASE_SHA:-unknown}")"
+    while IFS='|' read -r included_run_id included_sha; do
+        included_run_id="$(echo "${included_run_id:-}" | tr -d '[:space:]')"
+        included_sha="$(echo "${included_sha:-}" | tr -d '[:space:]')"
+        [[ "$included_run_id" =~ ^[0-9]+$ ]] || continue
+        [[ "$included_sha" =~ ^[0-9a-fA-F]{7,64}$ ]] || continue
+        if ! git -C "$COMPOSE_DIR" merge-base --is-ancestor "$included_sha" "${AADS_RELEASE_SHA:-HEAD}" 2>/dev/null; then
+            echo "[deploy.sh] direct release leaves non-ancestor queued: run=${included_run_id} sha=${included_sha}"
+            continue
+        fi
+
+        included_sha_sql="$(sql_escape "$included_sha")"
+        deploy_db_exec "
+            BEGIN;
+            SELECT pg_advisory_xact_lock(hashtext('deploy-intake:AADS:api:production'));
+            INSERT INTO deploy_batch_inclusions(
+                representative_run_id, included_run_id, project, component,
+                target_env, included_sha, representative_sha, relationship,
+                compatibility_reason, resolved_by
+            )
+            SELECT ${DEPLOY_RUN_ID}, ${included_run_id}, 'AADS', 'api',
+                   'production', '$included_sha_sql', '$release_sha_sql', 'ancestor',
+                   'current_release_contains_queued_ancestor', 'deploy.sh_direct_preflight'
+             WHERE EXISTS (
+                       SELECT 1 FROM deploy_runs
+                        WHERE id=${DEPLOY_RUN_ID}
+                          AND status IN ('running','verifying','syncing_standby')
+                   )
+               AND EXISTS (
+                       SELECT 1 FROM deploy_runs
+                        WHERE id=${included_run_id}
+                          AND status='queued'
+                          AND phase IN ('queued_for_deploy','waiting_batch_predecessor')
+                   )
+            ON CONFLICT (included_run_id) DO NOTHING;
+            UPDATE deploy_runs
+               SET status='superseded',
+                   phase='included_in_release_batch',
+                   phase_completed_at=NOW(),
+                   updated_at=NOW(),
+                   error_summary=CONCAT_WS('; ', NULLIF(error_summary,''),
+                       'included in direct deploy run ${DEPLOY_RUN_ID} after verified Git ancestry')
+             WHERE id=${included_run_id}
+               AND status='queued'
+               AND EXISTS (
+                       SELECT 1 FROM deploy_batch_inclusions
+                        WHERE representative_run_id=${DEPLOY_RUN_ID}
+                          AND included_run_id=${included_run_id}
+                   );
+            COMMIT;
+        " >/dev/null
+        echo "[deploy.sh] queued ancestor included: run=${included_run_id} sha=${included_sha} -> release_run=${DEPLOY_RUN_ID}"
+    done <<< "$queued_rows"
+}
+
 start_deploy_queue_worker() {
     local trigger="${1:-manual}"
     if [[ "$(deploy_queue_count)" == "0" ]]; then
@@ -1555,6 +1635,7 @@ audit_control "deploy-generation" "$ACTIVE_CONTAINER:$ACTIVE_PORT" "started" "mo
 ensure_deploy_observability_schema
 reconcile_stale_deploy_runs
 claim_latest_queued_deploy_request
+include_queued_ancestors_in_direct_release
 deploy_phase_start "preflight" "running"
 if [[ "${AADS_DEPLOY_QUEUE_WORKER:-false}" == "true" ]]; then
     # RC3: queue worker uses clean detached worktree — skip dirty gate
