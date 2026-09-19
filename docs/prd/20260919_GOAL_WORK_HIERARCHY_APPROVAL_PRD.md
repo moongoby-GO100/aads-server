@@ -1,8 +1,8 @@
 # PRD — 목표관리 업무계층 및 승인체계
 
-- 문서 버전: 1.1
+- 문서 버전: 1.2
 - 작성일: 2026-09-19 KST
-- 상태: 단계별 자동승인 권한 설계 적용 완료 / 구현 미착수
+- 상태: WO-1.1 Final 조건부 승인 / B-01~B-03 및 W-14F 승인 전 운영 마이그레이션 금지
 - 대상: AADS Goal Management, GoalPanel, Approval Gate, Pipeline Runner
 - 관련 목표: `cf1ec2f6-0072-4f85-aa5e-b08760cd6613`
 - 관련 마일스톤: M12~M16
@@ -517,14 +517,14 @@ grant API는 유효 범위·잔여 횟수·만료·발급자·회수 상태를 �
 
 | ID | 시나리오 | 기대 결과 |
 |---|---|---|
-| T01 | Task 부모로 Story 지정 | 422 invalid_parent |
+| T01 | Task 부모로 Epic 지정 | 422 invalid_parent |
 | T02 | 다른 tenant 부모 연결 | 403/404, 존재 노출 없음 |
 | T03 | 프로젝트에 같은 role 담당 재생성 | 409 duplicate_assignment |
 | T04 | 일반 AADS 세션이 GO100 담당 지정 | 403 project_scope_denied |
 | T05 | CEO 통합지시가 GO100 로컬 담당 지정 | 성공, 담당은 GO100 assignment |
 | T06 | 승인 대기 중 대상 version 변경 | 기존 승인 superseded |
 | T07 | 승인 후 patch 변조 | 실행 차단 + 감사 이벤트 |
-| T08 | 승인 콜백 중복 2회 | 실행 1회 |
+| T08 | 동일 승인/outbox 이벤트 N회 전달 | 내부 실행 예약·grant 사용량 각 1건. 외부 executor 멱등키 지원 시 부작용 1회, 미지원·결과 불명 시 reconciliation 전환 |
 | T09 | A3 일괄승인 시도 | 400 bulk_not_allowed |
 | T10 | 수행자가 자기 Story 수락 | 403 separation_of_duties |
 | T11 | evidence 없는 완료 | 422 evidence_required |
@@ -602,3 +602,265 @@ grant API는 유효 범위·잔여 횟수·만료·발급자·회수 상태를 �
 | 선행 목표 무결성 코드 | 검수 보류 | `runner-cd3ff19a` review infrastructure failure |
 | 운영 DB 마이그레이션 | 미실행 | 선행 커밋·검수 전 실행 금지 |
 | 대시보드·배포·E2E | 미실행 | M12~M14 선행 필요 |
+
+## 14. PRD v1.2 통제 개정 — WO-1.1 Final
+
+이 절은 WO-1.1 Final의 승인 통제 정본이다. 앞 절과 충돌하는 경우 이 절을 우선한다.
+구현 순서는 `B-01~B-03 → W-12a~c → W-13 → W-14F → W-14a~c → W-15 → W-16`으로 고정한다.
+
+### 14.1 정책 결과 4축
+
+정책 결과를 하나의 AUTO/DENY 값으로 축약하지 않고 다음 네 축으로 저장·전달한다.
+
+```text
+boundary_decision: ALLOW | DENY
+approval_route: NONE | NOTIFY | PROJECT_APPROVAL | CEO_APPROVAL |
+                INDEPENDENT_REVIEW | PROJECT_AND_INDEPENDENT | CEO_AND_INDEPENDENT
+automation_eligibility: BASELINE_AUTO | GRANT_REQUIRED | MANDATORY_HUMAN | NOT_EXECUTABLE
+risk_tier: A0 | A1 | A2 | A3
+```
+
+- 경계 `DENY`는 승인이나 grant로 우회할 수 없다.
+- A0는 정책 허용 시 baseline AUTO, A1은 유효한 단일 grant가 있을 때만 AUTO다.
+- A2는 프로젝트 승인 원칙이며 좁게 명시된 사전 위임만 허용한다.
+- A3는 grant 발급·자동승인을 금지하고 CEO 명시 승인을 요구한다.
+- `DENY_AUTO`는 최종 판정이 아니라 `MANDATORY_HUMAN` 또는 reason code로 표현한다.
+- 임의 문자열 `AUTO`만 전달된 요청은 executor가 거절한다.
+
+### 14.2 평가 오류·사전조건
+
+Cedar `diagnostics.error`가 하나라도 있으면 원래 engine 결과가 Allow여도 AUTO를 폐기한다.
+tenant/project/identity 데이터 오류는 `NOT_EXECUTABLE`, AUTO 후보 오류와 mandatory-human
+오류는 명시적 수동 승인 경로로 전환한다. simulate/shadow 오류는 실행하지 않고 diff만 저장한다.
+
+필수 감사값은 `original_engine_result`, `effective_application_result`, `error_policy_ids`,
+`error_kinds`, `entity_resolution_status`, `fallback_route`,
+`reason_code=policy_evaluation_error`다.
+
+정책 사전조건은 서버가 primary DB에서 계산한다.
+
+```json
+{
+  "preconditions": {
+    "parent_state": "...",
+    "parent_version": 7,
+    "evidence_complete": true,
+    "evidence_snapshot_hash": "sha256:...",
+    "review_verdict": "accepted|rejected|pending|none",
+    "blocker_count": 0,
+    "dependency_blocker_count": 0
+  }
+}
+```
+
+클라이언트는 `expected_parent_version` 같은 낙관적 잠금값만 보낼 수 있다. 실행 직전
+사전조건을 다시 계산해 hash가 바뀌면 판정을 폐기하고 재판정한다. 미충족이면
+`precondition_unmet`이며 grant는 예약·소비하지 않는다.
+
+### 14.3 canonical patch·decision hash
+
+1. Patch는 RFC 6902를 사용하고 operation 배열 순서를 보존한다.
+2. JSON 객체는 RFC 8785 JCS로 정규화한다.
+3. UTF-8 바이트열에 SHA-256을 적용한다.
+4. duplicate property, NaN, Infinity, 비정상 숫자 표현을 거절한다.
+5. `canonicalization_version`과 `hash_algorithm`을 저장한다.
+
+`decision_input_hash`는 다음 값을 모두 묶는다.
+
+```text
+tenant_id, project, workspace_kind, principal_session_id, assignment_id,
+target_type, target_id, action, base_version, patch_hash, environment,
+risk_factors, precondition_snapshot_hash, policy_version, grant_id, grant_version
+```
+
+### 14.4 동기 감사 정본·outbox·실행 보장
+
+| 저장소 | 정본 역할 |
+|---|---|
+| `goal_policy_decisions` | 모든 정책 판정의 동기 감사 원장 |
+| `goal_auto_approval_use_reservations` | execution_key별 예약 현재 상태 |
+| `goal_auto_approval_use_events` | grant 사용 append-only 원장 |
+| `work_item_events` | 도메인 변경 append-only 원장 |
+| OPA decision log | 분석·재생·운영 보조 |
+
+AUTO 판정과 사용량 예약이 필요하면 decision 기록, 예약, usage event, outbox 생성을 같은
+DB 트랜잭션에서 처리한다. 필수 기록 하나라도 실패하면 AUTO를 반환하지 않는다.
+민감값 원문은 저장하지 않고 `erased`, `masked`, `masking_policy_version`만 기록한다.
+
+Outbox 이벤트는 업무 트랜잭션 안에서 논리적으로 한 번 생성한다. 전달은 최소 한 번이며,
+consumer는 `execution_key`로 멱등 처리한다. 외부 executor가 멱등키를 지원할 때만
+effectively-once를 주장한다. 외부 결과가 불명확하면 `manual_reconciliation`으로 전환하고
+자동 환급·자동 재실행을 금지한다.
+
+### 14.5 grant 위임·회수·원자 소진
+
+grant에는 `logical_grant_id`, `grant_version`, `parent_grant_id`, `root_grant_id`,
+`delegation_path`, `delegation_depth`, `parent_grant_version`, `parent_scope_hash`,
+`ancestor_revocation_epoch`, `supersedes_grant_id`를 저장한다.
+
+실행 직전 모든 ancestor의 active 상태, version, revocation epoch, scope 부분집합,
+delegation depth, issuer/principal 분리, assignment 활성, tenant/project/goal 경계를 primary DB에서
+확인한다. `scope_hash`만으로 회수 전파를 판정하지 않는다. 복수 grant 합성은 금지한다.
+
+사용량은 blocking `FOR UPDATE` 또는 조건부 `UPDATE ... RETURNING`으로 예약한다.
+`SKIP LOCKED`는 queue 청구에만 사용하고 grant 판정에는 쓰지 않는다. 동일 execution_key는
+기존 예약을 반환한다. 비용은 추정치 예약 후 실측 정산하며 초과 시 `budget_overrun`,
+grant stale, 신규 실행 차단, 수동 검토와 `completed_with_budget_overrun` 또는
+`reconciliation_required`를 기록한다.
+
+### 14.6 kill switch·캐시·시간 기준
+
+kill switch, deny epoch, mandatory-human revision, grant revocation, assignment 상태,
+target version, ancestor revocation epoch는 permit 캐시 대상에서 제외한다. 실행 직전
+`kill_switch_epoch`, `deny_policy_epoch`, `assignment_epoch`, `grant_revocation_epoch`,
+`target_version`을 primary DB에서 확인한다. 일반 permit TTL 상한은 2초이며 조회 실패 시
+캐시 permit으로 실행하지 않는다.
+
+UI·캐시 무효화·큐 재분류·운영 알림 전파 p95는 5초 이내다. 실행 안전 기준은 kill switch
+또는 revocation 커밋 이후 primary 재검증을 통과한 신규 실행 0건이다.
+
+만료·idle·reservation 판정은 primary PostgreSQL `clock_timestamp()`를 사용한다.
+저장은 UTC `timestamptz`, 트랜잭션 이벤트 일관 시각은 `transaction_timestamp()`를 사용하며
+클라이언트 시각은 감사 참고용으로만 저장한다.
+
+### 14.7 검수·실행 중 회수
+
+검수 상태는 다음을 포함한다.
+
+```text
+in_progress → review_pending_assignment → in_review → completed | changes_requested
+```
+
+검수자 0명일 때 evidence 제출을 보존하고 `review_pending_assignment`로 전환한다. grant 추가
+소비와 자동 수락을 금지하고 목표 주도자에게 알린 뒤 SLA 초과 시 CEO에게 에스컬레이션한다.
+검수자 배정 뒤 `in_review`로 전환한다. 수행자 비교 범위는 생성자, change set 요청자,
+현재·실행 당시 담당자, evidence 제출자, 실행 actor, 직접 기여 session 전체다. CEO override에는
+`override_reason`, `original_required_role`, `overridden_requirement_id`, `risk_acceptance`를 남긴다.
+
+실행 중 grant 회수와 실제 취소를 구분하고 다음 상태를 지원한다.
+
+```text
+executing → cancellation_requested → cancelled
+executing → finish_current_requested → executed
+executing → compensating → compensated | compensation_failed
+executing → reconciliation_required
+```
+
+### 14.8 M12 필수 저장소
+
+기존 핵심 테이블은 `work_items`, `project_role_assignments`, `work_item_change_sets`,
+`work_item_events`, `goal_auto_approval_grants`, `goal_approval_policy_versions`다.
+다음 테이블을 추가한다.
+
+| 테이블 | 핵심 책임 |
+|---|---|
+| `work_item_dependencies` | parent와 분리된 실행·정보 의존성, 순환·교차 tenant 차단 |
+| `work_item_evidence` | version·criterion·artifact hash·검증·보존 분류 |
+| `goal_kill_switches` | scope별 active/epoch, 해제 시 grant 자동복구 금지 |
+| `goal_policy_decisions` | 정책 판정 동기 정본 |
+| `goal_workflow_outbox` | payload hash·sequence·claim·publish 상태 |
+| `goal_execution_leases` | owner instance/epoch fence |
+| `goal_auto_approval_use_reservations` | execution_key별 mutable 예약 상태 |
+| `goal_auto_approval_use_events` | reserved~reconciled append-only 이벤트 |
+| `work_item_review_requirements` | version별 검수 역할·최소 승인·순서·SLA |
+| `work_item_review_decisions` | 검수자·판정·evidence snapshot·override |
+
+활성 role/session 고유성은 partial UNIQUE index로 강제하고 SQLSTATE를
+`409 duplicate_assignment`로 변환한다. nullable parent idempotency는 지원 버전에서
+`NULLS NOT DISTINCT` 또는 별도 registry로 보장한다. 계층 무결성은 composite FK,
+잠금된 domain service/trigger, recursive CTE로 검증한다. 다른 row 상태를 일반 CHECK로
+검증하지 않는다.
+
+M12에서 RLS 적용 여부를 ADR로 확정한다. 적용 시 runtime role에 BYPASSRLS를 금지하고
+migration/runtime role을 분리하며 tenant context 미설정은 default deny다. 미적용 시 동등한
+DB role·composite FK·repository 강제와 direct SQL 격리시험을 ADR로 증명한다.
+
+### 14.9 작업 패키지·차단선
+
+| ID | 의존 | 완료 기준 |
+|---|---|---|
+| B-01 | 없음 | `runner-e56868f1` commit gate 복구, 동일 커밋 green, 포스트모템 |
+| B-02 | 없음 | `runner-cd3ff19a` 검수 인프라 복구, 선행 코드 독립 수락 |
+| B-03 | 없음 | PRD v1.2·WO-1.1 승인 이벤트 |
+| W-12a | B-01~03 | 기존 핵심 스키마·고유성·버전, up/down·경쟁 insert |
+| W-12b | W-12a | 신규 10개 저장소 additive migration, 누락 0건 |
+| W-12c | W-12b | tenant 격리/RLS ADR와 direct SQL 시험 |
+| W-13 | W-12c | 서버 계산 preconditions·경계 API, T01~T05 |
+| W-14F | W-13 | 4축 envelope·diagnostics·ledger·hash·signed decision |
+| W-14a | W-14F | change set·다중 승인·outbox·멱등 consumer |
+| W-14b | W-14a | grant·예약·회수·kill switch·위임 체인 |
+| W-14c | W-14b | simulate·shadow·마스킹·canary·rollback |
+| W-15 | W-14c | GoalPanel·diff/grant 패널·복구 UX, T15+3 viewport |
+| W-16 | W-15 | 진단·bluegreen·same digest·5분 P0/P1 관찰 |
+
+W-14F는 evaluator와 executor의 service identity, DB role, 배포 권한, 서명키 접근,
+네트워크 권한, 감사 책임을 분리한다. 임의 AUTO 문자열과 decision ledger 기록 실패는
+AUTO 0건이어야 한다.
+
+### 14.10 추가 회귀시험
+
+| ID | 시나리오 | 기대 결과 |
+|---|---|---|
+| T36 | forbid 평가 오류 + permit Allow | AUTO 폐기, policy_evaluation_error |
+| T37 | tenant 경계 엔티티 조회 실패 | 승인 요청 없이 NOT_EXECUTABLE |
+| T38 | 동기 decision ledger 실패 | 트랜잭션 롤백, AUTO 0건 |
+| T39 | outbox 동일 이벤트 3회 | 예약·사용량 각 1건 |
+| T40 | 외부 멱등키 미지원 timeout | 자동 재실행 없이 reconciliation |
+| T41 | 마스킹 적용 | erased/masked pointer 기록 |
+| T42 | 검수자 0명 review 제출 | review_pending_assignment, 자동 수락 0건 |
+| T43 | 검수 SLA 초과 | 목표 주도→CEO 에스컬레이션 |
+| T44 | depth=1에서 손자 grant | 422 delegation_depth_exceeded |
+| T45 | 부모 grant 회수 후 자식 실행 | ancestor epoch 불일치 차단 |
+| T46 | kill switch 커밋 후 신규 실행 | 0건 |
+| T47 | kill switch UI·큐 전파 | p95 5초 이내 |
+| T48 | grant 경합에 SKIP LOCKED 오용 | 판정 불가 0건, 정확히 1건 AUTO |
+| T49 | JSON 객체 키 순서만 변경 | patch hash 동일 |
+| T50 | JSON Patch operation 순서 변경 | patch hash 불일치 |
+| T51 | duplicate JSON key | 422 invalid_patch |
+| T52 | 승인 뒤 environment 변경 | 실행 차단 |
+| T53 | 동일 idempotency key·다른 body | 409 idempotency_key_reused |
+| T54 | parent scope hash 동일·epoch 변경 | 실행 차단 |
+| T55 | 신규 deny 직후 캐시 permit | deny epoch 불일치 차단 |
+| T56 | 클라이언트 preconditions 조작 | 서버 계산값으로 판정 |
+| T57 | 교차 프로젝트 dependency | 지정 승인 외 거절 |
+| T58 | 실측 비용이 예약치 초과 | overrun, grant stale, 신규 실행 금지 |
+
+### 14.11 표준 오류·mutation 응답
+
+표준 오류는 `401 unauthenticated`, `403 project_scope_denied`,
+`403 separation_of_duties`, `403 self_grant_denied`, `403 local_assignment_required`,
+`404 resource_not_found`, `409 duplicate_assignment`, `409 version_conflict`,
+`409 idempotency_key_reused`, `409 stale_policy`, `409 stale_assignment`,
+`409 stale_parent_grant`, `422 invalid_parent`, `422 invalid_patch`,
+`422 evidence_required`, `422 reviewer_unavailable`, `422 precondition_unmet`,
+`422 mandatory_human`, `422 delegation_depth_exceeded`, `423 kill_switch_active`다.
+다른 tenant 존재를 노출할 수 있는 외부 응답은 404로 통일하고 내부 감사에는
+`tenant_scope_denied`를 기록한다.
+
+권한이 허용된 mutation 응답은 `decision_id`, `version`, `tenant_id`, `project`,
+`policy_version`, `matched_grant_id`, `grant_version`, `remaining_uses`, `reason_codes`,
+`last_error`, `pending_approval_count`를 포함한다.
+
+### 14.12 UI·중단·최종 승인 게이트
+
+승인 결정 UI는 기존 `agent_permission_requests`를 재사용한다. Goal 상세에는 grant 조회·preview·
+발급·회수 보조 패널을 두고 정책 편집은 Admin/Settings로 분리한다. A3 일괄·광범위 승인 UI는
+노출하지 않는다. 일반 실행 화면은 적용 grant, 잔여 범위, 다음 수동 게이트만 표시한다.
+
+Goal 상세에는 상태·진행률·현재 Milestone·승인 필요·막힘·검수자 배정 대기·마지막 오류·
+reconciliation 수를 표시한다. AUTO는 Baseline AUTO, Delegated AUTO, Manual approval,
+Mandatory human, Not executable로 구분한다. 실행 타임라인에는 queued, executing,
+review_pending_assignment, cancellation_requested, finish_current_requested, compensating,
+compensation_failed, reconciliation_required, completed_with_budget_overrun을 분리 표시한다.
+
+shadow 권한 확대, A3 AUTO, revoke/kill 이후 신규 실행, decision 누락, 이중 소비,
+evidence 없는 전진, 자기 승인/검수, tenant 경계 누출, patch/version/environment 불일치,
+외부 결과 불명 자동 재실행, masking 전 민감정보 저장이 각각 1건이라도 있으면 활성화·배포를
+중단한다.
+
+구현 착수 게이트 산출물은 PRD v1.2, WO-1.1 Final, ERD v1, 4축/A0~A3 매핑,
+상태 전이표, JSON Patch/JCS hash 규격, idempotency·reservation·ancestor revocation·outbox·
+trust boundary·독립 검수·tenant/RLS ADR, 오류 카탈로그, T01·T36~T58 명세다.
+
+운영 migration은 B-01~B-03 및 W-14F 인터페이스 승인 전 금지한다. 모든 완료 보고는
+decision id, policy/grant version, correlation id로 역추적할 수 있어야 한다.
