@@ -1,10 +1,9 @@
 import os
 import re
-from uuid import uuid4
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATION = ROOT / "migrations/20260919_yeoljeong_hr_tenant_isolation.sql"
@@ -64,7 +63,7 @@ async def test_migration_requires_dedicated_postgresql(monkeypatch):
             "INSERT INTO yeoljeong_business_tenant_mapping VALUES ($1, $2)",
             [("biz-a", tenant_a), ("biz-b", tenant_b)],
         )
-        # Reproduce the measured 60 unassigned rows: 12/29/17/2. Exactly seven
+        # Exercise a 60-row mixed-ledger fixture: 12/29/17/2. Exactly seven
         # have a safe one-time payload candidate; no PII is emitted by the audit.
         await conn.executemany(
             "INSERT INTO yeoljeong_employee_join_requests (id, employee_email, request_payload) VALUES ($1,$2,$3::jsonb)",

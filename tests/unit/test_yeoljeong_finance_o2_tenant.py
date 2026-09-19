@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-
 _PATH = Path(__file__).resolve().parents[2] / "app/services/yeoljeong_finance_service.py"
 _SPEC = importlib.util.spec_from_file_location("o2_service", _PATH)
 service = importlib.util.module_from_spec(_SPEC)
@@ -68,6 +67,7 @@ def test_payroll_integer_preserves_integer_compatibility(value, expected):
 
 def test_hr_file_read_hides_cross_tenant_and_unassigned(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(service, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")
     monkeypatch.setattr(service, "_db_available", lambda: False)
     service._write_file_rows("contracts", [
         {"id": "owned", "tenant_id": TENANT}, {"id": "cross", "tenant_id": "other"}, {"id": "legacy"},
