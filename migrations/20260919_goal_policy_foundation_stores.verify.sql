@@ -29,6 +29,9 @@ BEGIN
           ('goal_policy_decisions','decision_input_hash'),
           ('goal_policy_decisions','precondition_snapshot_hash'),
           ('goal_policy_decisions','canonicalization_version'),
+          ('goal_policy_decisions','signature_key_id'),
+          ('goal_policy_decisions','signature_key_version'),
+          ('goal_policy_decisions','ancestor_revocation_epoch'),
           ('goal_workflow_outbox','payload_hash'),
           ('goal_workflow_outbox','sequence_no'),
           ('goal_execution_leases','owner_epoch'),
@@ -53,5 +56,11 @@ BEGIN
                       WHERE tgrelid='work_item_review_decisions'::regclass
                         AND tgname='trg_review_decisions_append_only' AND NOT tgisinternal) THEN
         RAISE EXCEPTION 'one or more append-only triggers are missing';
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF to_regprocedure('goal_policy_execution_fences(uuid,uuid,uuid,uuid)') IS NULL THEN
+        RAISE EXCEPTION 'goal_policy_execution_fences is missing';
     END IF;
 END $$;

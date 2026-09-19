@@ -13,7 +13,6 @@ from uuid import uuid4
 
 import pytest
 
-
 asyncpg = pytest.importorskip("asyncpg")
 DATABASE_URL = os.getenv("M12_TEST_DATABASE_URL", "")
 pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="M12_TEST_DATABASE_URL is not configured")
@@ -22,6 +21,7 @@ M12 = (ROOT / "migrations/20260919_goal_work_hierarchy_m12.sql").read_text()
 M14 = (ROOT / "migrations/20260919_goal_work_hierarchy_m14.sql").read_text()
 UP = (ROOT / "migrations/20260919_goal_policy_foundation_stores.sql").read_text()
 W13 = (ROOT / "migrations/20260919_goal_policy_preconditions_w13.sql").read_text()
+W14F = (ROOT / "migrations/20260919_goal_policy_foundation_w14f.sql").read_text()
 VERIFY = (ROOT / "migrations/20260919_goal_policy_foundation_stores.verify.sql").read_text()
 DOWN = (ROOT / "migrations/rollback/20260919_goal_policy_foundation_stores.down.sql").read_text()
 FOUNDATION_STORES = (
@@ -204,7 +204,17 @@ async def _exercise() -> None:
         await admin.execute(UP)
         await admin.execute(W13)
         await admin.execute(W13)
+        await admin.execute(W14F)
+        await admin.execute(W14F)
         await admin.execute(VERIFY)
+        for column_name in (
+            "signature_key_id", "signature_key_version", "ancestor_revocation_epoch",
+        ):
+            assert await admin.fetchval(
+                """SELECT EXISTS(SELECT 1 FROM information_schema.columns
+                     WHERE table_name='goal_policy_decisions' AND column_name=$1)""",
+                column_name,
+            )
         for table_name in ("goal_precondition_snapshots", "goal_policy_inputs"):
             assert await admin.fetchval("SELECT to_regclass($1) IS NOT NULL", table_name)
             security = await admin.fetchrow(
@@ -307,10 +317,10 @@ async def _exercise() -> None:
                     precondition_snapshot_hash,canonicalization_version,hash_algorithm,
                     effective_application_result,masking_policy_version,kill_switch_epoch,
                     deny_policy_epoch,assignment_epoch,grant_revocation_epoch,target_version,
-                    signature_algorithm,signature)
+                    signature_algorithm,signature_key_id,signature_key_version,signature)
                    VALUES($1,$2,'AADS','project',$3,'task',$4,'update',1,'dev','DENY','NONE',
                           'NOT_EXECUTABLE','A1','DENY',$5,$6,$7,'RFC8785','SHA-256','DENY',1,
-                          0,0,0,0,1,'test','signature')""",
+                          0,0,0,0,1,'test','test-key',1,'signature')""",
                 decision_id, tenant_a, session_a, uuid4(), policy_id,
                 "sha256:" + "2" * 64, "sha256:" + "3" * 64,
             )

@@ -1,3 +1,52 @@
+# AADS-GOAL-V12-W14F-POLICY-FOUNDATION-20260919
+
+## STEP 0 기존 구현 조사 및 분류
+
+| 접점 | 분류 | 결과 |
+|---|---|---|
+| W-13 precondition 함수 3종 | 유지 | 서버 계산 snapshot/실행 직전 stale 계약 유지 |
+| `goal_policy_decisions` 및 policy foundation stores | 수정 | 서명 key·ancestor epoch와 executor fence 보강 |
+| assignment/grant/kill-switch DB 접점 | 수정 | mutable epoch 재검증용 additive 컬럼·trigger·함수 |
+| 4축 evaluator/JCS/hash/HMAC/executor verifier | 신규 | W-14F foundation service 추가 |
+| 단일 grant reservation/overrun guard | 신규 | 합성 금지·원자 차감·stale 처리 |
+| 집중 unit/integration 검증 | 신규/수정 | T36/T38/T45/T46/T48~T58 및 migration 반복 적용 |
+| 기존 router/API와 W12/W13 테스트 | 유지 | 삭제·통째 대체 없음 |
+| 삭제 | 없음 | 호출처 영향 및 롤백 대상 삭제 없음 |
+
+지시서 외 service/migration/test/handover 파일 변경 사유는 evaluator/executor 계약과
+DB fence 및 독립 검증 증거를 구현하기 위해서다. 상세 분류와 롤백 범위는
+`docs/handover/AADS-GOAL-V12-W14F-POLICY-FOUNDATION-20260919.md`에 기록했다.
+
+## 변경 파일
+
+- `app/services/goal_policy_foundation.py`
+- `migrations/20260919_goal_policy_foundation_w14f.sql`
+- `migrations/20260919_goal_policy_foundation_stores.verify.sql`
+- `tests/unit/test_goal_policy_foundation_w14f.py`
+- `tests/unit/test_goal_policy_foundation_migration.py`
+- `tests/integration/test_goal_policy_foundation_migration.py`
+- `docs/contracts/GOAL_POLICY_FOUNDATION_INTERFACE_V1.md`
+- `docs/handover/AADS-GOAL-V12-W14F-POLICY-FOUNDATION-20260919.md`
+- `RESULT.md`
+
+## 검증 결과
+
+- `git diff --check`: PASS.
+- `pytest -q tests/unit/test_goal_*.py`: **340 passed**.
+- W-14F/W-13/W-12 집중 unit 4개 파일: **41 passed**.
+- disposable PostgreSQL `goal_w14f_r5b_test`에서
+  `tests/integration/test_goal_policy_foundation_migration.py`: **1 passed**.
+- 독립 검수에서 mutable epoch 서명, 현재 target version, 활성 policy/assignment,
+  kill switch, grant ancestor 상태, RFC 8785 binary64/Unicode 경계를 추가 보강했다.
+- 러너 생성물 `.runner_full_diff.patch`는 최종 커밋에서 제외했다. 원본은
+  `/tmp/runner-2085d6bd-full-diff.patch`로 이동해 복구 가능하다.
+- npm/next/docker build: 승인 후 Runner 빌드 검증 대상.
+- production DB evidence: 조회·변경하지 않음. B-04 승인 완료를 주장하지 않음.
+- commit SHA/push state: 최종 커밋 시 갱신 대상.
+- 삭제 0건, production write 0건, 배포 0건.
+
+---
+
 # AADS-GOAL-V12-W13-PRECONDITIONS-BOUNDARY-20260919
 
 ## STEP 0 기존 구현 조사

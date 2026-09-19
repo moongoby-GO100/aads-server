@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
 UP = (ROOT / "migrations/20260919_goal_policy_foundation_stores.sql").read_text()
+W14F = (ROOT / "migrations/20260919_goal_policy_foundation_w14f.sql").read_text()
 DOWN = (ROOT / "migrations/rollback/20260919_goal_policy_foundation_stores.down.sql").read_text()
 VERIFY = (ROOT / "migrations/20260919_goal_policy_foundation_stores.verify.sql").read_text()
 ADR = (ROOT / "docs/decisions/ADR-021-goal-policy-tenant-isolation.md").read_text()
@@ -46,6 +47,18 @@ def test_foundation_hash_epoch_review_and_reconciliation_contracts():
     assert "CREATE OR REPLACE VIEW goal_approval_kill_switches_compat" in UP
     assert "CREATE OR REPLACE VIEW goal_approval_decision_logs_compat" in UP
     assert "security_invoker=true" in UP
+
+
+def test_w14f_signed_envelope_and_execution_fences_are_additive():
+    for field in (
+        "signature_key_id", "signature_key_version", "ancestor_revocation_epoch",
+        "assignment_epoch", "revocation_epoch",
+    ):
+        assert field in W14F
+    assert "goal_policy_execution_fences" in W14F
+    assert "SECURITY INVOKER" in W14F
+    assert "DROP TABLE" not in W14F
+    assert "TRUNCATE" not in W14F
 
 
 def test_tenant_isolation_is_default_deny_and_rollback_is_non_destructive():

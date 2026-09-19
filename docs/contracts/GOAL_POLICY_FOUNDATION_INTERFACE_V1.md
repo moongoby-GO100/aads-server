@@ -1,6 +1,6 @@
 # Goal Policy Foundation Interface v1
 
-- 상태: **승인 (B-04, 2026-09-19 17:09 KST)**
+- 상태: **계약 내용 승인 기록 기재 / B-04 DB 승인 이벤트 미검증**
 - 대상: W-14F evaluator / executor
 - PRD: `docs/prd/20260919_GOAL_WORK_HIERARCHY_APPROVAL_PRD.md` v1.2
 - 원칙: 본 계약 승인 전 W-14F 구현 및 추가 운영 migration 금지
@@ -192,12 +192,14 @@ B-04 승인에는 T01 수정본, T08 강화본, T36~T58 명세가 모두 연결�
 shadow 권한 확대, A3 AUTO, ledger 누락, 이중 소비, revoke/kill switch 이후 신규
 실행, tenant 누출이 각 1건이라도 있으면 승인을 중단한다.
 
-## 13. B-04 승인 기록
+## 13. B-04 승인 기록(문서 기재값, DB 증거 확인 전)
 
 승인 이벤트에는 문서 commit SHA, 승인자 session UUID, 승인 시각, 승인한 contract
 version, 관련 ADR 목록을 기록한다. 승인 전 상태는 `pending`이며 이 문서만으로
 승인을 추정하지 않는다.
 
+- 증거 상태: 이 저장소 작업에서는 production DB를 조회·변경하지 않았으므로 B-04
+  승인 완료를 주장하지 않는다. 아래 값은 선행 문서에 기재된 메타데이터다.
 - 승인 범위 판정: `propose_next_steps` auto grant `82320385`
 - 승인 세션: `1fa84036-b12d-4497-97f5-076a32645a20`
 - 승인 시각: 2026-09-19 17:09 KST
