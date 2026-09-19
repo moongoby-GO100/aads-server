@@ -22,6 +22,10 @@ def test_weekly_report_is_session_only_and_idempotent() -> None:
     assert "ON CONFLICT (goal_id, subject_id, event) DO NOTHING" in source
     assert "_telegram(" not in source
     assert "notify(" not in source
+    # structlog reserves the positional event name. Passing ``event=`` again
+    # records the report and then crashes with "multiple values for event".
+    assert "report_event=event" in source
+    assert ", event=event" not in source
 
 
 def test_scheduler_registers_monday_kst_goal_report() -> None:

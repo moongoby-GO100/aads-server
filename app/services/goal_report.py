@@ -289,7 +289,8 @@ async def report_weekly_goal_progress(
             logger.info(
                 "weekly_goal_progress_sent",
                 goal_id=row["goal_id"], project=row["project"],
-                completed=completed, total=total, blocked=blocked, event=event,
+                completed=completed, total=total, blocked=blocked,
+                report_event=event,
             )
 
     return {"reported": reported, "skipped_no_owner": skipped_no_owner}
