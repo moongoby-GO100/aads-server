@@ -1690,6 +1690,25 @@ reload_mounted_sidecars() {
     deploy_phase_end "mounted_sidecar_reload" "success" "mounted sidecars reloaded and publicly healthy"
 }
 
+schedule_standby_sync_retry() {
+    local run_id="${1:-}"
+    local sync_script="${STATE_DIR}/scripts/sync-standby.sh"
+    local unit="aads-standby-sync-${run_id:-unknown}"
+    [[ "$run_id" =~ ^[0-9]+$ ]] || return 1
+    [[ -x "$sync_script" ]] || {
+        echo "[deploy.sh] ⚠️ standby retry script missing: ${sync_script}"
+        return 1
+    }
+    if systemd-run --unit="$unit" --collect --property=Type=oneshot \
+        /bin/bash -lc "set +e; for _attempt in \$(seq 1 120); do '${sync_script}' --deploy-run-id '${run_id}'; _rc=\$?; [[ \$_rc -eq 0 ]] && exit 0; [[ \$_rc -eq 2 || \$_rc -eq 3 ]] || exit \$_rc; sleep 30; done; exit 3" \
+        >/dev/null 2>&1; then
+        echo "[deploy.sh] standby 동기화 재시도 예약: unit=${unit}, run=${run_id}"
+        return 0
+    fi
+    echo "[deploy.sh] ⚠️ standby 동기화 재시도 예약 실패: unit=${unit}"
+    return 1
+}
+
 container_for_port() {
     case "$1" in
         8100) echo "aads-server" ;;
@@ -2581,6 +2600,7 @@ case "$MODE" in
                 STANDBY_SYNC_DEFERRED=true
                 notify "⚠️ standby 동기화 보류: 활성 스트림 때문에 ${OLD_CONTAINER} 가 구버전으로 남음"
                 deploy_phase_end "standby_same_digest_sync" "skipped" "deferred: active streams on ${OLD_CONTAINER}:${OLD_PORT}"
+                schedule_standby_sync_retry "$DEPLOY_RUN_ID" || true
                 echo "[deploy.sh] ⚠️ standby 동기화 보류 — 활성 슬롯은 새 릴리스로 정상 동작"
                 ;;
             *)

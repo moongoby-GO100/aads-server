@@ -45,7 +45,7 @@ GREEN_CONTAINER="aads-server-green"
 GREEN_PORT=8102
 
 DRY_RUN=false
-[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
+DEPLOY_RUN_ID=""
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -59,6 +59,20 @@ audit() {
 }
 
 die() { log "ERROR: $*"; audit "failed" "$*"; exit 2; }
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run) DRY_RUN=true ;;
+        --deploy-run-id)
+            DEPLOY_RUN_ID="${2:-}"
+            shift
+            ;;
+        *) die "알 수 없는 인자: $1" ;;
+    esac
+    shift
+done
+[[ -z "$DEPLOY_RUN_ID" || "$DEPLOY_RUN_ID" =~ ^[0-9]+$ ]] \
+    || die "deploy run id는 숫자여야 한다: ${DEPLOY_RUN_ID}"
 
 # ── 1. 활성 슬롯 확인 ────────────────────────────────────────────────────────
 active_container="$(tr -d '[:space:]' < "${STATE_DIR}/.active_container" 2>/dev/null || true)"
@@ -88,16 +102,48 @@ active_tag="$(docker inspect "$active_container" --format '{{.Config.Image}}' 2>
 active_digest="$(docker inspect "$active_container" --format '{{.Image}}' 2>/dev/null || true)"
 standby_digest="$(docker inspect "$standby_container" --format '{{.Image}}' 2>/dev/null || true)"
 [[ -n "$active_tag" && -n "$active_digest" ]] || die "활성 컨테이너 이미지를 읽을 수 없다"
+release_sha="${active_tag#aads-server:}"
+[[ -n "$release_sha" && "$release_sha" != "$active_tag" ]] || die "활성 이미지 태그 형식이 예상과 다르다: ${active_tag}"
+
+certify_deferred_run() {
+    [[ -n "$DEPLOY_RUN_ID" ]] || return 0
+    local release_sql digest_sql
+    release_sql="${release_sha//\'/\'\'}"
+    digest_sql="${active_digest//\'/\'\'}"
+    docker exec aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 -qAtc "
+        WITH updated AS (
+            UPDATE deploy_runs
+            SET status='success', phase='completed', phase_completed_at=NOW(),
+                updated_at=NOW(), last_heartbeat_at=NOW(),
+                image_digest='${digest_sql}', standby_digest='${digest_sql}',
+                error_summary=NULL
+            WHERE id=${DEPLOY_RUN_ID}
+              AND project='AADS'
+              AND release_sha='${release_sql}'
+              AND status='success_partial'
+            RETURNING id
+        )
+        INSERT INTO deploy_phase_events(
+            deploy_run_id, phase, status, phase_started_at, phase_completed_at,
+            duration_ms, current_slot, candidate_slot, image_digest,
+            standby_digest, error_summary, metadata
+        )
+        SELECT id, 'standby_same_digest_sync_retry', 'success', NOW(), NOW(),
+               0, '${active_port}', '${standby_port}', '${digest_sql}',
+               '${digest_sql}', NULL, jsonb_build_object('source','sync-standby.sh')
+        FROM updated;
+    " >/dev/null
+    log "deploy_runs#${DEPLOY_RUN_ID} success_partial → success 인증 반영"
+}
 
 if [[ "$active_digest" == "$standby_digest" ]]; then
     log "이미 동일한 이미지다 (${active_tag}). 할 일 없음."
+    certify_deferred_run
     audit "skipped" "already same digest"
     exit 0
 fi
 log "드리프트 감지: 활성=${active_digest:7:12} / 대기=${standby_digest:7:12}"
 
-release_sha="${active_tag#aads-server:}"
-[[ -n "$release_sha" && "$release_sha" != "$active_tag" ]] || die "활성 이미지 태그 형식이 예상과 다르다: ${active_tag}"
 docker image inspect "$active_tag" >/dev/null 2>&1 || die "이미지 ${active_tag} 가 로컬에 없다"
 
 # ── 4. 사전조건: 활성 슬롯 정상 + 대기 슬롯 비어 있음 ────────────────────────
@@ -152,5 +198,6 @@ curl -sf --max-time 5 "http://127.0.0.1:${active_port}/api/v1/health" >/dev/null
     || die "활성 슬롯이 동기화 후 비정상이다"
 
 log "✅ 동기화 완료: 양 슬롯 ${active_tag} (${active_digest:7:12}), 활성 ${active_container}:${active_port} 무변경"
+certify_deferred_run
 audit "success" "standby synced to ${active_tag}"
 exit 0
