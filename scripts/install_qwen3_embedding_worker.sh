@@ -22,11 +22,17 @@ release_root="/opt/aads-qwen3-worker/releases"
 release_dir="$release_root/$release_sha"
 current_link="/opt/aads-qwen3-worker/current"
 previous_target="$(readlink -f "$current_link" 2>/dev/null || true)"
+python_bin="${QWEN_PYTHON_BIN:-python3}"
+
+if ! "$python_bin" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))'; then
+  echo "Qwen3 worker requires Python 3.10+; set QWEN_PYTHON_BIN explicitly" >&2
+  exit 65
+fi
 
 install -d -m 0755 "$release_dir" "$release_root"
 install -m 0755 "$source_dir/scripts/qwen3_embedding_worker.py" "$release_dir/qwen3_embedding_worker.py"
 install -m 0644 "$source_dir/scripts/qwen3_embedding_worker.requirements.txt" "$release_dir/requirements.txt"
-python3 -m venv "$release_dir/.venv"
+"$python_bin" -m venv "$release_dir/.venv"
 "$release_dir/.venv/bin/pip" install --disable-pip-version-check -r "$release_dir/requirements.txt"
 
 install -d -m 0750 /etc/aads
