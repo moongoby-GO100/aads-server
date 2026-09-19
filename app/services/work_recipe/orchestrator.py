@@ -11,7 +11,7 @@ from app.services.work_recipe.executor import BrowserRecipeExecutor
 from app.services.work_recipe.player import RunResult, play_recipe
 from app.services.work_recipe.schema import WorkRecipe, parse_recipe
 from app.services.work_recipe.store import list_recipes, normalize_domain, row_to_recipe
-from app.services.channel_router import ActionIntent, ChannelRouter, DirectiveEnvelope, payload_hash
+from app.services.channel_router import ActionIntent, ChannelRouter
 
 _URL_HOST = re.compile(r"https?://([^/\s]+)", re.IGNORECASE)
 
@@ -53,24 +53,12 @@ async def run_directive(
 ) -> RunResult | None:
     """Run only a routed command; raw page text has no execution path here."""
     if action_intent is None:
-        payload = {"directive": directive_text}
-        action_intent = ChannelRouter().route_directive(
-            DirectiveEnvelope(
-                source="internal_control",
-                tenant_id=str(tenant_id),
-                session_id=browser_session_id or task_id or "internal-work-recipe",
-                correlation_id=task_id or "internal-work-recipe",
-                trust_level="internal",
-                allowed_capabilities=frozenset({"recipe.execute"}),
-                payload=payload,
-                payload_hash=payload_hash(payload),
-            ),
-            capability="recipe.execute",
-        )
-    else:
-        action_intent = ChannelRouter().validate_action_intent(
-            action_intent, capability="recipe.execute"
-        )
+        # The executor boundary must never manufacture authority for raw text.
+        # An authenticated ingress must route every command first.
+        raise ValueError("action_intent_required")
+    action_intent = ChannelRouter().validate_action_intent(
+        action_intent, capability="recipe.execute"
+    )
     if action_intent.tenant_id != str(tenant_id):
         raise ValueError("action_intent_tenant_mismatch")
     directive_text = str(action_intent.payload.get("directive") or "")
