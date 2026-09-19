@@ -38,6 +38,21 @@ def _clean_payload(payload: Optional[dict[str, Any]]) -> dict[str, Any]:
     return data
 
 
+def _business_id(user: dict[str, Any], requested_business_id: Optional[str]) -> str:
+    """Keep O3's single-company business scope from becoming a query bypass.
+
+    O3 has no separate, tenant-scoped business registry to look up.  Its rows use
+    the authenticated company id as their business scope, so accepting an
+    arbitrary client business id would create an unverified partition.  Until a
+    business registry is introduced, only that server-derived value is valid.
+    """
+    company_id = _company_id(user)
+    requested = str(requested_business_id or "").strip()
+    if requested and requested != company_id:
+        raise HTTPException(status_code=403, detail="허용되지 않은 사업자 범위입니다.")
+    return company_id
+
+
 def _quantity(value: Any, field: str = "quantity", *, allow_zero: bool = False) -> Decimal:
     """수량을 Decimal 로 파싱한다. 형식이 틀리거나 범위를 벗어나면 400."""
     if value is None or value == "":
@@ -69,11 +84,12 @@ async def get_items(
     low_stock: bool = Query(False),
     user: dict = Depends(get_current_user),
 ):
+    company_id = _company_id(user)
     items = await service.list_items(
-        _company_id(user),
+        company_id,
         category=category,
         low_stock=low_stock,
-        business_id=business_id,
+        business_id=_business_id(user, business_id),
     )
     return {"items": items, "count": len(items)}
 
@@ -86,6 +102,7 @@ async def post_item(
     data = _clean_payload(payload)
     if not data.get("name"):
         raise HTTPException(status_code=400, detail="name is required")
+    data["business_id"] = _business_id(user, data.get("business_id"))
     item = await service.create_item(_company_id(user), data)
     return {"item": item}
 
@@ -100,7 +117,10 @@ async def patch_item(
     existing = await service.get_item(company_id, item_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="item not found")
-    item = await service.update_item(company_id, item_id, _clean_payload(payload))
+    data = _clean_payload(payload)
+    if "business_id" in data:
+        data["business_id"] = _business_id(user, data.get("business_id"))
+    item = await service.update_item(company_id, item_id, data)
     return {"item": item}
 
 
@@ -184,7 +204,9 @@ async def get_low_stock(
     business_id: Optional[str] = Query(None),
     user: dict = Depends(get_current_user),
 ):
-    items = await service.low_stock_items(_company_id(user), business_id=business_id)
+    items = await service.low_stock_items(
+        _company_id(user), business_id=_business_id(user, business_id)
+    )
     return {"items": items, "count": len(items)}
 
 
@@ -205,7 +227,7 @@ async def get_orders(
         status=status,
         date_from=date_from,
         date_to=date_to,
-        business_id=business_id,
+        business_id=_business_id(user, business_id),
     )
     return {"orders": orders, "count": len(orders)}
 
@@ -216,6 +238,7 @@ async def post_order(
     user: dict = Depends(get_current_user),
 ):
     data = _clean_payload(payload)
+    data["business_id"] = _business_id(user, data.get("business_id"))
     for index, line in enumerate(data.get("items") or []):
         if isinstance(line, dict) and line.get("quantity") is not None:
             line["quantity"] = str(_quantity(line.get("quantity"), f"items[{index}].quantity"))
@@ -233,7 +256,10 @@ async def patch_order(
     existing = await service.get_order(company_id, order_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="order not found")
-    order = await service.update_order(company_id, order_id, _clean_payload(payload))
+    data = _clean_payload(payload)
+    if "business_id" in data:
+        data["business_id"] = _business_id(user, data.get("business_id"))
+    order = await service.update_order(company_id, order_id, data)
     return {"order": order}
 
 

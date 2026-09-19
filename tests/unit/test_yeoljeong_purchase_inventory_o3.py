@@ -283,6 +283,17 @@ def test_listing_never_leaks_another_company(store) -> None:
     assert names_b == ["B사 대파"]
 
 
+def test_unowned_business_scope_is_forbidden(store) -> None:
+    client = _client(COMPANY_A)
+
+    response = client.get(
+        "/api/v1/yeoljeong-inventory/items?business_id=company-b"
+    )
+
+    assert response.status_code == 403
+    assert "사업자 범위" in response.json()["detail"]
+
+
 def test_other_company_item_is_not_reachable_by_id(store) -> None:
     client_a, client_b = _client(COMPANY_A), _client(COMPANY_B)
     item_id = client_a.post("/api/v1/yeoljeong-inventory/items", json={"name": "A사 사골"}).json()["item"]["id"]
@@ -542,3 +553,8 @@ def test_obys_screen_uses_purchase_inventory_wording() -> None:
     assert "obys_inventory_order_draft" in js
     assert 'id="stockBalanceRows"' in html
     assert 'id="inventoryStocktakeForm"' in html
+    assert "loadInventoryData" in html
+    assert "inventoryApi(\"/orders\"" in html
+    assert "data-receive-order" in html
+    assert "inventoryDraftKey" in html
+    assert "salesDataState" in html

@@ -2928,7 +2928,13 @@
       <section id="salesView" class="hidden">
         <div class="grid content-grid">
           <section class="panel">
-            <div class="panel-head"><h2 class="panel-title">매출·정산 요약</h2><button type="button" data-view="entries">거래 입력 열기</button></div>
+            <div class="panel-head"><h2 class="panel-title">매출·정산 요약</h2><button type="button" class="v2-touch" id="salesRefreshBtn">새로고침</button></div>
+            <div class="panel-body v2-actions">
+              <label class="v2-field">기간 시작<input id="salesDateFrom" type="date"></label>
+              <label class="v2-field">기간 종료<input id="salesDateTo" type="date"></label>
+              <label class="v2-field">지점<input id="salesBranchFilter" type="text" placeholder="전체 지점"></label>
+              <span class="muted" id="salesDataState" aria-live="polite">로그인 후 실제 매출 원장을 불러옵니다.</span>
+            </div>
             <div class="panel-body"><div id="salesSummaryRows" class="progress-list"></div></div>
           </section>
           <section class="panel">
@@ -2962,7 +2968,8 @@
       <section id="inventoryView" class="hidden">
         <div class="grid content-grid">
           <section class="panel">
-            <div class="panel-head"><h2 class="panel-title">매입·재고</h2><button type="button" data-view="integrations">매입처 연동</button></div>
+            <div class="panel-head"><h2 class="panel-title">매입·재고</h2><button type="button" class="v2-touch" id="inventoryRefreshBtn">새로고침</button></div>
+            <div class="panel-body"><p class="muted" id="inventoryDataState" aria-live="polite">로그인 후 품목·발주·재고를 불러옵니다.</p></div>
             <div class="panel-body"><div id="inventorySummaryRows" class="progress-list"></div></div>
           </section>
           <section class="panel">
@@ -5650,6 +5657,10 @@
     let dbDeliverySales = [];
     let dbDeliveryReviews = [];
     let dbCollectionStatuses = [];
+    let salesLedger = [];
+    let inventoryItems = [];
+    let inventoryOrders = [];
+    let inventoryBalances = [];
     let pendingPhoneInviteToken = "";
     let pendingPhoneInvite = null;
     let pendingContractSignToken = "";
@@ -6774,33 +6785,37 @@
         `).join("") : tableEmpty(4, "보관 문서가 없습니다.");
       }
 
-      const dbSalesRows = deliveryLedgerRows("sales")
-        .filter(row => isSelectedBusinessRecord(row) && inScopeBranch(row.branch || "") && inScopeDate(deliveryRecordDate(row)))
-        .map(row => ({
-          date: deliveryRecordDate(row),
-          channel: integrationLabels[deliveryRecordService(row)] || deliveryRecordService(row) || "판매채널",
-          vendor: `${row.branch || "지점 미지정"} DB 수집매출`,
-          amount: deliveryRecordAmount(row, "sales"),
-          status: "confirmed"
-        }));
-      const salesRows = [
-        ...scopedEntries().filter(item => ["sales", "bank"].includes(item.type)),
-        ...dbSalesRows
-      ].slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
-      const dbSalesAmount = dbSalesRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+      const salesDateFrom = els.salesDateFrom?.value || "";
+      const salesDateTo = els.salesDateTo?.value || "";
+      const salesBranch = String(els.salesBranchFilter?.value || "").trim();
+      const salesRows = salesLedger.filter(row => {
+        const date = deliveryRecordDate(row);
+        const branch = String(row.branch || "");
+        return (!salesDateFrom || date >= salesDateFrom)
+          && (!salesDateTo || date <= salesDateTo)
+          && (!salesBranch || branch.includes(salesBranch));
+      }).map(row => ({
+        date: deliveryRecordDate(row),
+        channel: integrationLabels[deliveryRecordService(row)] || deliveryRecordService(row) || "판매채널",
+        vendor: row.kind === "settlement" ? "정산" : (row.order_no || row.order_id || "매출"),
+        amount: Number(row.amount || 0),
+        status: row.settlement_status || row.status || "confirmed",
+        kind: row.kind
+      })).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      const salesAmount = salesRows.filter(row => row.kind === "sales").reduce((sum, row) => sum + row.amount, 0);
+      const settlementAmount = salesRows.filter(row => row.kind === "settlement").reduce((sum, row) => sum + row.amount, 0);
       if (els.salesSummaryRows) {
         els.salesSummaryRows.innerHTML = [
-          progressRow("매출", formatMoney(m.sales), m.sales ? "good" : "warn", 100),
-          progressRow("DB 판매채널", `${dbSalesRows.length.toLocaleString("ko-KR")}건 · ${formatMoney(dbSalesAmount)}`, dbSalesRows.length ? "good" : "warn", 100),
-          progressRow("입금", formatMoney(m.bank), m.bank ? "good" : "warn", 100),
-          progressRow("대사 차이", formatMoney(m.depositGap), Math.abs(m.depositGap) > Math.max(10000, m.sales * 0.02) ? "warn" : "good", 60)
+          progressRow("매출", formatMoney(salesAmount), salesAmount ? "good" : "warn", 100),
+          progressRow("정산", formatMoney(settlementAmount), settlementAmount ? "good" : "warn", 100),
+          progressRow("원장 건수", `${salesRows.length.toLocaleString("ko-KR")}건`, salesRows.length ? "good" : "warn", 100)
         ].join("");
       }
       if (els.salesRows) {
         els.salesRows.innerHTML = salesRows.length ? salesRows.map(row => {
           const [label, klass] = statusLabels[row.status] || statusLabels.pending;
           return `<tr><td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.channel)}</td><td>${escapeHtml(row.vendor)}</td><td class="num">${formatMoney(row.amount)}</td><td>${badgeHtml(label, klass)}</td></tr>`;
-        }).join("") : tableEmpty(5, "매출·입금 거래가 없습니다.");
+        }).join("") : tableEmpty(5, "서버 매출·정산 데이터가 없습니다.");
       }
 
       const bankIntegrations = (settings().integrations || []).filter(item => financialTransactionServices.has(item.service));
@@ -6824,20 +6839,30 @@
         `).join("") : tableEmpty(4, "등록된 계좌 또는 은행 연동이 없습니다.");
       }
 
-      const purchaseRows = scopedEntries().filter(item => ["marketbom", "expense"].includes(item.type) || /마켓봄|매입|식자재|발주|거래명세|영수증/.test(`${item.vendor} ${item.channel} ${item.memo}`));
+      const purchaseRows = inventoryOrders.slice().sort((a, b) => String(b.order_date || b.created_at || "").localeCompare(String(a.order_date || a.created_at || "")));
       const supplierIntegrations = (settings().integrations || []).filter(item => ["매입처"].includes(integrationCatalog[item.service]?.category));
       if (els.inventorySummaryRows) {
         els.inventorySummaryRows.innerHTML = [
-          progressRow("매입 합계", formatMoney(m.marketbom), m.marketbom ? "good" : "warn", 100),
+          progressRow("발주 합계", formatMoney(purchaseRows.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)), purchaseRows.length ? "good" : "warn", 100),
           progressRow("매입처 연동", `${supplierIntegrations.length}개`, supplierIntegrations.length ? "good" : "warn", 80),
-          progressRow("식재료율", `${foodRate.toFixed(1)}%`, foodRate > 38 ? "bad" : "info", foodRate)
+          progressRow("재고 품목", `${inventoryItems.length}개`, inventoryItems.length ? "good" : "warn", 80)
         ].join("");
       }
       if (els.inventoryRows) {
         els.inventoryRows.innerHTML = purchaseRows.length ? purchaseRows.slice(0, 20).map(row => {
           const [label, klass] = statusLabels[row.status] || statusLabels.pending;
-          return `<tr><td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.vendor)}</td><td>${escapeHtml(row.channel)}</td><td class="num">${formatMoney(row.amount)}</td><td>${badgeHtml(label, klass)}</td></tr>`;
-        }).join("") : tableEmpty(5, "매입·발주 근거 거래가 없습니다.");
+          return `<tr><td>${escapeHtml(String(row.order_date || row.created_at || "").slice(0, 10))}</td><td>${escapeHtml(row.supplier || "-")}</td><td>${escapeHtml(row.channel || "발주")}</td><td class="num">${formatMoney(row.total_amount || 0)}</td><td>${badgeHtml(label, klass)}</td><td><button type="button" class="v2-touch" data-receive-order="${escapeHtml(row.id)}" ${row.status === "received" ? "disabled" : ""}>${row.status === "received" ? "입고완료" : "입고 처리"}</button></td></tr>`;
+        }).join("") : tableEmpty(6, "서버에 저장된 발주가 없습니다.");
+      }
+      const inventoryOptions = `<option value="">품목 선택</option>${inventoryItems.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} · 재고 ${escapeHtml(item.current_stock || 0)}${escapeHtml(item.unit || "")}</option>`).join("")}`;
+      [els.inventoryOrderItem, els.stocktakeItem].forEach(select => {
+        if (!select) return;
+        const selected = select.value;
+        select.innerHTML = inventoryOptions;
+        select.value = inventoryItems.some(item => item.id === selected) ? selected : "";
+      });
+      if (els.stockBalanceRows) {
+        els.stockBalanceRows.innerHTML = inventoryBalances.length ? inventoryBalances.map(row => `<tr><td>${escapeHtml(String(row.counted_at || row.created_at || "").slice(0, 10))}</td><td>${escapeHtml(row.item_name || "-")}</td><td class="num">${escapeHtml(row.book_quantity || 0)}</td><td class="num">${escapeHtml(row.counted_quantity || 0)}</td><td class="num">${escapeHtml(row.variance_quantity || 0)}</td><td>${escapeHtml(row.counted_by || "-")}</td></tr>`).join("") : tableEmpty(6, "서버에 저장된 재고 실사가 없습니다.");
       }
 
       const taxIntegrations = (settings().integrations || []).filter(item => ["세무·계산서", "기타 운영"].includes(integrationCatalog[item.service]?.category));
@@ -10092,6 +10117,8 @@
       if ((currentView === "contracts" || currentView === "payroll") && canManageOnboarding()) loadApprovedEmployees().catch(err => showToast(`승인 직원 조회 실패: ${err.message}`));
       if (currentView === "payroll" && hasServerAuth()) loadPayrollStatements().catch(err => showToast(`급여내역서 조회 실패: ${err.message}`));
       if (currentView === "integrations") ensureServerAccountsForIntegrations();
+      if (currentView === "sales") loadSalesLedger({ silent: true });
+      if (currentView === "inventory") loadInventoryData({ silent: true });
       applyAccessPolicy();
     }
 
@@ -10430,6 +10457,105 @@
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.detail || payload.message || `API ${response.status}`);
       return payload;
+    }
+
+    async function inventoryApi(path, options = {}) {
+      const response = await fetch(`/api/v1/yeoljeong-inventory${path}`, {
+        ...options,
+        headers: { ...apiHeaders(), ...(options.headers || {}) }
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const error = new Error(payload.detail || payload.message || `API ${response.status}`);
+        error.status = response.status;
+        if (response.status === 401) {
+          clearServerAuthToken();
+          saveAuthSession(null);
+          renderAuthState();
+        }
+        throw error;
+      }
+      return payload;
+    }
+
+    function inventoryDraftKey() {
+      const tenant = String(currentTenantId() || "anonymous");
+      const business = String(selectedSettingsBusinessId() || tenant);
+      const user = String(currentEmployeeEmail() || authSession?.user?.id || "anonymous");
+      return `obys_inventory_order_draft:${tenant}:${business}:${user}`;
+    }
+
+    function saveInventoryDraft() {
+      if (!hasServerAuth() || !els.inventoryOrderForm) return;
+      const draft = Object.fromEntries(new FormData(els.inventoryOrderForm).entries());
+      localStorage.setItem(inventoryDraftKey(), JSON.stringify(draft));
+      if (els.inventoryDraftState) els.inventoryDraftState.textContent = "이 사업자 계정에만 초안이 자동 보관됩니다.";
+    }
+
+    function restoreInventoryDraft() {
+      if (!hasServerAuth() || !els.inventoryOrderForm) return;
+      try {
+        const draft = JSON.parse(localStorage.getItem(inventoryDraftKey()) || "null");
+        if (!draft || typeof draft !== "object") return;
+        Object.entries(draft).forEach(([name, value]) => {
+          const field = els.inventoryOrderForm.elements.namedItem(name);
+          if (field && value != null) field.value = value;
+        });
+        if (els.inventoryDraftState) els.inventoryDraftState.textContent = "이 사업자 계정의 보관된 발주 초안을 복구했습니다.";
+      } catch (_) {
+        // A malformed local draft is never allowed to block server-backed inventory.
+      }
+    }
+
+    function inventoryErrorState(error) {
+      if (error?.status === 401) return "세션이 만료되었습니다. 다시 로그인해 주세요.";
+      return `불러오지 못했습니다: ${error?.message || "알 수 없는 오류"}`;
+    }
+
+    async function loadInventoryData({ silent = false } = {}) {
+      if (!hasServerAuth()) return;
+      if (els.inventoryDataState) els.inventoryDataState.textContent = "매입·재고 데이터를 불러오는 중입니다…";
+      try {
+        const [items, orders, balances] = await Promise.all([
+          inventoryApi("/items"), inventoryApi("/orders"), inventoryApi("/stock-balances")
+        ]);
+        inventoryItems = items.items || [];
+        inventoryOrders = orders.orders || [];
+        inventoryBalances = balances.stock_balances || [];
+        restoreInventoryDraft();
+        if (els.inventoryDataState) els.inventoryDataState.textContent = inventoryItems.length || inventoryOrders.length ? "서버에 저장된 매입·재고 데이터" : "등록된 품목·발주가 없습니다. 첫 품목을 등록한 뒤 발주할 수 있습니다.";
+        renderAll();
+      } catch (error) {
+        if (els.inventoryDataState) els.inventoryDataState.textContent = inventoryErrorState(error);
+        renderAll();
+        if (!silent) showToast(inventoryErrorState(error));
+      }
+    }
+
+    async function loadSalesLedger({ silent = false } = {}) {
+      if (!hasServerAuth()) return;
+      if (els.salesDataState) els.salesDataState.textContent = "매출·정산 원장을 불러오는 중입니다…";
+      try {
+        const business = selectedSettingsBusinessId();
+        const query = business ? `?business_id=${encodeURIComponent(business)}` : "";
+        const [sales, settlements] = await Promise.all([financeApi(`/sales${query}`), financeApi(`/settlements${query}`)]);
+        salesLedger = [
+          ...(sales.sales || []).map(row => ({ ...row, kind: "sales", amount: deliveryRecordAmount(row, "sales") })),
+          ...(settlements.settlements || []).map(row => ({ ...row, kind: "settlement", amount: deliveryRecordAmount(row, "settlements") }))
+        ];
+        if (els.salesDataState) els.salesDataState.textContent = salesLedger.length ? "서버 매출·정산 원장" : "선택한 기간·지점의 서버 매출·정산 데이터가 없습니다.";
+        renderAll();
+      } catch (error) {
+        salesLedger = [];
+        // The legacy finance ledger is deliberately tenant-gated.  A new
+        // business must see an empty ledger, never another tenant's records or
+        // a misleading retryable failure for that access boundary.
+        if (els.salesDataState) els.salesDataState.textContent = error?.status === 403
+          ? "이 사업자에 연결된 서버 매출·정산 데이터가 없습니다."
+          : inventoryErrorState(error);
+        renderAll();
+        if (!silent && error?.status !== 403) showToast(inventoryErrorState(error));
+      }
     }
 
     function apiAuthOnlyHeaders() {
@@ -11183,6 +11309,10 @@
       dbDeliveryReviews = [];
       dbCollectionStatuses = [];
       deliverySettlements = [];
+      salesLedger = [];
+      inventoryItems = [];
+      inventoryOrders = [];
+      inventoryBalances = [];
       renderOnboarding();
       renderEmployees();
       renderPayroll();
@@ -12231,6 +12361,67 @@
     function bindEvents() {
       els.monthFilter.addEventListener("change", renderAll);
       els.branchFilter.addEventListener("change", renderAll);
+      [els.salesDateFrom, els.salesDateTo, els.salesBranchFilter].forEach(input => input?.addEventListener("change", renderAll));
+      els.salesBranchFilter?.addEventListener("input", renderAll);
+      els.salesRefreshBtn?.addEventListener("click", () => loadSalesLedger().catch(() => {}));
+      els.inventoryRefreshBtn?.addEventListener("click", () => loadInventoryData().catch(() => {}));
+      els.inventoryOrderForm?.addEventListener("input", saveInventoryDraft);
+      els.inventoryOrderForm?.addEventListener("submit", async event => {
+        event.preventDefault();
+        if (!hasServerAuth()) return showToast("발주를 등록하려면 다시 로그인해 주세요.");
+        const form = new FormData(els.inventoryOrderForm);
+        const itemId = String(form.get("item_id") || "");
+        const quantity = String(form.get("quantity") || "");
+        if (!itemId || !quantity || Number(quantity) <= 0) return showToast("품목과 0보다 큰 수량을 입력해 주세요.");
+        const selectedItem = inventoryItems.find(item => item.id === itemId);
+        if (!selectedItem) return showToast("선택한 품목을 다시 불러와 주세요.");
+        const button = els.inventoryOrderSubmit;
+        button.disabled = true;
+        try {
+          await inventoryApi("/orders", {
+            method: "POST",
+            body: JSON.stringify({
+              supplier: String(form.get("supplier") || "").trim(),
+              total_amount: Number(form.get("total_amount") || 0),
+              memo: String(form.get("memo") || "").trim(),
+              items: [{ item_id: itemId, item_name: selectedItem.name, quantity, unit: selectedItem.unit || "" }]
+            })
+          });
+          localStorage.removeItem(inventoryDraftKey());
+          els.inventoryOrderForm.reset();
+          if (els.inventoryDraftState) els.inventoryDraftState.textContent = "발주를 서버에 등록했습니다.";
+          await loadInventoryData({ silent: true });
+          showToast("발주를 서버에 등록했습니다.");
+        } catch (error) {
+          showToast(inventoryErrorState(error));
+        } finally {
+          button.disabled = false;
+        }
+      });
+      els.inventoryOrderReset?.addEventListener("click", () => {
+        els.inventoryOrderForm.reset();
+        localStorage.removeItem(inventoryDraftKey());
+        if (els.inventoryDraftState) els.inventoryDraftState.textContent = "이 사업자 계정의 발주 초안을 비웠습니다.";
+      });
+      els.inventoryStocktakeForm?.addEventListener("submit", async event => {
+        event.preventDefault();
+        const form = new FormData(els.inventoryStocktakeForm);
+        const itemId = String(form.get("item_id") || "");
+        const countedQuantity = String(form.get("counted_quantity") || "");
+        if (!itemId || countedQuantity === "" || Number(countedQuantity) < 0) return showToast("품목과 0 이상의 실사 수량을 입력해 주세요.");
+        const button = els.stocktakeSubmit;
+        button.disabled = true;
+        try {
+          await inventoryApi(`/items/${encodeURIComponent(itemId)}/stocktake`, { method: "POST", body: JSON.stringify({ counted_quantity: countedQuantity, memo: String(form.get("memo") || "").trim() }) });
+          els.inventoryStocktakeForm.reset();
+          await loadInventoryData({ silent: true });
+          showToast("실사 수량을 서버 재고에 반영했습니다.");
+        } catch (error) {
+          showToast(inventoryErrorState(error));
+        } finally {
+          button.disabled = false;
+        }
+      });
       els.integrationCategoryFilter?.addEventListener("change", renderAll);
       els.integrationStatusFilter?.addEventListener("change", renderAll);
       els.integrationServiceFilter?.addEventListener("change", renderAll);
@@ -12941,6 +13132,8 @@
         renderAll();
         loadApprovedEmployees().catch(err => showToast(`승인 직원 조회 실패: ${err.message}`));
         loadDeliveryLedgers({ silent: true }).catch(err => showToast(`판매채널 DB 조회 실패: ${err.message}`));
+        loadSalesLedger({ silent: true }).catch(() => {});
+        loadInventoryData({ silent: true }).catch(() => {});
         showToast("선택 사업자 기준으로 설정 현황을 다시 정리했습니다.");
       });
       els.refreshServerAccountsBtn.addEventListener("click", () => refreshServerAccounts().catch(err => showToast(err.message)));
@@ -12965,6 +13158,17 @@
       els.uploadEvidenceBtn?.addEventListener("click", () => uploadIntegrationEvidenceToServer().catch(err => showToast(err.message)));
 
       document.body.addEventListener("click", event => {
+        const receiveOrderButton = event.target.closest("[data-receive-order]");
+        if (receiveOrderButton) {
+          const orderId = receiveOrderButton.dataset.receiveOrder;
+          receiveOrderButton.disabled = true;
+          inventoryApi(`/orders/${encodeURIComponent(orderId)}/receive`, { method: "POST", body: JSON.stringify({}) })
+            .then(() => loadInventoryData({ silent: true }))
+            .then(() => showToast("입고를 서버 재고에 반영했습니다."))
+            .catch(error => showToast(inventoryErrorState(error)))
+            .finally(() => { receiveOrderButton.disabled = false; });
+          return;
+        }
         const integrationDetailButton = event.target.closest("[data-integration-detail]");
         if (integrationDetailButton) {
           event.preventDefault();
@@ -13377,6 +13581,10 @@
         refreshBankAccounts({ silent: true }).catch(() => {});
       }
       if (hasServerAuth()) loadDeliveryLedgers({ silent: true }).catch(() => {});
+      if (hasServerAuth()) {
+        loadSalesLedger({ silent: true }).catch(() => {});
+        loadInventoryData({ silent: true }).catch(() => {});
+      }
       if (canManageOnboarding()) loadEmployeeInvites().catch(() => {});
       if (hasServerAuth()) {
         loadOnboardingDocumentTypes().catch(() => {});
