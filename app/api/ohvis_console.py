@@ -59,7 +59,7 @@ from app.services.work_recipe.approval import (
 from app.services.work_recipe.audit import mask_secrets
 from app.services.work_recipe.guard import requires_confirmation
 from app.services.work_recipe.orchestrator import run_directive
-from app.services.channel_router import ChannelRouter, DirectiveEnvelope, payload_hash
+from app.services.channel_router import ChannelRouter, directive_from_authenticated_context
 
 router = APIRouter(prefix="/ohvis/console", tags=["ohvis-console"])
 logger = structlog.get_logger()
@@ -696,15 +696,12 @@ async def run_console_command(
 
     command_payload = {"directive": title}
     action_intent = ChannelRouter().route_directive(
-        DirectiveEnvelope(
-            source="user_directive",
-            tenant_id=tenant_id,
+        directive_from_authenticated_context(
+            context,
             session_id=str(session_uuid),
             correlation_id=task_id,
-            trust_level="trusted",
-            allowed_capabilities=frozenset({"console.command", "recipe.execute"}),
             payload=command_payload,
-            payload_hash=payload_hash(command_payload),
+            capabilities=frozenset({"console.command", "recipe.execute"}),
         ),
         capability="console.command",
     )
@@ -851,17 +848,14 @@ async def run_console_recipe(
 ) -> dict[str, Any]:
     """저장된 레시피와 정확히 연결되는 지시만 실제 브라우저에서 실행한다."""
     try:
-        recipe_payload = {"directive": body.directive}
+        recipe_payload = {"directive": body.directive, "inputs": body.inputs}
         action_intent = ChannelRouter().route_directive(
-            DirectiveEnvelope(
-                source="user_directive",
-                tenant_id=_tenant_id(context),
+            directive_from_authenticated_context(
+                context,
                 session_id=body.browser_session_id or "ohvis-console",
                 correlation_id=str(uuid4()),
-                trust_level="trusted",
-                allowed_capabilities=frozenset({"recipe.execute"}),
                 payload=recipe_payload,
-                payload_hash=payload_hash(recipe_payload),
+                capabilities=frozenset({"recipe.execute"}),
             ),
             capability="recipe.execute",
         )

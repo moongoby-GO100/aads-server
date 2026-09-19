@@ -26,8 +26,8 @@ from app.services.browser_task_gateway import (
 from app.services.managed_browser import profile_info
 from app.services.channel_router import (
     ChannelRouter,
-    DirectiveEnvelope,
     ObservationEnvelope,
+    directive_from_authenticated_context,
     payload_hash,
 )
 
@@ -138,15 +138,12 @@ async def api_create_browser_task(
     }
     correlation_id = body.correlation_id or f"browser-create:{session_id}"
     intent = ChannelRouter().route_directive(
-        DirectiveEnvelope(
-            source="user_directive",
-            tenant_id=_tenant_id(context),
+        directive_from_authenticated_context(
+            context,
             session_id=session_id,
             correlation_id=correlation_id,
-            trust_level="trusted",
-            allowed_capabilities=frozenset({"browser.task.create"}),
             payload=directive_payload,
-            payload_hash=payload_hash(directive_payload),
+            capabilities=frozenset({"browser.task.create"}),
         ),
         capability="browser.task.create",
     )
@@ -252,12 +249,20 @@ async def api_update_browser_task_live_frame(
     session_id = str(task.get("session_id") or "")
     if not session_id:
         raise HTTPException(status_code=409, detail="MISSING_SESSION_ID")
+    # Persist structural provenance with the frame metadata.  Any later LLM,
+    # Browser, or PC consumer can therefore reject it at its own execution
+    # boundary; a page string cannot erase this server-added marker.
+    tainted_metadata = {
+        **body.metadata,
+        "__aads_taint__": "UNTRUSTED_PAGE_DATA",
+        "observation_source": "screenshot_ocr",
+    }
     observation_payload = {
         "frame_sha256": payload_hash({"frame": body.frame_base64 or body.frame_url}),
         "current_url": body.current_url,
         "page_title": body.page_title,
         "current_step": body.current_step,
-        "metadata": body.metadata,
+        "metadata": tainted_metadata,
     }
     ChannelRouter().route_observation(
         ObservationEnvelope(
@@ -282,7 +287,7 @@ async def api_update_browser_task_live_frame(
         page_title=body.page_title,
         current_step=body.current_step,
         cursor=body.cursor,
-        metadata=body.metadata,
+        metadata=tainted_metadata,
     )
     if not frame:
         raise HTTPException(status_code=404, detail="browser_task_not_found")

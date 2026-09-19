@@ -684,6 +684,20 @@ class ToolExecutor:
         """
         try:
             tool_input = dict(tool_input or {})
+            # Tool calls are an execution boundary.  Observations supplied to
+            # an LLM carry a structural taint marker and must never be promoted
+            # into a tool argument, even if a model emits a plausible call.
+            from app.services.channel_router import ChannelRouter, ChannelRoutingError
+            try:
+                ChannelRouter().assert_no_untrusted_page_data(
+                    tool_input, capability=f"llm.tool.{tool_name}"
+                )
+            except ChannelRoutingError as exc:
+                return json.dumps({
+                    "error": exc.reason_code,
+                    "blocked": True,
+                    "reason_code": exc.reason_code,
+                }, ensure_ascii=False)
             _dup = _sideeffect_duplicate(tool_name, tool_input)
             if _dup:
                 return _dup

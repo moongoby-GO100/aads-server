@@ -62,10 +62,19 @@ async def run_directive(
     if action_intent.tenant_id != str(tenant_id):
         raise ValueError("action_intent_tenant_mismatch")
     directive_text = str(action_intent.payload.get("directive") or "")
+    # Only arguments bound into the authenticated ActionIntent may reach a
+    # recipe.  This prevents an observation/resume payload from being supplied
+    # alongside a valid directive after ingress routing.
+    intent_inputs = action_intent.payload.get("inputs", inputs or {})
+    if not isinstance(intent_inputs, Mapping):
+        raise ValueError("action_intent_inputs_invalid")
+    ChannelRouter().assert_no_untrusted_page_data(
+        intent_inputs, envelope=action_intent, capability="recipe.execute"
+    )
     recipe = await resolve_recipe(directive_text, tenant_id)
     if recipe is None:
         return None
-    resolved_inputs = await _scoped_inputs(recipe, inputs or {})
+    resolved_inputs = await _scoped_inputs(recipe, intent_inputs)
     recorder = GuardedRunRecorder(
         domain=recipe.domain,
         tenant_id=tenant_id,

@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSock
 from app.auth import ADMIN_EMAIL, extract_aads_cookie_token, verify_token
 from app.models.pc_agent import CommandRequest, RoutedCommandRequest, StreamConfig, WSMessage
 from app.services.pc_agent_manager import pc_agent_manager
+from app.services.channel_router import ChannelRouter, ChannelRoutingError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1475,6 +1476,12 @@ async def execute_command(req: CommandRequest, request: Request):
 
     params = _normalize_browser_command_params(req.command_type, req.params)
     try:
+        ChannelRouter().assert_no_untrusted_page_data(
+            params, capability="pc_agent.execute"
+        )
+    except ChannelRoutingError as exc:
+        raise HTTPException(status_code=400, detail=exc.reason_code) from exc
+    try:
         command_id = await pc_agent_manager.send_command(
             req.agent_id, req.command_type, params
         )
@@ -1492,6 +1499,12 @@ async def route_execute_command(req: RoutedCommandRequest, request: Request):
         raise HTTPException(status_code=401, detail="인증이 필요합니다.")
 
     params = _normalize_browser_command_params(req.command_type, req.params)
+    try:
+        ChannelRouter().assert_no_untrusted_page_data(
+            params, capability="pc_agent.route_execute"
+        )
+    except ChannelRoutingError as exc:
+        raise HTTPException(status_code=400, detail=exc.reason_code) from exc
     effective_command_timeout_seconds = float(req.command_timeout_seconds)
     raw_param_timeout = (
         params.get("command_timeout_seconds")

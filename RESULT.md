@@ -119,3 +119,40 @@ HEIF 변환 가능/불가, `_normalize_images` 경로 변환·통과·잘못된 
 block 을 만든다. 지시서가 허용한 교체 범위(호출 2곳) 밖이라 건드리지 않았다.
 이 경로로 들어온 5MB 초과 이미지나 bmp/heic 은 통합 파이프라인을 타지 못해
 Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks` 로 옮길 대상.
+
+---
+
+# AADS-SMARTBROWSER-G2-UNTRUSTED-PAGE-DATA-20260919
+
+## STEP 0 — 기존 구현 조사 및 분류
+
+| 항목 | 분류 | 반영/판단 |
+|---|---|---|
+| `ChannelRouter.route_directive`, `validate_action_intent`, `route_observation` | 수정 | 인증된 서버 ingress provenance를 확인하고 DOM/ARIA/OCR/RAG/file taint가 명령으로 승격되면 `PAGE_DATA_COMMAND_ATTEMPT`로 차단한다. |
+| `DirectiveEnvelope`, `ActionIntent` | 수정 | `authenticated_provenance`를 유지·실행 경계까지 전달한다. caller의 source 라벨만으로 신뢰하지 않는다. |
+| `ObservationEnvelope` | 수정 | 기본·필수 taint를 `UNTRUSTED_PAGE_DATA`로 고정한다. |
+| `directive_from_authenticated_context` | 신규 | request의 서버 인증 context에서 tenant/user/source를 결선하는 유일한 API ingress 생성기다. |
+| `/browser-tasks` 생성 ingress | 수정 | request context 기반 directive 생성으로 교체했다. screenshot 관측은 기존 ObservationEnvelope 경로를 유지한다. |
+| `/ohvis/console/command`, `/recipes/run` 및 `run_directive` | 수정 | 레시피 directive와 inputs를 같은 ActionIntent에 묶고, resume/별도 인자에 의한 taint 우회를 실행 직전 재검사한다. |
+| `/pc-agent/execute`, `/pc-agent/route-execute` | 수정 | PC 전송 직전 params의 taint를 fail-closed 재검사한다. |
+| `ToolExecutor.execute` | 수정 | LLM이 생성한 tool input에서 taint 발견 시 dispatch 전에 구조화된 차단 결과를 반환한다. |
+| 기존 recipe guard의 `sanitize_page_text`, `assert_not_page_derived` | 유지 | 문자열 패턴 방어는 보조층으로 보존하며 구조적 provenance 검사를 대체하지 않는다. |
+| 삭제 | 0건 | 호출처 삭제 및 롤백 대상 없음. 롤백은 이 작업의 변경 hunks만 되돌리면 된다. |
+
+## 변경 및 보안 경계
+
+- DOM/ARIA/OCR/screenshot OCR/downloaded file/RAG/file 관측은 `ObservationEnvelope`로만 수용하며 `UNTRUSTED_PAGE_DATA` taint를 유지한다.
+- 페이지 텍스트의 태그 탈출 문자열은 신뢰 태그가 아니라 구조적 taint로 판정하므로 command/tool capability를 얻지 못한다.
+- Browser recipe, PC command, LLM tool dispatch 각각에서 실행 직전 taint를 재검증한다. 차단은 감사 로그에 `reason_code=PAGE_DATA_COMMAND_ATTEMPT`로 남는다.
+- 정상적인 사용자 directive 및 사용자 입력 검색어는 taint marker가 없으므로 계속 허용된다. tainted cross-tenant 값은 명령 채널로 들어오기 전에 차단된다.
+
+## 검증
+
+| 항목 | 결과 |
+|---|---|
+| 간접 프롬프트 인젝션 golden cases | `tests/unit/test_channel_router.py`에 DOM/ARIA/OCR/RAG/file, 태그 탈출, tool-call, cross-tenant tainted input 차단 케이스 추가 |
+| 정상 추출 회귀 | 동일 테스트에 일반 사용자 검색 인자 허용 케이스 추가 |
+| focused/affected test 실행 | 실행하지 않음 — 사용자 규칙상 코드 수정만 수행 |
+| 빌드 검증 | 승인 후 Runner 빌드 검증 대상 |
+| commit/push/deploy | 실행하지 않음 |
+| AADS handover DB evidence | DB 변경/기록을 수행하지 않음 — 사용자 규칙상 파일 수정 외 작업 금지 |

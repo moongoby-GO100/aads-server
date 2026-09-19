@@ -18,8 +18,10 @@ logger = logging.getLogger(__name__)
 TRUSTED_COMMAND_SOURCES = frozenset({"user_directive", "approved_recipe", "internal_control"})
 OBSERVATION_SOURCES = frozenset({
     "page_text", "dom", "DOM", "aria", "ARIA", "ocr", "OCR",
-    "screenshot_ocr", "downloaded_file",
+    "screenshot_ocr", "downloaded_file", "file", "rag", "RAG",
 })
+UNTRUSTED_PAGE_DATA = "UNTRUSTED_PAGE_DATA"
+PAGE_DATA_COMMAND_ATTEMPT = "PAGE_DATA_COMMAND_ATTEMPT"
 _SOURCE_TRUST = {
     "user_directive": frozenset({"trusted"}),
     "approved_recipe": frozenset({"trusted"}),
@@ -51,6 +53,9 @@ class DirectiveEnvelope:
     allowed_capabilities: frozenset[str]
     payload: Mapping[str, Any]
     payload_hash: str
+    # This is issued by the ingress adapter after authentication.  It is not a
+    # client supplied ``source`` label: the router binds it to tenant and user.
+    authenticated_provenance: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -62,6 +67,7 @@ class ObservationEnvelope:
     trust_level: str
     payload: Mapping[str, Any]
     payload_hash: str
+    taint: str = UNTRUSTED_PAGE_DATA
 
 
 @dataclass(frozen=True)
@@ -74,6 +80,41 @@ class ActionIntent:
     allowed_capabilities: frozenset[str]
     payload: Mapping[str, Any]
     payload_hash: str
+    authenticated_provenance: Mapping[str, Any]
+
+
+def directive_from_authenticated_context(
+    context: Mapping[str, Any], *, session_id: str, correlation_id: str,
+    payload: Mapping[str, Any], capabilities: frozenset[str],
+    source: str = "user_directive",
+) -> DirectiveEnvelope:
+    """Create command provenance from server-authenticated request context.
+
+    API callers never choose the effective tenant, user, or trust level.  The
+    only supported public ingress is an authenticated user directive; internal
+    callers must construct their own server-attested context deliberately.
+    """
+    tenant = context.get("tenant") if isinstance(context, Mapping) else None
+    membership = context.get("membership") if isinstance(context, Mapping) else None
+    tenant_id = str((tenant or {}).get("id") or "")
+    user_id = str((membership or {}).get("user_id") or "")
+    provenance = {
+        "issuer": "server_authenticated_request",
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "source": source,
+    }
+    return DirectiveEnvelope(
+        source=source,
+        tenant_id=tenant_id,
+        session_id=session_id,
+        correlation_id=correlation_id,
+        trust_level="trusted" if source != "internal_control" else "internal",
+        allowed_capabilities=capabilities,
+        payload=payload,
+        payload_hash=payload_hash(payload),
+        authenticated_provenance=provenance,
+    )
 
 
 class ChannelRouter:
@@ -85,9 +126,11 @@ class ChannelRouter:
         # the more specific PAGE_DATA_COMMAND_ATTEMPT reason below.
         self._validate_common(envelope, capability)
         if envelope.source in OBSERVATION_SOURCES:
-            self._reject(envelope, "PAGE_DATA_COMMAND_ATTEMPT", capability)
+            self._reject(envelope, PAGE_DATA_COMMAND_ATTEMPT, capability)
         if envelope.source not in TRUSTED_COMMAND_SOURCES:
             self._reject(envelope, "UNTRUSTED_COMMAND_SOURCE", capability)
+        self._validate_authenticated_provenance(envelope, capability)
+        self.assert_no_untrusted_page_data(envelope.payload, envelope=envelope, capability=capability)
         if envelope.trust_level not in _SOURCE_TRUST[envelope.source]:
             self._reject(envelope, "TRUST_LEVEL_MISMATCH", capability)
         if capability not in envelope.allowed_capabilities:
@@ -102,6 +145,7 @@ class ChannelRouter:
             allowed_capabilities=envelope.allowed_capabilities,
             payload=envelope.payload,
             payload_hash=envelope.payload_hash,
+            authenticated_provenance=envelope.authenticated_provenance,
         )
 
     def validate_action_intent(self, intent: ActionIntent, *, capability: str) -> ActionIntent:
@@ -116,6 +160,7 @@ class ChannelRouter:
                 allowed_capabilities=intent.allowed_capabilities,
                 payload=intent.payload,
                 payload_hash=intent.payload_hash,
+                authenticated_provenance=intent.authenticated_provenance,
             ),
             capability=capability,
         )
@@ -126,8 +171,33 @@ class ChannelRouter:
             self._reject(envelope, "INVALID_OBSERVATION_SOURCE", "observation.ingest")
         if envelope.trust_level != "untrusted":
             self._reject(envelope, "OBSERVATION_TRUST_MISMATCH", "observation.ingest")
-        self._audit(envelope, "accepted", "UNTRUSTED_PAGE_DATA", "observation.ingest")
+        if envelope.taint != UNTRUSTED_PAGE_DATA:
+            self._reject(envelope, "OBSERVATION_TAINT_MISMATCH", "observation.ingest")
+        self._audit(envelope, "accepted", UNTRUSTED_PAGE_DATA, "observation.ingest")
         return envelope
+
+    def assert_no_untrusted_page_data(
+        self, value: Any, *, envelope: Any | None = None, capability: str = "execution"
+    ) -> None:
+        """Fail closed if an observation reaches a command/tool argument.
+
+        The marker is data-model provenance, not a text tag, so page text such
+        as ``</untrusted_page_content>`` cannot break out of this boundary.
+        """
+        if _contains_untrusted_page_data(value):
+            target = envelope or _AuditEnvelope()
+            self._reject(target, PAGE_DATA_COMMAND_ATTEMPT, capability)
+
+    def _validate_authenticated_provenance(self, envelope: DirectiveEnvelope, capability: str) -> None:
+        provenance = envelope.authenticated_provenance
+        if not isinstance(provenance, Mapping):
+            self._reject(envelope, "MISSING_AUTHENTICATED_PROVENANCE", capability)
+        if provenance.get("issuer") != "server_authenticated_request":
+            self._reject(envelope, "UNAUTHENTICATED_PROVENANCE", capability)
+        if str(provenance.get("tenant_id") or "") != envelope.tenant_id:
+            self._reject(envelope, "PROVENANCE_TENANT_MISMATCH", capability)
+        if str(provenance.get("source") or "") != envelope.source:
+            self._reject(envelope, "PROVENANCE_SOURCE_MISMATCH", capability)
 
     def _validate_common(self, envelope: Any, capability: str) -> None:
         for field in ("source", "tenant_id", "session_id", "correlation_id", "payload_hash"):
@@ -157,3 +227,24 @@ class ChannelRouter:
                 "payload_hash": getattr(envelope, "payload_hash", ""),
             },
         )
+
+
+@dataclass(frozen=True)
+class _AuditEnvelope:
+    source: str = "untrusted_page_data"
+    tenant_id: str = ""
+    session_id: str = ""
+    correlation_id: str = ""
+    payload_hash: str = ""
+
+
+def _contains_untrusted_page_data(value: Any) -> bool:
+    if isinstance(value, ObservationEnvelope):
+        return value.taint == UNTRUSTED_PAGE_DATA
+    if isinstance(value, Mapping):
+        if value.get("__aads_taint__") == UNTRUSTED_PAGE_DATA:
+            return True
+        return any(_contains_untrusted_page_data(item) for item in value.values())
+    if isinstance(value, (tuple, list, frozenset, set)):
+        return any(_contains_untrusted_page_data(item) for item in value)
+    return False
