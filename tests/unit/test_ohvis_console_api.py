@@ -758,6 +758,27 @@ def test_command_runs_matching_recipe_and_closes_ohvis_task(monkeypatch):
     assert result["status"] == "done"
 
 
+def test_recipe_run_api_exposes_approval_wait_as_chat_artifact(monkeypatch):
+    """Native/auth handoffs must remain visible to the chat client, not logs only."""
+    from app.services.work_recipe.approval import ApprovalRequired
+
+    async def waiting_for_human(*args, **kwargs):
+        raise ApprovalRequired(
+            "approval-42", run_id=RUN_ID, step_seq=2, risk_level="WRITE_EXTERNAL", summary="로그인 승인"
+        )
+
+    monkeypatch.setattr(console, "run_directive", waiting_for_human)
+    body = console.RecipeRunIn(directive="aads login verification")
+    result = asyncio.run(console.run_console_recipe(body, context=ctx()))
+
+    assert result["status"] == "approval_required"
+    assert result["artifact"] == {
+        "kind": "approval_wait",
+        "narration": "승인이 필요한 단계에서 안전하게 대기 중입니다.",
+        "evidence": {"approval_id": "approval-42", "run_id": RUN_ID},
+    }
+
+
 def test_command_marks_the_row_error_and_502s_when_the_trigger_blows_up(monkeypatch):
     """트리거가 실패했는데 행이 running 으로 남으면 그것이 이번 결함이다."""
     _command_pool(monkeypatch, [SESSION_MINE])

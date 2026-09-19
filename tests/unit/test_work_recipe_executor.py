@@ -9,6 +9,9 @@ class FakeLocator:
     async def aria_snapshot(self):
         return "snapshot"
 
+    async def inner_text(self, **kwargs):
+        return "읽기 전용 대시보드"
+
 
 class FakePage:
     def __init__(self):
@@ -46,6 +49,9 @@ class FakePage:
         self.calls.append(("api_call", {"argument": argument, **kwargs}))
         return {"status": 200, "ok": True, "text": "ok"}
 
+    async def screenshot(self):
+        return b"smart-browser-screen"
+
 
 class FakeContext:
     def __init__(self, page):
@@ -77,9 +83,10 @@ async def test_executor_dispatches_all_allowed_actions(monkeypatch, action, fiel
     result = await executor({"action": action, "risk": "READ", **fields})
 
     assert result["ok"] is True
-    assert page.calls[-1][0] == action
+    executed = next(call for call in page.calls if call[0] == action)
+    assert executed[0] == action
     if action == "api_call":
-        assert page.calls[-1][1]["argument"] == {
+        assert executed[1]["argument"] == {
             "endpoint": "/api/items",
             "options": {"method": "POST"},
         }
@@ -95,3 +102,42 @@ async def test_executor_reports_missing_bridge(monkeypatch):
     )
     assert result["ok"] is False
     assert "Browser Bridge" in result["error"]
+
+
+async def test_executor_prefers_browser_agent_and_returns_visual_dom_aria_evidence(monkeypatch):
+    page = FakePage()
+    received = {}
+
+    async def acquire(**kwargs):
+        received.update(kwargs)
+        return FakeContext(page), None
+
+    monkeypatch.setattr(executor_module, "acquire_browser_context", acquire)
+    result = await executor_module.BrowserRecipeExecutor(browser_work_key="local-pc")(
+        {"action": "snapshot", "risk": "READ", "url": "https://aads.newtalk.kr/ops"}
+    )
+
+    assert result["ok"] is True
+    assert received["prefer_headless"] is True
+    assert received["browser_work_key"] is None
+    assert result["route"] == "browser_agent"
+    assert result["evidence"]["screenshot"]["status"] == "captured"
+    assert result["evidence"]["dom"]["text"] == "읽기 전용 대시보드"
+    assert result["evidence"]["aria"]["text"] == "snapshot"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_route", "expected_reason"),
+    [
+        ("session expired", "human_gateway", "SESSION_EXPIRED"),
+        ("permission denied (403)", "human_gateway", "permission_insufficient"),
+        ("net::ERR_NAME_NOT_RESOLVED", "browser_agent", "network_failure"),
+    ],
+)
+def test_smart_browser_recovery_routes_login_permission_and_network_failures(
+    error, expected_route, expected_reason
+):
+    recovery = executor_module.smart_browser_recovery(url="https://aads.newtalk.kr", error=error)
+
+    assert recovery["route"] == expected_route
+    assert recovery["reason"] == expected_reason

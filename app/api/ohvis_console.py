@@ -734,6 +734,11 @@ async def run_console_command(
             "task_id": task_id,
             "session_id": str(session_uuid),
             **approval_result,
+            "artifact": {
+                "kind": "approval_wait",
+                "narration": "승인이 필요한 단계에서 안전하게 대기 중입니다.",
+                "evidence": {"approval_id": exc.approval_id, "run_id": approval_result["run_id"]},
+            },
         }
     except ValueError as exc:
         reason = _text(str(exc), 300)
@@ -874,6 +879,11 @@ async def run_console_recipe(
             "approval_id": exc.approval_id,
             "run_id": str(exc.run_id) if exc.run_id else None,
             "risk": exc.risk_level,
+            "artifact": {
+                "kind": "approval_wait",
+                "narration": "승인이 필요한 단계에서 안전하게 대기 중입니다.",
+                "evidence": {"approval_id": exc.approval_id, "run_id": str(exc.run_id) if exc.run_id else None},
+            },
         }
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=_text(exc, 300)) from exc

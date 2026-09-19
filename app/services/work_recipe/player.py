@@ -52,6 +52,10 @@ class StepResult:
     output: Any = None
     llm_calls: int = 0
     save_as: str | None = None
+    narration: str = ""
+    route: str = ""
+    evidence: dict[str, Any] = field(default_factory=dict)
+    recovery: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -66,6 +70,10 @@ class StepResult:
             "output": self.output,
             "llm_calls": self.llm_calls,
             "save_as": self.save_as,
+            "narration": self.narration,
+            "route": self.route,
+            "evidence": self.evidence,
+            "recovery": self.recovery,
         }
 
 
@@ -301,10 +309,18 @@ class RecipePlayer:
                 outcome.llm_calls += _int_or_zero(data.get("llm_calls"))
                 if data.get("ok") is False or data.get("status") == STATUS_FAILED:
                     last_error = str(data.get("error") or "step reported failure")
+                    outcome.recovery = _mapping_or_empty(data.get("recovery"))
+                    outcome.narration = str(data.get("narration") or "Smart Browser 단계가 실패해 복구 경로를 준비했습니다.")[:500]
+                    outcome.route = str(
+                        data.get("route") or outcome.recovery.get("route") or "browser_agent"
+                    )[:80]
                 else:
                     outcome.status = STATUS_SUCCESS
                     outcome.error = ""
                     outcome.output = data.get("output", data.get("data", raw))
+                    outcome.narration = str(data.get("narration") or "")[:500]
+                    outcome.route = str(data.get("route") or "")[:80]
+                    outcome.evidence = _mapping_or_empty(data.get("evidence"))
                     outcome.duration_ms = int((time.monotonic() - started) * 1000)
                     return outcome
             if attempt <= self._retries and self._retry_delay > 0:
@@ -358,6 +374,10 @@ def _int_or_zero(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _mapping_or_empty(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 async def play_recipe(

@@ -92,7 +92,16 @@ async def run_directive(
         resolved_inputs,
         recorder=recorder,
         max_risk="IRREVERSIBLE",
-        context={"domain": recipe.domain},
+        context={
+            "domain": recipe.domain,
+            # Recipe metadata is registered/approved along with the immutable
+            # recipe version.  It is the only source allowed to request a
+            # native PC lane; a chat directive cannot promote itself there.
+            "smart_browser": {
+                "native_auth_required": bool(recipe.metadata.get("native_auth_required")),
+                "requires_local_security_programs": bool(recipe.metadata.get("requires_local_security_programs")),
+            },
+        },
     )
 
 
