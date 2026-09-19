@@ -60,8 +60,12 @@ def test_api_queries_and_ingest_are_project_fenced():
     governance = (ROOT / "app/services/aag_governance.py").read_text(encoding="utf-8")
     assert "X-AAG-Scanner-Token" in source
     assert "authenticate_scanner" in source
-    assert "o.project=$1 AND o.repository_id=$2 AND o.target_ref=$3" in source
+    assert "p.project=$1 AND p.repository_id=$2 AND p.target_ref=$3" in source
+    assert "o.project=p.project" in source
+    assert "o.repository_id=p.repository_id" in source
+    assert "o.target_ref=p.target_ref" in source
     assert "o.authoritative=TRUE" in source
+    assert "o.verification_status='verified'" in source
     assert "hmac.compare_digest" in governance
     assert "WHERE id=$1 AND project=$2 FOR UPDATE" in governance
     assert "fallback snapshot is outside project scope" in governance
