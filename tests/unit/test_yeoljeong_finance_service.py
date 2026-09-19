@@ -34,6 +34,25 @@ def isolate_yeoljeong_storage(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_BANK_AUTO_COLLECT_LOCK_PATH", str(tmp_path / ".bank_auto_collect.lock"))
     monkeypatch.setattr(service, "_run_db", disable_db)
 
+    # Legacy behavioral tests predate tenant ownership. Keep their fixtures
+    # tenant-consistent while dedicated O2 tests exercise fail-closed auth.
+    tenant_id = "15055cac-71b0-45ec-b714-7093dde189ff"
+    original_tenant_id = service._tenant_id
+    original_write_file_rows = service._write_file_rows
+
+    def legacy_tenant_id(user):
+        if isinstance(user, dict) and "current_membership" not in user:
+            return tenant_id
+        return original_tenant_id(user)
+
+    def tenant_owned_write(name, rows):
+        if name in service.HR_TENANT_LEDGER_NAMES:
+            rows = [{**row, "tenant_id": row.get("tenant_id") or tenant_id} for row in rows]
+        return original_write_file_rows(name, rows)
+
+    monkeypatch.setattr(service, "_tenant_id", legacy_tenant_id)
+    monkeypatch.setattr(service, "_write_file_rows", tenant_owned_write)
+
 
 def seed_approved_employee(name="가입 직원", email="member@example.com"):
     service._write("employee_join_requests", [{
@@ -4557,6 +4576,7 @@ def test_payroll_keeps_taxable_and_qualified_non_tax_meal_components():
         {
             "employee_name": "급여 테스트",
             "employee_email": "payroll@example.com",
+            "business_id": "biz-mia",
             "gross_pay": 3000000,
             "taxable_pay": 2800000,
             "non_tax_meal_allowance": 200000,
@@ -4574,6 +4594,7 @@ def test_payroll_rejects_non_tax_meal_when_employer_provides_meal():
             {
                 "employee_name": "급여 테스트",
                 "employee_email": "payroll@example.com",
+                "business_id": "biz-mia",
                 "gross_pay": 3000000,
                 "taxable_pay": 2800000,
                 "non_tax_meal_allowance": 200000,

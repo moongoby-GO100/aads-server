@@ -596,6 +596,68 @@ def _payload_dict(value: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+HR_TENANT_LEDGER_NAMES = {
+    "employee_join_requests",
+    "onboarding_documents",
+    "contracts",
+    "payroll_statements",
+}
+PAYROLL_AMOUNT_LIMIT = 9_000_000_000_000_000
+
+
+def _tenant_id(user: dict[str, Any] | None) -> str:
+    """Return only a verified active membership tenant; never fall back to user.tenant_id."""
+    membership = (user or {}).get("current_membership")
+    user_tenant = str((user or {}).get("tenant_id") or "").strip()
+    if not isinstance(membership, dict):
+        raise HTTPException(status_code=403, detail="활성 테넌트 멤버십이 필요합니다")
+    membership_tenant = str(membership.get("tenant_id") or "").strip()
+    if (
+        str(membership.get("status") or "").strip().lower() != "active"
+        or not membership_tenant
+        or not user_tenant
+        or membership_tenant != user_tenant
+    ):
+        raise HTTPException(status_code=403, detail="활성 테넌트 멤버십이 필요합니다")
+    try:
+        UUID(membership_tenant)
+    except (TypeError, ValueError, AttributeError):
+        raise HTTPException(status_code=403, detail="유효한 테넌트 멤버십이 필요합니다") from None
+    return membership_tenant
+
+
+def _record_tenant_uuid(record: dict[str, Any]) -> UUID | None:
+    value = str(record.get("tenant_id") or "").strip()
+    try:
+        return UUID(value) if value else None
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _payroll_integer(value: Any, *, field: str, default: int = 0) -> int:
+    """Parse an exact payroll integer without accepting bool, float, exponent, or truncation."""
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool) or isinstance(value, float):
+        raise ValueError(f"{field}: exact integer required")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and re.fullmatch(r"[+-]?\d+", value.strip()):
+        parsed = int(value.strip())
+    else:
+        raise ValueError(f"{field}: exact integer required")
+    if abs(parsed) > PAYROLL_AMOUNT_LIMIT:
+        raise ValueError(f"{field}: out of range")
+    return parsed
+
+
+def _payroll_integer_for_api(value: Any, *, field: str, default: int = 0) -> int:
+    try:
+        return _payroll_integer(value, field=field, default=default)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"{field}은 범위 내 정수로 입력하십시오") from None
+
+
 def _db_row_to_record(name: str, row: Any) -> dict[str, Any]:
     item = dict(row)
     if name in GENERIC_DB_LEDGER_NAMES:
@@ -618,7 +680,7 @@ def _db_row_to_record(name: str, row: Any) -> dict[str, Any]:
             "email_masked": payload.get("email_masked") or item.get("employee_email_masked") or _mask_email(email),
             "name": payload.get("name") or item.get("employee_name") or "",
             "phone": payload.get("phone") or item.get("phone") or "",
-            "business_id": payload.get("business_id") or item.get("business_id") or "",
+            "business_id": item.get("business_id") or "",
             "branch": payload.get("branch") or item.get("branch") or "",
             "role": payload.get("role") or item.get("role") or "employee",
             "status": payload.get("status") or item.get("status") or "pending",
@@ -629,6 +691,7 @@ def _db_row_to_record(name: str, row: Any) -> dict[str, Any]:
             "reviewed_at": payload.get("reviewed_at") or _iso(item.get("reviewed_at")),
             "created_at": payload.get("created_at") or _iso(item.get("created_at")),
             "updated_at": payload.get("updated_at") or _iso(item.get("updated_at")),
+            "tenant_id": str(item.get("tenant_id") or ""),
         }
     if name == "onboarding_documents":
         payload = _payload_dict(item.get("metadata"))
@@ -640,7 +703,7 @@ def _db_row_to_record(name: str, row: Any) -> dict[str, Any]:
             "employee_email": email,
             "employee_email_masked": payload.get("employee_email_masked") or item.get("employee_email_masked") or _mask_email(email),
             "employee_name": payload.get("employee_name") or item.get("employee_name") or "",
-            "business_id": payload.get("business_id") or item.get("business_id") or "",
+            "business_id": item.get("business_id") or "",
             "branch": payload.get("branch") or item.get("branch") or "",
             "document_type": payload.get("document_type") or item.get("document_type") or "",
             "document_label": payload.get("document_label") or item.get("document_label") or "",
@@ -659,6 +722,7 @@ def _db_row_to_record(name: str, row: Any) -> dict[str, Any]:
             "reviewed_at": payload.get("reviewed_at") or _iso(item.get("reviewed_at")),
             "created_at": payload.get("created_at") or _iso(item.get("created_at")),
             "updated_at": payload.get("updated_at") or _iso(item.get("updated_at")),
+            "tenant_id": str(item.get("tenant_id") or ""),
         }
     if name == "contracts":
         payload = _payload_dict(item.get("contract_payload"))
@@ -669,7 +733,7 @@ def _db_row_to_record(name: str, row: Any) -> dict[str, Any]:
             "employee_email": email,
             "employee_email_masked": payload.get("employee_email_masked") or item.get("employee_email_masked") or _mask_email(email),
             "employee_name": payload.get("employee_name") or item.get("employee_name") or "",
-            "business_id": payload.get("business_id") or item.get("business_id") or "",
+            "business_id": item.get("business_id") or "",
             "branch": payload.get("branch") or item.get("branch") or "",
             "contract_type": payload.get("contract_type") or item.get("contract_type") or "part_time",
             "document_kind": payload.get("document_kind") or item.get("document_kind") or "standard_employment_contract",
@@ -680,32 +744,39 @@ def _db_row_to_record(name: str, row: Any) -> dict[str, Any]:
             "signed_at": payload.get("signed_at") or _iso(item.get("signed_at")),
             "created_at": payload.get("created_at") or _iso(item.get("created_at")),
             "updated_at": payload.get("updated_at") or _iso(item.get("updated_at")),
+            "tenant_id": str(item.get("tenant_id") or ""),
         }
     if name == "payroll_statements":
         payload = _payload_dict(item.get("statement_payload"))
         email = str(payload.get("employee_email") or item.get("employee_email") or "").strip().lower()
+        amounts: dict[str, int | None] = {}
+        invalid_amount_fields: list[str] = []
+        for field in ("gross_pay", "tax_withholding", "insurance_deduction", "other_deduction", "net_pay"):
+            try:
+                amounts[field] = _payroll_integer(item.get(field), field=field)
+            except ValueError:
+                amounts[field] = None
+                invalid_amount_fields.append(field)
         return {
             **payload,
             "id": str(payload.get("id") or item.get("id") or ""),
             "employee_email": email,
             "employee_email_masked": payload.get("employee_email_masked") or item.get("employee_email_masked") or _mask_email(email),
             "employee_name": payload.get("employee_name") or item.get("employee_name") or "",
-            "business_id": payload.get("business_id") or item.get("business_id") or "",
+            "tenant_id": str(item.get("tenant_id") or ""),
+            "business_id": item.get("business_id") or "",
             "branch": payload.get("branch") or item.get("branch") or "",
-            "payroll_month": payload.get("payroll_month") or item.get("payroll_month") or "",
-            "gross_pay": int(payload.get("gross_pay") if payload.get("gross_pay") is not None else item.get("gross_pay") or 0),
-            "tax_withholding": int(payload.get("tax_withholding") if payload.get("tax_withholding") is not None else item.get("tax_withholding") or 0),
-            "insurance_deduction": int(payload.get("insurance_deduction") if payload.get("insurance_deduction") is not None else item.get("insurance_deduction") or 0),
-            "other_deduction": int(payload.get("other_deduction") if payload.get("other_deduction") is not None else item.get("other_deduction") or 0),
-            "net_pay": int(payload.get("net_pay") if payload.get("net_pay") is not None else item.get("net_pay") or 0),
-            "status": payload.get("status") or item.get("status") or "draft",
+            "payroll_month": item.get("payroll_month") or "",
+            **amounts,
+            "payroll_validation_errors": invalid_amount_fields,
+            "status": item.get("status") or "draft",
             "created_at": payload.get("created_at") or _iso(item.get("created_at")),
             "updated_at": payload.get("updated_at") or _iso(item.get("updated_at")),
         }
     return item
 
 
-async def _db_fetch_ledger(name: str) -> list[dict[str, Any]] | None:
+async def _db_fetch_ledger(name: str, tenant_id: str | None = None) -> list[dict[str, Any]] | None:
     import asyncpg
 
     table = DB_LEDGER_TABLE_BY_NAME.get(name)
@@ -717,7 +788,18 @@ async def _db_fetch_ledger(name: str) -> list[dict[str, Any]] | None:
         if not ready:
             return None
         key = "row_id" if name in GENERIC_DB_LEDGER_NAMES else "id"
-        rows = await conn.fetch(f"SELECT * FROM {table} WHERE deleted_at IS NULL ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, {key} DESC")
+        if name in HR_TENANT_LEDGER_NAMES:
+            if not tenant_id:
+                return []
+            rows = await conn.fetch(
+                f"SELECT * FROM {table} h WHERE h.deleted_at IS NULL AND h.tenant_id = $1::uuid "
+                "AND EXISTS (SELECT 1 FROM yeoljeong_business_tenant_mapping m "
+                "WHERE m.business_id = h.business_id AND m.tenant_id = h.tenant_id) "
+                f"ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, {key} DESC",
+                UUID(tenant_id),
+            )
+        else:
+            rows = await conn.fetch(f"SELECT * FROM {table} WHERE deleted_at IS NULL ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, {key} DESC")
         return [_db_row_to_record(name, row) for row in rows]
     finally:
         await conn.close()
@@ -782,12 +864,12 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
             )
             return True
         if name == "employee_join_requests":
-            await conn.execute(
+            result = await conn.execute(
                 """
                 INSERT INTO yeoljeong_employee_join_requests
                     (id, employee_email, employee_email_masked, employee_name, phone, business_id, branch, role, status,
-                     request_payload, review_memo, requested_by, reviewed_by, requested_at, reviewed_at, updated_at, deleted_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14::timestamptz, $15::timestamptz, $16::timestamptz, NULL)
+                     tenant_id, request_payload, review_memo, requested_by, reviewed_by, requested_at, reviewed_at, updated_at, deleted_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::uuid, $11::jsonb, $12, $13, $14, $15::timestamptz, $16::timestamptz, $17::timestamptz, NULL)
                 ON CONFLICT (id) DO UPDATE SET
                     employee_email = EXCLUDED.employee_email,
                     employee_email_masked = EXCLUDED.employee_email_masked,
@@ -805,6 +887,7 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                     reviewed_at = EXCLUDED.reviewed_at,
                     updated_at = EXCLUDED.updated_at,
                     deleted_at = NULL
+                WHERE yeoljeong_employee_join_requests.tenant_id = EXCLUDED.tenant_id
                 """,
                 record_id,
                 str(record.get("email") or record.get("employee_email") or "").strip().lower(),
@@ -815,6 +898,7 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                 str(record.get("branch") or ""),
                 str(record.get("role") or "employee"),
                 str(record.get("status") or "pending"),
+                _record_tenant_uuid(record),
                 payload,
                 str(record.get("review_memo") or ""),
                 str(record.get("requested_by") or ""),
@@ -823,16 +907,16 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                 _pg_ts(record.get("reviewed_at")),
                 _pg_ts(record.get("updated_at") or now),
             )
-            return True
+            return result != "INSERT 0 0"
         if name == "onboarding_documents":
-            await conn.execute(
+            result = await conn.execute(
                 """
                 INSERT INTO yeoljeong_onboarding_documents
                     (id, employee_request_id, employee_email, employee_email_masked, employee_name, business_id, branch,
                      document_type, document_label, requirement, status, original_filename, stored_filename, content_type,
-                     size_bytes, issue_date, memo, review_memo, uploaded_by, reviewed_by, uploaded_at, reviewed_at, updated_at, metadata, deleted_at)
+                     size_bytes, issue_date, memo, review_memo, uploaded_by, reviewed_by, uploaded_at, reviewed_at, updated_at, tenant_id, metadata, deleted_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-                        $21::timestamptz, $22::timestamptz, $23::timestamptz, $24::jsonb, NULL)
+                        $21::timestamptz, $22::timestamptz, $23::timestamptz, $24::uuid, $25::jsonb, NULL)
                 ON CONFLICT (id) DO UPDATE SET
                     employee_request_id = EXCLUDED.employee_request_id,
                     employee_email = EXCLUDED.employee_email,
@@ -858,6 +942,7 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                     updated_at = EXCLUDED.updated_at,
                     metadata = EXCLUDED.metadata,
                     deleted_at = NULL
+                WHERE yeoljeong_onboarding_documents.tenant_id = EXCLUDED.tenant_id
                 """,
                 record_id,
                 str(record.get("employee_request_id") or ""),
@@ -882,20 +967,21 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                 _pg_ts(record.get("uploaded_at") or record.get("created_at") or now),
                 _pg_ts(record.get("reviewed_at")),
                 _pg_ts(record.get("updated_at") or now),
+                _record_tenant_uuid(record),
                 payload,
             )
-            return True
+            return result != "INSERT 0 0"
         if name == "contracts":
             token = str(record.get("sign_token") or "")
             token_hash = str(record.get("sign_token_hash") or "")
-            await conn.execute(
+            result = await conn.execute(
                 """
                 INSERT INTO yeoljeong_contracts
                     (id, employee_email, employee_email_masked, employee_name, business_id, branch, contract_type,
                      document_kind, template_version, print_title, status, sign_token_hash, requested_at, signed_at,
-                     created_by, requested_by, signer_email, signer_name, contract_payload, updated_at, deleted_at)
+                     created_by, requested_by, signer_email, signer_name, tenant_id, contract_payload, updated_at, deleted_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::timestamptz, $14::timestamptz,
-                        $15, $16, $17, $18, $19::jsonb, $20::timestamptz, NULL)
+                        $15, $16, $17, $18, $19::uuid, $20::jsonb, $21::timestamptz, NULL)
                 ON CONFLICT (id) DO UPDATE SET
                     employee_email = EXCLUDED.employee_email,
                     employee_email_masked = EXCLUDED.employee_email_masked,
@@ -917,6 +1003,7 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                     contract_payload = EXCLUDED.contract_payload,
                     updated_at = EXCLUDED.updated_at,
                     deleted_at = NULL
+                WHERE yeoljeong_contracts.tenant_id = EXCLUDED.tenant_id
                 """,
                 record_id,
                 str(record.get("employee_email") or "").strip().lower(),
@@ -936,19 +1023,20 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                 str(record.get("requested_by") or ""),
                 str(record.get("signer_email") or ""),
                 str(record.get("signer_name") or ""),
+                _record_tenant_uuid(record),
                 payload,
                 _pg_ts(record.get("updated_at") or now),
             )
-            return True
+            return result != "INSERT 0 0"
         if name == "payroll_statements":
-            await conn.execute(
+            result = await conn.execute(
                 """
                 INSERT INTO yeoljeong_payroll_statements
                     (id, employee_email, employee_email_masked, employee_name, business_id, branch, payroll_month,
                      gross_pay, tax_withholding, insurance_deduction, other_deduction, net_pay, status, created_by,
-                     confirmed_by, confirmed_at, statement_payload, updated_at, deleted_at)
+                     confirmed_by, confirmed_at, tenant_id, statement_payload, updated_at, deleted_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::timestamptz,
-                        $17::jsonb, $18::timestamptz, NULL)
+                        $17::uuid, $18::jsonb, $19::timestamptz, NULL)
                 ON CONFLICT (id) DO UPDATE SET
                     employee_email = EXCLUDED.employee_email,
                     employee_email_masked = EXCLUDED.employee_email_masked,
@@ -968,6 +1056,7 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                     statement_payload = EXCLUDED.statement_payload,
                     updated_at = EXCLUDED.updated_at,
                     deleted_at = NULL
+                WHERE yeoljeong_payroll_statements.tenant_id = EXCLUDED.tenant_id
                 """,
                 record_id,
                 str(record.get("employee_email") or "").strip().lower(),
@@ -985,10 +1074,11 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                 str(record.get("created_by") or ""),
                 str(record.get("confirmed_by") or ""),
                 _pg_ts(record.get("confirmed_at")),
+                _record_tenant_uuid(record),
                 payload,
                 _pg_ts(record.get("updated_at") or now),
             )
-            return True
+            return result != "INSERT 0 0"
         return False
     finally:
         await conn.close()
@@ -1008,6 +1098,23 @@ async def _db_delete_ledger(name: str, row_id: str) -> bool:
         key = "row_id" if name in GENERIC_DB_LEDGER_NAMES else "id"
         await conn.execute(f"UPDATE {table} SET deleted_at = NOW() WHERE {key} = $1", str(row_id))
         return True
+    finally:
+        await conn.close()
+
+
+async def _db_delete_hr_ledger(name: str, row_id: str, tenant_id: str) -> bool:
+    import asyncpg
+
+    table = DB_LEDGER_TABLE_BY_NAME.get(name)
+    if name not in HR_TENANT_LEDGER_NAMES or not table:
+        return False
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        result = await conn.execute(
+            f"UPDATE {table} SET deleted_at = NOW() WHERE id = $1 AND tenant_id = $2::uuid AND deleted_at IS NULL",
+            str(row_id), UUID(tenant_id),
+        )
+        return result.endswith(" 1")
     finally:
         await conn.close()
 
@@ -1043,12 +1150,101 @@ def _read(name: str) -> list[dict[str, Any]]:
     return file_rows
 
 
+def _read_hr(name: str, user: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Read HR rows with the tenant predicate in SQL; legacy NULL rows stay invisible."""
+    if name not in HR_TENANT_LEDGER_NAMES:
+        raise ValueError(f"not an HR tenant ledger: {name}")
+    tenant_id = _tenant_id(user)
+    if _db_available():
+        rows = _run_db(_db_fetch_ledger(name, tenant_id))
+        return rows if isinstance(rows, list) else []
+    return [
+        row
+        for row in _read_file_rows(name)
+        if str(row.get("tenant_id") or "").strip() == tenant_id
+    ]
+
+
+async def _db_business_tenant_matches(business_id: str, tenant_id: str) -> bool:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        return bool(await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM yeoljeong_business_tenant_mapping WHERE business_id = $1 AND tenant_id = $2::uuid)",
+            business_id, UUID(tenant_id),
+        ))
+    finally:
+        await conn.close()
+
+
+def _require_business_for_tenant(business_id: Any, user: dict[str, Any] | None) -> str:
+    tenant_id = _tenant_id(user)
+    normalized = str(business_id or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="테넌트에 귀속된 사업자가 필요합니다")
+    if _db_available() and not _run_db(_db_business_tenant_matches(normalized, tenant_id)):
+        raise HTTPException(status_code=403, detail="테넌트에 귀속되지 않은 사업자입니다")
+    return normalized
+
+
+def _require_hr_record(record: dict[str, Any] | None, user: dict[str, Any] | None, *, detail: str) -> dict[str, Any]:
+    tenant_id = _tenant_id(user)
+    if not record or str(record.get("tenant_id") or "").strip() != tenant_id:
+        # Do not reveal whether the identifier exists in another tenant.
+        raise HTTPException(status_code=404, detail=detail)
+    return record
+
+
+def _owned_hr_record(record: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    owned = dict(record)
+    owned["tenant_id"] = _tenant_id(user)
+    owned["business_id"] = _require_business_for_tenant(owned.get("business_id"), user)
+    return owned
+
+
 def _write(name: str, rows: list[dict[str, Any]]) -> None:
     _write_file_rows(name, rows)
     if name not in DB_LEDGER_TABLE_BY_NAME:
         return
     for row in rows:
         _run_db(_db_upsert_ledger(name, row))
+
+
+def _write_hr_record(name: str, record: dict[str, Any], user: dict[str, Any] | None) -> None:
+    tenant_id = _tenant_id(user)
+    if str(record.get("tenant_id") or "").strip() != tenant_id:
+        raise HTTPException(status_code=403, detail="다른 테넌트의 데이터는 저장할 수 없습니다")
+    if _db_available():
+        if not _run_db(_db_upsert_ledger(name, record)):
+            raise HTTPException(status_code=404, detail="대상을 찾을 수 없습니다")
+        return
+    rows = _read_file_rows(name)
+    existing = _find(rows, str(record.get("id") or ""))
+    if existing and str(existing.get("tenant_id") or "").strip() != tenant_id:
+        raise HTTPException(status_code=404, detail="대상을 찾을 수 없습니다")
+    if existing:
+        existing.clear()
+        existing.update(record)
+    else:
+        rows.insert(0, record)
+    _write_file_rows(name, rows)
+
+
+def _delete_hr_record(name: str, row_id: str, user: dict[str, Any] | None) -> None:
+    tenant_id = _tenant_id(user)
+    if _db_available():
+        if not _run_db(_db_delete_hr_ledger(name, row_id, tenant_id)):
+            raise HTTPException(status_code=404, detail="대상을 찾을 수 없습니다")
+        return
+    rows = _read_file_rows(name)
+    matched = next(
+        (row for row in rows if str(row.get("id")) == str(row_id) and str(row.get("tenant_id") or "") == tenant_id),
+        None,
+    )
+    if not matched:
+        raise HTTPException(status_code=404, detail="대상을 찾을 수 없습니다")
+    _write_file_rows(name, [row for row in rows if row is not matched])
 
 
 def _delete(name: str, row_id: str) -> None:
@@ -1751,8 +1947,18 @@ def _is_admin(user: dict[str, Any]) -> bool:
     user_role = str(user.get("user_role") or "").strip().lower()
     privileged_principal = bool(user.get("is_internal_admin")) or user_role in {"ceo", "admin", "system"}
     if email and not privileged_principal:
+        membership = user.get("current_membership")
+        membership_valid = (
+            isinstance(membership, dict)
+            and str(membership.get("status") or "").strip().lower() == "active"
+            and str(membership.get("tenant_id") or "").strip() == str(user.get("tenant_id") or "").strip()
+        )
         employee_record = next(
-            (row for row in _read("employee_join_requests") if str(row.get("email") or "").strip().lower() == email),
+            (
+                row
+                for row in (_read_hr("employee_join_requests", user) if membership_valid else [])
+                if str(row.get("email") or "").strip().lower() == email
+            ),
             None,
         )
         if employee_record:
@@ -1795,8 +2001,9 @@ def list_document_types() -> list[dict[str, str]]:
 
 
 def session_for_user(user: dict[str, Any]) -> dict[str, Any]:
+    _tenant_id(user)
     email = _email(user)
-    joins = _read("employee_join_requests")
+    joins = _read_hr("employee_join_requests", user)
     own = next((row for row in joins if str(row.get("email") or "").strip().lower() == email), None)
     user_role = str(user.get("user_role") or "").strip().lower()
     privileged_principal = bool(user.get("is_internal_admin")) or user_role in {"ceo", "admin", "system"}
@@ -1932,18 +2139,18 @@ def accept_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
 
 
 def list_join_requests(user: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = _read("employee_join_requests")
+    rows = _read_hr("employee_join_requests", user)
     return sorted(_filter_user(rows, user, "email"), key=lambda row: row.get("requested_at", ""), reverse=True)
 
 
 def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
-    rows = _read("employee_join_requests")
+    rows = _read_hr("employee_join_requests", user)
     email = str(payload.get("email") or _email(user)).strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="직원 이메일이 필요합니다")
     existing = next((row for row in rows if str(row.get("email") or "").strip().lower() == email), None)
     now = _now()
-    record = existing or {"id": str(uuid4()), "requested_at": now}
+    record = dict(existing) if existing else {"id": str(uuid4()), "requested_at": now}
     branch = BRANCH_ALIASES.get(
         str(payload.get("branch") or record.get("branch") or "").strip(),
         str(payload.get("branch") or record.get("branch") or "").strip(),
@@ -1969,19 +2176,16 @@ def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
             "updated_at": now,
         }
     )
-    if not existing:
-        rows.insert(0, record)
-    _write("employee_join_requests", rows)
+    record = _owned_hr_record(record, user)
+    _write_hr_record("employee_join_requests", record, user)
     return record
 
 
 def review_join_request(request_id: str, action: str, memo: str, user: dict[str, Any]) -> dict[str, Any]:
+    _tenant_id(user)
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="가입요청 승인 권한이 없습니다")
-    rows = _read("employee_join_requests")
-    record = _find(rows, request_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="가입요청을 찾을 수 없습니다")
+    record = _require_hr_record(_find(_read_hr("employee_join_requests", user), request_id), user, detail="가입요청을 찾을 수 없습니다")
     if action not in {"approved", "rejected"}:
         raise HTTPException(status_code=400, detail="action은 approved 또는 rejected여야 합니다")
     record["status"] = action
@@ -1989,20 +2193,18 @@ def review_join_request(request_id: str, action: str, memo: str, user: dict[str,
     record["reviewed_by"] = _email(user)
     record["reviewed_at"] = _now()
     record["updated_at"] = record["reviewed_at"]
-    _write("employee_join_requests", rows)
+    _write_hr_record("employee_join_requests", record, user)
     return record
 
 
 def update_approved_employee_role(request_id: str, role: str, memo: str, user: dict[str, Any]) -> dict[str, Any]:
+    _tenant_id(user)
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="직원 권한 변경 권한이 없습니다")
     access_role = _employee_access_role(role)
     if access_role != str(role or "").strip().lower():
         raise HTTPException(status_code=400, detail="지원하지 않는 직원 권한입니다")
-    rows = _read("employee_join_requests")
-    record = _find(rows, request_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="직원을 찾을 수 없습니다")
+    record = _require_hr_record(_find(_read_hr("employee_join_requests", user), request_id), user, detail="직원을 찾을 수 없습니다")
     if str(record.get("status") or "").strip().lower() != "approved":
         raise HTTPException(status_code=400, detail="승인 완료 직원만 권한을 변경할 수 있습니다")
     now = _now()
@@ -2012,7 +2214,7 @@ def update_approved_employee_role(request_id: str, role: str, memo: str, user: d
     record["access_updated_by"] = _email(user)
     record["access_updated_at"] = now
     record["updated_at"] = now
-    _write("employee_join_requests", rows)
+    _write_hr_record("employee_join_requests", record, user)
     return record
 
 
@@ -2089,14 +2291,15 @@ def _employee_onboarding_profile(
 
 
 def list_approved_employees(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
+    _tenant_id(user)
     if not _is_admin(user):
         return []
-    docs = _read("onboarding_documents")
-    contracts = _read("contracts")
-    payroll = _read("payroll_statements")
+    docs = _read_hr("onboarding_documents", user)
+    contracts = _read_hr("contracts", user)
+    payroll = _read_hr("payroll_statements", user)
 
     result = []
-    for row in _read("employee_join_requests"):
+    for row in _read_hr("employee_join_requests", user):
         if row.get("status") != "approved":
             continue
         employee_business_id = _record_business_id(row)
@@ -2138,15 +2341,21 @@ async def save_onboarding_document(
     upload: UploadFile,
     user: dict[str, Any],
 ) -> dict[str, Any]:
+    tenant_id = _tenant_id(user)
     email = str(employee_email or _email(user)).strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="직원 이메일이 필요합니다")
     if not _is_admin(user) and email != _email(user):
         raise HTTPException(status_code=403, detail="본인 서류만 업로드할 수 있습니다")
+    employee_rows = (
+        await _db_fetch_ledger("employee_join_requests", tenant_id)
+        if _db_available()
+        else _read_hr("employee_join_requests", user)
+    )
     employee = next(
         (
             row
-            for row in _read("employee_join_requests")
+            for row in (employee_rows or [])
             if str(row.get("email") or "").strip().lower() == email
             and str(row.get("status") or "pending").strip().lower() != "rejected"
         ),
@@ -2155,6 +2364,8 @@ async def save_onboarding_document(
     employee_branch = str((employee or {}).get("branch") or "").strip()
     normalized_branch = BRANCH_ALIASES.get(employee_branch or branch.strip(), employee_branch or branch.strip())
     business_id = _record_business_id(employee or {"branch": normalized_branch})
+    if not business_id or (_db_available() and not await _db_business_tenant_matches(business_id, tenant_id)):
+        raise HTTPException(status_code=403, detail="테넌트에 귀속되지 않은 사업자입니다")
     meta = _document_meta(document_type)
     original = _safe_filename(upload.filename or "document.bin")
     suffix = Path(original).suffix.lower()
@@ -2195,10 +2406,13 @@ async def save_onboarding_document(
         "uploaded_by": _email(user),
         "uploaded_at": now,
         "updated_at": now,
+        "tenant_id": tenant_id,
     }
-    rows = _read("onboarding_documents")
-    rows.insert(0, record)
-    _write("onboarding_documents", rows)
+    if _db_available():
+        if not await _db_upsert_ledger("onboarding_documents", record):
+            raise HTTPException(status_code=404, detail="입사서류를 저장할 수 없습니다")
+    else:
+        _write_hr_record("onboarding_documents", record, user)
     return record
 
 
@@ -2336,7 +2550,7 @@ def _onboarding_missing_document_rows(
     }
     rows: list[dict[str, Any]] = []
     admin_view = _is_admin(user)
-    for employee in _read("employee_join_requests"):
+    for employee in _read_hr("employee_join_requests", user):
         status = str(employee.get("status") or "pending").strip().lower()
         if status == "rejected":
             continue
@@ -2382,7 +2596,7 @@ def _onboarding_missing_document_rows(
 
 
 def list_onboarding_documents(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
-    stored_rows = _read("onboarding_documents")
+    stored_rows = _read_hr("onboarding_documents", user)
     visible_rows = _filter_user(stored_rows, user, "employee_email", "uploaded_by")
     normalized_rows = []
     for item in visible_rows:
@@ -2401,9 +2615,7 @@ def list_onboarding_documents(user: dict[str, Any], business_id: str | None = No
 
 
 def get_onboarding_document(document_id: str, user: dict[str, Any]) -> tuple[dict[str, Any], Path]:
-    record = _find(_read("onboarding_documents"), document_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="입사서류를 찾을 수 없습니다")
+    record = _require_hr_record(_find(_read_hr("onboarding_documents", user), document_id), user, detail="입사서류를 찾을 수 없습니다")
     if not _is_admin(user) and str(record.get("employee_email") or "").strip().lower() != _email(user):
         raise HTTPException(status_code=403, detail="본인 서류만 열람할 수 있습니다")
     path = UPLOAD_DIR / str(record.get("stored_filename") or "")
@@ -2413,12 +2625,10 @@ def get_onboarding_document(document_id: str, user: dict[str, Any]) -> tuple[dic
 
 
 def review_onboarding_document(document_id: str, status: str, memo: str, user: dict[str, Any]) -> dict[str, Any]:
+    _tenant_id(user)
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="서류 검수 권한이 없습니다")
-    rows = _read("onboarding_documents")
-    record = _find(rows, document_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="입사서류를 찾을 수 없습니다")
+    record = _require_hr_record(_find(_read_hr("onboarding_documents", user), document_id), user, detail="입사서류를 찾을 수 없습니다")
     if status not in {"approved", "rejected", "needs_fix", "uploaded"}:
         raise HTTPException(status_code=400, detail="올바르지 않은 서류 상태입니다")
     record["status"] = status
@@ -2426,18 +2636,15 @@ def review_onboarding_document(document_id: str, status: str, memo: str, user: d
     record["reviewed_by"] = _email(user)
     record["reviewed_at"] = _now()
     record["updated_at"] = record["reviewed_at"]
-    _write("onboarding_documents", rows)
+    _write_hr_record("onboarding_documents", record, user)
     return record
 
 
 def delete_onboarding_document(document_id: str, user: dict[str, Any]) -> None:
-    rows = _read("onboarding_documents")
-    record = _find(rows, document_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="입사서류를 찾을 수 없습니다")
+    record = _require_hr_record(_find(_read_hr("onboarding_documents", user), document_id), user, detail="입사서류를 찾을 수 없습니다")
     if not _is_admin(user) and str(record.get("employee_email") or "").strip().lower() != _email(user):
         raise HTTPException(status_code=403, detail="본인 서류만 삭제할 수 있습니다")
-    _delete("onboarding_documents", document_id)
+    _delete_hr_record("onboarding_documents", document_id, user)
 
 
 def _contract_business(payload: dict[str, Any], employee: dict[str, Any] | None) -> tuple[str, str]:
@@ -2461,7 +2668,7 @@ def _fill_contract_reference_data(payload: dict[str, Any], user: dict[str, Any])
     request_id = str(result.get("employee_request_id") or result.get("employeeRequestId") or "").strip()
     employee = None
     if request_id:
-        employee = _find(_read("employee_join_requests"), request_id)
+        employee = _find(_read_hr("employee_join_requests", user), request_id)
         if not employee or str(employee.get("status") or "").lower() != "approved":
             raise HTTPException(status_code=400, detail="승인된 가입 직원만 계약서에 선택할 수 있습니다")
 
@@ -2470,7 +2677,7 @@ def _fill_contract_reference_data(payload: dict[str, Any], user: dict[str, Any])
     result["branch"] = branch
     if employee:
         document_profile = _employee_onboarding_profile(
-            _read("onboarding_documents"),
+            _read_hr("onboarding_documents", user),
             employee_email=str(employee.get("email") or ""),
             employee_request_id=request_id,
         )
@@ -2803,18 +3010,19 @@ def _contract_defaults(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_contracts(user: dict[str, Any]) -> list[dict[str, Any]]:
-    return sorted(_filter_user(_read("contracts"), user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
+    return sorted(_filter_user(_read_hr("contracts", user), user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
 
 
 def save_contract(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    _tenant_id(user)
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="계약서 작성 권한이 없습니다")
-    rows = _read("contracts")
+    rows = _read_hr("contracts", user)
     requested_id = str(payload.get("id") or "").strip()
     existing = _find(rows, requested_id) if requested_id else None
     if existing and str(existing.get("status") or "") == "signed":
         raise HTTPException(status_code=409, detail="서명 완료 계약서는 수정할 수 없습니다. 정정 계약서를 새로 작성하십시오")
-    contract = _contract_defaults(_validate_contract_payload(_fill_contract_reference_data(payload, user)))
+    contract = _owned_hr_record(_contract_defaults(_validate_contract_payload(_fill_contract_reference_data(payload, user))), user)
     existing = _find(rows, contract["id"])
     if existing:
         if str(existing.get("status") or "") == "requested":
@@ -2830,17 +3038,15 @@ def save_contract(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
         contract["status"] = "draft"
         rows.insert(0, contract)
         saved = contract
-    _write("contracts", rows)
+    _write_hr_record("contracts", saved, user)
     return saved
 
 
 def request_contract_signature(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    _tenant_id(user)
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="서명 요청 권한이 없습니다")
-    rows = _read("contracts")
-    contract = _find(rows, contract_id)
-    if not contract:
-        raise HTTPException(status_code=404, detail="계약서를 찾을 수 없습니다")
+    contract = _require_hr_record(_find(_read_hr("contracts", user), contract_id), user, detail="계약서를 찾을 수 없습니다")
     if str(contract.get("status") or "") == "signed":
         raise HTTPException(status_code=409, detail="서명 완료 계약서는 다시 서명 요청할 수 없습니다")
     _validate_contract_payload(contract)
@@ -2848,7 +3054,7 @@ def request_contract_signature(contract_id: str, user: dict[str, Any]) -> dict[s
     contract["sign_token"] = contract.get("sign_token") or secrets.token_urlsafe(24)
     contract["requested_at"] = _now()
     contract["updated_at"] = contract["requested_at"]
-    _write("contracts", rows)
+    _write_hr_record("contracts", contract, user)
     return contract
 
 
@@ -2857,6 +3063,7 @@ def _contract_signer_email(contract: dict[str, Any], user: dict[str, Any] | None
         raise HTTPException(status_code=401, detail="직원 계정 로그인이 필요합니다")
     if _is_admin(user):
         raise HTTPException(status_code=403, detail="관리자는 직원 대신 계약서에 서명할 수 없습니다")
+    _require_hr_record(contract, user, detail="서명 요청 계약서를 찾을 수 없습니다")
     signer_email = _email(user)
     employee_email = str(contract.get("employee_email") or "").strip().lower()
     if not employee_email or signer_email != employee_email:
@@ -2879,7 +3086,7 @@ def _validated_signature_image(data_uri: Any) -> tuple[str, str]:
 
 
 def get_contract_by_token(token: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
-    contract = next((row for row in _read("contracts") if row.get("sign_token") == token), None)
+    contract = next((row for row in _read_hr("contracts", user) if row.get("sign_token") == token), None)
     if not contract:
         raise HTTPException(status_code=404, detail="서명 요청 계약서를 찾을 수 없습니다")
     _contract_signer_email(contract, user)
@@ -2890,7 +3097,7 @@ def get_contract_by_token(token: str, user: dict[str, Any] | None = None) -> dic
 
 def sign_contract(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
     token = str(payload.get("token") or "")
-    rows = _read("contracts")
+    rows = _read_hr("contracts", user)
     contract = next((row for row in rows if row.get("sign_token") == token), None)
     if not contract:
         raise HTTPException(status_code=404, detail="서명 요청 계약서를 찾을 수 없습니다")
@@ -2933,32 +3140,32 @@ def sign_contract(payload: dict[str, Any], user: dict[str, Any] | None = None) -
     snapshot, snapshot_sha256 = _signed_contract_snapshot(contract)
     contract["signed_snapshot"] = snapshot
     contract["signed_snapshot_sha256"] = snapshot_sha256
-    _write("contracts", rows)
+    _write_hr_record("contracts", contract, user)
     return contract
 
 
 def delete_contract(contract_id: str, user: dict[str, Any]) -> None:
+    _tenant_id(user)
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="계약서 삭제 권한이 없습니다")
-    contract = _find(_read("contracts"), contract_id)
-    if not contract:
-        raise HTTPException(status_code=404, detail="계약서를 찾을 수 없습니다")
+    contract = _require_hr_record(_find(_read_hr("contracts", user), contract_id), user, detail="계약서를 찾을 수 없습니다")
     if str(contract.get("status") or "") == "signed":
         raise HTTPException(status_code=409, detail="서명 완료 계약서는 삭제할 수 없습니다")
-    _delete("contracts", contract_id)
+    _delete_hr_record("contracts", contract_id, user)
 
 
 def list_payroll(user: dict[str, Any]) -> list[dict[str, Any]]:
-    return sorted(_filter_user(_read("payroll_statements"), user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
+    return sorted(_filter_user(_read_hr("payroll_statements", user), user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
 
 
 def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    _tenant_id(user)
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="급여내역서 작성 권한이 없습니다")
-    rows = _read("payroll_statements")
-    gross = int(float(payload.get("gross_pay") or 0))
-    taxable_pay = int(float(payload.get("taxable_pay") or 0))
-    non_tax_meal = int(float(payload.get("non_tax_meal_allowance") or 0))
+    rows = _read_hr("payroll_statements", user)
+    gross = _payroll_integer_for_api(payload.get("gross_pay"), field="gross_pay")
+    taxable_pay = _payroll_integer_for_api(payload.get("taxable_pay"), field="taxable_pay")
+    non_tax_meal = _payroll_integer_for_api(payload.get("non_tax_meal_allowance"), field="non_tax_meal_allowance")
     if taxable_pay or non_tax_meal:
         if taxable_pay + non_tax_meal != gross:
             raise HTTPException(status_code=400, detail="과세급여와 비과세 식대 합계가 총지급액과 일치해야 합니다")
@@ -2966,7 +3173,10 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
             raise HTTPException(status_code=400, detail="비과세 식대는 월 200,000원 이내로 입력하십시오")
         if non_tax_meal > 0 and str(payload.get("meal_provision") or "") != "cash_no_meal":
             raise HTTPException(status_code=400, detail="사용자가 식사를 제공하는 경우 현금 식대를 비과세로 분류할 수 없습니다")
-    deductions = int(float(payload.get("tax_withholding") or 0)) + int(float(payload.get("insurance_deduction") or 0)) + int(float(payload.get("other_deduction") or 0))
+    tax_withholding = _payroll_integer_for_api(payload.get("tax_withholding"), field="tax_withholding")
+    insurance_deduction = _payroll_integer_for_api(payload.get("insurance_deduction"), field="insurance_deduction")
+    other_deduction = _payroll_integer_for_api(payload.get("other_deduction"), field="other_deduction")
+    deductions = tax_withholding + insurance_deduction + other_deduction
     now = _now()
     statement_id = str(payload.get("id") or uuid4())
     email = str(payload.get("employee_email") or "").strip().lower()
@@ -2978,13 +3188,14 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
         "gross_pay": gross,
         "taxable_pay": taxable_pay,
         "non_tax_meal_allowance": non_tax_meal,
-        "tax_withholding": int(float(payload.get("tax_withholding") or 0)),
-        "insurance_deduction": int(float(payload.get("insurance_deduction") or 0)),
-        "other_deduction": int(float(payload.get("other_deduction") or 0)),
+        "tax_withholding": tax_withholding,
+        "insurance_deduction": insurance_deduction,
+        "other_deduction": other_deduction,
         "net_pay": max(0, gross - deductions),
         "created_at": payload.get("created_at") or now,
         "updated_at": now,
     }
+    statement = _owned_hr_record(statement, user)
     existing = _find(rows, statement_id)
     if existing:
         existing.update(statement)
@@ -2992,14 +3203,16 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
     else:
         rows.insert(0, statement)
         saved = statement
-    _write("payroll_statements", rows)
+    _write_hr_record("payroll_statements", saved, user)
     return saved
 
 
 def delete_payroll(statement_id: str, user: dict[str, Any]) -> None:
+    _tenant_id(user)
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="급여내역서 삭제 권한이 없습니다")
-    _delete("payroll_statements", statement_id)
+    _require_hr_record(_find(_read_hr("payroll_statements", user), statement_id), user, detail="급여내역서를 찾을 수 없습니다")
+    _delete_hr_record("payroll_statements", statement_id, user)
 
 
 def _decode_csv(content: bytes) -> str:

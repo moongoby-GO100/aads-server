@@ -1,4 +1,5 @@
 import base64
+import os
 from io import BytesIO
 from pathlib import Path
 
@@ -7,7 +8,9 @@ from fastapi import BackgroundTasks, FastAPI, UploadFile
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
-from app.api import yeoljeong_finance as api
+os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-that-is-at-least-32-bytes-long")
+
+from app.api import obys_finance as api
 
 
 def test_join_request_accepts_contract_autofill_profile():
