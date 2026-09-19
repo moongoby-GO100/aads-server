@@ -119,6 +119,7 @@ async def test_foreign_business_is_404_fail_closed() -> None:
 def test_ui_exposes_four_real_ledger_pages() -> None:
     html = Path("app/static/apps/obys/index.html").read_text(encoding="utf-8")
     module = Path("app/static/apps/obys/modules/ledger-details.js").read_text(encoding="utf-8")
+    styles = Path("app/static/apps/obys/modules/ledger-details.css").read_text(encoding="utf-8")
     api = Path("app/api/obys_finance.py").read_text(encoding="utf-8")
     migration = Path("migrations/20260919_obys_bank_ledger_details.sql").read_text(encoding="utf-8")
     for view in ("salesLedger", "purchaseLedger", "bankLedger", "cardLedger"):
@@ -133,4 +134,14 @@ def test_ui_exposes_four_real_ledger_pages() -> None:
     assert "DROP " not in details_migration.upper()
     assert "TRUNCATE " not in details_migration.upper()
     assert "업로드 원본 행은 보존 정책에 따라 수정·삭제할 수 없습니다." in module
-    assert "min-height:44px" in module
+    assert "min-height: 44px" in styles
+    assert 'href="/static/apps/obys/modules/ledger-details.css"' in html
+    assert "엑셀 파일 등록" in module
+    assert "등록 양식 내려받기" in module
+    assert "data-upload-drop" in module
+    assert "data-ledger-search" in module
+    assert "ledger-kpis" in module
+    assert '"/card-uploads"' in module
+    assert '"/ledger-bank-transactions"' in module
+    assert ".ledger-upload-grid" in styles
+    assert "@media (max-width: 640px)" in styles
