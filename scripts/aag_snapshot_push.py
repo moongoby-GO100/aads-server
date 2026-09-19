@@ -29,6 +29,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Iterator
+from uuid import uuid4
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -107,6 +108,7 @@ def _v2_statement(project: str, graph: dict) -> str | None:
         return None
 
     body = graph_content(graph, project=project)
+    run_id = str(uuid4())
     content_hash = content_fingerprint(body)
     input_hash = input_fingerprint(
         project=project,
@@ -123,6 +125,7 @@ def _v2_statement(project: str, graph: dict) -> str | None:
     )
     values = {
         "project": _dollar(project),
+        "run_id": _dollar(run_id),
         "repository": _dollar(str(identity["repository_id"])),
         "ref": _dollar(str(identity["target_ref"])),
         "scope": _dollar(str(identity.get("governance_scope") or "default")),
@@ -151,11 +154,11 @@ WITH scope_lock AS (
     ))
 ), new_run AS (
     INSERT INTO aag_scan_runs
-         (project, repository_id, target_ref, governance_scope, resolved_commit_sha,
+         (id, project, repository_id, target_ref, governance_scope, resolved_commit_sha,
          expected_target_ref_head_sha, input_fingerprint, scanner_version,
          ruleset_digest, scan_scope_digest,
          normalization_version, parser_versions, host, result, stage_status)
-    SELECT {project}, {repository}, {ref}, {scope}, {commit}, {expected_commit},
+    SELECT {run_id}::uuid, {project}, {repository}, {ref}, {scope}, {commit}, {expected_commit},
             {input}, {scanner},
             {rules}, {scan_scope}, {normalization}, {parsers}::jsonb, {host},
             'running', '{{"scan":"succeeded","ingest":"running"}}'::jsonb
@@ -240,13 +243,18 @@ WITH scope_lock AS (
     WHERE EXCLUDED.generated_at >= aag_latest_pointers.generated_at
     RETURNING run_id
 )
+SELECT COUNT(*) AS pointers_published FROM new_pointer;
+
+-- A data-modifying CTE cannot UPDATE a row inserted by a sibling CTE in the
+-- same statement snapshot. Finalize the explicit run id in a second statement.
 UPDATE aag_scan_runs r
    SET result=CASE WHEN o.verification_status = 'verified' THEN o.result
                    WHEN o.verification_status = 'out_of_order' THEN 'out_of_order'
                    ELSE 'source_behind' END,
        finished_at=NOW(),
        stage_status='{{"scan":"succeeded","ingest":"succeeded"}}'::jsonb
-  FROM new_observation o WHERE r.id=o.run_id;
+  FROM aag_snapshot_observations o
+ WHERE r.id={run_id}::uuid AND o.run_id=r.id;
 """.format(
         **values,
         node_count=len(body["nodes"]),

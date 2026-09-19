@@ -159,6 +159,9 @@ def test_hourly_pusher_maintains_atomic_authoritative_pointer():
     assert "INSERT INTO aag_ref_heads" in sql
     assert "THEN 'out_of_order'" in sql
     assert "WHERE EXCLUDED.generated_at >= aag_latest_pointers.generated_at" in sql
+    assert "SELECT COUNT(*) AS pointers_published FROM new_pointer" in sql
+    assert "FROM aag_snapshot_observations o" in sql
+    assert "WHERE r.id=" in sql
 
 
 def test_release_enables_v2_with_environment_rollback_switches():
