@@ -8946,6 +8946,165 @@ async def list_sessions(workspace_id: str, limit: int = 50, tag: Optional[str] =
         return [_row_to_dict(r) for r in rows]
 
 
+async def list_session_attention(
+    *,
+    tenant_id: Optional[str],
+    user_id: str,
+) -> Dict[str, Any]:
+    """사용자별 통합 작업함을 반환한다.
+
+    최초 조회 시점을 기준선으로 저장해 기능 배포 전의 오래된 완료 실행이 한꺼번에
+    노출되지 않게 한다. 작업 중 세션은 기준선과 무관하게 항상 보인다.
+    """
+    tenant_uuid = _require_tenant_uuid(tenant_id, "list_session_attention")
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        raise ValueError("user_id_required")
+
+    async with get_pool().acquire() as conn:
+        baseline = await conn.fetchval(
+            """
+            WITH inserted AS (
+                INSERT INTO chat_session_attention_users (tenant_id, user_id)
+                VALUES ($1, $2)
+                ON CONFLICT (tenant_id, user_id) DO NOTHING
+                RETURNING started_at
+            )
+            SELECT started_at FROM inserted
+            UNION ALL
+            SELECT started_at
+            FROM chat_session_attention_users
+            WHERE tenant_id = $1 AND user_id = $2
+            LIMIT 1
+            """,
+            tenant_uuid,
+            normalized_user_id,
+        )
+        rows = await conn.fetch(
+            """
+            SELECT
+                s.id AS session_id,
+                s.workspace_id,
+                w.name AS workspace_name,
+                w.icon AS workspace_icon,
+                w.project_key,
+                s.title,
+                s.role_key,
+                s.current_model,
+                s.message_count,
+                s.pinned,
+                s.tags,
+                CASE
+                    WHEN s.current_execution_id IS NOT NULL THEN 'working'
+                    ELSE 'completed_unread'
+                END AS state,
+                COALESCE(s.current_execution_id, latest_completed.id) AS execution_id,
+                latest_completed.completed_at,
+                s.created_at,
+                s.updated_at
+            FROM chat_sessions s
+            JOIN chat_workspaces w
+              ON w.id = s.workspace_id
+             AND w.tenant_id = s.tenant_id
+            LEFT JOIN LATERAL (
+                SELECT te.id, te.completed_at
+                FROM chat_turn_executions te
+                WHERE te.session_id = s.id
+                  AND te.status = 'completed'
+                  AND te.completed_at IS NOT NULL
+                ORDER BY te.completed_at DESC, te.id DESC
+                LIMIT 1
+            ) latest_completed ON TRUE
+            LEFT JOIN chat_session_attention_acknowledgements ack
+              ON ack.tenant_id = s.tenant_id
+             AND ack.user_id = $2
+             AND ack.session_id = s.id
+            WHERE s.tenant_id = $1
+              AND (
+                    s.current_execution_id IS NOT NULL
+                    OR latest_completed.completed_at > COALESCE(ack.acknowledged_completed_at, $3)
+              )
+            ORDER BY
+                (s.current_execution_id IS NOT NULL) DESC,
+                COALESCE(latest_completed.completed_at, s.updated_at) DESC
+            LIMIT 100
+            """,
+            tenant_uuid,
+            normalized_user_id,
+            baseline,
+        )
+    items = [_row_to_dict(row) for row in rows]
+    return {
+        "items": items,
+        "working_count": sum(item["state"] == "working" for item in items),
+        "completed_unread_count": sum(item["state"] == "completed_unread" for item in items),
+    }
+
+
+async def acknowledge_session_attention(
+    session_id: str,
+    *,
+    tenant_id: Optional[str],
+    user_id: str,
+) -> Optional[Dict[str, Any]]:
+    """세션의 최신 완료 실행을 사용자별로 확인 처리한다."""
+    tenant_uuid = _require_tenant_uuid(tenant_id, "acknowledge_session_attention")
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        raise ValueError("user_id_required")
+
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT s.id AS session_id, te.id AS execution_id, te.completed_at
+            FROM chat_sessions s
+            LEFT JOIN LATERAL (
+                SELECT id, completed_at
+                FROM chat_turn_executions
+                WHERE session_id = s.id
+                  AND status = 'completed'
+                  AND completed_at IS NOT NULL
+                ORDER BY completed_at DESC, id DESC
+                LIMIT 1
+            ) te ON TRUE
+            WHERE s.id = $1 AND s.tenant_id = $2
+            """,
+            uuid.UUID(session_id),
+            tenant_uuid,
+        )
+        if not row:
+            return None
+        acknowledged_at = datetime.now(timezone.utc)
+        if row["execution_id"] is not None:
+            await conn.execute(
+                """
+                INSERT INTO chat_session_attention_acknowledgements (
+                    tenant_id, user_id, session_id,
+                    acknowledged_execution_id, acknowledged_completed_at,
+                    acknowledged_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $6)
+                ON CONFLICT (tenant_id, user_id, session_id)
+                DO UPDATE SET
+                    acknowledged_execution_id = EXCLUDED.acknowledged_execution_id,
+                    acknowledged_completed_at = EXCLUDED.acknowledged_completed_at,
+                    acknowledged_at = EXCLUDED.acknowledged_at,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                tenant_uuid,
+                normalized_user_id,
+                row["session_id"],
+                row["execution_id"],
+                row["completed_at"],
+                acknowledged_at,
+            )
+        return {
+            "acknowledged": row["execution_id"] is not None,
+            "session_id": row["session_id"],
+            "execution_id": row["execution_id"],
+            "acknowledged_at": acknowledged_at,
+        }
+
+
 async def create_session(
     data: Dict[str, Any],
     tenant_id: Optional[str] = None,

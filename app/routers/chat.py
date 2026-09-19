@@ -60,6 +60,8 @@ from app.models.chat import (
     MessageUpdateRequest,
     ResearchOut,
     SessionCreate,
+    SessionAttentionAckOut,
+    SessionAttentionSummaryOut,
     SessionOut,
     StreamingStatusOut,
     SessionUpdate,
@@ -1077,6 +1079,41 @@ async def get_sessions(
 ):
     """워크스페이스 내 세션 목록. tag 파라미터로 필터 가능."""
     return await svc.list_sessions(str(workspace_id), tag=tag, tenant_id=_tenant_id(context))
+
+
+@router.get(
+    "/chat/session-attention",
+    response_model=SessionAttentionSummaryOut,
+    tags=["chat-session"],
+)
+async def get_session_attention(
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """현재 작업 중이거나 완료 후 아직 확인하지 않은 세션을 모아 반환한다."""
+    return await svc.list_session_attention(
+        tenant_id=_tenant_id(context),
+        user_id=_user_id(context),
+    )
+
+
+@router.post(
+    "/chat/session-attention/{session_id}/acknowledge",
+    response_model=SessionAttentionAckOut,
+    tags=["chat-session"],
+)
+async def acknowledge_session_attention(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """해당 세션의 현재 최신 완료 실행까지 확인 처리한다."""
+    result = await svc.acknowledge_session_attention(
+        str(session_id),
+        tenant_id=_tenant_id(context),
+        user_id=_user_id(context),
+    )
+    if not result:
+        raise _NOT_FOUND("session")
+    return result
 
 
 @router.get("/chat/sessions/{session_id}", response_model=SessionOut, tags=["chat-session"])

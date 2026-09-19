@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS idx_chat_turn_executions_session_completed_attention;
+DROP TABLE IF EXISTS chat_session_attention_acknowledgements;
+DROP TABLE IF EXISTS chat_session_attention_users;

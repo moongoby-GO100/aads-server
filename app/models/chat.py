@@ -83,6 +83,40 @@ class SessionOut(BaseModel):
     updated_at: datetime
 
 
+class SessionAttentionOut(BaseModel):
+    """좌측 통합 작업함에 표시할 세션 상태."""
+
+    session_id: uuid.UUID
+    workspace_id: uuid.UUID
+    workspace_name: str
+    workspace_icon: Optional[str] = None
+    project_key: Optional[str] = None
+    title: Optional[str] = None
+    role_key: Optional[str] = None
+    current_model: Optional[str] = None
+    message_count: int = 0
+    pinned: bool = False
+    tags: List[str] = Field(default_factory=list)
+    state: Literal["working", "completed_unread"]
+    execution_id: Optional[uuid.UUID] = None
+    completed_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SessionAttentionSummaryOut(BaseModel):
+    items: List[SessionAttentionOut] = Field(default_factory=list)
+    working_count: int = 0
+    completed_unread_count: int = 0
+
+
+class SessionAttentionAckOut(BaseModel):
+    acknowledged: bool
+    session_id: uuid.UUID
+    execution_id: Optional[uuid.UUID] = None
+    acknowledged_at: datetime
+
+
 # ─── Message ─────────────────────────────────────────────────────────────────
 
 class MessageSendRequest(BaseModel):
