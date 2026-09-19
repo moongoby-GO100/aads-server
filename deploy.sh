@@ -626,6 +626,7 @@ deploy_observe_update() {
     # 같은 사실이 원장에서 사라지고 배포가 완전 성공으로만 남는다(2026-09-14 run 418).
     case "$status" in
         skipped|deferred|partial) status="success_partial" ;;
+        error) status="failed" ;;
         completed) status="success" ;;
     esac
     deploy_observe_init
@@ -1609,6 +1610,68 @@ notify() {
     fi
 }
 
+# Bind-mounted sidecars are not recreated by the API blue/green compose start.
+# Reload them while holding the nginx cutover lock so a concurrent deploy cannot
+# race the mounted process or certify a route against stale sidecar code.
+reload_mounted_sidecars() {
+    local sidecar optional_sidecars internal_url public_url
+    local -a sidecars optional_list
+    local failure=""
+
+    IFS=',' read -r -a sidecars <<< "${DEPLOY_MOUNTED_SIDECARS:-yeoljeong-finance}"
+    IFS=',' read -r -a optional_list <<< "${DEPLOY_MOUNTED_SIDECAR_OPTIONAL:-}"
+    internal_url="${DEPLOY_SIDECAR_CHECK_URL:-http://localhost:8110/health/live}"
+    public_url="${DEPLOY_SIDECAR_PUBLIC_CHECK_URL:-http://127.0.0.1/api/v1/yeoljeong-finance/health/live}"
+
+    deploy_phase_start "mounted_sidecar_reload" "verifying"
+    for sidecar in "${sidecars[@]}"; do
+        sidecar="${sidecar//[[:space:]]/}"
+        [[ -z "$sidecar" ]] && continue
+        if [[ "$sidecar" == aads-server* ]]; then
+            failure="refusing API container as mounted sidecar: ${sidecar}"
+            break
+        fi
+
+        local is_optional=false
+        local optional_sidecar
+        for optional_sidecar in "${optional_list[@]}"; do
+            optional_sidecar="${optional_sidecar//[[:space:]]/}"
+            [[ "$sidecar" == "$optional_sidecar" ]] && is_optional=true && break
+        done
+
+        if ! docker inspect "$sidecar" >/dev/null 2>&1; then
+            if [[ "$is_optional" == "true" ]]; then
+                echo "[deploy.sh] ⏭️ optional mounted sidecar absent: ${sidecar}"
+                continue
+            fi
+            failure="required sidecar absent: ${sidecar}"
+            break
+        fi
+
+        echo "[deploy.sh] ↻ mounted sidecar restart: ${sidecar}"
+        if ! docker restart "$sidecar" >/dev/null 2>&1; then
+            failure="mounted sidecar restart failed: ${sidecar}"
+            break
+        fi
+        if ! curl -sf --max-time 10 "$internal_url" >/dev/null 2>&1; then
+            failure="mounted sidecar internal health failed: ${sidecar} (${internal_url})"
+            break
+        fi
+        if ! curl -sf --max-time 10 "$public_url" >/dev/null 2>&1; then
+            failure="mounted sidecar public health failed: ${sidecar} (${public_url})"
+            break
+        fi
+    done
+
+    if [[ -n "$failure" ]]; then
+        echo "[deploy.sh] ❌ ${failure}"
+        deploy_phase_end "mounted_sidecar_reload" "error" "$failure"
+        notify "❌ Blue-Green 인증 실패: ${failure}"
+        return 1
+    fi
+    deploy_phase_end "mounted_sidecar_reload" "success" "mounted sidecars reloaded and publicly healthy"
+}
+
 container_for_port() {
     case "$1" in
         8100) echo "aads-server" ;;
@@ -2462,6 +2525,14 @@ case "$MODE" in
             notify "❌ Blue-Green 실패: 전환 검증 실패 — 복원 완료"
             deploy_phase_end "nginx_cutover" "failed" "post-switch health verification failed for ${NEW_CONTAINER}:${NEW_PORT}"
             record_deploy "failed" "$MODE" "post-switch health verification failed for ${NEW_CONTAINER}:${NEW_PORT}"
+            exit 1
+        fi
+
+        # The route is live now, but the bind-mounted finance sidecar still
+        # serves its pre-release files until it has been restarted and checked
+        # through nginx. Keep the switch lock through that verification.
+        if ! reload_mounted_sidecars; then
+            record_deploy "failed" "$MODE" "mounted sidecar reload failed after nginx cutover"
             exit 1
         fi
 
