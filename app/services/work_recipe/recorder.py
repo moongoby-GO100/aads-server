@@ -1,11 +1,11 @@
-"""성공한 브라우저 조작을 재생 가능한 WorkRecipe로 굳힌다."""
+"""성공한 브라우저 조작을 승인 대기 WorkRecipe draft로 굳힌다."""
 from __future__ import annotations
 
 import re
 from collections.abc import Mapping
 from typing import Any
 
-from app.services.work_recipe import store
+from app.services.work_recipe import registration, store
 from app.services.work_recipe.guard import INTERNAL_DOMAINS
 from app.services.work_recipe.schema import RecipeInput, RecipeStep, WorkRecipe
 
@@ -56,19 +56,18 @@ class WorkRecipeRecorder:
         if not self.steps:
             raise ValueError("성공한 단계가 없어 레시피를 저장할 수 없습니다")
         self._finished = True
-        version = await store.next_version(
-            name=self.name, domain=self.domain, tenant_id=self.tenant_id
-        )
         recipe = WorkRecipe(
             name=self.name,
             domain=self.domain,
-            version=version,
+            version=1,
             inputs=list(self.inputs),
             steps=list(self.steps),
             metadata={"recorded": True, "credentials": "credential_scope"},
         )
-        return await store.save_recipe(
-            recipe, tenant_id=self.tenant_id, created_by=created_by
+        # FR-17: 성공했다고 즉시 실행 가능 레시피로 올리지 않는다. 단계·권한·
+        # 위험·증거·변수 dry-run을 저장하고 B-scope 승인을 받은 뒤에만 등록한다.
+        return await registration.request_registration(
+            recipe, tenant_id=self.tenant_id, requested_by=created_by
         )
 
     def _is_credential_step(self, raw: Mapping[str, Any]) -> bool:

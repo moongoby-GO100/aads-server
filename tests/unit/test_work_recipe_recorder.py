@@ -7,15 +7,14 @@ from app.services.work_recipe import recorder as recorder_module
 async def test_recorder_replaces_credentials_before_saving(monkeypatch):
     saved = {}
 
-    async def next_version(**kwargs):
-        return 3
-
-    async def save_recipe(recipe, **kwargs):
+    async def request_registration(recipe, **kwargs):
         saved["recipe"] = recipe
-        return {"id": "recipe-1", "spec": recipe.to_dict()}
+        saved.update(kwargs)
+        return {"id": "registration-1", "status": "pending", "spec": recipe.to_dict()}
 
-    monkeypatch.setattr(recorder_module.store, "next_version", next_version)
-    monkeypatch.setattr(recorder_module.store, "save_recipe", save_recipe)
+    monkeypatch.setattr(
+        recorder_module.registration, "request_registration", request_registration
+    )
 
     recording = recorder_module.start_recording(
         "example_login", "https://www.example.com/login", "tenant-1"
@@ -32,7 +31,8 @@ async def test_recorder_replaces_credentials_before_saving(monkeypatch):
     assert recipe.steps[1].value == "{{credential_1}}"
     assert recipe.inputs[0].secret is True
     assert recipe.domain == "example.com"
-    assert recipe.version == 3
+    assert recipe.version == 1
+    assert saved["tenant_id"] == "tenant-1"
 
 
 async def test_orchestrator_returns_none_without_candidate(monkeypatch):
@@ -86,6 +86,8 @@ def test_ohvis_recipes_router_is_mounted():
     assert ("GET", "/api/v1/ohvis/recipes/recording/{recording_id}") in paths
     assert ("POST", "/api/v1/ohvis/recipes/recording/{recording_id}/steps") in paths
     assert ("POST", "/api/v1/ohvis/recipes/recording/{recording_id}/finish") in paths
+    assert ("GET", "/api/v1/ohvis/recipes/registrations/{registration_id}") in paths
+    assert ("POST", "/api/v1/ohvis/recipes/registrations/{registration_id}/decision") in paths
 
 
 def test_ohvis_recipes_requires_internal_admin(monkeypatch):
@@ -113,16 +115,31 @@ async def test_ohvis_recipes_full_recording_cycle(monkeypatch):
 
     saved = {}
 
-    async def next_version(**kwargs):
-        return 1
-
-    async def save_recipe(recipe, **kwargs):
+    async def request_registration(recipe, **kwargs):
         saved["recipe"] = recipe
-        saved["created_by"] = kwargs.get("created_by")
-        return {"id": "recipe-1", "spec": recipe.to_dict()}
+        saved["requested_by"] = kwargs.get("requested_by")
+        return {
+            "id": "registration-1",
+            "status": "pending",
+            "dry_run": {"scope": "recipe_registration", "steps": [{"seq": 1}]},
+            "spec": recipe.to_dict(),
+        }
 
-    monkeypatch.setattr(recorder_module.store, "next_version", next_version)
-    monkeypatch.setattr(recorder_module.store, "save_recipe", save_recipe)
+    monkeypatch.setattr(
+        recorder_module.registration, "request_registration", request_registration
+    )
+
+    async def decide_registration(registration_id, **kwargs):
+        assert registration_id == "registration-1"
+        assert kwargs["tenant_id"] == _admin_ctx()["tenant"]["id"]
+        assert kwargs["decision"] == "approve"
+        return {
+            "id": registration_id,
+            "status": "approved",
+            "recipe": {"id": "recipe-1", "version": 1},
+        }
+
+    monkeypatch.setattr(ohvis_recipes, "decide_registration", decide_registration)
 
     app = FastAPI()
     app.include_router(ohvis_recipes.router)
@@ -144,8 +161,18 @@ async def test_ohvis_recipes_full_recording_cycle(monkeypatch):
 
     finished = client.post(f"/ohvis/recipes/recording/{recording_id}/finish", json={})
     assert finished.status_code == 200
-    assert finished.json()["recipe"]["id"] == "recipe-1"
-    assert saved["created_by"] == "moong76@gmail.com"
+    assert finished.json()["status"] == "approval_required"
+    assert finished.json()["registration"]["id"] == "registration-1"
+    assert finished.json()["registration"]["dry_run"]["steps"] == [{"seq": 1}]
+    assert saved["requested_by"] == "moong76@gmail.com"
+
+    approved = client.post(
+        "/ohvis/recipes/registrations/registration-1/decision",
+        json={"decision": "approve", "reason": "dry-run 확인"},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"
+    assert approved.json()["registration"]["recipe"]["id"] == "recipe-1"
 
     # 종료된 recording_id 는 재사용할 수 없다
     stale = client.get(f"/ohvis/recipes/recording/{recording_id}")

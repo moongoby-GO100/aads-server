@@ -1,8 +1,8 @@
-"""WorkRecipe 기록 API — 브라우저 조작을 녹화해 재생 가능한 레시피로 저장한다.
+"""WorkRecipe 기록 API — 브라우저 조작을 녹화하고 승인 뒤 레시피로 등록한다.
 
 `app/services/work_recipe/recorder.py` 는 이미 main 에 있고 검증됐다 —
-여기서는 그 공개 함수(`start_recording`/`finish_recording`)만 부르는
-얇은 HTTP 표면을 얹는다. recorder 자체는 수정하지 않는다.
+완료 시에는 FR-17 dry-run과 B-scope 등록 승인 요청을 저장한다. 승인 전 draft는
+`work_recipes`에 들어가지 않으므로 플레이어가 미승인 레시피를 실행할 수 없다.
 
 인증은 `ohvis_console.require_console_admin` 과 동일하다 — 레시피 기록도
 CEO 운영 화면에서만 트리거되는 내부 관리 동작이라 내부 관리자로 막는다.
@@ -20,6 +20,11 @@ from pydantic import BaseModel, Field
 
 from app.api.ohvis_console import TenantContext, require_console_admin
 from app.services.work_recipe import recorder as recorder_module
+from app.services.work_recipe.registration import (
+    RegistrationError,
+    decide_registration,
+    get_registration,
+)
 
 router = APIRouter(prefix="/ohvis/recipes", tags=["ohvis-recipes"])
 
@@ -58,6 +63,11 @@ class RecordingStepIn(BaseModel):
 
 class RecordingFinishIn(BaseModel):
     created_by: str = Field(default="", max_length=200)
+
+
+class RegistrationDecisionIn(BaseModel):
+    decision: str = Field(min_length=1, max_length=20, description="approve | reject")
+    reason: str = Field(default="", max_length=1000)
 
 
 @router.post("/recording")
@@ -130,4 +140,35 @@ async def finish_recording(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
         _ACTIVE_RECORDINGS.pop(recording_id, None)
-    return {"status": "saved", "recipe": result}
+    return {"status": "approval_required", "registration": result}
+
+
+@router.get("/registrations/{registration_id}")
+async def get_registration_status(
+    registration_id: str,
+    context: TenantContext = Depends(require_console_admin),
+) -> dict[str, Any]:
+    row = await get_registration(registration_id, tenant_id=_tenant_id(context))
+    if row is None:
+        raise HTTPException(status_code=404, detail="registration_not_found")
+    return {"registration": row}
+
+
+@router.post("/registrations/{registration_id}/decision")
+async def decide_registration_request(
+    registration_id: str,
+    body: RegistrationDecisionIn,
+    context: TenantContext = Depends(require_console_admin),
+) -> dict[str, Any]:
+    try:
+        result = await decide_registration(
+            registration_id,
+            tenant_id=_tenant_id(context),
+            decision=body.decision,
+            decided_by=_decided_by(context),
+            reason=body.reason,
+        )
+    except RegistrationError as exc:
+        status = 404 if str(exc) == "registration_not_found" else 409
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    return {"status": result["status"], "registration": result}
