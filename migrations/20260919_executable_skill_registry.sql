@@ -38,18 +38,37 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ops_skill_runs_tenant_idempotency
 CREATE INDEX IF NOT EXISTS idx_ops_skill_versions_skill_status
     ON ops_skill_versions (skill_id, status, created_at DESC);
 
--- Published versions are immutable. Promotion may only change lifecycle fields.
+-- Published versions are immutable, except for the explicit active -> retired
+-- lifecycle transition.  The transition updates the embedded lifecycle status
+-- and its hash atomically, so the three persisted contract representations
+-- never disagree.
 CREATE OR REPLACE FUNCTION prevent_ops_skill_version_contract_mutation()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF OLD.status IN ('active', 'retired') AND (
-        NEW.skill_id IS DISTINCT FROM OLD.skill_id OR
-        NEW.version IS DISTINCT FROM OLD.version OR
-        NEW.content_sha256 IS DISTINCT FROM OLD.content_sha256 OR
-        NEW.content IS DISTINCT FROM OLD.content OR
-        NEW.manifest IS DISTINCT FROM OLD.manifest
-    ) THEN
-        RAISE EXCEPTION 'published skill versions are immutable';
+    IF NEW.manifest->>'status' IS DISTINCT FROM NEW.status THEN
+        RAISE EXCEPTION 'skill version manifest status must match row status';
+    END IF;
+    IF NEW.content::jsonb IS DISTINCT FROM NEW.manifest THEN
+        RAISE EXCEPTION 'skill version content must match manifest';
+    END IF;
+    IF NEW.content_sha256 IS DISTINCT FROM
+       ('sha256:' || encode(digest(convert_to(NEW.content, 'UTF8'), 'sha256'), 'hex')) THEN
+        RAISE EXCEPTION 'skill version content_sha256 must match content';
+    END IF;
+
+    IF NEW.status IS DISTINCT FROM OLD.status
+       OR NEW.skill_id IS DISTINCT FROM OLD.skill_id
+       OR NEW.version IS DISTINCT FROM OLD.version
+       OR NEW.content_sha256 IS DISTINCT FROM OLD.content_sha256
+       OR NEW.content IS DISTINCT FROM OLD.content
+       OR NEW.manifest IS DISTINCT FROM OLD.manifest THEN
+        IF (OLD.status, NEW.status) IN (('candidate', 'active'), ('shadow', 'active'), ('active', 'retired'))
+           AND NEW.skill_id IS NOT DISTINCT FROM OLD.skill_id
+           AND NEW.version IS NOT DISTINCT FROM OLD.version
+           AND NEW.manifest = jsonb_set(OLD.manifest, '{status}', to_jsonb(NEW.status)) THEN
+            RETURN NEW;
+        END IF;
+        RAISE EXCEPTION 'skill version contract is immutable outside promotion lifecycle';
     END IF;
     RETURN NEW;
 END;

@@ -213,6 +213,25 @@ def _row_dict(row: Any) -> dict[str, Any]:
     return dict(row) if row is not None else {}
 
 
+def _manifest_for_status(manifest: Mapping[str, Any], status: str) -> dict[str, Any]:
+    """Return the lifecycle-only representation of an immutable contract."""
+    return {**manifest, "status": status}
+
+
+def _validate_persisted_skill_version(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Reject a stored version whose lifecycle and immutable payload disagree."""
+    manifest = validate_skill_manifest(row["manifest"])
+    if manifest["status"] != row["status"]:
+        raise SkillRegistryError("stored_skill_lifecycle_mismatch", status_code=409)
+    try:
+        content = json.loads(row["content"])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise SkillRegistryError("stored_skill_contract_mismatch", status_code=409) from exc
+    if content != manifest or _sha256(manifest) != row["content_sha256"]:
+        raise SkillRegistryError("stored_skill_contract_mismatch", status_code=409)
+    return manifest
+
+
 def _enforce_executable_risk_policy(manifest: Mapping[str, Any]) -> None:
     """Fail closed when a risk tier is prohibited rather than approvable.
 
@@ -313,15 +332,15 @@ async def validate_stored_skill(*, tenant_id: str, skill_id: str, version: str) 
     from app.core.db_pool import get_pool
     async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
-            """SELECT v.manifest,v.content_sha256 FROM ops_skill_versions v
+            """SELECT v.status,v.manifest,v.content,v.content_sha256 FROM ops_skill_versions v
                JOIN ops_skill_library l ON l.id=v.skill_id
                WHERE l.tenant_id=$1::uuid AND l.id=$2::uuid AND v.version=$3""",
             tenant_id, skill_id, version,
         )
     if not row:
         raise SkillRegistryError("skill_version_not_found", status_code=404)
-    manifest = validate_skill_manifest(row["manifest"])
-    return {"valid": _sha256(manifest) == row["content_sha256"], "manifest": manifest,
+    manifest = _validate_persisted_skill_version(row)
+    return {"valid": True, "manifest": manifest,
             "executor_registered": manifest["executor"] in _SKILL_EXECUTORS}
 
 
@@ -332,24 +351,34 @@ async def promote_skill_version(*, tenant_id: str, skill_id: str, version: str,
     from app.core.db_pool import get_pool
     async with get_pool().acquire() as conn, conn.transaction():
         row = await conn.fetchrow(
-            """SELECT v.id,v.status,v.manifest FROM ops_skill_versions v
+            """SELECT v.id,v.status,v.manifest,v.content,v.content_sha256 FROM ops_skill_versions v
                    JOIN ops_skill_library l ON l.id=v.skill_id
                    WHERE l.tenant_id=$1::uuid AND l.id=$2::uuid AND v.version=$3 FOR UPDATE""",
             tenant_id, skill_id, version,
         )
         if not row:
             raise SkillRegistryError("skill_version_not_found", status_code=404)
-        manifest = validate_skill_manifest(row["manifest"])
+        manifest = _validate_persisted_skill_version(row)
         if row["status"] not in {"candidate", "shadow"}:
             raise SkillRegistryError("version_not_promotable", status_code=409)
         _enforce_executable_risk_policy(manifest)
         if manifest["executor"] not in _SKILL_EXECUTORS:
             raise SkillRegistryError("executor_not_registered", status_code=409)
-        await conn.execute(
-            """UPDATE ops_skill_versions SET status='retired'
-                   WHERE skill_id=$1::uuid AND status='active'""", skill_id,
+        active_rows = await conn.fetch(
+            """SELECT id,status,manifest,content,content_sha256 FROM ops_skill_versions
+               WHERE skill_id=$1::uuid AND status='active' FOR UPDATE""", skill_id,
         )
-        updated_manifest = {**manifest, "status": "active"}
+        for active in active_rows:
+            active_manifest = _validate_persisted_skill_version(active)
+            retired_manifest = _manifest_for_status(active_manifest, "retired")
+            await conn.execute(
+                """UPDATE ops_skill_versions
+                   SET status='retired',manifest=$2::jsonb,content=$3,content_sha256=$4
+                   WHERE id=$1""",
+                active["id"], json.dumps(retired_manifest), _canonical_json(retired_manifest),
+                _sha256(retired_manifest),
+            )
+        updated_manifest = _manifest_for_status(manifest, "active")
         updated_digest = _sha256(updated_manifest)
         updated = await conn.fetchrow(
             """UPDATE ops_skill_versions SET status='active',manifest=$2::jsonb,
@@ -401,7 +430,8 @@ async def execute_skill(
     async with get_pool().acquire() as conn:  # noqa: SIM117 - asyncpg transaction typing.
         async with conn.transaction():
             row = await conn.fetchrow(
-                """SELECT l.slug,l.risk_tier,v.id AS version_id,v.manifest
+                """SELECT l.slug,l.risk_tier,v.id AS version_id,v.status,v.manifest,
+                          v.content,v.content_sha256
                    FROM ops_skill_library l JOIN ops_skill_versions v ON v.skill_id=l.id
                    WHERE l.tenant_id=$1::uuid AND l.id=$2::uuid AND v.version=$3
                      AND v.status='active' AND l.enabled IS TRUE FOR SHARE""",
@@ -409,7 +439,7 @@ async def execute_skill(
             )
             if not row:
                 raise SkillRegistryError("active_skill_version_not_found", status_code=404)
-            manifest = validate_skill_manifest(row["manifest"])
+            manifest = _validate_persisted_skill_version(row)
             _enforce_executable_risk_policy(manifest)
             executor = _SKILL_EXECUTORS.get(manifest["executor"])
             if executor is None:
@@ -422,17 +452,36 @@ async def execute_skill(
                 raise SkillRegistryError("idempotency_key_required")
             if mode == "forbidden" and idempotency_key:
                 raise SkillRegistryError("idempotency_key_forbidden")
-            if idempotency_key:
+            # Reserve the idempotency key before consuming a Human Gateway
+            # approval.  ON CONFLICT waits for a concurrent transaction, then
+            # deterministically returns its existing run instead of leaking a
+            # uniqueness error as a 500 or consuming approval twice.
+            run = await conn.fetchrow(
+                """INSERT INTO ops_skill_runs
+                   (tenant_id,skill_id,skill_version_id,skill_slug,project,status,input,input_hash,
+                    idempotency_key,policy_decision,channel_provenance,approval_id)
+                   VALUES($1::uuid,$2::uuid,$3,$4,$5,'running',$6::jsonb,$7,$8,
+                          $9::jsonb,$10::jsonb,$11::uuid)
+                   ON CONFLICT (tenant_id,idempotency_key) WHERE idempotency_key IS NOT NULL
+                   DO NOTHING
+                   RETURNING id::text""",
+                tenant_id, skill_id, row["version_id"], row["slug"],
+                (manifest.get("provenance") or {}).get("project"), json.dumps(input_data), input_hash,
+                idempotency_key, json.dumps(RISK_POLICIES[manifest["risk_tier"]]),
+                json.dumps(dict(action_intent.authenticated_provenance)), approval_id,
+            )
+            if not run and idempotency_key:
                 existing = await conn.fetchrow(
                     """SELECT * FROM ops_skill_runs WHERE tenant_id=$1::uuid
-                       AND idempotency_key=$2 FOR UPDATE""", tenant_id, idempotency_key,
+                       AND idempotency_key=$2""", tenant_id, idempotency_key,
                 )
-                if existing:
-                    wrong_input = existing["input_hash"] != input_hash
-                    wrong_skill = str(existing["skill_id"]) != skill_id
-                    if wrong_input or wrong_skill:
-                        raise SkillRegistryError("idempotency_conflict", status_code=409)
-                    return _row_dict(existing)
+                if not existing:
+                    raise SkillRegistryError("idempotency_reservation_failed", status_code=409)
+                wrong_input = existing["input_hash"] != input_hash
+                wrong_skill = str(existing["skill_id"]) != skill_id
+                if wrong_input or wrong_skill:
+                    raise SkillRegistryError("idempotency_conflict", status_code=409)
+                return _row_dict(existing)
             approval = None
             if manifest["risk_tier"] in HIGH_RISK_TIERS:
                 approval = await conn.fetchrow(
@@ -454,19 +503,6 @@ async def execute_skill(
                            updated_at=clock_timestamp()
                        WHERE id=$1::uuid""", approval_id,
                 )
-            run = await conn.fetchrow(
-                """INSERT INTO ops_skill_runs
-                   (tenant_id,skill_id,skill_version_id,skill_slug,project,status,input,input_hash,
-                    idempotency_key,policy_decision,channel_provenance,approval_id)
-                   VALUES($1::uuid,$2::uuid,$3,$4,$5,'running',$6::jsonb,$7,$8,
-                          $9::jsonb,$10::jsonb,$11::uuid)
-                   RETURNING id::text""",
-                tenant_id, skill_id, row["version_id"], row["slug"],
-                (manifest.get("provenance") or {}).get("project"),
-                json.dumps(input_data), input_hash,
-                idempotency_key, json.dumps(RISK_POLICIES[manifest["risk_tier"]]),
-                json.dumps(dict(action_intent.authenticated_provenance)), approval_id,
-            )
     started = time.monotonic()
     attempts = manifest["retry"]["max_attempts"]
     result: Any = None

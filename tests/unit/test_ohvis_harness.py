@@ -113,6 +113,17 @@ def test_executable_manifest_contract_accepts_complete_json_schemas():
     assert manifest["idempotency"]["mode"] == "required"
 
 
+def test_lifecycle_manifest_changes_only_the_embedded_status():
+    candidate = validate_skill_manifest(_manifest())
+    active = ohvis_harness._manifest_for_status(candidate, "active")
+    retired = ohvis_harness._manifest_for_status(active, "retired")
+    assert active["status"] == "active"
+    assert retired["status"] == "retired"
+    assert {key: value for key, value in active.items() if key != "status"} == {
+        key: value for key, value in retired.items() if key != "status"
+    }
+
+
 def test_retry_is_rejected_without_required_idempotency():
     with pytest.raises(ohvis_harness.SkillRegistryError) as exc:
         validate_skill_manifest(_manifest(
@@ -200,4 +211,6 @@ def test_executable_registry_migration_extends_canonical_tables():
     assert "approval_id" in sql
     assert "cost_usd" in sql and "latency_ms" in sql
     assert "trg_ops_skill_version_immutable" in sql
+    assert "manifest status must match row status" in sql
+    assert "content_sha256 must match content" in sql
     assert "CREATE TABLE ops_skill" not in sql
