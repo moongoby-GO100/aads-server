@@ -79,6 +79,14 @@ def test_source_url_drops_query_credentials_and_rejects_userinfo():
         raise AssertionError("credential-bearing source URL must be rejected")
 
 
+def test_storage_identifiers_are_hashes_not_source_values():
+    source = "https://shop.example/items/1?token=secret"
+    assert gate.hash_source_url(source).startswith("sha256:")
+    assert "shop.example" not in gate.hash_source_url(source)
+    assert gate.hash_variant_key("red-xl").startswith("sha256:")
+    assert "red-xl" not in gate.hash_variant_key("red-xl")
+
+
 def test_sse_replay_drops_value_after_ttl_expiry():
     event = "data: " + json.dumps({"live_facts": [{
         "fact_id": "fact-1", "fact_type": "stock", "value": 8,
@@ -183,11 +191,11 @@ def test_payload_gate_redacts_known_live_fields(monkeypatch):
 
 
 def test_migration_has_tenant_context_evidence_and_append_only_event_ledger():
-    sql = (Path(__file__).resolve().parents[2] / "migrations/20260919_g5_live_fact_revalidation.sql").read_text()
+    sql = (Path(__file__).resolve().parents[2] / "migrations/20260920_m7_site_knowledge_canonical.sql").read_text()
     for token in (
-        "tenant_id UUID NOT NULL", "entity_key TEXT NOT NULL", "variant_key TEXT NOT NULL",
-        "account_context_hash", "expires_at TIMESTAMPTZ NOT NULL", "evidence_id TEXT",
-        "browser_live_fact_events", "freshness_status IN ('CURRENT','STALE','UNAVAILABLE','CONFLICT')",
+        "browser_live_facts", "browser_live_fact_events", "site_profile_id UUID",
+        "provenance JSONB", "source_url = 'sha256:'", "variant_key = 'sha256:'",
+        "browser_live_facts_source_url_hash_check",
     ):
         assert token in sql
 

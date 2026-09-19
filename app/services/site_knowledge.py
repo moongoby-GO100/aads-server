@@ -136,14 +136,19 @@ def _origin_list(value: Any) -> list[str]:
     return [str(item) for item in value] if isinstance(value, list) else []
 
 
-async def _profile(*, tenant_id: str, profile_id: str) -> dict[str, Any]:
-    async with get_pool().acquire() as conn:
-        row = await conn.fetchrow(
+async def _profile(*, tenant_id: str, profile_id: str, conn: Any | None = None) -> dict[str, Any]:
+    async def _fetch(connection: Any) -> Any:
+        return await connection.fetchrow(
             """SELECT id,base_origin,allowed_origins,knowledge_version
                  FROM authenticated_site_profiles
                 WHERE tenant_id=$1::uuid AND id=$2::uuid AND enabled IS TRUE""",
             tenant_id, profile_id,
         )
+    if conn is not None:
+        row = await _fetch(conn)
+    else:
+        async with get_pool().acquire() as connection:
+            row = await _fetch(connection)
     if not row:
         raise SiteKnowledgeError("site_profile_not_found")
     return dict(row)
@@ -270,32 +275,29 @@ async def record_live_observation(
     evidence: Sequence[str], provenance: Mapping[str, Any] | None,
     account_context: str = "",
 ) -> dict[str, Any]:
-    profile = await _profile(tenant_id=tenant_id, profile_id=site_profile_id)
-    source_origin = normalize_origin(source_url)
-    allowed = {normalize_origin(item) for item in _origin_list(profile["allowed_origins"])}
-    if source_origin not in allowed:
-        raise SiteKnowledgeError("source_origin_not_allowed")
     refs = evidence_refs(evidence)
     safe_value = safe_observation_value(observed_value)
-    provenance_value = canonical_provenance(provenance, origin=source_origin, version=str(profile["knowledge_version"]))
     from app.services.live_fact_gate import hash_account_context, record_live_fact
-
-    fact = await record_live_fact(
-        tenant_id=tenant_id, session_id=None, task_id=None,
-        fact_type=safe_semantic_text(fact_type, field="fact_type")[:80],
-        entity_key=safe_semantic_text(entity_key, field="entity_key")[:300],
-        variant_key=str(variant_key or "")[:300],
-        account_context_hash=hash_account_context(account_context),
-        source_url=source_url, source_kind="site_knowledge",
-        revalidator_key=safe_semantic_text(revalidator_key, field="revalidator_key")[:120],
-        observed_value=safe_value, observed_at=observed_at, expires_at=expires_at,
-        evidence_id=safe_semantic_text(evidence_id, field="evidence_id")[:500],
-        evidence={"object_evidence_refs": refs},
-    )
-    async with get_pool().acquire() as conn:
-        await conn.execute(
-            """UPDATE browser_live_facts SET site_profile_id=$1::uuid,provenance=$2::jsonb
-                WHERE tenant_id=$3::uuid AND id=$4::uuid""",
-            site_profile_id, json.dumps(provenance_value), tenant_id, fact["fact_id"],
+    async with get_pool().acquire() as conn, conn.transaction():
+        profile = await _profile(tenant_id=tenant_id, profile_id=site_profile_id, conn=conn)
+        source_origin = normalize_origin(source_url)
+        allowed = {normalize_origin(item) for item in _origin_list(profile["allowed_origins"])}
+        if source_origin not in allowed:
+            raise SiteKnowledgeError("source_origin_not_allowed")
+        provenance_value = canonical_provenance(
+            provenance, origin=source_origin, version=str(profile["knowledge_version"]),
+        )
+        fact = await record_live_fact(
+            tenant_id=tenant_id, session_id=None, task_id=None,
+            fact_type=safe_semantic_text(fact_type, field="fact_type")[:80],
+            entity_key=safe_semantic_text(entity_key, field="entity_key")[:300],
+            variant_key=str(variant_key or "")[:300],
+            account_context_hash=hash_account_context(account_context),
+            source_url=source_url, source_kind="site_knowledge",
+            revalidator_key=safe_semantic_text(revalidator_key, field="revalidator_key")[:120],
+            observed_value=safe_value, observed_at=observed_at, expires_at=expires_at,
+            evidence_id=safe_semantic_text(evidence_id, field="evidence_id")[:500],
+            evidence={"object_evidence_refs": refs}, site_profile_id=site_profile_id,
+            provenance=provenance_value, conn=conn,
         )
     return {**fact, "evidence_refs": refs, "provenance": provenance_value}

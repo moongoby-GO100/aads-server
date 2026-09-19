@@ -71,16 +71,15 @@ def test_page_template_accepts_only_structural_contract():
 
 def test_m7_m11_migration_is_additive_and_has_tenant_site_version_scopes():
     root = Path(__file__).resolve().parents[2]
-    sql = (root / "migrations" / "20260919_m7_m11_smart_browser_learning.sql").read_text()
+    sql = (root / "migrations" / "20260920_m7_site_knowledge_canonical.sql").read_text()
     assert "BEGIN;" in sql and "COMMIT;" in sql
     for table in (
         "authenticated_site_profiles", "browser_recipes", "browser_learned_artifact_versions",
         "ops_skill_versions", "memory_facts", "browser_live_facts",
     ):
         assert f"ALTER TABLE {table}" in sql
-    assert "browser_site_runtime_events" in sql
-    assert "browser_site_skill_embeddings" in sql
-    assert "vector(1024)" in sql
+    assert "browser_live_fact_events" in sql
+    assert "browser_live_facts_source_url_hash_check" in sql
     assert "DROP " not in sql.upper()
     assert "TRUNCATE " not in sql.upper()
 

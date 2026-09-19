@@ -82,6 +82,22 @@ def hash_account_context(value: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest() if normalized else ""
 
 
+def _private_identifier_hash(value: str) -> str:
+    return f"sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
+
+
+def _is_private_identifier_hash(value: Any) -> bool:
+    candidate = str(value or "")
+    return len(candidate) == 71 and candidate.startswith("sha256:") and all(
+        char in "0123456789abcdef" for char in candidate[7:]
+    )
+
+
+def hash_variant_key(value: str) -> str:
+    """Return the storage-safe variant identity; never persist the source value."""
+    return _private_identifier_hash(str(value or "").strip())
+
+
 def normalize_source_url(value: str) -> str:
     """Keep source identity while dropping credentials, query tokens, and fragments."""
     parsed = urlsplit(str(value or "").strip())
@@ -89,6 +105,11 @@ def normalize_source_url(value: str) -> str:
         raise LiveFactError("INVALID_FACT_SOURCE")
     port = f":{parsed.port}" if parsed.port else ""
     return urlunsplit((parsed.scheme.lower(), f"{parsed.hostname.lower()}{port}", parsed.path or "/", "", ""))
+
+
+def hash_source_url(value: str) -> str:
+    """Return a stable source identity without retaining a URL path or query."""
+    return _private_identifier_hash(normalize_source_url(value))
 
 
 def _evidence_metadata(value: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -121,6 +142,8 @@ def _context_matches(record: Mapping[str, Any], expected: Mapping[str, Any] | No
         return True
     for key in ("entity_key", "variant_key", "account_context_hash"):
         wanted = str(expected.get(key) or "")
+        if key == "variant_key" and wanted and not wanted.startswith("sha256:"):
+            wanted = hash_variant_key(wanted)
         if wanted and wanted != str(record.get(key) or ""):
             return False
     return True
@@ -153,8 +176,12 @@ def display_fact(
         "fact_id": str(record.get("id") or record.get("fact_id") or ""),
         "fact_type": str(record.get("fact_type") or ""),
         "entity_key": str(record.get("entity_key") or ""),
-        "variant_key": str(record.get("variant_key") or ""),
-        "source_url": str(record.get("source_url") or ""),
+        "variant_key_hash": (
+            str(record.get("variant_key")) if _is_private_identifier_hash(record.get("variant_key")) else None
+        ),
+        "source_url_hash": (
+            str(record.get("source_url")) if _is_private_identifier_hash(record.get("source_url")) else None
+        ),
         "observed_at": _as_utc(record.get("observed_at")).isoformat() if _as_utc(record.get("observed_at")) else None,
         "revalidated_at": _as_utc(record.get("revalidated_at")).isoformat() if _as_utc(record.get("revalidated_at")) else None,
         "expires_at": expires_at.isoformat() if expires_at else None,
@@ -171,6 +198,8 @@ async def record_live_fact(
     entity_key: str, variant_key: str, account_context_hash: str, source_url: str,
     source_kind: str, revalidator_key: str, observed_value: Any, observed_at: datetime,
     expires_at: datetime, evidence_id: str, evidence: Mapping[str, Any] | None = None,
+    site_profile_id: str | None = None, provenance: Mapping[str, Any] | None = None,
+    conn: Any | None = None,
 ) -> dict[str, Any]:
     observed = _as_utc(observed_at)
     expires = _as_utc(expires_at)
@@ -178,20 +207,29 @@ async def record_live_fact(
         raise LiveFactError("INVALID_FACT_TTL")
     if not all(str(item or "").strip() for item in (fact_type, entity_key, source_url, revalidator_key, evidence_id)):
         raise LiveFactError("INCOMPLETE_FACT_PROVENANCE")
-    normalized_source_url = normalize_source_url(source_url)
-    async with get_pool().acquire() as conn:
-        row = await conn.fetchrow(
+    source_url_hash = hash_source_url(source_url)
+    variant_key_hash = hash_variant_key(variant_key)
+
+    async def _insert(connection: Any) -> Any:
+        return await connection.fetchrow(
             """INSERT INTO browser_live_facts
                (tenant_id,session_id,task_id,fact_type,entity_key,variant_key,account_context_hash,
                 source_url,source_kind,revalidator_key,observed_value,observed_value_hash,
-                observed_at,expires_at,revalidated_at,freshness_status,evidence_id,evidence)
+                observed_at,expires_at,revalidated_at,freshness_status,evidence_id,evidence,
+                site_profile_id,provenance)
                VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,
-                      $13,$14,$13,'CURRENT',$15,$16::jsonb) RETURNING *""",
-            tenant_id, session_id, task_id, fact_type, entity_key, variant_key,
-            account_context_hash, normalized_source_url, source_kind, revalidator_key,
+                      $13,$14,$13,'CURRENT',$15,$16::jsonb,$17::uuid,$18::jsonb) RETURNING *""",
+            tenant_id, session_id, task_id, fact_type, entity_key, variant_key_hash,
+            account_context_hash, source_url_hash, source_kind, revalidator_key,
             _canonical(observed_value), value_hash(observed_value), observed, expires,
-            evidence_id, _canonical(_evidence_metadata(evidence)),
+            evidence_id, _canonical(_evidence_metadata(evidence)), site_profile_id,
+            _canonical(dict(provenance or {})),
         )
+    if conn is not None:
+        row = await _insert(conn)
+    else:
+        async with get_pool().acquire() as connection, connection.transaction():
+            row = await _insert(connection)
     return display_fact(dict(row))
 
 
@@ -242,7 +280,7 @@ async def revalidate_live_fact(
             "account_context_hash": record.get("account_context_hash"),
         })
         try:
-            observed_source = normalize_source_url(str(observed.get("source_url") or ""))
+            observed_source = hash_source_url(str(observed.get("source_url") or ""))
         except LiveFactError:
             observed_source = ""
         source_ok = observed_source == str(record.get("source_url") or "")
