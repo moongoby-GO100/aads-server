@@ -2668,8 +2668,18 @@ deploy_phase_end "frontend_qa" "success" "frontend_qa=${FRONTEND_QA_STATUS}"
 deploy_phase_start "p0p1_monitoring" "verifying"
 MONITOR_SECONDS="${AADS_DEPLOY_P0P1_MONITOR_SECONDS:-300}"
 MONITOR_INTERVAL="${AADS_DEPLOY_P0P1_MONITOR_INTERVAL:-30}"
-# 전 구간이 깨끗할 때 채우는 최소 관측 시간. 소크 자체를 없애지는 않는다.
-MONITOR_MIN_SECONDS="${AADS_DEPLOY_P0P1_MIN_SECONDS:-120}"
+# 릴리스 계약상 P0/P1 관측은 실제 5분보다 짧아질 수 없다. 환경변수도 이
+# 하한을 우회하지 못하게 clamp 한다. 더 긴 soak 만 허용한다.
+MONITOR_MIN_SECONDS="${AADS_DEPLOY_P0P1_MIN_SECONDS:-300}"
+if (( MONITOR_SECONDS < 300 )); then
+    MONITOR_SECONDS=300
+fi
+if (( MONITOR_MIN_SECONDS < 300 )); then
+    MONITOR_MIN_SECONDS=300
+fi
+if (( MONITOR_MIN_SECONDS > MONITOR_SECONDS )); then
+    MONITOR_SECONDS="$MONITOR_MIN_SECONDS"
+fi
 MONITOR_PATTERN="${AADS_DEPLOY_MONITOR_PATTERN:-level=(error|critical)|Traceback|CRITICAL}"
 MONITOR_SINCE="$(date --iso-8601=seconds)"
 MONITOR_ELAPSED=0

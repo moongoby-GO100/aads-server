@@ -407,6 +407,10 @@ def test_deploy_script_keeps_five_minute_monitoring_default():
     script = DEPLOY_SCRIPT.read_text()
 
     assert 'MONITOR_SECONDS="${AADS_DEPLOY_P0P1_MONITOR_SECONDS:-300}"' in script
+    assert 'MONITOR_MIN_SECONDS="${AADS_DEPLOY_P0P1_MIN_SECONDS:-300}"' in script
+    assert "if (( MONITOR_SECONDS < 300 )); then" in script
+    assert "if (( MONITOR_MIN_SECONDS < 300 )); then" in script
+    assert 'MONITOR_SECONDS="$MONITOR_MIN_SECONDS"' in script
     assert "docker logs \"$ACTIVE_CONTAINER\" --since \"$MONITOR_SINCE\"" in script
     assert "record_deploy \"success\"" in script
     # rindex: record_deploy "success" 는 시그널 트랩(전환 후 인터럽트 처리)에도
