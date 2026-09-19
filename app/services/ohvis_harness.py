@@ -213,6 +213,18 @@ def _row_dict(row: Any) -> dict[str, Any]:
     return dict(row) if row is not None else {}
 
 
+def _enforce_executable_risk_policy(manifest: Mapping[str, Any]) -> None:
+    """Fail closed when a risk tier is prohibited rather than approvable.
+
+    Human approval can authorize an otherwise permitted high-risk operation,
+    but it must never override an absolute policy rejection such as destructive
+    actions.
+    """
+    policy = RISK_POLICIES.get(str(manifest.get("risk_tier"))) or {}
+    if policy.get("decision") == "reject":
+        raise SkillRegistryError("skill_policy_rejected", status_code=403)
+
+
 async def create_skill(*, tenant_id: str, slug: str, title: str, description: str,
                        projects: list[str], intents: list[str], actor: str) -> dict[str, Any]:
     from app.core.db_pool import get_pool
@@ -330,6 +342,7 @@ async def promote_skill_version(*, tenant_id: str, skill_id: str, version: str,
         manifest = validate_skill_manifest(row["manifest"])
         if row["status"] not in {"candidate", "shadow"}:
             raise SkillRegistryError("version_not_promotable", status_code=409)
+        _enforce_executable_risk_policy(manifest)
         if manifest["executor"] not in _SKILL_EXECUTORS:
             raise SkillRegistryError("executor_not_registered", status_code=409)
         await conn.execute(
@@ -397,6 +410,7 @@ async def execute_skill(
             if not row:
                 raise SkillRegistryError("active_skill_version_not_found", status_code=404)
             manifest = validate_skill_manifest(row["manifest"])
+            _enforce_executable_risk_policy(manifest)
             executor = _SKILL_EXECUTORS.get(manifest["executor"])
             if executor is None:
                 raise SkillRegistryError("executor_not_registered", status_code=409)

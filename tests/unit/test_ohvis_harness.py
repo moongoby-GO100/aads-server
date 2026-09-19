@@ -62,6 +62,17 @@ def test_risk_policy_blocks_destructive_actions():
     assert RISK_POLICIES["deploy"]["approval_required"] is True
 
 
+def test_destructive_skill_cannot_be_promoted_or_executed_even_with_approval():
+    with pytest.raises(ohvis_harness.SkillRegistryError) as exc:
+        ohvis_harness._enforce_executable_risk_policy({"risk_tier": "destructive"})
+    assert exc.value.code == "skill_policy_rejected"
+    assert exc.value.status_code == 403
+
+    # High-risk tiers that are explicitly approvable remain eligible for the
+    # Human Gateway scope check performed by execute_skill.
+    ohvis_harness._enforce_executable_risk_policy({"risk_tier": "deploy"})
+
+
 def _manifest(**changes):
     value = {
         "skill_id": "11111111-1111-1111-1111-111111111111",
