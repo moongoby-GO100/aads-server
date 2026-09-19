@@ -13,7 +13,6 @@ contabo116 의 aads-server 에만 있기 때문이다 — 원격 서버에 LLM �
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
 import time
 from collections import OrderedDict
@@ -37,16 +36,19 @@ QUERY_PREFIX = "search_query: "
 
 QWEN_MODEL_ID = "qwen3-embedding:0.6b"
 QWEN_DIMENSION = 1024
-QWEN_INSTRUCTION_VERSION = "qwen3-doc-v1"
+QWEN_INSTRUCTION_VERSION = "qwen3-doc-v2-payload4000"
 QWEN_DOCUMENT_INSTRUCTION = "Represent this English document for retrieval: "
 QWEN_QUERY_INSTRUCTION = "Represent this query for retrieving relevant English documents: "
+QWEN_DOCUMENT_PAYLOAD_MAX_CHARS = 4000
 _QWEN_MODE = os.getenv("DOC_SEARCH_MODE", "shadow").strip().lower()
 _QWEN_CACHE_TTL = int(os.getenv("QWEN_QUERY_CACHE_TTL", "300"))
 _QWEN_CACHE_MAX = int(os.getenv("QWEN_QUERY_CACHE_MAX", "500"))
 _QWEN_TOP_N = int(os.getenv("QWEN_SEARCH_TOP_N", "30"))
+_QWEN_SHADOW_TIMEOUT = float(os.getenv("QWEN_SHADOW_TIMEOUT_SECONDS", "10"))
 _QWEN_URL = os.getenv("QWEN_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 _query_cache: "OrderedDict[str, tuple[float, List[float]]]" = OrderedDict()
 _query_cache_lock = asyncio.Lock()
+_shadow_tasks: set[asyncio.Task[Any]] = set()
 
 
 def _require_loopback(url: str) -> None:
@@ -69,7 +71,7 @@ async def embed_qwen_query(query: str) -> List[float]:
 
     _require_loopback(_QWEN_URL)
     key_text = normalize_query(query)
-    key = f"{QWEN_MODEL_ID}|{QWEN_INSTRUCTION_VERSION}|{key_text}"
+    key = f"{QWEN_MODEL_ID}|{QWEN_QUERY_INSTRUCTION}|{key_text}"
     now = time.monotonic()
     async with _query_cache_lock:
         cached = _query_cache.get(key)
@@ -276,26 +278,54 @@ async def search_docs(
     query_embedding: List[float], *, top_k: int = 5,
     project: Optional[str] = None, query_text: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Mode router with fail-safe legacy fallback and rank-only hybrid fusion."""
+    """Route modes without adding work from a mode the caller did not select."""
     limit = max(1, top_k)
-    legacy = await search_docs_legacy(query_embedding, top_k=limit, project=project)
     mode = _QWEN_MODE if _QWEN_MODE in {"legacy", "shadow", "qwen3", "hybrid"} else "shadow"
-    if mode == "legacy" or not query_text:
-        return legacy[:limit]
+
+    async def legacy() -> List[Dict[str, Any]]:
+        return await search_docs_legacy(query_embedding, top_k=limit, project=project)
+
+    async def qwen() -> List[Dict[str, Any]]:
+        if not query_text:
+            return []
+        vector = await embed_qwen_query(query_text)
+        return await search_docs_qwen3(vector, top_k=limit, project=project)
+
+    async def observe_shadow() -> None:
+        try:
+            rows = await asyncio.wait_for(qwen(), timeout=_QWEN_SHADOW_TIMEOUT)
+            logger.info("doc_qwen_shadow", qwen3=len(rows))
+        except Exception as exc:
+            logger.warning("doc_qwen_shadow_failed", error=str(exc))
+
+    if mode == "legacy":
+        return (await legacy())[:limit]
+    if mode == "shadow":
+        rows = await legacy()
+        if query_text:
+            task = asyncio.create_task(observe_shadow(), name="doc-qwen-shadow")
+            _shadow_tasks.add(task)
+            task.add_done_callback(_shadow_tasks.discard)
+        return rows[:limit]
+    if mode == "hybrid":
+        legacy_result, qwen_result = await asyncio.gather(
+            legacy(), qwen(), return_exceptions=True,
+        )
+        legacy_rows = legacy_result if isinstance(legacy_result, list) else []
+        qwen_rows = qwen_result if isinstance(qwen_result, list) else []
+        if not qwen_rows:
+            return legacy_rows[:limit]
+        if not legacy_rows:
+            return qwen_rows[:limit]
+        return reciprocal_rank_fusion(legacy_rows, qwen_rows, top_k=limit)
     try:
-        qwen_vector = await embed_qwen_query(query_text)
-        qwen = await search_docs_qwen3(qwen_vector, top_k=limit, project=project)
+        qwen_rows = await qwen()
     except Exception as exc:
         logger.warning("doc_qwen_fallback", mode=mode, error=str(exc))
-        return legacy[:limit]
-    if mode == "shadow":
-        logger.info("doc_qwen_shadow", legacy=len(legacy), qwen3=len(qwen))
-        return legacy[:limit]
-    if not qwen:
-        return legacy[:limit]
-    if mode == "qwen3":
-        return qwen[:limit]
-    return reciprocal_rank_fusion(legacy, qwen, top_k=limit)
+        return (await legacy())[:limit]
+    if not qwen_rows:
+        return (await legacy())[:limit]
+    return qwen_rows[:limit]
 
 
 async def index_status() -> Dict[str, Any]:

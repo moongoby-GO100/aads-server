@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import socket
@@ -15,8 +16,9 @@ import httpx
 
 QWEN_MODEL_ID = "qwen3-embedding:0.6b"
 QWEN_DIMENSION = 1024
-QWEN_INSTRUCTION_VERSION = "qwen3-doc-v1"
+QWEN_INSTRUCTION_VERSION = "qwen3-doc-v2-payload4000"
 QWEN_DOCUMENT_INSTRUCTION = "Represent this English document for retrieval: "
+QWEN_DOCUMENT_PAYLOAD_MAX_CHARS = 4000
 
 OLLAMA_URL = os.getenv("QWEN_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 DATABASE_URL = os.getenv("QWEN_DATABASE_URL", "")
@@ -61,8 +63,24 @@ def require_safe_database_url(url: str) -> None:
 
 
 def canonical_chunk_text(chunk: Any) -> str:
-    """Match the SQL coalesce() hashing contract exactly, including NULLs."""
+    """Preserved helper: normalize nullable chunk fields exactly like SQL COALESCE."""
     return "\n".join(str(chunk[field] or "") for field in ("title", "heading", "content"))
+
+
+def canonical_document_payload(chunk: Any) -> str:
+    """Return exactly what Ollama receives and what content_sha256 identifies.
+
+    Metadata NULLs are empty strings. The 4,000-character ceiling includes the
+    instruction. Changes beyond it intentionally do not invalidate the vector;
+    this hash is embedded-payload integrity, not full-document integrity.
+    """
+    return (QWEN_DOCUMENT_INSTRUCTION + canonical_chunk_text(chunk))[
+        :QWEN_DOCUMENT_PAYLOAD_MAX_CHARS
+    ]
+
+
+def payload_sha256(payload: str) -> str:
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 async def create_pool() -> Any:
@@ -124,20 +142,21 @@ async def claim(conn: Any, owner: str, limit: int) -> list[Any]:
 
 
 async def sync_queue(pool: Any) -> None:
-    """Idempotently enqueue new chunks and invalidate changed ready embeddings."""
+    """Enqueue/invalidate using the same canonical payload contract as Python."""
     await pool.execute(
         """
         INSERT INTO doc_chunk_embeddings_qwen3
           (chunk_id, model_id, dimension, instruction_version, content_sha256)
-        SELECT id, $1, $2, $3, encode(digest(
-          coalesce(title,'')||E'\n'||coalesce(heading,'')||E'\n'||coalesce(content,''),
-          'sha256'), 'hex')
+        SELECT id, $1, $2, $3, encode(digest(left(
+          $4||coalesce(title,'')||E'\n'||coalesce(heading,'')||E'\n'||coalesce(content,''),
+          $5), 'sha256'), 'hex')
         FROM doc_chunks
         ON CONFLICT (chunk_id, model_id, instruction_version) DO UPDATE
         SET content_sha256=EXCLUDED.content_sha256, embedding=NULL, state='pending',
             lease_owner=NULL, lease_expires_at=NULL, error=NULL, updated_at=now()
         WHERE doc_chunk_embeddings_qwen3.content_sha256 <> EXCLUDED.content_sha256
         """, QWEN_MODEL_ID, QWEN_DIMENSION, QWEN_INSTRUCTION_VERSION,
+        QWEN_DOCUMENT_INSTRUCTION, QWEN_DOCUMENT_PAYLOAD_MAX_CHARS,
     )
 
 
@@ -164,10 +183,11 @@ async def process_one(pool: Any, client: httpx.AsyncClient, row: Any, owner: str
         )
         if chunk is None:
             raise RuntimeError("chunk deleted after claim")
-        text = canonical_chunk_text(chunk)
+        payload = canonical_document_payload(chunk)
+        content_sha = payload_sha256(payload)
         response = await client.post(
             f"{OLLAMA_URL}/api/embed",
-            json={"model": QWEN_MODEL_ID, "input": QWEN_DOCUMENT_INSTRUCTION + text[:4000]},
+            json={"model": QWEN_MODEL_ID, "input": payload},
         )
         response.raise_for_status()
         vector = (response.json().get("embeddings") or [[]])[0]
@@ -175,11 +195,11 @@ async def process_one(pool: Any, client: httpx.AsyncClient, row: Any, owner: str
             raise ValueError(f"dimension {len(vector)}")
         result = await pool.execute(
             """UPDATE doc_chunk_embeddings_qwen3 SET embedding=$1::vector,
-               dimension=$2, content_sha256=encode(digest($3, 'sha256'), 'hex'),
+               dimension=$2, content_sha256=$3,
                state='ready', lease_owner=NULL,
                lease_expires_at=NULL, heartbeat_at=NULL, error=NULL, updated_at=now()
                WHERE id=$4 AND lease_owner=$5 AND state='processing'""",
-            str(vector), QWEN_DIMENSION, text, row["id"], owner,
+            str(vector), QWEN_DIMENSION, content_sha, row["id"], owner,
         )
         if result != "UPDATE 1":
             raise RuntimeError("lease lost")

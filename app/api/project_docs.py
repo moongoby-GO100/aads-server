@@ -1934,10 +1934,17 @@ async def search_docs_semantic(
     for r in rows:
         path = r.get("doc_path", "")
         prev = best.get(path)
-        if prev is None or r.get("similarity", 0) > prev.get("similarity", 0):
+        if prev is None or (
+            r.get("fusion_rank", float("inf")), -r.get("similarity", 0)
+        ) < (
+            prev.get("fusion_rank", float("inf")), -prev.get("similarity", 0)
+        ):
             best[path] = r
 
-    results = sorted(best.values(), key=lambda r: -r.get("similarity", 0))[:limit]
+    results = sorted(
+        best.values(),
+        key=lambda r: (r.get("fusion_rank", float("inf")), -r.get("similarity", 0)),
+    )[:limit]
 
     pool = get_pool()
     out = []

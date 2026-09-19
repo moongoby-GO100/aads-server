@@ -30,11 +30,15 @@ CREATE INDEX IF NOT EXISTS idx_qwen3_doc_claim
 CREATE INDEX IF NOT EXISTS idx_qwen3_doc_chunk
     ON doc_chunk_embeddings_qwen3 (chunk_id);
 
--- Seed only metadata. Legacy doc_chunks.embedding is never updated by this migration.
+-- Seed only metadata. The hash identifies the exact 4,000-character payload sent
+-- to Ollama (instruction included), not the full chunk. Therefore mutations past
+-- the cutoff intentionally reuse the deterministic embedding. Legacy vectors are
+-- never updated by this migration.
 INSERT INTO doc_chunk_embeddings_qwen3
     (chunk_id, instruction_version, content_sha256)
-SELECT id, 'qwen3-doc-v1', encode(digest(
+SELECT id, 'qwen3-doc-v2-payload4000', encode(digest(left(
+    'Represent this English document for retrieval: ' ||
     coalesce(title,'') || E'\n' || coalesce(heading,'') || E'\n' || coalesce(content,''),
-    'sha256'), 'hex')
+    4000), 'sha256'), 'hex')
 FROM doc_chunks
 ON CONFLICT (chunk_id, model_id, instruction_version) DO NOTHING;
