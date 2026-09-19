@@ -75,6 +75,9 @@ services:
       # REVIEW_MODEL_NO_RESPONSE → review_hold 로 큐 전체가 멈췄다. 같은 규모
       # 43KB 인 runner-48377212 는 통과했다. 비동기 총예산(240초)은 여유가 있다.
       - REVIEW_LLM_TIMEOUT_SEC=${REVIEW_LLM_TIMEOUT_SEC:-90}
+      - GOAL_WORK_HIERARCHY_ENABLED=${GOAL_WORK_HIERARCHY_ENABLED:-true}
+      - GOAL_WORKFLOW_APPROVAL_ENABLED=${GOAL_WORKFLOW_APPROVAL_ENABLED:-true}
+      - GOAL_AUTO_APPROVAL_MODE=${GOAL_AUTO_APPROVAL_MODE:-audit}
       - DOCKER_HOST=tcp://aads-socket-proxy:2375
       # aads-postgres 컨테이너 (pgvector/pg15) 연결 (T-011)
       - DATABASE_URL=postgresql://aads:${POSTGRES_PASSWORD}@aads-postgres:5432/aads
