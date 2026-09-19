@@ -150,8 +150,11 @@ services:
       # 진행 중 대화가 --resume 대상을 잃고 도구를 처음부터 다시 돌렸다.
       - /root/aads/data/claude-sessions:/tmp/.claude-sdk:rw
       - /root/aads/aads-server/supervisord.conf:/app/supervisord.conf:ro
-      - /root/aads/aads-server/docs:/app/docs:ro
-      - /root/aads/aads-server/reports:/app/reports:ro
+      # Keep release-SHA docs/reports embedded at /app. Mount host-generated
+      # runtime artifacts separately so a stale host checkout cannot hide files
+      # that are present in the immutable release image.
+      - /root/aads/aads-server/docs:/host/aads-server/docs:ro
+      - /root/aads/aads-server/reports:/host/aads-server/reports:ro
       - /root/aads/aads-docs/docs:/root/aads/aads-docs/docs:ro
       - /root/aads/aads-docs/reports:/root/aads/aads-docs/reports:ro
       - /root/aads/aads-dashboard/docs:/root/aads/aads-dashboard/docs:ro
@@ -258,8 +261,11 @@ services:
       # 진행 중 대화가 --resume 대상을 잃고 도구를 처음부터 다시 돌렸다.
       - /root/aads/data/claude-sessions:/tmp/.claude-sdk:rw
       - /root/aads/aads-server/supervisord.conf:/app/supervisord.conf:ro
-      - /root/aads/aads-server/docs:/app/docs:ro
-      - /root/aads/aads-server/reports:/app/reports:ro
+      # Keep release-SHA docs/reports embedded at /app. Mount host-generated
+      # runtime artifacts separately so a stale host checkout cannot hide files
+      # that are present in the immutable release image.
+      - /root/aads/aads-server/docs:/host/aads-server/docs:ro
+      - /root/aads/aads-server/reports:/host/aads-server/reports:ro
       - /root/aads/aads-docs/docs:/root/aads/aads-docs/docs:ro
       - /root/aads/aads-docs/reports:/root/aads/aads-docs/reports:ro
       - /root/aads/aads-dashboard/docs:/root/aads/aads-dashboard/docs:ro

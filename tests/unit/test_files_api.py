@@ -33,6 +33,26 @@ def test_unknown_tmp_file_is_not_resolved_by_matching_filename(monkeypatch, tmp_
     assert exc.value.status_code == 404
 
 
+def test_release_docs_precede_separate_host_runtime_mount():
+    candidates = files._candidates("docs/goals/example/PRD.md")
+
+    assert candidates.index(Path("/app/docs/goals/example/PRD.md")) < candidates.index(
+        Path("/host/aads-server/docs/goals/example/PRD.md")
+    )
+    assert files._is_allowed(Path("/host/aads-server/docs/generated.md"))
+
+
+def test_compose_does_not_shadow_release_docs_or_reports():
+    compose = (Path(__file__).parents[2] / "docker-compose.prod.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "/root/aads/aads-server/docs:/app/docs" not in compose
+    assert "/root/aads/aads-server/reports:/app/reports" not in compose
+    assert compose.count("/root/aads/aads-server/docs:/host/aads-server/docs:ro") == 2
+    assert compose.count("/root/aads/aads-server/reports:/host/aads-server/reports:ro") == 2
+
+
 @pytest.mark.parametrize(
     "raw",
     [
