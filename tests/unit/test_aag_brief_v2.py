@@ -90,7 +90,8 @@ async def test_api_brief_filters_target_and_preserves_pin(monkeypatch):
             "ref": {"project": "AADS", "repository_id": "aads-server",
                     "target_ref": "main", "governance_scope": "default"},
             "commit": {"resolved": "a" * 40, "expected_ref_head": "a" * 40},
-            "source": "central_db", "authoritative": True, "verified_at": NOW,
+            "source": "central_db", "authoritative": True,
+            "verified_at": datetime.now(UTC),
             "analyzer": _snapshot()["analyzer"],
         }
 
@@ -114,7 +115,8 @@ async def test_api_brief_marks_unresolved_snapshot_partial(monkeypatch):
                 "project": "AADS", "repository_id": "aads-server",
                 "target_ref": "main", "governance_scope": "default"},
             "commit": {"resolved": "a" * 40, "expected_ref_head": "a" * 40},
-            "source": "central_db", "authoritative": True, "verified_at": NOW,
+            "source": "central_db", "authoritative": True,
+            "verified_at": datetime.now(UTC),
             "analyzer": _snapshot()["analyzer"],
         }
 
