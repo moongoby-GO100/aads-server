@@ -24,6 +24,12 @@ from app.services.browser_task_gateway import (
     upsert_browser_task_live_frame,
 )
 from app.services.managed_browser import profile_info
+from app.services.channel_router import (
+    ChannelRouter,
+    DirectiveEnvelope,
+    ObservationEnvelope,
+    payload_hash,
+)
 
 router = APIRouter(prefix="/browser-tasks", tags=["browser-tasks"])
 TenantContext = dict[str, Any]
@@ -36,6 +42,7 @@ class BrowserTaskCreate(BaseModel):
     target_url: str = Field(min_length=1, max_length=2000)
     session_id: str | None = None
     current_step: str = Field(default="", max_length=500)
+    correlation_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class BrowserAccessCheckIn(BaseModel):
@@ -85,6 +92,7 @@ class BrowserLiveFrameIn(BaseModel):
     current_step: str = Field(default="", max_length=500)
     cursor: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    correlation_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 def _tenant_id(context: TenantContext) -> str:
@@ -121,6 +129,27 @@ async def api_create_browser_task(
     context: TenantContext = Depends(require_member),
 ) -> dict[str, Any]:
     session_id = body.session_id or _session_id_from_request(request)
+    if not session_id:
+        raise HTTPException(status_code=422, detail="MISSING_SESSION_ID")
+    directive_payload = {
+        "work_key": body.work_key,
+        "target_url": body.target_url,
+        "current_step": body.current_step,
+    }
+    correlation_id = body.correlation_id or f"browser-create:{session_id}"
+    intent = ChannelRouter().route_directive(
+        DirectiveEnvelope(
+            source="user_directive",
+            tenant_id=_tenant_id(context),
+            session_id=session_id,
+            correlation_id=correlation_id,
+            trust_level="trusted",
+            allowed_capabilities=frozenset({"browser.task.create"}),
+            payload=directive_payload,
+            payload_hash=payload_hash(directive_payload),
+        ),
+        capability="browser.task.create",
+    )
     task = await create_browser_task(
         tenant_id=_tenant_id(context),
         user_id=_user_id(context),
@@ -128,6 +157,14 @@ async def api_create_browser_task(
         target_url=body.target_url,
         session_id=session_id,
         current_step=body.current_step,
+        channel_audit={
+            "decision": "accepted",
+            "reason_code": "TRUSTED_COMMAND_CHANNEL",
+            "source": intent.source,
+            "correlation_id": intent.correlation_id,
+            "capability": "browser.task.create",
+            "payload_hash": intent.payload_hash,
+        },
     )
     return {
         "status": "created" if task.get("id") else "creation_failed",
@@ -209,6 +246,30 @@ async def api_update_browser_task_live_frame(
 ) -> dict[str, Any]:
     if not body.frame_base64 and not body.frame_url:
         raise HTTPException(status_code=400, detail="frame_base64_or_frame_url_required")
+    task = await get_browser_task(tenant_id=_tenant_id(context), task_id=task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="browser_task_not_found")
+    session_id = str(task.get("session_id") or "")
+    if not session_id:
+        raise HTTPException(status_code=409, detail="MISSING_SESSION_ID")
+    observation_payload = {
+        "frame_sha256": payload_hash({"frame": body.frame_base64 or body.frame_url}),
+        "current_url": body.current_url,
+        "page_title": body.page_title,
+        "current_step": body.current_step,
+        "metadata": body.metadata,
+    }
+    ChannelRouter().route_observation(
+        ObservationEnvelope(
+            source="screenshot_ocr",
+            tenant_id=_tenant_id(context),
+            session_id=session_id,
+            correlation_id=body.correlation_id or f"browser-frame:{task_id}",
+            trust_level="untrusted",
+            payload=observation_payload,
+            payload_hash=payload_hash(observation_payload),
+        )
+    )
     frame = await upsert_browser_task_live_frame(
         tenant_id=_tenant_id(context),
         task_id=task_id,

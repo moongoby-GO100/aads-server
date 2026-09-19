@@ -11,6 +11,7 @@ from app.services.work_recipe.executor import BrowserRecipeExecutor
 from app.services.work_recipe.player import RunResult, play_recipe
 from app.services.work_recipe.schema import WorkRecipe, parse_recipe
 from app.services.work_recipe.store import list_recipes, normalize_domain, row_to_recipe
+from app.services.channel_router import ActionIntent, ChannelRouter, DirectiveEnvelope, payload_hash
 
 _URL_HOST = re.compile(r"https?://([^/\s]+)", re.IGNORECASE)
 
@@ -48,7 +49,31 @@ async def run_directive(
     browser_work_key: str | None = None,
     triggered_by: str = "",
     task_id: str | None = None,
+    action_intent: ActionIntent | None = None,
 ) -> RunResult | None:
+    """Run only a routed command; raw page text has no execution path here."""
+    if action_intent is None:
+        payload = {"directive": directive_text}
+        action_intent = ChannelRouter().route_directive(
+            DirectiveEnvelope(
+                source="internal_control",
+                tenant_id=str(tenant_id),
+                session_id=browser_session_id or task_id or "internal-work-recipe",
+                correlation_id=task_id or "internal-work-recipe",
+                trust_level="internal",
+                allowed_capabilities=frozenset({"recipe.execute"}),
+                payload=payload,
+                payload_hash=payload_hash(payload),
+            ),
+            capability="recipe.execute",
+        )
+    else:
+        action_intent = ChannelRouter().validate_action_intent(
+            action_intent, capability="recipe.execute"
+        )
+    if action_intent.tenant_id != str(tenant_id):
+        raise ValueError("action_intent_tenant_mismatch")
+    directive_text = str(action_intent.payload.get("directive") or "")
     recipe = await resolve_recipe(directive_text, tenant_id)
     if recipe is None:
         return None

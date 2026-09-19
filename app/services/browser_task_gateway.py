@@ -303,6 +303,7 @@ async def create_browser_task(
     target_url: str,
     session_id: str | None = None,
     current_step: str = "",
+    channel_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_work_key = normalize_work_key(work_key)
     try:
@@ -332,6 +333,14 @@ async def create_browser_task(
                     "current_step": current_step,
                 },
             )
+            if channel_audit:
+                await append_browser_task_event(
+                    conn=conn,
+                    tenant_id=tenant_id,
+                    task_id=str(row["id"]),
+                    event_type="channel_routed",
+                    payload=channel_audit,
+                )
         return _task_to_dict(row)
     except Exception as exc:
         logger.warning(
