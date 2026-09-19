@@ -96,3 +96,43 @@ def test_auto_dependency_marker_matches_what_the_submit_api_writes():
 
 def test_runner_scripts_stay_byte_identical():
     assert _read("pipeline-runner.sh") == _read("pipeline-runner.sh.local")
+
+
+def test_api_failure_cascade_requeues_file_lock_child_instead_of_cancelling_it():
+    """API completion path must match the shell sweeper's auto-dependency rule."""
+    api = (ROOT / "app" / "api" / "pipeline_runner.py").read_text(encoding="utf-8")
+    cascade_start = api.index("async def _cascade_cleanup_orphans_with_ids")
+    cascade_end = api.index("\n\nasync def promote_next_queued", cascade_start)
+    cascade = api[cascade_start:cascade_end]
+
+    assert "_has_auto_file_dependency" in cascade
+    assert "_release_auto_file_dependency" in cascade
+    assert "depends_on = NULL" in api
+    assert "file_conflict_dependency_requeued" in api
+    assert "logs @> '[{\"event\": \"file_conflict_dependency_requeued\"}]'::jsonb" in api
+    # Only the explicit-dependency branch may enter the cancellation helper.
+    assert cascade.index("_has_auto_file_dependency") < cascade.index("_cancel_explicit_orphan")
+
+
+def test_explicit_dependency_still_cancels_with_parent_failure_context_and_alert():
+    api = (ROOT / "app" / "api" / "pipeline_runner.py").read_text(encoding="utf-8")
+    helper_start = api.index("async def _cancel_explicit_orphan")
+    helper_end = api.index("\n\nasync def _cascade_cleanup_orphans", helper_start)
+    helper = api[helper_start:helper_end]
+
+    assert "status = 'cancelled'" in helper
+    assert "orphaned_dependency: parent {parent_id} {parent_status}" in helper
+    assert "parent_failure_reason" in helper
+    assert "orphaned_dependency_alert" in helper
+    assert "pg_notify('pipeline_orphaned_dependency'" in helper
+
+
+def test_p0_instruction_is_promoted_ahead_of_implicit_file_lock_queue():
+    """Keep the existing numeric priority order, with directive P0 as its top tier."""
+    for name in SCRIPTS:
+        script = _read(name)
+        claim_start = script.index("_claim_queued_job()")
+        claim_end = script.index("\n}\n", claim_start)
+        claim = script[claim_start:claim_end]
+        assert "PRIORITY:[[:space:]]*P0" in claim
+        assert claim.index("PRIORITY:[[:space:]]*P0") < claim.index("COALESCE(p.priority, 0) DESC")

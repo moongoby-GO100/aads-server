@@ -1464,7 +1464,9 @@ promote_next_queued() {
                           AND (depends_on IS NULL OR EXISTS (
                                SELECT 1 FROM pipeline_jobs dep
                                WHERE dep.job_id = pipeline_jobs.depends_on AND dep.status = 'done'))
-                        ORDER BY COALESCE(priority, 0) DESC, created_at ASC LIMIT 1;" 2>/dev/null) || true
+                        ORDER BY CASE WHEN instruction ~* '(^|[[:space:]])PRIORITY:[[:space:]]*P0' THEN 1 ELSE 0 END DESC,
+                                 CASE WHEN logs @> '[{\"event\": \"file_conflict_dependency_requeued\"}]'::jsonb THEN 1 ELSE 0 END DESC,
+                                 COALESCE(priority, 0) DESC, created_at ASC LIMIT 1;" 2>/dev/null) || true
     next_job="${next_job// /}"
     if [[ -n "$next_job" ]]; then
         log "  PROMOTE_READY: 프로젝트 $project 의 다음 대기 작업 $next_job — 메인루프에서 곧 클레임"
@@ -1801,7 +1803,9 @@ _claim_queued_job() {
                          AND r.status IN ('running', 'claimed')
                          AND r.job_id != p.job_id) < ${MAX_CONCURRENT_PER_PROJECT:-6}
                   ${engine_predicate}
-                ORDER BY COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
+                ORDER BY CASE WHEN p.instruction ~* '(^|[[:space:]])PRIORITY:[[:space:]]*P0' THEN 1 ELSE 0 END DESC,
+                         CASE WHEN p.logs @> '[{\"event\": \"file_conflict_dependency_requeued\"}]'::jsonb THEN 1 ELSE 0 END DESC,
+                         COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
              RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, ${model_return_expr}, COALESCE(size,'M'), COALESCE(parallel_group,'');"

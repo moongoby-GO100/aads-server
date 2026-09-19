@@ -165,6 +165,7 @@ _DISPLAY_STATUS_GROUPS = {
     "tool_timeout": "action_required",
 }
 _DEFAULT_LOCAL_PID_PROJECTS = {"AADS"}
+_AUTO_FILE_DEPENDENCY_EVENT = "file_conflict_auto_dependency"
 _TARGET_FILE_RE = re.compile(
     r"(?<![A-Za-z0-9@])"
     r"(?:/root/aads/(?:aads-server|aads-dashboard)/)?"
@@ -771,6 +772,93 @@ async def cascade_cleanup_orphans(conn, failed_job_id: str) -> int:
     return len(await _cascade_cleanup_orphans_with_ids(conn, failed_job_id))
 
 
+def _has_auto_file_dependency(logs: object) -> bool:
+    """Whether ``depends_on`` only serializes a same-file write.
+
+    ``depends_on`` is deliberately reused for the DB-level wait primitive, so
+    its origin must be read from the durable submission event before deciding
+    whether a failed parent makes the child meaningless.
+    """
+    if not isinstance(logs, list):
+        return False
+    return any(
+        isinstance(entry, dict)
+        and entry.get("event") == _AUTO_FILE_DEPENDENCY_EVENT
+        for entry in logs
+    )
+
+
+async def _release_auto_file_dependency(conn, *, job_id: str, parent_id: str,
+                                        parent_status: str, parent_error: str) -> None:
+    """Release a file-lock wait after its parent terminates and wake the queue."""
+    await conn.execute(
+        """
+        UPDATE pipeline_jobs
+           SET depends_on = NULL,
+               review_feedback = COALESCE(review_feedback, '') || $3,
+               logs = COALESCE(logs, '[]'::jsonb) || jsonb_build_array(
+                   jsonb_build_object(
+                       'ts', NOW()::text,
+                       'event', 'file_conflict_dependency_requeued',
+                       'parent_job_id', $2,
+                       'parent_status', $4,
+                       'parent_error', $5
+                   )
+               ),
+               updated_at = NOW()
+         WHERE job_id = $1 AND status = 'queued'
+        """,
+        job_id,
+        parent_id,
+        f"\n[Runner Guard] file-lock parent {parent_id} ended {parent_status}; "
+        "dependency released and job requeued at queue head",
+        parent_status,
+        (parent_error or "unknown")[:1000],
+    )
+    await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
+
+
+async def _cancel_explicit_orphan(conn, *, job_id: str, parent_id: str,
+                                  parent_status: str, parent_error: str) -> bool:
+    """Cancel an explicit dependency and emit a durable, consumable alert."""
+    detail = (
+        f"orphaned_dependency: parent {parent_id} {parent_status}; "
+        f"failure_reason={parent_error or 'unknown'}"
+    )[:2000]
+    updated = await conn.fetchrow(
+        """
+        UPDATE pipeline_jobs
+           SET status = 'cancelled', phase = 'blocked_dependency',
+               error_detail = $2,
+               review_feedback = COALESCE(review_feedback, '') || $3,
+               logs = COALESCE(logs, '[]'::jsonb) || jsonb_build_array(
+                   jsonb_build_object(
+                       'ts', NOW()::text,
+                       'event', 'orphaned_dependency_alert',
+                       'parent_job_id', $4,
+                       'parent_status', $5,
+                       'parent_failure_reason', $6,
+                       'notification_required', true
+                   )
+               ),
+               completed_at = NOW(), updated_at = NOW()
+         WHERE job_id = $1 AND status = 'queued'
+         RETURNING job_id
+        """,
+        job_id,
+        detail,
+        f"\n[Runner Guard] {detail}; notification queued",
+        parent_id,
+        parent_status,
+        (parent_error or "unknown")[:1000],
+    )
+    if updated:
+        # Dedicated NOTIFY lets the runner/ops listener surface this terminal
+        # state instead of silently leaving it in a task panel.
+        await conn.execute("SELECT pg_notify('pipeline_orphaned_dependency', $1)", detail)
+    return bool(updated)
+
+
 async def _cascade_cleanup_orphans_with_ids(conn, failed_job_id: str) -> list[str]:
     """실패한 작업에 의존하는 모든 queued 작업을 재귀적으로 blocked 처리.
     P1-A: 고아 방지 — 의존 트리 전체를 한 번에 정리.
@@ -779,26 +867,38 @@ async def _cascade_cleanup_orphans_with_ids(conn, failed_job_id: str) -> list[st
     목표 링크도 cancelled/blocked_dependency 로 재조정해야 하기 때문이다.
     """
     cleaned: list[str] = []
-    total = 0
     to_process = [failed_job_id]
     while to_process:
         current_id = to_process.pop(0)
-        result = await conn.fetch(
-            "UPDATE pipeline_jobs SET status = 'cancelled', phase = 'blocked_dependency', "
-            "error_detail = $2, updated_at = NOW() "
-            "WHERE depends_on = $1 AND status = 'queued' "
-            "RETURNING job_id",
-            current_id,
-            f"orphaned_dependency: parent {current_id} failed",
+        parent = await conn.fetchrow(
+            "SELECT status, error_detail FROM pipeline_jobs WHERE job_id = $1", current_id,
         )
-        for r in result:
-            total += 1
-            cleaned.append(r["job_id"])
-            to_process.append(r["job_id"])
-            logger.info("pipeline_runner.orphan_cascade_cleaned",
-                        orphan_job_id=r["job_id"], parent=current_id)
-    if total:
-        logger.info("pipeline_runner.orphan_cascade_total", count=total, root=failed_job_id)
+        parent_status = _record_get(parent, "status", "failed")
+        parent_error = _record_get(parent, "error_detail", "unknown")
+        children = await conn.fetch(
+            "SELECT job_id, logs FROM pipeline_jobs WHERE depends_on = $1 AND status = 'queued'",
+            current_id,
+        )
+        for child in children:
+            child_id = child["job_id"]
+            if _has_auto_file_dependency(_record_get(child, "logs", [])):
+                await _release_auto_file_dependency(
+                    conn, job_id=child_id, parent_id=current_id,
+                    parent_status=parent_status, parent_error=parent_error,
+                )
+                logger.info("pipeline_runner.file_lock_dependency_requeued",
+                            job_id=child_id, parent=current_id)
+                continue
+            if await _cancel_explicit_orphan(
+                conn, job_id=child_id, parent_id=current_id,
+                parent_status=parent_status, parent_error=parent_error,
+            ):
+                cleaned.append(child_id)
+                to_process.append(child_id)
+                logger.info("pipeline_runner.orphan_cascade_cleaned",
+                            orphan_job_id=child_id, parent=current_id)
+    if cleaned:
+        logger.info("pipeline_runner.orphan_cascade_total", count=len(cleaned), root=failed_job_id)
     return cleaned
 
 
@@ -807,9 +907,11 @@ async def promote_next_queued(conn, project: str) -> str | None:
     AADS-211: depends_on이 설정된 작업은 의존 작업이 done일 때만 승격.
     P1-A: 의존 작업 실패 시 자동 고아 처리."""
     rows = await conn.fetch(
-        "SELECT job_id, depends_on, parallel_group FROM pipeline_jobs "
+        "SELECT job_id, depends_on, parallel_group, logs, instruction FROM pipeline_jobs "
         "WHERE project = $1 AND status = 'queued' "
-        "ORDER BY created_at ASC LIMIT 10",
+        "ORDER BY CASE WHEN instruction ~* '(^|[[:space:]])PRIORITY:[[:space:]]*P0' "
+        "THEN 0 ELSE 1 END, CASE WHEN logs @> '[{\"event\": \"file_conflict_dependency_requeued\"}]'::jsonb "
+        "THEN 0 ELSE 1 END, COALESCE(priority, 0) DESC, created_at ASC LIMIT 10",
         project,
     )
     for row in rows:
@@ -817,16 +919,20 @@ async def promote_next_queued(conn, project: str) -> str | None:
         if dep:
             # 의존 작업 상태 확인
             dep_row = await conn.fetchrow(
-                "SELECT status FROM pipeline_jobs WHERE job_id = $1", dep,
+                "SELECT status, error_detail FROM pipeline_jobs WHERE job_id = $1", dep,
             )
             if dep_row and dep_row["status"] in ("error", "rejected", "rejected_done", "cancelled"):
-                # P1-A: 의존 작업 실패 → 자동 고아 처리
-                await conn.execute(
-                    "UPDATE pipeline_jobs SET status = 'cancelled', phase = 'blocked_dependency', "
-                    "error_detail = $2, updated_at = NOW() "
-                    "WHERE job_id = $1 AND status = 'queued'",
-                    row["job_id"],
-                    f"orphaned_dependency: parent {dep} was {dep_row['status']}",
+                parent_error = _record_get(dep_row, "error_detail", "unknown")
+                if _has_auto_file_dependency(_record_get(row, "logs", [])):
+                    await _release_auto_file_dependency(
+                        conn, job_id=row["job_id"], parent_id=dep,
+                        parent_status=dep_row["status"], parent_error=parent_error,
+                    )
+                    return row["job_id"]
+                # Only a directive's explicit dependency remains an orphan.
+                await _cancel_explicit_orphan(
+                    conn, job_id=row["job_id"], parent_id=dep,
+                    parent_status=dep_row["status"], parent_error=parent_error,
                 )
                 try:
                     from app.services.pipeline_runner_service import _reconcile_job_goal_links
