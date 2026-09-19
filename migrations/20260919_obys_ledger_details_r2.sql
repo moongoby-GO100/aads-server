@@ -46,4 +46,28 @@ CREATE INDEX IF NOT EXISTS idx_yeoljeong_card_scope_date
     ON yeoljeong_card_transactions (tenant_id,business_id,occurred_at DESC)
     WHERE deleted_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS yeoljeong_card_uploads (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    business_id TEXT NOT NULL REFERENCES yeoljeong_businesses(id) ON UPDATE CASCADE,
+    original_filename TEXT NOT NULL,
+    stored_filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    byte_size BIGINT NOT NULL CHECK (byte_size BETWEEN 1 AND 10485760),
+    sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+    status TEXT NOT NULL DEFAULT 'pending_review'
+        CHECK (status IN ('pending_review','imported','duplicate','rejected')),
+    imported_rows INTEGER NOT NULL DEFAULT 0,
+    rejected_rows INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_yeoljeong_card_uploads_active_digest
+    ON yeoljeong_card_uploads (tenant_id,business_id,sha256)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_yeoljeong_card_uploads_scope_created
+    ON yeoljeong_card_uploads (tenant_id,business_id,created_at DESC);
+
 COMMIT;

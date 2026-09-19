@@ -30,6 +30,7 @@ _TENANT_SCOPED_PREFIXES = (
     "/api/v1/yeoljeong-finance/uploaded-ledger",
     "/api/v1/yeoljeong-finance/ledger-entries",
     "/api/v1/yeoljeong-finance/card-transactions",
+    "/api/v1/yeoljeong-finance/card-uploads",
     "/api/v1/yeoljeong-finance/ledger-bank-transactions",
 )
 

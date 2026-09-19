@@ -776,13 +776,7 @@ async def list_sales(business_id: str | None = None, current_user: dict = Depend
     return {"sales": await run_in_threadpool(svc.list_sales, current_user, business_id)}
 
 
-@router.post("/uploads", status_code=201)
-async def upload_ledger_file(
-    business_id: str = Form(...),
-    category: str = Form(...),
-    file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user),
-) -> dict[str, Any]:
+async def _read_limited_upload(file: UploadFile) -> bytes:
     chunks: list[bytes] = []
     size = 0
     try:
@@ -793,7 +787,18 @@ async def upload_ledger_file(
             chunks.append(chunk)
     finally:
         await file.close()
-    return await upload_svc.create_upload(user=current_user, business_id=business_id, category=category, filename=file.filename or "upload.bin", content_type=file.content_type or "application/octet-stream", data=b"".join(chunks))
+    return b"".join(chunks)
+
+
+@router.post("/uploads", status_code=201)
+async def upload_ledger_file(
+    business_id: str = Form(...),
+    category: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    data = await _read_limited_upload(file)
+    return await upload_svc.create_upload(user=current_user, business_id=business_id, category=category, filename=file.filename or "upload.bin", content_type=file.content_type or "application/octet-stream", data=data)
 
 
 @router.get("/uploads")
@@ -804,6 +809,41 @@ async def list_ledger_uploads(
 ) -> dict[str, Any]:
     uploads = await upload_svc.list_uploads(user=current_user, business_id=business_id, category=category)
     return {"uploads": uploads, "count": len(uploads)}
+
+
+@router.post("/card-uploads", status_code=201)
+async def upload_card_file(
+    business_id: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    data = await _read_limited_upload(file)
+    return await upload_svc.create_card_upload(
+        user=current_user, business_id=business_id,
+        filename=file.filename or "card-upload.bin",
+        content_type=file.content_type or "application/octet-stream", data=data,
+    )
+
+
+@router.get("/card-uploads")
+async def list_card_uploads(
+    business_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    uploads = await upload_svc.list_card_uploads(user=current_user, business_id=business_id)
+    return {"uploads": uploads, "count": len(uploads)}
+
+
+@router.get("/card-uploads/{upload_id}/download")
+async def download_card_upload(upload_id: UUID, current_user: dict = Depends(get_current_user)) -> FileResponse:
+    path, filename, content_type = await upload_svc.download_card_upload(user=current_user, upload_id=upload_id)
+    return FileResponse(path, media_type=content_type, filename=filename)
+
+
+@router.delete("/card-uploads/{upload_id}")
+async def delete_card_upload(upload_id: UUID, current_user: dict = Depends(get_current_user)) -> dict[str, bool]:
+    await upload_svc.delete_card_upload(user=current_user, upload_id=upload_id)
+    return {"ok": True}
 
 
 @router.get("/uploaded-ledger")

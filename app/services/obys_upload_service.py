@@ -27,6 +27,7 @@ CATEGORY_EXTENSIONS = {
     "transaction": {".csv", ".xlsx"},
     "card": {".csv", ".xlsx", ".pdf"},
 }
+GENERIC_LEDGER_CATEGORIES = frozenset({"sales", "purchase", "transaction"})
 MIME_BY_EXTENSION = {
     ".csv": {"text/csv", "application/csv", "text/plain", "application/vnd.ms-excel"},
     ".xlsx": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
@@ -211,7 +212,7 @@ async def _require_business(conn: Any, tenant_id: UUID, business_id: str) -> Non
         tenant_id,
     )
     if not owns:
-        raise HTTPException(status_code=403, detail="해당 사업자는 현재 테넌트 소유가 아닙니다")
+        raise HTTPException(status_code=404, detail="현재 테넌트의 사업자를 찾을 수 없습니다")
 
 
 async def list_businesses(*, user: dict[str, Any]) -> list[dict[str, Any]]:
@@ -262,6 +263,9 @@ async def update_business(*, user: dict[str, Any], business_id: str, payload: di
 
 
 async def create_upload(*, user: dict[str, Any], business_id: str, category: str, filename: str, content_type: str, data: bytes) -> dict[str, Any]:
+    _require_write(user)
+    if category not in GENERIC_LEDGER_CATEGORIES:
+        raise HTTPException(status_code=400, detail="공용 원장 업로드 구분이 아닙니다")
     tenant_id = _tenant(user)
     original, ext = _validate_file(category, filename, content_type, data)
     parsed, rejected = ([], 0) if ext in {".pdf", ".jpg", ".jpeg", ".png"} else _canonical(category, _raw_rows(ext, data))
@@ -310,7 +314,7 @@ async def list_uploads(*, user: dict[str, Any], business_id: str, category: str 
 
 async def list_ledger_rows(*, user: dict[str, Any], business_id: str, category: str, limit: int = 500) -> list[dict[str, Any]]:
     tenant_id = _tenant(user)
-    if category not in CATEGORY_EXTENSIONS:
+    if category not in GENERIC_LEDGER_CATEGORIES:
         raise HTTPException(status_code=400, detail="지원하지 않는 원장 구분입니다")
     conn = await _connect()
     try:
@@ -338,6 +342,7 @@ async def download_path(*, user: dict[str, Any], upload_id: UUID) -> tuple[Path,
 
 
 async def delete_upload(*, user: dict[str, Any], upload_id: UUID) -> bool:
+    _require_write(user)
     tenant_id = _tenant(user)
     conn = await _connect()
     try:
@@ -354,6 +359,107 @@ async def delete_upload(*, user: dict[str, Any], upload_id: UUID) -> bool:
                 tenant_id,
             )
             await conn.execute("UPDATE yeoljeong_uploads SET deleted_at=NOW() WHERE id=$1 AND tenant_id=$2", upload_id, tenant_id)
+        return True
+    finally:
+        await conn.close()
+
+
+async def create_card_upload(
+    *, user: dict[str, Any], business_id: str, filename: str,
+    content_type: str, data: bytes,
+) -> dict[str, Any]:
+    """Persist card evidence without mixing it into the bank/general ledger."""
+    _require_write(user)
+    tenant_id = _tenant(user)
+    original, ext = _validate_file("card", filename, content_type, data)
+    digest, upload_id = hashlib.sha256(data).hexdigest(), uuid4()
+    stored_name = f"{upload_id.hex}{ext}"
+    directory = UPLOAD_ROOT / str(tenant_id) / hashlib.sha256(business_id.encode()).hexdigest()[:32] / "card"
+    target = directory / stored_name
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant_id, business_id)
+        existing = await conn.fetchrow(
+            """SELECT * FROM yeoljeong_card_uploads
+                 WHERE tenant_id=$1 AND business_id=$2 AND sha256=$3 AND deleted_at IS NULL""",
+            tenant_id, business_id, digest,
+        )
+        if existing:
+            result = dict(existing)
+            result["status"] = "duplicate"
+            return result
+        directory.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        row = await conn.fetchrow(
+            """INSERT INTO yeoljeong_card_uploads
+                   (id,tenant_id,business_id,original_filename,stored_filename,content_type,
+                    byte_size,sha256,status,created_by)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending_review',$9)
+                 RETURNING id,business_id,original_filename,content_type,byte_size,sha256,
+                           status,imported_rows,rejected_rows,error_message,created_by,created_at""",
+            upload_id, tenant_id, business_id, original, stored_name, content_type,
+            len(data), digest, _actor(user),
+        )
+        return dict(row)
+    except Exception:
+        if target.exists():
+            target.unlink()
+        raise
+    finally:
+        await conn.close()
+
+
+async def list_card_uploads(*, user: dict[str, Any], business_id: str) -> list[dict[str, Any]]:
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant_id, business_id)
+        rows = await conn.fetch(
+            """SELECT id,business_id,original_filename,content_type,byte_size,sha256,status,
+                      imported_rows,rejected_rows,error_message,created_by,created_at
+                 FROM yeoljeong_card_uploads
+                WHERE tenant_id=$1 AND business_id=$2 AND deleted_at IS NULL
+                ORDER BY created_at DESC LIMIT 100""",
+            tenant_id, business_id,
+        )
+        return [dict(row) for row in rows]
+    finally:
+        await conn.close()
+
+
+async def download_card_upload(*, user: dict[str, Any], upload_id: UUID) -> tuple[Path, str, str]:
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        row = await conn.fetchrow(
+            """SELECT business_id,stored_filename,original_filename,content_type
+                 FROM yeoljeong_card_uploads
+                WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL""",
+            upload_id, tenant_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="카드 업로드 파일을 찾을 수 없습니다")
+        await _require_business(conn, tenant_id, row["business_id"])
+        path = UPLOAD_ROOT / str(tenant_id) / hashlib.sha256(row["business_id"].encode()).hexdigest()[:32] / "card" / row["stored_filename"]
+        if not path.is_file() or UPLOAD_ROOT.resolve() not in path.resolve().parents:
+            raise HTTPException(status_code=404, detail="카드 업로드 파일을 찾을 수 없습니다")
+        return path, row["original_filename"], row["content_type"]
+    finally:
+        await conn.close()
+
+
+async def delete_card_upload(*, user: dict[str, Any], upload_id: UUID) -> bool:
+    _require_write(user)
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        command = await conn.execute(
+            """UPDATE yeoljeong_card_uploads SET deleted_at=NOW()
+                 WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL""",
+            upload_id, tenant_id,
+        )
+        if command.endswith(" 0"):
+            raise HTTPException(status_code=404, detail="카드 업로드 파일을 찾을 수 없습니다")
         return True
     finally:
         await conn.close()
