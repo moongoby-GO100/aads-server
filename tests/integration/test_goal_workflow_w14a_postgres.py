@@ -29,6 +29,7 @@ pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="M12_TEST_DATABASE_URL 
 ROOT = Path(__file__).parents[2]
 W14A = (ROOT / "migrations/20260919_goal_workflow_w14a.sql").read_text()
 W14B = (ROOT / "migrations/20260919_goal_workflow_w14b.sql").read_text()
+W14B_RLS = (ROOT / "migrations/20260919_goal_workflow_w14b_rls_fix.sql").read_text()
 W14C = (ROOT / "migrations/20260919_goal_policy_rollout_w14c.sql").read_text()
 
 
@@ -92,11 +93,17 @@ async def _exercise() -> None:
         await conn.execute(W14A)
         await conn.execute(W14B)
         await conn.execute(W14B)
+        await conn.execute(W14B_RLS)
+        await conn.execute(W14B_RLS)
         await conn.execute(W14C)
         await conn.execute(W14C)
         assert await conn.fetchval(
             "SELECT count(*) FROM information_schema.tables WHERE table_name LIKE 'goal_policy_simulation_%'"
         ) == 2
+        rls = await conn.fetchrow(
+            "SELECT relrowsecurity,relforcerowsecurity FROM pg_class WHERE relname='goal_auto_approval_usage_events'"
+        )
+        assert rls["relrowsecurity"] is True and rls["relforcerowsecurity"] is True
         project_actor = ActorScope(str(tenant), str(principal), "project_lead", "AADS", "project")
         simulation = await simulate_policy(
             conn, tenant_id=str(tenant), actor=project_actor,

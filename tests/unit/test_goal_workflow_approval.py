@@ -31,6 +31,7 @@ SERVICE = (ROOT / "app/services/goal_workflow_approval.py").read_text()
 MIGRATION = (ROOT / "migrations/20260919_goal_work_hierarchy_m14.sql").read_text()
 W14A = (ROOT / "migrations/20260919_goal_workflow_w14a.sql").read_text()
 W14B = (ROOT / "migrations/20260919_goal_workflow_w14b.sql").read_text()
+W14B_RLS = (ROOT / "migrations/20260919_goal_workflow_w14b_rls_fix.sql").read_text()
 
 
 def actor(session: str = OTHER) -> ActorScope:
@@ -304,6 +305,9 @@ def test_w14b_append_only_estimated_actual_and_unknown_outcome_contract():
     for marker in ("actual_budget", "budget_overrun", "manual_reconciliation",
                    '"auto_refund": False', '"auto_replay": False', "status='stale'"):
         assert marker in body
+    assert "ENABLE ROW LEVEL SECURITY" in W14B_RLS
+    assert "FORCE ROW LEVEL SECURITY" in W14B_RLS
+    assert "tenant_isolation" in W14B_RLS
 
 
 def test_w14b_recursive_revoke_and_retry_fails_closed():
