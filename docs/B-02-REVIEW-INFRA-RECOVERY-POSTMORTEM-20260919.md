@@ -39,12 +39,12 @@ task-status, reconcile, and release-evidence. Because these endpoints read or
 mutate goal-linked data without requiring the tenant context, the claimed full
 tenant isolation is not established.
 
-The blocking test is
-`tests/unit/test_b02_independent_goal_tenant_review.py`. It enumerates every
-mounted `/goals` route and fails while any endpoint lacks the tenant dependency.
-The reviewed SHA must not be accepted until that test passes with tenant-scoped
-service/SQL behavior behind each endpoint; adding a parameter without enforcing
-it in database predicates is insufficient.
+The candidate-only blocking audit enumerated every mounted `/goals` route and
+failed with 21 unscoped endpoints. It is not installed as a permanently failing
+main-branch test; its findings are carried by the B-02R remediation milestone.
+The reviewed SHA must not be accepted until an equivalent regression test passes
+with tenant-scoped service/SQL behavior behind each endpoint; adding a parameter
+without enforcing it in database predicates is insufficient.
 
 ## STEP 0 preservation classification
 
@@ -53,12 +53,11 @@ it in database predicates is insufficient.
 - 수정: central model-call boundary, response extraction, structured verdict
   validation, failure evidence retention.
 - 신규: response-shape fixture tests and the independent tenant-isolation
-  blocking test.
+  rejection record.
 - 삭제: 없음.
 
 ## Selected change set
 
 Release SHA is intentionally not claimed here. The selected files are
 `app/services/code_reviewer.py`,
-`tests/unit/test_code_reviewer_flag_classification.py`,
-`tests/unit/test_b02_independent_goal_tenant_review.py`, and this postmortem.
+`tests/unit/test_code_reviewer_flag_classification.py` and this postmortem.
