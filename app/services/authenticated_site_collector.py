@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -737,6 +737,18 @@ def _account_approval_scope(*, profile: dict[str, Any], work_key: str, vault_ref
     }
 
 
+def _scope_matches_active_vault(
+    *, scope: dict[str, Any], profile: dict[str, Any], vault: Any, vault_reference: str,
+) -> bool:
+    """Require an existing A-scope to remain bound to the active Vault tuple."""
+    expected = _account_approval_scope(
+        profile=profile,
+        work_key=normalize_work_key(str(vault["work_key"])),
+        vault_reference=vault_reference,
+    )
+    return all(str(scope.get(key) or "") == value for key, value in expected.items())
+
+
 def _account_login_out(row: Any) -> dict[str, Any]:
     item = dict(row)
     approval_id = item.get("credential_approval_request_id")
@@ -835,6 +847,13 @@ async def request_first_login(
                         # credential reference; use an explicit recovery flow.
                         raise ValueError("account_vault_reference_change_requires_recovery")
                     if existing["credential_approval_request_id"] is not None:
+                        if not _scope_matches_active_vault(
+                            scope=_json_dict(existing["credential_scope"]),
+                            profile=profile,
+                            vault=vault,
+                            vault_reference=reference,
+                        ):
+                            raise ValueError("credential_approval_scope_mismatch")
                         return {
                             "status": "approval_requested",
                             "account": _account_login_out(existing),
@@ -939,14 +958,14 @@ async def recover_account_login(*, tenant_id: str, user_id: str, site_profile_id
                 )
                 if not row:
                     return None
-                if row["approval_decision"] == "pending" and row["approval_expires_at"] and row["approval_expires_at"] > datetime.now(timezone.utc):
+                if row["approval_decision"] == "pending" and row["approval_expires_at"] and row["approval_expires_at"] > datetime.now(UTC):
                     return {"status": "approval_pending", "account": _account_login_out(row)}
                 if row["login_status"] == "connected":
                     raise ValueError("account_recovery_not_required")
                 if row["login_status"] == "disabled":
                     raise ValueError("account_recovery_disabled")
                 if row["approval_decision"] == "approved":
-                    return {"status": "approval_approved", "account": _account_login_out(row)}
+                    raise ValueError("account_recovery_not_required")
                 scope = _json_dict(row["credential_scope"])
                 try:
                     vault_id = uuid.UUID(str(row["vault_reference"] or ""))
@@ -963,10 +982,13 @@ async def recover_account_login(*, tenant_id: str, user_id: str, site_profile_id
                 if normalize_origin(str(vault["origin"])) != recovery_origin:
                     raise ValueError("vault_reference_origin_mismatch")
                 vault_work_key = normalize_work_key(str(vault["work_key"]))
-                if scope.get("work_key") and normalize_work_key(str(scope["work_key"])) != vault_work_key:
-                    raise ValueError("vault_reference_work_key_mismatch")
+                profile = {"site_key": row["site_key"], "base_origin": row["base_origin"]}
+                if not _scope_matches_active_vault(
+                    scope=scope, profile=profile, vault=vault, vault_reference=str(vault_id),
+                ):
+                    raise ValueError("credential_approval_scope_mismatch")
                 recovery_scope = _account_approval_scope(
-                    profile={"site_key": row["site_key"], "base_origin": row["base_origin"]},
+                    profile=profile,
                     work_key=vault_work_key,
                     vault_reference=str(vault_id),
                 )

@@ -1,5 +1,5 @@
 import importlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -14,8 +14,8 @@ def collector_modules(tmp_path, monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("YEOLJEONG_FINANCE_DATABASE_URL", raising=False)
 
-    import app.services.pc_agent_collection_queue as queue_module
     import app.services.authenticated_site_collector as collector
+    import app.services.pc_agent_collection_queue as queue_module
 
     queue_module = importlib.reload(queue_module)
     collector = importlib.reload(collector)
@@ -609,6 +609,22 @@ class _CollectorPool:
         return _AsyncContext(self.conn)
 
 
+def _account_login_row(*, tenant_id: str, profile_id: str, login_status: str, approval_decision: str):
+    return {
+        "id": UUID("00000000-0000-0000-0000-000000000020"),
+        "tenant_id": UUID(tenant_id),
+        "site_profile_id": UUID(profile_id),
+        "site_key": "meta.business",
+        "base_origin": "https://business.facebook.com",
+        "account_label": "primary",
+        "login_status": login_status,
+        "approval_decision": approval_decision,
+        "approval_expires_at": datetime.now(UTC),
+        "vault_reference": "00000000-0000-0000-0000-000000000099",
+        "credential_scope": {},
+    }
+
+
 async def test_first_login_rejects_client_work_key_outside_vault_scope(collector_modules, monkeypatch):
     collector, _queue_module = collector_modules
     tenant_id = "00000000-0000-0000-0000-000000000001"
@@ -673,19 +689,49 @@ async def test_recovery_refuses_connected_account_before_new_approval(collector_
             self.fetches += 1
             assert "FOR UPDATE OF a" in query
             assert args == (UUID(tenant_id), profile_id, "primary")
-            return {
-                "id": UUID("00000000-0000-0000-0000-000000000020"),
-                "tenant_id": UUID(tenant_id),
-                "site_profile_id": UUID(profile_id),
-                "site_key": "meta.business",
-                "base_origin": "https://business.facebook.com",
-                "account_label": "primary",
-                "login_status": "connected",
-                "approval_decision": "rejected",
-                "approval_expires_at": datetime.now(timezone.utc),
-                "vault_reference": "00000000-0000-0000-0000-000000000099",
-                "credential_scope": {},
-            }
+            return _account_login_row(
+                tenant_id=tenant_id,
+                profile_id=profile_id,
+                login_status="connected",
+                approval_decision="rejected",
+            )
+
+    conn = Conn()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://enabled-for-test")
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _CollectorPool(conn))
+
+    with pytest.raises(ValueError, match="account_recovery_not_required"):
+        await collector.recover_account_login(
+            tenant_id=tenant_id,
+            user_id="ceo",
+            site_profile_id=profile_id,
+            account_label="primary",
+        )
+
+    assert conn.fetches == 1
+
+
+async def test_recovery_refuses_approved_account_before_vault_or_approval_write(collector_modules, monkeypatch):
+    collector, _queue_module = collector_modules
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+    profile_id = "00000000-0000-0000-0000-000000000010"
+
+    class Conn:
+        def __init__(self):
+            self.fetches = 0
+
+        def transaction(self):
+            return _AsyncContext()
+
+        async def fetchrow(self, query, *args):
+            self.fetches += 1
+            assert "FOR UPDATE OF a" in query
+            return _account_login_row(
+                tenant_id=tenant_id,
+                profile_id=profile_id,
+                login_status="expired",
+                approval_decision="approved",
+            )
 
     conn = Conn()
     monkeypatch.setenv("DATABASE_URL", "postgresql://enabled-for-test")
@@ -713,3 +759,6 @@ def test_account_approval_migration_enforces_same_tenant_foreign_key():
     assert "FOREIGN KEY (tenant_id, credential_approval_request_id)" in sql
     assert "REFERENCES agent_permission_requests(tenant_id, id)" in sql
     assert "ON DELETE SET NULL (credential_approval_request_id)" in sql
+    assert "REFERENCES agent_permission_requests(id)" not in sql
+    assert "DROP CONSTRAINT %I" in sql
+    assert "c.conkey = ARRAY" in sql
