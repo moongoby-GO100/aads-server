@@ -4,12 +4,18 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Literal, Optional
+from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.auth import TenantRole, require_tenant_role
+from app.core.goal_work_hierarchy_policy import goal_work_hierarchy_enabled
+
 router = APIRouter()
+require_tenant_viewer = require_tenant_role(TenantRole.VIEWER)
+require_tenant_member = require_tenant_role(TenantRole.MEMBER)
 
 _SESSION_UUID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -174,6 +180,132 @@ class InterveneRequest(BaseModel):
     roles: Optional[list[str]] = None
     reason: Optional[str] = None
     on: Optional[bool] = None
+
+
+class WorkItemCreateRequest(BaseModel):
+    type: Literal["epic", "story", "task"]
+    milestone_id: UUID
+    parent_id: Optional[UUID] = None
+    title: str = Field(min_length=1, max_length=500)
+    description: Optional[str] = None
+    acceptance_criteria: list[Any] = Field(default_factory=list)
+    priority: Literal["P0", "P1", "P2", "P3"] = "P2"
+    assignment_id: Optional[UUID] = None
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class ProjectAssignmentCreateRequest(BaseModel):
+    role_key: str = Field(min_length=1, max_length=100)
+    session_id: UUID
+
+
+def _require_work_hierarchy() -> None:
+    if not goal_work_hierarchy_enabled():
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "goal_work_hierarchy_disabled", "message": "goal work hierarchy is disabled"},
+        )
+
+
+def _tenant_identity(context: dict[str, Any]) -> tuple[str, str, bool]:
+    tenant_id = str(context.get("tenant", {}).get("id") or "")
+    user = context.get("user", {})
+    return tenant_id, str(user.get("user_id") or ""), bool(user.get("is_internal_admin"))
+
+
+@router.post("/goals/{goal_id}/work-items", status_code=201)
+async def create_goal_work_item(
+    goal_id: str,
+    req: WorkItemCreateRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+    actor_session_id: Optional[str] = Header(None, alias="X-Chat-Session-ID"),
+):
+    """Create an M13 Epic/Story/Task without invoking M14 approval execution."""
+    _require_work_hierarchy()
+    from app.core.db_pool import get_pool
+    from app.services.goal_work_hierarchy import create_work_item, resolve_actor_scope
+
+    tenant_id, user_id, internal_admin = _tenant_identity(context)
+    async with get_pool().acquire() as conn:
+        async with conn.transaction():
+            actor = await resolve_actor_scope(
+                conn, tenant_id=tenant_id, user_id=user_id,
+                actor_session_id=actor_session_id, internal_admin=internal_admin,
+            )
+            item, created = await create_work_item(
+                conn, tenant_id=tenant_id, actor=actor, goal_id=goal_id,
+                payload=req.model_dump(mode="json"),
+            )
+    # M13 exposes the boundary decision only.  It must not claim AUTO before
+    # M14 validates and atomically consumes a matching grant.
+    decision = "PROJECT_APPROVAL" if req.type == "epic" else "NOTIFY"
+    return {
+        "work_item": item,
+        "policy_decision": decision,
+        "change_set_id": None,
+        "approval_request_id": None,
+        "idempotent_replay": not created,
+    }
+
+
+@router.get("/goals/{goal_id}/tree")
+async def get_goal_work_tree(
+    goal_id: str,
+    include: str = Query(""),
+    context: dict[str, Any] = Depends(require_tenant_viewer),
+):
+    _require_work_hierarchy()
+    from app.core.db_pool import get_pool
+    from app.services.goal_work_hierarchy import get_goal_tree
+
+    allowed = {"evidence", "approvals", "dependencies"}
+    includes = {part.strip() for part in include.split(",") if part.strip()}
+    unknown = includes - allowed
+    if unknown:
+        raise HTTPException(status_code=422, detail={"code": "invalid_include", "fields": sorted(unknown)})
+    tenant_id, _, _ = _tenant_identity(context)
+    async with get_pool().acquire() as conn:
+        return await get_goal_tree(conn, tenant_id=tenant_id, goal_id=goal_id, includes=sorted(includes))
+
+
+@router.get("/goals/{goal_id}/governance")
+async def get_goal_work_governance(
+    goal_id: str,
+    context: dict[str, Any] = Depends(require_tenant_viewer),
+):
+    _require_work_hierarchy()
+    from app.core.db_pool import get_pool
+    from app.services.goal_work_hierarchy import get_governance
+
+    tenant_id, _, _ = _tenant_identity(context)
+    async with get_pool().acquire() as conn:
+        result = await get_governance(conn, tenant_id=tenant_id, goal_id=goal_id)
+    result["feature"] = {"enabled": True, "flag": "GOAL_WORK_HIERARCHY_ENABLED"}
+    return result
+
+
+@router.post("/goals/{goal_id}/assignments", status_code=201)
+async def create_goal_project_assignment(
+    goal_id: str,
+    req: ProjectAssignmentCreateRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+    actor_session_id: Optional[str] = Header(None, alias="X-Chat-Session-ID"),
+):
+    _require_work_hierarchy()
+    from app.core.db_pool import get_pool
+    from app.services.goal_work_hierarchy import create_project_assignment, resolve_actor_scope
+
+    tenant_id, user_id, internal_admin = _tenant_identity(context)
+    async with get_pool().acquire() as conn:
+        actor = await resolve_actor_scope(
+            conn, tenant_id=tenant_id, user_id=user_id,
+            actor_session_id=actor_session_id, internal_admin=internal_admin,
+        )
+        assignment = await create_project_assignment(
+            conn, tenant_id=tenant_id, actor=actor, goal_id=goal_id,
+            role_key=req.role_key, session_id=str(req.session_id),
+        )
+    return {"assignment": assignment, "project": assignment["project"]}
 
 
 @router.get("/goals/{goal_id}/board")
