@@ -257,7 +257,11 @@ async def _search_documents(
     import os
 
     out: List[Dict] = []
-    for r in rows:
+    fused_base = max(
+        (float(r.get("similarity", 0.0)) for r in rows if r.get("rrf_score") is not None),
+        default=0.0,
+    )
+    for position, r in enumerate(rows):
         path = r.get("doc_path", "")
         heading = r.get("heading", "")
         title = r.get("title", "")
@@ -265,11 +269,17 @@ async def _search_documents(
         # **파일 경로**여야 한다 — "어디에 그렇게 적혀 있나" 에 답할 수
         # 있어야 근거로서 쓸모가 있다.
         where = f"{title} › {heading}" if heading else title
+        # The caller merges documents with other semantic sources by `similarity`.
+        # Preserve RRF ordering with a tiny monotonic offset while retaining the
+        # original score scale; otherwise that later sort silently undoes fusion.
+        similarity = r.get("similarity", 0.0)
+        if r.get("rrf_score") is not None:
+            similarity = fused_base - (position * 1e-6)
         out.append({
             "kind": "doc",
             "source": f"문서 {os.path.basename(path)}",
             "msg_id": f"doc:{path}",
-            "similarity": r.get("similarity", 0.0),
+            "similarity": similarity,
             "text": f"[{where}] {r.get('content', '')}",
             "timestamp": path,
             "path": path,

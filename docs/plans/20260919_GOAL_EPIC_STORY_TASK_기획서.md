@@ -1,7 +1,7 @@
 # 목표관리 업무계층·승인체계 통합 기획서
 
 - 작성: 2026-09-19 KST
-- 개정: 2026-09-19 KST — 승인체계, 프로젝트 담당 고유성, 실패 복구 반영
+- 개정: 2026-09-19 KST — 단계별 자동승인 권한, 회수·비상차단·정책 시뮬레이션 반영
 - 관련 목표: `cf1ec2f6-0072-4f85-aa5e-b08760cd6613` 목표·마일스톤 시스템 무결성 확보
 - 구현 PRD: [`../prd/20260919_GOAL_WORK_HIERARCHY_APPROVAL_PRD.md`](../prd/20260919_GOAL_WORK_HIERARCHY_APPROVAL_PRD.md)
 - 이어받는 문서: `20260914_GOAL_ORCHESTRATION_기획서.md`, `20260915_APPROVAL_GATE_PRD.md`
@@ -168,6 +168,40 @@ executed → verification_pending → accepted | changes_requested
   반영한다.
 - 거절 사유, 수정 diff, 만료·회수, 실제 실행 결과를 append-only 이벤트로 남긴다.
 
+### 5.5 단계별 자동승인 권한
+
+자동승인은 목표 전체의 `high/critical` 스위치가 아니라, 권한자가 미리 정한
+범위 안에서만 작동하는 capability grant로 관리한다.
+
+| 단계 | 자동승인 가능한 범위 | 자동승인 금지선 |
+|---|---|---|
+| Goal | 초안 보강·읽기·증거 연결 | 활성화·성공기준·범위·취소 |
+| Milestone | 진행률·증거·상태 알림 | 기준선·순서·인수기준·수락 |
+| Epic | 승인된 Milestone 안 동일 프로젝트 보정 | 범위/프로젝트 변경·수락 |
+| Story | 승인된 Epic 안 생성·분해·로컬 배정 | 인수기준 확대·프로젝트 변경·수락 |
+| Task | 안전 실행·테스트·동일 입력 재시도 | 배포·DB schema·금융·시크릿·파괴 작업 |
+
+각 grant는 `session_id + assignment_id`, tenant/project/goal/단계/target, 행위,
+위험등급, environment, 횟수, 파일·행·비용 예산, 만료, policy version에 묶는다.
+재위임은 기본 금지하고 CEO가 명시한 경우에도 1단계·원 grant 교집합만 허용한다.
+자기 발급·자기 승인·자기 독립 검수는 금지한다.
+
+판정은 `명시적 DENY/kill switch → A3 강제 수동 → grant 일치 → 원자적 소진 →
+실행 직전 재검증` 순서다. 권한이 없거나 만료·회수·담당교체·정책변경이 감지되면
+자동 실행하지 않고 기존 승인 경로로 올린다. 여러 grant의 범위를 합쳐 한 요청을
+통과시키지 않는다.
+
+동일 `execution_key` 재시도는 같은 소비 예약을 재사용해 이중 차감·이중 실행을
+막는다. 선행 단계 evidence와 독립 검수가 없으면 다음 단계 권한을 소비하지 않는다.
+회수 시 실행 중 작업은 사전에 고정한 `중단|현재 단계 완료|보상` 전략으로 처리하며,
+정책 저장소나 캐시 무효화가 실패하면 자동승인이 아니라 수동 승인으로 전환한다.
+
+운영 화면은 활성 grant의 주체·단계·행위·만료·잔여 횟수·마지막 사용·발급자를
+표시하고 즉시 회수와 project/goal kill switch를 제공한다. 새 정책은 과거 결정에
+shadow replay하여 권한 확대가 0건일 때만 `audit_only → project canary → enabled`
+순서로 활성화한다. 상세 데이터·API·회귀시험은 PRD 4.4~4.9, FR-010~013,
+T16~T35를 따른다.
+
 ## 6. 데이터·API 개요
 
 ### 6.1 정본 모델
@@ -242,7 +276,7 @@ Milestone
 |---|---|---|---|
 | M12 | 업무계층·담당·change set 스키마 | 선행 러너 반영 | 마이그레이션/제약/롤백 시험 |
 | M13 | CRUD·트리·의존성·프로젝트 권한 API | M12 | API 계약·테넌트 격리 시험 |
-| M14 | A0~A3 판정·기존 승인 게이트 연동·exactly-once 실행 | M13 | 승인 변조·중복 소비·회수 회귀시험 |
+| M14 | A0~A3 판정·단계별 grant·원자 소진·회수·shadow 정책·exactly-once 실행 | M13 | 승인 변조·동시 소비·회수·stale grant·kill switch 시험 |
 | M15 | GoalPanel 트리·승인 diff·검수·복구 UI | M14 | 390/768/1440px E2E 캡처 |
 | M16 | 데이터 정리·블루그린 릴리스·관찰 | M15 | 동일 digest, routed health, 5분 P0/P1 무오류 |
 
@@ -257,6 +291,12 @@ Milestone
 | 증거·독립 검수 없는 완료 | 0건 |
 | A0/A1인데 CEO 승인을 요구한 오탐 | 0건 |
 | 만료·회수 후 실행 | 0건 |
+| grant 범위 밖 자동승인 | 0건 |
+| 담당교체·정책변경 뒤 stale grant 실행 | 0건 |
+| 자동결정의 decision id·정책버전 추적 누락 | 0건 |
+| 동일 실행 재시도의 grant 이중 차감 | 0건 |
+| 증거 없는 다음 단계 자동 전진 | 0건 |
+| 회수·kill switch 전파 | p95 5초 이내 |
 
 ## 10. 범위 밖
 

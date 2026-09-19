@@ -133,9 +133,13 @@ def reciprocal_rank_fusion(*rankings: List[Dict[str, Any]], top_k: int = 5) -> L
     for ranking in rankings:
         for rank, item in enumerate(ranking, 1):
             key = (item.get("doc_path"), item.get("heading"), item.get("content"))
-            entry = fused.setdefault(key, {**item, "rrf_score": 0.0})
+            entry = fused.setdefault(key, {**item, "rrf_score": 0.0, "fusion_hits": 0})
             entry["rrf_score"] += 1.0 / (60 + rank)
-    return sorted(fused.values(), key=lambda x: x["rrf_score"], reverse=True)[:top_k]
+            entry["fusion_hits"] += 1
+    ordered = sorted(fused.values(), key=lambda x: x["rrf_score"], reverse=True)[:top_k]
+    for rank, item in enumerate(ordered, 1):
+        item["fusion_rank"] = rank
+    return ordered
 
 
 def needs_translation_expansion(results: List[Dict[str, Any]], requested: int = 5) -> bool:

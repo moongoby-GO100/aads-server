@@ -4,7 +4,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS doc_chunk_embeddings_qwen3 (
     id bigserial PRIMARY KEY,
-    chunk_id bigint NOT NULL REFERENCES doc_chunks(id) ON DELETE CASCADE,
+    chunk_id uuid NOT NULL REFERENCES doc_chunks(id) ON DELETE CASCADE,
     model_id text NOT NULL DEFAULT 'qwen3-embedding:0.6b',
     dimension integer NOT NULL DEFAULT 1024 CHECK (dimension = 1024),
     instruction_version text NOT NULL,
