@@ -1,10 +1,18 @@
-# PRD — AAG 아키텍처 거버넌스
+# PRD — AAG 아키텍처 거버넌스 v1.1 Final
 
-- 버전: 1.0
+- 버전: 1.1 Final
+- 문서 상태: 최종 통합본
 - 작성: 2026-09-19 KST
 - 적용 목표 ID: `40cfdfc5-06f9-4861-8dc9-27c8688cb3f7`
 - 기획: [AAG 기획서](../plans/20260919_AAG_ARCHITECTURE_GOVERNANCE_기획서.md)
 - 기술 설계: [AAG 설계서](../design/20260919_AAG_ARCHITECTURE_GOVERNANCE_설계서.md)
+- Phase 0: [감사 보고서](../reports/20260919_AAG_V1_1_PHASE0_AUDIT.md)
+- 데이터/API 계약: [v1.1 계약](../contracts/20260919_AAG_V1_1_DATA_API_CONTRACT.md)
+- 요구사항 추적: [v1.0→v1.1 추적표](../contracts/20260919_AAG_V1_1_TRACEABILITY.md)
+
+v1.0의 FR-001~FR-014, NFR-001~NFR-008, 사용자 시나리오, 상태·규칙 정책,
+AO1~AO5, 수용 테스트, 운영 지표 및 완료 정의를 승계한다. 아래 v1.1 조항이
+명시적으로 수정한 부분만 대체하며 충돌 시 v1.1을 우선한다.
 
 ## 1. 제품 정의
 
@@ -164,3 +172,52 @@ AAG 목표는 다음을 모두 충족해야 완료다.
 - AO4 #310 구조 판정과 DB handover 완료
 - 실패 복구 시험과 운영 상태 확인 완료
 - 관련 변경이 커밋·푸시되고, 배포가 필요한 경우 프로젝트 배포 계약과 모니터링을 통과
+
+## 14. v1.1 추가 기능 요구사항
+
+| ID | 요구사항 | 우선순위 |
+|---|---|---:|
+| FR-015 | 코드 작업 세션과 runner가 착수 전 authoritative AAG brief를 요청하고 결과 또는 승인된 skip을 기록한다 | P1 |
+| FR-016 | 정적 graph와 보완 analyzer를 동일 commit 기준으로 연결한다 | P1 |
+| FR-017 | snapshot별 스캔·미관측 범위와 위험 가중 coverage를 기록한다 | P1 |
+| FR-018 | 구조 장애와 영향 오판 rollback에 미탐 사후 검토를 연결한다 | P1 |
+| FR-019 | 신규 rule을 warn-only 관측 후 승인받아 enforce로 승격한다 | P1 |
+| FR-020 | scanner/parser/rule 변경 시 골든 fixture와 결정성 회귀 검증을 수행한다 | P0 |
+| FR-021 | baseline, exception, severity, rule lifecycle, override를 승인·감사한다 | P0 |
+| FR-022 | 중앙 장애 override를 만료·승인·재검증 가능한 별도 경로로 관리한다 | P0 |
+| FR-023 | v1/v2 API를 병행하고 소비자 전환·rollback 검증 후 v1을 폐기한다 | P0 |
+| FR-024 | 문서 링크·유형·상호 참조·content hash 무결성을 CI에서 검사한다 | P1 |
+| FR-025 | finding 최초·최근 관측, 해결, 재발과 snapshot별 occurrence를 관리한다 | P1 |
+| FR-026 | 재스캔 권한, 중복, queue, 진행 상태와 결과를 관리한다 | P1 |
+| FR-027 | 목표와 프로젝트의 명시적 연결에 따라 지표를 격리 집계한다 | P1 |
+| FR-028 | backup, restore, latest pointer 재구축과 artifact 재처리를 지원한다 | P1 |
+| FR-029 | 문서 표류를 검출하거나 승인된 제품 범위 밖으로 명시한다 | P1 |
+| FR-030 | 두 번째 프로젝트를 같은 절차로 온보딩할 수 있다 | P1 |
+
+## 15. v1.1 추가 비기능 요구사항
+
+| ID | 요구사항 | 기준 |
+|---|---|---|
+| NFR-009 | 원자성 | partial snapshot을 ready/latest로 노출하지 않음 |
+| NFR-010 | 호환성 | 전환 기간 v1 소비자가 계속 동작하고 사용량이 계측됨 |
+| NFR-011 | 복구성 | 승인된 RPO/RTO와 실제 restore test를 충족 |
+| NFR-012 | 무결성 | artifact·audit 변조를 차단하거나 탐지 |
+| NFR-013 | 격리성 | 권한 없이 프로젝트 간 조회·적재·집계가 혼합되지 않음 |
+| NFR-014 | 관측성 | 데이터 부재, evaluator 실패, 알림 실패를 정상과 구분 |
+
+## 16. v1.1 완료 상태 계약
+
+아래 상태는 각각 독립적으로 보고한다. 문서만 수정한 상태를 제품 완료로 표현하지 않는다.
+
+- 문서 계약 완료
+- DB migration 완료
+- API v2 적용
+- 소비자 전환 완료
+- 기준선 재수립 완료
+- coverage·미탐 거버넌스 적용
+- 보안·감사·override 적용
+- 복구 시험 완료
+- v1 폐기 완료
+
+Phase 0는 B(재현 불가)로 판정됐다. 따라서 기존 71건은
+`legacy_unreproducible`로 보존하고 v1.1 기준선을 새로 수립해야 한다.

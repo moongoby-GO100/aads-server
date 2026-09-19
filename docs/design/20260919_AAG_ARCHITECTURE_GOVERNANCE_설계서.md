@@ -1,9 +1,13 @@
-# AAG 아키텍처 거버넌스 — 기술 설계서
+# AAG 아키텍처 거버넌스 — 기술 설계서 v1.1 Final
 
 - 작성: 2026-09-19 KST
+- 버전: 1.1 Final
+- 상태: 최종 통합본(구현 전 계약 승인 대기)
 - 적용 목표 ID: `40cfdfc5-06f9-4861-8dc9-27c8688cb3f7`
 - 배경: [기획서](../plans/20260919_AAG_ARCHITECTURE_GOVERNANCE_기획서.md)
 - 요구사항: [PRD](../prd/20260919_AAG_ARCHITECTURE_GOVERNANCE_PRD.md)
+- 상세 계약: [v1.1 데이터·API 계약](../contracts/20260919_AAG_V1_1_DATA_API_CONTRACT.md)
+- Phase 0: [감사 보고서](../reports/20260919_AAG_V1_1_PHASE0_AUDIT.md)
 
 ## 1. 설계 목표
 
@@ -182,3 +186,60 @@ GO100 스캔은 `/root/kis-autotrade-v4`를 root로 사용하되, GO100 소유 �
 - 규칙 회귀: 이전 rules/baseline 커밋으로 되돌리고 새 스냅샷 적재를 중지한다.
 - 적재 장애: DB 쓰기를 멈추고 검증된 로컬 그래프를 읽기 전용 fallback으로 사용한다.
 - 스케줄 장애: hourly 항목을 비활성화하고 마지막 정상 스냅샷과 수동 실행 절차를 유지한다.
+
+## 14. v1.1 논리 모델
+
+```text
+scan_run (모든 시도)
+  ├─ input_fingerprint
+  ├─ result: succeeded | no_change_success | scan_failed | ingest_failed |
+  │          skipped_locked | cancelled | out_of_order | source_behind
+  └─ snapshot_observation ──► graph_snapshot (불변 content)
+                                  ├─ graph_nodes / graph_edges
+                                  └─ finding_occurrences ──► finding_definition
+
+latest_pointer(project, repository, target_ref, governance_scope)
+baseline ──► baseline_findings(stable_finding_key, stable_key_version)
+```
+
+`generated_at`은 fingerprint에 포함하지 않는다. snapshot 최초 publish 시각은 불변이며,
+동일 content 재검증은 observation과 latest authoritative verification 시각만 추가한다.
+
+## 15. Canonicalization과 stable key
+
+- UTF-8, LF, repository-relative POSIX path, JSON object key 정렬을 사용한다.
+- node/edge/finding 배열은 stable identity 기준으로 정렬한다.
+- timestamp, run ID, host 임시값, 절대 경로를 content fingerprint에서 제외한다.
+- hash는 SHA-256, canonicalization/stable key schema는 명시적 version을 갖는다.
+- stable finding key는 project, rule, semantic target, route/table/symbol,
+  normalized path, contract signature로 만든다. line number는 보조 evidence다.
+- key version 변경은 과거 값을 덮지 않고 mapping 또는 신규 baseline 승인을 요구한다.
+
+## 16. Publish와 latest pointer
+
+한 DB transaction에서 candidate metadata → nodes/edges/occurrences → 집계·hash 검증 →
+`ready` → observation → latest pointer 순으로 publish한다. 실패·partial·집계 불일치는
+ready가 될 수 없고 기존 usable pointer를 유지한다. latest 갱신 전
+`resolved_commit_sha == expected_target_ref_head_sha`와 ancestry를 검사한다.
+
+## 17. 상태와 API 전환
+
+상태는 `freshness`, `last_run_result`, `debt_level`, `coverage` 네 축으로 제공한다.
+v1은 기존 project/generated_at 계약을 유지하고 v2는 run/snapshot/observation,
+repository/ref, authoritative, coverage, pagination pinning을 additive하게 제공한다.
+v1 telemetry와 rollback 검증 후 승인된 시점에만 v1을 제거한다.
+
+## 18. 보안·감사·override
+
+- Scanner credential은 project-scoped이며 다른 프로젝트 적재·조회가 불가하다.
+- baseline 제안자/승인자, severity·exception·rule 승격 승인자를 분리한다.
+- audit event는 actor/action/target/before/after/reason/correlation/time/source를 보존한다.
+- local fallback은 항상 `authoritative=false`이며 gate·목표 완료 evidence로 금지한다.
+- 중앙 장애 override는 request ID, commit, 승인자, 만료, 이전 정상본, 독립 검증,
+  rollback, replay 방지와 복구 후 재검증 job을 요구한다.
+
+## 19. 구현 제한
+
+Phase 0 B 판정, 신규 계약, baseline 재수립안, API 병행·rollback, 권한·감사,
+최소 수용 테스트 계획이 승인되기 전에는 파괴적 migration, v1 제거, blocking gate를
+활성화하지 않는다. 최초 구현은 additive migration과 advisory 모드로 한정한다.

@@ -14335,3 +14335,20 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   `trap '' HUP` 을 넣어 부모가 죽어도 검증까지는 끝내도록 고쳤다. 같은 이유로 55s 를 넘길
   가능성이 있는 원격 명령은 nohup/detach 로 돌려야 한다.
 - **남은 리스크**: 없음. 양 슬롯 digest 일치, 종료 상태 `phase='queued'` 잔여 0건.
+
+## 2026-09-19 15:58 KST — AAG v1.1 Final 계약 통합·Phase 0 B 판정·마일스톤 등록
+
+- **대상**: GO100 목표 `40cfdfc5-06f9-4861-8dc9-27c8688cb3f7`.
+- **Phase 0 실측**: 중앙 AAG 테이블은 `aag_graph_snapshots` 1개, 전체 11건 중
+  GO100 10건이며 non-empty `commit_sha`는 0건이다. run/observation/ref/fingerprint/
+  baseline/publish/audit 계약을 표현할 수 없어 기존 71건 기준선은
+  **B — `legacy_unreproducible`**로 판정했다. AO1~AO3 완료 이력은 보존한다.
+- **문서**: 기획서·PRD·기술 설계서를 v1.1 Final로 통합하고, Phase 0 감사 보고서,
+  데이터·API 계약, v1.0→v1.1 요구사항/AT-001~125 추적표를 추가했다.
+- **목표 DB**: V11-0~V11-7 8개 마일스톤을 우선순위대로 추가하고 기존 AO4를
+  AO4-A(sequence 45)로 분리했다. 신규 지원 문서 3건을 목표에 연결했다.
+- **검증**: `git diff --check` 통과, 문서 6개 존재·비어 있지 않음, DB transaction
+  COMMIT 후 마일스톤 12건·목표 문서 11건을 재조회했다. AAG 단위테스트는 로컬
+  환경의 `asyncpg` 미설치로 collection 단계에서 중단됐으며 문서 변경과는 무관하다.
+- **게이트**: Phase 0 B 판정과 신규 기준선 재수립·additive v2 계약을 CEO가 승인하기
+  전에는 파괴적 migration, v1 제거, blocking gate를 실행하지 않는다. 배포 없음.

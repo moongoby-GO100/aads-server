@@ -1,9 +1,14 @@
-# AAG 아키텍처 거버넌스 — 기획서
+# AAG 아키텍처 거버넌스 — 기획서 v1.1 Final
 
 - 작성: 2026-09-19 KST
+- 버전: 1.1 Final
+- 상태: 최종 통합본(Phase 0 판정 반영)
 - 적용 목표: `GO100 아키텍처 거버넌스 — AAG 그래프 가동 및 #310 파동 경로 구조 판정`
 - 목표 ID: `40cfdfc5-06f9-4861-8dc9-27c8688cb3f7`
 - 후속 문서: [설계서](../design/20260919_AAG_ARCHITECTURE_GOVERNANCE_설계서.md), [PRD](../prd/20260919_AAG_ARCHITECTURE_GOVERNANCE_PRD.md)
+- 보완 계약: [v1.1 데이터·API 계약](../contracts/20260919_AAG_V1_1_DATA_API_CONTRACT.md)
+- 감사 근거: [Phase 0 감사 보고서](../reports/20260919_AAG_V1_1_PHASE0_AUDIT.md)
+- 추적표: [v1.0→v1.1 요구사항 추적표](../contracts/20260919_AAG_V1_1_TRACEABILITY.md)
 
 ## 1. 한 줄 기획
 
@@ -113,3 +118,45 @@ AAG의 목적은 단순히 결함 목록을 만드는 것이 아니다. **착수
 - 사용자 핵심 경로에는 내부 도구명보다 “영향 확인”, “구조 결함”, “다시 스캔”처럼
   이해 가능한 업무명을 쓴다.
 - 목표 완료는 코드 변경만이 아니라 문서, 검증, 배포, 운영 스냅샷까지 확인한 뒤 판정한다.
+
+## 9. v1.1 보완 방향
+
+v1.1은 v1.0의 FR-001~FR-014, NFR-001~NFR-008, 사용자 시나리오,
+AO1~AO5, 수용 테스트와 완료 정의를 승계한다. 이 절과 연결된 v1.1 계약이
+명시적으로 바꾼 조항만 대체하며 충돌 시 v1.1을 우선한다.
+
+1. 실행(run), 불변 graph(snapshot), 특정 시점 검증(observation)을 분리한다.
+2. 같은 콘텐츠는 graph를 중복 저장하지 않고 observation만 추가해 freshness를 갱신한다.
+3. latest는 `project/repository/ref/governance_scope`별로 관리하며 과거 commit이 덮지 못한다.
+4. baseline은 총건수가 아닌 versioned stable finding key 집합으로 비교한다.
+5. freshness, last run, debt, coverage를 독립 상태로 표시한다.
+6. fallback은 참고 전용이며 authoritative evidence나 gate 성공으로 사용하지 않는다.
+7. exception, severity 하향, rule 승격, 중앙 장애 override는 승인·만료·감사 계약을 따른다.
+8. 전체 coverage와 위험 경로 coverage를 분리하고 미관측·미탐을 정상으로 표현하지 않는다.
+9. v1/v2 API를 병행해 소비자 전환과 rollback 검증 후에만 v1 폐기를 승인한다.
+
+## 10. Phase 0 판정과 실행 게이트
+
+2026-09-19 15:50 KST 실측 결과는 **B — 기존 기준선 재현 불가**다. 현재 중앙
+테이블은 `aag_graph_snapshots` 한 개뿐이고 GO100 10개 snapshot의 non-empty
+`commit_sha`가 0건이다. run/observation, repository/ref, fingerprint, baseline,
+publish 상태와 audit 이력이 없어 71건 기준선을 동일 입력으로 재현할 수 없다.
+
+- AO1~AO3의 기존 `completed`는 과거 계약 evidence로 보존한다.
+- v1.1 검증 상태는 별도 마일스톤으로 관리하며 소급 취소하지 않는다.
+- 신규 기준선 후보는 v1.1 canonicalization·stable key로 재스캔한 뒤 승인한다.
+- Phase 0 B 판정, 계약, 기준선 재수립안 승인 전에는 파괴적 migration, v1 제거,
+  blocking gate를 실행하지 않는다.
+
+## 11. 우선순위 로드맵
+
+| 순서 | v1.1 마일스톤 | 완료 기준 |
+|---:|---|---|
+| V11-0 | Phase 0 감사·B 판정 승인 | 감사 보고서, 소비자 목록, 재수립·rollback안 승인 |
+| V11-1 | run/snapshot/observation·no-change 계약 | additive migration, 동일 content 재사용, observation freshness 테스트 |
+| V11-2 | ref별 latest·원자 publish | out-of-order/source-behind 차단, 실패 시 정상 pointer 유지 |
+| V11-3 | stable key·baseline·fixture | key-set gate, baseline 불변성, 동일 입력 2회 결정성 |
+| V11-4 | brief 안전성·coverage·미탐 | negative assertion 금지, 골든셋, 위험 coverage, miss review |
+| V11-5 | API v2 이중 운영·소비자 전환 | v1/v2 병행, pinning/telemetry/rollback, 잔여 소비자 0 |
+| V11-6 | RBAC·감사·override | project scope, 승인 분리, 만료·replay 방지, 사후 재검증 |
+| V11-7 | UI·scheduler·복구·멀티프로젝트 | 4축 상태, 모바일/접근성, restore test, 두 번째 프로젝트 온보딩 |
