@@ -1,7 +1,8 @@
 #!/bin/bash
 # AADS 안전 배포 게이트웨이
-# 사용법: deploy.sh [bluegreen|code|reload|build]
+# 사용법: deploy.sh [bluegreen|warm-deps|code|reload|build]
 #   bluegreen (기본) — Blue↔Green 무중단 전환 (중단 0초, 자동 롤백, upstream 전환)
+#   warm-deps — lock/profile 기반 의존성 이미지만 사전 생성. 배포·재시작 없음.
 #   code/reload/build — 레거시 모드. 기본 차단 후 bluegreen으로 자동 전환.
 #                      불가피한 수동 점검 때만 AADS_DEPLOY_ALLOW_LEGACY_RESTART=true 지정.
 #
@@ -24,9 +25,9 @@ MODE="$REQUESTED_MODE"
 # 큐에 있던 릴리스를 claim 한 뒤 deploy_runs 에 실패 2건을 남겼다.
 # 배포가 아닌 호출이 배포 실패 원장을 오염시키면 실패율·원인 분석이 전부 흐려진다.
 case "$MODE" in
-    bluegreen|code|reload|build) ;;
+    bluegreen|warm-deps|code|reload|build) ;;
     *)
-        echo "[deploy.sh] ERROR: 알 수 없는 모드 '$MODE'. bluegreen|code|reload|build 사용" >&2
+        echo "[deploy.sh] ERROR: 알 수 없는 모드 '$MODE'. bluegreen|warm-deps|code|reload|build 사용" >&2
         exit 2
         ;;
 esac
@@ -104,12 +105,110 @@ build_disk_check_path() {
     fi
 }
 
+release_dependency_key() {
+    local source_dir="$1" dependency_file
+    {
+        for dependency_file in Dockerfile requirements.runtime.lock requirements.visual.lock; do
+            # A release is built from committed HEAD, never from a dirty
+            # working tree.  The preflight key must use that same source or an
+            # unrelated local edit can make a valid warm image look missing.
+            if git -C "$source_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 && \
+                    git -C "$source_dir" cat-file -e "HEAD:${dependency_file}" 2>/dev/null; then
+                git -C "$source_dir" show "HEAD:${dependency_file}" | sha256sum | awk '{print $1}'
+            else
+                sha256sum "${source_dir}/${dependency_file}" | awk '{print $1}'
+            fi
+        done
+        printf 'profile=%s\nplaywright=%s\n' "$AADS_IMAGE_PROFILE" "$AADS_INSTALL_PLAYWRIGHT"
+    } | sha256sum | awk '{print $1}'
+}
+
+prepare_release_context() {
+    cleanup_release_context
+    RELEASE_CONTEXT_DIR="$(mktemp -d /tmp/aads-server-release.XXXXXX)"
+    git -C "$COMPOSE_DIR" archive --format=tar HEAD | tar -xf - -C "$RELEASE_CONTEXT_DIR"
+    echo "[deploy.sh] clean release context: ${RELEASE_CONTEXT_DIR} (HEAD=${AADS_RELEASE_SHA})"
+    emit_release_context_manifest
+    require_release_context_within_limit
+}
+
+build_dependency_image() {
+    local build_max_wait dependency_key dependency_image dependency_label
+    build_max_wait="${AADS_DEPLOY_BUILD_MAX_WAIT:-2400}"
+    if [[ ! "$build_max_wait" =~ ^[0-9]+$ ]] || [[ "$build_max_wait" -lt 300 ]]; then
+        build_max_wait="1200"
+    fi
+
+    dependency_key="$(release_dependency_key "$COMPOSE_DIR")"
+    dependency_image="$(release_dependency_image "$COMPOSE_DIR")"
+    if docker image inspect "$dependency_image" >/dev/null 2>&1; then
+        dependency_label="$(docker image inspect "$dependency_image" \
+            --format '{{index .Config.Labels "io.aads.dependency-key"}}' 2>/dev/null || true)"
+        if [[ "$dependency_label" != "$dependency_key" ]]; then
+            echo "[deploy.sh] ❌ immutable dependency image mismatch: image=${dependency_image}" >&2
+            return 1
+        fi
+        echo "[deploy.sh] ✅ dependency image already warm: ${dependency_image}"
+        return 0
+    fi
+
+    require_build_disk_free
+    require_dependency_lock_freshness
+    report_docker_retention_status
+    prepare_release_context
+    dependency_key="$(release_dependency_key "$RELEASE_CONTEXT_DIR")"
+    dependency_image="$(release_dependency_image "$RELEASE_CONTEXT_DIR")"
+    echo "[deploy.sh] dependency image warm-up: ${dependency_image}"
+    timeout --kill-after=30s "$build_max_wait" env DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build \
+        --target runtime-deps \
+        --build-arg "AADS_IMAGE_PROFILE=${AADS_IMAGE_PROFILE}" \
+        --build-arg "INSTALL_PLAYWRIGHT=${AADS_INSTALL_PLAYWRIGHT}" \
+        --label "io.aads.dependency-key=${dependency_key}" \
+        --tag "$dependency_image" \
+        "$RELEASE_CONTEXT_DIR"
+    dependency_label="$(docker image inspect "$dependency_image" \
+        --format '{{index .Config.Labels "io.aads.dependency-key"}}' 2>/dev/null || true)"
+    if [[ "$dependency_label" != "$dependency_key" ]]; then
+        echo "[deploy.sh] ❌ dependency image verification failed: ${dependency_image}" >&2
+        return 1
+    fi
+    audit_control "dependency-image-warmup" "$dependency_image" "success" "dependency_key=${dependency_key}"
+    cleanup_release_context
+    echo "[deploy.sh] ✅ dependency image warm-up complete: ${dependency_image}"
+}
+
+release_dependency_image() {
+    local source_dir="$1" dependency_key
+    dependency_key="$(release_dependency_key "$source_dir")" || return 1
+    printf 'aads-server-deps:%s\n' "${dependency_key:0:24}"
+}
+
+release_dependency_image_ready() {
+    local source_dir="$1" dependency_key dependency_image dependency_label
+    dependency_key="$(release_dependency_key "$source_dir")" || return 1
+    dependency_image="aads-server-deps:${dependency_key:0:24}"
+    dependency_label="$(docker image inspect "$dependency_image" \
+        --format '{{index .Config.Labels "io.aads.dependency-key"}}' 2>/dev/null || true)"
+    [[ "$dependency_label" == "$dependency_key" ]]
+}
+
 require_build_disk_free() {
-    local check_path min_free_gb min_free_kb avail_kb
+    local check_path min_free_gb min_free_kb avail_kb disk_profile cold_min_free_gb
     check_path="$(build_disk_check_path)"
-    min_free_gb="${AADS_DEPLOY_MIN_FREE_GB:-20}"
+    cold_min_free_gb="${AADS_DEPLOY_MIN_FREE_GB:-20}"
+    disk_profile="cold_dependency_build"
+    if [[ -n "${AADS_DEPLOY_MIN_FREE_GB:-}" ]]; then
+        min_free_gb="$cold_min_free_gb"
+        disk_profile="operator_override"
+    elif release_dependency_image_ready "$COMPOSE_DIR"; then
+        min_free_gb="8"
+        disk_profile="warm_dependency_image"
+    else
+        min_free_gb="$cold_min_free_gb"
+    fi
     if [[ ! "$min_free_gb" =~ ^[0-9]+$ ]] || [[ "$min_free_gb" -lt 1 ]]; then
         min_free_gb="20"
+        disk_profile="invalid_override_fallback"
     fi
     min_free_kb=$((min_free_gb * 1024 * 1024))
     avail_kb="$(df -Pk "$check_path" | awk 'NR == 2 {print $4}')"
@@ -126,12 +225,12 @@ require_build_disk_free() {
         echo "[deploy.sh] ❌ build disk preflight failed: ${check_path} available=$((avail_kb / 1024))MB, required=$((min_free_kb / 1024))MB"
         echo "[deploy.sh]    Free Docker space before retrying; this avoids slow builds that fail during image export."
         DEPLOY_DISK_FAIL_DETAIL="${check_path} available=$((avail_kb / 1024))MB, required=$((min_free_kb / 1024))MB, short=$(((min_free_kb - avail_kb) / 1024))MB"
-        audit_control "build-disk-preflight" "$check_path" "blocked" "available_kb=${avail_kb}; required_kb=${min_free_kb}"
+        audit_control "build-disk-preflight" "$check_path" "blocked" "available_kb=${avail_kb}; required_kb=${min_free_kb}; profile=${disk_profile}"
         return 1
     fi
     DEPLOY_DISK_FAIL_DETAIL=""
-    echo "[deploy.sh] ✅ build disk preflight: ${check_path} available=$((avail_kb / 1024))MB, required=$((min_free_kb / 1024))MB"
-    audit_control "build-disk-preflight" "$check_path" "success" "available_kb=${avail_kb}; required_kb=${min_free_kb}"
+    echo "[deploy.sh] ✅ build disk preflight: ${check_path} available=$((avail_kb / 1024))MB, required=$((min_free_kb / 1024))MB, profile=${disk_profile}"
+    audit_control "build-disk-preflight" "$check_path" "success" "available_kb=${avail_kb}; required_kb=${min_free_kb}; profile=${disk_profile}"
 }
 
 # 배포마다 4.24GB 이미지가 쌓이는데 회수 절차가 없었다. 2026-09-12 에 7번
@@ -304,7 +403,7 @@ require_release_image_within_limit() {
 }
 
 build_release_image() {
-    local build_max_wait existing_revision
+    local build_max_wait existing_revision dependency_key dependency_image dependency_label
     build_max_wait="${AADS_DEPLOY_BUILD_MAX_WAIT:-2400}"
     if [[ ! "$build_max_wait" =~ ^[0-9]+$ ]] || [[ "$build_max_wait" -lt 300 ]]; then
         build_max_wait="1200"
@@ -331,37 +430,45 @@ build_release_image() {
     require_build_disk_free
     require_dependency_lock_freshness
     report_docker_retention_status
-    cleanup_release_context
-    RELEASE_CONTEXT_DIR="$(mktemp -d /tmp/aads-server-release.XXXXXX)"
-    git -C "$COMPOSE_DIR" archive --format=tar HEAD | tar -xf - -C "$RELEASE_CONTEXT_DIR"
-    echo "[deploy.sh] clean release context: ${RELEASE_CONTEXT_DIR} (HEAD=${AADS_RELEASE_SHA}, build_timeout=${build_max_wait}s)"
-    emit_release_context_manifest
-    require_release_context_within_limit
-    # 로컬 빌드 캐시에만 기대면 캐시가 비워졌을 때 매번 처음부터 빌드한다.
-    # 2026-09-12 빌드 로그에서 CACHED 단계가 0개였고, 그중 pip wheel 단계
-    # 하나가 166초, 설치 단계가 269초였다(총 455초 평균). 이전 릴리스 이미지를
-    # 캐시 소스로 명시하면 로컬 캐시가 사라져도 레이어를 재사용한다.
-    # inline cache 를 함께 심어 다음 배포가 이 이미지를 캐시로 쓸 수 있게 한다.
+    prepare_release_context
+    echo "[deploy.sh] release build timeout=${build_max_wait}s"
+    # 외부 cache registry가 설정된 환경은 그 캐시도 보조 입력으로 사용한다.
+    # registry가 없어도 아래 content-addressed dependency image가 wheel과
+    # Playwright 레이어를 보존하므로 로컬 BuildKit metadata에 의존하지 않는다.
     local cache_from_args=()
-    local prev_image=""
-    prev_image="$(docker inspect "$(cat "${STATE_DIR}/.active_container" 2>/dev/null || echo aads-server)" \
-        --format '{{.Config.Image}}' 2>/dev/null || true)"
-    # `--cache-from <이미지명>` 은 BuildKit 에서 레지스트리 참조로 해석된다.
-    # 로컬에 이미지가 있어도 docker.io 에서 받으려다 실패한다. 2026-09-13 실측:
-    #   #6 importing cache manifest from aads-server:ead682ddd060
-    #   #6 ERROR: failed to configure registry cache importer: pull access denied
-    # 매 빌드마다 이 오류가 나면서 캐시는 하나도 쓰이지 않았다(CACHED 0/15).
-    # 오류만 남기고 효과가 없으므로, 레지스트리를 명시했을 때만 붙인다.
-    # 레지스트리가 없으면 BuildKit 로컬 캐시와 inline cache 에 맡긴다.
     local cache_registry="${AADS_DEPLOY_CACHE_REGISTRY:-}"
     if [[ -n "$cache_registry" ]]; then
         cache_from_args+=(--cache-from "type=registry,ref=${cache_registry}")
         echo "[deploy.sh] build cache source(registry): ${cache_registry}"
-    elif [[ -n "$prev_image" ]]; then
-        echo "[deploy.sh] build cache: 로컬 BuildKit 캐시 사용 (이전 이미지=${prev_image}, 레지스트리 미설정)"
     fi
+
+    # BuildKit cache metadata is periodically reclaimed on this host, which
+    # made unchanged wheel/Playwright layers rebuild on every release.  Keep a
+    # content-addressed dependency image instead.  Tagged image layers survive
+    # cache pruning and are shared with the release image, so this does not
+    # duplicate the 4GB runtime on disk.
+    dependency_key="$(release_dependency_key "$RELEASE_CONTEXT_DIR")"
+    dependency_image="$(release_dependency_image "$RELEASE_CONTEXT_DIR")"
+    if ! docker image inspect "$dependency_image" >/dev/null 2>&1; then
+        echo "[deploy.sh] ❌ dependency image missing: ${dependency_image}" >&2
+        echo "[deploy.sh]    Run 'bash deploy.sh warm-deps' before bluegreen; release builds stay one-image-per-SHA." >&2
+        audit_control "dependency-image-reuse" "$dependency_image" "blocked" "dependency image missing; warm-deps required"
+        return 1
+    fi
+    dependency_label="$(docker image inspect "$dependency_image" \
+        --format '{{index .Config.Labels "io.aads.dependency-key"}}' 2>/dev/null || true)"
+    if [[ "$dependency_label" != "$dependency_key" ]]; then
+        echo "[deploy.sh] ❌ immutable dependency image mismatch: image=${dependency_image}" >&2
+        audit_control "dependency-image-reuse" "$dependency_image" "blocked" \
+            "expected=${dependency_key}; actual=${dependency_label:-missing}"
+        return 1
+    fi
+    echo "[deploy.sh] ✅ dependency image reuse: ${dependency_image}"
+    audit_control "dependency-image-reuse" "$dependency_image" "success" "dependency_key=${dependency_key}"
+
     timeout --kill-after=30s "$build_max_wait" env DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build \
         --target "${AADS_DOCKER_TARGET}" \
+        --build-arg "AADS_RUNTIME_BASE=${dependency_image}" \
         --build-arg "AADS_IMAGE_PROFILE=${AADS_IMAGE_PROFILE}" \
         --build-arg "INSTALL_PLAYWRIGHT=${AADS_INSTALL_PLAYWRIGHT}" \
         --build-arg BUILDKIT_INLINE_CACHE=1 \
@@ -1485,6 +1592,12 @@ verify_active_slot() {
     fi
     echo "[deploy.sh] ✅ ACTIVE 슬롯 일관성 확인: :${active_port} (${target_container})"
 }
+
+if [[ "$MODE" == "warm-deps" ]]; then
+    trap cleanup_release_context EXIT
+    build_dependency_image
+    exit 0
+fi
 
 ACTIVE_PORT="$(get_active_port)"
 ACTIVE_CONTAINER="$(get_active_container)"
@@ -2686,7 +2799,7 @@ case "$MODE" in
         notify "✅ Blue-Green active 전환 완료: :${CURRENT_PORT} → :${NEW_PORT}"
         ;;
     *)
-        echo "[deploy.sh] ERROR: 알 수 없는 모드 '$MODE'. bluegreen|code|reload|build 사용"
+        echo "[deploy.sh] ERROR: 알 수 없는 모드 '$MODE'. bluegreen|warm-deps|code|reload|build 사용"
         record_deploy "blocked" "$MODE" "unknown mode: ${MODE}"
         exit 1
         ;;

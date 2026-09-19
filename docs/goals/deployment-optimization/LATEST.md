@@ -2,17 +2,17 @@
 
 - Goal ID: `1997c471-ba2e-4f0d-a1e3-9df0dd6d1240`
 - 주도담당: `OPS담당` (`CTO`, session `539a6086-4854-49bf-a590-8ea60704d78b`)
-- 최신 문서 버전: `1.1.0`
-- 상태: `M2 implementation-candidate`
-- 최종 갱신: `2026-09-19 18:17 KST`
+- 최신 문서 버전: `1.2.0`
+- 상태: `M4 measured-candidate`
+- 최종 갱신: `2026-09-19 23:28 KST`
 
 ## 최신 정본
 
 | 문서 | 최신 경로 | 버전 | 상태 |
 |---|---|---:|---|
-| 기획 | `v1.1.0/PLAN.md` | 1.1.0 | implementation-candidate |
-| 설계 | `v1.1.0/DESIGN.md` | 1.1.0 | implementation-candidate |
-| PRD | `v1.1.0/PRD.md` | 1.1.0 | implementation-candidate |
+| 기획 | `v1.2.0/PLAN.md` | 1.2.0 | measured-candidate |
+| 설계 | `v1.2.0/DESIGN.md` | 1.2.0 | measured-candidate |
+| PRD | `v1.2.0/PRD.md` | 1.2.0 | measured-candidate |
 
 ## 버전 정책
 
@@ -28,3 +28,4 @@
 |---:|---|---|---|
 | 1.0.0 | 2026-09-19 17:32 | 목표·6개 마일스톤·기획·설계·PRD 최초 정본 | 이 파일을 추가한 Git 커밋 |
 | 1.1.0 | 2026-09-19 18:17 | M2 fail-closed 배처 계약·구현·검증 기준 | 구현 `304cfcc0` |
+| 1.2.0 | 2026-09-19 23:28 | M4 불변 의존성 이미지·단일 릴리스 빌드 계약과 cold/warm 실측 | 이 문서와 구현을 추가한 Git 커밋 |

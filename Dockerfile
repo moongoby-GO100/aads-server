@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1.7
+ARG AADS_RUNTIME_BASE=runtime-deps
 FROM python:3.12-slim AS wheelhouse
 
 WORKDIR /build
@@ -20,7 +21,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     fi && \
     rm -rf /var/lib/apt/lists/*
 
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim AS runtime-deps
 
 WORKDIR /app
 
@@ -44,6 +45,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 ENV PATH="/usr/local/bin:${PATH}"
 ENV AADS_IMAGE_PROFILE="${AADS_IMAGE_PROFILE}" \
     AADS_INSTALL_PLAYWRIGHT="${INSTALL_PLAYWRIGHT}"
+
+FROM ${AADS_RUNTIME_BASE} AS runtime
 
 COPY . .
 
