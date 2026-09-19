@@ -102,6 +102,11 @@ def _template_name_hashes(template: Mapping[str, Any]) -> frozenset[str]:
     stable_names = template.get("stable_names")
     if isinstance(stable_names, Sequence) and not isinstance(stable_names, (str, bytes)):
         names.extend(stable_names)
+    names.extend(
+        rule.get("name") or rule.get("accessible_name") or rule.get("label")
+        for rule in _required_state_rules(template)
+        if isinstance(rule, Mapping)
+    )
     for item in names:
         value = (
             item.get("name") or item.get("accessible_name") or item.get("label")
@@ -245,6 +250,7 @@ def _required_anchor_present(anchor: Mapping[str, Any], nodes: Sequence[Mapping[
 
 
 def _required_state_present(rule: Mapping[str, Any], nodes: Sequence[Mapping[str, Any]]) -> bool:
+    """Check required state using normalized nodes, never raw accessible text."""
     role = str(rule.get("role") or "").strip().lower()
     name_hash = _name_hash(rule.get("name") or rule.get("accessible_name") or rule.get("label"))
     expected = rule.get("states") if isinstance(rule.get("states"), Mapping) else {}
@@ -252,14 +258,11 @@ def _required_state_present(rule: Mapping[str, Any], nodes: Sequence[Mapping[str
     if not expected:
         return True
     for node in nodes:
-        if not isinstance(node, Mapping):
-            continue
         if role and str(node.get("role") or "").strip().lower() != role:
             continue
-        raw_name = node.get("accessible_name") or node.get("name") or node.get("label")
-        if name_hash and _name_hash(raw_name) != name_hash:
+        if name_hash and node.get("name_hash") != name_hash:
             continue
-        observed = _observed_states(node)
+        observed = node.get("states") if isinstance(node.get("states"), Mapping) else {}
         if all(observed.get(str(key).lower()) == value for key, value in expected.items()):
             return True
     return False
@@ -271,10 +274,7 @@ def assess_revisit(
 ) -> dict[str, Any]:
     """Choose reuse, rediscovery, or Human Gateway without treating ambiguity as success."""
     template = template or {}
-    if not current_nodes:
-        return {"decision": "rediscover", "reason": "aria_missing_dom_fallback_required", "similarity": 0.0,
-                "human_gateway_required": False, "signature": None}
-    signature = build_partial_signature(current_nodes, area_key=area_key, template=template)
+    signature = build_partial_signature(current_nodes or [], area_key=area_key, template=template)
     current = signature["structure"]["nodes"]
     required = template.get("required_anchors") if isinstance(template.get("required_anchors"), Sequence) else []
     missing = [anchor for anchor in required if isinstance(anchor, Mapping) and not _required_anchor_present(anchor, current)]
@@ -282,9 +282,12 @@ def assess_revisit(
         return {"decision": "human_gateway", "reason": "critical_required_anchor_missing", "similarity": 0.0,
                 "human_gateway_required": True, "signature": signature}
     required_state_rules = _required_state_rules(template)
-    if any(not _required_state_present(rule, current_nodes) for rule in required_state_rules):
+    if any(not _required_state_present(rule, current) for rule in required_state_rules):
         return {"decision": "human_gateway", "reason": "critical_required_state_changed", "similarity": 0.0,
                 "human_gateway_required": True, "signature": signature}
+    if not current_nodes:
+        return {"decision": "rediscover", "reason": "aria_missing_dom_fallback_required", "similarity": 0.0,
+                "human_gateway_required": False, "signature": None}
     tokens = [_node_token(node) for node in current]
     if not current or len(tokens) != len(set(tokens)):
         return {"decision": "rediscover", "reason": "ambiguous_aria_structure", "similarity": 0.0,
