@@ -35,6 +35,8 @@ logger = structlog.get_logger()
 ALLOWED_ROOTS: tuple[str, ...] = (
     "/app/docs",
     "/app/reports",
+    "/host/aads-server/docs",
+    "/host/aads-server/reports",
     "/app/app/static",
     "/app/generated-media-static",
     "/root/aads/aads-docs",
@@ -57,6 +59,7 @@ FALLBACK_DIRS: tuple[Path, ...] = (
     Path("/app/app/static/docs"),
     Path("/app/reports"),
     Path("/app/docs"),
+    Path("/host/aads-server"),
     Path("/root/aads/aads-dashboard/public/exports"),
     Path("/root/aads/aads-dashboard/public/reports"),
     Path("/var/www/certbot/exports"),
@@ -73,6 +76,8 @@ LEGACY_PATH_ALIASES: dict[str, Path] = {
 }
 
 HOST_ALIASES: tuple[tuple[str, str], ...] = (
+    ("/root/aads/aads-server/docs/", "/host/aads-server/docs/"),
+    ("/root/aads/aads-server/reports/", "/host/aads-server/reports/"),
     ("/root/aads/aads-server/app/", "/app/app/"),
     ("/root/aads/aads-server/", "/app/"),
 )
