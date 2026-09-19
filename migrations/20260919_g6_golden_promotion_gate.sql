@@ -63,10 +63,21 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_browser_learned_version_lifecycle ON browser_learned_artifact_versions;
-CREATE TRIGGER trg_browser_learned_version_lifecycle
-BEFORE INSERT OR UPDATE ON browser_learned_artifact_versions
-FOR EACH ROW EXECUTE FUNCTION enforce_browser_learned_version_lifecycle();
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_trigger
+         WHERE tgname = 'trg_browser_learned_version_lifecycle'
+           AND tgrelid = 'browser_learned_artifact_versions'::regclass
+           AND NOT tgisinternal
+    ) THEN
+        CREATE TRIGGER trg_browser_learned_version_lifecycle
+        BEFORE INSERT OR UPDATE ON browser_learned_artifact_versions
+        FOR EACH ROW EXECUTE FUNCTION enforce_browser_learned_version_lifecycle();
+    END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS browser_promotion_ledgers (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -93,9 +104,27 @@ CREATE TABLE IF NOT EXISTS browser_promotion_ledgers (
 ALTER TABLE ops_skill_versions
     ADD COLUMN IF NOT EXISTS previous_active_id UUID REFERENCES ops_skill_versions(id),
     ADD COLUMN IF NOT EXISTS quarantine_reason TEXT;
-ALTER TABLE ops_skill_versions DROP CONSTRAINT IF EXISTS ops_skill_versions_status_check;
-ALTER TABLE ops_skill_versions ADD CONSTRAINT ops_skill_versions_status_check
-    CHECK (status IN ('draft','candidate','shadow','active','deprecated','quarantined'));
+DO $$
+DECLARE
+    existing_definition TEXT;
+BEGIN
+    SELECT pg_get_constraintdef(oid)
+      INTO existing_definition
+      FROM pg_constraint
+     WHERE conrelid = 'ops_skill_versions'::regclass
+       AND conname = 'ops_skill_versions_status_check';
+
+    IF existing_definition IS NULL THEN
+        ALTER TABLE ops_skill_versions
+            ADD CONSTRAINT ops_skill_versions_status_check
+            CHECK (status IN ('draft','candidate','shadow','active','deprecated','quarantined'));
+    ELSIF existing_definition NOT ILIKE '%quarantined%'
+       OR existing_definition NOT ILIKE '%deprecated%'
+       OR existing_definition NOT ILIKE '%shadow%' THEN
+        RAISE EXCEPTION 'incompatible ops_skill_versions_status_check; additive migration refused';
+    END IF;
+END
+$$;
 
 CREATE OR REPLACE FUNCTION prevent_ops_skill_version_contract_mutation()
 RETURNS trigger LANGUAGE plpgsql AS $$
@@ -131,7 +160,18 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_ops_skill_version_immutable ON ops_skill_versions;
-CREATE TRIGGER trg_ops_skill_version_immutable
-BEFORE INSERT OR UPDATE ON ops_skill_versions
-FOR EACH ROW EXECUTE FUNCTION prevent_ops_skill_version_contract_mutation();
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_trigger
+         WHERE tgname = 'trg_ops_skill_version_immutable'
+           AND tgrelid = 'ops_skill_versions'::regclass
+           AND NOT tgisinternal
+    ) THEN
+        CREATE TRIGGER trg_ops_skill_version_immutable
+        BEFORE INSERT OR UPDATE ON ops_skill_versions
+        FOR EACH ROW EXECUTE FUNCTION prevent_ops_skill_version_contract_mutation();
+    END IF;
+END
+$$;

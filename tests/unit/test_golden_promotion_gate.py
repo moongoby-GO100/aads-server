@@ -78,6 +78,9 @@ def test_database_trigger_blocks_direct_active_insert_and_payload_mutation():
     assert "learned artifact lifecycle bypass" in sql
     assert "BEFORE INSERT OR UPDATE ON ops_skill_versions" in sql
     assert "skill versions must enter as candidate" in sql
+    assert "DROP CONSTRAINT" not in sql.upper()
+    assert "DROP TRIGGER" not in sql.upper()
+    assert "TRUNCATE" not in sql.upper()
 
 
 def test_runtime_promotion_paths_are_tenant_scoped_idempotent_and_transactional():
