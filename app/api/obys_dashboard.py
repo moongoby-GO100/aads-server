@@ -8,9 +8,14 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.concurrency import run_in_threadpool
 
 from app.auth import get_current_user
+from app.core.obys_tenant import require_legacy_obys_access
 from app.services import yeoljeong_dashboard_service as dash_svc
 
-router = APIRouter(prefix="/yeoljeong-dashboard", tags=["yeoljeong-dashboard"])
+router = APIRouter(
+    prefix="/yeoljeong-dashboard",
+    tags=["yeoljeong-dashboard"],
+    dependencies=[Depends(require_legacy_obys_access)],
+)
 logger = logging.getLogger(__name__)
 
 

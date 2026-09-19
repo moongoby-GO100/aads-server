@@ -14,9 +14,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
+from app.core.obys_tenant import require_legacy_obys_access
 from app.services import yeoljeong_accounting_service as svc
 
-router = APIRouter(prefix="/yeoljeong-accounting", tags=["yeoljeong-accounting"])
+router = APIRouter(
+    prefix="/yeoljeong-accounting",
+    tags=["yeoljeong-accounting"],
+    dependencies=[Depends(require_legacy_obys_access)],
+)
 logger = logging.getLogger(__name__)
 
 

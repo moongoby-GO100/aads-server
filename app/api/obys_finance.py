@@ -12,12 +12,17 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
+from app.core.obys_tenant import require_legacy_obys_access
 from app.services.yeoljeong_bank_collector_harness import (
     run_shinhan_windows_collector_harness,
 )
 from app.services import yeoljeong_finance_service as svc
 
-router = APIRouter(prefix="/yeoljeong-finance", tags=["yeoljeong-finance"])
+router = APIRouter(
+    prefix="/yeoljeong-finance",
+    tags=["yeoljeong-finance"],
+    dependencies=[Depends(require_legacy_obys_access)],
+)
 logger = logging.getLogger(__name__)
 
 
