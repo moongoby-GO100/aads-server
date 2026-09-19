@@ -10,8 +10,9 @@
 
 **같은 뜻의 API 를 새로 만들지 않는다** (지시서 2항):
   - 지시 전송  → `POST /ohvis/console/command`. 기록은 `ohvis_task_manager.create_task()`,
-    실행은 `chat_service.trigger_ai_reaction()` — 둘 다 기존 계약이고 여기서는
-    **잇기만** 한다. 2026-09-18 까지는 화면이 `POST /ohvis/tasks` 를 직접 불렀는데
+    실행은 저장된 레시피가 있으면 `work_recipe.orchestrator.run_directive()`, 없으면
+    `chat_service.trigger_ai_reaction()` 으로 이어진다. 2026-09-18 까지는 화면이
+    `POST /ohvis/tasks` 를 직접 불렀는데
     그 경로는 INSERT 만 하고 pending 을 소비하는 워커가 저장소에 없어서, 보낸
     지시가 영원히 pending 으로 남았다(`e41f2c94` 가 그 증거다). 그러니 실행
     트리거가 붙은 이 경로만 쓴다 — 그리고 그 트리거는 원격 프롬프트 주입이
@@ -691,6 +692,80 @@ async def run_console_command(
     if not task_id:
         # create_task 는 예외를 삼키고 None 을 준다 — 그 None 이 여기서 끝이다.
         raise HTTPException(status_code=502, detail="ohvis_task_create_failed")
+
+    # 저장된 WorkRecipe와 정확히 일치하는 지시는 채팅 LLM을 거치지 않고 바로
+    # 재생한다. task_id를 recorder에 넘겨 recipe_runs와 ohvis_tasks를 같은 실행
+    # 증거로 묶고, 결과도 이 행에 닫아 오비스 화면이 즉시 읽게 한다.
+    try:
+        recipe_result = await run_directive(
+            title,
+            tenant_id,
+            triggered_by=_decided_by(context),
+            task_id=task_id,
+        )
+    except ApprovalRequired as exc:
+        approval_result = {
+            "status": "approval_required",
+            "approval_id": exc.approval_id,
+            "run_id": str(exc.run_id) if exc.run_id else None,
+            "risk": exc.risk_level,
+        }
+        await complete_ohvis_task(
+            task_id,
+            status="done",
+            result=approval_result,
+            ohvis_judgement="승인 대기",
+        )
+        return {
+            "task_id": task_id,
+            "session_id": str(session_uuid),
+            **approval_result,
+        }
+    except ValueError as exc:
+        reason = _text(str(exc), 300)
+        await complete_ohvis_task(
+            task_id,
+            status="error",
+            result={"error": reason, "summary": f"레시피를 실행하지 못했습니다: {reason}"},
+            ohvis_judgement="레시피 실행 실패",
+        )
+        raise HTTPException(status_code=422, detail=reason) from exc
+    except Exception as exc:
+        reason = _text(str(exc), 300)
+        logger.warning(
+            "ohvis_console_recipe_dispatch_failed",
+            task_id=task_id,
+            error=reason,
+        )
+        await complete_ohvis_task(
+            task_id,
+            status="error",
+            result={"error": reason, "summary": f"레시피 실행 경로가 실패했습니다: {reason}"},
+            ohvis_judgement="레시피 실행 경로 실패",
+        )
+        raise HTTPException(
+            status_code=502, detail=f"recipe_dispatch_failed: {reason}"
+        ) from exc
+
+    if recipe_result is not None:
+        result_payload = recipe_result.to_dict()
+        recipe_status = str(result_payload.get("status") or "")
+        task_status = "done" if recipe_status == "success" else "error"
+        await complete_ohvis_task(
+            task_id,
+            status=task_status,
+            result=result_payload,
+            ohvis_judgement=(
+                "저장 레시피 재생 완료" if task_status == "done" else "저장 레시피 재생 실패"
+            ),
+        )
+        return {
+            "task_id": task_id,
+            "session_id": str(session_uuid),
+            "status": task_status,
+            "execution": "work_recipe",
+            "result": result_payload,
+        }
 
     try:
         await _dispatch_ai_reaction(str(session_uuid), title, task_id)

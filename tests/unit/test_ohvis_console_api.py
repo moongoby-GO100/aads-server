@@ -604,6 +604,11 @@ SESSION_THEIRS = console._uuid_or_none("3f8b3f2c-0000-4000-8000-0000000000bb")
 def _command_pool(monkeypatch, values: list) -> FakeConn:
     conn = FakeConn(values=values)
     monkeypatch.setattr(console, "get_pool", lambda: FakePool(conn))
+
+    async def no_matching_recipe(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(console, "run_directive", no_matching_recipe)
     return conn
 
 
@@ -707,6 +712,50 @@ def test_command_creates_a_running_row_and_triggers_the_ai(monkeypatch):
         "session_id": str(SESSION_MINE),
         "status": "running",
     }
+
+
+def test_command_runs_matching_recipe_and_closes_ohvis_task(monkeypatch):
+    """정확히 매칭되는 레시피는 LLM 채팅으로 보내지 않고 결과를 task에 기록한다."""
+    _command_pool(monkeypatch, [SESSION_MINE])
+    seen: dict = {}
+
+    async def fake_create(*, session_id, title, task_type):
+        return "task-recipe"
+
+    class RecipeResult:
+        def to_dict(self):
+            return {"status": "success", "run_id": RUN_ID, "llm_calls": 0}
+
+    async def fake_run(directive, tenant_id, **kwargs):
+        seen.update(directive=directive, tenant_id=tenant_id, **kwargs)
+        return RecipeResult()
+
+    async def fake_complete(task_id, *, status=None, result=None, ohvis_judgement=None):
+        seen.update(
+            completed_task_id=task_id,
+            completed_status=status,
+            completed_result=result,
+            ohvis_judgement=ohvis_judgement,
+        )
+        return True
+
+    async def should_not_dispatch(*args, **kwargs):
+        raise AssertionError("매칭된 레시피를 채팅 LLM으로 보내면 안 된다")
+
+    monkeypatch.setattr(console, "create_ohvis_task", fake_create)
+    monkeypatch.setattr(console, "run_directive", fake_run)
+    monkeypatch.setattr(console, "complete_ohvis_task", fake_complete)
+    monkeypatch.setattr(console, "_dispatch_ai_reaction", should_not_dispatch)
+
+    body = console.ConsoleCommandIn(title="aads_login_public_check")
+    result = asyncio.run(console.run_console_command(body, context=ctx()))
+
+    assert seen["task_id"] == "task-recipe"
+    assert seen["tenant_id"] == TENANT
+    assert seen["completed_status"] == "done"
+    assert seen["completed_result"]["run_id"] == RUN_ID
+    assert result["execution"] == "work_recipe"
+    assert result["status"] == "done"
 
 
 def test_command_marks_the_row_error_and_502s_when_the_trigger_blows_up(monkeypatch):
