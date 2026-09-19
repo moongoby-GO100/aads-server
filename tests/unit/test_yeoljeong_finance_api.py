@@ -1,4 +1,5 @@
 import base64
+import os
 from io import BytesIO
 from pathlib import Path
 
@@ -7,7 +8,9 @@ from fastapi import BackgroundTasks, FastAPI, UploadFile
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
-from app.api import yeoljeong_finance as api
+os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-that-is-at-least-32-bytes-long")
+
+from app.api import obys_finance as api
 
 
 def test_join_request_accepts_contract_autofill_profile():
@@ -74,12 +77,24 @@ def test_employee_signature_http_flow_records_authenticated_audit(tmp_path, monk
     monkeypatch.setattr(api.svc, "DATA_DIR", tmp_path)
     monkeypatch.setattr(api.svc, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")
     monkeypatch.setattr(api.svc, "_run_db", _disable_finance_db)
-    employee = {"email": "member@example.com", "is_admin": False}
-    admin = {"email": "owner@example.com", "is_admin": True}
+    tenant_id = "15055cac-71b0-45ec-b714-7093dde189ff"
+    membership = {"tenant_id": tenant_id, "status": "active"}
+    employee = {
+        "email": "member@example.com",
+        "is_admin": False,
+        "tenant_id": tenant_id,
+        "current_membership": membership,
+    }
+    admin = {
+        "email": "owner@example.com",
+        "is_admin": True,
+        "tenant_id": tenant_id,
+        "current_membership": membership,
+    }
     api.svc._write("employee_join_requests", [{
         "id": "join-mia", "name": "가입 직원", "email": employee["email"],
         "address": "서울시 직원 주소", "phone": "010-1234-5678", "birth_date": "1990-01-01",
-        "business_id": "biz-mia", "branch": "열정국밥_미아점", "status": "approved",
+        "tenant_id": tenant_id, "business_id": "biz-mia", "branch": "열정국밥_미아점", "status": "approved",
     }])
     saved = api.svc.save_contract({
         "employee_request_id": "join-mia", "business_id": "biz-mia", "branch": "열정국밥_미아점",
