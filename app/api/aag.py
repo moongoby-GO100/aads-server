@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from datetime import datetime
+from time import perf_counter
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -27,6 +28,12 @@ from app.services.aag_governance import (
     require_project_role,
 )
 from app.services.aag_ingest_v2 import IngestConflictError, ingest_graph
+from app.services.aag_query_v2 import (
+    AAGQueryError,
+    consumer_telemetry,
+    query_findings_page,
+    record_consumer_event,
+)
 from app.services.aag_tools import filter_findings, stale_minutes
 from tools.aag.v2_contract import CANONICALIZATION_VERSION, STABLE_KEY_VERSION
 
@@ -374,6 +381,94 @@ async def get_brief_v2(
     )
 
 
+@router.get("/v2/findings")
+async def get_findings_v2(
+    project: str,
+    user: CurrentUser,
+    repository_id: str | None = None,
+    target_ref: str | None = None,
+    governance_scope: str = "default",
+    snapshot_id: UUID | None = None,
+    cursor: str | None = None,
+    page_size: int = Query(50, ge=1, le=200),
+    rule: str | None = None,
+    severity: str | None = None,
+    path_prefix: str | None = None,
+    stable_finding_key: str | None = None,
+    status: str | None = None,
+    owner: str | None = None,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_aag_consumer: str | None = Header(default=None, alias="X-AAG-Consumer"),
+) -> dict[str, Any]:
+    """Return deterministic findings pages pinned to one immutable snapshot."""
+    _require_v2_enabled()
+    normalized = normalize_project(project)
+    try:
+        await require_project_role(
+            _actor(user), normalized, {"viewer", "proposer", "approver", "admin"},
+        )
+    except AAGAuthorizationError as exc:
+        raise _governance_error(exc) from exc
+    started = perf_counter()
+    try:
+        result = await query_findings_page(
+            project=normalized,
+            repository_id=repository_id,
+            target_ref=target_ref,
+            governance_scope=governance_scope,
+            snapshot_id=str(snapshot_id) if snapshot_id else None,
+            cursor=cursor,
+            page_size=page_size,
+            rule=rule,
+            severity=severity,
+            path_prefix=path_prefix,
+            stable_finding_key=stable_finding_key,
+            status=status,
+            owner=owner,
+        )
+    except AAGQueryError as exc:
+        await record_consumer_event(
+            consumer=x_aag_consumer or "http-unknown", api_version="v2",
+            endpoint="/aag/v2/findings", project=normalized, outcome="query_error",
+            request_id=x_request_id, repository_id=repository_id,
+            target_ref=target_ref, latency_ms=int((perf_counter() - started) * 1000),
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await record_consumer_event(
+        consumer=x_aag_consumer or "http-unknown", api_version="v2",
+        endpoint="/aag/v2/findings", project=normalized, outcome="success",
+        request_id=x_request_id, repository_id=result["ref"]["repository_id"],
+        target_ref=result["ref"]["target_ref"], snapshot_id=result["snapshot_id"],
+        latency_ms=int((perf_counter() - started) * 1000),
+    )
+    return result
+
+
+@router.get("/v2/consumer-telemetry")
+async def get_consumer_telemetry(
+    project: str,
+    user: CurrentUser,
+    hours: int = Query(24, ge=1, le=24 * 90),
+) -> dict[str, Any]:
+    """Report residual v1 consumers before any retirement decision."""
+    _require_v2_enabled()
+    normalized = normalize_project(project)
+    try:
+        await require_project_role(_actor(user), normalized, {"admin"})
+    except AAGAuthorizationError as exc:
+        raise _governance_error(exc) from exc
+    rows = await consumer_telemetry(normalized, hours)
+    return {
+        "project": normalized,
+        "window_hours": hours,
+        "consumers": rows,
+        "v1_requests": sum(row["requests"] for row in rows if row["api_version"] == "v1"),
+        "v1_retirement_ready": bool(rows) and not any(
+            row["api_version"] == "v1" and row["requests"] > 0 for row in rows
+        ),
+    }
+
+
 @router.post("/v2/exceptions", status_code=201)
 async def request_exception(
     body: ExceptionRequest, user: CurrentUser,
@@ -469,7 +564,10 @@ async def create_override_request(
 async def get_findings(
     project: str, rule: str | None = None, severity: str | None = None,
     path_prefix: str | None = None, limit: int = Query(50, ge=1, le=200),
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_aag_consumer: str | None = Header(default=None, alias="X-AAG-Consumer"),
 ) -> dict[str, Any]:
+    started = perf_counter()
     await _ensure_table()
     async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
@@ -477,14 +575,29 @@ async def get_findings(
             project,
         )
     if not row:
+        await record_consumer_event(
+            consumer=x_aag_consumer or "http-unknown", api_version="v1",
+            endpoint="/aag/findings", project=project, outcome="not_found",
+            request_id=x_request_id, latency_ms=int((perf_counter() - started) * 1000),
+        )
         return {"project": project.upper(), "generated_at": None, "stale_minutes": None, "findings": [], "reason": "스냅샷이 없습니다."}
     raw = row["findings"]
     findings = json.loads(raw) if isinstance(raw, str) else raw
-    return {"project": project.upper(), "generated_at": row["generated_at"], "stale_minutes": stale_minutes(row["generated_at"]), "findings": filter_findings(findings, rule=rule, severity=severity, path_prefix=path_prefix, limit=limit)}
+    result = {"project": project.upper(), "generated_at": row["generated_at"], "stale_minutes": stale_minutes(row["generated_at"]), "findings": filter_findings(findings, rule=rule, severity=severity, path_prefix=path_prefix, limit=limit)}
+    await record_consumer_event(
+        consumer=x_aag_consumer or "http-unknown", api_version="v1",
+        endpoint="/aag/findings", project=project, outcome="success",
+        request_id=x_request_id, latency_ms=int((perf_counter() - started) * 1000),
+    )
+    return result
 
 
 @router.get("/projects")
-async def get_projects() -> dict[str, Any]:
+async def get_projects(
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_aag_consumer: str | None = Header(default=None, alias="X-AAG-Consumer"),
+) -> dict[str, Any]:
+    started = perf_counter()
     await _ensure_table()
     async with get_pool().acquire() as conn:
         rows = await conn.fetch(
@@ -492,4 +605,9 @@ async def get_projects() -> dict[str, Any]:
                       node_count, edge_count, commit_sha
                  FROM aag_graph_snapshots ORDER BY project, generated_at DESC"""
         )
+    await record_consumer_event(
+        consumer=x_aag_consumer or "http-unknown", api_version="v1",
+        endpoint="/aag/projects", project="ALL", outcome="success",
+        request_id=x_request_id, latency_ms=int((perf_counter() - started) * 1000),
+    )
     return {"projects": [{**dict(row), "stale_minutes": stale_minutes(row["generated_at"])} for row in rows]}

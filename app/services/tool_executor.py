@@ -5588,6 +5588,8 @@ class ToolExecutor:
             project=str(inp.get("project") or "AADS"),
             rule=inp.get("rule"), severity=inp.get("severity"),
             path_prefix=inp.get("path_prefix"), limit=inp.get("limit", 50),
+            repository_id=inp.get("repository_id"), target_ref=inp.get("target_ref"),
+            governance_scope=str(inp.get("governance_scope") or "default"),
         )
 
     async def _aag_brief(self, inp: Dict[str, Any]) -> str:
@@ -5596,6 +5598,8 @@ class ToolExecutor:
         return await aag_brief_text(
             project=str(inp.get("project") or "AADS"),
             target=str(inp.get("target") or ""),
+            repository_id=inp.get("repository_id"), target_ref=inp.get("target_ref"),
+            governance_scope=str(inp.get("governance_scope") or "default"),
         )
 
     # ── 첨부파일 재읽기 도구 ─────────────────────────────────────────────────
