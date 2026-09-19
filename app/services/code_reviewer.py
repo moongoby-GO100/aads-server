@@ -243,14 +243,22 @@ _REVIEW_FEEDBACK_TEXT_CHARS = 2_000
 _REVIEW_FEEDBACK_MAX_DEPTH = 8
 _REVIEW_SECRET_PATTERNS = (
     re.compile(r"(?i)(authorization\s*:\s*bearer\s+)([^\s,;]+)"),
-    re.compile(r"(?i)(anthropic_auth_token\s*[=:]\s*)([^\s,;]+)"),
-    re.compile(r"\bsk-ant-[A-Za-z0-9_-]+"),
+    re.compile(r"(?i)(x-api-key\s*[=:]\s*)([^\s\"',;}]+)"),
+    re.compile(
+        r"(?i)((?:anthropic_auth_token|anthropic_api_key_fallback|api[_-]?key|"
+        r"access[_-]?token|refresh[_-]?token|oauth[_-]?token|password|passwd|secret)"
+        r"\s*[=:]\s*)([^\s\"',;}]+)"
+    ),
+    re.compile(r"(?i)(\bbearer\s+)([A-Za-z0-9._~+/=-]{8,})"),
+    re.compile(r"\bsk-(?:ant-)?[A-Za-z0-9_-]{8,}\b", re.IGNORECASE),
 )
 
 
 def _sanitize_review_text(value: object, *, limit: int = _REVIEW_EVIDENCE_PREVIEW_CHARS) -> str:
     """Redact credentials and bound text that may be persisted or logged."""
     text = value if isinstance(value, str) else str(value)
+    if "BEGIN OPENSSH PRIVATE KEY" in text or "BEGIN RSA PRIVATE KEY" in text:
+        return "[REDACTED PRIVATE KEY MATERIAL]"[:limit]
     for pattern in _REVIEW_SECRET_PATTERNS:
         text = pattern.sub(
             r"\1[REDACTED]" if pattern.groups >= 2 else "[REDACTED]",

@@ -70,6 +70,25 @@ def test_review_feedback_redacts_nested_synthetic_credentials():
     assert "[REDACTED]" in serialized
 
 
+def test_review_evidence_redacts_common_header_env_and_oauth_secret_forms():
+    reviewer = _load_reviewer()
+    samples = (
+        "x-api-key: synthetic-x-api-key-value",
+        "ANTHROPIC_API_KEY_FALLBACK=synthetic-fallback-value",
+        "accessToken=synthetic-access-token-value",
+        "refresh_token: synthetic-refresh-token-value",
+        "password=synthetic-password-value",
+        "Bearer synthetic-oauth-token-value",
+        "sk-synthetic-openai-token-value",
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nsynthetic-private-key-value",
+    )
+
+    for sample in samples:
+        sanitized = reviewer._sanitize_review_text(sample, limit=2_000)
+        assert "synthetic" not in sanitized
+        assert "REDACTED" in sanitized
+
+
 def test_provider_prefixes_keep_their_transport_contract():
     asyncio.run(_provider_prefixes_keep_their_transport_contract())
 
