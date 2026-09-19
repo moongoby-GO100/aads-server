@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.auth import get_current_user
 from app.core.db_pool import get_pool
+from app.services.aag_brief_v2 import build_brief_v2
 from app.services.aag_governance import (
     AAGAuthorizationError,
     AAGWorkflowError,
@@ -258,6 +259,7 @@ async def get_latest_snapshot_v2(
                       p.project, p.repository_id, p.target_ref, p.governance_scope,
                       p.resolved_commit_sha, p.expected_target_ref_head_sha,
                       p.generated_at, p.verified_at, s.content_fingerprint,
+                      s.scanner_version, s.ruleset_digest, s.scan_scope_digest,
                       s.canonicalization_version, s.stable_key_version,
                       s.stats, s.nodes, s.edges, s.findings, s.unresolved,
                       s.node_count, s.edge_count, s.finding_count,
@@ -304,12 +306,72 @@ async def get_latest_snapshot_v2(
         },
         "source": "central_db",
         "authoritative": True,
+        "analyzer": {
+            "name": "scan_aads",
+            "version": row["scanner_version"],
+            "ruleset_digest": row["ruleset_digest"],
+            "scan_scope_digest": row["scan_scope_digest"],
+        },
         "generated_at": row["generated_at"],
         "verified_at": row["verified_at"],
         "first_published_at": row["first_published_at"],
         "freshness": {"status": "fresh", "age_minutes": freshness_minutes},
         "limitation": [],
     }
+
+
+@router.get("/v2/brief")
+async def get_brief_v2(
+    project: str,
+    repository_id: str,
+    target_ref: str,
+    target: str,
+    user: CurrentUser,
+    governance_scope: str = "default",
+) -> dict[str, Any]:
+    """Return a commit-pinned brief without absence-of-impact claims."""
+    latest = await get_latest_snapshot_v2(
+        project=project,
+        repository_id=repository_id,
+        target_ref=target_ref,
+        governance_scope=governance_scope,
+        user=user,
+    )
+    snapshot = latest["snapshot"]
+    target_key = target.strip().replace("\\", "/")
+    matches = []
+    for finding in snapshot.get("findings") or []:
+        identities = (
+            finding.get("file"), finding.get("module"), finding.get("path"),
+            finding.get("key"), finding.get("semantic_target"),
+        )
+        if any(
+            target_key and target_key in str(value or "").replace("\\", "/")
+            for value in identities
+        ):
+            matches.append(finding)
+    status = "detected" if matches else (
+        "partial" if snapshot.get("unresolved") else "not_detected"
+    )
+    return build_brief_v2(
+        snapshot={
+            "snapshot_id": snapshot["id"],
+            "observation_id": latest["observation_id"],
+            "run_id": latest["run_id"],
+            **latest["ref"],
+            "resolved_commit_sha": latest["commit"]["resolved"],
+            "expected_target_ref_head_sha": latest["commit"]["expected_ref_head"],
+            "source": latest["source"],
+            "authoritative": latest["authoritative"],
+            "verified_at": latest["verified_at"],
+            "analyzer": latest["analyzer"],
+            "stats": snapshot.get("stats") or {},
+            "truncated": False,
+        },
+        target=target_key,
+        findings=matches,
+        status=status,
+    )
 
 
 @router.post("/v2/exceptions", status_code=201)
