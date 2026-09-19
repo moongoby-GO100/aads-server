@@ -625,38 +625,48 @@ def _account_login_row(*, tenant_id: str, profile_id: str, login_status: str, ap
     }
 
 
+class _FirstLoginVaultConn:
+    def __init__(self, *, tenant_id: str, profile_id: str, vault_id: UUID, vault_row):
+        self.tenant_id = tenant_id
+        self.profile_id = profile_id
+        self.vault_id = vault_id
+        self.vault_row = vault_row
+        self.calls = []
+
+    def transaction(self):
+        return _AsyncContext()
+
+    async def fetchrow(self, query, *args):
+        self.calls.append((query, args))
+        if "FROM authenticated_site_profiles" in query:
+            return {
+                "id": self.profile_id,
+                "site_key": "meta.business",
+                "base_origin": "https://business.facebook.com",
+            }
+        if "FROM agent_vault_credentials" in query:
+            assert args == (self.vault_id, UUID(self.tenant_id))
+            assert "tenant_id=$2" in query and "is_active=TRUE" in query
+            return self.vault_row
+        raise AssertionError(f"unexpected SQL after Vault lookup: {query}")
+
+
 async def test_first_login_rejects_client_work_key_outside_vault_scope(collector_modules, monkeypatch):
     collector, _queue_module = collector_modules
     tenant_id = "00000000-0000-0000-0000-000000000001"
     profile_id = "00000000-0000-0000-0000-000000000010"
     vault_id = UUID("00000000-0000-0000-0000-000000000099")
 
-    class Conn:
-        def __init__(self):
-            self.calls = []
-
-        def transaction(self):
-            return _AsyncContext()
-
-        async def fetchrow(self, query, *args):
-            self.calls.append((query, args))
-            if "FROM authenticated_site_profiles" in query:
-                return {
-                    "id": profile_id,
-                    "site_key": "meta.business",
-                    "base_origin": "https://business.facebook.com",
-                }
-            if "FROM agent_vault_credentials" in query:
-                assert args == (vault_id, UUID(tenant_id))
-                assert "tenant_id=$2" in query and "is_active=TRUE" in query
-                return {
-                    "id": vault_id,
-                    "work_key": "approved-vault-work",
-                    "origin": "https://business.facebook.com",
-                }
-            raise AssertionError(f"unexpected SQL after scope mismatch: {query}")
-
-    conn = Conn()
+    conn = _FirstLoginVaultConn(
+        tenant_id=tenant_id,
+        profile_id=profile_id,
+        vault_id=vault_id,
+        vault_row={
+            "id": vault_id,
+            "work_key": "approved-vault-work",
+            "origin": "https://business.facebook.com",
+        },
+    )
     monkeypatch.setenv("DATABASE_URL", "postgresql://enabled-for-test")
     monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _CollectorPool(conn))
 
@@ -668,6 +678,33 @@ async def test_first_login_rejects_client_work_key_outside_vault_scope(collector
             account_label="primary",
             vault_reference=str(vault_id),
             work_key="client-selected-work",
+        )
+
+    assert len(conn.calls) == 2
+
+
+async def test_first_login_inactive_vault_uses_not_found_contract(collector_modules, monkeypatch):
+    collector, _queue_module = collector_modules
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+    profile_id = "00000000-0000-0000-0000-000000000010"
+    vault_id = UUID("00000000-0000-0000-0000-000000000099")
+
+    conn = _FirstLoginVaultConn(
+        tenant_id=tenant_id,
+        profile_id=profile_id,
+        vault_id=vault_id,
+        vault_row=None,
+    )
+    monkeypatch.setenv("DATABASE_URL", "postgresql://enabled-for-test")
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _CollectorPool(conn))
+
+    with pytest.raises(ValueError, match="vault_reference_not_found"):
+        await collector.request_first_login(
+            tenant_id=tenant_id,
+            user_id="ceo",
+            site_profile_id=profile_id,
+            account_label="primary",
+            vault_reference=str(vault_id),
         )
 
     assert len(conn.calls) == 2

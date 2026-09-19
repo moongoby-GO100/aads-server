@@ -19,8 +19,8 @@ from app.services.authenticated_site_collector import (
     list_site_profiles,
     mark_collection_job_action_required,
     normalize_recipe_extension,
-    request_first_login,
     recover_account_login,
+    request_first_login,
     resume_collection_job,
     upsert_site_profile,
 )
