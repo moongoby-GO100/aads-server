@@ -104,21 +104,31 @@ class TaskStatusRequest(BaseModel):
 
 
 @router.get("/goals")
-async def list_goals(project: Optional[str] = Query(None)):
+async def list_goals(
+    project: Optional[str] = Query(None),
+    context: dict[str, Any] = Depends(require_tenant_viewer),
+):
     from app.services.goal_manager import goal_state_machine
-    return await goal_state_machine.list_goals(project)
+    return await goal_state_machine.list_goals(project, tenant_id=_tenant_id(context))
 
 
 @router.post("/goals")
-async def create_goal(req: GoalCreateRequest):
+async def create_goal(
+    req: GoalCreateRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     from app.services.goal_manager import goal_state_machine
+    tenant_id = _tenant_id(context)
     result = await goal_state_machine.create_goal(
         project=req.project,
         title=req.title,
         priority=req.priority,
         success_criteria=req.success_criteria,
         parent_goal_id=req.parent_goal_id,
+        tenant_id=tenant_id,
     )
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
     if req.milestones:
         for ms in req.milestones:
             await goal_state_machine.add_milestone(
@@ -136,14 +146,14 @@ async def create_goal(req: GoalCreateRequest):
         async with pool.acquire() as conn:
             await conn.execute(
                 "INSERT INTO goal_task_links "
-                "  (goal_id, task_type, task_id, status, bind_source, bound_by, link_state) "
-                "VALUES ($1::uuid, 'chat_session', $2, 'active', 'auto', 'system', 'active') "
+                "  (goal_id, tenant_id, task_type, task_id, status, bind_source, bound_by, link_state) "
+                "VALUES ($1::uuid, $3::uuid, 'chat_session', $2, 'active', 'auto', 'system', 'active') "
                 "ON CONFLICT (goal_id, task_type, task_id) WHERE goal_id IS NOT NULL "
                 "DO UPDATE SET link_state = 'active', detach_reason = NULL, "
                 "              bind_source = 'auto', bound_by = 'system', updated_at = NOW() "
                 "  WHERE goal_task_links.link_state IS DISTINCT FROM 'active' "
                 "     OR goal_task_links.detach_reason IS NOT NULL",
-                result["goal_id"], req.owner_session_id,
+                result["goal_id"], req.owner_session_id, tenant_id,
             )
             await conn.execute(
                 "UPDATE goals SET owner_session_id = $2::uuid, updated_at = NOW() "
@@ -289,6 +299,19 @@ async def _require_tenant_goal(conn: Any, goal_id: str, tenant_id: str) -> None:
         goal_id, tenant_id,
     ):
         raise HTTPException(status_code=404, detail="goal_not_found")
+
+
+async def _validated_tenant_goal(
+    goal_id: str, context: dict[str, Any], *, member: bool = False,
+) -> str:
+    """Fail closed before a legacy goal-manager method sees a global UUID."""
+    del member  # documents intent at call sites; auth dependency enforces the role.
+    from app.core.db_pool import get_pool
+
+    tenant_id = _tenant_id(context)
+    async with get_pool().acquire() as conn:
+        await _require_tenant_goal(conn, goal_id, tenant_id)
+    return tenant_id
 
 
 @router.post("/goals/{goal_id}/work-items", status_code=201)
@@ -1347,8 +1370,12 @@ async def goal_rewind(
 
 
 @router.get("/goals/{goal_id}/status")
-async def goal_status(goal_id: str):
+async def goal_status(
+    goal_id: str,
+    context: dict[str, Any] = Depends(require_tenant_viewer),
+):
     from app.services.goal_manager import goal_state_machine
+    await _validated_tenant_goal(goal_id, context)
     result = await goal_state_machine.get_goal_status(goal_id)
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
@@ -1356,8 +1383,12 @@ async def goal_status(goal_id: str):
 
 
 @router.post("/goals/{goal_id}/activate")
-async def activate_goal(goal_id: str):
+async def activate_goal(
+    goal_id: str,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     from app.services.goal_manager import goal_state_machine
+    await _validated_tenant_goal(goal_id, context, member=True)
     result = await goal_state_machine.activate_goal(goal_id)
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
@@ -1365,8 +1396,12 @@ async def activate_goal(goal_id: str):
 
 
 @router.post("/goals/{goal_id}/milestones")
-async def add_milestone(goal_id: str, req: MilestoneCreateRequest):
+async def add_milestone(
+    goal_id: str, req: MilestoneCreateRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     from app.services.goal_manager import goal_state_machine
+    await _validated_tenant_goal(goal_id, context, member=True)
     result = await goal_state_machine.add_milestone(
         goal_id=goal_id,
         title=req.title,
@@ -1378,8 +1413,12 @@ async def add_milestone(goal_id: str, req: MilestoneCreateRequest):
 
 
 @router.post("/goals/{goal_id}/link-task")
-async def link_task(goal_id: str, req: LinkTaskRequest):
+async def link_task(
+    goal_id: str, req: LinkTaskRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     from app.services.goal_manager import goal_state_machine
+    await _validated_tenant_goal(goal_id, context, member=True)
     result = await goal_state_machine.link_task(
         goal_id=goal_id,
         milestone_id=req.milestone_id,
@@ -1390,15 +1429,23 @@ async def link_task(goal_id: str, req: LinkTaskRequest):
 
 
 @router.post("/goals/{goal_id}/check-completion")
-async def check_completion(goal_id: str):
+async def check_completion(
+    goal_id: str,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     from app.services.goal_manager import goal_state_machine
+    await _validated_tenant_goal(goal_id, context, member=True)
     result = await goal_state_machine.check_goal_completion(goal_id)
     return result
 
 
 @router.post("/goals/{goal_id}/advance")
-async def advance_goal(goal_id: str):
+async def advance_goal(
+    goal_id: str,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     from app.services.goal_manager import goal_state_machine
+    await _validated_tenant_goal(goal_id, context, member=True)
     result = await goal_state_machine.advance_goal(goal_id)
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
@@ -1482,10 +1529,14 @@ async def reconcile_release_evidence(
 
 
 @router.put("/goals/{goal_id}")
-async def update_goal(goal_id: str, req: GoalUpdateRequest):
+async def update_goal(
+    goal_id: str, req: GoalUpdateRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
     from app.services.goal_manager import goal_state_machine
+    tenant_id = await _validated_tenant_goal(goal_id, context, member=True)
     result = await goal_state_machine.update_goal(
-        goal_id, **req.model_dump(exclude_none=True),
+        goal_id, tenant_id=tenant_id, **req.model_dump(exclude_none=True),
     )
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])

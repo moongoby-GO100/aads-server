@@ -11,6 +11,8 @@ from app.routers import goals
 
 
 TENANT_ENDPOINTS = (
+    "list_goals",
+    "create_goal",
     "goal_board",
     "goal_documents",
     "add_goal_document",
@@ -28,15 +30,22 @@ TENANT_ENDPOINTS = (
     "goal_direct",
     "confirm_milestone_api",
     "goal_rewind",
+    "goal_status",
+    "activate_goal",
+    "add_milestone",
+    "link_task",
+    "check_completion",
+    "advance_goal",
     "advance_active_goals",
     "update_task_status",
     "reconcile_goal_links",
     "reconcile_release_evidence",
+    "update_goal",
 )
 
 
 @pytest.mark.parametrize("endpoint_name", TENANT_ENDPOINTS)
-def test_all_21_tenant_endpoints_require_tenant_context(endpoint_name):
+def test_all_30_tenant_endpoints_require_tenant_context(endpoint_name):
     endpoint = getattr(goals, endpoint_name)
     parameter = inspect.signature(endpoint).parameters.get("context")
 

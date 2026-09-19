@@ -215,20 +215,31 @@ class GoalStateMachine:
         priority: str = "P2",
         success_criteria: Optional[str] = None,
         parent_goal_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> dict[str, Any]:
         pool = await self._pool()
         goal_id = str(uuid.uuid4())
         async with pool.acquire() as conn:
+            scoped_tenant = tenant_id or await conn.fetchval(
+                "SELECT aads_internal_tenant_id()"
+            )
+            if not scoped_tenant:
+                return {"error": "tenant_context_required"}
+            if parent_goal_id and not await conn.fetchval(
+                "SELECT 1 FROM goals WHERE id=$1::uuid AND tenant_id=$2::uuid",
+                parent_goal_id, scoped_tenant,
+            ):
+                return {"error": "parent_goal_not_found"}
             await conn.execute(
                 """
                 INSERT INTO goals (
                     id, project, title, priority, description, success_criteria,
-                    parent_goal_id, status
+                    parent_goal_id, status, tenant_id
                 )
-                VALUES ($1::uuid, $2, $3, $4, $5, $5, $6::uuid, 'draft')
+                VALUES ($1::uuid, $2, $3, $4, $5, $5, $6::uuid, 'draft', $7::uuid)
                 """,
                 goal_id, project, title, priority,
-                success_criteria, parent_goal_id,
+                success_criteria, parent_goal_id, scoped_tenant,
             )
         await self._trace(
             "goal_create",
@@ -1117,23 +1128,27 @@ class GoalStateMachine:
                 ],
             }
 
-    async def list_goals(self, project: Optional[str] = None) -> list[dict[str, Any]]:
+    async def list_goals(
+        self, project: Optional[str] = None, *, tenant_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
         pool = await self._pool()
         async with pool.acquire() as conn:
             if project:
                 rows = await conn.fetch(
                     """SELECT id, project, title, priority, status, progress, created_at, completed_at
-                       FROM goals WHERE project = $1 ORDER BY
+                       FROM goals WHERE project = $1
+                         AND ($2::uuid IS NULL OR tenant_id = $2::uuid) ORDER BY
                        CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'blocked' THEN 3 WHEN 'completed' THEN 4 ELSE 9 END,
                        created_at DESC""",
-                    project,
+                    project, tenant_id,
                 )
             else:
                 rows = await conn.fetch(
                     """SELECT id, project, title, priority, status, progress, created_at, completed_at
-                       FROM goals ORDER BY
+                       FROM goals WHERE ($1::uuid IS NULL OR tenant_id = $1::uuid) ORDER BY
                        CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'blocked' THEN 3 WHEN 'completed' THEN 4 ELSE 9 END,
-                       created_at DESC"""
+                       created_at DESC""",
+                    tenant_id,
                 )
         return [
             {
@@ -1149,7 +1164,9 @@ class GoalStateMachine:
             for r in rows
         ]
 
-    async def update_goal(self, goal_id: str, **kwargs) -> dict[str, Any]:
+    async def update_goal(
+        self, goal_id: str, *, tenant_id: Optional[str] = None, **kwargs,
+    ) -> dict[str, Any]:
         pool = await self._pool()
         allowed = {"title", "priority", "description", "success_criteria", "status", "deadline"}
         updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
@@ -1157,9 +1174,16 @@ class GoalStateMachine:
             return {"error": "no_valid_fields"}
         set_parts = [f"{k} = ${i+2}" for i, k in enumerate(updates)]
         set_parts.append("updated_at = NOW()")
-        sql = f"UPDATE goals SET {', '.join(set_parts)} WHERE id = $1::uuid"
+        tenant_param = len(updates) + 2
+        sql = (
+            f"UPDATE goals SET {', '.join(set_parts)} WHERE id = $1::uuid "
+            f"AND (${tenant_param}::uuid IS NULL OR tenant_id = ${tenant_param}::uuid) "
+            "RETURNING id::text"
+        )
         async with pool.acquire() as conn:
-            await conn.execute(sql, goal_id, *updates.values())
+            updated = await conn.fetchval(sql, goal_id, *updates.values(), tenant_id)
+        if not updated:
+            return {"error": "goal_not_found"}
         return {"goal_id": goal_id, "updated": list(updates.keys())}
 
     def _normalize_task_status(self, status: str) -> str:
