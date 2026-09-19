@@ -26,6 +26,7 @@ DATABASE_URL = os.getenv("M12_TEST_DATABASE_URL", "")
 pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="M12_TEST_DATABASE_URL is not configured")
 ROOT = Path(__file__).parents[2]
 W14A = (ROOT / "migrations/20260919_goal_workflow_w14a.sql").read_text()
+W14B = (ROOT / "migrations/20260919_goal_workflow_w14b.sql").read_text()
 
 
 def _url() -> str:
@@ -86,6 +87,8 @@ async def _exercise() -> None:
         )
         await conn.execute(W14A)
         await conn.execute(W14A)
+        await conn.execute(W14B)
+        await conn.execute(W14B)
         change_set = await conn.fetchval(
             "SELECT id FROM work_item_change_sets WHERE tenant_id=$1 LIMIT 1", tenant
         )
@@ -145,6 +148,45 @@ async def _exercise() -> None:
                    VALUES($1,'AADS',$2,$3,'other-owner',2,'internal','applied')""",
                 tenant, execution_key, change_set,
             )
+
+        grant = await conn.fetchrow(
+            "SELECT id,grant_version,max_executions FROM goal_auto_approval_grants WHERE tenant_id=$1 LIMIT 1", tenant
+        )
+        target = await conn.fetchrow(
+            "SELECT id,type,version FROM work_items WHERE tenant_id=$1 LIMIT 1", tenant
+        )
+        await conn.execute(
+            "UPDATE goal_auto_approval_grants SET used_executions=max_executions-1 WHERE id=$1", grant["id"]
+        )
+
+        async def reserve_once(key: str) -> bool:
+            worker = await asyncpg.connect(_url())
+            try:
+                async with worker.transaction():
+                    used = await worker.fetchval(
+                        """UPDATE goal_auto_approval_grants SET used_executions=used_executions+1
+                             WHERE id=$1 AND used_executions<max_executions RETURNING used_executions""",
+                        grant["id"],
+                    )
+                    if used is None:
+                        return False
+                    await worker.execute(
+                        """INSERT INTO goal_auto_approval_uses
+                           (tenant_id,decision_id,execution_key,grant_id,grant_version,input_hash,
+                            target_type,target_id,target_version,action,status,correlation_id)
+                           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'update','reserved',$10)""",
+                        tenant, uuid4(), key, grant["id"], grant["grant_version"],
+                        "sha256:" + "8" * 64, target["type"], target["id"], target["version"], uuid4(),
+                    )
+                    return True
+            finally:
+                await worker.close()
+
+        wins = await asyncio.gather(reserve_once("w14b-race-a"), reserve_once("w14b-race-b"))
+        assert wins.count(True) == 1
+        assert await conn.fetchval(
+            "SELECT used_executions FROM goal_auto_approval_grants WHERE id=$1", grant["id"]
+        ) == grant["max_executions"]
     finally:
         await conn.close()
 

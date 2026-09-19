@@ -21,6 +21,7 @@ from app.services.goal_workflow_approval import (
     decide_change_set,
     execute_change_set,
     preview_grant,
+    reconcile_grant_use,
     reserve_grant_use,
     review_item,
     revoke_grant,
@@ -95,6 +96,11 @@ class GrantRequest(BaseModel):
 
 class RevokeRequest(BaseModel):
     reason: str = Field(min_length=1)
+
+
+class GrantUseResultRequest(BaseModel):
+    outcome: Literal["completed", "failed", "unknown"]
+    actual_budget: dict[str, int | float] = Field(default_factory=dict)
 
 
 class SimulationRequest(BaseModel):
@@ -333,6 +339,21 @@ async def get_usage(grant_id: str, context=viewer_dependency,
                WHERE u.tenant_id=$1::uuid AND u.grant_id=$2::uuid AND g.goal_id=$3::uuid
                ORDER BY u.reserved_at""", tenant, grant_id, grant["goal_id"])
         return [dict(row) for row in rows]
+
+
+@router.post("/auto-approval-grant-uses/{execution_key}/reconcile")
+async def post_reconcile_grant_use(execution_key: str, req: GrantUseResultRequest,
+                                   context=member_dependency,
+                                   session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        return await reconcile_grant_use(
+            conn, tenant_id=tenant, execution_key=execution_key,
+            actual_budget=req.actual_budget, outcome=req.outcome,
+            actor=await _actor(conn, context, session_id),
+        )
 
 
 @router.post("/goal-policy/simulate")
