@@ -154,10 +154,10 @@ async def request_owner_session(
         if existing:
             return {"request_id": existing, "reused": True, "work_key": key}
 
-        # ② 요청자(주도) 세션에서 tenant/workspace 를 가져온다. 새 담당은
-        #    주도와 같은 워크스페이스에 서야 목표 현황에 함께 보인다.
+        # ② 요청자에게서는 tenant만 가져온다. 새 담당은 요청자의 현재
+        #    워크스페이스가 아니라 목표 프로젝트의 canonical workspace에 둔다.
         requester = await conn.fetchrow(
-            "SELECT tenant_id::text AS tenant_id, workspace_id::text AS workspace_id "
+            "SELECT tenant_id::text AS tenant_id "
             "  FROM chat_sessions WHERE id = $1::uuid",
             requester_session_id,
         )
@@ -179,6 +179,20 @@ async def request_owner_session(
         if not goal:
             return {"error": "목표를 찾지 못했습니다"}
 
+        target_project = str(goal["project"] or project or "").strip()
+        if project and project.upper() != target_project.upper():
+            return {"error": "owner_session_project_mismatch"}
+        workspace_id = await conn.fetchval(
+            """
+            SELECT id::text FROM chat_workspaces
+             WHERE tenant_id = $1::uuid AND upper(COALESCE(project_key,'')) = upper($2)
+             ORDER BY created_at LIMIT 1
+            """,
+            requester["tenant_id"], target_project,
+        )
+        if not workspace_id:
+            return {"error": "target_project_workspace_not_found"}
+
         has_prompt = await _has_role_prompt(conn, role_key)
         title = session_title_for(role_key)
         # 카드가 살아 있는 동안 승인 처리기가 읽는 유일한 사실 묶음이다.
@@ -187,8 +201,8 @@ async def request_owner_session(
             "scope": "single_call",
             "goal_id": str(goal_id),
             "role_key": role_key,
-            "project": project or str(goal["project"] or ""),
-            "workspace_id": str(requester["workspace_id"] or ""),
+            "project": target_project,
+            "workspace_id": str(workspace_id),
             "requester_session_id": requester_session_id,
             "has_prompt": bool(has_prompt),
         }
@@ -247,8 +261,9 @@ async def provision_owner_session(approval_scope: Dict[str, Any]) -> Dict[str, A
     role_key = str(scope.get("role_key") or "").strip()
     goal_id = str(scope.get("goal_id") or "").strip()
     workspace_id = str(scope.get("workspace_id") or "").strip()
+    project = str(scope.get("project") or "").strip()
     requester_session_id = str(scope.get("requester_session_id") or "").strip()
-    if not role_key or not workspace_id:
+    if not role_key or not workspace_id or not project:
         raise ValueError("owner_session_scope_incomplete")
 
     pool = get_pool()
@@ -261,6 +276,13 @@ async def provision_owner_session(approval_scope: Dict[str, Any]) -> Dict[str, A
 
     async with pool.acquire() as conn:
         has_prompt = await _has_role_prompt(conn, role_key)
+
+        workspace_project = await conn.fetchval(
+            "SELECT project_key FROM chat_workspaces WHERE id=$1::uuid",
+            workspace_id,
+        )
+        if not workspace_project or str(workspace_project).upper() != project.upper():
+            raise ValueError("owner_session_workspace_project_mismatch")
 
         # ① 이미 있으면 만들지 않는다. 일괄 승인에 같은 건이 섞이거나
         #    버튼을 두 번 눌러도 채팅창이 둘로 늘면 안 된다.

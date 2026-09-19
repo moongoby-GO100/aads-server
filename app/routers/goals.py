@@ -237,6 +237,28 @@ class AddOwnerRequest(BaseModel):
     )
     role_key: Optional[str] = None
     as_lead: bool = False
+    collaboration_role: Literal[
+        "project_owner", "contributor", "reviewer", "portfolio_coordinator"
+    ] = "project_owner"
+
+
+def goal_owner_binding_policy(
+    goal_project: str,
+    session_project: str,
+    collaboration_role: str,
+    *,
+    as_lead: bool,
+) -> tuple[bool, str | None]:
+    """Enforce local execution ownership with one explicit CEO coordinator exception."""
+    goal_key = (goal_project or "").strip().upper()
+    session_key = (session_project or "").strip().upper()
+    if goal_key and session_key == goal_key:
+        if collaboration_role == "portfolio_coordinator":
+            return False, "portfolio_coordinator_requires_ceo_workspace"
+        return True, None
+    if session_key == "CEO" and collaboration_role == "portfolio_coordinator" and not as_lead:
+        return True, None
+    return False, "cross_project_owner_denied"
 
 
 class ConfirmRequest(BaseModel):
@@ -762,17 +784,6 @@ async def goal_owner_candidates(
     pool = get_pool()
     async with pool.acquire() as conn:
         await _require_tenant_goal(conn, goal_id, tenant_id)
-    linked_ws = [
-        r["workspace_id"] for r in await pool.fetch(
-            "SELECT DISTINCT s.workspace_id FROM goal_task_links l "
-            "JOIN chat_sessions s ON s.id = l.task_id::uuid "
-            "WHERE l.goal_id = $1::uuid AND l.task_type = 'chat_session' "
-            "  AND COALESCE(l.link_state,'active') = 'active' "
-            "  AND l.task_id ~ '^[0-9a-fA-F-]{36}$' "
-            "  AND s.workspace_id IS NOT NULL AND s.tenant_id = $2::uuid",
-            goal_id, tenant_id,
-        )
-    ]
     project_ws = [
         r["id"] for r in await pool.fetch(
             "SELECT w.id FROM chat_workspaces w JOIN goals g ON g.id = $1::uuid "
@@ -794,13 +805,7 @@ async def goal_owner_candidates(
                      AND a.role_scope @> ARRAY[s.role_key]::text[]
                ) AS has_prompt
         FROM chat_sessions s
-        WHERE s.tenant_id = $4::uuid AND s.workspace_id = ANY(
-                -- 이미 붙어 있는 세션이 있으면 그 워크스페이스,
-                -- 하나도 없으면 목표의 프로젝트 워크스페이스로 떨어진다.
-                -- 이 폴백이 없을 때 담당 0명인 목표는 후보가 영원히 비었다.
-                CASE WHEN cardinality($2::uuid[]) > 0
-                     THEN $2::uuid[] ELSE $3::uuid[] END
-              )
+        WHERE s.tenant_id = $3::uuid AND s.workspace_id = ANY($2::uuid[])
           AND NOT EXISTS (
                 SELECT 1 FROM goal_task_links l
                 WHERE l.goal_id = $1::uuid AND l.task_type = 'chat_session'
@@ -810,13 +815,13 @@ async def goal_owner_candidates(
         ORDER BY s.updated_at DESC
         LIMIT 40
         """,
-        goal_id, linked_ws, project_ws, tenant_id,
+        goal_id, project_ws, tenant_id,
     )
     return {
         "candidates": [dict(r) for r in rows],
         # 화면이 "왜 비었는지" 를 말할 수 있어야 한다. 빈 목록만 보여 주면
         # 대표님은 붙일 창이 없는 것인지 조회가 깨진 것인지 알 수 없다.
-        "scope": "linked" if linked_ws else ("project" if project_ws else "none"),
+        "scope": "project" if project_ws else "none",
         "accepts_link": True,
     }
 
@@ -865,6 +870,13 @@ async def add_goal_owner(
                 detail=f"그런 세션이 없습니다 ({sid}). 링크를 다시 확인해 주십시오.",
             )
 
+        allowed, reason = goal_owner_binding_policy(
+            str(goal["project"] or ""), str(sess["project_key"] or ""),
+            req.collaboration_role, as_lead=req.as_lead,
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail=reason)
+
         role = (req.role_key or sess["role_key"] or "").strip()
         if role and role != sess["role_key"]:
             await conn.execute(
@@ -875,21 +887,26 @@ async def add_goal_owner(
 
         # 뗐다가 다시 붙이는 경우 DO NOTHING 이면 link_state 가 detached 로
         # 남아 화면에 담당이 나타나지 않는다. 다시 살려 준다.
+        bind_source = (
+            "ceo_portfolio_coordinator"
+            if req.collaboration_role == "portfolio_coordinator"
+            else "manual"
+        )
         await conn.execute(
             "INSERT INTO goal_task_links (goal_id, task_type, task_id, status, "
             "       bind_source, bound_by, link_state) "
             "SELECT g.id, 'chat_session', s.id::text, 'active', "
-            "       'manual', 'ceo', 'active' FROM goals g, chat_sessions s "
+            "       $4, 'ceo', 'active' FROM goals g, chat_sessions s "
             " WHERE g.id = $1::uuid AND s.id = $2::uuid "
             "   AND g.tenant_id = $3::uuid AND s.tenant_id = $3::uuid "
             "ON CONFLICT (goal_id, task_type, task_id) WHERE goal_id IS NOT NULL "
             "DO UPDATE SET link_state = 'active', detach_reason = NULL, "
-            "              bind_source = 'manual', bound_by = 'ceo', updated_at = NOW() "
+            "              bind_source = $4, bound_by = 'ceo', updated_at = NOW() "
             # 이미 붙어 있는 줄은 건드리지 않는다. 같은 창을 두 번 붙이셔도
             # updated_at 만 흔들려 "방금 바뀐 것" 처럼 보이는 일이 없다.
             "         WHERE goal_task_links.link_state IS DISTINCT FROM 'active' "
             "            OR goal_task_links.detach_reason IS NOT NULL",
-            goal_id, sid, tenant_id,
+            goal_id, sid, tenant_id, bind_source,
         )
 
         if req.as_lead:
@@ -906,25 +923,23 @@ async def add_goal_owner(
             role,
         ))
 
-    # 링크로 직접 붙이면 워크스페이스가 다를 수 있다. 막지는 않는다 —
-    # 대표님이 그 창을 보고 고르신 것이다. 다만 말은 해 드린다.
     notes = []
     if not has_prompt:
         notes.append(
             f"'{role or '(역할 없음)'}' 역할 프롬프트가 없습니다. 이 담당은 "
             "자기가 무엇을 하는 사람인지 모르는 채로 시작합니다."
         )
-    if (sess["project_key"] and goal["project"]
-            and sess["project_key"].upper() != goal["project"].upper()):
+    if req.collaboration_role == "portfolio_coordinator":
         notes.append(
-            f"이 창은 {sess['project_key']} 워크스페이스이고 목표는 "
-            f"{goal['project']} 입니다. 맥락이 섞일 수 있습니다."
+            "CEO 통합지시 세션은 포트폴리오 조정자로만 연결되며 목표 주도·실행 "
+            "담당이 될 수 없습니다."
         )
 
     return {
         "added": True, "session": sess["title"], "session_id": sid,
         "workspace": sess["workspace"], "role_key": role,
         "as_lead": req.as_lead, "has_prompt": has_prompt,
+        "collaboration_role": req.collaboration_role,
         "warning": "\n".join(notes) or None,
     }
 

@@ -70,6 +70,8 @@ class _RequestConn:
             return None
         if "FROM prompt_assets" in query:
             return 1
+        if "FROM chat_workspaces" in query and "project_key" in query:
+            return WORKSPACE
         if "INSERT INTO agent_permission_requests" in query:
             self.inserts.append(args)
             new_id = f"card-{len(self.cards) + 1}"
@@ -78,8 +80,8 @@ class _RequestConn:
         return None
 
     async def fetchrow(self, query, *args):
-        if "FROM chat_sessions" in query and "workspace_id" in query:
-            return {"tenant_id": TENANT, "workspace_id": WORKSPACE}
+        if "FROM chat_sessions" in query:
+            return {"tenant_id": TENANT}
         if "FROM goals g" in query:
             return {"goal_title": "채팅 시스템 안정화", "project": "AADS", "stuck": 3}
         return None
@@ -186,6 +188,8 @@ class _ProvisionConn:
     async def fetchval(self, query, *args):
         if "FROM prompt_assets" in query:
             return 1
+        if "SELECT project_key FROM chat_workspaces" in query:
+            return "AADS"
         if "information_schema.columns" in query:
             return None
         if "UPDATE milestones" in query:
