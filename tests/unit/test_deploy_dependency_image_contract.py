@@ -71,6 +71,13 @@ def test_dependency_warmup_is_an_explicit_non_release_mode():
     assert script.index('if [[ "$MODE" == "warm-deps" ]]') < script.index(
         'ACTIVE_PORT="$(get_active_port)"'
     )
+    mode_section = script.split('if [[ "$MODE" == "warm-deps" ]]', 1)[1].split(
+        'ACTIVE_PORT="$(get_active_port)"', 1
+    )[0]
+    assert 'DEPLOY_FLOCKFILE="/tmp/aads-deploy.flock"' in mode_section
+    assert 'AADS_DEPLOY_WARM_DEPS_LOCK_WAIT:-3600' in mode_section
+    assert 'flock -w "$WARM_DEPS_LOCK_WAIT" 7' in mode_section
+    assert "enforce_release_worktree_gate" in mode_section
 
 
 def test_disk_gate_distinguishes_cold_and_warm_dependency_builds():

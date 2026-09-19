@@ -1595,6 +1595,21 @@ verify_active_slot() {
 
 if [[ "$MODE" == "warm-deps" ]]; then
     trap cleanup_release_context EXIT
+    # Dependency preparation is not a release, but it is still a large Docker
+    # build. Serialize it with blue/green so two exporters never compete for
+    # disk/BuildKit state. It also has to use a clean committed archive.
+    DEPLOY_FLOCKFILE="/tmp/aads-deploy.flock"
+    WARM_DEPS_LOCK_WAIT="${AADS_DEPLOY_WARM_DEPS_LOCK_WAIT:-3600}"
+    [[ "$WARM_DEPS_LOCK_WAIT" =~ ^[0-9]+$ ]] || WARM_DEPS_LOCK_WAIT=3600
+    exec 7>"$DEPLOY_FLOCKFILE"
+    if ! flock -w "$WARM_DEPS_LOCK_WAIT" 7; then
+        echo "[deploy.sh] ❌ dependency warm-up lock timeout (${WARM_DEPS_LOCK_WAIT}s)" >&2
+        exit 1
+    fi
+    if ! enforce_release_worktree_gate; then
+        echo "[deploy.sh] ❌ dependency warm-up requires a clean committed worktree" >&2
+        exit 1
+    fi
     build_dependency_image
     exit 0
 fi

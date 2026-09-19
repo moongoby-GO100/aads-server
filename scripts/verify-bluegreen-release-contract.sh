@@ -45,6 +45,8 @@ grep -q 'AADS_DEPLOY_PRE_CUTOVER_DRAIN_MAX_WAIT:-0' "$deploy_file" \
     || fail "pre-cutover drain must not serialize traffic by default"
 grep -q 'AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-0' "$deploy_file" \
     || fail "busy standby drain must defer to the post-monitor retry worker"
+grep -q 'AADS_DEPLOY_WARM_DEPS_LOCK_WAIT:-3600' "$deploy_file" \
+    || fail "dependency warm-up must serialize with blue/green builds"
 grep -q 'DEPLOY_FLOCKFILE="/tmp/aads-deploy.flock"' "$deploy_file" \
     || fail "deploy entry flock is missing"
 
