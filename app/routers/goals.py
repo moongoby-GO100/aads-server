@@ -1,6 +1,7 @@
 """Goals API — 목표 Control Loop 엔드포인트."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime, timezone
@@ -153,10 +154,69 @@ async def create_goal(req: GoalCreateRequest):
 
 
 class GoalDocRequest(BaseModel):
-    kind: str = "reference"          # plan | prd | report | reference
+    kind: str = "reference"
     doc_path: str
     title: Optional[str] = None
     note: Optional[str] = None
+    document_key: Optional[str] = Field(
+        None,
+        description="같은 문서의 버전들을 묶는 안정 키. 생략 시 version 폴더/경로로 생성",
+    )
+    version: Optional[str] = Field(
+        None, description="semantic version(X.Y.Z). 생략 시 /vX.Y.Z/ 경로에서 추출"
+    )
+    change_summary: Optional[str] = None
+    status: Literal["active", "archived"] = "active"
+    set_latest: bool = True
+
+
+_GOAL_DOC_VERSION_RE = re.compile(r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)$", re.IGNORECASE)
+_GOAL_DOC_PATH_VERSION_RE = re.compile(
+    r"/v([0-9]+\.[0-9]+\.[0-9]+)/([^/]+)$", re.IGNORECASE
+)
+_GOAL_DOC_TITLE_VERSION_RE = re.compile(
+    r"(?:^|\s)v([0-9]+\.[0-9]+\.[0-9]+)(?:\s|$)", re.IGNORECASE
+)
+_GOAL_DOC_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+def _goal_document_identity(req: GoalDocRequest, path: str) -> tuple[str, str]:
+    """문서의 안정 키와 정규화된 semver를 만든다.
+
+    `/v1.2.3/PLAN.md`와 `/v1.3.0/PLAN.md`는 자동으로 같은
+    `plan:plan.md` 계보가 된다. version 폴더가 없는 기존 링크는 경로 해시로
+    서로 격리하며, 새 경로를 같은 계보에 넣으려면 document_key를 명시한다.
+    """
+    path_match = _GOAL_DOC_PATH_VERSION_RE.search(path)
+
+    raw_version = (req.version or "").strip()
+    if not raw_version and path_match:
+        raw_version = path_match.group(1)
+    if not raw_version and req.title:
+        title_match = _GOAL_DOC_TITLE_VERSION_RE.search(req.title)
+        if title_match:
+            raw_version = title_match.group(1)
+    if not raw_version:
+        raw_version = "1.0.0"
+
+    version_match = _GOAL_DOC_VERSION_RE.fullmatch(raw_version)
+    if not version_match:
+        raise HTTPException(status_code=400, detail="version must be semantic X.Y.Z")
+    version = ".".join(version_match.groups())
+
+    document_key = (req.document_key or "").strip()
+    if not document_key:
+        if path_match:
+            document_key = f"{req.kind}:{path_match.group(2).lower()}"
+        else:
+            digest = hashlib.sha256(path.encode("utf-8")).hexdigest()[:12]
+            document_key = f"{req.kind}:{digest}"
+    if not _GOAL_DOC_KEY_RE.fullmatch(document_key):
+        raise HTTPException(
+            status_code=400,
+            detail="document_key must use letters, numbers, dot, underscore, colon or hyphen",
+        )
+    return document_key, version
 
 
 class AddOwnerRequest(BaseModel):
@@ -476,6 +536,8 @@ async def goal_board(
         "milestones": [dict(m) for m in ms],
         "has_lead": any(o["is_lead"] for o in owners),
         "documents": docs["documents"],
+        "document_history": docs["document_history"],
+        "has_document_history": docs["has_history"],
         "has_design": docs["has_design"],
         "missing_design": docs["missing"],
     }
@@ -483,26 +545,45 @@ async def goal_board(
 
 @router.get("/goals/{goal_id}/documents")
 async def goal_documents(
-    goal_id: str, context: dict[str, Any] = Depends(require_tenant_viewer),
+    goal_id: str,
+    context: dict[str, Any] = Depends(require_tenant_viewer),
+    include_history: bool = False,
 ):
-    """목표의 설계 문서. 없으면 없다고 답한다 — 빈 것과 안 쓴 것은 다르다."""
+    """목표 문서의 최신본과 버전 이력.
+
+    기본 documents에는 논리 문서별 최신본만 넣는다. include_history=true는
+    이전 버전까지 documents에 싣고, document_history는 항상 전체 이력을
+    제공해 목표 화면이 최신본과 과거 근거를 분리해 보여 줄 수 있게 한다.
+    """
     from app.core.db_pool import get_pool
 
     pool = get_pool()
     async with pool.acquire() as conn:
         await _require_tenant_goal(conn, goal_id, _tenant_id(context))
         rows = await conn.fetch(
-            "SELECT d.kind, d.doc_path, d.title, d.note, d.created_at "
+            "SELECT d.id, d.kind, d.doc_path, d.title, d.note, d.created_at, "
+            "       d.document_key, d.version, d.status, d.is_latest, "
+            "       d.change_summary, d.supersedes_id, d.updated_at, "
+            "       (SELECT count(*) FROM goal_documents h "
+            "         WHERE h.goal_id = d.goal_id "
+            "           AND h.document_key = d.document_key)::integer AS version_count "
             "FROM goal_documents d JOIN goals g ON g.id = d.goal_id "
             "WHERE d.goal_id = $1::uuid AND g.tenant_id = $2::uuid "
             "ORDER BY CASE d.kind WHEN 'plan' THEN 0 WHEN 'prd' THEN 1 "
-            "                     WHEN 'report' THEN 2 ELSE 3 END, d.created_at",
+            "                     WHEN 'design' THEN 2 WHEN 'architecture' THEN 3 "
+            "                     WHEN 'contract' THEN 4 WHEN 'prototype' THEN 5 "
+            "                     WHEN 'report' THEN 6 ELSE 7 END, "
+            "         d.document_key, d.is_latest DESC, d.created_at DESC",
             goal_id, _tenant_id(context),
         )
-    docs = [dict(r) for r in rows]
-    kinds = {d["kind"] for d in docs}
+    history = [dict(r) for r in rows]
+    latest = [d for d in history if d["is_latest"]]
+    docs = history if include_history else latest
+    kinds = {d["kind"] for d in latest}
     return {
         "documents": docs,
+        "document_history": history,
+        "has_history": any(d["version_count"] > 1 for d in latest),
         # 기획서와 PRD 가 둘 다 있어야 "설계가 있다" 고 본다. 하나만 있으면
         # 왜(기획서)나 어떻게(PRD) 중 한쪽이 비어 있다는 뜻이다.
         "has_design": "plan" in kinds and "prd" in kinds,
@@ -515,29 +596,79 @@ async def add_goal_document(
     goal_id: str, req: GoalDocRequest,
     context: dict[str, Any] = Depends(require_tenant_member),
 ):
-    """문서를 목표에 잇는다. `doc_path` 는 doc_chunks 와 같은 규격이다."""
+    """문서를 목표에 잇고 논리 문서별 최신 버전을 원자적으로 교체한다."""
     from app.core.db_pool import get_pool
 
     path = (req.doc_path or "").strip()
     if not path:
         raise HTTPException(status_code=400, detail="doc_path required")
-    if req.kind not in ("plan", "prd", "report", "reference"):
-        raise HTTPException(status_code=400, detail="kind must be plan|prd|report|reference")
+    allowed_kinds = {
+        "plan", "prd", "design", "architecture", "contract",
+        "prototype", "report", "reference",
+    }
+    if req.kind not in allowed_kinds:
+        raise HTTPException(
+            status_code=400,
+            detail="kind must be plan|prd|design|architecture|contract|prototype|report|reference",
+        )
+    document_key, version = _goal_document_identity(req, path)
 
     pool = get_pool()
-    async with pool.acquire() as conn:
+    async with pool.acquire() as conn, conn.transaction():
         await _require_tenant_goal(conn, goal_id, _tenant_id(context))
+        await conn.fetchval(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            f"goal-document:{goal_id}:{document_key}",
+        )
+        previous_id = None
+        if req.set_latest:
+            previous_id = await conn.fetchval(
+                "SELECT id FROM goal_documents "
+                "WHERE goal_id = $1::uuid AND document_key = $2 "
+                "  AND is_latest AND doc_path <> $3 "
+                "FOR UPDATE",
+                goal_id, document_key, path,
+            )
+            await conn.execute(
+                "UPDATE goal_documents "
+                "SET is_latest = false, status = 'superseded', updated_at = NOW() "
+                "WHERE goal_id = $1::uuid AND document_key = $2 "
+                "  AND is_latest AND doc_path <> $3",
+                goal_id, document_key, path,
+            )
+
         row = await conn.fetchrow(
             """
-            INSERT INTO goal_documents (goal_id, kind, doc_path, title, note, created_by)
-            SELECT g.id, $2, $3, $4, $5, 'ceo' FROM goals g
+            INSERT INTO goal_documents
+                (goal_id, kind, doc_path, title, note, created_by,
+                 document_key, version, status, is_latest,
+                 change_summary, supersedes_id, updated_at)
+            SELECT g.id, $2, $3, $4, $5, 'ceo',
+                   $7, $8, $9, $10, $11, $12, NOW()
+              FROM goals g
              WHERE g.id = $1::uuid AND g.tenant_id = $6::uuid
             ON CONFLICT (goal_id, doc_path) DO UPDATE
-               SET kind = EXCLUDED.kind, title = EXCLUDED.title, note = EXCLUDED.note
-            RETURNING kind, doc_path, title
+               SET kind = EXCLUDED.kind,
+                   title = EXCLUDED.title,
+                   note = EXCLUDED.note,
+                   document_key = EXCLUDED.document_key,
+                   version = EXCLUDED.version,
+                   status = EXCLUDED.status,
+                   is_latest = EXCLUDED.is_latest,
+                   change_summary = EXCLUDED.change_summary,
+                   supersedes_id = COALESCE(EXCLUDED.supersedes_id,
+                                            goal_documents.supersedes_id),
+                   updated_at = NOW()
+            RETURNING id, kind, doc_path, title, note, document_key, version,
+                      status, is_latest, change_summary, supersedes_id, updated_at
             """,
             goal_id, req.kind, path, req.title, req.note, _tenant_id(context),
+            document_key, version,
+            "active" if req.set_latest else req.status,
+            req.set_latest, req.change_summary, previous_id,
         )
+        if row is None:
+            raise HTTPException(status_code=404, detail="goal_not_found")
     return dict(row)
 
 
