@@ -141,6 +141,11 @@ run, observation, snapshot, graph body, finding identity/occurrence, audit, evid
   않고 unavailable을 반환한다. fallback을 authoritative evidence로 오인하지 않기 위함이다.
 - v1 route와 legacy table은 유지한다. runner, CI, 목표 화면의 전환과 관측 기간 잔여 v1=0
   확인 전에는 v1 폐기를 승인하지 않는다.
+- Pipeline Runner는 interactive user JWT 대신 project-scoped scanner credential로
+  `POST /api/v1/aag/v2/runner-brief`를 호출한다. 응답은 authoritative snapshot/ref/commit에
+  고정된다. `AAG_V2_RUNNER_ENABLED=1`에서 credential·snapshot·central API가 없으면
+  브리프를 생략하며 local v1로 자동 강등하지 않는다. 운영자가 flag를 `0`으로 명시한
+  경우에만 repo/host `brief.py` rollback 경로를 사용한다.
 - phase 2 운영 기본값은 `AAG_V2_ENABLED=true`, `AAG_V2_CONSUMERS_ENABLED=true`다.
   두 값 중 하나를 `0`으로 설정하면 스키마 삭제 없이 즉시 v1 경로로 rollback한다.
 - 초기 direct pusher가 verified observation만 만들고 latest pointer를 누락한 호스트는

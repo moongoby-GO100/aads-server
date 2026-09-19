@@ -2195,30 +2195,66 @@ run_job() {
         # /root/scripts/aag-brief.py) — brief.py 는 러너 것이라 프로젝트 저장소마다 복제하지 않는다.
         # 브리프 생성 실패가 본 작업을 실패시켜서는 안 되므로 전부 `|| true` 로 흘린다.
         local aag_brief="" aag_step0_hint="" aag_brief_lines=0
-        local aag_brief_bin="" aag_brief_source=""
-        if [[ -f "$main_workdir/tools/aag/brief.py" ]]; then
-            aag_brief_bin="$main_workdir/tools/aag/brief.py"
-            aag_brief_source="repo"
-        elif [[ -f "${AAG_BRIEF_BIN:-/root/scripts/aag-brief.py}" ]]; then
-            aag_brief_bin="${AAG_BRIEF_BIN:-/root/scripts/aag-brief.py}"
-            aag_brief_source="host"
-        fi
-        if [[ -n "$aag_brief_bin" ]]; then
-            local aag_ins="$ARTIFACT_DIR/${job_id}.aaginst" aag_out=""
-            printf '%s' "$safe_instruction" > "$aag_ins" 2>/dev/null || true
-            aag_out=$(cd "$main_workdir" && timeout 20 python3 "$aag_brief_bin" \
-                        --instruction-file "$aag_ins" --project "$project" 2>/dev/null) || aag_out=""
-            rm -f "$aag_ins" 2>/dev/null || true
-            if [[ -n "$aag_out" ]]; then
-                aag_brief=$'\n'"$aag_out"
-                aag_step0_hint='- 아래 [AAG 착수 브리프] 가 있으면 그것을 먼저 읽어라. 거기 적힌 파일·경로·테이블은 다시 찾지 마라.'$'\n'
-                aag_brief_lines=$(printf '%s' "$aag_out" | grep -c '^- ' || true)
-                log "  AAG_BRIEF_OK job=$job_id project=$project source=$aag_brief_source bytes=${#aag_out} nodes=${aag_brief_lines}"
-                record_runner_event "$job_id" "aag_brief_attached" "running" "claude_code_work" "$current_model" "" "$job_size" "" "{\"project\":\"${project}\",\"source\":\"${aag_brief_source}\",\"bytes\":${#aag_out},\"nodes\":${aag_brief_lines}}"
+        local aag_brief_bin="" aag_brief_source="" aag_out=""
+        local aag_v2_enabled="${AAG_V2_RUNNER_ENABLED:-0}"
+        local aag_token_var="AAG_SCANNER_TOKEN_${project^^}"
+        aag_token_var="${aag_token_var//-/_}"
+        local aag_scanner_token="${!aag_token_var:-${AAG_SCANNER_TOKEN:-}}"
+        local aag_repo_var="AAG_REPOSITORY_ID_${project^^}"
+        aag_repo_var="${aag_repo_var//-/_}"
+        local aag_ref_var="AAG_TARGET_REF_${project^^}"
+        aag_ref_var="${aag_ref_var//-/_}"
+        local aag_repository_id="${!aag_repo_var:-}" aag_target_ref="${!aag_ref_var:-}"
+        local aag_ins="$ARTIFACT_DIR/${job_id}.aaginst"
+        printf '%s' "$safe_instruction" > "$aag_ins" 2>/dev/null || true
+
+        if [[ "$aag_v2_enabled" =~ ^(1|true|yes|on)$ ]]; then
+            # v2 is fail-closed for provenance: a missing credential or central
+            # snapshot skips the advisory brief.  It never silently presents a
+            # local v1 graph as authoritative.  Set AAG_V2_RUNNER_ENABLED=0 to
+            # perform the explicit rollback to the legacy renderer.
+            aag_brief_source="central_v2"
+            if [[ -n "$aag_scanner_token" ]]; then
+                local aag_api_base="${AADS_API_URL%/}"
+                local aag_payload="${aag_ins}.json"
+                local aag_headers="${aag_ins}.headers"
+                [[ "$aag_api_base" == */api/v1 ]] || aag_api_base="${aag_api_base}/api/v1"
+                if (umask 077; printf 'X-AAG-Scanner-Token: %s\nX-AAG-Consumer: pipeline-runner\n' "$aag_scanner_token" > "$aag_headers") && \
+                    python3 -c 'import json,sys; p={"project":sys.argv[2],"target":open(sys.argv[1],encoding="utf-8").read()}; p.update({"repository_id":sys.argv[3]} if sys.argv[3] else {}); p.update({"target_ref":sys.argv[4]} if sys.argv[4] else {}); print(json.dumps(p))' \
+                    "$aag_ins" "$project" "$aag_repository_id" "$aag_target_ref" > "$aag_payload" 2>/dev/null; then
+                    aag_out=$(curl -sf --max-time 20 -X POST \
+                        -H "Content-Type: application/json" \
+                        -H "@${aag_headers}" \
+                        --data-binary "@${aag_payload}" \
+                        "${aag_api_base}/aag/v2/runner-brief" 2>/dev/null) || aag_out=""
+                fi
             else
-                log "  AAG_BRIEF_SKIP job=$job_id project=$project source=$aag_brief_source reason=no_output_or_timeout"
-                record_runner_event "$job_id" "aag_brief_attached" "running" "claude_code_work" "$current_model" "" "$job_size" "" "{\"project\":\"${project}\",\"source\":\"${aag_brief_source}\",\"bytes\":0,\"nodes\":0,\"skipped_reason\":\"no_output_or_timeout\"}"
+                log "  AAG_BRIEF_SKIP job=$job_id project=$project source=$aag_brief_source reason=project_credential_missing"
             fi
+        else
+            if [[ -f "$main_workdir/tools/aag/brief.py" ]]; then
+                aag_brief_bin="$main_workdir/tools/aag/brief.py"
+                aag_brief_source="repo"
+            elif [[ -f "${AAG_BRIEF_BIN:-/root/scripts/aag-brief.py}" ]]; then
+                aag_brief_bin="${AAG_BRIEF_BIN:-/root/scripts/aag-brief.py}"
+                aag_brief_source="host"
+            fi
+            if [[ -n "$aag_brief_bin" ]]; then
+                aag_out=$(cd "$main_workdir" && timeout 20 python3 "$aag_brief_bin" \
+                            --instruction-file "$aag_ins" --project "$project" 2>/dev/null) || aag_out=""
+            fi
+        fi
+        rm -f "$aag_ins" "${aag_ins}.json" "${aag_ins}.headers" 2>/dev/null || true
+
+        if [[ -n "$aag_out" ]]; then
+            aag_brief=$'\n'"$aag_out"
+            aag_step0_hint='- 아래 [AAG 착수 브리프] 가 있으면 그것을 먼저 읽어라. 거기 적힌 파일·경로·테이블은 다시 찾지 마라.'$'\n'
+            aag_brief_lines=$(printf '%s' "$aag_out" | grep -c '^- ' || true)
+            log "  AAG_BRIEF_OK job=$job_id project=$project source=$aag_brief_source bytes=${#aag_out} nodes=${aag_brief_lines}"
+            record_runner_event "$job_id" "aag_brief_attached" "running" "claude_code_work" "$current_model" "" "$job_size" "" "{\"project\":\"${project}\",\"source\":\"${aag_brief_source}\",\"bytes\":${#aag_out},\"nodes\":${aag_brief_lines}}"
+        elif [[ -n "$aag_brief_source" ]]; then
+            log "  AAG_BRIEF_SKIP job=$job_id project=$project source=$aag_brief_source reason=no_output_or_timeout"
+            record_runner_event "$job_id" "aag_brief_attached" "running" "claude_code_work" "$current_model" "" "$job_size" "" "{\"project\":\"${project}\",\"source\":\"${aag_brief_source}\",\"bytes\":0,\"nodes\":0,\"skipped_reason\":\"no_output_or_timeout\"}"
         fi
 
         # H7: 빌드/배포 가드 v2.1 — Claude Code가 직접 배포하지 않도록 방지

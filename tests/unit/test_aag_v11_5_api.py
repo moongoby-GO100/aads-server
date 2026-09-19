@@ -5,7 +5,9 @@ from uuid import uuid4
 
 import pytest
 
+from app.api import aag as aag_api
 from app.services import aag_query_v2, aag_tools
+from app.services.aag_governance import ScannerPrincipal
 from scripts.aag_snapshot_push import _v2_statement
 
 
@@ -168,3 +170,49 @@ def test_release_enables_v2_with_environment_rollback_switches():
     compose = (aag_tools.REPO_ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
     assert compose.count("AAG_V2_ENABLED=${AAG_V2_ENABLED:-true}") == 2
     assert compose.count("AAG_V2_CONSUMERS_ENABLED=${AAG_V2_CONSUMERS_ENABLED:-true}") == 2
+
+
+@pytest.mark.asyncio
+async def test_runner_brief_uses_project_scoped_credential_and_pinned_snapshot(monkeypatch):
+    snap = _snapshot()
+    events = []
+
+    async def fake_auth(token, project):
+        assert token == "project-scoped-secret"
+        assert project == "AADS"
+        return ScannerPrincipal(uuid4(), project, "scanner:test")
+
+    async def fake_load(**kwargs):
+        assert kwargs["project"] == "AADS"
+        return snap
+
+    async def fake_record(**kwargs):
+        events.append(kwargs)
+
+    monkeypatch.setenv("AAG_V2_ENABLED", "1")
+    monkeypatch.setattr(aag_api, "authenticate_scanner", fake_auth)
+    monkeypatch.setattr(aag_api, "load_authoritative_snapshot", fake_load)
+    monkeypatch.setattr(aag_api, "record_consumer_event", fake_record)
+
+    result = await aag_api.get_runner_brief_v2(
+        body=aag_api.RunnerBriefRequest(project="aads", target="a.py"),
+        x_aag_scanner_token="project-scoped-secret",
+    )
+
+    assert result["fallback_used"] is False
+    assert result["brief"]["snapshot"]["snapshot_id"] == str(snap["snapshot_id"])
+    assert result["brief"]["state"] == "detected"
+    assert events[-1]["consumer"].startswith("pipeline-runner:")
+    assert events[-1]["snapshot_id"] == str(snap["snapshot_id"])
+
+
+def test_pipeline_runner_v2_cutover_is_explicit_and_fail_closed():
+    runner = (aag_tools.REPO_ROOT / "scripts/pipeline-runner.sh").read_text(encoding="utf-8")
+    assert 'AAG_V2_RUNNER_ENABLED:-0' in runner
+    assert 'AAG_SCANNER_TOKEN_${project^^}' in runner
+    assert '/aag/v2/runner-brief' in runner
+    assert 'reason=project_credential_missing' in runner
+    assert 'never silently presents a' in runner
+    assert 'AAG_V2_RUNNER_ENABLED=0' in runner
+    assert "umask 077" in runner
+    assert '-H "X-AAG-Scanner-Token: ${aag_scanner_token}"' not in runner

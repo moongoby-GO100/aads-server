@@ -31,6 +31,7 @@ from app.services.aag_ingest_v2 import IngestConflictError, ingest_graph
 from app.services.aag_query_v2 import (
     AAGQueryError,
     consumer_telemetry,
+    load_authoritative_snapshot,
     query_findings_page,
     record_consumer_event,
 )
@@ -93,6 +94,16 @@ class SnapshotV2In(BaseModel):
     edges: list[dict[str, Any]] = Field(default_factory=list)
     findings: list[dict[str, Any]] = Field(default_factory=list)
     unresolved: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class RunnerBriefRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project: str = Field(min_length=1, max_length=100)
+    target: str = Field(min_length=1, max_length=50_000)
+    repository_id: str | None = Field(default=None, min_length=1, max_length=255)
+    target_ref: str | None = Field(default=None, min_length=1, max_length=255)
+    governance_scope: str = Field(default="default", min_length=1, max_length=255)
 
 
 class ExceptionRequest(BaseModel):
@@ -379,6 +390,100 @@ async def get_brief_v2(
         findings=matches,
         status=status,
     )
+
+
+@router.post("/v2/runner-brief")
+async def get_runner_brief_v2(
+    body: RunnerBriefRequest,
+    x_aag_scanner_token: str | None = Header(default=None, alias="X-AAG-Scanner-Token"),
+) -> dict[str, Any]:
+    """Return a project-scoped, commit-pinned brief for Pipeline Runner.
+
+    Runners do not carry an interactive user session, so this route authenticates
+    the same opaque project credential used by the v2 publisher.  A missing
+    authoritative snapshot fails closed instead of falling back to a local graph.
+    """
+    _require_v2_enabled()
+    normalized = normalize_project(body.project)
+    started = perf_counter()
+    try:
+        principal = await authenticate_scanner(x_aag_scanner_token or "", normalized)
+    except AAGAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    snapshot = await load_authoritative_snapshot(
+        project=normalized,
+        repository_id=body.repository_id,
+        target_ref=body.target_ref,
+        governance_scope=body.governance_scope,
+    )
+    if not snapshot:
+        await record_consumer_event(
+            consumer=f"pipeline-runner:{principal.credential_id}",
+            api_version="v2",
+            endpoint="/aag/v2/runner-brief",
+            project=normalized,
+            outcome="not_found",
+            repository_id=body.repository_id,
+            target_ref=body.target_ref,
+            latency_ms=int((perf_counter() - started) * 1000),
+        )
+        raise HTTPException(status_code=404, detail="No authoritative AAG v2 snapshot")
+
+    target_key = body.target.strip().replace("\\", "/")
+    matches = []
+    for finding in snapshot.get("findings") or []:
+        identities = (
+            finding.get("file"), finding.get("module"), finding.get("path"),
+            finding.get("key"), finding.get("semantic_target"),
+        )
+        if any(
+            target_key and target_key in str(value or "").replace("\\", "/")
+            for value in identities
+        ):
+            matches.append(finding)
+    status = "detected" if matches else (
+        "partial" if snapshot.get("unresolved") else "not_detected"
+    )
+    brief = build_brief_v2(
+        snapshot={
+            "snapshot_id": str(snapshot["snapshot_id"]),
+            "observation_id": str(snapshot["observation_id"]),
+            "run_id": str(snapshot["run_id"]),
+            "project": snapshot["project"],
+            "repository_id": snapshot["repository_id"],
+            "target_ref": snapshot["target_ref"],
+            "governance_scope": snapshot["governance_scope"],
+            "resolved_commit_sha": snapshot["resolved_commit_sha"],
+            "expected_target_ref_head_sha": snapshot["expected_target_ref_head_sha"],
+            "source": "central_db",
+            "authoritative": True,
+            "verified_at": snapshot["verified_at"],
+            "analyzer": {
+                "name": "scan_aads",
+                "version": snapshot["scanner_version"],
+                "ruleset_digest": snapshot["ruleset_digest"],
+                "scan_scope_digest": snapshot["scan_scope_digest"],
+            },
+            "stats": snapshot.get("stats") or {},
+            "truncated": False,
+        },
+        target=target_key,
+        findings=matches,
+        status=status,
+    )
+    await record_consumer_event(
+        consumer=f"pipeline-runner:{principal.credential_id}",
+        api_version="v2",
+        endpoint="/aag/v2/runner-brief",
+        project=normalized,
+        outcome="success",
+        repository_id=snapshot["repository_id"],
+        target_ref=snapshot["target_ref"],
+        snapshot_id=str(snapshot["snapshot_id"]),
+        latency_ms=int((perf_counter() - started) * 1000),
+    )
+    return {"brief": brief, "fallback_used": False}
 
 
 @router.get("/v2/findings")
