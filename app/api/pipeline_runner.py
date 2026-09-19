@@ -15,7 +15,10 @@ from typing import Optional
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
+
 from app.auth import TenantRole, get_current_user, tenant_role_allows
+from app.core.project_config import PROJECT_MAP
+from app.services.goal_binding import parse_goal_binding
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -110,7 +113,7 @@ def _tenant_id(context: TenantContext) -> str:
     return str(context["tenant"]["id"])  # type: ignore[index]
 
 # H6 + M4: 허용 프로젝트 화이트리스트
-_VALID_PROJECTS = {"AADS", "GO100", "SF", "NTV2", "ACCT"}
+_VALID_PROJECTS = set(PROJECT_MAP) | {"ACCT"}
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 _JOB_ID_RE = re.compile(r'^runner-[0-9a-zA-Z_-]+$')
 _ACTIVE_PIPELINE_STATUSES = (
@@ -306,12 +309,30 @@ async def _find_active_file_conflict(
     project: str,
     target_files: set[str],
     tenant_id: str,
+    incoming_instruction: str = "",
+    incoming_goal_id: str = "",
+    incoming_milestone_id: str = "",
     ignore_job_ids: set[str] | None = None,
 ) -> dict | None:
-    """Return an active job touching one of target_files, if instruction paths overlap."""
+    """Return an active job touching one of target_files.
+
+    A same-goal job may only depend on the same or an earlier milestone.  The
+    previous newest-first lookup could make a recovered V11-1 depend on an
+    already queued V11-7 merely because both mentioned the same file.  Return
+    that case as an explicit inversion so callers fail closed instead of
+    persisting a backwards edge.
+    """
     if not target_files:
         return None
     ignored = ignore_job_ids or set()
+    incoming_order = await _resolve_milestone_order(
+        conn,
+        project=project,
+        tenant_id=tenant_id,
+        instruction=incoming_instruction,
+        goal_id=incoming_goal_id,
+        milestone_id=incoming_milestone_id,
+    )
     rows = await conn.fetch(
         """
         SELECT job_id, instruction, status, phase
@@ -326,6 +347,7 @@ async def _find_active_file_conflict(
         tenant_id,
         list(_ACTIVE_PIPELINE_STATUSES),
     )
+    inverted_conflict = None
     for row in rows:
         existing_job_id = row["job_id"]
         if existing_job_id in ignored:
@@ -333,12 +355,31 @@ async def _find_active_file_conflict(
         existing_files = _extract_target_files(row["instruction"] or "")
         overlap = target_files & existing_files
         if overlap:
+            existing_order = await _resolve_milestone_order(
+                conn,
+                project=project,
+                tenant_id=tenant_id,
+                instruction=row["instruction"] or "",
+            )
+            if _dependency_order_is_inverted(incoming_order, existing_order):
+                inverted_conflict = {
+                    "job_id": existing_job_id,
+                    "status": row["status"],
+                    "phase": row["phase"],
+                    "overlap": sorted(overlap),
+                    "dependency_inversion": True,
+                    "incoming_sequence": incoming_order[2],
+                    "parent_sequence": existing_order[2],
+                }
+                continue
             return {
                 "job_id": existing_job_id,
                 "status": row["status"],
                 "phase": row["phase"],
                 "overlap": sorted(overlap),
             }
+    if inverted_conflict:
+        return inverted_conflict
     # Cross-session: chat-direct dirty 파일 충돌 확인
     ledger_rows = await conn.fetch(
         """
@@ -362,6 +403,63 @@ async def _find_active_file_conflict(
                 "task_id": lrow["task_id"],
             }
     return None
+
+
+async def _resolve_milestone_order(
+    conn,
+    *,
+    project: str,
+    tenant_id: str,
+    instruction: str = "",
+    goal_id: str = "",
+    milestone_id: str = "",
+) -> tuple[str, str, int] | None:
+    """Resolve tenant-scoped canonical order from API fields/directive metadata.
+
+    Do not require ``milestones.project == runner project``.  A cross-project
+    goal may deliberately use the AADS runner to change shared orchestration
+    code while the goal itself belongs to GO100 (the V11 recovery is one such
+    case).  Tenant + goal + milestone identity remains the authorization and
+    ordering boundary.
+    """
+    binding = parse_goal_binding(
+        instruction,
+        goal_id=goal_id or None,
+        milestone_id=milestone_id or None,
+    )
+    if not binding.goal_id or not binding.milestone_id:
+        return None
+    row = await conn.fetchrow(
+        """
+        SELECT goal_id::text AS goal_id, id::text AS milestone_id, sequence_order
+        FROM milestones
+        WHERE id = $1::uuid
+          AND goal_id = $2::uuid
+          AND tenant_id = $3::uuid
+        """,
+        binding.milestone_id,
+        binding.goal_id,
+        tenant_id,
+    )
+    if not row:
+        return None
+    return str(row["goal_id"]), str(row["milestone_id"]), int(row["sequence_order"])
+
+
+def _dependency_order_is_inverted(
+    child: tuple[str, str, int] | None,
+    parent: tuple[str, str, int] | None,
+) -> bool:
+    """True when a same-goal child points to a strictly later milestone."""
+    return bool(child and parent and child[0] == parent[0] and parent[2] > child[2])
+
+
+def _dependency_inversion_detail(child_job_id: str, conflict: dict) -> str:
+    return (
+        "dependency_inversion: refusing later milestone parent "
+        f"{conflict['job_id']} (sequence={conflict['parent_sequence']}) for "
+        f"{child_job_id} (sequence={conflict['incoming_sequence']})"
+    )
 
 
 def _local_pid_projects() -> set[str]:
@@ -1191,7 +1289,8 @@ async def submit_job(
                 # AADS-211: depends_on 유효성 검사
                 if req.depends_on:
                     dep_row = await conn.fetchrow(
-                        "SELECT job_id, status FROM pipeline_jobs WHERE job_id = $1 AND tenant_id = $2::uuid",
+                        "SELECT job_id, status, instruction FROM pipeline_jobs "
+                        "WHERE job_id = $1 AND tenant_id = $2::uuid",
                         req.depends_on,
                         tenant_id,
                     )
@@ -1224,14 +1323,59 @@ async def submit_job(
                             status="blocked_dependency",
                             message=detail,
                         )
+                    child_order = await _resolve_milestone_order(
+                        conn,
+                        project=req.project,
+                        tenant_id=tenant_id,
+                        instruction=req.instruction,
+                        goal_id=req.goal_id,
+                        milestone_id=req.milestone_id,
+                    )
+                    parent_order = await _resolve_milestone_order(
+                        conn,
+                        project=req.project,
+                        tenant_id=tenant_id,
+                        instruction=dep_row["instruction"] or "",
+                    )
+                    if _dependency_order_is_inverted(child_order, parent_order):
+                        conflict = {
+                            "job_id": req.depends_on,
+                            "incoming_sequence": child_order[2],
+                            "parent_sequence": parent_order[2],
+                        }
+                        detail = _dependency_inversion_detail(job_id, conflict)
+                        logger.warning(
+                            "pipeline_runner.dependency_inversion_blocked",
+                            job_id=job_id,
+                            project=req.project,
+                            depends_on=req.depends_on,
+                            child_sequence=child_order[2],
+                            parent_sequence=parent_order[2],
+                        )
+                        raise HTTPException(status_code=409, detail=detail)
                 else:
                     conflict = await _find_active_file_conflict(
                         conn,
                         project=req.project,
                         target_files=target_files,
                         tenant_id=tenant_id,
+                        incoming_instruction=req.instruction,
+                        incoming_goal_id=req.goal_id,
+                        incoming_milestone_id=req.milestone_id,
                     )
                     if conflict:
+                        if conflict.get("dependency_inversion"):
+                            detail = _dependency_inversion_detail(job_id, conflict)
+                            logger.warning(
+                                "pipeline_runner.auto_dependency_inversion_blocked",
+                                job_id=job_id,
+                                project=req.project,
+                                depends_on=conflict["job_id"],
+                                child_sequence=conflict["incoming_sequence"],
+                                parent_sequence=conflict["parent_sequence"],
+                                overlap=conflict["overlap"],
+                            )
+                            raise HTTPException(status_code=409, detail=detail)
                         auto_depends_on = conflict["job_id"]
                         overlap = ", ".join(conflict["overlap"])
                         auto_dependency_reason = (
@@ -2402,6 +2546,28 @@ class BatchSubmitRequest(BaseModel):
         return v
 
 
+def _validate_batch_dependency_graph(jobs: list[BatchJobItem]) -> None:
+    """Reject ambiguous keys, missing parents, self edges, and cycles before DB writes."""
+    keys = [item.key for item in jobs]
+    if len(keys) != len(set(keys)):
+        raise HTTPException(status_code=422, detail="배치 작업 key는 중복될 수 없습니다")
+    key_set = set(keys)
+    parents = {item.key: item.depends_on_key for item in jobs if item.depends_on_key}
+    for child, parent in parents.items():
+        if parent not in key_set:
+            raise HTTPException(status_code=422, detail=f"depends_on_key를 찾을 수 없습니다: {parent}")
+        if child == parent:
+            raise HTTPException(status_code=422, detail=f"작업이 자기 자신을 의존할 수 없습니다: {child}")
+    for start in keys:
+        seen: set[str] = set()
+        current = start
+        while current in parents:
+            if current in seen:
+                raise HTTPException(status_code=422, detail=f"배치 의존성 순환을 감지했습니다: {start}")
+            seen.add(current)
+            current = parents[current]
+
+
 @router.post("/pipeline/jobs/batch", tags=["pipeline-runner"])
 async def submit_batch(
     req: BatchSubmitRequest,
@@ -2411,6 +2577,8 @@ async def submit_batch(
     AADS-211: 채팅 AI(오케스트레이터)가 작업을 쪼갠 뒤 호출."""
     from app.core.db_pool import get_pool
     pool = get_pool()
+
+    _validate_batch_dependency_graph(req.jobs)
 
     # 자동 parallel_group 생성 (미지정 시)
     pg = req.parallel_group or f"batch-{uuid.uuid4().hex[:8]}"
@@ -2433,11 +2601,35 @@ async def submit_batch(
                 )
                 if not session_tenant:
                     raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+                batch_orders = {
+                    item.key: await _resolve_milestone_order(
+                        conn,
+                        project=req.project,
+                        tenant_id=tenant_id,
+                        instruction=item.instruction,
+                    )
+                    for item in req.jobs
+                }
                 for item in req.jobs:
                     job_id = key_to_job_id[item.key]
                     depends_on = key_to_job_id.get(item.depends_on_key) if item.depends_on_key else None
                     item_target_files = _extract_target_files(item.instruction)
                     auto_dependency_reason = ""
+
+                    if item.depends_on_key and _dependency_order_is_inverted(
+                        batch_orders[item.key], batch_orders[item.depends_on_key],
+                    ):
+                        child_order = batch_orders[item.key]
+                        parent_order = batch_orders[item.depends_on_key]
+                        conflict = {
+                            "job_id": depends_on,
+                            "incoming_sequence": child_order[2],
+                            "parent_sequence": parent_order[2],
+                        }
+                        raise HTTPException(
+                            status_code=409,
+                            detail=_dependency_inversion_detail(job_id, conflict),
+                        )
 
                     worker_model, worker_model_reason = _normalize_worker_model_override(
                         item.worker_model,
@@ -2552,6 +2744,24 @@ async def submit_batch(
                         )
                         if internal_conflicts:
                             depends_on = batch_file_owner[internal_conflicts[0]]
+                            parent_key = next(
+                                key for key, mapped_job_id in key_to_job_id.items()
+                                if mapped_job_id == depends_on
+                            )
+                            if _dependency_order_is_inverted(
+                                batch_orders[item.key], batch_orders[parent_key],
+                            ):
+                                child_order = batch_orders[item.key]
+                                parent_order = batch_orders[parent_key]
+                                conflict = {
+                                    "job_id": depends_on,
+                                    "incoming_sequence": child_order[2],
+                                    "parent_sequence": parent_order[2],
+                                }
+                                raise HTTPException(
+                                    status_code=409,
+                                    detail=_dependency_inversion_detail(job_id, conflict),
+                                )
                             auto_dependency_reason = (
                                 "[Runner Guard] 배치 내 동일 파일 충돌 감지: "
                                 f"{', '.join(internal_conflicts)}; {depends_on} 완료 후 자동 실행"
@@ -2562,9 +2772,15 @@ async def submit_batch(
                                 project=req.project,
                                 target_files=item_target_files,
                                 tenant_id=tenant_id,
+                                incoming_instruction=item.instruction,
                                 ignore_job_ids=set(key_to_job_id.values()),
                             )
                             if conflict:
+                                if conflict.get("dependency_inversion"):
+                                    raise HTTPException(
+                                        status_code=409,
+                                        detail=_dependency_inversion_detail(job_id, conflict),
+                                    )
                                 depends_on = conflict["job_id"]
                                 auto_dependency_reason = (
                                     "[Runner Guard] 활성 작업과 동일 파일 충돌 감지: "
