@@ -2,7 +2,7 @@
 
 - 문서 버전: 1.2
 - 작성일: 2026-09-19 KST
-- 상태: WO-1.1 Final 조건부 승인 / B-01~B-03 및 W-14F 승인 전 운영 마이그레이션 금지
+- 상태: WO-1.1 Final 조건부 승인 / B-01~B-04 승인 전 운영 마이그레이션 금지
 - 대상: AADS Goal Management, GoalPanel, Approval Gate, Pipeline Runner
 - 관련 목표: `cf1ec2f6-0072-4f85-aa5e-b08760cd6613`
 - 관련 마일스톤: M12~M16
@@ -606,7 +606,7 @@ grant API는 유효 범위·잔여 횟수·만료·발급자·회수 상태를 �
 ## 14. PRD v1.2 통제 개정 — WO-1.1 Final
 
 이 절은 WO-1.1 Final의 승인 통제 정본이다. 앞 절과 충돌하는 경우 이 절을 우선한다.
-구현 순서는 `B-01~B-03 → W-12a~c → W-13 → W-14F → W-14a~c → W-15 → W-16`으로 고정한다.
+구현 순서는 `B-01~B-04 → W-12a~c → W-13 → W-14F → W-14a~c → W-15 → W-16`으로 고정한다.
 
 ### 14.1 정책 결과 4축
 
@@ -782,7 +782,8 @@ DB role·composite FK·repository 강제와 direct SQL 격리시험을 ADR로 �
 | B-01 | 없음 | `runner-e56868f1` commit gate 복구, 동일 커밋 green, 포스트모템 |
 | B-02 | 없음 | `runner-cd3ff19a` 검수 인프라 복구, 선행 코드 독립 수락 |
 | B-03 | 없음 | PRD v1.2·WO-1.1 승인 이벤트 |
-| W-12a | B-01~03 | 기존 핵심 스키마·고유성·버전, up/down·경쟁 insert |
+| B-04 | B-03 | W-14F 평가기·실행기 인터페이스/ADR/시험명세 승인 이벤트 |
+| W-12a | B-01~04 | 기존 핵심 스키마·고유성·버전, up/down·경쟁 insert |
 | W-12b | W-12a | 신규 10개 저장소 additive migration, 누락 0건 |
 | W-12c | W-12b | tenant 격리/RLS ADR와 direct SQL 시험 |
 | W-13 | W-12c | 서버 계산 preconditions·경계 API, T01~T05 |
@@ -862,5 +863,6 @@ evidence 없는 전진, 자기 승인/검수, tenant 경계 누출, patch/versio
 상태 전이표, JSON Patch/JCS hash 규격, idempotency·reservation·ancestor revocation·outbox·
 trust boundary·독립 검수·tenant/RLS ADR, 오류 카탈로그, T01·T36~T58 명세다.
 
-운영 migration은 B-01~B-03 및 W-14F 인터페이스 승인 전 금지한다. 모든 완료 보고는
+운영 migration은 B-01~B-04 완료 전 금지한다. B-04는 W-14F 구현 완료가 아니라
+평가기·실행기 인터페이스와 관련 ADR·시험명세의 선행 승인을 뜻한다. 모든 완료 보고는
 decision id, policy/grant version, correlation id로 역추적할 수 있어야 한다.
