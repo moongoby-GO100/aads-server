@@ -57,6 +57,18 @@ def _name_hash(value: Any) -> str | None:
     return _digest(name) if name else None
 
 
+def _stable_data_attributes(node: Mapping[str, Any]) -> dict[str, str]:
+    """Hash allowlisted stable data attributes without retaining their values."""
+    attributes = node.get("attributes") if isinstance(node.get("attributes"), Mapping) else {}
+    stable_attributes: dict[str, str] = {}
+    for key, value in attributes.items():
+        normalized_key = str(key).lower()
+        normalized_value = unicodedata.normalize("NFKC", str(value)).strip() if value is not None else ""
+        if normalized_key in _SAFE_DATA_ATTRIBUTES and normalized_value:
+            stable_attributes[normalized_key] = _digest(normalized_value)
+    return dict(sorted(stable_attributes.items()))
+
+
 def _stable_states(
     node: Mapping[str, Any], *, template: Mapping[str, Any] | None = None,
 ) -> dict[str, bool | str]:
@@ -141,17 +153,23 @@ def _configured_state_keys(template: Mapping[str, Any]) -> frozenset[str]:
 def _relation_targets(
     value: Any, *, approved_name_hashes: frozenset[str],
 ) -> list[dict[str, str]]:
-    """Keep only semantic targets; raw relationship IDs are deliberately dropped."""
+    """Keep unnamed targets and template-approved named targets, never raw IDs/names."""
     values = value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else [value]
     result: list[dict[str, str]] = []
     for target in values:
         if not isinstance(target, Mapping):
             continue
         role = str(target.get("role") or "").strip().lower()
-        name = _name_hash(target.get("name") or target.get("accessible_name") or target.get("label"))
+        raw_name = target.get("accessible_name") or target.get("name") or target.get("label")
+        has_name = bool(str(raw_name or "").strip())
+        name = _name_hash(raw_name)
+        # A named relationship target is semantic text, not a structural target,
+        # unless that exact name was explicitly approved by the recipe.
+        if has_name and name not in approved_name_hashes:
+            continue
         if role:
             item = {"role": role}
-            if name in approved_name_hashes:
+            if name:
                 item["name_hash"] = name
             result.append(item)
     return sorted(result, key=_canonical)
@@ -165,12 +183,14 @@ def _normalize_node(
         return None
     item: dict[str, Any] = {"role": role}
     raw_name = node.get("accessible_name") or node.get("name") or node.get("label")
-    normalized_name = normalize_accessible_name(raw_name)
-    name_hash = _digest(normalized_name) if normalized_name else None
-    # A supplied but non-stable name denotes exactly the volatile/personalized
-    # content this signature must exclude; retaining its role would still make
-    # price or ad insertion look like a structural change.
-    if str(raw_name or "").strip() and normalized_name is None:
+    has_name = bool(str(raw_name or "").strip())
+    name_hash = _name_hash(raw_name)
+    stable_attributes = _stable_data_attributes(node)
+    # Named nodes are included only when the recipe approved their name or an
+    # allowlisted stable data attribute supplies a non-textual identity. This
+    # drops personalized and ordinary unapproved labels instead of retaining a
+    # role-only fingerprint for them.
+    if has_name and name_hash not in approved_name_hashes and not stable_attributes:
         return None
     if name_hash in approved_name_hashes:
         item["name_hash"] = name_hash
@@ -188,22 +208,15 @@ def _normalize_node(
             normalized_relations[key] = targets
     if normalized_relations:
         item["relationships"] = normalized_relations
-    attributes = node.get("attributes") if isinstance(node.get("attributes"), Mapping) else {}
-    stable_attributes: dict[str, str] = {}
-    for key, value in attributes.items():
-        normalized_key = str(key).lower()
-        value_hash = _name_hash(value)
-        if normalized_key in _SAFE_DATA_ATTRIBUTES and value_hash:
-            stable_attributes[normalized_key] = value_hash
     if stable_attributes:
-        item["data_attributes"] = dict(sorted(stable_attributes.items()))
+        item["data_attributes"] = stable_attributes
     return item
 
 
 def build_partial_signature(
     nodes: Sequence[Mapping[str, Any]], *, area_key: str, template: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Normalize an ARIA interaction subtree without retaining sibling order/text."""
+    """Normalize approved names, stable attributes, and unnamed ARIA structure only."""
     template = template or {}
     approved_name_hashes = _template_name_hashes(template)
     state_keys = _configured_state_keys(template)

@@ -35,7 +35,7 @@ def test_stable_aria_signature_excludes_dynamic_id_price_ad_and_personalized_tex
     ], area_key="catalog-search")
     rendered = str(signature["structure"])
     assert "random-12345" not in rendered and "12.99" not in rendered and "alice" not in rendered.lower()
-    assert len(signature["structure"]["nodes"]) == 2
+    assert len(signature["structure"]["nodes"]) == 1
     assert signature["signature_hash"] == baseline["signature_hash"]
     assert normalize_accessible_name(" Product   Search ") == "product search"
 
@@ -64,13 +64,14 @@ def test_default_signature_excludes_runtime_states_and_unapproved_accessible_nam
         {"role": "button", "accessible_name": "계정별 주문 2026", "states": {"disabled": True}},
     ], area_key="catalog-search")
     assert first["signature_hash"] == changed["signature_hash"]
+    assert first["node_count"] == changed["node_count"] == 1
     assert "name_hash" not in str(changed["structure"])
     assert "states" not in str(changed["structure"])
 
 
 def test_template_approved_names_and_states_are_the_only_signature_inputs():
     template = {
-        "stable_names": ["Product search"],
+        "stable_names": ["Product search", "Search"],
         "stable_states": ["disabled"],
         "required_anchors": [{"role": "searchbox", "name": "Product search"}],
     }
@@ -78,6 +79,51 @@ def test_template_approved_names_and_states_are_the_only_signature_inputs():
     rendered = str(signature["structure"])
     assert "name_hash" in rendered and "states" in rendered
     assert "Search" not in rendered
+
+
+def test_unapproved_named_nodes_require_a_stable_data_attribute():
+    excluded = build_partial_signature(
+        [{"role": "button", "name": "Continue"}], area_key="checkout",
+    )
+    identified = build_partial_signature(
+        [{"role": "button", "name": "Continue", "attributes": {"data-testid": "continue-button"}}],
+        area_key="checkout",
+    )
+    assert excluded["node_count"] == 0
+    assert identified["node_count"] == 1
+    assert "name_hash" not in str(identified["structure"])
+
+
+def test_stable_data_attribute_value_change_changes_signature_without_storing_value():
+    first = build_partial_signature(
+        [{"role": "button", "name": "Continue", "attributes": {"DATA-TESTID": "continue-button"}}],
+        area_key="checkout",
+    )
+    changed = build_partial_signature(
+        [{"role": "button", "name": "Continue", "attributes": {"data-testid": "continue-button-v2"}}],
+        area_key="checkout",
+    )
+    assert first["signature_hash"] != changed["signature_hash"]
+    assert "continue-button" not in str(first["structure"])
+
+
+def test_relationship_targets_drop_unapproved_names_instead_of_retaining_roles():
+    template = {"stable_names": ["Dialog title"]}
+    signature = build_partial_signature(
+        [{
+            "role": "button", "name": "Open", "attributes": {"data-testid": "dialog-trigger"},
+            "relationships": {"labelledby": [
+                {"role": "heading", "name": "Dialog title"},
+                {"role": "status", "name": "Welcome Alice"},
+            ]},
+        }],
+        area_key="dialog", template=template,
+    )
+    relationships = signature["structure"]["nodes"][0]["relationships"]
+    assert relationships == {
+        "labelledby": [{"role": "heading", "name_hash": aria_signature._name_hash("Dialog title")}]
+    }
+    assert "Alice" not in str(signature["structure"])
 
 
 def test_required_state_change_blocks_but_unspecified_state_change_is_allowed():
