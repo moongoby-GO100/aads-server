@@ -36,10 +36,10 @@
 
 - `python -m py_compile app/services/goal_workflow_approval.py app/services/goal_policy_foundation.py`: PASS
 - `ruff check` (변경 Python 4개): PASS
-- W-14a/W-14F 집중 단위시험: `69 passed`
-- 전체 goal 단위 회귀: `346 passed`
-- 일회용 PostgreSQL 통합시험: `1 passed`; migration 2회, 복수 승인,
-  transaction rollback, execution-key 단일효과를 검증했다.
+- W-14a/W-14F 집중 단위시험: `51 passed`
+- 전체 goal 단위 회귀: `348 passed`
+- 일회용 PostgreSQL 통합시험 2종: 각 `1 passed`; migration 2회/FORCE RLS와
+  복수 승인/transaction rollback/execution-key 단일효과를 검증했다.
 - AAG baseline: 결함 증가 없음
 - `git diff --check`: PASS
 - 운영 migration/build/deploy: 미실행
@@ -47,4 +47,5 @@
 ## 남은 검증
 
 - 운영 적용 전 migration rehearsal과 blue/green release gate 수행
+- W-14b에서 grant reservation/ancestor revocation 및 outbox claim 동시성을 검증
 - migration 적용 순서: W-14F stores 이후 `20260919_goal_workflow_w14a.sql`

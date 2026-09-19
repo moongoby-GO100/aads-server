@@ -1,3 +1,17 @@
+# AADS-GOAL-V12-W14A-R1-20260919
+
+- 구현: immutable change set body hash/target version, 독립 다중 승인, reject-wins,
+  W-14F 실행 직전 재검증, transaction 내부 mutation/effect/outbox, owner epoch outbox
+  claim/ack fence, unknown outcome reconciliation.
+- 보안 보강: change-set immutable DB trigger, 신규 3개 테이블 FORCE RLS,
+  policy decision principal 결합, UUID/시간 envelope 정규화, ordered patch 적용.
+- 검증: `pytest -q tests/unit/test_goal_*.py` **348 passed**; disposable PostgreSQL
+  W14a multi-approval/rollback/exactly-once **1 passed**; 전체 migration/RLS **1 passed**;
+  Ruff, py_compile, `git diff --check` PASS.
+- 운영 DB migration·배포: 미실행.
+
+---
+
 # AADS-GOAL-V12-W14F-POLICY-FOUNDATION-20260919
 
 ## STEP 0 기존 구현 조사 및 분류
