@@ -5,13 +5,13 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from app.services.channel_router import ActionIntent, ChannelRouter
 from app.services.work_recipe.audit import GuardedRunRecorder
 from app.services.work_recipe.credential_scope import assert_credential_allowed
 from app.services.work_recipe.executor import BrowserRecipeExecutor
 from app.services.work_recipe.player import RunResult, play_recipe
 from app.services.work_recipe.schema import WorkRecipe, parse_recipe
 from app.services.work_recipe.store import list_recipes, normalize_domain, row_to_recipe
-from app.services.channel_router import ActionIntent, ChannelRouter
 
 _URL_HOST = re.compile(r"https?://([^/\s]+)", re.IGNORECASE)
 

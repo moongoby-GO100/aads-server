@@ -228,6 +228,14 @@ class RecipePlayer:
             await self._record_step(result.run_id, step_result)
             result.llm_calls += step_result.llm_calls
 
+            if step_result.status == STATUS_BLOCKED:
+                result.status = STATUS_BLOCKED
+                result.blocked_step_seq = step.seq
+                result.blocked_risk = step.risk
+                result.error = step_result.error
+                stop_index = index
+                break
+
             if step_result.status != STATUS_SUCCESS:
                 result.status = STATUS_FAILED
                 result.failed_step_seq = step.seq
@@ -307,13 +315,19 @@ class RecipePlayer:
             else:
                 data = dict(raw) if isinstance(raw, Mapping) else {}
                 outcome.llm_calls += _int_or_zero(data.get("llm_calls"))
-                if data.get("ok") is False or data.get("status") == STATUS_FAILED:
+                reported_status = str(data.get("status") or "")
+                if data.get("ok") is False or reported_status in {STATUS_FAILED, STATUS_BLOCKED}:
                     last_error = str(data.get("error") or "step reported failure")
                     outcome.recovery = _mapping_or_empty(data.get("recovery"))
                     outcome.narration = str(data.get("narration") or "Smart Browser 단계가 실패해 복구 경로를 준비했습니다.")[:500]
                     outcome.route = str(
                         data.get("route") or outcome.recovery.get("route") or "browser_agent"
                     )[:80]
+                    if reported_status == STATUS_BLOCKED or outcome.route in {"human_gateway", "pc_agent"}:
+                        outcome.status = STATUS_BLOCKED
+                        outcome.error = last_error
+                        outcome.duration_ms = int((time.monotonic() - started) * 1000)
+                        return outcome
                 else:
                     outcome.status = STATUS_SUCCESS
                     outcome.error = ""

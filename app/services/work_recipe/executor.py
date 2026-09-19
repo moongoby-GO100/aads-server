@@ -15,7 +15,6 @@ from app.services.work_recipe.guard import (
 )
 from app.services.work_recipe.schema import ALLOWED_ACTIONS
 
-
 # Smart Browser is the normal execution lane.  A local PC lane is deliberately
 # opt-in: it is reserved for native security software/certificates or an
 # explicitly observed authentication challenge.  This keeps ordinary AADS

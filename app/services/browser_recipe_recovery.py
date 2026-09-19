@@ -7,7 +7,6 @@ stored as a G6-gated *patch candidate*, never written to ``browser_recipes``.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import uuid
@@ -17,8 +16,14 @@ from typing import Any
 from app.core.db_pool import get_pool
 
 MAX_RECOVERY_RETRIES = 2
-_CREDENTIAL_MARKERS = re.compile(r"(?:cookie|token|otp|password|secret|authorization|bearer|session[ _-]?id)", re.I)
-_PAGE_COMMAND_MARKERS = re.compile(r"(?:javascript:|<script|\b(?:click|type|submit|navigate|execute)\s*\()", re.I)
+_CREDENTIAL_MARKERS = re.compile(
+    r"(?:cookie|token|otp|password|secret|authorization|bearer|session[ _-]?id)",
+    re.IGNORECASE,
+)
+_PAGE_COMMAND_MARKERS = re.compile(
+    r"(?:javascript:|<script|\b(?:click|type|submit|navigate|execute)\s*\()",
+    re.IGNORECASE,
+)
 _SELECTOR = re.compile(r"""^[a-zA-Z0-9_#.[\]="'~*^$|:+> ()\-,]+$""")
 _SCOPE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,199}$")
@@ -148,7 +153,16 @@ async def record_recipe_recovery(
                                          page_key=page_key, skill_key=skill_key, skill_version=skill_version,
                                          selector=safe_selector, evidence=cleaned_evidence)
             canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            digest = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            # The G6 lifecycle trigger hashes PostgreSQL's canonical
+            # ``jsonb::text`` representation.  Compute the digest through the
+            # same expression so harmless JSON whitespace/key ordering cannot
+            # make every recovery candidate fail closed as a hash mismatch.
+            digest = await conn.fetchval(
+                "SELECT 'sha256:' || encode(digest(convert_to(($1::jsonb)::text, 'UTF8'), 'sha256'), 'hex')",
+                canonical,
+            )
+            if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                raise ValueError("candidate_payload_hash_failed")
             version = "recovery-" + digest.removeprefix("sha256:")[:16]
             candidate = await conn.fetchrow(
                 """INSERT INTO browser_learned_artifact_versions (artifact_id,version,status,payload,payload_sha256)

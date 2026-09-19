@@ -276,6 +276,31 @@ async def test_executor_reported_failure_is_retried_too():
     assert calls.count(3) == 2
 
 
+async def test_human_gateway_recovery_blocks_without_retrying():
+    recipe = make_recipe()
+    calls: list[int] = []
+
+    async def executor(payload):
+        calls.append(payload["seq"])
+        return {
+            "ok": False,
+            "error": "session expired",
+            "recovery": {
+                "route": "human_gateway",
+                "reason": "SESSION_EXPIRED",
+                "resume": "login_then_retry_same_step",
+            },
+        }
+
+    result = await play_recipe(recipe, executor, {"shop_id": "42", "password": "pw"}, retries=2)
+
+    assert result.status == "blocked"
+    assert result.blocked_step_seq == 1
+    assert result.failed_step_seq is None
+    assert calls == [1]
+    assert result.steps[0].recovery["resume"] == "login_then_retry_same_step"
+
+
 async def test_step_timeout_is_enforced_and_retried():
     recipe = parse_recipe(
         """

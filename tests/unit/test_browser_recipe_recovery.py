@@ -59,6 +59,8 @@ def test_recording_is_tenant_scoped_idempotent_and_never_auto_promotes(monkeypat
 
         async def fetchval(self, query, *args):
             calls.append((query, args))
+            if "convert_to(($1::jsonb)::text" in query:
+                return "sha256:" + "a" * 64
             return 0
 
         def transaction(self):
@@ -72,11 +74,18 @@ def test_recording_is_tenant_scoped_idempotent_and_never_auto_promotes(monkeypat
         async def __aenter__(self): return Connection()
         async def __aexit__(self, *args): return False
 
-    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: SimpleNamespace(acquire=lambda: Acquire()))
+    monkeypatch.setattr(recovery, "get_pool", lambda: SimpleNamespace(acquire=lambda: Acquire()))
     asyncio.run(recovery.record_recipe_recovery(
         tenant_id="00000000-0000-0000-0000-000000000001", recipe_id="catalog", recipe_version="v1",
         site_key="shop", page_key="orders", idempotency_key="recovery-001", error_code="locator_not_found",
         rediscovered_selector="button[data-testid='save']",
     ))
-    assert all("tenant_id=$1::uuid" in query or "INSERT INTO browser_recipe_recovery_events" in query or "browser_learned_artifacts" in query or "browser_learned_artifact_versions" in query for query, _ in calls)
+    assert all(
+        "tenant_id=$1::uuid" in query
+        or "INSERT INTO browser_recipe_recovery_events" in query
+        or "browser_learned_artifacts" in query
+        or "browser_learned_artifact_versions" in query
+        or "convert_to(($1::jsonb)::text" in query
+        for query, _ in calls
+    )
     assert not any("'active'" in query for query, _ in calls)

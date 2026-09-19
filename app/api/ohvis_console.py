@@ -45,6 +45,7 @@ from pydantic import BaseModel, Field
 
 from app.auth import TenantRole, require_tenant_role
 from app.core.db_pool import get_pool
+from app.services.channel_router import ChannelRouter, directive_from_authenticated_context
 from app.services.loop_controller import list_active_loops
 from app.services.ohvis_task_manager import complete_task as complete_ohvis_task
 from app.services.ohvis_task_manager import create_task as create_ohvis_task
@@ -59,7 +60,6 @@ from app.services.work_recipe.approval import (
 from app.services.work_recipe.audit import mask_secrets
 from app.services.work_recipe.guard import requires_confirmation
 from app.services.work_recipe.orchestrator import run_directive
-from app.services.channel_router import ChannelRouter, directive_from_authenticated_context
 
 router = APIRouter(prefix="/ohvis/console", tags=["ohvis-console"])
 logger = structlog.get_logger()
