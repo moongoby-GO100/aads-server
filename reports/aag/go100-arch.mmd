@@ -6,11 +6,6 @@ graph LR
   n_backend_app_api_v1_auth_router_py --> n_ns_api_v1_auth
   n_backend_app_api_v1_social_auth_router_py["backend/app/api/v1/social_auth_router.py"]
   n_backend_app_api_v1_social_auth_router_py --> n_ns_api_v1_auth
-  n_ns_api_v1_dashboard_summary(["/api/v1/dashboard/summary"])
-  n_backend_app_api_v1_dashboard_router_py["backend/app/api/v1/dashboard_router.py"]
-  n_backend_app_api_v1_dashboard_router_py --> n_ns_api_v1_dashboard_summary
-  n_backend_app_routers_v4_compat_py["backend/app/routers/v4_compat.py"]
-  n_backend_app_routers_v4_compat_py --> n_ns_api_v1_dashboard_summary
   n_ns_api_v1_reports(["/api/v1/reports"])
   n_backend_app_routers_report_router_py["backend/app/routers/report_router.py"]
   n_backend_app_routers_report_router_py --> n_ns_api_v1_reports
@@ -139,8 +134,10 @@ graph LR
   n_ns_api_go100_wave_signals(["/api/go100/wave-signals"])
   n_backend_app_routers_go100_wave_signals_router_py["backend/app/routers/go100/wave_signals_router.py"]
   n_backend_app_routers_go100_wave_signals_router_py --> n_ns_api_go100_wave_signals
+  n_ns_api_go100_wave_training(["/api/go100/wave-training"])
+  n_backend_app_routers_go100_wave_training_router_py["backend/app/routers/go100/wave_training_router.py"]
+  n_backend_app_routers_go100_wave_training_router_py --> n_ns_api_go100_wave_training
   n_backend_app_main_py --> n_backend_app_api_v1_auth_router_py
-  n_backend_app_main_py --> n_backend_app_api_v1_dashboard_router_py
   n_backend_app_main_py --> n_backend_app_api_v1_go100_admin_router_py
   n_backend_app_main_py --> n_backend_app_api_v1_go100_commander_router_py
   n_backend_app_main_py --> n_backend_app_api_v1_social_auth_router_py
@@ -156,6 +153,7 @@ graph LR
   n_backend_app_main_py --> n_backend_app_routers_go100_wave_analysis_router_py
   n_backend_app_main_py --> n_backend_app_routers_go100_wave_engine_health_router_py
   n_backend_app_main_py --> n_backend_app_routers_go100_wave_signals_router_py
+  n_backend_app_main_py --> n_backend_app_routers_go100_wave_training_router_py
   n_backend_app_main_py --> n_backend_app_routers_report_router_py
   n_backend_app_main_py --> n_backend_app_routers_system_py
   n_backend_app_main_py --> n_backend_app_routers_universe_py

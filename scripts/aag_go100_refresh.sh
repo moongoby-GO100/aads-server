@@ -6,8 +6,9 @@
 # 반대 방향은 보장되지 않는다. 스캐너 정본은 이 저장소의 tools/aag 이므로
 # 매 실행마다 14 로 밀어넣어 사본이 낡지 않게 한다.
 #
-# 산출물은 GO100 저장소 안에 쓰지 않는다 — 러너의 UNTRACKED_IGNORED_RESCUE 가
-# 추적되지 않은 파일을 남의 커밋으로 끌어가는 경로가 있다(2026-09-19 실측).
+# 산출물은 어느 Git 저장소에도 쓰지 않는다. GO100 저장소에 쓰면 러너의
+# UNTRACKED_IGNORED_RESCUE 가 남의 커밋으로 끌어갈 수 있고, AADS 저장소의
+# reports/aag 에 쓰면 매시간 tracked 파일이 dirty 가 되어 배포를 막는다.
 #
 # 실행: cron (매시간 25분). 수동 1회 실행도 같은 명령이다.
 #   bash /root/aads/aads-server/scripts/aag_go100_refresh.sh
@@ -18,11 +19,11 @@ REMOTE="${AAG_GO100_REMOTE:-root@5.104.86.14}"
 REMOTE_DIR="${AAG_GO100_REMOTE_DIR:-/root/aag-go100}"
 REPO_DIR="${AAG_GO100_REPO_DIR:-/root/aads/aads-server}"
 TARGET_ROOT="${AAG_GO100_TARGET_ROOT:-/root/kis-autotrade-v4}"
-OUT_DIR="${REPO_DIR}/reports/aag"
+OUT_DIR="${AAG_GO100_OUT_DIR:-/var/lib/aads/aag/go100}"
 LOG="${AAG_GO100_LOG:-/var/log/aads-pipeline/aag-go100.log}"
 SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=15)
 
-mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+mkdir -p "$(dirname "$LOG")" "$OUT_DIR" 2>/dev/null || true
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S %Z')] $*" | tee -a "$LOG"; }
 
 # 중복 실행 방지 — 스캔이 주기보다 길어져도 겹치지 않는다.
@@ -83,7 +84,8 @@ print('generated=%s findings=%d %s routes=%s' % (
 #    폴백으로만 답한다 — 2026-09-19 `aag_graph_snapshots` 0건의 원인이 바로
 #    생산자 부재였다. 적재가 실패해도 산출물 회수는 성공으로 남긴다(파일은
 #    이미 최신이다). 대신 로그에 남겨 조용히 낡지 않게 한다.
-if python3 "${REPO_DIR}/scripts/aag_snapshot_push.py" >>"$LOG" 2>&1; then
+if python3 "${REPO_DIR}/scripts/aag_snapshot_push.py" \
+    "GO100=${OUT_DIR}/go100-graph.json" >>"$LOG" 2>&1; then
     log "SNAPSHOT_PUSHED"
 else
     log "SNAPSHOT_PUSH_FAILED — aag_findings 가 local_graph 폴백으로 답한다"
