@@ -1,4 +1,6 @@
 -- G5: facts shown to users must be revalidated at the final display boundary.
+-- Included in the M7-M11 release chain so a previously skipped G5 asset is
+-- applied before site-knowledge columns are added.
 CREATE TABLE IF NOT EXISTS browser_live_facts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
