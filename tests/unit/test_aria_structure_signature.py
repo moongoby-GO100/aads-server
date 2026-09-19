@@ -1,7 +1,8 @@
+import asyncio
 import importlib.util
 import sys
 from pathlib import Path
-
+from types import SimpleNamespace
 
 MODULE_PATH = Path(__file__).resolve().parents[2] / "app/services/aria_structure_signature.py"
 SPEC = importlib.util.spec_from_file_location("aria_structure_signature_under_test", MODULE_PATH)
@@ -13,6 +14,7 @@ SPEC.loader.exec_module(aria_signature)
 assess_revisit = aria_signature.assess_revisit
 build_partial_signature = aria_signature.build_partial_signature
 normalize_accessible_name = aria_signature.normalize_accessible_name
+record_revisit_signature = aria_signature.record_revisit_signature
 
 
 def _nodes():
@@ -61,3 +63,54 @@ def test_missing_aria_requires_dom_fallback_and_role_change_does_not_reuse():
         {"role": "textbox", "accessible_name": "Product search"}, {"role": "button", "accessible_name": "Search"},
     ], area_key="catalog-search")
     assert changed["decision"] == "rediscover"
+
+
+def test_stable_data_attribute_names_are_case_normalized():
+    lower = build_partial_signature(
+        [{"role": "button", "name": "Search", "attributes": {"data-testid": "catalog-search"}}],
+        area_key="catalog-search",
+    )
+    mixed = build_partial_signature(
+        [{"role": "button", "name": "Search", "attributes": {"DATA-TESTID": "catalog-search"}}],
+        area_key="catalog-search",
+    )
+    assert lower == mixed
+
+
+def test_record_revisit_signature_scopes_every_query_to_tenant(monkeypatch):
+    calls: list[tuple[str, tuple[object, ...]]] = []
+
+    class FakeConnection:
+        async def fetchrow(self, query, *args):
+            calls.append((query, args))
+            if "FROM browser_recipes" in query:
+                return {"capture_rules": {"aria_signature": {}}}
+            return None
+
+        async def execute(self, query, *args):
+            calls.append((query, args))
+
+    class Acquire:
+        async def __aenter__(self):
+            return FakeConnection()
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    pool = SimpleNamespace(acquire=lambda: Acquire())
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: pool)
+
+    asyncio.run(
+        record_revisit_signature(
+            tenant_id="00000000-0000-0000-0000-000000000001",
+            recipe_id="catalog-search",
+            recipe_version="v1",
+            page_key="catalog",
+            area_key="search",
+            current_nodes=_nodes(),
+        )
+    )
+
+    assert len(calls) == 3
+    assert all("tenant_id=$1::uuid" in query or "(tenant_id," in query for query, _ in calls)
+    assert all(args[0] == "00000000-0000-0000-0000-000000000001" for _, args in calls)

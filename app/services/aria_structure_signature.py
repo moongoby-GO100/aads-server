@@ -62,9 +62,11 @@ def _stable_states(node: Mapping[str, Any]) -> dict[str, bool | str]:
     result: dict[str, bool | str] = {}
     for key in _STATE_KEYS:
         value = states.get(key)
-        if isinstance(value, bool):
-            result[key] = value
-        elif key == "current" and isinstance(value, str) and value in {"page", "step", "location", "date", "time"}:
+        if isinstance(value, bool) or (
+            key == "current"
+            and isinstance(value, str)
+            and value in {"page", "step", "location", "date", "time"}
+        ):
             result[key] = value
     return result
 
@@ -107,19 +109,20 @@ def _normalize_node(node: Mapping[str, Any]) -> dict[str, Any] | None:
     if states:
         item["states"] = states
     relations = node.get("relationships") if isinstance(node.get("relationships"), Mapping) else {}
-    normalized_relations = {
-        key: _relation_targets(relations.get(key))
-        for key in _RELATION_KEYS if _relation_targets(relations.get(key))
-    }
+    normalized_relations: dict[str, list[dict[str, str]]] = {}
+    for key in _RELATION_KEYS:
+        targets = _relation_targets(relations.get(key))
+        if targets:
+            normalized_relations[key] = targets
     if normalized_relations:
         item["relationships"] = normalized_relations
     attributes = node.get("attributes") if isinstance(node.get("attributes"), Mapping) else {}
-    stable_attributes = {
-        key: value_hash
-        for key, value in attributes.items()
-        if str(key).lower() in _SAFE_DATA_ATTRIBUTES
-        if (value_hash := _name_hash(value))
-    }
+    stable_attributes: dict[str, str] = {}
+    for key, value in attributes.items():
+        normalized_key = str(key).lower()
+        value_hash = _name_hash(value)
+        if normalized_key in _SAFE_DATA_ATTRIBUTES and value_hash:
+            stable_attributes[normalized_key] = value_hash
     if stable_attributes:
         item["data_attributes"] = dict(sorted(stable_attributes.items()))
     return item
