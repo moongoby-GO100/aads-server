@@ -27,6 +27,7 @@ def _nodes():
 
 
 def test_stable_aria_signature_excludes_dynamic_id_price_ad_and_personalized_text():
+    baseline = build_partial_signature(_nodes(), area_key="catalog-search")
     signature = build_partial_signature(_nodes() + [
         {"role": "status", "accessible_name": "Price $12.99"},
         {"role": "complementary", "accessible_name": "Sponsored advertisement"},
@@ -34,7 +35,8 @@ def test_stable_aria_signature_excludes_dynamic_id_price_ad_and_personalized_tex
     ], area_key="catalog-search")
     rendered = str(signature["structure"])
     assert "random-12345" not in rendered and "12.99" not in rendered and "alice" not in rendered.lower()
-    assert len(signature["structure"]["nodes"]) == 5
+    assert len(signature["structure"]["nodes"]) == 2
+    assert signature["signature_hash"] == baseline["signature_hash"]
     assert normalize_accessible_name(" Product   Search ") == "product search"
 
 

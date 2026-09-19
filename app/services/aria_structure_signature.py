@@ -165,10 +165,13 @@ def _normalize_node(
         return None
     item: dict[str, Any] = {"role": role}
     raw_name = node.get("accessible_name") or node.get("name") or node.get("label")
-    name_hash = _name_hash(raw_name)
+    normalized_name = normalize_accessible_name(raw_name)
+    name_hash = _digest(normalized_name) if normalized_name else None
     # A supplied but non-stable name denotes exactly the volatile/personalized
     # content this signature must exclude; retaining its role would still make
     # price or ad insertion look like a structural change.
+    if str(raw_name or "").strip() and normalized_name is None:
+        return None
     if name_hash in approved_name_hashes:
         item["name_hash"] = name_hash
     landmark = str(node.get("landmark") or node.get("parent_role") or "").strip().lower()
