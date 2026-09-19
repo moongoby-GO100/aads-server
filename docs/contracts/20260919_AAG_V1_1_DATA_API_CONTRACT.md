@@ -141,3 +141,9 @@ run, observation, snapshot, graph body, finding identity/occurrence, audit, evid
   않고 unavailable을 반환한다. fallback을 authoritative evidence로 오인하지 않기 위함이다.
 - v1 route와 legacy table은 유지한다. runner, CI, 목표 화면의 전환과 관측 기간 잔여 v1=0
   확인 전에는 v1 폐기를 승인하지 않는다.
+- phase 2 운영 기본값은 `AAG_V2_ENABLED=true`, `AAG_V2_CONSUMERS_ENABLED=true`다.
+  두 값 중 하나를 `0`으로 설정하면 스키마 삭제 없이 즉시 v1 경로로 rollback한다.
+- 초기 direct pusher가 verified observation만 만들고 latest pointer를 누락한 호스트는
+  telemetry migration이 가장 최신의 verified authoritative observation만 백필한다.
+  이후 pusher는 ref별 advisory transaction lock을 획득하고 pointer/ref-head를 같은
+  transaction에서 갱신하며 commit mismatch와 out-of-order 관측은 latest를 바꾸지 않는다.

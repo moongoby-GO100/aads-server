@@ -145,16 +145,21 @@ def _v2_statement(project: str, graph: dict) -> str | None:
         "unresolved": _dollar(canonical_json(body["unresolved"])),
     }
     return """
-WITH new_run AS (
+WITH scope_lock AS (
+    SELECT pg_advisory_xact_lock(hashtextextended(
+        {project} || '|' || {repository} || '|' || {ref} || '|' || {scope}, 0
+    ))
+), new_run AS (
     INSERT INTO aag_scan_runs
          (project, repository_id, target_ref, governance_scope, resolved_commit_sha,
          expected_target_ref_head_sha, input_fingerprint, scanner_version,
          ruleset_digest, scan_scope_digest,
          normalization_version, parser_versions, host, result, stage_status)
-    VALUES ({project}, {repository}, {ref}, {scope}, {commit}, {expected_commit},
+    SELECT {project}, {repository}, {ref}, {scope}, {commit}, {expected_commit},
             {input}, {scanner},
             {rules}, {scan_scope}, {normalization}, {parsers}::jsonb, {host},
-            'running', '{{"scan":"succeeded","ingest":"running"}}'::jsonb)
+            'running', '{{"scan":"succeeded","ingest":"running"}}'::jsonb
+      FROM scope_lock
     RETURNING id
 ), inserted_snapshot AS (
     INSERT INTO aag_graph_snapshots_v2
@@ -181,15 +186,63 @@ WITH new_run AS (
          expected_target_ref_head_sha, authoritative, result,
          verification_status, verified_at)
     SELECT r.id, s.id, {project}, {repository}, {ref}, {scope}, {commit}, {input},
-           {content}, {expected_commit}, ({commit} = {expected_commit}),
+           {content}, {expected_commit},
+           ({commit} = {expected_commit} AND NOT EXISTS (
+               SELECT 1 FROM aag_latest_pointers p
+                WHERE p.project={project} AND p.repository_id={repository}
+                  AND p.target_ref={ref} AND p.governance_scope={scope}
+                  AND p.generated_at > {generated}::timestamptz
+           )),
            CASE WHEN s.created THEN 'succeeded' ELSE 'no_change_success' END,
-           CASE WHEN {commit} = {expected_commit} THEN 'verified'
-                ELSE 'commit_mismatch' END, NOW()
+           CASE WHEN {commit} <> {expected_commit} THEN 'commit_mismatch'
+                WHEN EXISTS (
+                    SELECT 1 FROM aag_latest_pointers p
+                     WHERE p.project={project} AND p.repository_id={repository}
+                       AND p.target_ref={ref} AND p.governance_scope={scope}
+                       AND p.generated_at > {generated}::timestamptz
+                ) THEN 'out_of_order'
+                ELSE 'verified' END, NOW()
       FROM new_run r CROSS JOIN selected_snapshot s
-    RETURNING run_id, result, verification_status
+    RETURNING id, run_id, snapshot_id, result, verification_status, verified_at
+), new_ref_head AS (
+    INSERT INTO aag_ref_heads
+        (project,repository_id,target_ref,governance_scope,head_commit_sha,
+         generated_at,verified_at,observation_id,updated_at)
+    SELECT {project},{repository},{ref},{scope},{commit},{generated}::timestamptz,
+           o.verified_at,o.id,NOW()
+      FROM new_observation o
+     WHERE o.verification_status='verified'
+    ON CONFLICT (project,repository_id,target_ref,governance_scope) DO UPDATE SET
+        head_commit_sha=EXCLUDED.head_commit_sha,
+        generated_at=EXCLUDED.generated_at,
+        verified_at=EXCLUDED.verified_at,
+        observation_id=EXCLUDED.observation_id,
+        updated_at=NOW()
+    WHERE EXCLUDED.generated_at >= aag_ref_heads.generated_at
+    RETURNING observation_id
+), new_pointer AS (
+    INSERT INTO aag_latest_pointers
+        (project,repository_id,target_ref,governance_scope,snapshot_id,observation_id,
+         run_id,resolved_commit_sha,expected_target_ref_head_sha,generated_at,verified_at,updated_at)
+    SELECT {project},{repository},{ref},{scope},o.snapshot_id,o.id,o.run_id,
+           {commit},{expected_commit},{generated}::timestamptz,o.verified_at,NOW()
+      FROM new_observation o
+     WHERE o.verification_status='verified'
+    ON CONFLICT (project,repository_id,target_ref,governance_scope) DO UPDATE SET
+        snapshot_id=EXCLUDED.snapshot_id,
+        observation_id=EXCLUDED.observation_id,
+        run_id=EXCLUDED.run_id,
+        resolved_commit_sha=EXCLUDED.resolved_commit_sha,
+        expected_target_ref_head_sha=EXCLUDED.expected_target_ref_head_sha,
+        generated_at=EXCLUDED.generated_at,
+        verified_at=EXCLUDED.verified_at,
+        updated_at=NOW()
+    WHERE EXCLUDED.generated_at >= aag_latest_pointers.generated_at
+    RETURNING run_id
 )
 UPDATE aag_scan_runs r
    SET result=CASE WHEN o.verification_status = 'verified' THEN o.result
+                   WHEN o.verification_status = 'out_of_order' THEN 'out_of_order'
                    ELSE 'source_behind' END,
        finished_at=NOW(),
        stage_status='{{"scan":"succeeded","ingest":"succeeded"}}'::jsonb

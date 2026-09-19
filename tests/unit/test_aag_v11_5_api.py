@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.services import aag_query_v2, aag_tools
+from scripts.aag_snapshot_push import _v2_statement
 
 
 def _snapshot(snapshot_id=None):
@@ -121,3 +122,46 @@ def test_v11_5_migration_is_additive_and_preserves_v1():
     assert "CREATE TABLE IF NOT EXISTS aag_api_consumer_events" in sql
     assert "DROP TABLE" not in sql
     assert "ALTER TABLE aag_graph_snapshots" not in sql
+
+    pointer_sql = (
+        aag_tools.REPO_ROOT / "migrations/20260919_aag_v1_1_pointer_cutover.sql"
+    ).read_text(encoding="utf-8")
+    assert "INSERT INTO aag_latest_pointers" in pointer_sql
+    assert "INSERT INTO aag_ref_heads" in pointer_sql
+    assert "o.authoritative=TRUE" in pointer_sql
+    assert "o.verification_status='verified'" in pointer_sql
+    assert "DROP TABLE" not in pointer_sql
+
+
+def test_hourly_pusher_maintains_atomic_authoritative_pointer():
+    graph = {
+        "generated_at": "2026-09-19T23:00:00+09:00",
+        "source_identity": {
+            "repository_id": "kis-autotrade-v4",
+            "target_ref": "refs/heads/main",
+            "resolved_commit_sha": "1" * 40,
+            "expected_target_ref_head_sha": "1" * 40,
+            "scanner_version": "aag-scanner-v1.1",
+            "ruleset_digest": "a" * 64,
+            "scan_scope_digest": "b" * 64,
+            "normalization_version": "aag-c14n-v1",
+            "stable_key_version": "aag-stable-key-v1",
+            "parser_versions": {"python_ast": "3.12"},
+        },
+        "stats": {}, "nodes": [], "edges": [], "findings": [], "unresolved": [],
+    }
+
+    sql = _v2_statement("GO100", graph)
+
+    assert sql is not None
+    assert "pg_advisory_xact_lock" in sql
+    assert "INSERT INTO aag_latest_pointers" in sql
+    assert "INSERT INTO aag_ref_heads" in sql
+    assert "THEN 'out_of_order'" in sql
+    assert "WHERE EXCLUDED.generated_at >= aag_latest_pointers.generated_at" in sql
+
+
+def test_release_enables_v2_with_environment_rollback_switches():
+    compose = (aag_tools.REPO_ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
+    assert compose.count("AAG_V2_ENABLED=${AAG_V2_ENABLED:-true}") == 2
+    assert compose.count("AAG_V2_CONSUMERS_ENABLED=${AAG_V2_CONSUMERS_ENABLED:-true}") == 2

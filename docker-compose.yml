@@ -78,6 +78,9 @@ services:
       - GOAL_WORK_HIERARCHY_ENABLED=${GOAL_WORK_HIERARCHY_ENABLED:-true}
       - GOAL_WORKFLOW_APPROVAL_ENABLED=${GOAL_WORKFLOW_APPROVAL_ENABLED:-true}
       - GOAL_AUTO_APPROVAL_MODE=${GOAL_AUTO_APPROVAL_MODE:-audit}
+      # AAG v2 remains reversible: set either flag to 0 for immediate v1 rollback.
+      - AAG_V2_ENABLED=${AAG_V2_ENABLED:-true}
+      - AAG_V2_CONSUMERS_ENABLED=${AAG_V2_CONSUMERS_ENABLED:-true}
       - DOCKER_HOST=tcp://aads-socket-proxy:2375
       # aads-postgres 컨테이너 (pgvector/pg15) 연결 (T-011)
       - DATABASE_URL=postgresql://aads:${POSTGRES_PASSWORD}@aads-postgres:5432/aads

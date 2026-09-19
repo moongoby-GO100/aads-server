@@ -1,4 +1,4 @@
-# AAG V11-5 consumer inventory — phase 1
+# AAG V11-5 consumer inventory — phase 2 cutover
 
 - 기준 SHA: `0fdcb4fa616a1c17ef4f94afbfc37cc553b1b686`
 - 조사 시각: 2026-09-19 22:50 KST
@@ -6,12 +6,17 @@
 
 | 소비자 | 현재 경로 | phase 1 조치 | 잔여 조치 |
 |---|---|---|---|
-| 세션 `aag_findings` | `app/services/aag_tools.py` legacy DB/local graph | `AAG_V2_CONSUMERS_ENABLED` flag로 central v2 전환, off 즉시 v1 rollback | 운영 shadow 관측 후 flag on 승인 |
-| 세션 `aag_brief` | local `tools/aag/brief.py` | 같은 flag로 pinned central v2 brief 전환 | 운영 golden 비교 후 flag on 승인 |
+| 세션 `aag_findings` | `app/services/aag_tools.py` legacy DB/local graph | 운영 기본값을 central v2로 전환, flag off 즉시 v1 rollback | telemetry로 v1 잔존 관측 |
+| 세션 `aag_brief` | local `tools/aag/brief.py` | 운영 기본값을 pinned central v2로 전환, flag off 즉시 v1 rollback | telemetry로 v1 잔존 관측 |
 | Pipeline Runner | `scripts/pipeline-runner.sh`가 local `brief.py` 직접 실행 | 변경 없음; v1 consumer로 분류 | project-scoped credential과 outage/skip 계약 확정 후 v2 endpoint 전환 |
 | CI | 중앙 AAG read API 직접 호출 없음 | 잔여 v1 consumer 아님 | v2 gate가 도입될 때 pinned snapshot/commit 계약 사용 |
 | 목표 화면 | AAG read API 직접 호출 없음 | 잔여 v1 consumer 아님 | V11-7 4축 상태 화면에서 v2 aggregate 사용 |
 | 외부 HTTP | `/api/v1/aag/findings`, `/projects` 호출자는 코드 검색만으로 확정 불가 | consumer header와 DB telemetry 추가 | 관측 기간 동안 이름 없는 소비자를 식별 |
+
+V11-2 초기 배포 뒤 authoritative observation 3건이 존재했지만 latest pointer가 0건인
+운영 공백이 확인됐다. V11-5 migration은 최신 verified authoritative observation만
+pointer/ref-head로 백필하고, hourly pusher는 advisory transaction lock 안에서 observation과
+pointer를 함께 기록한다. commit mismatch와 out-of-order 실행은 pointer를 갱신하지 않는다.
 
 ## Rollback
 
@@ -24,7 +29,7 @@
 
 - v2 endpoint의 snapshot-pinned pagination 회귀 통과
 - v1/v2 consumer telemetry migration 운영 적용
-- 세션 shadow 비교 통과 후 v2 flag on
+- 세션 v2 flag on 및 pinned central read 확인
 - Pipeline Runner v2 전환 및 승인된 outage/skip 계약
 - 관측 기간의 잔여 v1 request 0건
 - v1 rollback 리허설 통과 후에만 폐기 승인
