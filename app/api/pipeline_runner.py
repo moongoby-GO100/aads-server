@@ -2687,8 +2687,11 @@ async def adjudicate_review_from_origin_session(
                 INSERT INTO pipeline_runner_events
                     (job_id, tenant_id, project, event_type, status, phase, metadata)
                 VALUES ($1, $2::uuid, $3, 'origin_review_adjudicated', $4, $5,
-                        jsonb_build_object('caller_session_id',$6,'commit_sha',$7,
-                                           'diff_sha256',$8,'verdict',$9,'findings',$10))
+                        jsonb_build_object('caller_session_id',$6::text,
+                                           'commit_sha',$7::text,
+                                           'diff_sha256',$8::text,
+                                           'verdict',$9::text,
+                                           'findings',$10::text))
                 """,
                 job_id,
                 row["tenant_id"],

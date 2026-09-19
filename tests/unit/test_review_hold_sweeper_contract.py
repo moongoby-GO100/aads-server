@@ -145,6 +145,10 @@ def test_origin_adjudication_tool_and_state_machine_are_hash_and_session_bound()
     assert "status='error', phase='review_failed'" in endpoint
     assert "review_adjudication_unknown" in endpoint
     assert "origin_review_adjudicated" in endpoint
+    # asyncpg cannot infer values passed only through jsonb_build_object.
+    # Keep every bound audit field explicitly typed to prevent a runtime 500.
+    for parameter in range(6, 11):
+        assert f"${parameter}::text" in endpoint
     for source in (registry, executor, chat_tools):
         assert "pipeline_review_adjudicate" in source
 
