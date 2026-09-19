@@ -373,7 +373,9 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "queue_pending_deploy_request" in script
     assert "start_deploy_queue_worker \"lock_busy\"" in script
     assert "claim_latest_queued_deploy_request" in script
-    assert "superseded_by_newer_deploy" in script
+    assert "waiting_batch_predecessor" in script
+    assert "INSERT INTO deploy_release_manifests" in script
+    assert "superseded_by_newer_deploy" not in script
     assert "active_same_release" in script
     assert "no duplicate queue created" in script
 

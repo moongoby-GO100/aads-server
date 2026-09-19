@@ -14,6 +14,8 @@ STATE_DIR="${AADS_DEPLOY_STATE_DIR:-/root/aads/aads-server}"
 REPO_DIR="${AADS_DEPLOY_REPO_DIR:-/root/aads/aads-server}"
 LOCKFILE="/tmp/aads-deploy-queue-worker.lock"
 LOG_DIR="${STATE_DIR}/logs"
+BATCHER="${STATE_DIR}/scripts/coalesce_deploy_queue.py"
+BATCH_MIGRATION="${STATE_DIR}/migrations/20260919_deploy_batch_inclusions.sql"
 mkdir -p "$LOG_DIR"
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -37,6 +39,16 @@ if [[ -f "$LOCKFILE" ]]; then
     rm -f "$LOCKFILE" 2>/dev/null || true
 fi
 
+# Direct deploy.sh lock-busy requests must pass through the same host-Git
+# classifier as timer-driven drains.  Never fall back to newest-wins when the
+# classifier or its additive ledger migration is unavailable.
+if [[ ! -x "${STATE_DIR}/scripts/apply_migration.sh" || ! -f "$BATCH_MIGRATION" || ! -f "$BATCHER" ]]; then
+    echo "deploy batch prerequisites unavailable; queue left unchanged" >&2
+    exit 1
+fi
+"${STATE_DIR}/scripts/apply_migration.sh" "$BATCH_MIGRATION"
+python3 "$BATCHER" --repo "$REPO_DIR" --project AADS --component api --target-env production
+
 latest_sha="$(
     db_exec "
         SELECT release_sha
@@ -45,7 +57,7 @@ latest_sha="$(
           AND status='queued'
           AND phase='queued_for_deploy'
           AND COALESCE(auto_start, FALSE) = TRUE
-        ORDER BY created_at DESC, id DESC
+        ORDER BY created_at ASC, id ASC
         LIMIT 1;
     " | tail -1 | tr -d '[:space:]'
 )"

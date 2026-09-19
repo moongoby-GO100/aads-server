@@ -13,6 +13,7 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 QueueItem = MODULE.QueueItem
 classify_batch = MODULE.classify_batch
+apply_decision = MODULE._apply_decision
 
 OBSERVABILITY_PATH = Path(__file__).parents[2] / "app/services/deploy_observability.py"
 OBSERVABILITY_SPEC = importlib.util.spec_from_file_location("deploy_observability_batch_test", OBSERVABILITY_PATH)
@@ -87,11 +88,52 @@ def test_drain_runs_batcher_before_selecting_oldest_ready_request():
     assert "deploy batch classification failed; queue left unchanged" in text
 
 
+def test_direct_worker_runs_batcher_before_selecting_fifo_ready_head():
+    text = (Path(__file__).parents[2] / "scripts/start_aads_deploy_queue_worker.sh").read_text()
+    assert text.index('python3 "$BATCHER"') < text.index('latest_sha="$(')
+    assert "ORDER BY created_at ASC, id ASC" in text
+    assert "deploy batch prerequisites unavailable; queue left unchanged" in text
+
+
+def test_batch_decision_persists_inclusion_before_superseding(monkeypatch, tmp_path):
+    statements = []
+
+    def capture(sql, *, capture=True):
+        statements.append(sql)
+        return ""
+
+    monkeypatch.setattr(MODULE, "_psql", capture)
+    representative = item(11, "b" * 40)
+    included = [item(10, "a" * 40)]
+    apply_decision(
+        representative,
+        included,
+        "all_older_requests_are_low_risk_ancestors",
+        ("AADS", "api", "production"),
+    )
+
+    sql = statements[-1]
+    assert sql.index("INSERT INTO deploy_batch_inclusions") < sql.index("SET status='superseded'")
+    assert "representative_run_id" in sql
+    assert "included_run_id" in sql
+    assert "WHERE id IN (10) AND status='queued'" in sql
+
+
 def test_api_intake_preserves_requests_for_host_classification():
     text = (Path(__file__).parents[2] / "app/services/deploy_observability.py").read_text()
     assert "waiting_batch_predecessor" in text
     assert "pg_advisory_xact_lock" in text
     assert "superseded_by_newer_deploy_request" not in text
+
+
+def test_direct_deploy_intake_preserves_requests_for_host_classification():
+    text = (Path(__file__).parents[2] / "deploy.sh").read_text()
+    block = text[text.index("queue_pending_deploy_request()"):text.index("wait_for_active_deploy_lock()")]
+    assert "pg_advisory_xact_lock" in block
+    assert "waiting_batch_predecessor" in block
+    assert "INSERT INTO deploy_release_manifests" in block
+    assert "superseded_by_newer_deploy" not in block
+    assert "supersede_older_queued_deploy_requests" not in text
 
 
 class _Transaction:

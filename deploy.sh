@@ -555,36 +555,6 @@ deploy_observe_init() {
     fi
 }
 
-supersede_older_queued_deploy_requests() {
-    if ! deploy_db_available; then
-        return 0
-    fi
-    local release_sql reason_sql current_run_id
-    release_sql="$(sql_escape "${AADS_RELEASE_SHA:-unknown}")"
-    reason_sql="$(sql_escape "superseded by started release ${AADS_RELEASE_SHA:-unknown}")"
-    current_run_id="${DEPLOY_RUN_ID:-0}"
-    [[ "$current_run_id" =~ ^[0-9]+$ ]] || current_run_id="0"
-    deploy_db_exec "
-        UPDATE deploy_runs
-        SET status='superseded',
-            phase='superseded_by_started_deploy',
-            phase_completed_at=NOW(),
-            updated_at=NOW(),
-            error_summary=CONCAT_WS('; ', NULLIF(error_summary, ''), '$reason_sql')
-        WHERE project='AADS'
-          AND status='queued'
-          AND phase='queued_for_deploy'
-          -- 같은 SHA 의 대기 행도 함께 닫는다. 예전에는 IS DISTINCT FROM 으로
-          -- 다른 SHA 만 흡수해, 같은 커밋이 두 번 큐에 들어가면 둘 다 살아남아
-          -- 순차로 같은 이미지를 두 번 빌드했다(2026-09-13: #348/#349,
-          -- #379/#380). git 커밋은 누적이므로 지금 시작하는 배포가 대기 행의
-          -- 내용을 이미 포함한다 — 닫아도 잃는 것이 없다.
-          -- 진행 중(running)인 배포는 건드리지 않는다. 큐 정리가 실행 중인
-          -- 배포를 중단시켜서는 안 된다.
-          AND id <> ${current_run_id};
-    " >/dev/null
-}
-
 deploy_estimated_remaining_ms() {
     local elapsed_ms="$1"
     local default_estimate_ms="${AADS_DEPLOY_DEFAULT_ESTIMATE_MS:-600000}"
@@ -710,31 +680,26 @@ queue_pending_deploy_request() {
         return 0
     fi
     ensure_deploy_observability_schema || return 0
-    local release_sql lock_pid_sql queue_reason_sql run_id
+    local release_sql lock_pid_sql queue_reason_sql run_id changed_files_json changed_files_sql
     release_sql="$(sql_escape "${AADS_RELEASE_SHA:-unknown}")"
     lock_pid_sql="$(sql_escape "$lock_pid")"
     queue_reason_sql="$(sql_escape "queued because active blue-green deploy is still syncing standby; active_pid=${lock_pid}")"
+    changed_files_json="$(
+        git -C "$COMPOSE_DIR" diff-tree --no-commit-id --name-only -r "${AADS_RELEASE_SHA:-HEAD}" 2>/dev/null \
+            | python3 -c 'import json, sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))'
+    )"
+    changed_files_sql="$(sql_escape "${changed_files_json:-[]}")"
     run_id="$(
         deploy_db_exec "
-            WITH superseded AS (
-                UPDATE deploy_runs
-                SET status='superseded',
-                    phase='superseded_by_newer_deploy',
-                    phase_completed_at=NOW(),
-                    updated_at=NOW(),
-                    error_summary=CONCAT_WS('; ', NULLIF(error_summary, ''), 'superseded by newer queued release $release_sql')
-                WHERE project='AADS'
-                  AND status='queued'
-                  AND phase='queued_for_deploy'
-                  AND release_sha IS DISTINCT FROM '$release_sql'
-            ),
-            existing AS (
+            BEGIN;
+            SELECT pg_advisory_xact_lock(hashtext('deploy-intake:AADS:api:production'));
+            WITH existing AS (
                 SELECT id
                 FROM deploy_runs
                 WHERE project='AADS'
                   AND release_sha='$release_sql'
                   AND status='queued'
-                  AND phase='queued_for_deploy'
+                  AND phase IN ('queued_for_deploy', 'waiting_batch_predecessor')
                 ORDER BY id DESC
                 LIMIT 1
             ),
@@ -764,14 +729,47 @@ queue_pending_deploy_request() {
                                         deploy_pid, last_heartbeat_at, queue_position,
                                         error_summary, requested_by, request_source,
                                         commit_status, push_status, auto_start,
-                                        requested_at, created_at, updated_at)
-                SELECT 'AADS', '$release_sql', 'queued', 'queued_for_deploy', NOW(),
-                       $$, NOW(), 1, '$queue_reason_sql', 'deploy.sh', 'deploy.sh_lock_busy',
+                                        requested_at, created_at, updated_at,
+                                        component, deploy_type, target_env, approval_policy)
+                SELECT 'AADS', '$release_sql', 'queued',
+                       CASE WHEN EXISTS (
+                           SELECT 1 FROM deploy_runs
+                           WHERE project='AADS' AND component='api' AND target_env='production'
+                             AND status='queued' AND phase='queued_for_deploy'
+                             AND COALESCE(auto_start, FALSE)=TRUE
+                       ) THEN 'waiting_batch_predecessor' ELSE 'queued_for_deploy' END,
+                       NOW(), $$, NOW(),
+                       COALESCE((
+                           SELECT MAX(queue_position) + 1 FROM deploy_runs
+                           WHERE project='AADS' AND component='api' AND target_env='production'
+                             AND status='queued'
+                             AND phase IN ('queued_for_deploy', 'waiting_batch_predecessor')
+                       ), 1),
+                       '$queue_reason_sql', 'deploy.sh', 'deploy.sh_lock_busy',
                        'committed', 'pushed', TRUE,
-                       NOW(), NOW(), NOW()
+                       NOW(), NOW(), NOW(), 'api', 'api_bluegreen', 'production', 'auto_if_green'
                 WHERE NOT EXISTS (SELECT 1 FROM existing)
                   AND NOT EXISTS (SELECT 1 FROM active_same_release)
                 RETURNING id
+            ),
+            queued_request AS (
+                SELECT id FROM inserted
+                UNION
+                SELECT id FROM existing
+            ),
+            manifest AS (
+                INSERT INTO deploy_release_manifests(
+                    deploy_run_id, project, component, target_env, release_sha,
+                    changed_files, commits, risk_flags, created_at
+                )
+                SELECT id, 'AADS', 'api', 'production', '$release_sql',
+                       '$changed_files_sql'::jsonb, jsonb_build_array('$release_sql'), '[]'::jsonb, NOW()
+                FROM queued_request qr
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM deploy_release_manifests drm
+                    WHERE drm.deploy_run_id=qr.id
+                )
+                RETURNING deploy_run_id
             )
             SELECT id FROM inserted
             UNION ALL
@@ -781,6 +779,7 @@ queue_pending_deploy_request() {
             UNION ALL
             SELECT id FROM existing
             LIMIT 1;
+            COMMIT;
         " | tail -1 | tr -d '[:space:]'
     )"
     if [[ "$(deploy_queue_count)" == "0" ]]; then
@@ -853,7 +852,7 @@ claim_latest_queued_deploy_request() {
             WHERE project='AADS'
               AND status='queued'
               AND phase='queued_for_deploy'
-            ORDER BY created_at DESC, id DESC
+            ORDER BY created_at ASC, id ASC
             LIMIT 1;
         " | tail -1 | tr -d '[:space:]'
     )"
@@ -862,35 +861,24 @@ claim_latest_queued_deploy_request() {
         exit 0
     fi
     if [[ "$latest_sha" != "${AADS_RELEASE_SHA:-unknown}" ]]; then
-        # 내 SHA 가 더 이상 큐의 최신이 아니다 = 더 새 릴리스가 나를 흡수했다.
+        # 배처가 고른 ready head와 이 워커 SHA가 다르면 다른 릴리스가 대표다.
         # 실패가 아니라 할 일이 없어진 것이므로 0 으로 나간다. exit 1 로 나가면
         # ERR 트랩이 "unexpected error exit=1" 로 잡아 record_deploy failed 를
         # 남긴다. 2026-09-13 #389 가 이렇게 만들어졌다 — e0aca65c 가 0ac2166c 를
         # 흡수한 정상 동작이 실패 1건으로 집계됐다.
-        echo "[deploy.sh] queue worker standing down: 큐 최신은 ${latest_sha}, 내 HEAD 는 ${AADS_RELEASE_SHA:-unknown} — 더 새 릴리스가 흡수했다"
+        echo "[deploy.sh] queue worker standing down: ready head=${latest_sha}, worker HEAD=${AADS_RELEASE_SHA:-unknown}"
         exit 0
     fi
     run_id="$(
         deploy_db_exec "
-            WITH latest AS (
+            WITH ready AS (
                 SELECT id
                 FROM deploy_runs
                 WHERE project='AADS'
                   AND status='queued'
                   AND phase='queued_for_deploy'
-                ORDER BY created_at DESC, id DESC
+                ORDER BY created_at ASC, id ASC
                 LIMIT 1
-            ),
-            superseded AS (
-                UPDATE deploy_runs
-                SET status='superseded',
-                    phase='superseded_by_newer_deploy',
-                    phase_completed_at=NOW(),
-                    updated_at=NOW()
-                WHERE project='AADS'
-                  AND status='queued'
-                  AND phase='queued_for_deploy'
-                  AND id NOT IN (SELECT id FROM latest)
             )
             UPDATE deploy_runs
             SET status='running',
@@ -900,7 +888,7 @@ claim_latest_queued_deploy_request() {
                 last_heartbeat_at=NOW(),
                 updated_at=NOW(),
                 error_summary=NULL
-            WHERE id IN (SELECT id FROM latest)
+            WHERE id IN (SELECT id FROM ready)
             RETURNING id;
         " | tail -1 | tr -d '[:space:]'
     )"
@@ -1578,8 +1566,6 @@ elif ! enforce_release_worktree_gate; then
     record_deploy "blocked" "$MODE" "dirty worktree blocks release"
     exit 1
 fi
-supersede_older_queued_deploy_requests
-
 # 검사는 앞으로 당긴다. 디스크 검사가 build_candidate_image 안에만 있어서,
 # #340 은 preflight·dependency_check·code_validation 을 모두 통과한 뒤 빌드
 # 직전에야 공간 부족으로 막혔다. 헛된 4단계를 걷기 전에 여기서 끝낸다.
