@@ -1072,6 +1072,21 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": ["job_id", "action"],
         },
     },
+    {
+        "name": "pipeline_review_adjudicate",
+        "description": "자동 재검수 상한에 도달한 review_hold 작업을 원 세션이 read-only로 판정합니다. 전달된 SHA와 diff hash가 모두 일치할 때만 결과를 저장하며 배포·push는 수행하지 않습니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string"},
+                "expected_commit_sha": {"type": "string"},
+                "expected_diff_sha256": {"type": "string"},
+                "verdict": {"type": "string", "enum": ["APPROVE", "REJECT", "UNKNOWN"]},
+                "findings": {"type": "string"},
+            },
+            "required": ["job_id", "expected_commit_sha", "expected_diff_sha256", "verdict", "findings"],
+        },
+    },
     # Pipeline Runner(구 Pipeline C) 도구 완전 제거 (2026-03-16) — pipeline_runner_submit으로 대체
     # execute_tool 디스패처에 핸들러는 남아있어 기존 호출 시 에러 안내 반환
     {
@@ -5775,6 +5790,14 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
                 timeout=10,
             )
             return resp.text
+    elif name == "pipeline_review_adjudicate":
+        from app.services.tool_executor import ToolExecutor, current_chat_session_id
+        session_token = current_chat_session_id.set(str(chat_session_id or "").strip())
+        executor = ToolExecutor()
+        try:
+            return await executor._pipeline_review_adjudicate(params)
+        finally:
+            current_chat_session_id.reset(session_token)
     # ── pipeline_c_* 레거시 호환 → pipeline_runner_* 로 리다이렉트 ──────
     elif name == "pipeline_c_start":
         logger.info(f"pipeline_c_start → pipeline_runner_submit 리다이렉트")

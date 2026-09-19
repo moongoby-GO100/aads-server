@@ -349,7 +349,62 @@ infra_retry() {
     consec_infra=$((consec_infra + 1))
     log "  INFRA_RETRY ${jid} project=${proj} retry=${nxt}/${SWEEP_MAX_RETRY} ${reason}"
     if [[ "$nxt" -ge "$SWEEP_MAX_RETRY" ]]; then
-        log "  EXHAUSTED ${jid} — 자동 재검수 상한 도달, 수동 확인 필요"
+        log "  EXHAUSTED ${jid} — 자동 재검수 상한 도달, 원 세션 판정 이관"
+        enqueue_origin_adjudication "$jid" "$proj"
+    fi
+}
+
+# 모델 재검수가 상한에 닿으면 작업을 영구 review_hold 로 방치하지 않는다.
+# 원 세션과 job 의 tenant, commit SHA, 저장 diff SHA-256을 DB 안에서 한 번 더
+# 결선하고 durable reaction 을 만든다. 같은 증거에 대한 pending/claimed 요청은
+# ohvis_task_id 로 멱등 차단한다. 원 세션은 코드를 수정하거나 자동 승인하지 않고
+# 검수 결과만 pipeline_review_adjudicate 로 중앙 상태 머신에 제출한다.
+enqueue_origin_adjudication() {
+    local jid="$1" proj="$2" deferred_id=""
+    deferred_id=$(db_query "
+WITH target AS (
+    SELECT j.job_id, j.project, j.chat_session_id::uuid AS session_id,
+           lower(j.commit_hash) AS commit_sha,
+           encode(digest(j.git_diff, 'sha256'), 'hex') AS diff_sha256,
+           length(j.git_diff) AS diff_bytes,
+           'review-adjudication:' || j.job_id || ':' || lower(j.commit_hash) || ':' ||
+             encode(digest(j.git_diff, 'sha256'), 'hex') AS dedupe_key
+      FROM pipeline_jobs j
+      JOIN chat_sessions s
+        ON s.id::text = j.chat_session_id
+       AND s.tenant_id = j.tenant_id
+     WHERE j.job_id='${jid}'
+       AND j.project='${proj}'
+       AND j.status='review_hold'
+       AND j.review_flag_category IN (${INFRA_CATEGORIES})
+       AND COALESCE(j.review_retry_count,0) >= ${SWEEP_MAX_RETRY}
+       AND COALESCE(j.commit_hash,'') ~ '^[0-9a-fA-F]{7,64}$'
+       AND COALESCE(j.git_diff,'') <> ''
+), marked AS (
+    UPDATE pipeline_jobs j
+       SET error_detail='review_origin_adjudication_pending', updated_at=NOW()
+      FROM target t
+     WHERE j.job_id=t.job_id AND j.status='review_hold'
+    RETURNING t.*
+)
+INSERT INTO chat_deferred_reactions
+       (session_id, system_message, ohvis_task_id, status, attempts, created_at, updated_at)
+SELECT m.session_id,
+       format('[시스템] Pipeline review 인프라가 자동 재검수 상한에 도달했습니다. 이 요청은 원 세션 read-only 판정입니다. 코드·Git·DB·배포를 변경하지 말고 저장된 instruction, git_diff, 테스트 증거만 검토하십시오. job_id=%s project=%s commit_sha=%s diff_sha256=%s diff_bytes=%s. 판정 후 pipeline_review_adjudicate(job_id, expected_commit_sha, expected_diff_sha256, verdict=APPROVE|REJECT|UNKNOWN, findings)를 정확히 1회 호출하십시오. APPROVE는 awaiting_approval까지만 이동하며 push·배포를 수행하지 않습니다.',
+              m.job_id, m.project, m.commit_sha, m.diff_sha256, m.diff_bytes),
+       m.dedupe_key, 'pending', 0, NOW(), NOW()
+  FROM marked m
+ WHERE NOT EXISTS (
+       SELECT 1 FROM chat_deferred_reactions q
+        WHERE q.ohvis_task_id=m.dedupe_key
+          AND q.status IN ('pending','claimed')
+ )
+RETURNING id::text;" 2>/dev/null | tr -d '[:space:]') || deferred_id=""
+    if [[ -n "$deferred_id" ]]; then
+        handed=$((handed + 1))
+        log "  ORIGIN_ADJUDICATION_ENQUEUED ${jid} project=${proj} deferred=${deferred_id:0:8}"
+    else
+        log "  ORIGIN_ADJUDICATION_DEDUPED_OR_BLOCKED ${jid} project=${proj}"
     fi
 }
 
@@ -550,7 +605,8 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id request_id; do
                  WHERE job_id='${job_id}' AND status='review_hold';"
         retried=$((retried + 1))
         if [[ "$next_retry" -ge "$SWEEP_MAX_RETRY" ]]; then
-            log "  EXHAUSTED $job_id — 자동 재검수 상한 도달, 수동 확인 필요"
+            log "  EXHAUSTED $job_id — 자동 재검수 상한 도달, 원 세션 판정 이관"
+            enqueue_origin_adjudication "$job_id" "$project"
         fi
     fi
 

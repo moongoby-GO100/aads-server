@@ -1004,6 +1004,7 @@ class ToolExecutor:
             "pipeline_runner_submit_batch": self._pipeline_runner_submit_batch,
             "pipeline_runner_status":  self._pipeline_runner_status,
             "pipeline_runner_approve": self._pipeline_runner_approve,
+            "pipeline_review_adjudicate": self._pipeline_review_adjudicate,
             # Pipeline Runner: 레거시 → Runner 자동 리다이렉트
             "pipeline_c_start":       self._pipeline_runner_submit,  # 자동 전환
             "pipeline_c_status":      self._pipeline_c_status,
@@ -5340,6 +5341,37 @@ class ToolExecutor:
                 json={"action": inp.get("action", "approve"), "feedback": inp.get("feedback", "")},
                 timeout=10,
             )
+            return resp.json()
+
+    async def _pipeline_review_adjudicate(self, inp: Dict[str, Any]) -> Any:
+        """Submit a hash-bound verdict from the job's originating chat session."""
+        import httpx
+        from app.services.pipeline_runner_client import (
+            INTERNAL_PIPELINE_HEADERS,
+            get_pipeline_runner_api_url,
+        )
+
+        session_id = str(current_chat_session_id.get("") or "").strip()
+        if not session_id:
+            return {"error": "origin_session_missing"}
+        job_id = str(inp.get("job_id") or "").strip()
+        if not re.fullmatch(r"runner-[0-9a-zA-Z_-]+", job_id):
+            return {"error": "invalid_job_id"}
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                get_pipeline_runner_api_url(f"jobs/{job_id}/adjudicate-review"),
+                headers=INTERNAL_PIPELINE_HEADERS,
+                json={
+                    "caller_session_id": session_id,
+                    "expected_commit_sha": inp.get("expected_commit_sha", ""),
+                    "expected_diff_sha256": inp.get("expected_diff_sha256", ""),
+                    "verdict": inp.get("verdict", "UNKNOWN"),
+                    "findings": inp.get("findings", ""),
+                },
+                timeout=10,
+            )
+            if resp.status_code >= 400:
+                return {"error": "adjudication_rejected", "status_code": resp.status_code, "detail": resp.text}
             return resp.json()
 
     # ── Pipeline Runner: 레거시 (Runner로 자동 전환) ──────────────────────────────

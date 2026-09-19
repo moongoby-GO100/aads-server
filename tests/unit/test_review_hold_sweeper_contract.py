@@ -104,6 +104,42 @@ def test_review_hold_sweeper_excludes_twice_failed_model_from_next_review():
     assert "MODEL_EXCLUDED" in script
 
 
+def test_exhausted_review_is_handed_to_origin_session_once_with_bound_evidence():
+    script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+    fn = script.split("enqueue_origin_adjudication() {", 1)[1].split("\n}\n", 1)[0]
+
+    assert "JOIN chat_sessions s" in fn
+    assert "s.tenant_id = j.tenant_id" in fn
+    assert "lower(j.commit_hash) AS commit_sha" in fn
+    assert "encode(digest(j.git_diff, 'sha256'), 'hex') AS diff_sha256" in fn
+    assert "pipeline_review_adjudicate" in fn
+    assert "q.status IN ('pending','claimed')" in fn
+    assert "review_origin_adjudication_pending" in fn
+    assert script.count('enqueue_origin_adjudication "$jid" "$proj"') == 1
+    assert script.count('enqueue_origin_adjudication "$job_id" "$project"') == 1
+
+
+def test_origin_adjudication_tool_and_state_machine_are_hash_and_session_bound():
+    root = ROOT
+    api = (root / "app/api/pipeline_runner.py").read_text(encoding="utf-8")
+    registry = (root / "app/services/tool_registry.py").read_text(encoding="utf-8")
+    executor = (root / "app/services/tool_executor.py").read_text(encoding="utf-8")
+    chat_tools = (root / "app/api/ceo_chat_tools.py").read_text(encoding="utf-8")
+
+    endpoint = api.split("async def adjudicate_review_from_origin_session", 1)[1]
+    assert 'str(row["chat_session_id"] or "").lower() != req.caller_session_id' in endpoint
+    assert 'row["tenant_id"] != row["session_tenant_id"]' in endpoint
+    assert 'hashlib.sha256(diff_text.encode("utf-8")).hexdigest()' in endpoint
+    assert "commit_sha != req.expected_commit_sha" in endpoint
+    assert "diff_sha256 != req.expected_diff_sha256" in endpoint
+    assert "status='awaiting_approval'" in endpoint
+    assert "status='error', phase='review_failed'" in endpoint
+    assert "review_adjudication_unknown" in endpoint
+    assert "origin_review_adjudicated" in endpoint
+    for source in (registry, executor, chat_tools):
+        assert "pipeline_review_adjudicate" in source
+
+
 # ── AADS-REVIEWHOLD-DIRTY-STRAND-P0 ──────────────────────────────────────
 
 

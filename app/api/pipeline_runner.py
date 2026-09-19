@@ -837,6 +837,48 @@ class JobApproveRequest(BaseModel):
         return v
 
 
+class PipelineReviewAdjudicateRequest(BaseModel):
+    """Bound input from the originating chat session after reviewer exhaustion."""
+
+    caller_session_id: str = Field(..., description="Tool executor-bound chat session UUID")
+    expected_commit_sha: str = Field(..., min_length=7, max_length=64)
+    expected_diff_sha256: str = Field(..., min_length=64, max_length=64)
+    verdict: str = Field(..., description="APPROVE, REJECT, or UNKNOWN")
+    findings: str = Field("", max_length=4000)
+
+    @field_validator("caller_session_id")
+    @classmethod
+    def validate_caller_session_id(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not _UUID_RE.match(normalized):
+            raise ValueError("caller_session_id must be a UUID")
+        return normalized
+
+    @field_validator("expected_commit_sha")
+    @classmethod
+    def validate_commit_sha(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{7,64}", normalized):
+            raise ValueError("expected_commit_sha must be a hexadecimal git SHA")
+        return normalized
+
+    @field_validator("expected_diff_sha256")
+    @classmethod
+    def validate_diff_sha256(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", normalized):
+            raise ValueError("expected_diff_sha256 must be a SHA-256 digest")
+        return normalized
+
+    @field_validator("verdict")
+    @classmethod
+    def validate_verdict(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized not in {"APPROVE", "REJECT", "UNKNOWN"}:
+            raise ValueError("verdict must be APPROVE, REJECT, or UNKNOWN")
+        return normalized
+
+
 async def check_project_lock(conn, project: str, exclude_job_id: str | None = None, parallel_group: str = "", tenant_id: str = "") -> bool:
     """프로젝트에 실행 중인(running/claimed) 작업이 상한에 도달했는지 확인. True면 잠김.
     AADS-211: parallel_group이 지정되면 같은 그룹 내 작업은 동시 실행 허용."""
@@ -2510,6 +2552,162 @@ async def retry_review(
                 "flag_category": category,
                 "message": f"재검수 미통과 — review_hold 유지 ({category})",
             }
+
+
+@router.post("/pipeline/jobs/{job_id}/adjudicate-review", tags=["pipeline-runner"])
+async def adjudicate_review_from_origin_session(
+    job_id: str,
+    req: PipelineReviewAdjudicateRequest,
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """Accept a bounded, read-only review verdict from the originating session.
+
+    This is not deployment approval. APPROVE only moves a verified artifact to
+    ``awaiting_approval``; push/deploy remain behind the existing approval gate.
+    """
+    if not _JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=400, detail="유효하지 않은 job_id 형식")
+
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    caller_tenant_id = _tenant_id(context)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                SELECT j.job_id, j.project, j.status, j.chat_session_id,
+                       j.tenant_id::text AS tenant_id, j.commit_hash,
+                       j.git_diff, j.review_flag_category,
+                       COALESCE(j.review_retry_count, 0) AS review_retry_count,
+                       s.tenant_id::text AS session_tenant_id
+                  FROM pipeline_jobs j
+                  JOIN chat_sessions s ON s.id::text = j.chat_session_id
+                 WHERE j.job_id = $1
+                 FOR UPDATE OF j
+                """,
+                job_id,
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다")
+            if row["status"] != "review_hold":
+                raise HTTPException(status_code=409, detail="review_hold 상태가 아닙니다")
+            if str(row["chat_session_id"] or "").lower() != req.caller_session_id:
+                raise HTTPException(status_code=403, detail="원 세션만 검수 판정을 제출할 수 있습니다")
+            if (
+                not row["tenant_id"]
+                or row["tenant_id"] != row["session_tenant_id"]
+                or row["tenant_id"] != caller_tenant_id
+            ):
+                raise HTTPException(status_code=409, detail="작업과 원 세션의 tenant가 일치하지 않습니다")
+            if row["review_flag_category"] not in {
+                "REVIEW_API_UNAVAILABLE",
+                "REVIEW_MODEL_NO_RESPONSE",
+                "REVIEW_PARSER_FAILURE",
+                "REVIEW_TIMEOUT",
+            }:
+                raise HTTPException(status_code=409, detail="리뷰 인프라 장애 작업만 원 세션 폴백이 가능합니다")
+
+            try:
+                retry_threshold = max(1, int(os.getenv("REVIEW_SWEEP_MAX_RETRY", "10")))
+            except ValueError:
+                retry_threshold = 10
+            if int(row["review_retry_count"] or 0) < retry_threshold:
+                raise HTTPException(status_code=409, detail="자동 재검수 상한에 도달하지 않았습니다")
+
+            commit_sha = str(row["commit_hash"] or "").lower()
+            diff_text = row["git_diff"] or ""
+            diff_sha256 = hashlib.sha256(diff_text.encode("utf-8")).hexdigest()
+            if commit_sha != req.expected_commit_sha or diff_sha256 != req.expected_diff_sha256:
+                raise HTTPException(status_code=409, detail="검수 대상 SHA 또는 diff hash가 변경되었습니다")
+
+            findings = req.findings.strip() or "원 세션 read-only 판정"
+            if req.verdict == "APPROVE":
+                result = await conn.execute(
+                    """
+                    UPDATE pipeline_jobs
+                       SET status='awaiting_approval', phase='awaiting_approval',
+                           review_verdict='APPROVE', review_score=NULL,
+                           review_flag_category=NULL, review_needs_retry=FALSE,
+                           review_request_id=NULL, error_detail=NULL,
+                           review_feedback=COALESCE(review_feedback,'') || E'\n[원 세션 판정] APPROVE — ' || $2,
+                           updated_at=NOW()
+                     WHERE job_id=$1 AND status='review_hold' AND commit_hash=$3
+                    """,
+                    job_id,
+                    findings,
+                    commit_sha,
+                )
+                next_status, next_phase = "awaiting_approval", "awaiting_approval"
+            elif req.verdict == "REJECT":
+                result = await conn.execute(
+                    """
+                    UPDATE pipeline_jobs
+                       SET status='error', phase='review_failed',
+                           review_verdict='REQUEST_CHANGES', review_score=NULL,
+                           review_flag_category='CODE_QUALITY', review_needs_retry=FALSE,
+                           review_request_id=NULL,
+                           error_detail='review_failed: source=origin_session_adjudicator',
+                           review_feedback=COALESCE(review_feedback,'') || E'\n[원 세션 판정] REJECT — ' || $2,
+                           updated_at=NOW(), completed_at=NOW()
+                     WHERE job_id=$1 AND status='review_hold' AND commit_hash=$3
+                    """,
+                    job_id,
+                    findings,
+                    commit_sha,
+                )
+                next_status, next_phase = "error", "review_failed"
+            else:
+                result = await conn.execute(
+                    """
+                    UPDATE pipeline_jobs
+                       SET review_verdict='UNKNOWN', review_score=NULL,
+                           review_needs_retry=TRUE, review_request_id=NULL,
+                           review_retry_count=GREATEST($2 - 1, 0),
+                           review_retry_last_at=NOW(),
+                           error_detail='review_adjudication_unknown',
+                           review_feedback=COALESCE(review_feedback,'') || E'\n[원 세션 판정] UNKNOWN — 다음 백오프 후 자동 재검수: ' || $3,
+                           updated_at=NOW()
+                     WHERE job_id=$1 AND status='review_hold' AND commit_hash=$4
+                    """,
+                    job_id,
+                    retry_threshold,
+                    findings,
+                    commit_sha,
+                )
+                next_status, next_phase = "review_hold", "review_hold"
+
+            if not result.endswith(" 1"):
+                raise HTTPException(status_code=409, detail="판정 저장 중 작업 상태가 변경되었습니다")
+            await conn.execute(
+                """
+                INSERT INTO pipeline_runner_events
+                    (job_id, tenant_id, project, event_type, status, phase, metadata)
+                VALUES ($1, $2::uuid, $3, 'origin_review_adjudicated', $4, $5,
+                        jsonb_build_object('caller_session_id',$6,'commit_sha',$7,
+                                           'diff_sha256',$8,'verdict',$9,'findings',$10))
+                """,
+                job_id,
+                row["tenant_id"],
+                row["project"],
+                next_status,
+                next_phase,
+                req.caller_session_id,
+                commit_sha,
+                diff_sha256,
+                req.verdict,
+                findings,
+            )
+
+    return {
+        "job_id": job_id,
+        "verdict": req.verdict,
+        "status": next_status,
+        "phase": next_phase,
+        "commit_sha": commit_sha,
+        "diff_sha256": diff_sha256,
+        "message": "원 세션 판정이 중앙 상태 머신에 기록되었습니다",
+    }
 
 
 # ─── AADS-211: 배치 제출 — 복수 작업을 의존성 그래프로 한번에 제출 ────────────

@@ -104,6 +104,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "pipeline_runner_submit": False,  # 상시 로드 — 코드수정/배포 기본 도구
     "pipeline_runner_status": False,  # 상시 로드
     "pipeline_runner_approve": False, # 상시 로드
+    "pipeline_review_adjudicate": False, # 원 세션 read-only 검수 폴백
     # Pipeline Runner: 레거시 Pipeline C 제거됨 — Runner로 대체
     # ── 원격 쓰기/실행/Git 도구 (AADS-190) ──────────────────────────
     "write_remote_file": False,       # 코드 수정 핵심 — 상시 로드
@@ -2552,6 +2553,28 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"job_id": "runner-abc12345", "action": "reject", "feedback": "테스트 코드 누락"},
         ],
     },
+    "pipeline_review_adjudicate": {
+        "name": "pipeline_review_adjudicate",
+        "description": "자동 재검수 상한에 도달한 review_hold 작업을 원 세션이 read-only로 판정합니다. SHA와 diff hash가 일치할 때만 중앙 상태 머신에 결과를 제출하며 배포·push는 수행하지 않습니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "원 세션 판정 요청의 Runner 작업 ID"},
+                "expected_commit_sha": {"type": "string", "description": "판정 요청에 고정된 commit SHA"},
+                "expected_diff_sha256": {"type": "string", "description": "판정 요청에 고정된 git_diff SHA-256"},
+                "verdict": {"type": "string", "enum": ["APPROVE", "REJECT", "UNKNOWN"]},
+                "findings": {"type": "string", "description": "read-only 검수 근거 또는 차단 사유"},
+            },
+            "required": ["job_id", "expected_commit_sha", "expected_diff_sha256", "verdict", "findings"],
+        },
+        "input_examples": [{
+            "job_id": "runner-abc12345",
+            "expected_commit_sha": "0123456789abcdef0123456789abcdef01234567",
+            "expected_diff_sha256": "0" * 64,
+            "verdict": "UNKNOWN",
+            "findings": "테스트 증거가 없어 판정 보류",
+        }],
+    },
     # ── Pipeline Runner: 레거시 Pipeline C 완전 제거 (Runner로 대체) ──────
     # pipeline_c_start/status/approve → 도구 정의 제거됨 (2026-03-16)
     # execute_tool 디스패처에는 남아있어 기존 호출은 에러 메시지 반환
@@ -3492,6 +3515,7 @@ _CORE_TOOLS = [
     "read_remote_file", "query_database", "query_project_database",
     "list_remote_dir", "run_remote_command", "capture_screenshot",
     "pipeline_runner_submit", "pipeline_runner_status", "pipeline_runner_approve",
+    "pipeline_review_adjudicate",
     "check_task_status", "read_task_logs",
 ]
 
