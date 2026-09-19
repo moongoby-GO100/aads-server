@@ -95,6 +95,16 @@
     bar.querySelector("[data-v2-retry]").hidden = kind !== "error";
   }
 
+  function showLivebarFor(view) {
+    const visible = connectedViews.has(view) && !document.body.classList.contains("signed-out");
+    livebar().hidden = !visible;
+    if (!visible) {
+      activeController?.abort();
+      activeController = null;
+    }
+    return visible;
+  }
+
   const emptyRow = (colspan, message = "연결된 데이터가 없습니다.") => `<tr><td colspan="${colspan}"><div class="v2-empty">${escapeHtml(message)}</div></td></tr>`;
   const progress = (label, value) => `<div class="progress-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
 
@@ -328,7 +338,7 @@
   }
 
   async function refresh(view) {
-    if (!connectedViews.has(view) || document.body.classList.contains("signed-out")) return;
+    if (!showLivebarFor(view)) return;
     activeController?.abort();
     activeController = new AbortController();
     setStatus("loading", "실데이터 불러오는 중");

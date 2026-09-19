@@ -100,3 +100,11 @@ def test_tenant_gate_forbidden_does_not_destroy_valid_login() -> None:
     forbidden_branch = refresh.split("Number(err?.status) === 403", 1)[1]
     assert "clearServerAuthToken()" not in forbidden_branch
     assert "return authSession" in forbidden_branch
+
+
+def test_legacy_livebar_is_hidden_on_tenant_ledger_views() -> None:
+    _, js, _ = _source()
+    assert "function showLivebarFor(view)" in js
+    assert 'livebar().hidden = !visible' in js
+    assert 'if (!showLivebarFor(view)) return;' in js
+    assert 'connectedViews.has(view)' in js
