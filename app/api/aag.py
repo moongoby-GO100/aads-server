@@ -8,10 +8,22 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.db_pool import get_pool
+from app.auth import get_current_user
+from app.services.aag_governance import (
+    AAGAuthorizationError,
+    AAGWorkflowError,
+    approve_override,
+    authenticate_scanner,
+    create_exception,
+    decide_exception,
+    normalize_project,
+    require_project_role,
+    request_override,
+)
 from app.services.aag_ingest_v2 import IngestConflictError, ingest_graph
 from app.services.aag_tools import filter_findings, stale_minutes
 from tools.aag.v2_contract import CANONICALIZATION_VERSION, STABLE_KEY_VERSION
@@ -73,6 +85,49 @@ class SnapshotV2In(BaseModel):
     unresolved: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ExceptionRequest(BaseModel):
+    project: str = Field(min_length=1, max_length=100)
+    stable_finding_key: str = Field(min_length=1, max_length=500)
+    reason: str = Field(min_length=3, max_length=2000)
+    expires_at: datetime
+
+
+class DecisionRequest(BaseModel):
+    approve: bool
+    reason: str = Field(min_length=3, max_length=2000)
+
+
+class OverrideApprovalRequest(BaseModel):
+    project: str = Field(min_length=1, max_length=100)
+    verifier_id: str = Field(min_length=1, max_length=255)
+    verification: dict[str, Any]
+    reason: str = Field(min_length=3, max_length=2000)
+
+
+class OverrideRequest(BaseModel):
+    request_id: UUID
+    project: str = Field(min_length=1, max_length=100)
+    repository_id: str = Field(min_length=1, max_length=255)
+    target_ref: str = Field(min_length=1, max_length=255)
+    commit_sha: str = Field(min_length=7, max_length=64)
+    reason: str = Field(min_length=3, max_length=2000)
+    expires_at: datetime
+    previous_healthy_snapshot_id: UUID
+    fallback_snapshot_id: UUID | None = None
+    rollback_plan: dict[str, Any]
+    replay_nonce: str = Field(min_length=16, max_length=500)
+
+
+def _actor(user: dict[str, Any]) -> str:
+    return str(user.get("user_id") or "")
+
+
+def _governance_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, AAGAuthorizationError):
+        return HTTPException(status_code=403, detail=str(exc))
+    return HTTPException(status_code=409, detail=str(exc))
+
+
 def _require_v2_enabled() -> None:
     if os.getenv("AAG_V2_ENABLED", "0").strip().lower() not in {"1", "true", "yes", "on"}:
         raise HTTPException(status_code=404, detail="AAG v2 is disabled")
@@ -110,10 +165,14 @@ async def store_snapshot(body: SnapshotIn) -> dict[str, Any]:
 
 
 @router.post("/v2/snapshots", status_code=201)
-async def store_snapshot_v2(body: SnapshotV2In) -> dict[str, Any]:
+async def store_snapshot_v2(
+    body: SnapshotV2In,
+    x_aag_scanner_token: str | None = Header(default=None, alias="X-AAG-Scanner-Token"),
+) -> dict[str, Any]:
     """Publish immutable graph content and record a ref-specific observation."""
     _require_v2_enabled()
     try:
+        await authenticate_scanner(x_aag_scanner_token or "", body.project)
         result = await ingest_graph(
             project=body.project,
             repository_id=body.repository_id,
@@ -139,6 +198,8 @@ async def store_snapshot_v2(body: SnapshotV2In) -> dict[str, Any]:
                 "unresolved": body.unresolved,
             },
         )
+    except AAGAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except IngestConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
@@ -156,6 +217,110 @@ async def store_snapshot_v2(body: SnapshotV2In) -> dict[str, Any]:
         "authoritative": result.authoritative,
         "verification_status": result.verification_status,
     }
+
+
+@router.get("/v2/snapshots/latest")
+async def get_latest_snapshot_v2(
+    project: str,
+    repository_id: str,
+    target_ref: str,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Return only an authoritative snapshot inside the caller's project grant."""
+    _require_v2_enabled()
+    project = normalize_project(project)
+    try:
+        await require_project_role(_actor(user), project, {"viewer", "proposer", "approver", "admin"})
+    except AAGAuthorizationError as exc:
+        raise _governance_error(exc) from exc
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT s.id AS snapshot_id,o.id AS observation_id,o.project,o.repository_id,
+                      o.target_ref,o.resolved_commit_sha,o.authoritative,o.verified_at,
+                      s.generated_at,s.stats,s.nodes,s.edges,s.findings,s.unresolved
+                 FROM aag_snapshot_observations o
+                 JOIN aag_graph_snapshots_v2 s ON s.id=o.snapshot_id
+                WHERE o.project=$1 AND o.repository_id=$2 AND o.target_ref=$3
+                  AND o.authoritative=TRUE AND o.verification_status='verified'
+                  AND s.publish_status='ready'
+                ORDER BY o.verified_at DESC LIMIT 1""",
+            project, repository_id, target_ref,
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="authoritative snapshot not found")
+    return {"schema_version": "aag-v2", "source": "central", **dict(row)}
+
+
+@router.post("/v2/exceptions", status_code=201)
+async def request_exception(
+    body: ExceptionRequest, user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    actor = _actor(user)
+    try:
+        await require_project_role(actor, body.project, {"proposer", "admin"})
+        row = await create_exception(project=body.project,
+                                     stable_finding_key=body.stable_finding_key,
+                                     proposer_id=actor, reason=body.reason,
+                                     expires_at=body.expires_at)
+    except (AAGAuthorizationError, AAGWorkflowError) as exc:
+        raise _governance_error(exc) from exc
+    return dict(row)
+
+
+@router.post("/v2/exceptions/{exception_id}/decision")
+async def exception_decision(
+    exception_id: UUID, body: DecisionRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    actor = _actor(user)
+    async with get_pool().acquire() as conn:
+        project = await conn.fetchval(
+            "SELECT project FROM aag_finding_exceptions WHERE id=$1", exception_id
+        )
+    if not project:
+        raise HTTPException(status_code=404, detail="exception not found")
+    try:
+        await require_project_role(actor, project, {"approver", "admin"})
+        return await decide_exception(exception_id=exception_id, approver_id=actor,
+                                      approve=body.approve, reason=body.reason)
+    except (AAGAuthorizationError, AAGWorkflowError) as exc:
+        raise _governance_error(exc) from exc
+
+
+@router.post("/v2/overrides/{override_id}/approve")
+async def override_approval(
+    override_id: UUID, body: OverrideApprovalRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    actor = _actor(user)
+    try:
+        await require_project_role(actor, body.project, {"approver", "admin"})
+        return await approve_override(override_id=override_id, project=body.project,
+                                      approver_id=actor,
+                                      verifier_id=body.verifier_id,
+                                      verification=body.verification, reason=body.reason)
+    except (AAGAuthorizationError, AAGWorkflowError) as exc:
+        raise _governance_error(exc) from exc
+
+
+@router.post("/v2/overrides", status_code=201)
+async def create_override_request(
+    body: OverrideRequest, user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    actor = _actor(user)
+    try:
+        await require_project_role(actor, body.project, {"proposer", "admin"})
+        return await request_override(
+            request_id=body.request_id, project=body.project,
+            repository_id=body.repository_id, target_ref=body.target_ref,
+            commit_sha=body.commit_sha, requester_id=actor, reason=body.reason,
+            expires_at=body.expires_at,
+            previous_healthy_snapshot_id=body.previous_healthy_snapshot_id,
+            fallback_snapshot_id=body.fallback_snapshot_id,
+            rollback_plan=body.rollback_plan, replay_nonce=body.replay_nonce,
+        )
+    except (AAGAuthorizationError, AAGWorkflowError) as exc:
+        raise _governance_error(exc) from exc
 
 
 @router.get("/findings")
