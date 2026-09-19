@@ -188,3 +188,38 @@ Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks
 | migration/DB handover evidence | DB 변경·handover 기록 미수행 — 사용자 규칙상 파일 작업 외 실행 금지. migration은 Runner 적용 대상. |
 | 빌드 검증 | 승인 후 Runner 빌드 검증 대상 |
 | commit/push/deploy | 모두 미실행 |
+
+---
+
+# AADS-SMARTBROWSER-M4-RECOVERY-R3-20260919
+
+## STEP 0 — 기존 구현 조사 및 분류
+
+| 항목 | 분류 | 반영/판단 |
+|---|---|---|
+| `browser_recipes` / `browser_recipe_registry`의 tenant별 recipe/version 정본 | 유지 | 정본을 복제하거나 recovery가 직접 수정하지 않는다. 후보 patch는 기존 G6 learned artifact lifecycle에만 생성한다. |
+| `aria_structure_signature.assess_revisit` / `record_revisit_signature` | 유지 | G4의 `reuse`/`rediscover`/`human_gateway` 판정 및 개인정보 배제는 그대로 사용한다. |
+| `golden_promotion_gate.evaluate_promotion_gate`, learned artifact candidate→shadow→active 및 rollback | 유지 | recovery는 `candidate`만 만들며 승격을 호출하거나 우회하지 않는다. G6 gate와 기존 rollback만 active 전환을 허용한다. |
+| `browser_recipe_recovery` | 신규 | selector/ARIA, 로그인 만료, 일시 네트워크 오류를 분류하고 bounded·idempotent 복구 결정을 기록한다. |
+| `browser_recipe_recovery_events` migration | 신규 | tenant/recipe/version/site/page/skill/version 및 evidence hash·retry 한도·candidate 참조만 additive하게 보관한다. |
+| `/browser-recipes/{recipe_id}/versions/{version}/recovery` | 신규 | MEMBER 권한과 기존 tenant-scoped recipe 존재 확인 뒤 recovery를 기록한다. |
+| `tests/unit/test_browser_recipe_recovery.py` | 신규 | 실패 분류, 재시도 한도, 민감정보·페이지 명령문 미기록, tenant scope, candidate-only 경로를 회귀한다. |
+| 삭제 | 0건 | 호출처 영향 및 별도 롤백 대상 없음. 롤백은 본 작업의 신규 migration/service/API/test hunks만 되돌리면 된다. |
+
+## 변경 및 보안 경계
+
+- recovery evidence는 허용된 SHA-256 hash와 node count만 저장한다. raw credential/cookie/OTP/error text/page command는 저장하지 않는다.
+- selector 재발견은 제한된 CSS selector 형식만 후보 patch에 보관하며, `javascript:`·명령문·credential marker는 거부한다.
+- tenant와 recipe/site/page/skill/version scope 및 idempotency key를 모든 recovery 조회·저장에 적용한다. 네트워크 재시도는 scope별 최대 2회이고 동일 idempotency key는 replay한다.
+- 로그인 만료와 재시도 한도 초과는 명확한 Human Gateway 안내를 반환한다. selector 변경·ARIA 불일치는 rediscover로만 진행하고, candidate 상태의 G6 artifact version만 생성한다.
+- active recipe 또는 active learned artifact로 자동 승격하지 않는다. shadow/active 전환은 기존 G6 golden·regression gate가 통과한 별도 promotion 경로에서만 가능하다.
+
+## 검증
+
+| 항목 | 결과 |
+|---|---|
+| focused/affected pytest, Ruff | 실행하지 않음 — 사용자 규칙상 파일 수정 외 명령 실행 금지 |
+| migration `BEGIN/ROLLBACK` 검증 | 실행하지 않음 — 사용자 규칙상 DB 작업 금지 |
+| `git diff --check` | 실행하지 않음 — 사용자 규칙상 파일 수정 외 명령 실행 금지 |
+| 빌드 검증 | 승인 후 Runner 빌드 검증 대상 |
+| commit/push/deploy | 실행하지 않음 |

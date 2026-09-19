@@ -15,6 +15,7 @@ from app.services.browser_recipe_registry import (
     plan_browser_recipe_run,
     upsert_browser_recipe,
 )
+from app.services.browser_recipe_recovery import record_recipe_recovery
 
 router = APIRouter(prefix="/browser-recipes", tags=["browser-recipes"])
 TenantContext = dict[str, Any]
@@ -51,6 +52,19 @@ class BrowserRecipeDryRunIn(BrowserRecipeIn):
 class BrowserRecipeRunIn(BaseModel):
     target_url: str = Field(default="", max_length=2000)
     work_key: str = Field(default="", max_length=120)
+
+
+class BrowserRecipeRecoveryIn(BaseModel):
+    idempotency_key: str = Field(min_length=8, max_length=200)
+    site_key: str = Field(min_length=1, max_length=200)
+    page_key: str = Field(min_length=1, max_length=200)
+    skill_key: str = Field(default="", max_length=200)
+    skill_version: str = Field(default="", max_length=100)
+    run_id: str | None = None
+    error_code: str = Field(default="", max_length=200)
+    aria_decision: str = Field(default="", max_length=40)
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    rediscovered_selector: str | None = Field(default=None, max_length=500)
 
 
 def _tenant_id(context: TenantContext) -> str:
@@ -149,3 +163,24 @@ async def api_create_browser_recipe_run(
     if result.get("status") == "rejected":
         raise HTTPException(status_code=409, detail=result)
     return result
+
+
+@router.post("/{recipe_id}/versions/{version}/recovery")
+async def api_record_browser_recipe_recovery(
+    recipe_id: str,
+    version: str,
+    body: BrowserRecipeRecoveryIn,
+    context: TenantContext = Depends(require_member),
+) -> dict[str, Any]:
+    if not await get_browser_recipe(tenant_id=_tenant_id(context), recipe_id=recipe_id, version=version):
+        raise HTTPException(status_code=404, detail="browser_recipe_not_found")
+    try:
+        return await record_recipe_recovery(
+            tenant_id=_tenant_id(context), recipe_id=recipe_id, recipe_version=version,
+            site_key=body.site_key, page_key=body.page_key, skill_key=body.skill_key,
+            skill_version=body.skill_version, run_id=body.run_id, idempotency_key=body.idempotency_key,
+            error_code=body.error_code, aria_decision=body.aria_decision, evidence=body.evidence,
+            rediscovered_selector=body.rediscovered_selector,
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
