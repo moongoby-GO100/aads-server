@@ -6,7 +6,7 @@
 | v1.0/v1.1 요구사항 | 처리 | 기술·DB/API 계약 | 구현 파일/영역 | 테스트·evidence | 상태 |
 |---|---|---|---|---|---|
 | FR-001~002 | 유지·보강 | project rules, finding contract | `tools/aag/scan_aads.py`, rules YAML | AT-003~007, 62~65 | implemented-v1 |
-| FR-003 | 대체 | run/input/content/observation | v2 migration, ingest service | AT-011~017, 77~81 | planned |
+| FR-003 | 대체 | run/input/content/observation | `20260919_aag_v1_1_foundation.sql`, `aag_ingest_v2.py` | AT-011~017, 77~81 | partial |
 | FR-004 | 수정 | v2 filter/pagination/pinning | AAG v2 API·tool service | AT-098~102 | planned |
 | FR-005 | 수정 | authoritative brief+limitation | brief v2 API·renderer | AT-034~038, 100~102 | planned |
 | FR-006 | 보강 | hourly+DB lock/heartbeat | refresh scheduler·scan_runs | AT-009, 93~97 | partial |
@@ -22,7 +22,7 @@
 | FR-020~023 | 추가 | fixture, approval/audit, override, API dual-run | CI/migrations/v2 routes | AT-059~086 | approval-gated |
 | FR-024~030 | 추가 | doc CI, history, rescan, aggregate, restore, drift, onboarding | CI/UI/ops services | AT-085~125 | planned |
 | NFR-001~008 | 유지·보강 | freshness, determinism, safety, security, traceability, accessibility | scanner/API/UI | AT-006, 18~24, 39~46, 87~97 | partial |
-| NFR-009~014 | 추가 | atomicity, compatibility, recovery, integrity, isolation, observability | v2 data/API/ops | AT-011~24, 39~46, 66~86, 121~125 | planned |
+| NFR-009~014 | 추가 | atomicity, compatibility, recovery, integrity, isolation, observability | v2 data/API/ops | AT-011~017, 77~81 구현; 나머지 planned | partial |
 | US-01~06 | 유지·보강 | first use, repeated use, recovery | goal UI/tools/runner/AO4 | AT-001~010, 34~38, 47~50, 88~92 | partial |
 | AO1~AO3 | 유지+상태 분리 | legacy evidence / v1.1 verification | milestones+evidence | Phase 0 audit | implemented-v1 / v1.1-unverified |
 | AO4 | 분리 | AO4-A #310, AO4-B coverage | supplemental analysis+handover | AT-047~058 | planned |

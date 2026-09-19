@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import os
 import re
@@ -37,6 +38,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 KST = timezone(timedelta(hours=9))
+SCANNER_VERSION = "aag-scanner-v1.1"
 
 HTTP_METHODS = ("get", "post", "put", "delete", "patch", "head", "options")
 
@@ -102,6 +104,87 @@ def load_rules(path: Path) -> tuple[dict[str, Any], list[str]]:
         else:
             merged[key] = value
     return merged, warnings
+
+
+def _git_value(root: Path, *args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), *args], capture_output=True, text=True,
+            timeout=10, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _expected_ref_head(root: Path, target_ref: str) -> str:
+    configured = os.getenv("AAG_EXPECTED_TARGET_REF_HEAD_SHA", "").strip()
+    if configured:
+        return configured
+    candidates = [target_ref]
+    if target_ref.startswith("refs/heads/"):
+        branch = target_ref.removeprefix("refs/heads/")
+        candidates.insert(0, f"refs/remotes/origin/{branch}")
+    for candidate in candidates:
+        resolved = _git_value(root, "rev-parse", "--verify", candidate)
+        if resolved:
+            return resolved
+    return ""
+
+
+def _worktree_digest(root: Path) -> str | None:
+    status = _git_value(root, "status", "--porcelain=v1", "--untracked-files=all")
+    if not status:
+        return None
+    digest = hashlib.sha256(status.encode("utf-8", errors="surrogateescape"))
+    for line in status.splitlines():
+        relative = line[3:]
+        if " -> " in relative:
+            relative = relative.rsplit(" -> ", 1)[1]
+        path = root / relative
+        if path.is_file() and path.is_relative_to(root):
+            digest.update(relative.encode("utf-8", errors="surrogateescape"))
+            try:
+                digest.update(path.read_bytes())
+            except OSError:
+                digest.update(b"<unreadable>")
+    return digest.hexdigest()
+
+
+def source_identity(root: Path, rules_path: Path, rules: dict[str, Any]) -> dict[str, Any]:
+    """Return the reproducibility fields required by the v1.1 ingest contract."""
+    commit_sha = (
+        os.getenv("AADS_COMMIT_SHA")
+        or os.getenv("GIT_COMMIT")
+        or _git_value(root, "rev-parse", "HEAD")
+    )
+    branch = os.getenv("AAG_TARGET_REF") or _git_value(root, "symbolic-ref", "--short", "HEAD")
+    if branch and not branch.startswith("refs/"):
+        branch = f"refs/heads/{branch}"
+    target_ref = branch or "refs/heads/unknown"
+    rules_bytes = rules_path.read_bytes() if rules_path.is_file() else b""
+    scope = {
+        "scan": rules.get("scan") or {},
+        "entrypoints": rules.get("entrypoints") or {},
+        "frontend": rules.get("frontend") or {},
+        "sql": rules.get("sql") or {},
+    }
+    scope_bytes = json.dumps(
+        scope, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return {
+        "repository_id": os.getenv("AAG_REPOSITORY_ID") or root.name,
+        "target_ref": target_ref,
+        "resolved_commit_sha": commit_sha or "unknown",
+        "expected_target_ref_head_sha": _expected_ref_head(root, target_ref) or "unknown",
+        "scanner_version": SCANNER_VERSION,
+        "ruleset_digest": hashlib.sha256(rules_bytes).hexdigest(),
+        "scan_scope_digest": hashlib.sha256(scope_bytes).hexdigest(),
+        "normalization_version": "aag-c14n-v1",
+        "stable_key_version": "aag-stable-key-v1",
+        "parser_versions": {"python_ast": sys.version.split()[0], "aag": SCANNER_VERSION},
+        "worktree_digest": _worktree_digest(root),
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1960,7 +2043,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: 루트가 디렉터리가 아님 — {root}", file=sys.stderr)
         return 2
 
-    rules, warnings = load_rules(Path(args.rules))
+    rules_path = Path(args.rules)
+    rules, warnings = load_rules(rules_path)
+    identity = source_identity(root, rules_path, rules)
     scan = Scan(root, rules)
     scan.warnings.extend(warnings)
     try:
@@ -1996,6 +2081,8 @@ def main(argv: list[str] | None = None) -> int:
         graph_path.write_text(json.dumps({
             "generated_at": baseline["generated_at"],
             "root": str(root),
+            "source_identity": identity,
+            "commit_sha": identity["resolved_commit_sha"],
             "api_roots": scan.api_roots,
             "stats": baseline["scope"],
             "nodes": scan.nodes,
@@ -2030,7 +2117,7 @@ def main(argv: list[str] | None = None) -> int:
         push_snapshot({
             "project": "AADS", "host": socket.gethostname(),
             "generated_at": baseline["generated_at"],
-            "commit_sha": os.getenv("AADS_COMMIT_SHA") or os.getenv("GIT_COMMIT"),
+            "commit_sha": identity["resolved_commit_sha"],
             "stats": baseline["scope"], "findings": scan.findings,
             "unresolved": scan.unresolved, "node_count": len(scan.nodes),
             "edge_count": len(scan.edges),

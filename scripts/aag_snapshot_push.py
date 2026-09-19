@@ -31,6 +31,15 @@ from pathlib import Path
 from typing import Iterator
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+from tools.aag.v2_contract import (  # noqa: E402
+    canonical_json,
+    content_fingerprint,
+    graph_content,
+    input_fingerprint,
+)
+
 GRAPH_DIR = REPO_ROOT / "reports" / "aag"
 PG_CONTAINER = os.getenv("AAG_PG_CONTAINER", "aads-postgres")
 PG_USER = os.getenv("AAG_PG_USER", "aads")
@@ -48,7 +57,7 @@ def _dollar(value: str) -> str:
     return "%s%s%s" % (TAG, value, TAG)
 
 
-def _statement(project: str, graph: dict) -> str:
+def _legacy_statement(project: str, graph: dict) -> str:
     stats = graph.get("stats") or {}
     findings = graph.get("findings") or []
     unresolved = graph.get("unresolved") or []
@@ -83,6 +92,116 @@ def _statement(project: str, graph: dict) -> str:
     )
 
 
+def _v2_statement(project: str, graph: dict) -> str | None:
+    identity = graph.get("source_identity") or {}
+    required = (
+        "repository_id", "target_ref", "resolved_commit_sha", "scanner_version",
+        "ruleset_digest", "scan_scope_digest", "normalization_version",
+        "stable_key_version", "expected_target_ref_head_sha",
+    )
+    if any(not identity.get(key) for key in required):
+        return None
+    if "unknown" in {
+        identity["resolved_commit_sha"], identity["expected_target_ref_head_sha"]
+    }:
+        return None
+
+    body = graph_content(graph)
+    content_hash = content_fingerprint(body)
+    input_hash = input_fingerprint(
+        project=project,
+        repository_id=identity["repository_id"],
+        target_ref=identity["target_ref"],
+        resolved_commit_sha=identity["resolved_commit_sha"],
+        expected_target_ref_head_sha=identity["expected_target_ref_head_sha"],
+        scanner_version=identity["scanner_version"],
+        ruleset_digest=identity["ruleset_digest"],
+        scan_scope_digest=identity["scan_scope_digest"],
+        parser_versions=identity.get("parser_versions") or {},
+        normalization_version=identity["normalization_version"],
+        worktree_digest=identity.get("worktree_digest"),
+    )
+    values = {
+        "project": _dollar(project),
+        "repository": _dollar(str(identity["repository_id"])),
+        "ref": _dollar(str(identity["target_ref"])),
+        "scope": _dollar(str(identity.get("governance_scope") or "default")),
+        "commit": _dollar(str(identity["resolved_commit_sha"])),
+        "expected_commit": _dollar(str(identity["expected_target_ref_head_sha"])),
+        "input": _dollar(input_hash),
+        "content": _dollar(content_hash),
+        "scanner": _dollar(str(identity["scanner_version"])),
+        "rules": _dollar(str(identity["ruleset_digest"])),
+        "scan_scope": _dollar(str(identity["scan_scope_digest"])),
+        "normalization": _dollar(str(identity["normalization_version"])),
+        "stable_key": _dollar(str(identity["stable_key_version"])),
+        "parsers": _dollar(canonical_json(identity.get("parser_versions") or {})),
+        "host": _dollar(socket.gethostname()),
+        "generated": _dollar(str(graph["generated_at"])),
+        "stats": _dollar(canonical_json(body["stats"])),
+        "nodes": _dollar(canonical_json(body["nodes"])),
+        "edges": _dollar(canonical_json(body["edges"])),
+        "findings": _dollar(canonical_json(body["findings"])),
+        "unresolved": _dollar(canonical_json(body["unresolved"])),
+    }
+    return """
+WITH new_run AS (
+    INSERT INTO aag_scan_runs
+         (project, repository_id, target_ref, governance_scope, resolved_commit_sha,
+         expected_target_ref_head_sha, input_fingerprint, scanner_version,
+         ruleset_digest, scan_scope_digest,
+         normalization_version, parser_versions, host, result, stage_status)
+    VALUES ({project}, {repository}, {ref}, {scope}, {commit}, {expected_commit},
+            {input}, {scanner},
+            {rules}, {scan_scope}, {normalization}, {parsers}::jsonb, {host},
+            'running', '{{"scan":"succeeded","ingest":"running"}}'::jsonb)
+    RETURNING id
+), inserted_snapshot AS (
+    INSERT INTO aag_graph_snapshots_v2
+        (project, repository_id, content_fingerprint, canonicalization_version,
+         stable_key_version, stats, nodes, edges, findings, unresolved, node_count,
+         edge_count, finding_count, generated_at, publish_status, first_published_at)
+    VALUES ({project}, {repository}, {content}, {normalization}, {stable_key},
+            {stats}::jsonb, {nodes}::jsonb, {edges}::jsonb, {findings}::jsonb,
+            {unresolved}::jsonb, {node_count}, {edge_count}, {finding_count},
+            {generated}::timestamptz, 'ready', NOW())
+    ON CONFLICT (project, repository_id, content_fingerprint) DO NOTHING
+    RETURNING id
+), selected_snapshot AS (
+    SELECT id, TRUE AS created FROM inserted_snapshot
+    UNION ALL
+    SELECT id, FALSE AS created FROM aag_graph_snapshots_v2
+     WHERE project={project} AND repository_id={repository}
+       AND content_fingerprint={content}
+       AND NOT EXISTS (SELECT 1 FROM inserted_snapshot)
+), new_observation AS (
+    INSERT INTO aag_snapshot_observations
+        (run_id, snapshot_id, project, repository_id, target_ref, governance_scope,
+         resolved_commit_sha, input_fingerprint, content_fingerprint,
+         expected_target_ref_head_sha, authoritative, result,
+         verification_status, verified_at)
+    SELECT r.id, s.id, {project}, {repository}, {ref}, {scope}, {commit}, {input},
+           {content}, {expected_commit}, ({commit} = {expected_commit}),
+           CASE WHEN s.created THEN 'succeeded' ELSE 'no_change_success' END,
+           CASE WHEN {commit} = {expected_commit} THEN 'verified'
+                ELSE 'commit_mismatch' END, NOW()
+      FROM new_run r CROSS JOIN selected_snapshot s
+    RETURNING run_id, result, verification_status
+)
+UPDATE aag_scan_runs r
+   SET result=CASE WHEN o.verification_status = 'verified' THEN o.result
+                   ELSE 'source_behind' END,
+       finished_at=NOW(),
+       stage_status='{{"scan":"succeeded","ingest":"succeeded"}}'::jsonb
+  FROM new_observation o WHERE r.id=o.run_id;
+""".format(
+        **values,
+        node_count=len(body["nodes"]),
+        edge_count=len(body["edges"]),
+        finding_count=len(body["findings"]),
+    )
+
+
 def _targets(argv: list) -> Iterator:
     if argv:
         for item in argv:
@@ -108,7 +227,15 @@ def main() -> int:
             print("SKIP %s — generated_at 이 비어 있다" % project, file=sys.stderr)
             continue
         try:
-            statements.append(_statement(project, graph))
+            statements.append(_legacy_statement(project, graph))
+            v2_statement = _v2_statement(project, graph)
+            if v2_statement:
+                statements.append(v2_statement)
+            else:
+                print(
+                    "V2 SKIP %s — source identity/commit is incomplete; legacy only" % project,
+                    file=sys.stderr,
+                )
         except ValueError as exc:
             print("SKIP %s — %s" % (project, exc), file=sys.stderr)
             continue
@@ -136,7 +263,7 @@ def main() -> int:
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr)
         return 1
-    print("OK %d건 적재" % len(statements))
+    print("OK %d SQL statements applied" % len(statements))
     return 0
 
 

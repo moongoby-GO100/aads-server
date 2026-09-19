@@ -69,3 +69,17 @@ artifact는 hash, producer, scanner build, project scope, created time, replay w
 run, observation, snapshot, graph body, finding identity/occurrence, audit, evidence를
 분리 보존한다. goal/baseline/incident/override/handover evidence는 pin한다. restore
 시험은 baseline과 latest pointer, stable key, evidence 일치를 검증한다.
+
+## 9. V11-1 additive rollout
+
+- migration: `migrations/20260919_aag_v1_1_foundation.sql`; legacy
+  `aag_graph_snapshots`는 수정하지 않는다.
+- ingest: `app/services/aag_ingest_v2.py`; 동일 content는 immutable snapshot을
+  재사용하고 run/observation만 추가해 freshness를 갱신한다.
+- source fence: `resolved_commit_sha`와 `expected_target_ref_head_sha`가 다르면
+  observation은 `commit_mismatch`, `authoritative=false`이며 정상 freshness로 승격하지 않는다.
+- retry: 동일 `run_id`와 같은 input은 기존 결과를 반환하고, 다른 input으로 재사용하면
+  conflict로 거부한다.
+- API: `/api/v1/aag/v2/snapshots`; `AAG_V2_ENABLED=1`에서만 열리며 기본값은 off다.
+- rollback: flag를 off로 되돌리면 v2 ingest를 즉시 중지한다. 실제 DB migration 적용과
+  v2 활성화는 배포·운영 승인 뒤 진행하며 v1 API와 legacy row는 그대로 유지한다.
