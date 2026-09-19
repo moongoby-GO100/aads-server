@@ -161,6 +161,22 @@ def test_materialized_cte_names_are_not_tables():
     assert sc.extract_sql_tables(sql) == {"stock_universe", "real_table"}
 
 
+def test_cte_with_explicit_column_names_is_not_a_table():
+    """GO100 VALUES CTEs declare output columns between the name and AS."""
+    sql = """
+        WITH windows(window_key, start_ts, end_ts) AS (
+            VALUES ('open', NOW(), NOW())
+        ),
+        target(trade_date, stock_code) AS NOT MATERIALIZED (
+            SELECT trade_date, stock_code FROM stock_universe
+        )
+        SELECT t.stock_code
+        FROM target t
+        JOIN windows w ON true
+    """
+    assert sc.extract_sql_tables(sql) == {"stock_universe"}
+
+
 def test_sql_keywords_after_from_are_not_tables():
     assert sc.extract_sql_tables("SELECT TRIM(BOTH ' ' FROM code) FROM stocks") == {"stocks"}
     assert sc.extract_sql_tables("SELECT * FROM stocks WHERE code BETWEEN '1' AND '9'") == {"stocks"}

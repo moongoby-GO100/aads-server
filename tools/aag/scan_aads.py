@@ -234,7 +234,8 @@ _TABLE_REF_RE = re.compile(
 # `WITH x AS (…), y AS (…)` 의 y 를 놓치면 CTE 이름이 테이블로 둔갑한다.
 # `\b` 를 콤마 앞에 두면 `),\n  y AS (` 에서 경계가 성립하지 않아 매칭이 빠진다.
 _CTE_RE = re.compile(
-    r"(?:\bwith\b(?:\s+recursive\b)?|,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+as\s*"
+    r"(?:\bwith\b(?:\s+recursive\b)?|,)\s*([a-zA-Z_][a-zA-Z0-9_]*)"
+    r"(?:\s*\([^()]*\))?\s+as\s*"
     r"(?:(?:not\s+)?materialized\s*)?\(",
     re.I,
 )
