@@ -2611,7 +2611,6 @@
           <div class="auth-panel">
             <div id="authState" class="auth-state">
               <span class="badge warn">로그인 필요</span>
-              <span>자동화와 서버 저장은 로그인 후 사용</span>
             </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end">
               <button id="loginBtn" class="primary" type="button">로그인</button>
@@ -2630,27 +2629,10 @@
           <div class="auth-brand-lockup" aria-label="오비서 브랜드">
             <div class="auth-mark-large">매</div>
             <div class="auth-brand-text">
-              <strong>열정국밥 오비서</strong>
-              <span>중화점, 성신여대점, 미아점 통합 운영관리</span>
+              <strong>오비서</strong>
             </div>
           </div>
-          <span class="auth-kicker">FB 오비서</span>
-          <h2>매장 운영 로그인</h2>
-          <p>관리자는 운영 화면으로, 직원은 승인 상태에 맞는 직원 화면으로 들어갑니다.</p>
-          <div class="auth-summary compact" aria-label="권한 구분 요약">
-            <div>
-              <strong>대표(사업자)</strong>
-              <span>처음이면 사업자 회원가입 — 계정과 사업자를 함께 등록</span>
-            </div>
-            <div>
-              <strong>관리자</strong>
-              <span>사업자, 연동, 직원 승인, 계약, 급여 관리</span>
-            </div>
-            <div>
-              <strong>직원</strong>
-              <span>회원가입 후 기본정보와 입사서류 등록</span>
-            </div>
-          </div>
+          <p>오비서 경영관리의 모든 걸 지원합니다.</p>
         </div>
         <section class="auth-card">
           <div class="panel-head">
@@ -2671,7 +2653,6 @@
             <button class="primary" type="submit">로그인</button>
             <button id="openSignupFromGateBtn" type="button">직원 회원가입</button>
             <a id="ownerSignupFromGateBtn" href="/static/apps/obys/signup.html" style="display:flex;align-items:center;justify-content:center;min-height:44px;margin-top:8px;border-radius:8px;text-decoration:none;font-weight:700;color:#fff;background:#2f6fed;border:1px solid #2f6fed">사업자 회원가입 (대표님 · 신규 사업자)</a>
-            <p class="auth-help">대표님은 <b>사업자 회원가입</b>으로 계정과 사업자를 함께 등록합니다. 직원은 <b>직원 회원가입</b> 후 대표님 승인을 받습니다.</p>
           </form>
           <form id="gateSignupForm" class="panel-body hidden">
             <input name="name" type="hidden">
@@ -2713,10 +2694,6 @@
             <button id="openLoginFromInviteBtn" type="button">로그인으로 전환</button>
             <p class="auth-help">관리자가 전달한 초대 링크로 가입하면 지정된 권한으로 열정국밥 조직에 연결됩니다.</p>
           </form>
-          <div class="auth-security-strip">
-            <strong>접근 범위</strong>
-            <span>판매사이트 비밀번호는 화면에 표시하지 않고, 지점별 운영 데이터는 로그인 권한 기준으로만 저장합니다.</span>
-          </div>
         </section>
       </div>
     </section>
@@ -4689,9 +4666,6 @@
         </form>
         <button id="openSignupFromLoginBtn" type="button">직원 회원가입 먼저 하기</button>
         <a id="ownerSignupFromLoginBtn" href="/static/apps/obys/signup.html" style="display:flex;align-items:center;justify-content:center;min-height:44px;margin-top:8px;border-radius:8px;text-decoration:none;font-weight:700;color:#1b4ec2;background:#edf4ff;border:1px solid #c7dbff">사업자 회원가입 (대표님)</a>
-        <div class="settings-note">
-          대표님이 처음 오셨다면 <b>사업자 회원가입</b>, 기존 관리자는 로그인, 신규 직원은 <b>직원 회원가입</b> 후 가입요청과 입사서류 등록을 진행합니다.
-        </div>
       </div>
     </section>
   </div>
