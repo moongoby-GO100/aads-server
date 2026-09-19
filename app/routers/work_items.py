@@ -13,6 +13,7 @@ from app.core.goal_work_hierarchy_policy import (
     goal_work_hierarchy_enabled,
     workflow_approval_enabled,
 )
+from app.services.goal_policy_shadow import promote_policy, replay_policy, rollback_policy
 from app.services.goal_work_hierarchy import resolve_actor_scope
 from app.services.goal_workflow_approval import (
     approval_preview,
@@ -105,6 +106,22 @@ class GrantUseResultRequest(BaseModel):
 
 class SimulationRequest(BaseModel):
     input: dict[str, Any]
+
+
+class PolicyReplayRequest(BaseModel):
+    limit: int = Field(default=200, ge=1, le=1000)
+    mode: Literal["simulate", "shadow", "historical_replay"] = "historical_replay"
+
+
+class PolicyPromotionRequest(BaseModel):
+    replay_run_id: UUID
+    target_mode: Literal["canary", "enabled"]
+    reason: str = Field(min_length=1)
+
+
+class PolicyRollbackRequest(BaseModel):
+    rollback_policy_id: UUID
+    reason: str = Field(min_length=1)
 
 
 class PreconditionRequest(BaseModel):
@@ -366,3 +383,47 @@ async def post_simulate(req: SimulationRequest, context=member_dependency,
         return await reserve_grant_use(conn, tenant_id=tenant,
                                        actor=await _actor(conn, context, session_id),
                                        request=req.input, simulate=True)
+
+
+@router.post("/goal-policy/{policy_id}/replay")
+async def post_policy_replay(policy_id: str, req: PolicyReplayRequest,
+                             context=member_dependency,
+                             session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        return await replay_policy(
+            conn, tenant_id=tenant, policy_id=policy_id,
+            actor=await _actor(conn, context, session_id), limit=req.limit, run_mode=req.mode,
+        )
+
+
+@router.post("/goal-policy/{policy_id}/promote")
+async def post_policy_promote(policy_id: str, req: PolicyPromotionRequest,
+                              context=member_dependency,
+                              session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        return await promote_policy(
+            conn, tenant_id=tenant, policy_id=policy_id,
+            replay_run_id=str(req.replay_run_id), target_mode=req.target_mode,
+            reason=req.reason, actor=await _actor(conn, context, session_id),
+        )
+
+
+@router.post("/goal-policy/{policy_id}/rollback")
+async def post_policy_rollback(policy_id: str, req: PolicyRollbackRequest,
+                               context=member_dependency,
+                               session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        return await rollback_policy(
+            conn, tenant_id=tenant, policy_id=policy_id,
+            rollback_policy_id=str(req.rollback_policy_id), reason=req.reason,
+            actor=await _actor(conn, context, session_id),
+        )

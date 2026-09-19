@@ -368,3 +368,30 @@ Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks
 | artifact·secret scan/hooks | 커밋 hook에서 검증 예정 |
 | 빌드/운영 migration/deploy | 미실행 — W-14c/W-15 선행 후 W-16 blue/green 대상 |
 | DB handover/commit/push | 완료 전 상태 — 검증 후 별도 기록 |
+
+---
+
+# AADS-GOAL-V12-W14C-R3-20260919
+
+## 변경
+
+| 항목 | 결과 |
+|---|---|
+| simulation | 기존 단건 simulate는 grant/use/work/event/outbox를 쓰지 않으며 historical replay도 운영 count 전후 동일을 강제 |
+| shadow replay | 최근 tenant/project 결정 입력을 후보 정책에 재생하고 divergence·deny/allow·privilege expansion 지표를 불변 원장에 저장 |
+| masking | `sanitize_context` 적용 뒤 masked context와 erased/masked JSON Pointer만 저장; 원문 secret 비저장 |
+| canary | `audit_only → project canary → enabled`만 허용하고 replay 1건 이상·권한 확대 0건을 강제 |
+| rollback | 기존 버전 수정/삭제 없이 새 fail-closed revision 생성, 불량 정책 grant stale, append-only rollback event 기록 |
+| API | `/api/v1/goal-policy/{policy_id}/replay`, `/promote`, `/rollback` 추가 |
+| runbook | `docs/runbooks/GOAL_POLICY_CANARY_ROLLBACK.md` 추가 |
+
+## 검증
+
+| 항목 | 결과 |
+|---|---|
+| focused unit | `40 passed` |
+| full Goal unit | `369 passed` |
+| disposable PostgreSQL | migration 2회, raw secret 비저장, expansion 승격 차단, zero-expansion canary, rollback, append-only `1 passed` |
+| Ruff / py_compile / diff | 통과 |
+| AAG | `/api/v1/goal-policy` mount와 호출·테이블 영향 확인; 신규 service는 스냅샷 이후 파일이라 graph 미등재 |
+| production migration/deploy | 미실행 — W-15 완료 후 W-16 blue/green에서 일괄 적용 |
