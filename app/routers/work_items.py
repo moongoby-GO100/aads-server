@@ -107,6 +107,16 @@ class SimulationRequest(BaseModel):
     input: dict[str, Any]
 
 
+class PolicyReplayRequest(BaseModel):
+    candidate_policy_id: UUID
+    decision_ids: list[UUID] = Field(min_length=1, max_length=500)
+
+
+class PolicyPromotionRequest(BaseModel):
+    target_mode: Literal["canary", "enabled", "rollback"]
+    reason: str = Field(min_length=1)
+
+
 class PreconditionRequest(BaseModel):
     expected_parent_version: int | None = Field(default=None, ge=0)
     assignment_id: UUID | None = None
@@ -366,3 +376,35 @@ async def post_simulate(req: SimulationRequest, context=member_dependency,
         return await reserve_grant_use(conn, tenant_id=tenant,
                                        actor=await _actor(conn, context, session_id),
                                        request=req.input, simulate=True)
+
+
+@router.post("/goal-policy/shadow-replay")
+async def post_shadow_replay(req: PolicyReplayRequest, context=member_dependency,
+                             session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    from app.services.goal_policy_rollout import simulate_policy
+
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        return await simulate_policy(
+            conn, tenant_id=tenant, actor=await _actor(conn, context, session_id),
+            candidate_policy_id=str(req.candidate_policy_id),
+            decision_ids=[str(value) for value in req.decision_ids],
+        )
+
+
+@router.post("/goal-policy/versions/{policy_id}/promote")
+async def post_promote_policy(policy_id: str, req: PolicyPromotionRequest,
+                              context=member_dependency,
+                              session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    from app.services.goal_policy_rollout import promote_policy
+
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        return await promote_policy(
+            conn, tenant_id=tenant, actor=await _actor(conn, context, session_id),
+            policy_id=policy_id, target_mode=req.target_mode, reason=req.reason,
+        )

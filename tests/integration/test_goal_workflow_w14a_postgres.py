@@ -11,6 +11,8 @@ import pytest
 
 asyncpg = pytest.importorskip("asyncpg")
 
+from app.services.goal_policy_rollout import promote_policy, simulate_policy
+from app.services.goal_work_hierarchy import ActorScope
 from tests.integration.test_goal_policy_foundation_migration import (
     BASELINE,
     M12,
@@ -27,6 +29,7 @@ pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="M12_TEST_DATABASE_URL 
 ROOT = Path(__file__).parents[2]
 W14A = (ROOT / "migrations/20260919_goal_workflow_w14a.sql").read_text()
 W14B = (ROOT / "migrations/20260919_goal_workflow_w14b.sql").read_text()
+W14C = (ROOT / "migrations/20260919_goal_policy_rollout_w14c.sql").read_text()
 
 
 def _url() -> str:
@@ -89,6 +92,27 @@ async def _exercise() -> None:
         await conn.execute(W14A)
         await conn.execute(W14B)
         await conn.execute(W14B)
+        await conn.execute(W14C)
+        await conn.execute(W14C)
+        assert await conn.fetchval(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name LIKE 'goal_policy_simulation_%'"
+        ) == 2
+        project_actor = ActorScope(str(tenant), str(principal), "project_lead", "AADS", "project")
+        simulation = await simulate_policy(
+            conn, tenant_id=str(tenant), actor=project_actor,
+            candidate_policy_id=str(policy_id), decision_ids=[str(decision_id)],
+        )
+        assert simulation["sample_count"] == 1
+        assert simulation["widened_count"] == 0
+        ceo_actor = ActorScope(str(tenant), str(principal), "ceo", "AADS", "ceo_integrated")
+        rollout = await promote_policy(
+            conn, tenant_id=str(tenant), actor=ceo_actor, policy_id=str(policy_id),
+            target_mode="canary", reason="w14c integration proof",
+        )
+        assert rollout["mode"] == "canary"
+        assert await conn.fetchval(
+            "SELECT count(*) FROM goal_policy_rollout_events WHERE policy_version_id=$1", policy_id
+        ) == 1
         change_set = await conn.fetchval(
             "SELECT id FROM work_item_change_sets WHERE tenant_id=$1 LIMIT 1", tenant
         )
