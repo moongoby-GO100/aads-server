@@ -1614,7 +1614,7 @@ notify() {
 # Reload them while holding the nginx cutover lock so a concurrent deploy cannot
 # race the mounted process or certify a route against stale sidecar code.
 reload_mounted_sidecars() {
-    local sidecar optional_sidecars internal_url public_url health_wait health_interval health_elapsed
+    local sidecar optional_sidecars internal_url public_url health_wait health_interval health_elapsed public_code
     local -a sidecars optional_list
     local failure=""
 
@@ -1624,6 +1624,8 @@ reload_mounted_sidecars() {
     public_url="${DEPLOY_SIDECAR_PUBLIC_CHECK_URL:-http://127.0.0.1/api/v1/yeoljeong-finance/health/live}"
     health_wait="${DEPLOY_SIDECAR_HEALTH_WAIT:-60}"
     health_interval="${DEPLOY_SIDECAR_HEALTH_INTERVAL:-2}"
+    [[ "$health_wait" =~ ^[0-9]+$ ]] || health_wait=60
+    [[ "$health_interval" =~ ^[0-9]+$ ]] || health_interval=2
 
     deploy_phase_start "mounted_sidecar_reload" "verifying"
     for sidecar in "${sidecars[@]}"; do
@@ -1666,16 +1668,17 @@ reload_mounted_sidecars() {
         done
         [[ -n "$failure" ]] && break
 
-        health_elapsed=0
-        until curl -sf --max-time 5 "$public_url" >/dev/null 2>&1; do
-            if (( health_elapsed >= health_wait )); then
-                failure="mounted sidecar public health failed after ${health_elapsed}s: ${sidecar} (${public_url})"
+        # This route is intentionally authenticated. 401/403 verifies nginx
+        # routing plus the auth gate; the internal probe above verifies the
+        # sidecar process itself. Only a missing/broken public route fails.
+        public_code="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "$public_url" 2>/dev/null || echo 000)"
+        case "$public_code" in
+            200|401|403) ;;
+            *)
+                failure="mounted sidecar public health failed: ${sidecar} (${public_url}, http=${public_code})"
                 break
-            fi
-            sleep "$health_interval"
-            health_elapsed=$((health_elapsed + health_interval))
-        done
-        [[ -n "$failure" ]] && break
+                ;;
+        esac
     done
 
     if [[ -n "$failure" ]]; then

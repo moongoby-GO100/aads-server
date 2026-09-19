@@ -29,9 +29,16 @@ def test_public_health_failure_is_a_failed_reload_phase():
     body = _function_body("reload_mounted_sidecars")
     assert 'DEPLOY_SIDECAR_PUBLIC_CHECK_URL:-http://127.0.0.1/api/v1/yeoljeong-finance/health/live' in body
     assert 'DEPLOY_SIDECAR_HEALTH_WAIT:-60' in body
-    assert 'until curl -sf --max-time 5 "$public_url"' in body
-    assert 'failure="mounted sidecar public health failed after ${health_elapsed}s: ${sidecar} (${public_url})"' in body
+    assert "200|401|403" in body
+    assert 'failure="mounted sidecar public health failed: ${sidecar} (${public_url}, http=${public_code})"' in body
     assert 'notify "❌ Blue-Green 인증 실패: ${failure}"' in body
+
+
+def test_sidecar_internal_warmup_has_bounded_polling():
+    body = _function_body("reload_mounted_sidecars")
+    assert 'DEPLOY_SIDECAR_HEALTH_INTERVAL:-2' in body
+    assert 'until curl -sf --max-time 5 "$internal_url"' in body
+    assert 'health_elapsed=$((health_elapsed + health_interval))' in body
 
 
 def test_nginx_lock_is_released_before_sidecar_restart_wait():
