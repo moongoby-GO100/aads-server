@@ -1614,7 +1614,7 @@ notify() {
 # Reload them while holding the nginx cutover lock so a concurrent deploy cannot
 # race the mounted process or certify a route against stale sidecar code.
 reload_mounted_sidecars() {
-    local sidecar optional_sidecars internal_url public_url
+    local sidecar optional_sidecars internal_url public_url health_wait health_interval health_elapsed
     local -a sidecars optional_list
     local failure=""
 
@@ -1622,6 +1622,8 @@ reload_mounted_sidecars() {
     IFS=',' read -r -a optional_list <<< "${DEPLOY_MOUNTED_SIDECAR_OPTIONAL:-}"
     internal_url="${DEPLOY_SIDECAR_CHECK_URL:-http://localhost:8110/health/live}"
     public_url="${DEPLOY_SIDECAR_PUBLIC_CHECK_URL:-http://127.0.0.1/api/v1/yeoljeong-finance/health/live}"
+    health_wait="${DEPLOY_SIDECAR_HEALTH_WAIT:-60}"
+    health_interval="${DEPLOY_SIDECAR_HEALTH_INTERVAL:-2}"
 
     deploy_phase_start "mounted_sidecar_reload" "verifying"
     for sidecar in "${sidecars[@]}"; do
@@ -1653,14 +1655,27 @@ reload_mounted_sidecars() {
             failure="mounted sidecar restart failed: ${sidecar}"
             break
         fi
-        if ! curl -sf --max-time 10 "$internal_url" >/dev/null 2>&1; then
-            failure="mounted sidecar internal health failed: ${sidecar} (${internal_url})"
-            break
-        fi
-        if ! curl -sf --max-time 10 "$public_url" >/dev/null 2>&1; then
-            failure="mounted sidecar public health failed: ${sidecar} (${public_url})"
-            break
-        fi
+        health_elapsed=0
+        until curl -sf --max-time 5 "$internal_url" >/dev/null 2>&1; do
+            if (( health_elapsed >= health_wait )); then
+                failure="mounted sidecar internal health failed after ${health_elapsed}s: ${sidecar} (${internal_url})"
+                break
+            fi
+            sleep "$health_interval"
+            health_elapsed=$((health_elapsed + health_interval))
+        done
+        [[ -n "$failure" ]] && break
+
+        health_elapsed=0
+        until curl -sf --max-time 5 "$public_url" >/dev/null 2>&1; do
+            if (( health_elapsed >= health_wait )); then
+                failure="mounted sidecar public health failed after ${health_elapsed}s: ${sidecar} (${public_url})"
+                break
+            fi
+            sleep "$health_interval"
+            health_elapsed=$((health_elapsed + health_interval))
+        done
+        [[ -n "$failure" ]] && break
     done
 
     if [[ -n "$failure" ]]; then
@@ -2532,9 +2547,13 @@ case "$MODE" in
             exit 1
         fi
 
+        # The routing transaction is complete. Release the nginx lock before
+        # waiting for a separately mounted sidecar to restart; the global
+        # release contract allows the lock only through immediate routed health.
+        release_nginx_switch_lock
+
         # The route is live now, but the bind-mounted finance sidecar still
-        # serves its pre-release files until it has been restarted and checked
-        # through nginx. Keep the switch lock through that verification.
+        # serves its pre-release files until it has been restarted and checked.
         if ! reload_mounted_sidecars; then
             record_deploy "failed" "$MODE" "mounted sidecar reload failed after nginx cutover"
             exit 1
@@ -2546,7 +2565,6 @@ case "$MODE" in
         write_active_slot_state "$NEW_PORT" "$NEW_CONTAINER" "deploy.sh" "bluegreen routed health passed"
         docker exec "$NEW_CONTAINER" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         docker exec "$OLD_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
-        release_nginx_switch_lock
         STANDBY_SYNC_DEFERRED=false
         sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT" "$DEPLOY_GENERATION" || _standby_rc=$?
         case "${_standby_rc:-0}" in

@@ -28,14 +28,15 @@ def test_optional_absent_sidecar_is_skipped():
 def test_public_health_failure_is_a_failed_reload_phase():
     body = _function_body("reload_mounted_sidecars")
     assert 'DEPLOY_SIDECAR_PUBLIC_CHECK_URL:-http://127.0.0.1/api/v1/yeoljeong-finance/health/live' in body
-    assert 'curl -sf --max-time 10 "$public_url"' in body
-    assert 'failure="mounted sidecar public health failed: ${sidecar} (${public_url})"' in body
+    assert 'DEPLOY_SIDECAR_HEALTH_WAIT:-60' in body
+    assert 'until curl -sf --max-time 5 "$public_url"' in body
+    assert 'failure="mounted sidecar public health failed after ${health_elapsed}s: ${sidecar} (${public_url})"' in body
     assert 'notify "❌ Blue-Green 인증 실패: ${failure}"' in body
 
 
-def test_nginx_lock_is_released_only_after_sidecar_verification():
+def test_nginx_lock_is_released_before_sidecar_restart_wait():
     cutover_success = DEPLOY.index('deploy_phase_end "nginx_cutover" "success"')
     reload_call = DEPLOY.index("reload_mounted_sidecars", cutover_success)
-    release_lock = DEPLOY.index("release_nginx_switch_lock", reload_call)
+    release_lock = DEPLOY.index("release_nginx_switch_lock", cutover_success)
     standby_sync = DEPLOY.index("sync_standby_slot_after_drain", reload_call)
-    assert reload_call < release_lock < standby_sync
+    assert release_lock < reload_call < standby_sync
