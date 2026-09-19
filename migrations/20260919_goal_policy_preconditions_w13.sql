@@ -1,6 +1,23 @@
 -- W-13 server-computed policy inputs and immutable precondition snapshots.
 BEGIN;
 
+CREATE UNIQUE INDEX IF NOT EXISTS ux_project_role_assignments_principal_scope
+    ON project_role_assignments (id, tenant_id, project, session_id);
+
+ALTER TABLE milestones ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1
+    CHECK (version > 0);
+
+CREATE OR REPLACE FUNCTION aads_increment_milestone_version() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.version := OLD.version + 1;
+    RETURN NEW;
+END $$;
+
+CREATE OR REPLACE TRIGGER trg_milestone_version
+BEFORE UPDATE ON milestones
+FOR EACH ROW EXECUTE FUNCTION aads_increment_milestone_version();
+
 CREATE TABLE IF NOT EXISTS goal_precondition_snapshots (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
@@ -34,6 +51,7 @@ CREATE TABLE IF NOT EXISTS goal_policy_inputs (
     target_version BIGINT NOT NULL CHECK (target_version > 0),
     assignment_id UUID NOT NULL,
     principal_session_id UUID NOT NULL,
+    coordinator_session_id UUID NOT NULL,
     action TEXT NOT NULL CHECK (btrim(action)<>''),
     patch JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(patch)='array'),
     patch_hash TEXT NOT NULL CHECK (patch_hash ~ '^sha256:[0-9a-f]{64}$'),
@@ -43,9 +61,13 @@ CREATE TABLE IF NOT EXISTS goal_policy_inputs (
     precondition_snapshot_hash TEXT NOT NULL CHECK (precondition_snapshot_hash ~ '^sha256:[0-9a-f]{64}$'),
     policy_version UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT transaction_timestamp(),
-    FOREIGN KEY (assignment_id,tenant_id,project)
-        REFERENCES project_role_assignments(id,tenant_id,project) ON DELETE RESTRICT,
+    CONSTRAINT fk_goal_policy_input_principal_assignment
+        FOREIGN KEY (assignment_id,tenant_id,project,principal_session_id)
+        REFERENCES project_role_assignments(id,tenant_id,project,session_id) ON DELETE RESTRICT,
     FOREIGN KEY (principal_session_id,tenant_id) REFERENCES chat_sessions(id,tenant_id) ON DELETE RESTRICT,
+    CONSTRAINT fk_goal_policy_input_coordinator_session
+        FOREIGN KEY (coordinator_session_id,tenant_id)
+        REFERENCES chat_sessions(id,tenant_id) ON DELETE RESTRICT,
     FOREIGN KEY (policy_version,tenant_id) REFERENCES goal_approval_policy_versions(id,tenant_id) ON DELETE RESTRICT,
     FOREIGN KEY (tenant_id,work_item_id,precondition_snapshot_version,precondition_snapshot_hash)
         REFERENCES goal_precondition_snapshots

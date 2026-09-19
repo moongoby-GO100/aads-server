@@ -322,6 +322,19 @@ async def _exercise() -> None:
                 policy_id=policy_id,
                 decision_id=decision_id,
             )
+            milestone_before = await admin.fetchrow(
+                "SELECT id,version FROM milestones WHERE tenant_id=$1 LIMIT 1",
+                tenant_a,
+            )
+            assert milestone_before is not None
+            await admin.execute(
+                "UPDATE milestones SET title=title WHERE id=$1",
+                milestone_before["id"],
+            )
+            assert await admin.fetchval(
+                "SELECT version FROM milestones WHERE id=$1",
+                milestone_before["id"],
+            ) == milestone_before["version"] + 1
             for table_name in FOUNDATION_STORES:
                 assert await admin.fetchval(f"SELECT count(*) FROM {table_name}") == 1, table_name
             with pytest.raises(asyncpg.ObjectNotInPrerequisiteStateError):

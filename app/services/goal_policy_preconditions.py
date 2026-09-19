@@ -46,16 +46,29 @@ async def _local_assignment(
     conn: Any, *, tenant_id: str, project: str, actor: ActorScope,
     assignment_id: str | None,
 ) -> Any:
-    if actor.workspace_kind == "ceo_integrated" and not assignment_id:
-        raise _error(403, "local_assignment_required")
-    row = await conn.fetchrow(
-        """SELECT id::text,session_id::text,role_key
-             FROM project_role_assignments
-            WHERE tenant_id=$1::uuid AND project=$2 AND active
-              AND (($3::uuid IS NOT NULL AND id=$3::uuid)
-                   OR ($3::uuid IS NULL AND session_id=$4::uuid))""",
-        tenant_id, project, assignment_id, actor.session_id,
-    )
+    if actor.workspace_kind == "ceo_integrated":
+        if not assignment_id:
+            raise _error(403, "local_assignment_required")
+        # The CEO workspace coordinates across projects, but the execution
+        # principal is always the selected project's active local assignment.
+        row = await conn.fetchrow(
+            """SELECT id::text,session_id::text,role_key
+                 FROM project_role_assignments
+                WHERE tenant_id=$1::uuid AND project=$2 AND active
+                  AND id=$3::uuid""",
+            tenant_id, project, assignment_id,
+        )
+    else:
+        # Project actors cannot name another session's assignment.  An optional
+        # assignment id only narrows the actor-bound lookup.
+        row = await conn.fetchrow(
+            """SELECT id::text,session_id::text,role_key
+                 FROM project_role_assignments
+                WHERE tenant_id=$1::uuid AND project=$2 AND active
+                  AND session_id=$3::uuid
+                  AND ($4::uuid IS NULL OR id=$4::uuid)""",
+            tenant_id, project, actor.session_id, assignment_id,
+        )
     if not row:
         code = (
             "local_assignment_required"
@@ -96,9 +109,10 @@ async def compute_preconditions(
             raise _error(422, "invalid_parent")
     else:
         parent = await conn.fetchrow(
-            """SELECT status,1::bigint AS version FROM goals
-                WHERE id=$1::uuid AND tenant_id=$2::uuid AND project=$3""",
-            item["goal_id"], tenant_id, project,
+            """SELECT status,version FROM milestones
+                WHERE id=$1::uuid AND goal_id=$2::uuid
+                  AND tenant_id=$3::uuid AND project=$4""",
+            item["milestone_id"], item["goal_id"], tenant_id, project,
         )
         if not parent:
             raise _error(404, "resource_not_found")
@@ -111,7 +125,7 @@ async def compute_preconditions(
                   COALESCE(verification_state,CASE WHEN verified THEN 'verified' ELSE 'pending' END) AS state
              FROM work_item_evidence
             WHERE tenant_id=$1::uuid AND project=$2 AND work_item_id=$3::uuid
-              AND COALESCE(work_item_version,$4)= $4
+              AND work_item_version=$4
             ORDER BY criterion_key NULLS LAST,COALESCE(artifact_hash,content_hash),id""",
         tenant_id, project, item_id, item["version"],
     )
@@ -122,8 +136,9 @@ async def compute_preconditions(
         criteria = json.loads(criteria)
     criterion_keys = {
         str(value.get("key") or value.get("id") or index)
-        for index, value in enumerate(criteria)
         if isinstance(value, dict)
+        else str(index)
+        for index, value in enumerate(criteria)
     }
     verified_keys = {
         str(row["criterion_key"])
@@ -131,7 +146,7 @@ async def compute_preconditions(
         if row["state"] == "verified"
     }
     evidence_complete = not criteria or (
-        (criterion_keys <= verified_keys if criterion_keys else bool(evidence_records))
+        criterion_keys <= verified_keys
         and all(row["state"] == "verified" for row in evidence_records)
     )
 
@@ -205,6 +220,7 @@ async def compute_preconditions(
         "snapshot_version": int(version), "target_version": int(item["version"]),
         "target_type": str(item["type"]), "tenant_id": tenant_id, "project": project,
         "assignment_id": assignment["id"],
+        "principal_session_id": assignment["session_id"],
     }
 
 
@@ -229,15 +245,17 @@ async def create_policy_input(
     row = await conn.fetchrow(
         """INSERT INTO goal_policy_inputs
             (tenant_id,project,workspace_kind,work_item_id,target_type,target_version,
-             assignment_id,principal_session_id,action,patch,patch_hash,environment,risk_factors,
+             assignment_id,principal_session_id,coordinator_session_id,
+             action,patch,patch_hash,environment,risk_factors,
              precondition_snapshot_version,precondition_snapshot_hash,policy_version)
-            VALUES($1::uuid,$2,$3,$4::uuid,$5,$6,$7::uuid,$8::uuid,$9,$10::jsonb,$11,$12,
-                   $13::text[],$14,$15,$16::uuid)
+            VALUES($1::uuid,$2,$3,$4::uuid,$5,$6,$7::uuid,$8::uuid,$9::uuid,
+                   $10,$11::jsonb,$12,$13,$14::text[],$15,$16,$17::uuid)
             RETURNING id::text,created_at""",
         tenant_id, computed["project"],
         "ceo" if actor.workspace_kind == "ceo_integrated" else "project",
         item_id, computed["target_type"], computed["target_version"], computed["assignment_id"],
-        actor.session_id, payload["action"], json.dumps(payload.get("patch") or []), patch_hash,
+        computed["principal_session_id"], actor.session_id,
+        payload["action"], json.dumps(payload.get("patch") or []), patch_hash,
         payload["environment"], payload.get("risk_factors") or [],
         computed["snapshot_version"], computed["precondition_snapshot_hash"], policy_version,
     )
