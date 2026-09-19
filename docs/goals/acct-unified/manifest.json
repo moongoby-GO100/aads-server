@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "document_set": "ACCT-UNIFIED",
+  "goal_id": "acc70917-0917-4a01-9a01-000000000001",
+  "goal_title": "통합 경영관리시스템 구축 — ACCT 회계원장 + 오비서(FOOD) 단일 서비스",
+  "current_version": "1.0.0",
+  "status": "implementation_baseline",
+  "source_base_commit": "629cb20966bf4d527ce43bd9b1dfbe439f68bb65",
+  "versions": [
+    {
+      "version": "1.0.0",
+      "date": "2026-09-19",
+      "change_summary": "목표 전체 기획·설계·PRD와 4종 원장/HR 동작형 목업 기준선을 최초 연결",
+      "documents": {
+        "plan": "docs/goals/acct-unified/v1.0.0/PLAN.md",
+        "design": "docs/goals/acct-unified/v1.0.0/DESIGN.md",
+        "prd": "docs/goals/acct-unified/v1.0.0/PRD.md",
+        "mockup": "app/static/reports/20260919_acct_obys_unified_goal_mockup_v1.0.0.html"
+      }
+    }
+  ],
+  "related_documents": [
+    "docs/prd/ACCT-LAYOUT-001_매입자료화면_PRD.md",
+    "docs/prd/ACCT-LAYOUT-002_매입자료화면_PRD_v2.md",
+    "docs/prd/ACCT-LAYOUT-003_사용자회원가입_PRD.md",
+    "docs/prd/ACCT-LAYOUT-004_멀티사업자관리_PRD.md"
+  ]
+}

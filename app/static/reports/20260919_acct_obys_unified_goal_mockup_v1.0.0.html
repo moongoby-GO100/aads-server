@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>통합 경영관리시스템 v1.0.0 · 구현 기준 목업</title>
+  <style>
+    :root{--bg:#f3f5f9;--paper:#fff;--ink:#152033;--muted:#64748b;--line:#dce2ea;--nav:#111b2e;--brand:#3157d5;--brand2:#e8edff;--ok:#13795b;--warn:#a35f00;--bad:#b42318;--shadow:0 12px 32px rgba(15,23,42,.1)}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,Pretendard,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px}
+    button,input,select,textarea{font:inherit} button,select,input{min-height:44px} button{cursor:pointer}
+    :focus-visible{outline:3px solid #93b4ff;outline-offset:2px}
+    .app{min-height:100vh;display:grid;grid-template-columns:238px minmax(0,1fr)}
+    aside{position:sticky;top:0;height:100vh;background:var(--nav);color:#eef4ff;padding:24px 16px;display:flex;flex-direction:column;gap:20px}
+    .brand{display:flex;gap:10px;align-items:center;padding:0 8px}.brand b{font-size:19px}.brand small{display:block;color:#9fb0c9;margin-top:2px}.logo{width:38px;height:38px;border-radius:11px;background:#5a78ed;display:grid;place-items:center;font-weight:900}
+    nav{display:grid;gap:5px}.navbtn{width:100%;border:0;border-radius:10px;background:transparent;color:#bdc9da;text-align:left;padding:0 12px;display:flex;align-items:center;justify-content:space-between}.navbtn:hover,.navbtn.active{background:#24314b;color:#fff}.navbtn span:last-child{font-size:11px;background:#354565;padding:2px 7px;border-radius:99px}
+    .aside-note{margin-top:auto;color:#91a3bd;font-size:12px;line-height:1.55;padding:12px;border:1px solid #31415f;border-radius:10px}.aside-note strong{color:#dce7f8;display:block;margin-bottom:4px}
+    main{min-width:0}.topbar{height:76px;background:var(--paper);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:14px 26px;position:sticky;top:0;z-index:8}.topbar select{border:1px solid var(--line);border-radius:9px;background:#fff;padding:0 34px 0 12px;min-width:210px}.topbar .sync{margin-left:auto;color:var(--ok);font-size:12px}.avatar{width:38px;height:38px;border-radius:50%;border:0;background:#e8edff;color:#3157d5;font-weight:800}
+    .content{padding:24px 26px 60px;max-width:1500px;margin:auto}.notice{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:10px;background:#fff7df;border:1px solid #eedba2;color:#694500;margin-bottom:16px}.notice b{white-space:nowrap}.notice button{margin-left:auto;border:0;background:transparent;color:#694500;text-decoration:underline}
+    .pagehead{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:18px}.pagehead h1{font-size:27px;margin:0 0 5px}.pagehead p{margin:0;color:var(--muted)}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink);padding:0 15px;font-weight:700}.btn.primary{border-color:var(--brand);background:var(--brand);color:#fff}.btn.danger{color:var(--bad)}
+    .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}.kpi{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:17px}.kpi span{display:block;color:var(--muted);font-size:12px}.kpi strong{display:block;font-size:24px;margin:7px 0}.kpi small{color:var(--ok)}
+    .panel{background:var(--paper);border:1px solid var(--line);border-radius:13px;box-shadow:0 1px 2px rgba(15,23,42,.03)}.filters{display:grid;grid-template-columns:1fr 1fr 1fr minmax(180px,2fr) auto;gap:9px;padding:14px;border-bottom:1px solid var(--line)}
+    .filters select,.filters input,.field input,.field select,.field textarea{width:100%;border:1px solid var(--line);border-radius:8px;background:#fff;padding:0 10px;color:var(--ink)}.filters input{min-width:0}
+    .tablewrap{overflow:auto} table{width:100%;border-collapse:collapse;min-width:820px}th,td{text-align:left;padding:13px 14px;border-bottom:1px solid #edf0f4;white-space:nowrap}th{background:#f9fafc;color:#64748b;font-size:12px}tbody tr{cursor:pointer}tbody tr:hover{background:#f6f8ff}.money{text-align:right;font-variant-numeric:tabular-nums}.status{display:inline-flex;align-items:center;min-height:25px;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:800}.status.ok{color:var(--ok);background:#e6f6f0}.status.warn{color:var(--warn);background:#fff2d7}.status.bad{color:var(--bad);background:#ffebe9}.status.info{color:#3157d5;background:#e8edff}
+    .empty{padding:54px;text-align:center;color:var(--muted)}.empty b{display:block;color:var(--ink);margin-bottom:6px}.tablefoot{display:flex;justify-content:space-between;padding:13px 15px;color:var(--muted);font-size:12px}
+    .homegrid{display:grid;grid-template-columns:1.4fr 1fr;gap:14px}.queue{padding:16px}.queue h2{font-size:16px;margin:0 0 12px}.queueitem{display:grid;grid-template-columns:10px 1fr auto;gap:10px;align-items:center;padding:12px 0;border-bottom:1px solid #edf0f4}.dot{width:9px;height:9px;border-radius:50%;background:var(--warn)}.queueitem small{display:block;color:var(--muted);margin-top:3px}.quick{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.quick button{border:1px solid var(--line);border-radius:10px;background:#fff;text-align:left;padding:13px;font-weight:700}.quick small{display:block;color:var(--muted);font-weight:400;margin-top:4px}
+    .drawerback{position:fixed;inset:0;background:rgba(15,23,42,.38);z-index:20;display:none}.drawerback.open{display:block}.drawer{position:absolute;right:0;top:0;height:100%;width:min(560px,94vw);background:#fff;box-shadow:var(--shadow);display:flex;flex-direction:column}.drawerhead{padding:20px 22px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:12px}.drawerhead h2{margin:0;font-size:19px}.close{width:44px;border:1px solid var(--line);background:#fff;border-radius:9px}.drawerbody{padding:20px 22px;overflow:auto;flex:1}.meta{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:14px 0}.metabox{padding:12px;background:#f7f8fb;border-radius:9px}.metabox span{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}.section{border-top:1px solid var(--line);padding-top:17px;margin-top:18px}.section h3{font-size:14px;margin:0 0 10px}.history{display:grid;gap:10px}.history div{padding-left:13px;border-left:3px solid #ccd7f8}.history small{display:block;color:var(--muted)}
+    .formgrid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.field{display:grid;gap:6px}.field.full{grid-column:1/-1}.field label{font-size:12px;font-weight:700}.field textarea{min-height:92px;padding:10px;resize:vertical}.hint{font-size:11px;color:var(--muted)}.drawerfoot{border-top:1px solid var(--line);padding:14px 22px;display:flex;justify-content:flex-end;gap:8px;background:#fafbfc}
+    .mobile-nav{display:none}.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(90px);background:#162238;color:#fff;border-radius:9px;padding:12px 18px;z-index:40;transition:.2s}.toast.show{transform:translateX(-50%) translateY(0)}
+    @media(max-width:900px){.app{grid-template-columns:1fr}aside{display:none}.topbar{height:auto;padding:10px 14px}.topbar select{min-width:0;flex:1}.topbar .sync{display:none}.content{padding:18px 14px 90px}.pagehead{align-items:flex-start;flex-direction:column}.kpis{grid-template-columns:repeat(2,1fr)}.filters{grid-template-columns:1fr 1fr}.filters input{grid-column:1/-1}.homegrid{grid-template-columns:1fr}.mobile-nav{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:15;background:#fff;border-top:1px solid var(--line);padding:6px;overflow:auto}.mobile-nav button{border:0;background:#fff;min-width:74px;color:var(--muted);font-size:11px}.mobile-nav button.active{color:var(--brand);font-weight:800}.meta,.formgrid{grid-template-columns:1fr}.field.full{grid-column:auto}.notice{align-items:flex-start}.notice button{display:none}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="brand"><div class="logo">O</div><div><b>오비서</b><small>통합 경영관리</small></div></div>
+    <nav id="desktopNav" aria-label="주요 업무"></nav>
+    <div class="aside-note"><strong>v1.0.0 구현 기준 목업</strong>목록→상세→등록, 사업자 전환, 세션 복구를 검증합니다. 표시 숫자는 샘플입니다.</div>
+  </aside>
+  <main>
+    <header class="topbar">
+      <label for="business" class="sr-only">현재 사업자</label>
+      <select id="business" aria-label="현재 사업자"><option>라일론 주식회사</option><option>바이로그인</option><option>열정국밥 성신점</option><option>열정국밥 미아점</option></select>
+      <span class="sync">● 마지막 동기화 2분 전</span>
+      <button class="avatar" aria-label="사용자 메뉴">문</button>
+    </header>
+    <section class="content" id="content"></section>
+  </main>
+</div>
+<nav class="mobile-nav" id="mobileNav" aria-label="모바일 주요 업무"></nav>
+<div class="drawerback" id="drawerBack" role="presentation"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle"><header class="drawerhead"><div><small id="drawerKind"></small><h2 id="drawerTitle"></h2></div><button class="close" data-close aria-label="닫기">×</button></header><div class="drawerbody" id="drawerBody"></div><footer class="drawerfoot" id="drawerFoot"></footer></section></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script>
+(() => {
+  const pages = [
+    ["home","홈","4"],["sales","매출","3"],["purchase","매입","7"],["bank","은행","2"],["card","카드","5"],
+    ["contract","직원계약","6"],["attendance","근태","3"],["payroll","급여","2"]
+  ];
+  const labels = {sales:"매출",purchase:"매입",bank:"은행 거래",card:"카드 사용",contract:"직원계약",attendance:"근태",payroll:"급여"};
+  const samples = {
+    sales:[
+      {id:"S-260919-031",date:"09.19 12:31",party:"배달의민족",desc:"성신점 점심 매출",amount:3284000,status:"확정",tone:"ok"},
+      {id:"S-260919-030",date:"09.19 11:58",party:"쿠팡이츠",desc:"미아점 주문 정산 전",amount:1928000,status:"검토",tone:"warn"},
+      {id:"S-260918-122",date:"09.18 21:12",party:"현장 카드",desc:"정화점 POS 매출",amount:861000,status:"분개",tone:"info"}],
+    purchase:[
+      {id:"P-260919-014",date:"09.19 10:42",party:"마켓봄",desc:"식재료 정기 발주",amount:486200,status:"증빙대기",tone:"warn"},
+      {id:"P-260919-013",date:"09.19 09:31",party:"뉴통",desc:"면·육수 입고",amount:728000,status:"확정",tone:"ok"},
+      {id:"P-260918-077",date:"09.18 16:20",party:"성북상회",desc:"소모품 수기 매입",amount:153000,status:"미분류",tone:"bad"}],
+    bank:[
+      {id:"B-260919-882",date:"09.19 12:45",party:"배달의민족",desc:"신한 운영계좌 입금",amount:3012000,status:"매칭",tone:"ok"},
+      {id:"B-260919-881",date:"09.19 11:20",party:"성북상회",desc:"기업 정산계좌 출금",amount:-153000,status:"확인필요",tone:"warn"},
+      {id:"B-260918-610",date:"09.18 18:00",party:"급여이체",desc:"우리 급여계좌",amount:-8460000,status:"분개",tone:"info"}],
+    card:[
+      {id:"C-260919-204",date:"09.19 11:03",party:"네이버",desc:"현대 ****3318 광고비",amount:-420000,status:"미분류",tone:"bad"},
+      {id:"C-260919-203",date:"09.19 09:21",party:"쿠팡",desc:"기업 ****3985 소모품",amount:-84600,status:"증빙대기",tone:"warn"},
+      {id:"C-260918-980",date:"09.18 20:44",party:"주유소",desc:"하나 ****9670 차량비",amount:-78000,status:"확정",tone:"ok"}],
+    contract:[
+      {id:"E-1042",date:"입사 09.23",party:"김은서",desc:"성신점 · 주방",amount:null,status:"서명대기",tone:"warn"},
+      {id:"E-1038",date:"입사 09.18",party:"박지민",desc:"미아점 · 홀",amount:null,status:"서류검토",tone:"info"},
+      {id:"E-1021",date:"입사 08.01",party:"이수현",desc:"정화점 · 점장",amount:null,status:"완료",tone:"ok"}],
+    attendance:[
+      {id:"A-0919-18",date:"09.19",party:"김은서",desc:"08:58 출근 · 퇴근 전",amount:null,status:"근무중",tone:"info"},
+      {id:"A-0919-12",date:"09.19",party:"박지민",desc:"퇴근 누락",amount:null,status:"정정대기",tone:"warn"},
+      {id:"A-0918-22",date:"09.18",party:"이수현",desc:"9시간 12분 · 연장 12분",amount:null,status:"승인",tone:"ok"}],
+    payroll:[
+      {id:"PAY-2609-01",date:"2026.09",party:"성신점 12명",desc:"근태 마감버전 #3",amount:28460000,status:"검토",tone:"warn"},
+      {id:"PAY-2608-01",date:"2026.08",party:"성신점 11명",desc:"명세서 교부 11/11",amount:26120000,status:"지급완료",tone:"ok"}]
+  };
+  const state = {page:location.hash.slice(1)||"home",business:localStorage.getItem("acctMockBusiness")||"라일론 주식회사",query:""};
+  const money = v => v == null ? "—" : `${v<0?"−":""}₩${Math.abs(v).toLocaleString("ko-KR")}`;
+  const nav = pages.map(([id,name,badge])=>`<button class="navbtn" data-page="${id}"><span>${name}</span><span>${badge}</span></button>`).join("");
+  desktopNav.innerHTML=nav; mobileNav.innerHTML=pages.map(([id,name])=>`<button data-page="${id}">${name}</button>`).join(""); business.value=state.business;
+  function showToast(message){toast.textContent=message;toast.classList.add("show");setTimeout(()=>toast.classList.remove("show"),2200)}
+  function status(text,tone){return `<span class="status ${tone}">${text}</span>`}
+  function header(title,desc,primary="등록") {return `<div class="pagehead"><div><h1>${title}</h1><p>${desc}</p></div><div class="actions"><button class="btn" data-action="upload">파일 업로드</button><button class="btn primary" data-action="create">+ ${primary}</button></div></div>`}
+  function kpis(rows){const total=rows.filter(r=>r.amount!=null).reduce((a,r)=>a+r.amount,0);return `<div class="kpis"><div class="kpi"><span>현재 목록</span><strong>${rows.length}건</strong><small>필터 결과</small></div><div class="kpi"><span>합계</span><strong>${money(total)}</strong><small>샘플 데이터</small></div><div class="kpi"><span>확인 필요</span><strong>${rows.filter(r=>r.tone!=="ok").length}건</strong><small>우선 처리</small></div><div class="kpi"><span>마지막 동기화</span><strong>2분 전</strong><small>정상</small></div></div>`}
+  function ledger(page){const all=samples[page]||[];const rows=all.filter(r=>(r.party+r.desc+r.id).toLowerCase().includes(state.query.toLowerCase()));return `${header(labels[page],`${state.business} · 목록에서 행을 선택하면 상세·증빙·이력을 확인합니다.`,page==="contract"?"직원 초대":page==="attendance"?"근태 등록":page==="payroll"?"급여 계산":`${labels[page]} 등록`)}${kpis(rows)}<section class="panel"><div class="filters"><select aria-label="기간"><option>이번 달</option><option>지난 달</option></select><select aria-label="상태"><option>전체 상태</option><option>확인 필요</option><option>확정</option></select><select aria-label="담당"><option>전체 담당</option><option>내 담당</option></select><input id="search" value="${state.query}" placeholder="거래처·적요·ID 검색" aria-label="검색"><button class="btn" data-action="search">검색</button></div><div class="tablewrap">${rows.length?`<table><thead><tr><th>일자/기간</th><th>ID</th><th>거래처/대상</th><th>내용</th><th class="money">금액</th><th>상태</th></tr></thead><tbody>${rows.map(r=>`<tr data-row="${r.id}" tabindex="0"><td>${r.date}</td><td>${r.id}</td><td><strong>${r.party}</strong></td><td>${r.desc}</td><td class="money">${money(r.amount)}</td><td>${status(r.status,r.tone)}</td></tr>`).join("")}</tbody></table>`:`<div class="empty"><b>검색 결과가 없습니다.</b>필터를 초기화하거나 새 항목을 등록하십시오.</div>`}</div><div class="tablefoot"><span>샘플 ${rows.length}건 · 운영 실적 아님</span><span>1 / 1 페이지</span></div></section>`}
+  function home(){return `<div class="notice"><b>구현 기준 목업</b><span>실제 반영할 화면 구조와 복구 동선을 검증합니다. 금액과 행은 샘플입니다.</span><button data-action="dismiss">알겠습니다</button></div>${header("오늘의 경영 현황",`${state.business} · 먼저 처리할 일과 마지막 오류를 한 화면에서 확인합니다.`,"빠른 등록")}${kpis(samples.sales.concat(samples.purchase))}<div class="homegrid"><section class="panel queue"><h2>우선 처리</h2><div class="queueitem"><i class="dot"></i><div><b>카드 사용 1건 계정 미분류</b><small>현대 ****3318 · 네이버 광고비</small></div>${status("P0","bad")}</div><div class="queueitem"><i class="dot"></i><div><b>직원 계약 1건 서명 대기</b><small>김은서 · 09.23 입사 예정</small></div>${status("오늘","warn")}</div><div class="queueitem"><i class="dot"></i><div><b>퇴근 누락 정정 승인</b><small>박지민 · 09.19 근태</small></div>${status("승인","info")}</div><div class="queueitem"><i class="dot" style="background:var(--ok)"></i><div><b>은행 수집 정상</b><small>3개 계좌 · 2분 전 완료</small></div>${status("정상","ok")}</div></section><section class="panel queue"><h2>자주 쓰는 업무</h2><div class="quick">${[["sales","매출 등록","정산/현장 매출"],["purchase","매입 등록","증빙·입고 연결"],["bank","은행 거래","수집·대사"],["card","카드 사용","증빙·계정 분류"],["contract","직원 초대","가입·서류·계약"],["attendance","근태 승인","누락·정정"]].map(x=>`<button data-page="${x[0]}">${x[1]}<small>${x[2]}</small></button>`).join("")}</div></section></div>`}
+  function render(){if(!pages.some(p=>p[0]===state.page))state.page="home";content.innerHTML=state.page==="home"?home():ledger(state.page);document.querySelectorAll("[data-page]").forEach(b=>b.classList.toggle("active",b.dataset.page===state.page));location.hash=state.page;setTimeout(()=>document.querySelector("h1")?.focus?.(),0)}
+  function findRow(id){return Object.entries(samples).flatMap(([page,rows])=>rows.map(row=>({page,...row}))).find(r=>r.id===id)}
+  function openDetail(row){drawerKind.textContent=`${labels[row.page]} 상세 · ${state.business}`;drawerTitle.textContent=row.id;drawerBody.innerHTML=`${status(row.status,row.tone)}<div class="meta"><div class="metabox"><span>거래처/대상</span><b>${row.party}</b></div><div class="metabox"><span>일자/기간</span><b>${row.date}</b></div><div class="metabox"><span>금액</span><b>${money(row.amount)}</b></div><div class="metabox"><span>사업자</span><b>${state.business}</b></div></div><div class="section"><h3>내용과 원본</h3><p>${row.desc}</p><button class="btn" data-action="evidence">증빙·원본 보기</button></div><div class="section"><h3>연결 상태</h3><p>원장·증빙·회계분개 연결 정보를 이 위치에서 확인합니다. 미연결 항목은 다음 행동을 표시합니다.</p></div><div class="section"><h3>변경 이력</h3><div class="history"><div><b>${row.status}</b><small>2026-09-19 · 문고비 · 상태 변경</small></div><div><b>원본 생성</b><small>수집/수기등록 경로와 source hash 보존</small></div></div></div>`;drawerFoot.innerHTML=`<button class="btn" data-close>닫기</button><button class="btn primary" data-action="edit">수정·정정</button>`;drawerBack.classList.add("open");document.querySelector("[data-close]").focus()}
+  function openForm(){const kind=labels[state.page]||"거래";drawerKind.textContent=`${kind} 등록 · ${state.business}`;drawerTitle.textContent=`새 ${kind}`;const draft=JSON.parse(localStorage.getItem(`acctMockDraft:${state.page}`)||"{}");drawerBody.innerHTML=`<div class="notice"><b>임시저장</b><span>비민감 입력만 이 브라우저에 보존됩니다. 파일·계좌 전체번호는 보존하지 않습니다.</span></div><form id="entryForm" class="formgrid"><div class="field"><label for="occurred">일자</label><input id="occurred" name="occurred" type="date" required value="${draft.occurred||"2026-09-19"}"></div><div class="field"><label for="amount">금액</label><input id="amount" name="amount" inputmode="numeric" required value="${draft.amount||""}" placeholder="0"></div><div class="field full"><label for="party">거래처/대상</label><input id="party" name="party" required value="${draft.party||""}" placeholder="거래처 또는 직원명"></div><div class="field full"><label for="description">적요</label><textarea id="description" name="description" required placeholder="업무 목적과 근거를 입력하십시오.">${draft.description||""}</textarea><span class="hint">저장 전 중복·사업자 권한·필수 증빙을 검증합니다.</span></div><div class="field"><label for="state">처리 상태</label><select id="state" name="state"><option>임시저장</option><option>검토요청</option></select></div><div class="field"><label for="evidence">증빙</label><input id="evidence" name="evidence" type="file"></div></form>`;drawerFoot.innerHTML=`<button class="btn" data-action="save-draft">임시저장</button><button class="btn primary" data-action="submit">검증 후 등록</button>`;drawerBack.classList.add("open");document.getElementById("occurred").focus()}
+  function saveDraft(){const f=document.getElementById("entryForm");if(!f)return;const data=Object.fromEntries(new FormData(f));delete data.evidence;localStorage.setItem(`acctMockDraft:${state.page}`,JSON.stringify(data));showToast("비민감 입력을 임시저장했습니다.")}
+  document.addEventListener("click",e=>{const b=e.target.closest("button,[data-row]");if(!b)return;if(b.dataset.page){state.page=b.dataset.page;state.query="";render();return}if(b.dataset.row){openDetail(findRow(b.dataset.row));return}const a=b.dataset.action;if(a==="create")openForm();else if(a==="search"){state.query=document.getElementById("search")?.value||"";render()}else if(a==="save-draft")saveDraft();else if(a==="submit"){const f=document.getElementById("entryForm");if(f?.reportValidity()){localStorage.removeItem(`acctMockDraft:${state.page}`);drawerBack.classList.remove("open");showToast("목업 검증: 중복검사 후 등록 상세로 이동합니다.")}}else if(a==="upload")showToast("업로드: 미리보기 → 열 매핑 → 검증 → 반영 결과");else if(a==="edit")showToast("확정 전 수정, 확정 후 정정 버전을 생성합니다.");else if(a==="evidence")showToast("권한 재검증 후 원본을 엽니다.");else if(a==="dismiss")b.closest(".notice")?.remove();if(b.hasAttribute("data-close"))drawerBack.classList.remove("open")});
+  document.addEventListener("keydown",e=>{if(e.key==="Escape")drawerBack.classList.remove("open");const row=e.target.closest?.("[data-row]");if(row&&(e.key==="Enter"||e.key===" ")){e.preventDefault();openDetail(findRow(row.dataset.row))}});
+  business.addEventListener("change",()=>{state.business=business.value;localStorage.setItem("acctMockBusiness",state.business);showToast(`${state.business}(으)로 전환했습니다.`);render()});
+  drawerBack.addEventListener("click",e=>{if(e.target===drawerBack)drawerBack.classList.remove("open")});
+  render();
+})();
+</script>
+</body>
+</html>
