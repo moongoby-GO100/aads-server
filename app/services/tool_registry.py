@@ -2450,6 +2450,9 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "type": "object",
             "properties": {
                 "project": {"type": "string", "description": "프로젝트 이름 (예: AADS, ACCT)"},
+                "repository_id": {"type": "string", "description": "v2 저장소 식별자 (선택)"},
+                "target_ref": {"type": "string", "description": "v2 Git ref (선택)"},
+                "governance_scope": {"type": "string", "default": "default", "description": "v2 거버넌스 범위"},
                 "rule": {"type": "string", "description": "AAG 규칙 필터"},
                 "severity": {"type": "string", "description": "심각도 필터 (예: P1)"},
                 "path_prefix": {"type": "string", "description": "파일 경로 접두사 필터"},
@@ -2467,6 +2470,9 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "properties": {
                 "project": {"type": "string", "description": "프로젝트 이름 (예: AADS, ACCT)"},
                 "target": {"type": "string", "description": "지시서 문장 또는 파일 경로"},
+                "repository_id": {"type": "string", "description": "v2 저장소 식별자 (선택)"},
+                "target_ref": {"type": "string", "description": "v2 Git ref (선택)"},
+                "governance_scope": {"type": "string", "default": "default", "description": "v2 거버넌스 범위"},
             },
             "required": ["project", "target"],
         },

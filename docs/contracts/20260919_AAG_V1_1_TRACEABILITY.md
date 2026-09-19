@@ -7,7 +7,7 @@
 |---|---|---|---|---|---|
 | FR-001~002 | 유지·보강 | project rules, finding contract | `tools/aag/scan_aads.py`, rules YAML | AT-003~007, 62~65 | implemented-v1 |
 | FR-003 | 대체 | run/input/content/observation/latest pointer | foundation+latest migration, `aag_ingest_v2.py` | AT-011~017, 77~81 | implemented-v11-2 |
-| FR-004 | 수정 | v2 filter/pagination/pinning | AAG v2 API·tool service | AT-098~102 | planned |
+| FR-004 | 수정 | v2 filter/pagination/pinning | AAG v2 API·tool service | `test_aag_v11_5_api.py` | implemented-v11-5-phase1 |
 | FR-005 | 수정 | authoritative brief+limitation | brief v2 API·renderer | AT-034~038, 100~102 | planned |
 | FR-006 | 보강 | hourly+DB lock/heartbeat | refresh scheduler·scan_runs | AT-009, 93~97 | partial |
 | FR-007 | 대체 | stable key-set baseline gate | `aag_baseline.py`, stable baseline migration, scanner gate | AT-025~033 | implemented-v11-3 |
@@ -20,7 +20,7 @@
 | FR-014 | 보강 | four-axis UI+recovery action | goal/ops UI | AT-018~024, 88~92, 117 | planned |
 | FR-015~018 | 추가 | brief policy, analyzer, coverage, miss | runner/AAG governance services | AT-034~038, 47~58 | planned |
 | FR-019~020 | 추가 | warn-only rule lifecycle, golden fixture determinism | baseline service, scanner selftest | AT-059~065 | implemented-v11-3 |
-| FR-021~023 | 추가 | approval/audit, override, API dual-run | governance migrations/v2 routes | AT-059~086 | partial / approval-gated |
+| FR-021~023 | 추가 | approval/audit, override, API dual-run | governance migrations/v2 routes | AT-059~086, `test_aag_v11_5_api.py` | partial / dual-run-phase1 |
 | FR-024~030 | 추가 | doc CI, history, rescan, aggregate, restore, drift, onboarding | CI/UI/ops services | AT-085~125 | planned |
 | NFR-001~008 | 유지·보강 | freshness, determinism, safety, security, traceability, accessibility | scanner/API/UI | AT-006, 18~24, 39~46, 87~97 | partial |
 | NFR-009~014 | 추가 | atomicity, compatibility, recovery, integrity, ref/scope isolation, observability | v2 data/API/ops | AT-011~024, 77~81; ops observability planned | partial |

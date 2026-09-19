@@ -124,3 +124,20 @@ run, observation, snapshot, graph body, finding identity/occurrence, audit, evid
   제안자와 다른 승인자가 모두 확인해야 `enforced`로 승격된다.
 - rollback은 신규 rule을 enforce하지 않고 warn-only로 유지하거나 직전 approved baseline을
   계속 사용한다. additive table과 audit evidence는 삭제하지 않는다.
+
+## 12. V11-5 API v2 dual-run phase 1
+
+- `GET /api/v1/aag/v2/findings`는 최초 요청에서 authoritative latest pointer를 고르고
+  이후 cursor에 immutable `snapshot_id`, offset, filter digest를 넣는다. 다음 페이지는
+  같은 snapshot과 같은 filter에서만 열리므로 페이지 사이 latest 변경이 결과를 섞지 않는다.
+- 정렬은 severity, rule, normalized path, stable finding key 순으로 결정적이며 한 페이지는
+  최대 200건이다. cursor/filter/snapshot 불일치는 400으로 거부한다.
+- `aag_api_consumer_events`는 consumer, API version, endpoint, project/ref/snapshot, outcome,
+  latency를 기록한다. `/aag/v2/consumer-telemetry`는 project admin에게만 잔여 v1 사용량을
+  보여주며, 관측 행이 하나도 없으면 폐기 준비 완료로 판정하지 않는다.
+- 세션 `aag_findings`·`aag_brief` 소비자는 `AAG_V2_CONSUMERS_ENABLED=1`일 때 central v2를
+  사용한다. flag가 off이면 즉시 기존 v1 DB/local graph 경로로 돌아간다.
+- v2 flag가 on인 상태에서 authoritative snapshot이 없으면 legacy 결과로 조용히 폴백하지
+  않고 unavailable을 반환한다. fallback을 authoritative evidence로 오인하지 않기 위함이다.
+- v1 route와 legacy table은 유지한다. runner, CI, 목표 화면의 전환과 관측 기간 잔여 v1=0
+  확인 전에는 v1 폐기를 승인하지 않는다.
