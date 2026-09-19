@@ -83,3 +83,20 @@ def test_existing_business_workflows_are_still_bound() -> None:
         "uploadBankFileToServer", "loadOnboardingDocuments", "loadEmployeeContracts",
     ):
         assert re.search(rf"function\s+{function_name}\s*\(", html)
+
+
+def test_tenant_gate_forbidden_does_not_destroy_valid_login() -> None:
+    html, _, _ = _source()
+    finance_api = html.split("async function financeApi(path", 1)[1].split(
+        "async function inventoryApi(path", 1
+    )[0]
+    refresh = html.split("async function refreshFinanceSession()", 1)[1].split(
+        "function refreshFinanceSessionInBackground()", 1
+    )[0]
+
+    assert "error.status = response.status" in finance_api
+    assert "Number(err?.status) === 401" in refresh
+    assert "Number(err?.status) === 403" in refresh
+    forbidden_branch = refresh.split("Number(err?.status) === 403", 1)[1]
+    assert "clearServerAuthToken()" not in forbidden_branch
+    assert "return authSession" in forbidden_branch

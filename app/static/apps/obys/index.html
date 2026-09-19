@@ -10444,7 +10444,11 @@
         throw error;
       }).finally(() => clearTimeout(timeoutId));
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.detail || payload.message || `API ${response.status}`);
+      if (!response.ok) {
+        const error = new Error(payload.detail || payload.message || `API ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
       return payload;
     }
 
@@ -11403,12 +11407,15 @@
         saveAuthSession(payload);
         return payload;
       } catch (err) {
-        if (/401|403|bearer|인증|권한/i.test(String(err?.message || ""))) {
+        if (Number(err?.status) === 401) {
           clearServerAuthToken();
           saveAuthSession(null);
           renderAll();
           showToast("로그인 세션이 만료되었습니다. 다시 로그인하면 서버 연동 계정을 불러옵니다.");
           return null;
+        }
+        if (Number(err?.status) === 403) {
+          showToast("로그인은 유지됩니다. 현재 사업자의 테넌트 전용 메뉴만 사용할 수 있습니다.");
         }
         return authSession;
       }
