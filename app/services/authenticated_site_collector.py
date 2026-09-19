@@ -18,6 +18,8 @@ from app.services.auth_challenge_orchestrator import make_resume_token
 from app.services.browser_permission_policy import mask_sensitive_value
 from app.services.browser_recipe_registry import build_recipe_dry_run_plan
 from app.services.managed_browser import normalize_origin, normalize_work_key
+from app.services.site_knowledge import SiteKnowledgeError
+from app.services.site_knowledge import normalize_origin as normalize_knowledge_origin
 
 KST = timezone(timedelta(hours=9))
 DATA_DIR = Path(os.getenv("AADS_AUTHENTICATED_SITE_COLLECTOR_DATA_DIR", "app/data/authenticated_site_collector"))
@@ -461,10 +463,16 @@ def normalize_site_profile(payload: dict[str, Any]) -> dict[str, Any]:
     fallback_key = f"{project_key.lower()}.custom"
     site_key = _normalize_site_key(payload.get("site_key"), fallback=fallback_key)
     raw_origins = [str(value) for value in _json_list(payload.get("allowed_origins"))]
-    base_origin = normalize_origin(_clean_text(payload.get("base_origin"), max_length=2000))
+    try:
+        base_origin = normalize_knowledge_origin(_clean_text(payload.get("base_origin"), max_length=2000))
+    except SiteKnowledgeError:
+        base_origin = ""
     allowed_origins = []
     for origin in [base_origin, *raw_origins]:
-        normalized = normalize_origin(origin) or origin.strip().rstrip("/")
+        try:
+            normalized = normalize_knowledge_origin(origin)
+        except SiteKnowledgeError:
+            normalized = ""
         if normalized and normalized not in allowed_origins:
             allowed_origins.append(normalized)
     if not base_origin and allowed_origins:

@@ -85,6 +85,9 @@ class LiveObservationIn(_Strict):
     fact_type: str = Field(min_length=1, max_length=80)
     entity_key: str = Field(min_length=1, max_length=300)
     variant_key: str = Field(default="", max_length=300)
+    account_context: str = Field(
+        default="", max_length=500, json_schema_extra={"writeOnly": True},
+    )
     source_url: str = Field(min_length=1, max_length=2000)
     revalidator_key: str = Field(min_length=1, max_length=120)
     observed_value: Any

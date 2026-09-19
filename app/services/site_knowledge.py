@@ -267,6 +267,7 @@ async def record_live_observation(
     entity_key: str, variant_key: str, revalidator_key: str, observed_value: Any,
     observed_at: datetime, expires_at: datetime, evidence_id: str,
     evidence: Sequence[str], provenance: Mapping[str, Any] | None,
+    account_context: str = "",
 ) -> dict[str, Any]:
     profile = await _profile(tenant_id=tenant_id, profile_id=site_profile_id)
     source_origin = normalize_origin(source_url)
@@ -276,13 +277,14 @@ async def record_live_observation(
     refs = evidence_refs(evidence)
     safe_value = safe_observation_value(observed_value)
     provenance_value = canonical_provenance(provenance, origin=source_origin, version=str(profile["knowledge_version"]))
-    from app.services.live_fact_gate import record_live_fact
+    from app.services.live_fact_gate import hash_account_context, record_live_fact
 
     fact = await record_live_fact(
         tenant_id=tenant_id, session_id=None, task_id=None,
         fact_type=safe_semantic_text(fact_type, field="fact_type")[:80],
         entity_key=safe_semantic_text(entity_key, field="entity_key")[:300],
-        variant_key=str(variant_key or "")[:300], account_context_hash="",
+        variant_key=str(variant_key or "")[:300],
+        account_context_hash=hash_account_context(account_context),
         source_url=source_url, source_kind="site_knowledge",
         revalidator_key=safe_semantic_text(revalidator_key, field="revalidator_key")[:120],
         observed_value=safe_value, observed_at=observed_at, expires_at=expires_at,

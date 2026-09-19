@@ -1,4 +1,5 @@
 """OHVIS managed browser task API."""
+# ruff: noqa: B008  # FastAPI dependency injection uses module-level dependencies.
 from __future__ import annotations
 
 from typing import Any
@@ -8,10 +9,10 @@ from pydantic import BaseModel, Field
 
 from app.auth import TenantRole, require_tenant_role
 from app.services.browser_task_gateway import (
+    capture_browser_task_live_frame,
     check_browser_target_access,
     consume_approval_token,
     create_browser_task,
-    capture_browser_task_live_frame,
     decide_permission,
     get_browser_task,
     get_browser_task_live_frame,
@@ -23,13 +24,13 @@ from app.services.browser_task_gateway import (
     update_browser_task_status,
     upsert_browser_task_live_frame,
 )
-from app.services.managed_browser import profile_info
 from app.services.channel_router import (
     ChannelRouter,
     ObservationEnvelope,
     directive_from_authenticated_context,
     payload_hash,
 )
+from app.services.managed_browser import profile_info
 
 router = APIRouter(prefix="/browser-tasks", tags=["browser-tasks"])
 TenantContext = dict[str, Any]
@@ -240,7 +241,14 @@ async def api_get_browser_task_live_frame(
     events = []
     if event_limit:
         events = await list_browser_task_events(tenant_id=_tenant_id(context), task_id=task_id, limit=event_limit)
-    return await _display({"task": task, "frame": frame, "events": events, "capture": capture_result}, context)
+    from app.services.browser_artifact_state import build_browser_artifact_status
+
+    artifact_status = build_browser_artifact_status(task=task, frame=frame, events=events)
+    return await _display(
+        {"task": task, "frame": frame, "events": events, "capture": capture_result,
+         "artifact_status": artifact_status},
+        context,
+    )
 
 
 @router.post("/{task_id}/live-frame")
@@ -319,6 +327,25 @@ async def api_update_browser_task_status(
     if not task:
         raise HTTPException(status_code=404, detail="browser_task_not_found")
     return await _display({"status": "updated", "task": task}, context)
+
+
+@router.post("/{task_id}/retry")
+async def api_retry_browser_task(
+    task_id: str,
+    context: TenantContext = Depends(require_member),
+) -> dict[str, Any]:
+    current = await get_browser_task(tenant_id=_tenant_id(context), task_id=task_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="browser_task_not_found")
+    if current.get("status") in {"running", "queued"}:
+        return {"status": "already_active", "task": current}
+    if current.get("status") in {"approval_required", "auth_required"}:
+        raise HTTPException(status_code=409, detail="approval_or_authentication_required")
+    task = await update_browser_task_status(
+        tenant_id=_tenant_id(context), task_id=task_id, status="queued",
+        current_step="재시도 대기", result={"retry_requested": True}, error="",
+    )
+    return {"status": "queued", "task": task}
 
 
 @router.post("/{task_id}/permissions")

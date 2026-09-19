@@ -76,3 +76,10 @@ def test_m7_m11_migration_is_additive_and_has_tenant_site_version_scopes():
     assert "vector(1024)" in sql
     assert "DROP " not in sql.upper()
     assert "TRUNCATE " not in sql.upper()
+
+
+def test_live_observation_account_context_is_write_only():
+    from app.api.site_knowledge import LiveObservationIn
+
+    account = LiveObservationIn.model_json_schema()["properties"]["account_context"]
+    assert account["writeOnly"] is True
