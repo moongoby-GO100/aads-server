@@ -553,6 +553,16 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("weekly_briefing_failed", error=str(e))
 
+        async def _run_weekly_goal_progress():
+            """Send milestone achievement rates only to the owning AADS sessions."""
+            try:
+                from app.services.goal_report import report_weekly_goal_progress
+
+                result = await report_weekly_goal_progress(None)
+                logger.info("weekly_goal_progress_done", **result)
+            except Exception as e:
+                logger.warning("weekly_goal_progress_failed", error=str(e)[:200])
+
         # Unified Healer 초기화
         from app.services.unified_healer import healing_cycle, initialize as healer_init
 
@@ -1281,6 +1291,15 @@ async def lifespan(app: FastAPI):
             _run_weekly_briefing,
             CronTrigger(day_of_week="mon", hour=0, minute=0, timezone="UTC"),
             id="weekly_briefing",
+        )
+        # 목표별 달성률은 외부 알림 없이 각 목표 담당 세션 인박스로만 전달한다.
+        scheduler.add_job(
+            _run_weekly_goal_progress,
+            CronTrigger(day_of_week="mon", hour=0, minute=0, timezone="UTC"),
+            id="weekly_goal_progress",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
         )
         # F11: 매일 03:00 UTC — ai_observations GC (confidence 감쇠 + 삭제)
         async def _run_memory_gc():

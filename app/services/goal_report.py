@@ -35,7 +35,9 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import structlog
 
@@ -43,6 +45,17 @@ logger = structlog.get_logger(__name__)
 
 _ENABLED = os.getenv("GOAL_REPORT_ENABLED", "true").lower() in ("1", "true", "yes")
 _MAX_PER_CYCLE = int(os.getenv("GOAL_REPORT_MAX_PER_CYCLE", "3"))
+_KST = ZoneInfo("Asia/Seoul")
+
+
+def _weekly_event_key(now: datetime | None = None) -> str:
+    """Return the idempotency key for the current KST reporting week."""
+    observed = now or datetime.now(_KST)
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=_KST)
+    observed = observed.astimezone(_KST)
+    iso_year, iso_week, _ = observed.isocalendar()
+    return f"weekly_progress:{iso_year}-W{iso_week:02d}"
 
 
 async def _telegram(text: str) -> bool:
@@ -171,3 +184,112 @@ async def report_goal_events(project: str | None = None) -> dict[str, int]:
             )
 
     return {"reported": reported}
+
+
+async def report_weekly_goal_progress(
+    project: str | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Deliver one KST-weekly milestone rollup to each goal owner session.
+
+    This report intentionally stays inside AADS.  It writes to the owning
+    session's inbox and never calls the Telegram/Ohvis alert path.  The
+    ``goal_report_log`` row is inserted first with a non-null subject so its
+    existing unique key provides an atomic once-per-goal, once-per-week gate.
+    """
+    if not _ENABLED:
+        return {"reported": 0, "skipped_no_owner": 0}
+
+    from app.core.db_pool import get_pool
+
+    event = _weekly_event_key(now)
+    reported = 0
+    skipped_no_owner = 0
+    pool = get_pool()
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS goal_report_log (
+                id          bigserial PRIMARY KEY,
+                goal_id     uuid NOT NULL,
+                subject_id  uuid,
+                event       text NOT NULL,
+                created_at  timestamptz NOT NULL DEFAULT NOW(),
+                UNIQUE (goal_id, subject_id, event)
+            )
+            """
+        )
+        rows = await conn.fetch(
+            """
+            SELECT g.id::text AS goal_id, g.title, g.project,
+                   COALESCE(
+                       g.owner_session_id,
+                       (
+                           SELECT s.id
+                           FROM goal_task_links l
+                           JOIN chat_sessions s ON s.id = l.task_id::uuid
+                           WHERE l.goal_id = g.id
+                             AND l.task_type = 'chat_session'
+                             AND l.link_state = 'active'
+                           ORDER BY (s.role_key LIKE '%Lead') DESC, l.created_at
+                           LIMIT 1
+                       )
+                   )::text AS target_session_id,
+                   count(m.id) FILTER (WHERE m.status <> 'cancelled') AS milestone_total,
+                   count(m.id) FILTER (WHERE m.status = 'completed') AS milestone_completed,
+                   count(m.id) FILTER (WHERE m.status = 'blocked') AS milestone_blocked
+            FROM goals g
+            LEFT JOIN milestones m ON m.goal_id = g.id
+            WHERE ($1::text IS NULL OR g.project = $1)
+              AND g.status NOT IN ('completed', 'cancelled', 'archived')
+            GROUP BY g.id, g.title, g.project, g.owner_session_id
+            ORDER BY g.project, g.title
+            """,
+            project,
+        )
+
+        for row in rows:
+            target_session_id = row["target_session_id"]
+            if not target_session_id:
+                skipped_no_owner += 1
+                continue
+            total = int(row["milestone_total"] or 0)
+            completed = int(row["milestone_completed"] or 0)
+            blocked = int(row["milestone_blocked"] or 0)
+            percent = round(100 * completed / total) if total else 0
+
+            async with conn.transaction():
+                claimed = await conn.fetchval(
+                    """
+                    INSERT INTO goal_report_log (goal_id, subject_id, event)
+                    VALUES ($1::uuid, $1::uuid, $2)
+                    ON CONFLICT (goal_id, subject_id, event) DO NOTHING
+                    RETURNING id
+                    """,
+                    row["goal_id"], event,
+                )
+                if not claimed:
+                    continue
+                text = (
+                    f"주간 목표 달성률 — [{row['project']}] {row['title']}\n\n"
+                    f"마일스톤 {completed}/{total} 완료 ({percent}%), "
+                    f"차단 {blocked}건\n"
+                    "목표 화면에서 차단·승인 필요 항목과 다음 마일스톤을 확인해 주세요."
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO chat_messages (session_id, role, content, intent)
+                    VALUES ($1::uuid, 'assistant', $2, 'goal_weekly_report')
+                    """,
+                    target_session_id, text,
+                )
+            reported += 1
+            logger.info(
+                "weekly_goal_progress_sent",
+                goal_id=row["goal_id"], project=row["project"],
+                completed=completed, total=total, blocked=blocked, event=event,
+            )
+
+    return {"reported": reported, "skipped_no_owner": skipped_no_owner}
