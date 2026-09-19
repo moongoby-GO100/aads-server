@@ -101,10 +101,28 @@ class SimulationRequest(BaseModel):
     input: dict[str, Any]
 
 
+class PreconditionRequest(BaseModel):
+    expected_parent_version: int | None = Field(default=None, ge=0)
+    assignment_id: UUID | None = None
+
+
+class PolicyInputRequest(PreconditionRequest):
+    action: Literal["create", "update", "assign", "cancel", "execute", "accept"]
+    base_version: int = Field(ge=1)
+    patch: list[dict[str, Any]] = Field(default_factory=list)
+    environment: Literal["dev", "staging", "production"] = "dev"
+    risk_factors: list[str] = Field(default_factory=list)
+
+
 def _identity(context: dict[str, Any]) -> tuple[str, str, bool]:
+    if not isinstance(context, dict):
+        raise HTTPException(401, detail={"code": "unauthenticated"})
     user = context.get("user", {})
-    return (str(context.get("tenant", {}).get("id") or ""), str(user.get("user_id") or ""),
-            bool(user.get("is_internal_admin")))
+    tenant = str(context.get("tenant", {}).get("id") or "").strip()
+    user_id = str(user.get("user_id") or "").strip()
+    if not tenant or not user_id:
+        raise HTTPException(401, detail={"code": "unauthenticated"})
+    return tenant, user_id, bool(user.get("is_internal_admin"))
 
 
 def _require_m14() -> None:
@@ -112,10 +130,56 @@ def _require_m14() -> None:
         raise HTTPException(404, detail={"code": "goal_workflow_approval_disabled"})
 
 
+def _require_w13() -> None:
+    if not goal_work_hierarchy_enabled():
+        raise HTTPException(404, detail={"code": "goal_work_hierarchy_disabled"})
+
+
 async def _actor(conn: Any, context: dict[str, Any], session_id: str | None):
     tenant, user, admin = _identity(context)
     return await resolve_actor_scope(conn, tenant_id=tenant, user_id=user,
                                      actor_session_id=session_id, internal_admin=admin)
+
+
+@router.post("/work-items/{item_id}/preconditions/preview")
+async def post_precondition_preview(
+    item_id: str, req: PreconditionRequest, context=viewer_dependency,
+    session_id: str | None = Header(None, alias="X-Chat-Session-ID"),
+):
+    """Persist a server-computed snapshot; request bodies cannot supply its fields."""
+    _require_w13()
+    from app.core.db_pool import get_pool
+    from app.services.goal_policy_preconditions import compute_preconditions
+
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        await conn.execute("SELECT set_config('app.current_tenant_id',$1,true)", tenant)
+        actor = await _actor(conn, context, session_id)
+        return await compute_preconditions(
+            conn, tenant_id=tenant, item_id=item_id, actor=actor,
+            assignment_id=str(req.assignment_id) if req.assignment_id else None,
+            expected_parent_version=req.expected_parent_version,
+        )
+
+
+@router.post("/work-items/{item_id}/policy-inputs", status_code=201)
+async def post_policy_input(
+    item_id: str, req: PolicyInputRequest, context=member_dependency,
+    session_id: str | None = Header(None, alias="X-Chat-Session-ID"),
+):
+    """Create evaluator input only. W-13 never returns or implies AUTO."""
+    _require_w13()
+    from app.core.db_pool import get_pool
+    from app.services.goal_policy_preconditions import create_policy_input
+
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        await conn.execute("SELECT set_config('app.current_tenant_id',$1,true)", tenant)
+        actor = await _actor(conn, context, session_id)
+        return await create_policy_input(
+            conn, tenant_id=tenant, item_id=item_id, actor=actor,
+            payload=req.model_dump(mode="json"),
+        )
 
 
 @router.post("/work-items/{item_id}/change-sets", status_code=201)
@@ -126,9 +190,13 @@ async def post_change_set(item_id: str, req: ChangeSetRequest, context=member_de
     tenant, _, _ = _identity(context)
     async with get_pool().acquire() as conn, conn.transaction():
         actor = await _actor(conn, context, session_id)
-        result = await create_change_set(conn, tenant_id=tenant, actor=actor, target_id=item_id,
-                                         payload=req.model_dump(mode="json"))
-        routing = await route_change_set(conn, tenant_id=tenant, change_set_id=result["id"], actor=actor)
+        result = await create_change_set(
+            conn, tenant_id=tenant, actor=actor, target_id=item_id,
+            payload=req.model_dump(mode="json"),
+        )
+        routing = await route_change_set(
+            conn, tenant_id=tenant, change_set_id=result["id"], actor=actor,
+        )
     return {"change_set": result, **routing}
 
 

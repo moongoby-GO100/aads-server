@@ -21,6 +21,7 @@ ROOT = Path(__file__).parents[2]
 M12 = (ROOT / "migrations/20260919_goal_work_hierarchy_m12.sql").read_text()
 M14 = (ROOT / "migrations/20260919_goal_work_hierarchy_m14.sql").read_text()
 UP = (ROOT / "migrations/20260919_goal_policy_foundation_stores.sql").read_text()
+W13 = (ROOT / "migrations/20260919_goal_policy_preconditions_w13.sql").read_text()
 VERIFY = (ROOT / "migrations/20260919_goal_policy_foundation_stores.verify.sql").read_text()
 DOWN = (ROOT / "migrations/rollback/20260919_goal_policy_foundation_stores.down.sql").read_text()
 FOUNDATION_STORES = (
@@ -201,7 +202,16 @@ async def _exercise() -> None:
         await admin.execute(_fresh_database_variant(M14))
         await admin.execute(UP)
         await admin.execute(UP)
+        await admin.execute(W13)
+        await admin.execute(W13)
         await admin.execute(VERIFY)
+        for table_name in ("goal_precondition_snapshots", "goal_policy_inputs"):
+            assert await admin.fetchval("SELECT to_regclass($1) IS NOT NULL", table_name)
+            security = await admin.fetchrow(
+                "SELECT relrowsecurity,relforcerowsecurity FROM pg_class WHERE oid=$1::regclass",
+                table_name,
+            )
+            assert security["relrowsecurity"] and security["relforcerowsecurity"]
         policy_id = await admin.fetchval(
             """INSERT INTO goal_approval_policy_versions
                (tenant_id,policy,policy_hash,created_by)

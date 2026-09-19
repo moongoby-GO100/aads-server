@@ -1,3 +1,51 @@
+# AADS-GOAL-V12-W13-PRECONDITIONS-BOUNDARY-20260919
+
+## STEP 0 기존 구현 조사
+
+| 접점 | 분류 | 처리 |
+|---|---|---|
+| `ActorScope`, `resolve_actor_scope`, `require_project_access` | 유지 | DB 원천 identity/project 판정 계약 유지 |
+| `create_work_item`, `create_project_assignment`, tree/governance API | 유지 | 기존 M13 경로와 응답을 대체하지 않음 |
+| `project_role_assignments` active role/session unique index | 유지 | DB 409 변환 계약 유지 |
+| `work_item_dependencies`, `work_item_evidence`, review stores | 유지 | W-12 primary source로 읽기만 수행 |
+| `app/routers/work_items.py` identity/API surface | 수정 | 빈 tenant/identity 401 fail-close, W-13 preview/input API 추가 |
+| `compute_preconditions`, `create_policy_input`, `require_current_preconditions` | 신규 | 서버 계산·immutable snapshot·실행 직전 stale guard |
+| `goal_precondition_snapshots`, `goal_policy_inputs` | 신규 | additive migration, FORCE RLS |
+| W-13 unit/disposable PostgreSQL checks | 신규 | T56/T57, hash 결정성, repeat migration/RLS |
+| 삭제 | 없음 | 기존 계약 삭제 불필요 |
+
+지시서에 직접 열거되지 않은 파일 중 migration과 test 파일을 변경/추가한 사유는
+버전 snapshot 영속화와 disposable PostgreSQL 완료기준을 코드로 검증하기 위해서다.
+
+## 결과
+
+- 기준 HEAD/origin-main: `0f98c5eefc56305944c90cce2d748a41623e0dee`
+- 선행 `e1061c657a59fadf612c30bb294c432221aed6e6`: origin/main 조상 확인
+- 서버 계산 필드: parent state/version, evidence completeness/hash, review verdict,
+  blocker/dependency blocker count
+- client precondition object는 request model에서 입력으로 채택하지 않으며
+  `expected_parent_version`만 optimistic check에 사용
+- CEO integrated는 active local project assignment가 없으면
+  `403 local_assignment_required`; 일반 session/assignment project 불일치는 403
+- 다른 tenant resource는 외부 `404 resource_not_found`, 내부
+  `tenant_scope_denied` work-item event 기록
+- policy input은 `automation_claimed=false`, `decision_id=null`,
+  `reason_codes=[evaluation_required]`이며 AUTO를 주장하거나 grant를 소비하지 않음
+- 변경 파일 삭제 0건, production write 0건
+
+## 검증
+
+- `python3 -m py_compile ...`: PASS
+- `git diff --check`: PASS
+- AAG baseline: PASS (`고정선 대비 증가 없음`)
+- pytest target: HOLD — 현재 호스트 Python에 `fastapi`가 없어 collection 중단
+- disposable PostgreSQL: 코드 추가, 미실행 (`M12_TEST_DATABASE_URL` 미제공)
+- pre-commit: 미실행 (staging이 필요한 hook이며 `git add` 금지)
+- npm/next/docker build: 승인 후 Runner 빌드 검증 대상
+- commit/push/deploy: 미실행(사용자 필수 규칙)
+
+---
+
 # AADS-VISION-UNIFY-20260917-R3 — 비전 입력 통합 (extract_image_blocks 보존)
 
 `build_vision_blocks()` 를 **신규 추가**하고, 기존 public 함수
