@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -227,13 +228,53 @@ def _extract_review_text(response: object) -> tuple[str, dict]:
         "response_shape": source,
         "response_chars": len(text),
         "response_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest() if text else None,
-        "raw_preview": text[:500],
+        "raw_preview": _sanitize_review_text(text),
     }
 
 
 _REVIEW_SCORE_FIELDS = (
     "correctness", "security", "scope_compliance", "preservation", "quality",
 )
+
+# Model and proxy errors may echo request headers.  Review evidence is stored
+# and logged, so its size alone is not a secrecy boundary.
+_REVIEW_EVIDENCE_PREVIEW_CHARS = 500
+_REVIEW_FEEDBACK_TEXT_CHARS = 2_000
+_REVIEW_FEEDBACK_MAX_DEPTH = 8
+_REVIEW_SECRET_PATTERNS = (
+    re.compile(r"(?i)(authorization\s*:\s*bearer\s+)([^\s,;]+)"),
+    re.compile(r"(?i)(anthropic_auth_token\s*[=:]\s*)([^\s,;]+)"),
+    re.compile(r"\bsk-ant-[A-Za-z0-9_-]+"),
+)
+
+
+def _sanitize_review_text(value: object, *, limit: int = _REVIEW_EVIDENCE_PREVIEW_CHARS) -> str:
+    """Redact credentials and bound text that may be persisted or logged."""
+    text = value if isinstance(value, str) else str(value)
+    for pattern in _REVIEW_SECRET_PATTERNS:
+        text = pattern.sub(
+            r"\1[REDACTED]" if pattern.groups >= 2 else "[REDACTED]",
+            text,
+        )
+    return text[:limit]
+
+
+def _sanitize_review_feedback(value: object, *, depth: int = 0) -> object:
+    """Keep JSON feedback shape while bounding and redacting untrusted text."""
+    if depth >= _REVIEW_FEEDBACK_MAX_DEPTH:
+        return "[TRUNCATED_DEPTH]"
+    if isinstance(value, str):
+        return _sanitize_review_text(value, limit=_REVIEW_FEEDBACK_TEXT_CHARS)
+    if isinstance(value, dict):
+        return {
+            _sanitize_review_text(key, limit=200): _sanitize_review_feedback(item, depth=depth + 1)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_review_feedback(item, depth=depth + 1) for item in value]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return _sanitize_review_text(value, limit=_REVIEW_FEEDBACK_TEXT_CHARS)
 
 
 def _validate_review_details(details: object) -> Optional[dict]:
@@ -245,10 +286,15 @@ def _validate_review_details(details: object) -> Optional[dict]:
     }:
         return None
     try:
-        scores = [float(details[field]) for field in _REVIEW_SCORE_FIELDS]
-    except (KeyError, TypeError, ValueError):
+        raw_scores = [details[field] for field in _REVIEW_SCORE_FIELDS]
+    except KeyError:
         return None
-    if any(score < 0.0 or score > 1.0 for score in scores):
+    # JSON score fields are numbers, not coercible strings/booleans.  Coercing
+    # arbitrary values permits malformed model output to influence approval.
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in raw_scores):
+        return None
+    scores = [float(value) for value in raw_scores]
+    if any(not math.isfinite(score) or score < 0.0 or score > 1.0 for score in scores):
         return None
     if not isinstance(details.get("issues"), list):
         return None
@@ -350,7 +396,7 @@ async def _get_review_models() -> list[str]:
         filtered = await filter_executable_models(ordered)
         return filtered or [_REVIEW_MODEL_FALLBACK]
     except Exception as e:
-        logger.warning("review_model_db_lookup_failed: %s", str(e)[:80])
+        logger.warning("review_model_db_lookup_failed: %s", _sanitize_review_text(e, limit=80))
         return [_REVIEW_MODEL_FALLBACK]
 
 
@@ -447,10 +493,16 @@ def _build_review_verdict(
     needs_retry: bool = False,
     model_used: Optional[str] = None,
 ) -> ReviewVerdict:
-    details = dict(feedback or {})
-    details.setdefault("summary", summary)
+    details = _sanitize_review_feedback(dict(feedback or {}))
+    if not isinstance(details, dict):
+        details = {}
+    safe_summary = _sanitize_review_text(summary, limit=_REVIEW_FEEDBACK_TEXT_CHARS)
+    safe_issues = _sanitize_review_feedback(issues)
+    if not isinstance(safe_issues, list):
+        safe_issues = []
+    details.setdefault("summary", safe_summary)
     if issues:
-        details.setdefault("issues", issues)
+        details.setdefault("issues", safe_issues)
     if flag_category:
         details.setdefault("flag_category", flag_category)
     if failure_stage:
@@ -461,7 +513,7 @@ def _build_review_verdict(
         verdict=verdict,
         score=score,
         feedback=details,
-        issues=issues,
+        issues=safe_issues,
         flag_category=flag_category,
         failure_stage=failure_stage,
         needs_retry=needs_retry,
@@ -820,6 +872,9 @@ async def _save_review_result(
     model_used: Optional[str],
     cost: float,
 ) -> None:
+    # Defend the persistence boundary as well as verdict construction: future
+    # callers must not be able to store unredacted model/proxy text directly.
+    safe_feedback = _sanitize_review_feedback(verdict.feedback)
     try:
         from app.core.db_pool import get_pool
 
@@ -835,7 +890,7 @@ async def _save_review_result(
                     project,
                     verdict.verdict,
                     verdict.score,
-                    json.dumps(verdict.feedback, ensure_ascii=False),
+                    json.dumps(safe_feedback, ensure_ascii=False),
                     diff_size,
                     model_used,
                     cost,
@@ -844,7 +899,10 @@ async def _save_review_result(
                     verdict.needs_retry,
                 )
             except Exception as schema_err:
-                logger.warning("code_reviewer_db_save_new_schema_failed: %s", schema_err)
+                logger.warning(
+                    "code_reviewer_db_save_new_schema_failed: %s",
+                    _sanitize_review_text(schema_err, limit=200),
+                )
                 await conn.execute(
                     """INSERT INTO code_reviews
                        (job_id, project, verdict, score, feedback, diff_size, model_used, cost)
@@ -853,13 +911,13 @@ async def _save_review_result(
                     project,
                     verdict.verdict,
                     verdict.score,
-                    json.dumps(verdict.feedback, ensure_ascii=False),
+                    json.dumps(safe_feedback, ensure_ascii=False),
                     diff_size,
                     model_used,
                     cost,
                 )
     except Exception as db_err:
-        logger.warning("code_reviewer_db_save_error: error=%s", db_err)
+        logger.warning("code_reviewer_db_save_error: error=%s", _sanitize_review_text(db_err, limit=200))
 
 
 async def review_code_diff(
@@ -994,14 +1052,18 @@ async def review_code_diff(
                 result_text = None
                 attempt_evidence.append({"model": model, "outcome": "timeout", "timeout_sec": round(_attempt_timeout, 3)})
             except Exception as model_err:
+                error_text = str(model_err)
                 logger.warning("review_model_failed: model=%s attempt=%s/%s error=%s",
-                               model, attempt_no, attempt_limit, str(model_err)[:60])
+                               model, attempt_no, attempt_limit,
+                               _sanitize_review_text(error_text, limit=60))
                 result_text = None
                 attempt_evidence.append({
                     "model": model,
                     "outcome": "error",
                     "error_type": type(model_err).__name__,
-                    "error_preview": str(model_err)[:200],
+                    "error_chars": len(error_text),
+                    "error_sha256": hashlib.sha256(error_text.encode("utf-8")).hexdigest(),
+                    "error_preview": _sanitize_review_text(error_text, limit=200),
                 })
 
             if not result_text:
@@ -1016,7 +1078,8 @@ async def review_code_diff(
             attempt_evidence[-1]["outcome"] = "invalid_structure"
             logger.warning(
                 "code_reviewer_json_parse_failed: job_id=%s model=%s attempt=%s/%s preview=%r",
-                job_id, model, attempt_no, attempt_limit, (result_text or "")[:200]
+                job_id, model, attempt_no, attempt_limit,
+                _sanitize_review_text(result_text or "", limit=200)
             )
             if attempt_no < attempt_limit:
                 await asyncio.sleep(2 * attempt_no)
@@ -1051,7 +1114,8 @@ async def review_code_diff(
         if details is None:
             logger.warning(
                 "code_reviewer_json_parse_failed: job_id=%s model=%s attempts=%s preview=%r",
-                job_id, used_model, parse_fail_count, (result_text or "")[:200]
+                job_id, used_model, parse_fail_count,
+                _sanitize_review_text(result_text or "", limit=200)
             )
             verdict_obj = _build_review_verdict(
                 verdict="FLAG",
@@ -1062,7 +1126,7 @@ async def review_code_diff(
                     "코드 품질을 검증하지 못했으므로 승인 대기로 넘기면 안 됩니다.",
                 ],
                 feedback={
-                    "raw_preview": (result_text or "")[:500],
+                    "raw_preview": _sanitize_review_text(result_text or ""),
                     "summary": f"리뷰 응답 파싱 실패 ({parse_fail_count}회 재시도) — 승인 보류 필요",
                     "parse_attempts": parse_fail_count,
                     "attempt_evidence": attempt_evidence,
@@ -1137,16 +1201,20 @@ async def review_code_diff(
         return verdict_obj
 
     except Exception as e:
-        logger.error(f"code_reviewer_error: job_id={job_id} error={e}")
+        logger.error(
+            "code_reviewer_error: job_id=%s error=%s",
+            job_id,
+            _sanitize_review_text(e, limit=200),
+        )
         verdict = _build_review_verdict(
             verdict="FLAG",
             score=0.2,
             summary="리뷰 중 오류 발생 — 승인 보류 필요",
             issues=[
-                f"리뷰 오류: {str(e)[:200]}",
+                f"리뷰 오류: {_sanitize_review_text(e, limit=200)}",
                 "코드 품질을 검증하지 못했으므로 승인 대기로 넘기면 안 됩니다.",
             ],
-            feedback={"error": str(e)},
+            feedback={"error": _sanitize_review_text(e, limit=200)},
             flag_category="REVIEW_SYSTEM_FAILURE",
             failure_stage="review_runtime",
             needs_retry=True,
