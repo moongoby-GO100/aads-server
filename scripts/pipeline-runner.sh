@@ -2200,6 +2200,11 @@ run_job() {
         local aag_token_var="AAG_SCANNER_TOKEN_${project^^}"
         aag_token_var="${aag_token_var//-/_}"
         local aag_scanner_token="${!aag_token_var:-${AAG_SCANNER_TOKEN:-}}"
+        local aag_token_file_var="${aag_token_var}_FILE"
+        local aag_scanner_token_file="${!aag_token_file_var:-${AAG_SCANNER_TOKEN_FILE:-}}"
+        if [[ -z "$aag_scanner_token" && -n "$aag_scanner_token_file" && -r "$aag_scanner_token_file" ]]; then
+            IFS= read -r aag_scanner_token < "$aag_scanner_token_file" || aag_scanner_token=""
+        fi
         local aag_repo_var="AAG_REPOSITORY_ID_${project^^}"
         aag_repo_var="${aag_repo_var//-/_}"
         local aag_ref_var="AAG_TARGET_REF_${project^^}"

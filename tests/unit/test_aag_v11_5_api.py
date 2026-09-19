@@ -210,6 +210,8 @@ def test_pipeline_runner_v2_cutover_is_explicit_and_fail_closed():
     runner = (aag_tools.REPO_ROOT / "scripts/pipeline-runner.sh").read_text(encoding="utf-8")
     assert 'AAG_V2_RUNNER_ENABLED:-0' in runner
     assert 'AAG_SCANNER_TOKEN_${project^^}' in runner
+    assert 'aag_token_file_var="${aag_token_var}_FILE"' in runner
+    assert 'IFS= read -r aag_scanner_token < "$aag_scanner_token_file"' in runner
     assert '/aag/v2/runner-brief' in runner
     assert 'reason=project_credential_missing' in runner
     assert 'never silently presents a' in runner
