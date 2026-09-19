@@ -345,11 +345,11 @@ Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks
 |---|---|---|
 | W-14F decision/executor fence 및 foundation reservation/event store | 유지 | 서명·epoch·primary DB 재검증 계약을 대체하지 않음 |
 | W-14a change set·독립 승인·effect·outbox | 유지 | 기존 transaction/outbox/owner epoch 흐름을 변경하지 않음 |
-| `create_grant` / 위임 검증 | 수정 | 부모 principal 발급권, max depth 1, SoD, tool/risk/parallel/time 포함 전체 부분집합 검증 |
-| `reserve_grant_use` / 단일 grant 원자 예약 | 수정 | 마스킹 전 canonical body hash 충돌 409, recursive ancestor 검증, blocking grant lock 유지, reconciliation replay 차단 |
-| `revoke_grant` | 수정 | revocation epoch 증가와 전체 descendant recursive revoke 전파 |
+| `create_grant` / 위임 검증 | 수정 | 부모 principal 발급권, max depth 1, SoD, hierarchy/tool/risk/parallel/time/condition 전체 부분집합 검증 |
+| `reserve_grant_use` / 단일 grant 원자 예약 | 수정 | 서버 계산 계층 범위, 마스킹 전 canonical body hash 409, recursive ancestor version/hash/epoch, 부모·자식 횟수/예산 원자 소진 |
+| `revoke_grant` | 수정 | 권한 검증, DB trigger 기반 revocation epoch, 전체 descendant 회수와 grant별 in-flight 전략 전파 |
 | `reconcile_grant_use` 및 reconcile API | 신규 | actual budget 정산, overrun stale, unknown outcome 수동 대사, 자동 환급·재실행 금지 |
-| `20260919_goal_workflow_w14b.sql` | 신규 | lineage/version/hash/epoch와 append-only usage event 원장·DB 위임 trigger |
+| `20260919_goal_workflow_w14b.sql` | 신규 | lineage/version/hash/epoch, append-only usage event, active-grant 안전 backfill과 runtime-field immutability 예외 |
 | T16~T26/T29~T35 집중 계약 시험 | 수정 | canonical replay, full ancestor, non-composition, lineage/SoD, append-only/overrun/reconciliation/revoke 검증 추가 |
 | disposable PostgreSQL concurrency 시험 | 수정 | W-14b migration 2회 적용과 max=1 동시 blocking reservation의 단일 승자 검증 추가 |
 | 삭제 | 0건 | 호출처 영향 없음. 롤백은 W-14b 신규 migration과 본 작업의 service/router/test hunk를 되돌리면 됨 |
@@ -358,11 +358,13 @@ Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks
 
 | 항목 | 결과 |
 |---|---|
-| `python3 -m py_compile` | 통과 — service/router/unit test 문법 확인 |
-| focused pytest | 미통과 — 수집 환경에 `fastapi`, `asyncpg`가 없어 2건 collection error; 테스트 통과로 처리하지 않음 |
-| Ruff | 통과 — 변경 Python 파일 3개 `All checks passed!` |
+| `python3 -m py_compile` | 통과 — service/router/integration test 문법 확인 |
+| focused pytest | 통과 — `39 passed` |
+| full goal unit suites | 통과 — `362 passed` |
+| Ruff | 통과 — 변경 Python 파일 `All checks passed!` |
 | `git diff --check` | 통과 |
-| disposable PostgreSQL concurrency | 시험 코드는 추가했으나 미실행 — `M12_TEST_DATABASE_URL` 및 `asyncpg` 미제공 |
-| full goal suites/AAG/artifact·secret scan/hooks | 미실행 |
-| 빌드 검증 | 승인 후 Runner 빌드 검증 대상 |
-| DB handover/commit/push/deploy | 모두 미실행 |
+| disposable PostgreSQL | 통과 — migration 2회, service reservation/replay/conflict, scope deny, 단일승자 경합, immutable scope, epoch, delegated parent counter, descendant revoke/in-flight 전략 `1 passed` |
+| AAG | 통과 — 관련 라우트·호출자·테이블 확인, 대상 파일 duplicate/double-mount 없음 |
+| artifact·secret scan/hooks | 커밋 hook에서 검증 예정 |
+| 빌드/운영 migration/deploy | 미실행 — W-14c/W-15 선행 후 W-16 blue/green 대상 |
+| DB handover/commit/push | 완료 전 상태 — 검증 후 별도 기록 |

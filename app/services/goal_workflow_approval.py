@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -655,6 +657,14 @@ async def create_grant(
             raise _error(403, "delegation_issuer_mismatch")
         if str(parent["issued_by"]) == str(payload["principal_session_id"]):
             raise _error(403, "separation_of_duties")
+        child_valid_from = datetime.fromisoformat(str(payload["valid_from"]))
+        child_expires_at = datetime.fromisoformat(str(payload["expires_at"]))
+        child_conditions = payload.get("conditions") or {}
+        parent_conditions = parent["conditions"] or {}
+        if isinstance(parent_conditions, str):
+            parent_conditions = json.loads(parent_conditions)
+        parent_idle = parent["idle_timeout_seconds"]
+        child_idle = payload.get("idle_timeout_seconds")
         within_parent = (
             set(scope["actions"]).issubset(set(parent["actions"]))
             and set(scope["environments"]).issubset(set(parent["environments"]))
@@ -668,6 +678,13 @@ async def create_grant(
             and str(payload.get("max_risk_tier", "A1")) <= str(parent["max_risk_tier"])
             and str(parent["project"]).upper() == str(goal["project"]).upper()
             and str(parent["goal_id"]) == str(goal_id)
+            and child_valid_from >= parent["valid_from"] and child_expires_at <= parent["expires_at"]
+            and (parent_idle is None or (child_idle is not None and int(child_idle) <= int(parent_idle)))
+            and (parent["milestone_id"] is None
+                 or str(payload.get("milestone_id")) == str(parent["milestone_id"]))
+            and (parent["epic_id"] is None or str(payload.get("epic_id")) == str(parent["epic_id"]))
+            and (parent["story_id"] is None or str(payload.get("story_id")) == str(parent["story_id"]))
+            and all(child_conditions.get(key) == value for key, value in parent_conditions.items())
         )
         if not within_parent:
             raise _error(403, "delegation_scope_exceeded")
@@ -707,6 +724,15 @@ async def reserve_grant_use(
     conn: Any, *, tenant_id: str, actor: ActorScope, request: Mapping[str, Any], simulate: bool = False,
 ) -> dict[str, Any]:
     """Select one complete grant and atomically reserve all bounded budgets."""
+    required = {"project", "goal_id", "target_id", "target_type", "target_version",
+                "action", "execution_key"}
+    if required.difference(request):
+        raise _error(422, "invalid_grant_request")
+    risk_rank = {"A0": 0, "A1": 1, "A2": 2, "A3": 3}
+    requested_risk = str(request.get("risk_tier", "A1"))
+    if requested_risk not in risk_rank:
+        raise _error(422, "invalid_grant_request")
+    requested_tools = sorted({str(value) for value in request.get("tool_groups") or []})
     decision_id = str(uuid4())
     masked = mask_decision_context(dict(request))
     reason: list[str] = []
@@ -715,10 +741,16 @@ async def reserve_grant_use(
     if request.get("explicit_deny"):
         reason.append("explicit_deny")
     killed = await conn.fetchval(
-        """SELECT EXISTS(SELECT 1 FROM goal_approval_kill_switches
-           WHERE tenant_id=$1::uuid AND active
-             AND (project IS NULL OR project=$2)
-             AND (goal_id IS NULL OR goal_id=$3::uuid))""",
+        """SELECT EXISTS(
+             SELECT 1 FROM goal_approval_kill_switches
+              WHERE tenant_id=$1::uuid AND active
+                AND (project IS NULL OR project=$2)
+                AND (goal_id IS NULL OR goal_id=$3::uuid)
+             UNION ALL
+             SELECT 1 FROM goal_kill_switches
+              WHERE tenant_id=$1::uuid AND active AND project=$2
+                AND (goal_id IS NULL OR goal_id=$3::uuid)
+           )""",
         tenant_id, request["project"], request["goal_id"],
     )
     if killed:
@@ -730,12 +762,22 @@ async def reserve_grant_use(
     if reason:
         return await _decision(conn, tenant_id, decision_id, "CEO_APPROVAL", None, reason, masked, simulate)
     target = await conn.fetchrow(
-        """SELECT project,goal_id::text,version FROM work_items
-             WHERE id=$1::uuid AND tenant_id=$2::uuid""",
+        """SELECT w.project,w.goal_id::text,w.milestone_id::text,w.type,w.version,
+                  CASE WHEN w.type='epic' THEN w.id
+                       WHEN parent.type='epic' THEN parent.id
+                       WHEN grandparent.type='epic' THEN grandparent.id END::text AS epic_id,
+                  CASE WHEN w.type='story' THEN w.id
+                       WHEN parent.type='story' THEN parent.id END::text AS story_id
+             FROM work_items w
+             LEFT JOIN work_items parent ON parent.id=w.parent_id AND parent.tenant_id=w.tenant_id
+             LEFT JOIN work_items grandparent ON grandparent.id=parent.parent_id
+                  AND grandparent.tenant_id=w.tenant_id
+            WHERE w.id=$1::uuid AND w.tenant_id=$2::uuid""",
         request["target_id"], tenant_id,
     )
     if (not target or str(target["project"]).upper() != str(request["project"]).upper()
             or str(target["goal_id"]) != str(request["goal_id"])
+            or str(target["type"]) != str(request["target_type"])
             or int(target["version"]) != int(request["target_version"])
             or not actor.may_access(str(target["project"]))):
         return await _decision(conn, tenant_id, decision_id, "PROJECT_APPROVAL", None,
@@ -758,11 +800,20 @@ async def reserve_grant_use(
                 "matched_grant_id": str(existing["grant_id"]), "reason_codes": ["idempotent_replay"]}
     grant = await conn.fetchrow(
         """WITH RECURSIVE ancestors AS (
-               SELECT child.id AS leaf_id,parent.* FROM goal_auto_approval_grants child
+               SELECT child.id AS leaf_id,parent.*,
+                      child.parent_grant_version AS expected_version,
+                      child.parent_scope_hash AS expected_scope_hash,
+                      child.ancestor_revocation_epoch AS expected_epoch,
+                      child.issued_by AS child_issued_by,
+                      child.principal_session_id AS child_principal
+                 FROM goal_auto_approval_grants child
                JOIN goal_auto_approval_grants parent ON parent.id=child.parent_grant_id
                 AND parent.tenant_id=child.tenant_id WHERE child.tenant_id=$1::uuid
                UNION ALL
-               SELECT a.leaf_id,parent.* FROM ancestors a
+               SELECT a.leaf_id,parent.*,
+                      a.parent_grant_version,a.parent_scope_hash,a.ancestor_revocation_epoch,
+                      a.issued_by,a.principal_session_id
+                 FROM ancestors a
                JOIN goal_auto_approval_grants parent ON parent.id=a.parent_grant_id
                 AND parent.tenant_id=a.tenant_id
            ) SELECT g.* FROM goal_auto_approval_grants g
@@ -775,9 +826,11 @@ async def reserve_grant_use(
                  WHERE newer.tenant_id=g.tenant_id AND (newer.project=g.project OR newer.project IS NULL)
                    AND newer.mode IN ('canary','enabled') AND newer.created_at>p.created_at)
              AND $5=ANY(g.actions) AND $6=ANY(g.environments)
-             AND ($7::uuid IS NULL OR g.milestone_id IS NULL OR g.milestone_id=$7::uuid)
-             AND ($8::uuid IS NULL OR g.epic_id IS NULL OR g.epic_id=$8::uuid)
-             AND ($9::uuid IS NULL OR g.story_id IS NULL OR g.story_id=$9::uuid)
+             AND (g.milestone_id IS NULL OR g.milestone_id=$7::uuid)
+             AND (g.epic_id IS NULL OR g.epic_id=$8::uuid)
+             AND (g.story_id IS NULL OR g.story_id=$9::uuid)
+             AND $10::text[] <@ g.tool_groups
+             AND $11 <= CASE g.max_risk_tier WHEN 'A0' THEN 0 WHEN 'A1' THEN 1 ELSE 2 END
              AND g.used_executions < g.max_executions
              AND (SELECT count(*) FROM goal_auto_approval_uses u
                    WHERE u.tenant_id=g.tenant_id AND u.grant_id=g.id
@@ -790,15 +843,39 @@ async def reserve_grant_use(
                     (x.status<>'active' OR clock_timestamp() NOT BETWEEN x.valid_from AND x.expires_at
                      OR x.project<>g.project OR x.goal_id<>g.goal_id
                      OR NOT g.actions <@ x.actions OR NOT g.environments <@ x.environments
-                     OR x.delegation_depth<>1))
+                     OR g.tool_groups IS NULL OR NOT g.tool_groups <@ x.tool_groups
+                     OR x.delegation_depth<>1 OR x.grant_version<>x.expected_version
+                     OR x.scope_hash<>x.expected_scope_hash
+                     OR x.revocation_epoch<>x.expected_epoch
+                     OR x.principal_session_id<>x.child_issued_by
+                     OR x.issued_by=x.child_principal
+                     OR x.used_executions>=x.max_executions))
            ORDER BY cardinality(g.actions),g.expires_at FOR UPDATE OF g LIMIT 1""",
         tenant_id, request["project"], actor.session_id, request["goal_id"], request["action"],
-        request.get("environment", "dev"), request.get("milestone_id"), request.get("epic_id"),
-        request.get("story_id"),
+        request.get("environment", "dev"), target["milestone_id"], target["epic_id"],
+        target["story_id"], requested_tools, risk_rank[requested_risk],
     )
     if not grant:
         return await _decision(conn, tenant_id, decision_id, "PROJECT_APPROVAL", None,
                                ["scope_or_budget_mismatch"], masked, simulate)
+    parent_grant = None
+    if grant.get("parent_grant_id"):
+        parent_grant = await conn.fetchrow(
+            """SELECT * FROM goal_auto_approval_grants
+                 WHERE tenant_id=$1::uuid AND id=$2::uuid FOR UPDATE""",
+            tenant_id, grant["parent_grant_id"],
+        )
+        parent_is_current = (
+            parent_grant
+            and parent_grant["status"] == "active"
+            and int(parent_grant["grant_version"]) == int(grant["parent_grant_version"])
+            and str(parent_grant["scope_hash"]) == str(grant["parent_scope_hash"])
+            and int(parent_grant["revocation_epoch"]) == int(grant["ancestor_revocation_epoch"])
+            and int(parent_grant["used_executions"]) < int(parent_grant["max_executions"])
+        )
+        if not parent_is_current:
+            return await _decision(conn, tenant_id, decision_id, "PROJECT_APPROVAL", None,
+                                   ["stale_parent_grant"], masked, simulate)
     if request.get("evidence_required") and not request.get("evidence_satisfied"):
         return await _decision(conn, tenant_id, decision_id, "PROJECT_APPROVAL", str(grant["id"]),
                                ["evidence_required"], masked, simulate)
@@ -814,9 +891,29 @@ async def reserve_grant_use(
               AND status IN ('reserved','executing','completed','failed','manual_reconciliation')""",
         tenant_id, grant["id"],
     )
-    budget = {"files": int(request.get("estimated_files", 0)), "rows": int(request.get("estimated_rows", 0)),
-              "cost_usd": float(request.get("estimated_cost_usd", 0)),
-              "duration_seconds": int(request.get("estimated_duration_seconds", 0))}
+    parent_consumed = None
+    if parent_grant:
+        parent_consumed = await conn.fetchrow(
+            """SELECT COALESCE(sum((u.budget_delta->>'files')::bigint),0) AS files,
+                      COALESCE(sum((u.budget_delta->>'rows')::bigint),0) AS rows,
+                      COALESCE(sum((u.budget_delta->>'cost_usd')::numeric),0) AS cost_usd,
+                      COALESCE(sum((u.budget_delta->>'duration_seconds')::bigint),0) AS duration_seconds
+                 FROM goal_auto_approval_uses u
+                 JOIN goal_auto_approval_grants used_grant
+                   ON used_grant.id=u.grant_id AND used_grant.tenant_id=u.tenant_id
+                WHERE u.tenant_id=$1::uuid AND used_grant.root_grant_id=$2::uuid
+                  AND u.status IN ('reserved','executing','completed','failed','manual_reconciliation')""",
+            tenant_id, parent_grant["id"],
+        )
+    try:
+        budget = {"files": int(request.get("estimated_files", 0)),
+                  "rows": int(request.get("estimated_rows", 0)),
+                  "cost_usd": float(request.get("estimated_cost_usd", 0)),
+                  "duration_seconds": int(request.get("estimated_duration_seconds", 0))}
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise _error(422, "invalid_budget") from exc
+    if any(value < 0 or not math.isfinite(float(value)) for value in budget.values()):
+        raise _error(422, "invalid_budget")
     exceeded = [
         name for name, limit, used, delta in (
             ("max_files_exhausted", int(grant["max_files"]), int(consumed["files"]), budget["files"]),
@@ -826,6 +923,19 @@ async def reserve_grant_use(
              int(consumed["duration_seconds"]), budget["duration_seconds"]),
         ) if used + delta > limit
     ]
+    if parent_grant and parent_consumed:
+        exceeded.extend(
+            name for name, limit, used, delta in (
+                ("parent_max_files_exhausted", int(parent_grant["max_files"]),
+                 int(parent_consumed["files"]), budget["files"]),
+                ("parent_max_rows_exhausted", int(parent_grant["max_rows"]),
+                 int(parent_consumed["rows"]), budget["rows"]),
+                ("parent_max_cost_usd_exhausted", float(parent_grant["max_cost_usd"]),
+                 float(parent_consumed["cost_usd"]), budget["cost_usd"]),
+                ("parent_max_duration_seconds_exhausted", int(parent_grant["max_duration_seconds"]),
+                 int(parent_consumed["duration_seconds"]), budget["duration_seconds"]),
+            ) if used + delta > limit
+        )
     if exceeded:
         return await _decision(conn, tenant_id, decision_id, "PROJECT_APPROVAL", str(grant["id"]),
                                exceeded, masked, simulate)
@@ -835,12 +945,26 @@ async def reserve_grant_use(
                                ["simulation" if simulate else "audit_only"], masked, True,
                                remaining_uses=remaining)
     updated = await conn.fetchval(
-        """UPDATE goal_auto_approval_grants SET used_executions=used_executions+1
+        """UPDATE goal_auto_approval_grants SET used_executions=used_executions+1,
+                  last_used_at=clock_timestamp()
            WHERE id=$1::uuid AND used_executions < max_executions RETURNING used_executions""", grant["id"],
     )
     if updated is None:
         return await _decision(conn, tenant_id, decision_id, "PROJECT_APPROVAL", None,
                                ["max_executions_exhausted"], masked, False)
+    if parent_grant:
+        parent_updated = await conn.fetchval(
+            """UPDATE goal_auto_approval_grants
+                  SET used_executions=used_executions+1,last_used_at=clock_timestamp()
+                WHERE tenant_id=$1::uuid AND id=$2::uuid AND status='active'
+                  AND grant_version=$3 AND revocation_epoch=$4
+                  AND used_executions < max_executions
+              RETURNING used_executions""",
+            tenant_id, parent_grant["id"], parent_grant["grant_version"],
+            parent_grant["revocation_epoch"],
+        )
+        if parent_updated is None:
+            raise _error(409, "stale_parent_grant")
     await conn.execute(
         """INSERT INTO goal_auto_approval_uses
            (tenant_id,decision_id,execution_key,grant_id,grant_version,input_hash,target_type,target_id,
@@ -866,8 +990,18 @@ async def reconcile_grant_use(
     outcome: str, actor: ActorScope,
 ) -> dict[str, Any]:
     """Append the measured outcome; unknown effects are never refunded or replayed."""
+    try:
+        actual = {"files": int(actual_budget.get("files", 0)),
+                  "rows": int(actual_budget.get("rows", 0)),
+                  "cost_usd": float(actual_budget.get("cost_usd", 0)),
+                  "duration_seconds": int(actual_budget.get("duration_seconds", 0))}
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise _error(422, "invalid_budget") from exc
+    if any(value < 0 or not math.isfinite(float(value)) for value in actual.values()):
+        raise _error(422, "invalid_budget")
     use = await conn.fetchrow(
-        """SELECT u.*,g.max_files,g.max_rows,g.max_cost_usd,g.max_duration_seconds
+        """SELECT u.*,g.project,g.principal_session_id,g.max_files,g.max_rows,
+                  g.max_cost_usd,g.max_duration_seconds
              FROM goal_auto_approval_uses u JOIN goal_auto_approval_grants g
                ON g.id=u.grant_id AND g.tenant_id=u.tenant_id
             WHERE u.tenant_id=$1::uuid AND u.execution_key=$2 FOR UPDATE OF u,g""",
@@ -875,17 +1009,26 @@ async def reconcile_grant_use(
     )
     if not use:
         raise _error(404, "grant_use_not_found")
-    grant_project = await conn.fetchval(
-        "SELECT project FROM goal_auto_approval_grants WHERE tenant_id=$1::uuid AND id=$2::uuid",
-        tenant_id, use["grant_id"],
-    )
-    if not grant_project or not actor.may_access(str(grant_project)):
+    if not actor.may_access(str(use["project"])):
         raise _error(403, "project_scope_denied")
-    if use["status"] in {"completed", "manual_reconciliation"}:
+    if actor.session_id == str(use["principal_session_id"]):
+        raise _error(403, "separation_of_duties")
+    if actor.workspace_kind != "ceo_integrated":
+        reviewer_allowed = await conn.fetchval(
+            """SELECT EXISTS(SELECT 1 FROM project_role_assignments
+                 WHERE tenant_id=$1::uuid AND project=$2 AND session_id=$3::uuid AND active
+                   AND lower(role_key) IN ('project_lead','project lead','independent_reviewer'))""",
+            tenant_id, use["project"], actor.session_id,
+        )
+        if not reviewer_allowed:
+            raise _error(403, "independent_approval_required")
+    if use["status"] in {"completed", "failed", "manual_reconciliation"}:
+        prior = use["result"] or {}
+        if isinstance(prior, str):
+            prior = json.loads(prior)
+        if prior.get("outcome") != outcome or prior.get("actual_budget") != actual:
+            raise _error(409, "execution_key_conflict")
         return _row_dict(use)
-    actual = {"files": int(actual_budget.get("files", 0)), "rows": int(actual_budget.get("rows", 0)),
-              "cost_usd": float(actual_budget.get("cost_usd", 0)),
-              "duration_seconds": int(actual_budget.get("duration_seconds", 0))}
     estimated = use["budget_delta"]
     if isinstance(estimated, str):
         estimated = json.loads(estimated)
@@ -938,46 +1081,66 @@ async def _decision(conn: Any, tenant_id: str, decision_id: str, decision: str,
 
 async def revoke_grant(conn: Any, *, tenant_id: str, grant_id: str, actor: ActorScope, reason: str) -> dict[str, Any]:
     _require_enabled()
+    current = await conn.fetchrow(
+        """SELECT * FROM goal_auto_approval_grants
+             WHERE id=$1::uuid AND tenant_id=$2::uuid FOR UPDATE""",
+        grant_id, tenant_id,
+    )
+    if not current or not actor.may_access(str(current["project"])):
+        raise _error(404, "grant_not_found")
+    if actor.workspace_kind != "ceo_integrated" and actor.session_id not in {
+        str(current["issued_by"]), str(current["approved_by"]),
+    }:
+        may_revoke = await conn.fetchval(
+            """SELECT EXISTS(SELECT 1 FROM project_role_assignments
+                 WHERE tenant_id=$1::uuid AND project=$2 AND session_id=$3::uuid AND active
+                   AND lower(role_key) IN ('project_lead','project lead'))""",
+            tenant_id, current["project"], actor.session_id,
+        )
+        if not may_revoke:
+            raise _error(403, "project_lead_approval_required")
+    if current["status"] != "active":
+        return _row_dict(current)
     row = await conn.fetchrow(
         """UPDATE goal_auto_approval_grants SET status='revoked',revoked_by=$3::uuid,
-           revoked_at=clock_timestamp(),revoke_reason=$4,revocation_epoch=revocation_epoch+1
+           revoked_at=clock_timestamp(),revoke_reason=$4
            WHERE id=$1::uuid AND tenant_id=$2::uuid
            AND status='active' RETURNING id::text,revocation_strategy""",
         grant_id, tenant_id, actor.session_id, reason,
     )
     if not row:
-        existing = await conn.fetchrow(
-            "SELECT id::text,status,revocation_strategy FROM goal_auto_approval_grants WHERE id=$1::uuid AND tenant_id=$2::uuid",
-            grant_id, tenant_id,
-        )
-        if not existing:
-            raise _error(404, "grant_not_found")
-        return _row_dict(existing)
-    if row["revocation_strategy"] == "cancel_now":
-        await conn.execute(
-            """UPDATE goal_auto_approval_uses SET status='failed',completed_at=clock_timestamp(),
-               result=result||'{"revoked":"cancel_now"}'::jsonb
-               WHERE tenant_id=$1::uuid AND grant_id=$2::uuid AND status IN ('reserved','executing')""",
-            tenant_id, grant_id,
-        )
-    elif row["revocation_strategy"] == "compensate":
-        await conn.execute(
-            """UPDATE goal_auto_approval_uses SET status='manual_reconciliation',
-               result=result||'{"revoked":"compensate","compensation_required":true}'::jsonb
-               WHERE tenant_id=$1::uuid AND grant_id=$2::uuid AND status IN ('reserved','executing')""",
-            tenant_id, grant_id,
-        )
-    # finish_current intentionally leaves existing rows executable; the grant
-    # status prevents every new reservation.
+        raise _error(409, "stale_grant")
     await conn.execute(
         """WITH RECURSIVE descendants AS (
              SELECT id FROM goal_auto_approval_grants WHERE parent_grant_id=$1::uuid AND tenant_id=$3::uuid
              UNION ALL SELECT g.id FROM goal_auto_approval_grants g
                JOIN descendants d ON g.parent_grant_id=d.id WHERE g.tenant_id=$3::uuid
            ) UPDATE goal_auto_approval_grants SET status='revoked',revoked_by=$2::uuid,
-             revoked_at=clock_timestamp(),revoke_reason='parent_grant_revoked',
-             revocation_epoch=revocation_epoch+1 WHERE id IN (SELECT id FROM descendants) AND status='active'""",
+             revoked_at=clock_timestamp(),revoke_reason='parent_grant_revoked'
+             WHERE id IN (SELECT id FROM descendants) AND status='active'""",
         grant_id, actor.session_id, tenant_id,
+    )
+    # Apply each grant's frozen in-flight strategy to the entire revoked
+    # subtree. finish_current rows remain executable but no new reservation can
+    # pass the now-revoked grant/ancestor fence.
+    await conn.execute(
+        """UPDATE goal_auto_approval_uses u
+              SET status=CASE g.revocation_strategy
+                    WHEN 'cancel_now' THEN 'failed'
+                    WHEN 'compensate' THEN 'manual_reconciliation'
+                    ELSE u.status END,
+                  completed_at=CASE WHEN g.revocation_strategy='cancel_now'
+                    THEN clock_timestamp() ELSE u.completed_at END,
+                  result=u.result || CASE g.revocation_strategy
+                    WHEN 'cancel_now' THEN '{"revoked":"cancel_now"}'::jsonb
+                    WHEN 'compensate' THEN
+                      '{"revoked":"compensate","compensation_required":true}'::jsonb
+                    ELSE '{"revoked":"finish_current"}'::jsonb END
+             FROM goal_auto_approval_grants g
+            WHERE u.tenant_id=$1::uuid AND g.tenant_id=u.tenant_id AND g.id=u.grant_id
+              AND (g.id=$2::uuid OR g.parent_grant_id=$2::uuid)
+              AND u.status IN ('reserved','executing')""",
+        tenant_id, grant_id,
     )
     return _row_dict(row)
 

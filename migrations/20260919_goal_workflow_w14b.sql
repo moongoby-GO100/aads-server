@@ -12,6 +12,13 @@ ALTER TABLE goal_auto_approval_grants
     ADD COLUMN IF NOT EXISTS revocation_epoch BIGINT NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS supersedes_grant_id UUID;
 
+-- The M12 immutability trigger intentionally rejects any scope mutation on an
+-- active grant.  This migration has to backfill the newly introduced lineage
+-- fields on those existing rows, so fence concurrent grant writes, suspend the
+-- guard only for the deterministic backfill, and restore it before commit.
+LOCK TABLE goal_auto_approval_grants IN ACCESS EXCLUSIVE MODE;
+DROP TRIGGER IF EXISTS trg_goal_active_grant_immutable ON goal_auto_approval_grants;
+
 UPDATE goal_auto_approval_grants
    SET logical_grant_id=COALESCE(logical_grant_id,id),
        root_grant_id=COALESCE(root_grant_id,id),
@@ -76,6 +83,10 @@ BEGIN
     IF NOT FOUND OR parent_row.parent_grant_id IS NOT NULL OR parent_row.delegation_depth<>1 THEN
         RAISE EXCEPTION 'delegation depth exceeded' USING ERRCODE='23514';
     END IF;
+    IF parent_row.status <> 'active'
+       OR clock_timestamp() NOT BETWEEN parent_row.valid_from AND parent_row.expires_at THEN
+        RAISE EXCEPTION 'stale parent grant' USING ERRCODE='23514';
+    END IF;
     IF NEW.id=ANY(parent_row.delegation_path) THEN
         RAISE EXCEPTION 'delegation cycle' USING ERRCODE='23514';
     END IF;
@@ -85,7 +96,14 @@ BEGIN
        OR NEW.max_executions>parent_row.max_executions-parent_row.used_executions
        OR NEW.max_files>parent_row.max_files OR NEW.max_rows>parent_row.max_rows
        OR NEW.max_cost_usd>parent_row.max_cost_usd OR NEW.max_parallel>parent_row.max_parallel
-       OR NEW.max_duration_seconds>parent_row.max_duration_seconds THEN
+       OR NEW.max_duration_seconds>parent_row.max_duration_seconds
+       OR NEW.valid_from<parent_row.valid_from OR NEW.expires_at>parent_row.expires_at
+       OR (parent_row.idle_timeout_seconds IS NOT NULL AND
+           (NEW.idle_timeout_seconds IS NULL OR NEW.idle_timeout_seconds>parent_row.idle_timeout_seconds))
+       OR (parent_row.milestone_id IS NOT NULL AND NEW.milestone_id IS DISTINCT FROM parent_row.milestone_id)
+       OR (parent_row.epic_id IS NOT NULL AND NEW.epic_id IS DISTINCT FROM parent_row.epic_id)
+       OR (parent_row.story_id IS NOT NULL AND NEW.story_id IS DISTINCT FROM parent_row.story_id)
+       OR NOT NEW.conditions @> parent_row.conditions THEN
         RAISE EXCEPTION 'delegation scope exceeded' USING ERRCODE='23514';
     END IF;
     IF NEW.issued_by<>parent_row.principal_session_id OR NEW.principal_session_id=parent_row.issued_by THEN
@@ -101,5 +119,22 @@ END $$;
 DROP TRIGGER IF EXISTS trg_prepare_grant_lineage ON goal_auto_approval_grants;
 CREATE TRIGGER trg_prepare_grant_lineage BEFORE INSERT ON goal_auto_approval_grants
 FOR EACH ROW EXECUTE FUNCTION aads_prepare_grant_lineage();
+
+CREATE OR REPLACE FUNCTION aads_guard_active_grant() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.status = 'active' AND
+       (to_jsonb(NEW) - ARRAY['status','used_executions','last_used_at','revoked_by',
+                              'revoked_at','revoke_reason','revocation_epoch'])
+       IS DISTINCT FROM
+       (to_jsonb(OLD) - ARRAY['status','used_executions','last_used_at','revoked_by',
+                              'revoked_at','revoke_reason','revocation_epoch']) THEN
+        RAISE EXCEPTION 'active grant scope is immutable' USING ERRCODE='55000';
+    END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER trg_goal_active_grant_immutable BEFORE UPDATE ON goal_auto_approval_grants
+FOR EACH ROW EXECUTE FUNCTION aads_guard_active_grant();
 
 COMMIT;

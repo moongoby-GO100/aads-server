@@ -31,6 +31,7 @@ SERVICE = (ROOT / "app/services/goal_workflow_approval.py").read_text()
 MIGRATION = (ROOT / "migrations/20260919_goal_work_hierarchy_m14.sql").read_text()
 W14A = (ROOT / "migrations/20260919_goal_workflow_w14a.sql").read_text()
 W14B = (ROOT / "migrations/20260919_goal_workflow_w14b.sql").read_text()
+W14F = (ROOT / "migrations/20260919_goal_policy_foundation_w14f.sql").read_text()
 
 
 def actor(session: str = OTHER) -> ActorScope:
@@ -309,6 +310,25 @@ def test_w14b_append_only_estimated_actual_and_unknown_outcome_contract():
 def test_w14b_recursive_revoke_and_retry_fails_closed():
     body = SERVICE[SERVICE.index("async def revoke_grant"):SERVICE.index("async def submit_review")]
     assert "WITH RECURSIVE descendants" in body
-    assert "revocation_epoch=revocation_epoch+1" in body
+    assert "aads_bump_grant_revocation_epoch" in W14F
+    assert "'revocation_epoch'" in W14B
     reserve = SERVICE[SERVICE.index("async def reserve_grant_use"):SERVICE.index("async def reconcile_grant_use")]
     assert reserve.index("goal_approval_kill_switches") < reserve.index("idempotent_replay")
+
+
+def test_w14b_matches_every_scope_dimension_and_uses_server_hierarchy():
+    reserve = SERVICE[SERVICE.index("async def reserve_grant_use"):SERVICE.index("async def reconcile_grant_use")]
+    for marker in ("target[\"milestone_id\"]", "target[\"epic_id\"]", "target[\"story_id\"]",
+                   "requested_tools", "risk_rank[requested_risk]", "stale_parent_grant"):
+        assert marker in reserve
+    assert "g.tool_groups" in reserve and "g.max_risk_tier" in reserve
+    assert "goal_kill_switches" in reserve and "goal_approval_kill_switches" in reserve
+
+
+def test_w14b_parent_scope_includes_time_identity_conditions_and_runtime_mutability():
+    for marker in ("NEW.valid_from<parent_row.valid_from", "NEW.expires_at>parent_row.expires_at",
+                   "NEW.idle_timeout_seconds", "NEW.milestone_id", "NEW.epic_id",
+                   "NEW.story_id", "NEW.conditions @> parent_row.conditions"):
+        assert marker in W14B
+    for runtime_field in ("used_executions", "last_used_at", "revocation_epoch"):
+        assert f"'{runtime_field}'" in W14B
