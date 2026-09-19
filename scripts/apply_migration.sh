@@ -87,7 +87,9 @@ for input_file in "${files[@]}"; do
     echo "APPLY $filename"
     {
         printf '%s\n' 'BEGIN;'
-        printf "%s\n" "SELECT set_config('aads.migration_started_at', clock_timestamp()::text, true);"
+        # Some legacy migrations contain their own COMMIT. Keep the timer at
+        # session scope so the checksum ledger can still be written afterward.
+        printf "%s\n" "SELECT set_config('aads.migration_started_at', clock_timestamp()::text, false);"
         sed -e '$a\' "$file"
         printf '%s\n' \
             "INSERT INTO schema_migrations (filename, sha256, applied_by, source, duration_ms)" \
