@@ -25,6 +25,7 @@ CATEGORY_EXTENSIONS = {
     "sales": {".csv", ".xlsx", ".pdf", ".jpg", ".jpeg", ".png"},
     "purchase": {".csv", ".xlsx", ".pdf", ".jpg", ".jpeg", ".png"},
     "transaction": {".csv", ".xlsx"},
+    "card": {".csv", ".xlsx", ".pdf"},
 }
 MIME_BY_EXTENSION = {
     ".csv": {"text/csv", "application/csv", "text/plain", "application/vnd.ms-excel"},
@@ -52,6 +53,49 @@ def _tenant(user: dict[str, Any]) -> UUID:
 
 def _actor(user: dict[str, Any]) -> str:
     return str(user.get("email") or user.get("user_id") or user.get("sub") or "unknown")[:320]
+
+
+def tenant_session_for_user(user: dict[str, Any]) -> dict[str, Any]:
+    """Build a session from the active tenant membership, never legacy HR files."""
+    tenant_id = str(_tenant(user))
+    membership = user.get("current_membership") or {}
+    membership_tenant = str(membership.get("tenant_id") or "").strip()
+    status = str(membership.get("status") or "").strip().lower()
+    role = str(membership.get("role") or "").strip().lower()
+    if membership_tenant != tenant_id or status != "active" or role not in {"owner", "admin", "member", "viewer"}:
+        raise HTTPException(status_code=403, detail="현재 테넌트의 활성 멤버십이 필요합니다")
+    can_manage = role in {"owner", "admin"}
+    labels = {"owner": "소유자", "admin": "관리자", "member": "구성원", "viewer": "조회전용"}
+    return {
+        "user": {
+            "id": str(user.get("user_id") or ""),
+            "email": str(user.get("email") or ""),
+            "name": str(user.get("name") or ""),
+            "tenant_id": tenant_id,
+            "is_admin": can_manage,
+        },
+        "tenant": user.get("current_tenant") or {"id": tenant_id},
+        "permissions": {
+            "role": role,
+            "role_label": labels[role],
+            "can_view": True,
+            "can_edit_local_data": role != "viewer",
+            "can_manage_settings": can_manage,
+            "can_manage_automation": can_manage,
+            "can_import_settlements": role != "viewer",
+            "can_manage_onboarding": can_manage,
+            "can_upload_own_documents": role != "viewer",
+        },
+    }
+
+
+def _require_write(user: dict[str, Any]) -> None:
+    membership = user.get("current_membership") or {}
+    same_tenant = str(membership.get("tenant_id") or "") == str(user.get("tenant_id") or "")
+    role = str(membership.get("role") or "").strip().lower()
+    status = str(membership.get("status") or "").strip().lower()
+    if not same_tenant or status != "active" or role not in {"owner", "admin", "member"}:
+        raise HTTPException(status_code=403, detail="이 원장을 등록·수정할 권한이 없습니다")
 
 
 def _safe_name(filename: str) -> str:
@@ -368,6 +412,7 @@ async def list_manual_entries(*, user: dict[str, Any], business_id: str, categor
 
 
 async def create_manual_entry(*, user: dict[str, Any], category: str, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_write(user)
     tenant_id, category = _tenant(user), _ledger_category(category)
     business_id, occurred = str(payload.get("business_id") or "").strip(), _iso_date(payload.get("occurred_on"))
     supply, tax, total = _money_parts(payload)
@@ -394,6 +439,7 @@ async def get_manual_entry(*, user: dict[str, Any], category: str, entry_id: UUI
 
 
 async def update_manual_entry(*, user: dict[str, Any], category: str, entry_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_write(user)
     current = await get_manual_entry(user=user, category=category, entry_id=entry_id)
     merged = {**current, **payload}
     supply, tax, total = _money_parts(merged)
@@ -410,6 +456,7 @@ async def update_manual_entry(*, user: dict[str, Any], category: str, entry_id: 
 
 
 async def delete_manual_entry(*, user: dict[str, Any], category: str, entry_id: UUID) -> None:
+    _require_write(user)
     tenant_id = _tenant(user)
     conn = await _connect()
     try:
@@ -440,6 +487,7 @@ async def list_card_transactions(*, user: dict[str, Any], business_id: str, date
 
 
 async def create_card_transaction(*, user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    _require_write(user)
     tenant_id, business_id = _tenant(user), str(payload.get("business_id") or "").strip()
     supply, tax, total = _money_parts(payload)
     last4 = str(payload.get("card_last4") or "")
@@ -468,6 +516,7 @@ async def get_card_transaction(*, user: dict[str, Any], transaction_id: UUID) ->
 
 
 async def update_card_transaction(*, user: dict[str, Any], transaction_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_write(user)
     current = await get_card_transaction(user=user, transaction_id=transaction_id)
     merged = {**current, **payload}
     supply, tax, total = _money_parts(merged)
@@ -484,11 +533,108 @@ async def update_card_transaction(*, user: dict[str, Any], transaction_id: UUID,
 
 
 async def delete_card_transaction(*, user: dict[str, Any], transaction_id: UUID) -> None:
+    _require_write(user)
     tenant_id = _tenant(user)
     conn = await _connect()
     try:
         command = await conn.execute("UPDATE yeoljeong_card_transactions SET deleted_at=NOW(),updated_by=$3,updated_at=NOW() WHERE id=$1 AND tenant_id=$2 AND source='manual' AND deleted_at IS NULL", transaction_id, tenant_id, _actor(user))
         if command.endswith(" 0"):
             raise HTTPException(status_code=404, detail="삭제 가능한 카드 거래를 찾을 수 없습니다")
+    finally:
+        await conn.close()
+
+
+async def list_bank_transactions(*, user: dict[str, Any], business_id: str, date_from: str | None = None, date_to: str | None = None) -> list[dict[str, Any]]:
+    tenant_id = _tenant(user)
+    start = _iso_date(date_from, "date_from") if date_from else None
+    end = _iso_date(date_to, "date_to") if date_to else None
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant_id, business_id)
+        rows = await conn.fetch(
+            """SELECT id,business_id,occurred_at,direction,amount,balance,counterparty,memo,category,account_label,source,created_at,updated_at
+                 FROM yeoljeong_manual_bank_transactions
+                WHERE tenant_id=$1 AND business_id=$2 AND deleted_at IS NULL
+                  AND ($3::date IS NULL OR occurred_at::date >= $3)
+                  AND ($4::date IS NULL OR occurred_at::date <= $4)
+                ORDER BY occurred_at DESC LIMIT 1000""",
+            tenant_id, business_id, start, end,
+        )
+        return [dict(row) for row in rows]
+    finally:
+        await conn.close()
+
+
+async def create_bank_transaction(*, user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    _require_write(user)
+    tenant_id = _tenant(user)
+    business_id = str(payload.get("business_id") or "").strip()
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant_id, business_id)
+        row = await conn.fetchrow(
+            """INSERT INTO yeoljeong_manual_bank_transactions
+                    (id,tenant_id,business_id,occurred_at,direction,amount,balance,counterparty,memo,category,account_label,source,created_by,updated_by)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'manual',$12,$12) RETURNING *""",
+            uuid4(), tenant_id, business_id, _iso_datetime(payload.get("occurred_at")),
+            str(payload.get("direction") or ""), int(payload.get("amount") or 0), payload.get("balance"),
+            str(payload.get("counterparty") or "").strip(), str(payload.get("memo") or "").strip(),
+            str(payload.get("category") or "").strip(), str(payload.get("account_label") or "").strip(), _actor(user),
+        )
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+async def get_bank_transaction(*, user: dict[str, Any], transaction_id: UUID) -> dict[str, Any]:
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        row = await conn.fetchrow(
+            "SELECT * FROM yeoljeong_manual_bank_transactions WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL",
+            transaction_id, tenant_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="은행 거래를 찾을 수 없습니다")
+        await _require_business(conn, tenant_id, row["business_id"])
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+async def update_bank_transaction(*, user: dict[str, Any], transaction_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_write(user)
+    current = await get_bank_transaction(user=user, transaction_id=transaction_id)
+    merged = {**current, **payload}
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        row = await conn.fetchrow(
+            """UPDATE yeoljeong_manual_bank_transactions
+                  SET occurred_at=$3,direction=$4,amount=$5,balance=$6,counterparty=$7,memo=$8,category=$9,account_label=$10,updated_by=$11,updated_at=NOW()
+                WHERE id=$1 AND tenant_id=$2 AND source='manual' AND deleted_at IS NULL RETURNING *""",
+            transaction_id, tenant_id, _iso_datetime(merged.get("occurred_at")), str(merged.get("direction") or ""),
+            int(merged.get("amount") or 0), merged.get("balance"), str(merged.get("counterparty") or "").strip(),
+            str(merged.get("memo") or "").strip(), str(merged.get("category") or "").strip(),
+            str(merged.get("account_label") or "").strip(), _actor(user),
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="수정 가능한 은행 거래를 찾을 수 없습니다")
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+async def delete_bank_transaction(*, user: dict[str, Any], transaction_id: UUID) -> None:
+    _require_write(user)
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        command = await conn.execute(
+            "UPDATE yeoljeong_manual_bank_transactions SET deleted_at=NOW(),updated_by=$3,updated_at=NOW() WHERE id=$1 AND tenant_id=$2 AND source='manual' AND deleted_at IS NULL",
+            transaction_id, tenant_id, _actor(user),
+        )
+        if command.endswith(" 0"):
+            raise HTTPException(status_code=404, detail="삭제 가능한 은행 거래를 찾을 수 없습니다")
     finally:
         await conn.close()

@@ -30,6 +30,7 @@ _TENANT_SCOPED_PREFIXES = (
     "/api/v1/yeoljeong-finance/uploaded-ledger",
     "/api/v1/yeoljeong-finance/ledger-entries",
     "/api/v1/yeoljeong-finance/card-transactions",
+    "/api/v1/yeoljeong-finance/ledger-bank-transactions",
 )
 
 
@@ -37,6 +38,12 @@ def _allowed_tenant_ids() -> frozenset[str]:
     raw = os.getenv("OBYS_LEGACY_TENANT_IDS", "")
     ids = [item.strip() for item in raw.split(",") if item.strip()]
     return frozenset(ids) if ids else frozenset(_DEFAULT_LEGACY_TENANT_IDS)
+
+
+def is_legacy_obys_tenant(user: dict) -> bool:
+    """Return whether the authenticated tenant owns the legacy OBYS ledgers."""
+    tenant_id = str((user or {}).get("tenant_id") or "").strip()
+    return bool(tenant_id and tenant_id in _allowed_tenant_ids())
 
 
 async def require_legacy_obys_access(

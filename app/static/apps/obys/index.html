@@ -2562,6 +2562,7 @@
     }
   </style>
   <link rel="stylesheet" href="/static/apps/obys/modules/store-assistant-v2.css">
+  <link rel="stylesheet" href="/static/apps/obys/modules/ledger-details.css">
   <style>
     /* 사업자(대표) 회원가입 진입 — 로그인 전에만 보인다. 헤더의 로그인/회원가입 버튼은
        renderAuthState 가 항상 hidden 으로 두므로 별도 앵커로 노출한다. */
@@ -2714,6 +2715,10 @@
           <button class="tab" data-view="documents">경영자료·보관</button>
           <button class="tab" data-view="sales">매출·정산</button>
           <button class="tab" data-view="accounts">입금·계좌</button>
+          <button class="tab" data-view="salesLedger">매출 상세</button>
+          <button class="tab" data-view="purchaseLedger">매입 상세</button>
+          <button class="tab" data-view="bankLedger">은행 거래내역</button>
+          <button class="tab" data-view="cardLedger">카드 사용내역</button>
           <div class="side-label">운영</div>
           <button class="tab" data-view="employees">직원관리</button>
           <button class="tab" data-view="payroll">급여관리</button>
@@ -2951,6 +2956,11 @@
           </section>
         </div>
       </section>
+
+      <section id="salesLedgerView" class="hidden ledger-detail-view" data-ledger-kind="sales"></section>
+      <section id="purchaseLedgerView" class="hidden ledger-detail-view" data-ledger-kind="purchase"></section>
+      <section id="bankLedgerView" class="hidden ledger-detail-view" data-ledger-kind="bank"></section>
+      <section id="cardLedgerView" class="hidden ledger-detail-view" data-ledger-kind="card"></section>
 
       <section id="inventoryView" class="hidden">
         <div class="grid content-grid">
@@ -5322,6 +5332,10 @@
       "documents",
       "sales",
       "accounts",
+      "salesLedger",
+      "purchaseLedger",
+      "bankLedger",
+      "cardLedger",
       "employees",
       "inventory",
       "tax",
@@ -5923,7 +5937,7 @@
     }
 
     function defaultView() {
-      return isEmployeeExperience() ? "onboarding" : "dashboard";
+      return isEmployeeExperience() ? "onboarding" : "salesLedger";
     }
 
     function currentEmployeeEmail() {
@@ -10108,6 +10122,9 @@
       if (currentView === "integrations") ensureServerAccountsForIntegrations();
       if (currentView === "sales") loadSalesLedger({ silent: true });
       if (currentView === "inventory") loadInventoryData({ silent: true });
+      if (["salesLedger", "purchaseLedger", "bankLedger", "cardLedger"].includes(currentView)) {
+        window.obysLedgerDetails?.open(currentView);
+      }
       applyAccessPolicy();
     }
 
@@ -13669,6 +13686,7 @@
 
     init();
   </script>
+  <script src="/static/apps/obys/modules/ledger-details.js"></script>
   <script src="/static/apps/obys/modules/store-assistant-v2.js"></script>
 </body>
 </html>

@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
-from app.core.obys_tenant import require_legacy_obys_access
+from app.core.obys_tenant import is_legacy_obys_tenant, require_legacy_obys_access
 from app.services import obys_upload_service as upload_svc
 from app.services import yeoljeong_finance_service as svc
 from app.services.yeoljeong_bank_collector_harness import (
@@ -84,6 +84,31 @@ class CardTransactionUpdatePayload(BaseModel):
     tax_amount: Decimal | None = Field(default=None, ge=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
     total_amount: Decimal | None = Field(default=None, ge=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
     card_last4: str | None = Field(default=None, pattern=r"^\d{4}$")
+
+
+class ManualBankTransactionPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    business_id: str = Field(min_length=3, max_length=64)
+    occurred_at: str = Field(min_length=10, max_length=40)
+    direction: str = Field(pattern=r"^(in|out)$")
+    amount: int = Field(ge=0, le=9_999_999_999_999_999)
+    balance: int | None = Field(default=None, ge=0, le=9_999_999_999_999_999)
+    counterparty: str = Field(default="", max_length=200)
+    memo: str = Field(default="", max_length=500)
+    category: str = Field(default="", max_length=100)
+    account_label: str = Field(default="", max_length=100)
+
+
+class ManualBankTransactionUpdatePayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    occurred_at: str | None = Field(default=None, min_length=10, max_length=40)
+    direction: str | None = Field(default=None, pattern=r"^(in|out)$")
+    amount: int | None = Field(default=None, ge=0, le=9_999_999_999_999_999)
+    balance: int | None = Field(default=None, ge=0, le=9_999_999_999_999_999)
+    counterparty: str | None = Field(default=None, max_length=200)
+    memo: str | None = Field(default=None, max_length=500)
+    category: str | None = Field(default=None, max_length=100)
+    account_label: str | None = Field(default=None, max_length=100)
 
 
 class TenantBusinessPayload(BaseModel):
@@ -435,6 +460,8 @@ class BankQuickInquiryPayload(BaseModel):
 
 @router.get("/session")
 async def get_session(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    if not is_legacy_obys_tenant(current_user):
+        return upload_svc.tenant_session_for_user(current_user)
     return await run_in_threadpool(svc.session_for_user, current_user)
 
 
@@ -841,6 +868,58 @@ async def update_card_transaction(transaction_id: UUID, payload: CardTransaction
 @router.delete("/card-transactions/{transaction_id}")
 async def delete_card_transaction(transaction_id: UUID, current_user: dict = Depends(get_current_user)) -> dict[str, bool]:
     await upload_svc.delete_card_transaction(user=current_user, transaction_id=transaction_id)
+    return {"ok": True}
+
+
+@router.get("/ledger-bank-transactions")
+async def list_manual_bank_transactions(
+    business_id: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    rows = await upload_svc.list_bank_transactions(
+        user=current_user, business_id=business_id, date_from=date_from, date_to=date_to
+    )
+    return {"bank_transactions": rows, "count": len(rows)}
+
+
+@router.post("/ledger-bank-transactions", status_code=201)
+async def create_manual_bank_transaction(
+    payload: ManualBankTransactionPayload,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    row = await upload_svc.create_bank_transaction(user=current_user, payload=payload.model_dump())
+    return {"bank_transaction": row}
+
+
+@router.get("/ledger-bank-transactions/{transaction_id}")
+async def get_manual_bank_transaction(
+    transaction_id: UUID,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    row = await upload_svc.get_bank_transaction(user=current_user, transaction_id=transaction_id)
+    return {"bank_transaction": row}
+
+
+@router.patch("/ledger-bank-transactions/{transaction_id}")
+async def update_manual_bank_transaction(
+    transaction_id: UUID,
+    payload: ManualBankTransactionUpdatePayload,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    row = await upload_svc.update_bank_transaction(
+        user=current_user, transaction_id=transaction_id, payload=payload.model_dump(exclude_unset=True)
+    )
+    return {"bank_transaction": row}
+
+
+@router.delete("/ledger-bank-transactions/{transaction_id}")
+async def delete_manual_bank_transaction(
+    transaction_id: UUID,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, bool]:
+    await upload_svc.delete_bank_transaction(user=current_user, transaction_id=transaction_id)
     return {"ok": True}
 
 
