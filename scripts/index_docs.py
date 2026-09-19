@@ -93,6 +93,17 @@ ROOTS = [
     ("/root/aads/_remote_docs/cafe24_114/newtalk-v2/docs", "NTV2", "NTV2 문서(cafe24_114)"),
     ("/root/aads/_remote_docs/cafe24_114/newtalk-v2/reports", "NTV2", "NTV2 리포트(cafe24_114)"),
     ("/root/aads/_remote_docs/cafe24_114/nas-image", "NAS", "NAS 문서(cafe24_114)"),
+
+    # 발행 리포트(HTML). 대표님께 보고한 문서를 채팅이 근거로 쓰려면 색인돼야 한다.
+    ("/root/aads/aads-server/app/static/reports", "AADS", "발행 리포트"),
+
+    # 디렉터리뿐 아니라 **파일 경로 하나**도 넣을 수 있다. 릴리스 정본(AGENTS.md)과
+    # 규칙(CLAUDE.md)은 저장소 루트에 있어 docs/ 스캔에 걸리지 않는데, 사고를 가장
+    # 많이 막는 문서가 바로 이 둘이다 — 2026-09-13 헛빌드는 낡은 규칙을 읽어 났다.
+    ("/root/aads/AGENTS.md", "AADS", "릴리스 계약(전역)"),
+    ("/root/aads/aads-server/AGENTS.md", "AADS", "API 릴리스 계약"),
+    ("/root/aads/aads-dashboard/AGENTS.md", "AADS", "대시보드 릴리스 계약"),
+    ("/root/aads/aads-server/CLAUDE.md", "AADS", "프로젝트 규칙"),
 ]
 
 # 경로에 이 조각이 들어가면 제외한다. 전부 "같은 문서의 다른 사본"이 생기는
@@ -107,7 +118,24 @@ EXCLUDE = (
 # go100 클론들(go100-token-opt, go100-direct-yBauuU ...). 정본은 /root/aads/go100 하나다.
 _GO100_CLONE = re.compile(r"/go100[-_][A-Za-z0-9._-]+/")
 
-EXTENSIONS = {".md"}
+EXTENSIONS = {".md", ".html"}
+
+# 발행 리포트는 HTML 이다. 태그를 걷어내고 본문만 넣는다 — 안 걷어내면 마크업이
+# 청크의 절반을 차지해 검색이 엉뚱한 곳을 잡는다.
+# 중첩 반복을 쓰지 않는다(R-BG 3). 아래 둘 다 단일 반복이다.
+_HTML_DROP = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.S | re.I)
+_HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def html_to_text(raw: str) -> str:
+    t = _HTML_DROP.sub(" ", raw)
+    t = _HTML_TAG.sub("\n", t)
+    for ent, ch in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"),
+                    ("&gt;", ">"), ("&quot;", '"'), ("&#39;", "'")):
+        t = t.replace(ent, ch)
+    return "\n".join(ln for ln in (x.strip() for x in t.split("\n")) if ln)
+
+
 MIN_BYTES = 200
 MAX_BYTES = 4 * 1024 * 1024
 
@@ -187,10 +215,17 @@ def collect() -> list[dict]:
     seen_roots: set[str] = set()
     for root, project, label in ROOTS:
         base = Path(root)
-        if not base.is_dir() or root in seen_roots:
+        if root in seen_roots:
             continue
         seen_roots.add(root)
-        for p in base.rglob("*"):
+        # ROOTS 항목은 디렉터리일 수도, 파일 하나일 수도 있다.
+        if base.is_dir():
+            entries = base.rglob("*")
+        elif base.is_file():
+            entries = [base]
+        else:
+            continue
+        for p in entries:
             try:
                 if not p.is_file() or p.suffix.lower() not in EXTENSIONS:
                     continue
@@ -212,6 +247,10 @@ def collect() -> list[dict]:
                 text = raw.decode("utf-8")
             except UnicodeDecodeError:
                 continue
+            if p.suffix.lower() == ".html":
+                text = html_to_text(text)
+                if len(text) < MIN_BYTES:
+                    continue
             by_hash[digest] = {
                 "path": full, "project": project, "label": label,
                 "sha256": digest, "size": st.st_size, "mtime": st.st_mtime,

@@ -115,8 +115,120 @@ sql:
     - pg_indexes
     - pg_stat_activity
     - pg_tables
-  # 확인한 것만 넣는다. 추측으로 채우면 진짜 결함이 가려진다 (R-ERRBOOK).
-  known_external_tables: []
+    - pg_locks
+    - pg_stat_user_tables
+  # 운영 DB(contabo14 public 스키마)에 실재하지만 이 저장소에 CREATE TABLE 이
+  # 없는 것들. 2026-09-19 pg_class 대조로 확인한 것만 넣었다 — 추측으로 채우면
+  # 진짜 결함이 가려진다 (R-ERRBOOK).
+  #   relkind r(일반 테이블) 92 · p(파티션) 1 · v(뷰) 9 · S(시퀀스) 2
+  # 대조에 쓴 쿼리: pg_class ⋈ pg_namespace 에서 참조 이름 144개를 LEFT JOIN.
+  known_external_tables:
+    - account_snapshots
+    - financial_ratios
+    - global_index_snapshot
+    - go100_alerts
+    - go100_chat_sessions
+    - go100_daily_briefings
+    - go100_dart_disclosures
+    - go100_data_integrity_log
+    - go100_delisted_ohlcv
+    - go100_episodic_memory
+    - go100_etf_distributions
+    - go100_etf_info
+    - go100_evolution_loops
+    - go100_experience_log
+    - go100_fundamentals
+    - go100_fundamentals_pit
+    - go100_goals
+    - go100_hypothesis_backtests
+    - go100_momentum_scores
+    - go100_news_items
+    - go100_notifications
+    - go100_notification_settings
+    - go100_nxt_ohlcv_daily
+    - go100_portfolio_snapshots
+    - go100_push_subscriptions
+    - go100_sector_correlation
+    - go100_sector_price
+    - go100_stock_profiles
+    - go100_trade_decision_logs
+    - go100_user_profiles
+    - index_daily
+    - kis_configs
+    - live_positions
+    - orderbook_snapshots
+    - portfolios
+    - positions
+    - price_tick_snapshots
+    - scalping_features_daily
+    - social_accounts
+    - stock_fundamentals
+    - strategies
+    - strategy_performance
+    - trades
+    - users
+    - user_strategies
+    - v4_account_holdings
+    - v4_account_sync_log
+    - v4_alerts
+    - v4_backtest_desk_detail
+    - v4_backtest_equity
+    - v4_backtest_regime_analysis
+    - v4_chat_messages
+    - v4_chat_sessions
+    - v4_daily_portfolio
+    - v4_desk3_pool
+    - v4_desk4_watchlist
+    - v4_desk5_watchlist
+    - v4_desk5_weekly_review
+    - v4_desk_fund
+    - v4_desk_portfolio_summary
+    - v4_desk_positions
+    - v4_excluded_stocks
+    - v4_fund_lending
+    - v4_fund_pool_snapshot
+    - v4_hav_hypotheses
+    - v4_investor_daily
+    - v4_market_calendar
+    - v4_market_ranking
+    - v4_market_regime_daily
+    - v4_meta_rules
+    - v4_minute_collect_progress
+    - v4_ohlcv_minute
+    - v4_ohlcv_minute_2026_09
+    - v4_orderbook_realtime
+    - v4_order_executions
+    - v4_position_transfers
+    - v4_scalping_signals
+    - v4_scalping_universe
+    - v4_scoring_weights
+    - v4_sector_daily
+    - v4_signals
+    - v4_stage_transitions
+    - v4_stock_sector
+    - v4_system_state_log
+    - v4_theme_activity_daily
+    - v4_theme_master
+    - v4_theme_stock
+    - v4_theme_stock_mapping
+    - v4_top20_history
+    - v4_trade_analysis
+    - v4_trades
+    - v4_vi_occurrences
+    - v4_volume_retention
+    # 뷰 — 테이블이 아니므로 CREATE TABLE 이 없는 것이 정상이다.
+    - go100_investor_flow
+    - go100_minute_bars
+    - go100_orderbook_snapshot
+    - go100_strategy_store
+    - go100_tick_data
+    - go100_trades_effective
+    - v4_ohlcv_clean
+    - v_unified_positions
+    - v_unified_trades
+    # 시퀀스 — nextval() 참조가 테이블처럼 잡힌 것.
+    - go100_portfolios_portfolio_id_seq
+    - go100_strategy_cards_go100_card_id_seq
 
 # ── 규칙 심각도 ─────────────────────────────────────────────────────────
 severity:
