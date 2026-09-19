@@ -37,6 +37,14 @@ def main():
     now = int(time.time())
     old_exp_kst = datetime.fromtimestamp(old_exp, tz=KST).strftime('%Y-%m-%d %H:%M KST')
     print(f"현재 access_token 만료: {old_exp_kst} (남은: {(old_exp-now)//86400}일)")
+
+    # --apply 없이 토큰 엔드포인트를 부르면 안 된다. refresh_token 은 1회용이고
+    # 호출하는 순간 서버에서 회전한다 — 새 값을 저장하지 않으면 파일에 남은 옛
+    # refresh_token 은 그 자리에서 무효가 되고 재로그인 외에 복구가 없다.
+    # (2026-09-19: CODEX_OAUTH_JINAH 가 회전 어긋남으로 죽은 것과 같은 실패다.)
+    if '--apply' not in sys.argv:
+        print("DRY_RUN: 회전 소모를 막기 위해 요청을 보내지 않았다. 갱신하려면 --apply 를 붙여라.")
+        return
     
     # Try refresh
     data = urllib.parse.urlencode({
@@ -71,11 +79,14 @@ def main():
                     tokens['id_token'] = new_id
                 auth['tokens'] = tokens
                 auth['last_refresh'] = datetime.now(timezone.utc).isoformat()
-                with open(AUTH_FILE, 'w') as f:
+                # 원본을 바로 truncate 하지 않는다. 쓰는 도중에 죽으면 방금 회전한
+                # 토큰도, 옛 토큰도 남지 않아 재로그인 외에 복구가 없다.
+                tmp = AUTH_FILE + '.new'
+                with open(tmp, 'w') as f:
                     json.dump(auth, f, indent=2)
+                os.chmod(tmp, 0o600)
+                os.replace(tmp, AUTH_FILE)
                 print("AUTH_FILE_UPDATED")
-            else:
-                print("(--apply 옵션으로 auth.json 업데이트 가능)")
                 
     except urllib.error.HTTPError as e:
         body = e.read().decode() if e.fp else ''
