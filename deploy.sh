@@ -2175,7 +2175,7 @@ sync_standby_slot_after_drain() {
         # background task. The caller releases the nginx lock before entering it.
         # Existing nginx workers may still hold SSE/WebSocket streams on the old
         # slot, so require a short grace period plus consecutive zero samples.
-        local min_wait="${AADS_DEPLOY_STANDBY_SYNC_MIN_WAIT:-10}"
+        local min_wait="${AADS_DEPLOY_STANDBY_SYNC_MIN_WAIT:-0}"
         if [[ "$min_wait" != "0" ]]; then
             echo "[deploy.sh] standby sync grace wait ${old_container}:${old_port} ${min_wait}s"
             sleep "$min_wait"
@@ -2195,7 +2195,10 @@ sync_standby_slot_after_drain() {
         curl -sf -X POST "http://127.0.0.1:${old_port}/api/v1/pc-agent/graceful-shutdown" \
             -H "Content-Type: application/json" 2>/dev/null || true
 
-        # 기본 600초 → 180초 (2026-09-19).
+        # 기본 inline 대기는 0초다. old slot이 busy이면 즉시 success_partial로
+        # 물러나고, deploy flock이 풀린 뒤 별도 sync-standby worker가 30초
+        # 간격으로 재시도한다. 필수 5분 P0/P1 관측과 drain 시간을 겹치므로
+        # 동일한 stream 보호·same-digest 인증을 직렬 180초 대기 없이 달성한다.
         #
         # 이 대기는 타임아웃돼도 스트림을 끊지 않는다 — BLOCKED 로 물러나
         # 대기 슬롯을 구버전 그대로 둘 뿐이다(아래 return 2). 그러니 길게
@@ -2205,10 +2208,10 @@ sync_standby_slot_after_drain() {
         # 실측 #4719: 600초를 다 기다리고도 `active streams=1` 로 BLOCKED.
         # 그 10분 동안 배포 락을 잡아 다음 배포 #4721 이 통째로 밀렸다.
         # 어차피 물러날 것이라면 빨리 물러나 락을 놓는 편이 낫다.
-        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-180}"
+        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-0}"
         local drain_interval="${AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-5}"
         local elapsed=0
-        local active="0"
+        local active
         local zero_seen=0
         if [[ ! "$drain_max" =~ ^[0-9]+$ ]]; then
             drain_max="600"
@@ -2216,8 +2219,8 @@ sync_standby_slot_after_drain() {
         if [[ ! "$drain_interval" =~ ^[0-9]+$ ]] || [[ "$drain_interval" -lt 5 ]]; then
             drain_interval="5"
         fi
+        active="$(stream_count_for_port "$old_port")"
         while [[ $elapsed -lt $drain_max ]]; do
-            active="$(stream_count_for_port "$old_port")"
             if [[ "$active" == "0" || -z "$active" ]]; then
                 zero_seen=$((zero_seen + 1))
                 if [[ "$zero_seen" -ge "${AADS_DEPLOY_STANDBY_ZERO_SAMPLES:-1}" ]]; then
@@ -2231,6 +2234,7 @@ sync_standby_slot_after_drain() {
             echo "[deploy.sh] standby sync wait ${old_container}:${old_port} active streams=${active}; wait ${drain_interval}s"
             sleep "$drain_interval"
             elapsed=$((elapsed + drain_interval))
+            active="$(stream_count_for_port "$old_port")"
         done
 
         if [[ "${active:-0}" != "0" && -n "${active:-}" ]]; then
@@ -2559,7 +2563,7 @@ case "$MODE" in
         fi
         echo "[deploy.sh] 현재: :${CURRENT_PORT} → 전환 대상: :${NEW_PORT} (${NEW_CONTAINER})"
 
-        # ①-1 이미지 빌드 — drain 보다 먼저 한다.
+        # ①-1 이미지 빌드 — target drain 관측과 겹쳐 실행한다.
         #
         # 빌드는 이미지를 만들 뿐 실행 중인 컨테이너를 건드리지 않는다. 그런데
         # 기존 순서는 활성 스트림이 빠지기를 최대 1800초 기다린 뒤에야 빌드를
@@ -2569,6 +2573,17 @@ case "$MODE" in
         # 순서를 뒤집으면 빌드하는 동안 스트림이 자연히 빠져 추가 대기가
         # 대부분 사라진다. 컨테이너 교체(①-2)는 drain 이후로 그대로 둔다 —
         # 그때가 실제로 스트림을 끊는 시점이다.
+        # inactive target의 drain deadline은 빌드가 시작될 때부터 흐른다.
+        # 예전에는 10~20분 빌드가 끝난 뒤 다시 최대 180초를 기다려, 이미
+        # 충분히 drain된 시간까지 직렬로 더했다. 빌드는 컨테이너를 건드리지
+        # 않으므로 이 관측 창을 겹쳐도 실행 중 스트림 보호 계약은 그대로다.
+        TARGET_DRAIN_STARTED_EPOCH="$(date +%s)"
+        reconcile_inactive_target_recovery_executions "$NEW_CONTAINER"
+        TARGET_STREAMS_BEFORE_BUILD="$(stream_count_for_port "$NEW_PORT")"
+        echo "[deploy.sh] target drain window started before build: ${NEW_CONTAINER}:${NEW_PORT} active=${TARGET_STREAMS_BEFORE_BUILD:-unknown}"
+        audit_control "target-drain-window" "${NEW_CONTAINER}:${NEW_PORT}" "started" \
+            "active_before_build=${TARGET_STREAMS_BEFORE_BUILD:-unknown}; overlaps=build_candidate_image"
+
         cd "$COMPOSE_DIR"
         deploy_phase_start "build_candidate_image" "running"
         echo "[deploy.sh] ① release image 1회 빌드 (${AADS_RELEASE_SHA})..."
@@ -2578,21 +2593,21 @@ case "$MODE" in
         deploy_phase_start "target_slot_drain" "running"
         reconcile_inactive_target_recovery_executions "$NEW_CONTAINER"
         TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
+        local_target_drain_max="${AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180}"
+        local_target_drain_interval="${AADS_DEPLOY_TARGET_DRAIN_POLL_SECONDS:-10}"
+        local_target_elapsed=$(($(date +%s) - TARGET_DRAIN_STARTED_EPOCH))
+        if [[ ! "$local_target_drain_max" =~ ^[0-9]+$ ]]; then
+            local_target_drain_max="180"
+        fi
+        if [[ ! "$local_target_drain_interval" =~ ^[0-9]+$ ]] || [[ "$local_target_drain_interval" -lt 5 ]]; then
+            local_target_drain_interval="10"
+        fi
         if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]] && [[ "${AADS_DEPLOY_ALLOW_BUSY_TARGET:-false}" != "true" ]]; then
             # A busy inactive slot must not be restarted, because that would cut
             # the response it still owns. Bound the wait, however: after three
             # minutes fail closed and let the queued release retry later instead
             # of occupying the deployment lane for up to thirty minutes.
-            local_target_drain_max="${AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180}"
-            local_target_drain_interval="${AADS_DEPLOY_TARGET_DRAIN_POLL_SECONDS:-10}"
-            local_target_elapsed=0
-            if [[ ! "$local_target_drain_max" =~ ^[0-9]+$ ]]; then
-                local_target_drain_max="180"
-            fi
-            if [[ ! "$local_target_drain_interval" =~ ^[0-9]+$ ]] || [[ "$local_target_drain_interval" -lt 5 ]]; then
-                local_target_drain_interval="10"
-            fi
-            echo "[deploy.sh] ⏳ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT} 활성 스트림 ${TARGET_STREAMS}건 — 재빌드 전 drain 대기 (최대 ${local_target_drain_max}초)"
+            echo "[deploy.sh] ⏳ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT} 활성 스트림 ${TARGET_STREAMS}건 — build와 겹친 drain 창 확인 (${local_target_elapsed}/${local_target_drain_max}초)"
             while [[ "$local_target_elapsed" -lt "$local_target_drain_max" ]]; do
                 sleep "$local_target_drain_interval"
                 local_target_elapsed=$((local_target_elapsed + local_target_drain_interval))
@@ -2662,27 +2677,40 @@ case "$MODE" in
         fi
         deploy_phase_end "candidate_health" "success" "elapsed=${BG_ELAPSED}s"
 
-        # P1: 전환 전 현재 슬롯 활성 스트림 drain 대기 (최대 60초)
+        # 전환 전 현재 슬롯은 계속 신규 트래픽을 받으므로 여기서 기다려도
+        # busy 서비스에서는 0이 되지 않는다(최근 48시간 p50 68초). 기본은
+        # 소유 lease를 스냅샷만 남기고 즉시 graceful nginx cutover한다. 기존
+        # nginx worker가 live stream을 유지하고, old slot 재생성은 아래
+        # standby gate가 owner_instance/lease를 다시 확인한 뒤에만 수행한다.
         deploy_phase_start "active_slot_drain" "running"
+        PRE_CUTOVER_DRAIN_MAX_WAIT="${AADS_DEPLOY_PRE_CUTOVER_DRAIN_MAX_WAIT:-0}"
+        PRE_CUTOVER_DRAIN_INTERVAL="${AADS_DEPLOY_PRE_CUTOVER_DRAIN_POLL_SECONDS:-5}"
+        [[ "$PRE_CUTOVER_DRAIN_MAX_WAIT" =~ ^[0-9]+$ ]] || PRE_CUTOVER_DRAIN_MAX_WAIT=0
+        if [[ ! "$PRE_CUTOVER_DRAIN_INTERVAL" =~ ^[0-9]+$ ]] || [[ "$PRE_CUTOVER_DRAIN_INTERVAL" -lt 1 ]]; then
+            PRE_CUTOVER_DRAIN_INTERVAL=5
+        fi
+        DRAIN_ELAPSED=0
         ACTIVE_STREAMS="$(stream_count_for_port "$CURRENT_PORT")"
-        if [[ "$ACTIVE_STREAMS" =~ ^[0-9]+$ ]] && [[ "$ACTIVE_STREAMS" -gt 0 ]]; then
-            echo "[deploy.sh] ⏳ 현재 슬롯 :${CURRENT_PORT} 활성 스트림 ${ACTIVE_STREAMS}건 — 최대 60초 대기"
-            DRAIN_ELAPSED=0
-            while [[ $DRAIN_ELAPSED -lt 60 ]]; do
-                sleep 5
-                DRAIN_ELAPSED=$((DRAIN_ELAPSED + 5))
+        if [[ "$ACTIVE_STREAMS" =~ ^[0-9]+$ ]] && [[ "$ACTIVE_STREAMS" -gt 0 ]] \
+                && [[ "$PRE_CUTOVER_DRAIN_MAX_WAIT" -gt 0 ]]; then
+            echo "[deploy.sh] ⏳ 현재 슬롯 :${CURRENT_PORT} 활성 스트림 ${ACTIVE_STREAMS}건 — 최대 ${PRE_CUTOVER_DRAIN_MAX_WAIT}초 대기"
+            while [[ $DRAIN_ELAPSED -lt "$PRE_CUTOVER_DRAIN_MAX_WAIT" ]]; do
+                sleep "$PRE_CUTOVER_DRAIN_INTERVAL"
+                DRAIN_ELAPSED=$((DRAIN_ELAPSED + PRE_CUTOVER_DRAIN_INTERVAL))
                 ACTIVE_STREAMS="$(stream_count_for_port "$CURRENT_PORT")"
                 if [[ "$ACTIVE_STREAMS" == "0" || -z "$ACTIVE_STREAMS" ]]; then
                     echo "[deploy.sh] ✅ 활성 스트림 0건 — 전환 진행 (${DRAIN_ELAPSED}초 대기)"
                     break
                 fi
-                echo "[deploy.sh]   대기중... active=${ACTIVE_STREAMS} (${DRAIN_ELAPSED}/60초)"
+                echo "[deploy.sh]   대기중... active=${ACTIVE_STREAMS} (${DRAIN_ELAPSED}/${PRE_CUTOVER_DRAIN_MAX_WAIT}초)"
             done
             if [[ "$ACTIVE_STREAMS" =~ ^[0-9]+$ ]] && [[ "$ACTIVE_STREAMS" -gt 0 ]]; then
                 echo "[deploy.sh] ⚠️ ${ACTIVE_STREAMS}건 스트림 아직 활성 — nginx graceful reload로 전환 진행 (기존 worker가 스트림 유지)"
             fi
+        elif [[ "$ACTIVE_STREAMS" =~ ^[0-9]+$ ]] && [[ "$ACTIVE_STREAMS" -gt 0 ]]; then
+            echo "[deploy.sh] active lease snapshot=${ACTIVE_STREAMS}; pre-cutover wait disabled — graceful worker drain으로 보호"
         fi
-        set_deploy_stream_phase_metadata "$ACTIVE_CONTAINER" "$CURRENT_PORT" "${ACTIVE_STREAMS:-unknown}" "${DRAIN_ELAPSED:-0}" "60"
+        set_deploy_stream_phase_metadata "$ACTIVE_CONTAINER" "$CURRENT_PORT" "${ACTIVE_STREAMS:-unknown}" "${DRAIN_ELAPSED:-0}" "$PRE_CUTOVER_DRAIN_MAX_WAIT"
         deploy_phase_end "active_slot_drain" "success" "active_streams=${ACTIVE_STREAMS:-unknown}"
 
         # ③ upstream 전환 (aads-upstream.conf에서 backup 키워드 조작)

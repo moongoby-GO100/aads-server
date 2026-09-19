@@ -39,6 +39,12 @@ grep -q 'reconcile_stale_deploy_runs' "$deploy_file" \
     || fail "stale deployment run reconciliation is missing"
 grep -q 'AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180' "$deploy_file" \
     || fail "target slot drain must have a bounded default timeout"
+grep -q 'TARGET_DRAIN_STARTED_EPOCH="$(date +%s)"' "$deploy_file" \
+    || fail "target drain window must overlap the release image build"
+grep -q 'AADS_DEPLOY_PRE_CUTOVER_DRAIN_MAX_WAIT:-0' "$deploy_file" \
+    || fail "pre-cutover drain must not serialize traffic by default"
+grep -q 'AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-0' "$deploy_file" \
+    || fail "busy standby drain must defer to the post-monitor retry worker"
 grep -q 'DEPLOY_FLOCKFILE="/tmp/aads-deploy.flock"' "$deploy_file" \
     || fail "deploy entry flock is missing"
 

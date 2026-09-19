@@ -106,6 +106,8 @@ def test_deploy_script_uses_classifier_and_keeps_monitoring_contract():
     assert "AADS_DEPLOY_STALE_HEARTBEAT_TTL_SECONDS:-90" in deploy_script
     # ee9aeeef(RC9)에서 600→300초. 값이 아니라 상한 존재를 고정한다.
     assert re.search(r"AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-\d+", deploy_script)
+    assert "AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-0" in deploy_script
+    assert "AADS_DEPLOY_PRE_CUTOVER_DRAIN_MAX_WAIT:-0" in deploy_script
     assert "DEPLOY_PHASE_METADATA_JSON" in deploy_script
     assert 'MONITOR_SECONDS="${AADS_DEPLOY_P0P1_MONITOR_SECONDS:-300}"' in deploy_script
 

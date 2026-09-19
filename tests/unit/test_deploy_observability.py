@@ -348,9 +348,12 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     # ee9aeeef(RC9)에서 standby 동기화 상한이 600→300초로 조정됐다.
     # 값이 아니라 "상한이 존재한다"는 계약을 고정한다.
     assert re.search(r"AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-\d+", script)
-    assert "AADS_DEPLOY_STANDBY_SYNC_MIN_WAIT:-10" in script
+    assert "AADS_DEPLOY_STANDBY_SYNC_MIN_WAIT:-0" in script
     assert "AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-5" in script
     assert "AADS_DEPLOY_STANDBY_ZERO_SAMPLES:-1" in script
+    assert "AADS_DEPLOY_PRE_CUTOVER_DRAIN_MAX_WAIT:-0" in script
+    assert "TARGET_DRAIN_STARTED_EPOCH" in script
+    assert "local_target_elapsed=$(($(date +%s) - TARGET_DRAIN_STARTED_EPOCH))" in script
     assert "AADS_DEPLOY_MIN_FREE_GB:-20" in script
     assert "AADS_DEPLOY_MAX_RELEASE_CONTEXT_MB:-1024" in script
     assert "AADS_DEPLOY_MAX_IMAGE_GB:-7" in script
