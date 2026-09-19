@@ -22,6 +22,7 @@ from app.services.goal_workflow_approval import (
     execute_change_set,
     preview_grant,
     reconcile_grant_use,
+    request_outbox_retry,
     reserve_grant_use,
     review_item,
     revoke_grant,
@@ -96,6 +97,10 @@ class GrantRequest(BaseModel):
 
 class RevokeRequest(BaseModel):
     reason: str = Field(min_length=1)
+
+
+class RetryRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class GrantUseResultRequest(BaseModel):
@@ -247,6 +252,21 @@ async def get_approval_preview(item_id: str, context=viewer_dependency,
     async with get_pool().acquire() as conn:
         return await approval_preview(conn, tenant_id=tenant, item_id=item_id,
                                       actor=await _actor(conn, context, session_id))
+
+
+@router.post("/work-items/{item_id}/retry-delivery")
+async def post_retry_delivery(
+    item_id: str, req: RetryRequest, context=member_dependency,
+    session_id: str | None = Header(None, alias="X-Chat-Session-ID"),
+):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        return await request_outbox_retry(
+            conn, tenant_id=tenant, item_id=item_id,
+            actor=await _actor(conn, context, session_id), reason=req.reason,
+        )
 
 
 @router.post("/work-items/{item_id}/submit-review")

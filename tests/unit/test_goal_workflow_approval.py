@@ -16,9 +16,11 @@ from app.services.goal_work_hierarchy import ActorScope
 from app.services.goal_workflow_approval import (
     _apply_internal_patch,
     _change_set_body_hash,
+    approval_preview,
     canonical_hash,
     decide_change_set,
     preview_grant,
+    request_outbox_retry,
     route_change_set,
 )
 
@@ -112,6 +114,82 @@ class PatchConn:
             return self.current
         self.update = (sql, args)
         return {"id": CHANGE}
+
+
+class PreviewConn:
+    async def fetchrow(self, sql, *args):
+        if "FROM work_items" in sql:
+            return {
+                "id": CHANGE, "tenant_id": TENANT, "project": "AADS", "type": "task",
+                "title": "before", "description": None, "status": "ready",
+                "priority": "P2", "progress": 20, "version": 3,
+            }
+        return {
+            "id": CHANGE, "state": "pending", "risk_tier": "A2",
+            "patch": '[{"op":"replace","path":"/title","value":"after"}]',
+            "patch_hash": "sha256:" + "a" * 64, "base_version": 3,
+            "target_version": 4, "action": "update", "rationale": "why",
+            "expected_effect": "effect", "rollback_plan": "undo", "environment": "dev",
+            "risk_factors": [], "created_at": None, "last_error": None,
+            "approval_request_id": OTHER,
+        }
+
+
+class RetryConn:
+    def __init__(self, *, requested_by=SESSION, lead=False):
+        self.requested_by = requested_by
+        self.lead = lead
+        self.updated = False
+        self.event = False
+
+    async def fetchrow(self, sql, *args):
+        if "FROM work_items" in sql:
+            return {"id": CHANGE, "tenant_id": TENANT, "project": "AADS", "type": "task"}
+        if "FROM goal_workflow_outbox" in sql:
+            return {"id": OTHER, "change_set_id": CHANGE, "execution_key": "exec-1",
+                    "attempts": 2, "requested_by": self.requested_by}
+        if "UPDATE goal_workflow_outbox" in sql:
+            self.updated = True
+            return {"id": OTHER, "change_set_id": CHANGE, "execution_key": "exec-1",
+                    "status": "pending", "attempts": 2, "available_at": None}
+        return None
+
+    async def fetchval(self, sql, *args):
+        return self.lead
+
+    async def execute(self, sql, *args):
+        self.event = "INSERT INTO work_item_events" in sql
+        return "INSERT 0 1"
+
+
+def test_m15_approval_preview_exposes_safe_diff_context():
+    result = asyncio.run(approval_preview(
+        PreviewConn(), tenant_id=TENANT, item_id=CHANGE, actor=actor(SESSION),
+    ))
+    assert result["current"]["title"] == "before"
+    assert result["approval"]["patch"][0]["value"] == "after"
+    assert result["approval"]["rollback_plan"] == "undo"
+
+
+def test_m15_failed_delivery_retry_is_bounded_and_audited(monkeypatch):
+    monkeypatch.setenv("GOAL_WORKFLOW_APPROVAL_ENABLED", "true")
+    conn = RetryConn()
+    result = asyncio.run(request_outbox_retry(
+        conn, tenant_id=TENANT, item_id=CHANGE, actor=actor(SESSION), reason="operator retry",
+    ))
+    assert result["state"] == "retry_pending"
+    assert conn.updated and conn.event
+
+
+def test_m15_failed_delivery_retry_rejects_unrelated_member(monkeypatch):
+    monkeypatch.setenv("GOAL_WORKFLOW_APPROVAL_ENABLED", "true")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(request_outbox_retry(
+            RetryConn(requested_by=OTHER, lead=False), tenant_id=TENANT,
+            item_id=CHANGE, actor=actor(SESSION), reason="not mine",
+        ))
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "retry_not_authorized"
 
 
 def test_route_change_set_denies_cross_project_actor():

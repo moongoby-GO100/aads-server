@@ -304,13 +304,71 @@ async def approval_preview(conn: Any, *, tenant_id: str, item_id: str, actor: Ac
     if not actor.may_access(str(item["project"])):
         raise _error(403, "project_scope_denied")
     pending = await conn.fetchrow(
-        """SELECT id::text,state,risk_tier,patch_hash,base_version,approval_request_id::text
+        """SELECT id::text,state,risk_tier,patch,patch_hash,base_version,
+                  target_version,action,rationale,expected_effect,rollback_plan,
+                  environment,risk_factors,created_at,last_error,
+                  approval_request_id::text
            FROM work_item_change_sets WHERE tenant_id=$1::uuid AND target_id=$2::uuid
            ORDER BY created_at DESC LIMIT 1""", tenant_id, item_id,
     )
+    current = {
+        key: item.get(key)
+        for key in ("title", "description", "status", "priority", "progress", "version")
+    }
     return {"tenant_id": tenant_id, "project": item["project"], "version": item["version"],
-            "last_error": None, "pending_approval_count": 1 if pending and pending["state"] == "pending" else 0,
-            "approval": _row_dict(pending) if pending else None}
+            "last_error": pending.get("last_error") if pending else None,
+            "pending_approval_count": 1 if pending and pending["state"] == "pending" else 0,
+            "current": current, "approval": _row_dict(pending) if pending else None}
+
+
+async def request_outbox_retry(
+    conn: Any, *, tenant_id: str, item_id: str, actor: ActorScope, reason: str,
+) -> dict[str, Any]:
+    """Move one known-failed delivery back to pending without replaying unknown outcomes."""
+    _require_enabled()
+    item = await _target(conn, tenant_id, item_id)
+    project = str(item["project"])
+    if not actor.may_access(project):
+        raise _error(403, "project_scope_denied")
+    row = await conn.fetchrow(
+        """SELECT o.id::text,o.change_set_id::text,o.execution_key,o.attempts,
+                  c.requested_by::text
+             FROM goal_workflow_outbox o
+             JOIN work_item_change_sets c
+               ON c.id=o.change_set_id AND c.tenant_id=o.tenant_id
+            WHERE o.tenant_id=$1::uuid AND o.project=$2 AND c.target_id=$3::uuid
+              AND o.status='failed'
+            ORDER BY o.created_at DESC,o.id DESC LIMIT 1 FOR UPDATE OF o""",
+        tenant_id, project, item_id,
+    )
+    if not row:
+        raise _error(409, "failed_delivery_not_found")
+    if actor.workspace_kind != "ceo_integrated" and str(row["requested_by"]) != actor.session_id:
+        lead = await conn.fetchval(
+            """SELECT EXISTS(SELECT 1 FROM project_role_assignments
+                 WHERE tenant_id=$1::uuid AND project=$2 AND session_id=$3::uuid
+                   AND active AND lower(role_key) IN ('project_lead','project lead'))""",
+            tenant_id, project, actor.session_id,
+        )
+        if not lead:
+            raise _error(403, "retry_not_authorized")
+    updated = await conn.fetchrow(
+        """UPDATE goal_workflow_outbox
+              SET status='pending',available_at=clock_timestamp(),last_error=NULL,
+                  claim_token=NULL,claimed_at=NULL,publish_state='pending'
+            WHERE id=$1::uuid AND tenant_id=$2::uuid AND status='failed'
+            RETURNING id::text,change_set_id::text,execution_key,status,attempts,available_at""",
+        row["id"], tenant_id,
+    )
+    if not updated:
+        raise _error(409, "delivery_state_changed")
+    await append_event(
+        conn, tenant_id=tenant_id, project=project, aggregate_type="change_set",
+        aggregate_id=str(row["change_set_id"]), event_type="outbox_retry_requested",
+        actor=actor, payload={"reason": reason, "attempts": row["attempts"]},
+        correlation_id=str(uuid4()),
+    )
+    return {**_row_dict(updated), "state": "retry_pending"}
 
 
 _MUTABLE_WORK_ITEM_FIELDS = {

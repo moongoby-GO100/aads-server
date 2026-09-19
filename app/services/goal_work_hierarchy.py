@@ -6,8 +6,10 @@ auto-approval grants.  Those execution concerns belong to M14.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any
+from uuid import UUID
 
 from fastapi import HTTPException
 
@@ -26,12 +28,12 @@ def _row_dict(row: Any) -> dict[str, Any]:
     for key, item in tuple(value.items()):
         if hasattr(item, "isoformat"):
             value[key] = item.isoformat()
-        elif key in {"acceptance_criteria", "payload"} and isinstance(item, str):
+        elif key in {"acceptance_criteria", "payload", "patch"} and isinstance(item, str):
             try:
                 value[key] = json.loads(item)
             except json.JSONDecodeError:
                 pass
-        elif item is not None and item.__class__.__module__ == "uuid":
+        elif isinstance(item, UUID):
             value[key] = str(item)
     return value
 
@@ -259,18 +261,24 @@ async def get_goal_tree(
     goal = await get_goal_scope(conn, tenant_id=tenant_id, goal_id=goal_id)
     project = str(goal["project"])
     rows = await conn.fetch(
-        """SELECT * FROM work_items
-            WHERE tenant_id=$1::uuid AND project=$2 AND goal_id=$3::uuid
-            ORDER BY created_at, id""",
+        """SELECT w.*,m.title AS milestone_title,
+                  m.sequence_order AS milestone_sequence
+             FROM work_items w
+             JOIN milestones m
+               ON m.id=w.milestone_id AND m.goal_id=w.goal_id
+              AND m.tenant_id=w.tenant_id AND m.project=w.project
+            WHERE w.tenant_id=$1::uuid AND w.project=$2 AND w.goal_id=$3::uuid
+            ORDER BY m.sequence_order,w.created_at,w.id""",
         tenant_id, project, goal_id,
     )
-    items = {_row_dict(row)["id"]: _row_dict(row) for row in rows}
+    items = {str(_row_dict(row)["id"]): _row_dict(row) for row in rows}
     for item in items.values():
         item["children"] = []
         item["last_error"] = None
+        item["recovery"] = None
         item["pending_approval_count"] = 0
         if "evidence" in includes:
-            item["evidence"] = {"count": 0, "verified_count": 0}
+            item["evidence"] = {"count": 0, "verified_count": 0, "items": []}
         if "dependencies" in includes:
             item["dependencies"] = []
     if "evidence" in includes and items:
@@ -283,7 +291,28 @@ async def get_goal_tree(
             tenant_id, project, goal_id,
         )
         for row in summaries:
-            items[row["id"]]["evidence"] = {"count": row["count"], "verified_count": row["verified_count"]}
+            items[row["id"]]["evidence"].update(
+                {"count": row["count"], "verified_count": row["verified_count"]}
+            )
+        evidence_rows = await conn.fetch(
+            """WITH ranked AS (
+                 SELECT work_item_id::text AS item_id,id::text,evidence_type,uri,
+                        criterion_key,verified,created_at,
+                        row_number() OVER (
+                            PARTITION BY work_item_id ORDER BY created_at DESC,id DESC
+                        ) AS row_number
+                   FROM work_item_evidence
+                  WHERE tenant_id=$1::uuid AND project=$2 AND goal_id=$3::uuid
+               )
+               SELECT item_id,id,evidence_type,uri,criterion_key,verified,created_at
+                 FROM ranked WHERE row_number<=5
+                ORDER BY item_id,created_at DESC,id DESC""",
+            tenant_id, project, goal_id,
+        )
+        for row in evidence_rows:
+            item_id = str(row["item_id"])
+            if item_id in items:
+                items[item_id]["evidence"]["items"].append(_row_dict(row))
     if "dependencies" in includes and items:
         deps = await conn.fetch(
             """SELECT work_item_id::text, depends_on_id::text, dependency_type
@@ -306,6 +335,33 @@ async def get_goal_tree(
         )
         for row in approvals:
             items[row["id"]]["pending_approval_count"] = row["count"]
+    if items:
+        recoveries = await conn.fetch(
+            """SELECT DISTINCT ON (c.target_id)
+                      c.target_id::text AS id,c.id::text AS change_set_id,
+                      c.state AS change_set_state,o.id::text AS outbox_id,
+                      o.status AS delivery_state,o.attempts,o.available_at,
+                      COALESCE(o.last_error,c.last_error) AS last_error
+                 FROM work_item_change_sets c
+                 LEFT JOIN LATERAL (
+                     SELECT id,status,attempts,available_at,last_error,created_at
+                       FROM goal_workflow_outbox
+                      WHERE tenant_id=c.tenant_id AND change_set_id=c.id
+                      ORDER BY created_at DESC,id DESC LIMIT 1
+                 ) o ON TRUE
+                WHERE c.tenant_id=$1::uuid AND c.project=$2
+                  AND c.target_id=ANY($3::uuid[])
+                  AND (c.last_error IS NOT NULL
+                       OR o.status IN ('failed','reconciliation_required'))
+                ORDER BY c.target_id,c.created_at DESC,c.id DESC""",
+            tenant_id, project, list(items),
+        )
+        for row in recoveries:
+            item_id = str(row["id"])
+            recovery = _row_dict(row)
+            recovery["can_retry"] = recovery.get("delivery_state") == "failed"
+            items[item_id]["last_error"] = recovery.get("last_error")
+            items[item_id]["recovery"] = recovery
     roots: list[dict[str, Any]] = []
     for item in items.values():
         parent_id = item.get("parent_id")
