@@ -462,14 +462,14 @@ async def evaluate_and_persist(
 
 async def verify_immediately_before_execution(
     conn: Any, envelope: Mapping[str, Any], *, signing_key: SigningKey,
-    expected_input: Mapping[str, Any],
+    expected_input: Mapping[str, Any], accepted_results: Sequence[str] = (ApplicationResult.AUTO,),
 ) -> tuple[bool, str | None]:
     """Re-read every mutable fence and authenticate the decision at execution time."""
     if envelope.get("canonicalization_version") != CANONICALIZATION_VERSION:
         return False, "unsupported_canonicalization_version"
     if envelope.get("hash_algorithm") != HASH_ALGORITHM or not verify_envelope_signature(envelope, signing_key):
         return False, "invalid_decision_signature"
-    if envelope.get("effective_application_result") != ApplicationResult.AUTO:
+    if envelope.get("effective_application_result") not in accepted_results:
         return False, "decision_not_auto"
     if canonical_hash(expected_input) != envelope.get("decision_input_hash"):
         return False, "decision_input_mismatch"
@@ -483,7 +483,8 @@ async def verify_immediately_before_execution(
     state = await conn.fetchrow(
         """SELECT target_version,policy_version::text,precondition_snapshot_hash,
                   kill_switch_epoch,deny_policy_epoch,assignment_epoch,
-                  grant_revocation_epoch,ancestor_revocation_epoch
+                  grant_revocation_epoch,ancestor_revocation_epoch,
+                  kill_switch_active,policy_active,assignment_active,grant_chain_active
              FROM goal_policy_execution_fences($1::uuid,$2::uuid,$3::uuid,$4::uuid)""",
         envelope["decision_id"], expected_input["tenant_id"],
         expected_input["target_id"], expected_input["assignment_id"],

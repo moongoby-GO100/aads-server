@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import uuid4
@@ -19,6 +20,13 @@ from app.core.goal_work_hierarchy_policy import (
     mask_decision_context,
     workflow_approval_enabled,
 )
+from app.services.goal_policy_foundation import (
+    ApplicationResult,
+    SigningKey,
+    validate_patch,
+    verify_immediately_before_execution,
+)
+from app.services.goal_policy_foundation import patch_hash as canonical_patch_hash
 from app.services.goal_work_hierarchy import ActorScope, _row_dict
 
 
@@ -29,6 +37,12 @@ def _error(status: int, code: str, message: str | None = None) -> HTTPException:
 def canonical_hash(value: Any) -> str:
     raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
     return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def _change_set_body_hash(target_id: str, payload: Mapping[str, Any]) -> str:
+    """Hash the complete semantic request body, not only its patch."""
+    body = {key: value for key, value in payload.items() if key != "idempotency_key"}
+    return canonical_hash({"target_id": target_id, "body": body})
 
 
 def _require_enabled() -> None:
@@ -71,8 +85,10 @@ async def create_change_set(
     if not actor.may_access(str(item["project"])):
         raise _error(403, "project_scope_denied")
     patch = payload.get("patch")
-    if not isinstance(patch, list):
-        raise _error(422, "invalid_patch")
+    try:
+        patch = validate_patch(patch)
+    except (TypeError, ValueError) as exc:
+        raise _error(422, "invalid_patch") from exc
     if int(payload["base_version"]) != int(item["version"]):
         await conn.execute(
             """UPDATE work_item_change_sets SET state='superseded',updated_at=clock_timestamp()
@@ -80,13 +96,15 @@ async def create_change_set(
                  AND state IN ('pending','approved')""", tenant_id, target_id,
         )
         raise _error(409, "version_conflict")
-    patch_hash = canonical_hash(patch)
+    patch_hash = canonical_patch_hash(patch)
+    body_hash = _change_set_body_hash(target_id, {**payload, "patch": patch})
     existing = await conn.fetchrow(
         "SELECT * FROM work_item_change_sets WHERE tenant_id=$1::uuid AND idempotency_key=$2",
         tenant_id, payload["idempotency_key"],
     )
     if existing:
-        if existing["patch_hash"] != patch_hash or str(existing["target_id"]) != target_id:
+        existing_body_hash = existing.get("body_hash")
+        if (existing_body_hash or existing["patch_hash"]) != (body_hash if existing_body_hash else patch_hash):
             raise _error(409, "idempotency_conflict")
         return _row_dict(existing)
     risk = "A3" if action_requires_mandatory_human(
@@ -95,13 +113,14 @@ async def create_change_set(
     ) else str(payload.get("risk_tier") or "A2")
     row = await conn.fetchrow(
         """INSERT INTO work_item_change_sets
-           (tenant_id,project,target_type,target_id,action,base_version,patch,patch_hash,
+           (tenant_id,project,target_type,target_id,action,base_version,target_version,patch,patch_hash,body_hash,risk_factors,
             rationale,expected_effect,rollback_plan,risk_tier,state,idempotency_key,requested_by,environment)
-           VALUES($1::uuid,$2,$3,$4::uuid,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,'pending',$13,$14::uuid,$15)
+           VALUES($1::uuid,$2,$3,$4::uuid,$5,$6,$7,$8::jsonb,$9,$10,$11::text[],$12,$13,$14,$15,'pending',$16,$17::uuid,$18)
            RETURNING *""",
         tenant_id, item["project"], item["type"], target_id, payload.get("action", "update"),
-        payload["base_version"], json.dumps(patch), patch_hash, payload["rationale"],
-        payload["expected_effect"], payload["rollback_plan"], risk,
+        payload["base_version"], int(payload["base_version"]) + 1, json.dumps(patch), patch_hash, body_hash,
+        list(payload.get("risk_factors") or []),
+        payload["rationale"], payload["expected_effect"], payload["rollback_plan"], risk,
         payload["idempotency_key"], actor.session_id, payload.get("environment", "dev"),
     )
     correlation_id = str(uuid4())
@@ -116,7 +135,7 @@ async def create_change_set(
 async def route_change_set(
     conn: Any, *, tenant_id: str, change_set_id: str, actor: ActorScope,
 ) -> dict[str, Any]:
-    """Create exactly one legacy-compatible manual approval request."""
+    """Create every required approval route without conflating execution."""
     row = await conn.fetchrow(
         """SELECT c.*, w.goal_id FROM work_item_change_sets c
            JOIN work_items w ON w.id=c.target_id AND w.tenant_id=c.tenant_id
@@ -127,29 +146,46 @@ async def route_change_set(
         raise _error(404, "change_set_not_found")
     if not actor.may_access(str(row["project"])):
         raise _error(403, "project_scope_denied")
-    if row["approval_request_id"]:
-        return {"change_set_id": change_set_id, "approval_request_id": str(row["approval_request_id"])}
-    approval = await conn.fetchrow(
+    routes = ["ceo", "independent_reviewer"] if row["risk_tier"] == "A3" else ["project_lead"]
+    approvals: list[str] = []
+    for route in routes:
+        approval = await conn.fetchrow(
+            """SELECT id::text FROM agent_permission_requests
+               WHERE tenant_id=$1::uuid AND work_key=$2 AND gate_source='goal_workflow'
+               ORDER BY created_at DESC LIMIT 1""",
+            tenant_id, f"goal-workflow:{change_set_id}:{route}",
+        )
+        if not approval:
+            approval = await conn.fetchrow(
         """INSERT INTO agent_permission_requests
            (tenant_id,work_key,origin,action_type,action_summary,risk_level,decision,
             requested_by,approval_scope,max_executions,gate_source,tier)
            VALUES($1::uuid,$2,'goal_workflow',$3,$4,$5,'pending',$6,$7::jsonb,1,
                   'goal_workflow','approve') RETURNING id::text""",
-        tenant_id, f"goal-workflow:{change_set_id}", row["action"],
+        tenant_id, f"goal-workflow:{change_set_id}:{route}", row["action"],
         f"{row['target_type']} {row['target_id']}", str(row["risk_tier"]).lower(),
         str(row["requested_by"]), json.dumps({
             "change_set_id": change_set_id, "target_type": row["target_type"],
             "target_id": str(row["target_id"]), "base_version": row["base_version"],
             "patch_hash": row["patch_hash"], "project": row["project"],
-            "required_role": "ceo" if row["risk_tier"] == "A3" else "project_lead",
+            "required_role": route,
             "bulk_allowed": row["risk_tier"] != "A3",
         }),
-    )
+            )
+        approvals.append(str(approval["id"]))
+        await conn.execute(
+            """INSERT INTO work_item_change_set_approval_routes
+               (tenant_id,project,change_set_id,route_key,required_role,approval_request_id)
+               VALUES($1::uuid,$2,$3::uuid,$4,$4,$5::uuid)
+               ON CONFLICT (tenant_id,change_set_id,route_key) DO NOTHING""",
+            tenant_id, row["project"], change_set_id, route, approval["id"],
+        )
     await conn.execute(
         "UPDATE work_item_change_sets SET approval_request_id=$1::uuid WHERE id=$2::uuid",
-        approval["id"], change_set_id,
+        approvals[0], change_set_id,
     )
-    return {"change_set_id": change_set_id, "approval_request_id": approval["id"]}
+    return {"change_set_id": change_set_id, "approval_request_id": approvals[0],
+            "approval_request_ids": approvals, "required_routes": routes}
 
 
 async def decide_change_set(
@@ -168,14 +204,46 @@ async def decide_change_set(
     if str(row["requested_by"]) == actor.session_id:
         raise _error(403, "self_approval_denied")
     desired = "approved" if approve else "rejected"
-    if row["state"] == desired:
+    if row["state"] in {"rejected", desired}:
         return _row_dict(row)
-    if row["state"] != "pending":
+    if row["state"] not in {"pending", "approved"}:
         raise _error(409, "approval_already_decided")
-    if row["risk_tier"] == "A3":
-        if actor.workspace_kind != "ceo_integrated" or actor.role_key.strip().lower() != "ceo":
+    route = await conn.fetchrow(
+        """SELECT r.* FROM work_item_change_set_approval_routes r
+            WHERE r.tenant_id=$1::uuid AND r.change_set_id=$2::uuid
+              AND r.state='pending'
+              AND NOT EXISTS (SELECT 1 FROM work_item_change_set_approval_decisions d
+                 WHERE d.tenant_id=r.tenant_id AND d.change_set_id=r.change_set_id
+                   AND d.actor_session_id=$3::uuid)
+            ORDER BY CASE r.required_role WHEN 'ceo' THEN 1 WHEN 'project_lead' THEN 2 ELSE 3 END
+            FOR UPDATE LIMIT 1""",
+        tenant_id, change_set_id, actor.session_id,
+    )
+    # Legacy/fake adapters may return the change-set row for an unrecognised
+    # fetchrow call.  Only a row carrying the explicit route contract may be
+    # treated as a multi-approval route.
+    if route and not route.get("required_role"):
+        route = None
+    # Compatibility for databases being migrated: the legacy single route is
+    # treated exactly as before. New rows always have an explicit route.
+    route_obj = _row_dict(route) if route and "required_role" in route else None
+    if route_obj is None and route:
+        route = None
+    if route is None:
+        has_routes = bool(await conn.fetchval(
+            """SELECT EXISTS(SELECT 1 FROM work_item_change_set_approval_routes
+                 WHERE tenant_id=$1::uuid AND change_set_id=$2::uuid)""",
+            tenant_id, change_set_id,
+        ))
+        if has_routes:
+            raise _error(403, "approval_route_not_eligible")
+    required_role = str(route_obj["required_role"]) if route_obj else (
+        "ceo" if row["risk_tier"] == "A3" else "project_lead"
+    )
+    if required_role == "ceo":
+        if actor.workspace_kind not in {"ceo", "ceo_integrated"} or actor.role_key.strip().lower() != "ceo":
             raise _error(403, "ceo_approval_required")
-    elif row["risk_tier"] == "A2":
+    elif required_role == "project_lead":
         lead = await conn.fetchval(
             """SELECT EXISTS(SELECT 1 FROM project_role_assignments
                  WHERE tenant_id=$1::uuid AND project=$2 AND session_id=$3::uuid AND active
@@ -184,21 +252,49 @@ async def decide_change_set(
         )
         if not lead:
             raise _error(403, "project_lead_approval_required")
+    elif required_role == "independent_reviewer" and actor.role_key.strip().lower() not in {
+        "independent_reviewer", "independent reviewer", "reviewer", "qa",
+    }:
+        raise _error(403, "independent_review_required")
+    if route:
+        await conn.execute(
+            """INSERT INTO work_item_change_set_approval_decisions
+               (tenant_id,project,change_set_id,route_id,actor_session_id,decision,reason)
+               VALUES($1::uuid,$2,$3::uuid,$4::uuid,$5::uuid,$6,$7)
+               ON CONFLICT (tenant_id,route_id,actor_session_id) DO NOTHING""",
+            tenant_id, row["project"], change_set_id, route["id"], actor.session_id, desired, reason,
+        )
+        await conn.execute(
+            """UPDATE work_item_change_set_approval_routes SET state=$2,decided_at=clock_timestamp()
+                WHERE id=$1::uuid AND state='pending'""", route["id"], desired,
+        )
+    any_rejection = not approve or bool(await conn.fetchval(
+        """SELECT EXISTS(SELECT 1 FROM work_item_change_set_approval_routes
+             WHERE tenant_id=$1::uuid AND change_set_id=$2::uuid AND state='rejected')""",
+        tenant_id, change_set_id,
+    ))
+    all_approved = bool(await conn.fetchval(
+        """SELECT NOT EXISTS(SELECT 1 FROM work_item_change_set_approval_routes
+             WHERE tenant_id=$1::uuid AND change_set_id=$2::uuid AND state<>'approved')""",
+        tenant_id, change_set_id,
+    )) if route else approve
+    aggregate_state = "rejected" if any_rejection else ("approved" if all_approved else "pending")
     updated = await conn.fetchrow(
         """UPDATE work_item_change_sets SET state=$2,decided_by=$3::uuid,
            decided_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=$1::uuid RETURNING *""",
-        change_set_id, desired, actor.session_id,
+        change_set_id, aggregate_state, actor.session_id,
     )
     await conn.execute(
         """UPDATE agent_permission_requests SET decision=$2,reason=$3,decided_by=$4,
            decided_at=clock_timestamp(),updated_at=clock_timestamp()
            WHERE id=$1::uuid AND decision='pending'""",
-        row["approval_request_id"], desired, reason, actor.session_id,
+        route["approval_request_id"] if route else row["approval_request_id"], desired, reason, actor.session_id,
     )
     await append_event(
         conn, tenant_id=tenant_id, project=row["project"], aggregate_type="change_set",
-        aggregate_id=change_set_id, event_type=f"change_set_{desired}", actor=actor,
-        payload={"reason": reason}, correlation_id=str(uuid4()),
+        aggregate_id=change_set_id, event_type=f"change_set_route_{desired}", actor=actor,
+        payload={"reason": reason, "route": required_role, "aggregate_state": aggregate_state},
+        correlation_id=str(uuid4()),
     )
     return _row_dict(updated)
 
@@ -217,6 +313,78 @@ async def approval_preview(conn: Any, *, tenant_id: str, item_id: str, actor: Ac
             "approval": _row_dict(pending) if pending else None}
 
 
+_MUTABLE_WORK_ITEM_FIELDS = {
+    "/title": "title", "/description": "description", "/status": "status",
+    "/priority": "priority", "/progress": "progress",
+}
+
+
+async def _apply_internal_patch(
+    conn: Any, *, tenant_id: str, row: Mapping[str, Any], patch: Sequence[Mapping[str, Any]],
+) -> None:
+    """Apply the ordered patch to a bounded work-item surface in one UPDATE."""
+    current = await conn.fetchrow(
+        """SELECT title,description,status,priority,progress,version
+             FROM work_items WHERE id=$1::uuid AND tenant_id=$2::uuid FOR UPDATE""",
+        row["target_id"], tenant_id,
+    )
+    if not current or int(current["version"]) != int(row["base_version"]):
+        raise _error(409, "target_version_changed")
+    state = {field: current[field] for field in _MUTABLE_WORK_ITEM_FIELDS.values()}
+    changed_fields: set[str] = set()
+    for operation in patch:
+        field = _MUTABLE_WORK_ITEM_FIELDS.get(str(operation.get("path")))
+        op = str(operation["op"])
+        if field is None:
+            raise _error(422, "unsupported_patch_path")
+        if op == "test":
+            if state[field] != operation.get("value"):
+                raise _error(409, "patch_test_failed")
+            continue
+        if op in {"copy", "move"}:
+            source = _MUTABLE_WORK_ITEM_FIELDS.get(str(operation.get("from")))
+            if source is None:
+                raise _error(422, "unsupported_patch_path")
+            state[field] = state[source]
+            changed_fields.add(field)
+            if op == "move" and source != field:
+                if source != "description":
+                    raise _error(422, "unsupported_patch_remove")
+                state[source] = None
+                changed_fields.add(source)
+            continue
+        if op == "remove":
+            if field != "description":
+                raise _error(422, "unsupported_patch_remove")
+            state[field] = None
+            changed_fields.add(field)
+            continue
+        if op not in {"add", "replace"}:
+            raise _error(422, "unsupported_patch_operation")
+        state[field] = operation.get("value")
+        changed_fields.add(field)
+    if not changed_fields:
+        raise _error(422, "patch_has_no_mutation")
+    ordered_fields = sorted(changed_fields)
+    values = [state[field] for field in ordered_fields]
+    # Patch values begin at $5; identity/version arguments occupy $1..$4.
+    field_updates = ",".join(f"{field}=${index + 5}" for index, field in enumerate(ordered_fields))
+    completion_update = (
+        ",completed_at=CASE WHEN status='completed' THEN COALESCE(completed_at,clock_timestamp()) "
+        "ELSE completed_at END" if "status" in changed_fields else ""
+    )
+    sql = (
+        "UPDATE work_items SET " + (field_updates + "," if field_updates else "") +
+        "version=$3,updated_at=clock_timestamp()" + completion_update + " "
+        "WHERE id=$1::uuid AND tenant_id=$2::uuid AND version=$4 RETURNING id"
+    )
+    changed = await conn.fetchrow(
+        sql, row["target_id"], tenant_id, row["target_version"], row["base_version"], *values,
+    )
+    if not changed:
+        raise _error(409, "target_version_changed")
+
+
 async def execute_change_set(
     conn: Any, *, tenant_id: str, change_set_id: str, execution_key: str,
     owner_instance: str, owner_epoch: int, actor: ActorScope,
@@ -224,7 +392,7 @@ async def execute_change_set(
     """Validate immutable approval and enqueue one execution outbox event."""
     _require_enabled()
     row = await conn.fetchrow(
-        """SELECT c.*,w.version AS target_version,w.project AS target_project,w.goal_id AS target_goal_id
+        """SELECT c.*,w.version AS current_target_version,w.project AS target_project,w.goal_id AS target_goal_id
            FROM work_item_change_sets c JOIN work_items w ON w.id=c.target_id
             AND w.tenant_id=c.tenant_id
            WHERE c.id=$1::uuid AND c.tenant_id=$2::uuid FOR UPDATE OF c,w""",
@@ -250,18 +418,65 @@ async def execute_change_set(
         raise _error(409, "approval_revoked")
     if row["state"] != "approved":
         raise _error(409, "approval_required")
-    if int(row["base_version"]) != int(row["target_version"]):
+    if int(row["base_version"]) != int(row["current_target_version"]):
         await conn.execute("UPDATE work_item_change_sets SET state='superseded' WHERE id=$1::uuid", change_set_id)
         raise _error(409, "approval_superseded")
-    if action_requires_mandatory_human(str(row["action"]), str(row.get("environment", "dev")), []):
-        raise _error(409, "mandatory_human_revalidation_required")
-    if canonical_hash(row["patch"] if not isinstance(row["patch"], str) else json.loads(row["patch"])) != row["patch_hash"]:
+    patch = row["patch"] if not isinstance(row["patch"], str) else json.loads(row["patch"])
+    if canonical_patch_hash(patch) != row["patch_hash"]:
         await append_event(
             conn, tenant_id=tenant_id, project=row["project"], aggregate_type="change_set",
             aggregate_id=change_set_id, event_type="patch_tamper_blocked", actor=actor,
             payload={"stored_patch_hash": row["patch_hash"]}, correlation_id=str(uuid4()),
         )
         raise _error(409, "patch_hash_mismatch")
+    decision = await conn.fetchrow(
+        """SELECT d.* FROM goal_policy_decisions d
+            WHERE d.tenant_id=$1::uuid AND d.project=$2 AND d.target_id=$3::uuid
+              AND d.target_version=$4 AND d.patch_hash=$5
+              AND d.principal_session_id=$6::uuid
+              AND d.effective_application_result IN ('AUTO','APPROVAL_REQUIRED')
+            ORDER BY d.decided_at DESC LIMIT 1""",
+        tenant_id, row["project"], row["target_id"], row["base_version"], row["patch_hash"],
+        row["requested_by"],
+    )
+    secret = os.getenv("GOAL_POLICY_DECISION_SIGNING_SECRET", "").encode()
+    if not decision or len(secret) < 32:
+        raise _error(409, "policy_decision_unverifiable")
+    envelope = _row_dict(decision)
+    for name in (
+        "id", "tenant_id", "principal_session_id", "assignment_id", "target_id",
+        "policy_version", "matched_grant_id",
+    ):
+        if envelope.get(name) is not None:
+            envelope[name] = str(envelope[name])
+    envelope["decision_id"] = envelope.pop("id")
+    decided_at = envelope.get("decided_at")
+    if hasattr(decided_at, "isoformat"):
+        envelope["decided_at"] = decided_at.isoformat().replace("+00:00", "Z")
+    elif str(decided_at).endswith("+00:00"):
+        envelope["decided_at"] = str(decided_at)[:-6] + "Z"
+    expected_input = {
+        "tenant_id": tenant_id, "project": row["project"],
+        "workspace_kind": envelope["workspace_kind"],
+        "principal_session_id": envelope["principal_session_id"],
+        "assignment_id": envelope["assignment_id"], "target_type": row["target_type"],
+        "target_id": str(row["target_id"]), "action": row["action"],
+        "base_version": row["base_version"], "patch_hash": row["patch_hash"],
+        "environment": row["environment"],
+        "risk_factors": list(row.get("risk_factors") or []),
+        "precondition_snapshot_hash": envelope["precondition_snapshot_hash"],
+        "policy_version": str(envelope["policy_version"]),
+        "grant_id": str(envelope["matched_grant_id"]) if envelope.get("matched_grant_id") else None,
+        "grant_version": envelope.get("grant_version"),
+    }
+    verified, failure = await verify_immediately_before_execution(
+        conn, envelope,
+        signing_key=SigningKey(str(envelope["signature_key_id"]), int(envelope["signature_key_version"]), secret),
+        expected_input=expected_input,
+        accepted_results=(ApplicationResult.AUTO, ApplicationResult.APPROVAL_REQUIRED),
+    )
+    if not verified:
+        raise _error(409, failure or "policy_revalidation_failed")
     reservation = await conn.fetchrow(
         """SELECT g.status,g.project,g.goal_id::text,
                   clock_timestamp() BETWEEN g.valid_from AND g.expires_at AS valid_now
@@ -278,19 +493,28 @@ async def execute_change_set(
                         or str(reservation["goal_id"]) != str(row["target_goal_id"])):
         raise _error(409, "grant_revalidation_failed")
     correlation_id = str(uuid4())
+    await _apply_internal_patch(conn, tenant_id=tenant_id, row=row, patch=patch)
     await conn.execute(
-        """UPDATE work_item_change_sets SET state='executing',execution_key=$1,
-           owner_instance=$3,owner_epoch=$4,updated_at=clock_timestamp() WHERE id=$2::uuid""",
+        """INSERT INTO goal_workflow_effects
+           (tenant_id,project,execution_key,change_set_id,owner_instance,owner_epoch,effect_kind,state,applied_at)
+           VALUES($1::uuid,$2,$3,$4::uuid,$5,$6,'internal','applied',clock_timestamp())
+           ON CONFLICT (tenant_id,execution_key) DO NOTHING""",
+        tenant_id, row["project"], execution_key, change_set_id, owner_instance, owner_epoch,
+    )
+    await conn.execute(
+        """UPDATE work_item_change_sets SET state='executed',execution_key=$1,
+           owner_instance=$3,owner_epoch=$4,executed_at=clock_timestamp(),updated_at=clock_timestamp()
+           WHERE id=$2::uuid""",
         execution_key, change_set_id, owner_instance, owner_epoch,
     )
     await conn.execute(
         """INSERT INTO goal_workflow_outbox
-           (tenant_id,project,change_set_id,execution_key,event_type,payload,owner_instance,owner_epoch)
-           VALUES($1::uuid,$2,$3::uuid,$4,'change_set.execute',$5::jsonb,$6,$7)
+           (tenant_id,project,change_set_id,execution_key,event_type,payload,owner_instance,owner_epoch,decision_id)
+           VALUES($1::uuid,$2,$3::uuid,$4,'change_set.execute',$5::jsonb,$6,$7,$8::uuid)
            ON CONFLICT (tenant_id,execution_key) DO NOTHING""",
         tenant_id, row["project"], change_set_id, execution_key,
         json.dumps({"owner_instance": owner_instance, "owner_epoch": owner_epoch,
-                    "patch_hash": row["patch_hash"]}), owner_instance, owner_epoch,
+                    "patch_hash": row["patch_hash"]}), owner_instance, owner_epoch, decision["id"],
     )
     await append_event(
         conn, tenant_id=tenant_id, project=row["project"], aggregate_type="change_set",
@@ -299,7 +523,60 @@ async def execute_change_set(
                  "owner_epoch": owner_epoch, "patch_hash": row["patch_hash"]},
         correlation_id=correlation_id,
     )
-    return {"change_set_id": change_set_id, "state": "executing", "execution_key": execution_key}
+    return {"change_set_id": change_set_id, "state": "executed", "execution_key": execution_key}
+
+
+async def claim_outbox(
+    conn: Any, *, owner_instance: str, owner_epoch: int, limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Claim publish work; this is the only W-14a path that uses SKIP LOCKED."""
+    rows = await conn.fetch(
+        """WITH candidates AS (
+             SELECT o.id FROM goal_workflow_outbox o
+              JOIN work_item_change_sets c ON c.id=o.change_set_id AND c.tenant_id=o.tenant_id
+              JOIN chat_turn_executions e ON e.session_id=c.requested_by
+               AND e.owner_instance=$1 AND e.owner_epoch=$2
+               AND e.status IN ('running','retrying') AND e.lease_expires_at>clock_timestamp()
+              WHERE o.status IN ('pending','failed') AND o.available_at<=clock_timestamp()
+              ORDER BY o.available_at,o.created_at FOR UPDATE OF o SKIP LOCKED LIMIT $3
+           )
+           UPDATE goal_workflow_outbox o SET status='delivering',attempts=attempts+1,
+                  owner_instance=$1,owner_epoch=$2
+             FROM candidates c WHERE o.id=c.id RETURNING o.*""",
+        owner_instance, owner_epoch, limit,
+    )
+    return [_row_dict(row) for row in rows]
+
+
+async def complete_outbox_delivery(
+    conn: Any, *, tenant_id: str, outbox_id: str, owner_instance: str, owner_epoch: int,
+    outcome: str, error: str | None = None,
+) -> dict[str, Any]:
+    """Fence acknowledgements; unknown external outcomes require reconciliation."""
+    if outcome not in {"delivered", "failed", "unknown"}:
+        raise _error(422, "invalid_delivery_outcome")
+    status = "reconciliation_required" if outcome == "unknown" else outcome
+    row = await conn.fetchrow(
+        """UPDATE goal_workflow_outbox SET status=$5,
+               delivered_at=CASE WHEN $5='delivered' THEN clock_timestamp() ELSE delivered_at END,
+               last_error=$6,
+               publish_state=CASE WHEN $5='reconciliation_required'
+                    THEN 'reconciliation_required' ELSE publish_state END
+             WHERE id=$1::uuid AND tenant_id=$2::uuid AND owner_instance=$3 AND owner_epoch=$4
+               AND status='delivering' RETURNING *""",
+        outbox_id, tenant_id, owner_instance, owner_epoch, status, error,
+    )
+    if not row:
+        raise _error(409, "outbox_owner_fence_lost")
+    if outcome == "unknown":
+        await conn.execute(
+            """UPDATE goal_workflow_effects SET state='reconciliation_required',
+                   result=result||jsonb_build_object('unknown_external_outcome',true,'error',$4::text)
+                 WHERE tenant_id=$1::uuid AND execution_key=$2
+                   AND owner_instance=$3 AND owner_epoch=$5""",
+            tenant_id, row["execution_key"], owner_instance, error, owner_epoch,
+        )
+    return _row_dict(row)
 
 
 def preview_grant(payload: Mapping[str, Any], *, actor_session_id: str) -> dict[str, Any]:
@@ -482,7 +759,7 @@ async def reserve_grant_use(
                    SELECT 1 FROM goal_auto_approval_grants pg
                     WHERE pg.id=g.parent_grant_id AND pg.tenant_id=g.tenant_id AND pg.status='active'
                       AND clock_timestamp() BETWEEN pg.valid_from AND pg.expires_at))
-           ORDER BY cardinality(g.actions),g.expires_at FOR UPDATE OF g SKIP LOCKED LIMIT 1""",
+           ORDER BY cardinality(g.actions),g.expires_at FOR UPDATE OF g LIMIT 1""",
         tenant_id, request["project"], actor.session_id, request["goal_id"], request["action"],
         request.get("environment", "dev"), request.get("milestone_id"), request.get("epic_id"),
         request.get("story_id"),

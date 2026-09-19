@@ -14,6 +14,8 @@ from app.core.goal_work_hierarchy_policy import (
 )
 from app.services.goal_work_hierarchy import ActorScope
 from app.services.goal_workflow_approval import (
+    _apply_internal_patch,
+    _change_set_body_hash,
     canonical_hash,
     decide_change_set,
     preview_grant,
@@ -27,6 +29,7 @@ CHANGE = "00000000-0000-0000-0000-000000000004"
 ROOT = Path(__file__).parents[2]
 SERVICE = (ROOT / "app/services/goal_workflow_approval.py").read_text()
 MIGRATION = (ROOT / "migrations/20260919_goal_work_hierarchy_m14.sql").read_text()
+W14A = (ROOT / "migrations/20260919_goal_workflow_w14a.sql").read_text()
 
 
 def actor(session: str = OTHER) -> ActorScope:
@@ -94,6 +97,21 @@ class RouteConn:
         return {"project": "OTHER", "approval_request_id": None}
 
 
+class PatchConn:
+    def __init__(self):
+        self.current = {
+            "title": "old", "description": "description", "status": "ready",
+            "priority": "P2", "progress": 0, "version": 1,
+        }
+        self.update = None
+
+    async def fetchrow(self, sql, *args):
+        if sql.lstrip().startswith("SELECT"):
+            return self.current
+        self.update = (sql, args)
+        return {"id": CHANGE}
+
+
 def test_route_change_set_denies_cross_project_actor():
     with pytest.raises(HTTPException) as exc:
         asyncio.run(route_change_set(RouteConn(), tenant_id=TENANT, change_set_id=CHANGE, actor=actor()))
@@ -136,13 +154,86 @@ def test_t06_t12_t13_t14_change_set_guards_are_present():
         assert contract in SERVICE
 
 
+def test_t06_idempotency_hash_covers_non_patch_body_fields():
+    base = {"base_version": 1, "patch": [], "rationale": "r", "expected_effect": "e",
+            "rollback_plan": "undo", "idempotency_key": "same"}
+    assert _change_set_body_hash(CHANGE, base) == _change_set_body_hash(
+        CHANGE, {**base, "idempotency_key": "ignored"}
+    )
+    assert _change_set_body_hash(CHANGE, base) != _change_set_body_hash(
+        CHANGE, {**base, "rationale": "different"}
+    )
+
+
+def test_t07_immutable_versions_and_rfc6902_hash_contract():
+    assert "target_version > base_version" in W14A
+    assert "body_hash" in W14A
+    assert "canonical_patch_hash" in SERVICE and "validate_patch" in SERVICE
+
+
+def test_t07_ordered_patch_collapses_duplicate_paths_after_tests():
+    conn = PatchConn()
+    asyncio.run(_apply_internal_patch(
+        conn, tenant_id=TENANT,
+        row={"target_id": CHANGE, "base_version": 1, "target_version": 2},
+        patch=[
+            {"op": "test", "path": "/title", "value": "old"},
+            {"op": "replace", "path": "/title", "value": "first"},
+            {"op": "replace", "path": "/title", "value": "final"},
+            {"op": "remove", "path": "/description"},
+        ],
+    ))
+    sql, args = conn.update
+    assert sql.count("title=") == 1
+    assert "description=" in sql
+    assert "final" in args and "first" not in args
+
+
+def test_t07_patch_test_failure_is_fail_closed():
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(_apply_internal_patch(
+            PatchConn(), tenant_id=TENANT,
+            row={"target_id": CHANGE, "base_version": 1, "target_version": 2},
+            patch=[{"op": "test", "path": "/title", "value": "tampered"}],
+        ))
+    assert exc.value.detail["code"] == "patch_test_failed"
+
+
+def test_t08_t10_multi_approval_is_independent_and_rejection_wins():
+    assert "work_item_change_set_approval_routes" in SERVICE
+    assert "work_item_change_set_approval_decisions" in SERVICE
+    assert "ceo\", \"independent_reviewer" in SERVICE
+    assert 'aggregate_state = "rejected" if any_rejection' in SERVICE
+    assert "self_approval_denied" in SERVICE
+
+
+def test_t11_execution_and_acceptance_are_separate():
+    execution = SERVICE[SERVICE.index("async def execute_change_set"):SERVICE.index("def preview_grant")]
+    assert "review_item" not in execution
+    assert "state='executed'" in execution
+
+
+def test_t12_t13_transactional_outbox_and_exactly_once_effect_contract():
+    assert "goal_workflow_effects" in SERVICE
+    assert SERVICE.index("await _apply_internal_patch") < SERVICE.index("INSERT INTO goal_workflow_outbox")
+    assert "UNIQUE (tenant_id,execution_key)" in W14A
+    assert SERVICE.count("FOR UPDATE OF o SKIP LOCKED") == 1
+    assert "SKIP LOCKED" not in SERVICE[SERVICE.index("async def complete_outbox_delivery"):]
+
+
+def test_t14_unknown_external_outcome_requires_reconciliation():
+    assert "unknown_external_outcome" in SERVICE
+    assert "reconciliation_required" in SERVICE
+    assert "refund" not in SERVICE[SERVICE.index("async def complete_outbox_delivery"):SERVICE.index("def preview_grant")]
+
+
 def test_t11_t31_evidence_gate_precedes_grant_consumption():
     assert SERVICE.index('if request.get("evidence_required")') < SERVICE.index("used_executions=used_executions+1")
     assert "evidence_required" in SERVICE and "children_open" in SERVICE
 
 
 def test_t17_t20_t24_t30_t33_single_grant_atomic_budget_contract():
-    assert "FOR UPDATE OF g SKIP LOCKED LIMIT 1" in SERVICE
+    assert "FOR UPDATE OF g LIMIT 1" in SERVICE
     assert "used_executions < g.max_executions" in SERVICE
     assert "UNIQUE (tenant_id, execution_key)" in (ROOT / "migrations/20260919_goal_work_hierarchy_m12.sql").read_text()
     for budget in ("max_files", "max_rows", "max_cost_usd", "max_parallel", "max_duration_seconds"):
