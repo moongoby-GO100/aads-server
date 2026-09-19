@@ -141,6 +141,20 @@ def _coerce_string_list(value: Any) -> list[str]:
     return []
 
 
+def _infer_release_risk_flags(payload: dict[str, Any], changed_files: list[str]) -> list[str]:
+    inferred: list[str] = []
+    for path in changed_files:
+        lowered = path.lower()
+        if lowered.startswith("migrations/") or "/migrations/" in lowered:
+            inferred.append("migration")
+        if lowered.endswith(("requirements.txt", "requirements.lock", "poetry.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock")):
+            inferred.append("dependency")
+        if lowered in {"deploy.sh", "docker-compose.yml", "docker-compose.prod.yml"} or lowered.startswith("scripts/deploy"):
+            inferred.append("release_contract")
+    supplied = payload.get("risk_flags") if isinstance(payload.get("risk_flags"), list) else []
+    return sorted({str(flag) for flag in [*supplied, *inferred] if str(flag).strip()})
+
+
 def _payload_release_metadata(row: dict[str, Any]) -> dict[str, Any]:
     payload = _coerce_payload(row.get("request_payload"))
     title = (
@@ -332,8 +346,18 @@ async def enqueue_deploy_request(
         or None
     )
     normalized_files = _coerce_string_list(payload.get("changed_files") or payload.get("files"))
+    risk_flags = _infer_release_risk_flags(payload, normalized_files)
+    payload["risk_flags"] = risk_flags
 
     async with conn.transaction():
+        # One intake decision at a time per release lane.  Previously two
+        # concurrent callers could both supersede the existing queue and leave
+        # more than one apparent head.  The host batcher performs the Git
+        # ancestry decision; intake only serializes and preserves requests.
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtext($1))",
+            f"deploy-intake:{project_key}:{component_key}:{env_key}",
+        )
         existing = await conn.fetchrow(
             """
             SELECT *
@@ -355,27 +379,24 @@ async def enqueue_deploy_request(
         if existing:
             return {**dict(existing), "deduplicated": True}
 
-        await conn.execute(
+        ready_exists = bool(await conn.fetchval(
             """
-            UPDATE deploy_runs
-               SET status = 'superseded',
-                   phase = 'superseded_by_newer_deploy_request',
-                   phase_completed_at = NOW(),
-                   updated_at = NOW(),
-                   error_summary = CONCAT_WS('; ', NULLIF(error_summary, ''), $3::text)
-             WHERE project = $1
-               AND component = $4
-               AND target_env = $5
-               AND status = 'queued'
-               AND phase = 'queued_for_deploy'
-               AND release_sha IS DISTINCT FROM $2
+            SELECT EXISTS(
+                SELECT 1
+                  FROM deploy_runs
+                 WHERE project = $1
+                   AND component = $2
+                   AND target_env = $3
+                   AND status = 'queued'
+                   AND phase = 'queued_for_deploy'
+                   AND COALESCE(auto_start, FALSE) = TRUE
+            )
             """,
             project_key,
-            release,
-            f"superseded by newer queued release {release}",
             component_key,
             env_key,
-        )
+        ))
+        queue_phase = "waiting_batch_predecessor" if ready_exists else "queued_for_deploy"
 
         queue_position = await conn.fetchval(
             """
@@ -385,7 +406,7 @@ async def enqueue_deploy_request(
                AND component = $2
                AND target_env = $3
                AND status = 'queued'
-               AND phase = 'queued_for_deploy'
+               AND phase IN ('queued_for_deploy', 'waiting_batch_predecessor')
             """,
             project_key,
             component_key,
@@ -401,10 +422,10 @@ async def enqueue_deploy_request(
                 requested_at, last_heartbeat_at, created_at, updated_at
             )
             VALUES(
-                $1, $2, $3, $4, $5, NULLIF($6, ''), 'queued', 'queued_for_deploy', NOW(),
-                $7, 'queued by ops deploy request API', $8, $9,
-                $10, $11, $12, $13::jsonb,
-                $14, $15, $16, $17,
+                $1, $2, $3, $4, $5, NULLIF($6, ''), 'queued', $7, NOW(),
+                $8, 'queued by ops deploy request API; awaiting host ancestry classification', $9, $10,
+                $11, $12, $13, $14::jsonb,
+                $15, $16, $17, $18,
                 NOW(), NOW(), NOW(), NOW()
             )
             RETURNING *
@@ -415,6 +436,7 @@ async def enqueue_deploy_request(
             env_key,
             release,
             (runner_job_id or "").strip(),
+            queue_phase,
             int(queue_position or 1),
             actor,
             source,
@@ -433,13 +455,14 @@ async def enqueue_deploy_request(
                 deploy_run_id, project, component, deploy_type, release_sha,
                 status, phase, started_at, metadata, created_at, updated_at
             )
-            VALUES($1, $2, $3, $4, $5, 'queued', 'queued_for_deploy', NOW(), $6::jsonb, NOW(), NOW())
+            VALUES($1, $2, $3, $4, $5, 'queued', $6, NOW(), $7::jsonb, NOW(), NOW())
             """,
             row["id"],
             project_key,
             component_key,
             deploy_type_key,
             release,
+            queue_phase,
             json.dumps(payload, ensure_ascii=False, default=str),
         )
         await conn.execute(
@@ -460,7 +483,7 @@ async def enqueue_deploy_request(
             json.dumps(normalized_files, ensure_ascii=False),
             json.dumps(payload.get("tests") if isinstance(payload.get("tests"), list) else [], ensure_ascii=False, default=str),
             json.dumps(payload.get("commits") if isinstance(payload.get("commits"), list) else [], ensure_ascii=False, default=str),
-            json.dumps(payload.get("risk_flags") if isinstance(payload.get("risk_flags"), list) else [], ensure_ascii=False, default=str),
+            json.dumps(risk_flags, ensure_ascii=False, default=str),
         )
     return {**dict(row), "deduplicated": False}
 

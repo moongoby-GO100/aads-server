@@ -15,6 +15,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 API_WORKER="${SCRIPT_DIR}/start_aads_deploy_queue_worker.sh"
 DASHBOARD_WORKER="${SCRIPT_DIR}/start_aads_dashboard_deploy_worker.sh"
 UNIFIED_WORKER="${SCRIPT_DIR}/start_unified_component_deploy_worker.sh"
+BATCHER="${SCRIPT_DIR}/coalesce_deploy_queue.py"
+BATCH_MIGRATION="${SCRIPT_DIR}/../migrations/20260919_deploy_batch_inclusions.sql"
 
 if ! command -v docker >/dev/null 2>&1; then
     echo "drain skipped: docker CLI unavailable (host execution required)"
@@ -30,14 +32,33 @@ db_exec() {
     docker exec aads-postgres psql -U aads -d aads -qAtc "$1" 2>/dev/null || true
 }
 
+# Classify AADS/API requests only where host Git history is available.  The
+# batcher fails closed: unknown/risky manifests remain FIFO-separated.  A
+# classification failure must not let the legacy newest-wins query erase work.
+if [[ -x "$BATCHER" ]]; then
+    if [[ -x "${SCRIPT_DIR}/apply_migration.sh" ]]; then
+        if ! "${SCRIPT_DIR}/apply_migration.sh" "$BATCH_MIGRATION"; then
+            echo "deploy batch migration failed; refusing legacy newest-wins drain" >&2
+            exit 1
+        fi
+    else
+        echo "deploy batch migration runner missing; refusing legacy newest-wins drain" >&2
+        exit 1
+    fi
+    if ! python3 "$BATCHER" --repo "${SCRIPT_DIR}/.." --project AADS --component api --target-env production; then
+        echo "deploy batch classification failed; queue left unchanged" >&2
+        exit 1
+    fi
+fi
+
 rows="$(
     db_exec "
-        SELECT DISTINCT ON (project, component) id, project, component, release_sha
+        SELECT DISTINCT ON (project, component, target_env) id, project, component, release_sha
           FROM deploy_runs
          WHERE status='queued'
            AND phase='queued_for_deploy'
            AND COALESCE(auto_start, FALSE) = TRUE
-         ORDER BY project, component, created_at DESC, id DESC;
+         ORDER BY project, component, target_env, created_at ASC, id ASC;
     "
 )"
 

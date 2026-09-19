@@ -308,8 +308,10 @@ async def _queue_aads_deploy_after_push(job: "PipelineCJob", release_sha: str) -
     commit+push completed and returns the deploy_run_id for follow-up status.
     """
     from app.core.db_pool import get_pool
+    from app.services.code_reviewer import _extract_changed_files
     from app.services.deploy_observability import enqueue_deploy_request
 
+    changed_files = _extract_changed_files(job.git_diff or "")
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await enqueue_deploy_request(
@@ -326,6 +328,7 @@ async def _queue_aads_deploy_after_push(job: "PipelineCJob", release_sha: str) -
                 "chat_session_id": job.chat_session_id,
                 "runner_job_id": job.job_id,
                 "phase": "deploy_queued",
+                "changed_files": changed_files[:200],
             },
         )
 
