@@ -66,7 +66,10 @@ class DecisionRequest(BaseModel):
 class GrantRequest(BaseModel):
     principal_session_id: UUID
     assignment_id: UUID
-    approved_by: UUID
+    # Identity is derived from the authenticated actor and the approved server
+    # record. Legacy fields remain parseable for compatibility but are ignored.
+    approval_request_id: UUID
+    approved_by: UUID | None = None
     requested_by: UUID | None = None
     milestone_id: UUID | None = None
     epic_id: UUID | None = None
@@ -125,7 +128,7 @@ async def post_change_set(item_id: str, req: ChangeSetRequest, context=member_de
         actor = await _actor(conn, context, session_id)
         result = await create_change_set(conn, tenant_id=tenant, actor=actor, target_id=item_id,
                                          payload=req.model_dump(mode="json"))
-        routing = await route_change_set(conn, tenant_id=tenant, change_set_id=result["id"])
+        routing = await route_change_set(conn, tenant_id=tenant, change_set_id=result["id"], actor=actor)
     return {"change_set": result, **routing}
 
 
@@ -153,11 +156,13 @@ async def post_decision(change_set_id: str, req: DecisionRequest, context=member
 
 
 @router.get("/work-items/{item_id}/approval-preview")
-async def get_approval_preview(item_id: str, context=viewer_dependency):
+async def get_approval_preview(item_id: str, context=viewer_dependency,
+                               session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
     from app.core.db_pool import get_pool
     tenant, _, _ = _identity(context)
     async with get_pool().acquire() as conn:
-        return await approval_preview(conn, tenant_id=tenant, item_id=item_id)
+        return await approval_preview(conn, tenant_id=tenant, item_id=item_id,
+                                      actor=await _actor(conn, context, session_id))
 
 
 @router.post("/work-items/{item_id}/submit-review")
@@ -214,13 +219,21 @@ async def post_grant(goal_id: str, req: GrantRequest, context=member_dependency,
 
 
 @router.get("/goals/{goal_id}/auto-approval-grants")
-async def get_grants(goal_id: str, context=viewer_dependency):
+async def get_grants(goal_id: str, context=viewer_dependency,
+                     session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
     from app.core.db_pool import get_pool
     tenant, _, _ = _identity(context)
-    rows = await get_pool().fetch(
-        """SELECT *,max_executions-used_executions AS remaining_uses FROM goal_auto_approval_grants
-           WHERE tenant_id=$1::uuid AND goal_id=$2::uuid ORDER BY issued_at DESC""", tenant, goal_id)
-    return [dict(row) for row in rows]
+    async with get_pool().acquire() as conn:
+        actor = await _actor(conn, context, session_id)
+        goal = await conn.fetchrow("SELECT project FROM goals WHERE id=$1::uuid AND tenant_id=$2::uuid",
+                                   goal_id, tenant)
+        if not goal or not actor.may_access(str(goal["project"])):
+            raise HTTPException(404, detail={"code": "goal_not_found"})
+        rows = await conn.fetch(
+            """SELECT *,max_executions-used_executions AS remaining_uses FROM goal_auto_approval_grants
+               WHERE tenant_id=$1::uuid AND goal_id=$2::uuid AND project=$3 ORDER BY issued_at DESC""",
+            tenant, goal_id, goal["project"])
+        return [dict(row) for row in rows]
 
 
 @router.post("/auto-approval-grants/{grant_id}/revoke")
@@ -235,13 +248,23 @@ async def post_revoke(grant_id: str, req: RevokeRequest, context=member_dependen
 
 
 @router.get("/auto-approval-grants/{grant_id}/usage")
-async def get_usage(grant_id: str, context=viewer_dependency):
+async def get_usage(grant_id: str, context=viewer_dependency,
+                    session_id: str | None = Header(None, alias="X-Chat-Session-ID")):
     from app.core.db_pool import get_pool
     tenant, _, _ = _identity(context)
-    rows = await get_pool().fetch(
-        "SELECT * FROM goal_auto_approval_uses WHERE tenant_id=$1::uuid AND grant_id=$2::uuid ORDER BY reserved_at",
-        tenant, grant_id)
-    return [dict(row) for row in rows]
+    async with get_pool().acquire() as conn:
+        actor = await _actor(conn, context, session_id)
+        grant = await conn.fetchrow(
+            "SELECT goal_id::text,project FROM goal_auto_approval_grants WHERE id=$1::uuid AND tenant_id=$2::uuid",
+            grant_id, tenant)
+        if not grant or not actor.may_access(str(grant["project"])):
+            raise HTTPException(404, detail={"code": "grant_not_found"})
+        rows = await conn.fetch(
+            """SELECT u.* FROM goal_auto_approval_uses u
+               JOIN goal_auto_approval_grants g ON g.id=u.grant_id AND g.tenant_id=u.tenant_id
+               WHERE u.tenant_id=$1::uuid AND u.grant_id=$2::uuid AND g.goal_id=$3::uuid
+               ORDER BY u.reserved_at""", tenant, grant_id, grant["goal_id"])
+        return [dict(row) for row in rows]
 
 
 @router.post("/goal-policy/simulate")

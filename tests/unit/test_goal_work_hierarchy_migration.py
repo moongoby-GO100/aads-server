@@ -1,9 +1,9 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).parents[2]
 UP = (ROOT / "migrations/20260919_goal_work_hierarchy_m12.sql").read_text()
 DOWN = (ROOT / "migrations/rollback/20260919_goal_work_hierarchy_m12.down.sql").read_text()
+SECURITY = (ROOT / "migrations/20260919_goal_work_hierarchy_m14_security.sql").read_text()
 
 
 def test_m12_tables_remain_present_after_m14_router_is_added():
@@ -58,3 +58,9 @@ def test_migration_is_repeatable_and_has_explicit_empty_schema_rollback():
     assert "DROP TRIGGER IF EXISTS" in UP
     for table in ("work_items", "project_role_assignments", "goal_auto_approval_grants"):
         assert f"DROP TABLE IF EXISTS {table}" in DOWN
+
+
+def test_m14_security_environment_migration_is_additive_and_idempotent():
+    assert "ADD COLUMN IF NOT EXISTS environment" in SECURITY
+    assert "CHECK (environment IN ('dev', 'staging', 'production'))" in SECURITY
+    assert "pg_constraint" in SECURITY

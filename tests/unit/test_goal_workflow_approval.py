@@ -13,7 +13,12 @@ from app.core.goal_work_hierarchy_policy import (
     workflow_approval_enabled,
 )
 from app.services.goal_work_hierarchy import ActorScope
-from app.services.goal_workflow_approval import canonical_hash, decide_change_set, preview_grant
+from app.services.goal_workflow_approval import (
+    canonical_hash,
+    decide_change_set,
+    preview_grant,
+    route_change_set,
+)
 
 TENANT = "00000000-0000-0000-0000-000000000001"
 SESSION = "00000000-0000-0000-0000-000000000002"
@@ -80,6 +85,21 @@ class DecisionConn:
     async def execute(self, sql, *args):
         return "INSERT 0 1"
 
+    async def fetchval(self, sql, *args):
+        return False
+
+
+class RouteConn:
+    async def fetchrow(self, sql, *args):
+        return {"project": "OTHER", "approval_request_id": None}
+
+
+def test_route_change_set_denies_cross_project_actor():
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(route_change_set(RouteConn(), tenant_id=TENANT, change_set_id=CHANGE, actor=actor()))
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "project_scope_denied"
+
 
 def test_t08_duplicate_approval_callback_is_idempotent():
     conn = DecisionConn(state="approved", requested_by=SESSION)
@@ -102,6 +122,14 @@ def test_t10_self_approval_is_rejected():
     assert exc.value.status_code == 403 and exc.value.detail["code"] == "self_approval_denied"
 
 
+def test_t10_a2_member_without_active_lead_assignment_is_rejected():
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(decide_change_set(DecisionConn(), tenant_id=TENANT, change_set_id=CHANGE,
+                                      actor=actor(), approve=True, reason=""))
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "project_lead_approval_required"
+
+
 def test_t06_t12_t13_t14_change_set_guards_are_present():
     for contract in ("approval_superseded", "execution_key_conflict", "owner_instance", "owner_epoch",
                      "approval_revoked"):
@@ -119,6 +147,9 @@ def test_t17_t20_t24_t30_t33_single_grant_atomic_budget_contract():
     assert "UNIQUE (tenant_id, execution_key)" in (ROOT / "migrations/20260919_goal_work_hierarchy_m12.sql").read_text()
     for budget in ("max_files", "max_rows", "max_cost_usd", "max_parallel", "max_duration_seconds"):
         assert budget in SERVICE
+    for budget_reason in ("max_files_exhausted", "max_rows_exhausted", "max_cost_usd_exhausted",
+                          "max_duration_seconds_exhausted"):
+        assert budget_reason in SERVICE
 
 
 def test_t21_t22_t23_t29_t32_revocation_and_staleness_contract():

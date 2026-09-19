@@ -96,13 +96,13 @@ async def create_change_set(
     row = await conn.fetchrow(
         """INSERT INTO work_item_change_sets
            (tenant_id,project,target_type,target_id,action,base_version,patch,patch_hash,
-            rationale,expected_effect,rollback_plan,risk_tier,state,idempotency_key,requested_by)
-           VALUES($1::uuid,$2,$3,$4::uuid,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,'pending',$13,$14::uuid)
+            rationale,expected_effect,rollback_plan,risk_tier,state,idempotency_key,requested_by,environment)
+           VALUES($1::uuid,$2,$3,$4::uuid,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,'pending',$13,$14::uuid,$15)
            RETURNING *""",
         tenant_id, item["project"], item["type"], target_id, payload.get("action", "update"),
         payload["base_version"], json.dumps(patch), patch_hash, payload["rationale"],
         payload["expected_effect"], payload["rollback_plan"], risk,
-        payload["idempotency_key"], actor.session_id,
+        payload["idempotency_key"], actor.session_id, payload.get("environment", "dev"),
     )
     correlation_id = str(uuid4())
     await append_event(
@@ -113,7 +113,9 @@ async def create_change_set(
     return _row_dict(row)
 
 
-async def route_change_set(conn: Any, *, tenant_id: str, change_set_id: str) -> dict[str, Any]:
+async def route_change_set(
+    conn: Any, *, tenant_id: str, change_set_id: str, actor: ActorScope,
+) -> dict[str, Any]:
     """Create exactly one legacy-compatible manual approval request."""
     row = await conn.fetchrow(
         """SELECT c.*, w.goal_id FROM work_item_change_sets c
@@ -123,6 +125,8 @@ async def route_change_set(conn: Any, *, tenant_id: str, change_set_id: str) -> 
     )
     if not row:
         raise _error(404, "change_set_not_found")
+    if not actor.may_access(str(row["project"])):
+        raise _error(403, "project_scope_denied")
     if row["approval_request_id"]:
         return {"change_set_id": change_set_id, "approval_request_id": str(row["approval_request_id"])}
     approval = await conn.fetchrow(
@@ -168,6 +172,18 @@ async def decide_change_set(
         return _row_dict(row)
     if row["state"] != "pending":
         raise _error(409, "approval_already_decided")
+    if row["risk_tier"] == "A3":
+        if actor.workspace_kind != "ceo_integrated" or actor.role_key.strip().lower() != "ceo":
+            raise _error(403, "ceo_approval_required")
+    elif row["risk_tier"] == "A2":
+        lead = await conn.fetchval(
+            """SELECT EXISTS(SELECT 1 FROM project_role_assignments
+                 WHERE tenant_id=$1::uuid AND project=$2 AND session_id=$3::uuid AND active
+                   AND lower(role_key) IN ('project_lead','project lead'))""",
+            tenant_id, row["project"], actor.session_id,
+        )
+        if not lead:
+            raise _error(403, "project_lead_approval_required")
     updated = await conn.fetchrow(
         """UPDATE work_item_change_sets SET state=$2,decided_by=$3::uuid,
            decided_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=$1::uuid RETURNING *""",
@@ -187,8 +203,10 @@ async def decide_change_set(
     return _row_dict(updated)
 
 
-async def approval_preview(conn: Any, *, tenant_id: str, item_id: str) -> dict[str, Any]:
+async def approval_preview(conn: Any, *, tenant_id: str, item_id: str, actor: ActorScope) -> dict[str, Any]:
     item = await _target(conn, tenant_id, item_id)
+    if not actor.may_access(str(item["project"])):
+        raise _error(403, "project_scope_denied")
     pending = await conn.fetchrow(
         """SELECT id::text,state,risk_tier,patch_hash,base_version,approval_request_id::text
            FROM work_item_change_sets WHERE tenant_id=$1::uuid AND target_id=$2::uuid
@@ -206,7 +224,7 @@ async def execute_change_set(
     """Validate immutable approval and enqueue one execution outbox event."""
     _require_enabled()
     row = await conn.fetchrow(
-        """SELECT c.*,w.version AS target_version,w.project AS target_project
+        """SELECT c.*,w.version AS target_version,w.project AS target_project,w.goal_id AS target_goal_id
            FROM work_item_change_sets c JOIN work_items w ON w.id=c.target_id
             AND w.tenant_id=c.tenant_id
            WHERE c.id=$1::uuid AND c.tenant_id=$2::uuid FOR UPDATE OF c,w""",
@@ -214,17 +232,29 @@ async def execute_change_set(
     )
     if not row:
         raise _error(404, "change_set_not_found")
+    if not actor.may_access(str(row["project"])) or str(row["target_project"]).upper() != str(row["project"]).upper():
+        raise _error(403, "project_scope_denied")
+    lease_owner = await conn.fetchval(
+        """SELECT EXISTS(SELECT 1 FROM chat_turn_executions
+             WHERE session_id=$1::uuid AND owner_instance=$2 AND owner_epoch=$3
+               AND status IN ('running','retrying') AND lease_expires_at > clock_timestamp())""",
+        actor.session_id, owner_instance, owner_epoch,
+    )
+    if not lease_owner:
+        raise _error(409, "execution_owner_lease_invalid")
     if row["execution_key"]:
         if row["execution_key"] != execution_key:
             raise _error(409, "execution_key_conflict")
         return _row_dict(row)
-    if row["state"] == "revoked":
+    if row["state"] in {"revoked", "expired", "superseded"}:
         raise _error(409, "approval_revoked")
     if row["state"] != "approved":
         raise _error(409, "approval_required")
     if int(row["base_version"]) != int(row["target_version"]):
         await conn.execute("UPDATE work_item_change_sets SET state='superseded' WHERE id=$1::uuid", change_set_id)
         raise _error(409, "approval_superseded")
+    if action_requires_mandatory_human(str(row["action"]), str(row.get("environment", "dev")), []):
+        raise _error(409, "mandatory_human_revalidation_required")
     if canonical_hash(row["patch"] if not isinstance(row["patch"], str) else json.loads(row["patch"])) != row["patch_hash"]:
         await append_event(
             conn, tenant_id=tenant_id, project=row["project"], aggregate_type="change_set",
@@ -232,6 +262,21 @@ async def execute_change_set(
             payload={"stored_patch_hash": row["patch_hash"]}, correlation_id=str(uuid4()),
         )
         raise _error(409, "patch_hash_mismatch")
+    reservation = await conn.fetchrow(
+        """SELECT g.status,g.project,g.goal_id::text,
+                  clock_timestamp() BETWEEN g.valid_from AND g.expires_at AS valid_now
+             FROM goal_auto_approval_uses u
+             JOIN goal_auto_approval_grants g ON g.id=u.grant_id AND g.tenant_id=u.tenant_id
+            WHERE u.tenant_id=$1::uuid AND u.target_id=$2::uuid AND u.target_version=$3
+              AND u.patch_hash IS NOT DISTINCT FROM $4 AND u.action=$5
+              AND u.status IN ('reserved','executing')
+            ORDER BY u.reserved_at DESC LIMIT 1 FOR KEY SHARE OF g""",
+        tenant_id, row["target_id"], row["base_version"], row["patch_hash"], row["action"],
+    )
+    if reservation and (reservation["status"] != "active" or not reservation["valid_now"]
+                        or str(reservation["project"]).upper() != str(row["target_project"]).upper()
+                        or str(reservation["goal_id"]) != str(row["target_goal_id"])):
+        raise _error(409, "grant_revalidation_failed")
     correlation_id = str(uuid4())
     await conn.execute(
         """UPDATE work_item_change_sets SET state='executing',execution_key=$1,
@@ -282,12 +327,34 @@ async def create_grant(
     if not preview["allowed"]:
         code = "self_grant_denied" if "self_grant" in preview["rejected_reasons"] else "mandatory_human"
         raise _error(403 if code == "self_grant_denied" else 422, code)
-    requester = str(payload.get("requested_by") or actor.session_id)
-    if str(payload["approved_by"]) in {str(payload["principal_session_id"]), requester}:
-        raise _error(403, "self_approval_denied")
+    requester = actor.session_id
     goal = await conn.fetchrow("SELECT project FROM goals WHERE id=$1::uuid AND tenant_id=$2::uuid", goal_id, tenant_id)
     if not goal or not actor.may_access(goal["project"]):
         raise _error(404, "goal_not_found")
+    if actor.workspace_kind != "ceo_integrated":
+        issuer_is_lead = await conn.fetchval(
+            """SELECT EXISTS(SELECT 1 FROM project_role_assignments
+                 WHERE tenant_id=$1::uuid AND project=$2 AND session_id=$3::uuid AND active
+                   AND lower(role_key) IN ('project_lead','project lead'))""",
+            tenant_id, goal["project"], actor.session_id,
+        )
+        if not issuer_is_lead:
+            raise _error(403, "project_lead_approval_required")
+    approval = await conn.fetchrow(
+        """SELECT decided_by::text,requested_by::text,approval_scope FROM agent_permission_requests
+             WHERE id=$1::uuid AND tenant_id=$2::uuid AND gate_source='goal_workflow'
+               AND decision='approved' FOR UPDATE""",
+        payload["approval_request_id"], tenant_id,
+    )
+    if not approval:
+        raise _error(409, "independent_approval_required")
+    scope_data = approval["approval_scope"]
+    if isinstance(scope_data, str):
+        scope_data = json.loads(scope_data)
+    approved_by = str(approval["decided_by"] or "")
+    if (not approved_by or approved_by in {requester, str(payload["principal_session_id"])}
+            or str(scope_data.get("project", "")).upper() != str(goal["project"]).upper()):
+        raise _error(403, "independent_approval_required")
     assignment = await conn.fetchrow(
         """SELECT * FROM project_role_assignments WHERE id=$1::uuid AND tenant_id=$2::uuid
            AND project=$3 AND session_id=$4::uuid AND active""",
@@ -344,7 +411,7 @@ async def create_grant(
         payload["expires_at"], payload.get("idle_timeout_seconds"), payload.get("delegation_depth", 0),
         payload.get("parent_grant_id"), policy["id"], canonical_hash(scope),
         payload.get("revocation_strategy", "cancel_now"), requester,
-        actor.session_id, payload["approved_by"],
+        actor.session_id, approved_by,
     )
     return _row_dict(row)
 
@@ -375,6 +442,17 @@ async def reserve_grant_use(
         reason.append("mandatory_human")
     if reason:
         return await _decision(conn, tenant_id, decision_id, "CEO_APPROVAL", None, reason, masked, simulate)
+    target = await conn.fetchrow(
+        """SELECT project,goal_id::text,version FROM work_items
+             WHERE id=$1::uuid AND tenant_id=$2::uuid""",
+        request["target_id"], tenant_id,
+    )
+    if (not target or str(target["project"]).upper() != str(request["project"]).upper()
+            or str(target["goal_id"]) != str(request["goal_id"])
+            or int(target["version"]) != int(request["target_version"])
+            or not actor.may_access(str(target["project"]))):
+        return await _decision(conn, tenant_id, decision_id, "PROJECT_APPROVAL", None,
+                               ["target_scope_or_version_mismatch"], masked, simulate)
     existing = await conn.fetchrow(
         "SELECT * FROM goal_auto_approval_uses WHERE tenant_id=$1::uuid AND execution_key=$2",
         tenant_id, request["execution_key"],
@@ -396,8 +474,6 @@ async def reserve_grant_use(
              AND ($7::uuid IS NULL OR g.milestone_id IS NULL OR g.milestone_id=$7::uuid)
              AND ($8::uuid IS NULL OR g.epic_id IS NULL OR g.epic_id=$8::uuid)
              AND ($9::uuid IS NULL OR g.story_id IS NULL OR g.story_id=$9::uuid)
-             AND g.max_files >= $10 AND g.max_rows >= $11 AND g.max_cost_usd >= $12
-             AND g.max_duration_seconds >= $13
              AND g.used_executions < g.max_executions
              AND (SELECT count(*) FROM goal_auto_approval_uses u
                    WHERE u.tenant_id=g.tenant_id AND u.grant_id=g.id
@@ -409,8 +485,7 @@ async def reserve_grant_use(
            ORDER BY cardinality(g.actions),g.expires_at FOR UPDATE OF g SKIP LOCKED LIMIT 1""",
         tenant_id, request["project"], actor.session_id, request["goal_id"], request["action"],
         request.get("environment", "dev"), request.get("milestone_id"), request.get("epic_id"),
-        request.get("story_id"), request.get("estimated_files", 0), request.get("estimated_rows", 0),
-        request.get("estimated_cost_usd", 0), request.get("estimated_duration_seconds", 0),
+        request.get("story_id"),
     )
     if not grant:
         return await _decision(conn, tenant_id, decision_id, "PROJECT_APPROVAL", None,
@@ -418,6 +493,33 @@ async def reserve_grant_use(
     if request.get("evidence_required") and not request.get("evidence_satisfied"):
         return await _decision(conn, tenant_id, decision_id, "PROJECT_APPROVAL", str(grant["id"]),
                                ["evidence_required"], masked, simulate)
+    # The locked grant serializes each reservation; accumulated reservations
+    # are checked before consumption so all bounded budgets remain atomic.
+    consumed = await conn.fetchrow(
+        """SELECT COALESCE(sum((budget_delta->>'files')::bigint),0) AS files,
+                  COALESCE(sum((budget_delta->>'rows')::bigint),0) AS rows,
+                  COALESCE(sum((budget_delta->>'cost_usd')::numeric),0) AS cost_usd,
+                  COALESCE(sum((budget_delta->>'duration_seconds')::bigint),0) AS duration_seconds
+             FROM goal_auto_approval_uses
+            WHERE tenant_id=$1::uuid AND grant_id=$2::uuid
+              AND status IN ('reserved','executing','completed','failed','manual_reconciliation')""",
+        tenant_id, grant["id"],
+    )
+    budget = {"files": int(request.get("estimated_files", 0)), "rows": int(request.get("estimated_rows", 0)),
+              "cost_usd": float(request.get("estimated_cost_usd", 0)),
+              "duration_seconds": int(request.get("estimated_duration_seconds", 0))}
+    exceeded = [
+        name for name, limit, used, delta in (
+            ("max_files_exhausted", int(grant["max_files"]), int(consumed["files"]), budget["files"]),
+            ("max_rows_exhausted", int(grant["max_rows"]), int(consumed["rows"]), budget["rows"]),
+            ("max_cost_usd_exhausted", float(grant["max_cost_usd"]), float(consumed["cost_usd"]), budget["cost_usd"]),
+            ("max_duration_seconds_exhausted", int(grant["max_duration_seconds"]),
+             int(consumed["duration_seconds"]), budget["duration_seconds"]),
+        ) if used + delta > limit
+    ]
+    if exceeded:
+        return await _decision(conn, tenant_id, decision_id, "PROJECT_APPROVAL", str(grant["id"]),
+                               exceeded, masked, simulate)
     remaining = int(grant["max_executions"]) - int(grant["used_executions"])
     if simulate or auto_approval_mode() == "audit":
         return await _decision(conn, tenant_id, decision_id, "AUTO", str(grant["id"]),
@@ -430,9 +532,6 @@ async def reserve_grant_use(
     if updated is None:
         return await _decision(conn, tenant_id, decision_id, "PROJECT_APPROVAL", None,
                                ["max_executions_exhausted"], masked, False)
-    budget = {"files": request.get("estimated_files", 0), "rows": request.get("estimated_rows", 0),
-              "cost_usd": request.get("estimated_cost_usd", 0),
-              "duration_seconds": request.get("estimated_duration_seconds", 0)}
     await conn.execute(
         """INSERT INTO goal_auto_approval_uses
            (tenant_id,decision_id,execution_key,grant_id,grant_version,input_hash,target_type,target_id,
@@ -501,19 +600,25 @@ async def revoke_grant(conn: Any, *, tenant_id: str, grant_id: str, actor: Actor
 
 
 async def submit_review(conn: Any, *, tenant_id: str, item_id: str, actor: ActorScope) -> dict[str, Any]:
-    await _target(conn, tenant_id, item_id)
+    item = await _target(conn, tenant_id, item_id)
+    if not actor.may_access(str(item["project"])):
+        raise _error(403, "project_scope_denied")
+    if item["status"] not in {"ready", "in_progress", "changes_requested"}:
+        raise _error(409, "invalid_review_transition")
     missing = await conn.fetchval(
         "SELECT NOT EXISTS(SELECT 1 FROM work_item_evidence WHERE work_item_id=$1::uuid AND tenant_id=$2::uuid)",
         item_id, tenant_id,
     )
     children_open = await conn.fetchval(
-        "SELECT EXISTS(SELECT 1 FROM work_items WHERE parent_id=$1::uuid AND status<>'completed')", item_id,
+        """SELECT EXISTS(SELECT 1 FROM work_items
+             WHERE parent_id=$1::uuid AND tenant_id=$2::uuid AND status<>'completed')""", item_id, tenant_id,
     )
     if missing or children_open:
         raise _error(422, "evidence_required")
     row = await conn.fetchrow(
-        "UPDATE work_items SET status='in_review',version=version+1,updated_at=clock_timestamp() WHERE id=$1::uuid RETURNING *",
-        item_id,
+        """UPDATE work_items SET status='in_review',version=version+1,updated_at=clock_timestamp()
+             WHERE id=$1::uuid AND tenant_id=$2::uuid AND status IN ('ready','in_progress','changes_requested')
+             RETURNING *""", item_id, tenant_id,
     )
     return _row_dict(row)
 
