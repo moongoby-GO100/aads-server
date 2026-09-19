@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 2026-09-19 18:35 KST — 목표 문서 최신 연결·버전 원장
+
+- `goal_documents`에 논리 문서 키, semantic version, 최신 포인터, 변경요약, 직전 버전 연결과 상태를 추가했다. `/vX.Y.Z/<파일>` 기존 문서는 파일명별 계보로 안전하게 백필하며 원본 경로는 보존한다.
+- `GET /api/v1/goals/{goal_id}/documents`와 목표 board는 최신본을 기본 반환하고 전체 `document_history`를 별도로 제공한다. POST는 계보별 advisory lock과 트랜잭션으로 이전 최신본을 `superseded` 처리한다.
+- 검증: 관련 Python 52건 통과, 격리 PostgreSQL에서 v1.0.0→v1.1.0 승격·유일 최신 인덱스·rollback·재실행 시 수동 선택 보존을 확인했다. 이 기록 시점에는 commit/push/deploy 전이다.
+- 롤백: 대시보드를 먼저 이전 이미지로 되돌린 뒤 API를 이전 이미지로 라우팅하고 `migrations/rollback/20260919_goal_document_versions.down.sql`을 적용한다. 원본 문서는 삭제되지 않는다.
+
 ## 2026-09-14 19:00 KST — #310 하네스 8인 완성 + 크로스 세션 가시성 복구 + 프롬프트 레이어 유실 수정
 
 ### 1. 운영인프라담당 추가 — 하네스 8명
