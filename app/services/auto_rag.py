@@ -247,7 +247,9 @@ async def _search_documents(
         # 벡터로 찾느니 안 찾는 편이 낫다.
         if query_emb is None:
             return []
-        rows = await search_docs(query_emb, top_k=_RAG_TOP_K, project=None)
+        rows = await search_docs(
+            query_emb, top_k=_RAG_TOP_K, project=project, query_text=query_text,
+        )
     except Exception as e:
         logger.debug("auto_rag_doc_search_failed", error=str(e))
         return []

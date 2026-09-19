@@ -1883,7 +1883,7 @@ async def changes_digest(
 @router.get("/project-docs/search")
 async def search_docs_semantic(
     q: str = Query(..., min_length=2, max_length=300, description="찾는 내용 (뜻으로 찾는다)"),
-    limit: int = Query(20, ge=1, le=50),
+    limit: int = Query(5, ge=1, le=50),
     project: Optional[str] = Query(None, description="프로젝트 한정 (AADS/GO100/KIS)"),
 ):
     """문서 **내용** 으로 찾는다 — 파일명이 아니라 뜻으로.
@@ -1924,7 +1924,9 @@ async def search_docs_semantic(
         logger.warning("doc_search_embed_failed", error=str(exc))
         raise HTTPException(status_code=503, detail="내용 검색 일시 불가") from exc
 
-    rows = await search_docs(query_vector, top_k=limit * 3, project=project)
+    rows = await search_docs(
+        query_vector, top_k=limit * 3, project=project, query_text=q,
+    )
 
     # 같은 문서의 여러 조각이 잡히면 가장 잘 맞는 것 하나만 남긴다.
     # 안 그러면 긴 문서 하나가 결과를 독점한다.

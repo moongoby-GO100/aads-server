@@ -12,8 +12,13 @@ contabo116 의 aads-server 에만 있기 때문이다 — 원격 서버에 LLM �
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import os
+import time
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import structlog
 
@@ -29,6 +34,116 @@ _SEARCH_MIN_SIMILARITY = float(os.getenv("DOC_SEARCH_MIN_SIMILARITY", "0.35"))
 # **짝이 맞아야 한다** — 근거와 실측은 그 파일 주석에 있다.
 DOC_PREFIX = "search_document: "
 QUERY_PREFIX = "search_query: "
+
+QWEN_MODEL_ID = "qwen3-embedding:0.6b"
+QWEN_DIMENSION = 1024
+QWEN_INSTRUCTION_VERSION = "qwen3-doc-v1"
+QWEN_DOCUMENT_INSTRUCTION = "Represent this English document for retrieval: "
+QWEN_QUERY_INSTRUCTION = "Represent this query for retrieving relevant English documents: "
+_QWEN_MODE = os.getenv("DOC_SEARCH_MODE", "shadow").strip().lower()
+_QWEN_CACHE_TTL = int(os.getenv("QWEN_QUERY_CACHE_TTL", "300"))
+_QWEN_CACHE_MAX = int(os.getenv("QWEN_QUERY_CACHE_MAX", "500"))
+_QWEN_TOP_N = int(os.getenv("QWEN_SEARCH_TOP_N", "30"))
+_QWEN_URL = os.getenv("QWEN_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+_query_cache: "OrderedDict[str, tuple[float, List[float]]]" = OrderedDict()
+_query_cache_lock = asyncio.Lock()
+
+
+def _require_loopback(url: str) -> None:
+    if urlparse(url).hostname not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError("QWEN_OLLAMA_URL must remain loopback-only")
+
+
+def normalize_query(text: str) -> str:
+    return " ".join(text.strip().split())[:500]
+
+
+def qwen_query_text(query: str) -> str:
+    """Keep the English retrieval instruction paired with the original Korean query."""
+    return QWEN_QUERY_INSTRUCTION + normalize_query(query)
+
+
+async def embed_qwen_query(query: str) -> List[float]:
+    """Embed a query through loopback Ollama with a bounded TTL/LRU cache."""
+    import httpx
+
+    _require_loopback(_QWEN_URL)
+    key_text = normalize_query(query)
+    key = f"{QWEN_MODEL_ID}|{QWEN_INSTRUCTION_VERSION}|{key_text}"
+    now = time.monotonic()
+    async with _query_cache_lock:
+        cached = _query_cache.get(key)
+        if cached and now - cached[0] <= _QWEN_CACHE_TTL:
+            _query_cache.move_to_end(key)
+            return list(cached[1])
+        if cached:
+            _query_cache.pop(key, None)
+    started = time.monotonic()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{_QWEN_URL}/api/embed",
+            json={"model": QWEN_MODEL_ID, "input": qwen_query_text(key_text)},
+        )
+        response.raise_for_status()
+        vectors = response.json().get("embeddings") or []
+    vector = vectors[0] if vectors else []
+    if len(vector) != QWEN_DIMENSION:
+        raise ValueError(f"qwen dimension mismatch: {len(vector)} != {QWEN_DIMENSION}")
+    async with _query_cache_lock:
+        _query_cache[key] = (now, list(vector))
+        _query_cache.move_to_end(key)
+        while len(_query_cache) > _QWEN_CACHE_MAX:
+            _query_cache.popitem(last=False)
+    logger.info("doc_qwen_query_embedding", latency_ms=round((time.monotonic()-started)*1000, 1))
+    return list(vector)
+
+
+async def search_docs_qwen3(
+    query_embedding: List[float], *, top_k: int = 5, project: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    if len(query_embedding) != QWEN_DIMENSION:
+        return []
+    from app.core.db_pool import get_pool
+    started = time.monotonic()
+    try:
+        rows = await get_pool().fetch(
+            """
+            SELECT d.doc_path, d.server, d.project, d.title, d.heading, d.content,
+                   1 - (q.embedding <=> $1::vector) AS similarity
+            FROM doc_chunk_embeddings_qwen3 q
+            JOIN doc_chunks d ON d.id = q.chunk_id
+            WHERE q.state = 'ready' AND q.embedding IS NOT NULL
+              AND q.model_id = $4 AND q.instruction_version = $5
+              AND ($3::text IS NULL OR d.project = $3::text)
+            ORDER BY q.embedding <=> $1::vector LIMIT $2
+            """,
+            str(query_embedding), min(max(1, top_k), _QWEN_TOP_N), project,
+            QWEN_MODEL_ID, QWEN_INSTRUCTION_VERSION,
+        )
+    except Exception as exc:
+        logger.warning("doc_qwen_search_failed", error=str(exc))
+        return []
+    logger.info("doc_qwen_search", results=len(rows), latency_ms=round((time.monotonic()-started)*1000, 1))
+    return [{"kind": "doc", **dict(r), "similarity": float(r["similarity"] or 0)} for r in rows]
+
+
+def reciprocal_rank_fusion(*rankings: List[Dict[str, Any]], top_k: int = 5) -> List[Dict[str, Any]]:
+    """Merge ranks, never raw scores from incompatible vector spaces."""
+    fused: Dict[tuple, Dict[str, Any]] = {}
+    for ranking in rankings:
+        for rank, item in enumerate(ranking, 1):
+            key = (item.get("doc_path"), item.get("heading"), item.get("content"))
+            entry = fused.setdefault(key, {**item, "rrf_score": 0.0})
+            entry["rrf_score"] += 1.0 / (60 + rank)
+    return sorted(fused.values(), key=lambda x: x["rrf_score"], reverse=True)[:top_k]
+
+
+def needs_translation_expansion(results: List[Dict[str, Any]], requested: int = 5) -> bool:
+    """Signal only; callers may attach a translator/reranker without a paid API here."""
+    if len(results) < requested:
+        return True
+    scores = [float(r.get("similarity", 0)) for r in results[:2]]
+    return not scores or scores[0] < 0.40 or (len(scores) > 1 and scores[0] - scores[1] < 0.015)
 
 
 async def embed_query(text: str) -> List[float]:
@@ -105,7 +220,7 @@ async def backfill_embeddings(limit: int = 0) -> int:
     return done
 
 
-async def search_docs(
+async def search_docs_legacy(
     query_embedding: List[float],
     *,
     top_k: int = 5,
@@ -151,6 +266,32 @@ async def search_docs(
             "content": r["content"],
         })
     return out
+
+
+async def search_docs(
+    query_embedding: List[float], *, top_k: int = 5,
+    project: Optional[str] = None, query_text: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Mode router with fail-safe legacy fallback and rank-only hybrid fusion."""
+    limit = max(1, top_k)
+    legacy = await search_docs_legacy(query_embedding, top_k=limit, project=project)
+    mode = _QWEN_MODE if _QWEN_MODE in {"legacy", "shadow", "qwen3", "hybrid"} else "shadow"
+    if mode == "legacy" or not query_text:
+        return legacy[:limit]
+    try:
+        qwen_vector = await embed_qwen_query(query_text)
+        qwen = await search_docs_qwen3(qwen_vector, top_k=limit, project=project)
+    except Exception as exc:
+        logger.warning("doc_qwen_fallback", mode=mode, error=str(exc))
+        return legacy[:limit]
+    if mode == "shadow":
+        logger.info("doc_qwen_shadow", legacy=len(legacy), qwen3=len(qwen))
+        return legacy[:limit]
+    if not qwen:
+        return legacy[:limit]
+    if mode == "qwen3":
+        return qwen[:limit]
+    return reciprocal_rank_fusion(legacy, qwen, top_k=limit)
 
 
 async def index_status() -> Dict[str, Any]:

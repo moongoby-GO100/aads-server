@@ -1,0 +1,20 @@
+[Unit]
+Description=AADS Qwen3 document embedding worker
+After=network-online.target ollama.service
+Wants=network-online.target
+ConditionHost=!contabo14
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/aads/aads-server
+EnvironmentFile=-/etc/aads/qwen3-embedding-worker.env
+ExecStart=/root/aads/aads-server/.venv/bin/python scripts/qwen3_embedding_worker.py
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+
