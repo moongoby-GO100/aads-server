@@ -43,7 +43,7 @@ _VOLATILE_FIELDS = frozenset({
 })
 _EVIDENCE_FIELDS = frozenset({
     "capture_id", "screenshot_id", "response_hash", "source_status", "selector",
-    "trace_id", "reason", "error_type", "provider_version",
+    "trace_id", "reason", "error_type", "provider_version", "object_evidence_refs",
 })
 
 
@@ -92,7 +92,13 @@ def normalize_source_url(value: str) -> str:
 
 
 def _evidence_metadata(value: Mapping[str, Any] | None) -> dict[str, Any]:
-    return {key: item for key, item in dict(value or {}).items() if key in _EVIDENCE_FIELDS}
+    evidence = {key: item for key, item in dict(value or {}).items() if key in _EVIDENCE_FIELDS}
+    refs = evidence.get("object_evidence_refs")
+    if refs is not None:
+        from app.services.site_knowledge import evidence_refs
+
+        evidence["object_evidence_refs"] = evidence_refs(refs if isinstance(refs, list) else [])
+    return evidence
 
 
 def _as_utc(value: Any) -> datetime | None:

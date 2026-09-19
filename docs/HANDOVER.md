@@ -1,5 +1,8 @@
 # AADS HANDOVER
-최종 업데이트: 2026-09-13
+최종 업데이트: 2026-09-19
+
+## 2026-09-19
+- AADS-SMARTBROWSER-M7-M11-RELEASE-20260919: 목표 `169e5328-244e-444d-95c8-d20377192671`의 M7~M11을 최신 `origin/main` 기준 격리 브랜치에서 통합했다. Site Profile/Page Template/Site Skill/Semantic Memory/Live Observation 정본, 최초 ARIA 부분구조 candidate 학습과 재방문 판정, Exact→Qwen3 vector→제한 LLM allowlist 스킬 선택, 실행 전 Channel Router 재검증, 표시 직전 Live Fact 재검증을 API로 연결했다. 원시 DOM·페이지 명령·credential·주민등록번호·카드번호 저장은 차단하며 새 학습 버전은 G6 승격 전 active가 되지 않는다. 문서 정본은 `docs/reports/20260919_SMART_BROWSER_IMPLEMENTATION_REPORT.md` v1.0.0이다. 격리 PostgreSQL migration/lifecycle 검증과 Books to Scrape Playwright E2E(HTTP 200, 상품 20개, 동적 가격 변경 구조 재사용 1.0, 페이지 명령 차단, 핵심 앵커 제거 Human Gateway)를 통과했다. 최종 커밋·푸시·blue/green·동일 digest·5분 감시는 릴리스 실행 결과와 DB 핸드오버 정본에 기록한다.
 
 ## 2026-09-13
 - AADS-REVIEW-GATE-FP-20260913: 09:54 KST CEO 지시(`진행해`)에 따라 `app/services/code_reviewer.py`의 `_DELETED_SYMBOL_RE` 보존 게이트 오탐을 직접 수정했다. 기존 `^-\s*(...)\s+` 패턴의 `\s`가 개행까지 소비해, 삭제된 상수 블록과 후행 빈 줄(`-`) 다음에 오는 **변경되지 않은 context 선언**을 삭제 심볼로 검출했다. 재현 사례는 `scripts/go100/recalculate_confidence.py`에서 `DB_CONFIG`와 빈 줄만 삭제했는데 다음 context 줄의 `def get_indicators_from_params(...)`가 삭제로 잡혀 `PRESERVATION_HARD_GATE` FLAG/0.3으로 차단된 건이다. 선언 앞·내부 공백을 `[ \t]`로 제한해 수평 공백만 매칭하도록 바꿨고, 변수명·`re.MULTILINE`·캡처 그룹·`_removed_preservation_symbols()` 호출부·additions 재합성 경로·임계값/점수/판정 매핑은 모두 유지했다(삭제 0). `tests/unit/test_code_reviewer_flag_classification.py`에 오탐 회귀 2건과 실제 삭제 검출 회귀 4건(public def·class·들여쓴 async def·`@router`)을 추가했다. 검증: 대상 테스트 `26 passed`, `tests/unit/test_tools_and_pipeline.py` `81 passed / 9 failed`(전량 환경 결함 — `JWT_SECRET_KEY` 미설정 7건, `host.docker.internal` DNS 2건, 변경 범위 무관), `git diff --check` 통과. 이 수정은 worktree가 소실되어 커밋되지 못한 `runner-799fd648`(awaiting_approval, 리뷰 인프라 장애로 4회 재시도 실패) 산출물을 대체한다.

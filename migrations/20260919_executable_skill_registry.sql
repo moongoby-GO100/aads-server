@@ -5,9 +5,9 @@ ALTER TABLE ops_skill_library
 CREATE INDEX IF NOT EXISTS idx_ops_skill_library_tenant_slug
     ON ops_skill_library (tenant_id, slug);
 
--- Migration 158 used a global slug key. Tenant ownership requires the same
--- canonical Site Skill slug to be independently registrable in two tenants.
-ALTER TABLE ops_skill_library DROP CONSTRAINT IF EXISTS ops_skill_library_slug_key;
+-- Migration 158 used a global slug key. Keep that stricter legacy invariant:
+-- production release assets are additive and never drop constraints.  The
+-- tenant-scoped index below is the runtime lookup/idempotency contract.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ops_skill_library_tenant_slug_unique
     ON ops_skill_library (tenant_id, slug);
 
