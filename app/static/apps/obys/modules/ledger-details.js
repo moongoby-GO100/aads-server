@@ -63,8 +63,10 @@
     loading: false,
     error: "",
     uploadFile: null,
+    uploadPreview: null,
     uploadBusy: false,
-    uploadMessage: ""
+    uploadMessage: "",
+    journals: []
   };
 
   function escapeHtml(value) {
@@ -215,7 +217,7 @@
       <div class="ledger-table-wrap"><table class="ledger-table"><thead><tr>${headers(kind).map(label => `<th>${escapeHtml(label)}</th>`).join("")}<th>작업</th></tr></thead>
       <tbody>${rows.map((row, index) => {
         const mutable = rowSource(row) === "manual";
-        return `<tr data-detail-index="${index}">${rowCells(row, kind).map(value => `<td>${escapeHtml(value)}</td>`).join("")}<td class="ledger-row-actions"><button type="button" data-ledger-detail="${index}">상세</button>${mutable ? `<button type="button" data-ledger-edit="${index}">수정</button>` : ""}</td></tr>`;
+        return `<tr data-detail-index="${index}">${rowCells(row, kind).map(value => `<td>${escapeHtml(value)}</td>`).join("")}<td class="ledger-row-actions"><button type="button" data-ledger-detail="${index}">상세</button><button type="button" data-journal-create="${index}">전표 만들기</button>${mutable ? `<button type="button" data-ledger-edit="${index}">수정</button>` : ""}</td></tr>`;
       }).join("")}</tbody></table></div></div>`;
   }
 
@@ -266,7 +268,8 @@
           <h3>현재 등록 대상</h3>
           <dl><div><dt>사업자</dt><dd>${escapeHtml(selectedBusinessName())}</dd></div><div><dt>원장</dt><dd>${escapeHtml(meta.title)}</dd></div><div><dt>필수 열</dt><dd>${meta.columns.slice(0, 2).map(escapeHtml).join(", ")}</dd></div></dl>
           <p><b>권장 열:</b> ${meta.columns.map(escapeHtml).join(" · ")}</p>
-          <button type="button" class="primary" data-ledger-upload ${!file || state.uploadBusy ? "disabled" : ""}>${state.uploadBusy ? "서버에 반영 중…" : "선택한 파일 등록"}</button>
+          ${state.uploadPreview ? `<div class="ledger-preview"><b>등록 전 검증</b><span>정상 ${Number(state.uploadPreview.accepted_rows || 0)} · 중복 예상 ${Number(state.uploadPreview.duplicate_rows || 0)} · 오류 ${Number(state.uploadPreview.rejected_rows || 0)}</span><div class="ledger-preview-table"><table><thead><tr><th>일자</th><th>금액</th><th>거래처</th><th>적요</th></tr></thead><tbody>${(state.uploadPreview.preview_rows || []).map(row => `<tr><td>${escapeHtml(row.occurred_on)}</td><td>${money(row.amount)}</td><td>${escapeHtml(row.counterparty)}</td><td>${escapeHtml(row.description)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
+          <button type="button" class="primary" data-ledger-upload ${!file || state.uploadBusy ? "disabled" : ""}>${state.uploadBusy ? "처리 중…" : state.uploadPreview ? "검증 결과 확인 후 최종 반영" : "등록 전 검증"}</button>
           <div class="ledger-upload-message${messageClass}" aria-live="polite">${escapeHtml(state.uploadMessage || "파일 선택 후 사업자와 원장 구분을 확인하십시오.")}</div>
         </div>
       </div>
@@ -295,6 +298,8 @@
         </div>
         <div data-ledger-kpis>${kpiHtml(meta)}</div>
         <div data-ledger-content>${contentHtml(meta.kind)}</div>
+        <section class="ledger-journal-panel"><div class="ledger-history-head"><div><h2>전표 검토함</h2><p>자동분개는 검토 필요 상태로 시작하며 ACCT에는 아직 전송되지 않습니다.</p></div><span>${state.journals.length}건</span></div>
+          <div class="ledger-upload-history">${state.journals.length ? state.journals.map((item, index) => `<article class="ledger-upload-item"><div class="ledger-file-icon">전표</div><div class="ledger-upload-copy"><b>${escapeHtml(item.voucher_no)}</b><span>${escapeHtml(item.transaction_date)} · ${escapeHtml(item.description || "적요 없음")}</span><small>차변/대변 ${money(item.total_amount)} · 외부 전송 안 됨</small></div><span class="ledger-upload-status ${escapeHtml(item.status)}">${escapeHtml({draft:"초안",needs_review:"검토 필요",approved:"승인",posted:"확정",reversed:"역분개 완료"}[item.status] || item.status)}</span><div class="ledger-upload-actions"><button type="button" data-journal-review="${index}">전표 검토</button>${item.status === "approved" ? `<button type="button" data-journal-action="post" data-journal-index="${index}">확정</button>` : ""}${item.status === "posted" ? `<button type="button" class="ledger-danger" data-journal-action="reverse" data-journal-index="${index}">취소·역분개</button>` : ""}</div></article>`).join("") : `<div class="ledger-upload-empty">생성된 전표가 없습니다. 원장 행에서 “전표 만들기”를 선택하십시오.</div>`}</div></section>
         ${uploadHtml(meta)}
       </div>`;
     bindRoot(root);
@@ -359,6 +364,12 @@
       event.stopPropagation();
       openForm(rows[Number(button.dataset.ledgerEdit)]);
     }));
+    root.querySelectorAll("[data-journal-create]").forEach(button => button.addEventListener("click", event => {
+      event.stopPropagation();
+      createJournal(rows[Number(button.dataset.journalCreate)]);
+    }));
+    root.querySelectorAll("[data-journal-review]").forEach(button => button.addEventListener("click", () => openJournal(state.journals[Number(button.dataset.journalReview)])));
+    root.querySelectorAll("[data-journal-action]").forEach(button => button.addEventListener("click", () => journalAction(state.journals[Number(button.dataset.journalIndex)], button.dataset.journalAction)));
     root.querySelectorAll("tr[data-detail-index]").forEach(row => row.addEventListener("click", () => openDetail(rows[Number(row.dataset.detailIndex)])));
     root.querySelectorAll("[data-upload-download]").forEach(button => button.addEventListener("click", () => downloadUpload(button.dataset.uploadDownload)));
     root.querySelectorAll("[data-upload-delete]").forEach(button => button.addEventListener("click", () => deleteUpload(button.dataset.uploadDelete)));
@@ -366,6 +377,7 @@
 
   function chooseFile(file) {
     state.uploadMessage = "";
+    state.uploadPreview = null;
     if (!file) {
       state.uploadFile = null;
       render();
@@ -423,28 +435,32 @@
       const scope = `business_id=${encodeURIComponent(state.businessId)}`;
       const uploadCategory = encodeURIComponent(meta.upload);
       if (meta.kind === "sales" || meta.kind === "purchase") {
-        const [manual, uploaded, uploads] = await Promise.all([
+        const [manual, uploaded, uploads, journals] = await Promise.all([
           request(`/ledger-entries?${scope}&category=${meta.kind}${dateQuery()}`),
           request(`/uploaded-ledger?${scope}&category=${uploadCategory}&limit=500`),
-          request(`/uploads?${scope}&category=${uploadCategory}`)
+          request(`/uploads?${scope}&category=${uploadCategory}`), request(`/journals?${scope}`)
         ]);
         state.rows = [...(manual.entries || []), ...(uploaded.rows || []).map(normalizeUploaded)];
         state.uploads = uploads.uploads || [];
+        state.journals = journals.journals || [];
       } else if (meta.kind === "card") {
-        const [manual, uploads] = await Promise.all([
+        const [manual, uploaded, uploads, journals] = await Promise.all([
           request(`/card-transactions?${scope}${dateQuery()}`),
-          request(`/card-uploads?${scope}`)
+          request(`/uploaded-ledger?${scope}&category=card&limit=500`),
+          request(`/uploads?${scope}&category=card`), request(`/journals?${scope}`)
         ]);
-        state.rows = manual.card_transactions || [];
+        state.rows = [...(manual.card_transactions || []), ...(uploaded.rows || []).map(normalizeUploaded)];
         state.uploads = uploads.uploads || [];
+        state.journals = journals.journals || [];
       } else {
-        const [bank, uploaded, uploads] = await Promise.all([
+        const [bank, uploaded, uploads, journals] = await Promise.all([
           request(`/ledger-bank-transactions?${scope}${dateQuery()}`),
           request(`/uploaded-ledger?${scope}&category=transaction&limit=500`),
-          request(`/uploads?${scope}&category=transaction`)
+          request(`/uploads?${scope}&category=transaction`), request(`/journals?${scope}`)
         ]);
         state.rows = [...(bank.bank_transactions || []), ...(uploaded.rows || []).map(normalizeUploaded)];
         state.uploads = uploads.uploads || [];
+        state.journals = journals.journals || [];
       }
       state.rows.sort((a, b) => rowDate(b).localeCompare(rowDate(a)));
     } catch (error) {
@@ -612,16 +628,22 @@
     const file = state.uploadFile;
     if (!file || !state.businessId || state.uploadBusy) return;
     state.uploadBusy = true;
-    state.uploadMessage = "파일을 안전하게 전송하고 원장 행을 확인하고 있습니다.";
+    state.uploadMessage = state.uploadPreview ? "확인한 파일을 원장에 반영하고 있습니다." : "파일을 저장하지 않고 열과 행 오류를 검증하고 있습니다.";
     render();
     const form = new FormData();
     form.append("business_id", state.businessId);
-    if (views[state.view].kind !== "card") form.append("category", views[state.view].upload);
+    form.append("category", views[state.view].upload);
     form.append("file", file);
     try {
-      const base = views[state.view].kind === "card" ? "/card-uploads" : "/uploads";
-      const payload = await request(base, { method: "POST", body: form });
+      if (!state.uploadPreview) {
+        state.uploadPreview = await request("/uploads/preview", { method: "POST", body: form });
+        state.uploadMessage = `검증 완료: 상위 ${Math.min(20, Number(state.uploadPreview.accepted_rows || 0))}행을 확인하고 최종 반영하십시오.`;
+        return;
+      }
+      form.append("confirmed_sha256", state.uploadPreview.sha256);
+      const payload = await request("/uploads/commit", { method: "POST", body: form });
       state.uploadFile = null;
+      state.uploadPreview = null;
       state.uploadMessage = payload.status === "duplicate"
         ? "동일한 파일이 이미 등록되어 중복 반영하지 않았습니다."
         : payload.status === "pending_review"
@@ -636,9 +658,63 @@
     }
   }
 
+  function journalSource(row) {
+    if (row.upload_id) return "uploaded_ledger_row";
+    const kind = views[state.view].kind;
+    if (kind === "card") return "card_transaction";
+    if (kind === "bank") return "bank_transaction";
+    return "manual_ledger_entry";
+  }
+
+  async function createJournal(row) {
+    if (!row?.id || !window.confirm("이 원장 행으로 균형 전표 초안을 생성하시겠습니까?")) return;
+    try {
+      const payload = await request("/journals", { method: "POST", body: JSON.stringify({ business_id: state.businessId, source_type: journalSource(row), source_id: row.id }) });
+      window.alert(payload.journal?.idempotent ? "이미 연결된 전표를 열었습니다." : "검토 필요 전표를 생성했습니다. 계정과목을 확인한 뒤 확정하십시오.");
+      await load();
+    } catch (error) {
+      window.alert(recovery(error));
+    }
+  }
+
+  function journalLines(item) {
+    if (Array.isArray(item?.lines)) return item.lines;
+    try { return JSON.parse(item?.lines || "[]"); } catch (_) { return []; }
+  }
+
+  function openJournal(item) {
+    if (!item) return;
+    const editable = ["draft", "needs_review"].includes(item.status);
+    const lines = journalLines(item);
+    const panel = drawer(`<div class="ledger-drawer-head"><div><span class="ledger-eyebrow">JOURNAL VOUCHER</span><h3>${escapeHtml(item.voucher_no)}</h3></div><button type="button" data-drawer-close>닫기</button></div>
+      <p class="ledger-source">상태: ${escapeHtml(item.status)} · ACCT 외부 전송 안 됨</p>
+      <form class="ledger-form" data-journal-form><label class="wide">적요<input name="description" value="${escapeHtml(item.description || "")}" ${editable ? "" : "disabled"}></label>
+      ${lines.map((line, index) => `<fieldset class="wide ledger-journal-line"><legend>${index + 1}번 ${line.side === "debit" ? "차변" : "대변"}</legend><input type="hidden" name="side_${index}" value="${escapeHtml(line.side)}"><label>계정코드<input name="code_${index}" value="${escapeHtml(line.account_code)}" required ${editable ? "" : "disabled"}></label><label>계정과목<input name="name_${index}" value="${escapeHtml(line.account_name)}" required ${editable ? "" : "disabled"}></label><label>금액<input name="amount_${index}" type="number" min="0.01" step="0.01" value="${escapeHtml(line.amount)}" required ${editable ? "" : "disabled"}></label><label>부가세 코드<input name="tax_${index}" value="${escapeHtml(line.tax_code || "")}" ${editable ? "" : "disabled"}></label></fieldset>`).join("")}
+      <div class="ledger-form-actions"><button type="button" data-drawer-close>닫기</button>${editable ? `<button type="submit">보정 저장</button><button type="button" class="primary" data-journal-approve>승인</button>` : ""}</div></form><p class="ledger-form-error hidden" data-form-error></p>`);
+    panel.querySelector("[data-journal-form]")?.addEventListener("submit", async event => {
+      event.preventDefault();
+      const data = new FormData(event.currentTarget);
+      const payload = { description: data.get("description"), lines: lines.map((_, index) => ({ side: data.get(`side_${index}`), account_code: data.get(`code_${index}`), account_name: data.get(`name_${index}`), amount: data.get(`amount_${index}`), tax_code: data.get(`tax_${index}`) })) };
+      try { await request(`/journals/${encodeURIComponent(item.id)}`, { method: "PUT", body: JSON.stringify(payload) }); closeDrawer(); await load(); }
+      catch (error) { const note = panel.querySelector("[data-form-error]"); note.textContent = recovery(error); note.classList.remove("hidden"); }
+    });
+    panel.querySelector("[data-journal-approve]")?.addEventListener("click", () => journalAction(item, "approve"));
+  }
+
+  async function journalAction(item, action) {
+    if (!item) return;
+    const label = action === "reverse" ? "취소하고 역분개" : action === "post" ? "확정" : "승인";
+    if (!window.confirm(`이 전표를 ${label}하시겠습니까?`)) return;
+    try {
+      if (action === "reverse") await request(`/journals/${encodeURIComponent(item.id)}/reverse`, { method: "POST" });
+      else await request(`/journals/${encodeURIComponent(item.id)}/transition`, { method: "POST", body: JSON.stringify({ action }) });
+      closeDrawer(); await load();
+    } catch (error) { window.alert(recovery(error)); }
+  }
+
   async function downloadUpload(uploadId) {
     try {
-      const base = views[state.view].kind === "card" ? "/card-uploads" : "/uploads";
+      const base = "/uploads";
       const response = await fetch(`${API}${base}/${encodeURIComponent(uploadId)}/download`, {
         headers: token() ? { Authorization: `Bearer ${token()}` } : {}
       });
@@ -663,7 +739,7 @@
   async function deleteUpload(uploadId) {
     if (!window.confirm("이 파일과 파일에서 반영된 원장 행을 삭제하시겠습니까?")) return;
     try {
-      const base = views[state.view].kind === "card" ? "/card-uploads" : "/uploads";
+      const base = "/uploads";
       await request(`${base}/${encodeURIComponent(uploadId)}`, { method: "DELETE" });
       state.uploadMessage = "파일을 삭제했습니다. 같은 파일을 다시 등록할 수 있습니다.";
       await load();

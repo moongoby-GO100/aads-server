@@ -81,6 +81,29 @@ def test_csv_and_xlsx_canonical_rows():
     assert service._canonical("purchase", xlsx_rows)[0][0]["counterparty"] == "상점"
 
 
+@pytest.mark.parametrize("category", ["sales", "purchase", "transaction", "card"])
+def test_preview_supports_all_ledger_categories_without_io(monkeypatch, category):
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("preview must not connect or write")
+    monkeypatch.setattr(service, "_connect", forbidden)
+    result = service.preview_upload(
+        category=category, filename="ledger.csv", content_type="text/csv",
+        data="일자,금액,거래처,적요\n2026-09-20,12000,상점,테스트".encode(),
+    )
+    assert result["accepted_rows"] == 1
+    assert result["preview_rows"][0]["amount"] == "12000"
+    assert result["requires_confirmation"] is True
+    assert len(result["source_hashes"]) == 1
+
+
+def test_preview_reports_invalid_rows_and_limits_preview_to_twenty():
+    rows = ["일자,금액,거래처"] + [f"2026-09-{day:02d},{day},상점" for day in range(1, 22)] + ["bad,bad,오류"]
+    result = service.preview_upload(category="card", filename="card.csv", content_type="text/csv", data="\n".join(rows).encode())
+    assert result["accepted_rows"] == 21
+    assert len(result["preview_rows"]) == 20
+    assert result["rejected_rows"] == 1
+
+
 def test_empty_ledger_rows_rejected():
     with pytest.raises(HTTPException) as exc:
         service._raw_rows(".csv", b"date,amount\n")

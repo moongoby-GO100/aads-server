@@ -1,0 +1,1013 @@
+diff --git a/app/api/obys_finance.py b/app/api/obys_finance.py
+index c5ce2603..1cec76f9 100644
+--- a/app/api/obys_finance.py
++++ b/app/api/obys_finance.py
+@@ -1,6 +1,7 @@
+ """API routes for the Yeoljeong store assistant app."""
+ from __future__ import annotations
+ 
++import hashlib
+ import logging
+ import threading
+ from decimal import Decimal
+@@ -111,6 +112,34 @@ class ManualBankTransactionUpdatePayload(BaseModel):
+     account_label: str | None = Field(default=None, max_length=100)
+ 
+ 
++class JournalSourcePayload(BaseModel):
++    model_config = {"extra": "forbid"}
++    business_id: str = Field(min_length=3, max_length=64)
++    source_type: str = Field(pattern=r"^(uploaded_ledger_row|manual_ledger_entry|card_transaction|bank_transaction)$")
++    source_id: UUID
++
++
++class JournalLinePayload(BaseModel):
++    model_config = {"extra": "forbid"}
++    side: str = Field(pattern=r"^(debit|credit)$")
++    account_code: str = Field(min_length=1, max_length=40)
++    account_name: str = Field(min_length=1, max_length=120)
++    amount: Decimal = Field(gt=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
++    tax_code: str = Field(default="", max_length=40)
++    memo: str = Field(default="", max_length=500)
++
++
++class JournalUpdatePayload(BaseModel):
++    model_config = {"extra": "forbid"}
++    description: str = Field(default="", max_length=500)
++    lines: list[JournalLinePayload] = Field(min_length=2, max_length=100)
++
++
++class JournalTransitionPayload(BaseModel):
++    model_config = {"extra": "forbid"}
++    action: str = Field(pattern=r"^(approve|post)$")
++
++
+ class TenantBusinessPayload(BaseModel):
+     model_config = {"extra": "forbid"}
+     id: str = ""
+@@ -801,6 +830,47 @@ async def upload_ledger_file(
+     return await upload_svc.create_upload(user=current_user, business_id=business_id, category=category, filename=file.filename or "upload.bin", content_type=file.content_type or "application/octet-stream", data=data)
+ 
+ 
++@router.post("/uploads/preview")
++async def preview_ledger_file(
++    business_id: str = Form(...),
++    category: str = Form(...),
++    file: UploadFile = File(...),
++    current_user: dict = Depends(get_current_user),
++) -> dict[str, Any]:
++    # Business scope is checked without persisting the file or parsed rows.
++    data = await _read_limited_upload(file)
++    preview = upload_svc.preview_upload(category=category, filename=file.filename or "upload.bin", content_type=file.content_type or "application/octet-stream", data=data)
++    tenant_id = upload_svc._tenant(current_user)
++    conn = await upload_svc._connect()
++    try:
++        await upload_svc._require_business(conn, tenant_id, business_id)
++        existing = await conn.fetchval(
++            "SELECT COUNT(*) FROM yeoljeong_uploaded_ledger_rows WHERE tenant_id=$1 AND business_id=$2 AND category=$3 AND source_hash=ANY($4::text[])",
++            tenant_id, business_id, category, preview.pop("source_hashes"),
++        )
++    finally:
++        await conn.close()
++    preview["duplicate_rows"] += int(existing or 0)
++    return preview
++
++
++@router.post("/uploads/commit", status_code=201)
++async def commit_ledger_file(
++    business_id: str = Form(...),
++    category: str = Form(...),
++    confirmed_sha256: str = Form(...),
++    file: UploadFile = File(...),
++    current_user: dict = Depends(get_current_user),
++) -> dict[str, Any]:
++    data = await _read_limited_upload(file)
++    if hashlib.sha256(data).hexdigest() != confirmed_sha256:
++        raise HTTPException(status_code=409, detail="미리보기 이후 파일이 변경되었습니다. 다시 검증하십시오")
++    return await upload_svc.create_upload(
++        user=current_user, business_id=business_id, category=category,
++        filename=file.filename or "upload.bin", content_type=file.content_type or "application/octet-stream", data=data,
++    )
++
++
+ @router.get("/uploads")
+ async def list_ledger_uploads(
+     business_id: str,
+@@ -975,6 +1045,32 @@ async def delete_ledger_upload(upload_id: UUID, current_user: dict = Depends(get
+     return {"ok": True}
+ 
+ 
++@router.get("/journals")
++async def list_journal_vouchers(business_id: str, status: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
++    rows = await upload_svc.list_journals(user=current_user, business_id=business_id, status=status)
++    return {"journals": rows, "count": len(rows), "integration": {"acct": "not_connected", "export_status": "not_exported"}}
++
++
++@router.post("/journals", status_code=201)
++async def create_journal_voucher(payload: JournalSourcePayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
++    return {"journal": await upload_svc.create_journal(user=current_user, **payload.model_dump())}
++
++
++@router.put("/journals/{voucher_id}")
++async def update_journal_voucher(voucher_id: UUID, payload: JournalUpdatePayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
++    return {"journal": await upload_svc.update_journal(user=current_user, voucher_id=voucher_id, payload=payload.model_dump())}
++
++
++@router.post("/journals/{voucher_id}/transition")
++async def transition_journal_voucher(voucher_id: UUID, payload: JournalTransitionPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
++    return {"journal": await upload_svc.transition_journal(user=current_user, voucher_id=voucher_id, action=payload.action)}
++
++
++@router.post("/journals/{voucher_id}/reverse", status_code=201)
++async def reverse_journal_voucher(voucher_id: UUID, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
++    return {"journal": await upload_svc.reverse_journal(user=current_user, voucher_id=voucher_id)}
++
++
+ @router.get("/reviews")
+ async def list_reviews(business_id: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+     return {"reviews": await run_in_threadpool(svc.list_reviews, current_user, business_id)}
+diff --git a/app/services/obys_upload_service.py b/app/services/obys_upload_service.py
+index de422959..b67a9e7a 100644
+--- a/app/services/obys_upload_service.py
++++ b/app/services/obys_upload_service.py
+@@ -27,6 +27,7 @@ CATEGORY_EXTENSIONS = {
+     "transaction": {".csv", ".xlsx"},
+     "card": {".csv", ".xlsx", ".pdf"},
+ }
++LEDGER_CATEGORIES = frozenset({"sales", "purchase", "transaction", "card"})
+ GENERIC_LEDGER_CATEGORIES = frozenset({"sales", "purchase", "transaction"})
+ MIME_BY_EXTENSION = {
+     ".csv": {"text/csv", "application/csv", "text/plain", "application/vnd.ms-excel"},
+@@ -199,6 +200,39 @@ def _canonical(category: str, rows: list[dict[str, Any]]) -> tuple[list[dict[str
+     return accepted, rejected
+ 
+ 
++def preview_upload(*, category: str, filename: str, content_type: str, data: bytes) -> dict[str, Any]:
++    """Validate and parse an upload without filesystem or database writes."""
++    original, ext = _validate_file(category, filename, content_type, data)
++    if ext not in {".csv", ".xlsx"}:
++        raise HTTPException(status_code=415, detail="원장 미리보기는 .xlsx 또는 .csv만 지원합니다")
++    raw = _raw_rows(ext, data)
++    accepted, rejected = _canonical(category, raw)
++    accepted_hashes = {row["source_hash"] for row in accepted}
++    duplicate_rows = len(accepted) - len(accepted_hashes)
++    columns = [str(key) for key in raw[0].keys()]
++    return {
++        "filename": original,
++        "category": category,
++        "byte_size": len(data),
++        "sha256": hashlib.sha256(data).hexdigest(),
++        "columns": columns,
++        "mapping": {
++            "occurred_on": next((name for name in columns if _value({name: name}, "date", "거래일자", "매출일자", "일자")), ""),
++            "amount": next((name for name in columns if _value({name: name}, "amount", "금액", "매출액", "결제금액", "입금액", "출금액")), ""),
++        },
++        "preview_rows": [
++            {"occurred_on": row["occurred_on"].isoformat(), "amount": str(row["amount"]),
++             "counterparty": row["counterparty"], "description": row["description"]}
++            for row in accepted[:20]
++        ],
++        "accepted_rows": len(accepted),
++        "duplicate_rows": duplicate_rows,
++        "rejected_rows": rejected,
++        "requires_confirmation": True,
++        "source_hashes": list(accepted_hashes),
++    }
++
++
+ async def _connect():
+     import asyncpg
+ 
+@@ -264,8 +298,8 @@ async def update_business(*, user: dict[str, Any], business_id: str, payload: di
+ 
+ async def create_upload(*, user: dict[str, Any], business_id: str, category: str, filename: str, content_type: str, data: bytes) -> dict[str, Any]:
+     _require_write(user)
+-    if category not in GENERIC_LEDGER_CATEGORIES:
+-        raise HTTPException(status_code=400, detail="공용 원장 업로드 구분이 아닙니다")
++    if category not in LEDGER_CATEGORIES:
++        raise HTTPException(status_code=400, detail="지원하지 않는 원장 업로드 구분입니다")
+     tenant_id = _tenant(user)
+     original, ext = _validate_file(category, filename, content_type, data)
+     parsed, rejected = ([], 0) if ext in {".pdf", ".jpg", ".jpeg", ".png"} else _canonical(category, _raw_rows(ext, data))
+@@ -314,7 +348,7 @@ async def list_uploads(*, user: dict[str, Any], business_id: str, category: str
+ 
+ async def list_ledger_rows(*, user: dict[str, Any], business_id: str, category: str, limit: int = 500) -> list[dict[str, Any]]:
+     tenant_id = _tenant(user)
+-    if category not in GENERIC_LEDGER_CATEGORIES:
++    if category not in LEDGER_CATEGORIES:
+         raise HTTPException(status_code=400, detail="지원하지 않는 원장 구분입니다")
+     conn = await _connect()
+     try:
+@@ -744,3 +778,222 @@ async def delete_bank_transaction(*, user: dict[str, Any], transaction_id: UUID)
+             raise HTTPException(status_code=404, detail="삭제 가능한 은행 거래를 찾을 수 없습니다")
+     finally:
+         await conn.close()
++
++
++JOURNAL_SOURCES = {
++    "uploaded_ledger_row": ("yeoljeong_uploaded_ledger_rows", "occurred_on", "amount", "description", ""),
++    "manual_ledger_entry": ("yeoljeong_manual_ledger_entries", "occurred_on", "total_amount", "description", "AND deleted_at IS NULL"),
++    "card_transaction": ("yeoljeong_card_transactions", "occurred_at", "total_amount", "description", "AND deleted_at IS NULL"),
++    "bank_transaction": ("yeoljeong_manual_bank_transactions", "occurred_at", "amount", "memo", "AND deleted_at IS NULL"),
++}
++JOURNAL_STATUSES = frozenset({"draft", "needs_review", "approved", "posted", "reversed"})
++
++
++def _require_approve(user: dict[str, Any]) -> None:
++    membership = user.get("current_membership") or {}
++    if (str(membership.get("tenant_id") or "") != str(user.get("tenant_id") or "")
++            or str(membership.get("status") or "").lower() != "active"
++            or str(membership.get("role") or "").lower() not in {"owner", "admin"}):
++        raise HTTPException(status_code=403, detail="전표를 확정하거나 취소할 권한이 없습니다")
++
++
++async def create_journal(*, user: dict[str, Any], business_id: str, source_type: str, source_id: UUID) -> dict[str, Any]:
++    """Create one conservative, balanced draft per source (idempotent)."""
++    _require_write(user)
++    if source_type not in JOURNAL_SOURCES:
++        raise HTTPException(status_code=400, detail="지원하지 않는 전표 원본입니다")
++    tenant_id = _tenant(user)
++    table, date_column, amount_column, description_column, active_predicate = JOURNAL_SOURCES[source_type]
++    conn = await _connect()
++    try:
++        await _require_business(conn, tenant_id, business_id)
++        async with conn.transaction():
++            # Serialize the check/create pair as well as retaining the unique
++            # index: concurrent retries return the original voucher, not 409.
++            await conn.execute(
++                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
++                f"{tenant_id}:{business_id}:{source_type}:{source_id}",
++            )
++            existing = await conn.fetchrow(
++                "SELECT * FROM yeoljeong_journal_vouchers WHERE tenant_id=$1 AND business_id=$2 AND source_type=$3 AND source_id=$4",
++                tenant_id, business_id, source_type, source_id,
++            )
++            if existing:
++                result = dict(existing)
++                result["idempotent"] = True
++                return result
++            source = await conn.fetchrow(
++                f"SELECT {date_column} AS transaction_date,{amount_column} AS total_amount,{description_column} AS description "
++                f"FROM {table} WHERE id=$1 AND tenant_id=$2 AND business_id=$3 {active_predicate}",
++                source_id, tenant_id, business_id,
++            )
++            if not source:
++                raise HTTPException(status_code=404, detail="현재 사업자의 전표 원본을 찾을 수 없습니다")
++            total = Decimal(str(source["total_amount"] or 0))
++            if total <= 0:
++                raise HTTPException(status_code=422, detail="0원 이하 거래는 전표로 만들 수 없습니다")
++            voucher_id = uuid4()
++            voucher_no = f"OBYS-{datetime.now().strftime('%Y%m%d')}-{voucher_id.hex[:8].upper()}"
++            transaction_date = source["transaction_date"]
++            if isinstance(transaction_date, datetime):
++                transaction_date = transaction_date.date()
++            row = await conn.fetchrow(
++                """INSERT INTO yeoljeong_journal_vouchers
++                    (id,tenant_id,business_id,voucher_no,transaction_date,description,status,source_type,source_id,
++                     supply_amount,tax_amount,total_amount,evidence_source,created_by)
++                   VALUES ($1,$2,$3,$4,$5,$6,'needs_review',$7,$8,$9,0,$9,$7,$10) RETURNING *""",
++                voucher_id, tenant_id, business_id, voucher_no, transaction_date,
++                str(source["description"] or "")[:500], source_type, source_id, total, _actor(user),
++            )
++            # Conservative suspense accounts deliberately require accountant review.
++            await conn.executemany(
++                """INSERT INTO yeoljeong_journal_lines
++                    (id,voucher_id,line_no,side,account_code,account_name,amount,tax_code,memo)
++                   VALUES ($1,$2,$3,$4,$5,$6,$7,'', $8)""",
++                [(uuid4(), voucher_id, 1, "debit", "9998", "차변 계정 검토", total, "자동분개 검토 필요"),
++                 (uuid4(), voucher_id, 2, "credit", "9999", "대변 계정 검토", total, "자동분개 검토 필요")],
++            )
++        return dict(row)
++    finally:
++        await conn.close()
++
++
++async def list_journals(*, user: dict[str, Any], business_id: str, status: str | None = None) -> list[dict[str, Any]]:
++    tenant_id = _tenant(user)
++    if status and status not in JOURNAL_STATUSES:
++        raise HTTPException(status_code=400, detail="지원하지 않는 전표 상태입니다")
++    conn = await _connect()
++    try:
++        await _require_business(conn, tenant_id, business_id)
++        rows = await conn.fetch(
++            """SELECT v.*,COALESCE(jsonb_agg(jsonb_build_object(
++                       'id',l.id,'line_no',l.line_no,'side',l.side,'account_code',l.account_code,
++                       'account_name',l.account_name,'amount',l.amount,'tax_code',l.tax_code,'memo',l.memo)
++                       ORDER BY l.line_no) FILTER (WHERE l.id IS NOT NULL),'[]') AS lines
++                 FROM yeoljeong_journal_vouchers v LEFT JOIN yeoljeong_journal_lines l ON l.voucher_id=v.id
++                WHERE v.tenant_id=$1 AND v.business_id=$2 AND ($3::text IS NULL OR v.status=$3)
++                GROUP BY v.id ORDER BY v.transaction_date DESC,v.created_at DESC LIMIT 500""",
++            tenant_id, business_id, status,
++        )
++        return [dict(row) for row in rows]
++    finally:
++        await conn.close()
++
++
++async def update_journal(*, user: dict[str, Any], voucher_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
++    _require_write(user)
++    tenant_id = _tenant(user)
++    conn = await _connect()
++    try:
++        current = await conn.fetchrow("SELECT * FROM yeoljeong_journal_vouchers WHERE id=$1 AND tenant_id=$2", voucher_id, tenant_id)
++        if not current:
++            raise HTTPException(status_code=404, detail="전표를 찾을 수 없습니다")
++        await _require_business(conn, tenant_id, current["business_id"])
++        if current["status"] not in {"draft", "needs_review"}:
++            raise HTTPException(status_code=409, detail="검토 중인 전표만 보정할 수 있습니다")
++        lines = payload.get("lines") or []
++        if len(lines) < 2:
++            raise HTTPException(status_code=422, detail="전표는 차변·대변 2개 이상의 분개가 필요합니다")
++        debit = sum((Decimal(str(line.get("amount") or 0)) for line in lines if line.get("side") == "debit"), Decimal("0"))
++        credit = sum((Decimal(str(line.get("amount") or 0)) for line in lines if line.get("side") == "credit"), Decimal("0"))
++        if debit <= 0 or debit != credit or debit != current["total_amount"]:
++            raise HTTPException(status_code=422, detail="차변·대변과 거래 합계가 일치해야 합니다")
++        if any(line.get("side") not in {"debit", "credit"} or not str(line.get("account_code") or "").strip() or not str(line.get("account_name") or "").strip() for line in lines):
++            raise HTTPException(status_code=422, detail="계정과목과 차대 구분을 확인하십시오")
++        async with conn.transaction():
++            await conn.execute("DELETE FROM yeoljeong_journal_lines WHERE voucher_id=$1", voucher_id)
++            await conn.executemany(
++                """INSERT INTO yeoljeong_journal_lines
++                    (id,voucher_id,line_no,side,account_code,account_name,amount,tax_code,memo)
++                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
++                [(uuid4(), voucher_id, index, line["side"], str(line["account_code"])[:40],
++                  str(line["account_name"])[:120], Decimal(str(line["amount"])),
++                  str(line.get("tax_code") or "")[:40], str(line.get("memo") or "")[:500])
++                 for index, line in enumerate(lines, 1)],
++            )
++            row = await conn.fetchrow(
++                "UPDATE yeoljeong_journal_vouchers SET description=$3,status='draft',updated_at=NOW() WHERE id=$1 AND tenant_id=$2 RETURNING *",
++                voucher_id, tenant_id, str(payload.get("description") or current["description"])[:500],
++            )
++        return dict(row)
++    finally:
++        await conn.close()
++
++
++async def transition_journal(*, user: dict[str, Any], voucher_id: UUID, action: str) -> dict[str, Any]:
++    _require_approve(user)
++    tenant_id = _tenant(user)
++    transitions = {"approve": ({"draft", "needs_review"}, "approved"), "post": ({"approved"}, "posted")}
++    if action not in transitions:
++        raise HTTPException(status_code=400, detail="지원하지 않는 전표 상태 전환입니다")
++    conn = await _connect()
++    try:
++        row = await conn.fetchrow("SELECT * FROM yeoljeong_journal_vouchers WHERE id=$1 AND tenant_id=$2", voucher_id, tenant_id)
++        if not row:
++            raise HTTPException(status_code=404, detail="전표를 찾을 수 없습니다")
++        await _require_business(conn, tenant_id, row["business_id"])
++        allowed, target = transitions[action]
++        if row["status"] not in allowed:
++            raise HTTPException(status_code=409, detail="현재 상태에서는 요청한 전표 전환을 할 수 없습니다")
++        balance = await conn.fetchrow("SELECT COALESCE(SUM(amount) FILTER (WHERE side='debit'),0) debit,COALESCE(SUM(amount) FILTER (WHERE side='credit'),0) credit,COUNT(*) count FROM yeoljeong_journal_lines WHERE voucher_id=$1", voucher_id)
++        if balance["count"] < 2 or balance["debit"] != balance["credit"] or balance["debit"] != row["total_amount"]:
++            raise HTTPException(status_code=422, detail="균형 및 합계 검증을 통과하지 못했습니다")
++        return dict(await conn.fetchrow(
++            """UPDATE yeoljeong_journal_vouchers SET status=$3,approved_by=CASE WHEN $3='approved' THEN $4 ELSE approved_by END,
++                       approved_at=CASE WHEN $3='approved' THEN NOW() ELSE approved_at END,
++                       posted_at=CASE WHEN $3='posted' THEN NOW() ELSE posted_at END,updated_at=NOW()
++                 WHERE id=$1 AND tenant_id=$2 RETURNING *""", voucher_id, tenant_id, target, _actor(user)))
++    finally:
++        await conn.close()
++
++
++async def reverse_journal(*, user: dict[str, Any], voucher_id: UUID) -> dict[str, Any]:
++    _require_approve(user)
++    tenant_id = _tenant(user)
++    conn = await _connect()
++    try:
++        original = await conn.fetchrow("SELECT * FROM yeoljeong_journal_vouchers WHERE id=$1 AND tenant_id=$2", voucher_id, tenant_id)
++        if not original:
++            raise HTTPException(status_code=404, detail="전표를 찾을 수 없습니다")
++        await _require_business(conn, tenant_id, original["business_id"])
++        async with conn.transaction():
++            original = await conn.fetchrow(
++                "SELECT * FROM yeoljeong_journal_vouchers WHERE id=$1 AND tenant_id=$2 FOR UPDATE",
++                voucher_id, tenant_id,
++            )
++            if original["status"] != "posted":
++                existing = await conn.fetchrow(
++                    "SELECT * FROM yeoljeong_journal_vouchers WHERE reversal_of_id=$1 AND tenant_id=$2",
++                    voucher_id, tenant_id,
++                )
++                if existing:
++                    result = dict(existing)
++                    result["idempotent"] = True
++                    return result
++                raise HTTPException(status_code=409, detail="확정된 전표만 역분개할 수 있습니다")
++            reversal_id = uuid4()
++            number = f"RV-{original['voucher_no']}-{reversal_id.hex[:6].upper()}"
++            original_lines = await conn.fetch(
++                "SELECT line_no,side,account_code,account_name,amount,tax_code,memo FROM yeoljeong_journal_lines WHERE voucher_id=$1 ORDER BY line_no",
++                voucher_id,
++            )
++            reversal = await conn.fetchrow(
++                """INSERT INTO yeoljeong_journal_vouchers
++                    (id,tenant_id,business_id,voucher_no,transaction_date,description,status,source_type,source_id,
++                     supply_amount,tax_amount,total_amount,evidence_source,export_status,created_by,reversal_of_id,posted_at)
++                   VALUES ($1,$2,$3,$4,CURRENT_DATE,$5,'posted',$6,$7,$8,$9,$10,$11,'not_exported',$12,$13,NOW()) RETURNING *""",
++                reversal_id, tenant_id, original["business_id"], number, f"역분개: {original['description']}",
++                original["source_type"], uuid4(), original["supply_amount"], original["tax_amount"],
++                original["total_amount"], original["evidence_source"], _actor(user), voucher_id,
++            )
++            await conn.executemany(
++                """INSERT INTO yeoljeong_journal_lines (id,voucher_id,line_no,side,account_code,account_name,amount,tax_code,memo)
++                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
++                [(uuid4(), reversal_id, line["line_no"], "credit" if line["side"] == "debit" else "debit",
++                  line["account_code"], line["account_name"], line["amount"], line["tax_code"],
++                  f"역분개: {line['memo']}") for line in original_lines],
++            )
++            await conn.execute("UPDATE yeoljeong_journal_vouchers SET status='reversed',reversed_at=NOW(),updated_at=NOW() WHERE id=$1", voucher_id)
++        return dict(reversal)
++    finally:
++        await conn.close()
+diff --git a/app/static/apps/obys/index.html b/app/static/apps/obys/index.html
+index f2052ad7..fb60c0aa 100644
+--- a/app/static/apps/obys/index.html
++++ b/app/static/apps/obys/index.html
+@@ -2562,7 +2562,7 @@
+     }
+   </style>
+   <link rel="stylesheet" href="/static/apps/obys/modules/store-assistant-v2.css">
+-  <link rel="stylesheet" href="/static/apps/obys/modules/ledger-details.css">
++  <link rel="stylesheet" href="/static/apps/obys/modules/ledger-details.css?v=20260921-r3">
+   <style>
+     /* 사업자(대표) 회원가입 진입 — 로그인 전에만 보인다. 헤더의 로그인/회원가입 버튼은
+        renderAuthState 가 항상 hidden 으로 두므로 별도 앵커로 노출한다. */
+@@ -13686,7 +13686,7 @@
+ 
+     init();
+   </script>
+-  <script src="/static/apps/obys/modules/ledger-details.js"></script>
++  <script src="/static/apps/obys/modules/ledger-details.js?v=20260921-r3"></script>
+   <script src="/static/apps/obys/modules/store-assistant-v2.js"></script>
+ </body>
+ </html>
+diff --git a/app/static/apps/obys/modules/ledger-details.css b/app/static/apps/obys/modules/ledger-details.css
+index e0f1cee8..afbdf24c 100644
+--- a/app/static/apps/obys/modules/ledger-details.css
++++ b/app/static/apps/obys/modules/ledger-details.css
+@@ -163,7 +163,8 @@
+ }
+ 
+ .ledger-list-card,
+-.ledger-upload-panel {
++.ledger-upload-panel,
++.ledger-journal-panel {
+   width: 100%;
+   max-width: 100%;
+   min-width: 0;
+@@ -174,6 +175,49 @@
+   background: #fff;
+ }
+ 
++.ledger-journal-panel {
++  padding: 20px 24px;
++}
++
++.ledger-preview {
++  display: grid;
++  gap: 8px;
++  margin: 12px 0;
++  padding: 12px;
++  border: 1px solid #bfdbfe;
++  border-radius: 12px;
++  background: #eff6ff;
++}
++
++.ledger-preview-table {
++  max-height: 240px;
++  overflow: auto;
++  background: #fff;
++}
++
++.ledger-preview-table table {
++  width: 100%;
++  min-width: 560px;
++  border-collapse: collapse;
++  font-size: .75rem;
++}
++
++.ledger-preview-table th,
++.ledger-preview-table td {
++  padding: 7px;
++  border-bottom: 1px solid #e5e7eb;
++  text-align: left;
++}
++
++.ledger-journal-line {
++  display: grid;
++  grid-template-columns: repeat(2, minmax(0, 1fr));
++  gap: 10px;
++  padding: 12px;
++  border: 1px solid #dfe5ef;
++  border-radius: 12px;
++}
++
+ .ledger-card-head,
+ .ledger-history-head,
+ .ledger-upload-heading {
+@@ -703,6 +747,10 @@
+     box-sizing: border-box;
+   }
+ 
++  .ledger-journal-panel {
++    padding: 16px;
++  }
++
+   .ledger-toolbar,
+   .ledger-kpis,
+   .ledger-upload-steps,
+diff --git a/app/static/apps/obys/modules/ledger-details.js b/app/static/apps/obys/modules/ledger-details.js
+index f2a335b3..26ec0b62 100644
+--- a/app/static/apps/obys/modules/ledger-details.js
++++ b/app/static/apps/obys/modules/ledger-details.js
+@@ -63,8 +63,10 @@
+     loading: false,
+     error: "",
+     uploadFile: null,
++    uploadPreview: null,
+     uploadBusy: false,
+-    uploadMessage: ""
++    uploadMessage: "",
++    journals: []
+   };
+ 
+   function escapeHtml(value) {
+@@ -215,7 +217,7 @@
+       <div class="ledger-table-wrap"><table class="ledger-table"><thead><tr>${headers(kind).map(label => `<th>${escapeHtml(label)}</th>`).join("")}<th>작업</th></tr></thead>
+       <tbody>${rows.map((row, index) => {
+         const mutable = rowSource(row) === "manual";
+-        return `<tr data-detail-index="${index}">${rowCells(row, kind).map(value => `<td>${escapeHtml(value)}</td>`).join("")}<td class="ledger-row-actions"><button type="button" data-ledger-detail="${index}">상세</button>${mutable ? `<button type="button" data-ledger-edit="${index}">수정</button>` : ""}</td></tr>`;
++        return `<tr data-detail-index="${index}">${rowCells(row, kind).map(value => `<td>${escapeHtml(value)}</td>`).join("")}<td class="ledger-row-actions"><button type="button" data-ledger-detail="${index}">상세</button><button type="button" data-journal-create="${index}">전표 만들기</button>${mutable ? `<button type="button" data-ledger-edit="${index}">수정</button>` : ""}</td></tr>`;
+       }).join("")}</tbody></table></div></div>`;
+   }
+ 
+@@ -266,7 +268,8 @@
+           <h3>현재 등록 대상</h3>
+           <dl><div><dt>사업자</dt><dd>${escapeHtml(selectedBusinessName())}</dd></div><div><dt>원장</dt><dd>${escapeHtml(meta.title)}</dd></div><div><dt>필수 열</dt><dd>${meta.columns.slice(0, 2).map(escapeHtml).join(", ")}</dd></div></dl>
+           <p><b>권장 열:</b> ${meta.columns.map(escapeHtml).join(" · ")}</p>
+-          <button type="button" class="primary" data-ledger-upload ${!file || state.uploadBusy ? "disabled" : ""}>${state.uploadBusy ? "서버에 반영 중…" : "선택한 파일 등록"}</button>
++          ${state.uploadPreview ? `<div class="ledger-preview"><b>등록 전 검증</b><span>정상 ${Number(state.uploadPreview.accepted_rows || 0)} · 중복 예상 ${Number(state.uploadPreview.duplicate_rows || 0)} · 오류 ${Number(state.uploadPreview.rejected_rows || 0)}</span><div class="ledger-preview-table"><table><thead><tr><th>일자</th><th>금액</th><th>거래처</th><th>적요</th></tr></thead><tbody>${(state.uploadPreview.preview_rows || []).map(row => `<tr><td>${escapeHtml(row.occurred_on)}</td><td>${money(row.amount)}</td><td>${escapeHtml(row.counterparty)}</td><td>${escapeHtml(row.description)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
++          <button type="button" class="primary" data-ledger-upload ${!file || state.uploadBusy ? "disabled" : ""}>${state.uploadBusy ? "처리 중…" : state.uploadPreview ? "검증 결과 확인 후 최종 반영" : "등록 전 검증"}</button>
+           <div class="ledger-upload-message${messageClass}" aria-live="polite">${escapeHtml(state.uploadMessage || "파일 선택 후 사업자와 원장 구분을 확인하십시오.")}</div>
+         </div>
+       </div>
+@@ -295,6 +298,8 @@
+         </div>
+         <div data-ledger-kpis>${kpiHtml(meta)}</div>
+         <div data-ledger-content>${contentHtml(meta.kind)}</div>
++        <section class="ledger-journal-panel"><div class="ledger-history-head"><div><h2>전표 검토함</h2><p>자동분개는 검토 필요 상태로 시작하며 ACCT에는 아직 전송되지 않습니다.</p></div><span>${state.journals.length}건</span></div>
++          <div class="ledger-upload-history">${state.journals.length ? state.journals.map((item, index) => `<article class="ledger-upload-item"><div class="ledger-file-icon">전표</div><div class="ledger-upload-copy"><b>${escapeHtml(item.voucher_no)}</b><span>${escapeHtml(item.transaction_date)} · ${escapeHtml(item.description || "적요 없음")}</span><small>차변/대변 ${money(item.total_amount)} · 외부 전송 안 됨</small></div><span class="ledger-upload-status ${escapeHtml(item.status)}">${escapeHtml({draft:"초안",needs_review:"검토 필요",approved:"승인",posted:"확정",reversed:"역분개 완료"}[item.status] || item.status)}</span><div class="ledger-upload-actions"><button type="button" data-journal-review="${index}">전표 검토</button>${item.status === "approved" ? `<button type="button" data-journal-action="post" data-journal-index="${index}">확정</button>` : ""}${item.status === "posted" ? `<button type="button" class="ledger-danger" data-journal-action="reverse" data-journal-index="${index}">취소·역분개</button>` : ""}</div></article>`).join("") : `<div class="ledger-upload-empty">생성된 전표가 없습니다. 원장 행에서 “전표 만들기”를 선택하십시오.</div>`}</div></section>
+         ${uploadHtml(meta)}
+       </div>`;
+     bindRoot(root);
+@@ -359,6 +364,12 @@
+       event.stopPropagation();
+       openForm(rows[Number(button.dataset.ledgerEdit)]);
+     }));
++    root.querySelectorAll("[data-journal-create]").forEach(button => button.addEventListener("click", event => {
++      event.stopPropagation();
++      createJournal(rows[Number(button.dataset.journalCreate)]);
++    }));
++    root.querySelectorAll("[data-journal-review]").forEach(button => button.addEventListener("click", () => openJournal(state.journals[Number(button.dataset.journalReview)])));
++    root.querySelectorAll("[data-journal-action]").forEach(button => button.addEventListener("click", () => journalAction(state.journals[Number(button.dataset.journalIndex)], button.dataset.journalAction)));
+     root.querySelectorAll("tr[data-detail-index]").forEach(row => row.addEventListener("click", () => openDetail(rows[Number(row.dataset.detailIndex)])));
+     root.querySelectorAll("[data-upload-download]").forEach(button => button.addEventListener("click", () => downloadUpload(button.dataset.uploadDownload)));
+     root.querySelectorAll("[data-upload-delete]").forEach(button => button.addEventListener("click", () => deleteUpload(button.dataset.uploadDelete)));
+@@ -366,6 +377,7 @@
+ 
+   function chooseFile(file) {
+     state.uploadMessage = "";
++    state.uploadPreview = null;
+     if (!file) {
+       state.uploadFile = null;
+       render();
+@@ -423,28 +435,32 @@
+       const scope = `business_id=${encodeURIComponent(state.businessId)}`;
+       const uploadCategory = encodeURIComponent(meta.upload);
+       if (meta.kind === "sales" || meta.kind === "purchase") {
+-        const [manual, uploaded, uploads] = await Promise.all([
++        const [manual, uploaded, uploads, journals] = await Promise.all([
+           request(`/ledger-entries?${scope}&category=${meta.kind}${dateQuery()}`),
+           request(`/uploaded-ledger?${scope}&category=${uploadCategory}&limit=500`),
+-          request(`/uploads?${scope}&category=${uploadCategory}`)
++          request(`/uploads?${scope}&category=${uploadCategory}`), request(`/journals?${scope}`)
+         ]);
+         state.rows = [...(manual.entries || []), ...(uploaded.rows || []).map(normalizeUploaded)];
+         state.uploads = uploads.uploads || [];
++        state.journals = journals.journals || [];
+       } else if (meta.kind === "card") {
+-        const [manual, uploads] = await Promise.all([
++        const [manual, uploaded, uploads, journals] = await Promise.all([
+           request(`/card-transactions?${scope}${dateQuery()}`),
+-          request(`/card-uploads?${scope}`)
++          request(`/uploaded-ledger?${scope}&category=card&limit=500`),
++          request(`/uploads?${scope}&category=card`), request(`/journals?${scope}`)
+         ]);
+-        state.rows = manual.card_transactions || [];
++        state.rows = [...(manual.card_transactions || []), ...(uploaded.rows || []).map(normalizeUploaded)];
+         state.uploads = uploads.uploads || [];
++        state.journals = journals.journals || [];
+       } else {
+-        const [bank, uploaded, uploads] = await Promise.all([
++        const [bank, uploaded, uploads, journals] = await Promise.all([
+           request(`/ledger-bank-transactions?${scope}${dateQuery()}`),
+           request(`/uploaded-ledger?${scope}&category=transaction&limit=500`),
+-          request(`/uploads?${scope}&category=transaction`)
++          request(`/uploads?${scope}&category=transaction`), request(`/journals?${scope}`)
+         ]);
+         state.rows = [...(bank.bank_transactions || []), ...(uploaded.rows || []).map(normalizeUploaded)];
+         state.uploads = uploads.uploads || [];
++        state.journals = journals.journals || [];
+       }
+       state.rows.sort((a, b) => rowDate(b).localeCompare(rowDate(a)));
+     } catch (error) {
+@@ -612,16 +628,22 @@
+     const file = state.uploadFile;
+     if (!file || !state.businessId || state.uploadBusy) return;
+     state.uploadBusy = true;
+-    state.uploadMessage = "파일을 안전하게 전송하고 원장 행을 확인하고 있습니다.";
++    state.uploadMessage = state.uploadPreview ? "확인한 파일을 원장에 반영하고 있습니다." : "파일을 저장하지 않고 열과 행 오류를 검증하고 있습니다.";
+     render();
+     const form = new FormData();
+     form.append("business_id", state.businessId);
+-    if (views[state.view].kind !== "card") form.append("category", views[state.view].upload);
++    form.append("category", views[state.view].upload);
+     form.append("file", file);
+     try {
+-      const base = views[state.view].kind === "card" ? "/card-uploads" : "/uploads";
+-      const payload = await request(base, { method: "POST", body: form });
++      if (!state.uploadPreview) {
++        state.uploadPreview = await request("/uploads/preview", { method: "POST", body: form });
++        state.uploadMessage = `검증 완료: 상위 ${Math.min(20, Number(state.uploadPreview.accepted_rows || 0))}행을 확인하고 최종 반영하십시오.`;
++        return;
++      }
++      form.append("confirmed_sha256", state.uploadPreview.sha256);
++      const payload = await request("/uploads/commit", { method: "POST", body: form });
+       state.uploadFile = null;
++      state.uploadPreview = null;
+       state.uploadMessage = payload.status === "duplicate"
+         ? "동일한 파일이 이미 등록되어 중복 반영하지 않았습니다."
+         : payload.status === "pending_review"
+@@ -636,9 +658,63 @@
+     }
+   }
+ 
++  function journalSource(row) {
++    if (row.upload_id) return "uploaded_ledger_row";
++    const kind = views[state.view].kind;
++    if (kind === "card") return "card_transaction";
++    if (kind === "bank") return "bank_transaction";
++    return "manual_ledger_entry";
++  }
++
++  async function createJournal(row) {
++    if (!row?.id || !window.confirm("이 원장 행으로 균형 전표 초안을 생성하시겠습니까?")) return;
++    try {
++      const payload = await request("/journals", { method: "POST", body: JSON.stringify({ business_id: state.businessId, source_type: journalSource(row), source_id: row.id }) });
++      window.alert(payload.journal?.idempotent ? "이미 연결된 전표를 열었습니다." : "검토 필요 전표를 생성했습니다. 계정과목을 확인한 뒤 확정하십시오.");
++      await load();
++    } catch (error) {
++      window.alert(recovery(error));
++    }
++  }
++
++  function journalLines(item) {
++    if (Array.isArray(item?.lines)) return item.lines;
++    try { return JSON.parse(item?.lines || "[]"); } catch (_) { return []; }
++  }
++
++  function openJournal(item) {
++    if (!item) return;
++    const editable = ["draft", "needs_review"].includes(item.status);
++    const lines = journalLines(item);
++    const panel = drawer(`<div class="ledger-drawer-head"><div><span class="ledger-eyebrow">JOURNAL VOUCHER</span><h3>${escapeHtml(item.voucher_no)}</h3></div><button type="button" data-drawer-close>닫기</button></div>
++      <p class="ledger-source">상태: ${escapeHtml(item.status)} · ACCT 외부 전송 안 됨</p>
++      <form class="ledger-form" data-journal-form><label class="wide">적요<input name="description" value="${escapeHtml(item.description || "")}" ${editable ? "" : "disabled"}></label>
++      ${lines.map((line, index) => `<fieldset class="wide ledger-journal-line"><legend>${index + 1}번 ${line.side === "debit" ? "차변" : "대변"}</legend><input type="hidden" name="side_${index}" value="${escapeHtml(line.side)}"><label>계정코드<input name="code_${index}" value="${escapeHtml(line.account_code)}" required ${editable ? "" : "disabled"}></label><label>계정과목<input name="name_${index}" value="${escapeHtml(line.account_name)}" required ${editable ? "" : "disabled"}></label><label>금액<input name="amount_${index}" type="number" min="0.01" step="0.01" value="${escapeHtml(line.amount)}" required ${editable ? "" : "disabled"}></label><label>부가세 코드<input name="tax_${index}" value="${escapeHtml(line.tax_code || "")}" ${editable ? "" : "disabled"}></label></fieldset>`).join("")}
++      <div class="ledger-form-actions"><button type="button" data-drawer-close>닫기</button>${editable ? `<button type="submit">보정 저장</button><button type="button" class="primary" data-journal-approve>승인</button>` : ""}</div></form><p class="ledger-form-error hidden" data-form-error></p>`);
++    panel.querySelector("[data-journal-form]")?.addEventListener("submit", async event => {
++      event.preventDefault();
++      const data = new FormData(event.currentTarget);
++      const payload = { description: data.get("description"), lines: lines.map((_, index) => ({ side: data.get(`side_${index}`), account_code: data.get(`code_${index}`), account_name: data.get(`name_${index}`), amount: data.get(`amount_${index}`), tax_code: data.get(`tax_${index}`) })) };
++      try { await request(`/journals/${encodeURIComponent(item.id)}`, { method: "PUT", body: JSON.stringify(payload) }); closeDrawer(); await load(); }
++      catch (error) { const note = panel.querySelector("[data-form-error]"); note.textContent = recovery(error); note.classList.remove("hidden"); }
++    });
++    panel.querySelector("[data-journal-approve]")?.addEventListener("click", () => journalAction(item, "approve"));
++  }
++
++  async function journalAction(item, action) {
++    if (!item) return;
++    const label = action === "reverse" ? "취소하고 역분개" : action === "post" ? "확정" : "승인";
++    if (!window.confirm(`이 전표를 ${label}하시겠습니까?`)) return;
++    try {
++      if (action === "reverse") await request(`/journals/${encodeURIComponent(item.id)}/reverse`, { method: "POST" });
++      else await request(`/journals/${encodeURIComponent(item.id)}/transition`, { method: "POST", body: JSON.stringify({ action }) });
++      closeDrawer(); await load();
++    } catch (error) { window.alert(recovery(error)); }
++  }
++
+   async function downloadUpload(uploadId) {
+     try {
+-      const base = views[state.view].kind === "card" ? "/card-uploads" : "/uploads";
++      const base = "/uploads";
+       const response = await fetch(`${API}${base}/${encodeURIComponent(uploadId)}/download`, {
+         headers: token() ? { Authorization: `Bearer ${token()}` } : {}
+       });
+@@ -663,7 +739,7 @@
+   async function deleteUpload(uploadId) {
+     if (!window.confirm("이 파일과 파일에서 반영된 원장 행을 삭제하시겠습니까?")) return;
+     try {
+-      const base = views[state.view].kind === "card" ? "/card-uploads" : "/uploads";
++      const base = "/uploads";
+       await request(`${base}/${encodeURIComponent(uploadId)}`, { method: "DELETE" });
+       state.uploadMessage = "파일을 삭제했습니다. 같은 파일을 다시 등록할 수 있습니다.";
+       await load();
+diff --git a/migrations/20260921_obys_journal_vouchers_r3.sql b/migrations/20260921_obys_journal_vouchers_r3.sql
+new file mode 100644
+index 00000000..63a8dd35
+--- /dev/null
++++ b/migrations/20260921_obys_journal_vouchers_r3.sql
+@@ -0,0 +1,61 @@
++-- OBYS tenant/business-scoped upload and canonical journal workflow (additive/idempotent).
++BEGIN;
++
++ALTER TABLE yeoljeong_uploads DROP CONSTRAINT IF EXISTS yeoljeong_uploads_category_check;
++ALTER TABLE yeoljeong_uploads ADD CONSTRAINT yeoljeong_uploads_category_check
++    CHECK (category IN ('sales','purchase','transaction','card')) NOT VALID;
++ALTER TABLE yeoljeong_uploads VALIDATE CONSTRAINT yeoljeong_uploads_category_check;
++ALTER TABLE yeoljeong_uploaded_ledger_rows DROP CONSTRAINT IF EXISTS yeoljeong_uploaded_ledger_rows_category_check;
++ALTER TABLE yeoljeong_uploaded_ledger_rows ADD CONSTRAINT yeoljeong_uploaded_ledger_rows_category_check
++    CHECK (category IN ('sales','purchase','transaction','card')) NOT VALID;
++ALTER TABLE yeoljeong_uploaded_ledger_rows VALIDATE CONSTRAINT yeoljeong_uploaded_ledger_rows_category_check;
++
++CREATE TABLE IF NOT EXISTS yeoljeong_journal_vouchers (
++    id UUID PRIMARY KEY,
++    tenant_id UUID NOT NULL,
++    business_id TEXT NOT NULL REFERENCES yeoljeong_businesses(id) ON UPDATE CASCADE,
++    voucher_no TEXT NOT NULL,
++    transaction_date DATE NOT NULL,
++    description TEXT NOT NULL DEFAULT '',
++    status TEXT NOT NULL DEFAULT 'draft'
++        CHECK (status IN ('draft','needs_review','approved','posted','reversed')),
++    source_type TEXT NOT NULL
++        CHECK (source_type IN ('uploaded_ledger_row','manual_ledger_entry','card_transaction','bank_transaction')),
++    source_id UUID NOT NULL,
++    supply_amount NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK (supply_amount >= 0),
++    tax_amount NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK (tax_amount >= 0),
++    total_amount NUMERIC(18,2) NOT NULL CHECK (total_amount >= 0 AND total_amount = supply_amount + tax_amount),
++    evidence_source TEXT NOT NULL DEFAULT '',
++    export_status TEXT NOT NULL DEFAULT 'not_exported'
++        CHECK (export_status IN ('not_exported','ready','exported','failed')),
++    created_by TEXT NOT NULL,
++    approved_by TEXT,
++    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++    approved_at TIMESTAMPTZ,
++    posted_at TIMESTAMPTZ,
++    reversed_at TIMESTAMPTZ,
++    reversal_of_id UUID REFERENCES yeoljeong_journal_vouchers(id),
++    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++    UNIQUE (tenant_id,business_id,voucher_no)
++);
++CREATE UNIQUE INDEX IF NOT EXISTS uq_yeoljeong_journal_source
++    ON yeoljeong_journal_vouchers (tenant_id,business_id,source_type,source_id)
++    WHERE reversal_of_id IS NULL;
++CREATE INDEX IF NOT EXISTS idx_yeoljeong_journal_scope_status
++    ON yeoljeong_journal_vouchers (tenant_id,business_id,status,transaction_date DESC);
++
++CREATE TABLE IF NOT EXISTS yeoljeong_journal_lines (
++    id UUID PRIMARY KEY,
++    voucher_id UUID NOT NULL REFERENCES yeoljeong_journal_vouchers(id) ON DELETE CASCADE,
++    line_no SMALLINT NOT NULL CHECK (line_no > 0),
++    side TEXT NOT NULL CHECK (side IN ('debit','credit')),
++    account_code TEXT NOT NULL,
++    account_name TEXT NOT NULL,
++    amount NUMERIC(18,2) NOT NULL CHECK (amount > 0),
++    tax_code TEXT NOT NULL DEFAULT '',
++    memo TEXT NOT NULL DEFAULT '',
++    UNIQUE (voucher_id,line_no)
++);
++
++COMMIT;
++
+diff --git a/tests/integration/test_obys_ledger_details_postgres.py b/tests/integration/test_obys_ledger_details_postgres.py
+index 8351b530..c3afe6d7 100644
+--- a/tests/integration/test_obys_ledger_details_postgres.py
++++ b/tests/integration/test_obys_ledger_details_postgres.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import os
+ from datetime import datetime, timezone
+ from decimal import Decimal
++from pathlib import Path
+ from uuid import uuid4
+ 
+ import asyncpg
+@@ -138,3 +139,110 @@ async def test_tenant_isolation_and_all_manual_ledgers(monkeypatch, tmp_path):
+     assert await service.list_card_transactions(user=user_a, business_id=business_a) == []
+     assert await service.list_bank_transactions(user=user_a, business_id=business_a) == []
+     assert await service.list_card_uploads(user=user_a, business_id=business_a) == []
++
++
++async def test_r3_upload_and_journal_workflow_is_scoped_idempotent_and_balanced(monkeypatch, tmp_path):
++    """Exercise the additive R3 migration against an explicitly isolated DB."""
++    database_url = _url()
++    monkeypatch.setenv("OBYS_DATABASE_URL", database_url)
++    upload_root = tmp_path / "uploads"
++    monkeypatch.setattr(service, "UPLOAD_ROOT", upload_root)
++    migration = Path("migrations/20260921_obys_journal_vouchers_r3.sql").read_text(encoding="utf-8")
++    tenant_a, tenant_b = uuid4(), uuid4()
++    business_a = f"biz-{uuid4().hex[:16]}"
++    business_b = f"biz-{uuid4().hex[:16]}"
++    conn = await asyncpg.connect(database_url)
++    try:
++        # It must be safe for release tooling to apply the migration again.
++        await conn.execute(migration)
++        await conn.execute(migration)
++        await _business(conn, tenant_a, business_a, "A 사업자")
++        await _business(conn, tenant_a, business_b, "B 사업자")
++    finally:
++        await conn.close()
++
++    owner_a = _user(tenant_a, "owner-a@example.com")
++    owner_b = _user(tenant_b, "owner-b@example.com")
++    member_a = {**owner_a, "current_membership": {**owner_a["current_membership"], "role": "member"}}
++    csv_data = b"date,amount,counterparty,description\n2026-09-20,110,store,proof"
++
++    # Preview parses only: no upload directory and no database session are used.
++    preview = service.preview_upload(category="card", filename="card.csv", content_type="text/csv", data=csv_data)
++    assert preview["accepted_rows"] == 1 and len(preview["preview_rows"]) == 1
++    assert not upload_root.exists()
++
++    uploads = {}
++    for category in ("sales", "purchase", "transaction", "card"):
++        uploads[category] = await service.create_upload(
++            user=owner_a, business_id=business_a, category=category,
++            filename=f"{category}.csv", content_type="text/csv", data=csv_data,
++        )
++        assert uploads[category]["status"] == "imported"
++    repeated = await service.create_upload(
++        user=owner_a, business_id=business_a, category="card",
++        filename="card.csv", content_type="text/csv", data=csv_data,
++    )
++    assert repeated["status"] == "duplicate"
++
++    sale = await service.create_manual_entry(
++        user=owner_a, category="sales", payload={
++            "business_id": business_a, "occurred_on": "2026-09-20", "counterparty": "customer",
++            "description": "journal source", "supply_amount": "100", "tax_amount": "10", "total_amount": "110",
++        },
++    )
++    card = await service.create_card_transaction(
++        user=owner_a, payload={
++            "business_id": business_a, "occurred_at": datetime.now(timezone.utc).isoformat(), "merchant": "store",
++            "description": "card source", "supply_amount": "100", "tax_amount": "10", "total_amount": "110", "card_last4": "1234",
++        },
++    )
++    bank = await service.create_bank_transaction(
++        user=owner_a, payload={
++            "business_id": business_a, "occurred_at": datetime.now(timezone.utc).isoformat(), "direction": "out",
++            "amount": 110, "balance": 1000, "counterparty": "vendor", "memo": "bank source", "category": "expense", "account_label": "test",
++        },
++    )
++    uploaded_rows = await service.list_ledger_rows(user=owner_a, business_id=business_a, category="sales")
++    assert len(uploaded_rows) == 1
++
++    journal = await service.create_journal(
++        user=owner_a, business_id=business_a, source_type="manual_ledger_entry", source_id=sale["id"],
++    )
++    duplicate_journal = await service.create_journal(
++        user=owner_a, business_id=business_a, source_type="manual_ledger_entry", source_id=sale["id"],
++    )
++    assert duplicate_journal["id"] == journal["id"] and duplicate_journal["idempotent"] is True
++    for source_type, source_id in (("uploaded_ledger_row", uploaded_rows[0]["id"]), ("card_transaction", card["id"]), ("bank_transaction", bank["id"])):
++        assert (await service.create_journal(user=owner_a, business_id=business_a, source_type=source_type, source_id=source_id))["status"] == "needs_review"
++
++    with pytest.raises(HTTPException) as unbalanced:
++        await service.update_journal(user=owner_a, voucher_id=journal["id"], payload={"lines": [
++            {"side": "debit", "account_code": "100", "account_name": "cash", "amount": "110"},
++            {"side": "credit", "account_code": "200", "account_name": "sales", "amount": "109"},
++        ]})
++    assert unbalanced.value.status_code == 422
++    with pytest.raises(HTTPException) as cannot_approve:
++        await service.transition_journal(user=member_a, voucher_id=journal["id"], action="approve")
++    assert cannot_approve.value.status_code == 403
++    updated = await service.update_journal(user=owner_a, voucher_id=journal["id"], payload={"description": "balanced", "lines": [
++        {"side": "debit", "account_code": "100", "account_name": "cash", "amount": "110"},
++        {"side": "credit", "account_code": "200", "account_name": "sales", "amount": "110"},
++    ]})
++    assert updated["status"] == "draft"
++    assert (await service.transition_journal(user=owner_a, voucher_id=journal["id"], action="approve"))["status"] == "approved"
++    assert (await service.transition_journal(user=owner_a, voucher_id=journal["id"], action="post"))["status"] == "posted"
++    reversal = await service.reverse_journal(user=owner_a, voucher_id=journal["id"])
++    assert reversal["status"] == "posted"
++    retry_reversal = await service.reverse_journal(user=owner_a, voucher_id=journal["id"])
++    assert retry_reversal["id"] == reversal["id"] and retry_reversal["idempotent"] is True
++
++    other_sale = await service.create_manual_entry(user=owner_a, category="sales", payload={
++        "business_id": business_b, "occurred_on": "2026-09-20", "counterparty": "other", "description": "other",
++        "supply_amount": "100", "tax_amount": "10", "total_amount": "110",
++    })
++    with pytest.raises(HTTPException) as wrong_business:
++        await service.create_journal(user=owner_a, business_id=business_a, source_type="manual_ledger_entry", source_id=other_sale["id"])
++    assert wrong_business.value.status_code == 404
++    with pytest.raises(HTTPException) as wrong_tenant:
++        await service.get_manual_entry(user=owner_b, category="sales", entry_id=sale["id"])
++    assert wrong_tenant.value.status_code == 404
+diff --git a/tests/unit/test_obys_ledger_details.py b/tests/unit/test_obys_ledger_details.py
+index e14cbb14..6133a088 100644
+--- a/tests/unit/test_obys_ledger_details.py
++++ b/tests/unit/test_obys_ledger_details.py
+@@ -77,15 +77,11 @@ def test_card_public_shape_never_exposes_last4_field() -> None:
+     assert "card_last4" not in public
+ 
+ 
+-@pytest.mark.asyncio
+-async def test_card_evidence_cannot_enter_general_upload_ledger() -> None:
+-    with pytest.raises(HTTPException) as exc_info:
+-        await service.create_upload(
+-            user=_tenant_user(), business_id="business-a", category="card",
+-            filename="card.csv", content_type="text/csv",
+-            data=b"date,amount\n2026-09-19,100",
+-        )
+-    assert exc_info.value.status_code == 400
++def test_card_is_a_canonical_preview_commit_category() -> None:
++    assert service.LEDGER_CATEGORIES == {"sales", "purchase", "transaction", "card"}
++    # The legacy evidence-only endpoint remains separate, while spreadsheet
++    # imports use the same preview/commit contract as the other three ledgers.
++    assert "card" not in service.GENERIC_LEDGER_CATEGORIES
+ 
+ 
+ @pytest.mark.asyncio
+@@ -135,13 +131,35 @@ def test_ui_exposes_four_real_ledger_pages() -> None:
+     assert "TRUNCATE " not in details_migration.upper()
+     assert "업로드 원본 행은 보존 정책에 따라 수정·삭제할 수 없습니다." in module
+     assert "min-height: 44px" in styles
+-    assert 'href="/static/apps/obys/modules/ledger-details.css"' in html
++    assert 'href="/static/apps/obys/modules/ledger-details.css?v=20260921-r3"' in html
++    assert 'src="/static/apps/obys/modules/ledger-details.js?v=20260921-r3"' in html
+     assert "엑셀 파일 등록" in module
+     assert "등록 양식 내려받기" in module
+     assert "data-upload-drop" in module
+     assert "data-ledger-search" in module
+     assert "ledger-kpis" in module
+-    assert '"/card-uploads"' in module
++    # The legacy evidence endpoint remains in the API, but the detail UI uses
++    # one canonical spreadsheet flow for all four categories, including card.
++    assert '"/card-uploads"' in api
++    assert '"/card-uploads"' not in module
++    for route in ('"/uploads/preview"', '"/uploads/commit"', '`/uploads?${scope}&category=card`', 'const base = "/uploads"'):
++        assert route in module
++    for control in ("data-ledger-from", "data-ledger-to", "data-ledger-search", "data-ledger-source"):
++        assert control in module
++    for action in ("전표 만들기", "전표 검토", "승인", "확정", "역분개"):
++        assert action in module
+     assert '"/ledger-bank-transactions"' in module
+     assert ".ledger-upload-grid" in styles
++    assert "/uploads/preview" in module
++    assert "/uploads/commit" in module
++    assert "전표 검토함" in module
+     assert "@media (max-width: 640px)" in styles
++
++
++def test_journal_migration_is_additive_and_scoped() -> None:
++    migration = Path("migrations/20260921_obys_journal_vouchers_r3.sql").read_text(encoding="utf-8")
++    assert "yeoljeong_journal_vouchers" in migration
++    assert "tenant_id" in migration and "business_id" in migration
++    assert "ON yeoljeong_journal_vouchers (tenant_id,business_id,source_type,source_id)" in migration
++    assert "draft','needs_review','approved','posted','reversed" in migration
++    assert "TRUNCATE " not in migration.upper()
+diff --git a/tests/unit/test_obys_upload_service.py b/tests/unit/test_obys_upload_service.py
+index c294e127..76476732 100644
+--- a/tests/unit/test_obys_upload_service.py
++++ b/tests/unit/test_obys_upload_service.py
+@@ -81,6 +81,29 @@ def test_csv_and_xlsx_canonical_rows():
+     assert service._canonical("purchase", xlsx_rows)[0][0]["counterparty"] == "상점"
+ 
+ 
++@pytest.mark.parametrize("category", ["sales", "purchase", "transaction", "card"])
++def test_preview_supports_all_ledger_categories_without_io(monkeypatch, category):
++    def forbidden(*_args, **_kwargs):
++        raise AssertionError("preview must not connect or write")
++    monkeypatch.setattr(service, "_connect", forbidden)
++    result = service.preview_upload(
++        category=category, filename="ledger.csv", content_type="text/csv",
++        data="일자,금액,거래처,적요\n2026-09-20,12000,상점,테스트".encode(),
++    )
++    assert result["accepted_rows"] == 1
++    assert result["preview_rows"][0]["amount"] == "12000"
++    assert result["requires_confirmation"] is True
++    assert len(result["source_hashes"]) == 1
++
++
++def test_preview_reports_invalid_rows_and_limits_preview_to_twenty():
++    rows = ["일자,금액,거래처"] + [f"2026-09-{day:02d},{day},상점" for day in range(1, 22)] + ["bad,bad,오류"]
++    result = service.preview_upload(category="card", filename="card.csv", content_type="text/csv", data="\n".join(rows).encode())
++    assert result["accepted_rows"] == 21
++    assert len(result["preview_rows"]) == 20
++    assert result["rejected_rows"] == 1
++
++
+ def test_empty_ledger_rows_rejected():
+     with pytest.raises(HTTPException) as exc:
+         service._raw_rows(".csv", b"date,amount\n")

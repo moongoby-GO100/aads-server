@@ -27,6 +27,7 @@ CATEGORY_EXTENSIONS = {
     "transaction": {".csv", ".xlsx"},
     "card": {".csv", ".xlsx", ".pdf"},
 }
+LEDGER_CATEGORIES = frozenset({"sales", "purchase", "transaction", "card"})
 GENERIC_LEDGER_CATEGORIES = frozenset({"sales", "purchase", "transaction"})
 MIME_BY_EXTENSION = {
     ".csv": {"text/csv", "application/csv", "text/plain", "application/vnd.ms-excel"},
@@ -199,6 +200,39 @@ def _canonical(category: str, rows: list[dict[str, Any]]) -> tuple[list[dict[str
     return accepted, rejected
 
 
+def preview_upload(*, category: str, filename: str, content_type: str, data: bytes) -> dict[str, Any]:
+    """Validate and parse an upload without filesystem or database writes."""
+    original, ext = _validate_file(category, filename, content_type, data)
+    if ext not in {".csv", ".xlsx"}:
+        raise HTTPException(status_code=415, detail="원장 미리보기는 .xlsx 또는 .csv만 지원합니다")
+    raw = _raw_rows(ext, data)
+    accepted, rejected = _canonical(category, raw)
+    accepted_hashes = {row["source_hash"] for row in accepted}
+    duplicate_rows = len(accepted) - len(accepted_hashes)
+    columns = [str(key) for key in raw[0].keys()]
+    return {
+        "filename": original,
+        "category": category,
+        "byte_size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "columns": columns,
+        "mapping": {
+            "occurred_on": next((name for name in columns if _value({name: name}, "date", "거래일자", "매출일자", "일자")), ""),
+            "amount": next((name for name in columns if _value({name: name}, "amount", "금액", "매출액", "결제금액", "입금액", "출금액")), ""),
+        },
+        "preview_rows": [
+            {"occurred_on": row["occurred_on"].isoformat(), "amount": str(row["amount"]),
+             "counterparty": row["counterparty"], "description": row["description"]}
+            for row in accepted[:20]
+        ],
+        "accepted_rows": len(accepted),
+        "duplicate_rows": duplicate_rows,
+        "rejected_rows": rejected,
+        "requires_confirmation": True,
+        "source_hashes": list(accepted_hashes),
+    }
+
+
 async def _connect():
     import asyncpg
 
@@ -264,8 +298,8 @@ async def update_business(*, user: dict[str, Any], business_id: str, payload: di
 
 async def create_upload(*, user: dict[str, Any], business_id: str, category: str, filename: str, content_type: str, data: bytes) -> dict[str, Any]:
     _require_write(user)
-    if category not in GENERIC_LEDGER_CATEGORIES:
-        raise HTTPException(status_code=400, detail="공용 원장 업로드 구분이 아닙니다")
+    if category not in LEDGER_CATEGORIES:
+        raise HTTPException(status_code=400, detail="지원하지 않는 원장 업로드 구분입니다")
     tenant_id = _tenant(user)
     original, ext = _validate_file(category, filename, content_type, data)
     parsed, rejected = ([], 0) if ext in {".pdf", ".jpg", ".jpeg", ".png"} else _canonical(category, _raw_rows(ext, data))
@@ -314,7 +348,7 @@ async def list_uploads(*, user: dict[str, Any], business_id: str, category: str 
 
 async def list_ledger_rows(*, user: dict[str, Any], business_id: str, category: str, limit: int = 500) -> list[dict[str, Any]]:
     tenant_id = _tenant(user)
-    if category not in GENERIC_LEDGER_CATEGORIES:
+    if category not in LEDGER_CATEGORIES:
         raise HTTPException(status_code=400, detail="지원하지 않는 원장 구분입니다")
     conn = await _connect()
     try:
@@ -742,5 +776,224 @@ async def delete_bank_transaction(*, user: dict[str, Any], transaction_id: UUID)
         )
         if command.endswith(" 0"):
             raise HTTPException(status_code=404, detail="삭제 가능한 은행 거래를 찾을 수 없습니다")
+    finally:
+        await conn.close()
+
+
+JOURNAL_SOURCES = {
+    "uploaded_ledger_row": ("yeoljeong_uploaded_ledger_rows", "occurred_on", "amount", "description", ""),
+    "manual_ledger_entry": ("yeoljeong_manual_ledger_entries", "occurred_on", "total_amount", "description", "AND deleted_at IS NULL"),
+    "card_transaction": ("yeoljeong_card_transactions", "occurred_at", "total_amount", "description", "AND deleted_at IS NULL"),
+    "bank_transaction": ("yeoljeong_manual_bank_transactions", "occurred_at", "amount", "memo", "AND deleted_at IS NULL"),
+}
+JOURNAL_STATUSES = frozenset({"draft", "needs_review", "approved", "posted", "reversed"})
+
+
+def _require_approve(user: dict[str, Any]) -> None:
+    membership = user.get("current_membership") or {}
+    if (str(membership.get("tenant_id") or "") != str(user.get("tenant_id") or "")
+            or str(membership.get("status") or "").lower() != "active"
+            or str(membership.get("role") or "").lower() not in {"owner", "admin"}):
+        raise HTTPException(status_code=403, detail="전표를 확정하거나 취소할 권한이 없습니다")
+
+
+async def create_journal(*, user: dict[str, Any], business_id: str, source_type: str, source_id: UUID) -> dict[str, Any]:
+    """Create one conservative, balanced draft per source (idempotent)."""
+    _require_write(user)
+    if source_type not in JOURNAL_SOURCES:
+        raise HTTPException(status_code=400, detail="지원하지 않는 전표 원본입니다")
+    tenant_id = _tenant(user)
+    table, date_column, amount_column, description_column, active_predicate = JOURNAL_SOURCES[source_type]
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant_id, business_id)
+        async with conn.transaction():
+            # Serialize the check/create pair as well as retaining the unique
+            # index: concurrent retries return the original voucher, not 409.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"{tenant_id}:{business_id}:{source_type}:{source_id}",
+            )
+            existing = await conn.fetchrow(
+                "SELECT * FROM yeoljeong_journal_vouchers WHERE tenant_id=$1 AND business_id=$2 AND source_type=$3 AND source_id=$4",
+                tenant_id, business_id, source_type, source_id,
+            )
+            if existing:
+                result = dict(existing)
+                result["idempotent"] = True
+                return result
+            source = await conn.fetchrow(
+                f"SELECT {date_column} AS transaction_date,{amount_column} AS total_amount,{description_column} AS description "
+                f"FROM {table} WHERE id=$1 AND tenant_id=$2 AND business_id=$3 {active_predicate}",
+                source_id, tenant_id, business_id,
+            )
+            if not source:
+                raise HTTPException(status_code=404, detail="현재 사업자의 전표 원본을 찾을 수 없습니다")
+            total = Decimal(str(source["total_amount"] or 0))
+            if total <= 0:
+                raise HTTPException(status_code=422, detail="0원 이하 거래는 전표로 만들 수 없습니다")
+            voucher_id = uuid4()
+            voucher_no = f"OBYS-{datetime.now().strftime('%Y%m%d')}-{voucher_id.hex[:8].upper()}"
+            transaction_date = source["transaction_date"]
+            if isinstance(transaction_date, datetime):
+                transaction_date = transaction_date.date()
+            row = await conn.fetchrow(
+                """INSERT INTO yeoljeong_journal_vouchers
+                    (id,tenant_id,business_id,voucher_no,transaction_date,description,status,source_type,source_id,
+                     supply_amount,tax_amount,total_amount,evidence_source,created_by)
+                   VALUES ($1,$2,$3,$4,$5,$6,'needs_review',$7,$8,$9,0,$9,$7,$10) RETURNING *""",
+                voucher_id, tenant_id, business_id, voucher_no, transaction_date,
+                str(source["description"] or "")[:500], source_type, source_id, total, _actor(user),
+            )
+            # Conservative suspense accounts deliberately require accountant review.
+            await conn.executemany(
+                """INSERT INTO yeoljeong_journal_lines
+                    (id,voucher_id,line_no,side,account_code,account_name,amount,tax_code,memo)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,'', $8)""",
+                [(uuid4(), voucher_id, 1, "debit", "9998", "차변 계정 검토", total, "자동분개 검토 필요"),
+                 (uuid4(), voucher_id, 2, "credit", "9999", "대변 계정 검토", total, "자동분개 검토 필요")],
+            )
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+async def list_journals(*, user: dict[str, Any], business_id: str, status: str | None = None) -> list[dict[str, Any]]:
+    tenant_id = _tenant(user)
+    if status and status not in JOURNAL_STATUSES:
+        raise HTTPException(status_code=400, detail="지원하지 않는 전표 상태입니다")
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant_id, business_id)
+        rows = await conn.fetch(
+            """SELECT v.*,COALESCE(jsonb_agg(jsonb_build_object(
+                       'id',l.id,'line_no',l.line_no,'side',l.side,'account_code',l.account_code,
+                       'account_name',l.account_name,'amount',l.amount,'tax_code',l.tax_code,'memo',l.memo)
+                       ORDER BY l.line_no) FILTER (WHERE l.id IS NOT NULL),'[]') AS lines
+                 FROM yeoljeong_journal_vouchers v LEFT JOIN yeoljeong_journal_lines l ON l.voucher_id=v.id
+                WHERE v.tenant_id=$1 AND v.business_id=$2 AND ($3::text IS NULL OR v.status=$3)
+                GROUP BY v.id ORDER BY v.transaction_date DESC,v.created_at DESC LIMIT 500""",
+            tenant_id, business_id, status,
+        )
+        return [dict(row) for row in rows]
+    finally:
+        await conn.close()
+
+
+async def update_journal(*, user: dict[str, Any], voucher_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
+    _require_write(user)
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        current = await conn.fetchrow("SELECT * FROM yeoljeong_journal_vouchers WHERE id=$1 AND tenant_id=$2", voucher_id, tenant_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="전표를 찾을 수 없습니다")
+        await _require_business(conn, tenant_id, current["business_id"])
+        if current["status"] not in {"draft", "needs_review"}:
+            raise HTTPException(status_code=409, detail="검토 중인 전표만 보정할 수 있습니다")
+        lines = payload.get("lines") or []
+        if len(lines) < 2:
+            raise HTTPException(status_code=422, detail="전표는 차변·대변 2개 이상의 분개가 필요합니다")
+        debit = sum((Decimal(str(line.get("amount") or 0)) for line in lines if line.get("side") == "debit"), Decimal("0"))
+        credit = sum((Decimal(str(line.get("amount") or 0)) for line in lines if line.get("side") == "credit"), Decimal("0"))
+        if debit <= 0 or debit != credit or debit != current["total_amount"]:
+            raise HTTPException(status_code=422, detail="차변·대변과 거래 합계가 일치해야 합니다")
+        if any(line.get("side") not in {"debit", "credit"} or not str(line.get("account_code") or "").strip() or not str(line.get("account_name") or "").strip() for line in lines):
+            raise HTTPException(status_code=422, detail="계정과목과 차대 구분을 확인하십시오")
+        async with conn.transaction():
+            await conn.execute("DELETE FROM yeoljeong_journal_lines WHERE voucher_id=$1", voucher_id)
+            await conn.executemany(
+                """INSERT INTO yeoljeong_journal_lines
+                    (id,voucher_id,line_no,side,account_code,account_name,amount,tax_code,memo)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
+                [(uuid4(), voucher_id, index, line["side"], str(line["account_code"])[:40],
+                  str(line["account_name"])[:120], Decimal(str(line["amount"])),
+                  str(line.get("tax_code") or "")[:40], str(line.get("memo") or "")[:500])
+                 for index, line in enumerate(lines, 1)],
+            )
+            row = await conn.fetchrow(
+                "UPDATE yeoljeong_journal_vouchers SET description=$3,status='draft',updated_at=NOW() WHERE id=$1 AND tenant_id=$2 RETURNING *",
+                voucher_id, tenant_id, str(payload.get("description") or current["description"])[:500],
+            )
+        return dict(row)
+    finally:
+        await conn.close()
+
+
+async def transition_journal(*, user: dict[str, Any], voucher_id: UUID, action: str) -> dict[str, Any]:
+    _require_approve(user)
+    tenant_id = _tenant(user)
+    transitions = {"approve": ({"draft", "needs_review"}, "approved"), "post": ({"approved"}, "posted")}
+    if action not in transitions:
+        raise HTTPException(status_code=400, detail="지원하지 않는 전표 상태 전환입니다")
+    conn = await _connect()
+    try:
+        row = await conn.fetchrow("SELECT * FROM yeoljeong_journal_vouchers WHERE id=$1 AND tenant_id=$2", voucher_id, tenant_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="전표를 찾을 수 없습니다")
+        await _require_business(conn, tenant_id, row["business_id"])
+        allowed, target = transitions[action]
+        if row["status"] not in allowed:
+            raise HTTPException(status_code=409, detail="현재 상태에서는 요청한 전표 전환을 할 수 없습니다")
+        balance = await conn.fetchrow("SELECT COALESCE(SUM(amount) FILTER (WHERE side='debit'),0) debit,COALESCE(SUM(amount) FILTER (WHERE side='credit'),0) credit,COUNT(*) count FROM yeoljeong_journal_lines WHERE voucher_id=$1", voucher_id)
+        if balance["count"] < 2 or balance["debit"] != balance["credit"] or balance["debit"] != row["total_amount"]:
+            raise HTTPException(status_code=422, detail="균형 및 합계 검증을 통과하지 못했습니다")
+        return dict(await conn.fetchrow(
+            """UPDATE yeoljeong_journal_vouchers SET status=$3,approved_by=CASE WHEN $3='approved' THEN $4 ELSE approved_by END,
+                       approved_at=CASE WHEN $3='approved' THEN NOW() ELSE approved_at END,
+                       posted_at=CASE WHEN $3='posted' THEN NOW() ELSE posted_at END,updated_at=NOW()
+                 WHERE id=$1 AND tenant_id=$2 RETURNING *""", voucher_id, tenant_id, target, _actor(user)))
+    finally:
+        await conn.close()
+
+
+async def reverse_journal(*, user: dict[str, Any], voucher_id: UUID) -> dict[str, Any]:
+    _require_approve(user)
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        original = await conn.fetchrow("SELECT * FROM yeoljeong_journal_vouchers WHERE id=$1 AND tenant_id=$2", voucher_id, tenant_id)
+        if not original:
+            raise HTTPException(status_code=404, detail="전표를 찾을 수 없습니다")
+        await _require_business(conn, tenant_id, original["business_id"])
+        async with conn.transaction():
+            original = await conn.fetchrow(
+                "SELECT * FROM yeoljeong_journal_vouchers WHERE id=$1 AND tenant_id=$2 FOR UPDATE",
+                voucher_id, tenant_id,
+            )
+            if original["status"] != "posted":
+                existing = await conn.fetchrow(
+                    "SELECT * FROM yeoljeong_journal_vouchers WHERE reversal_of_id=$1 AND tenant_id=$2",
+                    voucher_id, tenant_id,
+                )
+                if existing:
+                    result = dict(existing)
+                    result["idempotent"] = True
+                    return result
+                raise HTTPException(status_code=409, detail="확정된 전표만 역분개할 수 있습니다")
+            reversal_id = uuid4()
+            number = f"RV-{original['voucher_no']}-{reversal_id.hex[:6].upper()}"
+            original_lines = await conn.fetch(
+                "SELECT line_no,side,account_code,account_name,amount,tax_code,memo FROM yeoljeong_journal_lines WHERE voucher_id=$1 ORDER BY line_no",
+                voucher_id,
+            )
+            reversal = await conn.fetchrow(
+                """INSERT INTO yeoljeong_journal_vouchers
+                    (id,tenant_id,business_id,voucher_no,transaction_date,description,status,source_type,source_id,
+                     supply_amount,tax_amount,total_amount,evidence_source,export_status,created_by,reversal_of_id,posted_at)
+                   VALUES ($1,$2,$3,$4,CURRENT_DATE,$5,'posted',$6,$7,$8,$9,$10,$11,'not_exported',$12,$13,NOW()) RETURNING *""",
+                reversal_id, tenant_id, original["business_id"], number, f"역분개: {original['description']}",
+                original["source_type"], uuid4(), original["supply_amount"], original["tax_amount"],
+                original["total_amount"], original["evidence_source"], _actor(user), voucher_id,
+            )
+            await conn.executemany(
+                """INSERT INTO yeoljeong_journal_lines (id,voucher_id,line_no,side,account_code,account_name,amount,tax_code,memo)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
+                [(uuid4(), reversal_id, line["line_no"], "credit" if line["side"] == "debit" else "debit",
+                  line["account_code"], line["account_name"], line["amount"], line["tax_code"],
+                  f"역분개: {line['memo']}") for line in original_lines],
+            )
+            await conn.execute("UPDATE yeoljeong_journal_vouchers SET status='reversed',reversed_at=NOW(),updated_at=NOW() WHERE id=$1", voucher_id)
+        return dict(reversal)
     finally:
         await conn.close()

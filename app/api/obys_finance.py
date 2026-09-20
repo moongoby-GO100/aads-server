@@ -1,6 +1,7 @@
 """API routes for the Yeoljeong store assistant app."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 from decimal import Decimal
@@ -109,6 +110,34 @@ class ManualBankTransactionUpdatePayload(BaseModel):
     memo: str | None = Field(default=None, max_length=500)
     category: str | None = Field(default=None, max_length=100)
     account_label: str | None = Field(default=None, max_length=100)
+
+
+class JournalSourcePayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    business_id: str = Field(min_length=3, max_length=64)
+    source_type: str = Field(pattern=r"^(uploaded_ledger_row|manual_ledger_entry|card_transaction|bank_transaction)$")
+    source_id: UUID
+
+
+class JournalLinePayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    side: str = Field(pattern=r"^(debit|credit)$")
+    account_code: str = Field(min_length=1, max_length=40)
+    account_name: str = Field(min_length=1, max_length=120)
+    amount: Decimal = Field(gt=0, le=Decimal("9999999999999999.99"), allow_inf_nan=False)
+    tax_code: str = Field(default="", max_length=40)
+    memo: str = Field(default="", max_length=500)
+
+
+class JournalUpdatePayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    description: str = Field(default="", max_length=500)
+    lines: list[JournalLinePayload] = Field(min_length=2, max_length=100)
+
+
+class JournalTransitionPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    action: str = Field(pattern=r"^(approve|post)$")
 
 
 class TenantBusinessPayload(BaseModel):
@@ -801,6 +830,47 @@ async def upload_ledger_file(
     return await upload_svc.create_upload(user=current_user, business_id=business_id, category=category, filename=file.filename or "upload.bin", content_type=file.content_type or "application/octet-stream", data=data)
 
 
+@router.post("/uploads/preview")
+async def preview_ledger_file(
+    business_id: str = Form(...),
+    category: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    # Business scope is checked without persisting the file or parsed rows.
+    data = await _read_limited_upload(file)
+    preview = upload_svc.preview_upload(category=category, filename=file.filename or "upload.bin", content_type=file.content_type or "application/octet-stream", data=data)
+    tenant_id = upload_svc._tenant(current_user)
+    conn = await upload_svc._connect()
+    try:
+        await upload_svc._require_business(conn, tenant_id, business_id)
+        existing = await conn.fetchval(
+            "SELECT COUNT(*) FROM yeoljeong_uploaded_ledger_rows WHERE tenant_id=$1 AND business_id=$2 AND category=$3 AND source_hash=ANY($4::text[])",
+            tenant_id, business_id, category, preview.pop("source_hashes"),
+        )
+    finally:
+        await conn.close()
+    preview["duplicate_rows"] += int(existing or 0)
+    return preview
+
+
+@router.post("/uploads/commit", status_code=201)
+async def commit_ledger_file(
+    business_id: str = Form(...),
+    category: str = Form(...),
+    confirmed_sha256: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    data = await _read_limited_upload(file)
+    if hashlib.sha256(data).hexdigest() != confirmed_sha256:
+        raise HTTPException(status_code=409, detail="미리보기 이후 파일이 변경되었습니다. 다시 검증하십시오")
+    return await upload_svc.create_upload(
+        user=current_user, business_id=business_id, category=category,
+        filename=file.filename or "upload.bin", content_type=file.content_type or "application/octet-stream", data=data,
+    )
+
+
 @router.get("/uploads")
 async def list_ledger_uploads(
     business_id: str,
@@ -973,6 +1043,32 @@ async def download_ledger_upload(upload_id: UUID, current_user: dict = Depends(g
 async def delete_ledger_upload(upload_id: UUID, current_user: dict = Depends(get_current_user)) -> dict[str, bool]:
     await upload_svc.delete_upload(user=current_user, upload_id=upload_id)
     return {"ok": True}
+
+
+@router.get("/journals")
+async def list_journal_vouchers(business_id: str, status: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    rows = await upload_svc.list_journals(user=current_user, business_id=business_id, status=status)
+    return {"journals": rows, "count": len(rows), "integration": {"acct": "not_connected", "export_status": "not_exported"}}
+
+
+@router.post("/journals", status_code=201)
+async def create_journal_voucher(payload: JournalSourcePayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"journal": await upload_svc.create_journal(user=current_user, **payload.model_dump())}
+
+
+@router.put("/journals/{voucher_id}")
+async def update_journal_voucher(voucher_id: UUID, payload: JournalUpdatePayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"journal": await upload_svc.update_journal(user=current_user, voucher_id=voucher_id, payload=payload.model_dump())}
+
+
+@router.post("/journals/{voucher_id}/transition")
+async def transition_journal_voucher(voucher_id: UUID, payload: JournalTransitionPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"journal": await upload_svc.transition_journal(user=current_user, voucher_id=voucher_id, action=payload.action)}
+
+
+@router.post("/journals/{voucher_id}/reverse", status_code=201)
+async def reverse_journal_voucher(voucher_id: UUID, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"journal": await upload_svc.reverse_journal(user=current_user, voucher_id=voucher_id)}
 
 
 @router.get("/reviews")

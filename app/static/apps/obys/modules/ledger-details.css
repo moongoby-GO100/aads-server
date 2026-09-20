@@ -163,7 +163,8 @@
 }
 
 .ledger-list-card,
-.ledger-upload-panel {
+.ledger-upload-panel,
+.ledger-journal-panel {
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -172,6 +173,49 @@
   border: 1px solid #dfe5ef;
   border-radius: 17px;
   background: #fff;
+}
+
+.ledger-journal-panel {
+  padding: 20px 24px;
+}
+
+.ledger-preview {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: #eff6ff;
+}
+
+.ledger-preview-table {
+  max-height: 240px;
+  overflow: auto;
+  background: #fff;
+}
+
+.ledger-preview-table table {
+  width: 100%;
+  min-width: 560px;
+  border-collapse: collapse;
+  font-size: .75rem;
+}
+
+.ledger-preview-table th,
+.ledger-preview-table td {
+  padding: 7px;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: left;
+}
+
+.ledger-journal-line {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dfe5ef;
+  border-radius: 12px;
 }
 
 .ledger-card-head,
@@ -701,6 +745,10 @@
     max-width: 100%;
     min-width: 0;
     box-sizing: border-box;
+  }
+
+  .ledger-journal-panel {
+    padding: 16px;
   }
 
   .ledger-toolbar,

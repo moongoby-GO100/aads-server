@@ -77,15 +77,11 @@ def test_card_public_shape_never_exposes_last4_field() -> None:
     assert "card_last4" not in public
 
 
-@pytest.mark.asyncio
-async def test_card_evidence_cannot_enter_general_upload_ledger() -> None:
-    with pytest.raises(HTTPException) as exc_info:
-        await service.create_upload(
-            user=_tenant_user(), business_id="business-a", category="card",
-            filename="card.csv", content_type="text/csv",
-            data=b"date,amount\n2026-09-19,100",
-        )
-    assert exc_info.value.status_code == 400
+def test_card_is_a_canonical_preview_commit_category() -> None:
+    assert service.LEDGER_CATEGORIES == {"sales", "purchase", "transaction", "card"}
+    # The legacy evidence-only endpoint remains separate, while spreadsheet
+    # imports use the same preview/commit contract as the other three ledgers.
+    assert "card" not in service.GENERIC_LEDGER_CATEGORIES
 
 
 @pytest.mark.asyncio
@@ -135,13 +131,35 @@ def test_ui_exposes_four_real_ledger_pages() -> None:
     assert "TRUNCATE " not in details_migration.upper()
     assert "업로드 원본 행은 보존 정책에 따라 수정·삭제할 수 없습니다." in module
     assert "min-height: 44px" in styles
-    assert 'href="/static/apps/obys/modules/ledger-details.css"' in html
+    assert 'href="/static/apps/obys/modules/ledger-details.css?v=20260921-r3"' in html
+    assert 'src="/static/apps/obys/modules/ledger-details.js?v=20260921-r3"' in html
     assert "엑셀 파일 등록" in module
     assert "등록 양식 내려받기" in module
     assert "data-upload-drop" in module
     assert "data-ledger-search" in module
     assert "ledger-kpis" in module
-    assert '"/card-uploads"' in module
+    # The legacy evidence endpoint remains in the API, but the detail UI uses
+    # one canonical spreadsheet flow for all four categories, including card.
+    assert '"/card-uploads"' in api
+    assert '"/card-uploads"' not in module
+    for route in ('"/uploads/preview"', '"/uploads/commit"', '`/uploads?${scope}&category=card`', 'const base = "/uploads"'):
+        assert route in module
+    for control in ("data-ledger-from", "data-ledger-to", "data-ledger-search", "data-ledger-source"):
+        assert control in module
+    for action in ("전표 만들기", "전표 검토", "승인", "확정", "역분개"):
+        assert action in module
     assert '"/ledger-bank-transactions"' in module
     assert ".ledger-upload-grid" in styles
+    assert "/uploads/preview" in module
+    assert "/uploads/commit" in module
+    assert "전표 검토함" in module
     assert "@media (max-width: 640px)" in styles
+
+
+def test_journal_migration_is_additive_and_scoped() -> None:
+    migration = Path("migrations/20260921_obys_journal_vouchers_r3.sql").read_text(encoding="utf-8")
+    assert "yeoljeong_journal_vouchers" in migration
+    assert "tenant_id" in migration and "business_id" in migration
+    assert "ON yeoljeong_journal_vouchers (tenant_id,business_id,source_type,source_id)" in migration
+    assert "draft','needs_review','approved','posted','reversed" in migration
+    assert "TRUNCATE " not in migration.upper()
