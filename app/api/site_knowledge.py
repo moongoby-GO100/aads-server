@@ -142,6 +142,20 @@ def _tenant(context: TenantContext) -> str:
     return str(context["tenant"]["id"])
 
 
+def _authenticated_permissions(context: TenantContext) -> list[str]:
+    """Map only server-authenticated membership data to execution permissions."""
+    membership = context.get("membership") or {}
+    role = str(membership.get("role") or "").casefold()
+    granted = {
+        str(value).strip().casefold()
+        for value in (membership.get("permissions") or [])
+        if str(value).strip()
+    }
+    if role in {"owner", "admin", "member", "viewer"}:
+        granted.add("read")
+    return sorted(granted)
+
+
 def _route_page_observation(
     *, context: TenantContext, request: Request, correlation_id: str,
     metadata: dict[str, Any], source: str = "aria",
@@ -328,8 +342,7 @@ async def execute_site_skill(
             required_capabilities=body.required_capabilities,
             max_llm_cost_usd=body.max_llm_cost_usd,
         )
-        membership = context.get("membership") or {}
-        authenticated_permissions = membership.get("permissions") or []
+        authenticated_permissions = _authenticated_permissions(context)
         contract = selected.get("execution_contract") or {}
         contract_capabilities = set(contract.get("capabilities") or [])
         safety_contract_match = bool(contract.get("executor")) and set(

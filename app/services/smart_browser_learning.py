@@ -694,22 +694,27 @@ def plan_skill_runtime(*, selected: Mapping[str, Any], required_capabilities: Se
                        permissions: Sequence[str], session_available: bool,
                        local_environment_available: bool, safety_contract_match: bool) -> dict[str, Any]:
     """Choose Browser/PC/Human from server-owned facts; never from page content."""
-    required = _as_string_set(required_capabilities)
+    requested = _as_string_set(required_capabilities)
     granted = _as_string_set(permissions)
     risk = str(selected.get("risk_tier") or "read").casefold()
     contract = selected.get("execution_contract") or {}
     executor = str(contract.get("executor") or "").casefold()
     allowed_tools = _as_string_set(contract.get("allowed_tools"))
-    if not safety_contract_match:
+    contract_capabilities = _as_string_set(contract.get("capabilities"))
+    contract_permissions = _as_string_set(contract.get("permissions"))
+    if not safety_contract_match or not requested.issubset(contract_capabilities):
         return {"runtime": "human_gateway", "executable": False,
                 "reason_code": "SAFETY_CONTRACT_MISMATCH"}
     if risk in _HIGH_RISK and "execute_high_risk" not in granted:
         return {"runtime": "human_gateway", "executable": False,
                 "reason_code": "HUMAN_APPROVAL_REQUIRED"}
-    if not required.issubset(granted):
+    if not contract_permissions.issubset(granted):
         return {"runtime": "human_gateway", "executable": False,
                 "reason_code": "CAPABILITY_PERMISSION_MISMATCH"}
-    needs_local = bool(required & {"local_file", "windows", "certificate", "pc_agent"})
+    effective_capabilities = requested | contract_capabilities
+    needs_local = bool(
+        effective_capabilities & {"local_file", "windows", "certificate", "pc_agent"}
+    )
     if needs_local:
         if not local_environment_available or not session_available:
             return {"runtime": "human_gateway", "executable": False,
@@ -721,11 +726,10 @@ def plan_skill_runtime(*, selected: Mapping[str, Any], required_capabilities: Se
     if not session_available:
         return {"runtime": "human_gateway", "executable": False,
                 "reason_code": "BROWSER_SESSION_UNAVAILABLE"}
-    browser_capability = bool(required & {"navigate", "interactive_browser", "browser"})
     browser_contract = bool(
         allowed_tools & {"browser", "browser_tasks", "browser_bridge"}
     ) or "browser" in executor
-    if browser_capability and not browser_contract:
+    if not browser_contract:
         return {"runtime": "human_gateway", "executable": False,
                 "reason_code": "BROWSER_EXECUTOR_CONTRACT_MISMATCH"}
     return {"runtime": "browser", "executable": True, "reason_code": "SERVER_BROWSER_CAPABLE"}

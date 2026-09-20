@@ -168,6 +168,9 @@ def test_resolution_gracefully_degrades_when_vector_and_llm_are_unavailable(monk
     [
         ({"safety_contract_match": False}, "human_gateway", False, "SAFETY_CONTRACT_MISMATCH"),
         ({"safety_contract_match": True, "required_capabilities": ["pc_agent"],
+          "selected": {"risk_tier": "read", "execution_contract": {
+              "executor": "browser.pc", "allowed_tools": ["pc_agent"],
+              "capabilities": ["pc_agent"], "permissions": []}},
           "permissions": ["pc_agent"], "session_available": True,
           "local_environment_available": True}, "pc_agent", True, "LOCAL_ENVIRONMENT_REQUIRED"),
         ({"safety_contract_match": True, "required_capabilities": ["navigate"],
@@ -178,7 +181,9 @@ def test_resolution_gracefully_degrades_when_vector_and_llm_are_unavailable(monk
 def test_runtime_routing_is_fail_closed(kwargs, runtime, executable, reason):
     defaults = {
         "selected": {"risk_tier": "read", "execution_contract": {
-            "executor": "browser.pc", "allowed_tools": ["pc_agent", "browser"]}},
+            "executor": "browser.pc", "allowed_tools": ["pc_agent", "browser"],
+            "capabilities": ["navigate"], "permissions": []}},
+        "required_capabilities": [],
         "permissions": [], "session_available": False,
         "local_environment_available": False, "safety_contract_match": False,
     }
@@ -196,6 +201,41 @@ def test_runtime_high_risk_requires_authenticated_permission():
     )
     assert result == {"runtime": "human_gateway", "executable": False,
                       "reason_code": "HUMAN_APPROVAL_REQUIRED"}
+
+
+def test_empty_requested_capabilities_cannot_bypass_manifest_permissions():
+    result = learning.plan_skill_runtime(
+        selected={"risk_tier": "read", "execution_contract": {
+            "executor": "browser.execute", "allowed_tools": ["browser"],
+            "capabilities": ["navigate"], "permissions": ["read"],
+        }},
+        required_capabilities=[], permissions=[], session_available=True,
+        local_environment_available=False, safety_contract_match=True,
+    )
+    assert result == {"runtime": "human_gateway", "executable": False,
+                      "reason_code": "CAPABILITY_PERMISSION_MISMATCH"}
+
+
+def test_browser_runtime_requires_server_owned_browser_contract():
+    result = learning.plan_skill_runtime(
+        selected={"risk_tier": "read", "execution_contract": {
+            "executor": "ohvis.contract-echo", "allowed_tools": [],
+            "capabilities": ["site.observe"], "permissions": ["read"],
+        }},
+        required_capabilities=[], permissions=["read"], session_available=True,
+        local_environment_available=False, safety_contract_match=True,
+    )
+    assert result == {"runtime": "human_gateway", "executable": False,
+                      "reason_code": "BROWSER_EXECUTOR_CONTRACT_MISMATCH"}
+
+
+def test_membership_role_maps_only_to_server_owned_read_permission():
+    from app.api.site_knowledge import _authenticated_permissions
+
+    assert _authenticated_permissions({"membership": {"role": "member"}}) == ["read"]
+    assert _authenticated_permissions({"membership": {
+        "role": "admin", "permissions": ["execute_high_risk"],
+    }}) == ["execute_high_risk", "read"]
 
 
 def test_api_exposes_learning_revisit_search_execute_and_live_observation():

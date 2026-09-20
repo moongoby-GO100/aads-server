@@ -377,3 +377,33 @@ Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks
 ## 미완료 항목
 
 - push/deploy는 후속 승인·M9~M11 의존 체인에서 수행한다.
+
+# AADS-SMARTBROWSER-M9-ROUTING-R2-20260920
+
+## 변경 및 보안 경계
+
+- `resolve_site_skill`은 tenant/site/active version/capability 범위 안에서 Exact → Qwen3 vector → bounded LLM 순서를 강제하고 단계별 reason/score/threshold/cost/latency를 감사 이벤트에 기록한다.
+- `plan_skill_runtime`은 요청 capability가 manifest capability의 부분집합인지, manifest permission이 서버 인증 membership 권한에 포함되는지 각각 검증한다. 둘을 혼용하지 않는다.
+- Browser/PC Agent executor 계약이 없거나 세션·로컬 환경·고위험 승인 조건이 부족하면 Human Gateway로 fail-closed 한다. 클라이언트가 capability를 비워 manifest permission을 우회할 수 없다.
+- 기존 JSONB 감사 이벤트 저장소를 재사용해 신규 migration은 필요하지 않다.
+
+## 변경 파일
+
+- `app/services/smart_browser_learning.py`
+- `app/api/site_knowledge.py`
+- `tests/unit/test_smart_browser_learning.py`
+- `RESULT.md`
+
+## 검증 결과
+
+| 항목 | 결과 |
+|---|---|
+| 최초 러너 회귀 | 1 failed, 87 passed — 누락된 `required_capabilities`를 재현하고 승인 차단 |
+| 교정 후 focused + M7/M8/G1/G2/G6 영향 회귀 | **91 passed** |
+| 권한 음성 테스트 | 빈 capability 우회, browser executor 부재, 고위험 승인 부재를 Human Gateway로 차단 |
+| Ruff, `py_compile`, `git diff --check` | 모두 PASS |
+| migration | 스키마 변경 없음; M7/M8 정본과 기존 JSONB 감사 저장소 재사용 |
+
+## 미완료 항목
+
+- push/deploy는 M10·M11 순차 완료 후 릴리스 단계에서 수행한다.
