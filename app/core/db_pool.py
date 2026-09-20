@@ -7,14 +7,21 @@ get_pool() → pool.acquire()로 사용.
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import TYPE_CHECKING, Any
 
-import asyncpg
 import structlog
+
+try:
+    import asyncpg
+except ModuleNotFoundError:  # pragma: no cover - exercised in lean validation envs
+    asyncpg = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:
+    import asyncpg as asyncpg_types
 
 logger = structlog.get_logger(__name__)
 
-_pool: Optional[asyncpg.Pool] = None
+_pool: asyncpg_types.Pool | None = None
 
 _POOL_MIN_SIZE = int(os.getenv("DB_POOL_MIN_SIZE", "5"))
 _POOL_MAX_SIZE = int(os.getenv("DB_POOL_MAX_SIZE", "20"))
@@ -25,15 +32,22 @@ def _db_url() -> str:
     return url.replace("postgresql://", "postgres://") if url else url
 
 
-async def init_pool() -> asyncpg.Pool:
+def _require_asyncpg() -> Any:
+    if asyncpg is None:
+        raise RuntimeError("asyncpg 패키지가 설치되지 않았습니다")
+    return asyncpg
+
+
+async def init_pool() -> asyncpg_types.Pool:
     """앱 시작 시 호출 — 커넥션 풀 생성."""
     global _pool
     if _pool is not None:
         return _pool
+    asyncpg_module = _require_asyncpg()
     dsn = _db_url()
     if not dsn:
         raise RuntimeError("DATABASE_URL 환경변수가 설정되지 않았습니다")
-    _pool = await asyncpg.create_pool(
+    _pool = await asyncpg_module.create_pool(
         dsn,
         min_size=_POOL_MIN_SIZE,
         max_size=_POOL_MAX_SIZE,
@@ -49,7 +63,7 @@ async def init_pool() -> asyncpg.Pool:
     return _pool
 
 
-def get_pool() -> asyncpg.Pool:
+def get_pool() -> asyncpg_types.Pool:
     """풀 인스턴스 반환. init_pool() 호출 전이면 RuntimeError."""
     if _pool is None:
         raise RuntimeError("DB pool이 초기화되지 않았습니다. init_pool()을 먼저 호출하세요.")
@@ -78,17 +92,18 @@ def get_pool_stats() -> dict:
 async def execute_with_retry(query: str, *args, max_retries: int = 3):
     """R4: 데드락/직렬화 실패 시 자동 재시도 (최대 3회)."""
     import asyncio as _aio
+    asyncpg_module = _require_asyncpg()
     pool = get_pool()
     for attempt in range(max_retries):
         try:
             async with pool.acquire() as conn:
                 return await conn.execute(query, *args)
-        except asyncpg.DeadlockDetectedError as e:
+        except asyncpg_module.DeadlockDetectedError as e:
             logger.warning("db_deadlock_retry", attempt=attempt + 1, max=max_retries, error=str(e)[:100])
             if attempt == max_retries - 1:
                 raise
             await _aio.sleep(0.1 * (2 ** attempt))
-        except asyncpg.SerializationError as e:
+        except asyncpg_module.SerializationError as e:
             logger.warning("db_serialization_retry", attempt=attempt + 1, error=str(e)[:100])
             if attempt == max_retries - 1:
                 raise
