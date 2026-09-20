@@ -44,21 +44,27 @@ ALTER TABLE browser_live_facts
 -- Redact legacy values in place.  The existing columns remain the stable API
 -- contract, but never retain a source URL or variant source value after M7.
 UPDATE browser_live_facts
-   SET source_url = 'sha256:' || encode(digest(source_url, 'sha256'), 'hex')
- WHERE source_url !~ '^sha256:[0-9a-f]{64}$';
-UPDATE browser_live_facts
-   SET variant_key = 'sha256:' || encode(digest(variant_key, 'sha256'), 'hex')
- WHERE variant_key !~ '^sha256:[0-9a-f]{64}$';
+   SET source_url = CASE
+           WHEN source_url ~ '^https?://[^/?#]+/_source/[0-9a-f]{64}$' THEN source_url
+           ELSE regexp_replace(source_url, '^(https?://[^/?#]+).*$', '\1/_source/')
+                || encode(digest(source_url, 'sha256'), 'hex')
+       END,
+       variant_key = CASE
+           WHEN variant_key = '' OR variant_key ~ '^[0-9a-f]{64}$' THEN variant_key
+           ELSE encode(digest(variant_key, 'sha256'), 'hex')
+       END
+ WHERE source_url !~ '^https?://[^/?#]+/_source/[0-9a-f]{64}$'
+    OR (variant_key <> '' AND variant_key !~ '^[0-9a-f]{64}$');
 
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='browser_live_facts_source_url_hash_check') THEN
         ALTER TABLE browser_live_facts ADD CONSTRAINT browser_live_facts_source_url_hash_check
-            CHECK (source_url ~ '^sha256:[0-9a-f]{64}$');
+            CHECK (source_url ~ '^https?://[^/?#]+/_source/[0-9a-f]{64}$') NOT VALID;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='browser_live_facts_variant_key_hash_check') THEN
         ALTER TABLE browser_live_facts ADD CONSTRAINT browser_live_facts_variant_key_hash_check
-            CHECK (variant_key ~ '^sha256:[0-9a-f]{64}$');
+            CHECK (variant_key = '' OR variant_key ~ '^[0-9a-f]{64}$') NOT VALID;
     END IF;
 END $$;
 

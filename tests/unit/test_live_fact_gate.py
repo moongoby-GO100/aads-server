@@ -81,10 +81,11 @@ def test_source_url_drops_query_credentials_and_rejects_userinfo():
 
 def test_storage_identifiers_are_hashes_not_source_values():
     source = "https://shop.example/items/1?token=secret"
-    assert gate.hash_source_url(source).startswith("sha256:")
-    assert "shop.example" not in gate.hash_source_url(source)
-    assert gate.hash_variant_key("red-xl").startswith("sha256:")
+    assert gate.hash_source_url(source).startswith("https://shop.example/_source/")
+    assert "items/1" not in gate.hash_source_url(source)
+    assert len(gate.hash_variant_key("red-xl")) == 64
     assert "red-xl" not in gate.hash_variant_key("red-xl")
+    assert gate._source_matches(source, gate.hash_source_url(source))
 
 
 def test_sse_replay_drops_value_after_ttl_expiry():
@@ -194,7 +195,7 @@ def test_migration_has_tenant_context_evidence_and_append_only_event_ledger():
     sql = (Path(__file__).resolve().parents[2] / "migrations/20260920_m7_site_knowledge_canonical.sql").read_text()
     for token in (
         "browser_live_facts", "browser_live_fact_events", "site_profile_id UUID",
-        "provenance JSONB", "source_url = 'sha256:'", "variant_key = 'sha256:'",
+        "provenance JSONB", "/_source/", "digest(variant_key",
         "browser_live_facts_source_url_hash_check",
     ):
         assert token in sql

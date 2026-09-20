@@ -84,7 +84,9 @@ def test_m7_m11_migration_is_additive_and_has_tenant_site_version_scopes():
     assert "TRUNCATE " not in sql.upper()
 
 
-def test_live_observation_account_context_is_write_only():
+def test_live_observation_account_context_is_write_only(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+
     from app.api.site_knowledge import LiveObservationIn
 
     account = LiveObservationIn.model_json_schema()["properties"]["account_context"]

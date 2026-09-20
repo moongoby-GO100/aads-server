@@ -83,19 +83,22 @@ def hash_account_context(value: str) -> str:
 
 
 def _private_identifier_hash(value: str) -> str:
-    return f"sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _is_private_identifier_hash(value: Any) -> bool:
     candidate = str(value or "")
-    return len(candidate) == 71 and candidate.startswith("sha256:") and all(
-        char in "0123456789abcdef" for char in candidate[7:]
-    )
+    return len(candidate) == 64 and all(char in "0123456789abcdef" for char in candidate)
 
 
 def hash_variant_key(value: str) -> str:
     """Return the storage-safe variant identity; never persist the source value."""
     return _private_identifier_hash(str(value or "").strip())
+
+
+def _variant_identity(value: Any) -> str:
+    candidate = str(value or "")
+    return candidate if _is_private_identifier_hash(candidate) else hash_variant_key(candidate)
 
 
 def normalize_source_url(value: str) -> str:
@@ -107,9 +110,45 @@ def normalize_source_url(value: str) -> str:
     return urlunsplit((parsed.scheme.lower(), f"{parsed.hostname.lower()}{port}", parsed.path or "/", "", ""))
 
 
+def _is_private_source_identifier(value: Any) -> bool:
+    parsed = urlsplit(str(value or "").strip())
+    path = parsed.path or ""
+    digest = path.removeprefix("/_source/")
+    return (
+        parsed.scheme in {"http", "https"}
+        and bool(parsed.hostname)
+        and path.startswith("/_source/")
+        and _is_private_identifier_hash(digest)
+    )
+
+
 def hash_source_url(value: str) -> str:
     """Return a stable source identity without retaining a URL path or query."""
-    return _private_identifier_hash(normalize_source_url(value))
+    normalized = normalize_source_url(value)
+    if _is_private_source_identifier(normalized):
+        return normalized
+    parsed = urlsplit(normalized)
+    port = f":{parsed.port}" if parsed.port else ""
+    origin = urlunsplit((parsed.scheme, f"{parsed.hostname}{port}", "", "", ""))
+    return f"{origin}/_source/{_private_identifier_hash(parsed.path or '/')}"
+
+
+def _source_matches(observed_source_url: str, stored_source_url: Any) -> bool:
+    stored = str(stored_source_url or "")
+    if not stored:
+        return False
+    try:
+        observed_hash = hash_source_url(observed_source_url)
+    except LiveFactError:
+        return False
+    if stored == observed_hash:
+        return True
+    if _is_private_source_identifier(stored):
+        return False
+    try:
+        return hash_source_url(stored) == observed_hash
+    except LiveFactError:
+        return False
 
 
 def _evidence_metadata(value: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -142,9 +181,11 @@ def _context_matches(record: Mapping[str, Any], expected: Mapping[str, Any] | No
         return True
     for key in ("entity_key", "variant_key", "account_context_hash"):
         wanted = str(expected.get(key) or "")
-        if key == "variant_key" and wanted and not wanted.startswith("sha256:"):
-            wanted = hash_variant_key(wanted)
-        if wanted and wanted != str(record.get(key) or ""):
+        actual = str(record.get(key) or "")
+        if key == "variant_key":
+            wanted = _variant_identity(wanted) if wanted else ""
+            actual = _variant_identity(actual) if actual else ""
+        if wanted and wanted != actual:
             return False
     return True
 
@@ -180,7 +221,7 @@ def display_fact(
             str(record.get("variant_key")) if _is_private_identifier_hash(record.get("variant_key")) else None
         ),
         "source_url_hash": (
-            str(record.get("source_url")) if _is_private_identifier_hash(record.get("source_url")) else None
+            str(record.get("source_url")) if _is_private_source_identifier(record.get("source_url")) else None
         ),
         "observed_at": _as_utc(record.get("observed_at")).isoformat() if _as_utc(record.get("observed_at")) else None,
         "revalidated_at": _as_utc(record.get("revalidated_at")).isoformat() if _as_utc(record.get("revalidated_at")) else None,
@@ -279,11 +320,7 @@ async def revalidate_live_fact(
             "variant_key": record.get("variant_key"),
             "account_context_hash": record.get("account_context_hash"),
         })
-        try:
-            observed_source = hash_source_url(str(observed.get("source_url") or ""))
-        except LiveFactError:
-            observed_source = ""
-        source_ok = observed_source == str(record.get("source_url") or "")
+        source_ok = _source_matches(str(observed.get("source_url") or ""), record.get("source_url"))
         evidence_ok = bool(str(observed.get("evidence_id") or "").strip())
         status = FreshnessStatus.CURRENT if context_ok and source_ok and evidence_ok else FreshnessStatus.CONFLICT
         if not evidence_ok:
