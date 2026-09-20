@@ -586,7 +586,7 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                       AND m.owner_role_key IS NOT NULL
                       AND s.role_key = m.owner_role_key
                 WHERE m.status = 'in_progress'
-                  AND g.status = 'active'
+                  AND g.status IN ('active', 'blocked')
                   AND ($1::text IS NULL OR g.project = $1)
                   AND (m.dispatched_at IS NULL
                        OR m.dispatched_at < NOW() - ($2 || ' minutes')::interval)

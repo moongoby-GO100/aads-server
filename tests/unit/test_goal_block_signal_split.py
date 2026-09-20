@@ -54,6 +54,13 @@ def test_answer_is_checked_before_retry_limit_blocks() -> None:
     assert "_clear_answered_block" in answered
 
 
+def test_blocked_goal_with_in_progress_milestone_is_dispatched() -> None:
+    source = inspect.getsource(goal_dispatch.dispatch_pending_milestones)
+
+    assert "m.status = 'in_progress'" in source
+    assert "g.status IN ('active', 'blocked')" in source
+
+
 def test_migration_is_idempotent_and_non_destructive() -> None:
     sql = (ROOT / "scripts" / "sql" / "20260918_milestone_dispatch_blocked_at.sql").read_text(
         encoding="utf-8"
