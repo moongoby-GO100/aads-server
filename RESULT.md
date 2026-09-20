@@ -359,6 +359,7 @@ Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks
 - `migrations/20260920_m8_auto_site_learning.sql`
 - `migrations/rollback/20260920_m8_auto_site_learning.down.sql`
 - `tests/unit/test_smart_browser_learning.py`
+- `tests/integration/test_smart_browser_learning_postgres.py`
 - `RESULT.md`
 
 ## 검증 결과
@@ -366,12 +367,13 @@ Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks
 | 항목 | 결과 |
 |---|---|
 | pending candidate 중복 | 공통 `_pending_candidate()` helper 1개와 호출 2곳으로 통합한 소스 수준 확인. |
-| focused + M7/G1/G2/G4/G6 영향 회귀, Ruff, `py_compile`, `git diff --check`, pre-commit | 실행하지 않음 — 사용자 규칙상 명령 실행 금지. |
-| disposable PostgreSQL migration 2회 적용 및 rollback/reapply | 실행하지 않음 — 승인 후 Runner 빌드 검증 대상. |
+| focused + M7/G1/G2/G4/G6 영향 회귀 | `run_unit_tests.sh` — **83 passed**. |
+| PostgreSQL 동시성·tenant 격리 | disposable `smartbrowser_m8_verify_0928` — **1 passed**; 동시 최초 방문이 candidate 1쌍만 생성하고 타 tenant 접근을 차단. |
+| Ruff, `py_compile`, `git diff --check` | 모두 PASS. |
+| disposable PostgreSQL migration 2회 적용 및 rollback/reapply | 2회 적용 성공 → rollback 후 테이블 `ABSENT` → reapply 성공. |
 | npm/next/docker build | 실행하지 않음 — 승인 후 Runner 빌드 검증 대상. |
-| commit SHA | 없음 — 사용자 규칙에 따라 commit/push 미실행. |
+| commit SHA | 이 결과와 통합 테스트를 포함한 최종 amend 커밋으로 확정. |
 
 ## 미완료 항목
 
-- 자동 테스트·정적 검사·pre-commit 및 disposable PostgreSQL migration 2회/rollback/reapply는 Runner 검증 전이므로 완료로 주장하지 않는다.
-- commit/push/deploy는 실행하지 않았다.
+- push/deploy는 후속 승인·M9~M11 의존 체인에서 수행한다.
