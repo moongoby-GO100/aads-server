@@ -432,7 +432,10 @@ services:
     container_name: aads-litellm
     restart: always
     ports:
-      - "4000:4000"
+      # LiteLLM is an internal gateway. Publishing it on every host interface
+      # exposed the admin/API surface directly to the Internet. API containers
+      # reach it over aads_network, while host diagnostics only need loopback.
+      - "127.0.0.1:4000:4000"
     env_file:
       - ${AADS_LITELLM_ENV_FILE:-.env.litellm}
     environment:
