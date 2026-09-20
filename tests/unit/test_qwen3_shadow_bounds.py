@@ -69,3 +69,18 @@ async def test_shadow_timeout_is_counted_and_does_not_escape(monkeypatch):
     assert (await doc_index.search_docs([0.0] * 768, query_text="q"))[0]["doc_path"] == "legacy"
     await asyncio.gather(*tuple(doc_index._shadow_tasks))
     assert doc_index.shadow_metrics()["timeout"] == 1
+
+
+@pytest.mark.asyncio
+async def test_shadow_error_is_counted_and_does_not_escape(monkeypatch):
+    _reset_shadow_scheduler(monkeypatch, in_flight=1, queue_max=0)
+
+    async def fail_observation():
+        raise RuntimeError("shadow unavailable")
+
+    assert doc_index._schedule_shadow(fail_observation) is True
+    await asyncio.gather(*tuple(doc_index._shadow_tasks))
+
+    metrics = doc_index.shadow_metrics()
+    assert metrics["error"] == 1
+    assert metrics["created"] == 1

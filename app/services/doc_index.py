@@ -89,7 +89,15 @@ def _schedule_shadow(observe: Any) -> bool:
             logger.warning("doc_qwen_shadow_timeout", **shadow_metrics())
         except Exception as exc:  # Shadow failures must never affect the request.
             _shadow_metrics["error"] += 1
-            logger.warning("doc_qwen_shadow_failed", error=str(exc), **shadow_metrics())
+            # ``shadow_metrics`` already exposes the numeric ``error`` counter.
+            # Reusing that key for the exception text makes Python reject the
+            # logger call before structlog can emit it, leaking a background-task
+            # exception into the event loop. Keep the metric and message distinct.
+            logger.warning(
+                "doc_qwen_shadow_failed",
+                exception_message=str(exc),
+                **shadow_metrics(),
+            )
         finally:
             _shadow_reserved -= 1
 
