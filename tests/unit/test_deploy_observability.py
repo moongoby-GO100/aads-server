@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import asyncio
 import importlib.util
 import re
+import subprocess
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -423,6 +424,32 @@ def test_deploy_script_keeps_five_minute_monitoring_default():
     assert script.index("deploy_phase_start \"p0p1_monitoring\"") < script.rindex(
         'record_deploy "$FINAL_DEPLOY_STATUS"'
     )
+
+
+def test_p0p1_monitor_matches_record_severity_without_payload_false_positive():
+    script = DEPLOY_SCRIPT.read_text()
+    match = re.search(
+        r'MONITOR_PATTERN="\$\{AADS_DEPLOY_MONITOR_PATTERN:-(.+)\}"',
+        script,
+    )
+    assert match, "default deploy monitor pattern is missing"
+    pattern = match.group(1)
+
+    def matches(line: str) -> bool:
+        return subprocess.run(
+            ["grep", "-Eq", pattern],
+            input=line,
+            text=True,
+            check=False,
+        ).returncode == 0
+
+    assert not matches(
+        '{"event":"tool failed for PRIORITY: P0-CRITICAL job",'
+        '"level":"warning"}'
+    )
+    assert matches('{"event":"background task escaped","level":"error"}')
+    assert matches("service event level=critical component=api")
+    assert matches("Traceback (most recent call last):")
 
 
 def test_dockerfile_keeps_runtime_image_bounded():

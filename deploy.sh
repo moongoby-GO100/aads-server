@@ -3022,7 +3022,11 @@ fi
 if (( MONITOR_MIN_SECONDS > MONITOR_SECONDS )); then
     MONITOR_SECONDS="$MONITOR_MIN_SECONDS"
 fi
-MONITOR_PATTERN="${AADS_DEPLOY_MONITOR_PATTERN:-level=(error|critical)|Traceback|CRITICAL}"
+# Match the log record severity, not arbitrary payload text. Pipeline/tool
+# messages legitimately embed strings such as "PRIORITY: P0-CRITICAL" inside a
+# warning record; the old bare ``CRITICAL`` branch treated those as release
+# failures. It also missed structlog's JSON form ("level": "error").
+MONITOR_PATTERN="${AADS_DEPLOY_MONITOR_PATTERN:-\"level\"[[:space:]]*:[[:space:]]*\"(error|critical)\"|level=(error|critical)([[:space:]]|$)|Traceback [(]most recent call last[)]:|^CRITICAL([[:space:]:]|$)}"
 MONITOR_SINCE="$(date --iso-8601=seconds)"
 MONITOR_ELAPSED=0
 echo "[deploy.sh] Phase 7: P0/P1 모니터링 (${MONITOR_SECONDS}초, since=${MONITOR_SINCE})..."
