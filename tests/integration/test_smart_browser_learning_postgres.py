@@ -5,8 +5,9 @@ import os
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-import asyncpg
 import pytest
+
+asyncpg = pytest.importorskip("asyncpg")
 
 from app.core import db_pool
 from app.services.smart_browser_learning import (

@@ -6,8 +6,9 @@ import types
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-import asyncpg
 import pytest
+
+asyncpg = pytest.importorskip("asyncpg")
 
 from app.api.learned_artifacts import PromotionRequest, promote_learned_artifact
 from app.core import db_pool

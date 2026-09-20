@@ -1,3 +1,60 @@
+# AADS-SMARTBROWSER-M11-E2E-RELEASE-R5-20260920
+
+## STEP 0 기존 구현 조사 및 분류
+
+| 접점 | 분류 | 처리 |
+|---|---|---|
+| `scripts/smart_browser_readonly_e2e.py:run` | 수정 | 기존 실제 Playwright capture 경로를 보존하고, ARIA snapshot 및 브라우저 실패 R-E2E artifact 경로만 추가했다. |
+| `_exercise_skill_resolution` | 수정 | production exact/vector resolver 사용은 유지하되, 선택 DB 의존성 때문에 pytest collection이 깨지지 않도록 지연 import했다. |
+| `aria_nodes`, `_sha256`, local storefront fixture | 유지 | read-only fixture와 캡처 증거 계산 계약을 변경하지 않았다. |
+| `tests/unit/test_smart_browser_readonly_e2e.py` | 수정 | optional `asyncpg` 환경에서는 관련 경로만 skip하고, 의존성 없는 브라우저 실패 artifact 계약은 계속 실행 가능하게 했다. |
+| `tests/integration/test_smart_browser_m11_postgres.py` | 수정 | `asyncpg` 직접 import를 `pytest.importorskip`으로 바꿔 collection failure를 안전한 dependency skip으로 전환했다. disposable DB가 제공되면 기존 실제 DB 검증은 그대로 실행된다. |
+| `tests/integration/test_smart_browser_learning_postgres.py` | 수정 | 위와 동일하게 collection 안전성만 보정했다. |
+| 기존 production API/DB schema/LLM client | 유지 | 테스트 편의를 위한 production 약화, `ANTHROPIC_API_KEY` 추가, 직접 외부 LLM 호출은 없다. |
+| 삭제 | 없음 | 호출처 영향·롤백 대상 삭제 없음. |
+
+지시서 중심 파일 밖에서 변경한 두 integration test의 사유는 `asyncpg` 부재가 M11
+pytest collection 전체를 막지 않도록 하고, disposable DB 제공 시 기존 integration
+본문을 실제 실행 경로로 남기기 위해서다.
+
+## 변경 파일
+
+- `scripts/smart_browser_readonly_e2e.py`
+- `tests/unit/test_smart_browser_readonly_e2e.py`
+- `tests/integration/test_smart_browser_m11_postgres.py`
+- `tests/integration/test_smart_browser_learning_postgres.py`
+- `RESULT.md`
+
+## 구현 결과
+
+- 실제 Playwright가 가능하면 fixture 화면 PNG 3개, `locator("main").aria_snapshot()`의 최초·핵심 anchor 무효화 snapshot, chat artifact를 생성한다.
+- 최초 candidate evidence(캡처 SHA-256), exact/vector 재사용 route/reason code, 동적 가격 재검증 hash, 핵심 ARIA invalidation의 candidate `+1`/active 보존, Human Gateway 복구, LLM 호출 수·비용·실행시간을 artifact에 기록한다.
+- 브라우저 import/launch/capture 또는 후속 production resolver가 실패하면 결과는 `degraded`다. `browser-fallback.json`에 `HTTP status -> API /health -> container/process` 순서의 read-only 진단을 저장하고, chat artifact에 `BROWSER_CAPTURE_UNAVAILABLE`를 남긴다. 이 경우 문구는 **브라우저 E2E 미실행, API 검증으로 대체**이며 browser pass로 판정하지 않는다.
+- 재검증 artifact 경로: `/tmp/aads-smartbrowser-r5-recheck.v916bh/01-first-learning.png`, `02-revisit-price.png`, `03-aria-invalidated.png`, `aria-snapshots.json`, `chat-artifact.json`; 폴백 검증 artifact는 `/tmp/aads-smart-browser-e2e-recheck-1039/browser-fallback.json`이다.
+
+## 검증 결과
+
+| 항목 | 결과 |
+|---|---|
+| Playwright E2E | **PASS**, 15/15 checks, 2,701ms, write action 0, LLM call 0, 비용 $0.00. 기존 릴리스 이미지에 현재 worktree를 read-only mount한 격리 컨테이너에서 최종 HEAD 재실행. |
+| focused/affected unit pytest | `run_unit_tests.sh` — **86 passed**. |
+| disposable PostgreSQL integration | M11 + M8 실제 DB 경로 — **2 passed**; candidate→active→candidate+1/active 보존과 concurrent candidate/tenant 격리를 재검증. |
+| 브라우저 불가 폴백 | 호스트 직접 실행에서 `ModuleNotFoundError`를 재현하고 `HTTP → API health → container/process` artifact와 `degraded` 판정을 확인. 브라우저 PASS로 오판하지 않음. |
+| Ruff | 대상 4개 Python 파일 **PASS**; 최초 검사에서 발견한 style 6건 교정 후 재검증. |
+| `py_compile` / `git diff --check` | 최종 HEAD에서 모두 **PASS**. |
+| repo 표준 pre-commit (`scripts/hooks/pre-commit`) | 대상 5개 파일 stage 후 수동 실행 및 실제 commit hook 모두 **PASS**. |
+| npm/next/docker build | 승인 후 Runner 빌드 검증 대상. |
+
+## 릴리스 후보 전제 및 핸드오버
+
+- 기준 SHA: `origin/main` `f6a124b2254aaf4676d1016af322948130b92ba5`; 검증 후보는 로컬 branch `runner-ea3210d3-recovered`의 단일 후속 commit이며 push는 수행하지 않았다.
+- 배포 전 preflight: clean committed candidate SHA, 단일 immutable image digest, candidate `--no-build` start, candidate direct health, DB owner/epoch fence, nginx lock 직전 health 재확인, routed health 실패 시 즉시 rollback, standby same-digest 동기화 확인.
+- 롤백 경로: routed health failure면 nginx route를 기존 active slot으로 즉시 복귀하고 candidate를 비활성화한다. 코드 롤백은 본 작업의 4개 코드/test hunk만 역적용 가능하며 삭제 파일은 없다.
+- P0/P1 관찰 계획: cutover 뒤 5분 동안 routed health, error/5xx, browser/recovery reason code, owner lease 및 LLM 비용/호출량을 관찰한다.
+- 운영 DB 및 handover DB 기록은 수행하지 않았다. 공식 Runner handover 경로에서 기록해야 하며, 불가하면 원 세션이 기록해야 한다.
+
+---
+
 # AADS-GOAL-V12-W14A-R1-20260919
 
 - 구현: immutable change set body hash/target version, 독립 다중 승인, reject-wins,
