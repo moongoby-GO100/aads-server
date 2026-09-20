@@ -32,6 +32,8 @@ from app.services.smart_browser_learning import (
     auto_learn_site_visit,
     index_site_skill_embedding,
     learn_page_template,
+    plan_skill_runtime,
+    record_runtime_decision,
     resolve_site_skill,
 )
 
@@ -122,6 +124,8 @@ class BrowserRecipeProvenanceIn(_Strict):
 class SkillResolveIn(_Strict):
     query: str = Field(min_length=1, max_length=500)
     allow_llm_fallback: bool = True
+    required_capabilities: list[str] = Field(default_factory=list, max_length=20)
+    max_llm_cost_usd: float = Field(default=0.01, ge=0, le=0.01)
 
 
 class SkillExecuteIn(SkillResolveIn):
@@ -130,6 +134,8 @@ class SkillExecuteIn(SkillResolveIn):
     approval_id: str | None = None
     session_id: str = Field(min_length=1, max_length=200)
     correlation_id: str = Field(min_length=1, max_length=200)
+    session_available: bool = False
+    local_environment_available: bool = False
 
 
 def _tenant(context: TenantContext) -> str:
@@ -319,7 +325,29 @@ async def execute_site_skill(
         selected = await resolve_site_skill(
             tenant_id=_tenant(context), site_profile_id=site_profile_id,
             query=body.query, allow_llm_fallback=body.allow_llm_fallback,
+            required_capabilities=body.required_capabilities,
+            max_llm_cost_usd=body.max_llm_cost_usd,
         )
+        membership = context.get("membership") or {}
+        authenticated_permissions = membership.get("permissions") or []
+        contract = selected.get("execution_contract") or {}
+        contract_capabilities = set(contract.get("capabilities") or [])
+        safety_contract_match = bool(contract.get("executor")) and set(
+            body.required_capabilities
+        ).issubset(contract_capabilities)
+        runtime = plan_skill_runtime(
+            selected=selected, required_capabilities=body.required_capabilities,
+            permissions=authenticated_permissions, session_available=body.session_available,
+            local_environment_available=body.local_environment_available,
+            safety_contract_match=safety_contract_match,
+        )
+        await record_runtime_decision(
+            tenant_id=_tenant(context), site_profile_id=site_profile_id,
+            selected=selected, runtime=runtime,
+        )
+        if not runtime["executable"]:
+            return {"selection": selected, "runtime": runtime, "run": None,
+                    "request_id": request.headers.get("x-request-id")}
         payload = {
             "skill_id": selected["skill_id"], "version": selected["version"],
             "input": body.input,
@@ -345,7 +373,7 @@ async def execute_site_skill(
         )
         safe_run = dict(result)
         safe_run.pop("output", None)
-        return {"selection": selected, "run": safe_run, "display": display,
+        return {"selection": selected, "runtime": runtime, "run": safe_run, "display": display,
                 "request_id": request.headers.get("x-request-id")}
     except (SmartBrowserLearningError, SkillRegistryError) as exc:
         status = exc.status_code if isinstance(exc, SkillRegistryError) else 422

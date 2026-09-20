@@ -127,6 +127,77 @@ def test_llm_may_select_only_from_active_allowlist(monkeypatch):
         ))
 
 
+def test_resolution_gracefully_degrades_when_vector_and_llm_are_unavailable(monkeypatch):
+    events = []
+
+    async def candidates(**_kwargs):
+        return [{
+            "skill_id": "skill-1", "version": "1", "version_id": "version-1",
+            "slug": "catalog.search", "title": "Catalog", "description": "read",
+            "intents": [], "risk_tier": "read", "manifest": {"capabilities": ["search"]},
+        }]
+
+    async def event(**kwargs):
+        events.append(kwargs)
+
+    async def unavailable(*_args, **_kwargs):
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(learning, "_active_skills", candidates)
+    monkeypatch.setattr(learning, "_write_event", event)
+    monkeypatch.setitem(sys.modules, "app.services.doc_index", SimpleNamespace(
+        QWEN_DIMENSION=1024, QWEN_INSTRUCTION_VERSION="qwen3", QWEN_MODEL_ID="qwen3",
+        embed_qwen_query=unavailable,
+    ))
+    monkeypatch.setitem(sys.modules, "app.core.anthropic_client", SimpleNamespace(
+        call_llm_with_fallback=unavailable,
+    ))
+    with pytest.raises(learning.SmartBrowserLearningError, match="no_allowed_site_skill"):
+        asyncio.run(learning.resolve_site_skill(
+            tenant_id="tenant", site_profile_id="profile", query="find products",
+            required_capabilities=["search"],
+        ))
+    audit = events[-1]["evidence"]["audit"]
+    assert [stage["stage"] for stage in audit] == ["exact", "qwen3_vector", "llm"]
+    assert audit[1]["reason_code"] == "QWEN3_UNAVAILABLE"
+    assert audit[2]["reason_code"] == "LLM_UNAVAILABLE"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "runtime", "executable", "reason"),
+    [
+        ({"safety_contract_match": False}, "human_gateway", False, "SAFETY_CONTRACT_MISMATCH"),
+        ({"safety_contract_match": True, "required_capabilities": ["pc_agent"],
+          "permissions": ["pc_agent"], "session_available": True,
+          "local_environment_available": True}, "pc_agent", True, "LOCAL_ENVIRONMENT_REQUIRED"),
+        ({"safety_contract_match": True, "required_capabilities": ["navigate"],
+          "permissions": ["navigate"], "session_available": True},
+         "browser", True, "SERVER_BROWSER_CAPABLE"),
+    ],
+)
+def test_runtime_routing_is_fail_closed(kwargs, runtime, executable, reason):
+    defaults = {
+        "selected": {"risk_tier": "read", "execution_contract": {
+            "executor": "browser.pc", "allowed_tools": ["pc_agent", "browser"]}},
+        "permissions": [], "session_available": False,
+        "local_environment_available": False, "safety_contract_match": False,
+    }
+    result = learning.plan_skill_runtime(**{**defaults, **kwargs})
+    assert (result["runtime"], result["executable"], result["reason_code"]) == (
+        runtime, executable, reason,
+    )
+
+
+def test_runtime_high_risk_requires_authenticated_permission():
+    result = learning.plan_skill_runtime(
+        selected={"risk_tier": "financial"}, required_capabilities=[], permissions=[],
+        session_available=True, local_environment_available=True,
+        safety_contract_match=True,
+    )
+    assert result == {"runtime": "human_gateway", "executable": False,
+                      "reason_code": "HUMAN_APPROVAL_REQUIRED"}
+
+
 def test_api_exposes_learning_revisit_search_execute_and_live_observation():
     from pathlib import Path
 
