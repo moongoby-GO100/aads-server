@@ -44,6 +44,8 @@ END $$;
 
 ALTER TABLE browser_live_facts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE browser_live_fact_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE browser_live_facts FORCE ROW LEVEL SECURITY;
+ALTER TABLE browser_live_fact_events FORCE ROW LEVEL SECURITY;
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='browser_live_facts' AND policyname='tenant_isolation') THEN

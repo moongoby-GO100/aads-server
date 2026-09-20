@@ -3,6 +3,8 @@ BEGIN;
 DROP INDEX IF EXISTS idx_browser_live_facts_m10_freshness;
 DROP POLICY IF EXISTS tenant_isolation ON browser_live_fact_events;
 DROP POLICY IF EXISTS tenant_isolation ON browser_live_facts;
+ALTER TABLE browser_live_fact_events NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE browser_live_facts NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE browser_live_fact_events DISABLE ROW LEVEL SECURITY;
 ALTER TABLE browser_live_facts DISABLE ROW LEVEL SECURITY;
 ALTER TABLE browser_live_fact_events

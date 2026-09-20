@@ -52,6 +52,8 @@ CREATE TABLE browser_live_fact_events(
 async def test_m10_twice_rollback_reapply_tenant_constraints_and_rls() -> None:
     conn = await asyncpg.connect(_url())
     tenant_a, tenant_b, profile_a = uuid4(), uuid4(), uuid4()
+    role_name = f"m10_tenant_{uuid4().hex[:12]}"
+    role_created = False
     try:
         await conn.execute(BOOTSTRAP)
         await conn.execute(UP)
@@ -70,16 +72,32 @@ async def test_m10_twice_rollback_reapply_tenant_constraints_and_rls() -> None:
                           now(),now(),now()+interval '1 minute',now(),'CURRENT','e',$2)""",
                 tenant_b, profile_a,
             )
-        await conn.execute("CREATE ROLE m10_tenant_test NOLOGIN")
-        await conn.execute("GRANT SELECT,INSERT ON browser_live_facts TO m10_tenant_test")
-        await conn.execute("SET ROLE m10_tenant_test")
+        await conn.execute(
+            """INSERT INTO browser_live_facts
+               (tenant_id,fact_type,entity_key,source_url,source_kind,revalidator_key,
+                observed_value,observed_value_hash,observed_at,fetched_at,expires_at,revalidated_at,
+                freshness_status,evidence_id,site_profile_id)
+               VALUES($1,'price','p','https://x/_source/'||repeat('a',64),'test','r','1','h',
+                      now(),now(),now()+interval '1 minute',now(),'CURRENT','e',$2)""",
+            tenant_a, profile_a,
+        )
+        await conn.execute(f"CREATE ROLE {role_name} NOLOGIN")
+        role_created = True
+        await conn.execute(f"GRANT SELECT,INSERT ON browser_live_facts TO {role_name}")
+        await conn.execute(f"SET ROLE {role_name}")
         await conn.execute("SELECT set_config('app.current_tenant_id',$1,false)", str(tenant_a))
+        assert await conn.fetchval("SELECT count(*) FROM browser_live_facts") == 1
+        await conn.execute("SELECT set_config('app.current_tenant_id',$1,false)", str(tenant_b))
         assert await conn.fetchval("SELECT count(*) FROM browser_live_facts") == 0
         await conn.execute("RESET ROLE")
         await conn.execute(DOWN)
         await conn.execute(UP)
         assert await conn.fetchval(
             "SELECT fetched_at IS NOT NULL FROM browser_live_facts LIMIT 1"
-        ) is None
+        ) is True
     finally:
+        await conn.execute("RESET ROLE")
+        if role_created:
+            await conn.execute(f"DROP OWNED BY {role_name}")
+            await conn.execute(f"DROP ROLE {role_name}")
         await conn.close()

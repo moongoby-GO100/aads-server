@@ -442,13 +442,13 @@ Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks
 | 항목 | 결과 |
 |---|---|
 | 기준선 | HEAD/origin/main `a8e7d431`; M9 포함 확인, 시작 시 clean detached worktree. |
-| focused + M7~M9/G1/G2/G5/G6 영향 회귀 | `JWT_SECRET_KEY=test-secret ... pytest` — **70 passed**. |
+| focused + M7~M9/G1/G2/G5/G6 영향 회귀 | `./scripts/run_unit_tests.sh ...` — **89 passed**. |
 | 최초 focused | **28 passed**. |
 | Ruff / py_compile / diff-check / pre-commit hook | 모두 PASS. |
-| disposable PostgreSQL 2회/rollback/reapply | 테스트를 작성하고 실행을 시도했으나 sandbox가 `127.0.0.1:5433` 연결을 `PermissionError: Operation not permitted`로 차단. **통과 주장하지 않음**. |
+| disposable PostgreSQL 2회/rollback/reapply | 격리 DB `smartbrowser_m10_verify_1002`에서 2회 적용, tenant/site FK, RLS 격리, rollback/reapply — **1 passed**. |
 | npm/next/docker build | 실행하지 않음 — 승인 후 Runner 빌드 검증 대상. |
-| commit SHA | commit 금지 지시에 따라 생성하지 않음. 기준 SHA는 `a8e7d431`; 변경은 working tree에만 존재. |
+| commit SHA | 러너 산출물 `e95c52efd0be45ae26bf2f8c6903767975d65917`; 독립 검증 보강은 후속 커밋에 기록한다. |
 
 ## 미충족 항목
 
-- disposable PostgreSQL 실검증은 현재 sandbox network 차단으로 미완료다. 따라서 M10 전체 완료를 주장하지 않는다.
+- 없음. 운영 적용은 M11 완료 후 단일 블루그린 릴리스에서 수행한다.
