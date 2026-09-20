@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import asyncpg
@@ -172,6 +172,9 @@ async def codex_usage() -> dict[str, Any]:
     10분마다 긁어 codex_usage_snapshots 에 올린다. 여기서는 그 표만 읽는다.
     설계: aads-docs/docs/PRD-LLM-ACCOUNT-RUNTIME-BINDING-v1.0.md
     """
+    from app.services.model_registry import clear_expired_rate_limits
+
+    await clear_expired_rate_limits()
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -305,10 +308,16 @@ def _usage_windows(provider: str, row: Any, slot_row: dict[str, Any] | None) -> 
         return out
 
     if row["used_percent"] is not None:
+        window_minutes = 10080
+        used_percent = float(row["used_percent"])
+        resets_at = row["resets_at"]
+        if resets_at and resets_at <= datetime.now(timezone.utc):
+            used_percent = 0.0
+            resets_at = resets_at + timedelta(minutes=window_minutes)
         out.append({
-            "window_minutes": 10080,
-            "used_percent": float(row["used_percent"]),
-            "resets_at": row["resets_at"].isoformat() if row["resets_at"] else None,
+            "window_minutes": window_minutes,
+            "used_percent": used_percent,
+            "resets_at": resets_at.isoformat() if resets_at else None,
         })
     return out
 
@@ -337,6 +346,9 @@ async def llm_overview() -> dict[str, Any]:
     껐다. 합치는 곳이 두 군데면 같은 실수가 두 번 난다.
     설계: aads-docs/docs/PRD-SETTINGS-UNIFIED-ACCOUNT-CARD-v1.0.md
     """
+    from app.services.model_registry import clear_expired_rate_limits
+
+    await clear_expired_rate_limits()
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(

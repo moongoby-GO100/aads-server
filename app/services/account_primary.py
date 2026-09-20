@@ -15,7 +15,7 @@ priority 를 다시 매기는 것으로 끝낸다. 화면의 "주계정" 표시�
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import structlog
@@ -83,6 +83,9 @@ def _earliest_reset(*pairs) -> Optional[datetime]:
 async def usage_view(provider: str) -> List[Dict[str, Any]]:
     """계정별 (key_name, 한도남음, 가장 이른 갱신시각). 정렬 판단의 원재료다."""
     from app.core.db_pool import get_pool
+    from app.services.model_registry import clear_expired_rate_limits
+
+    await clear_expired_rate_limits()
 
     pool = get_pool()
     now = datetime.now(timezone.utc)
@@ -97,11 +100,19 @@ async def usage_view(provider: str) -> List[Dict[str, Any]]:
     snaps: Dict[str, Dict[str, Any]] = {}
     if provider == "codex":
         for r in await pool.fetch(
-            "SELECT key_name, used_percent, resets_at FROM codex_usage_snapshots"
+            "SELECT key_name, used_percent, resets_at, window_minutes FROM codex_usage_snapshots"
         ):
+            used = float(r["used_percent"] or 0)
+            reset = r["resets_at"]
+            # Codex 수집은 10분 주기라 reset 직후에는 직전 창의 100% 스냅샷이
+            # 잠깐 남을 수 있다. reset 이 지난 스냅샷은 새 창으로 보고 자동
+            # 정렬에서 "한도 없음"으로 취급하지 않는다.
+            if reset and reset <= now:
+                used = 0.0
+                reset = reset + timedelta(minutes=int(r["window_minutes"] or 10080))
             snaps[r["key_name"]] = {
-                "headroom": 100.0 - float(r["used_percent"] or 0),
-                "reset": r["resets_at"],
+                "headroom": 100.0 - used,
+                "reset": reset,
             }
     else:
         # 클로드는 5시간 창과 주간 창을 따로 쓴다. 둘 중 여유가 있는 창의

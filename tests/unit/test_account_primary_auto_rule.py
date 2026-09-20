@@ -62,3 +62,13 @@ def test_full_tie_falls_back_to_existing_priority():
         acct("first", reset_in_h=5, headroom=50.0, priority=1),
     ])
     assert order == ["first", "second"]
+
+
+def test_fresh_reset_window_is_usable_but_not_ahead_of_known_earlier_reset():
+    """reset 이 지난 계정은 한도 없음으로 밀어내지 않는다."""
+    order = auto_order([
+        acct("fresh_window", quota=True, reset_in_h=7 * 24, headroom=100.0, priority=1),
+        acct("known_soon", quota=True, reset_in_h=4, headroom=35.0, priority=2),
+        acct("empty", quota=False, reset_in_h=1, headroom=0.0, priority=3),
+    ])
+    assert order == ["known_soon", "fresh_window", "empty"]
