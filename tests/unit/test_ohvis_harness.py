@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -122,6 +123,18 @@ def test_lifecycle_manifest_changes_only_the_embedded_status():
     assert {key: value for key, value in active.items() if key != "status"} == {
         key: value for key, value in retired.items() if key != "status"
     }
+
+
+def test_persisted_jsonb_text_manifest_is_validated_like_asyncpg_runtime() -> None:
+    manifest = validate_skill_manifest(_manifest())
+    content = ohvis_harness._canonical_json(manifest)
+    validated = ohvis_harness._validate_persisted_skill_version({
+        "status": "candidate",
+        "manifest": json.dumps(manifest),
+        "content": content,
+        "content_sha256": ohvis_harness._sha256(manifest),
+    })
+    assert validated == validate_skill_manifest(manifest)
 
 
 def test_retry_is_rejected_without_required_idempotency():

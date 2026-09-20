@@ -452,3 +452,40 @@ Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks
 ## 미충족 항목
 
 - 없음. 운영 적용은 M11 완료 후 단일 블루그린 릴리스에서 수행한다.
+
+# AADS-SMARTBROWSER-M11-E2E-RELEASE-R4-20260920
+
+## 구현·교정
+
+- 실제 Playwright 읽기전용 쇼핑 검색, 최초/재방문/ARIA 무효화 3단계 캡처와 ARIA·채팅 artifact를 생성한다.
+- production Exact→Qwen3 vector resolver, live fact 표시 gate, Human Gateway, G6 golden gate를 한 여정에서 검증한다.
+- disposable PostgreSQL에서 실제 `auto_learn_site_visit` candidate 생성, Page Template·Site Skill shadow→active 승격, exact/vector 재사용, ARIA 필수 anchor 제거 후 version 2 candidate 생성과 version 1 active 보존을 검증한다.
+- M10 raw 캡처 차단 정규식의 `dom_fallback` 오탐을 교정했다.
+- asyncpg JSONB 문자열을 Site Skill 승격 검증기가 object로 복원하지 못하던 런타임 결함을 교정했다.
+
+## 변경 파일
+
+- `scripts/smart_browser_readonly_e2e.py`
+- `tests/unit/test_smart_browser_readonly_e2e.py`
+- `tests/integration/test_smart_browser_m11_postgres.py`
+- `app/services/site_knowledge.py`
+- `tests/unit/test_site_knowledge.py`
+- `app/services/ohvis_harness.py`
+- `tests/unit/test_ohvis_harness.py`
+- `RESULT.md`
+
+## 검증 결과
+
+| 항목 | 결과 |
+|---|---|
+| Playwright E2E | **PASS**, 15/15 checks, 2,626ms, write action 0, LLM call 0, 비용 $0.00 |
+| 화면 근거 | `/tmp/aads-smart-browser-e2e-final/01-first-learning.png`, `02-revisit-price.png`, `03-aria-invalidated.png` |
+| artifact | `aria-snapshots.json`, `chat-artifact.json`; exact/vector/Human Gateway reason code 포함 |
+| focused + 영향 회귀 | **111 passed**, 0 failed |
+| PostgreSQL 실전이 | `smartbrowser_m11_verify_1015` — **1 passed**, 실제 candidate→active→candidate+1/active 보존·exact/vector 검증 |
+| 정적 검사 | py_compile·diff-check PASS; Ruff는 기존 `ohvis_harness.py`의 BLE001/S110/RUF100 경고만 제외하고 PASS |
+| 최초 결함 재현 | `dom_fallback` 오탐과 JSONB manifest 문자열 승격 실패를 실제 DB E2E에서 재현 후 교정 |
+
+## 남은 릴리스 항목
+
+- clean release SHA fast-forward push, `deploy.sh bluegreen`, 동일 digest standby, 외부 health 200, 5분 P0/P1 감시, 배포 후 화면 캡처와 DB handover 기록.

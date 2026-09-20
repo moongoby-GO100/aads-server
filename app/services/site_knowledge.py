@@ -94,7 +94,9 @@ def safe_observation_value(value: Any, *, depth: int = 0) -> Any:
         result: dict[str, Any] = {}
         for key, item in value.items():
             safe_key = str(key)
-            if _SENSITIVE_WORD.search(safe_key) or _RAW_CAPTURE_KEY.search(safe_key):
+            if _SENSITIVE_WORD.search(safe_key) or (
+                safe_key != "dom_fallback" and _RAW_CAPTURE_KEY.search(safe_key)
+            ):
                 raise SiteKnowledgeError("sensitive_or_page_command_content")
             result[safe_key] = safe_observation_value(item, depth=depth + 1)
         return result

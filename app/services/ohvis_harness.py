@@ -220,7 +220,13 @@ def _manifest_for_status(manifest: Mapping[str, Any], status: str) -> dict[str, 
 
 def _validate_persisted_skill_version(row: Mapping[str, Any]) -> dict[str, Any]:
     """Reject a stored version whose lifecycle and immutable payload disagree."""
-    manifest = validate_skill_manifest(row["manifest"])
+    stored_manifest = row["manifest"]
+    if isinstance(stored_manifest, str):
+        try:
+            stored_manifest = json.loads(stored_manifest)
+        except json.JSONDecodeError as exc:
+            raise SkillRegistryError("stored_skill_contract_mismatch", status_code=409) from exc
+    manifest = validate_skill_manifest(stored_manifest)
     if manifest["status"] != row["status"]:
         raise SkillRegistryError("stored_skill_lifecycle_mismatch", status_code=409)
     try:
