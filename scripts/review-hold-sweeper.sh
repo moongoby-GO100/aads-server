@@ -34,6 +34,7 @@ AADS_API_URL="${AADS_API_URL:-http://127.0.0.1:8100}"
 SWEEP_BATCH="${SWEEP_BATCH:-5}"                      # 1회 실행당 재검수 건수
 SWEEP_MAX_RETRY="${SWEEP_MAX_RETRY:-10}"             # 잡당 자동 재검수 상한 (CEO 지시 2026-09-17: 6→10)
 ORIGIN_ADJUDICATION_RETRY_THRESHOLD="${REVIEW_ORIGIN_ADJUDICATION_RETRY_THRESHOLD:-3}"
+ORIGIN_ADJUDICATION_TIMEOUT_MIN="${REVIEW_ORIGIN_ADJUDICATION_TIMEOUT_MIN:-120}"
 SWEEP_BACKOFF_BASE_MIN="${SWEEP_BACKOFF_BASE_MIN:-10}"
 SWEEP_BACKOFF_MAX_MIN="${SWEEP_BACKOFF_MAX_MIN:-360}"
 # 연속으로 이만큼 인프라 사유 실패가 나오면 그때 배치를 멈춘다(진짜 회로 개방).
@@ -304,13 +305,18 @@ db_exec "ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_retry_count I
 db_exec "ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_retry_last_at TIMESTAMPTZ;"
 db_exec "ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_request_id UUID;"
 
-select_sql="SELECT job_id, project, COALESCE(review_retry_count,0), COALESCE(chat_session_id,''), COALESCE(review_request_id::text,'')
+select_sql="SELECT job_id, project, COALESCE(review_retry_count,0), COALESCE(chat_session_id,''), COALESCE(review_request_id::text,''),
+       COALESCE(error_detail,''),
+       CASE WHEN error_detail='review_origin_adjudication_pending'
+            THEN FLOOR(EXTRACT(EPOCH FROM (NOW() - updated_at)) / 60)::bigint
+       END
 FROM pipeline_jobs
 WHERE status='review_hold'
   AND review_flag_category IN (${INFRA_CATEGORIES})
   AND COALESCE(git_diff,'') <> ''
   AND COALESCE(review_retry_count,0) < ${SWEEP_MAX_RETRY}
-  AND COALESCE(error_detail,'') <> 'review_origin_adjudication_pending'
+  AND (COALESCE(error_detail,'') <> 'review_origin_adjudication_pending'
+       OR updated_at < NOW() - (${ORIGIN_ADJUDICATION_TIMEOUT_MIN}::text || ' minutes')::interval)
   AND (review_retry_last_at IS NULL
        OR review_retry_last_at < NOW() - ((LEAST(${SWEEP_BACKOFF_MAX_MIN},
             (${SWEEP_BACKOFF_BASE_MIN} * POWER(2, COALESCE(review_retry_count,0)))::int))::text || ' minutes')::interval)
@@ -340,6 +346,13 @@ infra_retry() {
     retried=$((retried + 1))
     consec_infra=$((consec_infra + 1))
     log "  INFRA_RETRY ${jid} project=${proj} retry=${nxt}/${SWEEP_MAX_RETRY} ${reason}"
+    if [[ "$nxt" -ge "$SWEEP_MAX_RETRY" ]]; then
+        log "  REVIEW_RETRY_EXHAUSTED ${jid} project=${proj} retry=${nxt}/${SWEEP_MAX_RETRY}"
+        terminate_review_hold "$jid" "review_failed" \
+            "자동 재검수 상한(${SWEEP_MAX_RETRY}) 도달 — ${reason}"
+        terminated=$((terminated + 1))
+        return
+    fi
     if [[ "$nxt" -ge "$ORIGIN_ADJUDICATION_RETRY_THRESHOLD" ]]; then
         log "  ORIGIN_THRESHOLD ${jid} — 연속 무응답 판정 상한 도달, 원 세션 판정 이관"
         enqueue_origin_adjudication "$jid" "$proj"
@@ -370,6 +383,7 @@ WITH target AS (
        AND j.status='review_hold'
        AND j.review_flag_category IN (${INFRA_CATEGORIES})
        AND COALESCE(j.review_retry_count,0) >= ${ORIGIN_ADJUDICATION_RETRY_THRESHOLD}
+       AND COALESCE(j.error_detail,'') <> 'review_origin_adjudication_expired'
        AND COALESCE(j.commit_hash,'') ~ '^[0-9a-fA-F]{7,64}$'
        AND COALESCE(j.git_diff,'') <> ''
 ), marked AS (
@@ -409,7 +423,7 @@ SELECT job_id, project
  WHERE status='review_hold'
    AND review_flag_category IN (${INFRA_CATEGORIES})
    AND COALESCE(review_retry_count,0) >= ${ORIGIN_ADJUDICATION_RETRY_THRESHOLD}
-   AND COALESCE(error_detail,'') <> 'review_origin_adjudication_pending'
+   AND COALESCE(error_detail,'') NOT IN ('review_origin_adjudication_pending', 'review_origin_adjudication_expired')
  ORDER BY updated_at ASC
  LIMIT ${SWEEP_BATCH};" 2>/dev/null) || handoff_rows=""
 if [[ "$DRY_RUN" == "1" ]]; then
@@ -432,12 +446,41 @@ if [[ -z "${rows//[[:space:]]/}" ]]; then
     exit 0
 fi
 
-while IFS=$'\x1e' read -r job_id project retry_count session_id request_id; do
+while IFS=$'\x1e' read -r job_id project retry_count session_id request_id error_detail origin_pending_age_min; do
     [[ -z "$job_id" ]] && continue
     # C1: job_id 형식 검증 — DB 값이라도 그대로 SQL/URL에 넣지 않는다.
     if [[ ! "$job_id" =~ ^runner-[0-9a-f]{6,32}$ ]]; then
         log "  SKIP invalid job_id format: ${job_id:0:40}"
         continue
+    fi
+
+    if [[ "$error_detail" == "review_origin_adjudication_pending" ]]; then
+        if [[ "$DRY_RUN" == "1" ]]; then
+            log "ORIGIN_ADJUDICATION_EXPIRED ${job_id} project=${project} age_min=${origin_pending_age_min}"
+        else
+            expired_age_min=$(db_query "
+WITH expired AS (
+    SELECT job_id,
+           FLOOR(EXTRACT(EPOCH FROM (NOW() - updated_at)) / 60)::bigint AS age_min
+      FROM pipeline_jobs
+     WHERE job_id='${job_id}'
+       AND status='review_hold'
+       AND error_detail='review_origin_adjudication_pending'
+       AND updated_at < NOW() - (${ORIGIN_ADJUDICATION_TIMEOUT_MIN}::text || ' minutes')::interval
+), marked AS (
+    UPDATE pipeline_jobs j
+       SET error_detail='review_origin_adjudication_expired', updated_at=NOW()
+      FROM expired e
+     WHERE j.job_id=e.job_id AND j.status='review_hold'
+    RETURNING e.age_min
+)
+SELECT age_min FROM marked;" 2>/dev/null | tr -d '[:space:]') || expired_age_min=""
+            if [[ -z "$expired_age_min" ]]; then
+                log "  SKIP ${job_id} — origin adjudication 만료 상태 변경 누락"
+                continue
+            fi
+            log "ORIGIN_ADJUDICATION_EXPIRED ${job_id} project=${project} age_min=${expired_age_min}"
+        fi
     fi
     total=$((total + 1))
 
