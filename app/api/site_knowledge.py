@@ -16,7 +16,7 @@ from app.services.channel_router import (
     directive_from_authenticated_context,
     payload_hash,
 )
-from app.services.live_fact_gate import guard_payload_for_display
+from app.services.live_fact_gate import LiveFactError, guard_payload_for_display
 from app.services.ohvis_harness import SkillRegistryError, execute_skill
 from app.services.site_knowledge import (
     SiteKnowledgeError,
@@ -413,5 +413,5 @@ async def validate_live_observation(
         return await record_live_observation(
             tenant_id=_tenant(context), site_profile_id=site_profile_id, **payload,
         )
-    except SiteKnowledgeError as exc:
+    except (SiteKnowledgeError, LiveFactError) as exc:
         _error(exc)

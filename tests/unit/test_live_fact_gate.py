@@ -35,6 +35,8 @@ def test_display_fact_redacts_expired_value_and_supplies_retry():
     result = gate.display_fact(_record(expires_at=NOW - timedelta(seconds=1)), now=NOW)
     assert result["freshness_status"] == "STALE"
     assert result["value"] is None
+    assert result["reason_code"] == "TTL_EXPIRED"
+    assert result["recovery_action"]["action"] == "revalidate_fact"
     assert result["retry_action"]["action"] == "revalidate_fact"
 
 
@@ -108,8 +110,9 @@ def test_source_or_entity_change_is_conflict(monkeypatch):
     async def load(**_kwargs):
         return dict(record)
 
-    async def persist(_record_value, *, status, now, evidence):
-        return {"freshness_status": status.value, "value": None, "evidence": evidence, "now": now}
+    async def persist(_record_value, *, status, now, evidence, reason_code=""):
+        return {"freshness_status": status.value, "value": None, "evidence": evidence,
+                "now": now, "reason_code": reason_code}
 
     async def provider(_record_value):
         return {
@@ -129,17 +132,21 @@ def test_source_or_entity_change_is_conflict(monkeypatch):
     finally:
         gate.unregister_fact_revalidator("test.provider")
     assert result["freshness_status"] == "CONFLICT"
+    assert result["reason_code"] == "CONTEXT_MISMATCH"
     assert result["value"] is None
 
 
 def test_concurrent_non_force_revalidation_calls_source_once(monkeypatch):
-    record = _record(expires_at=NOW - timedelta(seconds=1), freshness_status="STALE")
+    record = _record(
+        observed_value=7, observed_value_hash=gate.value_hash(7),
+        expires_at=NOW - timedelta(seconds=1), freshness_status="STALE",
+    )
     calls = 0
 
     async def load(**_kwargs):
         return dict(record)
 
-    async def persist(_record_value, *, status, now, evidence):
+    async def persist(_record_value, *, status, now, evidence, reason_code=""):
         record.update({
             "observed_value": evidence["value"], "observed_at": now,
             "expires_at": now + timedelta(seconds=30), "revalidated_at": now,
@@ -176,6 +183,35 @@ def test_concurrent_non_force_revalidation_calls_source_once(monkeypatch):
     assert {item["freshness_status"] for item in results} == {"CURRENT"}
 
 
+def test_revalidation_value_change_is_conflict(monkeypatch):
+    record = _record(observed_value=1000, observed_value_hash=gate.value_hash(1000))
+
+    async def load(**_kwargs):
+        return dict(record)
+
+    async def persist(_record_value, *, status, now, evidence, reason_code=""):
+        return {"freshness_status": status.value, "value": None, "reason_code": reason_code}
+
+    async def provider(_record_value):
+        return {
+            "value": 900, "source_url": record["source_url"],
+            "entity_key": record["entity_key"], "variant_key": record["variant_key"],
+            "account_context_hash": record["account_context_hash"], "evidence_id": "evidence-new",
+            "observed_at": NOW, "expires_at": NOW + timedelta(seconds=30),
+        }
+
+    monkeypatch.setattr(gate, "_load_fact", load)
+    monkeypatch.setattr(gate, "_persist_revalidation", persist)
+    gate.register_fact_revalidator("test.provider", provider)
+    try:
+        result = asyncio.run(gate.revalidate_live_fact(
+            tenant_id=str(record["tenant_id"]), fact_id=str(record["id"]), now=NOW,
+        ))
+    finally:
+        gate.unregister_fact_revalidator("test.provider")
+    assert result == {"freshness_status": "CONFLICT", "value": None, "reason_code": "VALUE_MISMATCH"}
+
+
 def test_payload_gate_redacts_known_live_fields(monkeypatch):
     async def revalidate(**kwargs):
         return {
@@ -199,6 +235,11 @@ def test_migration_has_tenant_context_evidence_and_append_only_event_ledger():
         "browser_live_facts_source_url_hash_check",
     ):
         assert token in sql
+
+    m10 = (Path(__file__).resolve().parents[2] / "migrations/20260920_m10_live_fact_freshness.sql").read_text()
+    for token in ("fetched_at", "reason_code", "ENABLE ROW LEVEL SECURITY",
+                  "fk_browser_live_facts_tenant_site", "fk_browser_live_fact_events_tenant_fact"):
+        assert token in m10
 
 
 def test_browser_artifact_and_sse_final_display_paths_use_freshness_gate():

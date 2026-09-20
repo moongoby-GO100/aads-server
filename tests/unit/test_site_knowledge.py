@@ -52,6 +52,9 @@ def test_nested_observation_rejects_sensitive_keys_and_values():
         safe_observation_value({"outer": [{"profile": {"foreigner_number": "900101-5123456"}}]})
     with pytest.raises(SiteKnowledgeError):
         safe_observation_value({"payment": {"cvv": "123"}})
+    for raw_key in ("raw_dom", "aria_snapshot", "ocr_text", "html"):
+        with pytest.raises(SiteKnowledgeError):
+            safe_observation_value({raw_key: "captured page"})
     assert safe_observation_value({"price": 12000, "stock": 3}) == {"price": 12000, "stock": 3}
 
 

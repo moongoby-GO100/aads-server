@@ -45,6 +45,16 @@ _EVIDENCE_FIELDS = frozenset({
     "capture_id", "screenshot_id", "response_hash", "source_status", "selector",
     "trace_id", "reason", "error_type", "provider_version", "object_evidence_refs",
 })
+_LIVE_FACT_TYPES = frozenset({"price", "stock", "inventory", "shipping", "delivery", "seller"})
+
+
+def _recovery_action(reason_code: str, fact_id: str) -> dict[str, str]:
+    action = "revalidate_fact"
+    if reason_code == "REVALIDATOR_UNAVAILABLE":
+        action = "register_source_revalidator"
+    elif reason_code in {"CONTEXT_MISMATCH", "SOURCE_MISMATCH", "VALUE_MISMATCH"}:
+        action = "refresh_source_context"
+    return {"action": action, "fact_id": fact_id, "reason_code": reason_code}
 
 
 def register_fact_revalidator(key: str, revalidator: Revalidator) -> None:
@@ -203,18 +213,26 @@ def display_fact(
     )
     expires_at = _as_utc(record.get("expires_at"))
     evidence_id = str(record.get("evidence_id") or "")
-    if (
-        not _context_matches(record, expected_context)
-        or observed_value_hash
-        and observed_value_hash != value_hash(observed_value)
-    ):
+    reason_code = str(record.get("reason_code") or "")
+    if not _context_matches(record, expected_context):
         status = FreshnessStatus.CONFLICT
+        reason_code = "CONTEXT_MISMATCH"
+    elif observed_value_hash and observed_value_hash != value_hash(observed_value):
+        status = FreshnessStatus.CONFLICT
+        reason_code = "VALUE_HASH_MISMATCH"
     elif not expires_at or expires_at <= instant:
         status = FreshnessStatus.STALE
+        reason_code = "TTL_EXPIRED"
     elif not evidence_id or not record.get("revalidated_at") or status not in {item.value for item in FreshnessStatus}:
         status = FreshnessStatus.UNAVAILABLE
+        reason_code = reason_code or "EVIDENCE_UNAVAILABLE"
+    elif status == FreshnessStatus.CURRENT:
+        reason_code = ""
+    else:
+        reason_code = reason_code or f"{status}_UNSPECIFIED"
+    fact_id = str(record.get("id") or record.get("fact_id") or "")
     safe = {
-        "fact_id": str(record.get("id") or record.get("fact_id") or ""),
+        "fact_id": fact_id,
         "fact_type": str(record.get("fact_type") or ""),
         "entity_key": str(record.get("entity_key") or ""),
         "variant_key_hash": (
@@ -224,11 +242,14 @@ def display_fact(
             str(record.get("source_url")) if _is_private_source_identifier(record.get("source_url")) else None
         ),
         "observed_at": _as_utc(record.get("observed_at")).isoformat() if _as_utc(record.get("observed_at")) else None,
+        "fetched_at": _as_utc(record.get("fetched_at") or record.get("observed_at")).isoformat() if _as_utc(record.get("fetched_at") or record.get("observed_at")) else None,
         "revalidated_at": _as_utc(record.get("revalidated_at")).isoformat() if _as_utc(record.get("revalidated_at")) else None,
         "expires_at": expires_at.isoformat() if expires_at else None,
         "evidence_id": evidence_id or None,
         "freshness_status": str(status),
-        "retry_action": {"action": "revalidate_fact", "fact_id": str(record.get("id") or "")},
+        "reason_code": reason_code or None,
+        "recovery_action": _recovery_action(reason_code or "REVALIDATE_REQUIRED", fact_id),
+        "retry_action": _recovery_action(reason_code or "REVALIDATE_REQUIRED", fact_id),
     }
     safe["value"] = observed_value if status == FreshnessStatus.CURRENT else None
     return safe
@@ -246,26 +267,37 @@ async def record_live_fact(
     expires = _as_utc(expires_at)
     if not observed or not expires or expires <= observed:
         raise LiveFactError("INVALID_FACT_TTL")
-    if not all(str(item or "").strip() for item in (fact_type, entity_key, source_url, revalidator_key, evidence_id)):
+    normalized_fact_type = str(fact_type or "").strip().lower()
+    if normalized_fact_type not in _LIVE_FACT_TYPES:
+        raise LiveFactError("INVALID_LIVE_FACT_TYPE")
+    if not all(str(item or "").strip() for item in (entity_key, source_url, revalidator_key, evidence_id)):
         raise LiveFactError("INCOMPLETE_FACT_PROVENANCE")
     source_url_hash = hash_source_url(source_url)
     variant_key_hash = hash_variant_key(variant_key)
 
     async def _insert(connection: Any) -> Any:
-        return await connection.fetchrow(
+        row = await connection.fetchrow(
             """INSERT INTO browser_live_facts
                (tenant_id,session_id,task_id,fact_type,entity_key,variant_key,account_context_hash,
                 source_url,source_kind,revalidator_key,observed_value,observed_value_hash,
-                observed_at,expires_at,revalidated_at,freshness_status,evidence_id,evidence,
+                observed_at,fetched_at,expires_at,revalidated_at,freshness_status,evidence_id,evidence,
                 site_profile_id,provenance)
                VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,
-                      $13,$14,$13,'CURRENT',$15,$16::jsonb,$17::uuid,$18::jsonb) RETURNING *""",
-            tenant_id, session_id, task_id, fact_type, entity_key, variant_key_hash,
+                      $13,$13,$14,$13,'CURRENT',$15,$16::jsonb,$17::uuid,$18::jsonb) RETURNING *""",
+            tenant_id, session_id, task_id, normalized_fact_type, entity_key, variant_key_hash,
             account_context_hash, source_url_hash, source_kind, revalidator_key,
             _canonical(observed_value), value_hash(observed_value), observed, expires,
             evidence_id, _canonical(_evidence_metadata(evidence)), site_profile_id,
             _canonical(dict(provenance or {})),
         )
+        await connection.execute(
+            """INSERT INTO browser_live_fact_events
+                   (tenant_id,fact_id,status,value_hash,evidence_id,evidence,observed_at,reason_code)
+                   VALUES($1::uuid,$2::uuid,'CURRENT',$3,$4,$5::jsonb,$6,NULL)""",
+            tenant_id, row["id"], value_hash(observed_value), evidence_id,
+            _canonical(_evidence_metadata(evidence)), observed,
+        )
+        return row
     if conn is not None:
         row = await _insert(conn)
     else:
@@ -306,7 +338,7 @@ async def revalidate_live_fact(
         if not provider:
             return await _persist_revalidation(
                 record, status=FreshnessStatus.UNAVAILABLE, now=instant,
-                evidence={"reason": "REVALIDATOR_UNAVAILABLE"},
+                evidence={"reason": "REVALIDATOR_UNAVAILABLE"}, reason_code="REVALIDATOR_UNAVAILABLE",
             )
         try:
             observed = dict(await provider(dict(record)))
@@ -314,6 +346,7 @@ async def revalidate_live_fact(
             return await _persist_revalidation(
                 record, status=FreshnessStatus.UNAVAILABLE, now=instant,
                 evidence={"reason": "SOURCE_READ_FAILED", "error_type": type(exc).__name__},
+                reason_code="SOURCE_READ_FAILED",
             )
         context_ok = _context_matches(observed, {
             "entity_key": record.get("entity_key"),
@@ -322,15 +355,32 @@ async def revalidate_live_fact(
         })
         source_ok = _source_matches(str(observed.get("source_url") or ""), record.get("source_url"))
         evidence_ok = bool(str(observed.get("evidence_id") or "").strip())
-        status = FreshnessStatus.CURRENT if context_ok and source_ok and evidence_ok else FreshnessStatus.CONFLICT
+        returned_value = _json_value(observed.get("value"))
+        value_ok = value_hash(returned_value) == str(record.get("observed_value_hash") or "")
+        status = (
+            FreshnessStatus.CURRENT
+            if context_ok and source_ok and evidence_ok and value_ok
+            else FreshnessStatus.CONFLICT
+        )
+        reason_code = ""
+        if not context_ok:
+            reason_code = "CONTEXT_MISMATCH"
+        elif not source_ok:
+            reason_code = "SOURCE_MISMATCH"
+        elif not evidence_ok:
+            reason_code = "EVIDENCE_UNAVAILABLE"
+        elif not value_ok:
+            reason_code = "VALUE_MISMATCH"
         if not evidence_ok:
             status = FreshnessStatus.UNAVAILABLE
-        return await _persist_revalidation(record, status=status, now=instant, evidence=observed)
+        return await _persist_revalidation(
+            record, status=status, now=instant, evidence=observed, reason_code=reason_code,
+        )
 
 
 async def _persist_revalidation(
     record: Mapping[str, Any], *, status: FreshnessStatus, now: datetime,
-    evidence: Mapping[str, Any],
+    evidence: Mapping[str, Any], reason_code: str = "",
 ) -> dict[str, Any]:
     value = (
         evidence.get("value")
@@ -344,13 +394,19 @@ async def _persist_revalidation(
     fact_id = str(record["id"])
     async with get_pool().acquire() as conn, conn.transaction():
         row = await conn.fetchrow(
-            """UPDATE browser_live_facts SET observed_value=$3::jsonb,observed_value_hash=$4,
-                   observed_at=$5,expires_at=$6,revalidated_at=$7,freshness_status=$8,
-                   evidence_id=NULLIF($9,''),evidence=$10::jsonb,version=version+1,updated_at=NOW()
+            """UPDATE browser_live_facts SET
+                   observed_value=CASE WHEN $8='CURRENT' THEN $3::jsonb ELSE observed_value END,
+                   observed_value_hash=CASE WHEN $8='CURRENT' THEN $4 ELSE observed_value_hash END,
+                   observed_at=CASE WHEN $8='CURRENT' THEN $5 ELSE observed_at END,
+                   expires_at=CASE WHEN $8='CURRENT' THEN $6 ELSE expires_at END,
+                   revalidated_at=$7,freshness_status=$8,
+                   evidence_id=NULLIF($9,''),evidence=$10::jsonb,reason_code=NULLIF($12,''),
+                   fetched_at=CASE WHEN $8='CURRENT' THEN $5 ELSE fetched_at END,
+                   version=version+1,updated_at=NOW()
                    WHERE tenant_id=$1::uuid AND id=$2::uuid AND version=$11 RETURNING *""",
             tenant_id, UUID(fact_id), _canonical(value), value_hash(value), observed_at,
             expires_at, now, status.value, evidence_id, _canonical(_evidence_metadata(evidence)),
-            int(record.get("version") or 1),
+            int(record.get("version") or 1), reason_code,
         )
         if not row:
             winner = await _load_fact(tenant_id=tenant_id, fact_id=fact_id, conn=conn)
@@ -359,10 +415,10 @@ async def _persist_revalidation(
             return display_fact(winner, now=now)
         await conn.execute(
             """INSERT INTO browser_live_fact_events
-                   (tenant_id,fact_id,status,value_hash,evidence_id,evidence,observed_at)
-                   VALUES($1::uuid,$2::uuid,$3,$4,NULLIF($5,''),$6::jsonb,$7)""",
+                   (tenant_id,fact_id,status,value_hash,evidence_id,evidence,observed_at,reason_code)
+                   VALUES($1::uuid,$2::uuid,$3,$4,NULLIF($5,''),$6::jsonb,$7,NULLIF($8,''))""",
             tenant_id, UUID(fact_id), status.value, value_hash(value), evidence_id,
-            _canonical(_evidence_metadata(evidence)), now,
+            _canonical(_evidence_metadata(evidence)), now, reason_code,
         )
     return display_fact(dict(row), now=now)
 

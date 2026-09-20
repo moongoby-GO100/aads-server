@@ -407,3 +407,48 @@ Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks
 ## 미완료 항목
 
 - push/deploy는 M10·M11 순차 완료 후 릴리스 단계에서 수행한다.
+
+# AADS-SMARTBROWSER-M10-LIVE-DATA-R3-20260920
+
+## STEP 0 기존 구현 조사 및 분류
+
+| 접점 | 분류 | 처리 |
+|---|---|---|
+| `live_fact_gate.display_fact`, `guard_payload_for_display` | 수정 | 기존 G5 최종 표시 gate를 유지하고 STALE/CONFLICT/UNAVAILABLE `reason_code`와 복구 행동을 추가했다. |
+| `live_fact_gate.revalidate_live_fact`, revalidator registry | 수정 | 기존 서버 등록형 read-only 원출처 재검증을 유지하고 context/source/evidence/value 불일치를 fail-closed로 분리했다. |
+| `live_fact_gate.record_live_fact` | 수정 | fact/provenance/freshness와 최초 evidence event를 단일 transaction에 저장한다. |
+| `site_knowledge.record_live_observation` 및 API | 수정 | M7 tenant/site 정본을 재사용하고 live fact 오류 변환과 raw DOM/ARIA/OCR key 차단을 보강했다. |
+| browser task/artifact/chat 최종 응답, Redis SSE replay gate | 유지 | 기존 G5 결선을 재사용한다. 중복 구현하지 않았다. |
+| `20260920_m10_live_fact_freshness` migration/rollback | 신규 | `fetched_at`, reason ledger, tenant/site·event composite FK, fact type/TTL constraint, tenant RLS를 additive/idempotent하게 추가한다. |
+| focused/PostgreSQL tests | 신규·수정 | TTL boundary, mismatch, source failure, SSE, tenant/constraint/rollback 계약을 검증한다. |
+| 삭제 | 0건 | 호출처·데이터 삭제 없음. rollback은 M10 enforcement만 제거하고 observation 데이터와 추가 column은 보존한다. |
+
+지시서 밖 파일 변경은 없다. 기존 G5/M7 구현은 대체하지 않았다.
+
+## 변경 파일
+
+- `app/services/live_fact_gate.py`
+- `app/services/site_knowledge.py`
+- `app/api/site_knowledge.py`
+- `migrations/20260920_m10_live_fact_freshness.sql`
+- `migrations/rollback/20260920_m10_live_fact_freshness.down.sql`
+- `tests/unit/test_live_fact_gate.py`
+- `tests/unit/test_site_knowledge.py`
+- `tests/integration/test_live_fact_m10_postgres.py`
+- `RESULT.md`
+
+## 검증 결과
+
+| 항목 | 결과 |
+|---|---|
+| 기준선 | HEAD/origin/main `a8e7d431`; M9 포함 확인, 시작 시 clean detached worktree. |
+| focused + M7~M9/G1/G2/G5/G6 영향 회귀 | `JWT_SECRET_KEY=test-secret ... pytest` — **70 passed**. |
+| 최초 focused | **28 passed**. |
+| Ruff / py_compile / diff-check / pre-commit hook | 모두 PASS. |
+| disposable PostgreSQL 2회/rollback/reapply | 테스트를 작성하고 실행을 시도했으나 sandbox가 `127.0.0.1:5433` 연결을 `PermissionError: Operation not permitted`로 차단. **통과 주장하지 않음**. |
+| npm/next/docker build | 실행하지 않음 — 승인 후 Runner 빌드 검증 대상. |
+| commit SHA | commit 금지 지시에 따라 생성하지 않음. 기준 SHA는 `a8e7d431`; 변경은 working tree에만 존재. |
+
+## 미충족 항목
+
+- disposable PostgreSQL 실검증은 현재 sandbox network 차단으로 미완료다. 따라서 M10 전체 완료를 주장하지 않는다.

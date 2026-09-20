@@ -36,6 +36,7 @@ _PAGE_COMMAND = re.compile(
     re.IGNORECASE,
 )
 _RAW_MARKUP = re.compile(r"(?:<!doctype\s+html|<html\b|<body\b|<script\b|<iframe\b)", re.IGNORECASE)
+_RAW_CAPTURE_KEY = re.compile(r"(?:^|_)(?:raw_?)?(?:dom|aria|ocr|html)(?:_|$)", re.IGNORECASE)
 _EVIDENCE_REF = re.compile(r"^(?:object|s3|gs|blob)://[A-Za-z0-9][A-Za-z0-9._/@:+-]{2,500}$")
 _ALLOWED_TEMPLATE_KEYS = frozenset({
     "area_key", "signature_version", "signature", "required_anchors", "required_states",
@@ -93,7 +94,7 @@ def safe_observation_value(value: Any, *, depth: int = 0) -> Any:
         result: dict[str, Any] = {}
         for key, item in value.items():
             safe_key = str(key)
-            if _SENSITIVE_WORD.search(safe_key):
+            if _SENSITIVE_WORD.search(safe_key) or _RAW_CAPTURE_KEY.search(safe_key):
                 raise SiteKnowledgeError("sensitive_or_page_command_content")
             result[safe_key] = safe_observation_value(item, depth=depth + 1)
         return result
