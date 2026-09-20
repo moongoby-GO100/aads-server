@@ -148,6 +148,17 @@ class _FakeConn:
     def __init__(self, goal_row=None, milestone_owned=True):
         self._goal_row = goal_row
         self._milestone_owned = milestone_owned
+        self.executed = []
+
+    def transaction(self):
+        class _Transaction:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return _Transaction()
 
     async def fetchrow(self, query, *args):
         if "FROM goals" in query:
@@ -157,10 +168,16 @@ class _FakeConn:
     async def fetchval(self, query, *args):
         if "FROM milestones" in query:
             return 1 if self._milestone_owned else None
+        if "FROM pipeline_jobs" in query:
+            return "00000000-0000-0000-0000-000000000001"
         return None
 
     async def fetch(self, query, *args):
         return []
+
+    async def execute(self, query, *args):
+        self.executed.append((query, args))
+        return "UPDATE 1" if "UPDATE pipeline_jobs" in query else "INSERT 0 1"
 
 
 class _FakePool:
@@ -184,26 +201,32 @@ def _run_auto_link(monkeypatch, goal_row, **kwargs):
     from app.services import pipeline_runner_service as prs
 
     linked: dict = {}
+    if goal_row is not None and "tenant_id" not in goal_row:
+        goal_row = {**goal_row, "tenant_id": "00000000-0000-0000-0000-000000000001"}
     conn = _FakeConn(goal_row, milestone_owned=kwargs.pop("milestone_owned", True))
 
     class _FakeMachine:
         async def _pool(self):
             return _FakePool(conn)
 
-        async def _link_task_with_context(self, **link_kwargs):
-            linked.update(link_kwargs)
-            return {"link_id": "x"}
-
     import app.services.goal_manager as gm
 
     monkeypatch.setattr(gm, "goal_state_machine", _FakeMachine())
     result = asyncio.run(prs._link_job_to_goal_explicit("runner-test", "AADS", **kwargs))
+    for query, args in conn.executed:
+        if "INSERT INTO goal_task_links" in query:
+            linked.update({
+                "tenant_id": args[0], "goal_id": args[1], "milestone_id": args[2],
+                "task_id": args[3], "bind_source": args[4],
+            })
     return result, linked
 
 
 def test_explicit_valid_binding_creates_link(monkeypatch):
-    goal_row = {"id": GOAL_A, "project": "AADS", "status": "active"}
-    result, linked = _run_auto_link(monkeypatch, goal_row, goal_id=GOAL_A)
+    goal_row = {"id": GOAL_A, "tenant_id": "00000000-0000-0000-0000-000000000001", "project": "AADS", "status": "active"}
+    result, linked = _run_auto_link(
+        monkeypatch, goal_row, goal_id=GOAL_A, milestone_id=MILESTONE_A,
+    )
     assert result == GOAL_A
     assert linked["goal_id"] == GOAL_A
     assert linked["task_id"] == "runner-test"
@@ -247,13 +270,13 @@ def test_no_explicit_context_never_touches_the_database(monkeypatch):
     ) is None
 
 
-def test_milestone_not_owned_by_goal_falls_back_to_goal_level(monkeypatch):
-    goal_row = {"id": GOAL_A, "project": "AADS", "status": "active"}
-    _, linked = _run_auto_link(
+def test_milestone_not_owned_by_goal_is_rejected(monkeypatch):
+    goal_row = {"id": GOAL_A, "tenant_id": "00000000-0000-0000-0000-000000000001", "project": "AADS", "status": "active"}
+    result, linked = _run_auto_link(
         monkeypatch, goal_row, goal_id=GOAL_A, milestone_id=MILESTONE_A, milestone_owned=False,
     )
-    assert linked["goal_id"] == GOAL_A
-    assert linked["milestone_id"] is None
+    assert result is None
+    assert linked == {}
 
 
 # ─── 재조정 계획 (요구사항 C) ───────────────────────────────────────────────
@@ -469,7 +492,8 @@ def test_every_out_of_band_terminal_write_reconciles_goal_links():
     # 복구 스윕 / 폴링 재개 / watchdog / 강제취소 / 결과수거 경로 전부.
     assert source.count("await _reconcile_job_goal_links(") >= 8
     # 정규화는 goal_binding 단일 출처를 쓴다.
-    assert "from app.services.goal_binding import is_terminal_job_state, parse_goal_binding" in source
+    assert "is_terminal_job_state," in source
+    assert "parse_goal_binding," in source
     # 종료가 아닌 상태는 목표 그래프를 건드리지 않는다.
     assert "if not is_terminal_job_state(row[\"status\"], row[\"phase\"]):" in source
 

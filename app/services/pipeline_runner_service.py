@@ -12,10 +12,10 @@ Pipeline Runner Orchestrator — 채팅 → Claude Code 자율 작업 → 검수
 """
 import asyncio
 import base64
+import datetime as _dt
 import json
 import logging
 import os
-import datetime as _dt
 import shlex
 import time
 import uuid
@@ -24,10 +24,14 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
-import asyncpg
-
 from app.core.project_config import PROJECT_MAP
-from app.services.goal_binding import is_terminal_job_state, parse_goal_binding
+from app.services.goal_binding import (
+    approval_execution_key,
+    is_terminal_job_state,
+    parse_goal_binding,
+    remediation_purpose,
+    requires_mandatory_human,
+)
 from scripts.claude_model_contract import resolve_model
 
 logger = logging.getLogger(__name__)
@@ -84,6 +88,36 @@ _TERMINAL_JOB_STATUSES = {
     "rejected_done",
     "review_hold",
 }
+
+_AUTO_APPROVAL_SCORE_MIN = Decimal("0.800")
+
+
+async def _ensure_pipeline_action_required(
+    conn: Any, *, job_id: str, tenant_id: str, project: str, reason: str,
+    purpose: str = "approval-remediation",
+) -> str:
+    """Create exactly one durable GoalSystemAdmin action per execution key."""
+    execution_key = approval_execution_key(job_id, purpose)
+    await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", execution_key)
+    existing = await conn.fetchval(
+        """SELECT id::text FROM agent_permission_requests
+           WHERE tenant_id=$1::uuid AND work_key=$2 AND origin='pipeline_goal_control'
+           ORDER BY created_at LIMIT 1 FOR UPDATE""",
+        tenant_id, execution_key,
+    )
+    if existing:
+        return str(existing)
+    return str(await conn.fetchval(
+        """INSERT INTO agent_permission_requests
+           (tenant_id,work_key,origin,action_type,action_summary,risk_level,
+            decision,reason,requested_by,expires_at)
+           VALUES($1::uuid,$2,'pipeline_goal_control','action_required',$3,'high',
+                  'pending',$4,'GoalSystemAdmin',NOW()+INTERVAL '30 days')
+           RETURNING id::text""",
+        tenant_id, execution_key,
+        f"[{project}] pipeline {job_id} requires structured-evidence remediation",
+        reason[:1000],
+    ))
 
 
 def _is_codex_model_allowed(model: str) -> bool:
@@ -147,6 +181,82 @@ async def _update_linked_goal_state(job_id: str, status: str = "done") -> None:
     await _update_linked_goal_state_with_phase(job_id, status)
 
 
+async def _structured_approval_gate(conn: Any, job_id: str) -> dict[str, Any]:
+    """Fail closed using canonical review/evidence/policy/grant rows only."""
+    job = await conn.fetchrow(
+        """SELECT pj.job_id,pj.tenant_id::text,pj.project,pj.instruction,
+                  pj.goal_id::text,pj.milestone_id::text,pj.commit_hash,
+                  pj.review_verdict,pj.review_score,g.priority
+           FROM pipeline_jobs pj
+           LEFT JOIN goals g ON g.id=pj.goal_id AND g.tenant_id=pj.tenant_id
+           WHERE pj.job_id=$1 FOR UPDATE OF pj""", job_id,
+    )
+    if not job or not all((job["tenant_id"], job["goal_id"], job["milestone_id"])):
+        return {"allowed": False, "reason": "explicit_goal_milestone_scope_required", "job": job}
+    review = await conn.fetchrow(
+        """SELECT verdict,score,needs_retry FROM code_review_requests
+           WHERE job_id=$1 AND status='completed' ORDER BY created_at DESC LIMIT 1""", job_id,
+    )
+    verdict = str(job["review_verdict"] or "").upper()
+    score = Decimal(str(job["review_score"] or 0))
+    if (not review or str(review["verdict"] or "").upper() not in {"APPROVE", "PASS"}
+            or bool(review["needs_retry"]) or verdict not in {"APPROVE", "PASS"}
+            or score < _AUTO_APPROVAL_SCORE_MIN):
+        return {"allowed": False, "reason": "structured_review_not_passed", "job": job}
+    commit_hash = str(job["commit_hash"] or "").lower()
+    if len(commit_hash) != 40 or any(ch not in "0123456789abcdef" for ch in commit_hash):
+        return {"allowed": False, "reason": "canonical_commit_hash_missing", "job": job}
+    evidence = await conn.fetch(
+        """SELECT e.evidence_type,e.verified,e.verification_state,e.artifact_hash,
+                  e.content_hash,e.payload
+           FROM work_item_evidence e JOIN work_items w
+             ON w.id=e.work_item_id AND w.tenant_id=e.tenant_id
+           WHERE e.tenant_id=$1::uuid AND e.project=$2 AND e.goal_id=$3::uuid
+             AND w.milestone_id=$4::uuid AND e.verified
+             AND COALESCE(e.verification_state,'verified') IN ('verified','passed')""",
+        job["tenant_id"], job["project"], job["goal_id"], job["milestone_id"],
+    )
+    commit_bound = any(
+        commit_hash in {str(row["artifact_hash"] or "").removeprefix("sha256:"),
+                        str(row["content_hash"] or "").removeprefix("sha256:")}
+        or (isinstance(row["payload"], dict)
+            and str(row["payload"].get("commit_hash", "")).lower() == commit_hash)
+        for row in evidence
+    )
+    checks_passed = any(
+        row["evidence_type"] in {"test", "e2e", "acceptance_criterion"}
+        and isinstance(row["payload"], dict)
+        and str(row["payload"].get("status", "")).lower() in {"pass", "passed", "success"}
+        for row in evidence
+    )
+    if not commit_bound or not checks_passed:
+        return {"allowed": False, "reason": "verified_evidence_incomplete", "job": job}
+    policy = await conn.fetchrow(
+        """SELECT id::text,mode FROM goal_approval_policy_versions
+           WHERE tenant_id=$1::uuid AND (project=$2 OR project IS NULL)
+             AND effective_at<=NOW() AND mode IN ('audit_only','canary','enabled')
+           ORDER BY effective_at DESC,created_at DESC LIMIT 1""",
+        job["tenant_id"], job["project"],
+    )
+    if not policy or policy["mode"] == "audit_only":
+        return {"allowed": False, "reason": "audit_mode_no_execution", "job": job}
+    if requires_mandatory_human(str(job["priority"] or ""), str(job["instruction"] or "")):
+        return {"allowed": False, "reason": "mandatory_human_risk", "job": job}
+    grant = await conn.fetchval(
+        """SELECT EXISTS(SELECT 1 FROM goal_auto_approval_grants
+           WHERE tenant_id=$1::uuid AND project=$2 AND goal_id=$3::uuid
+             AND (milestone_id IS NULL OR milestone_id=$4::uuid)
+             AND status='active' AND NOW() BETWEEN valid_from AND expires_at
+             AND used_executions < max_executions
+             AND actions && ARRAY['execute','approve']::text[]
+             AND max_risk_tier IN ('A1','A2'))""",
+        job["tenant_id"], job["project"], job["goal_id"], job["milestone_id"],
+    )
+    if not grant:
+        return {"allowed": False, "reason": "active_scope_grant_required", "job": job}
+    return {"allowed": True, "reason": "structured_evidence_and_grant_passed", "job": job}
+
+
 async def _update_linked_goal_state_with_phase(
     job_id: str, status: str = "done", phase: Optional[str] = None,
 ) -> None:
@@ -190,6 +300,29 @@ async def _reconcile_job_goal_links(job_id: str) -> None:
         logger.warning("goal_link_reconcile_failed job=%s: %s", job_id, exc)
 
 
+async def reconcile_unbound_awaiting_approval() -> dict[str, Any]:
+    """Read-only diagnosis for legacy approvals lacking canonical scope."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT job_id,project,instruction FROM pipeline_jobs
+               WHERE status='awaiting_approval' AND (goal_id IS NULL OR milestone_id IS NULL)
+               ORDER BY created_at LIMIT 100"""
+        )
+    items = []
+    for row in rows:
+        binding = parse_goal_binding(row["instruction"])
+        items.append({
+            "job_id": row["job_id"], "project": row["project"],
+            "goal_id": binding.goal_id, "milestone_id": binding.milestone_id,
+            "eligible": bool(binding.is_explicit and binding.milestone_id),
+            "dry_run": True,
+        })
+    return {"dry_run": True, "diagnosed": len(items), "rebound": 0, "items": items}
+
+
 async def _auto_link_job_to_goal(job_id: str, project: str) -> None:
     """기존 호출 계약을 유지하되, 근거 없는 암묵 연결은 생성하지 않는다."""
     await _link_job_to_goal_explicit(job_id, project)
@@ -223,12 +356,20 @@ async def _link_job_to_goal_explicit(
         from app.services.goal_manager import goal_state_machine
 
         pool = await goal_state_machine._pool()
-        async with pool.acquire() as conn:
+        async with pool.acquire() as conn, conn.transaction():
             goal = await conn.fetchrow(
-                "SELECT id, project, status FROM goals WHERE id = $1::uuid", binding.goal_id,
+                "SELECT id, tenant_id::text, project, status FROM goals WHERE id = $1::uuid",
+                binding.goal_id,
             )
             if not goal:
                 logger.warning("goal_link_rejected_not_found job=%s goal=%s", job_id, binding.goal_id)
+                return None
+            job_tenant = await conn.fetchval(
+                "SELECT tenant_id::text FROM pipeline_jobs WHERE job_id=$1 AND project=$2 FOR UPDATE",
+                job_id, project,
+            )
+            if not job_tenant or goal["tenant_id"] != job_tenant:
+                logger.warning("goal_link_rejected_cross_tenant job=%s goal=%s", job_id, binding.goal_id)
                 return None
             if goal["project"] != project:
                 logger.warning(
@@ -236,33 +377,52 @@ async def _link_job_to_goal_explicit(
                     job_id, binding.goal_id, goal["project"], project,
                 )
                 return None
-            if goal["status"] not in ("draft", "active"):
+            blocked_remediation = (
+                goal["status"] == "blocked" and bool(binding.milestone_id)
+                and bool(remediation_purpose(instruction or ""))
+            )
+            if goal["status"] not in ("draft", "active") and not blocked_remediation:
                 logger.warning(
                     "goal_link_rejected_inactive job=%s goal=%s status=%s",
                     job_id, binding.goal_id, goal["status"],
                 )
                 return None
             resolved_milestone = binding.milestone_id
-            if resolved_milestone:
-                owns = await conn.fetchval(
-                    "SELECT 1 FROM milestones WHERE id = $1::uuid AND goal_id = $2::uuid",
-                    resolved_milestone, binding.goal_id,
+            if not resolved_milestone:
+                logger.warning("goal_link_rejected_milestone_required job=%s goal=%s", job_id, binding.goal_id)
+                return None
+            owns = await conn.fetchval(
+                """SELECT 1 FROM milestones
+                   WHERE id=$1::uuid AND goal_id=$2::uuid AND tenant_id=$3::uuid
+                     AND project=$4 AND status IN ('pending','in_progress','blocked')""",
+                resolved_milestone, binding.goal_id, job_tenant, project,
+            )
+            if not owns:
+                logger.warning(
+                    "goal_link_milestone_mismatch job=%s goal=%s milestone=%s",
+                    job_id, binding.goal_id, resolved_milestone,
                 )
-                if not owns:
-                    logger.warning(
-                        "goal_link_milestone_mismatch job=%s goal=%s milestone=%s",
-                        job_id, binding.goal_id, resolved_milestone,
-                    )
-                    resolved_milestone = None
-
-        await goal_state_machine._link_task_with_context(
-            goal_id=binding.goal_id,
-            milestone_id=resolved_milestone,
-            task_type="pipeline_job",
-            task_id=job_id,
-            bind_source=binding.source,
-            bound_by=f"pipeline_job:{job_id}",
-        )
+                return None
+            updated = await conn.execute(
+                """UPDATE pipeline_jobs SET goal_id=$2::uuid,milestone_id=$3::uuid,updated_at=NOW()
+                   WHERE job_id=$1 AND tenant_id=$4::uuid AND project=$5""",
+                job_id, binding.goal_id, resolved_milestone, job_tenant, project,
+            )
+            if updated != "UPDATE 1":
+                return None
+            await conn.execute(
+                """INSERT INTO goal_task_links
+                   (id,tenant_id,goal_id,milestone_id,task_type,task_id,status,bind_source,
+                    bound_by,link_state,last_job_status,updated_at)
+                   VALUES(gen_random_uuid(),$1::uuid,$2::uuid,$3::uuid,'pipeline_job',$4,
+                          'pending',$5,$6,'active','pending',NOW())
+                   ON CONFLICT (goal_id,task_type,task_id) WHERE goal_id IS NOT NULL
+                   DO UPDATE SET tenant_id=EXCLUDED.tenant_id,milestone_id=EXCLUDED.milestone_id,
+                       bind_source=EXCLUDED.bind_source,bound_by=EXCLUDED.bound_by,
+                       link_state='active',detach_reason=NULL,updated_at=NOW()""",
+                job_tenant, binding.goal_id, resolved_milestone, job_id, binding.source,
+                f"pipeline_job:{job_id}",
+            )
         logger.info(
             "goal_linked_explicit: job=%s goal=%s milestone=%s source=%s project=%s",
             job_id, binding.goal_id, resolved_milestone, binding.source, project,
@@ -1047,6 +1207,38 @@ class PipelineCJob:
         if self.status != "awaiting_approval":
             return {"error": f"승인 불가 상태: {self.status}"}
 
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            gate = await _structured_approval_gate(conn, self.job_id)
+            job_row = gate.get("job")
+            if job_row and job_row["tenant_id"]:
+                await conn.execute(
+                    """INSERT INTO goal_approval_decision_logs
+                       (tenant_id,decision,reason_codes,input_context,simulated,shadow_decision)
+                       VALUES($1::uuid,$2,$3::text[],$4::jsonb,$5,$6)""",
+                    job_row["tenant_id"], "AUTO" if gate["allowed"] else "DENY",
+                    [gate["reason"]], json.dumps({
+                        "job_id": self.job_id,
+                        "goal_id": job_row["goal_id"],
+                        "milestone_id": job_row["milestone_id"],
+                    }), gate["reason"] == "audit_mode_no_execution",
+                    "AUTO" if gate["reason"] == "audit_mode_no_execution" else None,
+                )
+            if not gate["allowed"]:
+                action_id = None
+                if job_row and job_row["tenant_id"]:
+                    action_id = await _ensure_pipeline_action_required(
+                        conn, job_id=self.job_id, tenant_id=job_row["tenant_id"],
+                        project=self.project, reason=gate["reason"],
+                    )
+                self.review_feedback = f"ACTION_REQUIRED: {gate['reason']}"
+                await conn.execute(
+                    "UPDATE pipeline_jobs SET review_feedback=$2,updated_at=NOW() WHERE job_id=$1",
+                    self.job_id, self.review_feedback,
+                )
+                return {"status": "action_required", "error": gate["reason"], "action_id": action_id}
+
         self.status = "running"
         _release_deploy_lock = None
         try:
@@ -1442,7 +1634,7 @@ class PipelineCJob:
         # 변경사항 완전 제거 (Shell Runner는 approve 후에만 커밋하므로 reset 불필요)
         await self._ssh_command("git checkout .")
         await self._ssh_command("git clean -fd")
-        self.status = "done"
+        self.status = "rejected_done"
         self.review_feedback = f"REJECTED: {reason}"
         await self._save_to_db()
 
@@ -2219,11 +2411,13 @@ class PipelineCJob:
             async with pool.acquire() as conn:
                 await conn.execute("""
                     INSERT INTO pipeline_jobs
-                        (job_id, chat_session_id, project, instruction, claude_session_id,
+                        (job_id, chat_session_id, tenant_id, project, instruction, claude_session_id,
                          phase, cycle, max_cycles, status, logs, result_output, git_diff,
                          review_feedback, worker_model, parallel_group, depends_on,
                          actual_model, size, updated_at, completed_at)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now(),$19)
+                    VALUES ($1,$2,COALESCE((SELECT tenant_id FROM chat_sessions WHERE id=$2),
+                                           aads_internal_tenant_id()),
+                            $3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now(),$19)
                     ON CONFLICT (job_id) DO UPDATE SET
                         phase = EXCLUDED.phase,
                         cycle = EXCLUDED.cycle,
