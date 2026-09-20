@@ -29,6 +29,7 @@ from app.services.site_knowledge import (
 from app.services.smart_browser_learning import (
     SmartBrowserLearningError,
     assess_page_revisit,
+    auto_learn_site_visit,
     index_site_skill_embedding,
     learn_page_template,
     resolve_site_skill,
@@ -69,6 +70,15 @@ class PageRevisitIn(_Strict):
     page_key: str = Field(min_length=1, max_length=300)
     area_key: str = Field(min_length=1, max_length=120)
     aria_nodes: list[dict[str, Any]] = Field(max_length=5000)
+
+
+class AutoSiteVisitIn(_Strict):
+    page_key: str = Field(min_length=1, max_length=300)
+    area_key: str = Field(min_length=1, max_length=120)
+    aria_nodes: list[dict[str, Any]] = Field(min_length=1, max_length=5000)
+    template_contract: dict[str, Any]
+    evidence_refs: list[str] = Field(min_length=1, max_length=50)
+    expires_at: datetime
 
 
 class SemanticMemoryIn(_Strict):
@@ -198,6 +208,28 @@ async def revisit_page(
         return await assess_page_revisit(
             tenant_id=_tenant(context), site_profile_id=site_profile_id,
             **body.model_dump(),
+        )
+    except (SiteKnowledgeError, SmartBrowserLearningError) as exc:
+        _error(exc)
+
+
+@router.post("/profiles/{site_profile_id}/auto-visit", status_code=201)
+async def auto_site_visit(
+    site_profile_id: str, body: AutoSiteVisitIn, request: Request,
+    context: TenantContext = Depends(require_member),
+) -> dict[str, Any]:
+    """Create or reuse paired candidate artifacts without executing page data."""
+    try:
+        _route_page_observation(
+            context=context, request=request,
+            correlation_id=f"site-auto-visit:{site_profile_id}:{body.page_key}",
+            metadata={"site_profile_id": site_profile_id, "page_key": body.page_key,
+                      "node_count": len(body.aria_nodes)},
+        )
+        payload = body.model_dump()
+        payload["evidence"] = payload.pop("evidence_refs")
+        return await auto_learn_site_visit(
+            tenant_id=_tenant(context), site_profile_id=site_profile_id, **payload,
         )
     except (SiteKnowledgeError, SmartBrowserLearningError) as exc:
         _error(exc)

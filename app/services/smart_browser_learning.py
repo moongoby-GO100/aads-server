@@ -1,6 +1,7 @@
 """M8-M11 orchestration for safe Smart Browser learning and revisits."""
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -11,11 +12,59 @@ from app.services.aria_structure_signature import assess_revisit, build_partial_
 from app.services.site_knowledge import (
     SiteKnowledgeError,
     create_page_template_candidate,
+    evidence_refs,
+    safe_page_template,
     safe_semantic_text,
 )
 
 _QUERY_LIMIT = 500
 _VECTOR_THRESHOLD = 0.72
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _skill_slug(*, tenant_id: str, site_profile_id: str, page_key: str) -> str:
+    scope = f"{tenant_id}:{site_profile_id}:{page_key}".encode()
+    return f"learned-site-{hashlib.sha256(scope).hexdigest()[:24]}"
+
+
+def _candidate_skill_manifest(
+    *, skill_id: str, version: int, origin: str, page_key: str,
+    evidence: Sequence[str], prior: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a non-authoritative contract whose executable fields are code-owned."""
+    if prior:
+        manifest = dict(prior)
+        manifest.update({"skill_id": skill_id, "version": str(version), "status": "candidate"})
+        provenance = dict(manifest.get("provenance") or {})
+        provenance.update({"source": "verified_browser_observation", "evidence_refs": list(evidence)})
+        manifest["provenance"] = provenance
+        return manifest
+    return {
+        "skill_id": skill_id,
+        "version": str(version),
+        "input_schema": {"type": "object", "additionalProperties": False},
+        "output_schema": {"type": "object"},
+        "executor": "ohvis.contract-echo",
+        "allowed_tools": [],
+        "capabilities": ["site.observe"],
+        "allowed_origins": [origin],
+        "permissions": ["read"],
+        "timeout_seconds": 15,
+        "retry": {"max_attempts": 1, "backoff_seconds": 0},
+        "idempotency": {"mode": "optional"},
+        "preconditions": ["authenticated_tenant_site_match", "active_version_required"],
+        "postconditions": ["no_page_authored_command_executed"],
+        "evidence": ["object_evidence_refs_required", "g6_golden_gate_required"],
+        "risk_tier": "read",
+        "status": "candidate",
+        "provenance": {
+            "source": "verified_browser_observation", "page_key": page_key,
+            "evidence_refs": list(evidence),
+        },
+    }
 
 
 class SmartBrowserLearningError(ValueError):
@@ -142,6 +191,267 @@ async def assess_page_revisit(
                   "active_version": decision.get("active_version")},
     )
     return decision
+
+
+async def _pending_candidate(conn: Any, *, artifact_id: Any, skill_id: Any) -> Any:
+    """Read the newest paired candidate while the caller holds its scope lock."""
+    return await conn.fetchrow(
+        """SELECT v.id::text AS template_version_id,v.version,
+                  s.id::text AS skill_version_id
+             FROM browser_learned_artifact_versions v
+             JOIN ops_skill_versions s ON s.skill_id=$2 AND s.version=v.version
+            WHERE v.artifact_id=$1 AND v.status IN ('candidate','shadow')
+            ORDER BY v.created_at DESC LIMIT 1""",
+        artifact_id, skill_id,
+    )
+
+
+async def auto_learn_site_visit(
+    *, tenant_id: str, site_profile_id: str, page_key: str, area_key: str,
+    aria_nodes: Sequence[Mapping[str, Any]], template_contract: Mapping[str, Any],
+    evidence: Sequence[str], expires_at: datetime,
+) -> dict[str, Any]:
+    """Atomically learn a first visit or allocate the next candidate on change.
+
+    A row lock on the tenant/site/page scope is the single version allocator.
+    Page observations can shape only a structural candidate; executable fields
+    in the paired Site Skill contract are fixed here and never read from the page.
+    """
+    refs = evidence_refs(evidence)
+    if expires_at.tzinfo is None or expires_at.astimezone(UTC) <= datetime.now(UTC):
+        raise SmartBrowserLearningError("auto_learning_ttl_required")
+    safe_page_key = safe_semantic_text(page_key, field="page_key")[:300]
+    safe_area_key = safe_semantic_text(area_key, field="area_key")[:120]
+    signature = build_partial_signature(
+        aria_nodes, area_key=safe_area_key, template=template_contract,
+    )
+    if not signature.get("node_count"):
+        raise SmartBrowserLearningError("stable_aria_structure_required")
+    template_payload = safe_page_template({
+        "page_type": str(template_contract.get("page_type") or "unknown")[:80],
+        "area_key": safe_area_key,
+        "signature_version": signature["signature_version"],
+        "signature": signature,
+        "required_anchors": list(template_contract.get("required_anchors") or []),
+        "required_states": template_contract.get("required_states") or [],
+        "stable_names": list(template_contract.get("stable_names") or []),
+        "stable_states": list(template_contract.get("stable_states") or []),
+        "reuse_threshold": float(template_contract.get("reuse_threshold", 0.88)),
+        "dom_fallback": bool(template_contract.get("dom_fallback", True)),
+    })
+    from app.services.ohvis_harness import validate_skill_manifest
+
+    async with get_pool().acquire() as conn, conn.transaction():
+        profile = await conn.fetchrow(
+            """SELECT id,base_origin FROM authenticated_site_profiles
+                WHERE tenant_id=$1::uuid AND id=$2::uuid AND enabled IS TRUE FOR SHARE""",
+            tenant_id, site_profile_id,
+        )
+        if not profile:
+            raise SmartBrowserLearningError("site_profile_not_found")
+        await conn.execute(
+            """INSERT INTO browser_site_learning_scopes
+               (tenant_id,site_profile_id,page_key)
+               VALUES($1::uuid,$2::uuid,$3)
+               ON CONFLICT(tenant_id,site_profile_id,page_key) DO NOTHING""",
+            tenant_id, site_profile_id, safe_page_key,
+        )
+        scope = await conn.fetchrow(
+            """SELECT * FROM browser_site_learning_scopes
+                WHERE tenant_id=$1::uuid AND site_profile_id=$2::uuid AND page_key=$3
+                FOR UPDATE""",
+            tenant_id, site_profile_id, safe_page_key,
+        )
+        active = None
+        if scope["page_artifact_id"]:
+            active = await conn.fetchrow(
+                """SELECT id::text AS version_id,version,payload,expires_at
+                     FROM browser_learned_artifact_versions
+                    WHERE artifact_id=$1 AND status='active'
+                    ORDER BY activated_at DESC NULLS LAST LIMIT 1 FOR SHARE""",
+                scope["page_artifact_id"],
+            )
+            if not active:
+                pending = await _pending_candidate(
+                    conn, artifact_id=scope["page_artifact_id"], skill_id=scope["skill_id"],
+                )
+                if pending:
+                    return {
+                        **dict(pending), "state": "awaiting_g6_promotion",
+                        "decision": "candidate_reused", "reason_code": "candidate_already_exists",
+                        "active_preserved": True, "promotion_required": True,
+                    }
+
+        if active:
+            active_payload = active["payload"]
+            if isinstance(active_payload, str):
+                active_payload = json.loads(active_payload)
+            assessment = assess_revisit(
+                previous=active_payload.get("signature"), current_nodes=aria_nodes,
+                area_key=safe_area_key, template=active_payload,
+            )
+            if assessment["decision"] == "reuse":
+                await conn.execute(
+                    """INSERT INTO browser_site_runtime_events
+                       (tenant_id,site_profile_id,event_type,decision,reason,evidence)
+                       VALUES($1::uuid,$2::uuid,'revisit_assessment','reuse',$3,$4::jsonb)""",
+                    tenant_id, site_profile_id, assessment["reason"], json.dumps({
+                        "page_key": safe_page_key, "active_version": active["version"],
+                        "signature_hash": signature["signature_hash"],
+                        "similarity": assessment["similarity"],
+                    }),
+                )
+                return {
+                    **assessment, "state": "active_reused", "reason_code": assessment["reason"],
+                    "active_version": active["version"], "active_preserved": True,
+                }
+            if assessment["reason"] == "ambiguous_aria_structure":
+                await conn.execute(
+                    """INSERT INTO browser_site_runtime_events
+                       (tenant_id,site_profile_id,event_type,decision,reason,evidence)
+                       VALUES($1::uuid,$2::uuid,'revisit_assessment','human_gateway',$3,$4::jsonb)""",
+                    tenant_id, site_profile_id, assessment["reason"], json.dumps({
+                        "page_key": safe_page_key, "active_version": active["version"],
+                        "signature_hash": signature["signature_hash"],
+                    }),
+                )
+                return {
+                    **assessment, "decision": "human_gateway", "state": "human_gateway_required",
+                    "reason_code": assessment["reason"], "active_version": active["version"],
+                    "active_preserved": True, "relearning_required": True,
+                    "human_gateway_required": True,
+                }
+
+            pending = await _pending_candidate(
+                conn, artifact_id=scope["page_artifact_id"], skill_id=scope["skill_id"],
+            )
+            if pending:
+                return {
+                    **dict(pending), "state": "awaiting_g6_promotion",
+                    "decision": "candidate_reused", "reason_code": "candidate_already_exists",
+                    "active_version": active["version"], "active_preserved": True,
+                    "promotion_required": True,
+                    "human_gateway_required": assessment["human_gateway_required"],
+                }
+
+        if not active:
+            initial_assessment = assess_revisit(
+                previous=None, current_nodes=aria_nodes,
+                area_key=safe_area_key, template=template_payload,
+            )
+            if initial_assessment["human_gateway_required"] or initial_assessment["reason"] == "ambiguous_aria_structure":
+                await conn.execute(
+                    """INSERT INTO browser_site_runtime_events
+                       (tenant_id,site_profile_id,event_type,decision,reason,evidence)
+                       VALUES($1::uuid,$2::uuid,'initial_learning','human_gateway',$3,$4::jsonb)""",
+                    tenant_id, site_profile_id, initial_assessment["reason"], json.dumps({
+                        "page_key": safe_page_key, "signature_hash": signature["signature_hash"],
+                    }),
+                )
+                return {
+                    **initial_assessment, "decision": "human_gateway",
+                    "state": "human_gateway_required",
+                    "reason_code": initial_assessment["reason"],
+                    "active_preserved": True, "relearning_required": True,
+                    "human_gateway_required": True,
+                }
+
+        version = int(scope["next_version"])
+        artifact = None
+        skill = None
+        if not scope["page_artifact_id"]:
+            artifact = await conn.fetchrow(
+                """INSERT INTO browser_learned_artifacts(tenant_id,artifact_type,artifact_key)
+                   VALUES($1::uuid,'page_template',$2) RETURNING id""",
+                tenant_id, f"site:{site_profile_id}:page:{safe_page_key}",
+            )
+            skill = await conn.fetchrow(
+                """INSERT INTO ops_skill_library
+                   (tenant_id,slug,title,description,projects,intents,risk_tier,allowed_tools,source_path,metadata)
+                   VALUES($1::uuid,$2,'Learned site interaction',
+                          'Candidate generated from verified structural observation',
+                          ARRAY['AADS'],ARRAY['site_observation'],'read',ARRAY[]::text[],$3,$4::jsonb)
+                   RETURNING id""",
+                tenant_id, _skill_slug(tenant_id=tenant_id, site_profile_id=site_profile_id,
+                                       page_key=safe_page_key),
+                f"site-skill:{site_profile_id}:{safe_page_key}",
+                json.dumps({"canonical": "auto_site_skill", "site_profile_id": site_profile_id}),
+            )
+            await conn.execute(
+                """UPDATE browser_site_learning_scopes
+                      SET page_artifact_id=$4,skill_id=$5,updated_at=clock_timestamp()
+                    WHERE tenant_id=$1::uuid AND site_profile_id=$2::uuid AND page_key=$3""",
+                tenant_id, site_profile_id, safe_page_key, artifact["id"], skill["id"],
+            )
+        artifact_id = artifact["id"] if artifact else scope["page_artifact_id"]
+        skill_id = skill["id"] if skill else scope["skill_id"]
+        prior_skill = None
+        if active:
+            prior_skill = await conn.fetchval(
+                """SELECT manifest FROM ops_skill_versions
+                    WHERE skill_id=$1 AND status='active' ORDER BY promoted_at DESC NULLS LAST LIMIT 1""",
+                skill_id,
+            )
+            if isinstance(prior_skill, str):
+                prior_skill = json.loads(prior_skill)
+        manifest = validate_skill_manifest(_candidate_skill_manifest(
+            skill_id=str(skill_id), version=version, origin=str(profile["base_origin"]),
+            page_key=safe_page_key, evidence=refs, prior=prior_skill,
+        ))
+        encoded_template = _canonical_json(template_payload)
+        template_digest = await conn.fetchval(
+            "SELECT 'sha256:' || encode(digest(convert_to(($1::jsonb)::text,'UTF8'),'sha256'),'hex')",
+            encoded_template,
+        )
+        template_row = await conn.fetchrow(
+            """INSERT INTO browser_learned_artifact_versions
+               (artifact_id,version,status,payload,payload_sha256,provenance,evidence_refs,expires_at)
+               VALUES($1,$2,'candidate',$3::jsonb,$4,$5::jsonb,$6::jsonb,$7)
+               RETURNING id::text AS template_version_id""",
+            artifact_id, str(version), encoded_template, template_digest,
+            json.dumps({"source_kind": "verified_extraction", "origin": profile["base_origin"],
+                        "version": str(version)}), json.dumps(refs), expires_at,
+        )
+        encoded_manifest = _canonical_json(manifest)
+        skill_digest = "sha256:" + hashlib.sha256(encoded_manifest.encode()).hexdigest()
+        skill_row = await conn.fetchrow(
+            """INSERT INTO ops_skill_versions
+               (skill_id,version,content_sha256,content,status,manifest,site_profile_id,
+                provenance,evidence_refs,expires_at)
+               VALUES($1,$2,$3,$4,'candidate',$5::jsonb,$6::uuid,$7::jsonb,$8::jsonb,$9)
+               RETURNING id::text AS skill_version_id""",
+            skill_id, str(version), skill_digest, encoded_manifest, json.dumps(manifest),
+            site_profile_id, json.dumps(manifest["provenance"]), json.dumps(refs), expires_at,
+        )
+        await conn.execute(
+            """UPDATE browser_site_learning_scopes
+                  SET next_version=$4,updated_at=clock_timestamp()
+                WHERE tenant_id=$1::uuid AND site_profile_id=$2::uuid AND page_key=$3""",
+            tenant_id, site_profile_id, safe_page_key, version + 1,
+        )
+        reason_code = "first_visit_candidates_created" if not active else "core_structure_changed"
+        await conn.execute(
+            """INSERT INTO browser_site_runtime_events
+               (tenant_id,site_profile_id,event_type,decision,reason,evidence)
+               VALUES($1::uuid,$2::uuid,$3,'candidate_created',$4,$5::jsonb)""",
+            tenant_id, site_profile_id, "initial_learning" if not active else "revisit_assessment",
+            reason_code, json.dumps({
+                "page_key": safe_page_key, "version": str(version),
+                "template_version_id": template_row["template_version_id"],
+                "skill_version_id": skill_row["skill_version_id"],
+                "signature_hash": signature["signature_hash"],
+                "previous_active_version": active["version"] if active else None,
+            }),
+        )
+        return {
+            "state": "candidate_created", "decision": "candidate_created",
+            "reason_code": reason_code, "version": str(version),
+            "template_version_id": template_row["template_version_id"],
+            "skill_version_id": skill_row["skill_version_id"],
+            "signature": signature, "evidence_refs": refs,
+            "active_preserved": bool(active), "promotion_required": True,
+            "human_gateway_required": bool(active and assessment["human_gateway_required"]),
+        }
 
 
 def _skill_result(row: Mapping[str, Any], *, route: str, score: float) -> dict[str, Any]:

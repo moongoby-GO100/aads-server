@@ -133,6 +133,7 @@ def test_api_exposes_learning_revisit_search_execute_and_live_observation():
     source = (Path(__file__).resolve().parents[2] / "app" / "api" / "site_knowledge.py").read_text()
     for route in (
         '"/profiles/{site_profile_id}/learn"',
+        '"/profiles/{site_profile_id}/auto-visit"',
         '"/profiles/{site_profile_id}/revisit"',
         '"/profiles/{site_profile_id}/skill-search"',
         '"/profiles/{site_profile_id}/skill-execute"',
@@ -143,3 +144,49 @@ def test_api_exposes_learning_revisit_search_execute_and_live_observation():
     assert "ObservationEnvelope" in source
     assert "execute_skill" in source
     assert "guard_payload_for_display" in source
+
+
+def test_auto_skill_contract_is_server_owned_and_candidate_only():
+    manifest = learning._candidate_skill_manifest(
+        skill_id="skill-1", version=2, origin="https://example.test", page_key="orders",
+        evidence=["object://evidence/visit-2"],
+    )
+    assert manifest["status"] == "candidate"
+    assert manifest["version"] == "2"
+    assert manifest["executor"] == "ohvis.contract-echo"
+    assert manifest["allowed_tools"] == []
+    assert manifest["capabilities"] == ["site.observe"]
+    assert manifest["allowed_origins"] == ["https://example.test"]
+    assert manifest["permissions"] == ["read"]
+    assert manifest["retry"]["max_attempts"] == 1
+    assert "active_version_required" in manifest["preconditions"]
+    assert "no_page_authored_command_executed" in manifest["postconditions"]
+
+
+def test_auto_learning_migration_serializes_scope_and_has_rollback():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    sql = (root / "migrations" / "20260920_m8_auto_site_learning.sql").read_text()
+    rollback = (root / "migrations" / "rollback" / "20260920_m8_auto_site_learning.down.sql").read_text()
+    assert "UNIQUE (tenant_id, site_profile_id, page_key)" in sql
+    assert "next_version BIGINT NOT NULL DEFAULT 1" in sql
+    assert "page_artifact_id" in sql and "skill_id" in sql
+    assert "enforce_browser_site_learning_scope_tenant" in sql
+    assert "artifact tenant mismatch" in sql and "skill tenant mismatch" in sql
+    assert "CREATE TABLE IF NOT EXISTS" in sql
+    assert "DROP TABLE IF EXISTS browser_site_learning_scopes" in rollback
+
+
+def test_auto_learning_code_locks_scope_and_never_activates_candidate():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "app" / "services" / "smart_browser_learning.py").read_text()
+    assert "browser_site_learning_scopes" in source
+    assert "FOR UPDATE" in source
+    assert "SET next_version=$4" in source
+    assert source.count("'candidate'") >= 3
+    auto_source = source[source.index("async def auto_learn_site_visit"):source.index("def _skill_result")]
+    assert "status='active'" in auto_source
+    assert "SET status='active'" not in auto_source
+    assert "eval(" not in auto_source and "import_module" not in auto_source

@@ -266,6 +266,7 @@ Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks
 | focused/affected test 실행 | 실행하지 않음 — 사용자 규칙상 코드 수정만 수행 |
 | 빌드 검증 | 승인 후 Runner 빌드 검증 대상 |
 | commit/push/deploy | 실행하지 않음 |
+
 | AADS handover DB evidence | DB 변경/기록을 수행하지 않음 — 사용자 규칙상 파일 수정 외 작업 금지 |
 
 ---
@@ -334,3 +335,43 @@ Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks
 | `git diff --check` | 실행하지 않음 — 사용자 규칙상 파일 수정 외 명령 실행 금지 |
 | 빌드 검증 | 승인 후 Runner 빌드 검증 대상 |
 | commit/push/deploy | 실행하지 않음 |
+
+# AADS-SMARTBROWSER-M8-AUTO-LEARNING-R6-20260920
+
+## STEP 0 — 기존 구현 조사 및 분류
+
+| 항목 | 분류 | 반영/판단 |
+|---|---|---|
+| `site_knowledge.create_page_template_candidate`, tenant/site canonical lookup | 유지 | 기존 수동 candidate 생성과 G6 정본을 변경하지 않고 자동 방문 경로가 동일 artifact/version 테이블을 사용한다. |
+| `aria_structure_signature.build_partial_signature`, `assess_revisit` | 유지 | G4 role/name/state/관계 기반 비교와 동적 텍스트 배제 정책을 그대로 호출한다. |
+| `ohvis_harness.validate_skill_manifest`, executor registry, G6 promotion gate | 유지 | eval/import 없이 등록 callable만 실행하는 계약 및 candidate→shadow→active gate를 우회하지 않는다. |
+| `smart_browser_learning.auto_learn_site_visit` | 신규 | 최초 방문 paired candidate 생성, 재방문 reuse/Human Gateway/invalidation, 단조 version 할당을 scope row lock transaction으로 수행한다. |
+| `smart_browser_learning._pending_candidate` | 신규 | 동일 transaction의 두 pending candidate 조회를 공통 private helper로 통합하여 중복 guard를 해소한다. |
+| `/site-knowledge/profiles/{site_profile_id}/auto-visit` | 신규 | 인증 tenant context와 untrusted observation channel을 결선하고 후보 상태만 반환한다. |
+| `browser_site_learning_scopes` migration/rollback | 신규 | tenant/site/page unique scope와 `FOR UPDATE` allocator, tenant-bound trigger를 additive/idempotent하게 제공한다. |
+| focused tests | 수정 | 자동 skill 계약, candidate-only 경로, migration/rollback, API route를 정적 회귀한다. |
+| 삭제 | 0건 | 호출처 삭제 및 데이터 삭제 없음. rollback은 scope allocator만 제거하고 canonical artifact/version은 보존한다. |
+
+## 변경 파일
+
+- `app/services/smart_browser_learning.py`
+- `app/api/site_knowledge.py`
+- `migrations/20260920_m8_auto_site_learning.sql`
+- `migrations/rollback/20260920_m8_auto_site_learning.down.sql`
+- `tests/unit/test_smart_browser_learning.py`
+- `RESULT.md`
+
+## 검증 결과
+
+| 항목 | 결과 |
+|---|---|
+| pending candidate 중복 | 공통 `_pending_candidate()` helper 1개와 호출 2곳으로 통합한 소스 수준 확인. |
+| focused + M7/G1/G2/G4/G6 영향 회귀, Ruff, `py_compile`, `git diff --check`, pre-commit | 실행하지 않음 — 사용자 규칙상 명령 실행 금지. |
+| disposable PostgreSQL migration 2회 적용 및 rollback/reapply | 실행하지 않음 — 승인 후 Runner 빌드 검증 대상. |
+| npm/next/docker build | 실행하지 않음 — 승인 후 Runner 빌드 검증 대상. |
+| commit SHA | 없음 — 사용자 규칙에 따라 commit/push 미실행. |
+
+## 미완료 항목
+
+- 자동 테스트·정적 검사·pre-commit 및 disposable PostgreSQL migration 2회/rollback/reapply는 Runner 검증 전이므로 완료로 주장하지 않는다.
+- commit/push/deploy는 실행하지 않았다.
