@@ -21,7 +21,6 @@ from app.services.goal_binding import (
 
 logger = logging.getLogger(__name__)
 
-
 # 정규화 어휘의 단일 출처는 goal_binding 이다. 아래 이름은 기존 호출부/테스트 호환 별칭.
 _DONE_TASK_STATUSES = set(DONE_JOB_STATUSES)
 _FAILED_TASK_STATUSES = set(FAILED_JOB_STATUSES)
@@ -734,7 +733,7 @@ class GoalStateMachine:
                        SELECT 1 FROM milestones earlier
                        WHERE earlier.goal_id = m.goal_id
                          AND earlier.sequence_order < m.sequence_order
-                         AND earlier.status <> 'completed'
+                         AND earlier.status NOT IN ('completed', 'cancelled', 'superseded', 'archived')
                    ) AS is_next_open
             FROM milestones m
             JOIN goals g ON g.id = m.goal_id
@@ -996,19 +995,27 @@ class GoalStateMachine:
 
             await self._update_goal_progress(goal_id)
 
+    @staticmethod
+    async def _milestone_completion_stats(conn, goal_id: str) -> tuple[int, int]:
+        stats = await conn.fetchrow(
+            """
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE status = 'completed') AS completed
+            FROM milestones
+            WHERE goal_id = $1::uuid
+              AND status NOT IN ('cancelled', 'superseded', 'archived')
+            """,
+            goal_id,
+        )
+        return (
+            stats["total"] if stats else 0,
+            stats["completed"] if stats else 0,
+        )
+
     async def _update_goal_progress(self, goal_id: str) -> None:
         pool = await self._pool()
         async with pool.acquire() as conn:
-            stats = await conn.fetchrow(
-                """
-                SELECT COUNT(*) AS total,
-                       COUNT(*) FILTER (WHERE status = 'completed') AS completed
-                FROM milestones WHERE goal_id = $1::uuid
-                """,
-                goal_id,
-            )
-            total = stats["total"] if stats else 0
-            completed = stats["completed"] if stats else 0
+            total, completed = await self._milestone_completion_stats(conn, goal_id)
             progress = round(completed / total, 2) if total > 0 else 0.0
 
             if total > 0 and total == completed:
@@ -1045,19 +1052,12 @@ class GoalStateMachine:
     async def check_goal_completion(self, goal_id: str) -> dict[str, Any]:
         pool = await self._pool()
         async with pool.acquire() as conn:
-            stats = await conn.fetchrow(
-                """
-                SELECT COUNT(*) AS total,
-                       COUNT(*) FILTER (WHERE status = 'completed') AS completed
-                FROM milestones WHERE goal_id = $1::uuid
-                """,
-                goal_id,
-            )
-            total = stats["total"] if stats else 0
-            completed = stats["completed"] if stats else 0
+            total, completed = await self._milestone_completion_stats(conn, goal_id)
             return {"goal_id": goal_id, "completed": total > 0 and total == completed, "total": total, "completed_count": completed}
 
-    async def get_goal_status(self, goal_id: str) -> dict[str, Any]:
+    async def get_goal_status(
+        self, goal_id: str, *, include_history: bool = False,
+    ) -> dict[str, Any]:
         pool = await self._pool()
         async with pool.acquire() as conn:
             goal = await conn.fetchrow(
@@ -1074,9 +1074,12 @@ class GoalStateMachine:
             milestones = await conn.fetch(
                 """
                 SELECT id, title, sequence_order, status, auto_advance, completion_criteria, started_at, completed_at
-                FROM milestones WHERE goal_id = $1::uuid ORDER BY sequence_order
+                FROM milestones
+                WHERE goal_id = $1::uuid
+                  AND ($2::boolean OR status NOT IN ('cancelled', 'superseded', 'archived'))
+                ORDER BY sequence_order
                 """,
-                goal_id,
+                goal_id, include_history,
             )
             # 회수(detached)/격리(orphan)된 링크는 목표 상태 화면에서 제외한다.
             columns = await link_optional_columns(conn)

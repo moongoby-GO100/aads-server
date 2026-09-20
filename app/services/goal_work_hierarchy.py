@@ -257,6 +257,7 @@ async def get_goal_tree(
     tenant_id: str,
     goal_id: str,
     includes: Sequence[str],
+    include_history: bool = False,
 ) -> dict[str, Any]:
     goal = await get_goal_scope(conn, tenant_id=tenant_id, goal_id=goal_id)
     project = str(goal["project"])
@@ -268,8 +269,9 @@ async def get_goal_tree(
                ON m.id=w.milestone_id AND m.goal_id=w.goal_id
               AND m.tenant_id=w.tenant_id AND m.project=w.project
             WHERE w.tenant_id=$1::uuid AND w.project=$2 AND w.goal_id=$3::uuid
+              AND ($4::boolean OR w.status <> 'cancelled')
             ORDER BY m.sequence_order,w.created_at,w.id""",
-        tenant_id, project, goal_id,
+        tenant_id, project, goal_id, include_history,
     )
     items = {str(_row_dict(row)["id"]): _row_dict(row) for row in rows}
     for item in items.values():

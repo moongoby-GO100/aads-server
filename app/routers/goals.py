@@ -375,6 +375,7 @@ async def create_goal_work_item(
 async def get_goal_work_tree(
     goal_id: str,
     include: str = Query(""),
+    include_history: bool = Query(False),
     context: dict[str, Any] = Depends(require_tenant_viewer),
 ):
     _require_work_hierarchy()
@@ -388,7 +389,13 @@ async def get_goal_work_tree(
         raise HTTPException(status_code=422, detail={"code": "invalid_include", "fields": sorted(unknown)})
     tenant_id, _, _ = _tenant_identity(context)
     async with get_pool().acquire() as conn:
-        return await get_goal_tree(conn, tenant_id=tenant_id, goal_id=goal_id, includes=sorted(includes))
+        return await get_goal_tree(
+            conn,
+            tenant_id=tenant_id,
+            goal_id=goal_id,
+            includes=sorted(includes),
+            include_history=include_history,
+        )
 
 
 @router.get("/goals/{goal_id}/governance")
@@ -433,7 +440,9 @@ async def create_goal_project_assignment(
 
 @router.get("/goals/{goal_id}/board")
 async def goal_board(
-    goal_id: str, context: dict[str, Any] = Depends(require_tenant_viewer),
+    goal_id: str,
+    context: dict[str, Any] = Depends(require_tenant_viewer),
+    include_history: bool = Query(False),
 ):
     """담당별 현재 상태. 창 8개를 열지 않아도 되게.
 
@@ -566,9 +575,10 @@ async def goal_board(
                      WHERE n.milestone_id = milestones.id AND n.answered_at IS NULL) AS open_notes
             FROM milestones
             WHERE goal_id = $1::uuid AND tenant_id = $2::uuid
+              AND ($3::boolean OR status NOT IN ('cancelled', 'superseded', 'archived'))
             ORDER BY sequence_order, COALESCE(variant, '')
             """,
-            goal_id, tenant_id,
+            goal_id, tenant_id, include_history,
         )
 
     from app.services.direction_guard import is_halted
@@ -1388,10 +1398,13 @@ async def goal_rewind(
 async def goal_status(
     goal_id: str,
     context: dict[str, Any] = Depends(require_tenant_viewer),
+    include_history: bool = Query(False),
 ):
     from app.services.goal_manager import goal_state_machine
     await _validated_tenant_goal(goal_id, context)
-    result = await goal_state_machine.get_goal_status(goal_id)
+    result = await goal_state_machine.get_goal_status(
+        goal_id, include_history=include_history,
+    )
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     return result

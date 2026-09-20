@@ -167,7 +167,7 @@ class _FakeConn:
 
     async def fetchval(self, query, *args):
         if "FROM milestones" in query:
-            return 1 if self._milestone_owned else None
+            return "in_progress" if self._milestone_owned else None
         if "FROM pipeline_jobs" in query:
             return "00000000-0000-0000-0000-000000000001"
         return None
@@ -233,6 +233,31 @@ def test_explicit_valid_binding_creates_link(monkeypatch):
     assert linked["bind_source"] == BIND_SOURCE_EXPLICIT_API
 
 
+def test_blocked_goal_accepts_only_explicit_remediation(monkeypatch):
+    goal_row = {
+        "id": GOAL_A,
+        "tenant_id": "00000000-0000-0000-0000-000000000001",
+        "project": "AADS",
+        "status": "blocked",
+    }
+    instruction = (
+        f"GOAL_ID: {GOAL_A}\nMILESTONE_ID: {MILESTONE_A}\n"
+        "REMEDIATION_PURPOSE: restore-goal-control-loop\n"
+    )
+    result, linked = _run_auto_link(
+        monkeypatch, goal_row, instruction=instruction,
+    )
+    assert result == GOAL_A
+    assert linked["milestone_id"] == MILESTONE_A
+
+    result, linked = _run_auto_link(
+        monkeypatch, goal_row,
+        instruction=f"GOAL_ID: {GOAL_A}\nMILESTONE_ID: {MILESTONE_A}\n",
+    )
+    assert result is None
+    assert linked == {}
+
+
 def test_cross_project_binding_is_rejected(monkeypatch):
     """GO100 목표에 AADS 작업을 붙이려 하면 연결하지 않는다."""
     goal_row = {"id": GOAL_A, "project": "GO100", "status": "active"}
@@ -270,13 +295,14 @@ def test_no_explicit_context_never_touches_the_database(monkeypatch):
     ) is None
 
 
-def test_milestone_not_owned_by_goal_is_rejected(monkeypatch):
+def test_milestone_not_owned_by_goal_falls_back_for_active_goal(monkeypatch):
     goal_row = {"id": GOAL_A, "tenant_id": "00000000-0000-0000-0000-000000000001", "project": "AADS", "status": "active"}
     result, linked = _run_auto_link(
         monkeypatch, goal_row, goal_id=GOAL_A, milestone_id=MILESTONE_A, milestone_owned=False,
     )
-    assert result is None
-    assert linked == {}
+    assert result == GOAL_A
+    assert linked["goal_id"] == GOAL_A
+    assert linked["milestone_id"] is None
 
 
 # ─── 재조정 계획 (요구사항 C) ───────────────────────────────────────────────

@@ -12,7 +12,6 @@
 """
 from __future__ import annotations
 
-import hashlib
 import re
 from typing import NamedTuple, Optional
 
@@ -73,25 +72,6 @@ BIND_SOURCE_UNKNOWN = "unknown"
 
 # 명시적 근거 없이(프로젝트만 보고) 붙었을 수 있는 계보 — 재조정에서 별도 보고 대상.
 UNVERIFIED_BIND_SOURCES = frozenset({BIND_SOURCE_LEGACY_AUTO, BIND_SOURCE_UNKNOWN, ""})
-
-MANDATORY_HUMAN_MARKERS = (
-    "production", "deploy", "schema", "migration", "bulk", "security",
-    "secret", "credential", "destructive", "drop table", "운영", "배포",
-    "스키마", "보안", "삭제",
-)
-
-
-def approval_execution_key(job_id: str, purpose: str) -> str:
-    digest = hashlib.sha256(f"pipeline:{job_id}:{purpose}".encode()).hexdigest()[:32]
-    return f"pipeline-action:{digest}"
-
-
-def requires_mandatory_human(priority: str, instruction: str) -> bool:
-    if (priority or "").upper().startswith("P0"):
-        return True
-    lowered = (instruction or "").lower()
-    return any(marker in lowered for marker in MANDATORY_HUMAN_MARKERS)
-
 
 def remediation_purpose(instruction: str) -> Optional[str]:
     """Return a non-empty, explicitly declared remediation purpose."""
