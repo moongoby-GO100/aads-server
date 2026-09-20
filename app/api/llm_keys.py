@@ -336,6 +336,20 @@ def _account_state(row: Any, binding: dict[str, Any] | None, now: datetime) -> s
     return "ok"
 
 
+def _anthropic_slot_map(records: list[dict[str, Any]]) -> dict[str, str]:
+    """Build the account-to-slot map from the relay's canonical slot metadata.
+
+    Priority is mutable (automatic/manual primary selection), while a Claude OAuth
+    slot is permanently identified by ``auth_provider``.  Deriving slot numbers
+    from priority therefore attaches another account's usage after every reorder.
+    """
+    return {
+        str(record["key_name"]): f"slot{record['slot']}"
+        for record in records
+        if record.get("key_name") and record.get("slot")
+    }
+
+
 @router.get("/overview")
 async def llm_overview() -> dict[str, Any]:
     """설정 화면 '통합 계정 카드' 의 단일 데이터원.
@@ -388,11 +402,18 @@ async def llm_overview() -> dict[str, Any]:
     except Exception:
         logger.warning("llm_keys.overview.slot_usage_unavailable")
 
-    # anthropic 키 ↔ 슬롯 매핑. 릴레이 슬롯 규약과 같은 순서다(priority 오름차순).
+    # 슬롯 번호는 priority가 아니라 auth_provider의 고정 슬롯 메타데이터로 잇는다.
+    # priority는 주계정 자동 전환 때 바뀌므로 순번으로 슬롯을 만들면 계정별 사용량이
+    # 서로 뒤바뀐다(예: 우선순위 1인 실제 slot3에 slot1의 100%가 표시됨).
     slot_of: dict[str, str] = {}
-    anthropic_rows = [r for r in rows if normalize_provider(r["provider"]) == "anthropic"]
-    for idx, r in enumerate(sorted(anthropic_rows, key=lambda x: (x["priority"], x["id"])), start=1):
-        slot_of[r["key_name"]] = f"slot{idx}"
+    try:
+        from app.core.auth_provider import get_oauth_key_records_async
+
+        slot_of = _anthropic_slot_map(
+            await get_oauth_key_records_async(include_rate_limited=True)
+        )
+    except Exception:
+        logger.warning("llm_keys.overview.anthropic_slot_map_unavailable")
 
     now = datetime.now(timezone.utc)
     accounts: list[dict[str, Any]] = []
