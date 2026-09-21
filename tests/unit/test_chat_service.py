@@ -1210,7 +1210,11 @@ async def test_save_and_update_session_rewrites_incomplete_tail_before_final_sav
     )
     conn = AsyncMock()
     conn.transaction = lambda: _TransactionCtx()
-    conn.fetchrow = AsyncMock(return_value={"status": "running", "completed_at": None})
+    conn.fetchrow = AsyncMock(return_value={
+        "status": "running", "completed_at": None,
+        "owner_instance": chat_service._EXECUTION_OWNER_INSTANCE,
+        "owner_epoch": 1, "generation_id": None,
+    })
     conn.fetchval = AsyncMock(return_value=placeholder_id)
     conn.execute = AsyncMock()
 
@@ -1236,6 +1240,7 @@ async def test_save_and_update_session_rewrites_incomplete_tail_before_final_sav
             raw_messages=[{"role": "user", "content": "원인 파악하고 보고해"}],
             model_used="gpt-5.5",
             tools_called=[{"name": "run_remote_command"}],
+            expected_owner_epoch=1,
         )
 
     rewrite.assert_awaited_once()
@@ -1256,7 +1261,11 @@ async def test_save_and_update_session_preserves_interrupted_partial_when_rewrit
     incomplete = "핵심 파일을 확인하고 DB 상태를 추가 조회하겠습니다."
     conn = AsyncMock()
     conn.transaction = lambda: _TransactionCtx()
-    conn.fetchrow = AsyncMock(return_value={"status": "running", "completed_at": None})
+    conn.fetchrow = AsyncMock(return_value={
+        "status": "running", "completed_at": None,
+        "owner_instance": chat_service._EXECUTION_OWNER_INSTANCE,
+        "owner_epoch": 1, "generation_id": None,
+    })
     conn.fetchval = AsyncMock(return_value=placeholder_id)
     conn.execute = AsyncMock()
 
@@ -1281,6 +1290,7 @@ async def test_save_and_update_session_preserves_interrupted_partial_when_rewrit
             raw_messages=[{"role": "user", "content": "원인 파악하고 보고해"}],
             model_used="gpt-5.5",
             tools_called=[{"name": "run_remote_command"}],
+            expected_owner_epoch=1,
         )
 
     mark_interrupted.assert_awaited_once()
@@ -1304,7 +1314,11 @@ async def test_save_and_update_session_saves_completed_when_todo_gate_missing():
     )
     conn = AsyncMock()
     conn.transaction = lambda: _TransactionCtx()
-    conn.fetchrow = AsyncMock(return_value={"status": "running", "completed_at": None})
+    conn.fetchrow = AsyncMock(return_value={
+        "status": "running", "completed_at": None,
+        "owner_instance": chat_service._EXECUTION_OWNER_INSTANCE,
+        "owner_epoch": 1, "generation_id": None,
+    })
     conn.fetchval = AsyncMock(return_value=placeholder_id)
     conn.execute = AsyncMock()
 
@@ -1333,6 +1347,7 @@ async def test_save_and_update_session_saves_completed_when_todo_gate_missing():
             raw_messages=[{"role": "user", "content": "원인 파악하고 수정해"}],
             model_used="gpt-5.5",
             tools_called=[{"name": "run_remote_command"}],
+            expected_owner_epoch=1,
         )
 
     mark_interrupted.assert_not_awaited()

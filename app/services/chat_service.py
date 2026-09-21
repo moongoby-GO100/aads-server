@@ -385,6 +385,9 @@ def _classify_interruption_reason(reason: str, fallback: str = "unknown") -> str
 from contextvars import ContextVar as _ContextVar  # noqa: E402
 _current_branch_id: _ContextVar[Optional[str]] = _ContextVar("_current_branch_id", default=None)
 _current_execution_id: _ContextVar[Optional[str]] = _ContextVar("_current_execution_id", default=None)
+_current_execution_owner_epoch: _ContextVar[Optional[int]] = _ContextVar(
+    "_current_execution_owner_epoch", default=None,
+)
 _current_stream_event_id: _ContextVar[Optional[str]] = _ContextVar(
     "_current_stream_event_id", default=None,
 )
@@ -762,6 +765,90 @@ def _history_exclusion_sql(alias: str = "") -> str:
         f"AND COALESCE({prefix}intent, '') NOT IN ({quoted}) "
         f"AND {prefix}deleted_at IS NULL"
     )
+
+
+def _bind_current_turn_to_history(
+    raw_messages: List[Dict[str, Any]],
+    *,
+    user_message_id: Optional[uuid.UUID | str],
+    content: str,
+) -> List[Dict[str, Any]]:
+    """Return history with this turn's user message present exactly once at the end.
+
+    Historical ``system_trigger`` rows are deliberately filtered so old runner noise
+    cannot pollute later turns.  The current trigger is different: it is the request
+    being answered.  Filtering first and only trying to replace the row meant that a
+    hidden current trigger vanished entirely.  Bind by the persisted message id and
+    append when the history filter removed it.
+    """
+    current_id = str(user_message_id) if user_message_id else None
+    bound: List[Dict[str, Any]] = []
+    for message in raw_messages:
+        if current_id and str(message.get("id") or "") == current_id:
+            continue
+        bound.append(dict(message))
+    current: Dict[str, Any] = {"role": "user", "content": content}
+    if current_id:
+        current["id"] = current_id
+    bound.append(current)
+    return bound
+
+
+def _current_turn_binding_status(
+    raw_messages: List[Dict[str, Any]],
+    user_message_id: Optional[uuid.UUID | str],
+) -> Dict[str, Any]:
+    current_id = str(user_message_id) if user_message_id else None
+    matches = [
+        idx for idx, message in enumerate(raw_messages)
+        if current_id and str(message.get("id") or "") == current_id
+    ]
+    return {
+        "current_user_included": bool(matches),
+        "current_user_occurrences": len(matches),
+        "current_user_is_last": bool(matches and matches[-1] == len(raw_messages) - 1),
+    }
+
+
+def _current_turn_llm_binding_status(
+    messages: List[Dict[str, Any]],
+    content: str,
+) -> Dict[str, Any]:
+    expected = str(content or "").strip()
+    matches: List[int] = []
+    for idx, message in enumerate(messages):
+        if message.get("role") != "user":
+            continue
+        message_content = message.get("content")
+        if isinstance(message_content, list):
+            text_parts = [
+                str(part.get("text") or "")
+                for part in message_content
+                if isinstance(part, dict) and part.get("type") == "text"
+            ]
+            actual = "".join(text_parts).strip()
+        else:
+            actual = str(message_content or "").strip()
+        if actual == expected:
+            matches.append(idx)
+    return {
+        "current_user_in_llm": bool(matches),
+        "current_user_is_last_llm": bool(matches and matches[-1] == len(messages) - 1),
+    }
+
+
+def _expected_execution_write_epoch(
+    execution_id: uuid.UUID | str,
+    explicit_epoch: Optional[int] = None,
+) -> Optional[int]:
+    """Resolve a write fence from task-local ownership, never the global lease cache."""
+    if explicit_epoch is not None:
+        return int(explicit_epoch)
+    context_execution_id = _current_execution_id.get(None)
+    if context_execution_id != str(execution_id):
+        return None
+    context_epoch = _current_execution_owner_epoch.get(None)
+    return int(context_epoch) if context_epoch is not None else None
 
 
 def _normalize_response_mode(response_mode: Optional[str]) -> str:
@@ -5493,7 +5580,17 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                     return
                 exec_owner = _exec_state["owner_instance"]
                 exec_epoch = int(_exec_state["owner_epoch"] or 0)
+                state_epoch = state.get("owner_epoch")
                 if exec_owner is None:
+                    if state_epoch is not None:
+                        state["completed"] = True
+                        state["_terminal_execution_closed"] = True
+                        state["_producer_incomplete_exit"] = "execution_lease_released"
+                        logger.warning(
+                            "interim_save_stopped_released_lease session=%s execution=%s expected_epoch=%s",
+                            session_id[:8], str(_eid)[:8], state_epoch,
+                        )
+                        return
                     if not _is_local_active_api_slot():
                         state["completed"] = True
                         state["_terminal_execution_closed"] = True
@@ -5524,7 +5621,17 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                         str(exec_owner or "-")[:80],
                     )
                     return
-                state["owner_epoch"] = exec_epoch
+                if state_epoch is not None and int(state_epoch) != exec_epoch:
+                    state["completed"] = True
+                    state["_terminal_execution_closed"] = True
+                    state["_producer_incomplete_exit"] = "execution_lease_epoch_mismatch"
+                    logger.warning(
+                        "interim_save_stopped_epoch_mismatch session=%s execution=%s epoch=%s expected_epoch=%s",
+                        session_id[:8], str(_eid)[:8], exec_epoch, state_epoch,
+                    )
+                    return
+                if state_epoch is None:
+                    state["owner_epoch"] = exec_epoch
                 # P0: 도구 호출 중 save_key 변경으로 heartbeat 경로를 우회해 lease 만료되는 버그 수정
                 _now_hb = _bg_time.monotonic()
                 if _now_hb - float(state.get("_last_lease_heartbeat_ts") or 0) >= _EXECUTION_HEARTBEAT_SECONDS:
@@ -5540,37 +5647,39 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                         )
                         return
                 await _archive_competing_stream_placeholder(conn, _sid, _eid)
-                # pre-SELECT 제거: UPSERT의 WHERE EXISTS가 terminal 상태 자동 필터링
-                if force:
-                    _row = await conn.fetchrow(
-                        """INSERT INTO chat_messages (session_id, execution_id, role, content, intent, model_used, tools_called)
-                           VALUES ($1, $2, 'assistant', $3, 'streaming_placeholder', 'streaming', $4::jsonb)
-                           ON CONFLICT (execution_id) WHERE intent = 'streaming_placeholder' AND execution_id IS NOT NULL
-                           DO UPDATE SET content = EXCLUDED.content, tools_called = $4::jsonb, edited_at = NOW()
-                           RETURNING id, (xmax = 0) AS is_new""",
-                        _sid, _eid, display_content, _tool_events_json,
-                    )
-                else:
-                    _row = await conn.fetchrow(
-                        """INSERT INTO chat_messages (session_id, execution_id, role, content, intent, model_used, tools_called)
-                           SELECT $1, $2, 'assistant', $3, 'streaming_placeholder', 'streaming', $4::jsonb
-                           WHERE EXISTS (
-                             SELECT 1 FROM chat_turn_executions
-                             WHERE id = $2
-                               AND status IN ('running', 'retrying')
-                               AND completed_at IS NULL
-                           )
-                           ON CONFLICT (execution_id) WHERE intent = 'streaming_placeholder' AND execution_id IS NOT NULL
-                           DO UPDATE SET content = EXCLUDED.content, tools_called = $4::jsonb, edited_at = NOW()
-                           WHERE EXISTS (
-                             SELECT 1 FROM chat_turn_executions
-                             WHERE id = $2
-                               AND status IN ('running', 'retrying')
-                               AND completed_at IS NULL
-                           )
-                           RETURNING id, (xmax = 0) AS is_new""",
-                        _sid, _eid, display_content, _tool_events_json,
-                    )
+                # The ownership predicate belongs in the same SQL statement as the
+                # message mutation.  A scanner can claim a new epoch after the
+                # SELECT above; a second unfenced UPSERT would otherwise let the old
+                # producer overwrite the new generation's placeholder.
+                _row = await conn.fetchrow(
+                    """INSERT INTO chat_messages (session_id, execution_id, role, content, intent, model_used, tools_called)
+                       SELECT $1, $2, 'assistant', $3, 'streaming_placeholder', 'streaming', $4::jsonb
+                       WHERE EXISTS (
+                         SELECT 1 FROM chat_turn_executions
+                         WHERE id = $2
+                           AND status IN ('running', 'retrying')
+                           AND completed_at IS NULL
+                           AND owner_instance = $5
+                           AND owner_epoch = $6
+                       )
+                       ON CONFLICT (execution_id) WHERE intent = 'streaming_placeholder' AND execution_id IS NOT NULL
+                       DO UPDATE SET content = EXCLUDED.content, tools_called = $4::jsonb, edited_at = NOW()
+                       WHERE EXISTS (
+                         SELECT 1 FROM chat_turn_executions
+                         WHERE id = $2
+                           AND status IN ('running', 'retrying')
+                           AND completed_at IS NULL
+                           AND owner_instance = $5
+                           AND owner_epoch = $6
+                       )
+                       RETURNING id, (xmax = 0) AS is_new""",
+                    _sid,
+                    _eid,
+                    display_content,
+                    _tool_events_json,
+                    _EXECUTION_OWNER_INSTANCE,
+                    state.get("owner_epoch"),
+                )
                 if not _row:
                     logger.info(
                         "interim_save_skipped_terminal_race session=%s execution=%s",
@@ -6066,7 +6175,13 @@ async def with_background_completion(
                     or exec_row["completed_at"] is not None
                 ):
                     return
-                expected_epoch = state.get("owner_epoch") or _execution_owner_epochs.get(str(execution_uuid))
+                expected_epoch = state.get("owner_epoch")
+                if expected_epoch is None:
+                    logger.warning(
+                        "completion_guard_skipped_missing_epoch session=%s execution=%s",
+                        session_id[:8], str(execution_uuid)[:8],
+                    )
+                    return
                 exec_owner = exec_row.get("owner_instance", _EXECUTION_OWNER_INSTANCE)
                 exec_epoch = exec_row.get("owner_epoch", expected_epoch or 0)
                 if (
@@ -7646,6 +7761,7 @@ async def _resume_single_stream(
 
     try:
         _current_execution_id.set(execution_id)
+        _current_execution_owner_epoch.set(owner_epoch)
         _current_stream_event_id.set(None)
         # 재개 턴도 세션에 묶는다. 이 줄이 없어서 이어받은 턴의 도구가
         # missing_session_id 로 떨어졌다 — 2026-09-17 todo_write 실측.
@@ -7692,6 +7808,7 @@ async def _resume_single_stream(
                     str(_execution_uuid)[:8],
                 )
                 return
+            _current_execution_owner_epoch.set(owner_epoch)
             # 7052 에서 만든 상태를 여기서 읽는데, 그 사이 _claim_execution_lease 의
             # await 에서 다른 코루틴으로 넘어간다. 그동안 펜싱 핸들러 등이 같은 키를
             # 지울 수 있고(_streaming_state.pop 지점이 7군데), 그러면 여기서
@@ -8342,6 +8459,7 @@ async def _resume_single_stream(
                 model_used=_resume_model_used,
                 cost=cost_usd,
                 tools_called=tools_called,
+                expected_owner_epoch=owner_epoch,
             )
 
             logger.info(
@@ -10603,6 +10721,7 @@ async def _save_and_update_session(
     edit_intent: bool = False,
     notify_user_id: Optional[str] = None,
     fallback_info: Optional[dict] = None,
+    expected_owner_epoch: Optional[int] = None,
 ) -> None:
     """#19: Phase C — 별도 커넥션으로 응답 저장 + 세션 비용 업데이트.
     BUG-FIX: placeholder가 있으면 UPDATE로 전환 (DELETE+INSERT gap 제거).
@@ -10629,6 +10748,7 @@ async def _save_and_update_session(
     )
     async with get_pool().acquire() as conn:
         async with conn.transaction():
+            _exec_generation_id = None
             generated_image_urls = _generated_image_urls_from_tool_events(normalized_tools_called)
             if not generated_image_urls:
                 try:
@@ -10669,7 +10789,7 @@ async def _save_and_update_session(
             if _execution_uuid:
                 _exec_row = await conn.fetchrow(
                     """
-                    SELECT status, completed_at, owner_instance, owner_epoch
+                    SELECT status, completed_at, owner_instance, owner_epoch, generation_id
                     FROM chat_turn_executions
                     WHERE id = $1
                     FOR UPDATE
@@ -10688,9 +10808,19 @@ async def _save_and_update_session(
                         _exec_row["status"] if _exec_row else "missing",
                     )
                     return
-                _expected_owner_epoch = _execution_owner_epochs.get(str(_execution_uuid))
+                _expected_owner_epoch = _expected_execution_write_epoch(
+                    _execution_uuid,
+                    expected_owner_epoch,
+                )
+                if _expected_owner_epoch is None:
+                    logger.warning(
+                        "final_save_skipped_missing_task_epoch session=%s execution=%s",
+                        str(sid)[:8], str(_execution_uuid)[:8],
+                    )
+                    return
                 _exec_owner = _exec_row.get("owner_instance", _EXECUTION_OWNER_INSTANCE)
                 _exec_epoch = _exec_row.get("owner_epoch", _expected_owner_epoch or 0)
+                _exec_generation_id = _exec_row.get("generation_id")
                 if (
                     _exec_owner != _EXECUTION_OWNER_INSTANCE
                     or (
@@ -10909,6 +11039,16 @@ async def _save_and_update_session(
                         partial_content=content,
                     )
                     return
+                if _exec_generation_id is not None:
+                    await conn.execute(
+                        """
+                        UPDATE chat_messages
+                        SET generation_id = COALESCE(generation_id, $2)
+                        WHERE id = $1
+                        """,
+                        _assistant_msg_id,
+                        _exec_generation_id,
+                    )
                 await _archive_interrupted_siblings_for_completed_execution(
                     conn,
                     _execution_uuid,
@@ -11112,6 +11252,107 @@ import time as _time  # noqa: E402
 _ai_reaction_active: dict[str, float] = {}  # session_id → timestamp
 _ai_reaction_queue: dict[str, list[str]] = {}  # session_id → 대기 메시지 리스트
 _AI_REACTION_MAX_QUEUE = 5
+
+_AUTO_REACTION_IDENTIFIER_RE = re.compile(
+    r"(?i)(?:\b[0-9a-f]{8}-[0-9a-f-]{27,36}\b|\b[0-9a-f]{7,40}\b|"
+    r"(?:[\w.-]+/)+[\w.-]+\.(?:md|py|ts|tsx|js|sql|sh))"
+)
+_AUTO_REACTION_WORD_RE = re.compile(r"[A-Za-z가-힣][A-Za-z0-9가-힣_.-]{2,}")
+_AUTO_REACTION_STOPWORDS = frozenset({
+    "그리고", "그러면", "사용자", "시스템", "메시지", "자동", "트리거", "현재",
+    "세션", "작업", "진행", "확인", "보고", "완료", "결과", "도구", "즉시",
+    "해주세요", "합니다", "있습니다", "this", "that", "with", "from", "session",
+    "current", "system", "message", "task", "result", "check", "complete",
+})
+
+
+def _assess_auto_reaction_alignment(instruction: str, response: str) -> Dict[str, Any]:
+    """Deterministically reject an unrelated response before closing an Ohvis task."""
+    instruction_text = str(instruction or "")
+    response_text = str(response or "")
+    response_lower = response_text.lower()
+    identifiers = sorted(set(_AUTO_REACTION_IDENTIFIER_RE.findall(instruction_text)))
+    matched_identifiers = [item for item in identifiers if item.lower() in response_lower]
+    words = []
+    for word in _AUTO_REACTION_WORD_RE.findall(instruction_text):
+        normalized = word.lower().strip("._-")
+        if normalized in _AUTO_REACTION_STOPWORDS or len(normalized) < 3:
+            continue
+        if normalized not in words:
+            words.append(normalized)
+    matched_words = [word for word in words[:40] if word in response_lower]
+    meaningful = bool(response_text.strip()) and not _is_progress_or_interrupt_only(response_text)
+    aligned = meaningful and bool(matched_identifiers or matched_words)
+    return {
+        "aligned": aligned,
+        "meaningful": meaningful,
+        "required_identifiers": identifiers[:12],
+        "matched_identifiers": matched_identifiers[:12],
+        "matched_keywords": matched_words[:12],
+    }
+
+
+async def _consume_internal_reaction_stream(session_id: str, content: str) -> Optional[str]:
+    """Consume an internal turn through the same lease/heartbeat wrapper as HTTP SSE."""
+    stream = send_message_stream(
+        session_id=session_id,
+        content=content,
+        intent_override="auto_reaction",
+    )
+    async for _ in with_background_completion(stream, session_id):
+        pass
+    state = _streaming_state.get(session_id) or {}
+    execution_id = state.get("execution_id")
+    return str(execution_id) if execution_id else None
+
+
+async def _load_auto_reaction_completion(
+    conn: asyncpg.Connection,
+    execution_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    if not execution_id:
+        return None
+    row = await conn.fetchrow(
+        """
+        SELECT te.id::text AS execution_id,
+               te.status,
+               te.assistant_message_id::text AS assistant_message_id,
+               m.content,
+               COALESCE((
+                   SELECT p.provenance #>> '{context_policy,current_user_included}'
+                   FROM compiled_prompt_provenance p
+                   WHERE p.execution_id = te.id
+                   ORDER BY p.id DESC
+                   LIMIT 1
+               ), 'false') = 'true' AS current_user_included,
+               COALESCE((
+                   SELECT p.provenance #>> '{context_policy,current_user_is_last}'
+                   FROM compiled_prompt_provenance p
+                   WHERE p.execution_id = te.id
+                   ORDER BY p.id DESC
+                   LIMIT 1
+               ), 'false') = 'true' AS current_user_is_last,
+               COALESCE((
+                   SELECT p.provenance #>> '{context_policy,current_user_in_llm}'
+                   FROM compiled_prompt_provenance p
+                   WHERE p.execution_id = te.id
+                   ORDER BY p.id DESC
+                   LIMIT 1
+               ), 'false') = 'true' AS current_user_in_llm,
+               COALESCE((
+                   SELECT p.provenance #>> '{context_policy,current_user_is_last_llm}'
+                   FROM compiled_prompt_provenance p
+                   WHERE p.execution_id = te.id
+                   ORDER BY p.id DESC
+                   LIMIT 1
+               ), 'false') = 'true' AS current_user_is_last_llm
+        FROM chat_turn_executions te
+        LEFT JOIN chat_messages m ON m.id = te.assistant_message_id
+        WHERE te.id = $1
+        """,
+        uuid.UUID(str(execution_id)),
+    )
+    return _row_to_dict(row) if row else None
 
 
 async def _session_has_live_execution(session_id: str) -> bool:
@@ -11340,12 +11581,7 @@ async def _consume_next_reaction(sid: str, msg: str) -> None:
     from app.services.tool_executor import current_chat_session_id
     current_chat_session_id.set(sid)
     try:
-        async for _ in send_message_stream(
-            session_id=sid,
-            content=msg,
-            intent_override="auto_reaction",
-        ):
-            pass
+        await _consume_internal_reaction_stream(sid, msg)
         # message_count 보정
         try:
             from app.core.db_pool import get_pool
@@ -11518,19 +11754,16 @@ async def trigger_ai_reaction(
 
     async def _consume_stream():
         _reaction_summary = ""
-        _trigger_started_at = None
+        _trigger_execution_id: Optional[str] = None
+        _reaction_validation: Dict[str, Any] = {
+            "valid": False,
+            "reason": "reaction_not_completed",
+        }
         try:
-            try:
-                async with get_pool().acquire() as _start_conn:
-                    _trigger_started_at = await _start_conn.fetchval("SELECT NOW()")
-            except Exception:
-                _trigger_started_at = None
-            async for _ in send_message_stream(
-                session_id=session_id,
-                content=safe_message,
-                intent_override="auto_reaction",
-            ):
-                pass  # 스트림 전체 소비 → DB에 AI 응답 자동 저장
+            _trigger_execution_id = await _consume_internal_reaction_stream(
+                session_id,
+                safe_message,
+            )
             # message_count 보정 + P1-2 AI 반응 텍스트 조회 (task_card용)
             try:
                 async with get_pool().acquire() as _conn:
@@ -11540,20 +11773,46 @@ async def trigger_ai_reaction(
                         "updated_at = NOW() WHERE id = $1",
                         uuid.UUID(session_id),
                     )
-                    # 세션의 "마지막 assistant 메시지" 가 아니라 **이 트리거 이후**
-                    # 생성된 메시지만 본다 — 세션이 다른 일로 바쁘면 그 사이 다른
-                    # 자동 메시지가 끼어들어 마지막 자리를 차지할 수 있다
-                    # (AADS-OHVIS-CONSOLE-SESSION-ROUTING-P0).
-                    _last_ai = await _conn.fetchval(
-                        "SELECT content FROM chat_messages "
-                        "WHERE session_id = $1 AND role = 'assistant' "
-                        "AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz) "
-                        "ORDER BY created_at DESC LIMIT 1",
-                        uuid.UUID(session_id),
-                        _trigger_started_at,
+                    _completion = await _load_auto_reaction_completion(
+                        _conn,
+                        _trigger_execution_id,
                     )
-                    if _last_ai and not _is_progress_or_interrupt_only(str(_last_ai)):
-                        _reaction_summary = str(_last_ai)[:2000]
+                    if _completion:
+                        _candidate = str(_completion.get("content") or "")
+                        _alignment = _assess_auto_reaction_alignment(
+                            system_message,
+                            _candidate,
+                        )
+                        _reaction_validation = {
+                            **_alignment,
+                            "execution_id": _completion.get("execution_id"),
+                            "assistant_message_id": _completion.get("assistant_message_id"),
+                            "execution_status": _completion.get("status"),
+                            "current_user_included": bool(_completion.get("current_user_included")),
+                            "current_user_is_last": bool(_completion.get("current_user_is_last")),
+                            "current_user_in_llm": bool(_completion.get("current_user_in_llm")),
+                            "current_user_is_last_llm": bool(_completion.get("current_user_is_last_llm")),
+                        }
+                        _reaction_validation["valid"] = bool(
+                            _completion.get("status") == "completed"
+                            and _completion.get("assistant_message_id")
+                            and _reaction_validation["current_user_included"]
+                            and _reaction_validation["current_user_is_last"]
+                            and _reaction_validation["current_user_in_llm"]
+                            and _reaction_validation["current_user_is_last_llm"]
+                            and _alignment.get("aligned")
+                        )
+                        if _reaction_validation["valid"]:
+                            _reaction_validation["reason"] = "validated"
+                            _reaction_summary = _candidate[:2000]
+                        else:
+                            _reaction_validation["reason"] = "semantic_completion_gate_failed"
+                    else:
+                        _reaction_validation = {
+                            "valid": False,
+                            "reason": "exact_execution_completion_not_found",
+                            "execution_id": _trigger_execution_id,
+                        }
             except Exception as _mc_err:
                 logger.warning(f"trigger_ai_reaction: post_stream_update failed session={session_id[:8]}: {_mc_err}")
         except Exception as e:
@@ -11564,15 +11823,21 @@ async def trigger_ai_reaction(
             if ohvis_task_id:
                 try:
                     from app.services.ohvis_task_manager import complete_task as _otm_done
-                    if _reaction_summary:
+                    if _reaction_summary and _reaction_validation.get("valid"):
                         await _otm_done(ohvis_task_id, status="done",
-                                        result={"ai_reaction": _reaction_summary},
+                                        result={"ai_reaction": _reaction_summary,
+                                                "validation": _reaction_validation},
                                         ohvis_judgement=_reaction_summary[:500])
                     else:
-                        # 이번 트리거로 생성된 답을 찾지 못했다 — 화면이 "돌고 있다"고
-                        # 거짓 보고하지 않도록 error 로 닫는다.
-                        await _otm_done(ohvis_task_id, status="error", result=None,
-                                        ohvis_judgement="오비스 자동 확인 실패 — 트리거 응답을 찾지 못했습니다")
+                        await _otm_done(
+                            ohvis_task_id,
+                            status="error",
+                            result={"validation": _reaction_validation},
+                            ohvis_judgement=(
+                                "오비스 자동 확인 실패 — 현재 지시가 프롬프트에 결합되고 "
+                                "정확한 execution의 관련 응답으로 완료됐는지 검증하지 못했습니다"
+                            ),
+                        )
                 except Exception as _otm_e:
                     logger.warning("ohvis_task_complete_failed: %s", _otm_e)
             # 큐에 대기 중인 트리거가 있으면 다음 것 처리
@@ -12353,6 +12618,9 @@ async def send_message_stream(
                 requested_model=model_override,
             )
             _current_execution_id.set(_execution_id_str)
+            _current_execution_owner_epoch.set(
+                _execution_owner_epochs.get(str(_execution_id_str))
+            )
             _current_stream_event_id.set(None)
             _stream_id = _execution_id_str
 
@@ -12425,9 +12693,13 @@ async def send_message_stream(
                     )
                 else:
                     hist_rows = []
-                # 분기 user 메시지를 히스토리 끝에 추가
+                # 분기 user 메시지를 히스토리 끝에 현재 턴으로 결합
                 raw_messages = [{"id": str(r["id"]), "role": r["role"], "content": r["content"]} for r in hist_rows]
-                raw_messages.append({"role": "user", "content": content})
+                raw_messages = _bind_current_turn_to_history(
+                    raw_messages,
+                    user_message_id=_saved_user_message_id,
+                    content=content,
+                )
                 logger.info(f"[BRANCH] session={session_id[:8]} branch_id={branch_id} point={branch_point_msg_id[:8]} hist={len(raw_messages)}")
             else:
                 hist_rows = await conn.fetch(
@@ -12442,12 +12714,11 @@ async def send_message_stream(
                     sid,
                 )
                 raw_messages = [{"id": str(r["id"]), "role": r["role"], "content": r["content"]} for r in hist_rows]
-                if _saved_user_message_id:
-                    _saved_user_message_id_str = str(_saved_user_message_id)
-                    for _raw_msg in reversed(raw_messages):
-                        if _raw_msg.get("id") == _saved_user_message_id_str:
-                            _raw_msg["content"] = content
-                            break
+                raw_messages = _bind_current_turn_to_history(
+                    raw_messages,
+                    user_message_id=_saved_user_message_id,
+                    content=content,
+                )
 
             # 세션 누적 비용 조회 (프론트엔드 표시용)
             _session_cost_row = await conn.fetchrow(
@@ -12671,6 +12942,22 @@ async def send_message_stream(
             logger.info(f"contradiction_warning_injected session={session_id[:8]}")
 
         intent = intent_override if intent_override else intent_result.intent
+        if (
+            intent_override == "auto_reaction"
+            and _requires_quality_response_mode(content, intent_result.intent)
+        ):
+            # A directive is still classified for routing, but the public intent is
+            # kept as auto_reaction/runner_response for UI isolation.  Do not let a
+            # stale conversational follow-up label (notably status_check) downgrade
+            # a multi-step implementation directive to a lightweight model policy.
+            intent_result.intent = "execute"
+            intent_result.use_tools = True
+            intent_result.tool_group = intent_result.tool_group or "all"
+            _contextual_followup_intent = None
+            logger.info(
+                "auto_reaction_directive_route_forced session=%s route_intent=execute",
+                session_id[:8],
+            )
         if response_mode == _RESPONSE_MODE_FAST and _requires_quality_response_mode(content, intent):
             response_mode = _RESPONSE_MODE_QUALITY
             system_prompt = system_prompt + _response_mode_prompt_block(response_mode)
@@ -13386,6 +13673,11 @@ async def send_message_stream(
             except Exception:
                 pass
             _prov = _compiled_prompt.provenance
+            _current_binding = _current_turn_binding_status(
+                raw_messages,
+                _saved_user_message_id,
+            )
+            _current_llm_binding = _current_turn_llm_binding_status(messages, content)
             _prov["context_policy"] = {
                 "raw_history_messages": len(raw_messages),
                 "llm_history_messages": len(messages),
@@ -13399,6 +13691,8 @@ async def send_message_stream(
                     str(m.get("id")) for m in raw_messages[-8:] if m.get("id")
                 ],
                 "contextual_followup_override": _contextual_followup_intent,
+                **_current_binding,
+                **_current_llm_binding,
             }
             logger.info(
                 f"[PROMPT_COMPILER] compiled assets={len(_prov.get('applied_assets') or [])} "
