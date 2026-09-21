@@ -6,6 +6,7 @@ Pipeline Runner API v2 — DB 기반 작업 제출/승인/조회.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import uuid
@@ -2680,6 +2681,31 @@ async def adjudicate_review_from_origin_session(
 
             if not result.endswith(" 1"):
                 raise HTTPException(status_code=409, detail="판정 저장 중 작업 상태가 변경되었습니다")
+            if req.verdict == "APPROVE":
+                # 승인 게이트(approve)는 code_reviews 최신 행만 본다.
+                # 원 세션 판정을 pipeline_jobs 에만 기록하면 게이트가 인프라 장애 FLAG 를
+                # 계속 읽어 awaiting_approval 인데도 승인이 영구 차단된다.
+                # 2026-09-21 runner-173c6907 실사례 — 장부 이원화 해소.
+                await conn.execute(
+                    """
+                    INSERT INTO code_reviews
+                        (job_id, project, verdict, score, feedback, diff_size,
+                         model_used, cost, flag_category, failure_stage, needs_retry)
+                    VALUES ($1, $2, 'APPROVE', 1.0, $3::jsonb, $4,
+                            'origin_session_adjudicator', 0, NULL, NULL, FALSE)
+                    """,
+                    job_id,
+                    row["project"],
+                    json.dumps(
+                        {
+                            "summary": findings,
+                            "source": "origin_session_adjudicator",
+                            "commit_sha": commit_sha,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    len(diff_text),
+                )
             await conn.execute(
                 """
                 INSERT INTO pipeline_runner_events
