@@ -11,6 +11,28 @@ COMPOSE_DIR="/root/aads/aads-server"
 NGINX_LOCK="/tmp/aads-nginx-upstream.lock"
 STATE_WRITER="${COMPOSE_DIR}/scripts/aads_active_slot_state.sh"
 
+nginx_config_test() {
+    if command -v nginx >/dev/null 2>&1; then
+        nginx -t
+    elif docker inspect aads-nginx --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
+        docker exec aads-nginx nginx -t
+    else
+        echo "ERROR: no running nginx instance found"
+        return 1
+    fi
+}
+
+nginx_reload() {
+    if command -v nginx >/dev/null 2>&1 && systemctl is-active --quiet nginx 2>/dev/null; then
+        systemctl reload nginx
+    elif docker inspect aads-nginx --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
+        docker exec aads-nginx nginx -s reload
+    else
+        echo "ERROR: no reloadable nginx instance found"
+        return 1
+    fi
+}
+
 exec 9>"$NGINX_LOCK"
 if ! flock -w 10 9; then
     echo "ERROR: nginx cutover lock is busy"
@@ -44,19 +66,19 @@ BACKUP_CONF="${UPSTREAM_CONF}.pre_manual_switch_$(date +%Y%m%d_%H%M%S)"
 cp "$UPSTREAM_CONF" "$BACKUP_CONF"
 sed -i -E     -e "s/server 127\.0\.0\.1:${BACKUP_PORT} [^;]*;/server 127.0.0.1:${BACKUP_PORT} max_fails=0;/g"     -e "s/server 127\.0\.0\.1:${CURRENT_PORT} [^;]*;/server 127.0.0.1:${CURRENT_PORT} max_fails=3 fail_timeout=30s backup;/g"     "$UPSTREAM_CONF"
 
-if ! nginx -t 2>/dev/null; then
+if ! nginx_config_test >/dev/null 2>&1; then
     echo "ERROR: nginx config invalid — rollback"
     cp "$BACKUP_CONF" "$UPSTREAM_CONF"
     exit 1
 fi
 
-systemctl reload nginx
+nginx_reload
 
 if ! curl -fsS --max-time 5 -H 'Host: aads.newtalk.kr' \
     'http://127.0.0.1/api/v1/health' >/dev/null 2>&1; then
     echo "ERROR: routed health failed — rollback"
     cp "$BACKUP_CONF" "$UPSTREAM_CONF"
-    systemctl reload nginx
+    nginx_reload
     exit 1
 fi
 
@@ -64,7 +86,7 @@ if [[ ! -x "$STATE_WRITER" ]] || ! AADS_SLOT_STATE_LOCK_HELD=true "$STATE_WRITER
     "$BACKUP_PORT" "$NEW_CONTAINER" "manual-bluegreen-switch" "routed health passed"; then
     echo "ERROR: active-slot marker authorization failed — rollback"
     cp "$BACKUP_CONF" "$UPSTREAM_CONF"
-    systemctl reload nginx
+    nginx_reload
     exit 1
 fi
 docker exec "$NEW_CONTAINER" sh -c "printf true > /tmp/aads_execution_resume_owner" 2>/dev/null || true

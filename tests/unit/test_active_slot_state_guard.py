@@ -140,6 +140,9 @@ def test_all_api_slot_mutators_use_the_audited_writer():
     assert "AADS_SLOT_STATE_LOCK_HELD=true" in watchdog
     assert 'STATE_WRITER="${COMPOSE_DIR}/scripts/aads_active_slot_state.sh"' in manual
     assert "routed health failed — rollback" in manual
+    assert "docker exec aads-nginx nginx -t" in manual
+    assert "docker exec aads-nginx nginx -s reload" in manual
+    assert "if ! nginx -t" not in manual
 
 
 def test_deploy_revalidates_active_slot_after_acquiring_deploy_lock():
