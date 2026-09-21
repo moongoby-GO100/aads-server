@@ -152,10 +152,19 @@ class SessionRegistry:
     registrations, while the in-process lock keeps current tool calls cheap.
     """
 
-    def __init__(self, state_dir: str | Path | None = None):
+    #: 이 기간 동안 한 번도 쓰이지 않은 등록은 죽은 것으로 본다.
+    DEFAULT_RETENTION_DAYS = 7
+
+    def __init__(self, state_dir: str | Path | None = None, *, retention_days: int | None = None):
         raw_dir = state_dir or os.environ.get("AADS_BROWSER_BRIDGE_STATE_DIR") or ".browser_bridge_state"
         self.state_dir = Path(raw_dir)
         self.state_file = ensure_child_path(self.state_dir, self.state_dir / "sessions.json")
+        if retention_days is None:
+            try:
+                retention_days = int(os.environ.get("AADS_BROWSER_BRIDGE_RETENTION_DAYS", ""))
+            except ValueError:
+                retention_days = self.DEFAULT_RETENTION_DAYS
+        self.retention_days = max(1, int(retention_days))
         self._sessions: dict[str, BrowserBridgeSession] = {}
         self._lock = threading.RLock()
         self._load()
@@ -226,8 +235,44 @@ class SessionRegistry:
                     self._sessions[session.session_id] = session
         except Exception:
             self._sessions = {}
+        self._prune_locked()
+
+    def _is_abandoned(self, session: BrowserBridgeSession, now: datetime) -> bool:
+        """오래 손대지 않은 등록은 죽은 등록이다.
+
+        만료 필터만으로는 아무것도 걸러지지 않았다 — 2026-09-21 실측에서
+        640건 전부 `expires_at=None` 이었고(만료 없음), 그래서 `_load()` 의
+        만료 검사를 그대로 통과해 파일이 837KB 까지 자랐다. 가장 오래된 것은
+        61일 전 기록이다. CDP 엔드포인트도 headless 컨텍스트도 그만큼 살아
+        있지 않으므로, 이것들은 전부 죽은 주소다.
+
+        쓰이고 있는 것은 건드리지 않는다: active/protected, 아직 살아 있는
+        lease 는 나이와 무관하게 남긴다.
+        """
+        if session.active or session.protected:
+            return False
+        if session.lease_expires_at and session.lease_expires_at > now:
+            return False
+        touched = session.last_used_at or session.registered_at
+        if touched is None:
+            return False
+        return (now - touched) > timedelta(days=self.retention_days)
+
+    def _prune_locked(self) -> int:
+        """만료·방치 등록을 떨어낸다. 떨어낸 수를 돌려준다."""
+        now = utcnow()
+        keep = {
+            session_id: session
+            for session_id, session in self._sessions.items()
+            if not session.is_expired and not self._is_abandoned(session, now)
+        }
+        dropped = len(self._sessions) - len(keep)
+        if dropped:
+            self._sessions = keep
+        return dropped
 
     def _save_locked(self) -> None:
+        self._prune_locked()
         self.state_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "version": 1,

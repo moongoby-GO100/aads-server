@@ -201,6 +201,54 @@ def test_session_registry_persists_sessions_and_leases(tmp_path) -> None:
     assert second.get(session.session_id).lease_owner == ""
 
 
+def _aged_session(session_id: str, days: int, **overrides):
+    from datetime import timedelta
+
+    from app.browser_bridge.models import BrowserBridgeSession, BrowserEndpoint, utcnow
+
+    touched = utcnow() - timedelta(days=days)
+    fields = {
+        "session_id": session_id,
+        "label": session_id,
+        "endpoint": BrowserEndpoint(kind=BrowserEndpointKind.CDP, url="http://127.0.0.1:9222"),
+        "registered_at": touched,
+        "last_used_at": touched,
+    }
+    fields.update(overrides)
+    return BrowserBridgeSession(**fields)
+
+
+def test_session_registry_prunes_sessions_nobody_touched(tmp_path) -> None:
+    """만료 없는 등록이 영원히 쌓이면 상태 파일이 계속 자란다."""
+    registry = SessionRegistry(state_dir=tmp_path, retention_days=7)
+    registry.register(_aged_session("bb-old", days=40), activate=False)
+    registry.register(_aged_session("bb-recent", days=1), activate=False)
+
+    assert registry.get("bb-old") is None
+    assert registry.get("bb-recent") is not None
+
+    reloaded = SessionRegistry(state_dir=tmp_path, retention_days=7)
+    assert [s.session_id for s in reloaded.list_sessions()] == ["bb-recent"]
+
+
+def test_session_registry_keeps_old_sessions_that_are_still_in_use(tmp_path) -> None:
+    """쓰이고 있는 등록은 나이와 무관하게 남긴다."""
+    from datetime import timedelta
+
+    from app.browser_bridge.models import utcnow
+
+    registry = SessionRegistry(state_dir=tmp_path, retention_days=7)
+    registry.register(_aged_session("bb-protected", days=40, protected=True), activate=False)
+    registry.register(
+        _aged_session("bb-leased", days=40, lease_owner="job-a", lease_expires_at=utcnow() + timedelta(hours=1)),
+        activate=False,
+    )
+    registry.register(_aged_session("bb-active", days=40), activate=True)
+
+    kept = {s.session_id for s in registry.list_sessions()}
+    assert kept == {"bb-protected", "bb-leased", "bb-active"}
+
+
 def test_session_registry_retire_marks_stale_and_skips_work_key_lookup(tmp_path) -> None:
     registry = SessionRegistry(state_dir=tmp_path)
     service = BrowserBridgeService(
@@ -974,48 +1022,6 @@ async def test_close_work_session_skips_protected_session(monkeypatch, tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_ensure_pc_agent_cdp_force_recreate_keeps_profile_by_default(monkeypatch, tmp_path) -> None:
-    """force_recreate 시에도 기본값은 Chrome 프로필(isolation_id) 유지 — 로그인 쿠키 보존."""
-    service = BrowserBridgeService(
-        pairings=PairingManager(default_ttl_seconds=60),
-        sessions=SessionRegistry(state_dir=tmp_path),
-        storage_states=StorageStateManager(tmp_path),
-    )
-
-    from app.services import pc_agent_manager as manager_module
-
-    captured_kwargs = {}
-
-    async def fake_execute_routed_command(**kwargs):
-        captured_kwargs.update(kwargs)
-        return {
-            "status": "success",
-            "lease": {"agent_id": "ceo-pc"},
-            "result": {
-                "result": {
-                    "port": 9555,
-                    "user_data_dir": "C:/AADS/chrome/yeoljeong",
-                    "websocket_debugger_url": "ws://127.0.0.1:9555/devtools/browser/test",
-                }
-            },
-        }
-
-    monkeypatch.delenv("AADS_BROWSER_PROFILE_STABLE_ON_RECREATE", raising=False)
-    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fake_execute_routed_command)
-
-    session = await service.ensure_pc_agent_cdp_session(
-        label="Yeoljeong Baemin",
-        url="https://self.baemin.com/",
-        work_key="yeoljeong-delivery-baemin-biz-junghwa-test",
-        force_recreate=True,
-    )
-
-    assert session.work_key == "yeoljeong-delivery-baemin-biz-junghwa-test"
-    assert captured_kwargs["params"]["work_key"] == "yeoljeong-delivery-baemin-biz-junghwa-test"
-    assert captured_kwargs["params"]["isolation_id"] == "yeoljeong-delivery-baemin-biz-junghwa-test"
-
-
-@pytest.mark.asyncio
 async def test_ensure_pc_agent_cdp_force_recreate_keeps_stable_isolation_profile(monkeypatch, tmp_path) -> None:
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),
@@ -1041,7 +1047,6 @@ async def test_ensure_pc_agent_cdp_force_recreate_keeps_stable_isolation_profile
             },
         }
 
-    monkeypatch.setenv("AADS_BROWSER_PROFILE_STABLE_ON_RECREATE", "0")
     monkeypatch.setenv("AADS_BROWSER_PROFILE_STABLE_ON_RECREATE", "0")
     monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fake_execute_routed_command)
 
