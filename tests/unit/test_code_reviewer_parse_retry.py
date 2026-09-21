@@ -53,7 +53,9 @@ async def _review_code_diff_reaches_later_healthy_model():
     with patch.object(
         reviewer,
         "_get_review_models",
-        new=AsyncMock(return_value=["bad-1", "bad-2", "bad-3", "codex:gpt-5.6-sol"]),
+        new=AsyncMock(return_value=[
+            "codex:gpt-bad-1", "codex:gpt-bad-2", "codex:gpt-bad-3", "codex:gpt-5.6-sol"
+        ]),
     ), patch.object(
         reviewer, "_save_review_result", new=AsyncMock(),
     ), patch.object(
@@ -69,7 +71,7 @@ async def _review_code_diff_reaches_later_healthy_model():
 
     assert call_model.await_count == 4
     assert [call.kwargs["model"] for call in call_model.await_args_list] == [
-        "bad-1", "bad-2", "bad-3", "codex:gpt-5.6-sol",
+        "codex:gpt-bad-1", "codex:gpt-bad-2", "codex:gpt-bad-3", "codex:gpt-5.6-sol",
     ]
     assert verdict.verdict == "APPROVE"
     assert verdict.model_used == "codex:gpt-5.6-sol"
@@ -94,17 +96,12 @@ async def _review_code_diff_retries_parse_failure_then_recovers():
     }"""
     call_llm = AsyncMock(side_effect=["not json", "still not json", valid_response])
 
-    anthropic_mod = types.ModuleType("app.core.anthropic_client")
-    anthropic_mod.call_llm_with_fallback = call_llm
-    with patch.dict(
-        sys.modules,
-        {
-            "app": types.ModuleType("app"),
-            "app.core": types.ModuleType("app.core"),
-            "app.core.anthropic_client": anthropic_mod,
-        },
+    with patch.object(
+        reviewer, "_get_review_models", new=AsyncMock(return_value=[
+            "codex:gpt-5.6-luna", "claude-sonnet-5", "codex:gpt-5.6-sol"
+        ]),
     ), patch.object(
-        reviewer, "_get_review_models", new=AsyncMock(return_value=["qwen-turbo"]),
+        reviewer, "_call_review_model", new=call_llm,
     ), patch.object(
         reviewer, "_save_review_result", new=AsyncMock(),
     ) as mock_save, patch.object(
@@ -133,17 +130,12 @@ async def _review_code_diff_gives_up_after_max_parse_attempts():
 
     call_llm = AsyncMock(return_value="not json")
 
-    anthropic_mod = types.ModuleType("app.core.anthropic_client")
-    anthropic_mod.call_llm_with_fallback = call_llm
-    with patch.dict(
-        sys.modules,
-        {
-            "app": types.ModuleType("app"),
-            "app.core": types.ModuleType("app.core"),
-            "app.core.anthropic_client": anthropic_mod,
-        },
+    with patch.object(
+        reviewer, "_get_review_models", new=AsyncMock(return_value=[
+            "codex:gpt-5.6-luna", "claude-sonnet-5", "codex:gpt-5.6-sol"
+        ]),
     ), patch.object(
-        reviewer, "_get_review_models", new=AsyncMock(return_value=["qwen-turbo"]),
+        reviewer, "_call_review_model", new=call_llm,
     ), patch.object(
         reviewer, "_save_review_result", new=AsyncMock(),
     ) as mock_save, patch.object(

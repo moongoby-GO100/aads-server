@@ -261,7 +261,8 @@ def test_pipeline_runner_api_uses_review_routing_fallback_chain():
     assert "SELECT 2 AS group_order" in service
     assert "route_key = 'runner_llm'" in service
     assert "AI_REVIEW" in reviewer
-    assert "route_key = 'runner_llm'" in reviewer
+    assert "Do not append the broader" in reviewer
+    assert "review model is not CLI-backed" in reviewer
     assert "route_key IN ('runner_llm', 'llm')" not in reviewer
 
 

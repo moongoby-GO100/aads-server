@@ -20,10 +20,8 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_REVIEW_MODEL = "qwen-turbo"
-_REVIEW_MODEL_FALLBACK = _REVIEW_MODEL  # DB 조회 실패 시 기본값
-_REVIEW_OAUTH_FALLBACK_MODEL = "claude-haiku-4-5-20251001"  # gitleaks:allow
-_REVIEW_LITELLM_FALLBACK_MODEL = "litellm:gemini-2.5-flash-lite"
+_REVIEW_MODEL = "codex:gpt-5.6-luna"
+_REVIEW_MODEL_FALLBACK = _REVIEW_MODEL  # DB 조회 실패 시에도 CLI 경로만 사용
 _REVIEW_PARSE_MAX_ATTEMPTS = 3  # P0: JSON 파싱 실패 시 즉시 REVIEW_PARSER_FAILURE 대신 재시도 후 폴백
 # DB에 여러 독립 리뷰 모델이 등록되어 있으면 앞쪽 모델 장애만으로 뒤쪽의 정상
 # 모델을 영구히 건너뛰지 않는다. 다만 잘못된 설정이 요청 시간을 무한히 늘리지
@@ -344,44 +342,23 @@ _SUSPICIOUS_INPUT_PATTERNS: list[tuple[re.Pattern[str], str, str, bool, str]] = 
 
 
 async def _get_review_models() -> list[str]:
-    """DB AI_REVIEW 설정을 우선하고 runner/llm 라우팅 순서로 폴백."""
+    """Return DB-ordered AI_REVIEW models that execute through a CLI relay.
+
+    AI review is part of the runner contract, so it must use the same Codex or
+    Claude CLI relays as runner execution.  Do not append the broader
+    ``runner_llm`` registry here: it can contain API/LiteLLM providers and can
+    make a review silently leave the configured DB order.
+    """
     try:
         from app.core.db_pool import get_pool
         import json as _j
         from app.services.model_registry import filter_executable_models
-
-        def _routing_model(provider: str, model_id: str) -> str:
-            provider_name = (provider or "").strip().lower()
-            model_name = (model_id or "").strip()
-            if not model_name:
-                return ""
-            if provider_name in {"codex", "openai"} and model_name.startswith("gpt-"):
-                return f"codex:{model_name}"
-            if provider_name == "anthropic":
-                return model_name
-            if provider_name in {"gemini", "google", "deepseek", "kimi", "minimax", "qwen", "groq", "openrouter", "litellm"}:
-                return f"litellm:{model_name}"
-            if ":" in model_name:
-                return model_name
-            return f"{provider_name}:{model_name}" if provider_name else model_name
 
         pool = get_pool()
         candidates: list[str] = []
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT models FROM runner_model_config WHERE size = 'AI_REVIEW'"
-            )
-            route_rows = await conn.fetch(
-                """
-                SELECT route_key, provider, model_id
-                FROM model_routing_preferences
-                WHERE route_key = 'runner_llm'
-                  AND is_enabled = TRUE
-                ORDER BY is_default DESC,
-                         display_order ASC,
-                         provider ASC,
-                         model_id ASC
-                """
             )
         if row:
             raw = row["models"]
@@ -391,13 +368,11 @@ async def _get_review_models() -> list[str]:
                 candidates.extend(raw)
             else:
                 candidates.extend(list(raw) if raw else [])
-        candidates.extend(_routing_model(r["provider"], r["model_id"]) for r in route_rows)
-        candidates.append(_REVIEW_MODEL_FALLBACK)
         seen: set[str] = set()
         ordered = []
         for model in candidates:
             normalized = str(model or "").strip()
-            if not normalized or normalized in seen:
+            if not _is_cli_review_model(normalized) or normalized in seen:
                 continue
             seen.add(normalized)
             ordered.append(normalized)
@@ -408,22 +383,28 @@ async def _get_review_models() -> list[str]:
         return [_REVIEW_MODEL_FALLBACK]
 
 
+def _is_cli_review_model(model: str) -> bool:
+    """Whether a configured review model is backed by Codex/Claude CLI."""
+    normalized = str(model or "").strip().lower()
+    return normalized.startswith(("codex:gpt-", "claude:", "gpt-", "claude-"))
+
+
 def _review_attempt_models(models: list[str], instruction: str) -> list[str]:
-    """Build a distinct failover chain and honor job-scoped sweeper exclusions."""
+    """Keep DB order, CLI-only execution, and sweeper exclusions."""
     excluded: set[str] = set()
     for match in _EXCLUDED_REVIEW_MODELS_RE.finditer(instruction or ""):
         excluded.update(part.strip() for part in match.group(1).split(",") if part.strip())
 
-    candidates = [
-        *models,
-        _REVIEW_OAUTH_FALLBACK_MODEL,
-        _REVIEW_LITELLM_FALLBACK_MODEL,
-    ]
+    candidates = models or [_REVIEW_MODEL_FALLBACK]
     ordered: list[str] = []
     seen: set[str] = set()
     for candidate in candidates:
         normalized = str(candidate or "").strip()
-        if not normalized or normalized in seen or normalized in excluded:
+        if (
+            not _is_cli_review_model(normalized)
+            or normalized in seen
+            or normalized in excluded
+        ):
             continue
         seen.add(normalized)
         ordered.append(normalized)
@@ -576,41 +557,20 @@ async def _call_review_model(
     system: str,
     max_tokens: int,
 ) -> object:
-    """Route CLI model IDs through their relay and API IDs through R-AUTH.
-
-    ``call_llm_with_fallback`` treats every non-Claude model name as a
-    LiteLLM model.  Removing the ``codex:``/``claude:`` prefix therefore sends
-    CLI-only model IDs such as ``gpt-5.6-sol`` to the wrong provider.  Keep
-    those IDs on the configured-model relay, which also owns OAuth slot
-    selection and refresh.  API/LiteLLM models continue through the central
-    R-AUTH client.
-    """
+    """Route review calls exclusively through configured CLI relays."""
     normalized = str(model or "").strip()
-    provider, separator, bare_model = normalized.partition(":")
-    provider = provider.lower() if separator else ""
-    if provider in {"codex", "claude"} or (
-        not provider
-        and normalized != _REVIEW_OAUTH_FALLBACK_MODEL
-        and (normalized.startswith("gpt-") or normalized.startswith("claude-"))
-    ):
-        from app.services.directive_draft_service import _call_configured_model
+    if not _is_cli_review_model(normalized):
+        raise ValueError(f"review model is not CLI-backed: {normalized or '<empty>'}")
 
-        return await _call_configured_model(
-            model_candidate=normalized,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            system=system,
-            tenant_id=None,
-            user_id=None,
-        )
+    from app.services.directive_draft_service import _call_configured_model
 
-    from app.core.anthropic_client import call_llm_with_fallback
-
-    return await call_llm_with_fallback(
+    return await _call_configured_model(
+        model_candidate=normalized,
         prompt=prompt,
-        model=bare_model if provider == "litellm" else normalized,
-        system=system,
         max_tokens=max_tokens,
+        system=system,
+        tenant_id=None,
+        user_id=None,
     )
 
 
@@ -997,9 +957,8 @@ async def review_code_diff(
         review_models = _review_attempt_models(configured_models, instruction)
         used_model = review_models[0] if review_models else _REVIEW_MODEL_FALLBACK
 
-        # 응답 실패와 JSON 파싱 실패는 같은 모델을 다시 부르지 않고 다음 모델로
-        # 넘긴다. 끝의 두 후보는 중앙 Anthropic OAuth 1→2 체인과 Gemini LiteLLM
-        # 순서를 고정해 단일 DB 모델 설정에서도 실제 폴백이 일어나게 한다.
+        # 응답 실패와 JSON 파싱 실패는 같은 모델을 다시 부르지 않고 DB에 등록된
+        # 다음 CLI 모델로 넘긴다. API/LiteLLM 경로는 리뷰에서 사용하지 않는다.
         result_text = None
         details = None
         parse_fail_count = 0

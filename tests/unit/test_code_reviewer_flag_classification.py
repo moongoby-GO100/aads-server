@@ -88,19 +88,13 @@ async def _review_code_diff_marks_low_score_as_code_quality_flag():
       "summary": "코드 품질 문제"
     }"""
 
-    anthropic_mod = types.ModuleType("app.core.anthropic_client")
-    anthropic_mod.call_llm_with_fallback = AsyncMock(return_value=llm_response)
-    with patch.dict(
-        sys.modules,
-        {
-            "app": types.ModuleType("app"),
-            "app.core": types.ModuleType("app.core"),
-            "app.core.anthropic_client": anthropic_mod,
-        },
-    ), patch.object(
+    call_model = AsyncMock(return_value=llm_response)
+    with patch.object(
         reviewer,
         "_get_review_models",
-        new=AsyncMock(return_value=["qwen-turbo"]),
+        new=AsyncMock(return_value=["codex:gpt-5.6-luna"]),
+    ), patch.object(
+        reviewer, "_call_review_model", new=call_model,
     ), patch.object(reviewer, "_save_review_result", new=AsyncMock()) as mock_save:
         verdict = await reviewer.review_code_diff(
             project="AADS",
@@ -113,7 +107,7 @@ async def _review_code_diff_marks_low_score_as_code_quality_flag():
     assert verdict.verdict == "FLAG"
     assert verdict.flag_category == "CODE_QUALITY"
     assert verdict.failure_stage == "review_analysis"
-    assert verdict.model_used == "qwen-turbo"
+    assert verdict.model_used == "codex:gpt-5.6-luna"
     mock_save.assert_awaited_once()
 
 
@@ -124,19 +118,16 @@ def test_review_code_diff_holds_when_review_models_return_no_response():
 async def _review_code_diff_holds_when_review_models_return_no_response():
     reviewer = _load_reviewer()
 
-    anthropic_mod = types.ModuleType("app.core.anthropic_client")
-    anthropic_mod.call_llm_with_fallback = AsyncMock(return_value="")
-    with patch.dict(
-        sys.modules,
-        {
-            "app": types.ModuleType("app"),
-            "app.core": types.ModuleType("app.core"),
-            "app.core.anthropic_client": anthropic_mod,
-        },
-    ), patch.object(
+    call_model = AsyncMock(return_value="")
+    configured_models = [
+        "codex:gpt-5.6-luna", "claude-sonnet-5", "claude-haiku", "codex:gpt-5.6-sol"
+    ]
+    with patch.object(
         reviewer,
         "_get_review_models",
-        new=AsyncMock(return_value=["qwen-turbo"]),
+        new=AsyncMock(return_value=configured_models),
+    ), patch.object(
+        reviewer, "_call_review_model", new=call_model,
     ), patch.object(reviewer, "_save_review_result", new=AsyncMock()) as mock_save:
         verdict = await reviewer.review_code_diff(
             project="AADS",
@@ -150,12 +141,8 @@ async def _review_code_diff_holds_when_review_models_return_no_response():
     assert verdict.flag_category == "REVIEW_MODEL_NO_RESPONSE"
     assert verdict.failure_stage == "review_llm"
     assert verdict.needs_retry is True
-    called_models = [call.kwargs["model"] for call in anthropic_mod.call_llm_with_fallback.await_args_list]
-    assert called_models == [
-        "qwen-turbo",
-        reviewer._REVIEW_OAUTH_FALLBACK_MODEL,
-        "gemini-2.5-flash-lite",
-    ]
+    called_models = [call.kwargs["model"] for call in call_model.await_args_list]
+    assert called_models == configured_models
     assert len(called_models) == len(set(called_models))
     mock_save.assert_awaited_once()
 
@@ -167,19 +154,16 @@ def test_review_code_diff_holds_when_review_response_is_unparseable():
 async def _review_code_diff_holds_when_review_response_is_unparseable():
     reviewer = _load_reviewer()
 
-    anthropic_mod = types.ModuleType("app.core.anthropic_client")
-    anthropic_mod.call_llm_with_fallback = AsyncMock(return_value="not json")
-    with patch.dict(
-        sys.modules,
-        {
-            "app": types.ModuleType("app"),
-            "app.core": types.ModuleType("app.core"),
-            "app.core.anthropic_client": anthropic_mod,
-        },
-    ), patch.object(
+    call_model = AsyncMock(return_value="not json")
+    configured_models = [
+        "codex:gpt-5.6-luna", "claude-sonnet-5", "claude-haiku", "codex:gpt-5.6-sol"
+    ]
+    with patch.object(
         reviewer,
         "_get_review_models",
-        new=AsyncMock(return_value=["qwen-turbo"]),
+        new=AsyncMock(return_value=configured_models),
+    ), patch.object(
+        reviewer, "_call_review_model", new=call_model,
     ), patch.object(reviewer, "_save_review_result", new=AsyncMock()) as mock_save:
         verdict = await reviewer.review_code_diff(
             project="AADS",
@@ -193,12 +177,8 @@ async def _review_code_diff_holds_when_review_response_is_unparseable():
     assert verdict.flag_category == "REVIEW_PARSER_FAILURE"
     assert verdict.failure_stage == "review_json_parse"
     assert verdict.needs_retry is True
-    called_models = [call.kwargs["model"] for call in anthropic_mod.call_llm_with_fallback.await_args_list]
-    assert called_models == [
-        "qwen-turbo",
-        reviewer._REVIEW_OAUTH_FALLBACK_MODEL,
-        "gemini-2.5-flash-lite",
-    ]
+    called_models = [call.kwargs["model"] for call in call_model.await_args_list]
+    assert called_models == configured_models
     assert len(called_models) == len(set(called_models))
     mock_save.assert_awaited_once()
 
@@ -220,7 +200,7 @@ async def _review_code_diff_extracts_structured_openai_response():
         "summary": "fixture accepted",
     }
     response = {"choices": [{"message": {"content": json.dumps(fixture)}}]}
-    with patch.object(reviewer, "_get_review_models", new=AsyncMock(return_value=["qwen-turbo"])), patch.object(
+    with patch.object(reviewer, "_get_review_models", new=AsyncMock(return_value=["codex:gpt-5.6-luna"])), patch.object(
         reviewer, "_call_review_model", new=AsyncMock(return_value=response)
     ), patch.object(reviewer, "_save_review_result", new=AsyncMock()) as mock_save:
         verdict = await reviewer.review_code_diff(
@@ -430,22 +410,18 @@ def test_net_removal_still_triggers_deletion_ratio_gate():
 def test_private_signature_change_still_requires_semantic_review():
     async def run():
         reviewer = _load_reviewer()
-        client = types.ModuleType("app.core.anthropic_client")
-        client.call_llm_with_fallback = AsyncMock(return_value='{"verdict":"FLAG",'
+        call_model = AsyncMock(return_value='{"verdict":"FLAG",'
             '"correctness":0.1,"security":0.1,"scope_compliance":0.1,'
             '"preservation":0.1,"quality":0.1,'
             '"issues":["behavior changed"],"summary":"reject"}')
-        with patch.dict(sys.modules, {
-            "app": types.ModuleType("app"),
-            "app.core": types.ModuleType("app.core"),
-            "app.core.anthropic_client": client,
-        }), patch.object(reviewer, "_get_review_models", new=AsyncMock(return_value=["qwen-turbo"])), \
+        with patch.object(reviewer, "_get_review_models", new=AsyncMock(return_value=["codex:gpt-5.6-luna"])), \
+                patch.object(reviewer, "_call_review_model", new=call_model), \
                 patch.object(reviewer, "_save_review_result", new=AsyncMock()):
             verdict = await reviewer.review_code_diff(
                 "AADS", "runner-test-signature-review",
                 _symbol_diff("def _worker():", "def _worker(epoch):"), "", ["app/main.py"],
             )
-        client.call_llm_with_fallback.assert_awaited_once()
+        call_model.assert_awaited_once()
         assert verdict.verdict == "FLAG"
         assert verdict.flag_category == "CODE_QUALITY"
 

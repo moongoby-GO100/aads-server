@@ -109,28 +109,20 @@ async def _cli_review_models_use_the_configured_model_relay():
     central.assert_not_awaited()
 
 
-def test_litellm_review_models_stay_on_central_r_auth():
-    asyncio.run(_litellm_review_models_stay_on_central_r_auth())
+def test_litellm_review_models_are_rejected():
+    asyncio.run(_litellm_review_models_are_rejected())
 
 
-async def _litellm_review_models_stay_on_central_r_auth():
+async def _litellm_review_models_are_rejected():
     reviewer = _load_reviewer()
-    central = AsyncMock(return_value="ok")
-    anthropic_module = types.ModuleType("app.core.anthropic_client")
-    anthropic_module.call_llm_with_fallback = central
-
-    with patch.dict(sys.modules, {"app.core.anthropic_client": anthropic_module}):
-        result = await reviewer._call_review_model(
+    try:
+        await reviewer._call_review_model(
             model="litellm:gemini-2.5-flash-lite", prompt="review", system="system", max_tokens=64,
         )
-
-    assert result == "ok"
-    central.assert_awaited_once_with(
-        prompt="review",
-        model="gemini-2.5-flash-lite",
-        system="system",
-        max_tokens=64,
-    )
+    except ValueError as exc:
+        assert "not CLI-backed" in str(exc)
+    else:
+        raise AssertionError("LiteLLM review route must be rejected")
 
 
 def test_remaining_budget_is_spent_instead_of_breaking_early():
@@ -160,7 +152,7 @@ async def _remaining_budget_is_spent_instead_of_breaking_early():
     ), patch.object(
         reviewer,
         "_get_review_models",
-        new=AsyncMock(return_value=["slow-model", "fast-model"]),
+        new=AsyncMock(return_value=["codex:gpt-slow", "codex:gpt-fast"]),
     ), patch.object(
         reviewer, "_save_review_result", new=AsyncMock()
     ), patch.object(
@@ -175,7 +167,7 @@ async def _remaining_budget_is_spent_instead_of_breaking_early():
             deadline_sec=3,
         )
 
-    assert attempted == ["slow-model", "fast-model"]
+    assert attempted == ["codex:gpt-slow", "codex:gpt-fast"]
     assert verdict.verdict == "APPROVE"
 
 
@@ -189,7 +181,7 @@ async def _first_model_cannot_consume_the_entire_sync_deadline():
 
     async def call_model(*, model, **_kwargs):
         attempted.append(model)
-        if model == "slow-model":
+        if model == "codex:gpt-slow":
             await asyncio.sleep(10)
         return VALID_REVIEW_JSON
 
@@ -198,7 +190,7 @@ async def _first_model_cannot_consume_the_entire_sync_deadline():
     ), patch.object(
         reviewer,
         "_get_review_models",
-        new=AsyncMock(return_value=["slow-model", "fast-model"]),
+        new=AsyncMock(return_value=["codex:gpt-slow", "codex:gpt-fast"]),
     ), patch.object(
         reviewer, "_save_review_result", new=AsyncMock()
     ), patch.object(
@@ -213,7 +205,7 @@ async def _first_model_cannot_consume_the_entire_sync_deadline():
             deadline_sec=4,
         )
 
-    assert attempted == ["slow-model", "fast-model"]
+    assert attempted == ["codex:gpt-slow", "codex:gpt-fast"]
     assert verdict.verdict == "APPROVE"
 
 

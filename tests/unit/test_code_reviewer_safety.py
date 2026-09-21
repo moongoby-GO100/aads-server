@@ -96,26 +96,39 @@ def test_provider_prefixes_keep_their_transport_contract():
 async def _provider_prefixes_keep_their_transport_contract():
     reviewer = _load_reviewer()
     configured_call = AsyncMock(return_value="configured")
-    central_call = AsyncMock(return_value="central")
     directive_mod = types.ModuleType("app.services.directive_draft_service")
     directive_mod._call_configured_model = configured_call
-    anthropic_mod = types.ModuleType("app.core.anthropic_client")
-    anthropic_mod.call_llm_with_fallback = central_call
     with patch.dict(sys.modules, {
         "app": types.ModuleType("app"),
         "app.services": types.ModuleType("app.services"),
-        "app.core": types.ModuleType("app.core"),
         "app.services.directive_draft_service": directive_mod,
-        "app.core.anthropic_client": anthropic_mod,
     }):
         assert await reviewer._call_review_model(model="codex:gpt-5.6-sol", prompt="p", system="s", max_tokens=1) == "configured"
         assert await reviewer._call_review_model(model="claude:claude-haiku", prompt="p", system="s", max_tokens=1) == "configured"
-        assert await reviewer._call_review_model(model="litellm:gemini-2.5-flash-lite", prompt="p", system="s", max_tokens=1) == "central"
+        try:
+            await reviewer._call_review_model(model="litellm:gemini-2.5-flash-lite", prompt="p", system="s", max_tokens=1)
+        except ValueError as exc:
+            assert "not CLI-backed" in str(exc)
+        else:
+            raise AssertionError("LiteLLM review route must be rejected")
 
     assert [call.kwargs["model_candidate"] for call in configured_call.await_args_list] == [
         "codex:gpt-5.6-sol", "claude:claude-haiku"
     ]
-    assert central_call.await_args.kwargs["model"] == "gemini-2.5-flash-lite"
+
+
+def test_review_attempt_models_keep_db_order_and_drop_non_cli_routes():
+    reviewer = _load_reviewer()
+    assert reviewer._review_attempt_models(
+        [
+            "codex:gpt-5.6-luna",
+            "litellm:gemini-2.5-flash-lite",
+            "groq-gpt-oss-120b",
+            "claude-sonnet-5",
+            "codex:gpt-5.6-luna",
+        ],
+        "",
+    ) == ["codex:gpt-5.6-luna", "claude-sonnet-5"]
 
 
 def test_timeout_empty_malformed_responses_fail_closed_until_valid_response():
@@ -127,7 +140,7 @@ async def _timeout_empty_malformed_responses_fail_closed_until_valid_response():
     valid = '{"verdict":"APPROVE","correctness":0.9,"security":0.9,"scope_compliance":0.9,"preservation":0.9,"quality":0.9,"issues":[]}'
     call_model = AsyncMock(side_effect=[asyncio.TimeoutError(), "", "not json", valid])
     with patch.object(reviewer, "_get_review_models", new=AsyncMock(return_value=[
-        "timeout", "empty", "malformed", "valid",
+        "codex:gpt-timeout", "codex:gpt-empty", "codex:gpt-malformed", "codex:gpt-valid",
     ])), patch.object(reviewer, "_call_review_model", new=call_model), patch.object(
         reviewer, "_save_review_result", new=AsyncMock()
     ), patch.object(reviewer.asyncio, "sleep", new=AsyncMock()):
