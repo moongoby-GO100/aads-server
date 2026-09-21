@@ -469,7 +469,6 @@ async def _api_token_inject(page: Any, credential: dict[str, Any], step: dict[st
     if not api_url:
         login_url = credential.get("login_url", "")
         if login_url:
-            from urllib.parse import urlparse
             parsed = urlparse(login_url)
             api_url = f"{parsed.scheme}://{parsed.netloc}/api/v1/auth/login"
     if not api_url:
@@ -487,18 +486,27 @@ async def _api_token_inject(page: Any, credential: dict[str, Any], step: dict[st
     redirect_url = step.get("redirect_url", "")
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                api_url,
-                json={email_field: username, password_field: password},
-                timeout=aiohttp.ClientTimeout(total=10),
-                ssl=False,
-            ) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    logger.error("api_token_inject: API %s returned %s: %s", api_url, resp.status, body[:200])
-                    return False
-                data = await resp.json()
+        # A freshly acquired Browser Bridge context opens a new page at
+        # about:blank.  localStorage written there belongs to an opaque origin
+        # and is therefore unavailable to the dashboard after navigation.
+        # Establish the credential's web origin before injecting the token.
+        login_url = str(credential.get("login_url") or "")
+        current_origin = urlparse(str(getattr(page, "url", "") or ""))
+        login_origin = urlparse(login_url)
+        if login_origin.netloc and current_origin.netloc != login_origin.netloc:
+            await page.goto(login_url, wait_until="domcontentloaded", timeout=15000)
+
+        async with aiohttp.ClientSession() as session, session.post(
+            api_url,
+            json={email_field: username, password_field: password},
+            timeout=aiohttp.ClientTimeout(total=10),
+            ssl=False,
+        ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                logger.error("api_token_inject: API %s returned %s: %s", api_url, resp.status, body[:200])
+                return False
+            data = await resp.json()
 
         token = data
         for key in token_path.split("."):
@@ -511,6 +519,8 @@ async def _api_token_inject(page: Any, credential: dict[str, Any], step: dict[st
         await page.evaluate(js_code)
         logger.info("api_token_inject: token injected storage_key=%s", storage_key)
 
+        if not redirect_url and login_url:
+            redirect_url = login_url.replace("/login", "/chat").replace("/signin", "/")
         if redirect_url:
             await page.goto(redirect_url, wait_until="domcontentloaded", timeout=15000)
 

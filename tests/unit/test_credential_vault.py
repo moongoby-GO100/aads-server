@@ -1,5 +1,5 @@
-import json
 import inspect
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -7,10 +7,11 @@ import pytest
 from app.core import credential_vault
 from app.core.credential_vault import (
     _E2E_PROJECT_CONFIG,
+    _api_token_inject,
     _coerce_json_dict,
     _coerce_json_list,
-    login_session_completed,
     _normalize_json_fields,
+    login_session_completed,
 )
 
 
@@ -160,3 +161,66 @@ async def test_login_session_completed_accepts_non_login_page_without_form():
     page = _FakePage("https://v2.newtalk.kr/dashboard")
 
     assert await login_session_completed(page, "https://v2.newtalk.kr/login") is True
+
+
+@pytest.mark.asyncio
+async def test_api_token_inject_establishes_origin_and_redirects_from_blank_page(monkeypatch):
+    class _Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def json(self):
+            return {"token": "test-token"}
+
+    class _Session:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def post(self, *_args, **_kwargs):
+            return _Response()
+
+    class _Page:
+        def __init__(self):
+            self.url = "about:blank"
+            self.events = []
+
+        async def goto(self, url, **kwargs):
+            self.events.append(("goto", url, kwargs))
+            self.url = url
+
+        async def evaluate(self, script):
+            self.events.append(("evaluate", script))
+
+    monkeypatch.setattr("aiohttp.ClientSession", _Session)
+    page = _Page()
+
+    result = await _api_token_inject(
+        page,
+        {
+            "login_url": "https://aads.newtalk.kr/login",
+            "username": "e2e@example.test",
+            "password": "secret",
+        },
+        {
+            "api_url": "https://aads.newtalk.kr/api/v1/auth/login",
+            "token_path": "token",
+            "storage_key": "aads_token",
+            "cookie_name": "aads_token",
+        },
+    )
+
+    assert result is True
+    assert page.events[0][0:2] == ("goto", "https://aads.newtalk.kr/login")
+    assert page.events[-1][0:2] == ("goto", "https://aads.newtalk.kr/chat")
+    assert page.url == "https://aads.newtalk.kr/chat"
