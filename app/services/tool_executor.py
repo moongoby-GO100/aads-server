@@ -194,6 +194,7 @@ _DATABASE_TOOL_TIMEOUT = max(float(os.getenv("AADS_DATABASE_TOOL_TIMEOUT_SECONDS
 _LONG_TOOL_TIMEOUT = 55.0  # MCP stdio 클라이언트 타임아웃(~60s) 이내로 응답 보장
 _BROWSER_TOOL_TIMEOUT = 210.0  # Browser Bridge CDP/PC Agent 명령(최대 180s) + 여유
 _BROWSER_TOOLS = frozenset({
+    "smart_browser",
     "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot",
     "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
     "browser_check", "browser_upload_file", "browser_download", "browser_tab_list",
@@ -984,6 +985,7 @@ class ToolExecutor:
             "browser_upload_file":    self._browser_upload_file,
             "browser_download":       self._browser_download,
             "browser_tab_list":       self._browser_tab_list,
+            "smart_browser":          self._smart_browser,
             # AADS-190 Phase2-A: 서브에이전트
             "spawn_subagent":         self._spawn_subagent,
             "spawn_parallel_subagents": self._spawn_parallel_subagents,
@@ -5407,6 +5409,131 @@ class ToolExecutor:
             tenant_id=str(inp.get("tenant_id") or ""),
         )
 
+    async def _smart_browser(self, inp: Dict[str, Any]) -> Any:
+        """Session-bound entry point for approved recipes and E2E registration."""
+        action = str(inp.get("action") or "").strip().lower()
+        session_id = str(current_chat_session_id.get("") or "").strip()
+        tenant_id = await resolve_bound_tenant_id(
+            explicit_tenant_id=inp.get("tenant_id"),
+            explicit_session_id=session_id,
+        )
+        if not session_id or not tenant_id:
+            return _missing_tenant_id_result("smart_browser")
+
+        if action == "list":
+            from app.services.work_recipe.store import list_recipes
+
+            rows = await list_recipes(tenant_id=tenant_id)
+            return {
+                "status": "ok",
+                "session_id": session_id,
+                "recipes": [
+                    {
+                        "id": str(row.get("id") or ""),
+                        "name": row.get("name"),
+                        "domain": row.get("domain"),
+                        "version": row.get("version"),
+                        "max_risk": row.get("max_risk"),
+                        "enabled": row.get("enabled"),
+                    }
+                    for row in rows
+                ],
+            }
+
+        if action == "run":
+            directive = str(inp.get("directive") or "").strip()
+            if not directive:
+                return {"error": "directive_required"}
+            from uuid import uuid4
+
+            from app.services.channel_router import (
+                ChannelRouter,
+                directive_from_authenticated_context,
+            )
+            from app.services.work_recipe.approval import ApprovalRequired
+            from app.services.work_recipe.orchestrator import run_directive
+
+            payload = {"directive": directive, "inputs": inp.get("inputs") or {}}
+            envelope = directive_from_authenticated_context(
+                {
+                    "tenant": {"id": tenant_id},
+                    "membership": {"user_id": f"chat-session:{session_id}"},
+                },
+                session_id=session_id,
+                correlation_id=str(uuid4()),
+                payload=payload,
+                capabilities=frozenset({"recipe.execute"}),
+            )
+            intent = ChannelRouter().route_directive(envelope, capability="recipe.execute")
+            try:
+                result = await run_directive(
+                    directive,
+                    tenant_id,
+                    inputs=payload["inputs"],
+                    browser_session_id=inp.get("browser_session_id"),
+                    browser_work_key=inp.get("browser_work_key"),
+                    triggered_by=f"chat:{session_id}",
+                    action_intent=intent,
+                )
+            except ApprovalRequired as exc:
+                return {
+                    "status": "approval_required",
+                    "approval_id": exc.approval_id,
+                    "run_id": str(exc.run_id) if exc.run_id else None,
+                    "risk": exc.risk_level,
+                }
+            if result is None:
+                return {"error": "matching_recipe_not_found", "session_id": session_id}
+            return {"status": "executed", "session_id": session_id, "result": result.to_dict()}
+
+        if action == "register_e2e":
+            evidence = inp.get("e2e_evidence")
+            if not isinstance(evidence, dict) or evidence.get("screen_verified") is not True:
+                return {"error": "screen_e2e_evidence_required"}
+            artifact_ref = str(
+                evidence.get("screenshot_url") or evidence.get("snapshot_ref") or ""
+            ).strip()
+            if not artifact_ref:
+                return {"error": "screenshot_or_snapshot_reference_required"}
+            name = str(inp.get("recipe_name") or "").strip()
+            domain = str(inp.get("domain") or "").strip()
+            steps = inp.get("steps")
+            if not name or not domain or not isinstance(steps, list) or not steps:
+                return {"error": "recipe_name_domain_and_steps_required"}
+
+            # Persist references only. Raw DOM/OCR and arbitrary fields can contain secrets.
+            safe_evidence = {
+                key: str(evidence[key])[:1000]
+                for key in ("screenshot_url", "snapshot_ref", "url", "captured_at", "tool")
+                if evidence.get(key) is not None
+            }
+            safe_evidence["screen_verified"] = True
+            from app.services.work_recipe import recorder as recorder_module
+
+            recording = recorder_module.start_recording(
+                name,
+                domain,
+                tenant_id,
+                session_id=session_id,
+                e2e_evidence=safe_evidence,
+            )
+            for raw_step in steps:
+                if not isinstance(raw_step, dict):
+                    return {"error": "invalid_recipe_step"}
+                payload = dict(raw_step)
+                succeeded = payload.pop("succeeded", True) is True
+                recording.record_step(payload, succeeded=succeeded)
+            registration = await recorder_module.finish_recording(
+                recording, created_by=f"chat:{session_id}"
+            )
+            return {
+                "status": "approval_required",
+                "session_id": session_id,
+                "registration": registration,
+            }
+
+        return {"error": "unsupported_action", "allowed": ["list", "run", "register_e2e"]}
+
     async def _browser_navigate(self, inp: Dict[str, Any]) -> Any:
         """브라우저로 URL 이동."""
         url = inp.get("url", "")
@@ -6046,8 +6173,8 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     "task_query":             ["check_directive_status"],
     "status_check":           ["check_directive_status"],
     # AADS-159: 브라우저 인텐트
-    "browser":                ["browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list"],
-    "browser_action":         ["browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list"],
+    "browser":                ["smart_browser", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list"],
+    "browser_action":         ["smart_browser", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list"],
     # AADS-190: 원격 쓰기/패치/실행/Git 인텐트
     "code_modify":            ["read_remote_file", "write_remote_file", "patch_remote_file", "run_remote_command"],
     "code_fix":               ["read_remote_file", "patch_remote_file", "run_remote_command"],

@@ -89,6 +89,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "browser_upload_file": True,
     "browser_download": True,
     "browser_tab_list": True,
+    "smart_browser": False,       # 채팅에서 승인 레시피 실행/E2E 레시피 등록
     # ── 기타 ─────────────────────────────────────────────────────────────
     "code_execution": True,
     "observe": True,
@@ -300,7 +301,7 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "url_read":           ["jina_read"],
     # Tier 6: 브라우저 — 명시적 요청 시만
     "browser":            [
-        "browser_connect", "browser_navigate", "browser_snapshot",
+        "smart_browser", "browser_connect", "browser_navigate", "browser_snapshot",
         "browser_screenshot", "browser_click", "browser_fill",
         "browser_press_key", "browser_select_option", "browser_check",
         "browser_upload_file", "browser_download", "browser_tab_list",
@@ -2194,6 +2195,36 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         },
         "defer_loading": True,
     },
+    "smart_browser": {
+        "name": "smart_browser",
+        "description": (
+            "채팅 세션에서 Smart Browser 승인 레시피를 조회·실행하거나, 화면 E2E가 성공한 "
+            "브라우저 단계들을 세션 증거와 함께 승인 대기 레시피로 등록한다. "
+            "action=list는 레시피 조회, run은 자연어 지시에 정확히 매칭되는 승인 레시피 실행, "
+            "register_e2e는 screen_verified=true와 화면 증거가 있을 때만 등록한다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "run", "register_e2e"]},
+                "directive": {"type": "string", "description": "run 시 실행할 자연어 지시"},
+                "inputs": {
+                    "type": "object",
+                    "description": "비밀값은 credential_scope reference만 허용",
+                },
+                "recipe_name": {"type": "string", "description": "register_e2e 레시피 이름"},
+                "domain": {"type": "string", "description": "register_e2e 대상 URL 또는 도메인"},
+                "steps": {"type": "array", "items": {"type": "object"}},
+                "e2e_evidence": {
+                    "type": "object",
+                    "description": "screen_verified=true 및 screenshot_url 또는 snapshot_ref 필수",
+                },
+                "browser_session_id": {"type": "string"},
+                "browser_work_key": {"type": "string"},
+            },
+            "required": ["action"],
+        },
+    },
     # ── AADS-188C Phase 2: 메타 도구 (Orchestrator) ────────────────────────
     "check_task_status": {
         "name": "check_task_status",
@@ -3496,7 +3527,7 @@ _GROUPS: Dict[str, List[str]] = {
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
-    "browser": ["read_remote_file", "list_remote_dir", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list"],
+    "browser": ["read_remote_file", "list_remote_dir", "smart_browser", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list"],
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
     "meta": ["check_directive_status", "check_task_status", "read_task_logs", "terminate_task", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
     # 운영/관측 도구 그룹

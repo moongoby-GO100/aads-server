@@ -461,6 +461,10 @@ class _LocalAgentPage:
     async def wait_for_timeout(self, ms: int) -> None:
         await asyncio.sleep(max(0, ms) / 1000)
 
+    def is_closed(self) -> bool:
+        """Match Playwright's Page contract for tab-reuse callers."""
+        return False
+
     async def close(self) -> None:
         return None
 

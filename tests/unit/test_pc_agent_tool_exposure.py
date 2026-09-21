@@ -933,3 +933,9 @@ async def test_local_agent_evaluate_accepts_playwright_argument(monkeypatch) -> 
     assert "secret-token" not in captured["expression"][:200]
     assert captured["expression"].endswith('(secret-token)') is False
     assert captured["expression"].endswith('(\"secret-token\")')
+
+
+def test_local_agent_page_exposes_playwright_is_closed_contract() -> None:
+    page = object.__new__(_LocalAgentPage)
+
+    assert page.is_closed() is False

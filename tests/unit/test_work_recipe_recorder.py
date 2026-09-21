@@ -43,6 +43,40 @@ async def test_orchestrator_returns_none_without_candidate(monkeypatch):
     assert await orchestrator.resolve_recipe("처음 보는 사이트 작업", "tenant-1") is None
 
 
+async def test_orchestrator_prefers_explicit_name_over_same_domain(monkeypatch):
+    rows = [
+        {
+            "name": "orders_search",
+            "domain": "example.com",
+            "spec": {
+                "name": "orders_search",
+                "domain": "example.com",
+                "steps": [{"action": "snapshot"}],
+            },
+        },
+        {
+            "name": "login_check",
+            "domain": "example.com",
+            "spec": {
+                "name": "login_check",
+                "domain": "example.com",
+                "steps": [{"action": "snapshot"}],
+            },
+        },
+    ]
+
+    async def recipes(**kwargs):
+        return rows
+
+    monkeypatch.setattr(orchestrator, "list_recipes", recipes)
+    resolved = await orchestrator.resolve_recipe(
+        "login_check example.com 화면 확인", "tenant-1"
+    )
+
+    assert resolved is not None
+    assert resolved.name == "login_check"
+
+
 async def test_secret_input_requires_scoped_credential_reference():
     recipe = recorder_module.WorkRecipe(
         name="login",

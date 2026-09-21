@@ -23,7 +23,8 @@ async def resolve_recipe(directive_text: str, tenant_id: Any) -> WorkRecipe | No
         return None
     hosts = {normalize_domain(match) for match in _URL_HOST.findall(text)}
     rows = await list_recipes(tenant_id=tenant_id)
-    matches: list[WorkRecipe] = []
+    name_matches: list[WorkRecipe] = []
+    domain_matches: list[WorkRecipe] = []
     for row in rows:
         name = str(row.get("name") or "").strip().casefold()
         domain = normalize_domain(str(row.get("domain") or ""))
@@ -35,9 +36,17 @@ async def resolve_recipe(directive_text: str, tenant_id: Any) -> WorkRecipe | No
         if recipe is None and isinstance(row.get("spec"), Mapping):
             recipe = parse_recipe(row["spec"])
         if recipe is not None:
-            matches.append(recipe)
-    # 둘 이상이면 추측하지 않는다. 이름+도메인으로 유일해질 때만 실행한다.
-    return matches[0] if len(matches) == 1 else None
+            if name_match:
+                name_matches.append(recipe)
+            elif domain_match:
+                domain_matches.append(recipe)
+    # 사용자가 이름을 명시한 단일 후보는 같은 도메인의 다른 레시피보다 강하다.
+    # 이름 후보끼리도 둘 이상이면 추측하지 않고, 이름이 없을 때만 도메인을 쓴다.
+    if len(name_matches) == 1:
+        return name_matches[0]
+    if name_matches:
+        return None
+    return domain_matches[0] if len(domain_matches) == 1 else None
 
 
 async def run_directive(
