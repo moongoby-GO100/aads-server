@@ -18,12 +18,15 @@ logger = logging.getLogger(__name__)
 
 _ADVISORY_TASKS: set[asyncio.Task] = set()
 _ADVISORY_PROMPT_MAX_CHARS = int(os.environ.get("REVIEW_ADVISORY_PROMPT_MAX_CHARS", "40000"))
+_ADVISORY_SYSTEM_PROMPT = """코드 변경을 독립적으로 검수하고 JSON 객체 하나만 출력하세요.
+필수 숫자 키 correctness, security, scope_compliance, preservation, quality는 각각 0과 1 사이 값입니다.
+필수 배열 키 issues와 suggestions에는 구체적인 문자열만 넣고, summary는 한 줄 문자열로 작성하세요.
+기존 함수/API 삭제, 허용 범위 밖 변경, 보안 취약점은 점수를 크게 낮추고 issues에 적으세요.
+마크다운 코드펜스, verdict 키, JSON 앞뒤 설명은 출력하지 마세요."""
 
 
 def _advisory_messages(prompt: str) -> list[dict[str, str]]:
-    """Build a bounded request with the same JSON contract as the main reviewer."""
-    from app.services.code_reviewer import _REVIEW_SYSTEM_PROMPT
-
+    """Build a bounded request tuned for the local Qwen native chat parser."""
     text = str(prompt or "")
     if len(text) > _ADVISORY_PROMPT_MAX_CHARS:
         head_chars = int(_ADVISORY_PROMPT_MAX_CHARS * 0.75)
@@ -34,7 +37,7 @@ def _advisory_messages(prompt: str) -> list[dict[str, str]]:
             + text[-tail_chars:]
         )
     return [
-        {"role": "system", "content": _REVIEW_SYSTEM_PROMPT},
+        {"role": "system", "content": _ADVISORY_SYSTEM_PROMPT},
         {"role": "user", "content": text},
     ]
 
