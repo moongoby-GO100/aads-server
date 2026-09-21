@@ -409,15 +409,24 @@ async def _get_review_models() -> list[str]:
 
 
 def _review_attempt_models(models: list[str], instruction: str) -> list[str]:
-    """Build a distinct failover chain and honor job-scoped sweeper exclusions."""
+    """Build a provider-diverse failover chain within the review deadline.
+
+    Keep the configured primary model first, but put the central R-AUTH and
+    LiteLLM fallbacks immediately after it.  A chain made entirely of CLI
+    models can otherwise consume the 240-second async budget (90s + 90s + the
+    remainder) before an independent backend is ever reached.
+    """
     excluded: set[str] = set()
     for match in _EXCLUDED_REVIEW_MODELS_RE.finditer(instruction or ""):
         excluded.update(part.strip() for part in match.group(1).split(",") if part.strip())
 
+    primary = models[:1]
+    remaining = models[1:]
     candidates = [
-        *models,
+        *primary,
         _REVIEW_OAUTH_FALLBACK_MODEL,
         _REVIEW_LITELLM_FALLBACK_MODEL,
+        *remaining,
     ]
     ordered: list[str] = []
     seen: set[str] = set()

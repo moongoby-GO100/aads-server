@@ -69,10 +69,11 @@ async def _review_code_diff_reaches_later_healthy_model():
 
     assert call_model.await_count == 4
     assert [call.kwargs["model"] for call in call_model.await_args_list] == [
-        "bad-1", "bad-2", "bad-3", "codex:gpt-5.6-sol",
+        "bad-1", "claude-haiku-4-5-20251001",
+        "litellm:gemini-2.5-flash-lite", "bad-2",
     ]
     assert verdict.verdict == "APPROVE"
-    assert verdict.model_used == "codex:gpt-5.6-sol"
+    assert verdict.model_used == "bad-2"
 
 
 def test_review_code_diff_retries_parse_failure_then_recovers():

@@ -133,6 +133,39 @@ async def _litellm_review_models_stay_on_central_r_auth():
     )
 
 
+def test_review_failover_reaches_independent_provider_before_cli_budget_is_exhausted():
+    """The 240s async budget must reach central R-AUTH after one 90s timeout."""
+    reviewer = _load_reviewer()
+
+    models = reviewer._review_attempt_models(
+        [
+            "codex:gpt-5.6-luna",
+            "claude-sonnet-5",
+            "claude-haiku",
+            "codex:gpt-5.6-sol",
+            "groq-gpt-oss-120b",
+        ],
+        "",
+    )
+
+    assert models[:3] == [
+        "codex:gpt-5.6-luna",
+        "claude-haiku-4-5-20251001",
+        "litellm:gemini-2.5-flash-lite",
+    ]
+
+
+def test_review_failover_deduplicates_configured_litellm_candidate():
+    reviewer = _load_reviewer()
+
+    models = reviewer._review_attempt_models(
+        ["codex:gpt-5.6-luna", "litellm:gemini-2.5-flash-lite", "claude-sonnet-5"],
+        "",
+    )
+
+    assert models.count("litellm:gemini-2.5-flash-lite") == 1
+
+
 def test_remaining_budget_is_spent_instead_of_breaking_early():
     asyncio.run(_remaining_budget_is_spent_instead_of_breaking_early())
 
@@ -175,7 +208,7 @@ async def _remaining_budget_is_spent_instead_of_breaking_early():
             deadline_sec=3,
         )
 
-    assert attempted == ["slow-model", "fast-model"]
+    assert attempted == ["slow-model", "claude-haiku-4-5-20251001"]
     assert verdict.verdict == "APPROVE"
 
 
@@ -213,7 +246,7 @@ async def _first_model_cannot_consume_the_entire_sync_deadline():
             deadline_sec=4,
         )
 
-    assert attempted == ["slow-model", "fast-model"]
+    assert attempted == ["slow-model", "claude-haiku-4-5-20251001"]
     assert verdict.verdict == "APPROVE"
 
 
