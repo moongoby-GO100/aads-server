@@ -14,7 +14,9 @@
 #   정해져 있다. 그 조치를 코드로 옮기고, 교정에 성공하면 스스로 재개한다.
 #
 # 안전 원칙(무한루프·폭주 방지):
-#   1. 원인별 재시도는 릴리스 SHA 기준 기본 1회 (AADS_DEPLOY_AUTOHEAL_MAX_ATTEMPTS)
+#   1. 원인별 재시도는 릴리스 SHA 기준 기본 1회 (AADS_DEPLOY_AUTOHEAL_MAX_ATTEMPTS).
+#      단 target_drain_busy 처럼 "기다리는 것이 교정"인 원인만 예산을 따로 둔다
+#      (AADS_DEPLOY_AUTOHEAL_DRAIN_MAX_ATTEMPTS, 기본 5) — autoheal_max_attempts 참조
 #   2. 자가치유 기동 사이 최소 쿨다운 180초 (AADS_DEPLOY_AUTOHEAL_COOLDOWN_SEC)
 #   3. 화이트리스트 원인만 재시도하고, 나머지는 CEO 에스컬레이션으로 끝낸다
 #   4. AADS_DEPLOY_AUTOHEAL=0 이면 전체 비활성 (기존 동작과 동일)
@@ -243,9 +245,19 @@ remediate_deploy_failure() {
             if [[ "$AADS_DEPLOY_AUTOHEAL_DRYRUN" == "1" ]]; then
                 autoheal_log "DRYRUN: drain 대기 생략"
             else
+                # 끝났는지 보고 나간다. 고정 대기는 스트림이 10초 만에 끝나도
+                # 120초를 채우고, 그만큼 배포 레인을 붙잡는다.
+                local _drain_left
                 while (( waited < wait_max )); do
                     sleep 10
                     waited=$((waited + 10))
+                    if declare -F stream_count_for_port >/dev/null 2>&1 && [[ -n "${NEW_PORT:-}" ]]; then
+                        _drain_left="$(stream_count_for_port "$NEW_PORT" 2>/dev/null || echo unknown)"
+                        if [[ "$_drain_left" == "0" ]]; then
+                            autoheal_log "후보 슬롯 drain 조기 완료 (${waited}초, active=0)"
+                            break
+                        fi
+                    fi
                 done
             fi
             autoheal_log "✅ drain 대기 완료(${waited}초) — 같은 릴리스로 재개한다"
@@ -343,6 +355,31 @@ autoheal_attempt_bump() {
     n="$(autoheal_attempt_count "$cause")"
     mkdir -p "$AUTOHEAL_STATE_DIR" 2>/dev/null || true
     echo "$((n + 1))" > "$file" 2>/dev/null || true
+}
+
+# 원인별 재시도 예산. 전역 1회는 "고쳐서 다시"인 원인에는 맞지만
+# "기다렸다 다시"인 원인에는 모자란다.
+# 2026-09-21 실측: #4988(19:57 KST) target_drain_busy 를 retry_launched 로 살려
+# 놓고도, 120초 뒤 #4990(20:08 KST)에서 스트림이 아직 3건이라 예산 1/1 이
+# 소진돼 결국 사람에게 넘어갔다. 활성 채팅 턴은 수 분~십수 분 이어지므로
+# 한 번의 대기로는 끝나지 않는다. 이 원인의 교정은 부작용이 없고(스트림을
+# 끊지 않는다) 비용도 대기뿐이라 예산을 늘리는 것이 안전하다.
+autoheal_max_attempts() {
+    local cause="${1:-unknown}"
+    # 운영자가 전역 예산을 명시했으면 그것이 우선이다(긴급 차단 경로 유지).
+    if [[ -n "${AADS_DEPLOY_AUTOHEAL_MAX_ATTEMPTS:-}" ]]; then
+        echo "$AUTOHEAL_MAX_ATTEMPTS"
+        return 0
+    fi
+    local n
+    case "$cause" in
+        target_drain_busy)
+            n="${AADS_DEPLOY_AUTOHEAL_DRAIN_MAX_ATTEMPTS:-5}" ;;
+        *)
+            n="$AUTOHEAL_MAX_ATTEMPTS" ;;
+    esac
+    [[ "$n" =~ ^[0-9]+$ ]] || n="$AUTOHEAL_MAX_ATTEMPTS"
+    echo "$n"
 }
 
 autoheal_cooldown_ok() {
@@ -507,7 +544,7 @@ deploy_autoheal_on_exit() {
         return 0
     fi
 
-    local phase err cause policy attempts
+    local phase err cause policy attempts budget
     phase="${DEPLOY_CURRENT_PHASE:-unknown}"
     err="${DEPLOY_LAST_FAIL_ERROR:-}"
     if [[ -z "${err//[[:space:]]/}" && -n "${DEPLOY_RUN_ID:-}" ]] && deploy_db_available; then
@@ -531,16 +568,17 @@ deploy_autoheal_on_exit() {
     fi
     policy="$(autoheal_policy "$cause" "$phase")"
     attempts="$(autoheal_attempt_count "$cause")"
-    autoheal_log "실패 감지: rc=${rc}, phase=${phase}, cause=${cause}, policy=${policy}, attempts=${attempts}/${AUTOHEAL_MAX_ATTEMPTS}"
+    budget="$(autoheal_max_attempts "$cause")"
+    autoheal_log "실패 감지: rc=${rc}, phase=${phase}, cause=${cause}, policy=${policy}, attempts=${attempts}/${budget}"
     audit_control "autoheal" "deploy_runs:${DEPLOY_RUN_ID:-none}" "classified" \
-        "cause=${cause}; policy=${policy}; phase=${phase}; attempts=${attempts}" || true
+        "cause=${cause}; policy=${policy}; phase=${phase}; attempts=${attempts}/${budget}" || true
 
     if [[ "$policy" != "retry" ]]; then
         autoheal_escalate "$cause" "정책상 자동 재시도 대상이 아님 (phase=${phase})"
         return 0
     fi
-    if (( attempts >= AUTOHEAL_MAX_ATTEMPTS )); then
-        autoheal_escalate "$cause" "재시도 예산 소진 (${attempts}/${AUTOHEAL_MAX_ATTEMPTS})"
+    if (( attempts >= budget )); then
+        autoheal_escalate "$cause" "재시도 예산 소진 (${attempts}/${budget})"
         return 0
     fi
     if ! autoheal_cooldown_ok; then

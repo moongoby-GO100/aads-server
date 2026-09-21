@@ -440,3 +440,44 @@ def test_non_dirty_retry_keeps_original_status(tmp_path):
     sql = sql_log.read_text(encoding="utf-8")
     assert "superseded_by_autoheal_reroute" not in sql
     assert "CONCAT_WS" in sql
+
+
+# ── 원인별 재시도 예산 (2026-09-21 #4988/#4990 회귀) ──────────────────────────
+# #4988(19:57 KST) 이 target_drain_busy 로 재시도를 띄웠는데 120초 뒤 #4990(20:08)
+# 에서 스트림이 아직 3건이었고, 전역 예산 1/1 이 소진돼 사람에게 넘어갔다.
+# 기다리는 것이 교정인 원인은 한 번으로 끝나지 않는다.
+def test_drain_busy_has_larger_retry_budget_than_default():
+    assert _call("autoheal_max_attempts", "target_drain_busy") == "5"
+    assert _call("autoheal_max_attempts", "disk_full") == "1"
+    assert _call("autoheal_max_attempts", "unknown") == "1"
+
+
+def test_explicit_global_budget_overrides_per_cause_budget():
+    """긴급 차단 경로 보존 — 운영자가 전역 예산을 명시하면 그것이 이긴다."""
+    env = "export AADS_DEPLOY_AUTOHEAL_MAX_ATTEMPTS=1\n"
+    assert _call("autoheal_max_attempts", "target_drain_busy", env_prefix=env) == "1"
+
+
+def test_drain_budget_is_env_tunable_and_rejects_garbage():
+    good = "export AADS_DEPLOY_AUTOHEAL_DRAIN_MAX_ATTEMPTS=3\n"
+    assert _call("autoheal_max_attempts", "target_drain_busy", env_prefix=good) == "3"
+    junk = "export AADS_DEPLOY_AUTOHEAL_DRAIN_MAX_ATTEMPTS=many\n"
+    assert _call("autoheal_max_attempts", "target_drain_busy", env_prefix=junk) == "1"
+
+
+def test_exit_handler_uses_per_cause_budget_not_global_constant():
+    src = AUTOHEAL_LIB.read_text(encoding="utf-8")
+    assert 'budget="$(autoheal_max_attempts "$cause")"' in src
+    assert "if (( attempts >= budget )); then" in src
+    # 전역 상수를 직접 비교하던 옛 경로가 남아 있으면 예산 확장이 무효가 된다.
+    assert "attempts >= AUTOHEAL_MAX_ATTEMPTS" not in src
+
+
+def test_drain_wait_polls_and_exits_early_without_cutting_streams():
+    """고정 120초 대기는 스트림이 먼저 끝나도 배포 레인을 붙잡는다."""
+    src = AUTOHEAL_LIB.read_text(encoding="utf-8")
+    assert 'stream_count_for_port "$NEW_PORT"' in src
+    assert "drain 조기 완료" in src
+    # 스트림을 끊는 교정은 절대 들어오면 안 된다(생성 중 답변 손실).
+    assert "docker kill" not in src
+    assert "pkill" not in src
