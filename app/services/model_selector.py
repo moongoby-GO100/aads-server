@@ -2729,6 +2729,19 @@ async def call_stream(
                     f"Claude {model} → samegrade fallback 전환 (계정 교차 {' → '.join(f'{m}/s{s}' for m,s in _fb_seq)} 모두 실패)",
                     "",
                 )
+            from app.services.error_book import ingest_error_event
+
+            await ingest_error_event(
+                error_type="claude_api_fallback",
+                source="model_selector.cli_relay_path",
+                server="aads-server",
+                message=(
+                    f"Claude {model} → samegrade fallback 전환 "
+                    f"(계정 교차 {' → '.join(f'{m}/s{s}' for m,s in _fb_seq)} 모두 실패)"
+                ),
+                project="AADS",
+                error_hash=_eh,
+            )
         except Exception as _log_err:
             logger.warning(f"error_log insert failed: {_log_err}")
 
