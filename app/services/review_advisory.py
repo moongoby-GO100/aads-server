@@ -11,11 +11,32 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _ADVISORY_TASKS: set[asyncio.Task] = set()
+_ADVISORY_PROMPT_MAX_CHARS = int(os.environ.get("REVIEW_ADVISORY_PROMPT_MAX_CHARS", "40000"))
+
+
+def _advisory_messages(prompt: str) -> list[dict[str, str]]:
+    """Build a bounded request with the same JSON contract as the main reviewer."""
+    from app.services.code_reviewer import _REVIEW_SYSTEM_PROMPT
+
+    text = str(prompt or "")
+    if len(text) > _ADVISORY_PROMPT_MAX_CHARS:
+        head_chars = int(_ADVISORY_PROMPT_MAX_CHARS * 0.75)
+        tail_chars = _ADVISORY_PROMPT_MAX_CHARS - head_chars
+        text = (
+            text[:head_chars]
+            + "\n\n[보조 리뷰 입력 절단: 중간 diff 생략]\n\n"
+            + text[-tail_chars:]
+        )
+    return [
+        {"role": "system", "content": _REVIEW_SYSTEM_PROMPT},
+        {"role": "user", "content": text},
+    ]
 
 
 def _safe_text(value: object, limit: int = 500) -> str:
@@ -159,7 +180,7 @@ async def _run_advisory(*, project: str, job_id: str, prompt: str,
             _run_pc_ollama_chat(
                 {
                     "model": sample["model_id"],
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": _advisory_messages(prompt),
                     "temperature": 0.1,
                     "max_tokens": 1024,
                     "timeout_seconds": timeout_seconds,

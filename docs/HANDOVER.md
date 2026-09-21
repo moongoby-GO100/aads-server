@@ -1,5 +1,8 @@
 # AADS HANDOVER
-최종 업데이트: 2026-09-19
+최종 업데이트: 2026-09-22
+
+## 2026-09-22
+- AADS-PC-QWEN-REVIEW-ADVISORY-SCHEMA-P0: `pc-qwen38-27b` 비차단 보조 리뷰 7건이 전부 실패한 원인을 운영 DB에서 확인했다. 4건은 주 리뷰 JSON system prompt가 PC Ollama 호출에 전달되지 않아 모델이 자체 `verdict/reasoning` 스키마로 응답했고, 3건은 최대 200,000자 리뷰 입력 때문에 PC Agent/명령이 90초 안에 끝나지 못했다. `app/services/review_advisory.py`가 주 리뷰와 동일한 JSON 계약을 system 메시지로 전달하고, 보조 리뷰 입력은 기본 40,000자로 제한하되 앞 75%·뒤 25%를 보존하도록 교정했다. 주 CLI 리뷰 판정과 DB 모델 순서는 변경하지 않는다. 검증: 전용 단위 테스트 8건 통과, 동일 system schema를 넣은 운영 `pc-qwen38-27b` 실호출이 0~1 numeric 평가 필드를 포함한 JSON을 반환했다. 롤백은 이 커밋 revert 후 동일 blue/green 배포이며 additive DB 테이블은 보존한다.
 
 ## 2026-09-19
 - AADS-SMARTBROWSER-M7-M11-RELEASE-20260919: 목표 `169e5328-244e-444d-95c8-d20377192671`의 M7~M11을 최신 `origin/main` 기준 격리 브랜치에서 통합했다. Site Profile/Page Template/Site Skill/Semantic Memory/Live Observation 정본, 최초 ARIA 부분구조 candidate 학습과 재방문 판정, Exact→Qwen3 vector→제한 LLM allowlist 스킬 선택, 실행 전 Channel Router 재검증, 표시 직전 Live Fact 재검증을 API로 연결했다. 원시 DOM·페이지 명령·credential·주민등록번호·카드번호 저장은 차단하며 새 학습 버전은 G6 승격 전 active가 되지 않는다. 문서 정본은 `docs/reports/20260919_SMART_BROWSER_IMPLEMENTATION_REPORT.md` v1.0.0이다. 격리 PostgreSQL migration/lifecycle 검증과 Books to Scrape Playwright E2E(HTTP 200, 상품 20개, 동적 가격 변경 구조 재사용 1.0, 페이지 명령 차단, 핵심 앵커 제거 Human Gateway)를 통과했다. 최종 커밋·푸시·blue/green·동일 digest·5분 감시는 릴리스 실행 결과와 DB 핸드오버 정본에 기록한다.

@@ -66,3 +66,16 @@ def test_authoritative_reviewer_stays_cli_only() -> None:
     assert _is_cli_review_model("claude-sonnet-5") is True
     assert _is_cli_review_model("pc-qwen38-27b") is False
     assert _is_cli_review_model("litellm:pc-qwen38-27b") is False
+
+
+def test_advisory_messages_include_schema_and_bound_large_prompt(monkeypatch) -> None:
+    monkeypatch.setattr(review_advisory, "_ADVISORY_PROMPT_MAX_CHARS", 100)
+
+    messages = review_advisory._advisory_messages("a" * 200)
+
+    assert [message["role"] for message in messages] == ["system", "user"]
+    assert '"correctness": 0.0~1.0' in messages[0]["content"]
+    assert '"scope_compliance": 0.0~1.0' in messages[0]["content"]
+    assert "보조 리뷰 입력 절단" in messages[1]["content"]
+    assert messages[1]["content"].startswith("a" * 75)
+    assert messages[1]["content"].endswith("a" * 25)
