@@ -407,18 +407,6 @@ model_list:
 #   litellm_params:
 #     model: openai/o3-pro
 #     api_key: os.environ/OPENAI_API_KEY
-    - qwen3-coder-plus
-    - deepseek-chat
-    - gemini-2.5-flash
-  - kimi-k2.6:
-    - kimi-k2.5
-    - qwen3-coder-plus
-    - deepseek-chat
-    - gemini-2.5-flash
-  - kimi-k2.5:
-    - qwen3-coder-plus
-    - deepseek-chat
-    - gemini-2.5-flash
 # CEO PC 로컬 27B — aads-server 의 PC Ollama 브리지 경유(PC Agent → CEO PC Ollama).
 # 이 서버에는 GPU 가 없다. 생성은 전적으로 CEO PC 의 RTX 3060 12GB 에서 돈다.
 # IQ2_XS(2비트급) 라 숫자·고유명사 정밀도가 약하다 — 분류·요약·2차 판독용이고
@@ -469,6 +457,18 @@ router_settings:
     - deepseek-chat
     - gemini-2.5-flash
   - minimax-m2.5:
+    - qwen3-coder-plus
+    - deepseek-chat
+    - gemini-2.5-flash
+  - kimi-k2.6:
+    - kimi-k2.5
+    - qwen3-coder-plus
+    - deepseek-chat
+    - gemini-2.5-flash
+  - kimi-k2.5:
+    - qwen3-coder-plus
+    - deepseek-chat
+    - gemini-2.5-flash
 litellm_settings:
   drop_params: true
   set_verbose: true
