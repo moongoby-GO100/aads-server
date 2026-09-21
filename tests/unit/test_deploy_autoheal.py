@@ -58,6 +58,10 @@ def test_syntax_is_valid():
         ("standby_same_digest_sync", "deploy interrupted by HUP", "signal_interrupt"),
         ("p0p1_monitoring", "deploy interrupted by HUP", "signal_interrupt"),
         ("standby_same_digest_sync", "standby same-digest sync failed for aads-server:8100", "standby_sync_fail"),
+        # 2026-09-21 24시간 실측: 실패·차단 48건 중 14건이 이 사유였는데 분류가
+        # 없어 other → manual 로 빠졌다. 한 건도 자동 재개되지 않았다.
+        ("target_slot_drain", "target slot aads-server-green:8102 active streams=1", "target_drain_busy"),
+        ("target_slot_drain", "target slot aads-server:8100 active streams=2", "target_drain_busy"),
         ("build_candidate_image", "aads-server-green memory limit mismatch", "mem_limit_mismatch"),
         ("standby_same_digest_sync", "unexpected error exit=1 line=2211: echo ...", "unexpected_exit"),
         ("nginx_cutover", "something nobody has seen before", "other"),
