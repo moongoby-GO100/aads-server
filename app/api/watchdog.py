@@ -2,6 +2,7 @@
 T-038: Watchdog API — 에러 자동기록·학습·자동복구
 """
 import hashlib
+import json
 import re
 import subprocess
 from typing import Optional, Dict, Any
@@ -74,6 +75,8 @@ async def report_error(
 
     eh = _error_hash(req.error_type, req.source, req.message)
 
+    response: Dict[str, Any]
+    context_json = json.dumps(req.context or {}, ensure_ascii=False, default=str)
     async with memory_store.pool.acquire() as conn:
         existing = await conn.fetchrow(
             "SELECT id, occurrence_count, auto_recoverable, recovery_command FROM error_log WHERE error_hash=$1",
@@ -89,7 +92,7 @@ async def report_error(
                     stack_trace = COALESCE($3, stack_trace),
                     context = $4::jsonb
                 WHERE error_hash = $1
-            """, eh, req.message, req.stack_trace, str(req.context or {}))
+            """, eh, req.message, req.stack_trace, context_json)
 
             error_id = existing["id"]
             count = existing["occurrence_count"] + 1
@@ -98,7 +101,7 @@ async def report_error(
                 recovery_result = await _attempt_recovery(
                     error_id, existing["recovery_command"]
                 )
-                return {
+                response = {
                     "status": "auto_recovered" if recovery_result else "recovery_failed",
                     "error_hash": eh,
                     "error_id": error_id,
@@ -106,14 +109,14 @@ async def report_error(
                     "recovery_attempted": True,
                     "recovery_success": recovery_result,
                 }
-
-            return {
-                "status": "recorded_recurring",
-                "error_hash": eh,
-                "error_id": error_id,
-                "occurrence_count": count,
-                "has_resolution": bool(existing.get("auto_recoverable")),
-            }
+            else:
+                response = {
+                    "status": "recorded_recurring",
+                    "error_hash": eh,
+                    "error_id": error_id,
+                    "occurrence_count": count,
+                    "has_resolution": bool(existing.get("auto_recoverable")),
+                }
         else:
             # 자동 복구 가능 여부 판단
             from app.services.unified_healer import ERROR_RECOVERY_MAP, _extract_service_name, _is_safe_command
@@ -131,10 +134,10 @@ async def report_error(
                 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'pending', $8, $9)
                 RETURNING id
             """, eh, req.error_type, req.source, req.server,
-                req.message, req.stack_trace, str(req.context or {}),
+                req.message, req.stack_trace, context_json,
                 auto_recoverable, matched_cmd)
 
-            return {
+            response = {
                 "status": "recorded_new",
                 "error_hash": eh,
                 "error_id": row["id"],
@@ -142,6 +145,27 @@ async def report_error(
                 "auto_recoverable": auto_recoverable,
                 "recovery_command": matched_cmd,
             }
+
+    # error_log(발생 원장)과 오류 사전(원인·예방 지식)을 한 경로로 연결한다.
+    # 사전 기록 실패는 원래 Watchdog 기록 성공을 뒤집지 않는다.
+    try:
+        from app.services.error_book import ingest_error_event
+
+        context_project = str((req.context or {}).get("project") or "AADS")
+        response["error_book"] = await ingest_error_event(
+            error_type=req.error_type,
+            source=req.source,
+            server=req.server,
+            message=req.message,
+            stack_trace=req.stack_trace or "",
+            project=context_project,
+            error_hash=eh,
+        )
+    except Exception as exc:
+        logger.warning("watchdog_error_book_ingest_failed", error=str(exc)[:160])
+        response["error_book"] = {"status": "failed", "reason": str(exc)[:160]}
+
+    return response
 
 
 # --- 해결법 등록 (PUT) ---

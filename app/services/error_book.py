@@ -89,7 +89,13 @@ async def match_error(text: Any, *, limit: int = 2) -> list[dict]:
     return hits
 
 
-async def record_candidate(text: Any, source: str = "") -> str:
+async def record_candidate(
+    text: Any,
+    source: str = "",
+    *,
+    project: str = "AADS",
+    metadata: dict[str, Any] | None = None,
+) -> str:
     """알려지지 않은 오류를 후보로 남긴다.
 
     원인을 모르는 채 active 로 넣으면 사전이 오염된다. status='candidate' 로
@@ -119,6 +125,9 @@ async def record_candidate(text: Any, source: str = "") -> str:
     sig = sig.replace(re.escape("\u00a7N\u00a7"), "[0-9]+")
 
     key = "auto." + hashlib.sha1(sig.encode("utf-8")).hexdigest()[:12]
+    project_key = str(project or "AADS").strip().upper()[:32] or "AADS"
+    candidate_meta = {"signatures": [sig], "source": source}
+    candidate_meta.update(metadata or {})
     try:
         from app.core.db_pool import get_pool
 
@@ -126,18 +135,75 @@ async def record_candidate(text: Any, source: str = "") -> str:
             """
             INSERT INTO ohvis_wiki_error_book
                 (project, error_key, symptom, root_cause, prevention, status, metadata)
-            VALUES ('AADS', $1, $2, '', '', 'candidate', $3::jsonb)
+            VALUES ($1, $2, $3, '', '', 'candidate', $4::jsonb)
             ON CONFLICT (project, error_key) DO UPDATE
                 SET recurrence_count = ohvis_wiki_error_book.recurrence_count + 1,
                     updated_at = NOW()
             """,
-            key, cand,
-            json.dumps({"signatures": [sig], "source": source}, ensure_ascii=False),
+            project_key, key, cand,
+            json.dumps(candidate_meta, ensure_ascii=False),
         )
     except Exception as exc:
         logger.debug("error_book_record_failed: %s", str(exc)[:120])
         return ""
     return key
+
+
+async def ingest_error_event(
+    *,
+    error_type: str,
+    source: str,
+    message: str,
+    server: str = "",
+    stack_trace: str = "",
+    project: str = "AADS",
+    error_hash: str = "",
+) -> dict[str, Any]:
+    """운영 오류 한 건을 공용 오류 사전과 동기화한다.
+
+    `error_log`는 발생 원장이고 오류 사전은 원인·예방 지식이다. 기존에는 두
+    저장소가 분리되어 Watchdog/모델 오류가 `error_log`에만 남고 오류 사전에는
+    자동 등록되지 않았다. 모든 writer가 이 함수를 호출하면 알려진 오류는 재발
+    횟수를 올리고, 모르는 오류는 원인 미상 candidate로 남는다.
+
+    오류 사전 장애가 원래 오류 기록을 막아서는 안 되므로 실패는 구조화해
+    반환하고 예외를 밖으로 전파하지 않는다.
+    """
+    probe = " ".join(
+        part.strip()
+        for part in (error_type, source, server, message, stack_trace)
+        if str(part or "").strip()
+    )
+    if not probe:
+        return {"status": "skipped", "reason": "empty_error"}
+    try:
+        known = await match_error(probe)
+        if known:
+            keys = []
+            for hit in known:
+                key = str(hit.get("error_key") or "")
+                if key:
+                    await bump_recurrence(key)
+                    keys.append(key)
+            return {"status": "matched", "error_keys": keys}
+
+        key = await record_candidate(
+            probe,
+            source=f"error_log:{source or error_type}",
+            project=project,
+            metadata={
+                "error_hash": str(error_hash or ""),
+                "error_type": str(error_type or ""),
+                "server": str(server or ""),
+                "ingest": "error_log",
+            },
+        )
+        if not key:
+            return {"status": "failed", "reason": "candidate_not_written"}
+        return {"status": "candidate", "error_key": key}
+    except Exception as exc:
+        logger.warning("error_book_ingest_failed: %s", str(exc)[:160])
+        return {"status": "failed", "reason": str(exc)[:160]}
 
 
 async def bump_recurrence(error_key: str) -> None:
