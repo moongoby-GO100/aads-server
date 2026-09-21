@@ -81,6 +81,8 @@ def test_classify_deploy_failure(phase: str, err: str, expected: str):
         ("standby_sync_fail", "retry"),
         ("lock_wait_timeout", "retry"),
         ("source_dir_missing", "retry"),
+        # 고칠 것이 없는 실패다 — 몇 분 뒤면 같은 배포가 그대로 성공한다.
+        ("target_drain_busy", "retry"),
         ("mem_limit_mismatch", "manual"),
         ("unexpected_exit", "manual"),
         ("other", "manual"),

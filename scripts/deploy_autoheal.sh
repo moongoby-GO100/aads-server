@@ -61,6 +61,14 @@ classify_deploy_failure() {
             echo "signal_interrupt" ;;
         *"standby same-digest sync"*)
             echo "standby_sync_fail" ;;
+        # 후보 슬롯에 채팅 턴이 살아 있어 drain 이 끝나지 않은 경우.
+        # 2026-09-21 24시간 실측: 실패·차단 48건 중 14건이 이것이었고,
+        # 사유는 전부 "active streams=1" 또는 "=2" 였다. 분류가 없어서
+        # other → manual 로 빠져 한 건도 자동 재개되지 않았다.
+        # 이 실패는 코드·자원 문제가 아니라 **시점 문제**다. 몇 분 뒤면
+        # 그 턴이 끝나 같은 배포가 그대로 성공한다 — 가장 재시도할 값이 크다.
+        *"active streams="*)
+            echo "target_drain_busy" ;;
         *"memory limit mismatch"*)
             echo "mem_limit_mismatch" ;;
         *"release context too large"*)
@@ -107,7 +115,7 @@ autoheal_policy() {
     local cause="${1:-unknown}"
     local phase="${2:-${DEPLOY_CURRENT_PHASE:-}}"
     case "$cause" in
-        disk_full|dirty_worktree|stale_heartbeat|standby_sync_fail|lock_wait_timeout|source_dir_missing)
+        disk_full|dirty_worktree|stale_heartbeat|standby_sync_fail|lock_wait_timeout|source_dir_missing|target_drain_busy)
             echo "retry" ;;
         # 컨테이너 재생성은 자원 경합으로 실패하는 경우가 많아 재시도할 값이 있다.
         # 다만 컷오버 이후라면 이미 트래픽이 넘어간 뒤이므로 손대지 않는다.
@@ -203,6 +211,24 @@ remediate_deploy_failure() {
                 return 1
             fi
             autoheal_log "✅ 빌드 디스크 임계 복귀"
+            ;;
+        target_drain_busy)
+            # 고칠 것이 없다. 기다리는 것이 교정이다.
+            # 후보 슬롯의 채팅 턴이 끝나기를 잠깐 기다린 뒤 같은 릴리스를 다시 건다.
+            # 여기서 스트림을 끊지 않는다 — 끊으면 생성 중이던 답변이 사라진다.
+            AUTOHEAL_LAST_REMEDIATION="wait_for_target_drain"
+            local wait_max="${AADS_DEPLOY_AUTOHEAL_DRAIN_WAIT:-120}"
+            local waited=0
+            autoheal_log "후보 슬롯 drain 대기: 최대 ${wait_max}초 (스트림을 끊지 않는다)"
+            if [[ "$AADS_DEPLOY_AUTOHEAL_DRYRUN" == "1" ]]; then
+                autoheal_log "DRYRUN: drain 대기 생략"
+            else
+                while (( waited < wait_max )); do
+                    sleep 10
+                    waited=$((waited + 10))
+                done
+            fi
+            autoheal_log "✅ drain 대기 완료(${waited}초) — 같은 릴리스로 재개한다"
             ;;
         source_dir_missing)
             autoheal_log "릴리스 소스 복구: ${COMPOSE_DIR:-unknown} 재생성 (sha=${AADS_RELEASE_SHA:-unknown})"
