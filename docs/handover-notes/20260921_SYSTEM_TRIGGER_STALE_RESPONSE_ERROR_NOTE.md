@@ -2,7 +2,7 @@
 
 - 기록일: 2026-09-21
 - 심각도: P0
-- 상태: 원인 확정, 수정·검증 진행 중
+- 상태: 수정·배포·운영 검증 완료
 - 세션: `ac5278a7-2f13-4cd7-9aa1-83d41fb23c97`
 - 사용자 메시지: `8f618f56-91f0-4eb6-ae57-2c5f9c522aac`
 - 잘못 저장된 assistant: `276f948d-f065-4ce3-b886-629393aa0605`
@@ -112,7 +112,14 @@
 - 2026-09-21: 신규 무결성 테스트 7개와 기존 연속성 테스트 3개, 총 10개 통과.
 - 2026-09-21: 최종 저장 회귀 테스트 3개 통과.
 - 2026-09-21: 채팅·lease·generation 관련 통합 회귀군 169개 통과. 별도 1개는 현재 compose가 `/host/aads-server/docs`를 사용하지만 기존 테스트가 `/app/docs`를 기대하는 기준 불일치로 실패했으며 이번 변경과 무관하다.
-- 커밋/배포/운영 5분 모니터링 결과는 완료 후 이 절에 추가한다.
+- 2026-09-21: 수정 커밋 `23a0636f31df7ced4b006351481e49ee225de7a3` push 완료. 이후 최신 main `74fa07bdf925`도 이 커밋의 후손임을 확인했다.
+- 2026-09-21: 배포 원장 `4931`, active `aads-server:8100`, standby `aads-server-green:8102`로 Blue/Green 배포 및 동일 digest 동기화 완료.
+- 2026-09-21: 양 슬롯 모두 image digest `sha256:7cf974edd1ca636526cd31679caccd38169146803ce5ae5ccb43cf702a7f3ee6`, health 정상. 원장 상태는 `success_partial -> success`로 인증됐다.
+- 2026-09-21: 외부 HTTPS health `status=ok`, `graph_ready=true`; 배포 내장 300초 release P0/P1 감시 이상 없음.
+- 2026-09-21: 사고 Ohvis 작업과 task card를 `error`로 보정하고 `current_instruction_omitted_and_stale_generation_promoted`를 기록했다.
+- 2026-09-21: 배포 전 추적 실행 7건은 동일 execution 재개 2건, 정상 완료 2건, partial 보존 후 새 current execution 승계 3건으로 전부 연결됐다. 소실 0건, 세션별 중복 active 0건, terminal 유효 lease 0건이다.
+- 2026-09-21: 마지막 구 슬롯 실행 `7eb645e3`(세션 `2648cf77`)은 owner `aads-server-green -> aads-server`, epoch `4 -> 5`로 회수됐다. 최종 live execution 8건은 모두 새 active 슬롯에서 실행 중이고 standby live execution은 0건이다.
+- 2026-09-21: 별도 운영 경보 `disk_full`이 86.3%에서 발생했다. 실제 여유 공간은 27GB였으며 이번 릴리스 기능 오류와는 무관하지만 용량 정리 후속 조치가 필요하다.
 
 ## 오류 사전 등록 값
 
@@ -120,4 +127,5 @@
 - symptom: 자동 지시 대신 과거 질문 응답이 저장되고 Ohvis 작업이 done 처리됨
 - cause: 현재 system_trigger가 히스토리 필터에서 제거되고, 내부 스트림이 heartbeat wrapper를 우회했으며, 구 producer가 전역 epoch 캐시로 새 lease를 채택하고, task 완료가 의미 검증 없이 처리됨
 - prevention: 현재 턴 ID 재결합, 모든 내부 스트림 공통 wrapper, task-local immutable epoch fence, exact execution/provenance/semantic 완료 게이트
-- fix commit: 배포 커밋 생성 후 등록
+- fix commit: `23a0636f31df7ced4b006351481e49ee225de7a3`
+- 등록 key: `chat.system_trigger_current_turn_generation_fence`

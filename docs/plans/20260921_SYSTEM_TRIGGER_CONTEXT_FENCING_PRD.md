@@ -167,9 +167,9 @@ DB에서 최신 epoch를 다시 읽어 producer의 캡처 값을 덮어쓰는 �
 - [x] M8 task-local epoch fence 및 generation stamp 구현
 - [x] M9 Ohvis 의미 완료 게이트 구현
 - [x] M10 전체 관련 회귀 테스트
-- [ ] M11 커밋·push·Blue/Green 배포
-- [ ] M12 운영 데이터 보정 및 5분 모니터링
-- [ ] M13 공용 오류 사전 등록 및 최종 보고
+- [x] M11 커밋·push·Blue/Green 배포
+- [x] M12 운영 데이터 보정 및 5분 모니터링
+- [x] M13 공용 오류 사전 등록 및 최종 보고
 
 ## 10. 완료 기준
 
@@ -180,3 +180,17 @@ DB에서 최신 epoch를 다시 읽어 producer의 캡처 값을 덮어쓰는 �
 - 사고 Ohvis 작업의 허위 `done` 상태가 보정된다.
 - 공용 오류 사전에 원인, prevention, fix commit이 등록된다.
 - 5분 P0/P1 모니터링 동안 새 오류가 없다.
+
+## 11. 완료 실측 (2026-09-21)
+
+- 수정 커밋 `23a0636f31df7ced4b006351481e49ee225de7a3`을 `origin/main`에 push했다. 이후 최신 main `74fa07bdf925`도 이 커밋의 후손임을 확인했다.
+- 배포 원장 `4931`로 Blue/Green 전환을 수행했고, 300초 연속 release P0/P1 감시를 통과했다.
+- 활성 `aads-server:8100`과 standby `aads-server-green:8102`는 모두 `aads-server:23a0636f31df`, image digest `sha256:7cf974edd1ca636526cd31679caccd38169146803ce5ae5ccb43cf702a7f3ee6`로 healthy다.
+- standby 동일 digest 인증 후 `deploy_runs#4931`은 `success_partial`에서 `success`로 승격됐다.
+- 외부 `https://aads.newtalk.kr/api/v1/health`는 `status=ok`, `graph_ready=true`를 반환했다.
+- 배포 전 추적한 실행 7건은 모두 원장상 소실 없이 정리됐다: 동일 execution 재개 2건, 완료 2건, partial 보존 후 새 current execution으로 승계 3건이다.
+- 특히 장시간 실행 `ebdbbf1a`는 epoch `2 -> 4 -> 5`, 세션 `2648cf77`의 실행 `7eb645e3`은 epoch `4 -> 5`로 새 활성 슬롯이 회수해 이어서 시작했다.
+- 최종 시점의 live execution 8건은 전부 `aads-server` 단일 소유이며, standby live execution은 0건, 세션별 중복 active execution은 0건, terminal row의 유효 lease는 0건이다.
+- 사고 Ohvis 작업 `dd50c1eb-e26a-4dc2-9b9c-931706c43598`과 task card를 `error`로 보정했고, 사고 assistant 메시지는 감사 추적을 위해 보존했다.
+- 공용 오류 사전에 `chat.system_trigger_current_turn_generation_fence`를 등록했다.
+- 별도 운영 경보로 루트 디스크 사용률 86.3%(실측 87%, 여유 27GB)가 관찰됐다. 릴리스 오류는 아니지만 80% 경보 임계값을 넘었으므로 용량 정리가 필요하다.
