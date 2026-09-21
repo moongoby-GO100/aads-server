@@ -3687,6 +3687,12 @@ _SERVICE_AUTH_EXACT_PATHS = {
     # X-Internal-Secret 을 검증하므로(app/api/internal_token.py) 여기서는
     # 정확 경로 하나만 면제한다 — prefix 로 넓히면 /internal/* 전체가 열린다.
     "/api/v1/internal/service-token",
+    # CEO PC Ollama 브리지. LiteLLM 이 OpenAI 호환 규격으로 부르는 경로이고,
+    # 라우터 자신이 PC_OLLAMA_BRIDGE_API_KEY(없으면 LITELLM_MASTER_KEY)로
+    # Bearer 를 검증한다(app/api/pc_ollama_bridge.py:_check_auth).
+    # JWT 미들웨어가 먼저 401 을 내면 그 검사에 닿지도 못한다 — 2026-09-21 실측.
+    # prefix 가 아니라 정확 경로 하나만 면제한다.
+    "/pc-ollama/v1/chat/completions",
 }
 
 # Public read-only routes must be listed individually. Never place the
