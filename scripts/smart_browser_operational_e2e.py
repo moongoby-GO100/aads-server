@@ -375,7 +375,9 @@ async def run(*, output_dir: Path, tenant_id: str, regression: Mapping[str, Any]
     output_dir.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     since = datetime.now(UTC)
-    run_tag = since.strftime("%Y%m%d%H%M%S")
+    # A digit-only tag trips the sensitive-value guard (13+ digits reads as a card
+    # number), so the per-run key stays alphanumeric.
+    run_tag = f"r{uuid.uuid4().hex[:10]}"
     page_key = f"catalog/search/{run_tag}"
     observed: dict[str, bool | None] = dict.fromkeys(OBSERVATIONS + POST_GATE_OBSERVATIONS)
     notes: dict[str, Any] = {}
