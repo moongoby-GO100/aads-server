@@ -106,17 +106,34 @@ async def main(args):
                     WHERE s.id=i.session_id RETURNING s.id
                 ) SELECT id,execution_id,session_id FROM inserted
             """, MISSING_BUBBLE_EXECUTIONS, ids)
+            # An old API may have resumed and archived our repair notice while
+            # the fixed release was waiting for drain. Restore only notices
+            # created by this repair, only on the locked terminal executions.
+            # Keep the content/diagnostics and terminal execution state intact.
+            restored = await conn.execute("""
+                UPDATE chat_messages m
+                SET intent='interruption_notice',
+                    quality_details=COALESCE(m.quality_details,'{}'::jsonb)
+                        || jsonb_build_object('recovery_notice_restored_at',NOW())
+                FROM chat_turn_executions te
+                WHERE te.id=m.execution_id AND te.id=ANY($1::uuid[])
+                  AND te.id=ANY($2::uuid[])
+                  AND te.status IN ('interrupted','cancelled')
+                  AND te.assistant_message_id=m.id
+                  AND m.quality_details->>'recovery_repair'='20260921_chat_bubble'
+                  AND m.intent='_archived_partial'
+            """, MISSING_BUBBLE_EXECUTIONS, ids)
             # The historical BEFORE trigger hides interruption_notice on
             # INSERT/content updates. Match _mark_execution_interrupted's final
             # visibility write: changing only is_hidden does not retrigger it.
             visible = await conn.execute("""
                 UPDATE chat_messages SET is_hidden=FALSE
-                WHERE execution_id=ANY($1::uuid[])
+                WHERE execution_id=ANY($1::uuid[]) AND execution_id=ANY($2::uuid[])
                   AND quality_details->>'recovery_repair'='20260921_chat_bubble'
                   AND intent='interruption_notice' AND is_hidden=TRUE
-            """, MISSING_BUBBLE_EXECUTIONS)
+            """, MISSING_BUBBLE_EXECUTIONS, ids)
             result = {**preview, "archived": archived, "cleared_pointers": cleared,
-                      "inserted": [dict(row) for row in inserted], "made_visible": visible,
+                      "inserted": [dict(row) for row in inserted], "restored_notices": restored, "made_visible": visible,
                       "snapshot": str(args.snapshot)}
         print(json.dumps(result, default=str))
     finally:

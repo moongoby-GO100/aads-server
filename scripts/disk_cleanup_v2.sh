@@ -8,6 +8,14 @@ BACKUP_DST="/mnt/volume_sgp1_01/aads-backups"
 GALLERY="/root/aads/aads-server/app/static/gallery"
 TELEGRAM_SCRIPT="/root/aads/aads-server/scripts/send_disk_alert.sh"
 
+# Hold the same lock as blue/green and warm-deps for the whole cleanup.
+# A one-shot lock probe has a race with the next build/export.
+exec 8>"${AADS_DEPLOY_FLOCKFILE:-/tmp/aads-deploy.flock}"
+if ! flock -n 8; then
+    echo "[CLEANUP] deployment/dependency build active; cleanup deferred"
+    exit 0
+fi
+
 mkdir -p "$(dirname "$LOG")"
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] === 디스크 정리 v2 시작 ===" >> "$LOG"
@@ -57,10 +65,38 @@ is_active_image() {
 }
 
 prune_project_images() {
+    local protected_releases
+    if ! protected_releases="$(docker exec aads-postgres psql -U aads -d aads -qAtc "
+        WITH recent_success AS (
+            SELECT release_sha FROM deploy_runs
+            WHERE project='AADS' AND status='success'
+            ORDER BY updated_at DESC LIMIT 3
+        )
+        SELECT DISTINCT release_sha FROM deploy_runs
+        WHERE project='AADS' AND release_sha IS NOT NULL AND (
+            status IN ('queued','running','verifying','syncing_standby','success_partial')
+            OR (status='blocked' AND updated_at>NOW()-INTERVAL '24 hours')
+        )
+        UNION SELECT release_sha FROM recent_success;
+    " 2>/dev/null)"; then
+        echo "[DOCKER] release ledger unavailable; tagged-image cleanup deferred" >> "$LOG"
+        return 0
+    fi
     docker image ls --format '{{.Repository}}:{{.Tag}}' \
         | grep -E '^(aads-server|aads-dashboard|aads-server-aads-|aads-dashboard-aads-|aads-server-yeoljeong-finance)' \
         | while read -r image_ref; do
             [ -n "$image_ref" ] || continue
+            # These are intentionally not attached to running containers.
+            # Removing them turns every warm release into a cold dependency build.
+            case "$image_ref" in
+                aads-server-deps:*)
+                    echo "[DOCKER] keep dependency image: $image_ref" >> "$LOG"
+                    continue ;;
+            esac
+            if printf '%s\n' "$protected_releases" | grep -Fxq "${image_ref##*:}"; then
+                echo "[DOCKER] keep pending/rollback release image: $image_ref" >> "$LOG"
+                continue
+            fi
             if is_active_image "$image_ref"; then
                 echo "[DOCKER] keep active image: $image_ref" >> "$LOG"
                 continue

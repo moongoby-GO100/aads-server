@@ -43,7 +43,7 @@ fi
 #
 # 디스크가 아무리 차도 진행 중인 배포를 깨는 것보다는 낫다. 다음 주기에 다시
 # 온다. 락은 flock 비차단으로만 본다 — 여기서 기다리면 크론이 쌓인다.
-DEPLOY_LOCK="${AADS_DEPLOY_LOCKFILE:-/tmp/aads-deploy.lock}"
+DEPLOY_LOCK="${AADS_DEPLOY_FLOCKFILE:-/tmp/aads-deploy.flock}"
 if [ -e "$DEPLOY_LOCK" ] && ! flock -n "$DEPLOY_LOCK" true 2>/dev/null; then
     echo "$(date '+%F %T') disk=${USED}% — 배포 진행 중(락 점유), 정리 건너뜀"
     exit 0
