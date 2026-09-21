@@ -109,6 +109,10 @@ async def run_directive(
             "smart_browser": {
                 "native_auth_required": bool(recipe.metadata.get("native_auth_required")),
                 "requires_local_security_programs": bool(recipe.metadata.get("requires_local_security_programs")),
+                # 봇/WAF 가 데이터센터 IP 를 막는 사이트는 처음부터 PC 레인으로 간다.
+                # native_auth_required 를 대신 켜서 우회하지 않는다.
+                "server_access_blocked": bool(recipe.metadata.get("server_access_blocked")),
+                "requires_residential_ip": bool(recipe.metadata.get("requires_residential_ip")),
             },
         },
     )

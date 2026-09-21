@@ -26,14 +26,39 @@ _NATIVE_AUTH_STATES = frozenset({
 _HUMAN_GATEWAY_STATES = frozenset({
     "captcha_required", "otp_required", "login_required",
 })
+# 서버(데이터센터) IP 가 봇/WAF 에 막히는 사이트는 "로컬 보안 프로그램이 필요한
+# 사이트" 와 전혀 다른 사유다. 두 가지를 native_auth_required 하나로 뭉뚱그리면
+# 그 플래그는 더 이상 보안 판정에 쓸 수 없게 된다. 그래서 별도 레인 사유
+# server_ip_blocked 를 둔다 (2026-09-21 CEO 지시: 서버 브라우저로 접근이 불가한
+# 사이트는 사람에게 넘기지 말고 PC 레인으로 진행한다).
+# 목록은 browser_task_gateway.ACCESS_MARKERS["bot_or_waf_blocked"] 와 같은 성격이되,
+# 앱 권한 거부와 구분되지 않는 "forbidden"/"permission denied" 는 일부러 뺐다.
+_SERVER_BLOCKED_MARKERS = (
+    "access denied",
+    "cloudflare",
+    "cf-chl",
+    "checking your browser",
+    "verify you are human",
+    "unusual traffic",
+    "bot detection",
+    "automated traffic",
+    "자동화된 접근",
+    "비정상적인 접근",
+    "접근이 제한",
+    "차단되었습니다",
+)
+# 차단 페이지는 짧다. 본문이 이보다 길면 같은 문구가 있어도 정상 페이지로 본다.
+_BLOCK_PAGE_TEXT_LIMIT = 2_000
 
 
 def smart_browser_route(context: Mapping[str, Any] | None = None) -> dict[str, str]:
     """Choose an explicit execution lane without silently escalating to PC.
 
     Callers may assert ``native_auth_required`` only for a known local-security
-    requirement.  Authentication challenges themselves are handled by the
-    Human Gateway after the Browser Agent observes them.
+    requirement.  A site that a datacenter IP cannot reach at all declares
+    ``server_access_blocked`` instead — a separate, honest reason that keeps the
+    native-auth flag meaningful.  Authentication challenges themselves are
+    handled by the Human Gateway after the Browser Agent observes them.
     """
     context = context or {}
     smart_context = context.get("smart_browser")
@@ -41,7 +66,15 @@ def smart_browser_route(context: Mapping[str, Any] | None = None) -> dict[str, s
         context = {**context, **smart_context}
     if bool(context.get("native_auth_required") or context.get("requires_local_security_programs")):
         return {"runtime": "pc_agent", "reason": "native_auth_required"}
+    if bool(context.get("server_access_blocked") or context.get("requires_residential_ip")):
+        return {"runtime": "pc_agent", "reason": "server_ip_blocked"}
     return {"runtime": "browser_agent", "reason": "read_or_login_verification"}
+
+
+def is_server_ip_blocked(*, url: str = "", text: str = "", error: str = "") -> bool:
+    """서버 브라우저가 봇/WAF 차단으로 페이지 자체를 못 연 상황인가."""
+    haystack = f"{url} {text} {error}".lower()
+    return any(marker in haystack for marker in _SERVER_BLOCKED_MARKERS)
 
 
 def smart_browser_recovery(*, url: str = "", text: str = "", error: str = "") -> dict[str, str]:
@@ -51,10 +84,14 @@ def smart_browser_recovery(*, url: str = "", text: str = "", error: str = "") ->
     decision = classify_portal_state(url=url, text=f"{text}\n{error}")
     if decision.state in _NATIVE_AUTH_STATES:
         return {"route": "pc_agent", "reason": decision.reason_code, "resume": "same_work_session"}
+    # 봇/WAF 차단은 권한 문제가 아니다. 사람을 부르기 전에 PC 레인으로 넘긴다.
+    if is_server_ip_blocked(url=url, text=text, error=error):
+        return {"route": "pc_agent", "reason": "server_ip_blocked", "resume": "same_work_session"}
     if decision.state in _HUMAN_GATEWAY_STATES:
         return {"route": "human_gateway", "reason": decision.reason_code, "resume": "same_work_session"}
     lowered = f"{text} {error}".lower()
-    if any(marker in lowered for marker in ("403", "forbidden", "permission denied", "권한", "access denied")):
+    # "access denied" 는 위 봇/WAF 판정이 먼저 가져간다. 여기 남는 것은 앱 권한 거부다.
+    if any(marker in lowered for marker in ("403", "forbidden", "permission denied", "권한")):
         return {"route": "human_gateway", "reason": "permission_insufficient", "resume": "after_access_grant"}
     if any(marker in lowered for marker in ("timeout", "net::err", "network", "dns", "connection refused")):
         return {"route": "browser_agent", "reason": "network_failure", "resume": "retry_same_step"}
@@ -78,6 +115,9 @@ class BrowserRecipeExecutor:
         self.page_texts = list(page_texts or [])
         self._context: Any = None
         self._page: Any = None
+        # 봇/WAF 차단을 만나 PC 레인으로 한 번 넘어가면 같은 recipe 의 남은
+        # 단계도 그 레인에서 이어간다. 레인이 단계마다 흔들리면 로그인 세션이 끊긴다.
+        self._pc_lane_forced = False
         # 서비스 초기화/설정 오류를 첫 단계보다 앞에서 드러낸다.
         self._service = get_browser_bridge_service()
 
@@ -86,6 +126,50 @@ class BrowserRecipeExecutor:
         if action not in ALLOWED_ACTIONS:
             return {"ok": False, "error": f"지원하지 않는 브라우저 action: {action}"}
 
+        result = await self._attempt(action, payload)
+        # 봇 차단은 예외로만 오지 않는다. 쿠팡처럼 "Access Denied" 한 장을
+        # 200 으로 돌려주면 단계는 성공하고 증거만 차단 화면이 된다(2026-09-21 실측).
+        blocked = (result.get("recovery") or {}).get("reason") == "server_ip_blocked" or (
+            bool(result.get("ok")) and self._evidence_shows_block(result)
+        )
+        if not blocked:
+            return result
+        recovery = result.get("recovery") or {}
+        # 서버 IP 가 막힌 것은 사람이 풀어 줄 수 있는 문제가 아니다.
+        # PC 레인이 준비돼 있으면 같은 단계를 그 레인에서 한 번 더 실행한다.
+        resume = "pc_lane_also_failed" if self._pc_lane_forced else "needs_browser_work_key"
+        if not self.browser_work_key or self._pc_lane_forced:
+            if result.get("ok"):
+                result["server_access"] = {"blocked": True, "lane": "browser_agent", "resume": resume}
+            else:
+                result["recovery"] = {**recovery, "reason": "server_ip_blocked", "resume": resume}
+            return result
+        self._pc_lane_forced = True
+        self._context = None
+        self._page = None
+        retried = await self._attempt(action, payload)
+        retried["lane_failover"] = {
+            "from": "browser_agent", "to": "pc_agent", "reason": "server_ip_blocked",
+        }
+        if retried.get("ok") and self._evidence_shows_block(retried):
+            retried["server_access"] = {
+                "blocked": True, "lane": "pc_agent", "resume": "pc_lane_also_failed",
+            }
+        return retried
+
+    @staticmethod
+    def _evidence_shows_block(result: Mapping[str, Any]) -> bool:
+        """증거 화면이 차단 페이지인가. 본문이 길면 차단 문구가 있어도 본문으로 본다."""
+        evidence = result.get("evidence")
+        if not isinstance(evidence, Mapping):
+            return False
+        dom = evidence.get("dom")
+        text = str(dom.get("text") or "") if isinstance(dom, Mapping) else ""
+        if len(text) > _BLOCK_PAGE_TEXT_LIMIT:
+            return False
+        return is_server_ip_blocked(url=str(evidence.get("url") or ""), text=text)
+
+    async def _attempt(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             level = classify_step(payload, domain=self._domain(payload))
             # 승인 집행은 orchestrator의 GuardedRunRecorder가 담당한다. 여기서도
@@ -101,7 +185,7 @@ class BrowserRecipeExecutor:
                 "risk": level.value,
                 "llm_calls": 0,
                 "narration": self._narration(action, payload),
-                "route": smart_browser_route(self._context_payload(payload))["runtime"],
+                "route": self._route(payload)["runtime"],
                 "evidence": evidence,
             }
         except BrowserBridgeError as exc:
@@ -144,10 +228,16 @@ class BrowserRecipeExecutor:
         context = payload.get("context")
         return context if isinstance(context, Mapping) else {}
 
+    def _route(self, payload: Mapping[str, Any]) -> dict[str, str]:
+        """차단으로 PC 레인에 넘어간 뒤에는 남은 단계도 같은 레인에서 이어간다."""
+        if self._pc_lane_forced:
+            return {"runtime": "pc_agent", "reason": "server_ip_blocked"}
+        return smart_browser_route(self._context_payload(payload))
+
     async def _get_page(self, payload: Mapping[str, Any]) -> Any:
         if self._page is not None:
             return self._page
-        route = smart_browser_route(self._context_payload(payload))
+        route = self._route(payload)
         self._context, error = await acquire_browser_context(
             browser_session_id=self.browser_session_id,
             # A work key opens a local PC session.  Do not use it unless the
