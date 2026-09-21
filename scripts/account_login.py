@@ -32,6 +32,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import pty
 import re
@@ -153,6 +154,22 @@ def _credential_ok(plan: dict) -> bool:
     return bool(oauth.get("refreshToken"))
 
 
+def _credential_signature(plan: dict) -> str | None:
+    """Stable internal fingerprint used to prove a re-login replaced credentials."""
+    path = plan["credential"]
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _credential_replaced(sess: dict) -> bool:
+    return (
+        _credential_ok(sess["plan"])
+        and _credential_signature(sess["plan"]) != sess.get("credential_before")
+    )
+
+
 async def _pump(sess: dict) -> None:
     """pty 를 읽어 상태를 갱신하고, 끝나면 파일로 성패를 판정한다."""
     loop = asyncio.get_running_loop()
@@ -177,7 +194,7 @@ async def _pump(sess: dict) -> None:
                 break
             sess["output"] = (sess["output"] + _clean(chunk.decode(errors="replace")))[-_MAX_OUTPUT:]
             _parse(sess)
-            if _credential_ok(sess["plan"]):
+            if _credential_replaced(sess):
                 sess["state"] = "success"
                 sess["message"] = "자격증명이 기록됐다."
                 break
@@ -194,7 +211,7 @@ async def _pump(sess: dict) -> None:
         except OSError:
             pass
         if sess["state"] not in ("success", "expired"):
-            if _credential_ok(sess["plan"]):
+            if _credential_replaced(sess):
                 sess["state"] = "success"
                 sess["message"] = "자격증명이 기록됐다."
             else:
@@ -226,6 +243,7 @@ async def start(target: str) -> dict:
         return public(existing)
 
     plan["home"].mkdir(parents=True, exist_ok=True)
+    credential_before = _credential_signature(plan)
     master, slave = pty.openpty()
     env = dict(os.environ)
     env.update(plan["env"])
@@ -250,6 +268,7 @@ async def start(target: str) -> dict:
         "login_id": login_id, "target": target, "kind": plan["kind"],
         "account": plan["name"], "needs_code": plan["needs_code"],
         "plan": plan, "proc": proc, "master": master,
+        "credential_before": credential_before,
         "output": "", "url": None, "user_code": None,
         "state": "starting", "message": "", "started_at": time.time(),
         "finished_at": None,
@@ -336,9 +355,22 @@ def bindings() -> list[dict]:
                 sub = (data.get("claudeAiOauth") or data).get("subscriptionType")
             except (OSError, ValueError):
                 sub = None
+        # Claude CLI keeps the non-secret account identity in HOME/.claude.json.
+        # A credential file existing is not enough: a wrong browser account can be
+        # logged into the slot, which previously made another account's quota appear
+        # under the configured label.  Expose only identity metadata so the API can
+        # fail closed on a binding mismatch without exposing OAuth tokens.
+        actual_account = None
+        try:
+            profile = json.loads((home / ".claude.json").read_text())
+            oauth_account = profile.get("oauthAccount") or {}
+            actual_account = oauth_account.get("emailAddress") or None
+        except (OSError, ValueError):
+            pass
         out.append({
             "target": f"claude:{num}", "kind": "claude", "account": home.name,
             "bound": ok, "needs_login": not ok, "subscription": sub,
+            "actual_account": actual_account,
         })
 
     for row in out:

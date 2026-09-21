@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -336,6 +337,22 @@ def _account_state(row: Any, binding: dict[str, Any] | None, now: datetime) -> s
     return "ok"
 
 
+_ACCOUNT_EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+
+
+def _binding_account_mismatch(label: str | None, binding: dict[str, Any] | None) -> bool:
+    """Whether a Claude slot is authenticated as a different labelled account.
+
+    Labels are display text, so only an explicit full email is enforced.  Labels such
+    as ``jinah-biseo(244)`` remain valid and do not become false mismatches.
+    """
+    if not binding:
+        return False
+    expected_match = _ACCOUNT_EMAIL_RE.search(str(label or ""))
+    actual = str(binding.get("actual_account") or "").strip().lower()
+    return bool(expected_match and actual and expected_match.group(0).lower() != actual)
+
+
 def _anthropic_slot_map(records: list[dict[str, Any]]) -> dict[str, str]:
     """Build the account-to-slot map from the relay's canonical slot metadata.
 
@@ -430,6 +447,14 @@ async def llm_overview() -> dict[str, Any]:
             slot = slot_of.get(row["key_name"])
             bkey = slot if provider == "anthropic" else row["key_name"]
             binding = bindings.get(bkey) if bindings is not None else None
+            binding_mismatch = provider == "anthropic" and _binding_account_mismatch(
+                row["label"], binding
+            )
+            if binding_mismatch and binding is not None:
+                # Treat a wrong-account credential as unavailable.  Keeping it
+                # "bound" while showing that account's quota under another email is
+                # more dangerous than asking for login again.
+                binding = {**binding, "needs_login": True}
             accounts.append({
                 "key_name": row["key_name"], "provider": provider, "label": row["label"],
                 "priority": row["priority"], "is_active": row["is_active"],
@@ -438,14 +463,22 @@ async def llm_overview() -> dict[str, Any]:
                 "state": _account_state(row, binding, now),
                 "bound": bool(binding and binding.get("bound")),
                 "needs_login": bool(binding and binding.get("needs_login")),
+                "binding_mismatch": binding_mismatch,
+                "actual_account": (binding or {}).get("actual_account"),
                 "login_in_progress": bool(binding and binding.get("login_in_progress")),
                 # 릴레이 규약은 'claude:<슬롯번호>' 와 'codex:<KEY_NAME>' 이다.
                 # provider 이름(anthropic)을 그대로 쓰면 resolve_target 이 거절한다.
                 "login_target": (f"claude:{slot[4:]}" if provider == "anthropic" and slot else None)
                                 or (f"codex:{row['key_name']}" if provider == "codex" else None),
                 "subscription": (binding or {}).get("subscription"),
-                "rate_limited_until": row["rate_limited_until"].isoformat() if row["rate_limited_until"] else None,
-                "windows": _usage_windows(provider, row, slot_usage.get(slot or "")),
+                "rate_limited_until": (
+                    row["rate_limited_until"].isoformat()
+                    if row["rate_limited_until"] and not binding_mismatch else None
+                ),
+                "windows": (
+                    [] if binding_mismatch
+                    else _usage_windows(provider, row, slot_usage.get(slot or ""))
+                ),
                 "used_percent": float(row["used_percent"]) if row["used_percent"] is not None else None,
                 "resets_at": row["resets_at"].isoformat() if row["resets_at"] else None,
                 "snapshot_age_hours": (round((now - row["snapshot_at"]).total_seconds() / 3600, 1)
@@ -614,7 +647,57 @@ async def start_account_login(body: AccountLoginStart) -> dict[str, Any]:
 
 @router.get("/account-login/{login_id}")
 async def get_account_login(login_id: str) -> dict[str, Any]:
-    return await _relay_call("GET", f"/account-login/{login_id}")
+    result = await _relay_call("GET", f"/account-login/{login_id}")
+    if result.get("state") == "success":
+        await _reconcile_successful_account_login(login_id, result)
+    return result
+
+
+async def _reconcile_successful_account_login(
+    login_id: str, result: dict[str, Any]
+) -> None:
+    """Clear quota state that belonged to the credential replaced by re-login."""
+    target = str(result.get("target") or "")
+    kind, _, name = target.partition(":")
+    if kind != "claude" or not name.isdigit():
+        return
+
+    from app.core.auth_provider import get_oauth_key_records_async
+
+    records = await get_oauth_key_records_async(include_rate_limited=True)
+    record = next((row for row in records if str(row.get("slot")) == name), None)
+    if not record or not record.get("key_name"):
+        logger.warning("llm_keys.account_login_reconcile_slot_missing", extra={"slot": name})
+        return
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                UPDATE llm_api_keys
+                SET rate_limited_until = NULL, last_verified_at = NOW(), updated_at = NOW()
+                WHERE key_name = $1 AND provider = 'anthropic'
+                """,
+                record["key_name"],
+            )
+            await conn.execute(
+                """
+                INSERT INTO claude_max_usage_snapshot
+                    (source, account_slot, account_label, plan_type,
+                     five_hour_utilization, five_hour_resets_at,
+                     seven_day_utilization, seven_day_resets_at, raw_data)
+                SELECT 'account_relogin', $1, $2, NULL, NULL, NULL, NULL, NULL,
+                       jsonb_build_object('login_id', $3)
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM claude_max_usage_snapshot
+                    WHERE source = 'account_relogin'
+                      AND account_slot = $1
+                      AND raw_data->>'login_id' = $3
+                )
+                """,
+                name, record.get("label") or "", login_id,
+            )
 
 
 @router.post("/account-login/{login_id}/code")

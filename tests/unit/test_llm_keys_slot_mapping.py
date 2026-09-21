@@ -1,4 +1,4 @@
-from app.api.llm_keys import _anthropic_slot_map
+from app.api.llm_keys import _anthropic_slot_map, _binding_account_mismatch
 
 
 def test_anthropic_slot_map_uses_canonical_slot_not_priority_order():
@@ -34,3 +34,12 @@ def test_anthropic_slot_map_ignores_unaddressable_records():
             {"key_name": "", "slot": "4"},
         ]
     ) == {}
+
+
+def test_binding_account_mismatch_requires_full_label_email():
+    binding = {"actual_account": "moong76@gmail.com"}
+
+    assert _binding_account_mismatch("moongoby@naver.com", binding) is True
+    assert _binding_account_mismatch("moong76@gmail.com", binding) is False
+    assert _binding_account_mismatch("jinah-biseo(244)", binding) is False
+    assert _binding_account_mismatch("moongoby@naver.com", {}) is False
