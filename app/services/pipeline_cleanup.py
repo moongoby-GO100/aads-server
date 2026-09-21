@@ -70,11 +70,31 @@ async def cleanup_stale_jobs() -> dict:
                            to_jsonb(moved) - 'git_diff' - 'logs' - 'result_output'
                    END
             FROM moved
-            ON CONFLICT (job_id) DO NOTHING
+            ON CONFLICT (job_id) DO UPDATE SET
+                project     = EXCLUDED.project,
+                status      = EXCLUDED.status,
+                runner_host = EXCLUDED.runner_host,
+                created_at  = EXCLUDED.created_at,
+                updated_at  = EXCLUDED.updated_at,
+                row_data    = EXCLUDED.row_data,
+                archived_at = NOW()
             """,
             list(_TERMINAL_STATUSES),
         )
 
+    # DO NOTHING 이 아니라 DO UPDATE 다 (2026-09-21 수정).
+    #
+    # DELETE 는 이미 실행된 뒤에 INSERT 만 건너뛰므로, job_id 가 아카이브에 이미
+    # 있으면 그 잡은 큐에서도 아카이브에서도 사라졌다 — 조용한 유실이다.
+    # pipeline_jobs·pipeline_jobs_archive 둘 다 job_id 가 PK(각각
+    # pipeline_jobs_pkey / pipeline_jobs_archive_pkey)라 moved 안에 같은 job_id 가
+    # 두 번 들어올 수 없으므로 DO UPDATE 가 "cannot affect row a second time" 을
+    # 내지 않는다.
+    #
+    # 카운트도 같이 고쳐진다. 이 CTE 의 최상위 문장은 INSERT 이므로 명령 태그가
+    # 'INSERT 0 N' 이고 N 은 '삽입된 행 수'다. DO NOTHING 이던 때는 충돌한 만큼
+    # N 이 줄어 실제로 큐에서 빠진 수보다 적게 보고됐다 — 유실이 나도 로그는
+    # 정상으로 보였다. DO UPDATE 는 갱신된 행도 세므로 N == 큐에서 빠진 수가 된다.
     archived = int(result.split()[-1]) if result else 0
     if archived > 0:
         logger.info("pipeline_cleanup.stale_archived", count=archived)
