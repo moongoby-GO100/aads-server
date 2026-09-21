@@ -494,7 +494,18 @@ async def _api_token_inject(page: Any, credential: dict[str, Any], step: dict[st
         current_origin = urlparse(str(getattr(page, "url", "") or ""))
         login_origin = urlparse(login_url)
         if login_origin.netloc and current_origin.netloc != login_origin.netloc:
-            await page.goto(login_url, wait_until="domcontentloaded", timeout=15000)
+            if callable(getattr(page, "_run_browser_command", None)):
+                # The PC-Agent facade's goto() also performs a second href
+                # probe.  Login only needs the destination origin here, so one
+                # direct navigation avoids an unnecessary remote round-trip.
+                await page._run_browser_command(
+                    "browser_navigate",
+                    {"url": login_url},
+                    command_timeout_seconds=15.0,
+                )
+                page.url = login_url
+            else:
+                await page.goto(login_url, wait_until="domcontentloaded", timeout=15000)
 
         async with aiohttp.ClientSession() as session, session.post(
             api_url,
@@ -512,17 +523,35 @@ async def _api_token_inject(page: Any, credential: dict[str, Any], step: dict[st
         for key in token_path.split("."):
             token = token[key]
 
+        if not redirect_url and login_url:
+            redirect_url = login_url.replace("/login", "/chat").replace("/signin", "/")
+
+        token_json = json.dumps(str(token))
+        storage_key_json = json.dumps(str(storage_key))
+        cookie_json = json.dumps(
+            f"{cookie_name}={token}; path=/; max-age={cookie_max_age}; SameSite=Lax"
+        )
+        redirect_json = json.dumps(str(redirect_url or ""))
         js_code = f"""() => {{
-            localStorage.setItem('{storage_key}', '{token}');
-            document.cookie = '{cookie_name}={token}; path=/; max-age={cookie_max_age}; SameSite=Lax';
+            localStorage.setItem({storage_key_json}, {token_json});
+            document.cookie = {cookie_json};
+            const redirectUrl = {redirect_json};
+            if (redirectUrl) {{
+                setTimeout(() => window.location.assign(redirectUrl), 0);
+            }}
+            return true;
         }}"""
         await page.evaluate(js_code)
         logger.info("api_token_inject: token injected storage_key=%s", storage_key)
 
-        if not redirect_url and login_url:
-            redirect_url = login_url.replace("/login", "/chat").replace("/signin", "/")
         if redirect_url:
-            await page.goto(redirect_url, wait_until="domcontentloaded", timeout=15000)
+            if callable(getattr(page, "_run_browser_command", None)):
+                # The same browser_eval already scheduled the redirect. Keep
+                # the facade metadata aligned; login_session_completed() will
+                # confirm the real href and DOM in one remote evaluation.
+                page.url = redirect_url
+            else:
+                await page.goto(redirect_url, wait_until="domcontentloaded", timeout=15000)
 
         return True
     except Exception as e:
@@ -611,6 +640,51 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
 
 async def login_session_completed(page: Any, login_url: str = "") -> bool:
     """Return True only when the browser no longer appears to be on a login form."""
+
+    if callable(getattr(page, "_run_browser_command", None)):
+        # A PC-Agent page makes each locator check a separate network command.
+        # Poll href and all login controls inside one browser_eval so the
+        # credential test remains below the outer tool timeout while still
+        # verifying the post-login page rather than trusting token injection.
+        login_paths = {"/login", "/auth/login", "/signin"}
+        if login_url:
+            target_path = (urlparse(login_url).path or "/").rstrip("/") or "/"
+            login_paths.add(target_path)
+        state_script = f"""async () => {{
+            const loginPaths = new Set({json.dumps(sorted(login_paths))});
+            const readState = () => {{
+                const rawPath = window.location.pathname || '/';
+                const path = (rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath) || '/';
+                const visible = (el) => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+                const passwordVisible = visible(document.querySelector("input[type='password']"));
+                const identityVisible = visible(document.querySelector("input[type='email'], input[name='email'], input[name='username'], input#email, input#username"));
+                const submitVisible = visible(document.querySelector("button[type='submit']"));
+                return {{
+                    href: window.location.href,
+                    complete: !loginPaths.has(path) && !(passwordVisible || (identityVisible && submitVisible)),
+                }};
+            }};
+            const deadline = Date.now() + 5000;
+            let state = readState();
+            while (!state.complete && Date.now() < deadline) {{
+                await new Promise((resolve) => setTimeout(resolve, 250));
+                state = readState();
+            }}
+            return state;
+        }}"""
+        try:
+            state = await page.evaluate(
+                state_script,
+                timeout=8000,
+                await_promise=True,
+            )
+            if isinstance(state, dict):
+                actual_url = str(state.get("href") or "")
+                if actual_url:
+                    page.url = actual_url
+                return bool(state.get("complete"))
+        except Exception as exc:
+            logger.warning("remote login completion probe failed: %s", exc)
 
     if login_url:
         current = urlparse(getattr(page, "url", "") or "")

@@ -139,6 +139,33 @@ class _FakePage:
         return _FakeLocator(visible)
 
 
+class _TokenResponse:
+    status = 200
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def json(self):
+        return {"token": "test-token"}
+
+
+class _TokenSession:
+    def __init__(self, *_args, **_kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    def post(self, *_args, **_kwargs):
+        return _TokenResponse()
+
+
 @pytest.mark.asyncio
 async def test_login_session_completed_rejects_login_url_even_without_visible_form():
     page = _FakePage("https://v2.newtalk.kr/login")
@@ -165,31 +192,6 @@ async def test_login_session_completed_accepts_non_login_page_without_form():
 
 @pytest.mark.asyncio
 async def test_api_token_inject_establishes_origin_and_redirects_from_blank_page(monkeypatch):
-    class _Response:
-        status = 200
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return None
-
-        async def json(self):
-            return {"token": "test-token"}
-
-    class _Session:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return None
-
-        def post(self, *_args, **_kwargs):
-            return _Response()
-
     class _Page:
         def __init__(self):
             self.url = "about:blank"
@@ -202,7 +204,7 @@ async def test_api_token_inject_establishes_origin_and_redirects_from_blank_page
         async def evaluate(self, script):
             self.events.append(("evaluate", script))
 
-    monkeypatch.setattr("aiohttp.ClientSession", _Session)
+    monkeypatch.setattr("aiohttp.ClientSession", _TokenSession)
     page = _Page()
 
     result = await _api_token_inject(
@@ -223,4 +225,76 @@ async def test_api_token_inject_establishes_origin_and_redirects_from_blank_page
     assert result is True
     assert page.events[0][0:2] == ("goto", "https://aads.newtalk.kr/login")
     assert page.events[-1][0:2] == ("goto", "https://aads.newtalk.kr/chat")
+    assert page.url == "https://aads.newtalk.kr/chat"
+
+
+@pytest.mark.asyncio
+async def test_api_token_inject_remote_page_redirects_in_same_evaluation(monkeypatch):
+    class _RemotePage:
+        def __init__(self):
+            self.url = "about:blank"
+            self.events = []
+
+        async def _run_browser_command(self, command, params, **kwargs):
+            self.events.append((command, params, kwargs))
+            return {}
+
+        async def evaluate(self, script, **kwargs):
+            self.events.append(("evaluate", script, kwargs))
+            return True
+
+        async def goto(self, *_args, **_kwargs):
+            raise AssertionError("remote login must avoid multi-command goto")
+
+    monkeypatch.setattr("aiohttp.ClientSession", _TokenSession)
+    page = _RemotePage()
+
+    result = await _api_token_inject(
+        page,
+        {
+            "login_url": "https://aads.newtalk.kr/login",
+            "username": "e2e@example.test",
+            "password": "secret",
+        },
+        {
+            "api_url": "https://aads.newtalk.kr/api/v1/auth/login",
+            "token_path": "token",
+            "storage_key": "aads_token",
+            "cookie_name": "aads_token",
+        },
+    )
+
+    assert result is True
+    assert page.events[0][0:2] == (
+        "browser_navigate",
+        {"url": "https://aads.newtalk.kr/login"},
+    )
+    assert page.events[1][0] == "evaluate"
+    assert "window.location.assign" in page.events[1][1]
+    assert page.url == "https://aads.newtalk.kr/chat"
+
+
+@pytest.mark.asyncio
+async def test_login_session_completed_remote_page_uses_single_dom_probe():
+    class _RemotePage:
+        def __init__(self):
+            self.url = "https://aads.newtalk.kr/login"
+            self.evaluate_calls = 0
+
+        async def _run_browser_command(self, *_args, **_kwargs):
+            return {}
+
+        async def evaluate(self, script, **kwargs):
+            self.evaluate_calls += 1
+            assert "const deadline = Date.now() + 5000" in script
+            assert kwargs == {"timeout": 8000, "await_promise": True}
+            return {"href": "https://aads.newtalk.kr/chat", "complete": True}
+
+        def locator(self, _selector):
+            raise AssertionError("remote completion must not issue locator commands")
+
+    page = _RemotePage()
+
+    assert await login_session_completed(page, "https://aads.newtalk.kr/login") is True
+    assert page.evaluate_calls == 1
     assert page.url == "https://aads.newtalk.kr/chat"
