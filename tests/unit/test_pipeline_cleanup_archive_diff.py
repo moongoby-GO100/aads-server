@@ -45,3 +45,23 @@ def test_delete_returning_insert_stays_single_statement():
     assert "DELETE FROM pipeline_jobs" in src
     assert "RETURNING *" in src
     assert "INSERT INTO pipeline_jobs_archive" in src
+
+
+def test_conflict_must_not_be_do_nothing():
+    """ON CONFLICT DO NOTHING 으로 되돌아가면 조용한 유실이 되살아난다.
+
+    DELETE 는 이미 실행된 뒤 INSERT 만 건너뛰므로, job_id 가 아카이브에 이미
+    있으면 그 잡은 큐에서도 아카이브에서도 사라진다. 2026-09-21 수정.
+    """
+    src = _archive_sql()
+    # 주석에는 'DO NOTHING' 이 설명으로 남아 있으므로 ON CONFLICT 절만 본다.
+    assert "ON CONFLICT (job_id) DO NOTHING" not in src
+    assert "ON CONFLICT (job_id) DO UPDATE SET" in src
+
+
+def test_conflict_update_refreshes_payload_and_archive_time():
+    """충돌 시 옛 행을 남기지 말고 최신 잡 내용으로 덮어써야 한다."""
+    src = _archive_sql()
+    assert "EXCLUDED.row_data" in src
+    assert "EXCLUDED.status" in src
+    assert "archived_at = NOW()" in src
