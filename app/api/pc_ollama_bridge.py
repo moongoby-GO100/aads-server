@@ -44,6 +44,12 @@ _MODEL_MAP = {
     "qwen2.5vl:3b": "qwen2.5vl:3b",
     "pc-qwen2.5vl-7b": "qwen2.5vl:7b",
     "qwen2.5vl:7b": "qwen2.5vl:7b",
+    # 2026-09-21 CEO PC 에 실제로 설치된 유일한 모델(`ollama list` 실측).
+    # IQ2_XS 는 27B 를 9.4GB 로 욱여넣은 2비트급 압축이다. 문장 이해·분류·구조
+    # 판단은 쓸 만하지만 숫자·고유명사·긴 논리 사슬에서 미끄러진다. 금액·수량
+    # 계산이나 최종 판정에 쓰지 마라 — 분류·요약·2차 판독 용도다.
+    "pc-qwen38-27b": "hf.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF:IQ2_XS",
+    "hf.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF:IQ2_XS": "hf.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF:IQ2_XS",
 }
 
 
@@ -136,6 +142,17 @@ async def _run_pc_ollama_chat(payload: dict[str, Any]) -> dict[str, Any]:
 
     data = (result.get("result") or {}).get("result") or {}
     raw = data.get("raw") if isinstance(data.get("raw"), dict) else {}
+
+    # 2026-09-21: Ollama 가 생성을 취소하면 HTTP 200 에 `done:false` 로 끝나고
+    # eval_count 등 metrics 가 통째로 빠진다(서버 로그 `srv stop: cancel task`).
+    # 이걸 성공으로 넘기면 잘린 답이 완성된 답으로 둔갑한다 — 실제로 그렇게
+    # 오판했다(고친 커밋 8597f615). 취소는 실패로 올려 폴백 체인으로 넘긴다.
+    if "done" in raw and not raw.get("done"):
+        raise HTTPException(
+            status_code=503,
+            detail=f"PC Ollama generation cancelled (done=false, model={ollama_model})",
+        )
+
     return {
         "display_model": display_model,
         "ollama_model": ollama_model,
