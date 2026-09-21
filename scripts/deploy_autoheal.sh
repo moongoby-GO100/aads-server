@@ -28,6 +28,7 @@ AUTOHEAL_STATE_DIR="${AADS_DEPLOY_AUTOHEAL_STATE_DIR:-/tmp/aads-deploy-autoheal}
 AUTOHEAL_MAX_ATTEMPTS="${AADS_DEPLOY_AUTOHEAL_MAX_ATTEMPTS:-1}"
 AUTOHEAL_COOLDOWN_SEC="${AADS_DEPLOY_AUTOHEAL_COOLDOWN_SEC:-180}"
 AUTOHEAL_BUILDER_PRUNE_UNTIL="${AADS_DEPLOY_AUTOHEAL_BUILDER_PRUNE_UNTIL:-48h}"
+AUTOHEAL_BUILDER_PRUNE_TIGHT="${AADS_DEPLOY_AUTOHEAL_BUILDER_PRUNE_TIGHT:-6h}"
 AUTOHEAL_LAST_REMEDIATION="none"
 DEPLOY_LAST_FAIL_STATUS="${DEPLOY_LAST_FAIL_STATUS:-}"
 DEPLOY_LAST_FAIL_ERROR="${DEPLOY_LAST_FAIL_ERROR:-}"
@@ -223,13 +224,32 @@ remediate_deploy_failure() {
             if [[ "$AADS_DEPLOY_AUTOHEAL_DRYRUN" == "1" ]]; then
                 autoheal_log "DRYRUN: docker prune 생략"
             else
+                autoheal_log "디스크 회수 1단계: release image + dangling image + build cache(until=${AUTOHEAL_BUILDER_PRUNE_UNTIL})"
                 prune_old_release_images || true
                 docker image prune -f >/dev/null 2>&1 || true
                 docker builder prune -f --filter "until=${AUTOHEAL_BUILDER_PRUNE_UNTIL}" >/dev/null 2>&1 || true
+
+                # 2026-09-21 #4993/#4994 실측: 1단계 회수량이 363MB 뿐이라 878MB 부족을
+                # 메우지 못하고 두 배포가 연속 차단됐다. 빌드 캐시 23.71GB 중 56건
+                # 가운데 55건이 active 로 잡혀 until=48h 필터에 전부 걸러졌기 때문이다.
+                # 필터를 좁혀 한 번 더 훑는다.
+                if ! require_build_disk_free >/dev/null 2>&1; then
+                    autoheal_log "디스크 회수 2단계: build cache(until=${AUTOHEAL_BUILDER_PRUNE_TIGHT})"
+                    docker builder prune -f --filter "until=${AUTOHEAL_BUILDER_PRUNE_TIGHT}" >/dev/null 2>&1 || true
+                fi
+
+                # 3단계는 빌드 캐시를 전량 버린다. 다음 빌드가 캐시 없이 도는 비용을
+                # 치르지만 배포가 막히는 것보다 낫다. 이미지·컨테이너·볼륨은 건드리지
+                # 않으므로 실행 중 서비스에는 영향이 없다.
+                if [[ "${AADS_DEPLOY_AUTOHEAL_DISK_HARD_PRUNE:-1}" == "1" ]] \
+                   && ! require_build_disk_free >/dev/null 2>&1; then
+                    autoheal_log "디스크 회수 3단계: build cache 전량(-a) — 다음 빌드는 캐시 없이 돈다"
+                    docker builder prune -af >/dev/null 2>&1 || true
+                fi
             fi
             AUTOHEAL_LAST_REMEDIATION="disk_reclaim"
             if [[ "$AADS_DEPLOY_AUTOHEAL_DRYRUN" != "1" ]] && ! autoheal_wait_disk_recovery; then
-                autoheal_log "❌ 회수 후에도 빌드 디스크 임계 미달 — 자동 재개를 중단한다"
+                autoheal_log "❌ 3단계 회수 후에도 빌드 디스크 임계 미달 — 자동 재개를 중단한다"
                 return 1
             fi
             autoheal_log "✅ 빌드 디스크 임계 복귀"
