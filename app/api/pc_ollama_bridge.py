@@ -53,6 +53,56 @@ _MODEL_MAP = {
 }
 
 
+_PEER_HOP_KEY = "_pc_ollama_peer_hop"
+_PEER_BASE_URLS = ("http://aads-server:8080", "http://aads-server-green:8080")
+
+
+async def _forward_to_peer(payload: dict[str, Any], detail: str) -> dict[str, Any] | None:
+    """PC Agent WebSocket 이 붙어 있는 반대편 슬롯으로 한 번만 넘긴다.
+
+    PC Agent 연결은 `pc_agent_manager` 의 **프로세스 내** 레지스트리라, blue/green
+    중 소켓을 쥔 쪽만 실행할 수 있다. 활성 슬롯이 바뀌어도 소켓은 옛 컨테이너에
+    남아 있어서, LiteLLM 이 어느 쪽을 잡느냐에 따라 503 'no online PC agent' 가
+    절반씩 났다(2026-09-21 실측: 200/503/200). 한 홉만 넘겨 그 틈을 없앤다.
+
+    자기 자신에게도 한 번 갈 수 있지만 `_PEER_HOP_KEY` 때문에 되돌아오지 않는다.
+    """
+    if payload.get(_PEER_HOP_KEY):
+        return None
+    if "no online PC agent" not in str(detail):
+        return None
+
+    import httpx
+
+    forwarded = {key: value for key, value in payload.items() if key != "stream"}
+    forwarded[_PEER_HOP_KEY] = True
+    token = _bridge_token()
+    for base in _PEER_BASE_URLS:
+        try:
+            async with httpx.AsyncClient(timeout=310.0) as client:
+                response = await client.post(
+                    f"{base}/pc-ollama/v1/chat/completions",
+                    json=forwarded,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            if response.status_code != 200:
+                continue
+            body = response.json()
+            choices = body.get("choices") or []
+            message = (choices[0].get("message") if choices else {}) or {}
+            usage = body.get("usage") or {}
+            return {
+                "display_model": body.get("model") or payload.get("model"),
+                "ollama_model": _MODEL_MAP.get(str(payload.get("model") or ""), ""),
+                "content": str(message.get("content") or ""),
+                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                "completion_tokens": int(usage.get("completion_tokens") or 0),
+            }
+        except Exception:  # 반대편도 죽어 있으면 원래 503 을 그대로 올린다
+            continue
+    return None
+
+
 def _bridge_token() -> str:
     return os.getenv("PC_OLLAMA_BRIDGE_API_KEY") or os.getenv("LITELLM_MASTER_KEY") or ""
 
@@ -138,6 +188,9 @@ async def _run_pc_ollama_chat(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if result.get("status") != "success":
         detail = result.get("message") or result.get("detail") or result.get("error_code") or "PC Ollama route failed"
+        peer = await _forward_to_peer(payload, detail)
+        if peer is not None:
+            return peer
         raise HTTPException(status_code=503, detail=detail)
 
     data = (result.get("result") or {}).get("result") or {}

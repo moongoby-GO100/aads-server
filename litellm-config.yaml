@@ -419,6 +419,16 @@ model_list:
     api_base: http://aads-server:8080/pc-ollama/v1
     api_key: os.environ/LITELLM_MASTER_KEY
     timeout: 300
+# 같은 model_name 두 번째 배포 — blue/green 어느 쪽이 활성이든 닿게 한다.
+# PC Agent WebSocket 은 활성 슬롯 컨테이너 하나에만 붙는다. 한 쪽만 적어 두면
+# 슬롯이 바뀐 순간 503 'no online PC agent' 가 난다(2026-09-21 실측).
+# router_settings.num_retries=3 이 실패한 배포를 다른 배포로 재시도한다.
+- model_name: pc-qwen38-27b
+  litellm_params:
+    model: openai/pc-qwen38-27b
+    api_base: http://aads-server-green:8080/pc-ollama/v1
+    api_key: os.environ/LITELLM_MASTER_KEY
+    timeout: 300
 router_settings:
   enable_pre_call_checks: false
   num_retries: 3
