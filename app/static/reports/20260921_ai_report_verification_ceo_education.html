@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 보고 검증법 — 대표님이 속지 않는 법 · 2026-09-21</title>
+<style>
+:root{
+  --ink:#16191d; --ink2:#454c55; --ink3:#6b7480;
+  --line:#e2e6ea; --bg:#ffffff; --bg2:#f6f8fa; --bg3:#eef2f6;
+  --good:#1a7f45; --goodbg:#e7f5ec;
+  --bad:#b3261e; --badbg:#fdecea;
+  --warn:#8a5a00; --warnbg:#fff4e0;
+  --acc:#1b5fbe; --accbg:#e8f0fc;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg2);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  line-height:1.72;font-size:15.5px;-webkit-text-size-adjust:100%}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px 90px}
+header{background:linear-gradient(135deg,#3a1220,#7a2338);color:#fff;padding:44px 20px 38px;margin-bottom:26px}
+header .inner{max-width:1080px;margin:0 auto}
+header h1{margin:0 0 10px;font-size:29px;letter-spacing:-.5px;line-height:1.35}
+header p{margin:0;color:#f0c9d3;font-size:14.5px}
+.badges{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
+.badge{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);
+  border-radius:999px;padding:4px 12px;font-size:12.5px;color:#fbeaef}
+section{background:var(--bg);border:1px solid var(--line);border-radius:12px;
+  padding:26px 28px;margin-bottom:22px}
+h2{font-size:21px;margin:0 0 6px;letter-spacing:-.3px;padding-bottom:12px;border-bottom:2px solid var(--bg3)}
+h2 .n{color:var(--acc);font-weight:700;margin-right:8px}
+h3{font-size:17px;margin:26px 0 8px;color:var(--ink)}
+h4{font-size:15px;margin:18px 0 6px;color:var(--ink2)}
+p{margin:10px 0}
+ul,ol{margin:10px 0;padding-left:22px}
+li{margin:5px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.2px}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:var(--bg3);font-weight:600}
+tr:nth-child(even) td{background:#fbfcfd}
+code{background:var(--bg3);padding:1.5px 6px;border-radius:5px;font-size:13.2px;
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+pre{background:#131820;color:#e6edf3;padding:16px 18px;border-radius:9px;overflow-x:auto;
+  font-size:13.2px;line-height:1.6;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+pre code{background:none;color:inherit;padding:0}
+.box{border-radius:9px;padding:14px 16px;margin:14px 0;border-left:4px solid}
+.good{background:var(--goodbg);border-color:var(--good)}
+.bad{background:var(--badbg);border-color:var(--bad)}
+.warn{background:var(--warnbg);border-color:var(--warn)}
+.acc{background:var(--accbg);border-color:var(--acc)}
+.box b{display:block;margin-bottom:4px}
+.toc{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin-bottom:22px}
+.toc ol{columns:2;column-gap:34px;margin:8px 0 0}
+.toc a{color:var(--acc);text-decoration:none}
+.toc a:hover{text-decoration:underline}
+.kpi{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}
+.kpi div{flex:1 1 150px;background:var(--bg3);border-radius:9px;padding:13px 15px}
+.kpi .v{font-size:21px;font-weight:700;color:var(--acc);display:block;line-height:1.3}
+.kpi .l{font-size:12.5px;color:var(--ink3)}
+.q{background:#fff;border:2px solid var(--acc);border-radius:10px;padding:16px 18px;margin:14px 0}
+.q .qq{font-size:17px;font-weight:700;color:var(--acc);margin-bottom:6px}
+.src{color:var(--ink3);font-size:12.5px}
+.card{border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0;background:#fcfdfe}
+.card .t{font-weight:700;margin-bottom:8px;font-size:15.5px}
+footer{color:var(--ink3);font-size:13px;text-align:center;padding:26px 0}
+@media(max-width:760px){.toc ol{columns:1}header h1{font-size:23px}}
+</style>
+</head>
+<body>
+<header><div class="inner">
+<h1>AI 보고 검증법<br>— 대표님이 속지 않는 법</h1>
+<p>2026-09-21 · 오비스(OBYS) CEO 교육자료 · 오늘 하루 실제로 난 사고 7건만 재료로 썼습니다</p>
+<div class="badges">
+  <span class="badge">실제 사고 7건 해부</span>
+  <span class="badge">검증 3질문</span>
+  <span class="badge">한 장 체크리스트</span>
+  <span class="badge">8개 장</span>
+</div>
+</div></header>
+
+<div class="wrap">
+
+<div class="box bad" style="margin-top:0">
+<b>이 자료를 만든 이유</b>
+오늘 하루 동안 <b>AI가 확신에 차서 틀린 일이 7번</b> 있었습니다. 그중 <b>5번은 제가 낸 것</b>입니다.
+대표님이 세 번 되물으신 덕분에 그중 하나는 실제 시스템 결함으로 드러났습니다.
+<b>되묻는 것이 통제 수단입니다.</b> 이 자료는 무엇을 되물어야 하는지에 대한 것입니다.
+</div>
+
+<div class="toc">
+<b>목차</b>
+<ol>
+<li><a href="#c1">AI가 틀리는 4가지 방식</a></li>
+<li><a href="#c2">검증 3질문 — 외우실 것</a></li>
+<li><a href="#c3">사례 해부 ① 확신에 찬 오답</a></li>
+<li><a href="#c4">사례 해부 ② 정답 없이 채점</a></li>
+<li><a href="#c5">사례 해부 ③ 실패를 성공으로 표시</a></li>
+<li><a href="#c6">"완료했습니다"를 믿는 기준</a></li>
+<li><a href="#c7">되돌릴 수 없는 작업의 규칙</a></li>
+<li><a href="#c8">한 장 체크리스트</a></li>
+</ol>
+</div>
+
+<section id="c1">
+<h2><span class="n">01</span>AI가 틀리는 4가지 방식</h2>
+
+<p>"AI가 틀린다"는 말은 너무 뭉뚱그려져 쓸모가 없습니다. <b>틀리는 방식이 네 가지</b>이고, 각각 잡는 법이 다릅니다.</p>
+
+<table>
+<tr><th>#</th><th>유형</th><th>겉보기</th><th>잡는 법</th></tr>
+<tr><td>1</td><td><b>없는 사실을 지어냄</b></td><td>전문적이고 단호함</td><td>"어디서 조회했나" — 출처 요구</td></tr>
+<tr><td>2</td><td><b>검증 안 한 추측을 확정처럼</b></td><td>"원인은 ~입니다"</td><td>"확인한 건가, 추정인가" — 구분 요구</td></tr>
+<tr><td>3</td><td><b>신호 하나로 단정</b></td><td>근거는 있으나 빈약</td><td>"다른 근거는?" — 교차 확인 요구</td></tr>
+<tr><td>4</td><td><b>실패를 성공으로 표시</b></td><td>"완료했습니다"</td><td>"무엇으로 확인했나" — 검증 명령 요구</td></tr>
+</table>
+
+<div class="box warn">
+<b>가장 위험한 것은 1번이 아니라 4번입니다</b>
+없는 사실은 대개 티가 납니다. 그런데 <b>실패를 성공으로 표시</b>하면 아무도 모른 채 지나갑니다.
+오늘 실제로 그런 코드가 운영 중이었습니다 — 데이터가 유실돼도 <b>로그에는 정상으로 찍히는</b> 구조였습니다(7장).
+</div>
+</section>
+
+<section id="c2">
+<h2><span class="n">02</span>검증 3질문 — 외우실 것</h2>
+
+<p>보고를 받으시면 이 셋 중 하나만 던지셔도 대부분 걸러집니다.</p>
+
+<div class="q"><div class="qq">① "그 숫자, 어디서 조회한 건가?"</div>
+도구로 확인한 값과 기억에서 꺼낸 값을 가르는 <b>유일한</b> 질문입니다.
+제대로 된 답은 <code>psql 조회</code>, <code>curl 응답</code>, <code>로그 몇 번째 줄</code>처럼 <b>재현 가능한 출처</b>가 나옵니다.
+"확인했습니다"만 오면 확인 안 한 것입니다.</div>
+
+<div class="q"><div class="qq">② "정답을 아는 상태에서 채점했나?"</div>
+AI 성능 보고에 던지실 질문입니다. <b>정답이 없으면 맞았는지 알 수 없습니다.</b>
+오늘 차트 판독 테스트를 새로 만든 이유가 이것입니다(4장).</div>
+
+<div class="q"><div class="qq">③ "실패하면 어떻게 되나?"</div>
+설계를 묻는 질문입니다. <b>조용히 실패하는 구조</b>가 가장 비쌉니다.
+좋은 답은 "실패하면 멈추고 알립니다"이고, 나쁜 답은 "실패해도 다음 단계가 진행됩니다"입니다.</div>
+
+<h3>보너스 — 말투로 알아채는 법</h3>
+<table>
+<tr><th>이런 표현이 나오면</th><th>속뜻</th></tr>
+<tr><td>"~로 보입니다", "~인 것 같습니다"</td><td>추정입니다. 근거를 물으십시오</td></tr>
+<tr><td>"정상적으로 처리되었습니다"</td><td>무엇으로 확인했는지 없으면 <b>미검증</b>입니다</td></tr>
+<tr><td>"일반적으로는 ~합니다"</td><td>우리 시스템을 안 본 것입니다</td></tr>
+<tr><td>"확인하겠습니다"로 끝남</td><td>아직 아무것도 안 한 것입니다</td></tr>
+</table>
+</section>
+
+<section id="c3">
+<h2><span class="n">03</span>사례 해부 ① 확신에 찬 오답</h2>
+
+<div class="card">
+<div class="t">상황</div>
+로컬 AI 모델에게 실제 운영 코드를 리뷰시켰습니다. 심어둔 결함 4개를 <b>전부 찾아냈고</b>, 제가 못 본 진짜 결함까지 2건 발견했습니다. 성능이 좋았습니다.
+</div>
+
+<div class="box bad">
+<b>그런데 같은 리뷰에서 이런 지적도 나왔습니다</b>
+"asyncpg는 자동 커밋이 꺼진 게 기본이라 <code>commit</code> 없이는 롤백된다 — 정리 작업이 반영되지 않는 <b>심각한 버그</b>"
+<br><br>
+<b>사실이 아닙니다.</b> 해당 라이브러리는 명시적 트랜잭션 밖에서 자동 커밋으로 동작합니다.
+</div>
+
+<h3>왜 위험했나</h3>
+<p>문장이 <b>전문적이고 단호</b>했습니다. "심각한 버그"라는 표현까지 붙었습니다. 그대로 믿었다면 <b>멀쩡한 코드에 불필요한 트랜잭션을 덧씌웠을</b> 것입니다. 고치지 않아도 될 것을 고치는 일은 새 버그를 만듭니다.</p>
+
+<div class="box acc">
+<b>배우실 점</b>
+<b>정답률이 높다는 것과 개별 답을 믿어도 된다는 것은 다릅니다.</b>
+6개 중 5개가 맞아도, 틀린 1개를 그대로 실행하면 손해입니다.
+AI 리뷰는 <b>"살펴볼 곳 목록"</b>이지 <b>"고칠 목록"</b>이 아닙니다.
+</div>
+</section>
+
+<section id="c4">
+<h2><span class="n">04</span>사례 해부 ② 정답 없이 채점</h2>
+
+<div class="card">
+<div class="t">상황</div>
+"AI가 차트 이미지를 읽을 수 있나"를 확인하려 했습니다. 이전에 두 번 테스트한 기록이 남아 있었고, 결과 파일도 있었습니다.
+</div>
+
+<p>그런데 <b>원본 차트의 정답이 기록돼 있지 않았습니다.</b> 모델이 "276,175 / 271,108 / …"이라고 답했는데, <b>그게 맞는지 확인할 방법이 없었습니다.</b></p>
+
+<div class="box warn">
+<b>"테스트했다"와 "채점했다"는 다릅니다</b>
+실행 기록이 있다고 검증된 것이 아닙니다. <b>정답과 대조하지 않으면 그냥 실행한 것</b>입니다.
+</div>
+
+<h3>그래서 다시 만들었습니다</h3>
+<p>제가 값을 정해서 막대그래프를 그리고, <b>막대 위에 숫자를 쓰지 않았습니다.</b> 눈금과 높이만 보고 맞혀야 합니다.</p>
+<table>
+<tr><th>막대</th><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th></tr>
+<tr><td><b>내가 그린 정답</b></td><td>120</td><td>340</td><td>210</td><td>480</td><td>90</td></tr>
+<tr><td><b>모델 답</b></td><td>120 ✅</td><td>340 ✅</td><td>210 ✅</td><td>480 ✅</td><td>90 ✅</td></tr>
+</table>
+<p>이제야 <b>"5/5 정답"</b>이라고 보고할 수 있습니다.</p>
+<p class="src">[대표님 PC 실측, 2026-09-21 16:15 KST]</p>
+
+<div class="box acc">
+<b>대표님이 쓰실 질문</b>
+성능 보고를 받으시면 — <b>"정답은 누가 정했나?"</b>
+"모델이 그렇게 답했습니다"는 채점이 아닙니다.
+</div>
+</section>
+
+<section id="c5">
+<h2><span class="n">05</span>사례 해부 ③ 실패를 성공으로 표시</h2>
+
+<div class="card">
+<div class="t">상황</div>
+로컬 모델에 코드리뷰를 시켰더니 <b>답이 왔습니다.</b> 통신도 정상(HTTP 200), 내용도 그럴듯했습니다. 그런데 문장이 중간에 끊겨 있었습니다.
+</div>
+
+<pre><code>{"response":"...1. 트랜잭션 커", "done":false}
+                                    ^^^^^^^^^^^
+                    done:false = 완료가 아니라 "취소됨"</code></pre>
+
+<p>서버 로그를 열어 보니 <code>srv stop: cancel task</code> — <b>생성이 취소</b>된 것이었습니다. 제 스크립트는 <code>done</code> 값을 검사하지 않아 <b>잘린 사고 과정을 "답변"으로</b> 받고 있었습니다.</p>
+
+<div class="kpi">
+<div><span class="v">200</span><span class="l">HTTP 상태(정상처럼 보임)</span></div>
+<div><span class="v">false</span><span class="l">실제 done 값</span></div>
+<div><span class="v">0개</span><span class="l">처리시간·토큰수 정보</span></div>
+</div>
+
+<h3>이 유형이 왜 제일 무서운가</h3>
+<p>1·2번 유형(지어냄·추측)은 읽으면 이상합니다. 그런데 <b>이건 아무도 안 봅니다.</b> 통신은 성공이고 결과도 왔으니까요. <b>검사하는 코드를 넣지 않으면 영원히 모릅니다.</b></p>
+<p>현재는 <code>done:false</code>를 실패로 판정하도록 고쳐 배포했습니다. 오류사전에도 등록했습니다.</p>
+
+<h3>같은 유형이 운영 코드에도 있었습니다</h3>
+<div class="box bad">
+<b>작업 기록 보관 코드의 조용한 유실</b>
+기록을 보관함으로 옮기는 코드가 <b>삭제는 실행하고 저장만 건너뛸 수 있는</b> 구조였습니다.
+게다가 건수를 세는 방식 때문에 <b>유실이 나도 로그에는 정상으로 찍혔습니다.</b>
+→ 당일 수정·배포, 재발 방지 테스트 2건 추가.
+</div>
+</section>
+
+<section id="c6">
+<h2><span class="n">06</span>"완료했습니다"를 믿는 기준</h2>
+
+<p>가장 자주 쓰이고 가장 자주 부정확한 말입니다. <b>네 가지가 다릅니다.</b></p>
+
+<table>
+<tr><th>단계</th><th>뜻</th><th>확인 방법</th><th>여기까지면?</th></tr>
+<tr><td>① 파일 수정</td><td>내 컴퓨터에만 바뀜</td><td>파일 내용 확인</td><td>❌ 아무 데도 반영 안 됨</td></tr>
+<tr><td>② 커밋</td><td>기록으로 남김</td><td><code>git log -1</code></td><td>❌ 아직 나만 가짐</td></tr>
+<tr><td>③ 푸시</td><td>공용 저장소에 올림</td><td>ancestor 확인</td><td>⚠️ 저장은 됐으나 <b>안 돌아감</b></td></tr>
+<tr><td><b>④ 반영(배포/리로드)</b></td><td><b>실제로 돌기 시작</b></td><td>실행 중인 코드 확인</td><td>✅ 진짜 완료</td></tr>
+</table>
+
+<div class="box warn">
+<b>오늘 실제로 3단계에서 멈출 뻔했습니다</b>
+데이터 유실 수정을 커밋·푸시까지 했는데, <b>실행 중인 서버는 여전히 옛 코드</b>였습니다.
+그 정리 작업은 1시간마다 도는 자동 작업이라, 리로드하지 않았으면 <b>유실 경로가 그대로 살아 있었습니다.</b>
+→ 무중단 리로드(152개 모듈) 후 <b>실행 중인 코드에서 직접 확인</b>하고서야 완료로 보고했습니다.
+</div>
+
+<div class="box acc">
+<b>대표님이 쓰실 질문</b>
+"완료했습니다"를 들으시면 — <b>"지금 돌고 있는 것도 바뀌었나?"</b>
+</div>
+</section>
+
+<section id="c7">
+<h2><span class="n">07</span>되돌릴 수 없는 작업의 규칙</h2>
+
+<p>오늘 가장 아팠던 사고입니다.</p>
+
+<div class="box bad">
+<b>영웅문4가 지워졌습니다</b>
+"안 쓰는 앱 정리해"라는 지시를 받고 실행했는데, <b>쓰시는 프로그램</b>이 포함됐습니다.
+"지우지 마라"는 지시가 도착하기 <b>3분 전</b>에 이미 삭제된 뒤였습니다.
+공식 설치본으로 복구했지만, <b>복구되지 않는 것이었다면 끝이었습니다.</b>
+</div>
+
+<h3>무엇이 잘못됐나</h3>
+<table>
+<tr><th>잘못</th><th>있어야 했던 것</th></tr>
+<tr><td>"전부"라는 범위를 그대로 실행</td><td><b>목록을 먼저 보여드리고 승인</b></td></tr>
+<tr><td>되돌릴 수 없는 작업을 빠르게 처리</td><td>되돌릴 수 없으면 <b>느린 게 맞음</b></td></tr>
+<tr><td>사용 여부를 실행기록만으로 판단</td><td>애매하면 <b>남겨두고 물어보기</b></td></tr>
+</table>
+
+<h3>반대로, 게이트가 실제로 막아낸 사례</h3>
+<p>같은 날 카카오톡 캐시 33GB를 지웠습니다. 이번엔 <b>파일별 검증 게이트</b>를 걸었습니다 — 백업본에 <b>같은 이름·같은 크기</b>로 존재하는 파일만 삭제.</p>
+<div class="kpi">
+<div><span class="v">153,303</span><span class="l">검증 통과 → 삭제</span></div>
+<div><span class="v">17</span><span class="l">검증 실패 → <b>보존</b></span></div>
+<div><span class="v">0</span><span class="l">유실</span></div>
+</div>
+<p>17건은 백업 직후 카카오톡이 새로 만든 파일이었습니다. <b>게이트가 없었으면 그대로 지워졌습니다.</b></p>
+
+<div class="box good">
+<b>대표님이 요구하실 3가지</b>
+되돌릴 수 없는 작업(삭제·배포·전송·결제)에는 반드시 —
+<b>① 대상 목록을 먼저 / ② 되돌리는 방법을 함께 / ③ 검증 실패 시 멈추는 게이트를</b>
+</div>
+</section>
+
+<section id="c8">
+<h2><span class="n">08</span>한 장 체크리스트</h2>
+
+<p>이 표만 옆에 두셔도 됩니다.</p>
+
+<table>
+<tr><th>보고 유형</th><th>던지실 질문</th><th>합격 답변</th></tr>
+<tr><td><b>수치 보고</b></td><td>"어디서 조회했나?"</td><td>조회 명령·테이블·시각이 나옴</td></tr>
+<tr><td><b>성능 보고</b></td><td>"정답은 누가 정했나?"</td><td>정답을 미리 정하고 대조했음</td></tr>
+<tr><td><b>원인 분석</b></td><td>"확인인가 추정인가?"</td><td>둘을 <b>나눠서</b> 말함</td></tr>
+<tr><td><b>완료 보고</b></td><td>"지금 돌고 있는 것도 바뀌었나?"</td><td>실행 중 코드/화면에서 확인</td></tr>
+<tr><td><b>삭제·배포</b></td><td>"되돌리는 방법은?"</td><td>롤백 절차가 구체적</td></tr>
+<tr><td><b>자동화</b></td><td>"실패하면 멈추나?"</td><td>게이트·알림이 있음</td></tr>
+<tr><td><b>모든 보고</b></td><td>"못 한 건 뭔가?"</td><td>미완료 항목을 <b>먼저</b> 말함</td></tr>
+</table>
+
+<div class="box acc">
+<b>마지막 한 줄</b>
+오늘 대표님이 <b>같은 질문을 세 번</b> 하셨습니다. 저는 두 번 "설명"만 하고 고치지 않았습니다.
+세 번째에야 진짜 실행기를 만들었고, 그 과정에서 <b>시스템 결함 하나가 드러났습니다.</b>
+<b>같은 답이 두 번 오면 그건 답이 아니라 회피입니다.</b> 세 번째를 물어주십시오.
+</div>
+
+<h3>오늘 확인된 제 오류 목록 (숨기지 않고 남깁니다)</h3>
+<table>
+<tr><th>#</th><th>내가 틀린 것</th><th>원인</th></tr>
+<tr><td>1</td><td>원인 미확정을 오류사전에 "확정"으로 기재</td><td>검증 전에 결론을 씀</td></tr>
+<tr><td>2</td><td>"자동 항목 미실행"이라 단정</td><td>파일 시각 하나만 보고 판단 — 실제로는 실행됐음</td></tr>
+<tr><td>3</td><td>로그 항목을 내 것으로 오독</td><td>같은 초에 찍힌 남의 로그를 근거로 씀</td></tr>
+<tr><td>4</td><td>"포털 미노출"이라 보고</td><td>301 리다이렉트를 안 따라감</td></tr>
+<tr><td>5</td><td>지시 전에 영웅문4 삭제</td><td>"전부"를 확인 없이 실행</td></tr>
+</table>
+<p class="src">이 목록을 남기는 이유 — <b>오류를 숨기는 보고가 오류 자체보다 비쌉니다.</b></p>
+</section>
+
+<footer>
+오비스(OBYS = Oh Byeong Yong's System) CEO 교육자료 · 2026-09-21 작성<br>
+본문의 모든 사례는 2026-09-21 당일 실제로 발생한 일이며, 수치는 직접 측정한 값입니다.
+</footer>
+
+</div>
+</body>
+</html>
