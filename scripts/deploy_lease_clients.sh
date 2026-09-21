@@ -16,12 +16,12 @@
 #
 # 멱등이다. 몇 번을 돌려도 같은 결과가 되고, 기존 파일은 .bak_lease_<날짜> 로 남는다.
 #
-#   deploy_lease_clients.sh                     # 기본 대상 2대
+#   deploy_lease_clients.sh                     # 기본 대상 3대
 #   LEASE_CLIENT_TARGETS="root@1.2.3.4" deploy_lease_clients.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-TARGETS="${LEASE_CLIENT_TARGETS:-root@5.104.86.14 root@114.207.244.86}"
+TARGETS="${LEASE_CLIENT_TARGETS:-root@5.104.86.14 root@114.207.244.86 root@5.104.85.244}"
 STAMP="$(date '+%Y%m%d')"
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=8)
 
