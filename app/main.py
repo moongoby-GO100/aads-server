@@ -16,7 +16,7 @@ from app.logging_config import configure_logging
 
 from app.api import health, projects, checkpoints, stream, auth, context, visual_qa, mobile_qa, memory, terminal, browser_bridge, design_modifications, google_sheets, obys_finance, notifications, unni_naengmyeon
 from app.api import obys_dashboard, obys_inventory, obys_accounting, obys_ops
-from app.api import acct_purchase
+from app.api import acct_purchase, acct_sales
 from app.api.channels import router as channels_router
 from app.api.managers import router as managers_router
 from app.api.conversations import router as conversations_router
@@ -3844,6 +3844,7 @@ app.include_router(obys_inventory.router, prefix="/api/v1", tags=["yeoljeong-inv
 app.include_router(obys_accounting.router, prefix="/api/v1", tags=["yeoljeong-accounting"])
 app.include_router(obys_ops.router, prefix="/api/v1", tags=["yeoljeong-ops"])
 app.include_router(acct_purchase.router, prefix="/api/v1", tags=["acct-purchase"])
+app.include_router(acct_sales.router, prefix="/api/v1", tags=["acct-sales"])
 app.include_router(credential_vault_router, prefix="/api/v1", tags=["credential-vault"])
 app.include_router(google_sheets.router, prefix="/api/v1", tags=["google-sheets"])
 app.include_router(notifications.router, prefix="/api/v1", tags=["notifications"])
