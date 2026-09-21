@@ -49,15 +49,29 @@
     .workspace-name b, .workspace-name span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .workspace-name b { font-size: 13px; }
     .workspace-name span { color: #9ca3af; font-size: 11px; margin-top: 2px; }
+    .sidebar-nav-scroll { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 12px; }
     .nav { display: grid; gap: 4px; padding: 0 10px; }
     .nav-label { padding: 13px 12px 5px; color: #747d8d; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
     .nav button { position: relative; width: 100%; height: 43px; border: 0; border-radius: 8px; background: transparent; color: #aeb5c1; display: flex; align-items: center; gap: 12px; padding: 0 12px; font-size: 13px; font-weight: 700; text-align: left; }
     .nav button:hover { background: rgba(255,255,255,.05); color: #fff; }
     .nav button.active { color: #fff; background: var(--nav-soft); }
     .nav button.active::before { content: ""; position: absolute; left: 0; top: 11px; bottom: 11px; width: 3px; border-radius: 3px; background: var(--orange); }
+    .nav-group { display: grid; gap: 3px; }
+    .nav-parent { justify-content: space-between; }
+    .nav-parent .nav-parent-label { display: flex; min-width: 0; align-items: center; gap: 12px; }
+    .nav-parent .nav-parent-label > span:not(.count) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nav-chevron { margin-left: auto; font-size: 13px; transition: transform .2s ease; }
+    .nav-parent[aria-expanded="true"] .nav-chevron { transform: rotate(180deg); }
+    .submenu { display: none; margin: -1px 0 3px 30px; padding-left: 10px; border-left: 1px solid rgba(255,255,255,.13); }
+    .nav-group.expanded .submenu { display: grid; gap: 1px; }
+    .submenu button { height: 31px; padding: 0 9px; color: #929ba9; font-size: 11px; font-weight: 650; }
+    .submenu button:hover, .submenu button.active { color: #fff; background: rgba(255,255,255,.08); }
+    .submenu button.active::before { display: none; }
+    button:focus-visible { outline: 3px solid rgba(242,106,46,.7); outline-offset: 2px; }
     .nav svg, .bottom-nav svg, .topbar svg { width: 18px; height: 18px; stroke-width: 1.8; }
     .count { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; display: grid; place-items: center; background: #3b2524; color: #ffb08a; font-size: 10px; }
     .sidebar-bottom { margin-top: auto; padding: 16px 18px; border-top: 1px solid rgba(255,255,255,.07); color: #858d9a; font-size: 11px; line-height: 1.5; }
+    .mobile-menu-overlay { display: none; }
     .main { min-width: 0; }
     .topbar { position: sticky; top: 0; z-index: 15; height: 72px; padding: 0 28px; background: rgba(255,255,255,.94); border-bottom: 1px solid var(--line); backdrop-filter: blur(12px); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
     .top-left, .top-right, .profile { display: flex; align-items: center; }
@@ -329,6 +343,11 @@
       .bottom-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; height: 70px; display: flex; overflow-x: auto; background: rgba(255,255,255,.96); border-top: 1px solid var(--line); backdrop-filter: blur(12px); }
       .bottom-nav button { flex: 0 0 68px; border: 0; background: transparent; color: #808897; display: grid; place-items: center; align-content: center; gap: 4px; font-size: 9px; font-weight: 750; }
       .bottom-nav button.active { color: var(--orange); }
+      .mobile-menu-overlay.open { position: fixed; inset: 0; z-index: 60; display: block; background: rgba(17,24,39,.5); }
+      .mobile-menu-sheet { width: min(340px, calc(100vw - 28px)); height: 100%; overflow-y: auto; padding: 18px 12px 92px; background: var(--nav); color: #fff; box-shadow: 12px 0 36px rgba(0,0,0,.25); }
+      .mobile-menu-head { display: flex; align-items: center; justify-content: space-between; padding: 0 10px 14px; font-weight: 850; }
+      .mobile-menu-head button { width: 34px; height: 34px; border: 1px solid rgba(255,255,255,.18); border-radius: 8px; background: transparent; color: #fff; font-size: 22px; }
+      .mobile-menu-sheet .nav { padding: 0; }
     }
     @media (max-width: 620px) {
       .topbar { padding: 0 13px; }
@@ -386,7 +405,7 @@
           <span>⌄</span>
         </button>
       </div>
-      <nav class="nav" aria-label="주요 메뉴">
+      <div class="sidebar-nav-scroll"><nav class="nav" aria-label="주요 메뉴">
         <div class="nav-label">경영</div>
         <button data-view="home"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9a1 1 0 01-1 1h-5v-7H9v7H4a1 1 0 01-1-1z"/></svg>통합 홈</button>
         <button data-view="tasks"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>할 일·알림<span class="count">5</span></button>
@@ -405,7 +424,7 @@
         <button data-view="integrations"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>연동 관리</button>
         <button data-view="margins"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 19V5m0 14h16M8 16l3-5 3 2 4-7"/></svg>원가·마진</button>
         <button data-view="audit"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 3l7 4v5c0 5-3 8-7 9-4-1-7-4-7-9V7zM9 12l2 2 4-5"/></svg>권한·감사로그</button>
-      </nav>
+      </nav></div>
       <div class="sidebar-bottom">Final Concept v3.0 · 2026<br>경영·회계 통합 인터랙티브 시안</div>
     </aside>
 
@@ -453,6 +472,12 @@
       <div class="drawer-body" id="drawerBody"></div>
     </section>
   </div>
+  <div class="mobile-menu-overlay" id="mobileMenuOverlay" aria-hidden="true">
+    <section class="mobile-menu-sheet" role="dialog" aria-modal="true" aria-label="전체 메뉴">
+      <div class="mobile-menu-head"><span>전체 메뉴</span><button type="button" data-close-mobile-menu aria-label="메뉴 닫기">×</button></div>
+      <nav class="nav" id="mobileNav" aria-label="모바일 전체 메뉴"></nav>
+    </section>
+  </div>
 
   <script>
     const viewRoot = document.getElementById("viewRoot");
@@ -462,6 +487,71 @@
     const drawerTitle = document.getElementById("drawerTitle");
     const drawerSubtitle = document.getElementById("drawerSubtitle");
     const drawerBody = document.getElementById("drawerBody");
+    const mobileMenuOverlay = document.getElementById("mobileMenuOverlay");
+    const mobileNav = document.getElementById("mobileNav");
+    let expandedMenus = new Set();
+    let lastFocusedElement = null;
+    const submenuItems = {
+      home: [["오늘 할 일", "task"], ["현금흐름", "account-detail"], ["매출·정산", "sales-detail"], ["세무 일정", "calendar"]],
+      tasks: [["긴급", "task"], ["오늘", "review"], ["예정", "calendar"], ["완료", "approval-detail"]],
+      reports: [["손익", "review"], ["현금흐름", "account-detail"], ["채널·지점", "sales-detail"], ["보고서 생성", "report"]],
+      documents: [["경영보고서", "document-vault"], ["세무문서", "tax-return-preview"], ["계약·인사", "employee-docs"], ["증빙", "receipt-upload"]],
+      sales: [["통계", "sales-detail"], ["거래 상세", "order-detail"], ["정산 대사", "review"], ["채널 연동", "sales-channel-connect"]],
+      accounts: [["잔액", "account-detail"], ["입금 예정", "order-detail"], ["미매칭", "match"], ["은행 연동", "bank-connect"]],
+      employees: [["직원 현황", "employee-detail"], ["근태", "signature-progress"], ["급여", "approve"], ["계약·증빙", "employee-docs"]],
+      inventory: [["재고 현황", "menu-detail"], ["발주 추천", "order-detail"], ["매입처", "supplier-connect"], ["수기 증빙", "receipt-upload"]],
+      tax: [["매출자료", "vat-ledger"], ["매입·증빙", "evidence-gap"], ["회계 원장", "withholding-ledger"], ["신고·납부", "tax-return-preview"]],
+      approvals: [["승인 대기", "approval-detail"], ["완료", "audit-detail"], ["반려", "review"], ["정책", "tax-agent-approval"]],
+      alerts: [["중요", "notification"], ["업무", "task"], ["시스템", "integration-audit"], ["알림 설정", "credential-vault"]],
+      business: [["사업자", "business-detail"], ["지점", "business-ocr"], ["전환 이력", "audit-detail"], ["신규 등록", "business-switch"]],
+      integrations: [["판매", "sales-channel-connect"], ["은행", "bank-connect"], ["매입", "supplier-connect"], ["세무", "tax-connect"], ["권한 점검", "integration-audit"]],
+      margins: [["메뉴 원가", "menu-detail"], ["원가 변동", "review"], ["마진", "margin-detail"], ["시뮬레이션", "order-detail"]],
+      audit: [["계정 권한", "audit-detail"], ["변경 이력", "credential-vault"], ["로그인·연동", "integration-audit"], ["정책", "business-switch"]]
+    };
+    const detailRouteActions = new Set(Object.values(submenuItems).flat().map(([, action]) => action));
+
+    const sidebarNav = document.querySelector(".sidebar .nav");
+    const menuSource = [...sidebarNav.children].map((item) => item.cloneNode(true));
+    function buildMenu(nav, includeLabels = true) {
+      const source = menuSource;
+      nav.innerHTML = "";
+      source.forEach((item) => {
+        if (!item.matches("[data-view]")) {
+          if (includeLabels) nav.append(item.cloneNode(true));
+          return;
+        }
+        const slug = item.dataset.view;
+        const group = document.createElement("div");
+        group.className = "nav-group";
+        group.dataset.menuGroup = slug;
+        const parent = item.cloneNode(true);
+        parent.classList.add("nav-parent");
+        parent.removeAttribute("data-view");
+        parent.dataset.menuToggle = slug;
+        parent.setAttribute("aria-expanded", "false");
+        parent.setAttribute("aria-controls", `submenu-${slug}${nav === mobileNav ? "-mobile" : ""}`);
+        const label = document.createElement("span");
+        label.className = "nav-parent-label";
+        while (parent.firstChild) label.append(parent.firstChild);
+        const chevron = Object.assign(document.createElement("span"), { className: "nav-chevron", textContent: "⌄" });
+        chevron.setAttribute("aria-hidden", "true");
+        parent.append(label, chevron);
+        const submenu = document.createElement("div");
+        submenu.className = "submenu";
+        submenu.id = parent.getAttribute("aria-controls");
+        submenuItems[slug].forEach(([labelText, action]) => {
+          const detail = document.createElement("button");
+          detail.type = "button";
+          detail.textContent = labelText;
+          detail.dataset.submenuDetail = action;
+          detail.dataset.submenuView = slug;
+          detail.setAttribute("aria-label", `${views[slug].title} ${labelText}`);
+          submenu.append(detail);
+        });
+        group.append(parent, submenu);
+        nav.append(group);
+      });
+    }
     const moneyIcon = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 20V10m7 10V4m7 16v-7"/></svg>';
     const cardIcon = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 7h18v12H3zM3 10h18M7 15h4"/></svg>';
     const bankIcon = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 10h18M5 10v8m4-8v8m6-8v8m4-8v8M2 21h20M12 3l9 5H3z"/></svg>';
@@ -1229,9 +1319,12 @@
       }
     });
 
+    buildMenu(sidebarNav);
+    buildMenu(mobileNav);
+
     const detailCard = (label, value) => `<div class="detail-block"><small>${label}</small><strong>${value}</strong></div>`;
     function detailContent(action) {
-      const slug = normalizeHash();
+      const { slug } = normalizeHash();
       const reviewByView = {
         sales: ["정산 차이 상세", "7월 23일 · 성신점 · 카드 매출", [["주문·승인 매출","₩2,611,000"],["총 수수료","₩78,330"],["광고비·쿠폰 차감","₩26,500"],["입금 예정액","₩2,506,170"],["원장 차이","₩42,000"],["처리 상태","소명자료 검토 중"]]],
         accounts: ["입금 매칭 상세", "BAEMIN_PAY 입금 후보 비교", [["입금액","₩400,000"],["예상 정산액","₩426,500"],["차이","₩26,500"],["후보 주문","배민 성신점 128건"],["매칭 신뢰도","92% · 시안"],["처리 상태","대표 확인 필요"]]],
@@ -1311,6 +1404,19 @@
     }
     function closeOverlays() {
       closeDetail();
+      closeMobileMenu();
+    }
+    function openMobileMenu() {
+      lastFocusedElement = document.activeElement;
+      mobileMenuOverlay.classList.add("open");
+      mobileMenuOverlay.setAttribute("aria-hidden", "false");
+      mobileMenuOverlay.querySelector("[data-close-mobile-menu]").focus();
+    }
+    function closeMobileMenu() {
+      if (!mobileMenuOverlay.classList.contains("open")) return;
+      mobileMenuOverlay.classList.remove("open");
+      mobileMenuOverlay.setAttribute("aria-hidden", "true");
+      if (lastFocusedElement) lastFocusedElement.focus();
     }
 
     const actionMessages = {
@@ -1361,20 +1467,42 @@
     };
 
     const normalizeHash = () => {
-      const slug = window.location.hash.replace("#", "");
-      return views[slug] ? slug : "home";
+      const [rawView, rawDetail] = window.location.hash.replace(/^#/, "").split("/");
+      const slug = views[rawView] ? rawView : "home";
+      const detail = detailRouteActions.has(rawDetail) ? rawDetail : null;
+      return { slug, detail };
     };
-    const render = (slug, updateHash = true) => {
+    const syncMenuState = (slug, detail = null) => {
+      expandedMenus.add(slug);
+      document.querySelectorAll("[data-menu-group]").forEach((group) => {
+        const expanded = expandedMenus.has(group.dataset.menuGroup);
+        group.classList.toggle("expanded", expanded);
+        const parent = group.querySelector("[data-menu-toggle]");
+        parent.setAttribute("aria-expanded", String(expanded));
+        if (group.dataset.menuGroup === slug) parent.setAttribute("aria-current", "page"); else parent.removeAttribute("aria-current");
+      });
+      document.querySelectorAll("[data-view], [data-submenu-detail]").forEach((item) => {
+        const active = item.dataset.view === slug || (item.dataset.submenuView === slug && item.dataset.submenuDetail === detail);
+        item.classList.toggle("active", active);
+        if (active) item.setAttribute("aria-current", "page"); else item.removeAttribute("aria-current");
+      });
+    };
+    const render = (slug, updateHash = true, detail = null) => {
       const view = views[slug] || views.home;
       closeOverlays();
       pageTitle.textContent = view.title;
       document.title = `오비서 V3 · ${view.title} 최종안`;
       viewRoot.innerHTML = view.html();
       window.scrollTo(0, 0);
-      document.querySelectorAll("[data-view]").forEach((item) => item.classList.toggle("active", item.dataset.view === slug));
-      if (updateHash && window.location.hash !== `#${slug}`) {
-        history.pushState(null, "", `#${slug}`);
+      syncMenuState(slug, detail);
+      const route = detail ? `#${slug}/${detail}` : `#${slug}`;
+      if (updateHash && window.location.hash !== route) {
+        history.pushState(null, "", route);
       }
+    };
+    const openSubmenuDetail = (slug, detail) => {
+      render(slug, true, detail);
+      openDetail(detail);
     };
 
     document.addEventListener("click", (event) => {
@@ -1399,6 +1527,18 @@
         render(authButton.dataset.auth);
         return;
       }
+      const menuToggle = event.target.closest("[data-menu-toggle]");
+      if (menuToggle) {
+        const slug = menuToggle.dataset.menuToggle;
+        if (expandedMenus.has(slug)) expandedMenus.delete(slug); else expandedMenus.add(slug);
+        syncMenuState(normalizeHash().slug, normalizeHash().detail);
+        return;
+      }
+      const submenuButton = event.target.closest("[data-submenu-detail]");
+      if (submenuButton) {
+        openSubmenuDetail(submenuButton.dataset.submenuView, submenuButton.dataset.submenuDetail);
+        return;
+      }
       const viewButton = event.target.closest("[data-view]");
       if (viewButton) {
         const slug = viewButton.dataset.view;
@@ -1409,6 +1549,10 @@
       const actionButton = event.target.closest("[data-action]");
       if (actionButton) {
         const action = actionButton.dataset.action;
+        if (action === "mobile-menu") {
+          openMobileMenu();
+          return;
+        }
         if (action === "new-business") {
           render("auth-onboarding");
           return;
@@ -1480,16 +1624,24 @@
     document.addEventListener("click", (event) => {
       if (event.target.closest("[data-close-overlay]")) closeDetail();
       if (event.target === detailOverlay) closeDetail();
+      if (event.target.closest("[data-close-mobile-menu]") || event.target === mobileMenuOverlay) closeMobileMenu();
     });
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && detailOverlay.classList.contains("open")) closeDetail();
+      if (event.key === "Escape" && mobileMenuOverlay.classList.contains("open")) closeMobileMenu();
       if ((event.key === "Enter" || event.key === " ") && event.target.matches(".profile[role='button']")) {
         event.preventDefault();
         openDetail("profile");
       }
     });
-    window.addEventListener("hashchange", () => render(normalizeHash(), false));
-    render(normalizeHash(), false);
+    window.addEventListener("hashchange", () => {
+      const { slug, detail } = normalizeHash();
+      render(slug, false, detail);
+      if (detail) openDetail(detail);
+    });
+    const initialRoute = normalizeHash();
+    render(initialRoute.slug, false, initialRoute.detail);
+    if (initialRoute.detail) openDetail(initialRoute.detail);
   </script>
 </body>
 </html>
