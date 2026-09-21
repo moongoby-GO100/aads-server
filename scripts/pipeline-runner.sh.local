@@ -53,6 +53,7 @@ RUNNER_HOSTNAME=$(hostname -s)
 # 러너도 같은 래퍼를 경유해 그 자격증명을 공유한다. 슬롯이 없거나 불완전하면
 # 조용히 기존 고정 토큰 경로로 폴백하므로 슬롯이 없는 서버(211/114)는 영향이 없다.
 CLAUDE_RELAY_SLOT_HOME_ROOT="${CLAUDE_RELAY_SLOT_HOME_ROOT:-/root/.claude-relay-slots}"
+CLAUDE_LEASE_SLOT_HOME_ROOT="${CLAUDE_LEASE_SLOT_HOME_ROOT:-/root/.claude-lease}"
 CLAUDE_SLOT_CREDENTIAL_WRAPPER="${CLAUDE_SLOT_CREDENTIAL_WRAPPER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-slot-credentials-wrapper.sh}"
 RUNNER_USE_SLOT_CREDENTIALS="${RUNNER_USE_SLOT_CREDENTIALS:-1}"
 
@@ -545,6 +546,38 @@ PY
     printf '%s' "$cred"
 }
 
+# contabo116 이 10분마다 배달하는 읽기 전용 단기 lease. 원격 서버에는
+# refresh token을 복사하지 않으므로 서버 간 회전 경합이 없다. 만료 5분 이내
+# 토큰은 거부해 실행 중 401이 나는 것을 막는다. stdout은 토큰 전용이며 로그하지 않는다.
+leased_slot_token() {
+    local slot="${1:-1}"
+    local cred="${CLAUDE_LEASE_SLOT_HOME_ROOT}/slot${slot}/.claude/.credentials.json"
+    [[ -f "$cred" ]] || return 1
+    python3 - "$cred" <<'PY' || return 1
+import json
+import sys
+import time
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+oauth = payload.get("claudeAiOauth", payload)
+token = oauth.get("accessToken") if isinstance(oauth, dict) else None
+expires_at = oauth.get("expiresAt") if isinstance(oauth, dict) else None
+try:
+    expires_at = float(expires_at)
+    if expires_at > 100_000_000_000:
+        expires_at /= 1000.0
+except (TypeError, ValueError):
+    raise SystemExit(1)
+if not isinstance(token, str) or not token or expires_at <= time.time() + 300:
+    raise SystemExit(1)
+sys.stdout.write(token)
+PY
+}
+
 # DB(llm_api_keys) 기반 Anthropic 계정 사다리 (AADS-RUNNER-SLOT4, 2026-09-19)
 #
 # 왜 필요한가. 여기는 오래도록 `i % 2 + 1` 로 계정1·2만 돌았다. 그런데 대표님
@@ -556,8 +589,8 @@ PY
 # 규칙 셋.
 #  1. rate_limited_until 이 지난/비어 있는 계정만 돌려준다 — 죽은 계정을 때리지 않는다.
 #  2. priority 오름차순 — 대표님이 대시보드에서 정한 순서가 그대로 사다리가 된다.
-#  3. 실제로 쓸 수 있는 슬롯만 남긴다. 슬롯3·4 는 .env 에 고정 토큰이 없으므로
-#     릴레이 슬롯 자격증명(refresh 가능)이 있을 때만 유효하다.
+#  3. 실제로 쓸 수 있는 슬롯만 남긴다. 중앙은 refresh 가능 자격증명을,
+#     원격 서버는 contabo116이 배달한 4개 단기 lease를 사용한다.
 # 조회 실패 시 아무것도 출력하지 않고 1 을 반환해 호출측이 기존 2슬롯 경로로 폴백한다.
 get_db_anthropic_slots() {
     local rows
@@ -578,6 +611,8 @@ get_db_anthropic_slots() {
         slot="${slot//[^0-9]/}"
         [[ -z "$slot" ]] && continue
         if [[ -n "$(slot_credentials_file "$slot" || true)" ]]; then
+            out+="${slot}"$'\n'
+        elif leased_slot_token "$slot" >/dev/null 2>&1; then
             out+="${slot}"$'\n'
         elif [[ "$slot" == "1" && -n "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
             out+="${slot}"$'\n'
@@ -2130,9 +2165,9 @@ run_job() {
     local TOKEN_2="${ANTHROPIC_AUTH_TOKEN_2:-}"
     # C-4: 빈 토큰 가드 — 둘 다 비어있으면 즉시 실패 처리
     # 단, 슬롯 자격증명이 살아 있으면 고정 토큰이 없어도 실행 가능하므로 차단하지 않는다.
-    local _slot_cred_available=""
-    _slot_cred_available="$(slot_credentials_file 1 || slot_credentials_file 2 || slot_credentials_file 3 || slot_credentials_file 4 || true)"
-    if [[ -z "$TOKEN_1" && -z "$TOKEN_2" && -z "$_slot_cred_available" ]]; then
+    local _slot_auth_available=""
+    _slot_auth_available="$(slot_credentials_file 1 || slot_credentials_file 2 || slot_credentials_file 3 || slot_credentials_file 4 || leased_slot_token 1 || leased_slot_token 2 || leased_slot_token 3 || leased_slot_token 4 || true)"
+    if [[ -z "$TOKEN_1" && -z "$TOKEN_2" && -z "$_slot_auth_available" ]]; then
         log "FATAL: ANTHROPIC_AUTH_TOKEN / _2 모두 비어있음 — job=$job_id 실패 처리"
         db_update "UPDATE pipeline_jobs SET status='error', phase='token_missing',
                    error_detail='token_missing',
@@ -2166,8 +2201,9 @@ run_job() {
         # 2순위 — .env 고정 oat 토큰 (슬롯이 없는 서버의 기존 경로).
         # Claude Code CLI는 OAuth 토큰을 CLAUDE_CODE_OAUTH_TOKEN으로 받아야 한다.
         # oat 토큰을 ANTHROPIC_API_KEY에 넣으면 x-api-key 경로로 전송되어 Invalid API key가 발생한다.
-        local slot_cred_file=""
+        local slot_cred_file="" leased_token=""
         slot_cred_file="$(slot_credentials_file "$token_slot" || true)"
+        [[ -z "$slot_cred_file" ]] && leased_token="$(leased_slot_token "$token_slot" || true)"
         if [[ -n "$slot_cred_file" ]]; then
             # 래퍼가 격리 HOME 에 자격증명을 staging 하고 CLAUDE_CODE_OAUTH_TOKEN 을 unset 한다.
             # 여기서 고정 토큰을 export 하면 래퍼가 지우기 전까지 우선순위가 뒤집히므로 지운다.
@@ -2175,16 +2211,24 @@ run_job() {
             unset ANTHROPIC_API_KEY 2>/dev/null || true
             unset ANTHROPIC_BASE_URL 2>/dev/null || true
             log "  TOKEN_SWITCH job=$job_id → 계정${token_slot} via slot_credentials (refreshable)"
+        elif [[ -n "$leased_token" ]]; then
+            export CLAUDE_CODE_OAUTH_TOKEN="$leased_token"
+            unset ANTHROPIC_API_KEY 2>/dev/null || true
+            unset ANTHROPIC_BASE_URL 2>/dev/null || true
+            log "  TOKEN_SWITCH job=$job_id → 계정${token_slot} via central_lease (access-only)"
         elif [[ "$token_slot" == "2" && -n "$TOKEN_2" ]]; then
             export CLAUDE_CODE_OAUTH_TOKEN="$TOKEN_2"
             unset ANTHROPIC_API_KEY 2>/dev/null || true
             unset ANTHROPIC_BASE_URL 2>/dev/null || true
             log "  TOKEN_SWITCH job=$job_id → 계정2 via CLAUDE_CODE_OAUTH_TOKEN"
-        else
+        elif [[ "$token_slot" == "1" && -n "$TOKEN_1" ]]; then
             export CLAUDE_CODE_OAUTH_TOKEN="$TOKEN_1"
             unset ANTHROPIC_API_KEY 2>/dev/null || true
             unset ANTHROPIC_BASE_URL 2>/dev/null || true
-            [[ "$token_slot" == "2" ]] && log "  TOKEN_SWITCH job=$job_id → 계정2 없음, 계정1 유지 via CLAUDE_CODE_OAUTH_TOKEN"
+        else
+            log "  TOKEN_SWITCH_SKIP job=$job_id 계정${token_slot} 사용 가능한 자격증명/lease 없음"
+            attempt=$((attempt + 1))
+            continue
         fi
 
         # H6: instruction 크기 제한 (50KB)

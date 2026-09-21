@@ -8,6 +8,7 @@ Type=oneshot
 # 모든 원격 러너는 contabo116이 갱신한 단기 access-token lease만 받는다.
 # refresh token은 중앙 슬롯 홈 밖으로 복제하지 않는다.
 Environment="CLAUDE_LEASE_TARGETS=root@5.104.86.14 root@114.207.244.86 root@5.104.85.244"
+Environment="CLAUDE_LEASE_SLOTS=1 2 3 4"
 Environment="SLOT_LEASE_TARGETS=5.104.86.14 114.207.244.86 5.104.85.244"
 ExecStart=/root/aads/aads-server/scripts/claude-lease-push.sh
 ExecStart=/root/aads/aads-server/scripts/slot_lease_push.sh

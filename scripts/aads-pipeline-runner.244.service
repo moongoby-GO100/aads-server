@@ -2,9 +2,8 @@
 # 진아실장 서버(5.104.85.244, vmi3535008) 전용 러너 — ACCT(회계) 프로젝트.
 #
 # CEO 지시 2026-09-14: "진아서버에는 진아계정만 유지하고 사용한다."
-# 그래서 이 유닛은 AADS 릴레이 슬롯을 쓰지 않는다(RUNNER_USE_SLOT_CREDENTIALS=0).
-# Claude 는 /usr/local/bin/claude-aads 를 거치고, 그 래퍼는 /etc/biseo.env 의
-# 진아 OAuth 토큰만 읽는다. lease.env 는 이 서버에 배달되지 않는다.
+# 2026-09-21 CEO 지시로 4개 슬롯의 단기 access-token lease를 사용한다.
+# refresh token은 contabo116에만 남고, 이 서버는 /root/.claude-lease 읽기 전용이다.
 #
 # 동시 실행을 2로 묶는 이유: 계정이 개인 구독 하나뿐이라 한도를 태우면
 # 진아실장 본인 작업까지 같이 막힌다. 공용 서버(4)보다 보수적으로 둔다.
@@ -30,6 +29,7 @@ Environment=RUNNER_PROJECTS=ACCT
 Environment=RUNNER_ENGINE_MODE=general
 Environment=AADS_RUNNER_HOST_NAME=jinah244
 Environment=RUNNER_USE_SLOT_CREDENTIALS=0
+Environment=CLAUDE_LEASE_SLOT_HOME_ROOT=/root/.claude-lease
 Environment=RUNNER_CLAUDE_CLI_BIN=/usr/local/bin/claude-aads
 Environment=AADS_API_URL=https://aads.newtalk.kr
 Environment=POLL_INTERVAL=5

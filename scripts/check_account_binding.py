@@ -35,8 +35,13 @@ CODEX_ACCOUNTS_ROOT = Path(os.getenv("CODEX_ACCOUNTS_ROOT", "/root/.codex-accoun
 CLAUDE_SLOT_ROOT = Path(os.getenv("CLAUDE_RELAY_SLOT_HOME_ROOT", "/root/.claude-relay-slots"))
 PSQL = ["/usr/bin/docker", "exec", "aads-postgres", "psql", "-U", "aads", "-d", "aads", "-tAc"]
 
-# ANTHROPIC_AUTH_TOKEN → slot1, _2 → slot2, _3 → slot3
-SLOT_OF = {"ANTHROPIC_AUTH_TOKEN": "1", "ANTHROPIC_AUTH_TOKEN_2": "2", "ANTHROPIC_AUTH_TOKEN_3": "3"}
+# ANTHROPIC_AUTH_TOKEN → slot1, _2 → slot2, _3 → slot3, _4 → slot4
+SLOT_OF = {
+    "ANTHROPIC_AUTH_TOKEN": "1",
+    "ANTHROPIC_AUTH_TOKEN_2": "2",
+    "ANTHROPIC_AUTH_TOKEN_3": "3",
+    "ANTHROPIC_AUTH_TOKEN_4": "4",
+}
 
 
 def psql(sql: str) -> list[list[str]]:

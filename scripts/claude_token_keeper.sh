@@ -59,6 +59,14 @@ FAIL_BELOW_MIN="${CLAUDE_TOKEN_FAIL_BELOW_MIN:-10}"
 
 log() { echo "$(date '+%F %T') $*"; }
 
+key_for_slot() {
+    case "$1" in
+        1) printf '%s' "ANTHROPIC_AUTH_TOKEN" ;;
+        2|3|4) printf 'ANTHROPIC_AUTH_TOKEN_%s' "$1" ;;
+        *) return 1 ;;
+    esac
+}
+
 # accessToken 또는 refreshToken 이 비었는지. 갱신이 파일을 망가뜨렸는지
 # 판단하는 유일한 기준이다 — 만료 시각만 보면 "만료됐다" 와 "지워졌다" 가
 # 구분되지 않는다.
@@ -153,7 +161,7 @@ print(o.get('accessToken',''), end='')
 }
 
 renewed=0
-for slot in 1 2; do
+for slot in 1 2 3 4; do
     home="${SLOT_ROOT}/slot${slot}"
     cred="${home}/.claude/.credentials.json"
     [ -f "$cred" ] || { log "slot${slot}: 자격증명 없음 — 건너뜀"; continue; }
@@ -170,8 +178,7 @@ for slot in 1 2; do
         # 순간부터 영영 고쳐지지 않는다. 2026-09-13 실측 — 파일은 382분 남아
         # 있는데 DB 는 8시간 전 만료 시각을 들고 있어 러너가 쓸 수 있는 슬롯을
         # 찾지 못했다. 10분마다 도는 작업이라 비용은 무시할 수 있다.
-        key="ANTHROPIC_AUTH_TOKEN"
-        [ "$slot" = "2" ] && key="ANTHROPIC_AUTH_TOKEN_2"
+        key="$(key_for_slot "$slot")"
         resync_to_db "$slot" "$key" "$cred" >/dev/null 2>&1 || true
         continue
     fi
@@ -245,8 +252,7 @@ for slot in 1 2; do
                 log "  임박 재시도 ${tries}/${CLOSE_RETRY_TIMES} — 아직 (${retry_after}분)"
             done
         fi
-        key="ANTHROPIC_AUTH_TOKEN"
-        [ "$slot" = "2" ] && key="ANTHROPIC_AUTH_TOKEN_2"
+        key="$(key_for_slot "$slot")"
         resync_to_db "$slot" "$key" "$cred" >/dev/null 2>&1 || true
         continue
     else
@@ -254,8 +260,7 @@ for slot in 1 2; do
         # 만료 시각과 토큰 값을 보고 슬롯을 고르므로, 여기서 건너뛰면 멀쩡한
         # 토큰을 두고도 "쓸 수 있는 슬롯 없음"이 된다.
         if [[ "$after" =~ ^[0-9]+$ ]] && [ "$after" -gt 0 ]; then
-            key="ANTHROPIC_AUTH_TOKEN"
-            [ "$slot" = "2" ] && key="ANTHROPIC_AUTH_TOKEN_2"
+            key="$(key_for_slot "$slot")"
             resync_to_db "$slot" "$key" "$cred" >/dev/null 2>&1 \
                 && log "  갱신은 실패했지만 파일이 유효해 DB 는 동기화함 (${after}분)"
         fi
@@ -275,8 +280,7 @@ for slot in 1 2; do
         continue
     fi
 
-    key="ANTHROPIC_AUTH_TOKEN"
-    [ "$slot" = "2" ] && key="ANTHROPIC_AUTH_TOKEN_2"
+    key="$(key_for_slot "$slot")"
     resync_to_db "$slot" "$key" "$cred" || log "  ⚠️ DB 동기화 실패 — 릴레이는 옛 토큰을 계속 쓴다"
 done
 
