@@ -407,6 +407,18 @@ model_list:
 #   litellm_params:
 #     model: openai/o3-pro
 #     api_key: os.environ/OPENAI_API_KEY
+# CEO PC 로컬 27B — aads-server 의 PC Ollama 브리지 경유(PC Agent → CEO PC Ollama).
+# 이 서버에는 GPU 가 없다. 생성은 전적으로 CEO PC 의 RTX 3060 12GB 에서 돈다.
+# IQ2_XS(2비트급) 라 숫자·고유명사 정밀도가 약하다 — 분류·요약·2차 판독용이고
+# 금액·수량 계산이나 최종 판정에 쓰지 않는다. 한계비용은 전기료뿐이다.
+# api_base 는 같은 aads_network 의 컨테이너명으로 닿는다(litellm 에는
+# host.docker.internal 이 없다). 콜드 로딩 약 26초 + 생성 21.5 tok/s 라 timeout 을 길게 준다.
+- model_name: pc-qwen38-27b
+  litellm_params:
+    model: openai/pc-qwen38-27b
+    api_base: http://aads-server:8080/pc-ollama/v1
+    api_key: os.environ/LITELLM_MASTER_KEY
+    timeout: 300
 router_settings:
   enable_pre_call_checks: false
   num_retries: 3
@@ -457,18 +469,6 @@ router_settings:
     - qwen3-coder-plus
     - deepseek-chat
     - gemini-2.5-flash
-# CEO PC 로컬 27B — aads-server 의 PC Ollama 브리지 경유(PC Agent → CEO PC Ollama).
-# 이 서버에는 GPU 가 없다. 생성은 전적으로 CEO PC 의 RTX 3060 12GB 에서 돈다.
-# IQ2_XS(2비트급) 라 숫자·고유명사 정밀도가 약하다 — 분류·요약·2차 판독용이고
-# 금액·수량 계산이나 최종 판정에 쓰지 않는다. 한계비용은 전기료뿐이다.
-# api_base 는 같은 aads_network 의 컨테이너명으로 닿는다(litellm 에는
-# host.docker.internal 이 없다). 콜드 로딩 약 26초 + 생성 21.5 tok/s 라 timeout 을 길게 준다.
-- model_name: pc-qwen38-27b
-  litellm_params:
-    model: openai/pc-qwen38-27b
-    api_base: http://aads-server:8080/pc-ollama/v1
-    api_key: os.environ/LITELLM_MASTER_KEY
-    timeout: 300
 litellm_settings:
   drop_params: true
   set_verbose: true
