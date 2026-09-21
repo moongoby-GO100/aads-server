@@ -57,16 +57,25 @@
     .nav button.active { color: #fff; background: var(--nav-soft); }
     .nav button.active::before { content: ""; position: absolute; left: 0; top: 11px; bottom: 11px; width: 3px; border-radius: 3px; background: var(--orange); }
     .nav-group { display: grid; gap: 3px; }
-    .nav-parent { justify-content: space-between; }
+    .nav-group-head { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 2px; }
+    .nav-group-head .nav-parent { min-width: 0; }
+    .nav-group-head .nav-toggle { width: 34px; padding: 0; justify-content: center; }
     .nav-parent .nav-parent-label { display: flex; min-width: 0; align-items: center; gap: 12px; }
     .nav-parent .nav-parent-label > span:not(.count) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nav-chevron { margin-left: auto; font-size: 13px; transition: transform .2s ease; }
-    .nav-parent[aria-expanded="true"] .nav-chevron { transform: rotate(180deg); }
+    .nav-toggle[aria-expanded="true"] .nav-chevron { transform: rotate(180deg); }
     .submenu { display: none; margin: -1px 0 3px 30px; padding-left: 10px; border-left: 1px solid rgba(255,255,255,.13); }
     .nav-group.expanded .submenu { display: grid; gap: 1px; }
     .submenu button { height: 31px; padding: 0 9px; color: #929ba9; font-size: 11px; font-weight: 650; }
     .submenu button:hover, .submenu button.active { color: #fff; background: rgba(255,255,255,.08); }
     .submenu button.active::before { display: none; }
+    .detail-breadcrumb { display: flex; align-items: center; gap: 7px; margin-bottom: 13px; color: var(--muted); font-size: 11px; }
+    .detail-breadcrumb button { padding: 0; border: 0; background: transparent; color: #b64e21; font-weight: 800; }
+    .detail-page .hero { align-items: flex-start; }
+    .detail-page .hero h2 { margin-top: 0; }
+    .detail-page .panel { min-width: 0; }
+    .detail-page .recovery { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+    .detail-page .recovery p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
     button:focus-visible { outline: 3px solid rgba(242,106,46,.7); outline-offset: 2px; }
     .nav svg, .bottom-nav svg, .topbar svg { width: 18px; height: 18px; stroke-width: 1.8; }
     .count { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; display: grid; place-items: center; background: #3b2524; color: #ffb08a; font-size: 10px; }
@@ -491,6 +500,7 @@
     const mobileNav = document.getElementById("mobileNav");
     let expandedMenus = new Set();
     let lastFocusedElement = null;
+    let drawerTriggerElement = null;
     const submenuItems = {
       home: [["오늘 할 일", "task"], ["현금흐름", "account-detail"], ["매출·정산", "sales-detail"], ["세무 일정", "calendar"]],
       tasks: [["긴급", "task"], ["오늘", "review"], ["예정", "calendar"], ["완료", "approval-detail"]],
@@ -508,8 +518,6 @@
       margins: [["메뉴 원가", "menu-detail"], ["원가 변동", "review"], ["마진", "margin-detail"], ["시뮬레이션", "order-detail"]],
       audit: [["계정 권한", "audit-detail"], ["변경 이력", "credential-vault"], ["로그인·연동", "integration-audit"], ["정책", "business-switch"]]
     };
-    const detailRouteActions = new Set(Object.values(submenuItems).flat().map(([, action]) => action));
-
     const sidebarNav = document.querySelector(".sidebar .nav");
     const menuSource = [...sidebarNav.children].map((item) => item.cloneNode(true));
     function buildMenu(nav, includeLabels = true) {
@@ -526,19 +534,28 @@
         group.dataset.menuGroup = slug;
         const parent = item.cloneNode(true);
         parent.classList.add("nav-parent");
-        parent.removeAttribute("data-view");
-        parent.dataset.menuToggle = slug;
-        parent.setAttribute("aria-expanded", "false");
-        parent.setAttribute("aria-controls", `submenu-${slug}${nav === mobileNav ? "-mobile" : ""}`);
+        parent.dataset.view = slug;
         const label = document.createElement("span");
         label.className = "nav-parent-label";
         while (parent.firstChild) label.append(parent.firstChild);
+        parent.append(label);
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "nav-toggle";
+        toggle.dataset.menuToggle = slug;
+        toggle.setAttribute("aria-label", `${views[slug].title} 하위 메뉴 펼치기`);
+        toggle.setAttribute("aria-expanded", "false");
+        toggle.setAttribute("aria-controls", `submenu-${slug}${nav === mobileNav ? "-mobile" : ""}`);
         const chevron = Object.assign(document.createElement("span"), { className: "nav-chevron", textContent: "⌄" });
         chevron.setAttribute("aria-hidden", "true");
-        parent.append(label, chevron);
+        toggle.append(chevron);
+        const head = document.createElement("div");
+        head.className = "nav-group-head";
+        head.append(parent, toggle);
         const submenu = document.createElement("div");
         submenu.className = "submenu";
-        submenu.id = parent.getAttribute("aria-controls");
+        submenu.id = toggle.getAttribute("aria-controls");
+        submenu.hidden = true;
         submenuItems[slug].forEach(([labelText, action]) => {
           const detail = document.createElement("button");
           detail.type = "button";
@@ -548,7 +565,7 @@
           detail.setAttribute("aria-label", `${views[slug].title} ${labelText}`);
           submenu.append(detail);
         });
-        group.append(parent, submenu);
+        group.append(head, submenu);
         nav.append(group);
       });
     }
@@ -1319,6 +1336,83 @@
       }
     });
 
+    const detailPageDefinitions = {
+      "home/task": ["오늘 할 일", "대표님이 오늘 마쳐야 할 업무를 위험도와 마감순으로 모았습니다.", ["긴급", "2건", "오늘 마감"], ["우선 처리", "부가세 자료 확인|급여 최종 승인|미확인 입금 매칭"], ["완료 기준", "담당자 확인|근거 첨부|대표 승인"]],
+      "home/account-detail": ["통합 현금흐름", "전체 사업자와 지점의 입출금 전망 및 최저 잔액을 확인합니다.", ["가용 현금", "₩52.19M", "7월 29일 최저"], ["예정 유입", "배민 정산 ₩8.2M|카드 정산 ₩6.4M|매장 입금 ₩3.1M"], ["예정 유출", "급여 ₩38.42M|임대료 ₩9.8M|세금 ₩11.74M"]],
+      "home/sales-detail": ["통합 매출·정산", "전체 채널의 매출과 수수료 차감 후 정산액을 빠르게 점검합니다.", ["통합 매출", "₩128.46M", "전월 +8.4%"], ["채널 현황", "배달 ₩61.28M|POS ₩39.42M|카드 ₩27.76M"], ["정산 점검", "정상 14건|차이 2건|입금 대기 6건"]],
+      "home/calendar": ["세무 일정", "사업자별 신고·납부 마감과 준비 상태를 한 화면에서 확인합니다.", ["다음 마감", "D-2", "부가가치세"], ["다가오는 일정", "부가세 7월 25일|원천세 8월 10일|중간예납 8월 31일"], ["준비 상태", "자료수집 완료|누락증빙 7건|대표 승인 대기"]],
+      "tasks/task": ["긴급 업무", "오늘 마감이거나 금액 위험이 큰 업무만 분리해 처리합니다.", ["긴급", "2건", "미처리"], ["긴급 큐", "부가세 누락 7건|성신점 정산차 ₩42K|은행 동기화 지연"], ["복구 절차", "담당자 재지정|근거 다시 수집|마감 연장 요청"]],
+      "tasks/review": ["오늘 업무", "오늘 처리하기로 정한 담당 업무와 검토 근거를 관리합니다.", ["오늘 완료율", "60%", "3/5 완료"], ["진행 중", "급여 최종 검토|입금 3건 매칭|계약 갱신안 작성"], ["검토 순서", "원자료 확인|예외 메모|완료 상태 변경"]],
+      "tasks/calendar": ["예정 업무", "향후 14일의 업무를 마감일과 담당자 기준으로 준비합니다.", ["예정", "12건", "14일 이내"], ["이번 주", "세무 신고자료|발주 승인|근로계약 갱신"], ["다음 주", "급여 확정|인증서 갱신|월간 보고서"]],
+      "tasks/approval-detail": ["완료 업무", "완료된 업무의 승인 근거와 후속 작업을 추적합니다.", ["완료", "28건", "이번 달"], ["최근 완료", "6월 원천세 납부|급여명세 배포|카드차이 소명"], ["후속 확인", "문서 보관|감사로그 기록|담당자 알림"]],
+      "reports/review": ["손익 리포트", "사업자·지점별 매출, 원가와 영업이익 변동을 비교합니다.", ["영업이익", "₩18.92M", "이익률 14.7%"], ["손익 요약", "매출 ₩128.46M|변동비 ₩72.4M|고정비 ₩37.14M"], ["변동 원인", "식재료 +1.2%p|배달수수료 +₩420K|인건비 안정"]],
+      "reports/account-detail": ["현금흐름 리포트", "영업·투자·재무 현금흐름과 월말 잔액을 분석합니다.", ["순유입", "₩15.34M", "이번 달"], ["현금 유입", "영업 ₩101.2M|정산대기 ₩18.4M|기타 ₩2.1M"], ["현금 유출", "매입 ₩43.8M|인건비 ₩38.42M|세금 ₩11.74M"]],
+      "reports/sales-detail": ["채널·지점 리포트", "판매채널과 지점 성과를 같은 기준으로 비교합니다.", ["최고 성장", "성신점", "+12.8%"], ["지점 비교", "성신점 ₩54.2M|미아점 ₩42.8M|정화점 ₩31.46M"], ["채널 비교", "배민 31%|POS 30.7%|카드 21.6%"]],
+      "reports/report": ["보고서 생성", "공유 대상과 기간을 선택해 CEO 보고서 초안을 만듭니다.", ["생성 대기", "1건", "7월 월간"], ["포함 항목", "손익과 현금흐름|지점·채널 비교|위험과 다음 행동"], ["생성 흐름", "범위 선택|미리보기 검토|PDF·Excel 내보내기"]],
+      "documents/document-vault": ["경영보고서 보관", "월간·분기 경영보고서의 버전과 열람 이력을 관리합니다.", ["보관 문서", "24개", "최신 7월 초안"], ["최근 보고서", "7월 월간 초안|2분기 확정본|성신점 개선안"], ["문서 상태", "대표 검토 1건|확정 19건|보관기한 확인 4건"]],
+      "documents/tax-return-preview": ["세무문서 보관", "신고서·납부서·접수증을 세목과 사업자별로 찾습니다.", ["세무문서", "38개", "미확정 3개"], ["문서 묶음", "부가세 신고서 초안|원천세 납부서|전자신고 접수증"], ["보관 점검", "대표 승인 여부|제출본 일치|보존기간 설정"]],
+      "documents/employee-docs": ["계약·인사 문서", "근로계약서와 입사서류의 서명·만료 상태를 관리합니다.", ["갱신 필요", "2건", "30일 이내"], ["직원 문서", "김서윤 계약 갱신|박준호 보건증 만료|이민지 서명 완료"], ["보호 조치", "민감정보 마스킹|역할별 열람|다운로드 기록"]],
+      "documents/receipt-upload": ["증빙 보관", "영수증·거래명세서·세금계산서의 OCR 및 원장 반영 상태를 확인합니다.", ["미분류", "7건", "OCR 대기 4건"], ["최근 증빙", "서울축산 거래명세서|현장구매 영수증|마켓봄 세금계산서"], ["처리 상태", "OCR 검토|세금구분 확인|원장 반영 승인"]],
+      "sales/sales-detail": ["매출 통계", "일·주·월별 매출을 채널과 지점 단위로 분석합니다.", ["7월 매출", "₩128.46M", "+8.4%"], ["기간 추이", "1주 ₩29.1M|2주 ₩31.8M|3주 ₩34.2M"], ["성장 요인", "성신점 저녁 +14%|배민 +9%|포장 주문 +6%"]],
+      "sales/order-detail": ["거래 상세", "주문·승인·취소 건을 원천 채널 데이터와 함께 조회합니다.", ["거래", "8,421건", "취소율 1.8%"], ["최근 거래", "배민 주문 B-2841|POS 영수증 P-9182|카드 승인 C-4012"], ["예외 거래", "중복 승인 1건|취소 미반영 2건|메뉴 미매핑 4건"]],
+      "sales/review": ["정산 대사", "플랫폼 정산서와 주문·은행 입금을 3방향으로 대사합니다.", ["정산 차이", "2건", "₩42,000"], ["대사 결과", "일치 14건|수수료 차이 1건|입금일 차이 1건"], ["해결 흐름", "원천자료 비교|차이 사유 선택|소명·확정"]],
+      "sales/sales-channel-connect": ["채널 연동", "판매사이트별 인증, 지점·메뉴 매핑과 수집 상태를 관리합니다.", ["연동", "6개", "정상 5개"], ["채널 상태", "배민 정상|쿠팡 정상|요기요 인증 갱신"], ["실패 복구", "인증 재확인|파일 업로드 대체|지점 매핑 재검토"]],
+      "accounts/account-detail": ["계좌 잔액", "사업자별 은행 잔액과 가용·제한 금액을 확인합니다.", ["전체 잔액", "₩52.19M", "5개 계좌"], ["주요 계좌", "신한 운영 ₩24.8M|기업 정산 ₩17.1M|국민 급여 ₩10.29M"], ["잔액 주의", "급여일 최저 ₩39.81M|세금 예약 ₩11.74M|제한금 없음"]],
+      "accounts/order-detail": ["입금 예정", "판매채널·카드사의 입금 예정액과 예정일을 추적합니다.", ["입금 예정", "₩34.82M", "6건"], ["예정 내역", "배민 7/24 ₩8.2M|카드 7/25 ₩6.4M|쿠팡 7/26 ₩4.8M"], ["지연 점검", "예정일 초과 1건|금액 변경 1건|계좌 미지정 0건"]],
+      "accounts/match": ["미매칭 입금", "은행 입금과 주문·정산 후보를 비교해 연결합니다.", ["미매칭", "3건", "₩1.84M"], ["매칭 후보", "KCP ₩1.12M 96%|배민 ₩520K 91%|현장입금 ₩200K 64%"], ["처리 순서", "추천 근거 확인|정산건 지정|감사로그 저장"]],
+      "accounts/bank-connect": ["은행 연동", "빠른계좌조회 인증과 계좌별 수집 범위를 관리합니다.", ["연동 계좌", "5개", "지연 1개"], ["은행 상태", "신한 정상|기업 정상|국민 3시간 지연"], ["실패 복구", "인증 갱신|조회권한 확인|거래내역 파일 대체"]],
+      "employees/employee-detail": ["직원 현황", "재직·휴직·퇴사 상태와 계약·서류 위험을 확인합니다.", ["재직", "18명", "3개 지점"], ["직원 이슈", "계약 만료 1명|보건증 갱신 1명|계좌 보완 2명"], ["인력 분포", "성신점 8명|미아점 6명|정화점 4명"]],
+      "employees/signature-progress": ["근태 현황", "출퇴근, 연장·야간 근무와 수정 요청을 검토합니다.", ["이번 달", "2,736시간", "예외 4건"], ["근태 예외", "박준호 주 46시간|누락 출근 2건|휴게시간 수정 1건"], ["확정 흐름", "직원 수정요청|점장 확인|급여 반영 잠금"]],
+      "employees/approve": ["급여 현황", "급여 계산, 공제와 지급 승인 상태를 관리합니다.", ["지급 예정", "₩38.42M", "18명"], ["급여 구성", "기본급 ₩31.8M|수당 ₩5.2M|공제 ₩2.34M"], ["승인 흐름", "근태 확정|예외 검토|대표 승인·지급"]],
+      "employees/employee-docs": ["계약·증빙", "직원별 계약서, 신분·계좌·보건 증빙을 관리합니다.", ["보완 필요", "3건", "민감정보 보호"], ["서류 상태", "계약 갱신 1건|보건증 만료 1건|계좌 확인 1건"], ["처리 흐름", "OCR 확인|직원 보완요청|관리자 승인"]],
+      "inventory/menu-detail": ["재고 현황", "지점별 현재고, 안전재고와 예상 소진일을 확인합니다.", ["부족 예상", "4개", "3일 이내"], ["부족 품목", "돼지사골 96kg|깍두기 24kg|포장용기 4박스"], ["지점 재고", "성신 ₩8.2M|미아 ₩6.1M|정화 ₩4.62M"]],
+      "inventory/order-detail": ["발주 추천", "판매 예측과 리드타임을 반영한 품목별 권장 수량입니다.", ["권장 금액", "₩2.184M", "3개 공급사"], ["발주 제안", "돼지사골 96kg|대파 40kg|포장용기 8박스"], ["발주 흐름", "수량 수정|대표 승인|발주서·입고 검수"]],
+      "inventory/supplier-connect": ["매입처 관리", "공급사 연결, 단가표와 납기 신뢰도를 관리합니다.", ["매입처", "12곳", "점검 2곳"], ["주요 매입처", "서울축산 납기 98%|마켓봄 단가변동|뉴통 증빙누락"], ["연결 방식", "계정/API|발주서 파일|사진·OCR 수기"]],
+      "inventory/receipt-upload": ["수기 증빙", "연동되지 않은 매입처의 영수증과 거래명세서를 등록합니다.", ["업로드 대기", "4건", "현장구매"], ["수집함", "성신점 영수증 2건|미아점 거래명세 1건|카톡 주문 1건"], ["반영 흐름", "OCR 추출|품목·세금 수정|재고·원장 승인"]],
+      "tax/vat-ledger": ["매출자료", "채널·지점별 과세매출을 집계하고 신고자료 누락을 점검합니다.", ["과세매출", "₩284.2M", "누락 후보 3건"], ["채널·지점 집계", "배달 ₩132.4M|POS ₩86.7M|카드 ₩65.1M"], ["누락 점검", "성신점 현금 1건|쿠팡 취소 1건|면세분류 확인 1건"]],
+      "tax/evidence-gap": ["매입·증빙", "수집함과 OCR 결과에서 중복·미매칭을 찾아 보완 요청합니다.", ["보완 필요", "7건", "OCR 대기 4건"], ["증빙 수집함", "전자계산서 18건|카드매입 42건|수기 사진 4건"], ["예외·보완", "중복 2건|미매칭 3건|거래처 요청 3건"]],
+      "tax/withholding-ledger": ["회계 원장", "분개와 계정과목을 검토하고 마감 잠금·감사추적을 관리합니다.", ["미결 분개", "6건", "7월 마감 82%"], ["분개·계정과목", "매출채권 3건|복리후생비 2건|가수금 1건"], ["마감·감사", "수정 이력 9건|잠금 대기 1단계|검토자 회계팀"]],
+      "tax/tax-return-preview": ["신고·납부", "부가세·원천세·지방세 일정과 신고서 승인·납부 흐름을 관리합니다.", ["예상 납부", "₩11.74M", "부가세 D-2"], ["신고 일정", "부가세 7/25|원천세 8/10|지방소득세 8/10"], ["승인·납부 흐름", "신고서 미리보기|세무대리인 검토|대표 승인·납부확인"]],
+      "approvals/approval-detail": ["승인 대기", "계약·발주·정산·세무 승인 요청을 근거와 함께 처리합니다.", ["승인 대기", "8건", "오늘 마감 3건"], ["대기 큐", "근로계약 2건|긴급발주 3건|세무 공유 1건"], ["승인 기준", "금액·위험 확인|첨부 근거 확인|의견 기록"]],
+      "approvals/audit-detail": ["완료 승인", "완료된 승인과 당시 근거·결재자를 조회합니다.", ["완료", "31건", "이번 달"], ["최근 승인", "급여 확정|사골 발주|정산 차이 소명"], ["감사 정보", "결재자|처리 시각|변경 전후 값"]],
+      "approvals/review": ["반려 요청", "반려 사유와 수정 후 재상신 상태를 추적합니다.", ["반려", "1건", "계약조건"], ["수정 요청", "수습기간 근거|급여조건 확인|직원 재동의"], ["재상신 흐름", "사유 확인|문서 수정|서명·승인 재요청"]],
+      "approvals/tax-agent-approval": ["승인 정책", "업무 종류와 금액별 승인 단계 및 대리 권한을 설정합니다.", ["정책", "12개", "충돌 1건"], ["주요 정책", "발주 ₩1M 이상 대표|세무 항상 대표|계약 노무 검토"], ["정책 점검", "대리 승인 만료|역할 중복|예외 로그"]],
+      "alerts/notification": ["중요 알림", "마감·금액·보안 위험이 높은 알림만 모아 확인합니다.", ["중요", "5건", "읽지 않음 3건"], ["위험 알림", "부가세 D-2|은행 인증 지연|계약 만료 D-8"], ["다음 행동", "담당자 지정|즉시 처리|완료 조건 확인"]],
+      "alerts/task": ["업무 알림", "담당 업무의 배정, 지연과 완료 알림을 관리합니다.", ["업무", "9건", "지연 2건"], ["알림 목록", "급여 승인 요청|발주 수정 의견|증빙 보완 회신"], ["알림 규칙", "담당자만|마감 전 재알림|완료 시 자동 종료"]],
+      "alerts/integration-audit": ["시스템 알림", "외부 연동과 동기화 상태 이상을 기술 영향과 함께 보여줍니다.", ["시스템", "3건", "장애 없음"], ["상태 알림", "국민은행 지연|홈택스 인증 D-14|요기요 재로그인"], ["복구 안내", "재시도|인증 갱신|수기 업로드 전환"]],
+      "alerts/credential-vault": ["알림 설정", "업무별 채널, 수신자와 반복 알림 조건을 설정합니다.", ["규칙", "18개", "활성 16개"], ["수신 설정", "대표 중요알림 즉시|점장 재고 매일|회계 세무 D-14/7/2"], ["채널 설정", "앱 알림|이메일 요약|메신저 연결 대기"]],
+      "business/business-detail": ["사업자 관리", "사업자 기본정보, 과세유형과 검증 상태를 관리합니다.", ["사업자", "3개", "보완 1개"], ["사업자 목록", "열정국밥 검증완료|문라이트 수정검토|문고비 서류보완"], ["관리 항목", "등록정보|대표 권한|계좌·플랫폼 연결"]],
+      "business/business-ocr": ["지점 관리", "지점 운영정보와 사업자등록증 OCR 매핑을 점검합니다.", ["지점", "5개", "운영 5개"], ["지점 현황", "성신점 매출 1위|미아점 계약 갱신|정화점 재고 안정"], ["정보 점검", "주소·영업시간|사업자 매핑|계좌·채널 연결"]],
+      "business/audit-detail": ["전환 이력", "사업자 전환과 주요 설정 변경 이력을 추적합니다.", ["전환", "14회", "최근 30일"], ["최근 이력", "열정국밥→문라이트|문라이트→열정국밥|지점 범위 변경"], ["감사 항목", "사용자·시각|전환 전후|접속 기기"]],
+      "business/business-switch": ["신규 사업자 등록", "서류 업로드부터 지점·계좌 연결까지 등록 단계를 진행합니다.", ["등록 초안", "1건", "서류 대기"], ["필수 정보", "사업자등록증|대표자·과세유형|주사업자 여부"], ["등록 흐름", "OCR 추출|필드 검토|지점·계좌 연결"]],
+      "integrations/sales-channel-connect": ["판매 연동", "배달·POS 판매채널의 인증과 데이터 수집 범위를 관리합니다.", ["판매 연동", "6개", "정상 5개"], ["서비스 상태", "배민 정상|쿠팡 정상|요기요 재인증"], ["복구 절차", "로그인 확인|지점·메뉴 매핑|샘플 주문 대사"]],
+      "integrations/bank-connect": ["은행 연동", "조회 전용 계좌 인증과 거래수집 상태를 관리합니다.", ["은행 연동", "3곳", "지연 1곳"], ["연결 상태", "신한 2계좌 정상|기업 2계좌 정상|국민 1계좌 지연"], ["안전·복구", "이체권한 제외|인증 갱신|파일 업로드 대체"]],
+      "integrations/supplier-connect": ["매입 연동", "매입처·발주 프로그램과 수기 증빙 경로를 함께 관리합니다.", ["매입 연동", "8개", "수기 3개"], ["연동 방식", "마켓봄 계정|뉴통 API|서울축산 OCR"], ["실패 복구", "발주서 업로드|영수증 OCR|반복 템플릿 저장"]],
+      "integrations/tax-connect": ["세무 연동", "홈택스 인증과 세금계산서·카드매입 수집 범위를 관리합니다.", ["세무 연동", "3개", "만료예정 1개"], ["수집 범위", "전자세금계산서|현금영수증|카드매입·신고서"], ["복구 절차", "인증서 갱신|위임 확인|자료 파일 업로드"]],
+      "integrations/integration-audit": ["권한 점검", "연동별 인증 주체, 최소 권한과 만료·변경 이력을 점검합니다.", ["점검 필요", "3건", "권한 과다 2건"], ["위험 항목", "점장 정산열람|OTP 만료 D-7|공용계정 사용"], ["개선 흐름", "권한 축소|인증 교체|감사로그 확인"]],
+      "margins/menu-detail": ["메뉴 원가", "레시피 재료비, 포장비와 채널 수수료를 메뉴별로 계산합니다.", ["평균 원가율", "36.8%", "+1.2%p"], ["메뉴 원가", "얼큰국밥 ₩4,366|수육정식 ₩7,650|만두 ₩2,180"], ["원가 구성", "식재료|포장재|채널 수수료"]],
+      "margins/review": ["원가 변동", "매입 단가와 레시피 변경이 메뉴 원가에 준 영향을 추적합니다.", ["상승 품목", "6개", "최근 30일"], ["주요 변동", "돼지고기 +8.2%|대파 +12.4%|포장용기 +3.1%"], ["영향 메뉴", "수육정식 +2.1%p|얼큰국밥 +0.8%p|세트 +1.4%p"]],
+      "margins/margin-detail": ["마진 분석", "메뉴·채널별 공헌이익과 목표 마진 미달을 확인합니다.", ["공헌이익", "₩42.8M", "마진율 33.3%"], ["목표 미달", "수육정식 배달|만두 단품|야간 할인세트"], ["개선 후보", "가격 조정|구성 변경|채널 프로모션 축소"]],
+      "margins/order-detail": ["가격 시뮬레이션", "가격과 주문량 가정을 바꿔 매출·이익 영향을 비교합니다.", ["예상 개선", "+₩2.4M", "월 공헌이익"], ["시나리오", "수육 +₩1,000|주문량 -3%|재료비 +2%"], ["비교 결과", "현재 이익|권장 가격|손익분기 주문량"]],
+      "audit/audit-detail": ["계정 권한", "사용자·역할별 데이터 접근과 승인 범위를 점검합니다.", ["사용자", "27명", "과다권한 2명"], ["역할 현황", "대표 2명|점장 5명|회계·노무 4명"], ["권한 점검", "사업자 범위|민감문서|승인·내보내기"]],
+      "audit/credential-vault": ["변경 이력", "중요 정보와 정책 변경 전후 값을 감사 가능하게 기록합니다.", ["변경", "46건", "최근 30일"], ["최근 변경", "계약 시급|사업자 주소|연동 수집범위"], ["감사 정보", "변경자·시각|이전·새 값|승인 근거"]],
+      "audit/integration-audit": ["로그인·연동 감사", "로그인과 외부 연동 인증 시도 및 실패를 추적합니다.", ["실패", "4건", "차단 0건"], ["접속 이력", "대표 웹 로그인|회계 모바일 로그인|은행 재인증"], ["보안 점검", "새 기기|반복 실패|인증정보 변경"]],
+      "audit/business-switch": ["보안 정책", "세션, 최소 권한, 민감정보와 내보내기 정책을 관리합니다.", ["정책", "15개", "검토 2개"], ["핵심 정책", "세션 8시간|민감정보 마스킹|내보내기 승인"], ["정책 운영", "정기 검토|예외 승인|위반 알림"]]
+    };
+
+    const renderDetailPage = (slug, detail) => {
+      const definition = detailPageDefinitions[`${slug}/${detail}`];
+      const [title, description, metric, primarySection, secondarySection] = definition;
+      const list = ([heading, values], tone) => `<article class="card panel"><div class="panel-head"><div class="panel-title"><h3>${heading}</h3><p>${title} 업무를 구성하는 핵심 항목입니다.</p></div><span class="status ${tone}">${values.split("|").length}개 항목</span></div><div class="list">${values.split("|").map((value, index) => row(index ? "blue" : "orange", index + 1, value, `${views[slug].title} · 시안 데이터`, "review")).join("")}</div></article>`;
+      return `<div class="detail-page" data-detail-page="${slug}/${detail}">
+        <nav class="detail-breadcrumb" aria-label="현재 위치"><button type="button" data-view="${slug}">${views[slug].title} 요약</button><span aria-hidden="true">/</span><span aria-current="page">${title}</span></nav>
+        <section class="hero"><div><h2>${title}</h2><p>${description} 모든 수치는 시안 데이터입니다.</p></div><div class="hero-actions"><button type="button" class="outline" data-view="${slug}">상위 요약</button><button type="button" class="primary" data-action="review">업무 검토</button></div></section>
+        <section class="kpis">${kpi(metric[0], metric[1], `<span class="up">${metric[2]}</span>`, "orange", moneyIcon)}${kpi("처리 상태", "진행 중", '<span>담당자 확인 가능</span>', "blue", cardIcon)}${kpi("마지막 갱신", "오늘 09:20", '<span>연동 기준</span>', "green", bankIcon)}${kpi("예외", secondarySection[1].split("|").length + "건", '<span class="down">검토 필요</span>', "amber", taxIcon)}</section>
+        <section class="grid-2">${list(primarySection, "ok")}${list(secondarySection, "warn")}</section>
+        <section class="card panel recovery"><div><h3>처리되지 않을 때</h3><p>원천 자료를 다시 확인한 뒤 재시도하거나 연결 설정과 담당 권한을 점검하세요.</p></div><div class="hero-actions"><button type="button" class="outline" data-view="${slug}">요약으로 돌아가기</button><button type="button" class="outline" data-action="reconnect">연결 설정</button><button type="button" class="primary" data-action="review">다시 검토</button></div></section>
+      </div>`;
+    };
+
     buildMenu(sidebarNav);
     buildMenu(mobileNav);
 
@@ -1388,6 +1482,7 @@
       return specs[action] || ["상세현황", "선택한 업무의 상세 화면입니다.", `<div class="notice"><span>해당 기능의 업무 흐름을 확인하는 UX 시안입니다.</span><b>시안 데이터</b></div>`];
     }
     function openDetail(action) {
+      drawerTriggerElement = document.activeElement;
       const [title, subtitle, body] = detailContent(action);
       drawerTitle.textContent = title;
       drawerSubtitle.textContent = subtitle;
@@ -1398,9 +1493,12 @@
       detailOverlay.querySelector("[data-close-overlay]").focus();
     }
     function closeDetail() {
+      if (!detailOverlay.classList.contains("open")) return;
       detailOverlay.classList.remove("open");
       detailOverlay.setAttribute("aria-hidden", "true");
       document.body.style.overflow = "";
+      if (drawerTriggerElement && document.contains(drawerTriggerElement)) drawerTriggerElement.focus();
+      drawerTriggerElement = null;
     }
     function closeOverlays() {
       closeDetail();
@@ -1469,30 +1567,36 @@
     const normalizeHash = () => {
       const [rawView, rawDetail] = window.location.hash.replace(/^#/, "").split("/");
       const slug = views[rawView] ? rawView : "home";
-      const detail = detailRouteActions.has(rawDetail) ? rawDetail : null;
-      return { slug, detail };
+      const detail = rawDetail && detailPageDefinitions[`${slug}/${rawDetail}`] ? rawDetail : null;
+      return { slug, detail, needsRecovery: Boolean(rawDetail && !detail) || !views[rawView] };
     };
     const syncMenuState = (slug, detail = null) => {
       expandedMenus.add(slug);
       document.querySelectorAll("[data-menu-group]").forEach((group) => {
         const expanded = expandedMenus.has(group.dataset.menuGroup);
         group.classList.toggle("expanded", expanded);
-        const parent = group.querySelector("[data-menu-toggle]");
-        parent.setAttribute("aria-expanded", String(expanded));
-        if (group.dataset.menuGroup === slug) parent.setAttribute("aria-current", "page"); else parent.removeAttribute("aria-current");
+        const toggle = group.querySelector("[data-menu-toggle]");
+        const submenu = group.querySelector(".submenu");
+        toggle.setAttribute("aria-expanded", String(expanded));
+        toggle.setAttribute("aria-label", `${views[group.dataset.menuGroup].title} 하위 메뉴 ${expanded ? "접기" : "펼치기"}`);
+        submenu.hidden = !expanded;
       });
       document.querySelectorAll("[data-view], [data-submenu-detail]").forEach((item) => {
-        const active = item.dataset.view === slug || (item.dataset.submenuView === slug && item.dataset.submenuDetail === detail);
+        const submenuActive = item.dataset.submenuView === slug && item.dataset.submenuDetail === detail;
+        const summaryActive = item.dataset.view === slug && (!detail || !item.closest(".nav-group"));
+        const active = summaryActive || submenuActive;
         item.classList.toggle("active", active);
-        if (active) item.setAttribute("aria-current", "page"); else item.removeAttribute("aria-current");
+        if (active && (!detail || submenuActive)) item.setAttribute("aria-current", "page"); else item.removeAttribute("aria-current");
       });
     };
     const render = (slug, updateHash = true, detail = null) => {
       const view = views[slug] || views.home;
       closeOverlays();
-      pageTitle.textContent = view.title;
-      document.title = `오비서 V3 · ${view.title} 최종안`;
-      viewRoot.innerHTML = view.html();
+      const detailDefinition = detail ? detailPageDefinitions[`${slug}/${detail}`] : null;
+      const currentTitle = detailDefinition ? detailDefinition[0] : view.title;
+      pageTitle.textContent = currentTitle;
+      document.title = `오비서 V3 · ${currentTitle}`;
+      viewRoot.innerHTML = detailDefinition ? renderDetailPage(slug, detail) : view.html();
       window.scrollTo(0, 0);
       syncMenuState(slug, detail);
       const route = detail ? `#${slug}/${detail}` : `#${slug}`;
@@ -1502,7 +1606,6 @@
     };
     const openSubmenuDetail = (slug, detail) => {
       render(slug, true, detail);
-      openDetail(detail);
     };
 
     document.addEventListener("click", (event) => {
@@ -1542,6 +1645,7 @@
       const viewButton = event.target.closest("[data-view]");
       if (viewButton) {
         const slug = viewButton.dataset.view;
+        expandedMenus.add(slug);
         render(slug);
         showToast(`${views[slug].title} 화면으로 전환했습니다.`);
         return;
@@ -1635,13 +1739,13 @@
       }
     });
     window.addEventListener("hashchange", () => {
-      const { slug, detail } = normalizeHash();
+      const { slug, detail, needsRecovery } = normalizeHash();
       render(slug, false, detail);
-      if (detail) openDetail(detail);
+      if (needsRecovery) history.replaceState(null, "", `#${slug}`);
     });
     const initialRoute = normalizeHash();
     render(initialRoute.slug, false, initialRoute.detail);
-    if (initialRoute.detail) openDetail(initialRoute.detail);
+    if (initialRoute.needsRecovery) history.replaceState(null, "", `#${initialRoute.slug}`);
   </script>
 </body>
 </html>
