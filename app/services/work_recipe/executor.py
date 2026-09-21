@@ -7,6 +7,7 @@ from typing import Any
 
 from app.browser_bridge.aads_adapter import acquire_browser_context
 from app.browser_bridge.service import BrowserBridgeError, get_browser_bridge_service
+from app.services.screenshot_store import save_png
 from app.services.work_recipe.audit import mask_secrets
 from app.services.work_recipe.guard import (
     assert_not_page_derived,
@@ -175,11 +176,16 @@ class BrowserRecipeExecutor:
         except Exception as exc:  # Evidence must not turn a completed read into a failed task.
             evidence["dom"] = {"status": "unavailable", "reason": type(exc).__name__}
         try:
-            screenshot = await page.screenshot()
+            screenshot = await page.screenshot(timeout=15_000)
             if isinstance(screenshot, bytes):
                 evidence["screenshot"] = {
                     "status": "captured", "sha256": hashlib.sha256(screenshot).hexdigest(), "bytes": len(screenshot),
                 }
+                # 해시만 남기면 "증거 저장" 이라고 보고하면서 정작 아무도 그
+                # 화면을 열어 볼 수 없다. 열리는 URL 까지 같이 남긴다.
+                url = await save_png(screenshot, prefix="recipe")
+                if url:
+                    evidence["screenshot"]["url"] = url
             elif isinstance(screenshot, str):
                 evidence["screenshot"] = {"status": "captured", "reference": mask_secrets(screenshot)}
         except Exception as exc:

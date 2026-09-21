@@ -49,7 +49,11 @@ class FakePage:
         self.calls.append(("api_call", {"argument": argument, **kwargs}))
         return {"status": 200, "ok": True, "text": "ok"}
 
-    async def screenshot(self):
+    async def screenshot(self, **kwargs):
+        # 실제 Playwright 는 timeout 을 받는다. 스텁이 그것을 거부하면
+        # 증거 수집이 TypeError 로 삼켜져 'unavailable' 이 되고,
+        # 테스트는 통과하던 경로가 아니라 실패 경로를 검증하게 된다.
+        self.screenshot_kwargs = dict(kwargs)
         return b"smart-browser-screen"
 
 
@@ -124,6 +128,51 @@ async def test_executor_prefers_browser_agent_and_returns_visual_dom_aria_eviden
     assert result["evidence"]["screenshot"]["status"] == "captured"
     assert result["evidence"]["dom"]["text"] == "읽기 전용 대시보드"
     assert result["evidence"]["aria"]["text"] == "snapshot"
+    # 캡처가 무한정 매달리면 읽기 한 건이 도구 타임아웃을 넘긴다.
+    assert page.screenshot_kwargs.get("timeout") == 15_000
+
+
+async def test_screenshot_evidence_carries_openable_url(monkeypatch):
+    """해시만 남기면 "증거 저장" 이라고 보고해도 아무도 그 화면을 못 연다."""
+    page = FakePage()
+
+    async def acquire(**kwargs):
+        return FakeContext(page), None
+
+    async def fake_save(data, *, prefix=""):
+        assert data == b"smart-browser-screen"
+        return "https://aads.newtalk.kr/screenshots/recipe_test.png"
+
+    monkeypatch.setattr(executor_module, "acquire_browser_context", acquire)
+    monkeypatch.setattr(executor_module, "save_png", fake_save)
+    result = await executor_module.BrowserRecipeExecutor()(
+        {"action": "snapshot", "risk": "READ", "url": "https://aads.newtalk.kr/ohvis"}
+    )
+
+    shot = result["evidence"]["screenshot"]
+    assert shot["status"] == "captured"
+    assert shot["url"] == "https://aads.newtalk.kr/screenshots/recipe_test.png"
+
+
+async def test_screenshot_evidence_survives_save_failure(monkeypatch):
+    """저장 실패는 증거를 줄일 뿐, 읽기 결과를 실패로 뒤집지 않는다."""
+    page = FakePage()
+
+    async def acquire(**kwargs):
+        return FakeContext(page), None
+
+    async def failing_save(data, *, prefix=""):
+        return None
+
+    monkeypatch.setattr(executor_module, "acquire_browser_context", acquire)
+    monkeypatch.setattr(executor_module, "save_png", failing_save)
+    result = await executor_module.BrowserRecipeExecutor()(
+        {"action": "snapshot", "risk": "READ", "url": "https://aads.newtalk.kr/ohvis"}
+    )
+
+    assert result["ok"] is True
+    assert result["evidence"]["screenshot"]["status"] == "captured"
+    assert "url" not in result["evidence"]["screenshot"]
 
 
 @pytest.mark.parametrize(
