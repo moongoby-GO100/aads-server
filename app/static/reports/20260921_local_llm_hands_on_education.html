@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>내 PC에서 27B 모델 돌리기 — 로컬 LLM 실전 운용 교육자료 · 2026-09-21</title>
+<style>
+:root{
+  --ink:#16191d; --ink2:#454c55; --ink3:#6b7480;
+  --line:#e2e6ea; --bg:#ffffff; --bg2:#f6f8fa; --bg3:#eef2f6;
+  --good:#1a7f45; --goodbg:#e7f5ec;
+  --bad:#b3261e; --badbg:#fdecea;
+  --warn:#8a5a00; --warnbg:#fff4e0;
+  --acc:#1b5fbe; --accbg:#e8f0fc;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg2);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  line-height:1.72;font-size:15.5px;-webkit-text-size-adjust:100%}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px 90px}
+header{background:linear-gradient(135deg,#10233f,#1b3b6b);color:#fff;padding:44px 20px 38px;margin-bottom:26px}
+header .inner{max-width:1080px;margin:0 auto}
+header h1{margin:0 0 10px;font-size:29px;letter-spacing:-.5px;line-height:1.35}
+header p{margin:0;color:#c3d4ea;font-size:14.5px}
+.badges{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
+.badge{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);
+  border-radius:999px;padding:4px 12px;font-size:12.5px;color:#eaf1fa}
+section{background:var(--bg);border:1px solid var(--line);border-radius:12px;
+  padding:26px 28px;margin-bottom:22px}
+h2{font-size:21px;margin:0 0 6px;letter-spacing:-.3px;padding-bottom:12px;border-bottom:2px solid var(--bg3)}
+h2 .n{color:var(--acc);font-weight:700;margin-right:8px}
+h3{font-size:17px;margin:26px 0 8px;color:var(--ink)}
+h4{font-size:15px;margin:18px 0 6px;color:var(--ink2)}
+p{margin:10px 0}
+ul,ol{margin:10px 0;padding-left:22px}
+li{margin:5px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.2px}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:var(--bg3);font-weight:600}
+tr:nth-child(even) td{background:#fbfcfd}
+code{background:var(--bg3);padding:1.5px 6px;border-radius:5px;font-size:13.2px;
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+pre{background:#131820;color:#e6edf3;padding:16px 18px;border-radius:9px;overflow-x:auto;
+  font-size:13.2px;line-height:1.6;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+pre code{background:none;color:inherit;padding:0}
+.box{border-radius:9px;padding:14px 16px;margin:14px 0;border-left:4px solid}
+.good{background:var(--goodbg);border-color:var(--good)}
+.bad{background:var(--badbg);border-color:var(--bad)}
+.warn{background:var(--warnbg);border-color:var(--warn)}
+.acc{background:var(--accbg);border-color:var(--acc)}
+.box b{display:block;margin-bottom:4px}
+.toc{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin-bottom:22px}
+.toc ol{columns:2;column-gap:34px;margin:8px 0 0}
+.toc a{color:var(--acc);text-decoration:none}
+.toc a:hover{text-decoration:underline}
+.kpi{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}
+.kpi div{flex:1 1 150px;background:var(--bg3);border-radius:9px;padding:13px 15px}
+.kpi .v{font-size:21px;font-weight:700;color:var(--acc);display:block;line-height:1.3}
+.kpi .l{font-size:12.5px;color:var(--ink3)}
+.src{color:var(--ink3);font-size:12.5px}
+footer{color:var(--ink3);font-size:13px;text-align:center;padding:26px 0}
+@media(max-width:760px){.toc ol{columns:1}header h1{font-size:23px}}
+</style>
+</head>
+<body>
+<header><div class="inner">
+<h1>내 PC에서 27B 모델 돌리기<br>— 로컬 LLM 실전 운용</h1>
+<p>2026-09-21 · 오비스(OBYS) CEO 교육자료 · 모든 수치는 대표님 PC에서 당일 직접 측정한 값입니다</p>
+<div class="badges">
+  <span class="badge">RTX 3060 12GB 실측</span>
+  <span class="badge">21.6 tok/s</span>
+  <span class="badge">비전 판독 5/5</span>
+  <span class="badge">코드리뷰 4/4</span>
+  <span class="badge">8개 장</span>
+</div>
+</div></header>
+
+<div class="wrap">
+
+<div class="toc">
+<b>목차</b>
+<ol>
+<li><a href="#c1">왜 내 PC에서 돌리나 — 판단 기준</a></li>
+<li><a href="#c2">모델 이름 읽는 법</a></li>
+<li><a href="#c3">내 PC가 되는지 확인하는 4개 숫자</a></li>
+<li><a href="#c4">속도를 5배 바꾼 설정 하나</a></li>
+<li><a href="#c5">실제로 무엇을 시켜봤고 얼마나 맞혔나</a></li>
+<li><a href="#c6">AI 답을 믿으면 안 되는 순간</a></li>
+<li><a href="#c7">자리를 60GB 만든 방법</a></li>
+<li><a href="#c8">교육 커리큘럼 지도 — 지금까지 22건</a></li>
+</ol>
+</div>
+
+<section id="c1">
+<h2><span class="n">01</span>왜 내 PC에서 돌리나 — 판단 기준</h2>
+
+<p>로컬 LLM은 "돈을 아끼려고" 쓰는 것이 아닙니다. 아끼는 돈보다 관리 비용이 더 큰 경우가 많습니다. 판단은 <b>세 가지 질문</b>으로 갈립니다.</p>
+
+<table>
+<tr><th>질문</th><th>예 → 로컬</th><th>아니오 → 클라우드(Claude 등)</th></tr>
+<tr><td><b>데이터가 밖으로 나가면 안 되는가</b></td><td>계좌·고객정보·미공개 실적</td><td>공개 문서·일반 질의</td></tr>
+<tr><td><b>같은 일을 수천 번 반복하는가</b></td><td>문서 1만 건 분류·태깅</td><td>하루 몇 번 쓰는 질의</td></tr>
+<tr><td><b>품질이 조금 떨어져도 되는가</b></td><td>1차 초안·선별·요약</td><td>최종 판단·대외 문서·코드 확정</td></tr>
+</table>
+
+<div class="box acc">
+<b>핵심 한 줄</b>
+로컬 LLM은 <b>클라우드 모델의 대체재가 아니라 전처리기</b>입니다. 1만 건을 로컬로 걸러 100건으로 줄이고, 그 100건만 고급 모델에 보내는 구조가 가장 경제적입니다.
+</div>
+
+<p>오늘 대표님 PC에 올린 모델은 <b>Qwen3.8-27B</b>입니다. 이 급(27B, 약 269억 파라미터)이 로컬에서 의미 있는 이유는, 이보다 작으면 코드·차트 같은 실무 판단을 못 하고, 이보다 크면 12GB VRAM에 안 들어가기 때문입니다.</p>
+</section>
+
+<section id="c2">
+<h2><span class="n">02</span>모델 이름 읽는 법</h2>
+
+<p>대표님이 물으셨던 그 이름입니다.</p>
+
+<pre><code>ISTA-DASLab / Qwen3.8-27B - GSQ - RCO - GGUF : IQ2_XS
+   ①만든곳      ②원본모델    ③압축기법   ④파일형식  ⑤압축강도</code></pre>
+
+<table>
+<tr><th>조각</th><th>뜻</th><th>왜 중요한가</th></tr>
+<tr><td><b>① ISTA-DASLab</b></td><td>오스트리아 IST 대학 연구실. GPTQ·SparseGPT를 만든 곳</td><td>압축본은 <b>누가 만들었는지</b>가 품질을 좌우합니다. 무명 계정 압축본은 성능이 망가진 경우가 흔합니다</td></tr>
+<tr><td><b>② Qwen3.8-27B</b></td><td>알리바바 원본 모델, 269억 파라미터</td><td>"27B"가 체급입니다. 7B는 가볍고 멍청, 70B는 똑똑하지만 PC에 안 들어갑니다</td></tr>
+<tr><td><b>③ GSQ·RCO</b></td><td>압축 알고리즘 2종</td><td>같은 크기로 줄여도 알고리즘에 따라 품질 차이가 납니다</td></tr>
+<tr><td><b>④ GGUF</b></td><td>Ollama·LM Studio가 읽는 파일 형식</td><td><b>이 글자가 있으면 내 PC에서 바로 돌아갑니다.</b> 없으면 서버용입니다</td></tr>
+<tr><td><b>⑤ IQ2_XS</b></td><td>압축 강도(2비트급, 가장 강함)</td><td>숫자가 작을수록 파일이 작고 품질이 떨어집니다</td></tr>
+</table>
+
+<h3>양자화(압축)가 뭔지 한 문장으로</h3>
+<p>모델은 수백억 개의 <b>숫자</b> 덩어리입니다. 원래 숫자 하나에 16비트를 쓰던 것을 2~4비트로 줄이는 것이 양자화입니다. <b>사진을 JPEG로 압축하는 것과 같습니다</b> — 파일은 작아지고 화질은 조금 나빠집니다.</p>
+
+<div class="kpi">
+<div><span class="v">53.8 GB</span><span class="l">원본 크기</span></div>
+<div><span class="v">8.4 GB</span><span class="l">IQ2_XS 압축 후</span></div>
+<div><span class="v">931 MB</span><span class="l">비전(이미지) 모듈</span></div>
+<div><span class="v">9.4 GB</span><span class="l">실제 다운로드 총량</span></div>
+</div>
+<p class="src">[대표님 PC 실측, 2026-09-21 · <code>ollama list</code> ID 6c270d90a683]</p>
+</section>
+
+<section id="c3">
+<h2><span class="n">03</span>내 PC가 되는지 확인하는 4개 숫자</h2>
+
+<p>PC 사양표를 다 볼 필요 없습니다. <b>네 개만</b> 보면 됩니다.</p>
+
+<table>
+<tr><th>#</th><th>볼 것</th><th>대표님 PC 실측</th><th>판정 기준</th></tr>
+<tr><td>1</td><td><b>VRAM</b>(그래픽카드 메모리)</td><td>RTX 3060 · <b>12 GB</b></td><td>모델 파일보다 커야 함. 8.4GB 모델 → 12GB면 여유</td></tr>
+<tr><td>2</td><td><b>RAM</b>(본체 메모리)</td><td><b>31.9 GB</b></td><td>VRAM이 모자랄 때 대신 씀. 16GB 이상 권장</td></tr>
+<tr><td>3</td><td><b>디스크 여유</b></td><td>시작 시 6.5GB → <b>67.19 GB</b></td><td>모델 크기의 1.5배. 이게 첫 블로커였습니다</td></tr>
+<tr><td>4</td><td><b>CPU</b></td><td>i7-10700F 8코어</td><td>보조 역할. 웬만하면 문제 안 됨</td></tr>
+</table>
+
+<div class="box warn">
+<b>주의 — 윈도우 시스템 정보는 VRAM을 틀리게 말합니다</b>
+대표님 PC의 윈도우 시스템 정보는 VRAM을 <b>4GB</b>로 보고했습니다. 실제는 12,288MB입니다. 윈도우의 오래된 32비트 표기 버그입니다.
+<b>반드시 <code>nvidia-smi</code> 로 확인하십시오.</b> 이걸 믿었으면 "우리 PC는 안 된다"는 잘못된 결론이 났을 겁니다.
+</div>
+
+<h3>VRAM에 다 안 들어가면 어떻게 되나</h3>
+<p>못 돌아가는 게 아니라 <b>느려집니다</b>. 안 들어간 부분을 CPU가 대신 계산하는데, GPU보다 훨씬 느립니다. 그래서 "된다/안 된다"가 아니라 <b>"몇 %가 GPU에 올라갔나"</b>를 봐야 합니다. 다음 장의 핵심입니다.</p>
+</section>
+
+<section id="c4">
+<h2><span class="n">04</span>속도를 5배 바꾼 설정 하나</h2>
+
+<p>오늘 가장 값진 발견입니다. <b>같은 PC, 같은 모델인데 설정 하나로 5배 차이</b>가 났습니다.</p>
+
+<table>
+<tr><th>설정</th><th>속도</th><th>GPU 배치</th><th>판정</th></tr>
+<tr><td>기본값 (32K 컨텍스트)</td><td><b>4.37 tok/s</b></td><td>87% GPU / 13% CPU</td><td>❌ 답답해서 못 씀</td></tr>
+<tr><td><b>4K 컨텍스트</b> (적용함)</td><td><b>21.6 tok/s</b></td><td>100% GPU</td><td>✅ 실사용 가능</td></tr>
+</table>
+
+<h3>왜 이런 일이 생기나</h3>
+<p><b>컨텍스트</b>는 모델이 한 번에 기억하는 글의 양입니다. 이걸 크게 잡으면 그 기억을 담을 공간(KV 캐시)도 VRAM을 먹습니다. 32K로 잡으면 <b>모델 자체가 VRAM에 다 못 들어가</b> 일부가 CPU로 밀려납니다. 그 13%가 전체 속도를 5분의 1로 끌어내립니다.</p>
+
+<pre><code># 윈도우 사용자 환경변수 (재부팅해도 유지됨 — 실측 확인)
+OLLAMA_CONTEXT_LENGTH = 4096</code></pre>
+
+<div class="box good">
+<b>대표님이 기억하실 한 줄</b>
+로컬 LLM이 느리면 PC 탓이 아니라 <b>설정 탓일 가능성이 먼저</b>입니다.
+"컨텍스트를 줄여봤나?"가 첫 질문입니다.
+</div>
+
+<h3>로딩 시간은 세 가지가 다릅니다</h3>
+<table>
+<tr><th>상황</th><th>로딩</th><th>이유</th></tr>
+<tr><td>재부팅 직후 첫 호출</td><td><b>165초</b></td><td>디스크에서 9.4GB를 처음 읽음</td></tr>
+<tr><td>디스크 캐시가 더워진 뒤</td><td><b>26초</b></td><td>윈도우가 파일을 메모리에 들고 있음</td></tr>
+<tr><td>모델이 상주 중</td><td><b>0초</b></td><td>이미 VRAM에 있음</td></tr>
+</table>
+<p>즉 <b>첫 질문만 느리고 이어서 쓰면 계속 빠릅니다.</b> "느리다"는 평가를 첫 호출로 내리면 안 됩니다.</p>
+<p class="src">[대표님 PC 실측 · Ollama 0.34.0 → 0.34.2 업데이트 후에도 21.55~21.99 tok/s로 동일]</p>
+</section>
+
+<section id="c5">
+<h2><span class="n">05</span>실제로 무엇을 시켜봤고 얼마나 맞혔나</h2>
+
+<p>"돌아간다"와 "쓸 만하다"는 다릅니다. 오늘 <b>정답을 아는 문제</b>로 채점했습니다.</p>
+
+<h3>시험 ① 차트 이미지 판독 — 5문항 전부 정답</h3>
+<p>제가 값을 정해서 막대그래프를 그리고, <b>막대 위에 숫자를 쓰지 않은 채</b> 읽게 했습니다. 눈금과 막대 높이만 보고 맞혀야 합니다.</p>
+<table>
+<tr><th>막대</th><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th></tr>
+<tr><td><b>정답</b></td><td>120</td><td>340</td><td>210</td><td>480</td><td>90</td></tr>
+<tr><td><b>모델 답</b></td><td>120 ✅</td><td>340 ✅</td><td>210 ✅</td><td>480 ✅</td><td>90 ✅</td></tr>
+</table>
+<p>눈금 사이에 걸친 값(340·480·210)까지 정확히 보간했습니다. <b>차트 캡처를 던지고 숫자를 뽑는 용도로는 충분합니다.</b></p>
+
+<h3>시험 ② 코드리뷰 — 심어둔 결함 4개 전부 적발</h3>
+<p>제가 일부러 결함 4개를 넣은 코드를 리뷰시켰습니다.</p>
+<table>
+<tr><th>심어둔 결함</th><th>적발</th><th>모델이 제시한 수정안</th></tr>
+<tr><td>SQL 인젝션</td><td>✅ [심각]</td><td>파라미터 바인딩 <code>$1, $2</code></td></tr>
+<tr><td>캐시 키 누락 → 잘못된 결과 반환</td><td>✅ [높음]</td><td>키에 조건값 포함</td></tr>
+<tr><td>예외를 삼키고 <code>None</code> 반환</td><td>✅ [중간]</td><td>마지막 예외 re-raise</td></tr>
+<tr><td>키 미설정 시 <code>"Bearer None"</code></td><td>✅ [중간]</td><td>값 검증 후 오류 발생</td></tr>
+</table>
+
+<h3>시험 ③ 실제 운영 코드 — 진짜 결함 2건 발견</h3>
+<p>여기서 놀라운 일이 있었습니다. AADS 실제 운영 파일을 리뷰시켰더니 <b>제가 못 본 결함</b>을 찾아냈습니다.</p>
+<div class="box bad">
+<b>발견된 실제 결함 — 조용한 데이터 유실</b>
+작업 기록을 보관함으로 옮기는 코드가 <code>ON CONFLICT DO NOTHING</code>을 쓰고 있었습니다.
+<b>삭제는 이미 실행된 뒤에 저장만 건너뜁니다.</b> 큐에서도 사라지고 보관함에도 안 남습니다.
+게다가 건수를 세는 방식 때문에 <b>유실이 나도 로그는 정상으로 보였습니다.</b>
+→ 당일 수정·배포 완료(커밋 <code>ea6f843e</code>), 재발 방지 테스트 2건 추가.
+</div>
+</section>
+
+<section id="c6">
+<h2><span class="n">06</span>AI 답을 믿으면 안 되는 순간</h2>
+
+<p>이 장이 오늘 교육의 <b>가장 중요한 부분</b>입니다. 같은 모델이 진짜 결함을 찾아낸 바로 그 세션에서, <b>확신에 찬 오답</b>도 냈습니다.</p>
+
+<div class="box bad">
+<b>모델의 오답 — 그대로 믿었으면 멀쩡한 코드를 고칠 뻔했습니다</b>
+"asyncpg는 자동 커밋이 꺼져 있는 게 기본이라 <code>commit</code> 없이는 롤백된다 — 정리 작업이 반영되지 않는 <b>심각한 버그</b>"
+<br><br>
+<b>틀렸습니다.</b> 해당 라이브러리는 명시적 트랜잭션 밖에서 자동 커밋으로 동작합니다. 문장은 전문적이고 단호했지만 사실이 아니었습니다.
+</div>
+
+<h3>대표님이 보고를 검증하실 때 쓰실 3개 질문</h3>
+<table>
+<tr><th>#</th><th>질문</th><th>왜</th></tr>
+<tr><td>1</td><td>"그 숫자, <b>어디서 조회한 건가</b>?"</td><td>도구로 확인한 값과 추측을 가르는 유일한 질문입니다</td></tr>
+<tr><td>2</td><td>"<b>정답을 아는 상태</b>에서 채점했나?"</td><td>오늘 차트 테스트를 새로 만든 이유입니다. 정답이 없으면 맞았는지 알 수 없습니다</td></tr>
+<tr><td>3</td><td>"<b>실패하면 어떻게 되나</b>?"</td><td>조용히 실패하는 설계가 가장 위험합니다</td></tr>
+</table>
+
+<h3>실제로 오늘 저(AI)도 두 번 틀렸습니다</h3>
+<table>
+<tr><th>제 오류</th><th>왜 생겼나</th><th>교훈</th></tr>
+<tr><td>"예산 부족이 원인"이라고 오류사전에 등록</td><td>가설을 검증 전에 확정으로 적음</td><td>실측 후 즉시 "미확정"으로 정정</td></tr>
+<tr><td>"자동 항목이 실행 안 됐다"고 판단</td><td>PC 파일 시각 하나만 보고 단정</td><td>실제로는 실행됐음. <b>단일 신호로 단정 금지</b></td></tr>
+</table>
+
+<div class="box acc">
+<b>대표님이 가지실 원칙</b>
+AI가 <b>틀리는 것</b>은 정상입니다. 문제는 <b>틀린 것을 확신에 차서 말할 때</b>입니다.
+그래서 "무엇을 확인했나"와 "무엇을 추측했나"를 <b>보고에서 분리하도록 요구</b>하셔야 합니다.
+오늘 대표님이 같은 질문을 세 번 하신 것이 실제로 시스템 결함 하나를 찾아냈습니다.
+</div>
+
+<h3>보너스 — 실패 신호 읽는 법</h3>
+<p>로컬 모델이 답을 주는 것처럼 보였지만 <b>실제로는 중간에 끊긴</b> 경우가 있었습니다. 겉으로는 정상 응답(HTTP 200)이었습니다.</p>
+<pre><code>{"response":"...1. 트랜잭션 커", "done":false}
+                                    ^^^^^^^^^^^^
+                    done:false = 완료가 아니라 "취소됨"
+                    이때는 처리 시간·토큰수 같은 정보가 통째로 없음</code></pre>
+<p>서버 로그에는 <code>srv stop: cancel task</code>가 찍혀 있었습니다. <b>이 신호를 검사하지 않으면 잘린 사고 과정을 "답변"으로 받습니다.</b> 현재는 자동 판정하도록 고쳐 두었습니다(커밋 <code>8597f615</code>).</p>
+</section>
+
+<section id="c7">
+<h2><span class="n">07</span>자리를 60GB 만든 방법</h2>
+
+<p>모델을 올리려면 자리가 필요했습니다. 시작은 <b>6.5GB</b>였고, 아무것도 사지 않고 <b>67.19GB</b>를 만들었습니다.</p>
+
+<table>
+<tr><th>대상</th><th>회수</th><th>성격</th><th>위험도</th></tr>
+<tr><td><code>hiberfil.sys</code> (최대절전)</td><td><b>12.76 GB</b></td><td>쓰지 않던 최대절전용 메모리 덤프</td><td>🟢 1초·되돌리기 가능</td></tr>
+<tr><td>카카오톡 미디어 캐시</td><td><b>33.30 GB</b></td><td>NAS 백업 후 삭제</td><td>🟡 백업 검증 통과분만</td></tr>
+<tr><td>Adobe 5종</td><td>약 11.8 GB</td><td><b>2022년 이후 실행 기록 0</b></td><td>🟢 미사용 확인됨</td></tr>
+</table>
+
+<div class="box warn">
+<b>이 과정에서 사고가 한 번 났습니다 — 반드시 기억하실 부분</b>
+"안 쓰는 앱 정리" 지시로 <b>영웅문4가 삭제됐습니다.</b> 쓰시는 프로그램이었습니다.
+지시가 도착하기 <b>3분 전</b>에 이미 지워진 뒤였습니다. 이후 공식 설치본으로 복구했습니다.
+<br><br>
+<b>교훈</b>: "전부 정리해"라는 지시는 <b>목록을 먼저 보여드리고 승인받은 뒤</b> 실행해야 합니다.
+되돌릴 수 없는 작업에서 속도는 미덕이 아닙니다.
+</div>
+
+<h3>백업 게이트가 실제로 작동한 사례</h3>
+<p>카카오톡 33GB 삭제에는 <b>파일별 검증 게이트</b>를 걸었습니다. 백업본에 같은 이름·같은 크기로 존재하는 파일만 지우도록 했습니다.</p>
+<div class="kpi">
+<div><span class="v">153,303</span><span class="l">검증 통과 → 삭제</span></div>
+<div><span class="v">17</span><span class="l">검증 실패 → <b>보존</b></span></div>
+<div><span class="v">0</span><span class="l">유실</span></div>
+</div>
+<p>17건은 백업 직후 카카오톡이 새로 만든 파일이었습니다. <b>게이트가 없었으면 그대로 지워졌을 것</b>입니다.</p>
+</section>
+
+<section id="c8">
+<h2><span class="n">08</span>교육 커리큘럼 지도 — 지금까지 22건</h2>
+
+<p>대표님께 준비된 교육자료 전체입니다. <b>읽는 순서</b>를 함께 적었습니다.</p>
+
+<h3>1단계 · 기초 개념 (먼저 보실 것)</h3>
+<table>
+<tr><th>주제</th><th>무엇을 알게 되나</th></tr>
+<tr><td>AI 학습론</td><td>AI가 실제로 무엇을 "학습"하는가 — 사전학습·미세조정·RAG·기억의 차이</td></tr>
+<tr><td>바이브코딩 개발 용어 대사전</td><td>380개 용어 + <b>지시할 때 쓰는 문장</b>으로 연결</td></tr>
+<tr><td>프롬프트·컨텍스트 엔지니어링</td><td>같은 질문도 어떻게 물으면 답이 달라지는가</td></tr>
+</table>
+
+<h3>2단계 · 우리 시스템 이해</h3>
+<table>
+<tr><th>주제</th><th>무엇을 알게 되나</th></tr>
+<tr><td>오비스 자동화·MCP·스킬 v2 (11개 장)</td><td>OBYS 5개 엔진, 도구 135종, 목표(Goal) 기능</td></tr>
+<tr><td>멀티에이전트 운영</td><td>여러 AI가 나눠 일하는 구조</td></tr>
+<tr><td>지시서 검수·재작업</td><td>AI에게 일을 시키고 되돌려받는 절차</td></tr>
+<tr><td>위키 지식관리</td><td>알아낸 것을 어떻게 남기는가</td></tr>
+</table>
+
+<h3>3단계 · 실전 구축·운용</h3>
+<table>
+<tr><th>주제</th><th>무엇을 알게 되나</th></tr>
+<tr><td><b>내 PC에서 27B 모델 돌리기 (이 문서)</b></td><td><b>로컬 LLM 실전 — 되는지 판단·설정·검증</b></td></tr>
+<tr><td>LLM 서버 종합 구축</td><td>하드웨어·가격(원화 병기)·기술스택</td></tr>
+<tr><td>RAG·벡터DB·임베딩</td><td>우리 문서를 AI가 찾아 쓰게 하는 법</td></tr>
+<tr><td>파인튜닝·LoRA 실습</td><td>모델을 우리 데이터에 맞추는 법</td></tr>
+<tr><td>MCP 도구 호출</td><td>AI가 외부 도구를 쓰는 표준</td></tr>
+<tr><td>멀티모달 AI</td><td>이미지·음성을 다루는 법</td></tr>
+<tr><td>AI 코딩 에이전트 실습</td><td>코드를 AI에게 시키는 실전</td></tr>
+</table>
+
+<h3>4단계 · 경영 판단</h3>
+<table>
+<tr><th>주제</th><th>무엇을 알게 되나</th></tr>
+<tr><td>AI 제품 PRD·AX</td><td>AI 전환(AX)을 제품 기획으로 옮기는 법</td></tr>
+<tr><td>비용·토큰 경제학</td><td>돈이 어디서 나가는가</td></tr>
+<tr><td>평가(Evals)</td><td>AI 성능을 <b>숫자로</b> 판정하는 법</td></tr>
+<tr><td>LLMOps·관측</td><td>돌아가는 것을 어떻게 지켜보는가</td></tr>
+<tr><td>보안·거버넌스</td><td>사고를 막는 규칙</td></tr>
+<tr><td>법·저작권·개인정보</td><td>지켜야 할 선</td></tr>
+</table>
+
+<div class="box acc">
+<b>포털 한 곳에서 전부 보실 수 있습니다</b>
+<code>https://aads.newtalk.kr/education/</code> — 교육자료 22건 전부 등록되어 있습니다.
+</div>
+
+<h3>앞으로 만들 자료 — 대표님 질문에서 도출한 공백</h3>
+<table>
+<tr><th>우선</th><th>주제</th><th>왜 필요한가</th></tr>
+<tr><td>P1</td><td><b>AI 보고 검증법</b> — CEO용 체크리스트</td><td>오늘 모델이 확신에 찬 오답을 냈고, 저도 두 번 틀렸습니다. 검증은 기술이 아니라 습관입니다</td></tr>
+<tr><td>P1</td><td><b>"자동으로 된다"의 함정</b></td><td>오늘 자동 항목이 3번 물으실 때까지 안 돌았습니다. 구조를 아시면 바로 짚어내실 수 있습니다</td></tr>
+<tr><td>P2</td><td><b>되돌릴 수 없는 작업 다루는 법</b></td><td>영웅문4 삭제 사고. 승인·게이트·백업의 설계 원칙</td></tr>
+</table>
+</section>
+
+<footer>
+오비스(OBYS = Oh Byeong Yong's System) CEO 교육자료 · 2026-09-21 작성<br>
+본문의 모든 수치는 당일 대표님 PC·서버에서 직접 측정한 값입니다.
+</footer>
+
+</div>
+</body>
+</html>
