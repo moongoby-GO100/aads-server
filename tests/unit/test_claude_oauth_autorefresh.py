@@ -32,6 +32,26 @@ def _write_credential(path: Path, *, expires_at: float, generation: int = 0) -> 
     path.chmod(0o600)
 
 
+@pytest.mark.parametrize("expires_in", [-10, 3600])
+def test_docker_credential_lock_contention_fails_without_unlocked_execution(tmp_path, expires_in):
+    import fcntl
+
+    credential = tmp_path / ".credentials.json"
+    _write_credential(credential, expires_at=time.time() + expires_in)
+    lock = tmp_path / "credentials.lock"
+    wrapper = Path(__file__).resolve().parents[2] / "scripts" / "claude-docker-wrapper.sh"
+    env = dict(os.environ, CLAUDE_SLOT_CREDENTIALS_FILE=str(credential),
+               CLAUDE_SLOT_CREDENTIAL_LOCK_FILE=str(lock), CLAUDE_OAUTH_SLOT="2",
+               CLAUDE_SLOT_EXCLUSIVE_LOCK_WAIT_SEC="0.05", CLAUDE_SLOT_SHARED_LOCK_WAIT_SEC="0.05")
+    with lock.open("w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = subprocess.run(["bash", str(wrapper), "--version"], env=env,
+                                capture_output=True, text=True, timeout=5)
+    assert result.returncode == 75
+    assert "oauth_slot_busy" in result.stderr
+    assert "unit-access-value" not in result.stderr
+
+
 def test_slot_credentials_precede_stale_env_token(monkeypatch, tmp_path):
     monkeypatch.setattr(relay, "_SLOT_HOME_ROOT", tmp_path)
     credential = tmp_path / "slot2" / ".claude" / ".credentials.json"
@@ -225,7 +245,7 @@ def test_docker_wrapper_stages_and_atomically_syncs_credentials():
         Path(__file__).resolve().parents[2] / "scripts" / "claude-docker-wrapper.sh"
     ).read_text(encoding="utf-8")
 
-    assert "flock -x 9" in wrapper
+    assert 'flock -x -w "$_excl_wait" 9' in wrapper
     assert "CLAUDE_SLOT_CREDENTIAL_MODE=1" in wrapper
     assert "docker cp" in wrapper
     assert 'mv -f -- "$staged" "$CREDENTIAL_FILE"' in wrapper
@@ -384,7 +404,7 @@ async def test_auth_failure_falls_back_account_then_gpt_without_stale_sdk(monkey
     async def no_registry_row(*args, **kwargs):
         return None
 
-    async def slot_records():
+    async def slot_records(**kwargs):
         return {
             "1": {"priority": 1, "key_name": "slot-one"},
             "2": {"priority": 2, "key_name": "slot-two"},

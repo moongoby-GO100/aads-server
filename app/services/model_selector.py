@@ -3670,8 +3670,19 @@ async def _stream_cli_relay_once(
                 if hc.status_code != 200:
                     yield {"type": "error", "content": f"CLI Relay not healthy: {hc.status_code}"}
                     return
-                if (hc.json().get("claude_model_contract") or {}).get("version") != CONTRACT_VERSION:
+                health = hc.json()
+                if (health.get("claude_model_contract") or {}).get("version") != CONTRACT_VERSION:
                     yield {"type": "error", "content": "CLI Relay model_contract_version_mismatch"}
+                    return
+                # An old validation receipt is not an auth failure. Only skip
+                # a slot with affirmative evidence that authentication is unavailable.
+                slot_health = (health.get("slot_auth") or {}).get(str(oauth_slot or ""), {})
+                if slot_health.get("auth_available") is False:
+                    yield {
+                        "type": "error",
+                        "content": f"CLI Relay oauth_slot_unavailable: slot={oauth_slot}",
+                        "error_type": "oauth_slot_unavailable",
+                    }
                     return
             except Exception as hc_err:
                 yield {"type": "error", "content": f"CLI Relay unreachable: {hc_err}"}
@@ -3923,6 +3934,8 @@ _RELAY_NON_RETRYABLE_ERROR_MARKERS = (
     # error immediately and let call_stream use a cross-provider fallback.
     "codex_relay_busy",
     "relay_semaphore_timeout",
+    "oauth_slot_unavailable",
+    "oauth_slot_busy",
     "you've hit your limit",
     "you have hit your limit",
     "resets ",
@@ -3942,7 +3955,10 @@ _CODEX_NON_RETRYABLE_ERROR_MARKERS = _RELAY_NON_RETRYABLE_ERROR_MARKERS
 
 
 def _is_cli_auth_error(error_content: str) -> bool:
-    return _classify_claude_auth_error(error_content) != "error"
+    return (
+        any(marker in str(error_content) for marker in ("oauth_slot_unavailable", "oauth_slot_busy"))
+        or _classify_claude_auth_error(error_content) != "error"
+    )
 
 
 def _is_stale_resume_error(error_content: str) -> bool:
@@ -4119,7 +4135,10 @@ async def _stream_cli_relay(
         # A refresh-capable CLI normally renews during the first call.  Some
         # versions surface the initial 401 before persisting the new token, so
         # allow exactly one immediate same-slot retry before account fallback.
-        if _is_cli_auth_error(last_error) and not auth_retry_used:
+        if (
+            _is_cli_auth_error(last_error) and not auth_retry_used
+            and not any(marker in last_error for marker in ("oauth_slot_unavailable", "oauth_slot_busy"))
+        ):
             auth_retry_used = True
             logger.warning(
                 "cli_relay_oauth_refresh_retry: model=%s session=%s slot=%s",

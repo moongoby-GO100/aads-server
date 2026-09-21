@@ -231,6 +231,25 @@ async def _claim_execution_lease(
             updated_at = NOW()
         WHERE id = $1
           AND status IN ('running', 'retrying', 'interrupted')
+          -- Manual resume can reset budgets, never resurrect a superseded turn.
+          AND COALESCE(error_message, '') NOT LIKE '%superseded%'
+          AND COALESCE(error_message, '') NOT LIKE '%newer_user%'
+          AND COALESCE(error_message, '') NOT LIKE '%new_execution%'
+          AND NOT EXISTS (
+              SELECT 1 FROM chat_messages newer_user
+              JOIN chat_messages execution_user
+                ON execution_user.id = chat_turn_executions.user_message_id
+              WHERE newer_user.session_id = chat_turn_executions.session_id
+                AND newer_user.role = 'user'
+                AND newer_user.deleted_at IS NULL
+                AND newer_user.created_at > execution_user.created_at
+                AND COALESCE(newer_user.intent, '') NOT IN (
+                    'system_trigger', 'queued_interrupt', 'interrupt_completed',
+                    'recovered_interrupt', 'interrupt_expired'
+                )
+                AND newer_user.content NOT LIKE '[시스템]%%'
+                AND newer_user.content NOT LIKE '[추가 지시%%'
+          )
           AND ($6::boolean OR COALESCE(owner_epoch, 0) < $7::int)
           -- 나이 상한. epoch 상한만으로는 **느린 루프**를 못 잡는다 —
           -- 2026-09-17 실측: 며칠을 버틴 실행들의 epoch 는 12~17 이었고,
@@ -4386,6 +4405,7 @@ async def _execution_has_newer_user_message(conn, session_id: str, execution_id:
             FROM chat_messages
             WHERE session_id = te.session_id
               AND role = 'user'
+              AND deleted_at IS NULL
               -- 추가지시는 '더 새 사용자 메시지' 가 아니다. 진행 중 턴을 밀어내면
               -- 그 턴이 만들던 답변이 통째로 버려진다(실측 54,301자 사례).
               --
@@ -4434,9 +4454,22 @@ async def _schedule_interrupted_auto_resume(
     """복구 가능한 검증/완료계약 실패를 같은 실행의 자동 이어쓰기 작업으로 전환한다."""
     if not _should_auto_resume_interrupted_reason(reason):
         return False
+    if not _is_local_active_api_slot():
+        return False
+    # Do this before any lease/placeholder mutation. The producer's watchdog
+    # and its CancelledError cleanup can both arrive for the same execution.
+    existing_task = _active_bg_tasks.get(session_id)
+    if existing_task and not existing_task.done():
+        logger.info(
+            "interrupted_auto_resume_skip_active_task session=%s execution=%s",
+            session_id[:8], execution_id[:8],
+        )
+        return False
 
     sid = uuid.UUID(str(session_id))
     eid = uuid.UUID(str(execution_id))
+    if await _execution_has_newer_user_message(conn, session_id, execution_id):
+        return False
     row = await conn.fetchrow(
         """
         SELECT te.retry_count,
@@ -4580,13 +4613,6 @@ async def _schedule_interrupted_auto_resume(
         "반드시 원인, 조치 내용, 검증 결과, 남은 리스크/다음 조치를 포함하세요. "
         "커밋/푸시/배포/문서반영을 실제 수행하지 않았다면 완료했다고 보고하지 마세요."
     )
-    existing_task = _active_bg_tasks.get(session_id)
-    if existing_task and not existing_task.done():
-        logger.info(
-            "interrupted_auto_resume_skip_active_task session=%s execution=%s",
-            session_id[:8], execution_id[:8],
-        )
-        return False
     task = _heartbeat_asyncio.create_task(
         _resume_single_stream(
             session_id,
@@ -4743,7 +4769,6 @@ async def _mark_execution_interrupted(
         token in reason
         for token in (
             "superseded",
-            "CancelledError",
             "newer_user",
             "new_execution",
         )

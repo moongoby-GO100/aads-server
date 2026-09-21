@@ -772,6 +772,7 @@ class TestRegressions:
         class FakeConn:
             async def fetchrow(self, query, *args):
                 return {
+                    "latest_user_id": None,
                     "retry_count": 0,
                     "requested_model": "gpt-5.5",
                     "last_user_msg": "원래 질문",
@@ -823,6 +824,7 @@ class TestRegressions:
         class FakeConn:
             async def fetchrow(self, query, *args):
                 return {
+                    "latest_user_id": None,
                     "retry_count": 4,
                     "requested_model": "gpt-5.5",
                     "last_user_msg": "원래 질문",
@@ -896,6 +898,7 @@ class TestRegressions:
         class FakeConn:
             async def fetchrow(self, query, *args):
                 return {
+                    "latest_user_id": None,
                     "retry_count": 0,
                     "requested_model": "gpt-5.5",
                     "current_execution_id": execution_id,
@@ -966,6 +969,7 @@ class TestRegressions:
         class FakeConn:
             async def fetchrow(self, query, *args):
                 return {
+                    "latest_user_id": None,
                     "retry_count": 2,
                     "requested_model": "gpt-5.5",
                     "current_execution_id": execution_id,

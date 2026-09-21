@@ -535,7 +535,14 @@ async def _schedule_recovery_auto_resume(
     """
     if retry_limit <= 0:
         retry_limit = svc._EXECUTION_RESUME_MAX_ATTEMPTS
+    if not svc._is_local_active_api_slot():
+        return False
+    existing_task = svc._active_bg_tasks.get(str(session_id))
+    if existing_task and not existing_task.done():
+        return False
     try:
+        if await svc._execution_has_newer_user_message(conn, str(session_id), str(execution_id)):
+            return False
         row = await conn.fetchrow(
             """
             SELECT te.retry_count,
@@ -570,6 +577,12 @@ async def _schedule_recovery_auto_resume(
             )
             return False
 
+        owner_epoch = await svc._claim_execution_lease(
+            conn, execution_id, status="retrying", error_message="recovery_auto_retry_scheduled",
+        )
+        if owner_epoch is None:
+            return False
+        await svc._archive_competing_stream_placeholder(conn, session_id, execution_id)
         clean_partial = svc._strip_streaming_progress_markers(partial_content or "")
         clean_partial = re.sub(
             r"\n\n_\(응답이 중단되어 여기까지 보존되었습니다\.\)_\s*$",
@@ -633,14 +646,18 @@ async def _schedule_recovery_auto_resume(
                 updated_at = NOW()
             WHERE id = $1
               AND session_id = $3
-              AND status = 'interrupted'
+              AND status = 'retrying'
               AND retry_count < $4
+              AND owner_instance = $5
+              AND owner_epoch = $6
             RETURNING id
             """,
             execution_id,
             placeholder_id,
             session_id,
             retry_limit,
+            svc._EXECUTION_OWNER_INSTANCE,
+            owner_epoch,
         )
         if not claimed:
             return False
@@ -665,9 +682,11 @@ async def _schedule_recovery_auto_resume(
                 row["workspace_name"] or "CEO",
                 execution_id=str(execution_id),
                 requested_model=row["requested_model"],
+                owner_epoch=owner_epoch,
                 recovery_reason="recovery_auto_retry_scheduled",
             )
         )
+        svc._active_bg_tasks[str(session_id)] = task
 
         def _on_recovery_resume_done(_task, _sid=str(session_id), _eid=str(execution_id)):
             if _task.cancelled():
@@ -3930,9 +3949,13 @@ async def resume_interrupted(
 
     sid = str(session_id)
 
+    if not svc._is_local_active_api_slot():
+        return {"resumed": False, "code": "chat_resume_inactive_slot", "retry_after_seconds": 5}
+
     # 이미 스트리밍 중이면 거부
     status = get_streaming_status(sid)
-    if status and status.get("is_streaming"):
+    existing_task = svc._active_bg_tasks.get(sid)
+    if (status and status.get("is_streaming")) or (existing_task and not existing_task.done()):
         return {
             "resumed": False,
             "code": "chat_resume_already_streaming",
@@ -4002,6 +4025,9 @@ async def resume_interrupted(
                         WHERE s.id = m.session_id) AS workspace_name
                 FROM chat_messages m
                 WHERE m.session_id = $1 AND m.intent = 'streaming_placeholder'
+                  AND m.execution_id IS NULL
+                  AND NOT COALESCE(m.is_hidden, FALSE)
+                  AND m.deleted_at IS NULL
                 ORDER BY m.created_at DESC LIMIT 1
             """, session_id)
         if not row:
@@ -4030,9 +4056,12 @@ async def resume_interrupted(
                     'interrupted_partial',
                     'interruption_notice',
                     'regenerated',
-                    'continued',
-                    '_archived_partial'
+                    'continued'
                   )
+                  AND NOT COALESCE(am.is_hidden, FALSE)
+                  AND am.deleted_at IS NULL
+                  AND COALESCE(te.error_message, '') NOT LIKE '%superseded%'
+                  AND COALESCE(te.error_message, '') NOT LIKE '%newer_user%'
                   AND length(trim(coalesce(am.content, ''))) > 0
                 ORDER BY GREATEST(te.updated_at, COALESCE(am.edited_at, am.created_at)) DESC
                 LIMIT 1
@@ -4053,12 +4082,25 @@ async def resume_interrupted(
     owner_epoch = None
     if row["execution_id"]:
         async with pool.acquire() as conn2:
+            if await svc._execution_has_newer_user_message(conn2, sid, row["execution_id"]):
+                return {
+                    "resumed": False,
+                    "code": "chat_resume_superseded",
+                    "message": "더 최신 요청이 있어 이전 응답은 재개하지 않습니다.",
+                }
             _cap_row = await conn2.fetchrow(
-                "SELECT retry_count, error_message FROM chat_turn_executions WHERE id = $1",
+                """SELECT retry_count, error_message,
+                          status = 'interrupted' AND completed_at > NOW() - INTERVAL '5 seconds'
+                            AS resume_cooldown
+                   FROM chat_turn_executions WHERE id = $1""",
                 uuid.UUID(row["execution_id"]),
             )
             _rc = (_cap_row["retry_count"] if _cap_row else 0) or 0
             _err = (_cap_row["error_message"] if _cap_row else "") or ""
+            if any(token in _err for token in ("superseded", "newer_user", "new_execution")):
+                return {"resumed": False, "code": "chat_resume_superseded"}
+            if _cap_row and _cap_row["resume_cooldown"]:
+                return {"resumed": False, "code": "chat_resume_cooldown", "retry_after_seconds": 5}
             if _rc >= svc._EXECUTION_RESUME_MAX_ATTEMPTS and not reset_retry_count:
                 return {
                     "resumed": False,
@@ -4097,11 +4139,13 @@ async def resume_interrupted(
                 WHERE id = $1
                   AND status IN ('running', 'retrying', 'interrupted')
                   AND owner_instance = $2
+                  AND owner_epoch = $5
                 """,
                 uuid.UUID(row["execution_id"]),
                 _EXECUTION_OWNER_INSTANCE,
                 requested_override,
                 reset_retry_count,
+                owner_epoch,
             )
             await conn2.execute(
                 """
@@ -4139,7 +4183,7 @@ async def resume_interrupted(
     clean_partial = re.sub(r'\n\n⏳ _.*?_$', '', partial, flags=re.DOTALL).strip()
 
     import asyncio
-    asyncio.create_task(
+    task = asyncio.create_task(
         _resume_single_stream(
             sid, row["placeholder_id"], clean_partial,
             row["last_user_msg"] or "", row["workspace_name"] or "CEO",
@@ -4149,6 +4193,7 @@ async def resume_interrupted(
             owner_epoch=owner_epoch,
         )
     )
+    svc._active_bg_tasks[sid] = task
     return {
         "resumed": True,
         "message": "이어서 생성을 시작합니다. 잠시 후 채팅창을 확인하세요.",

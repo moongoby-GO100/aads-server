@@ -144,23 +144,21 @@ if [[ -n "$CREDENTIAL_FILE" ]]; then
     # 세션 9개가 전부 flock -s 에서 막혀, 신규 채팅창조차 응답하지 못했다.
     # 무한 대기는 한 호출의 지연을 전체 장애로 키운다.
     #
-    # 배타를 못 잡으면 다른 호출이 이미 갱신 중이라는 뜻이다. 그 결과를 쓰면
-    # 되므로 공유로 내려간다. 공유마저 시간이 차면 잠금 없이 진행한다 —
-    # 자격증명은 위에서 이미 검증했고, 되쓰기는 .sync 잠금과 digest 비교가
-    # 따로 지킨다(sync_container_credential). 막혀서 못 하는 것보다 낫다.
-    _excl_wait="${CLAUDE_SLOT_EXCLUSIVE_LOCK_WAIT_SEC:-300}"
-    _shared_wait="${CLAUDE_SLOT_SHARED_LOCK_WAIT_SEC:-120}"
+    # CLI owns token refresh, so keep serialization but fail fast to allow
+    # account fallback before the chat first-response watchdog (180s).
+    # Never downgrade/bypass the lock: concurrent refresh can revoke credentials.
+    _excl_wait="${CLAUDE_SLOT_EXCLUSIVE_LOCK_WAIT_SEC:-5}"
+    _shared_wait="${CLAUDE_SLOT_SHARED_LOCK_WAIT_SEC:-5}"
     if credential_requires_exclusive_lock "$CREDENTIAL_FILE"; then
         if ! flock -x -w "$_excl_wait" 9; then
-            echo "slot${OAUTH_SLOT:-?}: exclusive lock wait exceeded ${_excl_wait}s — 공유 모드로 진행" >&2
-            LOCK_MODE="shared"
-            flock -s -w "$_shared_wait" 9 \
-                || echo "slot${OAUTH_SLOT:-?}: shared lock wait exceeded ${_shared_wait}s — 잠금 없이 진행" >&2
+            echo "oauth_slot_busy: slot${OAUTH_SLOT:-?} exclusive credential lock exceeded ${_excl_wait}s" >&2
+            exit 75
         fi
     else
         LOCK_MODE="shared"
         if ! flock -s -w "$_shared_wait" 9; then
-            echo "slot${OAUTH_SLOT:-?}: shared lock wait exceeded ${_shared_wait}s — 잠금 없이 진행" >&2
+            echo "oauth_slot_busy: slot${OAUTH_SLOT:-?} shared credential lock exceeded ${_shared_wait}s" >&2
+            exit 75
         fi
     fi
     ORIGINAL_CREDENTIAL_DIGEST="$(sha256sum "$CREDENTIAL_FILE" | awk '{print $1}')"
