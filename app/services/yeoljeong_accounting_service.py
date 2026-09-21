@@ -19,6 +19,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.core.obys_db import obys_db_url
+from app.services.obys_upload_service import require_journal_write_enabled
 
 KST = timezone(timedelta(hours=9))
 
@@ -139,6 +140,7 @@ async def list_entries(
 
 
 async def create_entry(payload: dict[str, Any], actor: str = "") -> dict[str, Any]:
+    require_journal_write_enabled()
     import asyncpg
 
     conn = await asyncpg.connect(_db_url(), timeout=5)
@@ -198,6 +200,7 @@ _ENTRY_EDITABLE_FIELDS = (
 
 
 async def update_entry(entry_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    require_journal_write_enabled()
     import asyncpg
 
     fields = {k: v for k, v in payload.items() if k in _ENTRY_EDITABLE_FIELDS and v is not None}
@@ -230,6 +233,7 @@ async def update_entry(entry_id: str, payload: dict[str, Any]) -> dict[str, Any]
 
 
 async def delete_entry(entry_id: str) -> bool:
+    require_journal_write_enabled()
     import asyncpg
 
     conn = await asyncpg.connect(_db_url(), timeout=5)
@@ -245,6 +249,7 @@ async def delete_entry(entry_id: str) -> bool:
 
 async def auto_classify(business_id: str = "biz-mia", limit: int = 500) -> dict[str, Any]:
     """미분류 은행거래를 규칙 기반으로 분류하여 회계 항목으로 등록한다."""
+    require_journal_write_enabled()
     import asyncpg
 
     conn = await asyncpg.connect(_db_url(), timeout=5)

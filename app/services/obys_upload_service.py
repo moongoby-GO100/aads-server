@@ -5,6 +5,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import re
 import zipfile
 from datetime import date, datetime
@@ -787,6 +788,23 @@ JOURNAL_SOURCES = {
     "bank_transaction": ("yeoljeong_manual_bank_transactions", "occurred_at", "amount", "memo", "AND deleted_at IS NULL"),
 }
 JOURNAL_STATUSES = frozenset({"draft", "needs_review", "approved", "posted", "reversed"})
+JOURNAL_WRITE_FROZEN_CODE = "journal_write_moved_to_acct"
+JOURNAL_WRITE_FROZEN_MESSAGE = "전표 정본은 ACCT(회계원장)입니다. 오비서에서는 전표를 생성·수정할 수 없습니다."
+
+
+def journal_writes_are_frozen() -> bool:
+    """Default-deny OBYS journal writes; false is the explicit rollback switch."""
+    return os.getenv("OBYS_JOURNAL_WRITE_FROZEN", "true").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
+def require_journal_write_enabled() -> None:
+    if journal_writes_are_frozen():
+        raise HTTPException(
+            status_code=409,
+            detail={"code": JOURNAL_WRITE_FROZEN_CODE, "message": JOURNAL_WRITE_FROZEN_MESSAGE},
+        )
 
 
 def _require_approve(user: dict[str, Any]) -> None:
@@ -799,6 +817,7 @@ def _require_approve(user: dict[str, Any]) -> None:
 
 async def create_journal(*, user: dict[str, Any], business_id: str, source_type: str, source_id: UUID) -> dict[str, Any]:
     """Create one conservative, balanced draft per source (idempotent)."""
+    require_journal_write_enabled()
     _require_write(user)
     if source_type not in JOURNAL_SOURCES:
         raise HTTPException(status_code=400, detail="지원하지 않는 전표 원본입니다")
@@ -881,6 +900,7 @@ async def list_journals(*, user: dict[str, Any], business_id: str, status: str |
 
 
 async def update_journal(*, user: dict[str, Any], voucher_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
+    require_journal_write_enabled()
     _require_write(user)
     tenant_id = _tenant(user)
     conn = await _connect()
@@ -921,6 +941,7 @@ async def update_journal(*, user: dict[str, Any], voucher_id: UUID, payload: dic
 
 
 async def transition_journal(*, user: dict[str, Any], voucher_id: UUID, action: str) -> dict[str, Any]:
+    require_journal_write_enabled()
     _require_approve(user)
     tenant_id = _tenant(user)
     transitions = {"approve": ({"draft", "needs_review"}, "approved"), "post": ({"approved"}, "posted")}
@@ -948,6 +969,7 @@ async def transition_journal(*, user: dict[str, Any], voucher_id: UUID, action: 
 
 
 async def reverse_journal(*, user: dict[str, Any], voucher_id: UUID) -> dict[str, Any]:
+    require_journal_write_enabled()
     _require_approve(user)
     tenant_id = _tenant(user)
     conn = await _connect()

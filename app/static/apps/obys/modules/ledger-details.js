@@ -110,6 +110,32 @@
     }
   }
 
+  // ACCT is the journal source of truth.  Keep the legacy endpoint as a
+  // read-only fallback while the remote ledger is unavailable during rollout.
+  async function acctJournalRequest(path) {
+    const response = await fetch(`/api/v1/acct-purchase${path}`, {
+      headers: token() ? { Authorization: `Bearer ${token()}` } : {}
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = payload.detail || payload.message || `API ${response.status}`;
+      const error = new Error(typeof detail === "object" ? (detail.message || "ACCT 전표 조회 실패") : detail);
+      error.status = response.status;
+      throw error;
+    }
+    return payload;
+  }
+
+  async function loadJournals(scope) {
+    try {
+      const acct = await acctJournalRequest(`/journals?${scope}`);
+      return { journals: acct.journals || [], source: "acct" };
+    } catch (_) {
+      const legacy = await request(`/journals?${scope}`);
+      return { journals: legacy.journals || [], source: "legacy" };
+    }
+  }
+
   function money(value) {
     const numeric = Number(value || 0);
     return Number.isFinite(numeric) ? `${numeric.toLocaleString("ko-KR")}원` : "-";
@@ -217,7 +243,7 @@
       <div class="ledger-table-wrap"><table class="ledger-table"><thead><tr>${headers(kind).map(label => `<th>${escapeHtml(label)}</th>`).join("")}<th>작업</th></tr></thead>
       <tbody>${rows.map((row, index) => {
         const mutable = rowSource(row) === "manual";
-        return `<tr data-detail-index="${index}">${rowCells(row, kind).map(value => `<td>${escapeHtml(value)}</td>`).join("")}<td class="ledger-row-actions"><button type="button" data-ledger-detail="${index}">상세</button><button type="button" data-journal-create="${index}">전표 만들기</button>${mutable ? `<button type="button" data-ledger-edit="${index}">수정</button>` : ""}</td></tr>`;
+        return `<tr data-detail-index="${index}">${rowCells(row, kind).map(value => `<td>${escapeHtml(value)}</td>`).join("")}<td class="ledger-row-actions"><button type="button" data-ledger-detail="${index}">상세</button>${mutable ? `<button type="button" data-ledger-edit="${index}">수정</button>` : ""}</td></tr>`;
       }).join("")}</tbody></table></div></div>`;
   }
 
@@ -298,8 +324,8 @@
         </div>
         <div data-ledger-kpis>${kpiHtml(meta)}</div>
         <div data-ledger-content>${contentHtml(meta.kind)}</div>
-        <section class="ledger-journal-panel"><div class="ledger-history-head"><div><h2>전표 검토함</h2><p>자동분개는 검토 필요 상태로 시작하며 ACCT에는 아직 전송되지 않습니다.</p></div><span>${state.journals.length}건</span></div>
-          <div class="ledger-upload-history">${state.journals.length ? state.journals.map((item, index) => `<article class="ledger-upload-item"><div class="ledger-file-icon">전표</div><div class="ledger-upload-copy"><b>${escapeHtml(item.voucher_no)}</b><span>${escapeHtml(item.transaction_date)} · ${escapeHtml(item.description || "적요 없음")}</span><small>차변/대변 ${money(item.total_amount)} · 외부 전송 안 됨</small></div><span class="ledger-upload-status ${escapeHtml(item.status)}">${escapeHtml({draft:"초안",needs_review:"검토 필요",approved:"승인",posted:"확정",reversed:"역분개 완료"}[item.status] || item.status)}</span><div class="ledger-upload-actions"><button type="button" data-journal-review="${index}">전표 검토</button>${item.status === "approved" ? `<button type="button" data-journal-action="post" data-journal-index="${index}">확정</button>` : ""}${item.status === "posted" ? `<button type="button" class="ledger-danger" data-journal-action="reverse" data-journal-index="${index}">취소·역분개</button>` : ""}</div></article>`).join("") : `<div class="ledger-upload-empty">생성된 전표가 없습니다. 원장 행에서 “전표 만들기”를 선택하십시오.</div>`}</div></section>
+        <section class="ledger-journal-panel"><div class="ledger-history-head"><div><h2>ACCT 전표 조회</h2><p>전표는 회계원장(ACCT)에서 생성됩니다. <a href="/api/v1/acct-purchase/ui" target="_blank" rel="noopener">회계원장 조회 화면 열기</a></p></div><span>${state.journals.length}건</span></div>
+          <div class="ledger-upload-history">${state.journals.length ? state.journals.map((item, index) => `<article class="ledger-upload-item"><div class="ledger-file-icon">전표</div><div class="ledger-upload-copy"><b>${escapeHtml(item.entry_no || item.voucher_no || item.id)}</b><span>${escapeHtml(item.entry_date || item.transaction_date)} · ${escapeHtml(item.description || "적요 없음")}</span><small>ACCT 회계원장 정본 · 조회 전용</small></div><span class="ledger-upload-status ${escapeHtml(item.status)}">${escapeHtml({draft:"초안",needs_review:"검토 필요",approved:"승인",posted:"확정",reversed:"역분개 완료"}[item.status] || item.status || "확정")}</span><div class="ledger-upload-actions"><button type="button" data-journal-review="${index}">전표 상세</button></div></article>`).join("") : `<div class="ledger-upload-empty">ACCT에 확정된 전표가 없습니다. 전표는 회계원장(ACCT)에서 생성됩니다.</div>`}</div></section>
         ${uploadHtml(meta)}
       </div>`;
     bindRoot(root);
@@ -364,12 +390,7 @@
       event.stopPropagation();
       openForm(rows[Number(button.dataset.ledgerEdit)]);
     }));
-    root.querySelectorAll("[data-journal-create]").forEach(button => button.addEventListener("click", event => {
-      event.stopPropagation();
-      createJournal(rows[Number(button.dataset.journalCreate)]);
-    }));
     root.querySelectorAll("[data-journal-review]").forEach(button => button.addEventListener("click", () => openJournal(state.journals[Number(button.dataset.journalReview)])));
-    root.querySelectorAll("[data-journal-action]").forEach(button => button.addEventListener("click", () => journalAction(state.journals[Number(button.dataset.journalIndex)], button.dataset.journalAction)));
     root.querySelectorAll("tr[data-detail-index]").forEach(row => row.addEventListener("click", () => openDetail(rows[Number(row.dataset.detailIndex)])));
     root.querySelectorAll("[data-upload-download]").forEach(button => button.addEventListener("click", () => downloadUpload(button.dataset.uploadDownload)));
     root.querySelectorAll("[data-upload-delete]").forEach(button => button.addEventListener("click", () => deleteUpload(button.dataset.uploadDelete)));
@@ -438,7 +459,7 @@
         const [manual, uploaded, uploads, journals] = await Promise.all([
           request(`/ledger-entries?${scope}&category=${meta.kind}${dateQuery()}`),
           request(`/uploaded-ledger?${scope}&category=${uploadCategory}&limit=500`),
-          request(`/uploads?${scope}&category=${uploadCategory}`), request(`/journals?${scope}`)
+          request(`/uploads?${scope}&category=${uploadCategory}`), loadJournals(scope)
         ]);
         state.rows = [...(manual.entries || []), ...(uploaded.rows || []).map(normalizeUploaded)];
         state.uploads = uploads.uploads || [];
@@ -447,7 +468,7 @@
         const [manual, uploaded, uploads, journals] = await Promise.all([
           request(`/card-transactions?${scope}${dateQuery()}`),
           request(`/uploaded-ledger?${scope}&category=card&limit=500`),
-          request(`/uploads?${scope}&category=card`), request(`/journals?${scope}`)
+          request(`/uploads?${scope}&category=card`), loadJournals(scope)
         ]);
         state.rows = [...(manual.card_transactions || []), ...(uploaded.rows || []).map(normalizeUploaded)];
         state.uploads = uploads.uploads || [];
@@ -456,7 +477,7 @@
         const [bank, uploaded, uploads, journals] = await Promise.all([
           request(`/ledger-bank-transactions?${scope}${dateQuery()}`),
           request(`/uploaded-ledger?${scope}&category=transaction&limit=500`),
-          request(`/uploads?${scope}&category=transaction`), request(`/journals?${scope}`)
+          request(`/uploads?${scope}&category=transaction`), loadJournals(scope)
         ]);
         state.rows = [...(bank.bank_transactions || []), ...(uploaded.rows || []).map(normalizeUploaded)];
         state.uploads = uploads.uploads || [];
@@ -658,58 +679,26 @@
     }
   }
 
-  function journalSource(row) {
-    if (row.upload_id) return "uploaded_ledger_row";
-    const kind = views[state.view].kind;
-    if (kind === "card") return "card_transaction";
-    if (kind === "bank") return "bank_transaction";
-    return "manual_ledger_entry";
-  }
-
-  async function createJournal(row) {
-    if (!row?.id || !window.confirm("이 원장 행으로 균형 전표 초안을 생성하시겠습니까?")) return;
-    try {
-      const payload = await request("/journals", { method: "POST", body: JSON.stringify({ business_id: state.businessId, source_type: journalSource(row), source_id: row.id }) });
-      window.alert(payload.journal?.idempotent ? "이미 연결된 전표를 열었습니다." : "검토 필요 전표를 생성했습니다. 계정과목을 확인한 뒤 확정하십시오.");
-      await load();
-    } catch (error) {
-      window.alert(recovery(error));
-    }
-  }
-
   function journalLines(item) {
     if (Array.isArray(item?.lines)) return item.lines;
     try { return JSON.parse(item?.lines || "[]"); } catch (_) { return []; }
   }
 
-  function openJournal(item) {
+  async function openJournal(item) {
     if (!item) return;
-    const editable = ["draft", "needs_review"].includes(item.status);
-    const lines = journalLines(item);
-    const panel = drawer(`<div class="ledger-drawer-head"><div><span class="ledger-eyebrow">JOURNAL VOUCHER</span><h3>${escapeHtml(item.voucher_no)}</h3></div><button type="button" data-drawer-close>닫기</button></div>
-      <p class="ledger-source">상태: ${escapeHtml(item.status)} · ACCT 외부 전송 안 됨</p>
-      <form class="ledger-form" data-journal-form><label class="wide">적요<input name="description" value="${escapeHtml(item.description || "")}" ${editable ? "" : "disabled"}></label>
-      ${lines.map((line, index) => `<fieldset class="wide ledger-journal-line"><legend>${index + 1}번 ${line.side === "debit" ? "차변" : "대변"}</legend><input type="hidden" name="side_${index}" value="${escapeHtml(line.side)}"><label>계정코드<input name="code_${index}" value="${escapeHtml(line.account_code)}" required ${editable ? "" : "disabled"}></label><label>계정과목<input name="name_${index}" value="${escapeHtml(line.account_name)}" required ${editable ? "" : "disabled"}></label><label>금액<input name="amount_${index}" type="number" min="0.01" step="0.01" value="${escapeHtml(line.amount)}" required ${editable ? "" : "disabled"}></label><label>부가세 코드<input name="tax_${index}" value="${escapeHtml(line.tax_code || "")}" ${editable ? "" : "disabled"}></label></fieldset>`).join("")}
-      <div class="ledger-form-actions"><button type="button" data-drawer-close>닫기</button>${editable ? `<button type="submit">보정 저장</button><button type="button" class="primary" data-journal-approve>승인</button>` : ""}</div></form><p class="ledger-form-error hidden" data-form-error></p>`);
-    panel.querySelector("[data-journal-form]")?.addEventListener("submit", async event => {
-      event.preventDefault();
-      const data = new FormData(event.currentTarget);
-      const payload = { description: data.get("description"), lines: lines.map((_, index) => ({ side: data.get(`side_${index}`), account_code: data.get(`code_${index}`), account_name: data.get(`name_${index}`), amount: data.get(`amount_${index}`), tax_code: data.get(`tax_${index}`) })) };
-      try { await request(`/journals/${encodeURIComponent(item.id)}`, { method: "PUT", body: JSON.stringify(payload) }); closeDrawer(); await load(); }
-      catch (error) { const note = panel.querySelector("[data-form-error]"); note.textContent = recovery(error); note.classList.remove("hidden"); }
-    });
-    panel.querySelector("[data-journal-approve]")?.addEventListener("click", () => journalAction(item, "approve"));
-  }
-
-  async function journalAction(item, action) {
-    if (!item) return;
-    const label = action === "reverse" ? "취소하고 역분개" : action === "post" ? "확정" : "승인";
-    if (!window.confirm(`이 전표를 ${label}하시겠습니까?`)) return;
+    let journal = item;
     try {
-      if (action === "reverse") await request(`/journals/${encodeURIComponent(item.id)}/reverse`, { method: "POST" });
-      else await request(`/journals/${encodeURIComponent(item.id)}/transition`, { method: "POST", body: JSON.stringify({ action }) });
-      closeDrawer(); await load();
-    } catch (error) { window.alert(recovery(error)); }
+      const detail = await acctJournalRequest(`/journal-entries/${encodeURIComponent(item.id)}?business_id=${encodeURIComponent(state.businessId)}`);
+      if (detail.journal) journal = { ...detail.journal, lines: detail.lines || [] };
+    } catch (_) {
+      // The list may be the legacy fallback while ACCT is unavailable.
+    }
+    const lines = journalLines(journal);
+    const panel = drawer(`<div class="ledger-drawer-head"><div><span class="ledger-eyebrow">JOURNAL VOUCHER</span><h3>${escapeHtml(journal.entry_no || journal.voucher_no || journal.id)}</h3></div><button type="button" data-drawer-close>닫기</button></div>
+      <p class="ledger-source">상태: ${escapeHtml(journal.status)} · ACCT 회계원장 정본 · 조회 전용</p>
+      <form class="ledger-form"><label class="wide">적요<input value="${escapeHtml(journal.description || "")}" disabled></label>
+      ${lines.map((line, index) => `<fieldset class="wide ledger-journal-line"><legend>${index + 1}번 ${line.side === "debit" ? "차변" : "대변"}</legend><label>계정코드<input value="${escapeHtml(line.account_code || "")}" disabled></label><label>계정과목<input value="${escapeHtml(line.account_name || "")}" disabled></label><label>금액<input value="${escapeHtml(line.amount || line.debit_amount || line.credit_amount || "")}" disabled></label><label>부가세 코드<input value="${escapeHtml(line.tax_code || "")}" disabled></label></fieldset>`).join("")}
+      <div class="ledger-form-actions"><button type="button" data-drawer-close>닫기</button></div></form>`);
   }
 
   async function downloadUpload(uploadId) {

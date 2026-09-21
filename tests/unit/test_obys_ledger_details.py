@@ -146,13 +146,13 @@ def test_ui_exposes_four_real_ledger_pages() -> None:
         assert route in module
     for control in ("data-ledger-from", "data-ledger-to", "data-ledger-search", "data-ledger-source"):
         assert control in module
-    for action in ("전표 만들기", "전표 검토", "승인", "확정", "역분개"):
-        assert action in module
+    for control in ("data-journal-create", "data-journal-action", "data-journal-approve"):
+        assert control not in module
     assert '"/ledger-bank-transactions"' in module
     assert ".ledger-upload-grid" in styles
     assert "/uploads/preview" in module
     assert "/uploads/commit" in module
-    assert "전표 검토함" in module
+    assert "ACCT 전표 조회" in module
     assert "@media (max-width: 640px)" in styles
 
 
@@ -163,3 +163,42 @@ def test_journal_migration_is_additive_and_scoped() -> None:
     assert "ON yeoljeong_journal_vouchers (tenant_id,business_id,source_type,source_id)" in migration
     assert "draft','needs_review','approved','posted','reversed" in migration
     assert "TRUNCATE " not in migration.upper()
+
+
+@pytest.mark.asyncio
+async def test_journal_writes_default_to_acct_freeze(monkeypatch) -> None:
+    monkeypatch.delenv("OBYS_JOURNAL_WRITE_FROZEN", raising=False)
+    with pytest.raises(HTTPException) as exc_info:
+        await service.create_journal(
+            user=_tenant_user(),
+            business_id="biz-mia",
+            source_type="manual_ledger_entry",
+            source_id=uuid4(),
+        )
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "journal_write_moved_to_acct"
+
+
+@pytest.mark.asyncio
+async def test_journal_freeze_false_reaches_legacy_path(monkeypatch) -> None:
+    monkeypatch.setenv("OBYS_JOURNAL_WRITE_FROZEN", "false")
+
+    async def legacy_connect():
+        raise RuntimeError("legacy journal path reached")
+
+    monkeypatch.setattr(service, "_connect", legacy_connect)
+    with pytest.raises(RuntimeError, match="legacy journal path reached"):
+        await service.create_journal(
+            user=_tenant_user(),
+            business_id="biz-mia",
+            source_type="manual_ledger_entry",
+            source_id=uuid4(),
+        )
+
+
+def test_ledger_ui_prefers_acct_journals_and_hides_write_controls() -> None:
+    module = Path("app/static/apps/obys/modules/ledger-details.js").read_text(encoding="utf-8")
+    assert 'acctJournalRequest(`/journals?${scope}`)' in module
+    assert 'request(`/journals?${scope}`)' in module
+    assert "전표는 회계원장(ACCT)에서 생성됩니다" in module
+    assert 'data-journal-create="${index}"' not in module

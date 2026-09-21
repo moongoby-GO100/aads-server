@@ -23,7 +23,10 @@ SSH 터널 + `acct_app` 자격증명 + 읽기전용 트랜잭션이 이미 그�
 """
 from __future__ import annotations
 
+import json
+from datetime import date
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from pathlib import Path
@@ -33,6 +36,7 @@ from fastapi.responses import FileResponse
 
 from app.api.ceo_chat_tools_db import query_acct_database
 from app.auth import get_current_user
+from app.services import obys_upload_service as obys_upload_svc
 
 router = APIRouter(prefix="/acct-purchase", tags=["acct-purchase"])
 logger = logging.getLogger(__name__)
@@ -113,6 +117,49 @@ _TXN_FIELDS: Dict[str, tuple] = {
 _MAX_TEXT_LEN = 80
 _FORBIDDEN_FRAGMENTS = (";", "--", "/*", "*/", "\x00", "\\")
 
+# This is the CEO-approved OBYS business → ACCT tenant/company mapping.  It is
+# deliberately not derived from a caller-supplied company_id: ownership is
+# first checked against the JWT tenant in the OBYS business registry.
+_DEFAULT_OBYS_ACCT_COMPANY_MAP = {
+    "biz-junghwa": (7, 7),
+    "biz-mia": (8, 8),
+    "biz-sungshin": (9, 9),
+    "biz-eonni-naengmyeon": (10, 10),
+}
+
+
+def _acct_company_map() -> Dict[str, tuple[int, int]]:
+    """Read an optional deployment mapping without accepting request input."""
+    raw = os.getenv("OBYS_ACCT_COMPANY_MAP", "").strip()
+    if not raw:
+        return _DEFAULT_OBYS_ACCT_COMPANY_MAP
+    try:
+        parsed = json.loads(raw)
+        return {
+            str(business_id): (int(value["tenant_id"]), int(value["company_id"]))
+            for business_id, value in parsed.items()
+        }
+    except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        logger.error("acct_purchase: invalid OBYS_ACCT_COMPANY_MAP")
+        raise HTTPException(status_code=503, detail="ACCT 회사 매핑 설정이 올바르지 않습니다") from exc
+
+
+async def _authorized_acct_scope(current_user: dict, business_id: Optional[str]) -> Optional[tuple[int, int]]:
+    """Return only the ACCT scope owned by this JWT tenant; roles never bypass it."""
+    if not business_id:
+        return None
+    business_id = str(business_id).strip()
+    scope = _acct_company_map().get(business_id)
+    if not scope:
+        raise HTTPException(status_code=403, detail="이 사업자에는 ACCT 회사 매핑이 없습니다")
+    tenant_id = obys_upload_svc._tenant(current_user)
+    conn = await obys_upload_svc._connect()
+    try:
+        await obys_upload_svc._require_business(conn, tenant_id, business_id)
+    finally:
+        await conn.close()
+    return scope
+
 
 def _lit(value: str) -> str:
     """사용자 입력을 SQL 문자열 리터럴로 안전하게 바꾼다."""
@@ -150,6 +197,57 @@ async def _fetch(sql: str) -> List[Dict[str, Any]]:
         logger.error("acct_purchase: ACCT 조회 실패 | %s", result["error"])
         raise HTTPException(status_code=502, detail=f"ACCT DB 조회 실패: {result['error']}")
     return list(result.get("rows") or [])
+
+
+async def _fetch_acct_journals(sql: str, acct_tenant_id: int) -> List[Dict[str, Any]]:
+    """ACCT journal reads always carry the RLS tenant selected from JWT scope."""
+    result = await query_acct_database(sql, acct_tenant_id=str(acct_tenant_id))
+    if isinstance(result, dict) and result.get("error"):
+        logger.error("acct_purchase: ACCT journal 조회 실패 | %s", result["error"])
+        raise HTTPException(status_code=502, detail="ACCT 전표 조회 실패")
+    return list(result.get("rows") or [])
+
+
+def _journal_value(entry: Dict[str, Any], *names: str) -> Any:
+    for name in names:
+        if entry.get(name) is not None:
+            return entry[name]
+    return None
+
+
+def _journal_entry_summary(row: Dict[str, Any]) -> Dict[str, Any]:
+    entry = row.get("entry") or row
+    if isinstance(entry, str):
+        entry = json.loads(entry)
+    entry = dict(entry)
+    return {
+        "id": _journal_value(entry, "id", "entry_id"),
+        "company_id": _journal_value(entry, "company_id"),
+        "entry_date": _journal_value(entry, "entry_date", "posted_date", "transaction_date"),
+        "entry_no": _journal_value(entry, "entry_no", "journal_no", "voucher_no", "number"),
+        "description": _journal_value(entry, "description", "memo", "narration"),
+        "status": _journal_value(entry, "status", "state"),
+        "posted_at": _journal_value(entry, "posted_at"),
+        "created_at": _journal_value(entry, "created_at"),
+    }
+
+
+def _journal_line_totals(lines: List[Dict[str, Any]]) -> tuple[float, float]:
+    debit = credit = 0.0
+    for line in lines:
+        side = str(line.get("side") or "").lower()
+        amount = line.get("amount")
+        try:
+            if side == "debit":
+                debit += float(amount or 0)
+            elif side == "credit":
+                credit += float(amount or 0)
+            else:
+                debit += float(line.get("debit_amount") or 0)
+                credit += float(line.get("credit_amount") or 0)
+        except (TypeError, ValueError):
+            continue
+    return debit, credit
 
 
 def _pivot_cte(source_file_id: int) -> str:
@@ -274,6 +372,104 @@ def _to_int(value: Any) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _journal_date(value: Optional[str], field: str) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10]).isoformat()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{field} 날짜 형식이 올바르지 않습니다") from exc
+
+
+@router.get("/journals")
+async def list_journals(
+    business_id: Optional[str] = Query(None, max_length=64),
+    company_id: Optional[int] = Query(None),
+    period_key: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$"),
+    entry_date_from: Optional[str] = Query(None),
+    entry_date_to: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0, le=1000000),
+    current_user: dict = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """List posted ACCT journals for one JWT-owned OBYS business only.
+
+    A missing business scope intentionally returns an empty successful result;
+    this keeps a newly provisioned tenant (with no ACCT company yet) readable
+    without treating the absence of entries as an error.
+    """
+    scope = await _authorized_acct_scope(current_user, business_id)
+    if scope is None:
+        return {"journals": [], "count": 0, "limit": limit, "offset": offset}
+    acct_tenant_id, mapped_company_id = scope
+    if company_id is not None and company_id != mapped_company_id:
+        raise HTTPException(status_code=403, detail="요청한 ACCT 회사는 현재 사업자에 매핑되지 않습니다")
+    date_from = _journal_date(entry_date_from, "entry_date_from")
+    date_to = _journal_date(entry_date_to, "entry_date_to")
+    if period_key:
+        date_from = date_from or f"{period_key}-01"
+        year, month = (int(part) for part in period_key.split("-"))
+        date_to = date_to or date(year + (month == 12), month % 12 + 1, 1).isoformat()
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=400, detail="전표 시작일은 종료일보다 뒤일 수 없습니다")
+    conditions = [f"e.company_id = {mapped_company_id}"]
+    if date_from:
+        conditions.append(f"e.entry_date >= {_lit(date_from)}::date")
+    if date_to:
+        # period_key's generated end is exclusive; explicit end dates include the day.
+        operator = "<" if period_key and entry_date_to is None else "<="
+        conditions.append(f"e.entry_date {operator} {_lit(date_to)}::date")
+    rows = await _fetch_acct_journals(
+        "SELECT to_jsonb(e) AS entry FROM journal_entry e WHERE "
+        + " AND ".join(conditions)
+        + f" ORDER BY e.entry_date DESC, e.created_at DESC LIMIT {limit} OFFSET {offset}",
+        acct_tenant_id,
+    )
+    journals = [_journal_entry_summary(row) for row in rows]
+    return {"journals": journals, "count": len(journals), "limit": limit, "offset": offset}
+
+
+@router.get("/journal-entries/{entry_id}")
+async def get_journal_entry(
+    entry_id: str,
+    business_id: Optional[str] = Query(None, max_length=64),
+    company_id: Optional[int] = Query(None),
+    current_user: dict = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Return one ACCT journal and all lines after tenant/company verification."""
+    scope = await _authorized_acct_scope(current_user, business_id)
+    if scope is None:
+        return {"journal": None, "lines": [], "debit_total": 0, "credit_total": 0}
+    acct_tenant_id, mapped_company_id = scope
+    if company_id is not None and company_id != mapped_company_id:
+        raise HTTPException(status_code=403, detail="요청한 ACCT 회사는 현재 사업자에 매핑되지 않습니다")
+    safe_entry_id = _lit(entry_id)
+    entry_rows = await _fetch_acct_journals(
+        "SELECT to_jsonb(e) AS entry FROM journal_entry e "
+        f"WHERE e.id::text = {safe_entry_id} AND e.company_id = {mapped_company_id} LIMIT 1",
+        acct_tenant_id,
+    )
+    if not entry_rows:
+        # Absence (including a foreign ID) is deliberately indistinguishable.
+        return {"journal": None, "lines": [], "debit_total": 0, "credit_total": 0}
+    line_rows = await _fetch_acct_journals(
+        "SELECT to_jsonb(l) AS line FROM journal_line l "
+        f"WHERE l.entry_id::text = {safe_entry_id} ORDER BY l.id",
+        acct_tenant_id,
+    )
+    lines = []
+    for row in line_rows:
+        line = row.get("line") or row
+        lines.append(json.loads(line) if isinstance(line, str) else dict(line))
+    debit_total, credit_total = _journal_line_totals(lines)
+    return {
+        "journal": _journal_entry_summary(entry_rows[0]),
+        "lines": lines,
+        "debit_total": debit_total,
+        "credit_total": credit_total,
+    }
 
 
 # 화면 자체는 데이터를 담고 있지 않다(빈 껍데기 + JS). 데이터 엔드포인트는 전부 인증을
