@@ -337,6 +337,79 @@ def _extract_project(message: str) -> Optional[str]:
     return None
 
 
+# ─── 텍스트 승인 브릿지 (low 위험도 한정) ──────────────────────────────────
+# /approvals/{id}/decide 는 브라우저 CEO 인증으로만 호출된다 — 에이전트가
+# 자기 요청을 스스로 승인하지 못하게 하는 게이트다. 이 브릿지는 그 불변식을
+# 지킨다: 에이전트 코드가 아니라 CEO가 실제로 보낸 req.message 원문만 보고,
+# LLM/에이전트가 실행되기 전에 여기서 판단한다. 오탐이 되돌리기 어려운
+# medium 이상은 다루지 않고, 이 세션에 low 카드가 정확히 1건 대기 중이며
+# 메시지 전체가 짧은 확정 문구와 정확히 일치할 때만 발동한다("진행해" 같은
+# 단어가 긴 새 지시문 안에 섞여 있으면 발동하지 않는다).
+_TEXT_APPROVAL_PATTERN = re.compile(
+    r"^(승인|승인한다|승인해|승인함|진행해|진행|오케이|오케|ok|okay)[.!~\s]*$",
+    re.IGNORECASE,
+)
+
+
+async def _try_text_approval_bridge(
+    conn, session_id: str, message: str,
+) -> Optional[Dict[str, str]]:
+    """짧은 텍스트 승인을 대기 중인 low 카드 decision 으로 연결한다.
+
+    성공하면 승인된 카드 정보(dict)를 반환하고, 아니면 None.
+    다건 대기 중이면 어느 것인지 CEO 의도가 불명확하므로 발동하지 않는다.
+    """
+    text = (message or "").strip()
+    if not text or len(text) > 12 or not _TEXT_APPROVAL_PATTERN.match(text):
+        return None
+    try:
+        pending = await conn.fetch(
+            """
+            SELECT id, action_type, action_summary
+              FROM agent_permission_requests
+             WHERE decision = 'pending' AND expires_at > now()
+               AND risk_level = 'low' AND requested_by = $1
+            """,
+            session_id,
+        )
+    except Exception as exc:
+        logger.warning(f"text_approval_bridge_lookup_failed session={session_id[:8]} error={exc}")
+        return None
+    if len(pending) != 1:
+        return None
+    target = pending[0]
+    try:
+        row = await conn.fetchrow(
+            """
+            UPDATE agent_permission_requests
+               SET decision = 'approved', decided_by = $2,
+                   decided_at = now(), updated_at = now(),
+                   max_executions = 1,
+                   approval_scope = jsonb_set(
+                       COALESCE(approval_scope, '{}'::jsonb), '{scope}', '"single"'
+                   ) || jsonb_build_object('used', 0),
+                   expires_at = now() + interval '1 hour'
+             WHERE id = $1 AND decision = 'pending'
+            RETURNING id::text, action_type, action_summary
+            """,
+            target["id"], f"CEO(text):{session_id[:8]}",
+        )
+    except Exception as exc:
+        logger.warning(f"text_approval_bridge_decide_failed session={session_id[:8]} error={exc}")
+        return None
+    if not row:
+        return None
+    logger.warning(
+        f"text_approval_bridge_fired session={session_id[:8]} request={row['id'][:8]} "
+        f"tool={row['action_type']}"
+    )
+    return {
+        "id": row["id"],
+        "action_type": row["action_type"],
+        "action_summary": row["action_summary"] or "",
+    }
+
+
 _CODE_REVIEW_SYSTEM_PROMPT = """당신은 시니어 코드 리뷰어입니다. 제공된 코드를 다음 기준으로 분석하세요:
 
 1. **코드 품질** (가독성, 구조, 네이밍)
@@ -1807,9 +1880,19 @@ async def send_ceo_message(req: CeoChatRequest):
             requested_model = req.model if req.model and req.model != "mixture" else None
             return await _build_duplicate_response(conn, session_id, req.message, requested_model)
 
+        # 텍스트 승인 브릿지: low 카드 1건 대기 + 짧은 확정 문구일 때만 발동
+        _text_approval = await _try_text_approval_bridge(conn, session_id, req.message)
+
         # 컨텍스트 빌드 (AADS-190: memory_recall 통합)
         ctx_mgr = ContextManager(conn)
         system_prompt = await ctx_mgr.build_context(session_id)
+        if _text_approval:
+            system_prompt += (
+                "\n\n[시스템] 대표님이 텍스트로 승인했습니다 — 카드 "
+                f"{_text_approval['id'][:8]} (도구 {_text_approval['action_type']}).\n"
+                f"요청 내용: {_text_approval['action_summary'][:300]}\n"
+                "이 요청은 이미 승인 처리됐습니다. 이어서 실행하고 결과를 보고하세요."
+            )
 
         # 세션 라우팅: 서버가 현재 채팅 세션을 자동 주입한다.
         system_prompt += (
