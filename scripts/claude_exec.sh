@@ -48,7 +48,7 @@ PGID=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || echo $$)
 
 TASK_ID="${1:?사용법: $0 <task_id> [directive_file] [model]}"
 DIRECTIVE_FILE="${2:-}"
-MODEL="${3:-claude-sonnet-4-6}"  # AADS-206: 3번째 인자로 모델 수신
+MODEL="${3:-claude-sonnet-5}"  # AADS-206: 3번째 인자로 모델 수신
 
 # === AADS-145: Tasks 시스템 통합 ===
 CLAUDEBOT_TASKS_DIR="/home/claudebot/.claude/tasks"

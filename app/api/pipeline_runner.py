@@ -653,10 +653,8 @@ async def _get_model_for_size(conn, size: str) -> str:
     cycle = await _get_model_cycle_for_size(conn, size)
     if cycle:
         return cycle[0]
-    # DB 조회 실패 시 안전망
-    return {"XS": "claude-haiku-4-5-20251001", "S": "claude-haiku-4-5-20251001",
-            "M": "claude-sonnet-4-6", "L": "claude-sonnet-4-6",
-            "XL": "claude-opus-5"}.get((size or "M").upper(), "claude-sonnet-4-6")
+    # DB 조회 실패 시에도 Python runner의 전-size 기본 계약과 일치시킨다.
+    return "claude-sonnet-5"
 
 
 def _model_spec_from_routing(provider: str, model_id: str) -> str:

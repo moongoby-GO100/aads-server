@@ -394,12 +394,12 @@ _best_by_score() {
 
 # ─── AADS-206: 지시서에서 model: 필드 파싱 ───────────────────
 # 사용: _get_directive_model <directive_file>
-# 반환: 지시서의 model: 필드값 또는 기본값 claude-sonnet-4-6
+# 반환: 지시서의 model: 필드값 또는 기본값 claude-sonnet-5
 _get_directive_model() {
     local directive_file="$1"
     local model
     model=$(grep -m1 '^model:' "$directive_file" 2>/dev/null | awk '{print $2}' | tr -d ' ' || true)
-    echo "${model:-claude-sonnet-4-6}"
+    echo "${model:-claude-sonnet-5}"
 }
 
 # ─── AADS-145: 투기적 실행 — final_commit 기반 다음작업 프리로드 ─

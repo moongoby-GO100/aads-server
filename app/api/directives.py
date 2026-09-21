@@ -30,15 +30,13 @@ _TASK_ID_RE = re.compile(r"^[A-Z][A-Z0-9]*-\d+$")
 
 # AADS-205: size별 자동 모델 매핑
 def get_model_for_size(size: str) -> str:
-    """작업 크기에 따라 최적 모델 자동 선택."""
-    size_to_model = {
-        "XS": "claude-haiku-4-5-20251001",
-        "S":  "claude-haiku-4-5-20251001",
-        "M":  "claude-sonnet-4-6",
-        "L":  "claude-sonnet-4-6",
-        "XL": "claude-opus-4-6",
-    }
-    return size_to_model.get(size, "claude-sonnet-4-6")
+    """Use the current Claude Code default for newly generated directives.
+
+    The host runner still honors an explicitly requested historical model.  New
+    directives must not pin that historical version, though, because an
+    explicit value takes precedence over the centrally managed runner cycle.
+    """
+    return "claude-sonnet-5"
 
 
 class DirectiveSubmitRequest(BaseModel):
