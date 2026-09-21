@@ -1309,6 +1309,9 @@
       detailOverlay.setAttribute("aria-hidden", "true");
       document.body.style.overflow = "";
     }
+    function closeOverlays() {
+      closeDetail();
+    }
 
     const actionMessages = {
       "business-switch": "전역 사업자 전환 패널을 여는 시안 동작입니다.",
@@ -1363,7 +1366,7 @@
     };
     const render = (slug, updateHash = true) => {
       const view = views[slug] || views.home;
-      closeDetail();
+      closeOverlays();
       pageTitle.textContent = view.title;
       document.title = `오비서 V3 · ${view.title} 최종안`;
       viewRoot.innerHTML = view.html();
