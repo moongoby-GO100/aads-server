@@ -481,3 +481,32 @@ def test_drain_wait_polls_and_exits_early_without_cutting_streams():
     # 스트림을 끊는 교정은 절대 들어오면 안 된다(생성 중 답변 손실).
     assert "docker kill" not in src
     assert "pkill" not in src
+
+
+# ── 디스크 회수 단계적 강화 (2026-09-21 #4993/#4994 회귀) ────────────────────
+# until=48h 필터가 빌드 캐시 56건 중 55건을 active 로 걸러내 363MB 만 회수됐고,
+# 878MB 부족을 못 메워 배포 2건이 연속 차단됐다.
+def test_disk_reclaim_escalates_through_three_tiers():
+    src = AUTOHEAL_LIB.read_text(encoding="utf-8")
+    assert 'until=${AUTOHEAL_BUILDER_PRUNE_UNTIL}' in src
+    assert 'until=${AUTOHEAL_BUILDER_PRUNE_TIGHT}' in src
+    assert "docker builder prune -af" in src
+    # 각 단계는 임계 미달일 때만 다음으로 넘어가야 한다(불필요한 캐시 파기 방지).
+    assert src.count("! require_build_disk_free >/dev/null 2>&1") >= 2
+
+
+def test_tight_prune_window_is_narrower_than_default():
+    assert _call('echo "$AUTOHEAL_BUILDER_PRUNE_UNTIL"') == "48h"
+    assert _call('echo "$AUTOHEAL_BUILDER_PRUNE_TIGHT"') == "6h"
+    env = "export AADS_DEPLOY_AUTOHEAL_BUILDER_PRUNE_TIGHT=12h\n"
+    assert _call('echo "$AUTOHEAL_BUILDER_PRUNE_TIGHT"', env_prefix=env) == "12h"
+
+
+def test_hard_prune_is_gateable_and_touches_only_build_cache():
+    src = AUTOHEAL_LIB.read_text(encoding="utf-8")
+    assert "AADS_DEPLOY_AUTOHEAL_DISK_HARD_PRUNE:-1" in src
+    # 실행 중 서비스를 건드리는 회수는 들어오면 안 된다.
+    assert "docker volume prune" not in src
+    assert "docker system prune" not in src
+    assert "docker container prune" not in src
+    assert "docker image prune -a" not in src
