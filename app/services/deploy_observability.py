@@ -650,7 +650,9 @@ async def _load_legacy(conn: Any) -> tuple[list[dict[str, Any]], list[dict[str, 
     return stale, durations
 
 
-async def _load_runner_signals(conn: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+async def _load_runner_signals(
+    conn: Any,
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
     rows = _dict_rows(await conn.fetch(
         """
         SELECT job_id AS runner_job_id, project, status, phase, commit_hash AS release_sha,
@@ -664,15 +666,23 @@ async def _load_runner_signals(conn: Any) -> tuple[list[dict[str, Any]], list[di
         """,
         list(PROJECTS), list(TERMINAL_PIPELINE_STATUSES),
     ))
-    queue = []
+    queues: dict[str, list[dict[str, Any]]] = {
+        "runner_queue": [],
+        "approval_queue": [],
+        "review_hold_queue": [],
+    }
     signals = []
     for row in rows:
         status = str(row.get("status") or "")
         project = str(row.get("project") or "").upper()
         idle = int(row.get("idle_seconds") or 0)
         detail = str(row.get("error_detail") or "").lower()
-        if status in QUEUED_STATUSES or status in ("pending_ceo_approval", "review_hold"):
-            queue.append(row)
+        if status == "queued":
+            queues["runner_queue"].append(row)
+        elif status in ("awaiting_approval", "pending_ceo_approval"):
+            queues["approval_queue"].append(row)
+        elif status == "review_hold":
+            queues["review_hold_queue"].append(row)
         signal = None
         if "process_died" in detail:
             signal = "process_died"
@@ -685,9 +695,10 @@ async def _load_runner_signals(conn: Any) -> tuple[list[dict[str, Any]], list[di
             row["reconcile_action"] = "review_only"
             row["requires_ceo_approval"] = True
             signals.append(row)
-    for position, row in enumerate(queue, 1):
-        row["queue_position"] = position
-    return queue, signals
+    for queue in queues.values():
+        for position, row in enumerate(queue, 1):
+            row["queue_position"] = position
+    return queues, signals
 
 
 async def _load_project_deployments(
@@ -773,6 +784,7 @@ async def _load_project_deployments(
                    created_at, started_at, completed_at, deployed_at, updated_at
               FROM pipeline_jobs
              WHERE upper(project) = ANY($1::text[])
+               AND (deployed_at IS NOT NULL OR status = 'deploying')
              ORDER BY upper(project),
                       COALESCE(updated_at, completed_at, deployed_at, started_at, created_at) DESC NULLS LAST
             """,
@@ -785,6 +797,8 @@ async def _load_project_deployments(
             current = overview[project]
             current["has_pipeline_job"] = True
             status = str(row.get("status") or "")
+            if row.get("deployed_at") is None and status != "deploying":
+                continue
             # 배포 원장이 있으면 그것이 정본이다. 러너 이력은 아직 끝나지 않은
             # 작업(진행 중인 배포 후보)일 때만 카드를 덮어쓴다.
             # 2026-09-15: GO100 최신 deploy_runs(success/rollback)가 종료된 러너
@@ -947,11 +961,14 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     response: dict[str, Any] = {
         "generated_at": now,
-        "schema_version": "deploy-observability-v1",
+        "schema_version": "deploy-observability-v2",
         "degraded": False,
         "degraded_reasons": [],
         "active_deployments": [],
         "queued_deployments": [],
+        "runner_queue": [],
+        "approval_queue": [],
+        "review_hold_queue": [],
         "recent_completed_deployments": [],
         "recent_deployments": [],
         "recent_durations_per_project": [],
@@ -999,11 +1016,8 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
         response["degraded_reasons"].append("deploy_history_unavailable")
 
     if has_pipeline:
-        runner_queue, signals = await _load_runner_signals(conn)
-        known_jobs = {item.get("runner_job_id") for item in response["queued_deployments"]}
-        response["queued_deployments"].extend(
-            item for item in runner_queue if item.get("runner_job_id") not in known_jobs
-        )
+        runner_queues, signals = await _load_runner_signals(conn)
+        response.update(runner_queues)
         response["stale_zombie_signals"] = signals
     else:
         response["degraded"] = True
@@ -1039,8 +1053,8 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
         "ready": not blockers,
         "blockers": blockers,
         "next_queued_runner_job_id": (
-            response["queued_deployments"][0].get("runner_job_id")
-            if response["queued_deployments"] else None
+            response["runner_queue"][0].get("runner_job_id")
+            if response["runner_queue"] else None
         ),
     }
 

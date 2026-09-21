@@ -96,6 +96,47 @@ def test_go100_zombie_blocks_next_deploy_without_mutation():
     assert "runner_reconciliation_required" in result["next_deploy_readiness"]["blockers"]
 
 
+def test_runner_workflow_states_are_separate_from_deploy_queue():
+    now = datetime.now(timezone.utc)
+    runner_rows = [
+        {
+            "runner_job_id": f"runner-{status}",
+            "project": "AADS",
+            "status": status,
+            "phase": "review",
+            "release_sha": "abc1234",
+            "runner_pid": None,
+            "error_detail": None,
+            "started_at": now,
+            "created_at": now,
+            "updated_at": now,
+            "idle_seconds": 10,
+        }
+        for status in ("queued", "awaiting_approval", "review_hold")
+    ]
+    conn = FakeConnection(
+        {"deploy_runs", "deploy_history", "pipeline_jobs"},
+        {
+            "FROM deploy_runs dr": [],
+            "FROM deploy_recent_durations": [],
+            "FROM deploy_phase_events": [],
+            "legacy_started_without_terminal_match": [],
+            "ROUND(AVG(duration_s)": [],
+            "project_deploy_overview_latest_pipeline": [],
+            "project_deploy_overview_latest_success_pipeline": [],
+            "FROM pipeline_jobs": runner_rows,
+        },
+    )
+
+    result = asyncio.run(get_deploy_status(conn))
+
+    assert result["queued_deployments"] == []
+    assert [item["status"] for item in result["runner_queue"]] == ["queued"]
+    assert [item["status"] for item in result["approval_queue"]] == ["awaiting_approval"]
+    assert [item["status"] for item in result["review_hold_queue"]] == ["review_hold"]
+    assert result["next_deploy_readiness"]["next_queued_runner_job_id"] == "runner-queued"
+
+
 def test_stalled_active_deploy_requires_reconciliation_not_live_deploy_blocker():
     now = datetime.now(timezone.utc)
     old = now.replace(year=now.year - 1)
@@ -212,7 +253,7 @@ def test_recent_deployments_include_failed_run_id_and_status():
     assert recent["completed_at"] == now
 
 
-def test_project_deployments_include_projects_from_pipeline_history():
+def test_project_deployments_only_include_deployed_pipeline_history():
     now = datetime.now(timezone.utc)
     conn = FakeConnection(
         {"deploy_runs", "deploy_history", "pipeline_jobs"},
@@ -235,18 +276,32 @@ def test_project_deployments_include_projects_from_pipeline_history():
             "FROM deploy_phase_events": [],
             "legacy_started_without_terminal_match": [],
             "ROUND(AVG(duration_s)": [],
-            "project_deploy_overview_latest_pipeline": [{
-                "project": "GO100",
-                "runner_job_id": "runner-go100",
-                "status": "error",
-                "phase": "review_failed",
-                "release_sha": "feedbee",
-                "created_at": now,
-                "started_at": now,
-                "completed_at": now,
-                "deployed_at": None,
-                "updated_at": now,
-            }],
+            "project_deploy_overview_latest_pipeline": [
+                {
+                    "project": "GO100",
+                    "runner_job_id": "runner-go100",
+                    "status": "review_hold",
+                    "phase": "review_failed",
+                    "release_sha": "feedbee",
+                    "created_at": now,
+                    "started_at": now,
+                    "completed_at": None,
+                    "deployed_at": None,
+                    "updated_at": now,
+                },
+                {
+                    "project": "ACCT",
+                    "runner_job_id": "runner-acct",
+                    "status": "done",
+                    "phase": "deployed",
+                    "release_sha": "cafebabe",
+                    "created_at": now,
+                    "started_at": now,
+                    "completed_at": now,
+                    "deployed_at": now,
+                    "updated_at": now,
+                },
+            ],
             "project_deploy_overview_latest_success_pipeline": [],
             "FROM pipeline_jobs": [],
         },
@@ -257,10 +312,11 @@ def test_project_deployments_include_projects_from_pipeline_history():
     by_project = {item["project"]: item for item in result["project_deployments"]}
     assert set(by_project) == {"AADS", "FOOD", "GO100", "KIS", "SF", "NTV2", "NAS", "ACCT"}
     assert by_project["AADS"]["source"] == "deploy_runs"
-    assert by_project["GO100"]["source"] == "pipeline_jobs"
-    assert by_project["GO100"]["status"] == "error"
-    assert by_project["GO100"]["runner_job_id"] == "runner-go100"
-    assert by_project["ACCT"]["status"] == "unknown"
+    assert by_project["GO100"]["source"] == "none"
+    assert by_project["GO100"]["status"] == "unknown"
+    assert by_project["ACCT"]["source"] == "pipeline_jobs"
+    assert by_project["ACCT"]["status"] == "done"
+    assert by_project["ACCT"]["runner_job_id"] == "runner-acct"
 
 
 def test_component_deployments_include_manifest_metadata():
