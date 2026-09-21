@@ -78,6 +78,47 @@
     .detail-page .panel { min-width: 0; }
     .detail-page .recovery { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
     .detail-page .recovery p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+    .records-panel { margin-top: 14px; }
+    .sample-flag { display: inline-flex; align-items: center; min-height: 24px; padding: 4px 8px; border-radius: 999px; background: var(--blue-soft); color: var(--blue); font-size: 10px; font-weight: 850; }
+    .record-filter { display: grid; gap: 12px; margin-bottom: 15px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fafbfc; }
+    .record-filter summary { display: none; cursor: pointer; font-size: 12px; font-weight: 850; }
+    .record-filter-fields { display: grid; grid-template-columns: repeat(5, minmax(130px, 1fr)); gap: 10px; align-items: end; }
+    .record-filter .field { min-width: 0; }
+    .record-filter .field label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 10px; font-weight: 800; }
+    .record-filter input, .record-filter select { width: 100%; min-height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); font-size: 11px; }
+    .quick-ranges { display: flex; gap: 6px; flex-wrap: wrap; grid-column: 1 / -1; }
+    .quick-ranges button { min-height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--muted); font-size: 10px; font-weight: 800; }
+    .quick-ranges button.active { border-color: var(--orange); background: var(--orange-soft); color: #a8461b; }
+    .record-filter-actions { display: flex; gap: 7px; justify-content: flex-end; grid-column: 1 / -1; }
+    .filter-error { grid-column: 1 / -1; margin: 0; padding: 9px 11px; border-radius: 7px; background: var(--red-soft); color: #a52d2d; font-size: 11px; font-weight: 750; }
+    .record-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 10px; color: var(--muted); font-size: 11px; }
+    .record-summary strong { color: var(--ink); }
+    .record-table { table-layout: fixed; min-width: 860px; }
+    .record-table th, .record-table td { white-space: normal; vertical-align: middle; }
+    .record-table tbody tr[data-record-id] { cursor: pointer; }
+    .record-table tbody tr[data-record-id]:hover, .record-table tbody tr[data-record-id]:focus { background: #fff8f4; outline: none; }
+    .record-table .date-group td { padding: 8px 10px; background: #f3f4f6; color: #4b5563; font-size: 10px; font-weight: 850; }
+    .record-table .cell-main { display: block; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .record-table .cell-sub { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
+    .record-table .detail-button { min-height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: #fff; font-size: 10px; font-weight: 800; }
+    .record-cards { display: none; gap: 9px; }
+    .record-card { width: 100%; display: grid; gap: 9px; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: #fff; text-align: left; }
+    .record-card-head, .record-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+    .record-card b { font-size: 12px; overflow-wrap: anywhere; }
+    .record-card dl { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 7px; margin: 0; }
+    .record-card dt { color: var(--muted); font-size: 9px; }
+    .record-card dd { margin: 2px 0 0; font-size: 11px; font-weight: 750; overflow-wrap: anywhere; }
+    .record-state { min-height: 190px; display: grid; place-items: center; padding: 24px; border: 1px dashed #cfd5de; border-radius: 10px; text-align: center; }
+    .record-state h4 { margin: 0 0 6px; font-size: 14px; }
+    .record-state p { margin: 0 0 14px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+    .record-state-actions { display: flex; gap: 7px; justify-content: center; flex-wrap: wrap; }
+    .record-pagination { display: flex; justify-content: center; margin-top: 13px; }
+    .record-pagination button { min-height: 38px; padding: 0 16px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-size: 11px; font-weight: 800; }
+    .record-drawer-section h3 { margin: 3px 0 10px; font-size: 13px; }
+    .record-history { display: grid; gap: 8px; }
+    .record-history div { padding: 10px 11px; border-left: 3px solid #d9dee6; background: #f8f9fb; font-size: 10px; line-height: 1.5; }
+    .record-navigation { display: flex; gap: 7px; justify-content: space-between; }
+    .record-navigation button { flex: 1; }
     button:focus-visible { outline: 3px solid rgba(242,106,46,.7); outline-offset: 2px; }
     .nav svg, .bottom-nav svg, .topbar svg { width: 18px; height: 18px; stroke-width: 1.8; }
     .count { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; display: grid; place-items: center; background: #3b2524; color: #ffb08a; font-size: 10px; }
@@ -395,6 +436,16 @@
       .filter-actions button { flex: 1; }
       .drawer { padding: 18px; }
       .detail-grid { grid-template-columns: 1fr; }
+      .record-filter summary { display: block; }
+      .record-filter-fields { grid-template-columns: 1fr; padding-top: 12px; }
+      .record-filter:not([open]) .record-filter-fields { display: none; }
+      .quick-ranges, .record-filter-actions, .filter-error { grid-column: auto; }
+      .record-filter-actions button { flex: 1; }
+      .record-table-wrap { display: none; }
+      .record-cards { display: grid; }
+      .record-summary { align-items: flex-start; flex-direction: column; }
+      .record-card dl { grid-template-columns: 1fr 1fr; }
+      #detailOverlay .drawer { width: 100%; }
       .auth-shell { min-height: auto; padding: 4px 0 20px; }
       .auth-side { padding: 20px; }
       .employee-auth .auth-card { order: 1; }
@@ -1401,6 +1452,123 @@
       "audit/integration-audit": ["로그인·연동 감사", "로그인과 외부 연동 인증 시도 및 실패를 추적합니다.", ["실패", "4건", "차단 0건"], ["접속 이력", "대표 웹 로그인|회계 모바일 로그인|은행 재인증"], ["보안 점검", "새 기기|반복 실패|인증정보 변경"]],
       "audit/business-switch": ["보안 정책", "세션, 최소 권한, 민감정보와 내보내기 정책을 관리합니다.", ["정책", "15개", "검토 2개"], ["핵심 정책", "세션 8시간|민감정보 마스킹|내보내기 승인"], ["정책 운영", "정기 검토|예외 승인|위반 알림"]]
     };
+    const recordProfiles = {
+      sales: { search: "주문번호·메뉴·채널", fields: [["주문·채널", "subject"], ["구분", "kind"], ["할인·수수료", "metric"], ["정산액", "amount"]], subjects: ["배민 B-2841 · 얼큰국밥", "POS P-9182 · 수육정식", "쿠팡 C-4012 · 국밥세트", "요기요 Y-7730 · 만두", "카드 K-6201 · 포장 주문", "배민 B-2834 · 얼큰국밥", "POS P-9176 · 수육정식", "쿠팡 C-4004 · 국밥세트"], kinds: ["주문", "취소", "할인", "주문"], metrics: ["쿠폰 ₩2,000 · 수수료 ₩3,240", "취소 ₩14,000", "할인 ₩1,500 · 수수료 ₩2,860", "수수료 ₩4,120"], unit: "정산액" },
+      purchase: { search: "거래처·품목·문서번호", fields: [["거래처·품목", "subject"], ["증빙", "kind"], ["공급가·세액", "metric"], ["결제금액", "amount"]], subjects: ["서울축산 · 돼지사골", "마켓봄 · 대파", "뉴통 · 포장용기", "성북상회 · 쌀", "한빛유통 · 양념", "청정농산 · 깍두기", "서울축산 · 수육", "마켓봄 · 채소"], kinds: ["세금계산서", "거래명세서", "카드전표", "현금영수증"], metrics: ["공급가 ₩420,000 · 세액 ₩42,000", "공급가 ₩188,000 · 세액 ₩18,800", "공급가 ₩320,000 · 세액 ₩32,000", "공급가 ₩96,000 · 면세"], unit: "결제금액" },
+      vat: { search: "거래처·증빙번호", fields: [["증빙·거래처", "subject"], ["세금 구분", "kind"], ["공급가·부가세", "metric"], ["합계", "amount"]], subjects: ["전자세금계산서 · 서울축산", "카드매입 · 마켓봄", "현금영수증 · 성북상회", "전자세금계산서 · 뉴통", "카드매출 · 성신점", "현금매출 · 미아점", "수기증빙 · 한빛유통", "전자계산서 · 청정농산"], kinds: ["과세·공제", "과세·검토", "면세", "과세·공제"], metrics: ["공급가 ₩420,000 · 세액 ₩42,000", "공급가 ₩188,000 · 세액 ₩18,800", "공급가 ₩96,000 · 세액 ₩0", "공급가 ₩320,000 · 세액 ₩32,000"], unit: "합계" },
+      ledger: { search: "분개번호·계정과목·적요", fields: [["분개·적요", "subject"], ["계정과목", "kind"], ["차변·대변", "metric"], ["분개금액", "amount"]], subjects: ["JV-0921-18 · 카드매출", "JV-0921-17 · 식재료 매입", "JV-0920-12 · 배달 정산", "JV-0919-09 · 급여 미지급", "JV-0918-22 · 임차료", "JV-0917-13 · 가수금", "JV-0916-08 · 소모품", "JV-0915-04 · 세금예수금"], kinds: ["매출채권", "복리후생비", "보통예금", "미지급금"], metrics: ["차변 ₩462,000 · 대변 ₩462,000", "차변 ₩206,800 · 대변 ₩206,800", "차변 ₩352,000 · 대변 ₩352,000", "차변 ₩1,240,000 · 대변 ₩1,240,000"], unit: "분개금액" },
+      evidence: { search: "거래처·증빙·문서번호", fields: [["누락 증빙·거래처", "subject"], ["OCR", "kind"], ["매칭·보완", "metric"], ["거래금액", "amount"]], subjects: ["마켓봄 · 거래명세서", "대표 개인카드 · 식자재", "서울축산 · 세금계산서", "성북상회 · 간이영수증", "뉴통 · 전자계산서", "현장구매 · 카드전표", "한빛유통 · 영수증", "청정농산 · 면세계산서"], kinds: ["OCR 92%", "OCR 완료", "원본 대기", "OCR 71%"], metrics: ["미매칭 · 거래처 요청", "매칭 후보 2건", "수신 재요청", "품목 보완 완료"], unit: "거래금액" },
+      approval: { search: "요청자·근거·요청번호", fields: [["요청·요청자", "subject"], ["승인 유형", "kind"], ["근거", "metric"], ["요청금액", "amount"]], subjects: ["성신점장 · 긴급 발주", "회계팀 · 정산 차이", "노무담당 · 계약 갱신", "세무담당 · 신고 공유", "미아점장 · 설비 수리", "구매담당 · 단가 변경", "재무담당 · 급여 확정", "정화점장 · 재고 폐기"], kinds: ["발주", "정산", "계약", "세무"], metrics: ["3일 내 소진 예상", "원천자료 대사 완료", "만료 D-8", "신고 마감 D-2"], unit: "요청금액" },
+      payroll: { search: "직원·귀속월·명세서", fields: [["귀속월·직원", "subject"], ["명세서", "kind"], ["지급·공제", "metric"], ["실지급액", "amount"]], subjects: ["2026-09 · 김서윤", "2026-09 · 박준호", "2026-09 · 이민지", "2026-09 · 최도윤", "2026-09 · 정하늘", "2026-09 · 윤서아", "2026-09 · 강민호", "2026-09 · 한유진"], kinds: ["검토 완료", "수당 확인", "공제 확인", "초안"], metrics: ["지급 ₩2,780,000 · 공제 ₩241,000", "지급 ₩3,120,000 · 공제 ₩286,000", "지급 ₩2,640,000 · 공제 ₩218,000", "지급 ₩2,920,000 · 공제 ₩252,000"], unit: "실지급액" },
+      inventory: { search: "품목·원문서·공급사", fields: [["품목·원문서", "subject"], ["입출고", "kind"], ["수량·단가", "metric"], ["재고잔량", "amount"]], subjects: ["돼지사골 · GR-0921-08", "대파 · GR-0921-07", "포장용기 · GI-0920-12", "쌀 · GR-0919-04", "양념 · GI-0918-16", "깍두기 · GR-0917-09", "수육 · GI-0916-05", "만두 · GR-0915-03"], kinds: ["입고", "입고", "출고", "조정"], metrics: ["96kg · ₩8,900/kg", "40kg · ₩3,200/kg", "8박스 · ₩42,000", "120kg · ₩2,800/kg"], unit: "재고잔량" },
+      tasks: { search: "업무·담당자·번호", fields: [["업무·담당", "subject"], ["우선순위", "kind"], ["마감·진행", "metric"], ["관련 수치", "amount"]], subjects: ["부가세 자료 확인 · 회계팀", "급여 최종 승인 · 재무팀", "입금 매칭 · 성신점", "계약 갱신 · 노무팀", "발주 검토 · 구매팀", "인증 갱신 · 관리자", "보고서 확인 · 대표", "증빙 보완 · 미아점"], kinds: ["긴급", "높음", "보통", "예정"], metrics: ["오늘 18:00 · 검토 중", "오늘 15:00 · 승인 대기", "내일 · 담당 배정", "D-7 · 자료 수집"], unit: "관련 수치" },
+      reports: { search: "보고서·지점·작성자", fields: [["보고서·범위", "subject"], ["형식", "kind"], ["버전·공유", "metric"], ["집계액", "amount"]], subjects: ["CEO 월간보고 · 전체", "손익 비교 · 성신점", "현금흐름 · 전체", "정산 대사 · 배달", "원가 분석 · 미아점", "급여 대장 · 전체", "세무 묶음 · 법인", "매출 추이 · 정화점"], kinds: ["PDF", "Excel", "대시보드", "PDF·Excel"], metrics: ["v3 · 대표 공유", "v2 · 검토 중", "초안 · 미공유", "확정 · 보관"], unit: "집계액" },
+      accounts: { search: "계좌·입금자·거래번호", fields: [["계좌·거래", "subject"], ["입출금", "kind"], ["매칭·예정일", "metric"], ["거래금액", "amount"]], subjects: ["신한 운영 · BAEMIN_PAY", "기업 정산 · KCP", "국민 급여 · 이체예약", "신한 운영 · 현장입금", "기업 정산 · COUPANG", "국민 세금 · 납부예약", "신한 운영 · 임대료", "기업 정산 · YOGIYO"], kinds: ["입금", "입금", "출금 예정", "출금"], metrics: ["매칭 96% · 9/23", "매칭 완료 · 9/24", "예약 완료 · 9/25", "미매칭 · 확인 필요"], unit: "거래금액" },
+      people: { search: "직원·지점·문서", fields: [["직원·지점", "subject"], ["구분", "kind"], ["근태·계약", "metric"], ["인원·시간", "amount"]], subjects: ["김서윤 · 미아점", "박준호 · 성신점", "이민지 · 정화점", "최도윤 · 성신점", "정하늘 · 미아점", "윤서아 · 정화점", "강민호 · 성신점", "한유진 · 미아점"], kinds: ["재직", "근태 검토", "계약 갱신", "서류 보완"], metrics: ["주 40시간 · 정상", "주 46시간 · 확인", "계약 D-8", "보건증 D-14"], unit: "인원·시간" },
+      integration: { search: "서비스·계정·지점", fields: [["연동·지점", "subject"], ["수집 방식", "kind"], ["동기화·권한", "metric"], ["수집 건수", "amount"]], subjects: ["배달의민족 · 성신점", "신한은행 · 전체", "홈택스 · 법인", "마켓봄 · 미아점", "쿠팡이츠 · 정화점", "기업은행 · 전체", "뉴통 · 성신점", "요기요 · 미아점"], kinds: ["자동 수집", "조회 전용", "파일 보조", "재인증"], metrics: ["09:20 · 정상", "08:45 · 최소 권한", "06:00 · 인증 D-14", "지연 · 재시도 가능"], unit: "수집 건수" },
+      alerts: { search: "알림·담당자·규칙", fields: [["알림·대상", "subject"], ["중요도", "kind"], ["발송·조치", "metric"], ["발생 건수", "amount"]], subjects: ["부가세 마감 · 대표", "은행 인증 · 회계", "계약 만료 · 노무", "재고 부족 · 점장", "정산 차이 · 재무", "증빙 누락 · 구매", "로그인 실패 · 관리자", "급여 승인 · 대표"], kinds: ["긴급", "주의", "정보", "업무"], metrics: ["즉시 발송 · 미확인", "이메일 발송 · 확인", "D-7 반복 · 조치 중", "앱 알림 · 완료"], unit: "발생 건수" },
+      business: { search: "사업자·지점·변경자", fields: [["사업자·지점", "subject"], ["관리 구분", "kind"], ["검증·변경", "metric"], ["연결 수", "amount"]], subjects: ["열정국밥 · 성신점", "열정국밥 · 미아점", "열정국밥 · 정화점", "문라이트F&B · 본점", "문고비 개인 · 1호점", "열정국밥 · 신규점", "문라이트F&B · 창고", "열정국밥 · 공유주방"], kinds: ["사업자", "지점", "전환", "신규 등록"], metrics: ["검증 완료 · 정상", "OCR 확인 · 보완", "대표 변경 · 승인", "서류 대기 · 초안"], unit: "연결 수" },
+      margin: { search: "메뉴·재료·시나리오", fields: [["메뉴·항목", "subject"], ["분석 구분", "kind"], ["원가·변동", "metric"], ["공헌이익", "amount"]], subjects: ["얼큰국밥 · 돼지사골", "수육정식 · 돼지고기", "만두 · 포장", "국밥세트 · 수수료", "순대국밥 · 대파", "포장세트 · 용기", "야간세트 · 할인", "곱빼기 · 쌀"], kinds: ["메뉴 원가", "단가 변동", "마진", "시뮬레이션"], metrics: ["원가 ₩4,366 · +0.8%p", "단가 +8.2% · 검토", "마진 33.3% · 정상", "가격 +₩1,000 · 주문 -3%"], unit: "공헌이익" },
+      audit: { search: "사용자·행위·감사번호", fields: [["사용자·행위", "subject"], ["감사 구분", "kind"], ["변경·접속", "metric"], ["영향 건수", "amount"]], subjects: ["문고비 · 권한 변경", "회계담당 · 원장 수정", "성신점장 · 사업자 전환", "노무담당 · 문서 열람", "관리자 · 로그인 정책", "세무담당 · 내보내기", "미아점장 · 승인 요청", "시스템 · 연동 재시도"], kinds: ["권한", "변경", "로그인", "정책"], metrics: ["대표→회계 · 승인", "이전값 보관 · 완료", "새 기기 · 2단계 인증", "예외 만료 D-3"], unit: "영향 건수" }
+    };
+    const detailRecordProfileAssignments = {
+      "home/task":"tasks","home/account-detail":"accounts","home/sales-detail":"sales","home/calendar":"tasks",
+      "tasks/task":"tasks","tasks/review":"tasks","tasks/calendar":"tasks","tasks/approval-detail":"approval",
+      "reports/review":"reports","reports/account-detail":"accounts","reports/sales-detail":"sales","reports/report":"reports",
+      "documents/document-vault":"reports","documents/tax-return-preview":"vat","documents/employee-docs":"people","documents/receipt-upload":"evidence",
+      "sales/sales-detail":"sales","sales/order-detail":"sales","sales/review":"sales","sales/sales-channel-connect":"integration",
+      "accounts/account-detail":"accounts","accounts/order-detail":"accounts","accounts/match":"accounts","accounts/bank-connect":"integration",
+      "employees/employee-detail":"people","employees/signature-progress":"people","employees/approve":"payroll","employees/employee-docs":"people",
+      "inventory/menu-detail":"inventory","inventory/order-detail":"inventory","inventory/supplier-connect":"purchase","inventory/receipt-upload":"purchase",
+      "tax/vat-ledger":"vat","tax/evidence-gap":"evidence","tax/withholding-ledger":"ledger","tax/tax-return-preview":"vat",
+      "approvals/approval-detail":"approval","approvals/audit-detail":"approval","approvals/review":"approval","approvals/tax-agent-approval":"approval",
+      "alerts/notification":"alerts","alerts/task":"alerts","alerts/integration-audit":"alerts","alerts/credential-vault":"alerts",
+      "business/business-detail":"business","business/business-ocr":"business","business/audit-detail":"audit","business/business-switch":"business",
+      "integrations/sales-channel-connect":"integration","integrations/bank-connect":"integration","integrations/supplier-connect":"purchase","integrations/tax-connect":"vat","integrations/integration-audit":"audit",
+      "margins/menu-detail":"margin","margins/review":"margin","margins/margin-detail":"margin","margins/order-detail":"margin",
+      "audit/audit-detail":"audit","audit/credential-vault":"audit","audit/integration-audit":"audit","audit/business-switch":"audit"
+    };
+    const routeAliases = { "sales/channel-sales":"sales/order-detail", "purchase/purchase-journal":"inventory/receipt-upload", "employees/payroll":"employees/approve", "inventory/movement":"inventory/menu-detail", "approvals/pending":"approvals/approval-detail" };
+    const recordStatuses = ["완료", "검토", "대기", "오류", "완료", "검토", "완료", "대기"];
+    const recordAmounts = [462000, 206800, 352000, 1240000, 318000, 896000, 154000, 728000];
+    const recordDates = ["2026-09-21 16:42", "2026-09-21 11:18", "2026-09-20 18:05", "2026-09-19 14:36", "2026-09-18 09:22", "2026-09-17 17:51", "2026-09-16 12:14", "2026-09-15 08:40"];
+    const escapeMarkup = (value) => String(value).replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
+    const money = (value) => `₩${Number(value).toLocaleString("ko-KR")}`;
+    const recordStateKey = (route) => `obys-v3-records:${route}`;
+    const getRecordState = (route) => {
+      const defaults = { range: "month", start: "2026-09-01", end: "2026-09-21", scope: "전체 사업자·지점", status: "전체 상태", search: "", preview: "results", visible: 6 };
+      try { return { ...defaults, ...JSON.parse(sessionStorage.getItem(recordStateKey(route)) || "{}") }; } catch (_) { return defaults; }
+    };
+    const saveRecordState = (route, state) => sessionStorage.setItem(recordStateKey(route), JSON.stringify(state));
+    const recordsForRoute = (route) => {
+      const profile = recordProfiles[detailRecordProfileAssignments[route]];
+      return profile.subjects.map((subject, index) => ({ id: `${route.replace("/", "-")}-${index + 1}`, route, date: recordDates[index], subject, kind: profile.kinds[index % profile.kinds.length], metric: profile.metrics[index % profile.metrics.length], amount: recordAmounts[index], status: recordStatuses[index], source: ["자동 수집 · 회계팀", "원문서 OCR · 구매팀", "관리자 입력 · 지점장", "외부 연동 · 재무팀"][index % 4], branch: ["열정국밥 · 성신점", "열정국밥 · 미아점", "열정국밥 · 정화점", "문라이트F&B · 본점"][index % 4], ref: `${route.split("/")[1].toUpperCase()}-${String(index + 1).padStart(4, "0")}` }));
+    };
+    const statusTone = (status) => status === "완료" ? "ok" : status === "오류" ? "bad" : status === "검토" ? "warn" : "info";
+    const renderRecordState = (kind) => {
+      if (kind === "loading") return `<div class="record-state" role="status"><div><h4>상세내역을 불러오는 중입니다</h4><p>선택한 기간과 범위의 시안 데이터를 확인하고 있습니다.</p></div></div>`;
+      if (kind === "error") return `<div class="record-state" role="alert"><div><h4>상세내역을 불러오지 못했습니다</h4><p>연결 상태를 확인한 뒤 다시 시도하거나 연동 관리에서 수집 설정을 확인해 주세요.</p><div class="record-state-actions"><button type="button" class="primary" data-record-retry>다시 시도</button><button type="button" class="outline" data-action="reconnect">연동 관리</button></div></div></div>`;
+      return `<div class="record-state"><div><h4>조건에 맞는 상세내역이 없습니다</h4><p>기간이나 상태를 넓혀 조회해 보세요.</p><button type="button" class="primary" data-record-reset>필터 초기화</button></div></div>`;
+    };
+    function filterRecords(route, state) {
+      const query = state.search.trim().toLowerCase();
+      return recordsForRoute(route).filter((item) => item.date.slice(0, 10) >= state.start && item.date.slice(0, 10) <= state.end && (state.scope === "전체 사업자·지점" || item.branch === state.scope) && (state.status === "전체 상태" || item.status === state.status) && (!query || `${item.subject} ${item.kind} ${item.metric} ${item.ref}`.toLowerCase().includes(query)));
+    }
+    function renderRecordResults(route) {
+      const state = getRecordState(route);
+      if (state.preview !== "results") return renderRecordState(state.preview);
+      const profile = recordProfiles[detailRecordProfileAssignments[route]];
+      const rows = filterRecords(route, state);
+      if (!rows.length) return renderRecordState("empty");
+      const visible = rows.slice(0, state.visible);
+      let lastDate = "";
+      const tableRows = visible.map((item) => {
+        const day = item.date.slice(0, 10);
+        const group = day === lastDate ? "" : `<tr class="date-group"><td colspan="8">${day.replaceAll("-", ".")} · ${rows.filter((rowItem) => rowItem.date.startsWith(day)).length}건</td></tr>`;
+        lastDate = day;
+        return `${group}<tr tabindex="0" data-record-id="${item.id}"><td><span class="cell-main"><strong>${escapeMarkup(item.date.slice(11))}</strong></span><span class="cell-sub">${escapeMarkup(item.ref)}</span></td><td><span class="cell-main" title="${escapeMarkup(item.subject)}">${escapeMarkup(item.subject)}</span></td><td>${escapeMarkup(item.kind)}</td><td>${escapeMarkup(item.metric)}</td><td><span class="status ${statusTone(item.status)}">${item.status}</span></td><td class="amount">${money(item.amount)}</td><td>${escapeMarkup(item.source)}</td><td><button type="button" class="detail-button" data-record-id="${item.id}" aria-label="${escapeMarkup(item.subject)} 상세보기">상세보기</button></td></tr>`;
+      }).join("");
+      const cards = visible.map((item) => `<button type="button" class="record-card" data-record-id="${item.id}"><span class="record-card-head"><b>${escapeMarkup(item.subject)}</b><span class="status ${statusTone(item.status)}">${item.status}</span></span><span class="cell-sub">${escapeMarkup(item.date)} · ${escapeMarkup(item.ref)}</span><dl><div><dt>${profile.fields[1][0]}</dt><dd>${escapeMarkup(item.kind)}</dd></div><div><dt>${profile.fields[2][0]}</dt><dd>${escapeMarkup(item.metric)}</dd></div><div><dt>${profile.fields[3][0]}</dt><dd>${money(item.amount)}</dd></div><div><dt>출처·담당</dt><dd>${escapeMarkup(item.source)}</dd></div></dl><span class="record-card-foot"><span>건별 내역과 처리 이력 확인</span><strong>상세보기 ›</strong></span></button>`).join("");
+      return `<div class="record-summary"><span><strong>${rows.length}건</strong> · 표시 ${visible.length}건 · 합계 <strong>${money(rows.reduce((sum, item) => sum + item.amount, 0))}</strong></span><span>거래일시 최신순</span></div><div class="table-wrap record-table-wrap"><table class="record-table"><thead><tr><th>일시·문서번호</th>${profile.fields.slice(0, 3).map(([label]) => `<th>${label}</th>`).join("")}<th>상태</th><th class="amount">${profile.fields[3][0]}</th><th>출처·담당</th><th>건별 조회</th></tr></thead><tbody>${tableRows}</tbody></table></div><div class="record-cards">${cards}</div>${state.visible < rows.length ? `<div class="record-pagination"><button type="button" data-record-more>더 보기 (${rows.length - state.visible}건)</button></div>` : ""}`;
+    }
+    function renderRecordSection(route) {
+      const state = getRecordState(route);
+      const profile = recordProfiles[detailRecordProfileAssignments[route]];
+      return `<section class="card panel records-panel" data-records-route="${route}"><div class="panel-head"><div class="panel-title"><h3>상세내역</h3><p>기간별 목록에서 행을 선택하면 원문·증빙·처리 이력을 확인할 수 있습니다.</p></div><span class="sample-flag">시안 데이터</span></div><details class="record-filter" open><summary>조회 조건 열기·접기</summary><form class="record-filter-fields" data-record-filter><div class="quick-ranges" aria-label="빠른 기간"><button type="button" data-record-range="today" class="${state.range === "today" ? "active" : ""}">오늘</button><button type="button" data-record-range="week" class="${state.range === "week" ? "active" : ""}">7일</button><button type="button" data-record-range="month" class="${state.range === "month" ? "active" : ""}">이번 달</button><button type="button" data-record-range="custom" class="${state.range === "custom" ? "active" : ""}">직접 설정</button></div><div class="field"><label>시작일</label><input type="date" name="start" value="${state.start}"></div><div class="field"><label>종료일</label><input type="date" name="end" value="${state.end}"></div><div class="field"><label>사업자·지점</label><select name="scope"><option>전체 사업자·지점</option><option>열정국밥 · 성신점</option><option>열정국밥 · 미아점</option><option>문라이트F&amp;B · 본점</option></select></div><div class="field"><label>상태</label><select name="status"><option>전체 상태</option><option>완료</option><option>검토</option><option>대기</option><option>오류</option></select></div><div class="field"><label>통합검색</label><input type="search" name="search" value="${escapeMarkup(state.search)}" placeholder="${profile.search}"></div><div class="field"><label>목록 상태 확인</label><select name="preview"><option value="results">조회 결과</option><option value="loading">불러오는 중</option><option value="empty">빈 결과</option><option value="error">오류·재시도</option></select></div><div class="record-filter-actions"><button type="reset" class="outline">초기화</button><button type="submit" class="primary">조회</button></div><p class="filter-error" data-record-error hidden>시작일은 종료일보다 늦을 수 없습니다. 날짜를 다시 선택해 주세요.</p></form></details><div data-record-results>${renderRecordResults(route)}</div></section>`;
+    }
+    function syncRecordControls(section) {
+      if (!section) return;
+      const state = getRecordState(section.dataset.recordsRoute);
+      ["scope", "status", "preview"].forEach((name) => { if (section.querySelector(`[name="${name}"]`)) section.querySelector(`[name="${name}"]`).value = state[name]; });
+    }
+    function refreshRecordResults(section) {
+      section.querySelector("[data-record-results]").innerHTML = renderRecordResults(section.dataset.recordsRoute);
+      syncRecordControls(section);
+    }
+    function recordCta(profileName) {
+      if (["evidence", "purchase", "vat"].includes(profileName)) return "관련 증빙 보기";
+      if (profileName === "approval") return "승인 요청";
+      if (["integration", "alerts"].includes(profileName)) return "오류 다시 시도";
+      return "처리 요청";
+    }
+    function openRecordDetail(route, recordId, trigger = document.activeElement) {
+      const rows = filterRecords(route, getRecordState(route));
+      const record = recordsForRoute(route).find((item) => item.id === recordId);
+      if (!record) return;
+      const position = rows.findIndex((item) => item.id === recordId);
+      const profileName = detailRecordProfileAssignments[route];
+      const profile = recordProfiles[profileName];
+      const title = detailPageDefinitions[route][0];
+      drawerTriggerElement = trigger;
+      drawerTitle.textContent = `${title} · 건별 상세`;
+      drawerSubtitle.textContent = `${record.ref} · 실제 연동 전 시안 데이터`;
+      drawerBody.innerHTML = `<div class="notice"><span>업무 화면과 상호작용을 확인하기 위한 예시이며 실제 거래 자료가 아닙니다.</span><b>시안 데이터</b></div><section class="record-drawer-section"><h3>기본 정보</h3><div class="detail-grid">${detailCard("업무명", title)}${detailCard("발생 일시", record.date)}${detailCard("사업자·지점", record.branch)}${detailCard("식별정보", `${record.ref} · ${record.subject}`)}${detailCard(profile.fields[1][0], record.kind)}${detailCard(profile.fields[2][0], record.metric)}${detailCard(profile.unit, money(record.amount))}${detailCard("처리 상태", record.status)}${detailCard("수집 출처·담당", record.source)}${detailCard("증빙·첨부", `${record.ref}-원문.pdf · 이미지 1장`)}</div></section><section class="record-drawer-section"><h3>메모</h3><div class="detail-block"><strong>${record.status === "오류" ? "원문 수집이 지연되어 재시도가 필요합니다." : "원문과 집계값을 대조한 시안 메모입니다."}</strong></div></section><section class="record-drawer-section"><h3>승인·수정 이력</h3><div class="record-history"><div><strong>09월 21일 16:45 · 회계팀</strong><br>원문과 금액을 확인하고 검토 상태를 저장했습니다.</div><div><strong>09월 21일 16:42 · 자동 수집</strong><br>${record.status === "오류" ? "첫 수집 실패 후 재시도 대기열에 등록했습니다." : "자료를 수집하고 사업자·지점에 자동 연결했습니다."}</div></div></section><div class="record-navigation"><button type="button" class="outline" data-record-nav="${position > 0 ? rows[position - 1].id : ""}" ${position <= 0 ? "disabled" : ""}>← 이전 건</button><button type="button" class="outline" data-record-nav="${position >= 0 && position < rows.length - 1 ? rows[position + 1].id : ""}" ${position < 0 || position >= rows.length - 1 ? "disabled" : ""}>다음 건 →</button></div><div class="drawer-actions"><button type="button" class="outline" data-close-overlay>목록으로 닫기</button><button type="button" class="primary" data-record-context>${recordCta(profileName)}</button></div>`;
+      detailOverlay.dataset.recordRoute = route;
+      detailOverlay.classList.add("open");
+      detailOverlay.setAttribute("aria-hidden", "false");
+      document.body.style.overflow = "hidden";
+      detailOverlay.querySelector("[data-close-overlay]").focus();
+    }
     const allowedDetailsByView = Object.fromEntries(
       Object.entries(submenuItems).map(([slug, items]) => [slug, new Set(items.map(([, detail]) => detail))])
     );
@@ -1414,6 +1582,7 @@
         <section class="hero"><div><h2>${title}</h2><p>${description} 모든 수치는 시안 데이터입니다.</p></div><div class="hero-actions"><button type="button" class="outline" data-view="${slug}">상위 요약</button><button type="button" class="primary" data-action="review">업무 검토</button></div></section>
         <section class="kpis">${kpi(metric[0], metric[1], `<span class="up">${metric[2]}</span>`, "orange", moneyIcon)}${kpi("처리 상태", "진행 중", '<span>담당자 확인 가능</span>', "blue", cardIcon)}${kpi("마지막 갱신", "오늘 09:20", '<span>연동 기준</span>', "green", bankIcon)}${kpi("예외", secondarySection[1].split("|").length + "건", '<span class="down">검토 필요</span>', "amber", taxIcon)}</section>
         <section class="grid-2">${list(primarySection, "ok")}${list(secondarySection, "warn")}</section>
+        ${renderRecordSection(`${slug}/${detail}`)}
         <section class="card panel recovery"><div><h3>처리되지 않을 때</h3><p>원천 자료를 다시 확인한 뒤 재시도하거나 연결 설정과 담당 권한을 점검하세요.</p></div><div class="hero-actions"><button type="button" class="outline" data-view="${slug}">요약으로 돌아가기</button><button type="button" class="outline" data-action="reconnect">연결 설정</button><button type="button" class="primary" data-action="review">다시 검토</button></div></section>
       </div>`;
     };
@@ -1504,6 +1673,7 @@
       document.body.style.overflow = "";
       if (drawerTriggerElement && document.contains(drawerTriggerElement)) drawerTriggerElement.focus();
       drawerTriggerElement = null;
+      delete detailOverlay.dataset.recordRoute;
     }
     function closeOverlays() {
       closeDetail();
@@ -1570,7 +1740,8 @@
     };
 
     const normalizeHash = () => {
-      const [rawView, rawDetail] = window.location.hash.replace(/^#/, "").split("/");
+      const rawRoute = window.location.hash.replace(/^#/, "");
+      const [rawView, rawDetail] = (routeAliases[rawRoute] || rawRoute).split("/");
       const slug = views[rawView] ? rawView : "home";
       const detail = rawDetail && allowedDetailsByView[slug]?.has(rawDetail) ? rawDetail : null;
       return { slug, detail, needsRecovery: Boolean(rawDetail && !detail) || !views[rawView] };
@@ -1604,6 +1775,7 @@
       pageTitle.textContent = currentTitle;
       document.title = `오비서 V3 · ${currentTitle}`;
       viewRoot.innerHTML = detailDefinition ? renderDetailPage(slug, detail) : view.html();
+      if (detailDefinition) syncRecordControls(viewRoot.querySelector("[data-records-route]"));
       window.scrollTo(0, 0);
       syncMenuState(slug, detail);
       const route = detail ? `#${slug}/${detail}` : `#${slug}`;
@@ -1616,6 +1788,56 @@
     };
 
     document.addEventListener("click", (event) => {
+      const recordSection = event.target.closest("[data-records-route]");
+      const recordRange = event.target.closest("[data-record-range]");
+      if (recordRange && recordSection) {
+        const form = recordRange.closest("form");
+        const range = recordRange.dataset.recordRange;
+        form.querySelectorAll("[data-record-range]").forEach((button) => button.classList.toggle("active", button === recordRange));
+        const dates = { today: ["2026-09-21", "2026-09-21"], week: ["2026-09-15", "2026-09-21"], month: ["2026-09-01", "2026-09-21"] };
+        if (dates[range]) [form.start.value, form.end.value] = dates[range];
+        if (range === "custom") form.start.focus();
+        return;
+      }
+      const recordTarget = event.target.closest("[data-record-id]");
+      if (recordTarget && recordSection) {
+        openRecordDetail(recordSection.dataset.recordsRoute, recordTarget.dataset.recordId, recordTarget);
+        return;
+      }
+      const moreButton = event.target.closest("[data-record-more]");
+      if (moreButton && recordSection) {
+        const route = recordSection.dataset.recordsRoute;
+        const state = getRecordState(route);
+        state.visible += 4;
+        saveRecordState(route, state);
+        refreshRecordResults(recordSection);
+        return;
+      }
+      const resetButton = event.target.closest("[data-record-reset]");
+      if (resetButton && recordSection) {
+        sessionStorage.removeItem(recordStateKey(recordSection.dataset.recordsRoute));
+        render(normalizeHash().slug, false, normalizeHash().detail);
+        return;
+      }
+      const retryButton = event.target.closest("[data-record-retry]");
+      if (retryButton && recordSection) {
+        const route = recordSection.dataset.recordsRoute;
+        const state = getRecordState(route);
+        state.preview = "loading";
+        saveRecordState(route, state);
+        refreshRecordResults(recordSection);
+        window.setTimeout(() => { state.preview = "results"; saveRecordState(route, state); if (document.contains(recordSection)) refreshRecordResults(recordSection); }, 450);
+        return;
+      }
+      const recordNav = event.target.closest("[data-record-nav]");
+      if (recordNav && recordNav.dataset.recordNav) {
+        openRecordDetail(detailOverlay.dataset.recordRoute, recordNav.dataset.recordNav, drawerTriggerElement);
+        return;
+      }
+      if (event.target.closest("[data-record-context]")) {
+        showToast(`${event.target.closest("[data-record-context]").textContent} 요청을 시안 상태로 반영했습니다.`);
+        return;
+      }
       const integrationPreset = event.target.closest("[data-integration-preset]");
       if (integrationPreset) {
         const form = integrationPreset.closest("[data-integration-setup-form]");
@@ -1661,6 +1883,11 @@
       const actionButton = event.target.closest("[data-action]");
       if (actionButton) {
         const action = actionButton.dataset.action;
+        const currentRoute = normalizeHash();
+        if (!currentRoute.detail && allowedDetailsByView[currentRoute.slug]?.has(action)) {
+          openSubmenuDetail(currentRoute.slug, action);
+          return;
+        }
         if (action === "mobile-menu") {
           openMobileMenu();
           return;
@@ -1688,6 +1915,26 @@
       }
     });
     document.addEventListener("submit", (event) => {
+      if (event.target.matches("[data-record-filter]")) {
+        event.preventDefault();
+        const form = event.target;
+        const section = form.closest("[data-records-route]");
+        const error = form.querySelector("[data-record-error]");
+        if (form.start.value > form.end.value) {
+          error.hidden = false;
+          form.start.setAttribute("aria-invalid", "true");
+          form.start.focus();
+          return;
+        }
+        error.hidden = true;
+        form.start.removeAttribute("aria-invalid");
+        const data = Object.fromEntries(new FormData(form));
+        const activeRange = form.querySelector("[data-record-range].active");
+        saveRecordState(section.dataset.recordsRoute, { ...getRecordState(section.dataset.recordsRoute), ...data, range: activeRange ? activeRange.dataset.recordRange : "custom", visible: 6 });
+        refreshRecordResults(section);
+        showToast("조회 조건을 적용했습니다.");
+        return;
+      }
       if (event.target.matches("[data-filter-form]")) {
         event.preventDefault();
         const values = [...new FormData(event.target).values()].filter(Boolean);
@@ -1710,6 +1957,14 @@
       }
     });
     document.addEventListener("reset", (event) => {
+      if (event.target.matches("[data-record-filter]")) {
+        event.preventDefault();
+        const section = event.target.closest("[data-records-route]");
+        sessionStorage.removeItem(recordStateKey(section.dataset.recordsRoute));
+        render(normalizeHash().slug, false, normalizeHash().detail);
+        showToast("상세내역 조회 조건을 초기화했습니다.");
+        return;
+      }
       if (event.target.matches("[data-filter-form]")) {
         window.setTimeout(() => showToast("검색 조건을 초기화했습니다."), 0);
       }
@@ -1744,6 +1999,20 @@
       if ((event.key === "Enter" || event.key === " ") && event.target.matches(".profile[role='button']")) {
         event.preventDefault();
         openDetail("profile");
+      }
+      if ((event.key === "Enter" || event.key === " ") && event.target.matches("tr[data-record-id]")) {
+        event.preventDefault();
+        const section = event.target.closest("[data-records-route]");
+        openRecordDetail(section.dataset.recordsRoute, event.target.dataset.recordId, event.target);
+      }
+      const activeOverlay = detailOverlay.classList.contains("open") ? detailOverlay : mobileMenuOverlay.classList.contains("open") ? mobileMenuOverlay : null;
+      if (event.key === "Tab" && activeOverlay) {
+        const focusable = [...activeOverlay.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter((item) => item.offsetParent !== null);
+        if (focusable.length) {
+          const first = focusable[0], last = focusable[focusable.length - 1];
+          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+          if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+        }
       }
     });
     window.addEventListener("hashchange", () => {
