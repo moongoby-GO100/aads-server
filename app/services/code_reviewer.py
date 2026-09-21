@@ -1165,6 +1165,28 @@ async def review_code_diff(
             f"score={round(score, 3)} duration_ms={duration_ms}"
         )
 
+        # The production verdict above remains CLI-only and is already durable.
+        # A bounded PC Qwen shadow review collects comparison evidence without
+        # delaying or changing the runner decision.  Advisory failures are
+        # intentionally isolated from the authoritative review path.
+        try:
+            from app.services.review_advisory import schedule_review_advisory
+
+            schedule_review_advisory(
+                project=project,
+                job_id=job_id,
+                prompt=prompt,
+                primary_verdict=verdict_obj.verdict,
+                primary_model=used_model,
+                diff_size=len(diff),
+            )
+        except Exception as advisory_err:  # noqa: BLE001 - advisory is isolated by design
+            logger.warning(
+                "review_advisory_schedule_failed: job_id=%s error=%s",
+                job_id,
+                _sanitize_review_text(advisory_err, limit=160),
+            )
+
         return verdict_obj
 
     except Exception as e:
