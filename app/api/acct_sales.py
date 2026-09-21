@@ -148,6 +148,33 @@ async def transactions(
     }
 
 
+@router.get("/summary")
+async def summary(
+    business_id: str = Query(..., min_length=1, max_length=64),
+    company_id: Optional[int] = Query(None),
+    entry_date_from: Optional[str] = Query(None),
+    entry_date_to: Optional[str] = Query(None),
+    account_code: Optional[str] = Query(None, max_length=80),
+    keyword: Optional[str] = Query(None, max_length=80),
+    current_user: dict = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Return the filtered sales count and amount for the JWT-owned company."""
+    tenant_id, mapped_company_id = await _scope(current_user, business_id, company_id)
+    start, end = _date(entry_date_from, "시작일"), _date(entry_date_to, "종료일")
+    if start and end and start > end:
+        raise HTTPException(status_code=400, detail="시작일은 종료일보다 뒤일 수 없습니다")
+    row = (
+        await _fetch_acct_journals(
+            "SELECT count(*) AS count, coalesce(sum(l.amount), 0) AS amount "
+            "FROM journal_line l JOIN journal_entry e ON e.id = l.entry_id "
+            "JOIN source_file sf ON sf.id = e.source_file_id AND sf.company_id = e.company_id "
+            f"WHERE {_conditions(mapped_company_id, start, end, account_code, keyword)}",
+            tenant_id,
+        )
+    )[0]
+    return {"count": int(row.get("count") or 0), "amount": _number(row.get("amount"))}
+
+
 @router.get("/monthly")
 async def monthly(
     business_id: str = Query(..., min_length=1, max_length=64),
