@@ -558,16 +558,16 @@
       home: [["오늘 할 일", "task"], ["현금흐름", "account-detail"], ["매출·정산", "sales-detail"], ["세무 일정", "calendar"]],
       tasks: [["긴급", "task"], ["오늘", "review"], ["예정", "calendar"], ["완료", "approval-detail"]],
       reports: [["손익", "review"], ["현금흐름", "account-detail"], ["채널·지점", "sales-detail"], ["보고서 생성", "report"]],
-      documents: [["경영보고서", "document-vault"], ["세무문서", "tax-return-preview"], ["계약·인사", "employee-docs"], ["증빙", "receipt-upload"]],
-      sales: [["통계", "sales-detail"], ["거래 상세", "order-detail"], ["정산 대사", "review"], ["채널 연동", "sales-channel-connect"]],
-      accounts: [["잔액", "account-detail"], ["입금 예정", "order-detail"], ["미매칭", "match"], ["은행 연동", "bank-connect"]],
+      documents: [["경영보고서", "document-vault"], ["세무문서", "tax-return-preview"], ["계약·인사", "employee-docs"], ["증빙 원본보관", "receipt-upload"]],
+      sales: [["매출 현황", "sales-detail"], ["거래 내역", "order-detail"], ["정산 대사", "review"], ["매출자료 등록", "sales-channel-connect"]],
+      accounts: [["계좌 현황", "account-detail"], ["입금 예정", "order-detail"], ["미매칭", "match"], ["입출금자료 등록", "bank-connect"]],
       employees: [["직원 현황", "employee-detail"], ["근태", "signature-progress"], ["급여", "approve"], ["계약·증빙", "employee-docs"]],
-      inventory: [["재고 현황", "menu-detail"], ["발주 추천", "order-detail"], ["매입처", "supplier-connect"], ["수기 증빙", "receipt-upload"]],
-      tax: [["매출자료", "vat-ledger"], ["매입·증빙", "evidence-gap"], ["회계 원장", "withholding-ledger"], ["신고·납부", "tax-return-preview"]],
+      inventory: [["재고 현황", "menu-detail"], ["발주 추천", "order-detail"], ["매입처 현황", "supplier-connect"], ["매입자료 등록", "receipt-upload"]],
+      tax: [["증빙 대장", "vat-ledger"], ["증빙 등록·누락", "evidence-gap"], ["전표관리", "withholding-ledger"], ["신고·납부", "tax-return-preview"]],
       approvals: [["승인 대기", "approval-detail"], ["완료", "audit-detail"], ["반려", "review"], ["정책", "tax-agent-approval"]],
       alerts: [["중요", "notification"], ["업무", "task"], ["시스템", "integration-audit"], ["알림 설정", "credential-vault"]],
       business: [["사업자", "business-detail"], ["지점", "business-ocr"], ["전환 이력", "audit-detail"], ["신규 등록", "business-switch"]],
-      integrations: [["판매", "sales-channel-connect"], ["은행", "bank-connect"], ["매입", "supplier-connect"], ["세무", "tax-connect"], ["권한 점검", "integration-audit"]],
+      integrations: [["판매 자동연동", "sales-channel-connect"], ["은행 자동연동", "bank-connect"], ["매입 자동연동", "supplier-connect"], ["세무 자동연동", "tax-connect"], ["권한·오류", "integration-audit"]],
       margins: [["메뉴 원가", "menu-detail"], ["원가 변동", "review"], ["마진", "margin-detail"], ["시뮬레이션", "order-detail"]],
       audit: [["계정 권한", "audit-detail"], ["변경 이력", "credential-vault"], ["로그인·연동", "integration-audit"], ["정책", "business-switch"]]
     };
@@ -1409,11 +1409,11 @@
       "sales/sales-detail": ["매출 통계", "일·주·월별 매출을 채널과 지점 단위로 분석합니다.", ["7월 매출", "₩128.46M", "+8.4%"], ["기간 추이", "1주 ₩29.1M|2주 ₩31.8M|3주 ₩34.2M"], ["성장 요인", "성신점 저녁 +14%|배민 +9%|포장 주문 +6%"]],
       "sales/order-detail": ["거래 상세", "주문·승인·취소 건을 원천 채널 데이터와 함께 조회합니다.", ["거래", "8,421건", "취소율 1.8%"], ["최근 거래", "배민 주문 B-2841|POS 영수증 P-9182|카드 승인 C-4012"], ["예외 거래", "중복 승인 1건|취소 미반영 2건|메뉴 미매핑 4건"]],
       "sales/review": ["정산 대사", "플랫폼 정산서와 주문·은행 입금을 3방향으로 대사합니다.", ["정산 차이", "2건", "₩42,000"], ["대사 결과", "일치 14건|수수료 차이 1건|입금일 차이 1건"], ["해결 흐름", "원천자료 비교|차이 사유 선택|소명·확정"]],
-      "sales/sales-channel-connect": ["채널 연동", "판매사이트별 인증, 지점·메뉴 매핑과 수집 상태를 관리합니다.", ["연동", "6개", "정상 5개"], ["채널 상태", "배민 정상|쿠팡 정상|요기요 인증 갱신"], ["실패 복구", "인증 재확인|파일 업로드 대체|지점 매핑 재검토"]],
+      "sales/sales-channel-connect": ["매출자료 등록", "판매 자동연동이 실패하거나 원천 파일만 제공될 때 매출·취소·수수료 자료를 직접 등록합니다.", ["등록 대기", "3건", "검증 오류 1건"], ["등록 경로", "엑셀 일괄등록|CSV 업로드|건별 직접입력"], ["검증 결과", "중복 승인 확인|지점·채널 매핑|합계 대사"]],
       "accounts/account-detail": ["계좌 잔액", "사업자별 은행 잔액과 가용·제한 금액을 확인합니다.", ["전체 잔액", "₩52.19M", "5개 계좌"], ["주요 계좌", "신한 운영 ₩24.8M|기업 정산 ₩17.1M|국민 급여 ₩10.29M"], ["잔액 주의", "급여일 최저 ₩39.81M|세금 예약 ₩11.74M|제한금 없음"]],
       "accounts/order-detail": ["입금 예정", "판매채널·카드사의 입금 예정액과 예정일을 추적합니다.", ["입금 예정", "₩34.82M", "6건"], ["예정 내역", "배민 7/24 ₩8.2M|카드 7/25 ₩6.4M|쿠팡 7/26 ₩4.8M"], ["지연 점검", "예정일 초과 1건|금액 변경 1건|계좌 미지정 0건"]],
       "accounts/match": ["미매칭 입금", "은행 입금과 주문·정산 후보를 비교해 연결합니다.", ["미매칭", "3건", "₩1.84M"], ["매칭 후보", "KCP ₩1.12M 96%|배민 ₩520K 91%|현장입금 ₩200K 64%"], ["처리 순서", "추천 근거 확인|정산건 지정|감사로그 저장"]],
-      "accounts/bank-connect": ["은행 연동", "빠른계좌조회 인증과 계좌별 수집 범위를 관리합니다.", ["연동 계좌", "5개", "지연 1개"], ["은행 상태", "신한 정상|기업 정상|국민 3시간 지연"], ["실패 복구", "인증 갱신|조회권한 확인|거래내역 파일 대체"]],
+      "accounts/bank-connect": ["입출금자료 등록", "은행 자동조회가 실패하거나 파일만 제공될 때 계좌 거래내역을 직접 등록하고 중복을 검증합니다.", ["등록 대기", "2개 파일", "미매핑 3건"], ["등록 경로", "은행 엑셀 업로드|CSV 업로드|건별 직접입력"], ["검증 결과", "계좌·사업자 매핑|중복 거래 확인|입출금 합계 대사"]],
       "employees/employee-detail": ["직원 현황", "재직·휴직·퇴사 상태와 계약·서류 위험을 확인합니다.", ["재직", "18명", "3개 지점"], ["직원 이슈", "계약 만료 1명|보건증 갱신 1명|계좌 보완 2명"], ["인력 분포", "성신점 8명|미아점 6명|정화점 4명"]],
       "employees/signature-progress": ["근태 현황", "출퇴근, 연장·야간 근무와 수정 요청을 검토합니다.", ["이번 달", "2,736시간", "예외 4건"], ["근태 예외", "박준호 주 46시간|누락 출근 2건|휴게시간 수정 1건"], ["확정 흐름", "직원 수정요청|점장 확인|급여 반영 잠금"]],
       "employees/approve": ["급여 현황", "급여 계산, 공제와 지급 승인 상태를 관리합니다.", ["지급 예정", "₩38.42M", "18명"], ["급여 구성", "기본급 ₩31.8M|수당 ₩5.2M|공제 ₩2.34M"], ["승인 흐름", "근태 확정|예외 검토|대표 승인·지급"]],
@@ -1422,9 +1422,9 @@
       "inventory/order-detail": ["발주 추천", "판매 예측과 리드타임을 반영한 품목별 권장 수량입니다.", ["권장 금액", "₩2.184M", "3개 공급사"], ["발주 제안", "돼지사골 96kg|대파 40kg|포장용기 8박스"], ["발주 흐름", "수량 수정|대표 승인|발주서·입고 검수"]],
       "inventory/supplier-connect": ["매입처 관리", "공급사 연결, 단가표와 납기 신뢰도를 관리합니다.", ["매입처", "12곳", "점검 2곳"], ["주요 매입처", "서울축산 납기 98%|마켓봄 단가변동|뉴통 증빙누락"], ["연결 방식", "계정/API|발주서 파일|사진·OCR 수기"]],
       "inventory/receipt-upload": ["수기 증빙", "연동되지 않은 매입처의 영수증과 거래명세서를 등록합니다.", ["업로드 대기", "4건", "현장구매"], ["수집함", "성신점 영수증 2건|미아점 거래명세 1건|카톡 주문 1건"], ["반영 흐름", "OCR 추출|품목·세금 수정|재고·원장 승인"]],
-      "tax/vat-ledger": ["매출자료", "채널·지점별 과세매출을 집계하고 신고자료 누락을 점검합니다.", ["과세매출", "₩284.2M", "누락 후보 3건"], ["채널·지점 집계", "배달 ₩132.4M|POS ₩86.7M|카드 ₩65.1M"], ["누락 점검", "성신점 현금 1건|쿠팡 취소 1건|면세분류 확인 1건"]],
-      "tax/evidence-gap": ["매입·증빙", "수집함과 OCR 결과에서 중복·미매칭을 찾아 보완 요청합니다.", ["보완 필요", "7건", "OCR 대기 4건"], ["증빙 수집함", "전자계산서 18건|카드매입 42건|수기 사진 4건"], ["예외·보완", "중복 2건|미매칭 3건|거래처 요청 3건"]],
-      "tax/withholding-ledger": ["회계 원장", "분개와 계정과목을 검토하고 마감 잠금·감사추적을 관리합니다.", ["미결 분개", "6건", "7월 마감 82%"], ["분개·계정과목", "매출채권 3건|복리후생비 2건|가수금 1건"], ["마감·감사", "수정 이력 9건|잠금 대기 1단계|검토자 회계팀"]],
+      "tax/vat-ledger": ["세무 증빙대장", "사업자별 전자세금계산서·전자계산서·현금영수증·카드·종이증빙을 구분 조회하고 원장 반영 상태를 확인합니다.", ["수집 증빙", "1,248건", "미분류 7건"], ["증빙 구분", "전자세금계산서 486건|현금영수증 214건|카드 512건|계산서·기타 36건"], ["처리 상태", "원장 반영 1,221건|검토 20건|중복·누락 7건"]],
+      "tax/evidence-gap": ["증빙 등록·누락", "자동수집 실패 자료를 증빙 종류별로 직접 입력하거나 엑셀·사진으로 등록하고 중복·미매칭을 보완합니다.", ["보완 필요", "7건", "등록 대기 4건"], ["등록 방식", "건별 직접입력|엑셀 일괄등록|사진·PDF OCR"], ["검증 항목", "사업자·거래처|공급가·세액|중복·원장 연결"]],
+      "tax/withholding-ledger": ["전표관리", "사업자별 전표를 조회·등록·수정·승인하고 차변·대변 균형, 마감 잠금과 역분개 이력을 관리합니다.", ["미결 전표", "6건", "7월 마감 82%"], ["전표 현황", "자동분개 382건|직접입력 24건|승인 대기 6건"], ["통제·감사", "차대변 불일치 0건|수정 이력 9건|역분개 2건"]],
       "tax/tax-return-preview": ["신고·납부", "부가세·원천세·지방세 일정과 신고서 승인·납부 흐름을 관리합니다.", ["예상 납부", "₩11.74M", "부가세 D-2"], ["신고 일정", "부가세 7/25|원천세 8/10|지방소득세 8/10"], ["승인·납부 흐름", "신고서 미리보기|세무대리인 검토|대표 승인·납부확인"]],
       "approvals/approval-detail": ["승인 대기", "계약·발주·정산·세무 승인 요청을 근거와 함께 처리합니다.", ["승인 대기", "8건", "오늘 마감 3건"], ["대기 큐", "근로계약 2건|긴급발주 3건|세무 공유 1건"], ["승인 기준", "금액·위험 확인|첨부 근거 확인|의견 기록"]],
       "approvals/audit-detail": ["완료 승인", "완료된 승인과 당시 근거·결재자를 조회합니다.", ["완료", "31건", "이번 달"], ["최근 승인", "급여 확정|사골 발주|정산 차이 소명"], ["감사 정보", "결재자|처리 시각|변경 전후 값"]],
@@ -1471,70 +1471,159 @@
       margin: { search: "메뉴·재료·시나리오", fields: [["메뉴·항목", "subject"], ["분석 구분", "kind"], ["원가·변동", "metric"], ["공헌이익", "amount"]], subjects: ["얼큰국밥 · 돼지사골", "수육정식 · 돼지고기", "만두 · 포장", "국밥세트 · 수수료", "순대국밥 · 대파", "포장세트 · 용기", "야간세트 · 할인", "곱빼기 · 쌀"], kinds: ["메뉴 원가", "단가 변동", "마진", "시뮬레이션"], metrics: ["원가 ₩4,366 · +0.8%p", "단가 +8.2% · 검토", "마진 33.3% · 정상", "가격 +₩1,000 · 주문 -3%"], unit: "공헌이익" },
       audit: { search: "사용자·행위·감사번호", fields: [["사용자·행위", "subject"], ["감사 구분", "kind"], ["변경·접속", "metric"], ["영향 건수", "amount"]], subjects: ["문고비 · 권한 변경", "회계담당 · 원장 수정", "성신점장 · 사업자 전환", "노무담당 · 문서 열람", "관리자 · 로그인 정책", "세무담당 · 내보내기", "미아점장 · 승인 요청", "시스템 · 연동 재시도"], kinds: ["권한", "변경", "로그인", "정책"], metrics: ["대표→회계 · 승인", "이전값 보관 · 완료", "새 기기 · 2단계 인증", "예외 만료 D-3"], unit: "영향 건수" }
     };
-    const detailRecordProfileAssignments = {
-      "home/task":"tasks","home/account-detail":"accounts","home/sales-detail":"sales","home/calendar":"tasks",
-      "tasks/task":"tasks","tasks/review":"tasks","tasks/calendar":"tasks","tasks/approval-detail":"approval",
-      "reports/review":"reports","reports/account-detail":"accounts","reports/sales-detail":"sales","reports/report":"reports",
-      "documents/document-vault":"reports","documents/tax-return-preview":"vat","documents/employee-docs":"people","documents/receipt-upload":"evidence",
-      "sales/sales-detail":"sales","sales/order-detail":"sales","sales/review":"sales","sales/sales-channel-connect":"integration",
-      "accounts/account-detail":"accounts","accounts/order-detail":"accounts","accounts/match":"accounts","accounts/bank-connect":"integration",
-      "employees/employee-detail":"people","employees/signature-progress":"people","employees/approve":"payroll","employees/employee-docs":"people",
-      "inventory/menu-detail":"inventory","inventory/order-detail":"inventory","inventory/supplier-connect":"purchase","inventory/receipt-upload":"purchase",
-      "tax/vat-ledger":"vat","tax/evidence-gap":"evidence","tax/withholding-ledger":"ledger","tax/tax-return-preview":"vat",
-      "approvals/approval-detail":"approval","approvals/audit-detail":"approval","approvals/review":"approval","approvals/tax-agent-approval":"approval",
-      "alerts/notification":"alerts","alerts/task":"alerts","alerts/integration-audit":"alerts","alerts/credential-vault":"alerts",
-      "business/business-detail":"business","business/business-ocr":"business","business/audit-detail":"audit","business/business-switch":"business",
-      "integrations/sales-channel-connect":"integration","integrations/bank-connect":"integration","integrations/supplier-connect":"purchase","integrations/tax-connect":"vat","integrations/integration-audit":"audit",
-      "margins/menu-detail":"margin","margins/review":"margin","margins/margin-detail":"margin","margins/order-detail":"margin",
-      "audit/audit-detail":"audit","audit/credential-vault":"audit","audit/integration-audit":"audit","audit/business-switch":"audit"
+    // PRD: docs/PRD-OBYS-MOCKUP-V3-DETAIL-PAGES.md
+    // Every detail route owns its filters, columns, value unit, primary action and recovery path.
+    const detailBlueprint = (profile, scopeLabel, scopeOptions, statusLabel, statusOptions, columns, valueLabel, valueType, cta, recovery) => ({
+      profile, scope: { label: scopeLabel, options: scopeOptions }, status: { label: statusLabel, options: statusOptions },
+      columns, value: { label: valueLabel, type: valueType }, cta, recovery
+    });
+    const detailPageBlueprints = {
+      "home/task": detailBlueprint("tasks", "담당 범위", ["전체 담당", "대표", "회계팀", "지점장"], "마감 위험", ["전체 위험", "긴급", "오늘", "예정"], ["업무·담당", "우선순위", "마감·진행"], "관련 항목", "count", "오늘 업무 처리", "담당자를 다시 지정하거나 마감 사유를 남겨 업무를 복구하세요."),
+      "home/account-detail": detailBlueprint("accounts", "자금 범위", ["전체 계좌", "운영 계좌", "정산 계좌", "급여·세금 계좌"], "자금 상태", ["전체 상태", "확정", "예정", "주의"], ["계좌·거래", "입출금", "예정·가용"], "현금 금액", "money", "현금흐름 확인", "은행 원문을 다시 수집하고 자금 범위와 예약 이체를 점검하세요."),
+      "home/sales-detail": detailBlueprint("sales", "매출 범위", ["전체 채널", "배달", "POS", "카드"], "정산 상태", ["전체 상태", "대사 완료", "차이", "입금 대기"], ["채널·주문", "거래 구분", "수수료·차이"], "정산액", "money", "정산 차이 검토", "원천 주문·정산서·은행 입금을 다시 수집한 뒤 대사를 재실행하세요."),
+      "home/calendar": detailBlueprint("tasks", "세무 사업자", ["전체 사업자", "열정국밥", "문라이트F&B", "개인사업자"], "준비 상태", ["전체 상태", "자료 완료", "누락", "승인 대기"], ["신고 일정", "세목", "준비·마감"], "남은 일정", "count", "세무 일정 준비", "누락 자료의 담당자를 지정하고 신고 마감 변경 여부를 확인하세요."),
+
+      "tasks/task": detailBlueprint("tasks", "긴급 담당", ["전체 담당", "회계팀", "재무팀", "관리자"], "긴급도", ["전체 긴급도", "P0", "P1", "차단"], ["긴급 업무", "위험", "마감·원인"], "영향 항목", "count", "긴급 업무 해결", "담당자 재지정, 근거 재수집, 마감 연장 요청 순으로 복구하세요."),
+      "tasks/review": detailBlueprint("tasks", "오늘 담당", ["전체 담당", "내 업무", "회계팀", "지점장"], "진행 상태", ["전체 상태", "진행 중", "승인 대기", "완료"], ["오늘 업무", "담당", "진행·완료기준"], "체크 항목", "count", "오늘 업무 완료", "원자료와 예외 메모를 보완한 뒤 완료 상태를 다시 저장하세요."),
+      "tasks/calendar": detailBlueprint("tasks", "예정 기간", ["향후 7일", "향후 14일", "이번 달", "다음 달"], "준비 단계", ["전체 단계", "자료 수집", "담당 확인", "예정"], ["예정 업무", "업무 유형", "마감·담당"], "남은 일수", "count", "일정에 추가", "마감일 또는 담당자가 없으면 먼저 보완한 뒤 일정을 다시 저장하세요."),
+      "tasks/approval-detail": detailBlueprint("approval", "완료 업무 범위", ["전체 업무", "세무", "급여", "정산"], "보관 상태", ["전체 상태", "기록 완료", "후속 필요", "보관 대기"], ["완료 업무", "승인 유형", "완료·후속"], "완료 건수", "count", "완료 근거 열람", "승인 근거와 감사로그가 없으면 완료를 취소하고 기록을 보완하세요."),
+
+      "reports/review": detailBlueprint("reports", "손익 범위", ["전체 사업자", "성신점", "미아점", "정화점"], "보고 상태", ["전체 상태", "초안", "검토", "확정"], ["손익 항목", "구분", "변동 원인"], "손익 금액", "money", "손익 보고 확정", "집계 범위와 원장 마감 상태를 확인한 뒤 보고서를 다시 생성하세요."),
+      "reports/account-detail": detailBlueprint("accounts", "현금흐름 구분", ["전체 흐름", "영업", "투자", "재무"], "예측 상태", ["전체 상태", "확정", "예측", "주의"], ["현금 항목", "유입·유출", "예측·잔액"], "현금 금액", "money", "현금흐름 내보내기", "누락 계좌를 연결하고 예측 기준일을 다시 선택하세요."),
+      "reports/sales-detail": detailBlueprint("sales", "비교 축", ["전체 지점·채널", "지점별", "채널별", "메뉴별"], "성과 상태", ["전체 상태", "성장", "정체", "하락"], ["지점·채널", "비교 구분", "증감·기여"], "매출액", "money", "비교 보고 공유", "비교 기간과 같은 기준의 원천 매출이 있는지 확인하세요."),
+      "reports/report": detailBlueprint("reports", "보고 대상", ["CEO", "지점장", "회계팀", "외부 세무"], "생성 상태", ["전체 상태", "초안", "검토 대기", "완료"], ["보고서·범위", "출력 형식", "버전·공유"], "집계액", "money", "보고서 생성", "범위와 수신 권한을 다시 선택한 뒤 미리보기를 생성하세요."),
+
+      "documents/document-vault": detailBlueprint("reports", "보고서 분류", ["전체 보고서", "월간", "분기", "지점 개선"], "문서 상태", ["전체 상태", "초안", "확정", "보관 점검"], ["보고서·범위", "파일 형식", "버전·열람"], "첨부 수", "count", "보고서 원본 열람", "파일 무결성과 열람 권한을 확인하고 원본을 다시 업로드하세요."),
+      "documents/tax-return-preview": detailBlueprint("vat", "세무 문서", ["전체 세목", "부가세", "원천세", "지방세"], "제출 상태", ["전체 상태", "초안", "제출", "납부 완료"], ["신고 문서", "세목·귀속", "제출·납부"], "문서 수", "count", "제출본 확인", "접수증과 납부확인증을 다시 수집하거나 세무대리인 권한을 확인하세요."),
+      "documents/employee-docs": detailBlueprint("people", "직원 문서", ["전체 직원", "재직자", "퇴직자", "갱신 대상"], "서명·만료", ["전체 상태", "서명 완료", "서명 대기", "만료 임박"], ["직원·문서", "문서 종류", "서명·만료"], "문서 수", "count", "직원 문서 열람", "직원에게 보완을 요청하거나 민감정보 열람 권한을 다시 확인하세요."),
+      "documents/receipt-upload": detailBlueprint("evidence", "증빙 분류", ["전체 증빙", "영수증", "거래명세서", "세금계산서"], "OCR·반영", ["전체 상태", "OCR 대기", "검토", "원장 반영"], ["증빙·거래처", "문서 종류", "OCR·매칭"], "증빙 금액", "money", "증빙 원본 검토", "원본을 재업로드하거나 OCR 필드를 직접 보완하세요."),
+
+      "sales/sales-detail": detailBlueprint("sales", "매출 집계", ["전체 지점", "성신점", "미아점", "정화점"], "매출 상태", ["전체 상태", "정상", "취소", "미매핑"], ["주문·메뉴", "채널", "할인·수수료"], "정산액", "money", "매출 분석", "원천 주문을 다시 수집하고 메뉴·지점 매핑을 확인하세요."),
+      "sales/order-detail": detailBlueprint("sales", "주문 채널", ["전체 채널", "배민", "POS", "카드"], "주문 상태", ["전체 상태", "승인", "취소", "취소 미반영"], ["주문번호·메뉴", "승인 구분", "취소·수수료"], "결제액", "money", "원천 주문 확인", "채널 원문을 재수집하거나 주문번호로 수기 대조하세요."),
+      "sales/review": detailBlueprint("sales", "정산 플랫폼", ["전체 플랫폼", "배민", "쿠팡", "요기요"], "대사 결과", ["전체 결과", "일치", "금액 차이", "입금일 차이"], ["정산 묶음", "대사 결과", "차이 사유"], "차이 금액", "money", "대사 확정", "주문·정산서·은행 입금 중 누락 원문을 보완하고 다시 대사하세요."),
+      "sales/sales-channel-connect": detailBlueprint("sales", "등록 사업자", ["전체 사업자", "열정국밥", "문라이트F&B", "개인사업자"], "등록 상태", ["전체 상태", "검증 완료", "중복 확인", "매핑 필요"], ["파일·채널", "등록 방식", "검증·매핑"], "등록 매출액", "money", "매출자료 등록", "엑셀 양식을 내려받아 사업자·지점·채널을 매핑한 뒤 중복 검증부터 다시 실행하세요."),
+
+      "accounts/account-detail": detailBlueprint("accounts", "은행·계좌", ["전체 계좌", "신한 운영", "기업 정산", "국민 급여"], "잔액 상태", ["전체 상태", "가용", "예약", "제한"], ["계좌·거래", "잔액 구분", "가용·제한"], "계좌 잔액", "money", "계좌 원문 조회", "조회 인증을 갱신하거나 거래내역 파일로 잔액을 대체 확인하세요."),
+      "accounts/order-detail": detailBlueprint("accounts", "입금 출처", ["전체 출처", "판매채널", "카드사", "현장 입금"], "입금 상태", ["전체 상태", "예정", "입금 완료", "지연"], ["입금처·거래", "예정 구분", "예정일·변경"], "입금 예정액", "money", "입금 일정 확인", "정산 예정일과 수취 계좌를 다시 지정하세요."),
+      "accounts/match": detailBlueprint("accounts", "미매칭 계좌", ["전체 계좌", "신한 운영", "기업 정산", "현장 입금"], "추천 상태", ["전체 상태", "추천 높음", "검토", "제외"], ["입금·후보", "거래 구분", "신뢰도·근거"], "입금액", "money", "입금 매칭", "추천 후보를 제외하고 주문·정산서를 직접 선택해 연결하세요."),
+      "accounts/bank-connect": detailBlueprint("accounts", "등록 계좌", ["전체 계좌", "신한 운영", "기업 정산", "국민 급여"], "등록 상태", ["전체 상태", "검증 완료", "중복 확인", "계좌 미매핑"], ["파일·계좌", "입출금 구분", "매핑·검증"], "등록 거래액", "money", "입출금자료 등록", "은행 엑셀 양식을 선택하고 계좌·사업자를 매핑한 뒤 중복 거래 검증부터 다시 실행하세요."),
+
+      "employees/employee-detail": detailBlueprint("people", "근무 지점", ["전체 지점", "성신점", "미아점", "정화점"], "재직 상태", ["전체 상태", "재직", "휴직", "퇴사"], ["직원·지점", "재직 구분", "계약·서류"], "직원 수", "count", "직원 정보 보완", "직원 초대 또는 관리자 수정으로 필수 정보를 보완하세요."),
+      "employees/signature-progress": detailBlueprint("people", "근태 지점", ["전체 지점", "성신점", "미아점", "정화점"], "근태 상태", ["전체 상태", "정상", "수정 요청", "확정 대기"], ["직원·근무일", "근태 구분", "연장·휴게"], "근무 시간", "duration", "근태 확정", "직원 수정요청과 점장 확인을 거쳐 급여 반영 잠금을 다시 시도하세요."),
+      "employees/approve": detailBlueprint("payroll", "급여 귀속월", ["2026년 9월", "2026년 8월", "2026년 7월", "퇴직 정산"], "급여 상태", ["전체 상태", "초안", "검토", "승인 완료"], ["직원·귀속월", "명세 상태", "지급·공제"], "실지급액", "money", "급여 승인", "근태 잠금과 공제 근거를 확인한 뒤 급여를 다시 계산하세요."),
+      "employees/employee-docs": detailBlueprint("people", "서류 대상", ["전체 직원", "신규 입사", "갱신 대상", "퇴직자"], "서류 상태", ["전체 상태", "완료", "보완 요청", "만료"], ["직원·문서", "서류 종류", "OCR·유효기간"], "서류 수", "count", "서류 보완 요청", "직원에게 원본 재제출을 요청하고 OCR 결과를 다시 검토하세요."),
+
+      "inventory/menu-detail": detailBlueprint("inventory", "재고 위치", ["전체 창고", "성신점", "미아점", "정화점"], "재고 상태", ["전체 상태", "안전", "부족 예상", "실사 차이"], ["품목·원문서", "입출고", "수량·안전재고"], "재고 잔량", "quantity", "재고 이동 확인", "실사 수량을 입력하거나 입출고 원문을 다시 반영하세요."),
+      "inventory/order-detail": detailBlueprint("inventory", "발주 지점", ["전체 지점", "성신점", "미아점", "정화점"], "발주 상태", ["전체 상태", "추천", "승인 대기", "발주 완료"], ["품목·공급사", "발주 구분", "권장량·납기"], "권장 수량", "quantity", "발주안 승인", "수량을 수정하거나 공급사·리드타임을 다시 선택해 계산하세요."),
+      "inventory/supplier-connect": detailBlueprint("purchase", "공급사", ["전체 공급사", "서울축산", "마켓봄", "뉴통"], "거래 상태", ["전체 상태", "정상", "단가 점검", "증빙 누락"], ["공급사·품목", "연결 방식", "단가·납기"], "매입액", "money", "공급사 설정", "계정 연결을 갱신하거나 발주서·거래명세서 업로드로 전환하세요."),
+      "inventory/receipt-upload": detailBlueprint("purchase", "수기 매입처", ["전체 매입처", "현장 구매", "카카오 주문", "파일 거래처"], "반영 상태", ["전체 상태", "OCR 대기", "검토", "재고 반영"], ["거래처·품목", "증빙 종류", "OCR·세금"], "결제금액", "money", "매입자료 반영", "사진을 재촬영하거나 품목·세금 구분을 직접 수정하세요."),
+
+      "tax/vat-ledger": detailBlueprint("vat", "증빙 사업자", ["전체 사업자", "열정국밥", "문라이트F&B", "개인사업자"], "증빙 구분", ["전체 증빙", "전자세금계산서", "전자계산서", "현금영수증", "카드"], ["증빙·거래처", "매출·매입/과세", "공급가·세액"], "증빙 합계", "money", "증빙 확인·등록", "홈택스·카드 원문을 다시 수집하거나 엑셀·건별 입력으로 증빙을 등록한 뒤 중복 검증하세요."),
+      "tax/evidence-gap": detailBlueprint("evidence", "증빙 사업자", ["전체 사업자", "열정국밥", "문라이트F&B", "개인사업자"], "처리 상태", ["전체 상태", "등록 대기", "중복", "미매칭", "원장 반영"], ["증빙·거래처", "증빙 종류", "중복·원장 연결"], "거래금액", "money", "증빙 직접 등록", "원본을 재수집하거나 증빙 종류와 공급가·세액을 직접 입력한 뒤 원장 연결을 재시도하세요."),
+      "tax/withholding-ledger": detailBlueprint("ledger", "전표 사업자", ["전체 사업자", "열정국밥", "문라이트F&B", "개인사업자"], "전표 상태", ["전체 상태", "미결", "승인 대기", "확정", "역분개"], ["전표번호·적요", "계정과목", "차변·대변"], "전표금액", "money", "전표 등록·승인", "차변·대변과 증빙 연결을 보완하고 마감 잠금 전 승인 또는 역분개로 처리하세요."),
+      "tax/tax-return-preview": detailBlueprint("vat", "신고 세목", ["부가세", "원천세", "지방소득세", "지급명세서"], "신고 단계", ["전체 단계", "자료 수집", "대리인 검토", "대표 승인"], ["신고서·사업자", "세목", "검토·납부"], "예상 납부액", "money", "신고서 승인", "누락 증빙을 보완하고 세무대리인 검토본을 다시 생성하세요."),
+
+      "approvals/approval-detail": detailBlueprint("approval", "승인 유형", ["전체 승인", "계약", "발주", "정산·세무"], "결재 단계", ["전체 단계", "담당 검토", "대표 대기", "기한 임박"], ["요청·요청자", "승인 유형", "근거·기한"], "요청금액", "money", "승인 또는 반려", "첨부 근거를 보완하거나 결재자를 재지정한 뒤 재상신하세요."),
+      "approvals/audit-detail": detailBlueprint("approval", "완료 승인", ["전체 승인", "급여", "발주", "정산"], "감사 상태", ["전체 상태", "근거 완료", "변경 있음", "추가 확인"], ["승인·결재자", "승인 유형", "근거·변경"], "승인금액", "money", "승인 근거 열람", "결재 시각·변경 전후 값이 없으면 감사 보완을 요청하세요."),
+      "approvals/review": detailBlueprint("approval", "반려 업무", ["전체 반려", "계약", "발주", "세무"], "재상신 상태", ["전체 상태", "수정 중", "재동의", "재상신 완료"], ["반려 요청", "반려 유형", "사유·수정"], "영향 항목", "count", "수정 후 재상신", "반려 사유와 변경 근거를 보완하고 필요한 재동의를 받으세요."),
+      "approvals/tax-agent-approval": detailBlueprint("approval", "정책 업무", ["전체 정책", "발주", "세무", "계약"], "정책 상태", ["전체 상태", "정상", "충돌", "대리 만료"], ["정책·범위", "결재 단계", "한도·예외"], "정책 수", "count", "승인 정책 저장", "충돌 정책을 비활성화하고 대리 승인 만료일을 다시 설정하세요."),
+
+      "alerts/notification": detailBlueprint("alerts", "알림 수신자", ["전체 수신자", "대표", "회계", "점장"], "중요도", ["전체 중요도", "긴급", "주의", "정보"], ["알림·대상", "위험 종류", "발송·조치"], "알림 건수", "count", "알림 확인", "담당자를 지정하고 원인 업무로 이동해 조치 상태를 갱신하세요."),
+      "alerts/task": detailBlueprint("alerts", "업무 담당", ["전체 담당", "재무", "구매", "노무"], "조치 상태", ["전체 상태", "미확인", "조치 중", "완료"], ["업무 알림", "업무 종류", "배정·마감"], "발생 건수", "count", "담당 업무 열기", "담당자 또는 마감 규칙을 수정한 뒤 알림을 다시 발송하세요."),
+      "alerts/integration-audit": detailBlueprint("alerts", "시스템 서비스", ["전체 시스템", "은행", "홈택스", "판매채널"], "장애 수준", ["전체 수준", "정상", "지연", "인증 필요"], ["서비스 알림", "장애 구분", "영향·복구"], "실패 건수", "count", "복구 작업 실행", "재시도 후에도 실패하면 인증 갱신 또는 수기 업로드로 전환하세요."),
+      "alerts/credential-vault": detailBlueprint("alerts", "알림 규칙", ["전체 규칙", "마감", "재고", "보안"], "활성 상태", ["전체 상태", "활성", "일시중지", "오류"], ["규칙·수신자", "채널", "반복·조건"], "발송 건수", "count", "알림 규칙 저장", "수신 채널을 테스트하고 실패한 주소 또는 권한을 수정하세요."),
+
+      "business/business-detail": detailBlueprint("business", "사업자", ["전체 사업자", "열정국밥", "문라이트F&B", "개인사업자"], "검증 상태", ["전체 상태", "검증 완료", "수정 검토", "서류 보완"], ["사업자·지점", "관리 구분", "검증·연결"], "연결 서비스", "count", "사업자 정보 저장", "사업자등록증 원본과 대표 권한을 다시 확인하세요."),
+      "business/business-ocr": detailBlueprint("business", "운영 지점", ["전체 지점", "성신점", "미아점", "정화점"], "OCR 상태", ["전체 상태", "추출 완료", "검토", "보완"], ["지점·서류", "등록 구분", "OCR·매핑"], "매핑 필드", "count", "지점 정보 저장", "서류를 재업로드하거나 주소·사업자 매핑을 직접 수정하세요."),
+      "business/audit-detail": detailBlueprint("audit", "전환 대상", ["전체 전환", "사업자", "지점", "접속 범위"], "전환 결과", ["전체 결과", "완료", "승인 대기", "복원"], ["사용자·전환", "전환 구분", "이전·새 범위"], "영향 건수", "count", "전환 이력 확인", "잘못된 전환은 이전 사업자·지점 범위로 복원하고 세션을 갱신하세요."),
+      "business/business-switch": detailBlueprint("business", "등록 단계", ["기본정보", "서류 OCR", "지점 연결", "계좌·채널"], "등록 상태", ["전체 상태", "초안", "검토", "등록 완료"], ["사업자·등록", "서류 구분", "진행·연결"], "필수 항목", "count", "신규 사업자 등록", "누락 필드를 보완하고 OCR 원본 대조부터 다시 진행하세요."),
+
+      "integrations/sales-channel-connect": detailBlueprint("integration", "판매 채널", ["전체 채널", "배민", "쿠팡", "POS"], "연결 상태", ["전체 상태", "정상", "재인증", "매핑 필요"], ["서비스·지점", "수집 방식", "동기화·매핑"], "수집 주문", "count", "판매채널 연결 테스트", "로그인과 메뉴·지점 매핑을 갱신한 뒤 샘플 주문을 대사하세요."),
+      "integrations/bank-connect": detailBlueprint("integration", "은행 서비스", ["전체 은행", "신한", "기업", "국민"], "인증 상태", ["전체 상태", "정상", "지연", "만료"], ["은행·계좌", "조회 권한", "동기화·인증"], "수집 거래", "count", "은행 연결 테스트", "조회 전용 인증을 갱신하거나 거래내역 파일 업로드로 대체하세요."),
+      "integrations/supplier-connect": detailBlueprint("purchase", "매입 서비스", ["전체 서비스", "마켓봄", "뉴통", "수기 거래처"], "수집 상태", ["전체 상태", "정상", "단가 점검", "파일 대체"], ["매입처·품목", "연결 방식", "단가·증빙"], "수집 품목", "count", "매입 연동 테스트", "발주서 또는 거래명세서 업로드로 전환하고 반복 템플릿을 저장하세요."),
+      "integrations/tax-connect": detailBlueprint("vat", "세무 서비스", ["홈택스", "전자세금계산서", "현금영수증", "카드매입"], "인증 상태", ["전체 상태", "정상", "만료 예정", "위임 필요"], ["서비스·사업자", "수집 자료", "인증·위임"], "수집 문서", "count", "세무 연동 테스트", "인증서 또는 위임 상태를 갱신하고 자료 파일 업로드로 대체하세요."),
+      "integrations/integration-audit": detailBlueprint("audit", "점검 서비스", ["전체 연동", "판매", "은행", "세무"], "위험 수준", ["전체 수준", "정상", "권한 과다", "만료 임박"], ["서비스·계정", "권한 구분", "위험·변경"], "위험 항목", "count", "연동 권한 축소", "최소 권한으로 교체하고 공용 계정과 만료 인증을 정리하세요."),
+
+      "margins/menu-detail": detailBlueprint("margin", "메뉴", ["전체 메뉴", "얼큰국밥", "수육정식", "만두"], "원가 상태", ["전체 상태", "목표 이내", "상승", "재계산"], ["메뉴·재료", "원가 구분", "단가·구성"], "메뉴 원가", "money", "원가 산식 확인", "레시피 수량과 최신 매입 단가를 다시 연결해 원가를 계산하세요."),
+      "margins/review": detailBlueprint("margin", "변동 품목", ["전체 품목", "축산", "농산", "포장재"], "변동 수준", ["전체 수준", "안정", "주의", "급등"], ["품목·영향메뉴", "변동 구분", "단가·영향"], "변동률", "percent", "원가 변동 검토", "비정상 단가를 제외하거나 기준 단가로 복원한 뒤 다시 계산하세요."),
+      "margins/margin-detail": detailBlueprint("margin", "분석 축", ["전체 메뉴·채널", "메뉴별", "채널별", "세트별"], "목표 상태", ["전체 상태", "목표 달성", "주의", "미달"], ["메뉴·채널", "마진 구분", "원가·수수료"], "공헌이익", "money", "마진 개선안 저장", "누락 원가·수수료를 보완하고 목표 마진을 다시 선택하세요."),
+      "margins/order-detail": detailBlueprint("margin", "가격 시나리오", ["기준 가격", "가격 인상", "구성 변경", "프로모션 축소"], "시뮬레이션", ["전체 상태", "초안", "비교 완료", "채택"], ["메뉴·시나리오", "가정 구분", "가격·주문량"], "예상 이익", "money", "시나리오 채택", "가정값을 초기화하고 기준 가격·수요 탄력성을 다시 입력하세요."),
+
+      "audit/audit-detail": detailBlueprint("audit", "권한 대상", ["전체 사용자", "대표", "점장", "외부 담당"], "권한 위험", ["전체 수준", "정상", "과다 권한", "회수 필요"], ["사용자·권한", "역할", "범위·위험"], "영향 리소스", "count", "권한 회수", "최소 역할로 되돌리고 현재 세션을 만료시킨 뒤 재로그인하게 하세요."),
+      "audit/credential-vault": detailBlueprint("audit", "변경 영역", ["전체 변경", "계약", "사업자", "연동"], "감사 상태", ["전체 상태", "정상", "승인 누락", "복원 필요"], ["변경자·대상", "변경 구분", "이전·새 값"], "변경 필드", "count", "변경 근거 확인", "승인 근거가 없으면 이전값으로 복원하고 변경 사유를 다시 기록하세요."),
+      "audit/integration-audit": detailBlueprint("audit", "접속 서비스", ["전체 접속", "웹 로그인", "모바일", "외부 연동"], "보안 결과", ["전체 결과", "정상", "추가 인증", "실패"], ["사용자·접속", "인증 구분", "기기·실패"], "시도 횟수", "count", "접속 차단 또는 해제", "의심 세션을 차단하고 인증정보 변경 후 다시 로그인하세요."),
+      "audit/business-switch": detailBlueprint("audit", "보안 정책", ["전체 정책", "세션", "민감정보", "내보내기"], "정책 상태", ["전체 상태", "적용", "예외", "검토"], ["정책·대상", "통제 구분", "조건·예외"], "적용 대상", "count", "보안 정책 적용", "예외를 만료하고 마지막 정상 정책으로 복원한 뒤 세션을 재검증하세요.")
     };
+    const detailRoutes = Object.keys(detailPageDefinitions);
+    const missingBlueprints = detailRoutes.filter((route) => !detailPageBlueprints[route]);
+    const orphanBlueprints = Object.keys(detailPageBlueprints).filter((route) => !detailPageDefinitions[route]);
+    if (missingBlueprints.length || orphanBlueprints.length) {
+      throw new Error(`상세페이지 블루프린트 불일치: missing=${missingBlueprints.join(",")} orphan=${orphanBlueprints.join(",")}`);
+    }
     const routeAliases = { "sales/channel-sales":"sales/order-detail", "purchase/purchase-journal":"inventory/receipt-upload", "employees/payroll":"employees/approve", "inventory/movement":"inventory/menu-detail", "approvals/pending":"approvals/approval-detail" };
     const recordStatuses = ["완료", "검토", "대기", "오류", "완료", "검토", "완료", "대기"];
     const recordAmounts = [462000, 206800, 352000, 1240000, 318000, 896000, 154000, 728000];
     const recordDates = ["2026-09-21 16:42", "2026-09-21 11:18", "2026-09-20 18:05", "2026-09-19 14:36", "2026-09-18 09:22", "2026-09-17 17:51", "2026-09-16 12:14", "2026-09-15 08:40"];
     const escapeMarkup = (value) => String(value).replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
     const money = (value) => `₩${Number(value).toLocaleString("ko-KR")}`;
+    const formatRecordValue = (value, type) => {
+      if (type === "money") return money(value);
+      if (type === "duration") return `${Math.max(1, Math.round(value / 18000))}시간`;
+      if (type === "quantity") return `${Math.max(1, Math.round(value / 10000))}단위`;
+      if (type === "percent") return `${(value % 180) / 10 + 1}%`;
+      if (type === "score") return `${Math.min(100, Math.round(value / 15000))}점`;
+      return `${Math.max(1, Math.round(value / 77000))}건`;
+    };
     const recordStateKey = (route) => `obys-v3-records:${route}`;
     const getRecordState = (route) => {
-      const defaults = { range: "month", start: "2026-09-01", end: "2026-09-21", scope: "전체 사업자·지점", status: "전체 상태", search: "", preview: "results", visible: 6 };
+      const blueprint = detailPageBlueprints[route];
+      const defaults = { range: "month", start: "2026-09-01", end: "2026-09-21", scope: blueprint.scope.options[0], status: blueprint.status.options[0], search: "", preview: "results", visible: 6 };
       try { return { ...defaults, ...JSON.parse(sessionStorage.getItem(recordStateKey(route)) || "{}") }; } catch (_) { return defaults; }
     };
     const saveRecordState = (route, state) => sessionStorage.setItem(recordStateKey(route), JSON.stringify(state));
     const recordsForRoute = (route) => {
-      const profile = recordProfiles[detailRecordProfileAssignments[route]];
-      return profile.subjects.map((subject, index) => ({ id: `${route.replace("/", "-")}-${index + 1}`, route, date: recordDates[index], subject, kind: profile.kinds[index % profile.kinds.length], metric: profile.metrics[index % profile.metrics.length], amount: recordAmounts[index], status: recordStatuses[index], source: ["자동 수집 · 회계팀", "원문서 OCR · 구매팀", "관리자 입력 · 지점장", "외부 연동 · 재무팀"][index % 4], branch: ["열정국밥 · 성신점", "열정국밥 · 미아점", "열정국밥 · 정화점", "문라이트F&B · 본점"][index % 4], ref: `${route.split("/")[1].toUpperCase()}-${String(index + 1).padStart(4, "0")}` }));
+      const blueprint = detailPageBlueprints[route];
+      const profile = recordProfiles[blueprint.profile];
+      const scopes = blueprint.scope.options.slice(1);
+      const statuses = blueprint.status.options.slice(1);
+      return profile.subjects.map((subject, index) => ({ id: `${route.replace("/", "-")}-${index + 1}`, route, date: recordDates[index], subject, kind: profile.kinds[index % profile.kinds.length], metric: profile.metrics[index % profile.metrics.length], amount: recordAmounts[index], status: statuses[index % statuses.length], source: ["자동 수집 · 회계팀", "원문서 OCR · 구매팀", "관리자 입력 · 지점장", "외부 연동 · 재무팀"][index % 4], branch: scopes[index % scopes.length], ref: `${route.split("/")[1].toUpperCase()}-${String(index + 1).padStart(4, "0")}` }));
     };
-    const statusTone = (status) => status === "완료" ? "ok" : status === "오류" ? "bad" : status === "검토" ? "warn" : "info";
-    const renderRecordState = (kind) => {
+    const statusTone = (status) => /완료|확정|정상|달성|안전|적용|제출|높음/.test(status) ? "ok" : /오류|실패|차단|미달|급등|만료|회수|누락/.test(status) ? "bad" : /검토|대기|주의|지연|차이|보완|임박|과다|중복|미매칭/.test(status) ? "warn" : "info";
+    const renderRecordState = (route, kind) => {
+      const blueprint = detailPageBlueprints[route];
       if (kind === "loading") return `<div class="record-state" role="status"><div><h4>상세내역을 불러오는 중입니다</h4><p>선택한 기간과 범위의 시안 데이터를 확인하고 있습니다.</p></div></div>`;
-      if (kind === "error") return `<div class="record-state" role="alert"><div><h4>상세내역을 불러오지 못했습니다</h4><p>연결 상태를 확인한 뒤 다시 시도하거나 연동 관리에서 수집 설정을 확인해 주세요.</p><div class="record-state-actions"><button type="button" class="primary" data-record-retry>다시 시도</button><button type="button" class="outline" data-action="reconnect">연동 관리</button></div></div></div>`;
-      return `<div class="record-state"><div><h4>조건에 맞는 상세내역이 없습니다</h4><p>기간이나 상태를 넓혀 조회해 보세요.</p><button type="button" class="primary" data-record-reset>필터 초기화</button></div></div>`;
+      if (kind === "error") return `<div class="record-state" role="alert"><div><h4>${blueprint.columns[0]} 상세내역을 불러오지 못했습니다</h4><p>${escapeMarkup(blueprint.recovery)}</p><div class="record-state-actions"><button type="button" class="primary" data-record-retry>다시 시도</button><button type="button" class="outline" data-record-context>${escapeMarkup(blueprint.cta)}</button></div></div></div>`;
+      return `<div class="record-state"><div><h4>조건에 맞는 ${blueprint.columns[0]} 상세내역이 없습니다</h4><p>${blueprint.scope.label} 또는 ${blueprint.status.label} 조건을 넓혀 조회해 보세요.</p><button type="button" class="primary" data-record-reset>필터 초기화</button></div></div>`;
     };
     function filterRecords(route, state) {
+      const blueprint = detailPageBlueprints[route];
       const query = state.search.trim().toLowerCase();
-      return recordsForRoute(route).filter((item) => item.date.slice(0, 10) >= state.start && item.date.slice(0, 10) <= state.end && (state.scope === "전체 사업자·지점" || item.branch === state.scope) && (state.status === "전체 상태" || item.status === state.status) && (!query || `${item.subject} ${item.kind} ${item.metric} ${item.ref}`.toLowerCase().includes(query)));
+      return recordsForRoute(route).filter((item) => item.date.slice(0, 10) >= state.start && item.date.slice(0, 10) <= state.end && (state.scope === blueprint.scope.options[0] || item.branch === state.scope) && (state.status === blueprint.status.options[0] || item.status === state.status) && (!query || `${item.subject} ${item.kind} ${item.metric} ${item.ref}`.toLowerCase().includes(query)));
     }
     function renderRecordResults(route) {
       const state = getRecordState(route);
-      if (state.preview !== "results") return renderRecordState(state.preview);
-      const profile = recordProfiles[detailRecordProfileAssignments[route]];
+      if (state.preview !== "results") return renderRecordState(route, state.preview);
+      const blueprint = detailPageBlueprints[route];
       const rows = filterRecords(route, state);
-      if (!rows.length) return renderRecordState("empty");
+      if (!rows.length) return renderRecordState(route, "empty");
       const visible = rows.slice(0, state.visible);
       let lastDate = "";
       const tableRows = visible.map((item) => {
         const day = item.date.slice(0, 10);
         const group = day === lastDate ? "" : `<tr class="date-group"><td colspan="8">${day.replaceAll("-", ".")} · ${rows.filter((rowItem) => rowItem.date.startsWith(day)).length}건</td></tr>`;
         lastDate = day;
-        return `${group}<tr tabindex="0" data-record-id="${item.id}"><td><span class="cell-main"><strong>${escapeMarkup(item.date.slice(11))}</strong></span><span class="cell-sub">${escapeMarkup(item.ref)}</span></td><td><span class="cell-main" title="${escapeMarkup(item.subject)}">${escapeMarkup(item.subject)}</span></td><td>${escapeMarkup(item.kind)}</td><td>${escapeMarkup(item.metric)}</td><td><span class="status ${statusTone(item.status)}">${item.status}</span></td><td class="amount">${money(item.amount)}</td><td>${escapeMarkup(item.source)}</td><td><button type="button" class="detail-button" data-record-id="${item.id}" aria-label="${escapeMarkup(item.subject)} 상세보기">상세보기</button></td></tr>`;
+        return `${group}<tr tabindex="0" data-record-id="${item.id}"><td><span class="cell-main"><strong>${escapeMarkup(item.date.slice(11))}</strong></span><span class="cell-sub">${escapeMarkup(item.ref)}</span></td><td><span class="cell-main" title="${escapeMarkup(item.subject)}">${escapeMarkup(item.subject)}</span></td><td>${escapeMarkup(item.kind)}</td><td>${escapeMarkup(item.metric)}</td><td><span class="status ${statusTone(item.status)}">${item.status}</span></td><td class="amount">${formatRecordValue(item.amount, blueprint.value.type)}</td><td>${escapeMarkup(item.source)}</td><td><button type="button" class="detail-button" data-record-id="${item.id}" aria-label="${escapeMarkup(item.subject)} 상세보기">상세보기</button></td></tr>`;
       }).join("");
-      const cards = visible.map((item) => `<button type="button" class="record-card" data-record-id="${item.id}"><span class="record-card-head"><b>${escapeMarkup(item.subject)}</b><span class="status ${statusTone(item.status)}">${item.status}</span></span><span class="cell-sub">${escapeMarkup(item.date)} · ${escapeMarkup(item.ref)}</span><dl><div><dt>${profile.fields[1][0]}</dt><dd>${escapeMarkup(item.kind)}</dd></div><div><dt>${profile.fields[2][0]}</dt><dd>${escapeMarkup(item.metric)}</dd></div><div><dt>${profile.fields[3][0]}</dt><dd>${money(item.amount)}</dd></div><div><dt>출처·담당</dt><dd>${escapeMarkup(item.source)}</dd></div></dl><span class="record-card-foot"><span>건별 내역과 처리 이력 확인</span><strong>상세보기 ›</strong></span></button>`).join("");
-      return `<div class="record-summary"><span><strong>${rows.length}건</strong> · 표시 ${visible.length}건 · 합계 <strong>${money(rows.reduce((sum, item) => sum + item.amount, 0))}</strong></span><span>거래일시 최신순</span></div><div class="table-wrap record-table-wrap"><table class="record-table"><thead><tr><th>일시·문서번호</th>${profile.fields.slice(0, 3).map(([label]) => `<th>${label}</th>`).join("")}<th>상태</th><th class="amount">${profile.fields[3][0]}</th><th>출처·담당</th><th>건별 조회</th></tr></thead><tbody>${tableRows}</tbody></table></div><div class="record-cards">${cards}</div>${state.visible < rows.length ? `<div class="record-pagination"><button type="button" data-record-more>더 보기 (${rows.length - state.visible}건)</button></div>` : ""}`;
+      const cards = visible.map((item) => `<button type="button" class="record-card" data-record-id="${item.id}"><span class="record-card-head"><b>${escapeMarkup(item.subject)}</b><span class="status ${statusTone(item.status)}">${item.status}</span></span><span class="cell-sub">${escapeMarkup(item.date)} · ${escapeMarkup(item.ref)}</span><dl><div><dt>${blueprint.columns[1]}</dt><dd>${escapeMarkup(item.kind)}</dd></div><div><dt>${blueprint.columns[2]}</dt><dd>${escapeMarkup(item.metric)}</dd></div><div><dt>${blueprint.value.label}</dt><dd>${formatRecordValue(item.amount, blueprint.value.type)}</dd></div><div><dt>출처·담당</dt><dd>${escapeMarkup(item.source)}</dd></div></dl><span class="record-card-foot"><span>${escapeMarkup(blueprint.cta)}를 위한 건별 근거</span><strong>상세보기 ›</strong></span></button>`).join("");
+      const aggregate = rows.reduce((sum, item) => sum + item.amount, 0);
+      return `<div class="record-summary"><span><strong>${rows.length}건</strong> · 표시 ${visible.length}건 · ${blueprint.value.label} 합계 <strong>${formatRecordValue(aggregate, blueprint.value.type)}</strong></span><span>발생일시 최신순</span></div><div class="table-wrap record-table-wrap"><table class="record-table"><thead><tr><th>일시·문서번호</th>${blueprint.columns.map((label) => `<th>${label}</th>`).join("")}<th>${blueprint.status.label}</th><th class="amount">${blueprint.value.label}</th><th>출처·담당</th><th>건별 조회</th></tr></thead><tbody>${tableRows}</tbody></table></div><div class="record-cards">${cards}</div>${state.visible < rows.length ? `<div class="record-pagination"><button type="button" data-record-more>더 보기 (${rows.length - state.visible}건)</button></div>` : ""}`;
     }
     function renderRecordSection(route) {
       const state = getRecordState(route);
-      const profile = recordProfiles[detailRecordProfileAssignments[route]];
-      return `<section class="card panel records-panel" data-records-route="${route}"><div class="panel-head"><div class="panel-title"><h3>상세내역</h3><p>기간별 목록에서 행을 선택하면 원문·증빙·처리 이력을 확인할 수 있습니다.</p></div><span class="sample-flag">시안 데이터</span></div><details class="record-filter" open><summary>조회 조건 열기·접기</summary><form class="record-filter-fields" data-record-filter><div class="quick-ranges" aria-label="빠른 기간"><button type="button" data-record-range="today" class="${state.range === "today" ? "active" : ""}">오늘</button><button type="button" data-record-range="week" class="${state.range === "week" ? "active" : ""}">7일</button><button type="button" data-record-range="month" class="${state.range === "month" ? "active" : ""}">이번 달</button><button type="button" data-record-range="custom" class="${state.range === "custom" ? "active" : ""}">직접 설정</button></div><div class="field"><label>시작일</label><input type="date" name="start" value="${state.start}"></div><div class="field"><label>종료일</label><input type="date" name="end" value="${state.end}"></div><div class="field"><label>사업자·지점</label><select name="scope"><option>전체 사업자·지점</option><option>열정국밥 · 성신점</option><option>열정국밥 · 미아점</option><option>문라이트F&amp;B · 본점</option></select></div><div class="field"><label>상태</label><select name="status"><option>전체 상태</option><option>완료</option><option>검토</option><option>대기</option><option>오류</option></select></div><div class="field"><label>통합검색</label><input type="search" name="search" value="${escapeMarkup(state.search)}" placeholder="${profile.search}"></div><div class="field"><label>목록 상태 확인</label><select name="preview"><option value="results">조회 결과</option><option value="loading">불러오는 중</option><option value="empty">빈 결과</option><option value="error">오류·재시도</option></select></div><div class="record-filter-actions"><button type="reset" class="outline">초기화</button><button type="submit" class="primary">조회</button></div><p class="filter-error" data-record-error hidden>시작일은 종료일보다 늦을 수 없습니다. 날짜를 다시 선택해 주세요.</p></form></details><div data-record-results>${renderRecordResults(route)}</div></section>`;
+      const blueprint = detailPageBlueprints[route];
+      const profile = recordProfiles[blueprint.profile];
+      const options = (values) => values.map((value) => `<option>${escapeMarkup(value)}</option>`).join("");
+      return `<section class="card panel records-panel" data-records-route="${route}"><div class="panel-head"><div class="panel-title"><h3>${blueprint.columns[0]} 상세내역</h3><p>${blueprint.scope.label}와 ${blueprint.status.label} 기준으로 조회하고, 행에서 업무 근거와 처리 이력을 확인합니다.</p></div><span class="sample-flag">시안 데이터</span></div><details class="record-filter" open><summary>조회 조건 열기·접기</summary><form class="record-filter-fields" data-record-filter><div class="quick-ranges" aria-label="빠른 기간"><button type="button" data-record-range="today" class="${state.range === "today" ? "active" : ""}">오늘</button><button type="button" data-record-range="week" class="${state.range === "week" ? "active" : ""}">7일</button><button type="button" data-record-range="month" class="${state.range === "month" ? "active" : ""}">이번 달</button><button type="button" data-record-range="custom" class="${state.range === "custom" ? "active" : ""}">직접 설정</button></div><div class="field"><label>시작일</label><input type="date" name="start" value="${state.start}"></div><div class="field"><label>종료일</label><input type="date" name="end" value="${state.end}"></div><div class="field"><label>${blueprint.scope.label}</label><select name="scope">${options(blueprint.scope.options)}</select></div><div class="field"><label>${blueprint.status.label}</label><select name="status">${options(blueprint.status.options)}</select></div><div class="field"><label>${blueprint.columns[0]} 검색</label><input type="search" name="search" value="${escapeMarkup(state.search)}" placeholder="${profile.search}"></div><div class="field"><label>목록 상태 확인</label><select name="preview"><option value="results">조회 결과</option><option value="loading">불러오는 중</option><option value="empty">빈 결과</option><option value="error">오류·재시도</option></select></div><div class="record-filter-actions"><button type="reset" class="outline">초기화</button><button type="submit" class="primary">조회</button></div><p class="filter-error" data-record-error hidden>시작일은 종료일보다 늦을 수 없습니다. 날짜를 다시 선택해 주세요.</p></form></details><div data-record-results>${renderRecordResults(route)}</div></section>`;
     }
     function syncRecordControls(section) {
       if (!section) return;
@@ -1545,24 +1634,17 @@
       section.querySelector("[data-record-results]").innerHTML = renderRecordResults(section.dataset.recordsRoute);
       syncRecordControls(section);
     }
-    function recordCta(profileName) {
-      if (["evidence", "purchase", "vat"].includes(profileName)) return "관련 증빙 보기";
-      if (profileName === "approval") return "승인 요청";
-      if (["integration", "alerts"].includes(profileName)) return "오류 다시 시도";
-      return "처리 요청";
-    }
     function openRecordDetail(route, recordId, trigger = document.activeElement) {
       const rows = filterRecords(route, getRecordState(route));
       const record = recordsForRoute(route).find((item) => item.id === recordId);
       if (!record) return;
       const position = rows.findIndex((item) => item.id === recordId);
-      const profileName = detailRecordProfileAssignments[route];
-      const profile = recordProfiles[profileName];
+      const blueprint = detailPageBlueprints[route];
       const title = detailPageDefinitions[route][0];
       drawerTriggerElement = trigger;
       drawerTitle.textContent = `${title} · 건별 상세`;
       drawerSubtitle.textContent = `${record.ref} · 실제 연동 전 시안 데이터`;
-      drawerBody.innerHTML = `<div class="notice"><span>업무 화면과 상호작용을 확인하기 위한 예시이며 실제 거래 자료가 아닙니다.</span><b>시안 데이터</b></div><section class="record-drawer-section"><h3>기본 정보</h3><div class="detail-grid">${detailCard("업무명", title)}${detailCard("발생 일시", record.date)}${detailCard("사업자·지점", record.branch)}${detailCard("식별정보", `${record.ref} · ${record.subject}`)}${detailCard(profile.fields[1][0], record.kind)}${detailCard(profile.fields[2][0], record.metric)}${detailCard(profile.unit, money(record.amount))}${detailCard("처리 상태", record.status)}${detailCard("수집 출처·담당", record.source)}${detailCard("증빙·첨부", `${record.ref}-원문.pdf · 이미지 1장`)}</div></section><section class="record-drawer-section"><h3>메모</h3><div class="detail-block"><strong>${record.status === "오류" ? "원문 수집이 지연되어 재시도가 필요합니다." : "원문과 집계값을 대조한 시안 메모입니다."}</strong></div></section><section class="record-drawer-section"><h3>승인·수정 이력</h3><div class="record-history"><div><strong>09월 21일 16:45 · 회계팀</strong><br>원문과 금액을 확인하고 검토 상태를 저장했습니다.</div><div><strong>09월 21일 16:42 · 자동 수집</strong><br>${record.status === "오류" ? "첫 수집 실패 후 재시도 대기열에 등록했습니다." : "자료를 수집하고 사업자·지점에 자동 연결했습니다."}</div></div></section><div class="record-navigation"><button type="button" class="outline" data-record-nav="${position > 0 ? rows[position - 1].id : ""}" ${position <= 0 ? "disabled" : ""}>← 이전 건</button><button type="button" class="outline" data-record-nav="${position >= 0 && position < rows.length - 1 ? rows[position + 1].id : ""}" ${position < 0 || position >= rows.length - 1 ? "disabled" : ""}>다음 건 →</button></div><div class="drawer-actions"><button type="button" class="outline" data-close-overlay>목록으로 닫기</button><button type="button" class="primary" data-record-context>${recordCta(profileName)}</button></div>`;
+      drawerBody.innerHTML = `<div class="notice"><span>업무 화면과 상호작용을 확인하기 위한 예시이며 실제 운영 자료가 아닙니다.</span><b>시안 데이터</b></div><section class="record-drawer-section"><h3>${title} 기본 정보</h3><div class="detail-grid">${detailCard("업무명", title)}${detailCard("발생 일시", record.date)}${detailCard(blueprint.scope.label, record.branch)}${detailCard("식별정보", `${record.ref} · ${record.subject}`)}${detailCard(blueprint.columns[1], record.kind)}${detailCard(blueprint.columns[2], record.metric)}${detailCard(blueprint.value.label, formatRecordValue(record.amount, blueprint.value.type))}${detailCard(blueprint.status.label, record.status)}${detailCard("수집 출처·담당", record.source)}${detailCard("근거·첨부", `${record.ref}-원문.pdf · 이미지 1장`)}</div></section><section class="record-drawer-section"><h3>업무 메모</h3><div class="detail-block"><strong>${/오류|실패|지연/.test(record.status) ? blueprint.recovery : `${blueprint.cta} 전에 원문과 표시값을 대조한 시안 메모입니다.`}</strong></div></section><section class="record-drawer-section"><h3>처리·변경 이력</h3><div class="record-history"><div><strong>09월 21일 16:45 · 담당자</strong><br>${blueprint.columns[2]} 근거와 ${blueprint.value.label}을 확인해 상태를 저장했습니다.</div><div><strong>09월 21일 16:42 · 자료 수집</strong><br>${/오류|실패|지연/.test(record.status) ? blueprint.recovery : `${blueprint.scope.label} 기준으로 자료를 연결했습니다.`}</div></div></section><div class="record-navigation"><button type="button" class="outline" data-record-nav="${position > 0 ? rows[position - 1].id : ""}" ${position <= 0 ? "disabled" : ""}>← 이전 건</button><button type="button" class="outline" data-record-nav="${position >= 0 && position < rows.length - 1 ? rows[position + 1].id : ""}" ${position < 0 || position >= rows.length - 1 ? "disabled" : ""}>다음 건 →</button></div><div class="drawer-actions"><button type="button" class="outline" data-close-overlay>목록으로 닫기</button><button type="button" class="primary" data-record-context>${blueprint.cta}</button></div>`;
       detailOverlay.dataset.recordRoute = route;
       detailOverlay.classList.add("open");
       detailOverlay.setAttribute("aria-hidden", "false");
@@ -1573,17 +1655,79 @@
       Object.entries(submenuItems).map(([slug, items]) => [slug, new Set(items.map(([, detail]) => detail))])
     );
 
+    const dimensionSnapshots = {
+      home: [["사업자별", "열정국밥 68% · 문라이트 24% · 개인 8%"], ["지점별", "성신 42% · 미아 33% · 정화 25%"], ["업무별", "매출 18 · 자금 9 · 세무 7"], ["위험별", "긴급 2 · 주의 6 · 정상 28"]],
+      tasks: [["사업자별", "열정국밥 14 · 문라이트 6 · 개인 3"], ["담당자별", "대표 5 · 회계 9 · 지점 9"], ["마감별", "오늘 5 · 7일 11 · 이후 7"], ["상태별", "진행 8 · 승인 4 · 완료 11"]],
+      reports: [["사업자별", "열정국밥 ₩92.4M · 문라이트 ₩28.1M"], ["지점별", "성신 ₩54.2M · 미아 ₩42.8M · 정화 ₩31.5M"], ["보고서별", "손익 · 현금흐름 · 정산 · 원가"], ["기간별", "당월 · 전월 · 전년동월 · 누계"]],
+      documents: [["사업자별", "열정국밥 112 · 문라이트 48 · 개인 24"], ["문서유형별", "경영 24 · 세무 38 · 인사 78 · 증빙 44"], ["권한별", "대표 184 · 회계 96 · 외부 38"], ["상태별", "확정 166 · 검토 13 · 만료 5"]],
+      sales: [["사업자별", "열정국밥 ₩92.4M · 문라이트 ₩28.1M · 개인 ₩7.9M"], ["매출처·채널별", "배민 ₩39.8M · POS ₩39.4M · 카드 ₩27.8M"], ["지점별", "성신 ₩54.2M · 미아 ₩42.8M · 정화 ₩31.5M"], ["결제·상태별", "승인 96.8% · 취소 1.8% · 미매핑 1.4%"]],
+      accounts: [["사업자별", "열정국밥 ₩36.8M · 문라이트 ₩11.2M · 개인 ₩4.2M"], ["계좌별", "신한 운영 ₩24.8M · 기업 정산 ₩17.1M · 국민 급여 ₩10.3M"], ["입금처별", "배달 ₩8.2M · 카드 ₩6.4M · 현장 ₩3.1M"], ["거래별", "입금 128 · 출금 76 · 미매칭 3"]],
+      employees: [["사업자별", "열정국밥 14명 · 문라이트 3명 · 개인 1명"], ["지점별", "성신 8 · 미아 6 · 정화 4"], ["고용형태별", "정규 9 · 계약 6 · 일용 3"], ["상태별", "재직 18 · 갱신 2 · 보완 3"]],
+      inventory: [["사업자별", "열정국밥 ₩15.8M · 문라이트 ₩2.4M · 개인 ₩0.7M"], ["매입처별", "서울축산 ₩6.8M · 마켓봄 ₩4.1M · 뉴통 ₩2.9M"], ["지점별", "성신 ₩8.2M · 미아 ₩6.1M · 정화 ₩4.6M"], ["품목별", "식재료 62% · 포장 21% · 소모품 17%"]],
+      tax: [["사업자별", "열정국밥 824건 · 문라이트 312건 · 개인 112건"], ["증빙별", "세금계산서 486 · 계산서 36 · 현금영수증 214 · 카드 512"], ["거래처별", "서울축산 82 · 마켓봄 76 · 뉴통 61 · 기타 1,029"], ["전표상태별", "확정 382 · 미결 6 · 승인대기 6 · 역분개 2"]],
+      approvals: [["사업자별", "열정국밥 5 · 문라이트 2 · 개인 1"], ["유형별", "발주 3 · 계약 2 · 정산 2 · 세무 1"], ["결재자별", "대표 6 · 회계 1 · 점장 1"], ["상태별", "대기 8 · 반려 2 · 완료 31"]],
+      alerts: [["사업자별", "열정국밥 9 · 문라이트 4 · 개인 2"], ["업무별", "세무 4 · 연동 3 · 인사 3 · 재고 5"], ["수신자별", "대표 6 · 회계 5 · 점장 4"], ["중요도별", "긴급 2 · 주의 6 · 정보 7"]],
+      business: [["사업자별", "법인 2 · 개인 1"], ["지점별", "성신 · 미아 · 정화 · 본점 · 1호점"], ["계좌별", "운영 3 · 정산 3 · 급여 2"], ["연결별", "판매 9 · 은행 8 · 세무 3"]],
+      integrations: [["사업자별", "열정국밥 12 · 문라이트 6 · 개인 3"], ["서비스별", "판매 6 · 은행 5 · 매입 7 · 세무 3"], ["수집방식별", "API 8 · 자동화 7 · 파일 4 · OCR 2"], ["상태별", "정상 18 · 재인증 2 · 지연 1"]],
+      margins: [["사업자별", "열정국밥 42개 · 문라이트 16개 · 개인 8개"], ["메뉴별", "국밥 38% · 정식 31% · 사이드 18% · 기타 13%"], ["채널별", "홀 36% · 배달 49% · 포장 15%"], ["마진별", "목표달성 51 · 미달 15"]],
+      audit: [["사업자별", "열정국밥 28 · 문라이트 12 · 개인 6"], ["사용자별", "대표 8 · 회계 14 · 점장 17 · 시스템 7"], ["행위별", "권한 9 · 변경 18 · 로그인 12 · 내보내기 7"], ["위험별", "정상 42 · 검토 3 · 차단 1"]]
+    };
+    const routeDimensionSnapshots = {
+      "sales/sales-detail": [["사업자별", "열정국밥 ₩92.4M · 문라이트 ₩28.1M · 개인 ₩7.9M"], ["매출처·채널별", "배민 ₩39.8M · POS ₩39.4M · 카드 ₩27.8M"], ["지점별", "성신 ₩54.2M · 미아 ₩42.8M · 정화 ₩31.5M"], ["결제수단별", "카드 54% · 현금 16% · 간편결제 30%"]],
+      "sales/order-detail": [["사업자별", "법인 7,182건 · 개인 1,239건"], ["채널별", "배민 3,046 · POS 2,984 · 카드 2,391"], ["카드사별", "신한 1,284 · 국민 1,146 · 삼성 982 · 기타"], ["처리상태별", "승인 8,269 · 취소 148 · 미매핑 4"]],
+      "sales/review": [["정산처별", "배민 8건 · 쿠팡 4건 · 요기요 4건"], ["입금계좌별", "신한 9건 · 기업 7건"], ["차이유형별", "수수료 1 · 입금일 1 · 정상 14"], ["처리상태별", "확정 12 · 검토 2 · 보완 2"]],
+      "sales/sales-channel-connect": [["등록사업자별", "열정국밥 2파일 · 문라이트 1파일"], ["자료종류별", "POS 1 · 카드승인 1 · 배달정산 1"], ["등록방식별", "엑셀 2 · CSV 1 · 건별 0"], ["검증결과별", "완료 2 · 매핑필요 1 · 중복 0"]],
+      "accounts/account-detail": [["사업자별", "열정국밥 ₩36.8M · 문라이트 ₩11.2M · 개인 ₩4.2M"], ["은행별", "신한 ₩24.8M · 기업 ₩17.1M · 국민 ₩10.3M"], ["계좌별", "운영 ₩24.8M · 정산 ₩17.1M · 급여 ₩10.3M"], ["잔액상태별", "가용 ₩40.4M · 예약 ₩11.7M · 제한 ₩0"]],
+      "accounts/order-detail": [["입금처별", "배달 ₩8.2M · 카드 ₩6.4M · 현장 ₩3.1M"], ["수취계좌별", "신한 ₩9.4M · 기업 ₩8.3M"], ["예정일별", "오늘 ₩4.1M · 3일내 ₩9.8M · 이후 ₩3.8M"], ["상태별", "예정 4 · 지연 1 · 변경 1"]],
+      "accounts/match": [["계좌별", "신한 1건 · 기업 1건 · 현장 1건"], ["입금처별", "KCP ₩1.12M · 배민 ₩520K · 현장 ₩200K"], ["추천신뢰도별", "90% 이상 2 · 검토 1"], ["처리상태별", "추천 2 · 수동확인 1 · 제외 0"]],
+      "accounts/bank-connect": [["등록사업자별", "열정국밥 1파일 · 문라이트 1파일"], ["은행별", "신한 1 · 기업 1 · 국민 0"], ["계좌별", "운영 1 · 정산 1 · 급여 0"], ["검증결과별", "완료 1 · 미매핑 3건 · 중복 0"]],
+      "inventory/menu-detail": [["사업자별", "열정국밥 ₩15.8M · 문라이트 ₩2.4M · 개인 ₩0.7M"], ["지점별", "성신 ₩8.2M · 미아 ₩6.1M · 정화 ₩4.6M"], ["품목분류별", "식재료 62% · 포장 21% · 소모품 17%"], ["재고상태별", "안전 84 · 부족예상 4 · 실사차이 2"]],
+      "inventory/order-detail": [["매입처별", "서울축산 ₩6.8M · 마켓봄 ₩4.1M · 뉴통 ₩2.9M"], ["지점별", "성신 12건 · 미아 8건 · 정화 6건"], ["품목별", "축산 9 · 농산 8 · 포장 6 · 기타 3"], ["발주상태별", "추천 8 · 승인 5 · 발주완료 13"]],
+      "inventory/supplier-connect": [["매입처별", "서울축산 18건 · 마켓봄 14건 · 뉴통 11건"], ["연결방식별", "API 4 · 계정 3 · 파일 3 · 수기 2"], ["품목분류별", "식재료 8 · 포장 2 · 소모품 2"], ["상태별", "정상 10 · 단가점검 1 · 증빙누락 1"]],
+      "inventory/receipt-upload": [["사업자별", "열정국밥 3건 · 문라이트 1건"], ["매입처별", "현장구매 2 · 서울축산 1 · 마켓봄 1"], ["증빙별", "영수증 2 · 거래명세서 1 · 계산서 1"], ["세금처리별", "과세 2 · 면세 1 · 검토 1"]],
+      "tax/vat-ledger": [["사업자별", "열정국밥 824건 · 문라이트 312건 · 개인 112건"], ["증빙별", "세금계산서 486 · 계산서 36 · 현금영수증 214 · 카드 512"], ["거래처별", "서울축산 82 · 마켓봄 76 · 뉴통 61 · 기타 1,029"], ["원장상태별", "반영 1,221 · 검토 20 · 중복·누락 7"]],
+      "tax/evidence-gap": [["사업자별", "열정국밥 4건 · 문라이트 2건 · 개인 1건"], ["증빙별", "세금계산서 3 · 현금영수증 1 · 카드 2 · 종이증빙 1"], ["거래처별", "마켓봄 2 · 뉴통 1 · 현장구매 4"], ["보완상태별", "등록대기 4 · 중복 2 · 미매칭 1"]],
+      "tax/withholding-ledger": [["사업자별", "열정국밥 288건 · 문라이트 86건 · 개인 32건"], ["발생원천별", "자동분개 382 · 직접입력 24"], ["계정과목별", "매출 164 · 매입 142 · 비용 76 · 기타 24"], ["전표상태별", "확정 382 · 미결 6 · 승인대기 6 · 역분개 2"]],
+      "tax/tax-return-preview": [["사업자별", "열정국밥 4건 · 문라이트 3건 · 개인 2건"], ["세목별", "부가세 3 · 원천세 3 · 지방세 2 · 지급명세 1"], ["검토단계별", "자료수집 2 · 대리인검토 3 · 대표승인 2 · 완료 2"], ["마감별", "D-2 1 · D-14 3 · 30일 이후 5"]]
+    };
+    const manualFallbackActions = {
+      "sales/sales-detail": [["excel-import", "엑셀 매출 등록"], ["manual-record", "매출 건별 입력"]],
+      "sales/order-detail": [["excel-import", "엑셀 카드·주문 등록"], ["manual-record", "카드·주문 건별 입력"]],
+      "sales/sales-channel-connect": [["excel-import", "엑셀 매출 등록"], ["manual-record", "매출 건별 입력"]],
+      "accounts/account-detail": [["excel-import", "엑셀 입출금 등록"], ["manual-record", "입출금 건별 입력"]],
+      "accounts/order-detail": [["excel-import", "엑셀 입금예정 등록"], ["manual-record", "입금예정 건별 입력"]],
+      "accounts/bank-connect": [["excel-import", "엑셀 입출금 등록"], ["manual-record", "입출금 건별 입력"]],
+      "inventory/supplier-connect": [["excel-import", "엑셀 매입 등록"], ["manual-record", "매입 건별 입력"]],
+      "inventory/receipt-upload": [["excel-import", "엑셀 매입 등록"], ["manual-record", "매입 건별 입력"]],
+      "tax/vat-ledger": [["tax-evidence-register", "세무증빙 등록"], ["excel-import", "엑셀 증빙 등록"]],
+      "tax/evidence-gap": [["tax-evidence-register", "세무증빙 등록"], ["excel-import", "엑셀 증빙 등록"]],
+      "tax/withholding-ledger": [["journal-entry", "전표 입력"], ["journal-reverse", "전표 수정·역분개"]]
+    };
+    const renderDimensionSnapshot = (slug, detail) => {
+      const snapshots = routeDimensionSnapshots[`${slug}/${detail}`] || dimensionSnapshots[slug];
+      return `<section class="card panel"><div class="panel-head"><div class="panel-title"><h3>${detailPageDefinitions[`${slug}/${detail}`][0]} 상세 현황</h3><p>이 메뉴의 업무 특성에 맞는 집계축에서 건별 상세로 내려갑니다.</p></div><span class="sample-flag">집계 → 상세</span></div><div class="detail-grid">${snapshots.map(([label, value]) => detailCard(label, value)).join("")}</div></section>`;
+    };
+    const renderManualFallback = (slug, detail) => {
+      const actions = manualFallbackActions[`${slug}/${detail}`];
+      if (!actions) return "";
+      return `<section class="card panel"><div class="panel-head"><div class="panel-title"><h3>자동연동 실패 시 자료 등록</h3><p>자동 수집이 막혀도 엑셀 일괄등록 또는 건별 입력으로 업무를 계속할 수 있습니다.</p></div><span class="status warn">복구 경로</span></div><div class="notice"><span>양식 다운로드 → 파일 선택 → 컬럼 매핑 → 중복·합계 검증 → 등록 결과 확인 순서로 진행합니다.</span><b>원본 보존·감사로그</b></div><div class="hero-actions">${actions.map(([action, label]) => `<button type="button" class="${action === "excel-import" ? "primary" : "outline"}" data-action="${action}">${label}</button>`).join("")}</div></section>`;
+    };
+
     const renderDetailPage = (slug, detail) => {
-      const definition = detailPageDefinitions[`${slug}/${detail}`];
+      const route = `${slug}/${detail}`;
+      const definition = detailPageDefinitions[route];
+      const blueprint = detailPageBlueprints[route];
       const [title, description, metric, primarySection, secondarySection] = definition;
       const list = ([heading, values], tone) => `<article class="card panel"><div class="panel-head"><div class="panel-title"><h3>${heading}</h3><p>${title} 업무를 구성하는 핵심 항목입니다.</p></div><span class="status ${tone}">${values.split("|").length}개 항목</span></div><div class="list">${values.split("|").map((value, index) => row(index ? "blue" : "orange", index + 1, value, `${views[slug].title} · 시안 데이터`, "review")).join("")}</div></article>`;
       return `<div class="detail-page" data-detail-page="${slug}/${detail}">
         <nav class="detail-breadcrumb" aria-label="현재 위치"><button type="button" data-view="${slug}">${views[slug].title} 요약</button><span aria-hidden="true">/</span><span aria-current="page">${title}</span></nav>
-        <section class="hero"><div><h2>${title}</h2><p>${description} 모든 수치는 시안 데이터입니다.</p></div><div class="hero-actions"><button type="button" class="outline" data-view="${slug}">상위 요약</button><button type="button" class="primary" data-action="review">업무 검토</button></div></section>
+        <section class="hero"><div><h2>${title}</h2><p>${description} 모든 수치는 시안 데이터입니다.</p></div><div class="hero-actions"><button type="button" class="outline" data-view="${slug}">상위 요약</button><button type="button" class="primary" data-record-context>${escapeMarkup(blueprint.cta)}</button></div></section>
         <section class="kpis">${kpi(metric[0], metric[1], `<span class="up">${metric[2]}</span>`, "orange", moneyIcon)}${kpi("처리 상태", "진행 중", '<span>담당자 확인 가능</span>', "blue", cardIcon)}${kpi("마지막 갱신", "오늘 09:20", '<span>연동 기준</span>', "green", bankIcon)}${kpi("예외", secondarySection[1].split("|").length + "건", '<span class="down">검토 필요</span>', "amber", taxIcon)}</section>
         <section class="grid-2">${list(primarySection, "ok")}${list(secondarySection, "warn")}</section>
-        ${renderRecordSection(`${slug}/${detail}`)}
-        <section class="card panel recovery"><div><h3>처리되지 않을 때</h3><p>원천 자료를 다시 확인한 뒤 재시도하거나 연결 설정과 담당 권한을 점검하세요.</p></div><div class="hero-actions"><button type="button" class="outline" data-view="${slug}">요약으로 돌아가기</button><button type="button" class="outline" data-action="reconnect">연결 설정</button><button type="button" class="primary" data-action="review">다시 검토</button></div></section>
+        ${renderDimensionSnapshot(slug, detail)}
+        ${renderManualFallback(slug, detail)}
+        ${renderRecordSection(route)}
+        <section class="card panel recovery"><div><h3>${blueprint.columns[0]} 처리가 막혔을 때</h3><p>${escapeMarkup(blueprint.recovery)}</p></div><div class="hero-actions"><button type="button" class="outline" data-view="${slug}">요약으로 돌아가기</button><button type="button" class="outline" data-detail-reset>조회 조건 초기화</button><button type="button" class="primary" data-record-context>${escapeMarkup(blueprint.cta)}</button></div></section>
       </div>`;
     };
 
@@ -1591,8 +1735,20 @@
     buildMenu(mobileNav);
 
     const detailCard = (label, value) => `<div class="detail-block"><small>${label}</small><strong>${value}</strong></div>`;
+    const currentEntryDomain = () => ({ sales: "매출", accounts: "입출금", inventory: "매입", tax: "세무증빙" }[normalizeHash().slug] || "업무자료");
+    const excelImportForm = () => {
+      const domain = currentEntryDomain();
+      const sourceOptions = domain === "매출" ? ["배달·판매채널", "POS·키오스크", "카드 승인", "기타 매출"] : domain === "입출금" ? ["은행 거래내역", "카드·PG 입금", "현장 입출금", "기타 계좌자료"] : domain === "매입" ? ["매입처 거래내역", "발주·입고", "카드매입", "기타 매입자료"] : ["전자세금계산서", "전자계산서", "현금영수증", "카드매입", "종이·기타 증빙"];
+      return `<form class="auth-form" data-search-form><div class="notice"><span>자동연동 자료와 중복되지 않도록 사업자·원천문서번호·거래일·금액 조합을 먼저 검사합니다. 오류 행만 내려받아 수정 후 재등록할 수 있습니다.</span><b>${domain} 대체등록</b></div><div class="credential-grid">${authSelect("excel-domain", "등록 업무", [domain])}${authSelect("excel-business", "사업자", ["열정국밥 주식회사", "문라이트F&B", "문고비 개인사업자"])}${authSelect("excel-source", "자료 출처", sourceOptions)}${authSelect("excel-branch", "지점·계좌", ["전체/파일값 사용", "성신점", "미아점", "정화점", "계좌 직접 매핑"])}${authField("excel-file", "엑셀·CSV 파일", "file", "XLSX 또는 CSV 선택")}${authSelect("excel-duplicate", "중복 처리", ["중복 행 제외 후 검토", "기존값과 비교", "오류로 중단"])}${authSelect("excel-tax", "세금 처리", ["파일값 사용", "자동 판정", "과세", "면세", "회계 검토"])}${authSelect("excel-approval", "등록 승인", ["검증 후 회계 승인", "대표 승인", "검증 통과 자동등록"])}</div><section class="record-drawer-section"><h3>컬럼 매핑·미리보기</h3><div class="table-wrap"><table><thead><tr><th>파일 컬럼</th><th>시스템 필드</th><th>예시값</th><th>검증</th></tr></thead><tbody><tr><td>거래일자</td><td>발생일</td><td>2026-09-21</td><td><span class="status ok">정상</span></td></tr><tr><td>거래처/입금자</td><td>상대처</td><td>서울축산</td><td><span class="status ok">정상</span></td></tr><tr><td>공급가/금액</td><td>거래금액</td><td>420,000</td><td><span class="status warn">형식 확인</span></td></tr><tr><td>문서번호</td><td>원천 식별자</td><td>INV-0921-18</td><td><span class="status ok">중복 없음</span></td></tr></tbody></table></div></section><div class="timeline">${step("1", "양식·원본 선택", `${domain} 표준 양식 또는 원천 파일`, "완료")}${step("2", "컬럼 매핑", "필수값과 사업자·지점·계좌 연결", "검토")}${step("3", "중복·합계 검증", "정상/오류/제외 건수와 금액 대사", "대기")}${step("4", "등록 결과", "성공·실패 행과 전표 생성 결과 확인", "예정")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="download-template">${domain} 표준양식 다운로드</button><button type="submit" class="primary">검증 후 등록</button></div></form>`;
+    };
+    const manualEntryForm = () => {
+      const domain = currentEntryDomain();
+      return `<form class="auth-form" data-search-form><div class="credential-grid">${authSelect("manual-business", "사업자", ["열정국밥 주식회사", "문라이트F&B", "문고비 개인사업자"])}${authField("manual-date", "거래일자", "date", "거래일")}${authSelect("manual-domain", "업무 구분", [domain])}${authSelect("manual-scope", "지점·계좌", ["성신점", "미아점", "정화점", "신한 운영", "기업 정산"])}${authField("manual-counterparty", "거래처·입금자", "text", "상대처를 입력")}${authField("manual-reference", "원천 문서번호", "text", "중복 검사용 식별자")}${authField("manual-amount", "거래금액", "number", "0")}${authSelect("manual-status", "처리 상태", ["검토 대기", "확정", "제외"])}<div class="wide">${authField("manual-note", "적요·등록 사유", "text", "자동연동 실패 사유와 근거")}</div></div><div class="drawer-actions"><button type="button" class="outline" data-action="excel-import">엑셀 일괄등록</button><button type="submit" class="primary">${domain} 건별 등록</button></div></form>`;
+    };
+    const taxEvidenceRegisterForm = () => `<form class="auth-form" data-search-form><div class="notice"><span>증빙 종류와 매출·매입, 과세 구분을 분리 입력하고 원본·전표 연결을 함께 남깁니다.</span><b>세무증빙 등록</b></div><div class="credential-grid">${authSelect("evidence-business", "사업자", ["열정국밥 주식회사", "문라이트F&B", "문고비 개인사업자"])}${authField("evidence-date", "작성·승인일", "date", "증빙일")}${authSelect("evidence-direction", "매출·매입", ["매입", "매출"])}${authSelect("evidence-type", "증빙 종류", ["전자세금계산서", "전자계산서", "현금영수증", "카드매입·매출", "종이 세금계산서", "간이영수증", "기타 증빙"])}${authSelect("evidence-tax", "과세 구분", ["과세", "면세", "영세", "불공제", "회계 검토"])}${authField("evidence-number", "승인·증빙번호", "text", "중복 검사용 번호")}${authField("evidence-counterparty", "거래처", "text", "상호 또는 사업자번호")}${authField("evidence-supply", "공급가액", "number", "0")}${authField("evidence-vat", "부가세", "number", "0")}${authField("evidence-total", "합계", "number", "0")}${authField("evidence-file", "원본 파일", "file", "PDF/JPG/PNG")}${authSelect("evidence-ledger", "원장 처리", ["전표 자동생성 후 검토", "기존 전표 연결", "증빙만 임시저장"])}</div><div class="timeline">${step("1", "종류 확인", "계산서·현금영수증·카드 등 원본 구분", "완료")}${step("2", "금액 검증", "공급가액+부가세=합계, 면세·불공제 확인", "검토")}${step("3", "중복 검사", "승인번호·거래처·일자·금액 대조", "대기")}${step("4", "전표 연결", "자동분개 또는 기존 전표와 연결", "예정")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="excel-import">엑셀 일괄등록</button><button type="submit" class="primary">증빙 검증·등록</button></div></form>`;
+    const journalEntryForm = () => `<form class="auth-form" data-search-form><div class="notice"><span>직접 전표는 차변·대변 합계가 일치해야 저장되며, 마감 기간 수정은 승인 후 역분개로만 처리합니다.</span><b>차대변 통제</b></div><div class="credential-grid">${authSelect("journal-business", "사업자", ["열정국밥 주식회사", "문라이트F&B", "문고비 개인사업자"])}${authField("journal-date", "전표일자", "date", "전표일")}${authSelect("journal-type", "전표 유형", ["일반전표", "매입전표", "매출전표", "입금전표", "출금전표", "역분개"])}${authField("journal-number", "전표번호", "text", "저장 시 자동채번")}${authField("journal-summary", "적요", "text", "거래 목적과 상대처")}${authField("journal-evidence", "연결 증빙번호", "text", "증빙대장에서 선택")}${authSelect("journal-debit-account", "차변 계정과목", ["매출채권", "보통예금", "식재료비", "복리후생비", "부가세대급금"])}${authField("journal-debit", "차변 금액", "number", "0")}${authSelect("journal-credit-account", "대변 계정과목", ["매출", "보통예금", "미지급금", "부가세예수금", "가수금"])}${authField("journal-credit", "대변 금액", "number", "0")}${authSelect("journal-status", "저장 상태", ["임시저장", "승인 요청", "확정"])}${authField("journal-attachment", "근거 첨부", "file", "PDF/JPG/PNG")}</div><div class="detail-grid">${detailCard("차변 합계", "₩462,000")}${detailCard("대변 합계", "₩462,000")}${detailCard("차액", "₩0 · 저장 가능")}${detailCard("마감 상태", "2026년 9월 · 미마감")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="excel-import">전표 엑셀 등록</button><button type="submit" class="primary">전표 저장·승인요청</button></div></form>`;
     function detailContent(action) {
-      const { slug } = normalizeHash();
+      const { slug, detail } = normalizeHash();
       const reviewByView = {
         sales: ["정산 차이 상세", "7월 23일 · 성신점 · 카드 매출", [["주문·승인 매출","₩2,611,000"],["총 수수료","₩78,330"],["광고비·쿠폰 차감","₩26,500"],["입금 예정액","₩2,506,170"],["원장 차이","₩42,000"],["처리 상태","소명자료 검토 중"]]],
         accounts: ["입금 매칭 상세", "BAEMIN_PAY 입금 후보 비교", [["입금액","₩400,000"],["예상 정산액","₩426,500"],["차이","₩26,500"],["후보 주문","배민 성신점 128건"],["매칭 신뢰도","92% · 시안"],["처리 상태","대표 확인 필요"]]],
@@ -1601,9 +1757,26 @@
         business: ["사업자·지점 상세", "열정국밥 주식회사 · 성신점", [["사업자 상태","운영 중"],["지점 권한","대표·점장·재무"],["연결 계좌","신한 운영·국민 정산"],["연동 마켓","배민·쿠팡·요기요"],["직원","8명"],["최근 동기화","12:45"]]],
         documents: ["보고서 검토", "부가세 증빙 묶음", [["대상 기간","2026년 상반기"],["형식","ZIP·PDF"],["자료 수","126건"],["누락","7건"],["공유 대상","세무대리인"],["상태","대표 승인 대기"]]]
       };
+      const registrationContexts = {
+        sales: { noun: detail === "order-detail" ? "카드·주문" : "매출", types: ["카드 승인·취소", "POS 매출", "배달 주문·정산", "현금영수증 매출"], party: "매출처·채널", partyHint: "배달의민족, 신한카드, 성신점 POS" },
+        accounts: { noun: detail === "order-detail" ? "입금예정" : "입출금", types: ["은행 입금", "은행 출금", "카드사 입금예정", "플랫폼 정산예정"], party: "입금처·거래처", partyHint: "KCP, 배달의민족, 거래처명" },
+        inventory: { noun: "매입", types: ["전자세금계산서 매입", "전자계산서 매입", "카드 매입", "거래명세·현금 매입"], party: "매입처", partyHint: "서울축산, 마켓봄, 뉴통" },
+        tax: { noun: "세무증빙", types: ["전자세금계산서", "전자계산서", "현금영수증", "카드 매출·매입", "종이증빙·기타"], party: "거래처", partyHint: "공급자 또는 공급받는 자" }
+      };
+      const registration = registrationContexts[slug] || registrationContexts.tax;
+      const excelImportForm = `<form class="auth-form" data-search-form><div class="notice"><span>원본 파일은 보존하고 등록 전 컬럼 매핑·중복·합계 검증 결과를 반드시 확인합니다.</span><b>${registration.noun} 엑셀등록</b></div><div class="credential-grid">${authSelect("import-business","사업자",["열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}${authSelect("import-type","자료 구분",registration.types)}${authSelect("import-template","양식",["오비서 표준 양식","은행·카드사 원본 양식","판매채널 원본 양식","직접 컬럼 매핑"])}${authField("import-period","귀속월·기준일","month","2026-09")}${authField("import-file","엑셀·CSV 파일","file",".xlsx, .xls, .csv")}${authSelect("import-encoding","CSV 인코딩",["자동 감지","UTF-8","CP949"])}${authSelect("import-duplicate","중복 처리",["중복 후보를 제외하고 검토","기존 자료와 비교만","검증 후 기존 자료 갱신"])}${authSelect("import-approval","등록 승인",["검증 후 회계담당 승인","검증 후 대표 승인","임시보관 후 나중에 승인"])}</div><div class="timeline">${step("1","양식·원본 선택","표준 양식 다운로드 또는 원본 파일 선택","입력")}${step("2","컬럼 매핑","일자·사업자·거래처·공급가·세액 매핑","대기")}${step("3","검증 결과","오류행·중복·합계 차이 확인","대기")}${step("4","등록 완료","성공·실패 건수와 감사로그 확인","대기")}</div><div class="detail-grid">${detailCard("미리보기","정상 124건 · 중복 후보 2건 · 오류 1건")}${detailCard("합계 대사","원본 ₩18,420,000 · 등록예정 ₩18,420,000")}${detailCard("오류 복구","오류행만 내려받아 수정 후 재등록")}${detailCard("감사 기록","업로더·파일해시·등록시각·승인자 보존")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="download">표준 양식 다운로드</button><button type="submit" class="primary">검증 후 임시등록</button></div></form>`;
+      const manualRecordForm = `<form class="auth-form" data-search-form><div class="notice"><span>자동연동 자료와 같은 중복키로 먼저 검사하고 승인 전에는 원장에 확정 반영하지 않습니다.</span><b>${registration.noun} 건별입력</b></div><div class="credential-grid">${authSelect("manual-business","사업자",["열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}${authField("manual-date","거래일자","date","거래일")}${authSelect("manual-type","자료 구분",registration.types)}${authField("manual-party",registration.party,"text",registration.partyHint)}${authField("manual-reference","승인·거래번호","text","원천 식별번호")}${authField("manual-supply","공급가액","number","0")}${authField("manual-tax","세액","number","0")}${authField("manual-total","합계금액","number","0")}${authSelect("manual-tax-kind","세금 구분",["과세","면세","영세","불공제","검토 필요"])}${authField("manual-source","원본 증빙","file","이미지, PDF 또는 원본 파일")}</div><div class="detail-grid">${detailCard("중복검사","사업자+일자+금액+승인번호")}${detailCard("반영범위",`${registration.noun} 현황 · 증빙대장 · 전표 후보`)}${detailCard("입력상태","임시저장 → 검토 → 승인")}${detailCard("오류 복구","임시저장 목록에서 수정·삭제 후 재검증")}</div><div class="drawer-actions"><button type="button" class="outline" data-close-overlay>취소</button><button type="submit" class="primary">중복검사 후 임시저장</button></div></form>`;
+      const taxEvidenceForm = `<form class="auth-form" data-search-form><div class="notice"><span>현금영수증·계산서·세금계산서·카드증빙을 구분해 등록하고 공급가·세액·원장 연결을 검증합니다.</span><b>세무증빙 직접등록</b></div><div class="credential-grid">${authSelect("evidence-business","사업자",["열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}${authSelect("evidence-direction","매출·매입",["매출 증빙","매입 증빙"])}${authSelect("evidence-type","증빙 종류",["전자세금계산서","전자계산서","현금영수증","카드매출전표","카드매입전표","종이세금계산서","간이영수증","기타증빙"])}${authField("evidence-date","발행·거래일","date","발행일")}${authField("evidence-party","거래처명","text","공급자 또는 공급받는 자")}${authField("evidence-business-no","거래처 사업자번호","text","000-00-00000")}${authField("evidence-approval-no","승인·발행번호","text","현금영수증·카드 승인번호")}${authField("evidence-supply","공급가액","number","0")}${authField("evidence-tax","세액","number","0")}${authField("evidence-total","합계금액","number","0")}${authSelect("evidence-tax-kind","세금 처리",["과세","면세","영세","불공제","의제매입 검토"])}${authSelect("evidence-payment","결제수단",["계좌이체","사업자카드","현금","개인카드 정산","외상"])}${authField("evidence-original","원본 파일","file","PDF, 이미지, XML")}${authSelect("evidence-ledger","전표 연결",["자동분개 후보 생성","기존 전표 연결","증빙만 임시저장","회계 검토 요청"])}</div><div class="timeline">${step("1","증빙 구분","종류와 매출·매입 방향 확인","입력")}${step("2","금액 검증","공급가+세액=합계 및 면세 규칙 확인","대기")}${step("3","중복 확인","승인번호·발행번호·거래처 기준 검사","대기")}${step("4","원장 연결","전표 후보 생성 또는 기존 전표 매칭","대기")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="excel-import">엑셀로 일괄등록</button><button type="submit" class="primary">검증 후 증빙등록</button></div></form>`;
+      const journalEntryForm = `<form class="auth-form" data-search-form><div class="notice"><span>차변 합계와 대변 합계가 일치하고 증빙·사업자가 연결된 전표만 승인 요청할 수 있습니다.</span><b>복식부기 전표입력</b></div><div class="credential-grid">${authSelect("journal-business","사업자",["열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}${authField("journal-date","전표일자","date","전표일")}${authSelect("journal-source","발생 원천",["직접 입력","매출자료","매입증빙","은행 입출금","급여","마감 조정"])}${authField("journal-summary","적요","text","거래 내용과 목적")}${authField("journal-evidence","연결 증빙번호","text","증빙대장 번호")}${authSelect("journal-debit-account","차변 계정",["보통예금","매입","복리후생비","지급수수료","부가세대급금","가수금"])}${authField("journal-debit-amount","차변 금액","number","0")}${authSelect("journal-credit-account","대변 계정",["매출","보통예금","미지급금","부가세예수금","가수금","대표자차입금"])}${authField("journal-credit-amount","대변 금액","number","0")}${authSelect("journal-tax-code","세금 코드",["과세매출","면세매출","과세매입","면세매입","불공제","해당 없음"])}${authSelect("journal-status","처리 상태",["임시저장","회계 검토 요청","대표 승인 요청"])}</div><div class="detail-grid">${detailCard("차변 합계","₩1,100,000")}${detailCard("대변 합계","₩1,100,000")}${detailCard("대차 균형","일치 · 저장 가능")}${detailCard("마감 통제","마감월 수정 시 잠금 해제 승인 필요")}</div><div class="drawer-actions"><button type="button" class="outline" data-close-overlay>취소</button><button type="submit" class="primary">균형 검증 후 저장</button></div></form>`;
+      const journalReverseForm = `<form class="auth-form" data-search-form><div class="notice"><span>확정 전표는 원본을 직접 덮어쓰지 않고 수정전표 또는 역분개로 이력을 보존합니다.</span><b>감사 추적 필수</b></div><div class="detail-grid">${detailCard("원전표","JV-202609-0382 · 매입/보통예금")}${detailCard("전표일자","2026-09-21")}${detailCard("원금액","차변 ₩896,000 · 대변 ₩896,000")}${detailCard("현재상태","확정 · 마감 전")}</div><div class="credential-grid">${authSelect("reverse-method","처리 방식",["역분개 후 수정전표 생성","수정전표만 생성","임시전표 내용 수정"])}${authField("reverse-date","처리일자","date","역분개일")}${authField("reverse-reason","수정·역분개 사유","text","필수 사유 입력")}${authSelect("reverse-approval","승인 경로",["회계 검토 후 대표 승인","대표 직접 승인","마감 잠금 해제 요청"])}</div><div class="timeline">${step("1","원전표 보존","원본 번호와 연결 관계 유지","완료")}${step("2","반대 분개 생성","원전표 차변·대변을 반대로 생성","대기")}${step("3","수정전표 입력","올바른 계정·금액·증빙 연결","대기")}${step("4","승인·감사로그","처리자·사유·승인자를 기록","대기")}</div><div class="drawer-actions"><button type="button" class="outline" data-close-overlay>취소</button><button type="submit" class="primary">역분개 승인 요청</button></div></form>`;
       const specs = {
         profile: ["프로필·계정", "문고비 대표 · 최고 관리자", `<div class="profile-menu"><button type="button" data-auth="auth-login">로그인 화면</button><button type="button" data-auth="auth-signup">대표자 회원가입</button><button type="button" data-auth="auth-invite">직원 회원가입</button><button type="button" data-auth="auth-onboarding">사업자 온보딩</button><button type="button" data-action="logout">로그아웃</button></div>`],
         search: ["통합 검색", "사업자·직원·거래·문서를 한 번에 찾습니다.", `<form class="auth-form" data-search-form>${authField("global-search","검색어","search","사업자, 직원명, 거래번호")}<div class="drawer-actions"><button type="submit" class="primary">검색</button></div></form>`],
+        "excel-import": [`${registration.noun} 엑셀 일괄등록`, "자동연동 실패 시 원본 파일을 검증해 안전하게 대체 등록합니다.", excelImportForm],
+        "manual-record": [`${registration.noun} 건별 직접입력`, "자동수집에서 빠진 한 건을 중복검사 후 임시 저장합니다.", manualRecordForm],
+        "tax-evidence-register": ["세무증빙 구분·등록", "현금영수증·계산서·세금계산서·카드증빙을 조회 기준과 동일하게 입력합니다.", taxEvidenceForm],
+        "journal-entry": ["전표 입력", "차변·대변, 계정과목, 증빙과 승인 상태를 한 화면에서 등록합니다.", journalEntryForm],
+        "journal-reverse": ["전표 수정·역분개", "확정 전표의 원본을 보존하면서 수정 이력과 승인 근거를 남깁니다.", journalReverseForm],
         notification: ["알림센터", "미처리 알림 5건", `<div class="list">${row("red","세","부가세 신고 D-2","누락 증빙 7건","task")}${row("amber","급","급여 승인 대기","직원 18명","approve")}${row("blue","입","미매칭 입금","3건 · 1,840,000원","match")}</div>`],
         task: ["업무 상세", "부가세 신고 자료 확인", `<div class="detail-grid">${detailCard("담당자","문고비 대표")}${detailCard("마감","2026-07-25")}${detailCard("사업자","전체 사업자")}${detailCard("진행률","94%")}</div><div class="timeline">${step("✓","매출 자료","수집 완료","완료")}${step("2","누락 증빙","7건 확인","검토")}${step("3","대표 승인","검토 후 승인","대기")}</div>`],
         approve: ["승인 상세", "7월 급여 최종 승인", `<div class="detail-grid">${detailCard("직원","18명")}${detailCard("지급 예정","₩38,420,000")}${detailCard("지급일","2026-07-29 10:00")}${detailCard("예외","야간수당 4건")}</div><div class="drawer-actions"><button type="button" class="outline" data-close-overlay>보류</button><button type="button" class="primary" data-action="confirm-state">승인 처리</button></div>`],
@@ -1631,7 +1804,7 @@
         "supplier-connect": ["매입처·발주 프로그램 설정", "쿠팡, 마켓봄, 뉴통, 발주고는 계정/API 연동을 우선하고, 미연동 거래처는 수기 증빙으로 관리합니다.", `<form class="auth-form" data-search-form><div class="notice"><span>주문 프로그램이 없는 매입처는 계정 ID/PW를 요구하지 않고, 거래명세서·영수증 사진 등록 화면으로 바로 전환합니다.</span><b>수기등록 지원</b></div><div class="credential-grid">${authSelect("supplier-service","매입처",["쿠팡","마켓봄","뉴통","발주고","직접 추가"])}${authSelect("supplier-method","연동 방식",["주문 프로그램 계정","API Key","발주서 파일 업로드","거래명세서 OCR","영수증 사진 등록"])}${authSelect("supplier-has-program","주문 프로그램 여부",["있음 · 계정 연동","있음 · 파일만 제공","없음 · 수기등록","확인 필요"])}${authSelect("supplier-branch","사용 지점",["전체 지점","성신점","미아점","정화점"])}${authField("supplier-name","매입처명","text","서울축산")}${authField("supplier-login-id","주문 프로그램 ID","text","없으면 비워둠","",false)}${authField("supplier-password","주문 프로그램 비밀번호","password","Vault에 암호화 저장","",false)}${authField("supplier-api-key","API Key·거래처 코드","password","제공되는 경우 입력","",false)}${authSelect("supplier-upload-rule","주문 프로그램 없음 처리",["거래명세서 사진/OCR 기본","영수증 사진 기본","카카오톡 주문 캡처 허용","월말 파일 일괄 등록"])}${authSelect("supplier-category","품목 분류",["식재료","소모품","포장재","기타"])}${authField("supplier-phone","담당 연락처","tel","010-0000-0000","",false)}${authSelect("supplier-approval","반영 승인",["대표 승인 후 매입/재고 반영","점장 확인 후 대표 승인","금액 기준 자동 승인","회계 검토 필요"])}</div><div class="fallback-lane"><div>${manualReceiptPanel()}</div><div class="manual-pipeline">${step("1","수기 매입처 생성","사업자·지점·거래처명만으로 임시 거래처 등록","대기")}${step("2","사진/OCR 등록","영수증·거래명세서에서 품목, 금액, 부가세 추출","검토")}${step("3","반복 템플릿 저장","자주 사는 품목과 단가를 다음 등록 기본값으로 사용","예정")}${step("4","승인 후 반영","대표 승인 시 매입자료, 재고, 세무 증빙에 동시 반영","예정")}</div></div><div class="drawer-actions"><button type="button" class="outline" data-action="receipt-upload">증빙 먼저 등록</button><button type="submit" class="primary">매입처 저장</button></div></form>`],
         "tax-connect": ["홈택스·계산서 연동 설정", "전자세금계산서, 현금영수증, 카드매입, 신고자료를 사업자별 인증값으로 수집합니다.", `<form class="auth-form" data-search-form>${credentialNotice()}<div class="credential-grid">${authSelect("tax-business","사업자",["전체 사업자","열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}${authSelect("tax-auth","인증 방식",["공동인증서","세무대리인 위임","홈택스 ID/PW","자료 파일 업로드"])}${authField("tax-login-id","홈택스 ID","text","사업자 계정")}${authField("tax-login-password","홈택스 비밀번호","password","Vault에 암호화 저장")}${authField("tax-cert","공동인증서 파일","file","인증서 선택")}${authField("tax-cert-password","인증서 비밀번호","password","인증서 암호")}${authField("tax-agent","세무대리인","text","담당 세무사")}${authSelect("tax-delegation","위임 상태",["위임 완료","위임 요청 필요","대표 직접 인증","파일 업로드만 사용"])}${authSelect("tax-scope","수집 범위",["전자세금계산서+현금영수증+카드매입","전자세금계산서만","매입 증빙만","신고서 파일"])}${authSelect("tax-cycle","수집 주기",["매일 06:00","매주 월요일","신고기간 집중","수동 실행"])}${authField("tax-alert","신고 알림일","text","마감 14일/7일/2일 전")}${authSelect("tax-permission","열람 권한",["대표+회계","대표+세무대리인","사업자별 담당자","대표 전용"])}</div><div class="detail-grid">${detailCard("부가세 신고","매출/매입 증빙 자동 묶음")}${detailCard("소득세/법인세","월 손익 보고서와 감가/인건비 연계")}${detailCard("계산서 누락","거래처별 미수취 알림")}${detailCard("인증 만료","인증서/위임 만료 전 알림")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="calendar">신고 일정 보기</button><button type="submit" class="primary">연동 테스트</button></div></form>`],
         "vat-ledger": ["부가세 매출·매입 대장", "전자세금계산서, 현금영수증, 카드매입, 수기증빙을 공급가액/세액 기준으로 대사합니다.", `<div class="detail-grid">${detailCard("매출세액","₩28,420,000 · 배달앱/POS/카드")}${detailCard("매입세액","₩16,680,000 · 계산서/카드매입")}${detailCard("불공제 후보","간이영수증 3건 · 개인카드 2건")}${detailCard("누락 증빙","7건 · 공급가 ₩2,318,000")}${detailCard("홈택스 수집","전자세금계산서+현금영수증+카드매입")}${detailCard("검토 권한","대표·회계·세무대리인")}</div><div class="timeline">${step("1","자료 수집","홈택스/카드/판매채널 자료 병합","완료")}${step("2","세금구분 대사","과세·면세·불공제 후보 분리","검토")}${step("3","누락 보완","거래처 요청 또는 수기증빙 업로드","대기")}${step("4","신고서 반영","대표 승인 후 신고서 초안 생성","예정")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="evidence-gap">누락증빙 보기</button><button type="button" class="primary" data-action="tax-return-preview">신고서 미리보기</button></div>`],
-        "withholding-ledger": ["원천세·지급명세서 상세", "근로소득, 사업소득 3.3%, 일용직 지급자료를 신고 유형별로 분리합니다.", `<div class="detail-grid">${detailCard("근로소득","직원 18명 · 지급액 ₩38,420,000")}${detailCard("사업소득 3.3%","프리랜서 3명 · 지급액 ₩4,800,000")}${detailCard("일용근로","헬프 2명 · 지급액 ₩760,000")}${detailCard("원천세 합계","₩2,342,400 · 시안 계산")}${detailCard("제출자료","원천세 신고서, 간이지급명세서, 지급명세서")}${detailCard("예외","주민번호/계좌 보완 2명")}</div><div class="timeline">${step("✓","급여 확정","급여관리 승인값 반영","완료")}${step("2","소득유형 분류","근로/사업/일용 구분 확인","검토")}${step("3","신고자료 생성","원천세·지급명세서 초안","대기")}${step("4","대표 승인","세무대리인 공유 전 승인","예정")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="tax-agent-approval">승인함</button><button type="button" class="primary" data-action="tax-return-preview">신고자료 미리보기</button></div>`],
+        "withholding-ledger": ["전표관리", "사업자별 전표의 조회·입력·수정·승인·역분개와 마감 잠금을 관리합니다.", `<div class="detail-grid">${detailCard("전표 범위","자동분개 382건 · 직접입력 24건")}${detailCard("처리 상태","확정 382 · 미결 6 · 승인대기 6")}${detailCard("대차 검증","불일치 0건 · 균형 검증 완료")}${detailCard("증빙 연결","연결 398 · 미연결 8")}${detailCard("마감 통제","2026년 8월 잠금 · 9월 진행")}${detailCard("감사 이력","수정 9 · 역분개 2 · 잠금해제 1")}</div><div class="timeline">${step("1","발생자료 수집","매출·매입·입출금·급여에서 전표 후보 생성","완료")}${step("2","차대변·증빙 검증","계정과목, 금액 균형, 원문 연결 확인","검토")}${step("3","회계·대표 승인","금액·마감 정책에 따라 승인","대기")}${step("4","확정·마감","확정 후 수정은 역분개로 이력 보존","예정")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="journal-reverse">수정·역분개</button><button type="button" class="primary" data-action="journal-entry">새 전표 입력</button></div>`],
         "evidence-gap": ["증빙 누락·불공제 검토", "주문 프로그램이 없는 매입처와 홈택스 미수집 증빙을 수기등록/OCR로 보완합니다.", `<div class="detail-grid">${detailCard("전자세금계산서 미수취","마켓봄 2건 · 뉴통 1건")}${detailCard("영수증 OCR 대기","현장구매 4건")}${detailCard("불공제 후보","개인카드·간이영수증 5건")}${detailCard("거래처 요청","증빙 요청 메시지 3건 발송 대기")}${detailCard("반영 위치","매입자료, 재고, 세무증빙, 원가분석")}${detailCard("승인 방식","대표 승인 후 원장 반영")}</div><div class="timeline">${step("1","증빙 업로드","사진/PDF/카카오톡 캡처 등록","진행")}${step("2","OCR 추출","품목·공급가·부가세 자동 추출","검토")}${step("3","세금구분 수정","과세·면세·불공제 선택","대기")}${step("4","원장 반영","세무대리인 공유 묶음에 포함","예정")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="receipt-upload">수기증빙 등록</button><button type="button" class="primary" data-action="confirm-state">보완 요청 발송</button></div>`],
         "tax-return-preview": ["신고서 A4 미리보기", "대표 승인 전 신고서 초안, 세액 산출 근거, 첨부 증빙 목록을 확인합니다.", `<div class="detail-grid">${detailCard("문서","부가가치세 신고서 초안")}${detailCard("대상 기간","2026년 1기")}${detailCard("과세표준","₩284,200,000")}${detailCard("매입세액","₩16,680,000")}${detailCard("예상 납부세액","₩11,740,000")}${detailCard("첨부 증빙","전자세금계산서, 현금영수증, 카드매입, 수기 OCR")}</div><div class="notice"><span>A4 신고서 프리뷰는 실제 전자신고 제출이 아니라 대표·세무대리인 검토용 시안입니다. 제출 전 세무대리인 확인 단계를 고정합니다.</span><b>제출 전 검토</b></div><div class="drawer-actions"><button type="button" class="outline" data-action="tax-payment-preview">납부서 확인</button><button type="button" class="primary" data-action="tax-agent-approval">세무대리인 승인 요청</button></div>`],
         "tax-payment-preview": ["납부서 A4 미리보기", "납부세액, 납부기한, 납부계좌, 담당 권한을 확인한 뒤 PDF/인쇄합니다.", `<div class="detail-grid">${detailCard("납부세목","부가가치세")}${detailCard("납부세액","₩11,740,000")}${detailCard("납부기한","2026-07-25")}${detailCard("납부 계좌","대표 승인 후 표시")}${detailCard("권한","대표·회계만 열람")}${detailCard("보관","문서보관함 세무/납부서")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="download">PDF 미리보기</button><button type="button" class="primary" data-action="confirm-state">납부 확인 상태로 변경</button></div>`],
@@ -1723,7 +1896,12 @@
       "supplier-connect": "매입처·발주 프로그램 설정을 여는 시안 동작입니다.",
       "tax-connect": "홈택스·계산서 연동 설정을 여는 시안 동작입니다.",
       "vat-ledger": "부가세 매출·매입 대장을 여는 시안 동작입니다.",
-      "withholding-ledger": "원천세·지급명세서 상세를 여는 시안 동작입니다.",
+      "withholding-ledger": "전표 조회·입력·수정·승인·역분개 관리 화면을 엽니다.",
+      "excel-import": "엑셀·CSV 자료의 매핑과 검증 등록 화면을 엽니다.",
+      "manual-record": "자동연동 누락 자료의 건별 입력 화면을 엽니다.",
+      "tax-evidence-register": "현금영수증·계산서·카드 등 세무증빙 등록 화면을 엽니다.",
+      "journal-entry": "차변·대변 전표 입력 화면을 엽니다.",
+      "journal-reverse": "확정 전표의 수정·역분개 화면을 엽니다.",
       "evidence-gap": "증빙 누락·불공제 검토 화면을 여는 시안 동작입니다.",
       "tax-return-preview": "신고서 A4 미리보기 화면을 여는 시안 동작입니다.",
       "tax-payment-preview": "납부서 A4 미리보기 화면을 여는 시안 동작입니다.",
@@ -1819,6 +1997,14 @@
         render(normalizeHash().slug, false, normalizeHash().detail);
         return;
       }
+      if (event.target.closest("[data-detail-reset]")) {
+        const currentRoute = normalizeHash();
+        const route = `${currentRoute.slug}/${currentRoute.detail}`;
+        sessionStorage.removeItem(recordStateKey(route));
+        render(currentRoute.slug, false, currentRoute.detail);
+        showToast(`${detailPageBlueprints[route].scope.label}와 ${detailPageBlueprints[route].status.label} 조건을 초기화했습니다.`);
+        return;
+      }
       const retryButton = event.target.closest("[data-record-retry]");
       if (retryButton && recordSection) {
         const route = recordSection.dataset.recordsRoute;
@@ -1906,7 +2092,7 @@
           showToast("선택한 상태 변경을 시안에 반영했습니다.");
           return;
         }
-        const detailActions = new Set(["profile","search","notification","report","task","approve","match","contract","review","download","business-switch","connect","calendar","primary","sales-detail","account-detail","employee-detail","business-detail","employee-docs","contract-builder","signature-progress","business-ocr","menu-detail","order-detail","approval-detail","margin-detail","audit-detail","document-vault","sales-channel-connect","bank-connect","supplier-connect","tax-connect","vat-ledger","withholding-ledger","evidence-gap","tax-return-preview","tax-payment-preview","tax-agent-approval","receipt-upload","integration-audit","integration-guide","recommended-connectors","credential-vault","pos-connect","review-connect","hr-connect","pg-connect"]);
+        const detailActions = new Set(["profile","search","notification","report","task","approve","match","contract","review","download","business-switch","connect","calendar","primary","sales-detail","account-detail","employee-detail","business-detail","employee-docs","contract-builder","signature-progress","business-ocr","menu-detail","order-detail","approval-detail","margin-detail","audit-detail","document-vault","sales-channel-connect","bank-connect","supplier-connect","tax-connect","vat-ledger","withholding-ledger","evidence-gap","tax-return-preview","tax-payment-preview","tax-agent-approval","receipt-upload","integration-audit","integration-guide","recommended-connectors","credential-vault","pos-connect","review-connect","hr-connect","pg-connect","excel-import","manual-record","tax-evidence-register","journal-entry","journal-reverse"]);
         if (detailActions.has(action)) {
           openDetail(action);
           return;
