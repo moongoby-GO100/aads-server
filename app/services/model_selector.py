@@ -1742,19 +1742,14 @@ async def _stream_pc_ollama_provider(
     except (TypeError, ValueError):
         max_tokens = 2048
 
+    # Keep OpenAI-style image blocks as Ollama ``images`` arrays. The old
+    # string conversion silently discarded screenshots before PC inference.
+    from app.api.pc_ollama_bridge import _normalize_messages
+
     clean_msgs = [m for m in messages if m.get("role") != "system"]
-    ollama_messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
-    for msg in clean_msgs:
-        role = str(msg.get("role") or "user")
-        if role not in {"system", "user", "assistant", "tool"}:
-            role = "user"
-        content = _convert_content_for_openai(msg.get("content", ""))
-        if not isinstance(content, str):
-            content = json.dumps(content, ensure_ascii=False)
-        if role == "tool":
-            role = "user"
-            content = f"[tool_result]\n{content}"
-        ollama_messages.append({"role": role, "content": content})
+    ollama_messages = _normalize_messages(
+        [{"role": "system", "content": system_prompt}, *clean_msgs]
+    )
 
     result = await pc_agent_manager.execute_routed_command(
         command_type="ollama_chat",

@@ -7,7 +7,7 @@
 """
 import asyncio
 
-from app.api.pc_ollama_bridge import _PEER_HOP_KEY, _forward_to_peer
+from app.api.pc_ollama_bridge import _PEER_HOP_KEY, _forward_to_peer, _normalize_messages
 
 
 def test_forward_to_peer_skips_when_already_hopped():
@@ -19,3 +19,38 @@ def test_forward_to_peer_skips_unrelated_failures():
     payload = {"model": "pc-qwen38-27b"}
     detail = "PC Ollama generation cancelled (done=false, model=x)"
     assert asyncio.run(_forward_to_peer(payload, detail)) is None
+
+
+def test_normalize_messages_preserves_vision_images():
+    messages = _normalize_messages([
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "화면을 검수하세요"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,aGVsbG8="},
+                },
+            ],
+        }
+    ])
+
+    assert messages == [{
+        "role": "user",
+        "content": "화면을 검수하세요",
+        "images": ["aGVsbG8="],
+    }]
+
+
+def test_normalize_messages_does_not_fetch_remote_images():
+    messages = _normalize_messages([
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "check"},
+                {"type": "image_url", "image_url": "https://example.com/a.png"},
+            ],
+        }
+    ])
+
+    assert messages == [{"role": "user", "content": "check"}]

@@ -116,38 +116,74 @@ def _check_auth(authorization: str | None) -> None:
         raise HTTPException(status_code=401, detail="invalid PC Ollama bridge token")
 
 
-def _string_content(content: Any) -> str:
+def _ollama_image(value: Any) -> str | None:
+    """Return an Ollama-compatible base64 image without fetching remote URLs."""
+    if isinstance(value, dict):
+        value = value.get("url") or value.get("data") or value.get("image_data")
+    if not isinstance(value, str):
+        return None
+    image = value.strip()
+    if not image:
+        return None
+    if image.startswith("data:image/") and ";base64," in image:
+        return image.split(";base64,", 1)[1]
+    # Raw base64 is accepted for PC Agent/Ollama callers. HTTP URLs and
+    # server-local paths are intentionally not dereferenced by the bridge.
+    if "://" in image or image.startswith(("/", "\\")):
+        return None
+    return image
+
+
+def _content_parts(content: Any) -> tuple[str, list[str]]:
+    images: list[str] = []
     if isinstance(content, str):
-        return content
+        return content, images
     if isinstance(content, list):
         parts: list[str] = []
         for item in content:
             if isinstance(item, dict):
                 if item.get("type") in {"text", "input_text"}:
                     parts.append(str(item.get("text") or ""))
+                elif item.get("type") in {"image_url", "input_image", "image"}:
+                    image = _ollama_image(
+                        item.get("image_url") or item.get("image_data") or item.get("data")
+                    )
+                    if image:
+                        images.append(image)
                 elif "text" in item:
                     parts.append(str(item.get("text") or ""))
             else:
                 parts.append(str(item))
-        return "\n".join(part for part in parts if part)
-    return json.dumps(content, ensure_ascii=False) if content is not None else ""
+        return "\n".join(part for part in parts if part), images
+    return (json.dumps(content, ensure_ascii=False) if content is not None else ""), images
 
 
-def _normalize_messages(messages: Any) -> list[dict[str, str]]:
+def _string_content(content: Any) -> str:
+    return _content_parts(content)[0]
+
+
+def _normalize_messages(messages: Any) -> list[dict[str, Any]]:
     if not isinstance(messages, list):
         raise HTTPException(status_code=400, detail="messages must be a list")
-    normalized: list[dict[str, str]] = []
+    normalized: list[dict[str, Any]] = []
     for msg in messages:
         if not isinstance(msg, dict):
             continue
         role = str(msg.get("role") or "user").strip()
         if role not in {"system", "user", "assistant", "tool"}:
             role = "user"
-        content = _string_content(msg.get("content"))
+        content, images = _content_parts(msg.get("content"))
+        for raw_image in msg.get("images") or []:
+            image = _ollama_image(raw_image)
+            if image:
+                images.append(image)
         if role == "tool":
             role = "user"
             content = f"[tool_result]\n{content}"
-        normalized.append({"role": role, "content": content})
+        normalized_msg: dict[str, Any] = {"role": role, "content": content}
+        if images:
+            normalized_msg["images"] = images[:4]
+        normalized.append(normalized_msg)
     return normalized
 
 
