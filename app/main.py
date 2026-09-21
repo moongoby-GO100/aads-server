@@ -903,25 +903,12 @@ async def lifespan(app: FastAPI):
                         ) ph ON TRUE
                         WHERE (
                           te.status IN ('running', 'retrying')
-                          AND (
-                            (
-                              COALESCE(te.last_event_id, '') = ''
-                              AND te.started_at < NOW() - INTERVAL '20 minutes'
-                              AND te.updated_at < NOW() - INTERVAL '10 minutes'
-                            )
-                            OR (
-                              COALESCE(te.last_event_id, '') <> ''
-                              AND te.started_at < NOW() - INTERVAL '45 minutes'
-                              AND te.updated_at < NOW() - INTERVAL '20 minutes'
-                            )
-                            OR (
-                              te.started_at < NOW() - INTERVAL '30 minutes'
-                              AND COALESCE(te.actual_model, '') = ''
-                            )
-                            OR (
-                              te.started_at < NOW() - INTERVAL '90 minutes'
-                            )
-                          )
+                          AND COALESCE(te.heartbeat_at, te.updated_at, te.started_at) < NOW() - INTERVAL '90 seconds'
+                          AND te.started_at < NOW() - INTERVAL '2 minutes'
+                        )
+                        OR (
+                          te.status IN ('running', 'retrying')
+                          AND te.started_at < NOW() - INTERVAL '6 hours'
                         )
                         OR (
                           te.status = 'interrupted'
@@ -1036,25 +1023,12 @@ async def lifespan(app: FastAPI):
                               AND (
                                 (
                                   status IN ('running', 'retrying')
-                                  AND (
-                                    (
-                                      COALESCE(last_event_id, '') = ''
-                                      AND started_at < NOW() - INTERVAL '20 minutes'
-                                      AND updated_at < NOW() - INTERVAL '10 minutes'
-                                    )
-                                    OR (
-                                      COALESCE(last_event_id, '') <> ''
-                                      AND started_at < NOW() - INTERVAL '45 minutes'
-                                      AND updated_at < NOW() - INTERVAL '20 minutes'
-                                    )
-                                    OR (
-                                      started_at < NOW() - INTERVAL '30 minutes'
-                                      AND COALESCE(actual_model, '') = ''
-                                    )
-                                    OR (
-                                      started_at < NOW() - INTERVAL '90 minutes'
-                                    )
-                                  )
+                                  AND COALESCE(heartbeat_at, updated_at, started_at) < NOW() - INTERVAL '90 seconds'
+                                  AND started_at < NOW() - INTERVAL '2 minutes'
+                                )
+                                OR (
+                                  status IN ('running', 'retrying')
+                                  AND started_at < NOW() - INTERVAL '6 hours'
                                 )
                                 OR (
                                   status = 'interrupted'

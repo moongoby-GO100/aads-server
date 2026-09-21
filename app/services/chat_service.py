@@ -323,7 +323,12 @@ _MODEL_TIMEOUT_OVERRIDES = {
 
 _INTERRUPT_REASON_CATEGORIES = {
     "relay_503": ("codex_relay_busy", "relay_semaphore_timeout"),
-    "watchdog_timeout": ("stale_execution", "active_stream_hard_timeout"),
+    "relay_4xx": ("codex relay 400", "messages_text required"),
+    "watchdog_timeout": (
+        "stale_execution",
+        "active_stream_hard_timeout",
+        "stale_retrying_cleanup_after",
+    ),
     "user_action": ("stopped by user",),
     "superseded": ("superseded", "newer"),
     "auto_recovery": ("recovery_auto_retry", "auto-settled"),
@@ -352,7 +357,6 @@ _INTERRUPT_REASON_CATEGORIES = {
     "resume_exhausted": (
         "resume_attempt_fence_or_limit_rejected",
         "resume_retry_limit_exhausted",
-        "resume_retry_limit_exhausted",
         "execution_resume_attempt_limit_exceeded",
         "stale_retrying_hard_cap",
     ),
@@ -365,11 +369,17 @@ _INTERRUPT_REASON_CATEGORIES = {
         "complete message body",
         "remote protocol error",
         "server disconnected",
+        "illegal chunk header",
     ),
     "llm_provider_error": (
         "all llm providers failed",
         "litellm",
+        "codex_empty_result",
+        "session limit",
+        "본인 계정 키가 등록",
     ),
+    "progress_only": ("progress_only_no_retry",),
+    "resume_error": ("resume_single_stream_error:",),
 }
 
 
@@ -6546,12 +6556,16 @@ async def with_background_completion(
                 if not _queued and not _client_gone:
                     return
 
-                # 클라이언트 연결 중 중간 저장: 실 이벤트는 5초마다, heartbeat은 25초마다 (blue-green stale 판정 방지)
+                # D-1 partial flush: 3초마다 또는 500자 증가 시 즉시 저장 (heartbeat은 25초)
                 if not _client_gone:
                     _now_rt = _bg_time.monotonic()
-                    _save_interval = 5 if _event_type not in ("heartbeat", None, "") else 25
-                    if _now_rt - state["last_save"] > _save_interval:
+                    _save_interval = 3 if _event_type not in ("heartbeat", None, "") else 25
+                    _content_grew = (
+                        len(state.get("content", "")) - state.get("_d1_last_saved_len", 0) >= 500
+                    )
+                    if _content_grew or _now_rt - state["last_save"] > _save_interval:
                         state["last_save"] = _now_rt
+                        state["_d1_last_saved_len"] = len(state.get("content", ""))
                         await _interim_save_streaming(session_id, state)
                         if state.get("_terminal_execution_closed"):
                             return
