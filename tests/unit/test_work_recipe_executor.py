@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.browser_bridge.service import _LocalAgentPage
 from app.services.work_recipe import executor as executor_module
 
 
@@ -289,3 +290,7 @@ async def test_long_page_containing_block_words_does_not_switch_lane(monkeypatch
     assert lanes == [False]
     assert result["route"] == "browser_agent"
     assert "lane_failover" not in result
+def test_local_agent_honors_explicit_navigation_timeout_above_default():
+    assert _LocalAgentPage._playwright_timeout_seconds(90_000, 30.0) == 90.0
+    assert _LocalAgentPage._playwright_timeout_seconds(None, 30.0) == 30.0
+    assert _LocalAgentPage._playwright_timeout_seconds(300_000, 30.0) == 120.0

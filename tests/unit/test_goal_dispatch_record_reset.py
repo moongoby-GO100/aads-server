@@ -367,7 +367,7 @@ def test_restart_owner_traces_every_milestone_it_clears(monkeypatch) -> None:
 def test_a_rejected_review_traces_the_reset(monkeypatch) -> None:
     """반려는 기록을 지우고 다시 지시하게 한다 — 그 사실이 남아야 한다."""
     from app.core import db_pool
-    from app.services import milestone_review
+    from app.services import goal_manager, milestone_review
 
     log = _Log()
     monkeypatch.setattr(goal_dispatch, "logger", log)
@@ -384,6 +384,16 @@ def test_a_rejected_review_traces_the_reset(monkeypatch) -> None:
     monkeypatch.setattr(
         db_pool, "get_pool", lambda: _Pool(_ReviewConn([], None)),
     )
+    recomputed = []
+
+    async def _recompute(goal_id: str) -> None:
+        recomputed.append(goal_id)
+
+    monkeypatch.setattr(
+        goal_manager.goal_state_machine,
+        "_update_goal_progress",
+        _recompute,
+    )
 
     out = asyncio.run(
         milestone_review.confirm("05fdc2bb", ok=False, reason="근거가 없다")
@@ -395,3 +405,4 @@ def test_a_rejected_review_traces_the_reset(monkeypatch) -> None:
     assert got[0]["milestone"] == "05fdc2bb"
     assert got[0]["prev_dispatch_count"] == 1
     assert got[0]["called_from"].startswith("milestone_review.py:")
+    assert recomputed == ["36da9794"]

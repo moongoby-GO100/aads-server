@@ -323,7 +323,12 @@ class _LocalAgentPage:
             return default_seconds
         if timeout_ms <= 0:
             return default_seconds
-        return max(1.0, min(default_seconds, timeout_ms / 1000.0))
+        # ``default_seconds`` is the fallback, not a hard ceiling.  Capping an
+        # explicit recipe timeout at the default made slow but successful PC
+        # navigations (Coupang is a real example) fail three times at 30s even
+        # though the page finished loading shortly afterwards.  Honour the
+        # caller up to a bounded two-minute ceiling.
+        return max(1.0, min(120.0, timeout_ms / 1000.0))
 
     async def goto(self, url: str, **kwargs: Any) -> None:
         command_timeout_seconds = self._playwright_timeout_seconds(

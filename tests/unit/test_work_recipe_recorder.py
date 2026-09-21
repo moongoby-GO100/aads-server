@@ -35,6 +35,23 @@ async def test_recorder_replaces_credentials_before_saving(monkeypatch):
     assert saved["tenant_id"] == "tenant-1"
 
 
+def test_recorder_preserves_explicit_read_only_navigation_risk():
+    recording = recorder_module.start_recording(
+        "public_search", "https://www.example.com/search", "tenant-1"
+    )
+
+    step = recording.record_step(
+        {
+            "action": "navigate",
+            "url": "https://www.example.com/search?q=vacuum",
+            "risk": "READ",
+        }
+    )
+
+    assert step is not None
+    assert step.risk == "READ"
+
+
 async def test_orchestrator_returns_none_without_candidate(monkeypatch):
     async def no_recipes(**kwargs):
         return []

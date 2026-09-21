@@ -63,7 +63,17 @@ class WorkRecipeRecorder:
                     )
                 )
             raw["risk"] = self._login_risk()
-        elif not self.steps and raw.get("action") == "navigate":
+        elif (
+            not self.steps
+            and raw.get("action") == "navigate"
+            and not str(raw.get("risk") or "").strip()
+        ):
+            # An unspecified first navigation may lead into an authentication
+            # flow, so keep the conservative external-write default.  A caller
+            # that just verified a public, read-only GET may explicitly record
+            # ``risk=READ``; overwriting that declaration made harmless search
+            # recipes require an approval that could not be resumed by the
+            # chat entry point.
             raw["risk"] = self._login_risk()
         step = RecipeStep.from_dict(raw, seq=len(self.steps) + 1)
         self.steps.append(step)

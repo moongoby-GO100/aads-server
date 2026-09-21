@@ -174,6 +174,14 @@ async def confirm(
         "milestone_confirmed", milestone=milestone_id[:8],
         result=new, by=confirmer,
     )
+    # ``confirm`` is also called directly from the CEO panel.  Previously that
+    # path only changed the milestone row, leaving the parent goal at its old
+    # progress/status (for example 17/17 milestones completed while the goal
+    # still showed ``blocked / 94%``).  Recompute from the milestone source of
+    # truth after the review transaction has committed.
+    from app.services.goal_manager import goal_state_machine
+
+    await goal_state_machine._update_goal_progress(row["goal_id"])
     return {"status": new, "milestone": row["title"], "goal_id": row["goal_id"]}
 
 
