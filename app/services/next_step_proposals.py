@@ -424,22 +424,73 @@ async def propose(
                     step["title"][:40], str(exc)[:160],
                 )
 
+    # ── auto 를 실제로 실행시킨다 (2026-09-21) ──────────────────────────────
+    #
+    # 대표님이 "자동 항목이 왜 자동으로 안 되냐" 를 두 번 물으셨다. 답은
+    # "아무도 실행해 주지 않아서" 였고, 1차 조치로 반환 note 만 고쳤다.
+    # 문구는 에이전트가 읽고 지켜야 하는 것이라 또 안 지켜졌다. 그래서
+    # cards 가 쓰는 재주입 경로를 auto 에도 그대로 태운다.
+    #
+    # trigger_ai_reaction 은 현재 턴이 살아 있으면(_session_has_live_execution)
+    # 스스로 deferred 큐에 넣고 턴이 끝난 뒤 소비한다. 따라서 여기서 불러도
+    # 지금 만들고 있는 응답을 방해하지 않는다 — 턴이 끝나면 에이전트가 다시
+    # 불려서 이 항목들을 수행한다.
+    #
+    # 같은 항목이 계속 재발화하면 무한 루프가 되므로 work_key 로 TTL 중복막이를
+    # 둔다. agent_permission_requests 에 행을 넣는 방식은 쓰지 않는다 —
+    # decision='approved' 행이 _covered_by_existing_grant 에 잡혀 의도치 않게
+    # 다른 도구 승인까지 넓힐 수 있다.
+    auto_fired = 0
+    if auto:
+        import time as _t
+        fired = globals().setdefault("_AUTO_FIRED", {})
+        now_ts = _t.time()
+        for k, v in list(fired.items()):
+            if now_ts - v > 900:
+                fired.pop(k, None)
+        fresh = []
+        for item in auto:
+            wkey = _work_key(session_id, item["title"])
+            if wkey in fired:
+                continue
+            fired[wkey] = now_ts
+            fresh.append(item)
+        if fresh:
+            listing = "\n".join(f"{i+1}. {x['title']}" for i, x in enumerate(fresh))
+            prompt = (
+                "[시스템] 승인 없이 진행하기로 한 다음 단계입니다. 지금 수행하세요.\n\n"
+                f"{listing}\n\n"
+                "각 항목을 실제로 실행하고 결과를 보고하세요. 적힌 범위만 하고, "
+                "이미 끝낸 항목은 다시 하지 마세요.\n"
+                "**같은 항목을 propose_next_steps 로 다시 올리지 마세요** — 중복 실행이 됩니다."
+            )
+            try:
+                from app.services.chat_service import trigger_ai_reaction
+                await trigger_ai_reaction(session_id, prompt)
+                auto_fired = len(fresh)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "next_step_auto_trigger_failed session=%s error=%s",
+                    session_id[:8], str(exc)[:160],
+                )
+
     logger.info(
-        "next_step_proposed session=%s cards=%s auto=%s skipped=%s",
-        session_id[:8], len(cards), len(auto), skipped,
+        "next_step_proposed session=%s cards=%s auto=%s auto_fired=%s skipped=%s",
+        session_id[:8], len(cards), len(auto), auto_fired, skipped,
     )
     return {
         "proposed": len(cards) + len(auto),
         "cards": cards,
         "auto": auto,
         "skipped": skipped,
+        "auto_fired": auto_fired,
         "note": (
-            "cards 는 대표님이 누르면 승인 프롬프트가 세션에 재주입되어 "
-            "그때 수행하면 됩니다. "
-            "auto 는 '승인을 물을 필요가 없다'는 뜻일 뿐, "
-            "시스템이 대신 실행해 주지 않는다 — DB 행도 재주입 트리거도 없다. "
-            "auto 항목은 이번 턴 안에 직접 실행하고 결과까지 보고하라. "
-            "실행하지 않은 채 '자동 진행하겠습니다' 로 턴을 끝내면 그 항목은 "
-            "그대로 사라진다."
+            "cards 는 대표님이 누르면 승인 프롬프트가 세션에 재주입된다. "
+            "auto 는 승인을 물을 필요가 없는 것이고, auto_fired 만큼은 "
+            "이 턴이 끝난 직후 시스템이 자동으로 재주입해 수행시킨다 "
+            "(trigger_ai_reaction deferred 큐). "
+            "그러니 auto 항목을 이번 턴에 이미 끝냈다면 다음 트리거에서 "
+            "'완료됨' 으로 답하고 다시 하지 마라. 아직 안 했다면 그때 하면 된다. "
+            "auto_fired 가 0 이면 같은 항목이 최근 15분 안에 이미 발화된 것이다."
         ),
     }
