@@ -121,6 +121,23 @@ async def get_registration(registration_id: Any, *, tenant_id: Any) -> dict[str,
     return _row(row) if row else None
 
 
+async def list_registrations(
+    *, tenant_id: Any, status: str = "pending"
+) -> list[dict[str, Any]]:
+    """List registration requests visible to one tenant, newest request first."""
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT * FROM work_recipe_registration_requests
+             WHERE tenant_id=$1 AND status=$2
+             ORDER BY requested_at DESC, id DESC
+            """,
+            _tenant_uuid(tenant_id),
+            str(status or "pending").strip().lower(),
+        )
+    return [_row(row) for row in rows]
+
+
 async def decide_registration(
     registration_id: Any,
     *,

@@ -24,6 +24,7 @@ from app.services.work_recipe.registration import (
     RegistrationError,
     decide_registration,
     get_registration,
+    list_registrations,
 )
 
 router = APIRouter(prefix="/ohvis/recipes", tags=["ohvis-recipes"])
@@ -66,7 +67,10 @@ class RecordingFinishIn(BaseModel):
 
 
 class RegistrationDecisionIn(BaseModel):
-    decision: str = Field(min_length=1, max_length=20, description="approve | reject")
+    # `status` is the dashboard/API contract; `decision` remains accepted for
+    # recorder clients that shipped before the approval screen.
+    status: str = Field(default="", max_length=20, description="approved | rejected")
+    decision: str = Field(default="", max_length=20, description="approve | reject (legacy)")
     reason: str = Field(default="", max_length=1000)
 
 
@@ -143,6 +147,21 @@ async def finish_recording(
     return {"status": "approval_required", "registration": result}
 
 
+@router.get("/registrations")
+async def list_registration_requests(
+    status: str = "pending",
+    context: TenantContext = Depends(require_console_admin),
+) -> dict[str, Any]:
+    """Return registration requests for the current tenant only."""
+    normalized_status = status.strip().lower()
+    if normalized_status not in {"pending", "approved", "rejected"}:
+        raise HTTPException(status_code=422, detail="invalid_registration_status")
+    rows = await list_registrations(
+        tenant_id=_tenant_id(context), status=normalized_status
+    )
+    return {"registrations": rows}
+
+
 @router.get("/registrations/{registration_id}")
 async def get_registration_status(
     registration_id: str,
@@ -160,11 +179,13 @@ async def decide_registration_request(
     body: RegistrationDecisionIn,
     context: TenantContext = Depends(require_console_admin),
 ) -> dict[str, Any]:
+    decision = (body.status or body.decision).strip().lower()
+    decision = {"approved": "approve", "rejected": "reject"}.get(decision, decision)
     try:
         result = await decide_registration(
             registration_id,
             tenant_id=_tenant_id(context),
-            decision=body.decision,
+            decision=decision,
             decided_by=_decided_by(context),
             reason=body.reason,
         )

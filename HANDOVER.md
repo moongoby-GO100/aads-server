@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-09-22 KST — 오비스 스마트브라우저 레시피 등록 목록 API
+
+- `GET /api/v1/ohvis/recipes/registrations?status=pending`를 추가했다. 현재 관리자 테넌트 범위만 조회하며 `requested_at DESC, id DESC`로 반환한다. 허용 상태는 `pending`, `approved`, `rejected`이고 기본값은 `pending`이다. 결정 API는 화면 계약의 `status: approved|rejected`를 받고 기존 `decision: approve|reject` 호출도 호환한다.
+- `list_registrations()`는 기존 등록 단건 조회·결정 함수와 같은 `work_recipe_registration_requests`를 사용한다. 녹화·단건 조회·결정 경로는 변경하거나 삭제하지 않았다.
+- `tests/unit/test_work_recipe_registration.py`에 테넌트 및 pending SQL 조건과 정렬을 검증하는 단위 테스트를, `tests/unit/test_work_recipe_recorder.py`에 실제 라우트 mount 및 목록 응답 계약 테스트를 추가했다.
+- 대시보드 구현 대상은 `/root/aads/aads-dashboard`이나 이 작업의 파일시스템 권한은 aads-server 작업공간으로 제한되어 해당 경로의 프론트 수정은 차단됐다. API 클라이언트·승인 화면·내비게이션 반영은 대시보드 작업공간에서 후속 수행해야 한다.
+- 검증 명령은 사용자 규칙에 따라 실행하지 않았다. 승인 후 Runner 빌드 검증 대상.
+
 ## 2026-09-19 18:35 KST — 목표 문서 최신 연결·버전 원장
 
 - `goal_documents`에 논리 문서 키, semantic version, 최신 포인터, 변경요약, 직전 버전 연결과 상태를 추가했다. `/vX.Y.Z/<파일>` 기존 문서는 파일명별 계보로 안전하게 백필하며 원본 경로는 보존한다.

@@ -137,6 +137,7 @@ def test_ohvis_recipes_router_is_mounted():
     assert ("GET", "/api/v1/ohvis/recipes/recording/{recording_id}") in paths
     assert ("POST", "/api/v1/ohvis/recipes/recording/{recording_id}/steps") in paths
     assert ("POST", "/api/v1/ohvis/recipes/recording/{recording_id}/finish") in paths
+    assert ("GET", "/api/v1/ohvis/recipes/registrations") in paths
     assert ("GET", "/api/v1/ohvis/recipes/registrations/{registration_id}") in paths
     assert ("POST", "/api/v1/ohvis/recipes/registrations/{registration_id}/decision") in paths
 
@@ -228,3 +229,64 @@ async def test_ohvis_recipes_full_recording_cycle(monkeypatch):
     # 종료된 recording_id 는 재사용할 수 없다
     stale = client.get(f"/ohvis/recipes/recording/{recording_id}")
     assert stale.status_code == 404
+
+
+async def test_ohvis_recipes_lists_pending_registrations_for_current_tenant(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import ohvis_console, ohvis_recipes
+
+    async def list_registrations(**kwargs):
+        assert kwargs == {
+            "tenant_id": _admin_ctx()["tenant"]["id"],
+            "status": "pending",
+        }
+        return [
+            {
+                "id": "registration-1",
+                "tenant_id": _admin_ctx()["tenant"]["id"],
+                "name": "example_login",
+                "domain": "example.com",
+                "spec": {"steps": [{"action": "navigate"}]},
+                "status": "pending",
+                "requested_at": "2026-09-22T00:00:00+00:00",
+            }
+        ]
+
+    monkeypatch.setattr(ohvis_recipes, "list_registrations", list_registrations)
+    app = FastAPI()
+    app.include_router(ohvis_recipes.router)
+    app.dependency_overrides[ohvis_console.require_viewer] = lambda: _admin_ctx()
+
+    response = TestClient(app).get("/ohvis/recipes/registrations")
+
+    assert response.status_code == 200
+    assert response.json()["registrations"][0]["id"] == "registration-1"
+    assert response.json()["registrations"][0]["status"] == "pending"
+
+
+async def test_ohvis_recipes_accepts_status_decision_contract(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import ohvis_console, ohvis_recipes
+
+    async def decide_registration(registration_id, **kwargs):
+        assert registration_id == "registration-1"
+        assert kwargs["decision"] == "approve"
+        assert kwargs["reason"] == "검토 완료"
+        return {"id": registration_id, "status": "approved"}
+
+    monkeypatch.setattr(ohvis_recipes, "decide_registration", decide_registration)
+    app = FastAPI()
+    app.include_router(ohvis_recipes.router)
+    app.dependency_overrides[ohvis_console.require_viewer] = lambda: _admin_ctx()
+
+    response = TestClient(app).post(
+        "/ohvis/recipes/registrations/registration-1/decision",
+        json={"status": "approved", "reason": "검토 완료"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "approved"
