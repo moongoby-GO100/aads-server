@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>배포가 실패하면 무슨 일이 일어나는가 — 블루/그린 18단계와 롤백 · 2026-09-21</title>
+<style>
+:root{
+  --ink:#16191d; --ink2:#454c55; --ink3:#6b7480;
+  --line:#e2e6ea; --bg:#ffffff; --bg2:#f6f8fa; --bg3:#eef2f6;
+  --good:#1a7f45; --goodbg:#e7f5ec;
+  --bad:#b3261e; --badbg:#fdecea;
+  --warn:#8a5a00; --warnbg:#fff4e0;
+  --acc:#1b5fbe; --accbg:#e8f0fc;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg2);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  line-height:1.72;font-size:15.5px;-webkit-text-size-adjust:100%}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px 90px}
+header{background:linear-gradient(135deg,#12301a,#1f5c33);color:#fff;padding:44px 20px 38px;margin-bottom:26px}
+header .inner{max-width:1080px;margin:0 auto}
+header h1{margin:0 0 10px;font-size:29px;letter-spacing:-.5px;line-height:1.35}
+header p{margin:0;color:#c3e6ce;font-size:14.5px}
+.badges{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
+.badge{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);
+  border-radius:999px;padding:4px 12px;font-size:12.5px;color:#e4f6ea}
+section{background:var(--bg);border:1px solid var(--line);border-radius:12px;
+  padding:26px 28px;margin-bottom:22px}
+h2{font-size:21px;margin:0 0 6px;letter-spacing:-.3px;padding-bottom:12px;border-bottom:2px solid var(--bg3)}
+h2 .n{color:var(--acc);font-weight:700;margin-right:8px}
+h3{font-size:17px;margin:26px 0 8px;color:var(--ink)}
+h4{font-size:15px;margin:18px 0 6px;color:var(--ink2)}
+p{margin:10px 0}
+ul,ol{margin:10px 0;padding-left:22px}
+li{margin:5px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.2px}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:var(--bg3);font-weight:600}
+tr:nth-child(even) td{background:#fbfcfd}
+code{background:var(--bg3);padding:1.5px 6px;border-radius:5px;font-size:13.2px;
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+pre{background:#131820;color:#e6edf3;padding:16px 18px;border-radius:9px;overflow-x:auto;
+  font-size:13.2px;line-height:1.6;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+pre code{background:none;color:inherit;padding:0}
+.box{border-radius:9px;padding:14px 16px;margin:14px 0;border-left:4px solid}
+.good{background:var(--goodbg);border-color:var(--good)}
+.bad{background:var(--badbg);border-color:var(--bad)}
+.warn{background:var(--warnbg);border-color:var(--warn)}
+.acc{background:var(--accbg);border-color:var(--acc)}
+.box b{display:block;margin-bottom:4px}
+.toc{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin-bottom:22px}
+.toc ol{columns:2;column-gap:34px;margin:8px 0 0}
+.toc a{color:var(--acc);text-decoration:none}
+.toc a:hover{text-decoration:underline}
+.kpi{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}
+.kpi div{flex:1 1 150px;background:var(--bg3);border-radius:9px;padding:13px 15px}
+.kpi .v{font-size:21px;font-weight:700;color:var(--acc);display:block;line-height:1.3}
+.kpi .l{font-size:12.5px;color:var(--ink3)}
+.q{background:#fff;border:2px solid var(--acc);border-radius:10px;padding:16px 18px;margin:14px 0}
+.q .qq{font-size:17px;font-weight:700;color:var(--acc);margin-bottom:6px}
+.src{color:var(--ink3);font-size:12.5px}
+.card{border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0;background:#fcfdfe}
+.card .t{font-weight:700;margin-bottom:8px;font-size:15.5px}
+.bar{background:var(--bg3);border-radius:6px;height:16px;position:relative;overflow:hidden}
+.bar span{display:block;height:100%;background:var(--acc)}
+footer{color:var(--ink3);font-size:13px;text-align:center;padding:26px 0}
+@media(max-width:760px){.toc ol{columns:1}header h1{font-size:23px}}
+</style>
+</head>
+<body>
+<header><div class="inner">
+<h1>배포가 실패하면 무슨 일이 일어나는가<br>— 블루/그린 18단계와 롤백</h1>
+<p>2026-09-21 · 오비스(OBYS) CEO 교육자료 4호 · 대표님 질문 "왜 배포 실패사유가 아티팩트 배포탭에 안 나오지?"에 대한 답</p>
+<div class="badges">
+  <span class="badge">배포 1,113건 실측 분석</span>
+  <span class="badge">18단계 실측 지도</span>
+  <span class="badge">화면에 안 보이는 298건</span>
+  <span class="badge">오늘 오후 2시간 배포 로그 해부</span>
+  <span class="badge">원인 특정 완료</span>
+</div>
+</div></header>
+
+<div class="wrap">
+
+<div class="toc">
+<b>목차</b>
+<ol>
+  <li><a href="#c1">대표님 질문에 대한 답 — 사유는 다 있습니다</a></li>
+  <li><a href="#c2">무중단 배포란 무엇인가 — 두 칸을 번갈아 쓴다</a></li>
+  <li><a href="#c3">배포 18단계 실측 지도</a></li>
+  <li><a href="#c4">실패는 어디서 나는가 — 30일 분포</a></li>
+  <li><a href="#c5">오늘 오후 2시간, 실제 배포 기록 읽기</a></li>
+  <li><a href="#c6">상태 6종의 뜻 — 실패가 다 같은 실패가 아니다</a></li>
+  <li><a href="#c7">왜 화면에 안 보였나 — 한 줄짜리 원인</a></li>
+  <li><a href="#c8">한 장 요약 + 확인 질문 3개</a></li>
+</ol>
+</div>
+
+<section id="c1">
+<h2><span class="n">01</span>대표님 질문에 대한 답 — 사유는 다 있습니다</h2>
+
+<p>대표님이 물으셨습니다. <b>"왜 배포실패사유가 아티팩트 배포탭 리스트에 안 나오지? 내가 궁금한데"</b></p>
+
+<p>DB를 전수 조회했습니다. <b>실패 사유는 하나도 빠짐없이 저장돼 있습니다.</b></p>
+
+<table>
+<tr><th>상태</th><th>건수</th><th>사유(error_summary)가 기록된 건</th><th>화면에 표시?</th></tr>
+<tr><td>success</td><td>554</td><td>10</td><td>해당 없음</td></tr>
+<tr><td><b>failed</b></td><td>260</td><td><b>260 (100%)</b></td><td>✅ 표시됨</td></tr>
+<tr><td><b>superseded</b></td><td>143</td><td><b>143 (100%)</b></td><td>❌ <b>안 보임</b></td></tr>
+<tr><td><b>blocked</b></td><td>137</td><td><b>136 (99.3%)</b></td><td>❌ <b>안 보임</b></td></tr>
+<tr><td><b>cancelled</b></td><td>11</td><td>11 (100%)</td><td>❌ <b>안 보임</b></td></tr>
+<tr><td><b>success_partial</b></td><td>8</td><td>8 (100%)</td><td>❌ <b>안 보임</b></td></tr>
+</table>
+<p class="src">[DB 조회 · <code>deploy_runs</code> 전수 1,113건, 2026-09-21 18:30 KST]</p>
+
+<div class="box bad"><b>사유가 DB에 있는데 화면이 가리고 있는 건수 = 298건.</b>
+대표님이 "안 나온다"고 느끼신 것이 정확합니다. 저장 실패가 아니라 <b>표시 조건이 좁았던 것</b>입니다.
+원인 코드 한 줄은 7장에 있습니다.</div>
+
+<p>그런데 왜 <code>blocked</code>·<code>superseded</code>가 실패로 안 잡혔는가 — 이게 이 자료의 핵심입니다.
+그 상태들은 <b>"배포가 실패한 것"이 아니라 "배포가 시작되지 못한 것"</b>이기 때문입니다.
+대표님 입장에서는 둘 다 "안 올라갔다"로 같습니다. 그래서 화면이 둘을 다르게 다루면 안 됩니다.</p>
+</section>
+
+<section id="c2">
+<h2><span class="n">02</span>무중단 배포란 무엇인가 — 두 칸을 번갈아 쓴다</h2>
+
+<p>AADS API 서버는 <b>같은 프로그램이 두 벌</b> 떠 있습니다.</p>
+
+<table>
+<tr><th>슬롯</th><th>컨테이너</th><th>포트</th><th>지금 역할</th></tr>
+<tr><td>green</td><td><code>aads-server-green</code></td><td>8102</td><td><b>활성</b> — 대표님 요청이 여기로 감</td></tr>
+<tr><td>blue</td><td><code>aads-server</code></td><td>8100</td><td><b>대기(backup)</b> — 롤백용으로 살려 둠</td></tr>
+</table>
+<p class="src">[<code>/etc/nginx/conf.d/aads-upstream.conf</code> 실측, 2026-09-21]</p>
+
+<p>새 버전을 올릴 때 활성 슬롯을 끄지 않습니다. <b>쉬고 있는 칸에 새 버전을 올려서 건강한지 확인한 뒤,
+교통정리(nginx)만 그쪽으로 돌립니다.</b> 대표님 화면에서는 끊김이 없습니다.</p>
+
+<div class="box good"><b>여기서 가장 중요한 한 가지 —</b> 새 버전으로 넘어간 뒤에도
+<b>옛 버전을 죽이지 않습니다.</b> nginx 설정에 이렇게 주석으로 남습니다.
+<code># Active API slot: green (8102). Blue (8100) is kept as rollback backup.</code>
+문제가 생기면 <b>다시 빌드할 필요 없이 교통정리만 되돌리면</b> 즉시 복구됩니다.</div>
+
+<h3>그래서 대표님이 기억하실 것</h3>
+<ul>
+  <li>배포가 실패해도 <b>돌아가던 서비스는 그대로</b>입니다 — 새 칸에서 실패하기 때문입니다</li>
+  <li>진짜 위험한 구간은 <b>교통정리 직후(nginx_cutover ~ post_switch_health)</b> 몇 초입니다</li>
+  <li>"배포 실패 = 장애"가 아닙니다. 대부분은 <b>"새 버전이 안 올라갔다"</b>일 뿐입니다</li>
+</ul>
+</section>
+
+<section id="c3">
+<h2><span class="n">03</span>배포 18단계 실측 지도</h2>
+
+<p>말이 아니라 실제 성공 사례의 단계별 시각입니다. 오늘 16:43~16:53 배포 1건을 그대로 옮겼습니다.</p>
+
+<table>
+<tr><th>#</th><th>단계</th><th>시각</th><th>무엇을 하나</th></tr>
+<tr><td>1</td><td><code>preflight</code></td><td>16:43:41</td><td>워크트리 깨끗한가, 잠금 있나</td></tr>
+<tr><td>2</td><td><code>dependency_check</code></td><td>16:43:43</td><td>의존성 이미지 최신인가</td></tr>
+<tr><td>3</td><td><code>code_validation</code></td><td>16:44:10</td><td>구문·import·테스트</td></tr>
+<tr><td>4</td><td><code>build_candidate_image</code></td><td>16:45:11</td><td><b>새 이미지 빌드</b>(가장 오래 걸림)</td></tr>
+<tr><td>5</td><td><code>target_slot_drain</code></td><td>16:45:14</td><td>쉬는 칸에 남은 접속 정리</td></tr>
+<tr><td>6</td><td><code>start_candidate_container</code></td><td>16:45:54</td><td>새 칸 기동</td></tr>
+<tr><td>7</td><td><code>candidate_health</code></td><td>16:46:26</td><td><b>새 칸이 건강한가</b></td></tr>
+<tr><td>8</td><td><code>active_slot_drain</code></td><td>16:46:28</td><td>현재 칸 접속 정리</td></tr>
+<tr><td>9</td><td><code>nginx_cutover</code></td><td>16:46:34</td><td><b>교통정리 전환 — 여기가 분기점</b></td></tr>
+<tr><td>10</td><td><code>mounted_sidecar_reload</code></td><td>16:46:45</td><td>부속 프로세스 반영</td></tr>
+<tr><td>11</td><td><code>standby_same_digest_sync</code></td><td>16:46:49</td><td>반대 칸도 같은 버전으로</td></tr>
+<tr><td>12</td><td><code>post_switch_health</code></td><td>16:46:54</td><td>전환 후 건강검진</td></tr>
+<tr><td>13</td><td><code>db_schema_check</code></td><td>16:46:57</td><td>DB 스키마 정합</td></tr>
+<tr><td>14</td><td><code>chat_table_check</code></td><td>16:46:59</td><td>채팅 테이블 정상</td></tr>
+<tr><td>15</td><td><code>llm_health_check</code></td><td>16:47:00</td><td>모델 호출 정상</td></tr>
+<tr><td>16</td><td><code>frontend_qa</code></td><td>16:47:02</td><td>화면 점검</td></tr>
+<tr><td>17</td><td><code>p0p1_monitoring</code></td><td>16:52:17</td><td><b>5분 감시</b> — 배포 후 실제 트래픽 관찰</td></tr>
+<tr><td>18</td><td><code>standby_same_digest_sync_retry</code></td><td>16:53:34</td><td>대기 칸 동기화 재시도</td></tr>
+</table>
+<p class="src">[DB 조회 · <code>deploy_phase_events</code>, 성공 배포 1건 전 구간]</p>
+
+<div class="kpi">
+  <div><span class="v">18단계</span><span class="l">성공 1건의 전체 단계 수</span></div>
+  <div><span class="v">약 10분</span><span class="l">16:43:41 → 16:53:34</span></div>
+  <div><span class="v">5분</span><span class="l">그중 배포 후 감시(17단계)</span></div>
+  <div><span class="v">0초</span><span class="l">서비스 중단 시간(설계 목표)</span></div>
+</div>
+
+<div class="box acc"><b>17단계가 핵심입니다.</b> 배포가 끝난 뒤에도 <b>5분간 실제 트래픽을 지켜봅니다.</b>
+이 감시에서 걸리면 배포는 <code>failed</code>로 바뀝니다 — 오늘 17:56에 실제로 그랬습니다(5장).
+"올라갔다"와 "정상이다"는 다른 판정이고, 시스템이 그 둘을 나눠서 봅니다.</div>
+</section>
+
+<section id="c4">
+<h2><span class="n">04</span>실패는 어디서 나는가 — 30일 분포</h2>
+
+<p>최근 30일 <code>failed</code> 배포를 단계별로 셌습니다.</p>
+
+<table>
+<tr><th>단계</th><th>건수</th><th>분포</th><th>뜻</th></tr>
+<tr><td><code>build_candidate_image</code></td><td><b>76</b></td><td><div class="bar"><span style="width:100%"></span></div></td><td>새 이미지를 못 만듦 — 코드/디스크/의존성</td></tr>
+<tr><td><code>standby_same_digest_sync</code></td><td>48</td><td><div class="bar"><span style="width:63%"></span></div></td><td>대기 칸 동기화 실패(서비스 영향 없음)</td></tr>
+<tr><td><code>initializing</code></td><td>41</td><td><div class="bar"><span style="width:54%"></span></div></td><td>시작도 못 함 — 잠금·중복 요청</td></tr>
+<tr><td><code>code_validation</code></td><td>23</td><td><div class="bar"><span style="width:30%"></span></div></td><td>테스트·구문 검사에서 걸림</td></tr>
+<tr><td><code>p0p1_monitoring</code></td><td>16</td><td><div class="bar"><span style="width:21%"></span></div></td><td><b>올라갔는데 5분 감시에서 걸림</b></td></tr>
+<tr><td><code>build_candidate_image_stale_auto</code></td><td>13</td><td><div class="bar"><span style="width:17%"></span></div></td><td>낡은 빌드 자동 정리</td></tr>
+<tr><td><code>target_slot_drain</code></td><td>10</td><td><div class="bar"><span style="width:13%"></span></div></td><td>쉬는 칸에 접속이 안 빠짐</td></tr>
+<tr><td><code>candidate_health</code></td><td>5</td><td><div class="bar"><span style="width:7%"></span></div></td><td>새 칸이 건강검진 통과 못 함</td></tr>
+</table>
+<p class="src">[DB 조회 · <code>deploy_runs</code> status='failed', 최근 30일]</p>
+
+<div class="box good"><b>읽는 법: 위쪽 네 개는 "안 올라갔다", 아래쪽은 "올라갔는데 문제".</b>
+위쪽은 대표님 서비스에 영향이 <b>없습니다</b>(옛 버전이 계속 돌고 있음).
+아래쪽 <code>p0p1_monitoring</code>·<code>candidate_health</code> 21건만이 <b>실제 사용자 영향 가능 구간</b>입니다.
+"배포 실패 260건"이라는 숫자에 놀라실 필요가 없는 이유입니다.</div>
+</section>
+
+<section id="c5">
+<h2><span class="n">05</span>오늘 오후 2시간, 실제 배포 기록 읽기</h2>
+
+<p>오늘 16:56~17:56 사이 배포 8건이 돌았습니다. 대표님과 제가 대화하던 바로 그 시간입니다.
+이 시퀀스 하나에 이 자료의 모든 개념이 들어 있습니다.</p>
+
+<table>
+<tr><th>시각</th><th>ID</th><th>상태</th><th>단계</th><th>사유(실제 기록)</th></tr>
+<tr><td>16:56</td><td>4951</td><td>success_partial</td><td>completed</td><td>standby sync deferred: active streams</td></tr>
+<tr><td>16:58</td><td>4952</td><td>blocked</td><td>target_slot_drain</td><td>target slot green:8102 <b>active streams=2</b></td></tr>
+<tr><td>17:13</td><td>4955</td><td>superseded</td><td>autoheal_reroute</td><td><b>dirty worktree blocks release</b> → 자동 재시도</td></tr>
+<tr><td>17:13</td><td>4956</td><td>failed</td><td>build_candidate_image</td><td>unexpected error exit=1 line=2605</td></tr>
+<tr><td>17:30</td><td>4959</td><td>blocked</td><td>target_slot_drain</td><td>active streams=1 · 자동재시도 대상 아님</td></tr>
+<tr><td>17:42</td><td>4960</td><td>superseded</td><td>autoheal_reroute</td><td>dirty worktree blocks release</td></tr>
+<tr><td>17:42</td><td>4961</td><td>failed</td><td>build_candidate_image</td><td>unexpected error exit=1 line=2605</td></tr>
+<tr><td>17:56</td><td>4963</td><td>failed</td><td><b>p0p1_monitoring</b></td><td><b>OutputValidator FABRICATED_DATA_TABLE 감지</b></td></tr>
+</table>
+<p class="src">[DB 조회 · <code>deploy_runs</code> id 4951~4963]</p>
+
+<h3>이 표가 말하는 세 가지</h3>
+
+<div class="card">
+<div class="t">① "active streams" — 대표님이 채팅 중이면 배포가 막힙니다</div>
+<p>대표님과 제가 대화 중일 때 그 연결(SSE 스트림)이 살아 있습니다.
+배포는 그 칸을 비워야 하는데 연결이 남아 있으면 <code>blocked</code>가 됩니다.
+<b>이건 고장이 아니라 안전장치입니다</b> — 대표님 대화를 끊지 않으려고 배포가 양보한 것입니다.</p>
+</div>
+
+<div class="card">
+<div class="t">② "dirty worktree" — 제가 만든 원인입니다</div>
+<p>릴리스는 <b>커밋된 깨끗한 작업본</b>에서만 이미지를 만들도록 규칙이 걸려 있습니다(AGENTS.md 계약).
+제가 파일을 고쳐 두고 커밋하지 않은 상태에서 배포가 돌면 이 상태가 됩니다.
+오늘 17:13과 17:42 두 번 났고, <b>두 번 다 제 미커밋 파일이 원인</b>입니다.</p>
+</div>
+
+<div class="card">
+<div class="t">③ 17:56 — 감시가 AI의 날조를 잡았습니다</div>
+<p>배포 자체는 올라갔는데 <b>5분 감시에서 <code>FABRICATED_DATA_TABLE</code></b>이 걸렸습니다.
+"DB 조회"라고 써 놓고 실제 도구 호출 없이 표를 만든 응답을 탐지기가 잡아 배포를 실패 처리한 것입니다.
+<b>배포 게이트가 코드뿐 아니라 AI 응답 품질까지 본다</b>는 뜻이고, 2호 자료 「AI 보고 검증법」이
+사람 쪽 방어라면 이건 기계 쪽 방어입니다.</p>
+</div>
+
+<div class="box warn"><b>정직하게 말씀드립니다.</b> 이 시퀀스에서 배포를 세 번 막은 원인 중 둘(dirty worktree)은 제 작업 습관이고,
+하나(FABRICATED_DATA_TABLE)는 제 응답 품질 문제입니다. 시스템은 제 역할을 했습니다.</div>
+</section>
+
+<section id="c6">
+<h2><span class="n">06</span>상태 6종의 뜻 — 실패가 다 같은 실패가 아니다</h2>
+
+<table>
+<tr><th>상태</th><th>한 줄 뜻</th><th>서비스 영향</th><th>대표님이 하실 일</th></tr>
+<tr><td><b>success</b></td><td>18단계 전부 통과</td><td>없음</td><td>없음</td></tr>
+<tr><td><b>success_partial</b></td><td>본 배포는 됐고 <b>대기 칸 동기화만</b> 미뤄짐</td><td>없음(롤백 여력만 일시 축소)</td><td>없음 — 다음 배포에 자동 해소</td></tr>
+<tr><td><b>blocked</b></td><td><b>시작 못 함</b> — 접속·잠금이 남아 있음</td><td>없음(옛 버전 계속 동작)</td><td>없음 — 대개 자동 재시도</td></tr>
+<tr><td><b>superseded</b></td><td>같은 건이 <b>새 시도로 대체됨</b></td><td>없음</td><td>없음 — 뒤 건의 결과만 보면 됨</td></tr>
+<tr><td><b>cancelled</b></td><td>사람/시스템이 <b>중단</b></td><td>없음</td><td>중단 사유 확인</td></tr>
+<tr><td><b>failed</b></td><td>단계 도중 <b>실패</b></td><td>단계에 따라 다름(4장)</td><td>단계명을 보시면 됨</td></tr>
+</table>
+
+<div class="box acc"><b>대표님이 쓰실 판정 공식 한 줄.</b><br>
+<b>단계명이 <code>nginx_cutover</code> 앞이면 → 서비스 영향 없음.</b><br>
+<b>뒤면 → 실제 영향 가능. 이때만 "롤백했나"를 물으십시오.</b></div>
+</section>
+
+<section id="c7">
+<h2><span class="n">07</span>왜 화면에 안 보였나 — 한 줄짜리 원인</h2>
+
+<p>API는 <b>모든 상태의 사유를 그대로 내려보냅니다.</b></p>
+<pre><code>-- app/api/project_docs.py:1835
+SELECT id, project, left(release_sha,12) AS sha, status, phase,
+       COALESCE(error_summary, '') AS error   -- ← 상태 조건 없음. 전부 내려감
+FROM deploy_runs ...</code></pre>
+
+<p>막고 있는 곳은 화면입니다.</p>
+<pre><code>// aads-dashboard/src/app/chat/ChatArtifactPanel.tsx:890
+{item.error_summary && ["failed","error"].includes((itemStatus||"").toLowerCase()) && (
+   ⚠️ {item.error_summary}
+)}</code></pre>
+<p class="src">[코드 실측, 2026-09-21 18:31 KST]</p>
+
+<div class="box bad"><b>표시 조건이 <code>failed</code>·<code>error</code> 두 가지뿐입니다.</b>
+그래서 <code>blocked</code>(136) · <code>superseded</code>(143) · <code>cancelled</code>(11) ·
+<code>success_partial</code>(8) — <b>합계 298건</b>의 사유가 DB에 있으면서 화면에서 사라집니다.
+대표님이 오늘 오후에 보신 <code>blocked</code>·<code>superseded</code> 4건이 정확히 이 경우입니다.</div>
+
+<h3>수정안 — 화이트리스트를 넓히는 한 줄</h3>
+<pre><code>// 현재
+["failed","error"].includes(status)
+
+// 수정안
+["failed","error","blocked","superseded","cancelled","success_partial"].includes(status)
+// 또는 더 단순하게: error_summary 가 있으면 무조건 표시하고,
+// 상태에 따라 색만 다르게(빨강=failed / 노랑=blocked·superseded / 회색=partial)</code></pre>
+
+<div class="box warn"><b>다만 이건 대시보드 변경이라 빌드·블루그린 배포가 따라옵니다.</b>
+정적 문서와 달리 되돌리는 비용이 있어, 대표님 승인 후 진행하겠습니다.
+승인하시면 <code>aads-dashboard/deploy.sh</code>로 무중단 배포하고, 문제 시 이전 슬롯으로 즉시 롤백합니다.</div>
+</section>
+
+<section id="c8">
+<h2><span class="n">08</span>한 장 요약 + 확인 질문 3개</h2>
+
+<h3>한 장 요약</h3>
+<table>
+<tr><th>#</th><th>기억하실 것</th></tr>
+<tr><td>1</td><td>서버는 두 칸(green:8102 활성 / blue:8100 대기). <b>옛 칸을 죽이지 않아</b> 롤백이 즉시 가능</td></tr>
+<tr><td>2</td><td>배포는 <b>18단계</b>, 약 10분. 그중 마지막 5분은 <b>실제 트래픽 감시</b></td></tr>
+<tr><td>3</td><td><code>nginx_cutover</code> <b>앞</b>에서 실패 = 서비스 영향 없음 / <b>뒤</b> = 영향 가능</td></tr>
+<tr><td>4</td><td>30일 실패 260건 중 <b>사용자 영향 가능 구간은 21건</b>(p0p1 16 + candidate_health 5)</td></tr>
+<tr><td>5</td><td><code>blocked</code>는 고장이 아니라 <b>대표님 대화를 끊지 않으려는 양보</b></td></tr>
+<tr><td>6</td><td><code>dirty worktree</code>는 <b>AI가 커밋 안 한 파일</b>을 남긴 것 — 제 책임</td></tr>
+<tr><td>7</td><td>사유는 <b>100% 저장돼 있고</b>, 화면 조건이 좁아 <b>298건이 가려져</b> 있음</td></tr>
+</table>
+
+<h3>확인 질문 3개</h3>
+
+<div class="q"><div class="qq">Q1. "배포 실패했습니다"라는 보고를 받으셨습니다. 첫 질문은?</div>
+<p><b>A.</b> <b>"어느 단계에서?"</b> 입니다. <code>build_candidate_image</code>면 서비스는 멀쩡하고 새 버전만 안 올라간 것이고,
+<code>p0p1_monitoring</code>이면 이미 올라간 버전에 문제가 있는 것입니다. 대응이 정반대입니다.</p></div>
+
+<div class="q"><div class="qq">Q2. 배포탭에 상태만 있고 사유가 비어 있습니다. 무엇을 의심하시겠습니까?</div>
+<p><b>A.</b> "기록이 없다"가 아니라 <b>"화면이 가리고 있다"</b>를 먼저 의심하십시오.
+실측상 사유 저장률은 failed 100%, blocked 99.3%, superseded 100%입니다.
+확인 한마디: <b>"DB의 error_summary 그대로 보여 달라"</b>.</p></div>
+
+<div class="q"><div class="qq">Q3. 배포가 계속 <code>blocked</code>로 밀립니다. 무엇을 바꿔야 합니까?</div>
+<p><b>A.</b> <b>배포 시각</b>입니다. 대표님이 채팅 중이면 스트림이 살아 있어 슬롯이 안 비워집니다.
+급하지 않은 배포는 대화가 끊긴 시점에 잡는 게 맞고, 급하면 "지금 스트림 끊고 배포해"라고 명시해 주셔야 합니다.</p></div>
+
+<div class="box acc"><b>다음 자료 예고.</b> 5호는 「Pipeline Runner — 지시 한 줄이 코드가 되기까지」입니다.
+대표님이 "걔한테 시켜"라고 하실 때 실제로 무엇이 도는지, 검수는 누가 하는지를 다룹니다.</div>
+
+</section>
+
+<footer>
+오비스(OBYS) CEO 교육자료 4호 · 2026-09-21 작성 · 모든 수치는 당일 DB·코드·배포 이벤트 실측<br>
+교육자료 포털: <a href="/education/index.html">aads.newtalk.kr/education</a>
+</footer>
+
+</div>
+</body>
+</html>
