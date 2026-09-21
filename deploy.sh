@@ -419,6 +419,13 @@ build_release_image() {
             echo "[deploy.sh] ❌ immutable image tag mismatch: tag=${AADS_RELEASE_SHA} label=${existing_revision:-missing}"
             audit_control "release-image-reuse" "aads-server:${AADS_RELEASE_SHA}" "blocked" \
                 "revision_label=${existing_revision:-missing}"
+            # 사유를 전역에 올린다. 올리지 않으면 ERR 트랩이 deploy_runs 에
+            # "unexpected error exit=1 line=NNNN: return 1" 한 줄만 남기고,
+            # 자가치유는 그것을 unexpected_exit(manual) 로 분류한다.
+            # 2026-09-21 24시간 실측: build_candidate_image 실패 17건 중 13건이
+            # 이 경로로 새어나가 한 건도 자동 재개되지 않았다. 실제 사유는
+            # control audit 로그에만 있었다.
+            DEPLOY_LAST_FAIL_ERROR="immutable image tag mismatch: tag=${AADS_RELEASE_SHA} label=${existing_revision:-missing}"
             return 1
         fi
         require_release_image_within_limit
@@ -453,6 +460,7 @@ build_release_image() {
         echo "[deploy.sh] ❌ dependency image missing: ${dependency_image}" >&2
         echo "[deploy.sh]    Run 'bash deploy.sh warm-deps' before bluegreen; release builds stay one-image-per-SHA." >&2
         audit_control "dependency-image-reuse" "$dependency_image" "blocked" "dependency image missing; warm-deps required"
+        DEPLOY_LAST_FAIL_ERROR="dependency image missing: ${dependency_image}; warm-deps required"
         return 1
     fi
     dependency_label="$(docker image inspect "$dependency_image" \
@@ -461,6 +469,7 @@ build_release_image() {
         echo "[deploy.sh] ❌ immutable dependency image mismatch: image=${dependency_image}" >&2
         audit_control "dependency-image-reuse" "$dependency_image" "blocked" \
             "expected=${dependency_key}; actual=${dependency_label:-missing}"
+        DEPLOY_LAST_FAIL_ERROR="immutable dependency image mismatch: image=${dependency_image}; expected=${dependency_key}; actual=${dependency_label:-missing}"
         return 1
     fi
     echo "[deploy.sh] ✅ dependency image reuse: ${dependency_image}"

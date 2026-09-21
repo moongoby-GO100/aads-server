@@ -87,6 +87,22 @@ classify_deploy_failure() {
         # deploy.sh 를 없는 모드로 호출한 것. 재시도해도 같은 결과다.
         *"unknown mode:"*)
             echo "invalid_mode" ;;
+        # 의존성 이미지가 없어 빌드가 막힌 경우. 고치는 방법이 정해져 있다 —
+        # warm-deps 로 의존성 이미지를 만들고 같은 릴리스를 다시 태운다.
+        # 2026-09-21 24시간 실측: build_candidate_image 실패 17건 전부가
+        # control audit 에 "dependency image missing; warm-deps required" 를
+        # 남겼는데, error_summary 에는 "return 1" 만 남아 unexpected_exit(manual)
+        # 로 빠졌다. 17건 중 한 건도 자동 재개되지 않았다.
+        *"dependency image missing"*|*"warm-deps required"*)
+            echo "dependency_image_missing" ;;
+        # 의존성 이미지가 있지만 키 라벨이 어긋난 경우. warm-deps 가 현재 키로
+        # 다시 만들어 붙이므로 같은 교정으로 풀린다.
+        *"immutable dependency image mismatch"*|*"dependency image verification failed"*)
+            echo "dependency_image_mismatch" ;;
+        # 릴리스 태그가 다른 revision 을 가리킨다. 이미지를 덮어쓰는 것은
+        # 무결성 위반이라 자동 교정 대상이 아니다 — 사유만 분명히 남긴다.
+        *"immutable image tag mismatch"*)
+            echo "release_image_tag_mismatch" ;;
         *"unexpected error exit="*)
             echo "unexpected_exit" ;;
         *)
@@ -115,7 +131,7 @@ autoheal_policy() {
     local cause="${1:-unknown}"
     local phase="${2:-${DEPLOY_CURRENT_PHASE:-}}"
     case "$cause" in
-        disk_full|dirty_worktree|stale_heartbeat|standby_sync_fail|lock_wait_timeout|source_dir_missing|target_drain_busy)
+        disk_full|dirty_worktree|stale_heartbeat|standby_sync_fail|lock_wait_timeout|source_dir_missing|target_drain_busy|dependency_image_missing|dependency_image_mismatch)
             echo "retry" ;;
         # 컨테이너 재생성은 자원 경합으로 실패하는 경우가 많아 재시도할 값이 있다.
         # 다만 컷오버 이후라면 이미 트래픽이 넘어간 뒤이므로 손대지 않는다.
@@ -128,6 +144,10 @@ autoheal_policy() {
             ;;
         # 호출 방식이 틀린 것이라 재시도해도 같은 결과다. 사람이 고쳐야 한다.
         invalid_mode)
+            echo "manual" ;;
+        # 같은 태그가 다른 revision 을 가리키는 무결성 위반이다. 자동으로
+        # 덮어쓰지 않는다 — 어느 이미지가 맞는지는 사람이 판정해야 한다.
+        release_image_tag_mismatch)
             echo "manual" ;;
         signal_interrupt)
             if [[ "${DEPLOY_UPSTREAM_SWITCHED:-false}" == "true" ]] || autoheal_phase_is_post_switch "$phase"; then
@@ -260,6 +280,36 @@ remediate_deploy_failure() {
         signal_interrupt)
             autoheal_log "중단 신호 교정: 컷오버 전 중단으로 판단 — 동일 릴리스를 다시 태운다"
             AUTOHEAL_LAST_REMEDIATION="restart_release"
+            ;;
+        dependency_image_missing|dependency_image_mismatch)
+            # deploy.sh 자신이 "Run 'bash deploy.sh warm-deps' before bluegreen" 라고
+            # 적어 두고 사람을 기다렸다. 그 한 줄을 여기서 대신 실행한다.
+            # 릴리스 worktree 의 deploy.sh 를 쓴다 — 그쪽은 커밋된 clean 트리라
+            # warm-deps 의 worktree 게이트를 그대로 통과한다.
+            # 자식에서는 자가치유를 끈다(AADS_DEPLOY_AUTOHEAL=0). 재시도 판단은
+            # 이 프로세스가 갖고 있고, 자식이 또 큐를 넣으면 폭주한다.
+            AUTOHEAL_LAST_REMEDIATION="warm_dependency_image"
+            local warm_timeout="${AADS_DEPLOY_AUTOHEAL_WARMDEPS_TIMEOUT:-1800}"
+            [[ "$warm_timeout" =~ ^[0-9]+$ ]] || warm_timeout=1800
+            local warm_script=""
+            if [[ -f "${COMPOSE_DIR:-}/deploy.sh" ]]; then
+                warm_script="${COMPOSE_DIR}/deploy.sh"
+            elif [[ -f "${STATE_DIR:-}/deploy.sh" ]]; then
+                warm_script="${STATE_DIR}/deploy.sh"
+            fi
+            if [[ -z "$warm_script" ]]; then
+                autoheal_log "❌ warm-deps 를 돌릴 deploy.sh 를 찾을 수 없다 — 자동 재개를 중단한다"
+                return 1
+            fi
+            autoheal_log "의존성 이미지 warm-up: ${warm_script} warm-deps (최대 ${warm_timeout}초)"
+            if [[ "$AADS_DEPLOY_AUTOHEAL_DRYRUN" == "1" ]]; then
+                autoheal_log "DRYRUN: warm-deps 생략"
+            elif ! AADS_DEPLOY_AUTOHEAL=0 timeout --kill-after=30s "$warm_timeout" \
+                    bash "$warm_script" warm-deps; then
+                autoheal_log "❌ 의존성 이미지 warm-up 실패 — 자동 재개를 중단한다"
+                return 1
+            fi
+            autoheal_log "✅ 의존성 이미지 준비 완료 — 같은 릴리스로 재개한다"
             ;;
         *)
             return 1 ;;

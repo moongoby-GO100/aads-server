@@ -62,6 +62,13 @@ def test_syntax_is_valid():
         # 없어 other → manual 로 빠졌다. 한 건도 자동 재개되지 않았다.
         ("target_slot_drain", "target slot aads-server-green:8102 active streams=1", "target_drain_busy"),
         ("target_slot_drain", "target slot aads-server:8100 active streams=2", "target_drain_busy"),
+        # 2026-09-21 24시간 실측: build_candidate_image 실패 17건 전부가 이 사유였다.
+        # deploy.sh 가 DEPLOY_LAST_FAIL_ERROR 로 올려 주기 전에는 error_summary 에
+        # "return 1" 만 남아 unexpected_exit(manual) 로 빠졌다.
+        ("build_candidate_image", "dependency image missing: aads-server-deps:de49c580f19a; warm-deps required", "dependency_image_missing"),
+        ("build_candidate_image", "immutable dependency image mismatch: image=aads-server-deps:de49c580f19a; expected=de49c580f19a; actual=missing", "dependency_image_mismatch"),
+        ("build_candidate_image", "dependency image verification failed: aads-server-deps:de49c580f19a", "dependency_image_mismatch"),
+        ("build_candidate_image", "immutable image tag mismatch: tag=3ab5c899 label=missing", "release_image_tag_mismatch"),
         ("build_candidate_image", "aads-server-green memory limit mismatch", "mem_limit_mismatch"),
         ("standby_same_digest_sync", "unexpected error exit=1 line=2211: echo ...", "unexpected_exit"),
         ("nginx_cutover", "something nobody has seen before", "other"),
@@ -83,6 +90,11 @@ def test_classify_deploy_failure(phase: str, err: str, expected: str):
         ("source_dir_missing", "retry"),
         # 고칠 것이 없는 실패다 — 몇 분 뒤면 같은 배포가 그대로 성공한다.
         ("target_drain_busy", "retry"),
+        # warm-deps 로 의존성 이미지를 만들면 같은 릴리스가 그대로 통과한다.
+        ("dependency_image_missing", "retry"),
+        ("dependency_image_mismatch", "retry"),
+        # 같은 태그가 다른 revision 을 가리키는 무결성 위반 — 덮어쓰지 않는다.
+        ("release_image_tag_mismatch", "manual"),
         ("mem_limit_mismatch", "manual"),
         ("unexpected_exit", "manual"),
         ("other", "manual"),
