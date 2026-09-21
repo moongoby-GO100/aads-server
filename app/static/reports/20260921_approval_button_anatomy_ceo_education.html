@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>승인 버튼의 정체 — "진행해" 한 마디가 시스템에서 하는 일 · 2026-09-21</title>
+<style>
+:root{
+  --ink:#16191d; --ink2:#454c55; --ink3:#6b7480;
+  --line:#e2e6ea; --bg:#ffffff; --bg2:#f6f8fa; --bg3:#eef2f6;
+  --good:#1a7f45; --goodbg:#e7f5ec;
+  --bad:#b3261e; --badbg:#fdecea;
+  --warn:#8a5a00; --warnbg:#fff4e0;
+  --acc:#1b5fbe; --accbg:#e8f0fc;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg2);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  line-height:1.72;font-size:15.5px;-webkit-text-size-adjust:100%}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px 90px}
+header{background:linear-gradient(135deg,#0c2633,#13506b);color:#fff;padding:44px 20px 38px;margin-bottom:26px}
+header .inner{max-width:1080px;margin:0 auto}
+header h1{margin:0 0 10px;font-size:29px;letter-spacing:-.5px;line-height:1.35}
+header p{margin:0;color:#bfe0ee;font-size:14.5px}
+.badges{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
+.badge{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);
+  border-radius:999px;padding:4px 12px;font-size:12.5px;color:#e6f4fa}
+section{background:var(--bg);border:1px solid var(--line);border-radius:12px;
+  padding:26px 28px;margin-bottom:22px}
+h2{font-size:21px;margin:0 0 6px;letter-spacing:-.3px;padding-bottom:12px;border-bottom:2px solid var(--bg3)}
+h2 .n{color:var(--acc);font-weight:700;margin-right:8px}
+h3{font-size:17px;margin:26px 0 8px;color:var(--ink)}
+h4{font-size:15px;margin:18px 0 6px;color:var(--ink2)}
+p{margin:10px 0}
+ul,ol{margin:10px 0;padding-left:22px}
+li{margin:5px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.2px}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:var(--bg3);font-weight:600}
+tr:nth-child(even) td{background:#fbfcfd}
+code{background:var(--bg3);padding:1.5px 6px;border-radius:5px;font-size:13.2px;
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+pre{background:#131820;color:#e6edf3;padding:16px 18px;border-radius:9px;overflow-x:auto;
+  font-size:13.2px;line-height:1.6;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+pre code{background:none;color:inherit;padding:0}
+.box{border-radius:9px;padding:14px 16px;margin:14px 0;border-left:4px solid}
+.good{background:var(--goodbg);border-color:var(--good)}
+.bad{background:var(--badbg);border-color:var(--bad)}
+.warn{background:var(--warnbg);border-color:var(--warn)}
+.acc{background:var(--accbg);border-color:var(--acc)}
+.box b{display:block;margin-bottom:4px}
+.toc{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin-bottom:22px}
+.toc ol{columns:2;column-gap:34px;margin:8px 0 0}
+.toc a{color:var(--acc);text-decoration:none}
+.toc a:hover{text-decoration:underline}
+.kpi{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}
+.kpi div{flex:1 1 150px;background:var(--bg3);border-radius:9px;padding:13px 15px}
+.kpi .v{font-size:21px;font-weight:700;color:var(--acc);display:block;line-height:1.3}
+.kpi .l{font-size:12.5px;color:var(--ink3)}
+.q{background:#fff;border:2px solid var(--acc);border-radius:10px;padding:16px 18px;margin:14px 0}
+.q .qq{font-size:17px;font-weight:700;color:var(--acc);margin-bottom:6px}
+.src{color:var(--ink3);font-size:12.5px}
+.card{border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0;background:#fcfdfe}
+.card .t{font-weight:700;margin-bottom:8px;font-size:15.5px}
+.flow{background:var(--bg3);border-radius:10px;padding:16px 18px;margin:14px 0;font-size:14.3px}
+.flow div{margin:4px 0}
+footer{color:var(--ink3);font-size:13px;text-align:center;padding:26px 0}
+@media(max-width:760px){.toc ol{columns:1}header h1{font-size:23px}}
+</style>
+</head>
+<body>
+<header><div class="inner">
+<h1>승인 버튼의 정체<br>— "진행해" 한 마디가 시스템에서 하는 일</h1>
+<p>2026-09-21 · 오비스(OBYS) CEO 교육자료 3호 · 오늘 대표님이 네 번 물으신 질문에 대한 구조 설명</p>
+<div class="badges">
+  <span class="badge">🟢자동 / 🟡승인 / ⏸보류</span>
+  <span class="badge">판정자는 AI가 아니다</span>
+  <span class="badge">오늘의 사고 해부</span>
+  <span class="badge">대표님의 통제 손잡이 5개</span>
+  <span class="badge">코드 실측 기반</span>
+</div>
+</div></header>
+
+<div class="wrap">
+
+<div class="toc">
+<b>목차</b>
+<ol>
+  <li><a href="#c1">대표님이 오늘 네 번 물으신 것</a></li>
+  <li><a href="#c2">다음 단계 표의 세 가지 표기</a></li>
+  <li><a href="#c3">판정자는 AI가 아니다 — 코드가 가르는 두 갈래</a></li>
+  <li><a href="#c4">🟡승인을 누르면 실제로 일어나는 일</a></li>
+  <li><a href="#c5">오늘의 사고 — 🟢자동에는 목적지가 없었다</a></li>
+  <li><a href="#c6">어떻게 고쳤나 — 실행기와 15분 중복막이</a></li>
+  <li><a href="#c7">대표님의 통제 손잡이 5개</a></li>
+  <li><a href="#c8">한 장 요약 + 확인 질문 3개</a></li>
+</ol>
+</div>
+
+<section id="c1">
+<h2><span class="n">01</span>대표님이 오늘 네 번 물으신 것</h2>
+
+<p>오늘 하루 대표님은 같은 질문을 표현만 바꿔 네 번 하셨습니다.</p>
+
+<table>
+<tr><th>시각(KST)</th><th>대표님 말씀</th><th>속뜻</th></tr>
+<tr><td>17:0x</td><td>"자동승인건 보고해"</td><td>자동으로 넘긴 게 뭐고 어떻게 됐나</td></tr>
+<tr><td>17:1x</td><td>"자동 4건 왜 바로 진행 안하지?"</td><td>자동이라며 왜 멈춰 있나</td></tr>
+<tr><td>17:2x</td><td>"다음 자동 승인건이 왜 자동으로 진행못하는지도 확인하고 조치후 진행해"</td><td>원인을 찾아 고쳐라</td></tr>
+<tr><td>17:4x</td><td>"자동 3건이 왜 자동으로 실행안되냐고"</td><td>설명 말고 실제로 되게 하라</td></tr>
+</table>
+
+<div class="box bad"><b>같은 질문이 네 번 나왔다는 건 설명이 아니라 구조가 잘못됐다는 신호입니다.</b>
+실제로 그랬습니다. 제 게으름이 아니라 <b>코드에 실행 경로가 아예 없었습니다.</b>
+이 자료는 그 구조를 대표님이 직접 읽으실 수 있게 푼 것입니다.</div>
+
+<p>이 자료를 읽고 나시면 다음 세 가지를 하실 수 있습니다.</p>
+<ul>
+  <li>다음 단계 표에서 <b>어떤 항목이 왜 승인을 요구하는지</b> 스스로 판정</li>
+  <li>승인 버튼을 눌렀는데 아무 일도 안 일어날 때 <b>어디가 막혔는지 질문</b></li>
+  <li>반복되는 승인 요청을 <b>정책으로 한 번에 없애기</b></li>
+</ul>
+</section>
+
+<section id="c2">
+<h2><span class="n">02</span>다음 단계 표의 세 가지 표기</h2>
+
+<p>제 보고서 끝에 붙는 「다음 단계」 표의 순위 칸에는 반드시 세 표기 중 하나가 붙습니다.
+장식이 아니라 <b>시스템 내부의 서로 다른 처리 경로</b>입니다.</p>
+
+<table>
+<tr><th>표기</th><th>뜻</th><th>DB 기록</th><th>대표님이 하실 일</th></tr>
+<tr><td><b>🟢자동</b></td><td>이미 승인 범위 안이라 물을 필요가 없음</td><td>없음(즉시 실행 큐로)</td><td>없음 — 다음 턴에 결과 보고를 받으심</td></tr>
+<tr><td><b>🟡승인</b></td><td>위험도가 승인 범위를 넘음</td><td><code>agent_permission_requests</code>에 <code>decision='pending'</code></td><td>버블 아래 버튼을 누르심</td></tr>
+<tr><td><b>⏸보류</b></td><td>도구 문제가 아니라 <b>경영 판단</b>이 필요함</td><td>게이트 판정 대상 아님</td><td>결정을 말씀해 주심</td></tr>
+</table>
+
+<div class="box acc"><b>⏸보류를 🟡승인으로 잘못 붙이면 대표님이 버튼만 찾다 끝납니다.</b>
+"카카오 백업본 33GB를 지울까요"는 버튼이 아니라 판단입니다. 반대로
+"테스트를 돌려 보겠습니다"에 승인 버튼을 띄우면 그건 결재 낭비입니다.</div>
+
+<h3>왜 표기를 감으로 붙이면 안 되는가</h3>
+<p>표기는 제가 정하는 게 아닙니다. <code>propose_next_steps</code> 도구를 호출하면
+서버가 <code>cards</code>(승인 필요) / <code>auto</code>(승인 불필요)로 갈라 돌려줍니다.
+제가 도구를 부르지 않고 표기만 쓰면 <b>화면에 버튼이 안 뜹니다</b> —
+글자만 🟡승인이고 누를 것이 없는 상태가 됩니다. 이것이 대표님이 오늘 겪으신 혼란의 절반입니다.</p>
+</section>
+
+<section id="c3">
+<h2><span class="n">03</span>판정자는 AI가 아니다 — 코드가 가르는 두 갈래</h2>
+
+<p>제안 하나가 들어오면 <code>app/services/next_step_proposals.py</code>가 순서대로 두 가지를 묻습니다.
+둘 중 하나라도 "그렇다"면 🟢자동, 둘 다 아니면 🟡승인입니다.</p>
+
+<pre><code>for step in normalized:
+    # 질문 1. 이 세션에서 같은 도구에 이미 승인을 내리신 적이 있는가
+    grant_id = await _covered_by_existing_grant(conn, session_id, step["tool"], project)
+    if grant_id:
+        auto.append({"title": step["title"], "grant_id": grant_id[:8]})
+        continue
+
+    # 질문 2. 세션에 걸린 목표(Goal)의 승인 정책이 이 위험도를 이미 덮는가
+    goal_id = await _goal_policy_covers(conn, session_id, step["risk"])
+    if goal_id:
+        auto.append({"title": step["title"], "grant_id": goal_id[:8], "via": "goal_policy"})
+        continue
+
+    # 둘 다 아니면 → 승인 카드 INSERT
+</code></pre>
+<p class="src">[코드 실측 · <code>app/services/next_step_proposals.py</code> 364~380행, 2026-09-21]</p>
+
+<table>
+<tr><th>갈래</th><th>판정 근거</th><th>유효 범위</th><th>대표님 체감</th></tr>
+<tr><td><b>개별 승인(grant)</b></td><td>이 세션에서 그 도구를 이미 허락하심</td><td>같은 세션·같은 도구</td><td>"아까 허락했는데 또 묻네"가 사라짐</td></tr>
+<tr><td><b>목표 정책(goal_policy)</b></td><td>목표에 걸린 승인 정책이 그 <b>위험도</b>를 덮음</td><td>목표가 사는 동안</td><td>세션이 바뀌어도 안 물음</td></tr>
+<tr><td><b>둘 다 없음</b></td><td>—</td><td>—</td><td>승인 카드가 뜸</td></tr>
+</table>
+
+<div class="box good"><b>이 구조의 핵심: 승인은 "한 번 누르면 한 번 실행"이 아니라 "한 번 누르면 범위가 생긴다"입니다.</b>
+같은 성격의 일을 반복해서 물으면 그건 정책을 안 걸어 둔 것입니다 —
+제 잘못이고, 7장에서 해결법을 드립니다.</div>
+
+<h3>한 번에 최대 5개</h3>
+<p><code>MAX_STEPS = 5</code>입니다. 제안을 6개 이상 올리면 5개로 잘리고 나머지는 <code>skipped</code>로 셉니다.
+그래서 다음 단계 표가 항상 1~5행인 것이고, 그 이상 쓰면 <b>표에는 보이지만 시스템에는 안 올라갑니다.</b></p>
+</section>
+
+<section id="c4">
+<h2><span class="n">04</span>🟡승인을 누르면 실제로 일어나는 일</h2>
+
+<p>대표님이 버튼을 누르시는 순간 AI가 "깨어나" 이어서 일하는 게 아닙니다.
+AI에게는 기억이 이어지는 몸이 없습니다. 실제로 일어나는 일은 <b>문장 한 줄의 재주입</b>입니다.</p>
+
+<div class="flow">
+<div><b>①</b> 대표님이 승인 버튼 클릭</div>
+<div><b>②</b> <code>agent_permission_requests</code>의 해당 행 <code>decision</code>이 <code>pending</code> → <code>approved</code></div>
+<div><b>③</b> 승인 API가 <b>세션에 프롬프트를 새로 넣음</b><br>
+　　<code>"[시스템] 대표님이 다음 단계를 승인했습니다. …"</code> <span class="src">(app/api/project_docs.py:1418)</span></div>
+<div><b>④</b> 그 프롬프트가 새 턴을 열고 AI가 다시 호출됨</div>
+<div><b>⑤</b> AI가 승인된 항목을 실행하고 결과를 보고</div>
+</div>
+
+<div class="box warn"><b>여기서 대표님이 알아 두실 것 하나.</b>
+승인은 <b>"실행"이 아니라 "실행하라는 새 지시"</b> 입니다. 그래서 승인 후에도
+AI가 엉뚱한 걸 하거나, 이미 끝난 걸 또 하거나, 조용히 실패할 수 있습니다.
+2호 자료 「AI 보고 검증법」의 3질문을 승인 <b>이후</b>에도 쓰셔야 하는 이유입니다.</div>
+
+<h3>왜 굳이 이렇게 만들었나</h3>
+<p>세션을 계속 살려 두면 비용이 계속 나가고, 며칠 뒤 누르셔도 그 대화는 이미 사라졌을 수 있습니다.
+"버튼 → 문장 재주입" 구조는 <b>몇 시간 뒤에 누르셔도 동작</b>하게 만드는 값싼 방법입니다.
+대신 재주입 문장이 없으면 승인은 그냥 DB 한 칸이 바뀌는 것으로 끝납니다 — 다음 장의 사고가 정확히 그것이었습니다.</p>
+</section>
+
+<section id="c5">
+<h2><span class="n">05</span>오늘의 사고 — 🟢자동에는 목적지가 없었다</h2>
+
+<p>대표님 질문이 정확했습니다. 원인은 이렇습니다.</p>
+
+<table>
+<tr><th>구분</th><th>DB 저장</th><th>재호출 트리거</th><th>결과</th></tr>
+<tr><td><b>🟡승인(cards)</b></td><td>✅ <code>agent_permission_requests</code> INSERT</td><td>✅ 승인 API가 프롬프트 재주입</td><td>눌러 주시면 <b>실행됨</b></td></tr>
+<tr><td><b>🟢자동(auto)</b></td><td>❌ <b>없음</b> — 반환값 리스트뿐</td><td>❌ <b>없음</b></td><td>턴이 끝나면 <b>소멸</b></td></tr>
+</table>
+
+<p><code>auto.append(...)</code> 다음이 <code>continue</code>였습니다. 목록에 담고 대표님께 "자동으로 하겠습니다"라고
+글자로 보고한 뒤, <b>그 목록을 소비하는 코드가 저장소 전체에 0건</b>이었습니다.
+호출자도 반환값을 화면 표시용으로만 썼습니다.</p>
+
+<div class="box bad"><b>즉 "🟢자동 3건"은 약속이 아니라 문장이었습니다.</b>
+대표님이 네 번 물으신 게 맞습니다. 세 번은 제가 "다음 턴에 하겠습니다"라고 답했고,
+그 다음 턴을 <b>아무도 열어 주지 않았습니다.</b></div>
+
+<h3>이 사고의 교훈 — 표기가 거짓말이 되는 순간</h3>
+<p>"🟢자동"이라고 적는 것은 <b>대표님의 결재를 면제받는 대가로 실행을 약속</b>하는 것입니다.
+실행 경로가 없는데 자동이라고 적으면, 승인도 안 받고 실행도 안 한 항목이 조용히 사라집니다.
+이것이 승인 누락보다 위험합니다 — <b>대표님 화면에는 처리된 것처럼 보이기 때문</b>입니다.</p>
+
+<p>오류 사전에 <code>next_step.auto_items_never_executed</code> 로 등록해 두었습니다.
+같은 증상이 다시 나면 다음 사람이 처음부터 추적하지 않아도 됩니다.</p>
+</section>
+
+<section id="c6">
+<h2><span class="n">06</span>어떻게 고쳤나 — 실행기와 15분 중복막이</h2>
+
+<p>승인 카드가 쓰던 재주입 함수 <code>trigger_ai_reaction</code>을 🟢자동 쪽에도 연결했습니다.
+승인 대신 <b>"승인 없이 진행하기로 한 항목"</b>이라는 문장을 시스템이 스스로 넣습니다.</p>
+
+<pre><code>if fresh:
+    listing = "\n".join(f"{i+1}. {x['title']}" for i, x in enumerate(fresh))
+    prompt = (
+        "[시스템] 승인 없이 진행하기로 한 다음 단계입니다. 지금 수행하세요.\n\n"
+        f"{listing}\n\n"
+        "각 항목을 실제로 실행하고 결과를 보고하세요. 적힌 범위만 하고, "
+        "이미 끝낸 항목은 다시 하지 마세요.\n"
+        "**같은 항목을 propose_next_steps 로 다시 올리지 마세요** — 중복 실행이 됩니다."
+    )
+    from app.services.chat_service import trigger_ai_reaction
+    await trigger_ai_reaction(session_id, prompt)
+    auto_fired = len(fresh)
+</code></pre>
+<p class="src">[코드 실측 · 같은 파일 458~470행 · 커밋 <code>745eb61c</code>]</p>
+
+<h3>무한 루프를 막는 장치 — 900초</h3>
+<p>자동 실행이 자기 자신을 다시 제안하면 영원히 돕니다. 그래서
+<code>work_key = _work_key(session_id, title)</code> 로 항목마다 열쇠를 만들고,
+같은 열쇠가 <b>900초(15분)</b> 안에 이미 발화됐으면 건너뜁니다.</p>
+
+<div class="kpi">
+  <div><span class="v">900초</span><span class="l">같은 항목 재발화 차단 TTL</span></div>
+  <div><span class="v">5개</span><span class="l">한 턴 제안 상한(MAX_STEPS)</span></div>
+  <div><span class="v">3건</span><span class="l">오늘 실제 자동 발화(auto_fired)</span></div>
+  <div><span class="v">745eb61c</span><span class="l">수정 커밋 · push 완료</span></div>
+</div>
+
+<h3>정말 되는지 어떻게 확인했나</h3>
+<p>"고쳤습니다"는 근거가 아닙니다. 로그 4단계를 연속으로 확인했습니다.</p>
+<ol>
+  <li><code>next_step_proposed … auto_fired=3</code> — 발화 수 기록</li>
+  <li><code>deferred_reaction_enqueued</code> — 큐에 적재</li>
+  <li><code>trigger_ai_reaction: triggered for session=acc75e55</code> — 세션 재호출</li>
+  <li><code>deferred_reaction_handoff_started count=1</code> — 실제 턴 시작</li>
+</ol>
+<p class="src">[컨테이너 로그 실측, 2026-09-21 17:48~17:50 KST]</p>
+
+<div class="box good"><b>그리고 실제로 3건이 17:50에 자동 실행됐습니다.</b>
+SWA 취소 가설 검증(재현 실패로 기각), 스크립트 동기화(완료), Cookies 재복사(카카오톡 실행 중이라 보류).
+<b>보류도 결과입니다</b> — 자동 실행이 조용히 사라지지 않고 사유가 남았다는 것이 이번 수정의 증거입니다.</div>
+</section>
+
+<section id="c7">
+<h2><span class="n">07</span>대표님의 통제 손잡이 5개</h2>
+
+<p>구조를 아셨으니 이제 대표님이 쥐실 수 있는 손잡이입니다. 개발 지식 없이 말씀 한 마디로 쓰실 수 있습니다.</p>
+
+<div class="card">
+<div class="t">① 반복 승인을 정책으로 한 번에 없애기</div>
+<p>같은 성격의 승인을 세 번 이상 누르셨다면 그건 정책 미설정입니다.
+말씀: <b>"이 목표에서 읽기·조회 작업은 앞으로 묻지 마라"</b> → 목표 승인 정책으로 등록되어 그 위험도 전체가 🟢자동이 됩니다.</p>
+</div>
+
+<div class="card">
+<div class="t">② 반대로 조여 두기</div>
+<p>말씀: <b>"이 프로젝트는 커밋·배포는 무조건 물어라"</b> → 기존 grant가 있어도 그 도구는 카드로 올라오게 됩니다.
+금융(KIS/GO100)·고객 노출(NTV2) 쪽에 권합니다.</p>
+</div>
+
+<div class="card">
+<div class="t">③ 자동 항목이 정말 돌았는지 되묻기</div>
+<p>가장 강력한 질문은 이것입니다 — <b>"auto_fired 몇이었나?"</b>
+0이면 15분 중복막이에 걸린 것이고, 숫자가 있는데 결과 보고가 없으면 실행 턴이 죽은 것입니다. 둘은 원인이 완전히 다릅니다.</p>
+</div>
+
+<div class="card">
+<div class="t">④ 승인 요청에 권장안이 없으면 반려</div>
+<p>선택지만 나열한 승인 요청은 미완성입니다. 규정상 제가 <b>권장안 1개 + 권장 사유 + 비권장 사유 + 롤백 방법 + 승인 안 할 때 상태</b>를
+반드시 써야 합니다. 없으면 "권장안 뭐냐"고 한마디만 하십시오.</p>
+</div>
+
+<div class="card">
+<div class="t">⑤ 되돌리는 법을 먼저 묻기</div>
+<p>🟢자동이든 🟡승인이든, 되돌릴 수 없는 것은 세 가지입니다 — <b>파일 삭제 · 외부 전송 · 푸시된 커밋</b>.
+이 셋이 포함된 항목은 자동 범위에 넣지 마시고, 반드시 <b>"되돌리는 방법이 뭐냐"</b>를 먼저 물으십시오.</p>
+</div>
+
+<table>
+<tr><th>상황</th><th>대표님 한마디</th><th>기대 결과</th></tr>
+<tr><td>같은 승인을 반복해 누름</td><td>"이건 정책으로 걸어라"</td><td>같은 위험도 전체 자동화</td></tr>
+<tr><td>자동이라더니 조용함</td><td>"auto_fired 몇이었나"</td><td>중복막이 / 실행 실패 구분</td></tr>
+<tr><td>버튼이 안 보임</td><td>"승인 카드 올렸나"</td><td><code>propose_next_steps</code> 호출 누락 적발</td></tr>
+<tr><td>위험한 자동</td><td>"이건 보류로 바꿔라"</td><td>판단 영역으로 환원</td></tr>
+</table>
+</section>
+
+<section id="c8">
+<h2><span class="n">08</span>한 장 요약 + 확인 질문 3개</h2>
+
+<h3>한 장 요약</h3>
+<table>
+<tr><th>#</th><th>기억하실 것</th></tr>
+<tr><td>1</td><td>표기 3종 — 🟢자동(물을 필요 없음) / 🟡승인(버튼) / ⏸보류(대표님 판단)</td></tr>
+<tr><td>2</td><td>판정자는 AI가 아니라 <b>코드</b>. 기존 승인 또는 목표 정책이 덮으면 자동, 아니면 카드</td></tr>
+<tr><td>3</td><td>승인은 실행이 아니라 <b>"실행하라는 새 지시의 재주입"</b>. 승인 후에도 검증은 필요</td></tr>
+<tr><td>4</td><td>한 턴 제안 상한 <b>5개</b>, 같은 항목 재발화 차단 <b>15분</b></td></tr>
+<tr><td>5</td><td>"자동"이라고 적고 안 하면 승인 누락보다 위험 — 화면에는 처리된 것처럼 보임</td></tr>
+<tr><td>6</td><td>되돌릴 수 없는 3종(삭제·외부전송·푸시)은 자동 범위에 넣지 않는다</td></tr>
+<tr><td>7</td><td>막히면 <b>"auto_fired 몇이었나"</b> 한마디로 원인이 절반 좁혀진다</td></tr>
+</table>
+
+<h3>확인 질문 3개</h3>
+
+<div class="q"><div class="qq">Q1. 승인 버튼을 눌렀는데 30분째 아무 보고가 없습니다. 무엇부터 물으시겠습니까?</div>
+<p><b>A.</b> "재주입됐나, 새 턴이 열렸나"입니다. 승인은 DB 한 칸을 바꾸고 프롬프트를 넣는 두 단계인데,
+DB만 바뀌고 프롬프트가 안 들어가는 고장이 실제로 있었습니다(오늘 🟢자동 쪽이 정확히 그 모양이었습니다).</p></div>
+
+<div class="q"><div class="qq">Q2. "🟢자동 4건 진행하겠습니다"라고 보고받았습니다. 믿을 수 있는 근거는 무엇입니까?</div>
+<p><b>A.</b> <code>auto_fired</code> 숫자와 <b>다음 턴의 실행 결과 보고</b>입니다. 제안 목록 자체는 근거가 아닙니다.
+목록은 "하겠다는 말"이고, <code>auto_fired</code>는 "시스템이 실제로 턴을 열었다"는 기록입니다.</p></div>
+
+<div class="q"><div class="qq">Q3. 같은 종류 승인을 오늘만 다섯 번 누르셨습니다. 무엇이 잘못된 것입니까?</div>
+<p><b>A.</b> AI가 아니라 <b>정책 설정</b>입니다. 개별 grant는 세션 단위라 세션이 바뀌면 사라집니다.
+목표 승인 정책으로 올리면 목표가 사는 동안 유지됩니다. "이건 정책으로 걸어라" 한마디면 됩니다.</p></div>
+
+<div class="box acc"><b>다음 자료 예고.</b> 4호는 「배포가 실패하면 무슨 일이 일어나는가 — 블루/그린과 롤백」입니다.
+오늘 대표님이 물으셨던 "배포 실패 사유가 왜 아티팩트 탭에 안 나오지"와 직결됩니다.</div>
+
+</section>
+
+<footer>
+오비스(OBYS) CEO 교육자료 3호 · 2026-09-21 작성 · 모든 수치는 당일 코드·로그·git 실측<br>
+교육자료 포털: <a href="/education/index.html">aads.newtalk.kr/education</a>
+</footer>
+
+</div>
+</body>
+</html>
