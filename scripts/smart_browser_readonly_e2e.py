@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Read-only browser E2E for M11 using an isolated storefront fixture."""
+"""Read-only browser E2E for M11 using an isolated storefront fixture.
+
+Scope warning: skill resolution, the promotion suites and the promotion
+metrics here are in-process doubles so the journey stays runnable without a
+database.  That makes this a unit fixture, not release evidence — a gate fed
+synthetic inputs cannot fail.  Use ``smart_browser_operational_e2e.py`` for
+milestone evidence; it runs the same journey with no doubles.
+"""
 from __future__ import annotations
 
 import argparse
@@ -342,7 +349,9 @@ async def run(output_dir: Path) -> dict:
         "original_source_revalidated": current["source_url_hash"] == hash_source_url(original_source),
         "fresh_value_displayed": current["value"] == 12000,
         "stale_value_redacted": stale["value"] is None and stale["freshness_status"] == "STALE",
-        "golden_gate_passed": promotion.passed,
+        # Synthetic inputs: this only proves the gate contract is wired, not that a
+        # real suite passed.  The operational script feeds it measured observations.
+        "golden_gate_contract_exercised": promotion.passed,
         "browser_agent_only": True,
     }
     duration_ms = int((time.monotonic() - started) * 1000)
@@ -356,6 +365,9 @@ async def run(output_dir: Path) -> dict:
     _write_json(chat_artifact_path, chat_artifact)
     return {
         "status": "passed" if all(checks.values()) else "failed",
+        "mode": "fixture_stubbed",
+        "gate_inputs": "synthetic_not_release_evidence",
+        "operational_persistence": False,
         "browser_e2e_executed": True,
         "checks": checks,
         "screenshots": {key: str(path) for key, path in screenshots.items()},
