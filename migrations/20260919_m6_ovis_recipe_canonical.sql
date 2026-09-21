@@ -111,7 +111,12 @@ BEGIN
     ) THEN
         EXECUTE $skill$
             INSERT INTO ovis_recipes (tenant_id, canonical_key)
+            -- G3 gives pre-tenant skills the all-zero sentinel, which has no
+            -- tenants row; canonicalizing those would violate the FK here.  They
+            -- wait until a real tenant owns them instead of blocking the chain.
             SELECT l.tenant_id, 'skill:' || l.slug FROM ops_skill_library l
+             WHERE l.tenant_id IS NULL
+                OR EXISTS (SELECT 1 FROM tenants t WHERE t.id = l.tenant_id)
             ON CONFLICT (COALESCE(tenant_id, '00000000-0000-0000-0000-000000000000'::uuid), canonical_key)
             DO NOTHING
         $skill$;
