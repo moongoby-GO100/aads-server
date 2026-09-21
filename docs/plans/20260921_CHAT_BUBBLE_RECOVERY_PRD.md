@@ -1,7 +1,7 @@
 # 채팅 응답 버블 보존 및 재개 무한 반복 방지 PRD
 
 - 작성일: 2026-09-21
-- 상태: 구현 및 회귀 검사 완료 / 배포 검증 진행
+- 상태: 구현·데이터 복구 완료 / 운영 API 배포는 정상 활성 스트림 drain 대기로 차단 (2026-09-21 20:14 KST)
 - 범위: 채팅 API, 실행 복구, Claude 인증 사전 검사, 두 신고 세션의 상태 복구
 - 오류 사전: `chat.oauth_lock_outlives_first_response_watchdog`
 
@@ -87,6 +87,27 @@ Opus 5 전체 장애로 규정하지 않는다. 이전 실패 시점에 slot2 �
 ## 6. 사전 검증 결과
 
 - 관련 단위 회귀 검사 308개 통과: 취소/버블, 복구 owner fence, OAuth 갱신/락, 모델 계약, 채팅 서비스/명령 생명주기.
-- PostgreSQL 실제 lease SQL 9개 통과: 접속 전용 `pg_temp` 테이블만 사용. 과거 실행 epoch=535에서 수동 예외를 주어도 superseded/새 사용자/완료/취소 실행은 변경되지 않는다. 추가 지시·시스템 트리거·회수된 메시지는 정상 재개를 막지 않는다.
+- PostgreSQL 통합 검사 10개 통과: 실제 lease SQL 9개와 운영 visibility trigger를 적용한 타임아웃 버블 보존 1개. 접속 전용 `pg_temp` 테이블만 사용한다. 과거 실행 epoch=535에서 수동 예외를 주어도 superseded/새 사용자/완료/취소 실행은 변경되지 않는다. 추가 지시·시스템 트리거·회수된 메시지는 정상 재개를 막지 않는다.
 - credential lock의 공유/배타 경합 모두 제한 시간 후 exit 75로 종료함을 실행 검증했다.
 - `scripts/repair_chat_bubble_recovery.py`: 기본 preview, `--apply --snapshot` 명시 시에만 두 신고 세션의 terminal 상태와 누락 안내 4건을 복구한다. 실행 중 상태는 제외하고 snapshot을 덮어쓰지 않는다.
+
+## 7. 운영 조치 및 미완료 항목 (2026-09-21 20:14 KST)
+
+- 애플리케이션 수정 커밋 `425a5a73306c654ff49b235e39019c06277d27b3`을 main과 작업 브랜치에 푸시했다.
+- 실제 Opus 5/slot4 단건 검증에서 응답 `OK`, `model_verified=true`, `model_mismatch=false`를 확인했다. 정상 모델·계정 선택은 변경하지 않았다.
+- 두 신고 세션의 누락 오류 안내를 각 2건, 총 4건 복구했다. 원래 실행 종료 시각으로 저장하여 이후 대화 순서를 보존했다. 기존 답변/사용자 지시는 변경하지 않았다.
+- 복구 중 기존 DB trigger가 INSERT의 `interruption_notice`를 숨기는 것을 확인했다. 정상 `_mark_execution_interrupted` 경로에 이미 있는 최종 `is_hidden` 전용 UPDATE를 복구 스크립트에도 적용했다. 전역 trigger 정책은 변경하지 않았다. 4건 모두 `is_hidden=false`, execution 연결 정상이다.
+- 변경 전 snapshot: `/root/aads/backups/chat-bubble-recovery-20260921/before-repair-20260921.json`, `/root/aads/backups/chat-bubble-recovery-20260921/before-visibility-repair-20260921.json` (0600).
+- 복구 시 기존 placeholder 보관 0건, current_execution_id 해제 0건. 첫 신고 세션의 현재 실행 `e2561c93`과 비교 세션 `8bbc1c71`을 보존했다.
+- 현재 프론트엔드의 실제 표시 판정 함수를 실행해 복구 문구가 숨김/짧은 placeholder 필터를 통과함을 확인했다. 이것은 브라우저 화면 검증과 구분한다.
+- 배포 요청 #4987은 상위 릴리스 `da94c12385cf`의 #4988에 통합되었다. 수정된 앱/인증 wrapper 파일이 포함된 것을 비교 확인했다. 이미지 digest: `sha256:57cf1de69d70a2282e130256f761d83fa3b997338c4a11211737af368294939b`.
+- #4988 및 자동 재시도 #4990은 `target_slot_drain`에서 차단됐다. 마지막 확인 시 이전 green에 유효한 lease/heartbeat를 가진 정상 실행 3건이 남아 있고, 이 중 사용자가 정상 응답이라고 제시한 비교 세션이 포함된다. 강제 중단하지 않았다.
+- 아직 새 API 이미지로 라우팅 전환되지 않았다. 운영 active=`a08bcc01a2d2`, 이전 green=`e772c4ce7628`이다. 호스트 wrapper의 5초 락 제한은 반영됐지만 API 수정 전체가 운영 적용됐다고 보고하지 않는다.
+- 남은 완료 조건: 이전 green 실행 자연 종료 → 동일 이미지 배포 재개 → 외부 health → 이전 active drain/동일 digest standby → 최소 5분 P0/P1 관측. 자동 재시도 예산은 소진되어 #4990은 운영자 확인을 요청한 상태다.
+
+### 20:17 KST 재검증: 복구 후 구버전 재개에 의한 재보관
+
+- 후속 검증에서 복구 4건 중 `d9eb0fad` 실행의 안내 1건이 구버전 실행 처리에 의해 다시 `_archived_partial/is_hidden=true`로 바뀐 것을 확인했다. owner_epoch가 2→3, 원인이 `stale_superseded_by_newer_user_message`로 변경됐다. 다른 3건은 표시 가능하며 네 메시지의 실행 연결은 유지된다.
+- 따라서 "누락 4건 복구 작업 수행"과 "4건 표시 상태 유지"는 다르다. 재발 방지 API가 아직 배포되지 않았으므로 완전 복구로 보고하지 않는다. 진행 중인 새 사용자 요청과 경쟁하지 않도록 반복적인 강제 상태 덮어쓰기는 하지 않는다.
+- 정상 green 실행은 3건에서 2건으로 감소했다. 비교 세션 `2c929b8e`의 현재 실행은 여전히 유효한 heartbeat/lease를 보유한다.
+- 브라우저 확인은 로컬 Playwright 실행 파일 부재로 실패했다. 기존 이미지의 브라우저로 대체 실행했으나 첫 세션은 화면 대기 timeout, 두 번째 세션은 초기 DOM에서 대상 버블을 찾지 못했다. 변경 요청을 차단한 읽기 전용 검사였으며, 화면 표시 성공으로 보고할 수 없다. DB/프론트 함수 검증을 화면 E2E 성공으로 대체하지 않는다.

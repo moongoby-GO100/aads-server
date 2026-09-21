@@ -106,8 +106,18 @@ async def main(args):
                     WHERE s.id=i.session_id RETURNING s.id
                 ) SELECT id,execution_id,session_id FROM inserted
             """, MISSING_BUBBLE_EXECUTIONS, ids)
+            # The historical BEFORE trigger hides interruption_notice on
+            # INSERT/content updates. Match _mark_execution_interrupted's final
+            # visibility write: changing only is_hidden does not retrigger it.
+            visible = await conn.execute("""
+                UPDATE chat_messages SET is_hidden=FALSE
+                WHERE execution_id=ANY($1::uuid[])
+                  AND quality_details->>'recovery_repair'='20260921_chat_bubble'
+                  AND intent='interruption_notice' AND is_hidden=TRUE
+            """, MISSING_BUBBLE_EXECUTIONS)
             result = {**preview, "archived": archived, "cleared_pointers": cleared,
-                      "inserted": [dict(row) for row in inserted], "snapshot": str(args.snapshot)}
+                      "inserted": [dict(row) for row in inserted], "made_visible": visible,
+                      "snapshot": str(args.snapshot)}
         print(json.dumps(result, default=str))
     finally:
         await conn.close()
