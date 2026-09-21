@@ -3858,13 +3858,33 @@ async def tool_browser_navigate(
         return err
     try:
         dedicated_session = bool(browser_session_id or browser_work_key)
-        pages = ctx.pages
-        if len(pages) >= _BROWSER_MAX_TABS:
+        # 탭 누수 방지. 예전에는 _BROWSER_MAX_TABS 에 닿을 때까지 호출마다
+        # new_page() 를 했고, 연 탭을 닫는 경로가 어디에도 없었다. 탐색이
+        # 타임아웃으로 실패해 재시도할수록 빈 탭만 쌓였다(2026-09-17 실측).
+        # 살아 있는 탭이 있으면 마지막 것을 재사용하고, 상한을 넘긴 옛 탭은 닫는다.
+        pages = [p for p in ctx.pages if not p.is_closed()]
+        opened_here = False
+        if pages:
             page = pages[-1]
+            for stale in pages[:-_BROWSER_MAX_TABS]:
+                try:
+                    await stale.close()
+                except Exception:
+                    pass
         else:
             page = await ctx.new_page()
+            opened_here = True
 
-        await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
+        try:
+            await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
+        except Exception:
+            # 실패한 탐색이 빈 탭을 남기지 않게 한다.
+            if opened_here:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+            raise
 
         # 로그인 폼 감지 + Vault 자동 로그인. 도메인 종류나 /login 직접 진입 여부와 무관하게 적용한다.
         if dedicated_session and tenant_id:
