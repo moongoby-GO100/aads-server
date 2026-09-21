@@ -63,7 +63,7 @@ nginx_active_port() {
 
 marker_fingerprint() {
     [[ -f "$ACTIVE_PORT_FILE" && -f "$ACTIVE_CONTAINER_FILE" ]] || return 1
-    stat -c '%i|%s|%y' "$ACTIVE_PORT_FILE" "$ACTIVE_CONTAINER_FILE" 2>/dev/null \
+    TZ=UTC LC_ALL=C stat -c '%i|%s|%y' "$ACTIVE_PORT_FILE" "$ACTIVE_CONTAINER_FILE" 2>/dev/null \
         | sha256sum | awk '{print $1}'
 }
 

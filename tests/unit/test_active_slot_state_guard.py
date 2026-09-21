@@ -58,6 +58,16 @@ def test_writer_authorizes_marker_pair(tmp_path: Path):
     assert _run(env, "check", "pytest-guard").returncode == 0
 
 
+def test_marker_fingerprint_is_timezone_independent(tmp_path: Path):
+    env = _env(tmp_path)
+    writer_env = {**env, "TZ": "Asia/Seoul"}
+    checker_env = {**env, "TZ": "Europe/Berlin"}
+
+    _run(writer_env, "write", "8100", "aads-server", "pytest", "kst writer")
+
+    assert _run(checker_env, "check", "pytest-guard-cest").returncode == 0
+
+
 def test_cutover_preserves_pinned_inodes_and_rollback_visibility(tmp_path: Path):
     env = _env(tmp_path)
     _run(env, "write", "8100", "aads-server", "pytest")
