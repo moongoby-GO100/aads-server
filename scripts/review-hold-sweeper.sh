@@ -234,6 +234,16 @@ terminate_review_hold() {
                  review_feedback=COALESCE(review_feedback,'') || E'\n' || ${note},
                  completed_at=NOW(), updated_at=NOW()
              WHERE job_id='${job_id}' AND status='review_hold';"
+    # 종결된 작업의 원 세션 판정 요청이 뒤늦게 실행되면 같은 작업을 다시
+    # 검토하는 잡음이 생긴다. 아직 소비되지 않은 durable reaction도 함께
+    # fail-closed 처리한다. 완료된 reaction 감사 이력은 보존한다.
+    db_exec "UPDATE chat_deferred_reactions
+             SET status='failed',
+                 error_message=COALESCE(error_message, 'review job terminated: ${detail}'),
+                 claimed_by=NULL, lease_expires_at=NULL,
+                 completed_at=COALESCE(completed_at, NOW()), updated_at=NOW()
+             WHERE ohvis_task_id LIKE 'review-adjudication:${job_id}:%'
+               AND status IN ('pending','claimed');"
     return 0
 }
 
@@ -414,6 +424,29 @@ RETURNING id::text;" 2>/dev/null | tr -d '[:space:]') || deferred_id=""
     fi
 }
 
+# 원 세션 판정에도 명시적인 시간 상한이 있다. 상한이 끝난 작업을 다시 검수
+# 모델 백오프로 돌리면 원 세션과 모델 사이를 영구 순환하며 review_hold 건수가
+# 줄지 않는다. 이미 만료 표식이 남은 기존 적체를 스위프 시작 시 먼저 종결한다.
+expired_origin_rows=$(db_query "
+SELECT job_id, project
+  FROM pipeline_jobs
+ WHERE status='review_hold'
+   AND error_detail='review_origin_adjudication_expired'
+ ORDER BY updated_at ASC
+ LIMIT ${SWEEP_BATCH};" 2>/dev/null) || expired_origin_rows=""
+if [[ "$DRY_RUN" == "1" ]]; then
+    [[ -z "${expired_origin_rows//[[:space:]]/}" ]] || log "DRY_RUN expired origin adjudications present"
+else
+    while IFS=$'\x1e' read -r expired_job expired_project; do
+        [[ -z "$expired_job" ]] && continue
+        [[ "$expired_job" =~ ^runner-[0-9a-f]{6,32}$ ]] || continue
+        terminate_review_hold "$expired_job" "review_origin_adjudication_expired" \
+            "원 세션 판정 제한시간(${ORIGIN_ADJUDICATION_TIMEOUT_MIN}분) 만료 — 승인 없이 fail-closed 종결"
+        terminated=$((terminated + 1))
+        log "ORIGIN_ADJUDICATION_TERMINATED ${expired_job} project=${expired_project}"
+    done <<< "$expired_origin_rows"
+fi
+
 # 이전 주기에 이미 임계치를 넘긴 작업도 백오프 만료를 기다리지 않고 먼저
 # 원 세션으로 이관한다. 이렇게 해야 배포 직후 정책이 적용되면 기존 적체도 즉시
 # 줄고, select_sql 의 일반 모델 재시도와 동시에 같은 작업을 잡지 않는다.
@@ -479,7 +512,11 @@ SELECT age_min FROM marked;" 2>/dev/null | tr -d '[:space:]') || expired_age_min
                 log "  SKIP ${job_id} — origin adjudication 만료 상태 변경 누락"
                 continue
             fi
-            log "ORIGIN_ADJUDICATION_EXPIRED ${job_id} project=${project} age_min=${expired_age_min}"
+            terminate_review_hold "$job_id" "review_origin_adjudication_expired" \
+                "원 세션 판정 제한시간(${ORIGIN_ADJUDICATION_TIMEOUT_MIN}분) 만료(age=${expired_age_min}분) — 승인 없이 fail-closed 종결"
+            terminated=$((terminated + 1))
+            log "ORIGIN_ADJUDICATION_TERMINATED ${job_id} project=${project} age_min=${expired_age_min}"
+            continue
         fi
     fi
     total=$((total + 1))

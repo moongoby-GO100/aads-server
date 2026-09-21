@@ -128,6 +128,31 @@ def test_exhausted_review_is_handed_to_origin_session_once_with_bound_evidence()
     assert script.count('enqueue_origin_adjudication "$job_id" "$project"') == 1
 
 
+def test_expired_origin_adjudication_is_terminal_and_cancels_deferred_reaction():
+    script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+
+    terminal = script[script.index("terminate_review_hold() {"):script.index(
+        "# dirty 워크트리 판정"
+    )]
+    assert "UPDATE chat_deferred_reactions" in terminal
+    assert "status='failed'" in terminal
+    assert "review-adjudication:${job_id}:%" in terminal
+    assert "status IN ('pending','claimed')" in terminal
+
+    expired_sweep = script[script.index("expired_origin_rows=$(db_query"):script.index(
+        "# 이전 주기에 이미 임계치를 넘긴 작업"
+    )]
+    assert "error_detail='review_origin_adjudication_expired'" in expired_sweep
+    assert 'terminate_review_hold "$expired_job" "review_origin_adjudication_expired"' in expired_sweep
+
+    timeout_branch = script[script.index('if [[ "$error_detail" == "review_origin_adjudication_pending" ]]'):]
+    terminate = timeout_branch.index(
+        'terminate_review_hold "$job_id" "review_origin_adjudication_expired"'
+    )
+    assert timeout_branch.index("expired_age_min=") < terminate
+    assert timeout_branch.index("continue", terminate) > terminate
+
+
 def test_origin_adjudication_tool_and_state_machine_are_hash_and_session_bound():
     root = ROOT
     api = (root / "app/api/pipeline_runner.py").read_text(encoding="utf-8")

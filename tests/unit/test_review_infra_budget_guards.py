@@ -220,12 +220,15 @@ async def _first_model_cannot_consume_the_entire_sync_deadline():
 def test_sweeper_consumes_retry_budget_on_infra_failure():
     """카운터를 올리지 않으면 백오프도 상한도 영원히 오지 않는다."""
     script = _read("scripts/review-hold-sweeper.sh")
+    infra_retry = script[script.index("infra_retry() {"):script.index(
+        "# 모델 재검수가 상한에 닿으면"
+    )]
 
-    assert "infra_retry()" in script
-    assert "review_retry_count=${nxt}" in script
+    assert "review_retry_count=${nxt}" in infra_retry
     # 옛 로그 문구. 이게 다시 보이면 예산을 보존한 채 배치를 멈추고 있다는 뜻이다
-    # — 21회 연속 scanned=1 retried=0 을 만든 그 경로다.
-    assert "retry budget preserved; batch stopped" not in script
+    # — 21회 연속 scanned=1 retried=0 을 만든 그 경로다. HTTP 자체가 도달하지
+    # 못한 별도 분기는 예산을 보존하므로 infra_retry 함수만 검사한다.
+    assert "retry budget preserved; batch stopped" not in infra_retry
 
 
 def test_sweeper_circuit_opens_only_after_consecutive_infra_failures():
