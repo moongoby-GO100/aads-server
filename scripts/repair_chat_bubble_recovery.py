@@ -24,6 +24,15 @@ MISSING_BUBBLE_EXECUTIONS = [UUID(value) for value in (
     "d9eb0fad-8bf3-4102-8a2e-3b918ac74455",
     "b25ac21a-3347-47ed-8861-7519eceecaf0",
 )]
+# Original timeout timestamps from the exclusive before-repair snapshot. Old
+# resume attempts subsequently rewrote completed_at; do not move notices into
+# the middle of newer conversations when recreating a deleted repair notice.
+ORIGINAL_TIMEOUT_AT = {
+    "18e67cc5-d1f1-45e4-a262-fda0b379c2b6": "2026-09-21T09:47:55.396525+00:00",
+    "1eef6586-261f-4f6e-bfc5-0660037dd694": "2026-09-21T09:57:17.898489+00:00",
+    "b25ac21a-3347-47ed-8861-7519eceecaf0": "2026-09-21T09:59:44.263192+00:00",
+    "d9eb0fad-8bf3-4102-8a2e-3b918ac74455": "2026-09-21T09:56:05.404730+00:00",
+}
 
 
 async def main(args):
@@ -90,11 +99,12 @@ async def main(args):
                       '첫 응답 대기 시간이 초과되어 이 요청의 응답이 중단되었습니다. 오류 정리 중 사라졌던 안내를 복구했습니다. 이후 대화는 그대로 유지됩니다.',
                       'interrupted','interruption_notice',FALSE,'[]'::jsonb,
                       jsonb_build_object('recovery_repair','20260921_chat_bubble','interruption_reason',te.error_message),
-                      COALESCE(te.completed_at,te.created_at)
+                      COALESCE(($3::jsonb->>te.id::text)::timestamptz,te.completed_at,te.created_at)
                     FROM chat_turn_executions te
                     WHERE te.id=ANY($1::uuid[]) AND te.id=ANY($2::uuid[])
                       AND te.status='interrupted' AND te.assistant_message_id IS NULL
-                      AND te.error_message LIKE '%llm_first_response_timeout%'
+                      AND (te.error_message LIKE '%llm_first_response_timeout%'
+                           OR te.error_message LIKE '%superseded%')
                       AND NOT EXISTS (SELECT 1 FROM chat_messages m WHERE m.execution_id=te.id AND m.role='assistant')
                     RETURNING id,execution_id,session_id
                 ), linked AS (
@@ -105,7 +115,7 @@ async def main(args):
                     FROM (SELECT session_id,COUNT(*)::int n FROM inserted GROUP BY session_id) i
                     WHERE s.id=i.session_id RETURNING s.id
                 ) SELECT id,execution_id,session_id FROM inserted
-            """, MISSING_BUBBLE_EXECUTIONS, ids)
+            """, MISSING_BUBBLE_EXECUTIONS, ids, json.dumps(ORIGINAL_TIMEOUT_AT))
             # An old API may have resumed and archived our repair notice while
             # the fixed release was waiting for drain. Restore only notices
             # created by this repair, only on the locked terminal executions.
