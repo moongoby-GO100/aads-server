@@ -190,3 +190,102 @@ def test_smart_browser_recovery_routes_login_permission_and_network_failures(
 
     assert recovery["route"] == expected_route
     assert recovery["reason"] == expected_reason
+
+
+class BlockedLocator(FakeLocator):
+    async def aria_snapshot(self):
+        return "Access Denied"
+
+    async def inner_text(self, **kwargs):
+        return "Access Denied\nYou don't have permission to access this resource."
+
+
+class BlockedPage(FakePage):
+    def locator(self, selector):
+        self.calls.append(("snapshot", {"selector": selector}))
+        return BlockedLocator()
+
+
+class LongPageLocator(FakeLocator):
+    async def inner_text(self, **kwargs):
+        # 정상 본문 안에 차단 문구가 섞여 있을 수 있다. 길면 본문으로 본다.
+        return ("상품 설명 " * 400) + "판매가 차단되었습니다"
+
+
+class LongPage(FakePage):
+    def locator(self, selector):
+        self.calls.append(("snapshot", {"selector": selector}))
+        return LongPageLocator()
+
+
+def test_route_sends_bot_blocked_site_to_pc_lane_without_faking_native_auth():
+    """봇 차단 사이트를 native_auth_required 로 위장하지 않고도 PC 레인에 보낸다."""
+    route = executor_module.smart_browser_route(
+        {"smart_browser": {"native_auth_required": False, "server_access_blocked": True}}
+    )
+
+    assert route == {"runtime": "pc_agent", "reason": "server_ip_blocked"}
+
+
+def test_recovery_routes_bot_block_to_pc_lane_not_human():
+    recovery = executor_module.smart_browser_recovery(
+        url="https://www.coupang.com/np/search", error="Access Denied"
+    )
+
+    assert recovery["route"] == "pc_agent"
+    assert recovery["reason"] == "server_ip_blocked"
+    assert recovery["resume"] == "same_work_session"
+
+
+async def test_executor_fails_over_to_pc_lane_when_block_page_is_returned(monkeypatch):
+    """차단 화면은 HTTP 200 으로 온다. 단계가 성공해도 레인을 바꿔 다시 시도한다."""
+    lanes = []
+
+    async def acquire(**kwargs):
+        lanes.append(bool(kwargs.get("browser_work_key")))
+        return FakeContext(FakePage() if kwargs.get("browser_work_key") else BlockedPage()), None
+
+    monkeypatch.setattr(executor_module, "acquire_browser_context", acquire)
+    result = await executor_module.BrowserRecipeExecutor(browser_work_key="ceo-pc")(
+        {"action": "snapshot", "risk": "READ", "url": "https://www.coupang.com/np/search"}
+    )
+
+    assert result["ok"] is True
+    assert lanes == [False, True]
+    assert result["route"] == "pc_agent"
+    assert result["lane_failover"]["reason"] == "server_ip_blocked"
+    assert result["evidence"]["dom"]["text"] == "읽기 전용 대시보드"
+    assert "server_access" not in result
+
+
+async def test_blocked_page_without_pc_lane_is_reported_not_silently_accepted(monkeypatch):
+    async def acquire(**kwargs):
+        return FakeContext(BlockedPage()), None
+
+    monkeypatch.setattr(executor_module, "acquire_browser_context", acquire)
+    result = await executor_module.BrowserRecipeExecutor()(
+        {"action": "snapshot", "risk": "READ", "url": "https://www.coupang.com/np/search"}
+    )
+
+    assert result["ok"] is True
+    assert result["server_access"] == {
+        "blocked": True, "lane": "browser_agent", "resume": "needs_browser_work_key",
+    }
+
+
+async def test_long_page_containing_block_words_does_not_switch_lane(monkeypatch):
+    lanes = []
+
+    async def acquire(**kwargs):
+        lanes.append(bool(kwargs.get("browser_work_key")))
+        return FakeContext(LongPage()), None
+
+    monkeypatch.setattr(executor_module, "acquire_browser_context", acquire)
+    result = await executor_module.BrowserRecipeExecutor(browser_work_key="ceo-pc")(
+        {"action": "snapshot", "risk": "READ", "url": "https://www.coupang.com/vp/products/1"}
+    )
+
+    assert result["ok"] is True
+    assert lanes == [False]
+    assert result["route"] == "browser_agent"
+    assert "lane_failover" not in result
