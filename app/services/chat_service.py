@@ -6515,7 +6515,10 @@ async def with_background_completion(
                         elif _t == "done":
                             state["saw_done_event"] = True
                             state["first_response_at"] = state.get("first_response_at") or _bg_time.monotonic()
-                        if _t:
+                        # SSE heartbeat keeps the client connection alive, but is not
+                        # evidence of a relay/LLM response. Do not let it reset the
+                        # first-response watchdog's inactivity clock.
+                        if _t and _t != "heartbeat":
                             state["last_event_at"] = _bg_time.monotonic()
                     except Exception:
                         pass
