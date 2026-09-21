@@ -604,6 +604,48 @@ async def _config_syntax_errors(
     return errors
 
 
+async def _content_regression_paths(
+    project: str, repo: str, file_paths: list[str]
+) -> dict[str, str]:
+    """작업본이 HEAD 가 아닌 '예전 커밋 내용' 과 똑같으면 되돌림으로 보고 막는다.
+
+    2026-09-21: 자동 커밋 15a5abc3 이 같은 날 고쳐 둔 litellm-config.yaml 을 옛
+    내용으로 되돌려 aads-litellm 이 21 회 크래시했다. 경로·문법만 보는 게이트는
+    이걸 못 잡는다 — 내용이 과거 커밋의 블롭과 일치하는지 직접 본다.
+
+    새 파일이거나 이력이 없으면 판단하지 않는다(기존 동작 유지).
+    """
+    regressed: dict[str, str] = {}
+    for path in file_paths:
+        quoted = shlex.quote(path)
+        command = (
+            f'P={quoted}; git hash-object -- "$P" 2>/dev/null; echo "--"; '
+            f'for c in $(git rev-list -n 10 HEAD -- "$P" 2>/dev/null); do '
+            f'git rev-parse "$c:$P" 2>/dev/null; done'
+        )
+        try:
+            output = await _run_git_command(project, repo, command)
+        except Exception as exc:  # 조회 실패는 차단하지 않는다
+            logger.warning("content regression check failed: %s (%s)", path, exc)
+            continue
+        lines = [line.strip() for line in str(output).splitlines() if line.strip()]
+        if "--" not in lines:
+            continue
+        marker = lines.index("--")
+        working = lines[marker - 1] if marker else ""
+        history = lines[marker + 1 :]
+        if len(working) != 40 or len(history) < 2:
+            continue
+        head_blob = history[0]
+        if working == head_blob:
+            continue
+        if working in history[1:]:
+            regressed[path] = (
+                f"작업본이 과거 커밋 내용({working[:8]})과 동일 — HEAD({head_blob[:8]}) 를 되돌린다"
+            )
+    return regressed
+
+
 def _is_committable_path(path: str) -> bool:
     """레포 밖 경로(/tmp, /root/.ssh, ../..)는 git add에서 제외한다."""
     if not path or path.startswith("/"):
@@ -661,13 +703,23 @@ async def _finalize_group(
             file_paths = [path for path in file_paths if path not in invalid_config]
             result["skipped_invalid_config"] = list(invalid_config)[:20]
 
+    # 과거 커밋 내용으로 되돌리는 변경은 커밋하지 않는다(_content_regression_paths).
+    regressed: dict[str, str] = {}
+    if file_paths:
+        regressed = await _content_regression_paths(project, repo, file_paths)
+        if regressed:
+            file_paths = [path for path in file_paths if path not in regressed]
+            result["skipped_content_regression"] = list(regressed)[:20]
+
+    blocked = {**invalid_config, **regressed}
+
     all_ledger_paths = [str(row.get("file_path") or "").strip() for row in rows]
     all_ledger_paths = [path for path in dict.fromkeys(all_ledger_paths) if path]
 
-    if not file_paths and invalid_config:
-        # 문법 오류로 전부 걸러진 경우는 ledger 를 정리하지 않는다 — 고쳐야 할
-        # 변경이 남아 있다는 신호를 지우면 조용히 유실된다.
-        detail = "; ".join(f"{path}: {msg}" for path, msg in invalid_config.items())
+    if not file_paths and blocked:
+        # 문법 오류·되돌림으로 전부 걸러진 경우는 ledger 를 정리하지 않는다 —
+        # 고쳐야 할 변경이 남아 있다는 신호를 지우면 조용히 유실된다.
+        detail = "; ".join(f"{path}: {msg}" for path, msg in blocked.items())
         if all_ledger_paths:
             try:
                 await _mark_group(
@@ -677,11 +729,11 @@ async def _finalize_group(
                     file_paths=[],
                     ledger_file_paths=all_ledger_paths,
                     status=_STATUS_DIRTY,
-                    last_error=f"invalid config syntax: {detail}"[:500],
+                    last_error=f"blocked before commit: {detail}"[:500],
                 )
             except Exception:
                 pass
-        result["detail"] = f"invalid config syntax: {detail}"[:500]
+        result["detail"] = f"blocked before commit: {detail}"[:500]
         return result
 
     if not file_paths:

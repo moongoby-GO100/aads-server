@@ -99,3 +99,53 @@ def test_config_syntax_errors_passes_valid_config(monkeypatch):
 def test_config_syntax_errors_flags_broken_json(monkeypatch):
     errors = _run_config_syntax_check(monkeypatch, {"tsconfig.json": '{"a": 1,}'})
     assert "tsconfig.json" in errors
+
+
+_HEAD_SHA = "a" * 40
+_OLD_SHA = "b" * 40
+_NEW_SHA = "c" * 40
+
+
+def _run_regression_check(monkeypatch, outputs):
+    import asyncio
+
+    from app.services import workspace_change_tracker as tracker
+
+    async def fake_run_git_command(project, repo, command):
+        for path, text in outputs.items():
+            if path in command:
+                return text
+        return ""
+
+    monkeypatch.setattr(tracker, "_run_git_command", fake_run_git_command)
+    return asyncio.run(
+        tracker._content_regression_paths("AADS", "aads-server", list(outputs))
+    )
+
+
+def test_content_regression_flags_revert_to_older_commit(monkeypatch):
+    # 2026-09-21 재현: 자동 커밋이 당일 수정본을 옛 내용으로 되돌린 상황.
+    regressed = _run_regression_check(
+        monkeypatch,
+        {"litellm-config.yaml": f"{_OLD_SHA}\n--\n{_HEAD_SHA}\n{_OLD_SHA}\n"},
+    )
+    assert "litellm-config.yaml" in regressed
+
+
+def test_content_regression_allows_new_content(monkeypatch):
+    regressed = _run_regression_check(
+        monkeypatch,
+        {"app/main.py": f"{_NEW_SHA}\n--\n{_HEAD_SHA}\n{_OLD_SHA}\n"},
+    )
+    assert regressed == {}
+
+
+def test_content_regression_allows_unchanged_and_new_file(monkeypatch):
+    regressed = _run_regression_check(
+        monkeypatch,
+        {
+            "same.py": f"{_HEAD_SHA}\n--\n{_HEAD_SHA}\n{_OLD_SHA}\n",
+            "brand_new.py": f"{_NEW_SHA}\n--\n",
+        },
+    )
+    assert regressed == {}
