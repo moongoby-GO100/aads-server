@@ -566,6 +566,44 @@ async def sync_git_dirty_snapshot(
     return summary
 
 
+_CONFIG_SUFFIXES = (".yaml", ".yml", ".json")
+
+
+async def _config_syntax_errors(
+    project: str, repo: str, file_paths: list[str]
+) -> dict[str, str]:
+    """설정 파일(YAML/JSON)이 파싱되지 않으면 커밋 대상에서 뺀다.
+
+    2026-09-21: 블록 위치가 잘못된 litellm-config.yaml 이 자동 커밋(15a5abc3)으로
+    들어가 aads-litellm 이 21 회 크래시했다. 기존 게이트는 경로만 보고 내용을
+    보지 않았다 — 문법이 깨진 설정 파일은 커밋 전에 걸러낸다.
+    """
+    import json
+
+    targets = [
+        path for path in file_paths if path.lower().endswith(_CONFIG_SUFFIXES)
+    ]
+    errors: dict[str, str] = {}
+    for path in targets:
+        try:
+            text = await _run_git_command(project, repo, f"cat -- {shlex.quote(path)}")
+        except Exception as exc:  # 읽기 실패는 차단하지 않는다(기존 동작 유지)
+            logger.warning("config syntax check read failed: %s (%s)", path, exc)
+            continue
+        if not text or len(text) > 2_000_000:
+            continue
+        try:
+            if path.lower().endswith(".json"):
+                json.loads(text)
+            else:
+                import yaml
+
+                yaml.safe_load(text)
+        except Exception as exc:
+            errors[path] = str(exc)[:200]
+    return errors
+
+
 def _is_committable_path(path: str) -> bool:
     """레포 밖 경로(/tmp, /root/.ssh, ../..)는 git add에서 제외한다."""
     if not path or path.startswith("/"):
@@ -615,8 +653,36 @@ async def _finalize_group(
         result["skipped_outside_repo"] = skipped_outside[:20]
         result["skipped_not_dirty"] = skipped_missing[:20]
 
+    # 문법이 깨진 설정 파일은 커밋하지 않는다(_config_syntax_errors 주석 참조).
+    invalid_config: dict[str, str] = {}
+    if file_paths:
+        invalid_config = await _config_syntax_errors(project, repo, file_paths)
+        if invalid_config:
+            file_paths = [path for path in file_paths if path not in invalid_config]
+            result["skipped_invalid_config"] = list(invalid_config)[:20]
+
     all_ledger_paths = [str(row.get("file_path") or "").strip() for row in rows]
     all_ledger_paths = [path for path in dict.fromkeys(all_ledger_paths) if path]
+
+    if not file_paths and invalid_config:
+        # 문법 오류로 전부 걸러진 경우는 ledger 를 정리하지 않는다 — 고쳐야 할
+        # 변경이 남아 있다는 신호를 지우면 조용히 유실된다.
+        detail = "; ".join(f"{path}: {msg}" for path, msg in invalid_config.items())
+        if all_ledger_paths:
+            try:
+                await _mark_group(
+                    session_id=session_id,
+                    project=project,
+                    repo=repo,
+                    file_paths=[],
+                    ledger_file_paths=all_ledger_paths,
+                    status=_STATUS_DIRTY,
+                    last_error=f"invalid config syntax: {detail}"[:500],
+                )
+            except Exception:
+                pass
+        result["detail"] = f"invalid config syntax: {detail}"[:500]
+        return result
 
     if not file_paths:
         # 커밋 대상이 하나도 없으면 ledger를 정리해 다음 배포를 막지 않는다.

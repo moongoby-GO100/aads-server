@@ -51,3 +51,51 @@ def test_derive_change_owner_prefers_explicit_then_session_then_tool():
     assert _derive_change_owner("session-1234567890", "tool", "owner-x") == "owner-x"
     assert _derive_change_owner("session-1234567890", "tool") == "chat:session-1234"
     assert _derive_change_owner("", "write_remote_file") == "tool:write_remote_file"
+
+
+def _run_config_syntax_check(monkeypatch, contents):
+    import asyncio
+
+    from app.services import workspace_change_tracker as tracker
+
+    async def fake_run_git_command(project, repo, command):
+        for path, text in contents.items():
+            if path in command:
+                return text
+        return ""
+
+    monkeypatch.setattr(tracker, "_run_git_command", fake_run_git_command)
+    return asyncio.run(
+        tracker._config_syntax_errors("AADS", "aads-server", list(contents))
+    )
+
+
+def test_config_syntax_errors_flags_broken_yaml(monkeypatch):
+    # 2026-09-21 재현: model_list 밖에 시퀀스가 붙어 YAML 전체가 깨진 상태.
+    errors = _run_config_syntax_check(
+        monkeypatch,
+        {
+            "litellm-config.yaml": (
+                "model_list:\n- model_name: a\nrouter_settings:\n  x: 1\n- model_name: b\n"
+            ),
+            "app/main.py": "def f():\n    pass\n",
+        },
+    )
+    assert "litellm-config.yaml" in errors
+    assert "app/main.py" not in errors
+
+
+def test_config_syntax_errors_passes_valid_config(monkeypatch):
+    errors = _run_config_syntax_check(
+        monkeypatch,
+        {
+            "litellm-config.yaml": "model_list:\n- model_name: a\n- model_name: b\n",
+            "package.json": '{"name": "ok"}',
+        },
+    )
+    assert errors == {}
+
+
+def test_config_syntax_errors_flags_broken_json(monkeypatch):
+    errors = _run_config_syntax_check(monkeypatch, {"tsconfig.json": '{"a": 1,}'})
+    assert "tsconfig.json" in errors
