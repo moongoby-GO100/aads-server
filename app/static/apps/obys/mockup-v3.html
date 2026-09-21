@@ -60,6 +60,8 @@
     .nav-group-head { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 2px; }
     .nav-group-head .nav-parent { min-width: 0; }
     .nav-group-head .nav-toggle { width: 34px; padding: 0; justify-content: center; }
+    .nav-group.group-active .nav-parent { color: #fff; background: rgba(255,255,255,.08); }
+    .nav-group.group-active .nav-toggle { color: #fff; background: rgba(255,255,255,.05); }
     .nav-parent .nav-parent-label { display: flex; min-width: 0; align-items: center; gap: 12px; }
     .nav-parent .nav-parent-label > span:not(.count) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nav-chevron { margin-left: auto; font-size: 13px; transition: transform .2s ease; }
@@ -1399,6 +1401,9 @@
       "audit/integration-audit": ["로그인·연동 감사", "로그인과 외부 연동 인증 시도 및 실패를 추적합니다.", ["실패", "4건", "차단 0건"], ["접속 이력", "대표 웹 로그인|회계 모바일 로그인|은행 재인증"], ["보안 점검", "새 기기|반복 실패|인증정보 변경"]],
       "audit/business-switch": ["보안 정책", "세션, 최소 권한, 민감정보와 내보내기 정책을 관리합니다.", ["정책", "15개", "검토 2개"], ["핵심 정책", "세션 8시간|민감정보 마스킹|내보내기 승인"], ["정책 운영", "정기 검토|예외 승인|위반 알림"]]
     };
+    const allowedDetailsByView = Object.fromEntries(
+      Object.entries(submenuItems).map(([slug, items]) => [slug, new Set(items.map(([, detail]) => detail))])
+    );
 
     const renderDetailPage = (slug, detail) => {
       const definition = detailPageDefinitions[`${slug}/${detail}`];
@@ -1567,14 +1572,16 @@
     const normalizeHash = () => {
       const [rawView, rawDetail] = window.location.hash.replace(/^#/, "").split("/");
       const slug = views[rawView] ? rawView : "home";
-      const detail = rawDetail && detailPageDefinitions[`${slug}/${rawDetail}`] ? rawDetail : null;
+      const detail = rawDetail && allowedDetailsByView[slug]?.has(rawDetail) ? rawDetail : null;
       return { slug, detail, needsRecovery: Boolean(rawDetail && !detail) || !views[rawView] };
     };
     const syncMenuState = (slug, detail = null) => {
       expandedMenus.add(slug);
       document.querySelectorAll("[data-menu-group]").forEach((group) => {
         const expanded = expandedMenus.has(group.dataset.menuGroup);
+        const groupActive = group.dataset.menuGroup === slug && Boolean(detail);
         group.classList.toggle("expanded", expanded);
+        group.classList.toggle("group-active", groupActive);
         const toggle = group.querySelector("[data-menu-toggle]");
         const submenu = group.querySelector(".submenu");
         toggle.setAttribute("aria-expanded", String(expanded));
@@ -1632,6 +1639,7 @@
       }
       const menuToggle = event.target.closest("[data-menu-toggle]");
       if (menuToggle) {
+        event.stopPropagation();
         const slug = menuToggle.dataset.menuToggle;
         if (expandedMenus.has(slug)) expandedMenus.delete(slug); else expandedMenus.add(slug);
         syncMenuState(normalizeHash().slug, normalizeHash().detail);
