@@ -301,6 +301,107 @@ def _apply_deploy_time_aliases(rows: list[dict[str, Any]]) -> list[dict[str, Any
     return rows
 
 
+def _deploy_waiting_reason(row: dict[str, Any]) -> tuple[str, str]:
+    """Return a stable, user-facing reason without exposing internal-only labels."""
+    status = str(row.get("status") or "").lower()
+    phase = str(row.get("phase") or "").lower()
+    if status == "awaiting_approval":
+        return "approval_required", "배포 승인을 기다리고 있습니다."
+    if phase == "waiting_batch_predecessor":
+        return "batch_predecessor", "앞선 호환 배포가 끝나기를 기다리고 있습니다."
+    if status == "queued":
+        return "queued_for_deploy", "배포 실행 순서를 기다리고 있습니다."
+    if status == "success_partial":
+        return "standby_sync_deferred", "활성 슬롯은 정상이며 대기 슬롯 동일 이미지 동기화를 기다리고 있습니다."
+    if status in ACTIVE_STATUSES:
+        return "phase_in_progress", "현재 배포 단계가 진행 중입니다."
+    if status in {"failed", "error", "blocked"}:
+        return "deploy_failed", "마지막 배포가 실패 또는 차단되어 복구 조치가 필요합니다."
+    return "none", "대기 없음"
+
+
+def _annotate_deploy_controls(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach the control/recovery contract consumed by Ops UI cards."""
+    for row in rows:
+        status = str(row.get("status") or "").lower()
+        phase = str(row.get("phase") or "")
+        reason_code, reason = _deploy_waiting_reason(row)
+        run_id = row.get("id")
+        approval_required = status == "awaiting_approval"
+        retry_allowed = status in {"failed", "error", "blocked"} and run_id is not None
+        rollback_plan = str(row.get("rollback_plan") or "").strip() or None
+
+        if status == "success_partial":
+            recovery_state = "standby_sync_scheduled"
+        elif status in ACTIVE_STATUSES:
+            recovery_state = "phase_managed"
+        elif status == "queued":
+            recovery_state = "worker_auto_start" if row.get("auto_start") else "manual_start_required"
+        elif retry_allowed:
+            recovery_state = "manual_retry_available"
+        else:
+            recovery_state = "completed" if status in {"completed", "success"} else "none"
+
+        phase_lower = phase.lower()
+        if "rollback" in phase_lower or status == "rolled_back":
+            rollback = {"state": "completed", "label": "롤백 완료", "automatic": True, "plan": rollback_plan}
+        elif status in {"failed", "error", "blocked"}:
+            rollback = {
+                "state": "available" if rollback_plan else "route_preserved",
+                "label": "롤백 계획 있음" if rollback_plan else "실패 지점에서 라우팅 유지",
+                "automatic": False,
+                "plan": rollback_plan,
+            }
+        else:
+            rollback = {
+                "state": "planned" if rollback_plan else "not_required",
+                "label": "롤백 계획 등록" if rollback_plan else "현재 롤백 불필요",
+                "automatic": False,
+                "plan": rollback_plan,
+            }
+
+        row.update({
+            "waiting_reason_code": reason_code,
+            "waiting_reason": reason,
+            "bottleneck_phase": phase or None,
+            "bottleneck_label": phase.replace("_", " ") if phase else "대기 없음",
+            "approval_required": approval_required,
+            "last_error": row.get("error_summary") or None,
+            "automatic_recovery_state": recovery_state,
+            "retry": {
+                "allowed": retry_allowed,
+                "method": "POST" if retry_allowed else None,
+                "path": f"/api/v1/ops/deploy/{run_id}/retry" if retry_allowed else None,
+            },
+            "approval": {
+                "required": approval_required,
+                "method": "POST" if approval_required else None,
+                "path": f"/api/v1/ops/deploy/{run_id}/approve" if approval_required and run_id is not None else None,
+            },
+            "rollback": rollback,
+        })
+    return rows
+
+
+def _deployment_control_items(response: dict[str, Any]) -> list[dict[str, Any]]:
+    """Prefer live/queued runs, then append actionable recent runs without duplicates."""
+    selected: list[dict[str, Any]] = []
+    seen: set[Any] = set()
+    sources = [response["active_deployments"], response["queued_deployments"]]
+    sources.append([
+        item for item in response["recent_deployments"]
+        if str(item.get("status") or "").lower() in {"failed", "error", "blocked", "success_partial"}
+    ][:8])
+    for source in sources:
+        for item in source:
+            key = item.get("id") or (item.get("project"), item.get("release_sha"), item.get("status"))
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append(item)
+    return selected[:16]
+
+
 async def _table_exists(conn: Any, name: str) -> bool:
     return bool(await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{name}"))
 
@@ -541,7 +642,7 @@ async def _load_recent_deployments(conn: Any) -> list[dict[str, Any]]:
                         ELSE 'mismatch' END AS bg_sync_status,
                    COALESCE(dr.phase_completed_at, dr.updated_at, dr.created_at) AS _sort_at
             FROM deploy_runs AS dr
-            WHERE dr.status IN ('completed', 'success', 'failed', 'error',
+            WHERE dr.status IN ('completed', 'success', 'success_partial', 'failed', 'error',
                                 'blocked', 'superseded', 'cancelled')
         ), ranked AS (
             SELECT t.*,
@@ -971,6 +1072,7 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
         "review_hold_queue": [],
         "recent_completed_deployments": [],
         "recent_deployments": [],
+        "deployment_control_items": [],
         "recent_durations_per_project": [],
         "phase_timeline": [],
         "stale_zombie_signals": [],
@@ -989,10 +1091,15 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
     if has_runs:
         active, queued = await _load_deploy_runs(conn)
         active = _annotate_active_runs(active, now)
-        response["active_deployments"] = active
-        response["queued_deployments"] = queued
-        response["recent_completed_deployments"] = await _load_recent_completed_deployments(conn)
-        response["recent_deployments"] = await _load_recent_deployments(conn)
+        response["active_deployments"] = _annotate_deploy_controls(active)
+        response["queued_deployments"] = _annotate_deploy_controls(queued)
+        response["recent_completed_deployments"] = _annotate_deploy_controls(
+            await _load_recent_completed_deployments(conn)
+        )
+        response["recent_deployments"] = _annotate_deploy_controls(
+            await _load_recent_deployments(conn)
+        )
+        response["deployment_control_items"] = _deployment_control_items(response)
         response["recent_durations_per_project"] = await _load_recent_durations(conn)
         response["phase_timeline"] = await _load_phase_timeline(conn)
         response["bg_digest_sync"] = [

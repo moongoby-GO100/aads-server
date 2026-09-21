@@ -539,6 +539,7 @@ async def get_common_deploy_status():
             "error_summary": "deployment telemetry is temporarily unavailable",
             "active_deployments": [],
             "queued_deployments": [],
+            "deployment_control_items": [],
             "recent_completed_deployments": [],
             "recent_durations_per_project": [],
             "phase_timeline": [],

@@ -253,6 +253,72 @@ def test_recent_deployments_include_failed_run_id_and_status():
     assert recent["completed_at"] == now
 
 
+def test_deployment_control_items_expose_reason_recovery_and_actions():
+    now = datetime.now(timezone.utc)
+    conn = FakeConnection(
+        {"deploy_runs", "deploy_history", "pipeline_jobs"},
+        {
+            "FROM deploy_runs dr": [{
+                "id": 21,
+                "project": "AADS",
+                "release_sha": "deadbeef",
+                "status": "awaiting_approval",
+                "phase": "approval_gate",
+                "requested_at": now,
+                "created_at": now,
+                "updated_at": now,
+                "request_payload": {},
+                "error_summary": None,
+                "auto_start": True,
+                "bg_sync_status": "unknown",
+            }],
+            "recent_terminal_deploy_history": [{
+                "id": 20,
+                "project": "AADS",
+                "release_sha": "cafebabe",
+                "status": "failed",
+                "phase": "candidate_health",
+                "requested_at": now,
+                "created_at": now,
+                "updated_at": now,
+                "phase_completed_at": now,
+                "request_payload": {},
+                "error_summary": "candidate health failed",
+                "rollback_plan": "keep current route",
+                "bg_sync_status": "unknown",
+            }],
+            "FROM deploy_recent_durations": [],
+            "FROM deploy_phase_events": [],
+            "legacy_started_without_terminal_match": [],
+            "ROUND(AVG(duration_s)": [],
+            "FROM pipeline_jobs": [],
+        },
+    )
+
+    result = asyncio.run(get_deploy_status(conn))
+
+    approval = next(item for item in result["deployment_control_items"] if item["id"] == 21)
+    failed = next(item for item in result["deployment_control_items"] if item["id"] == 20)
+    assert approval["approval_required"] is True
+    assert approval["approval"]["path"] == "/api/v1/ops/deploy/21/approve"
+    assert failed["last_error"] == "candidate health failed"
+    assert failed["retry"]["path"] == "/api/v1/ops/deploy/20/retry"
+    assert failed["rollback"]["state"] == "available"
+
+
+def test_success_partial_is_visible_as_automatic_standby_recovery():
+    rows = _MODULE._annotate_deploy_controls([{
+        "id": 4905,
+        "status": "success_partial",
+        "phase": "completed",
+        "error_summary": "standby sync deferred: active streams",
+    }])
+
+    assert rows[0]["waiting_reason_code"] == "standby_sync_deferred"
+    assert rows[0]["automatic_recovery_state"] == "standby_sync_scheduled"
+    assert rows[0]["retry"]["allowed"] is False
+
+
 def test_project_deployments_only_include_deployed_pipeline_history():
     now = datetime.now(timezone.utc)
     conn = FakeConnection(
