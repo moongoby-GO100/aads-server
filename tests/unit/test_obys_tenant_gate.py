@@ -54,6 +54,8 @@ class TestDefaultAllowList:
             "/api/v1/yeoljeong-finance/uploads",
             "/api/v1/yeoljeong-finance/uploads/00000000-0000-0000-0000-000000000001/download",
             "/api/v1/yeoljeong-finance/uploaded-ledger",
+            "/api/v1/yeoljeong-finance/journals",
+            "/api/v1/yeoljeong-finance/journals/00000000-0000-0000-0000-000000000001/transition",
         ],
     )
     async def test_new_tenant_can_enter_only_scoped_upload_routes(self, path):

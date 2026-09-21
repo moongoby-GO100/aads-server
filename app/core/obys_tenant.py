@@ -32,6 +32,10 @@ _TENANT_SCOPED_PREFIXES = (
     "/api/v1/yeoljeong-finance/card-transactions",
     "/api/v1/yeoljeong-finance/card-uploads",
     "/api/v1/yeoljeong-finance/ledger-bank-transactions",
+    # 전표(journals)도 같은 규칙이다 — create/list/update/transition/reverse 5개 함수
+    # 전부 _tenant(user) 로 JWT tenant_id 를 잡고 _require_business() 로 사업자
+    # 귀속을 확인한다. 이 줄이 없어 신규 테넌트가 전표 호출마다 403 을 받았다.
+    "/api/v1/yeoljeong-finance/journals",
 )
 
 
