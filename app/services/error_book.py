@@ -106,6 +106,17 @@ async def record_candidate(
     쌓인다.
     """
     body = str(text or "")
+    probe = body.strip()
+    # 프록시가 돌려준 HTML 오류 페이지는 원인 신호가 아니라 전송 껍데기다.
+    # 이를 후보로 만들면 동일한 nginx 본문이 재발 횟수만 부풀린다.
+    html_markers = ("<!-- a padding", "<html", "<!doctype", "friendly error page")
+    if (
+        len(probe) < 20
+        or re.fullmatch(r"[0-9\s]+", probe)
+        or any(marker in probe.lower() for marker in html_markers)
+    ):
+        logger.debug("error_book_candidate_skipped_noisy_probe")
+        return ""
     cand = ""
     for line in body.splitlines():
         line = line.strip()

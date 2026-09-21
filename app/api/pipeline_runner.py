@@ -2056,6 +2056,47 @@ async def get_job(
     return result
 
 
+async def _record_terminal_failure_candidate(row: object) -> None:
+    """Index runner failures without changing the terminal transition."""
+    status = str(row["status"] or "")  # type: ignore[index]
+    phase = str(row["phase"] or "")  # type: ignore[index]
+    is_code_failure = status == "error" and phase in {"error", "review_failed"}
+    is_review_infra_failure = status == "review_hold" and phase == "review_hold"
+    if not (is_code_failure or is_review_infra_failure):
+        return
+
+    job_id = str(row["job_id"] or "")  # type: ignore[index]
+    project = str(row["project"] or "AADS")  # type: ignore[index]
+    error_detail = str(row["error_detail"] or "")  # type: ignore[index]
+    review_feedback = str(row["review_feedback"] or "")[-500:]  # type: ignore[index]
+    probe = (
+        f"error_detail: {error_detail}\n"
+        f"review_feedback: {review_feedback}\n"
+        f"job_id: {job_id}\nproject: {project}"
+    )
+    try:
+        from app.services.error_book import bump_recurrence, match_error, record_candidate
+
+        known = await match_error(probe)
+        if known:
+            for hit in known:
+                await bump_recurrence(hit["error_key"])
+        else:
+            await record_candidate(
+                probe,
+                source=f"runner:{project}:{phase}",
+                project=project,
+                metadata={"job_id": job_id, "phase": phase, "status": status},
+            )
+    except Exception as exc:
+        # 오류 사전 장애가 러너의 종료·승격 흐름을 바꾸면 안 된다.
+        logger.debug(
+            "pipeline_runner.error_book_hook_failed",
+            job_id=job_id,
+            error=str(exc)[:120],
+        )
+
+
 @router.post("/pipeline/jobs/{job_id}/notify", tags=["pipeline-runner"])
 async def notify_completion(job_id: str):
     """Runner가 작업 완료 시 호출 — 채팅AI에 자동 반응 트리거."""
@@ -2078,7 +2119,7 @@ async def notify_completion(job_id: str):
 
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT job_id, project, status, phase, chat_session_id, error_detail, "
+            "SELECT job_id, project, status, phase, chat_session_id, error_detail, review_feedback, "
             "substring(result_output from 1 for 500) as output_preview, "
             "substring(instruction from 1 for 200) as instruction_preview "
             "FROM pipeline_jobs WHERE job_id = $1", job_id
@@ -2089,6 +2130,8 @@ async def notify_completion(job_id: str):
 
     status = row["status"]
     project = row["project"]
+
+    await _record_terminal_failure_candidate(row)
 
     # 작업 완료/에러 시 같은 프로젝트의 다음 queued 작업을 자동 승격
     promoted_job_id = None
