@@ -186,6 +186,8 @@ class _EnqueueConnection:
         return "OK"
 
     async def fetchval(self, query, *args):
+        if "FROM chat_sessions" in query:
+            return True
         if "SELECT EXISTS" in query:
             return self.ready_exists
         if "MAX(queue_position)" in query:
@@ -193,10 +195,17 @@ class _EnqueueConnection:
         raise AssertionError(query)
 
     async def fetchrow(self, query, *args):
+        self.executions.append((query, args))
         if "SELECT *" in query:
             return None
         if "INSERT INTO deploy_runs" in query:
-            return {"id": 23, "release_sha": args[4], "phase": args[6]}
+            return {
+                "id": 23,
+                "release_sha": args[4],
+                "phase": args[6],
+                "chat_session_id": args[18],
+                "session_notification_status": "pending" if args[18] else "unbound",
+            }
         raise AssertionError(query)
 
 
@@ -212,3 +221,20 @@ def test_enqueue_preserves_second_request_as_waiting_and_infers_risk_flags():
     assert result["phase"] == "waiting_batch_predecessor"
     manifest_call = next(args for query, args in conn.executions if "INSERT INTO deploy_release_manifests" in query)
     assert json.loads(manifest_call[-1]) == ["migration"]
+
+
+def test_enqueue_binds_valid_origin_session_for_terminal_callback():
+    session_id = "11111111-1111-4111-8111-111111111111"
+    conn = _EnqueueConnection(ready_exists=False)
+
+    result = asyncio.run(OBSERVABILITY.enqueue_deploy_request(
+        conn,
+        project="AADS",
+        release_sha="b" * 40,
+        chat_session_id=session_id,
+    ))
+
+    assert result["chat_session_id"] == session_id
+    assert result["session_notification_status"] == "pending"
+    insert_args = next(args for query, args in conn.executions if "INSERT INTO deploy_runs" in query)
+    assert insert_args[18] == session_id

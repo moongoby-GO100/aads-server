@@ -366,6 +366,7 @@ async def _queue_aads_deploy_after_push(job: "PipelineCJob", release_sha: str) -
             commit_status="committed",
             push_status="pushed",
             auto_start=True,
+            chat_session_id=job.chat_session_id,
             metadata={
                 "chat_session_id": job.chat_session_id,
                 "runner_job_id": job.job_id,
@@ -384,6 +385,8 @@ async def _queue_aads_deploy_after_push(job: "PipelineCJob", release_sha: str) -
         "release_sha": row.get("release_sha"),
         "queue_position": row.get("queue_position"),
         "deduplicated": row.get("deduplicated", False),
+        "chat_session_id": str(row.get("chat_session_id") or "") or None,
+        "session_callback_status": row.get("session_notification_status"),
         "worker": worker.strip()[-500:],
     }
 

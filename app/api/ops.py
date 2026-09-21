@@ -460,6 +460,7 @@ class DeployQueueRequest(BaseModel):
     auto_start: bool = True
     rollback_plan: Optional[str] = None
     approval_policy: str = "auto_if_green"
+    chat_session_id: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -590,6 +591,7 @@ async def create_common_deploy_request(req: DeployQueueRequest):
             rollback_plan=req.rollback_plan,
             approval_policy=req.approval_policy,
             metadata=req.metadata,
+            chat_session_id=req.chat_session_id,
         )
         from app.services.deploy_adapters import DeployRequest, resolve_adapter
 
@@ -645,6 +647,8 @@ async def create_common_deploy_request(req: DeployQueueRequest):
             "phase": row.get("phase"),
             "queue_position": row.get("queue_position"),
             "deduplicated": row.get("deduplicated", False),
+            "chat_session_id": str(row.get("chat_session_id") or "") or None,
+            "session_callback_status": row.get("session_notification_status"),
             "worker_start": worker_start,
             "next_check": "/api/v1/ops/deploy/status",
         }

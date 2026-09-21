@@ -3335,6 +3335,17 @@ async def lifespan(app: FastAPI):
 
     _startup_asyncio.create_task(_periodic_deferred_reaction_handoff())
 
+    # Terminal deploys report back to the chat session that registered them.
+    # The poller checks the active-slot marker before every DB claim, so the
+    # standby API never starts a duplicate reaction during blue/green overlap.
+    try:
+        from app.services.deploy_session_callback import deploy_session_callback_poller
+
+        _startup_asyncio.create_task(deploy_session_callback_poller())
+        logger.info("deploy_session_callback_poller_started")
+    except Exception as _e:
+        logger.warning("deploy_session_callback_poller_start_failed", error=str(_e))
+
     # Pipeline Runner: 재시작 복구 + Watchdog 시작 (DB 풀 초기화 이후)
     try:
         from app.services.pipeline_runner_service import recover_interrupted_jobs, start_watchdog

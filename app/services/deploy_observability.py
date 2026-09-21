@@ -6,6 +6,7 @@ import os
 import re
 import json
 import subprocess
+import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -423,6 +424,7 @@ async def enqueue_deploy_request(
     rollback_plan: str | None = None,
     approval_policy: str = "auto_if_green",
     metadata: dict[str, Any] | None = None,
+    chat_session_id: str | None = None,
 ) -> dict[str, Any]:
     """Queue a deploy in the ops DB without blocking the caller for the rollout."""
     project_key = _normalize_project(project)
@@ -453,6 +455,20 @@ async def enqueue_deploy_request(
     normalized_files = _coerce_string_list(payload.get("changed_files") or payload.get("files"))
     risk_flags = _infer_release_risk_flags(payload, normalized_files)
     payload["risk_flags"] = risk_flags
+    raw_session_id = str(chat_session_id or payload.get("chat_session_id") or "").strip()
+    normalized_session_id: str | None = None
+    if raw_session_id:
+        try:
+            normalized_session_id = str(uuid.UUID(raw_session_id))
+        except (TypeError, ValueError):
+            normalized_session_id = None
+    if normalized_session_id and not await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_sessions WHERE id = $1::uuid)",
+        normalized_session_id,
+    ):
+        normalized_session_id = None
+    if normalized_session_id:
+        payload["chat_session_id"] = normalized_session_id
 
     async with conn.transaction():
         # One intake decision at a time per release lane.  Previously two
@@ -482,6 +498,21 @@ async def enqueue_deploy_request(
             env_key,
         )
         if existing:
+            if normalized_session_id and existing.get("chat_session_id") is None:
+                existing = await conn.fetchrow(
+                    """
+                    UPDATE deploy_runs
+                       SET chat_session_id = $2::uuid,
+                           session_notification_status = 'pending',
+                           request_payload = request_payload || jsonb_build_object('chat_session_id', $2::text),
+                           updated_at = NOW()
+                     WHERE id = $1
+                       AND chat_session_id IS NULL
+                    RETURNING *
+                    """,
+                    existing["id"],
+                    normalized_session_id,
+                ) or existing
             return {**dict(existing), "deduplicated": True}
 
         ready_exists = bool(await conn.fetchval(
@@ -524,6 +555,7 @@ async def enqueue_deploy_request(
                 queue_position, error_summary, requested_by, request_source,
                 commit_status, push_status, auto_start, request_payload,
                 release_title, release_summary, rollback_plan, approval_policy,
+                chat_session_id, session_notification_status,
                 requested_at, last_heartbeat_at, created_at, updated_at
             )
             VALUES(
@@ -531,6 +563,7 @@ async def enqueue_deploy_request(
                 $8, 'queued by ops deploy request API; awaiting host ancestry classification', $9, $10,
                 $11, $12, $13, $14::jsonb,
                 $15, $16, $17, $18,
+                $19::uuid, CASE WHEN $19::uuid IS NULL THEN 'unbound' ELSE 'pending' END,
                 NOW(), NOW(), NOW(), NOW()
             )
             RETURNING *
@@ -553,6 +586,7 @@ async def enqueue_deploy_request(
             release_summary,
             (rollback_plan or payload.get("rollback_plan") or "")[:500] or None,
             (approval_policy or "auto_if_green")[:80],
+            normalized_session_id,
         )
         await conn.execute(
             """
@@ -1296,6 +1330,18 @@ async def register_external_deploy(
     payload = dict(metadata or {})
     payload.setdefault("component", component_key)
     payload.setdefault("deploy_type", deploy_type)
+    raw_session_id = str(payload.get("chat_session_id") or "").strip()
+    normalized_session_id: str | None = None
+    if raw_session_id:
+        try:
+            normalized_session_id = str(uuid.UUID(raw_session_id))
+        except (TypeError, ValueError):
+            normalized_session_id = None
+    if normalized_session_id and not await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_sessions WHERE id = $1::uuid)",
+        normalized_session_id,
+    ):
+        normalized_session_id = None
 
     git_meta = _git_release_metadata(project_key, sha)
     release_title = git_meta.get("release_title") or payload.get("title") or None
@@ -1311,6 +1357,7 @@ async def register_external_deploy(
             requested_by, request_source, commit_status, push_status,
             auto_start, request_payload, requested_at, last_heartbeat_at,
             release_title, release_summary, approval_policy,
+            chat_session_id, session_notification_status,
             created_at, updated_at
         )
         VALUES(
@@ -1321,6 +1368,7 @@ async def register_external_deploy(
             $9, $10, 'committed', 'pushed',
             true, $11::jsonb, NOW(), NOW(),
             $12, $13, 'auto_if_green',
+            $14::uuid, CASE WHEN $14::uuid IS NULL THEN 'unbound' ELSE 'pending' END,
             NOW(), NOW()
         )
         RETURNING *
@@ -1338,6 +1386,7 @@ async def register_external_deploy(
         json.dumps(payload, ensure_ascii=False, default=str),
         (release_title or "")[:180] or None,
         (release_summary or "")[:240] or None,
+        normalized_session_id,
     )
     logger.info(
         "external_deploy_registered",
