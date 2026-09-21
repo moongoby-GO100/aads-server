@@ -198,7 +198,7 @@ _BROWSER_TOOLS = frozenset({
     "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot",
     "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
     "browser_check", "browser_upload_file", "browser_download", "browser_tab_list",
-    "capture_screenshot",
+    "capture_screenshot", "e2e_verify",
 })
 _DATABASE_TOOLS = frozenset({
     "query_database",
@@ -1038,6 +1038,7 @@ class ToolExecutor:
             "read_task_logs":         self._read_task_logs,
             "terminate_task":         self._terminate_task,
             "capture_screenshot":     self._capture_screenshot,
+            "e2e_verify":             self._e2e_verify,
             # Memory Upgrade: F5 + F12 + C4
             "query_timeline":         self._query_timeline,
             "recall_tool_result":     self._recall_tool_result,
@@ -3916,6 +3917,21 @@ class ToolExecutor:
             browser_work_key=browser_work_key,
             tenant_id=str(inp.get("tenant_id") or ""),
             close_on_complete=bool(inp.get("close_on_complete", True)),
+        )
+
+    async def _e2e_verify(self, inp: Dict[str, Any]) -> Any:
+        """Run the integrated screen verification pipeline and persist its evidence."""
+        from app.services.e2e_verify import run_e2e_verify
+
+        return await run_e2e_verify(
+            job_id=str(inp.get("job_id") or ""),
+            project=str(inp.get("project") or ""),
+            url=str(inp.get("url") or ""),
+            tenant_id=str(inp.get("tenant_id") or ""),
+            selectors=[str(item) for item in (inp.get("selectors") or []) if str(item)],
+            browser_session_id=str(inp.get("browser_session_id") or ""),
+            browser_work_key=str(inp.get("browser_work_key") or ""),
+            full_page=bool(inp.get("full_page", False)),
         )
 
     async def _terminate_task(self, inp: Dict[str, Any]) -> Any:

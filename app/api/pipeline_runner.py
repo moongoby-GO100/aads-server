@@ -2353,6 +2353,22 @@ async def approve_or_reject(
 
             latest_review = None
             if req.action == "approve":
+                from app.services.e2e_verify import assert_screen_evidence_gate
+                gate_files = row["actual_changed_files"] or []
+                if isinstance(gate_files, str):
+                    try:
+                        gate_files = json.loads(gate_files)
+                    except json.JSONDecodeError:
+                        gate_files = []
+                try:
+                    await assert_screen_evidence_gate(
+                        conn,
+                        job_id=job_id,
+                        instruction=row["instruction"] or "",
+                        changed_files=list(gate_files),
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
                 deploy_only = _is_deploy_only_instruction(row["instruction"])
                 git_diff = row["git_diff"] or ""
                 commit_hash = (row["commit_hash"] or "").strip()

@@ -1723,6 +1723,31 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": ["url"],
         },
     },
+    {
+        "name": "e2e_verify",
+        "description": (
+            "Pipeline Runner 화면 작업의 통합 E2E 검증. URL 사전 확인, Vault 로그인, "
+            "DOM selector assertion, 기존 Playwright 캡처와 R-E2E 폴백을 순서대로 실행하고 evidence JSON을 저장합니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "evidence를 연결할 Pipeline Runner job id"},
+                "project": {"type": "string", "description": "자격증명 매칭용 프로젝트명"},
+                "url": {"type": "string", "description": "검증할 화면 URL"},
+                "selectors": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "description": "반드시 존재해야 하는 CSS selector 목록",
+                },
+                "browser_session_id": {"type": "string"},
+                "browser_work_key": {"type": "string"},
+                "full_page": {"type": "boolean", "default": False},
+            },
+            "required": ["job_id", "project", "url", "selectors"],
+        },
+    },
     # ── 작업 모니터 도구 ─────────────────────────────────────────────────
     {
         "name": "check_task_status",
@@ -6062,6 +6087,20 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             browser_work_key=params.get("browser_work_key", ""),
             tenant_id=str(params.get("tenant_id") or ""),
         )
+    elif name == "e2e_verify":
+        from app.services.e2e_verify import run_e2e_verify
+
+        result = await run_e2e_verify(
+            job_id=str(params.get("job_id") or ""),
+            project=str(params.get("project") or ""),
+            url=str(params.get("url") or ""),
+            tenant_id=str(params.get("tenant_id") or ""),
+            selectors=[str(item) for item in (params.get("selectors") or []) if str(item)],
+            browser_session_id=str(params.get("browser_session_id") or ""),
+            browser_work_key=str(params.get("browser_work_key") or ""),
+            full_page=bool(params.get("full_page", False)),
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
     # ── 프로젝트 DB 도구 ─────────────────────────────────────────────────
     elif name == "query_project_database":
         from app.api.ceo_chat_tools_db import query_project_database

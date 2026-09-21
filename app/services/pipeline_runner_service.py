@@ -706,6 +706,28 @@ class PipelineCJob:
         except Exception as exc:
             logger.warning(f"pipeline_c_push_notify_error job={self.job_id}: {exc}")
 
+    async def _require_screen_evidence(self) -> None:
+        """Fail closed before any screen-sensitive done/approve transition."""
+        from app.core.db_pool import get_pool
+        from app.services.e2e_verify import assert_screen_evidence_gate
+
+        async with get_pool().acquire() as gate_conn:
+            gate_files = await gate_conn.fetchval(
+                "SELECT actual_changed_files FROM pipeline_jobs WHERE job_id=$1",
+                self.job_id,
+            )
+            if isinstance(gate_files, str):
+                try:
+                    gate_files = json.loads(gate_files)
+                except json.JSONDecodeError:
+                    gate_files = []
+            await assert_screen_evidence_gate(
+                gate_conn,
+                job_id=self.job_id,
+                instruction=self.instruction,
+                changed_files=list(gate_files or []),
+            )
+
     async def _trigger_ai_reaction(self, message: str) -> None:
         """채팅 AI가 결과를 확인하고 자동으로 반응하도록 트리거."""
         if not self.chat_session_id:
@@ -900,6 +922,14 @@ class PipelineCJob:
                     and _is_read_only_instruction(self.instruction)
                     and self.result_output.strip()
                 ):
+                    try:
+                        await self._require_screen_evidence()
+                    except ValueError as exc:
+                        self.status = "awaiting_approval"
+                        self.review_feedback = f"BLOCKED: {exc}"
+                        self._log("awaiting_approval", "화면 검증 evidence 누락 — 완료 전환 차단")
+                        await self._save_to_db()
+                        return
                     self._log("read_only_done", "read-only 작업 완료 — 변경사항 0건이 정상 조건")
                     self.status = "done"
                     self.review_feedback = "PASS: read-only 작업 완료, 변경사항 없음"
@@ -1091,6 +1121,11 @@ class PipelineCJob:
     async def _approve_inner(self) -> dict:
         if self.status != "awaiting_approval":
             return {"error": f"승인 불가 상태: {self.status}"}
+
+        try:
+            await self._require_screen_evidence()
+        except ValueError as exc:
+            return {"error": str(exc), "status": "awaiting_approval"}
 
         self.status = "running"
         _release_deploy_lock = None
