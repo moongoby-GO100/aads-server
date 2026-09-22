@@ -1,3 +1,4 @@
+<!-- spec-version: v1   updated: 2026-09-22   source: spec plan tasks -->
 # tasks: obys-v4-evidence-gap
 
 - [ ] 데이터 모델/쿼리 확정
@@ -5,4 +6,3 @@
 - [ ] 소유 메뉴(세무·회계 — 증빙대장·증빙등록·전표관리·신고납부) 화면 구현
 - [ ] 참조 메뉴(세무·회계)는 링크만 연결, 화면 복제 금지
 - [ ] 완료 기준 검증(spec.md 참조)
-

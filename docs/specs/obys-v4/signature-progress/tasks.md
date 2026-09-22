@@ -1,3 +1,4 @@
+<!-- spec-version: v1   updated: 2026-09-22   source: spec plan tasks -->
 # tasks: obys-v4-signature-progress
 
 - [ ] 데이터 모델/쿼리 확정
@@ -5,4 +6,3 @@
 - [ ] 소유 메뉴(직원·급여) 화면 구현
 - [ ] 참조 메뉴(직원·급여)는 링크만 연결, 화면 복제 금지
 - [ ] 완료 기준 검증(spec.md 참조)
-

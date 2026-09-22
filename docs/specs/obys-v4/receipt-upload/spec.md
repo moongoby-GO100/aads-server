@@ -1,3 +1,4 @@
+<!-- spec-version: v1   updated: 2026-09-22   source: spec plan tasks -->
 # spec: obys-v4-receipt-upload
 
 ## 의도(무엇/왜)

@@ -1,3 +1,4 @@
+<!-- spec-version: v1   updated: 2026-09-22   source: spec plan tasks -->
 # tasks: obys-v4-order-detail
 
 - [ ] 데이터 모델/쿼리 확정

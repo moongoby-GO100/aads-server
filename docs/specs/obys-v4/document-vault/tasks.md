@@ -1,3 +1,4 @@
+<!-- spec-version: v1   updated: 2026-09-22   source: spec plan tasks -->
 # tasks: obys-v4-document-vault
 
 - [ ] 데이터 모델/쿼리 확정
@@ -5,4 +6,3 @@
 - [ ] 소유 메뉴(문서보관함 — 확정 문서와 원본의 보관·권한·이력) 화면 구현
 - [ ] 참조 메뉴(경영자료·보관)는 링크만 연결, 화면 복제 금지
 - [ ] 완료 기준 검증(spec.md 참조)
-

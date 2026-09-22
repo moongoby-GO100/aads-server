@@ -1,3 +1,4 @@
+<!-- spec-version: v1   updated: 2026-09-22   source: spec plan tasks -->
 # plan: obys-v4-business-switch
 
 ## 기술 계약(어떻게)

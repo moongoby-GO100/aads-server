@@ -2452,6 +2452,10 @@ _SPEC_SLICE_ID_PATTERN = re.compile(
     r"(?<![a-z0-9-])(?P<project>[a-z0-9]+-v\d+)-"
     r"(?P<slice>[a-z0-9]+(?:-[a-z0-9]+)*)(?![a-z0-9-])"
 )
+_SPEC_VERSION_PATTERN = re.compile(
+    r"^<!--\s*spec-version:\s*(?P<version>[^\s>]+)\b[^>]*-->\s*$",
+    re.MULTILINE,
+)
 _ANALYZE_GATE_HEADER = "## ANALYZE GATE 결과 (자동 교차검사, 읽기전용 — AADS-analyze-gate)"
 _ANALYZE_GATE_STOP_MESSAGE = (
     "**이 작업은 구현에 착수하지 마라.** 코드/DB/배포를 변경하지 말고 위 목록을 RESULT에 "
@@ -2470,6 +2474,12 @@ def _find_referenced_spec_dirs(instruction: str) -> list[str]:
         for match in _SPEC_SLICE_ID_PATTERN.finditer(instruction)
     )
     return sorted(referenced_dirs)
+
+
+def _spec_version(document: str) -> str | None:
+    """문서 최상단의 정본 버전을 읽는다. 본문 내 주석은 메타데이터가 아니다."""
+    match = _SPEC_VERSION_PATTERN.match(document)
+    return match.group("version") if match else None
 
 
 def _run_analyze_gate(instruction: str, project: str) -> str:
@@ -2506,6 +2516,20 @@ def _run_analyze_gate(instruction: str, project: str) -> str:
             findings.append(f"{relative_dir}: 소유권 미확정 기재")
         if "- [ ] ⚠️ 소유권 충돌 해결" in tasks:
             findings.append(f"{relative_dir}: 미해결 선행 작업 존재")
+
+        # 둘 이상 정본이 있을 때만 세 문서 간 버전을 비교한다. 누락 파일은 기존의
+        # 정본화 위험 진단으로 처리하고, 헤더 누락만으로는 구현 금지를 만들지 않는다.
+        if len(documents) >= 2:
+            versions = {
+                filename: _spec_version(document)
+                for filename, document in documents.items()
+            }
+            for filename, version in versions.items():
+                if version is None:
+                    findings.append(f"{relative_dir}: {filename} 버전 메타데이터 없음")
+            present_versions = {version for version in versions.values() if version is not None}
+            if len(present_versions) > 1:
+                findings.append(f"{relative_dir}: 버전 불일치 — CEO/PM 결정 전 구현 금지")
 
     if not findings:
         return instruction
