@@ -21,6 +21,57 @@ BUSINESS = {
 
 
 @pytest.mark.asyncio
+async def test_acct_summary_uses_full_total_and_adds_local_rows(monkeypatch):
+    async def business(*args):
+        return BUSINESS
+
+    async def rows(**kwargs):
+        return [
+            ("acct-source", {"id": "acct:1:1", "total_amount": Decimal("5"),
+                "source_total_count": 4210, "source_total_amount": Decimal("999999")}),
+            ("ledger", {"id": "local", "total_amount": Decimal("55000")}),
+        ], "acct+obys"
+
+    monkeypatch.setattr(api, "_business", business)
+    monkeypatch.setattr(api, "_source_rows", rows)
+    result = await api.workspace_summary("biz-lylon-e2e", "purchases", None, None, USER)
+    assert result["metrics"][0]["value"] == "4,211건"
+    assert result["metrics"][1]["value"] == "1,054,999원"
+
+
+@pytest.mark.asyncio
+async def test_acct_detail_fetches_older_record_by_id_with_scope(monkeypatch):
+    async def business(user, business_id):
+        assert user is USER and business_id == BUSINESS["id"]
+        return BUSINESS
+
+    async def source(user, business_id, category, **kwargs):
+        assert user is USER and business_id == BUSINESS["id"]
+        assert category == "purchase" and kwargs["record_id"] == "acct:1:2"
+        return [{"id": "acct:1:2", "total_amount": 55}], "acct"
+
+    monkeypatch.setattr(api, "_business", business)
+    monkeypatch.setattr(api.acct_source_ledger, "source_transactions", source)
+    result = await api.workspace_record_detail(BUSINESS["id"], "purchases", "acct:1:2", USER)
+    assert result["record"]["id"] == "acct:1:2"
+
+
+@pytest.mark.asyncio
+async def test_acct_detail_rejects_unauthorized_business_before_remote_lookup(monkeypatch):
+    async def business(*args):
+        raise HTTPException(status_code=404)
+
+    async def source(*args, **kwargs):
+        pytest.fail("remote DB must not be queried before ownership validation")
+
+    monkeypatch.setattr(api, "_business", business)
+    monkeypatch.setattr(api.acct_source_ledger, "source_transactions", source)
+    with pytest.raises(HTTPException) as err:
+        await api.workspace_record_detail("foreign", "purchases", "acct:1:2", USER)
+    assert err.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_sales_records_are_tenant_business_scoped_and_db_backed(monkeypatch):
     async def businesses(*, user):
         assert user is USER
