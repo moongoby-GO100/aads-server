@@ -11470,6 +11470,53 @@ async def _enqueue_deferred_reaction(
     return str(deferred_id)
 
 
+async def enqueue_next_step_reaction(
+    session_id: str,
+    system_message: str,
+    *,
+    dedupe_key: str,
+    reuse_seconds: int = 0,
+) -> Dict[str, Any]:
+    """Persist a next-step reaction exactly once per key/window across API slots.
+
+    Approval batches use an unlimited window; auto proposals reuse a delivery
+    made in the last 15 minutes.  The DB lock closes the SELECT/INSERT race.
+    """
+    safe_message = _safe_reaction_message(session_id, system_message)
+    async with get_pool().acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+                str(session_id), dedupe_key,
+            )
+            existing = await conn.fetchrow(
+                """
+                SELECT id::text AS id, status
+                FROM chat_deferred_reactions
+                WHERE session_id = $1::uuid AND dedupe_key = $2
+                  AND ($3::integer = 0 OR
+                       created_at > NOW() - make_interval(secs => $3::integer))
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                str(session_id), dedupe_key, max(0, int(reuse_seconds)),
+            )
+            if existing:
+                return {"queue_id": existing["id"],
+                        "queue_status": existing["status"], "created": False}
+            row = await conn.fetchrow(
+                """
+                INSERT INTO chat_deferred_reactions
+                    (session_id, system_message, dedupe_key)
+                VALUES ($1::uuid, $2, $3)
+                RETURNING id::text AS id, status
+                """,
+                str(session_id), safe_message, dedupe_key,
+            )
+    return {"queue_id": row["id"], "queue_status": row["status"],
+            "created": True}
+
+
 async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
     """Claim durable reactions on the active API slot and start their streams."""
     if not _is_local_active_api_slot():
@@ -11655,6 +11702,26 @@ async def _consume_next_reaction(sid: str, msg: str) -> None:
                 loop.create_task(_consume_next_reaction(sid, next_msg))
 
 
+def _safe_reaction_message(session_id: str, system_message: str) -> str:
+    """Apply the same automatic-trigger guard to direct and durable delivery."""
+    return (
+        system_message + "\n\n"
+        "⚠️ 이 메시지는 자동 트리거입니다.\n"
+        "**금지 도구** (무한 루프 방지): delegate_to_agent, pipeline_c_start, spawn_subagent, spawn_parallel_subagents\n"
+        "**허용 도구** (진단·조치용): run_remote_command, check_task_status, read_task_logs, "
+        "terminate_task, health_check, query_database, read_remote_file 등 읽기/진단 도구는 자유롭게 사용하세요.\n"
+        "오류가 발생했으면 도구로 원인을 직접 확인하고, 가능한 한 자율적으로 조치하세요.\n\n"
+        "**배포 완료 보고 시 필수 규칙:**\n"
+        "- 도구를 호출하지 않고 수치(건수/개수)를 보고하는 것은 금지. 반드시 query_database/run_remote_command로 실측.\n"
+        "- '정상 완료'라고 보고하려면 최소 health_check 또는 docker ps로 실제 확인 필수.\n"
+        "- 프론트엔드 변경 시 browser_snapshot으로 렌더링 확인 권장.\n\n"
+        f"[현재 세션 ID: {session_id}]\n"
+        "pipeline_runner_submit / pipeline_runner_submit_batch / check_task_status 호출 시 "
+        "서버가 현재 채팅 세션을 자동 주입합니다. "
+        "사용자에게 session_id를 다시 요구하지 말고 현재 채팅 기준으로 진행하세요."
+    )
+
+
 async def trigger_ai_reaction(
     session_id: str,
     system_message: str,
@@ -11683,21 +11750,8 @@ async def trigger_ai_reaction(
         _ai_reaction_queue.pop(k, None)
 
     # 시스템 메시지에 작업 재실행 도구만 금지 (무한 루프 방지), 진단 도구는 허용
-    safe_message = system_message if _already_safe else (
-        system_message + "\n\n"
-        "⚠️ 이 메시지는 자동 트리거입니다.\n"
-        "**금지 도구** (무한 루프 방지): delegate_to_agent, pipeline_c_start, spawn_subagent, spawn_parallel_subagents\n"
-        "**허용 도구** (진단·조치용): run_remote_command, check_task_status, read_task_logs, "
-        "terminate_task, health_check, query_database, read_remote_file 등 읽기/진단 도구는 자유롭게 사용하세요.\n"
-        "오류가 발생했으면 도구로 원인을 직접 확인하고, 가능한 한 자율적으로 조치하세요.\n\n"
-        "**배포 완료 보고 시 필수 규칙:**\n"
-        "- 도구를 호출하지 않고 수치(건수/개수)를 보고하는 것은 금지. 반드시 query_database/run_remote_command로 실측.\n"
-        "- '정상 완료'라고 보고하려면 최소 health_check 또는 docker ps로 실제 확인 필수.\n"
-        "- 프론트엔드 변경 시 browser_snapshot으로 렌더링 확인 권장.\n\n"
-        f"[현재 세션 ID: {session_id}]\n"
-        "pipeline_runner_submit / pipeline_runner_submit_batch / check_task_status 호출 시 "
-        "서버가 현재 채팅 세션을 자동 주입합니다. "
-        "사용자에게 session_id를 다시 요구하지 말고 현재 채팅 기준으로 진행하세요."
+    safe_message = system_message if _already_safe else _safe_reaction_message(
+        session_id, system_message,
     )
 
     if not _is_local_active_api_slot():

@@ -149,7 +149,7 @@ _DISPLAY_STATUS_LABELS = {
     "build_fail": "빌드 실패",
     "deploy_failed": "배포 실패",
     "review_failed": "검수 실패",
-    "review_hold": "AI 리뷰 보류",
+    "review_hold": "AI 리뷰 재검수 대기",
     "auth_unavailable": "인증 필요",
     "auth_recovery_pending": "인증 복구 대기",
     "awaiting_user_auth": "사용자 인증 필요",
@@ -1105,12 +1105,19 @@ def _runner_display_status(
     candidates = (auth_recovery_state or "", phase, status, error_detail.split(":", 1)[0])
     for candidate in candidates:
         if candidate in _DISPLAY_STATUS_LABELS:
-            return {
+            display = {
                 "display_status": candidate,
                 "status_label": _DISPLAY_STATUS_LABELS[candidate],
                 "status_group": _DISPLAY_STATUS_GROUPS[candidate],
                 "auto_retryable": candidate in {"tool_timeout", "auth_recovery_pending"},
             }
+            if candidate == "review_hold":
+                display["approval_available"] = False
+                display["action_hint"] = (
+                    "AI 리뷰 인프라 재검수 대기 중입니다. CEO 승인 버튼은 "
+                    "검수를 통과해 승인 대기로 전환된 뒤 나타납니다."
+                )
+            return display
     if status == "cancelled":
         return {"display_status": "cancelled", "status_label": "종결",
                 "status_group": "blocked", "auto_retryable": False}
@@ -1122,7 +1129,8 @@ def _runner_display_status(
     elif status in ("error", "rejected"):
         group = "action_required"
     return {"display_status": status, "status_label": status,
-            "status_group": group, "auto_retryable": False}
+            "status_group": group, "auto_retryable": False,
+            "approval_available": status == "awaiting_approval"}
 
 
 async def _runner_health_probe(conn, row) -> dict | None:

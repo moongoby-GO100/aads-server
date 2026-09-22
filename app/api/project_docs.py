@@ -1269,6 +1269,33 @@ def _owner_session_note(
     return "\n".join(lines)
 
 
+def _next_step_decision_prompt(rows: list[dict]) -> str:
+    """Build one instruction for every approved card attached to a reply."""
+    approved = [r for r in rows if r["decision"] == "approved" and r["active"]]
+    skipped = [r for r in rows if r not in approved]
+    lines = ["[시스템] 대표님이 다음 단계 제안 묶음을 결정했습니다."]
+    if approved:
+        lines.extend(["", "승인되어 실행할 항목:"])
+        lines.extend(
+            f"{i}. {str(r['action_summary'])[:1000]}"
+            for i, r in enumerate(approved, 1)
+        )
+        lines.extend([
+            "", "위 승인 항목을 모두 수행하고 항목별 결과를 보고하세요. "
+            "이미 끝난 항목은 다시 실행하지 말고 완료 근거를 확인하세요. "
+            "승인 범위 밖의 변경은 하지 마세요.",
+        ])
+    else:
+        lines.extend(["", "실행할 승인 항목이 없습니다."])
+    if skipped:
+        lines.extend(["", "실행하지 않을 거절·만료 항목:"])
+        lines.extend(
+            f"- {str(r['action_summary']).splitlines()[0][:200]}"
+            for r in skipped
+        )
+    return "\n".join(lines)
+
+
 async def _notify_chat_of_approval_decision(
     *,
     session_id: str,
@@ -1281,7 +1308,7 @@ async def _notify_chat_of_approval_decision(
     hours: int,
     owner_scope: Optional[Dict[str, Any]] = None,
     owner_result: Optional[Dict[str, Any]] = None,
-) -> None:
+) -> Optional[Dict[str, Any]]:
     """결정을 그 대화에 남기고, 남은 대기 건이 없으면 막힌 작업을 이어서 돌린다.
 
     2026-09-15 CEO 지적 — "승인 거절 누르면 해당 채팅창에 전달되나 액션이 없다".
@@ -1291,8 +1318,9 @@ async def _notify_chat_of_approval_decision(
 
     그래서 둘을 한다. ① 결정을 대화에 기록으로 남긴다 — 승인 화면(/approvals)
     에서 눌러도 대화에 남아야 나중에 "누가 언제 무엇을 허락했나" 가 보인다.
-    ② 그 세션에 남은 대기 건이 없을 때만 재개 턴을 띄운다. 대기 건마다
-    턴을 띄우면 5건을 연달아 누를 때 턴이 5번 뜬다.
+    ② 다음 단계 제안은 같은 버블의 결정이 모두 끝난 뒤 승인된 항목
+    전체를 한 영속 반응에 담는다. 다른 버블의 대기 카드는 막지 않는다.
+    일반 보호 게이트는 기존 세션 단위 재개 규칙을 유지한다.
     """
     sid = (session_id or "").strip()
     if not _SESSION_UUID_RE.match(sid):
@@ -1335,8 +1363,9 @@ async def _notify_chat_of_approval_decision(
         note = (
             f"**{head}** — {label}\n\n"
             f"- 범위: {scope_label} · 유효 {hours}시간\n"
-            f"- 요청: {(summary or '')[:300]}\n\n"
-            "이어서 진행합니다."
+            f"- 요청: {(summary or '')[:300]}\n\n" +
+            ("같은 응답의 승인 결정을 모아 실행 큐에 등록합니다."
+             if tool == "next_step" else "이어서 진행합니다.")
         )
     else:
         note = (
@@ -1347,6 +1376,8 @@ async def _notify_chat_of_approval_decision(
 
     from app.core.db_pool import get_pool
 
+    proposal_rows: list[dict] = []
+    proposal_key = request_id
     try:
         pool = get_pool()
         async with pool.acquire() as conn:
@@ -1363,27 +1394,70 @@ async def _notify_chat_of_approval_decision(
                 " updated_at = now() WHERE id = $1::uuid",
                 sid,
             )
-            remaining = await conn.fetchval(
-                """SELECT count(*) FROM agent_permission_requests
-                    WHERE requested_by = $1 AND decision = 'pending'
-                      AND expires_at > now()""",
-                sid,
-            )
+            if tool == "next_step":
+                proposal_rows = [dict(r) for r in await conn.fetch(
+                    """
+                    WITH anchor AS (
+                        SELECT source_message_id
+                        FROM agent_permission_requests WHERE id = $2::uuid
+                    )
+                    SELECT r.id::text AS id, r.action_summary, r.decision,
+                           r.expires_at > NOW() AS active,
+                           r.source_message_id::text AS source_message_id
+                    FROM agent_permission_requests r, anchor a
+                    WHERE r.requested_by = $1 AND r.gate_source = 'next_step'
+                      AND (r.id = $2::uuid OR
+                           (a.source_message_id IS NOT NULL AND
+                            r.source_message_id = a.source_message_id))
+                    ORDER BY r.created_at, r.id
+                    """,
+                    sid, request_id,
+                )]
+                if proposal_rows:
+                    proposal_key = proposal_rows[0]["source_message_id"] or request_id
+                remaining = any(
+                    r["decision"] == "pending" and r["active"]
+                    for r in proposal_rows
+                )
+            else:
+                remaining = await conn.fetchval(
+                    """SELECT count(*) FROM agent_permission_requests
+                        WHERE requested_by = $1 AND decision = 'pending'
+                          AND expires_at > now()""",
+                    sid,
+                )
     except Exception as exc:
         logger.warning(
             "approval_decision_note_failed request=%s error=%s", request_id[:8], str(exc)
         )
-        return
+        return {"status": "enqueue_failed", "error": "decision_note_failed"}
 
     if remaining:
-        return  # 남은 결정을 다 누른 뒤에 한 번만 이어서 돈다
+        return {"status": "waiting_for_decisions"}
 
     try:
-        from app.services.chat_service import trigger_ai_reaction
-
         # 제안 카드(next_step)는 "막혀서 멈춘 것" 이 아니라 "이걸 할까요" 다.
         # 같은 문구로 이어 붙이면 담당이 있지도 않은 중단 지점을 찾는다.
         is_proposal = (tool or "") == "next_step"
+        if is_proposal:
+            from app.services.chat_service import enqueue_next_step_reaction
+
+            if not proposal_rows:
+                logger.warning("next_step_approval_missing request=%s", request_id[:8])
+                return {"status": "enqueue_failed", "error": "approval_rows_missing"}
+            queued = await enqueue_next_step_reaction(
+                sid,
+                _next_step_decision_prompt(proposal_rows),
+                dedupe_key=f"next_step:approval:{sid}:{proposal_key}",
+            )
+            logger.info(
+                "next_step_approval_queued request=%s queue=%s created=%s",
+                request_id[:8], queued["queue_id"], queued["created"],
+            )
+            return {"status": queued["queue_status"],
+                    "queue_id": queued["queue_id"], "created": queued["created"]}
+        from app.services.chat_service import trigger_ai_reaction
+
         if is_owner_session:
             # 여기서 "막혀서 중단된 작업을 이어서 수행하세요" 를 쓰면 안 된다.
             # 서버가 이미 실행을 끝냈다 — 주도는 있지도 않은 중단 지점을
@@ -1413,27 +1487,12 @@ async def _notify_chat_of_approval_decision(
                     "지금 그 담당에게 따로 말을 걸 필요는 없습니다. "
                     "역할 프롬프트가 없다면 무엇을 하는 담당인지 정리해 올리세요."
                 )
-        elif approved and is_proposal:
-            prompt = (
-                f"[시스템] 대표님이 다음 단계를 승인했습니다.\n"
-                f"승인된 제안: {(summary or '')[:500]}\n\n"
-                "이 제안을 지금 수행하고 결과를 보고하세요. "
-                "제안에 적힌 범위만 하고, 적히지 않은 변경은 하지 마세요. "
-                "수행 중 새로 필요한 단계가 생기면 propose_next_steps 로 다시 올리세요."
-            )
         elif approved:
             prompt = (
                 f"[시스템] 대표님이 승인했습니다 — 도구 `{tool}`, 범위 {scope}, "
                 f"유효 {hours}시간.\n요청 내용: {(summary or '')[:500]}\n\n"
                 "보호 게이트에 막혀 중단됐던 그 작업을 지금 이어서 수행하고 결과를 보고하세요. "
                 "승인 범위를 벗어나는 변경은 하지 마세요."
-            )
-        elif is_proposal:
-            prompt = (
-                f"[시스템] 대표님이 다음 단계 제안을 거절했습니다.\n"
-                f"거절된 제안: {(summary or '')[:500]}\n\n"
-                "이 제안은 진행하지 마세요. 다른 선택지가 있으면 짧게 제시하고, "
-                "없으면 그대로 두고 다음 지시를 기다리세요."
             )
         else:
             prompt = (
@@ -1442,11 +1501,13 @@ async def _notify_chat_of_approval_decision(
                 "이 작업은 진행하지 말고, 대신 가능한 대안과 남은 영향만 간단히 보고하세요."
             )
         await trigger_ai_reaction(sid, prompt)
+        return {"status": "reaction_started"}
     except Exception as exc:
         logger.warning(
             "approval_decision_reaction_failed request=%s error=%s",
             request_id[:8], str(exc),
         )
+        return {"status": "enqueue_failed", "error": str(exc)[:160]}
 
 
 @router.post("/approvals/{request_id}/decide")
@@ -1608,7 +1669,7 @@ async def approvals_decide(
                 owner_result = {"error": str(exc)[:200]}
 
     # 결정은 대화로 돌아간다 — 누른 결과가 화면에 보이고, 막힌 작업이 이어진다.
-    await _notify_chat_of_approval_decision(
+    reaction_dispatch = await _notify_chat_of_approval_decision(
         session_id=row["requested_by"],
         request_id=request_id,
         tool=row["action_type"],
@@ -1628,6 +1689,7 @@ async def approvals_decide(
         "scope": row["scope"] or ("single" if decision == "approved" else ""),
         "valid_hours": hours if decision == "approved" else 0,
         "max_executions": row["max_executions"] if decision == "approved" else 0,
+        "reaction_dispatch": reaction_dispatch,
     }
     if owner_result is not None:
         resp["owner_session"] = owner_result

@@ -635,6 +635,11 @@ ensure_deploy_observability_schema() {
         echo "[deploy.sh] ❌ deploy session callback schema migration failed"
         return 1
     fi
+    if ! docker exec -i aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 -q \
+        < "${COMPOSE_DIR}/migrations/20260922_next_step_dispatch_dedupe.sql" >/dev/null; then
+        echo "[deploy.sh] ❌ next-step dispatch schema migration failed"
+        return 1
+    fi
 }
 
 deploy_observe_init() {

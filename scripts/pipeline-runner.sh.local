@@ -3071,7 +3071,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
         record_runner_event "$job_id" "job_terminal" "$review_hold_status" "$review_hold_phase" "$job_model" "" "$job_size" "" "{\"error_detail\":\"${review_hold_phase}\",\"verdict\":\"${review_verdict}\",\"flag_category\":\"${review_flag_category}\",\"policy\":\"FLAG+hold\"}"
         if [[ "$review_infra_failure" == "true" ]]; then
             post_to_chat "$session_id" "🟠 [Pipeline Runner] AI 리뷰 인프라 장애로 승인 보류: $job_id — ${review_error_detail}
-코드 반려가 아니라 리뷰 시스템 장애입니다. 작업 산출물(worktree)은 재검수를 위해 보존했습니다: ${worktree_dir}"
+코드 반려가 아니라 리뷰 시스템 장애입니다. 지금은 CEO 승인 단계가 아니므로 승인 버튼이 표시되지 않습니다. 자동 재검수 통과 후 승인 대기로 전환되면 버튼이 생성됩니다. 작업 산출물(worktree)은 재검수를 위해 보존했습니다: ${worktree_dir}"
         else
             post_to_chat "$session_id" "🔴 [Pipeline Runner] AI 리뷰 미통과로 승인 대기 차단: $job_id — ${review_error_detail}
 리뷰가 오판이었을 수 있습니다. 작업 산출물(worktree)은 ${ARTIFACT_MAX_AGE_HOURS}시간 보존 후 자동 회수됩니다: ${worktree_dir}"

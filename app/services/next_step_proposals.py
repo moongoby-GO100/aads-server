@@ -26,7 +26,7 @@
 `live_trading_guard.is_approved()` 가 한다(횟수도 거기서 센다). 이 함수는
 "물어볼 필요가 있나" 만 미리 본다 — 읽기 전용이다.
 
-## auto 는 실행되지 않는다 (2026-09-21 대표님 지적)
+## auto 는 영속 큐에 등록돼야 실행된다 (2026-09-22 교정)
 
 `cards` 와 `auto` 는 수명이 전혀 다르다. 이걸 모르면 "자동 항목이 왜
 자동으로 안 되냐" 는 질문을 반드시 받는다.
@@ -36,16 +36,11 @@
             "[시스템] 대표님이 다음 단계를 승인했습니다" 프롬프트를
             세션에 재주입한다 → 에이전트가 다시 불려 실행한다.
 
-    auto  → 반환값 리스트에만 있다. DB 행 없음. 재주입 없음.
-            턴이 끝나면 그대로 사라진다.
+    auto  → chat_deferred_reactions 에 항목별로 등록한다.
+            큐 ID·상태가 없으면 자동 실행 예정으로 보고하면 안 된다.
 
-그래서 **승인이 필요한 항목이 자동 항목보다 더 확실히 실행된다** 는
-역설이 생긴다. auto 를 실행하는 주체는 오직 에이전트 자신이고, 그것도
-같은 턴 안에서여야 한다. 반환 `note` 가 그렇게 지시하는 이유다.
-
-실행기를 붙일 생각이면 auto 를 `decision='approved'` 로 같은 테이블에
-넣어 재주입 경로를 태우는 쪽이 새 큐를 만드는 것보다 안전하다 —
-다만 승인 화면 표시를 먼저 확인해야 한다(미착수).
+승인 카드와 자동 항목 모두 영속 재주입 경로를 쓴다. 대화 본문에
+`🟢자동`이라고 적는 것만으로는 이 경로에 등록되지 않는다.
 """
 from __future__ import annotations
 
@@ -365,7 +360,7 @@ async def propose(
                 conn, session_id, step["tool"], project,
             )
             if grant_id:
-                auto.append({"title": step["title"], "grant_id": grant_id[:8]})
+                auto.append({**step, "grant_id": grant_id[:8]})
                 continue
 
             risk = step["risk"]
@@ -374,7 +369,7 @@ async def propose(
             goal_id = goal_cache[risk]
             if goal_id:
                 auto.append({
-                    "title": step["title"],
+                    **step,
                     "grant_id": goal_id[:8],
                     "via": "goal_policy",
                 })
@@ -424,59 +419,43 @@ async def propose(
                     step["title"][:40], str(exc)[:160],
                 )
 
-    # ── auto 를 실제로 실행시킨다 (2026-09-21) ──────────────────────────────
-    #
-    # 대표님이 "자동 항목이 왜 자동으로 안 되냐" 를 두 번 물으셨다. 답은
-    # "아무도 실행해 주지 않아서" 였고, 1차 조치로 반환 note 만 고쳤다.
-    # 문구는 에이전트가 읽고 지켜야 하는 것이라 또 안 지켜졌다. 그래서
-    # cards 가 쓰는 재주입 경로를 auto 에도 그대로 태운다.
-    #
-    # trigger_ai_reaction 은 현재 턴이 살아 있으면(_session_has_live_execution)
-    # 스스로 deferred 큐에 넣고 턴이 끝난 뒤 소비한다. 따라서 여기서 불러도
-    # 지금 만들고 있는 응답을 방해하지 않는다 — 턴이 끝나면 에이전트가 다시
-    # 불려서 이 항목들을 수행한다.
-    #
-    # 같은 항목이 계속 재발화하면 무한 루프가 되므로 work_key 로 TTL 중복막이를
-    # 둔다. agent_permission_requests 에 행을 넣는 방식은 쓰지 않는다 —
-    # decision='approved' 행이 _covered_by_existing_grant 에 잡혀 의도치 않게
-    # 다른 도구 승인까지 넓힐 수 있다.
+    # 다음 단계는 실제 영속 큐에 등록된 경우에만 자동 실행 예정이라 부른다.
+    # DB 잠금·15분 중복막이는 슬롯 전환 후에도 유지된다.
     auto_fired = 0
+    auto_enqueue_failed = 0
     if auto:
-        import time as _t
-        fired = globals().setdefault("_AUTO_FIRED", {})
-        now_ts = _t.time()
-        for k, v in list(fired.items()):
-            if now_ts - v > 900:
-                fired.pop(k, None)
-        fresh = []
         for item in auto:
-            wkey = _work_key(session_id, item["title"])
-            if wkey in fired:
-                continue
-            fired[wkey] = now_ts
-            fresh.append(item)
-        if fresh:
-            listing = "\n".join(f"{i+1}. {x['title']}" for i, x in enumerate(fresh))
             prompt = (
-                "[시스템] 승인 없이 진행하기로 한 다음 단계입니다. 지금 수행하세요.\n\n"
-                f"{listing}\n\n"
-                "각 항목을 실제로 실행하고 결과를 보고하세요. 적힌 범위만 하고, "
+                "[시스템] 사전 승인 범위에 포함된 다음 단계입니다. 지금 수행하세요.\n\n"
+                f"{_summary_of(item, context)}\n\n"
+                "이 항목을 실제로 실행하고 결과를 보고하세요. 적힌 범위만 하고, "
                 "이미 끝낸 항목은 다시 하지 마세요.\n"
                 "**같은 항목을 propose_next_steps 로 다시 올리지 마세요** — 중복 실행이 됩니다."
             )
             try:
-                from app.services.chat_service import trigger_ai_reaction
-                await trigger_ai_reaction(session_id, prompt)
-                auto_fired = len(fresh)
+                from app.services.chat_service import enqueue_next_step_reaction
+                queued = await enqueue_next_step_reaction(
+                    session_id, prompt,
+                    dedupe_key=f"next_step:auto:{_work_key(session_id, item['title'])}",
+                    reuse_seconds=900,
+                )
+                item["queue_id"] = queued["queue_id"]
+                item["queue_status"] = queued["queue_status"]
+                item["queued"] = True
+                if queued["created"]:
+                    auto_fired += 1
             except Exception as exc:  # noqa: BLE001
+                item["queued"] = False
+                item["queue_status"] = "enqueue_failed"
+                auto_enqueue_failed += 1
                 logger.warning(
                     "next_step_auto_trigger_failed session=%s error=%s",
                     session_id[:8], str(exc)[:160],
                 )
 
     logger.info(
-        "next_step_proposed session=%s cards=%s auto=%s auto_fired=%s skipped=%s",
-        session_id[:8], len(cards), len(auto), auto_fired, skipped,
+        "next_step_proposed session=%s cards=%s auto=%s auto_fired=%s auto_failed=%s skipped=%s",
+        session_id[:8], len(cards), len(auto), auto_fired, auto_enqueue_failed, skipped,
     )
     return {
         "proposed": len(cards) + len(auto),
@@ -484,13 +463,13 @@ async def propose(
         "auto": auto,
         "skipped": skipped,
         "auto_fired": auto_fired,
+        "auto_enqueue_failed": auto_enqueue_failed,
         "note": (
             "cards 는 대표님이 누르면 승인 프롬프트가 세션에 재주입된다. "
-            "auto 는 승인을 물을 필요가 없는 것이고, auto_fired 만큼은 "
-            "이 턴이 끝난 직후 시스템이 자동으로 재주입해 수행시킨다 "
-            "(trigger_ai_reaction deferred 큐). "
-            "그러니 auto 항목을 이번 턴에 이미 끝냈다면 다음 트리거에서 "
-            "'완료됨' 으로 답하고 다시 하지 마라. 아직 안 했다면 그때 하면 된다. "
-            "auto_fired 가 0 이면 같은 항목이 최근 15분 안에 이미 발화된 것이다."
+            "auto 는 queue_id 가 있는 항목만 실행 예약이 완료됐다. "
+            "queue_status 는 실행 결과가 아니라 전달 큐 상태다. "
+            "queued=false 항목을 '🟢자동'이라고 보고하지 마라. "
+            "auto_fired 는 이번 호출에서 새로 큐에 넣은 건수다. "
+            "이미 끝낸 항목은 재주입 시 완료됨으로만 답하고 재실행하지 마라."
         ),
     }
