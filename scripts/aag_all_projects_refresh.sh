@@ -122,12 +122,35 @@ refresh_nas() {
 }
 
 refresh_ntv2() {
-    if ssh "${SSH_OPTS[@]}" "$REMOTE_114" \
-        "mkdir -p /var/lib/aads/aag/ntv2 && cd /srv/newtalk-v2 && timeout 900 python3 tools/aag/scan.py --root /srv/newtalk-v2 --rules tools/aag/rules.yml --out /var/lib/aads/aag/ntv2" \
+    local remote_out="/var/lib/aads/aag/ntv2"
+    mkdir -p "$STATE_DIR/ntv2"
+    if ! ssh "${SSH_OPTS[@]}" "$REMOTE_114" \
+        "mkdir -p '$REMOTE_STAGE' '$remote_out'" >>"$LOG" 2>&1 \
+        || ! scp "${SSH_OPTS[@]}" -q \
+            "$REPO_DIR/tools/aag/scan_ntv2_adapter.py" \
+            "$REMOTE_114:$REMOTE_STAGE/" >>"$LOG" 2>&1; then
+        failed NTV2 "scanner_sync"
+        return
+    fi
+    ssh "${SSH_OPTS[@]}" "$REMOTE_114" \
+        "git -C /srv/newtalk-v2 fetch -q origin main && tmp=\$(mktemp -d /tmp/aag-ntv2-main.XXXXXX) && trap 'rm -rf \"\$tmp\"' EXIT && git -C /srv/newtalk-v2 archive refs/remotes/origin/main | tar -x -C \"\$tmp\" && sha=\$(git -C /srv/newtalk-v2 rev-parse refs/remotes/origin/main) && timeout 900 python3 '$REMOTE_STAGE/scan_ntv2_adapter.py' --root \"\$tmp\" --scanner \"\$tmp/tools/aag/scan.py\" --rules \"\$tmp/tools/aag/rules.yml\" --out-dir '$remote_out' --commit-sha \"\$sha\" --expected-head-sha \"\$sha\"" \
+        >>"$LOG" 2>&1
+    local scan_rc=$?
+    if ((scan_rc != 0)); then
+        failed NTV2 "clean_ref_scan"
+        return
+    fi
+    if ! scp "${SSH_OPTS[@]}" -q \
+        "$REMOTE_114:$remote_out/ntv2-graph.json" "$STATE_DIR/ntv2/" \
         >>"$LOG" 2>&1; then
-        log "STATUS project=NTV2 result=success publish=artifact_only"
+        failed NTV2 "artifact_fetch"
+        return
+    fi
+    if python3 "$REPO_DIR/scripts/aag_snapshot_push.py" \
+        "NTV2=$STATE_DIR/ntv2/ntv2-graph.json" >>"$LOG" 2>&1; then
+        log "STATUS project=NTV2 result=success source=origin/main"
     else
-        failed NTV2 "laravel_scan"
+        failed NTV2 "snapshot_publish"
     fi
 }
 
