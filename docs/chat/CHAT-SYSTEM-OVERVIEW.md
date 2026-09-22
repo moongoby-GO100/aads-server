@@ -35,7 +35,7 @@ AADS CEO Chat은 CEO(moongoby)가 자연어로 6개 프로젝트를 통합 운�
 │  └───────────────┬───────────────┘                         │
 │                  │                                          │
 │  ┌───────────────▼───────────────┐                         │
-│  │ app/services/chat_service.py  │  ← 비즈니스 로직 (4158L) │
+│  │ app/services/chat_service.py  │  ← 비즈니스 로직         │
 │  │ send_message_stream()         │                         │
 │  │ with_background_completion()  │                         │
 │  │ resume_interrupted_streams()  │                         │
