@@ -1,6 +1,26 @@
 #!/usr/bin/env bash
 # Refresh the six-project AAG inventory from the central AADS host.
 # Runtime artifacts stay outside every repository so scans never dirty worktrees.
+#
+# 실행 중 자기 보호 (2026-09-22 11:13 CEST 사고): systemd 타이머가 이 스크립트를
+# 읽고 있는 도중 배포 도구가 같은 경로에 새 버전을 write했다. bash 는 러닝
+# 스크립트를 한 번에 버퍼링하지 않고 바이트 오프셋으로 순차 실행하므로, 파일이
+# 밀리자 "line 137: syntax error near unexpected token '('" 로 죽었다(전체
+# journalctl 근거는 오류사전 aag.script_edited_while_running). flock 은 이
+# 스크립트끼리의 중복 실행만 막지, 외부 편집 도구는 그 lock 을 모른다 — 막을
+# 방법은 실행 시작 즉시 자신을 불변 스냅샷으로 복제해 그 사본을 실행하는 것뿐이다.
+# AAG_FROZEN 은 재실행 시 이 블록을 건너뛰기 위한 표식이다.
+if [[ -z "${AAG_FROZEN:-}" ]]; then
+    frozen="$(mktemp /tmp/aag-all-projects-refresh.frozen.XXXXXX.sh)"
+    cp -- "$0" "$frozen"
+    chmod +x "$frozen"
+    AAG_FROZEN=1 exec bash "$frozen" "$@"
+fi
+# `exec` replaced the pre-freeze process image, so any trap set before it is
+# gone — this one runs only inside the frozen copy (bash sets $0 to $frozen
+# here) and deletes it on exit regardless of success/failure.
+trap 'rm -f "$0"' EXIT
+
 set -uo pipefail
 
 REPO_DIR="${AAG_REPO_DIR:-/root/aads/aads-server}"
