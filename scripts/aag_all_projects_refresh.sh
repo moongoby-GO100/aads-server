@@ -63,9 +63,12 @@ refresh_generic_114() {
         failed "$project" "scanner_sync"
         return
     fi
-    if ! ssh "${SSH_OPTS[@]}" "$REMOTE_114" \
+    ssh "${SSH_OPTS[@]}" "$REMOTE_114" \
         "cd '$REMOTE_STAGE' && AAG_PROJECT='$project' timeout 900 python3 scan_aads.py --root '$root' --rules '$REMOTE_STAGE/$rules' --out-dir '$remote_out' --json" \
-        >>"$LOG" 2>&1; then
+        >>"$LOG" 2>&1
+    local scan_rc=$?
+    # Scanner rc=1 means findings exist; rc>=2 means the scan itself failed.
+    if ((scan_rc >= 2)); then
         failed "$project" "remote_scan"
         return
     fi
@@ -80,6 +83,41 @@ refresh_generic_114() {
         log "STATUS project=$project result=success"
     else
         failed "$project" "snapshot_publish"
+    fi
+}
+
+refresh_nas() {
+    local remote_out="/var/lib/aads/aag/nas"
+    mkdir -p "$STATE_DIR/nas"
+    if ! ssh "${SSH_OPTS[@]}" "$REMOTE_114" \
+        "mkdir -p '$REMOTE_STAGE' '$remote_out'" >>"$LOG" 2>&1 \
+        || ! scp "${SSH_OPTS[@]}" -q \
+            "$REPO_DIR/tools/aag/scan_aads.py" \
+            "$REPO_DIR/tools/aag/v2_contract.py" \
+            "$REPO_DIR/tools/aag/rules_nas.yml" \
+            "$REMOTE_114:$REMOTE_STAGE/" >>"$LOG" 2>&1; then
+        failed NAS "scanner_sync"
+        return
+    fi
+    ssh "${SSH_OPTS[@]}" "$REMOTE_114" \
+        "git -C /srv/newtalk-v2 fetch -q origin main && tmp=\$(mktemp -d /tmp/aag-nas-main.XXXXXX) && trap 'rm -rf \"\$tmp\"' EXIT && git -C /srv/newtalk-v2 archive refs/remotes/origin/main | tar -x -C \"\$tmp\" && sha=\$(git -C /srv/newtalk-v2 rev-parse refs/remotes/origin/main) && cd '$REMOTE_STAGE' && AAG_PROJECT=NAS AAG_REPOSITORY_ID=newtalk-v2 AADS_COMMIT_SHA=\"\$sha\" AAG_EXPECTED_TARGET_REF_HEAD_SHA=\"\$sha\" AAG_TARGET_REF=refs/heads/main timeout 900 python3 scan_aads.py --root \"\$tmp\" --rules '$REMOTE_STAGE/rules_nas.yml' --out-dir '$remote_out' --json" \
+        >>"$LOG" 2>&1
+    local scan_rc=$?
+    if ((scan_rc >= 2)); then
+        failed NAS "clean_ref_scan"
+        return
+    fi
+    if ! scp "${SSH_OPTS[@]}" -q \
+        "$REMOTE_114:$remote_out/nas-graph.json" "$STATE_DIR/nas/" \
+        >>"$LOG" 2>&1; then
+        failed NAS "artifact_fetch"
+        return
+    fi
+    if python3 "$REPO_DIR/scripts/aag_snapshot_push.py" \
+        "NAS=$STATE_DIR/nas/nas-graph.json" >>"$LOG" 2>&1; then
+        log "STATUS project=NAS result=success source=origin/main"
+    else
+        failed NAS "snapshot_publish"
     fi
 }
 
@@ -98,7 +136,7 @@ refresh_aads
 refresh_go100_and_kis
 refresh_generic_114 SF /data/shortflow rules_sf.yml sf
 refresh_ntv2
-refresh_generic_114 NAS /srv/newtalk-v2 rules_nas.yml nas
+refresh_nas
 
 if ((${#failures[@]})); then
     log "DONE result=failed projects=$(IFS=,; echo "${failures[*]}")"
