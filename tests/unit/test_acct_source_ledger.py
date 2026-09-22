@@ -31,6 +31,20 @@ def test_pivot_sql_applies_date_window_in_source_format():
     assert "occurred_on <= '20260831'" in sql
 
 
+def test_full_totals_are_computed_before_row_limit():
+    sql = mod._pivot_sql(11, "2", None, None)
+    assert "count(*) OVER() AS source_total_count" in sql
+    assert "OVER() AS source_total_amount" in sql
+    assert sql.index("source_total_amount") < sql.index("LIMIT 2000")
+
+
+def test_detail_id_is_filtered_after_deduplication_before_limit():
+    sql = mod._pivot_sql(11, "2", None, None, "acct:100:7")
+    assert "FROM deduped WHERE source_file_id = 100 AND rec_idx = 7" in sql
+    with pytest.raises(HTTPException):
+        mod._pivot_sql(11, "2", None, None, "acct:1:1 OR 1=1")
+
+
 def test_sales_and_purchase_use_distinct_entry_types():
     assert mod._ENTRY_TYPE["sales"] == "1"
     assert mod._ENTRY_TYPE["purchase"] == "2"

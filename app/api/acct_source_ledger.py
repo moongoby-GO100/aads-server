@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
@@ -96,7 +97,7 @@ def _decimal(value: Any) -> Decimal:
         return Decimal("0")
 
 
-def _pivot_sql(company_id: int, entry_type: str, date_from: Optional[str], date_to: Optional[str]) -> str:
+def _pivot_sql(company_id: int, entry_type: str, date_from: Optional[str], date_to: Optional[str], record_id: Optional[str] = None) -> str:
     selects = ",\n           ".join(
         "max({column}) FILTER (WHERE ar.field_key = {key}) AS {alias}".format(
             column="ar.num_value" if is_num else "ar.raw_value",
@@ -112,9 +113,15 @@ def _pivot_sql(company_id: int, entry_type: str, date_from: Optional[str], date_
         conditions.append(f"occurred_on >= {_lit(start)}")
     if end:
         conditions.append(f"occurred_on <= {_lit(end)}")
+    detail_filter = ""
+    if record_id is not None:
+        match = re.fullmatch(r"acct:(\d+):(\d+)", record_id)
+        if not match:
+            raise HTTPException(status_code=404, detail="원천 내역을 찾을 수 없습니다")
+        detail_filter = f" WHERE source_file_id = {int(match[1])} AND rec_idx = {int(match[2])}"
     # 같은 전표가 여러 스냅샷 파일에 그대로 다시 들어온다.  2026-09-22 라일론
     # 실측에서 매입 원본 행 26,723건은 전표키(일자+일련번호) 기준으로 4,210건
-    # 뿐이었고, 그대로 더하면 합계가 53.6억 대신 195억으로 6.3배 부풀었다.
+    # 뿐이었고, 중복 스냅샷을 그대로 더하면 건수와 금액이 부풀었다.
     # 그래서 전표키마다 가장 나중 source_file 한 건만 남긴다.
     return (
         "WITH pivot AS (\n"
@@ -136,7 +143,9 @@ def _pivot_sql(company_id: int, entry_type: str, date_from: Optional[str], date_
         "  ) keyed\n"
         "  ORDER BY occurred_on, voucher_key, source_file_id DESC\n"
         ")\n"
-        "SELECT * FROM deduped\n"
+        "SELECT *, count(*) OVER() AS source_total_count,\n"
+        " sum(coalesce(nullif(total_amount,0),supply_amount,0)) OVER() AS source_total_amount\n"
+        " FROM deduped" + detail_filter + "\n"
         " ORDER BY occurred_on DESC, voucher_key DESC\n"
         f" LIMIT {_MAX_ROWS}"
     )
@@ -172,6 +181,8 @@ def _row(row: Dict[str, Any], category: str) -> Dict[str, Any]:
         "source_file_id": row.get("source_file_id"),
         "rec_idx": row.get("rec_idx"),
         "voucher_seq": str(row.get("seq") or ""),
+        "source_total_count": row.get("source_total_count"),
+        "source_total_amount": row.get("source_total_amount"),
     }
 
 
@@ -181,6 +192,7 @@ async def source_transactions(
     category: str,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    record_id: Optional[str] = None,
 ) -> tuple[List[Dict[str, Any]], str]:
     """(행 목록, 원천 이름)을 돌려준다. 읽기 전용이며 계정 추정을 하지 않는다."""
     entry_type = _ENTRY_TYPE.get(category)
@@ -191,7 +203,7 @@ async def source_transactions(
         raise HTTPException(status_code=403, detail="사업자 범위가 필요합니다")
     tenant_id, company_id = scope
     rows = await _fetch_acct_journals(
-        _pivot_sql(company_id, entry_type, date_from, date_to), tenant_id
+        _pivot_sql(company_id, entry_type, date_from, date_to, record_id), tenant_id
     )
     records = [_row(row, category) for row in rows]
     return records, f"acct.source_file/atom_record:wehago:{category}"

@@ -562,6 +562,16 @@ async def workspace_summary(
         if source_rows and source_rows[0][1].get("source_total_amount") is not None
         else sum((Decimal(item["amount"]) for item in records), Decimal("0"))
     )
+    if selected_route in ACCT_SOURCE_ROUTES:
+        # The SQL window totals cover all remote rows before its list limit.
+        # Local manual/uploaded rows are an additional, separately owned source.
+        remote = [row for kind, row in source_rows if kind == "acct-source"]
+        local = [row for kind, row in source_rows if kind != "acct-source"]
+        if remote and remote[0].get("source_total_count") is not None:
+            source_count = int(remote[0]["source_total_count"]) + len(local)
+            total = Decimal(str(remote[0]["source_total_amount"] or 0)) + sum(
+                (_amount(row) for row in local), Decimal("0")
+            )
     review = sum(1 for item in records if any(token in item["status"].lower() for token in ("review", "pending", "대기", "필요")))
     return {
         "business": {"id": business["id"], "name": business["name"]},
@@ -615,6 +625,18 @@ async def workspace_record_detail(
 ) -> dict[str, Any]:
     selected_route = _route(route)
     business = await _business(current_user, business_id)
+    if selected_route in ACCT_SOURCE_ROUTES and record_id.startswith("acct:"):
+        source_rows, source = await acct_source_ledger.source_transactions(
+            current_user, business_id, ACCT_SOURCE_ROUTES[selected_route], record_id=record_id,
+        )
+        if not source_rows:
+            raise HTTPException(status_code=404, detail="현재 사업자의 내역을 찾을 수 없습니다")
+        return {
+            "business": {"id": business["id"], "name": business["name"]},
+            "route": selected_route,
+            "record": _record("acct-source", source_rows[0], business["name"]),
+            "source": {"name": source, "live": True},
+        }
     source_rows, source = await _source_rows(
         route=selected_route, user=current_user, business_id=business_id,
         date_from=None, date_to=None,
