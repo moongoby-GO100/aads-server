@@ -84,6 +84,67 @@ _DETAIL_LABEL: Dict[str, str] = {
 _MAX_ROWS = 2000
 
 
+def _card_master_sql(company_id: int) -> str:
+    """Verified card-register format; never read historical or foreign masters.
+
+    Transaction cd_ctrade joins register cd_trade (not nm_ctrade). Mask PANs
+    inside PostgreSQL so full numbers never enter the API process or response.
+    Multiple identities for one code are deliberately left unresolved.
+    """
+    return f"""
+WITH master AS (
+ SELECT sf.id AS source_file_id, ar.rec_idx,
+  max(ar.raw_value) FILTER (WHERE ar.field_key='cd_trade') AS card_code,
+  max(ar.raw_value) FILTER (WHERE ar.field_key='nm_trade') AS card_name,
+  max(ar.raw_value) FILTER (WHERE ar.field_key='id_sa') AS pan,
+  max(ar.raw_value) FILTER (WHERE ar.field_key='yn_use') AS use_code
+ FROM source_file sf JOIN atom_record ar ON ar.source_file_id=sf.id
+ WHERE sf.company_id={int(company_id)} AND sf.is_current IS TRUE
+  AND sf.domain='wehago'
+  AND regexp_replace(sf.abs_path, '^.*/', '')='카드거래처.json'
+  AND ar.field_key IN ('cd_trade','nm_trade','id_sa','yn_use')
+ GROUP BY sf.id,ar.rec_idx
+), identities AS (
+ SELECT *, regexp_replace(coalesce(pan,''),'[^0-9]','','g') AS pan_digits
+ FROM master WHERE nullif(card_code,'') IS NOT NULL
+), resolved AS (
+ SELECT card_code, count(DISTINCT (coalesce(card_name,''),pan_digits,coalesce(use_code,''))) AS variants,
+  min(card_name) AS card_name, min(pan_digits) AS pan_digits,
+  min(use_code) AS use_code, array_agg(DISTINCT source_file_id) AS source_file_ids
+ FROM identities GROUP BY card_code
+)
+SELECT card_code, variants, source_file_ids,
+ CASE WHEN variants=1 THEN regexp_replace(card_name, '[0-9][0-9 -]{{8,}}[0-9]', '[식별번호 가림]', 'g') END AS card_name,
+ CASE WHEN variants=1 AND length(pan_digits) BETWEEN 13 AND 19
+      THEN '****-****-****-' || right(pan_digits,4) END AS card_number_masked,
+ CASE WHEN variants=1 THEN use_code END AS master_use_code
+FROM resolved
+"""
+
+
+async def _enrich_cards(records: list[dict], tenant_id: int, company_id: int) -> None:
+    if not any(record.get("card_code") for record in records):
+        return
+    masters = await _fetch_acct_journals(_card_master_sql(company_id), tenant_id)
+    by_code = {str(row["card_code"]): row for row in masters}
+    for record in records:
+        code = record.get("card_code")
+        if not code:
+            continue
+        master = by_code.get(code)
+        record["card_master_status"] = "missing"
+        if not master:
+            continue
+        record["card_master_source_file_ids"] = master["source_file_ids"]
+        if int(master["variants"]) != 1:
+            record["card_master_status"] = "conflict"
+            continue
+        record.update(card_name=master.get("card_name"),
+                      card_number_masked=master.get("card_number_masked"),
+                      card_master_use_code=master.get("master_use_code"),
+                      card_master_status="matched" if master.get("card_number_masked") else "number_missing")
+
+
 def _digits(value: Optional[str]) -> Optional[str]:
     """ISO 날짜(YYYY-MM-DD)를 원천 표기(YYYYMMDD)로 바꾼다."""
     if not value:
@@ -260,6 +321,7 @@ async def source_transactions(
         _pivot_sql(company_id, entry_type, date_from, date_to, record_id, limit=limit, offset=offset, search=search, status=status), tenant_id
     )
     records = [_row(row, category) for row in rows]
+    await _enrich_cards(records, tenant_id, company_id)
     return records, f"acct.source_file/atom_record:wehago:{category}"
 
 
