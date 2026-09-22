@@ -23,7 +23,7 @@
 | ID | 요구 |
 |---|---|
 | S1-1 | 스캔 제외 경로: `.worktrees/`, `*-releases/`, `go100-*`(클론), `claude-model-release-*`, `*-unified-p0`, `aads-dashboard-unni`, `.venvs`, `node_modules` |
-| S1-2 | 색인 대상 확장자: `.md` 만. 이미지·소스·json 은 문서가 아니다 |
+| S1-2 | 색인 대상 확장자: `.md` 만. 이미지·소스·json 은 문서가 아니다. **예외**: `app/static/reports/` 하위 `.html`(대표님께 보고한 발행 리포트)은 색인 대상 — `scripts/index_docs.py`의 `html_to_text`가 태그를 제거하고 본문만 넣는다 (2026-09-22, runner-8b1a6c43 PRESERVATION_HARD_GATE 반려로 확인: 이 예외를 모르고 제거하면 발행 리포트가 검색에서 사라진다) |
 | S1-3 | 내용 해시(sha256)로 중복 제거. 같은 내용이면 **정본 1개**만 색인 |
 | S1-4 | 정본 선택 규칙: `aads-server` > `aads-docs` > `aads-dashboard` > `go100` 순, 같으면 경로가 짧은 것 |
 | S1-5 | 제외는 **색인에서만**. 파일은 지우지 않는다 |
