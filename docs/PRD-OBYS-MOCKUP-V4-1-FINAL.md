@@ -3,7 +3,7 @@
 - 문서 ID: `AADS-OBYS-V4-1-FINAL-20260922`
 - 제품 버전: V4.1
 - 목업: `/static/apps/obys/mockup-v4-1.html`
-- 상태: 최종 구현 기준
+- 상태: DB 연동 구현 기준 · 2026-09-22 반영
 
 ## 1. 목적과 사용자
 
@@ -245,34 +245,29 @@ tenant `d1695f15-6b68-4929-bc8d-646827363ff9`(ACCT tenant id 11).
 - 자바스크립트 구문 오류와 브라우저 콘솔 오류가 0건이다.
 - 외부 URL이 HTTP 200이며 배포 후 5분간 P0/P1 오류가 0건이다.
 
-## 12. 라일론 DB 연동 실측 (2026-09-22)
+## 12. 실제 구현 계약
 
-목업을 실데이터 계약으로 바꾸면서 라일론 사업자로 원천을 실측했다. 결론은 **오비서 화면에서 라일론이
-볼 수 있는 실자료는 6개 메뉴, 합계 10행**이고, 라일론의 회계 자료 대부분은 오비서가 아니라 ACCT 원장에만 있다는 것이다.
+V4.1은 더 이상 화면 안의 샘플 배열을 데이터로 사용하지 않는다. 로그인한 사용자의 JWT 테넌트로 사업자 목록을 조회하고, 선택한 사업자가 해당 테넌트 소유인지 서버에서 재검증한 뒤 아래 API를 호출한다.
 
-| 구분 | 실측값 | 근거 |
+| 화면 동작 | 구현 API | 정본 |
 |---|---|---|
-| obys DB 라일론 자료 | card_transactions 1 · journal_vouchers 2 · manual_ledger_entries 2 · manual_bank_transactions 1 · uploaded_ledger_rows 3 · uploads 3 · businesses 1 | `obys` DB, `business_id='biz-lylon-e2e'` |
-| obys DB 라일론 0건 | delivery_sales · delivery_settlements · bank_accounts · branches · contracts · onboarding_documents · platform_accounts · inventory_items · purchase_orders | 같은 조회 |
-| ACCT DB 라일론 자료 | `journal_entry` 13,623건(2026-01-01~2026-08-24) · `journal_line` 27,416건 · company 1 | ACCT DB tenant_id=11 |
-| ACCT DB 라일론 0건 | canonical_transaction · canonical_document · raw_document · import_job · source_connection · audit_event · period_lock | 같은 조회 |
-| 연동 상태 | `GET /yeoljeong-finance/journals` 응답의 `integration.acct = "not_connected"` | `app/api/obys_finance.py` |
-| 테넌트 게이트 | 라일론 tenant는 레거시 허용목록에 없어 18개 메뉴가 403 | `app/core/obys_tenant.py` |
+| 사업자 선택 | `GET /api/v1/workspaces/businesses` | `yeoljeong_businesses` |
+| KPI·원천 상태 | `GET /api/v1/workspaces/{businessId}/{route}/summary` | route별 기존 오비서 원장 |
+| 일자별·건별 조회 | `GET /api/v1/workspaces/{businessId}/{route}/records` | 매출·매입·카드·은행·전표 및 업무별 기존 테이블 |
+| 건별 상세 | `GET /api/v1/workspaces/{businessId}/{route}/records/{id}` | 같은 DB row의 마스킹된 원문 |
+| 엑셀 사전검증 | `POST /api/v1/workspaces/{businessId}/{route}/imports/preview` | 무기록 파싱 + DB 중복 해시 조회 |
+| 엑셀 확정등록 | `POST /api/v1/workspaces/{businessId}/{route}/imports/commit` | `yeoljeong_uploads`, `yeoljeong_uploaded_ledger_rows` |
+| 건별 직접등록 | `POST /api/v1/workspaces/{businessId}/{route}/records` | 수기 원장·카드·은행 정본 테이블 |
 
-따라서 "오비서 V4.1에서 라일론 실데이터를 본다"는 두 가지를 먼저 풀어야 성립한다.
+36개 route는 모두 DB 원천을 명시한다. 해당 사업자의 row가 없으면 샘플 값을 보여주지 않고 `0건`을 표시한다. 매출·매입·계좌·카드·세무증빙·전표는 각각 기존 tenant-scoped 서비스 함수를 재사용한다. 직원·급여·재고·승인·감사·설정 화면은 사업자 소유권 검증 후 해당 업무 테이블을 읽는다.
 
-1. **테넌트 게이트 해제 조건** — `yeoljeong-*` 라우터의 WHERE 절에 테넌트 조건을 넣어야 허용목록을 지울 수 있다.
-   지금 허용목록을 늘리면 라일론이 열정국밥 자료를 보게 된다(게이트가 막고 있던 바로 그 사고다).
-2. **ACCT 원장 13,623건 연결** — 오비서의 `journals` 는 `obys.yeoljeong_journal_vouchers`(2건)를 보고 있고
-   ACCT `journal_entry`(13,623건)와 이어져 있지 않다. 세무·회계 4개 메뉴의 실데이터는 이 연결 없이는 나오지 않는다.
+### 12.1 라일론 검증 기준
 
-이 두 가지가 끝나기 전까지 목업은 `차단(403)` 과 `미연동` 을 숨기지 않고 그대로 표시한다.
-화면에 수치가 보이지 않는 것은 목업의 결함이 아니라 원천의 현재 상태다.
-
-## 13. M1 완료 판정 (목업·PRD의 실데이터 계약 전환)
-
-- 36개 메뉴 계약 = 36개 `configs` 항목, 중복 route 0개. (파일 실측)
-- 샘플 행 생성기(`rows()`·`sampleValue()`)와 고정 KPI 문자열 제거 — 하드코딩 금액·건수·비율 0건.
-- 모든 값은 §8.2 의 원천 API 응답에서만 나오며, 없으면 미연동·0건·차단·로그인 필요를 표시한다.
-- HTML 파서 오류 0건, 자바스크립트 구문 오류 0건, 외부 URL HTTP 200.
-- 남은 항목: §9 의 `summary`·`records`·`import-sessions` API 미구현, 건별 처리 API 미구현, §12 의 두 선행 조건.
+- 대상 사업자: `주식회사 라일론` (`biz-lylon-e2e`)
+- 검증 시 테넌트는 로그인 JWT에서만 결정하며 HTML이나 쿼리 파라미터로 받지 않는다.
+- 화면에 표시된 DB 건수와 동일 조건 SQL count가 일치해야 한다.
+- 조회 시작일·종료일은 KST 현재 월을 기본값으로 사용하고, 업로드 원장을 포함한 모든 원천에 같은 날짜 조건을 적용해야 한다.
+- 매출·매입·계좌·카드·세무증빙·전표에서 목록 행을 누르면 같은 row ID의 상세 원문이 열려야 한다.
+- 상세 원문의 토큰·비밀번호·API 키·사업자번호·이메일·전화·비마스킹 계좌번호는 서버 응답 단계에서 마스킹해야 한다.
+- 업로드 미리보기는 DB를 변경하지 않고, 확정 버튼을 눌렀을 때만 저장해야 한다.
+- 다른 테넌트가 `biz-lylon-e2e`를 직접 요청하면 404로 차단되어야 한다.

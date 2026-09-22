@@ -25,9 +25,9 @@
   <div class="shell">
     <aside class="side" id="side">
       <div class="brand"><span class="mark">오</span>오비서 <span class="version">V4.1</span></div>
-      <div class="business" id="bizBox"><small>현재 사업자</small><b id="bizName">사업자 조회 중</b><span id="bizMeta">tenant-registry 응답 대기</span></div>
+      <div class="business"><small>현재 사업자</small><b id="businessName">로그인 후 사업자를 불러옵니다</b><span id="businessMeta">오비서 DB 연결 대기</span></div>
       <nav class="nav" id="nav" aria-label="V4.1 통합 메뉴"></nav>
-      <div class="side-foot">업무별 전용 정보계층 · 실데이터 계약<br>원천이 없으면 미연동·0건·차단을 그대로 표시합니다</div>
+      <div class="side-foot">업무별 전용 정보계층 · 오비서 DB 실데이터<br>자동연동 실패 시 엑셀·직접등록 지원</div>
     </aside>
     <section class="stage">
       <header class="top"><button class="menu-toggle" id="menuToggle" aria-label="전체 메뉴">☰</button><div class="crumb"><small id="groupLabel">경영</small><b id="pageLabel">통합 홈</b></div><div class="top-actions"><span class="sync"><span class="dot" id="syncDot"></span><span id="syncLabel">미조회</span></span><button class="btn" id="helpBtn">화면 안내</button><button class="btn primary" id="quickRegister">자료 등록</button></div></header>
@@ -53,11 +53,8 @@
       {label:"사업자·분석",icon:"◇",items:[["사업자 현황","businesses"],["지점 현황·등록","branches"],["원가·마진","margins"],["메뉴 원가","menu-costs"]]},
       {label:"설정",icon:"⚙",items:[["자동연동 관리","integrations"],["판매 연동","sales-connect"],["은행·카드 연동","bank-connect"],["세무 연동","tax-connect"],["권한·감사로그","access-log"]]}
     ];
-    /* src: 지금 붙일 수 있는 원천. none: 계약만 있고 API가 없는 원천(미연동).
-       gate="legacy" 는 app/core/obys_tenant.py 허용목록 테넌트만 통과한다 — 그 외 테넌트는 403. */
-    const src=(api,key,store,o={})=>({api,key,store,plan:o.plan||"",gate:o.gate||"open",params:o.params||{},note:o.note||"",biz:o.biz!==false});
-    const none=(plan,store,note)=>({api:null,key:null,store:store||"저장소 미정",plan:plan||"",gate:"none",params:{},note:note||"",biz:true});
-    const C=(title,desc,hierarchy,columns,metrics,focus,o={})=>({title,desc,hierarchy,columns,metrics,focus,register:o.register!==false,action:o.action||"상세 확인",kind:o.kind||"현황",status:o.status||["전체 상태","정상","확인 필요","완료"],source:o.source||none("")});
+    const rows=()=>[];
+    const C=(title,desc,hierarchy,columns,metrics,focus,opts={})=>({title,desc,hierarchy,columns,metrics,focus,register:opts.register!==false,action:opts.action||"상세 확인",kind:opts.kind||"현황",status:opts.status||["전체 상태","정상","확인 필요","완료"],data:rows(opts.prefix||title.slice(0,2),columns,opts.rowStatus)});
     const configs={
       home:C("통합 홈","오늘 처리할 업무, 자금, 증빙, 승인 상태를 한 화면에서 확인합니다.",["사업자","오늘 할 일","위험·마감"],["업무","담당자","일자","상태"],["요약 항목","확인 필요"],["마감 관점|기한이 지난 증빙과 신고 항목을 먼저 봅니다.","현금흐름 관점|예정 입금과 출금의 차이를 봅니다.","자동화 관점|수집이 끊긴 연동을 먼저 복구합니다."],{register:false,kind:"요약",source:src("/yeoljeong-dashboard/kpis","kpis","obys 집계(dashboard.get_kpis)",{gate:"legacy",note:"요약 지표 단일 객체 — 건별 목록은 각 업무 메뉴에서 조회합니다."})}),
       tasks:C("할 일·마감","담당자와 완료 기준이 명확한 업무 보드입니다.",["사업자","업무영역","담당자","마감상태"],["업무","담당자","일자","상태"],["업무 건수","지연·확인 필요"],["오늘 우선|마감일이 지난 업무를 위에 둡니다.","담당 병목|한 담당자에게 몰린 승인을 확인합니다.","완료 기준|근거를 첨부해야 완료 처리합니다."],{kind:"업무",action:"완료 처리",source:src("/yeoljeong-dashboard/tasks","tasks","obys 집계(dashboard.get_tasks)",{gate:"legacy"})}),
@@ -96,13 +93,13 @@
       "tax-connect":C("세무 연동","홈택스·전자증빙 서비스의 인증과 증빙 종류별 수집 범위를 설정합니다.",["사업자","세무서비스","증빙종류","수집상태"],["연동번호","서비스","사업자","증빙","마지막성공","상태"],["세무 연동 수","인증 만료·누락"],["인증 상태|인증서와 간편인증 만료를 봅니다.","수집 종류|계산서·현금영수증·카드를 봅니다.","업무 연결|수집 자료는 증빙대장에서 봅니다."],{register:false,action:"세무 인증 갱신",source:none("GET /api/v1/workspaces/{businessId}/tax-connect/records","세무 연동 저장소 미정","홈택스 연동 상태 테이블이 아직 없습니다.")}),
       "access-log":C("권한·감사로그","사용자·역할·권한 변경과 로그인·민감정보 접근을 추적합니다.",["사업자","사용자","권한영역","위험도"],["로그번호","일자","담당자","행위","대상","상태"],["로그 건수","위험 접근"],["최소 권한|업무와 사업자 범위를 확인합니다.","세션 통제|활성 기기와 만료를 봅니다.","감사 추적|권한 부여·회수 근거를 남깁니다."],{register:false,action:"권한 회수·확인",source:src("/yeoljeong-ops/audit-logs","audit_logs","obys.yeoljeong_audit_logs",{gate:"legacy",note:"권한 영역 필터가 없어 전체 감사로그를 표시합니다."})})
     };
-    const STATES={idle:{label:"미조회",tone:"warn"},loading:{label:"조회 중",tone:"warn"},live:{label:"실데이터",tone:"ok"},empty:{label:"0건",tone:"warn"},unlinked:{label:"미연동",tone:"warn"},blocked:{label:"테넌트 차단",tone:"bad"},auth:{label:"로그인 필요",tone:"bad"},error:{label:"조회 실패",tone:"bad"}};
-    const TONE={ok:"#22c55e",warn:"#f59e0b",bad:"#ef4444"};
-    const ALIAS={"일자":["date","entry_date","txn_date","transaction_date","sales_date","occurred_at","approved_at","created_at"],"전표일자":["entry_date","voucher_date","date"],"예정일":["due_date","expected_date","date"],"서명일":["signed_at","signed_date"],"만료일":["expires_at","expire_date","valid_until"],"납부기한":["due_date","pay_due_date"],"금액":["amount","total_amount","total","supply_amount","price","net_amount"],"공급가":["supply_amount","supply_price","net_amount"],"세액":["tax_amount","vat","tax"],"수수료":["fee","commission","fee_amount"],"상태":["status","state","result","stage"],"담당자":["owner","assignee","manager","user_name","created_by","actor"],"요청자":["requester","created_by","user_name"],"사업자":["business_name","business_id","company_name"],"지점":["branch_name","branch_id","store_name"],"직원":["employee_name","name","user_name"],"거래처":["vendor","vendor_name","partner","counterparty"],"매입처":["vendor","vendor_name","supplier","supplier_name"],"매출처·채널":["channel","platform","channel_name"],"카드사":["card_issuer","issuer","card_company"],"카드번호":["card_number","card_no","masked_card_number"],"가맹점":["merchant","merchant_name","store"],"계좌":["account","account_number","bank_account","account_name"],"입금처":["depositor","remitter","counterparty","description"],"품목":["item","item_name","product_name"],"수량":["quantity","qty","stock_quantity"],"업무":["task","title","subject","action"],"문서":["document_name","file_name","filename","title"],"서비스":["service","provider","platform","channel"],"오류":["error","error_message","reason","message"],"근거":["evidence","reason","note"],"영향":["impact","scope","message"],"변경내용":["change","diff","description"],"메뉴":["menu_name","name"],"주문번호":["order_no","order_id","id"],"승인번호":["approval_no","approval_number","id"],"전표번호":["voucher_no","voucher_id","id"],"증빙번호":["evidence_no","evidence_id","id"],"연동번호":["integration_id","id"],"직무":["position","role","job_title"]};
-    const state={route:"home",search:"",status:"전체 상태",tab:"summary",step:0,selected:{},registerMode:null,fileSelected:false,fileName:"",fileReport:null,detailRow:null,dateFrom:"",dateTo:"",biz:null,bizList:[],load:{kind:"idle",detail:"",rows:[],at:null},seq:0};
+    const dateParts=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:"Asia/Seoul",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date()).filter(x=>x.type!=="literal").map(x=>[x.type,x.value]));
+    const kstToday=`${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+    const state={route:"home",search:"",status:"전체 상태",tab:"summary",step:0,selected:{},sourceFailed:false,registerMode:null,detailRow:null,dateFrom:`${dateParts.year}-${dateParts.month}-01`,dateTo:kstToday,businessId:"",businessName:"",businesses:[],liveMetrics:[],liveSource:null,liveLoading:false,liveError:"",requestId:0,importPreview:null,importFile:null};
     const specialFields={
       sales:["주문일시","매출처·채널","지점","주문번호","상품·옵션","결제금액","취소사유"],
-      orders:["주문일시","채널","지점","주문번호","상품·수량","결제수단","취소·환불사유"],
+      orders:["주문일시","채널","지점","주문번호","상품·수량","결제금액","취소·환불사유"],
+      suppliers:["매입일자","매입처","품목","수량·단가","공급가액","세액","지급계좌·예정일"],
       purchases:["매입일자","매입처","품목","수량·단가","공급가액","세액","지급계좌·예정일"],
       accounts:["거래일시","은행·계좌","입금처","은행 적요","입금액","출금액","매칭 대상"],
       unmatched:["거래일시","은행·계좌","입금처","입금액","추천 대상","분할금액","매칭 사유"],
@@ -111,6 +108,8 @@
       "tax-gap":["증빙일자","거래처·사업자번호","증빙종류","매출·매입","과세구분","공급가액·세액","원본 첨부"],
       journals:["전표일자","거래처","적요","차변계정·금액","대변계정·금액","연결 증빙","승인 상태"]
     };
+    function registrationFields(c){return specialFields[state.route]||c.columns.filter(x=>x!=="상태").slice(0,7)}
+    function fieldControl(label,i){const selectMap={"증빙종류":["전자세금계산서","전자계산서","현금영수증","카드전표","간이영수증"],"매출·매입":["매출","매입"],"과세구분":["과세","면세","영세","불공제"],"승인·취소":["승인","취소"],"승인 상태":["임시","검토 요청"]};const options=selectMap[label],dateField=label.includes("일자")||label.includes("일시");return`<div class="form-field"><label>${label} <span class="required">필수</span></label>${options?`<select data-register-field="${i}" data-register-label="${label}">${options.map(x=>`<option>${x}</option>`).join("")}</select>`:`<input data-register-field="${i}" data-register-label="${label}" type="${dateField?'date':'text'}" value="${dateField?state.dateTo:''}" placeholder="${label} 입력" aria-label="${label}">`}</div>`}
     const nav=document.getElementById("nav"),page=document.getElementById("page"),side=document.getElementById("side"),backdrop=document.getElementById("backdrop"),detailDialog=document.getElementById("detailDialog"),registerDialog=document.getElementById("registerDialog"),toast=document.getElementById("toast");
     const cfg=()=>configs[state.route]||configs.home;
     function escapeHtml(value){return String(value===null||value===undefined?"":value).replace(/[&<>'"]/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[ch]))}
@@ -144,205 +143,71 @@
       document.getElementById("bizName").textContent=name;
       document.getElementById("bizMeta").textContent=state.bizList.length>1?`사업자 ${state.bizList.length}개 · 눌러서 전환`:(state.biz?`business_id ${plain(state.biz.id||state.biz.business_id)}`:"tenant-registry 응답 없음");
     }
-    async function loadRoute(){
-      const c=cfg(),s=c.source,seq=++state.seq;
-      if(!s.api){state.load={kind:"unlinked",detail:s.plan?`계약 예정 ${s.plan}`:"원천 API 미정",rows:[],at:null};renderPage();return}
-      state.load={kind:"loading",detail:`${API}${s.api} 조회 중`,rows:[],at:null};renderPage();
-      const q=new URLSearchParams();
-      if(s.biz&&state.biz)q.set("business_id",plain(state.biz.id||state.biz.business_id));
-      Object.entries(s.params).forEach(([k,v])=>q.set(k,v));
-      if(state.dateFrom)q.set("date_from",state.dateFrom);
-      if(state.dateTo)q.set("date_to",state.dateTo);
-      let res;
-      try{res=await fetch(`${API}${s.api}${q.toString()?`?${q}`:""}`,{credentials:"same-origin",headers:{Accept:"application/json"}})}
-      catch(err){if(seq!==state.seq)return;state.load={kind:"error",detail:`네트워크 오류 ${err.message}`,rows:[],at:new Date()};renderPage();return}
-      if(seq!==state.seq)return;
-      let body=null;try{body=await res.json()}catch(err){body=null}
-      const detail=body&&body.detail?plain(body.detail):"";
-      if(res.status===401){state.load={kind:"auth",detail:detail||"세션이 없거나 만료되었습니다.",rows:[],at:new Date()};renderPage();return}
-      if(res.status===403){state.load={kind:"blocked",detail:detail||"이 테넌트에는 접근 권한이 없습니다.",rows:[],at:new Date()};renderPage();return}
-      if(!res.ok){state.load={kind:"error",detail:`HTTP ${res.status} ${detail}`.trim(),rows:[],at:new Date()};renderPage();return}
-      const rows=pickRows(body,s.key).filter(r=>r!==null&&r!==undefined);
-      state.load={kind:rows.length?"live":"empty",detail:`HTTP ${res.status} · ${rows.length}건 수신`,rows,at:new Date()};
-      renderPage();
+    function downloadCsv(data,columns,name){const csv=[columns.join(","),...data.map(r=>columns.map(c=>`"${String(r[c]??'').replaceAll('"','""')}"`).join(","))].join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\ufeff"+csv],{type:"text/csv"}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);showToast("현재 조건의 CSV를 만들었습니다.")}
+    function showToast(message){toast.textContent=message;toast.classList.add("show");setTimeout(()=>toast.classList.remove("show"),2200)}
+    renderNav();nav.onclick=e=>{const title=e.target.closest(".group-title");if(title){const g=title.closest(".group");g.classList.toggle("open");title.setAttribute("aria-expanded",g.classList.contains("open"));return}const item=e.target.closest("[data-route]");if(item){state.route=item.dataset.route;state.search="";state.status="전체 상태";state.selected={};history.replaceState(null,"",`#${state.route}`);side.classList.remove("show");backdrop.classList.remove("show");renderPage()}};
+    document.getElementById("menuToggle").onclick=()=>{side.classList.add("show");backdrop.classList.add("show")};backdrop.onclick=()=>{side.classList.remove("show");backdrop.classList.remove("show")};document.querySelectorAll("[data-close]").forEach(b=>b.onclick=()=>document.getElementById(b.dataset.close).close());document.getElementById("quickRegister").onclick=()=>{if(configs[state.route].register)openRegister();else{state.route="tax-gap";history.replaceState(null,"","#tax-gap");renderPage();openRegister()}};document.getElementById("helpBtn").onclick=()=>showToast("상세 탐색 → 필터 → 건별 행 → 처리 버튼 순서로 사용하십시오.");document.getElementById("prevStep").onclick=()=>{state.step=Math.max(0,state.step-1);renderRegister()};document.getElementById("nextStep").onclick=()=>{if(state.step<3){state.step++;renderRegister()}else{registerDialog.close();showToast("124건이 임시등록되었습니다. 승인 전까지 확정값에 반영되지 않습니다.")}};document.getElementById("templateBtn").onclick=()=>downloadCsv([],configs[state.route].columns,`${state.route}-template.csv`);document.getElementById("detailAction").onclick=()=>{detailDialog.close();showToast(`${configs[state.route].action} 화면을 열었습니다.`)};
+    function levelChoice(label){if(["사업자","서비스유형","사업자유형"].includes(label))return state.businessName||"사업자 선택 필요";const value=(configs[state.route]?.data||[]).map(row=>row[label]).find(Boolean);return value||`전체 ${label}`}
+    function escapeHtml(value){return String(value??"").replace(/[&<>'"]/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[ch]))}
+    function authHeaders(){const token=localStorage.getItem("aads_token")||localStorage.getItem("fb_access_token")||"";return token?{Authorization:`Bearer ${token}`}:{}}
+    async function workspaceApi(path,options={}){const response=await fetch(`/api/v1/workspaces${path}`,{credentials:"same-origin",...options,headers:{...authHeaders(),...(options.headers||{})}});let body={};try{body=await response.json()}catch(_error){}if(!response.ok)throw new Error(body.detail||`HTTP ${response.status}`);return body}
+    function liveRow(record,c){const row=Object.fromEntries(c.columns.map((column,index)=>[column,record.display?.[column]??(index===0?record.id:index===c.columns.length-1?record.status:"")]));Object.defineProperty(row,"__live",{value:record,enumerable:false});return row}
+    async function loadBusinesses(){const payload=await workspaceApi("/businesses");state.businesses=payload.businesses||[];if(!state.businesses.length)throw new Error("현재 계정에 연결된 사업자가 없습니다.");const saved=localStorage.getItem("obys_v41_business_id");const selected=state.businesses.find(x=>x.id===saved)||state.businesses[0];state.businessId=selected.id;state.businessName=selected.name;localStorage.setItem("obys_v41_business_id",selected.id);document.getElementById("businessName").textContent=selected.name;document.getElementById("businessMeta").textContent=`${selected.entity_type||"사업자"} · ${selected.tax_type||"세무유형 미등록"} · DB 연결`}
+    async function loadLiveRoute(){if(!state.businessId)return;const requestId=++state.requestId,stateRoute=state.route,c=configs[stateRoute];state.liveLoading=true;state.liveError="";renderPageV41();const params=new URLSearchParams({date_from:state.dateFrom,date_to:state.dateTo,limit:"500"});if(state.search)params.set("search",state.search);if(state.status!=="전체 상태")params.set("status",state.status);try{const [summary,records]=await Promise.all([workspaceApi(`/${encodeURIComponent(state.businessId)}/${encodeURIComponent(stateRoute)}/summary?${params}`),workspaceApi(`/${encodeURIComponent(state.businessId)}/${encodeURIComponent(stateRoute)}/records?${params}`)]);if(requestId!==state.requestId)return;c.data=(records.records||[]).map(record=>liveRow(record,c));state.liveMetrics=summary.metrics||[];state.liveSource=records.source||summary.source||null;state.sourceFailed=false}catch(error){if(requestId!==state.requestId)return;c.data=[];state.liveMetrics=[];state.liveSource=null;state.liveError=error.message;state.sourceFailed=true}finally{if(requestId===state.requestId){state.liveLoading=false;renderPageV41()}}}
+    function filteredRows(c){let data=c.data.filter(r=>(state.status==="전체 상태"||Object.values(r).includes(state.status))&&(!state.search||Object.values(r).join(" ").toLowerCase().includes(state.search.toLowerCase())));Object.entries(state.selected).forEach(([index,value])=>{const label=c.hierarchy[Number(index)];if(value&&!String(value).startsWith("전체 "))data=data.filter(row=>!row[label]||row[label]===value)});if(state.tab==="exceptions")data=data.filter(r=>Object.values(r).some(v=>/확인 필요|누락|대기|주의|오류|불균형|미매칭|needs_review|pending/.test(String(v))));return data}
+    function renderPageV41(){
+      const c=configs[state.route]||configs.home,info=routeInfo(state.route),data=filteredRows(c);
+      document.getElementById("groupLabel").textContent=info.group.label;document.getElementById("pageLabel").textContent=c.title;
+      document.querySelectorAll("[data-route]").forEach(x=>x.classList.toggle("active",x.dataset.route===state.route));const group=document.querySelector(`[data-group="${info.group.label}"]`);if(group)group.classList.add("open");
+      const selected=c.hierarchy.map((label,i)=>state.selected[i]||(["사업자","서비스유형","사업자유형"].includes(label)?(state.businessName||"사업자 선택 필요"):`전체 ${label}`));
+      const source=`<div class="source-status ${state.sourceFailed?'failed':''}"><b>${state.liveLoading?'DB 조회 중':state.liveError?'DB 연결 확인 필요':state.liveSource?.live?'오비서 DB 실데이터':'DB 연결 · 원천 미구성'}</b><span>${state.liveLoading?'현재 조건의 원장을 불러오고 있습니다.':state.liveError?escapeHtml(state.liveError):state.liveSource?.live?`${state.liveSource.name} · ${data.length}건 표시 · 샘플 데이터 없음`:'이 메뉴의 정본 테이블/API가 아직 없어 0건으로 표시합니다.'}</span>${state.liveError?'<button class="btn" id="retrySource">다시 시도</button>':!state.liveSource?.live&&c.register?'<button class="btn primary" id="fallbackRegister">엑셀 대체등록</button>':''}</div>`;
+      const hierarchy=`<section class="section"><div class="section-head"><h2>업무별 상세 탐색</h2><p>상위 집계에서 원문 건별까지 순서대로 좁혀봅니다.</p><span class="right">${c.hierarchy.length}단계 드릴다운</span></div><div class="hierarchy">${c.hierarchy.map((label,i)=>`<div class="level"><small>${i+1}단계 · ${label}</small><button class="${state.selected[i]?'selected':''}" data-level="${i}">${selected[i]}</button></div>`).join("")}</div></section>`;
+      const table=`<section class="section"><div class="section-head"><h2>${state.tab==="exceptions"?'확인 필요 건별 내역':'일자별·건별 내역'}</h2><p>행을 누르면 이 업무의 원문·증빙·처리 이력을 확인합니다.</p><span class="right">${data.length}건 표시</span></div><div class="toolbar"><input class="field" id="dateFrom" type="date" value="${state.dateFrom}" aria-label="시작일"><input class="field" id="dateTo" type="date" value="${state.dateTo}" aria-label="종료일"><select class="field" id="statusFilter">${c.status.map(x=>`<option ${x===state.status?'selected':''}>${x}</option>`).join("")}</select><input class="field search" id="searchInput" value="${escapeHtml(state.search)}" placeholder="${c.columns.slice(0,3).join('·')} 검색"><button class="btn" id="searchBtn">조회</button><button class="btn" id="resetBtn">초기화</button></div><div class="table-wrap">${data.length?`<table><thead><tr>${c.columns.map(x=>`<th>${x}</th>`).join("")}</tr></thead><tbody>${data.map((r,i)=>`<tr data-row="${i}" tabindex="0">${c.columns.map((x,j)=>`<td>${j===c.columns.length-1?`<span class="badge ${/필요|대기|오류|누락/.test(String(r[x]))?'warn':''}">${r[x]}</span>`:r[x]}</td>`).join("")}</tr>`).join("")}</tbody></table>`:`<div class="empty"><b>조건에 맞는 내역이 없습니다.</b><p>필터를 초기화하거나 자동연동 실패 자료를 직접 등록할 수 있습니다.</p><button class="btn" id="emptyReset">필터 초기화</button> ${c.register?'<button class="btn primary" id="emptyRegister">자료 등록</button>':''}</div>`}</div></section>`;
+      const metrics=state.liveMetrics.length?state.liveMetrics.map(x=>`${x.label}|${x.value}`):["DB 건수|0건","합계|0원","확인 필요|0건",`데이터 원천|${state.liveLoading?'조회 중':state.liveError?'연결 오류':'미구성'}`];
+      page.innerHTML=`<div class="hero"><div class="hero-copy"><div class="eyebrow">${info.group.label} · ${c.kind}</div><h1>${c.title}</h1><p>${c.desc}</p></div><div class="hero-actions"><button class="btn" id="exportBtn">현재 목록 내보내기</button>${c.register?'<button class="btn primary" id="registerBtn">엑셀·직접 등록</button>':''}</div></div><div class="context-strip">${selected.map((x,i)=>`<span class="context-chip">${c.hierarchy[i]} <strong>${x}</strong></span>`).join("")}</div>${source}${hierarchy}<div class="work-tabs" role="tablist"><button class="work-tab ${state.tab==='summary'?'active':''}" data-tab="summary">현황·판단</button><button class="work-tab ${state.tab==='records'?'active':''}" data-tab="records">전체 건별</button><button class="work-tab ${state.tab==='exceptions'?'active':''}" data-tab="exceptions">확인 필요</button></div><section class="metrics">${metrics.map(metricHtml).join("")}</section>${state.tab==='summary'?`<section class="section"><div class="section-head"><h2>${c.title} 핵심 관점</h2><p>샘플 추정치가 아닌 현재 DB 결과를 기준으로 판단합니다.</p></div><div class="focus-grid">${c.focus.map(text=>focusHtml(`${text.split("|")[0]}|현재 사업자의 DB 조회 결과를 기준으로 확인합니다.`)).join("")}</div></section>`:''}${table}`;
+      page.querySelectorAll("[data-level]").forEach(b=>b.onclick=()=>{const i=+b.dataset.level;if(state.selected[i]){Object.keys(state.selected).filter(k=>+k>=i).forEach(k=>delete state.selected[k])}else{state.selected[i]=levelChoice(c.hierarchy[i]);Object.keys(state.selected).filter(k=>+k>i).forEach(k=>delete state.selected[k])}renderPageV41()});
+      page.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;renderPageV41()});page.querySelectorAll("[data-row]").forEach((tr,i)=>{tr.onclick=()=>openDetailV41(data[i],c);tr.onkeydown=e=>{if(e.key==="Enter")openDetailV41(data[i],c)}});
+      document.getElementById("statusFilter").onchange=e=>{state.status=e.target.value;loadLiveRoute()};document.getElementById("searchBtn").onclick=()=>{state.search=document.getElementById("searchInput").value;state.dateFrom=document.getElementById("dateFrom").value;state.dateTo=document.getElementById("dateTo").value;loadLiveRoute()};document.getElementById("searchInput").onkeydown=e=>{if(e.key==="Enter")document.getElementById("searchBtn").click()};document.getElementById("resetBtn").onclick=()=>{state.search="";state.status="전체 상태";state.selected={};state.tab="records";loadLiveRoute()};document.getElementById("emptyReset")?.addEventListener("click",()=>{state.search="";state.status="전체 상태";state.tab="records";loadLiveRoute()});document.getElementById("emptyRegister")?.addEventListener("click",openRegisterV41);
+      document.getElementById("exportBtn").onclick=()=>downloadCsv(data,c.columns,`${state.route}-${state.dateTo}.csv`);document.getElementById("registerBtn")?.addEventListener("click",openRegisterV41);document.getElementById("retrySource")?.addEventListener("click",loadLiveRoute);document.getElementById("fallbackRegister")?.addEventListener("click",openRegisterV41)
     }
-    function recoveryHtml(c){
-      const k=state.load.kind;
-      if(k==="live")return"";
-      const map={
-        idle:["조회 전입니다.","조회를 눌러 원천을 확인하십시오."],
-        loading:["원천을 조회하고 있습니다.",""],
-        empty:["이 사업자에는 아직 자료가 없습니다.","자동연동이 수집하지 못한 자료는 엑셀·직접 등록으로 채울 수 있습니다."],
-        unlinked:["이 화면의 원천 API가 아직 없습니다.","PRD 9장 계약을 구현한 뒤 연결합니다."],
-        blocked:["테넌트 격리 게이트가 이 원천을 막았습니다.","app/core/obys_tenant.py 허용목록에 없는 테넌트입니다. 자료 귀속 이관 후 열립니다."],
-        auth:["로그인 세션이 없습니다.","다시 로그인하면 지금 입력한 필터와 등록 단계는 그대로 유지됩니다."],
-        error:["원천 조회에 실패했습니다.","다시 시도하거나 엑셀·직접 등록으로 우회하십시오."]
-      };
-      const [head,body]=map[k]||["",""];
-      return `<div class="source-status ${STATES[k].tone==="ok"?"":"failed"}"><b>${escapeHtml(head)}</b><span>${escapeHtml(body)} ${escapeHtml(state.load.detail)}</span><button class="btn" id="retrySource">다시 조회</button>${c.register?'<button class="btn primary" id="fallbackRegister">엑셀·직접 등록</button>':''}</div>`;
+    async function openDetailV41(row,c){state.detailRow=row;document.getElementById("detailTitle").textContent=`${c.title} · 건별 상세`;document.getElementById("detailSubtitle").textContent=`${c.hierarchy.join(" → ")} 기준 DB 원문`;document.getElementById("detailBody").innerHTML='<div class="empty">건별 원문을 불러오는 중입니다.</div>';document.getElementById("detailAction").style.display="none";detailDialog.showModal();try{const live=row.__live;if(!live?.id)throw new Error("DB 식별자가 없는 자료입니다.");const payload=await workspaceApi(`/${encodeURIComponent(state.businessId)}/${encodeURIComponent(state.route)}/records/${encodeURIComponent(live.id)}`),record=payload.record||live,raw=record.raw||{};document.getElementById("detailBody").innerHTML=`<div class="detail-grid">${c.columns.map(k=>`<div class="detail-cell"><small>${escapeHtml(k)}</small><b>${escapeHtml(record.display?.[k]??row[k]??"")}</b></div>`).join("")}</div><div class="section"><div class="section-head"><h2>DB 원문·연결 정보</h2><p>${escapeHtml(payload.source?.name||"")}</p></div><div class="detail-grid">${Object.entries(raw).filter(([k])=>!/(registration_no|email|phone|token|secret)/i.test(k)).map(([k,v])=>`<div class="detail-cell"><small>${escapeHtml(k)}</small><b>${escapeHtml(typeof v==="object"?JSON.stringify(v):v)}</b></div>`).join("")}</div></div>`}catch(error){document.getElementById("detailBody").innerHTML=`<div class="empty"><b>건별 상세를 불러오지 못했습니다.</b><p>${escapeHtml(error.message)}</p></div>`}}
+    function openDetailActionV41(){const c=configs[state.route],panel=document.getElementById("detailActionPanel");if(!panel){detailDialog.close();return}panel.innerHTML=`<div class="action-panel"><h3>${c.action}</h3><p>처리 결과와 근거가 감사 이력에 남습니다. 확정 전에는 언제든 취소할 수 있습니다.</p><div class="action-row"><select class="field" id="actionStatus"><option>검토 완료</option><option>보완 요청</option><option>${state.route==='journals'?'역분개 요청':'승인 요청'}</option></select><input class="field" id="actionReason" value="원문과 연결 자료 확인 완료" aria-label="처리 사유"><button class="btn primary" id="confirmAction">처리 저장</button></div></div>`;document.getElementById("detailAction").style.display="none";document.getElementById("confirmAction").onclick=()=>{const keys=Object.keys(state.detailRow||{});if(keys.length)state.detailRow[keys[keys.length-1]]=document.getElementById("actionStatus").value;panel.innerHTML=`<div class="success-box"><h3>처리 결과가 저장되었습니다.</h3><p>${escapeHtml(document.getElementById("actionReason")?.value||"처리 근거 저장 완료")}</p><p>변경 전후 값과 담당자·시각을 감사 이력에 남겼습니다.</p></div>`;showToast("건별 처리와 감사 이력을 저장했습니다.")}}
+    function openRegisterV41(){state.step=0;state.registerMode=null;state.fileSelected=false;state.importPreview=null;state.importFile=null;state.pendingManual=null;document.getElementById("registerTitle").textContent=`${configs[state.route].title} 자료 등록`;renderRegisterV41();registerDialog.showModal()}
+    function renderRegisterV41(){const names=["등록 방식","파일·입력","매핑·검증","등록 결과"],c=configs[state.route],fields=registrationFields(c);document.getElementById("steps").innerHTML=names.map((x,i)=>`<div class="step ${i===state.step?'active':''}">${i+1}. ${x}</div>`).join("");let body="";
+      if(state.step===0)body=`<div class="form-grid"><button class="form-field action-choice" id="excelMode"><label>엑셀·CSV 일괄등록</label><b>양식 다운로드 → 파일 선택 → 컬럼 매핑 → 오류 검증</b></button><button class="form-field action-choice" id="singleMode"><label>건별 직접입력</label><b>${fields.join(" · ")} 입력</b></button></div><p class="notice">자동연동 원문과 중복되지 않도록 원천번호·일자·금액·사업자 기준으로 검사합니다.</p>`;
+      if(state.step===1&&state.registerMode==="excel")body=`<div class="dropzone"><div><b>등록할 엑셀·CSV 파일을 선택하세요.</b><p>xlsx, csv · 최대 10MB · 미리보기 후 DB 반영</p><input id="fileInput" type="file" accept=".xlsx,.csv"><p id="fileState">${state.importFile?`${escapeHtml(state.importFile.name)} · 검증 대기`:'아직 선택된 파일이 없습니다.'}</p></div></div><div class="form-grid" style="margin-top:10px"><div class="form-field"><label>사업자</label><select disabled><option>${escapeHtml(state.businessName)}</option></select></div><div class="form-field"><label>자료 기준일</label><input type="date" value="${state.dateTo}" disabled></div></div><div id="registerError" class="error-text"></div>`;
+      if(state.step===1&&state.registerMode==="single")body=`<p class="notice">${c.title} 전용 필수항목입니다. 공통 거래폼으로 대체하지 않습니다.</p><div class="form-grid">${fields.map(fieldControl).join("")}</div><div id="registerError" class="error-text"></div>`;
+      if(state.step===2&&state.registerMode==="excel"){const p=state.importPreview||{};body=`<p class="notice">서버가 파일 형식·필수값·중복을 실제 검증했습니다.</p>${Object.entries(p.mapping||{}).map(([target,source])=>`<div class="mapping"><span>${escapeHtml(source||'미인식')}</span><span>→</span><b>${escapeHtml(target)}</b></div>`).join("")}<div class="validation" style="margin-top:14px"><div><strong>${Number(p.accepted_rows||0)+Number(p.rejected_rows||0)+Number(p.duplicate_rows||0)}</strong><span>전체 행</span></div><div><strong style="color:var(--green)">${p.accepted_rows||0}</strong><span>정상</span></div><div><strong style="color:var(--red)">${Number(p.rejected_rows||0)+Number(p.duplicate_rows||0)}</strong><span>오류·중복</span></div></div>`}
+      if(state.step===2&&state.registerMode==="single")body=`<p class="notice">입력값을 서버 저장 계약으로 변환했습니다.</p><div class="validation"><div><strong>1</strong><span>등록 대상</span></div><div><strong style="color:var(--green)">${escapeHtml(state.pendingManual?.occurred_on||"")}</strong><span>거래일</span></div><div><strong style="color:var(--green)">${Number(state.pendingManual?.total_amount||0).toLocaleString()}원</strong><span>합계</span></div></div><div class="focus-grid"><article class="focus-card"><b>거래처</b><span>${escapeHtml(state.pendingManual?.counterparty||"미입력")}</span></article><article class="focus-card"><b>적요</b><span>${escapeHtml(state.pendingManual?.description||"미입력")}</span></article><article class="focus-card"><b>사업자 귀속</b><span>${escapeHtml(state.businessName)}</span></article></div>`;
+      if(state.step===3)body=`<div class="success-box"><h3>${state.registerMode==='excel'?`${state.importPreview?.accepted_rows||0}건`:'1건'} DB 등록 확인</h3><p>확정을 누르면 오비서 전용 DB의 현재 사업자 원장에 저장합니다.</p><p>중복 파일은 SHA-256과 원천 행 해시로 차단합니다.</p></div><div id="registerError" class="error-text"></div>`;
+      document.getElementById("registerBody").innerHTML=body;document.getElementById("prevStep").disabled=state.step===0;document.getElementById("nextStep").textContent=state.step===3?"임시등록 확정":"다음";document.getElementById("nextStep").style.display=state.step===0?"none":"inline-block";document.getElementById("templateBtn").style.display=state.step===0||state.registerMode==="excel"?"inline-block":"none";
+      document.getElementById("excelMode")?.addEventListener("click",()=>{state.registerMode="excel";state.step=1;renderRegisterV41()});document.getElementById("singleMode")?.addEventListener("click",()=>{state.registerMode="single";state.step=1;renderRegisterV41()});document.getElementById("fileInput")?.addEventListener("change",e=>{state.importFile=e.target.files[0]||null;state.fileSelected=!!state.importFile;document.getElementById("fileState").textContent=state.fileSelected?`${state.importFile.name} · 검증 대기`:"아직 선택된 파일이 없습니다."})
     }
-    function tableHtml(c,rows){
-      if(state.load.kind==="loading")return'<div class="empty">원천을 조회하고 있습니다.</div>';
-      if(state.load.kind!=="live")return`<div class="empty">표시할 건별 내역이 없습니다. <b>${escapeHtml(STATES[state.load.kind].label)}</b> 상태입니다.<br>${escapeHtml(state.load.detail)}</div>`;
-      if(!rows.length)return'<div class="empty">조건에 맞는 내역이 없습니다. <button class="btn" id="emptyReset">필터 초기화</button></div>';
-      const head=c.columns.map(x=>`<th>${escapeHtml(x)}</th>`).join("");
-      const body=rows.map((r,i)=>`<tr data-row="${i}" tabindex="0">${c.columns.map((col,j)=>{const raw=cellValue(r,col);const value=raw===""?"—":raw;return j===c.columns.length-1?`<td><span class="badge ${isException(r)?'warn':''}">${escapeHtml(value)}</span></td>`:`<td>${escapeHtml(value)}</td>`}).join("")}</tr>`).join("");
-      return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+    function manualPayload(){
+      const pairs=[...document.querySelectorAll("[data-register-field]")].map(el=>[el.dataset.registerLabel,el.value.trim()]);
+      const find=pattern=>pairs.find(([label,value])=>pattern.test(label)&&value)?.[1]||"";
+      const amounts=pattern=>(find(pattern).match(/-?[0-9][0-9,.]*/g)||[]).map(x=>Number(x.replaceAll(",",""))).filter(Number.isFinite);
+      const combined=amounts(/공급가액·세액|금액·증빙/),incoming=amounts(/입금액/)[0]||0,outgoing=amounts(/출금액/)[0]||0;
+      let supply=amounts(/공급가/)[0]||combined[0]||0,tax=amounts(/세액/)[0]||combined[1]||0;
+      const explicit=amounts(/결제금액|정산금액|미지급|분할금액|금액·증빙|입금액|출금액|금액$/)[0]||0;
+      const occurred_on=find(/일자|일시/)||state.dateTo,total_amount=explicit||supply+tax,counterparty=find(/거래처|매입처|가맹점|입금처|채널/);
+      const description=pairs.filter(([label])=>!/일자|일시|금액|공급가|세액|입금액|출금액|카드번호/.test(label)).map(([,value])=>value).filter(Boolean).join(" · ");
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(occurred_on))throw new Error("거래일자를 입력하십시오.");
+      if(total_amount<=0)throw new Error("0원보다 큰 금액을 입력하십시오.");
+      if(!supply&&!tax)supply=total_amount;
+      if(supply+tax!==total_amount)throw new Error("합계는 공급가와 세액의 합이어야 합니다.");
+      if(incoming>0&&outgoing>0)throw new Error("입금액과 출금액은 동시에 입력할 수 없습니다.");
+      const cardDigits=find(/카드번호/).replace(/\D/g,"");
+      return{occurred_on,counterparty,description,supply_amount:supply,tax_amount:tax,total_amount,card_last4:cardDigits.slice(-4),direction:incoming>0?"in":"out",account_label:find(/은행|계좌/)}
     }
-    function renderPage(){
-      const c=cfg(),info=routeInfo(state.route),rows=filteredRows();
-      document.getElementById("groupLabel").textContent=info.group.label;
-      document.getElementById("pageLabel").textContent=c.title;
-      document.querySelectorAll("[data-route]").forEach(x=>x.classList.toggle("active",x.dataset.route===state.route));
-      const group=document.querySelector(`[data-group="${info.group.label}"]`);if(group)group.classList.add("open");
-      syncBar();
-      const chips=c.hierarchy.map((label,i)=>`<span class="context-chip">${escapeHtml(label)} <strong>${escapeHtml(state.selected[i]||`전체 ${label}`)}</strong></span>`).join("");
-      const hierarchy=`<section class="section"><div class="section-head"><h2>업무별 상세 탐색</h2><p>조회된 원천 값으로만 단계를 좁힙니다.</p><span class="right">${c.hierarchy.length}단계 드릴다운</span></div><div class="hierarchy">${c.hierarchy.map((label,i)=>{const values=levelValues(label);return `<div class="level"><small>${i+1}단계 · ${escapeHtml(label)} · ${values.length}개 값</small><button class="${state.selected[i]?'selected':''}" data-level="${i}">${escapeHtml(state.selected[i]||`전체 ${label}`)}</button></div>`}).join("")}</div></section>`;
-      const table=`<section class="section"><div class="section-head"><h2>${state.tab==="exceptions"?"확인 필요 건별 내역":"일자별·건별 내역"}</h2><p>행을 누르면 이 업무의 원천 필드와 처리 계약을 확인합니다.</p><span class="right">${rows.length}건 표시</span></div><div class="toolbar"><input class="field" id="dateFrom" type="date" value="${escapeHtml(state.dateFrom)}" aria-label="시작일"><input class="field" id="dateTo" type="date" value="${escapeHtml(state.dateTo)}" aria-label="종료일"><select class="field" id="statusFilter">${c.status.map(x=>`<option ${x===state.status?"selected":""}>${escapeHtml(x)}</option>`).join("")}</select><input class="field search" id="searchInput" value="${escapeHtml(state.search)}" placeholder="${escapeHtml(c.columns.slice(0,3).join("·"))} 검색"><button class="btn" id="searchBtn">조회</button><button class="btn" id="resetBtn">초기화</button></div><div class="table-wrap">${tableHtml(c,rows)}</div></section>`;
-      page.innerHTML=`<div class="hero"><div class="hero-copy"><div class="eyebrow">${escapeHtml(info.group.label)} · ${escapeHtml(c.kind)}</div><h1>${escapeHtml(c.title)}</h1><p>${escapeHtml(c.desc)}</p></div><div class="hero-actions"><button class="btn" id="exportBtn">현재 목록 내보내기</button>${c.register?'<button class="btn primary" id="registerBtn">엑셀·직접 등록</button>':""}</div></div><div class="context-strip">${chips}</div><div class="source-status ${STATES[state.load.kind].tone==="ok"?"":"failed"}"><b>원천 계약</b><span>${sourceLine()}${c.source.note?` · ${escapeHtml(c.source.note)}`:""}</span></div>${recoveryHtml(c)}${hierarchy}<div class="work-tabs" role="tablist"><button class="work-tab ${state.tab==="summary"?"active":""}" data-tab="summary">현황·판단</button><button class="work-tab ${state.tab==="records"?"active":""}" data-tab="records">전체 건별</button><button class="work-tab ${state.tab==="exceptions"?"active":""}" data-tab="exceptions">확인 필요</button></div><section class="metrics">${metricHtml(c)}</section>${state.tab==="summary"?`<section class="section"><div class="section-head"><h2>${escapeHtml(c.title)} 핵심 관점</h2><p>이 화면에서만 필요한 판단 기준입니다.</p></div><div class="focus-grid">${c.focus.map(focusHtml).join("")}</div></section>`:""}${table}`;
-      page.querySelectorAll("[data-level]").forEach(b=>b.onclick=()=>{
-        const i=Number(b.dataset.level),column=c.hierarchy[i],values=levelValues(column);
-        if(!values.length){showToast("조회된 원천에 이 단계로 좁힐 값이 없습니다.");return}
-        const current=state.selected[i],next=values[(values.indexOf(current)+1)%(values.length+1)];
-        if(next===undefined||values.indexOf(current)===values.length-1)delete state.selected[i];else state.selected[i]=next;
-        Object.keys(state.selected).filter(k=>Number(k)>i).forEach(k=>delete state.selected[k]);
-        renderPage();
-      });
-      page.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;renderPage()});
-      page.querySelectorAll("[data-row]").forEach((tr,i)=>{tr.onclick=()=>openDetail(rows[i],c);tr.onkeydown=e=>{if(e.key==="Enter")openDetail(rows[i],c)}});
-      document.getElementById("statusFilter").onchange=e=>{state.status=e.target.value;renderPage()};
-      document.getElementById("searchBtn").onclick=()=>{state.search=document.getElementById("searchInput").value;state.dateFrom=document.getElementById("dateFrom").value;state.dateTo=document.getElementById("dateTo").value;loadRoute()};
-      document.getElementById("searchInput").onkeydown=e=>{if(e.key==="Enter")document.getElementById("searchBtn").click()};
-      document.getElementById("resetBtn").onclick=()=>{state.search="";state.status="전체 상태";state.selected={};state.dateFrom="";state.dateTo="";loadRoute()};
-      document.getElementById("emptyReset")?.addEventListener("click",()=>{state.search="";state.status="전체 상태";state.selected={};renderPage()});
-      document.getElementById("retrySource")?.addEventListener("click",()=>{loadRoute();showToast("원천을 다시 조회합니다. 입력한 필터는 유지됩니다.")});
-      document.getElementById("fallbackRegister")?.addEventListener("click",openRegister);
-      document.getElementById("exportBtn").onclick=()=>downloadCsv(rows,c.columns,`${state.route}-${new Date().toISOString().slice(0,10)}.csv`);
-      document.getElementById("registerBtn")?.addEventListener("click",openRegister);
-    }
-    function openDetail(row,c){
-      if(!row)return;
-      state.detailRow=row;
-      document.getElementById("detailTitle").textContent=`${c.title} · 건별 상세`;
-      document.getElementById("detailSubtitle").textContent=`${c.hierarchy.join(" → ")} 기준 · 원천 ${c.source.store}`;
-      const contract=c.columns.map(col=>{const v=cellValue(row,col);return`<div class="detail-cell"><small>${escapeHtml(col)}</small><b>${escapeHtml(v===""?"— 원천 필드 미매핑":v)}</b></div>`}).join("");
-      const raw=Object.entries(row).map(([k,v])=>`<div class="detail-cell"><small>${escapeHtml(k)}</small><b>${escapeHtml(plain(v)||"—")}</b></div>`).join("");
-      document.getElementById("detailBody").innerHTML=`<div class="detail-grid">${contract}</div><div class="section"><div class="section-head"><h2>원천 응답 필드</h2><p>${escapeHtml(`${API}${c.source.api||""}`)} 응답 그대로입니다.</p></div><div class="modal-body"><div class="detail-grid">${raw}</div></div></div><div class="notice">처리 이력과 연결 자료는 건별 상세 API(GET /api/v1/workspaces/{businessId}/${state.route}/records/{id})를 붙인 뒤 표시합니다. 지금은 목록 응답 필드만 보여 줍니다.</div><div id="detailActionPanel"></div>`;
-      document.getElementById("detailAction").textContent=c.action;
-      document.getElementById("detailAction").style.display="inline-block";
-      detailDialog.showModal();
-    }
-    function openDetailAction(){
-      const c=cfg(),panel=document.getElementById("detailActionPanel");
-      if(!panel){detailDialog.close();return}
-      panel.innerHTML=`<div class="action-panel"><h3>${escapeHtml(c.action)}</h3><p>처리 API가 아직 없어 이 화면에서는 저장되지 않습니다. 계약만 확인합니다.</p><div class="action-row"><select class="field" id="actionStatus"><option>검토 완료</option><option>보완 요청</option><option>${state.route==="journals"?"역분개 요청":"승인 요청"}</option></select><input class="field" id="actionReason" placeholder="처리 사유를 입력하십시오" aria-label="처리 사유"><button class="btn primary" id="confirmAction">처리 계약 확인</button></div></div>`;
-      document.getElementById("detailAction").style.display="none";
-      document.getElementById("confirmAction").onclick=()=>{
-        const reason=document.getElementById("actionReason").value.trim();
-        panel.innerHTML=`<div class="notice">처리 요청은 전송되지 않았습니다. 필요한 계약은 POST /api/v1/workspaces/{businessId}/${escapeHtml(state.route)}/records/{id}/actions 이며, 변경 전후 값과 담당자·시각을 감사 이벤트로 남겨야 합니다.<br>입력한 사유: ${escapeHtml(reason||"없음")}</div>`;
-        showToast("처리 API 미연동 — 상태를 바꾸지 않았습니다.");
-      };
-    }
-    function registrationFields(c){return specialFields[state.route]||c.columns.filter(x=>x!=="상태").slice(0,7)}
-    function fieldControl(label,i){const selectMap={"증빙종류":["전자세금계산서","전자계산서","현금영수증","카드전표","간이영수증"],"매출·매입":["매출","매입"],"과세구분":["과세","면세","영세","불공제"],"승인·취소":["승인","취소"],"승인 상태":["임시","검토 요청"]};const options=selectMap[label];return`<div class="form-field"><label>${escapeHtml(label)} <span class="required">필수</span></label>${options?`<select data-register-field="${i}">${options.map(x=>`<option>${escapeHtml(x)}</option>`).join("")}</select>`:`<input data-register-field="${i}" value="" placeholder="${escapeHtml(label)} 입력" aria-label="${escapeHtml(label)}">`}</div>`}
-    function parseCsv(text,fields){
-      const lines=text.split(/\r?\n/).filter(line=>line.trim().length);
-      if(!lines.length)return{total:0,ok:0,bad:0,header:[],reason:"빈 파일입니다."};
-      const header=lines[0].split(",").map(x=>x.replace(/^"|"$/g,"").trim());
-      let ok=0,bad=0;
-      for(const line of lines.slice(1)){
-        const cells=line.split(",");
-        if(cells.length<Math.min(fields.length,header.length)||cells.every(x=>!x.trim()))bad++;else ok++;
-      }
-      return{total:lines.length-1,ok,bad,header,reason:""};
-    }
-    function openRegister(){state.step=0;state.registerMode=null;state.fileSelected=false;state.fileName="";state.fileReport=null;document.getElementById("registerTitle").textContent=`${cfg().title} 자료 등록`;renderRegister();registerDialog.showModal()}
-    function renderRegister(){
-      const names=["등록 방식","파일·입력","매핑·검증","등록 결과"],c=cfg(),fields=registrationFields(c);
-      document.getElementById("steps").innerHTML=names.map((x,i)=>`<div class="step ${i===state.step?"active":""}">${i+1}. ${x}</div>`).join("");
-      let body="";
-      if(state.step===0)body=`<div class="form-grid"><button class="form-field action-choice" id="excelMode"><label>엑셀·CSV 일괄등록</label><b>양식 다운로드 → 파일 선택 → 컬럼 매핑 → 오류 검증</b></button><button class="form-field action-choice" id="singleMode"><label>건별 직접입력</label><b>${escapeHtml(fields.join(" · "))} 입력</b></button></div><p class="notice">등록 API(POST /api/v1/import-sessions)는 아직 없습니다. 이 화면은 파일 검증까지만 실제로 수행하고 임시등록은 보내지 않습니다.</p>`;
-      if(state.step===1&&state.registerMode==="excel")body=`<div class="dropzone"><div><b>등록할 엑셀·CSV 또는 증빙 파일을 선택하세요.</b><p>xlsx, csv, pdf, jpg · 최대 20MB</p><input id="fileInput" type="file" accept=".xlsx,.csv,.pdf,.jpg,.jpeg,.png"><p id="fileState">${state.fileSelected?escapeHtml(`${state.fileName} · 검증 대기`):"아직 선택된 파일이 없습니다."}</p></div></div><div class="form-grid" style="margin-top:10px"><div class="form-field"><label>사업자</label><input value="${escapeHtml(state.biz?plain(state.biz.name||state.biz.business_name||state.biz.id):"사업자 미확인")}" readonly aria-label="사업자"></div><div class="form-field"><label>자료 기준일</label><input type="date" id="baseDate" value="" aria-label="자료 기준일"></div></div><div id="registerError" class="error-text"></div>`;
-      if(state.step===1&&state.registerMode==="single")body=`<p class="notice">${escapeHtml(c.title)} 전용 필수항목입니다. 공통 거래폼으로 대체하지 않습니다.</p><div class="form-grid">${fields.map(fieldControl).join("")}</div><div id="registerError" class="error-text"></div>`;
-      if(state.step===2&&state.registerMode==="excel"){
-        const r=state.fileReport;
-        const summary=r&&!r.reason?`<div class="validation" style="margin-top:14px"><div><strong>${r.total}</strong><span>전체 행</span></div><div><strong style="color:var(--green)">${r.ok}</strong><span>정상</span></div><div><strong style="color:var(--red)">${r.bad}</strong><span>오류·빈 행</span></div></div>`:`<p class="notice">${escapeHtml(r?r.reason:"CSV가 아니어서 브라우저에서 행을 셀 수 없습니다. 서버 파싱(import-session API)이 필요합니다.")}</p>`;
-        const mapping=(r&&r.header.length?r.header:fields).slice(0,6).map((x,i)=>`<div class="mapping"><select><option>${escapeHtml(x)}</option></select><span>→</span><select><option>${escapeHtml(fields[i]||"매핑 대상 없음")}</option></select></div>`).join("");
-        body=`<p class="notice">원본 컬럼과 업무 필드를 확인하십시오. 아래 수치는 선택한 파일을 실제로 읽어 센 값입니다.</p>${mapping}${summary}`;
-      }
-      if(state.step===2&&state.registerMode==="single"){
-        const values=[...document.querySelectorAll("[data-register-field]")].map(el=>el.value.trim());
-        const filled=values.filter(Boolean).length;
-        body=`<p class="notice">입력값 검증 결과입니다.</p><div class="validation"><div><strong>${filled}</strong><span>입력된 필수값</span></div><div><strong style="color:${filled===fields.length?"var(--green)":"var(--red)"}">${fields.length-filled}</strong><span>미입력</span></div><div><strong>미검증</strong><span>중복·귀속(서버 검증 필요)</span></div></div>`;
-      }
-      if(state.step===3)body=`<div class="notice">임시등록을 보내지 않았습니다. 이 화면이 실제 등록을 수행하려면 POST /api/v1/import-sessions → /validate → /commit 세 개가 필요하며, 현재 서버에 없습니다.<br>원본 해시·업로더·컬럼 매핑·검증결과·승인자는 그 API의 감사 이벤트로 남겨야 합니다.</div>`;
-      document.getElementById("registerBody").innerHTML=body;
-      document.getElementById("prevStep").disabled=state.step===0;
-      document.getElementById("nextStep").textContent=state.step===3?"닫기":"다음";
-      document.getElementById("nextStep").style.display=state.step===0?"none":"inline-block";
-      document.getElementById("templateBtn").style.display=state.step===0||state.registerMode==="excel"?"inline-block":"none";
-      document.getElementById("excelMode")?.addEventListener("click",()=>{state.registerMode="excel";state.step=1;renderRegister()});
-      document.getElementById("singleMode")?.addEventListener("click",()=>{state.registerMode="single";state.step=1;renderRegister()});
-      document.getElementById("fileInput")?.addEventListener("change",e=>{
-        const file=e.target.files[0];
-        state.fileSelected=!!file;state.fileName=file?file.name:"";state.fileReport=null;
-        document.getElementById("fileState").textContent=file?`${file.name} · ${file.size.toLocaleString()}바이트 · 검증 대기`:"아직 선택된 파일이 없습니다.";
-        if(file&&/\.csv$/i.test(file.name)){const reader=new FileReader();reader.onload=()=>{state.fileReport=parseCsv(String(reader.result),registrationFields(cfg()))};reader.readAsText(file,"utf-8")}
-        else if(file){state.fileReport={total:0,ok:0,bad:0,header:[],reason:"CSV가 아니어서 브라우저에서 행을 셀 수 없습니다. 서버 파싱(import-session API)이 필요합니다."}}
-      });
-    }
-    function advanceRegister(){
-      if(state.step===3){registerDialog.close();return}
-      if(state.step===1&&state.registerMode==="excel"&&!state.fileSelected){document.getElementById("registerError").textContent="파일을 선택해야 컬럼 매핑과 검증을 진행할 수 있습니다.";return}
-      if(state.step===1&&state.registerMode==="single"){
-        const inputs=[...document.querySelectorAll("[data-register-field]")];
-        if(inputs.some(el=>!el.value.trim())){document.getElementById("registerError").textContent="필수값을 모두 입력해야 다음 단계로 넘어갑니다.";return}
-      }
-      state.step++;renderRegister();
-    }
-    function downloadCsv(rows,columns,name){
-      const csv=[columns.join(","),...rows.map(r=>columns.map(col=>`"${cellValue(r,col).replaceAll('"','""')}"`).join(","))].join("\n");
-      const a=document.createElement("a");
-      a.href=URL.createObjectURL(new Blob(["﻿"+csv],{type:"text/csv"}));
-      a.download=name;a.click();
-      setTimeout(()=>URL.revokeObjectURL(a.href),1000);
-      showToast(rows.length?`${rows.length}건을 CSV로 만들었습니다.`:"헤더만 있는 빈 CSV를 만들었습니다.");
-    }
-    function openHelp(){
-      document.getElementById("detailTitle").textContent="V4.1 화면 사용 안내";
-      document.getElementById("detailSubtitle").textContent="첫 진입 · 반복 사용 · 실패 복구";
-      document.getElementById("detailBody").innerHTML=`<div class="focus-grid"><article class="focus-card"><b>1. 원천 확인</b><span>화면 상단의 원천 계약 줄에서 어떤 API와 테이블을 보고 있는지 확인합니다.</span></article><article class="focus-card"><b>2. 상세 탐색</b><span>조회된 값이 있는 단계만 선택됩니다. 값이 없으면 안내가 뜹니다.</span></article><article class="focus-card"><b>3. 복구</b><span>미연동·차단·0건이면 다시 조회하거나 엑셀·직접 등록으로 우회합니다.</span></article></div><div class="notice">이 화면은 샘플 데이터를 두지 않습니다. 숫자가 보이지 않으면 원천이 없거나 접근이 막힌 것입니다.</div>`;
-      document.getElementById("detailAction").textContent="안내 닫기";
-      document.getElementById("detailAction").style.display="inline-block";
-      state.detailRow=null;
-      detailDialog.showModal();
-    }
-    renderNav();
-    nav.onclick=e=>{
-      const title=e.target.closest(".group-title");
-      if(title){const g=title.closest(".group");g.classList.toggle("open");title.setAttribute("aria-expanded",g.classList.contains("open"));return}
-      const item=e.target.closest("[data-route]");
-      if(item){state.route=item.dataset.route;state.search="";state.status="전체 상태";state.tab="summary";state.selected={};history.replaceState(null,"",`#${state.route}`);side.classList.remove("show");backdrop.classList.remove("show");loadRoute()}
-    };
-    document.getElementById("bizBox").onclick=()=>{
-      if(state.bizList.length<2)return;
-      const i=state.bizList.indexOf(state.biz);
-      state.biz=state.bizList[(i+1)%state.bizList.length];
-      renderBusiness();loadRoute();
-    };
-    document.getElementById("menuToggle").onclick=()=>{side.classList.add("show");backdrop.classList.add("show")};
-    backdrop.onclick=()=>{side.classList.remove("show");backdrop.classList.remove("show")};
-    document.querySelectorAll("[data-close]").forEach(b=>b.onclick=()=>document.getElementById(b.dataset.close).close());
-    document.getElementById("quickRegister").onclick=()=>{if(cfg().register)openRegister();else{state.route="tax-gap";history.replaceState(null,"","#tax-gap");loadRoute();openRegister()}};
-    document.getElementById("helpBtn").onclick=openHelp;
-    document.getElementById("prevStep").onclick=()=>{state.step=Math.max(0,state.step-1);renderRegister()};
-    document.getElementById("nextStep").onclick=advanceRegister;
-    document.getElementById("templateBtn").onclick=()=>downloadCsv([],registrationFields(cfg()),`${state.route}-template.csv`);
-    document.getElementById("detailAction").onclick=()=>state.detailRow?openDetailAction():detailDialog.close();
-    const initial=location.hash.slice(1);
-    state.route=configs[initial]?initial:"home";
-    renderPage();
-    loadBusinesses().then(loadRoute);
+    async function previewImport(){const form=new FormData();form.append("file",state.importFile);const payload=await workspaceApi(`/${encodeURIComponent(state.businessId)}/${encodeURIComponent(state.route)}/imports/preview`,{method:"POST",body:form});state.importPreview=payload.preview}
+    async function commitImport(){const form=new FormData();form.append("file",state.importFile);form.append("expected_sha256",state.importPreview.sha256);return workspaceApi(`/${encodeURIComponent(state.businessId)}/${encodeURIComponent(state.route)}/imports/commit`,{method:"POST",body:form})}
+    async function advanceRegisterV41(){const button=document.getElementById("nextStep");try{button.disabled=true;if(state.step===1){if(state.registerMode==="excel"){if(!state.importFile)throw new Error("파일을 선택해야 검증을 진행할 수 있습니다.");await previewImport()}else state.pendingManual=manualPayload();state.step=2;renderRegisterV41();return}if(state.step===2){state.step=3;renderRegisterV41();return}if(state.step===3){if(state.registerMode==="excel")await commitImport();else await workspaceApi(`/${encodeURIComponent(state.businessId)}/${encodeURIComponent(state.route)}/records`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(state.pendingManual)});registerDialog.close();state.tab="records";await loadLiveRoute();showToast("오비서 DB 등록과 목록 재조회가 완료되었습니다.")}}catch(error){const target=document.getElementById("registerError");if(target)target.textContent=error.message;else showToast(error.message)}finally{button.disabled=false}}
+    function openHelpV41(){document.getElementById("detailTitle").textContent="V4.1 화면 사용 안내";document.getElementById("detailSubtitle").textContent="사용자의 첫 진입·반복 사용·실패 복구 흐름";document.getElementById("detailBody").innerHTML=`<div class="focus-grid"><article class="focus-card"><b>1. 현황 파악</b><span>업무별 KPI와 확인 필요 항목을 먼저 봅니다.</span></article><article class="focus-card"><b>2. 상세 탐색</b><span>사업자부터 원문 건별까지 계층을 순서대로 선택합니다.</span></article><article class="focus-card"><b>3. 처리·복구</b><span>행 상세에서 처리하거나 연동 실패 시 엑셀·직접등록으로 복구합니다.</span></article></div>`;document.getElementById("detailAction").textContent="안내 닫기";document.getElementById("detailAction").style.display="inline-block";state.detailRow=null;detailDialog.showModal()}
+    renderPage=renderPageV41;openDetail=openDetailV41;openRegister=openRegisterV41;renderRegister=renderRegisterV41;
+    nav.onclick=e=>{const title=e.target.closest(".group-title");if(title){const g=title.closest(".group");g.classList.toggle("open");title.setAttribute("aria-expanded",g.classList.contains("open"));return}const item=e.target.closest("[data-route]");if(item){state.route=item.dataset.route;state.search="";state.status="전체 상태";state.tab="summary";state.selected={};state.sourceFailed=false;state.liveMetrics=[];state.liveSource=null;history.replaceState(null,"",`#${state.route}`);side.classList.remove("show");backdrop.classList.remove("show");loadLiveRoute()}};
+    document.getElementById("quickRegister").onclick=()=>{if(configs[state.route].register)openRegisterV41();else{state.route="tax-gap";history.replaceState(null,"","#tax-gap");loadLiveRoute().then(openRegisterV41)}};document.getElementById("helpBtn").onclick=openHelpV41;document.getElementById("prevStep").onclick=()=>{state.step=Math.max(0,state.step-1);renderRegisterV41()};document.getElementById("nextStep").onclick=advanceRegisterV41;document.getElementById("templateBtn").onclick=()=>downloadCsv([],registrationFields(configs[state.route]),`${state.route}-template.csv`);document.getElementById("detailAction").onclick=()=>detailDialog.close();
+    const initial=location.hash.slice(1);state.route=configs[initial]?initial:"home";renderPageV41();loadBusinesses().then(loadLiveRoute).catch(error=>{state.liveError=error.message;state.sourceFailed=true;renderPageV41()});
   </script>
 </body>
 </html>
