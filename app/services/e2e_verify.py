@@ -17,6 +17,7 @@ _SCREEN_MARKERS = (
 )
 _SCREEN_SUFFIXES = (".html", ".css", ".scss", ".sass", ".less", ".tsx", ".jsx", ".vue", ".svelte")
 _SCREEN_PATH_MARKERS = ("/static/", "/templates/", "/frontend/", "/components/", "/pages/", "/app/")
+_BROWSER_FLOW_TIMEOUT_SECONDS = 75.0
 
 
 def screen_verification_required(instruction: str, changed_files: list[str] | None = None) -> bool:
@@ -147,80 +148,81 @@ async def run_e2e_verify(
     browser_error = ""
     page = None
     try:
-        from app.api.ceo_chat_tools import (
-            _acquire_pw_context,
-            _pre_inject_vault_token,
-            tool_capture_screenshot,
-        )
-        from app.core.credential_vault import list_credentials
-        from app.services.agent_vault_service import list_agent_credentials, normalize_origin
-
-        agent_credentials = await list_agent_credentials(
-            tenant_id=tenant_id,
-            work_key=browser_work_key or project,
-            origin=normalize_origin(url),
-        ) if tenant_id else []
-        legacy_credentials = await list_credentials(
-            project=project,
-            include_secrets=False,
-            tenant_id=tenant_id,
-        ) if tenant_id else []
-        target_host = parsed.netloc.lower()
-        legacy_matches = [
-            item for item in legacy_credentials
-            if urlparse(str(item.get("login_url") or item.get("url") or "")).netloc.lower() == target_host
-        ]
-        credentials = agent_credentials or legacy_matches
-        credential_source = "agent_vault" if agent_credentials else ("credential_vault" if legacy_matches else "none")
-        login = {
-            "attempted": bool(credentials),
-            "credential_matched": bool(credentials),
-            "credential_source": credential_source,
-            "credential_id": str(credentials[0]["id"]) if credentials else None,
-            "success": False,
-            "tool": "credential_vault/agent_vault",
-        }
-        context, context_error = await _acquire_pw_context(browser_session_id, browser_work_key, url)
-        if context_error:
-            raise RuntimeError(context_error)
-        page = await context.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-        if credentials:
-            login["success"] = await _pre_inject_vault_token(
-                page, url, tenant_id=tenant_id, browser_work_key=browser_work_key or project,
+        async with asyncio.timeout(_BROWSER_FLOW_TIMEOUT_SECONDS):
+            from app.api.ceo_chat_tools import (
+                _acquire_pw_context,
+                _pre_inject_vault_token,
+                tool_capture_screenshot,
             )
-            if login["success"]:
-                await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-        evidence["stages"]["credential_login"] = login
+            from app.core.credential_vault import list_credentials
+            from app.services.agent_vault_service import list_agent_credentials, normalize_origin
 
-        assertions = []
-        for selector in selectors:
-            found = bool(await page.locator(selector).count())
-            assertions.append({"selector": selector, "found": found})
-        evidence["stages"]["dom_assertion"] = {
-            "passed": all(item["found"] for item in assertions),
-            "assertions": assertions,
-            "tool": "playwright",
-            "final_url": str(page.url),
-        }
-        await page.close()
-        page = None
+            agent_credentials = await list_agent_credentials(
+                tenant_id=tenant_id,
+                work_key=browser_work_key or project,
+                origin=normalize_origin(url),
+            ) if tenant_id else []
+            legacy_credentials = await list_credentials(
+                project=project,
+                include_secrets=False,
+                tenant_id=tenant_id,
+            ) if tenant_id else []
+            target_host = parsed.netloc.lower()
+            legacy_matches = [
+                item for item in legacy_credentials
+                if urlparse(str(item.get("login_url") or item.get("url") or "")).netloc.lower() == target_host
+            ]
+            credentials = agent_credentials or legacy_matches
+            credential_source = "agent_vault" if agent_credentials else ("credential_vault" if legacy_matches else "none")
+            login = {
+                "attempted": bool(credentials),
+                "credential_matched": bool(credentials),
+                "credential_source": credential_source,
+                "credential_id": str(credentials[0]["id"]) if credentials else None,
+                "success": False,
+                "tool": "credential_vault/agent_vault",
+            }
+            context, context_error = await _acquire_pw_context(browser_session_id, browser_work_key, url)
+            if context_error:
+                raise RuntimeError(context_error)
+            page = await context.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            if credentials:
+                login["success"] = await _pre_inject_vault_token(
+                    page, url, tenant_id=tenant_id, browser_work_key=browser_work_key or project,
+                )
+                if login["success"]:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            evidence["stages"]["credential_login"] = login
 
-        capture_result = await tool_capture_screenshot(
-            url,
-            full_page,
-            browser_session_id=browser_session_id,
-            browser_work_key=browser_work_key or project,
-            tenant_id=tenant_id,
-            close_on_complete=True,
-        )
-        screenshot_url = re.search(r"https?://[^\s)]+", capture_result or "")
-        evidence["stages"]["screenshot"] = {
-            "success": "[ERROR]" not in (capture_result or "") and bool(screenshot_url),
-            "url": screenshot_url.group(0) if screenshot_url else None,
-            "tool": "capture_screenshot",
-            "result": (capture_result or "")[:500],
-        }
+            assertions = []
+            for selector in selectors:
+                found = bool(await page.locator(selector).count())
+                assertions.append({"selector": selector, "found": found})
+            evidence["stages"]["dom_assertion"] = {
+                "passed": all(item["found"] for item in assertions),
+                "assertions": assertions,
+                "tool": "playwright",
+                "final_url": str(page.url),
+            }
+            await page.close()
+            page = None
+
+            capture_result = await tool_capture_screenshot(
+                url,
+                full_page,
+                browser_session_id=browser_session_id,
+                browser_work_key=browser_work_key,
+                tenant_id=tenant_id,
+                close_on_complete=True,
+            )
+            screenshot_url = re.search(r"https?://[^\s)]+", capture_result or "")
+            evidence["stages"]["screenshot"] = {
+                "success": "[ERROR]" not in (capture_result or "") and bool(screenshot_url),
+                "url": screenshot_url.group(0) if screenshot_url else None,
+                "tool": "capture_screenshot",
+                "result": (capture_result or "")[:500],
+            }
     except Exception as exc:
         browser_error = str(exc)[:500]
     finally:
