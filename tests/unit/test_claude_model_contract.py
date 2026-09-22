@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from scripts.claude_model_contract import (
-    AADS_MODEL_IDS, EXACT_MODEL_IDS, ModelObservation, resolve_model, runtime_alias, session_key,
+    AADS_MODEL_IDS, CONTRACT_VERSION, EXACT_MODEL_IDS, ModelObservation, resolve_model, runtime_alias, session_key,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.mark.parametrize("requested,expected", list(AADS_MODEL_IDS.items()) + [
     ("claude-fable-5.1", "claude-fable-5-1"),
-    ("opus", "claude-opus-5"), ("sonnet", "claude-sonnet-5"),
+    ("opus", "claude-opus-5-5"), ("sonnet", "claude-sonnet-5"),
 ])
 def test_settings_to_exact_cli_model(requested, expected):
     assert resolve_model(requested) == expected
@@ -36,11 +36,12 @@ def test_unknown_models_fail_closed(model):
 
 
 def test_resume_isolated_by_model_and_account_but_equivalent_aliases_share():
-    assert session_key("s", "1", "claude-opus") == session_key("s", "1", "claude-opus-5")
+    assert session_key("s", "1", "claude-opus") == session_key("s", "1", "claude-opus-5-5")
+    assert session_key("s", "1", "claude-opus") != session_key("s", "1", "claude-opus-5")
     assert session_key("s", "1", "claude-opus") != session_key("s", "1", "claude-opus-46")
     assert session_key("s", "1", "claude-opus") != session_key("s", "2", "claude-opus")
     assert session_key("s", "0") == "s"
-    assert session_key("s", "0", "claude-opus") == "s@claude-opus-5"
+    assert session_key("s", "0", "claude-opus") == "s@claude-opus-5-5"
 
 
 def test_primary_model_not_first_subagent_usage_and_mismatch_detected():
@@ -115,7 +116,12 @@ async def test_relay_passes_exact_model_to_process_and_reports_receipt(monkeypat
 
     monkeypatch.setattr(relay, "_iter_ndjson_lines", lines)
     request = AsyncMock()
-    request.json.return_value = {"model": requested, "messages_text": "test", "session_id": "test", "model_contract_version": 1}
+    request.json.return_value = {
+        "model": requested,
+        "messages_text": "test",
+        "session_id": "test",
+        "model_contract_version": CONTRACT_VERSION,
+    }
     response = await relay.handle_stream(request)
     assert response.status == 200
     argv = launch.call_args.args

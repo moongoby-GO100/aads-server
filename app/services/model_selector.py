@@ -508,8 +508,8 @@ _INTENT_POLICY_MODEL_ALIASES = {
     "claude-sonnet-5": "claude-sonnet-5",
     "claude-haiku-4-5": "claude-haiku",
     "claude-haiku-4-5-20251001": "claude-haiku",
-    "claude-opus-5": "claude-opus",
-    "claude-opus-5": "claude-opus",
+    "claude-opus-5-5": "claude-opus",
+    "claude-opus-5": "claude-opus-5",
     "claude-opus-4-7": "claude-opus",
     "claude-opus-4-6": "claude-opus",
     "claude-opus-4-5": "claude-opus",
@@ -1058,7 +1058,8 @@ _EXTENDED_THINKING_ENABLED = os.getenv("EXTENDED_THINKING_ENABLED", "true").lowe
 
 # 모델별 비용 (per 1M tokens, USD)
 _COST_MAP = {
-    "claude-opus":            (5.0,  25.0),   # Opus 4.7 실제 가격
+    "claude-opus":            (4.0,  20.0),   # 최신 Opus 5.5 공식 가격
+    "claude-opus-5-5":        (4.0,  20.0),   # Opus 5.5 공식 가격
     "claude-opus-46":         (5.0,  25.0),   # Opus 4.6 실제 가격
     "claude-sonnet":          (3.0,  15.0),
     "claude-haiku":           (1.0,   5.0),   # Haiku 4.5 실제 가격

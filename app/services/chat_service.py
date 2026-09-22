@@ -334,6 +334,7 @@ _MODEL_TIMEOUT_OVERRIDES = {
     "gpt-6-astra": 1500,
     "codex:gpt-6-astra": 1500,
     "claude-fable-5-1": 1200,
+    "claude-opus-5-5": 1200,
     "claude-opus-5": 1200,
     "claude-opus-4-6": 900,
     "claude-haiku": 900,
@@ -1218,7 +1219,7 @@ def _cross_provider_chat_fallback_chain(base_model: Optional[str]) -> List[str]:
     if normalized.startswith(("claude-", "claude_")):
         preferred = [base, "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"]
     elif normalized.startswith("codex:") or normalized.startswith("gpt-"):
-        preferred = [base, "claude-fable-5-1", "claude-opus-5", "claude-opus"]
+        preferred = [base, "claude-fable-5-1", "claude-opus-5-5", "claude-opus"]
     else:
         preferred = [base, "claude-fable-5-1", "gpt-6-astra", "gpt-5.6-sol"]
 
@@ -6730,6 +6731,7 @@ async def with_background_completion(
 
                 if not _retried:
                     _FALLBACK_CHAIN_429 = {
+                        "claude-opus-5-5": ["claude-fable-5-1", "gpt-5.6-sol"],
                         "claude-opus-5": ["claude-fable-5-1", "gpt-5.6-sol"],
                         "claude-opus-4-6": ["claude-opus-5", "claude-fable-5-1"],
                         "claude-fable-5-1": ["claude-opus-5", "gpt-5.6-sol"],

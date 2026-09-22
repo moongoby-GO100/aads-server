@@ -10,7 +10,8 @@ CONTRACT_VERSION = 1
 AADS_MODEL_IDS = {
     "claude-sonnet": "claude-sonnet-5",
     "claude-sonnet-5": "claude-sonnet-5",
-    "claude-opus": "claude-opus-5",
+    "claude-opus": "claude-opus-5-5",
+    "claude-opus-5-5": "claude-opus-5-5",
     "claude-opus-5": "claude-opus-5",
     "claude-opus-46": "claude-opus-4-6",
     "claude-haiku": "claude-haiku-4-5-20251001",
@@ -21,7 +22,7 @@ ALIASES = dict(AADS_MODEL_IDS, **{
     "claude-fable-5.1": "claude-fable-5-1",
     "claude-fable-latest": "claude-fable-5-1",
     "claude-haiku-4-5": "claude-haiku-4-5-20251001",
-    "opus": "claude-opus-5",
+    "opus": "claude-opus-5-5",
     "sonnet": "claude-sonnet-5",
     "haiku": "claude-haiku-4-5-20251001",
 })

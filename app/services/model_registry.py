@@ -123,7 +123,8 @@ def _json_default(value: Any) -> str:
 
 
 _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
-    "claude-opus": (_decimal(5.0), _decimal(25.0)),
+    "claude-opus": (_decimal(4.0), _decimal(20.0)),
+    "claude-opus-5-5": (_decimal(4.0), _decimal(20.0)),
     "claude-opus-5": (_decimal(5.0), _decimal(25.0)),
     "claude-opus-46": (_decimal(5.0), _decimal(25.0)),
     "claude-sonnet": (_decimal(3.0), _decimal(15.0)),
@@ -212,6 +213,7 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
 }
 
 _THINKING_MODELS = {
+    "claude-opus-5-5",
     "claude-sonnet-5",
     "claude-fable-5",
     "claude-fable-5-1",
@@ -238,6 +240,7 @@ _THINKING_MODELS = {
 }
 
 _VISION_MODELS = {
+    "claude-opus-5-5",
     "claude-sonnet-5",
     "claude-fable-5",
     "claude-fable-5-1",
@@ -254,6 +257,7 @@ _VISION_MODELS = {
 
 _CODING_MODELS = {
     "claude-opus",
+    "claude-opus-5-5",
     "claude-opus-5",
     "claude-opus-46",
     "claude-sonnet",
@@ -282,7 +286,8 @@ _CODING_MODELS = {
 }
 
 _DISPLAY_NAME_OVERRIDES = {
-    "claude-opus": "Claude Opus",
+    "claude-opus": "Claude Opus 5.5 (latest, Claude CLI)",
+    "claude-opus-5-5": "Claude Opus 5.5 (Claude CLI)",
     "claude-opus-5": "Claude Opus 5 (Claude CLI)",
     "claude-opus-46": "Claude Opus 4.6",
     "claude-sonnet": "Claude Sonnet",
@@ -315,6 +320,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "claude-fable-5",
         "claude-fable-5-1",
         "claude-opus",
+        "claude-opus-5-5",
         "claude-opus-5",
         "claude-opus-46",
         "claude-sonnet",

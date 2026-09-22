@@ -29,7 +29,8 @@ def _codex_quota_headroom(monkeypatch):
 
 
 def test_anthropic_registry_model_ids_are_normalized_to_runtime_aliases():
-    assert model_selector._to_anthropic_runtime_alias("claude-opus-5") == "claude-opus"
+    assert model_selector._to_anthropic_runtime_alias("claude-opus-5-5") == "claude-opus"
+    assert model_selector._to_anthropic_runtime_alias("claude-opus-5") == "claude-opus-5"
     assert model_selector._to_anthropic_runtime_alias("claude-opus-4-8") == "claude-opus-4-8"
     assert model_selector._to_anthropic_runtime_alias("claude-sonnet-4-6") == "claude-sonnet"
     assert model_selector._to_anthropic_runtime_alias("claude-haiku-4-5-20251001") == "claude-haiku"
