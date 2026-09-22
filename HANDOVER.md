@@ -1,3 +1,17 @@
+## 2026-09-23 08:49:53 KST — PC Agent 1.0.74 EXE/ZIP/automatic updater deployment
+
+- Scope: CEO-approved PC browser concurrency release; PC distribution and installed launcher are complete. API/dashboard deployment certification remains pending.
+- Source: server `a261ba8ea48d8ec8269aa0c85572df70fb1370c0`, dashboard `addcbbb323527cc68b5c5f1f6eb2a9713aaa143f`, both verified on remote main before this documentation commit.
+- Windows EXE: GitHub Actions run `35797996651` succeeded at the exact server SHA; release `pc-agent-v1.0.74`. SHA256 `ed8131abd9c5e4639b4a4bafa900b6e6723911641944695f3d1ca10f588ed204` matches release asset, public download, host cache, and installed PC launcher.
+- Host publication: `pc_agent/dist/kakaobot-setup.exe` and `.exe.version` now serve 1.0.74 directly; public download HTTP 200, `X-PC-Agent-Exe-Stale: false`. Prior EXE/stamp preserved under `pc_agent/dist/archive-before-1.0.74`.
+- ZIP: public download succeeded; all 44 tracked included files match release source. Installed critical files match normalized SHA256 (Windows CRLF vs Git LF) for browser_tab, command registry, both updaters, agent and launcher.
+- Windows PC `2e9379a1-fed`: switched old 1.0.51 launcher to `%LOCALAPPDATA%/KakaoBot/AADS-PC-Agent.exe`; switch-status reports success at 2026-09-23T08:46:40+09:00. Worker VERSION 1.0.74, WebSocket reconnect and command execution succeeded; startup command targets stable EXE, KakaoBotWatchdog enabled. Existing profiles/config were preserved. Old Downloads launcher remains available for rollback.
+- Updater verification: self_update returns already latest; periodic check logged local=remote=1.0.74. Actual installed updater in an isolated temporary install detected 1.0.73 -> downloaded public 1.0.74 ZIP -> repeat check returned false. This proves the download/apply path; it does not claim a future release or PC reboot was tested.
+- Tests: `.venv/bin/python -m pytest -q tests/unit/test_pc_agent_release_guards.py tests/unit/test_pc_agent_launcher_startup.py tests/unit/test_pc_agent_download.py tests/unit/test_pc_browser_tabs.py` => 41 passed.
+- Separate remaining release: API #5130 blocked by target-slot active stream, automatic retry #5133 queued; dashboard #5131 queued. Existing coordinator `/tmp/aads-pc-tab-release-coordinator-5130.py` is running and follows same-SHA retries, starts dashboard only after certified API success, and records final outcome in DB. No active API was restarted and no stream was terminated.
+- Still required: API/dashboard same-digest slot certification, five-minute P0/P1 monitoring, production Windows two-chat UI E2E. Do not report the complete browser feature as deployed based solely on this PC update.
+- DB handover key: `pc-agent-1.0.74-distribution-20260923` (AADS/verification). No application-source change or new API deployment was introduced in this follow-up.
+
 ## 2026-09-23 채팅별 PC 브라우저 분리 구현 (운영 미배포)
 
 - PRD: `docs/pc-browser-concurrency-prd-20260923.md`.
