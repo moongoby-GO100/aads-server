@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spec-Driven Development 업계 동향 — 우리 게이트는 어디쯤인가 · 2026-09-22</title>
+<style>
+:root{
+  --ink:#16191d; --ink2:#444c56; --ink3:#6e7781;
+  --line:#d8dee4; --bg:#fff; --bg2:#f6f8fa; --bg3:#eef2f6;
+  --blue:#1b5fbe; --bluebg:#e8f0fc; --green:#1a7f45; --greenbg:#e7f5ec;
+  --red:#b3261e; --redbg:#fdecea; --amber:#8a5a00; --amberbg:#fff4e0;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg2);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  line-height:1.72;font-size:15.5px;-webkit-text-size-adjust:100%}
+header{background:linear-gradient(135deg,#10243e,#264f7a);color:#fff;padding:44px 20px 38px;margin-bottom:26px}
+header .inner,.wrap{max-width:1080px;margin:0 auto}
+.wrap{padding:0 20px 88px}
+h1{margin:0 0 10px;font-size:29px;line-height:1.35;letter-spacing:-.45px}
+header p{margin:0;color:#d4e5f7;font-size:14.5px}
+.badges{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
+.badge{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);
+  border-radius:999px;padding:4px 12px;font-size:12.5px;color:#eef6ff}
+section,.toc{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:25px 28px;margin-bottom:22px}
+h2{font-size:21px;margin:0 0 8px;letter-spacing:-.3px;padding-bottom:12px;border-bottom:2px solid var(--bg3)}
+h2 .n{color:var(--blue);font-weight:700;margin-right:8px}
+h3{font-size:17px;margin:24px 0 8px}
+p{margin:10px 0}
+ul,ol{margin:10px 0;padding-left:22px}
+li{margin:5px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.1px}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:var(--bg3);font-weight:600}
+tr:nth-child(even) td{background:#fbfcfd}
+code{background:var(--bg3);padding:1.5px 6px;border-radius:5px;font-size:13.2px;
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+pre{background:#111827;color:#e5edf6;padding:15px 17px;border-radius:9px;overflow-x:auto;
+  font-size:13.2px;line-height:1.6}
+pre code{background:none;color:inherit;padding:0}
+.box{border-left:4px solid;border-radius:9px;padding:14px 16px;margin:14px 0}
+.good{background:var(--greenbg);border-color:var(--green)}
+.bad{background:var(--redbg);border-color:var(--red)}
+.warn{background:var(--amberbg);border-color:var(--amber)}
+.acc{background:var(--bluebg);border-color:var(--blue)}
+.box b{display:block;margin-bottom:4px}
+.toc ol{columns:2;column-gap:34px;margin:8px 0 0}
+.toc a{color:var(--blue);text-decoration:none}
+.toc a:hover{text-decoration:underline}
+.src{color:var(--ink3);font-size:13px}
+.kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+.kpi div{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:14px}
+.kpi b{display:block;font-size:22px;color:var(--blue);margin-bottom:2px}
+footer{color:var(--ink3);font-size:13px;text-align:center;padding-top:22px}
+@media(max-width:760px){.toc ol{columns:1}.kpi{grid-template-columns:1fr 1fr}h1{font-size:23px}section,.toc{padding:20px 18px}}
+</style>
+</head>
+<body>
+<header><div class="inner">
+<h1>Spec-Driven Development 업계 동향<br>— 우리 게이트는 어디쯤인가</h1>
+<p>2026-09-22 · AADS 교육담당자 · 오비서 세션(acc75e55) 기획 누락 사건을 계기로 한 업계 리서치 + AADS 실측 대조</p>
+<div class="badges">
+  <span class="badge">조사 2026-09-22 10:37~10:41 KST</span>
+  <span class="badge">GitHub API·공식문서 실측</span>
+  <span class="badge">AADS 적용 결과 10:43~10:56 KST 재실측</span>
+</div>
+</div></header>
+
+<div class="wrap">
+<div class="toc">
+<b>목차</b>
+<ol>
+<li><a href="#c1">한 문장 정의</a></li>
+<li><a href="#c2">먼저 알아야 할 6개 용어</a></li>
+<li><a href="#c3">왜 필요했나 — 오비서 세션 실측</a></li>
+<li><a href="#c4">업계 실측 비교표</a></li>
+<li><a href="#c5">세 게이트 상세 — clarify·checklist·analyze·converge</a></li>
+<li><a href="#c6">AADS는 어디까지 왔나</a></li>
+<li><a href="#c7">우리 시스템에 적용된 곳</a></li>
+<li><a href="#c8">아직 적용 안 된 곳과 확인 질문</a></li>
+</ol>
+</div>
+
+<section id="c1">
+<h2><span class="n">1</span>한 문장 정의</h2>
+<p><b>Spec-Driven Development(기획 정본화 개발)란, 구현을 시작하기 전에 "무엇을 원하는가"를 spec·plan·tasks 3개 문서로 고정하고, 그 사이의 빠짐·모순을 사람이 아니라 기계가 검사하게 만드는 개발 방식입니다.</b></p>
+<p><b>일상 비유</b> 집을 지을 때 "대충 예쁘게 지어주세요"라고 말로만 하면 시공 중 계속 "여기도 필요했는데요"가 나옵니다. 설계도(spec)·시공계획(plan)·체크리스트(tasks) 3장을 먼저 확정하고, 그 3장이 서로 안 맞는지 준공 전에 검사관이 대조하면 시공 중 추가요청이 줄어듭니다. Spec Kit·AWS Kiro가 하는 일이 이 검사관 역할입니다.</p>
+</section>
+
+<section id="c2">
+<h2><span class="n">2</span>먼저 알아야 할 6개 용어</h2>
+<table>
+<tr><th>용어</th><th>일상 언어</th><th>대표님이 보는 의미</th></tr>
+<tr><td><code>spec</code></td><td>무엇을(요구사항)</td><td>기능·화면·범위경계를 담은 정본 문서</td></tr>
+<tr><td><code>plan</code></td><td>어떻게(설계)</td><td>spec을 구현할 기술적 접근</td></tr>
+<tr><td><code>tasks</code></td><td>할 일 목록</td><td>plan을 실행 단위로 쪼갠 체크리스트</td></tr>
+<tr><td><code>clarify</code></td><td>착수 전 질문 5개</td><td>모호한 지점을 미리 물어 spec에 답을 기록</td></tr>
+<tr><td><code>analyze</code></td><td>구현 전 대조 검사</td><td>spec·plan·tasks 3개가 서로 맞는지 읽기전용 검사</td></tr>
+<tr><td><code>converge</code></td><td>수렴 루프</td><td>구현 후 spec과 다른 점을 찾아 tasks에 추가만 하고, 더 뺄 것 없을 때까지 반복</td></tr>
+</table>
+</section>
+
+<section id="c3">
+<h2><span class="n">3</span>왜 필요했나 — 오비서 세션 실측</h2>
+<p>대표님이 지목하신 오비서 세션(<code>acc75e55</code>)의 최근 요구 흐름을 <code>chat_messages</code> 30건으로 실측했습니다.</p>
+<table>
+<tr><th>시각(KST)</th><th>CEO 지시</th><th>결과</th><th>누락 원인</th></tr>
+<tr><td>09-21 20:53</td><td>"메뉴 특성 고려없이 또 모두 일괄 적용한거지?"</td><td>일괄 복제 확인·보고</td><td>메뉴별 요구가 문서에 없음</td></tr>
+<tr><td>09-22 06:59</td><td>중복메뉴·엑셀등록·상세현황 4건(182자)</td><td>보고만, 구현 없음</td><td>요구가 대화에만 존재</td></tr>
+<tr><td>09-22 08:45</td><td>"누락 생략없이 확실하게"</td><td>구현 미착수</td><td>범위 계약이 지시와 분리</td></tr>
+<tr><td>09-22 09:59</td><td>"와 진짜 하나하나 다 찝어줘야하네"(345자 요구 폭발)</td><td>35개 메뉴 전수 재설계</td><td>CEO가 결함 발견자 역할</td></tr>
+</table>
+<div class="box bad"><b>공통점 3개</b>
+①요구사항이 대화에 흩어져 단 한 번도 정본 문서로 고정된 적이 없음(PRD 6건은 있으나 누적 요구본 아님)<br>
+②버전만 올라감(V3→V4→V4.1), 빠진 항목 목록 자체가 없음<br>
+③CEO 지시 길이 9~44자인 턴에서 누락이 반복됨(해당 턴 quality 0.31~0.82)</div>
+</section>
+
+<section id="c4">
+<h2><span class="n">4</span>업계 실측 비교표</h2>
+<table>
+<tr><th>출처</th><th>실측(2026-09-22)</th><th>누락 방지 장치</th></tr>
+<tr><td><b>GitHub Spec Kit</b></td><td>⭐138,237 · 최근 push 2026-09-21 · MIT</td><td>9단계 <code>constitution→specify→clarify→plan→checklist→tasks→analyze→implement→converge</code></td></tr>
+<tr><td>Spec Kit <b>Spec of Specs</b></td><td>roadmap 6열(ID·의도·범위경계·의존·상태·서브스펙)</td><td>대형 기획을 슬라이스로 쪼개 각자 spec/plan/tasks 보유</td></tr>
+<tr><td><b>AWS Kiro</b></td><td>공식문서 2026-08-27</td><td>requirements/design/tasks 3파일 고정 + Analyze Requirements(설계 전 불일치 탐지) + 의존성 wave 병렬</td></tr>
+<tr><td><b>BMAD-METHOD</b></td><td>⭐53,318 · push 2026-09-21</td><td>역할 분업(analyst/PM/architect/dev/QA), context-engineering 토픽</td></tr>
+<tr><td>Task Master</td><td>⭐28,087 · push 2026-04-28(5개월 정체)</td><td>⚠️ 채택 비권장 — 유지보수 신호 약함</td></tr>
+</table>
+<p class="src">[출처: GitHub API 저장소 메타데이터, 각 프로젝트 공식문서, 2026-09-22 10:41 KST 조회. Gemini 검색 2종은 403 CONSUMER_SUSPENDED로 실패해 Jina·GitHub API·Naver로 대체 조사했습니다.]</p>
+</section>
+
+<section id="c5">
+<h2><span class="n">5</span>세 게이트 상세 — clarify·checklist·analyze·converge</h2>
+<table>
+<tr><th>게이트</th><th>언제</th><th>무엇을 막나</th></tr>
+<tr><td><code>clarify</code></td><td>기획 착수 시</td><td>모호한 지점 최대 5개를 먼저 물어 spec에 답을 기록 — 짧은 지시(9~44자)에서 누락이 반복된 것을 겨냥</td></tr>
+<tr><td><code>checklist</code></td><td>plan 확정 후</td><td>"요구사항의 단위테스트" 역할 — 이 조건이 충족되면 완료로 볼 수 있는지 항목화</td></tr>
+<tr><td><code>analyze</code></td><td>구현 착수 전</td><td>spec↔plan↔tasks 3개 문서를 읽기전용으로 교차검사, 모순·누락을 구현 전에 차단</td></tr>
+<tr><td><code>converge</code></td><td>구현 후</td><td>append-only로 spec 대조 후 빠진 것을 tasks에 추가만 하고, <code>Converged</code> 판정이 연속으로 나올 때까지 반복 — "하나하나 찝어주는" 역할을 기계로 이전</td></tr>
+</table>
+</section>
+
+<section id="c6">
+<h2><span class="n">6</span>AADS는 어디까지 왔나 — 오늘 실제로 한 일</h2>
+<p>이 조사 직후 같은 세션에서 [다음단계 1]로 오비서 기획 정본화를 실제 실행했습니다. 결과를 재실측했습니다.</p>
+<div class="kpi">
+<div><b>33</b>실측 슬라이스(mockup-v3.html 파싱, CEO 지시 "35개"와 차이)</div>
+<div><b>101</b><code>docs/specs/obys-v4/</code> 파일 수[서버 실측]</div>
+<div><b>12</b>소유권 충돌 신규 발견</div>
+<div><b>cfbaa6cb</b>커밋 = origin/main 조상[git 실측]</div>
+</div>
+<div class="box warn"><b>핵심 발견</b><code>receipt-upload</code> 슬라이스는 PRD가 "증빙 원본보관"과 "매입자료 등록"을 구분하라고 이미 명시했는데, 실제 mockup은 두 메뉴가 같은 화면 슬러그를 공유하고 있었습니다. <code>analyze</code>류 교차검사가 실제로 실물 불일치를 찾아낸 사례입니다.</div>
+<p><b>대표님이 알아야 할 것</b> "35개"라는 지시 수치를 그대로 믿지 않고 실제 코드(<code>submenuItems</code>)를 파싱해 33개로 정정했습니다. 지시받은 수치와 실측값이 다르면 실측값을 쓰고 차이를 명시하는 것이 이 교육자료 전체가 따르는 원칙입니다.</p>
+</section>
+
+<section id="c7">
+<h2><span class="n">7</span>우리 시스템에 적용된 곳</h2>
+<table>
+<tr><th>요소</th><th>AADS 현재</th><th>판정</th></tr>
+<tr><td>태스크 wave 병렬</td><td><code>pipeline_runner_submit_batch</code>의 <code>parallel_group</code>·<code>depends_on_key</code></td><td>✅ Kiro와 동형</td></tr>
+<tr><td>실행 후 검증 체크리스트</td><td><code>pipeline_runner_service.py:2443</code></td><td>✅ 있음</td></tr>
+<tr><td>기획 정본(spec 3산출물)</td><td>오비서 한정 <code>docs/specs/obys-v4/</code> 33슬라이스 신설(<code>cfbaa6cb</code>)</td><td>✅ 오늘부터 부분 적용</td></tr>
+<tr><td>소유권 충돌 자동 탐지</td><td>PRD 대조 스크립트(<code>scripts/gen_obys_specs.py</code>)로 12건 실제 발견</td><td>✅ 1회 실증</td></tr>
+</table>
+</section>
+
+<section id="c8">
+<h2><span class="n">8</span>아직 적용 안 된 곳과 확인 질문</h2>
+<table>
+<tr><th>미적용/한계</th><th>이유</th><th>대표님 영향</th></tr>
+<tr><td><code>clarify</code>·<code>checklist</code>·<code>analyze</code>·<code>converge</code> 게이트 코드화</td><td>이번 작업은 문서 정본화까지만 — 승인 워크플로 코드에는 아직 연결 안 됨</td><td>오비서 외 프로젝트·세션에는 자동 적용 안 됨</td></tr>
+<tr><td>소유권 충돌 12건 최종 결정</td><td>CEO/PM 판단 필요(예: <code>receipt-upload</code> 화면 분리 여부)</td><td>결정 전 구현 착수 시 화면 중복 재발 위험</td></tr>
+<tr><td>전세션 확장</td><td>이번 실측은 오비서(OBYS) 1개 프로젝트 범위</td><td>AADS/GO100/SF 등 타 프로젝트는 별도 roadmap 필요</td></tr>
+</table>
+<div class="box acc"><b>대표님 확인 질문 3개</b>
+1. "소유권 충돌 12건 중 receipt-upload는 화면을 분리할까요, PRD를 mockup에 맞춰 수정할까요?"<br>
+2. "analyze/converge 게이트를 승인 워크플로 코드에 실제로 연결하는 작업을 P1로 올릴까요?"<br>
+3. "오비서 다음으로 spec 정본화를 적용할 프로젝트는 무엇인가요?"</div>
+<p><b>한 장 요약</b> 업계는 "한 번에 다 쓰게" 만들지 않고, spec·plan·tasks 3문서를 고정한 뒤 clarify·analyze·converge 3개 게이트로 빠짐을 기계가 잡게 합니다. AADS는 오늘 오비서 프로젝트에 그 첫 단계(정본화)를 실제로 적용해 소유권 충돌 12건을 실물로 찾아냈지만, 게이트를 코드에 연결하는 작업과 전세션 확장은 아직 남아 있습니다.</p>
+</section>
+
+<footer>AADS 교육담당자(EducationLead) · 2026-09-22 작성 · 근거: chat_messages·GitHub API·git 실측. 비용 $0.</footer>
+</div>
+</body>
+</html>
