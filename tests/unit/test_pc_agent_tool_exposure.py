@@ -681,6 +681,66 @@ def test_credential_test_login_no_longer_uses_genspark_specific_login() -> None:
 
 
 @pytest.mark.asyncio
+async def test_credential_test_login_resolves_prefix_and_uses_ntv2_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    credential_id = "0b2b9e16-c06f-4f6f-9a91-f56726d43507"
+    tenant_id = "00000000-0000-0000-0000-000000000012"
+    observed: dict[str, object] = {}
+
+    class _FakePool:
+        async def fetch(self, *_args, **_kwargs):
+            return [{"id": credential_id}]
+
+    async def fake_get_credential(resolved_id, **_kwargs):
+        observed["resolved_id"] = resolved_id
+        return {
+            "id": credential_id,
+            "tenant_id": tenant_id,
+            "service": "newtalk-v2-admin",
+            "login_url": "https://v2.newtalk.kr/login",
+            "username": "e2e@example.test",
+            "password": "secret-password",
+            "login_steps": [],
+        }
+
+    async def fake_api_login(*, origin, username, password):
+        observed["api_login"] = (origin, username, password)
+        return 200, {"token": "ntv2-token"}
+
+    async def fake_mark_used(resolved_id, **_kwargs):
+        observed["used_id"] = resolved_id
+
+    async def fake_mark_verified(resolved_id, **kwargs):
+        observed["verified"] = (resolved_id, kwargs["success"])
+
+    async def fail_acquire_browser_context(**_kwargs):
+        raise AssertionError("NTV2 API fast path must not open Browser Bridge")
+
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _FakePool())
+    monkeypatch.setattr("app.core.credential_vault.get_credential", fake_get_credential)
+    monkeypatch.setattr("app.core.credential_vault.mark_used", fake_mark_used)
+    monkeypatch.setattr("app.core.credential_vault.mark_verified", fake_mark_verified)
+    monkeypatch.setattr(ceo_chat_tools, "_agent_vault_api_login", fake_api_login)
+    monkeypatch.setattr("app.browser_bridge.aads_adapter.acquire_browser_context", fail_acquire_browser_context)
+
+    result = await ceo_chat_tools.tool_credential_test_login(
+        "0b2b9e16",
+        tenant_id=tenant_id,
+        browser_work_key="ntv2-vault-e2e",
+    )
+
+    assert "status: success" in result
+    assert f"credential_id: {credential_id}" in result
+    assert observed["resolved_id"] == credential_id
+    assert observed["api_login"] == (
+        "https://v2.newtalk.kr",
+        "e2e@example.test",
+        "secret-password",
+    )
+    assert observed["used_id"] == credential_id
+    assert observed["verified"] == (credential_id, True)
+
+
+@pytest.mark.asyncio
 async def test_credential_test_login_agent_vault_times_out_to_api_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     credential_id = "00000000-0000-0000-0000-000000000011"
     tenant_id = "00000000-0000-0000-0000-000000000012"

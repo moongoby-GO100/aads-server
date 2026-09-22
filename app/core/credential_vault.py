@@ -466,21 +466,23 @@ async def _api_token_inject(page: Any, credential: dict[str, Any], step: dict[st
     import aiohttp
 
     api_url = step.get("api_url", "")
+    login_url = str(credential.get("login_url") or "")
+    login_parsed = urlparse(login_url)
+    is_ntv2 = login_parsed.netloc == "v2.newtalk.kr"
     if not api_url:
-        login_url = credential.get("login_url", "")
         if login_url:
-            parsed = urlparse(login_url)
-            api_url = f"{parsed.scheme}://{parsed.netloc}/api/v1/auth/login"
+            api_path = "/api/auth/login" if is_ntv2 else "/api/v1/auth/login"
+            api_url = f"{login_parsed.scheme}://{login_parsed.netloc}{api_path}"
     if not api_url:
         logger.error("api_token_inject: api_url 미설정")
         return False
 
     username = credential.get("username", "")
     password = credential.get("password", "")
-    email_field = step.get("email_field", "email")
+    email_field = step.get("email_field", "login" if is_ntv2 else "email")
     password_field = step.get("password_field", "password")
     token_path = step.get("token_path", "token")
-    storage_key = step.get("storage_key", "aads_token")
+    storage_key = step.get("storage_key", "newtalk_token" if is_ntv2 else "aads_token")
     cookie_name = step.get("cookie_name", storage_key)
     cookie_max_age = step.get("cookie_max_age", 604800)
     redirect_url = step.get("redirect_url", "")
@@ -490,7 +492,6 @@ async def _api_token_inject(page: Any, credential: dict[str, Any], step: dict[st
         # about:blank.  localStorage written there belongs to an opaque origin
         # and is therefore unavailable to the dashboard after navigation.
         # Establish the credential's web origin before injecting the token.
-        login_url = str(credential.get("login_url") or "")
         current_origin = urlparse(str(getattr(page, "url", "") or ""))
         login_origin = urlparse(login_url)
         if login_origin.netloc and current_origin.netloc != login_origin.netloc:

@@ -38,6 +38,9 @@ _GLOBAL_TASK_SCOPES = frozenset({"all", "global"})
 _AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS = float(
     os.getenv("AADS_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS", "45")
 )
+_E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS = float(
+    os.getenv("AADS_E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS", "20")
+)
 
 _AGENT_VAULT_API_LOGIN_TARGETS = {
     "go100.newtalk.kr": {
@@ -49,6 +52,17 @@ _AGENT_VAULT_API_LOGIN_TARGETS = {
         "login_path": "/auth/login",
         "storage_keys": ("token", "access_token"),
         "cookie_names": ("token", "access_token"),
+    },
+    "v2.newtalk.kr": {
+        "api_path": "/api/auth/login",
+        "token_field": "token",
+        "identity_field": "login",
+        "callback_path": "",
+        "return_param": "",
+        "default_return_path": "/admin/dashboard",
+        "login_path": "/login",
+        "storage_keys": ("newtalk_token",),
+        "cookie_names": ("newtalk_token",),
     },
 }
 
@@ -3706,10 +3720,11 @@ async def _agent_vault_api_login(
     if not target:
         return 0, {}
     api_url = f"{origin.rstrip('/')}{target['api_path']}"
+    identity_field = str(target.get("identity_field") or "email")
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
         async with session.post(
             api_url,
-            json={"email": username, "password": password},
+            json={identity_field: username, "password": password},
             ssl=False,
         ) as response:
             data: dict[str, Any] = {}
@@ -3721,6 +3736,43 @@ async def _agent_vault_api_login(
                 except Exception:
                     data = {}
             return int(response.status), data
+
+
+async def _resolve_login_test_credential_id(credential_id: str, tenant_id: str) -> tuple[str, str]:
+    """Resolve a full UUID or a unique UI-style UUID prefix within one tenant."""
+    raw_id = str(credential_id or "").strip().lower()
+    try:
+        return str(uuid.UUID(raw_id)), ""
+    except (TypeError, ValueError, AttributeError):
+        pass
+
+    if not re.fullmatch(r"[0-9a-f]{8,32}", raw_id):
+        return "", "INVALID_CREDENTIAL_ID"
+    if not tenant_id:
+        return "", "TENANT_SCOPE_REQUIRED"
+
+    from app.core.db_pool import get_pool
+
+    rows = await get_pool().fetch(
+        """
+        SELECT id::text AS id
+          FROM e2e_credentials
+         WHERE tenant_id = $1 AND is_active = TRUE AND id::text LIKE $2
+        UNION ALL
+        SELECT id::text AS id
+          FROM agent_vault_credentials
+         WHERE tenant_id = $1 AND is_active = TRUE AND id::text LIKE $2
+        LIMIT 3
+        """,
+        uuid.UUID(str(tenant_id)),
+        f"{raw_id}%",
+    )
+    matches = sorted({str(row["id"]) for row in rows})
+    if len(matches) == 1:
+        return matches[0], ""
+    if not matches:
+        return "", "CREDENTIAL_NOT_FOUND"
+    return "", "AMBIGUOUS_CREDENTIAL_ID"
 
 
 async def _inject_agent_vault_api_login_token(
@@ -5070,10 +5122,20 @@ async def tool_credential_test_login(
         execute_login_steps,
         get_credential,
         login_session_completed,
+        mark_used,
         mark_verified,
     )
     import aiohttp
     try:
+        credential_id, credential_id_error = await _resolve_login_test_credential_id(
+            credential_id,
+            tenant_id,
+        )
+        if credential_id_error:
+            return (
+                "[ERROR] credential_id 해석 실패: "
+                f"error_code={credential_id_error}"
+            )
         try:
             cred = await get_credential(credential_id, include_secrets=True, tenant_id=tenant_id or None)
         except Exception:
@@ -5236,14 +5298,50 @@ async def tool_credential_test_login(
             return "[ERROR] login_url이 설정되지 않아 테스트할 수 없습니다."
 
         browser_error = ""
+        login_url = str(cred.get("login_url") or "")
+        login_parsed = urlparse(login_url)
+        api_target = _AGENT_VAULT_API_LOGIN_TARGETS.get(login_parsed.netloc)
+        if api_target:
+            origin = f"{login_parsed.scheme}://{login_parsed.netloc}"
+            try:
+                api_status, api_data = await _agent_vault_api_login(
+                    origin=origin,
+                    username=str(cred.get("username") or ""),
+                    password=str(cred.get("password") or ""),
+                )
+                api_token = str(api_data.get(str(api_target["token_field"])) or "")
+                if api_status == 200 and api_token:
+                    await mark_used(credential_id, tenant_id=tenant_id or None)
+                    await mark_verified(credential_id, success=True, tenant_id=tenant_id or None)
+                    return (
+                        "[API 로그인 테스트]\n"
+                        "status: success\n"
+                        f"vault_type: {vault_type}\n"
+                        f"origin: {origin}\n"
+                        f"credential_id: {credential_id}"
+                    )
+                return (
+                    "[API 로그인 테스트]\n"
+                    "status: failed\n"
+                    f"vault_type: {vault_type}\n"
+                    f"error_code: API_LOGIN_HTTP_{api_status}_TOKEN_{'OK' if api_token else 'MISSING'}\n"
+                    f"origin: {origin}\n"
+                    f"credential_id: {credential_id}"
+                )
+            except Exception as api_exc:
+                browser_error = f"API_LOGIN_ERROR: {api_exc}"
+
         try:
             from app.browser_bridge.aads_adapter import acquire_browser_context
 
             work_key = browser_work_key or f"e2e-{str(cred.get('service') or 'credential').lower().replace('_', '-')}"
-            ctx, err = await acquire_browser_context(
-                browser_session_id=browser_session_id or None,
-                browser_work_key=work_key if not browser_session_id else None,
-                url=cred["login_url"],
+            ctx, err = await asyncio.wait_for(
+                acquire_browser_context(
+                    browser_session_id=browser_session_id or None,
+                    browser_work_key=work_key if not browser_session_id else None,
+                    url=cred["login_url"],
+                ),
+                timeout=_E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS,
             )
             if err:
                 browser_error = err
@@ -5251,8 +5349,14 @@ async def tool_credential_test_login(
                 page = await ctx.new_page()
                 if not cred.get("login_steps"):
                     await page.goto(cred["login_url"], wait_until="domcontentloaded", timeout=15000)
-                success = await execute_login_steps(page, cred)
-                success = bool(success) and await login_session_completed(page, cred["login_url"])
+                success = await asyncio.wait_for(
+                    execute_login_steps(page, cred),
+                    timeout=_E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS,
+                )
+                success = bool(success) and await asyncio.wait_for(
+                    login_session_completed(page, cred["login_url"]),
+                    timeout=_E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS,
+                )
                 final_url = page.url
                 await mark_verified(credential_id, success=bool(success), tenant_id=tenant_id or None)
                 return (
@@ -5262,6 +5366,8 @@ async def tool_credential_test_login(
                     f"final_url: {final_url}\n"
                     f"browser_work_key: {work_key}"
                 )
+        except asyncio.TimeoutError:
+            browser_error = f"TIMEOUT_AFTER_{_E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS}s"
         except Exception as be:
             browser_error = str(be)
 
