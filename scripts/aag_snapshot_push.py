@@ -93,7 +93,9 @@ def _legacy_statement(project: str, graph: dict) -> str:
     )
 
 
-def _v2_statement(project: str, graph: dict) -> str | None:
+def _v2_statement(
+    project: str, graph: dict, *, identity_project: str | None = None
+) -> str | None:
     identity = graph.get("source_identity") or {}
     required = (
         "repository_id", "target_ref", "resolved_commit_sha", "scanner_version",
@@ -107,7 +109,7 @@ def _v2_statement(project: str, graph: dict) -> str | None:
     }:
         return None
 
-    body = graph_content(graph, project=project)
+    body = graph_content(graph, project=identity_project or project)
     run_id = str(uuid4())
     content_hash = content_fingerprint(body)
     input_hash = input_fingerprint(
@@ -264,21 +266,29 @@ UPDATE aag_scan_runs r
 
 
 def _targets(argv: list) -> Iterator:
+    """Yield (project, identity_project, path).
+
+    "KIS@GO100=path" republishes path's already-scanned content under
+    project=KIS while validating finding identity against GO100 — the
+    project that actually produced the stable_finding_key values baked
+    into the graph (shared_monorepo alias; see aag_all_projects_refresh.sh).
+    """
     if argv:
         for item in argv:
-            project, _, path = item.partition("=")
+            spec, _, path = item.partition("=")
             if not path:
                 print("무시: %s — PROJECT=경로 형식이 아니다" % item, file=sys.stderr)
                 continue
-            yield project.upper(), Path(path)
+            project, _, identity_project = spec.partition("@")
+            yield project.upper(), (identity_project.upper() or None), Path(path)
         return
     for path in sorted(GRAPH_DIR.glob("*-graph.json")):
-        yield path.name[: -len("-graph.json")].upper(), path
+        yield path.name[: -len("-graph.json")].upper(), None, path
 
 
 def main() -> int:
     statements = []
-    for project, path in _targets(sys.argv[1:]):
+    for project, identity_project, path in _targets(sys.argv[1:]):
         try:
             graph = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -289,7 +299,7 @@ def main() -> int:
             continue
         try:
             statements.append(_legacy_statement(project, graph))
-            v2_statement = _v2_statement(project, graph)
+            v2_statement = _v2_statement(project, graph, identity_project=identity_project)
             if v2_statement:
                 statements.append(v2_statement)
             else:

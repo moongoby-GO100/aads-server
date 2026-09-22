@@ -39,7 +39,7 @@ refresh_go100_and_kis() {
         return
     fi
     if python3 "$REPO_DIR/scripts/aag_snapshot_push.py" \
-        "KIS=$STATE_DIR/go100/go100-graph.json" >>"$LOG" 2>&1; then
+        "KIS@GO100=$STATE_DIR/go100/go100-graph.json" >>"$LOG" 2>&1; then
         log "STATUS project=KIS result=success scope=shared_monorepo"
     else
         failed KIS "shared_monorepo_publish"
