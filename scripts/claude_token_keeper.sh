@@ -170,6 +170,12 @@ renewed=0
 for slot in 1 2 3 4; do
     home="${SLOT_ROOT}/slot${slot}"
     cred="${home}/.claude/.credentials.json"
+    # 릴레이가 같은 슬롯 자격증명을 쓸 때 쓰는 락과 같은 파일이다.
+    # keeper 는 전역 락(_KEEPER_LOCK)만 있어 릴레이의 실시간 갱신과
+    # 배타되지 않았다 — 동시 갱신이 refresh token 회전 충돌을 낸 유력
+    # 원인이었다(2026-09-21 슬롯2 소실). 이제 CLI 를 돌리는 순간에는
+    # 이 락을 같이 쓴다.
+    lock="${home}/.claude/.credentials.lock"
     [ -f "$cred" ] || { log "slot${slot}: 자격증명 없음 — 건너뜀"; continue; }
 
     left="$(remaining_min "$cred")"
@@ -217,7 +223,7 @@ for slot in 1 2 3 4; do
     fi
     # CLI 는 만료가 임박하면 refreshToken 으로 스스로 갱신한다. 한도 초과(429)로
     # 응답이 실패해도 갱신 자체는 일어나므로 결과 코드로 판단하지 않는다.
-    HOME="$home" timeout 120 "$CLAUDE_BIN" -p "ping" --output-format json >/dev/null 2>&1 || true
+    flock -w 60 "$lock" env HOME="$home" timeout 120 "$CLAUDE_BIN" -p "ping" --output-format json >/dev/null 2>&1 || true
 
     after="$(remaining_min "$cred")"
     # -1 은 "만료됨"이 아니라 파일을 읽지 못했다는 신호다(remaining_min 의
@@ -265,7 +271,7 @@ for slot in 1 2 3 4; do
             while [ "$tries" -lt "$CLOSE_RETRY_TIMES" ]; do
                 tries=$((tries + 1))
                 sleep "$CLOSE_RETRY_SLEEP"
-                HOME="$home" timeout 120 "$CLAUDE_BIN" -p "ping" --output-format json >/dev/null 2>&1 || true
+                flock -w 60 "$lock" env HOME="$home" timeout 120 "$CLAUDE_BIN" -p "ping" --output-format json >/dev/null 2>&1 || true
                 retry_after="$(remaining_min "$cred")"
                 if [ -n "$backup" ] && [ -s "$backup" ] \
                    && _token_field_empty "$cred" && ! _token_field_empty "$backup"; then
