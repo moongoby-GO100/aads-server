@@ -74,7 +74,7 @@ services:
       # 2026-09-19 runner-1b282742 가 sonnet-5·haiku·groq 3종 모두 45초에서 잘려
       # REVIEW_MODEL_NO_RESPONSE → review_hold 로 큐 전체가 멈췄다. 같은 규모
       # 43KB 인 runner-48377212 는 통과했다. 비동기 총예산(240초)은 여유가 있다.
-      - REVIEW_LLM_TIMEOUT_SEC=${REVIEW_LLM_TIMEOUT_SEC:-90}
+      - REVIEW_LLM_TIMEOUT_SEC=${REVIEW_LLM_TIMEOUT_SEC:-120}
       - GOAL_WORK_HIERARCHY_ENABLED=${GOAL_WORK_HIERARCHY_ENABLED:-true}
       - GOAL_WORKFLOW_APPROVAL_ENABLED=${GOAL_WORKFLOW_APPROVAL_ENABLED:-true}
       - GOAL_AUTO_APPROVAL_MODE=${GOAL_AUTO_APPROVAL_MODE:-audit}

@@ -35,7 +35,7 @@ _REVIEW_MODEL_MAX_ATTEMPTS = int(os.environ.get("REVIEW_MODEL_MAX_ATTEMPTS", "6"
 #
 # 상한을 줄일 때는 반드시 실제 리뷰 프롬프트로 지연을 먼저 재라. 프록시 한도에서
 # 거꾸로 계산해 내려잡으면 "무응답" 이 아닌 것을 무응답으로 만든다.
-_REVIEW_LLM_TIMEOUT_SEC = int(os.environ.get("REVIEW_LLM_TIMEOUT_SEC", "45"))
+_REVIEW_LLM_TIMEOUT_SEC = int(os.environ.get("REVIEW_LLM_TIMEOUT_SEC", "120"))
 # 마감까지 남은 시간이 이보다 짧으면 새 시도를 걸지 않는다. 남은 시간이 상한보다
 # 짧아도 이 값보다 길면 남은 만큼이라도 써서 시도한다 — 예산을 버리지 않는다.
 _REVIEW_MIN_ATTEMPT_SEC = int(os.environ.get("REVIEW_MIN_ATTEMPT_SEC", "12"))
@@ -56,7 +56,7 @@ _REVIEW_TOTAL_DEADLINE_SEC = int(os.environ.get("REVIEW_TOTAL_DEADLINE_SEC", "85
 # 클라이언트가 request_id 를 폴링한다. 프록시 마감에 묶이지 않으므로 같은 85초를
 # 쓸 이유가 없다. 재검수 스위퍼가 이 경로를 쓴다 — 동기 경로에서 상한에 걸린
 # 작업이 재검수에서도 똑같이 걸리면 복구 경로가 아무 의미가 없다.
-_REVIEW_ASYNC_DEADLINE_SEC = int(os.environ.get("REVIEW_ASYNC_DEADLINE_SEC", "240"))
+_REVIEW_ASYNC_DEADLINE_SEC = int(os.environ.get("REVIEW_ASYNC_DEADLINE_SEC", "500"))
 # 리뷰 프롬프트에 넣는 diff 상한(문자수). 리뷰 모델은 200K 컨텍스트인데 종전
 # 10KB 하드코딩은 그 0.5%도 쓰지 않았다. 실측(2026-09-17): runner 리뷰 287건 중
 # 196건(68%)이 절단된 채 심사됐고 승인율이 41.8% → 22.4% 로 떨어졌다. 반려 사유는

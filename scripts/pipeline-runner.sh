@@ -185,9 +185,9 @@ AADS_REVIEW_MAX_TIME="${AADS_REVIEW_MAX_TIME:-95}"
 AADS_REVIEW_MAX_ATTEMPTS="${AADS_REVIEW_MAX_ATTEMPTS:-3}"
 AADS_REVIEW_MAX_RUNTIME="${AADS_REVIEW_MAX_RUNTIME:-$((AADS_REVIEW_MAX_TIME * AADS_REVIEW_MAX_ATTEMPTS + 120))}"
 # 최초 리뷰도 durable request를 먼저 저장한 뒤 상태를 폴링한다. 이 대기 예산은
-# 후보별 모델 timeout과 별개다. 서버의 async deadline(기본 240초)이 모든 DB
+# 후보별 모델 timeout과 별개다. 서버의 async deadline(기본 500초)이 모든 DB
 # 후보를 소진할 시간을 갖도록 여유를 둔다.
-AADS_REVIEW_ASYNC_WAIT_SEC="${AADS_REVIEW_ASYNC_WAIT_SEC:-270}"
+AADS_REVIEW_ASYNC_WAIT_SEC="${AADS_REVIEW_ASYNC_WAIT_SEC:-540}"
 AADS_REVIEW_POLL_INTERVAL="${AADS_REVIEW_POLL_INTERVAL:-3}"
 WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-300}"    # 5분마다 프로세스 생존 확인
 STUCK_CHECK_INTERVAL="${STUCK_CHECK_INTERVAL:-300}"  # 좀비/stuck 감지 주기 (초, 기본 5분)
@@ -2954,8 +2954,8 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             # 요청을 다시 폴링하거나 재개할 수 있다. 후보별 timeout과 전체 후보
             # 예산은 서버의 code_reviewer가 분리해서 집행한다.
             local review_http_code=""
-            local review_attempt=1
-            local review_max_attempts=1
+            local review_attempt=0
+            local review_max_attempts="${AADS_REVIEW_MAX_ATTEMPTS:-3}"
             local review_request_id
             review_request_id=$(cat /proc/sys/kernel/random/uuid)
             db_update "UPDATE pipeline_jobs SET review_request_id='${review_request_id}'::uuid, updated_at=NOW()
@@ -2968,12 +2968,29 @@ $(printf '%s\n' "$_dirty_status" | head -20)
                 --arg inst "$instruction" \
                 --arg files "$changed_files" \
                 '{request_id: $rid, job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
-            review_response=$(curl -4 -s --http1.1 -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff/requests" \
-                -H "Content-Type: application/json" \
-                -d "$review_body" \
-                --connect-timeout 10 --max-time 20 2>/dev/null) || true
-            review_http_code=$(echo "$review_response" | tail -1)
-            review_response=$(echo "$review_response" | sed '$d')
+            while [[ $review_attempt -lt $review_max_attempts ]]; do
+                review_attempt=$((review_attempt + 1))
+                review_response=$(curl -4 -s --http1.1 -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff/requests" \
+                    -H "Content-Type: application/json" \
+                    -d "$review_body" \
+                    --connect-timeout 10 --max-time 20 2>/dev/null) || true
+                review_http_code=$(echo "$review_response" | tail -1)
+                review_response=$(echo "$review_response" | sed '$d')
+                if [[ "$review_http_code" == "202" ]]; then
+                    if [[ $review_attempt -gt 1 ]]; then
+                        log "  AI_REVIEW_TRANSPORT_RECOVERED job=$job_id attempt=${review_attempt}/${review_max_attempts}"
+                    fi
+                    break
+                fi
+                log "  AI_REVIEW_TRANSPORT_FAIL job=$job_id attempt=${review_attempt}/${review_max_attempts} http=${review_http_code:-000}"
+                record_runner_event "$job_id" "ai_review_transport_fail" "running" "ai_review" "$job_model" "" "$job_size" "" "{\"attempt\":${review_attempt},\"max_attempts\":${review_max_attempts},\"http\":\"${review_http_code:-000}\"}"
+                if [[ "$(get_job_status "$job_id")" != "running" ]]; then
+                    log "  AI_REVIEW_ABORTED_TERMINAL job=$job_id attempt=${review_attempt}"
+                    _release_work_lock "$project" "$job_id" "$parallel_group"
+                    return 1
+                fi
+                sleep $((review_attempt * 2))
+            done
 
             local review_request_status=""
             if [[ "$review_http_code" == "202" ]]; then

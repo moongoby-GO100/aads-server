@@ -184,6 +184,11 @@ MAX_JOB_RUNTIME="${MAX_JOB_RUNTIME:-$MAX_RUNTIME}"  # CLI 상한보다 먼저 �
 AADS_REVIEW_MAX_TIME="${AADS_REVIEW_MAX_TIME:-95}"
 AADS_REVIEW_MAX_ATTEMPTS="${AADS_REVIEW_MAX_ATTEMPTS:-3}"
 AADS_REVIEW_MAX_RUNTIME="${AADS_REVIEW_MAX_RUNTIME:-$((AADS_REVIEW_MAX_TIME * AADS_REVIEW_MAX_ATTEMPTS + 120))}"
+# 최초 리뷰도 durable request를 먼저 저장한 뒤 상태를 폴링한다. 이 대기 예산은
+# 후보별 모델 timeout과 별개다. 서버의 async deadline(기본 500초)이 모든 DB
+# 후보를 소진할 시간을 갖도록 여유를 둔다.
+AADS_REVIEW_ASYNC_WAIT_SEC="${AADS_REVIEW_ASYNC_WAIT_SEC:-540}"
+AADS_REVIEW_POLL_INTERVAL="${AADS_REVIEW_POLL_INTERVAL:-3}"
 WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-300}"    # 5분마다 프로세스 생존 확인
 STUCK_CHECK_INTERVAL="${STUCK_CHECK_INTERVAL:-300}"  # 좀비/stuck 감지 주기 (초, 기본 5분)
 MIN_DISK_GB="${MIN_DISK_GB:-1}"                  # 최소 디스크 공간 (GB)
@@ -2944,52 +2949,81 @@ $(printf '%s\n' "$_dirty_status" | head -20)
                 --arg files "$changed_files" \
                 '{job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
 
-            # P0: 리뷰 API 전송 실패는 코드 품질 문제가 아니므로 즉시 fail-close하지 않고 재시도
+            # 최초 검수도 스위퍼와 같은 durable async 경로를 쓴다. 요청 ID를
+            # pipeline_jobs에 먼저 남기므로 슬롯 전환/응답 유실 뒤에도 같은 DB
+            # 요청을 다시 폴링하거나 재개할 수 있다. 후보별 timeout과 전체 후보
+            # 예산은 서버의 code_reviewer가 분리해서 집행한다.
             local review_http_code=""
             local review_attempt=0
             local review_max_attempts="${AADS_REVIEW_MAX_ATTEMPTS:-3}"
+            local review_request_id
+            review_request_id=$(cat /proc/sys/kernel/random/uuid)
+            db_update "UPDATE pipeline_jobs SET review_request_id='${review_request_id}'::uuid, updated_at=NOW()
+                       WHERE job_id='${job_id}' AND status='running';"
+            review_body=$(jq -n \
+                --arg rid "$review_request_id" \
+                --arg jid "$job_id" \
+                --arg proj "$project" \
+                --arg diff "$git_diff" \
+                --arg inst "$instruction" \
+                --arg files "$changed_files" \
+                '{request_id: $rid, job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
             while [[ $review_attempt -lt $review_max_attempts ]]; do
-                if [[ "$(get_job_status "$job_id")" != "running" ]]; then
-                    log "  AI_REVIEW_ABORTED_TERMINAL job=$job_id attempt=$((review_attempt + 1))"
-                    _release_work_lock "$project" "$job_id" "$parallel_group"
-                    return 1
-                fi
                 review_attempt=$((review_attempt + 1))
-                review_response=$(curl -4 -s --http1.1 -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
+                review_response=$(curl -4 -s --http1.1 -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff/requests" \
                     -H "Content-Type: application/json" \
                     -d "$review_body" \
-                    --connect-timeout 10 \
-                    --max-time "$AADS_REVIEW_MAX_TIME" 2>/dev/null) || true
-
-                if [[ "$(get_job_status "$job_id")" != "running" ]]; then
-                    log "  AI_REVIEW_ABORTED_TERMINAL job=$job_id attempt=${review_attempt}"
-                    _release_work_lock "$project" "$job_id" "$parallel_group"
-                    return 1
-                fi
-
+                    --connect-timeout 10 --max-time 20 2>/dev/null) || true
                 review_http_code=$(echo "$review_response" | tail -1)
                 review_response=$(echo "$review_response" | sed '$d')
-
-                if [[ "$review_http_code" == "200" && -n "$review_response" ]]; then
+                if [[ "$review_http_code" == "202" ]]; then
                     if [[ $review_attempt -gt 1 ]]; then
                         log "  AI_REVIEW_TRANSPORT_RECOVERED job=$job_id attempt=${review_attempt}/${review_max_attempts}"
                     fi
                     break
                 fi
-
                 log "  AI_REVIEW_TRANSPORT_FAIL job=$job_id attempt=${review_attempt}/${review_max_attempts} http=${review_http_code:-000}"
-                record_runner_event "$job_id" "ai_review_transport_fail" "running" "ai_review" "$job_model" "" "$job_size" "" "{\"attempt\":${review_attempt},\"http_code\":\"${review_http_code:-000}\"}"
-                if [[ $review_attempt -lt $review_max_attempts ]]; then
-                    sleep $((review_attempt * 15))
+                record_runner_event "$job_id" "ai_review_transport_fail" "running" "ai_review" "$job_model" "" "$job_size" "" "{\"attempt\":${review_attempt},\"max_attempts\":${review_max_attempts},\"http\":\"${review_http_code:-000}\"}"
+                if [[ "$(get_job_status "$job_id")" != "running" ]]; then
+                    log "  AI_REVIEW_ABORTED_TERMINAL job=$job_id attempt=${review_attempt}"
+                    _release_work_lock "$project" "$job_id" "$parallel_group"
+                    return 1
                 fi
+                sleep $((review_attempt * 2))
             done
 
-            if [[ "$review_http_code" == "200" ]] && [[ -n "$review_response" ]]; then
+            local review_request_status=""
+            if [[ "$review_http_code" == "202" ]]; then
+                local review_poll_deadline=$((SECONDS + AADS_REVIEW_ASYNC_WAIT_SEC))
+                while (( SECONDS < review_poll_deadline )); do
+                    if [[ "$(get_job_status "$job_id")" != "running" ]]; then
+                        log "  AI_REVIEW_ABORTED_TERMINAL job=$job_id request_id=${review_request_id}"
+                        _release_work_lock "$project" "$job_id" "$parallel_group"
+                        return 1
+                    fi
+                    review_response=$(curl -4 -s --http1.1 -w "\n%{http_code}" \
+                        "${AADS_API_URL}/api/v1/review/code-diff/requests/${review_request_id}" \
+                        --connect-timeout 5 --max-time 15 2>/dev/null) || true
+                    local review_poll_http_code
+                    review_poll_http_code=$(echo "$review_response" | tail -1)
+                    review_response=$(echo "$review_response" | sed '$d')
+                    if [[ "$review_poll_http_code" == "200" && -n "$review_response" ]]; then
+                        review_request_status=$(echo "$review_response" | jq -r '.status // empty' 2>/dev/null || true)
+                        if [[ "$review_request_status" == "completed" || "$review_request_status" == "failed" ]]; then
+                            review_http_code="$review_poll_http_code"
+                            break
+                        fi
+                    fi
+                    sleep "$AADS_REVIEW_POLL_INTERVAL"
+                done
+            fi
+
+            if [[ "$review_http_code" == "200" && "$review_request_status" == "completed" && -n "$review_response" ]]; then
                 review_verdict=$(echo "$review_response" | jq -r '.verdict // "APPROVE"')
                 review_score=$(echo "$review_response" | jq -r '.score // "1.0"')
                 review_flag_category=$(echo "$review_response" | jq -r '.flag_category // empty')
                 review_needs_retry=$(echo "$review_response" | jq -r '.needs_retry // false')
-                log "  AI_REVIEW_RESULT job=$job_id verdict=$review_verdict score=$review_score flag_category=${review_flag_category:-none} needs_retry=$review_needs_retry"
+                log "  AI_REVIEW_RESULT job=$job_id request_id=${review_request_id} verdict=$review_verdict score=$review_score flag_category=${review_flag_category:-none} needs_retry=$review_needs_retry"
 
                 if [[ "$review_verdict" == "REQUEST_CHANGES" ]]; then
                     local review_issues=""
@@ -3002,9 +3036,15 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             else
                 review_verdict="FLAG"
                 review_score="0.0"
+                # 후보 무응답은 서버가 모든 DB 후보를 실제로 소진한 뒤에만
+                # REVIEW_MODEL_NO_RESPONSE로 완료한다. 여기서는 durable 요청을
+                # 받지 못했거나 아직 완료하지 못한 전송/폴링 장애만 구분한다.
                 review_flag_category="REVIEW_API_UNAVAILABLE"
                 review_needs_retry="true"
-                log "  AI_REVIEW_HOLD job=$job_id (HTTP ${review_http_code:-timeout})"
+                if [[ "$review_http_code" == "202" && -n "$review_request_status" ]]; then
+                    review_flag_category="REVIEW_TIMEOUT"
+                fi
+                log "  AI_REVIEW_HOLD job=$job_id request_id=${review_request_id} status=${review_request_status:-unknown} http=${review_http_code:-000}"
             fi
         else
             review_verdict="FLAG"

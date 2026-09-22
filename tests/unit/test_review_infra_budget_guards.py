@@ -56,9 +56,9 @@ def _read(rel: str) -> str:
 
 
 def test_attempt_timeout_clears_measured_review_latency():
-    """25초는 실측 지연(opus 20.0s / haiku 25.5s)과 겹친다. 다시 내리지 마라."""
+    """운영 무응답 표본(최대 90초)을 넘겨 각 CLI 후보에 120초를 보장한다."""
     reviewer = _load_reviewer()
-    assert reviewer._REVIEW_LLM_TIMEOUT_SEC >= 45
+    assert reviewer._REVIEW_LLM_TIMEOUT_SEC >= 120
     assert reviewer._REVIEW_MIN_ATTEMPT_SEC <= reviewer._REVIEW_LLM_TIMEOUT_SEC
 
 
@@ -66,6 +66,7 @@ def test_async_path_gets_a_longer_deadline_than_the_proxy_bound_sync_path():
     """비동기 경로는 202+폴링이라 Cloudflare 마감에 묶이지 않는다."""
     reviewer = _load_reviewer()
     assert reviewer._REVIEW_ASYNC_DEADLINE_SEC > reviewer._REVIEW_TOTAL_DEADLINE_SEC
+    assert reviewer._REVIEW_ASYNC_DEADLINE_SEC >= reviewer._REVIEW_LLM_TIMEOUT_SEC * 4
 
 
 def test_async_review_request_passes_the_longer_deadline():
@@ -85,7 +86,7 @@ def test_first_runner_review_persists_and_polls_the_durable_request():
     poll = review_block.index('/api/v1/review/code-diff/requests/${review_request_id}')
 
     assert persist < enqueue < poll
-    assert 'AADS_REVIEW_ASYNC_WAIT_SEC="${AADS_REVIEW_ASYNC_WAIT_SEC:-270}"' in runner
+    assert 'AADS_REVIEW_ASYNC_WAIT_SEC="${AADS_REVIEW_ASYNC_WAIT_SEC:-540}"' in runner
     assert '"${AADS_API_URL}/api/v1/review/code-diff" \\' not in review_block
 
 
