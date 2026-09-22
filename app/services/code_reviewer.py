@@ -20,8 +20,6 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_REVIEW_MODEL = "codex:gpt-5.6-luna"
-_REVIEW_MODEL_FALLBACK = _REVIEW_MODEL  # DB 조회 실패 시에도 CLI 경로만 사용
 _REVIEW_PARSE_MAX_ATTEMPTS = 3  # P0: JSON 파싱 실패 시 즉시 REVIEW_PARSER_FAILURE 대신 재시도 후 폴백
 # DB에 여러 독립 리뷰 모델이 등록되어 있으면 앞쪽 모델 장애만으로 뒤쪽의 정상
 # 모델을 영구히 건너뛰지 않는다. 다만 잘못된 설정이 요청 시간을 무한히 늘리지
@@ -352,7 +350,6 @@ async def _get_review_models() -> list[str]:
     try:
         from app.core.db_pool import get_pool
         import json as _j
-        from app.services.model_registry import filter_executable_models
 
         pool = get_pool()
         candidates: list[str] = []
@@ -376,17 +373,24 @@ async def _get_review_models() -> list[str]:
                 continue
             seen.add(normalized)
             ordered.append(normalized)
-        filtered = await filter_executable_models(ordered)
-        return filtered or [_REVIEW_MODEL_FALLBACK]
+        # AI_REVIEW is an ordered, operator-owned failover contract.  The
+        # general executable registry is advisory and may be stale during a
+        # slot transition; filtering through it here previously removed later
+        # DB candidates before they could be tried.  Preserve every configured
+        # CLI candidate in its DB order instead.
+        return ordered
     except Exception as e:
         logger.warning("review_model_db_lookup_failed: %s", _sanitize_review_text(e, limit=80))
-        return [_REVIEW_MODEL_FALLBACK]
+        return []
 
 
 def _is_cli_review_model(model: str) -> bool:
     """Whether a configured review model is backed by Codex/Claude CLI."""
     normalized = str(model or "").strip().lower()
-    return normalized.startswith(("codex:gpt-", "claude:", "gpt-", "claude-"))
+    # Bare `gpt-*` identifiers can resolve to an API provider in the generic
+    # registry.  Reviews accept only explicit Codex or Claude CLI identifiers;
+    # the DB's legacy `claude-*` names are Claude CLI aliases.
+    return normalized.startswith(("codex:gpt-", "claude:", "claude-"))
 
 
 def _review_attempt_models(models: list[str], instruction: str) -> list[str]:
@@ -395,7 +399,7 @@ def _review_attempt_models(models: list[str], instruction: str) -> list[str]:
     for match in _EXCLUDED_REVIEW_MODELS_RE.finditer(instruction or ""):
         excluded.update(part.strip() for part in match.group(1).split(",") if part.strip())
 
-    candidates = models or [_REVIEW_MODEL_FALLBACK]
+    candidates = models
     ordered: list[str] = []
     seen: set[str] = set()
     for candidate in candidates:
@@ -955,7 +959,7 @@ async def review_code_diff(
     try:
         configured_models = await _get_review_models()
         review_models = _review_attempt_models(configured_models, instruction)
-        used_model = review_models[0] if review_models else _REVIEW_MODEL_FALLBACK
+        used_model = review_models[0] if review_models else "unconfigured"
 
         # 응답 실패와 JSON 파싱 실패는 같은 모델을 다시 부르지 않고 DB에 등록된
         # 다음 CLI 모델로 넘긴다. API/LiteLLM 경로는 리뷰에서 사용하지 않는다.
@@ -1052,6 +1056,11 @@ async def review_code_diff(
                 await asyncio.sleep(2 * attempt_no)
 
         if not result_text and parse_fail_count == 0:
+            no_response_category = (
+                "REVIEW_MODEL_NO_RESPONSE"
+                if attempt_evidence and len(attempt_evidence) == attempt_limit
+                else "REVIEW_MODEL_CONFIG_INVALID"
+            )
             logger.warning(f"code_reviewer_no_response: job_id={job_id}")
             verdict = _build_review_verdict(
                 verdict="FLAG",
@@ -1062,7 +1071,7 @@ async def review_code_diff(
                     "코드 품질을 검증하지 못했으므로 승인 대기로 넘기면 안 됩니다.",
                 ],
                 feedback={"attempt_evidence": attempt_evidence},
-                flag_category="REVIEW_MODEL_NO_RESPONSE",
+                flag_category=no_response_category,
                 failure_stage="review_llm",
                 needs_retry=True,
                 model_used=used_model,
@@ -1139,6 +1148,10 @@ async def review_code_diff(
         if verdict == "FLAG" and not failure_stage:
             failure_stage = "review_analysis"
 
+        # A successful fallback is evidence too: retain every preceding
+        # timeout/error and the final valid model in the durable code_reviews
+        # record so later review_hold recovery can make an informed exclusion.
+        details["attempt_evidence"] = attempt_evidence
         verdict_obj = _build_review_verdict(
             verdict=verdict,
             score=score,

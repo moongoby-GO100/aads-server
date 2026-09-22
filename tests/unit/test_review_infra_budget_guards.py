@@ -73,6 +73,42 @@ def test_async_review_request_passes_the_longer_deadline():
     assert "deadline_sec=_REVIEW_ASYNC_DEADLINE_SEC" in source
 
 
+def test_first_runner_review_persists_and_polls_the_durable_request():
+    """최초 리뷰도 동기 Cloudflare 요청이 아니라 durable 요청을 재사용한다."""
+    runner = _read("scripts/pipeline-runner.sh")
+    review_block = runner[runner.index('log "  AI_REVIEW job=$job_id"'):runner.index(
+        'db_update "UPDATE pipeline_jobs\n               SET review_verdict='
+    )]
+
+    persist = review_block.index("SET review_request_id='${review_request_id}'::uuid")
+    enqueue = review_block.index('/api/v1/review/code-diff/requests"')
+    poll = review_block.index('/api/v1/review/code-diff/requests/${review_request_id}')
+
+    assert persist < enqueue < poll
+    assert 'AADS_REVIEW_ASYNC_WAIT_SEC="${AADS_REVIEW_ASYNC_WAIT_SEC:-270}"' in runner
+    assert '"${AADS_API_URL}/api/v1/review/code-diff" \\' not in review_block
+
+
+def test_review_model_candidates_remain_db_ordered_without_registry_filtering():
+    source = _read("app/services/code_reviewer.py")
+    configured = source[source.index("async def _get_review_models"):source.index(
+        "def _is_cli_review_model"
+    )]
+
+    assert "SELECT models FROM runner_model_config WHERE size = 'AI_REVIEW'" in configured
+    assert "filter_executable_models" not in configured
+    assert "return ordered" in configured
+
+
+def test_successful_fallback_persists_every_model_attempt():
+    source = _read("app/services/code_reviewer.py")
+    verdict_build = source[source.index("# 가중 평균 계산"):source.index(
+        "await _save_review_result(", source.index("# 가중 평균 계산")
+    )]
+
+    assert 'details["attempt_evidence"] = attempt_evidence' in verdict_build
+
+
 def test_cli_review_models_use_the_configured_model_relay():
     asyncio.run(_cli_review_models_use_the_configured_model_relay())
 
@@ -123,6 +159,11 @@ async def _litellm_review_models_are_rejected():
         assert "not CLI-backed" in str(exc)
     else:
         raise AssertionError("LiteLLM review route must be rejected")
+
+
+def test_bare_gpt_review_model_is_rejected_without_codex_prefix():
+    reviewer = _load_reviewer()
+    assert reviewer._is_cli_review_model("gpt-5.6-luna") is False
 
 
 def test_remaining_budget_is_spent_instead_of_breaking_early():
