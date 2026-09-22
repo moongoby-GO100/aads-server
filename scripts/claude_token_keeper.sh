@@ -91,7 +91,13 @@ except Exception:
     print(-1); sys.exit()
 o = d.get('claudeAiOauth', d)
 exp = o.get('expiresAt', 0)
-print(int((exp/1000 - time.time()) / 60) if exp else -1)
+if not exp:
+    # expiresAt=0 은 두 가지다 — 읽지 못한 파일(-1)과 갱신이 토큰을 지워
+    # 버린 파일(-2). 2026-09-21 19:00 KST 사고는 이 둘을 -1 하나로 뭉갠
+    # 탓에 빈 파일이 '남은 수명이 늘었다'로 오인돼 확정됐다.
+    print(-2 if not (o.get('accessToken') and o.get('refreshToken')) else -1)
+    sys.exit()
+print(int((exp/1000 - time.time()) / 60))
 " 2>/dev/null || echo -1
 }
 
@@ -200,9 +206,14 @@ for slot in 1 2 3 4; do
     # 안전장치가 스스로 사고를 냈다. 갱신은 실패할 수 있다 — 실패해도
     # **있던 것을 잃지는 않아야 한다.**
     backup=""
-    if [ -s "$cred" ]; then
+    if [ -s "$cred" ] && ! _token_field_empty "$cred"; then
         backup="${cred}.bak"
         cp -p "$cred" "$backup" 2>/dev/null || backup=""
+    elif [ -s "${cred}.bak" ] && ! _token_field_empty "${cred}.bak"; then
+        # 현재 파일이 이미 비었으면 **지난 주기의 정상본**을 백업으로 삼는다.
+        # 2026-09-21: 빈 파일이 .bak 을 그대로 덮어써 마지막 정상본까지
+        # 사라졌고, 그래서 재로그인 외에 복구 경로가 없었다.
+        backup="${cred}.bak"
     fi
     # CLI 는 만료가 임박하면 refreshToken 으로 스스로 갱신한다. 한도 초과(429)로
     # 응답이 실패해도 갱신 자체는 일어나므로 결과 코드로 판단하지 않는다.
@@ -220,6 +231,25 @@ for slot in 1 2 3 4; do
         sleep 3
         after="$(remaining_min "$cred")"
         [[ "$after" == "-1" ]] || log "  (자격증명 파일 재읽기 성공: ${after}분)"
+    fi
+    # 남은 수명을 비교하기 **전에** 토큰이 아직 있는지부터 본다.
+    #
+    # 2026-09-21 19:00 KST slot2 사고. 갱신이 파일을 비웠는데 left=-9,
+    # after=-1 이라 `-1 > -9` 가 성립해 아래 성공 분기로 들어갔고, 그 뒤의
+    # 롤백 가드 두 곳이 실행되지 않아 refreshToken 이 영구 소실됐다.
+    # "수명이 늘었다"는 갱신 성공의 증거가 아니다. 토큰이 있어야 성공이다.
+    if _token_field_empty "$cred"; then
+        if [ -n "$backup" ] && [ -s "$backup" ] && ! _token_field_empty "$backup"; then
+            cp -p "$backup" "$cred" 2>/dev/null \
+                && log "  ↩ 갱신이 토큰을 지웠다 — 원본 복구 (refreshToken 보존)"
+            after="$(remaining_min "$cred")"
+            log "  ⚠️ 갱신 실패 (${left}분 → ${after}분) — 다음 주기에 다시 시도한다"
+        else
+            log "  ⛔ 갱신이 토큰을 지웠고 되돌릴 백업도 없다 — 재로그인 필요"
+        fi
+        ALERT="/root/aads/aads-server/scripts/send_disk_alert.sh"
+        [ -x "$ALERT" ] && "$ALERT" "Claude slot${slot} 자격증명이 비었다 — 재로그인 필요" >/dev/null 2>&1 || true
+        continue
     fi
     if [[ "$after" =~ ^-?[0-9]+$ ]] && [ "$after" -gt "$left" ]; then
         log "  갱신됨: ${left}분 → ${after}분"
