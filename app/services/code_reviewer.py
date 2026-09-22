@@ -1032,6 +1032,7 @@ async def review_code_diff(
         parse_fail_count = 0
         attempt_evidence: list[dict] = []
         attempt_limit = min(len(review_models), _REVIEW_MODEL_MAX_ATTEMPTS)
+        budget_exhausted = False
         _review_started_at = time.monotonic()
         for attempt_no in range(1, attempt_limit + 1):
             _elapsed = time.monotonic() - _review_started_at
@@ -1042,6 +1043,7 @@ async def review_code_diff(
             # 마감이 85초일 때 첫 시도가 실패하면 60초가 남아도 두 번째 모델을
             # 부르지 않고 끝나는 구간이 생겼다. 남은 만큼이라도 쓰는 편이 낫다.
             if _remaining < _REVIEW_MIN_ATTEMPT_SEC:
+                budget_exhausted = True
                 logger.warning(
                     "review_measurement label=review.budget.exhausted path=%s "
                     "stage=model_call outcome=deadline job_id=%s elapsed_ms=%s "
@@ -1156,6 +1158,11 @@ async def review_code_diff(
                 })
 
             if not result_text:
+                # 마지막 모델도 전체 마감까지 기다리다 끝날 수 있어 다음 루프의
+                # 사전 break를 거치지 않는다. 실패 직후에도 남은 예산을 확인해
+                # 실제 마감 소진은 일반 무응답과 구분한다.
+                if total_deadline - (time.monotonic() - _review_started_at) < _REVIEW_MIN_ATTEMPT_SEC:
+                    budget_exhausted = True
                 if attempt_evidence[-1]["outcome"] == "empty":
                     logger.warning(
                         "review_measurement label=review.model.empty path=%s "
@@ -1197,9 +1204,11 @@ async def review_code_diff(
 
         if not result_text and parse_fail_count == 0:
             no_response_category = (
-                "REVIEW_MODEL_NO_RESPONSE"
-                if attempt_evidence and len(attempt_evidence) == attempt_limit
-                else "REVIEW_MODEL_CONFIG_INVALID"
+                "REVIEW_MODEL_CONFIG_INVALID"
+                if attempt_limit == 0
+                else "REVIEW_TIMEOUT"
+                if budget_exhausted
+                else "REVIEW_MODEL_NO_RESPONSE"
             )
             logger.warning(f"code_reviewer_no_response: job_id={job_id}")
             verdict = _build_review_verdict(
@@ -1222,6 +1231,8 @@ async def review_code_diff(
                     label=(
                         "review.complete.no_response"
                         if no_response_category == "REVIEW_MODEL_NO_RESPONSE"
+                        else "review.complete.timeout"
+                        if no_response_category == "REVIEW_TIMEOUT"
                         else "review.complete.config_invalid"
                     ),
                     path=review_path,

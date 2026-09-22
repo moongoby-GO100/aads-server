@@ -121,6 +121,7 @@ def test_review_attempts_have_stable_measurement_labels_and_timings():
         "review.model.valid",
         "review.budget.exhausted",
         "review.complete.no_response",
+        "review.complete.timeout",
         "review.complete.config_invalid",
     ):
         assert label in source

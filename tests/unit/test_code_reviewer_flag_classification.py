@@ -147,6 +147,105 @@ async def _review_code_diff_holds_when_review_models_return_no_response():
     mock_save.assert_awaited_once()
 
 
+def test_review_code_diff_marks_empty_model_configuration_invalid():
+    asyncio.run(_review_code_diff_marks_empty_model_configuration_invalid())
+
+
+async def _review_code_diff_marks_empty_model_configuration_invalid():
+    reviewer = _load_reviewer()
+
+    with patch.object(
+        reviewer, "_get_review_models", new=AsyncMock(return_value=[]),
+    ), patch.object(
+        reviewer, "_call_review_model", new=AsyncMock(),
+    ) as call_model, patch.object(
+        reviewer, "_save_review_result", new=AsyncMock(),
+    ) as mock_save:
+        verdict = await reviewer.review_code_diff(
+            project="AADS",
+            job_id="runner-test-empty-review-models",
+            diff="diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n a = 1\n+b = 2\n",
+            instruction="테스트",
+            files_changed=["a.py"],
+        )
+
+    assert verdict.flag_category == "REVIEW_MODEL_CONFIG_INVALID"
+    assert verdict.feedback["measurement"]["measurement_label"] == "review.complete.config_invalid"
+    call_model.assert_not_awaited()
+    mock_save.assert_awaited_once()
+
+
+def test_review_code_diff_marks_early_budget_break_timeout():
+    asyncio.run(_review_code_diff_marks_early_budget_break_timeout())
+
+
+async def _review_code_diff_marks_early_budget_break_timeout():
+    reviewer = _load_reviewer()
+
+    async def slow_empty_response(**_kwargs):
+        await asyncio.sleep(10)
+
+    call_model = AsyncMock(side_effect=slow_empty_response)
+    with patch.object(reviewer, "_REVIEW_LLM_TIMEOUT_SEC", 1), patch.object(
+        reviewer, "_REVIEW_MIN_ATTEMPT_SEC", 0.2,
+    ), patch.object(
+        reviewer, "_get_review_models", new=AsyncMock(return_value=["codex:gpt-slow", "codex:gpt-unused"]),
+    ), patch.object(
+        reviewer, "_call_review_model", new=call_model,
+    ), patch.object(
+        reviewer, "_save_review_result", new=AsyncMock(),
+    ) as mock_save:
+        verdict = await reviewer.review_code_diff(
+            project="AADS",
+            job_id="runner-test-budget-break",
+            diff="diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n a = 1\n+b = 2\n",
+            instruction="테스트",
+            files_changed=["a.py"],
+            deadline_sec=1,
+        )
+
+    assert verdict.flag_category == "REVIEW_TIMEOUT"
+    assert verdict.feedback["measurement"]["measurement_label"] == "review.complete.timeout"
+    assert call_model.await_count == 1
+    mock_save.assert_awaited_once()
+
+
+def test_review_code_diff_marks_final_attempt_deadline_timeout():
+    asyncio.run(_review_code_diff_marks_final_attempt_deadline_timeout())
+
+
+async def _review_code_diff_marks_final_attempt_deadline_timeout():
+    """마지막 시도가 마감을 소진해도 다음 루프 없이 TIMEOUT으로 닫는다."""
+    reviewer = _load_reviewer()
+
+    async def slow_empty_response(**_kwargs):
+        await asyncio.sleep(10)
+
+    call_model = AsyncMock(side_effect=slow_empty_response)
+    with patch.object(reviewer, "_REVIEW_LLM_TIMEOUT_SEC", 1), patch.object(
+        reviewer, "_REVIEW_MIN_ATTEMPT_SEC", 0.2,
+    ), patch.object(
+        reviewer, "_get_review_models", new=AsyncMock(return_value=["codex:gpt-slow"]),
+    ), patch.object(
+        reviewer, "_call_review_model", new=call_model,
+    ), patch.object(
+        reviewer, "_save_review_result", new=AsyncMock(),
+    ) as mock_save:
+        verdict = await reviewer.review_code_diff(
+            project="AADS",
+            job_id="runner-test-final-attempt-deadline",
+            diff="diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n a = 1\n+b = 2\n",
+            instruction="테스트",
+            files_changed=["a.py"],
+            deadline_sec=1,
+        )
+
+    assert verdict.flag_category == "REVIEW_TIMEOUT"
+    assert verdict.feedback["measurement"]["measurement_label"] == "review.complete.timeout"
+    call_model.assert_awaited_once()
+    mock_save.assert_awaited_once()
+
+
 def test_review_code_diff_holds_when_review_response_is_unparseable():
     asyncio.run(_review_code_diff_holds_when_review_response_is_unparseable())
 
