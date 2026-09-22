@@ -16,6 +16,8 @@ import json
 import logging
 import os
 import datetime as _dt
+from pathlib import Path
+import re
 import shlex
 import time
 import uuid
@@ -832,7 +834,9 @@ class PipelineCJob:
             )
 
             # AADS-1864: 검증 체크리스트 자동 삽입
-            enriched_instruction = _append_verification_checklist(self.instruction, self.project)
+            enriched_instruction = _append_verification_checklist(
+                _run_analyze_gate(self.instruction, self.project), self.project,
+            )
             # 보존 정책 컴파일 결과를 실행 전 증거로 기록 (비치명적)
             await self._trace_task_policy()
 
@@ -2438,6 +2442,78 @@ _VERIFICATION_CHECKLIST_TEMPLATE = """
 
 RESULT 파일에 위 체크리스트 항목별 실행 결과를 반드시 포함하세요.
 """
+
+
+_SPEC_DIR_PATH_PATTERN = re.compile(
+    r"docs/specs/(?P<project>[a-z0-9]+(?:-[a-z0-9]+)*)/"
+    r"(?P<slice>[a-z0-9]+(?:-[a-z0-9]+)*)"
+)
+_SPEC_SLICE_ID_PATTERN = re.compile(
+    r"(?<![a-z0-9-])(?P<project>[a-z0-9]+-v\d+)-"
+    r"(?P<slice>[a-z0-9]+(?:-[a-z0-9]+)*)(?![a-z0-9-])"
+)
+_ANALYZE_GATE_HEADER = "## ANALYZE GATE 결과 (자동 교차검사, 읽기전용 — AADS-analyze-gate)"
+_ANALYZE_GATE_STOP_MESSAGE = (
+    "**이 작업은 구현에 착수하지 마라.** 코드/DB/배포를 변경하지 말고 위 목록을 RESULT에 "
+    "그대로 옮겨 CEO 결정을 요청하는 보고만 작성하라."
+)
+
+
+def _find_referenced_spec_dirs(instruction: str) -> list[str]:
+    """지시서의 정본 경로 또는 슬라이스 ID를 정규화된 spec 디렉토리로 찾는다."""
+    referenced_dirs = {
+        f"docs/specs/{match.group('project')}/{match.group('slice')}"
+        for match in _SPEC_DIR_PATH_PATTERN.finditer(instruction)
+    }
+    referenced_dirs.update(
+        f"docs/specs/{match.group('project')}/{match.group('slice')}"
+        for match in _SPEC_SLICE_ID_PATTERN.finditer(instruction)
+    )
+    return sorted(referenced_dirs)
+
+
+def _run_analyze_gate(instruction: str, project: str) -> str:
+    """정본 spec/plan/tasks의 미해결 사항을 읽기 전용으로 지시서에 보강한다."""
+    if os.getenv("AADS_ANALYZE_GATE_ENABLED") == "0":
+        return instruction
+
+    referenced_dirs = _find_referenced_spec_dirs(instruction)
+    if not referenced_dirs:
+        return instruction
+
+    # project는 기존 러너 호출 계약을 유지한다. 정본은 이 서비스와 함께 배포된 저장소에서만 읽는다.
+    del project
+    repository_root = Path(__file__).resolve().parents[2]
+    findings: list[str] = []
+    for relative_dir in referenced_dirs:
+        slice_dir = repository_root / relative_dir
+        documents: dict[str, str] = {}
+        for filename in ("spec.md", "plan.md", "tasks.md"):
+            document_path = slice_dir / filename
+            try:
+                documents[filename] = document_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                findings.append(f"{relative_dir}: {filename} 없음 — 정본화 없이 구현 착수 위험")
+            except (OSError, UnicodeError):
+                findings.append(f"{relative_dir}: {filename} 읽기 실패")
+
+        spec = documents.get("spec.md", "")
+        plan = documents.get("plan.md", "")
+        tasks = documents.get("tasks.md", "")
+        if "⚠️" in spec:
+            findings.append(f"{relative_dir}: 미해결 충돌 표시 발견 — CEO/PM 결정 전 구현 금지")
+        if plan and "충돌" in plan and "없음(단일 소유 확인됨)" not in plan:
+            findings.append(f"{relative_dir}: 소유권 미확정 기재")
+        if "- [ ] ⚠️ 소유권 충돌 해결" in tasks:
+            findings.append(f"{relative_dir}: 미해결 선행 작업 존재")
+
+    if not findings:
+        return instruction
+
+    gate_result = "\n".join(f"- {finding}" for finding in findings)
+    if any("구현 금지" in finding or "위험" in finding for finding in findings):
+        gate_result = f"{gate_result}\n\n{_ANALYZE_GATE_STOP_MESSAGE}"
+    return f"{instruction.rstrip()}\n\n{_ANALYZE_GATE_HEADER}\n{gate_result}\n"
 
 
 def _append_verification_checklist(instruction: str, project: str) -> str:
