@@ -2490,6 +2490,7 @@ _ANALYZE_GATE_STOP_MESSAGE = (
     "**이 작업은 구현에 착수하지 마라.** 코드/DB/배포를 변경하지 말고 위 목록을 RESULT에 "
     "그대로 옮겨 CEO 결정을 요청하는 보고만 작성하라."
 )
+_OWNER_RESOLVED_STATUS = "정본 확정(PRD 6절 소유 메뉴와 일치)"
 
 
 def _find_referenced_spec_dirs(instruction: str) -> list[str]:
@@ -2509,6 +2510,51 @@ def _spec_version(document: str) -> str | None:
     """문서 최상단의 정본 버전을 읽는다. 본문 내 주석은 메타데이터가 아니다."""
     match = _SPEC_VERSION_PATTERN.match(document)
     return match.group("version") if match else None
+
+
+def _unresolved_owner_slices(instruction: str, project: str) -> list[dict[str, str]]:
+    """Return referenced roadmap slices that have not completed converge.
+
+    A roadmap is the machine-enforced boundary for this gate.  Repositories
+    without a ``roadmap.md`` keep the existing analyze-gate behaviour, while a
+    referenced slice in a roadmap-driven spec set fails closed when the row is
+    missing or its status is not ``owner_resolved``.
+    """
+    if os.getenv("AADS_OWNER_RESOLVED_GATE_ENABLED") == "0":
+        return []
+
+    del project  # The canonical spec copy is deployed with this service.
+    repository_root = Path(__file__).resolve().parents[2]
+    unresolved: list[dict[str, str]] = []
+    for relative_dir in _find_referenced_spec_dirs(instruction):
+        parts = Path(relative_dir).parts
+        if len(parts) != 4:
+            continue
+        spec_project, slice_name = parts[2], parts[3]
+        roadmap_path = repository_root / "docs/specs" / spec_project / "roadmap.md"
+        if not roadmap_path.is_file():
+            continue
+
+        slice_id = f"{spec_project}-{slice_name}"
+        status = ""
+        try:
+            for line in roadmap_path.read_text(encoding="utf-8").splitlines():
+                if not line.lstrip().startswith("|"):
+                    continue
+                cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+                if len(cells) >= 5 and cells[0].strip("`") == slice_id:
+                    status = cells[4]
+                    break
+        except (OSError, UnicodeError):
+            status = "roadmap_read_error"
+
+        if status != _OWNER_RESOLVED_STATUS:
+            unresolved.append({
+                "spec_dir": relative_dir,
+                "slice_id": slice_id,
+                "status": status or "roadmap_row_missing",
+            })
+    return unresolved
 
 
 def _run_analyze_gate(instruction: str, project: str) -> str:

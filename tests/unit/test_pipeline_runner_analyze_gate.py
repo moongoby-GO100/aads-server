@@ -4,6 +4,9 @@ import pytest
 
 from app.services import pipeline_runner_service
 from app.services.pipeline_runner_service import _run_analyze_gate
+from app.services.pipeline_runner_service import _unresolved_owner_slices
+from app.api.pipeline_runner import _enforce_owner_resolved_gate
+from fastapi import HTTPException
 
 
 @pytest.fixture
@@ -119,3 +122,36 @@ def test_analyze_gate_reports_missing_version_metadata_without_stop(monkeypatch,
 
     assert "버전 메타데이터 없음" in result
     assert "이 작업은 구현에 착수하지 마라" not in result
+
+
+def test_owner_resolved_gate_rejects_unconverged_real_slice(monkeypatch):
+    monkeypatch.delenv("AADS_OWNER_RESOLVED_GATE_ENABLED", raising=False)
+    instruction = "docs/specs/obys-v4/receipt-upload 정본에 따라 구현한다."
+
+    unresolved = _unresolved_owner_slices(instruction, "AADS")
+
+    assert unresolved == [{
+        "spec_dir": "docs/specs/obys-v4/receipt-upload",
+        "slice_id": "obys-v4-receipt-upload",
+        "status": "충돌 — 2개 이상 정본 메뉴가 동일 화면 참조, 소유권 재결정 필요",
+    }]
+    with pytest.raises(HTTPException) as exc_info:
+        _enforce_owner_resolved_gate(instruction, "AADS")
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "owner_resolution_required"
+
+
+def test_owner_resolved_gate_allows_converged_real_slice(monkeypatch):
+    monkeypatch.delenv("AADS_OWNER_RESOLVED_GATE_ENABLED", raising=False)
+    instruction = "docs/specs/obys-v4/vat-ledger 정본에 따라 구현한다."
+
+    assert _unresolved_owner_slices(instruction, "AADS") == []
+    _enforce_owner_resolved_gate(instruction, "AADS")
+
+
+def test_owner_resolved_gate_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("AADS_OWNER_RESOLVED_GATE_ENABLED", "0")
+    instruction = "docs/specs/obys-v4/receipt-upload 정본에 따라 구현한다."
+
+    assert _unresolved_owner_slices(instruction, "AADS") == []
+    _enforce_owner_resolved_gate(instruction, "AADS")

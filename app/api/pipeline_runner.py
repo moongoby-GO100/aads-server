@@ -1239,12 +1239,36 @@ async def _persist_job_goal_context(
         logger.debug("pipeline_runner.goal_context_persist_skipped", job_id=job_id, error=str(exc))
 
 
+def _enforce_owner_resolved_gate(instruction: str, project: str) -> None:
+    """Reject implementation submission before a roadmap slice has converged."""
+    from app.services.pipeline_runner_service import _unresolved_owner_slices
+
+    unresolved = _unresolved_owner_slices(instruction, project)
+    if not unresolved:
+        return
+    summary = ", ".join(
+        f"{item['slice_id']}={item['status']}" for item in unresolved
+    )
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "owner_resolution_required",
+            "message": (
+                "analyze/converge가 끝나지 않은 정본 슬라이스는 구현 러너에 제출할 수 없습니다: "
+                f"{summary}"
+            ),
+            "unresolved": unresolved,
+        },
+    )
+
+
 @router.post("/pipeline/jobs", response_model=JobSubmitResponse, tags=["pipeline-runner"])
 async def submit_job(
     req: JobSubmitRequest,
     context: TenantContext = Depends(require_tenant_member),
 ):
     """작업 제출 — 같은 프로젝트에 running 작업이 있으면 queued 대기, 없으면 즉시 running."""
+    _enforce_owner_resolved_gate(req.instruction, req.project)
     from app.core.db_pool import get_pool
     pool = get_pool()
 
@@ -2874,6 +2898,8 @@ async def submit_batch(
     pool = get_pool()
 
     _validate_batch_dependency_graph(req.jobs)
+    for item in req.jobs:
+        _enforce_owner_resolved_gate(item.instruction, req.project)
 
     # 자동 parallel_group 생성 (미지정 시)
     pg = req.parallel_group or f"batch-{uuid.uuid4().hex[:8]}"
