@@ -191,14 +191,26 @@ async def _tenant_isolation_audit(
     }
 
 
-async def _user_rows(conn, days: int, limit: int) -> list[dict[str, Any]]:
+async def _user_rows(
+    conn,
+    days: int,
+    *,
+    q: str | None,
+    role: str | None,
+    status: str | None,
+    active_only: bool,
+    page: int,
+    page_size: int,
+    sort: str,
+    order: str,
+) -> tuple[list[dict[str, Any]], int]:
     required = (
         await _table_exists(conn, "saas_users")
         and await _table_exists(conn, "tenant_memberships")
         and await _table_exists(conn, "tenants")
     )
     if not required:
-        return []
+        return [], 0
 
     user_columns = await _columns(conn, "saas_users")
     deleted_filter = "u.deleted_at IS NULL" if "deleted_at" in user_columns else "TRUE"
@@ -208,8 +220,41 @@ async def _user_rows(conn, days: int, limit: int) -> list[dict[str, Any]]:
         else "'active'"
     )
     plan_expr = "COALESCE(u.plan, '')" if "plan" in user_columns else "''"
+    username_expr = "COALESCE(u.username, '')" if "username" in user_columns else "''"
 
-    session_usage_cte = "SELECT NULL::text AS user_id, NULL::uuid AS tenant_id, 0::bigint AS sessions, 0::bigint AS messages, 0::bigint AS tokens, 0::numeric AS cost_usd, NULL::timestamptz AS last_seen_at WHERE FALSE"
+    filters = ["TRUE"]
+    if active_only:
+        filters.extend((
+            deleted_filter,
+            "COALESCE(u.email, '') !~* '(e2e|test|qa|codex|legacy)'",
+        ))
+    filters.extend((
+        f"($2::text IS NULL OR COALESCE(u.email, '') ILIKE $2 OR COALESCE(u.name, '') ILIKE $2 OR {username_expr} ILIKE $2)",
+        "($3::text IS NULL OR COALESCE(u.role, 'user') = $3)",
+        f"($4::text IS NULL OR {status_expr} = $4)",
+    ))
+    where_clause = " AND ".join(filters)
+    search = f"%{q.strip()}%" if q and q.strip() else None
+
+    sort_columns = {
+        "email": "COALESCE(u.email, '')",
+        "name": "COALESCE(u.name, '')",
+        "username": f"MAX({username_expr})",
+        "role": "COALESCE(u.role, 'user')",
+        "status": status_expr,
+        "created_at": "u.created_at",
+        "updated_at": "u.updated_at",
+        "last_seen_at": "MAX(su.last_seen_at)",
+        "sessions_30d": "COALESCE(SUM(su.sessions), 0)",
+        "messages_30d": "COALESCE(SUM(su.messages), 0)",
+        "tokens_30d": "COALESCE(SUM(su.tokens), 0)",
+        "cost_30d": "COALESCE(SUM(su.cost_usd), 0)",
+    }
+    order_column = sort_columns.get(sort, sort_columns["last_seen_at"])
+    order_direction = "ASC" if order.lower() == "asc" else "DESC"
+    offset = (page - 1) * page_size
+
+    session_usage_cte = "SELECT NULL::text AS user_id, NULL::uuid AS tenant_id, 0::bigint AS sessions, 0::bigint AS messages, 0::bigint AS tokens, 0::numeric AS cost_usd, NULL::timestamptz AS last_seen_at WHERE FALSE AND $1::int IS NOT NULL"
     if await _table_exists(conn, "chat_sessions") and await _table_exists(conn, "chat_messages"):
         session_columns = await _columns(conn, "chat_sessions")
         message_columns = await _columns(conn, "chat_messages")
@@ -268,13 +313,31 @@ async def _user_rows(conn, days: int, limit: int) -> list[dict[str, Any]]:
         LEFT JOIN session_usage su
           ON su.user_id = u.id
           OR su.tenant_id = tm.tenant_id
-        WHERE {deleted_filter}
+        WHERE {where_clause}
         GROUP BY u.id, u.email, u.name, u.role, {status_expr}, {plan_expr}, dt.name, u.created_at, u.updated_at
-        ORDER BY MAX(su.last_seen_at) DESC NULLS LAST, u.created_at DESC NULLS LAST
-        LIMIT $2
+        ORDER BY {order_column} {order_direction} NULLS LAST, u.created_at DESC NULLS LAST
+        LIMIT $5 OFFSET $6
         """,
         days,
-        limit,
+        search,
+        role,
+        status,
+        page_size,
+        offset,
+    )
+
+    count_where_clause = where_clause.replace("$2", "$1").replace("$3", "$2").replace("$4", "$3")
+    total = _int(
+        await conn.fetchval(
+            f"""
+            SELECT COUNT(*)::int
+            FROM saas_users u
+            WHERE {count_where_clause}
+            """,
+            search,
+            role,
+            status,
+        )
     )
 
     return [
@@ -296,18 +359,27 @@ async def _user_rows(conn, days: int, limit: int) -> list[dict[str, Any]]:
             "last_seen_at": _iso(row["last_seen_at"]),
         }
         for row in rows
-    ]
+    ], total
 
 
 @router.get("/admin/users/overview")
 async def get_admin_users_overview(
     days: int = Query(30, ge=1, le=365),
-    limit: int = Query(80, ge=1, le=300),
+    limit: int | None = Query(None, ge=1, le=300, description="Deprecated alias for page_size"),
+    q: str | None = Query(None, max_length=200),
+    role: str | None = Query(None, max_length=100),
+    status: str | None = Query(None, max_length=100),
+    active_only: bool = Query(True),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(30, ge=1, le=100),
+    sort: str = Query("last_seen_at", max_length=50),
+    order: str = Query("desc", pattern="^(?i:asc|desc)$"),
 ) -> dict[str, Any]:
     """Return signup, tenant, membership, and usage metrics for admin users page."""
     from app.core.db_pool import get_pool
 
     now = datetime.now(ZoneInfo("Asia/Seoul"))
+    effective_page_size = min(limit, 100) if limit is not None else page_size
     pool = get_pool()
     async with pool.acquire() as conn:
         tables = {
@@ -341,6 +413,7 @@ async def get_admin_users_overview(
                 "membership_roles": [],
                 "tenants": [],
                 "users": [],
+                "pagination": {"total": 0, "page": page, "page_size": effective_page_size},
                 "daily": [],
                 "tenant_isolation": {
                     "chat_sessions_tenant_id_null": 0,
@@ -462,7 +535,7 @@ async def get_admin_users_overview(
                 ORDER BY active_members DESC, t.created_at DESC NULLS LAST
                 LIMIT $1
                 """,
-                limit,
+                effective_page_size,
             )
             tenants = [
                 {
@@ -500,7 +573,18 @@ async def get_admin_users_overview(
             """
         )
 
-        users = await _user_rows(conn, days, limit)
+        users, total_users = await _user_rows(
+            conn,
+            days,
+            q=q,
+            role=role,
+            status=status,
+            active_only=active_only,
+            page=page,
+            page_size=effective_page_size,
+            sort=sort,
+            order=order,
+        )
         tenant_isolation = await _tenant_isolation_audit(
             conn,
             user_columns=user_columns,
@@ -543,6 +627,7 @@ async def get_admin_users_overview(
         "membership_roles": membership_roles,
         "tenants": tenants,
         "users": users,
+        "pagination": {"total": total_users, "page": page, "page_size": effective_page_size},
         "daily": [{"day": row["day"], "signups": _int(row["signups"])} for row in daily_rows],
         "tenant_isolation": tenant_isolation,
     }
