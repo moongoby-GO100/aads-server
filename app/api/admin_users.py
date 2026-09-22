@@ -11,6 +11,15 @@ from app.auth import require_internal_admin
 
 router = APIRouter(dependencies=[Depends(require_internal_admin)])
 
+# Keep synthetic accounts out of the default operations view.  example.com is
+# an IANA-reserved test domain; Korean labels cover generated employee fixtures
+# whose email local part does not contain the English test markers.
+TEST_ACCOUNT_EXCLUSION_SQL = " AND ".join((
+    "COALESCE(u.email, '') !~* '(e2e|test|qa|codex|legacy|smoke)'",
+    "COALESCE(u.email, '') !~* '@example[.]com$'",
+    "COALESCE(u.name, '') !~* '(테스트|검증|스모크)'",
+))
+
 
 def _iso(value: Any) -> str | None:
     return value.isoformat() if value else None
@@ -226,7 +235,7 @@ async def _user_rows(
     if active_only:
         filters.extend((
             deleted_filter,
-            "COALESCE(u.email, '') !~* '(e2e|test|qa|codex|legacy)'",
+            TEST_ACCOUNT_EXCLUSION_SQL,
         ))
     filters.extend((
         f"($2::text IS NULL OR COALESCE(u.email, '') ILIKE $2 OR COALESCE(u.name, '') ILIKE $2 OR {username_expr} ILIKE $2)",
