@@ -344,6 +344,7 @@ services:
       - /root/aads/aads-server/migrations:/app/migrations:rw
       - /root/aads/aads-server/scripts:/app/scripts:rw
       - /root/aads/aads-server/browser-bridge-state:/app/browser-bridge-state:rw
+      - /root/.ssh:/root/.ssh:ro
     command: ["uvicorn", "app.yeoljeong_main:app", "--host", "0.0.0.0", "--port", "8080"]
     extra_hosts:
       - "host.docker.internal:host-gateway"

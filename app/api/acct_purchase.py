@@ -125,6 +125,7 @@ _DEFAULT_OBYS_ACCT_COMPANY_MAP = {
     "biz-mia": (8, 8),
     "biz-sungshin": (9, 9),
     "biz-eonni-naengmyeon": (10, 10),
+    "biz-lylon-e2e": (11, 11),
 }
 
 
@@ -243,8 +244,8 @@ def _journal_line_totals(lines: List[Dict[str, Any]]) -> tuple[float, float]:
             elif side == "credit":
                 credit += float(amount or 0)
             else:
-                debit += float(line.get("debit_amount") or 0)
-                credit += float(line.get("credit_amount") or 0)
+                debit += float(line.get("debit_amount") or line.get("debit") or 0)
+                credit += float(line.get("credit_amount") or line.get("credit") or 0)
         except (TypeError, ValueError):
             continue
     return debit, credit

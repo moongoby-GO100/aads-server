@@ -3,7 +3,7 @@
 - 문서 ID: `AADS-OBYS-V4-1-FINAL-20260922`
 - 제품 버전: V4.1
 - 목업: `/static/apps/obys/mockup-v4-1.html`
-- 상태: DB 연동 구현 기준 · 2026-09-22 반영
+- 상태: 운영 오비서 정식 진입 통합 · DB 연동 구현 기준 · 2026-09-22 반영
 
 ## 1. 목적과 사용자
 
@@ -170,7 +170,7 @@ tenant `d1695f15-6b68-4929-bc8d-646827363ff9`(ACCT tenant id 11).
 | `hr-docs` | `GET /yeoljeong-finance/contracts` | `obys.yeoljeong_contracts` | 0건(전체 29건) | 차단(403) |
 | `tax-evidence` | `GET /yeoljeong-finance/integration-evidence` | obys 증빙 파일 저장소 | 0건 | 차단(403) |
 | `tax-gap` | `GET /yeoljeong-finance/uploaded-ledger?category=purchase` | `obys.yeoljeong_uploaded_ledger_rows` | 3건 | 실데이터 |
-| `journals` | `GET /yeoljeong-finance/journals` | `obys.yeoljeong_journal_vouchers` | 2건 | 실데이터 |
+| `journals` | `GET /workspaces/{businessId}/journals/*` | 진아서버 `acct.journal_entry` + `journal_line` | 13,623건 | 실데이터 |
 | `tax-returns` | `GET /yeoljeong-accounting/tax-reports` | `obys.yeoljeong_tax_reports` | 0건 | 차단(403) |
 | `approvals` | `GET /yeoljeong-ops/approvals` | `obys.yeoljeong_approvals` | 0건 | 차단(403) |
 | `audit-history` | `GET /yeoljeong-ops/audit-logs` | `obys.yeoljeong_audit_logs` | 0건 | 차단(403) |
@@ -186,7 +186,10 @@ tenant `d1695f15-6b68-4929-bc8d-646827363ff9`(ACCT tenant id 11).
 | `tax-connect` | 없음 | 세무 연동 상태 저장소 미정 | — | 미연동 |
 | `access-log` | `GET /yeoljeong-ops/audit-logs` | `obys.yeoljeong_audit_logs` | 0건 | 차단(403) |
 
-합계 36개 = 실데이터 6 · 0건 2 · 차단(403) 18 · 미연동 10.
+위 표의 레거시 API 상태는 V4.1 전환 착수 당시의 기준선이다. V4.1 운영 화면은
+`/api/v1/workspaces` 어댑터를 사용하며, `journals`는 라일론 사업자 매핑을 거쳐
+진아서버 ACCT 정본을 직접 읽는다. 나머지 메뉴는 각 행의 정본이 없는 경우 샘플로
+대체하지 않고 0건 또는 미연동으로 표시한다.
 
 `차단(403)` 은 `app/core/obys_tenant.py` 의 레거시 허용목록(`15055cac-…` 1개) 때문이다.
 라일론 테넌트는 허용목록에 없고, 목록에 없는 테넌트가 통과할 수 있는 경로는
@@ -271,3 +274,30 @@ V4.1은 더 이상 화면 안의 샘플 배열을 데이터로 사용하지 않�
 - 상세 원문의 토큰·비밀번호·API 키·사업자번호·이메일·전화·비마스킹 계좌번호는 서버 응답 단계에서 마스킹해야 한다.
 - 업로드 미리보기는 DB를 변경하지 않고, 확정 버튼을 눌렀을 때만 저장해야 한다.
 - 다른 테넌트가 `biz-lylon-e2e`를 직접 요청하면 404로 차단되어야 한다.
+
+실측 기준값(2026-09-22 14:34 KST)은 ACCT tenant/company `11/11`, 전표
+13,623건, 전표라인 27,416건, 원천파일 604개, 차변·대변 불균형 전표 0건,
+전표기간 2026-01-01~2026-08-24다. 이 값은 화면의 전표관리 원천이 테스트 원장
+2건으로 되돌아가지 않았는지 확인하는 배포 검증 기준이며, 화면 필터에 따라 표시
+건수는 달라질 수 있다.
+
+## 13. 운영 오비서 통합 계약
+
+V4.1은 별도 검토 링크가 아니라 인증 후 오비서의 기본 업무 화면이다. 기존
+`index.html`은 로그인·회원가입·초대·계약 링크 처리를 계속 소유하고, 유효한 인증
+토큰이 확인되면 `mockup-v4-1.html#home`으로 전환한다. 로그인 성공 뒤에도 같은
+전환을 수행한다.
+
+- `?legacy=1`은 장애 복구와 아직 V4.1에 옮기지 않은 기존 관리 기능을 위한 명시적
+  롤백 진입점이다.
+- 레시피 redirect, 직원 가입·초대, 계약서 딥링크는 기존 흐름을 우선하고 V4.1로
+  강제 전환하지 않는다.
+- V4.1에서 여러 사업자를 조회할 수 있으면 사업자 선택기를 노출하며, 선택값은
+  `business_id`로 API에 전달되고 서버가 JWT tenant 소유권을 다시 검증한다.
+- 세션이 만료되면 입력·필터 화면을 막다른 오류로 끝내지 않고 다시 로그인 및
+  재시도 버튼을 표시한다.
+- 로그아웃은 서버 세션 종료를 시도한 뒤 브라우저 토큰·쿠키를 제거하고 기존 로그인
+  화면으로 돌아간다.
+
+운영 통합 완료 판정은 `index.html 로그인 → V4.1 자동 진입 → 사업자 선택 → 라일론
+DB 조회 → 건별 상세 → 로그아웃/재로그인 복구`를 데스크톱과 모바일에서 확인한 때다.

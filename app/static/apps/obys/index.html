@@ -4950,6 +4950,7 @@
     const SETTINGS_BUSINESS_KEY = "yeoljeong-finance-settings-business";
     const SERVER_AUTH_TOKEN_KEY = "aads_token";
     const FB_ACCESS_TOKEN_KEY = "fb_access_token";
+    const V41_APP_PATH = "/static/apps/obys/mockup-v4-1.html";
     const typeLabels = {
       sales: "매출",
       bank: "입금",
@@ -10408,6 +10409,24 @@
       return true;
     }
 
+    function shouldOpenV41App() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("legacy") === "1") return false;
+      if (params.has("redirect") || params.has("next") || params.has("yf_contract_token")) return false;
+      const hash = String(window.location.hash || "").replace(/^#/, "");
+      if (hash.startsWith("auth-") || hash.startsWith("invite")) return false;
+      return hasServerAuth();
+    }
+
+    function openV41App() {
+      const hash = String(window.location.hash || "");
+      const route = /^(#(?:home|tasks|reports|documents|sales|orders|cards|settlements|accounts|receivables|unmatched|purchases|suppliers|inventory|purchase-orders|employees|attendance|payroll|hr-docs|tax-evidence|tax-gap|journals|tax-returns|approvals|audit-history|alerts|errors|businesses|branches|margins|menu-costs|integrations|sales-connect|bank-connect|tax-connect|access-log))$/.test(hash)
+        ? hash
+        : "#home";
+      window.location.replace(`${V41_APP_PATH}${route}`);
+      return true;
+    }
+
     function permissionsFromAuthPayload(payload = {}) {
       const isAdmin = Boolean(payload.is_admin);
       return {
@@ -11260,6 +11279,7 @@
       els.loginForm.reset();
       els.gateLoginForm.reset();
       if (followPostLoginRedirect()) return;
+      if (shouldOpenV41App() && openV41App()) return;
       setView(defaultView());
       renderAuthState();
       refreshFinanceSessionInBackground();
@@ -13658,6 +13678,7 @@
       renderAll();
       const rememberedRecipeRedirect = rememberPostLoginRedirectFromUrl();
       syncServerAuthCookieFromStorage();
+      if (!rememberedRecipeRedirect && shouldOpenV41App() && openV41App()) return;
       readInviteTokenFromUrl();
       applyAuthHashDeepLink();
       handleContractLinkFromUrl().catch(err => showToast(`계약서 링크 확인 실패: ${err.message}`));

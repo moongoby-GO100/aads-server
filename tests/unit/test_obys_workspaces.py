@@ -102,6 +102,51 @@ async def test_other_tenant_business_is_not_exposed(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_lylon_journals_use_acct_canonical_source(monkeypatch):
+    async def businesses(*, user):
+        return [BUSINESS]
+
+    async def scope(user, business_id):
+        assert user is USER
+        assert business_id == BUSINESS["id"]
+        return 11, 11
+
+    async def fetch(sql, tenant_id):
+        assert tenant_id == 11
+        assert "journal_entry" in sql
+        assert "e.company_id = 11" in sql
+        return [{
+            "id": "entry-1",
+            "transaction_date": date(2026, 8, 24),
+            "description": "라일론 전표",
+            "is_closed": False,
+            "debit_total": Decimal("11000"),
+            "credit_total": Decimal("11000"),
+            "source_total_count": 13623,
+            "source_total_amount": Decimal("123456789"),
+            "status": "균형",
+            "lines": [
+                {"account_code": "83300", "debit": 11000, "credit": 0},
+                {"account_code": "10300", "debit": 0, "credit": 11000},
+            ],
+        }]
+
+    monkeypatch.setattr(api.upload_svc, "list_businesses", businesses)
+    monkeypatch.setattr(api.acct_purchase, "_authorized_acct_scope", scope)
+    monkeypatch.setattr(api.acct_purchase, "_fetch_acct_journals", fetch)
+
+    result = await api.workspace_summary(
+        business_id=BUSINESS["id"], route="journals", date_from=None,
+        date_to=None, current_user=USER,
+    )
+    assert result["source"] == {
+        "name": "acct.journal_entry", "live": True, "record_count": 13623,
+    }
+    assert result["metrics"][0]["value"] == "13,623건"
+    assert result["metrics"][1]["value"] == "123,456,789원"
+
+
+@pytest.mark.asyncio
 async def test_manual_purchase_is_written_through_existing_ledger_service(monkeypatch):
     async def businesses(*, user):
         return [BUSINESS]
@@ -132,6 +177,22 @@ def test_v41_static_page_uses_workspace_api_without_seeded_rows():
     assert "/api/v1/workspaces" in html
     assert "오비서 DB 실데이터" in html
     assert "샘플 데이터<br>" not in html
+
+
+def test_operational_obys_enters_v41_after_login_with_legacy_recovery():
+    index = Path("app/static/apps/obys/index.html").read_text(encoding="utf-8")
+    v41 = Path("app/static/apps/obys/mockup-v4-1.html").read_text(encoding="utf-8")
+    prd = Path("docs/PRD-OBYS-MOCKUP-V4-1-FINAL.md").read_text(encoding="utf-8")
+
+    assert 'const V41_APP_PATH = "/static/apps/obys/mockup-v4-1.html"' in index
+    assert "shouldOpenV41App() && openV41App()" in index
+    assert 'params.get("legacy") === "1"' in index
+    assert 'id="businessSelect"' in v41
+    assert 'id="legacyBtn"' in v41
+    assert 'id="logoutBtn"' in v41
+    assert "renderSessionRecovery" in v41
+    assert "운영 오비서 정식 진입 통합" in prd
+    assert api.acct_purchase._acct_company_map()["biz-lylon-e2e"] == (11, 11)
 
 
 def test_raw_source_masks_nested_credentials_and_personal_identifiers():

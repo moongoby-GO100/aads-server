@@ -16,6 +16,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
+from app.api import acct_purchase
 from app.auth import get_current_user
 from app.services import obys_upload_service as upload_svc
 
@@ -149,7 +150,7 @@ def _public_raw(value: Any) -> Any:
 
 
 def _amount(row: dict[str, Any]) -> Decimal:
-    for key in ("total_amount", "amount", "supply_amount"):
+    for key in ("total_amount", "amount", "source_total_amount", "debit_total", "credit_total", "supply_amount"):
         if row.get(key) is None:
             continue
         try:
@@ -293,14 +294,14 @@ def _record(kind: str, row: dict[str, Any], business_name: str) -> dict[str, Any
                 lines = json.loads(lines)
             except json.JSONDecodeError:
                 lines = []
-        debit = next((line for line in lines if line.get("side") == "debit"), {})
-        credit = next((line for line in lines if line.get("side") == "credit"), {})
+        debit = next((line for line in lines if line.get("side") == "debit" or Decimal(str(line.get("debit") or 0)) > 0), {})
+        credit = next((line for line in lines if line.get("side") == "credit" or Decimal(str(line.get("credit") or 0)) > 0), {})
         display.update(
             {
                 "전표번호": str(value.get("voucher_no") or record_id),
                 "전표일자": str(value.get("transaction_date") or "")[:10],
-                "차변계정": str(debit.get("account_name") or "검토 필요"),
-                "대변계정": str(credit.get("account_name") or "검토 필요"),
+                "차변계정": str(debit.get("account_name") or debit.get("account_code") or "검토 필요"),
+                "대변계정": str(credit.get("account_name") or credit.get("account_code") or "검토 필요"),
                 "분개": status,
                 "증빙번호": str(value.get("source_id") or record_id),
             }
@@ -340,6 +341,47 @@ async def _ledger_records(
     rows: list[tuple[str, dict[str, Any]]] = [("ledger", row) for row in manual]
     rows.extend(("uploaded", row) for row in uploaded)
     return rows
+
+
+async def _acct_journal_records(
+    *, user: dict[str, Any], business_id: str,
+    date_from: str | None, date_to: str | None,
+) -> list[tuple[str, dict[str, Any]]] | None:
+    """Read the canonical ACCT journal when this OBYS business has a mapping."""
+    try:
+        scope = await acct_purchase._authorized_acct_scope(user, business_id)
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            return None
+        raise
+    if scope is None:
+        return None
+    acct_tenant_id, company_id = scope
+    conditions = [f"e.company_id = {int(company_id)}"]
+    if date_from:
+        conditions.append(f"e.entry_date >= {acct_purchase._lit(date_from)}::date")
+    if date_to:
+        conditions.append(f"e.entry_date <= {acct_purchase._lit(date_to)}::date")
+    rows = await acct_purchase._fetch_acct_journals(
+        "WITH entry_totals AS ("
+        " SELECT e.id::text AS id, e.entry_date AS transaction_date,"
+        " e.description, e.period_key, e.is_closed, e.source_ref AS source_id,"
+        " e.created_at, coalesce(sum(l.debit),0) AS debit_total,"
+        " coalesce(sum(l.credit),0) AS credit_total,"
+        " jsonb_agg(jsonb_build_object('id',l.id::text,'account_code',l.account_code,"
+        " 'debit',l.debit,'credit',l.credit,'note',l.note,'partner_code',l.partner_code)"
+        " ORDER BY l.line_order,l.id) AS lines"
+        " FROM journal_entry e LEFT JOIN journal_line l ON l.entry_id=e.id"
+        " WHERE " + " AND ".join(conditions) +
+        " GROUP BY e.id,e.entry_date,e.description,e.period_key,e.is_closed,e.source_ref,e.created_at"
+        ") SELECT *, count(*) OVER() AS source_total_count,"
+        " sum(greatest(debit_total,credit_total)) OVER() AS source_total_amount,"
+        " CASE WHEN debit_total=credit_total THEN CASE WHEN is_closed THEN '마감' ELSE '균형' END"
+        " ELSE '불균형' END AS status FROM entry_totals"
+        " ORDER BY transaction_date DESC,created_at DESC LIMIT 500",
+        acct_tenant_id,
+    )
+    return [("journal", row) for row in rows]
 
 
 async def _source_rows(
@@ -384,6 +426,11 @@ async def _source_rows(
         )
         return [*(("bank", row) for row in rows), *(("uploaded", row) for row in uploaded)], "obys_bank_transactions"
     if route in JOURNAL_ROUTES:
+        acct_rows = await _acct_journal_records(
+            user=user, business_id=business_id, date_from=date_from, date_to=date_to,
+        )
+        if acct_rows is not None:
+            return acct_rows, "acct.journal_entry"
         rows = await upload_svc.list_journals(user=user, business_id=business_id)
         return [("journal", row) for row in rows], "obys_journal_vouchers"
     if route == "home":
@@ -461,18 +508,23 @@ async def workspace_summary(
     )
     source_rows = _filter_source_dates(source_rows, date_from, date_to)
     records = [_record(kind, row, business["name"]) for kind, row in source_rows]
-    total = sum((Decimal(item["amount"]) for item in records), Decimal("0"))
+    source_count = int(source_rows[0][1].get("source_total_count") or len(records)) if source_rows else 0
+    total = (
+        Decimal(str(source_rows[0][1].get("source_total_amount") or 0))
+        if source_rows and source_rows[0][1].get("source_total_amount") is not None
+        else sum((Decimal(item["amount"]) for item in records), Decimal("0"))
+    )
     review = sum(1 for item in records if any(token in item["status"].lower() for token in ("review", "pending", "대기", "필요")))
     return {
         "business": {"id": business["id"], "name": business["name"]},
         "route": selected_route,
         "metrics": [
-            {"label": "DB 건수", "value": f"{len(records):,}건"},
+            {"label": "DB 건수", "value": f"{source_count:,}건"},
             {"label": "합계", "value": f"{total:,.0f}원"},
             {"label": "확인 필요", "value": f"{review:,}건"},
             {"label": "데이터 원천", "value": source},
         ],
-        "source": {"name": source, "live": source != "not_configured", "record_count": len(records)},
+        "source": {"name": source, "live": source != "not_configured", "record_count": source_count},
     }
 
 
