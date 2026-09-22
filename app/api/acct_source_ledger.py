@@ -11,9 +11,9 @@
   ``2``(매입매출전표) 26,723건과 ``3``(일반전표) 31,291건뿐이다.
   **매출 전표(``ty_mth='1'``)는 한 건도 없다.**
 
-그래서 조회 결과가 비어 있을 때 "금액 0" 이 아니라 "원천 미적재" 로 구분해
-돌려준다. 계정과목 추정이나 헤더 문자열 추측은 하지 않는다 — 취소 전표와
-부가세 포함 금액을 그럴듯한 매출로 바꿔 놓는 사고가 바로 거기서 난다.
+이 사실은 위하고 JSON 전표에만 해당한다. sales 도메인의 atom_cell에는
+별도 엑셀 자료가 있으므로 조회 결과가 비었다고 전체 원천 미적재로 판정하지
+않는다. 원천 보유 현황과 거래 정규화 상태는 source_coverage에서 분리한다.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
-from app.api.acct_purchase import _authorized_acct_scope, _fetch_acct_journals, _lit
+from app.api.acct_purchase import _STATUS_LABEL, _authorized_acct_scope, _fetch_acct_journals, _lit
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +176,8 @@ def _row(row: Dict[str, Any], category: str) -> Dict[str, Any]:
         "supply_amount": supply,
         "tax_amount": _decimal(row.get("tax_amount")),
         "total_amount": total if total else supply,
-        "status": "확정" if str(row.get("status_code") or "") else "검토 필요",
+        "status_code": str(row.get("status_code") or ""),
+        "status": _STATUS_LABEL.get(str(row.get("status_code") or ""), "검토 필요"),
         "source": f"acct_wehago_{category}",
         "source_file_id": row.get("source_file_id"),
         "rec_idx": row.get("rec_idx"),
@@ -207,3 +208,79 @@ async def source_transactions(
     )
     records = [_row(row, category) for row in rows]
     return records, f"acct.source_file/atom_record:wehago:{category}"
+
+
+def _coverage_sql(company_id: int) -> str:
+    """Count each representation separately: cells and snapshots are not trades.
+
+    No raw cells, filenames, or paths leave this query. Each aggregate starts
+    from company-scoped current files; joining EAV records to cells would
+    multiply both counts and must never be used here.
+    """
+    return f"""
+WITH files AS MATERIALIZED (
+    SELECT id, domain FROM source_file
+    WHERE company_id = {int(company_id)} AND is_current IS TRUE
+), file_counts AS (
+    SELECT domain, count(*) AS registered_files FROM files GROUP BY domain
+), sheets AS (
+    SELECT f.domain, s.source_file_id, s.id
+    FROM files f JOIN atom_sheet s ON s.source_file_id = f.id
+), sheet_counts AS (
+    SELECT domain, count(*) AS sheets FROM sheets GROUP BY domain
+), cell_counts AS (
+    SELECT s.domain, count(DISTINCT s.source_file_id) AS files_with_cells,
+           count(*) AS cells
+    FROM sheets s JOIN atom_cell c ON c.sheet_id = s.id GROUP BY s.domain
+), record_counts AS (
+    SELECT f.domain, count(DISTINCT ar.source_file_id) AS files_with_records,
+           count(DISTINCT (ar.source_file_id, ar.rec_idx)) AS snapshot_records
+    FROM files f JOIN atom_record ar ON ar.source_file_id = f.id GROUP BY f.domain
+)
+SELECT f.domain, f.registered_files, coalesce(s.sheets, 0) AS sheets,
+       coalesce(c.files_with_cells, 0) AS files_with_cells,
+       coalesce(c.cells, 0) AS cells,
+       coalesce(r.files_with_records, 0) AS files_with_records,
+       coalesce(r.snapshot_records, 0) AS snapshot_records
+FROM file_counts f LEFT JOIN sheet_counts s USING (domain)
+LEFT JOIN cell_counts c USING (domain) LEFT JOIN record_counts r USING (domain)
+ORDER BY f.domain
+"""
+
+
+async def source_coverage(current_user: dict, business_id: str) -> Dict[str, Any]:
+    """Read-only inventory; never treats unnormalized spreadsheets as revenue."""
+    scope = await _authorized_acct_scope(current_user, business_id)
+    if scope is None:
+        raise HTTPException(status_code=403, detail="사업자 범위가 필요합니다")
+    tenant_id, company_id = scope
+    rows = await _fetch_acct_journals(_coverage_sql(company_id), tenant_id)
+    domains = []
+    count_fields = (
+        "registered_files", "sheets", "files_with_cells", "cells",
+        "files_with_records", "snapshot_records",
+    )
+    for row in rows:
+        counts = {key: int(row.get(key) or 0) for key in count_fields}
+        domains.append({
+            "domain": str(row.get("domain") or ""),
+            **counts,
+            "storage_status": (
+                "cells_and_records" if counts["cells"] and counts["snapshot_records"]
+                else "cells_only" if counts["cells"]
+                else "records_only" if counts["snapshot_records"]
+                else "registered_only"
+            ),
+            "spreadsheet_transaction_mapping": "not_implemented" if counts["cells"] else "not_applicable",
+        })
+    return {
+        "business_id": business_id,
+        "domains": domains,
+        "scope": "all_current_files; not a transaction-date-filtered inventory",
+        "complete": False,
+        "warnings": [
+            "파일·셀·스냅샷 수는 거래 건수 또는 확정 금액이 아닙니다.",
+            "조회조건에 맞는 전표가 없어도 다른 형식의 원천 자료가 존재할 수 있습니다.",
+            "엑셀 자료는 거래일·거래 ID·사업자 귀속·취소·중복 검증 후 원장에 반영해야 합니다.",
+        ],
+    }

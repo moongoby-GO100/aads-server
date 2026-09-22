@@ -450,7 +450,7 @@ async def _source_rows(
         rows: list[tuple[str, dict[str, Any]]] = [("acct-source", row) for row in acct_rows]
         rows.extend(ledger)
         if not acct_rows:
-            return rows, f"{acct_source}:원천_미적재+obys_ledger"
+            return rows, f"{acct_source}:조회조건_전표없음+obys_ledger"
         return rows, f"{acct_source}+obys_ledger"
     if route in LEDGER_ROUTES:
         return await _ledger_records(
@@ -584,6 +584,29 @@ async def workspace_summary(
         ],
         "source": {"name": source, "live": source != "not_configured", "record_count": source_count},
     }
+
+
+@router.get("/{business_id}/source-coverage")
+async def workspace_source_coverage(
+    business_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Expose source coverage without pretending every menu uses the ACCT DB."""
+    business = await _business(current_user, business_id)
+    coverage = await acct_source_ledger.source_coverage(current_user, business_id)
+    coverage["business"] = {"id": business["id"], "name": business["name"]}
+    coverage["routes"] = {
+        route: {
+            "source": (
+                "acct_wehago+obys_ledger" if route in ACCT_SOURCE_ROUTES
+                else "acct_journal" if route in JOURNAL_ROUTES
+                else "obys_only"
+            ),
+            "acct_connected": route in ACCT_SOURCE_ROUTES or route in JOURNAL_ROUTES,
+        }
+        for route in sorted(ROUTES)
+    }
+    return coverage
 
 
 @router.get("/{business_id}/{route}/records")

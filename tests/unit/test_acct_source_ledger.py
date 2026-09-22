@@ -73,7 +73,7 @@ def test_row_keeps_source_values_without_guessing():
     assert row["detail_type_label"] == "카드매입"
     assert row["evidence_label"] == "신용카드"
     assert row["total_amount"] == Decimal("29700")
-    assert row["status"] == "확정"
+    assert row["status"] == "미확인"
 
 
 @pytest.mark.asyncio

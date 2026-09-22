@@ -111,8 +111,9 @@ async def test_sales_records_are_tenant_business_scoped_and_db_backed(monkeypatc
 
     assert result["business"]["name"] == "주식회사 라일론"
     assert result["source"]["live"] is True
-    # 원천이 비어 있다는 사실이 이름에 남아야 한다 — 0건과 장애를 구분한다.
-    assert "원천_미적재" in result["source"]["name"]
+    # JSON 전표 조회 0건은 별도 엑셀 원천의 부재를 의미하지 않는다.
+    assert "조회조건_전표없음" in result["source"]["name"]
+    assert "원천_미적재" not in result["source"]["name"]
     assert result["count"] == 1
     assert result["records"][0]["display"]["매출처·채널"] == "라일론 매출처"
     assert result["records"][0]["display"]["금액"] == "11,000원"
