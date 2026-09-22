@@ -81,13 +81,14 @@ footer{text-align:center;padding:32px 0;color:var(--text2);font-size:.8rem;borde
 <div id="content"></div>
 
 <footer>
-AADS 문서 포털 · 최종 업데이트 2026-09-12 · 자동 생성
+AADS 문서 포털 · 최종 업데이트 2026-09-22 · 자동 생성
 </footer>
 </div>
 
 <script>
 const docs = [
   // === 교육자료 ===
+  {cat:"edu",title:"프롬프트 5-Layer와 역할(role_key) — AI가 자기 역할을 잊는 이유",file:"20260922_prompt_5layer_role_key_ceo_education.html",date:"2026-09-22",size:"15KB",desc:"8개 장 · 오늘 EducationLead 역할 신설 직후 겪은 실제 사고(역할 재질문에 오답) 해부 · L1~L5 5레이어 구조와 prompt_assets 4중 스코프(workspace/role/intent/target_models) · compiled_prompt_provenance로 적용 여부 판정하는 법 · 같은 세션 3개 시각(13:43/13:59/14:05) role 필드·L3 자산 비교표 · '프롬프트 미적용'과 '적용·응답 불일치'를 구분해야 하는 이유 · CEO 확인 질문 3개 + 체크리스트"},
   {cat:"edu",title:"기획 정본화 게이트 — \"기획서 없이 만들지 마라\"를 코드로 바꾼 날",file:"20260922_spec_canon_gate_ceo_education.html",date:"2026-09-22",size:"18KB",desc:"8개 장 · 당일 커밋 3건(84616732 analyze 게이트 / a204c1cf 버전 대조 / 32330dc8 converge 루프)과 저장소 실측만 사용 · 용어 6개 일상어 풀이(정본·슬라이스·spec/plan/tasks·게이트·append-only·converge) · 문1 판정 4종과 '구현 금지' 자동 삽입 문구 · 문2 spec-version 한 줄 규칙(2개 이상일 때만 비교, 헤더 누락은 보고만) · 문3 3회 상한과 STATUS: Converged · 적용 범위 obys-v4 33슬라이스 버전헤더 100% · 미적용 5건(타 프로젝트 정본 0건·원격 저장소 미검사·자동 재제출 미구현·키워드 대조 한계·헤더 누락 비차단) · 환경변수 스위치 2개와 CEO 확인 질문 3개"},
   {cat:"edu",title:"배포가 실패하면 무슨 일이 일어나는가 — 블루/그린 18단계와 롤백",file:"20260921_deploy_bluegreen_failure_ceo_education.html",date:"2026-09-21",size:"24KB",desc:"8개 장 · 배포 1,113건 전수 실측 · CEO 질문 '배포 실패사유가 왜 아티팩트 배포탭에 안 나오지' 원인 특정(사유 저장률 failed 100%·blocked 99.3%인데 화면 표시조건이 좁아 298건 은폐) · 블루(8100)/그린(8102) 슬롯과 롤백 백업 구조 · 성공 배포 18단계 실측 타임라인 · 30일 실패 단계 분포 · 당일 16:56~17:56 배포 8건 해부(active streams·dirty worktree·FABRICATED_DATA_TABLE) · 상태 6종 판정표와 nginx_cutover 기준 영향 판정 공식"},
   {cat:"edu",title:"승인 버튼의 정체 — \"진행해\" 한 마디가 시스템에서 하는 일",file:"20260921_approval_button_anatomy_ceo_education.html",date:"2026-09-21",size:"23KB",desc:"8개 장 · 당일 코드·로그 실측만 사용 · 다음 단계 표기 3종(🟢자동/🟡승인/⏸보류)의 실제 처리 경로 · 판정자는 AI가 아니라 코드(기존 grant·목표 승인정책 2갈래) · 승인 버튼 = 프롬프트 재주입 구조 5단계 · 오늘의 사고: auto 항목에 실행 경로가 0건이었던 원인과 수정(745eb61c) · 900초 중복막이·MAX_STEPS 5 · CEO 통제 손잡이 5개 + 확인 질문 3개"},
@@ -120,7 +121,7 @@ const docs = [
   {cat:"design",title:"스마트 브라우저 기획서 v2.0 — Work Execution Layer",file:"20260917_smart_browser_plan.html",date:"2026-09-17",size:"15KB",desc:"Ask Only When Blocked · 대표 사용 장면 · 계정/레시피/행위 승인 분리 · 성공지표 · P0~P3 로드맵"},
   {cat:"design",title:"스마트 브라우저 PRD v2.0",file:"20260917_smart_browser_prd.html",date:"2026-09-17",size:"15KB",desc:"FR-1~19 · 행위 4등급 · 승인 3종 독립성 · 상태 재개 · 수용기준 AC-1~18"},
   {cat:"design",title:"오비스 스마트 브라우저 상세 설계서 v2.0",file:"20260917_smart_browser_design.html",date:"2026-09-17",size:"17KB",desc:"Ask Only When Blocked · 계정/레시피/행위 승인 분리 · 상태머신 · API/DB/보안/재개 계약 · 수용기준 18개"},
-  {cat:"design",title:"스마트 브라우저 아키텍처 v2.0",file:"20260917_smart_browser_architecture.html",date:"2026-09-17",size:"15KB",desc:"오비스 오케스트레이터 · Intent/Preflight · Vault · Policy Gate · Browser Bridge · Evidence/Resume 신뢰 경계"},
+  {cat:"design",title:"오비스 스마트 브라우저 아키텍처 v2.0",file:"20260917_smart_browser_architecture.html",date:"2026-09-17",size:"15KB",desc:"오비스 오케스트레이터 · Intent/Preflight · Vault · Policy Gate · Browser Bridge · Evidence/Resume 신뢰 경계"},
   {cat:"mockup",title:"스마트 브라우저 화면 목업 (동작 프로토타입)",file:"20260917_smart_browser_mockup_interactive.html",date:"2026-09-17",size:"28KB",desc:"5화면 · 레시피 7단계 실제 실행 · 승인 게이트 모달(확인문구 검증) · 감사 타임라인 · 인젝션 차단 · 모바일 뷰"},
   {cat:"design",title:"ACCT 공용 회계·매장·경리·인사 비서 설계",file:"ACCT_HERMES_FOUNDATION_PRD_MOCKUP_20260909.html",date:"2026-09-09",size:"61KB",desc:"PRD·동작형 목업 포함"},
   {cat:"design",title:"오비스 12축 오케스트레이션 아키텍처 v3",file:"ohvis-jarvis-beyond-control-plane-20260906.html",date:"2026-09-06",size:"97KB",desc:"Control Loop 통합·구현 자산 인벤토리"},

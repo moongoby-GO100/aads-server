@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>프롬프트 5-Layer와 역할(role_key) — AI가 자기 역할을 잊는 이유 | AADS 교육자료</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f172a;--card:#1e293b;--accent:#3b82f6;--accent2:#8b5cf6;--accent4:#f59e0b;--accent5:#10b981;--accent6:#ef4444;
+--text:#e2e8f0;--text2:#94a3b8;--border:#334155}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.7;min-height:100vh}
+.container{max-width:920px;margin:0 auto;padding:32px 20px 80px}
+header{padding:24px 0 32px;border-bottom:1px solid var(--border);margin-bottom:32px}
+header h1{font-size:1.7rem;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:10px}
+header p{color:var(--text2);font-size:.95rem}
+.meta-bar{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.meta-bar span{font-size:.75rem;background:var(--card);border:1px solid var(--border);padding:4px 10px;border-radius:12px;color:var(--text2)}
+h2{font-size:1.3rem;margin:44px 0 14px;padding-top:8px;color:#fff;border-left:4px solid var(--accent);padding-left:12px}
+h3{font-size:1.05rem;margin:22px 0 10px;color:#cbd5e1}
+p{margin-bottom:12px;color:var(--text)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px;margin:16px 0}
+.callout{background:#1e293b;border-left:4px solid var(--accent4);border-radius:6px;padding:14px 16px;margin:16px 0;font-size:.92rem}
+.callout.bad{border-left-color:var(--accent6)}
+.callout.good{border-left-color:var(--accent5)}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:.85rem}
+th,td{border:1px solid var(--border);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:#1e293b;color:#cbd5e1;font-weight:600}
+tr:nth-child(even){background:#16213a}
+code,.mono{font-family:'SF Mono',Consolas,monospace;background:#111827;color:#67e8f9;padding:2px 6px;border-radius:4px;font-size:.82rem}
+pre{background:#0b1220;border:1px solid var(--border);border-radius:8px;padding:14px;overflow-x:auto;font-size:.78rem;line-height:1.5;margin:12px 0}
+pre code{background:none;padding:0;color:#a5f3fc}
+.tag{display:inline-block;font-size:.72rem;padding:2px 8px;border-radius:4px;background:#3b82f620;color:#60a5fa;margin-right:4px}
+.checklist li{margin-bottom:8px}
+ul,ol{margin:10px 0 10px 22px}
+footer{text-align:center;padding:32px 0;color:var(--text2);font-size:.8rem;border-top:1px solid var(--border);margin-top:50px}
+.qbox{background:#1e293b;border:1px dashed var(--accent2);border-radius:8px;padding:14px 16px;margin:14px 0}
+.qbox b{color:#c4b5fd}
+</style>
+</head>
+<body>
+<div class="container">
+<header>
+<h1>프롬프트 5-Layer와 역할(role_key) — AI가 자기 역할을 잊는 이유</h1>
+<p>AADS가 매 턴 시스템 프롬프트를 다시 조립하는 방식과, 그 조립 로직이 "역할을 잊은 것처럼 보이는" 현상을 어떻게 만드는지를 오늘 한 세션의 실측 데이터로 해부합니다.</p>
+<div class="meta-bar">
+<span>8개 장</span>
+<span>compiled_prompt_provenance 실측 3건</span>
+<span>세션 2c929b8e 당일 추적</span>
+<span>2026-09-22 작성</span>
+</div>
+</header>
+
+<h2>1. 왜 이 주제인가 — 오늘 대표님이 실제로 겪은 일</h2>
+<p>오늘 같은 채팅 세션(<code>2c929b8e-ae6a-4351-bca1-3c850273d981</code>)에서 대표님이 초반에
+<b>"너는 나의 교육담당자이다"</b>라고 역할을 지정했습니다(2026-09-08 04:08:51 KST, 세션 최초 메시지).
+그런데 몇 시간 뒤 같은 세션에서 GO100 러너 검수를 진행하던 중 "지금 너의 역할이 뭐야?"라고 다시 묻자,
+AI는 <b>"AADS CTO AI — Orchestrator"</b>라고 답했습니다. 교육담당자라는 답은 나오지 않았습니다.
+대표님이 "맥락을 잊어버렸구나"라고 지적하고 나서야 DB를 조회해 원래 역할을 되찾았습니다.</p>
+<div class="callout bad"><b>겉으로 보이는 현상</b>: "AI가 이전 지시를 잊어버렸다."<br>
+<b>실제로 DB에 있던 값</b>: 아래 3장에서 보듯, 그 순간 시스템 프롬프트에는 <code>role-education-lead</code> 자산이
+이미 포함돼 있었습니다. 프롬프트가 비어서가 아니라, <b>AI가 그 안에서 어느 부분을 근거로 답할지 잘못 골랐기</b> 때문입니다.</div>
+
+<h2>2. L1~L5란 무엇인가</h2>
+<p>AADS는 매 턴 시스템 프롬프트를 파일 하나로 고정해두지 않고, <code>prompt_assets</code> 테이블에서
+조건에 맞는 조각을 골라 그때그때 이어붙입니다. 조각은 5개 레이어로 나뉩니다.</p>
+<table>
+<tr><th>레이어</th><th>이름</th><th>범위</th><th>오늘 세션 실측 개수</th></tr>
+<tr><td>L1</td><td>global</td><td>전 프로젝트·전 역할·전 인텐트 공통 절대 규칙</td><td>16개 자산, 9,000자 고정</td></tr>
+<tr><td>L2</td><td>project</td><td>워크스페이스(CEO/AADS/GO100 등)별 도메인 컨텍스트</td><td>1개(<code>project-ceo-orchestration-context</code>)</td></tr>
+<tr><td>L3</td><td>role</td><td>세션에 지정된 역할(role_key)별 전문성</td><td>1~2개(아래 3장 참조)</td></tr>
+<tr><td>L4</td><td>intent</td><td>이번 메시지의 작업 유형(상태조회/보고/코드수정 등)</td><td>1~3개, 턴마다 재계산</td></tr>
+<tr><td>L5</td><td>model</td><td>실행 모델(Opus/Sonnet 등)별 실행 특성</td><td>1~2개</td></tr>
+</table>
+<p>핵심은 <b>L1만 고정이고 L2~L5는 매 턴 다시 계산된다</b>는 것입니다. L1이 있으니 "프롬프트가 통째로 날아가는"
+일은 없지만, L3(역할)·L4(작업유형)가 이번 메시지를 어떻게 분류하느냐에 따라 완전히 달라집니다.</p>
+
+<h2>3. prompt_assets 4중 스코프 — 무엇이 자산 포함 여부를 결정하는가</h2>
+<p>각 <code>prompt_assets</code> 행은 4개 필터를 동시에 만족해야 이번 턴 프롬프트에 실제로 들어갑니다.</p>
+<ol>
+<li><b>workspace_scope</b> — 지금 워크스페이스(오늘은 "CEO")와 일치하는가</li>
+<li><b>role_scope</b> — 지금 세션의 <code>role_key</code>와 일치하는가</li>
+<li><b>intent_scope</b> — 이번 메시지가 분류된 intent와 일치하는가</li>
+<li><b>target_models</b> — 지금 실행 모델과 매칭되는가</li>
+</ol>
+<p>중요한 점: L3(role) 레이어는 <b>딱 하나만 뽑히는 게 아니라 여러 개가 동시에 적용될 수 있습니다.</b>
+오늘 세션의 13:59:43 KST 프롬프트 조립 기록을 보면 L3에 두 자산이 동시에 들어가 있었습니다.</p>
+<pre><code>{"slug":"role-ceo-command","chars":159,"layer_id":3,"priority":10}
+{"slug":"role-education-lead","chars":889,"layer_id":3,"priority":11}</code></pre>
+<p><code>role-ceo-command</code>는 우선순위 10, <code>role-education-lead</code>는 우선순위 11로 그 뒤에 이어붙습니다.
+즉 "교육담당자" 지시가 사라진 게 아니라, 더 일반적인 CEO 커맨드 지시 <b>뒤에 889자짜리 부가 지시로 붙어 있었습니다.</b>
+프롬프트 앞쪽 레이어(L1의 <code>&lt;role&gt;</code> 정의 문단, "AADS CTO AI — Orchestrator")가
+훨씬 크고(9,000자) 먼저 나오기 때문에, 모델이 "역할이 뭐야"라는 즉답형 질문에 답할 때
+뒤에 짧게 붙은 L3 자산보다 앞쪽의 크고 단정적인 L1 정체성 문단을 더 강하게 참조한 것으로 보입니다.</p>
+
+<h2>4. compiled_prompt_provenance로 "정말 적용됐는지" 확인하는 법</h2>
+<p>말로 "적용됐다/안 됐다"를 주장하지 않고 검증하는 유일한 방법은 이 테이블을 직접 조회하는 것입니다.</p>
+<pre><code>SELECT session_id, created_at, system_prompt_chars, provenance
+FROM compiled_prompt_provenance
+WHERE session_id = '&lt;세션ID&gt;'
+ORDER BY created_at DESC LIMIT 3;</code></pre>
+<p>판정 기준은 세 가지입니다.</p>
+<table>
+<tr><th>확인값</th><th>의미</th><th>정상 조건</th></tr>
+<tr><td><code>system_prompt_chars</code></td><td>실제 조립된 시스템 프롬프트 총 길이</td><td>0보다 커야 함</td></tr>
+<tr><td><code>provenance.applied_assets</code></td><td>실제로 붙은 자산 목록(slug·layer_id·priority)</td><td>기대하는 slug가 배열 안에 있어야 함</td></tr>
+<tr><td><code>compile_error</code></td><td>조립 중 오류 여부</td><td>null이어야 함</td></tr>
+</table>
+<div class="callout good"><b>이번 검증 결과</b>: 3개 시각 모두 <code>compile_error</code> 없음, <code>system_prompt_chars</code>
+38,361~39,404자로 정상 범위. 즉 <b>"프롬프트 미적용"은 이번 사고의 원인이 아니었습니다</b> — 적용은 됐는데
+그 안에서 모델이 잘못된 부분을 근거로 답한 것입니다. 이 둘을 구분하지 않으면 항상 "프롬프트를 더 키운다"는
+잘못된 처방으로 흐릅니다.</div>
+
+<h2>5. 오늘 세션 3개 시점 비교 — role 필드가 흔들린 실제 기록</h2>
+<table>
+<tr><th>시각(KST)</th><th>provenance.role</th><th>intent</th><th>system_prompt_chars</th><th>L3(role) 자산 수</th></tr>
+<tr><td>13:43:02</td><td><code>CEO</code></td><td>pipeline_runner</td><td>38,361</td><td>1 (role-ceo-command만)</td></tr>
+<tr><td>13:59:43</td><td><code>EducationLead</code></td><td>status_check</td><td>39,404</td><td>2 (role-ceo-command + role-education-lead)</td></tr>
+<tr><td>14:05:37</td><td><code>EducationLead</code></td><td>runner_response</td><td>39,211</td><td>2 (동일)</td></tr>
+</table>
+<p>13:43:02에는 L3에 <code>role-education-lead</code>가 없었습니다(그때는 아직 세션 role_key가 CEO 상태였음).
+"지금 너의 역할이 뭐야?"라는 질문은 13:59:43 무렵 오갔고, 이 시점엔 이미 <code>role-education-lead</code>가
+프롬프트에 들어와 있었습니다. 그런데도 실제 응답은 L1의 일반 정체성 문단을 인용했습니다.
+<b>DB 기록(provenance)과 모델이 실제로 쓴 답변이 어긋난 사례</b>입니다 — 이게 "프롬프트 미적용"이 아니라
+"적용된 프롬프트와 답변 내용의 불일치"로 분류해야 하는 이유입니다.</p>
+
+<h2>6. 근본 원인 3가지</h2>
+<ol>
+<li><b>레이어 순서와 크기의 불균형</b> — L1(9,000자, 고정)이 L3(889자, 조건부)보다 항상 먼저·크게 나옵니다.
+"네 역할이 뭐냐"처럼 정체성을 직접 묻는 질문일수록 앞쪽의 크고 단정적인 문단에 끌릴 위험이 큽니다.</li>
+<li><b>intent가 매 턴 재분류된다</b> — 같은 세션 안에서도 <code>pipeline_runner</code> → <code>status_check</code>
+→ <code>runner_response</code>로 계속 바뀝니다. L4는 이 값을 따라 매번 다시 조립되므로,
+"이 세션은 원래 이런 흐름이었다"는 서사적 연속성이 L4 레이어 자체에는 없습니다.</li>
+<li><b>role_key는 세션에 저장되지만 응답 생성 시 "우선 참조 순서"가 명시적으로 강제되지 않습니다</b> —
+L3 자산이 존재한다고 해서 모델이 그것을 L1보다 우선해 답한다는 보장이 프롬프트 구조만으로는 없습니다.
+이번처럼 직접적인 정체성 질문에는 오답 가능성이 남습니다.</li>
+</ol>
+
+<h2>7. 이게 "기억 상실"과 다른 이유</h2>
+<p>대표님 입장에서는 "AI가 잊어버렸다"로 보이는 게 당연합니다. 하지만 기술적으로는 다음 두 가지를 구분해야
+정확한 조치가 나옵니다.</p>
+<table>
+<tr><th>구분</th><th>정의</th><th>이번 사고 해당 여부</th><th>확인 방법</th></tr>
+<tr><td>프롬프트 미적용</td><td>자산이 애초에 조립되지 않음(<code>applied_assets</code>에 없음)</td><td>❌ 아님</td><td><code>compiled_prompt_provenance</code> 조회</td></tr>
+<tr><td>적용·응답 불일치</td><td>자산은 조립됐으나 모델이 그걸 근거로 답하지 않음</td><td>✅ 이번 사고</td><td>provenance vs 실제 응답 문장 대조</td></tr>
+</table>
+<div class="callout"><b>왜 이 구분이 중요한가</b>: "미적용"이면 게이트·DB 시딩을 고치면 됩니다(코드 문제).
+"불일치"면 레이어 우선순위·자산 배치·질문 유형별 응답 지침을 고쳐야 합니다(설계 문제). 원인을 뒤바꿔 처방하면
+같은 사고가 재발합니다.</div>
+
+<h2>8. 대표님이 직접 확인할 수 있는 질문 3개</h2>
+<div class="qbox"><b>Q1.</b> "지금 이 세션의 역할이 뭐야?"라고 물었을 때 답이 이상하면 —
+"provenance 조회해서 role과 applied_assets 보여줘"라고 요청하세요. 답변 내용이 아니라 DB 기록이 정답입니다.</div>
+<div class="qbox"><b>Q2.</b> 역할을 여러 번 다시 지정해야 했다면 — "이 세션 role_key가 언제 바뀌었는지 이력 보여줘"로
+실제로 role_key 자체가 흔들렸는지, 아니면 응답만 어긋난 것인지 구분할 수 있습니다.</div>
+<div class="qbox"><b>Q3.</b> 보고서가 3,000자 넘게 길어지는데 앞부분 결론과 뒷부분 내용이 다르면 —
+"이 응답에 L1 report-depth-contract가 실제로 적용됐는지 provenance로 확인해"라고 요청하세요.</div>
+
+<h3>한 장 체크리스트</h3>
+<ul class="checklist">
+<li>"역할이 이상하다"는 느낌이 들면 먼저 <code>compiled_prompt_provenance</code>부터 본다(추측 금지)</li>
+<li><code>applied_assets</code>에 기대 slug가 있는데 답이 다르면 → "미적용"이 아니라 "불일치"로 보고받는다</li>
+<li>세션이 오래 이어질수록 intent가 자주 바뀌므로, 중요한 역할 지시는 대화 도중이 아니라
+role_key로 명시 고정해달라고 요청한다</li>
+<li>8섹션 이상 긴 보고서는 첫 줄 결론과 본문이 어긋나지 않는지 direct하게 재확인한다</li>
+</ul>
+
+<h3>부록 — 오늘 확인한 L1 16개 자산(그대로 나열)</h3>
+<pre><code>global-chat-completion-contract, global-e2e-verification-contract,
+global-user-centered-product-ux-contract, global-core-directives,
+global-tool-parallel-execution, global-direct-work-dependency-gate,
+global-response-quality, global-report-depth-contract,
+global-response-mode-selector, global-next-steps-priority-table,
+global-cost-control, global-search-strategy, global-layer-governance,
+l1-approval-recommendation-required, l1-handover-db-canonical,
+l1-stock-name-required-reporting</code></pre>
+
+</div>
+<footer>
+AADS 교육자료 · 세션 2c929b8e 실측 기반 · 2026-09-22 작성 · 이 문서에 쓰인 모든 수치는 compiled_prompt_provenance 실제 조회 결과입니다
+</footer>
+</body>
+</html>
