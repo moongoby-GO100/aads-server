@@ -416,22 +416,38 @@ if [ -f "scripts/dup_guard.py" ]; then
     fi
 fi
 
-# ── 문서 표류 검사 (경고) ────────────────────────────────────────────
+# ── 문서 표류 검사 (차단) ────────────────────────────────────────────
 #
 # 문서가 주장하는 숫자(줄 수·엔드포인트 수)와 코드의 실제값을 대조한다.
 # 2026-09-14 감사에서 page.tsx 4,501줄→12,865줄, chat_service.py
 # 4,158→14,909줄, 엔드포인트 "30+"→77 같은 표류가 무더기로 나왔다.
 #
-# **지금은 경고다.** 기존 표류가 25건이라 곧바로 차단하면 무관한 커밋이
-# 전부 막힌다. 기존 항목을 정리한 뒤 `--warn` 을 떼고 차단으로 올린다.
-# 그때까지 이 항목은 "또 일어난다" 로 읽어야 한다(R-ERRBOOK).
-if [ -x "scripts/doc_drift_check.py" ]; then
+# **2026-09-22 차단으로 올렸다(DG2.1).** 경고로 둔 8일 동안 표류는 7건에서
+# 27건으로 늘었다 — 경고만 뜨는 항목은 아무도 고치지 않는다. 전체 스캔을
+# 0건으로 만든 뒤 승격했으므로, 지금 막히는 것은 이번 커밋이 새로 만든 표류다.
+#
+# 고치는 방법은 둘이다. 숫자를 실제값으로 바꾸거나, 숫자를 문서에서 빼고
+# 재는 방법을 적는다. 손으로 적은 숫자는 반드시 또 틀어지므로 뒤쪽이 낫다.
+#
+# 종료코드 1 = 표류 있음 / 그 밖의 0 아닌 값 = 검사가 못 돌았다.
+# 둘 다 막는다 — 검사기가 죽은 날 초록불이 켜지면 그건 게이트가 아니다(AAG 와 같은 규칙).
+if [ -n "$ALLOW_DOC_DRIFT" ]; then
+    echo -e "${YELLOW}[문서 표류] ALLOW_DOC_DRIFT=1 — 검사를 건너뜁니다${NC}"
+elif [ -x "scripts/doc_drift_check.py" ]; then
     CHANGED_DOCS=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.md$' || true)
     if [ -n "$CHANGED_DOCS" ]; then
-        DRIFT=$(python3 scripts/doc_drift_check.py --warn --paths $CHANGED_DOCS 2>/dev/null | head -40)
-        if echo "$DRIFT" | grep -q "표류 [0-9]"; then
-            echo -e "${YELLOW}[문서 표류] 커밋하려는 문서의 숫자가 코드와 다릅니다 (경고)${NC}"
-            echo "$DRIFT" | sed 's/^/  /'
+        DRIFT=$(python3 scripts/doc_drift_check.py --paths $CHANGED_DOCS 2>&1)
+        DRIFT_RC=$?
+        if [ "$DRIFT_RC" -ne 0 ]; then
+            if [ "$DRIFT_RC" -eq 1 ]; then
+                echo -e "${RED}[문서 표류] 커밋하려는 문서의 숫자가 코드와 다릅니다${NC}"
+            else
+                echo -e "${RED}[문서 표류] 검사를 실행하지 못했습니다 — '표류 없음' 이 아니라 '점검 못함' 입니다${NC}"
+            fi
+            echo "$DRIFT" | head -40 | sed 's/^/  /'
+            echo -e "${YELLOW}  → 숫자를 실제값으로 고치거나, 숫자를 빼고 재는 방법을 적으세요${NC}"
+            echo -e "${YELLOW}  → 그래도 지금 통과시켜야 하면: ALLOW_DOC_DRIFT=1 git commit -m \"...\"${NC}"
+            exit 1
         fi
     fi
 fi

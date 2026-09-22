@@ -119,7 +119,7 @@
 
 ## 3. Memory Recall — 10섹션 주입 시스템
 
-**파일**: `app/core/memory_recall.py` (911줄)
+**파일**: `app/core/memory_recall.py`
 **진입점**: `build_memory_context(session_id, project_id)`
 **실행 방식**: 10개 빌더 함수를 `asyncio.gather()`로 **병렬** 실행 후 조립, 총 4,000자 상한
 
@@ -229,7 +229,7 @@ correction_directive는 두 곳에 동시 주입:
 
 ### 5-1. 품질 평가 (evaluate_response)
 
-**파일**: `app/services/self_evaluator.py` (723줄)
+**파일**: `app/services/self_evaluator.py`
 **호출**: 매 AI 응답 후 백그라운드
 
 **6기준 가중치**:

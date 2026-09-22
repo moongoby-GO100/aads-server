@@ -6,16 +6,16 @@ _v1.1 | 2026-06-02 | 완료 아이콘/버블 표시 기준 보강_
 
 ```
 src/app/chat/
-├── layout.tsx              (17L)   — 세그먼트 레이아웃, ThemeProvider
-├── page.tsx                (4501L) — 메인 채팅 페이지 (핵심)
-├── ChatInput.tsx           (406L)  — 메시지 입력 컴포넌트
-├── ChatSidebar.tsx         (566L)  — 워크스페이스/세션 사이드바
-├── ChatArtifactPanel.tsx   (513L)  — 아티팩트 패널 (보고서/코드/차트)
-├── MarkdownRenderer.tsx    (361L)  — 마크다운 + 코드 하이라이팅
-├── api.ts                  (48L)   — API 헬퍼 (fetch wrapper)
-└── types.ts                (114L)  — TypeScript 타입 정의
+├── layout.tsx                      — 세그먼트 레이아웃, ThemeProvider
+├── page.tsx                        — 메인 채팅 페이지 (핵심)
+├── ChatInput.tsx                   — 메시지 입력 컴포넌트
+├── ChatSidebar.tsx                 — 워크스페이스/세션 사이드바
+├── ChatArtifactPanel.tsx           — 아티팩트 패널 (보고서/코드/차트)
+├── MarkdownRenderer.tsx            — 마크다운 + 코드 하이라이팅
+├── api.ts                          — API 헬퍼 (fetch wrapper)
+└── types.ts                        — TypeScript 타입 정의
                             ─────
-                            총 6,509줄
+                            총 줄 수는 `wc -l src/app/chat/*` 로 확인 (수시 변동)
 ```
 
 ## 2. 핵심 컴포넌트 상세
@@ -106,7 +106,7 @@ stream-resume (최대 5회, 120s 타임아웃)
 | 답글 | reply_to_id 지정, 원본 메시지 미리보기 |
 | 중지 버튼 | 스트리밍 중 → POST /chat/sessions/{id}/stop |
 
-### 2.3 ChatSidebar.tsx (566줄)
+### 2.3 ChatSidebar.tsx
 
 | 기능 | 상세 |
 |------|------|
@@ -116,7 +116,7 @@ stream-resume (최대 5회, 120s 타임아웃)
 | 새 세션 생성 | 자동 제목 생성 (versioned) |
 | 세션 삭제 | 확인 대화상자 |
 
-### 2.4 ChatArtifactPanel.tsx (513줄)
+### 2.4 ChatArtifactPanel.tsx
 
 | 기능 | 상세 |
 |------|------|
@@ -125,7 +125,7 @@ stream-resume (최대 5회, 120s 타임아웃)
 | 내보내기 | PDF, Markdown, JSON |
 | 코드 하이라이팅 | 언어 자동 감지 |
 
-### 2.5 MarkdownRenderer.tsx (361줄)
+### 2.5 MarkdownRenderer.tsx
 
 | 기능 | 상세 |
 |------|------|
@@ -145,7 +145,7 @@ getToken()  // localStorage에서 JWT 토큰
 authHdrs()  // Authorization 헤더 생성
 ```
 
-### 2.7 types.ts (114줄)
+### 2.7 types.ts
 
 | 타입 | 주요 필드 |
 |------|----------|

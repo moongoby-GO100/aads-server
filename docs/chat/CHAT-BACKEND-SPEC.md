@@ -7,18 +7,18 @@ _v1.2 | 2026-06-02 | reply_to 저장 본문 오염 방지 반영_
 ```
 app/
 ├── routers/
-│   └── chat.py                     — Chat V2 Router (30+ endpoints, 현재 활성)
+│   └── chat.py                     — Chat V2 Router (현재 활성)
 ├── api/
-│   ├── chat.py                     — Legacy Router (4 endpoints, 키워드 기반)
+│   ├── chat.py                     — Legacy Router (키워드 기반)
 │   ├── ceo_chat.py                 — Legacy CEO Chat (6 endpoints, 비활성)
 │   ├── ceo_chat_tools.py           — 도구 정의 (35+ MCP tools)
 │   └── ceo_chat_tools_scheduler.py — 스케줄러 도구
 ├── services/
-│   ├── chat_service.py             — 비즈니스 로직 (4,158줄, 핵심)
+│   ├── chat_service.py             — 비즈니스 로직 (핵심)
 │   ├── chat_embedding_service.py   — 벡터 임베딩 서비스
 │   ├── chat_tools.py               — 도구 실행 엔진
 │   ├── response_completion_contract.py — 최종 완료보고 계약 검사
-│   └── redis_stream.py             — Redis Stream 토큰 버퍼 (190줄)
+│   └── redis_stream.py             — Redis Stream 토큰 버퍼
 ├── core/
 │   ├── anthropic_client.py         — LLM 클라이언트 (fallback 체인)
 │   └── db_pool.py                  — DB 커넥션 풀
@@ -123,7 +123,7 @@ app.include_router(chat_v2_router, prefix="/api/v1", tags=["chat-v2"])  # L1065 
 | GET/POST | `/chat/templates` | 프롬프트 템플릿 |
 | GET/POST | `/settings/auth-keys` | API 키 관리 |
 
-## 4. chat_service.py 핵심 함수 (4,158줄)
+## 4. chat_service.py 핵심 함수
 
 ### 4.1 스트리밍 인프라
 
@@ -196,7 +196,7 @@ LLM 응답 생성
 | `_auto_observe_session()` | 3345 | 세션 관찰 자동 기록 |
 | `_auto_extract_mid_conversation_lessons()` | 3356 | 대화 중간 교훈 추출 |
 
-## 5. redis_stream.py (190줄)
+## 5. redis_stream.py
 
 | 함수 | 기능 |
 |------|------|

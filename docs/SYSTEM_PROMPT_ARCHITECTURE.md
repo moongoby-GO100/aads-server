@@ -1,7 +1,7 @@
 # AADS 시스템 프롬프트 아키텍처 (2026-03-31)
 
-> **소스 파일**: `app/core/prompts/system_prompt_v2.py` (401줄)
-> **조립기**: `app/services/context_builder.py` (552줄)
+> **소스 파일**: `app/core/prompts/system_prompt_v2.py`
+> **조립기**: `app/services/context_builder.py`
 > **설계 기반**: Anthropic "Effective Context Engineering" 가이드
 
 ---
