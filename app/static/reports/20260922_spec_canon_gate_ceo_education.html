@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>기획 정본화 게이트 — "기획서 없이 만들지 마라"를 코드로 바꾼 날 · 2026-09-22</title>
+<style>
+:root{
+  --ink:#16191d; --ink2:#454c55; --ink3:#6b7480;
+  --line:#e2e6ea; --bg:#ffffff; --bg2:#f6f8fa; --bg3:#eef2f6;
+  --good:#1a7f45; --goodbg:#e7f5ec;
+  --bad:#b3261e; --badbg:#fdecea;
+  --warn:#8a5a00; --warnbg:#fff4e0;
+  --acc:#1b5fbe; --accbg:#e8f0fc;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg2);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  line-height:1.72;font-size:15.5px;-webkit-text-size-adjust:100%}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px 90px}
+header{background:linear-gradient(135deg,#0c2633,#13506b);color:#fff;padding:44px 20px 38px;margin-bottom:26px}
+header .inner{max-width:1080px;margin:0 auto}
+header h1{margin:0 0 10px;font-size:29px;letter-spacing:-.5px;line-height:1.35}
+header p{margin:0;color:#bfe0ee;font-size:14.5px}
+.badges{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
+.badge{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);
+  border-radius:999px;padding:4px 12px;font-size:12.5px;color:#e6f4fa}
+section{background:var(--bg);border:1px solid var(--line);border-radius:12px;
+  padding:26px 28px;margin-bottom:22px}
+h2{font-size:21px;margin:0 0 6px;letter-spacing:-.3px;padding-bottom:12px;border-bottom:2px solid var(--bg3)}
+h2 .n{color:var(--acc);font-weight:700;margin-right:8px}
+h3{font-size:17px;margin:26px 0 8px;color:var(--ink)}
+h4{font-size:15px;margin:18px 0 6px;color:var(--ink2)}
+p{margin:10px 0}
+ul,ol{margin:10px 0;padding-left:22px}
+li{margin:5px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.2px}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:var(--bg3);font-weight:600}
+tr:nth-child(even) td{background:#fbfcfd}
+code{background:var(--bg3);padding:1.5px 6px;border-radius:5px;font-size:13.2px;
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+pre{background:#131820;color:#e6edf3;padding:16px 18px;border-radius:9px;overflow-x:auto;
+  font-size:13.2px;line-height:1.6;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+pre code{background:none;color:inherit;padding:0}
+.box{border-radius:9px;padding:14px 16px;margin:14px 0;border-left:4px solid}
+.good{background:var(--goodbg);border-color:var(--good)}
+.bad{background:var(--badbg);border-color:var(--bad)}
+.warn{background:var(--warnbg);border-color:var(--warn)}
+.acc{background:var(--accbg);border-color:var(--acc)}
+.box b{display:block;margin-bottom:4px}
+.toc{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin-bottom:22px}
+.toc ol{columns:2;column-gap:34px;margin:8px 0 0}
+.toc a{color:var(--acc);text-decoration:none}
+.toc a:hover{text-decoration:underline}
+.src{color:var(--ink3);font-size:13px}
+footer{color:var(--ink3);font-size:13px;text-align:center;padding:22px 0 0}
+@media(max-width:720px){.toc ol{columns:1}header h1{font-size:23px}section{padding:20px 18px}}
+</style>
+</head>
+<body>
+<header><div class="inner">
+<h1>기획 정본화 게이트<br>— "기획서 없이 만들지 마라"를 코드로 바꾼 날</h1>
+<p>2026-09-22 · AADS 교육담당자 · 당일 커밋 3건과 저장소 실측만 사용</p>
+<div class="badges">
+  <span class="badge">커밋 84616732 · a204c1cf · 32330dc8</span>
+  <span class="badge">정본 슬라이스 33개 실측</span>
+  <span class="badge">추정 없음 — 코드·파일만 인용</span>
+</div>
+</div></header>
+
+<div class="wrap">
+
+<div class="toc">
+<b>목차</b>
+<ol>
+<li><a href="#c1">한 문장 정의</a></li>
+<li><a href="#c2">용어 풀이 — 6개만 알면 된다</a></li>
+<li><a href="#c3">왜 필요했나 — 게이트가 없을 때 생기는 일</a></li>
+<li><a href="#c4">세 개의 문(門) — 오늘 만든 것</a></li>
+<li><a href="#c5">실제로 이렇게 동작한다</a></li>
+<li><a href="#c6">우리 시스템에 적용된 곳</a></li>
+<li><a href="#c7">적용 안 된 곳과 그 이유</a></li>
+<li><a href="#c8">대표님의 손잡이 · 확인 질문</a></li>
+</ol>
+</div>
+
+<section id="c1">
+<h2><span class="n">1</span>한 문장 정의</h2>
+<p><b>기획 정본화 게이트란, AI가 코드를 고치기 전에 "그 기능의 기획서가 확정돼 있는지"를 시스템이 대신 확인하고, 확정 안 됐으면 착수를 막는 자동 검문소입니다.</b></p>
+<div class="box acc">
+<b>일상 비유</b>
+공사장에 인부를 보내기 전에, 설계도가 승인됐는지·최신판인지·도장이 찍혔는지를 경비실에서 먼저 확인하는 것과 같습니다. 경비실이 없으면 인부는 일단 벽부터 세웁니다. 나중에 설계도가 나오면 벽을 허물어야 합니다.
+</div>
+<p>여기서 "인부"는 Pipeline Runner(지시를 받아 코드를 고치는 AI)이고, "설계도"는 <code>docs/specs/</code> 아래의 세 문서(<code>spec.md</code> · <code>plan.md</code> · <code>tasks.md</code>)이며, "경비실"이 오늘 만든 게이트입니다.</p>
+</section>
+
+<section id="c2">
+<h2><span class="n">2</span>용어 풀이 — 6개만 알면 된다</h2>
+<table>
+<tr><th>용어</th><th>일상 언어로</th><th>우리 시스템에서</th></tr>
+<tr><td><b>정본(正本)</b></td><td>"이게 진짜 원본이다"라고 한 곳만 정해 둔 문서</td><td><code>docs/specs/&lt;프로젝트&gt;/&lt;슬라이스&gt;/</code> 안의 세 파일</td></tr>
+<tr><td><b>슬라이스(slice)</b></td><td>기능 한 덩어리. 화면 하나, 버튼 하나 단위</td><td><code>obys-v4/approve</code>, <code>obys-v4/account-detail</code> 등 33개</td></tr>
+<tr><td><b>spec / plan / tasks</b></td><td>무엇을 만들까 / 어떻게 만들까 / 무엇부터 할까</td><td>세 문서가 한 세트. 하나라도 없으면 미완성 취급</td></tr>
+<tr><td><b>게이트(gate)</b></td><td>통과 검사대. 조건 미달이면 못 지나감</td><td>지시서를 러너에게 넘기기 <i>직전</i>에 끼어드는 코드</td></tr>
+<tr><td><b>append-only</b></td><td>덧붙이기만 하고 지우지 않기</td><td>검사 결과를 <code>tasks.md</code> 끝에 계속 쌓아 흔적을 남김</td></tr>
+<tr><td><b>converge(수렴)</b></td><td>"다 만들었나?"를 기획서와 맞대보며 좁혀가는 것</td><td>구현 산출물 ↔ <code>## 완료 기준</code> 대조를 최대 3회 반복</td></tr>
+</table>
+<div class="box warn">
+<b>용어를 용어로 설명하지 않기</b>
+"정본화"는 어려운 말이 아닙니다. <b>"기획서를 여러 군데 흩어 놓지 말고 한 곳만 진짜로 정하자"</b>가 전부입니다. 흩어져 있으면 AI가 어느 것을 보고 만들었는지 대표님이 확인할 수 없습니다.
+</div>
+</section>
+
+<section id="c3">
+<h2><span class="n">3</span>왜 필요했나 — 게이트가 없을 때 생기는 일</h2>
+<p>게이트 이전에는 순서가 이랬습니다.</p>
+<pre><code>지시 → AI가 코드 수정 → 커밋 → 검수 → 배포
+                ↑
+        기획서를 봤는지 아무도 확인 안 함</code></pre>
+<p>이 구조의 문제는 <b>틀린 것을 빨리, 잘 만든다</b>는 점입니다. AI는 지시가 모호해도 멈추지 않고 그럴듯한 답을 만듭니다. 기획이 확정되지 않았다는 사실은 코드가 이미 배포된 뒤에야 드러납니다.</p>
+<p>게이트 이후 순서는 이렇게 바뀌었습니다.</p>
+<pre><code>지시 → [문1] 기획서 읽고 미해결 사항 검사 → 있으면 "구현 금지" 문구를 지시서에 삽입
+     → [문2] 세 문서 버전이 서로 같은지 대조
+     → AI가 코드 수정 → [문3] 완료기준과 산출물 대조 → tasks.md에 기록
+     → 커밋 → 검수 → 배포</code></pre>
+<div class="box good">
+<b>핵심 전환</b>
+"AI가 기획서를 읽도록 <b>부탁</b>하는 것" → "기획서 상태를 <b>코드가 검사</b>하는 것". 규칙 문서에만 적힌 규칙은 AI가 어깁니다. AADS 운영 문서(R-ERRBOOK)에도 <i>"두 번 이상 어긴 규칙은 코드 차단으로 옮긴다"</i>고 적혀 있고, 오늘 한 일이 정확히 그 이행입니다.
+</div>
+</section>
+
+<section id="c4">
+<h2><span class="n">4</span>세 개의 문(門) — 오늘 만든 것</h2>
+<table>
+<tr><th>문</th><th>커밋 · 시각(KST)</th><th>하는 일</th><th>막는 실패</th></tr>
+<tr><td><b>문1 Analyze 게이트</b></td><td><code>84616732</code><br>04:03</td><td>지시서에 언급된 슬라이스의 세 문서를 읽어 미해결 표시를 찾아 지시서 끝에 붙임</td><td>기획 미확정 상태에서 착수</td></tr>
+<tr><td><b>문2 버전 대조</b></td><td><code>a204c1cf</code><br>04:23</td><td>세 문서 최상단의 <code>spec-version</code> 한 줄을 비교</td><td>spec만 고치고 plan·tasks는 옛날판인 채로 구현</td></tr>
+<tr><td><b>문3 Converge 루프</b></td><td><code>32330dc8</code><br>04:41</td><td>구현 산출물과 <code>## 완료 기준</code>을 대조해 빠진 항목을 <code>tasks.md</code>에 덧붙임</td><td>"다 했다"고 보고했는데 기준 일부 미충족</td></tr>
+</table>
+<p class="src">[출처: <code>git log</code> · <code>git show --stat</code>, 2026-09-22 실측] 변경 규모 — 문1 서비스 +78줄·테스트 +51줄, 문2 서비스 +24줄·문서 +13줄·33슬라이스 헤더, 문3 서비스 +136줄. 모두 <code>app/services/pipeline_runner_service.py</code> 한 파일에 모여 있습니다.</p>
+
+<h3>문1이 실제로 찾는 것 (판정 4종)</h3>
+<table>
+<tr><th>발견하면</th><th>붙는 문구</th></tr>
+<tr><td><code>spec.md</code> 본문에 <code>⚠️</code>가 있음</td><td>미해결 충돌 표시 발견 — CEO/PM 결정 전 구현 금지</td></tr>
+<tr><td><code>plan.md</code>에 "충돌"이 있는데 "없음(단일 소유 확인됨)"이 아님</td><td>소유권 미확정 기재</td></tr>
+<tr><td><code>tasks.md</code>에 <code>- [ ] ⚠️ 소유권 충돌 해결</code>이 남아 있음</td><td>미해결 선행 작업 존재</td></tr>
+<tr><td>세 파일 중 하나라도 없음</td><td>정본화 없이 구현 착수 위험</td></tr>
+</table>
+<p>"구현 금지" 또는 "위험"이 하나라도 걸리면 지시서 맨 끝에 이 문장이 자동으로 붙습니다.</p>
+<pre><code>**이 작업은 구현에 착수하지 마라.** 코드/DB/배포를 변경하지 말고
+위 목록을 RESULT에 그대로 옮겨 CEO 결정을 요청하는 보고만 작성하라.</code></pre>
+
+<h3>문2가 보는 한 줄</h3>
+<pre><code>&lt;!-- spec-version: v1   updated: 2026-09-22   source: spec plan tasks --&gt;</code></pre>
+<ul>
+<li>반드시 <b>문서 최상단</b>에 있어야 메타데이터로 인정됩니다(본문 중간의 같은 주석은 무시).</li>
+<li>문서가 <b>2개 이상</b> 있을 때만 비교합니다. 버전이 서로 다르면 → 구현 금지.</li>
+<li>헤더가 아예 없으면 "버전 메타데이터 없음"으로 <b>보고만</b> 하고 막지는 않습니다.</li>
+</ul>
+
+<h3>문3의 3회 상한</h3>
+<ul>
+<li><code>## 완료 기준</code> 아래 불릿만 읽어 산출물과 키워드로 대조합니다.</li>
+<li>회차는 <code>&lt;!-- converge-iteration: N --&gt;</code>로 <code>tasks.md</code>에 기록되고 <b>지우지 않습니다</b>.</li>
+<li>통과하면 <code>## STATUS: Converged (날짜)</code>, 미달이면 <code>needs_retry</code>.</li>
+<li>3회에 도달하면 <code>## CONVERGE 상한 도달 (3회) — CEO 검토 필요, 자동 append 중단</code>을 남기고 멈춥니다. <b>무한 반복을 코드가 차단</b>합니다.</li>
+</ul>
+</section>
+
+<section id="c5">
+<h2><span class="n">5</span>실제로 이렇게 동작한다</h2>
+<p>대표님이 이렇게 지시했다고 가정합니다.</p>
+<pre><code>TASK_ID: OBYS-APPROVE-001
+승인 화면 버튼 정렬을 고쳐라. 정본: docs/specs/obys-v4/approve</code></pre>
+<ol>
+<li><b>경로 인식</b> — 게이트가 지시서에서 <code>docs/specs/obys-v4/approve</code>를 찾아냅니다. 경로를 안 쓰고 <code>obys-v4-approve</code>처럼 슬라이스 ID만 써도 인식합니다.</li>
+<li><b>읽기 전용 검사</b> — 세 문서를 읽습니다. 고치지 않습니다.</li>
+<li><b>결과 삽입</b> — 문제가 있으면 지시서 끝에 <code>## ANALYZE GATE 결과 (자동 교차검사, 읽기전용 — AADS-analyze-gate)</code> 절이 붙습니다.</li>
+<li><b>착수 또는 정지</b> — "구현 금지"가 붙었으면 러너는 코드를 건드리지 않고 보고만 씁니다. 그 보고가 대표님 승인 대기로 올라옵니다.</li>
+<li><b>구현 후</b> — 문3이 완료기준과 대조해 빠진 항목을 <code>tasks.md</code>에 덧붙입니다.</li>
+</ol>
+<div class="box acc">
+<b>대표님이 화면에서 보게 되는 변화</b>
+지시가 "조용히 잘못 진행"되는 대신, <b>승인 대기 카드에 "기획이 아직 확정 안 됨"이 이유와 함께 올라옵니다.</b> 즉 게이트의 산출물은 코드가 아니라 <b>대표님의 결정 요청</b>입니다.
+</div>
+</section>
+
+<section id="c6">
+<h2><span class="n">6</span>우리 시스템에 적용된 곳</h2>
+<table>
+<tr><th>항목</th><th>실측값</th><th>출처</th></tr>
+<tr><td>정본 슬라이스 수</td><td><b>33개</b></td><td><code>ls -d docs/specs/*/*/</code></td></tr>
+<tr><td><code>spec.md</code> 보유</td><td>33 / 33</td><td>파일 수 집계</td></tr>
+<tr><td><code>spec-version</code> 헤더 보유</td><td><b>33 / 33 (100%)</b></td><td><code>grep -l 'spec-version:'</code></td></tr>
+<tr><td>정본이 있는 프로젝트</td><td><b>obys-v4 하나</b></td><td><code>ls docs/specs/</code></td></tr>
+<tr><td>게이트 코드 위치</td><td><code>app/services/pipeline_runner_service.py</code></td><td>커밋 3건 전부</td></tr>
+<tr><td>자동 테스트</td><td><code>tests/unit/test_pipeline_runner_analyze_gate.py</code> (문1)</td><td>커밋 84616732</td></tr>
+</table>
+<p class="src">[전부 2026-09-22 저장소 실측. 게이트 3건은 커밋·배포 완료 상태입니다.]</p>
+</section>
+
+<section id="c7">
+<h2><span class="n">7</span>적용 안 된 곳과 그 이유</h2>
+<p>교육자료는 "된 것"만 적으면 절반입니다. 아래는 <b>아직 안 되는 것</b>입니다.</p>
+<table>
+<tr><th>#</th><th>안 되는 것</th><th>이유</th><th>영향</th></tr>
+<tr><td>1</td><td>GO100 · SF · NTV2 · KIS 는 게이트가 사실상 발동 안 함</td><td>이 프로젝트들은 <code>docs/specs/</code> 정본이 <b>0건</b>. 게이트는 지시서에 정본 경로가 <b>언급될 때만</b> 동작</td><td>정본 없는 프로젝트는 예전 방식 그대로 — 기획 미확정 착수 가능</td></tr>
+<tr><td>2</td><td>게이트가 <b>원격 서버 저장소</b>를 읽지 못함</td><td>코드가 "이 서비스와 함께 배포된 저장소"만 읽도록 고정(<code>Path(__file__).parents[2]</code>)</td><td>KIS/GO100(서버 14), SF/NTV2(서버 114) 정본은 검사 대상 밖</td></tr>
+<tr><td>3</td><td>미달 시 <b>자동 재작업</b>이 안 됨</td><td>코드 주석에 <i>"AADS_CONVERGE_AUTO_RESUBMIT=1 도입 시 여기서 재제출한다"</i> — <b>미구현</b>이라고 명시</td><td>빠진 항목은 기록만 되고, 다시 시키는 건 사람 몫</td></tr>
+<tr><td>4</td><td>완료기준 대조가 <b>키워드 수준</b></td><td>문3은 단어 토큰을 맞대보는 "단순·재현 가능한" 방식(코드 주석 원문)</td><td>표현이 다르면 실제로 했는데 미달로 잡히거나 그 반대일 수 있음 → 3회 상한과 CEO 검토가 안전장치</td></tr>
+<tr><td>5</td><td>헤더 누락은 <b>막지 않음</b></td><td>"헤더 없음"은 보고만 하도록 의도적으로 설계</td><td>새 슬라이스가 헤더 없이 생기면 버전 대조가 사실상 비활성</td></tr>
+</table>
+<div class="box bad">
+<b>가장 중요한 한 줄</b>
+오늘 만든 문은 <b>AADS 저장소의 obys-v4 33개 슬라이스에만</b> 실효가 있습니다. 나머지 5개 프로젝트에 같은 보호를 주려면 그 프로젝트에 정본 문서부터 만들어야 합니다 — 코드를 더 짜는 일이 아니라 <b>기획을 정리하는 일</b>입니다.
+</div>
+</section>
+
+<section id="c8">
+<h2><span class="n">8</span>대표님의 손잡이 · 확인 질문</h2>
+<h3>끄고 켜는 스위치 (환경변수)</h3>
+<table>
+<tr><th>스위치</th><th>값</th><th>효과</th></tr>
+<tr><td><code>AADS_ANALYZE_GATE_ENABLED</code></td><td><code>0</code></td><td>문1·문2 검사를 건너뜀 (지시서 원문 그대로 러너에게 전달)</td></tr>
+<tr><td><code>AADS_CONVERGE_GATE_ENABLED</code></td><td><code>0</code></td><td>문3 완료기준 대조를 건너뜀</td></tr>
+<tr><td>(미설정)</td><td>기본</td><td><b>세 문 모두 켜짐</b></td></tr>
+</table>
+<p>즉 긴급 상황에서 게이트가 방해가 되면 재배포 없이 환경변수로 끌 수 있고, 끈 사실이 설정에 남습니다.</p>
+
+<h3>AI 보고를 받을 때 던질 질문 3개</h3>
+<ol>
+<li><b>"그 작업, 정본 경로가 지시서에 있었나?"</b> — 없었다면 게이트는 아예 동작하지 않았습니다.</li>
+<li><b>"ANALYZE GATE 결과 절이 지시서에 붙었나, 비어 있었나?"</b> — 붙은 적이 없다면 "검사 통과"가 아니라 "검사 대상 아님"일 수 있습니다.</li>
+<li><b>"tasks.md에 converge-iteration이 몇 번 찍혔나?"</b> — 3회면 자동 중단 상태이고 대표님 검토가 필요합니다.</li>
+</ol>
+
+<div class="box good">
+<b>한 장 요약</b>
+① 오늘 문 3개를 코드로 세웠다(커밋 84616732 · a204c1cf · 32330dc8).<br>
+② 효과 범위는 AADS 저장소 obys-v4 33슬라이스, 버전 헤더 100% 적용.<br>
+③ 나머지 5개 프로젝트는 정본이 0건이라 아직 보호받지 못한다.<br>
+④ 미달을 자동으로 다시 시키는 기능은 일부러 넣지 않았다 — 판단은 대표님 몫으로 남겼다.
+</div>
+</section>
+
+<footer>AADS 교육담당자(EducationLead) · 2026-09-22 작성 · 근거: 당일 커밋 3건, 저장소 파일 실측. 추정치 없음.</footer>
+</div>
+</body>
+</html>
