@@ -147,3 +147,97 @@ def test_migration_enforces_single_latest_pointer():
     assert "uq_goal_documents_latest" in sql
     assert "WHERE is_latest" in sql
     assert "supersedes_id" in sql
+
+
+class _DocumentListDB:
+    """Serves a fixed document list to the goal-documents view."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def acquire(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    async def fetchval(self, query, *_args):
+        if "FROM goals" in query:
+            return 1
+        return None
+
+    async def fetch(self, *_args):
+        return self.rows
+
+
+def test_spec_kit_kinds_register_without_rejection(monkeypatch):
+    """docs/specs 슬라이스는 spec/plan/tasks 세 벌이 정본이다.
+
+    kind 목록에 spec·tasks 가 없던 동안 docs/specs 99건은 대장에 넣을 kind 가
+    없어 0건이었다(DG1.1).
+    """
+    from app.core import db_pool
+    from app.routers import goals
+
+    db = _DocumentUpsertDB()
+    context = {"tenant": {"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}}
+    goal_id = "11111111-1111-4111-8111-111111111111"
+    monkeypatch.setattr(db_pool, "get_pool", lambda: db)
+
+    stored = [
+        asyncio.run(goals.add_goal_document(
+            goal_id,
+            GoalDocRequest(kind=kind, doc_path=f"docs/specs/obys-v4/match/{name}"),
+            context,
+        ))["kind"]
+        for kind, name in (
+            ("spec", "spec.md"), ("plan", "plan.md"), ("tasks", "tasks.md")
+        )
+    ]
+
+    assert stored == ["spec", "plan", "tasks"]
+
+
+def test_unknown_kind_still_fails_closed(monkeypatch):
+    from app.core import db_pool
+    from app.routers import goals
+
+    monkeypatch.setattr(db_pool, "get_pool", lambda: _DocumentUpsertDB())
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(goals.add_goal_document(
+            "11111111-1111-4111-8111-111111111111",
+            GoalDocRequest(kind="blueprint", doc_path="docs/x.md"),
+            {"tenant": {"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}},
+        ))
+
+    assert exc.value.status_code == 400
+
+
+def test_spec_fills_requirement_slot_so_slices_keep_prd_signal(monkeypatch):
+    from app.core import db_pool
+    from app.routers import goals
+
+    def _row(doc_id, kind, name, key):
+        return {
+            "id": doc_id, "kind": kind,
+            "doc_path": f"docs/specs/obys-v4/match/{name}",
+            "title": None, "note": None, "created_at": None,
+            "document_key": key, "version": "1.0.0", "status": "active",
+            "is_latest": True, "change_summary": None, "supersedes_id": None,
+            "updated_at": None, "version_count": 1,
+        }
+
+    rows = [_row(1, "spec", "spec.md", "spec:aaa"), _row(2, "plan", "plan.md", "plan:bbb")]
+    monkeypatch.setattr(db_pool, "get_pool", lambda: _DocumentListDB(rows))
+
+    result = asyncio.run(goals.goal_documents(
+        "11111111-1111-4111-8111-111111111111",
+        {"tenant": {"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}},
+    ))
+
+    assert result["missing"] == []
+    assert result["has_design"] is True

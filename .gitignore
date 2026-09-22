@@ -43,6 +43,8 @@ tmp_*
 .tmp/
 .tmp*/
 .codex_tmp*/
+.codex-tmp*/
+.codex-go100-*/
 
 # OS
 .DS_Store

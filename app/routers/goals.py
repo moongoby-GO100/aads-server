@@ -652,8 +652,9 @@ async def goal_documents(
             "FROM goal_documents d JOIN goals g ON g.id = d.goal_id "
             "WHERE d.goal_id = $1::uuid AND g.tenant_id = $2::uuid "
             "ORDER BY CASE d.kind WHEN 'plan' THEN 0 WHEN 'prd' THEN 1 "
-            "                     WHEN 'design' THEN 2 WHEN 'architecture' THEN 3 "
-            "                     WHEN 'contract' THEN 4 WHEN 'prototype' THEN 5 "
+            "                     WHEN 'spec' THEN 1 WHEN 'design' THEN 2 "
+            "                     WHEN 'architecture' THEN 3 WHEN 'contract' THEN 4 "
+            "                     WHEN 'tasks' THEN 4 WHEN 'prototype' THEN 5 "
             "                     WHEN 'report' THEN 6 ELSE 7 END, "
             "         d.document_key, d.is_latest DESC, d.created_at DESC",
             goal_id, _tenant_id(context),
@@ -662,14 +663,21 @@ async def goal_documents(
     latest = [d for d in history if d["is_latest"]]
     docs = history if include_history else latest
     kinds = {d["kind"] for d in latest}
+    # spec-kit 슬라이스는 요구사항을 spec.md 로 쓴다(docs/specs/README.md).
+    # 그래서 kind='spec' 은 prd 슬롯을 채운 것으로 본다 — 그러지 않으면
+    # spec/plan/tasks 세 산출물을 다 갖춘 목표가 "PRD 없음" 으로 보고된다.
+    has_requirement = bool(kinds & {"prd", "spec"})
     return {
         "documents": docs,
         "document_history": history,
         "has_history": any(d["version_count"] > 1 for d in latest),
-        # 기획서와 PRD 가 둘 다 있어야 "설계가 있다" 고 본다. 하나만 있으면
-        # 왜(기획서)나 어떻게(PRD) 중 한쪽이 비어 있다는 뜻이다.
-        "has_design": "plan" in kinds and "prd" in kinds,
-        "missing": [k for k in ("plan", "prd") if k not in kinds],
+        # 기획서와 PRD(또는 spec) 가 둘 다 있어야 "설계가 있다" 고 본다.
+        # 하나만 있으면 왜(기획서)나 무엇(PRD/spec) 중 한쪽이 비어 있다는 뜻이다.
+        "has_design": "plan" in kinds and has_requirement,
+        "missing": (
+            ([] if "plan" in kinds else ["plan"])
+            + ([] if has_requirement else ["prd"])
+        ),
     }
 
 
@@ -685,14 +693,20 @@ async def add_goal_document(
     if not raw_path:
         raise HTTPException(status_code=400, detail="doc_path required")
     path = _normalize_goal_document_path(raw_path)
+    # spec/tasks 는 spec-kit 슬라이스의 정본 산출물 이름 그대로다
+    # (docs/specs/README.md: spec.md·plan.md·tasks.md 세 벌이 한 버전을 공유).
+    # 이 둘이 없던 동안 docs/specs 99건은 대장에 들어갈 kind 가 없어 0건이었다.
     allowed_kinds = {
-        "plan", "prd", "design", "architecture", "contract",
+        "plan", "prd", "spec", "tasks", "design", "architecture", "contract",
         "prototype", "report", "reference",
     }
     if req.kind not in allowed_kinds:
         raise HTTPException(
             status_code=400,
-            detail="kind must be plan|prd|design|architecture|contract|prototype|report|reference",
+            detail=(
+                "kind must be plan|prd|spec|tasks|design|architecture"
+                "|contract|prototype|report|reference"
+            ),
         )
     document_key, version = _goal_document_identity(req, path)
 
