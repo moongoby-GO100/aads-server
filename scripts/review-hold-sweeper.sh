@@ -563,8 +563,10 @@ SELECT age_min FROM marked;" 2>/dev/null | tr -d '[:space:]') || expired_age_min
     http_code=$(curl -4 -s --http1.1 -o "$resp_file" -w '%{http_code}' \
         -X POST "${AADS_API_URL}/api/v1/review/code-diff/requests" \
         -H 'Content-Type: application/json' \
+        -H 'X-Monitor-Key: internal-review-hold-sweeper' \
         -d @"$payload_file" \
         --connect-timeout 10 --max-time 20 2>/dev/null) || http_code="000"
+    response_detail=$(jq -r '.detail // .error // empty' "$resp_file" 2>/dev/null | tr '\n' ' ' | head -c 300)
 
     verdict=""; score="0.0"; category=""; issues=""
     request_status=""
@@ -573,6 +575,7 @@ SELECT age_min FROM marked;" 2>/dev/null | tr -d '[:space:]') || expired_age_min
         while (( SECONDS < deadline )); do
             poll_code=$(curl -4 -s --http1.1 -o "$resp_file" -w '%{http_code}' \
                 "${AADS_API_URL}/api/v1/review/code-diff/requests/${request_id}" \
+                -H 'X-Monitor-Key: internal-review-hold-sweeper' \
                 --connect-timeout 5 --max-time 15 2>/dev/null) || poll_code="000"
             if [[ "$poll_code" == "200" ]]; then
                 request_status=$(jq -r '.status // empty' "$resp_file" 2>/dev/null || echo "")
@@ -608,7 +611,7 @@ SELECT age_min FROM marked;" 2>/dev/null | tr -d '[:space:]') || expired_age_min
     elif [[ "$request_status" == "failed" ]]; then
         infra_reason="request_status=failed"
     elif [[ "$http_code" != "202" || -z "$verdict" ]]; then
-        infra_reason="enqueue_http=${http_code} request_status=${request_status:-unknown} verdict=${verdict:-none}"
+        infra_reason="enqueue_http=${http_code} request_status=${request_status:-unknown} verdict=${verdict:-none} detail=${response_detail:-none}"
     elif [[ "$verdict" == "FLAG" && ",REVIEW_API_UNAVAILABLE,REVIEW_MODEL_NO_RESPONSE,REVIEW_PARSER_FAILURE,REVIEW_TIMEOUT," == *",${category},"* ]]; then
         infra_reason="category=${category}"
     fi

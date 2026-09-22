@@ -26,6 +26,9 @@ def test_review_hold_sweeper_persists_then_polls_async_request():
     assert "review_request_id UUID" in script
     assert enqueue < poll < verdict
     assert "request_status" in script[poll:verdict]
+    assert script[enqueue:verdict].count(
+        "X-Monitor-Key: internal-review-hold-sweeper"
+    ) == 2
     assert "retry budget preserved" in script
 
 
