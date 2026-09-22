@@ -116,7 +116,7 @@ PostgreSQL
    └─ code_reviews
    │
    ▼
-scripts/pipeline-runner.sh (1865줄)
+scripts/pipeline-runner.sh
    ├─ claim_queued_job()
    ├─ get_db_model_cycle(size)
    ├─ MODEL_CYCLE + TOKEN_CYCLE 구성
@@ -208,7 +208,7 @@ queued → claimed → running → awaiting_approval → approved → deploying 
 
 ## 4. 컴포넌트별 상세
 
-### 4.1 API Layer — `app/api/pipeline_runner.py` (829줄)
+### 4.1 API Layer — `app/api/pipeline_runner.py`
 
 주요 역할:
 
@@ -237,7 +237,7 @@ queued → claimed → running → awaiting_approval → approved → deploying 
 - size별 타임아웃 계산과 SSH 재시도 백오프를 가진다
 - 문서 기준 주 실행기는 Shell Runner지만, 일부 모델/원격 경로 로직의 기준 구현이 이 서비스에도 남아 있다
 
-### 4.3 Shell Runner — `scripts/pipeline-runner.sh` (1865줄)
+### 4.3 Shell Runner — `scripts/pipeline-runner.sh`
 
 핵심 기능:
 
@@ -248,7 +248,7 @@ queued → claimed → running → awaiting_approval → approved → deploying 
 - git diff 수집 및 리뷰 API 호출
 - artifact/worktree/lock 정리
 
-### 4.4 AI Reviewer — `app/services/code_reviewer.py` (431줄)
+### 4.4 AI Reviewer — `app/services/code_reviewer.py`
 
 핵심 기능:
 
