@@ -3,7 +3,7 @@
 - 문서 ID: `AADS-OBYS-V4-1-FINAL-20260922`
 - 제품 버전: V4.1
 - 목업: `/static/apps/obys/mockup-v4-1.html`
-- 상태: 최종 구현 기준
+- 상태: DB 연동 구현 기준 · 2026-09-22 반영
 
 ## 1. 목적과 사용자
 
@@ -173,3 +173,30 @@ V4.1은 8개 업무군, 36개 고유 메뉴 경로를 제공한다. 카드 승�
 - 데스크톱 1440px와 모바일 390px에서 메뉴·필터·상세·등록 흐름을 캡처한다.
 - 자바스크립트 구문 오류와 브라우저 콘솔 오류가 0건이다.
 - 외부 URL이 HTTP 200이며 배포 후 5분간 P0/P1 오류가 0건이다.
+
+## 12. 실제 구현 계약
+
+V4.1은 더 이상 화면 안의 샘플 배열을 데이터로 사용하지 않는다. 로그인한 사용자의 JWT 테넌트로 사업자 목록을 조회하고, 선택한 사업자가 해당 테넌트 소유인지 서버에서 재검증한 뒤 아래 API를 호출한다.
+
+| 화면 동작 | 구현 API | 정본 |
+|---|---|---|
+| 사업자 선택 | `GET /api/v1/workspaces/businesses` | `yeoljeong_businesses` |
+| KPI·원천 상태 | `GET /api/v1/workspaces/{businessId}/{route}/summary` | route별 기존 오비서 원장 |
+| 일자별·건별 조회 | `GET /api/v1/workspaces/{businessId}/{route}/records` | 매출·매입·카드·은행·전표 및 업무별 기존 테이블 |
+| 건별 상세 | `GET /api/v1/workspaces/{businessId}/{route}/records/{id}` | 같은 DB row의 마스킹된 원문 |
+| 엑셀 사전검증 | `POST /api/v1/workspaces/{businessId}/{route}/imports/preview` | 무기록 파싱 + DB 중복 해시 조회 |
+| 엑셀 확정등록 | `POST /api/v1/workspaces/{businessId}/{route}/imports/commit` | `yeoljeong_uploads`, `yeoljeong_uploaded_ledger_rows` |
+| 건별 직접등록 | `POST /api/v1/workspaces/{businessId}/{route}/records` | 수기 원장·카드·은행 정본 테이블 |
+
+36개 route는 모두 DB 원천을 명시한다. 해당 사업자의 row가 없으면 샘플 값을 보여주지 않고 `0건`을 표시한다. 매출·매입·계좌·카드·세무증빙·전표는 각각 기존 tenant-scoped 서비스 함수를 재사용한다. 직원·급여·재고·승인·감사·설정 화면은 사업자 소유권 검증 후 해당 업무 테이블을 읽는다.
+
+### 12.1 라일론 검증 기준
+
+- 대상 사업자: `주식회사 라일론` (`biz-lylon-e2e`)
+- 검증 시 테넌트는 로그인 JWT에서만 결정하며 HTML이나 쿼리 파라미터로 받지 않는다.
+- 화면에 표시된 DB 건수와 동일 조건 SQL count가 일치해야 한다.
+- 조회 시작일·종료일은 KST 현재 월을 기본값으로 사용하고, 업로드 원장을 포함한 모든 원천에 같은 날짜 조건을 적용해야 한다.
+- 매출·매입·계좌·카드·세무증빙·전표에서 목록 행을 누르면 같은 row ID의 상세 원문이 열려야 한다.
+- 상세 원문의 토큰·비밀번호·API 키·사업자번호·이메일·전화·비마스킹 계좌번호는 서버 응답 단계에서 마스킹해야 한다.
+- 업로드 미리보기는 DB를 변경하지 않고, 확정 버튼을 눌렀을 때만 저장해야 한다.
+- 다른 테넌트가 `biz-lylon-e2e`를 직접 요청하면 404로 차단되어야 한다.
