@@ -611,6 +611,8 @@ class PipelineCJob:
         self.result_output = ""
         self.git_diff = ""
         self.review_feedback = ""
+        # 완료 저장이 여러 번 호출되어도 converge 기록은 작업당 한 번만 남긴다.
+        self._converge_checked = False
         self.created_at = datetime.now()
         self.error_msg = ""
         self.ohvis_task_id = None
@@ -2350,6 +2352,33 @@ class PipelineCJob:
                 await _update_linked_goal_state_with_phase(
                     self.job_id, self.status, self.phase,
                 )
+            if (
+                self.status == "done"
+                and self.phase not in ("rejected", "cancelled")
+                and not self._converge_checked
+            ):
+                self._converge_checked = True
+                try:
+                    converge_result = _run_converge_check(
+                        self.instruction,
+                        self.project,
+                        self.git_diff,
+                        self.result_output,
+                    )
+                    if converge_result:
+                        logger.info(
+                            "pipeline_c_converge_check job=%s result=%s",
+                            self.job_id,
+                            converge_result,
+                        )
+                    # AADS_CONVERGE_AUTO_RESUBMIT=1 도입 시 여기서 재제출한다.
+                except Exception as converge_error:
+                    # 수렴 검사는 완료 상태를 막지 않는 best-effort 훅이다.
+                    logger.warning(
+                        "pipeline_c_converge_check_error job=%s: %s",
+                        self.job_id,
+                        converge_error,
+                    )
         except Exception as e:
             logger.error(f"pipeline_c_save_db_error job={self.job_id}: {e}")
 
@@ -2538,6 +2567,113 @@ def _run_analyze_gate(instruction: str, project: str) -> str:
     if any("구현 금지" in finding or "위험" in finding for finding in findings):
         gate_result = f"{gate_result}\n\n{_ANALYZE_GATE_STOP_MESSAGE}"
     return f"{instruction.rstrip()}\n\n{_ANALYZE_GATE_HEADER}\n{gate_result}\n"
+
+
+_CONVERGE_COMPLETION_HEADER_PATTERN = re.compile(r"^##\s*완료\s*기준\s*$")
+_CONVERGE_BULLET_PATTERN = re.compile(r"^\s*[-*+]\s+(?:\[[ xX]\]\s*)?(?P<item>.+?)\s*$")
+_CONVERGE_ITERATION_PATTERN = re.compile(r"<!--\s*converge-iteration:\s*(\d+)\s*-->")
+
+
+def _parse_completion_criteria(spec: str) -> list[str]:
+    """실제 정본의 ``## 완료 기준`` 불릿만 결정적으로 읽는다."""
+    in_completion_section = False
+    criteria: list[str] = []
+    for line in spec.splitlines():
+        if _CONVERGE_COMPLETION_HEADER_PATTERN.match(line.strip()):
+            in_completion_section = True
+            continue
+        if in_completion_section and re.match(r"^#{1,2}\s+", line):
+            break
+        if not in_completion_section:
+            continue
+        match = _CONVERGE_BULLET_PATTERN.match(line)
+        if match:
+            item = match.group("item").strip()
+            if item:
+                criteria.append(item)
+    return criteria
+
+
+def _criterion_keywords(criterion: str) -> set[str]:
+    """완료기준과 산출물의 단순·재현 가능한 키워드 대조용 토큰을 만든다."""
+    return {
+        token.casefold()
+        for token in re.findall(r"[A-Za-z0-9_/-]{2,}|[가-힣]{2,}", criterion)
+    }
+
+
+def _run_converge_check(
+    instruction: str,
+    project: str,
+    git_diff: str,
+    result_output: str,
+) -> str | None:
+    """구현 산출물과 spec 완료기준을 대조해 tasks.md에 append-only로 남긴다.
+
+    이 함수는 파일 I/O 문제를 포함해 어떤 오류도 파이프라인 완료를 방해하지 않는다.
+    """
+    if os.getenv("AADS_CONVERGE_GATE_ENABLED") == "0":
+        return None
+
+    referenced_dirs = _find_referenced_spec_dirs(instruction)
+    if not referenced_dirs:
+        return None
+
+    del project  # 기존 게이트 호출 계약을 유지하며 정본은 현재 저장소에서만 읽는다.
+    repository_root = Path(__file__).resolve().parents[2]
+    evidence = f"{git_diff}\n{result_output}".casefold()
+    evidence_keywords = set(re.findall(r"[A-Za-z0-9_/-]{2,}|[가-힣]{2,}", evidence))
+    today = _dt.date.today().isoformat()
+    needs_retry = False
+    checked_any_slice = False
+
+    for relative_dir in referenced_dirs:
+        slice_dir = repository_root / relative_dir
+        spec_path = slice_dir / "spec.md"
+        tasks_path = slice_dir / "tasks.md"
+        try:
+            spec = spec_path.read_text(encoding="utf-8")
+            tasks = tasks_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+
+        criteria = _parse_completion_criteria(spec)
+        if not criteria:
+            continue
+        checked_any_slice = True
+
+        iterations = _CONVERGE_ITERATION_PATTERN.findall(tasks)
+        iteration = int(iterations[-1]) if iterations else 0
+        missing = [
+            criterion
+            for criterion in criteria
+            if not (_criterion_keywords(criterion) & evidence_keywords)
+        ]
+
+        try:
+            with tasks_path.open("a", encoding="utf-8") as tasks_file:
+                if tasks and not tasks.endswith("\n"):
+                    tasks_file.write("\n")
+                if missing and iteration >= 3:
+                    tasks_file.write("## CONVERGE 상한 도달 (3회) — CEO 검토 필요, 자동 append 중단\n")
+                    needs_retry = True
+                    continue
+                if missing:
+                    next_iteration = iteration + 1
+                    for criterion in missing:
+                        tasks_file.write(
+                            f"- [ ] ⚠️ CONVERGE: {criterion} (iteration {next_iteration}, {today})\n"
+                        )
+                    tasks_file.write(f"<!-- converge-iteration: {next_iteration} -->\n")
+                    needs_retry = True
+                else:
+                    tasks_file.write(f"## STATUS: Converged ({today})\n")
+        except (OSError, UnicodeError):
+            continue
+
+    if not checked_any_slice:
+        return None
+    return "needs_retry" if needs_retry else "Converged"
 
 
 def _append_verification_checklist(instruction: str, project: str) -> str:
