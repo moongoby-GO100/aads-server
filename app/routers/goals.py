@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Literal, Optional
 from uuid import UUID
 
@@ -188,14 +189,36 @@ _GOAL_DOC_TITLE_VERSION_RE = re.compile(
     r"(?:^|\s)v([0-9]+\.[0-9]+\.[0-9]+)(?:\s|$)", re.IGNORECASE
 )
 _GOAL_DOC_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_GOAL_DOCUMENT_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _normalize_goal_document_path(doc_path: str) -> str:
+    """Store absolute document paths relative to the repository root.
+
+    Relative paths are kept as supplied for backwards compatibility.  An
+    absolute path outside this checkout cannot identify a repository document,
+    so reject it instead of storing a second, non-canonical spelling.
+    """
+    path = Path(doc_path)
+    if not path.is_absolute():
+        return doc_path
+    try:
+        return path.resolve(strict=False).relative_to(
+            _GOAL_DOCUMENT_REPO_ROOT.resolve()
+        ).as_posix()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="doc_path must be inside repository root"
+        ) from exc
 
 
 def _goal_document_identity(req: GoalDocRequest, path: str) -> tuple[str, str]:
     """문서의 안정 키와 정규화된 semver를 만든다.
 
-    `/v1.2.3/PLAN.md`와 `/v1.3.0/PLAN.md`는 자동으로 같은
-    `plan:plan.md` 계보가 된다. version 폴더가 없는 기존 링크는 경로 해시로
-    서로 격리하며, 새 경로를 같은 계보에 넣으려면 document_key를 명시한다.
+    `/v1.2.3/PLAN.md`와 `/v1.3.0/PLAN.md`는 자동으로 같은 계보가 된다.
+    version 폴더를 제외한 전체 경로의 해시를 사용해, 파일명만 같은 별도 문서가
+    하나의 키로 합쳐지지 않게 한다. 새 경로를 같은 계보에 넣으려면
+    document_key를 명시한다.
     """
     path_match = _GOAL_DOC_PATH_VERSION_RE.search(path)
 
@@ -217,7 +240,11 @@ def _goal_document_identity(req: GoalDocRequest, path: str) -> tuple[str, str]:
     document_key = (req.document_key or "").strip()
     if not document_key:
         if path_match:
-            document_key = f"{req.kind}:{path_match.group(2).lower()}"
+            versionless_path = (
+                f"{path[:path_match.start()]}/v/{path_match.group(2).lower()}"
+            )
+            digest = hashlib.sha256(versionless_path.encode("utf-8")).hexdigest()[:12]
+            document_key = f"{req.kind}:{digest}"
         else:
             digest = hashlib.sha256(path.encode("utf-8")).hexdigest()[:12]
             document_key = f"{req.kind}:{digest}"
@@ -654,9 +681,10 @@ async def add_goal_document(
     """문서를 목표에 잇고 논리 문서별 최신 버전을 원자적으로 교체한다."""
     from app.core.db_pool import get_pool
 
-    path = (req.doc_path or "").strip()
-    if not path:
+    raw_path = (req.doc_path or "").strip()
+    if not raw_path:
         raise HTTPException(status_code=400, detail="doc_path required")
+    path = _normalize_goal_document_path(raw_path)
     allowed_kinds = {
         "plan", "prd", "design", "architecture", "contract",
         "prototype", "report", "reference",
