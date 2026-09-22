@@ -35,6 +35,7 @@ system_extra = _safe_import("system_extra")
 screen_stream = _safe_import("screen_stream")
 macro = _safe_import("macro")
 browser_auto = _safe_import("browser_auto")
+browser_tab = _safe_import("browser_tab")
 file_transfer = _safe_import("file_transfer")
 scheduler = _safe_import("scheduler")
 security = _safe_import("security")
@@ -106,6 +107,7 @@ _RAW_HANDLERS = {
     "macro_list": _handler(macro, "list_macros_cmd"),
     "macro_delete": _handler(macro, "delete_macro_cmd"),
     # P3: CDP 브라우저 자동화
+    "browser_tab": _handler(browser_tab, "execute"),
     "browser_navigate": _handler(browser_auto, "browser_navigate"),
     "browser_click": _handler(browser_auto, "browser_click"),
     "browser_fill": _handler(browser_auto, "browser_fill"),

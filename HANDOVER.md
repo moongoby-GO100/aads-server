@@ -1,3 +1,10 @@
+## 2026-09-23 채팅별 PC 브라우저 분리 구현 (운영 미배포)
+
+- PRD: `docs/pc-browser-concurrency-prd-20260923.md`.
+- 서버 WS 인증/테넌트/채팅 잠금, PC 전용 target 캡처·입력, 프론트 입력 확인·재연결 구현.
+- Python 27건 + PC 패키지 20건 통과. 실제 Chromium 2프로필 동시 입력/클릭·재연결·닫힌 target 검증 통과. 프론트 타입/컴포넌트 lint/모의 WS 화면 회귀 통과.
+- 운영 Windows PC E2E, 푸시, Blue/Green 배포 및 운영 관측은 미실행. DB 정본 entry_key: `pc-browser-concurrency-20260923` (별도 도구 기록 결과 참조).
+
 # AADS HANDOVER
 
 ## 2026-09-22 KST — 쿠팡이츠 단계별 레시피·PC 입력 상태 복구
