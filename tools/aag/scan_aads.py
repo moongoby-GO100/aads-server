@@ -129,7 +129,9 @@ def _expected_ref_head(root: Path, target_ref: str) -> str:
         return configured
     candidates = [target_ref]
     if target_ref.startswith("refs/heads/"):
-        branch = target_ref.removeprefix("refs/heads/")
+        # Remote project scanners still include Python 3.8 hosts.  Keep this
+        # producer compatible with them; str.removeprefix was added in 3.9.
+        branch = target_ref[len("refs/heads/"):]
         candidates.insert(0, f"refs/remotes/origin/{branch}")
     for candidate in candidates:
         resolved = _git_value(root, "rev-parse", "--verify", candidate)
@@ -148,7 +150,11 @@ def _worktree_digest(root: Path) -> str | None:
         if " -> " in relative:
             relative = relative.rsplit(" -> ", 1)[1]
         path = root / relative
-        if path.is_file() and path.is_relative_to(root):
+        try:
+            path.relative_to(root)
+        except ValueError:
+            continue
+        if path.is_file():
             digest.update(relative.encode("utf-8", errors="surrogateescape"))
             try:
                 digest.update(path.read_bytes())
@@ -886,7 +892,7 @@ def _expr_src(node: ast.AST) -> str:
 
 
 def parse_router_module(rel_path: str, source: str) -> ModuleInfo:
-    """한 모듈이 정의하는 APIRouter 와 그 라우트를 뽑는다.
+    """한 모듈이 정의하는 APIRouter/FastAPI 앱과 그 라우트를 뽑는다.
 
     ast 로 읽기 때문에 독스트링 안의 `include_router`/`@router.get` 예시는
     애초에 노드가 되지 않는다 — grep 기반이라면 여기서부터 오탐이다.
@@ -902,7 +908,7 @@ def parse_router_module(rel_path: str, source: str) -> ModuleInfo:
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             continue
         value = node.value
-        if not isinstance(value, ast.Call) or _callee_name(value.func) != "APIRouter":
+        if not isinstance(value, ast.Call) or _callee_name(value.func) not in {"APIRouter", "FastAPI"}:
             continue
         prefix_node = _kwarg(value, "prefix")
         prefix = _const_str(prefix_node) or ""
@@ -1562,6 +1568,7 @@ class Scan:
                 self.unresolved.extend(info.unresolved)
 
         self.includes: list[IncludeCall] = []
+        self.direct_routes: list[RouteDef] = []
         self.entrypoints_present: list[str] = []
         for rel in entrypoints:
             path = self.root / rel
@@ -1569,10 +1576,14 @@ class Scan:
                 self.warnings.append(f"엔트리포인트 없음: {rel}")
                 continue
             self.entrypoints_present.append(rel)
-            incs, _aliases, err = parse_entrypoint(rel, read_text(path))
+            source = read_text(path)
+            incs, _aliases, err = parse_entrypoint(rel, source)
             if err:
                 self.warnings.append(f"엔트리포인트 파싱 실패 {rel}: {err}")
                 continue
+            direct = parse_router_module(rel, source)
+            self.direct_routes.extend(direct.routes)
+            self.unresolved.extend(direct.unresolved)
             for inc in incs:
                 inc.target_module = dotted_to_relpath(self.root, inc.target_module)
                 if not inc.target_module:
@@ -1605,6 +1616,15 @@ class Scan:
                     "full_path": normalize_route(join_path(inc.prefix, route.path)),
                     "lineno": route.lineno,
                 })
+        for route in self.direct_routes:
+            self.mounted_routes.append({
+                "entrypoint": route.module,
+                "module": route.module,
+                "method": route.method,
+                "mount_prefix": "",
+                "full_path": normalize_route(route.path),
+                "lineno": route.lineno,
+            })
 
         self.primary_routes = [r for r in self.mounted_routes if r["entrypoint"] == primary]
         self.routes_by_method: dict[str, list[str]] = {}
@@ -2014,8 +2034,8 @@ def zero_target_guard(scan: Scan) -> list[str]:
         empty.append("app_roots 아래 .py 파일 0개")
     if not scan.router_dir_files:
         empty.append("router_dirs 아래 .py 파일 0개")
-    if not scan.modules:
-        empty.append("APIRouter 를 정의하는 모듈 0개")
+    if not scan.modules and not getattr(scan, "direct_routes", None):
+        empty.append("APIRouter/FastAPI 라우트를 정의하는 모듈 0개")
     if not scan.entrypoints_present:
         empty.append("엔트리포인트 파일 0개")
     # 프런트 계약 검사는 "설정했는데 0파일" 이 가장 위험하다 — 전체 스캔은

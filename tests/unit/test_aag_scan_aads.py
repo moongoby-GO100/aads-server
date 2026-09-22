@@ -51,6 +51,19 @@ def test_normalize_route_strips_trailing_slash_and_dedupes():
     assert sc.normalize_route("") == "/"
 
 
+def test_expected_ref_head_resolves_remote_branch_without_new_string_apis(monkeypatch):
+    """The scanner is copied to remote hosts that still run Python 3.8."""
+    calls = []
+
+    def fake_git_value(_root, *args):
+        calls.append(args)
+        return "abc123" if args[-1] == "refs/remotes/origin/main" else ""
+
+    monkeypatch.setattr(sc, "_git_value", fake_git_value)
+    assert sc._expected_ref_head(Path("/repo"), "refs/heads/main") == "abc123"
+    assert calls[0][-1] == "refs/remotes/origin/main"
+
+
 # ── 네임스페이스 (DOUBLE_MOUNT 의 정본 기준) ──────────────────────────
 
 
@@ -256,6 +269,18 @@ def test_router_prefix_is_composed_into_route_paths():
     info = sc.parse_router_module("app/api/browser_tasks.py", source)
     assert info.defines_router
     assert [(r.method, r.path) for r in info.routes] == [("GET", "/browser-tasks/{task_id}")]
+
+
+def test_fastapi_entrypoint_direct_routes_are_parsed():
+    source = (
+        "from fastapi import FastAPI\n"
+        "app = FastAPI()\n"
+        '@app.post("/crop")\n'
+        "def crop(): ...\n"
+    )
+    info = sc.parse_router_module("docker/imgproc/app.py", source)
+    assert info.defines_router
+    assert [(r.method, r.path) for r in info.routes] == [("POST", "/crop")]
 
 
 def test_docstring_route_example_is_not_a_route():

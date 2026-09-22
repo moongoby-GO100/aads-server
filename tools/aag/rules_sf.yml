@@ -1,0 +1,94 @@
+version: 1
+
+scan:
+  router_dirs:
+    - api/routes
+    - api/routers
+    - worker/routes
+  app_roots:
+    - api
+    - worker
+    - engine
+    - dashboard
+    - scripts
+  backup_roots:
+    - api
+    - worker
+    - engine
+    - dashboard
+    - scripts
+    - db
+    - sql
+  schema_roots:
+    - db
+    - sql
+    - scripts/migrations
+  exclude_dir_names:
+    - __pycache__
+    - node_modules
+    - .git
+    - .next
+    - venv
+    - .venv
+    - venv_old
+    - backups
+    - data
+    - logs
+    - credentials
+
+entrypoints:
+  primary: api/main.py
+  secondary:
+    - worker/main.py
+
+frontend:
+  roots:
+    - saas-dashboard
+  extensions: [".ts", ".tsx"]
+  base_env_names:
+    - NEXT_PUBLIC_API_URL
+  fallback_base: ""
+  internal_hosts:
+    - localhost
+    - 127.0.0.1
+    - shortflow.newtalk.kr
+  call_names:
+    - fetch
+    - EventSource
+  path_helpers: {}
+  path_aliases: {}
+
+backup_patterns:
+  - '\\.bak$'
+  - '\\.bak[._-].*$'
+  - '\\.backup$'
+  - '\\.orig$'
+  - '\\.old$'
+  - '\\.save$'
+  - '\\.disabled$'
+  - '~$'
+  - '\\.bak_.*$'
+  - '_backup\\.[A-Za-z0-9]+$'
+  - '\\.[A-Za-z0-9]+\\.bak\\..*$'
+
+sql:
+  ignore_tables:
+    - pg_catalog
+    - information_schema
+  known_external_tables: []
+
+severity:
+  DUP_MODULE: P1
+  DOUBLE_MOUNT: P1
+  ROUTE_SHADOWED: P0
+  ORPHAN_ROUTER: P2
+  TABLE_NO_MODEL: P1
+  PATH_DRIFT: P1
+  ROUTE_MISSING: P0
+  STALE_BACKUP: P2
+
+output:
+  graph_json: reports/aag/sf-graph.json
+  mermaid: reports/aag/sf-arch.mmd
+  findings_md: reports/aag/sf-findings.md
+  mermaid_max_namespaces: 40

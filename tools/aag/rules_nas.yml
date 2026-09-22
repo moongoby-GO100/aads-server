@@ -1,0 +1,66 @@
+version: 1
+
+scan:
+  router_dirs:
+    - docker/imgproc
+  app_roots:
+    - docker/imgproc
+  backup_roots:
+    - docker/imgproc
+  schema_roots: []
+  exclude_dir_names:
+    - __pycache__
+    - .git
+    - .venv
+    - venv
+
+entrypoints:
+  primary: docker/imgproc/app.py
+  secondary: []
+
+frontend:
+  roots: []
+  extensions: [".ts", ".tsx"]
+  base_env_names: []
+  fallback_base: ""
+  internal_hosts:
+    - localhost
+    - 127.0.0.1
+  call_names:
+    - fetch
+    - EventSource
+  path_helpers: {}
+  path_aliases: {}
+
+backup_patterns:
+  - '\\.bak$'
+  - '\\.bak[._-].*$'
+  - '\\.backup$'
+  - '\\.orig$'
+  - '\\.old$'
+  - '\\.save$'
+  - '\\.disabled$'
+  - '~$'
+  - '\\.bak_.*$'
+
+sql:
+  ignore_tables:
+    - pg_catalog
+    - information_schema
+  known_external_tables: []
+
+severity:
+  DUP_MODULE: P1
+  DOUBLE_MOUNT: P1
+  ROUTE_SHADOWED: P0
+  ORPHAN_ROUTER: P2
+  TABLE_NO_MODEL: P1
+  PATH_DRIFT: P1
+  ROUTE_MISSING: P0
+  STALE_BACKUP: P2
+
+output:
+  graph_json: reports/aag/nas-graph.json
+  mermaid: reports/aag/nas-arch.mmd
+  findings_md: reports/aag/nas-findings.md
+  mermaid_max_namespaces: 20

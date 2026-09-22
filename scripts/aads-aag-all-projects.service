@@ -1,0 +1,14 @@
+[Unit]
+Description=AADS AAG all-project architecture scan refresh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/aads/aads-server
+ExecStart=/bin/bash /root/aads/aads-server/scripts/aag_all_projects_refresh.sh
+TimeoutStartSec=1800
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aads-aag-all-projects
