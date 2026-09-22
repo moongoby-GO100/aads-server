@@ -150,7 +150,7 @@ def _public_raw(value: Any) -> Any:
 
 
 def _amount(row: dict[str, Any]) -> Decimal:
-    for key in ("total_amount", "amount", "source_total_amount", "debit_total", "credit_total", "supply_amount"):
+    for key in ("total_amount", "amount", "debit_total", "credit_total", "source_total_amount", "supply_amount"):
         if row.get(key) is None:
             continue
         try:
