@@ -73,8 +73,9 @@ async def test_coverage_endpoint_reports_actual_route_coverage(monkeypatch):
         assert set(result["routes"]) == api.ROUTES
         assert result["routes"]["sales"]["acct_connected"] is True
         assert result["routes"]["journals"]["acct_connected"] is True
-        for route in ("cards", "accounts", "tax-evidence", "home"):
-            assert result["routes"][route]["acct_connected"] is False
+        for route in ("cards", "accounts", "tax-evidence", "suppliers"):
+            assert result["routes"][route]["acct_connected"] is True
+        assert result["routes"]["home"]["acct_connected"] is False
         monkeypatch.setattr(api, "_business", AsyncMock(side_effect=HTTPException(404)))
         source.source_coverage.reset_mock()
         response = await client.get("/workspaces/foreign/source-coverage")

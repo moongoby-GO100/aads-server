@@ -48,18 +48,20 @@ _SOURCE_FIELDS: Dict[str, tuple[str, bool]] = {
     "supply_amount": ("mn_mnam", True),
     "tax_amount": ("mn_vat", True),
     "total_amount": ("mn_total", True),
+    "card_code": ("cd_ctrade", False),
+    "invoice_number": ("no_eserotax", False),
+    "deposit_amount": ("deposit_amount", True),
+    "withdraw_amount": ("withdraw_amount", True),
+    "bank_description": ("deal_abstract", False),
+    "bank_counterparty": ("consignee", False),
 }
 
-# 증빙구분(ty_trade) — 세무 화면의 계산서/현금영수증/카드 구분에 쓴다.
-_EVIDENCE_LABEL: Dict[str, str] = {
-    "10": "세금계산서",
-    "11": "계산서",
-    "15": "신용카드",
-    "2": "현금영수증",
-    "9": "기타",
-    "24": "수입",
-    "0": "증빙 없음",
-}
+# ty_trade=2 also occurs on electronic tax invoices; it is NOT a cash-receipt flag.
+# Use explicit document/transaction subtype evidence, retain unknown raw codes.
+_EVIDENCE_LABEL = {"15": "신용카드"}
+_DETAIL_EVIDENCE = {"11": "세금계산서", "12": "세금계산서", "13": "계산서",
+                    "17": "신용카드", "22": "현금영수증", "51": "세금계산서",
+                    "52": "세금계산서", "53": "계산서", "57": "신용카드", "61": "현금영수증"}
 
 # 매입매출 세부유형(ty_mth2).
 _DETAIL_LABEL: Dict[str, str] = {
@@ -97,17 +99,34 @@ def _decimal(value: Any) -> Decimal:
         return Decimal("0")
 
 
-def _pivot_sql(company_id: int, entry_type: str, date_from: Optional[str], date_to: Optional[str], record_id: Optional[str] = None) -> str:
+def _pivot_sql(company_id: int, entry_type: str, date_from: Optional[str], date_to: Optional[str], record_id: Optional[str] = None, *, limit: int = _MAX_ROWS, offset: int = 0, search: str = "", status: str = "") -> str:
+    fields = _SOURCE_FIELDS
+    if entry_type == "bank":
+        bank_fields = {"occurred_on","seq","counterparty","status_code","deposit_amount","withdraw_amount","bank_description","bank_counterparty","item_name"}
+        fields = {k:v for k,v in fields.items() if k in bank_fields}
     selects = ",\n           ".join(
         "max({column}) FILTER (WHERE ar.field_key = {key}) AS {alias}".format(
             column="ar.num_value" if is_num else "ar.raw_value",
             key=_lit(field_key),
             alias=alias,
         )
-        for alias, (field_key, is_num) in _SOURCE_FIELDS.items()
+        for alias, (field_key, is_num) in fields.items()
     )
-    keys = ", ".join(_lit(field_key) for field_key, _ in _SOURCE_FIELDS.values())
-    conditions = [f"entry_type = {_lit(entry_type)}", "occurred_on IS NOT NULL"]
+    for alias, (_, numeric) in _SOURCE_FIELDS.items():
+        if alias not in fields:
+            selects += f", NULL::{'numeric' if numeric else 'text'} AS {alias}"
+    keys = ", ".join(_lit(field_key) for field_key, _ in fields.values())
+    marker = {
+        "bank": "marker.field_key IN ('deposit_amount','withdraw_amount') AND marker.num_value <> 0",
+        "card": "marker.field_key='cd_ctrade' AND nullif(marker.raw_value,'') IS NOT NULL",
+        "evidence": "((marker.field_key='ty_mth' AND marker.raw_value IN ('1','2')) OR (marker.field_key='cd_ctrade' AND nullif(marker.raw_value,'') IS NOT NULL))",
+    }.get(entry_type, f"marker.field_key='ty_mth' AND marker.raw_value={_lit(entry_type)}")
+    category_condition = {
+        "card": "nullif(card_code, '') IS NOT NULL",
+        "bank": "seq IS NOT NULL AND seq NOT IN ('', '0') AND (coalesce(deposit_amount,0) <> 0 OR coalesce(withdraw_amount,0) <> 0)",
+        "evidence": "entry_type IN ('1','2') OR nullif(card_code,'') IS NOT NULL",
+    }.get(entry_type, f"entry_type = {_lit(entry_type)}")
+    conditions = ["("+category_condition+")", "occurred_on ~ '^[0-9]{8}$'", "occurred_on > '19000101'"]
     start, end = _digits(date_from), _digits(date_to)
     if start:
         conditions.append(f"occurred_on >= {_lit(start)}")
@@ -119,16 +138,37 @@ def _pivot_sql(company_id: int, entry_type: str, date_from: Optional[str], date_
         if not match:
             raise HTTPException(status_code=404, detail="원천 내역을 찾을 수 없습니다")
         detail_filter = f" WHERE source_file_id = {int(match[1])} AND rec_idx = {int(match[2])}"
+    filters = []
+    if search:
+        filters.append(f"position(lower({_lit(search)}) in lower(concat_ws(' ',counterparty,item_name,remark,bank_description,bank_counterparty,card_code,seq))) > 0")
+    if status and status not in {"전체", "전체 상태"}:
+        codes = [code for code, label in _STATUS_LABEL.items() if status in label]
+        if codes:
+            filters.append("status_code IN (" + ",".join(_lit(code) for code in codes) + ")")
+        elif status == "검토 필요":
+            filters.append("coalesce(status_code,'') NOT IN ('1','2','3','5')")
+        else:
+            filters.append("FALSE")
+    if filters:
+        detail_filter += (" AND " if detail_filter else " WHERE ") + " AND ".join(filters)
+    amount_sql = ("coalesce(deposit_amount,0) - coalesce(withdraw_amount,0)" if entry_type == "bank"
+                  else "coalesce(nullif(total_amount,0),supply_amount,0)")
+    limit, offset = max(1,min(int(limit),_MAX_ROWS)), max(0,int(offset))
     # 같은 전표가 여러 스냅샷 파일에 그대로 다시 들어온다.  2026-09-22 라일론
     # 실측에서 매입 원본 행 26,723건은 전표키(일자+일련번호) 기준으로 4,210건
     # 뿐이었고, 중복 스냅샷을 그대로 더하면 건수와 금액이 부풀었다.
     # 그래서 전표키마다 가장 나중 source_file 한 건만 남긴다.
     return (
-        "WITH pivot AS (\n"
+        "WITH candidates AS MATERIALIZED (\n"
+        " SELECT DISTINCT marker.source_file_id, marker.rec_idx FROM source_file sf\n"
+        " JOIN atom_record marker ON marker.source_file_id=sf.id\n"
+        f" WHERE sf.company_id={int(company_id)} AND sf.is_current IS TRUE AND sf.domain='wehago' AND {marker}\n"
+        "), pivot AS (\n"
         "  SELECT ar.source_file_id, ar.rec_idx,\n"
         f"         {selects}\n"
         "    FROM source_file sf\n"
-        "    JOIN atom_record ar ON ar.source_file_id = sf.id\n"
+        "    JOIN candidates c ON c.source_file_id=sf.id\n"
+        "    JOIN atom_record ar ON ar.source_file_id = sf.id AND ar.rec_idx=c.rec_idx\n"
         f"   WHERE sf.company_id = {int(company_id)}\n"
         "     AND sf.is_current IS TRUE\n"
         "     AND sf.domain = 'wehago'\n"
@@ -137,17 +177,19 @@ def _pivot_sql(company_id: int, entry_type: str, date_from: Optional[str], date_
         "), deduped AS (\n"
         "  SELECT DISTINCT ON (occurred_on, voucher_key) * FROM (\n"
         "    SELECT pivot.*,\n"
-        "           coalesce(nullif(seq, ''), 'rec:' || rec_idx::text) AS voucher_key\n"
+        "           coalesce(nullif(seq, ''), 'rec:' || source_file_id::text || ':' || rec_idx::text) AS voucher_key\n"
         "      FROM pivot\n"
         f"     WHERE {' AND '.join(conditions)}\n"
         "  ) keyed\n"
         "  ORDER BY occurred_on, voucher_key, source_file_id DESC\n"
         ")\n"
         "SELECT *, count(*) OVER() AS source_total_count,\n"
-        " sum(coalesce(nullif(total_amount,0),supply_amount,0)) OVER() AS source_total_amount\n"
+        f" sum({amount_sql}) OVER() AS source_total_amount,\n"
+        f" sum(CASE WHEN status_code='2' THEN {amount_sql} ELSE 0 END) OVER() AS source_confirmed_amount,\n"
+        " count(*) FILTER (WHERE coalesce(status_code,'') NOT IN ('2','3')) OVER() AS source_review_count\n"
         " FROM deduped" + detail_filter + "\n"
         " ORDER BY occurred_on DESC, voucher_key DESC\n"
-        f" LIMIT {_MAX_ROWS}"
+        f" LIMIT {limit} OFFSET {offset}"
     )
 
 
@@ -160,17 +202,25 @@ def _row(row: Dict[str, Any], category: str) -> Dict[str, Any]:
     detail = str(row.get("detail_type") or "")
     evidence = str(row.get("evidence_code") or "")
     total = _decimal(row.get("total_amount"))
+    if category == "bank":
+        total = _decimal(row.get("deposit_amount")) - _decimal(row.get("withdraw_amount"))
     supply = _decimal(row.get("supply_amount"))
     return {
         "id": "acct:{0}:{1}".format(row.get("source_file_id"), row.get("rec_idx")),
         "category": category,
         "occurred_on": _iso(row.get("occurred_on")),
-        "counterparty": str(row.get("counterparty") or ""),
+        "counterparty": str(row.get("counterparty") or row.get("bank_counterparty") or ""),
         "counterparty_biz_no": str(row.get("counterparty_biz_no") or ""),
-        "description": str(row.get("item_name") or row.get("remark") or ""),
+        "description": str(row.get("item_name") or row.get("remark") or row.get("bank_description") or ""),
         "detail_type": detail,
         "detail_type_label": _DETAIL_LABEL.get(detail, detail or "미분류"),
-        "evidence_label": _EVIDENCE_LABEL.get(evidence, evidence or "미분류"),
+        "evidence_label": ("전자세금계산서" if row.get("invoice_number") else _DETAIL_EVIDENCE.get(detail) or _EVIDENCE_LABEL.get(evidence) or "증빙 확인 필요"),
+        "evidence_code": evidence,
+        "card_code": str(row.get("card_code") or ""),
+        "account_label": "원천 계좌 식별자 확인 필요" if category == "bank" else "",
+        "direction": "in" if _decimal(row.get("deposit_amount")) else "out",
+        "deposit_amount": _decimal(row.get("deposit_amount")),
+        "withdraw_amount": _decimal(row.get("withdraw_amount")),
         "debit_account": str(row.get("debit_name") or ""),
         "credit_account": str(row.get("credit_name") or ""),
         "supply_amount": supply,
@@ -184,6 +234,8 @@ def _row(row: Dict[str, Any], category: str) -> Dict[str, Any]:
         "voucher_seq": str(row.get("seq") or ""),
         "source_total_count": row.get("source_total_count"),
         "source_total_amount": row.get("source_total_amount"),
+        "source_confirmed_amount": row.get("source_confirmed_amount"),
+        "source_review_count": row.get("source_review_count"),
     }
 
 
@@ -194,9 +246,10 @@ async def source_transactions(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     record_id: Optional[str] = None,
+    *, limit: int = _MAX_ROWS, offset: int = 0, search: str = "", status: str = "",
 ) -> tuple[List[Dict[str, Any]], str]:
     """(행 목록, 원천 이름)을 돌려준다. 읽기 전용이며 계정 추정을 하지 않는다."""
-    entry_type = _ENTRY_TYPE.get(category)
+    entry_type = category if category in {"bank", "card", "evidence"} else _ENTRY_TYPE.get(category)
     if not entry_type:
         raise HTTPException(status_code=400, detail="매출 또는 매입만 조회할 수 있습니다")
     scope = await _authorized_acct_scope(current_user, business_id)
@@ -204,7 +257,7 @@ async def source_transactions(
         raise HTTPException(status_code=403, detail="사업자 범위가 필요합니다")
     tenant_id, company_id = scope
     rows = await _fetch_acct_journals(
-        _pivot_sql(company_id, entry_type, date_from, date_to, record_id), tenant_id
+        _pivot_sql(company_id, entry_type, date_from, date_to, record_id, limit=limit, offset=offset, search=search, status=status), tenant_id
     )
     records = [_row(row, category) for row in rows]
     return records, f"acct.source_file/atom_record:wehago:{category}"

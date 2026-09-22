@@ -10,13 +10,13 @@ from datetime import date, datetime, time
 from decimal import Decimal
 import json
 import re
-from typing import Any
+from typing import Any, Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
-from app.api import acct_purchase, acct_source_ledger
+from app.api import acct_purchase, acct_source_ledger, acct_source_documents
 from app.auth import get_current_user
 from app.services import obys_upload_service as upload_svc
 
@@ -58,11 +58,14 @@ LEDGER_ROUTES = {
     "tax-gap": "purchase",
 }
 
-# 매출·매입 "현황" 정본 메뉴만 ACCT 원천을 본다. orders/settlements/suppliers 는
-# 오비서 자체 원장을 계속 쓰므로 이번 연결로 회귀하지 않는다.
+# ACCT source categories retain their own evidence and transaction semantics.
 ACCT_SOURCE_ROUTES = {
     "sales": "sales",
     "purchases": "purchase",
+    "suppliers": "purchase",
+    "cards": "card",
+    "accounts": "bank",
+    "tax-evidence": "evidence",
 }
 BANK_ROUTES = frozenset({"accounts", "receivables", "unmatched"})
 CARD_ROUTES = frozenset({"cards"})
@@ -276,6 +279,21 @@ def _record(kind: str, row: dict[str, Any], business_name: str) -> dict[str, Any
                 "차변계정": str(value.get("debit_account") or "검토 필요"),
                 "대변계정": str(value.get("credit_account") or "검토 필요"),
                 "사업자번호": str(value.get("counterparty_biz_no") or ""),
+                "원천전표번호": str(value.get("voucher_seq") or record_id),
+                "카드코드": str(value.get("card_code") or "미기재"),
+                "계정과목": str(value.get("debit_account") or "확인 필요"),
+                "분개": status,
+                "주요품목": description,
+                "카드사": "원천 카드코드 " + str(value.get("card_code") or "미기재"),
+                "카드번호": "번호 미제공",
+                "가맹점": counterparty,
+                "승인·취소": status,
+                "거래번호": str(value.get("voucher_seq") or record_id),
+                "계좌": str(value.get("account_label") or "식별자 확인 필요"),
+                "거래유형": "입금" if value.get("direction") == "in" else "출금",
+                "매칭·미매칭": "원천 조회 · 매칭 미실행",
+                "증빙번호": record_id,
+                "공급가액": f"{Decimal(str(value.get('supply_amount') or 0)):,.0f}원",
                 "공급가": f"{Decimal(str(value.get('supply_amount') or 0)):,.0f}원",
                 "세액": f"{Decimal(str(value.get('tax_amount') or 0)):,.0f}원",
             }
@@ -411,11 +429,33 @@ async def _acct_journal_records(
     return [("journal", row) for row in rows]
 
 
+async def _local_source_rows(route, user, business_id, date_from, date_to):
+    category = ACCT_SOURCE_ROUTES[route]
+    if category in {"sales", "purchase"}:
+        return await _ledger_records(user=user, business_id=business_id, category=category,
+                                     date_from=date_from, date_to=date_to)
+    if category == "evidence":
+        rows = []
+        for kind in ("sales", "purchase"):
+            rows.extend(await _ledger_records(user=user, business_id=business_id, category=kind,
+                                             date_from=date_from, date_to=date_to))
+        return rows
+    if category == "card":
+        rows = await upload_svc.list_card_transactions(user=user, business_id=business_id,
+                                                      date_from=date_from, date_to=date_to)
+    else:
+        rows = await upload_svc.list_bank_transactions(user=user, business_id=business_id,
+                                                      date_from=date_from, date_to=date_to)
+    uploaded = await upload_svc.list_ledger_rows(user=user, business_id=business_id,
+                         category="card" if category == "card" else "transaction", limit=500)
+    return [(category, row) for row in rows] + [("uploaded", row) for row in uploaded]
+
+
 async def _source_rows(
     *, route: str, user: dict[str, Any], business_id: str,
     date_from: str | None, date_to: str | None,
 ) -> tuple[list[tuple[str, dict[str, Any]]], str]:
-    if route in {"tax-evidence", "tax-gap"}:
+    if route == "tax-gap":
         rows: list[tuple[str, dict[str, Any]]] = []
         for category in ("sales", "purchase"):
             rows.extend(await _ledger_records(
@@ -433,10 +473,7 @@ async def _source_rows(
         return rows, "obys_tax_evidence_sources"
     if route in ACCT_SOURCE_ROUTES:
         category = ACCT_SOURCE_ROUTES[route]
-        ledger = await _ledger_records(
-            user=user, business_id=business_id, category=category,
-            date_from=date_from, date_to=date_to,
-        )
+        ledger = await _local_source_rows(route, user, business_id, date_from, date_to)
         try:
             acct_rows, acct_source = await acct_source_ledger.source_transactions(
                 user, business_id, category, date_from=date_from, date_to=date_to,
@@ -572,13 +609,22 @@ async def workspace_summary(
             total = Decimal(str(remote[0]["source_total_amount"] or 0)) + sum(
                 (_amount(row) for row in local), Decimal("0")
             )
-    review = sum(1 for item in records if any(token in item["status"].lower() for token in ("review", "pending", "대기", "필요")))
+    confirmed = sum((_amount(row) for kind,row in source_rows if kind != "acct-source" and row.get("status") == "확정"), Decimal("0"))
+    remote_rows = [row for kind,row in source_rows if kind == "acct-source"]
+    if remote_rows:
+        confirmed += Decimal(str(remote_rows[0].get("source_confirmed_amount") or 0))
+    review = sum(1 for item in records if any(token in item["status"].lower() for token in ("review", "pending", "대기", "필요", "미확인", "보류")))
+    if remote_rows and remote_rows[0].get("source_review_count") is not None:
+        review = int(remote_rows[0]["source_review_count"]) + sum(
+            1 for kind,row in source_rows if kind != "acct-source" and any(
+                word in str(row.get("status") or "") for word in ("미확인","보류","필요","pending","review")))
     return {
         "business": {"id": business["id"], "name": business["name"]},
         "route": selected_route,
         "metrics": [
             {"label": "DB 건수", "value": f"{source_count:,}건"},
-            {"label": "합계", "value": f"{total:,.0f}원"},
+            {"label": "원천 순입출금" if selected_route == "accounts" else "원천 합계(제외·보류 포함)", "value": f"{total:,.0f}원"},
+            *([{"label": "확정 원천 금액", "value": f"{confirmed:,.0f}원"}] if selected_route in ACCT_SOURCE_ROUTES else []),
             {"label": "확인 필요", "value": f"{review:,}건"},
             {"label": "데이터 원천", "value": source},
         ],
@@ -609,6 +655,35 @@ async def workspace_source_coverage(
     return coverage
 
 
+@router.get("/{business_id}/source-documents")
+async def workspace_source_documents(
+    business_id: str, domain: str = Query("", max_length=40),
+    offset: Annotated[int, Query(ge=0)] = 0, limit: int = Query(50, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+):
+    await _business(current_user, business_id)
+    return await acct_source_documents.source_documents(current_user, business_id, domain, offset, limit)
+
+
+@router.get("/{business_id}/source-documents/{file_id}/sheets/{sheet_id}")
+async def workspace_source_sheet(
+    business_id: str, file_id: int, sheet_id: int,
+    after_row: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+):
+    await _business(current_user, business_id)
+    return await acct_source_documents.source_sheet(current_user, business_id, file_id, sheet_id, after_row, limit)
+
+
+@router.get("/{business_id}/source-documents/{file_id}/snapshot")
+async def workspace_source_snapshot(
+    business_id: str, file_id: int, after_record: int = Query(-1, ge=-1),
+    limit: int = Query(50, ge=1, le=100), current_user: dict = Depends(get_current_user),
+):
+    await _business(current_user, business_id)
+    return await acct_source_documents.source_snapshot(current_user, business_id, file_id, after_record, limit)
+
+
 @router.get("/{business_id}/{route}/records")
 async def workspace_records(
     business_id: str,
@@ -618,10 +693,38 @@ async def workspace_records(
     status: str = Query("전체 상태", max_length=80),
     search: str = Query("", max_length=200),
     limit: int = Query(200, ge=1, le=500),
+    offset: Annotated[int, Query(ge=0)] = 0,
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
     selected_route = _route(route)
     business = await _business(current_user, business_id)
+    if selected_route in ACCT_SOURCE_ROUTES:
+        _filter_source_dates([], date_from, date_to)
+        local_rows = await _local_source_rows(selected_route, current_user, business_id, date_from, date_to)
+        local_rows = _filter_source_dates(local_rows, date_from, date_to)
+        local = _filter([_record(k,r,business["name"]) for k,r in local_rows], search, status)
+        records = local[offset:offset+limit]
+        quota = limit - len(records)
+        remote, source = [], "obys_ledger"
+        if quota:
+            try:
+                remote, source = await acct_source_ledger.source_transactions(
+                    current_user, business_id, ACCT_SOURCE_ROUTES[selected_route],
+                    date_from=date_from, date_to=date_to, limit=quota,
+                    offset=max(0,offset-len(local)), search=search, status=status,
+                )
+            except HTTPException as exc:
+                if exc.status_code != 403:
+                    raise
+            records.extend(_record("acct-source",r,business["name"]) for r in remote)
+        if quota and not remote and source != "obys_ledger":
+            source += ":조회조건_전표없음"
+        total = len(local) + (int(remote[0].get("source_total_count") or len(remote)) if remote else 0)
+        has_more = (offset+len(records) < total) if remote else len(records)==limit
+        return {"business": {"id":business["id"],"name":business["name"]},
+                "route":selected_route,"records":records,"count":len(records),
+                "offset":offset,"has_more":has_more,"next_offset":offset+len(records),
+                "source":{"name":source+"+obys_ledger","live":True}}
     source_rows, source = await _source_rows(
         route=selected_route, user=current_user, business_id=business_id,
         date_from=date_from, date_to=date_to,
@@ -629,7 +732,7 @@ async def workspace_records(
     source_rows = _filter_source_dates(source_rows, date_from, date_to)
     records = _filter(
         [_record(kind, row, business["name"]) for kind, row in source_rows], search, status
-    )[:limit]
+    )[offset:offset+limit]
     return {
         "business": {"id": business["id"], "name": business["name"]},
         "route": selected_route,

@@ -95,7 +95,7 @@ async def test_sales_records_are_tenant_business_scoped_and_db_backed(monkeypatc
     async def uploaded(**kwargs):
         return []
 
-    async def no_acct_source(user, business_id, category, date_from=None, date_to=None):
+    async def no_acct_source(user, business_id, category, date_from=None, date_to=None, **kwargs):
         # 이 사업자는 ACCT 매출 원천이 비어 있다(2026-09-22 실측: ty_mth='1' 0건).
         return [], "acct.source_file/atom_record:wehago:sales"
 
@@ -130,7 +130,7 @@ async def test_purchase_records_prefer_acct_source_over_local_ledger(monkeypatch
     async def uploaded(**kwargs):
         return []
 
-    async def acct_source(user, business_id, category, date_from=None, date_to=None):
+    async def acct_source(user, business_id, category, date_from=None, date_to=None, **kwargs):
         assert category == "purchase"
         return [{
             "id": "acct:1234:7",
@@ -181,7 +181,7 @@ async def test_acct_source_failure_is_not_reported_as_zero(monkeypatch):
     async def uploaded(**kwargs):
         return []
 
-    async def failing(user, business_id, category, date_from=None, date_to=None):
+    async def failing(user, business_id, category, date_from=None, date_to=None, **kwargs):
         raise HTTPException(status_code=502, detail="ACCT 전표 조회 실패")
 
     monkeypatch.setattr(api.upload_svc, "list_businesses", businesses)
