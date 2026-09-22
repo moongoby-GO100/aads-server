@@ -138,6 +138,77 @@ V4.1은 8개 업무군, 36개 고유 메뉴 경로를 제공한다. 카드 승�
 
 페이지는 같은 카드나 표 컴포넌트를 사용할 수 있지만, 위 탐색 계층·목록 컬럼·건별 처리 계약을 다른 페이지의 것으로 대체할 수 없다. 모든 페이지의 `현재 목록 내보내기`, 목록 행, 상세 처리, 자료 등록 가능 여부와 실패 복구 버튼은 실제 상태 변화 또는 파일 생성으로 이어져야 한다.
 
+### 8.2 36개 메뉴 데이터 원천표
+
+목업 `mockup-v4-1.html` 의 `configs[route].source` 와 1:1로 대응한다. 목업은 이 표에 적힌
+경로만 호출하고, 응답이 없거나 막히면 그 상태를 그대로 화면에 표시한다. 샘플 행과 고정 KPI는 두지 않는다.
+
+실측 기준: 2026-09-22 12:5x KST, 라일론 = `obys.yeoljeong_businesses.id='biz-lylon-e2e'`,
+tenant `d1695f15-6b68-4929-bc8d-646827363ff9`(ACCT tenant id 11).
+상태는 `실데이터`(1건 이상) · `0건`(연결되나 자료 없음) · `차단(403)`(테넌트 게이트) · `미연동`(원천 API 없음) 넷이다.
+
+| 페이지(route) | 현행 원천 API | 저장소 | 라일론 실측 | 상태 |
+|---|---|---|---|---|
+| `home` | `GET /yeoljeong-dashboard/kpis` | obys 집계(dashboard.get_kpis) | 게이트 차단 | 차단(403) |
+| `tasks` | `GET /yeoljeong-dashboard/tasks` | obys 집계(dashboard.get_tasks) | 게이트 차단 | 차단(403) |
+| `reports` | 없음 | 리포트 저장소 미정 | — | 미연동 |
+| `documents` | `GET /yeoljeong-finance/onboarding/documents` | `obys.yeoljeong_onboarding_documents` | 0건(전체 41건) | 차단(403) |
+| `sales` | `GET /yeoljeong-finance/sales` | `obys.yeoljeong_delivery_sales` | 0건(전체 3,813건) | 차단(403) |
+| `orders` | 없음 | 주문 원문 저장소 미정 | — | 미연동 |
+| `cards` | `GET /yeoljeong-finance/card-transactions` | `obys.yeoljeong_card_transactions` | 1건 | 실데이터 |
+| `settlements` | `GET /yeoljeong-finance/settlements` | `obys.yeoljeong_delivery_settlements` | 0건(전체 3,551건) | 차단(403) |
+| `accounts` | `GET /yeoljeong-finance/ledger-bank-transactions` | `obys.yeoljeong_manual_bank_transactions` | 1건 | 실데이터 |
+| `receivables` | 없음 | 미수 저장소 미정 | — | 미연동 |
+| `unmatched` | 없음 | 매칭 결과 저장소 미정 | — | 미연동 |
+| `purchases` | `GET /yeoljeong-finance/ledger-entries?category=purchase` | `obys.yeoljeong_manual_ledger_entries` | 2건 | 실데이터 |
+| `suppliers` | 없음 | 거래처 마스터 미정 | — | 미연동 |
+| `inventory` | `GET /yeoljeong-inventory/items` | `obys.yeoljeong_inventory_items` | 0건 | 0건 |
+| `purchase-orders` | `GET /yeoljeong-inventory/orders` | `obys.yeoljeong_purchase_orders` | 0건 | 0건 |
+| `employees` | `GET /yeoljeong-finance/employees/approved` | `obys.yeoljeong_employee_join_requests` | 0건(전체 17건) | 차단(403) |
+| `attendance` | 없음 | `obys.yeoljeong_attendance_records` | 0건 | 미연동 |
+| `payroll` | `GET /yeoljeong-finance/payroll` | `obys.yeoljeong_payroll_statements` | 0건(전체 2건) | 차단(403) |
+| `hr-docs` | `GET /yeoljeong-finance/contracts` | `obys.yeoljeong_contracts` | 0건(전체 29건) | 차단(403) |
+| `tax-evidence` | `GET /yeoljeong-finance/integration-evidence` | obys 증빙 파일 저장소 | 0건 | 차단(403) |
+| `tax-gap` | `GET /yeoljeong-finance/uploaded-ledger?category=purchase` | `obys.yeoljeong_uploaded_ledger_rows` | 3건 | 실데이터 |
+| `journals` | `GET /yeoljeong-finance/journals` | `obys.yeoljeong_journal_vouchers` | 2건 | 실데이터 |
+| `tax-returns` | `GET /yeoljeong-accounting/tax-reports` | `obys.yeoljeong_tax_reports` | 0건 | 차단(403) |
+| `approvals` | `GET /yeoljeong-ops/approvals` | `obys.yeoljeong_approvals` | 0건 | 차단(403) |
+| `audit-history` | `GET /yeoljeong-ops/audit-logs` | `obys.yeoljeong_audit_logs` | 0건 | 차단(403) |
+| `alerts` | `GET /yeoljeong-ops/notifications` | `obys.yeoljeong_notifications` | 0건 | 차단(403) |
+| `errors` | `GET /yeoljeong-finance/collection-status` | `obys.yeoljeong_delivery_collection_status` | 0건(전체 4,967건) | 차단(403) |
+| `businesses` | `GET /yeoljeong-finance/tenant-registry/businesses` | `obys.yeoljeong_businesses` | 1건 | 실데이터 |
+| `branches` | 없음 | `obys.yeoljeong_branches`(전체 5건) | 0건 | 미연동 |
+| `margins` | 없음 | 원가 분석 저장소 미정 | — | 미연동 |
+| `menu-costs` | 없음 | 레시피 마스터 미정 | — | 미연동 |
+| `integrations` | `GET /yeoljeong-finance/automation` | obys 자동화 상태 집계 | 게이트 차단 | 차단(403) |
+| `sales-connect` | `GET /yeoljeong-finance/completion-matrix` | `obys.yeoljeong_delivery_collection_status` 집계 | 게이트 차단 | 차단(403) |
+| `bank-connect` | `GET /yeoljeong-finance/bank-accounts` | `obys.yeoljeong_bank_accounts` | 0건(전체 6건) | 차단(403) |
+| `tax-connect` | 없음 | 세무 연동 상태 저장소 미정 | — | 미연동 |
+| `access-log` | `GET /yeoljeong-ops/audit-logs` | `obys.yeoljeong_audit_logs` | 0건 | 차단(403) |
+
+합계 36개 = 실데이터 6 · 0건 2 · 차단(403) 18 · 미연동 10.
+
+`차단(403)` 은 `app/core/obys_tenant.py` 의 레거시 허용목록(`15055cac-…` 1개) 때문이다.
+라일론 테넌트는 허용목록에 없고, 목록에 없는 테넌트가 통과할 수 있는 경로는
+`/session` `/tenant-registry` `/uploads` `/uploaded-ledger` `/ledger-entries`
+`/card-transactions` `/card-uploads` `/ledger-bank-transactions` `/journals` 뿐이다.
+그래서 라일론이 실제 자료를 볼 수 있는 화면은 6개이고, 나머지 18개는 자료 유무와 무관하게 403이다.
+
+### 8.3 KPI·드릴다운 계산 규칙
+
+메뉴마다 고정 수치를 적어 두지 않는다. 지표 4칸은 다음 규칙으로 조회 결과에서 계산한다.
+
+| 칸 | 값 | 계산 |
+|---|---|---|
+| 1 | 메뉴별 건수 | 조회된 행 수 |
+| 2 | 확인 필요 | 행 값에 확인 필요·누락·대기·오류·미매칭·연체 등이 있는 행 수 |
+| 3 | 최근 일자 | 행 값에서 찾은 `YYYY-MM-DD` 중 최대값 |
+| 4 | 원천 상태 | 실데이터 / 0건 / 미연동 / 차단 / 로그인 필요 / 조회 실패 |
+
+`실데이터`·`0건` 이 아닌 상태에서는 1~3칸을 `—` 로 둔다. 추정값을 채우지 않는다.
+드릴다운 단계도 같다 — 각 단계의 선택지는 조회된 행에서 뽑은 고유값뿐이고, 값이 없으면 단계를 선택할 수 없다.
+확정 지표(총매출액, 마진율 등)는 §9 의 `summary` API를 붙인 뒤 이 계산값을 대체한다.
+
 ## 9. API·권한 계약
 
 | API | 목적 | 필수 통제 |
@@ -173,3 +244,35 @@ V4.1은 8개 업무군, 36개 고유 메뉴 경로를 제공한다. 카드 승�
 - 데스크톱 1440px와 모바일 390px에서 메뉴·필터·상세·등록 흐름을 캡처한다.
 - 자바스크립트 구문 오류와 브라우저 콘솔 오류가 0건이다.
 - 외부 URL이 HTTP 200이며 배포 후 5분간 P0/P1 오류가 0건이다.
+
+## 12. 라일론 DB 연동 실측 (2026-09-22)
+
+목업을 실데이터 계약으로 바꾸면서 라일론 사업자로 원천을 실측했다. 결론은 **오비서 화면에서 라일론이
+볼 수 있는 실자료는 6개 메뉴, 합계 10행**이고, 라일론의 회계 자료 대부분은 오비서가 아니라 ACCT 원장에만 있다는 것이다.
+
+| 구분 | 실측값 | 근거 |
+|---|---|---|
+| obys DB 라일론 자료 | card_transactions 1 · journal_vouchers 2 · manual_ledger_entries 2 · manual_bank_transactions 1 · uploaded_ledger_rows 3 · uploads 3 · businesses 1 | `obys` DB, `business_id='biz-lylon-e2e'` |
+| obys DB 라일론 0건 | delivery_sales · delivery_settlements · bank_accounts · branches · contracts · onboarding_documents · platform_accounts · inventory_items · purchase_orders | 같은 조회 |
+| ACCT DB 라일론 자료 | `journal_entry` 13,623건(2026-01-01~2026-08-24) · `journal_line` 27,416건 · company 1 | ACCT DB tenant_id=11 |
+| ACCT DB 라일론 0건 | canonical_transaction · canonical_document · raw_document · import_job · source_connection · audit_event · period_lock | 같은 조회 |
+| 연동 상태 | `GET /yeoljeong-finance/journals` 응답의 `integration.acct = "not_connected"` | `app/api/obys_finance.py` |
+| 테넌트 게이트 | 라일론 tenant는 레거시 허용목록에 없어 18개 메뉴가 403 | `app/core/obys_tenant.py` |
+
+따라서 "오비서 V4.1에서 라일론 실데이터를 본다"는 두 가지를 먼저 풀어야 성립한다.
+
+1. **테넌트 게이트 해제 조건** — `yeoljeong-*` 라우터의 WHERE 절에 테넌트 조건을 넣어야 허용목록을 지울 수 있다.
+   지금 허용목록을 늘리면 라일론이 열정국밥 자료를 보게 된다(게이트가 막고 있던 바로 그 사고다).
+2. **ACCT 원장 13,623건 연결** — 오비서의 `journals` 는 `obys.yeoljeong_journal_vouchers`(2건)를 보고 있고
+   ACCT `journal_entry`(13,623건)와 이어져 있지 않다. 세무·회계 4개 메뉴의 실데이터는 이 연결 없이는 나오지 않는다.
+
+이 두 가지가 끝나기 전까지 목업은 `차단(403)` 과 `미연동` 을 숨기지 않고 그대로 표시한다.
+화면에 수치가 보이지 않는 것은 목업의 결함이 아니라 원천의 현재 상태다.
+
+## 13. M1 완료 판정 (목업·PRD의 실데이터 계약 전환)
+
+- 36개 메뉴 계약 = 36개 `configs` 항목, 중복 route 0개. (파일 실측)
+- 샘플 행 생성기(`rows()`·`sampleValue()`)와 고정 KPI 문자열 제거 — 하드코딩 금액·건수·비율 0건.
+- 모든 값은 §8.2 의 원천 API 응답에서만 나오며, 없으면 미연동·0건·차단·로그인 필요를 표시한다.
+- HTML 파서 오류 0건, 자바스크립트 구문 오류 0건, 외부 URL HTTP 200.
+- 남은 항목: §9 의 `summary`·`records`·`import-sessions` API 미구현, 건별 처리 API 미구현, §12 의 두 선행 조건.
