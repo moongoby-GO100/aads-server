@@ -1006,7 +1006,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `app/services/llmops_eval.py` (new): 5-check rule evaluator (`rule_v1`), idempotent dataset promotion, experiment runner, experiment read.
   - `app/services/llmops_export.py` (new): fail-closed external LangSmith gate + masking policy `mask_v1`.
   - `app/api/ohvis_llmops.py` (new): PRD §5.6 routes under `/api/v1/ohvis/llmops`.
-  - `app/main.py`: router import + `include_router` (2 lines).
+  - `app/main.py`: router import + `include_router` added.
   - `app/services/ohvis_harness.py`: 8 LLMOps tables added to `FOUNDATION_TABLES`, new `llmops` component in harness status (additive; existing fields preserved).
   - `app/services/ohvis_harness_trace.py`: provenance hook — legacy harness writes now derive a deterministic run-scoped `trace_id` from `graph_run_id`.
   - `tests/unit/test_ohvis_llmops.py` (new): 41 tests.
@@ -14386,3 +14386,10 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   base64 19,992자)와 click Input을 실행했고, 신규 단위테스트 4건, Python compile,
   dashboard TypeScript 검사와 ESLint(오류 0)를 통과했다. 배포·화면 캡처·5분 관측 결과는
   DB 핸드오버 정본에 후속 기록한다.
+
+## 2026-09-22 Cafe24 browser direct recovery
+- Recovered preserved runner-79279468 changes in an isolated worktree. Repeated approval_commit_failed was the staged dup_guard 15-line probe/capture duplicate, not detached HEAD or authentication.
+- Shared probe/capture navigation resource owner; authenticated per-browser SSH SOCKS tunnel to deployment alias server-114, loopback only, strict host key checking, bounded startup and cleanup. Requested Cafe24 failure never changes to direct/PC. Server live streams remain isolated ephemeral contexts; snapshot profiles are tenant/session scoped.
+- Browser tasks persist direct/cafe24/auto; auto selects Cafe24 for store.coupangeats.com. Session filtering happens before LIMIT. Recipe registry execution plans retain the route policy; this does not certify sales recipe replay.
+- Validation: focused pytest 53 passed; staged dup_guard passed; real isolated server-browser probe returned Cafe24 egress 114.207.244.86 and CDP frames. Coupang Eats returned Access Denied on both direct and Cafe24. Authentication/sales collection NOT complete.
+- Pending at commit: API release, dashboard release and production chat UI evidence. DB handover key smartbrowser-cafe24-direct-recovery-20260922 tracks actual release state.

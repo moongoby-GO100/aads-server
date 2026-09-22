@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import base64
 import json
 import logging
@@ -13,7 +14,7 @@ from urllib.parse import urlparse
 
 from app.core.db_pool import get_pool
 from app.services.browser_permission_policy import classify_browser_action, mask_sensitive_value
-from app.services.managed_browser import normalize_work_key
+from app.services.managed_browser import browser_egress, egress_for_target, normalize_egress_policy, normalize_work_key, profile_info
 
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
@@ -266,6 +267,8 @@ def _task_to_dict(row: Any) -> dict[str, Any]:
         if item.get(key):
             item[key] = item[key].isoformat()
     item["result"] = _json_dict(item.get("result"))
+    egress = egress_for_target(item.get("egress_policy") or "direct", str(item.get("target_url") or ""))
+    item.update({key: value for key, value in egress.items() if key != "proxy"})
     return item
 
 
@@ -303,15 +306,17 @@ async def create_browser_task(
     target_url: str,
     session_id: str | None = None,
     current_step: str = "",
+    egress_policy: str = "direct",
     channel_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_work_key = normalize_work_key(work_key)
+    normalized_egress_policy = normalize_egress_policy(egress_policy)
     try:
         async with get_pool().acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO browser_tasks (tenant_id, user_id, session_id, work_key, target_url, status, current_step)
-                VALUES ($1, $2, $3, $4, $5, 'queued', $6)
+                INSERT INTO browser_tasks (tenant_id, user_id, session_id, work_key, target_url, status, current_step, egress_policy)
+                VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7)
                 RETURNING *
                 """,
                 _tenant_uuid(tenant_id),
@@ -320,6 +325,7 @@ async def create_browser_task(
                 normalized_work_key,
                 target_url,
                 current_step,
+                normalized_egress_policy,
             )
             await append_browser_task_event(
                 conn=conn,
@@ -331,6 +337,7 @@ async def create_browser_task(
                     "target_url": target_url,
                     "session_id": session_id or "",
                     "current_step": current_step,
+                    "egress_requested": normalized_egress_policy,
                 },
             )
             if channel_audit:
@@ -358,6 +365,7 @@ async def create_browser_task(
             "target_url": target_url,
             "status": "creation_failed",
             "current_step": current_step,
+            "egress_policy": normalized_egress_policy,
             "requires_approval": False,
             "approval_request_id": None,
             "result": {},
@@ -532,12 +540,15 @@ async def cleanup_browser_task_session(task: dict[str, Any]) -> dict[str, Any]:
         return {"status": "error", "message": str(exc)}
 
 
-async def list_browser_tasks(*, tenant_id: str, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+async def list_browser_tasks(*, tenant_id: str, status: str | None = None, limit: int = 50, session_id: str | None = None) -> list[dict[str, Any]]:
     args: list[Any] = [_tenant_uuid(tenant_id)]
     where = "tenant_id = $1"
     if status:
         where += " AND status = $2"
         args.append(status)
+    if session_id:
+        args.append(uuid.UUID(session_id))
+        where += f" AND session_id = ${len(args)}"
     args.append(max(1, min(limit, 200)))
     async with get_pool().acquire() as conn:
         rows = await conn.fetch(
@@ -614,6 +625,36 @@ def _target_supports_self_hosted_capture(target_url: str) -> bool:
     return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
 
 
+def _self_hosted_capture_settings(task: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], asyncio.Lock]:
+    """Keep profile, egress, and per-profile locking identical for probe/capture."""
+    target_url = str(task.get("target_url") or "").strip()
+    scope = f"{task.get('tenant_id', 'probe')}-{task.get('session_id') or task.get('id', 'probe')}"
+    profile = profile_info(scope, target_url)
+    egress = egress_for_target(task.get("egress_policy") or "direct", target_url)
+    lock = _SELF_HOSTED_CAPTURE_LOCKS.setdefault(profile["profile_key"], asyncio.Lock())
+    return profile, egress, lock
+
+
+@asynccontextmanager
+async def _open_self_hosted_page(playwright: Any, profile: dict[str, Any], egress: dict[str, Any], target_url: str):
+    """One shared launch/navigation path for probes and stored screenshots."""
+    async with browser_egress(egress) as proxy:
+        context = await playwright.chromium.launch_persistent_context(
+            profile["profile_dir"], headless=True, viewport=SELF_HOSTED_LIVE_VIEWPORT,
+            ignore_https_errors=True, args=["--disable-dev-shm-usage", "--no-sandbox"], proxy=proxy,
+        )
+        try:
+            page = context.pages[0] if context.pages else await context.new_page()
+            response = await page.goto(target_url, wait_until="domcontentloaded", timeout=SELF_HOSTED_LIVE_CAPTURE_TIMEOUT_MS)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=3_000)
+            except Exception:
+                pass
+            yield page, response
+        finally:
+            await context.close()
+
+
 def classify_playwright_access(
     *,
     status: str = "",
@@ -659,7 +700,13 @@ def classify_playwright_access(
         severity = "warning"
         approval_required = True
         reason_code = "http_auth_required"
-    elif http_status in {403, 429}:
+    elif http_status == 403:
+        category = "access_restricted_unknown"
+        severity = "warning"
+        self_hosted_usable = False
+        approval_required = True
+        reason_code = "http_403_unclassified"
+    elif http_status == 429:
         category = "bot_or_waf_blocked"
         severity = "error"
         self_hosted_usable = False
@@ -752,13 +799,16 @@ def build_access_remediation_plan(diagnosis: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def check_browser_target_access(*, work_key: str, target_url: str) -> dict[str, Any]:
+async def check_browser_target_access(
+    *, work_key: str, target_url: str, egress_policy: str = "direct"
+) -> dict[str, Any]:
     task = {
         "id": "00000000-0000-0000-0000-000000000000",
         "tenant_id": "00000000-0000-0000-0000-000000000000",
         "work_key": normalize_work_key(work_key or "access-check"),
         "target_url": target_url,
         "current_step": "access check",
+        "egress_policy": normalize_egress_policy(egress_policy),
     }
     result = await _probe_self_hosted_playwright_access(task)
     diagnosis = result.get("access_diagnosis") or classify_playwright_access(
@@ -773,6 +823,7 @@ async def check_browser_target_access(*, work_key: str, target_url: str) -> dict
         "diagnosis": diagnosis,
         "remediation": build_access_remediation_plan(diagnosis),
         "runtime": "self_hosted_playwright",
+        **{key: value for key, value in egress_for_target(task["egress_policy"], target_url).items() if key != "proxy"},
     }
 
 
@@ -789,58 +840,39 @@ async def _probe_self_hosted_playwright_access(task: dict[str, Any]) -> dict[str
         diagnosis = classify_playwright_access(status="skipped", reason="playwright_unavailable", message=str(exc))
         return {"status": "skipped", "reason": "playwright_unavailable", "message": str(exc), "access_diagnosis": diagnosis}
 
-    from app.services.managed_browser import profile_info
-
-    profile = profile_info(work_key, target_url)
-    profile_dir = profile["profile_dir"]
-    lock_key = profile["profile_key"]
-    lock = _SELF_HOSTED_CAPTURE_LOCKS.setdefault(lock_key, asyncio.Lock())
+    profile, egress, lock = _self_hosted_capture_settings(task)
+    if egress["egress_effective"] == "unavailable":
+        diagnosis = classify_playwright_access(status="skipped", reason=egress["egress_reason"])
+        return {"status": "skipped", "reason": egress["egress_reason"], "access_diagnosis": diagnosis,
+                **{key: value for key, value in egress.items() if key != "proxy"}}
     async with lock:
         browser_context = None
         async with async_playwright() as playwright:
             try:
-                browser_context = await playwright.chromium.launch_persistent_context(
-                    profile_dir,
-                    headless=True,
-                    viewport=SELF_HOSTED_LIVE_VIEWPORT,
-                    ignore_https_errors=True,
-                    args=[
-                        "--disable-dev-shm-usage",
-                        "--no-sandbox",
-                    ],
-                )
-                page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
-                response = await page.goto(
-                    target_url,
-                    wait_until="domcontentloaded",
-                    timeout=SELF_HOSTED_LIVE_CAPTURE_TIMEOUT_MS,
-                )
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=3_000)
-                except Exception:
-                    pass
-                title = await page.title()
-                current_url = page.url
-                body_text = ""
-                try:
-                    body_text = await page.locator("body").inner_text(timeout=1_500)
-                except Exception:
+                async with _open_self_hosted_page(playwright, profile, egress, target_url) as (page, response):
+                    title = await page.title()
+                    current_url = page.url
                     body_text = ""
-                http_status = response.status if response else None
-                diagnosis = classify_playwright_access(
-                    status="reachable",
-                    http_status=http_status,
-                    current_url=current_url,
-                    page_title=title,
-                    body_text=body_text,
-                )
-                return {
-                    "status": "reachable",
-                    "http_status": http_status,
-                    "current_url": current_url,
-                    "page_title": title,
-                    "access_diagnosis": diagnosis,
-                }
+                    try:
+                        body_text = await page.locator("body").inner_text(timeout=1_500)
+                    except Exception:
+                        body_text = ""
+                    http_status = response.status if response else None
+                    diagnosis = classify_playwright_access(
+                        status="reachable",
+                        http_status=http_status,
+                        current_url=current_url,
+                        page_title=title,
+                        body_text=body_text,
+                    )
+                    return {
+                        "status": "reachable",
+                        "http_status": http_status,
+                        "current_url": current_url,
+                        "page_title": title,
+                        "access_diagnosis": diagnosis,
+                        **{key: value for key, value in egress.items() if key != "proxy"},
+                    }
             except Exception as exc:
                 diagnosis = classify_playwright_access(status="skipped", reason="self_hosted_capture_failed", message=str(exc))
                 logger.warning(
@@ -854,6 +886,7 @@ async def _probe_self_hosted_playwright_access(task: dict[str, Any]) -> dict[str
                     "reason": "self_hosted_capture_failed",
                     "message": str(exc),
                     "access_diagnosis": diagnosis,
+                    **{key: value for key, value in egress.items() if key != "proxy"},
                 }
             finally:
                 if browser_context:
@@ -884,79 +917,62 @@ async def _capture_self_hosted_playwright_frame(task: dict[str, Any]) -> dict[st
             "remediation": build_access_remediation_plan(diagnosis),
         }
 
-    from app.services.managed_browser import profile_info
-
-    profile = profile_info(work_key, target_url)
-    profile_dir = profile["profile_dir"]
-    lock_key = profile["profile_key"]
-    lock = _SELF_HOSTED_CAPTURE_LOCKS.setdefault(lock_key, asyncio.Lock())
+    profile, egress, lock = _self_hosted_capture_settings(task)
+    if egress["egress_effective"] == "unavailable":
+        diagnosis = classify_playwright_access(status="skipped", reason=egress["egress_reason"])
+        return {"status": "skipped", "reason": egress["egress_reason"], "access_diagnosis": diagnosis,
+                "remediation": build_access_remediation_plan(diagnosis),
+                **{key: value for key, value in egress.items() if key != "proxy"}}
     async with lock:
         browser_context = None
         async with async_playwright() as playwright:
             try:
-                browser_context = await playwright.chromium.launch_persistent_context(
-                    profile_dir,
-                    headless=True,
-                    viewport=SELF_HOSTED_LIVE_VIEWPORT,
-                    ignore_https_errors=True,
-                    args=[
-                        "--disable-dev-shm-usage",
-                        "--no-sandbox",
-                    ],
-                )
-                page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
-                response = await page.goto(
-                    target_url,
-                    wait_until="domcontentloaded",
-                    timeout=SELF_HOSTED_LIVE_CAPTURE_TIMEOUT_MS,
-                )
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=3_000)
-                except Exception:
-                    pass
-                image_bytes = await page.screenshot(type="jpeg", quality=68, full_page=False)
-                frame_base64 = base64.b64encode(image_bytes).decode("ascii")
-                title = await page.title()
-                current_url = page.url
-                body_text = ""
-                try:
-                    body_text = await page.locator("body").inner_text(timeout=1_500)
-                except Exception:
+                async with _open_self_hosted_page(playwright, profile, egress, target_url) as (page, response):
+                    image_bytes = await page.screenshot(type="jpeg", quality=68, full_page=False)
+                    frame_base64 = base64.b64encode(image_bytes).decode("ascii")
+                    title = await page.title()
+                    current_url = page.url
                     body_text = ""
-                http_status = response.status if response else None
-                diagnosis = classify_playwright_access(
-                    status="captured",
-                    http_status=http_status,
-                    current_url=current_url,
-                    page_title=title,
-                    body_text=body_text,
-                )
-                frame = await upsert_browser_task_live_frame(
-                    tenant_id=str(task["tenant_id"]),
-                    task_id=str(task["id"]),
-                    frame_base64=frame_base64,
-                    media_type="image/jpeg",
-                    width=SELF_HOSTED_LIVE_VIEWPORT["width"],
-                    height=SELF_HOSTED_LIVE_VIEWPORT["height"],
-                    current_url=current_url,
-                    page_title=title,
-                    current_step=str(task.get("current_step") or "server live capture"),
-                    metadata={
+                    try:
+                        body_text = await page.locator("body").inner_text(timeout=1_500)
+                    except Exception:
+                        body_text = ""
+                    http_status = response.status if response else None
+                    diagnosis = classify_playwright_access(
+                        status="captured",
+                        http_status=http_status,
+                        current_url=current_url,
+                        page_title=title,
+                        body_text=body_text,
+                    )
+                    frame = await upsert_browser_task_live_frame(
+                        tenant_id=str(task["tenant_id"]),
+                        task_id=str(task["id"]),
+                        frame_base64=frame_base64,
+                        media_type="image/jpeg",
+                        width=SELF_HOSTED_LIVE_VIEWPORT["width"],
+                        height=SELF_HOSTED_LIVE_VIEWPORT["height"],
+                        current_url=current_url,
+                        page_title=title,
+                        current_step=str(task.get("current_step") or "server live capture"),
+                        metadata={
+                            "source": "self_hosted_playwright",
+                            "runtime": "self_hosted_playwright",
+                            "http_status": http_status,
+                            "profile_key": profile["profile_key"],
+                            "access_diagnosis": diagnosis,
+                            "remediation": build_access_remediation_plan(diagnosis),
+                            **{key: value for key, value in egress.items() if key != "proxy"},
+                        },
+                    )
+                    return {
+                        "status": "captured",
                         "source": "self_hosted_playwright",
-                        "runtime": "self_hosted_playwright",
-                        "http_status": http_status,
-                        "profile_key": profile["profile_key"],
+                        "frame": frame,
                         "access_diagnosis": diagnosis,
                         "remediation": build_access_remediation_plan(diagnosis),
-                    },
-                )
-                return {
-                    "status": "captured",
-                    "source": "self_hosted_playwright",
-                    "frame": frame,
-                    "access_diagnosis": diagnosis,
-                    "remediation": build_access_remediation_plan(diagnosis),
-                }
+                        **{key: value for key, value in egress.items() if key != "proxy"},
+                    }
             except Exception as exc:
                 diagnosis = classify_playwright_access(status="skipped", reason="self_hosted_capture_failed", message=str(exc))
                 logger.warning(
@@ -971,6 +987,7 @@ async def _capture_self_hosted_playwright_frame(task: dict[str, Any]) -> dict[st
                     "message": str(exc),
                     "access_diagnosis": diagnosis,
                     "remediation": build_access_remediation_plan(diagnosis),
+                    **{key: value for key, value in egress.items() if key != "proxy"},
                 }
             finally:
                 if browser_context:
@@ -1066,6 +1083,19 @@ async def capture_browser_task_live_frame(*, tenant_id: str, task_id: str) -> di
             narration="서버 브라우저로 작업을 완료했습니다.",
             guide="추가로 필요한 조작이 있으면 말씀해 주세요.",
             route="self_hosted_playwright",
+        )
+        return self_hosted
+
+    if self_hosted.get("egress_effective") in {"unavailable", "cafe24"}:
+        fail_reason = str(self_hosted.get("egress_reason") or self_hosted.get("reason") or "cafe24_egress_unavailable")
+        await record_browser_task_step(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            step="failed",
+            narration="Cafe24 한국 egress 연결을 사용할 수 없어 브라우저를 시작하지 않았습니다.",
+            guide="승인된 Cafe24 루프백 터널 상태를 확인한 뒤 같은 작업을 다시 시도해 주세요.",
+            route="cafe24_egress",
+            extra={"egress_requested": self_hosted.get("egress_requested"), "egress_reason": fail_reason},
         )
         return self_hosted
 

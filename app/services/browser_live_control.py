@@ -13,6 +13,8 @@ import json
 from typing import Any
 from urllib.parse import urlparse
 
+from app.services.managed_browser import browser_egress, egress_for_target
+
 VIEWPORT_WIDTH = 1366
 VIEWPORT_HEIGHT = 768
 
@@ -24,11 +26,13 @@ class BrowserLiveControlError(RuntimeError):
 class ServerBrowserLiveSession:
     """Own one headless Chromium page, its screencast, and CDP input channel."""
 
-    def __init__(self, *, target_url: str, quality: int = 70) -> None:
+    def __init__(self, *, target_url: str, work_key: str = "live", egress_policy: str = "direct", quality: int = 70) -> None:
         parsed = urlparse(str(target_url or "").strip())
         if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
             raise BrowserLiveControlError("unsupported_target_url")
         self.target_url = target_url
+        self.work_key = work_key
+        self.egress_contract = egress_for_target(egress_policy, target_url)
         self.quality = max(30, min(int(quality), 90))
         self.width = VIEWPORT_WIDTH
         self.height = VIEWPORT_HEIGHT
@@ -38,6 +42,7 @@ class ServerBrowserLiveSession:
         self._page: Any = None
         self._cdp: Any = None
         self._frames: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1)
+        self._egress_manager: Any = None
         self._closed = False
 
     async def start(self) -> dict[str, Any]:
@@ -48,13 +53,13 @@ class ServerBrowserLiveSession:
 
         self._playwright = await async_playwright().start()
         try:
+            self._egress_manager = browser_egress(self.egress_contract)
+            proxy = await self._egress_manager.__aenter__()
             self._browser = await self._playwright.chromium.launch(
-                headless=True,
-                args=["--disable-dev-shm-usage", "--no-sandbox"],
+                headless=True, args=["--disable-dev-shm-usage", "--no-sandbox"], proxy=proxy,
             )
             self._context = await self._browser.new_context(
-                viewport={"width": self.width, "height": self.height},
-                ignore_https_errors=True,
+                viewport={"width": self.width, "height": self.height}, ignore_https_errors=True,
             )
             self._page = await self._context.new_page()
             await self._page.goto(self.target_url, wait_until="domcontentloaded", timeout=20_000)
@@ -72,7 +77,7 @@ class ServerBrowserLiveSession:
                 },
             )
             return await self.page_state()
-        except Exception:
+        except BaseException:
             await self.close()
             raise
 
@@ -288,3 +293,6 @@ class ServerBrowserLiveSession:
         if self._playwright is not None:
             with contextlib.suppress(Exception):
                 await self._playwright.stop()
+        if self._egress_manager is not None:
+            with contextlib.suppress(Exception):
+                await self._egress_manager.__aexit__(None, None, None)
