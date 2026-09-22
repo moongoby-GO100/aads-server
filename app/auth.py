@@ -809,8 +809,21 @@ async def resolve_login_tenant_for_user(user: dict) -> Optional[str]:
         raise HTTPException(status_code=401, detail="Invalid user")
 
     default_tenant_id = str(user.get("tenant_id") or user.get("default_tenant_id") or "").strip() or None
+    memberships = await list_user_tenants(user_id)
+
+    # 사용자가 마지막으로 고른 조직을 먼저 존중한다.  내부 운영자도 예외가
+    # 아니다: 2026-09-22 실측에서 role=ceo 계정이 default_tenant_id 로
+    # "열정국밥 운영관리" 를 지정해 두었는데도 로그인마다 internal 로 되돌아가,
+    # 화면에는 사업자가 하나도 없는 것처럼 보였다.  조직 전환은 여전히
+    # /auth/tenants/{id}/switch 로 가능하므로, 여기서는 그 선택이 살아 있는
+    # 소속인지만 확인하고 그대로 돌려준다.
+    if default_tenant_id and any(
+        str(tenant.get("tenant_id") or "") == default_tenant_id for tenant in memberships
+    ):
+        return default_tenant_id
+
     if _is_internal_tenant_principal(user.get("email"), user.get("role")):
-        for tenant in await list_user_tenants(user_id):
+        for tenant in memberships:
             if str(tenant.get("kind") or "").lower() == "internal":
                 return str(tenant.get("tenant_id") or "") or default_tenant_id
         if default_tenant_id:

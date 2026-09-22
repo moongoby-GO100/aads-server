@@ -44,9 +44,14 @@ async def test_sales_records_are_tenant_business_scoped_and_db_backed(monkeypatc
     async def uploaded(**kwargs):
         return []
 
+    async def no_acct_source(user, business_id, category, date_from=None, date_to=None):
+        # 이 사업자는 ACCT 매출 원천이 비어 있다(2026-09-22 실측: ty_mth='1' 0건).
+        return [], "acct.source_file/atom_record:wehago:sales"
+
     monkeypatch.setattr(api.upload_svc, "list_businesses", businesses)
     monkeypatch.setattr(api.upload_svc, "list_manual_entries", manual)
     monkeypatch.setattr(api.upload_svc, "list_ledger_rows", uploaded)
+    monkeypatch.setattr(api.acct_source_ledger, "source_transactions", no_acct_source)
 
     result = await api.workspace_records(
         business_id=BUSINESS["id"], route="sales", date_from=None, date_to=None,
@@ -55,9 +60,89 @@ async def test_sales_records_are_tenant_business_scoped_and_db_backed(monkeypatc
 
     assert result["business"]["name"] == "주식회사 라일론"
     assert result["source"]["live"] is True
+    # 원천이 비어 있다는 사실이 이름에 남아야 한다 — 0건과 장애를 구분한다.
+    assert "원천_미적재" in result["source"]["name"]
     assert result["count"] == 1
     assert result["records"][0]["display"]["매출처·채널"] == "라일론 매출처"
     assert result["records"][0]["display"]["금액"] == "11,000원"
+
+
+@pytest.mark.asyncio
+async def test_purchase_records_prefer_acct_source_over_local_ledger(monkeypatch):
+    async def businesses(*, user):
+        return [BUSINESS]
+
+    async def manual(**kwargs):
+        return []
+
+    async def uploaded(**kwargs):
+        return []
+
+    async def acct_source(user, business_id, category, date_from=None, date_to=None):
+        assert category == "purchase"
+        return [{
+            "id": "acct:1234:7",
+            "category": "purchase",
+            "occurred_on": "2026-08-24",
+            "counterparty": "라일론 매입처",
+            "counterparty_biz_no": "204-86-48463",
+            "description": "원재료",
+            "detail_type_label": "과세매입",
+            "evidence_label": "세금계산서",
+            "debit_account": "원재료",
+            "credit_account": "외상매입금",
+            "supply_amount": Decimal("100000"),
+            "tax_amount": Decimal("10000"),
+            "total_amount": Decimal("110000"),
+            "status": "확정",
+            "source": "acct_wehago_purchase",
+        }], "acct.source_file/atom_record:wehago:purchase"
+
+    monkeypatch.setattr(api.upload_svc, "list_businesses", businesses)
+    monkeypatch.setattr(api.upload_svc, "list_manual_entries", manual)
+    monkeypatch.setattr(api.upload_svc, "list_ledger_rows", uploaded)
+    monkeypatch.setattr(api.acct_source_ledger, "source_transactions", acct_source)
+
+    result = await api.workspace_records(
+        business_id=BUSINESS["id"], route="purchases", date_from=None, date_to=None,
+        status="전체 상태", search="", limit=200, current_user=USER,
+    )
+
+    assert result["count"] == 1
+    assert "원천_미적재" not in result["source"]["name"]
+    assert result["source"]["name"].startswith("acct.source_file/atom_record:wehago:purchase")
+    record = result["records"][0]
+    assert record["display"]["매입처"] == "라일론 매입처"
+    assert record["display"]["증빙"] == "세금계산서"
+    assert record["display"]["구분"] == "과세매입"
+    assert record["display"]["금액"] == "110,000원"
+
+
+@pytest.mark.asyncio
+async def test_acct_source_failure_is_not_reported_as_zero(monkeypatch):
+    async def businesses(*, user):
+        return [BUSINESS]
+
+    async def manual(**kwargs):
+        return []
+
+    async def uploaded(**kwargs):
+        return []
+
+    async def failing(user, business_id, category, date_from=None, date_to=None):
+        raise HTTPException(status_code=502, detail="ACCT 전표 조회 실패")
+
+    monkeypatch.setattr(api.upload_svc, "list_businesses", businesses)
+    monkeypatch.setattr(api.upload_svc, "list_manual_entries", manual)
+    monkeypatch.setattr(api.upload_svc, "list_ledger_rows", uploaded)
+    monkeypatch.setattr(api.acct_source_ledger, "source_transactions", failing)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await api.workspace_records(
+            business_id=BUSINESS["id"], route="purchases", date_from=None, date_to=None,
+            status="전체 상태", search="", limit=200, current_user=USER,
+        )
+    assert excinfo.value.status_code == 502
 
 
 @pytest.mark.asyncio

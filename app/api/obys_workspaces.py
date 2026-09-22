@@ -16,7 +16,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
-from app.api import acct_purchase
+from app.api import acct_purchase, acct_source_ledger
 from app.auth import get_current_user
 from app.services import obys_upload_service as upload_svc
 
@@ -56,6 +56,13 @@ LEDGER_ROUTES = {
     "suppliers": "purchase",
     "tax-evidence": "purchase",
     "tax-gap": "purchase",
+}
+
+# 매출·매입 "현황" 정본 메뉴만 ACCT 원천을 본다. orders/settlements/suppliers 는
+# 오비서 자체 원장을 계속 쓰므로 이번 연결로 회귀하지 않는다.
+ACCT_SOURCE_ROUTES = {
+    "sales": "sales",
+    "purchases": "purchase",
 }
 BANK_ROUTES = frozenset({"accounts", "receivables", "unmatched"})
 CARD_ROUTES = frozenset({"cards"})
@@ -253,6 +260,26 @@ def _record(kind: str, row: dict[str, Any], business_name: str) -> dict[str, Any
                 "세액": f"{Decimal(str(value.get('tax_amount') or 0)):,.0f}원",
             }
         )
+    elif kind == "acct-source":
+        # 진아서버 ACCT 원천 전표. 계정과목을 추정하지 않고 위하고 원값을 그대로 쓴다.
+        display.update(
+            {
+                "주문번호": record_id,
+                "매입번호": record_id,
+                "매출처·채널": counterparty or "거래처 미기재",
+                "매입처": counterparty or "거래처 미기재",
+                "주문·취소": description or str(value.get("detail_type_label") or ""),
+                "품목": description,
+                "구분": str(value.get("detail_type_label") or ""),
+                "증빙": str(value.get("evidence_label") or ""),
+                "증빙·지급": str(value.get("evidence_label") or ""),
+                "차변계정": str(value.get("debit_account") or "검토 필요"),
+                "대변계정": str(value.get("credit_account") or "검토 필요"),
+                "사업자번호": str(value.get("counterparty_biz_no") or ""),
+                "공급가": f"{Decimal(str(value.get('supply_amount') or 0)):,.0f}원",
+                "세액": f"{Decimal(str(value.get('tax_amount') or 0)):,.0f}원",
+            }
+        )
     elif kind == "uploaded":
         category = str(value.get("category") or "")
         display.update(
@@ -404,6 +431,27 @@ async def _source_rows(
         rows.extend(("card", row) for row in cards)
         rows.extend(("uploaded", row) for row in card_uploads)
         return rows, "obys_tax_evidence_sources"
+    if route in ACCT_SOURCE_ROUTES:
+        category = ACCT_SOURCE_ROUTES[route]
+        ledger = await _ledger_records(
+            user=user, business_id=business_id, category=category,
+            date_from=date_from, date_to=date_to,
+        )
+        try:
+            acct_rows, acct_source = await acct_source_ledger.source_transactions(
+                user, business_id, category, date_from=date_from, date_to=date_to,
+            )
+        except HTTPException as exc:
+            # ACCT 매핑이 없는 사업자(403)는 자체 원장만 본다. 그 밖의 실패는
+            # 0건으로 감추지 않는다 — "매출 0원" 은 장애와 구분되지 않는다.
+            if exc.status_code != 403:
+                raise
+            return ledger, "obys_ledger"
+        rows: list[tuple[str, dict[str, Any]]] = [("acct-source", row) for row in acct_rows]
+        rows.extend(ledger)
+        if not acct_rows:
+            return rows, f"{acct_source}:원천_미적재+obys_ledger"
+        return rows, f"{acct_source}+obys_ledger"
     if route in LEDGER_ROUTES:
         return await _ledger_records(
             user=user, business_id=business_id, category=LEDGER_ROUTES[route],
