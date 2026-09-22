@@ -573,10 +573,10 @@ async def _record_dedup_blocked(conn, *, job_id: str, req: "JobSubmitRequest",
                 jsonb_build_array(jsonb_build_object(
                   'ts', NOW()::text,
                   'event', 'dedup_blocked',
-                  'existing_job_id', $12,
-                  'existing_status', $13,
-                  'existing_phase', $14,
-                  'parallel_scope', $15,
+                  'existing_job_id', $12::text,
+                  'existing_status', $13::text,
+                  'existing_phase', $14::text,
+                  'parallel_scope', $15::text,
                   'auto_retryable', false
                 )),
                 NOW(), NOW(), $16::uuid)
@@ -621,8 +621,8 @@ async def _record_blocked_dependency(conn, *, job_id: str, req: "JobSubmitReques
                 jsonb_build_array(jsonb_build_object(
                   'ts', NOW()::text,
                   'event', 'blocked_dependency',
-                  'depends_on', $12,
-                  'upstream_status', $13,
+                  'depends_on', $12::text,
+                  'upstream_status', $13::text,
                   'auto_retryable', false
                 )),
                 NOW(), NOW(), $14::uuid)
