@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>오비서 V4 · 통합 메뉴</title>
+  <style>
+    :root{--nav:#151922;--nav2:#202633;--line:#e3e7ee;--ink:#18202b;--muted:#687386;--blue:#2563eb;--blue2:#eff6ff;--bg:#f5f7fa;--white:#fff;--red:#dc2626;--shadow:0 10px 30px rgba(15,23,42,.10)}
+    *{box-sizing:border-box}html,body{height:100%;margin:0;font-family:Pretendard,"Noto Sans KR",Arial,sans-serif;color:var(--ink);background:var(--bg)}
+    button{font:inherit}button:focus-visible{outline:3px solid #93c5fd;outline-offset:2px}
+    .shell{display:grid;grid-template-columns:264px minmax(0,1fr);height:100vh;overflow:hidden}
+    .side{display:flex;flex-direction:column;min-height:0;background:var(--nav);color:#fff;border-right:1px solid #0d1118}
+    .brand{display:flex;align-items:center;gap:11px;height:68px;padding:0 20px;font-weight:800;font-size:18px;border-bottom:1px solid rgba(255,255,255,.08)}
+    .mark{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:var(--blue);font-size:16px}.version{margin-left:auto;padding:4px 7px;border-radius:999px;background:#334155;color:#dbeafe;font-size:10px}
+    .business{margin:14px;padding:12px;border:1px solid rgba(255,255,255,.10);border-radius:10px;background:rgba(255,255,255,.05)}.business small{display:block;color:#8e9aad;font-size:10px}.business b{display:block;margin-top:5px;font-size:12px}.business span{display:block;margin-top:3px;color:#a9b2c1;font-size:10px}
+    .nav{min-height:0;overflow:auto;padding:0 10px 18px}.group{margin-top:8px}.group-title{width:100%;display:flex;align-items:center;gap:9px;padding:10px;border:0;border-radius:8px;background:transparent;color:#c9d0db;text-align:left;font-size:12px;font-weight:750;cursor:pointer}.group-title:hover,.group.open .group-title{background:#272e3b;color:#fff}.group-title .icon{width:22px;text-align:center}.group-title .chev{margin-left:auto;color:#778397;transition:.2s}.group.open .chev{transform:rotate(90deg)}
+    .items{display:none;padding:4px 0 4px 31px}.group.open .items{display:grid;gap:2px}.items button{position:relative;width:100%;padding:8px 10px;border:0;border-radius:7px;background:transparent;color:#929dac;text-align:left;font-size:11px;cursor:pointer}.items button:hover{background:#222936;color:#fff}.items button.active{background:#1d4ed8;color:#fff;font-weight:700}.items button.active:before{content:"";position:absolute;left:-8px;top:11px;width:5px;height:5px;border-radius:50%;background:#93c5fd}
+    .side-foot{margin-top:auto;padding:12px 15px;border-top:1px solid rgba(255,255,255,.08);color:#7f8a9b;font-size:10px;line-height:1.5}
+    .stage{display:grid;grid-template-rows:64px minmax(0,1fr);min-width:0}.top{display:flex;align-items:center;gap:14px;padding:0 18px;background:#fff;border-bottom:1px solid var(--line);z-index:5}.menu-toggle{display:none;width:40px;height:40px;border:1px solid var(--line);border-radius:9px;background:#fff;font-size:20px}.crumb{min-width:0}.crumb small{display:block;color:var(--muted);font-size:10px}.crumb b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}.top-actions{display:flex;align-items:center;gap:8px;margin-left:auto}.action{height:36px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:#334155;font-size:11px;font-weight:700;cursor:pointer}.action.primary{border-color:var(--blue);background:var(--blue);color:#fff}.status{display:flex;align-items:center;gap:6px;color:#64748b;font-size:10px}.dot{width:7px;height:7px;border-radius:50%;background:#22c55e}
+    .frame-wrap{position:relative;min-height:0;background:#fff}.loader{position:absolute;inset:0;display:grid;place-items:center;background:var(--bg);z-index:2;color:var(--muted);font-size:12px}.loader.hide{display:none}iframe{display:block;width:100%;height:100%;border:0;background:#fff}
+    dialog{width:min(760px,calc(100vw - 32px));padding:0;border:0;border-radius:16px;box-shadow:0 24px 70px rgba(15,23,42,.24)}dialog::backdrop{background:rgba(15,23,42,.55)}.modal-head{display:flex;align-items:flex-start;gap:12px;padding:20px 22px 16px;border-bottom:1px solid var(--line)}.modal-head h2{margin:0;font-size:18px}.modal-head p{margin:5px 0 0;color:var(--muted);font-size:11px}.close{margin-left:auto;width:34px;height:34px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer}.upload-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:18px}.upload-card{padding:16px;border:1px solid var(--line);border-radius:11px;background:#fff;text-align:left;cursor:pointer}.upload-card:hover{border-color:#93c5fd;background:var(--blue2)}.upload-card b{display:block;font-size:13px}.upload-card span{display:block;margin-top:6px;color:var(--muted);font-size:10px;line-height:1.5}.upload-card em{display:inline-block;margin-top:10px;color:var(--blue);font-style:normal;font-size:10px;font-weight:800}
+    .mobile-backdrop{display:none;position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:20}.mobile-backdrop.show{display:block}
+    @media(max-width:850px){.shell{grid-template-columns:1fr}.side{position:fixed;inset:0 auto 0 0;width:min(84vw,300px);z-index:30;transform:translateX(-102%);transition:.22s;box-shadow:var(--shadow)}.side.show{transform:none}.menu-toggle{display:block}.status{display:none}.top{padding:0 10px}.top-actions .action:not(.primary){display:none}.upload-grid{grid-template-columns:1fr}.stage{height:100vh}}
+  </style>
+</head>
+<body>
+  <div class="mobile-backdrop" id="backdrop"></div>
+  <div class="shell">
+    <aside class="side" id="side">
+      <div class="brand"><span class="mark">오</span>오비서 <span class="version">V4</span></div>
+      <div class="business"><small>현재 사업자</small><b>열정국밥 주식회사</b><span>3개 지점 통합 · 샘플 데이터</span></div>
+      <nav class="nav" id="nav" aria-label="V4 통합 메뉴"></nav>
+      <div class="side-foot">중복 메뉴를 제거한 V4 통합 셸<br>상세 업무화면은 검증된 V3 화면을 재사용합니다.</div>
+    </aside>
+    <section class="stage">
+      <header class="top">
+        <button class="menu-toggle" id="menuToggle" aria-label="전체 메뉴">☰</button>
+        <div class="crumb"><small id="groupLabel">경영</small><b id="pageLabel">통합 홈</b></div>
+        <div class="top-actions"><span class="status"><span class="dot"></span>연동 정상</span><button class="action" id="openV3">V3 비교</button><button class="action primary" id="uploadOpen">자료 등록</button></div>
+      </header>
+      <div class="frame-wrap"><div class="loader" id="loader">업무 화면을 불러오는 중입니다.</div><iframe id="workspace" title="오비서 업무 상세화면" src="mockup-v3.html#home"></iframe></div>
+    </section>
+  </div>
+  <dialog id="uploadDialog">
+    <div class="modal-head"><div><h2>자료 직접 등록</h2><p>자동연동 실패 시 업무별 엑셀·파일 등록 화면으로 바로 이동합니다.</p></div><button class="close" id="uploadClose" aria-label="닫기">×</button></div>
+    <div class="upload-grid">
+      <button class="upload-card" data-route="sales/sales-channel-connect"><b>매출자료 등록</b><span>POS·배달앱·카드 매출 엑셀 업로드, 컬럼 매핑, 검증</span><em>등록 화면 열기 →</em></button>
+      <button class="upload-card" data-route="accounts/bank-connect"><b>입출금자료 등록</b><span>계좌 거래내역 파일 업로드, 입금 매칭, 중복 확인</span><em>등록 화면 열기 →</em></button>
+      <button class="upload-card" data-route="inventory/receipt-upload"><b>매입·증빙 등록</b><span>매입 엑셀, 영수증·거래명세서 OCR, 부가세 분류</span><em>등록 화면 열기 →</em></button>
+      <button class="upload-card" data-route="tax/evidence-gap"><b>세무증빙 등록</b><span>현금영수증·계산서·카드·기타 증빙 구분과 누락 보완</span><em>등록 화면 열기 →</em></button>
+    </div>
+  </dialog>
+  <script>
+    const groups = [
+      {label:"경영",icon:"⌂",items:[["통합 홈","home"],["할 일·마감","tasks/task"],["경영 리포트","reports/review"],["문서보관함","documents/document-vault"]]},
+      {label:"매출·입금",icon:"₩",items:[["매출 현황","sales/sales-detail"],["매출 거래내역","sales/order-detail"],["정산 대사","sales/review"],["계좌 현황","accounts/account-detail"],["입금 예정·미수","accounts/order-detail"],["입금 미매칭","accounts/match"]]},
+      {label:"매입·재고",icon:"▣",items:[["매입처 현황","inventory/supplier-connect"],["재고 현황","inventory/menu-detail"],["발주 추천","inventory/order-detail"],["매입·증빙 등록","inventory/receipt-upload"]]},
+      {label:"직원·급여",icon:"♙",items:[["직원 현황","employees/employee-detail"],["근태 현황","employees/signature-progress"],["급여 현황","employees/approve"],["계약·인사증빙","employees/employee-docs"]]},
+      {label:"세무·회계",icon:"▤",items:[["세무 증빙대장","tax/vat-ledger"],["증빙 등록·누락","tax/evidence-gap"],["전표관리","tax/withholding-ledger"],["신고·납부","tax/tax-return-preview"]]},
+      {label:"승인·알림",icon:"✓",items:[["통합 승인함","approvals/approval-detail"],["완료·감사 이력","approvals/audit-detail"],["중요 알림","alerts/notification"],["시스템 오류","alerts/integration-audit"]]},
+      {label:"사업자·분석",icon:"◇",items:[["사업자 현황","business/business-detail"],["지점 현황·등록","business/business-ocr"],["원가·마진","margins/margin-detail"],["메뉴 원가","margins/menu-detail"]]},
+      {label:"설정",icon:"⚙",items:[["자동연동 관리","integrations"],["판매 연동","integrations/sales-channel-connect"],["은행·카드 연동","integrations/bank-connect"],["세무 연동","integrations/tax-connect"],["권한·감사로그","audit/audit-detail"]]}
+    ];
+    const nav=document.getElementById("nav"),frame=document.getElementById("workspace"),loader=document.getElementById("loader"),side=document.getElementById("side"),backdrop=document.getElementById("backdrop"),dialog=document.getElementById("uploadDialog");
+    const findRoute=(route)=>{for(const group of groups){const item=group.items.find(x=>x[1]===route);if(item)return {group,item}}return {group:groups[0],item:groups[0].items[0]}};
+    const renderNav=()=>{nav.innerHTML=groups.map((g,i)=>`<section class="group ${i<2?'open':''}" data-group="${g.label}"><button class="group-title" aria-expanded="${i<2}"><span class="icon">${g.icon}</span>${g.label}<span class="chev">›</span></button><div class="items">${g.items.map(x=>`<button data-route="${x[1]}">${x[0]}</button>`).join("")}</div></section>`).join("")};
+    const setFrameChrome=()=>{try{const doc=frame.contentDocument;if(!doc)return;const sidebar=doc.querySelector(".sidebar"),bottom=doc.querySelector(".bottom-nav"),mobile=doc.querySelector(".mobile-menu");if(sidebar)sidebar.style.display="none";if(bottom)bottom.style.display="none";if(mobile)mobile.style.display="none";const app=doc.querySelector(".app");if(app)app.style.gridTemplateColumns="minmax(0,1fr)";doc.title="오비서 V4 업무화면"}catch(e){console.warn("V4 frame chrome",e)}};
+    const go=(route,push=true)=>{const found=findRoute(route);document.getElementById("groupLabel").textContent=found.group.label;document.getElementById("pageLabel").textContent=found.item[0];document.querySelectorAll("[data-route]").forEach(b=>b.classList.toggle("active",b.dataset.route===route));const group=document.querySelector(`[data-group="${found.group.label}"]`);if(group)group.classList.add("open");loader.classList.remove("hide");frame.src=`mockup-v3.html#${route}`;if(push)history.replaceState(null,"",`#${route}`);side.classList.remove("show");backdrop.classList.remove("show")};
+    renderNav();
+    nav.addEventListener("click",e=>{const title=e.target.closest(".group-title");if(title){const group=title.closest(".group");group.classList.toggle("open");title.setAttribute("aria-expanded",group.classList.contains("open"));return}const item=e.target.closest("[data-route]");if(item)go(item.dataset.route)});
+    frame.addEventListener("load",()=>{setFrameChrome();loader.classList.add("hide")});
+    document.getElementById("menuToggle").onclick=()=>{side.classList.add("show");backdrop.classList.add("show")};backdrop.onclick=()=>{side.classList.remove("show");backdrop.classList.remove("show")};
+    document.getElementById("openV3").onclick=()=>window.open(`mockup-v3.html${frame.contentWindow?.location?.hash||"#home"}`,"_blank","noopener");
+    document.getElementById("uploadOpen").onclick=()=>dialog.showModal();document.getElementById("uploadClose").onclick=()=>dialog.close();
+    dialog.addEventListener("click",e=>{const card=e.target.closest("[data-route]");if(card){dialog.close();go(card.dataset.route)}});
+    const initial=location.hash.replace(/^#/,"")||"home";go(findRoute(initial).item[1],false);
+  </script>
+</body>
+</html>
