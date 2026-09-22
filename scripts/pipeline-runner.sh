@@ -3533,7 +3533,8 @@ deploy_job() {
                 if [[ "$_release_relevant" == "true" ]]; then
                     local _aads_deploy_log="/tmp/pipeline-deploy-aads-${job_id}.log"
                     log "  BLUEGREEN aads-server — approved isolated worktree=$worktree_dir"
-                    if AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
+                    if AADS_DEPLOY_FOREGROUND=1 \
+                       AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
                        AADS_DEPLOY_STATE_DIR="$main_workdir" \
                        bash "$worktree_dir/deploy.sh" bluegreen >"$_aads_deploy_log" 2>&1; then
                         tail -20 "$_aads_deploy_log" 2>/dev/null || true
@@ -3892,7 +3893,8 @@ deploy_job() {
                         fi
                     else
                         # 롤백/revert 커밋도 격리 worktree에서 동일한 인증 경로로 배포한다.
-                        if AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
+                        if AADS_DEPLOY_FOREGROUND=1 \
+                           AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
                            AADS_DEPLOY_STATE_DIR="$main_workdir" \
                            bash "$worktree_dir/deploy.sh" bluegreen 2>&1 | tail -10; then
                             log "  ROLLBACK_DEPLOY: isolated bluegreen 성공"

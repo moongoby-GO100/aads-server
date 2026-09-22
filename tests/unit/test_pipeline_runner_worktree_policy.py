@@ -97,6 +97,7 @@ def test_aads_api_release_uses_the_approved_isolated_bluegreen_path_only():
 
     assert 'AADS_DEPLOY_SOURCE_DIR="$worktree_dir"' in aads_case
     assert 'AADS_DEPLOY_STATE_DIR="$main_workdir"' in aads_case
+    assert 'AADS_DEPLOY_FOREGROUND=1' in aads_case
     assert 'bash "$worktree_dir/deploy.sh" bluegreen' in aads_case
     assert "/root/aads/aads-server/scripts/reload-api.sh" not in aads_case
     assert "bash /root/aads/aads-server/deploy.sh bluegreen" not in aads_case
@@ -107,6 +108,7 @@ def test_aads_rollback_uses_the_same_isolated_release_path():
     script = _runner_script()
 
     assert script.count('bash "$worktree_dir/deploy.sh" bluegreen') >= 2
+    assert script.count("AADS_DEPLOY_FOREGROUND=1") >= 2
     assert "ROLLBACK_DEPLOY: isolated bluegreen 성공" in script
 
 
