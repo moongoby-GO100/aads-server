@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>러너 작업이 실패하는 방식 — 30시간 Pipeline Runner 해부 · 2026-09-22</title>
+<style>
+:root{
+  --ink:#16191d; --ink2:#444c56; --ink3:#6e7781;
+  --line:#d8dee4; --bg:#fff; --bg2:#f6f8fa; --bg3:#eef2f6;
+  --blue:#1b5fbe; --bluebg:#e8f0fc; --green:#1a7f45; --greenbg:#e7f5ec;
+  --red:#b3261e; --redbg:#fdecea; --amber:#8a5a00; --amberbg:#fff4e0;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg2);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  line-height:1.72;font-size:15.5px;-webkit-text-size-adjust:100%}
+header{background:linear-gradient(135deg,#10243e,#264f7a);color:#fff;padding:44px 20px 38px;margin-bottom:26px}
+header .inner,.wrap{max-width:1080px;margin:0 auto}
+.wrap{padding:0 20px 88px}
+h1{margin:0 0 10px;font-size:29px;line-height:1.35;letter-spacing:-.45px}
+header p{margin:0;color:#d4e5f7;font-size:14.5px}
+.badges{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
+.badge{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);
+  border-radius:999px;padding:4px 12px;font-size:12.5px;color:#eef6ff}
+section,.toc{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:25px 28px;margin-bottom:22px}
+h2{font-size:21px;margin:0 0 8px;letter-spacing:-.3px;padding-bottom:12px;border-bottom:2px solid var(--bg3)}
+h2 .n{color:var(--blue);font-weight:700;margin-right:8px}
+h3{font-size:17px;margin:24px 0 8px}
+p{margin:10px 0}
+ul,ol{margin:10px 0;padding-left:22px}
+li{margin:5px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.1px}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:var(--bg3);font-weight:600}
+tr:nth-child(even) td{background:#fbfcfd}
+code{background:var(--bg3);padding:1.5px 6px;border-radius:5px;font-size:13.2px;
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+pre{background:#111827;color:#e5edf6;padding:15px 17px;border-radius:9px;overflow-x:auto;
+  font-size:13.2px;line-height:1.6}
+pre code{background:none;color:inherit;padding:0}
+.box{border-left:4px solid;border-radius:9px;padding:14px 16px;margin:14px 0}
+.good{background:var(--greenbg);border-color:var(--green)}
+.bad{background:var(--redbg);border-color:var(--red)}
+.warn{background:var(--amberbg);border-color:var(--amber)}
+.acc{background:var(--bluebg);border-color:var(--blue)}
+.box b{display:block;margin-bottom:4px}
+.toc ol{columns:2;column-gap:34px;margin:8px 0 0}
+.toc a{color:var(--blue);text-decoration:none}
+.toc a:hover{text-decoration:underline}
+.src{color:var(--ink3);font-size:13px}
+.kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+.kpi div{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:14px}
+.kpi b{display:block;font-size:22px;color:var(--blue);margin-bottom:2px}
+footer{color:var(--ink3);font-size:13px;text-align:center;padding-top:22px}
+@media(max-width:760px){.toc ol{columns:1}.kpi{grid-template-columns:1fr 1fr}h1{font-size:23px}section,.toc{padding:20px 18px}}
+</style>
+</head>
+<body>
+<header><div class="inner">
+<h1>러너 작업이 실패하는 방식<br>— 30시간 Pipeline Runner 해부</h1>
+<p>2026-09-22 · AADS 교육담당자 · 대표님 화면 문구와 실제 원인을 연결하는 판독표</p>
+<div class="badges">
+  <span class="badge">측정 시각 2026-09-22 14:13 KST</span>
+  <span class="badge">pipeline_jobs 최근 30시간 재조회</span>
+  <span class="badge">추정 없음 — DB 값만 사용</span>
+</div>
+</div></header>
+
+<div class="wrap">
+<div class="toc">
+<b>목차</b>
+<ol>
+<li><a href="#c1">한 문장 정의</a></li>
+<li><a href="#c2">먼저 알아야 할 5개 용어</a></li>
+<li><a href="#c3">30시간 실측 요약</a></li>
+<li><a href="#c4">실패 유형 판독표</a></li>
+<li><a href="#c5">코드 반려와 시스템 장애 구분법</a></li>
+<li><a href="#c6">대표님 화면 문구별 대응</a></li>
+<li><a href="#c7">우리 시스템에 적용된 곳</a></li>
+<li><a href="#c8">아직 적용 안 된 곳과 확인 질문</a></li>
+</ol>
+</div>
+
+<section id="c1">
+<h2><span class="n">1</span>한 문장 정의</h2>
+<p><b>Pipeline Runner 실패란, AI 개발자에게 일을 시켰지만 코드 수정·검수·승인·배포 중 어느 한 문에서 멈춘 상태입니다.</b></p>
+<div class="box acc">
+<b>일상 비유</b>
+공장으로 치면 "불량품"만 실패가 아닙니다. 원자재가 없어서 멈춘 것, 검사 장비가 고장난 것, 출하 승인서 번호가 안 맞은 것, 이미 같은 작업을 다른 사람이 하고 있어서 대기한 것도 모두 생산라인의 실패로 기록됩니다.
+</div>
+<p>대표님이 알아야 할 핵심은 하나입니다. <b>실패라고 떠도 전부 코드가 나쁜 것은 아닙니다.</b> 어떤 실패는 AI가 틀린 것이고, 어떤 실패는 검수 인프라·배포 게이트·동일 파일 충돌 같은 운영 장치가 멈춘 것입니다.</p>
+</section>
+
+<section id="c2">
+<h2><span class="n">2</span>먼저 알아야 할 5개 용어</h2>
+<table>
+<tr><th>용어</th><th>일상 언어</th><th>대표님이 보는 의미</th></tr>
+<tr><td><b>Runner</b></td><td>일을 맡은 AI 개발자</td><td>작업 1건마다 <code>runner-xxxx</code> ID가 붙음</td></tr>
+<tr><td><b>Review</b></td><td>작업물 검사</td><td>통과하면 승인 대기, 반려면 재작업 또는 실패</td></tr>
+<tr><td><b>Gate</b></td><td>자동 검문소</td><td>위험한 작업을 사람 승인 전 차단</td></tr>
+<tr><td><b>SHA</b></td><td>커밋 지문</td><td>배포하려는 코드와 검수받은 코드가 같은지 확인하는 번호</td></tr>
+<tr><td><b>Dirty worktree</b></td><td>작업장에 남은 미정리 변경</td><td>엉뚱한 변경을 함께 배포하지 않도록 멈춤</td></tr>
+</table>
+</section>
+
+<section id="c3">
+<h2><span class="n">3</span>30시간 실측 요약</h2>
+<p>자동 지시 본문에는 "30시간 256건 중 error 122건(47.7%)"이라고 적혀 있었습니다. 자료 작성 시각이 14:13 KST로 바뀌면서 30시간 창도 08:19:58 KST 이후로 이동했고, 재조회 값은 아래와 같습니다.</p>
+<div class="kpi">
+  <div><b>252</b><span>전체 작업</span></div>
+  <div><b>118</b><span>error</span></div>
+  <div><b>46.8%</b><span>오류 비율</span></div>
+  <div><b>08:19~14:11</b><span>집계 범위 KST</span></div>
+</div>
+<p class="src">[DB 조회: <code>pipeline_jobs</code>, 조건 <code>created_at >= now() - interval '30 hours'</code>, 2026-09-22 14:13 KST]</p>
+<table>
+<tr><th>상태</th><th>건수</th><th>대표님 화면에서의 의미</th></tr>
+<tr><td><code>error</code></td><td>118</td><td>작업이 실패 상태로 끝남. 원인 판독 필요</td></tr>
+<tr><td><code>done</code></td><td>57</td><td>읽기전용 완료 또는 변경 반영 완료</td></tr>
+<tr><td><code>cancelled</code></td><td>47</td><td>강제종료·중복·충돌 등으로 중단</td></tr>
+<tr><td><code>rejected_done</code></td><td>20</td><td>검수 또는 승인 단계에서 거절 후 종결</td></tr>
+<tr><td><code>awaiting_approval</code></td><td>4</td><td>대표님 또는 승인 게이트 대기</td></tr>
+<tr><td><code>queued</code></td><td>4</td><td>아직 실행 전 대기열</td></tr>
+<tr><td><code>deploying</code></td><td>1</td><td>배포 진행 중</td></tr>
+<tr><td><code>running</code></td><td>1</td><td>실행 중</td></tr>
+</table>
+</section>
+
+<section id="c4">
+<h2><span class="n">4</span>실패 유형 판독표</h2>
+<table>
+<tr><th>유형</th><th>건수</th><th>대표 문구</th><th>판정</th></tr>
+<tr><td>코드/리뷰 반려</td><td>28</td><td><code>REQUEST_CHANGES</code>, <code>origin_session_adjudicator</code></td><td>대체로 코드나 산출물 품질 문제</td></tr>
+<tr><td>검수 인프라 장애</td><td>19</td><td><code>REVIEW_MODEL_NO_RESPONSE</code>, <code>REVIEW_MODEL_CONFIG_INVALID</code></td><td><b>코드 반려 아님</b>. 검수 모델·설정 문제</td></tr>
+<tr><td>배포 전 차단</td><td>11</td><td><code>deploy_preflight_git_state</code>, <code>deploy_preflight_ff_conflict</code></td><td><b>보호 장치 작동</b>. dirty 또는 fast-forward 충돌</td></tr>
+<tr><td>보존 하드게이트</td><td>6</td><td><code>PRESERVATION_HARD_GATE</code></td><td>삭제·손실 위험 차단. 보통 잘 멈춘 것</td></tr>
+<tr><td>커밋 SHA 불일치</td><td>6</td><td><code>deploy_commit_sha_mismatch</code></td><td>검수받은 커밋과 배포 커밋 불일치. 배포 금지</td></tr>
+<tr><td>빌드 실패</td><td>5</td><td><code>go100-frontend:build_failed</code></td><td>프론트 빌드 오류. 코드/환경 모두 가능</td></tr>
+<tr><td>기타/미분류</td><td>42</td><td><code>server_restart_orphan</code>, <code>watchdog_stall_30min</code>, 빈 메시지 등</td><td>로그·작업 로그 추가 확인 필요</td></tr>
+</table>
+<p class="src">[DB 조회: <code>review_flag_category</code>, <code>error_detail</code>, <code>review_feedback</code> 기준 CASE 분류. 같은 작업이 여러 증상을 가질 수 있어 대표 증상 1개로 분류했습니다.]</p>
+<div class="box warn">
+<b>중요한 보정</b>
+"변경 0건"은 이번 30시간 <code>error</code> 안에서는 0건으로 재조회됐습니다. 다만 운영 메시지에는 "변경사항 0건으로 작업 종결"이 별도 정상 종결처럼 보일 수 있으므로, 아래 판독표에 별도 항목으로 설명합니다.
+</div>
+</section>
+
+<section id="c5">
+<h2><span class="n">5</span>코드 반려와 시스템 장애 구분법</h2>
+<table>
+<tr><th>보이는 문구</th><th>무엇을 뜻하나</th><th>대표님 판단</th><th>다음 조치</th></tr>
+<tr><td><code>REQUEST_CHANGES</code></td><td>검수자가 "수정 필요"라고 판정</td><td>코드 반려 가능성 높음</td><td>반려 사유와 diff 확인 후 재작업</td></tr>
+<tr><td><code>REVIEW_MODEL_NO_RESPONSE</code></td><td>검수 모델이 답을 안 함</td><td><b>코드 반려 아님</b></td><td>자동 재검수 또는 검수 인프라 점검</td></tr>
+<tr><td><code>REVIEW_MODEL_CONFIG_INVALID</code></td><td>검수 모델 설정이 잘못됨</td><td><b>코드 반려 아님</b></td><td>모델 라우팅·설정 수정 후 재검수</td></tr>
+<tr><td><code>PRESERVATION_HARD_GATE</code></td><td>보존해야 할 파일·기능 삭제 위험</td><td>작업물을 바로 믿으면 안 됨</td><td>삭제 심볼과 보존 대상 대조</td></tr>
+<tr><td><code>deploy_commit_sha_mismatch</code></td><td>검수받은 커밋과 배포 대상이 다름</td><td>배포하면 안 됨</td><td>해당 SHA로 재검수 또는 배포 대상 고정</td></tr>
+<tr><td><code>deploy_preflight_git_state</code></td><td>작업장에 미정리 변경이 있음</td><td>시스템 보호 장치 작동</td><td>변경 소유권 분리 후 재배포</td></tr>
+<tr><td><code>build_failed</code></td><td>빌드가 깨짐</td><td>코드·의존성·환경 모두 후보</td><td>빌드 로그 첫 오류부터 확인</td></tr>
+<tr><td><code>변경사항 0건</code></td><td>실제로 바꾼 파일이 없음</td><td>실패라기보다 "승인 대기 안 보냄"</td><td>읽기전용이면 정상, 수정 작업이면 지시 재작성</td></tr>
+</table>
+<div class="box good">
+<b>대표님용 한 줄 판정법</b>
+<code>REVIEW_MODEL_*</code>는 검수 인프라 장애, <code>REQUEST_CHANGES</code>는 코드·산출물 반려, <code>deploy_*</code>는 배포 보호 장치, <code>PRESERVATION_*</code>는 삭제 방지 장치입니다.
+</div>
+</section>
+
+<section id="c6">
+<h2><span class="n">6</span>대표님 화면 문구별 대응</h2>
+<table>
+<tr><th>화면 문구</th><th>오해하기 쉬운 점</th><th>정확한 해석</th><th>대표님이 물어볼 말</th></tr>
+<tr><td>AI 리뷰 인프라 장애로 승인 보류</td><td>AI가 코드를 못 짰다고 오해</td><td>검수 모델이 응답 실패 또는 설정 오류</td><td>"재검수 통과했나, 같은 SHA인가?"</td></tr>
+<tr><td>AI 리뷰 통과</td><td>운영 반영 완료로 오해</td><td>검수만 통과. 배포·헬스는 별도</td><td>"커밋·푸시·배포·헬스 각각 됐나?"</td></tr>
+<tr><td>배포 완료 backend=OK</td><td>서비스 전체 정상으로 오해</td><td>백엔드 배포 확인. 화면·업무 플로우는 별도</td><td>"화면 또는 API 검증 근거는?"</td></tr>
+<tr><td>변경사항 0건으로 작업 종결</td><td>작업 실패로만 오해</td><td>읽기전용 진단이면 정상, 수정 지시면 미완료</td><td>"이 작업은 읽기전용이었나?"</td></tr>
+<tr><td>deploy_commit_sha_mismatch</td><td>단순 배포 실패로 오해</td><td>검수받은 코드와 배포 코드가 달라져 차단</td><td>"검수 SHA와 배포 SHA를 보여 달라"</td></tr>
+<tr><td>동일 파일 충돌 감지</td><td>러너가 느린 것으로 오해</td><td>같은 파일을 다른 작업이 만져서 보호 차단</td><td>"선행 runner가 끝났나, depends_on 연결됐나?"</td></tr>
+</table>
+</section>
+
+<section id="c7">
+<h2><span class="n">7</span>우리 시스템에 적용된 곳</h2>
+<table>
+<tr><th>장치</th><th>무엇을 막나</th><th>실측 근거</th></tr>
+<tr><td>AI 리뷰 게이트</td><td>코드 품질 문제·보존 위험·검수 인프라 장애를 상태로 분리</td><td><code>review_flag_category</code>에 5종 값 확인</td></tr>
+<tr><td>배포 preflight</td><td>dirty worktree, fast-forward 충돌, SHA 불일치 배포</td><td><code>deploy_preflight_git_state</code> 9건, <code>deploy_commit_sha_mismatch</code> 2건</td></tr>
+<tr><td>Runner Guard</td><td>동일 파일 동시 수정</td><td><code>[Runner Guard] 동일 파일 충돌 감지</code> 로그 다수</td></tr>
+<tr><td>보존 하드게이트</td><td>삭제·기능 손실 위험</td><td><code>PRESERVATION_HARD_GATE</code> 6건</td></tr>
+<tr><td>작업 상태 DB</td><td>어떤 세션이 지시했는지, 현재 상태가 무엇인지 추적</td><td><code>pipeline_jobs.chat_session_id</code>, <code>status</code>, <code>error_detail</code></td></tr>
+</table>
+<p>즉 AADS는 "실패를 숨기는 시스템"이 아니라, 실패를 여러 문으로 쪼개 기록하는 시스템입니다. 문제는 대표님 화면에서 이 분류가 교육 없이 보이면 전부 같은 실패처럼 느껴진다는 점입니다.</p>
+</section>
+
+<section id="c8">
+<h2><span class="n">8</span>아직 적용 안 된 곳과 확인 질문</h2>
+<table>
+<tr><th>미적용/한계</th><th>이유</th><th>대표님 영향</th></tr>
+<tr><td>기타/미분류 42건 자동 해석</td><td>메시지가 비어 있거나 표준 코드가 아님</td><td>사람이 로그를 열어봐야 원인 확정</td></tr>
+<tr><td>화면 문구와 DB 원인코드 1:1 연결</td><td>일부 알림은 긴 error_detail을 요약해 보여줌</td><td>같은 "실패" 문구라도 실제 원인이 다를 수 있음</td></tr>
+<tr><td>변경 0건 자동 판정</td><td>읽기전용 정상종결과 수정 미실행을 문맥 없이 구분하기 어려움</td><td>작업 지시 의도 확인 필요</td></tr>
+<tr><td>타 프로젝트 러너 소유권 교육</td><td>이번 자료는 AADS DB의 최근 30시간만 사용</td><td>GO100/SF 등 원격 저장소 원인은 별도 자료 필요</td></tr>
+</table>
+<div class="box acc">
+<b>대표님 확인 질문 4개</b>
+<ol>
+<li>"이 실패는 <code>REQUEST_CHANGES</code>인가, <code>REVIEW_MODEL_*</code>인가?"</li>
+<li>"검수 통과만 한 건가, 배포와 헬스까지 끝난 건가?"</li>
+<li>"검수 SHA와 배포 SHA가 같은가?"</li>
+<li>"읽기전용 작업이라 변경 0건이 정상인가, 수정 작업인데 변경 0건인가?"</li>
+</ol>
+</div>
+<div class="box good">
+<b>한 장 요약</b>
+최근 30시간 재조회 기준 러너 작업 252건 중 error 118건(46.8%)입니다. 그러나 그중 19건은 검수 인프라 장애이고, 11건은 배포 전 보호 장치, 6건은 보존 하드게이트입니다. 따라서 대표님이 보실 때는 "실패"라는 한 단어보다 <b>어느 문에서 멈췄는지</b>를 먼저 보셔야 합니다.
+</div>
+</section>
+
+<footer>AADS 교육담당자(EducationLead) · 2026-09-22 작성 · 근거: pipeline_jobs DB 재조회. 비용 $0.</footer>
+</div>
+</body>
+</html>
