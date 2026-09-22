@@ -57,6 +57,10 @@ _REVIEW_TOTAL_DEADLINE_SEC = int(os.environ.get("REVIEW_TOTAL_DEADLINE_SEC", "85
 # 쓸 이유가 없다. 재검수 스위퍼가 이 경로를 쓴다 — 동기 경로에서 상한에 걸린
 # 작업이 재검수에서도 똑같이 걸리면 복구 경로가 아무 의미가 없다.
 _REVIEW_ASYNC_DEADLINE_SEC = int(os.environ.get("REVIEW_ASYNC_DEADLINE_SEC", "500"))
+# 리뷰 장애를 큐/모델호출/파싱/완료 단계로 분리하기 위한 안정적인 계측 계약.
+# job_id/model 같은 고카디널리티 값은 로그 문맥으로만 남기고 measurement_label 은
+# 아래의 제한된 값만 사용한다. code_reviews.feedback 에도 같은 계약을 보존한다.
+_REVIEW_MEASUREMENT_SCHEMA = "review_pipeline.v1"
 # 리뷰 프롬프트에 넣는 diff 상한(문자수). 리뷰 모델은 200K 컨텍스트인데 종전
 # 10KB 하드코딩은 그 0.5%도 쓰지 않았다. 실측(2026-09-17): runner 리뷰 287건 중
 # 196건(68%)이 절단된 채 심사됐고 승인율이 41.8% → 22.4% 로 떨어졌다. 반려 사유는
@@ -514,6 +518,40 @@ def _build_review_verdict(
     )
 
 
+def _review_measurement(
+    *,
+    label: str,
+    path: str,
+    stage: str,
+    outcome: str,
+    started_at: float,
+    deadline_sec: int,
+    attempts_used: int = 0,
+    attempt_limit: int = 0,
+    diff_chars: int = 0,
+    diff_truncated: bool = False,
+) -> dict:
+    """Build bounded, durable review timing labels for logs and DB evidence."""
+    return {
+        "schema": _REVIEW_MEASUREMENT_SCHEMA,
+        "measurement_label": label,
+        "path": path,
+        "stage": stage,
+        "outcome": outcome,
+        "duration_ms": max(0, int((time.monotonic() - started_at) * 1000)),
+        "deadline_ms": max(0, int(deadline_sec * 1000)),
+        "attempts_used": max(0, int(attempts_used)),
+        "attempt_limit": max(0, int(attempt_limit)),
+        "diff_chars": max(0, int(diff_chars)),
+        "diff_truncated": bool(diff_truncated),
+    }
+
+
+def _attach_review_measurement(verdict: ReviewVerdict, measurement: dict) -> ReviewVerdict:
+    verdict.feedback["measurement"] = measurement
+    return verdict
+
+
 def _precheck_review_input(diff: str) -> Optional[ReviewVerdict]:
     stripped = (diff or "").strip()
     if not stripped:
@@ -906,10 +944,24 @@ async def review_code_diff(
     비동기 요청 경로가 더 긴 마감을 쓰기 위한 것이다(_REVIEW_ASYNC_DEADLINE_SEC).
     """
     start = time.time()
+    measurement_started_at = time.monotonic()
     total_deadline = int(deadline_sec or _REVIEW_TOTAL_DEADLINE_SEC)
+    review_path = "async" if deadline_sec is not None else "sync"
 
     precheck = _precheck_review_input(diff)
     if precheck is not None:
+        _attach_review_measurement(
+            precheck,
+            _review_measurement(
+                label="review.input.precheck",
+                path=review_path,
+                stage=precheck.failure_stage or "input_validation",
+                outcome=precheck.verdict.lower(),
+                started_at=measurement_started_at,
+                deadline_sec=total_deadline,
+                diff_chars=len(diff or ""),
+            ),
+        )
         if precheck.verdict != "SKIP":
             await _save_review_result(
                 job_id=job_id,
@@ -923,6 +975,18 @@ async def review_code_diff(
 
     preservation_precheck = _precheck_preservation_gate(diff, instruction, files_changed)
     if preservation_precheck is not None:
+        _attach_review_measurement(
+            preservation_precheck,
+            _review_measurement(
+                label="review.preservation.blocked",
+                path=review_path,
+                stage="pre_llm_preservation_gate",
+                outcome=preservation_precheck.verdict.lower(),
+                started_at=measurement_started_at,
+                deadline_sec=total_deadline,
+                diff_chars=len(diff or ""),
+            ),
+        )
         await _save_review_result(
             job_id=job_id,
             project=project,
@@ -979,8 +1043,11 @@ async def review_code_diff(
             # 부르지 않고 끝나는 구간이 생겼다. 남은 만큼이라도 쓰는 편이 낫다.
             if _remaining < _REVIEW_MIN_ATTEMPT_SEC:
                 logger.warning(
-                    "review_deadline_reached: job_id=%s elapsed=%.0fs attempts=%s/%s deadline=%ss",
-                    job_id, _elapsed, attempt_no - 1, attempt_limit, total_deadline,
+                    "review_measurement label=review.budget.exhausted path=%s "
+                    "stage=model_call outcome=deadline job_id=%s elapsed_ms=%s "
+                    "attempts=%s/%s deadline_ms=%s",
+                    review_path, job_id, int(_elapsed * 1000), attempt_no - 1,
+                    attempt_limit, total_deadline * 1000,
                 )
                 break
             # Keep enough of the total deadline for at least one fallback.
@@ -1000,6 +1067,7 @@ async def review_code_diff(
             # 빈 응답이어도 마지막으로 실제 호출한 모델을 기록해야 스위퍼가
             # 다음 재검수에서 정확한 실패 모델을 제외할 수 있다.
             used_model = model
+            _attempt_started_at = time.monotonic()
             try:
                 # P0: 리뷰 모델이 실패하면 call_llm_with_fallback 이 Claude 429 재시도(최대 60회)와
                 # LiteLLM 폴백 체인을 순회하며 수 분간 반환되지 않는 경우가 있다. 그동안 러너의
@@ -1015,22 +1083,72 @@ async def review_code_diff(
                     timeout=_attempt_timeout,
                 )
                 result_text, response_evidence = _extract_review_text(raw_response)
-                response_evidence.update({"model": model, "outcome": "response" if result_text else "empty"})
+                response_evidence.update({
+                    "model": model,
+                    "outcome": "response" if result_text else "empty",
+                    "measurement_label": (
+                        "review.model.response" if result_text else "review.model.empty"
+                    ),
+                    "stage": "model_call",
+                    "path": review_path,
+                    "attempt_no": attempt_no,
+                    "attempt_limit": attempt_limit,
+                    "duration_ms": int((time.monotonic() - _attempt_started_at) * 1000),
+                    "timeout_ms": int(_attempt_timeout * 1000),
+                    "budget_remaining_ms": max(
+                        0,
+                        int((total_deadline - (time.monotonic() - _review_started_at)) * 1000),
+                    ),
+                })
                 attempt_evidence.append(response_evidence)
             except asyncio.TimeoutError:
-                logger.warning("review_model_timeout: model=%s attempt=%s/%s limit=%.0fs",
-                               model, attempt_no, attempt_limit, _attempt_timeout)
+                _attempt_duration_ms = int((time.monotonic() - _attempt_started_at) * 1000)
+                logger.warning(
+                    "review_measurement label=review.model.timeout path=%s stage=model_call "
+                    "outcome=timeout model=%s attempt=%s/%s duration_ms=%s limit_sec=%.0f",
+                    review_path, model, attempt_no, attempt_limit,
+                    _attempt_duration_ms, _attempt_timeout,
+                )
                 result_text = None
-                attempt_evidence.append({"model": model, "outcome": "timeout", "timeout_sec": round(_attempt_timeout, 3)})
+                attempt_evidence.append({
+                    "model": model,
+                    "outcome": "timeout",
+                    "measurement_label": "review.model.timeout",
+                    "stage": "model_call",
+                    "path": review_path,
+                    "attempt_no": attempt_no,
+                    "attempt_limit": attempt_limit,
+                    "duration_ms": _attempt_duration_ms,
+                    "timeout_ms": int(_attempt_timeout * 1000),
+                    "budget_remaining_ms": max(
+                        0,
+                        int((total_deadline - (time.monotonic() - _review_started_at)) * 1000),
+                    ),
+                })
             except Exception as model_err:
                 error_text = str(model_err)
-                logger.warning("review_model_failed: model=%s attempt=%s/%s error=%s",
-                               model, attempt_no, attempt_limit,
-                               _sanitize_review_text(error_text, limit=60))
+                _attempt_duration_ms = int((time.monotonic() - _attempt_started_at) * 1000)
+                logger.warning(
+                    "review_measurement label=review.model.error path=%s stage=model_call "
+                    "outcome=error model=%s attempt=%s/%s duration_ms=%s error=%s",
+                    review_path, model, attempt_no, attempt_limit, _attempt_duration_ms,
+                    _sanitize_review_text(error_text, limit=60),
+                )
                 result_text = None
                 attempt_evidence.append({
                     "model": model,
                     "outcome": "error",
+                    "measurement_label": "review.model.error",
+                    "stage": "model_call",
+                    "path": review_path,
+                    "attempt_no": attempt_no,
+                    "attempt_limit": attempt_limit,
+                    "duration_ms": _attempt_duration_ms,
+                    "timeout_ms": int(_attempt_timeout * 1000),
+                    "budget_remaining_ms": max(
+                        0,
+                        int((total_deadline - (time.monotonic() - _review_started_at)) * 1000),
+                    ),
                     "error_type": type(model_err).__name__,
                     "error_chars": len(error_text),
                     "error_sha256": hashlib.sha256(error_text.encode("utf-8")).hexdigest(),
@@ -1038,18 +1156,40 @@ async def review_code_diff(
                 })
 
             if not result_text:
+                if attempt_evidence[-1]["outcome"] == "empty":
+                    logger.warning(
+                        "review_measurement label=review.model.empty path=%s "
+                        "stage=model_call outcome=empty job_id=%s model=%s "
+                        "attempt=%s/%s duration_ms=%s",
+                        review_path, job_id, model, attempt_no, attempt_limit,
+                        attempt_evidence[-1]["duration_ms"],
+                    )
                 continue
 
             details = _validate_review_details(_parse_review_json(result_text))
             if details is not None:
                 attempt_evidence[-1]["outcome"] = "valid"
+                attempt_evidence[-1]["measurement_label"] = "review.model.valid"
+                attempt_evidence[-1]["stage"] = "model_parse"
+                logger.info(
+                    "review_measurement label=review.model.valid path=%s "
+                    "stage=model_parse outcome=valid job_id=%s model=%s "
+                    "attempt=%s/%s duration_ms=%s",
+                    review_path, job_id, model, attempt_no, attempt_limit,
+                    attempt_evidence[-1]["duration_ms"],
+                )
                 break
 
             parse_fail_count += 1
             attempt_evidence[-1]["outcome"] = "invalid_structure"
+            attempt_evidence[-1]["measurement_label"] = "review.model.invalid_structure"
+            attempt_evidence[-1]["stage"] = "model_parse"
             logger.warning(
-                "code_reviewer_json_parse_failed: job_id=%s model=%s attempt=%s/%s preview=%r",
-                job_id, model, attempt_no, attempt_limit,
+                "review_measurement label=review.model.invalid_structure path=%s "
+                "stage=model_parse outcome=invalid_structure job_id=%s model=%s "
+                "attempt=%s/%s duration_ms=%s preview=%r",
+                review_path, job_id, model, attempt_no, attempt_limit,
+                attempt_evidence[-1]["duration_ms"],
                 _sanitize_review_text(result_text or "", limit=200)
             )
             if attempt_no < attempt_limit:
@@ -1075,6 +1215,25 @@ async def review_code_diff(
                 failure_stage="review_llm",
                 needs_retry=True,
                 model_used=used_model,
+            )
+            _attach_review_measurement(
+                verdict,
+                _review_measurement(
+                    label=(
+                        "review.complete.no_response"
+                        if no_response_category == "REVIEW_MODEL_NO_RESPONSE"
+                        else "review.complete.config_invalid"
+                    ),
+                    path=review_path,
+                    stage="review_llm",
+                    outcome=no_response_category.lower(),
+                    started_at=measurement_started_at,
+                    deadline_sec=total_deadline,
+                    attempts_used=len(attempt_evidence),
+                    attempt_limit=attempt_limit,
+                    diff_chars=len(diff or ""),
+                    diff_truncated=was_truncated,
+                ),
             )
             await _save_review_result(
                 job_id=job_id,
@@ -1111,6 +1270,21 @@ async def review_code_diff(
                 failure_stage="review_json_parse",
                 needs_retry=True,
                 model_used=used_model,
+            )
+            _attach_review_measurement(
+                verdict_obj,
+                _review_measurement(
+                    label="review.complete.invalid_structure",
+                    path=review_path,
+                    stage="review_json_parse",
+                    outcome="parser_failure",
+                    started_at=measurement_started_at,
+                    deadline_sec=total_deadline,
+                    attempts_used=len(attempt_evidence),
+                    attempt_limit=attempt_limit,
+                    diff_chars=len(diff or ""),
+                    diff_truncated=was_truncated,
+                ),
             )
             await _save_review_result(
                 job_id=job_id,
@@ -1163,6 +1337,19 @@ async def review_code_diff(
             needs_retry=needs_retry,
             model_used=used_model,
         )
+        measurement = _review_measurement(
+            label=f"review.complete.{verdict.lower()}",
+            path=review_path,
+            stage="complete",
+            outcome=verdict.lower(),
+            started_at=measurement_started_at,
+            deadline_sec=total_deadline,
+            attempts_used=len(attempt_evidence),
+            attempt_limit=attempt_limit,
+            diff_chars=len(diff or ""),
+            diff_truncated=was_truncated,
+        )
+        _attach_review_measurement(verdict_obj, measurement)
         await _save_review_result(
             job_id=job_id,
             project=project,
@@ -1174,8 +1361,11 @@ async def review_code_diff(
 
         duration_ms = int((time.time() - start) * 1000)
         logger.info(
-            f"code_review_complete: job_id={job_id} verdict={verdict} "
-            f"score={round(score, 3)} duration_ms={duration_ms}"
+            "review_measurement label=%s path=%s stage=complete outcome=%s "
+            "job_id=%s model=%s attempts=%s/%s score=%s duration_ms=%s",
+            measurement["measurement_label"], review_path, verdict.lower(),
+            job_id, used_model, len(attempt_evidence), attempt_limit,
+            round(score, 3), duration_ms,
         )
 
         # The production verdict above remains CLI-only and is already durable.
@@ -1220,6 +1410,18 @@ async def review_code_diff(
             flag_category="REVIEW_SYSTEM_FAILURE",
             failure_stage="review_runtime",
             needs_retry=True,
+        )
+        _attach_review_measurement(
+            verdict,
+            _review_measurement(
+                label="review.complete.runtime_error",
+                path=review_path,
+                stage="review_runtime",
+                outcome="error",
+                started_at=measurement_started_at,
+                deadline_sec=total_deadline,
+                diff_chars=len(diff or ""),
+            ),
         )
         await _save_review_result(
             job_id=job_id,

@@ -110,6 +110,71 @@ def test_successful_fallback_persists_every_model_attempt():
     assert 'details["attempt_evidence"] = attempt_evidence' in verdict_build
 
 
+def test_review_attempts_have_stable_measurement_labels_and_timings():
+    source = _read("app/services/code_reviewer.py")
+    assert '_REVIEW_MEASUREMENT_SCHEMA = "review_pipeline.v1"' in source
+    for label in (
+        "review.model.timeout",
+        "review.model.error",
+        "review.model.empty",
+        "review.model.invalid_structure",
+        "review.model.valid",
+        "review.budget.exhausted",
+        "review.complete.no_response",
+        "review.complete.config_invalid",
+    ):
+        assert label in source
+    for field in (
+        '"duration_ms"',
+        '"timeout_ms"',
+        '"budget_remaining_ms"',
+        '"attempt_no"',
+        '"attempt_limit"',
+    ):
+        assert field in source
+
+
+def test_review_measurement_payload_is_bounded_and_non_negative():
+    reviewer = _load_reviewer()
+    with patch.object(reviewer.time, "monotonic", side_effect=[100.250]):
+        measurement = reviewer._review_measurement(
+            label="review.complete.approve",
+            path="async",
+            stage="complete",
+            outcome="approve",
+            started_at=100.0,
+            deadline_sec=500,
+            attempts_used=-1,
+            attempt_limit=4,
+            diff_chars=-1,
+            diff_truncated=True,
+        )
+
+    assert measurement == {
+        "schema": "review_pipeline.v1",
+        "measurement_label": "review.complete.approve",
+        "path": "async",
+        "stage": "complete",
+        "outcome": "approve",
+        "duration_ms": 250,
+        "deadline_ms": 500_000,
+        "attempts_used": 0,
+        "attempt_limit": 4,
+        "diff_chars": 0,
+        "diff_truncated": True,
+    }
+
+
+def test_async_review_poll_exposes_queue_run_and_total_measurements():
+    source = _read("app/api/code_review.py")
+    assert "review.queue.claim" in source
+    assert 'result["measurements"]' in source
+    assert '"queue_wait_ms"' in source
+    assert '"run_ms"' in source
+    assert '"total_ms"' in source
+    assert '"worker_wait_ms=%s"' in source
+
+
 def test_cli_review_models_use_the_configured_model_relay():
     asyncio.run(_cli_review_models_use_the_configured_model_relay())
 

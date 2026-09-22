@@ -8,6 +8,8 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
+from datetime import datetime
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, status
@@ -77,6 +79,7 @@ async def _execute_review_request(request_id: UUID) -> None:
     from app.core.db_pool import get_pool
     from app.services.code_reviewer import review_code_diff as do_review
 
+    scheduled_at = time.monotonic()
     async with _review_concurrency:
         pool = get_pool()
         async with pool.acquire() as conn:
@@ -87,12 +90,26 @@ async def _execute_review_request(request_id: UUID) -> None:
                     started_at=COALESCE(started_at, NOW()), updated_at=NOW(),
                     error_detail=NULL
                 WHERE request_id=$1 AND status='queued'
-                RETURNING job_id, project, diff, instruction, files_changed
+                RETURNING job_id, project, diff, instruction, files_changed,
+                          created_at, started_at
                 """,
                 request_id,
             )
         if not row:
             return
+
+        queued_wait_ms = max(
+            0,
+            int((row["started_at"] - row["created_at"]).total_seconds() * 1000),
+        )
+        logger.info(
+            "review_measurement label=review.queue.claim path=async stage=queue "
+            "outcome=claimed request_id=%s job_id=%s queued_wait_ms=%s "
+            "worker_wait_ms=%s",
+            request_id, row["job_id"], queued_wait_ms,
+            int((time.monotonic() - scheduled_at) * 1000),
+        )
+        run_started_at = time.monotonic()
 
         try:
             files_changed = row["files_changed"]
@@ -132,8 +149,22 @@ async def _execute_review_request(request_id: UUID) -> None:
                     result.needs_retry,
                     result.model_used,
                 )
+            logger.info(
+                "review_measurement label=review.request.completed path=async stage=request "
+                "outcome=completed request_id=%s job_id=%s run_ms=%s total_ms=%s "
+                "queued_wait_ms=%s",
+                request_id, row["job_id"],
+                int((time.monotonic() - run_started_at) * 1000),
+                int((time.monotonic() - scheduled_at) * 1000), queued_wait_ms,
+            )
         except Exception as exc:
-            logger.exception("async_code_review_failed request_id=%s", request_id)
+            logger.exception(
+                "review_measurement label=review.request.failed path=async stage=request "
+                "outcome=error request_id=%s job_id=%s run_ms=%s total_ms=%s",
+                request_id, row["job_id"],
+                int((time.monotonic() - run_started_at) * 1000),
+                int((time.monotonic() - scheduled_at) * 1000),
+            )
             async with pool.acquire() as conn:
                 await conn.execute(
                     """
@@ -257,6 +288,26 @@ async def get_code_review_request(request_id: UUID):
     if not row:
         raise HTTPException(status_code=404, detail="리뷰 요청을 찾을 수 없습니다")
     result = dict(row)
+    now = datetime.now(row["created_at"].tzinfo)
+    queue_end = row["started_at"] or now
+    run_end = row["completed_at"] or now
+    result["measurements"] = {
+        "schema": "review_pipeline.v1",
+        "measurement_label": f"review.request.{row['status']}",
+        "path": "async",
+        "stage": "request",
+        "outcome": row["status"],
+        "queue_wait_ms": max(
+            0, int((queue_end - row["created_at"]).total_seconds() * 1000)
+        ),
+        "run_ms": (
+            max(0, int((run_end - row["started_at"]).total_seconds() * 1000))
+            if row["started_at"] is not None else 0
+        ),
+        "total_ms": max(
+            0, int((run_end - row["created_at"]).total_seconds() * 1000)
+        ),
+    }
     for key in ("request_id", "created_at", "started_at", "completed_at", "updated_at"):
         if result.get(key) is not None:
             result[key] = str(result[key])
