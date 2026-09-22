@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+## 2026-09-22 KST — 쿠팡이츠 단계별 레시피·PC 입력 상태 복구
+
+- 공통 정책 `global-browser-modular-recipe-contract`를 DB에 트랜잭션 반영했다. 모든 scope `*`, L1, priority 7. 검증용 컴파일 provenance에 포함됐으며 실제 다음 채팅 턴 적용과 구분한다. 재현 SQL: `scripts/sql/20260922_modular_browser_recipe_policy.sql`. 롤백은 해당 slug 비활성화.
+- 서버 브라우저의 Access Denied와 PC의 실제 로그인 폼을 각각 관측했다. Akamai 공식 탐지 문서는 헤더·브라우저·행동 탐지를 설명하지만 해당 요청의 차단 규칙은 미확정이다.
+- 쿠팡이츠 Vault 로그인 설정은 navigate 한 단계뿐이었다. 실제 DOM의 `#loginId`, `#password`, submit 버튼을 확인해 입력·클릭을 포함한 네 단계로 수정했다. 암호화 자격증명 값은 변경하지 않았다. 원복은 기존 navigate 단계만 복구한다.
+- PC의 `el.value` 직접 대입은 React 입력 상태를 갱신하지 않아 입력값이 존재해도 비밀번호 필수 오류가 발생했다. native setter로 교정 후 실제 제출은 자격증명 불일치로 거절됐다. 계정 잠금 방지를 위해 추가 제출 중단, CEO에게 Vault 확인 요청. 로그인 성공·매출조회는 미완료다.
+- `app/browser_bridge/service.py`의 PC fill을 native setter + input/change 이벤트 + boolean 확인으로 변경했다. 실패 시 INPUT_FILL_NOT_CONFIRMED, 비밀값 미반환. Node로 controlled-input tracker를 실행한 회귀 6건, 컨테이너 임시 검증 환경에서 기존 bridge/routing 54건 통과. 호스트 확장검사는 의존성 부재·컨테이너 라우팅 가정으로 실패했고 컨테이너에서 재검증했다.
+- 레시피 `coupangeats_01_open_login` v1은 기본 30초 제한으로 재생 실패(런 `8888c1b7-34b8-4822-a3ed-931662c520b5`). 동일 검증 화면을 근거로 v2의 PC 단계 제한을 조정했다. `coupangeats_02_vault_fill` v1은 secret 변수만 저장했으나 PC 입력 상태 결함으로 disabled 처리했다. 수정 배포·재생 검증 전 재활성화 금지. 성공 확인 레시피는 실제 로그인 성공 후 등록한다.
+- DB 정본 키: `AADS / verification / coupangeats-modular-login-20260922`. 이 문서 작성 시점은 커밋·푸시·비동기 배포 전이며 최종 상태는 DB 정본을 조회한다. 기존 dirty 파일은 보존했다.
+
 ## 2026-09-22 KST — 오비스 스마트브라우저 레시피 등록 목록 API
 
 - `GET /api/v1/ohvis/recipes/registrations?status=pending`를 추가했다. 현재 관리자 테넌트 범위만 조회하며 `requested_at DESC, id DESC`로 반환한다. 허용 상태는 `pending`, `approved`, `rejected`이고 기본값은 `pending`이다. 결정 API는 화면 계약의 `status: approved|rejected`를 받고 기존 `decision: approve|reject` 호출도 호환한다.
