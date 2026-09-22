@@ -2,12 +2,23 @@
 # ruff: noqa: B008  # FastAPI dependency injection uses module-level dependencies.
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pydantic import BaseModel, Field
 
-from app.auth import TenantRole, require_tenant_role
+from app.auth import TenantRole, require_tenant_role, verify_token
 from app.services.browser_task_gateway import (
     capture_browser_task_live_frame,
     check_browser_target_access,
@@ -20,6 +31,7 @@ from app.services.browser_task_gateway import (
     list_browser_task_steps,
     list_browser_tasks,
     list_permission_requests,
+    record_browser_task_step,
     request_task_permission,
     update_browser_task_status,
     upsert_browser_task_live_frame,
@@ -36,6 +48,26 @@ router = APIRouter(prefix="/browser-tasks", tags=["browser-tasks"])
 TenantContext = dict[str, Any]
 require_viewer = require_tenant_role(TenantRole.VIEWER)
 require_member = require_tenant_role(TenantRole.MEMBER)
+
+
+def _websocket_token(websocket: WebSocket) -> str:
+    for key in ("access_token", "auth_token", "token"):
+        value = str(websocket.query_params.get(key) or "").strip()
+        if value:
+            return value
+    return str((websocket.cookies or {}).get("aads_token") or "").strip()
+
+
+def _websocket_principal(websocket: WebSocket) -> dict[str, Any]:
+    token = _websocket_token(websocket)
+    payload = verify_token(token) if token else None
+    if not payload:
+        return {}
+    return {
+        "user_id": str(payload.get("sub") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip(),
+        "is_admin": bool(payload.get("is_admin")),
+    }
 
 
 class BrowserTaskCreate(BaseModel):
@@ -249,6 +281,118 @@ async def api_get_browser_task_live_frame(
          "artifact_status": artifact_status},
         context,
     )
+
+
+@router.websocket("/{task_id}/live-stream")
+async def api_browser_task_live_stream(websocket: WebSocket, task_id: str) -> None:
+    """Stream a server Chromium tab and accept operator CDP input on one socket."""
+    principal = _websocket_principal(websocket)
+    tenant_id = str(principal.get("tenant_id") or "")
+    user_id = str(principal.get("user_id") or "")
+    if not tenant_id or not user_id:
+        await websocket.close(code=4401, reason="authentication_required")
+        return
+    try:
+        task = await get_browser_task(tenant_id=tenant_id, task_id=task_id)
+    except (ValueError, TypeError):
+        task = None
+    if not task:
+        await websocket.close(code=4404, reason="browser_task_not_found")
+        return
+    task_user_id = str(task.get("user_id") or "").strip()
+    if task_user_id and task_user_id != user_id and not principal.get("is_admin"):
+        await websocket.close(code=4403, reason="forbidden")
+        return
+
+    from app.services.browser_live_control import BrowserLiveControlError, ServerBrowserLiveSession
+
+    await websocket.accept()
+    live = ServerBrowserLiveSession(target_url=str(task.get("target_url") or ""))
+    try:
+        state = await live.start()
+        await record_browser_task_step(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            step="action",
+            narration="서버 브라우저 실시간 화면을 연결했습니다.",
+            guide="프레임을 클릭하거나 입력 도구로 직접 조작할 수 있습니다.",
+            route="server_cdp_screencast",
+            extra={"action": "live_stream_started", "runtime": "server_cdp"},
+        )
+        await websocket.send_json({"type": "ready", **state, "width": live.width, "height": live.height})
+
+        async def send_frames() -> None:
+            last_persisted = 0.0
+            while True:
+                try:
+                    frame = await live.next_frame(timeout=15.0)
+                except TimeoutError:
+                    await websocket.send_json({"type": "heartbeat"})
+                    continue
+                state_now = await live.page_state()
+                frame.update(state_now)
+                await websocket.send_json(frame)
+                now = time.monotonic()
+                if now - last_persisted >= 2.0:
+                    await upsert_browser_task_live_frame(
+                        tenant_id=tenant_id,
+                        task_id=task_id,
+                        frame_base64=str(frame.get("frame") or ""),
+                        media_type="image/jpeg",
+                        width=live.width,
+                        height=live.height,
+                        current_url=str(state_now.get("url") or ""),
+                        page_title=str(state_now.get("title") or ""),
+                        current_step="server CDP live stream",
+                        metadata={"source": "server_cdp_screencast", "interactive": True},
+                    )
+                    last_persisted = now
+
+        async def receive_controls() -> None:
+            while True:
+                message = await websocket.receive_json()
+                message_type = str(message.get("type") or "")
+                if message_type == "ping":
+                    await websocket.send_json({"type": "pong"})
+                    continue
+                if message_type != "control":
+                    await websocket.send_json({"type": "error", "error": "unsupported_message_type"})
+                    continue
+                try:
+                    result = await live.apply_control(message)
+                except BrowserLiveControlError as exc:
+                    await websocket.send_json({"type": "control_error", "error": str(exc)})
+                    continue
+                recipe_step = result.get("recipe_step") if isinstance(result, dict) else None
+                await record_browser_task_step(
+                    tenant_id=tenant_id,
+                    task_id=task_id,
+                    step="action",
+                    narration=f"대표님이 브라우저에서 {result.get('action') or 'control'} 조작을 수행했습니다.",
+                    guide="성공한 조작은 학습 모드에서 승인 대기 레시피 단계로 기록됩니다.",
+                    route="server_cdp_input",
+                    extra={
+                        "action": result.get("action") or "",
+                        "selector": (recipe_step or {}).get("selector") if isinstance(recipe_step, dict) else "",
+                        "secret": bool(result.get("secret")),
+                    },
+                )
+                await websocket.send_json({"type": "control_ack", "result": result})
+
+        sender = asyncio.create_task(send_frames())
+        receiver = asyncio.create_task(receive_controls())
+        done, pending = await asyncio.wait({sender, receiver}, return_when=asyncio.FIRST_COMPLETED)
+        for pending_task in pending:
+            pending_task.cancel()
+        for finished in done:
+            finished.result()
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:  # noqa: BLE001 - Playwright/CDP exposes runtime-specific errors.
+        with contextlib.suppress(Exception):
+            await websocket.send_json({"type": "error", "error": str(exc)[:300]})
+    finally:
+        await live.close()
 
 
 @router.post("/{task_id}/live-frame")

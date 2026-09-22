@@ -550,7 +550,12 @@ def _assert_agent_access(
 def _resolve_websocket_user_id(websocket: WebSocket) -> str:
     token = ""
     try:
-        token = str(websocket.query_params.get("auth_token") or websocket.query_params.get("access_token") or "").strip()
+        token = str(
+            websocket.query_params.get("auth_token")
+            or websocket.query_params.get("access_token")
+            or websocket.query_params.get("token")
+            or ""
+        ).strip()
     except Exception:
         token = ""
     if not token:
@@ -567,6 +572,30 @@ def _resolve_websocket_user_id(websocket: WebSocket) -> str:
     if not payload:
         return ""
     return str(payload.get("sub") or "").strip()
+
+
+def _resolve_websocket_principal(websocket: WebSocket) -> dict[str, Any]:
+    """Resolve the same JWT claims used by REST for dashboard stream access."""
+    token = ""
+    try:
+        token = str(
+            websocket.query_params.get("auth_token")
+            or websocket.query_params.get("access_token")
+            or websocket.query_params.get("token")
+            or ""
+        ).strip()
+    except Exception:
+        token = ""
+    if not token:
+        token = str((getattr(websocket, "cookies", {}) or {}).get("aads_token") or "").strip()
+    payload = verify_token(token) if token else None
+    if not payload:
+        return {}
+    email = str(payload.get("email") or "").strip()
+    return {
+        "user_id": str(payload.get("sub") or "").strip(),
+        "is_admin": bool(payload.get("is_admin")) or email.lower() == ADMIN_EMAIL.lower(),
+    }
 
 
 # ── WebSocket ──────────────────────────────────────────────────────────
@@ -1692,9 +1721,14 @@ async def ws_stream(websocket: WebSocket, agent_id: str):
     if agent is None:
         await websocket.close(code=4004, reason=f"agent '{agent_id}' not connected")
         return
-    requester_user_id = _resolve_websocket_user_id(websocket)
+    principal = _resolve_websocket_principal(websocket)
+    requester_user_id = str(principal.get("user_id") or "")
+    is_admin_principal = bool(principal.get("is_admin"))
     agent_owner_user_id = str(getattr(agent, "user_id", "") or "").strip()
-    if not requester_user_id or agent_owner_user_id != requester_user_id:
+    if not requester_user_id or (
+        not is_admin_principal
+        and (not agent_owner_user_id or agent_owner_user_id != requester_user_id)
+    ):
         await websocket.close(code=4003, reason="forbidden")
         return
 

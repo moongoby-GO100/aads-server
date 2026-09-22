@@ -14367,3 +14367,22 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   환경의 `asyncpg` 미설치로 collection 단계에서 중단됐으며 문서 변경과는 무관하다.
 - **게이트**: Phase 0 B 판정과 신규 기준선 재수립·additive v2 계약을 CEO가 승인하기
   전에는 파괴적 migration, v1 제거, blocking gate를 실행하지 않는다. 배포 없음.
+
+## 2026-09-22 09:03 KST — 오비스 서버/PC 브라우저 라이브 보조·레시피 학습
+
+- **서버 레인**: `browser_tasks/{task_id}/live-stream` WebSocket과
+  `browser_live_control.py`를 추가했다. 한 슬롯·한 연결 안에서 Chromium CDP
+  `Page.startScreencast` 프레임을 전송하고 프레임 클릭·텍스트·Enter를 CDP Input으로
+  되돌린다. 최신 프레임은 복구용으로만 주기 저장하며 실시간 전송은 DB 폴링을 거치지 않는다.
+- **사용자 보조→레시피**: 오비스 화면에서 학습 시작 후 성공한 click/fill/press를 기존
+  WorkRecipe recorder로 넘기고, 종료 시 registration pending을 만든다. 대표님이 화면에서
+  승인한 뒤에만 `work_recipes v1`이 생성된다. password/비밀값은 레시피에 원문을 남기지
+  않고 credential 변수로 바꾼다.
+- **PC 레인 실측**: 운영 PC Agent `2e9379a1-fed`가 online이며 `chrome_cdp`,
+  `interactive_browser`, `stream_start/stop`, `browser_click/fill/press_key`를 광고했다.
+  기존 스트림 WebSocket은 레거시 무소유 Agent에 관리자도 403이어서, REST와 동일하게
+  관리자 접근을 허용하고 기존 UI의 `?token=`도 인식하도록 교정했다.
+- **검증**: 실제 Chromium에서 `https://example.com` CDP screencast(1366×768,
+  base64 19,992자)와 click Input을 실행했고, 신규 단위테스트 4건, Python compile,
+  dashboard TypeScript 검사와 ESLint(오류 0)를 통과했다. 배포·화면 캡처·5분 관측 결과는
+  DB 핸드오버 정본에 후속 기록한다.

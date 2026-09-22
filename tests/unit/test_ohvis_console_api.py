@@ -201,7 +201,8 @@ def test_live_frame_returns_metadata_only_and_is_tenant_scoped():
     frame = asyncio.run(console._fetch_live_frame(conn, TENANT))
 
     query, args = conn.queries[0]
-    assert "WHERE tenant_id = $1::uuid" in query
+    assert "WHERE bt.tenant_id = $1::uuid" in query
+    assert "LEFT JOIN browser_task_live_frames" in query
     assert args[0] == TENANT
     assert frame is not None
     assert frame["has_image"] is True

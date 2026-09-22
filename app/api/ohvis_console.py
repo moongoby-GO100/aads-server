@@ -429,20 +429,33 @@ async def _fetch_timeline(conn: Any, run_id: str, limit: int) -> list[dict[str, 
 
 
 async def _fetch_live_frame(conn: Any, tenant_id: str) -> dict[str, Any] | None:
-    """중앙 화면의 최신 프레임 한 장 — **메타데이터만**.
+    """중앙 화면의 최신 실행 대상과 프레임 메타데이터.
 
     frame_base64 는 최대 2.5MB 다. 3초 폴링에 얹으면 화면 하나가 분당 50MB 를
     끌어온다. 이미지는 화면이 기존 `/browser-tasks/{task_id}/live-frame` 으로
-    따로 받는다(같은 tenant 검사를 그쪽이 이미 한다).
+    따로 받는다(같은 tenant 검사를 그쪽이 이미 한다). 아직 첫 프레임이 없는
+    활성 task도 반환해 대시보드가 WebSocket screencast를 즉시 시작할 수 있다.
     """
     row = await conn.fetchrow(
         """
-        SELECT task_id, frame_url, media_type, width, height,
-               current_url, page_title, current_step, captured_at, updated_at,
-               (frame_base64 <> '') AS has_image
-          FROM browser_task_live_frames
-         WHERE tenant_id = $1::uuid
-         ORDER BY captured_at DESC
+        SELECT bt.id AS task_id,
+               COALESCE(lf.frame_url, '') AS frame_url,
+               COALESCE(lf.media_type, 'image/jpeg') AS media_type,
+               lf.width,
+               lf.height,
+               COALESCE(NULLIF(lf.current_url, ''), bt.target_url) AS current_url,
+               COALESCE(lf.page_title, '') AS page_title,
+               COALESCE(NULLIF(lf.current_step, ''), bt.current_step) AS current_step,
+               lf.captured_at,
+               COALESCE(lf.updated_at, bt.updated_at) AS updated_at,
+               COALESCE(lf.frame_base64 <> '', FALSE) AS has_image
+          FROM browser_tasks bt
+          LEFT JOIN browser_task_live_frames lf
+            ON lf.task_id = bt.id
+           AND lf.tenant_id = bt.tenant_id
+         WHERE bt.tenant_id = $1::uuid
+         ORDER BY (bt.status NOT IN ('completed', 'failed', 'cancelled')) DESC,
+                  COALESCE(lf.captured_at, bt.updated_at) DESC
          LIMIT 1
         """,
         tenant_id,
