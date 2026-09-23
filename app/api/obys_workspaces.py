@@ -301,7 +301,11 @@ def _record(kind: str, row: dict[str, Any], business_name: str) -> dict[str, Any
                 "승인·취소": status,
                 "거래번호": str(value.get("voucher_seq") or record_id),
                 "계좌": str(value.get("account_label") or "식별자 확인 필요"),
-                "거래유형": "입금" if value.get("direction") == "in" else "출금",
+                "거래유형": (
+                    ("입금" if value.get("direction") == "in" else "출금")
+                    if value.get("category") == "bank"
+                    else "해당 없음"
+                ),
                 "매칭·미매칭": "원천 조회 · 매칭 미실행",
                 "증빙번호": record_id,
                 "공급가액": f"{Decimal(str(value.get('supply_amount') or 0)):,.0f}원",

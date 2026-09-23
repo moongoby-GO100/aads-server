@@ -281,7 +281,15 @@ def _row(row: Dict[str, Any], category: str) -> Dict[str, Any]:
         "evidence_code": evidence,
         "card_code": str(row.get("card_code") or ""),
         "account_label": "원천 계좌 식별자 확인 필요" if category == "bank" else "",
-        "direction": "in" if _decimal(row.get("deposit_amount")) else "out",
+        # direction 은 통장(bank) 원천에만 의미가 있다. 매출·매입·카드·세무 전표에는
+        # deposit_amount 원자가 아예 없어 항상 0 -> "out" 이 되고, obys_workspaces._amount
+        # 가 그걸 보고 금액을 음수로 뒤집었다. 2026-09-23 실측: 매입 110,000원이 화면에
+        # -110,000원으로 표시됐다(공급가 100,000 + 세액 10,000). 통장 외에는 붙이지 않는다.
+        **(
+            {"direction": "in" if _decimal(row.get("deposit_amount")) else "out"}
+            if category == "bank"
+            else {}
+        ),
         "deposit_amount": _decimal(row.get("deposit_amount")),
         "withdraw_amount": _decimal(row.get("withdraw_amount")),
         "debit_account": str(row.get("debit_name") or ""),
