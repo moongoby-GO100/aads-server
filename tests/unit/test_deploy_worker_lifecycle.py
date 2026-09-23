@@ -78,3 +78,25 @@ deploy_phase_end initializing failed 'original failure'
     assert "UPDATE deploy_runs" in result.stderr
     assert "original failure" in result.stderr
     assert "unbound variable" not in result.stderr
+
+
+def _claim_queued_request_body() -> str:
+    source = (ROOT / "deploy.sh").read_text()
+    body = source.split("claim_latest_queued_deploy_request() {", 1)[1]
+    return body.split("\ninclude_queued_ancestors_in_direct_release", 1)[0]
+
+
+def test_queue_head_is_scoped_to_api_lane():
+    # 큐 head 를 component 없이 고르면 맨 앞이 dashboard 행일 때 api 워커가
+    # 자기 SHA 와 다르다고 판단해 영구 stand down 한다(2026-09-23 #5131~#5133).
+    # 배처(scripts/coalesce_deploy_queue.py)는 project/component/target_env
+    # 레인 단위로 head 를 정하므로 워커도 같은 술어를 써야 한다.
+    body = _claim_queued_request_body()
+
+    # head 조회(SELECT release_sha)와 claim CTE(WITH ready) 두 곳 모두 레인 스코프여야 한다.
+    assert body.count("AND component='api'") >= 2
+    assert body.count("AND target_env='production'") >= 2
+
+    for chunk in body.split("AND status='queued'")[:-1]:
+        assert "AND component='api'" in chunk, "queued 조회에 component 필터가 없다"
+        assert "AND target_env='production'" in chunk, "queued 조회에 target_env 필터가 없다"
