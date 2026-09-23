@@ -208,9 +208,11 @@ _REPORT_REQUIRED_GROUPS: dict[str, tuple[str, ...]] = {
 _REPORT_MIN_STRUCTURE_CHARS = 280
 _STATUS_REPORT_MIN_STRUCTURE_CHARS = 180
 
-# ─── CEO 8섹션 응답 플로우 (AADS-CRF v2.0, 2026-09-08) ────────────────────────
-# CEO 지시: 질문/지시 파악 → 목표 → 계획 → 실행순서 → 결과 → 검증 → 리스크 → 다음
-# 재시도 폭증(응답 끊김)을 막기 위해 "완전 일치"가 아니라 "커버리지 하한"만 강제한다.
+# ─── Legacy CEO 8섹션 진단기 (AADS-CRF v2.0, 2026-09-08) ─────────────────────
+# UI/과거 회귀 테스트의 진단 호환성을 위해 키워드 그룹과 공개 함수를 유지한다.
+# 실제 응답 뼈대는 AADS-CRF v3.0의 M1~M7 선택기가 결정하며, 이 진단 결과로
+# 응답을 재작성하지 않는다. 고정 8섹션 강제는 단답·상태·검수 응답까지 같은
+# 모양으로 바꾸고, 이미 선택된 모드와 충돌해 불필요한 재시도를 만들었다.
 _CEO_FLOW_GROUPS: dict[str, tuple[str, ...]] = {
     "brief": (
         "지시 확인", "지시 파악", "지시 정리", "요청 확인", "요청 파악", "요청 정리",
@@ -227,11 +229,6 @@ _CEO_FLOW_GROUPS: dict[str, tuple[str, ...]] = {
     "risk": ("리스크", "문제", "위험", "한계", "주의", "미완료", "이상 항목"),
     "next": ("다음 단계", "→ 다음", "권장 조치", "→ 권장", "후속 조치"),
 }
-
-# 8섹션 플로우 검사 적용 최소 길이 (짧은 확인 답변은 대상 아님)
-_CEO_FLOW_MIN_CHARS = 900
-# 8개 중 최소 몇 개가 본문에 드러나야 하는지 (보수적 하한)
-_CEO_FLOW_MIN_COVERAGE = 5
 
 _DETAILED_RESPONSE_TRIGGERS: tuple[str, ...] = (
     "문제점",
@@ -579,28 +576,13 @@ def check_report_quality_structure(
     if len(text) >= 800 and not _LEAD_CONCLUSION_PATTERN.search(text[:_LEAD_CONCLUSION_WINDOW]):
         readability_gaps.append("lead_conclusion")
 
-    # ── CEO 8섹션 응답 플로우 커버리지 (AADS-CRF v2.0) ──────────────────────
-    flow_missing = evaluate_ceo_flow_coverage(text)
-    flow_gaps: list[str] = []
-    if (
-        len(text) >= _CEO_FLOW_MIN_CHARS
-        and (len(_CEO_FLOW_GROUPS) - len(flow_missing)) < _CEO_FLOW_MIN_COVERAGE
-    ):
-        flow_gaps = [f"flow_{name}" for name in flow_missing]
-
     # 임계치 완화 (2026-09-06): structural 2개 이상 또는 readability 2개 이상이면 재작성.
     if len(structural_gaps) >= 2:
-        all_gaps = structural_gaps + readability_gaps + flow_gaps
+        all_gaps = structural_gaps + readability_gaps
         reason = "문제점·원인·권장안·검증/완료기준 중 필수 항목이 부족합니다."
     elif len(readability_gaps) >= 2:
-        all_gaps = readability_gaps + structural_gaps + flow_gaps
+        all_gaps = readability_gaps + structural_gaps
         reason = "응답 구조가 CEO 가독성 표준(결론 선행·섹션 헤딩·도구 경과 분리)을 벗어났습니다."
-    elif flow_gaps:
-        all_gaps = flow_gaps + structural_gaps + readability_gaps
-        reason = (
-            "CEO 8섹션 응답 플로우(지시파악→목표→계획→실행순서→결과→검증→리스크→다음) "
-            "커버리지가 하한 미만입니다."
-        )
     else:
         return None
 
@@ -620,21 +602,18 @@ def _build_report_quality_retry_prompt(missing: list[str], reason: str) -> str:
     return (
         "[시스템 재시도 지시 — 보고 품질 부족] "
         f"{reason} 누락 항목: {missing_text}. "
-        "이전 응답을 CEO 보고서 기준으로 다시 작성하세요. "
-        "[필수 구조] "
+        "이전 응답을 AADS-CRF v3.0 기준으로 다시 작성하세요. "
+        "[서식 선택] 요청 성격에 맞는 모드 하나만 사용하세요. "
+        "M1 단답=헤딩·표 없이 3줄, M2 상태=현황표→이상→권장, "
+        "M3 진단·개발=진단표→실행표→검증기준, M4 실행결과=수행표→검증→미완료, "
+        "M5 기획=요약→문제표→개선안표→리스크, M6 검수=판정→차단이슈→승인조건, "
+        "M7 사실확인=직답→근거표→신뢰도. 모든 모드를 섞지 마세요. "
+        "[공통 품질] "
         "첫 줄: 판정 아이콘(✅/⚠️/❌) + 한 문장 결론. "
         "둘째 줄: 핵심 근거 1개(수치 + [출처] 태그). "
-        "본문은 CEO 8섹션 응답 플로우를 ## 헤딩으로 순서대로 작성: "
-        "1) ## 지시 파악 — 요청을 어떻게 이해했는지 1~2줄, "
-        "2) ## 목표 — 이번 응답의 완료 기준, "
-        "3) ## 계획 — 어떤 방식으로 처리했는지, "
-        "4) ## 실행순서 — 실제 수행 단계(표 또는 번호 목록), "
-        "5) ## 결과 — 완료/미완료 구분, "
-        "6) ## 검증 — 실행한 명령·도구와 결과(✅/❌), "
-        "7) ## 리스크 — 없으면 '없음'으로 명시, "
-        "8) → 다음 단계: 즉시 실행 가능한 액션 1~3개. "
-        "간단 조회·인사 응답에는 이 8섹션을 강제하지 않습니다. "
-        "[서식 규칙] "
+        "문제·원인·권장안·검증기준은 선택한 모드 안에서 필요한 만큼 담으세요. "
+        "M1을 제외한 다음 단계는 R-NEXTSTEP 5열 표를 사용하세요. "
+        "[출력 규칙] "
         "비교 항목 3개 이상은 마크다운 표 필수. "
         "수치·날짜·상태값에 [DB 조회]/[코드 확인]/[로그]/[미측정] 출처 태그 필수. "
         "1,500자 이상은 ## 섹션 헤딩으로 구간 분리 필수. "
@@ -837,5 +816,3 @@ def should_retry_without_tools(violation_type: str, tools_called: bool) -> bool:
     본문을 얻는다 — 실패하면 기존 부분응답 보존 경로로 그대로 떨어진다.
     """
     return violation_type == "PROGRESS_ONLY_RESPONSE" and bool(tools_called)
-
-

@@ -455,11 +455,10 @@ class TestOutputValidator:
 
         assert result.is_valid is False
         assert result.violation_type == "REPORT_STRUCTURE_WEAK"
-        # AADS-CRF v2.0(9f8edcd9)에서 재시도 지시가 CEO 8섹션 플로우로 바뀌었다.
-        # 재시도 프롬프트는 무엇을 다시 쓸지 구조로 알려줘야 한다.
-        assert "## 결과" in result.retry_prompt
-        assert "## 검증" in result.retry_prompt
-        assert "다음 단계" in result.retry_prompt
+        # AADS-CRF v3.0에서는 고정 8섹션 대신 요청별 모드 하나를 고른다.
+        assert "M3 진단·개발" in result.retry_prompt
+        assert "모든 모드를 섞지 마세요" in result.retry_prompt
+        assert "CEO 8섹션 응답 플로우" not in result.retry_prompt
 
     def test_report_quality_accepts_structured_analysis(self):
         from app.services.output_validator import validate_response
@@ -491,6 +490,39 @@ class TestOutputValidator:
             intent="cto_strategy",
         )
 
+        assert result.is_valid is True
+
+    def test_report_quality_accepts_crf_v3_mode_without_legacy_eight_sections(self):
+        from app.services.output_validator import validate_response
+
+        response = """
+✅ 현재 서비스는 정상이며 지연 경보 한 건만 후속 확인이 필요합니다.
+핵심 근거는 API health 200과 최근 오류 1건입니다. [로그]
+
+## 현황
+| 항목 | 상태 | 근거 |
+|---|---|---|
+| API | 정상 | health 200 [로그] |
+| 응답 지연 | 주의 | P95 경보 1건 [DB 조회] |
+| 배포 | 정상 | active 슬롯 일치 [코드 확인] |
+
+## 이상 항목
+문제는 응답 지연 경보이며 사용자에게 답변이 늦게 보일 수 있습니다. 원인은 외부 모델 왕복 시간으로 확인했습니다. [로그]
+
+## 권장 조치
+P1로 지연 표본을 재측정하고 같은 조건에서 테스트해 재발 여부를 검증합니다. 완료기준은 신규 경보가 없고 health 200이 유지되는 것입니다.
+
+| 순위 | 다음 단계 | 왜 필요한가(근거) | 선행·병렬 | 완료기준 |
+|---|---|---|---|---|
+| P1 자동 | 지연 표본 재측정 | 경보 1건 [DB 조회] | 없음 | 신규 경보 0건 |
+""" + ("운영 상태의 확인된 사실만 간결하게 보고합니다. " * 20)
+        result = validate_response(
+            response_text=response,
+            tools_called=True,
+            intent="status_check",
+        )
+
+        assert len(response) >= 900
         assert result.is_valid is True
 
     def test_status_report_quality_rejects_thin_next_step_report(self):
