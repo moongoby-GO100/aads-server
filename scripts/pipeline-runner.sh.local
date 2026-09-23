@@ -3704,7 +3704,7 @@ deploy_job() {
                 _qa_response=$(curl -s -m 60 -X POST \
                     -H "Content-Type: application/json" \
                     -d '{"pages": ["/", "/chat", "/ops"]}' \
-                    "http://127.0.0.1:8100/api/v1/visual-qa/full-qa" 2>/dev/null) || true
+                    "${AADS_API_URL}/api/v1/visual-qa/full-qa" 2>/dev/null) || true
 
                 if [ -z "$_qa_response" ]; then
                     log "  QA: WARN — QA API 호출 실패 (응답 없음), 배포는 계속 진행"
@@ -3881,7 +3881,7 @@ deploy_job() {
     local health_ok="unknown"
     local health_url=""
     case "$project" in
-        AADS)   health_url="http://localhost:8100/api/v1/health" ;;
+        AADS)   health_url="${AADS_API_URL}/api/v1/health" ;;
         KIS)    health_url="http://localhost:8003/health" ;;
         GO100)  health_url="http://localhost:8002/health" ;;
         SF)     health_url="http://localhost:8000/health" ;;
