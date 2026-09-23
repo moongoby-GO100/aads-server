@@ -6,7 +6,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Iterable, Sequence
 
@@ -39,6 +39,7 @@ _PROVIDER_ALIASES = {
     "kimi": "kimi",
     "moonshot": "kimi",
     "minimax": "minimax",
+    "mistral": "mistral",
     "codex": "codex",
     "litellm": "litellm",
 }
@@ -128,7 +129,7 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "claude-opus-46": (_decimal(5.0), _decimal(25.0)),
     "claude-sonnet": (_decimal(3.0), _decimal(15.0)),
     "claude-haiku": (_decimal(1.0), _decimal(5.0)),
-    "claude-sonnet-5": (_decimal(3.0), _decimal(15.0)),
+    "claude-sonnet-5": (_decimal(2.0), _decimal(10.0)),
     "claude-fable-5": (_decimal(10.0), _decimal(50.0)),
     "claude-fable-5-1": (_decimal(10.0), _decimal(50.0)),
     "gemini-flash": (_decimal(0.075), _decimal(0.3)),
@@ -139,13 +140,9 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "gemini-3.1-pro-preview": (_decimal(2.0), _decimal(12.0)),
     "gemini-2.5-flash": (_decimal(0.15), _decimal(0.6)),
     "gemini-2.5-flash-lite": (_decimal(0.04), _decimal(0.1)),
-    "groq-qwen3-32b": (_decimal(0.0), _decimal(0.0)),
-    "groq-kimi-k2": (_decimal(0.0), _decimal(0.0)),
-    "groq-llama4-scout": (_decimal(0.0), _decimal(0.0)),
-    "groq-llama-70b": (_decimal(0.0), _decimal(0.0)),
-    "groq-llama-8b": (_decimal(0.0), _decimal(0.0)),
-    "groq-gpt-oss-120b": (_decimal(0.0), _decimal(0.0)),
-    "groq-compound": (_decimal(0.0), _decimal(0.0)),
+    "groq-gpt-oss-120b": (_decimal(0.15), _decimal(0.60)),
+    "groq-gpt-oss-20b": (_decimal(0.075), _decimal(0.30)),
+    "groq-qwen3.8-27b": (_decimal(0.80), _decimal(4.0)),
     "gpt-4o": (_decimal(2.5), _decimal(10.0)),
     "gpt-4o-mini": (_decimal(0.15), _decimal(0.6)),
     "gpt-5": (_decimal(5.0), _decimal(15.0)),
@@ -154,6 +151,8 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "o3-mini": (_decimal(1.1), _decimal(4.4)),
     "o3-pro": (_decimal(20.0), _decimal(80.0)),
     "gpt-6-astra": (_decimal(10.0), _decimal(50.0)),
+    "gpt-6-sol": (_decimal(2.0), _decimal(10.0)),
+    "gpt-6-luna": (_decimal(0.1), _decimal(0.5)),
     "gpt-5.6-sol": (_decimal(4.0), _decimal(20.0)),
     "gpt-5.6-tela": (_decimal(3.0), _decimal(15.0)),
     "gpt-5.6-terra": (_decimal(2.0), _decimal(12.0)),
@@ -162,15 +161,14 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "gpt-5.4": (_decimal(2.5), _decimal(15.0)),
     "gpt-5.4-mini": (_decimal(0.75), _decimal(4.5)),
     "gpt-5.3-codex": (_decimal(1.75), _decimal(14.0)),
-    "deepseek-v4-flash": (_decimal(0.28), _decimal(0.42)),
-    "deepseek-v4-pro": (_decimal(0.55), _decimal(2.19)),
-    "deepseek-chat": (_decimal(0.28), _decimal(0.42)),
-    "deepseek-reasoner": (_decimal(0.55), _decimal(2.19)),
+    "deepseek-flash": (_decimal(0.3), _decimal(1.2)),
+    "deepseek-v4-pro": (_decimal(1.32), _decimal(3.96)),
     "openrouter-grok-4-fast": (_decimal(0.2), _decimal(0.2)),
     "openrouter-deepseek-v3": (_decimal(0.26), _decimal(0.26)),
     "openrouter-mistral-small": (_decimal(0.15), _decimal(0.15)),
     "openrouter-nemotron-free": (_decimal(0.0), _decimal(0.0)),
     "openrouter-minimax-m2": (_decimal(0.3), _decimal(0.3)),
+    "openrouter-grok-4.7": (_decimal(1.6), _decimal(4.8)),
     "qwen3-235b": (_decimal(0.6), _decimal(2.4)),
     "qwen3-235b-instruct": (_decimal(0.6), _decimal(2.4)),
     "qwen3-235b-thinking": (_decimal(0.6), _decimal(2.4)),
@@ -221,17 +219,27 @@ _THINKING_MODELS = {
     "gemini-3-pro-preview",
     "gemini-3.1-flash-lite-preview",
     "gemini-3.1-pro-preview",
+    "gemini-3.8-flash",
+    "gemini-3.8-live-extended-thinking",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
     "gemini-2.5-flash",
     "gemini-2.5-pro",
     "deepseek-v4-pro",
+    "deepseek-flash",
     "deepseek-reasoner",
     "qwen3-235b-thinking",
+    "qwen3.7-plus",
+    "qwen3.7-max",
+    "qwen3.8-max",
     "qwq-plus",
     "gpt-5.6-sol",
     "gpt-5.6-tela",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "gpt-6-astra",
+    "gpt-6-sol",
     "o3",
     "o3-mini",
     "o3-pro",
@@ -244,7 +252,11 @@ _VISION_MODELS = {
     "gpt-4o",
     "gpt-4o-mini",
     "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6-luna",
     "gemini-2.5-flash-image",
+    "gemini-3.8-flash",
+    "kimi-k3",
     "qwen-vl-max",
     "qwen-vl-plus",
     "qwen3-vl-plus",
@@ -267,6 +279,8 @@ _CODING_MODELS = {
     "gpt-5.4-mini",
     "gpt-5.3-codex",
     "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-tela",
     "gpt-5.6-terra",
@@ -278,6 +292,10 @@ _CODING_MODELS = {
     "qwen3-coder-plus",
     "qwen3-coder-flash",
     "qwen3-coder-480b",
+    "qwen3.6-plus",
+    "qwen3.7-plus",
+    "qwen3.7-max",
+    "qwen3.8-max",
     "qwen-coder-plus",
 }
 
@@ -291,6 +309,8 @@ _DISPLAY_NAME_OVERRIDES = {
     "claude-fable-5": "Claude Fable 5",
     "claude-fable-5-1": "Claude Fable 5.1",
     "gpt-6-astra": "GPT-6 Astra",
+    "gpt-6-sol": "GPT-6 Sol",
+    "gpt-6-luna": "GPT-6 Luna",
     "gpt-5.4": "GPT-5.4 (Codex CLI)",
     "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)",
     "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)",
@@ -298,7 +318,7 @@ _DISPLAY_NAME_OVERRIDES = {
     "gpt-5.6-terra": "GPT-5.6 Terra (Codex CLI)",
     "gpt-5.6-luna": "GPT-5.6 Luna (Codex CLI)",
     "gpt-5.5": "GPT-5.5 (Codex CLI)",
-    "deepseek-v4-flash": "DeepSeek V4 Flash",
+    "deepseek-flash": "DeepSeek V4.1 Flash",
     "deepseek-v4-pro": "DeepSeek V4 Pro",
     "deepseek-chat": "DeepSeek Chat (compat alias -> V4 Flash)",
     "deepseek-reasoner": "DeepSeek Reasoner (compat alias -> V4 Pro)",
@@ -307,6 +327,13 @@ _DISPLAY_NAME_OVERRIDES = {
     "openrouter-mistral-small": "OpenRouter Mistral Small",
     "openrouter-nemotron-free": "OpenRouter Nemotron Free",
     "openrouter-minimax-m2": "OpenRouter MiniMax M2",
+    "openrouter-grok-4.7": "OpenRouter Grok 4.7",
+    "openrouter-kimi-k3": "OpenRouter Kimi K3",
+    "openrouter-minimax-m3": "OpenRouter MiniMax M3",
+    "openrouter-qwen3.8-max": "OpenRouter Qwen 3.8 Max",
+    "mistral-medium-latest": "Mistral Medium 3.5",
+    "mistral-small-latest": "Mistral Small 4",
+    "mistral-large-latest": "Mistral Large 3",
     "dashscope-deepseek-v3.2": "DashScope DeepSeek V3.2",
 }
 
@@ -326,10 +353,15 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "gemini-flash-lite",
         "gemini-pro",
         "gemini-3-flash-preview",
-        "gemini-3-pro-preview",
-        "gemini-3.1-flash-lite-preview",
+        "gemini-3.8-flash",
+        "gemini-3.8-live",
+        "gemini-3.8-live-extended-thinking",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
         "gemini-3.1-pro-preview",
-        "gemini-2.0-flash",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
         "gemini-2.5-pro",
@@ -337,16 +369,14 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "gemma-3-27b-it",
     ),
     "groq": (
-        "groq-qwen3-32b",
-        "groq-kimi-k2",
-        "groq-llama4-scout",
-        "groq-llama-70b",
-        "groq-llama-8b",
         "groq-gpt-oss-120b",
-        "groq-compound",
+        "groq-gpt-oss-20b",
+        "groq-qwen3.8-27b",
     ),
     "openai": (
         "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
@@ -358,14 +388,18 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "o3-mini",
         "o3-pro",
     ),
-    "codex": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
-    "deepseek": ("deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"),
+    "codex": ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
+    "deepseek": ("deepseek-flash", "deepseek-v4-pro"),
     "openrouter": (
         "openrouter-grok-4-fast",
         "openrouter-deepseek-v3",
         "openrouter-mistral-small",
         "openrouter-nemotron-free",
         "openrouter-minimax-m2",
+        "openrouter-grok-4.7",
+        "openrouter-kimi-k3",
+        "openrouter-minimax-m3",
+        "openrouter-qwen3.8-max",
     ),
     "qwen": (
         "qwen3-235b",
@@ -382,6 +416,10 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "qwen3-coder-480b",
         "qwen3.5-plus",
         "qwen3.5-flash",
+        "qwen3.6-plus",
+        "qwen3.7-plus",
+        "qwen3.7-max",
+        "qwen3.8-max",
         "qwen-max",
         "qwen-max-latest",
         "qwen-plus",
@@ -399,22 +437,60 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "qwen-omni-turbo",
         "dashscope-deepseek-v3.2",
     ),
-    "kimi": ("kimi-k2.6", "kimi-k2.5", "kimi-k2", "kimi-latest", "kimi-128k", "kimi-8k"),
-    "minimax": ("minimax-m2.7", "minimax-m2.5"),
+    "kimi": ("kimi-k3", "kimi-k2.6", "kimi-k2.5", "kimi-k2", "kimi-latest", "kimi-128k", "kimi-8k"),
+    "minimax": ("minimax-m3", "minimax-m2.7", "minimax-m2.5"),
+    "mistral": ("mistral-medium-latest", "mistral-small-latest", "mistral-large-latest"),
 }
 
 _KEYLESS_PROVIDERS = {"codex", "antigravity"}  # relay 서버 경유, 별도 API key 불필요
 
 _DEEPSEEK_ALIAS_DEPRECATION_DATE = "2026-07-24"
 _DEEPSEEK_COMPATIBILITY_ALIASES = {
-    "deepseek-chat": "deepseek-v4-flash",
+    "deepseek-chat": "deepseek-flash",
+    "deepseek-v4-flash": "deepseek-flash",
     "deepseek-reasoner": "deepseek-v4-pro",
 }
 _DEEPSEEK_LITELLM_RUNTIME_ALIASES = {
-    "deepseek-v4-flash": "deepseek-v4-flash",
+    "deepseek-flash": "deepseek-flash",
     "deepseek-v4-pro": "deepseek-v4-pro",
-    "deepseek-chat": "deepseek-chat",
-    "deepseek-reasoner": "deepseek-reasoner",
+}
+
+_OPENROUTER_RUNTIME_MODEL_IDS = {
+    "openrouter-grok-4.7": "x-ai/grok-4.7",
+    "openrouter-kimi-k3": "moonshotai/kimi-k3",
+    "openrouter-minimax-m3": "minimax/minimax-m3",
+    "openrouter-qwen3.8-max": "qwen/qwen3.8-max-0902",
+}
+
+_GROQ_RUNTIME_MODEL_IDS = {
+    "groq-gpt-oss-120b": "openai/gpt-oss-120b",
+    "groq-gpt-oss-20b": "openai/gpt-oss-20b",
+    "groq-qwen3.8-27b": "qwen/qwen3.8-27b",
+}
+
+# Officially shut-down endpoints must not be revived by provider discovery.
+_FORCED_RETIRED_MODELS = {
+    ("anthropic", "claude-opus-4-1-20250805"),
+    ("anthropic", "claude-opus-4-20250514"),
+    ("anthropic", "claude-sonnet-4-20250514"),
+    ("anthropic", "claude-3-7-sonnet-20250219"),
+    ("anthropic", "claude-3-5-haiku-20241022"),
+    ("anthropic", "claude-3-haiku-20240307"),
+    ("deepseek", "deepseek-chat"),
+    ("deepseek", "deepseek-reasoner"),
+    ("deepseek", "deepseek-v4-flash"),
+    ("gemini", "gemini-2.0-flash"),
+    ("gemini", "gemini-2.0-flash-lite"),
+    ("gemini", "gemini-3.1-flash-lite-preview"),
+    ("gemini", "gemini-3-pro-preview"),
+    ("groq", "groq-compound"),
+    ("groq", "groq-kimi-k2"),
+    ("groq", "groq-llama-70b"),
+    ("groq", "groq-llama-8b"),
+    ("groq", "groq-llama4-scout"),
+    ("groq", "groq-qwen3-32b"),
+    ("openai", "gpt-5.2-chat-latest"),
+    ("openai", "gpt-5.3-chat-latest"),
 }
 from scripts.claude_model_contract import AADS_MODEL_IDS  # noqa: E402
 
@@ -465,6 +541,7 @@ _PROVIDER_META = {
     "qwen": {"display_name": "Qwen / DashScope", "manual_review": False},
     "kimi": {"display_name": "Kimi", "manual_review": False},
     "minimax": {"display_name": "MiniMax", "manual_review": False},
+    "mistral": {"display_name": "Mistral", "manual_review": False},
 }
 
 _DIRECT_PROVIDER_BASE_URLS = {
@@ -474,6 +551,7 @@ _DIRECT_PROVIDER_BASE_URLS = {
     "qwen": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "kimi": "https://api.moonshot.ai/v1",
     "minimax": "https://api.minimax.chat/v1",
+    "mistral": "https://api.mistral.ai/v1",
 }
 
 
@@ -525,7 +603,66 @@ def _canonical_model_id(model_id: str) -> str:
 def _runtime_model_id(provider: str, model_id: str) -> str:
     if provider == "deepseek":
         return _DEEPSEEK_LITELLM_RUNTIME_ALIASES.get(model_id, model_id)
+    if provider == "openrouter":
+        return _OPENROUTER_RUNTIME_MODEL_IDS.get(model_id, model_id)
+    if provider == "groq":
+        return _GROQ_RUNTIME_MODEL_IDS.get(model_id, model_id)
     return _canonical_model_id(model_id)
+
+
+def _commercial_metadata(provider: str, model_id: str) -> dict[str, Any]:
+    if provider == "codex":
+        return {
+            "billing_mode": "chatgpt_subscription_oauth",
+            "subscription_plans": ["Plus", "Pro", "Business", "Enterprise"],
+            "api_billing_separate": True,
+        }
+    if provider == "anthropic":
+        return {
+            "billing_mode": "claude_subscription_oauth",
+            "subscription_plans": ["Pro", "Max", "Team", "Enterprise"],
+            "api_billing_separate": True,
+        }
+    if provider == "gemini":
+        return {
+            "billing_mode": "api_key",
+            "consumer_subscription_plans": ["Google AI Plus", "Google AI Pro", "Google AI Ultra"],
+            "api_billing_separate": True,
+        }
+    if provider == "qwen":
+        return {
+            "billing_mode": "api_key",
+            "coding_plan_available": model_id in {"qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus", "qwen3-coder-plus"},
+            "api_billing_separate": True,
+        }
+    if provider == "kimi":
+        return {
+            "billing_mode": "api_key",
+            "kimi_membership_available": model_id in {"kimi-k3", "kimi-k2.6"},
+            "api_billing_separate": True,
+        }
+    if provider == "minimax":
+        return {
+            "billing_mode": "api_key",
+            "token_plan_available": model_id in {"minimax-m3", "minimax-m2.7", "minimax-m2.5"},
+            "api_billing_separate": True,
+        }
+    if provider == "openai":
+        return {"billing_mode": "api_key", "api_billing_separate_from_chatgpt": True}
+    return {"billing_mode": "api_key"}
+
+
+def _is_retired_catalog_row(row: dict[str, Any]) -> bool:
+    if (str(row.get("provider") or ""), str(row.get("model_id") or "")) in _FORCED_RETIRED_MODELS:
+        return True
+    raw = _coerce_json_object(_coerce_json_object(row.get("metadata")).get("raw"))
+    shutdown_date = str(raw.get("shutdown_date") or "").strip()
+    if not shutdown_date:
+        return False
+    try:
+        return date.fromisoformat(shutdown_date) <= datetime.now(timezone.utc).date()
+    except ValueError:
+        return False
 
 
 def _compatibility_alias_metadata(model_id: str) -> dict[str, Any]:
@@ -844,6 +981,7 @@ def _discovered_model_row(
     }
     metadata.update(_compatibility_alias_metadata(model_id))
     metadata.update(_accepted_alias_metadata(provider, model_id))
+    metadata.update(_commercial_metadata(provider, model_id))
     return {
         "provider": provider,
         "model_id": model_id,
@@ -1148,8 +1286,14 @@ async def discover_provider_model_rows(
 
 
 def _merge_model_rows(template_rows: list[dict[str, Any]], discovered_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    merged: dict[tuple[str, str], dict[str, Any]] = {(row["provider"], row["model_id"]): dict(row) for row in template_rows}
+    merged: dict[tuple[str, str], dict[str, Any]] = {
+        (row["provider"], row["model_id"]): dict(row)
+        for row in template_rows
+        if not _is_retired_catalog_row(row)
+    }
     for row in discovered_rows:
+        if _is_retired_catalog_row(row):
+            continue
         key = (row["provider"], row["model_id"])
         if key not in merged:
             merged[key] = dict(row)
@@ -1219,6 +1363,7 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
             }
             metadata.update(_compatibility_alias_metadata(template.model_id))
             metadata.update(_accepted_alias_metadata(provider, template.model_id))
+            metadata.update(_commercial_metadata(provider, template.model_id))
             model_rows.append(
                 {
                     "provider": provider,

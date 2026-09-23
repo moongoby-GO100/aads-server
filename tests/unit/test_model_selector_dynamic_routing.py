@@ -452,7 +452,7 @@ async def test_call_stream_executes_deepseek_compatibility_alias_as_canonical(mo
     ]
 
     assert captured == {
-        "request_model": "deepseek-reasoner",
+        "request_model": "deepseek-v4-pro",
         "display_model": "deepseek-reasoner",
         "cost_model": "deepseek-reasoner",
     }

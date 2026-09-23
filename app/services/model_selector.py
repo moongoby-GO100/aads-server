@@ -1074,10 +1074,9 @@ _COST_MAP = {
     "gemini-2.5-flash":       (0.15,  0.6),   # thinking 별도 $3.50 (여기선 non-thinking만)
     "gemini-2.5-flash-lite":  (0.04,  0.1),
     # Groq (무료 — 비용 0)
-    "groq-qwen3-32b":        (0.0,   0.0),
-    "groq-kimi-k2":          (0.0,   0.0),
-
-    "groq-llama4-scout":     (0.0,   0.0),
+    "groq-gpt-oss-120b":     (0.15,  0.60),
+    "groq-gpt-oss-20b":      (0.075, 0.30),
+    "groq-qwen3.8-27b":      (0.80,  4.00),
     # OpenAI (LiteLLM 경유)
     "gpt-4o":                (2.50,  10.0),
     "gpt-4o-mini":           (0.15,   0.6),
@@ -1087,25 +1086,22 @@ _COST_MAP = {
     "o3-mini":               (1.10,   4.40),
     "o3-pro":                (20.0,  80.0),
     "gpt-6-astra":           (10.0,  50.0),
+    "gpt-6-sol":             (2.0,   10.0),
+    "gpt-6-luna":            (0.10,   0.50),
     # Codex CLI (ChatGPT Plus OAuth)
     "gpt-5.4":               (2.50,  15.0),
     "gpt-5.4-mini":          (0.75,   4.50),
     "gpt-5.3-codex":         (1.75,  14.0),
-    "groq-llama-70b":        (0.0,   0.0),
-    "groq-llama-8b":         (0.0,   0.0),
-    "groq-gpt-oss-120b":     (0.0,   0.0),
-    "groq-compound":         (0.0,   0.0),
     # DeepSeek
-    "deepseek-v4-flash":     (0.28,  0.42),
-    "deepseek-v4-pro":       (0.55,  2.19),
-    "deepseek-chat":         (0.28,  0.42),
-    "deepseek-reasoner":     (0.55,  2.19),
+    "deepseek-flash":        (0.30,  1.20),
+    "deepseek-v4-pro":       (1.32,  3.96),
     # OpenRouter
     "openrouter-grok-4-fast":    (0.20,  0.20),   # Grok 4.1 Fast, 2M ctx
     "openrouter-deepseek-v3":    (0.26,  0.26),   # DeepSeek V3.2
     "openrouter-mistral-small":  (0.15,  0.15),   # Mistral Small
     "openrouter-nemotron-free":  (0.0,   0.0),    # Nemotron 3 Super (무료)
     "openrouter-minimax-m2":     (0.30,  0.30),   # MiniMax M2.7
+    "openrouter-grok-4.7":       (1.60,  4.80),
     # Alibaba/Qwen (DashScope via LiteLLM)
     "qwen3-235b":              (0.60,  2.40),
     "qwen3-235b-instruct":     (0.60,  2.40),
@@ -1182,10 +1178,15 @@ _GEMINI_MODELS = {
     "gemini-flash-lite",
     "gemini-pro",
     "gemini-3-flash-preview",
-    "gemini-3-pro-preview",
-    "gemini-3.1-flash-lite-preview",
+    "gemini-3.8-flash",
+    "gemini-3.8-live",
+    "gemini-3.8-live-extended-thinking",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
     "gemini-3.1-pro-preview",
-    "gemini-2.0-flash",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
     "gemini-2.5-pro",
@@ -1198,18 +1199,21 @@ _GEMINI_THINKING_MODELS = {
     "gemini-pro",
     "gemini-flash",
     "gemini-3-flash-preview",
-    "gemini-3-pro-preview",
-    "gemini-3.1-flash-lite-preview",
+    "gemini-3.8-flash",
+    "gemini-3.8-live-extended-thinking",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
     "gemini-3.1-pro-preview",
     "gemini-2.5-flash",
     "gemini-2.5-pro",
 }
 
 # Groq 모델 (LiteLLM 경유, 무료)
-_GROQ_MODELS = {"groq-qwen3-32b", "groq-kimi-k2", "groq-llama4-scout", "groq-llama-70b", "groq-llama-8b", "groq-gpt-oss-120b", "groq-compound"}
+_GROQ_MODELS = {"groq-gpt-oss-120b", "groq-gpt-oss-20b", "groq-qwen3.8-27b"}
 # OpenAI 모델 (LiteLLM/OpenAI-compatible 경유)
-_OPENAI_MODELS = {"gpt-6-astra", "gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"}
-_OPENAI_REASONING_MODELS = {"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5", "o3", "o3-mini", "o3-pro"}
+_OPENAI_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"}
+_OPENAI_REASONING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5", "o3", "o3-mini", "o3-pro"}
 # OpenAI 직결 경로는 LiteLLM 프록시와 달리 파라미터를 번역해 주지 않는다.
 # 2026-09-19 실측: gpt-5.6-sol 채팅이 매 턴 HTTP 400 으로 죽고 "[... 실행 불가 →
 # Codex CLI 전환]" 배너만 남았다. 세 제약이 동시에 걸려 있었다.
@@ -1221,9 +1225,11 @@ _OPENAI_DIRECT_MAX_TOOLS = 128
 _OPENAI_RESPONSES_TOOL_REQUIRED_MODELS = {"gpt-6-astra"}
 
 # Codex CLI 모델 (ChatGPT Plus OAuth, relay /codex-stream 경유)
-_CODEX_MODELS = {"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
+_CODEX_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
 _CODEX_MODEL_DISPLAY = {
     "gpt-6-astra": "GPT-6 Astra (Codex CLI)",
+    "gpt-6-sol": "GPT-6 Sol (Codex CLI)",
+    "gpt-6-luna": "GPT-6 Luna (Codex CLI)",
     "gpt-5.6-sol": "GPT-5.6 Sol (Codex CLI)",
     "gpt-5.6-terra": "GPT-5.6 Terra (Codex CLI)",
     "gpt-5.6-luna": "GPT-5.6 Luna (Codex CLI)",
@@ -1235,6 +1241,10 @@ _CODEX_MODEL_DISPLAY = {
 _CODEX_MODEL_ALIASES = {
     "codex:gpt-6-astra": "gpt-6-astra",
     "gpt-6 astra (codex cli)": "gpt-6-astra",
+    "codex:gpt-6-sol": "gpt-6-sol",
+    "gpt-6 sol (codex cli)": "gpt-6-sol",
+    "codex:gpt-6-luna": "gpt-6-luna",
+    "gpt-6 luna (codex cli)": "gpt-6-luna",
     "codex:gpt-5.6-sol": "gpt-5.6-sol",
     "gpt-5.6 sol (codex cli)": "gpt-5.6-sol",
     "codex:gpt-5.6-terra": "gpt-5.6-terra",
@@ -1266,16 +1276,18 @@ def _canonical_codex_model_id(model: Any) -> str:
 
 # DeepSeek 모델 (LiteLLM 경유)
 _DEEPSEEK_COMPATIBILITY_ALIASES = {
-    "deepseek-chat": "deepseek-v4-flash",
+    "deepseek-chat": "deepseek-flash",
+    "deepseek-v4-flash": "deepseek-flash",
     "deepseek-reasoner": "deepseek-v4-pro",
 }
 _DEEPSEEK_LITELLM_RUNTIME_ALIASES = {
-    "deepseek-v4-flash": "deepseek-v4-flash",
+    "deepseek-flash": "deepseek-flash",
     "deepseek-v4-pro": "deepseek-v4-pro",
-    "deepseek-chat": "deepseek-chat",
-    "deepseek-reasoner": "deepseek-reasoner",
+    "deepseek-chat": "deepseek-flash",
+    "deepseek-v4-flash": "deepseek-flash",
+    "deepseek-reasoner": "deepseek-v4-pro",
 }
-_DEEPSEEK_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"}
+_DEEPSEEK_MODELS = {"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"}
 
 
 def _canonical_deepseek_model_id(model: str) -> str:
@@ -1293,13 +1305,19 @@ _OPENROUTER_MODELS = {
     "openrouter-mistral-small",
     "openrouter-nemotron-free",
     "openrouter-minimax-m2",
+    "openrouter-grok-4.7",
+    "openrouter-kimi-k3",
+    "openrouter-minimax-m3",
+    "openrouter-qwen3.8-max",
 }
 
 # Kimi 모델 (Moonshot AI, LiteLLM 경유)
-_KIMI_MODELS = {"kimi-k2.6", "kimi-k2.5", "kimi-k2", "kimi-latest", "kimi-128k", "kimi-8k"}
+_KIMI_MODELS = {"kimi-k3", "kimi-k2.6", "kimi-k2.5", "kimi-k2", "kimi-latest", "kimi-128k", "kimi-8k"}
 
 # MiniMax 모델 (LiteLLM 경유)
-_MINIMAX_MODELS = {"minimax-m2.7", "minimax-m2.5"}
+_MINIMAX_MODELS = {"minimax-m3", "minimax-m2.7", "minimax-m2.5"}
+
+_MISTRAL_MODELS = {"mistral-medium-latest", "mistral-small-latest", "mistral-large-latest"}
 
 # Alibaba/Qwen 모델 (LiteLLM 경유, DashScope)
 _ALIBABA_MODELS = {
@@ -1320,6 +1338,10 @@ _ALIBABA_MODELS = {
     # Qwen3.5
     "qwen3.5-plus",
     "qwen3.5-flash",
+    "qwen3.6-plus",
+    "qwen3.7-plus",
+    "qwen3.7-max",
+    "qwen3.8-max",
     # Qwen (안정 릴리스)
     "qwen-max",
     "qwen-max-latest",
@@ -1344,9 +1366,9 @@ _ALIBABA_MODELS = {
 }
 
 # LiteLLM OpenAI 호환 모델 (Gemini + Groq + DeepSeek + OpenRouter + Alibaba)
-_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS | _OPENAI_MODELS | _CODEX_MODELS | _ANTIGRAVITY_MODELS
+_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS | _MISTRAL_MODELS | _OPENAI_MODELS | _CODEX_MODELS | _ANTIGRAVITY_MODELS
 
-_OPENAI_COMPATIBLE_DIRECT_PROVIDERS = {"openai", "groq", "openrouter", "qwen", "kimi", "minimax"}
+_OPENAI_COMPATIBLE_DIRECT_PROVIDERS = {"openai", "groq", "openrouter", "qwen", "kimi", "minimax", "mistral"}
 _DIRECT_PROVIDER_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
     "groq": "https://api.groq.com/openai/v1",
@@ -1354,6 +1376,7 @@ _DIRECT_PROVIDER_BASE_URLS = {
     "qwen": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "kimi": "https://api.moonshot.ai/v1",
     "minimax": "https://api.minimax.chat/v1",
+    "mistral": "https://api.mistral.ai/v1",
 }
 _DIRECT_PROVIDER_ENV_KEYS = {
     "openai": "OPENAI_API_KEY",
@@ -1362,6 +1385,7 @@ _DIRECT_PROVIDER_ENV_KEYS = {
     "qwen": "ALIBABA_API_KEY",
     "kimi": "MOONSHOT_API_KEY",
     "minimax": "MINIMAX_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
 }
 _DIRECT_PROVIDER_BYOK_ALIASES = {
     "qwen": "dashscope",
@@ -1494,6 +1518,7 @@ def _split_provider_qualified_model(model_id: str) -> tuple[str | None, str]:
         "kimi",
         "litellm",
         "minimax",
+        "mistral",
         "openai",
         "openrouter",
         "qwen",
@@ -3307,15 +3332,14 @@ async def _stream_litellm_openai(
     is_thinking = model in _GEMINI_THINKING_MODELS or model in _OPENAI_REASONING_MODELS
     # 모델별 max_tokens 제한 (제공사 한도 초과 방지)
     _MODEL_MAX_TOKENS = {
-        "deepseek-v4-flash": 8192, "deepseek-v4-pro": 8192,
+        "deepseek-flash": 8192, "deepseek-v4-flash": 8192, "deepseek-v4-pro": 8192,
         "deepseek-chat": 8192, "deepseek-reasoner": 8192,
-        "groq-kimi-k2": 32768, "groq-llama-70b": 8192, "groq-llama-8b": 8192,
-        "groq-llama4-scout": 16384, "groq-qwen3-32b": 32768,
-        "groq-gpt-oss-120b": 16384, "groq-compound": 32768,
-        "kimi-k2": 8192, "kimi-k2.5": 8192, "kimi-k2.6": 8192, "kimi-latest": 8192,
+        "groq-gpt-oss-120b": 65536, "groq-gpt-oss-20b": 65536,
+        "groq-qwen3.8-27b": 16384,
+        "kimi-k2": 8192, "kimi-k2.5": 8192, "kimi-k2.6": 8192, "kimi-k3": 32768, "kimi-latest": 8192,
         "kimi-128k": 8192, "kimi-8k": 8192,
-        "minimax-m2.7": 16384, "minimax-m2.5": 16384,
-        "gpt-6-astra": 128000,
+        "minimax-m3": 32768, "minimax-m2.7": 16384, "minimax-m2.5": 16384,
+        "gpt-6-astra": 128000, "gpt-6-sol": 128000, "gpt-6-luna": 128000,
     }
     _default_max = _MAX_TOKENS_GEMINI_THINKING if is_thinking else _MAX_TOKENS_GEMINI
     max_tokens = _MODEL_MAX_TOKENS.get(model, _default_max)
@@ -3324,7 +3348,7 @@ async def _stream_litellm_openai(
         extra_params["reasoning_effort"] = "low"
     # DeepSeek V4 Pro/Flash: thinking 활성 시 content가 비고 reasoning_content만 내려오는
     # 케이스가 있어 채팅 본문 안정성을 위해 기본 채팅 경로에서는 thinking을 끈다.
-    if model in {"deepseek-v4-flash", "deepseek-v4-pro"}:
+    if model in {"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"}:
         extra_params["extra_body"] = {"thinking": {"type": "disabled"}}
     # Qwen3 계열: thinking 모드 비활성화 → 도구 호출 우선 (thinking 활성 시 도구 무시됨)
     if "qwen3" in model.lower() and "thinking" not in model.lower():

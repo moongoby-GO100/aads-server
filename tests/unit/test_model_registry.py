@@ -105,7 +105,7 @@ def test_codex_astra_migration_adds_runner_model_config_cycle():
     assert "'claude-fable-5-1', 'codex:gpt-6-astra'" in sql
 
 
-def test_build_registry_snapshots_registers_deepseek_v4_and_alias_metadata():
+def test_build_registry_snapshots_registers_current_deepseek_models():
     now = datetime.now(timezone.utc)
     model_rows, provider_rows = model_registry.build_registry_snapshots(
         [
@@ -123,22 +123,77 @@ def test_build_registry_snapshots_registers_deepseek_v4_and_alias_metadata():
     )
 
     deepseek_models = {row["model_id"]: row for row in model_rows if row["provider"] == "deepseek"}
-    assert {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"} <= set(deepseek_models)
+    assert set(deepseek_models) == {"deepseek-flash", "deepseek-v4-pro"}
     assert deepseek_models["deepseek-v4-pro"]["supports_thinking"] is True
-    assert deepseek_models["deepseek-v4-flash"]["metadata"]["execution_model_id"] == "deepseek-v4-flash"
-    assert deepseek_models["deepseek-v4-flash"]["execution_model_id"] == "deepseek-v4-flash"
+    assert deepseek_models["deepseek-flash"]["metadata"]["execution_model_id"] == "deepseek-flash"
+    assert deepseek_models["deepseek-flash"]["execution_model_id"] == "deepseek-flash"
     assert deepseek_models["deepseek-v4-pro"]["metadata"]["execution_model_id"] == "deepseek-v4-pro"
     assert deepseek_models["deepseek-v4-pro"]["execution_model_id"] == "deepseek-v4-pro"
-    assert deepseek_models["deepseek-chat"]["metadata"]["canonical_model"] == "deepseek-v4-flash"
-    assert deepseek_models["deepseek-chat"]["metadata"]["deprecation_date"] == "2026-07-24"
-    assert deepseek_models["deepseek-chat"]["metadata"]["compatibility_alias"] is True
-    assert deepseek_models["deepseek-chat"]["execution_model_id"] == "deepseek-chat"
-    assert deepseek_models["deepseek-reasoner"]["execution_model_id"] == "deepseek-reasoner"
 
     deepseek_summary = next(row for row in provider_rows if row["provider"] == "deepseek")
     assert deepseek_summary["runtime_executable"] is True
-    assert deepseek_summary["active_model_count"] == 4
+    assert deepseek_summary["active_model_count"] == 2
     assert deepseek_summary["active_model_source"] == "template"
+
+
+def test_catalog_registers_latest_models_and_subscription_metadata():
+    now = datetime.now(timezone.utc)
+    key_rows = [
+        {
+            "id": index,
+            "provider": provider,
+            "key_name": f"{provider.upper()}_API_KEY",
+            "priority": 1,
+            "is_active": True,
+            "rate_limited_until": None,
+            "last_used_at": now,
+            "last_verified_at": now,
+        }
+        for index, provider in enumerate(("openai", "codex", "gemini", "groq", "qwen", "kimi", "minimax", "mistral"), 1)
+    ]
+    model_rows, _ = model_registry.build_registry_snapshots(key_rows)
+    catalog = {(row["provider"], row["model_id"]): row for row in model_rows}
+
+    expected = {
+        ("openai", "gpt-6-sol"),
+        ("openai", "gpt-6-luna"),
+        ("codex", "gpt-6-sol"),
+        ("gemini", "gemini-3.8-flash"),
+        ("groq", "groq-qwen3.8-27b"),
+        ("qwen", "qwen3.8-max"),
+        ("kimi", "kimi-k3"),
+        ("minimax", "minimax-m3"),
+        ("mistral", "mistral-small-latest"),
+    }
+    assert expected <= set(catalog)
+    assert catalog[("codex", "gpt-6-sol")]["metadata"]["billing_mode"] == "chatgpt_subscription_oauth"
+    assert catalog[("groq", "groq-qwen3.8-27b")]["execution_model_id"] == "qwen/qwen3.8-27b"
+    assert catalog[("kimi", "kimi-k3")]["metadata"]["api_billing_separate"] is True
+
+
+def test_merge_filters_static_and_provider_shutdown_models():
+    active = {
+        "provider": "openai",
+        "model_id": "gpt-6-sol",
+        "family": "gpt",
+        "metadata": {"raw": {"shutdown_date": None}},
+    }
+    static_retired = {
+        "provider": "gemini",
+        "model_id": "gemini-2.0-flash",
+        "family": "gemini",
+        "metadata": {},
+    }
+    dated_retired = {
+        "provider": "openai",
+        "model_id": "past-model",
+        "family": "gpt",
+        "metadata": {"raw": {"shutdown_date": "2020-01-01"}},
+    }
+
+    merged = model_registry._merge_model_rows([active, static_retired], [dated_retired])
+
+    assert [(row["provider"], row["model_id"]) for row in merged] == [("openai", "gpt-6-sol")]
 
 
 def test_build_registry_snapshots_marks_anthropic_oauth_as_runtime_only_discovery():
@@ -171,7 +226,7 @@ def test_build_registry_snapshots_marks_anthropic_oauth_as_runtime_only_discover
     assert claude_row["metadata"]["accepted_aliases"] == [
         "claude-sonnet-4-6",
     ]
-    assert claude_row["execution_model_id"] == "claude-sonnet-4-6"
+    assert claude_row["execution_model_id"] == "claude-sonnet-5"
 
     fable_row = next(row for row in model_rows if row["provider"] == "anthropic" and row["model_id"] == "claude-fable-5-1")
     assert fable_row["execution_backend"] == "claude_cli_relay"
