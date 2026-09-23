@@ -14,6 +14,7 @@ import fcntl
 import hashlib
 import io
 import json
+import logging
 import math
 import mimetypes
 import os
@@ -494,13 +495,30 @@ def _write_json_object(name: str, data: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+logger = logging.getLogger(__name__)
+
+
 def _db_url() -> str:
+    """오비서 업무 DSN 만 본다. AADS ``DATABASE_URL`` 로 폴백하지 않는다.
+
+    폴백을 두면 환경변수 하나가 빠졌을 때 오비서가 조용히 aads DB 의
+    ``yeoljeong_*`` 를 읽고 쓰게 되고, 두 DB 가 갈라진 뒤에야 드러난다.
+    같은 이유로 ``app/core/obys_db.py`` 는 2026-09-19 에 이미 폴백을 걷어냈는데
+    이 경로만 남아 있었다. 진아서버 이전에서는 이 경로가 그대로 교차 쓰기가
+    되므로 여기서 끊는다.
+    """
     url = (
         os.getenv("YEOLJEONG_FINANCE_DATABASE_URL")
         or os.getenv("OBYS_DATABASE_URL")
-        or os.getenv("DATABASE_URL", "")
-    )
-    return url.replace("postgresql://", "postgres://") if url else ""
+        or ""
+    ).strip()
+    if not url:
+        logger.error(
+            "yeoljeong_finance: OBYS_DATABASE_URL 미설정 — aads DB 로 폴백하지 않고 "
+            "DB 경로를 비활성화한다"
+        )
+        return ""
+    return url.replace("postgresql://", "postgres://")
 
 
 def _db_available() -> bool:
