@@ -263,10 +263,15 @@ def apply() -> dict:
     current, _ = pinned_artifact((ROOT / "Dockerfile").read_text())
     print(json.dumps({"official": version, "repo_pin": current, "phase": "detected"}))
     value = prepare(version, checksum, size)
-    if not value or value.get("version") != version:
+    if not value:
         # An existing manually managed release may still be draining. Never
         # deploy unrelated main commits under the updater's identity.
-        raise Deferred("no updater-owned candidate; inspect deployment queue")
+        if (chat_converged(version) and
+                run_version([runner_binary(), "--version"]) == version):
+            return {"version": version, "phase": "up_to_date"}
+        raise Deferred("latest CLI is pinned, but chat/runner paths have not converged")
+    if value.get("version") != version:
+        raise Deferred("updater state version differs from official latest")
     if (value.get("phase") == "complete" and chat_converged(version)
             and release_monitor_passed(value["sha"])
             and runner_binary() == value.get("binary")

@@ -54,3 +54,15 @@ def test_pending_candidate_blocks_new_release(monkeypatch):
     monkeypatch.setattr(update, "state", lambda: {"version": "2.1.281", "phase": "pushed"})
     with pytest.raises(update.Deferred, match="previous CLI candidate"):
         update.prepare("2.1.282", "a" * 64, 233_000_000)
+
+
+def test_already_pinned_requires_effective_runtime_convergence(monkeypatch):
+    monkeypatch.setattr(update, "official_release", lambda: ("2.1.280", "a" * 64, 233_000_000))
+    monkeypatch.setattr(update, "prepare", lambda *args: {})
+    monkeypatch.setattr(update, "chat_converged", lambda version: False)
+    with pytest.raises(update.Deferred, match="have not converged"):
+        update.apply()
+    monkeypatch.setattr(update, "chat_converged", lambda version: True)
+    monkeypatch.setattr(update, "runner_binary", lambda: "/runner/claude")
+    monkeypatch.setattr(update, "run_version", lambda argv: "2.1.280")
+    assert update.apply()["phase"] == "up_to_date"
