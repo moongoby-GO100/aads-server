@@ -2021,6 +2021,11 @@ _SSH_SENSITIVE_PATTERNS = re.compile(
 _SSH_TIMEOUT = 120  # 초 — docker build 등 장시간 명령 대응 (기존 10초→120초)
 _SSH_WRITE_TIMEOUT = 15  # 쓰기 작업은 조금 더 여유
 _SSH_CMD_TIMEOUT = 50  # 원격 명령 실행 타임아웃 (MCP bridge 55s 이내 응답 보장)
+# 원격 측 강제 상한 (초). 툴이 _SSH_CMD_TIMEOUT 에 포기해도 ssh 채널만 닫힐 뿐
+# 원격 명령은 고아로 남아 무한 실행된다(2026-09-22 cafe24_114 grep 20시간 잔존,
+# sdb %util 99.87%). -tt 없이는 SIGHUP 도 전달되지 않으므로 원격에서 직접
+# timeout 으로 끊는다. deploy 류 정상 장기작업은 살아남도록 상한을 넉넉히 둔다.
+_SSH_REMOTE_MAX_SECONDS = 900
 _SSH_MAX_RESULT_BYTES = 1024 * 1024  # 1MB (제한 없음 — Claude Code 동일)
 _SSH_MAX_WRITE_BYTES = 1024 * 1024  # 1MB 쓰기 제한
 _SSH_MAX_FILES = 100
@@ -3143,7 +3148,11 @@ async def tool_run_remote_command(project: str, command: str) -> str:
     ssh_port = mapping.get("port", "22")
 
     # 실행: workdir에서 명령 수행
-    full_cmd = f"cd {shlex.quote(workdir)} && {command}"
+    # 원격 측 timeout 강제 — 툴이 먼저 포기해도 원격 명령이 고아로 남지 않게 한다.
+    full_cmd = (
+        f"cd {shlex.quote(workdir)} && "
+        f"timeout -k 10 {_SSH_REMOTE_MAX_SECONDS} bash -c {shlex.quote(command)}"
+    )
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -3163,6 +3172,11 @@ async def tool_run_remote_command(project: str, command: str) -> str:
 
         result_parts = [f"[{project} 명령 실행 — exit={proc.returncode}]"]
         result_parts.append(f"$ {command}")
+        if proc.returncode == 124:
+            result_parts.append(
+                f"[NOTE] 원격 측 실행 상한 {_SSH_REMOTE_MAX_SECONDS}초를 넘겨 강제 종료됐습니다. "
+                "범위를 좁히거나(-xdev, 디렉터리 한정) 백그라운드 작업으로 분리하십시오."
+            )
         if out.strip():
             result_parts.append(out.strip())
         if err_out.strip() and proc.returncode != 0:
