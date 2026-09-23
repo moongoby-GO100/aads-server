@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import re
 import shlex
 from collections import defaultdict
 from typing import Any, Dict, Iterable, Optional
@@ -28,6 +29,9 @@ _STATUS_SUPERSEDED_OWNER = "superseded_owner"
 _AADS_RUNTIME_STATE_PATHS = {".active_container", ".active_port"}
 _AADS_RUNTIME_PREFIXES = ("app/data/",)
 _AADS_RUNTIME_SUFFIXES = (".lock", ".jsonl", ".tsbuildinfo", ".bak")
+# finalize 훅 push 대상 브랜치. 브랜치를 실측하지 못할 때만 쓰는 기본값이다.
+_DEFAULT_PUSH_BRANCH = "main"
+_BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")
 
 
 def _is_ignored_change_path(project: str, repo: str, file_path: str) -> bool:
@@ -324,6 +328,36 @@ async def _run_git_command(project: str, repo: str, command: str) -> str:
     full_cmd = f"{_repo_prefix(project, repo)}{command}" if _repo_prefix(project, repo) else command
     result = await tool_run_remote_command(project, full_cmd)
     return result if isinstance(result, str) else str(result)
+
+
+def _last_output_line(text: str) -> str:
+    """run_remote_command 출력(헤더 + `$ 명령` 에코 포함)에서 마지막 실제 출력 줄만 꺼낸다."""
+    for line in reversed((text or "").strip().splitlines()):
+        line = line.strip()
+        if not line or line.startswith("$") or line.startswith("["):
+            continue
+        return line
+    return ""
+
+
+async def _resolve_push_branch(project: str, repo: str) -> str:
+    """finalize 훅이 push 할 브랜치를 실측한다.
+
+    하드코딩한 `master` 폴백은 aads-server/aads-dashboard 원격에 존재하지 않아
+    항상 `src refspec master does not match any` 로 실패했고, 실패한 push 때문에
+    Chat-Finalize 커밋이 로컬 main 에만 쌓였다(2026-09-23, 29449698·b3ca871c).
+    detached HEAD 처럼 브랜치를 알 수 없을 때만 기본값 main 을 쓴다.
+    """
+    try:
+        output = await _run_git_command(project, repo, "git rev-parse --abbrev-ref HEAD")
+    except Exception:
+        return _DEFAULT_PUSH_BRANCH
+    if _command_has_error(output):
+        return _DEFAULT_PUSH_BRANCH
+    branch = _last_output_line(output)
+    if not branch or branch == "HEAD" or not _BRANCH_NAME_RE.match(branch):
+        return _DEFAULT_PUSH_BRANCH
+    return branch
 
 
 async def _mark_group(
@@ -799,27 +833,28 @@ async def _finalize_group(
             sha_result = await _run_git_command(project, repo, "git rev-parse HEAD")
             commit_sha = sha_result.strip().splitlines()[-1] if sha_result.strip() else None
 
-            push_result = await _run_git_command(project, repo, "git push origin main")
+            push_branch = await _resolve_push_branch(project, repo)
+            push_result = await _run_git_command(
+                project, repo, f"git push origin {shlex.quote(push_branch)}"
+            )
             if _command_has_error(push_result):
-                fallback_result = await _run_git_command(project, repo, "git push origin master")
-                if _command_has_error(fallback_result):
-                    await _mark_group(
-                        session_id=session_id,
-                        project=project,
-                        repo=repo,
-                        file_paths=file_paths,
-                        ledger_file_paths=ledger_file_paths,
-                        status=_STATUS_COMMITTED,
-                        last_error=fallback_result,
-                        commit_sha=commit_sha,
-                        commit_message=commit_message,
-                    )
-                    result["status"] = _STATUS_COMMITTED
-                    result["commit_sha"] = commit_sha
-                    result["commit_message"] = commit_message
-                    result["detail"] = fallback_result[:500]
-                    return result
-                push_result = fallback_result
+                await _mark_group(
+                    session_id=session_id,
+                    project=project,
+                    repo=repo,
+                    file_paths=file_paths,
+                    ledger_file_paths=ledger_file_paths,
+                    status=_STATUS_COMMITTED,
+                    last_error=push_result,
+                    commit_sha=commit_sha,
+                    commit_message=commit_message,
+                )
+                result["status"] = _STATUS_COMMITTED
+                result["commit_sha"] = commit_sha
+                result["commit_message"] = commit_message
+                result["push_branch"] = push_branch
+                result["detail"] = push_result[:500]
+                return result
 
             await _mark_group(
                 session_id=session_id,
@@ -836,6 +871,7 @@ async def _finalize_group(
             result["status"] = _STATUS_PUSHED
             result["commit_sha"] = commit_sha
             result["commit_message"] = commit_message
+            result["push_branch"] = push_branch
             result["detail"] = push_result[:500]
             return result
     except TimeoutError as exc:

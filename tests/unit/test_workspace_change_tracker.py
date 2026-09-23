@@ -149,3 +149,46 @@ def test_content_regression_allows_unchanged_and_new_file(monkeypatch):
         },
     )
     assert regressed == {}
+
+
+def _resolve_branch(monkeypatch, rev_parse_output):
+    import asyncio
+
+    from app.services import workspace_change_tracker as tracker
+
+    async def fake_run_git_command(project, repo, command):
+        assert "rev-parse --abbrev-ref HEAD" in command
+        return rev_parse_output
+
+    monkeypatch.setattr(tracker, "_run_git_command", fake_run_git_command)
+    return asyncio.run(tracker._resolve_push_branch("AADS", "aads-server"))
+
+
+def test_resolve_push_branch_uses_actual_branch(monkeypatch):
+    # run_remote_command 출력에는 헤더와 `$ 명령` 에코가 섞여 온다.
+    output = "[AADS 명령 실행 — exit=0]\n$ cd /root/aads/aads-server && git rev-parse --abbrev-ref HEAD\nmain\n"
+    assert _resolve_branch(monkeypatch, output) == "main"
+
+
+def test_resolve_push_branch_keeps_non_main_branch(monkeypatch):
+    assert _resolve_branch(monkeypatch, "direct/hotfix-20260923\n") == "direct/hotfix-20260923"
+
+
+def test_resolve_push_branch_falls_back_on_detached_head(monkeypatch):
+    assert _resolve_branch(monkeypatch, "HEAD\n") == "main"
+
+
+def test_resolve_push_branch_falls_back_on_git_error(monkeypatch):
+    assert _resolve_branch(monkeypatch, "fatal: not a git repository\n") == "main"
+
+
+def test_finalize_group_never_pushes_hardcoded_master():
+    # 2026-09-23 회귀: origin 에 master 가 없어 폴백 push 가 항상 실패했고,
+    # Chat-Finalize 커밋이 로컬 main 에만 쌓였다(29449698, b3ca871c).
+    import inspect
+
+    from app.services import workspace_change_tracker as tracker
+
+    source = inspect.getsource(tracker._finalize_group)
+    assert "push origin master" not in source
+    assert "_resolve_push_branch" in source
