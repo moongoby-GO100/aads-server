@@ -14,6 +14,18 @@ from scripts.claude_model_contract import (
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_opus_55_uses_pinned_compatible_cli_in_release_image():
+    dockerfile = (ROOT / "Dockerfile").read_text()
+    wrapper = (ROOT / "scripts/claude-oauth-wrapper.sh").read_text()
+    interactive = (ROOT / "scripts/claude-host-wrapper.sh").read_text()
+    assert "2.1.280/linux-x64/claude" in dockerfile
+    assert "--checksum=sha256:1e08503dbdf3c2cb0d706d32f3408277388d1c76ef108673e8fe42c1b322925b" in dockerfile
+    assert "2.1.280 (Claude Code)" in dockerfile
+    assert 'exec /usr/local/bin/claude-aads "$@"' in wrapper
+    assert 'DIRECT_BIN="${CLAUDE_DIRECT_BIN:-/usr/local/bin/claude-aads}"' in interactive
+    assert "_bundled/claude" not in wrapper
+
+
 @pytest.mark.parametrize("requested,expected", list(AADS_MODEL_IDS.items()) + [
     ("claude-fable-5.1", "claude-fable-5-1"),
     ("opus", "claude-opus-5-5"), ("sonnet", "claude-sonnet-5"),

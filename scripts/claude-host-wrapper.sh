@@ -3,7 +3,7 @@ set -euo pipefail
 
 CONTAINER_NAME="${CLAUDE_DOCKER_CONTAINER:-aads-server}"
 NONINTERACTIVE_WRAPPER="${CLAUDE_NONINTERACTIVE_WRAPPER:-/root/aads/aads-server/scripts/claude-docker-wrapper.sh}"
-DIRECT_BIN="${CLAUDE_DIRECT_BIN:-/usr/local/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude}"
+DIRECT_BIN="${CLAUDE_DIRECT_BIN:-/usr/local/bin/claude-aads}"
 
 # 대화형 터미널에서는 컨테이너 내부 Claude REPL을 직접 띄운다.
 # 이렇게 해야 호스트 GLIBC 제약을 피하면서 /login 인증도 가능하다.
