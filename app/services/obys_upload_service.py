@@ -21,7 +21,7 @@ from app.core.obys_db import obys_db_url
 
 MAX_BYTES = 10 * 1024 * 1024
 MAX_UNPACKED_BYTES = 50 * 1024 * 1024
-UPLOAD_ROOT = Path("app/data/yeoljeong_finance/uploads/ledgers")
+UPLOAD_ROOT = Path(os.getenv("OBYS_UPLOAD_ROOT", "app/data/yeoljeong_finance/uploads/ledgers"))
 CATEGORY_EXTENSIONS = {
     "sales": {".csv", ".xlsx", ".pdf", ".jpg", ".jpeg", ".png"},
     "purchase": {".csv", ".xlsx", ".pdf", ".jpg", ".jpeg", ".png"},

@@ -2,8 +2,8 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 ID / 버전 | OBYS-MIGRATION-JINAH / v1.1 |
-| 상태 | 정식 요구사항·설계안 작성 완료 / 구현·이전 미착수 |
+| 문서 ID / 버전 | OBYS-MIGRATION-JINAH / v1.2 |
+| 상태 | M1 독립 실행 기반 구현·진아서버 합성 DB 리허설 검증 / 운영 이전 미완료 |
 | 요청 | “aads 인증 포함 전체 모두 이전 하는 방안을 정식 정리해서 PRD로 보고해” |
 | 관리 프로젝트 | AADS — 이전 대상 인프라는 jinah244(5.104.85.244) |
 | 현재 출발점 | contabo116(5.104.86.116)의 오비서 및 AADS 공유 인증 |
@@ -419,3 +419,71 @@ PG 15 → 16 은 이 범위에서 호환된다.
 | 인증 부트스트랩 마이그레이션 | 완료·리허설 검증 (17.3절) |
 | 파일 저장소 해시·용량 | 미실행 |
 | 전환 시간·복원 예산 | 미실행 |
+
+
+## 18. M1 systemd + uvicorn 구현 (2026-09-23 KST)
+
+이 절은 이전 절의 런타임 선택 및 상태 서술을 갱신한다. CEO가 권장안으로 구현 진행을 승인하여
+Docker 신규 설치 대신 systemd + uvicorn 기반을 구현했다. M0는 인증 복원 리허설까지
+완료됐으나 파일 manifest·전환/복원 예산은 여전히 남아 있다. 전체 M0/M1 또는 운영 이전을
+완료로 인증하지 않는다.
+
+### 18.1 구현과 기존 운영의 경계
+
+- `app/obys_standalone.py`: 진아서버 전용 factory. 기존 AADS용
+  `app.yeoljeong_main` 실행 방식은 유지한다. 3종 DB 검사 실패 시 시작을 중단한다.
+- `app/core/obys_runtime.py`: 명시적 로컬 인증/업무/원본 DSN, 서로 다른 DB,
+  AADS DB 별칭 충돌, JWT 최소 길이, 릴리스 밖 영속 디렉터리를 검사한다.
+  `/health/ready`는 DB 접속·핵심 테이블·SELECT 권한·인증 함수·일반 역할을 검증한다.
+  ACCT 원본 역할에 INSERT/UPDATE/DELETE/TRUNCATE 권한이 있으면 실패한다.
+  이 검사는 전체 스키마/컬럼/쓰기 권한·데이터 동등성 검증을 대신하지 않는다.
+- `obys_upload_service.py`: 코드 폴더에 고정된 원장 파일 경로를 `OBYS_UPLOAD_ROOT`로
+  지정할 수 있게 했다. 기존 서버의 기본 경로는 그대로 유지한다. 신규 서버에서 파일이
+  릴리스 폴더에 남아 버전 교체 시 누락되는 경로를 차단한다.
+- `deploy/obys/obys-api@.service`: 비특권 사용자, localhost 바인딩, 영속 경로 외
+  파일시스템 쓰기 제한, 종료 유예, 재시작 제한을 설정한다. 수집기는 포함하지 않는다.
+- `deploy/obys/requirements.obys.lock`: 기존 runtime lock의 핵심 API 의존성을 고정한다.
+  브라우저/수집 의존성은 M3 검증 대상으로 남긴다.
+- `deploy/obys/stage-release.sh`: 커밋된 archive의 SHA 디렉터리에서만 실행하는
+  설치 스크립트. 계정/영속 경로/venv/서비스 템플릿만 준비한다. 설정 비밀파일 작성,
+  슬롯 시작·enable·링크 교체·DNS·nginx 전환은 수행하지 않는다.
+
+### 18.2 실제 검증 근거와 한계
+
+| 검증 | 결과 | 범위/제한 |
+|---|---|---|
+| 관련 pytest | 62 passed | 설정 거부·업로드 회귀·업무 DB 격리 |
+| 확장 pytest | 85 passed / 1 failed | 기존 Compose의 PC Agent 기본 ID 문자열 검사 실패 |
+| 기준 커밋 대조 | Compose와 해당 테스트 파일 diff 없음 | 이번 변경이 만든 실패 아님; 기준선 결함으로 분리 |
+| Python compile / bash -n / git diff --check | 통과 | 구문·패치 검사 |
+| 진아서버 pip check | No broken requirements found | Python 3.12 격리 venv |
+| systemd 후보 실제 기동 | 정상 | obys-m1 사용자, 127.0.0.1:18110, ProtectSystem=strict |
+| DB readiness | auth/business/source 모두 true, HTTP 200 | 최소 합성 테이블만 있는 격리 DB; 실자료 이전 아님 |
+| SELECT 권한 회수/복구 | ready 503 → 200, live 200 유지 | 합성 원본 테이블 권한으로 오류 주입 |
+| 원본 쓰기 권한 오류 | ready 503, 권한 회수 후 200 | 실제 합성 DB GRANT/REVOKE |
+| 인증 없는 업무 요청 | HTTP 401 | 인증 경계만 검증; 실제 사용자 로그인 아님 |
+| 공개 계약 | OpenAPI 경로 116개 응답 | 개수만 확인; 인증된 API별 동등성은 M4 |
+| PC/모바일 화면 | 로그인 페이지 캡처 성공, pageerror 없음 | SSH 포워딩 경유; DNS 미변경, 로그인 미실행 |
+| 후보 네트워크 | systemd IPAddressDeny=any, localhost만 허용 | 후보 기동의 독립성만 증명; 모든 업무의 AADS 차단 검증 아님 |
+
+브라우저 경로: `/static/apps/obys/index.html`. 증거:
+`/tmp/obys-jinah-m1-login-desktop.png`, `/tmp/obys-jinah-m1-login-mobile.png`.
+진아서버 검증 결과: `/tmp/obys-m1-rehearsal-result.json`.
+합성 검증 DB는 `obys_m1_auth_20260923`, `obys_m1_business_20260923`,
+`obys_m1_source_20260923`이며 실제 인증/업무/acct DB는 변경하지 않았다.
+
+### 18.3 남은 마일스톤과 전환 금지 조건
+
+1. M1 잔여: 진아서버 proxy/TLS와 실제 전환·복귀 제어기. 현재 staging 도구는
+   운영 전환기가 아니며 동일 릴리스 양 슬롯·drain·즉시 routed-health 복귀·5분 관제를
+   자동화했다는 뜻이 아니다. 기존 AADS 배포 규칙을 우회하지 않는다.
+2. M2: 오비서 조직 기준 인증 행 추출, 신규 가입/초대/조직 생성의 chat_workspaces
+   의존 제거, 사용량 API 분리, 새 서명키 및 issuer/audience 경계, 실제 로그인/조직 전환.
+   M0의 인증 7테이블 전체 복원 결과를 그대로 운영 인증 DB로 쓰지 않는다.
+3. M3: 실제 업무 DB/첨부·원장 파일 해시, source mapping, 키/수집 체크포인트,
+   단일 워커 실행권, 변경 자료 보존 및 복원 예산.
+4. M4~M6: 두 조직의 실제 자료·신규 등록·복구·부하·외부 화면 검증 후 쓰기 장벽과
+   최종 동기화, 공개 전환, 동일 릴리스 standby, 5분 P0/P1 관제와 인계.
+
+주도 실행 담당은 현재 AADS CTO/Codex 직접 작업이다. 별도 Runner에 위임하지 않았다.
+서비스 템플릿 설치나 합성 DB health 200만으로 전체 이전 완료를 보고하지 않는다.
