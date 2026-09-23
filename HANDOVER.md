@@ -14436,3 +14436,14 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - Browser tasks persist direct/cafe24/auto; auto selects Cafe24 for store.coupangeats.com. Session filtering happens before LIMIT. Recipe registry execution plans retain the route policy; this does not certify sales recipe replay.
 - Validation: focused pytest 53 passed; staged dup_guard passed; real isolated server-browser probe returned Cafe24 egress 114.207.244.86 and CDP frames. Coupang Eats returned Access Denied on both direct and Cafe24. Authentication/sales collection NOT complete.
 - Pending at commit: API release, dashboard release and production chat UI evidence. DB handover key smartbrowser-cafe24-direct-recovery-20260922 tracks actual release state.
+
+## 2026-09-23 — 오비서 신규 등록·조회 정합성 직접 교정
+- 대상: workspace API, upload service, V4.1 UI. 기존 계좌표시 d4ef119a는 운영 e8430f96에 포함됨을 ancestry로 확인. 운영 DB 데이터/스키마 변경 없음.
+- KST 카드·통장 날짜 필터/표시 통일, 출금 순액 부호와 원단위 검증, 입금/출금 분리 엑셀 파싱, 세무 직접등록 매출/매입 귀속, 공급가·세액 복합입력 교정.
+- 수기/업로드 상세는 원천 SSH 장애·최근목록 한도와 독립해 ID+tenant+business로 조회. 업로드 날짜 필터를 SQL LIMIT 전에 적용. workspace 로컬 원장은 내부 limit=None으로 전체 집계/페이지 계산하며 공개 응답은 최대500건 유지(대량 증가 시 SQL 집계/페이징 최적화 필요).
+- 등록 후 필터/페이지 초기화, 조회 실패 시 저장 성공과 조회 실패 구분. 다운로드 양식을 실제 parser 지원 헤더로 정렬. 엑셀 파일내/기존DB 중복 건수 분리.
+- 검증: 관련 unit 88개 및 격리 PostgreSQL integration 8개 통과. 기존 journal legacy integration은 검증DB에만 OBYS_JOURNAL_WRITE_FROZEN=false; 운영 기본 ACCT 정본 동결 유지. 새 integration은 신규등록/재조회/당일/KST/합계/503건페이지/중복/타사업자404/세무분류/소수원 차단 검증.
+- Playwright 격리 DB 실제 HTTP POST201: sales,purchases,cards,accounts,tax-evidence 직접등록→목록·상세, xlsx 최초imported/재등록duplicate, 필터초기화, PC/mobile 캡처, JS오류0. 테스트 멤버십을 주입한 검증서버이며 운영 로그인 검증과 구분.
+- 증거: /tmp/obys-registration-ui-result.json, /root/aads/exports/obys-registration-verified-{desktop,mobile}.png.
+- AAG brief scanner_version 컬럼 오류는 코드·실DB테스트로 대체. 배포 인증/운영 E2E 결과는 후속 DB 핸드오버 obys-registration-integrity-20260923에 기록.
+- 남은 원천 제약: 라일론 날짜없는 매출 원본은 일별 거래로 추정 적재하지 않음. 계좌 인증/자동수집은 계좌 마스터 등록과 별개.

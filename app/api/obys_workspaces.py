@@ -7,10 +7,11 @@ copying data into a second set of tables or falling back to demo rows.
 from __future__ import annotations
 
 from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 import json
 import re
-from typing import Any, Annotated
+from typing import Any, Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -35,6 +36,7 @@ class WorkspaceManualRecord(BaseModel):
     card_last4: str = Field(default="", max_length=4)
     direction: str = Field(default="in", pattern=r"^(in|out)$")
     account_label: str = Field(default="", max_length=100)
+    ledger_category: Literal["sales", "purchase"] | None = None
 
 ROUTES = frozenset(
     {
@@ -164,7 +166,8 @@ def _amount(row: dict[str, Any]) -> Decimal:
         if row.get(key) is None:
             continue
         try:
-            return Decimal(str(row[key]))
+            value = Decimal(str(row[key]))
+            return -abs(value) if row.get("direction") == "out" else value
         except (ValueError, TypeError):
             continue
     return Decimal("0")
@@ -173,7 +176,15 @@ def _amount(row: dict[str, Any]) -> Decimal:
 def _date_text(row: dict[str, Any]) -> str:
     for key in ("occurred_at", "occurred_on", "transaction_date", "created_at"):
         if row.get(key):
-            return str(row[key])[:10]
+            value = row[key]
+            if key == "occurred_at":
+                try:
+                    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                    if parsed.tzinfo is not None:
+                        return parsed.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat()
+                except ValueError:
+                    pass
+            return str(value)[:10]
     return ""
 
 
@@ -397,10 +408,11 @@ async def _ledger_records(
 ) -> list[tuple[str, dict[str, Any]]]:
     manual = await upload_svc.list_manual_entries(
         user=user, business_id=business_id, category=category,
-        date_from=date_from, date_to=date_to,
+        date_from=date_from, date_to=date_to, limit=None,
     )
     uploaded = await upload_svc.list_ledger_rows(
-        user=user, business_id=business_id, category=category, limit=500,
+        user=user, business_id=business_id, category=category, limit=None,
+        date_from=date_from, date_to=date_to,
     )
     rows: list[tuple[str, dict[str, Any]]] = [("ledger", row) for row in manual]
     rows.extend(("uploaded", row) for row in uploaded)
@@ -461,12 +473,13 @@ async def _local_source_rows(route, user, business_id, date_from, date_to):
         return rows
     if category == "card":
         rows = await upload_svc.list_card_transactions(user=user, business_id=business_id,
-                                                      date_from=date_from, date_to=date_to)
+                                                      date_from=date_from, date_to=date_to, limit=None)
     else:
         rows = await upload_svc.list_bank_transactions(user=user, business_id=business_id,
-                                                      date_from=date_from, date_to=date_to)
+                                                      date_from=date_from, date_to=date_to, limit=None)
     uploaded = await upload_svc.list_ledger_rows(user=user, business_id=business_id,
-                         category="card" if category == "card" else "transaction", limit=500)
+                         category="card" if category == "card" else "transaction", limit=None,
+                         date_from=date_from, date_to=date_to)
     return [(category, row) for row in rows] + [("uploaded", row) for row in uploaded]
 
 
@@ -482,10 +495,10 @@ async def _source_rows(
                 date_from=date_from, date_to=date_to,
             ))
         cards = await upload_svc.list_card_transactions(
-            user=user, business_id=business_id, date_from=date_from, date_to=date_to,
+            user=user, business_id=business_id, date_from=date_from, date_to=date_to, limit=None,
         )
         card_uploads = await upload_svc.list_ledger_rows(
-            user=user, business_id=business_id, category="card", limit=500,
+            user=user, business_id=business_id, category="card", limit=None, date_from=date_from, date_to=date_to,
         )
         rows.extend(("card", row) for row in cards)
         rows.extend(("uploaded", row) for row in card_uploads)
@@ -515,18 +528,18 @@ async def _source_rows(
         ), "obys_ledger"
     if route in CARD_ROUTES:
         rows = await upload_svc.list_card_transactions(
-            user=user, business_id=business_id, date_from=date_from, date_to=date_to,
+            user=user, business_id=business_id, date_from=date_from, date_to=date_to, limit=None,
         )
         uploaded = await upload_svc.list_ledger_rows(
-            user=user, business_id=business_id, category="card", limit=500,
+            user=user, business_id=business_id, category="card", limit=None, date_from=date_from, date_to=date_to,
         )
         return [*(("card", row) for row in rows), *(("uploaded", row) for row in uploaded)], "obys_card_transactions"
     if route in BANK_ROUTES:
         rows = await upload_svc.list_bank_transactions(
-            user=user, business_id=business_id, date_from=date_from, date_to=date_to,
+            user=user, business_id=business_id, date_from=date_from, date_to=date_to, limit=None,
         )
         uploaded = await upload_svc.list_ledger_rows(
-            user=user, business_id=business_id, category="transaction", limit=500,
+            user=user, business_id=business_id, category="transaction", limit=None, date_from=date_from, date_to=date_to,
         )
         return [*(("bank", row) for row in rows), *(("uploaded", row) for row in uploaded)], "obys_bank_transactions"
     if route in JOURNAL_ROUTES:
@@ -545,10 +558,10 @@ async def _source_rows(
                 date_from=date_from, date_to=date_to,
             ))
         cards = await upload_svc.list_card_transactions(
-            user=user, business_id=business_id, date_from=date_from, date_to=date_to,
+            user=user, business_id=business_id, date_from=date_from, date_to=date_to, limit=None,
         )
         banks = await upload_svc.list_bank_transactions(
-            user=user, business_id=business_id, date_from=date_from, date_to=date_to,
+            user=user, business_id=business_id, date_from=date_from, date_to=date_to, limit=None,
         )
         rows.extend(("card", row) for row in cards)
         rows.extend(("bank", row) for row in banks)
@@ -796,6 +809,35 @@ async def workspace_record_detail(
             "record": _record("acct-source", source_rows[0], business["name"]),
             "source": {"name": source, "live": True},
         }
+    if selected_route in LEDGER_ROUTES or selected_route in CARD_ROUTES or selected_route in BANK_ROUTES:
+        try:
+            local_id = UUID(record_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="현재 사업자의 내역을 찾을 수 없습니다") from exc
+        categories = (["sales", "purchase"] if selected_route in {"tax-evidence", "tax-gap"}
+                      else [_import_category(selected_route)])
+        for category in categories:
+            try:
+                if category in {"sales", "purchase"}:
+                    row = await upload_svc.get_manual_entry(user=current_user, category=category, entry_id=local_id)
+                    kind = "ledger"
+                elif category == "card":
+                    row = await upload_svc.get_card_transaction(user=current_user, transaction_id=local_id)
+                    kind = "card"
+                else:
+                    row = await upload_svc.get_bank_transaction(user=current_user, transaction_id=local_id)
+                    kind = "bank"
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+                row = await upload_svc.get_ledger_row(user=current_user, business_id=business_id,
+                                                     category=category, entry_id=local_id)
+                kind = "uploaded"
+            if row and row.get("business_id") == business_id:
+                return {"business": {"id": business["id"], "name": business["name"]},
+                        "route": selected_route, "record": _record(kind, row, business["name"]),
+                        "source": {"name": "obys_ledger", "live": True}}
+        raise HTTPException(status_code=404, detail="현재 사업자의 내역을 찾을 수 없습니다")
     source_rows, source = await _source_rows(
         route=selected_route, user=current_user, business_id=business_id,
         date_from=None, date_to=None,
@@ -843,9 +885,9 @@ async def preview_workspace_import(
         )
     finally:
         await connection.close()
-    preview["duplicate_rows"] = duplicate_count
+    preview["duplicate_rows"] += int(duplicate_count or 0)
     preview["accepted_rows"] = max(
-        0, int(preview.get("accepted_rows") or 0) - int(duplicate_count or 0)
+        0, int(preview.get("accepted_rows") or 0) - int(preview["duplicate_rows"])
     )
     return {"preview": preview, "route": selected_route, "category": category}
 
@@ -895,7 +937,7 @@ async def create_workspace_record(
     if selected_route in LEDGER_ROUTES:
         result = await upload_svc.create_manual_entry(
             user=current_user,
-            category=LEDGER_ROUTES[selected_route],
+            category=(payload.ledger_category or "purchase") if selected_route in {"tax-evidence", "tax-gap"} else LEDGER_ROUTES[selected_route],
             payload=values,
         )
         return {"record": _json_value(result), "source": "obys_manual_ledger"}
@@ -912,6 +954,8 @@ async def create_workspace_record(
         )
         return {"record": _json_value(result), "source": "obys_card_transactions"}
     if selected_route in BANK_ROUTES:
+        if payload.total_amount != payload.total_amount.to_integral_value():
+            raise HTTPException(status_code=422, detail="통장 금액은 원 단위 정수로 입력하십시오")
         result = await upload_svc.create_bank_transaction(
             user=current_user,
             payload={

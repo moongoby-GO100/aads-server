@@ -186,6 +186,16 @@ def _canonical(category: str, rows: list[dict[str, Any]]) -> tuple[list[dict[str
     for row in rows:
         raw_date = _value(row, "date", "거래일자", "매출일자", "일자")
         raw_amount = _value(row, "amount", "금액", "매출액", "결제금액", "입금액", "출금액")
+        if category == "transaction" and _value(row, "amount", "금액") in (None, ""):
+            try:
+                incoming = Decimal(re.sub(r"[^0-9.-]", "", str(_value(row, "입금액") or 0)))
+                outgoing = Decimal(re.sub(r"[^0-9.-]", "", str(_value(row, "출금액") or 0)))
+                if incoming < 0 or outgoing < 0 or (incoming and outgoing):
+                    raise ValueError("ambiguous bank direction")
+                raw_amount = incoming - outgoing
+            except (ValueError, InvalidOperation):
+                rejected += 1
+                continue
         try:
             occurred = raw_date.date() if isinstance(raw_date, datetime) else date.fromisoformat(str(raw_date)[:10].replace(".", "-").replace("/", "-"))
             amount = Decimal(re.sub(r"[^0-9.-]", "", str(raw_amount)))
@@ -347,15 +357,26 @@ async def list_uploads(*, user: dict[str, Any], business_id: str, category: str 
         await conn.close()
 
 
-async def list_ledger_rows(*, user: dict[str, Any], business_id: str, category: str, limit: int = 500) -> list[dict[str, Any]]:
+async def list_ledger_rows(*, user: dict[str, Any], business_id: str, category: str, limit: int | None = 500, date_from: str | None = None, date_to: str | None = None) -> list[dict[str, Any]]:
     tenant_id = _tenant(user)
     if category not in LEDGER_CATEGORIES:
         raise HTTPException(status_code=400, detail="지원하지 않는 원장 구분입니다")
     conn = await _connect()
     try:
         await _require_business(conn, tenant_id, business_id)
-        rows = await conn.fetch("SELECT id,upload_id,category,occurred_on,counterparty,description,amount,payload,created_at FROM yeoljeong_uploaded_ledger_rows WHERE tenant_id=$1 AND business_id=$2 AND category=$3 ORDER BY occurred_on DESC NULLS LAST,created_at DESC LIMIT $4", tenant_id, business_id, category, min(max(limit, 1), 1000))
+        rows = await conn.fetch("SELECT id,business_id,upload_id,category,occurred_on,counterparty,description,amount,payload,created_at FROM yeoljeong_uploaded_ledger_rows WHERE tenant_id=$1 AND business_id=$2 AND category=$3 AND ($5::date IS NULL OR occurred_on >= $5) AND ($6::date IS NULL OR occurred_on <= $6) ORDER BY occurred_on DESC NULLS LAST,created_at DESC LIMIT $4", tenant_id, business_id, category, None if limit is None else min(max(limit, 1), 1000), _iso_date(date_from) if date_from else None, _iso_date(date_to) if date_to else None)
         return [dict(row) for row in rows]
+    finally:
+        await conn.close()
+
+
+async def get_ledger_row(*, user: dict[str, Any], business_id: str, category: str, entry_id: UUID) -> dict[str, Any] | None:
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant_id, business_id)
+        row = await conn.fetchrow("SELECT * FROM yeoljeong_uploaded_ledger_rows WHERE id=$1 AND tenant_id=$2 AND business_id=$3 AND category=$4", entry_id, tenant_id, business_id, category)
+        return dict(row) if row else None
     finally:
         await conn.close()
 
@@ -539,14 +560,14 @@ def _iso_datetime(value: Any) -> datetime:
     return parsed
 
 
-async def list_manual_entries(*, user: dict[str, Any], business_id: str, category: str, date_from: str | None = None, date_to: str | None = None) -> list[dict[str, Any]]:
+async def list_manual_entries(*, user: dict[str, Any], business_id: str, category: str, date_from: str | None = None, date_to: str | None = None, limit: int | None = 1000) -> list[dict[str, Any]]:
     tenant_id, category = _tenant(user), _ledger_category(category)
     start = _iso_date(date_from, "date_from") if date_from else None
     end = _iso_date(date_to, "date_to") if date_to else None
     conn = await _connect()
     try:
         await _require_business(conn, tenant_id, business_id)
-        rows = await conn.fetch("""SELECT id,business_id,category,occurred_on,counterparty,description,supply_amount,tax_amount,total_amount,source,created_at,updated_at FROM yeoljeong_manual_ledger_entries WHERE tenant_id=$1 AND business_id=$2 AND category=$3 AND deleted_at IS NULL AND ($4::date IS NULL OR occurred_on >= $4) AND ($5::date IS NULL OR occurred_on <= $5) ORDER BY occurred_on DESC,created_at DESC LIMIT 1000""", tenant_id, business_id, category, start, end)
+        rows = await conn.fetch("""SELECT id,business_id,category,occurred_on,counterparty,description,supply_amount,tax_amount,total_amount,source,created_at,updated_at FROM yeoljeong_manual_ledger_entries WHERE tenant_id=$1 AND business_id=$2 AND category=$3 AND deleted_at IS NULL AND ($4::date IS NULL OR occurred_on >= $4) AND ($5::date IS NULL OR occurred_on <= $5) ORDER BY occurred_on DESC,created_at DESC LIMIT $6""", tenant_id, business_id, category, start, end, limit)
         return [dict(row) for row in rows]
     finally:
         await conn.close()
@@ -614,14 +635,14 @@ def _public_card(row: Any) -> dict[str, Any]:
     return value
 
 
-async def list_card_transactions(*, user: dict[str, Any], business_id: str, date_from: str | None = None, date_to: str | None = None) -> list[dict[str, Any]]:
+async def list_card_transactions(*, user: dict[str, Any], business_id: str, date_from: str | None = None, date_to: str | None = None, limit: int | None = 1000) -> list[dict[str, Any]]:
     tenant_id = _tenant(user)
     start = _iso_date(date_from, "date_from") if date_from else None
     end = _iso_date(date_to, "date_to") if date_to else None
     conn = await _connect()
     try:
         await _require_business(conn, tenant_id, business_id)
-        rows = await conn.fetch("""SELECT id,business_id,occurred_at,merchant,description,supply_amount,tax_amount,total_amount,card_last4,source,created_at,updated_at FROM yeoljeong_card_transactions WHERE tenant_id=$1 AND business_id=$2 AND deleted_at IS NULL AND ($3::date IS NULL OR occurred_at::date >= $3) AND ($4::date IS NULL OR occurred_at::date <= $4) ORDER BY occurred_at DESC LIMIT 1000""", tenant_id, business_id, start, end)
+        rows = await conn.fetch("""SELECT id,business_id,occurred_at,merchant,description,supply_amount,tax_amount,total_amount,card_last4,source,created_at,updated_at FROM yeoljeong_card_transactions WHERE tenant_id=$1 AND business_id=$2 AND deleted_at IS NULL AND ($3::date IS NULL OR (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= $3) AND ($4::date IS NULL OR (occurred_at AT TIME ZONE 'Asia/Seoul')::date <= $4) ORDER BY occurred_at DESC LIMIT $5""", tenant_id, business_id, start, end, limit)
         return [_public_card(row) for row in rows]
     finally:
         await conn.close()
@@ -685,7 +706,7 @@ async def delete_card_transaction(*, user: dict[str, Any], transaction_id: UUID)
         await conn.close()
 
 
-async def list_bank_transactions(*, user: dict[str, Any], business_id: str, date_from: str | None = None, date_to: str | None = None) -> list[dict[str, Any]]:
+async def list_bank_transactions(*, user: dict[str, Any], business_id: str, date_from: str | None = None, date_to: str | None = None, limit: int | None = 1000) -> list[dict[str, Any]]:
     tenant_id = _tenant(user)
     start = _iso_date(date_from, "date_from") if date_from else None
     end = _iso_date(date_to, "date_to") if date_to else None
@@ -696,10 +717,10 @@ async def list_bank_transactions(*, user: dict[str, Any], business_id: str, date
             """SELECT id,business_id,occurred_at,direction,amount,balance,counterparty,memo,category,account_label,source,created_at,updated_at
                  FROM yeoljeong_manual_bank_transactions
                 WHERE tenant_id=$1 AND business_id=$2 AND deleted_at IS NULL
-                  AND ($3::date IS NULL OR occurred_at::date >= $3)
-                  AND ($4::date IS NULL OR occurred_at::date <= $4)
-                ORDER BY occurred_at DESC LIMIT 1000""",
-            tenant_id, business_id, start, end,
+                  AND ($3::date IS NULL OR (occurred_at AT TIME ZONE 'Asia/Seoul')::date >= $3)
+                  AND ($4::date IS NULL OR (occurred_at AT TIME ZONE 'Asia/Seoul')::date <= $4)
+                ORDER BY occurred_at DESC LIMIT $5""",
+            tenant_id, business_id, start, end, limit,
         )
         return [dict(row) for row in rows]
     finally:
