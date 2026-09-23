@@ -17,7 +17,9 @@
 #   1. 원인별 재시도는 릴리스 SHA 기준 기본 1회 (AADS_DEPLOY_AUTOHEAL_MAX_ATTEMPTS).
 #      단 target_drain_busy 처럼 "기다리는 것이 교정"인 원인만 예산을 따로 둔다
 #      (AADS_DEPLOY_AUTOHEAL_DRAIN_MAX_ATTEMPTS, 기본 5) — autoheal_max_attempts 참조
-#   2. 자가치유 기동 사이 최소 쿨다운 180초 (AADS_DEPLOY_AUTOHEAL_COOLDOWN_SEC)
+#   2. 동일 릴리스 SHA·원인 조합별 최소 쿨다운 180초 (AADS_DEPLOY_AUTOHEAL_COOLDOWN_SEC).
+#      다른 SHA 또는 다른 원인은 서로 쿨다운을 공유하지 않는다 — 한 릴리스의
+#      disk_full 쿨다운이 다른 릴리스의 target_drain_busy 재시도를 막으면 안 된다.
 #   3. 화이트리스트 원인만 재시도하고, 나머지는 CEO 에스컬레이션으로 끝낸다
 #   4. AADS_DEPLOY_AUTOHEAL=0 이면 전체 비활성 (기존 동작과 동일)
 #   5. 작업 트리를 건드리는 교정(stash/checkout/clean)은 절대 하지 않는다
@@ -350,15 +352,24 @@ remediate_deploy_failure() {
 }
 
 # ── 4단계: 재시도 예산 · 쿨다운 (폭주 차단) ─────────────────────────────────
+# 릴리스 SHA·원인 둘 다 상태 파일명(및 SQL 리터럴)로 그대로 쓰인다. 구분자·공백·
+# "unknown" 플레이스홀더를 거부해 경로 이탈(../)이나 다른 릴리스와의 상태 공유를
+# 막는다. 유효하지 않으면 실패시켜 호출자가 별도 원인(코드)으로 재분류하게 한다.
+autoheal_key_valid() {
+    [[ "$1" =~ ^[a-zA-Z0-9_-]{1,64}$ && "$1" != "unknown" \
+       && "$2" =~ ^[a-zA-Z0-9_]{1,64}$ && "$2" != "unknown" ]]
+}
+
 autoheal_attempt_file() {
     local cause="${1:-unknown}"
     local sha="${AADS_RELEASE_SHA:-unknown}"
+    autoheal_key_valid "$sha" "$cause" || return 1
     echo "${AUTOHEAL_STATE_DIR}/${sha}.${cause}.attempts"
 }
 
 autoheal_attempt_count() {
     local file
-    file="$(autoheal_attempt_file "${1:-unknown}")"
+    file="$(autoheal_attempt_file "${1:-unknown}")" || { echo 0; return 1; }
     local n
     n="$(cat "$file" 2>/dev/null || echo 0)"
     if [[ "$n" =~ ^[0-9]+$ ]]; then
@@ -371,7 +382,7 @@ autoheal_attempt_count() {
 autoheal_attempt_bump() {
     local cause="${1:-unknown}"
     local file n
-    file="$(autoheal_attempt_file "$cause")"
+    file="$(autoheal_attempt_file "$cause")" || return 1
     n="$(autoheal_attempt_count "$cause")"
     mkdir -p "$AUTOHEAL_STATE_DIR" 2>/dev/null || true
     echo "$((n + 1))" > "$file" 2>/dev/null || true
@@ -402,27 +413,55 @@ autoheal_max_attempts() {
     echo "$n"
 }
 
+autoheal_cooldown_file() {
+    local cause="${1:-unknown}"
+    local sha="${AADS_RELEASE_SHA:-unknown}"
+    autoheal_key_valid "$sha" "$cause" || return 1
+    echo "${AUTOHEAL_STATE_DIR}/${sha}.${cause}.last_launch_epoch"
+}
+
 autoheal_cooldown_ok() {
-    local marker="${AUTOHEAL_STATE_DIR}/last_launch_epoch"
-    local last now
+    local cause="${1:-unknown}"
+    local marker
+    marker="$(autoheal_cooldown_file "$cause")" || return 1
+    local last now cooldown
     last="$(cat "$marker" 2>/dev/null || echo 0)"
     [[ "$last" =~ ^[0-9]+$ ]] || last=0
     now="$(date +%s)"
-    if (( now - last < AUTOHEAL_COOLDOWN_SEC )); then
-        autoheal_log "쿨다운 중: 마지막 자가치유 기동 $((now - last))초 전 (최소 ${AUTOHEAL_COOLDOWN_SEC}초)"
+    cooldown="$AUTOHEAL_COOLDOWN_SEC"
+    [[ "$cooldown" =~ ^[0-9]+$ ]] || cooldown=180
+    if (( now - last < cooldown )); then
+        autoheal_log "쿨다운 중: 마지막 자가치유 기동 $((now - last))초 전 (최소 ${cooldown}초)"
         return 1
     fi
     return 0
 }
 
 autoheal_cooldown_stamp() {
+    local cause="${1:-unknown}"
+    local marker
+    marker="$(autoheal_cooldown_file "$cause")" || return 1
     mkdir -p "$AUTOHEAL_STATE_DIR" 2>/dev/null || true
-    date +%s > "${AUTOHEAL_STATE_DIR}/last_launch_epoch" 2>/dev/null || true
+    date +%s > "$marker" 2>/dev/null
 }
 
 # ── 5단계: 재개 — 동일 릴리스를 큐에 넣고 clean worktree 워커로 기동 ────────
+# 후속 run 인정 조건은 scripts/start_aads_deploy_queue_worker.sh 가 실제로 집는
+# 조건과 반드시 같아야 한다(AI 리뷰 P1, f19c3491 반려 사유). 그 워커는
+#   status='queued' AND phase='queued_for_deploy' AND COALESCE(auto_start,FALSE)=TRUE
+# 인 행만 claim 한다 — auto_start=false 수동 대기 행은 아무도 자동으로 집지 않는다.
+# running/verifying/syncing_standby 는 이미 실행 중인 상태 그 자체이므로 추가
+# phase 조건 없이 인정한다. 이 조건이 어긋나면 "후속이 있다"고 믿고 원본
+# blocked 행을 superseded 로 세탁하면서 실제로는 아무도 재개하지 않는 상태가
+# 생긴다.
 queue_autoheal_retry_request() {
     local cause="${1:-unknown}"
+    AUTOHEAL_SUCCESSOR_RUN_ID=""
+    if ! autoheal_key_valid "${AADS_RELEASE_SHA:-unknown}" "$cause" \
+       || [[ ! "${DEPLOY_RUN_ID:-0}" =~ ^[0-9]+$ ]]; then
+        autoheal_log "❌ 재개 큐 키 또는 원본 run ID가 유효하지 않다"
+        return 1
+    fi
     if ! deploy_db_available; then
         autoheal_log "❌ DB 불가 — 큐 등록 생략"
         return 1
@@ -432,6 +471,7 @@ queue_autoheal_retry_request() {
     reason_sql="$(sql_escape "autoheal retry: cause=${cause}; remediation=${AUTOHEAL_LAST_REMEDIATION}")"
     run_id="$(
         deploy_db_exec "
+            WITH inserted AS (
             INSERT INTO deploy_runs(project, release_sha, status, phase, phase_started_at,
                                     deploy_pid, last_heartbeat_at, queue_position,
                                     error_summary, requested_by, request_source,
@@ -443,17 +483,32 @@ queue_autoheal_retry_request() {
             WHERE NOT EXISTS (
                 SELECT 1 FROM deploy_runs
                 WHERE project='AADS'
-                  AND status IN ('queued','running','verifying','syncing_standby')
                   AND release_sha='$release_sql'
+                  AND ((status='queued' AND phase='queued_for_deploy' AND COALESCE(auto_start, FALSE) = TRUE)
+                      OR status IN ('running','verifying','syncing_standby'))
             )
-            RETURNING id;
+            RETURNING id
+            )
+            SELECT id FROM inserted
+            UNION ALL
+            SELECT id FROM deploy_runs
+             WHERE project='AADS' AND release_sha='$release_sql'
+               AND id <> ${DEPLOY_RUN_ID:-0}
+               AND ((status='queued' AND phase='queued_for_deploy' AND COALESCE(auto_start, FALSE) = TRUE)
+                   OR status IN ('running','verifying','syncing_standby'))
+               AND NOT EXISTS (SELECT 1 FROM inserted)
+             ORDER BY id DESC LIMIT 1;
         " | tail -1 | tr -d '[:space:]'
     )"
-    if [[ -n "${run_id:-}" ]]; then
-        autoheal_log "재개 큐 등록: deploy_run_id=${run_id}, release=${AADS_RELEASE_SHA:-unknown}"
-    else
-        autoheal_log "재개 큐 등록 생략: 동일 릴리스가 이미 큐/진행 중"
+    # INSERT 실패는 문장 전체를 실패시키므로, deploy_db_exec 의 빈 오류 출력이
+    # "활성 후속 run 조회 성공"으로 위장할 수 없다. run_id 가 숫자가 아니거나
+    # 원본 행 자신이면 실행 가능한 후속을 확인하지 못한 것이다.
+    if [[ ! "$run_id" =~ ^[0-9]+$ || "$run_id" == "${DEPLOY_RUN_ID:-}" ]]; then
+        autoheal_log "❌ 재개 큐와 실행 가능한 후속 run을 확인할 수 없다"
+        return 1
     fi
+    autoheal_log "재개 큐/실행 가능한 후속 run 확인: deploy_run_id=${run_id}, release=${AADS_RELEASE_SHA:-unknown}"
+    AUTOHEAL_SUCCESSOR_RUN_ID="$run_id"
     return 0
 }
 
@@ -483,11 +538,20 @@ launch_autoheal_worker() {
         autoheal_log "DRYRUN: 워커 기동 생략 (${launcher} ${retry_mode} autoheal_${cause})"
         return 0
     fi
-    autoheal_cooldown_stamp
-    bash "$launcher" "$retry_mode" "autoheal_${cause}" || {
-        autoheal_log "❌ 큐 워커 기동 실패"
+    autoheal_cooldown_stamp "$cause" || return 1
+    local launch_out
+    if ! launch_out="$(bash "$launcher" "$retry_mode" "autoheal_${cause}" 2>&1)"; then
+        autoheal_log "❌ 큐 워커 기동 실패: ${launch_out}"
         return 1
-    }
+    fi
+    autoheal_log "$launch_out"
+    # 워커 launcher 는 claim 할 행이 없어도 exit 0 로 끝난다("deploy queue empty").
+    # exit code 만 보면 이 경우도 성공으로 오인해 아무도 재개하지 않았는데
+    # retry_launched/superseded 를 기록하는 상태 세탁이 된다(AI 리뷰 P1).
+    if [[ "$launch_out" == *"deploy queue empty"* ]]; then
+        autoheal_log "❌ 큐 워커가 claim 한 릴리스가 없다(queue empty) — 재개로 인정하지 않는다"
+        return 1
+    fi
     return 0
 }
 
@@ -517,25 +581,53 @@ autoheal_record_outcome() {
     " >/dev/null 2>&1 || true
     autoheal_log "결과 기록: deploy_runs#${DEPLOY_RUN_ID} ← ${outcome}/${cause}"
 
-    # dirty 게이트에서 멈춘 배포는 "실패" 가 아니라 "경로 변경" 이다.
-    # 직접 배포가 미커밋 작업 때문에 preflight 에서 멈추면 같은 릴리스가
-    # 큐 워커의 clean worktree 로 다시 태워지고, 원본 행만 blocked 로 남는다.
-    # 2026-09-16 11:20 KST 실측: 최근 3일 blocked 27건이 전부 이 경로였고
-    # 후속 런은 모두 success 였다. 대시보드에는 실패로 보이므로 원장을
-    # 바로잡는다. 재개가 실제로 기동된 경우에만, preflight/blocked 행에만
-    # 적용한다 — 진짜로 막힌 배포를 덮지 않기 위해서다.
-    if [[ "$outcome" == "retry_launched" && "$cause" == "dirty_worktree" \
-          && "$AUTOHEAL_LAST_REMEDIATION" == "route_clean_worktree" ]]; then
+    # dirty 게이트/drain 대기에서 멈춘 배포는 "실패" 가 아니라 "경로 변경" 또는
+    # "시점 문제" 다. 같은 릴리스가 그대로 재개되고 성공하면 원본 행만
+    # blocked 로 남아 대시보드에서 실패한 배포로 읽힌다(SLO 왜곡).
+    # 2026-09-16 11:20 KST 실측: 최근 3일 blocked 27건이 전부 dirty_worktree
+    # 경로였고 후속 런은 모두 success 였다.
+    #
+    # 다만 원장을 바로잡는 것은 "실제로 실행 가능한 후속이 확인됐고 워커
+    # 기동에 성공한 경우"에만 해야 한다(AI 리뷰 P1, f19c3491 반려 사유).
+    # AUTOHEAL_SUCCESSOR_RUN_ID 는 queue_autoheal_retry_request 가 워커의
+    # 실제 claim 조건(auto_start=TRUE AND phase='queued_for_deploy', 또는
+    # running/verifying/syncing_standby)과 동일한 조건으로 확인한 후속
+    # run id 다 — 이 값이 없으면(빈 문자열) UPDATE 자체가 걸리지 않는다.
+    # WHERE 절의 EXISTS 서브쿼리도 같은 조건으로 다시 확인해, 큐 등록과
+    # UPDATE 사이에 후속 행 상태가 바뀌었을 가능성까지 막는다(상태 세탁 금지).
+    if [[ "$outcome" == "retry_launched" && "${AUTOHEAL_SUCCESSOR_RUN_ID:-}" =~ ^[0-9]+$ \
+          && ( "$cause" == "target_drain_busy" \
+               || ( "$cause" == "dirty_worktree" && "$AUTOHEAL_LAST_REMEDIATION" == "route_clean_worktree" ) ) ]]; then
+        local successor_id="$AUTOHEAL_SUCCESSOR_RUN_ID" release_sql phase_sql original_phase
+        release_sql="$(sql_escape "${AADS_RELEASE_SHA:-unknown}")"
+        phase_sql="superseded_by_autoheal_reroute"
+        original_phase="preflight"
+        if [[ "$cause" == "target_drain_busy" ]]; then
+            phase_sql="superseded_by_autoheal_drain_retry"
+            original_phase="target_slot_drain"
+        fi
         deploy_db_exec "
             UPDATE deploy_runs
                SET status = 'superseded',
-                   phase = 'superseded_by_autoheal_reroute',
+                   phase = '${phase_sql}',
+                   error_summary = CONCAT_WS(' | ', NULLIF(error_summary, ''),
+                       'autoheal successor deploy_run_id=${successor_id}'),
                    updated_at = NOW()
              WHERE id = ${DEPLOY_RUN_ID}
                AND status = 'blocked'
-               AND phase = 'preflight';
+               AND phase = '${original_phase}'
+               AND EXISTS (
+                   SELECT 1 FROM deploy_runs successor
+                    WHERE successor.id = ${successor_id}
+                      AND successor.id <> ${DEPLOY_RUN_ID}
+                      AND successor.project = 'AADS'
+                      AND successor.release_sha = '${release_sql}'
+                      AND ((successor.status='queued' AND successor.phase='queued_for_deploy'
+                              AND COALESCE(successor.auto_start, FALSE) = TRUE)
+                          OR successor.status IN ('running','verifying','syncing_standby'))
+               );
         " >/dev/null 2>&1 || true
-        autoheal_log "원장 보정: deploy_runs#${DEPLOY_RUN_ID} blocked → superseded (clean worktree 재기동)"
+        autoheal_log "원장 보정: deploy_runs#${DEPLOY_RUN_ID} blocked → superseded (후속 run=#${successor_id}, ${cause})"
     fi
 }
 
@@ -586,6 +678,10 @@ deploy_autoheal_on_exit() {
         autoheal_log "릴리스 소스 부재 확인: ${COMPOSE_DIR:-unknown} — 분류를 source_dir_missing 으로 보정"
         cause="source_dir_missing"
     fi
+    if ! autoheal_key_valid "${AADS_RELEASE_SHA:-unknown}" "$cause"; then
+        autoheal_escalate "$cause" "유효하지 않은 릴리스 SHA 또는 원인 키(release=${AADS_RELEASE_SHA:-unknown})"
+        return 0
+    fi
     policy="$(autoheal_policy "$cause" "$phase")"
     attempts="$(autoheal_attempt_count "$cause")"
     budget="$(autoheal_max_attempts "$cause")"
@@ -601,7 +697,7 @@ deploy_autoheal_on_exit() {
         autoheal_escalate "$cause" "재시도 예산 소진 (${attempts}/${budget})"
         return 0
     fi
-    if ! autoheal_cooldown_ok; then
+    if ! autoheal_cooldown_ok "$cause"; then
         autoheal_escalate "$cause" "쿨다운 미충족 — 연속 재시도 폭주 차단"
         return 0
     fi
