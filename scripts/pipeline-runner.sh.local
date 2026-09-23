@@ -35,7 +35,9 @@ PGPASSWORD="${PGPASSWORD:-}"
 export PGPASSWORD
 
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
-AADS_API_URL="${AADS_API_URL:-http://127.0.0.1:8100}"
+# Host-local nginx tracks the active blue/green API. Never pin review traffic
+# to blue:8100 while green:8102 is active or blue is being synchronized.
+AADS_API_URL="${AADS_API_URL:-http://127.0.0.1}"
 MAX_RUNTIME="${MAX_RUNTIME:-7200}"
 MAX_RETRIES="${MAX_RETRIES:-2}"               # H5: Claude 실패 시 재시도 횟수
 MAX_CONCURRENT_PER_PROJECT="${MAX_CONCURRENT_PER_PROJECT:-6}"  # 프로젝트당 동시 실행 수
@@ -3617,7 +3619,7 @@ deploy_job() {
                 _qa_response=$(curl -s -m 60 -X POST \
                     -H "Content-Type: application/json" \
                     -d '{"pages": ["/", "/chat", "/ops"]}' \
-                    "http://127.0.0.1:8100/api/v1/visual-qa/full-qa" 2>/dev/null) || true
+                    "${AADS_API_URL}/api/v1/visual-qa/full-qa" 2>/dev/null) || true
 
                 if [ -z "$_qa_response" ]; then
                     log "  QA: WARN — QA API 호출 실패 (응답 없음), 배포는 계속 진행"
@@ -3794,7 +3796,7 @@ deploy_job() {
     local health_ok="unknown"
     local health_url=""
     case "$project" in
-        AADS)   health_url="http://localhost:8100/api/v1/health" ;;
+        AADS)   health_url="${AADS_API_URL}/api/v1/health" ;;
         KIS)    health_url="http://localhost:8003/health" ;;
         GO100)  health_url="http://localhost:8002/health" ;;
         SF)     health_url="http://localhost:8000/health" ;;
