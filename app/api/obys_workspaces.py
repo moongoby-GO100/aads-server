@@ -332,6 +332,25 @@ def _record(kind: str, row: dict[str, Any], business_name: str) -> dict[str, Any
                 "거래유형": "입금" if direction == "in" else "출금",
             }
         )
+    elif kind == "bank-account":
+        status = {
+            "needs_auth": "인증 필요", "error": "오류 · 확인 필요",
+            "inactive": "비활성", "connected": "연결됨", "active": "활성",
+        }.get(status, status)
+        bank = str(value.get("bank_name") or "은행 미확인")
+        masked = str(value.get("account_number_masked") or "번호 미등록")
+        description = str(value.get("account_alias") or bank)
+        last_success = (
+            str(value.get("last_synced_at") or "성공 이력 없음")
+            if value.get("last_sync_status") == "success" else "성공 이력 미확인"
+        )
+        display.update({
+            "서비스": bank, "기관": bank, "계좌·카드": masked,
+            "계좌": f"{bank} {masked}", "마지막성공": last_success,
+            "수집건수": str(value.get("last_sync_transaction_count") or 0) + "건",
+            "상태": status, "수집상태": status,
+            "연동방식": "수동 등록" if value.get("connection_type") == "manual" else str(value.get("connection_type") or "미확인"),
+        })
     elif kind == "journal":
         lines = value.get("lines") or []
         if isinstance(lines, str):
@@ -542,7 +561,8 @@ async def _source_rows(
         connection = await upload_svc._connect()
         try:
             rows = await connection.fetch(sql, business_id)
-            return [("generic", dict(row)) for row in rows], source
+            kind = "bank-account" if source == "yeoljeong_bank_accounts" else "generic"
+            return [(kind, dict(row)) for row in rows], source
         finally:
             await connection.close()
     return [], "not_configured"
@@ -593,6 +613,19 @@ async def workspace_summary(
     )
     source_rows = _filter_source_dates(source_rows, date_from, date_to)
     records = [_record(kind, row, business["name"]) for kind, row in source_rows]
+    if selected_route in {"bank-connect", "integrations"}:
+        needs_attention = sum(row.get("status") in {"needs_auth", "error", "pending"}
+                              for _, row in source_rows)
+        return {
+            "business": {"id": business["id"], "name": business["name"]},
+            "route": selected_route,
+            "metrics": [
+                {"label": "등록 계좌", "value": f"{len(records):,}건"},
+                {"label": "인증·확인 필요", "value": f"{needs_attention:,}건"},
+                {"label": "데이터 원천", "value": source},
+            ],
+            "source": {"name": source, "live": source != "not_configured", "record_count": len(records)},
+        }
     source_count = int(source_rows[0][1].get("source_total_count") or len(records)) if source_rows else 0
     total = (
         Decimal(str(source_rows[0][1].get("source_total_amount") or 0))

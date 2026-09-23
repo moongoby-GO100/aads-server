@@ -1,3 +1,15 @@
+## 2026-09-23 — 라일론 계좌 목록 표시 및 원천 거래 계좌 식별
+
+- CEO의 직접 API·화면 수정/배포 승인 후 별도 clean worktree에서 변경. 기본 작업공간 dirty 변경 보존.
+- `obys_workspaces.py`: 은행명·마스킹 계좌번호·인증 상태·수집 이력 표시, 계좌 현황의 의미 없는 0원 합계 제거.
+- `acct_source_ledger.py`: 권한 검증 후 원천 파일의 명시적 6자리 계좌코드와 같은 사업자/ACCT 회사의 저장 화면 근거(hash 포함)만 연결. 충돌·코드 부재·마스킹 위반은 미확정. 조회 보강이며 거래·금액·상태·중복제거 및 업무 DB는 변경하지 않음.
+- 회귀: `pytest tests/unit/test_obys_bank_identity.py tests/unit/test_obys_workspaces.py tests/unit/test_acct_source_ledger.py tests/unit/test_obys_card_master.py -q` → 46 passed.
+- 실제 DB 후보 API: 계좌13/마스킹13/인증필요13, 거래 표본200 중 코드 연결192, 미확정8. 건별 상세 일치, 타 사업자404. 이는 표본이며 전체 계좌별 거래 완결을 뜻하지 않음.
+- 후보 UI: 공개 HTML에 실제 DB 후보 응답을 주입하여 desktop/detail/mobile 검증, 13행 마스킹 표시, JS오류0. 대표님 기존 소유자 권한 검증 JWT 사용; 비밀번호 로그인 시험 아님. 운영 반영/배포 후 E2E와 구별.
+- 증거: `/tmp/obys-bank-candidate-results.json`, `/tmp/lylon-bank-candidate-e2e.json`, `/root/aads/exports/lylon-bank-candidate-{desktop,detail,mobile}.png`.
+- 배포는 이 커밋 push 후 bluegreen 비동기 등록. 동일digest·후보/외부 health·300초 관제·운영 화면 검증 전 최종 배포 완료 아님. DB 정본 key `obys-bank-display-identity-20260923`에 최종 상태 기록.
+- 잔여: 코드 없는 원본8건(조회 표본) 식별 근거, 은행 인증/자동수집, 전체 계좌별 거래 대조 및 일별매출 정규화.
+
 ## 2026-09-23 08:49:53 KST — PC Agent 1.0.74 EXE/ZIP/automatic updater deployment
 
 - Scope: CEO-approved PC browser concurrency release; PC distribution and installed launcher are complete. API/dashboard deployment certification remains pending.

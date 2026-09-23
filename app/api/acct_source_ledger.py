@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from decimal import Decimal, InvalidOperation
@@ -25,6 +26,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 
 from app.api.acct_purchase import _STATUS_LABEL, _authorized_acct_scope, _fetch_acct_journals, _lit
+from app.services import obys_upload_service
 
 logger = logging.getLogger(__name__)
 
@@ -300,6 +302,72 @@ def _row(row: Dict[str, Any], category: str) -> Dict[str, Any]:
     }
 
 
+def _bank_file_code(path: str) -> str:
+    """Only explicit WEHAGO account codes, never bank names or list positions."""
+    match = re.search(
+        r"/\.wehago/(?:통장덤프_[0-9]{8}/|bank_|통장8_|통장_)([0-9]{6})(?:_[^/]+)?\.json$",
+        path,
+    )
+    return match.group(1) if match else ""
+
+
+async def _enrich_bank_accounts(records: List[Dict[str, Any]], tenant_id: int,
+                                company_id: int, business_id: str) -> None:
+    """Read-only identity join after authorized ACCT scope resolution.
+
+    Money, status, transaction IDs and deduplication remain unchanged. Missing
+    or conflicting evidence stays explicitly unresolved; this is not bank auth.
+    """
+    if not records:
+        return
+    file_ids = sorted({int(row["source_file_id"]) for row in records})
+    files = await _fetch_acct_journals(
+        "SELECT id,abs_path FROM source_file WHERE company_id=" + str(int(company_id))
+        + " AND is_current IS TRUE AND domain='wehago' AND id IN ("
+        + ",".join(map(str, file_ids)) + ")", tenant_id,
+    )
+    codes = {int(row["id"]): _bank_file_code(str(row["abs_path"])) for row in files}
+    conn = await obys_upload_service._connect()
+    try:
+        accounts = await conn.fetch(
+            "SELECT id,bank_name,account_number_masked,memo FROM yeoljeong_bank_accounts "
+            "WHERE business_id=$1 AND status <> 'inactive'", business_id,
+        )
+    finally:
+        await conn.close()
+    by_code: dict[str, list] = {}
+    for account in accounts:
+        try:
+            evidence = json.loads(account.get("memo") or "{}")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(evidence, dict):
+            continue
+        code = str(evidence.get("source_account_code") or "")
+        if (str(evidence.get("acct_company_id")) != str(company_id)
+                or evidence.get("source") != "stored_wehago_screen"
+                or not re.fullmatch(r"[0-9]{6}", code)
+                or not re.fullmatch(r"[a-f0-9]{64}", str(evidence.get("sha256") or ""))):
+            continue
+        by_code.setdefault(code, []).append(account)
+    for record in records:
+        code = codes.get(int(record["source_file_id"]), "")
+        matches = by_code.get(code, [])
+        record["account_match_status"] = "unresolved"
+        if len(matches) > 1:
+            record["account_match_status"] = "conflict"
+        if len(matches) != 1:
+            continue
+        account = matches[0]
+        masked = str(account.get("account_number_masked") or "")
+        if not re.fullmatch(r"\*{4}[0-9]{4}", masked):
+            continue
+        record.update(account_id=str(account["id"]), account_code=code,
+                      account_label=f"{account['bank_name']} {masked}",
+                      account_number_masked=masked, account_match_status="matched",
+                      account_match_basis="저장 위하고 화면 계좌코드·원천 파일 코드 일치")
+
+
 async def source_transactions(
     current_user: dict,
     business_id: str,
@@ -322,6 +390,8 @@ async def source_transactions(
     )
     records = [_row(row, category) for row in rows]
     await _enrich_cards(records, tenant_id, company_id)
+    if category == "bank":
+        await _enrich_bank_accounts(records, tenant_id, company_id, business_id)
     return records, f"acct.source_file/atom_record:wehago:{category}"
 
 
