@@ -208,6 +208,20 @@ _REPORT_REQUIRED_GROUPS: dict[str, tuple[str, ...]] = {
 _REPORT_MIN_STRUCTURE_CHARS = 280
 _STATUS_REPORT_MIN_STRUCTURE_CHARS = 180
 
+# 단답·대화형 인텐트. 2026-09-23 신설.
+# 이 인텐트들은 위에서 이미 낮은 글자수 하한(180자)을 쓴다 — 짧아도 되는
+# 응답이라는 뜻이다. 그런데 table_or_matrix·next_action 갭은 500자만 넘으면
+# 자동으로 2개가 성립해, CRF v3.0 이 허용한 "M1 단답" 형식을 판정이 다시
+# 떨어뜨렸다. 그래서 재작성이 같은 기준에 두 번 걸려 턴이 죽었다.
+# 보고형(report·audit·analysis·strategy…)에는 이 완화를 적용하지 않는다.
+_CONVERSATIONAL_REPORT_INTENTS = frozenset({
+    "status_check",
+    "task_query",
+    "health_check",
+    "runner_response",
+    "knowledge_query",
+})
+
 # ─── CEO 8섹션 응답 플로우 (AADS-CRF v2.0, 2026-09-08) ────────────────────────
 # CEO 지시: 질문/지시 파악 → 목표 → 계획 → 실행순서 → 결과 → 검증 → 리스크 → 다음
 # 재시도 폭증(응답 끊김)을 막기 위해 "완전 일치"가 아니라 "커버리지 하한"만 강제한다.
@@ -561,10 +575,13 @@ def check_report_quality_structure(
     has_source_tags = bool(_SOURCE_TAG_PATTERN.search(text))
     has_quantified_claim = bool(_QUANTIFIED_CLAIM_PATTERN.search(text))
 
+    # 단답·대화형 인텐트에서는 표·다음단계를 갭으로 세지 않는다
+    # (_CONVERSATIONAL_REPORT_INTENTS 주석 참고).
+    _conversational = normalized_intent in _CONVERSATIONAL_REPORT_INTENTS
     structural_gaps = list(missing)
-    if not has_table and len(text) >= 500:
+    if not has_table and len(text) >= 500 and not _conversational:
         structural_gaps.append("table_or_matrix")
-    if not has_next_action:
+    if not has_next_action and not _conversational:
         structural_gaps.append("next_action")
     if has_quantified_claim and not has_source_tags and len(text) >= 500:
         structural_gaps.append("source_tags")
