@@ -12,7 +12,17 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# SDK 타입 참조 (훅 응답은 dict 형태로 반환 — {"behavior": "allow"} 또는 {"behavior": "deny", "message": "..."})
+# PreToolUse 훅은 PermissionResult가 아니라 HookJSONOutput을 반환한다.
+
+
+def _pre_tool_decision(decision: str, reason: str = "") -> dict[str, Any]:
+    output: dict[str, Any] = {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": decision,
+    }
+    if reason:
+        output["permissionDecisionReason"] = reason
+    return {"hookSpecificOutput": output}
 
 # ─── 위험 패턴 상수 ────────────────────────────────────────────────────────────
 
@@ -108,9 +118,7 @@ async def pre_tool_use_hook(
     도구 실행 전 검사 + 자동 승인.
     root 환경에서 bypassPermissions 불가하므로 이 훅에서 안전한 도구를 자동 승인한다.
 
-    SDK PreToolUseHookInput/PermissionRequestHookInput 호환:
-    - 안전: PermissionResultAllow() 반환
-    - 위험: PermissionResultDeny(message="이유") 반환
+    SDK PreToolUseHookInput의 HookJSONOutput 계약에 맞춰 승인/차단한다.
     """
     # SDK 타입 or dict 모두 지원
     if isinstance(hook_input, dict):
@@ -133,7 +141,7 @@ async def pre_tool_use_hook(
             if re.search(pattern, command, re.IGNORECASE):
                 reason = f"위험 Bash 명령 차단: {command[:120]}"
                 logger.warning(f"pre_tool_use: {reason}")
-                return {"behavior": "deny", "message": reason}
+                return _pre_tool_decision("deny", reason)
         approval_required = _detect_approval_required_action(tool_name, tool_input if isinstance(tool_input, dict) else {})
         if approval_required:
             category, preview = approval_required
@@ -149,7 +157,7 @@ async def pre_tool_use_hook(
             if sensitive in file_path:
                 reason = f"민감 경로 Write 차단: {file_path}"
                 logger.warning(f"pre_tool_use: {reason}")
-                return {"behavior": "deny", "message": reason}
+                return _pre_tool_decision("deny", reason)
 
     # ── write_remote_file / patch_remote_file 민감 경로 차단 ─────────────
     if tool_name in ("write_remote_file", "patch_remote_file"):
@@ -160,7 +168,7 @@ async def pre_tool_use_hook(
             if sensitive in file_path:
                 reason = f"원격 민감 경로 쓰기 차단: {file_path}"
                 logger.warning(f"pre_tool_use: {reason}")
-                return {"behavior": "deny", "message": reason}
+                return _pre_tool_decision("deny", reason)
         logger.info(f"pre_tool_use: Yellow 도구 자동 승인 | tool={tool_name} path={file_path}")
 
     # ── run_remote_command 위험 명령 차단 ─────────────────────────────────
@@ -172,12 +180,12 @@ async def pre_tool_use_hook(
             if re.search(pattern, command, re.IGNORECASE):
                 reason = f"원격 위험 명령 차단: {command[:120]}"
                 logger.warning(f"pre_tool_use: {reason}")
-                return {"behavior": "deny", "message": reason}
+                return _pre_tool_decision("deny", reason)
         # force push 차단
         if re.search(r"git\s+push\s+.*--force", command, re.IGNORECASE):
             reason = f"force push 차단: {command[:120]}"
             logger.warning(f"pre_tool_use: {reason}")
-            return {"behavior": "deny", "message": reason}
+            return _pre_tool_decision("deny", reason)
         approval_required = _detect_approval_required_action(tool_name, tool_input if isinstance(tool_input, dict) else {})
         if approval_required:
             category, preview = approval_required
@@ -202,14 +210,14 @@ async def pre_tool_use_hook(
             if error:
                 reason = f"프로젝트 DB 쿼리 차단: {error} | query={query[:120]}"
                 logger.warning(f"pre_tool_use: {reason}")
-                return {"behavior": "deny", "message": reason}
+                return _pre_tool_decision("deny", reason)
         except ImportError:
             pass
         logger.info(f"pre_tool_use: Yellow 도구 자동 승인 | tool={tool_name} query={query[:80]}")
 
     # ── 안전 → 자동 승인 ─────────────────────────────────────────────────
     logger.debug(f"pre_tool_use: 자동 승인 | tool={tool_name}")
-    return {"behavior": "allow"}
+    return _pre_tool_decision("allow")
 
 
 # ─── PostToolUse Hook ─────────────────────────────────────────────────────────

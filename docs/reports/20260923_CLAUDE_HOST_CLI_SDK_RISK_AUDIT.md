@@ -8,6 +8,15 @@ but the chosen path must exist in the SDK process's filesystem. The official
 Python SDK bundles a CLI by default. AADS currently has multiple execution
 paths, not one globally updated CLI.
 
+This audit also found a separate `PreToolUse` hook wire-contract mismatch on
+the direct-execution SDK path. See
+`docs/handover-notes/20260923_AGENT_SDK_HOOK_WIRE_CONTRACT_ERROR_NOTE.md`;
+neither host execution nor a newer binary repairs a malformed SDK hook reply.
+The existing hook also logs some approval-required Git/deploy/SSH/Docker
+commands without enforcing an approval decision; changing the CLI process
+boundary would enlarge the impact of that separate governance gap. This audit
+does not authorize changing that approval policy implicitly.
+
 ## Effective AADS paths
 
 | Path | Current implementation | Effect of host `/usr/bin/claude` update |

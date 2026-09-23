@@ -31,4 +31,10 @@ five-minute monitoring, and same-digest standby synchronization.
 
 - Read-only production DB JOIN: 6/6 authoritative pointers match their run.
 - Targeted AAG unit suite: 225 passed.
-- Live API, release monitor and standby certification: pending deployment.
+- Live container: all six authoritative project snapshots loaded; the
+  `aag_brief` tool and public latest-reader SQL returned successfully.
+- Release 5163 (`f36e0446`): LLM health and five-minute P0/P1 monitoring
+  succeeded; standby synchronization subsequently certified the run as
+  `success` at 2026-09-23 13:52 KST.
+- Later documentation release 5168 (`f78d9e4f`) also passed five-minute
+  P0/P1 monitoring and reached `success` with matching slot image digests.
