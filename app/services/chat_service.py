@@ -13963,6 +13963,17 @@ async def send_message_stream(
                         f"autonomous_executor_weak_report_bypassed: {_auto_val.message} "
                         f"(tools_called={len(tools_called) if isinstance(tools_called, list) else tools_called})"
                     )
+                elif not str(_auto_val.violation_type or "").startswith("FABRICATED"):
+                    # 2026-09-23 안전망. 도구를 부른 턴은 위에서 bypass 되지만
+                    # 미호출 턴에는 안전망이 하나도 없어, 검증이 한 번 걸리면
+                    # 턴이 통째로 interrupted_partial 로 끝났다 — 72시간 실측
+                    # 11건이 전부 이 경로였고 본문은 288~3,619자로 멀쩡했다.
+                    # 형식이 부족한 답변이 아예 없는 답변보다 낫다.
+                    # 날조 방지 계열(FABRICATED_*)은 이 안전망에서 제외한다.
+                    logger.warning(
+                        f"autonomous_validation_failed_safety_net: {_auto_val.violation_type} — "
+                        f"{_auto_val.message} (intent={intent}, chars={len(full_response or '')})"
+                    )
                 else:
                     logger.error(f"autonomous_executor_validation_failed: {_auto_val.violation_type} — {_auto_val.message}")
                     await _save_interrupted_partial_message(
@@ -14537,6 +14548,24 @@ async def send_message_stream(
                             f"(tools_called={len(tools_called) if isinstance(tools_called, list) else tools_called})"
                         )
                         full_response = _retry_response
+                    elif not str(_retry_validation.violation_type or "").startswith("FABRICATED"):
+                        # 2026-09-23 안전망(위 autonomous 분기와 같은 규칙).
+                        # 재작성까지 같은 기준에 또 걸리면 턴이 통째로 죽었다.
+                        # 원문·재작성문 중 긴 쪽을 정상 답변으로 내보낸다 —
+                        # 아래 `full_response = _retry_response` 가 이 값을 쓴다.
+                        _net_best = max(
+                            [
+                                _t for _t in (_retry_response, _failed_response)
+                                if isinstance(_t, str) and _t.strip()
+                            ] or [_retry_response],
+                            key=lambda _t: len(_t or ""),
+                        )
+                        logger.warning(
+                            f"output_validator_retry_failed_safety_net: {_retry_validation.violation_type} — "
+                            f"{_retry_validation.message} (intent={intent}, "
+                            f"chars={len(_net_best or '')}, tools_called={bool(tools_called)})"
+                        )
+                        _retry_response = _net_best
                     else:
                         logger.error(
                             f"output_validator_retry_also_failed: {_retry_validation.violation_type} — "
