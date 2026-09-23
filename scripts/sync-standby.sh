@@ -138,7 +138,11 @@ certify_deferred_run() {
 
 if [[ "$active_digest" == "$standby_digest" ]]; then
     log "이미 동일한 이미지다 (${active_tag}). 할 일 없음."
-    certify_deferred_run
+    # --dry-run must not certify a deploy even when slots have converged;
+    # certification is a database write, unlike the diagnostic log.
+    if [[ "$DRY_RUN" != "true" ]]; then
+        certify_deferred_run
+    fi
     audit "skipped" "already same digest"
     exit 0
 fi

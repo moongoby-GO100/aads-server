@@ -1,4 +1,47 @@
+## 2026-09-23 — 라일론 계좌 목록 표시 및 원천 거래 계좌 식별
+
+- CEO의 직접 API·화면 수정/배포 승인 후 별도 clean worktree에서 변경. 기본 작업공간 dirty 변경 보존.
+- `obys_workspaces.py`: 은행명·마스킹 계좌번호·인증 상태·수집 이력 표시, 계좌 현황의 의미 없는 0원 합계 제거.
+- `acct_source_ledger.py`: 권한 검증 후 원천 파일의 명시적 6자리 계좌코드와 같은 사업자/ACCT 회사의 저장 화면 근거(hash 포함)만 연결. 충돌·코드 부재·마스킹 위반은 미확정. 조회 보강이며 거래·금액·상태·중복제거 및 업무 DB는 변경하지 않음.
+- 회귀: `pytest tests/unit/test_obys_bank_identity.py tests/unit/test_obys_workspaces.py tests/unit/test_acct_source_ledger.py tests/unit/test_obys_card_master.py -q` → 46 passed.
+- 실제 DB 후보 API: 계좌13/마스킹13/인증필요13, 거래 표본200 중 코드 연결192, 미확정8. 건별 상세 일치, 타 사업자404. 이는 표본이며 전체 계좌별 거래 완결을 뜻하지 않음.
+- 후보 UI: 공개 HTML에 실제 DB 후보 응답을 주입하여 desktop/detail/mobile 검증, 13행 마스킹 표시, JS오류0. 대표님 기존 소유자 권한 검증 JWT 사용; 비밀번호 로그인 시험 아님. 운영 반영/배포 후 E2E와 구별.
+- 증거: `/tmp/obys-bank-candidate-results.json`, `/tmp/lylon-bank-candidate-e2e.json`, `/root/aads/exports/lylon-bank-candidate-{desktop,detail,mobile}.png`.
+- 배포는 이 커밋 push 후 bluegreen 비동기 등록. 동일digest·후보/외부 health·300초 관제·운영 화면 검증 전 최종 배포 완료 아님. DB 정본 key `obys-bank-display-identity-20260923`에 최종 상태 기록.
+- 잔여: 코드 없는 원본8건(조회 표본) 식별 근거, 은행 인증/자동수집, 전체 계좌별 거래 대조 및 일별매출 정규화.
+
+## 2026-09-23 08:49:53 KST — PC Agent 1.0.74 EXE/ZIP/automatic updater deployment
+
+- Scope: CEO-approved PC browser concurrency release; PC distribution and installed launcher are complete. API/dashboard deployment certification remains pending.
+- Source: server `a261ba8ea48d8ec8269aa0c85572df70fb1370c0`, dashboard `addcbbb323527cc68b5c5f1f6eb2a9713aaa143f`, both verified on remote main before this documentation commit.
+- Windows EXE: GitHub Actions run `35797996651` succeeded at the exact server SHA; release `pc-agent-v1.0.74`. SHA256 `ed8131abd9c5e4639b4a4bafa900b6e6723911641944695f3d1ca10f588ed204` matches release asset, public download, host cache, and installed PC launcher.
+- Host publication: `pc_agent/dist/kakaobot-setup.exe` and `.exe.version` now serve 1.0.74 directly; public download HTTP 200, `X-PC-Agent-Exe-Stale: false`. Prior EXE/stamp preserved under `pc_agent/dist/archive-before-1.0.74`.
+- ZIP: public download succeeded; all 44 tracked included files match release source. Installed critical files match normalized SHA256 (Windows CRLF vs Git LF) for browser_tab, command registry, both updaters, agent and launcher.
+- Windows PC `2e9379a1-fed`: switched old 1.0.51 launcher to `%LOCALAPPDATA%/KakaoBot/AADS-PC-Agent.exe`; switch-status reports success at 2026-09-23T08:46:40+09:00. Worker VERSION 1.0.74, WebSocket reconnect and command execution succeeded; startup command targets stable EXE, KakaoBotWatchdog enabled. Existing profiles/config were preserved. Old Downloads launcher remains available for rollback.
+- Updater verification: self_update returns already latest; periodic check logged local=remote=1.0.74. Actual installed updater in an isolated temporary install detected 1.0.73 -> downloaded public 1.0.74 ZIP -> repeat check returned false. This proves the download/apply path; it does not claim a future release or PC reboot was tested.
+- Tests: `.venv/bin/python -m pytest -q tests/unit/test_pc_agent_release_guards.py tests/unit/test_pc_agent_launcher_startup.py tests/unit/test_pc_agent_download.py tests/unit/test_pc_browser_tabs.py` => 41 passed.
+- Separate remaining release: API #5130 blocked by target-slot active stream, automatic retry #5133 queued; dashboard #5131 queued. Existing coordinator `/tmp/aads-pc-tab-release-coordinator-5130.py` is running and follows same-SHA retries, starts dashboard only after certified API success, and records final outcome in DB. No active API was restarted and no stream was terminated.
+- Still required: API/dashboard same-digest slot certification, five-minute P0/P1 monitoring, production Windows two-chat UI E2E. Do not report the complete browser feature as deployed based solely on this PC update.
+- DB handover key: `pc-agent-1.0.74-distribution-20260923` (AADS/verification). No application-source change or new API deployment was introduced in this follow-up.
+
+## 2026-09-23 채팅별 PC 브라우저 분리 구현 (운영 미배포)
+
+- PRD: `docs/pc-browser-concurrency-prd-20260923.md`.
+- 서버 WS 인증/테넌트/채팅 잠금, PC 전용 target 캡처·입력, 프론트 입력 확인·재연결 구현.
+- Python 27건 + PC 패키지 20건 통과. 실제 Chromium 2프로필 동시 입력/클릭·재연결·닫힌 target 검증 통과. 프론트 타입/컴포넌트 lint/모의 WS 화면 회귀 통과.
+- 운영 Windows PC E2E, 푸시, Blue/Green 배포 및 운영 관측은 미실행. DB 정본 entry_key: `pc-browser-concurrency-20260923` (별도 도구 기록 결과 참조).
+
 # AADS HANDOVER
+
+## 2026-09-22 KST — 쿠팡이츠 단계별 레시피·PC 입력 상태 복구
+
+- 공통 정책 `global-browser-modular-recipe-contract`를 DB에 트랜잭션 반영했다. 모든 scope `*`, L1, priority 7. 검증용 컴파일 provenance에 포함됐으며 실제 다음 채팅 턴 적용과 구분한다. 재현 SQL: `scripts/sql/20260922_modular_browser_recipe_policy.sql`. 롤백은 해당 slug 비활성화.
+- 서버 브라우저의 Access Denied와 PC의 실제 로그인 폼을 각각 관측했다. Akamai 공식 탐지 문서는 헤더·브라우저·행동 탐지를 설명하지만 해당 요청의 차단 규칙은 미확정이다.
+- 쿠팡이츠 Vault 로그인 설정은 navigate 한 단계뿐이었다. 실제 DOM의 `#loginId`, `#password`, submit 버튼을 확인해 입력·클릭을 포함한 네 단계로 수정했다. 암호화 자격증명 값은 변경하지 않았다. 원복은 기존 navigate 단계만 복구한다.
+- PC의 `el.value` 직접 대입은 React 입력 상태를 갱신하지 않아 입력값이 존재해도 비밀번호 필수 오류가 발생했다. native setter로 교정 후 실제 제출은 자격증명 불일치로 거절됐다. 계정 잠금 방지를 위해 추가 제출 중단, CEO에게 Vault 확인 요청. 로그인 성공·매출조회는 미완료다.
+- `app/browser_bridge/service.py`의 PC fill을 native setter + input/change 이벤트 + boolean 확인으로 변경했다. 실패 시 INPUT_FILL_NOT_CONFIRMED, 비밀값 미반환. Node로 controlled-input tracker를 실행한 회귀 6건, 컨테이너 임시 검증 환경에서 기존 bridge/routing 54건 통과. 호스트 확장검사는 의존성 부재·컨테이너 라우팅 가정으로 실패했고 컨테이너에서 재검증했다.
+- 레시피 `coupangeats_01_open_login` v1은 기본 30초 제한으로 재생 실패(런 `8888c1b7-34b8-4822-a3ed-931662c520b5`). 동일 검증 화면을 근거로 v2의 PC 단계 제한을 조정했다. `coupangeats_02_vault_fill` v1은 secret 변수만 저장했으나 PC 입력 상태 결함으로 disabled 처리했다. 수정 배포·재생 검증 전 재활성화 금지. 성공 확인 레시피는 실제 로그인 성공 후 등록한다.
+- DB 정본 키: `AADS / verification / coupangeats-modular-login-20260922`. 이 문서 작성 시점은 커밋·푸시·비동기 배포 전이며 최종 상태는 DB 정본을 조회한다. 기존 dirty 파일은 보존했다.
 
 ## 2026-09-22 KST — 오비스 스마트브라우저 레시피 등록 목록 API
 
@@ -1006,7 +1049,7 @@ API 변경을 함께 반영하는 승인된 경우에는 `bash /root/aads/aads-s
   - `app/services/llmops_eval.py` (new): 5-check rule evaluator (`rule_v1`), idempotent dataset promotion, experiment runner, experiment read.
   - `app/services/llmops_export.py` (new): fail-closed external LangSmith gate + masking policy `mask_v1`.
   - `app/api/ohvis_llmops.py` (new): PRD §5.6 routes under `/api/v1/ohvis/llmops`.
-  - `app/main.py`: router import + `include_router` (2 lines).
+  - `app/main.py`: router import + `include_router` added.
   - `app/services/ohvis_harness.py`: 8 LLMOps tables added to `FOUNDATION_TABLES`, new `llmops` component in harness status (additive; existing fields preserved).
   - `app/services/ohvis_harness_trace.py`: provenance hook — legacy harness writes now derive a deterministic run-scoped `trace_id` from `graph_run_id`.
   - `tests/unit/test_ohvis_llmops.py` (new): 41 tests.
@@ -14386,3 +14429,36 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   base64 19,992자)와 click Input을 실행했고, 신규 단위테스트 4건, Python compile,
   dashboard TypeScript 검사와 ESLint(오류 0)를 통과했다. 배포·화면 캡처·5분 관측 결과는
   DB 핸드오버 정본에 후속 기록한다.
+
+## 2026-09-22 Cafe24 browser direct recovery
+- Recovered preserved runner-79279468 changes in an isolated worktree. Repeated approval_commit_failed was the staged dup_guard 15-line probe/capture duplicate, not detached HEAD or authentication.
+- Shared probe/capture navigation resource owner; authenticated per-browser SSH SOCKS tunnel to deployment alias server-114, loopback only, strict host key checking, bounded startup and cleanup. Requested Cafe24 failure never changes to direct/PC. Server live streams remain isolated ephemeral contexts; snapshot profiles are tenant/session scoped.
+- Browser tasks persist direct/cafe24/auto; auto selects Cafe24 for store.coupangeats.com. Session filtering happens before LIMIT. Recipe registry execution plans retain the route policy; this does not certify sales recipe replay.
+- Validation: focused pytest 53 passed; staged dup_guard passed; real isolated server-browser probe returned Cafe24 egress 114.207.244.86 and CDP frames. Coupang Eats returned Access Denied on both direct and Cafe24. Authentication/sales collection NOT complete.
+- Pending at commit: API release, dashboard release and production chat UI evidence. DB handover key smartbrowser-cafe24-direct-recovery-20260922 tracks actual release state.
+
+## 2026-09-23 — 오비서 신규 등록·조회 정합성 직접 교정
+- 대상: workspace API, upload service, V4.1 UI. 기존 계좌표시 d4ef119a는 운영 e8430f96에 포함됨을 ancestry로 확인. 운영 DB 데이터/스키마 변경 없음.
+- KST 카드·통장 날짜 필터/표시 통일, 출금 순액 부호와 원단위 검증, 입금/출금 분리 엑셀 파싱, 세무 직접등록 매출/매입 귀속, 공급가·세액 복합입력 교정.
+- 수기/업로드 상세는 원천 SSH 장애·최근목록 한도와 독립해 ID+tenant+business로 조회. 업로드 날짜 필터를 SQL LIMIT 전에 적용. workspace 로컬 원장은 내부 limit=None으로 전체 집계/페이지 계산하며 공개 응답은 최대500건 유지(대량 증가 시 SQL 집계/페이징 최적화 필요).
+- 등록 후 필터/페이지 초기화, 조회 실패 시 저장 성공과 조회 실패 구분. 다운로드 양식을 실제 parser 지원 헤더로 정렬. 엑셀 파일내/기존DB 중복 건수 분리.
+- 검증: 관련 unit 88개 및 격리 PostgreSQL integration 8개 통과. 기존 journal legacy integration은 검증DB에만 OBYS_JOURNAL_WRITE_FROZEN=false; 운영 기본 ACCT 정본 동결 유지. 새 integration은 신규등록/재조회/당일/KST/합계/503건페이지/중복/타사업자404/세무분류/소수원 차단 검증.
+- Playwright 격리 DB 실제 HTTP POST201: sales,purchases,cards,accounts,tax-evidence 직접등록→목록·상세, xlsx 최초imported/재등록duplicate, 필터초기화, PC/mobile 캡처, JS오류0. 테스트 멤버십을 주입한 검증서버이며 운영 로그인 검증과 구분.
+- 증거: /tmp/obys-registration-ui-result.json, /root/aads/exports/obys-registration-verified-{desktop,mobile}.png.
+- AAG brief scanner_version 컬럼 오류는 코드·실DB테스트로 대체. 배포 인증/운영 E2E 결과는 후속 DB 핸드오버 obys-registration-integrity-20260923에 기록.
+- 남은 원천 제약: 라일론 날짜없는 매출 원본은 일별 거래로 추정 적재하지 않음. 계좌 인증/자동수집은 계좌 마스터 등록과 별개.
+## 2026-09-23 — gpt6-sol-release-r5-20260923 (R6 code handover)
+
+- Existing implementation review: `model_selector.py` provider-qualified lookup, `call_stream`, direct OpenAI streaming, and Chat Completions request construction are **modified**. `model_registry.py` template constants and Codex display naming are **modified**; registry sync and its policy for inactive models are **maintained**. The other existing functions, routes, and DB contacts in both modules are **maintained**. New helper: `_prepare_openai_chat_request`. No existing declaration is deleted.
+- Explicit `openai:gpt-6-sol` and `codex:gpt-6-sol` retain their provider across missing or inactive registry rows, runtime lists, quota checks, and upstream errors. Unqualified Sol prefers Codex. Startup templates register Codex Sol with its display name. Direct Sol tool requests use `reasoning_effort=none`; reasoning requests omit conflicting sampling fields and use `max_completion_tokens`. Astra's existing tool guard remains.
+- Test helper review: all four local `FakeConn` classes, both local `FakeTask` classes, and the existing local `fake_resume`/`fake_create_task` declarations remain. Added `_StreamingPlaceholderFetch`, `_with_placeholder_fetch`, and `_install_resume_mocks`; changed the four connection call sites and two mock setup call sites. No test assertion, test function, or existing helper was deleted. Two SSH-dependent unit tests now isolate the subprocess or raw-file read at the test boundary.
+- Initial local run: 137 passed, 6 failed. Three selector expectations and one registry expectation assumed the old Sonnet 4.6 alias/template mapping, while `scripts/claude_model_contract.py` maps the default to Sonnet 5 and preserves explicit 4.6. Two unit tests attempted real SSH to `host.docker.internal` and failed DNS resolution. These assertions now check the current version-preserving contract; the SSH calls are mocked in those two tests. The same stale expectations and live SSH calls exist in the HEAD baseline.
+- Final local verification: the three requested test files passed (143 passed, 1 warning) using the repository virtual environment and the test JWT value. AST parsing of five changed Python files, `git diff --check`, `scripts/dup_guard.py --paths`, and cumulative `_precheck_preservation_gate` (`None`, removed symbols `[]`) passed. The official `scripts/run_unit_tests.sh` exited 2 before pytest because no AADS test container image was available in this environment. Formal AI review was not run.
+- This code-only session has no commit, push, release SHA, deploy run ID, production health evidence, five-minute monitoring result, DB handover update, or error-book fix SHA. 승인 후 Runner 빌드 검증 대상.
+
+### R6 host release verification
+- Host canonical `scripts/run_unit_tests.sh` completed successfully: 143 passed, 1 deprecation warning, exit 0. The worker-only image limitation was resolved by verification on the deployment host.
+- Integrated on origin/main 7aae8a86494f; concurrent OBYS changes preserved. Only HANDOVER append conflict required resolution. Subsequent R6 review defects were fixed in model_selector and its regression tests: fill missing Codex backend metadata and preserve configured OpenAI proxy backends. Formal AI review and release certification tracked in DB handover `gpt6-sol-release-r5-20260923`.
+- Direct follow-up review addresses R6 REQUEST_CHANGES. Added missing-metadata Codex success/error/quota and configured OpenAI proxy success/error regressions. No review gate or deployment script changes.
+- Second review corrections: infer a missing backend from the original registry row and preserve execution model/base URL/reasoning metadata; reject unknown configured backends. Correct Sol standard input/output estimates to $2/$10 per million tokens (https://developers.openai.com/api/docs/models/gpt-6-sol, verified 2026-09-23).
+- Third review corrections: use the registered display-model contract for Sol HTTP parameter validation while retaining execution aliases on the wire; pass configured reasoning_effort through the LiteLLM proxy branch. Real MockTransport HTTP-body regressions cover alias+tools and alias+high reasoning; provider dispatch is not mocked for these checks.

@@ -441,7 +441,32 @@ class _LocalAgentPage:
         await self._run_browser_command("browser_click", {"selector": selector})
 
     async def fill(self, selector: str, value: str, **_: Any) -> None:
-        await self._run_browser_command("browser_fill", {"selector": selector, "value": value})
+        # Assigning el.value can update React's value tracker before input fires,
+        # leaving the form state empty even though the DOM displays a password.
+        # Use the native setter and return only booleans, never the secret value.
+        expression = f"""(() => {{
+            const el = document.querySelector({json.dumps(selector)});
+            if (!el || el.disabled || el.readOnly) return {{filled: false}};
+            const proto = el.tagName === 'TEXTAREA'
+                ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+            if (!setter) return {{filled: false}};
+            el.focus();
+            const expected = {json.dumps(value)};
+            setter.call(el, expected);
+            el.dispatchEvent(new Event('input', {{bubbles: true}}));
+            el.dispatchEvent(new Event('change', {{bubbles: true}}));
+            return {{filled: el.value === expected}};
+        }})()"""
+        result = await self._run_browser_command("browser_eval", {"expression": expression})
+        state = result.get("value")
+        if isinstance(state, str):
+            try:
+                state = json.loads(state)
+            except ValueError:
+                state = None
+        if not isinstance(state, dict) or state.get("filled") is not True:
+            raise BrowserBridgeError("browser input did not accept value", error_code="INPUT_FILL_NOT_CONFIRMED")
 
     async def press_key(self, key: str, selector: str = "") -> None:
         await self._run_browser_command("browser_press_key", {"key": key, "selector": selector})

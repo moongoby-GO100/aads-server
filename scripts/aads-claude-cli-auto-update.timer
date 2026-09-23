@@ -1,0 +1,11 @@
+[Unit]
+Description=Check and safely update AADS Claude CLI daily
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 Asia/Seoul
+RandomizedDelaySec=15m
+Persistent=true
+Unit=aads-claude-cli-auto-update.service
+
+[Install]
+WantedBy=timers.target

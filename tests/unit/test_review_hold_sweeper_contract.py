@@ -19,16 +19,19 @@ def test_review_hold_sweeper_stops_batch_without_spending_retry_budget_on_outage
 def test_review_hold_sweeper_persists_then_polls_async_request():
     script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
 
+    existing_lookup = script.index('existing_http_code=$(curl')
+    resume = script.index('/api/v1/review/code-diff/requests/${request_id}/resume')
     enqueue = script.index('/api/v1/review/code-diff/requests"')
-    poll = script.index('/api/v1/review/code-diff/requests/${request_id}')
+    poll = script.index('poll_code=$(curl', enqueue)
     verdict = script.index("verdict=$(jq -r '.verdict // empty'")
 
     assert "review_request_id UUID" in script
-    assert enqueue < poll < verdict
+    assert existing_lookup < resume < enqueue < poll < verdict
+    assert 'elif [[ "$existing_http_code" == "404" ]]; then' in script
+    assert 'if [[ -z "$request_id" ]]; then' in script
     assert "request_status" in script[poll:verdict]
-    assert script[enqueue:verdict].count(
-        "X-Monitor-Key: internal-review-hold-sweeper"
-    ) == 2
+    assert "REVIEW_MONITOR_HEADER='X-Monitor-Key: internal-review-hold-sweeper'" in script
+    assert script[enqueue:verdict].count('-H "$REVIEW_MONITOR_HEADER"') == 2
     assert "retry budget preserved" in script
 
 

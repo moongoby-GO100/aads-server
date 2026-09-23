@@ -2268,6 +2268,7 @@ async def handle_codex_stream(request):
         + "\n"
         + prompt
     )
+    response = None
     try:
         async with _SemaphoreLease(
             _semaphore,
@@ -2338,7 +2339,9 @@ async def handle_codex_stream(request):
                 cmd.extend(["--image", image_path])
             if codex_model:
                 cmd.extend(["-m", codex_model])
-            cmd.append(prompt)
+            # Codex reads '-' from stdin. Never put a chat transcript in argv:
+            # long sessions exceed the OS per-argument limit (E2BIG).
+            cmd.append("-")
             logger.info(
                 "Codex: project=%s cwd=%s model=%s prompt_len=%d tools=%d images=%d cmd_mode=%s mcp_mode=%s sandbox=%s approval=%s add_dirs=%s",
                 codex_project,
@@ -2372,11 +2375,13 @@ async def handle_codex_stream(request):
                 stderr=asyncio.subprocess.PIPE, env=proc_env)
             # AADS-191B: lease registry에 PID/모델 등록
             _lease.attach_proc(proc.pid, codex_model or "")
-            proc.stdin.close()
             full_text = ""
             input_tokens = output_tokens = 0
             result_sent = False
             try:
+                proc.stdin.write(prompt.encode("utf-8"))
+                await proc.stdin.drain()
+                proc.stdin.close()
                 async for raw_line in _iter_ndjson_lines(proc.stdout, timeout_sec=300):
                     try:
                         event = json.loads(raw_line.decode("utf-8", errors="replace"))
@@ -2453,6 +2458,10 @@ async def handle_codex_stream(request):
                     logger.info("Codex stream error write skipped: client already closed session=%s", (session_id or "default")[:8])
             finally:
                 # AADS-191: Codex CLI도 동일한 pipe leak 가능성 차단
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
                 if proc.returncode is None:
                     try:
                         proc.terminate()
@@ -2512,8 +2521,20 @@ async def handle_codex_stream(request):
     except Exception as e:
         if _is_client_disconnect_error(e):
             logger.info("Codex handler client disconnected: session=%s", (session_id or "default")[:8])
-            return web.Response(status=499)
+            return response if response is not None and response.prepared else web.Response(status=499)
         logger.error("Codex handler error: %s", e)
+        if response is not None and response.prepared:
+            # HTTP headers are already sent. Returning a new JSON 500 here
+            # corrupts the chunked stream ("illegal chunk header" on clients).
+            try:
+                await _stream_write(response, json.dumps({
+                    "type": "error", "error_type": "codex_relay_internal_error",
+                    "content": "Codex relay internal error",
+                }).encode() + b"\n")
+                await _stream_write_eof(response)
+            except ConnectionResetError:
+                pass
+            return response
         return web.json_response({"error": str(e)}, status=500)
 
 

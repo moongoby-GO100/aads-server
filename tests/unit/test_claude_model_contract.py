@@ -8,15 +8,46 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from scripts.claude_model_contract import (
-    AADS_MODEL_IDS, EXACT_MODEL_IDS, ModelObservation, resolve_model, runtime_alias, session_key,
+    AADS_MODEL_IDS, CONTRACT_VERSION, EXACT_MODEL_IDS, ModelObservation, resolve_model, runtime_alias, session_key,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_opus_55_uses_pinned_compatible_cli_in_release_image():
+    from scripts.audit_claude_cli_runtime import pinned_artifact
+
+    dockerfile = (ROOT / "Dockerfile").read_text()
+    wrapper = (ROOT / "scripts/claude-oauth-wrapper.sh").read_text()
+    interactive = (ROOT / "scripts/claude-host-wrapper.sh").read_text()
+    version, checksum = pinned_artifact(dockerfile)
+    assert tuple(map(int, version.split("."))) >= (2, 1, 280)
+    assert f"--checksum=sha256:{checksum}" in dockerfile
+    assert f"{version} (Claude Code)" in dockerfile
+    assert 'exec /usr/local/bin/claude-aads "$@"' in wrapper
+    assert 'DIRECT_BIN="${CLAUDE_DIRECT_BIN:-/usr/local/bin/claude-aads}"' in interactive
+    assert "_bundled/claude" not in wrapper
+
+
+def test_direct_execution_sdk_uses_pinned_authenticated_container_cli(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.services import agent_sdk_service as sdk_service
+
+    options = MagicMock()
+    monkeypatch.setattr(sdk_service, "ClaudeAgentOptions", options)
+    monkeypatch.setattr(sdk_service, "HookMatcher", MagicMock())
+    service = sdk_service.AgentSDKService()
+    monkeypatch.setattr(service, "_get_mcp_server", lambda: None)
+
+    service._build_options()
+
+    assert options.call_args.kwargs["cli_path"] == "/app/scripts/claude-oauth-wrapper.sh"
+
+
 @pytest.mark.parametrize("requested,expected", list(AADS_MODEL_IDS.items()) + [
     ("claude-fable-5.1", "claude-fable-5-1"),
-    ("opus", "claude-opus-5"), ("sonnet", "claude-sonnet-5"),
+    ("opus", "claude-opus-5-5"), ("sonnet", "claude-sonnet-5"),
 ])
 def test_settings_to_exact_cli_model(requested, expected):
     assert resolve_model(requested) == expected
@@ -36,11 +67,12 @@ def test_unknown_models_fail_closed(model):
 
 
 def test_resume_isolated_by_model_and_account_but_equivalent_aliases_share():
-    assert session_key("s", "1", "claude-opus") == session_key("s", "1", "claude-opus-5")
+    assert session_key("s", "1", "claude-opus") == session_key("s", "1", "claude-opus-5-5")
+    assert session_key("s", "1", "claude-opus") != session_key("s", "1", "claude-opus-5")
     assert session_key("s", "1", "claude-opus") != session_key("s", "1", "claude-opus-46")
     assert session_key("s", "1", "claude-opus") != session_key("s", "2", "claude-opus")
     assert session_key("s", "0") == "s"
-    assert session_key("s", "0", "claude-opus") == "s@claude-opus-5"
+    assert session_key("s", "0", "claude-opus") == "s@claude-opus-5-5"
 
 
 def test_primary_model_not_first_subagent_usage_and_mismatch_detected():
@@ -115,7 +147,12 @@ async def test_relay_passes_exact_model_to_process_and_reports_receipt(monkeypat
 
     monkeypatch.setattr(relay, "_iter_ndjson_lines", lines)
     request = AsyncMock()
-    request.json.return_value = {"model": requested, "messages_text": "test", "session_id": "test", "model_contract_version": 1}
+    request.json.return_value = {
+        "model": requested,
+        "messages_text": "test",
+        "session_id": "test",
+        "model_contract_version": CONTRACT_VERSION,
+    }
     response = await relay.handle_stream(request)
     assert response.status == 200
     argv = launch.call_args.args

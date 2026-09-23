@@ -29,7 +29,9 @@ export PGPASSWORD
 
 DB_MODE="${DB_MODE:-auto}"
 PG_CONTAINER="${PG_CONTAINER:-aads-postgres}"
-AADS_API_URL="${AADS_API_URL:-http://127.0.0.1:8100}"
+AADS_API_URL="${AADS_API_URL:-http://127.0.0.1}"
+# This is an internal request marker, not a credential. Keep it in one place.
+REVIEW_MONITOR_HEADER='X-Monitor-Key: internal-review-hold-sweeper' # gitleaks:allow
 
 SWEEP_BATCH="${SWEEP_BATCH:-5}"                      # 1회 실행당 재검수 건수
 SWEEP_MAX_RETRY="${SWEEP_MAX_RETRY:-10}"             # 잡당 자동 재검수 상한 (CEO 지시 2026-09-17: 6→10)
@@ -549,33 +551,65 @@ SELECT age_min FROM marked;" 2>/dev/null | tr -d '[:space:]') || expired_age_min
         continue
     fi
 
-    if [[ ! "$request_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
-        request_id=$(cat /proc/sys/kernel/random/uuid)
-        db_exec "UPDATE pipeline_jobs SET review_request_id='${request_id}'::uuid WHERE job_id='${job_id}' AND status='review_hold';"
+    # 이미 접수된 ID는 저장된 payload 자체가 계약이다. pipeline_jobs에서 재구성해
+    # 같은 ID로 POST하면 files_changed/개행이 달라져 409가 난다. 먼저 결과를 조회하고
+    # 필요하면 서버의 저장 payload 재개 엔드포인트만 호출한다.
+    verdict=""; score="0.0"; category=""; issues=""
+    request_status=""; response_detail=""; http_code="000"
+    if [[ "$request_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+        existing_http_code=$(curl -4 -s --http1.1 -o "$resp_file" -w '%{http_code}' \
+            "${AADS_API_URL}/api/v1/review/code-diff/requests/${request_id}" \
+            -H "$REVIEW_MONITOR_HEADER" \
+            --connect-timeout 5 --max-time 15 2>/dev/null) || existing_http_code="000"
+        if [[ "$existing_http_code" == "200" ]]; then
+            request_status=$(jq -r '.status // empty' "$resp_file" 2>/dev/null || true)
+            http_code="202"
+            if [[ "$request_status" == "completed" ]]; then
+                existing_category=$(jq -r '.flag_category // empty' "$resp_file" 2>/dev/null || true)
+                if [[ ",REVIEW_API_UNAVAILABLE,REVIEW_MODEL_NO_RESPONSE,REVIEW_PARSER_FAILURE,REVIEW_TIMEOUT," == *",${existing_category},"* ]]; then
+                    # 완료된 인프라 FLAG는 재검수 대상이다. 변경된 모델 제외 지시를
+                    # 적용하려면 새 ID로 새 payload를 만든다.
+                    request_id=""; request_status=""
+                fi
+            elif [[ "$request_status" == "running" || "$request_status" == "failed" || "$request_status" == "queued" ]]; then
+                http_code=$(curl -4 -s --http1.1 -o "$resp_file" -w '%{http_code}' \
+                    -X POST "${AADS_API_URL}/api/v1/review/code-diff/requests/${request_id}/resume" \
+                    -H "$REVIEW_MONITOR_HEADER" \
+                    --connect-timeout 10 --max-time 20 2>/dev/null) || http_code="000"
+            else
+                http_code="500"
+            fi
+        elif [[ "$existing_http_code" == "404" ]]; then
+            # 첫 enqueue의 HTTP 000: 서버에 요청 자체가 없으므로 새 ID가 안전하다.
+            request_id=""
+        else
+            http_code="$existing_http_code"
+        fi
+    else
+        request_id=""
     fi
 
-    jq -n --rawfile d "$diff_file" --rawfile i "$ins_file" \
-          --arg r "$request_id" --arg j "$job_id" --arg p "$project" \
-          '{request_id:$r, job_id:$j, project:$p, diff:$d, instruction:$i}' > "$payload_file"
-
-    # 요청은 먼저 DB에 저장되고 202로 즉시 반환된다. 이후에는 HTTP 응답 본문이
-    # 아니라 request_id의 DB 상태만 폴링하므로 verdict 응답 유실이 없다.
-    http_code=$(curl -4 -s --http1.1 -o "$resp_file" -w '%{http_code}' \
-        -X POST "${AADS_API_URL}/api/v1/review/code-diff/requests" \
-        -H 'Content-Type: application/json' \
-        -H 'X-Monitor-Key: internal-review-hold-sweeper' \
-        -d @"$payload_file" \
-        --connect-timeout 10 --max-time 20 2>/dev/null) || http_code="000"
+    if [[ -z "$request_id" ]]; then
+        request_id=$(cat /proc/sys/kernel/random/uuid)
+        db_exec "UPDATE pipeline_jobs SET review_request_id='${request_id}'::uuid WHERE job_id='${job_id}' AND status='review_hold';"
+        jq -n --rawfile d "$diff_file" --rawfile i "$ins_file" \
+              --arg r "$request_id" --arg j "$job_id" --arg p "$project" \
+              '{request_id:$r, job_id:$j, project:$p, diff:$d, instruction:$i}' > "$payload_file"
+        http_code=$(curl -4 -s --http1.1 -o "$resp_file" -w '%{http_code}' \
+            -X POST "${AADS_API_URL}/api/v1/review/code-diff/requests" \
+            -H 'Content-Type: application/json' \
+            -H "$REVIEW_MONITOR_HEADER" \
+            -d @"$payload_file" \
+            --connect-timeout 10 --max-time 20 2>/dev/null) || http_code="000"
+    fi
     response_detail=$(jq -r '.detail // .error // empty' "$resp_file" 2>/dev/null | tr '\n' ' ' | head -c 300)
 
-    verdict=""; score="0.0"; category=""; issues=""
-    request_status=""
-    if [[ "$http_code" == "202" ]]; then
+    if [[ "$http_code" == "202" && "$request_status" != "completed" ]]; then
         deadline=$((SECONDS + REVIEW_MAX_TIME))
         while (( SECONDS < deadline )); do
             poll_code=$(curl -4 -s --http1.1 -o "$resp_file" -w '%{http_code}' \
                 "${AADS_API_URL}/api/v1/review/code-diff/requests/${request_id}" \
-                -H 'X-Monitor-Key: internal-review-hold-sweeper' \
+                -H "$REVIEW_MONITOR_HEADER" \
                 --connect-timeout 5 --max-time 15 2>/dev/null) || poll_code="000"
             if [[ "$poll_code" == "200" ]]; then
                 request_status=$(jq -r '.status // empty' "$resp_file" 2>/dev/null || echo "")

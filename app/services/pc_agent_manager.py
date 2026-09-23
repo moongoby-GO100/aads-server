@@ -382,6 +382,13 @@ class PCAgentManager:
             self._timed_out_commands.pop(command_id, None)
             self._results.pop(command_id, None)
 
+    def forget_result(self, command_id: str) -> None:
+        """Release transient live-tab frames after delivery."""
+        result = self._results.pop(command_id, None)
+        self._pending_commands.pop(command_id, None)
+        self._timed_out_commands.pop(command_id, None)
+        self._untrack_command(command_id, result.agent_id if result else "")
+
     def update_heartbeat(self, agent_id: str) -> None:
         """에이전트 하트비트 갱신."""
         conn = self._agents.get(agent_id)

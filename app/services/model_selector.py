@@ -508,8 +508,8 @@ _INTENT_POLICY_MODEL_ALIASES = {
     "claude-sonnet-5": "claude-sonnet-5",
     "claude-haiku-4-5": "claude-haiku",
     "claude-haiku-4-5-20251001": "claude-haiku",
-    "claude-opus-5": "claude-opus",
-    "claude-opus-5": "claude-opus",
+    "claude-opus-5-5": "claude-opus",
+    "claude-opus-5": "claude-opus-5",
     "claude-opus-4-7": "claude-opus",
     "claude-opus-4-6": "claude-opus",
     "claude-opus-4-5": "claude-opus",
@@ -1058,7 +1058,8 @@ _EXTENDED_THINKING_ENABLED = os.getenv("EXTENDED_THINKING_ENABLED", "true").lowe
 
 # 모델별 비용 (per 1M tokens, USD)
 _COST_MAP = {
-    "claude-opus":            (5.0,  25.0),   # Opus 4.7 실제 가격
+    "claude-opus":            (4.0,  20.0),   # 최신 Opus 5.5 공식 가격
+    "claude-opus-5-5":        (4.0,  20.0),   # Opus 5.5 공식 가격
     "claude-opus-46":         (5.0,  25.0),   # Opus 4.6 실제 가격
     "claude-sonnet":          (3.0,  15.0),
     "claude-haiku":           (1.0,   5.0),   # Haiku 4.5 실제 가격
@@ -1220,7 +1221,7 @@ _OPENAI_REASONING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-
 #   1) max_tokens 불가 → max_completion_tokens
 #   2) tools 배열 128개 상한
 #   3) temperature 커스텀값 불가 (기본 1만 허용)
-_OPENAI_NO_CUSTOM_SAMPLING_MODELS = {"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+_OPENAI_NO_CUSTOM_SAMPLING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
 _OPENAI_DIRECT_MAX_TOOLS = 128
 _OPENAI_RESPONSES_TOOL_REQUIRED_MODELS = {"gpt-6-astra"}
 
@@ -1586,6 +1587,7 @@ async def _get_registered_model_row(model_id: str, provider: str | None = None) 
                 continue
             if target_model in _candidate_ids(row):
                 return row
+        return None
     for row in rows:
         if str(row.get("model_id") or "").strip() == target_model:
             return row
@@ -1694,12 +1696,14 @@ async def _stream_direct_openai_provider(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,
     session_id: Optional[str] = None,
+    *,
+    allow_fallback: bool = True,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     request_model = str(metadata.get("execution_model_id") or display_model).strip() or display_model
     base_url = str(metadata.get("execution_base_url") or _DIRECT_PROVIDER_BASE_URLS.get(provider, "")).rstrip("/")
     api_key = await _get_session_user_api_key(session_id, provider) or await _get_direct_provider_api_key(provider)
     if not base_url or not api_key:
-        yield {"type": "error", "content": f"direct provider route unavailable: provider={provider}"}
+        yield {"type": "error", "content": f"direct provider route unavailable: provider={provider} model={display_model}"}
         return
     had_error = False
     async for event in _stream_litellm_openai(
@@ -1712,8 +1716,12 @@ async def _stream_direct_openai_provider(
         api_key=api_key,
         display_model=display_model,
         cost_model=display_model,
+        reasoning_effort=metadata.get("reasoning_effort"),
     ):
         if event.get("type") == "error":
+            if not allow_fallback:
+                yield {**event, "content": f"provider={provider} model={display_model}: {event.get('content', '')}"}
+                return
             had_error = True
             logger.warning(
                 "direct_provider_fallback: provider=%s model=%s error=%s",
@@ -2162,6 +2170,7 @@ async def call_stream(
             logger.warning("empty_model_fallback: DB lookup failed → 'claude-sonnet'")
             model = "claude-sonnet"
     _qualified_provider, _qualified_model = _split_provider_qualified_model(str(model))
+    _provider_pinned = bool(_qualified_provider and not _db_default_applied)
     if _qualified_provider:
         model = _qualified_model
     model = _canonical_codex_model_id(model)
@@ -2170,6 +2179,16 @@ async def call_stream(
         logger.info("registered_model_alias_resolved: '%s' -> '%s'", model, resolved_model)
         model = resolved_model
         _qualified_provider = str((resolved_row or {}).get("provider") or _qualified_provider or "").strip().lower() or None
+    # A qualified model is an exact provider choice. Check its own registry row
+    # before any governance, alias, or generic availability fallback can reroute it.
+    if _provider_pinned and (
+        not resolved_row
+        or resolved_row.get("provider") != _qualified_provider
+        or resolved_row.get("is_active") is not True
+        or resolved_row.get("is_executable") is False
+    ):
+        yield {"type": "error", "content": f"provider={_qualified_provider} model={model}: registered route unavailable"}
+        return
 
     try:
         from app.services.tenant_usage_limits import TenantUsageLimitExceeded, check_tenant_usage_limit
@@ -2196,7 +2215,7 @@ async def call_stream(
     # ── Dynamic Model Cascading (shadow/primary governance routing) ─────────
     _intent = getattr(intent_result, "intent", "")
     _model_locked = getattr(intent_result, "model_locked", False)
-    _explicit_model_requested = bool(_effective_override) or bool(_model_locked)
+    _explicit_model_requested = bool(_effective_override) or bool(_model_locked) or _provider_pinned
     if not _explicit_model_requested:
         _policy_model, _policy_reason = await _resolve_governed_intent_model(
             intent=_intent,
@@ -2231,7 +2250,7 @@ async def call_stream(
         and registered_row
         and (registered_row.get("is_active") or registered_row.get("is_executable"))
     )
-    if runtime_available_models and not _explicit_registered_runtime and not _is_model_runtime_available(model, runtime_available_models):
+    if runtime_available_models and not _provider_pinned and not _explicit_registered_runtime and not _is_model_runtime_available(model, runtime_available_models):
         fallback_model = await _fallback_for_unavailable_model(
             model,
             runtime_available_models,
@@ -2245,8 +2264,25 @@ async def call_stream(
             model = resolved_model
         registered_row = resolved_row or await _get_registered_model_row(model)
     route_metadata = _route_metadata(registered_row)
+    if (
+        _provider_pinned
+        and _qualified_provider in {"openai", "codex"}
+        and model in _CODEX_MODELS
+        and not route_metadata
+    ):
+        # Fill only missing backend metadata. Preserve configured proxy routes,
+        # and send older Codex rows through the provider-pinned error handling.
+        configured_metadata = _coerce_metadata((registered_row or {}).get("metadata"))
+        if str(configured_metadata.get("execution_backend") or "").strip():
+            yield {"type": "error", "content": f"provider={_qualified_provider} model={model}: unsupported execution backend"}
+            return
+        configured_metadata = {
+            **configured_metadata,
+            "execution_backend": "codex_cli" if _qualified_provider == "codex" else "openai_compatible_direct",
+        }
+        route_metadata = _route_metadata({**registered_row, "metadata": configured_metadata})
     model_is_known_runtime = bool(runtime_available_models) and _is_model_runtime_available(model, runtime_available_models)
-    if not registered_row and not route_metadata and not model_is_known_runtime:
+    if not _provider_pinned and not registered_row and not route_metadata and not model_is_known_runtime:
         logger.warning(f"unknown_model_fallback: '{model}' → 'claude-sonnet'")
         model = "claude-sonnet"
         resolved_model, resolved_row = await _resolve_registered_model_alias(model)
@@ -2297,6 +2333,7 @@ async def call_stream(
                 messages,
                 tools=tools,
                 session_id=session_id,
+                **({"allow_fallback": False} if _provider_pinned else {}),
             ):
                 yield event
             return
@@ -2310,6 +2347,8 @@ async def call_stream(
                 session_id=session_id,
                 display_model=model,
                 cost_model=model,
+                **({"reasoning_effort": route_metadata["reasoning_effort"]}
+                   if route_metadata.get("reasoning_effort") is not None else {}),
             ):
                 yield event
             return
@@ -2327,6 +2366,9 @@ async def call_stream(
         elif backend == "codex_cli":
             _cx_blocked, _cx_detail = await _codex_quota_exhausted()
             if _cx_blocked:
+                if _provider_pinned:
+                    yield {"type": "error", "content": f"provider=codex model={model}: quota unavailable: {_cx_detail}"}
+                    return
                 logger.warning("codex_preflight_skip: 주간 한도 소진(%s) — Claude 경로로 우회", _cx_detail)
                 async for event in _stream_cli_relay(
                     _codex_to_claude_equivalent(model), system_prompt, messages,
@@ -2366,6 +2408,9 @@ async def call_stream(
                 )
                 logger.warning("codex_empty_response model=%s — 폴백으로 전환", model)
             if not _codex_had_error:
+                return
+            if _provider_pinned:
+                yield {"type": "error", "content": f"provider=codex model={model}: {_codex_error_content}"}
                 return
             if _codex_is_tool_error:
                 logger.warning(f"codex_tool_error_no_model_fallback: {model} — {_codex_error_content[:120]}")
@@ -3297,6 +3342,28 @@ async def _stream_litellm_anthropic(
     }
 
 
+def _prepare_openai_chat_request(
+    body: Dict[str, Any], model: str, *, direct: bool, requested_effort: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Apply the documented GPT-6 Sol Chat Completions parameter rules."""
+    if model != "gpt-6-sol":
+        if direct and model in _OPENAI_REASONING_MODELS:
+            body["max_completion_tokens"] = body.pop("max_tokens")
+        return body
+    effort = requested_effort if requested_effort is not None else ("none" if body.get("tools") else "low")
+    if effort not in {"none", "low", "medium", "high", "xhigh", "max"}:
+        raise ValueError(f"{model}: unsupported reasoning_effort={effort!r}")
+    if body.get("tools") and effort != "none":
+        raise ValueError(f"{model}: Chat Completions tools require reasoning_effort=none")
+    body["reasoning_effort"] = effort
+    if direct:
+        body["max_completion_tokens"] = body.pop("max_tokens")
+    if effort != "none":
+        for key in ("temperature", "top_p", "top_logprobs", "logprobs"):
+            body.pop(key, None)
+    return body
+
+
 async def _stream_litellm_openai(
     model: str,
     system_prompt: str,
@@ -3308,6 +3375,7 @@ async def _stream_litellm_openai(
     api_key: Optional[str] = None,
     display_model: Optional[str] = None,
     cost_model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Gemini 등 비-Claude 모델 → LiteLLM /chat/completions (OpenAI 호환).
     멀티턴 Agentic Loop + 병렬 도구 실행 지원 (AADS-202).
@@ -3400,14 +3468,19 @@ async def _stream_litellm_openai(
                 # OpenAI 직결(api.openai.com)일 때만 제약을 맞춘다. LiteLLM 프록시
                 # 경유는 프록시가 번역하므로 건드리지 않는다.
                 _openai_direct = "api.openai.com" in (route_base_url or "")
-                if _openai_direct and model in _OPENAI_REASONING_MODELS:
-                    req_body["max_completion_tokens"] = req_body.pop("max_tokens")
                 if model not in _OPENAI_NO_CUSTOM_SAMPLING_MODELS:
                     req_body["temperature"] = _ctx_temperature.get(0.2)
                 if _oai_tools:
                     req_body["tools"] = (
                         _oai_tools[:_OPENAI_DIRECT_MAX_TOOLS] if _openai_direct else _oai_tools
                     )
+                try:
+                    req_body = _prepare_openai_chat_request(
+                        req_body, display_model or model, direct=_openai_direct, requested_effort=reasoning_effort,
+                    )
+                except ValueError as exc:
+                    yield {"type": "error", "content": str(exc)}
+                    return
 
                 async with client.stream(
                     "POST",

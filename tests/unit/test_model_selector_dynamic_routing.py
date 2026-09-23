@@ -5,9 +5,306 @@ import json
 import time
 
 import pytest
+import httpx
 
 from app.services import model_selector
 from app.services.intent_router import IntentResult, get_model_for_override
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected,providers,available,expected", [
+    ("gpt-6-sol", ("openai", "codex"), {"gpt-6-sol"}, "codex"),
+    ("codex:gpt-6-sol", ("openai", "codex"), set(), "codex"),
+    ("openai:gpt-6-sol", ("openai", "codex"), set(), "openai"),
+    ("openai:gpt-6-sol", ("openai",), {"other"}, "openai"),
+    ("gpt-6-sol", ("openai",), {"gpt-6-sol"}, "openai"),
+    ("openai:gpt-6-sol", ("codex",), {"gpt-6-sol"}, None),
+    ("openai:gpt-6-sol", ("codex",), set(), None),
+])
+async def test_sol_provider_choice_survives_runtime_and_registry_fallback(
+    monkeypatch, selected, providers, available, expected,
+):
+    calls = []
+    rows = [
+        {"provider": provider, "model_id": "gpt-6-sol", "is_active": True,
+         "metadata": {"execution_backend": "codex_cli" if provider == "codex" else "openai_compatible_direct"}}
+        for provider in providers
+    ]
+
+    async def registered(active_only=False):
+        return rows
+
+    async def models():
+        return available
+
+    async def key(*_args, **_kwargs):
+        return ""
+
+    async def codex(model, *_args, **_kwargs):
+        calls.append(("codex", model))
+        yield {"type": "delta", "content": "ok"}
+        yield {"type": "done", "model": model}
+
+    async def direct(model, provider, *_args, **_kwargs):
+        calls.append((provider, model))
+        yield {"type": "done", "model": model}
+
+    monkeypatch.setattr(model_selector, "_get_db_key", key)
+    monkeypatch.setattr(model_selector, "_list_registered_models", registered)
+    monkeypatch.setattr(model_selector, "get_available_model_ids", models)
+    monkeypatch.setattr(model_selector, "_stream_codex_relay", codex)
+    monkeypatch.setattr(model_selector, "_stream_direct_openai_provider", direct)
+    events = [event async for event in model_selector.call_stream(
+        IntentResult(intent="code_modify", model=selected, use_tools=False, tool_group=""),
+        "system", [{"role": "user", "content": "hello"}], model_override=selected,
+    )]
+    assert calls == ([(expected, "gpt-6-sol")] if expected else [])
+    assert events[-1]["type"] == ("done" if expected else "error")
+    if not expected:
+        assert "provider=openai model=gpt-6-sol" in events[-1]["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("available", [set(), {"gpt-6-sol"}])
+async def test_inactive_openai_sol_never_uses_active_codex(monkeypatch, available):
+    async def registered(active_only=False):
+        return [
+            {"provider": "codex", "model_id": "gpt-6-sol", "is_active": True},
+            {"provider": "openai", "model_id": "gpt-6-sol", "is_active": False},
+        ]
+
+    monkeypatch.setattr(model_selector, "_list_registered_models", registered)
+    async def models():
+        return available
+    monkeypatch.setattr(model_selector, "get_available_model_ids", models)
+    events = [event async for event in model_selector.call_stream(
+        IntentResult(intent="code_modify", model="openai:gpt-6-sol", use_tools=False, tool_group=""),
+        "system", [{"role": "user", "content": "hello"}], model_override="openai:gpt-6-sol",
+    )]
+    assert events == [{"type": "error", "content": "provider=openai model=gpt-6-sol: registered route unavailable"}]
+
+
+@pytest.mark.asyncio
+async def test_explicit_openai_sol_upstream_error_keeps_prefix_without_banner(monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(400, text="bad request")
+
+    client = httpx.AsyncClient
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(model_selector.httpx, "AsyncClient", lambda **kwargs: client(transport=transport, **kwargs))
+
+    async def no_user_key(*_args):
+        return ""
+
+    async def api_key(*_args):
+        return "test-key"
+
+    monkeypatch.setattr(model_selector, "_get_session_user_api_key", no_user_key)
+    monkeypatch.setattr(model_selector, "_get_direct_provider_api_key", api_key)
+    events = [event async for event in model_selector._stream_direct_openai_provider(
+        "gpt-6-sol", "openai", {}, "system", [{"role": "user", "content": "hello"}],
+        allow_fallback=False,
+    )]
+    assert requests[0]["reasoning_effort"] == "low"
+    assert requests[0]["max_completion_tokens"] > 0
+    assert "max_tokens" not in requests[0]
+    assert all(key not in requests[0] for key in ("temperature", "top_p", "top_logprobs", "logprobs"))
+    assert events == [{"type": "error", "content": "provider=openai model=gpt-6-sol: LiteLLM gpt-6-sol HTTP 400: bad request"}]
+
+
+@pytest.mark.asyncio
+async def test_unqualified_openai_error_keeps_codex_banner(monkeypatch):
+    async def no_user_key(*_args):
+        return ""
+
+    async def api_key(*_args):
+        return "test-key"
+
+    async def upstream(*_args, **_kwargs):
+        yield {"type": "error", "content": "upstream failed"}
+
+    async def fallback_model():
+        return "gpt-5.5"
+
+    async def codex(*_args, **_kwargs):
+        yield {"type": "done", "model": "gpt-5.5"}
+
+    monkeypatch.setattr(model_selector, "_get_session_user_api_key", no_user_key)
+    monkeypatch.setattr(model_selector, "_get_direct_provider_api_key", api_key)
+    monkeypatch.setattr(model_selector, "_stream_litellm_openai", upstream)
+    monkeypatch.setattr(model_selector, "_get_codex_cli_fallback_model_from_db", fallback_model)
+    monkeypatch.setattr(model_selector, "_stream_codex_relay", codex)
+    events = [event async for event in model_selector._stream_direct_openai_provider(
+        "gpt-6-sol", "openai", {}, "system", [{"role": "user", "content": "hello"}],
+    )]
+    assert "Codex CLI gpt-5.5 전환" in events[0]["content"]
+    assert events[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("execution_model", ["gpt-6-sol", "sol-proxy-alias"])
+async def test_sol_direct_tools_use_none_effort(monkeypatch, execution_model):
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+
+    client = httpx.AsyncClient
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(model_selector.httpx, "AsyncClient", lambda **kwargs: client(transport=transport, **kwargs))
+    events = [event async for event in model_selector._stream_litellm_openai(
+        execution_model, "system", [{"role": "user", "content": "hello"}],
+        tools=[{"name": "ping", "input_schema": {"type": "object"}}],
+        base_url="https://api.openai.com/v1", api_key="test-key",
+        display_model="gpt-6-sol",
+    )]
+    assert requests[0]["reasoning_effort"] == "none"
+    assert requests[0]["max_completion_tokens"] > 0
+    assert requests[0]["tools"][0]["function"]["name"] == "ping"
+    assert requests[0]["model"] == execution_model
+    assert events[-1]["type"] == "done"
+
+
+def test_sol_reasoning_tools_are_rejected_before_http():
+    body = {"model": "gpt-6-sol", "max_tokens": 100, "tools": [{"type": "function"}]}
+    with pytest.raises(ValueError, match="reasoning_effort=none"):
+        model_selector._prepare_openai_chat_request(body, "gpt-6-sol", direct=True, requested_effort="high")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tools,effort,expected", [
+    ([], "high", "high"),
+    ([{"name": "ping", "input_schema": {"type": "object"}}], None, "none"),
+])
+async def test_sol_proxy_alias_builds_valid_http_body(monkeypatch, tools, effort, expected):
+    captured = []
+
+    async def registered(active_only=False):
+        return [{"provider": "openai", "model_id": "gpt-6-sol", "is_active": True,
+                 "metadata": {"execution_backend": "litellm_proxy", "execution_model_id": "sol-alias",
+                              "reasoning_effort": effort}}]
+
+    def respond(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(model_selector.httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport, **kwargs))
+    monkeypatch.setattr(model_selector, "_list_registered_models", registered)
+    events = [event async for event in model_selector.call_stream(
+        IntentResult(intent="code_modify", model="openai:gpt-6-sol", use_tools=bool(tools), tool_group=""),
+        "system", [{"role": "user", "content": "hello"}], tools=tools, model_override="openai:gpt-6-sol",
+    )]
+    assert len(captured) == 1
+    assert captured[0]["model"] == "sol-alias"
+    assert captured[0]["reasoning_effort"] == expected
+    if tools:
+        assert captured[0]["tools"][0]["function"]["name"] == "ping"
+    else:
+        assert all(k not in captured[0] for k in ("temperature", "top_p", "logprobs", "top_logprobs"))
+    assert events[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", [None, "unsupported_backend"])
+async def test_explicit_openai_sol_with_older_registry_row_uses_api_route(monkeypatch, backend):
+    calls = []
+
+    async def registered(active_only=False):
+        return [{"provider": "openai", "model_id": "gpt-6-sol", "is_active": True,
+                 "execution_model_id": "gpt-6-sol-snapshot",
+                 "metadata": {"execution_backend": backend, "execution_model_id": "old-snapshot",
+                              "execution_base_url": "https://configured.invalid/v1", "reasoning_effort": "high"}}]
+
+    async def models():
+        return set()
+
+    async def direct(model, provider, metadata, *_args, **_kwargs):
+        calls.append((model, provider, metadata["execution_backend"]))
+        assert metadata["execution_model_id"] == "gpt-6-sol-snapshot"
+        assert metadata["execution_base_url"] == "https://configured.invalid/v1"
+        assert metadata["reasoning_effort"] == "high"
+        yield {"type": "done", "model": model}
+
+    monkeypatch.setattr(model_selector, "_list_registered_models", registered)
+    monkeypatch.setattr(model_selector, "get_available_model_ids", models)
+    monkeypatch.setattr(model_selector, "_stream_direct_openai_provider", direct)
+    events = [event async for event in model_selector.call_stream(
+        IntentResult(intent="code_modify", model="openai:gpt-6-sol", use_tools=False, tool_group=""),
+        "system", [{"role": "user", "content": "hello"}], model_override="openai:gpt-6-sol",
+    )]
+    if backend:
+        assert calls == []
+        assert events == [{"type": "error", "content": "provider=openai model=gpt-6-sol: unsupported execution backend"}]
+    else:
+        assert calls == [("gpt-6-sol", "openai", "openai_compatible_direct")]
+        assert events[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata", [{}, {"execution_backend": "codex_cli"}])
+async def test_explicit_codex_sol_quota_error_stays_on_codex(monkeypatch, metadata):
+    async def registered(active_only=False):
+        return [{"provider": "codex", "model_id": "gpt-6-sol", "is_active": True,
+                 "metadata": metadata}]
+
+    async def quota():
+        return True, "exhausted"
+
+    monkeypatch.setattr(model_selector, "_list_registered_models", registered)
+    monkeypatch.setattr(model_selector, "_codex_quota_exhausted", quota)
+    events = [event async for event in model_selector.call_stream(
+        IntentResult(intent="code_modify", model="codex:gpt-6-sol", use_tools=False, tool_group=""),
+        "system", [{"role": "user", "content": "hello"}], model_override="codex:gpt-6-sol",
+    )]
+    assert events == [{"type": "error", "content": "provider=codex model=gpt-6-sol: quota unavailable: exhausted"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider,backend,outcome", [
+    ("codex", "", "error"),
+    ("codex", "", "success"),
+    ("openai", "litellm_proxy", "error"),
+    ("openai", "litellm_proxy", "success"),
+])
+async def test_pinned_sol_preserves_configured_backend_and_errors(monkeypatch, provider, backend, outcome):
+    calls = []
+
+    async def registered(active_only=False):
+        return [{"provider": provider, "model_id": "gpt-6-sol", "is_active": True,
+                 "metadata": {"execution_backend": backend}}]
+
+    async def stream(model, *_args, **_kwargs):
+        calls.append(model)
+        if outcome == "error":
+            yield {"type": "error", "content": "upstream unavailable"}
+        else:
+            yield {"type": "delta", "content": "ok"}
+            yield {"type": "done", "model": model}
+
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("pinned request switched its configured provider/backend")
+        yield {}
+
+    monkeypatch.setattr(model_selector, "_list_registered_models", registered)
+    monkeypatch.setattr(model_selector, "_stream_codex_relay", stream if provider == "codex" else forbidden)
+    monkeypatch.setattr(model_selector, "_stream_litellm_openai", stream if backend == "litellm_proxy" else forbidden)
+    monkeypatch.setattr(model_selector, "_stream_direct_openai_provider", forbidden)
+    monkeypatch.setattr(model_selector, "_stream_cli_relay", forbidden)
+    selected = f"{provider}:gpt-6-sol"
+    events = [event async for event in model_selector.call_stream(
+        IntentResult(intent="code_modify", model=selected, use_tools=False, tool_group=""),
+        "system", [{"role": "user", "content": "hello"}], model_override=selected,
+    )]
+    assert calls == ["gpt-6-sol"]
+    assert events[-1]["type"] == ("error" if outcome == "error" else "done")
+    if outcome == "error":
+        assert "upstream unavailable" in events[-1]["content"]
 
 
 @pytest.fixture(autouse=True)
@@ -29,9 +326,10 @@ def _codex_quota_headroom(monkeypatch):
 
 
 def test_anthropic_registry_model_ids_are_normalized_to_runtime_aliases():
-    assert model_selector._to_anthropic_runtime_alias("claude-opus-5") == "claude-opus"
+    assert model_selector._to_anthropic_runtime_alias("claude-opus-5-5") == "claude-opus"
+    assert model_selector._to_anthropic_runtime_alias("claude-opus-5") == "claude-opus-5"
     assert model_selector._to_anthropic_runtime_alias("claude-opus-4-8") == "claude-opus-4-8"
-    assert model_selector._to_anthropic_runtime_alias("claude-sonnet-4-6") == "claude-sonnet"
+    assert model_selector._to_anthropic_runtime_alias("claude-sonnet-4-6") == "claude-sonnet-4-6"
     assert model_selector._to_anthropic_runtime_alias("claude-haiku-4-5-20251001") == "claude-haiku"
     assert model_selector._to_anthropic_runtime_alias("claude-fable-5") == "claude-fable-5"
     assert model_selector._to_anthropic_runtime_alias("claude-fable-5-1") == "claude-fable-5-1"
@@ -785,8 +1083,8 @@ async def test_resolve_registered_model_alias_uses_registry_metadata(monkeypatch
 
     resolved_model, resolved_row = await model_selector._resolve_registered_model_alias("claude-sonnet-4-6")
 
-    assert resolved_model == "claude-sonnet"
-    assert resolved_row["provider"] == "anthropic"
+    assert resolved_model == "claude-sonnet-4-6"
+    assert resolved_row is None  # The current Sonnet template must not capture an explicit older version.
 
 
 @pytest.mark.asyncio
@@ -809,8 +1107,8 @@ async def test_resolve_registered_model_alias_uses_execution_model_id(monkeypatc
 
     resolved_model, resolved_row = await model_selector._resolve_registered_model_alias("claude-sonnet-4-6")
 
-    assert resolved_model == "claude-sonnet"
-    assert resolved_row["provider"] == "anthropic"
+    assert resolved_model == "claude-sonnet-4-6"
+    assert resolved_row is None  # Stale execution metadata cannot remap an explicit version.
 
 
 @pytest.mark.asyncio

@@ -105,6 +105,31 @@ def test_runner_scripts_stay_byte_identical():
     assert _read_script("pipeline-runner.sh") == _read_script("pipeline-runner.sh.local")
 
 
+def test_isolated_static_preserves_legacy_preflight_and_routes_aads_only():
+    script = _read_script("pipeline-runner.sh")
+    legacy = _extract_function(script, "deploy_git_preflight")
+    isolated = _extract_function(script, "deploy_isolated_git_preflight")
+    assert 'local job_id="$1" project="$2" session_id="$3" main_workdir="$4"' in legacy
+    assert "merge --ff-only origin/main" in legacy
+    assert "deploy_preflight_file_conflict" in legacy
+    assert 'if [[ "$project" == "AADS" ]]; then\n        if ! deploy_isolated_git_preflight' in script
+    assert 'elif ! deploy_git_preflight "$job_id" "$project" "$session_id" "$main_workdir"' in script
+    assert "worktree list --porcelain" in isolated
+    assert "status --porcelain --untracked-files=all" in isolated
+    assert '"$head_sha" != "$approved_sha"' in isolated
+    assert "merge-base --is-ancestor" in isolated
+    assert "deploy_isolated_stale_approval" in isolated
+
+
+def test_isolated_static_requires_reviewed_sha_at_remote_before_release():
+    script = _read_script("pipeline-runner.sh")
+    assert '"$project" == "AADS" && "$push_state" != "fast_forward"' in script
+    assert "deploy_isolated_push_state" in script
+    assert '"$pushed_remote_sha" != "$expected_sha"' in script
+    assert "deploy_isolated_remote_changed" in script
+    assert 'if [[ "$project" != "AADS" ]] && ! ensure_approved_job_worktree' in script
+
+
 # ── 2) 실제 동작 ────────────────────────────────────────────────────────
 
 
@@ -241,3 +266,88 @@ def test_behind_zero_skips_ff_entirely(fn_file, tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert "DEPLOY_PREFLIGHT_FFONLY_SYNC" not in proc.stderr
     assert "DEPLOY_PREFLIGHT_OK" in proc.stderr
+
+
+@pytest.fixture
+def isolated_case(tmp_path):
+    remote, main = _build_remote_and_main(tmp_path)
+    job_id = f"runner-isolated-{uuid.uuid4().hex[:12]}"
+    worktree = Path(f"/tmp/aads-wt-{job_id}")
+    _git(main, "worktree", "add", "--detach", str(worktree), "HEAD")
+    _git(worktree, "config", "user.email", "runner@aads.local")
+    _git(worktree, "config", "user.name", "AADS Runner Test")
+    (worktree / "release.txt").write_text("approved\n", encoding="utf-8")
+    _git(worktree, "add", "-A")
+    _git(worktree, "commit", "-m", "approved release")
+    approved_sha = _git(worktree, "rev-parse", "HEAD")
+    try:
+        yield remote, main, worktree, job_id, approved_sha
+    finally:
+        _git(main, "worktree", "remove", "--force", str(worktree))
+
+
+@pytest.fixture(scope="module")
+def isolated_fn_file(tmp_path_factory):
+    script = _read_script("pipeline-runner.sh")
+    body = STUBS + _extract_function(script, "deploy_isolated_git_preflight")
+    path = tmp_path_factory.mktemp("isolated_preflight_fn") / "fn.sh"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def _call_isolated(fn_file, main, worktree, job_id, approved_sha, fail_out):
+    cmd = (
+        f'source "{fn_file}"; '
+        f'FAIL_JOB_OUT={str(fail_out)!r} '
+        f'deploy_isolated_git_preflight "{job_id}" "AADS" "sess-1" '
+        f'"{main}" "{worktree}" "{approved_sha}"'
+    )
+    return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
+
+
+def test_isolated_clean_approved_worktree_ignores_dirty_shared_main(isolated_case, isolated_fn_file, tmp_path):
+    _remote, main, worktree, job_id, sha = isolated_case
+    (main / "base.txt").write_text("shared dirty\n", encoding="utf-8")
+    fail_out = tmp_path / "fail.txt"
+    proc = _call_isolated(isolated_fn_file, main, worktree, job_id, sha, fail_out)
+    assert proc.returncode == 0, proc.stderr
+    assert not fail_out.exists()
+    assert (main / "base.txt").read_text() == "shared dirty\n"
+
+
+@pytest.mark.parametrize("case", ["wrong_sha", "dirty_release", "remote_changed", "fetch_failure"])
+def test_isolated_fails_closed(isolated_case, isolated_fn_file, tmp_path, case):
+    remote, main, worktree, job_id, sha = isolated_case
+    if case == "wrong_sha":
+        sha = _git(main, "rev-parse", "HEAD")
+    elif case == "dirty_release":
+        (worktree / "dirty.txt").write_text("uncommitted\n", encoding="utf-8")
+    elif case == "remote_changed":
+        _advance_origin(remote, tmp_path, "release.txt", "conflicting\n")
+    else:
+        _git(main, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
+    fail_out = tmp_path / "fail.txt"
+    proc = _call_isolated(isolated_fn_file, main, worktree, job_id, sha, fail_out)
+    assert proc.returncode == 1, proc.stderr
+    assert fail_out.exists()
+    assert fail_out.read_text().strip() == {
+        "wrong_sha": "deploy_isolated_sha_or_dirty",
+        "dirty_release": "deploy_isolated_sha_or_dirty",
+        "remote_changed": "deploy_isolated_stale_approval",
+        "fetch_failure": "deploy_fetch_failed",
+    }[case]
+
+
+def test_isolated_rejects_unregistered_clone(isolated_case, isolated_fn_file, tmp_path):
+    remote, main, _worktree, _job_id, _sha = isolated_case
+    fake_job_id = f"runner-fake-{uuid.uuid4().hex[:12]}"
+    fake_path = Path(f"/tmp/aads-wt-{fake_job_id}")
+    subprocess.run(["git", "clone", str(remote), str(fake_path)], check=True, capture_output=True)
+    try:
+        fail_out = tmp_path / "fake_fail.txt"
+        fake_sha = _git(fake_path, "rev-parse", "HEAD")
+        proc = _call_isolated(isolated_fn_file, main, fake_path, fake_job_id, fake_sha, fail_out)
+        assert proc.returncode == 1, proc.stderr
+        assert fail_out.read_text().strip() == "deploy_worktree_not_isolated"
+    finally:
+        shutil.rmtree(fake_path)

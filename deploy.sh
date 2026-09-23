@@ -2718,6 +2718,20 @@ case "$MODE" in
             record_deploy "failed" "$MODE" "${NEW_CONTAINER} health check failed"
             exit 1
         fi
+        # The SDK bundle can lag behind the model contract. Check the actual
+        # candidate container before routing chat traffic to it; source-level
+        # pins alone cannot catch a release built from a divergent branch.
+        CANDIDATE_CLAUDE_VERSION="$(docker exec "$NEW_CONTAINER" /usr/local/bin/claude-aads --version 2>/dev/null || true)"
+        if ! python3 -c 'import re, sys; m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+) \(Claude Code\)", sys.argv[1]); sys.exit(0 if m and tuple(map(int, m.groups())) >= (2, 1, 280) else 1)' "$CANDIDATE_CLAUDE_VERSION"; then
+            echo "[deploy.sh] ❌ ${NEW_CONTAINER} Claude CLI 호환성 실패: ${CANDIDATE_CLAUDE_VERSION:-missing} — 롤백"
+            docker stop "$NEW_CONTAINER" 2>/dev/null || true
+            docker rm "$NEW_CONTAINER" 2>/dev/null || true
+            notify "❌ Blue-Green 실패: ${NEW_CONTAINER} Claude CLI 2.1.280+ 없음"
+            deploy_phase_end "candidate_health" "failed" "${NEW_CONTAINER} incompatible Claude CLI: ${CANDIDATE_CLAUDE_VERSION:-missing}"
+            record_deploy "failed" "$MODE" "${NEW_CONTAINER} incompatible Claude CLI: ${CANDIDATE_CLAUDE_VERSION:-missing}"
+            exit 1
+        fi
+        echo "[deploy.sh] ✅ ${NEW_CONTAINER} Claude CLI 호환성 확인: ${CANDIDATE_CLAUDE_VERSION}"
         deploy_phase_end "candidate_health" "success" "elapsed=${BG_ELAPSED}s"
 
         # 전환 전 현재 슬롯은 계속 신규 트래픽을 받으므로 여기서 기다려도

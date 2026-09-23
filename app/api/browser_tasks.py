@@ -75,12 +75,14 @@ class BrowserTaskCreate(BaseModel):
     target_url: str = Field(min_length=1, max_length=2000)
     session_id: str | None = None
     current_step: str = Field(default="", max_length=500)
+    egress_policy: str = Field(default="direct", pattern="^(direct|cafe24|auto)$")
     correlation_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class BrowserAccessCheckIn(BaseModel):
     work_key: str = Field(default="access-check", min_length=1, max_length=120)
     target_url: str = Field(min_length=1, max_length=2000)
+    egress_policy: str = Field(default="direct", pattern="^(direct|cafe24|auto)$")
 
 
 class BrowserTaskStatusPatch(BaseModel):
@@ -155,9 +157,10 @@ async def _display(payload: dict[str, Any], context: TenantContext) -> dict[str,
 async def api_list_browser_tasks(
     status: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
+    session_id: str | None = None,
     context: TenantContext = Depends(require_viewer),
 ) -> dict[str, Any]:
-    tasks = await list_browser_tasks(tenant_id=_tenant_id(context), status=status, limit=limit)
+    tasks = await list_browser_tasks(tenant_id=_tenant_id(context), status=status, limit=limit, session_id=session_id)
     displayed = [await _display(task, context) for task in tasks]
     return {"tasks": displayed, "count": len(displayed)}
 
@@ -175,6 +178,7 @@ async def api_create_browser_task(
         "work_key": body.work_key,
         "target_url": body.target_url,
         "current_step": body.current_step,
+        "egress_policy": body.egress_policy,
     }
     correlation_id = body.correlation_id or f"browser-create:{session_id}"
     intent = ChannelRouter().route_directive(
@@ -194,6 +198,7 @@ async def api_create_browser_task(
         target_url=body.target_url,
         session_id=session_id,
         current_step=body.current_step,
+        egress_policy=body.egress_policy,
         channel_audit={
             "decision": "accepted",
             "reason_code": "TRUSTED_COMMAND_CHANNEL",
@@ -215,7 +220,9 @@ async def api_check_browser_target_access(
     body: BrowserAccessCheckIn,
     context: TenantContext = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return await check_browser_target_access(work_key=body.work_key, target_url=body.target_url)
+    return await check_browser_target_access(
+        work_key=body.work_key, target_url=body.target_url, egress_policy=body.egress_policy,
+    )
 
 
 @router.get("/{task_id}")
@@ -307,7 +314,11 @@ async def api_browser_task_live_stream(websocket: WebSocket, task_id: str) -> No
     from app.services.browser_live_control import BrowserLiveControlError, ServerBrowserLiveSession
 
     await websocket.accept()
-    live = ServerBrowserLiveSession(target_url=str(task.get("target_url") or ""))
+    live = ServerBrowserLiveSession(
+        target_url=str(task.get("target_url") or ""),
+        work_key=str(task.get("work_key") or ""),
+        egress_policy=str(task.get("egress_policy") or "direct"),
+    )
     try:
         state = await live.start()
         await record_browser_task_step(
@@ -317,9 +328,11 @@ async def api_browser_task_live_stream(websocket: WebSocket, task_id: str) -> No
             narration="서버 브라우저 실시간 화면을 연결했습니다.",
             guide="프레임을 클릭하거나 입력 도구로 직접 조작할 수 있습니다.",
             route="server_cdp_screencast",
-            extra={"action": "live_stream_started", "runtime": "server_cdp"},
+            extra={"action": "live_stream_started", "runtime": "server_cdp",
+                   **{key: value for key, value in live.egress_contract.items() if key != "proxy"}},
         )
-        await websocket.send_json({"type": "ready", **state, "width": live.width, "height": live.height})
+        await websocket.send_json({"type": "ready", **state, "width": live.width, "height": live.height,
+                                   **{key: value for key, value in live.egress_contract.items() if key != "proxy"}})
 
         async def send_frames() -> None:
             last_persisted = 0.0
@@ -344,7 +357,8 @@ async def api_browser_task_live_stream(websocket: WebSocket, task_id: str) -> No
                         current_url=str(state_now.get("url") or ""),
                         page_title=str(state_now.get("title") or ""),
                         current_step="server CDP live stream",
-                        metadata={"source": "server_cdp_screencast", "interactive": True},
+                        metadata={"source": "server_cdp_screencast", "interactive": True,
+                                  **{key: value for key, value in live.egress_contract.items() if key != "proxy"}},
                     )
                     last_persisted = now
 

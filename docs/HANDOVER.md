@@ -742,3 +742,14 @@ grep 결과 inline image block 직접 조립 지점 3곳:
 | `_to_openai_image_content` | **신규** | Anthropic image/document block → `image_url` 변환 헬퍼 |
 
 기존 호출자는 전부 `images` 미지정 → 수정 0건. `ANTHROPIC_API_KEY` 신규 참조 없음(R-AUTH).
+
+- OBYS-CARD-MASTER-20260923: Resumed the approved direct API implementation in isolated worktree `/tmp/obys-card-master-20260923`. Card transactions now resolve `cd_ctrade` against company-scoped current `카드거래처.json` (`cd_trade`, `nm_trade`, `id_sa`). SQL masks PAN before returning it; ambiguous codes remain unresolved. Workspace card rows display registered card name and masked number. Read-only source verification: 89 master codes, 75 masked numbers, no conflicting codes; all 2,646 card transactions match, 2,643 have masked numbers, total remains 833,546,911 KRW. Unit suite: 49 passed; diff check passed. Source data unchanged. Daily sales normalization and bank-account master linkage remain blocked on verified original identifiers. Commit/push/bluegreen/browser verification tracked in DB handover `obys-card-master-direct-20260923`; this file does not assert deployment completion.
+
+- OBYS-CARD-MASTER-UI-20260923: Public Playwright exposed a stale `configs.cards` column override after the API card identity join. Updated `mockup-v4-1.html` card columns and hierarchy to render card name and masked number while keeping voucher IDs distinct from approval IDs. Inline JavaScript syntax verified; final browser and release results are recorded in DB handover `obys-card-master-direct-20260923`.
+
+## 2026-09-23 — 오비서 진아서버 M1 독립 실행 기반
+- PRD v1.2 §18: systemd+uvicorn factory, 로컬 3종 DB fail-closed 설정/readiness, 영속 원장 파일 경로, 비특권 systemd 템플릿 및 staging 스크립트 구현.
+- 관련 pytest 62 passed. 확장 85 passed/1 baseline failure(Compose PC Agent 기본 ID 문자열). Python/bash 구문 및 diff 검사 통과.
+- 진아서버 합성 DB 후보 실제 기동, 200/503 장애주입·복구, 원본 쓰기권한 차단, PC/모바일 로그인 페이지 캡처 확인. 실제 로그인/자료 이전 검증 아님.
+- 운영 DNS/기존 서비스/실제 DB 미변경. M1 proxy/TLS/전환기와 M2 인증, M3 실제 자료/수집, M4~M6 검수/전환은 미완료.
+- DB 정본 entry_key: obys-jinah-m1-systemd-20260923 (AADS / verification).

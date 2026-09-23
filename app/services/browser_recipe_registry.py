@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from app.core.db_pool import get_pool
 from app.services.browser_permission_policy import classify_browser_action, mask_sensitive_value
-from app.services.managed_browser import normalize_origin, normalize_work_key
+from app.services.managed_browser import egress_for_target, normalize_egress_policy, normalize_origin, normalize_work_key
 
 ALLOWED_RUNTIMES = {"pc_agent", "self_hosted_playwright", "external_sandbox", "auto"}
 ALLOWED_QUEUE_STRATEGIES = {"fifo", "priority", "latest_only", "reject_on_conflict"}
@@ -145,7 +145,11 @@ def normalize_recipe_payload(payload: dict[str, Any]) -> dict[str, Any]:
     service = str(payload.get("service") or recipe_id.split(".")[0]).strip()
     runtime_policy = _json_dict(payload.get("runtime_policy"))
     resource_policy = normalize_resource_policy(payload.get("resource_policy") or runtime_policy)
-    runtime_policy = {**runtime_policy, "runtime": resource_policy["runtime"]}
+    runtime_policy = {
+        **runtime_policy,
+        "runtime": resource_policy["runtime"],
+        "egress_policy": normalize_egress_policy(runtime_policy.get("egress_policy") or "direct"),
+    }
     return {
         "recipe_id": recipe_id,
         "version": version,
@@ -298,6 +302,9 @@ def build_runtime_execution_plan(recipe: dict[str, Any], *, target_url: str = ""
     return {
         "configured_runtime": configured_runtime,
         "primary_runtime": primary_runtime,
+        **{key: value for key, value in egress_for_target(
+            normalized["runtime_policy"]["egress_policy"], candidate_target
+        ).items() if key != "proxy"},
         "fallback_runtimes": fallback_runtimes[:4],
         "self_hosted_eligible": self_hosted_eligible,
         "pc_agent_required": pc_agent_required,

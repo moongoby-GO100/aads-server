@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import inspect
 from uuid import uuid4
 
 import pytest
@@ -9,6 +10,42 @@ from app.api import aag as aag_api
 from app.services import aag_query_v2, aag_tools
 from app.services.aag_governance import ScannerPrincipal
 from scripts.aag_snapshot_push import _v2_statement
+
+
+@pytest.mark.asyncio
+async def test_authoritative_read_joins_scan_run_for_analyzer_metadata(monkeypatch):
+    """Snapshot content is deduplicated; scanner identity belongs to the run."""
+    statements = []
+
+    class Connection:
+        async def fetchrow(self, statement, *_args):
+            statements.append(statement)
+            return None
+
+    class Acquire:
+        async def __aenter__(self):
+            return Connection()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class Pool:
+        def acquire(self):
+            return Acquire()
+
+    monkeypatch.setattr(aag_query_v2, "get_pool", lambda: Pool())
+    assert await aag_query_v2.load_authoritative_snapshot(project="AADS") is None
+
+    # Both session tools and the public latest endpoint must use the run that
+    # published the pointer, not fields absent from the immutable graph table.
+    api_source = inspect.getsource(aag_api.get_latest_snapshot_v2)
+    for source in (statements[0], api_source):
+        assert "JOIN aag_scan_runs r" in source
+        assert "r.id=p.run_id" in source
+        assert "r.resolved_commit_sha=p.resolved_commit_sha" in source
+        for field in ("scanner_version", "ruleset_digest", "scan_scope_digest"):
+            assert f"r.{field}" in source
+            assert f"s.{field}" not in source
 
 
 def _snapshot(snapshot_id=None):

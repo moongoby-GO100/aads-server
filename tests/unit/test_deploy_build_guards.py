@@ -33,6 +33,16 @@ def test_deploy_script_has_p1_build_preflight_guards():
     assert "AADS_DEPLOY_CONTEXT_MANIFEST_TOP_N" in script
 
 
+def test_candidate_claude_cli_version_is_checked_before_cutover():
+    script = DEPLOY_SCRIPT.read_text()
+
+    check_at = script.index('CANDIDATE_CLAUDE_VERSION="$(docker exec "$NEW_CONTAINER" /usr/local/bin/claude-aads --version')
+    cutover_at = script.index('deploy_phase_start "nginx_cutover"', check_at)
+    assert check_at < cutover_at
+    assert 'tuple(map(int, m.groups())) >= (2, 1, 280)' in script
+    assert 'deploy_phase_end "candidate_health" "failed" "${NEW_CONTAINER} incompatible Claude CLI:' in script
+
+
 def test_requirements_scripts_exist_and_are_safe_by_default():
     compile_script = COMPILE_SCRIPT.read_text()
     prune_script = PRUNE_SCRIPT.read_text()

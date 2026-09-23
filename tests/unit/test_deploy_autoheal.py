@@ -176,6 +176,7 @@ def _disk_full_env(tmp_path, db_ok: bool, run_id: str = "4242") -> str:
     return (
         f'export AADS_DEPLOY_AUTOHEAL_STATE_DIR="{state_dir}"\n'
         'export AADS_RELEASE_SHA="qsha"\n'
+        'export DEPLOY_RUN_ID="4241"\n'
         'export AADS_DEPLOY_AUTOHEAL_DRYRUN=1\n'
         'export AADS_DEPLOY_AUTOHEAL_COOLDOWN_SEC=0\n'
         'export DEPLOY_CURRENT_PHASE="preflight"\n'
@@ -187,7 +188,12 @@ def _disk_full_env(tmp_path, db_ok: bool, run_id: str = "4242") -> str:
         'prune_old_release_images() { :; }\n'
         'require_build_disk_free() { return 0; }\n'
         f'deploy_db_available() {{ return {0 if db_ok else 1}; }}\n'
-        f'deploy_db_exec() {{ echo "{run_id if db_ok else ""}"; }}\n'
+        + ('deploy_db_exec() {\n'
+         ' case "$1" in\n'
+         f'  *"SELECT status FROM"*) echo "running" ;;\n'
+         f'  *) echo "{run_id if db_ok else ""}" ;;\n'
+         ' esac\n'
+         '}\n')
     )
 
 
@@ -199,10 +205,10 @@ def test_queue_registration_failure_blocks_retry(tmp_path):
 
 
 def test_queue_registration_success_launches_retry(tmp_path):
-    """큐 등록이 성공하면 교정 후 재개까지 이어진다(DRYRUN 이므로 실제 기동은 없음)."""
+    """동일 릴리스 active successor가 확인되면 추가 worker 없이 인계한다."""
     out = _call("deploy_autoheal_on_exit", "1", env_prefix=_disk_full_env(tmp_path, db_ok=True))
-    assert "재개 큐 등록: deploy_run_id=4242" in out
-    assert "재개 기동 완료" in out
+    assert "active successor 확인: deploy_run_id=4242" in out
+    assert "successor 인계 확인" in out
 
 
 def test_worktree_is_never_mutated():
@@ -404,7 +410,8 @@ def _sql_capture_env(sql_log) -> str:
         'audit_control() { :; }\n'
         'sql_escape() { echo "$1"; }\n'
         'deploy_db_available() { return 0; }\n'
-        f'deploy_db_exec() {{ printf "%s\\n" "$1" >> "{sql_log}"; }}\n'
+        f'deploy_db_exec() {{ printf "%s\\n" "$1" >> "{sql_log}"; '
+        'case "$1" in *"RETURNING id"*) echo 4242 ;; esac; }\n'
     )
 
 
@@ -414,11 +421,17 @@ def test_dirty_reroute_is_recorded_as_superseded_not_blocked(tmp_path):
     2026-09-16 11:20 KST 실측: 최근 3일 deploy_runs blocked 27건이 전부
     preflight/dirty_worktree 였고 후속 런은 모두 success 였다. 원본 행이
     blocked 로 남으면 대시보드에서 실패한 배포로 읽힌다.
+
+    단, 원장을 바꾸는 것은 실행 가능한 후속 run 이 확인된 경우에만 해야
+    한다(AI 리뷰 P1) — AUTOHEAL_SUCCESSOR_RUN_ID 가 비어 있으면 세탁하지
+    않는다는 것은 아래 test_dirty_reroute_without_verified_successor_keeps_ledger
+    가 별도로 검증한다.
     """
     sql_log = tmp_path / "sql.log"
     _call(
         'AUTOHEAL_LAST_REMEDIATION="route_clean_worktree"; '
-        'autoheal_record_outcome "retry_launched" "dirty_worktree" "release=abc"',
+        'AUTOHEAL_SUCCESSOR_RUN_ID=4243; AADS_RELEASE_SHA=abc1234; '
+        'autoheal_record_outcome "retry_launched" "dirty_worktree" "release=abc1234"',
         env_prefix=_sql_capture_env(sql_log),
     )
     sql = sql_log.read_text(encoding="utf-8")
@@ -427,6 +440,31 @@ def test_dirty_reroute_is_recorded_as_superseded_not_blocked(tmp_path):
     # 진짜로 막힌 배포를 덮지 않도록 조건이 좁혀져 있어야 한다.
     assert "AND status = 'blocked'" in sql
     assert "AND phase = 'preflight'" in sql
+    # 후속 run 확인 조건은 워커의 실제 claim 조건과 같아야 한다(AI 리뷰 P1).
+    assert "successor.id = 4243" in sql
+    assert "successor.release_sha = 'abc1234'" in sql
+    assert "successor.status IN ('running','verifying','syncing_standby')" in sql
+    assert "successor.component" in sql
+    assert "successor.target_env" in sql
+    assert "autoheal successor deploy_run_id=4243" in sql
+
+
+def test_dirty_reroute_without_verified_successor_keeps_ledger(tmp_path):
+    """후속 run 이 확인되지 않았으면(AUTOHEAL_SUCCESSOR_RUN_ID 미설정) 원장을 세탁하지 않는다.
+
+    f19c3491 (반려됨)의 실패 원인 — 후속 run 존재를 확인하지 않고도 outcome
+    문자열만으로 superseded 를 찍었다. queue-empty/미확인 성공을 그대로
+    믿으면 실제로는 아무도 재개하지 않았는데 대시보드는 '전환됨'으로 읽는다.
+    """
+    sql_log = tmp_path / "sql.log"
+    _call(
+        'AUTOHEAL_LAST_REMEDIATION="route_clean_worktree"; '
+        'autoheal_record_outcome "retry_launched" "dirty_worktree" "release=abc1234"',
+        env_prefix=_sql_capture_env(sql_log),
+    )
+    sql = sql_log.read_text(encoding="utf-8")
+    assert "superseded_by_autoheal_reroute" not in sql
+    assert "SET status = 'superseded'" not in sql
 
 
 def test_non_dirty_retry_keeps_original_status(tmp_path):
@@ -434,12 +472,377 @@ def test_non_dirty_retry_keeps_original_status(tmp_path):
     sql_log = tmp_path / "sql.log"
     _call(
         'AUTOHEAL_LAST_REMEDIATION="disk_reclaim"; '
-        'autoheal_record_outcome "retry_launched" "disk_full" "release=abc"',
+        'AUTOHEAL_SUCCESSOR_RUN_ID=4243; AADS_RELEASE_SHA=abc1234; '
+        'autoheal_record_outcome "retry_launched" "disk_full" "release=abc1234"',
         env_prefix=_sql_capture_env(sql_log),
     )
     sql = sql_log.read_text(encoding="utf-8")
     assert "superseded_by_autoheal_reroute" not in sql
     assert "CONCAT_WS" in sql
+
+
+def test_drain_ledger_changes_only_with_verified_successor(tmp_path):
+    """target_drain_busy 재개도 dirty_worktree 와 같은 검증 없이는 원장을 바꾸면 안 된다."""
+    sql_log = tmp_path / "sql.log"
+    env = _sql_capture_env(sql_log) + 'AADS_RELEASE_SHA="abc1234"\n'
+    _call(
+        'autoheal_record_outcome "retry_launched" "target_drain_busy" "release=abc1234"',
+        env_prefix=env,
+    )
+    assert "superseded_by_autoheal_drain_retry" not in sql_log.read_text()
+    _call(
+        'AUTOHEAL_SUCCESSOR_RUN_ID=4243; '
+        'autoheal_record_outcome "retry_launched" "target_drain_busy" "release=abc1234"',
+        env_prefix=env,
+    )
+    sql = sql_log.read_text()
+    assert "superseded_by_autoheal_drain_retry" in sql
+    assert "AND phase = 'target_slot_drain'" in sql
+    assert "successor.release_sha = 'abc1234'" in sql
+    assert "successor.id = 4243" in sql
+    assert "successor.status IN ('running','verifying','syncing_standby')" in sql
+
+
+def test_queue_successor_lookup_matches_worker_claim_conditions(tmp_path):
+    """후속 run 인정 조건은 scripts/start_aads_deploy_queue_worker.sh 의 실제 claim 조건과 같아야 한다.
+
+    f19c3491 (반려됨)은 status IN ('queued','running','verifying','syncing_standby')
+    만으로 후속을 인정했다. 그 워커는 queued 행 중 auto_start=TRUE AND
+    phase='queued_for_deploy' 인 것만 집는다 — auto_start=false 수동 대기 행은
+    아무도 자동으로 집지 않으므로 successor 로 인정하면 원장이 거짓말을 한다.
+    """
+    sql_log = tmp_path / "sql.log"
+    env = (
+        'AADS_RELEASE_SHA=abc1234\nDEPLOY_RUN_ID=4242\n'
+        'sql_escape() { echo "$1"; }\n'
+        'deploy_db_available() { return 0; }\n'
+        f'deploy_db_exec() {{ printf "%s\\n" "$1" >> "{sql_log}"; '
+        'case "$1" in *"status=\'queued\'"*) echo 4243 ;; esac; }\n'
+    )
+    _call('queue_autoheal_retry_request target_drain_busy', env_prefix=env)
+    sql = sql_log.read_text()
+    assert "phase='queued_for_deploy'" in sql
+    assert "COALESCE(auto_start, FALSE)=TRUE" in sql
+    assert "status IN ('running','verifying','syncing_standby')" in sql
+    # 워커가 claim 하지 않는 조건(auto_start 무관 queued 전부)이 섞여 들어가면
+    # 안 된다 — 이것이 반려된 버전의 정확한 결함이었다.
+    assert "status IN ('queued','running','verifying','syncing_standby')" not in sql
+
+
+def test_queue_requires_insert_or_active_successor():
+    env = (
+        'AADS_RELEASE_SHA=abc1234\nDEPLOY_RUN_ID=4242\n'
+        'audit_control() { :; }\n'
+        'sql_escape() { echo "$1"; }\n'
+        'deploy_db_available() { return 0; }\n'
+        'deploy_db_exec() { :; }\n'
+    )
+    out = _call('queue_autoheal_retry_request target_drain_busy || echo QUEUE_FAILED; '
+                'echo "SUCCESSOR=${AUTOHEAL_SUCCESSOR_RUN_ID:-none}"', env_prefix=env)
+    assert "QUEUE_FAILED" in out
+    assert "SUCCESSOR=none" in out
+
+
+def test_queue_accepts_verified_active_successor():
+    env = (
+        'AADS_RELEASE_SHA=abc1234\nDEPLOY_RUN_ID=4242\n'
+        'sql_escape() { echo "$1"; }\n'
+        'deploy_db_available() { return 0; }\n'
+        'deploy_db_exec() { echo 4243; }\n'
+    )
+    out = _call('queue_autoheal_retry_request target_drain_busy; '
+                'echo "SUCCESSOR=$AUTOHEAL_SUCCESSOR_RUN_ID"', env_prefix=env)
+    assert "SUCCESSOR=4243" in out
+
+
+def test_queue_rejects_original_run_id():
+    env = (
+        'AADS_RELEASE_SHA=abc1234\nDEPLOY_RUN_ID=4242\n'
+        'sql_escape() { echo "$1"; }\n'
+        'deploy_db_available() { return 0; }\n'
+        'deploy_db_exec() { echo 4242; }\n'
+    )
+    out = _call(
+        'queue_autoheal_retry_request target_drain_busy || echo QUEUE_FAILED',
+        env_prefix=env,
+    )
+    assert "QUEUE_FAILED" in out
+
+
+def test_existing_eligible_queued_successor_is_reused():
+    env = (
+        'AADS_RELEASE_SHA=abc1234\nDEPLOY_RUN_ID=4242\n'
+        'sql_escape() { echo "$1"; }\n'
+        'deploy_db_available() { return 0; }\n'
+        'deploy_db_exec() {\n'
+        ' case "$1" in\n'
+        '  *"status IN (\'running\',\'verifying\',\'syncing_standby\')"*) ;;\n'
+        '  *"status=\'queued\'"*) echo 4243 ;;\n'
+        ' esac\n'
+        '}\n'
+    )
+    out = _call(
+        'queue_autoheal_retry_request target_drain_busy; '
+        'echo "$AUTOHEAL_SUCCESSOR_KIND|$AUTOHEAL_SUCCESSOR_RUN_ID"',
+        env_prefix=env,
+    )
+    assert out.endswith("queued|4243")
+
+
+def test_insert_race_rechecks_active_before_queued(tmp_path):
+    counter = tmp_path / "calls"
+    env = (
+        'AADS_RELEASE_SHA=abc1234\nDEPLOY_RUN_ID=4242\n'
+        f'COUNTER="{counter}"\n'
+        'sql_escape() { echo "$1"; }\n'
+        'deploy_db_available() { return 0; }\n'
+        'deploy_db_exec() {\n'
+        ' local n=0; [[ -f "$COUNTER" ]] && n="$(cat "$COUNTER")"; '
+        ' n=$((n + 1)); echo "$n" > "$COUNTER";\n'
+        ' if [[ "$n" == 4 ]]; then echo 4243; fi\n'
+        '}\n'
+    )
+    out = _call(
+        'queue_autoheal_retry_request target_drain_busy; '
+        'echo "$AUTOHEAL_SUCCESSOR_KIND|$AUTOHEAL_SUCCESSOR_RUN_ID"',
+        env_prefix=env,
+    )
+    assert out.endswith("active|4243")
+
+
+@pytest.mark.parametrize("status", ["running", "verifying", "syncing_standby"])
+def test_exact_active_successor_status_is_confirmed(status):
+    env = (
+        'AADS_RELEASE_SHA=abc1234\nDEPLOY_RUN_ID=4242\n'
+        'sql_escape() { echo "$1"; }\n'
+        'deploy_db_available() { return 0; }\n'
+        'deploy_db_exec() {\n'
+        f' case "$1" in *"SELECT status FROM"*) echo {status} ;; *) echo 4243 ;; esac\n'
+        '}\n'
+    )
+    out = _call(
+        'queue_autoheal_retry_request target_drain_busy; '
+        'autoheal_confirm_successor_active && echo CONFIRMED',
+        env_prefix=env,
+    )
+    assert "CONFIRMED" in out
+
+
+def test_active_successor_skips_worker_launch(tmp_path):
+    marker = tmp_path / "launched"
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    launcher = scripts_dir / "start_aads_deploy_queue_worker.sh"
+    launcher.write_text(f"#!/bin/bash\ntouch '{marker}'\n")
+    launcher.chmod(0o755)
+    out = _call(
+        'AUTOHEAL_SUCCESSOR_KIND=active; launch_autoheal_worker target_drain_busy; echo SKIPPED',
+        env_prefix=f'COMPOSE_DIR="{tmp_path}"\nSTATE_DIR="{tmp_path}"\n',
+    )
+    assert "SKIPPED" in out
+    assert not marker.exists()
+
+
+def test_already_running_parent_with_queued_successor_never_supersedes(tmp_path):
+    sql_log = tmp_path / "sql.log"
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    launcher = scripts_dir / "start_aads_deploy_queue_worker.sh"
+    launcher.write_text("#!/bin/bash\necho 'deploy queue worker already running'\nexit 0\n")
+    launcher.chmod(0o755)
+    env = (
+        f'export AADS_DEPLOY_AUTOHEAL_STATE_DIR="{tmp_path / "autoheal"}"\n'
+        'export AADS_RELEASE_SHA=abc1234\nexport DEPLOY_RUN_ID=4242\n'
+        'export AADS_DEPLOY_AUTOHEAL_DRYRUN=0\nexport AADS_DEPLOY_AUTOHEAL_COOLDOWN_SEC=0\n'
+        'export AADS_DEPLOY_AUTOHEAL_CLAIM_POLLS=1\n'
+        'export DEPLOY_CURRENT_PHASE=preflight\n'
+        'export DEPLOY_LAST_FAIL_ERROR="dirty worktree"\n'
+        f'COMPOSE_DIR="{tmp_path}"\nSTATE_DIR="{tmp_path}"\n'
+        'audit_control() { :; }\nsql_escape() { echo "$1"; }\n'
+        'deploy_db_available() { return 0; }\n'
+        f'deploy_db_exec() {{ printf "%s\\n" "$1" >> "{sql_log}"; '
+        'case "$1" in '
+        '*"SELECT status FROM"*) echo queued ;; '
+        '*"status IN (\'running\',\'verifying\',\'syncing_standby\')"*) ;; '
+        '*"status=\'queued\'"*) echo 4243 ;; '
+        'esac; }\n'
+    )
+    out = _call("deploy_autoheal_on_exit", "1", env_prefix=env)
+    sql = sql_log.read_text()
+    assert "deploy queue worker already running" in out
+    assert "successor active 확인 실패" in out
+    assert "SET status = 'superseded'" not in sql
+
+
+def test_successor_failure_during_atomic_update_keeps_original(tmp_path):
+    sql_log = tmp_path / "sql.log"
+    env = (
+        'DEPLOY_RUN_ID=4242\nAADS_RELEASE_SHA=abc1234\n'
+        'audit_control() { :; }\nsql_escape() { echo "$1"; }\n'
+        'deploy_db_available() { return 0; }\n'
+        f'deploy_db_exec() {{ printf "%s\\n" "$1" >> "{sql_log}"; }}\n'
+    )
+    out = _call(
+        'AUTOHEAL_LAST_REMEDIATION=route_clean_worktree; '
+        'AUTOHEAL_SUCCESSOR_RUN_ID=4243; '
+        'autoheal_record_outcome retry_launched dirty_worktree release=abc1234 '
+        '|| echo LEDGER_TRANSITION_FAILED',
+        env_prefix=env,
+    )
+    assert "LEDGER_TRANSITION_FAILED" in out
+    assert "원장 보정:" not in out
+    assert "successor.status IN ('running','verifying','syncing_standby')" in sql_log.read_text()
+
+
+def test_worker_failure_does_not_supersede_blocked_run(tmp_path):
+    """워커 launcher 를 찾지 못하면(재개 실패) blocked 행을 superseded 로 세탁하면 안 된다."""
+    sql_log = tmp_path / "sql.log"
+    env = (
+        _sql_capture_env(sql_log)
+        + 'AADS_RELEASE_SHA=abc1234\nAUTOHEAL_SUCCESSOR_RUN_ID=4243\n'
+        + 'COMPOSE_DIR=/no/such/dir\nSTATE_DIR=/no/such/dir\n'
+    )
+    out = _call(
+        'launch_autoheal_worker target_drain_busy || '
+        'autoheal_record_outcome "escalated" "target_drain_busy" "worker failed"',
+        env_prefix=env,
+    )
+    assert "큐 워커 런처를 찾을 수 없다" in out
+    assert "escalated/target_drain_busy" in out
+    assert "superseded_by_autoheal_drain_retry" not in sql_log.read_text()
+
+
+def test_drain_worker_failure_preserves_original_ledger(tmp_path):
+    """전체 경로: 큐 등록은 성공(후속 확인)해도 워커 기동 자체가 실패하면 원장은 그대로다."""
+    sql_log = tmp_path / "sql.log"
+    env = (
+        f'export AADS_DEPLOY_AUTOHEAL_STATE_DIR="{tmp_path}"\n'
+        'AADS_RELEASE_SHA=abc1234\nDEPLOY_RUN_ID=4242\n'
+        'AADS_DEPLOY_AUTOHEAL_DRAIN_WAIT=0\n'
+        'DEPLOY_CURRENT_PHASE=target_slot_drain\n'
+        'DEPLOY_LAST_FAIL_ERROR="target slot active streams=1"\n'
+        'COMPOSE_DIR=/no/such/dir\nSTATE_DIR=/no/such/dir\n'
+        'audit_control() { :; }\n'
+        'sql_escape() { echo "$1"; }\n'
+        'deploy_db_available() { return 0; }\n'
+        f'deploy_db_exec() {{ printf "%s\\n" "$1" >> "{sql_log}"; echo 4243; }}\n'
+    )
+    out = _call('deploy_autoheal_on_exit 1', env_prefix=env)
+    assert "재개 워커 기동 실패" in out
+    sql = sql_log.read_text()
+    assert "superseded_by_autoheal_drain_retry" not in sql
+    assert "autoheal escalated" in sql
+
+
+def test_worker_queue_empty_success_requires_db_confirmation(tmp_path):
+    """queue empty/exit 0 자체는 성공 근거가 아니며 후속 DB 확인이 필수다.
+
+    scripts/start_aads_deploy_queue_worker.sh 는 claim 할 행이 없어도 성공
+    종료한다(host drain 이 아니라 로컬에서 아무 것도 하지 않았다는 뜻). exit
+    code 만 보면 이것도 성공으로 오인해, 아무도 재개하지 않았는데
+    retry_launched 를 기록하는 상태 세탁이 된다(AI 리뷰 P1).
+    """
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    launcher = scripts_dir / "start_aads_deploy_queue_worker.sh"
+    launcher.write_text("#!/bin/bash\necho 'deploy queue empty'\nexit 0\n")
+    launcher.chmod(0o755)
+    env = (
+        f'COMPOSE_DIR="{tmp_path}"\nSTATE_DIR="{tmp_path}"\nAADS_DEPLOY_AUTOHEAL_DRYRUN=0\n'
+        f'AADS_RELEASE_SHA=abc1234\nexport AADS_DEPLOY_AUTOHEAL_STATE_DIR="{tmp_path / "autoheal"}"\n'
+    )
+    out = _call('launch_autoheal_worker target_drain_busy && echo LAUNCH_RETURNED', env_prefix=env)
+    assert "LAUNCH_RETURNED" in out
+    assert "queue empty" in out
+
+
+def test_queue_empty_worker_success_does_not_supersede_ledger(tmp_path):
+    """전체 경로: DB 상 후속을 확인했어도 워커가 실제로는 아무것도 못 집으면(queue empty) 원장은 그대로다.
+
+    큐 등록과 워커 기동 사이의 경합(배치 병합 등)으로 확인했던 후속 run 이
+    사라질 수 있다. queue_autoheal_retry_request 의 사전 확인만 믿지 않고
+    워커의 실제 출력까지 확인해야 한다.
+    """
+    sql_log = tmp_path / "sql.log"
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    launcher = scripts_dir / "start_aads_deploy_queue_worker.sh"
+    launcher.write_text("#!/bin/bash\necho 'deploy queue empty'\nexit 0\n")
+    launcher.chmod(0o755)
+    env = (
+        f'export AADS_DEPLOY_AUTOHEAL_STATE_DIR="{tmp_path / "autoheal"}"\n'
+        'export AADS_RELEASE_SHA=abc1234\nexport DEPLOY_RUN_ID=4242\n'
+        'export AADS_DEPLOY_AUTOHEAL_DRYRUN=0\nexport AADS_DEPLOY_AUTOHEAL_COOLDOWN_SEC=0\n'
+        'export DEPLOY_CURRENT_PHASE=target_slot_drain\n'
+        'export DEPLOY_LAST_FAIL_ERROR="target slot active streams=1"\n'
+        'export AADS_DEPLOY_AUTOHEAL_DRAIN_WAIT=0\n'
+        f'COMPOSE_DIR="{tmp_path}"\nSTATE_DIR="{tmp_path}"\n'
+        'audit_control() { :; }\n'
+        'sql_escape() { echo "$1"; }\n'
+        'deploy_db_available() { return 0; }\n'
+        f'deploy_db_exec() {{ printf "%s\\n" "$1" >> "{sql_log}"; '
+        'case "$1" in '
+        '*"status IN (\'running\',\'verifying\',\'syncing_standby\')"*) ;; '
+        '*"status=\'queued\'"*) echo 4243 ;; '
+        '*"SELECT status FROM"*) echo queued ;; '
+        'esac; }\n'
+        'export AADS_DEPLOY_AUTOHEAL_CLAIM_POLLS=1\n'
+    )
+    out = _call("deploy_autoheal_on_exit", "1", env_prefix=env)
+    assert "queue empty" in out
+    assert "successor active 확인 실패" in out
+    sql = sql_log.read_text()
+    assert "superseded_by_autoheal_drain_retry" not in sql
+    assert "autoheal escalated" in sql
+
+
+def test_cooldown_is_scoped_to_release_and_cause(tmp_path):
+    """쿨다운은 릴리스 SHA·원인 조합별로 격리된다 — 다른 조합은 서로 막지 않는다."""
+    env = f'export AADS_DEPLOY_AUTOHEAL_STATE_DIR="{tmp_path}"\n'
+    out = _call(
+        'AADS_RELEASE_SHA=abc1234; autoheal_cooldown_stamp target_drain_busy; '
+        'autoheal_cooldown_ok target_drain_busy || echo SAME_BLOCKED; '
+        'autoheal_cooldown_ok dirty_worktree && echo OTHER_CAUSE_OK; '
+        'AADS_RELEASE_SHA=def5678; autoheal_cooldown_ok target_drain_busy && echo OTHER_SHA_OK',
+        env_prefix=env,
+    )
+    assert "SAME_BLOCKED" in out
+    assert "OTHER_CAUSE_OK" in out
+    assert "OTHER_SHA_OK" in out
+    assert (tmp_path / "abc1234.target_drain_busy.last_launch_epoch").exists()
+
+
+def test_autoheal_key_rejects_unsafe_filename_inputs(tmp_path):
+    """SHA/원인이 파일명·SQL 로 그대로 쓰이므로 경로 이탈 문자는 거부해야 한다."""
+    env = f'export AADS_DEPLOY_AUTOHEAL_STATE_DIR="{tmp_path}"\n'
+    out = _call(
+        'AADS_RELEASE_SHA="../escape"; autoheal_cooldown_stamp target_drain_busy || echo BAD_SHA; '
+        'AADS_RELEASE_SHA=abc1234; autoheal_cooldown_stamp "../cause" || echo BAD_CAUSE; '
+        'autoheal_cooldown_stamp target_drain_busy && echo SAFE',
+        env_prefix=env,
+    )
+    assert all(item in out for item in ("BAD_SHA", "BAD_CAUSE", "SAFE"))
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "abc1234.target_drain_busy.last_launch_epoch"
+    ]
+
+
+def test_invalid_release_key_escalates_instead_of_retrying(tmp_path):
+    """AADS_RELEASE_SHA 가 유효하지 않으면(예: unknown) 재시도 대신 즉시 에스컬레이션한다."""
+    state_dir = tmp_path / "autoheal"
+    state_dir.mkdir()
+    env_prefix = (
+        f'export AADS_DEPLOY_AUTOHEAL_STATE_DIR="{state_dir}"\n'
+        'export AADS_RELEASE_SHA="unknown"\n'
+        'export AADS_DEPLOY_AUTOHEAL_DRYRUN=1\n'
+        'export DEPLOY_CURRENT_PHASE="preflight"\n'
+        'export DEPLOY_LAST_FAIL_ERROR="insufficient build disk"\n'
+        'audit_control() { :; }\n'
+        'deploy_db_available() { return 1; }\n'
+    )
+    out = _call("deploy_autoheal_on_exit", "1", env_prefix=env_prefix)
+    assert "유효하지 않은 릴리스 SHA 또는 원인 키" in out
+    assert "재개 기동 완료" not in out
 
 
 # ── 원인별 재시도 예산 (2026-09-21 #4988/#4990 회귀) ──────────────────────────

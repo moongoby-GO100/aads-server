@@ -20,9 +20,32 @@ import sys
 import re
 import json
 import subprocess
-from uuid import uuid4
+from types import SimpleNamespace
+from uuid import UUID, uuid4
 
 import pytest
+
+
+class _StreamingPlaceholderFetch:
+    def __init__(self, session_id, execution_id):
+        self.expected = (UUID(str(session_id)), UUID(str(execution_id)))
+
+    async def fetch(self, query, *args):
+        assert "FROM chat_messages" in query
+        assert "intent = 'streaming_placeholder'" in query
+        assert "execution_id IS DISTINCT FROM $2" in query
+        assert args == self.expected
+        return []
+
+def _with_placeholder_fetch(conn, session_id, execution_id):
+    conn.fetch = _StreamingPlaceholderFetch(session_id, execution_id).fetch
+    return conn
+
+
+def _install_resume_mocks(monkeypatch, chat_service, fake_resume, fake_create_task):
+    monkeypatch.setattr(chat_service, "_strip_streaming_progress_markers", lambda text: text)
+    monkeypatch.setattr(chat_service, "_resume_single_stream", fake_resume)
+    monkeypatch.setattr(chat_service._heartbeat_asyncio, "create_task", fake_create_task)
 
 
 @pytest.fixture(autouse=True)
@@ -125,8 +148,19 @@ class TestReadRawFile:
     """_read_raw_file이 줄번호 없이 반환하는지 테스트."""
 
     @pytest.mark.asyncio
-    async def test_no_line_numbers(self):
-        from app.api.ceo_chat_tools import _read_raw_file
+    async def test_no_line_numbers(self, monkeypatch):
+        from app.api import ceo_chat_tools
+
+        async def communicate():
+            return b"first line\nsecond line\n", b""
+
+        async def fake_exec(*args, **kwargs):
+            assert args[0] == "ssh"
+            assert args[-1] == "cat /root/aads/aads-server/app/main.py"
+            return SimpleNamespace(returncode=0, communicate=communicate)
+
+        monkeypatch.setattr(ceo_chat_tools.asyncio, "create_subprocess_exec", fake_exec)
+        _read_raw_file = ceo_chat_tools._read_raw_file
         content = await _read_raw_file("AADS", "app/main.py")
         assert not content.startswith("[ERROR]"), f"파일 읽기 실패: {content[:100]}"
         first_line = content.split("\n")[0]
@@ -150,8 +184,14 @@ class TestPatchRemoteFile:
     """patch_remote_file 단위 테스트."""
 
     @pytest.mark.asyncio
-    async def test_old_string_not_found_returns_error_with_hint(self):
-        from app.api.ceo_chat_tools import tool_patch_remote_file
+    async def test_old_string_not_found_returns_error_with_hint(self, monkeypatch):
+        from app.api import ceo_chat_tools
+
+        async def fake_read_raw_file(_project, _file_path):
+            return "def main():\n    pass\n"
+
+        monkeypatch.setattr(ceo_chat_tools, "_read_raw_file", fake_read_raw_file)
+        tool_patch_remote_file = ceo_chat_tools.tool_patch_remote_file
         result = await tool_patch_remote_file("AADS", "app/main.py", "NONEXISTENT_XYZ_12345", "REPLACED")
         assert "[ERROR]" in result
         assert "read_remote_file" in result  # 가이드 포함
@@ -415,11 +455,10 @@ class TestOutputValidator:
 
         assert result.is_valid is False
         assert result.violation_type == "REPORT_STRUCTURE_WEAK"
-        # AADS-CRF v2.0(9f8edcd9)에서 재시도 지시가 CEO 8섹션 플로우로 바뀌었다.
-        # 재시도 프롬프트는 무엇을 다시 쓸지 구조로 알려줘야 한다.
-        assert "## 결과" in result.retry_prompt
-        assert "## 검증" in result.retry_prompt
-        assert "다음 단계" in result.retry_prompt
+        # AADS-CRF v3.0에서는 고정 8섹션 대신 요청별 모드 하나를 고른다.
+        assert "M3 진단·개발" in result.retry_prompt
+        assert "모든 모드를 섞지 마세요" in result.retry_prompt
+        assert "CEO 8섹션 응답 플로우" not in result.retry_prompt
 
     def test_report_quality_accepts_structured_analysis(self):
         from app.services.output_validator import validate_response
@@ -451,6 +490,39 @@ class TestOutputValidator:
             intent="cto_strategy",
         )
 
+        assert result.is_valid is True
+
+    def test_report_quality_accepts_crf_v3_mode_without_legacy_eight_sections(self):
+        from app.services.output_validator import validate_response
+
+        response = """
+✅ 현재 서비스는 정상이며 지연 경보 한 건만 후속 확인이 필요합니다.
+핵심 근거는 API health 200과 최근 오류 1건입니다. [로그]
+
+## 현황
+| 항목 | 상태 | 근거 |
+|---|---|---|
+| API | 정상 | health 200 [로그] |
+| 응답 지연 | 주의 | P95 경보 1건 [DB 조회] |
+| 배포 | 정상 | active 슬롯 일치 [코드 확인] |
+
+## 이상 항목
+문제는 응답 지연 경보이며 사용자에게 답변이 늦게 보일 수 있습니다. 원인은 외부 모델 왕복 시간으로 확인했습니다. [로그]
+
+## 권장 조치
+P1로 지연 표본을 재측정하고 같은 조건에서 테스트해 재발 여부를 검증합니다. 완료기준은 신규 경보가 없고 health 200이 유지되는 것입니다.
+
+| 순위 | 다음 단계 | 왜 필요한가(근거) | 선행·병렬 | 완료기준 |
+|---|---|---|---|---|
+| P1 자동 | 지연 표본 재측정 | 경보 1건 [DB 조회] | 없음 | 신규 경보 0건 |
+""" + ("운영 상태의 확인된 사실만 간결하게 보고합니다. " * 20)
+        result = validate_response(
+            response_text=response,
+            tools_called=True,
+            intent="status_check",
+        )
+
+        assert len(response) >= 900
         assert result.is_valid is True
 
     def test_status_report_quality_rejects_thin_next_step_report(self):
@@ -797,7 +869,7 @@ class TestRegressions:
         monkeypatch.setattr(chat_router.svc, "_resume_single_stream", fake_resume)
 
         scheduled = await chat_router._schedule_recovery_auto_resume(
-            FakeConn(),
+            _with_placeholder_fetch(FakeConn(), session_id, execution_id),
             session_id,
             execution_id,
             assistant_id,
@@ -849,7 +921,7 @@ class TestRegressions:
         monkeypatch.setattr(chat_router.svc, "_resume_single_stream", fake_resume)
 
         scheduled = await chat_router._schedule_recovery_auto_resume(
-            FakeConn(),
+            _with_placeholder_fetch(FakeConn(), session_id, execution_id),
             session_id,
             execution_id,
             assistant_id,
@@ -926,12 +998,10 @@ class TestRegressions:
             calls["resumed"].append(((), {}))
             return FakeTask()
 
-        monkeypatch.setattr(chat_service, "_strip_streaming_progress_markers", lambda text: text)
-        monkeypatch.setattr(chat_service, "_resume_single_stream", fake_resume)
-        monkeypatch.setattr(chat_service._heartbeat_asyncio, "create_task", fake_create_task)
+        _install_resume_mocks(monkeypatch, chat_service, fake_resume, fake_create_task)
 
         scheduled = await chat_service._schedule_interrupted_auto_resume(
-            FakeConn(),
+            _with_placeholder_fetch(FakeConn(), session_id, execution_id),
             str(session_id),
             str(execution_id),
             assistant_id,
@@ -996,12 +1066,10 @@ class TestRegressions:
             calls["resumed"].append(((), {}))
             return FakeTask()
 
-        monkeypatch.setattr(chat_service, "_strip_streaming_progress_markers", lambda text: text)
-        monkeypatch.setattr(chat_service, "_resume_single_stream", fake_resume)
-        monkeypatch.setattr(chat_service._heartbeat_asyncio, "create_task", fake_create_task)
+        _install_resume_mocks(monkeypatch, chat_service, fake_resume, fake_create_task)
 
         scheduled = await chat_service._schedule_interrupted_auto_resume(
-            FakeConn(),
+            _with_placeholder_fetch(FakeConn(), session_id, execution_id),
             str(session_id),
             str(execution_id),
             assistant_id,

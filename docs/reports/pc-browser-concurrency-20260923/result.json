@@ -1,0 +1,9 @@
+{
+  "status": "passed",
+  "profiles": 2,
+  "concurrent_input_isolated": true,
+  "clicks_isolated": true,
+  "reconnect_preserved": true,
+  "closed_target_rejected": true,
+  "environment": "local headless Chromium; Windows PC deployment not tested"
+}

@@ -12,6 +12,14 @@ from app.api import admin_users as admin_users_api
 from app.auth import get_current_user
 
 
+def test_test_account_exclusion_covers_reserved_and_generated_fixtures():
+    exclusion = admin_users_api.TEST_ACCOUNT_EXCLUSION_SQL
+
+    assert "smoke" in exclusion
+    assert "@example[.]com$" in exclusion
+    assert "테스트|검증|스모크" in exclusion
+
+
 class _AuditConn:
     def __init__(
         self,

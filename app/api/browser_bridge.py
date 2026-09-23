@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
@@ -317,3 +317,10 @@ async def e2e_config(
         },
         "fallback": "Headless Playwright is used when no bridge session is available.",
     }
+
+# Tab-specific transport is separate from the desktop-wide PC stream.
+@router.websocket("/chat/{chat_id}/pc-live")
+async def chat_pc_live_stream(websocket: WebSocket, chat_id: str) -> None:
+    from app.browser_bridge.live_api import chat_pc_live
+
+    await chat_pc_live(websocket, chat_id)

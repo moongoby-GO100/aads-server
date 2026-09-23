@@ -96,6 +96,23 @@ def test_build_registry_snapshots_registers_codex_astra_template():
     assert astra_row["capabilities"]["chatgpt_credits"] is True
 
 
+def test_registry_sync_template_keeps_codex_sol_registered():
+    now = datetime.now(timezone.utc)
+    rows, _ = model_registry.build_registry_snapshots([
+        {
+            "id": 4, "provider": "codex", "key_name": "CODEX_CHATGPT_OAUTH",
+            "priority": 1, "is_active": True, "rate_limited_until": None,
+            "last_used_at": now, "last_verified_at": now,
+        }
+    ])
+    sol = next(row for row in rows if row["provider"] == "codex" and row["model_id"] == "gpt-6-sol")
+    assert sol["display_name"] == "GPT-6 Sol (Codex CLI)"
+    assert sol["execution_model_id"] == "gpt-6-sol"
+    assert sol["metadata"]["execution_backend"] == "codex_cli"
+    assert sol["is_active"] is True
+    assert sol["is_executable"] is True
+
+
 def test_codex_astra_migration_adds_runner_model_config_cycle():
     sql = Path("migrations/155_runner_model_config_gpt6_astra.sql").read_text()
 
@@ -250,6 +267,39 @@ def test_build_registry_snapshots_marks_anthropic_oauth_as_runtime_only_discover
     assert all(row["is_active"] is False for row in fable_alias_rows)
     assert all(row["is_selectable"] is False for row in fable_alias_rows)
     assert all(row["is_executable"] is False for row in fable_alias_rows)
+
+
+def test_build_registry_snapshots_registers_opus_5_5_as_claude_cli_model():
+    now = datetime.now(timezone.utc)
+    model_rows, _ = model_registry.build_registry_snapshots(
+        [
+            {
+                "id": 21,
+                "provider": "anthropic",
+                "key_name": "ANTHROPIC_AUTH_TOKEN",
+                "priority": 1,
+                "is_active": True,
+                "rate_limited_until": None,
+                "last_used_at": now,
+                "last_verified_at": now,
+            }
+        ]
+    )
+
+    opus_row = next(
+        row
+        for row in model_rows
+        if row["provider"] == "anthropic" and row["model_id"] == "claude-opus-5-5"
+    )
+    assert opus_row["display_name"] == "Claude Opus 5.5 (Claude CLI)"
+    assert opus_row["execution_backend"] == "claude_cli_relay"
+    assert opus_row["execution_model_id"] == "claude-opus-5-5"
+    assert opus_row["input_cost"] == model_registry._decimal(4.0)
+    assert opus_row["output_cost"] == model_registry._decimal(20.0)
+    assert opus_row["supports_tools"] is True
+    assert opus_row["supports_thinking"] is True
+    assert opus_row["supports_vision"] is True
+    assert opus_row["supports_coding"] is True
 
 
 def test_build_registry_snapshots_marks_unknown_provider_for_review():

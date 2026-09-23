@@ -35,7 +35,9 @@ PGPASSWORD="${PGPASSWORD:-}"
 export PGPASSWORD
 
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
-AADS_API_URL="${AADS_API_URL:-http://127.0.0.1:8100}"
+# Host-local nginx tracks the active blue/green API. Never pin review traffic
+# to blue:8100 while green:8102 is active or blue is being synchronized.
+AADS_API_URL="${AADS_API_URL:-http://127.0.0.1}"
 MAX_RUNTIME="${MAX_RUNTIME:-7200}"
 MAX_RETRIES="${MAX_RETRIES:-2}"               # H5: Claude 실패 시 재시도 횟수
 MAX_CONCURRENT_PER_PROJECT="${MAX_CONCURRENT_PER_PROJECT:-6}"  # 프로젝트당 동시 실행 수
@@ -1293,6 +1295,67 @@ deploy_git_preflight() {
 
     log "  DEPLOY_PREFLIGHT_OK: dirty=0 behind=0 ahead=0"
     return 0
+}
+
+# 승인된 AADS 격리 릴리스는 공유 main 의 ahead/dirty 상태와 독립적이다.
+# 공유 본체를 동기화하는 기존 4인자 preflight 계약은 그대로 둔다.
+deploy_isolated_git_preflight() {
+    local job_id="$1" project="$2" session_id="$3" main_workdir="$4"
+    local worktree_dir="$5" approved_sha="$6" main_root worktree_root
+    local main_common worktree_common registered remote_sha head_sha worktree_status
+
+    if [[ "$project" != "AADS" || ! "$job_id" =~ ^[a-zA-Z0-9_-]+$ \
+        || ! "$approved_sha" =~ ^[0-9a-f]{40}$ ]]; then
+        _fail_job "$job_id" "$session_id" "deploy_isolated_identity_invalid" "격리 릴리스 소유권 또는 승인 SHA 오류"
+        return 1
+    fi
+    main_root=$(git -C "$main_workdir" rev-parse --show-toplevel 2>/dev/null) || main_root=""
+    worktree_root=$(git -C "$worktree_dir" rev-parse --show-toplevel 2>/dev/null) || worktree_root=""
+    if [[ -z "$main_root" || -z "$worktree_root" ]]; then
+        _fail_job "$job_id" "$session_id" "deploy_worktree_not_isolated" "격리 릴리스 저장소 경로 확인 실패"
+        return 1
+    fi
+    main_root=$(realpath "$main_root") || return 1
+    worktree_root=$(realpath "$worktree_root") || return 1
+    main_common=$(git -C "$main_root" rev-parse --git-common-dir 2>/dev/null) || main_common=""
+    worktree_common=$(git -C "$worktree_root" rev-parse --git-common-dir 2>/dev/null) || worktree_common=""
+    if [[ -z "$main_common" || -z "$worktree_common" ]]; then
+        _fail_job "$job_id" "$session_id" "deploy_worktree_not_isolated" "격리 릴리스 공통 저장소 확인 실패"
+        return 1
+    fi
+    [[ "$main_common" == /* ]] || main_common="$main_root/$main_common"
+    [[ "$worktree_common" == /* ]] || worktree_common="$worktree_root/$worktree_common"
+    main_common=$(realpath -m "$main_common") || return 1
+    worktree_common=$(realpath -m "$worktree_common") || return 1
+    registered=$(git -C "$main_root" worktree list --porcelain 2>/dev/null) || registered=""
+    if [[ "$worktree_root" != "/tmp/aads-wt-${job_id}" || "$worktree_root" == "$main_root" \
+        || "$main_common" != "$worktree_common" ]] \
+        || ! printf '%s\n' "$registered" | grep -Fxq "worktree $worktree_root"; then
+        _fail_job "$job_id" "$session_id" "deploy_worktree_not_isolated" "격리 worktree 등록/저장소/작업 소유권 확인 실패"
+        return 1
+    fi
+    head_sha=$(git -C "$worktree_root" rev-parse HEAD 2>/dev/null) || head_sha=""
+    worktree_status=$(git -C "$worktree_root" status --porcelain --untracked-files=all 2>/dev/null) || worktree_status="status_failed"
+    if [[ "$head_sha" != "$approved_sha" || -n "$worktree_status" ]]; then
+        _fail_job "$job_id" "$session_id" "deploy_isolated_sha_or_dirty" "격리 worktree HEAD/승인 SHA 불일치 또는 dirty"
+        return 1
+    fi
+    git -C "$worktree_root" fetch --prune origin >/dev/null 2>&1 || {
+        _fail_job "$job_id" "$session_id" "deploy_fetch_failed" "격리 릴리스 origin fetch 실패"
+        return 1
+    }
+    remote_sha=$(git -C "$worktree_root" ls-remote origin refs/heads/main 2>/dev/null | awk 'NR==1 {print $1}') || remote_sha=""
+    if [[ ! "$remote_sha" =~ ^[0-9a-f]{40}$ \
+        || "$(git -C "$worktree_root" rev-parse --verify origin/main 2>/dev/null)" != "$remote_sha" \
+        || "$(git -C "$worktree_root" remote get-url origin 2>/dev/null)" != "$(git -C "$main_root" remote get-url origin 2>/dev/null)" ]]; then
+        _fail_job "$job_id" "$session_id" "deploy_origin_missing" "격리 릴리스 origin/main 일치 확인 실패"
+        return 1
+    fi
+    if ! git -C "$worktree_root" merge-base --is-ancestor "$remote_sha" "$approved_sha" 2>/dev/null; then
+        _fail_job "$job_id" "$session_id" "deploy_isolated_stale_approval" "최신 origin/main 통합 후 새 SHA 재검수 필요"
+        return 1
+    fi
+    log "  DEPLOY_ISOLATED_PREFLIGHT_OK: job=$job_id sha=$approved_sha origin=$remote_sha"
 }
 
 # ── 에러 분류 ─────────────────────────────────────────────────────────
@@ -3383,15 +3446,21 @@ deploy_job() {
     local main_workdir="$workdir"
     local worktree_dir="/tmp/aads-wt-${job_id}"
 
-    if ! deploy_git_preflight "$job_id" "$project" "$session_id" "$main_workdir"; then
+    local expected_sha current_sha
+    expected_sha=$(db_exec "SELECT COALESCE(commit_hash,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]') || expected_sha=""
+    if [[ "$project" == "AADS" ]]; then
+        if ! deploy_isolated_git_preflight "$job_id" "$project" "$session_id" "$main_workdir" "$worktree_dir" "$expected_sha"; then
+            _release_deploy_lock "$project" "$job_id"
+            promote_next_queued "$project"
+            return 1
+        fi
+    elif ! deploy_git_preflight "$job_id" "$project" "$session_id" "$main_workdir"; then
         _release_deploy_lock "$project" "$job_id"
         promote_next_queued "$project"
         return 1
     fi
 
-    local expected_sha current_sha
-    expected_sha=$(db_exec "SELECT COALESCE(commit_hash,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]') || expected_sha=""
-    if ! ensure_approved_job_worktree "$job_id" "$worktree_dir" "$main_workdir" "$expected_sha"; then
+    if [[ "$project" != "AADS" ]] && ! ensure_approved_job_worktree "$job_id" "$worktree_dir" "$main_workdir" "$expected_sha"; then
         _fail_job "$job_id" "$session_id" "deploy_worktree_not_isolated" "BLOCK: 승인/배포 push 거부 — isolated runner worktree 복구/검증 실패 (${worktree_dir})"
         _release_deploy_lock "$project" "$job_id"
         return 1
@@ -3414,6 +3483,14 @@ deploy_job() {
     # ── push 전 사전 판별 — non-fast-forward 를 불투명한 거부로 만들지 않는다 ──
     push_state=$(classify_push_state "$worktree_dir" "$current_sha")
     log "  PUSH_PRECHECK job=$job_id sha=$current_sha state=$push_state"
+
+    # AADS 릴리스는 검수 SHA 를 변경하지 않는다. 원격 조회 실패와 stale base 는
+    # 자동 rebase/push 로 넘어가지 않고 새 SHA 검수 대상으로 남긴다.
+    if [[ "$project" == "AADS" && "$push_state" != "fast_forward" && "$push_state" != "already_present" ]]; then
+        _fail_job "$job_id" "$session_id" "deploy_isolated_push_state" "승인 SHA push 사전판별 실패: ${push_state}; 최신 origin 통합 후 재검수 필요"
+        _release_deploy_lock "$project" "$job_id"
+        return 1
+    fi
 
     if [[ "$push_state" == "already_present" ]]; then
         push_skipped="true"
@@ -3488,6 +3565,15 @@ deploy_job() {
         return 1
     fi
     log "  GIT_PUSH_OK job=$job_id sha=$current_sha worktree=$worktree_dir"
+    if [[ "$project" == "AADS" ]]; then
+        local pushed_remote_sha
+        pushed_remote_sha=$(git -C "$worktree_dir" ls-remote origin refs/heads/main 2>/dev/null | awk 'NR==1 {print $1}') || pushed_remote_sha=""
+        if [[ "$pushed_remote_sha" != "$expected_sha" || "$current_sha" != "$expected_sha" ]]; then
+            _fail_job "$job_id" "$session_id" "deploy_isolated_remote_changed" "승인 SHA와 실제 origin/main 불일치: 배포 차단"
+            _release_deploy_lock "$project" "$job_id"
+            return 1
+        fi
+    fi
     db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
 
     # ── 지시서의 배포 금지 제약 강제 (AADS-RUNNER-DEPLOY-DIRECTIVE-GATE) ──
@@ -3533,7 +3619,8 @@ deploy_job() {
                 if [[ "$_release_relevant" == "true" ]]; then
                     local _aads_deploy_log="/tmp/pipeline-deploy-aads-${job_id}.log"
                     log "  BLUEGREEN aads-server — approved isolated worktree=$worktree_dir"
-                    if AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
+                    if AADS_DEPLOY_FOREGROUND=1 \
+                       AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
                        AADS_DEPLOY_STATE_DIR="$main_workdir" \
                        bash "$worktree_dir/deploy.sh" bluegreen >"$_aads_deploy_log" 2>&1; then
                         tail -20 "$_aads_deploy_log" 2>/dev/null || true
@@ -3892,7 +3979,8 @@ deploy_job() {
                         fi
                     else
                         # 롤백/revert 커밋도 격리 worktree에서 동일한 인증 경로로 배포한다.
-                        if AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
+                        if AADS_DEPLOY_FOREGROUND=1 \
+                           AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
                            AADS_DEPLOY_STATE_DIR="$main_workdir" \
                            bash "$worktree_dir/deploy.sh" bluegreen 2>&1 | tail -10; then
                             log "  ROLLBACK_DEPLOY: isolated bluegreen 성공"

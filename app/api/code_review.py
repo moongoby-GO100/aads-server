@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -56,6 +57,18 @@ _review_tasks: set[asyncio.Task] = set()
 _review_concurrency = asyncio.Semaphore(2)
 
 
+def _review_deadlines() -> tuple[int, int]:
+    """Keep worker and stale-claim limits below/above one another."""
+    from app.services.code_reviewer import _REVIEW_ASYNC_DEADLINE_SEC
+
+    hard_limit = int(_REVIEW_ASYNC_DEADLINE_SEC) + 10
+    stale_after = max(
+        hard_limit + 60,
+        int(os.environ.get("REVIEW_REQUEST_STALE_SEC", "600")),
+    )
+    return hard_limit, stale_after
+
+
 def _payload_sha256(req: CodeReviewRequest) -> str:
     payload = {
         "job_id": req.job_id,
@@ -91,7 +104,7 @@ async def _execute_review_request(request_id: UUID) -> None:
                     error_detail=NULL
                 WHERE request_id=$1 AND status='queued'
                 RETURNING job_id, project, diff, instruction, files_changed,
-                          created_at, started_at
+                          created_at, started_at, attempts
                 """,
                 request_id,
             )
@@ -120,13 +133,17 @@ async def _execute_review_request(request_id: UUID) -> None:
             # 준다. 재검수 스위퍼가 동기 경로와 똑같은 상한에 걸리면 복구가 안 된다.
             from app.services.code_reviewer import _REVIEW_ASYNC_DEADLINE_SEC
 
-            result = await do_review(
-                project=row["project"],
-                job_id=row["job_id"],
-                diff=row["diff"],
-                instruction=row["instruction"] or "",
-                files_changed=list(files_changed or []),
-                deadline_sec=_REVIEW_ASYNC_DEADLINE_SEC,
+            hard_limit, _ = _review_deadlines()
+            result = await asyncio.wait_for(
+                do_review(
+                    project=row["project"],
+                    job_id=row["job_id"],
+                    diff=row["diff"],
+                    instruction=row["instruction"] or "",
+                    files_changed=list(files_changed or []),
+                    deadline_sec=_REVIEW_ASYNC_DEADLINE_SEC,
+                ),
+                timeout=hard_limit,
             )
             async with pool.acquire() as conn:
                 await conn.execute(
@@ -137,7 +154,7 @@ async def _execute_review_request(request_id: UUID) -> None:
                         flag_category=$6, failure_stage=$7,
                         needs_retry=$8, model_used=$9,
                         completed_at=NOW(), updated_at=NOW()
-                    WHERE request_id=$1 AND status='running'
+                    WHERE request_id=$1 AND status='running' AND attempts=$10
                     """,
                     request_id,
                     result.verdict,
@@ -148,6 +165,7 @@ async def _execute_review_request(request_id: UUID) -> None:
                     result.failure_stage,
                     result.needs_retry,
                     result.model_used,
+                    row["attempts"],
                 )
             logger.info(
                 "review_measurement label=review.request.completed path=async stage=request "
@@ -171,11 +189,45 @@ async def _execute_review_request(request_id: UUID) -> None:
                     UPDATE code_review_requests
                     SET status='failed', error_detail=$2,
                         needs_retry=TRUE, completed_at=NOW(), updated_at=NOW()
-                    WHERE request_id=$1 AND status='running'
+                    WHERE request_id=$1 AND status='running' AND attempts=$3
                     """,
                     request_id,
                     str(exc)[:1000],
+                    row["attempts"],
                 )
+
+
+async def _resume_stored_request(request_id: UUID) -> str:
+    """Reclaim only expired/failed work; the saved payload is never rebuilt."""
+    from app.core.db_pool import get_pool
+
+    _, stale_after = _review_deadlines()
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE code_review_requests
+               SET status='queued', started_at=NULL, completed_at=NULL,
+                   error_detail='stale async review recovered', updated_at=NOW()
+             WHERE request_id=$1
+               AND (status='failed' OR
+                    (status='running' AND updated_at < NOW() - ($2::int * INTERVAL '1 second')))
+            RETURNING status
+            """,
+            request_id,
+            stale_after,
+        )
+        if not row:
+            row = await conn.fetchrow(
+                "SELECT status FROM code_review_requests WHERE request_id=$1",
+                request_id,
+            )
+    if not row:
+        raise HTTPException(status_code=404, detail="리뷰 요청을 찾을 수 없습니다")
+    request_status = row["status"]
+    if request_status == "queued":
+        _schedule_review_request(request_id)
+    return request_status
 
 
 @router.post("/code-diff", response_model=CodeReviewResponse)
@@ -238,22 +290,6 @@ async def create_code_review_request(req: AsyncCodeReviewRequest):
             "SELECT status, payload_sha256 FROM code_review_requests WHERE request_id=$1",
             request_id,
         )
-        # A process can die after the durable write but before/during the model
-        # call. A client retry with the same id revives only clearly stale work;
-        # the claim UPDATE in the worker still guarantees one active execution.
-        await conn.execute(
-            """
-            UPDATE code_review_requests
-            SET status='queued', error_detail='stale async review recovered', updated_at=NOW()
-            WHERE request_id=$1 AND status='running'
-              AND updated_at < NOW() - INTERVAL '30 minutes'
-            """,
-            request_id,
-        )
-        row = await conn.fetchrow(
-            "SELECT status, payload_sha256 FROM code_review_requests WHERE request_id=$1",
-            request_id,
-        )
     if not row:
         raise HTTPException(status_code=500, detail="리뷰 요청 저장에 실패했습니다")
     if row["payload_sha256"] != payload_hash:
@@ -263,6 +299,21 @@ async def create_code_review_request(req: AsyncCodeReviewRequest):
     return AsyncCodeReviewAccepted(
         request_id=request_id,
         status=row["status"],
+        result_url=f"/api/v1/review/code-diff/requests/{request_id}",
+    )
+
+
+@router.post(
+    "/code-diff/requests/{request_id}/resume",
+    response_model=AsyncCodeReviewAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def resume_code_review_request(request_id: UUID):
+    """Resume a durable request using its exact stored payload only."""
+    request_status = await _resume_stored_request(request_id)
+    return AsyncCodeReviewAccepted(
+        request_id=request_id,
+        status=request_status,
         result_url=f"/api/v1/review/code-diff/requests/{request_id}",
     )
 

@@ -1,0 +1,41 @@
+[Unit]
+Description=Obys isolated API slot %i
+After=network-online.target postgresql.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=exec
+User=obys
+Group=obys
+WorkingDirectory=/opt/obys/slots/%i
+# Provisioned separately through the approved secret channel. Never in Git.
+EnvironmentFile=/etc/obys/runtime.env
+EnvironmentFile=/etc/obys/slots/%i.env
+Environment=PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ExecStartPre=/opt/obys/slots/%i/.venv/bin/python -c "from app.core.obys_runtime import RuntimeSettings; RuntimeSettings.from_env()"
+ExecStart=/opt/obys/slots/%i/.venv/bin/python -m uvicorn app.obys_standalone:create_app --factory --host 127.0.0.1 --port ${OBYS_PORT} --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1 --timeout-graceful-shutdown 60
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=75
+KillSignal=SIGTERM
+UMask=0077
+StateDirectory=obys
+RuntimeDirectory=obys-%i
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/obys
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=2G
+TasksMax=128
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

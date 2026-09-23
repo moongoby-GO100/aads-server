@@ -124,7 +124,8 @@ def _json_default(value: Any) -> str:
 
 
 _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
-    "claude-opus": (_decimal(5.0), _decimal(25.0)),
+    "claude-opus": (_decimal(4.0), _decimal(20.0)),
+    "claude-opus-5-5": (_decimal(4.0), _decimal(20.0)),
     "claude-opus-5": (_decimal(5.0), _decimal(25.0)),
     "claude-opus-46": (_decimal(5.0), _decimal(25.0)),
     "claude-sonnet": (_decimal(3.0), _decimal(15.0)),
@@ -210,6 +211,7 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
 }
 
 _THINKING_MODELS = {
+    "claude-opus-5-5",
     "claude-sonnet-5",
     "claude-fable-5",
     "claude-fable-5-1",
@@ -246,6 +248,7 @@ _THINKING_MODELS = {
 }
 
 _VISION_MODELS = {
+    "claude-opus-5-5",
     "claude-sonnet-5",
     "claude-fable-5",
     "claude-fable-5-1",
@@ -266,6 +269,7 @@ _VISION_MODELS = {
 
 _CODING_MODELS = {
     "claude-opus",
+    "claude-opus-5-5",
     "claude-opus-5",
     "claude-opus-46",
     "claude-sonnet",
@@ -300,7 +304,8 @@ _CODING_MODELS = {
 }
 
 _DISPLAY_NAME_OVERRIDES = {
-    "claude-opus": "Claude Opus",
+    "claude-opus": "Claude Opus 5.5 (latest, Claude CLI)",
+    "claude-opus-5-5": "Claude Opus 5.5 (Claude CLI)",
     "claude-opus-5": "Claude Opus 5 (Claude CLI)",
     "claude-opus-46": "Claude Opus 4.6",
     "claude-sonnet": "Claude Sonnet",
@@ -342,6 +347,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "claude-fable-5",
         "claude-fable-5-1",
         "claude-opus",
+        "claude-opus-5-5",
         "claude-opus-5",
         "claude-opus-46",
         "claude-sonnet",
@@ -388,6 +394,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "o3-mini",
         "o3-pro",
     ),
+    "codex": ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
     "codex": ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
     "deepseek": ("deepseek-flash", "deepseek-v4-pro"),
     "openrouter": (
@@ -581,8 +588,8 @@ def _display_name_for(model_id: str) -> str:
 
 
 def _display_name_for_provider(provider: str, model_id: str) -> str:
-    if provider == "codex" and model_id == "gpt-6-astra":
-        return "GPT-6 Astra (Codex CLI)"
+    if provider == "codex" and model_id in {"gpt-6-astra", "gpt-6-sol"}:
+        return f"{_display_name_for(model_id)} (Codex CLI)"
     override = _DISPLAY_NAME_OVERRIDES.get(model_id)
     if override:
         return override

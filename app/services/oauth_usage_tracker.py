@@ -1045,6 +1045,48 @@ async def _maybe_alert_slot_quota(
         logger.warning("slot quota alert failed slot=%s: %s", slot, str(e)[:160])
 
 
+def _effective_usage_window(
+    utilization: Any,
+    resets_at: datetime | None,
+    window_minutes: int,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Return a display/routing-safe view of a usage window.
+
+    Claude CLI only emits a new ``rate_limit_event`` while it is making a
+    request.  When an exhausted account sits idle across its reset boundary,
+    the newest DB row therefore still says 100% even though the new window is
+    fully available.  Keep the historical row intact, but expire its value at
+    the provider-supplied reset time for every live consumer.
+
+    ``last_reset_at`` preserves the evidence behind the normalization while
+    ``resets_at`` is cleared so the UI does not present an already elapsed time
+    as the *next* reset.  A later CLI event replaces the estimate with a fresh
+    measured window.
+    """
+    used_percent = float(utilization) if utilization is not None else None
+    effective_now = now or datetime.now(timezone.utc)
+    reset_elapsed = bool(resets_at and resets_at <= effective_now)
+    if reset_elapsed:
+        return {
+            "used_percent": 0.0,
+            "window_minutes": window_minutes,
+            "resets_at": None,
+            "last_reset_at": resets_at.isoformat(),
+            "reset_elapsed": True,
+            "estimated_after_reset": True,
+        }
+    return {
+        "used_percent": used_percent,
+        "window_minutes": window_minutes,
+        "resets_at": resets_at.isoformat() if resets_at else None,
+        "last_reset_at": None,
+        "reset_elapsed": False,
+        "estimated_after_reset": False,
+    }
+
+
 async def get_slot_usage_all() -> List[Dict[str, Any]]:
     """슬롯별 최신 쿼터 스냅샷. UsageBar 가 계정 수만큼 렌더하는 데 쓴다."""
     try:
@@ -1072,6 +1114,7 @@ async def get_slot_usage_all() -> List[Dict[str, Any]]:
         rows = []
 
     by_slot = {r["account_slot"]: r for r in rows}
+    now = datetime.now(timezone.utc)
     out: List[Dict[str, Any]] = []
     known = [(str(r.get("slot", "")), r.get("label", "")) for r in records if r.get("slot")]
     for slot in sorted({s for s, _ in known} | set(by_slot)):
@@ -1093,16 +1136,12 @@ async def get_slot_usage_all() -> List[Dict[str, Any]]:
             "secondary": {"used_percent": None, "window_minutes": 10080, "resets_at": None},
         }
         if row:
-            entry["primary"] = {
-                "used_percent": float(row["five_hour_utilization"]) if row["five_hour_utilization"] is not None else None,
-                "window_minutes": 300,
-                "resets_at": row["five_hour_resets_at"].isoformat() if row["five_hour_resets_at"] else None,
-            }
-            entry["secondary"] = {
-                "used_percent": float(row["seven_day_utilization"]) if row["seven_day_utilization"] is not None else None,
-                "window_minutes": 10080,
-                "resets_at": row["seven_day_resets_at"].isoformat() if row["seven_day_resets_at"] else None,
-            }
+            entry["primary"] = _effective_usage_window(
+                row["five_hour_utilization"], row["five_hour_resets_at"], 300, now=now,
+            )
+            entry["secondary"] = _effective_usage_window(
+                row["seven_day_utilization"], row["seven_day_resets_at"], 10080, now=now,
+            )
         # 토큰이 살아 있나. 자동 갱신이 안 되는 슬롯은 이것이 유일한 신호다.
         try:
             from app.services.slot_token_health import snapshot as _token_snapshot

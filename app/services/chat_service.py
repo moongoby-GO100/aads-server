@@ -313,13 +313,9 @@ async def _archive_competing_stream_placeholder(
     execution_id: uuid.UUID | str,
 ) -> None:
     """Remove the session-wide placeholder conflict after the lease is acquired."""
-    await conn.execute(
+    placeholders = await conn.fetch(
         """
-        UPDATE chat_messages
-        SET intent = '_archived_partial',
-            model_used = 'interrupted',
-            is_hidden = TRUE,
-            edited_at = NOW()
+        SELECT id, content FROM chat_messages
         WHERE session_id = $1
           AND intent = 'streaming_placeholder'
           AND execution_id IS DISTINCT FROM $2
@@ -327,6 +323,17 @@ async def _archive_competing_stream_placeholder(
         uuid.UUID(str(session_id)),
         uuid.UUID(str(execution_id)),
     )
+    for placeholder in placeholders:
+        partial = _strip_streaming_progress_markers(placeholder["content"] or "")
+        await conn.execute(
+            """
+            UPDATE chat_messages
+            SET content = $2, intent = '_archived_partial',
+                model_used = 'interrupted', is_hidden = $3, edited_at = NOW()
+            WHERE id = $1 AND intent = 'streaming_placeholder'
+            """,
+            placeholder["id"], partial or placeholder["content"], not bool(partial),
+        )
 
 _MODEL_TIMEOUT_OVERRIDES = {
     "gpt-5.6-sol": 1500,
@@ -334,6 +341,7 @@ _MODEL_TIMEOUT_OVERRIDES = {
     "gpt-6-astra": 1500,
     "codex:gpt-6-astra": 1500,
     "claude-fable-5-1": 1200,
+    "claude-opus-5-5": 1200,
     "claude-opus-5": 1200,
     "claude-opus-4-6": 900,
     "claude-haiku": 900,
@@ -1218,7 +1226,7 @@ def _cross_provider_chat_fallback_chain(base_model: Optional[str]) -> List[str]:
     if normalized.startswith(("claude-", "claude_")):
         preferred = [base, "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"]
     elif normalized.startswith("codex:") or normalized.startswith("gpt-"):
-        preferred = [base, "claude-fable-5-1", "claude-opus-5", "claude-opus"]
+        preferred = [base, "claude-fable-5-1", "claude-opus-5-5", "claude-opus"]
     else:
         preferred = [base, "claude-fable-5-1", "gpt-6-astra", "gpt-5.6-sol"]
 
@@ -4935,14 +4943,13 @@ async def _mark_execution_interrupted(
                 SET content = $1,
                     intent = $3,
                     model_used = 'interrupted',
-                    is_hidden = CASE WHEN $4::boolean THEN is_hidden ELSE FALSE END,
+                    is_hidden = FALSE,
                     edited_at = NOW()
                 WHERE id = $2
                 """,
                 final_content,
                 pid,
                 _intent,
-                is_superseded_cancel,
             )
             assistant_message_id = pid
         elif delete_empty_placeholder or is_superseded_cancel:
@@ -6730,6 +6737,7 @@ async def with_background_completion(
 
                 if not _retried:
                     _FALLBACK_CHAIN_429 = {
+                        "claude-opus-5-5": ["claude-fable-5-1", "gpt-5.6-sol"],
                         "claude-opus-5": ["claude-fable-5-1", "gpt-5.6-sol"],
                         "claude-opus-4-6": ["claude-opus-5", "claude-fable-5-1"],
                         "claude-fable-5-1": ["claude-opus-5", "gpt-5.6-sol"],
@@ -9509,7 +9517,14 @@ def _runner_progress_allow_sql() -> str:
 
 
 def _visible_message_filter(is_active: bool, include_streaming: bool) -> str:
-    hidden_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate'"
+    # A completed answer supersedes only partials from the same execution.
+    # The archival writer records that final message ID; exclude those rows
+    # while retaining superseded partials that have no final answer.
+    hidden_filter = (
+        "AND intent IS DISTINCT FROM '_deleted_duplicate'"
+        " AND (intent IS DISTINCT FROM '_archived_partial'"
+        " OR COALESCE(quality_details->>'final_message_id', '') = '')"
+    )
     if include_streaming:
         # streaming_placeholder rows are intentionally is_hidden=true for normal
         # history, but live/recovery fetches explicitly request them. Interrupted

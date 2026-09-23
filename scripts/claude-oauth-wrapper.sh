@@ -24,4 +24,6 @@ fi
 mkdir -p $HOME/.claude 2>/dev/null
 [ -f $HOME/.claude/settings.json ] || echo "{}" > $HOME/.claude/settings.json
 
-exec /usr/local/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude "$@"
+# Use the version-pinned release binary. Falling back to the SDK bundle would
+# silently reintroduce HTTP 400 for models that require Claude Code >= 2.1.280.
+exec /usr/local/bin/claude-aads "$@"

@@ -26,7 +26,7 @@ from app.services.browser_recipe_registry import (
     normalize_resource_policy,
 )
 from app.services.browser_permission_policy import classify_browser_action, mask_sensitive_value
-from app.services.managed_browser import profile_info
+from app.services.managed_browser import egress_for_target, profile_info
 
 
 def test_permission_policy_denies_secret_reveal():
@@ -188,6 +188,41 @@ def test_managed_browser_profile_is_origin_scoped():
     assert first["profile_dir"] == second["profile_dir"]
 
 
+def test_cafe24_egress_never_uses_an_unconfigured_direct_fallback(monkeypatch):
+    monkeypatch.delenv("CAFE24_EGRESS_PROXY_VAULT_REF", raising=False)
+    monkeypatch.setenv("CAFE24_EGRESS_PROXY_URL", "socks5://unapproved.example:1080")
+    decision = egress_for_target("cafe24", "https://store.coupangeats.com/merchant/login")
+    assert decision["egress_effective"] == "unavailable"
+    assert decision["proxy"] is None
+
+
+def test_auto_uses_cafe24_only_for_registered_korea_domain(monkeypatch):
+    monkeypatch.setenv("CAFE24_EGRESS_PROXY_VAULT_REF", "vault://cafe24-egress")
+    monkeypatch.setenv("CAFE24_EGRESS_PROXY_URL", "socks5://127.0.0.1:19080")
+    cafe24 = egress_for_target("auto", "https://store.coupangeats.com/merchant/login")
+    direct = egress_for_target("auto", "https://example.com/login")
+    assert cafe24["egress_effective"] == "cafe24"
+    assert cafe24["proxy"] == {"server": "socks5://127.0.0.1:19080"}
+    assert direct["egress_effective"] == "direct"
+
+
+def test_http_403_is_not_mislabeled_as_a_korean_ip_block():
+    diagnosis = classify_playwright_access(status="reachable", http_status=403)
+    assert diagnosis["category"] == "access_restricted_unknown"
+    assert diagnosis["reason_code"] == "http_403_unclassified"
+
+
+def test_browser_recipe_hashes_and_exposes_egress_policy():
+    recipe = normalize_recipe_payload({
+        "recipe_id": "coupangeats.sales", "version": "v1",
+        "allowed_origins": ["https://store.coupangeats.com"],
+        "runtime_policy": {"egress_policy": "auto"},
+    })
+    plan = build_runtime_execution_plan(recipe)
+    assert recipe["runtime_policy"]["egress_policy"] == "auto"
+    assert plan["egress_requested"] == "auto"
+
+
 def test_migration_contains_no_destructive_table_ops():
     migration = Path("migrations/122_ohvis_managed_browser_agent_vault.sql").read_text()
     upper = migration.upper()
@@ -266,14 +301,14 @@ def test_playwright_access_diagnosis_classifies_challenge_and_advice():
     assert remediation["primary_runtime"] == "self_hosted_playwright"
 
 
-def test_playwright_access_diagnosis_classifies_waf_block():
+def test_playwright_access_diagnosis_does_not_guess_403_cause():
     diagnosis = classify_playwright_access(status="reachable", http_status=403, body_text="Access Denied")
     remediation = build_access_remediation_plan(diagnosis)
 
-    assert diagnosis["category"] == "bot_or_waf_blocked"
+    assert diagnosis["category"] == "access_restricted_unknown"
     assert diagnosis["self_hosted_usable"] is False
-    assert remediation["next_action"] == "switch_runtime"
-    assert remediation["primary_runtime"] == "pc_agent"
+    assert remediation["next_action"] == "manual_review"
+    assert remediation["primary_runtime"] == "self_hosted_playwright"
 
 
 @pytest.mark.asyncio
