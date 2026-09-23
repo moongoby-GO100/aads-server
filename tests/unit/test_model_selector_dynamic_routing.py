@@ -145,7 +145,8 @@ async def test_unqualified_openai_error_keeps_codex_banner(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_sol_direct_tools_use_none_effort(monkeypatch):
+@pytest.mark.parametrize("execution_model", ["gpt-6-sol", "sol-proxy-alias"])
+async def test_sol_direct_tools_use_none_effort(monkeypatch, execution_model):
     requests = []
 
     def respond(request):
@@ -156,13 +157,15 @@ async def test_sol_direct_tools_use_none_effort(monkeypatch):
     transport = httpx.MockTransport(respond)
     monkeypatch.setattr(model_selector.httpx, "AsyncClient", lambda **kwargs: client(transport=transport, **kwargs))
     events = [event async for event in model_selector._stream_litellm_openai(
-        "gpt-6-sol", "system", [{"role": "user", "content": "hello"}],
+        execution_model, "system", [{"role": "user", "content": "hello"}],
         tools=[{"name": "ping", "input_schema": {"type": "object"}}],
         base_url="https://api.openai.com/v1", api_key="test-key",
+        display_model="gpt-6-sol",
     )]
     assert requests[0]["reasoning_effort"] == "none"
     assert requests[0]["max_completion_tokens"] > 0
     assert requests[0]["tools"][0]["function"]["name"] == "ping"
+    assert requests[0]["model"] == execution_model
     assert events[-1]["type"] == "done"
 
 
@@ -170,6 +173,41 @@ def test_sol_reasoning_tools_are_rejected_before_http():
     body = {"model": "gpt-6-sol", "max_tokens": 100, "tools": [{"type": "function"}]}
     with pytest.raises(ValueError, match="reasoning_effort=none"):
         model_selector._prepare_openai_chat_request(body, "gpt-6-sol", direct=True, requested_effort="high")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tools,effort,expected", [
+    ([], "high", "high"),
+    ([{"name": "ping", "input_schema": {"type": "object"}}], None, "none"),
+])
+async def test_sol_proxy_alias_builds_valid_http_body(monkeypatch, tools, effort, expected):
+    captured = []
+
+    async def registered(active_only=False):
+        return [{"provider": "openai", "model_id": "gpt-6-sol", "is_active": True,
+                 "metadata": {"execution_backend": "litellm_proxy", "execution_model_id": "sol-alias",
+                              "reasoning_effort": effort}}]
+
+    def respond(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(model_selector.httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport, **kwargs))
+    monkeypatch.setattr(model_selector, "_list_registered_models", registered)
+    events = [event async for event in model_selector.call_stream(
+        IntentResult(intent="code_modify", model="openai:gpt-6-sol", use_tools=bool(tools), tool_group=""),
+        "system", [{"role": "user", "content": "hello"}], tools=tools, model_override="openai:gpt-6-sol",
+    )]
+    assert len(captured) == 1
+    assert captured[0]["model"] == "sol-alias"
+    assert captured[0]["reasoning_effort"] == expected
+    if tools:
+        assert captured[0]["tools"][0]["function"]["name"] == "ping"
+    else:
+        assert all(k not in captured[0] for k in ("temperature", "top_p", "logprobs", "top_logprobs"))
+    assert events[-1]["type"] == "done"
 
 
 @pytest.mark.asyncio

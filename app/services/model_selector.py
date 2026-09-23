@@ -2326,6 +2326,8 @@ async def call_stream(
                 session_id=session_id,
                 display_model=model,
                 cost_model=model,
+                **({"reasoning_effort": route_metadata["reasoning_effort"]}
+                   if route_metadata.get("reasoning_effort") is not None else {}),
             ):
                 yield event
             return
@@ -3454,7 +3456,7 @@ async def _stream_litellm_openai(
                     )
                 try:
                     req_body = _prepare_openai_chat_request(
-                        req_body, model, direct=_openai_direct, requested_effort=reasoning_effort,
+                        req_body, display_model or model, direct=_openai_direct, requested_effort=reasoning_effort,
                     )
                 except ValueError as exc:
                     yield {"type": "error", "content": str(exc)}
