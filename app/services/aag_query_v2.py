@@ -85,7 +85,7 @@ async def load_authoritative_snapshot(
                       p.project, p.repository_id, p.target_ref, p.governance_scope,
                       p.resolved_commit_sha, p.expected_target_ref_head_sha,
                       p.generated_at, p.verified_at, s.content_fingerprint,
-                      s.scanner_version, s.ruleset_digest, s.scan_scope_digest,
+                      r.scanner_version, r.ruleset_digest, r.scan_scope_digest,
                       s.canonicalization_version, s.stable_key_version,
                       s.stats, s.nodes, s.edges, s.findings, s.unresolved,
                       s.node_count, s.edge_count, s.finding_count,
@@ -100,6 +100,11 @@ async def load_authoritative_snapshot(
                   AND o.repository_id=p.repository_id AND o.target_ref=p.target_ref
                   AND o.governance_scope=p.governance_scope
                   AND o.resolved_commit_sha=p.resolved_commit_sha
+                 JOIN aag_scan_runs r
+                   ON r.id=p.run_id AND r.project=p.project
+                  AND r.repository_id=p.repository_id AND r.target_ref=p.target_ref
+                  AND r.governance_scope=p.governance_scope
+                  AND r.resolved_commit_sha=p.resolved_commit_sha
                 WHERE p.project=$1
                   AND ($2::text IS NULL OR p.repository_id=$2)
                   AND ($3::text IS NULL OR p.target_ref=$3)
