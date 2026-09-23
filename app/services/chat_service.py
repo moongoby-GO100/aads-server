@@ -370,7 +370,22 @@ _INTERRUPT_REASON_CATEGORIES = {
         "completion_guard_incomplete",
         "incomplete_progress_tail",
     ),
-    "completion_contract": ("todo_completion_gate_missing",),
+    "completion_contract": (
+        "todo_completion_gate_missing",
+        # 2026-09-23. completion_contract_unresolved:* 가 토큰에 없어 unknown 으로
+        # 떨어졌다(72시간 3건). 같은 계약 게이트이므로 같은 범주에 둔다.
+        "completion_contract_unresolved",
+    ),
+    # 아래 둘은 2026-09-23 신설. 09-22 보고양식 작업 뒤에 생긴 중단 경로가
+    # 토큰 맵에 없어 72시간 unknown 27건 중 21건이 미분류로 떨어졌다.
+    # 분류기가 퇴행한 것이 아니라 새 사유가 들어온 것이다 — 새 중단 사유를
+    # 만들 때는 여기에 토큰을 같이 넣어라. 넣지 않으면 그 사유는 통째로
+    # unknown 이 되고, 무엇을 고쳐야 하는지 고르는 일이 추측이 된다.
+    "output_validator_failed": (
+        "output_validator_autonomous_failed",
+        "output_validator_retry_failed",
+    ),
+    "first_response_timeout": ("llm_first_response_timeout_after",),
     "client_disconnect": (
         "client_gone=true",
         "client disconnected",
