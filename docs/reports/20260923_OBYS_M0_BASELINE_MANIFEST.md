@@ -7,22 +7,24 @@
 | 조사 시각 | 2026-09-23 18:33~18:44 KST |
 | 판정 | **부분 확정 / M0 완료 보류** |
 | 보류 사유 | 전체 RTO의 앱 기동·E2E 구간 미측정, 역할별 담당 세션·개별 PRD 확정 기록 없음, 목표 `paused`와 PRD `active` 상태 불일치 |
-| 상위 PRD | `docs/prd/20260923_OBYS_FULL_MIGRATION_JINAH_PRD.md`, DB `goal_documents.id=214`, v1.1.0 `active` |
+| 상위 PRD | `docs/prd/20260923_OBYS_FULL_MIGRATION_JINAH_PRD.md`, DB `goal_documents.id=214`, v1.2.0 `active` |
 
 ## 1. 소스와 대상 기준선
 
 | 구분 | 실측값 | 출처 |
 |---|---|---|
 | AADS 조사 작업트리 HEAD | `6266c9089aadf3c7be53e6e70471fe62e3f84825`; `origin/main`보다 5 ahead/51 behind | `git status`, `git log` |
+| PRD 정본 | `origin/main` v1.2, 489줄·47,669B, SHA-256 `1d5b308a74ae9054ff425750fb06c78482d270d95028199a906b3c08f737a3de`, 마지막 변경 commit `4313e0c1d51dd176b6fd77442df5f1ceed009edf` | `git show origin/main:docs/prd/20260923_OBYS_FULL_MIGRATION_JINAH_PRD.md`, `goal_documents.id=214` |
 | AADS 운영 오비서 이미지 | revision `0720ed89caf2`, image digest `sha256:1969a61a242a5b6da57176709d385b95aef16a124f44bb98d9347ce8ed83a3c0` | `docker inspect aads-server-green` |
 | 진아서버 회계비서 소스 | `6931f82bb0c8d3c1e8056d177f019fe7367af82c`, 브랜치 `관문개편`, origin보다 2커밋 앞, AAG 보고서 2파일 dirty | `ssh jinah244 git -C /srv/biseo/회계비서/회계비서 ...` |
 | 공개 health | `https://fb.newtalk.kr/health/live` HTTP 200, 0.759315초 | `curl`, Cloudflare 경유 |
 | 오비서 전용 API | 153 METHOD+PATH, local health HTTP 200/0.008576초 | 운영 `yeoljeong-finance` 컨테이너 route introspection |
 | 소스 호스트 용량 | RAM 25,199,218,688B, 가용 15,320,735,744B; 루트 가용 4,422,942,720B, 사용률 98% | `free -b`, `df -B1` |
 | 대상 호스트 용량 | RAM 25,199,181,824B, 가용 20,760,141,824B; 루트 가용 225,146,679,296B, 사용률 28% | `ssh jinah244 free -b`, `df -B1` |
-| 대상 런타임 | PostgreSQL 16.15 실행; Docker 명령 없음; 80/443 listener 없음; Cloudflare tunnel·biseo 서비스 실행 | `docker --version`, `systemctl`, `ss -ltnp` |
+| 대상 런타임 | PostgreSQL 16.15 실행; Docker 명령 없음; 80/443 listener 없음; Cloudflare tunnel·biseo 서비스 실행; `obys-api@.service` 설치됐으나 disabled·running instance 0 | `docker --version`, `systemctl`, `ss -ltnp` |
+| 대상 리허설 DB | `obys_auth_rehearsal` 8,576,023B, `obys_m1_auth_20260923` 7,830,551B, `obys_m1_business_20260923` 7,822,359B, `obys_m1_source_20260923` 7,765,015B | 진아서버 `pg_database` 조회 |
 
-조사 작업트리 SHA와 운영 이미지 SHA가 다르므로 구현 기준 SHA는 M1 착수 전에 하나로 고정해야 한다. 현 dirty 작업과 untracked 상위 PRD를 운영 이미지에 포함된 것으로 간주하지 않는다.
+조사 작업트리 SHA와 운영 이미지 SHA가 다르므로 구현 기준 SHA는 운영 전환 전에 하나로 고정해야 한다. 로컬 untracked PRD는 v1.1·299줄인 stale copy이며, DB와 `origin/main`의 v1.2를 정본으로 판정한다. 현 dirty 작업과 stale copy를 운영 이미지에 포함된 것으로 간주하지 않는다.
 
 ## 2. 포함 manifest
 
@@ -37,7 +39,7 @@
 | 업무 파일·상태 | `app/data/yeoljeong_finance` 전체 | 65,898,759B, 952 files, manifest hash `13d681a253f16c9b117248f3aa4b3e2389e18cc358dd92a5ebba3735c8f2ecf5` | 파일별 SHA-256·DB 메타 교차검증 |
 | 브라우저 상태 참조 | `browser-bridge-state`의 승인된 오비서 상태만 | 전체 디렉터리 1,907,913B; 포함 파일 선별 미확정 | 계정/사이트별 소유·만료·재인증 검수 |
 | 키 참조 | Vault 암호화 키와 인증/JWT 발급·검증 키의 **참조·버전·소유권** | 운영 컨테이너 `VAULT_ENCRYPTION_KEY` env 미설정, `/app/app/.vault.key` read-only mount의 소스 파일 44B | 원문 복사/문서화 금지; target secret store에 주입 후 암복호 round-trip |
-| API | 현재 오비서 앱의 153 METHOD+PATH | auth, finance, ACCT read, inventory, workspace 포함 | OpenAPI snapshot + 인증/권한별 contract test |
+| API | route introspection 153 METHOD+PATH(health/docs 포함), OpenAPI 업무 endpoint 116개 | auth, finance, ACCT read, inventory, workspace 포함 | OpenAPI snapshot + 인증/권한별 contract test |
 | 워커 | 배달·은행 수집, PC/Browser Bridge 의존, lock/checkpoint/상태 | compose 정의는 있으나 `yeoljeong-finance-worker` 컨테이너 미실행 | 단일 owner/epoch + 멱등 재실행 + 마지막 체크포인트 |
 | 기존 ACCT 연동 | 진아서버 `acct` DB를 같은 호스트에서 read-only로 사용 | DB 1,768,496,151B; 39 tables, RLS 21/39·FORCE RLS 21/39; 5 tenant/company mappings | app role/RLS 문맥·동일 필터 count/amount 검증 |
 
@@ -76,7 +78,7 @@
 | P0 | source 루트 디스크 98%, 가용 4,422,942,720B | `df -B1` | 백업/이미지 빌드 여유 확보 전 source 작업 금지 |
 | P0 | `YEOLJEONG_FINANCE_DATABASE_URL` 미설정, `DATABASE_URL`은 AADS, `OBYS_DATABASE_URL`은 `obys` | 운영 컨테이너 env 계약(값 비노출) | 모든 업무 경로를 명시적 target DSN으로 고정하고 fallback 제거 |
 | P0 | 자동수집 worker 미실행 | compose에는 정의, `docker ps -a`에는 컨테이너 없음 | 현재 수집 공백 원인 확인 및 target 단일 실행권 설계 |
-| P0 | target에 Docker/Nginx/80·443 listener 없음 | `docker --version`, `ss` | blue/green 계약을 만족할 target runtime·proxy 설치안 확정 |
+| P0 | target에 Docker/Nginx/80·443 listener와 실행 중 오비서 instance 없음 | `docker --version`, `ss`, systemd unit 상태 | 선택된 systemd+uvicorn 방식의 양 슬롯·proxy/TLS·cutover/rollback 계약 완성 |
 | P0 | end-to-end RTO 미측정 | DB restore 1.27초는 측정했으나 target runtime 부재 | 앱 기동·route/E2E·cutover/rollback 포함 통합 시간 측정 |
 | P0 | goal은 `paused`, PRD는 `active` | `goals`, `goal_documents` DB 조회 | 승인 주체가 목표 상태와 PRD 상태를 일치시킴 |
 | P0 | M0~M6 `owner_session_id` 전부 NULL | `milestones` DB 조회 | 담당 세션 확정 및 인수 응답 기록 |
@@ -88,11 +90,11 @@
 
 | 단계 | DB owner role | owner session | 개별 PRD | 상태 |
 |---|---|---|---|---|
-| M0 | CTO | NULL | 상위 PRD v1.1의 M0 절만 존재 | 미확정 |
+| M0 | CTO | NULL | 상위 PRD v1.2의 M0/M1 기록만 존재 | 미확정 |
 | M1~M4 | Developer | 전부 NULL | milestone별 문서 연결 필드/문서 없음 | 미확정 |
 | M5~M6 | CTO | 전부 NULL | milestone별 문서 연결 필드/문서 없음 | 미확정 |
 
-현재 `goal_documents`에는 목표 단위 PRD 1건만 있고 현재 스키마에는 `milestone_id`가 없다. milestone별 PRD 연결 작업 `runner-1b2b0474`가 queued 상태이므로 우회 DB 쓰기를 하지 않는다. 목표 소유 CTO 세션 `acc75e55-0917-4a01-9a01-000000000002`에 PRD 승인과 역할 배정을 질의했으며 relay `462df734-7d1e-4f0f-ab83-60f89977c4c2` 응답 대기 중이다.
+현재 `goal_documents`에는 목표 단위 PRD 1건만 있고 현재 스키마에는 `milestone_id`가 없다. milestone별 PRD 연결 작업 `runner-1b2b0474`도 선행 실패로 `blocked_dependency/cancelled`라서 우회 DB 쓰기를 하지 않는다. 목표 소유 CTO 세션 `acc75e55-0917-4a01-9a01-000000000002`에 PRD 승인과 역할 배정을 질의했으며 relay `462df734-7d1e-4f0f-ab83-60f89977c4c2` 응답 대기 중이다.
 
 ## 7. M0 완료 판정
 
