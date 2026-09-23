@@ -19,6 +19,7 @@ Status: implementation, 2026-09-23. Scope: AADS chat relay, Agent SDK wrapper, a
 ## Design
 
 - Replace the broken broad cron entry with an AADS-specific updater timer. Do not reactivate `update_claude_all_servers.sh` as-is: it also updates Codex and remote hosts outside this request.
+- Run the timer from a dedicated, clean, retained updater worktree at `/root/aads/.worktrees/claude-cli-updater-runtime`; the host's long-lived working tree contains unrelated changes and may lag `origin/main`. The updater fetches fresh `origin/main` before preparing a candidate. Automation-code upgrades require explicitly refreshing this retained worktree after tests.
 - A read-only audit command checks the live execution paths and official manifest and emits machine-readable drift/availability status. Missing tools, network failure, or unverified checksum are `unknown`, not "up to date".
 - A prepare command uses an isolated worktree at freshly fetched `origin/main`, changes only the pinned CLI artifact version/checksum/test fixture, runs relevant tests, commits with hooks, and pushes by fast-forward only. It refuses unsupported major/minor version jumps, a dirty worktree, a changed base, or a checksum mismatch.
 - An apply command delegates to `deploy.sh bluegreen` from that clean worktree. It verifies the resulting active image, model execution receipt, standby image digest, and monitor interval. On uncertain result it does not advance the runner. If the release script defers standby, the updater remains pending and retries certification without replacing live streams.
