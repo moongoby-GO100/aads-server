@@ -317,7 +317,7 @@ class MemoryManager:
                 INSERT INTO ai_observations
                     (category, key, value, confidence, source_session_id, last_confirmed_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-                ON CONFLICT (category, key) DO UPDATE SET
+                ON CONFLICT (category, key, COALESCE(project, '')) DO UPDATE SET
                     confidence = CASE
                         WHEN ai_observations.value = EXCLUDED.value
                         THEN LEAST(ai_observations.confidence + 0.1, 1.0)
