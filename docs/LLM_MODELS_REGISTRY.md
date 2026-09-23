@@ -11,6 +11,56 @@ AADS 채팅창에 노출되는 모델 집합과 실제 실행 경로를 문서�
 - `llm_api_keys` 상태와 레지스트리 metadata를 함께 보고 실행 가능 모델과 실제 routing backend를 판단합니다.
 - 본문의 과거 수기 모델 표는 역사적 참고 자료이며, 현재 authoritative source는 레지스트리 row입니다.
 
+## 2026-09-23 CEO PC 로컬 모델(Qwen 계열)로 무엇을 할 수 있나
+
+**요약.** PC Qwen 은 "추가 비용 없이 돌릴 수 있는 보조 판독기"다. 정식 판정·금액 계산·
+최종 승인에는 쓰지 않는다. 2026-09-23 18:5x KST 실측 기준 **PC Agent 가 오프라인이라
+지금 당장은 어느 경로도 실행되지 않는다**(`device_list` = 0대, `local_model_queue_status`
+= `pc_agent_offline_or_not_updated`).
+
+### 실행 경로 (코드 확인)
+
+| 계층 | 위치 | 하는 일 |
+|---|---|---|
+| OpenAI 호환 브리지 | `app/api/pc_ollama_bridge.py` (`/pc-ollama/chat/completions`) | LiteLLM 이 부를 수 있는 표면을 열고 PC Agent WebSocket 으로 위임 |
+| blue/green 홉 | 같은 파일 `_forward_to_peer` | 소켓을 쥔 슬롯으로 1홉 전달 — 없으면 503 이 절반씩 났다(2026-09-21 실측) |
+| 채팅 스트리밍 | `app/services/model_selector.py` `_stream_pc_ollama_provider` | `backend=pc_ollama` 모델을 채팅에서 직접 실행 |
+| 임베딩 | `app/services/chat_embedding_service.py` | `qwen3-embedding:0.6b` 1순위, `bge-m3` 폴백 (`app/api/llm_models.py:206`) |
+| 러너 2차 판독 | `app/services/review_advisory.py` | AI 코드리뷰를 섀도 모드로 재판독, 1차 판정과 일치율 집계 |
+| 설치 큐 | `scripts/local_model_install_queue.json` (21건) + `app/services/local_model_manager.py` | 병렬 설치 금지, 벤치마크 통과 전 기본모델 승격 금지 |
+
+### 쓸 수 있는 일 / 쓰면 안 되는 일
+
+| 용도 | 담당 모델 | 판정 |
+|---|---|---|
+| 분류·요약·2차 판독 | `pc-qwen38-27b-local` (실제 설치된 유일 모델, IQ2_XS 9.4GB) | 가능 — 단 보조용 |
+| 임베딩·의미검색 | `qwen3-embedding:0.6b` | 가능, DB 활성 |
+| 화면/이미지 판독 | `pc-qwen2.5vl-3b` / `-7b` | 레지스트리 활성이나 **PC 미설치** |
+| 일반 텍스트 생성 | `pc-qwen3-4b/8b/14b/30b` | 큐에 있으나 전부 `queued_not_checked` = 미설치 |
+| 리랭크 | `Qwen/Qwen3-Reranker-0.6B` | 큐 우선순위 3, 미설치 |
+| 이미지 생성·편집 | `QwenLM/Qwen-Image` | 큐 우선순위 2, 미설치 |
+| **금액·수량 계산, 최종 판정, 고유명사 정확도** | — | **금지.** IQ2_XS 는 27B 를 2비트급으로 욱여넣은 것이라 숫자와 긴 논리 사슬에서 미끄러진다(`pc_ollama_bridge.py:47-51` 주석, 2026-09-21 실측) |
+
+### 섀도 평가 현황 — 아직 승격 기준 미달
+
+CEO 승인 48시간 섀도 실험(`runner_review_advisory_config`, `updated_by=ceo-approved-qwen-shadow-48h-20260922`)
+대상은 `pc-qwen38-27b`, 승격 조건은 **1차 판정 일치율 ≥ 0.80 · critical miss 0건**이다.
+
+| 지표 | 실측값 [DB `code_review_advisories`, 2026-09-23 조회] |
+|---|---|
+| 표본 | 139건 (완료 58 / 실패 80 / running 1) |
+| 일치율 | 27 / 58 = **46.6%** (기준 80% 미달) |
+| 실패 사유 | 대부분 `invalid advisory review structure` — JSON 구조 출력 실패 |
+| 판정 | **승격 불가.** 섀도 유지, 정식 리뷰 경로 대체 금지 |
+
+### 운영 규칙
+
+1. PC 로컬 모델은 **비용 0**이지만 가용성이 CEO PC 전원·네트워크에 묶인다. 상시 경로의 1순위로 두지 않는다.
+2. 큐 항목은 **한 번에 하나만** 설치한다(`parallel_installs:false`). 대형 모델 동시 다운로드 금지.
+3. 벤치마크 통과 전에는 어떤 항목도 기본 모델로 승격하지 않는다(`benchmark_required_before_default:true`).
+4. 목록에 보인다고 실행 가능한 것이 아니다. `llm_models` 활성 여부와 **PC 실제 설치 여부(`ollama list`)는 별개**다 — 현재 레지스트리 활성이면서 미설치인 row 가 다수 있다.
+5. PC Agent 오프라인이면 "기능 불가"가 아니라 **"연결된 에이전트가 없어 라우팅 불가"**로 보고한다.
+
 ## 2026-04-28 최신 모델 자동 발견 및 provider별 선호도 분리
 
 - 자동 발견
