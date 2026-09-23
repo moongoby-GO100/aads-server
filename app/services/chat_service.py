@@ -9517,7 +9517,14 @@ def _runner_progress_allow_sql() -> str:
 
 
 def _visible_message_filter(is_active: bool, include_streaming: bool) -> str:
-    hidden_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate'"
+    # A completed answer supersedes only partials from the same execution.
+    # The archival writer records that final message ID; exclude those rows
+    # while retaining superseded partials that have no final answer.
+    hidden_filter = (
+        "AND intent IS DISTINCT FROM '_deleted_duplicate'"
+        " AND (intent IS DISTINCT FROM '_archived_partial'"
+        " OR COALESCE(quality_details->>'final_message_id', '') = '')"
+    )
     if include_streaming:
         # streaming_placeholder rows are intentionally is_hidden=true for normal
         # history, but live/recovery fetches explicitly request them. Interrupted
