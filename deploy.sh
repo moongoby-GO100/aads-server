@@ -970,12 +970,19 @@ claim_latest_queued_deploy_request() {
     if [[ "${AADS_DEPLOY_QUEUE_WORKER:-false}" != "true" ]] || ! deploy_db_available; then
         return 0
     fi
+    # ready head 는 반드시 component='api' AND target_env='production' 안에서 고른다.
+    # 2026-09-23: 필터가 없어 큐 맨 앞이 dashboard 행이면 api 워커가 자기 SHA 와
+    # 다르다고 판단해 영구 stand down 했다(#5131~#5133 이 이렇게 흡수됐다).
+    # 큐 intake(component='api' AND target_env='production' 로 queue_position·
+    # waiting_batch_predecessor 를 계산하는 곳)와 같은 술어를 써야 한다.
     local latest_sha run_id
     latest_sha="$(
         deploy_db_exec "
             SELECT release_sha
             FROM deploy_runs
             WHERE project='AADS'
+              AND component='api'
+              AND target_env='production'
               AND status='queued'
               AND phase='queued_for_deploy'
             ORDER BY created_at ASC, id ASC
@@ -1001,6 +1008,8 @@ claim_latest_queued_deploy_request() {
                 SELECT id
                 FROM deploy_runs
                 WHERE project='AADS'
+                  AND component='api'
+                  AND target_env='production'
                   AND status='queued'
                   AND phase='queued_for_deploy'
                 ORDER BY created_at ASC, id ASC
