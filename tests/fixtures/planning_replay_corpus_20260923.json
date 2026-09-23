@@ -1,0 +1,251 @@
+{
+  "schema_version": 1,
+  "corpus_id": "m7-replay-20260923",
+  "milestone_id": "d17c7a5e-0923-4a00-8000-000000000017",
+  "goal_id": "d17c7a5e-0923-4a00-8000-000000000001",
+  "prd": "docs/prd/20260923_PLANNING_CONVERSATION_REVIEW_PRD.md",
+  "prd_sha256": "765183af786cc10068b0c1d70fc1010f6c63300c2a703694c5f866f88bacf630",
+  "purpose": "M7 완료기준('현재 논의로 재현')의 입력 코퍼스. 실제 CEO 대화 턴을 DB에서 추출해 turn_kind 라벨과 기대 결과(AC)를 고정한다. 합성 문장이 아니라 chat_messages 실측 행이다.",
+  "source": {
+    "tenant_id": "2d701a8c-9596-4757-8588-faa4f7837112",
+    "session_id": "8bf0405a-1f22-4ad9-bb09-6e0fce8c6339",
+    "session_title": "오비스",
+    "workspace_id": "48cb8821-76b6-4493-9874-7fcb5a751b1a",
+    "extracted_at_utc": "2026-09-23T09:20:00Z",
+    "extract_query": "SELECT id, created_at, md5(content) FROM chat_messages WHERE session_id='8bf0405a-1f22-4ad9-bb09-6e0fce8c6339' AND role='user' AND deleted_at IS NULL AND created_at > '2026-09-23T05:40:00Z' ORDER BY created_at",
+    "content_hash_algo": "md5(chat_messages.content)"
+  },
+  "turn_kinds": {
+    "instruction_apply": "정식 목표/마일스톤 반영을 명시적으로 지시한 턴. 반영 허용.",
+    "design_decision": "요구사항·경계·금지를 확정한 턴. 설계 초안 revision 갱신만 허용, 정식 반영 금지.",
+    "question": "현황·의미·영향을 묻는 턴. 초안·대안 갱신만, 정식 반영 금지.",
+    "assumption": "가정 제시·확인 턴('이 흐름인가?'). 가정으로 표시, 정식 반영 금지.",
+    "reorder": "표시/실행 순서만 바꾸는 턴. 명시한 순서만 변경, 상태·의존성 변경 금지.",
+    "system_dispatch": "[시스템] 사전 승인 다음단계 주입 메시지. CEO 발언이 아니므로 설계 초안 원문 출처로 쓰지 않는다."
+  },
+  "turns": [
+    {
+      "seq": 1,
+      "message_id": "22b7ffe4-19ea-4548-a30b-0195ea275674",
+      "created_at_utc": "2026-09-23T05:46:24.571833Z",
+      "content_md5": "1552ee3581bba5cc9e3737bc1747911f",
+      "turn_kind": "instruction_apply",
+      "text_head": "지시서 활성화 방안 및 최적화를 목표로 등록하고 마일스톤 등록해",
+      "expected": {
+        "draft_revision_created": true,
+        "formal_plan_changes_allowed": true
+      },
+      "observed_baseline": "goals 1건 생성(05:48:12), milestones M1~M6 생성(05:48:40). 출처 메시지 링크 없음."
+    },
+    {
+      "seq": 2,
+      "message_id": "753c342a-823b-4518-80d0-703838da0844",
+      "created_at_utc": "2026-09-23T05:59:52.514206Z",
+      "content_md5": "c7e52a7db1f2904f54be454b16d81dab",
+      "turn_kind": "question",
+      "text_head": "각 세션에서 보고하는 사항을 내가 다 검토를 못하겠어 ... 어떻게 하면 효율적으로 관리하고 프로젝트를 진행할수 있을까?",
+      "ac": ["AC-01"],
+      "expected": {
+        "draft_revision_created": true,
+        "formal_plan_changes_allowed": false
+      }
+    },
+    {
+      "seq": 3,
+      "message_id": "4e42c2ab-8878-4d47-8890-8d3e8fc702a5",
+      "created_at_utc": "2026-09-23T06:34:00.896382Z",
+      "content_md5": "fe7e8c8f44a76a971649323058ef5ed3",
+      "turn_kind": "question",
+      "text_head": "이런 보고가 내가 의도한거와 다르게 응답이 왔는데 이걸 검토안하고 모두 승인한다고하면 어떻게 되나?",
+      "ac": ["AC-01"],
+      "expected": {
+        "draft_revision_created": true,
+        "formal_plan_changes_allowed": false
+      }
+    },
+    {
+      "seq": 4,
+      "message_id": "a47f7fe1-8483-4a69-9491-2d578e22934f",
+      "created_at_utc": "2026-09-23T07:03:00.567133Z",
+      "content_md5": "7bf5cd1ad4d31999fa39f20f315df23e",
+      "turn_kind": "assumption",
+      "text_head": "응답에 대한 리뷰를 별도로 붙이고 확인하고 이상있을시에만 나에게 보고한다 이흐름인가?",
+      "ac": ["AC-01"],
+      "expected": {
+        "draft_revision_created": true,
+        "formal_plan_changes_allowed": false,
+        "item_kind": "assumption"
+      }
+    },
+    {
+      "seq": 5,
+      "message_id": "1be0138a-00cf-45bb-a6f5-f5ae9af18b42",
+      "created_at_utc": "2026-09-23T07:15:49.627299Z",
+      "content_md5": "63aff0503ba050b92064942a292a5210",
+      "turn_kind": "design_decision",
+      "text_head": "내가 원하는건 너하고 이렇게 대화하는 응답에 대한 리뷰와 방향을 다방면에서 확인후 권장안을 제안하고 그게 올바르게 기획 설계 되게하는게 중요해",
+      "expected": {
+        "draft_revision_created": true,
+        "formal_plan_changes_allowed": false,
+        "requirements_recorded": true
+      }
+    },
+    {
+      "seq": 6,
+      "message_id": "14adc4ca-e4df-4ff5-9db1-6ed4bcddcee6",
+      "created_at_utc": "2026-09-23T07:31:14.607525Z",
+      "content_md5": "b8fe8808fc45af5f2a0e486ba05fd1ac",
+      "turn_kind": "design_decision",
+      "text_head": "너의 목표중 지시서관련된게 있지? 이걸 방금 나눈 내용을 넣어서 어떻게 기획하면 좋을지 다시 보고해",
+      "expected": {
+        "draft_revision_created": true,
+        "formal_plan_changes_allowed": false,
+        "note": "기존 목표 참조는 읽기만. 보고 요청이지 반영 지시가 아니다."
+      }
+    },
+    {
+      "seq": 7,
+      "message_id": "a1e33dc7-7567-4c7c-8174-ad0f30afac15",
+      "created_at_utc": "2026-09-23T08:05:09.302562Z",
+      "content_md5": "f08ec7a1e5a8bfdb48dbb3f075776073",
+      "turn_kind": "question",
+      "text_head": "대화하면서 작동하도록 설계한다라는게 정확하게 어떤 의미이고 어떻게 작동되는지 흐름을 상세하게 이야기해줘",
+      "ac": ["AC-02"],
+      "expected": {
+        "draft_revision_created": true,
+        "formal_plan_changes_allowed": false
+      },
+      "observed_baseline": "08:05:09~08:11:59 구간에 goals/milestones 생성·수정 0건 [DB 조회]. 현재 동작도 이 턴에서는 기준을 만족한다."
+    },
+    {
+      "seq": 8,
+      "message_id": "d3254e03-050b-4924-a008-06f071869800",
+      "created_at_utc": "2026-09-23T08:11:59.910415Z",
+      "content_md5": "5f17e7a1d14446ae30ccf6c34298f4a1",
+      "turn_kind": "instruction_apply",
+      "text_head": "해당 논의 건 부터 목표에 반영되게 해봐",
+      "ac": ["AC-03"],
+      "expected": {
+        "draft_revision_created": true,
+        "formal_plan_changes_allowed": true,
+        "must_bind_to_draft_revision": true
+      },
+      "observed_baseline": "milestones M7~M11 5건 생성(08:15:00.671286). 어느 설계 revision·어느 원문 메시지에서 나왔는지 기록하는 컬럼이 milestones/goals 스키마에 없어 역추적 불가 [스키마 조회]."
+    },
+    {
+      "seq": 9,
+      "message_id": "464d5e86-62f4-4f8e-80fb-3d32f165816c",
+      "created_at_utc": "2026-09-23T08:18:04.333689Z",
+      "content_md5": "7d269abfdc364ed647ce30b061a379a5",
+      "turn_kind": "question",
+      "text_head": "[추가 지시] 마일스톤에 업무계층등록은 안하나?",
+      "ac": ["AC-01", "AC-15"],
+      "expected": {
+        "draft_revision_created": true,
+        "formal_plan_changes_allowed": false
+      }
+    },
+    {
+      "seq": 10,
+      "message_id": "c5973979-a093-4bdd-9627-993fe0aa7c0c",
+      "created_at_utc": "2026-09-23T08:28:01.466963Z",
+      "content_md5": "5f17e7a1d14446ae30ccf6c34298f4a1",
+      "turn_kind": "instruction_apply",
+      "text_head": "해당 논의 건 부터 목표에 반영되게 해봐",
+      "ac": ["AC-04"],
+      "duplicate_of": "d3254e03-050b-4924-a008-06f071869800",
+      "expected": {
+        "draft_revision_created": false,
+        "formal_plan_changes_allowed": false,
+        "reason": "seq 8 과 content_md5 동일한 재전송. 같은 멱등키(tenant/project/session/goal/source_user_message 내용해시)면 기존 결과를 반환하고 새 초안·새 반영을 만들지 않는다."
+      },
+      "observed_baseline": "실측상 08:28 이후 이 목표에 새 milestone 행은 생기지 않았다(M7~M11 모두 08:15:00.671286 단일 시각) [DB 조회]. 다만 스키마에 멱등키가 없어 중복 차단이 보장된 것이 아니라 결과적으로 발생하지 않은 것이다."
+    },
+    {
+      "seq": 11,
+      "message_id": "b409195e-97ad-48db-96b6-bcbf7b44db43",
+      "created_at_utc": "2026-09-23T08:39:03.977599Z",
+      "content_md5": "7b51e6e4a5fb786c8a81d7c054e924b6",
+      "turn_kind": "reorder",
+      "text_head": "M1 보다 기획 설계 관련 마일스톤을 최상단에 배치해",
+      "expected": {
+        "draft_revision_created": true,
+        "formal_plan_changes_allowed": true,
+        "allowed_fields": ["sequence_order"],
+        "forbidden_fields": ["status", "auto_advance", "completion_criteria"]
+      }
+    },
+    {
+      "seq": 12,
+      "message_id": "371b6ede-8023-40c3-9944-401531f95cf3",
+      "created_at_utc": "2026-09-23T08:39:51.680995Z",
+      "content_md5": "68fc8e363b5fcdd42f2ccc2980ba5816",
+      "turn_kind": "instruction_apply",
+      "text_head": "[추가 지시] 이게 작동되면 지시서는 나중에 진행해도 될듯하다 제일 마지막으로 이동시켜놔",
+      "expected": {
+        "draft_revision_created": true,
+        "formal_plan_changes_allowed": true,
+        "must_bind_to_draft_revision": true
+      },
+      "observed_baseline": "M4·M11 이 08:48:46 에 갱신되고 criteria_history 에 reason='CEO 지시: 기획 기능이 작동한 뒤 지시서를 마지막에 진행...' 과 previous_title/previous_criteria/previous_version 이 남았다 [DB 조회]. 귀속은 자연어 reason 으로만 가능하고 source_message_id·draft revision 링크는 없다 — M7 이 메꿔야 할 지점."
+    },
+    {
+      "seq": 13,
+      "message_id": "875f2112-ec6d-416d-87ea-f4c55328cf5f",
+      "created_at_utc": "2026-09-23T09:10:36.981290Z",
+      "content_md5": "1d11b1855ed50006355b6e6e2faca18a",
+      "turn_kind": "reorder",
+      "text_head": "[추가 지시] 자동진행 순서를 바꿔 배열순서로",
+      "expected": {
+        "draft_revision_created": true,
+        "formal_plan_changes_allowed": true,
+        "allowed_fields": ["sequence_order", "auto_advance"],
+        "forbidden_fields": ["status", "completion_criteria"]
+      }
+    }
+  ],
+  "negative_cases": [
+    {
+      "case": "cross_tenant_goal_injection",
+      "ac": ["AC-06"],
+      "input": {
+        "tenant_id": "2d701a8c-9596-4757-8588-faa4f7837112",
+        "goal_id": "acc70917-0917-4a01-9a01-000000000001",
+        "session_id": "8bf0405a-1f22-4ad9-bb09-6e0fce8c6339"
+      },
+      "expected": "goal 이 이 세션의 목표가 아니므로 초안 저장 거절. 타 tenant 자원이면 404, 같은 tenant 다른 목표면 422(불명확한 목표 연결). 목표 제목 등 내용 노출 금지."
+    },
+    {
+      "case": "session_message_mismatch",
+      "ac": ["AC-06"],
+      "input": {
+        "session_id": "8bf0405a-1f22-4ad9-bb09-6e0fce8c6339",
+        "source_message_id": "9909e41e-8450-494d-ba16-dd1bd1bb637b"
+      },
+      "expected": "source_message 가 다른 세션(89c864a2 Developer 세션)의 행이므로 422. 원문 출처는 같은 세션·같은 tenant 여야 한다."
+    },
+    {
+      "case": "system_dispatch_as_source",
+      "input": {
+        "source_message_id": "cee341a4-a804-45dc-b171-7c1fb538c656"
+      },
+      "expected": "role=user 이지만 '[시스템] 사전 승인 범위에 포함된 다음 단계입니다' 로 시작하는 주입 메시지다. CEO 설계 발언으로 분류하지 않는다(turn_kind=system_dispatch)."
+    },
+    {
+      "case": "same_key_different_body",
+      "ac": ["AC-05"],
+      "expected": "같은 멱등키에 content_hash 가 다르면 409, 기존 초안 보존."
+    }
+  ],
+  "current_traceability_gap": {
+    "exists_today": "milestones.criteria_history 에 reason(자연어)·previous_title·previous_criteria·previous_version 이 기록된다. milestones.version 도 증가한다(M4=6, M11=4 실측).",
+    "missing": "source_message_id, 설계 draft/revision id, 멱등키, correlation_id. 따라서 '원문 메시지→설계 버전→변경안' 기계 추적이 불가능하고, 같은 턴 재전송 차단도 스키마로 보장되지 않는다.",
+    "measured_at_utc": "2026-09-23T09:25:00Z"
+  },
+  "acceptance_summary": {
+    "formal_change_allowed_turns": [1, 8, 11, 12, 13],
+    "formal_change_forbidden_turns": [2, 3, 4, 5, 6, 7, 9, 10],
+    "duplicate_turn_pairs": [[8, 10]],
+    "criteria": "turn_kind 분류 결과가 위 두 목록과 100% 일치하고, 금지 목록 턴에서 goals/milestones 쓰기 0건, 중복 쌍에서 새 초안 0건이면 M7 완료기준의 재현 항목을 충족한다."
+  }
+}
