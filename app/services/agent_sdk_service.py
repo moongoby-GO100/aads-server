@@ -354,6 +354,10 @@ class AgentSDKService:
 
         options = ClaudeAgentOptions(
             cwd=_CWD,
+            # Keep direct-execution SDK sessions on the same authenticated,
+            # version-pinned container CLI as the model-selector SDK path.
+            # Otherwise the SDK silently falls back to its older bundled CLI.
+            cli_path="/app/scripts/claude-oauth-wrapper.sh",
             model="claude-opus-4-6",
             max_turns=self.max_turns,
             max_budget_usd=self.max_budget_usd,

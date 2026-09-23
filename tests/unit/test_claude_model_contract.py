@@ -29,6 +29,22 @@ def test_opus_55_uses_pinned_compatible_cli_in_release_image():
     assert "_bundled/claude" not in wrapper
 
 
+def test_direct_execution_sdk_uses_pinned_authenticated_container_cli(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.services import agent_sdk_service as sdk_service
+
+    options = MagicMock()
+    monkeypatch.setattr(sdk_service, "ClaudeAgentOptions", options)
+    monkeypatch.setattr(sdk_service, "HookMatcher", MagicMock())
+    service = sdk_service.AgentSDKService()
+    monkeypatch.setattr(service, "_get_mcp_server", lambda: None)
+
+    service._build_options()
+
+    assert options.call_args.kwargs["cli_path"] == "/app/scripts/claude-oauth-wrapper.sh"
+
+
 @pytest.mark.parametrize("requested,expected", list(AADS_MODEL_IDS.items()) + [
     ("claude-fable-5.1", "claude-fable-5-1"),
     ("opus", "claude-opus-5-5"), ("sonnet", "claude-sonnet-5"),
