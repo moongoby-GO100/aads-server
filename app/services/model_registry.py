@@ -155,6 +155,7 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "o3-mini": (_decimal(1.1), _decimal(4.4)),
     "o3-pro": (_decimal(20.0), _decimal(80.0)),
     "gpt-6-astra": (_decimal(10.0), _decimal(50.0)),
+    "gpt-6-sol": (_decimal(4.0), _decimal(20.0)),
     "gpt-5.6-sol": (_decimal(4.0), _decimal(20.0)),
     "gpt-5.6-tela": (_decimal(3.0), _decimal(15.0)),
     "gpt-5.6-terra": (_decimal(2.0), _decimal(12.0)),
@@ -234,6 +235,7 @@ _THINKING_MODELS = {
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "gpt-6-astra",
+    "gpt-6-sol",
     "o3",
     "o3-mini",
     "o3-pro",
@@ -247,6 +249,7 @@ _VISION_MODELS = {
     "gpt-4o",
     "gpt-4o-mini",
     "gpt-6-astra",
+    "gpt-6-sol",
     "gemini-2.5-flash-image",
     "qwen-vl-max",
     "qwen-vl-plus",
@@ -271,6 +274,7 @@ _CODING_MODELS = {
     "gpt-5.4-mini",
     "gpt-5.3-codex",
     "gpt-6-astra",
+    "gpt-6-sol",
     "gpt-5.6-sol",
     "gpt-5.6-tela",
     "gpt-5.6-terra",
@@ -296,6 +300,7 @@ _DISPLAY_NAME_OVERRIDES = {
     "claude-fable-5": "Claude Fable 5",
     "claude-fable-5-1": "Claude Fable 5.1",
     "gpt-6-astra": "GPT-6 Astra",
+    "gpt-6-sol": "GPT-6 Sol",
     "gpt-5.4": "GPT-5.4 (Codex CLI)",
     "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)",
     "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)",
@@ -353,6 +358,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
     ),
     "openai": (
         "gpt-6-astra",
+        "gpt-6-sol",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
@@ -364,7 +370,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "o3-mini",
         "o3-pro",
     ),
-    "codex": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
+    "codex": ("gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
     "deepseek": ("deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"),
     "openrouter": (
         "openrouter-grok-4-fast",
@@ -509,8 +515,8 @@ def _display_name_for(model_id: str) -> str:
 
 
 def _display_name_for_provider(provider: str, model_id: str) -> str:
-    if provider == "codex" and model_id == "gpt-6-astra":
-        return "GPT-6 Astra (Codex CLI)"
+    if provider == "codex" and model_id in {"gpt-6-astra", "gpt-6-sol"}:
+        return f"{_display_name_for(model_id)} (Codex CLI)"
     override = _DISPLAY_NAME_OVERRIDES.get(model_id)
     if override:
         return override

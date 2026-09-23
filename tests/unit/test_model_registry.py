@@ -96,6 +96,23 @@ def test_build_registry_snapshots_registers_codex_astra_template():
     assert astra_row["capabilities"]["chatgpt_credits"] is True
 
 
+def test_registry_sync_template_keeps_codex_sol_registered():
+    now = datetime.now(timezone.utc)
+    rows, _ = model_registry.build_registry_snapshots([
+        {
+            "id": 4, "provider": "codex", "key_name": "CODEX_CHATGPT_OAUTH",
+            "priority": 1, "is_active": True, "rate_limited_until": None,
+            "last_used_at": now, "last_verified_at": now,
+        }
+    ])
+    sol = next(row for row in rows if row["provider"] == "codex" and row["model_id"] == "gpt-6-sol")
+    assert sol["display_name"] == "GPT-6 Sol (Codex CLI)"
+    assert sol["execution_model_id"] == "gpt-6-sol"
+    assert sol["metadata"]["execution_backend"] == "codex_cli"
+    assert sol["is_active"] is True
+    assert sol["is_executable"] is True
+
+
 def test_codex_astra_migration_adds_runner_model_config_cycle():
     sql = Path("migrations/155_runner_model_config_gpt6_astra.sql").read_text()
 
@@ -171,7 +188,7 @@ def test_build_registry_snapshots_marks_anthropic_oauth_as_runtime_only_discover
     assert claude_row["metadata"]["accepted_aliases"] == [
         "claude-sonnet-4-6",
     ]
-    assert claude_row["execution_model_id"] == "claude-sonnet-4-6"
+    assert claude_row["execution_model_id"] == "claude-sonnet-5"
 
     fable_row = next(row for row in model_rows if row["provider"] == "anthropic" and row["model_id"] == "claude-fable-5-1")
     assert fable_row["execution_backend"] == "claude_cli_relay"
