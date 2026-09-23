@@ -1988,6 +1988,145 @@ async def get_runner_model_stats(
     return {"days": days, "project": project or "all", "stats": stats}
 
 
+@router.get("/pipeline/failures/classification", tags=["pipeline-runner"])
+async def get_failure_classification(
+    days: int = Query(7, ge=1, le=180),
+    project: Optional[str] = Query(None, max_length=10),
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """러너 실패(error/cancelled)를 3분류로 집계한다 (M1 실패 원인 계측).
+
+    instruction_defect(지시서 결함) / infra(리뷰·CLI 인프라) / gate_block(정상 게이트 차단).
+    분류 규칙 원본은 app/services/pipeline_failure_taxonomy.py 이고,
+    이 API 는 migrations/182 가 만든 pipeline_failure_classification_v1 뷰만 읽는다.
+    """
+    if project and project not in _VALID_PROJECTS:
+        raise HTTPException(status_code=400, detail="유효하지 않은 프로젝트")
+
+    from app.core.db_pool import get_pool
+    from app.services.pipeline_failure_taxonomy import (
+        CLASS_LABELS_KO,
+        CLASS_UNCLASSIFIED,
+        VIEW_NAME,
+    )
+
+    pool = get_pool()
+    tenant_id = _tenant_id(context)
+    conditions = ["tenant_id = $1::uuid", "created_at >= NOW() - ($2::int * INTERVAL '1 day')"]
+    params: list[object] = [tenant_id, days]
+    if project:
+        conditions.append("project = $3")
+        params.append(project)
+    where = " AND ".join(conditions)
+
+    async with pool.acquire() as conn:
+        view_exists = await conn.fetchval(
+            "SELECT to_regclass($1) IS NOT NULL", f"public.{VIEW_NAME}"
+        )
+        if not view_exists:
+            raise HTTPException(
+                status_code=503,
+                detail=f"{VIEW_NAME} 뷰가 없습니다 — migrations/182 적용이 필요합니다",
+            )
+        class_rows = await conn.fetch(
+            f"""
+            SELECT
+                failure_class,
+                COUNT(*)::int AS jobs,
+                COUNT(*) FILTER (WHERE status = 'error')::int AS error_jobs,
+                COUNT(*) FILTER (WHERE status = 'cancelled')::int AS cancelled_jobs,
+                MAX(created_at) AS last_seen_at
+            FROM {VIEW_NAME}
+            WHERE {where}
+            GROUP BY failure_class
+            ORDER BY jobs DESC
+            """,
+            *params,
+        )
+        subtype_rows = await conn.fetch(
+            f"""
+            SELECT
+                failure_class,
+                failure_subtype,
+                signal_source,
+                COUNT(*)::int AS jobs,
+                MAX(created_at) AS last_seen_at,
+                (array_agg(signal_sample ORDER BY created_at DESC))[1] AS sample
+            FROM {VIEW_NAME}
+            WHERE {where}
+            GROUP BY failure_class, failure_subtype, signal_source
+            ORDER BY jobs DESC
+            LIMIT 60
+            """,
+            *params,
+        )
+        project_rows = await conn.fetch(
+            f"""
+            SELECT
+                project,
+                failure_class,
+                COUNT(*)::int AS jobs
+            FROM {VIEW_NAME}
+            WHERE {where}
+            GROUP BY project, failure_class
+            """,
+            *params,
+        )
+
+    total = sum(row["jobs"] for row in class_rows)
+
+    def _pct(value: int) -> float:
+        return round(100.0 * value / total, 2) if total else 0.0
+
+    classes = [
+        {
+            "failure_class": row["failure_class"],
+            "label_ko": CLASS_LABELS_KO.get(row["failure_class"], row["failure_class"]),
+            "jobs": row["jobs"],
+            "pct": _pct(row["jobs"]),
+            "error_jobs": row["error_jobs"],
+            "cancelled_jobs": row["cancelled_jobs"],
+            "last_seen_at": row["last_seen_at"].isoformat() if row["last_seen_at"] else None,
+        }
+        for row in class_rows
+    ]
+    subtypes = [
+        {
+            "failure_class": row["failure_class"],
+            "failure_subtype": row["failure_subtype"],
+            "signal_source": row["signal_source"],
+            "jobs": row["jobs"],
+            "pct": _pct(row["jobs"]),
+            "last_seen_at": row["last_seen_at"].isoformat() if row["last_seen_at"] else None,
+            "sample": row["sample"],
+        }
+        for row in subtype_rows
+    ]
+
+    by_project: dict[str, dict[str, object]] = {}
+    for row in project_rows:
+        key = row["project"] or "unknown"
+        bucket = by_project.setdefault(key, {"project": key, "total": 0})
+        bucket[row["failure_class"]] = row["jobs"]
+        bucket["total"] = int(bucket["total"]) + row["jobs"]
+
+    unclassified = next(
+        (row["jobs"] for row in class_rows if row["failure_class"] == CLASS_UNCLASSIFIED), 0
+    )
+    return {
+        "days": days,
+        "project": project or "all",
+        "total_failures": total,
+        "unclassified_jobs": unclassified,
+        "unclassified_pct": _pct(unclassified),
+        "classes": classes,
+        "subtypes": subtypes,
+        "by_project": sorted(
+            by_project.values(), key=lambda item: int(item["total"]), reverse=True
+        ),
+    }
+
+
 @router.get("/pipeline/jobs/{job_id}", tags=["pipeline-runner"])
 async def get_job(
     job_id: str,
