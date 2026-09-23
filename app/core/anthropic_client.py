@@ -480,18 +480,8 @@ async def call_llm_with_fallback(
 
     _lc = get_litellm_config()
 
-    # 3순위: 외부 모델은 반드시 LiteLLM 프록시를 통한다.
-    if _lc.get("key"):
-        try:
-            _gemini_text = await _call_litellm(
-                prompt, "gemini-2.5-flash-lite", max_tokens, system, images
-            )
-            if _gemini_text:
-                return _gemini_text
-        except Exception as e:
-            logger.warning("gemini_litellm_fallback_error: %s", str(e)[:80])
-
-    # 최종: 운영 DB의 LiteLLM 저비용 체인 — Claude OAuth/Gemini 실패 시 가용성 유지
+    # AADS(2026-09-24): Gemini 3순위 폴백 제거(CEO 지시 — 구글 상용 중단 기간).
+    # 최종: 운영 DB의 LiteLLM 저비용 체인 — Claude OAuth 실패 시 가용성 유지
     if _lc.get("key"):
         from app.core.llm_fallback_engine import get_bg_fallback_models as _get_fb
         _fb_list = await _get_fb()
@@ -506,7 +496,7 @@ async def call_llm_with_fallback(
                     "bg_llm_last_resort_error: model=%s error=%s", _fb_model, str(e)[:80]
                 )
 
-    logger.error("all_bg_llm_failed: claude+gemini_litellm_chain exhausted")
+    logger.error("all_bg_llm_failed: claude+litellm_chain exhausted")
     return None
 
 
