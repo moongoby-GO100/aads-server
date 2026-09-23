@@ -32,6 +32,8 @@ AUTOHEAL_COOLDOWN_SEC="${AADS_DEPLOY_AUTOHEAL_COOLDOWN_SEC:-180}"
 AUTOHEAL_BUILDER_PRUNE_UNTIL="${AADS_DEPLOY_AUTOHEAL_BUILDER_PRUNE_UNTIL:-48h}"
 AUTOHEAL_BUILDER_PRUNE_TIGHT="${AADS_DEPLOY_AUTOHEAL_BUILDER_PRUNE_TIGHT:-6h}"
 AUTOHEAL_LAST_REMEDIATION="none"
+AUTOHEAL_SUCCESSOR_RUN_ID=""
+AUTOHEAL_SUCCESSOR_KIND=""
 DEPLOY_LAST_FAIL_STATUS="${DEPLOY_LAST_FAIL_STATUS:-}"
 DEPLOY_LAST_FAIL_ERROR="${DEPLOY_LAST_FAIL_ERROR:-}"
 
@@ -457,6 +459,7 @@ autoheal_cooldown_stamp() {
 queue_autoheal_retry_request() {
     local cause="${1:-unknown}"
     AUTOHEAL_SUCCESSOR_RUN_ID=""
+    AUTOHEAL_SUCCESSOR_KIND=""
     if ! autoheal_key_valid "${AADS_RELEASE_SHA:-unknown}" "$cause" \
        || [[ ! "${DEPLOY_RUN_ID:-0}" =~ ^[0-9]+$ ]]; then
         autoheal_log "❌ 재개 큐 키 또는 원본 run ID가 유효하지 않다"
@@ -469,51 +472,159 @@ queue_autoheal_retry_request() {
     local release_sql reason_sql run_id
     release_sql="$(sql_escape "${AADS_RELEASE_SHA:-unknown}")"
     reason_sql="$(sql_escape "autoheal retry: cause=${cause}; remediation=${AUTOHEAL_LAST_REMEDIATION}")"
+
+    # 실행 중인 distinct successor가 있으면 새 큐/워커가 필요 없다. legacy NULL은
+    # API/production 기본값으로 정규화하되, 다른 component/env는 절대 섞지 않는다.
     run_id="$(
         deploy_db_exec "
-            WITH inserted AS (
+            SELECT id FROM deploy_runs
+             WHERE id <> ${DEPLOY_RUN_ID}
+               AND upper(trim(project))='AADS'
+               AND release_sha='$release_sql'
+               AND COALESCE(NULLIF(lower(trim(component)), ''), 'api')='api'
+               AND COALESCE(NULLIF(lower(trim(target_env)), ''), 'production')='production'
+               AND status IN ('running','verifying','syncing_standby')
+             ORDER BY id DESC LIMIT 1;
+        " | tail -1 | tr -d '[:space:]'
+    )"
+    if [[ "$run_id" =~ ^[0-9]+$ && "$run_id" != "${DEPLOY_RUN_ID}" ]]; then
+        AUTOHEAL_SUCCESSOR_RUN_ID="$run_id"
+        AUTOHEAL_SUCCESSOR_KIND="active"
+        autoheal_log "동일 릴리스 active successor 확인: deploy_run_id=${run_id}"
+        return 0
+    fi
+
+    # 이미 worker가 집을 수 있는 queued successor가 있으면 그 정확한 ID를
+    # 재사용한다. waiting_batch_predecessor/auto_start=false는 대상이 아니다.
+    run_id="$(
+        deploy_db_exec "
+            SELECT id FROM deploy_runs
+             WHERE id <> ${DEPLOY_RUN_ID}
+               AND upper(trim(project))='AADS'
+               AND release_sha='$release_sql'
+               AND COALESCE(NULLIF(lower(trim(component)), ''), 'api')='api'
+               AND COALESCE(NULLIF(lower(trim(target_env)), ''), 'production')='production'
+               AND status='queued' AND phase='queued_for_deploy'
+               AND COALESCE(auto_start, FALSE)=TRUE
+             ORDER BY id ASC LIMIT 1;
+        " | tail -1 | tr -d '[:space:]'
+    )"
+    if [[ "$run_id" =~ ^[0-9]+$ && "$run_id" != "${DEPLOY_RUN_ID}" ]]; then
+        AUTOHEAL_SUCCESSOR_RUN_ID="$run_id"
+        AUTOHEAL_SUCCESSOR_KIND="queued"
+        autoheal_log "기존 eligible queued successor 재사용: deploy_run_id=${run_id}"
+        return 0
+    fi
+
+    run_id="$(
+        deploy_db_exec "
             INSERT INTO deploy_runs(project, release_sha, status, phase, phase_started_at,
                                     deploy_pid, last_heartbeat_at, queue_position,
                                     error_summary, requested_by, request_source,
                                     commit_status, push_status, auto_start,
+                                    component, target_env,
                                     requested_at, created_at, updated_at)
             SELECT 'AADS', '$release_sql', 'queued', 'queued_for_deploy', NOW(),
                    $$, NOW(), 1, '$reason_sql', 'deploy.sh_autoheal', 'autoheal_${cause}',
-                   'committed', 'pushed', TRUE, NOW(), NOW(), NOW()
+                   'committed', 'pushed', TRUE, 'api', 'production', NOW(), NOW(), NOW()
             WHERE NOT EXISTS (
                 SELECT 1 FROM deploy_runs
-                WHERE project='AADS'
+                WHERE id <> ${DEPLOY_RUN_ID}
+                  AND upper(trim(project))='AADS'
                   AND release_sha='$release_sql'
+                  AND COALESCE(NULLIF(lower(trim(component)), ''), 'api')='api'
+                  AND COALESCE(NULLIF(lower(trim(target_env)), ''), 'production')='production'
                   AND ((status='queued' AND phase='queued_for_deploy' AND COALESCE(auto_start, FALSE) = TRUE)
                       OR status IN ('running','verifying','syncing_standby'))
             )
-            RETURNING id
-            )
-            SELECT id FROM inserted
-            UNION ALL
+            RETURNING id;
+        " | tail -1 | tr -d '[:space:]'
+    )"
+
+    if [[ "$run_id" =~ ^[0-9]+$ && "$run_id" != "${DEPLOY_RUN_ID}" ]]; then
+        AUTOHEAL_SUCCESSOR_RUN_ID="$run_id"
+        AUTOHEAL_SUCCESSOR_KIND="queued"
+        autoheal_log "신규 재개 큐 등록: deploy_run_id=${run_id}, release=${AADS_RELEASE_SHA}"
+        return 0
+    fi
+
+    # NOT EXISTS와 INSERT 사이 경합으로 RETURNING이 비면 별도 snapshot에서
+    # active를 먼저, 그 다음 eligible queued를 다시 확인한다.
+    run_id="$(
+        deploy_db_exec "
             SELECT id FROM deploy_runs
-             WHERE project='AADS' AND release_sha='$release_sql'
-               AND id <> ${DEPLOY_RUN_ID:-0}
-               AND ((status='queued' AND phase='queued_for_deploy' AND COALESCE(auto_start, FALSE) = TRUE)
-                   OR status IN ('running','verifying','syncing_standby'))
-               AND NOT EXISTS (SELECT 1 FROM inserted)
+             WHERE id <> ${DEPLOY_RUN_ID}
+               AND upper(trim(project))='AADS' AND release_sha='$release_sql'
+               AND COALESCE(NULLIF(lower(trim(component)), ''), 'api')='api'
+               AND COALESCE(NULLIF(lower(trim(target_env)), ''), 'production')='production'
+               AND status IN ('running','verifying','syncing_standby')
              ORDER BY id DESC LIMIT 1;
         " | tail -1 | tr -d '[:space:]'
     )"
-    # INSERT 실패는 문장 전체를 실패시키므로, deploy_db_exec 의 빈 오류 출력이
-    # "활성 후속 run 조회 성공"으로 위장할 수 없다. run_id 가 숫자가 아니거나
-    # 원본 행 자신이면 실행 가능한 후속을 확인하지 못한 것이다.
-    if [[ ! "$run_id" =~ ^[0-9]+$ || "$run_id" == "${DEPLOY_RUN_ID:-}" ]]; then
-        autoheal_log "❌ 재개 큐와 실행 가능한 후속 run을 확인할 수 없다"
-        return 1
+    if [[ "$run_id" =~ ^[0-9]+$ && "$run_id" != "${DEPLOY_RUN_ID}" ]]; then
+        AUTOHEAL_SUCCESSOR_RUN_ID="$run_id"
+        AUTOHEAL_SUCCESSOR_KIND="active"
+        autoheal_log "INSERT 경합 후 active successor 확인: deploy_run_id=${run_id}"
+        return 0
     fi
-    autoheal_log "재개 큐/실행 가능한 후속 run 확인: deploy_run_id=${run_id}, release=${AADS_RELEASE_SHA:-unknown}"
-    AUTOHEAL_SUCCESSOR_RUN_ID="$run_id"
-    return 0
+    run_id="$(
+        deploy_db_exec "
+            SELECT id FROM deploy_runs
+             WHERE id <> ${DEPLOY_RUN_ID}
+               AND upper(trim(project))='AADS' AND release_sha='$release_sql'
+               AND COALESCE(NULLIF(lower(trim(component)), ''), 'api')='api'
+               AND COALESCE(NULLIF(lower(trim(target_env)), ''), 'production')='production'
+               AND status='queued' AND phase='queued_for_deploy'
+               AND COALESCE(auto_start, FALSE)=TRUE
+             ORDER BY id ASC LIMIT 1;
+        " | tail -1 | tr -d '[:space:]'
+    )"
+    if [[ "$run_id" =~ ^[0-9]+$ && "$run_id" != "${DEPLOY_RUN_ID}" ]]; then
+        AUTOHEAL_SUCCESSOR_RUN_ID="$run_id"
+        AUTOHEAL_SUCCESSOR_KIND="queued"
+        autoheal_log "INSERT 경합 후 eligible queued successor 확인: deploy_run_id=${run_id}"
+        return 0
+    fi
+    autoheal_log "❌ 재개 큐와 실행 가능한 후속 run을 확인할 수 없다"
+    return 1
+}
+
+autoheal_confirm_successor_active() {
+    local successor_id="${AUTOHEAL_SUCCESSOR_RUN_ID:-}"
+    local release_sql attempts delay i state
+    [[ "$successor_id" =~ ^[0-9]+$ && "$successor_id" != "${DEPLOY_RUN_ID:-}" ]] || return 1
+    release_sql="$(sql_escape "${AADS_RELEASE_SHA:-unknown}")"
+    attempts="${AADS_DEPLOY_AUTOHEAL_CLAIM_POLLS:-15}"
+    delay="${AADS_DEPLOY_AUTOHEAL_CLAIM_POLL_SEC:-2}"
+    [[ "$attempts" =~ ^[0-9]+$ && "$attempts" -ge 1 && "$attempts" -le 30 ]] || attempts=15
+    [[ "$delay" =~ ^[0-9]+$ && "$delay" -le 5 ]] || delay=2
+    for ((i=0; i<attempts; i++)); do
+        state="$(
+            deploy_db_exec "
+                SELECT status FROM deploy_runs
+                 WHERE id=${successor_id} AND id <> ${DEPLOY_RUN_ID}
+                   AND upper(trim(project))='AADS' AND release_sha='$release_sql'
+                   AND COALESCE(NULLIF(lower(trim(component)), ''), 'api')='api'
+                   AND COALESCE(NULLIF(lower(trim(target_env)), ''), 'production')='production';
+            " 2>/dev/null | tail -1 | tr -d '[:space:]'
+        )" || return 1
+        case "$state" in
+            running|verifying|syncing_standby)
+                AUTOHEAL_SUCCESSOR_KIND="active"
+                return 0 ;;
+            queued) ;;
+            *) return 1 ;;
+        esac
+        (( i + 1 < attempts )) && sleep "$delay"
+    done
+    return 1
 }
 
 launch_autoheal_worker() {
     local cause="${1:-unknown}"
+    if [[ "${AUTOHEAL_SUCCESSOR_KIND:-}" == "active" ]]; then
+        return 0
+    fi
     local launcher=""
     if [[ -x "${COMPOSE_DIR}/scripts/start_aads_deploy_queue_worker.sh" ]]; then
         launcher="${COMPOSE_DIR}/scripts/start_aads_deploy_queue_worker.sh"
@@ -545,13 +656,8 @@ launch_autoheal_worker() {
         return 1
     fi
     autoheal_log "$launch_out"
-    # 워커 launcher 는 claim 할 행이 없어도 exit 0 로 끝난다("deploy queue empty").
-    # exit code 만 보면 이 경우도 성공으로 오인해 아무도 재개하지 않았는데
-    # retry_launched/superseded 를 기록하는 상태 세탁이 된다(AI 리뷰 P1).
-    if [[ "$launch_out" == *"deploy queue empty"* ]]; then
-        autoheal_log "❌ 큐 워커가 claim 한 릴리스가 없다(queue empty) — 재개로 인정하지 않는다"
-        return 1
-    fi
+    # already-running/queue-empty/exit 0은 단독 성공 근거가 아니다. 호출자는
+    # 이 함수 뒤 정확한 successor ID의 DB active 전환을 bounded poll로 확인한다.
     return 0
 }
 
@@ -606,7 +712,8 @@ autoheal_record_outcome() {
             phase_sql="superseded_by_autoheal_drain_retry"
             original_phase="target_slot_drain"
         fi
-        deploy_db_exec "
+        local superseded_id
+        superseded_id="$(deploy_db_exec "
             UPDATE deploy_runs
                SET status = 'superseded',
                    phase = '${phase_sql}',
@@ -620,15 +727,21 @@ autoheal_record_outcome() {
                    SELECT 1 FROM deploy_runs successor
                     WHERE successor.id = ${successor_id}
                       AND successor.id <> ${DEPLOY_RUN_ID}
-                      AND successor.project = 'AADS'
+                      AND upper(trim(successor.project)) = 'AADS'
                       AND successor.release_sha = '${release_sql}'
-                      AND ((successor.status='queued' AND successor.phase='queued_for_deploy'
-                              AND COALESCE(successor.auto_start, FALSE) = TRUE)
-                          OR successor.status IN ('running','verifying','syncing_standby'))
-               );
-        " >/dev/null 2>&1 || true
+                      AND COALESCE(NULLIF(lower(trim(successor.component)), ''), 'api')='api'
+                      AND COALESCE(NULLIF(lower(trim(successor.target_env)), ''), 'production')='production'
+                      AND successor.status IN ('running','verifying','syncing_standby')
+               )
+            RETURNING id;
+        " 2>/dev/null | tail -1 | tr -d '[:space:]')"
+        if [[ "$superseded_id" != "${DEPLOY_RUN_ID}" ]]; then
+            autoheal_log "❌ 원장 보정 중단: successor #${successor_id} active 재검증 실패"
+            return 1
+        fi
         autoheal_log "원장 보정: deploy_runs#${DEPLOY_RUN_ID} blocked → superseded (후속 run=#${successor_id}, ${cause})"
     fi
+    return 0
 }
 
 autoheal_escalate() {
@@ -713,16 +826,19 @@ deploy_autoheal_on_exit() {
         autoheal_escalate "$cause" "재개 큐 등록 실패 — 워커를 기동해도 집을 릴리스가 없다"
         return 0
     fi
-    if launch_autoheal_worker "$cause"; then
-        autoheal_log "✅ 자가치유 재개 기동 완료: cause=${cause}, remediation=${AUTOHEAL_LAST_REMEDIATION}"
-        autoheal_record_outcome "retry_launched" "$cause" "release=${AADS_RELEASE_SHA:-unknown}"
+    if launch_autoheal_worker "$cause" && autoheal_confirm_successor_active; then
+        if ! autoheal_record_outcome "retry_launched" "$cause" "release=${AADS_RELEASE_SHA:-unknown}"; then
+            autoheal_escalate "$cause" "successor active 재검증 또는 원장 전환 실패"
+            return 0
+        fi
+        autoheal_log "✅ 자가치유 successor 인계 확인: cause=${cause}, successor=${AUTOHEAL_SUCCESSOR_RUN_ID}"
         audit_control "autoheal" "deploy_runs:${DEPLOY_RUN_ID:-none}" "retry_launched" \
             "cause=${cause}; remediation=${AUTOHEAL_LAST_REMEDIATION}; release=${AADS_RELEASE_SHA:-unknown}" || true
         if declare -F notify >/dev/null 2>&1; then
             notify "🔄 배포 자동복구 재개: ${cause} → ${AUTOHEAL_LAST_REMEDIATION} (release=${AADS_RELEASE_SHA:-unknown})" || true
         fi
     else
-        autoheal_escalate "$cause" "재개 워커 기동 실패"
+        autoheal_escalate "$cause" "재개 워커 기동 실패 또는 successor active 확인 실패"
     fi
     return 0
 }
