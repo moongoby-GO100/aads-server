@@ -17,7 +17,9 @@ _SCREEN_MARKERS = (
 )
 _SCREEN_SUFFIXES = (".html", ".css", ".scss", ".sass", ".less", ".tsx", ".jsx", ".vue", ".svelte")
 _SCREEN_PATH_MARKERS = ("/static/", "/templates/", "/frontend/", "/components/", "/pages/", "/app/")
-_BROWSER_FLOW_TIMEOUT_SECONDS = 75.0
+_BROWSER_FLOW_TIMEOUT_SECONDS = 150.0
+_DOM_SETTLE_TIMEOUT_MS = 20_000
+_DOM_ASSERTION_BUDGET_SECONDS = 20.0
 
 
 def screen_verification_required(instruction: str, changed_files: list[str] | None = None) -> bool:
@@ -195,8 +197,21 @@ async def run_e2e_verify(
                     await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
             evidence["stages"]["credential_login"] = login
 
+            try:
+                await page.wait_for_load_state("networkidle", timeout=_DOM_SETTLE_TIMEOUT_MS)
+                settle = "networkidle"
+            except Exception:
+                settle = "timeout"
+
+            deadline = asyncio.get_running_loop().time() + _DOM_ASSERTION_BUDGET_SECONDS
             assertions = []
             for selector in selectors:
+                remaining_ms = max(0, int((deadline - asyncio.get_running_loop().time()) * 1000))
+                if remaining_ms > 0:
+                    try:
+                        await page.wait_for_selector(selector, state="attached", timeout=remaining_ms)
+                    except Exception:
+                        pass
                 found = bool(await page.locator(selector).count())
                 assertions.append({"selector": selector, "found": found})
             evidence["stages"]["dom_assertion"] = {
@@ -204,6 +219,8 @@ async def run_e2e_verify(
                 "assertions": assertions,
                 "tool": "playwright",
                 "final_url": str(page.url),
+                "settle": settle,
+                "budget_seconds": _DOM_ASSERTION_BUDGET_SECONDS,
             }
             await page.close()
             page = None
