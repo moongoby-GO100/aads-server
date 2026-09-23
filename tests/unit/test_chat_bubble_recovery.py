@@ -58,6 +58,48 @@ async def test_system_cancellation_preserves_visible_failure_bubble(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_superseded_partial_remains_visible_after_history_refresh(monkeypatch):
+    sid, eid, pid = uuid4(), uuid4(), uuid4()
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {
+        "status": "running", "owner_instance": svc._EXECUTION_OWNER_INSTANCE,
+        "owner_epoch": 2, "lease_valid": True, "completed_at": None,
+    }
+    conn.fetchval.side_effect = lambda query, *args: eid if "RETURNING id" in query else None
+    monkeypatch.setattr(svc, "_schedule_interrupted_auto_resume", AsyncMock(return_value=False))
+
+    await svc._mark_execution_interrupted(
+        conn, str(sid), str(eid), "superseded while preserving partial response",
+        partial_content="조사 결과를 설명합니다.", placeholder_id=str(pid), expected_owner_epoch=2,
+    )
+
+    partial_update = next(
+        call for call in conn.execute.await_args_list
+        if "UPDATE chat_messages" in call.args[0] and "intent = $3" in call.args[0]
+    )
+    assert partial_update.args[3] == "_archived_partial"
+    assert "is_hidden = FALSE" in partial_update.args[0]
+    assert "조사 결과를 설명합니다." in partial_update.args[1]
+
+
+@pytest.mark.asyncio
+async def test_competing_placeholder_archives_text_without_exposing_progress_only():
+    sid, eid = uuid4(), uuid4()
+    answer_id, spinner_id = uuid4(), uuid4()
+    conn = AsyncMock()
+    conn.fetch.return_value = [
+        {"id": answer_id, "content": "⏳ _AI가 응답을 생성 중입니다..._\n실제 답변"},
+        {"id": spinner_id, "content": "⏳ _AI가 응답을 생성 중입니다..._"},
+    ]
+
+    await svc._archive_competing_stream_placeholder(conn, sid, eid)
+
+    updates = conn.execute.await_args_list
+    assert updates[0].args[2:] == ("실제 답변", False)
+    assert updates[1].args[3] is True
+
+
+@pytest.mark.asyncio
 async def test_superseded_resume_is_refused_even_with_budget_reset(monkeypatch):
     from app.core import db_pool
     from app.routers import chat

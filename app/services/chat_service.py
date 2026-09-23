@@ -313,13 +313,9 @@ async def _archive_competing_stream_placeholder(
     execution_id: uuid.UUID | str,
 ) -> None:
     """Remove the session-wide placeholder conflict after the lease is acquired."""
-    await conn.execute(
+    placeholders = await conn.fetch(
         """
-        UPDATE chat_messages
-        SET intent = '_archived_partial',
-            model_used = 'interrupted',
-            is_hidden = TRUE,
-            edited_at = NOW()
+        SELECT id, content FROM chat_messages
         WHERE session_id = $1
           AND intent = 'streaming_placeholder'
           AND execution_id IS DISTINCT FROM $2
@@ -327,6 +323,17 @@ async def _archive_competing_stream_placeholder(
         uuid.UUID(str(session_id)),
         uuid.UUID(str(execution_id)),
     )
+    for placeholder in placeholders:
+        partial = _strip_streaming_progress_markers(placeholder["content"] or "")
+        await conn.execute(
+            """
+            UPDATE chat_messages
+            SET content = $2, intent = '_archived_partial',
+                model_used = 'interrupted', is_hidden = $3, edited_at = NOW()
+            WHERE id = $1 AND intent = 'streaming_placeholder'
+            """,
+            placeholder["id"], partial or placeholder["content"], not bool(partial),
+        )
 
 _MODEL_TIMEOUT_OVERRIDES = {
     "gpt-5.6-sol": 1500,
@@ -4936,14 +4943,13 @@ async def _mark_execution_interrupted(
                 SET content = $1,
                     intent = $3,
                     model_used = 'interrupted',
-                    is_hidden = CASE WHEN $4::boolean THEN is_hidden ELSE FALSE END,
+                    is_hidden = FALSE,
                     edited_at = NOW()
                 WHERE id = $2
                 """,
                 final_content,
                 pid,
                 _intent,
-                is_superseded_cancel,
             )
             assistant_message_id = pid
         elif delete_empty_placeholder or is_superseded_cancel:
