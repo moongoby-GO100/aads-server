@@ -173,17 +173,24 @@ def test_sol_reasoning_tools_are_rejected_before_http():
 
 
 @pytest.mark.asyncio
-async def test_explicit_openai_sol_with_older_registry_row_uses_api_route(monkeypatch):
+@pytest.mark.parametrize("backend", [None, "unsupported_backend"])
+async def test_explicit_openai_sol_with_older_registry_row_uses_api_route(monkeypatch, backend):
     calls = []
 
     async def registered(active_only=False):
-        return [{"provider": "openai", "model_id": "gpt-6-sol", "is_active": True, "metadata": {}}]
+        return [{"provider": "openai", "model_id": "gpt-6-sol", "is_active": True,
+                 "execution_model_id": "gpt-6-sol-snapshot",
+                 "metadata": {"execution_backend": backend, "execution_model_id": "old-snapshot",
+                              "execution_base_url": "https://configured.invalid/v1", "reasoning_effort": "high"}}]
 
     async def models():
         return set()
 
     async def direct(model, provider, metadata, *_args, **_kwargs):
         calls.append((model, provider, metadata["execution_backend"]))
+        assert metadata["execution_model_id"] == "gpt-6-sol-snapshot"
+        assert metadata["execution_base_url"] == "https://configured.invalid/v1"
+        assert metadata["reasoning_effort"] == "high"
         yield {"type": "done", "model": model}
 
     monkeypatch.setattr(model_selector, "_list_registered_models", registered)
@@ -193,8 +200,12 @@ async def test_explicit_openai_sol_with_older_registry_row_uses_api_route(monkey
         IntentResult(intent="code_modify", model="openai:gpt-6-sol", use_tools=False, tool_group=""),
         "system", [{"role": "user", "content": "hello"}], model_override="openai:gpt-6-sol",
     )]
-    assert calls == [("gpt-6-sol", "openai", "openai_compatible_direct")]
-    assert events[-1]["type"] == "done"
+    if backend:
+        assert calls == []
+        assert events == [{"type": "error", "content": "provider=openai model=gpt-6-sol: unsupported execution backend"}]
+    else:
+        assert calls == [("gpt-6-sol", "openai", "openai_compatible_direct")]
+        assert events[-1]["type"] == "done"
 
 
 @pytest.mark.asyncio

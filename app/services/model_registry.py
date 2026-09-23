@@ -155,7 +155,7 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "o3-mini": (_decimal(1.1), _decimal(4.4)),
     "o3-pro": (_decimal(20.0), _decimal(80.0)),
     "gpt-6-astra": (_decimal(10.0), _decimal(50.0)),
-    "gpt-6-sol": (_decimal(4.0), _decimal(20.0)),
+    "gpt-6-sol": (_decimal(2.0), _decimal(10.0)),
     "gpt-5.6-sol": (_decimal(4.0), _decimal(20.0)),
     "gpt-5.6-tela": (_decimal(3.0), _decimal(15.0)),
     "gpt-5.6-terra": (_decimal(2.0), _decimal(12.0)),

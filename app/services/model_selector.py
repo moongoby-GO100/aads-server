@@ -1088,7 +1088,7 @@ _COST_MAP = {
     "o3-mini":               (1.10,   4.40),
     "o3-pro":                (20.0,  80.0),
     "gpt-6-astra":           (10.0,  50.0),
-    "gpt-6-sol":             (4.0,   20.0),
+    "gpt-6-sol":             (2.0,   10.0),
     # Codex CLI (ChatGPT Plus OAuth)
     "gpt-5.4":               (2.50,  15.0),
     "gpt-5.4-mini":          (0.75,   4.50),
@@ -2247,15 +2247,19 @@ async def call_stream(
         _provider_pinned
         and _qualified_provider in {"openai", "codex"}
         and model in _CODEX_MODELS
-        and not str(route_metadata.get("execution_backend") or "").strip()
+        and not route_metadata
     ):
         # Fill only missing backend metadata. Preserve configured proxy routes,
         # and send older Codex rows through the provider-pinned error handling.
-        route_metadata = {
-            **route_metadata,
+        configured_metadata = _coerce_metadata((registered_row or {}).get("metadata"))
+        if str(configured_metadata.get("execution_backend") or "").strip():
+            yield {"type": "error", "content": f"provider={_qualified_provider} model={model}: unsupported execution backend"}
+            return
+        configured_metadata = {
+            **configured_metadata,
             "execution_backend": "codex_cli" if _qualified_provider == "codex" else "openai_compatible_direct",
-            "execution_model_id": route_metadata.get("execution_model_id") or model,
         }
+        route_metadata = _route_metadata({**registered_row, "metadata": configured_metadata})
     model_is_known_runtime = bool(runtime_available_models) and _is_model_runtime_available(model, runtime_available_models)
     if not _provider_pinned and not registered_row and not route_metadata and not model_is_known_runtime:
         logger.warning(f"unknown_model_fallback: '{model}' → 'claude-sonnet'")
