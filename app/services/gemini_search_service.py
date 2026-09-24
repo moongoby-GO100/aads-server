@@ -1,6 +1,10 @@
 """
-AADS-185: Gemini Google Search Grounding 서비스
-google-generativeai SDK 사용 (기존 langchain-google-genai 패키지 경유)
+AADS-185: 검색 그라운딩 서비스.
+
+2026-09-24(CEO 지시): Gemini Grounding 제거. Claude(Anthropic) 네이티브
+web_search 도구를 1순위로, OpenAI 네이티브 web_search 도구를 2순위(타사 동급)로
+사용한다. 클래스/데이터클래스 이름은 기존 4개 호출부(tool_executor.py,
+ceo_chat_tools.py, chat_service.py)와의 호환을 위해 유지한다.
 """
 from __future__ import annotations
 
@@ -10,8 +14,6 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
-
-GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
 
 
 @dataclass
@@ -24,96 +26,106 @@ class SearchResult:
 
 class GeminiSearchService:
     """
-    Gemini 2.5 Flash + Google Search Grounding.
-    langchain-google-genai 패키지를 통해 호출.
+    Claude 네이티브 web_search 도구(claude-haiku-4-5, 저비용) 1순위,
+    OpenAI 네이티브 web_search 도구(gpt-5-mini) 2순위. Gemini는 사용하지 않는다.
     """
 
     def __init__(self) -> None:
-        self._api_key = GEMINI_API_KEY
+        self._api_key = "claude+openai_web_search"  # 하위 호환용 truthy placeholder
 
     async def search_grounded(self, query: str, context: str = "") -> SearchResult:
-        """
-        Gemini 2.5 Flash + Google Search tool.
-        google-genai SDK 우선, 없으면 REST API 폴백.
-        """
-        if not self._api_key:
-            raise ValueError("GEMINI_API_KEY not set")
-
-        try:
-            from google import genai as genai_sdk
-            from google.genai import types as genai_types
-
-            client = genai_sdk.Client(api_key=self._api_key)
-            prompt = f"{context}\n\n{query}" if context else query
-
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-                ),
-            )
-
-            text = response.text or ""
-            citations: List[Dict[str, Any]] = []
-            queries: List[str] = []
-
-            if response.candidates:
-                candidate = response.candidates[0]
-                gm = getattr(candidate, "grounding_metadata", None)
-                if gm:
-                    if hasattr(gm, "web_search_queries"):
-                        queries = list(gm.web_search_queries or [])
-                    if hasattr(gm, "grounding_chunks"):
-                        for chunk in (gm.grounding_chunks or [])[:5]:
-                            web = getattr(chunk, "web", None)
-                            if web:
-                                citations.append({
-                                    "url": getattr(web, "uri", "") or "",
-                                    "title": getattr(web, "title", "") or "",
-                                    "favicon": f"https://www.google.com/s2/favicons?domain={getattr(web, 'uri', '') or ''}",
-                                })
-
-            return SearchResult(text=text, citations=citations, queries=queries)
-
-        except ImportError:
-            return await self._search_via_rest(query, context)
-        except Exception as e:
-            logger.warning(f"gemini_search_sdk_error (fallback to REST): {e}")
-            return await self._search_via_rest(query, context)
-
-    async def _search_via_rest(self, query: str, context: str = "") -> SearchResult:
-        """REST API 폴백 — google_search tool (2.5 호환)."""
-        import httpx
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.5-flash:generateContent?key={self._api_key}"
-        )
         prompt = f"{context}\n\n{query}" if context else query
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "tools": [{"google_search": {}}],
-        }
-        async with httpx.AsyncClient(timeout=30.0) as c:
-            r = await c.post(url, json=payload)
-            if r.status_code != 200:
-                raise ValueError(f"Gemini API error {r.status_code}: {r.text[:300]}")
-            data = r.json()
+        try:
+            return await self._search_claude(prompt)
+        except Exception as e:
+            logger.warning(f"claude_web_search_failed (falling back to OpenAI): {e}")
+        try:
+            return await self._search_openai(prompt)
+        except Exception as e:
+            logger.warning(f"openai_web_search_failed (falling back to SearXNG): {e}")
+        return await self._search_via_rest(query, context)
 
-        text = ""
-        citations = []
-        candidates = data.get("candidates", [])
-        if candidates:
-            parts = candidates[0].get("content", {}).get("parts", [])
-            text = "".join(p.get("text", "") for p in parts)
-            gm = candidates[0].get("groundingMetadata", {})
-            for chunk in gm.get("groundingChunks", [])[:5]:
-                web = chunk.get("web", {})
-                if web:
+    async def _search_claude(self, prompt: str) -> SearchResult:
+        from app.core.auth_provider import create_anthropic_client
+
+        client = create_anthropic_client()
+        response = await client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=2048,
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}],
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        text_parts: List[str] = []
+        citations: List[Dict[str, Any]] = []
+        for block in response.content:
+            if getattr(block, "type", None) != "text":
+                continue
+            text_parts.append(block.text)
+            for cite in (getattr(block, "citations", None) or []):
+                url = getattr(cite, "url", None)
+                if url:
                     citations.append({
-                        "url": web.get("uri", ""),
-                        "title": web.get("title", ""),
-                        "favicon": f"https://www.google.com/s2/favicons?domain={web.get('uri', '')}",
+                        "url": url,
+                        "title": getattr(cite, "title", "") or "",
+                        "favicon": f"https://www.google.com/s2/favicons?domain={url}",
                     })
 
+        text = "".join(text_parts)
+        if not text:
+            raise ValueError("Claude web_search returned no text content")
+        return SearchResult(text=text, citations=citations)
+
+    async def _search_openai(self, prompt: str) -> SearchResult:
+        from openai import AsyncOpenAI
+
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not set")
+        client = AsyncOpenAI(api_key=api_key)
+        response = await client.responses.create(
+            model="gpt-5-mini",
+            tools=[{"type": "web_search_preview"}],
+            input=prompt,
+        )
+
+        text = getattr(response, "output_text", "") or ""
+        citations: List[Dict[str, Any]] = []
+        for item in (getattr(response, "output", None) or []):
+            for content in (getattr(item, "content", None) or []):
+                for ann in (getattr(content, "annotations", None) or []):
+                    url = getattr(ann, "url", None)
+                    if url:
+                        citations.append({
+                            "url": url,
+                            "title": getattr(ann, "title", "") or "",
+                            "favicon": f"https://www.google.com/s2/favicons?domain={url}",
+                        })
+
+        if not text:
+            raise ValueError("OpenAI web_search returned no text content")
+        return SearchResult(text=text, citations=citations)
+
+    async def _search_via_rest(self, query: str, context: str = "") -> SearchResult:
+        """3순위 최종 폴백. Claude/OpenAI 네이티브 도구가 모두 실패했을 때만 탄다.
+
+        REST 호출로 외부 검색 API를 직접 때리는 대신, 이미 검증된 내부
+        SearXNG 메타검색(aads-searxng, 70개+ 엔진, 무료)을 재사용한다.
+        """
+        from app.services.searxng_search_service import search_searxng
+
+        data = await search_searxng(f"{context} {query}".strip() if context else query)
+        if data.get("error"):
+            return SearchResult(text="", error=data["error"])
+
+        results = data.get("results", [])
+        text = "\n\n".join(f"{r.get('title', '')}\n{r.get('content', '')}" for r in results[:5])
+        citations = [
+            {
+                "url": r.get("url", ""),
+                "title": r.get("title", ""),
+                "favicon": f"https://www.google.com/s2/favicons?domain={r.get('url', '')}",
+            }
+            for r in results[:5] if r.get("url")
+        ]
         return SearchResult(text=text, citations=citations)
