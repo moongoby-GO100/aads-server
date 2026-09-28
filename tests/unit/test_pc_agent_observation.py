@@ -365,3 +365,48 @@ async def test_slow_telemetry_does_not_block_websocket_loop(monkeypatch, tmp_pat
     finally:
         release.set()
         await asyncio.wait_for(task, timeout=3)
+
+
+@pytest.mark.asyncio
+async def test_pending_start_ack_is_preserved_when_stop_is_requested():
+    manager = PCAgentManager()
+    ws = DummyWebSocket()
+    manager.register_agent("pc", ws, {})
+    start_id = await manager.start_stream("pc", StreamConfig())
+    with pytest.raises(ValueError, match="stream_command_pending"):
+        await manager.stop_stream("pc")
+    assert ws.last_message["id"] == start_id  # No new command sent.
+    manager.receive_result(start_id, {"status": "success"})
+    assert manager.get_last_observation("pc")["stream_state"] == "active"
+
+    async def failed_send(message):
+        raise OSError("stop send failed")
+
+    ws.send_json = failed_send
+    with pytest.raises(OSError):
+        await manager.stop_stream("pc")
+    assert manager.get_last_observation("pc")["stream_state"] == "active"
+    assert not manager._stream_commands
+
+
+@pytest.mark.parametrize("value", [10**400, -(10**400), float("inf"), float("nan"), True])
+def test_invalid_resource_number_cannot_disconnect_or_refresh(value, monkeypatch):
+    manager = PCAgentManager()
+    manager.register_agent("pc", DummyWebSocket(), {})
+    start = manager._now()
+    monkeypatch.setattr(manager, "_now", lambda: start)
+    manager.update_observation("pc", {"cpu_percent": 22})
+    monkeypatch.setattr(manager, "_now", lambda: start + timedelta(seconds=30))
+    manager.update_observation("pc", {"cpu_percent": value})
+    observed = manager.get_last_observation("pc")
+    assert observed["cpu_percent"] == 22
+    assert observed["observation_age_seconds"] == 30
+
+
+def test_enormous_sample_age_remains_stale_without_float_overflow():
+    manager = PCAgentManager()
+    manager.register_agent("pc", DummyWebSocket(), {})
+    manager.update_observation("pc", {"cpu_percent": 99, "sample_age_seconds": 10**400})
+    observed = manager.get_last_observation("pc")
+    assert observed["observation_age_seconds"] >= 86400
+    assert observed["classification"] != "resource_pressure"

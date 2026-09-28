@@ -458,13 +458,14 @@ class PCAgentManager:
         values: dict[str, Any] = {}
         for key in allowed:
             value = payload.get(key)
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 <= value < 1_000_000:
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value < 1_000_000 and math.isfinite(value):
                 values[key] = round(float(value), 2)
         if "os_event_count" in values and isinstance(payload.get("os_event_count_is_lower_bound"), bool):
             values["os_event_count_is_lower_bound"] = payload["os_event_count_is_lower_bound"]
         sample_age = payload.get("sample_age_seconds", 0)
-        if not isinstance(sample_age, (int, float)) or not math.isfinite(sample_age):
-            sample_age = 0
+        if (not isinstance(sample_age, (int, float)) or isinstance(sample_age, bool)
+                or sample_age < 0 or (isinstance(sample_age, float) and not math.isfinite(sample_age))):
+            return
         measured = ("cpu_percent", "ram_percent", "commit_percent", "disk_percent",
                     "agent_rss_mb", "os_event_count")
         if any(key in values for key in measured):
@@ -601,6 +602,11 @@ class PCAgentManager:
         async with conn.stream_command_lock:
             if self._agents.get(agent_id) is not conn:
                 raise ValueError("PC agent connection changed before stream dispatch")
+            self._expire_stream_ack(conn, self._now())
+            if conn.stream_state in ("starting", "stopping"):
+                # Never discard an in-flight ACK to supersede it. The caller
+                # can retry once the current command acknowledges or expires.
+                raise ValueError("stream_command_pending")
             fields = ("streaming", "stream_state", "stream_started_at", "stream_command_at",
                       "last_frame_at", "previous_frame_at")
             previous = {field: getattr(conn, field) for field in fields}

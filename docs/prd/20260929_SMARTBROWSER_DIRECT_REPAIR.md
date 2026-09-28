@@ -15,6 +15,9 @@ table, or existing function is deleted. PC version advances 1.0.74 to 1.0.76.
 Stream requests must be registered before socket send; a frame cannot acknowledge
 start/stop. Missing ACK expires after ten seconds, even with continuing frames.
 Late ACK and old-connection ACK cannot revive success. Failed sends restore state.
+Only one unacknowledged stream control is allowed per PC; callers retry after
+ACK or timeout. Numeric bounds are checked before float conversion so enormous
+JSON integers cannot disconnect a PC's heartbeat.
 Windows probes run outside the WebSocket event loop. Offline samples retain their
 absolute timestamp; empty resource payloads cannot refresh a sample. OS event count
 is a bounded System log sample in a sixty-second window, with a lower-bound flag.
@@ -52,3 +55,10 @@ entry; this is not evidence that other vault stores contain none. The approved
 recipe list contained only the Coupang Eats login-page fragment for these workflows.
 Dashboard login failed after bridge retry; ARIA confirmed the login page, and
 public login/API health returned 200. Both API containers were healthy.
+The same-tenant Agent Vault separately contains an active corporate Shinhan
+credential; the E2E Vault result must not be treated as its absence.
+
+Windows exact-function observe-only probe on PC `62405e70-e98`: before cold
+53.32ms, after cold 221.67ms, after cached 0.02ms; resource collection 172.0ms.
+Single sample, not a statistically representative benchmark or installed rollout.
+Evidence: `/root/aads/qa_reports/smartbrowser-direct-20260929/windows-observe.json`.
