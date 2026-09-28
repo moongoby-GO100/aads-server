@@ -6,7 +6,7 @@ HTML = (
     / "app"
     / "static"
     / "apps"
-    / "yeoljeong-finance"
+    / "obys"
     / "index.html"
 ).read_text(encoding="utf-8")
 

@@ -139,7 +139,7 @@ def test_employee_signature_http_flow_records_authenticated_audit(tmp_path, monk
 
 
 def test_contract_preview_is_a4_modal():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
 
     assert 'id="contractPreviewModal"' in html
@@ -156,7 +156,7 @@ def test_contract_preview_is_a4_modal():
 
 
 def test_delivery_integration_normalization_preserves_selected_business_scope():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
     normalizer = html.split("function normalizeMiaBusinessLinks(next)", 1)[1].split("function mergeSettings", 1)[0]
 
@@ -169,7 +169,7 @@ def test_delivery_integration_normalization_preserves_selected_business_scope():
 
 
 def test_integration_accounts_use_resolved_auth_token_and_session_first_load():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
 
     assert "function serverAuthToken()" in html
@@ -401,7 +401,7 @@ async def test_sync_delivery_preserves_baemin_full_backfill_options(monkeypatch)
 
 
 def test_contract_editor_uses_safe_classification_and_locks_signed_records():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
     assert 'wage: "12000"' not in html
     assert "function syncContractClassification()" in html
@@ -419,7 +419,7 @@ def test_contract_editor_uses_safe_classification_and_locks_signed_records():
 
 
 def test_execution_contract_has_complete_worker_identity_and_no_editor_notice():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
     for field in (
         'name="employeeAddress"', 'name="employeePhone"', 'name="employeeBirthDate"',
@@ -441,7 +441,7 @@ def test_execution_contract_has_complete_worker_identity_and_no_editor_notice():
 
 
 def test_employee_signup_collects_contract_autofill_profile():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
     assert html.count('name="birthDate"') >= 3
     assert html.count('name="address"') >= 3
@@ -453,7 +453,7 @@ def test_employee_signup_collects_contract_autofill_profile():
 
 
 def test_employee_auth_gate_prioritizes_login_but_keeps_employee_signup_available():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
     gate = html.split('<section id="authGate"', 1)[1].split('<section id="appFilters"', 1)[0]
 
@@ -475,7 +475,7 @@ def test_employee_auth_gate_prioritizes_login_but_keeps_employee_signup_availabl
 
 
 def test_member_permission_levels_are_visible_in_audit_view():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
     audit = html.split('<section id="auditView"', 1)[1].split('<section id="loginModal"', 1)[0]
 
@@ -519,7 +519,7 @@ async def test_update_approved_employee_role_route_delegates_to_service(monkeypa
 
 
 def test_unni_recipe_redirect_restores_fb_cookie_for_existing_login():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
     token_resolver = html.split("function serverAuthToken()", 1)[1].split("function apiHeaders()", 1)[0]
 
@@ -535,7 +535,7 @@ def test_unni_recipe_redirect_restores_fb_cookie_for_existing_login():
 
 
 def test_contract_signing_requires_employee_consent_and_drawn_signature():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
 
     assert 'id="contractSignModal"' in html
@@ -550,7 +550,7 @@ def test_contract_signing_requires_employee_consent_and_drawn_signature():
 
 
 def test_onboarding_open_uses_authenticated_file_preview_modal():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
 
     assert 'id="filePreviewModal"' in html
@@ -562,7 +562,7 @@ def test_onboarding_open_uses_authenticated_file_preview_modal():
 
 
 def test_bank_quick_service_ui_collects_required_vault_fields():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
 
     assert '<option value="bank-quick-service">은행 간편/빠른조회</option>' in html
@@ -582,7 +582,7 @@ def test_bank_quick_service_ui_collects_required_vault_fields():
 
 
 def test_pdf_preview_does_not_sandbox_chrome_pdf_viewer():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
 
     pdf_branch = html.split('contentType === "application/pdf"', 1)[1].split(
@@ -776,7 +776,7 @@ def test_bank_transaction_multipart_upload_rejects_auth_extension_and_size(tmp_p
 
 
 def test_bank_file_upload_ui_uses_multipart_without_reading_excel_as_text():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
     upload_block = html.split("async function uploadBankFileToServer()", 1)[1].split(
         "async function importSettlementCsvToServer", 1
@@ -813,7 +813,7 @@ def test_bank_account_rejects_extra_sensitive_field(tmp_path, monkeypatch):
 
 
 def test_integration_form_persists_bank_credentials_to_bank_account_vault():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
     save_block = html.split("async function saveIntegrationConnection", 1)[1].split(
         "async function runIntegrationAudit",
@@ -845,7 +845,7 @@ async def test_delete_account_endpoint_delegates_to_service(monkeypatch):
 
 
 def test_integration_delete_waits_for_server_db_before_local_removal():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
     delete_block = html.split("async function deleteIntegrationAccount", 1)[1].split(
         "async function refreshServerAccounts",
@@ -861,7 +861,7 @@ def test_integration_delete_waits_for_server_db_before_local_removal():
 
 
 def test_bank_credential_save_is_fail_closed_without_server_authorization():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
     save_block = html.split("async function saveIntegrationConnection", 1)[1].split(
         "async function runIntegrationAudit",
@@ -874,7 +874,7 @@ def test_bank_credential_save_is_fail_closed_without_server_authorization():
 
 
 def test_bank_credential_save_finishes_before_collection_and_requires_server_confirmation():
-    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" / "index.html"
     html = html_path.read_text(encoding="utf-8")
     save_block = html.split("async function saveIntegrationConnection", 1)[1].split(
         "async function runIntegrationAudit",

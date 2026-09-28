@@ -5,8 +5,8 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PRINT_DIR = ROOT / "app" / "static" / "apps" / "yeoljeong-finance" / "assets" / "prints"
-BANNERS_HTML = ROOT / "app" / "static" / "apps" / "yeoljeong-finance" / "banners.html"
+PRINT_DIR = ROOT / "app" / "static" / "apps" / "obys" / "assets" / "prints"
+BANNERS_HTML = ROOT / "app" / "static" / "apps" / "obys" / "banners.html"
 
 
 def test_indoor_banner_manifest_lists_print_ready_pngs() -> None:

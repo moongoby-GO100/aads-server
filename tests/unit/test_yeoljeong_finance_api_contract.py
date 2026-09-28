@@ -4,8 +4,8 @@ import pytest
 from fastapi import UploadFile
 from pydantic import ValidationError
 
-from app.api import yeoljeong_finance
-from app.api.yeoljeong_finance import AccountUpsertPayload
+from app.api import obys_finance
+from app.api.obys_finance import AccountUpsertPayload
 
 
 def test_account_password_is_write_only_and_hidden_from_repr():
@@ -45,11 +45,11 @@ async def test_onboarding_upload_awaits_async_service(monkeypatch):
         return {"id": "doc-e2e", "status": "pending"}
 
     monkeypatch.setattr(
-        yeoljeong_finance.svc,
+        obys_finance.svc,
         "save_onboarding_document",
         fake_save_onboarding_document,
     )
-    result = await yeoljeong_finance.upload_onboarding_document(
+    result = await obys_finance.upload_onboarding_document(
         employee_name="테스트 직원",
         employee_email="employee@example.com",
         branch="열정국밥_미아점",

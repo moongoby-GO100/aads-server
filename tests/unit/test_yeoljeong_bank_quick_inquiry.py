@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.api import yeoljeong_finance as api
+from app.api import obys_finance as api
 from app.services import pc_agent_collection_queue as queue
 from app.services import yeoljeong_finance_service as svc
 
