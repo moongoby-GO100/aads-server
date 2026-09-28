@@ -231,8 +231,8 @@ def test_pipeline_runner_passes_parallel_group_to_work_lock_and_run_job():
 
     assert "RETURNING job_id, project" in script
     assert "COALESCE(parallel_group,'')" in script
-    assert "read -r job_id project instruction session_id max_cycles job_model job_size parallel_group" in script
-    assert 'run_job "$job_id" "$project" "$instruction" "$session_id" "${max_cycles:-3}" "${job_model:-litellm:minimax-m2.7}" "${job_size:-M}" "${parallel_group:-}" &' in script
+    assert "read -r job_id project instruction_hex session_id max_cycles job_model job_size parallel_group" in script
+    assert 'run_job "$job_id" "$project" "$decoded_instruction" "$session_id" "${max_cycles:-3}" "${job_model:-litellm:minimax-m2.7}" "${job_size:-M}" "${parallel_group:-}" &' in script
     assert "work_lock_scope_param=\"&scope=${parallel_group}\"" in script
     assert '_release_work_lock "$project" "$job_id" "$parallel_group"' in script
 
@@ -247,6 +247,66 @@ def test_pipeline_runner_general_claim_uses_admin_model_column():
     assert "route_key = 'runner_llm'" in script
     assert "route_key IN ('runner_llm','llm')" not in script
     assert "DB_MODEL_CONFIG_OVERRIDE" in script
+
+
+def test_claim_instruction_round_trips_exact_bytes_and_fails_closed(tmp_path):
+    script = _read_script("pipeline-runner.sh")
+    assert "encode(convert_to(instruction, 'UTF8'), 'hex')" in script
+    assert "replace(replace(instruction" not in script
+    funcs = "\n".join(
+        _extract_function(script, name) + "\n}"
+        for name in ("decode_claim_instruction", "dispatch_claimed_job")
+    )
+    harness = r'''set -eo pipefail
+declare -A _bg_jobs=()
+log() { :; }
+run_job() { printf '%s' "$3" > "$OUT"; printf 'run\n' >> "$CALLS"; }
+_fail_job() { printf '%s\n' "$3" >> "$FAILURES"; }
+''' + funcs + r'''
+payload=$'a\x1ePROJECT\x1e'"$HEX"$'\x1eSESSION\x1e3\x1emodel\x1eM\x1egroup'
+dispatch_claimed_job "$payload"
+wait
+'''
+
+    def run(hex_value: str) -> tuple[subprocess.CompletedProcess[bytes], bytes]:
+        output = tmp_path / "instruction.bin"
+        runner = tmp_path / "claim-harness.sh"
+        runner.write_text(harness, encoding="utf-8")
+        env = os.environ.copy()
+        calls = tmp_path / "calls.txt"
+        failures = tmp_path / "failures.txt"
+        calls.unlink(missing_ok=True)
+        failures.unlink(missing_ok=True)
+        env.update(OUT=str(output), HEX=hex_value, CALLS=str(calls), FAILURES=str(failures))
+        proc = subprocess.run(["bash", str(runner)], env=env, capture_output=True, timeout=10)
+        proc.call_count = calls.read_text().count("run") if calls.exists() else 0
+        proc.failures = failures.read_text().splitlines() if failures.exists() else []
+        return proc, output.read_bytes() if output.exists() else b""
+
+    original = "첫 줄\r\n둘째 | 값\x1e끝\n"
+    proc, received = run(original.encode("utf-8").hex())
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+    assert received == original.encode("utf-8")
+    assert proc.call_count == 1
+    assert proc.failures == []
+
+    proc, _ = run("")
+    assert proc.returncode == 0
+    assert proc.call_count == 0
+    assert proc.failures == ["EMPTY_INSTRUCTION"]
+
+    proc, _ = run("xyz")
+    assert proc.returncode == 0
+    assert proc.call_count == 0
+    assert proc.failures == ["INVALID_INSTRUCTION_HEX"]
+
+
+def test_decode_failure_does_not_touch_shared_current_job_marker():
+    script = _read_script("pipeline-runner.sh")
+    dispatch = _extract_function(script, "dispatch_claimed_job")
+    assert "/tmp/.pipeline_current_job" not in dispatch
+    assert "_fail_job \"$job_id\"" in dispatch
+    assert "run_job \"$job_id\"" in dispatch
 
 
 def test_pipeline_runner_api_uses_review_routing_fallback_chain():

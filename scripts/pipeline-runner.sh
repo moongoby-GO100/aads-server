@@ -1934,7 +1934,7 @@ _claim_queued_job() {
         engine_predicate="AND NOT (COALESCE(NULLIF(p.worker_model, ''), NULLIF(p.model, ''), '') LIKE 'litellm:%' AND p.project IN ('GO100','KIS','SF','NTV2'))"
         model_return_expr="COALESCE(NULLIF(worker_model, ''), NULLIF(model, ''), 'auto')"
     fi
-    # instruction의 줄바꿈을 \\n으로 치환하여 단일행 RETURNING 보장
+    # UTF-8 바이트 hex로 반환해 줄바꿈/RS/pipe를 포함한 원문을 보존한다.
     # AADS-211: depends_on 체크 — 의존 작업이 done이 아니면 스킵
     # RUNNER_ENGINE_MODE=litellm: litellm:* 작업만 claim. general은 원격 litellm 작업을 전용 러너에 넘김.
     # 어느 서버가 집었는지 남긴다. runner_pid 는 숫자라 호스트를 구분하지 못한다.
@@ -1955,7 +1955,42 @@ _claim_queued_job() {
                          COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
-             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, ${model_return_expr}, COALESCE(size,'M'), COALESCE(parallel_group,'');"
+             RETURNING job_id, project, encode(convert_to(instruction, 'UTF8'), 'hex'), chat_session_id, max_cycles, ${model_return_expr}, COALESCE(size,'M'), COALESCE(parallel_group,'');"
+}
+
+# claim 결과의 instruction_hex를 Bash 내장 printf로 디코딩한다. 외부 도구
+# 의존성이 없고, 잘못된 hex는 호출자가 fail-closed 처리한다.
+decode_claim_instruction() {
+    local hex="$1" escaped="" i byte
+    decoded_instruction=""
+    [[ "$hex" =~ ^([[:xdigit:]]{2})*$ ]] || return 2
+    [[ -n "$hex" ]] || return 1
+    for ((i=0; i<${#hex}; i+=2)); do
+        byte="${hex:i:2}"
+        escaped+="\\x${byte}"
+    done
+    printf -v decoded_instruction '%b' "$escaped"
+    [[ -n "$decoded_instruction" ]] || return 1
+}
+
+dispatch_claimed_job() {
+    local pending="$1" job_id project instruction_hex session_id max_cycles job_model job_size parallel_group
+    local decode_rc
+    IFS=$'\x1e' read -r job_id project instruction_hex session_id max_cycles job_model job_size parallel_group <<< "$pending"
+    [[ -n "$job_id" && -n "$project" ]] || return 0
+    decoded_instruction=""
+    decode_claim_instruction "$instruction_hex" || {
+        decode_rc=$?
+        if (( decode_rc == 1 )); then
+            _fail_job "$job_id" "$session_id" "EMPTY_INSTRUCTION" "Claimed job instruction is empty"
+        else
+            _fail_job "$job_id" "$session_id" "INVALID_INSTRUCTION_HEX" "Claimed job instruction is not valid UTF-8 hex"
+        fi
+        return 0
+    }
+    run_job "$job_id" "$project" "$decoded_instruction" "$session_id" "${max_cycles:-3}" "${job_model:-litellm:minimax-m2.7}" "${job_size:-M}" "${parallel_group:-}" &
+    _bg_jobs[$!]="${job_id}|${session_id}"
+    log "  BG_START: job=$job_id pid=$! (parallel)"
 }
 
 claim_approved_job() {
@@ -4471,14 +4506,7 @@ main() {
         pending=$(claim_queued_job "$project_filter" 2>/dev/null) || true
 
         if [[ -n "$pending" ]]; then
-            # FIX: ASCII RS(0x1e) 구분자 사용 — instruction에 | 포함 시 파싱 깨짐 방지
-            IFS=$'\x1e' read -r job_id project instruction session_id max_cycles job_model job_size parallel_group <<< "$pending"
-            if [[ -n "$job_id" && -n "$project" ]]; then
-                # 방안A: 백그라운드 병렬 실행 — 다른 프로젝트 작업이 블로킹하지 않음
-                run_job "$job_id" "$project" "$instruction" "$session_id" "${max_cycles:-3}" "${job_model:-litellm:minimax-m2.7}" "${job_size:-M}" "${parallel_group:-}" &
-                _bg_jobs[$!]="${job_id}|${session_id}"
-                log "  BG_START: job=$job_id pid=$! (parallel)"
-            fi
+            dispatch_claimed_job "$pending"
         fi
 
         # 2) approved 작업 원자적 클레임 (C4)
