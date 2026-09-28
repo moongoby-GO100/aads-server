@@ -37,6 +37,11 @@ def test_screen_gate_classifies_ui_but_not_backend_work():
     assert screen_verification_required("로그인 필요 화면 Visual QA")
     assert screen_verification_required("component update", ["frontend/components/Login.tsx"])
     assert not screen_verification_required("DB 인덱스와 백엔드 API 수정", ["app/services/report.py"])
+    assert not screen_verification_required(
+        "로그인 필요 화면을 사용하는 서버 API 수정",
+        ["app/api/llm_keys.py", "scripts/account_login.py", "reports/result.md"],
+    )
+    assert screen_verification_required("로그인 필요 화면 수정", ["app/components/Login.tsx"])
 
 
 def test_evidence_contract_requires_dom_and_capture_success():
