@@ -14462,3 +14462,11 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - Direct follow-up review addresses R6 REQUEST_CHANGES. Added missing-metadata Codex success/error/quota and configured OpenAI proxy success/error regressions. No review gate or deployment script changes.
 - Second review corrections: infer a missing backend from the original registry row and preserve execution model/base URL/reasoning metadata; reject unknown configured backends. Correct Sol standard input/output estimates to $2/$10 per million tokens (https://developers.openai.com/api/docs/models/gpt-6-sol, verified 2026-09-23).
 - Third review corrections: use the registered display-model contract for Sol HTTP parameter validation while retaining execution aliases on the wire; pass configured reasoning_effort through the LiteLLM proxy branch. Real MockTransport HTTP-body regressions cover alias+tools and alias+high reasoning; provider dispatch is not mocked for these checks.
+
+# Smart Browser direct M1 repair (2026-09-29 KST)
+
+- Goal `1a463229-5bbe-4c7e-b020-71b157acc241`; reused the valid M1 candidate changes from `81541b13` in an isolated worktree, preserving unrelated main edits.
+- Corrected pre-send ACK registration, frame-before-ACK false success, missing stop ACK timeout, late/old-connection ACKs, send rollback, and blocking Windows telemetry. Existing auth/routing/leases retained. Scope includes this handover and `docs/prd/20260929_SMARTBROWSER_DIRECT_REPAIR.md`.
+- Targeted observation, connection, disconnect, routing, release, launcher and recovery tests: 104 passed. No Windows rollout or milestone acceptance is implied.
+- Two online PCs and one offline PC observed. First PC RAM 91.8%, installed agent 1.0.74. Dashboard Vault login failed after bridge retry; ARIA shows login page. HTTP login and API health 200, both API containers healthy.
+- M1 canary/overhead, M2–M13 operational gates, all-PC rollout and 24-hour observation remain outstanding. Canonical DB handover is recorded separately; this file is the compatibility record.

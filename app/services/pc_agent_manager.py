@@ -7,13 +7,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import math
 import os
 import subprocess
 import tempfile
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Deque, Dict, Optional, Set
 
 from fastapi import WebSocket
@@ -165,6 +166,17 @@ class _AgentConnection:
         self.agent_id = agent_id
         self.websocket = websocket
         self.info = info
+        self.last_observation: dict[str, Any] = {}
+        self.last_frame_at: datetime | None = None
+        self.previous_frame_at: datetime | None = None
+        self.last_command_at: datetime | None = None
+        self.last_command_status: str = ""
+        self.last_command_latency_seconds: float | None = None
+        self.streaming = False
+        self.stream_state = "stopped"
+        self.stream_started_at: datetime | None = None
+        self.stream_command_at: datetime | None = None
+        self.stream_command_lock = asyncio.Lock()
 
 
 class PCAgentManager:
@@ -172,6 +184,8 @@ class PCAgentManager:
 
     def __init__(self) -> None:
         self._agents: Dict[str, _AgentConnection] = {}
+        self._last_observations: Dict[str, dict[str, Any]] = {}
+        self._stream_commands: Dict[str, tuple[str, str]] = {}
         self._pending_commands: Dict[str, asyncio.Event] = {}
         self._results: Dict[str, CommandResult] = {}
         self._command_agents: Dict[str, str] = {}
@@ -227,7 +241,9 @@ class PCAgentManager:
             tenant_id=str(owner_tenant_id or "").strip(),
             agent_name=agent_name,
         )
+        self._stream_commands = {key: value for key, value in self._stream_commands.items() if value[0] != agent_id}
         self._agents[agent_id] = _AgentConnection(agent_id, websocket, agent_info)
+        self._agents[agent_id].last_observation = dict(self._last_observations.get(agent_id, {}))
         logger.info(
             "pc_agent_registered agent_id=%s hostname=%s user_id=%s capabilities=%s command_types=%s",
             agent_id,
@@ -251,6 +267,10 @@ class PCAgentManager:
         if websocket is not None and conn.websocket is not websocket:
             logger.info("pc_agent_unregister_skipped_stale agent_id=%s", agent_id)
             return False
+        self._last_observations[agent_id] = self._observation(conn, self._now(), connected=False)
+        self._stream_commands = {key: value for key, value in self._stream_commands.items() if value[0] != agent_id}
+        if len(self._last_observations) > 512:
+            self._last_observations.pop(next(iter(self._last_observations)))
         del self._agents[agent_id]
         self._fail_pending_commands_for_agent(
             agent_id,
@@ -322,6 +342,13 @@ class PCAgentManager:
             if result:
                 result.status = "timeout"
                 result.completed_at = datetime.utcnow()
+                conn = self._agents.get(result.agent_id)
+                if conn:
+                    conn.last_command_at = result.completed_at
+                    conn.last_command_status = "timeout"
+                    conn.last_command_latency_seconds = round(
+                        max(0.0, (result.completed_at - result.created_at).total_seconds()), 2
+                    )
             self._pending_commands.pop(command_id, None)
             self._untrack_command(command_id, result.agent_id if result else "")
             self._timed_out_commands[command_id] = (
@@ -341,9 +368,28 @@ class PCAgentManager:
 
     def receive_result(self, command_id: str, result: Dict[str, Any]) -> None:
         """에이전트로부터 결과 수신."""
+        stream_command = self._stream_commands.pop(command_id, None)
+        if stream_command:
+            agent_id, action = stream_command
+            conn = self._agents.get(agent_id)
+            if conn and not self._expire_stream_ack(conn, self._now()):
+                success = result.get("status") in ("success", "ok")
+                conn.stream_command_at = None
+                if action == "start":
+                    conn.streaming = success
+                    conn.stream_state = "active" if success else "failed"
+                    conn.stream_started_at = self._now() if success else None
+                elif success:
+                    conn.streaming = False
+                    conn.stream_state = "stopped"
+                    conn.stream_started_at = None
+                else:
+                    conn.stream_state = "stop_failed"
         self._prune_timed_out_commands()
         stored = self._results.get(command_id)
         if stored is None:
+            if stream_command:
+                return
             logger.warning("pc_agent_unknown_result command_id=%s", command_id)
             return
 
@@ -361,6 +407,13 @@ class PCAgentManager:
         stored.status = result.get("status", "success")
         stored.result = result.get("data")
         stored.completed_at = datetime.utcnow()
+        conn = self._agents.get(stored.agent_id)
+        if conn:
+            conn.last_command_at = stored.completed_at
+            conn.last_command_status = stored.status
+            conn.last_command_latency_seconds = round(
+                max(0.0, (stored.completed_at - stored.created_at).total_seconds()), 2
+            )
         self._untrack_command(command_id, stored.agent_id)
 
         event = self._pending_commands.get(command_id)
@@ -395,6 +448,122 @@ class PCAgentManager:
         if conn:
             conn.info.last_heartbeat = datetime.utcnow()
 
+    def update_observation(self, agent_id: str, payload: dict[str, Any]) -> None:
+        """Accept bounded numeric health data only; never retain arbitrary client text."""
+        conn = self._agents.get(agent_id)
+        if conn is None or not isinstance(payload, dict):
+            return
+        allowed = ("cpu_percent", "ram_percent", "commit_percent", "disk_percent",
+                   "agent_rss_mb", "os_event_count", "os_event_window_seconds", "collection_ms")
+        values: dict[str, Any] = {}
+        for key in allowed:
+            value = payload.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 <= value < 1_000_000:
+                values[key] = round(float(value), 2)
+        if "os_event_count" in values and isinstance(payload.get("os_event_count_is_lower_bound"), bool):
+            values["os_event_count_is_lower_bound"] = payload["os_event_count_is_lower_bound"]
+        sample_age = payload.get("sample_age_seconds", 0)
+        if not isinstance(sample_age, (int, float)) or not math.isfinite(sample_age):
+            sample_age = 0
+        measured = ("cpu_percent", "ram_percent", "commit_percent", "disk_percent",
+                    "agent_rss_mb", "os_event_count")
+        if any(key in values for key in measured):
+            values["observed_at"] = (self._now() - timedelta(seconds=min(max(sample_age, 0), 86400))).isoformat()
+            conn.last_observation = values
+
+    def record_frame(self, agent_id: str) -> None:
+        conn = self._agents.get(agent_id)
+        if conn:
+            conn.previous_frame_at = conn.last_frame_at
+            conn.last_frame_at = self._now()
+            if conn.stream_state in ("active", "lost_frame"):
+                conn.streaming = True
+                conn.stream_state = "active"
+
+    def _expire_stream_ack(self, conn: _AgentConnection, now: datetime) -> bool:
+        """A received frame cannot substitute for a command acknowledgement."""
+        if (conn.stream_state in ("starting", "stopping") and conn.stream_command_at
+                and (now - conn.stream_command_at).total_seconds() > 10):
+            conn.stream_state = "start_timeout" if conn.stream_state == "starting" else "stop_timeout"
+            conn.stream_command_at = None
+            self._stream_commands = {
+                key: value for key, value in self._stream_commands.items() if value[0] != conn.agent_id
+            }
+            return True
+        return False
+
+    def get_last_observation(self, agent_id: str) -> dict[str, Any] | None:
+        conn = self._agents.get(agent_id)
+        if conn:
+            return self._observation(conn, self._now(), connected=True)
+        snapshot = self._last_observations.get(agent_id)
+        return self.refresh_offline_observation(snapshot, self._now()) if snapshot else None
+
+    @staticmethod
+    def refresh_offline_observation(snapshot: dict[str, Any] | None, now: datetime | None = None) -> dict[str, Any] | None:
+        """Recompute ages from event metadata as well as in-memory snapshots."""
+        if not isinstance(snapshot, dict):
+            return None
+        now = now or datetime.utcnow()
+        result = dict(snapshot)
+        for field, age_field in (("last_frame_at", "frame_age_seconds"),
+                                 ("observed_at", "observation_age_seconds"),
+                                 ("last_heartbeat_at", "heartbeat_age_seconds")):
+            value = result.get(field)
+            try:
+                timestamp = datetime.fromisoformat(value) if isinstance(value, str) else value
+                if timestamp.tzinfo:
+                    timestamp = timestamp.astimezone(timezone.utc).replace(tzinfo=None)
+                result[age_field] = round(max(0.0, (now - timestamp).total_seconds()), 1)
+            except (TypeError, ValueError, AttributeError):
+                result[age_field] = None
+        result.update(classification="contact_lost", frame_fresh=False, streaming=False, stream_state="disconnected")
+        return result
+
+    def _observation(self, conn: _AgentConnection, now: datetime, *, connected: bool) -> dict[str, Any]:
+        self._expire_stream_ack(conn, now)
+        observation = dict(conn.last_observation)
+        frame_age = max(0.0, (now - conn.last_frame_at).total_seconds()) if conn.last_frame_at else None
+        frame_interval = ((conn.last_frame_at - conn.previous_frame_at).total_seconds()
+                          if conn.last_frame_at and conn.previous_frame_at else None)
+        heartbeat_age = max(0.0, (now - conn.info.last_heartbeat).total_seconds())
+        observed_at = observation.get("observed_at")
+        observation_age = max(0.0, (now - datetime.fromisoformat(observed_at)).total_seconds()) if observed_at else None
+        stream_age = max(0.0, (now - conn.stream_started_at).total_seconds()) if conn.stream_started_at else None
+        observation.update({
+            "last_frame_at": conn.last_frame_at.isoformat() if conn.last_frame_at else None,
+            "last_heartbeat_at": conn.info.last_heartbeat.isoformat(),
+            "frame_age_seconds": round(frame_age, 1) if frame_age is not None else None,
+            "frame_interval_seconds": round(frame_interval, 1) if frame_interval is not None else None,
+            "frame_fresh": connected and conn.streaming and frame_age is not None and frame_age <= 10,
+            "heartbeat_age_seconds": round(heartbeat_age, 1),
+            "observation_age_seconds": round(observation_age, 1) if observation_age is not None else None,
+            "streaming": conn.streaming,
+            "stream_state": ("disconnected" if not connected else
+                             "lost_frame" if conn.stream_state == "active" and frame_age is not None and frame_age > 10 else
+                             conn.stream_state),
+            "last_command_status": conn.last_command_status or None,
+            "last_command_latency_seconds": conn.last_command_latency_seconds,
+            "last_command_at": conn.last_command_at.isoformat() if conn.last_command_at else None,
+        })
+        if not connected or heartbeat_age > self._heartbeat_timeout_seconds:
+            cause = "contact_lost"
+        elif observation_age is not None and observation_age <= 120 and any(
+            observation.get(key, 0) >= 90 for key in ("cpu_percent", "ram_percent", "commit_percent", "disk_percent")
+        ):
+            cause = "resource_pressure"
+        elif conn.stream_state in ("start_timeout", "stop_timeout", "failed", "stop_failed") or (conn.last_command_status == "timeout" and conn.last_command_at and
+              conn.info.last_heartbeat <= conn.last_command_at and
+              (conn.last_frame_at is None or conn.last_frame_at <= conn.last_command_at)) or (
+              conn.stream_state == "starting" and stream_age is not None and stream_age > 10) or (conn.streaming and (
+            frame_age > 10 if frame_age is not None else stream_age is not None and stream_age > 10
+        )):
+            cause = "app_unresponsive"
+        else:
+            cause = "healthy"
+        observation["classification"] = cause
+        return observation
+
     # ── 스트리밍 ──────────────────────────────────────────────────
 
     def add_stream_subscriber(self, agent_id: str, ws: WebSocket) -> None:
@@ -418,38 +587,51 @@ class PCAgentManager:
 
     async def start_stream(self, agent_id: str, config: StreamConfig) -> str:
         """에이전트에 스트리밍 시작 명령 전송."""
-        conn = self._agents.get(agent_id)
-        if conn is None:
-            raise ValueError(f"에이전트 '{agent_id}'가 연결되어 있지 않습니다.")
-
-        command_id = str(uuid.uuid4())
-        msg = WSMessage(
-            type="command",
-            id=command_id,
-            payload={"command_type": "stream_start", "params": config.model_dump()},
-        )
-        await conn.websocket.send_json(msg.model_dump(mode="json"))
-        logger.info("stream_start_sent agent_id=%s config=%s", agent_id, config.model_dump())
-        return command_id
+        return await self._send_stream_command(agent_id, "start", config.model_dump())
 
     async def stop_stream(self, agent_id: str) -> str:
         """에이전트에 스트리밍 중지 명령 전송."""
+        return await self._send_stream_command(agent_id, "stop", {})
+
+    async def _send_stream_command(self, agent_id: str, action: str, params: dict[str, Any]) -> str:
+        """Register before yielding to the socket, serialize sends, roll back failed sends."""
         conn = self._agents.get(agent_id)
         if conn is None:
             raise ValueError(f"에이전트 '{agent_id}'가 연결되어 있지 않습니다.")
-
-        command_id = str(uuid.uuid4())
-        msg = WSMessage(
-            type="command",
-            id=command_id,
-            payload={"command_type": "stream_stop", "params": {}},
-        )
-        await conn.websocket.send_json(msg.model_dump(mode="json"))
-        logger.info("stream_stop_sent agent_id=%s", agent_id)
-        return command_id
+        async with conn.stream_command_lock:
+            if self._agents.get(agent_id) is not conn:
+                raise ValueError("PC agent connection changed before stream dispatch")
+            fields = ("streaming", "stream_state", "stream_started_at", "stream_command_at",
+                      "last_frame_at", "previous_frame_at")
+            previous = {field: getattr(conn, field) for field in fields}
+            previous_commands = {key: value for key, value in self._stream_commands.items() if value[0] == agent_id}
+            self._stream_commands = {key: value for key, value in self._stream_commands.items() if value[0] != agent_id}
+            command_id = str(uuid.uuid4())
+            self._stream_commands[command_id] = (agent_id, action)
+            conn.stream_command_at = self._now()
+            conn.stream_state = "starting" if action == "start" else "stopping"
+            if action == "start":
+                conn.streaming = False
+                conn.stream_started_at = conn.stream_command_at
+                conn.last_frame_at = None
+                conn.previous_frame_at = None
+            msg = WSMessage(type="command", id=command_id,
+                            payload={"command_type": f"stream_{action}", "params": params})
+            try:
+                await conn.websocket.send_json(msg.model_dump(mode="json"))
+            except BaseException:
+                # If an ACK already arrived, its state is more authoritative than a send error.
+                if self._stream_commands.pop(command_id, None) and self._agents.get(agent_id) is conn:
+                    self._stream_commands.update(previous_commands)
+                    for field, value in previous.items():
+                        setattr(conn, field, value)
+                raise
+            logger.info("stream_command_sent agent_id=%s action=%s", agent_id, action)
+            return command_id
 
     async def broadcast_frame(self, agent_id: str, frame_data: str) -> None:
         """모든 구독자에게 스트리밍 프레임 전송."""
+        self.record_frame(agent_id)
         subs = self._streaming_subscribers.get(agent_id)
         if not subs:
             return
@@ -475,6 +657,7 @@ class PCAgentManager:
         """모든 에이전트 연결을 1012로 정상 종료."""
         closed = 0
         for agent_id, conn in list(self._agents.items()):
+            self._last_observations[agent_id] = self._observation(conn, self._now(), connected=False)
             self._fail_pending_commands_for_agent(
                 agent_id,
                 reason=reason,
@@ -488,6 +671,7 @@ class PCAgentManager:
             except Exception:
                 pass
         self._agents.clear()
+        self._stream_commands.clear()
         self._streaming_subscribers.clear()
         logger.info("pc_agent_all_connections_closed count=%d reason=%s fast_reconnect=true", closed, reason)
         return closed
@@ -894,6 +1078,7 @@ class PCAgentManager:
             "last_seen": conn.info.last_heartbeat.isoformat() if conn.info.last_heartbeat else None,
             "user_id": getattr(conn.info, "user_id", "") or "",
             "reconnect_guidance": self._reconnect_guidance(online),
+            "last_observation": self._observation(conn, now, connected=True),
         }
 
     def _reconnect_guidance(self, online: bool) -> str:

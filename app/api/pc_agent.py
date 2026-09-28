@@ -698,6 +698,13 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
         }
         if extra:
             metadata.update(extra)
+        last_observation = pc_agent_manager.get_last_observation(agent_id)
+        if last_observation is not None:
+            metadata["last_observation"] = {
+                **last_observation,
+                "classification": "contact_lost",
+                "frame_fresh": False,
+            }
         return metadata
 
     async def _record_disconnect_once(reason: str, metadata: dict[str, Any]) -> None:
@@ -816,6 +823,7 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
                 last_heartbeat_at = last_message_at
                 pc_agent_manager.update_heartbeat(agent_id)
                 heartbeat_payload = msg.payload or {}
+                pc_agent_manager.update_observation(agent_id, heartbeat_payload.get("resources") or {})
                 if heartbeat_payload:
                     await _record_agent_event(
                         agent_id,
@@ -831,6 +839,7 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
                             "launcher_or_parent_pid": heartbeat_payload.get("launcher_or_parent_pid"),
                             "watchdog_task": heartbeat_payload.get("watchdog_task"),
                             "startup_registration": heartbeat_payload.get("startup_registration"),
+                            "last_observation": pc_agent_manager.get_last_observation(agent_id),
                         },
                     )
                 await websocket.send_json(
@@ -925,7 +934,7 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
                     agent_id,
                     "disconnected",
                     reason=disconnect_reason,
-                    metadata=disconnect_metadata,
+                    metadata={**disconnect_metadata, "last_observation": pc_agent_manager.get_last_observation(agent_id)},
                 )
             except Exception as exc:
                 logger.error(
@@ -1327,7 +1336,7 @@ async def _latest_known_pc_agents_from_events(
                            agent_id, metadata AS identity_metadata, created_at AS identity_at
                       FROM pc_agent_connection_events
                      WHERE created_at >= NOW() - make_interval(days => $1::int)
-                       AND metadata <> '{}'::jsonb
+                       AND metadata ? 'user_id'
                      ORDER BY agent_id, created_at DESC
                 )
                 SELECT le.agent_id,
@@ -1383,6 +1392,9 @@ async def _latest_known_pc_agents_from_events(
                 "user_id": owner_user_id,
                 "known_from_event_log": True,
                 "reconnect_guidance": "Offline in live WebSocket registry; restart or reconnect the PC Agent if this PC should be online.",
+                "last_observation": pc_agent_manager.refresh_offline_observation(
+                    metadata.get("last_observation") or identity_metadata.get("last_observation")
+                ),
             }
         )
     return known_agents
@@ -1791,7 +1803,7 @@ async def stream_start(request: Request, agent_id: str, config: StreamConfig | N
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    return {"command_id": command_id, "status": "streaming", "config": config.model_dump()}
+    return {"command_id": command_id, "status": "starting", "config": config.model_dump()}
 
 
 @router.post("/pc-agent/stream/{agent_id}/stop")
@@ -1814,7 +1826,7 @@ async def stream_stop(request: Request, agent_id: str):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    return {"command_id": command_id, "status": "stopped"}
+    return {"command_id": command_id, "status": "stopping"}
 
 
 @router.get("/pc-agent/health")

@@ -6,6 +6,7 @@ v1.0.12: 4010 수신 시 프로세스 종료 — 중복 인스턴스 ping-pong �
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import json
 import logging
 import os
@@ -87,6 +88,16 @@ def _hidden_subprocess_kwargs() -> dict[str, int]:
     if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
         return {"creationflags": subprocess.CREATE_NO_WINDOW}
     return {}
+
+
+def _os_event_sample(xml: str) -> dict[str, Any]:
+    """Report the 60-second bounded sample and mark a count over ten as a floor."""
+    sampled = xml.count("<Event ")
+    return {
+        "os_event_count": min(sampled, 10),
+        "os_event_count_is_lower_bound": sampled > 10,
+        "os_event_window_seconds": 60,
+    }
 
 # ── 단일 인스턴스 (Windows 뮤텍스) ────────────────────────────────────────
 
@@ -286,7 +297,52 @@ class PCAgent:
         """Collect auto-recovery state; cached to keep heartbeat inexpensive."""
         now = time.time()
         if self._telemetry_cache and now - self._telemetry_cached_at < 60:
-            return dict(self._telemetry_cache)
+            telemetry = dict(self._telemetry_cache)
+            telemetry["resources"] = {
+                **telemetry["resources"],
+                "sample_age_seconds": round(max(0, now - self._telemetry_cached_at), 1),
+            }
+            return telemetry
+
+        collection_started = time.monotonic()
+        resources: dict[str, Any] = {}
+        try:
+            import psutil
+            resources["cpu_percent"] = psutil.cpu_percent(interval=None)
+            resources["ram_percent"] = psutil.virtual_memory().percent
+            resources["disk_percent"] = psutil.disk_usage(str(INSTALL_DIR.anchor or INSTALL_DIR)).percent
+            resources["agent_rss_mb"] = round(psutil.Process().memory_info().rss / 1048576, 1)
+            if sys.platform == "win32":
+                class MEMORYSTATUSEX(ctypes.Structure):
+                    _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong)] + [
+                        (name, ctypes.c_ulonglong) for name in (
+                            "ullTotalPhys", "ullAvailPhys", "ullTotalPageFile", "ullAvailPageFile",
+                            "ullTotalVirtual", "ullAvailVirtual", "ullAvailExtendedVirtual"
+                        )
+                    ]
+                memory = MEMORYSTATUSEX()
+                memory.dwLength = ctypes.sizeof(memory)
+                if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(memory)) and memory.ullTotalPageFile:
+                    resources["commit_percent"] = round(
+                        100 * (memory.ullTotalPageFile - memory.ullAvailPageFile) / memory.ullTotalPageFile, 1
+                    )
+        except Exception as exc:
+            resources["collection_error"] = type(exc).__name__
+        if sys.platform == "win32":
+            try:
+                events = subprocess.run(
+                    ["wevtutil", "qe", "System",
+                     "/q:*[System[(Level=1 or Level=2) and TimeCreated[timediff(@SystemTime) <= 60000]]]",
+                     "/c:11", "/rd:true", "/f:xml"],
+                    capture_output=True, text=True, timeout=2,
+                    **_hidden_subprocess_kwargs(),
+                )
+                if events.returncode == 0:
+                    resources.update(_os_event_sample(events.stdout))
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        resources["collection_ms"] = round((time.monotonic() - collection_started) * 1000, 2)
+        resources["sample_age_seconds"] = 0
 
         watchdog: dict[str, Any] = {"registered": False, "platform": sys.platform}
         startup: dict[str, Any] = {"registered": False, "platform": sys.platform}
@@ -344,6 +400,7 @@ class PCAgent:
             "agent_start_count": self._agent_start_count,
             "watchdog_task": watchdog,
             "startup_registration": startup,
+            "resources": resources,
         }
         self._telemetry_cached_at = now
         return dict(self._telemetry_cache)
@@ -536,13 +593,16 @@ class PCAgent:
                     await ws.close(code=1000, reason="sleep_wake_reconnect")
                     break
                 last_beat = now
+                # Event-log/task-scheduler probes can block for seconds. Keep
+                # command and frame handling on the WebSocket loop responsive.
+                telemetry = await asyncio.to_thread(self._runtime_telemetry)
                 await ws.send(json.dumps({
                     "type": "heartbeat",
                     "id": str(uuid.uuid4()),
                     "payload": {
                         "hostname": self.hostname,
                         "version": self._get_version(),
-                        **self._runtime_telemetry(),
+                        **telemetry,
                     },
                 }))
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
