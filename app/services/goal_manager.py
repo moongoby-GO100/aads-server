@@ -42,7 +42,7 @@ async def link_optional_columns(conn) -> set:
             rows = await conn.fetch(
                 """
                 SELECT column_name FROM information_schema.columns
-                WHERE table_schema = 'public' AND table_name = 'goal_task_links'
+                WHERE table_schema = current_schema() AND table_name = 'goal_task_links'
                 """
             )
             present = {r["column_name"] for r in rows}
@@ -988,11 +988,34 @@ class GoalStateMachine:
                 goal_id, seq,
             )
             if next_ms and next_ms["auto_advance"]:
-                await conn.execute(
-                    "UPDATE milestones SET status = 'in_progress', started_at = NOW(), updated_at = NOW() WHERE id = $1",
+                advanced = await conn.fetchval(
+                    """UPDATE milestones SET status = 'in_progress', started_at = NOW(),
+                       updated_at = NOW() WHERE id = $1 AND status = 'pending'
+                       RETURNING id""",
                     next_ms["id"],
                 )
-                logger.info("milestone_auto_advanced: %s → %s", completed_milestone_id, next_ms["id"])
+                if advanced:
+                    logger.info("milestone_auto_advanced: %s → %s", completed_milestone_id, advanced)
+                    # Draft persistence is secondary. Keep the existing transition committed
+                    # even when a draft table, optional column, or session is unavailable.
+                    try:
+                        from app.services.directive_draft_service import save_milestone_draft
+
+                        goal = await conn.fetchrow(
+                            "SELECT id, tenant_id, project, priority, status FROM goals WHERE id=$1::uuid",
+                            goal_id,
+                        )
+                        if goal and goal["status"] != "blocked":
+                            milestone = await conn.fetchrow(
+                                """SELECT id, title, description, completion_criteria
+                                   FROM milestones WHERE id=$1::uuid""",
+                                advanced,
+                            )
+                            if milestone:
+                                async with conn.transaction():
+                                    await save_milestone_draft(conn, goal=goal, milestone=milestone)
+                    except Exception:
+                        logger.exception("milestone_draft_save_failed: %s", advanced)
 
             await self._update_goal_progress(goal_id)
 

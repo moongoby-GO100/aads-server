@@ -160,7 +160,10 @@ def validate_directive(
         errors.append("size_value")
     if fields.get("MODEL") != "AUTO":
         errors.append("model_value")
-    if expected_project and fields.get("TASK_ID") != f"{expected_project}-DRAFT":
+    task_id = fields.get("TASK_ID", "")
+    if expected_project and task_id != f"{expected_project}-DRAFT" and not re.fullmatch(
+        re.escape(expected_project) + r"-DRAFT-[0-9a-f]{32}", task_id
+    ):
         errors.append("task_id_value")
     if "DESCRIPTION:" not in (content or ""):
         errors.append("description")
@@ -721,6 +724,144 @@ async def create_draft(
     result["artifact_id"] = str(artifact["id"])
     result["artifact"] = _serialize_artifact(artifact)
     return result
+
+
+def _safe_milestone_text(value: Any) -> str:
+    """Keep milestone prose from becoming directive delimiters or header fields."""
+    text = str(value or "").strip().replace(">>>DIRECTIVE_", "›››DIRECTIVE_")
+    return re.sub(
+        r"(?im)^(\s*)(TASK_ID|TITLE|PRIORITY|SIZE|MODEL|DESCRIPTION):",
+        lambda match: f"{match.group(1)}{match.group(2)}：", text,
+    )
+
+
+async def save_milestone_draft(conn, *, goal: Any, milestone: Any) -> None:
+    """Save a review-only milestone directive in the existing draft store.
+
+    The caller owns a short, separate draft transaction. The advisory lock
+    serializes retries for this milestone without locking goals or milestones.
+    """
+    milestone_id = str(milestone["id"])
+    tenant_id = goal["tenant_id"]
+    project_key = normalize_project_key(goal["project"])
+    priority = {"P0": "P0-CRITICAL", "P1": "P1-HIGH", "P2": "P2-MEDIUM", "P3": "P3-LOW"}.get(
+        goal["priority"], "P2-MEDIUM"
+    )
+    title = " ".join(_safe_milestone_text(milestone["title"]).split())[:200]
+    description = _safe_milestone_text(milestone["description"])
+    criteria = _safe_milestone_text(milestone["completion_criteria"])
+    content = (
+        ">>>DIRECTIVE_START\n"
+        f"TASK_ID: {project_key}-DRAFT-{uuid.UUID(milestone_id).hex}\n"
+        f"TITLE: {title}\n"
+        f"PRIORITY: {priority}\n"
+        "SIZE: M\nMODEL: AUTO\nDESCRIPTION:\n"
+        f"목표: {title}\n"
+        f"현재 근거: 마일스톤 {milestone_id} 자동 전환\n"
+        f"허용 범위: {description or title}\n"
+        "금지 범위: 승인 전 자동 제출 및 실행\n"
+        f"구현 요구사항: {description or title}\n"
+        f"검증 기준: {criteria or '마일스톤 완료 기준을 담당자가 확인'}\n"
+        "완료 보고: 검증 결과와 변경 내용을 보고\n"
+        ">>>DIRECTIVE_END"
+    )
+    classification = json.dumps({
+        "source_mode": "milestone_auto_advance",
+        "goal_id": str(goal["id"]),
+        "milestone_id": milestone_id,
+        "requires_human_review": True,
+        "auto_submit": False,
+    }, ensure_ascii=False)
+    await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", milestone_id)
+    current = await conn.fetchrow(
+        """SELECT id, artifact_id, content, status, current_revision
+           FROM directive_drafts
+           WHERE tenant_id = $1 AND classification->>'source_mode' = 'milestone_auto_advance'
+             AND classification->>'milestone_id' = $2
+           ORDER BY created_at LIMIT 1 FOR UPDATE""",
+        tenant_id, milestone_id,
+    )
+    if current and (current["status"] != "draft" or current["content"] == content):
+        return
+    if current:
+        latest_source = await conn.fetchval(
+            """SELECT change_source FROM directive_draft_revisions
+               WHERE draft_id = $1 ORDER BY revision DESC LIMIT 1""",
+            current["id"],
+        )
+        if latest_source in {"user_edit", "artifact_edit"}:
+            return
+        draft_id = current["id"]
+        revision = current["current_revision"] + 1
+        await conn.execute(
+            """UPDATE directive_drafts SET title=$2, content=$3,
+               current_revision=$4, updated_at=NOW() WHERE id=$1""",
+            draft_id, title, content, revision,
+        )
+        if current["artifact_id"]:
+            await conn.execute(
+                """UPDATE chat_artifacts SET title=$2, content=$3,
+                   metadata=metadata || jsonb_build_object('revision', $4::integer),
+                   updated_at=NOW() WHERE id=$1""",
+                current["artifact_id"], f"지시 초안: {title}"[:200], content, revision,
+            )
+        action = "edited"
+        change_source = "regenerated"
+    else:
+        from app.services.goal_manager import active_link_predicate, link_optional_columns
+
+        link_columns = await link_optional_columns(conn)
+        session = await conn.fetchrow(
+            f"""SELECT s.id, s.workspace_id FROM goal_task_links l
+               JOIN chat_sessions s ON s.id::text = l.task_id AND s.tenant_id = $2
+               WHERE l.goal_id = $1::uuid AND l.task_type = 'chat_session'
+                 {active_link_predicate(link_columns, 'l')}
+               ORDER BY (l.milestone_id = $3::uuid) DESC NULLS LAST,
+                        l.created_at DESC, l.id DESC LIMIT 1""",
+            goal["id"], tenant_id, milestone["id"],
+        )
+        if not session:
+            logger.warning("milestone_draft_skipped_no_active_session goal=%s milestone=%s",
+                           goal["id"], milestone_id)
+            return
+        draft_id = await conn.fetchval(
+            """INSERT INTO directive_drafts
+               (tenant_id, session_id, project_key, title, content, risk_level,
+                confidence, classification)
+               VALUES ($1,$2,$3,$4,$5,$6,1.0,$7::jsonb)
+               RETURNING id""",
+            tenant_id, session["id"], project_key, title, content,
+            classify_risk(content), classification,
+        )
+        artifact_id = await conn.fetchval(
+            """INSERT INTO chat_artifacts
+               (tenant_id, session_id, workspace_id, type, title, content, metadata)
+               VALUES ($1,$2,$3,'report',$4,$5,$6::jsonb) RETURNING id""",
+            tenant_id, session["id"], session["workspace_id"],
+            f"지시 초안: {title}"[:200], content,
+            json.dumps({"subtype": "directive_draft", "draft_id": str(draft_id),
+                        "revision": 1, "status": "draft", "requires_human_review": True}),
+        )
+        await conn.execute(
+            "UPDATE directive_drafts SET artifact_id=$2 WHERE id=$1", draft_id, artifact_id,
+        )
+        revision = 1
+        action = "created"
+        change_source = "fallback"
+    await conn.execute(
+        """INSERT INTO directive_draft_revisions
+           (tenant_id, draft_id, revision, title, content, change_source, metadata)
+           VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)""",
+        tenant_id, draft_id, revision, title, content, change_source,
+        json.dumps({"milestone_id": milestone_id}),
+    )
+    await conn.execute(
+        """INSERT INTO directive_draft_events
+           (tenant_id, draft_id, revision, action, metadata)
+           VALUES ($1,$2,$3,$4,$5::jsonb)""",
+        tenant_id, draft_id, revision, action,
+        json.dumps({"source_mode": "milestone_auto_advance"}),
+    )
 
 
 async def list_drafts(*, tenant_id: str, session_id: str, limit: int = 20) -> list[dict[str, Any]]:

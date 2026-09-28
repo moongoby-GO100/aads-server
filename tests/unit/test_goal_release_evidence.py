@@ -154,6 +154,7 @@ class _FakeDB:
         self.link_columns = link_columns
         self.executed: list[str] = []
         self.queries: list[tuple[str, tuple]] = []
+        self.generated_drafts: list[str] = []
 
     # -- 커넥션/풀 프로토콜 -------------------------------------------------
     def acquire(self):
@@ -167,6 +168,9 @@ class _FakeDB:
                 return False
 
         return _Ctx()
+
+    def transaction(self):
+        return self.acquire()
 
     # -- 조회 ---------------------------------------------------------------
     async def fetch(self, query, *args):
@@ -264,6 +268,12 @@ class _FakeDB:
     async def fetchrow(self, query, *args):
         q = " ".join(query.split())
 
+        if "FROM milestones WHERE id=$1::uuid" in q:
+            return self._milestone(args[0])
+
+        if "SELECT id, tenant_id, project, priority, status FROM goals" in q:
+            return self._goal(args[0])
+
         if "LEFT JOIN goals p ON p.id = g.parent_goal_id" in q:
             goal = self._goal(args[0])
             if goal is None:
@@ -287,14 +297,14 @@ class _FakeDB:
             ms = self._milestone(args[0])
             return {"sequence_order": ms["sequence_order"]} if ms else None
 
-        if "SELECT id, auto_advance FROM milestones" in q:
+        if "auto_advance FROM milestones" in q:
             goal_id, seq = args
             nxt = sorted(
                 (m for m in self.milestones
                  if m["goal_id"] == goal_id and m["sequence_order"] > seq and m["status"] == "pending"),
                 key=lambda m: m["sequence_order"],
             )
-            return {"id": nxt[0]["id"], "auto_advance": nxt[0]["auto_advance"]} if nxt else None
+            return nxt[0] if nxt else None
 
         if "COUNT(*) AS total" in q:
             goal_id = args[0]
@@ -351,6 +361,12 @@ class _FakeDB:
 
     async def fetchval(self, query, *args):
         q = " ".join(query.split())
+        if "UPDATE milestones SET status = 'in_progress'" in q:
+            ms = self._milestone(args[0])
+            if not ms or ms["status"] != "pending":
+                return None
+            await self.execute(query, *args)
+            return ms["id"]
         if "SELECT status FROM goals" in q:
             goal = self._goal(args[0])
             return goal["status"] if goal else None
@@ -448,6 +464,13 @@ def db(monkeypatch):
     """가짜 DB 를 풀로 주입하고, 모듈 수준 스키마 캐시를 매 테스트 초기화한다."""
     fake = _FakeDB()
     monkeypatch.setattr("app.core.db_pool.get_pool", lambda: fake)
+
+    async def save_draft(_conn, *, goal, milestone):
+        fake.generated_drafts.append(milestone["id"])
+
+    monkeypatch.setattr(
+        "app.services.directive_draft_service.save_milestone_draft", save_draft,
+    )
     gm._link_columns_cache = None
     re_mod.reset_schema_cache()
     return fake
@@ -506,6 +529,7 @@ def test_ancestor_provenance_completes_link_and_advances_milestone(db, traces):
     # GoalStateMachine 이 마일스톤을 완료시키고 다음 단계를 자동 개시했다.
     assert db._milestone(MS1)["status"] == "completed"
     assert db._milestone(MS2)["status"] == "in_progress"
+    assert db.generated_drafts == [MS2]
     assert db._goal(GOAL_ID)["progress"] == 0.5
 
     # 상관 ID 가 붙은 goal_release_evidence trace 가 남는다.
