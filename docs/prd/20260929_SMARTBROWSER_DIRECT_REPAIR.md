@@ -15,8 +15,9 @@ table, or existing function is deleted. PC version advances 1.0.74 to 1.0.76.
 Stream requests must be registered before socket send; a frame cannot acknowledge
 start/stop. Missing ACK expires after ten seconds, even with continuing frames.
 Late ACK and old-connection ACK cannot revive success. Failed sends restore state.
-Only one unacknowledged stream control is allowed per PC; callers retry after
-ACK or timeout. Numeric bounds are checked before float conversion so enormous
+Only one unacknowledged stream control is allowed per PC; start callers retry after
+ACK or timeout. Stop waits for ACK/deadline so last-subscriber cleanup is retained.
+Numeric bounds are checked before float conversion so enormous
 JSON integers cannot disconnect a PC's heartbeat.
 Windows probes run outside the WebSocket event loop. Offline samples retain their
 absolute timestamp; empty resource payloads cannot refresh a sample. OS event count

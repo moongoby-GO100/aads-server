@@ -177,6 +177,8 @@ class _AgentConnection:
         self.stream_started_at: datetime | None = None
         self.stream_command_at: datetime | None = None
         self.stream_command_lock = asyncio.Lock()
+        self.stream_ack_done = asyncio.Event()
+        self.stream_ack_done.set()
 
 
 class PCAgentManager:
@@ -241,6 +243,9 @@ class PCAgentManager:
             tenant_id=str(owner_tenant_id or "").strip(),
             agent_name=agent_name,
         )
+        previous_conn = self._agents.get(agent_id)
+        if previous_conn:
+            previous_conn.stream_ack_done.set()
         self._stream_commands = {key: value for key, value in self._stream_commands.items() if value[0] != agent_id}
         self._agents[agent_id] = _AgentConnection(agent_id, websocket, agent_info)
         self._agents[agent_id].last_observation = dict(self._last_observations.get(agent_id, {}))
@@ -268,6 +273,7 @@ class PCAgentManager:
             logger.info("pc_agent_unregister_skipped_stale agent_id=%s", agent_id)
             return False
         self._last_observations[agent_id] = self._observation(conn, self._now(), connected=False)
+        conn.stream_ack_done.set()
         self._stream_commands = {key: value for key, value in self._stream_commands.items() if value[0] != agent_id}
         if len(self._last_observations) > 512:
             self._last_observations.pop(next(iter(self._last_observations)))
@@ -375,6 +381,7 @@ class PCAgentManager:
             if conn and not self._expire_stream_ack(conn, self._now()):
                 success = result.get("status") in ("success", "ok")
                 conn.stream_command_at = None
+                conn.stream_ack_done.set()
                 if action == "start":
                     conn.streaming = success
                     conn.stream_state = "active" if success else "failed"
@@ -481,12 +488,13 @@ class PCAgentManager:
                 conn.streaming = True
                 conn.stream_state = "active"
 
-    def _expire_stream_ack(self, conn: _AgentConnection, now: datetime) -> bool:
+    def _expire_stream_ack(self, conn: _AgentConnection, now: datetime, *, force: bool = False) -> bool:
         """A received frame cannot substitute for a command acknowledgement."""
         if (conn.stream_state in ("starting", "stopping") and conn.stream_command_at
-                and (now - conn.stream_command_at).total_seconds() > 10):
+                and (force or (now - conn.stream_command_at).total_seconds() > 10)):
             conn.stream_state = "start_timeout" if conn.stream_state == "starting" else "stop_timeout"
             conn.stream_command_at = None
+            conn.stream_ack_done.set()
             self._stream_commands = {
                 key: value for key, value in self._stream_commands.items() if value[0] != conn.agent_id
             }
@@ -604,9 +612,17 @@ class PCAgentManager:
                 raise ValueError("PC agent connection changed before stream dispatch")
             self._expire_stream_ack(conn, self._now())
             if conn.stream_state in ("starting", "stopping"):
-                # Never discard an in-flight ACK to supersede it. The caller
-                # can retry once the current command acknowledges or expires.
-                raise ValueError("stream_command_pending")
+                if action != "stop":
+                    raise ValueError("stream_command_pending")
+                # Last-subscriber cleanup must still stop a pending start.
+                # Wait without holding up the independent ACK receiver.
+                remaining = max(0.01, 10 - (self._now() - conn.stream_command_at).total_seconds())
+                try:
+                    await asyncio.wait_for(conn.stream_ack_done.wait(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    self._expire_stream_ack(conn, self._now(), force=True)
+                if self._agents.get(agent_id) is not conn:
+                    raise ValueError("PC agent connection changed before stream dispatch")
             fields = ("streaming", "stream_state", "stream_started_at", "stream_command_at",
                       "last_frame_at", "previous_frame_at")
             previous = {field: getattr(conn, field) for field in fields}
@@ -615,6 +631,7 @@ class PCAgentManager:
             command_id = str(uuid.uuid4())
             self._stream_commands[command_id] = (agent_id, action)
             conn.stream_command_at = self._now()
+            conn.stream_ack_done.clear()
             conn.stream_state = "starting" if action == "start" else "stopping"
             if action == "start":
                 conn.streaming = False
@@ -631,6 +648,7 @@ class PCAgentManager:
                     self._stream_commands.update(previous_commands)
                     for field, value in previous.items():
                         setattr(conn, field, value)
+                    conn.stream_ack_done.set()
                 raise
             logger.info("stream_command_sent agent_id=%s action=%s", agent_id, action)
             return command_id
@@ -664,6 +682,7 @@ class PCAgentManager:
         closed = 0
         for agent_id, conn in list(self._agents.items()):
             self._last_observations[agent_id] = self._observation(conn, self._now(), connected=False)
+            conn.stream_ack_done.set()
             self._fail_pending_commands_for_agent(
                 agent_id,
                 reason=reason,

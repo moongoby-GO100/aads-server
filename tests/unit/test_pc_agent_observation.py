@@ -368,13 +368,13 @@ async def test_slow_telemetry_does_not_block_websocket_loop(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_pending_start_ack_is_preserved_when_stop_is_requested():
+async def test_pending_start_ack_is_preserved_when_another_start_is_requested():
     manager = PCAgentManager()
     ws = DummyWebSocket()
     manager.register_agent("pc", ws, {})
     start_id = await manager.start_stream("pc", StreamConfig())
     with pytest.raises(ValueError, match="stream_command_pending"):
-        await manager.stop_stream("pc")
+        await manager.start_stream("pc", StreamConfig())
     assert ws.last_message["id"] == start_id  # No new command sent.
     manager.receive_result(start_id, {"status": "success"})
     assert manager.get_last_observation("pc")["stream_state"] == "active"
@@ -410,3 +410,67 @@ def test_enormous_sample_age_remains_stale_without_float_overflow():
     observed = manager.get_last_observation("pc")
     assert observed["observation_age_seconds"] >= 86400
     assert observed["classification"] != "resource_pressure"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("send_fails", [False, True])
+async def test_last_subscriber_stop_waits_for_start_ack_without_losing_it(send_fails):
+    import asyncio
+
+    manager = PCAgentManager()
+    ws = DummyWebSocket()
+    manager.register_agent("pc", ws, {})
+    start_id = await manager.start_stream("pc", StreamConfig())
+
+    async def stop_send(message):
+        if send_fails:
+            raise OSError("stop send failed")
+        manager.receive_result(message["id"], {"status": "success"})
+
+    ws.send_json = stop_send
+    task = asyncio.create_task(manager.stop_stream("pc"))
+    await asyncio.sleep(0)
+    assert not task.done()
+    manager.receive_result(start_id, {"status": "success"})
+    if send_fails:
+        with pytest.raises(OSError):
+            await task
+        assert manager.get_last_observation("pc")["stream_state"] == "active"
+    else:
+        await task
+        assert manager.get_last_observation("pc")["stream_state"] == "stopped"
+    assert not manager._stream_commands
+
+
+@pytest.mark.asyncio
+async def test_last_subscriber_stop_sends_after_start_ack_deadline():
+    manager = PCAgentManager()
+    ws = DummyWebSocket()
+    manager.register_agent("pc", ws, {})
+    start_id = await manager.start_stream("pc", StreamConfig())
+    manager._agents["pc"].stream_command_at = manager._now() - timedelta(seconds=9.999)
+
+    async def stop_ack(message):
+        assert message["payload"]["command_type"] == "stream_stop"
+        manager.receive_result(message["id"], {"status": "success"})
+
+    ws.send_json = stop_ack
+    await manager.stop_stream("pc")
+    manager.receive_result(start_id, {"status": "success"})
+    assert manager.get_last_observation("pc")["stream_state"] == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_queued_stop_does_not_target_a_replacement_connection():
+    import asyncio
+
+    manager = PCAgentManager()
+    manager.register_agent("pc", DummyWebSocket(), {})
+    await manager.start_stream("pc", StreamConfig())
+    task = asyncio.create_task(manager.stop_stream("pc"))
+    await asyncio.sleep(0)
+    replacement = DummyWebSocket()
+    manager.register_agent("pc", replacement, {})
+    with pytest.raises(ValueError, match="connection changed"):
+        await task
+    assert not hasattr(replacement, "last_message")
