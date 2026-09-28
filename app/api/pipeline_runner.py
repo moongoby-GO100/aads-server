@@ -2334,6 +2334,39 @@ async def notify_completion(job_id: str):
                     "pipeline_runner.goal_state_update_fail", job_id=orphan_job_id, error=str(exc),
                 )
 
+    # AADS-RUNNER-AUTO-REWORK: AI 리뷰 반려(REQUEST_CHANGES)는 여기서 끝내지 않고
+    # 지적을 붙인 재작업을 max_cycles-1 라운드까지 자동 제출한다. 이전에는 반려마다
+    # 사람이 R2·R3 을 손으로 다시 써야 했고, 그동안 목표 자동진행이 멈췄다.
+    if status == "error" and row["phase"] == "review_failed":
+        try:
+            from app.services.pipeline_auto_rework import maybe_submit_auto_rework
+
+            async with pool.acquire() as conn:
+                rework = await maybe_submit_auto_rework(conn, job_id)
+            if rework and rework.get("job_id") and not rework.get("skipped"):
+                from app.services.pipeline_runner_service import _link_job_to_goal_explicit
+
+                linked = await _link_job_to_goal_explicit(
+                    rework["job_id"], rework["project"],
+                    instruction=rework["instruction"],
+                    goal_id=str(rework["goal_id"]) if rework.get("goal_id") else None,
+                    milestone_id=str(rework["milestone_id"]) if rework.get("milestone_id") else None,
+                )
+                if linked:
+                    await _persist_job_goal_context(
+                        pool, rework["job_id"], linked,
+                        str(rework["milestone_id"]) if rework.get("milestone_id") else None,
+                    )
+                if not promoted_job_id:
+                    async with pool.acquire() as conn:
+                        promoted_job_id = await promote_next_queued(conn, project)
+            elif rework:
+                logger.info("pipeline_runner.auto_rework_skipped", job_id=job_id, **{
+                    k: v for k, v in rework.items() if k in ("skipped", "rounds_max")
+                })
+        except Exception as exc:  # 재작업 실패가 종료 처리를 되돌리면 안 된다
+            logger.warning("pipeline_runner.auto_rework_fail", job_id=job_id, error=str(exc)[:200])
+
     # AADS-STALE-TRIGGER-SUPPRESS-P1: terminal jobs must never re-enter the
     # approval/review notification path.  Keep the terminal-side effects above
     # (queue promotion and goal reconciliation), but stop before any chat task
