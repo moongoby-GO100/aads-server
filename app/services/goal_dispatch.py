@@ -590,7 +590,7 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                   AND ($1::text IS NULL OR g.project = $1)
                   AND (m.dispatched_at IS NULL
                        OR m.dispatched_at < NOW() - ($2 || ' minutes')::interval)
-                ORDER BY m.dispatched_at NULLS FIRST, m.sequence_order
+                ORDER BY m.sequence_order, m.dispatched_at NULLS FIRST
                 LIMIT 20
                 """,
                 project, str(_RETRY_AFTER_MIN),
