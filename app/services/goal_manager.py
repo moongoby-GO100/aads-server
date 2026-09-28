@@ -5,6 +5,7 @@ goals/milestones/goal_task_links 테이블을 조작하여
 """
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Any, Optional
@@ -1073,8 +1074,11 @@ class GoalStateMachine:
 
             milestones = await conn.fetch(
                 """
-                SELECT id, title, sequence_order, status, auto_advance, completion_criteria, started_at, completed_at
-                FROM milestones
+                SELECT m.id, m.title, m.sequence_order, m.status, m.auto_advance,
+                       m.completion_criteria, m.started_at, m.completed_at,
+                       NULLIF(to_jsonb(m)->'completion_checklist', 'null'::jsonb)
+                           AS completion_checklist
+                FROM milestones m
                 WHERE goal_id = $1::uuid
                   AND ($2::boolean OR status NOT IN ('cancelled', 'superseded', 'archived'))
                 ORDER BY sequence_order
@@ -1123,6 +1127,10 @@ class GoalStateMachine:
                         "status": m["status"],
                         "auto_advance": m["auto_advance"],
                         "completion_criteria": m["completion_criteria"],
+                        **({"completion_checklist": json.loads(m["completion_checklist"])
+                            if isinstance(m["completion_checklist"], str)
+                            else m["completion_checklist"]}
+                           if m["completion_checklist"] is not None else {}),
                         "started_at": m["started_at"].isoformat() if m["started_at"] else None,
                         "completed_at": m["completed_at"].isoformat() if m["completed_at"] else None,
                         "tasks": task_map.get(str(m["id"]), []),
