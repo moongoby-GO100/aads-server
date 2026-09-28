@@ -336,10 +336,31 @@ async def approved_brief(conn: Any, tenant_id: str, project_key: str, limit: int
     rows = await conn.fetch(
         "SELECT h.document_key,h.kind,r.title,r.version,left(r.content,4000) AS excerpt,r.content_hash "
         "FROM project_document_heads h JOIN project_document_revisions r ON r.id=h.approved_revision_id "
+        "AND r.head_id=h.id AND r.tenant_id=h.tenant_id AND r.project_key=h.project_key "
         "WHERE h.tenant_id=$1::uuid AND h.project_key=$2 ORDER BY h.updated_at DESC LIMIT $3",
         tenant_id, _project(project_key), limit,
     )
     return [dict(row) for row in rows]
+
+
+def format_approved_brief(documents: list[dict], *, max_chars: int = 3000) -> str:
+    """Use at most 3,000 characters as a conservative 3,000-token budget."""
+    empty = "승인된 정본 문서 없음/조회 불가"
+    if not documents:
+        return empty
+    parts = ["[프로젝트 승인 정본 문서]", "아래는 승인 포인터가 가리키는 문서의 발췌입니다."]
+    for row in documents[:8]:
+        raw_excerpt = str(row.get("excerpt") or "")
+        raw_title = str(row.get("title") or "")
+        excerpt = raw_excerpt[:1200]
+        title = raw_title[:120]
+        if not excerpt or SECRET.search(raw_excerpt) or SECRET.search(raw_title):
+            continue
+        item = f"\n- {str(row.get('document_key') or '')[:128]} ({str(row.get('version') or '')[:32]}): {title}\n{excerpt}"
+        if len("\n".join(parts)) + 1 + len(item) > max_chars:
+            break
+        parts.append(item)
+    return "\n".join(parts) if len(parts) > 2 else empty
 
 
 @router.post("/{document_key}/review")

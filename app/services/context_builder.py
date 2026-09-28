@@ -628,6 +628,38 @@ def _normalize_workspace(name: str) -> str:
 _SECTION_CHARS_LAST: dict[str, int] = {}
 
 
+async def _build_approved_document_layer(session_id: str, db_conn) -> str:
+    """Resolve document scope from the persisted session, never the display name."""
+    from app.api.canonical_documents import approved_brief, format_approved_brief
+
+    unavailable = "승인된 정본 문서 없음/조회 불가"
+    if db_conn is None or not session_id:
+        return unavailable
+    try:
+        scope = await db_conn.fetchrow(
+            "SELECT s.tenant_id::text AS tenant_id, w.project_key, s.user_id::text AS user_id "
+            "FROM chat_sessions s JOIN chat_workspaces w ON w.id=s.workspace_id "
+            "AND w.tenant_id=s.tenant_id WHERE s.id=$1::uuid",
+            session_id,
+        )
+        if not scope or not all(scope.get(key) for key in ("tenant_id", "project_key", "user_id")):
+            return unavailable
+        allowed = await db_conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM project_document_grants "
+            "WHERE tenant_id=$1::uuid AND project_key=$2 AND user_id=$3 "
+            "AND access=ANY($4::text[]))",
+            scope["tenant_id"], scope["project_key"], scope["user_id"],
+            ["read", "write", "approve"],
+        )
+        if not allowed:
+            return unavailable
+        documents = await approved_brief(db_conn, scope["tenant_id"], scope["project_key"])
+        return format_approved_brief(documents)
+    except Exception:  # noqa: BLE001 — document lookup must fail closed on database errors
+        logger.warning("approved_document_brief_unavailable")
+        return unavailable
+
+
 async def build_messages_context(
     workspace_name: str,
     session_id: str,
@@ -758,7 +790,8 @@ async def build_messages_context(
     # 그 뒤 시스템 프롬프트 전체(실측 34,000~40,000자)가 매 턴 캐시 미스가 된다.
     # 모델이 시각을 읽는 데에는 위치가 상관없으므로 맥락 손실 없이 적중만 올린다.
     _kst_now = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST (%A)")
-    system_prompt = layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer + artifact_layer + "\n\n" + _layer4 + f"\n\n<currentTime>\n{_kst_now}\n</currentTime>"
+    approved_documents = await _build_approved_document_layer(session_id, db_conn)
+    system_prompt = layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer + artifact_layer + "\n\n" + _layer4 + "\n\n" + approved_documents + f"\n\n<currentTime>\n{_kst_now}\n</currentTime>"
 
     # 구간별 계측.
     #
@@ -776,6 +809,7 @@ async def build_messages_context(
         "preload": len(preload_layer),
         "auto_rag": len(auto_rag_layer),
         "artifact": len(artifact_layer),
+        "approved_documents": len(approved_documents),
         "layer4": len(_layer4),
     }
     _sp_chars = len(system_prompt)
@@ -924,9 +958,10 @@ async def build(
     # 읽는 내용은 동일하므로 맥락 유지에는 영향이 없다.
     _kst_now = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST (%A)")
     _kst_block = f"<currentTime>\n{_kst_now}\n</currentTime>"
-    system_text = layer1 + "\n\n---\n\n" + layer2_full + "\n\n" + _layer4 + "\n\n" + _kst_block
+    approved_documents = await _build_approved_document_layer(session_id, db_conn)
+    system_text = layer1 + "\n\n---\n\n" + layer2_full + "\n\n" + _layer4 + "\n\n" + approved_documents + "\n\n" + _kst_block
     # system_blocks 꼬리에 KST 시각 주입 (비캐시 블록 — 캐시 프리픽스를 깨지 않는 위치)
-    system_blocks = system_blocks + [{"type": "text", "text": _kst_block}]
+    system_blocks = system_blocks + [{"type": "text", "text": approved_documents}, {"type": "text", "text": _kst_block}]
 
     # 토큰 절감 측정 로깅
     _sp_chars = len(system_text)

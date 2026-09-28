@@ -279,6 +279,50 @@ db_exec() {
     echo "$out"
 }
 
+approved_document_runner_brief() {
+    # The claimed job is the server-side tenant/project authority. No instruction text
+    # or workspace display name participates in document scope resolution.
+    local job_id="$1" project="$2" rows=""
+    local unavailable='승인된 정본 문서 없음/조회 불가'
+    [[ "$job_id" =~ ^[a-zA-Z0-9_-]+$ && "$project" =~ ^[A-Z0-9][A-Z0-9_-]{0,63}$ ]] || { printf '%s' "$unavailable"; return; }
+    rows=$(db_exec "SELECT COALESCE(json_agg(json_build_object('key',d.document_key,'title',d.title,'version',d.version,'excerpt',d.excerpt))::text,'[]')
+        FROM (SELECT h.document_key,r.title,r.version,left(r.content,1300) AS excerpt
+              FROM pipeline_jobs p JOIN project_document_heads h
+                ON h.tenant_id=p.tenant_id AND h.project_key=p.project
+              JOIN project_document_revisions r ON r.id=h.approved_revision_id
+                AND r.head_id=h.id AND r.tenant_id=h.tenant_id AND r.project_key=h.project_key
+              WHERE p.job_id='${job_id}' AND p.tenant_id IS NOT NULL AND p.project='${project}'
+                AND EXISTS (
+                  SELECT 1 FROM chat_sessions s JOIN chat_workspaces w ON w.id=s.workspace_id
+                  JOIN project_document_grants g ON g.tenant_id=p.tenant_id
+                    AND g.project_key=p.project AND g.user_id=s.user_id::text
+                    AND g.access IN ('read','write','approve')
+                  WHERE s.id=p.chat_session_id AND s.tenant_id=p.tenant_id
+                    AND w.tenant_id=p.tenant_id AND w.project_key=p.project)
+              ORDER BY h.updated_at DESC LIMIT 8) d;" 2>/dev/null) || rows=''
+    [[ -n "$rows" ]] || { printf '%s' "$unavailable"; return; }
+    printf '%s' "$rows" | python3 -c '
+import json, re, sys
+empty = "승인된 정본 문서 없음/조회 불가"
+secret = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{16,}|AIza[0-9A-Za-z_-]{20,}|AKIA[0-9A-Z]{16})|(?i:(?:api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|password|client[_-]?secret|secret[_-]?key|private[_-]?key|database[_-]?url)[\x27\"]?\s*[:=]\s*[\x27\"]?[^\s\x27\"]+)")
+try:
+    rows = json.load(sys.stdin)
+    parts = ["[프로젝트 승인 정본 문서]", "아래는 승인 포인터가 가리키는 문서의 발췌입니다."]
+    for row in rows[:8]:
+        raw_title, raw_excerpt = str(row.get("title") or ""), str(row.get("excerpt") or "")
+        title, excerpt = raw_title[:120], raw_excerpt[:1200]
+        if not excerpt or secret.search(raw_title) or secret.search(raw_excerpt):
+            continue
+        item = "\n- %s (%s): %s\n%s" % (str(row.get("key") or "")[:128], str(row.get("version") or "")[:32], title, excerpt)
+        if len("\n".join(parts)) + 1 + len(item) > 3000:
+            break
+        parts.append(item)
+    print("\n".join(parts) if len(parts) > 2 else empty)
+except (ValueError, TypeError, AttributeError):
+    print(empty)
+' 2>/dev/null || printf '%s' "$unavailable"
+}
+
 # 실패 지점에서 오류 사전(ohvis_wiki_error_book)을 조회한다.
 #
 # 2026-09-14, 같은 실패를 세 세션이 "러너 계정 문제" 로 보고했다. 실제 원인은
@@ -2303,6 +2347,7 @@ run_job() {
         # /root/scripts/aag-brief.py) — brief.py 는 러너 것이라 프로젝트 저장소마다 복제하지 않는다.
         # 브리프 생성 실패가 본 작업을 실패시켜서는 안 되므로 전부 `|| true` 로 흘린다.
         local aag_brief="" aag_step0_hint="" aag_brief_lines=0
+        local approved_document_brief=""
         local aag_brief_bin="" aag_brief_source="" aag_out=""
         local aag_v2_enabled="${AAG_V2_RUNNER_ENABLED:-0}"
         local aag_token_var="AAG_SCANNER_TOKEN_${project^^}"
@@ -2370,6 +2415,8 @@ run_job() {
             record_runner_event "$job_id" "aag_brief_attached" "running" "claude_code_work" "$current_model" "" "$job_size" "" "{\"project\":\"${project}\",\"source\":\"${aag_brief_source}\",\"bytes\":0,\"nodes\":0,\"skipped_reason\":\"no_output_or_timeout\"}"
         fi
 
+        approved_document_brief=$(approved_document_runner_brief "$job_id" "$project")
+
         # H7: 빌드/배포 가드 v2.1 — Claude Code가 직접 배포하지 않도록 방지
         safe_instruction="[필수 규칙 — 반드시 준수]
 1. 코드 수정을 수행하세요. 파일 생성/수정/삭제와 함께, 아래 2번 차단목록에 없는 읽기·검증 명령(pytest, ruff, python3 -m compileall, scripts/dup_guard.py, bash scripts/run_unit_tests.sh, cat/grep/sed 조회)은 실행해도 됩니다. 지시서가 요구한 검증은 반드시 실제로 실행하고 그 결과를 RESULT에 적으세요.
@@ -2394,6 +2441,8 @@ run_job() {
 
 위 규칙을 위반하면 작업이 거부됩니다.
 ${aag_brief}
+[프로젝트 문서 조회 결과]
+${approved_document_brief}
 [STEP 0 기존 구현 조사 — 코드 수정 전 필수]
 ${aag_step0_hint}- 대상 파일의 기존 함수/클래스/엔드포인트/스케줄러/DB 접점 목록을 먼저 확인하세요.
 - 각 항목을 [유지 | 수정 | 신규 | 삭제(사유 필수)]로 분류해 RESULT에 기록하세요.
