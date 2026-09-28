@@ -168,6 +168,8 @@ print(o.get('accessToken',''), end='')
 
 renewed=0
 for slot in 1 2 3 4; do
+    requested_slot="${CLAUDE_TOKEN_KEEPER_SLOT:-}"
+    [ -z "$requested_slot" ] || [ "$slot" = "$requested_slot" ] || continue
     home="${SLOT_ROOT}/slot${slot}"
     cred="${home}/.claude/.credentials.json"
     # 릴레이가 같은 슬롯 자격증명을 쓸 때 쓰는 락과 같은 파일이다.

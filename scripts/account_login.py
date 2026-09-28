@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import pty
 import re
@@ -57,6 +58,7 @@ _SECRETISH = re.compile(r"(sk-[A-Za-z0-9_\-]{8,}|rt\.[A-Za-z0-9_\-]{8,}|ey[A-Za-
 
 # {login_id: session dict}
 _SESSIONS: dict[str, dict] = {}
+_START_LOCK = asyncio.Lock()
 
 
 class LoginError(RuntimeError):
@@ -170,6 +172,69 @@ def _credential_replaced(sess: dict) -> bool:
     )
 
 
+def _fresh_claude_credential(plan: dict) -> bool:
+    """A newly written refresh token alone does not prove usable OAuth access."""
+    try:
+        oauth = json.loads(plan["credential"].read_text()).get("claudeAiOauth") or {}
+        expires = float(oauth.get("expiresAt") or 0)
+        if expires > 100_000_000_000:
+            expires /= 1000
+        return bool(oauth.get("accessToken") and oauth.get("refreshToken")
+                    and expires > time.time() + 300)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _access_fingerprint(plan: dict) -> str | None:
+    try:
+        oauth = json.loads(plan["credential"].read_text()).get("claudeAiOauth") or {}
+        token = oauth.get("accessToken")
+        return hashlib.sha256(token.encode()).hexdigest() if isinstance(token, str) and token else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+async def _verify_claude_call(plan: dict) -> bool:
+    """Probe through the isolated Claude CLI, without returning its output."""
+    env = dict(os.environ)
+    env.update(plan["env"])
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            CLAUDE_BIN, "-p", "Reply OK", "--output-format", "json",
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL, env=env,
+        )
+        output, _ = await asyncio.wait_for(proc.communicate(), timeout=90)
+        if proc.returncode != 0:
+            return False
+        result = json.loads(output)
+        return bool(result.get("result")) and not result.get("is_error", False)
+    except (OSError, TimeoutError, ValueError, TypeError):
+        if "proc" in locals() and proc.returncode is None:
+            proc.kill()
+            await proc.communicate()
+        return False
+
+
+async def _sync_slot4_token_to_db() -> bool:
+    """Run the existing keeper's slot-4 sync after a verified relogin."""
+    keeper = Path(__file__).with_name("claude_token_keeper.sh")
+    if not keeper.is_file():
+        return False
+    env = dict(os.environ, CLAUDE_TOKEN_KEEPER_SLOT="4")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bash", str(keeper), stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL, env=env,
+        )
+        return await asyncio.wait_for(proc.wait(), timeout=150) == 0
+    except (OSError, TimeoutError):
+        if "proc" in locals() and proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        return False
+
+
 async def _pump(sess: dict) -> None:
     """pty 를 읽어 상태를 갱신하고, 끝나면 파일로 성패를 판정한다."""
     loop = asyncio.get_running_loop()
@@ -184,7 +249,7 @@ async def _pump(sess: dict) -> None:
             try:
                 chunk = await asyncio.wait_for(
                     loop.run_in_executor(None, os.read, master, 4096), timeout=2)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if sess["proc"].returncode is not None:
                     break
                 continue
@@ -195,8 +260,19 @@ async def _pump(sess: dict) -> None:
             sess["output"] = (sess["output"] + _clean(chunk.decode(errors="replace")))[-_MAX_OUTPUT:]
             _parse(sess)
             if _credential_replaced(sess):
+                if sess["kind"] == "claude":
+                    sess["state"] = "verifying"
+                    sess["message"] = "새 자격증명의 유효 기간과 실호출을 확인 중이다."
+                    if not _fresh_claude_credential(sess["plan"]) or not await _verify_claude_call(sess["plan"]):
+                        sess["state"] = "verification_pending"
+                        sess["message"] = "실사용 검증을 마치지 못했다. 격리를 유지한다. 재로그인으로 다시 시도해라."
+                        break
+                    if sess["target"] == "claude:4" and not await _sync_slot4_token_to_db():
+                        sess["state"] = "verification_pending"
+                        sess["message"] = "실호출은 성공했지만 토큰 DB 동기화를 확인하지 못했다. 슬롯 격리를 유지한다."
+                        break
                 sess["state"] = "success"
-                sess["message"] = "자격증명이 기록됐다."
+                sess["message"] = "새 자격증명의 실호출을 확인했다." if sess["kind"] == "claude" else "자격증명이 기록됐다."
                 break
     finally:
         proc = sess["proc"]
@@ -210,10 +286,11 @@ async def _pump(sess: dict) -> None:
             os.close(master)
         except OSError:
             pass
-        if sess["state"] not in ("success", "expired"):
+        if sess["state"] not in ("success", "expired", "verification_pending", "cancelled"):
             if _credential_replaced(sess):
-                sess["state"] = "success"
-                sess["message"] = "자격증명이 기록됐다."
+                sess["state"] = "verification_pending" if sess["kind"] == "claude" else "success"
+                sess["message"] = ("새 자격증명의 실사용 검증을 마치지 못했다. 재로그인으로 다시 시도해라."
+                                   if sess["kind"] == "claude" else "자격증명이 기록됐다.")
             else:
                 sess["state"] = "failed"
                 sess["message"] = sess.get("message") or "로그인이 끝나지 않았다."
@@ -230,55 +307,56 @@ def _purge() -> None:
 def find_active(target: str) -> dict | None:
     for sess in _SESSIONS.values():
         if sess["target"] == target and sess["state"] in (
-                "starting", "awaiting_browser", "awaiting_code"):
+                "starting", "awaiting_browser", "awaiting_code", "verifying"):
             return sess
     return None
 
 
 async def start(target: str) -> dict:
-    _purge()
-    plan = resolve_target(target)
-    existing = find_active(target)
-    if existing:
-        return public(existing)
+    async with _START_LOCK:
+        _purge()
+        plan = resolve_target(target)
+        existing = find_active(target)
+        if existing:
+            return public(existing)
 
-    plan["home"].mkdir(parents=True, exist_ok=True)
-    credential_before = _credential_signature(plan)
-    master, slave = pty.openpty()
-    env = dict(os.environ)
-    env.update(plan["env"])
-    env["TERM"] = "xterm-256color"
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *plan["argv"], stdin=slave, stdout=slave, stderr=slave,
-            env=env, close_fds=True,
-        )
-    except FileNotFoundError as exc:
-        os.close(master)
-        os.close(slave)
-        raise LoginError(f"CLI 를 찾을 수 없다: {exc}") from exc
-    finally:
+        plan["home"].mkdir(parents=True, exist_ok=True)
+        credential_before = _credential_signature(plan)
+        master, slave = pty.openpty()
+        env = dict(os.environ)
+        env.update(plan["env"])
+        env["TERM"] = "xterm-256color"
         try:
+            proc = await asyncio.create_subprocess_exec(
+                *plan["argv"], stdin=slave, stdout=slave, stderr=slave,
+                env=env, close_fds=True,
+            )
+        except FileNotFoundError as exc:
+            os.close(master)
             os.close(slave)
-        except OSError:
-            pass
+            raise LoginError(f"CLI 를 찾을 수 없다: {exc}") from exc
+        finally:
+            try:
+                os.close(slave)
+            except OSError:
+                pass
 
-    login_id = secrets.token_urlsafe(9)
-    sess = {
-        "login_id": login_id, "target": target, "kind": plan["kind"],
-        "account": plan["name"], "needs_code": plan["needs_code"],
-        "plan": plan, "proc": proc, "master": master,
-        "credential_before": credential_before,
-        "output": "", "url": None, "user_code": None,
-        "state": "starting", "message": "", "started_at": time.time(),
-        "finished_at": None,
-    }
-    _SESSIONS[login_id] = sess
-    sess["task"] = asyncio.create_task(_pump(sess))
+        login_id = secrets.token_urlsafe(9)
+        sess = {
+            "login_id": login_id, "target": target, "kind": plan["kind"],
+            "account": plan["name"], "needs_code": plan["needs_code"],
+            "plan": plan, "proc": proc, "master": master,
+            "credential_before": credential_before,
+            "output": "", "url": None, "user_code": None,
+            "state": "starting", "message": "", "started_at": time.time(),
+            "finished_at": None,
+        }
+        _SESSIONS[login_id] = sess
+        sess["task"] = asyncio.create_task(_pump(sess))
 
     # URL/코드가 찍힐 때까지 잠깐 기다린다 — 화면이 빈 창을 띄우지 않게.
     for _ in range(50):
-        if sess["url"] or sess["state"] in ("failed", "expired", "success"):
+        if sess["url"] or sess["state"] in ("failed", "expired", "success", "verification_pending"):
             break
         await asyncio.sleep(0.2)
     return public(sess)
@@ -393,4 +471,8 @@ def public(sess: dict) -> dict:
         "url": sess["url"],
         "user_code": sess["user_code"],
         "expires_in": max(0, int(sess["started_at"] + SESSION_TTL_SEC - time.time())),
+        "credential_fingerprint": (
+            _access_fingerprint(sess["plan"])
+            if sess["kind"] == "claude" and sess["state"] == "success" else None
+        ),
     }

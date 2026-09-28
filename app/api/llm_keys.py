@@ -431,6 +431,10 @@ async def llm_overview() -> dict[str, Any]:
         )
     except Exception:
         logger.warning("llm_keys.overview.anthropic_slot_map_unavailable")
+    # Disabled keys are omitted by get_oauth_key_records_async. Keep the fixed
+    # slot-4 login target addressable while its 2100 hold is in force.
+    if any(row["key_name"] == "ANTHROPIC_AUTH_TOKEN_4" for row in rows):
+        slot_of["ANTHROPIC_AUTH_TOKEN_4"] = "slot4"
 
     now = datetime.now(timezone.utc)
     accounts: list[dict[str, Any]] = []
@@ -445,6 +449,7 @@ async def llm_overview() -> dict[str, Any]:
 
         if provider in SUBSCRIPTION_PROVIDERS:
             slot = slot_of.get(row["key_name"])
+            quarantined_slot4 = slot == "slot4" and not row["is_active"]
             bkey = slot if provider == "anthropic" else row["key_name"]
             binding = bindings.get(bkey) if bindings is not None else None
             binding_mismatch = provider == "anthropic" and _binding_account_mismatch(
@@ -460,9 +465,9 @@ async def llm_overview() -> dict[str, Any]:
                 "priority": row["priority"], "is_active": row["is_active"],
                 "kind": "subscription", "masked_value": masked,
                 "slot": slot,
-                "state": _account_state(row, binding, now),
+                "state": "needs_login" if quarantined_slot4 else _account_state(row, binding, now),
                 "bound": bool(binding and binding.get("bound")),
-                "needs_login": bool(binding and binding.get("needs_login")),
+                "needs_login": quarantined_slot4 or bool(binding and binding.get("needs_login")),
                 "binding_mismatch": binding_mismatch,
                 "actual_account": (binding or {}).get("actual_account"),
                 "login_in_progress": bool(binding and binding.get("login_in_progress")),
@@ -473,7 +478,7 @@ async def llm_overview() -> dict[str, Any]:
                 "subscription": (binding or {}).get("subscription"),
                 "rate_limited_until": (
                     row["rate_limited_until"].isoformat()
-                    if row["rate_limited_until"] and not binding_mismatch else None
+                    if row["rate_limited_until"] and not binding_mismatch and not quarantined_slot4 else None
                 ),
                 "windows": (
                     [] if binding_mismatch
@@ -642,6 +647,11 @@ async def start_account_login(body: AccountLoginStart) -> dict[str, Any]:
     """구독 계정 재로그인 시작. 화면의 '재로그인' 버튼이 부른다."""
     result = await _relay_call("POST", "/account-login", {"target": body.target})
     logger.info("llm_keys.account_login_start", extra={"target": body.target, "state": result.get("state")})
+    if result.get("state") == "success":
+        if not await _reconcile_successful_account_login(str(result.get("login_id") or ""), result):
+            result["state"] = "verification_pending"
+            result["message"] = "계정 확인 또는 DB 토큰 동기화가 끝나지 않았다. 슬롯 격리를 유지한다."
+    result.pop("credential_fingerprint", None)
     return result
 
 
@@ -649,34 +659,94 @@ async def start_account_login(body: AccountLoginStart) -> dict[str, Any]:
 async def get_account_login(login_id: str) -> dict[str, Any]:
     result = await _relay_call("GET", f"/account-login/{login_id}")
     if result.get("state") == "success":
-        await _reconcile_successful_account_login(login_id, result)
+        if not await _reconcile_successful_account_login(login_id, result):
+            result["state"] = "verification_pending"
+            result["message"] = "계정 확인 또는 DB 토큰 동기화가 끝나지 않았다. 슬롯 격리를 유지한다. 잠시 후 진행창을 다시 열거나 재로그인해라."
+    result.pop("credential_fingerprint", None)
     return result
 
 
 async def _reconcile_successful_account_login(
     login_id: str, result: dict[str, Any]
-) -> None:
-    """Clear quota state that belonged to the credential replaced by re-login."""
+) -> bool:
+    """Release slot 4 only after relay proof, identity and DB token all agree."""
     target = str(result.get("target") or "")
     kind, _, name = target.partition(":")
     if kind != "claude" or not name.isdigit():
-        return
+        return True
 
-    from app.core.auth_provider import get_oauth_key_records_async
+    if name != "4":
+        # Keep the established reconciliation for numeric Claude slots. Slot 4
+        # alone needs the stricter identity and credential proof below.
+        from app.core.auth_provider import get_oauth_key_records_async
 
-    records = await get_oauth_key_records_async(include_rate_limited=True)
-    record = next((row for row in records if str(row.get("slot")) == name), None)
-    if not record or not record.get("key_name"):
-        logger.warning("llm_keys.account_login_reconcile_slot_missing", extra={"slot": name})
-        return
+        records = await get_oauth_key_records_async(include_rate_limited=True)
+        record = next((row for row in records if str(row.get("slot")) == name), None)
+        if not record or not record.get("key_name"):
+            return False
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """UPDATE llm_api_keys
+                       SET rate_limited_until = NULL, last_verified_at = NOW(), updated_at = NOW()
+                       WHERE key_name = $1 AND provider = 'anthropic'""",
+                    record["key_name"],
+                )
+                await conn.execute(
+                    """INSERT INTO claude_max_usage_snapshot
+                       (source, account_slot, account_label, plan_type,
+                        five_hour_utilization, five_hour_resets_at,
+                        seven_day_utilization, seven_day_resets_at, raw_data)
+                       SELECT 'account_relogin', $1, $2, NULL, NULL, NULL, NULL, NULL,
+                              jsonb_build_object('login_id', $3)
+                       WHERE NOT EXISTS (
+                           SELECT 1 FROM claude_max_usage_snapshot
+                           WHERE source = 'account_relogin' AND account_slot = $1
+                             AND raw_data->>'login_id' = $3
+                       )""",
+                    name, record.get("label") or "", login_id,
+                )
+        invalidate_key_cache(record["key_name"])
+        invalidate_registry_cache()
+        return True
+
+    import hashlib
+
+    try:
+        payload = await _relay_call("GET", "/account-bindings")
+        binding = next((b for b in payload.get("bindings", []) if b.get("target") == target), None)
+    except HTTPException:
+        return False
+    if not binding or not binding.get("bound") or binding.get("needs_login"):
+        return False
+    if str(binding.get("actual_account") or "").lower() != "thelylon14@gmail.com":
+        return False
 
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            record = await conn.fetchrow(
+                """SELECT key_name, label, encrypted_value, oauth_expires_at
+                   FROM llm_api_keys WHERE provider = 'anthropic'
+                     AND key_name = 'ANTHROPIC_AUTH_TOKEN_4' FOR UPDATE"""
+            )
+            if not record:
+                return False
+            try:
+                value = decrypt_value(record["encrypted_value"])
+            except Exception:
+                return False
+            fingerprint = result.get("credential_fingerprint")
+            if (not fingerprint or hashlib.sha256(value.encode()).hexdigest() != fingerprint
+                    or not record["oauth_expires_at"]
+                    or record["oauth_expires_at"] <= datetime.now(timezone.utc) + timedelta(minutes=5)):
+                return False
             await conn.execute(
                 """
                 UPDATE llm_api_keys
-                SET rate_limited_until = NULL, last_verified_at = NOW(), updated_at = NOW()
+                SET is_active = TRUE, rate_limited_until = NULL,
+                    last_verified_at = NOW(), updated_at = NOW()
                 WHERE key_name = $1 AND provider = 'anthropic'
                 """,
                 record["key_name"],
@@ -696,8 +766,11 @@ async def _reconcile_successful_account_login(
                       AND raw_data->>'login_id' = $3
                 )
                 """,
-                name, record.get("label") or "", login_id,
+                name, record["label"] or "", login_id,
             )
+    invalidate_key_cache(record["key_name"])
+    invalidate_registry_cache()
+    return True
 
 
 @router.post("/account-login/{login_id}/code")
