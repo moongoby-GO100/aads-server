@@ -20,9 +20,23 @@ _SCREEN_PATH_MARKERS = ("/static/", "/templates/", "/frontend/", "/components/",
 _NON_RENDERING_SUFFIXES = (
     ".py", ".sql", ".md", ".txt", ".yml", ".yaml", ".toml", ".cfg", ".ini", ".sh", ".env.example",
 )
+# Data/manifest files render nothing on their own, so a backend release manifest
+# must not demand screen evidence. They count as screen work only inside a UI
+# source tree (dashboard config, i18n strings), where the path markers apply.
+_NON_RENDERING_DATA_SUFFIXES = (".json",)
 _BROWSER_FLOW_TIMEOUT_SECONDS = 150.0
 _DOM_SETTLE_TIMEOUT_MS = 20_000
 _DOM_ASSERTION_BUDGET_SECONDS = 20.0
+
+
+def _renders_nothing(raw_path: str) -> bool:
+    """True when the file cannot render UI by itself, so it needs no screen proof."""
+    path = str(raw_path).lower().replace("\\", "/")
+    if path.endswith(_NON_RENDERING_SUFFIXES):
+        return True
+    if not path.endswith(_NON_RENDERING_DATA_SUFFIXES):
+        return False
+    return not any(marker in f"/{path}" for marker in _SCREEN_PATH_MARKERS)
 
 
 def screen_verification_required(instruction: str, changed_files: list[str] | None = None) -> bool:
@@ -31,7 +45,7 @@ def screen_verification_required(instruction: str, changed_files: list[str] | No
     if any(marker in text for marker in _SCREEN_MARKERS):
         if not changed_files:
             return True
-        return not all(str(path).lower().endswith(_NON_RENDERING_SUFFIXES) for path in changed_files)
+        return not all(_renders_nothing(path) for path in changed_files)
     for raw_path in changed_files or []:
         path = str(raw_path).lower().replace("\\", "/")
         if path.endswith(_SCREEN_SUFFIXES) and any(marker in f"/{path}" for marker in _SCREEN_PATH_MARKERS):

@@ -98,6 +98,19 @@ def test_screen_gate_classifies_ui_but_not_backend_work():
     assert not screen_verification_required("DB 인덱스와 백엔드 API 수정", ["app/services/report.py"])
 
 
+def test_screen_gate_ignores_backend_data_manifests():
+    """A release manifest renders nothing, so 화면 wording alone must not gate it."""
+    assert not screen_verification_required(
+        "화면·설치 증거가 없으면 완료로 적지 마라",
+        ["pc_agent/updater.py", "pc_agent/RELEASE_ZIP_SHA256.json", "HANDOVER.md"],
+    )
+    # JSON inside a UI source tree still needs screen proof.
+    assert screen_verification_required(
+        "화면 문구 교체",
+        ["src/components/i18n/ko.json"],
+    )
+
+
 def test_evidence_contract_requires_dom_and_capture_success():
     assert evidence_passes_gate(_evidence())
     assert not evidence_passes_gate(_evidence(passed=False))
