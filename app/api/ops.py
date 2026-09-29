@@ -3852,3 +3852,123 @@ async def ops_design_reviews(
         "count": len(items),
         "generated_at": datetime.now(KST).isoformat(),
     }
+
+
+# ─── M9 후보 모델 대장·비교 이력 (AADS-LLM-M9-CANDIDATE-REGISTRY) ─────────────
+# 현행 모델은 llm_models 가 정본이다. 여기는 후보 대장 조회만 한다(라우팅과 무관).
+
+_CANDIDATE_COLUMNS = """
+    id, provider, model_id, product_name, surface_scope, official_url, verified_at,
+    model_version, region_scope, quota_rpm, quota_tpm,
+    price_input_per_1m, price_cached_input_per_1m, price_output_per_1m, price_currency,
+    subscription_price_per_month, price_status, pricing_kind,
+    training_use, training_terms_url, retention_note, extra_charges,
+    excluded_from_private_eval, exclusion_reason, status, notes, created_at, updated_at
+"""
+
+
+@router.get("/ops/llm-candidates")
+async def ops_llm_candidates(
+    surface: Optional[str] = Query(None, description="chat / runner / terminal_cli / service"),
+    pricing_kind: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None, description="price — pricing_kind 를 함께 지정해야 함"),
+):
+    """후보 모델 대장. 금액은 price_status·pricing_kind 와 함께만 내보낸다."""
+    from app.services import llm_candidate_registry as reg
+
+    if surface is not None and surface not in reg.SURFACES:
+        raise HTTPException(status_code=400, detail=f"surface must be one of {list(reg.SURFACES)}")
+    if pricing_kind is not None and pricing_kind not in reg.PRICING_KINDS:
+        raise HTTPException(status_code=400, detail=f"pricing_kind must be one of {list(reg.PRICING_KINDS)}")
+    if status is not None and status not in reg.CANDIDATE_STATUSES:
+        raise HTTPException(status_code=400, detail=f"status must be one of {list(reg.CANDIDATE_STATUSES)}")
+    if sort not in (None, "price"):
+        raise HTTPException(status_code=400, detail="sort must be 'price' or omitted")
+    if sort == "price" and pricing_kind is None:
+        # 구독료와 토큰 단가를 한 줄로 세우지 않는다.
+        raise HTTPException(status_code=400, detail="sort=price 는 pricing_kind 필터와 함께만 허용됨")
+    try:
+        conn = await _get_conn()
+        try:
+            rows = await conn.fetch(
+                f"SELECT {_CANDIDATE_COLUMNS} FROM llm_model_candidates "
+                "WHERE ($1::text IS NULL OR $1::text = ANY(surface_scope)) "
+                "AND ($2::text IS NULL OR pricing_kind = $2::text) "
+                "AND ($3::text IS NULL OR status = $3::text) "
+                "ORDER BY provider, model_id",
+                surface, pricing_kind, status,
+            )
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.error("ops_llm_candidates_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+    items = [dict(r) for r in rows]
+    if sort == "price":
+        try:
+            items = reg.sort_by_price(items)
+        except reg.PriceAxisMismatch as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    items = [reg.serialize_row(r) for r in items]
+    return {
+        "items": items,
+        "count": len(items),
+        "filters": {"surface": surface, "pricing_kind": pricing_kind, "status": status, "sort": sort},
+        "generated_at": datetime.now(KST).isoformat(),
+    }
+
+
+@router.get("/ops/llm-comparisons")
+async def ops_llm_comparisons(
+    surface: Optional[str] = Query(None),
+    since: Optional[datetime] = Query(None, description="ran_at(없으면 created_at) 하한"),
+    until: Optional[datetime] = Query(None, description="ran_at(없으면 created_at) 상한"),
+    limit: int = 50,
+):
+    """후보 비교 이력(최신순). 후보의 price_status·training_use 를 함께 싣는다."""
+    from app.services import llm_candidate_registry as reg
+
+    if surface is not None and surface not in reg.SURFACES:
+        raise HTTPException(status_code=400, detail=f"surface must be one of {list(reg.SURFACES)}")
+    limit = _clamp_int(limit, default=50, minimum=1, maximum=500)
+    try:
+        conn = await _get_conn()
+        try:
+            rows = await conn.fetch("""
+                SELECT cmp.id, cmp.milestone_id, cmp.surface, cmp.task_suite_key,
+                       cmp.incumbent_provider, cmp.incumbent_model_id, cmp.incumbent_version_pin,
+                       cmp.candidate_id, c.provider AS candidate_provider,
+                       c.model_id AS candidate_model_id, cmp.candidate_version_pin,
+                       cmp.min_sample_size, cmp.sample_size, cmp.noninferiority_margin,
+                       cmp.metrics_incumbent, cmp.metrics_candidate, cmp.verdict, cmp.verdict_reason,
+                       cmp.cost_per_success_incumbent, cmp.cost_per_success_candidate,
+                       cmp.savings_pct, cmp.cost_source, cmp.evidence_refs, cmp.ran_at, cmp.created_at,
+                       c.pricing_kind, c.price_status, c.training_use, c.excluded_from_private_eval
+                FROM llm_model_comparisons cmp
+                JOIN llm_model_candidates c ON c.id = cmp.candidate_id
+                WHERE ($1::text IS NULL OR cmp.surface = $1::text)
+                  AND ($2::timestamptz IS NULL OR COALESCE(cmp.ran_at, cmp.created_at) >= $2::timestamptz)
+                  AND ($3::timestamptz IS NULL OR COALESCE(cmp.ran_at, cmp.created_at) < $3::timestamptz)
+                ORDER BY COALESCE(cmp.ran_at, cmp.created_at) DESC, cmp.id DESC
+                LIMIT $4::int
+            """, surface, since, until, limit)
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.error("ops_llm_comparisons_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+    items = [reg.serialize_row(r) for r in rows]
+    return {
+        "items": items,
+        "count": len(items),
+        "limit": limit,
+        "filters": {
+            "surface": surface,
+            "since": since.isoformat() if since else None,
+            "until": until.isoformat() if until else None,
+        },
+        "generated_at": datetime.now(KST).isoformat(),
+    }
