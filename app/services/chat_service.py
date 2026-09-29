@@ -7100,11 +7100,22 @@ async def with_background_completion(
                 _clean = _strip_streaming_progress_markers(_ph["content"] or "")
                 _ph_execution_id = _ph["execution_id"]
                 if _ph_execution_id:
+                    # 2026-09-29. 보존할 본문이 없으면 "preserving" 이라고 적지 않는다.
+                    # 빈 placeholder 는 아래 delete_empty_placeholder 로 삭제되므로
+                    # assistant_message_id 가 NULL 로 남는데, 사유만 "보존했다"로
+                    # 기록돼 지표에서 정상처럼 보였다 — 24시간 superseded 79건 중
+                    # 10건이 그 상태였고 화면에는 지시만 남고 답이 사라졌다.
+                    # 사유를 갈라 두면 유실이 집계에서 바로 드러난다.
+                    _supersede_reason = (
+                        "superseded while preserving partial response"
+                        if _clean
+                        else "superseded_without_partial"
+                    )
                     await _mark_execution_interrupted(
                         _conn,
                         session_id,
                         str(_ph_execution_id),
-                        "superseded while preserving partial response",
+                        _supersede_reason,
                         partial_content=_clean,
                         placeholder_id=str(_ph["id"]),
                         delete_empty_placeholder=not bool(_clean),
