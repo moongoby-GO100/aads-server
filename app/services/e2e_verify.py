@@ -18,7 +18,7 @@ _SCREEN_MARKERS = (
 _SCREEN_SUFFIXES = (".html", ".css", ".scss", ".sass", ".less", ".tsx", ".jsx", ".vue", ".svelte")
 _SCREEN_PATH_MARKERS = ("/static/", "/templates/", "/frontend/", "/components/", "/pages/", "/app/")
 _NON_RENDERING_SUFFIXES = (
-    ".py", ".sql", ".md", ".txt", ".yml", ".yaml", ".toml", ".cfg", ".ini", ".sh", ".env.example",
+    ".py", ".sql", ".md", ".txt", ".yml", ".yaml", ".toml", ".cfg", ".ini", ".sh", ".env.example", ".local",
 )
 # Data/manifest files render nothing on their own, so a backend release manifest
 # must not demand screen evidence. They count as screen work only inside a UI

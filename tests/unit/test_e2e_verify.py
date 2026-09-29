@@ -111,6 +111,28 @@ def test_screen_gate_ignores_backend_data_manifests():
     )
 
 
+def test_screen_gate_ignores_local_shell_copy():
+    """scripts/*.sh.local is a byte-identical shell copy, not UI source."""
+    instruction = "화면 증거 게이트 오탐 교정"
+    assert not screen_verification_required(
+        instruction,
+        ["scripts/pipeline-runner.sh", "scripts/pipeline-runner.sh.local", "tests/unit/x.py"],
+    )
+    # Real UI file among the changes keeps the gate on.
+    assert screen_verification_required(
+        instruction,
+        ["scripts/pipeline-runner.sh.local", "aads-dashboard/src/app/page.tsx"],
+    )
+    # No changed-file list: marker alone still requires evidence.
+    assert screen_verification_required(instruction, [])
+    assert screen_verification_required(instruction, None)
+    # JSON inside a UI tree still needs screen proof.
+    assert screen_verification_required(
+        instruction,
+        ["scripts/pipeline-runner.sh.local", "aads-dashboard/src/components/i18n/ko.json"],
+    )
+
+
 def test_evidence_contract_requires_dom_and_capture_success():
     assert evidence_passes_gate(_evidence())
     assert not evidence_passes_gate(_evidence(passed=False))
