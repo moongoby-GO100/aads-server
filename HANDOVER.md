@@ -1,3 +1,10 @@
+## 2026-09-29 — Smart Browser direct candidate repair
+
+- Canonical DB: AADS / verification / `sb-direct-closeout-20260929`.
+- Isolated branch `fix/sb-direct-closeout-20260929`, base `f232ce1f`; shared dirty files preserved.
+- Direct M1/M2/M3/M5/M6/M7/M9 code repairs, staged tests and all M1–M13 remaining gates are documented in `docs/reports/20260929_SB_DIRECT_CLOSEOUT.md`.
+- PC 1.0.77 is a candidate only. No PC rollout, bank operation, reclaim or API deployment; no milestone self-approval. Full goal remains incomplete pending actual Windows/E2E, predecessor evidence and 24-hour observation.
+
 ## 2026-09-23 — 라일론 계좌 목록 표시 및 원천 거래 계좌 식별
 
 - CEO의 직접 API·화면 수정/배포 승인 후 별도 clean worktree에서 변경. 기본 작업공간 dirty 변경 보존.

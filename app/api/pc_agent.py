@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
@@ -627,6 +628,9 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
         _agent_connect_locks[agent_id] = asyncio.Lock()
     connect_lock = _agent_connect_locks[agent_id]
 
+    connection_id = uuid4().hex
+    connection_identity = {"connection_id": connection_id, "user_id": owner_user_id or "",
+                           "tenant_id": owner_tenant_id or ""}
     async with connect_lock:
         # Accept the new WebSocket before touching a stale connection. During
         # hot reload or fast reconnect Starlette can otherwise reject the new
@@ -640,17 +644,18 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
             except Exception:
                 pass
             logger.info("pc_agent_ws_replaced agent_id=%s", agent_id)
-            await _record_agent_event(agent_id, "replaced", reason="replaced_by_new")
+            await _record_agent_event(agent_id, "replaced", reason="replaced_by_new",
+                                      metadata=connection_identity)
             await asyncio.sleep(0.1)  # 이전 연결 정리 시간 확보
 
-    _agent_connections[agent_id] = websocket
+        _agent_connections[agent_id] = websocket
+        await _record_agent_event(agent_id, "socket_connected", metadata=connection_identity)
     connected_at = datetime.utcnow()
     last_message_at = connected_at
     last_heartbeat_at = connected_at
     last_server_ping_at: datetime | None = None
     server_ping_count = 0
     logger.info("pc_agent_ws_connected agent_id=%s total=%d", agent_id, len(_agent_connections))
-    await _record_agent_event(agent_id, "connected")
     disconnect_recorded = False
     disconnect_reason = ""
     disconnect_metadata: dict[str, Any] = {}
@@ -680,6 +685,7 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
     ) -> dict[str, Any]:
         now = datetime.utcnow()
         metadata: dict[str, Any] = {
+            "connection_id": connection_id,
             "uptime_seconds": round((now - connected_at).total_seconds(), 1),
             "close_code": close_code,
             "close_reason": close_reason,
@@ -698,7 +704,8 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
         }
         if extra:
             metadata.update(extra)
-        last_observation = pc_agent_manager.get_last_observation(agent_id)
+        last_observation = (pc_agent_manager.get_last_observation(agent_id)
+                            if pc_agent_manager.is_current_connection(agent_id, websocket) else None)
         if last_observation is not None:
             metadata["last_observation"] = {
                 **last_observation,
@@ -746,17 +753,29 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
         raw = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
         msg = WSMessage.model_validate(raw)
         if msg.type != "register":
-            await _record_agent_event(agent_id, "register_failed", reason="first message must be register")
+            await _record_agent_event(agent_id, "register_failed", reason="first message must be register",
+                                      metadata=connection_identity)
             if _agent_connections.get(agent_id) is websocket:
                 _agent_connections.pop(agent_id, None)
             await websocket.close(code=4002, reason="first message must be register")
             return
-        device_type = (msg.payload or {}).get("device_type", "pc")
-        version = (msg.payload or {}).get("version", "")
-        await _record_agent_event(
-            agent_id,
-            "connected",
-            metadata={
+        async with connect_lock:
+            if _agent_connections.get(agent_id) is not websocket:
+                await _record_agent_event(agent_id, "register_failed", reason="replaced_by_new_connection",
+                                          metadata=connection_identity)
+                await _close_socket(4010, "replaced_by_new_connection")
+                return
+            device_type = (msg.payload or {}).get("device_type", "pc")
+            version = (msg.payload or {}).get("version", "")
+            pc_agent_manager.register_agent(
+                agent_id,
+                websocket,
+                msg.payload,
+                owner_user_id=owner_user_id,
+                owner_tenant_id=owner_tenant_id,
+            )
+            await _record_agent_event(agent_id, "connected", metadata={
+                "connection_id": connection_id,
                 "device_type": device_type,
                 "version": version,
                 "user_id": owner_user_id or "",
@@ -764,18 +783,12 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
                 "hostname": (msg.payload or {}).get("hostname", ""),
                 "os_info": (msg.payload or {}).get("os_info", ""),
                 "agent_name": (msg.payload or {}).get("agent_name", ""),
-            },
-        )
-        pc_agent_manager.register_agent(
-            agent_id,
-            websocket,
-            msg.payload,
-            owner_user_id=owner_user_id,
-            owner_tenant_id=owner_tenant_id,
-        )
+            })
     except (asyncio.TimeoutError, Exception) as exc:
         logger.error("pc_agent_ws_register_failed agent_id=%s err=%s", agent_id, exc)
-        await _record_agent_event(agent_id, "register_failed", reason=str(exc)[:300])
+        await _record_agent_event(agent_id, "register_failed", reason=str(exc)[:300] or type(exc).__name__,
+                                  metadata={**connection_identity, "exc_type": type(exc).__name__})
+        pc_agent_manager.unregister_agent(agent_id, websocket)
         if _agent_connections.get(agent_id) is websocket:
             _agent_connections.pop(agent_id, None)
         await websocket.close(code=4003, reason="register failed")
@@ -816,6 +829,11 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
             raw = await asyncio.wait_for(
                 websocket.receive_json(), timeout=HEARTBEAT_INTERVAL * 3
             )
+            if not pc_agent_manager.is_current_connection(agent_id, websocket):
+                disconnect_reason = "replaced_by_new_connection"
+                disconnect_metadata = _build_disconnect_metadata(
+                    close_code=4010, close_reason=disconnect_reason, exc_type="replacement")
+                break
             last_message_at = datetime.utcnow()
             msg = WSMessage.model_validate(raw)
 
@@ -829,6 +847,7 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
                         agent_id,
                         "heartbeat_status",
                         metadata={
+                            "connection_id": connection_id,
                             "device_type": "pc",
                             "hostname": heartbeat_payload.get("hostname", ""),
                             "version": heartbeat_payload.get("version", ""),
@@ -906,7 +925,7 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
             agent_id,
             "error",
             reason=str(exc)[:300],
-            metadata={"uptime_seconds": round(uptime_s, 1), "exc_type": type(exc).__name__},
+            metadata={"connection_id": connection_id, "uptime_seconds": round(uptime_s, 1), "exc_type": type(exc).__name__},
         )
         if not disconnect_reason:
             disconnect_reason = "unexpected_error"
@@ -918,9 +937,6 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
         await _close_socket(code=1011, reason="unexpected_error")
     finally:
         ping_task.cancel()
-        pc_agent_manager.unregister_agent(agent_id, websocket)
-        if _agent_connections.get(agent_id) is websocket:
-            _agent_connections.pop(agent_id, None)
         if not disconnect_reason:
             disconnect_reason = "connection_cleanup"
             disconnect_metadata = _build_disconnect_metadata(
@@ -928,13 +944,16 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
                 close_reason=None,
                 exc_type="cleanup",
             )
+        pc_agent_manager.unregister_agent(agent_id, websocket)
+        if _agent_connections.get(agent_id) is websocket:
+            _agent_connections.pop(agent_id, None)
         if not disconnect_recorded:
             try:
                 await _record_agent_event(
                     agent_id,
                     "disconnected",
                     reason=disconnect_reason,
-                    metadata={**disconnect_metadata, "last_observation": pc_agent_manager.get_last_observation(agent_id)},
+                    metadata={**disconnect_metadata, "connection_id": connection_id},
                 )
             except Exception as exc:
                 logger.error(
@@ -1324,31 +1343,39 @@ async def _latest_known_pc_agents_from_events(
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                WITH latest_event AS (
-                    SELECT DISTINCT ON (agent_id)
-                           agent_id, event, reason, metadata, created_at
+                WITH recent_events AS MATERIALIZED (
+                    SELECT id, agent_id, event, reason, metadata, created_at
                       FROM pc_agent_connection_events
                      WHERE created_at >= NOW() - make_interval(days => $1::int)
-                     ORDER BY agent_id, created_at DESC
-                ),
-                latest_identity AS (
-                    SELECT DISTINCT ON (agent_id)
-                           agent_id, metadata AS identity_metadata, created_at AS identity_at
-                      FROM pc_agent_connection_events
-                     WHERE created_at >= NOW() - make_interval(days => $1::int)
-                       AND metadata ? 'user_id'
-                     ORDER BY agent_id, created_at DESC
+                ), latest_identity AS (
+                    -- Scan identity history once, including identities older than
+                    -- the activity window. Never trust heartbeat-supplied owners.
+                    SELECT DISTINCT ON (e.agent_id)
+                           e.id, e.agent_id, e.metadata AS identity_metadata,
+                           e.created_at AS identity_at
+                      FROM pc_agent_connection_events e
+                     WHERE e.event IN ('socket_connected', 'registered', 'connected')
+                       AND e.metadata ? 'user_id'
+                       AND e.agent_id IN (SELECT agent_id FROM recent_events)
+                     ORDER BY e.agent_id, e.id DESC
+                ), latest_event AS (
+                    SELECT DISTINCT ON (e.agent_id)
+                           e.*, li.identity_metadata, li.identity_at
+                      FROM recent_events e
+                      LEFT JOIN latest_identity li ON li.agent_id = e.agent_id
+                     WHERE li.id IS NULL OR (
+                         e.id >= li.id AND (
+                             e.id = li.id OR
+                             NULLIF(li.identity_metadata->>'connection_id', '') IS NULL OR
+                             e.metadata->>'connection_id' = li.identity_metadata->>'connection_id'
+                         )
+                     )
+                     ORDER BY e.agent_id, e.id DESC
                 )
-                SELECT le.agent_id,
-                       le.event,
-                       le.reason,
-                       le.metadata,
-                       le.created_at,
-                       li.identity_metadata,
-                       li.identity_at
-                  FROM latest_event le
-                  LEFT JOIN latest_identity li ON li.agent_id = le.agent_id
-                 ORDER BY le.created_at DESC
+                SELECT agent_id, event, reason, metadata, created_at,
+                       identity_metadata, identity_at
+                  FROM latest_event
+                 ORDER BY created_at DESC
                 """,
                 days,
             )
@@ -1364,7 +1391,7 @@ async def _latest_known_pc_agents_from_events(
         metadata = _event_metadata_dict(row["metadata"])
         identity_metadata = _event_metadata_dict(row["identity_metadata"])
         merged_metadata = {**metadata, **identity_metadata}
-        owner_user_id = str(merged_metadata.get("user_id") or "").strip()
+        owner_user_id = str(identity_metadata.get("user_id") or "").strip()
         if not include_all_agents and owner_user_id != requester_user_id:
             continue
         last_seen = row["created_at"]

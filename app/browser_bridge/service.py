@@ -183,6 +183,10 @@ class _LocalAgentPage:
     def _params(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = dict(params or {})
         payload.setdefault("port", self._port)
+        for key in ("tenant_id", "chat_session_id"):
+            value = (self._session.endpoint.metadata or {}).get(key)
+            if value:
+                payload[key] = str(value)
         return payload
 
     async def _run_browser_command(
@@ -646,6 +650,9 @@ class BrowserBridgeService:
         force_recreate: bool = False,
         queue_wait_timeout_seconds: float | None = None,
         command_timeout_seconds: float | None = None,
+        tenant_id: str = "",
+        chat_session_id: str = "",
+        adopt_legacy_scope: bool = False,
     ) -> BrowserBridgeSession:
         """Launch or reuse Chrome through PC Agent and register a local-agent bridge session."""
         from app.services.pc_agent_manager import pc_agent_manager
@@ -675,8 +682,16 @@ class BrowserBridgeService:
             launch_params["isolation_id"] = base_isolation_id
         if normalized_work_key:
             launch_params["work_key"] = normalized_work_key
+        if tenant_id:
+            launch_params["tenant_id"] = tenant_id
+        if chat_session_id:
+            launch_params["chat_session_id"] = chat_session_id
+        if adopt_legacy_scope:
+            raise ValueError("CDP_LEGACY_SCOPE_LOCAL_RECOVERY_REQUIRED")
 
         if force_recreate and normalized_work_key:
+            previous = self.sessions.find_by_work_key(normalized_work_key)
+            previous_metadata = dict(previous.endpoint.metadata or {}) if previous else {}
             close_params = {
                 "work_key": normalized_work_key,
                 "close_browser": True,
@@ -684,6 +699,11 @@ class BrowserBridgeService:
                 "reason": "browser_bridge_force_recreate",
                 "command_timeout_seconds": 10,
             }
+            for scope_key in ("tenant_id", "chat_session_id"):
+                if previous and str(previous_metadata.get(scope_key) or "") != str(launch_params.get(scope_key) or ""):
+                    raise ValueError("CDP_SCOPE_MISMATCH")
+                if launch_params.get(scope_key):
+                    close_params[scope_key] = str(launch_params[scope_key])
             close_result: dict[str, Any] | None = None
             try:
                 if self._route_pc_agent_via_active_api_first():
@@ -800,6 +820,9 @@ class BrowserBridgeService:
                     "work_key": normalized_work_key or launch_params.get("work_key") or "",
                     "command_timeout_seconds": health_timeout,
                 }
+                for scope_key in ("tenant_id", "chat_session_id"):
+                    if launch_params.get(scope_key):
+                        health_params[scope_key] = launch_params[scope_key]
                 if preferred_port:
                     health_params["preferred_port"] = int(preferred_port)
                 health_routed = await self._execute_pc_agent_route_via_active_api(
@@ -843,6 +866,9 @@ class BrowserBridgeService:
                         "work_key": normalized_work_key or launch_params.get("work_key") or "",
                         "command_timeout_seconds": health_timeout,
                     }
+                    for scope_key in ("tenant_id", "chat_session_id"):
+                        if launch_params.get(scope_key):
+                            tabs_params[scope_key] = launch_params[scope_key]
                     if preferred_port:
                         tabs_params["preferred_port"] = int(preferred_port)
                         tabs_params["port"] = int(preferred_port)
@@ -892,6 +918,9 @@ class BrowserBridgeService:
                             "work_key": normalized_work_key or launch_params.get("work_key") or "",
                             "command_timeout_seconds": health_timeout,
                         }
+                        for scope_key in ("tenant_id", "chat_session_id"):
+                            if launch_params.get(scope_key):
+                                navigate_params[scope_key] = launch_params[scope_key]
                         if preferred_port:
                             navigate_params["preferred_port"] = int(preferred_port)
                             navigate_params["port"] = int(preferred_port)
@@ -979,6 +1008,9 @@ class BrowserBridgeService:
             "last_url": url or "about:blank",
             "stale": False,
         }
+        for scope_key in ("tenant_id", "chat_session_id"):
+            if launch_params.get(scope_key):
+                metadata[scope_key] = str(launch_params[scope_key])
         for layout_key in ("window_position", "window_size", "window_layout_policy"):
             value = data.get(layout_key) or launch_params.get(layout_key)
             if value:
@@ -1021,6 +1053,8 @@ class BrowserBridgeService:
         url: str = "about:blank",
         preferred_port: int | None = None,
         force_recreate: bool = False,
+        tenant_id: str = "",
+        chat_session_id: str = "",
         queue_wait_timeout_seconds: float | None = None,
         command_timeout_seconds: float | None = None,
     ) -> BrowserBridgeSession:
@@ -1033,7 +1067,13 @@ class BrowserBridgeService:
         normalized_work_key = normalize_work_key(work_key)
         is_protected = normalized_work_key in PROTECTED_WORK_KEYS or looks_like_protected_label(label)
         requested_agent_id = str(agent_id or "").strip()
-        existing = None if force_recreate else self.sessions.find_by_work_key(normalized_work_key)
+        previous = self.sessions.find_by_work_key(normalized_work_key)
+        if previous:
+            previous_scope = dict(previous.endpoint.metadata or {})
+            for key, value in (("tenant_id", tenant_id), ("chat_session_id", chat_session_id)):
+                if str(previous_scope.get(key) or "") != str(value or ""):
+                    raise ValueError("CDP_SCOPE_MISMATCH")
+        existing = None if force_recreate else previous
         existing_agent_matches = self._work_session_agent_matches(existing, requested_agent_id) if existing else True
         if (
             existing
@@ -1085,6 +1125,8 @@ class BrowserBridgeService:
             work_key=normalized_work_key,
             protected=is_protected,
             force_recreate=force_recreate,
+            tenant_id=tenant_id,
+            chat_session_id=chat_session_id,
             queue_wait_timeout_seconds=queue_wait_timeout_seconds,
             command_timeout_seconds=command_timeout_seconds,
         )
@@ -1271,6 +1313,8 @@ class BrowserBridgeService:
             url=requested_url or str((session.endpoint.metadata or {}).get("last_url") or "about:blank"),
             preferred_port=preferred_port or None,
             force_recreate=True,
+            tenant_id=str((session.endpoint.metadata or {}).get("tenant_id") or ""),
+            chat_session_id=str((session.endpoint.metadata or {}).get("chat_session_id") or ""),
         )
 
     def work_session_status(self) -> dict[str, Any]:
@@ -1329,6 +1373,9 @@ class BrowserBridgeService:
             "reason": reason,
             "command_timeout_seconds": max(1.0, min(10.0, float(command_timeout_seconds))),
         }
+        for scope_key in ("tenant_id", "chat_session_id"):
+            if metadata.get(scope_key):
+                close_params[scope_key] = str(metadata[scope_key])
         if metadata.get("port"):
             close_params["port"] = int(metadata.get("port") or 0)
         agent_id = str(metadata.get("agent_id") or "")
@@ -1361,15 +1408,20 @@ class BrowserBridgeService:
                     command_timeout_seconds=command_timeout_seconds,
                 )
         finally:
-            self.sessions.retire_session(
-                session.session_id,
-                stale_reason=reason,
-                clear_work_key=True,
-                clear_active=False,
-                clear_lease=True,
-            )
-            self._session_contexts.pop(session.session_id, None)
-            self._session_browsers.pop(session.session_id, None)
+            # Keep ownership metadata available when the PC Agent refuses cleanup.
+            normalized_result = self._coerce_pc_agent_embedded_success(result or {})
+            if normalized_result.get("status") != "success":
+                result = normalized_result
+            else:
+                self.sessions.retire_session(
+                    session.session_id,
+                    stale_reason=reason,
+                    clear_work_key=True,
+                    clear_active=False,
+                    clear_lease=True,
+                )
+                self._session_contexts.pop(session.session_id, None)
+                self._session_browsers.pop(session.session_id, None)
 
         result = self._coerce_pc_agent_embedded_success(result or {})
         return {
@@ -1740,6 +1792,9 @@ class BrowserBridgeService:
     async def acquire_playwright_context(
         self,
         session_id: str | None = None,
+        *,
+        tenant_id: str = "",
+        chat_session_id: str = "",
     ) -> tuple[Any, Optional[str]]:
         """Return a bridge Playwright context or a headless fallback context.
 
@@ -1755,6 +1810,10 @@ class BrowserBridgeService:
                 if session_id and not session:
                     raise BrowserBridgeError(f"browser bridge session not found: {session_id}")
                 if session:
+                    metadata = dict(session.endpoint.metadata or {})
+                    for key, value in (("tenant_id", tenant_id), ("chat_session_id", chat_session_id)):
+                        if str(metadata.get(key) or "") != str(value or ""):
+                            raise BrowserBridgeError("CDP_SCOPE_MISMATCH")
                     context = await self._context_for_session(session)
                     session.mark_used()
                     self.sessions.touch(session)

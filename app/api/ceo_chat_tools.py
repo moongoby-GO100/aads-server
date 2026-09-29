@@ -273,6 +273,10 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "type": "string",
                     "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
                 },
+                "browser_username": {
+                    "type": "string",
+                    "description": "Agent Vault의 정확한 계정명. 생략 시 동일 tenant·origin·work_key에 유일한 계정만 사용",
+                },
             },
             "required": ["url"],
         },
@@ -3614,6 +3618,31 @@ async def _login_with_agent_vault_credential(
     if not tenant_id or not credential:
         return False
     origin = str(credential.get("origin") or "").rstrip("/")
+    configured_login_url = str(credential.get("login_url") or "").strip()
+    if configured_login_url and (
+        urlparse(configured_login_url).scheme.lower(), urlparse(configured_login_url).netloc.lower()
+    ) != (urlparse(origin).scheme.lower(), urlparse(origin).netloc.lower()):
+        return False
+    if credential.get("tenant_id") and str(credential["tenant_id"]) != str(tenant_id):
+        return False
+    if browser_work_key and credential.get("work_key") != browser_work_key:
+        return False
+    origin_parts = urlparse(origin)
+    if origin_parts.scheme not in {"https", "http"} or not origin_parts.hostname:
+        return False
+    if origin_parts.username or origin_parts.password:
+        return False
+
+    def same_origin(value: str) -> bool:
+        parsed_value = urlparse(value)
+        return (
+            parsed_value.scheme.lower() == origin_parts.scheme.lower()
+            and parsed_value.netloc.lower() == origin_parts.netloc.lower()
+            and not parsed_value.username and not parsed_value.password
+        )
+
+    if url and not same_origin(url):
+        return False
     username = str(credential.get("username") or "")
     password = str(credential.get("password") or "")
     work_key = str(browser_work_key or credential.get("work_key") or "")
@@ -3670,23 +3699,35 @@ async def _login_with_agent_vault_credential(
 
         current_url = str(getattr(page, "url", "") or "")
         current = urlparse(current_url)
-        login_url = current_url
-        if current.netloc != origin_parsed.netloc:
+        login_url = configured_login_url or current_url
+        if not configured_login_url and current.netloc != origin_parsed.netloc:
             login_url = f"{origin}/login" if origin_parsed.netloc.endswith("newtalk.kr") else origin
+        if current_url != login_url:
             await page.goto(login_url, wait_until="domcontentloaded", timeout=15000)
 
+        # A same-origin login URL may redirect elsewhere. Never fill secrets
+        # into the resulting page until its actual origin is checked.
+        if not same_origin(str(getattr(page, "url", "") or "")):
+            return False
         email_input = page.locator(
             "input[type='email'], input[name='email'], input[name='username'], "
             "input[name='login'], input#email, input#username, input#login, input[type='text']"
         ).first
         await email_input.clear(timeout=5000)
         await email_input.fill(username, timeout=5000)
+        if not same_origin(str(getattr(page, "url", "") or "")):
+            return False
         pw_input = page.locator("input[type='password']").first
         await pw_input.fill(password, timeout=5000)
+        if not await email_input.evaluate("el => Boolean(el.value)") or not await pw_input.evaluate("el => Boolean(el.value)"):
+            logger.warning("agent_vault_login_input_empty origin=%s", origin)
+            return False
         login_btn = page.locator(
             "button[type='submit'], input[type='submit'], button:has-text('로그인'), "
             "button:has-text('Login'), button:has-text('Sign in'), a:has-text('로그인')"
         ).first
+        if not same_origin(str(getattr(page, "url", "") or "")):
+            return False
         await login_btn.click(timeout=5000)
         await page.wait_for_timeout(3000)
         from app.core.credential_vault import login_session_completed
@@ -3703,7 +3744,7 @@ async def _login_with_agent_vault_credential(
         logger.info("agent_vault_form_login_submitted origin=%s work_key=%s", origin, browser_work_key)
         return True
     except Exception as exc:
-        logger.warning("agent_vault_login_failed: %s", exc)
+        logger.warning("agent_vault_login_failed: %s", type(exc).__name__)
         return False
 
 
@@ -3850,9 +3891,9 @@ async def _inject_agent_vault_api_login_token(
     return True
 
 
-async def _agent_vault_login(page: Any, url: str, tenant_id: str = "", browser_work_key: str = "") -> bool:
+async def _agent_vault_login(page: Any, url: str, tenant_id: str = "", browser_work_key: str = "", username: str = "") -> bool:
     """Use Agent Vault password-manager credentials for a visible login form."""
-    if not tenant_id:
+    if not tenant_id or not browser_work_key:
         return False
     try:
         from app.services.agent_vault_service import get_agent_credential_for_url
@@ -3861,6 +3902,7 @@ async def _agent_vault_login(page: Any, url: str, tenant_id: str = "", browser_w
             tenant_id=tenant_id,
             url=url,
             work_key=browser_work_key or None,
+            username=username,
             user_id="browser-e2e",
         )
         if not cred:
@@ -3873,7 +3915,7 @@ async def _agent_vault_login(page: Any, url: str, tenant_id: str = "", browser_w
             browser_work_key=browser_work_key,
         )
     except Exception as exc:
-        logger.warning("agent_vault_login_failed: %s", exc)
+        logger.warning("agent_vault_login_failed: %s", type(exc).__name__)
         return False
 
 
@@ -3882,6 +3924,7 @@ async def _pre_inject_vault_token(
     url: str,
     tenant_id: str = "",
     browser_work_key: str = "",
+    browser_username: str = "",
 ) -> bool:
     """대상 URL의 도메인에 매칭되는 vault 자격증명으로 사전 토큰 주입.
 
@@ -3895,8 +3938,10 @@ async def _pre_inject_vault_token(
             candidates.append(candidate)
 
     for candidate in candidates or [url]:
-        if await _agent_vault_login(page, candidate, tenant_id=tenant_id, browser_work_key=browser_work_key):
+        if await _agent_vault_login(page, candidate, tenant_id=tenant_id, browser_work_key=browser_work_key, username=browser_username):
             return True
+    if browser_username:
+        return False
     try:
         if not tenant_id:
             raise ValueError("tenant_id_required")
@@ -3939,6 +3984,7 @@ async def tool_browser_navigate(
     browser_session_id: str = "",
     browser_work_key: str = "",
     tenant_id: str = "",
+    browser_username: str = "",
 ) -> str:
     """브라우저로 URL 이동 (도메인 화이트리스트 검사 포함)."""
     blocked = _browser_domain_ok(url)
@@ -3994,6 +4040,7 @@ async def tool_browser_navigate(
                         url,
                         tenant_id=tenant_id,
                         browser_work_key=browser_work_key,
+                        browser_username=browser_username,
                     )
                     logger.info("e2e_pre_inject_result=%s url=%s", injected, url)
                     if injected:
@@ -4020,6 +4067,7 @@ async def tool_browser_navigate(
                     url,
                     tenant_id=tenant_id,
                     browser_work_key=browser_work_key,
+                    browser_username=browser_username,
                 )
                 if injected:
                     await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
@@ -5165,7 +5213,8 @@ async def tool_credential_test_login(
                 row = await get_pool().fetchrow(
                     """
                     SELECT id::text AS id, tenant_id::text AS tenant_id, work_key, origin,
-                           label, username_enc, password_enc
+                           label, username_enc, password_enc, metadata, is_active,
+                           last_used_at, created_at, updated_at
                       FROM agent_vault_credentials
                      WHERE id = $1
                        AND tenant_id = $2
@@ -5176,15 +5225,9 @@ async def tool_credential_test_login(
                     uuid.UUID(str(tenant_id)),
                 )
                 if row:
-                    agent_cred = {
-                        "id": str(row["id"]),
-                        "tenant_id": str(row["tenant_id"]),
-                        "work_key": str(row["work_key"] or ""),
-                        "origin": str(row["origin"] or ""),
-                        "label": str(row["label"] or ""),
-                        "username": decrypt_value(row["username_enc"]),
-                        "password": decrypt_value(row["password_enc"]),
-                    }
+                    from app.services.agent_vault_service import _row_to_credential
+
+                    agent_cred = _row_to_credential(row, include_secret=True)
                     vault_type = "agent_vault"
             except Exception:
                 agent_cred = None
@@ -5794,7 +5837,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
             tenant_id=str(params.get("tenant_id") or ""),
-            close_on_complete=bool(params.get("close_on_complete", True)),
+            browser_username=str(params.get("browser_username") or ""),
         )
     elif name == "browser_snapshot":
         return await tool_browser_snapshot(

@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import socket
 import hashlib
+import ipaddress
 import os
 import re
 from pathlib import Path
@@ -119,6 +120,21 @@ def egress_for_target(requested: str | None, target_url: str) -> dict[str, Any]:
         "egress_reason": reason if policy == "cafe24" else "auto_domain_policy:cafe24",
         "proxy": proxy,
     }
+
+
+async def measure_browser_egress_ip(context: Any) -> str:
+    """Measure the public IP inside the selected browser context and proxy."""
+    page = await context.new_page()
+    try:
+        response = await page.goto("https://api.ipify.org", wait_until="domcontentloaded", timeout=8_000)
+        if response is None or response.status != 200:
+            raise RuntimeError("egress_ip_probe_failed")
+        value = (await page.locator("body").inner_text(timeout=2_000)).strip()
+        return str(ipaddress.ip_address(value))
+    except Exception as exc:
+        raise RuntimeError("egress_ip_probe_failed") from exc
+    finally:
+        await page.close()
 
 
 @contextlib.asynccontextmanager

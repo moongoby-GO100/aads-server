@@ -107,12 +107,17 @@ def test_client_cannot_override_scope_or_target(harness):
     with connect(client) as ws:
         ws.send_json({'agent_id':'pc-a'});ws.receive_json();ws.receive_json()
         ws.send_json({'type':'control','request_id':'r1','action':'click','x':10,'y':20,'frame_id':'f1',
-                      'port':9222,'work_key':'attacker','tab_token':'attacker','target_id':'other'})
+                      'port':9222,'work_key':'attacker','tab_token':'attacker','target_id':'other',
+                      'tenant_id':'attacker','chat_session_id':'attacker'})
         while True:
             result=ws.receive_json()
             if result['type']=='control_ack': break
         assert result['request_id']=='r1'
     control=next(c for c in state.commands if c['op']=='control')
+    assert state.session_calls[0]['tenant_id'] == TENANT
+    assert state.session_calls[0]['chat_session_id'] == CHAT
+    assert control['tenant_id'] == TENANT
+    assert control['chat_session_id'] == CHAT
     assert control['port']==9333
     assert control['work_key']==live.chat_work_key(TENANT,CHAT,'pc-a')
     assert control['tab_token']!='attacker'

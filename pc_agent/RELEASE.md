@@ -1,3 +1,10 @@
+## 1.0.77 candidate — direct smart-browser repair
+
+- Preserve tenant/chat/work-key ownership through recovery and all CDP/tab commands.
+- Require local ownership proof for legacy session recovery; no request-controlled scope adoption.
+- Build ZIP entries with platform-independent ordering and metadata.
+- Candidate only: not distributed to PCs; Windows canary, dual-chat E2E and 24-hour observation remain required.
+
 # PC agent source ZIP release
 
 The ZIP route serves the files listed in `RELEASE_ZIP_SHA256.json`. After an

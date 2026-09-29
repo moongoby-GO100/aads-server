@@ -302,13 +302,25 @@ def test_playwright_access_diagnosis_classifies_challenge_and_advice():
 
 
 def test_playwright_access_diagnosis_does_not_guess_403_cause():
-    diagnosis = classify_playwright_access(status="reachable", http_status=403, body_text="Access Denied")
+    diagnosis = classify_playwright_access(status="reachable", http_status=403)
     remediation = build_access_remediation_plan(diagnosis)
 
     assert diagnosis["category"] == "access_restricted_unknown"
     assert diagnosis["self_hosted_usable"] is False
     assert remediation["next_action"] == "manual_review"
     assert remediation["primary_runtime"] == "self_hosted_playwright"
+
+
+@pytest.mark.parametrize(("body", "category", "reason"), [
+    ("Access Denied", "bot_or_waf_blocked", "access_denied"),
+    ("CAPTCHA", "challenge_required", "captcha_detected"),
+    ("Login failed", "login_error", "login_rejected"),
+])
+def test_coupang_block_causes_are_distinct(body, category, reason):
+    diagnosis = classify_playwright_access(status="reachable", http_status=403, body_text=body)
+    assert diagnosis["category"] == category
+    assert diagnosis["reason_code"] == reason
+    assert build_access_remediation_plan(diagnosis)["next_action"] != "continue_self_hosted"
 
 
 @pytest.mark.asyncio

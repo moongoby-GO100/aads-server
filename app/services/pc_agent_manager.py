@@ -187,6 +187,7 @@ class PCAgentManager:
     def __init__(self) -> None:
         self._agents: Dict[str, _AgentConnection] = {}
         self._last_observations: Dict[str, dict[str, Any]] = {}
+        self._last_observation_owners: Dict[str, tuple[str, str]] = {}
         self._stream_commands: Dict[str, tuple[str, str]] = {}
         self._pending_commands: Dict[str, asyncio.Event] = {}
         self._results: Dict[str, CommandResult] = {}
@@ -246,9 +247,19 @@ class PCAgentManager:
         previous_conn = self._agents.get(agent_id)
         if previous_conn:
             previous_conn.stream_ack_done.set()
+        owner = (agent_info.user_id, agent_info.tenant_id)
+        previous_owner = ((previous_conn.info.user_id, previous_conn.info.tenant_id)
+                          if previous_conn else self._last_observation_owners.get(agent_id))
+        same_owner_observation = (dict(previous_conn.last_observation)
+                                  if previous_conn and previous_owner == owner else {})
+        if previous_owner != owner:
+            self._last_observations.pop(agent_id, None)
+            self._last_observation_owners.pop(agent_id, None)
         self._stream_commands = {key: value for key, value in self._stream_commands.items() if value[0] != agent_id}
         self._agents[agent_id] = _AgentConnection(agent_id, websocket, agent_info)
-        self._agents[agent_id].last_observation = dict(self._last_observations.get(agent_id, {}))
+        self._agents[agent_id].last_observation = (
+            same_owner_observation or dict(self._last_observations.get(agent_id, {}))
+        )
         logger.info(
             "pc_agent_registered agent_id=%s hostname=%s user_id=%s capabilities=%s command_types=%s",
             agent_id,
@@ -258,6 +269,18 @@ class PCAgentManager:
             ",".join(agent_info.command_types),
         )
         return agent_info
+
+    def is_current_connection(self, agent_id: str, websocket: WebSocket) -> bool:
+        conn = self._agents.get(agent_id)
+        return conn is not None and conn.websocket is websocket
+
+    def _cache_offline_observation(self, agent_id: str, conn: _AgentConnection) -> None:
+        self._last_observations[agent_id] = self._observation(conn, self._now(), connected=False)
+        self._last_observation_owners[agent_id] = (conn.info.user_id, conn.info.tenant_id)
+        while len(self._last_observations) > 512:
+            evicted = next(iter(self._last_observations))
+            self._last_observations.pop(evicted)
+            self._last_observation_owners.pop(evicted, None)
 
     def unregister_agent(self, agent_id: str, websocket: WebSocket | None = None) -> bool:
         """에이전트 해제.
@@ -272,11 +295,9 @@ class PCAgentManager:
         if websocket is not None and conn.websocket is not websocket:
             logger.info("pc_agent_unregister_skipped_stale agent_id=%s", agent_id)
             return False
-        self._last_observations[agent_id] = self._observation(conn, self._now(), connected=False)
+        self._cache_offline_observation(agent_id, conn)
         conn.stream_ack_done.set()
         self._stream_commands = {key: value for key, value in self._stream_commands.items() if value[0] != agent_id}
-        if len(self._last_observations) > 512:
-            self._last_observations.pop(next(iter(self._last_observations)))
         del self._agents[agent_id]
         self._fail_pending_commands_for_agent(
             agent_id,
@@ -681,7 +702,7 @@ class PCAgentManager:
         """모든 에이전트 연결을 1012로 정상 종료."""
         closed = 0
         for agent_id, conn in list(self._agents.items()):
-            self._last_observations[agent_id] = self._observation(conn, self._now(), connected=False)
+            self._cache_offline_observation(agent_id, conn)
             conn.stream_ack_done.set()
             self._fail_pending_commands_for_agent(
                 agent_id,

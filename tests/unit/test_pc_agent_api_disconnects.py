@@ -154,6 +154,7 @@ def _setup_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pc_agent, "_RELOAD_DISCONNECT_FLUSH_TASK", None)
     monkeypatch.setattr(pc_agent, "_verify_token_db", AsyncMock(return_value=(True, "", "")))
     monkeypatch.setattr(pc_agent.pc_agent_manager, "register_agent", Mock())
+    monkeypatch.setattr(pc_agent.pc_agent_manager, "is_current_connection", Mock(return_value=True))
     monkeypatch.setattr(pc_agent.pc_agent_manager, "unregister_agent", Mock(return_value=True))
     monkeypatch.setattr(pc_agent.pc_agent_manager, "update_heartbeat", Mock())
     monkeypatch.setattr(pc_agent.pc_agent_manager, "receive_result", Mock())

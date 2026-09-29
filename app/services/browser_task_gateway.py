@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 from app.core.db_pool import get_pool
 from app.services.browser_permission_policy import classify_browser_action, mask_sensitive_value
-from app.services.managed_browser import browser_egress, egress_for_target, normalize_egress_policy, normalize_work_key, profile_info
+from app.services.managed_browser import browser_egress, egress_for_target, measure_browser_egress_ip, normalize_egress_policy, normalize_work_key, profile_info
 
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
@@ -700,6 +700,22 @@ def classify_playwright_access(
         severity = "warning"
         approval_required = True
         reason_code = "http_auth_required"
+    elif "captcha" in haystack or "recaptcha" in haystack or "hcaptcha" in haystack:
+        category = "challenge_required"
+        severity = "warning"
+        approval_required = True
+        reason_code = "captcha_detected"
+    elif any(marker in haystack for marker in ("invalid password", "incorrect password", "login failed", "비밀번호가 틀", "로그인 실패")):
+        category = "login_error"
+        severity = "warning"
+        approval_required = True
+        reason_code = "login_rejected"
+    elif "access denied" in haystack:
+        category = "bot_or_waf_blocked"
+        severity = "error"
+        self_hosted_usable = False
+        approval_required = True
+        reason_code = "access_denied"
     elif http_status == 403:
         category = "access_restricted_unknown"
         severity = "warning"
@@ -754,33 +770,41 @@ def build_access_remediation_plan(diagnosis: dict[str, Any]) -> dict[str, Any]:
         return {
             "next_action": "continue_self_hosted",
             "primary_runtime": "self_hosted_playwright",
-            "fallback_runtimes": ["pc_agent"],
+            "fallback_runtimes": [],
             "requires_approval": False,
-            "message": "서버 Playwright로 접근 가능합니다.",
+            "message": "페이지 접근을 확인했습니다. 로그인 성공 여부는 별도로 확인하십시오.",
         }
     if category == "auth_required":
         return {
             "next_action": "vault_login_or_approval",
             "primary_runtime": "self_hosted_playwright",
-            "fallback_runtimes": ["pc_agent"],
+            "fallback_runtimes": [],
             "requires_approval": True,
             "message": "로그인 단계입니다. Vault 자동입력 또는 사용자 승인 토큰으로 진행하십시오.",
+        }
+    if category == "login_error":
+        return {
+            "next_action": "verify_vault_account_and_login",
+            "primary_runtime": "self_hosted_playwright",
+            "fallback_runtimes": [],
+            "requires_approval": True,
+            "message": "로그인이 거절됐습니다. 같은 tenant·도메인·계정의 Vault 등록과 로그인 화면을 확인하십시오.",
         }
     if category == "challenge_required":
         return {
             "next_action": "approval_scoped_challenge_automation",
             "primary_runtime": "self_hosted_playwright",
-            "fallback_runtimes": ["pc_agent"],
+            "fallback_runtimes": [],
             "requires_approval": True,
             "message": "OTP/CAPTCHA/인증 챌린지입니다. 승인된 범위 안에서만 transient 입력 또는 승인형 모델 판독을 실행하십시오.",
         }
     if category in {"bot_or_waf_blocked", "unsupported_url", "network_or_tls_error"}:
         return {
-            "next_action": "switch_runtime",
-            "primary_runtime": "pc_agent",
-            "fallback_runtimes": ["self_hosted_playwright", "external_sandbox_review"],
+            "next_action": "review_access_block",
+            "primary_runtime": "self_hosted_playwright",
+            "fallback_runtimes": [],
             "requires_approval": True,
-            "message": "서버 Playwright 접근이 제한됐습니다. 동일 권한의 사용자 브라우저 세션 또는 별도 승인된 샌드박스 런타임으로 전환하십시오.",
+            "message": "선택한 레인에서 접근이 제한됐습니다. 차단 화면과 승인된 연결 상태를 확인하십시오.",
         }
     if category == "runtime_unavailable":
         return {
@@ -817,13 +841,17 @@ async def check_browser_target_access(
         message=str(result.get("message") or ""),
         http_status=result.get("http_status") if isinstance(result.get("http_status"), int) else None,
     )
+    lane = result if "egress_requested" in result else egress_for_target(task["egress_policy"], target_url)
     return {
         "status": result.get("status"),
         "target_url": target_url,
         "diagnosis": diagnosis,
         "remediation": build_access_remediation_plan(diagnosis),
         "runtime": "self_hosted_playwright",
-        **{key: value for key, value in egress_for_target(task["egress_policy"], target_url).items() if key != "proxy"},
+        "egress_ip": result.get("egress_ip"),
+        "egress_failure_reason": result.get("egress_ip_failure_reason") or (result.get("reason") if result.get("status") != "reachable" else None),
+        "authentication_status": "unverified",
+        **{key: lane[key] for key in ("egress_requested", "egress_effective", "egress_status", "egress_reason") if key in lane},
     }
 
 
@@ -850,6 +878,12 @@ async def _probe_self_hosted_playwright_access(task: dict[str, Any]) -> dict[str
         async with async_playwright() as playwright:
             try:
                 async with _open_self_hosted_page(playwright, profile, egress, target_url) as (page, response):
+                    egress_ip = None
+                    egress_ip_failure_reason = None
+                    try:
+                        egress_ip = await measure_browser_egress_ip(page.context)
+                    except Exception:
+                        egress_ip_failure_reason = "egress_ip_probe_failed"
                     title = await page.title()
                     current_url = page.url
                     body_text = ""
@@ -868,23 +902,25 @@ async def _probe_self_hosted_playwright_access(task: dict[str, Any]) -> dict[str
                     return {
                         "status": "reachable",
                         "http_status": http_status,
+                        "egress_ip": egress_ip,
+                        "egress_ip_failure_reason": egress_ip_failure_reason,
                         "current_url": current_url,
                         "page_title": title,
                         "access_diagnosis": diagnosis,
                         **{key: value for key, value in egress.items() if key != "proxy"},
                     }
             except Exception as exc:
-                diagnosis = classify_playwright_access(status="skipped", reason="self_hosted_capture_failed", message=str(exc))
+                failure_reason = "self_hosted_capture_failed"
+                diagnosis = classify_playwright_access(status="skipped", reason=failure_reason, message=str(exc))
                 logger.warning(
-                    "browser_task_self_hosted_access_probe_failed task_id=%s work_key=%s err=%s",
+                    "browser_task_self_hosted_access_probe_failed task_id=%s work_key=%s reason=%s",
                     task.get("id"),
                     work_key,
-                    exc,
+                    failure_reason,
                 )
                 return {
                     "status": "skipped",
-                    "reason": "self_hosted_capture_failed",
-                    "message": str(exc),
+                    "reason": failure_reason,
                     "access_diagnosis": diagnosis,
                     **{key: value for key, value in egress.items() if key != "proxy"},
                 }

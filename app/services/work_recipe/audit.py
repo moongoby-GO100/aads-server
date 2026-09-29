@@ -169,7 +169,32 @@ def _split_result(result: Any, *, error: str) -> tuple[str, Any]:
 
 
 def _json_ready(value: Any) -> Any:
-    return mask_audit_payload(value)
+    masked = mask_audit_payload(value)
+    # Preserve only the validated financial receipt at its audit location.
+    # A global exemption for *sha256 keys would also expose arbitrary secrets
+    # placed under those keys. All other output keeps the normal masking.
+    evidence = value.get("evidence") if isinstance(value, Mapping) else None
+    receipt = evidence.get("stage_receipt") if isinstance(evidence, Mapping) else None
+    expected_keys = {"stage", "origin", "dom_sha256", "predecessor_sha256", "receipt_sha256"}
+    if not isinstance(receipt, Mapping) or set(receipt) != expected_keys:
+        return masked
+    if any(not isinstance(item, str) for item in receipt.values()):
+        return masked
+    if receipt["origin"] != "bank.shinhan.com" or receipt["stage"] not in {"open", "authenticate", "verify"}:
+        return masked
+    if any(re.fullmatch(r"[0-9a-f]{64}", receipt[key]) is None
+           for key in ("dom_sha256", "receipt_sha256")):
+        return masked
+    prior = receipt["predecessor_sha256"]
+    if (receipt["stage"] == "open" and prior != "") or (
+        receipt["stage"] != "open" and re.fullmatch(r"[0-9a-f]{64}", prior) is None
+    ):
+        return masked
+    from app.services.work_recipe.shinhan_corporate_manual import verify_receipt
+
+    if verify_receipt(receipt):
+        masked["evidence"]["stage_receipt"] = dict(receipt)
+    return masked
 
 
 # --------------------------------------------------------- append-only 기록

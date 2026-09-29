@@ -18,11 +18,13 @@ MANIFEST_NAME = "RELEASE_ZIP_SHA256.json"
 
 
 def _source_files(agent_dir: Path) -> list[str]:
-    return [path.relative_to(agent_dir).as_posix() for path in sorted(agent_dir.rglob("*"))
+    # Path ordering is case-insensitive on Windows. Sort canonical archive names,
+    # not native Path objects, so the manifest and ZIP match on every OS.
+    return sorted(path.relative_to(agent_dir).as_posix() for path in agent_dir.rglob("*")
             if path.is_file() and not any(part in ZIP_EXCLUDE_DIRS for part in path.relative_to(agent_dir).parts)
             and path.suffix not in ZIP_EXCLUDE_EXTS
             and not any(path.name.endswith(s) for s in ZIP_EXCLUDE_SUFFIXES)
-            and not path.name.startswith("RESULT_") and path.name != MANIFEST_NAME]
+            and not path.name.startswith("RESULT_") and path.name != MANIFEST_NAME)
 
 
 def _release_files(agent_dir: Path) -> list[str]:
@@ -35,6 +37,15 @@ def _release_files(agent_dir: Path) -> list[str]:
     return files
 
 
+def _zip_info(name: str) -> zipfile.ZipInfo:
+    info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    # ZipInfo defaults to DOS on Windows and Unix elsewhere; this byte is part
+    # of the central directory and therefore part of the published SHA256.
+    info.create_system = 3
+    info.external_attr = 0o644 << 16
+    return info
+
+
 def build_agent_zip(agent_dir: Path, install_ticket: str | None = None) -> bytes:
     buf = io.BytesIO()
     # STORED entries do not vary with zlib or CPython compression versions.
@@ -43,11 +54,10 @@ def build_agent_zip(agent_dir: Path, install_ticket: str | None = None) -> bytes
             path = agent_dir / name
             if not path.resolve().is_relative_to(agent_dir.resolve()):
                 raise ValueError("Invalid PC ZIP manifest path")
-            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-            info.external_attr = 0o644 << 16
+            info = _zip_info(name)
             zf.writestr(info, path.read_bytes())
         if install_ticket:
-            info = zipfile.ZipInfo("install_ticket.txt", date_time=(1980, 1, 1, 0, 0, 0))
+            info = _zip_info("install_ticket.txt")
             zf.writestr(info, install_ticket)
     return buf.getvalue()
 
@@ -65,7 +75,7 @@ def ticketed_agent_zip(agent_dir: Path, ticket: str | None = None) -> bytes:
         return data
     buf = io.BytesIO(data)
     with zipfile.ZipFile(buf, "a", zipfile.ZIP_STORED) as zf:
-        info = zipfile.ZipInfo("install_ticket.txt", date_time=(1980, 1, 1, 0, 0, 0))
+        info = _zip_info("install_ticket.txt")
         zf.writestr(info, ticket)
     return buf.getvalue()
 

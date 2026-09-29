@@ -96,9 +96,11 @@ async def chat_pc_live(websocket: WebSocket, chat_id: str) -> None:
                 raise ValueError('chat_browser_already_in_use')
             try:
                 session = await service.ensure_work_session(work_key=work_key, agent_id=agent_id,
+                    tenant_id=str(tenant_uuid), chat_session_id=str(chat_uuid),
                     label='채팅 전용 PC 브라우저', url='about:blank', command_timeout_seconds=45, queue_wait_timeout_seconds=10)
                 meta = session.endpoint.metadata
-                binding = {'port': int(meta['port']), 'work_key': work_key}
+                binding = {'port': int(meta['port']), 'work_key': work_key,
+                    'tenant_id': str(tenant_uuid), 'chat_session_id': str(chat_uuid)}
                 await lock_conn.fetchval('SELECT 1')
                 opened = await tab_command(service, agent_id, work_key, {
                     **binding, 'op': 'open', 'url': url, 'target_id': meta.get('live_target_id', '')})

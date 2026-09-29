@@ -30,8 +30,21 @@ async def acquire_browser_context(
     browser_work_key: str | None = None,
     url: str = "about:blank",
     prefer_headless: bool = False,
+    tenant_id: str = "",
+    chat_session_id: str = "",
 ) -> tuple[Any, Optional[str]]:
     service = get_browser_bridge_service()
+    # Tool invocation ContextVars are authoritative, unlike browser registry
+    # metadata or arbitrary requested session IDs. No bound context means the
+    # caller must provide scope explicitly to access a scoped browser.
+    from app.services.tool_executor import current_chat_session_id, current_tenant_id
+    bound_tenant = str(current_tenant_id.get("") or "")
+    bound_chat = str(current_chat_session_id.get("") or "")
+    if ((bound_tenant and tenant_id and bound_tenant != tenant_id)
+            or (bound_chat and chat_session_id and bound_chat != chat_session_id)):
+        return None, "[브라우저 접근 차단] CDP_SCOPE_MISMATCH"
+    tenant_id, chat_session_id = bound_tenant or tenant_id, bound_chat or chat_session_id
+    scope = {key: value for key, value in (("tenant_id", tenant_id), ("chat_session_id", chat_session_id)) if value}
     # A URL-only capture is independent server work.  Do not let an unrelated
     # active LOCAL_AGENT/CDP session become its implicit execution target.
     if prefer_headless and not browser_session_id and not browser_work_key:
@@ -51,8 +64,11 @@ async def acquire_browser_context(
             session = await service.ensure_work_session(
                 work_key=browser_work_key,
                 url=url or "about:blank",
+                **scope,
             )
         except Exception as exc:
+            if "CDP_SCOPE_MISMATCH" in str(exc):
+                return None, "[브라우저 접근 차단] CDP_SCOPE_MISMATCH"
             logger.warning(
                 "browser_work_session_unavailable_headless_fallback "
                 "work_key=%s error=%s",
@@ -76,7 +92,7 @@ async def acquire_browser_context(
                     f"headless fallback 실패: {fallback_exc}"
                 )
         browser_session_id = session.session_id
-    return await service.acquire_playwright_context(session_id=browser_session_id or None)
+    return await service.acquire_playwright_context(session_id=browser_session_id or None, **scope)
 
 
 def create_pairing_instructions(label: str = "CEO local Chrome", created_by: str = "") -> str:

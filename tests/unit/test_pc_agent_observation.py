@@ -45,6 +45,30 @@ def test_disconnect_preserves_last_observation_and_classifies_contact_loss(monke
     assert observation["classification"] == "contact_lost"
 
 
+def test_reconnect_keeps_same_owner_observation_but_clears_on_owner_change():
+    manager = PCAgentManager()
+    first = DummyWebSocket()
+    manager.register_agent("pc", first, {}, owner_user_id="alice")
+    manager.update_observation("pc", {"cpu_percent": 91})
+    manager.unregister_agent("pc", first)
+    manager.register_agent("pc", DummyWebSocket(), {}, owner_user_id="alice")
+    assert manager.get_last_observation("pc")["cpu_percent"] == 91
+    manager.register_agent("pc", DummyWebSocket(), {}, owner_user_id="bob")
+    assert "cpu_percent" not in manager.get_last_observation("pc")
+    manager.register_agent("pc", DummyWebSocket(), {}, owner_user_id="")
+    assert "cpu_percent" not in manager.get_last_observation("pc")
+
+
+def test_direct_socket_replacement_keeps_only_same_owner_sample():
+    manager = PCAgentManager()
+    manager.register_agent("pc", DummyWebSocket(), {}, owner_user_id="alice")
+    manager.update_observation("pc", {"cpu_percent": 73})
+    manager.register_agent("pc", DummyWebSocket(), {}, owner_user_id="alice")
+    assert manager.get_last_observation("pc")["cpu_percent"] == 73
+    manager.register_agent("pc", DummyWebSocket(), {}, owner_user_id="bob")
+    assert "cpu_percent" not in manager.get_last_observation("pc")
+
+
 def test_healthy_heartbeat_distinguishes_resource_pressure_and_stale_stream():
     manager = PCAgentManager()
     manager.register_agent("pc", DummyWebSocket(), {})
@@ -474,3 +498,40 @@ async def test_queued_stop_does_not_target_a_replacement_connection():
     with pytest.raises(ValueError, match="connection changed"):
         await task
     assert not hasattr(replacement, "last_message")
+
+
+@pytest.mark.parametrize("disconnect_first", [False, True])
+def test_observation_does_not_cross_tenant_for_same_user(disconnect_first):
+    manager = PCAgentManager()
+    ws = DummyWebSocket()
+    manager.register_agent("pc", ws, {}, owner_user_id="alice", owner_tenant_id="tenant-a")
+    manager.update_observation("pc", {"cpu_percent": 87})
+    if disconnect_first:
+        manager.unregister_agent("pc", ws)
+    manager.register_agent("pc", DummyWebSocket(), {}, owner_user_id="alice", owner_tenant_id="tenant-b")
+    assert "cpu_percent" not in manager.get_last_observation("pc")
+
+
+def test_cache_owners_only_exist_for_bounded_offline_snapshots():
+    manager = PCAgentManager()
+    for index in range(520):
+        agent_id = str(index)
+        ws = DummyWebSocket()
+        manager.register_agent(agent_id, ws, {}, owner_user_id="alice")
+        assert agent_id not in manager._last_observation_owners
+        manager.unregister_agent(agent_id, ws)
+    assert len(manager._last_observations) == 512
+    assert manager._last_observations.keys() == manager._last_observation_owners.keys()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_bounds_observation_cache_and_owners():
+    manager = PCAgentManager()
+    class Socket(DummyWebSocket):
+        async def close(self, **kwargs):
+            pass
+    for index in range(520):
+        manager.register_agent(str(index), Socket(), {}, owner_user_id="alice")
+    assert await manager.close_all_connections() == 520
+    assert len(manager._last_observations) == 512
+    assert manager._last_observations.keys() == manager._last_observation_owners.keys()

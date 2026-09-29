@@ -54,6 +54,8 @@ class EnsurePcCdpSessionRequest(BaseModel):
     isolation_id: str = Field(default="", max_length=80)
     activate: bool = False
     work_key: str = Field(default="", max_length=120)
+    chat_session_id: str = Field(default="", max_length=120)
+    adopt_legacy_scope: bool = False
 
 
 class EnsureWorkSessionRequest(BaseModel):
@@ -62,6 +64,7 @@ class EnsureWorkSessionRequest(BaseModel):
     agent_id: str = Field(default="", max_length=120)
     url: str = Field(default="about:blank", max_length=2048)
     preferred_port: int | None = Field(default=None, ge=1024, le=65535)
+    chat_session_id: str = Field(default="", max_length=120)
 
 
 class WorkSessionRouteExecuteRequest(BaseModel):
@@ -77,6 +80,7 @@ class WorkSessionRouteExecuteRequest(BaseModel):
     command_timeout_seconds: float = Field(default=90, ge=1, le=300)
     url: str = Field(default="about:blank", max_length=2048)
     preferred_port: int | None = Field(default=None, ge=1024, le=65535)
+    chat_session_id: str = Field(default="", max_length=120)
 
 
 class SessionLeaseRequest(BaseModel):
@@ -163,11 +167,36 @@ async def select_session(
     return {"status": "selected", "session": session.public_dict()}
 
 
+async def _verified_browser_scope(current_user: dict, chat_session_id: str) -> dict[str, str]:
+    tenant_id = str(current_user.get("tenant_id") or "")
+    if not tenant_id:
+        raise HTTPException(status_code=403, detail="Authenticated tenant scope required")
+    if chat_session_id:
+        from uuid import UUID
+        from app.core.db_pool import get_pool
+        try:
+            session_id = UUID(chat_session_id)
+            tenant_uuid = UUID(tenant_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid session scope") from exc
+        async with get_pool().acquire() as conn:
+            owned = await conn.fetchval(
+                "SELECT 1 FROM chat_sessions WHERE id = $1 AND tenant_id = $2 AND user_id::text = $3",
+                session_id, tenant_uuid, str(current_user.get("user_id") or ""),
+            )
+        if not owned:
+            raise HTTPException(status_code=403, detail="Session scope does not belong to this user")
+    return {"tenant_id": tenant_id, "chat_session_id": str(chat_session_id or "")}
+
+
 @router.post("/sessions/ensure-pc-cdp")
 async def ensure_pc_cdp_session(
     req: EnsurePcCdpSessionRequest,
     current_user: dict = Depends(get_current_user),
 ) -> dict[str, Any]:
+    if req.adopt_legacy_scope:
+        raise HTTPException(status_code=403, detail="Legacy scope recovery requires a local operator")
+    scope = await _verified_browser_scope(current_user, req.chat_session_id)
     service = get_browser_bridge_service()
     try:
         session = await service.ensure_pc_agent_cdp_session(
@@ -179,10 +208,19 @@ async def ensure_pc_cdp_session(
             isolation_id=req.isolation_id,
             activate=req.activate,
             work_key=req.work_key,
+            **scope,
+            adopt_legacy_scope=req.adopt_legacy_scope,
         )
     except Exception as exc:
         raise HTTPException(status_code=424, detail=str(exc)) from exc
     return {"status": "ready", "session": session.public_dict()}
+
+
+async def _ensure_verified_work_session(service: Any, req: Any, scope: dict[str, str]):
+    return await service.ensure_work_session(
+        work_key=req.work_key, label=req.label, agent_id=req.agent_id,
+        url=req.url, preferred_port=req.preferred_port, **scope,
+    )
 
 
 @router.post("/work-sessions/ensure")
@@ -190,15 +228,10 @@ async def ensure_work_session(
     req: EnsureWorkSessionRequest,
     current_user: dict = Depends(get_current_user),
 ) -> dict[str, Any]:
+    scope = await _verified_browser_scope(current_user, req.chat_session_id)
     service = get_browser_bridge_service()
     try:
-        session = await service.ensure_work_session(
-            work_key=req.work_key,
-            label=req.label,
-            agent_id=req.agent_id,
-            url=req.url,
-            preferred_port=req.preferred_port,
-        )
+        session = await _ensure_verified_work_session(service, req, scope)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -211,20 +244,18 @@ async def route_execute_work_session(
     req: WorkSessionRouteExecuteRequest,
     current_user: dict = Depends(get_current_user),
 ) -> dict[str, Any]:
+    scope = await _verified_browser_scope(current_user, req.chat_session_id)
     service = get_browser_bridge_service()
     try:
-        session = await service.ensure_work_session(
-            work_key=req.work_key,
-            label=req.label,
-            agent_id=req.agent_id,
-            url=req.url,
-            preferred_port=req.preferred_port,
-        )
+        session = await _ensure_verified_work_session(service, req, scope)
         endpoint = session.endpoint.public_dict()
         metadata = endpoint.get("metadata", {}) if isinstance(endpoint, dict) else {}
         agent_id = str(req.agent_id or metadata.get("agent_id") or "")
         port = metadata.get("port")
         params = dict(req.params or {})
+        # Request params cannot select another tenant/session/work key or port.
+        params.update(scope)
+        params.pop("adopt_legacy_scope", None)
         effective_command_timeout_seconds = float(req.command_timeout_seconds)
         raw_param_timeout = (
             params.get("command_timeout_seconds")
@@ -241,13 +272,13 @@ async def route_execute_work_session(
         params["command_timeout_seconds"] = effective_command_timeout_seconds
         if req.command_type.strip().lower() == "browser_eval" and "evaluate_timeout_seconds" not in params:
             params["evaluate_timeout_seconds"] = max(1.0, min(60.0, effective_command_timeout_seconds - 0.5))
-        params.setdefault("work_key", session.work_key or req.work_key)
-        params.setdefault("browser_session_id", session.session_id)
-        params.setdefault("session_id", session.session_id)
+        params["work_key"] = session.work_key or req.work_key
+        params["browser_session_id"] = session.session_id
+        params["session_id"] = session.session_id
         params.setdefault("label", session.label or req.label)
         if port:
-            params.setdefault("port", int(port))
-            params.setdefault("preferred_port", int(port))
+            params["port"] = int(port)
+            params["preferred_port"] = int(port)
 
         result = await service._execute_pc_agent_route_via_active_api(
             command_type=req.command_type,

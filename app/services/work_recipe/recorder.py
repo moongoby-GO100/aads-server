@@ -7,7 +7,7 @@ from typing import Any
 
 from app.services.work_recipe import registration, store
 from app.services.work_recipe.guard import INTERNAL_DOMAINS
-from app.services.work_recipe.schema import RecipeInput, RecipeStep, WorkRecipe
+from app.services.work_recipe.schema import RecipeInput, RecipeStep, WorkRecipe, risk_rank
 
 _CREDENTIAL_HINT = re.compile(
     r"password|passwd|pwd|login|sign.?in|username|user.?id|email|otp|인증|비밀번호|아이디",
@@ -76,6 +76,15 @@ class WorkRecipeRecorder:
             # chat entry point.
             raw["risk"] = self._login_risk()
         step = RecipeStep.from_dict(raw, seq=len(self.steps) + 1)
+        # A split login-confirm recording may contain only a generic button or
+        # Enter key. Its selector carries no auth hint, so the guard otherwise
+        # treats the credential submission as READ. Keep authentication context
+        # from the recording name or preceding secret inputs when saving it.
+        authentication_recording = bool(self.inputs) or bool(_CREDENTIAL_HINT.search(self.name))
+        if step.action in {"click", "press"} and authentication_recording:
+            minimum_risk = self._login_risk()
+            if risk_rank(step.risk) < risk_rank(minimum_risk):
+                step.risk = minimum_risk
         self.steps.append(step)
         return step
 

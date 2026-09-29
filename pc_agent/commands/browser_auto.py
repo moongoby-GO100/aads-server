@@ -56,6 +56,9 @@ class CDPSession:
     port: int
     profile_dir: str
     pid: int = 0
+    tenant_id: str = ""
+    chat_session_id: str = ""
+    process_started_at: float = 0.0
     connected_at: float = field(default_factory=_time)
     last_heartbeat_at: float = field(default_factory=_time)
     last_target_id: str = ""
@@ -74,6 +77,40 @@ class CDPSessionManager:
     _sessions: dict[str, CDPSession] = {}
     _port_pool: list[int] = [9222, 9333, 9444, 9555, 9666, 9777]
     _lock = threading.Lock()
+    _loaded = False
+
+    @classmethod
+    def _state_file(cls) -> str:
+        return os.environ.get("AADS_CDP_SESSION_STATE_FILE") or os.path.join(_default_profile_root(), "sessions.json")
+
+    @classmethod
+    def _load_locked(cls) -> None:
+        if cls._loaded:
+            return
+        cls._loaded = True
+        try:
+            with open(cls._state_file(), encoding="utf-8") as stream:
+                payload = json.load(stream)
+            for item in payload.get("sessions", []):
+                if not isinstance(item, dict):
+                    continue
+                session = CDPSession(**{key: item[key] for key in CDPSession.__dataclass_fields__ if key in item})
+                if session.work_key and session.port and _is_managed_profile_dir(session.profile_dir):
+                    cls._sessions.setdefault(session.work_key, session)
+        except (OSError, ValueError, TypeError):
+            pass
+
+    @classmethod
+    def _save_locked(cls) -> None:
+        path = cls._state_file()
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            temp = path + ".tmp"
+            with open(temp, "w", encoding="utf-8") as stream:
+                json.dump({"version": 1, "sessions": [vars(s) for s in cls._sessions.values()]}, stream)
+            os.replace(temp, path)
+        except OSError as exc:
+            logger.warning("cdp_session_state_save_failed: %s", exc)
 
     @classmethod
     def normalize_work_key(cls, work_key: str) -> str:
@@ -81,11 +118,14 @@ class CDPSessionManager:
 
     @classmethod
     def get_session(cls, work_key: str) -> CDPSession | None:
-        return cls._sessions.get(cls.normalize_work_key(work_key))
+        with cls._lock:
+            cls._load_locked()
+            return cls._sessions.get(cls.normalize_work_key(work_key))
 
     @classmethod
     def get_by_port(cls, port: int) -> CDPSession | None:
         with cls._lock:
+            cls._load_locked()
             for session in cls._sessions.values():
                 if session.port == port:
                     return session
@@ -100,6 +140,7 @@ class CDPSessionManager:
     ) -> int:
         normalized_work_key = cls.normalize_work_key(work_key)
         with cls._lock:
+            cls._load_locked()
             existing = cls._sessions.get(normalized_work_key)
             if existing:
                 return existing.port
@@ -115,11 +156,18 @@ class CDPSessionManager:
         return _find_free_port()
 
     @classmethod
-    def register(cls, work_key: str, port: int, profile_dir: str, pid: int = 0) -> CDPSession:
+    def register(cls, work_key: str, port: int, profile_dir: str, pid: int = 0,
+                 *, tenant_id: str = "", chat_session_id: str = "") -> CDPSession:
         normalized_work_key = cls.normalize_work_key(work_key)
         with cls._lock:
-            session = CDPSession(work_key=normalized_work_key, port=port, profile_dir=profile_dir, pid=pid)
+            cls._load_locked()
+            session = CDPSession(
+                work_key=normalized_work_key, port=port, profile_dir=profile_dir, pid=pid,
+                tenant_id=tenant_id, chat_session_id=chat_session_id,
+                process_started_at=_process_started_at(pid),
+            )
             cls._sessions[normalized_work_key] = session
+            cls._save_locked()
             return session
 
     @classmethod
@@ -135,6 +183,7 @@ class CDPSessionManager:
                 session.last_target_id = target_id
             if target_url:
                 session.last_target_url = target_url
+            cls._save_locked()
 
     @classmethod
     def mark_error(cls, work_key: str, *, error_code: str = "") -> None:
@@ -145,15 +194,25 @@ class CDPSessionManager:
                 return
             session.last_heartbeat_at = _time()
             session.last_error_code = str(error_code or "")
+            cls._save_locked()
+
+    @classmethod
+    def save(cls) -> None:
+        with cls._lock:
+            cls._save_locked()
 
     @classmethod
     def release(cls, work_key: str) -> None:
         with cls._lock:
+            cls._load_locked()
             cls._sessions.pop(cls.normalize_work_key(work_key), None)
+            cls._save_locked()
 
     @classmethod
     def get_all(cls) -> dict[str, CDPSession]:
-        return dict(cls._sessions)
+        with cls._lock:
+            cls._load_locked()
+            return dict(cls._sessions)
 
 
 class CDPCommandGuardManager:
@@ -439,7 +498,119 @@ def _candidate_ports(params: Dict[str, Any]) -> list[int]:
 def _work_key_from_params(params: Dict[str, Any] | None = None) -> str:
     if not isinstance(params, dict):
         return CDPSessionManager.normalize_work_key("general")
+    if not str(params.get("work_key") or "").strip() and "port" in params:
+        owner = CDPSessionManager.get_by_port(_coerce_port(params.get("port")))
+        if owner:
+            return owner.work_key
     return CDPSessionManager.normalize_work_key(params.get("work_key", "general"))
+
+
+def _process_started_at(pid: int) -> float:
+    if pid <= 0:
+        return 0.0
+    try:
+        import psutil
+        return float(psutil.Process(pid).create_time())
+    except Exception:
+        return 0.0
+
+
+def _owned_browser_process(session: CDPSession) -> tuple[int, float]:
+    """Find Chrome by its dedicated profile and CDP port, never by PID alone."""
+    try:
+        import psutil
+        profile = os.path.normcase(os.path.abspath(session.profile_dir))
+        port_arg = f"--remote-debugging-port={session.port}"
+        profile_arg = "--user-data-dir="
+        for proc in psutil.process_iter(["pid", "name", "cmdline", "create_time"]):
+            try:
+                args = proc.info.get("cmdline") or []
+                name = str(proc.info.get("name") or "").lower()
+                if "chrome" not in name and "chromium" not in name:
+                    continue
+                if port_arg not in args:
+                    continue
+                profiles = [arg[len(profile_arg):] for arg in args if arg.startswith(profile_arg)]
+                if not profiles or os.path.normcase(os.path.abspath(profiles[0])) != profile:
+                    continue
+                started = float(proc.info.get("create_time") or 0)
+                if proc.pid == session.pid and session.process_started_at and started != session.process_started_at:
+                    continue  # PID was reused by a different Chrome instance.
+                return proc.pid, started
+            except (OSError, ValueError, TypeError):
+                continue
+    except Exception:  # Process exit/access errors cannot establish ownership.
+        pass
+    return 0, 0.0
+
+
+def _session_scope_error(session: CDPSession, params: Dict[str, Any]) -> str:
+    for key in ("tenant_id", "chat_session_id"):
+        stored = str(getattr(session, key, "") or "")
+        requested = str(params.get(key) or "")
+        if stored and stored != requested:
+            return "CDP_SCOPE_MISMATCH"
+        if requested and not stored:
+            return "CDP_LEGACY_SCOPE_REQUIRED"
+    return ""
+
+
+def _adopt_session_process(session: CDPSession, params: Dict[str, Any]) -> bool:
+    pid, started = _owned_browser_process(session)
+    if not pid:
+        return False
+    session.pid = pid
+    session.process_started_at = started
+    CDPSessionManager.save()
+    return True
+
+
+def bind_legacy_session_scope(work_key: str, *, profile_dir: str,
+                              tenant_id: str, chat_session_id: str) -> bool:
+    """Local operator recovery only; deliberately absent from command handlers.
+
+    Confirm the dedicated profile and its live process before binding an old
+    registry entry. Remote command parameters cannot authorize this migration.
+    """
+    if not tenant_id or not chat_session_id:
+        return False
+    with CDPSessionManager._lock:
+        CDPSessionManager._load_locked()
+        session = CDPSessionManager._sessions.get(CDPSessionManager.normalize_work_key(work_key))
+        if (not session or session.tenant_id or session.chat_session_id
+                or not _is_managed_profile_dir(session.profile_dir)
+                or os.path.normcase(os.path.abspath(session.profile_dir)) != os.path.normcase(os.path.abspath(profile_dir))):
+            return False
+        pid, started = _owned_browser_process(session)
+        if not pid:
+            return False
+        session.pid, session.process_started_at = pid, started
+        session.tenant_id, session.chat_session_id = tenant_id, chat_session_id
+        CDPSessionManager._save_locked()
+        return True
+
+
+def command_scope_error(params: Dict[str, Any]) -> Dict[str, Any] | None:
+    """Validate both explicit work key and resolved port before any CDP I/O."""
+    work_key = _work_key_from_params(params)
+    session = CDPSessionManager.get_session(work_key)
+    port = _effective_port(params)
+    owner = CDPSessionManager.get_by_port(port)
+    if session and session.port != port:
+        return _ownership_error("CDP_PORT_MISMATCH", work_key, port)
+    if owner and owner.work_key != work_key:
+        return _ownership_error("CDP_PORT_MISMATCH", work_key, port)
+    if session:
+        code = _session_scope_error(session, params)
+        if code:
+            return _ownership_error(code, work_key, port)
+    elif params.get("tenant_id") or params.get("chat_session_id"):
+        return _ownership_error("CDP_SESSION_REQUIRED", work_key, port)
+    return None
+
+
+def _ownership_error(code: str, work_key: str, port: int) -> Dict[str, Any]:
+    return {"status": "error", "data": {"error_code": code, "work_key": work_key, "port": port}}
 
 
 def _resolve_timeout(
@@ -1823,7 +1994,7 @@ async def browser_tabs(params: Dict[str, Any]) -> Dict[str, Any]:
 
 async def browser_health(params: Dict[str, Any]) -> Dict[str, Any]:
     """CDP 세션 건강 확인 + stale 세션 정리. params: work_key(선택), cleanup(선택, 기본true)."""
-    work_key = CDPSessionManager.normalize_work_key(params.get("work_key", "general"))
+    work_key = _work_key_from_params(params)
     do_cleanup = bool(params.get("cleanup", True))
     port = _effective_port(params)
     guard_key = CDPCommandGuardManager._guard_key({"work_key": work_key}, port=port)
@@ -1831,6 +2002,11 @@ async def browser_health(params: Dict[str, Any]) -> Dict[str, Any]:
 
     session = CDPSessionManager.get_session(work_key)
     if session:
+        if "port" in params and _coerce_port(params.get("port")) != session.port:
+            return _ownership_error("CDP_PORT_MISMATCH", work_key, session.port)
+        scope_error = _session_scope_error(session, params)
+        if scope_error:
+            return _ownership_error(scope_error, work_key, session.port)
         port = session.port
         guard_key = CDPCommandGuardManager._guard_key({"work_key": work_key}, port=port)
 
@@ -1993,7 +2169,7 @@ def _terminate_browser_process(pid: int) -> dict[str, Any]:
 
 async def browser_close_session(params: Dict[str, Any]) -> Dict[str, Any]:
     """Close a managed browser session for one work_key and release CDP bookkeeping."""
-    work_key = CDPSessionManager.normalize_work_key(params.get("work_key", "general"))
+    work_key = _work_key_from_params(params)
     close_tabs = _as_bool(params.get("close_tabs", True), default=True)
     close_browser = _as_bool(params.get("close_browser", True), default=True)
     keep_last = _as_bool(params.get("keep_last", False), default=False)
@@ -2013,6 +2189,11 @@ async def browser_close_session(params: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     port = session.port
+    if "port" in params and _coerce_port(params.get("port")) != port:
+        return _ownership_error("CDP_PORT_MISMATCH", work_key, port)
+    scope_error = _session_scope_error(session, params)
+    if scope_error:
+        return _ownership_error(scope_error, work_key, port)
     managed_profile = _is_managed_profile_dir(session.profile_dir)
     if not managed_profile and not allow_unmanaged_profile_close:
         CDPCommandGuardManager.force_release(CDPCommandGuardManager._guard_key({"work_key": work_key}, port=port))
@@ -2037,6 +2218,17 @@ async def browser_close_session(params: Dict[str, Any]) -> Dict[str, Any]:
                 "reason": reason,
             },
         }
+
+    owned = _adopt_session_process(session, params)
+    if not owned:
+        if not _as_bool(params.get("force_cleanup")):
+            return _ownership_error("CDP_OWNER_MISMATCH", work_key, port)
+        # Explicit recovery only forgets bookkeeping. It cannot close a foreign Chrome.
+        CDPCommandGuardManager.force_release(CDPCommandGuardManager._guard_key({"work_key": work_key}, port=port))
+        CDPSessionManager.release(work_key)
+        return {"status": "success", "data": {"work_key": work_key, "port": port,
+                "session_released": True, "closed_tabs": 0,
+                "process": {"attempted": False, "reason": "owner_unverified"}}}
 
     closed: list[dict[str, Any]] = []
     remaining = 0
@@ -2105,7 +2297,7 @@ async def browser_close_session(params: Dict[str, Any]) -> Dict[str, Any]:
 async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
     """Chrome CDP 전용 세션 시작 (전용 프로필 + 동적 포트 충돌 회피)."""
     url = params.get("url", "about:blank")
-    work_key = CDPSessionManager.normalize_work_key(str(params.get("work_key", "general")))
+    work_key = _work_key_from_params(params)
 
     # OS별 Chrome 경로
     if sys.platform == "win32":
@@ -2128,7 +2320,10 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
         if not chrome_exe:
             chrome_exe = chrome_paths[0]  # 기본값 시도
 
-    profile_dir = _resolve_profile_dir(params)
+    existing_session = CDPSessionManager.get_session(work_key)
+    # No explicit profile request means reuse the proven registered profile.
+    profile_dir = (existing_session.profile_dir if existing_session and not params.get("user_data_dir")
+                   else _resolve_profile_dir(params))
     ports = _candidate_ports(params)
     preferred = _coerce_port(params.get("preferred_port", params.get("port", CDP_PORT)), CDP_PORT)
     new_window = _as_bool(params.get("new_window", False), default=False)
@@ -2140,8 +2335,17 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
 
         existing_session = CDPSessionManager.get_session(work_key)
         if existing_session:
+            if os.path.normcase(os.path.abspath(existing_session.profile_dir)) != os.path.normcase(os.path.abspath(profile_dir)):
+                return _ownership_error("CDP_PROFILE_MISMATCH", work_key, existing_session.port)
+            if "port" in params and _coerce_port(params.get("port")) != existing_session.port:
+                return _ownership_error("CDP_PORT_MISMATCH", work_key, existing_session.port)
+            scope_error = _session_scope_error(existing_session, params)
+            if scope_error:
+                return _ownership_error(scope_error, work_key, existing_session.port)
             existing = await _probe_cdp_version(existing_session.port)
             if existing is not None:
+                if not _adopt_session_process(existing_session, params):
+                    return _ownership_error("CDP_OWNER_MISMATCH", work_key, existing_session.port)
                 if work_key.startswith("yeoljeong-bank-") and not await _bank_work_key_port_matches_url(
                     existing_session.port,
                     str(url or ""),
@@ -2202,13 +2406,21 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
             if existing is not None:
                 owner = CDPSessionManager.get_by_port(port)
                 if owner and owner.work_key == work_key:
+                    if os.path.normcase(os.path.abspath(owner.profile_dir)) != os.path.normcase(os.path.abspath(profile_dir)):
+                        return _ownership_error("CDP_PROFILE_MISMATCH", work_key, port)
+                    scope_error = _session_scope_error(owner, params)
+                    if scope_error:
+                        return _ownership_error(scope_error, work_key, port)
+                    if not _adopt_session_process(owner, params):
+                        return _ownership_error("CDP_OWNER_MISMATCH", work_key, port)
                     if work_key.startswith("yeoljeong-bank-") and not await _bank_work_key_port_matches_url(
                         port,
                         str(url or ""),
                     ):
                         CDPSessionManager.release(work_key)
                         continue
-                    CDPSessionManager.register(work_key, port, profile_dir, pid=owner.pid)
+                    CDPSessionManager.register(work_key, port, profile_dir, pid=owner.pid,
+                        tenant_id=owner.tenant_id, chat_session_id=owner.chat_session_id)
                     return {
                         "status": "success",
                         "data": {
@@ -2217,52 +2429,6 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
                             "user_data_dir": profile_dir,
                             "cdp_ready": True,
                             "websocket_debugger_url": existing.get("webSocketDebuggerUrl", ""),
-                        },
-                    }
-                if work_key == "general" and owner is None:
-                    CDPSessionManager.register(work_key, port, profile_dir)
-                    return {
-                        "status": "success",
-                        "data": {
-                            "message": f"기존 CDP 세션 사용 (port {port})",
-                            "port": port,
-                            "user_data_dir": profile_dir,
-                            "cdp_ready": True,
-                            "websocket_debugger_url": existing.get("webSocketDebuggerUrl", ""),
-                        },
-                    }
-                if (
-                    work_key.startswith("yeoljeong-bank-")
-                    and owner is None
-                    and await _bank_work_key_port_matches_url(port, str(url or ""))
-                ):
-                    CDPSessionManager.register(work_key, port, profile_dir)
-                    navigated = False
-                    navigate_error = ""
-                    if str(url or "").strip() and str(url).strip() != "about:blank":
-                        try:
-                            navigate_result = await browser_navigate(
-                                {
-                                    **params,
-                                    "url": str(url),
-                                    "port": port,
-                                    "work_key": work_key,
-                                    "reuse_tab": False,
-                                }
-                            )
-                            navigated = isinstance(navigate_result, dict) and navigate_result.get("status") == "success"
-                        except Exception as exc:
-                            navigate_error = str(exc)[:200]
-                    return {
-                        "status": "success",
-                        "data": {
-                            "message": f"기존 은행 CDP 세션 재등록 (port {port})",
-                            "port": port,
-                            "user_data_dir": profile_dir,
-                            "cdp_ready": True,
-                            "websocket_debugger_url": existing.get("webSocketDebuggerUrl", ""),
-                            "navigated": navigated,
-                            "navigate_error": navigate_error,
                         },
                     }
                 # 다른 work_key 또는 외부 CDP가 이미 점유한 포트는 재사용하지 않는다.
@@ -2289,7 +2455,9 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
             if ready is None:
                 continue
 
-            CDPSessionManager.register(work_key, port, profile_dir, pid=int(proc.pid or 0))
+            CDPSessionManager.register(work_key, port, profile_dir, pid=int(proc.pid or 0),
+                tenant_id=str(params.get("tenant_id") or ""),
+                chat_session_id=str(params.get("chat_session_id") or ""))
             logger.info("Chrome CDP 시작 완료 (port=%d profile=%s work_key=%s)", port, profile_dir, work_key)
             logger.info(
                 "browser_launch_window_layout work_key=%s port=%d position=%s size=%s policy=%s",
@@ -2328,7 +2496,9 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
             proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             ready = await _wait_cdp_ready(port, ready_timeout)
             if ready is not None:
-                CDPSessionManager.register(work_key, port, profile_dir, pid=int(proc.pid or 0))
+                CDPSessionManager.register(work_key, port, profile_dir, pid=int(proc.pid or 0),
+                    tenant_id=str(params.get("tenant_id") or ""),
+                    chat_session_id=str(params.get("chat_session_id") or ""))
                 return {
                     "status": "success",
                     "data": {
@@ -2360,3 +2530,26 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": "CDP_NOT_READY"}}
+
+
+def _scope_checked(handler):
+    from functools import wraps
+
+    @wraps(handler)
+    async def checked(params):
+        denied = command_scope_error(params)
+        if denied:
+            return denied
+        return await handler(params)
+    return checked
+
+
+# Wrap public operations, including direct calls and command-dispatch imports.
+# Launch validates scope itself because a new session may not exist yet.
+for _command_name in (
+    "browser_navigate", "browser_click", "browser_fill", "browser_press_key",
+    "browser_select_option", "browser_check", "browser_file_upload",
+    "browser_download", "browser_screenshot", "browser_get_text", "browser_eval",
+    "browser_tabs", "browser_health", "browser_close_tab", "browser_close_session",
+):
+    globals()[_command_name] = _scope_checked(globals()[_command_name])

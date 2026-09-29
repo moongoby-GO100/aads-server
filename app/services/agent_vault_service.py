@@ -49,16 +49,26 @@ def _json_dict(value: Any) -> dict[str, Any]:
 
 def _row_to_credential(row: Any, *, include_secret: bool = False) -> dict[str, Any]:
     item = dict(row)
+    metadata = _json_dict(item.get("metadata"))
+    origin = normalize_origin(str(item["origin"]))
+    login_url = str(metadata.get("login_url") or "").strip()
+    login_parsed = urlparse(login_url)
+    if login_url and (
+        normalize_origin(login_url) != origin or login_parsed.username or login_parsed.password
+        or login_parsed.query or login_parsed.fragment
+    ):
+        login_url = ""
     result = {
         "id": str(item["id"]),
         "tenant_id": str(item["tenant_id"]),
         "work_key": item["work_key"],
-        "origin": item["origin"],
+        "origin": origin,
+        "login_url": login_url,
         "label": item["label"],
         "username": decrypt_value(item["username_enc"]),
         "password": "********",
-        "metadata": _json_dict(item.get("metadata")),
-        "is_active": item["is_active"],
+        "metadata": mask_sensitive_value(metadata),
+        "is_active": item.get("is_active"),
         "last_used_at": item["last_used_at"].isoformat() if item.get("last_used_at") else None,
         "created_at": item["created_at"].isoformat() if item.get("created_at") else None,
         "updated_at": item["updated_at"].isoformat() if item.get("updated_at") else None,
@@ -95,6 +105,7 @@ async def get_agent_credential_for_url(
     tenant_id: str,
     url: str,
     work_key: str | None = None,
+    username: str | None = None,
     user_id: str = "browser-e2e",
 ) -> dict[str, Any] | None:
     """Return the best active Agent Vault credential for a browser URL.
@@ -103,39 +114,23 @@ async def get_agent_credential_for_url(
     manager without exposing plaintext in tool output or browser history.
     """
     origin_norm = normalize_origin(url)
+    if not work_key or not urlparse(origin_norm).scheme or not urlparse(origin_norm).netloc:
+        return None
     async with get_pool().acquire() as conn:
+        conditions = ["tenant_id = $1", "origin = $2", "is_active = TRUE"]
+        args: list[Any] = [_tenant_uuid(tenant_id), origin_norm]
         if work_key:
-            row = await conn.fetchrow(
-                """
-                SELECT *
-                  FROM agent_vault_credentials
-                 WHERE tenant_id = $1
-                   AND origin = $2
-                   AND is_active = TRUE
-                 ORDER BY CASE WHEN work_key = $3 THEN 0 ELSE 1 END,
-                          label
-                 LIMIT 1
-                """,
-                _tenant_uuid(tenant_id),
-                origin_norm,
-                work_key,
-            )
-        else:
-            row = await conn.fetchrow(
-                """
-                SELECT *
-                  FROM agent_vault_credentials
-                 WHERE tenant_id = $1
-                   AND origin = $2
-                   AND is_active = TRUE
-                 ORDER BY label
-                 LIMIT 1
-                """,
-                _tenant_uuid(tenant_id),
-                origin_norm,
-            )
-        if not row:
+            args.append(work_key)
+            conditions.append(f"work_key = ${len(args)}")
+        rows = await conn.fetch(
+            f"SELECT * FROM agent_vault_credentials WHERE {' AND '.join(conditions)}",
+            *args,
+        )
+        if username:
+            rows = [row for row in rows if decrypt_value(row["username_enc"]) == username]
+        if len(rows) != 1:
             return None
+        row = rows[0]
         await write_access_log(
             conn=conn,
             tenant_id=tenant_id,

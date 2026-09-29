@@ -78,6 +78,9 @@ async def request_registration(
     requested_by: str = "",
 ) -> dict[str, Any]:
     """Persist a dry-run draft. It is not visible to the recipe player yet."""
+    from app.services.work_recipe.shinhan_corporate_manual import validate_manifest
+
+    validate_manifest(recipe)
     tenant = _tenant_uuid(tenant_id)
     domain = store.normalize_domain(recipe.domain)
     proposed_version = await store.next_version(name=recipe.name, domain=domain, tenant_id=tenant)
@@ -185,6 +188,9 @@ async def decide_registration(
 
         spec = _json_object(row["spec"])
         recipe = parse_recipe(spec)
+        from app.services.work_recipe.shinhan_corporate_manual import validate_manifest
+
+        validate_manifest(recipe)
         lock_key = f"{tenant}:{row['domain']}:{row['name']}"
         await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lock_key)
         version = int(

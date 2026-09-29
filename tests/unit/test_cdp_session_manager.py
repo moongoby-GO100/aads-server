@@ -106,6 +106,7 @@ class TestCDPSessionManager:
 
 @pytest.mark.asyncio
 async def test_browser_close_session_releases_session_and_guard(monkeypatch):
+    monkeypatch.setattr("browser_auto._owned_browser_process", lambda session: (1234, 100.0))
     CDPSessionManager._sessions.clear()
     CDPCommandGuardManager._guards.clear()
     CDPSessionManager.register("aads-ceo-browser", 9444, os.path.join(_default_profile_root(), "isolated-aads-ceo-browser"), pid=1234)
@@ -155,6 +156,7 @@ async def test_browser_close_session_refuses_unmanaged_user_profile(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_browser_launch_navigates_existing_work_key_session(monkeypatch):
+    monkeypatch.setattr("browser_auto._owned_browser_process", lambda session: (1234, 100.0))
     CDPSessionManager._sessions.clear()
     CDPSessionManager.register(
         "yeoljeong-delivery-coupangeats-biz-junghwa-test",
@@ -240,7 +242,7 @@ async def test_bank_work_key_port_accepts_requested_bank_target(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_browser_launch_registers_ownerless_matching_bank_port(monkeypatch):
+async def test_browser_launch_does_not_adopt_ownerless_matching_bank_port(monkeypatch):
     CDPSessionManager._sessions.clear()
 
     async def fake_probe(port):
@@ -268,6 +270,7 @@ async def test_browser_launch_registers_ownerless_matching_bank_port(monkeypatch
     monkeypatch.setattr("browser_auto._list_cdp_targets", fake_list_targets)
     monkeypatch.setattr("browser_auto.browser_navigate", fake_browser_navigate)
 
+    monkeypatch.setattr("browser_auto.subprocess.Popen", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
     result = await browser_launch(
         {
             "work_key": "yeoljeong-bank-shinhan-individual-abc",
@@ -276,11 +279,10 @@ async def test_browser_launch_registers_ownerless_matching_bank_port(monkeypatch
         }
     )
 
-    assert result["status"] == "success"
-    assert result["data"]["port"] == 9222
-    assert "재등록" in result["data"]["message"]
-    assert CDPSessionManager.get_session("yeoljeong-bank-shinhan-individual-abc").port == 9222
-    assert navigations[0]["reuse_tab"] is False
+    # Matching bank URL is not ownership proof; no foreign tab may be navigated.
+    assert result["status"] == "error"
+    assert CDPSessionManager.get_session("yeoljeong-bank-shinhan-individual-abc") is None
+    assert navigations == []
 
 
 @pytest.mark.asyncio

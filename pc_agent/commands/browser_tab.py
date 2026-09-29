@@ -139,6 +139,11 @@ async def _open(params: dict) -> dict:
 
 async def execute(params: dict) -> dict:
     try:
+        denied = cdp.command_scope_error(params)
+        if denied:
+            if denied.get("data", {}).get("error_code") == "CDP_PORT_MISMATCH":
+                raise ValueError("tab_profile_mismatch")
+            return denied
         op = params.get('op')
         if op == 'open':
             data = await _open(params)

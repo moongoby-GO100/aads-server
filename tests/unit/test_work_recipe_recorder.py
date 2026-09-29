@@ -1,7 +1,55 @@
 from __future__ import annotations
 
+import pytest
+
 from app.services.work_recipe import orchestrator
 from app.services.work_recipe import recorder as recorder_module
+
+
+@pytest.mark.parametrize("action,arguments", [
+    ("click", {"selector": ".primary"}),
+    ("press", {"selector": "body", "value": "Enter"}),
+])
+async def test_split_login_submission_keeps_external_approval_gate(monkeypatch, action, arguments):
+    from app.services.work_recipe.guard import classify_step, requires_approval
+
+    captured = {}
+
+    async def request_registration(recipe, **kwargs):
+        captured["recipe"] = recipe
+        return {"status": "pending"}
+
+    monkeypatch.setattr(recorder_module.registration, "request_registration", request_registration)
+    recording = recorder_module.start_recording(
+        "coupangeats_03_login_confirm", "store.coupangeats.com", "tenant-1"
+    )
+    recording.record_step({"action": action, "risk": "READ", **arguments})
+    await recording.finish_recording()
+
+    recipe = captured["recipe"]
+    assert recipe.max_risk() == "WRITE_EXTERNAL"
+    assert requires_approval(classify_step(recipe.steps[0], domain=recipe.domain))
+
+
+def test_recorded_secret_input_protects_later_generic_submit():
+    from app.services.work_recipe.guard import classify_step, requires_approval
+
+    recording = recorder_module.start_recording("merchant_access", "example.com", "tenant-1")
+    recording.record_step({"action": "fill", "selector": "#opaque", "secret": True, "value": "not-stored"})
+    submit = recording.record_step({"action": "click", "selector": "#opaque-submit", "risk": "READ"})
+    assert requires_approval(classify_step(submit, domain=recording.domain))
+
+
+def test_auth_submission_never_downgrades_irreversible_risk():
+    recording = recorder_module.start_recording("login_confirm", "example.com", "tenant-1")
+    step = recording.record_step({"action": "click", "selector": ".primary", "risk": "IRREVERSIBLE"})
+    assert step.risk == "IRREVERSIBLE"
+
+
+def test_non_auth_recording_preserves_read_only_click():
+    recording = recorder_module.start_recording("sales_period", "example.com", "tenant-1")
+    step = recording.record_step({"action": "click", "selector": ".next-page", "risk": "READ"})
+    assert step.risk == "READ"
 
 
 async def test_recorder_replaces_credentials_before_saving(monkeypatch):

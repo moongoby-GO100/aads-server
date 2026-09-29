@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import inspect
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -260,6 +261,9 @@ class _FakeAgentVaultLoginLocator:
     async def fill(self, value: str, *, timeout: int) -> None:
         self.page.events.append(("fill", self.selector, value, str(timeout)))
 
+    async def evaluate(self, _script: str) -> bool:
+        return any(event[0] == "fill" and event[1] == self.selector and bool(event[2]) for event in self.page.events)
+
     async def click(self, *, timeout: int) -> None:
         self.page.events.append(("click", self.selector, str(timeout)))
         self.page.url = "https://v2.newtalk.kr/dashboard"
@@ -328,6 +332,7 @@ async def test_apply_aads_e2e_url_injects_token_and_preserves_fragment() -> None
 @pytest.mark.asyncio
 async def test_agent_vault_login_uses_generic_form_and_marks_used(monkeypatch: pytest.MonkeyPatch) -> None:
     marked: dict[str, object] = {}
+    monkeypatch.setattr(ceo_chat_tools, "_inject_agent_vault_api_login_token", AsyncMock(return_value=False))
 
     async def fake_mark_agent_credential_used(**kwargs):  # noqa: ANN003
         marked.update(kwargs)
@@ -344,6 +349,7 @@ async def test_agent_vault_login_uses_generic_form_and_marks_used(monkeypatch: p
         {
             "id": "00000000-0000-0000-0000-000000000011",
             "origin": "https://v2.newtalk.kr",
+            "login_url": "https://v2.newtalk.kr/auth/login",
             "work_key": "aads-ceo-browser",
             "username": "admin@example.test",
             "password": "secret-password",
@@ -354,7 +360,7 @@ async def test_agent_vault_login_uses_generic_form_and_marks_used(monkeypatch: p
     )
 
     assert ok is True
-    assert ("goto", "https://v2.newtalk.kr/login", "domcontentloaded", "15000") in page.events
+    assert ("goto", "https://v2.newtalk.kr/auth/login", "domcontentloaded", "15000") in page.events
     assert any(event[:3] == ("fill", "input[type='password']", "secret-password") for event in page.events)
     assert marked["credential_id"] == "00000000-0000-0000-0000-000000000011"
     assert marked["origin"] == "https://v2.newtalk.kr"
@@ -397,6 +403,7 @@ async def test_pre_inject_vault_token_uses_current_login_redirect_origin(monkeyp
         "https://www.marketbom.com/dashboard",
         tenant_id="00000000-0000-0000-0000-000000000012",
         browser_work_key="aads-ceo-browser",
+        browser_username="admin@example.test",
     )
 
     assert ok is True
@@ -405,6 +412,73 @@ async def test_pre_inject_vault_token_uses_current_login_redirect_origin(monkeyp
         "https://auth.marketbom.com/login?redirect=%2Fdashboard",
     ]
     assert any(event[:3] == ("fill", "input[type='password']", "secret-password") for event in page.events)
+
+
+@pytest.mark.asyncio
+async def test_agent_vault_autologin_requires_explicit_exact_username(monkeypatch: pytest.MonkeyPatch) -> None:
+    lookup = AsyncMock(return_value={"id": "other-account"})
+    monkeypatch.setattr("app.services.agent_vault_service.get_agent_credential_for_url", lookup)
+    page = _FakeAgentVaultLoginPage()
+
+    assert await ceo_chat_tools._agent_vault_login(
+        page, "https://store.coupangeats.com/merchant/login", tenant_id="00000000-0000-0000-0000-000000000012"
+    ) is False
+    lookup.assert_not_awaited()
+    lookup.return_value = None
+    assert await ceo_chat_tools._agent_vault_login(
+        page, "https://store.coupangeats.com/merchant/login", tenant_id="00000000-0000-0000-0000-000000000012",
+        browser_work_key="aads", username="yunhee1",
+    ) is False
+    assert lookup.await_args.kwargs["username"] == "yunhee1"
+    assert lookup.await_args.kwargs["work_key"] == "aads"
+
+
+@pytest.mark.asyncio
+async def test_browser_navigate_dispatch_passes_requested_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    navigate = AsyncMock(return_value="[탐색 완료]")
+    monkeypatch.setattr(ceo_chat_tools, "tool_browser_navigate", navigate)
+    result = await ceo_chat_tools.execute_tool(
+        "browser_navigate",
+        {"url": "https://aads.newtalk.kr/", "browser_work_key": "aads", "browser_username": "yunhee1"},
+        dsn="",
+    )
+    assert result == "[탐색 완료]"
+    assert navigate.await_args.kwargs["browser_username"] == "yunhee1"
+    assert "close_on_complete" not in navigate.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_credential_test_login_uses_agent_vault_metadata_login_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    credential_id = "00000000-0000-0000-0000-000000000011"
+    tenant_id = "00000000-0000-0000-0000-000000000012"
+    login_url = "https://store.coupangeats.com/merchant/login"
+    monkeypatch.setattr(ceo_chat_tools, "_resolve_login_test_credential_id", AsyncMock(return_value=(credential_id, "")))
+    monkeypatch.setattr("app.core.credential_vault.get_credential", AsyncMock(return_value=None))
+    monkeypatch.setattr("app.core.credential_vault.decrypt_value", lambda value: value)
+    monkeypatch.setattr("app.services.agent_vault_service.decrypt_value", lambda value: value)
+
+    class FakePool:
+        async def fetchrow(self, *_args):
+            return {"id": credential_id, "tenant_id": tenant_id, "work_key": "aads",
+                    "origin": "https://store.coupangeats.com", "label": "requested-account",
+                    "username_enc": "requested-account", "password_enc": "fixture-placeholder",
+                    "metadata": {"login_url": login_url}, "is_active": True}
+
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: FakePool())
+    page = AsyncMock(url=login_url)
+    context = AsyncMock()
+    context.new_page.return_value = page
+    monkeypatch.setattr("app.browser_bridge.aads_adapter.acquire_browser_context", AsyncMock(return_value=(context, None)))
+    observed = {}
+
+    async def fake_login(_page, credential, _url, **_kwargs):
+        observed["login_url"] = credential["login_url"]
+        return True
+
+    monkeypatch.setattr(ceo_chat_tools, "_login_with_agent_vault_credential", fake_login)
+    result = await ceo_chat_tools.tool_credential_test_login(credential_id, tenant_id=tenant_id)
+    assert "status: success" in result
+    assert observed["login_url"] == login_url
 
 
 def test_browser_e2e_vault_autologin_is_not_limited_to_newtalk_domains() -> None:
@@ -565,7 +639,7 @@ async def test_agent_vault_login_go100_uses_direct_token_injection(monkeypatch: 
         {
             "id": "00000000-0000-0000-0000-000000000011",
             "origin": "https://go100.newtalk.kr",
-            "work_key": "aads-ceo-browser",
+            "work_key": "go100-e2e",
             "username": "admin@go100.com",
             "password": "secret-password",
         },
@@ -650,7 +724,7 @@ async def test_agent_vault_login_go100_defaults_login_return_path(monkeypatch: p
         {
             "id": "00000000-0000-0000-0000-000000000011",
             "origin": "https://go100.newtalk.kr",
-            "work_key": "aads-ceo-browser",
+            "work_key": "go100-e2e",
             "username": "admin@go100.com",
             "password": "secret-password",
         },
@@ -788,6 +862,7 @@ async def test_credential_test_login_agent_vault_times_out_to_api_fallback(monke
 
     monkeypatch.setattr("app.core.credential_vault.get_credential", fake_get_credential)
     monkeypatch.setattr("app.core.credential_vault.decrypt_value", lambda value: value)
+    monkeypatch.setattr("app.services.agent_vault_service.decrypt_value", lambda value: value)
     monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _FakePool())
     monkeypatch.setattr("app.browser_bridge.aads_adapter.acquire_browser_context", fake_acquire_browser_context)
     monkeypatch.setattr("aiohttp.ClientSession", _FakeSession)
@@ -858,6 +933,7 @@ async def test_credential_test_login_agent_vault_aads_uses_api_login_fast_path(m
 
     monkeypatch.setattr("app.core.credential_vault.get_credential", fake_get_credential)
     monkeypatch.setattr("app.core.credential_vault.decrypt_value", lambda value: value)
+    monkeypatch.setattr("app.services.agent_vault_service.decrypt_value", lambda value: value)
     monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _FakePool())
     monkeypatch.setattr("app.browser_bridge.aads_adapter.acquire_browser_context", fake_acquire_browser_context)
     monkeypatch.setattr("app.services.agent_vault_service.mark_agent_credential_used", fake_mark_agent_credential_used)
@@ -937,14 +1013,16 @@ async def test_credential_test_login_agent_vault_go100_uses_api_login_fast_path(
             marked["ssl"] = ssl
             return _FakeResponse()
 
-    async def fake_acquire_browser_context(**_kwargs):  # noqa: ANN003
-        raise AssertionError("GO100 API login fast-path must not open Browser Bridge")
-
-    async def fake_mark_agent_credential_used(**kwargs):  # noqa: ANN003
-        marked["used"] = kwargs
+    fake_acquire_browser_context = AsyncMock(
+        side_effect=AssertionError("GO100 API login fast-path must not open Browser Bridge")
+    )
+    fake_mark_agent_credential_used = AsyncMock(
+        side_effect=lambda **kwargs: marked.update(used=kwargs)
+    )
 
     monkeypatch.setattr("app.core.credential_vault.get_credential", fake_get_credential)
     monkeypatch.setattr("app.core.credential_vault.decrypt_value", lambda value: value)
+    monkeypatch.setattr("app.services.agent_vault_service.decrypt_value", lambda value: value)
     monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _FakePool())
     monkeypatch.setattr("app.browser_bridge.aads_adapter.acquire_browser_context", fake_acquire_browser_context)
     monkeypatch.setattr("app.services.agent_vault_service.mark_agent_credential_used", fake_mark_agent_credential_used)
@@ -999,3 +1077,31 @@ def test_local_agent_page_exposes_playwright_is_closed_contract() -> None:
     page = object.__new__(_LocalAgentPage)
 
     assert page.is_closed() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mismatch", ["tenant", "work_key", "target", "redirect"])
+async def test_agent_vault_refuses_mismatched_scope_before_secret_fill(monkeypatch, mismatch):
+    credential = {
+        "id": "credential-fixture", "tenant_id": "tenant-a", "work_key": "work-a",
+        "origin": "https://store.coupangeats.com",
+        "login_url": "https://store.coupangeats.com/merchant/login",
+        "username": "fixture-user", "password": "fixture-password",
+    }
+    page = _FakeAgentVaultLoginPage()
+    target = "https://store.coupangeats.com/merchant/login"
+    if mismatch == "tenant":
+        credential["tenant_id"] = "tenant-b"
+    elif mismatch == "work_key":
+        credential["work_key"] = "work-b"
+    elif mismatch == "target":
+        target = "https://unrelated.example/login"
+    else:
+        async def redirected(*args, **kwargs):
+            page.url = "https://unrelated.example/login"
+        page.goto = redirected
+    result = await ceo_chat_tools._login_with_agent_vault_credential(
+        page, credential, target, tenant_id="tenant-a", browser_work_key="work-a",
+    )
+    assert result is False
+    assert not any(event[0] in {"fill", "click"} for event in page.events)
