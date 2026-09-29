@@ -1456,8 +1456,13 @@ async def lifespan(app: FastAPI):
                 "CLAUDE_RELAY_URL", "http://host.docker.internal:8199"
             ).rstrip("/")
             try:
+                from app.api.ops import _load_relay_secret
+
                 async with httpx.AsyncClient(timeout=5) as c:
-                    relay_response = await c.get(f"{relay_url}/health")
+                    relay_response = await c.get(
+                        f"{relay_url}/health",
+                        headers={"X-Claude-Relay-Secret": _load_relay_secret()},
+                    )
                 relay_response.raise_for_status()
                 relay_health = relay_response.json()
                 slot_auth = relay_health.get("slot_auth") or {}

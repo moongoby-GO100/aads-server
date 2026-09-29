@@ -1048,7 +1048,10 @@ async def _relay_clear_aads_session_for_oauth_fallback(session_id: Optional[str]
         return
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
-            resp = await client.delete("{}/sessions/{}".format(_CLAUDE_RELAY_URL, session_id))
+            resp = await client.delete(
+                "{}/sessions/{}".format(_CLAUDE_RELAY_URL, session_id),
+                headers={"X-Claude-Relay-Secret": _load_relay_shared_secret()},
+            )
             if resp.status_code not in (200, 404):
                 logger.warning("relay_session_clear: HTTP %s", resp.status_code)
     except Exception as ex:
@@ -3777,7 +3780,10 @@ async def _stream_cli_relay_once(
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
             # Health check first (빠른 실패)
             try:
-                hc = await client.get(f"{_CLAUDE_RELAY_URL}/health", timeout=5.0)
+                hc = await client.get(
+                    f"{_CLAUDE_RELAY_URL}/health",
+                    headers={"X-Claude-Relay-Secret": _load_relay_shared_secret()}, timeout=5.0,
+                )
                 if hc.status_code != 200:
                     yield {"type": "error", "content": f"CLI Relay not healthy: {hc.status_code}"}
                     return
@@ -3803,6 +3809,7 @@ async def _stream_cli_relay_once(
                 "POST",
                 f"{_CLAUDE_RELAY_URL}/stream",
                 json=req_body,
+                headers={"X-Claude-Relay-Secret": _load_relay_shared_secret()},
                 timeout=httpx.Timeout(600.0, connect=10.0),
             ) as resp:
                 if resp.status_code != 200:
@@ -4397,7 +4404,10 @@ async def _stream_codex_relay_once(
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
             try:
-                hc = await client.get(f"{_CLAUDE_RELAY_URL}/health", timeout=5.0)
+                hc = await client.get(
+                    f"{_CLAUDE_RELAY_URL}/health",
+                    headers={"X-Claude-Relay-Secret": _load_relay_shared_secret()}, timeout=5.0,
+                )
                 if hc.status_code != 200:
                     yield {"type": "error", "content": f"Codex Relay not healthy: {hc.status_code}"}
                     return
@@ -4406,7 +4416,8 @@ async def _stream_codex_relay_once(
                 return
             async with client.stream(
                 "POST", f"{_CLAUDE_RELAY_URL}/codex-stream",
-                json=req_body, timeout=httpx.Timeout(300.0, connect=10.0),
+                json=req_body, headers={"X-Claude-Relay-Secret": _load_relay_shared_secret()},
+                timeout=httpx.Timeout(300.0, connect=10.0),
             ) as resp:
                 if resp.status_code != 200:
                     body = await resp.aread()
@@ -4620,7 +4631,10 @@ async def _stream_antigravity_relay_once(
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
             try:
-                hc = await client.get(f"{_CLAUDE_RELAY_URL}/health", timeout=5.0)
+                hc = await client.get(
+                    f"{_CLAUDE_RELAY_URL}/health",
+                    headers={"X-Claude-Relay-Secret": _load_relay_shared_secret()}, timeout=5.0,
+                )
                 if hc.status_code != 200:
                     yield {"type": "error", "content": f"Antigravity Relay not healthy: {hc.status_code}"}
                     return
@@ -4629,7 +4643,8 @@ async def _stream_antigravity_relay_once(
                 return
             async with client.stream(
                 "POST", f"{_CLAUDE_RELAY_URL}/antigravity-stream",
-                json=req_body, timeout=httpx.Timeout(300.0, connect=10.0),
+                json=req_body, headers={"X-Claude-Relay-Secret": _load_relay_shared_secret()},
+                timeout=httpx.Timeout(300.0, connect=10.0),
             ) as resp:
                 if resp.status_code != 200:
                     body = await resp.aread()

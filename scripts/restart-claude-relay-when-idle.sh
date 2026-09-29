@@ -8,9 +8,22 @@ poll_sec="${AADS_RELAY_IDLE_POLL_SEC:-5}"
 idle_streak_needed="${AADS_RELAY_IDLE_STREAK_NEEDED:-3}"
 started_at="$(date +%s)"
 idle_streak=0
+secret_file="${CLAUDE_RELAY_SHARED_SECRET_FILE:-$(dirname "$0")/claude_relay_secret.txt}"
+
+relay_health() {
+    local relay_secret
+    if [[ ! -r "$secret_file" ]]; then
+        return 1
+    fi
+    relay_secret="$(<"$secret_file")"
+    if [[ -z "$relay_secret" ]]; then
+        return 1
+    fi
+    curl --max-time 3 -fsS -H "X-Claude-Relay-Secret: $relay_secret" http://127.0.0.1:8199/health
+}
 
 while (( $(date +%s) - started_at < max_wait_sec )); do
-    health="$(curl --max-time 3 -fsS http://127.0.0.1:8199/health 2>/dev/null || true)"
+    health="$(relay_health 2>/dev/null || true)"
     lease_count="$(printf '%s' "$health" | python3 -c 'import json,sys; print(int(json.load(sys.stdin).get("lease_count", -1)))' 2>/dev/null || echo -1)"
     if [[ "$lease_count" == "0" ]]; then
         idle_streak=$((idle_streak + 1))
@@ -20,7 +33,7 @@ while (( $(date +%s) - started_at < max_wait_sec )); do
     if (( idle_streak >= idle_streak_needed )); then
         systemctl restart claude-relay.service
         for _ in $(seq 1 15); do
-            health="$(curl --max-time 3 -fsS http://127.0.0.1:8199/health 2>/dev/null || true)"
+            health="$(relay_health 2>/dev/null || true)"
             if printf '%s' "$health" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)

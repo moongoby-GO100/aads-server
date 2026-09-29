@@ -217,8 +217,13 @@ async def _sync_relay_current_slot(slot: str) -> None:
     if not slot:
         return
     try:
+        from app.api.ops import _load_relay_secret
+
         async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
-            await client.post("{}/oauth/switch".format(_CLAUDE_RELAY_URL), json={"slot": slot})
+            await client.post(
+                "{}/oauth/switch".format(_CLAUDE_RELAY_URL), json={"slot": slot},
+                headers={"X-Claude-Relay-Secret": _load_relay_secret()},
+            )
     except Exception as e:
         logger.warning("auth_provider: relay slot sync failed: %s", e)
 

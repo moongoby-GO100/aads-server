@@ -192,7 +192,10 @@ async def relay_capacity():
     global _relay_capacity_cache
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
-            response = await client.get(_RELAY_HEALTH_URL)
+            response = await client.get(
+                _RELAY_HEALTH_URL,
+                headers={"X-Claude-Relay-Secret": _load_relay_secret()},
+            )
             response.raise_for_status()
             normalized = _normalize_relay_capacity(response.json())
             _relay_capacity_cache = (datetime.now(timezone.utc), normalized)
@@ -235,7 +238,10 @@ async def api_key_status():
     relay_cli = {}
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
-            relay = await client.get("http://host.docker.internal:8199/health")
+            relay = await client.get(
+                "http://host.docker.internal:8199/health",
+                headers={"X-Claude-Relay-Secret": _load_relay_secret()},
+            )
             if relay.status_code == 200:
                 relay_cli = relay.json()
     except Exception:

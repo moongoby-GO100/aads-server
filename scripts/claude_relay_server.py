@@ -16,6 +16,7 @@ import asyncio
 import base64
 import binascii
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -381,6 +382,8 @@ class _SemaphoreLease:
 
 
 def _load_relay_secret():
+    # 앱 쪽(app/api/ops.py, health.py, model_selector.py)은 env 를 파일보다 우선한다.
+    # 릴레이만 파일 전용으로 두면 누가 env 를 설정하는 순간 양쪽 시크릿이 갈려 전 경로가 403 이 된다.
     secret = (os.getenv("CLAUDE_RELAY_SHARED_SECRET") or "").strip()
     if secret:
         return secret
@@ -2691,6 +2694,9 @@ async def handle_antigravity_stream(request):
 
 
 async def handle_health(request):
+    # Public health checks expose liveness only; operational details need the secret.
+    if not _relay_secret_ok(request):
+        return web.json_response({"status": "ok"})
     # AADS-191: 세마포어 leak 가시성을 위해 active_leases / semaphore_value 노출
     sem_value = None
     try:
@@ -2954,12 +2960,8 @@ async def _query_codex_rate_limits_all():
 
 async def handle_codex_usage(request):
     """AADS-193: /codex-usage — shared secret 보호 + 60초 캐시."""
-    # shared secret 검증
-    secret_expected = _load_relay_secret()
-    if secret_expected:
-        provided = request.headers.get("X-Claude-Relay-Secret", "")
-        if provided != secret_expected:
-            return web.json_response({"error": "invalid relay secret"}, status=403)
+    if not _relay_secret_ok(request):
+        return web.json_response({"error": "invalid relay secret"}, status=403)
     # 캐시 확인
     now = time.time()
     cached = _CODEX_USAGE_CACHE.get("payload")
@@ -2977,9 +2979,16 @@ async def handle_codex_usage(request):
 
 def _relay_secret_ok(request):
     expected = _load_relay_secret()
-    if not expected:
-        return True
-    return request.headers.get("X-Claude-Relay-Secret", "") == expected
+    return bool(expected) and hmac.compare_digest(
+        request.headers.get("X-Claude-Relay-Secret", ""), expected,
+    )
+
+
+@web.middleware
+async def relay_secret_middleware(request, handler):
+    if request.path != "/health" and not _relay_secret_ok(request):
+        return web.json_response({"error": "invalid relay secret"}, status=403)
+    return await handler(request)
 
 
 async def handle_account_login_start(request):
@@ -3154,7 +3163,9 @@ async def _on_startup(app):
 
 
 def create_app():
-    app = web.Application()
+    if not _load_relay_secret():
+        logger.error("Relay shared secret missing or empty; non-health requests denied")
+    app = web.Application(middlewares=[relay_secret_middleware])
     app.on_startup.append(_on_startup)
     app.router.add_post("/stream", handle_stream)
     app.router.add_post("/codex-stream", handle_codex_stream)
