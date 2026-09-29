@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from datetime import datetime, timezone
 from urllib.request import urlopen
@@ -16,17 +17,16 @@ from scripts.claude_model_contract import EXACT_MODEL_IDS
 
 SLOTS = ("aads-server", "aads-server-green")
 MAX_DISCOVERY_AGE_MINUTES = 24 * 60
+CATALOG_COLUMNS = ("tier", "fallback_group")
+CATALOG_COLUMNS_SQL = """SELECT COALESCE(json_agg(column_name), '[]'::json)
+FROM information_schema.columns
+WHERE table_schema = current_schema() AND table_name = 'llm_models'
+  AND column_name IN ('tier', 'fallback_group')"""
 CATALOG_SQL = """SELECT json_build_object(
-  'tier_column_present', EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = current_schema() AND table_name = 'llm_models' AND column_name = 'tier'),
-  'fallback_group_column_present', EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = current_schema() AND table_name = 'llm_models' AND column_name = 'fallback_group'),
   'selectable_unverified', count(*) FILTER (
     WHERE is_selectable IS TRUE AND COALESCE(verification_status, '') <> 'verified'),
-  'active_null_tier', count(*) FILTER (WHERE is_active IS TRUE AND to_jsonb(m)->>'tier' IS NULL),
-  'active_null_fallback_group', count(*) FILTER (WHERE is_active IS TRUE AND to_jsonb(m)->>'fallback_group' IS NULL)
+  'active_null_tier', count(*) FILTER (WHERE is_active IS TRUE AND tier IS NULL),
+  'active_null_fallback_group', count(*) FILTER (WHERE is_active IS TRUE AND fallback_group IS NULL)
 ) FROM llm_models AS m"""
 DISCOVERY_SQL = """WITH providers AS (
   SELECT provider FROM llm_model_discovery_runs
@@ -40,7 +40,14 @@ DISCOVERY_SQL = """WITH providers AS (
 )
 SELECT COALESCE(json_agg(json_build_object(
   'provider', p.provider, 'status', l.status,
-  'error', CASE WHEN l.error IS NULL THEN NULL ELSE '[redacted]' END,
+  'error_class', CASE
+    WHEN l.error IS NULL THEN NULL
+    WHEN l.error ILIKE '%oauth_runtime_only_models_api_unavailable%' THEN 'models_api_unavailable'
+    WHEN l.error ILIKE '%google_routes_disabled%' THEN 'provider_disabled'
+    WHEN l.error ~* '(^|[^0-9])4[0-9]{2}([^0-9]|$)' THEN 'http_4xx'
+    WHEN l.error ~* '(^|[^0-9])5[0-9]{2}([^0-9]|$)' THEN 'http_5xx'
+    WHEN l.error ~* 'timed?[ -]?out|timeout' THEN 'timeout'
+    ELSE 'unclassified' END,
   'last_run_at', l.created_at, 'last_success_at', s.last_success_at
 ) ORDER BY p.provider), '[]'::json)
 FROM providers p LEFT JOIN latest l USING (provider) LEFT JOIN success s USING (provider)"""
@@ -69,6 +76,14 @@ def read_database(sql: str):
     output = _command(["docker", "exec", "aads-postgres", "psql", "-X", "-q", "-t", "-A",
                        "-v", "ON_ERROR_STOP=1", "-U", "aads", "-d", "aads", "-c", sql])
     return json.loads(output)
+
+
+def read_catalog(db_reader=read_database) -> dict:
+    present = db_reader(CATALOG_COLUMNS_SQL)
+    missing = sorted(set(CATALOG_COLUMNS) - set(present))
+    if missing:
+        return {"status": "column_missing", "missing_columns": missing}
+    return db_reader(CATALOG_SQL)
 
 
 def _timestamp(value: str | None) -> datetime | None:
@@ -101,13 +116,29 @@ def check_slots(slots: dict) -> dict:
 
 
 def check_catalog(catalog: dict) -> dict:
+    if catalog.get("status") == "column_missing":
+        return {"status": "column_missing", "missing_columns": catalog["missing_columns"], "ok": False}
     count_keys = ("selectable_unverified", "active_null_tier", "active_null_fallback_group")
     counts = {key: int(catalog[key]) for key in count_keys}
-    for key in ("tier_column_present", "fallback_group_column_present"):
-        counts[key] = catalog[key] is True
-    counts["ok"] = not any(counts[key] for key in count_keys) and all(
-        counts[key] for key in ("tier_column_present", "fallback_group_column_present"))
+    counts["status"] = "measured"
+    counts["ok"] = not any(counts[key] for key in count_keys)
     return counts
+
+
+def classify_error(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if "oauth_runtime_only_models_api_unavailable" in value:
+        return "models_api_unavailable"
+    if "google_routes_disabled" in value:
+        return "provider_disabled"
+    if re.search(r"(?<!\d)4\d{2}(?!\d)", value, re.I):
+        return "http_4xx"
+    if re.search(r"(?<!\d)5\d{2}(?!\d)", value, re.I):
+        return "http_5xx"
+    if re.search(r"timed?[ -]?out|timeout", value, re.I):
+        return "timeout"
+    return "unclassified"
 
 
 def check_discovery(discovery: list, now: datetime) -> dict:
@@ -116,7 +147,10 @@ def check_discovery(discovery: list, now: datetime) -> dict:
         success = _timestamp(row.get("last_success_at"))
         age = round((now - success).total_seconds() / 60, 2) if success else None
         safe_row = {key: row.get(key) for key in ("provider", "status", "last_run_at", "last_success_at")}
-        safe_row["error"] = "[redacted]" if row.get("error") is not None else None
+        safe_row["error_class"] = (row.get("error_class") if row.get("error_class") in
+                                   {"models_api_unavailable", "provider_disabled", "http_4xx",
+                                    "http_5xx", "timeout", "unclassified"}
+                                   else classify_error(row.get("error")))
         provider_rows.append({**safe_row, "age_minutes": age,
                               "ok": row.get("status") == "ok" and age is not None
                               and 0 <= age <= MAX_DISCOVERY_AGE_MINUTES})
@@ -142,7 +176,7 @@ def collect(*, relay_reader=read_relay, slot_reader=read_slot, db_reader=read_da
     errors = {}
     for name, reader in (("relay_contract", relay_reader),
                          ("slots", lambda: {slot: slot_reader(slot) for slot in SLOTS}),
-                         ("catalog", lambda: db_reader(CATALOG_SQL)),
+                         ("catalog", lambda: read_catalog(db_reader)),
                          ("discovery", lambda: db_reader(DISCOVERY_SQL))):
         try:
             evidence[name] = reader()
