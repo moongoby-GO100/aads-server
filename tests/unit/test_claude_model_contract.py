@@ -47,7 +47,7 @@ def test_direct_execution_sdk_uses_pinned_authenticated_container_cli(monkeypatc
 
 @pytest.mark.parametrize("requested,expected", list(AADS_MODEL_IDS.items()) + [
     ("claude-fable-5.1", "claude-fable-5-1"),
-    ("opus", "claude-opus-5-5"), ("sonnet", "claude-sonnet-5"),
+    ("opus", "claude-opus-5-5"), ("sonnet", "claude-sonnet-5-5"),
 ])
 def test_settings_to_exact_cli_model(requested, expected):
     assert resolve_model(requested) == expected

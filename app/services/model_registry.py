@@ -131,6 +131,7 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "claude-sonnet": (_decimal(3.0), _decimal(15.0)),
     "claude-haiku": (_decimal(1.0), _decimal(5.0)),
     "claude-sonnet-5": (_decimal(2.0), _decimal(10.0)),
+    "claude-sonnet-5-5": (_decimal(2.0), _decimal(10.0)),
     "claude-fable-5": (_decimal(10.0), _decimal(50.0)),
     "claude-fable-5-1": (_decimal(10.0), _decimal(50.0)),
     "gemini-flash": (_decimal(0.075), _decimal(0.3)),
@@ -212,6 +213,7 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
 
 _THINKING_MODELS = {
     "claude-opus-5-5",
+    "claude-sonnet-5-5",
     "claude-sonnet-5",
     "claude-fable-5",
     "claude-fable-5-1",
@@ -249,6 +251,7 @@ _THINKING_MODELS = {
 
 _VISION_MODELS = {
     "claude-opus-5-5",
+    "claude-sonnet-5-5",
     "claude-sonnet-5",
     "claude-fable-5",
     "claude-fable-5-1",
@@ -275,6 +278,7 @@ _CODING_MODELS = {
     "claude-sonnet",
     "claude-haiku",
     "claude-sonnet-5",
+    "claude-sonnet-5-5",
     "claude-fable-5",
     "claude-fable-5-1",
     "gpt-5",
@@ -311,6 +315,7 @@ _DISPLAY_NAME_OVERRIDES = {
     "claude-sonnet": "Claude Sonnet",
     "claude-haiku": "Claude Haiku",
     "claude-sonnet-5": "Claude Sonnet 5",
+    "claude-sonnet-5-5": "Claude Sonnet 5.5",
     "claude-fable-5": "Claude Fable 5",
     "claude-fable-5-1": "Claude Fable 5.1",
     "gpt-6-astra": "GPT-6 Astra",
@@ -352,6 +357,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "claude-opus-46",
         "claude-sonnet",
         "claude-sonnet-5",
+        "claude-sonnet-5-5",
         "claude-haiku",
     ),
     "gemini": (
@@ -503,6 +509,7 @@ from scripts.claude_model_contract import AADS_MODEL_IDS  # noqa: E402
 
 _ANTHROPIC_RUNTIME_MODEL_IDS = dict(AADS_MODEL_IDS)
 _MODEL_ACCEPTED_ALIASES: dict[str, tuple[str, ...]] = {
+    "claude-sonnet-5-5": ("claude-sonnet-5-5",),
     "claude-fable-5-1": (
         "claude-fable-5.1",
         "claude-fable-latest",

@@ -57,17 +57,17 @@ def _get_timeout_for_job(job: "PipelineCJob") -> int:
     return _TIMEOUT_BY_SIZE.get(size.upper(), _CLAUDE_MAX_WAIT)
 _MAX_OUTPUT_CHARS = 6000    # 결과 최대 문자수
 _MAX_DIFF_CHARS = 50000     # git diff 최대 문자수 (L3)
-_REVIEW_MODEL = "claude-sonnet-5"
+_REVIEW_MODEL = "claude-sonnet-5-5"
 _MAX_REVIEW_PARSE_RETRIES = 3  # AI 검수 인프라 실패(DELEGATED) 재시도 횟수 — 소진 후 세션 AI 직접 검수 전환
 
 # AADS-234: LiteLLM Runner 폴백 모델 — size 기반, 무료 쿼터 우선
 # CEO 지시: 전 사이즈 Sonnet 5 통일, 폴백 Codex GPT 5.6 Tela (2026-09-11)
 _CLAUDE_MODEL_BY_SIZE = {
-    "XS": "claude-sonnet-5",
-    "S":  "claude-sonnet-5",
-    "M":  "claude-sonnet-5",
-    "L":  "claude-sonnet-5",
-    "XL": "claude-sonnet-5",
+    "XS": "claude-sonnet-5-5",
+    "S":  "claude-sonnet-5-5",
+    "M":  "claude-sonnet-5-5",
+    "L":  "claude-sonnet-5-5",
+    "XL": "claude-sonnet-5-5",
 }
 
 # CEO 지시(2026-09-11): 유료 LiteLLM 폴백 비활성화, 무료 Groq만 유지
@@ -870,13 +870,13 @@ class PipelineCJob:
                 work_result = await self._run_codex_cli(enriched_instruction, override_model=_codex_model)
             elif _wm == "claude":
                 # Claude 명시 지정: Claude 직행 (크기별 모델 분기)
-                _claude_model = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5")
+                _claude_model = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5-5")
                 work_result = await self._run_model_candidate(enriched_instruction, _claude_model)
             else:
                 # 기본: DB runner_model_config 우선순위 순회 → DB 미구성/실패 시 기존 폴백 유지
                 db_models = await _get_db_model_config(self.size)
                 model_cycle = db_models or [
-                    _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5"),
+                    _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5-5"),
                 ]
                 self._log("model_cycle", f"모델 우선순위: {', '.join(model_cycle)}")
 
@@ -1966,10 +1966,10 @@ class PipelineCJob:
             return {"error": "빈 모델 스펙", "output": ""}
 
         if spec == "litellm":
-            spec = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5")
+            spec = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5-5")
 
         if spec == "claude":
-            spec = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5")
+            spec = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5-5")
 
         if spec.startswith("codex:"):
             self._log("model_attempt", f"DB 모델 시도: {spec}")

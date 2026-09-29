@@ -655,7 +655,7 @@ async def _get_model_for_size(conn, size: str) -> str:
     if cycle:
         return cycle[0]
     # DB 조회 실패 시에도 Python runner의 전-size 기본 계약과 일치시킨다.
-    return "claude-sonnet-5"
+    return "claude-sonnet-5-5"
 
 
 def _model_spec_from_routing(provider: str, model_id: str) -> str:

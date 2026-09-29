@@ -506,6 +506,7 @@ _INTENT_POLICY_MODEL_ALIASES = {
     "claude-sonnet-4-6": "claude-sonnet",
     "claude-sonnet-4-5": "claude-sonnet",
     "claude-sonnet-5": "claude-sonnet-5",
+    "claude-sonnet-5-5": "claude-sonnet-5-5",
     "claude-haiku-4-5": "claude-haiku",
     "claude-haiku-4-5-20251001": "claude-haiku",
     "claude-opus-5-5": "claude-opus",
@@ -519,6 +520,7 @@ _INTENT_POLICY_CLAUDE_RANK = {
     "claude-haiku": 0,
     "claude-sonnet": 1,
     "claude-sonnet-5": 2,
+    "claude-sonnet-5-5": 2,
     "claude-opus": 3,
     "claude-fable-5": 4,
     "claude-fable-5-1": 5,
@@ -599,7 +601,7 @@ def _codex_to_claude_equivalent(model: Any) -> str:
     m = str(model or "").lower()
     if "astra" in m or "gpt-6" in m:
         return "claude-opus-5"
-    return os.getenv("AADS_CODEX_BYPASS_MODEL", "claude-sonnet-5")
+    return os.getenv("AADS_CODEX_BYPASS_MODEL", "claude-sonnet-5-5")
 
 
 _CODEX_QUOTA_CACHE: Dict[str, Any] = {"ts": 0.0, "blocked": False, "detail": ""}
@@ -1063,7 +1065,8 @@ _COST_MAP = {
     "claude-opus-46":         (5.0,  25.0),   # Opus 4.6 실제 가격
     "claude-sonnet":          (3.0,  15.0),
     "claude-haiku":           (1.0,   5.0),   # Haiku 4.5 실제 가격
-    "claude-sonnet-5":        (3.0,  15.0),
+    "claude-sonnet-5":        (2.0,  10.0),
+    "claude-sonnet-5-5":      (2.0,  10.0),
     "claude-fable-5":         (10.0, 50.0),
     "claude-fable-5-1":       (10.0, 50.0),
     "gemini-flash":           (0.075, 0.3),
@@ -1156,6 +1159,7 @@ _ANTHROPIC_THINKING_ALIASES = {
     "claude-opus",
     "claude-sonnet",
     "claude-sonnet-5",
+    "claude-sonnet-5-5",
 }
 
 
@@ -2516,6 +2520,7 @@ async def call_stream(
         "claude-fable-5": ["claude-fable-5", "claude-opus", "claude-sonnet"],
         "claude-opus": ["claude-opus"],
         "claude-sonnet-5": ["claude-sonnet-5", "claude-sonnet"],
+        "claude-sonnet-5-5": ["claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet"],
         "claude-sonnet": ["claude-sonnet"],
         "claude-haiku": ["claude-haiku"],
     }
@@ -2524,6 +2529,7 @@ async def call_stream(
         "claude-fable-5": ["gpt-5.6-sol", "claude-opus"],
         "claude-opus": ["gpt-5.6-sol"],
         "claude-sonnet-5": ["claude-sonnet", "gpt-5.5"],
+        "claude-sonnet-5-5": ["claude-sonnet-5", "gpt-5.5"],
         "claude-sonnet": ["gpt-5.5"],
         "claude-haiku": ["gpt-5.4-mini"],
     }

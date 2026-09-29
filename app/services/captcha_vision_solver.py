@@ -41,7 +41,7 @@ async def _call_anthropic_vision(image_b64: str) -> str:
             ],
         }
     ]
-    models = ["claude-sonnet-5", "claude-haiku-4-5-20251001"]
+    models = ["claude-sonnet-5-5", "claude-haiku-4-5-20251001"]
     for model_id in models:
         client = create_anthropic_client()
         try:

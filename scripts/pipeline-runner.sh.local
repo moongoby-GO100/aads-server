@@ -2234,7 +2234,7 @@ run_job() {
             # DB 조회 실패 → 하드코딩 폴백
             log "  DB_MODEL_CONFIG_FAIL job=$job_id → fallback to hardcoded"
             local claude_fb
-            claude_fb="claude-sonnet-5"
+            claude_fb="claude-sonnet-5-5"
             MODEL_CYCLE=("litellm:minimax-m2.7" "litellm:minimax-m2.7" "$claude_fb" "$claude_fb")
         fi
     else
@@ -2251,9 +2251,9 @@ run_job() {
         if [[ ${#MODEL_CYCLE[@]} -le 2 ]]; then
             local claude_primary claude_secondary
             case "$job_size" in
-                XL)      claude_primary="claude-sonnet-5"; claude_secondary="claude-opus-5" ;;
-                L|M)     claude_primary="claude-sonnet-5"; claude_secondary="claude-opus-5" ;;
-                S|XS|*)  claude_primary="claude-sonnet-5"; claude_secondary="claude-haiku-4-5-20251001" ;;
+                XL)      claude_primary="claude-sonnet-5-5"; claude_secondary="claude-opus-5-5" ;;
+                L|M)     claude_primary="claude-sonnet-5-5"; claude_secondary="claude-opus-5-5" ;;
+                S|XS|*)  claude_primary="claude-sonnet-5-5"; claude_secondary="claude-haiku-4-5-20251001" ;;
             esac
             append_model_for_attempts "$claude_primary"
             append_model_for_attempts "$claude_secondary"

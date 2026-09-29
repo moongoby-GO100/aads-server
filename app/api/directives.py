@@ -36,7 +36,7 @@ def get_model_for_size(size: str) -> str:
     directives must not pin that historical version, though, because an
     explicit value takes precedence over the centrally managed runner cycle.
     """
-    return "claude-sonnet-5"
+    return "claude-sonnet-5-5"
 
 
 class DirectiveSubmitRequest(BaseModel):

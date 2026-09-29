@@ -23,7 +23,7 @@ GENERATION_TIMEOUT_SECONDS = 45
 _directive_model_cache: dict = {}
 _directive_model_cache_ts: float = 0.0
 _DIRECTIVE_MODEL_CACHE_TTL = 60
-_DEFAULT_DIRECTIVE_MODELS = ["claude-sonnet-5", "codex:gpt-5.6-terra"]
+_DEFAULT_DIRECTIVE_MODELS = ["claude-sonnet-5-5", "codex:gpt-5.6-terra"]
 _DIRECTIVE_MODEL_ALIASES = {
     # Legacy typo accepted by the first Ops-settings implementation.
     "codex:gpt-5.6-tela": "codex:gpt-5.6-terra",

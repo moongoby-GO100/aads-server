@@ -6760,6 +6760,7 @@ async def with_background_completion(
                         "gpt-6-astra": ["gpt-5.6-sol", "claude-opus-5"],
                         "claude-haiku-4-5-20251001": ["claude-fable-5-1", "gpt-5.6-sol"],
                         "claude-sonnet-5": ["claude-fable-5-1", "claude-opus-5"],
+                        "claude-sonnet-5-5": ["claude-sonnet-5", "gpt-5.6-sol"],
                     }
                     for _fb_model in _FALLBACK_CHAIN_429.get(_original_model, []):
                         try:

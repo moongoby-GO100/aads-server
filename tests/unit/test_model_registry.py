@@ -243,7 +243,13 @@ def test_build_registry_snapshots_marks_anthropic_oauth_as_runtime_only_discover
     assert claude_row["metadata"]["accepted_aliases"] == [
         "claude-sonnet-4-6",
     ]
-    assert claude_row["execution_model_id"] == "claude-sonnet-5"
+    assert claude_row["execution_model_id"] == "claude-sonnet-5-5"
+
+    sonnet_55 = next(row for row in model_rows if row["provider"] == "anthropic" and row["model_id"] == "claude-sonnet-5-5")
+    assert sonnet_55["execution_model_id"] == "claude-sonnet-5-5"
+    assert sonnet_55["supports_thinking"] and sonnet_55["supports_vision"]
+    assert float(sonnet_55["input_cost"]) == 2.0
+    assert float(sonnet_55["output_cost"]) == 10.0
 
     fable_row = next(row for row in model_rows if row["provider"] == "anthropic" and row["model_id"] == "claude-fable-5-1")
     assert fable_row["execution_backend"] == "claude_cli_relay"
