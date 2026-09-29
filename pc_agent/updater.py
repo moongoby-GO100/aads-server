@@ -6,6 +6,8 @@ launcher.py에서 호출됨.
 from __future__ import annotations
 
 import io
+import hashlib
+import json
 import logging
 import os
 import re
@@ -97,7 +99,20 @@ def download_update(cfg: dict, version: str) -> None:
     token = cfg.get("agent_token", "")
     logger.info("에이전트 v%s 다운로드 시작", version)
 
+    # New servers report the digest of the exact ZIP they serve. Older servers
+    # have no digest, so keep their ZIP/version checks during mixed rollout.
+    release = json.loads(_api_get("/api/v1/kakao-bot/agent/version", token))
+    expected_hash = release.get("zip_sha256")
+    if release.get("version") != version:
+        raise ValueError("PC ZIP release version differs")
+    if expected_hash is not None and (not isinstance(expected_hash, str)
+                                      or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)):
+        raise ValueError("PC ZIP release digest is invalid")
+    if expected_hash is None:
+        logger.warning("서버가 ZIP SHA256을 제공하지 않아 이전 버전 검증 경로 사용")
     zip_data = _api_get("/api/v1/kakao-bot/agent/download?format=zip", token)
+    if expected_hash is not None and hashlib.sha256(zip_data).hexdigest() != expected_hash:
+        raise ValueError("PC ZIP SHA256 does not match the published release")
 
     # 안전장치: ZIP 시그니처 확인
     if zip_data[:2] != b"PK":
@@ -105,6 +120,8 @@ def download_update(cfg: dict, version: str) -> None:
 
     # 임시 폴더에 해제
     tmp_dir = Path(tempfile.mkdtemp(prefix="kakaobot_update_"))
+    backup_dir = INSTALL_DIR / "agent_backup"
+    backup_created = False
     try:
         with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
             # zip bomb 방지: 전체 크기 100MB 제한
@@ -122,25 +139,28 @@ def download_update(cfg: dict, version: str) -> None:
         # agent.py 존재 검증
         if not (extracted / "agent.py").exists():
             raise FileNotFoundError("다운로드한 zip에 agent.py가 없습니다")
+        if not (extracted / "VERSION").exists() or (extracted / "VERSION").read_text(encoding="utf-8").strip() != version:
+            raise ValueError("다운로드한 ZIP의 VERSION이 릴리스와 다릅니다")
 
         # 기존 폴더 백업 후 교체
-        backup_dir = INSTALL_DIR / "agent_backup"
         if backup_dir.exists():
             shutil.rmtree(backup_dir)
         if AGENT_DIR.exists():
             AGENT_DIR.rename(backup_dir)
+            backup_created = True
 
         shutil.copytree(extracted, AGENT_DIR)
         logger.info("에이전트 업데이트 완료: v%s", version)
 
         # 백업 정리
-        if backup_dir.exists():
+        if backup_created and backup_dir.exists():
             shutil.rmtree(backup_dir, ignore_errors=True)
 
     except Exception:
         # 실패 시 백업 복원
-        backup_dir = INSTALL_DIR / "agent_backup"
-        if backup_dir.exists() and not AGENT_DIR.exists():
+        if backup_created:
+            if AGENT_DIR.exists():
+                shutil.rmtree(AGENT_DIR)
             backup_dir.rename(AGENT_DIR)
             logger.info("업데이트 실패 — 백업에서 복원")
         raise

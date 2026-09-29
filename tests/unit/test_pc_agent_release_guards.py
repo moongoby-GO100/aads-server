@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import io
+import json
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,6 +31,118 @@ def test_launcher_updater_blocks_server_downgrade() -> None:
     assert updater._is_remote_newer("1.0.50", "1.0.52") is False
     assert updater._is_remote_newer("1.0.52", "1.0.52") is False
     assert updater._is_remote_newer("unknown", "1.0.52") is False
+
+
+def _update_fixture(monkeypatch, tmp_path):
+    updater = _load("launcher_update_install_test", ROOT / "pc_agent" / "updater.py")
+    install = tmp_path / "install"
+    agent = install / "agent"
+    agent.mkdir(parents=True)
+    (agent / "agent.py").write_text("current", encoding="utf-8")
+    monkeypatch.setattr(updater, "INSTALL_DIR", install)
+    monkeypatch.setattr(updater, "AGENT_DIR", agent)
+    return updater, install, agent
+
+
+def _zip_payload() -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("agent.py", "new")
+        archive.writestr("VERSION", "1.0.2")
+    return output.getvalue()
+
+
+def test_preinstall_validation_failure_preserves_current_agent_with_stale_backup(monkeypatch, tmp_path):
+    updater, install, agent = _update_fixture(monkeypatch, tmp_path)
+    stale = install / "agent_backup"
+    stale.mkdir()
+    (stale / "agent.py").write_text("stale", encoding="utf-8")
+    digest = hashlib.sha256(b"not-a-zip").hexdigest()
+    monkeypatch.setattr(updater, "_api_get", lambda path, token="": (
+        json.dumps({"version": "1.0.2", "zip_sha256": digest}).encode()
+        if path.endswith("/version") else b"not-a-zip"))
+
+    with pytest.raises(ValueError, match="ZIP이 아닌"):
+        updater.download_update({}, "1.0.2")
+    assert (agent / "agent.py").read_text() == "current"
+    assert (stale / "agent.py").read_text() == "stale"
+
+
+def test_hash_mismatch_stops_install(monkeypatch, tmp_path):
+    updater, _install, agent = _update_fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(updater, "_api_get", lambda path, token="": (
+        json.dumps({"version": "1.0.2", "zip_sha256": "0" * 64}).encode()
+        if path.endswith("/version") else _zip_payload()))
+
+    with pytest.raises(ValueError, match="SHA256"):
+        updater.download_update({}, "1.0.2")
+    assert (agent / "agent.py").read_text() == "current"
+
+
+def test_only_backup_created_by_this_attempt_is_restored(monkeypatch, tmp_path):
+    updater, install, agent = _update_fixture(monkeypatch, tmp_path)
+    stale = install / "agent_backup"
+    stale.mkdir()
+    (stale / "agent.py").write_text("stale", encoding="utf-8")
+    payload = _zip_payload()
+    digest = hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(updater, "_api_get", lambda path, token="": (
+        json.dumps({"version": "1.0.2", "zip_sha256": digest}).encode()
+        if path.endswith("/version") else payload))
+
+    def partial_copy(_source, target):
+        target.mkdir()
+        (target / "agent.py").write_text("partial", encoding="utf-8")
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(updater.shutil, "copytree", partial_copy)
+    with pytest.raises(OSError, match="copy failed"):
+        updater.download_update({}, "1.0.2")
+    assert (agent / "agent.py").read_text() == "current"
+    assert not stale.exists()
+
+
+def test_release_manifest_matches_checkout_and_rejects_source_drift(tmp_path):
+    from pc_agent.release_archive import _source_files, build_agent_zip, release_sha256
+
+    assert len(release_sha256(ROOT / "pc_agent")) == 64
+    (tmp_path / "VERSION").write_text("1.0.2", encoding="utf-8")
+    (tmp_path / "agent.py").write_text("original", encoding="utf-8")
+    digest = hashlib.sha256(build_agent_zip(tmp_path)).hexdigest()
+    (tmp_path / "RELEASE_ZIP_SHA256.json").write_text(
+        json.dumps({"version": "1.0.2", "files": _source_files(tmp_path), "sha256": digest}), encoding="utf-8"
+    )
+    assert release_sha256(tmp_path) == digest
+    (tmp_path / "agent.py").write_text("changed", encoding="utf-8")
+    with pytest.raises(ValueError, match="differs"):
+        release_sha256(tmp_path)
+
+
+def test_release_archive_ignores_unregistered_runtime_files_and_caches(tmp_path):
+    from pc_agent.release_archive import cached_agent_zip, ticketed_agent_zip
+
+    (tmp_path / "VERSION").write_text("1.0.2", encoding="utf-8")
+    (tmp_path / "agent.py").write_text("release", encoding="utf-8")
+    (tmp_path / "RELEASE_ZIP_SHA256.json").write_text(json.dumps({
+        "version": "1.0.2", "files": ["VERSION", "agent.py"], "sha256": "0" * 64
+    }), encoding="utf-8")
+    first, digest = cached_agent_zip(tmp_path)
+    (tmp_path / "runtime.log").write_text("runtime", encoding="utf-8")
+    assert cached_agent_zip(tmp_path)[0] is first
+    assert hashlib.sha256(first).hexdigest() == digest
+    assert ticketed_agent_zip(tmp_path, "ticket") != first
+    with zipfile.ZipFile(io.BytesIO(first)) as archive:
+        assert "runtime.log" not in archive.namelist()
+        assert all(item.compress_type == zipfile.ZIP_STORED for item in archive.infolist())
+
+
+def test_legacy_server_without_digest_still_updates(monkeypatch, tmp_path):
+    updater, _install, agent = _update_fixture(monkeypatch, tmp_path)
+    payload = _zip_payload()
+    monkeypatch.setattr(updater, "_api_get", lambda path, token="": (
+        json.dumps({"version": "1.0.2"}).encode() if path.endswith("/version") else payload))
+    updater.download_update({}, "1.0.2")
+    assert (agent / "agent.py").read_text() == "new"
 
 
 def test_agent_updater_blocks_server_downgrade() -> None:
@@ -111,6 +227,7 @@ def test_release_publish_is_main_only() -> None:
         pytest.skip("workflow file not present in this checkout (.dockerignore)")
 
     workflow = workflow_path.read_text(encoding="utf-8")
+    assert "python -m pc_agent.release_archive check" in workflow
     assert (
         "- name: Create/Update Release\n"
         "        if: github.ref == 'refs/heads/main'\n"

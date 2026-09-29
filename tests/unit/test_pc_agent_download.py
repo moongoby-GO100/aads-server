@@ -54,6 +54,7 @@ async def test_agent_version_advertises_installable_exe_release(
     result = await kakao_bot.agent_version()
 
     assert result["version"] == "1.0.55"
+    assert len(result["zip_sha256"]) == 64
     assert result["download_url"].endswith("/agent/download-exe")
     assert result["exe_download_url"].endswith("/agent/download-exe")
     assert result["safe_download_url"].endswith("/agent/download?format=zip")

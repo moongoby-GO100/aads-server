@@ -7,7 +7,6 @@ import logging
 import os
 import re
 import time
-import zipfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -18,6 +17,10 @@ from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
 from app.core.anthropic_client import call_llm_with_fallback
+from pc_agent.release_archive import (
+    cached_agent_zip,
+    ticketed_agent_zip,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/kakao-bot", tags=["kakao-bot"])
@@ -35,10 +38,6 @@ PC_AGENT_RELEASE_BASE = (
 # GitHub Release 자산 존재 여부 probe 캐시 (url -> (checked_at, available))
 _RELEASE_ASSET_PROBE_TTL = 300.0
 _release_asset_probe_cache: dict[str, tuple[float, bool]] = {}
-# zip 제외 패턴
-_ZIP_EXCLUDE_DIRS = {"__pycache__", ".git", "build_tmp", "dist", ".mypy_cache", ".pytest_cache"}
-_ZIP_EXCLUDE_EXTS = {".pyc", ".pyo", ".exe", ".spec"}
-_ZIP_EXCLUDE_SUFFIXES = {".bak_aads"}  # 자동 백업 파일 제외
 # 에이전트 토큰 (환경변수에서 로드, 실제로는 DB 기반으로 확장 가능)
 PC_AGENT_SECRET = os.environ.get("PC_AGENT_SECRET", "")
 PC_AGENT_INSTALL_TICKET_TTL_SECONDS = 10 * 60
@@ -296,6 +295,7 @@ async def agent_version():
 
     return {
         "version": version,
+        "zip_sha256": cached_agent_zip(PC_AGENT_DIR)[1],
         "download_url": "/api/v1/kakao-bot/agent/download-exe",
         "exe_download_url": "/api/v1/kakao-bot/agent/download-exe",
         "safe_download_url": "/api/v1/kakao-bot/agent/download?format=zip",
@@ -312,32 +312,8 @@ async def agent_version():
 
 
 def _build_agent_zip(install_ticket: str | None = None) -> bytes:
-    """pc_agent/ 디렉토리를 메모리 내 zip으로 압축.
-
-    __pycache__, .pyc, .git, dist, build_tmp 등 제외.
-    """
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(PC_AGENT_DIR.rglob("*")):
-            if file_path.is_dir():
-                continue
-            # 제외 디렉토리 체크
-            rel = file_path.relative_to(PC_AGENT_DIR)
-            if any(part in _ZIP_EXCLUDE_DIRS for part in rel.parts):
-                continue
-            # 제외 확장자 체크
-            if file_path.suffix in _ZIP_EXCLUDE_EXTS:
-                continue
-            # .bak_aads 백업 파일 제외 (접미사 체크)
-            if any(file_path.name.endswith(s) for s in _ZIP_EXCLUDE_SUFFIXES):
-                continue
-            # RESULT_ 리포트 파일 제외
-            if file_path.name.startswith("RESULT_"):
-                continue
-            zf.write(file_path, arcname=str(rel))
-        if install_ticket:
-            zf.writestr("install_ticket.txt", install_ticket)
-    return buf.getvalue()
+    """Serve the cached release bytes; ticketed downloads add only the ticket."""
+    return ticketed_agent_zip(PC_AGENT_DIR, install_ticket)
 
 
 @router.get("/agent/download")
