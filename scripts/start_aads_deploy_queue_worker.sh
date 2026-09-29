@@ -91,7 +91,10 @@ WORKER_BODY='
     cleanup() {
         git -C "$REPO_DIR" worktree remove --force "$worktree" >/dev/null 2>&1 || true
         # Autoheal can hand the lock to a successor before this worker exits.
-        # Never delete the successor's lock from this older worker's cleanup.
+        # Never delete a successor lock from an older worker cleanup.
+        # No apostrophes here: WORKER_BODY is single-quoted, so one would close
+        # the string and the rest of the comment would run as commands
+        # (2026-09-29: "lock: command not found" exit=127 killed deploy #5243).
         if [[ "$(cat "$LOCKFILE" 2>/dev/null || true)" == "$BASHPID" ]]; then
             rm -f "$LOCKFILE" 2>/dev/null || true
         fi
