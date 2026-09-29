@@ -13,9 +13,12 @@ import logging
 import math
 import os
 import re
+import subprocess
 import time
 from collections import Counter
+from contextvars import ContextVar
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -816,7 +819,179 @@ def _removed_preservation_symbols(diff: str) -> list[str]:
     return removed
 
 
-def _precheck_preservation_gate(diff: str, instruction: str, files_changed: Optional[list]) -> Optional[ReviewVerdict]:
+# 모듈 private 헬퍼(`_foo`) 삭제 오탐 교정 (runner-5ceddf2f: 모듈 private 헬퍼 하나로
+# 771추가/96삭제 diff 전체가 FLAG 0.3 으로 차단됐다. 정의와 유일한 호출이 같은 파일 안이었다).
+# 오류사전 runner.preservation_gate_symbol_delete 는 20회 재발했고 조치가 "규칙으로만 기록"
+# 이었으므로 코드로 옮긴다. 예외는 하나뿐이다 — 밑줄로 시작하는 **함수**이고, 삭제가 일어난
+# 파일 밖에서 그 이름을 참조하는 파일이 저장소 어디에도 없을 때만 제외한다.
+# public 함수·클래스·@router.*·던더는 이 예외의 대상이 아니다.
+#
+# 참조 검색은 이 프로세스가 볼 수 있는 트리(_REPO_ROOT = aads-server 배포본)만 대상으로 한다.
+# 그러므로 (a) 프로젝트가 AADS 인 diff 에만 적용하고, (b) 삭제 파일이 그 트리에 실제로 있고
+# 그 안에 같은 정의가 있을 때만 적용한다. 이 둘 중 하나라도 확인 못 하면 종전처럼 차단한다.
+# 다른 프로젝트나 어긋난 트리에서 "참조 0건" 은 증거가 아니라 검색 대상 부재이기 때문이다.
+_PRIVATE_EXEMPT_PROJECTS = frozenset({"AADS"})
+_PRIVATE_EXEMPT_MAX_SYMBOLS = 50
+_PRIVATE_EXEMPT_GREP_TIMEOUT_SEC = 15
+_PRIVATE_EXEMPT_INCLUDES = ("*.py", "*.ts", "*.tsx", "*.js", "*.sh", "*.sql")
+_PRIVATE_EXEMPT_EXCLUDE_DIRS = (
+    ".git", "node_modules", ".next", "__pycache__", ".venv", "venv", ".mypy_cache", ".ruff_cache",
+)
+_PRIVATE_FUNC_SYMBOL_RE = re.compile(r"(?:async[ \t]+def|def)[ \t]+(_[A-Za-z0-9_]*)")
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+# (job_id, 면제 심볼). job_id 가 다르면 쓰지 않는다 — 앞선 리뷰의 목록이 뒤 리뷰로 새지 않게.
+_PRESERVATION_EXEMPTIONS: ContextVar[Optional[tuple]] = ContextVar(
+    "preservation_exempted_private_symbols", default=None
+)
+
+
+def _private_symbol_name(symbol: str) -> Optional[str]:
+    match = _PRIVATE_FUNC_SYMBOL_RE.fullmatch(symbol)
+    if not match:
+        return None
+    name = match.group(1)
+    if name.startswith("__") and name.endswith("__"):
+        return None
+    return name
+
+
+def _search_roots() -> tuple[list[str], list[str]]:
+    """(검색할 루트, 트리에 없어 검색하지 못한 루트 이름)."""
+    roots = [str(_REPO_ROOT)]
+    missing: list[str] = []
+    sibling = _REPO_ROOT.parent / "aads-dashboard"
+    if sibling.is_dir():
+        roots.append(str(sibling))
+    else:
+        missing.append("aads-dashboard")
+    return roots, missing
+
+
+def _find_symbol_reference_files(names: set[str], roots: list[str]) -> Optional[dict[str, set[str]]]:
+    """이름 -> 그 이름을 (단어 단위로) 포함한 파일 절대경로 집합. 검색 실패 시 None."""
+    cmd = ["grep", "-rowF", "--binary-files=without-match"]
+    cmd += [f"--include={pattern}" for pattern in _PRIVATE_EXEMPT_INCLUDES]
+    cmd += [f"--exclude-dir={name}" for name in _PRIVATE_EXEMPT_EXCLUDE_DIRS]
+    for name in sorted(names):
+        cmd += ["-e", name]
+    cmd += ["--", *roots]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, errors="replace",
+            timeout=_PRIVATE_EXEMPT_GREP_TIMEOUT_SEC,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode not in (0, 1):
+        return None
+    found: dict[str, set[str]] = {name: set() for name in names}
+    for line in proc.stdout.splitlines():
+        path, sep, matched = line.rpartition(":")
+        if sep and matched in found:
+            found[matched].add(os.path.realpath(path))
+    return found
+
+
+def _resolve_deleted_file_defining(path: str, name: str) -> Optional[str]:
+    """삭제 파일이 _REPO_ROOT 안의 실제 .py 이고 `def name` 이 거기 있으면 그 realpath, 아니면 None."""
+    if not path.endswith(".py") or os.path.isabs(path):
+        return None
+    root = os.path.realpath(_REPO_ROOT)
+    resolved = os.path.realpath(os.path.join(root, path))
+    if not resolved.startswith(root + os.sep) or not os.path.isfile(resolved):
+        return None
+    try:
+        with open(resolved, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return None
+    definition = re.compile(rf"^[ \t]*(?:async[ \t]+)?def[ \t]+{re.escape(name)}\b", re.MULTILINE)
+    return resolved if definition.search(text) else None
+
+
+def _split_exempt_private_symbols(
+    diff: str,
+    symbols: list[str],
+    project: Optional[str] = None,
+    notes_out: Optional[dict] = None,
+) -> tuple[list[str], list[str]]:
+    """(계속 차단할 심볼, 면제한 심볼). 조금이라도 불확실하면 면제하지 않는다."""
+    if str(project or "").strip().upper() not in _PRIVATE_EXEMPT_PROJECTS:
+        return symbols, []
+    candidates: dict[str, str] = {}
+    for symbol in symbols:
+        name = _private_symbol_name(symbol)
+        if name:
+            candidates[symbol] = name
+    if not candidates:
+        return symbols, []
+    names = set(candidates.values())
+    if len(names) > _PRIVATE_EXEMPT_MAX_SYMBOLS:
+        return symbols, []
+
+    deleted_in: dict[str, set[str]] = {name: set() for name in names}
+    referenced_by_diff: dict[str, set[str]] = {name: set() for name in names}
+    for file_diff in re.split(r"(?=^diff --git )", diff or "", flags=re.MULTILINE):
+        header = _DIFF_HEADER_PATH_RE.match(file_diff)
+        if not header:
+            continue
+        path = header.group(2)
+        for line in file_diff.splitlines():
+            if line.startswith("---") or line.startswith("+++"):
+                continue
+            if line.startswith("-"):
+                for symbol in _DELETED_SYMBOL_RE.findall(line):
+                    name = _private_symbol_name(symbol)
+                    if name in deleted_in:
+                        deleted_in[name].add(path)
+            elif line.startswith("+"):
+                for name in names:
+                    if re.search(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])", line):
+                        referenced_by_diff[name].add(path)
+
+    deleted_file_real: dict[str, str] = {}
+    for name in names:
+        if len(deleted_in[name]) != 1 or not referenced_by_diff[name] <= deleted_in[name]:
+            continue
+        resolved = _resolve_deleted_file_defining(next(iter(deleted_in[name])), name)
+        if resolved is not None:
+            deleted_file_real[name] = resolved
+    if not deleted_file_real:
+        return symbols, []
+
+    roots, missing_roots = _search_roots()
+    references = _find_symbol_reference_files(set(deleted_file_real), roots)
+    if references is None:
+        return symbols, []
+
+    exempt_names = {
+        name for name, deleted_file in deleted_file_real.items()
+        if all(ref == deleted_file for ref in references[name])
+    }
+    if exempt_names and notes_out is not None:
+        notes_out["preservation_exempt_search_roots"] = [os.path.basename(root) for root in roots]
+        if missing_roots:
+            notes_out["preservation_exempt_search_missing_roots"] = missing_roots
+            logger.warning(
+                "preservation_private_exempt_partial_search: missing=%s", ",".join(missing_roots)
+            )
+    kept: list[str] = []
+    exempted: list[str] = []
+    for symbol in symbols:
+        if candidates.get(symbol) in exempt_names:
+            exempted.append(symbol)
+        else:
+            kept.append(symbol)
+    return kept, exempted
+
+
+def _precheck_preservation_gate(
+    diff: str,
+    instruction: str,
+    files_changed: Optional[list],
+    exemption_out: Optional[dict] = None,
+    project: Optional[str] = None,
+) -> Optional[ReviewVerdict]:
     additions, deletions = _diff_line_counts(diff)
     issues: list[str] = []
     feedback: dict[str, object] = {
@@ -845,7 +1020,15 @@ def _precheck_preservation_gate(diff: str, instruction: str, files_changed: Opti
     elif additions == 0 and deletions > 0:
         issues.append(f"추가 없이 삭제 라인({deletions})만 존재합니다. 삭제 사유가 필요합니다.")
 
-    symbol_matches = _removed_preservation_symbols(diff)
+    exemption_notes: dict[str, object] = {}
+    symbol_matches, exempted_symbols = _split_exempt_private_symbols(
+        diff, _removed_preservation_symbols(diff), project, exemption_notes
+    )
+    if exempted_symbols:
+        exemption_notes["preservation_exempted_private_symbols"] = exempted_symbols
+        feedback.update(exemption_notes)
+        if exemption_out is not None:
+            exemption_out.update(exemption_notes)
     if symbol_matches:
         feedback["deleted_symbols"] = symbol_matches[:20]
         issues.append(
@@ -899,6 +1082,10 @@ async def _save_review_result(
     # Defend the persistence boundary as well as verdict construction: future
     # callers must not be able to store unredacted model/proxy text directly.
     safe_feedback = _sanitize_review_feedback(verdict.feedback)
+    exemption = _PRESERVATION_EXEMPTIONS.get()
+    if exemption and exemption[0] == job_id and isinstance(safe_feedback, dict):
+        for key, value in exemption[1].items():
+            safe_feedback.setdefault(key, value)
     try:
         from app.core.db_pool import get_pool
 
@@ -961,6 +1148,7 @@ async def review_code_diff(
     measurement_started_at = time.monotonic()
     total_deadline = int(deadline_sec or _REVIEW_TOTAL_DEADLINE_SEC)
     review_path = "async" if deadline_sec is not None else "sync"
+    _PRESERVATION_EXEMPTIONS.set(None)
 
     precheck = _precheck_review_input(diff)
     if precheck is not None:
@@ -987,7 +1175,11 @@ async def review_code_diff(
             )
         return precheck
 
-    preservation_precheck = _precheck_preservation_gate(diff, instruction, files_changed)
+    preservation_exemption: dict[str, object] = {}
+    preservation_precheck = await asyncio.to_thread(
+        _precheck_preservation_gate, diff, instruction, files_changed, preservation_exemption, project
+    )
+    _PRESERVATION_EXEMPTIONS.set((job_id, preservation_exemption) if preservation_exemption else None)
     if preservation_precheck is not None:
         _attach_review_measurement(
             preservation_precheck,
