@@ -227,7 +227,7 @@ def test_explicit_valid_binding_creates_link(monkeypatch):
     result, linked = _run_auto_link(
         monkeypatch, goal_row, goal_id=GOAL_A, milestone_id=MILESTONE_A,
     )
-    assert result == GOAL_A
+    assert result.goal_id == GOAL_A
     assert linked["goal_id"] == GOAL_A
     assert linked["task_id"] == "runner-test"
     assert linked["bind_source"] == BIND_SOURCE_EXPLICIT_API
@@ -247,7 +247,7 @@ def test_blocked_goal_accepts_only_explicit_remediation(monkeypatch):
     result, linked = _run_auto_link(
         monkeypatch, goal_row, instruction=instruction,
     )
-    assert result == GOAL_A
+    assert result.goal_id == GOAL_A
     assert linked["milestone_id"] == MILESTONE_A
 
     result, linked = _run_auto_link(
@@ -300,9 +300,104 @@ def test_milestone_not_owned_by_goal_falls_back_for_active_goal(monkeypatch):
     result, linked = _run_auto_link(
         monkeypatch, goal_row, goal_id=GOAL_A, milestone_id=MILESTONE_A, milestone_owned=False,
     )
-    assert result == GOAL_A
+    assert result.goal_id == GOAL_A
     assert linked["goal_id"] == GOAL_A
     assert linked["milestone_id"] is None
+    assert result.milestone_id is None
+
+
+# ─── 제출 API 가 방금 기록한 milestone_id 를 NULL 로 덮어쓰던 결함 ─────────────────
+def _submit_like(monkeypatch, goal_row, *, req_goal=None, req_milestone=None, instruction=""):
+    """제출 API(create_job) 의 목표 연결 3줄을 그대로 재현하고, pipeline_jobs 에 마지막으로
+    기록된 (goal_id, milestone_id) 와 goal_task_links.milestone_id 를 돌려준다."""
+    from app.api import pipeline_runner as api
+    from app.services import pipeline_runner_service as prs
+
+    goal_row = {**goal_row, "tenant_id": "00000000-0000-0000-0000-000000000001"}
+    conn = _FakeConn(goal_row, milestone_owned=True)
+
+    class _FakeMachine:
+        async def _pool(self):
+            return _FakePool(conn)
+
+    import app.services.goal_manager as gm
+
+    monkeypatch.setattr(gm, "goal_state_machine", _FakeMachine())
+
+    async def _go():
+        link = await prs._link_job_to_goal_explicit(
+            "runner-test", "AADS", instruction=instruction,
+            goal_id=req_goal, milestone_id=req_milestone,
+        )
+        if link:
+            await api._persist_job_goal_context(
+                _FakePool(conn), "runner-test", link.goal_id, link.milestone_id,
+            )
+        return link
+
+    link = asyncio.run(_go())
+    job_rows = [a for q, a in conn.executed if "UPDATE pipeline_jobs" in q]
+    link_rows = [a for q, a in conn.executed if "INSERT INTO goal_task_links" in q]
+    persisted = job_rows[-1] if job_rows else None
+    return link, persisted, (link_rows[-1][2] if link_rows else None)
+
+
+_ACTIVE_GOAL = {"id": GOAL_A, "project": "AADS", "status": "active"}
+
+
+def test_directive_only_milestone_survives_submit_persist(monkeypatch):
+    """지시서 MILESTONE_ID 만 준 제출 — 마지막 UPDATE 가 milestone 을 NULL 로 덮으면 안 된다."""
+    instruction = f"GOAL_ID: {GOAL_A}\nMILESTONE_ID: {MILESTONE_A}\n"
+    link, persisted, link_milestone = _submit_like(
+        monkeypatch, _ACTIVE_GOAL, instruction=instruction,
+    )
+    assert link.milestone_id == MILESTONE_A
+    assert persisted[2] == MILESTONE_A
+    assert persisted[2] == link_milestone
+
+
+def test_api_field_milestone_is_still_used(monkeypatch):
+    link, persisted, link_milestone = _submit_like(
+        monkeypatch, _ACTIVE_GOAL, req_goal=GOAL_A, req_milestone=MILESTONE_A,
+    )
+    assert link.milestone_id == MILESTONE_A
+    assert persisted[1] == GOAL_A
+    assert persisted[2] == MILESTONE_A == link_milestone
+
+
+def test_goal_only_directive_keeps_goal_and_null_milestone(monkeypatch):
+    link, persisted, link_milestone = _submit_like(
+        monkeypatch, _ACTIVE_GOAL, instruction=f"GOAL_ID: {GOAL_A}\n",
+    )
+    assert link.goal_id == GOAL_A
+    assert link.milestone_id is None
+    assert persisted[1] == GOAL_A
+    assert persisted[2] is None
+    assert link_milestone is None
+
+
+def test_persist_goal_context_touches_updated_at():
+    from app.api import pipeline_runner as api
+
+    conn = _FakeConn({"id": GOAL_A, "project": "AADS", "status": "active"})
+    asyncio.run(api._persist_job_goal_context(_FakePool(conn), "runner-t", GOAL_A, MILESTONE_A))
+    query, _ = conn.executed[-1]
+    assert "updated_at = NOW()" in query
+
+
+def test_submit_call_sites_never_persist_request_milestone():
+    """호출부가 요청 필드(req.milestone_id)를 persist 에 다시 넘기면 지시서 값이 NULL 로 덮인다."""
+    import ast
+
+    src = (ROOT / "app/api/pipeline_runner.py").read_text(encoding="utf-8")
+    calls = [
+        n for n in ast.walk(ast.parse(src))
+        if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_persist_job_goal_context"
+    ]
+    assert len(calls) >= 2
+    for call in calls:
+        for arg in call.args:
+            assert "req.milestone_id" not in ast.get_source_segment(src, arg)
 
 
 # ─── 재조정 계획 (요구사항 C) ───────────────────────────────────────────────

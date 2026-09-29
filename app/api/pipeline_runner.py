@@ -1316,7 +1316,8 @@ async def _persist_job_goal_context(
     try:
         async with pool.acquire() as conn:
             await conn.execute(
-                "UPDATE pipeline_jobs SET goal_id = $2::uuid, milestone_id = $3::uuid WHERE job_id = $1",
+                "UPDATE pipeline_jobs SET goal_id = $2::uuid, milestone_id = $3::uuid, updated_at = NOW() "
+                "WHERE job_id = $1",
                 job_id, goal_id, milestone_id,
             )
     except Exception as exc:  # noqa: BLE001 — 컬럼 부재/경합은 비치명적
@@ -1609,15 +1610,15 @@ async def submit_job(
     # 어떤 목표에도 붙이지 않는다 (이전의 "프로젝트 첫 active 목표" 자동연결 폐기).
     try:
         from app.services.pipeline_runner_service import _link_job_to_goal_explicit
-        linked_goal_id = await _link_job_to_goal_explicit(
+        goal_link = await _link_job_to_goal_explicit(
             job_id, req.project,
             instruction=req.instruction,
             goal_id=req.goal_id or None,
             milestone_id=req.milestone_id or None,
         )
-        if linked_goal_id:
-            await _persist_job_goal_context(pool, job_id, linked_goal_id, req.milestone_id or None)
-            msg += f" 목표 {linked_goal_id} 에 연결되었습니다."
+        if goal_link:
+            await _persist_job_goal_context(pool, job_id, goal_link.goal_id, goal_link.milestone_id)
+            msg += f" 목표 {goal_link.goal_id} 에 연결되었습니다."
     except Exception as exc:
         logger.warning("pipeline_runner.goal_link_fail", job_id=job_id, error=str(exc))
     return JobSubmitResponse(job_id=job_id, status="queued", message=msg)
@@ -2451,8 +2452,7 @@ async def notify_completion(job_id: str):
                 )
                 if linked:
                     await _persist_job_goal_context(
-                        pool, rework["job_id"], linked,
-                        str(rework["milestone_id"]) if rework.get("milestone_id") else None,
+                        pool, rework["job_id"], linked.goal_id, linked.milestone_id,
                     )
                 if not promoted_job_id:
                     async with pool.acquire() as conn:

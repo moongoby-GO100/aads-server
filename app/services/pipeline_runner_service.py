@@ -24,7 +24,7 @@ import uuid
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, Optional
+from typing import Any, Dict, NamedTuple, Optional
 
 from app.core.project_config import PROJECT_MAP
 from app.services.goal_binding import (
@@ -198,13 +198,20 @@ async def _auto_link_job_to_goal(job_id: str, project: str) -> None:
     await _link_job_to_goal_explicit(job_id, project)
 
 
+class GoalLink(NamedTuple):
+    """`_link_job_to_goal_explicit` 가 실제로 확정한 연결. milestone_id 는 해석·검증 후 값이다."""
+
+    goal_id: str
+    milestone_id: Optional[str]
+
+
 async def _link_job_to_goal_explicit(
     job_id: str,
     project: str,
     instruction: Optional[str] = None,
     goal_id: Optional[str] = None,
     milestone_id: Optional[str] = None,
-) -> Optional[str]:
+) -> Optional[GoalLink]:
     """작업을 **명시적으로 지정된** 목표에만 연결한다.
 
     이전 구현은 `project` 의 첫 active 목표를 골라 붙였다. 그래서 OHVIS trace
@@ -214,8 +221,10 @@ async def _link_job_to_goal_explicit(
       1) 호출자가 넘긴 goal_id/milestone_id (제출 API 필드, pipeline_jobs 에 보존)
       2) 지시서 메타데이터 `GOAL_ID: <uuid>` / `MILESTONE_ID: <uuid>`
 
-    근거가 없으면 **아무 목표에도 붙이지 않고** None 을 돌려준다(하위호환: 기존
-    호출부는 반환값을 쓰지 않으며 예외도 나지 않는다). 지정된 목표는 작업과 같은
+    근거가 없으면 **아무 목표에도 붙이지 않고** None 을 돌려준다. 연결했으면
+    `GoalLink(goal_id, milestone_id)` 를 돌려준다 — milestone_id 는 요청 필드가 아니라
+    지시서 메타까지 반영해 검증을 통과한 값이며, 호출부는 이 값을 그대로 저장해야 한다
+    (요청 필드를 다시 넘기면 방금 쓴 milestone_id 를 NULL 로 덮는다). 지정된 목표는 작업과 같은
     프로젝트여야 하고 draft/active 상태여야 한다 — 아니면 거부하고 연결하지 않는다.
     """
     binding = parse_goal_binding(instruction, goal_id=goal_id, milestone_id=milestone_id)
@@ -311,7 +320,7 @@ async def _link_job_to_goal_explicit(
             "goal_linked_explicit: job=%s goal=%s milestone=%s source=%s project=%s",
             job_id, binding.goal_id, resolved_milestone, binding.source, project,
         )
-        return binding.goal_id
+        return GoalLink(binding.goal_id, resolved_milestone)
     except Exception as exc:
         logger.warning("goal_link_failed job=%s: %s", job_id, exc)
         return None
