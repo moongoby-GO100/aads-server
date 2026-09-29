@@ -220,6 +220,18 @@ async def load_gate(project: Optional[str]) -> Tuple[bool, str]:
     return True, ""
 
 
+async def goal_paused(goal_id: str) -> Tuple[bool, str]:
+    """대표님이 목표 전체의 자동 발송을 멈춰 두셨는가."""
+    from app.core.db_pool import get_pool
+
+    row = await get_pool().fetchrow(
+        "SELECT paused_at, paused_reason FROM goals WHERE id = $1::uuid", goal_id,
+    )
+    if not row or row["paused_at"] is None:
+        return False, ""
+    return True, row["paused_reason"] or "대표님이 목표를 멈춤"
+
+
 async def owner_paused(goal_id: str, session_id: str) -> Tuple[bool, str]:
     """대표님이 이 담당을 멈춰 두셨는가."""
     from app.core.db_pool import get_pool

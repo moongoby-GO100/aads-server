@@ -95,6 +95,10 @@ class GoalUpdateRequest(BaseModel):
     deadline: Optional[str] = None
 
 
+class GoalPauseRequest(BaseModel):
+    reason: str
+
+
 class TaskStatusRequest(BaseModel):
     task_type: str
     task_id: str
@@ -483,7 +487,7 @@ async def goal_board(
     pool = get_pool()
     async with pool.acquire() as conn:
         goal = await conn.fetchrow(
-            "SELECT id::text, project, title, status, progress, "
+            "SELECT id::text, project, title, status, progress, paused_at, paused_reason, "
             "       COALESCE(owner_role_key, '') AS owner_role_key, "
             "       COALESCE(owner_session_id::text, '') AS owner_session_id "
             "FROM goals WHERE id = $1::uuid AND tenant_id = $2::uuid",
@@ -613,6 +617,8 @@ async def goal_board(
     docs = await goal_documents(goal_id, context)
     return {
         "goal": dict(goal),
+        "goal_paused": goal.get("paused_at") is not None,
+        "goal_paused_reason": goal.get("paused_reason") if goal.get("paused_at") else None,
         "halted": await is_halted(),
         "owners": owners,
         "milestones": [dict(m) for m in ms],
@@ -1201,6 +1207,59 @@ async def remove_goal_owner(
             "나가지 않습니다." if holding else None
         ),
     }
+
+
+@router.post("/goals/{goal_id}/pause")
+async def pause_goal(
+    goal_id: str, req: GoalPauseRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
+    """목표의 자동 발송을 멈춘다. 이미 멈춘 목표에는 첫 시각을 보존한다."""
+    from app.core.db_pool import get_pool
+
+    if not bool(context.get("user", {}).get("is_internal_admin")):
+        raise HTTPException(status_code=403, detail="internal_admin_required")
+
+    reason = req.reason.strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="reason required")
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE goals SET paused_at = COALESCE(paused_at, NOW()), "
+            "paused_reason = $3, paused_by = $4, updated_at = NOW() "
+            "WHERE id = $1::uuid AND tenant_id = $2::uuid "
+            "RETURNING paused_at, paused_reason, paused_by",
+            goal_id, _tenant_id(context), reason,
+            str(context.get("user", {}).get("user_id")
+                or context.get("user", {}).get("id") or "unknown"),
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="goal_not_found")
+    return {"goal_paused": True, "goal_paused_reason": row["paused_reason"]}
+
+
+@router.delete("/goals/{goal_id}/pause")
+async def resume_goal(
+    goal_id: str, context: dict[str, Any] = Depends(require_tenant_member),
+):
+    """목표의 자동 발송 멈춤을 푼다."""
+    from app.core.db_pool import get_pool
+
+    if not bool(context.get("user", {}).get("is_internal_admin")):
+        raise HTTPException(status_code=403, detail="internal_admin_required")
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE goals SET paused_at = NULL, paused_reason = NULL, "
+            "paused_by = NULL, updated_at = NOW() "
+            "WHERE id = $1::uuid AND tenant_id = $2::uuid RETURNING id",
+            goal_id, _tenant_id(context),
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="goal_not_found")
+    return {"goal_paused": False, "goal_paused_reason": None}
 
 
 @router.post("/goals/{goal_id}/owners/{session_id}/pause")

@@ -92,6 +92,7 @@ def harness(monkeypatch):
         return (True, "")
 
     monkeypatch.setattr(orchestration_limits, "owner_paused", _open)
+    monkeypatch.setattr(orchestration_limits, "goal_paused", _open)
     monkeypatch.setattr(orchestration_limits, "cost_gate", _ok)
     monkeypatch.setattr(orchestration_limits, "load_gate", _ok)
     # 한 사이클 발송 상한이 기본 2 라 3건을 볼 수 없다.

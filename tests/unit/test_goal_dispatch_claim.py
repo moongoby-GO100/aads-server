@@ -147,6 +147,7 @@ def harness(monkeypatch):
         return (True, "")
 
     monkeypatch.setattr(orchestration_limits, "owner_paused", _open)
+    monkeypatch.setattr(orchestration_limits, "goal_paused", _open)
     monkeypatch.setattr(orchestration_limits, "cost_gate", _ok)
     monkeypatch.setattr(orchestration_limits, "load_gate", _ok)
     monkeypatch.setattr(goal_dispatch, "_MAX_PER_CYCLE", 10)

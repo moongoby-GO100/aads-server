@@ -52,6 +52,38 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 _running: set[asyncio.Task] = set()
 
 
+async def _relay_goal(origin_session_id: str, target_session_id: str, question: str) -> Optional[str]:
+    """명시한 목표 또는 양쪽 세션의 유일한 공통 목표에만 릴레이를 묶는다."""
+    from app.core.db_pool import get_pool
+
+    rows = await get_pool().fetch(
+        "SELECT DISTINCT a.goal_id::text AS goal_id FROM goal_task_links a "
+        "JOIN goal_task_links b ON b.goal_id = a.goal_id "
+        "WHERE a.task_type = 'chat_session' AND a.task_id = $1 "
+        "AND b.task_type = 'chat_session' AND b.task_id = $2 "
+        "AND COALESCE(a.link_state, 'active') = 'active' "
+        "AND COALESCE(b.link_state, 'active') = 'active'",
+        origin_session_id, target_session_id,
+    )
+    linked = {r["goal_id"] for r in rows}
+    explicit = re.search(r"GOAL_ID:\s*([0-9a-f-]{36})", question, re.I)
+    if explicit and explicit.group(1) in linked:
+        return explicit.group(1)
+    return next(iter(linked)) if len(linked) == 1 else None
+
+
+async def _relay_paused(goal_id: Optional[str], relay_id: str) -> bool:
+    if not goal_id:
+        return False
+    from app.services.orchestration_limits import goal_paused
+
+    paused, why = await goal_paused(goal_id)
+    if paused:
+        logger.info("session_relay_goal_paused", goal=goal_id, milestone=None,
+                    relay=relay_id, why=why)
+    return paused
+
+
 async def _resolve_target(target: str, origin_session_id: str) -> Optional[Dict[str, Any]]:
     """담당 이름 또는 세션 id 로 대상 세션을 찾는다.
 
@@ -193,7 +225,8 @@ def _build_question(origin_title: str, origin_role: str, origin_id: str,
     return "\n".join(body)
 
 
-async def _deliver_answer(origin_session_id: str, content: str) -> None:
+async def _deliver_answer(origin_session_id: str, content: str,
+                          goal_id: Optional[str] = None, relay_id: str = "") -> bool:
     """회신을 물어본 세션에 넣고 **다음 행동을 하게 한다.**
 
     2026-09-14 첫 구현은 회신을 assistant 메시지로 넣었다. 루프를 막으려는
@@ -229,6 +262,9 @@ async def _deliver_answer(origin_session_id: str, content: str) -> None:
             "session_relay_delivered_while_busy origin=%s", origin_session_id[:8]
         )
 
+    if await _relay_paused(goal_id, relay_id):
+        return False
+
     async for chunk in cs.send_message_stream(
         session_id=origin_session_id,
         content=content,
@@ -236,10 +272,12 @@ async def _deliver_answer(origin_session_id: str, content: str) -> None:
         response_mode="quality",
     ):
         del chunk
+    return True
 
 
 async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
-                     origin_session_id: str, question: str) -> None:
+                     origin_session_id: str, question: str,
+                     goal_id: Optional[str] = None) -> None:
     """대상 세션에 질문을 넣고, 답이 나오면 물어본 세션에 회신한다."""
     from app.core.db_pool import get_pool
     from app.services import chat_service as cs
@@ -248,6 +286,12 @@ async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
     answer = ""
     execution_id = ""
     try:
+        if await _relay_paused(goal_id, relay_id):
+            await pool.execute(
+                "UPDATE session_relay SET status='queued', error='goal_paused' "
+                "WHERE id=$1::uuid", relay_id,
+            )
+            return
         async for chunk in cs.send_message_stream(
             session_id=target_session_id,
             content=prompt,
@@ -309,7 +353,13 @@ async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
             "`ask_session` 으로 물으세요(한 줄기당 3회까지). 충분하면 결론을 내고 "
             "CEO 에게 보고하세요. 이 메시지에 인사만 하고 끝내지 마세요."
         )
-        await _deliver_answer(origin_session_id, reply)
+        if not await _deliver_answer(origin_session_id, reply, goal_id, relay_id):
+            await pool.execute(
+                "UPDATE session_relay SET status='blocked', pending_reply=$2, "
+                "answer_message_id=$3::uuid, error='goal_paused' WHERE id=$1::uuid",
+                relay_id, reply, answer_id,
+            )
+            return
 
         await pool.execute(
             "UPDATE session_relay SET status='answered', answer_message_id=$2::uuid, "
@@ -379,6 +429,7 @@ async def ask(origin_session_id: str, target: str, question: str,
     if await _pair_in_flight(origin_session_id, tgt["id"]):
         return {"sent": False, "error": "already_in_flight",
                 "message": f"{tgt.get('role_key') or tgt['title']} 와(과) 이미 주고받는 중입니다. 답을 기다리세요."}
+    goal_id = await _relay_goal(origin_session_id, tgt["id"], question)
     # 바쁘면 **반려하지 않고 대기열에 넣는다.**
     #
     # 2026-09-17 대표님 "목표 마일스톤에 접근이 안된다고 세션들에서 보고가
@@ -393,12 +444,12 @@ async def ask(origin_session_id: str, target: str, question: str,
     #
     # 끼어들지 않는다는 원래 판단은 그대로 지킨다(진행 중 응답이 깨진다).
     # 지금 보내지 않을 뿐, 끝나면 보낸다.
-    if await _target_is_busy(tgt["id"]):
+    if await _target_is_busy(tgt["id"]) or await _relay_paused(goal_id, "new"):
         queued_id = str(uuid.uuid4())
         await pool.execute(
-            "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status) "
-            "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'queued')",
-            queued_id, origin_session_id, tgt["id"], hop, question[:2000],
+            "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status, goal_id) "
+            "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'queued', $6::uuid)",
+            queued_id, origin_session_id, tgt["id"], hop, question[:2000], goal_id,
         )
         logger.info("session_relay_queued relay=%s origin=%s target=%s",
                     queued_id[:8], origin_session_id[:8], tgt["id"][:8])
@@ -425,13 +476,13 @@ async def ask(origin_session_id: str, target: str, question: str,
 
     relay_id = str(uuid.uuid4())
     await pool.execute(
-        "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status) "
-        "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'pending')",
-        relay_id, origin_session_id, tgt["id"], hop, question[:2000],
+        "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status, goal_id) "
+        "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'pending', $6::uuid)",
+        relay_id, origin_session_id, tgt["id"], hop, question[:2000], goal_id,
     )
 
     task = asyncio.create_task(
-        _run_relay(relay_id, tgt["id"], prompt, origin_session_id, question)
+        _run_relay(relay_id, tgt["id"], prompt, origin_session_id, question, goal_id)
     )
     _running.add(task)
     task.add_done_callback(_running.discard)
@@ -456,6 +507,51 @@ async def ask(origin_session_id: str, target: str, question: str,
 # 턴이 돌 때만 일어나, 세션이 멈추면 23시간을 그대로 남았다).
 _RELAY_QUEUE_MAX_AGE_HOURS = max(1, int(os.getenv("SESSION_RELAY_QUEUE_MAX_AGE_HOURS", "6")))
 _RELAY_QUEUE_BATCH = max(1, int(os.getenv("SESSION_RELAY_QUEUE_BATCH", "3")))
+# 목표가 멈춘 동안에도 이보다 묵으면 버린다. 멈춘 채 버려진 목표에 대기
+# 질문·붙잡힌 회신이 영원히 쌓이지 않게 하는 상한이다.
+_RELAY_PAUSED_MAX_AGE_HOURS = max(
+    _RELAY_QUEUE_MAX_AGE_HOURS,
+    int(os.getenv("SESSION_RELAY_PAUSED_MAX_AGE_HOURS", "72")),
+)
+
+
+async def _resume_blocked_reply(relay_id: str, origin_session_id: str,
+                                reply: str, goal_id: Optional[str]) -> None:
+    """목표 멈춤으로 붙잡아 둔 회신을 넣는다. 사이클 밖에서 돈다."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    try:
+        delivered = await _deliver_answer(origin_session_id, reply, goal_id, relay_id)
+    except Exception as exc:
+        # 스트림 도중 실패면 회신이 이미 일부 들어갔을 수 있다. 다시 넣으면
+        # 중복이므로 재시도하지 않고 실패로 닫는다(`_run_relay` 와 같은 처리).
+        logger.warning("session_relay_reply_resume_failed relay=%s error=%s",
+                       relay_id[:8], str(exc)[:200])
+        try:
+            await pool.execute(
+                "UPDATE session_relay SET status='failed', pending_reply=NULL, error=$2 "
+                "WHERE id=$1::uuid AND status='pending'",
+                relay_id, f"reply_resume_failed: {str(exc)[:450]}",
+            )
+        except Exception:
+            pass
+        return
+    if not delivered:
+        # 집은 뒤 배달 직전에 다시 멈췄다. 다음 해제를 기다린다.
+        await pool.execute(
+            "UPDATE session_relay SET status='blocked', error='goal_paused' "
+            "WHERE id=$1::uuid AND status='pending'",
+            relay_id,
+        )
+        return
+    await pool.execute(
+        "UPDATE session_relay SET status='answered', answered_at=now(), "
+        "pending_reply=NULL, error=NULL WHERE id=$1::uuid",
+        relay_id,
+    )
+    logger.info("session_relay_reply_resumed relay=%s origin=%s",
+                relay_id[:8], origin_session_id[:8])
 
 
 async def dispatch_queued_relays() -> Dict[str, int]:
@@ -472,24 +568,83 @@ async def dispatch_queued_relays() -> Dict[str, int]:
 
     # 너무 묵은 것은 버린다. 여섯 시간 전 질문을 지금 보내면 맥락이 달라져
     # 엉뚱한 답이 온다 — 답이 없는 것보다 나쁘다.
+    #
+    # 목표 멈춤(2026-09-29)으로 멈춰 둔 것도 같은 기준이다. 멈춘 **동안만**
+    # 만료를 미루고, 풀리는 순간 나이가 넘은 것은 배달하기 전에 여기서
+    # 버린다(이 UPDATE 가 배달보다 먼저 돈다). 멈춘 채 버려진 목표에 쌓이지
+    # 않도록 `_RELAY_PAUSED_MAX_AGE_HOURS` 를 넘으면 멈춤과 무관하게 버린다.
+    # 멈춤으로 붙잡아 둔 회신(`blocked` + `pending_reply`)도 같은 규칙이다.
     exp = await pool.execute(
-        "UPDATE session_relay SET status='failed', "
-        "error='queue_expired: 대상이 오래 바빠 배달 못 함' "
-        "WHERE status='queued' AND created_at <= now() - ($1::int * interval '1 hour')",
-        _RELAY_QUEUE_MAX_AGE_HOURS,
+        "UPDATE session_relay r SET status='failed', pending_reply=NULL, "
+        "error = CASE WHEN r.status='blocked' "
+        "  THEN 'reply_expired: 목표 멈춤 동안 회신이 오래 묵음' "
+        "  ELSE 'queue_expired: 대상이 오래 바빠 배달 못 함' END "
+        "WHERE r.status IN ('queued', 'blocked') "
+        "AND ((r.created_at <= now() - ($1::int * interval '1 hour') "
+        "      AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.id = r.goal_id "
+        "                      AND g.paused_at IS NOT NULL)) "
+        "     OR r.created_at <= now() - ($2::int * interval '1 hour'))",
+        _RELAY_QUEUE_MAX_AGE_HOURS, _RELAY_PAUSED_MAX_AGE_HOURS,
     )
     try:
         expired = int(str(exp).split()[-1])
     except (ValueError, IndexError):
         expired = 0
 
+    # 멈춤이 풀린 목표의 회신을 질문 재실행 없이 재개한다.
+    #
+    # 멈춘 목표는 SQL 에서 거른다 — 루프에서 거르면 같은 조회를 회신마다
+    # 한 번 더 한다. 물어본 세션당 한 건씩만 집어, 멈춤이 풀린 순간 한
+    # 세션에 회신이 몰려 들어가지 않게 한다. 배달은 스트림이 끝날 때까지
+    # 걸리므로 사이클에서 기다리지 않고 따로 띄운다(`_resume_blocked_reply`).
+    replies = await pool.fetch(
+        """
+        SELECT DISTINCT ON (r.origin_session_id)
+               r.id::text AS id, r.origin_session_id::text AS origin,
+               r.goal_id::text AS goal_id, r.pending_reply
+          FROM session_relay r
+         WHERE r.status = 'blocked' AND r.pending_reply IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.id = r.goal_id
+                           AND g.paused_at IS NOT NULL)
+         ORDER BY r.origin_session_id, r.created_at ASC
+         LIMIT $1
+        """,
+        _RELAY_QUEUE_BATCH,
+    )
+    for reply in replies:
+        try:
+            if await _target_is_busy(reply["origin"]):
+                continue
+            claimed = await pool.execute(
+                "UPDATE session_relay SET status='pending' "
+                "WHERE id=$1::uuid AND status='blocked'",
+                reply["id"],
+            )
+            if str(claimed).split()[-1] != "1":
+                continue
+            task = asyncio.create_task(_resume_blocked_reply(
+                reply["id"], reply["origin"], reply["pending_reply"], reply["goal_id"],
+            ))
+            _running.add(task)
+            task.add_done_callback(_running.discard)
+            sent += 1
+        except Exception as exc:
+            # 한 건의 실패로 사이클 전체(만료·대기열 배달)가 멈추면 안 된다.
+            logger.warning("session_relay_reply_resume_error relay=%s error=%s",
+                           reply["id"][:8], str(exc)[:200])
+
+    # 멈춘 목표의 질문은 SQL 에서 거른다. 루프에서 `continue` 로 건너뛰면
+    # DISTINCT ON 이 대상당 가장 오래된 한 건만 집으므로, 멈춘 목표의 질문
+    # 한 건이 그 대상에게 가는 다른 목표·목표 없는 질문을 전부 막는다.
     rows = await pool.fetch(
         """
         SELECT DISTINCT ON (target_session_id)
                id::text AS id, origin_session_id::text AS origin, target_session_id::text AS target,
-               question
+               question, goal_id::text AS goal_id
           FROM session_relay
          WHERE status = 'queued'
+           AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.id = session_relay.goal_id
+                           AND g.paused_at IS NOT NULL)
          ORDER BY target_session_id, created_at ASC
          LIMIT $1
         """,
@@ -518,7 +673,7 @@ async def dispatch_queued_relays() -> Dict[str, int]:
             r["origin"], tgt_role or "", r["question"], "",
         )
         task = asyncio.create_task(
-            _run_relay(r["id"], r["target"], prompt, r["origin"], r["question"])
+            _run_relay(r["id"], r["target"], prompt, r["origin"], r["question"], r["goal_id"])
         )
         _running.add(task)
         task.add_done_callback(_running.discard)

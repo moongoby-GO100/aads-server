@@ -126,6 +126,7 @@ def cycle(monkeypatch):
         return 0
 
     monkeypatch.setattr(orchestration_limits, "owner_paused", _open)
+    monkeypatch.setattr(orchestration_limits, "goal_paused", _open)
     monkeypatch.setattr(orchestration_limits, "cost_gate", _ok)
     monkeypatch.setattr(orchestration_limits, "load_gate", _ok)
     monkeypatch.setattr(goal_dispatch, "repair_owner_links", _no_repair)

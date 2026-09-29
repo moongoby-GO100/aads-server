@@ -445,12 +445,15 @@ async def _note_detached(milestone_id: str, note: str) -> None:
 
 async def _send_milestone(
     *,
+    goal_id: str | None = None,
     milestone_id: str,
     session_id: str,
     message: str,
     attempt: int,
     project: str | None,
     count_after: int | None = None,
+    previous_dispatched_at: Any = None,
+    previous_session_id: str | None = None,
 ) -> None:
     """지시를 넣고 스트림이 끝날 때까지 기다린다 — **사이클 밖에서.**
 
@@ -458,10 +461,18 @@ async def _send_milestone(
     그래서 담당 한 명의 긴 응답이 뒤 마일스톤을 자르지 못한다.
     """
 
-    async def _consume() -> None:
+    async def _consume() -> bool:
         # 세마포어를 상한 **안에서** 잡는다. 밖에 두면 순서를 기다리는
         # 동안에는 상한이 안 걸려 결국 상한 없는 대기가 된다.
         async with _send_semaphore():
+            if goal_id is not None:
+                from app.services.orchestration_limits import goal_paused
+
+                paused, why = await goal_paused(goal_id)
+                if paused:
+                    logger.info("goal_dispatch_goal_paused", goal=goal_id,
+                                milestone=milestone_id, why=why)
+                    return False
             from app.services import chat_service as cs
 
             async for _chunk in cs.send_message_stream(
@@ -471,9 +482,20 @@ async def _send_milestone(
                 response_mode="quality",
             ):
                 pass
+            return True
 
     try:
-        await asyncio.wait_for(_consume(), _SEND_TIMEOUT)
+        delivered = await asyncio.wait_for(_consume(), _SEND_TIMEOUT)
+        if not delivered:
+            from app.core.db_pool import get_pool
+
+            await get_pool().execute(
+                "UPDATE milestones SET dispatch_count = dispatch_count - 1, "
+                "dispatched_at = $3, dispatched_session_id = $4::uuid "
+                "WHERE id = $1::uuid AND dispatch_count = $2",
+                milestone_id, count_after, previous_dispatched_at, previous_session_id,
+            )
+            return
     except TimeoutError:
         # 발송 기록은 사이클에서 이미 남았다. 담당이 답을 못 하면
         # `_RETRY_AFTER_MIN` 뒤 재알림이 이어받는다.
@@ -649,6 +671,14 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
             )
 
             for row in rows:
+                from app.services.orchestration_limits import goal_paused
+
+                paused, why = await goal_paused(row["goal_id"])
+                if paused:
+                    logger.info("goal_dispatch_goal_paused", goal=row["goal_id"],
+                                milestone=row["milestone_id"], why=why)
+                    skipped += 1
+                    continue
                 if not row["session_id"]:
                     # 담당이 안 정해진 마일스톤. 말을 걸 곳이 **아직** 없다.
                     #
@@ -865,6 +895,8 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                     "dispatch_blocked_at = NULL, "
                     "updated_at = NOW() WHERE id = $1::uuid "
                     "  AND status = 'in_progress' "
+                    "  AND EXISTS (SELECT 1 FROM goals g WHERE g.id = milestones.goal_id "
+                    "              AND g.paused_at IS NULL) "
                     "  AND (dispatched_at IS NULL "
                     "       OR dispatched_at < NOW() - ($3 || ' minutes')::interval) "
                     "RETURNING dispatch_count",
@@ -909,12 +941,15 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 # 자체 상한(`_SEND_TIMEOUT`)과 동시 실행 상한
                 # (`_SEND_CONCURRENCY`) 아래에서 혼자 끝난다.
                 _spawn_send(
+                    goal_id=row["goal_id"],
                     milestone_id=row["milestone_id"],
                     session_id=str(row["session_id"]),
                     message=_build_message(row, sent_before=count_after - 1),
                     attempt=count_after,
                     project=row["project"],
                     count_after=count_after,
+                    previous_dispatched_at=row["dispatched_at"],
+                    previous_session_id=row.get("dispatched_session_id"),
                 )
 
                 sent += 1

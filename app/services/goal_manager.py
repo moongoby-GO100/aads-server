@@ -1166,7 +1166,8 @@ class GoalStateMachine:
             goal = await conn.fetchrow(
                 """
                 SELECT id, project, title, priority, status, description,
-                       success_criteria, progress, created_at, completed_at
+                       success_criteria, progress, created_at, completed_at,
+                       paused_at, paused_reason
                 FROM goals WHERE id = $1::uuid
                 """,
                 goal_id,
@@ -1216,6 +1217,8 @@ class GoalStateMachine:
                 "title": goal["title"],
                 "priority": goal["priority"],
                 "status": goal["status"],
+                "goal_paused": goal.get("paused_at") is not None,
+                "goal_paused_reason": goal.get("paused_reason") if goal.get("paused_at") else None,
                 "description": goal["description"],
                 "success_criteria": goal["success_criteria"] or goal["description"],
                 "progress": float(goal["progress"]) if goal["progress"] else (completed / total if total > 0 else 0),
@@ -1248,7 +1251,8 @@ class GoalStateMachine:
         async with pool.acquire() as conn:
             if project:
                 rows = await conn.fetch(
-                    """SELECT id, project, title, priority, status, progress, created_at, completed_at
+                    """SELECT id, project, title, priority, status, progress, created_at, completed_at,
+                              paused_at, paused_reason
                        FROM goals WHERE project = $1
                          AND ($2::uuid IS NULL OR tenant_id = $2::uuid) ORDER BY
                        CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'blocked' THEN 3 WHEN 'completed' THEN 4 ELSE 9 END,
@@ -1257,7 +1261,8 @@ class GoalStateMachine:
                 )
             else:
                 rows = await conn.fetch(
-                    """SELECT id, project, title, priority, status, progress, created_at, completed_at
+                    """SELECT id, project, title, priority, status, progress, created_at, completed_at,
+                              paused_at, paused_reason
                        FROM goals WHERE ($1::uuid IS NULL OR tenant_id = $1::uuid) ORDER BY
                        CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'blocked' THEN 3 WHEN 'completed' THEN 4 ELSE 9 END,
                        created_at DESC""",
@@ -1270,6 +1275,8 @@ class GoalStateMachine:
                 "title": r["title"],
                 "priority": r["priority"],
                 "status": r["status"],
+                "goal_paused": r.get("paused_at") is not None,
+                "goal_paused_reason": r.get("paused_reason") if r.get("paused_at") else None,
                 "progress": float(r["progress"]) if r["progress"] else 0,
                 "created_at": r["created_at"].isoformat() if r["created_at"] else None,
                 "completed_at": r["completed_at"].isoformat() if r["completed_at"] else None,

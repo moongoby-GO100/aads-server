@@ -1,0 +1,5 @@
+ALTER TABLE session_relay DROP COLUMN IF EXISTS pending_reply;
+ALTER TABLE session_relay DROP COLUMN IF EXISTS goal_id;
+ALTER TABLE goals DROP COLUMN IF EXISTS paused_by;
+ALTER TABLE goals DROP COLUMN IF EXISTS paused_reason;
+ALTER TABLE goals DROP COLUMN IF EXISTS paused_at;

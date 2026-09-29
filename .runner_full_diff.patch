@@ -1,1199 +1,1214 @@
-diff --git a/pc_agent/RELEASE_ZIP_SHA256.json b/pc_agent/RELEASE_ZIP_SHA256.json
-index 99094c68..93521451 100644
---- a/pc_agent/RELEASE_ZIP_SHA256.json
-+++ b/pc_agent/RELEASE_ZIP_SHA256.json
-@@ -14,6 +14,7 @@
-     "build_shinhan_collector_exe.py",
-     "commands/__init__.py",
-     "commands/browser_auto.py",
-+    "commands/browser_reclaim.py",
-     "commands/browser_tab.py",
-     "commands/file_ops.py",
-     "commands/file_transfer.py",
-@@ -48,5 +49,5 @@
-     "tray.py",
-     "updater.py"
-   ],
--  "sha256": "cc17132faf983e3d57dfe7ce3303b4fdba7432893ad778aff9b4e1b340020bb4"
-+  "sha256": "8951cfdf2cd6311fa939bcaac9abecc9b17fb6614f8f0658ad9fbdcf4cc70aa1"
- }
-diff --git a/pc_agent/commands/__init__.py b/pc_agent/commands/__init__.py
-index 3c266fbc..244aee86 100644
---- a/pc_agent/commands/__init__.py
-+++ b/pc_agent/commands/__init__.py
-@@ -35,6 +35,7 @@ system_extra = _safe_import("system_extra")
- screen_stream = _safe_import("screen_stream")
- macro = _safe_import("macro")
- browser_auto = _safe_import("browser_auto")
-+browser_reclaim = _safe_import("browser_reclaim")
- browser_tab = _safe_import("browser_tab")
- file_transfer = _safe_import("file_transfer")
- scheduler = _safe_import("scheduler")
-@@ -108,6 +109,7 @@ _RAW_HANDLERS = {
-     "macro_delete": _handler(macro, "delete_macro_cmd"),
-     # P3: CDP 브라우저 자동화
-     "browser_tab": _handler(browser_tab, "execute"),
-+    "browser_owned_tab": _handler(browser_reclaim, "execute"),
-     "browser_navigate": _handler(browser_auto, "browser_navigate"),
-     "browser_click": _handler(browser_auto, "browser_click"),
-     "browser_fill": _handler(browser_auto, "browser_fill"),
-diff --git a/pc_agent/commands/browser_auto.py b/pc_agent/commands/browser_auto.py
-index f1fd41be..59df7e77 100644
---- a/pc_agent/commands/browser_auto.py
-+++ b/pc_agent/commands/browser_auto.py
-@@ -41,6 +41,12 @@ DOWNLOAD_CONTENT_MAX_BYTES = max(
-     int(os.getenv("AADS_BROWSER_DOWNLOAD_CONTENT_MAX_BYTES", str(2 * 1024 * 1024)) or "0"),
- )
- _MSG_ID = 0
-+_OWNED_TAB_LOCKS: dict[int, asyncio.Lock] = {}
+diff --git a/app/routers/goals.py b/app/routers/goals.py
+index 3e750b3d..df20107b 100644
+--- a/app/routers/goals.py
++++ b/app/routers/goals.py
+@@ -95,6 +95,10 @@ class GoalUpdateRequest(BaseModel):
+     deadline: Optional[str] = None
+ 
+ 
++class GoalPauseRequest(BaseModel):
++    reason: str
 +
 +
-+def _owned_tab_lock(port: int) -> asyncio.Lock:
-+    """Serialize ownership-sensitive operations on one CDP port only."""
-+    return _OWNED_TAB_LOCKS.setdefault(port, asyncio.Lock())
+ class TaskStatusRequest(BaseModel):
+     task_type: str
+     task_id: str
+@@ -483,7 +487,7 @@ async def goal_board(
+     pool = get_pool()
+     async with pool.acquire() as conn:
+         goal = await conn.fetchrow(
+-            "SELECT id::text, project, title, status, progress, "
++            "SELECT id::text, project, title, status, progress, paused_at, paused_reason, "
+             "       COALESCE(owner_role_key, '') AS owner_role_key, "
+             "       COALESCE(owner_session_id::text, '') AS owner_session_id "
+             "FROM goals WHERE id = $1::uuid AND tenant_id = $2::uuid",
+@@ -613,6 +617,8 @@ async def goal_board(
+     docs = await goal_documents(goal_id, context)
+     return {
+         "goal": dict(goal),
++        "goal_paused": goal.get("paused_at") is not None,
++        "goal_paused_reason": goal.get("paused_reason") if goal.get("paused_at") else None,
+         "halted": await is_halted(),
+         "owners": owners,
+         "milestones": [dict(m) for m in ms],
+@@ -1203,6 +1209,59 @@ async def remove_goal_owner(
+     }
  
  
- class CDPCommandError(RuntimeError):
-@@ -56,6 +62,7 @@ class CDPSession:
-     port: int
-     profile_dir: str
-     pid: int = 0
-+    generation: str = field(default_factory=lambda: uuid.uuid4().hex)
-     connected_at: float = field(default_factory=_time)
-     last_heartbeat_at: float = field(default_factory=_time)
-     last_target_id: str = ""
-@@ -886,7 +893,7 @@ async def _best_effort_target_probe(
-     return report
++@router.post("/goals/{goal_id}/pause")
++async def pause_goal(
++    goal_id: str, req: GoalPauseRequest,
++    context: dict[str, Any] = Depends(require_tenant_member),
++):
++    """목표의 자동 발송을 멈춘다. 이미 멈춘 목표에는 첫 시각을 보존한다."""
++    from app.core.db_pool import get_pool
++
++    if not bool(context.get("user", {}).get("is_internal_admin")):
++        raise HTTPException(status_code=403, detail="internal_admin_required")
++
++    reason = req.reason.strip()
++    if not reason:
++        raise HTTPException(status_code=400, detail="reason required")
++    pool = get_pool()
++    async with pool.acquire() as conn:
++        row = await conn.fetchrow(
++            "UPDATE goals SET paused_at = COALESCE(paused_at, NOW()), "
++            "paused_reason = $3, paused_by = $4, updated_at = NOW() "
++            "WHERE id = $1::uuid AND tenant_id = $2::uuid "
++            "RETURNING paused_at, paused_reason, paused_by",
++            goal_id, _tenant_id(context), reason,
++            str(context.get("user", {}).get("user_id")
++                or context.get("user", {}).get("id") or "unknown"),
++        )
++    if not row:
++        raise HTTPException(status_code=404, detail="goal_not_found")
++    return {"goal_paused": True, "goal_paused_reason": row["paused_reason"]}
++
++
++@router.delete("/goals/{goal_id}/pause")
++async def resume_goal(
++    goal_id: str, context: dict[str, Any] = Depends(require_tenant_member),
++):
++    """목표의 자동 발송 멈춤을 푼다."""
++    from app.core.db_pool import get_pool
++
++    if not bool(context.get("user", {}).get("is_internal_admin")):
++        raise HTTPException(status_code=403, detail="internal_admin_required")
++
++    pool = get_pool()
++    async with pool.acquire() as conn:
++        row = await conn.fetchrow(
++            "UPDATE goals SET paused_at = NULL, paused_reason = NULL, "
++            "paused_by = NULL, updated_at = NOW() "
++            "WHERE id = $1::uuid AND tenant_id = $2::uuid RETURNING id",
++            goal_id, _tenant_id(context),
++        )
++    if not row:
++        raise HTTPException(status_code=404, detail="goal_not_found")
++    return {"goal_paused": False, "goal_paused_reason": None}
++
++
+ @router.post("/goals/{goal_id}/owners/{session_id}/pause")
+ async def pause_owner(
+     goal_id: str, session_id: str, req: InterveneRequest,
+diff --git a/app/services/goal_dispatch.py b/app/services/goal_dispatch.py
+index e0c28996..228526a2 100644
+--- a/app/services/goal_dispatch.py
++++ b/app/services/goal_dispatch.py
+@@ -444,12 +444,15 @@ async def _note_detached(milestone_id: str, note: str) -> None:
+ 
+ async def _send_milestone(
+     *,
++    goal_id: str | None = None,
+     milestone_id: str,
+     session_id: str,
+     message: str,
+     attempt: int,
+     project: str | None,
+     count_after: int | None = None,
++    previous_dispatched_at: Any = None,
++    previous_session_id: str | None = None,
+ ) -> None:
+     """지시를 넣고 스트림이 끝날 때까지 기다린다 — **사이클 밖에서.**
+ 
+@@ -457,10 +460,18 @@ async def _send_milestone(
+     그래서 담당 한 명의 긴 응답이 뒤 마일스톤을 자르지 못한다.
+     """
+ 
+-    async def _consume() -> None:
++    async def _consume() -> bool:
+         # 세마포어를 상한 **안에서** 잡는다. 밖에 두면 순서를 기다리는
+         # 동안에는 상한이 안 걸려 결국 상한 없는 대기가 된다.
+         async with _send_semaphore():
++            if goal_id is not None:
++                from app.services.orchestration_limits import goal_paused
++
++                paused, why = await goal_paused(goal_id)
++                if paused:
++                    logger.info("goal_dispatch_goal_paused", goal=goal_id,
++                                milestone=milestone_id, why=why)
++                    return False
+             from app.services import chat_service as cs
+ 
+             async for _chunk in cs.send_message_stream(
+@@ -470,9 +481,20 @@ async def _send_milestone(
+                 response_mode="quality",
+             ):
+                 pass
++            return True
+ 
+     try:
+-        await asyncio.wait_for(_consume(), _SEND_TIMEOUT)
++        delivered = await asyncio.wait_for(_consume(), _SEND_TIMEOUT)
++        if not delivered:
++            from app.core.db_pool import get_pool
++
++            await get_pool().execute(
++                "UPDATE milestones SET dispatch_count = dispatch_count - 1, "
++                "dispatched_at = $3, dispatched_session_id = $4::uuid "
++                "WHERE id = $1::uuid AND dispatch_count = $2",
++                milestone_id, count_after, previous_dispatched_at, previous_session_id,
++            )
++            return
+     except TimeoutError:
+         # 발송 기록은 사이클에서 이미 남았다. 담당이 답을 못 하면
+         # `_RETRY_AFTER_MIN` 뒤 재알림이 이어받는다.
+@@ -619,6 +641,14 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
+             )
+ 
+             for row in rows:
++                from app.services.orchestration_limits import goal_paused
++
++                paused, why = await goal_paused(row["goal_id"])
++                if paused:
++                    logger.info("goal_dispatch_goal_paused", goal=row["goal_id"],
++                                milestone=row["milestone_id"], why=why)
++                    skipped += 1
++                    continue
+                 if not row["session_id"]:
+                     # 담당이 안 정해진 마일스톤. 말을 걸 곳이 **아직** 없다.
+                     #
+@@ -835,6 +865,8 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
+                     "dispatch_blocked_at = NULL, "
+                     "updated_at = NOW() WHERE id = $1::uuid "
+                     "  AND status = 'in_progress' "
++                    "  AND EXISTS (SELECT 1 FROM goals g WHERE g.id = milestones.goal_id "
++                    "              AND g.paused_at IS NULL) "
+                     "  AND (dispatched_at IS NULL "
+                     "       OR dispatched_at < NOW() - ($3 || ' minutes')::interval) "
+                     "RETURNING dispatch_count",
+@@ -879,12 +911,15 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
+                 # 자체 상한(`_SEND_TIMEOUT`)과 동시 실행 상한
+                 # (`_SEND_CONCURRENCY`) 아래에서 혼자 끝난다.
+                 _spawn_send(
++                    goal_id=row["goal_id"],
+                     milestone_id=row["milestone_id"],
+                     session_id=str(row["session_id"]),
+                     message=_build_message(row, sent_before=count_after - 1),
+                     attempt=count_after,
+                     project=row["project"],
+                     count_after=count_after,
++                    previous_dispatched_at=row["dispatched_at"],
++                    previous_session_id=row.get("dispatched_session_id"),
+                 )
+ 
+                 sent += 1
+diff --git a/app/services/goal_manager.py b/app/services/goal_manager.py
+index b9d4769c..7576555d 100644
+--- a/app/services/goal_manager.py
++++ b/app/services/goal_manager.py
+@@ -1166,7 +1166,8 @@ class GoalStateMachine:
+             goal = await conn.fetchrow(
+                 """
+                 SELECT id, project, title, priority, status, description,
+-                       success_criteria, progress, created_at, completed_at
++                       success_criteria, progress, created_at, completed_at,
++                       paused_at, paused_reason
+                 FROM goals WHERE id = $1::uuid
+                 """,
+                 goal_id,
+@@ -1216,6 +1217,8 @@ class GoalStateMachine:
+                 "title": goal["title"],
+                 "priority": goal["priority"],
+                 "status": goal["status"],
++                "goal_paused": goal.get("paused_at") is not None,
++                "goal_paused_reason": goal.get("paused_reason") if goal.get("paused_at") else None,
+                 "description": goal["description"],
+                 "success_criteria": goal["success_criteria"] or goal["description"],
+                 "progress": float(goal["progress"]) if goal["progress"] else (completed / total if total > 0 else 0),
+@@ -1248,7 +1251,8 @@ class GoalStateMachine:
+         async with pool.acquire() as conn:
+             if project:
+                 rows = await conn.fetch(
+-                    """SELECT id, project, title, priority, status, progress, created_at, completed_at
++                    """SELECT id, project, title, priority, status, progress, created_at, completed_at,
++                              paused_at, paused_reason
+                        FROM goals WHERE project = $1
+                          AND ($2::uuid IS NULL OR tenant_id = $2::uuid) ORDER BY
+                        CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'blocked' THEN 3 WHEN 'completed' THEN 4 ELSE 9 END,
+@@ -1257,7 +1261,8 @@ class GoalStateMachine:
+                 )
+             else:
+                 rows = await conn.fetch(
+-                    """SELECT id, project, title, priority, status, progress, created_at, completed_at
++                    """SELECT id, project, title, priority, status, progress, created_at, completed_at,
++                              paused_at, paused_reason
+                        FROM goals WHERE ($1::uuid IS NULL OR tenant_id = $1::uuid) ORDER BY
+                        CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'blocked' THEN 3 WHEN 'completed' THEN 4 ELSE 9 END,
+                        created_at DESC""",
+@@ -1270,6 +1275,8 @@ class GoalStateMachine:
+                 "title": r["title"],
+                 "priority": r["priority"],
+                 "status": r["status"],
++                "goal_paused": r.get("paused_at") is not None,
++                "goal_paused_reason": r.get("paused_reason") if r.get("paused_at") else None,
+                 "progress": float(r["progress"]) if r["progress"] else 0,
+                 "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                 "completed_at": r["completed_at"].isoformat() if r["completed_at"] else None,
+diff --git a/app/services/milestone_review.py b/app/services/milestone_review.py
+index be304338..f3ee613c 100644
+--- a/app/services/milestone_review.py
++++ b/app/services/milestone_review.py
+@@ -280,6 +280,13 @@ async def ask_pending_reviews(project: Optional[str] = None) -> Dict[str, int]:
+         )
+ 
+         for row in rows:
++            from app.services.orchestration_limits import goal_paused
++
++            paused, why = await goal_paused(row["goal_id"])
++            if paused:
++                logger.info("milestone_review_goal_paused", goal=row["goal_id"],
++                            milestone=row["milestone_id"], why=why)
++                continue
+             lead = await _lead_session(conn, row["goal_id"])
+             lead_role = ""
+             if lead:
+diff --git a/app/services/orchestration_limits.py b/app/services/orchestration_limits.py
+index dde7ed20..c5f0bfc7 100644
+--- a/app/services/orchestration_limits.py
++++ b/app/services/orchestration_limits.py
+@@ -220,6 +220,18 @@ async def load_gate(project: Optional[str]) -> Tuple[bool, str]:
+     return True, ""
  
  
--async def _send_cdp_command(
-+async def _send_cdp_command_unlocked(
-     port: int,
-     method: str,
-     params: Dict[str, Any] | None = None,
-@@ -937,6 +944,11 @@ async def _send_cdp_command(
-         candidate_target_id = str(candidate.get("targetId") or candidate.get("id") or "")
-         candidate_url = str(candidate.get("url") or "")
-         candidate_title = str(candidate.get("title") or "")
-+        if candidate_target_id:
-+            # Selection is already inside the port lock. A command may affect
-+            # the page and then time out, so record use before sending it.
-+            from . import browser_reclaim
-+            browser_reclaim.mark_observed(candidate_target_id)
-         try:
-             async with await _connect_cdp_ws(
-                 websockets,
-@@ -1052,6 +1064,38 @@ async def _send_cdp_command(
++async def goal_paused(goal_id: str) -> Tuple[bool, str]:
++    """대표님이 목표 전체의 자동 발송을 멈춰 두셨는가."""
++    from app.core.db_pool import get_pool
++
++    row = await get_pool().fetchrow(
++        "SELECT paused_at, paused_reason FROM goals WHERE id = $1::uuid", goal_id,
++    )
++    if not row or row["paused_at"] is None:
++        return False, ""
++    return True, row["paused_reason"] or "대표님이 목표를 멈춤"
++
++
+ async def owner_paused(goal_id: str, session_id: str) -> Tuple[bool, str]:
+     """대표님이 이 담당을 멈춰 두셨는가."""
+     from app.core.db_pool import get_pool
+diff --git a/app/services/session_relay.py b/app/services/session_relay.py
+index e31dce9b..eaa2c121 100644
+--- a/app/services/session_relay.py
++++ b/app/services/session_relay.py
+@@ -52,6 +52,38 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
+ _running: set[asyncio.Task] = set()
+ 
+ 
++async def _relay_goal(origin_session_id: str, target_session_id: str, question: str) -> Optional[str]:
++    """명시한 목표 또는 양쪽 세션의 유일한 공통 목표에만 릴레이를 묶는다."""
++    from app.core.db_pool import get_pool
++
++    rows = await get_pool().fetch(
++        "SELECT DISTINCT a.goal_id::text AS goal_id FROM goal_task_links a "
++        "JOIN goal_task_links b ON b.goal_id = a.goal_id "
++        "WHERE a.task_type = 'chat_session' AND a.task_id = $1 "
++        "AND b.task_type = 'chat_session' AND b.task_id = $2 "
++        "AND COALESCE(a.link_state, 'active') = 'active' "
++        "AND COALESCE(b.link_state, 'active') = 'active'",
++        origin_session_id, target_session_id,
++    )
++    linked = {r["goal_id"] for r in rows}
++    explicit = re.search(r"GOAL_ID:\s*([0-9a-f-]{36})", question, re.I)
++    if explicit and explicit.group(1) in linked:
++        return explicit.group(1)
++    return next(iter(linked)) if len(linked) == 1 else None
++
++
++async def _relay_paused(goal_id: Optional[str], relay_id: str) -> bool:
++    if not goal_id:
++        return False
++    from app.services.orchestration_limits import goal_paused
++
++    paused, why = await goal_paused(goal_id)
++    if paused:
++        logger.info("session_relay_goal_paused", goal=goal_id, milestone=None,
++                    relay=relay_id, why=why)
++    return paused
++
++
+ async def _resolve_target(target: str, origin_session_id: str) -> Optional[Dict[str, Any]]:
+     """담당 이름 또는 세션 id 로 대상 세션을 찾는다.
+ 
+@@ -193,7 +225,8 @@ def _build_question(origin_title: str, origin_role: str, origin_id: str,
+     return "\n".join(body)
+ 
+ 
+-async def _deliver_answer(origin_session_id: str, content: str) -> None:
++async def _deliver_answer(origin_session_id: str, content: str,
++                          goal_id: Optional[str] = None, relay_id: str = "") -> bool:
+     """회신을 물어본 세션에 넣고 **다음 행동을 하게 한다.**
+ 
+     2026-09-14 첫 구현은 회신을 assistant 메시지로 넣었다. 루프를 막으려는
+@@ -229,6 +262,9 @@ async def _deliver_answer(origin_session_id: str, content: str) -> None:
+             "session_relay_delivered_while_busy origin=%s", origin_session_id[:8]
+         )
+ 
++    if await _relay_paused(goal_id, relay_id):
++        return False
++
+     async for chunk in cs.send_message_stream(
+         session_id=origin_session_id,
+         content=content,
+@@ -236,10 +272,12 @@ async def _deliver_answer(origin_session_id: str, content: str) -> None:
+         response_mode="quality",
+     ):
+         del chunk
++    return True
+ 
+ 
+ async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
+-                     origin_session_id: str, question: str) -> None:
++                     origin_session_id: str, question: str,
++                     goal_id: Optional[str] = None) -> None:
+     """대상 세션에 질문을 넣고, 답이 나오면 물어본 세션에 회신한다."""
+     from app.core.db_pool import get_pool
+     from app.services import chat_service as cs
+@@ -248,6 +286,12 @@ async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
+     answer = ""
+     execution_id = ""
+     try:
++        if await _relay_paused(goal_id, relay_id):
++            await pool.execute(
++                "UPDATE session_relay SET status='queued', error='goal_paused' "
++                "WHERE id=$1::uuid", relay_id,
++            )
++            return
+         async for chunk in cs.send_message_stream(
+             session_id=target_session_id,
+             content=prompt,
+@@ -309,7 +353,13 @@ async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
+             "`ask_session` 으로 물으세요(한 줄기당 3회까지). 충분하면 결론을 내고 "
+             "CEO 에게 보고하세요. 이 메시지에 인사만 하고 끝내지 마세요."
+         )
+-        await _deliver_answer(origin_session_id, reply)
++        if not await _deliver_answer(origin_session_id, reply, goal_id, relay_id):
++            await pool.execute(
++                "UPDATE session_relay SET status='blocked', pending_reply=$2, "
++                "answer_message_id=$3::uuid, error='goal_paused' WHERE id=$1::uuid",
++                relay_id, reply, answer_id,
++            )
++            return
+ 
+         await pool.execute(
+             "UPDATE session_relay SET status='answered', answer_message_id=$2::uuid, "
+@@ -379,6 +429,7 @@ async def ask(origin_session_id: str, target: str, question: str,
+     if await _pair_in_flight(origin_session_id, tgt["id"]):
+         return {"sent": False, "error": "already_in_flight",
+                 "message": f"{tgt.get('role_key') or tgt['title']} 와(과) 이미 주고받는 중입니다. 답을 기다리세요."}
++    goal_id = await _relay_goal(origin_session_id, tgt["id"], question)
+     # 바쁘면 **반려하지 않고 대기열에 넣는다.**
+     #
+     # 2026-09-17 대표님 "목표 마일스톤에 접근이 안된다고 세션들에서 보고가
+@@ -393,12 +444,12 @@ async def ask(origin_session_id: str, target: str, question: str,
+     #
+     # 끼어들지 않는다는 원래 판단은 그대로 지킨다(진행 중 응답이 깨진다).
+     # 지금 보내지 않을 뿐, 끝나면 보낸다.
+-    if await _target_is_busy(tgt["id"]):
++    if await _target_is_busy(tgt["id"]) or await _relay_paused(goal_id, "new"):
+         queued_id = str(uuid.uuid4())
+         await pool.execute(
+-            "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status) "
+-            "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'queued')",
+-            queued_id, origin_session_id, tgt["id"], hop, question[:2000],
++            "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status, goal_id) "
++            "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'queued', $6::uuid)",
++            queued_id, origin_session_id, tgt["id"], hop, question[:2000], goal_id,
+         )
+         logger.info("session_relay_queued relay=%s origin=%s target=%s",
+                     queued_id[:8], origin_session_id[:8], tgt["id"][:8])
+@@ -425,13 +476,13 @@ async def ask(origin_session_id: str, target: str, question: str,
+ 
+     relay_id = str(uuid.uuid4())
+     await pool.execute(
+-        "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status) "
+-        "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'pending')",
+-        relay_id, origin_session_id, tgt["id"], hop, question[:2000],
++        "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status, goal_id) "
++        "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'pending', $6::uuid)",
++        relay_id, origin_session_id, tgt["id"], hop, question[:2000], goal_id,
      )
  
- 
-+async def _send_cdp_command(
-+    port: int,
-+    method: str,
-+    params: Dict[str, Any] | None = None,
-+    *,
-+    timeout_seconds: float,
-+    target_id: str = "",
-+    target_idx: int = 0,
-+) -> Dict[str, Any]:
-+    # _send_cdp_command_unlocked calls _send_cdp/_request_cdp directly; it does
-+    # not call this wrapper. Reclaim uses those same low-level calls under this
-+    # lock, so its last check and close cannot race a normal command on the port.
-+    async with _owned_tab_lock(port):
-+        result = await _send_cdp_command_unlocked(
-+            port, method, params, timeout_seconds=timeout_seconds,
-+            target_id=target_id, target_idx=target_idx,
-+        )
-+        target = result.get("_target") if isinstance(result, dict) else None
-+        if isinstance(target, dict):
-+            resolved_id = str(target.get("id") or target.get("targetId") or "")
-+            if resolved_id:
-+                from . import browser_reclaim
-+                browser_reclaim.mark_observed(resolved_id)
-+                session = CDPSessionManager.get_by_port(port)
-+                if session:
-+                    CDPSessionManager.mark_healthy(
-+                        session.work_key, target_id=resolved_id,
-+                        target_url=str(target.get("url") or ""),
-+                    )
-+        return result
+     task = asyncio.create_task(
+-        _run_relay(relay_id, tgt["id"], prompt, origin_session_id, question)
++        _run_relay(relay_id, tgt["id"], prompt, origin_session_id, question, goal_id)
+     )
+     _running.add(task)
+     task.add_done_callback(_running.discard)
+@@ -456,6 +507,51 @@ async def ask(origin_session_id: str, target: str, question: str,
+ # 턴이 돌 때만 일어나, 세션이 멈추면 23시간을 그대로 남았다).
+ _RELAY_QUEUE_MAX_AGE_HOURS = max(1, int(os.getenv("SESSION_RELAY_QUEUE_MAX_AGE_HOURS", "6")))
+ _RELAY_QUEUE_BATCH = max(1, int(os.getenv("SESSION_RELAY_QUEUE_BATCH", "3")))
++# 목표가 멈춘 동안에도 이보다 묵으면 버린다. 멈춘 채 버려진 목표에 대기
++# 질문·붙잡힌 회신이 영원히 쌓이지 않게 하는 상한이다.
++_RELAY_PAUSED_MAX_AGE_HOURS = max(
++    _RELAY_QUEUE_MAX_AGE_HOURS,
++    int(os.getenv("SESSION_RELAY_PAUSED_MAX_AGE_HOURS", "72")),
++)
 +
 +
- async def _collect_page_diagnostics(
-     port: int,
-     *,
-diff --git a/pc_agent/commands/browser_reclaim.py b/pc_agent/commands/browser_reclaim.py
-new file mode 100644
-index 00000000..c8eb00d3
---- /dev/null
-+++ b/pc_agent/commands/browser_reclaim.py
-@@ -0,0 +1,435 @@
-+"""Opt-in, fail-closed reclamation of tabs created by this agent.
++async def _resume_blocked_reply(relay_id: str, origin_session_id: str,
++                                reply: str, goal_id: Optional[str]) -> None:
++    """목표 멈춤으로 붙잡아 둔 회신을 넣는다. 사이클 밖에서 돈다."""
++    from app.core.db_pool import get_pool
 +
-+The in-memory ledger deliberately does not survive an agent restart: a lost
-+creation proof must never be reconstructed from a CDP /json listing.
-+"""
-+from __future__ import annotations
-+
-+import asyncio
-+import json
-+import logging
-+import os
-+import threading
-+import time
-+import uuid
-+from dataclasses import dataclass
-+from typing import Any
-+from urllib.parse import urlparse
-+
-+from . import browser_auto as cdp
-+
-+try:
-+    import psutil
-+except ImportError:  # no process/port proof means no ownership
-+    psutil = None
-+
-+_OWNED: dict[str, OwnedTab] = {}
-+_USED: set[str] = set()
-+_OWNED_LOCK = threading.Lock()
-+_MAX_PER_PASS = 2
-+_MAX_OWNED = 64
-+_SWEEP_CURSOR = 0
-+_SWEEP_WINDOW = 0
-+_SWEEP_COUNT = 0
-+_CREATE_ATTEMPTS = 0
-+_QUARANTINED: dict[tuple[int, str], str] = {}
-+logger = logging.getLogger(__name__)
-+_ACTIVITY_JS = """(() => ({
-+  visible: document.visibilityState === 'visible',
-+  focused: document.hasFocus(),
-+  editing: !!document.querySelector('input:focus,textarea:focus,[contenteditable]:focus') ||
-+    [...document.querySelectorAll('input,textarea,[contenteditable]')].some(e =>
-+      !['hidden','submit','button','checkbox','radio'].includes(e.type) &&
-+      !!(e.value || e.textContent || '').trim()),
-+  downloading: !!document.querySelector('a[download]:focus'),
-+  url: location.href
-+}))()"""
-+
-+
-+@dataclass(frozen=True)
-+class OwnedTab:
-+    token: str
-+    epoch: str
-+    work_key: str
-+    port: int
-+    pid: int
-+    process_started: float
-+    browser_ws: str
-+    target_id: str
-+    target_ws: str
-+    lease_until: float
-+    created_at: float
-+    session_generation: str = ""
-+
-+
-+def mark_observed(target_id: str) -> None:
-+    """An interactive binding permanently excludes this target from sweeping."""
-+    with _OWNED_LOCK:
-+        if any(record.target_id == target_id for record in _OWNED.values()):
-+            _USED.add(target_id)
-+
-+
-+def _forget(record: OwnedTab) -> None:
-+    global _CREATE_ATTEMPTS
-+    with _OWNED_LOCK:
-+        if _OWNED.get(record.token) is record:
-+            _OWNED.pop(record.token)
-+            _CREATE_ATTEMPTS = max(0, _CREATE_ATTEMPTS - 1)
-+            if not any(item.target_id == record.target_id for item in _OWNED.values()):
-+                _USED.discard(record.target_id)
-+
-+
-+async def _prune_closed_or_changed(port: int) -> None:
-+    """Discard only records whose loss is confirmed by this browser's CDP inventory.
-+
-+    The caller holds the port lock. An uncertain or malformed response preserves
-+    the ledger, and the hard cap then rejects further creations.
-+    """
-+    global _CREATE_ATTEMPTS
-+    records = [record for record in _OWNED.values() if record.port == port]
-+    quarantined = [key for key in _QUARANTINED if key[0] == port]
-+    if not records and not quarantined:
-+        return
-+    version = await cdp._probe_cdp_version(port)
-+    browser_ws = str((version or {}).get("webSocketDebuggerUrl") or "")
-+    if not _local_ws(browser_ws, port):
-+        return
++    pool = get_pool()
 +    try:
-+        response = await cdp._send_cdp(browser_ws, "Target.getTargets", {}, timeout_seconds=5)
-+    except Exception:  # noqa: BLE001 - uncertain inventory must not discard proof
-+        return
-+    targets = response.get("targetInfos") if isinstance(response, dict) else None
-+    if not isinstance(targets, list) or not all(isinstance(t, dict) and isinstance(t.get("targetId"), str) for t in targets):
-+        return
-+    try:
-+        pages = await cdp._list_cdp_targets(port)
-+    except Exception:  # noqa: BLE001 - a failed listing is not proof of change
-+        return
-+    if not isinstance(pages, list) or not all(isinstance(page, dict) for page in pages):
-+        return
-+    by_id = {target["targetId"]: target for target in targets}
-+    pages_by_id = {page.get("id"): page for page in pages}
-+    for key in quarantined:
-+        if key[1] not in by_id and key[1] not in pages_by_id:
-+            with _OWNED_LOCK:
-+                if key in _QUARANTINED:
-+                    _QUARANTINED.pop(key)
-+                    _CREATE_ATTEMPTS = max(0, _CREATE_ATTEMPTS - 1)
-+    for record in records:
-+        if (_OWNED.get(record.token) is record and record.browser_ws == browser_ws
-+                and _process_proof(record.pid, port) == record.process_started):
-+            target = by_id.get(record.target_id)
-+            page = pages_by_id.get(record.target_id)
-+            if ((target is None and page is None)
-+                    or (target is not None and target.get("type") != "page")
-+                    or (target is not None and page is not None
-+                        and page.get("webSocketDebuggerUrl") != record.target_ws)):
-+                _forget(record)
-+
-+
-+def _process_proof(pid: int, port: int) -> float | None:
-+    """Verify the process behind the listening port and return its start time."""
-+    if psutil is None or pid <= 0:
-+        return None
-+    try:
-+        proc = psutil.Process(pid)
-+        # psutil < 6 uses connections(); both APIs expose the same listener data.
-+        connection_list = getattr(proc, "net_connections", None) or proc.connections
-+        listeners = connection_list(kind="tcp")
-+        if not any(
-+            conn.status == psutil.CONN_LISTEN
-+            and conn.laddr.port == port
-+            and conn.laddr.ip in {"127.0.0.1", "::1"}
-+            for conn in listeners
-+        ):
-+            return None
-+        return proc.create_time()
-+    except (psutil.Error, OSError, AttributeError):
-+        return None
-+
-+
-+def _local_ws(url: str, port: int) -> bool:
-+    parsed = urlparse(url)
-+    return parsed.scheme == "ws" and parsed.hostname in {"localhost", "127.0.0.1", "::1"} and parsed.port == port
-+
-+
-+async def _target_info(browser_ws: str, target_id: str) -> dict[str, Any] | None:
-+    try:
-+        response = await cdp._send_cdp(browser_ws, "Target.getTargetInfo", {"targetId": target_id}, timeout_seconds=5)
-+        info = response.get("targetInfo") if isinstance(response, dict) else None
-+        return info if isinstance(info, dict) and info.get("targetId") == target_id else None
-+    except Exception:  # noqa: BLE001 - an uncertain CDP result must block reclamation
-+        return None
-+
-+
-+async def _activity(target_ws: str) -> dict[str, Any] | None:
-+    try:
-+        response = await cdp._send_cdp(
-+            target_ws, "Runtime.evaluate",
-+            {"expression": _ACTIVITY_JS, "returnByValue": True, "awaitPromise": False},
-+            timeout_seconds=5,
-+        )
-+        result = response.get("result") if isinstance(response, dict) else None
-+        value = result.get("value") if isinstance(result, dict) else None
-+        if not isinstance(result, dict) or result.get("exceptionDetails") or not isinstance(value, dict):
-+            return None
-+        if not all(type(value.get(key)) is bool for key in ("visible", "focused", "editing", "downloading")):
-+            return None
-+        return value if isinstance(value.get("url"), str) else None
-+    except Exception:  # noqa: BLE001 - an uncertain activity result must block reclamation
-+        return None
-+
-+
-+def _activity_value(response: dict[str, Any]) -> dict[str, Any] | None:
-+    if not isinstance(response, dict) or response.get("exceptionDetails"):
-+        return None
-+    result = response.get("result") if isinstance(response, dict) else None
-+    value = result.get("value") if isinstance(result, dict) else None
-+    if (not isinstance(value, dict) or not all(type(value.get(k)) is bool
-+            for k in ("visible", "focused", "editing", "downloading"))
-+            or not isinstance(value.get("url"), str)):
-+        return None
-+    return value
-+
-+
-+def _ownership_current(record: OwnedTab) -> bool:
-+    session = cdp.CDPSessionManager.get_session(record.work_key)
-+    return bool(
-+        _OWNED.get(record.token) is record and record.token and record.epoch
-+        and session and record.session_generation
-+        and session.generation == record.session_generation
-+        and session.port == record.port and session.pid == record.pid
-+        and time.monotonic() >= record.lease_until
-+        and record.target_id not in _USED
-+        and session.last_target_id != record.target_id
-+        and session.last_heartbeat_at <= time.time() - 60
-+        and cdp._is_managed_profile_dir(session.profile_dir)
-+        and _process_proof(record.pid, record.port) == record.process_started
-+    )
-+
-+
-+async def _guarded_close(record: OwnedTab) -> str:
-+    """Observe the target and close it over one attached browser connection.
-+
-+    CDP navigation/target events received before the close acknowledgement veto
-+    confirmation. A separate client can still race the browser after the command
-+    is sent; therefore this path is limited to a proven untouched blank tab.
-+    """
-+    import websockets
-+
-+    if not _ownership_current(record):
-+        return "ownership_or_session_changed"
-+    ws = await cdp._connect_cdp_ws(websockets, record.browser_ws, open_timeout=5)
-+    session_id = ""
-+    changed = False
-+
-+    async def request(method: str, params: dict[str, Any] | None = None, *, target_session: bool = False) -> dict[str, Any]:
-+        nonlocal changed
-+        msg_id = cdp._next_id()
-+        payload: dict[str, Any] = {"id": msg_id, "method": method, "params": params or {}}
-+        if target_session:
-+            payload["sessionId"] = session_id
-+        await ws.send(json.dumps(payload))
-+        while True:
-+            message = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-+            event = message.get("method", "")
-+            if event in {"Page.frameStartedNavigating", "Page.frameNavigated", "Page.navigatedWithinDocument",
-+                         "Runtime.executionContextsCleared", "Target.detachedFromTarget", "Target.targetDestroyed"}:
-+                changed = True
-+            if event == "Target.targetInfoChanged":
-+                info = (message.get("params") or {}).get("targetInfo") or {}
-+                if info.get("targetId") == record.target_id and info.get("url") != "about:blank":
-+                    changed = True
-+            if message.get("id") == msg_id:
-+                if "error" in message:
-+                    raise RuntimeError(str(message["error"]))
-+                return message.get("result") or {}
-+
-+    try:
-+        attached = await request("Target.attachToTarget", {"targetId": record.target_id, "flatten": True})
-+        session_id = str(attached.get("sessionId") or "")
-+        if not session_id:
-+            return "attach_failed"
-+        await request("Page.enable", target_session=True)
-+        await request("Runtime.enable", target_session=True)
-+        changed = False  # discard only setup events, before the final activity sample
-+        response = await request("Runtime.evaluate", {"expression": _ACTIVITY_JS, "returnByValue": True,
-+                                                       "awaitPromise": False}, target_session=True)
-+        activity = _activity_value(response)
-+        if changed or activity is None or any(activity[k] for k in ("visible", "focused", "editing", "downloading")):
-+            return "user_active_or_changed"
-+        if activity["url"] != "about:blank":
-+            return "non_blank_protected"
-+        info = await request("Target.getTargetInfo", {"targetId": record.target_id})
-+        target = info.get("targetInfo") or {}
-+        if changed or target.get("targetId") != record.target_id or target.get("type") != "page" or target.get("url") != "about:blank":
-+            return "target_changed"
-+        if not _ownership_current(record):
-+            return "ownership_or_session_changed"
-+        closed = await request("Target.closeTarget", {"targetId": record.target_id})
-+        if changed or not _ownership_current(record):
-+            return "changed_during_close"
-+        return "closed" if closed.get("success") is True else "close_not_confirmed"
-+    finally:
-+        if session_id:
-+            try:
-+                await request("Target.detachFromTarget", {"sessionId": session_id})
-+            except Exception as exc:  # noqa: BLE001 - tab may already have closed
-+                logger.debug("target detach failed after close check: %s", exc)
-+        await ws.close()
-+
-+
-+async def create(params: dict[str, Any]) -> dict[str, Any]:
-+    """Create a new target and record ownership only after independent checks."""
-+    global _CREATE_ATTEMPTS
-+    try:
-+        lease = max(60, min(int(params.get("lease_seconds") or 300), 3600))
-+    except (TypeError, ValueError, OverflowError):
-+        return {"status": "error", "data": {"reason": "invalid_lease"}}
-+    work_key = str(params.get("work_key") or "")
-+    session = cdp.CDPSessionManager.get_session(work_key)
-+    if not session or session.pid <= 0 or not cdp._is_managed_profile_dir(session.profile_dir):
-+        return {"status": "error", "data": {"reason": "managed_session_required"}}
-+    port = session.port
-+    async with cdp._owned_tab_lock(port):
-+        await _prune_closed_or_changed(port)
-+        if _CREATE_ATTEMPTS >= _MAX_OWNED:
-+            return {"status": "error", "data": {"reason": "creation_attempt_capacity_reached"}}
-+        if len(_OWNED) >= _MAX_OWNED:
-+            return {"status": "error", "data": {"reason": "ownership_capacity_reached"}}
-+        started = _process_proof(session.pid, port)
-+        version = await cdp._probe_cdp_version(port)
-+        browser_ws = str((version or {}).get("webSocketDebuggerUrl") or "")
-+        if started is None or not _local_ws(browser_ws, port):
-+            return {"status": "error", "data": {"reason": "process_port_unverified"}}
-+        # Create through the verified browser endpoint. Never adopt an existing tab.
-+        target_id = ""
++        delivered = await _deliver_answer(origin_session_id, reply, goal_id, relay_id)
++    except Exception as exc:
++        # 스트림 도중 실패면 회신이 이미 일부 들어갔을 수 있다. 다시 넣으면
++        # 중복이므로 재시도하지 않고 실패로 닫는다(`_run_relay` 와 같은 처리).
++        logger.warning("session_relay_reply_resume_failed relay=%s error=%s",
++                       relay_id[:8], str(exc)[:200])
 +        try:
-+            # A foreground target remains visible in headful Chrome and cannot
-+            # pass the activity gate. Background creation keeps it eligible.
-+            _CREATE_ATTEMPTS += 1
-+            created = await cdp._send_cdp(browser_ws, "Target.createTarget", {"url": "about:blank", "background": True}, timeout_seconds=5)
-+            target_id = str(created.get("targetId") or "")
-+            pages = await cdp._list_cdp_targets(port)
-+            page = next((p for p in pages if p.get("id") == target_id and p.get("type") == "page"), None)
-+            info = await _target_info(browser_ws, target_id) if page else None
-+            target_ws = str((page or {}).get("webSocketDebuggerUrl") or "")
-+            if (not target_id or not info or info.get("type") != "page"
-+                    or info.get("attached") is not False or page.get("url") != "about:blank"
-+                    or not _local_ws(target_ws, port)
-+                    or _process_proof(session.pid, port) != started
-+                    or cdp.CDPSessionManager.get_session(work_key) is not session):
-+                raise ValueError("creation_proof_failed")
-+            now = time.monotonic()
-+            token = uuid.uuid4().hex
-+            with _OWNED_LOCK:
-+                if len(_OWNED) >= _MAX_OWNED:
-+                    raise ValueError("ownership_capacity_reached")
-+                _OWNED[token] = OwnedTab(token, uuid.uuid4().hex, work_key, port, session.pid,
-+                                         started, browser_ws, target_id, target_ws, now + lease, now,
-+                                         session.generation)
-+            return {"status": "success", "data": {"owner_token": token, "target_id": target_id, "lease_seconds": lease}}
-+        except Exception as exc:  # noqa: BLE001 - creation proof must fail closed
-+            reason = "creation_proof_failed" if isinstance(exc, ValueError) else "creation_failed"
-+            cleanup = "not_created"
-+            if target_id:
-+                cleanup = "quarantined"
-+                _QUARANTINED[(port, target_id)] = reason
-+                logger.warning("owned tab quarantined after failed creation proof: target=%s reason=%s", target_id, reason)
-+            return {"status": "error", "data": {"reason": reason, "target_id": target_id, "cleanup": cleanup}}
-+
-+
-+async def reclaim(params: dict[str, Any]) -> dict[str, Any]:
-+    """One bounded pass; disabled and dry-run unless explicitly enabled locally."""
-+    global _SWEEP_CURSOR, _SWEEP_WINDOW, _SWEEP_COUNT
-+    enabled = os.getenv("AADS_SAFE_TAB_RECLAIM_ENABLED") == "1"
-+    dry_run = params.get("dry_run") is not False
-+    selected = str(params.get("owner_token") or "")
-+    results: list[dict[str, Any]] = []
-+    # Hold the same per-port lock used by command dispatch and tab binding from
-+    # final observation through close. The pass cap applies across all ports.
-+    # Selection itself is local and has no awaits. The cap applies to every caller.
-+    candidates = [r for r in _OWNED.values() if not selected or r.token == selected]
-+    if candidates and not selected:
-+        start = _SWEEP_CURSOR % len(candidates)
-+        candidates = candidates[start:] + candidates[:start]
-+        _SWEEP_CURSOR += _MAX_PER_PASS
-+    window = int(time.monotonic() // 60)
-+    if window != _SWEEP_WINDOW:
-+        _SWEEP_WINDOW, _SWEEP_COUNT = window, 0
-+    entries = candidates[:max(0, _MAX_PER_PASS - _SWEEP_COUNT)]
-+    _SWEEP_COUNT += len(entries)
-+    for record in entries:
-+        async with cdp._owned_tab_lock(record.port):
-+            try:
-+                reason = await _reclaim_reason(record)
-+            except Exception:  # noqa: BLE001 - one uncertain record must not abort the pass
-+                reason = "ownership_unknown"
-+            if reason == "eligible" and enabled and not dry_run:
-+                # All checks, including the last CDP lookup and close, run under this port lock.
-+                try:
-+                    close_reason = await _guarded_close(record)
-+                    if close_reason == "closed":
-+                        _forget(record)
-+                        reason = "closed"
-+                    else:
-+                        reason = close_reason
-+                except Exception:  # noqa: BLE001 - preserve the ownership record
-+                    reason = "close_failed"
-+            elif reason == "eligible":
-+                reason = "dry_run" if enabled else "disabled"
-+            elif reason == "tab_changed":
-+                await _prune_closed_or_changed(record.port)
-+                if _OWNED.get(record.token) is not record:
-+                    reason = "ownership_lost"
-+            results.append({"owner_token": record.token, "target_id": record.target_id, "result": reason})
-+    return {"status": "success", "data": {"results": results, "processed": len(results), "limit": _MAX_PER_PASS}}
-+
-+
-+async def _reclaim_reason(record: OwnedTab) -> str:
-+    if _OWNED.get(record.token) is not record or time.monotonic() < record.lease_until:
-+        return "lease_active_or_changed"
-+    if record.target_id in _USED:
-+        return "user_observed"
-+    session = cdp.CDPSessionManager.get_session(record.work_key)
-+    if (not session or session.port != record.port or session.pid != record.pid
-+            or not record.session_generation or session.generation != record.session_generation
-+            or getattr(session, "last_target_id", None) is None
-+            or session.last_target_id == record.target_id
-+            or getattr(session, "last_heartbeat_at", None) is None
-+            or session.last_heartbeat_at > time.time() - 60
-+            or not cdp._is_managed_profile_dir(session.profile_dir)):
-+        return "session_or_command_active"
-+    if _process_proof(record.pid, record.port) != record.process_started:
-+        return "process_changed"
-+    version = await cdp._probe_cdp_version(record.port)
-+    if str((version or {}).get("webSocketDebuggerUrl") or "") != record.browser_ws:
-+        return "browser_changed"
-+    pages = await cdp._list_cdp_targets(record.port)
-+    page = next((p for p in pages if p.get("id") == record.target_id and p.get("type") == "page"), None)
-+    if not page or page.get("webSocketDebuggerUrl") != record.target_ws:
-+        return "tab_changed"
-+    info = await _target_info(record.browser_ws, record.target_id)
-+    if not info or info.get("attached") is not False or info.get("type") != "page":
-+        return "attached_or_unknown"
-+    # Existing live-control bindings are observers even if CDP reports detached.
-+    from . import browser_tab
-+    if any(tab.target_id == record.target_id for tab in browser_tab._SESSIONS.values()):
-+        return "observed"
-+    activity = await _activity(record.target_ws)
-+    if activity is None or any(activity[key] for key in ("visible", "focused", "editing", "downloading")):
-+        return "user_active_or_unknown"
-+    # CDP has no reliable snapshot of in-flight downloads or unsaved app state.
-+    # A blank target created here is the only target whose state we can prove.
-+    if activity["url"] != "about:blank" or page.get("url") != "about:blank":
-+        return "non_blank_protected"
-+    return "eligible"
-+
-+
-+async def execute(params: dict[str, Any]) -> dict[str, Any]:
-+    operation = params.get("op")
-+    if operation == "create":
-+        return await create(params)
-+    if operation == "reclaim":
-+        return await reclaim(params)
-+    return {"status": "error", "data": {"reason": "unsupported_operation"}}
-diff --git a/pc_agent/commands/browser_tab.py b/pc_agent/commands/browser_tab.py
-index 839291f2..1d9bac1a 100644
---- a/pc_agent/commands/browser_tab.py
-+++ b/pc_agent/commands/browser_tab.py
-@@ -12,6 +12,7 @@ from urllib.parse import urlparse
- from importlib import import_module
- 
- cdp = import_module(f"{__package__}.browser_auto")
-+reclaim = import_module(f"{__package__}.browser_reclaim")
- 
- _SESSIONS: dict[str, 'Tab'] = {}
- _OPEN_LOCK = asyncio.Lock()
-@@ -99,12 +100,11 @@ class Tab:
++            await pool.execute(
++                "UPDATE session_relay SET status='failed', pending_reply=NULL, error=$2 "
++                "WHERE id=$1::uuid AND status='pending'",
++                relay_id, f"reply_resume_failed: {str(exc)[:450]}",
++            )
++        except Exception:
++            pass
++        return
++    if not delivered:
++        # 집은 뒤 배달 직전에 다시 멈췄다. 다음 해제를 기다린다.
++        await pool.execute(
++            "UPDATE session_relay SET status='blocked', error='goal_paused' "
++            "WHERE id=$1::uuid AND status='pending'",
++            relay_id,
++        )
++        return
++    await pool.execute(
++        "UPDATE session_relay SET status='answered', answered_at=now(), "
++        "pending_reply=NULL, error=NULL WHERE id=$1::uuid",
++        relay_id,
++    )
++    logger.info("session_relay_reply_resumed relay=%s origin=%s",
++                relay_id[:8], origin_session_id[:8])
  
  
- async def _open(params: dict) -> dict:
--    import websockets
-     port, work_key = int(params['port']), str(params['work_key'])
-     session = cdp.CDPSessionManager.get_session(work_key)
-     if not work_key.startswith('chat-pc-') or not session or session.port != port:
-         raise ValueError('tab_profile_mismatch')
--    async with _OPEN_LOCK:
-+    async with _OPEN_LOCK, cdp._owned_tab_lock(port):
-         for token, tab in list(_SESSIONS.items()):
-             if time.monotonic() - tab.touched > 60:
-                 _SESSIONS.pop(token, None)
-@@ -119,9 +119,11 @@ async def _open(params: dict) -> dict:
-         if len(pages) != 1:
-             raise ValueError('explicit_tab_required')
-         page = pages[0]
-+        reclaim.mark_observed(page['id'])
-         endpoint = urlparse(page['webSocketDebuggerUrl'])
-         if endpoint.scheme != 'ws' or endpoint.hostname not in {'localhost', '127.0.0.1', '::1'} or endpoint.port != port:
-             raise ValueError('invalid_tab_endpoint')
-+        import websockets
-         ws = await cdp._connect_cdp_ws(websockets, page['webSocketDebuggerUrl'], open_timeout=8)
-         tab = Tab(port, work_key, page['id'], ws)
-         try:
-diff --git a/tests/unit/test_browser_safe_reclaim.py b/tests/unit/test_browser_safe_reclaim.py
+ async def dispatch_queued_relays() -> Dict[str, int]:
+@@ -472,24 +568,83 @@ async def dispatch_queued_relays() -> Dict[str, int]:
+ 
+     # 너무 묵은 것은 버린다. 여섯 시간 전 질문을 지금 보내면 맥락이 달라져
+     # 엉뚱한 답이 온다 — 답이 없는 것보다 나쁘다.
++    #
++    # 목표 멈춤(2026-09-29)으로 멈춰 둔 것도 같은 기준이다. 멈춘 **동안만**
++    # 만료를 미루고, 풀리는 순간 나이가 넘은 것은 배달하기 전에 여기서
++    # 버린다(이 UPDATE 가 배달보다 먼저 돈다). 멈춘 채 버려진 목표에 쌓이지
++    # 않도록 `_RELAY_PAUSED_MAX_AGE_HOURS` 를 넘으면 멈춤과 무관하게 버린다.
++    # 멈춤으로 붙잡아 둔 회신(`blocked` + `pending_reply`)도 같은 규칙이다.
+     exp = await pool.execute(
+-        "UPDATE session_relay SET status='failed', "
+-        "error='queue_expired: 대상이 오래 바빠 배달 못 함' "
+-        "WHERE status='queued' AND created_at <= now() - ($1::int * interval '1 hour')",
+-        _RELAY_QUEUE_MAX_AGE_HOURS,
++        "UPDATE session_relay r SET status='failed', pending_reply=NULL, "
++        "error = CASE WHEN r.status='blocked' "
++        "  THEN 'reply_expired: 목표 멈춤 동안 회신이 오래 묵음' "
++        "  ELSE 'queue_expired: 대상이 오래 바빠 배달 못 함' END "
++        "WHERE r.status IN ('queued', 'blocked') "
++        "AND ((r.created_at <= now() - ($1::int * interval '1 hour') "
++        "      AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.id = r.goal_id "
++        "                      AND g.paused_at IS NOT NULL)) "
++        "     OR r.created_at <= now() - ($2::int * interval '1 hour'))",
++        _RELAY_QUEUE_MAX_AGE_HOURS, _RELAY_PAUSED_MAX_AGE_HOURS,
+     )
+     try:
+         expired = int(str(exp).split()[-1])
+     except (ValueError, IndexError):
+         expired = 0
+ 
++    # 멈춤이 풀린 목표의 회신을 질문 재실행 없이 재개한다.
++    #
++    # 멈춘 목표는 SQL 에서 거른다 — 루프에서 거르면 같은 조회를 회신마다
++    # 한 번 더 한다. 물어본 세션당 한 건씩만 집어, 멈춤이 풀린 순간 한
++    # 세션에 회신이 몰려 들어가지 않게 한다. 배달은 스트림이 끝날 때까지
++    # 걸리므로 사이클에서 기다리지 않고 따로 띄운다(`_resume_blocked_reply`).
++    replies = await pool.fetch(
++        """
++        SELECT DISTINCT ON (r.origin_session_id)
++               r.id::text AS id, r.origin_session_id::text AS origin,
++               r.goal_id::text AS goal_id, r.pending_reply
++          FROM session_relay r
++         WHERE r.status = 'blocked' AND r.pending_reply IS NOT NULL
++           AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.id = r.goal_id
++                           AND g.paused_at IS NOT NULL)
++         ORDER BY r.origin_session_id, r.created_at ASC
++         LIMIT $1
++        """,
++        _RELAY_QUEUE_BATCH,
++    )
++    for reply in replies:
++        try:
++            if await _target_is_busy(reply["origin"]):
++                continue
++            claimed = await pool.execute(
++                "UPDATE session_relay SET status='pending' "
++                "WHERE id=$1::uuid AND status='blocked'",
++                reply["id"],
++            )
++            if str(claimed).split()[-1] != "1":
++                continue
++            task = asyncio.create_task(_resume_blocked_reply(
++                reply["id"], reply["origin"], reply["pending_reply"], reply["goal_id"],
++            ))
++            _running.add(task)
++            task.add_done_callback(_running.discard)
++            sent += 1
++        except Exception as exc:
++            # 한 건의 실패로 사이클 전체(만료·대기열 배달)가 멈추면 안 된다.
++            logger.warning("session_relay_reply_resume_error relay=%s error=%s",
++                           reply["id"][:8], str(exc)[:200])
++
++    # 멈춘 목표의 질문은 SQL 에서 거른다. 루프에서 `continue` 로 건너뛰면
++    # DISTINCT ON 이 대상당 가장 오래된 한 건만 집으므로, 멈춘 목표의 질문
++    # 한 건이 그 대상에게 가는 다른 목표·목표 없는 질문을 전부 막는다.
+     rows = await pool.fetch(
+         """
+         SELECT DISTINCT ON (target_session_id)
+                id::text AS id, origin_session_id::text AS origin, target_session_id::text AS target,
+-               question
++               question, goal_id::text AS goal_id
+           FROM session_relay
+          WHERE status = 'queued'
++           AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.id = session_relay.goal_id
++                           AND g.paused_at IS NOT NULL)
+          ORDER BY target_session_id, created_at ASC
+          LIMIT $1
+         """,
+@@ -518,7 +673,7 @@ async def dispatch_queued_relays() -> Dict[str, int]:
+             r["origin"], tgt_role or "", r["question"], "",
+         )
+         task = asyncio.create_task(
+-            _run_relay(r["id"], r["target"], prompt, r["origin"], r["question"])
++            _run_relay(r["id"], r["target"], prompt, r["origin"], r["question"], r["goal_id"])
+         )
+         _running.add(task)
+         task.add_done_callback(_running.discard)
+diff --git a/migrations/20260929_goal_pause_all_paths.sql b/migrations/20260929_goal_pause_all_paths.sql
 new file mode 100644
-index 00000000..960fa586
+index 00000000..998322ca
 --- /dev/null
-+++ b/tests/unit/test_browser_safe_reclaim.py
-@@ -0,0 +1,590 @@
-+"""Chrome shaped CDP responses and fail-closed owned-tab reclamation."""
++++ b/migrations/20260929_goal_pause_all_paths.sql
+@@ -0,0 +1,10 @@
++-- 목표 단위 멈춤 (AADS-GOAL-PAUSE-ALL-PATHS, 2026-09-29). additive only.
++-- 롤백: migrations/rollback/20260929_goal_pause_all_paths.down.sql
++ALTER TABLE goals ADD COLUMN IF NOT EXISTS paused_at timestamptz;
++ALTER TABLE goals ADD COLUMN IF NOT EXISTS paused_reason text;
++ALTER TABLE goals ADD COLUMN IF NOT EXISTS paused_by text;
++-- 릴레이를 목표에 묶는다. 목표가 지워지면 릴레이 기록은 남기고 연결만 끊는다
++-- (ON DELETE SET NULL — 목표 삭제가 릴레이 FK 로 막히지 않게).
++ALTER TABLE session_relay ADD COLUMN IF NOT EXISTS goal_id uuid
++    REFERENCES goals(id) ON DELETE SET NULL;
++ALTER TABLE session_relay ADD COLUMN IF NOT EXISTS pending_reply text;
+diff --git a/migrations/rollback/20260929_goal_pause_all_paths.down.sql b/migrations/rollback/20260929_goal_pause_all_paths.down.sql
+new file mode 100644
+index 00000000..9c6f7c4f
+--- /dev/null
++++ b/migrations/rollback/20260929_goal_pause_all_paths.down.sql
+@@ -0,0 +1,5 @@
++ALTER TABLE session_relay DROP COLUMN IF EXISTS pending_reply;
++ALTER TABLE session_relay DROP COLUMN IF EXISTS goal_id;
++ALTER TABLE goals DROP COLUMN IF EXISTS paused_by;
++ALTER TABLE goals DROP COLUMN IF EXISTS paused_reason;
++ALTER TABLE goals DROP COLUMN IF EXISTS paused_at;
+diff --git a/tests/unit/test_goal_dispatch_claim.py b/tests/unit/test_goal_dispatch_claim.py
+index 989dc158..b05af31b 100644
+--- a/tests/unit/test_goal_dispatch_claim.py
++++ b/tests/unit/test_goal_dispatch_claim.py
+@@ -147,6 +147,7 @@ def harness(monkeypatch):
+         return (True, "")
+ 
+     monkeypatch.setattr(orchestration_limits, "owner_paused", _open)
++    monkeypatch.setattr(orchestration_limits, "goal_paused", _open)
+     monkeypatch.setattr(orchestration_limits, "cost_gate", _ok)
+     monkeypatch.setattr(orchestration_limits, "load_gate", _ok)
+     monkeypatch.setattr(goal_dispatch, "_MAX_PER_CYCLE", 10)
+diff --git a/tests/unit/test_goal_dispatch_detached_send.py b/tests/unit/test_goal_dispatch_detached_send.py
+index fd4d416b..57c4abf3 100644
+--- a/tests/unit/test_goal_dispatch_detached_send.py
++++ b/tests/unit/test_goal_dispatch_detached_send.py
+@@ -92,6 +92,7 @@ def harness(monkeypatch):
+         return (True, "")
+ 
+     monkeypatch.setattr(orchestration_limits, "owner_paused", _open)
++    monkeypatch.setattr(orchestration_limits, "goal_paused", _open)
+     monkeypatch.setattr(orchestration_limits, "cost_gate", _ok)
+     monkeypatch.setattr(orchestration_limits, "load_gate", _ok)
+     # 한 사이클 발송 상한이 기본 2 라 3건을 볼 수 없다.
+diff --git a/tests/unit/test_goal_dispatch_progress_gate.py b/tests/unit/test_goal_dispatch_progress_gate.py
+index cfbbc2cd..627a270d 100644
+--- a/tests/unit/test_goal_dispatch_progress_gate.py
++++ b/tests/unit/test_goal_dispatch_progress_gate.py
+@@ -45,6 +45,7 @@ def _patch_dispatch_gates(monkeypatch, conn) -> None:
+         return conn.columns
+ 
+     monkeypatch.setattr(orchestration_limits, "owner_paused", _not_paused)
++    monkeypatch.setattr(orchestration_limits, "goal_paused", _not_paused)
+     monkeypatch.setattr(orchestration_limits, "cost_gate", _open)
+     monkeypatch.setattr(orchestration_limits, "load_gate", _open)
+     monkeypatch.setattr(goal_dispatch, "repair_owner_links", _no_repair)
+@@ -166,6 +167,7 @@ def run_cycle(monkeypatch):
+         return 0
+ 
+     monkeypatch.setattr(orchestration_limits, "owner_paused", _not_paused)
++    monkeypatch.setattr(orchestration_limits, "goal_paused", _not_paused)
+     monkeypatch.setattr(orchestration_limits, "cost_gate", _open)
+     monkeypatch.setattr(orchestration_limits, "load_gate", _open)
+     monkeypatch.setattr(goal_dispatch, "repair_owner_links", _no_repair)
+diff --git a/tests/unit/test_goal_dispatch_record_reset.py b/tests/unit/test_goal_dispatch_record_reset.py
+index 4155588a..3e0004b1 100644
+--- a/tests/unit/test_goal_dispatch_record_reset.py
++++ b/tests/unit/test_goal_dispatch_record_reset.py
+@@ -126,6 +126,7 @@ def cycle(monkeypatch):
+         return 0
+ 
+     monkeypatch.setattr(orchestration_limits, "owner_paused", _open)
++    monkeypatch.setattr(orchestration_limits, "goal_paused", _open)
+     monkeypatch.setattr(orchestration_limits, "cost_gate", _ok)
+     monkeypatch.setattr(orchestration_limits, "load_gate", _ok)
+     monkeypatch.setattr(goal_dispatch, "repair_owner_links", _no_repair)
+diff --git a/tests/unit/test_goal_pause_all_paths.py b/tests/unit/test_goal_pause_all_paths.py
+new file mode 100644
+index 00000000..a6a01d87
+--- /dev/null
++++ b/tests/unit/test_goal_pause_all_paths.py
+@@ -0,0 +1,525 @@
++"""Goal pause blocks automatic sends while preserving CEO manual direction."""
 +from __future__ import annotations
 +
++import ast
 +import asyncio
-+import json
-+import os
-+import sys
-+import types
-+from dataclasses import replace
-+from functools import wraps
++from datetime import UTC, datetime, timedelta
++from pathlib import Path
 +
 +import pytest
++from fastapi import HTTPException
 +
-+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "pc_agent"))
-+from commands import browser_auto as cdp
-+from commands import browser_reclaim as reclaim
-+from commands import browser_tab
-+
-+_real_process_proof = reclaim._process_proof
-+
-+
-+def run_async(func):
-+    @wraps(func)
-+    def wrapped(*args, **kwargs):
-+        return asyncio.run(func(*args, **kwargs))
-+    return wrapped
++from app.services import goal_intervene, milestone_review, orchestration_limits
++from tests.unit.test_goal_dispatch_progress_gate import (
++    run_cycle as dispatch_run_cycle,  # noqa: F401
++)
 +
 +
-+@pytest.fixture(autouse=True)
-+def reset(monkeypatch):
-+    cdp.CDPSessionManager._sessions.clear()
-+    cdp._OWNED_TAB_LOCKS.clear()
-+    reclaim._OWNED.clear()
-+    reclaim._USED.clear()
-+    reclaim._QUARANTINED.clear()
-+    reclaim._SWEEP_CURSOR = 0
-+    reclaim._SWEEP_WINDOW = 0
-+    reclaim._SWEEP_COUNT = 0
-+    reclaim._CREATE_ATTEMPTS = 0
-+    browser_tab._SESSIONS.clear()
-+    monkeypatch.setattr(cdp, "_is_managed_profile_dir", lambda _path: True)
-+    monkeypatch.setattr(reclaim, "_process_proof", lambda pid, port: 1234.5 if pid == 42 and port == 9222 else None)
-+    monkeypatch.setenv("AADS_SAFE_TAB_RECLAIM_ENABLED", "1")
-+    yield
-+    cdp.CDPSessionManager._sessions.clear()
-+    cdp._OWNED_TAB_LOCKS.clear()
-+    reclaim._OWNED.clear()
-+    reclaim._USED.clear()
-+    reclaim._QUARANTINED.clear()
-+    reclaim._SWEEP_CURSOR = 0
-+    reclaim._SWEEP_WINDOW = 0
-+    reclaim._SWEEP_COUNT = 0
-+    reclaim._CREATE_ATTEMPTS = 0
-+    browser_tab._SESSIONS.clear()
++def test_goal_pause_reads_flag_independently_of_status(monkeypatch):
++    from app.core import db_pool
 +
++    class Pool:
++        def __init__(self):
++            self.row = {"paused_at": "now", "paused_reason": None}
 +
-+@run_async
-+async def test_chrome_json_without_attached_field_registers_and_reclaims(monkeypatch):
-+    browser_ws = "ws://127.0.0.1:9222/devtools/browser/browser-1"
-+    target_ws = "ws://127.0.0.1:9222/devtools/page/new-1"
-+    # Chrome's /json page listing has no attached field.
-+    pages = [{"id": "new-1", "type": "page", "url": "about:blank",
-+              "webSocketDebuggerUrl": target_ws}]
-+    calls = []
++        async def fetchrow(self, query, goal_id):
++            assert "paused_at" in query and "status" not in query
++            assert goal_id == "goal"
++            return self.row
 +
-+    async def version(_port):
-+        return {"webSocketDebuggerUrl": browser_ws}
-+
-+    async def list_pages(_port):
-+        return pages
-+
-+    async def send(_ws, method, _params, **_kwargs):
-+        calls.append(method)
-+        if method == "Target.createTarget":
-+            assert _params == {"url": "about:blank", "background": True}
-+            return {"targetId": "new-1"}
-+        if method == "Target.getTargetInfo":
-+            return {"targetInfo": {"targetId": "new-1", "type": "page", "attached": False}}
-+        if method == "Runtime.evaluate":
-+            return {"result": {"type": "object", "value": {
-+                "visible": False, "focused": False, "editing": False,
-+                "downloading": False, "url": "about:blank"}}}
-+        if method == "Target.closeTarget":
-+            return {"success": True}
-+        raise AssertionError(method)
-+
-+    monkeypatch.setattr(cdp, "_probe_cdp_version", version)
-+    monkeypatch.setattr(cdp, "_list_cdp_targets", list_pages)
-+    monkeypatch.setattr(cdp, "_send_cdp", send)
-+    async def guarded(_record):
-+        calls.append("Target.closeTarget")
-+        return "closed"
-+    monkeypatch.setattr(reclaim, "_guarded_close", guarded)
-+    session = cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
-+    created = await reclaim.create({"work_key": "job-1", "lease_seconds": 60})
-+    assert created["status"] == "success"
-+    token = created["data"]["owner_token"]
-+    reclaim._OWNED[token] = replace(reclaim._OWNED[token], lease_until=0)
-+    session.last_heartbeat_at = 0
-+    outcome = await reclaim.reclaim({"owner_token": token, "dry_run": False})
-+    assert outcome["data"]["results"][0]["result"] == "closed"
-+    assert token not in reclaim._OWNED
-+    assert calls.count("Target.getTargetInfo") == 2
-+    assert calls.count("Target.closeTarget") == 1
-+
-+
-+@run_async
-+async def test_user_active_tab_is_never_closed(monkeypatch):
-+    browser_ws = "ws://127.0.0.1:9222/devtools/browser/browser-1"
-+    target_ws = "ws://127.0.0.1:9222/devtools/page/new-1"
-+    calls = []
-+    navigated = False
-+
-+    async def version(_port):
-+        return {"webSocketDebuggerUrl": browser_ws}
-+
-+    async def list_pages(_port):
-+        return [{"id": "new-1", "type": "page", "url": "https://example.org/form" if navigated else "about:blank",
-+                 "webSocketDebuggerUrl": target_ws}]
-+
-+    async def send(_ws, method, params, **_kwargs):
-+        calls.append(method)
-+        if method == "Target.createTarget":
-+            return {"targetId": "new-1"}
-+        if method == "Target.getTargetInfo":
-+            return {"targetInfo": {"targetId": "new-1", "type": "page", "attached": False}}
-+        if method == "Runtime.evaluate":
-+            assert "document.hasFocus()" in params["expression"]
-+            assert "[contenteditable]:focus" in params["expression"]
-+            return {"result": {"type": "object", "value": {
-+                "visible": True, "focused": True, "editing": True,
-+                "downloading": False, "url": "https://example.org/form"}}}
-+        if method == "Target.closeTarget":
-+            raise AssertionError("active user tab must not close")
-+        raise AssertionError(method)
-+
-+    monkeypatch.setattr(cdp, "_probe_cdp_version", version)
-+    monkeypatch.setattr(cdp, "_list_cdp_targets", list_pages)
-+    monkeypatch.setattr(cdp, "_send_cdp", send)
-+    session = cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
-+    created = await reclaim.create({"work_key": "job-1"})
-+    assert created["status"] == "success"
-+    navigated = True
-+    token = created["data"]["owner_token"]
-+    session.last_heartbeat_at = 0
-+    reclaim._OWNED[token] = replace(reclaim._OWNED[token], lease_until=0)
-+    outcome = await reclaim.reclaim({"owner_token": token, "dry_run": False})
-+    assert outcome["data"]["results"][0]["result"] == "user_active_or_unknown"
-+    assert token in reclaim._OWNED
-+    assert "Target.closeTarget" not in calls
-+
-+
-+@run_async
-+async def test_close_must_confirm_success_and_pass_is_capped(monkeypatch):
-+    browser_ws = "ws://127.0.0.1:9222/devtools/browser/browser-1"
-+    target_ws = "ws://127.0.0.1:9222/devtools/page/new-1"
-+    for index in range(3):
-+        token = f"owner-{index}"
-+        reclaim._OWNED[token] = reclaim.OwnedTab(
-+            token, f"epoch-{index}", "job-1", 9222, 42, 1234.5,
-+            browser_ws, f"new-{index}", target_ws, 0, 0,
-+        )
-+
-+    async def eligible(_record):
-+        return "eligible"
-+
-+    async def close(_ws, method, _params, **_kwargs):
-+        assert method == "Target.closeTarget"
-+        return {"success": False}
-+
-+    monkeypatch.setattr(reclaim, "_reclaim_reason", eligible)
-+    async def unconfirmed(_record):
-+        assert (await close(None, "Target.closeTarget", {}))["success"] is False
-+        return "close_not_confirmed"
-+    monkeypatch.setattr(reclaim, "_guarded_close", unconfirmed)
-+    result = await reclaim.reclaim({"dry_run": False})
-+    assert result["data"]["processed"] == 2
-+    assert [entry["result"] for entry in result["data"]["results"]] == ["close_not_confirmed"] * 2
-+    assert len(reclaim._OWNED) == 3
-+    assert (await reclaim.reclaim({"work_key": "other", "dry_run": False}))["data"]["processed"] == 0
-+
-+
-+@run_async
-+async def test_default_gates_and_observed_tab(monkeypatch):
-+    actual_reason = reclaim._reclaim_reason
-+    token = "owner-1"
-+    reclaim._OWNED[token] = reclaim.OwnedTab(
-+        token, "epoch-1", "job-1", 9222, 42, 1234.5,
-+        "ws://127.0.0.1:9222/devtools/browser/one", "tab-1",
-+        "ws://127.0.0.1:9222/devtools/page/tab-1", 0, 0,
++    pool = Pool()
++    monkeypatch.setattr(db_pool, "get_pool", lambda: pool)
++    assert asyncio.run(orchestration_limits.goal_paused("goal")) == (
++        True, "대표님이 목표를 멈춤"
 +    )
-+    async def eligible(_record):
-+        return "eligible"
-+    async def should_not_close(*_args, **_kwargs):
-+        raise AssertionError("close must be gated")
-+    monkeypatch.setattr(reclaim, "_reclaim_reason", eligible)
-+    monkeypatch.setattr(cdp, "_send_cdp", should_not_close)
-+    monkeypatch.delenv("AADS_SAFE_TAB_RECLAIM_ENABLED")
-+    assert (await reclaim.reclaim({"dry_run": False}))["data"]["results"][0]["result"] == "disabled"
-+    monkeypatch.setenv("AADS_SAFE_TAB_RECLAIM_ENABLED", "1")
-+    assert (await reclaim.reclaim({}))["data"]["results"][0]["result"] == "dry_run"
-+    reclaim.mark_observed("tab-1")
-+    monkeypatch.setattr(reclaim, "_reclaim_reason", actual_reason)
-+    reclaim._SWEEP_WINDOW = 0  # next sweep window
-+    assert (await reclaim.reclaim({"dry_run": False}))["data"]["results"][0]["result"] == "user_observed"
++    pool.row = {"paused_at": None, "paused_reason": "old reason"}
++    assert asyncio.run(orchestration_limits.goal_paused("goal")) == (False, "")
 +
 +
-+@run_async
-+async def test_invalid_lease_and_failed_proof_cleanup(monkeypatch):
-+    browser_ws = "ws://127.0.0.1:9222/devtools/browser/one"
-+    cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
-+    calls = []
-+    async def version(_port):
-+        return {"webSocketDebuggerUrl": browser_ws}
-+    async def pages(_port):
++def test_dispatch_pause_and_resume(monkeypatch, dispatch_run_cycle):  # noqa: F811
++    paused = True
++
++    async def gate(_goal_id):
++        return (paused, "대표님이 목표를 멈춤" if paused else "")
++
++    monkeypatch.setattr(orchestration_limits, "goal_paused", gate)
++    answered = datetime.now(UTC) - timedelta(hours=1)
++    result, conn, sent = dispatch_run_cycle(answered)
++    assert result["sent"] == 0
++    assert conn.claims == 0  # dispatch_count increment happens only in the claim
++    assert sent == []
++
++    paused = False
++    result, conn, sent = dispatch_run_cycle(answered)
++    assert result["sent"] == 1
++    assert conn.claims == 1
++    assert len(sent) == 1
++
++
++def test_review_pause_and_resume(monkeypatch):
++    from app.core import db_pool
++    from app.services import chat_service
++
++    class Conn:
++        updates = 0
++
++        async def fetch(self, *_args):
++            return [{"goal_id": "goal", "milestone_id": "milestone", "title": "M",
++                     "owner": "owner", "owner_session": "owner", "goal_title": "G",
++                     "project": "AADS", "review_ask_count": 0, "review_asked_at": None,
++                     "completion_criteria": "done", "evidence": {}}]
++
++        async def fetchval(self, *_args):
++            return "lead"
++
++        async def execute(self, *_args):
++            self.updates += 1
++
++    class Pool:
++        def __init__(self, conn):
++            self.conn = conn
++
++        def acquire(self):
++            pool = self
++
++            class Context:
++                async def __aenter__(self):
++                    return pool.conn
++
++                async def __aexit__(self, *_args):
++                    return False
++
++            return Context()
++
++    conn = Conn()
++    monkeypatch.setattr(db_pool, "get_pool", lambda: Pool(conn))
++    monkeypatch.setattr(
++        milestone_review, "_lead_session", lambda *_: asyncio.sleep(0, result="lead")
++    )
++    sent = []
++
++    async def stream(**kwargs):
++        sent.append(kwargs)
++        yield "ok"
++
++    monkeypatch.setattr(chat_service, "send_message_stream", stream)
++    paused = True
++
++    async def gate(_goal_id):
++        return paused, "paused" if paused else ""
++
++    monkeypatch.setattr(orchestration_limits, "goal_paused", gate)
++    assert asyncio.run(milestone_review.ask_pending_reviews()) == {"asked": 0, "escalated": 0}
++    assert conn.updates == 0 and sent == []
++    paused = False
++    assert asyncio.run(milestone_review.ask_pending_reviews())["asked"] == 1
++    assert conn.updates == 1 and len(sent) == 1
++
++
++def test_ceo_direct_still_sends_when_goal_paused(monkeypatch):
++    from app.core import db_pool
++    from app.services import chat_service
++
++    class Pool:
++        async def fetchval(self, *_args):
++            return 1
++
++        def acquire(self):
++            pool = self
++
++            class Context:
++                async def __aenter__(self):
++                    return pool
++
++                async def __aexit__(self, *_args):
++                    return False
++
++            return Context()
++
++    async def owners(*_args):
++        return [{"id": "session", "role_key": "Lead"}]
++
++    sent = []
++
++    async def stream(**kwargs):
++        sent.append(kwargs)
++        yield "ok"
++
++    async def forbidden_gate(_goal_id):
++        raise AssertionError("direct must not consult goal pause")
++
++    monkeypatch.setattr(db_pool, "get_pool", Pool)
++    monkeypatch.setattr(goal_intervene, "_owner_sessions", owners)
++    monkeypatch.setattr(chat_service, "send_message_stream", stream)
++    monkeypatch.setattr(orchestration_limits, "goal_paused", forbidden_gate)
++    result = asyncio.run(goal_intervene.direct("goal", "대표님 지시", tenant_id="tenant"))
++    assert result["sent"] == ["Lead"]
++    assert len(sent) == 1
++
++
++def test_pause_api_handlers_round_trip_and_tenant_scope(monkeypatch):
++    from app.core import db_pool
++    monkeypatch.setenv("JWT_SECRET_KEY", "unit-test-goal-pause-secret")
++    from app.routers import goals
++
++    tenant_id = "00000000-0000-4000-8000-000000000002"
++
++    class Store:
++        paused_at = None
++        paused_reason = None
++        paused_by = None
++
++        async def fetchrow(self, query, goal_id, tenant_id, *values):
++            if (goal_id != "00000000-0000-4000-8000-000000000001"
++                    or tenant_id != "00000000-0000-4000-8000-000000000002"):
++                return None
++            if "paused_at = COALESCE" in query:
++                self.paused_at = self.paused_at or "now"
++                self.paused_reason, self.paused_by = values
++            else:
++                self.paused_at = self.paused_reason = self.paused_by = None
++            return {"id": goal_id, "paused_at": self.paused_at,
++                    "paused_reason": self.paused_reason, "paused_by": self.paused_by}
++
++        def acquire(self):
++            store = self
++
++            class Context:
++                async def __aenter__(self):
++                    return store
++
++                async def __aexit__(self, *_args):
++                    return False
++
++            return Context()
++
++    store = Store()
++    monkeypatch.setattr(db_pool, "get_pool", lambda: store)
++    context = {"tenant": {"id": tenant_id},
++               "user": {"id": "ceo", "is_internal_admin": True}}
++    goal_id = "00000000-0000-4000-8000-000000000001"
++    async def round_trip():
++        stopped = await goals.pause_goal(goal_id, goals.GoalPauseRequest(reason="재기획"), context)
++        after_pause = (store.paused_at, store.paused_reason, store.paused_by)
++        resumed = await goals.resume_goal(goal_id, context)
++        return stopped, after_pause, resumed
++
++    stopped, after_pause, resumed = asyncio.run(round_trip())
++    assert stopped == {"goal_paused": True, "goal_paused_reason": "재기획"}
++    assert after_pause == ("now", "재기획", "ceo")
++    assert resumed == {"goal_paused": False, "goal_paused_reason": None}
++    assert (store.paused_at, store.paused_reason, store.paused_by) == (None, None, None)
++
++
++def test_tenant_member_cannot_pause_or_resume_ceo_goal():
++    from app.routers import goals
++
++    member = {"tenant": {"id": "tenant"},
++              "user": {"id": "member", "is_internal_admin": False}}
++    for call in (goals.pause_goal("goal", goals.GoalPauseRequest(reason="stop"), member),
++                 goals.resume_goal("goal", member)):
++        with pytest.raises(HTTPException) as exc:
++            asyncio.run(call)
++        assert exc.value.status_code == 403
++
++
++def test_detached_send_rechecks_pause_and_refunds_claim(monkeypatch):
++    from app.core import db_pool
++    from app.services import goal_dispatch
++
++    updates = []
++
++    class Pool:
++        async def execute(self, query, *args):
++            updates.append((query, args))
++
++    async def paused(_goal_id):
++        return True, "stop"
++
++    monkeypatch.setattr(db_pool, "get_pool", Pool)
++    monkeypatch.setattr(orchestration_limits, "goal_paused", paused)
++    asyncio.run(goal_dispatch._send_milestone(
++        goal_id="goal", milestone_id="milestone", session_id="session",
++        message="message", attempt=1, project="AADS", count_after=1,
++    ))
++    assert len(updates) == 1
++    assert "dispatch_count = dispatch_count - 1" in updates[0][0]
++
++
++def test_paused_missing_owner_does_not_create_approval(monkeypatch, dispatch_run_cycle):  # noqa: F811
++    from app.services import goal_dispatch
++    from tests.unit import test_goal_dispatch_progress_gate as progress
++
++    original = progress._row
++
++    def missing_owner():
++        row = original()
++        row["session_id"] = None
++        return row
++
++    async def paused(_goal_id):
++        return True, "stop"
++
++    async def forbidden(*_args, **_kwargs):
++        raise AssertionError("approval card created while paused")
++
++    monkeypatch.setattr(progress, "_row", missing_owner)
++    monkeypatch.setattr(goal_dispatch, "_handle_missing_owner", forbidden)
++    monkeypatch.setattr(orchestration_limits, "goal_paused", paused)
++    result, conn, sent = dispatch_run_cycle(None)
++    assert result["owner_requests"] == 0 and conn.claims == 0 and sent == []
++
++
++def test_relay_binds_only_unambiguous_shared_goal(monkeypatch):
++    from app.core import db_pool
++    from app.services import session_relay
++
++    class Pool:
++        def __init__(self):
++            self.rows = [{"goal_id": "00000000-0000-4000-8000-000000000001"},
++                         {"goal_id": "00000000-0000-4000-8000-000000000002"}]
++
++        async def fetch(self, *_args):
++            return self.rows
++
++    pool = Pool()
++    monkeypatch.setattr(db_pool, "get_pool", lambda: pool)
++    assert asyncio.run(session_relay._relay_goal("origin", "target", "unrelated")) is None
++    assert asyncio.run(session_relay._relay_goal(
++        "origin", "target", "GOAL_ID: 00000000-0000-4000-8000-000000000002"
++    )) == pool.rows[1]["goal_id"]
++    pool.rows = pool.rows[:1]
++    assert asyncio.run(session_relay._relay_goal("origin", "target", "work")) == pool.rows[0]["goal_id"]
++
++
++def test_paused_relay_question_stays_queued(monkeypatch):
++    from app.core import db_pool
++    from app.services import session_relay
++
++    writes = []
++
++    class Pool:
++        async def execute(self, query, *args):
++            writes.append((query, args))
++
++    async def paused(_goal_id):
++        return True, "stop"
++
++    monkeypatch.setattr(db_pool, "get_pool", Pool)
++    monkeypatch.setattr(orchestration_limits, "goal_paused", paused)
++    asyncio.run(session_relay._run_relay("relay", "target", "prompt", "origin", "question", "goal"))
++    assert len(writes) == 1 and "status='queued'" in writes[0][0]
++
++
++class _RelayPool:
++    """dispatch_queued_relays 용 가짜 풀. 조회 SQL 과 쓰기를 기록한다."""
++
++    def __init__(self, replies=None, queued=None):
++        self.replies = replies or []
++        self.queued = queued or []
++        self.fetches = []
++        self.writes = []
++        self.events = []
++
++    async def fetch(self, query, *_args):
++        self.fetches.append(query)
++        self.events.append("fetch")
++        if "r.status = 'blocked'" in query:
++            return self.replies
++        if "WHERE status = 'queued'" in query:
++            return self.queued
 +        return []
-+    async def send(_ws, method, _params, **_kwargs):
-+        calls.append(method)
-+        return {"targetId": "new-1"} if method == "Target.createTarget" else {"success": True}
-+    monkeypatch.setattr(cdp, "_probe_cdp_version", version)
-+    monkeypatch.setattr(cdp, "_list_cdp_targets", pages)
-+    monkeypatch.setattr(cdp, "_send_cdp", send)
-+    assert (await reclaim.create({"work_key": "job-1", "lease_seconds": "bad"}))["data"]["reason"] == "invalid_lease"
-+    assert calls == []
-+    result = await reclaim.create({"work_key": "job-1"})
-+    assert result["data"]["reason"] == "creation_proof_failed"
-+    assert result["data"]["cleanup"] == "quarantined"
-+    assert reclaim._QUARANTINED[(9222, "new-1")] == "creation_proof_failed"
-+    assert calls == ["Target.createTarget"]
-+    assert not reclaim._OWNED
++
++    async def fetchrow(self, *_args):
++        return {"title": "origin", "role_key": "role"}
++
++    async def fetchval(self, *_args):
++        return "role"
++
++    async def execute(self, query, *args):
++        self.writes.append((query, args))
++        self.events.append("expire" if "queue_expired" in query else "write")
++        if "SET status='pending'" in query:
++            return "UPDATE 1"
++        return "UPDATE 0"
 +
 +
-+@run_async
-+async def test_command_failure_does_not_mark_session_healthy(monkeypatch):
-+    session = cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
-+    session.last_heartbeat_at = 1
-+    session.last_error_code = "prior_error"
-+    async def fail(*_args, **_kwargs):
-+        raise TimeoutError("slow command")
-+    monkeypatch.setattr(cdp, "_send_cdp_command_unlocked", fail)
-+    with pytest.raises(TimeoutError):
-+        await cdp._send_cdp_command(9222, "Page.navigate", timeout_seconds=1)
-+    assert session.last_heartbeat_at == 1
-+    assert session.last_error_code == "prior_error"
++def _sweep(session_relay):
++    async def _go():
++        result = await session_relay.dispatch_queued_relays()
++        await asyncio.gather(*list(session_relay._running), return_exceptions=True)
++        return result
++
++    return asyncio.run(_go())
 +
 +
-+@run_async
-+async def test_different_ports_do_not_block_each_other(monkeypatch):
-+    entered = asyncio.Event()
-+    release = asyncio.Event()
-+    async def send(port, *_args, **_kwargs):
-+        if port == 9222:
-+            entered.set()
-+            await release.wait()
-+        return {"port": port}
-+    monkeypatch.setattr(cdp, "_send_cdp_command_unlocked", send)
-+    slow = asyncio.create_task(cdp._send_cdp_command(9222, "Page.navigate", timeout_seconds=5))
-+    await entered.wait()
-+    try:
-+        other = await asyncio.wait_for(cdp._send_cdp_command(9333, "Page.navigate", timeout_seconds=1), 1)
-+        assert other["port"] == 9333
-+    finally:
-+        release.set()
-+        await slow
++def _relay_harness(monkeypatch, pool, deliver):
++    from app.core import db_pool
++    from app.services import session_relay
++
++    gate_calls = []
++
++    async def gate(goal_id, relay_id):
++        gate_calls.append((goal_id, relay_id))
++        return False
++
++    async def idle(_sid):
++        return False
++
++    monkeypatch.setattr(db_pool, "get_pool", lambda: pool)
++    monkeypatch.setattr(session_relay, "_relay_paused", gate)
++    monkeypatch.setattr(session_relay, "_deliver_answer", deliver)
++    monkeypatch.setattr(session_relay, "_target_is_busy", idle)
++    return session_relay, gate_calls
 +
 +
-+@run_async
-+async def test_tab_open_waits_for_reclaim_final_check(monkeypatch):
-+    monkeypatch.setitem(sys.modules, "websockets", types.ModuleType("websockets"))
-+    cdp.CDPSessionManager.register("chat-pc-one", 9222, "/managed/profile", pid=42)
-+    token = "owner-1"
-+    reclaim._OWNED[token] = reclaim.OwnedTab(
-+        token, "epoch-1", "chat-pc-one", 9222, 42, 1234.5,
-+        "ws://127.0.0.1:9222/devtools/browser/one", "tab-1",
-+        "ws://127.0.0.1:9222/devtools/page/tab-1", 0, 0,
-+    )
-+    entered = asyncio.Event()
-+    release = asyncio.Event()
-+    async def check(_record):
-+        entered.set()
-+        await release.wait()
-+        return "eligible"
-+    async def pages(_port):
-+        return [{"id": "tab-1", "type": "page", "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/tab-1"}]
-+    class Ws:
-+        async def close(self):
-+            pass
-+    async def connect(*_args, **_kwargs):
-+        return Ws()
-+    monkeypatch.setattr(reclaim, "_reclaim_reason", check)
-+    monkeypatch.setattr(cdp, "_list_cdp_targets", pages)
-+    monkeypatch.setattr(cdp, "_connect_cdp_ws", connect)
-+    sweep = asyncio.create_task(reclaim.reclaim({}))
-+    await entered.wait()
-+    opening = asyncio.create_task(browser_tab._open({"port": 9222, "work_key": "chat-pc-one"}))
-+    await asyncio.sleep(0)
-+    assert not opening.done()
-+    release.set()
-+    await sweep
-+    result = await asyncio.wait_for(opening, 1)
-+    assert result["target_id"] == "tab-1"
-+    assert "tab-1" in reclaim._USED
++def test_completed_relay_reply_resumes_without_reasking(monkeypatch):
++    deliveries = []
++
++    async def deliver(origin, content, goal_id, relay_id):
++        deliveries.append((origin, content, goal_id, relay_id))
++        return True
++
++    pool = _RelayPool(replies=[{"id": "relay", "origin": "origin", "goal_id": "goal",
++                                "pending_reply": "completed answer"}])
++    session_relay, gate_calls = _relay_harness(monkeypatch, pool, deliver)
++    result = _sweep(session_relay)
++    assert result["sent"] == 1
++    assert deliveries == [("origin", "completed answer", "goal", "relay")]
++    assert any("status='answered'" in q for q, _ in pool.writes)
++    # 리뷰 지적 5 — 사이클이 회신마다 멈춤 조회를 따로 하지 않는다
++    # (멈춘 목표는 SQL 에서 걸렀고, 배달 직전 재확인은 _deliver_answer 안의 한 번뿐).
++    assert gate_calls == []
++    reply_sql = next(q for q in pool.fetches if "r.status = 'blocked'" in q)
++    assert "paused_at IS NOT NULL" in reply_sql and "DISTINCT ON (r.origin_session_id)" in reply_sql
 +
 +
-+def test_process_proof_supports_psutil_before_v6(monkeypatch):
-+    class Listener:
-+        status = "LISTEN"
-+        laddr = types.SimpleNamespace(port=9222, ip="127.0.0.1")
-+    class Process:
-+        def __init__(self, pid):
-+            assert pid == 42
-+        def connections(self, *, kind):
-+            assert kind == "tcp"
-+            return [Listener()]
-+        def create_time(self):
-+            return 1234.5
-+    monkeypatch.setattr(reclaim, "psutil", types.SimpleNamespace(Process=Process, CONN_LISTEN="LISTEN", Error=OSError))
-+    assert _real_process_proof(42, 9222) == 1234.5
++def test_reply_resume_failure_does_not_abort_cycle(monkeypatch):
++    """리뷰 지적 4 — 회신 배달이 예외를 내도 만료·대기열 배달은 계속 돈다."""
++    async def boom(*_args):
++        raise RuntimeError("stream broke")
++
++    pool = _RelayPool(replies=[{"id": "relay-1", "origin": "origin", "goal_id": "goal",
++                                "pending_reply": "answer"}])
++    session_relay, _ = _relay_harness(monkeypatch, pool, boom)
++    result = _sweep(session_relay)
++    assert any("WHERE status = 'queued'" in q for q in pool.fetches)
++    assert "expired" in result
++    failed = [(q, a) for q, a in pool.writes if "status='failed'" in q and "reply_resume_failed" in str(a)]
++    assert failed, pool.writes
 +
 +
-+@run_async
-+async def test_missing_session_activity_fields_fail_closed_per_record(monkeypatch):
-+    class OldSession:
-+        port = 9222
-+        pid = 42
-+        profile_dir = "/managed/profile"
-+    token = "owner-1"
-+    reclaim._OWNED[token] = reclaim.OwnedTab(
-+        token, "epoch-1", "job-1", 9222, 42, 1234.5,
-+        "ws://127.0.0.1:9222/devtools/browser/one", "tab-1",
-+        "ws://127.0.0.1:9222/devtools/page/tab-1", 0, 0,
-+    )
-+    monkeypatch.setattr(cdp.CDPSessionManager, "get_session", lambda _key: OldSession())
-+    result = await reclaim.reclaim({"dry_run": False})
-+    assert result["data"]["results"][0]["result"] == "session_or_command_active"
-+    assert token in reclaim._OWNED
++def test_reply_repaused_after_claim_goes_back_to_blocked(monkeypatch):
++    async def paused_again(*_args):
++        return False
++
++    pool = _RelayPool(replies=[{"id": "relay-1", "origin": "origin", "goal_id": "goal",
++                                "pending_reply": "answer"}])
++    session_relay, _ = _relay_harness(monkeypatch, pool, paused_again)
++    _sweep(session_relay)
++    assert any("status='blocked'" in q and "status='pending'" in q
++               for q, _ in pool.writes if q.startswith("UPDATE session_relay SET status='blocked'"))
++    assert not any("status='answered'" in q for q, _ in pool.writes)
 +
 +
-+@run_async
-+async def test_command_marks_owned_target_before_releasing_port_lock(monkeypatch):
-+    session = cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
-+    session.last_heartbeat_at = 0
-+    record = reclaim.OwnedTab(
-+        "owner-1", "epoch-1", "job-1", 9222, 42, 1234.5,
-+        "ws://127.0.0.1:9222/devtools/browser/one", "tab-1",
-+        "ws://127.0.0.1:9222/devtools/page/tab-1", 0, 0,
-+    )
-+    reclaim._OWNED[record.token] = record
-+    entered = asyncio.Event()
-+    release = asyncio.Event()
++def test_paused_goal_relay_does_not_block_other_relays_to_target(monkeypatch):
++    """리뷰 지적 1 — 멈춘 목표의 질문은 SQL 에서 걸러 head-of-line 차단이 없다."""
++    runs = []
 +
-+    async def command(*_args, **_kwargs):
-+        entered.set()
-+        await release.wait()
-+        return {"_target": {"id": "tab-1", "url": "about:blank"}}
++    async def fake_run(relay_id, target, prompt, origin, question, goal_id=None):
++        runs.append((relay_id, goal_id))
 +
-+    async def close(*_args, **_kwargs):
-+        raise AssertionError("a just used target must not close")
++    async def deliver(*_args):
++        return True
 +
-+    monkeypatch.setattr(cdp, "_send_cdp_command_unlocked", command)
-+    monkeypatch.setattr(cdp, "_send_cdp", close)
-+    running = asyncio.create_task(cdp._send_cdp_command(9222, "Runtime.evaluate", timeout_seconds=1))
-+    await entered.wait()
-+    sweeping = asyncio.create_task(reclaim.reclaim({"owner_token": record.token, "dry_run": False}))
-+    await asyncio.sleep(0)
-+    assert not sweeping.done()
-+    release.set()
-+    await running
-+    result = await sweeping
-+    assert result["data"]["results"][0]["result"] == "user_observed"
-+    assert session.last_target_id == "tab-1"
-+    assert session.last_heartbeat_at > 0
++    pool = _RelayPool(queued=[{"id": "relay-free", "origin": "origin", "target": "target",
++                               "question": "q", "goal_id": None}])
++    session_relay, gate_calls = _relay_harness(monkeypatch, pool, deliver)
++    monkeypatch.setattr(session_relay, "_run_relay", fake_run)
++    result = _sweep(session_relay)
++    assert runs == [("relay-free", None)] and result["sent"] == 1
++    assert gate_calls == []
++    queued_sql = next(q for q in pool.fetches if "WHERE status = 'queued'" in q)
++    where = queued_sql[queued_sql.index("WHERE"):queued_sql.index("ORDER BY")]
++    # 필터는 DISTINCT ON 보다 먼저(WHERE) 적용돼야 대상당 "멈추지 않은 것 중 가장 오래된" 것을 집는다.
++    assert "NOT EXISTS" in where and "g.paused_at IS NOT NULL" in where
++    assert "g.id = session_relay.goal_id" in where
 +
 +
-+@run_async
-+async def test_prior_used_tab_stays_protected_after_last_target_changes(monkeypatch):
-+    session = cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
-+    record = reclaim.OwnedTab(
-+        "owner-1", "epoch-1", "job-1", 9222, 42, 1234.5,
-+        "ws://127.0.0.1:9222/devtools/browser/one", "tab-1",
-+        "ws://127.0.0.1:9222/devtools/page/tab-1", 0, 0,
-+    )
-+    reclaim._OWNED[record.token] = record
++def test_relay_expiry_only_exempts_currently_paused_goals(monkeypatch):
++    """리뷰 지적 2·3 — 목표에 묶인 릴레이도 만료되고, 멈춘 동안만 미뤄지며, 상한이 있다."""
++    async def deliver(*_args):
++        return True
 +
-+    async def command(_port, _method, _params, *, target_id, **_kwargs):
-+        return {"_target": {"id": target_id, "url": "about:blank"}}
-+
-+    monkeypatch.setattr(cdp, "_send_cdp_command_unlocked", command)
-+    await cdp._send_cdp_command(9222, "Page.captureScreenshot", timeout_seconds=1, target_id="tab-1")
-+    await cdp._send_cdp_command(9222, "Page.captureScreenshot", timeout_seconds=1, target_id="tab-2")
-+    assert session.last_target_id == "tab-2"
-+    session.last_heartbeat_at = 0
-+    result = await reclaim.reclaim({"owner_token": record.token, "dry_run": False})
-+    assert result["data"]["results"][0]["result"] == "user_observed"
-+    assert record.token in reclaim._OWNED
++    pool = _RelayPool()
++    session_relay, _ = _relay_harness(monkeypatch, pool, deliver)
++    _sweep(session_relay)
++    expiry, args = next((q, a) for q, a in pool.writes if "status='failed'" in q)
++    assert "goal_id IS NULL" not in expiry
++    assert "r.status IN ('queued', 'blocked')" in expiry
++    assert "g.paused_at IS NOT NULL" in expiry
++    assert "pending_reply=NULL" in expiry
++    assert args == (session_relay._RELAY_QUEUE_MAX_AGE_HOURS,
++                    session_relay._RELAY_PAUSED_MAX_AGE_HOURS)
++    assert session_relay._RELAY_PAUSED_MAX_AGE_HOURS >= session_relay._RELAY_QUEUE_MAX_AGE_HOURS
++    # 만료가 회신 재개·대기열 배달보다 먼저 돈다 — 해제 직후 묵은 회신이 쏟아지지 않는다.
++    assert pool.events[0] == "expire", pool.events
 +
 +
-+@run_async
-+async def test_closed_records_pruned_and_uncertain_inventory_hits_cap(monkeypatch):
-+    browser_ws = "ws://127.0.0.1:9222/devtools/browser/one"
-+    target_ws = "ws://127.0.0.1:9222/devtools/page/new-1"
-+    cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
-+    for index in range(reclaim._MAX_OWNED):
-+        token = f"owner-{index}"
-+        reclaim._OWNED[token] = reclaim.OwnedTab(
-+            token, f"epoch-{index}", "job-1", 9222, 42, 1234.5,
-+            browser_ws, f"closed-{index}", target_ws, 0, 0,
-+        )
-+
-+    async def version(_port):
-+        return {"webSocketDebuggerUrl": browser_ws}
-+
-+    async def pages(_port):
-+        return [{"id": "new-1", "type": "page", "url": "about:blank",
-+                 "webSocketDebuggerUrl": target_ws}]
-+
-+    async def send(_ws, method, _params, **_kwargs):
-+        if method == "Target.getTargets":
-+            return {"targetInfos": [{"targetId": "new-1", "type": "page"}]}
-+        if method == "Target.createTarget":
-+            return {"targetId": "new-1"}
-+        if method == "Target.getTargetInfo":
-+            return {"targetInfo": {"targetId": "new-1", "type": "page", "attached": False}}
-+        raise AssertionError(method)
-+
-+    monkeypatch.setattr(cdp, "_probe_cdp_version", version)
-+    monkeypatch.setattr(cdp, "_list_cdp_targets", pages)
-+    monkeypatch.setattr(cdp, "_send_cdp", send)
-+    created = await reclaim.create({"work_key": "job-1"})
-+    assert created["status"] == "success"
-+    assert len(reclaim._OWNED) == 1
-+
-+    async def uncertain(*_args, **_kwargs):
-+        raise TimeoutError("inventory unavailable")
-+
-+    for index in range(reclaim._MAX_OWNED - 1):
-+        token = f"owner-new-{index}"
-+        reclaim._OWNED[token] = replace(next(iter(reclaim._OWNED.values())), token=token)
-+    monkeypatch.setattr(cdp, "_send_cdp", uncertain)
-+    blocked = await reclaim.create({"work_key": "job-1"})
-+    assert blocked["data"]["reason"] == "ownership_capacity_reached"
-+    assert len(reclaim._OWNED) == reclaim._MAX_OWNED
++def test_relay_goal_fk_does_not_block_goal_delete():
++    """리뷰 지적 6 — 목표 삭제가 릴레이 FK 로 막히지 않는다."""
++    root = Path(__file__).resolve().parents[2]
++    sql = (root / "migrations/20260929_goal_pause_all_paths.sql").read_text()
++    stmt = next(line_ for line_ in sql.split(";") if "session_relay ADD COLUMN IF NOT EXISTS goal_id" in line_)
++    assert "ON DELETE SET NULL" in stmt
 +
 +
-+class GuardedSocket:
-+    def __init__(self, *, change_at="", before_close=None):
-+        self.pending = []
-+        self.methods = []
-+        self.change_at = change_at
-+        self.before_close = before_close
-+
-+    async def send(self, raw):
-+        message = json.loads(raw)
-+        method = message["method"]
-+        self.methods.append(method)
-+        if method == self.change_at:
-+            self.pending.append(json.dumps({"method": "Page.frameStartedNavigating", "sessionId": "s1"}))
-+        if method == "Target.closeTarget" and self.before_close:
-+            self.before_close()
-+        result = {
-+            "Target.attachToTarget": {"sessionId": "s1"},
-+            "Runtime.evaluate": {"result": {"type": "object", "value": {
-+                "visible": False, "focused": False, "editing": False,
-+                "downloading": False, "url": "about:blank"}}},
-+            "Target.getTargetInfo": {"targetInfo": {
-+                "targetId": "tab-1", "type": "page", "url": "about:blank"}},
-+            "Target.closeTarget": {"success": True},
-+        }.get(method, {})
-+        self.pending.append(json.dumps({"id": message["id"], "result": result}))
-+
-+    async def recv(self):
-+        return self.pending.pop(0)
-+
-+    async def close(self):
-+        pass
++def test_dispatch_select_reads_columns_used_by_refund():
++    """리뷰 지적 8 — 환급에 쓰는 두 칸을 후보 조회가 실제로 읽는다."""
++    root = Path(__file__).resolve().parents[2]
++    source = (root / "app/services/goal_dispatch.py").read_text()
++    body = source[source.index("async def dispatch_pending_milestones"):]
++    select = body[body.index("SELECT m.id::text AS milestone_id"):body.index("FROM milestones m")]
++    assert "m.dispatched_at" in select and "m.dispatched_session_id" in select
++    assert 'previous_dispatched_at=row["dispatched_at"]' in body
 +
 +
-+def guarded_record():
-+    session = cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
-+    session.last_heartbeat_at = 0
-+    record = reclaim.OwnedTab(
-+        "owner-1", "epoch-1", "job-1", 9222, 42, 1234.5,
-+        "ws://127.0.0.1:9222/devtools/browser/one", "tab-1",
-+        "ws://127.0.0.1:9222/devtools/page/tab-1", 0, 0, session.generation,
-+    )
-+    reclaim._OWNED[record.token] = record
-+    return record
-+
-+
-+@run_async
-+async def test_navigation_between_final_check_and_close_aborts(monkeypatch):
-+    record = guarded_record()
-+    socket = GuardedSocket(change_at="Target.getTargetInfo")
-+    monkeypatch.setitem(sys.modules, "websockets", types.ModuleType("websockets"))
-+    async def connect(*_args, **_kwargs):
-+        return socket
-+    monkeypatch.setattr(cdp, "_connect_cdp_ws", connect)
-+    assert await reclaim._guarded_close(record) == "target_changed"
-+    assert "Target.closeTarget" not in socket.methods
-+    assert record.token in reclaim._OWNED
-+
-+
-+@run_async
-+async def test_navigation_during_close_response_is_not_confirmed(monkeypatch):
-+    record = guarded_record()
-+    socket = GuardedSocket(change_at="Target.closeTarget")
-+    monkeypatch.setitem(sys.modules, "websockets", types.ModuleType("websockets"))
-+    async def connect(*_args, **_kwargs):
-+        return socket
-+    monkeypatch.setattr(cdp, "_connect_cdp_ws", connect)
-+    assert await reclaim._guarded_close(record) == "changed_during_close"
-+    assert socket.methods.count("Target.closeTarget") == 1
-+    assert record.token in reclaim._OWNED
-+
-+
-+@run_async
-+async def test_creation_capacity_recovers_after_confirmed_cleanup(monkeypatch):
-+    browser_ws = "ws://127.0.0.1:9222/devtools/browser/one"
-+    target_ws = "ws://127.0.0.1:9222/devtools/page/new-1"
-+    cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
-+    current = {"id": ""}
-+    async def version(_port):
-+        return {"webSocketDebuggerUrl": browser_ws}
-+    async def pages(_port):
-+        return ([{"id": current["id"], "type": "page", "url": "about:blank",
-+                  "webSocketDebuggerUrl": target_ws}] if current["id"] else [])
-+    async def send(_ws, method, _params, **_kwargs):
-+        if method == "Target.getTargets":
-+            return {"targetInfos": ([{"targetId": current["id"], "type": "page"}]
-+                                    if current["id"] else [])}
-+        if method == "Target.createTarget":
-+            current["id"] = "new-1"
-+            return {"targetId": current["id"]}
-+        if method == "Target.getTargetInfo":
-+            return {"targetInfo": {"targetId": current["id"], "type": "page", "attached": False}}
-+        raise AssertionError(method)
-+    monkeypatch.setattr(cdp, "_probe_cdp_version", version)
-+    monkeypatch.setattr(cdp, "_list_cdp_targets", pages)
-+    monkeypatch.setattr(cdp, "_send_cdp", send)
-+    for _ in range(reclaim._MAX_OWNED + 1):
-+        created = await reclaim.create({"work_key": "job-1"})
-+        assert created["status"] == "success"
-+        current["id"] = ""
-+    assert reclaim._CREATE_ATTEMPTS == 1
-+    assert len(reclaim._OWNED) == 1
-+
-+
-+@run_async
-+async def test_quarantine_capacity_recovers_only_after_target_disappears(monkeypatch):
-+    browser_ws = "ws://127.0.0.1:9222/devtools/browser/one"
-+    cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
-+    reclaim._QUARANTINED[(9222, "lost-tab")] = "creation_proof_failed"
-+    reclaim._CREATE_ATTEMPTS = reclaim._MAX_OWNED
-+    async def version(_port):
-+        return {"webSocketDebuggerUrl": browser_ws}
-+    async def pages(_port):
-+        return []
-+    async def send(_ws, method, _params, **_kwargs):
-+        if method == "Target.getTargets":
-+            return {"targetInfos": []}
-+        if method == "Target.createTarget":
-+            return {"targetId": "new-1"}
-+        raise AssertionError(method)
-+    monkeypatch.setattr(cdp, "_probe_cdp_version", version)
-+    monkeypatch.setattr(cdp, "_list_cdp_targets", pages)
-+    monkeypatch.setattr(cdp, "_send_cdp", send)
-+    result = await reclaim.create({"work_key": "job-1"})
-+    assert result["data"]["reason"] == "creation_proof_failed"
-+    assert (9222, "lost-tab") not in reclaim._QUARANTINED
-+    assert reclaim._CREATE_ATTEMPTS == reclaim._MAX_OWNED
-+
-+
-+@run_async
-+async def test_session_generation_changes_before_close_aborts(monkeypatch):
-+    record = guarded_record()
-+    socket = GuardedSocket()
-+    monkeypatch.setitem(sys.modules, "websockets", types.ModuleType("websockets"))
-+    async def connect(*_args, **_kwargs):
-+        return socket
-+    original_send = socket.send
-+    async def send(raw):
-+        message = json.loads(raw)
-+        await original_send(raw)
-+        if message["method"] == "Target.getTargetInfo":
-+            cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
-+    socket.send = send
-+    monkeypatch.setattr(cdp, "_connect_cdp_ws", connect)
-+    assert await reclaim._guarded_close(record) == "ownership_or_session_changed"
-+    assert "Target.closeTarget" not in socket.methods
-+    assert record.token in reclaim._OWNED
++def test_system_trigger_sites_have_goal_pause_gate():
++    root = Path(__file__).resolve().parents[2]
++    automatic = {
++        "app/services/goal_dispatch.py": {"_consume": "goal_paused"},
++        "app/services/milestone_review.py": {"ask_pending_reviews": "goal_paused"},
++        "app/services/session_relay.py": {
++            "_run_relay": "_relay_paused",
++            "_deliver_answer": "_relay_paused",
++        },
++    }
++    manual = {("app/services/goal_intervene.py", "direct"),
++              ("app/routers/goals.py", "confirm_milestone_api")}
++    files = list((root / "app").rglob("*.py"))
++    sites = []
++    for path in files:
++        source = path.read_text()
++        rel = str(path.relative_to(root))
++        tree = ast.parse(source)
++        functions = [n for n in ast.walk(tree)
++                     if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
++        for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
++            if not any(k.arg == "intent_override" and isinstance(k.value, ast.Constant)
++                       and k.value.value == "system_trigger" for k in call.keywords):
++                continue
++            enclosing = [n for n in functions if n.lineno <= call.lineno <= n.end_lineno]
++            assert enclosing, (rel, call.lineno)
++            node = min(enclosing, key=lambda n: n.end_lineno - n.lineno)
++            own = ast.get_source_segment(source, node) or ""
++            if (rel, node.name) in manual:
++                sites.append((rel, node.name))
++                continue
++            assert node.name in automatic.get(rel, {}), (rel, node.name)
++            gate = automatic[rel][node.name]
++            if rel.endswith("goal_dispatch.py"):
++                assert gate in source[source.index("async def dispatch_pending_milestones"):]
++            else:
++                assert gate in own, (rel, node.name)
++            sites.append((rel, node.name))
++    assert sites
+diff --git a/tests/unit/test_milestone_completion_checklist_status.py b/tests/unit/test_milestone_completion_checklist_status.py
+index 5a0af698..e1c13e0c 100644
+--- a/tests/unit/test_milestone_completion_checklist_status.py
++++ b/tests/unit/test_milestone_completion_checklist_status.py
+@@ -67,7 +67,8 @@ def test_goal_status_without_checklist_keeps_previous_response_contract(monkeypa
+     status = _status(monkeypatch, None)
+     assert status == {
+         "goal_id": "goal-1", "project": "AADS", "title": "Goal", "priority": "P2",
+-        "status": "active", "description": "Description", "success_criteria": "Description",
++        "status": "active", "goal_paused": False, "goal_paused_reason": None,
++        "description": "Description", "success_criteria": "Description",
+         "progress": 0, "milestones_total": 1, "milestones_completed": 0,
+         "milestones": [{
+             "id": "milestone-1", "title": "Milestone", "sequence": 1,

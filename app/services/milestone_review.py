@@ -280,6 +280,13 @@ async def ask_pending_reviews(project: Optional[str] = None) -> Dict[str, int]:
         )
 
         for row in rows:
+            from app.services.orchestration_limits import goal_paused
+
+            paused, why = await goal_paused(row["goal_id"])
+            if paused:
+                logger.info("milestone_review_goal_paused", goal=row["goal_id"],
+                            milestone=row["milestone_id"], why=why)
+                continue
             lead = await _lead_session(conn, row["goal_id"])
             lead_role = ""
             if lead:

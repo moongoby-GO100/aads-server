@@ -67,7 +67,8 @@ def test_goal_status_without_checklist_keeps_previous_response_contract(monkeypa
     status = _status(monkeypatch, None)
     assert status == {
         "goal_id": "goal-1", "project": "AADS", "title": "Goal", "priority": "P2",
-        "status": "active", "description": "Description", "success_criteria": "Description",
+        "status": "active", "goal_paused": False, "goal_paused_reason": None,
+        "description": "Description", "success_criteria": "Description",
         "progress": 0, "milestones_total": 1, "milestones_completed": 0,
         "milestones": [{
             "id": "milestone-1", "title": "Milestone", "sequence": 1,

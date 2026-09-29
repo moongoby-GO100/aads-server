@@ -45,6 +45,7 @@ def _patch_dispatch_gates(monkeypatch, conn) -> None:
         return conn.columns
 
     monkeypatch.setattr(orchestration_limits, "owner_paused", _not_paused)
+    monkeypatch.setattr(orchestration_limits, "goal_paused", _not_paused)
     monkeypatch.setattr(orchestration_limits, "cost_gate", _open)
     monkeypatch.setattr(orchestration_limits, "load_gate", _open)
     monkeypatch.setattr(goal_dispatch, "repair_owner_links", _no_repair)
@@ -166,6 +167,7 @@ def run_cycle(monkeypatch):
         return 0
 
     monkeypatch.setattr(orchestration_limits, "owner_paused", _not_paused)
+    monkeypatch.setattr(orchestration_limits, "goal_paused", _not_paused)
     monkeypatch.setattr(orchestration_limits, "cost_gate", _open)
     monkeypatch.setattr(orchestration_limits, "load_gate", _open)
     monkeypatch.setattr(goal_dispatch, "repair_owner_links", _no_repair)
