@@ -150,7 +150,7 @@ def test_unmerged_commit_is_bundled_before_reclaim(worktrees):
     assert "reclaimed=1" in result.stdout
     bundle = tmp_path / "archive" / f"{ids['old']}.bundle"
     assert bundle.is_file()
-    assert head in subprocess.check_output(["git", "bundle", "list-heads", str(bundle)], text=True)
+    assert head in subprocess.check_output(["git", "bundle", "list-heads", str(bundle)], text=True, cwd=str(repo))
 
 
 def test_bundle_verification_failure_preserves_worktree(worktrees):
