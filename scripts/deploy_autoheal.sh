@@ -663,6 +663,20 @@ launch_autoheal_worker() {
         autoheal_log "DRYRUN: 워커 기동 생략 (${launcher} ${retry_mode} autoheal_${cause})"
         return 0
     fi
+    # When deploy.sh runs inside the queue worker, its parent still owns the
+    # worker lock until deploy.sh exits. Autoheal runs in deploy.sh's EXIT trap,
+    # so waiting for that parent would deadlock and a normal launcher call
+    # would incorrectly say "already running". Release only our parent's lock;
+    # the worker cleanup checks ownership before removing a successor's lock.
+    if [[ "${AADS_DEPLOY_QUEUE_WORKER:-false}" == "true" ]]; then
+        local queue_lock="${AADS_DEPLOY_QUEUE_WORKER_LOCKFILE:-/tmp/aads-deploy-queue-worker.lock}"
+        local owner_pid
+        owner_pid="$(cat "$queue_lock" 2>/dev/null || true)"
+        if [[ "$owner_pid" =~ ^[0-9]+$ && "$owner_pid" == "$PPID" ]]; then
+            rm -f "$queue_lock" || return 1
+            autoheal_log "현재 워커 잠금 인계: pid=${owner_pid}"
+        fi
+    fi
     autoheal_cooldown_stamp "$cause" || return 1
     local launch_out
     if ! launch_out="$(bash "$launcher" "$retry_mode" "autoheal_${cause}" 2>&1)"; then

@@ -90,7 +90,11 @@ WORKER_BODY='
     echo "$BASHPID" > "$LOCKFILE"
     cleanup() {
         git -C "$REPO_DIR" worktree remove --force "$worktree" >/dev/null 2>&1 || true
-        rm -f "$LOCKFILE" 2>/dev/null || true
+        # Autoheal can hand the lock to a successor before this worker exits.
+        # Never delete the successor's lock from this older worker's cleanup.
+        if [[ "$(cat "$LOCKFILE" 2>/dev/null || true)" == "$BASHPID" ]]; then
+            rm -f "$LOCKFILE" 2>/dev/null || true
+        fi
     }
     trap cleanup EXIT
 

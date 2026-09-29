@@ -712,6 +712,45 @@ def test_already_running_parent_with_queued_successor_never_supersedes(tmp_path)
     assert "SET status = 'superseded'" not in sql
 
 
+def test_queue_worker_hands_off_only_its_parent_lock(tmp_path):
+    """A failed worker can start its successor without deleting another owner's lock."""
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    launcher = scripts_dir / "start_aads_deploy_queue_worker.sh"
+    launcher.write_text(
+        '#!/bin/bash\n'
+        '[[ ! -e "$AADS_DEPLOY_QUEUE_WORKER_LOCKFILE" ]] || exit 23\n'
+        'echo successor > "$AADS_DEPLOY_QUEUE_WORKER_LOCKFILE"\n'
+        'echo "deploy queue worker started"\n'
+    )
+    launcher.chmod(0o755)
+    lock = tmp_path / "worker.lock"
+    env = (
+        f'COMPOSE_DIR="{tmp_path}"\nSTATE_DIR="{tmp_path}"\n'
+        f'export AADS_DEPLOY_QUEUE_WORKER_LOCKFILE="{lock}"\n'
+        f'export AADS_DEPLOY_AUTOHEAL_STATE_DIR="{tmp_path / "state"}"\n'
+        'export AADS_DEPLOY_QUEUE_WORKER=true\n'
+        'export AADS_DEPLOY_AUTOHEAL_COOLDOWN_SEC=0\n'
+        'AADS_RELEASE_SHA=abc1234\n'
+    )
+    out = _call(
+        f'echo "$PPID" > "{lock}"; '
+        'launch_autoheal_worker target_drain_busy',
+        env_prefix=env,
+    )
+    assert "현재 워커 잠금 인계" in out
+    assert "deploy queue worker started" in out
+    assert lock.read_text().strip() == "successor"
+
+    lock.write_text("987654321\n")
+    out = _call(
+        'launch_autoheal_worker target_drain_busy || echo FOREIGN_LOCK_PRESERVED',
+        env_prefix=env,
+    )
+    assert "FOREIGN_LOCK_PRESERVED" in out
+    assert lock.read_text().strip() == "987654321"
+
+
 def test_successor_failure_during_atomic_update_keeps_original(tmp_path):
     sql_log = tmp_path / "sql.log"
     env = (
