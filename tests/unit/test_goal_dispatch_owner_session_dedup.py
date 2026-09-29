@@ -19,20 +19,20 @@ import re
 from app.services import goal_dispatch
 
 # 조회창 크기. SQL 에서 직접 읽어 테스트가 상수를 따라가게 한다.
-_WINDOW_RE = re.compile(r"ORDER BY\s+m\.sequence_order.*?LIMIT\s+(\d+)", re.S | re.I)
+_WINDOW_RE = re.compile(r"\)\s*c\s+.*?LIMIT\s+(\$3|\d+)", re.S | re.I)
 
 
 def _dispatch_candidate_sql() -> str:
     """후보 조회 SQL 만 잘라 온다.
 
-    끝을 바깥쪽 `ORDER BY m.sequence_order … LIMIT n` 으로 잡는다.
+    끝을 바깥쪽 `ORDER BY goal_rn … LIMIT $3` 으로 잡는다.
     LATERAL 안에도 `LIMIT 1` 이 있으므로 첫 LIMIT 으로 끊으면 정작
     검사해야 할 조인이 잘려 나간다.
     """
     source = inspect.getsource(goal_dispatch.dispatch_pending_milestones)
     match = re.search(
-        r"SELECT m\.id::text AS milestone_id.*?ORDER BY\s+m\.sequence_order"
-        r".*?LIMIT\s+\d+",
+        r"SELECT m\.id::text AS milestone_id.*?ORDER BY\s+goal_rn"
+        r".*?LIMIT\s+\$3",
         source,
         re.S,
     )
@@ -67,9 +67,8 @@ def test_owner_session_join_is_deduplicated() -> None:
 def test_candidate_window_must_hold_many_milestones() -> None:
     """복제 조인은 조회창을 마일스톤 한 건으로 채운다 — 그 차이를 고정한다."""
     sql = _dispatch_candidate_sql()
-    window_match = _WINDOW_RE.search(sql)
-    assert window_match, "조회창 크기를 SQL 에서 읽지 못했다"
-    window = int(window_match.group(1))
+    assert _WINDOW_RE.search(sql), "조회창 크기를 SQL 에서 읽지 못했다"
+    window = goal_dispatch._CANDIDATE_LIMIT
 
     role_sessions = [f"session-{i}" for i in range(window)]
     milestones = [f"milestone-{i}" for i in range(3)]

@@ -71,6 +71,7 @@ logger = structlog.get_logger(__name__)
 
 _ENABLED = os.getenv("GOAL_DISPATCH_ENABLED", "true").lower() in ("1", "true", "yes")
 _MAX_PER_CYCLE = int(os.getenv("GOAL_DISPATCH_MAX_PER_CYCLE", "2"))
+_CANDIDATE_LIMIT = int(os.getenv("GOAL_DISPATCH_CANDIDATE_LIMIT", "60"))
 _MAX_DISPATCH = int(os.getenv("GOAL_DISPATCH_MAX_RETRY", "3"))
 _RETRY_AFTER_MIN = int(os.getenv("GOAL_DISPATCH_RETRY_AFTER_MIN", "30"))
 _PROGRESS_GRACE_MIN = int(os.getenv("GOAL_DISPATCH_PROGRESS_GRACE_MIN", "45"))
@@ -577,6 +578,12 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
 
             rows = await conn.fetch(
                 """
+                SELECT milestone_id, milestone_title, description,
+                       completion_criteria, dispatch_count, dispatched_at,
+                       dispatched_session_id, load_deferred_since,
+                       dispatch_blocked_at, goal_title, project, goal_id,
+                       owner_role_key, goal_lead_session_id, session_id
+                FROM (
                 SELECT m.id::text AS milestone_id, m.title AS milestone_title,
                        m.description, m.completion_criteria,
                        m.dispatch_count, m.dispatched_at, m.dispatched_session_id,
@@ -585,7 +592,12 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                        g.title AS goal_title, g.project, g.id::text AS goal_id,
                        COALESCE(m.owner_role_key, '') AS owner_role_key,
                        COALESCE(g.owner_session_id::text, '') AS goal_lead_session_id,
-                       COALESCE(m.owner_session_id, s.id) AS session_id
+                       COALESCE(m.owner_session_id, s.id) AS session_id,
+                       m.sequence_order,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY g.id
+                           ORDER BY m.sequence_order, m.dispatched_at NULLS FIRST
+                       ) AS goal_rn
                 FROM milestones m
                 JOIN goals g ON g.id = m.goal_id
                 -- 역할로 담당 세션을 찾을 때는 **한 개만** 집는다.
@@ -612,10 +624,28 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                   AND ($1::text IS NULL OR g.project = $1)
                   AND (m.dispatched_at IS NULL
                        OR m.dispatched_at < NOW() - ($2 || ' minutes')::interval)
-                ORDER BY m.sequence_order, m.dispatched_at NULLS FIRST
-                LIMIT 20
+                ) c
+                -- 같은 날 이어서 실측(16:0x KST). 위 복제를 없앤 뒤에도
+                -- `ORDER BY m.sequence_order … LIMIT 20` 이라 seq 가 작은
+                -- 마일스톤이 창 앞을 고정 점유했다. 활성 목표 19개·후보
+                -- 47건 중 20건만 창에 들었고 **27건은 사이클에 아예 보이지
+                -- 않았다**(AADS 18건 중 12건·최장 대기 17,134분, GO100
+                -- 18건 중 10건·13,376분, ACCT 7건 중 5건·14,607분). 창 밖
+                -- 건은 게이트 로그(cost_gated/load_deferred)에도, 30분
+                -- 재발송에도 오르지 못했다. 게이트 문제가 아니라 조회창 문제다.
+                --
+                -- 그래서 **목표 사이**만 공평하게 만든다. 목표별 순위
+                -- (goal_rn)를 먼저 보면 19개 목표의 선두 1건씩이 창에 먼저
+                -- 들어오고, 그 다음 오래 기다린 순(미발송=NULL 이 맨 앞)이다.
+                -- 같은 목표 안에서는 goal_rn 이 곧 sequence_order 순이므로
+                -- 착수 순서 계약은 그대로다. 창 크기는 GOAL_DISPATCH_CANDIDATE_LIMIT
+                -- (기본 60). 발송 상한(_MAX_PER_CYCLE)은 그대로 두고 가시성만 넓힌다.
+                ORDER BY goal_rn,
+                         COALESCE(dispatched_at, load_deferred_since) ASC NULLS FIRST,
+                         sequence_order
+                LIMIT $3
                 """,
-                project, str(_RETRY_AFTER_MIN),
+                project, str(_RETRY_AFTER_MIN), _CANDIDATE_LIMIT,
             )
 
             for row in rows:
