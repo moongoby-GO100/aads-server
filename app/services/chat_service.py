@@ -2599,12 +2599,27 @@ async def _get_or_create_turn_execution(
                 str(flush_err)[:160],
             )
 
+    _superseded_diag = _build_interruption_diagnostics(
+        reason="superseded by newer execution",
+        category="superseded",
+        partial_content=existing_state.get("content", "") if existing_state else "",
+        superseded=True,
+    )
+    # 일한 턴이 버려졌는지 DB 만으로 판정하기 위한 계측. 실행별 정확한 값은
+    # 아래 placeholder 루프가 다시 덮어쓴다(여기는 메모리 상태 기준 기본값).
+    if existing_state:
+        _superseded_diag["tool_count"] = int(existing_state.get("tool_count") or 0)
+        _superseded_diag["last_tool"] = str(existing_state.get("last_tool") or "")
     await conn.execute(
         """
         UPDATE chat_turn_executions
         SET status = 'interrupted',
             interrupt_category = 'superseded',
-            interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb) || $2::jsonb,
+            interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb) || $2::jsonb
+                || jsonb_build_object(
+                    'elapsed_sec',
+                    ROUND(EXTRACT(EPOCH FROM (NOW() - COALESCE(started_at, created_at)))::numeric, 3)
+                ),
             completed_at = COALESCE(completed_at, NOW()),
             owner_instance = NULL,
             lease_expires_at = NULL,
@@ -2614,25 +2629,43 @@ async def _get_or_create_turn_execution(
           AND status IN ('running', 'retrying')
         """,
         session_id,
-        json.dumps(
-            _build_interruption_diagnostics(
-                reason="superseded by newer execution",
-                category="superseded",
-                partial_content=existing_state.get("content", "") if existing_state else "",
-                superseded=True,
-            ),
-            ensure_ascii=False,
-        ),
+        json.dumps(_superseded_diag, ensure_ascii=False),
     )
 
     # 중단된 실행의 streaming_placeholder를 즉시 interrupted_partial로 승격
     # (cleanup_stale 대기 없이) — 강력 새로고침 후 버블 사라짐 방지
     _orphan_placeholders = await conn.fetch(
-        "SELECT id, content FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder'",
+        "SELECT id, execution_id, content FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder'",
         session_id,
     )
     for _oph in _orphan_placeholders:
-        _cleaned = _format_stale_placeholder_content(_oph["content"] or "")
+        _oph_content = _oph["content"] or ""
+        try:
+            _oph_eid = _oph["execution_id"]
+        except (KeyError, IndexError):
+            _oph_eid = None
+        # 도구만 돌고 본문이 없는 턴은 "보존된 내용이 없습니다" 대신 작업 요약을 남긴다.
+        _oph_tools, _oph_last_tool = _resolve_turn_tool_work(session_id, _oph_eid, _oph_content)
+        _cleaned = _format_stale_placeholder_content(
+            _oph_content,
+            superseded=True,
+            tool_count=_oph_tools,
+            last_tool=_oph_last_tool,
+        )
+        if _oph_eid:
+            await conn.execute(
+                """
+                UPDATE chat_turn_executions
+                SET interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb) || $2::jsonb
+                WHERE id = $1
+                  AND interrupt_category = 'superseded'
+                """,
+                _oph_eid,
+                json.dumps(
+                    {"tool_count": int(_oph_tools), "last_tool": _oph_last_tool},
+                    ensure_ascii=False,
+                ),
+            )
         await conn.execute(
             """
             UPDATE chat_messages
@@ -3455,13 +3488,82 @@ async def _live_session_ids_with_db(conn: Any) -> set[str]:
     return live
 
 
-def _format_stale_placeholder_content(content: str) -> str:
+# 진행 문구에서 도구 횟수·최근 도구를 되읽는다. _interim_save_streaming 이 쓰는
+# "도구 N회 호출(중)(, 최근: X)" 형식이다. 중첩 반복 없이 한 줄씩 본다(R-BG 3항).
+_PROGRESS_TOOL_RE = re.compile(r"도구 (\d+)회 호출(?: 중)?(?:, 최근: ([^)\n]+))?")
+
+
+def _parse_progress_tool_info(content: str) -> tuple[int, str]:
+    """placeholder 진행 문구에서 (tool_count, last_tool) 을 뽑는다. 없으면 (0, "")."""
+    tool_count, last_tool = 0, ""
+    for line in str(content or "").splitlines():
+        if "도구" not in line:
+            continue
+        m = _PROGRESS_TOOL_RE.search(line)
+        if m:
+            tool_count = int(m.group(1))
+            last_tool = (m.group(2) or "").strip()
+    return tool_count, last_tool
+
+
+def _resolve_turn_tool_work(
+    session_id: Any,
+    execution_id: Any = None,
+    content: str = "",
+) -> tuple[int, str]:
+    """실행이 돌린 도구 횟수·최근 도구명.
+
+    메모리 상태(_streaming_state)가 같은 실행의 것이면 그 값을, 아니면
+    placeholder 진행 문구를 쓴다. 둘 다 있으면 큰 쪽을 믿는다 — 진행 문구는
+    마지막 flush 시점 값이라 메모리보다 뒤처질 수 있다.
+    """
+    tool_count, last_tool = _parse_progress_tool_info(content)
+    state = _streaming_state.get(str(session_id)) if session_id else None
+    if state and (
+        execution_id is None
+        or (state.get("execution_id") and str(state.get("execution_id")) == str(execution_id))
+    ):
+        try:
+            state_count = int(state.get("tool_count") or 0)
+        except (TypeError, ValueError):
+            state_count = 0
+        if state_count >= tool_count:
+            tool_count = state_count
+            last_tool = str(state.get("last_tool") or "") or last_tool
+    return tool_count, last_tool
+
+
+def _superseded_work_summary_notice(tool_count: int, last_tool: str = "") -> str:
+    """도구만 돌고 본문이 없는 채로 새 지시에 밀려난 턴의 안내.
+
+    2026-09-29 실측: superseded 무본문 37건 중 다수가 100~270초 동안 도구를
+    28회씩 돌린 턴이었는데 "보존된 내용이 없습니다" 만 남아 일한 흔적이 사라졌다.
+    """
+    recent = f"(최근: {last_tool})" if last_tool else ""
+    return (
+        f"⚠️ _새 지시로 이 턴이 대체되었습니다. 여기까지 도구 {int(tool_count)}회를 "
+        f"실행했고{recent}, 생성된 본문은 없습니다._"
+    )
+
+
+def _format_stale_placeholder_content(
+    content: str,
+    *,
+    superseded: bool = False,
+    tool_count: Optional[int] = None,
+    last_tool: str = "",
+) -> str:
     clean = _strip_streaming_progress_markers(content or "")
     if _has_meaningful_partial_content(clean):
         marker = "_(응답이 중단되어 여기까지 보존되었습니다.)_"
         if marker in clean or "응답 생성이 중단" in clean:
             return clean
         return clean + "\n\n" + marker
+    if superseded:
+        if tool_count is None:
+            tool_count, last_tool = _parse_progress_tool_info(content)
+        if tool_count and tool_count > 0:
+            return _superseded_work_summary_notice(tool_count, last_tool)
     return (
         "⚠️ _응답 생성이 중단되어 여기까지 보존된 내용이 없습니다. "
         "같은 질문으로 다시 요청할 수 있습니다._"
@@ -4780,6 +4882,8 @@ async def _mark_execution_interrupted(
     placeholder_id: Optional[str] = None,
     delete_empty_placeholder: bool = False,
     expected_owner_epoch: Optional[int] = None,
+    tool_count: Optional[int] = None,
+    last_tool: str = "",
 ) -> None:
     """실패/취소된 실행을 terminal 상태로 닫아 자동 복구가 오작동하지 않게 한다."""
     sid = uuid.UUID(str(session_id))
@@ -4899,15 +5003,23 @@ async def _mark_execution_interrupted(
         )
 
     clean_partial = _strip_streaming_progress_markers(partial_content)
+    if tool_count is None:
+        tool_count, last_tool = _resolve_turn_tool_work(session_id, execution_id, partial_content or "")
+    tool_count = max(0, int(tool_count or 0))
+    last_tool = str(last_tool or "")
+    # 도구를 돌렸지만 본문이 없는 superseded 턴은 지우지 않고 작업 요약을 남긴다.
+    work_summary_only = bool(is_superseded_cancel and not clean_partial and tool_count > 0)
     interruption_quality_details = _build_interruption_diagnostics(
         reason=reason,
         category=interrupt_category,
         partial_content=clean_partial,
         placeholder_id=str(pid) if pid else None,
-        delete_empty_placeholder=delete_empty_placeholder,
+        delete_empty_placeholder=delete_empty_placeholder and not work_summary_only,
         superseded=is_superseded_cancel,
     )
     interruption_quality_details["interruption_reason"] = reason[:500]
+    interruption_quality_details["tool_count"] = tool_count
+    interruption_quality_details["last_tool"] = last_tool
     try:
         _started_at = await conn.fetchval(
             "SELECT started_at FROM chat_turn_executions WHERE id = $1",
@@ -4922,6 +5034,7 @@ async def _mark_execution_interrupted(
                     "duration_sec": _duration_sec,
                     "duration_ms": int(round(_duration_sec * 1000)),
                     "response_duration_source": "interrupted_execution_elapsed",
+                    "elapsed_sec": _duration_sec,
                 }
             )
     except Exception as _duration_err:
@@ -4965,6 +5078,22 @@ async def _mark_execution_interrupted(
                 final_content,
                 pid,
                 _intent,
+            )
+            assistant_message_id = pid
+        elif work_summary_only:
+            final_content = _superseded_work_summary_notice(tool_count, last_tool)
+            await conn.execute(
+                """
+                UPDATE chat_messages
+                SET content = $1,
+                    intent = 'interrupted_partial',
+                    model_used = 'interrupted',
+                    is_hidden = FALSE,
+                    edited_at = NOW()
+                WHERE id = $2
+                """,
+                final_content,
+                pid,
             )
             assistant_message_id = pid
         elif delete_empty_placeholder or is_superseded_cancel:
@@ -7099,6 +7228,11 @@ async def with_background_completion(
             for _ph in _stale_placeholders:
                 _clean = _strip_streaming_progress_markers(_ph["content"] or "")
                 _ph_execution_id = _ph["execution_id"]
+                # 진행 문구를 지우기 전에 이 턴이 도구를 몇 번 돌렸는지 읽어 둔다.
+                # 본문 없이 도구만 돈 턴도 "일한 흔적"은 남겨야 한다(2026-09-29).
+                _ph_tools, _ph_last_tool = _resolve_turn_tool_work(
+                    session_id, _ph_execution_id, _ph["content"] or ""
+                )
                 if _ph_execution_id:
                     # 2026-09-29. 보존할 본문이 없으면 "preserving" 이라고 적지 않는다.
                     # 빈 placeholder 는 아래 delete_empty_placeholder 로 삭제되므로
@@ -7109,6 +7243,8 @@ async def with_background_completion(
                     _supersede_reason = (
                         "superseded while preserving partial response"
                         if _clean
+                        else "superseded_tool_work_without_partial"
+                        if _ph_tools > 0
                         else "superseded_without_partial"
                     )
                     await _mark_execution_interrupted(
@@ -7118,9 +7254,11 @@ async def with_background_completion(
                         _supersede_reason,
                         partial_content=_clean,
                         placeholder_id=str(_ph["id"]),
-                        delete_empty_placeholder=not bool(_clean),
+                        delete_empty_placeholder=not bool(_clean) and _ph_tools <= 0,
+                        tool_count=_ph_tools,
+                        last_tool=_ph_last_tool,
                     )
-                    if _clean:
+                    if _clean or _ph_tools > 0:
                         _preserved_count += 1
                     else:
                         _deleted_count += 1
@@ -7140,6 +7278,20 @@ async def with_background_completion(
                         WHERE id = $2
                         """,
                         _final,
+                        _ph["id"],
+                    )
+                    _preserved_count += 1
+                elif _ph_tools > 0:
+                    await _conn.execute(
+                        """
+                        UPDATE chat_messages
+                        SET content = $1,
+                            intent = 'interrupted_partial',
+                            model_used = 'interrupted',
+                            edited_at = NOW()
+                        WHERE id = $2
+                        """,
+                        _superseded_work_summary_notice(_ph_tools, _ph_last_tool),
                         _ph["id"],
                     )
                     _preserved_count += 1
