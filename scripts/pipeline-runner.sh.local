@@ -1410,6 +1410,67 @@ deploy_isolated_git_preflight() {
     log "  DEPLOY_ISOLATED_PREFLIGHT_OK: job=$job_id sha=$approved_sha origin=$remote_sha"
 }
 
+# ── GO100 프론트 번들 신선도 ──────────────────────────────────────────
+# 2026-09-30 runner-9c1f2658: 포트 curl 200 만 보고 frontend_health=OK 로 보고했지만
+# 활성 슬롯 번들은 구버전이었다. go100-frontend.service 는 masked 이고 실제 서비스는
+# blue(3000)/green(3001), 번들은 frontend/.next.<color> 다. 활성 슬롯은 nginx 가 정한다.
+GO100_REPO_DIR="${GO100_REPO_DIR:-/root/kis-autotrade-v4}"
+GO100_NGINX_CONF="${GO100_NGINX_CONF:-/etc/nginx/sites-enabled/go100}"
+
+# stdout: green | blue | "" (판정 불가). 항상 0 으로 끝난다 (set -e 안전).
+go100_active_frontend_color() {
+    local _conf="${1:-$GO100_NGINX_CONF}"
+    local _port=""
+    if [ -r "$_conf" ]; then
+        _port=$(awk '
+            /^[[:space:]]*upstream[[:space:]]+go100_frontend([[:space:]]|\{|$)/ { inb=1; next }
+            inb && /^[[:space:]]*server[[:space:]]+127\.0\.0\.1:[0-9]+/ && !/[[:space:]](down|backup)/ {
+                match($0, /127\.0\.0\.1:[0-9]+/)
+                print substr($0, RSTART + 10, RLENGTH - 10)
+                exit
+            }
+            inb && /\}/ { inb=0 }
+        ' "$_conf" 2>/dev/null) || true
+    fi
+    case "$_port" in
+        3001) echo "green" ;;
+        3000) echo "blue" ;;
+        *) echo "" ;;
+    esac
+    return 0
+}
+
+# stdout: "status|color|build_id8|built_epoch|commit_epoch"
+# status: fresh | stale | active_slot_unknown | build_id_missing | commit_epoch_unknown
+# 항상 0 으로 끝난다 (set -e 안전). 판정은 호출측이 status 로 한다.
+verify_go100_bundle_fresh() {
+    local _repo="${1:-$GO100_REPO_DIR}" _conf="${2:-$GO100_NGINX_CONF}"
+    local _color="" _commit_epoch="" _bid_file="" _built_epoch="" _bid=""
+    _color=$(go100_active_frontend_color "$_conf") || _color=""
+    if [ -z "$_color" ]; then
+        echo "active_slot_unknown||||"
+        return 0
+    fi
+    _bid_file="$_repo/frontend/.next.${_color}/BUILD_ID"
+    if [ ! -f "$_bid_file" ]; then
+        echo "build_id_missing|${_color}|||"
+        return 0
+    fi
+    _bid=$(head -c 8 "$_bid_file" 2>/dev/null | tr -d '[:space:]|') || _bid=""
+    _built_epoch=$(stat -c %Y "$_bid_file" 2>/dev/null) || _built_epoch=""
+    _commit_epoch=$(git -C "$_repo" show -s --format=%ct HEAD 2>/dev/null) || _commit_epoch=""
+    if ! [[ "$_commit_epoch" =~ ^[0-9]+$ ]] || ! [[ "$_built_epoch" =~ ^[0-9]+$ ]]; then
+        echo "commit_epoch_unknown|${_color}|${_bid}|${_built_epoch}|${_commit_epoch}"
+        return 0
+    fi
+    if (( _built_epoch < _commit_epoch )); then
+        echo "stale|${_color}|${_bid}|${_built_epoch}|${_commit_epoch}"
+    else
+        echo "fresh|${_color}|${_bid}|${_built_epoch}|${_commit_epoch}"
+    fi
+    return 0
+}
+
 # ── 에러 분류 ─────────────────────────────────────────────────────────
 persist_auth_recovery() {
     local job_id="$1" state="$2" reason="$3" retry_count="$4"
@@ -4118,32 +4179,68 @@ deploy_job() {
                     _fe_changed=$(git -C /root/kis-autotrade-v4 diff HEAD~1 HEAD --name-only -- frontend/ 2>/dev/null) || true
                 fi
                 if [ -n "$_fe_changed" ]; then
-                    # HEARTBEAT: GO100 프론트엔드 BG 배포 시작 직전 갱신
-                    db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-                    log "  ZERO-DOWNTIME go100-frontend build start (changed: $(echo "$_fe_changed" | wc -l) files)"
-                    cd "$_fe_dir"
-                    # P1: build 전 BUILD_ID 캡처 (빌드 반영 검증용)
-                    local _old_build_id=""
-                    [ -f "$_fe_dir/.next/BUILD_ID" ] && _old_build_id=$(cat "$_fe_dir/.next/BUILD_ID" 2>/dev/null) || true
-                    # Step 1: 빌드 (기존 next start 프로세스 유지)
-                    if npx next build 2>&1 | tail -5; then
-                        # P1: build 후 BUILD_ID 검증 — 변경 없으면 빌드 미반영 경고
-                        local _new_build_id=""
-                        [ -f "$_fe_dir/.next/BUILD_ID" ] && _new_build_id=$(cat "$_fe_dir/.next/BUILD_ID" 2>/dev/null) || true
-                        if [[ -n "$_old_build_id" && "$_old_build_id" == "$_new_build_id" ]]; then
-                            log "  WARN: go100-frontend BUILD_ID unchanged ($_new_build_id) — 빌드 반영 안 됨"
-                            post_to_chat "$session_id" "⚠️ [Runner] GO100 프론트엔드 BUILD_ID 변경 없음 — 빌드 미반영 의심"
-                            _build_fail="go100-frontend:BUILD_ID_unchanged"
-                        fi
-                        # Step 2: 빌드 성공 → restart (새 .next/ 반영)
-                        # HEARTBEAT: 서비스 재시작 직전 갱신
-                        db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-                        systemctl restart go100-frontend 2>/dev/null || true
-                        log "  go100-frontend zero-downtime restart complete (BUILD_ID=${_new_build_id:0:8})"
+                    # 정본 무중단 경로: 비활성 슬롯 staging 빌드 → 산출물 검증 → health → nginx 전환.
+                    # go100-frontend.service 는 masked 라 systemctl restart 는 no-op 이었고,
+                    # frontend/.next 는 존재하지 않아 BUILD_ID 비교도 발화할 수 없었다 (2026-09-30).
+                    local _fe_bg_script="${GO100_REPO_DIR}/scripts/deploy_frontend_blue_green.sh"
+                    if [ ! -f "$_fe_bg_script" ]; then
+                        # npx 직접 빌드로 폴백하지 않는다 — 활성 슬롯에 닿지 않는 경로다.
+                        log "  ERROR: go100-frontend blue-green 스크립트 없음: $_fe_bg_script"
+                        post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 blue-green 스크립트 없음 — 배포 안 됨"
+                        _build_fail="${_build_fail:+${_build_fail};}go100-frontend:bluegreen_script_missing"
                     else
-                        log "  ERROR: go100-frontend build failed — 배포 error 처리"
-                        post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 빌드 실패"
-                        _build_fail="go100-frontend:build_failed"
+                        # HEARTBEAT: GO100 프론트엔드 BG 배포 시작 직전 갱신
+                        db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
+                        log "  ZERO-DOWNTIME go100-frontend blue-green start (changed: $(echo "$_fe_changed" | wc -l) files)"
+                        local _fe_bg_rc=0
+                        # pipefail: tail/tee 가 성공해도 스크립트 실패 rc 가 그대로 올라온다.
+                        if bash "$_fe_bg_script" --apply 2>&1 | tail -30 | tee -a "$LOG_DIR/runner.log"; then
+                            _fe_bg_rc=0
+                        else
+                            _fe_bg_rc=$?
+                        fi
+                        # HEARTBEAT: GO100 프론트엔드 BG 배포 종료 직후 갱신
+                        db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
+                        if [ "$_fe_bg_rc" -ne 0 ]; then
+                            log "  ERROR: go100-frontend blue-green 배포 실패 (rc=$_fe_bg_rc)"
+                            post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 blue-green 배포 실패 (rc=$_fe_bg_rc)"
+                            _build_fail="${_build_fail:+${_build_fail};}go100-frontend:build_failed"
+                        fi
+                    fi
+
+                    # 번들 신선도 게이트: URL 200 이 아니라 활성 슬롯 BUILD_ID 가 병합 커밋보다 새것인지 본다.
+                    if [[ "$_build_fail" != *"go100-frontend:"* ]]; then
+                        local _fresh_out="" _fresh_status="" _fresh_color="" _fresh_bid="" _fresh_built="" _fresh_commit=""
+                        _fresh_out=$(verify_go100_bundle_fresh "$GO100_REPO_DIR" "$GO100_NGINX_CONF") || _fresh_out=""
+                        IFS='|' read -r _fresh_status _fresh_color _fresh_bid _fresh_built _fresh_commit <<< "$_fresh_out" || true
+                        local _fresh_built_kst="-" _fresh_commit_kst="-"
+                        [[ "$_fresh_built" =~ ^[0-9]+$ ]] && _fresh_built_kst=$(TZ=Asia/Seoul date -d "@$_fresh_built" '+%Y-%m-%d %H:%M:%S KST' 2>/dev/null || echo "$_fresh_built")
+                        [[ "$_fresh_commit" =~ ^[0-9]+$ ]] && _fresh_commit_kst=$(TZ=Asia/Seoul date -d "@$_fresh_commit" '+%Y-%m-%d %H:%M:%S KST' 2>/dev/null || echo "$_fresh_commit")
+                        case "$_fresh_status" in
+                            fresh)
+                                log "  go100-frontend bundle fresh (color=${_fresh_color} BUILD_ID=${_fresh_bid} built=${_fresh_built_kst})"
+                                ;;
+                            stale)
+                                log "  ERROR: go100-frontend stale bundle (color=${_fresh_color} BUILD_ID=${_fresh_bid} built=${_fresh_built_kst} < commit=${_fresh_commit_kst})"
+                                post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 구번들 서빙 중 — color=${_fresh_color} BUILD_ID=${_fresh_bid} built=${_fresh_built_kst} < commit=${_fresh_commit_kst}"
+                                _build_fail="${_build_fail:+${_build_fail};}go100-frontend:stale_bundle"
+                                ;;
+                            build_id_missing)
+                                log "  ERROR: go100-frontend BUILD_ID 없음 (color=${_fresh_color} dir=${_fe_dir}/.next.${_fresh_color})"
+                                post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 활성 슬롯(${_fresh_color}) BUILD_ID 없음"
+                                _build_fail="${_build_fail:+${_build_fail};}go100-frontend:build_id_missing"
+                                ;;
+                            commit_epoch_unknown)
+                                log "  ERROR: go100-frontend 신선도 판정 불가 (color=${_fresh_color} built=${_fresh_built:-?} commit=${_fresh_commit:-?})"
+                                post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 번들 신선도 판정 불가 (commit/BUILD_ID 시각 조회 실패)"
+                                _build_fail="${_build_fail:+${_build_fail};}go100-frontend:freshness_unknown"
+                                ;;
+                            *)
+                                log "  ERROR: go100-frontend 활성 슬롯 판정 불가 (${GO100_NGINX_CONF} upstream go100_frontend)"
+                                post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 활성 슬롯 판정 불가 — 번들 신선도 미확인"
+                                _build_fail="${_build_fail:+${_build_fail};}go100-frontend:active_slot_unknown"
+                                ;;
+                        esac
                     fi
                 else
                     log "  SKIP go100-frontend (no frontend changes since $_pre_sha)"
