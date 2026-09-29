@@ -588,10 +588,25 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                        COALESCE(m.owner_session_id, s.id) AS session_id
                 FROM milestones m
                 JOIN goals g ON g.id = m.goal_id
-                LEFT JOIN chat_sessions s
-                       ON m.owner_session_id IS NULL
+                -- 역할로 담당 세션을 찾을 때는 **한 개만** 집는다.
+                --
+                -- 2026-09-29 실측. 여기가 평범한 LEFT JOIN 이어서 같은
+                -- role_key 를 쓰는 채팅 세션이 여러 개면 마일스톤 한 건이
+                -- 세션 수만큼 복제됐다. 아래 LIMIT 20 이 그 복제로 통째로
+                -- 차서 후보 62건 중 **단 1건**만 사이클마다 20번 반복
+                -- 조회됐고(로그 goal_dispatch_cost_gated 1,060건/53사이클),
+                -- 그 1건이 비용 상한에 걸린 목표여서 발송은 14시간 동안
+                -- 0건이었다. 나머지 61건은 조회조차 되지 않았다.
+                LEFT JOIN LATERAL (
+                    SELECT cs.id
+                    FROM chat_sessions cs
+                    WHERE m.owner_session_id IS NULL
                       AND m.owner_role_key IS NOT NULL
-                      AND s.role_key = m.owner_role_key
+                      AND cs.role_key = m.owner_role_key
+                    ORDER BY cs.updated_at DESC NULLS LAST,
+                             cs.created_at DESC, cs.id
+                    LIMIT 1
+                ) s ON TRUE
                 WHERE m.status = 'in_progress'
                   AND g.status IN ('active', 'blocked')
                   AND ($1::text IS NULL OR g.project = $1)
