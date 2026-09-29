@@ -1,3 +1,13 @@
+## 2026-09-29 — deploy.sh 조상 릴리스 거부 가드 R2 (AADS-DEPLOY-ANCESTOR-RELEASE-GUARD-R2-20260929)
+
+- R1(runner-42338110, 3362daa7)은 리뷰 0.858·테스트 통과 후 stale_base 로 푸시되지 못했다. 설계 변경 없이 최신 main(cac17f1a, 0543b4a9·389882dd 포함) 위에 같은 내용을 다시 얹었다.
+- 추돌 해소: `deploy.sh` 4개 hunk 는 45줄 오프셋으로 그대로 적용(내용 동일). 389882dd 의 `run_release_migrations`/`apply_release_schema_migrations`(scripts/apply_release_migrations.sh 호출)와 0543b4a9 의 `record-release-provenance.sh` 훅은 손대지 않았다. HANDOVER 는 이 항목을 새로 썼다.
+- 가드 계약(R1 과 동일): `claim_latest_queued_deploy_request` 직후·`include_queued_ancestors_in_direct_release`·`deploy_phase_start preflight` 앞에서 `enforce_ancestor_release_guard` 호출. 큐 워커 모드와 무관하게 동작. 구동본(활성 슬롯 `org.opencontainers.image.revision` 라벨, 없으면 `aads-server:<sha>` 태그)의 조상이거나, origin/main 에 흡수됐고 구동본을 포함하지 않으며 구동본보다 오래된 릴리스는 이미지 빌드 전에 `status=superseded`, `error_summary=ancestor_release_skipped: release=<sha> running=<sha> behind=<n> reentry=<k> reason=<...>` 로 닫고 exit 0(deploy_history 는 `skipped`). 같은 SHA 는 막지 않음. SHA 판정 불가 시 경고+audit 만. 의도된 롤백은 `AADS_DEPLOY_ALLOW_ANCESTOR_RELEASE=1`. `deploy_observe_update` 완료시각 CASE 에 superseded 추가.
+- 테스트: `tests/unit/test_deploy_ancestor_release_guard.py` 에 `test_guard_coexists_with_release_migrations_and_provenance` 추가(migrations 단계·provenance 훅 존재 및 가드 < migrations 호출 < provenance 순서, 가드 호출 1회) → 11건.
+  - `bash scripts/run_unit_tests.sh tests/unit/test_deploy_ancestor_release_guard.py tests/unit/test_deploy_release_migrations.py` → 28 passed, exit 0.
+  - 회귀: terminal_state_contract·autoheal·unified_worker_provenance_hook·sync_standby_contract 119 passed / goal_release_evidence 59 passed, 모두 exit 0. `bash -n deploy.sh` OK.
+- 기존 deploy_runs 행은 변경하지 않음.
+
 ## 2026-09-29 19:50 KST — AADS-RELEASE-PROVENANCE-QUEUEWORKER-HOOK-R2: 큐 워커 계보 훅 + 멱등성 보강 + 5239~ 소급
 
 - 변경 파일

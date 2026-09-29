@@ -791,7 +791,7 @@ deploy_observe_update() {
             updated_at=NOW(),
             last_heartbeat_at=NOW(),
             phase_completed_at=CASE
-                WHEN '$status_sql' IN ('success', 'success_partial', 'completed', 'failed', 'blocked') THEN NOW()
+                WHEN '$status_sql' IN ('success', 'success_partial', 'completed', 'failed', 'blocked', 'superseded') THEN NOW()
                 ELSE phase_completed_at
             END,
             duration_ms=${elapsed_ms},
@@ -809,7 +809,7 @@ deploy_observe_update() {
             updated_at=NOW(),
             started_at=COALESCE(started_at, to_timestamp(${DEPLOY_START_EPOCH})),
             completed_at=CASE
-                WHEN '$status_sql' IN ('success', 'success_partial', 'completed', 'failed', 'blocked') THEN NOW()
+                WHEN '$status_sql' IN ('success', 'success_partial', 'completed', 'failed', 'blocked', 'superseded') THEN NOW()
                 ELSE completed_at
             END,
             duration_ms=${elapsed_ms},
@@ -1171,6 +1171,135 @@ include_queued_ancestors_in_direct_release() {
         " >/dev/null
         echo "[deploy.sh] queued ancestor included: run=${included_run_id} sha=${included_sha} -> release_run=${DEPLOY_RUN_ID}"
     done <<< "$queued_rows"
+}
+
+# 이미 구동 중인 릴리스보다 낡은 SHA 를 다시 굽는 것은 회귀 배포다.
+# 2026-09-29 실측: 6d20a6eb(main 대비 35 커밋 뒤)·71bf61c2(13 뒤)·f6aa0d74(10 뒤)가
+# 큐 워커/autoheal 경로로 하루 13번 재시도됐다. 성공했다면 그 뒤에 머지된 커밋이
+# 운영에서 사라졌다. include_queued_ancestors_in_direct_release 는 queued 조상을
+# 흡수할 뿐이고 큐 워커에서는 동작하지 않으므로, 이 가드는 워커 여부와 무관하게 돈다.
+#
+# 같은 SHA 는 여기서 막지 않는다. 한쪽 슬롯만 올라간 상태의 같은 릴리스 재배포는
+# standby 복구이며, 양쪽 모두 라이브인 경우는 reject_duplicate_live_release 가 막는다.
+# 판정 불가(구동본 SHA 미상·커밋 미존재·fetch 실패)는 차단하지 않고 경고만 남긴다.
+# 가짜 차단이 더 위험하다. 의도된 롤백은 AADS_DEPLOY_ALLOW_ANCESTOR_RELEASE=1.
+DEPLOY_ANCESTOR_SKIP_SUMMARY=""
+
+running_release_sha() {
+    local container="${ACTIVE_CONTAINER:-}" rev="" img=""
+    [[ -n "$container" ]] || return 0
+    rev="$(docker inspect "$container" \
+        --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
+    rev="$(printf '%s' "$rev" | tr -d '[:space:]')"
+    if [[ ! "$rev" =~ ^[0-9a-fA-F]{7,64}$ ]]; then
+        img="$(docker inspect "$container" --format '{{.Config.Image}}' 2>/dev/null || true)"
+        case "$img" in
+            aads-server:*) rev="${img#aads-server:}" ;;
+            *) rev="" ;;
+        esac
+    fi
+    if [[ "$rev" =~ ^[0-9a-fA-F]{7,64}$ ]]; then
+        printf '%s' "$rev"
+    fi
+}
+
+resolve_release_commit() {
+    local sha="$1" full=""
+    full="$(git -C "$COMPOSE_DIR" rev-parse --verify --quiet "${sha}^{commit}" 2>/dev/null || true)"
+    if [[ -z "$full" && "${AADS_DEPLOY_ANCESTOR_GUARD_FETCH:-1}" == "1" ]]; then
+        timeout 20 git -C "$COMPOSE_DIR" fetch --quiet origin >/dev/null 2>&1 || true
+        full="$(git -C "$COMPOSE_DIR" rev-parse --verify --quiet "${sha}^{commit}" 2>/dev/null || true)"
+    fi
+    printf '%s' "$full"
+}
+
+reject_ancestor_release() {
+    DEPLOY_ANCESTOR_SKIP_SUMMARY=""
+    local sha running release_full running_full main_full reason="" behind reentry run_id_sql sha_sql
+    sha="${AADS_RELEASE_SHA:-}"
+    if [[ "${AADS_DEPLOY_ALLOW_ANCESTOR_RELEASE:-0}" == "1" ]]; then
+        echo "[deploy.sh] ancestor-release guard bypassed by AADS_DEPLOY_ALLOW_ANCESTOR_RELEASE=1"
+        audit_control "ancestor-release-guard" "aads-server:${sha:-unknown}" "bypassed" "operator override"
+        return 0
+    fi
+    if [[ ! "$sha" =~ ^[0-9a-fA-F]{7,64}$ ]]; then
+        echo "[deploy.sh] ⚠️ ancestor-release guard: release sha undeterminable (${sha:-empty}) — not blocking"
+        audit_control "ancestor-release-guard" "aads-server:${sha:-unknown}" "warning" "release sha undeterminable"
+        return 0
+    fi
+    running="$(running_release_sha)"
+    if [[ -z "$running" ]]; then
+        echo "[deploy.sh] ⚠️ ancestor-release guard: running release undeterminable (container=${ACTIVE_CONTAINER:-unknown}) — not blocking"
+        audit_control "ancestor-release-guard" "aads-server:${sha}" "warning" "running release undeterminable"
+        return 0
+    fi
+    release_full="$(resolve_release_commit "$sha")"
+    running_full="$(resolve_release_commit "$running")"
+    if [[ -z "$release_full" || -z "$running_full" ]]; then
+        echo "[deploy.sh] ⚠️ ancestor-release guard: commit missing locally (release=${sha} found=${release_full:+yes} running=${running} found=${running_full:+yes}) — not blocking"
+        audit_control "ancestor-release-guard" "aads-server:${sha}" "warning" \
+            "ancestry undeterminable; running=${running}"
+        return 0
+    fi
+    if [[ "$release_full" == "$running_full" ]]; then
+        return 0
+    fi
+    if git -C "$COMPOSE_DIR" merge-base --is-ancestor "$release_full" "$running_full" 2>/dev/null; then
+        reason="ancestor_of_running"
+    else
+        # 구동본의 조상은 아니지만 origin/main 에 이미 흡수됐고, 구동본을 포함하지
+        # 않으며, 구동본보다 오래된 커밋이면 역시 회귀다.
+        main_full="$(git -C "$COMPOSE_DIR" rev-parse --verify --quiet 'origin/main^{commit}' 2>/dev/null || true)"
+        if [[ -n "$main_full" ]] \
+            && git -C "$COMPOSE_DIR" merge-base --is-ancestor "$release_full" "$main_full" 2>/dev/null \
+            && ! git -C "$COMPOSE_DIR" merge-base --is-ancestor "$running_full" "$release_full" 2>/dev/null; then
+            local release_ts running_ts
+            release_ts="$(git -C "$COMPOSE_DIR" log -1 --format=%ct "$release_full" 2>/dev/null || echo 0)"
+            running_ts="$(git -C "$COMPOSE_DIR" log -1 --format=%ct "$running_full" 2>/dev/null || echo 0)"
+            if [[ "$release_ts" =~ ^[0-9]+$ && "$running_ts" =~ ^[0-9]+$ && "$release_ts" -gt 0 \
+                  && "$release_ts" -lt "$running_ts" ]]; then
+                reason="absorbed_in_main_older_than_running"
+            fi
+        fi
+    fi
+    [[ -n "$reason" ]] || return 0
+
+    behind="$(git -C "$COMPOSE_DIR" rev-list --count "${release_full}..${running_full}" 2>/dev/null || echo unknown)"
+    reentry=1
+    if deploy_db_available; then
+        sha_sql="$(sql_escape "${sha:0:8}")"
+        run_id_sql="${DEPLOY_RUN_ID:-}"
+        [[ "$run_id_sql" =~ ^[0-9]+$ ]] || run_id_sql="-1"
+        local prior
+        prior="$(
+            deploy_db_exec "
+                SELECT COUNT(*)::int
+                  FROM deploy_runs
+                 WHERE project='AADS'
+                   AND release_sha LIKE '${sha_sql}%'
+                   AND error_summary LIKE 'ancestor_release_skipped:%'
+                   AND id <> ${run_id_sql};
+            " | tail -1 | tr -d '[:space:]'
+        )"
+        [[ "$prior" =~ ^[0-9]+$ ]] && reentry=$((prior + 1))
+    fi
+    DEPLOY_ANCESTOR_SKIP_SUMMARY="ancestor_release_skipped: release=${sha} running=${running} behind=${behind} reentry=${reentry} reason=${reason}"
+    echo "[deploy.sh] ⏭️ ${DEPLOY_ANCESTOR_SKIP_SUMMARY}"
+    audit_control "ancestor-release-guard" "aads-server:${sha}" "superseded" "$DEPLOY_ANCESTOR_SKIP_SUMMARY"
+    return 1
+}
+
+# 차단은 실패가 아니라 이미 반영된 것이다. failed 로 남기면 autoheal 이 다시
+# 재시도하므로 superseded 로 닫고 0 으로 나간다.
+enforce_ancestor_release_guard() {
+    if reject_ancestor_release; then
+        return 0
+    fi
+    DEPLOY_CURRENT_PHASE="preflight"
+    DEPLOY_PHASE_START_EPOCH="$(date +%s)"
+    deploy_phase_end "preflight" "superseded" "$DEPLOY_ANCESTOR_SKIP_SUMMARY"
+    record_deploy "skipped" "$MODE" "$DEPLOY_ANCESTOR_SKIP_SUMMARY"
+    exit 0
 }
 
 start_deploy_queue_worker() {
@@ -1836,6 +1965,7 @@ audit_control "deploy-generation" "$ACTIVE_CONTAINER:$ACTIVE_PORT" "started" "mo
 ensure_deploy_observability_schema
 reconcile_stale_deploy_runs
 claim_latest_queued_deploy_request
+enforce_ancestor_release_guard
 include_queued_ancestors_in_direct_release
 deploy_phase_start "preflight" "running"
 if [[ "${AADS_DEPLOY_QUEUE_WORKER:-false}" == "true" ]]; then
