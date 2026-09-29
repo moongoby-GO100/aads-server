@@ -95,6 +95,90 @@ elif [ "${GITLEAKS_MISSING_WARNED:-0}" != "1" ]; then
   GITLEAKS_MISSING_WARNED=1
 fi
 
+# ─── Step 1c: 민감 보안문서 차단 (AADS-SEC-M0) ──────────────────────
+# 2026-09-29, 세션 종료 자동 커밋(a6ce87ea)이 보안 감사 문서를 public 저장소에
+# 올렸다. 키 패턴 검사는 "값" 만 보므로 문서 자체는 그냥 통과했다.
+# 규칙은 app/services/workspace_change_tracker.py 의 _SENSITIVE_* 와 같다 —
+# 한쪽만 고치지 마라(tests/unit/test_workspace_change_tracker_sensitive.py 가 대조한다).
+# 본문은 작업본이 아니라 스테이징된 블롭의 앞 8KB 를 본다.
+SENSITIVE_OUT=$(python3 - <<'PYEOF'
+import subprocess
+
+DIR_MARKERS = ("security-private/",)
+NAME_MARKERS = ("security_audit", "security-audit", "_pentest")
+SUFFIXES = (".pem", ".key", ".p12")
+# "공개 금지" 단독은 뺐다: 표 셀·문장의 일반 단어 조합이라 docs/plans/AADS-VOICE-COMMAND-MVP.md 를 오탐했다.
+CONTENT_MARKERS = ("do-not-commit", "do not commit", "커밋하거나 푸시하지 말 것")
+# "커밋 금지" 는 줄 머리(장식 문자 제외)에서만 표식이다. 문장 중간의 ".env 커밋 금지" 는 README 등
+# 추적 파일 10건이 쓰는 일반 주의문이라 부분 문자열로 걸면 오탐이다.
+LINE_START_MARKERS = ("커밋 금지",)
+LINE_DECORATION = " \t#>*-|`/;:"
+# .env.example 류는 값이 없는 견본이라 커밋 대상이다(.env.example, .env.e2e.example 오탐). 본문 검사도 뺀다.
+ENV_TEMPLATE_SUFFIXES = (".example", ".sample", ".template")
+SCAN_BYTES = 8192
+# 게이트 자신은 표식 문자열을 담고 있으므로 본문 검사에서만 뺀다(경로 규칙은 적용).
+CONTENT_EXEMPT = {
+    "app/services/workspace_change_tracker.py",
+    "scripts/hooks/pre-commit",
+    "tests/unit/test_workspace_change_tracker_sensitive.py",
+}
+
+out = subprocess.run(
+    ["git", "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR"],
+    capture_output=True,
+).stdout
+for raw in out.split(b"\0"):
+    if not raw:
+        continue
+    path = raw.decode("utf-8", errors="replace")
+    lowered = path.lower()
+    name = lowered.rsplit("/", 1)[-1]
+    reason = None
+    for marker in DIR_MARKERS:
+        if marker in lowered or lowered.startswith(marker.rstrip("/")):
+            reason = "경로에 %s" % marker
+    if not reason:
+        for marker in NAME_MARKERS:
+            if marker in name:
+                reason = "파일명에 %s" % marker.upper()
+                break
+    if not reason and name.endswith(SUFFIXES):
+        reason = "민감 확장자 %s" % name[name.rfind("."):]
+    if not reason and name.startswith(".env") and not name.endswith(ENV_TEMPLATE_SUFFIXES):
+        reason = ".env 파일"
+    if not reason and path not in CONTENT_EXEMPT and not (
+        name.startswith(".env") and name.endswith(ENV_TEMPLATE_SUFFIXES)
+    ):
+        blob = subprocess.run(["git", "show", ":" + path], capture_output=True).stdout[:SCAN_BYTES]
+        if b"\0" not in blob:
+            text = blob.decode("utf-8", errors="ignore").lower()
+            for marker in CONTENT_MARKERS:
+                if marker in text:
+                    reason = "본문 표식 '%s'" % marker
+                    break
+            if not reason:
+                for line in text.splitlines():
+                    stripped = line.lstrip(LINE_DECORATION)
+                    for marker in LINE_START_MARKERS:
+                        if stripped.startswith(marker):
+                            reason = "본문 표식 '%s'" % marker
+    if reason:
+        print("%s — %s" % (path, reason))
+PYEOF
+)
+if [ -n "$SENSITIVE_OUT" ]; then
+  if [ "${ALLOW_SENSITIVE_COMMIT:-}" = "1" ]; then
+    echo -e "${YELLOW}[민감 문서] ALLOW_SENSITIVE_COMMIT=1 — 알고도 진행합니다${NC}"
+    echo "$SENSITIVE_OUT" | sed 's/^/  /'
+  else
+    echo -e "${RED}[BLOCKED] 민감 보안문서가 스테이징됐습니다 — 이 저장소는 public 입니다${NC}"
+    echo "$SENSITIVE_OUT" | sed 's/^/  /'
+    echo -e "${YELLOW}  → git restore --staged <파일> 로 빼고, security-private/ 등 저장소 밖에 두세요.${NC}"
+    echo -e "${YELLOW}  → 공개해도 되는 것이 확실하면(CEO 승인): ALLOW_SENSITIVE_COMMIT=1 git commit -m \"...\"${NC}"
+    exit 1
+  fi
+fi
+
 # ─── Step 2: Python 코드 검수 (구문 + 정적 분석 + import 검증) ───
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'

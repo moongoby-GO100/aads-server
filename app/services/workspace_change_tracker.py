@@ -689,6 +689,142 @@ def _is_committable_path(path: str) -> bool:
     return True
 
 
+# AADS-SEC-M0(2026-09-29): 세션 종료 자동 커밋이 보안 감사 문서를 public 저장소에
+# 푸시했다(a6ce87ea). 경로 게이트는 레포 밖 경로만 걸렀고 문서 안의 "커밋 금지"
+# 문구도 읽지 않았다. scripts/hooks/pre-commit 의 같은 이름 단계와 규칙을 맞춘다.
+_SENSITIVE_DIR_MARKERS = ("security-private/",)
+_SENSITIVE_NAME_MARKERS = ("security_audit", "security-audit", "_pentest")
+_SENSITIVE_SUFFIXES = (".pem", ".key", ".p12")
+# "공개 금지" 단독은 뺐다: 표 셀·문장의 일반 단어 조합이라 docs/plans/AADS-VOICE-COMMAND-MVP.md 를 오탐했다.
+_SENSITIVE_CONTENT_MARKERS = (
+    "do-not-commit",
+    "do not commit",
+    "커밋하거나 푸시하지 말 것",
+)
+# "커밋 금지" 는 줄 머리(장식 문자 제외)에서만 표식이다. 문장 중간의 ".env 커밋 금지" 는 README 등
+# 추적 파일 10건이 쓰는 일반 주의문이라 부분 문자열로 걸면 오탐이다.
+_SENSITIVE_LINE_START_MARKERS = ("커밋 금지",)
+_SENSITIVE_LINE_DECORATION = " \t#>*-|`/;:"
+# .env.example 류는 값이 없는 견본이라 커밋 대상이다(.env.example, .env.e2e.example 오탐). 본문 검사도 뺀다.
+_SENSITIVE_ENV_TEMPLATE_SUFFIXES = (".example", ".sample", ".template")
+_SENSITIVE_SCAN_BYTES = 8192
+# 게이트 자신은 표식 문자열을 정의로 담고 있으므로 본문 검사에서만 뺀다(경로 규칙은 적용).
+_SENSITIVE_CONTENT_EXEMPT = frozenset({
+    "app/services/workspace_change_tracker.py",
+    "scripts/hooks/pre-commit",
+    "tests/unit/test_workspace_change_tracker_sensitive.py",
+})
+
+
+def _sensitive_path_reason(rel_path: str) -> Optional[str]:
+    lowered = (rel_path or "").strip().lower()
+    if not lowered:
+        return None
+    for marker in _SENSITIVE_DIR_MARKERS:
+        if marker in lowered or lowered.startswith(marker.rstrip("/")):
+            return f"path contains {marker}"
+    name = lowered.rsplit("/", 1)[-1]
+    for marker in _SENSITIVE_NAME_MARKERS:
+        if marker in name:
+            return f"filename contains {marker.upper()}"
+    if name.endswith(_SENSITIVE_SUFFIXES):
+        return f"sensitive extension {name[name.rfind('.'):]}"
+    if name.startswith(".env") and not name.endswith(_SENSITIVE_ENV_TEMPLATE_SUFFIXES):
+        return "env file"
+    return None
+
+
+def _sensitive_content_reason(text: str) -> Optional[str]:
+    if not text or "\x00" in text:  # 바이너리는 본문 표식을 보지 않는다
+        return None
+    lowered = text[:_SENSITIVE_SCAN_BYTES].lower()
+    for marker in _SENSITIVE_CONTENT_MARKERS:
+        if marker in lowered:
+            return f"content marker '{marker}'"
+    for line in lowered.splitlines():
+        stripped = line.lstrip(_SENSITIVE_LINE_DECORATION)
+        for marker in _SENSITIVE_LINE_START_MARKERS:
+            if stripped.startswith(marker):
+                return f"content marker '{marker}'"
+    return None
+
+
+def _content_scan_exempt(rel_path: str) -> bool:
+    if rel_path in _SENSITIVE_CONTENT_EXEMPT:
+        return True
+    name = (rel_path or "").lower().rsplit("/", 1)[-1]
+    return name.startswith(".env") and name.endswith(_SENSITIVE_ENV_TEMPLATE_SUFFIXES)
+
+
+def _is_sensitive_path(repo_root: str, rel_path: str) -> Optional[str]:
+    """민감 파일이면 사유를, 아니면 None 을 돌려준다.
+
+    본문은 repo_root 에서 직접 읽을 수 있을 때만 본다(앞 8KB).
+    """
+    reason = _sensitive_path_reason(rel_path)
+    if reason:
+        return reason
+    if not repo_root or not rel_path or _content_scan_exempt(rel_path):
+        return None
+    import os
+
+    full_path = os.path.join(repo_root, rel_path)
+    try:
+        with open(full_path, "rb") as handle:
+            head = handle.read(_SENSITIVE_SCAN_BYTES)
+    except OSError:
+        return None
+    return _sensitive_content_reason(head.decode("utf-8", errors="ignore"))
+
+
+async def _sensitive_paths(
+    project: str, repo: str, file_paths: list[str]
+) -> dict[str, str]:
+    """커밋 대상 중 민감 파일을 골라낸다.
+
+    컨테이너에서는 호스트 레포가 마운트되어 있지 않으므로, 로컬에서 읽지 못한
+    파일의 본문은 원격 명령으로 앞 8KB 만 읽어 표식을 확인한다.
+    """
+    import os
+
+    repo_root = _repo_workdir(project, repo)
+    sensitive: dict[str, str] = {}
+    for path in file_paths:
+        reason = _is_sensitive_path(repo_root, path)
+        if (
+            not reason
+            and not _content_scan_exempt(path)
+            and not os.path.isfile(os.path.join(repo_root, path))
+        ):
+            try:
+                head = await _run_git_command(
+                    project, repo, f"head -c {_SENSITIVE_SCAN_BYTES} -- {shlex.quote(path)}"
+                )
+            except Exception as exc:  # 조회 실패는 경로 규칙만 적용한다
+                logger.warning("sensitive content check read failed: %s (%s)", path, exc)
+                head = ""
+            reason = _sensitive_content_reason(head)
+        if reason:
+            sensitive[path] = reason
+    return sensitive
+
+
+async def _notify_sensitive_skipped(
+    project: str, repo: str, session_id: str, sensitive: dict[str, str]
+) -> None:
+    try:
+        from app.services.telegram_bot import get_telegram_bot
+
+        bot = get_telegram_bot()
+        if bot and bot.is_ready:
+            lines = "\n".join(f"- {path}: {reason}" for path, reason in list(sensitive.items())[:10])
+            await bot.send_message(
+                f"\U0001f6a8 *자동 커밋에서 민감 파일 제외* ({project}/{repo}, session {session_id[:8]})\n{lines}"
+            )
+    except Exception as exc:
+        logger.warning("sensitive skip telegram alert failed: %s", exc)
+
+
 async def _finalize_group(
     *,
     session_id: str,
@@ -715,6 +851,21 @@ async def _finalize_group(
                 file_paths = [path for path in file_paths if path in changed]
         except Exception:  # 상태 조회 실패 시에는 기존 동작 유지
             pass
+    # 민감 보안문서는 커밋하지 않는다(_sensitive_paths 주석 참조). 레포 밖 경로처럼
+    # 영구히 커밋 불가 대상으로 보고 ledger 를 막지 않는다.
+    sensitive: dict[str, str] = {}
+    if file_paths:
+        sensitive = await _sensitive_paths(project, repo, file_paths)
+        if sensitive:
+            file_paths = [path for path in file_paths if path not in sensitive]
+            logger.warning(
+                "workspace_change_sensitive_skipped project=%s repo=%s session=%s files=%s",
+                project,
+                repo,
+                session_id[:8],
+                "; ".join(f"{path} ({reason})" for path, reason in sensitive.items())[:1000],
+            )
+            await _notify_sensitive_skipped(project, repo, session_id, sensitive)
     result: dict[str, Any] = {
         "project": project,
         "repo": repo,
@@ -728,6 +879,10 @@ async def _finalize_group(
     if skipped_outside or skipped_missing:
         result["skipped_outside_repo"] = skipped_outside[:20]
         result["skipped_not_dirty"] = skipped_missing[:20]
+    if sensitive:
+        result["skipped_sensitive"] = [
+            {"path": path, "reason": reason} for path, reason in list(sensitive.items())[:20]
+        ]
 
     # 문법이 깨진 설정 파일은 커밋하지 않는다(_config_syntax_errors 주석 참조).
     invalid_config: dict[str, str] = {}
