@@ -1856,6 +1856,18 @@ async def filter_executable_models(model_ids: Sequence[str]) -> list[str]:
     return filtered
 
 
+# (tier, fallback_group) — 같은 계열의 기존 행(opus=S/premium, sonnet=A/standard)과 동일한 값만 적는다.
+_MODEL_TIER_CATALOG: dict[tuple[str, str], tuple[str, str]] = {
+    ("anthropic", "claude-opus-5-5"): ("S", "premium"),
+    ("anthropic", "claude-opus-5"): ("S", "premium"),
+    ("anthropic", "claude-sonnet-5"): ("A", "standard"),
+}
+
+
+def _catalog_tier(provider: str, model_id: str) -> tuple[str | None, str | None]:
+    return _MODEL_TIER_CATALOG.get((provider, model_id), (None, None))
+
+
 async def sync_model_registry(*, triggered_by: str = "system", reason: str = "") -> dict[str, Any]:
     sync_token = uuid.uuid4().hex
     pool = get_pool()
@@ -1897,6 +1909,7 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                     metadata["sync_token"] = sync_token
                     capabilities = _coerce_json_object(row.get("capabilities"))
                     pricing = _coerce_json_object(row.get("pricing"))
+                    tier, fallback_group = _catalog_tier(row["provider"], row["model_id"])
                     await conn.execute(
                         """
                         INSERT INTO llm_models (
@@ -1905,7 +1918,8 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                             input_cost, output_cost, is_active, activation_source,
                             linked_key_name, metadata, execution_model_id, discovery_source,
                             last_seen_at, retired_at, verification_status, last_verified_at,
-                            capabilities, pricing, is_selectable, is_executable, updated_at
+                            capabilities, pricing, is_selectable, is_executable, updated_at,
+                            tier, fallback_group
                         )
                         VALUES (
                             $1, $2, $3, $4, $5,
@@ -1913,7 +1927,8 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                             $10, $11, $12, $13,
                             $14, $15::jsonb, $16, $17,
                             NOW(), NULL, $18, $19,
-                            $20::jsonb, $21::jsonb, $22, $23, NOW()
+                            $20::jsonb, $21::jsonb, $22, $23, NOW(),
+                            $24, $25
                         )
                         ON CONFLICT (provider, model_id)
                         DO UPDATE SET
@@ -1940,6 +1955,8 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                             pricing = EXCLUDED.pricing,
                             is_selectable = EXCLUDED.is_selectable,
                             is_executable = EXCLUDED.is_executable,
+                            tier = COALESCE(llm_models.tier, EXCLUDED.tier),
+                            fallback_group = COALESCE(llm_models.fallback_group, EXCLUDED.fallback_group),
                             updated_at = NOW()
                         """,
                         row["provider"],
@@ -1965,6 +1982,8 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                         json.dumps(pricing, default=_json_default),
                         bool(row.get("is_selectable", row.get("is_active", False))),
                         bool(row.get("is_executable", row.get("is_active", False))),
+                        tier,
+                        fallback_group,
                     )
 
                 await conn.execute(
