@@ -14,6 +14,10 @@ from app.services.goal_binding import normalize_job_state_for_project
 logger = logging.getLogger(__name__)
 _MAX_RETRY = min(2, max(0, int(os.getenv("GOAL_FAILED_LINK_RETRY_MAX", "2"))))
 _RETRY_MARKER = re.compile(r"^RETRY_OF_LINK: (\S+)$", re.MULTILINE)
+# 운영 지시서의 승계 헤더. 줄 시작에서만 인식해 본문 중간의 언급은 잡지 않는다.
+_HEADER_MARKER = re.compile(r"^[ \t]*(AUTO_REWORK_OF|SUPERSEDES)[ \t]*:[ \t]*(.*)$", re.MULTILINE)
+_HEADER_PAREN = re.compile(r"\([^()]*\)")
+_RUNNER_JOB_ID = re.compile(r"(?<![\w-])runner-[0-9a-f]{8}(?![\w-])")
 
 
 def _evidence(value) -> dict:
@@ -306,6 +310,33 @@ async def ensure_retry_candidate(
         return {"created": False, "why": "proposal_failed"}
 
 
+def parse_supersede_markers(instruction: str) -> list[tuple[str, str]]:
+    """지시서 헤더에서 (실패 job id, marker 종류) 목록을 뽑는다.
+
+    RETRY_OF_LINK 가 가리키는 id 는 카드 검증 경로가 우선하므로 헤더에서 중복 제외한다.
+    SUPERSEDES 는 복수, AUTO_REWORK_OF 는 첫 토큰만. 괄호 주석 안의 id 는 버린다.
+    """
+    text = instruction or ""
+    found: list[tuple[str, str]] = []
+    retry = _RETRY_MARKER.search(text)
+    if retry:
+        found.append((retry.group(1), "retry_of_link"))
+    for key, value in _HEADER_MARKER.findall(text):
+        while True:
+            stripped = _HEADER_PAREN.sub(" ", value)
+            if stripped == value:
+                break
+            value = stripped
+        ids = _RUNNER_JOB_ID.findall(value)
+        if key == "AUTO_REWORK_OF":
+            ids = ids[:1]
+        marker = key.lower()
+        for job_id in ids:
+            if all(job_id != seen for seen, _ in found):
+                found.append((job_id, marker))
+    return found
+
+
 async def mark_explicit_retry_supersession(conn, milestone_id: str) -> int:
     """Supersede a recorded failed link when its marked replacement succeeds."""
     from app.services.goal_manager import active_link_predicate, link_optional_columns
@@ -332,48 +363,95 @@ async def mark_explicit_retry_supersession(conn, milestone_id: str) -> int:
     )
     count = 0
     for replacement in replacements:
+        markers = parse_supersede_markers(replacement["instruction"])
+        if not markers:
+            continue
         if normalize_job_state_for_project(
             replacement["status"], replacement["phase"], replacement["project"],
         ) != "completed":
+            # 진행 중인 후속은 완료 판정마다 다시 오므로 warning 대신 info 로 남긴다.
+            for failed_id, marker in markers:
+                logger.info("goal_retry_supersede_rejected milestone=%s failed=%s replacement=%s "
+                            "reason=replacement_not_completed marker=%s",
+                            milestone_id, failed_id, replacement["task_id"], marker)
             continue
-        marker = _RETRY_MARKER.search(replacement["instruction"] or "")
-        failed_id = marker.group(1) if marker else None
-        if not failed_id:
-            continue
-        reason = None
-        if (str(replacement["goal_id"]) != str(row["goal_id"])
-                or str(replacement["milestone_id"]) != milestone_id):
-            reason = "link_scope_mismatch"
-        elif str(replacement["tenant_id"]) != row["tenant_id"]:
-            reason = "tenant_mismatch"
-        elif failed_id == replacement["task_id"]:
-            reason = "self_replacement"
-        if reason:
-            logger.warning("goal_retry_supersede_rejected milestone=%s failed=%s replacement=%s reason=%s",
-                           milestone_id, failed_id, replacement["task_id"], reason)
-            continue
-        async with conn.transaction():
-            locked = await conn.fetchrow(
-                "SELECT evidence FROM milestones WHERE id = $1::uuid "
-                "AND tenant_id = $2::uuid FOR UPDATE",
-                milestone_id, row["tenant_id"],
+        for failed_id, marker in markers:
+            if await _supersede_one(conn, milestone_id, row, columns, replacement,
+                                    failed_id, marker):
+                count += 1
+    return count
+
+
+def _reject(milestone_id: str, failed_id: str, replacement_id, reason: str, marker: str) -> bool:
+    logger.warning("goal_retry_supersede_rejected milestone=%s failed=%s replacement=%s reason=%s marker=%s",
+                   milestone_id, failed_id, replacement_id, reason, marker)
+    return False
+
+
+async def _supersede_one(conn, milestone_id: str, row, columns: set, replacement,
+                         failed_id: str, marker: str) -> bool:
+    """완료된 후속 job 하나가 marker 로 가리킨 실패 링크 하나를 승계한다.
+
+    retry_of_link 는 살아 있는 retry_candidate 카드와 카드 이후 생성을 요구한다.
+    auto_rework_of/supersedes 헤더 경로는 카드를 요구하지 않는 대신 후속 job 이
+    실패 job 보다 나중에 생성됐는지 확인한다. 범위·tenant·자기 자신 검증은 공통.
+    """
+    from app.services.goal_manager import active_link_predicate
+
+    header = marker != "retry_of_link"
+    reason = None
+    if (str(replacement["goal_id"]) != str(row["goal_id"])
+            or str(replacement["milestone_id"]) != milestone_id):
+        reason = "link_scope_mismatch"
+    elif str(replacement["tenant_id"]) != row["tenant_id"]:
+        reason = "tenant_mismatch"
+    elif failed_id == replacement["task_id"]:
+        reason = "self_replacement"
+    elif header:
+        failed_job = await conn.fetchrow(
+            "SELECT p.created_at FROM pipeline_jobs p "
+            "WHERE p.job_id = $1 AND p.tenant_id = $2::uuid",
+            failed_id, row["tenant_id"],
+        )
+        try:
+            failed_at = failed_job["created_at"] if failed_job else None
+            created_at = replacement["created_at"]
+            if failed_at is None:
+                reason = "failed_job_missing"
+            else:
+                if isinstance(failed_at, str):
+                    failed_at = datetime.fromisoformat(failed_at)
+                if isinstance(created_at, str):
+                    created_at = datetime.fromisoformat(created_at)
+                if _aware(created_at) <= _aware(failed_at):
+                    reason = "created_before_failed"
+        except (KeyError, TypeError, ValueError, AttributeError):
+            reason = "invalid_job_time"
+    if reason:
+        return _reject(milestone_id, failed_id, replacement["task_id"], reason, marker)
+    async with conn.transaction():
+        locked = await conn.fetchrow(
+            "SELECT evidence FROM milestones WHERE id = $1::uuid "
+            "AND tenant_id = $2::uuid FOR UPDATE",
+            milestone_id, row["tenant_id"],
+        )
+        evidence = _evidence(locked["evidence"]) if locked else {}
+        if await _refresh_candidates(
+            conn, evidence.get("retry_candidates", []), row["tenant_id"], datetime.now(UTC),
+        ):
+            await conn.execute(
+                "UPDATE milestones SET evidence = $2::jsonb, updated_at = NOW() "
+                "WHERE id = $1::uuid AND tenant_id = $3::uuid",
+                milestone_id, json.dumps(evidence), row["tenant_id"],
             )
-            evidence = _evidence(locked["evidence"]) if locked else {}
-            if await _refresh_candidates(
-                conn, evidence.get("retry_candidates", []), row["tenant_id"], datetime.now(UTC),
-            ):
-                await conn.execute(
-                    "UPDATE milestones SET evidence = $2::jsonb, updated_at = NOW() "
-                    "WHERE id = $1::uuid AND tenant_id = $3::uuid",
-                    milestone_id, json.dumps(evidence), row["tenant_id"],
-                )
-            candidates = [item for item in evidence.get("retry_candidates", [])
-                          if str(item.get("failed_task_id")) == failed_id
-                          and item.get("card_id") and not item.get("failed")]
-            if not candidates:
+        candidates = [item for item in evidence.get("retry_candidates", [])
+                      if str(item.get("failed_task_id")) == failed_id
+                      and item.get("card_id") and not item.get("failed")]
+        candidate = max(candidates, key=lambda item: item.get("at") or "") if candidates else None
+        if not header:
+            if candidate is None:
                 reason = "candidate_missing"
             else:
-                candidate = max(candidates, key=lambda item: item.get("at") or "")
                 try:
                     proposed_at = datetime.fromisoformat(candidate["at"])
                     created_at = replacement["created_at"]
@@ -383,29 +461,31 @@ async def mark_explicit_retry_supersession(conn, milestone_id: str) -> int:
                         reason = "created_before_candidate"
                 except (KeyError, TypeError, ValueError):
                     reason = "invalid_candidate_time"
-            if reason:
-                logger.warning("goal_retry_supersede_rejected milestone=%s failed=%s replacement=%s reason=%s",
-                               milestone_id, failed_id, replacement["task_id"], reason)
-                continue
-            superseded_at = ", superseded_at = NOW()" if "superseded_at" in columns else ""
-            result = await conn.execute(
-                f"""UPDATE goal_task_links l SET superseded_by = $4{superseded_at}
-                    WHERE l.milestone_id = $1::uuid AND l.goal_id = $2::uuid
-                      AND l.tenant_id = $3::uuid AND l.task_type = 'pipeline_job'
-                      AND l.task_id = $5 AND l.status = 'failed'
-                      AND l.superseded_by IS NULL
-                      {active_link_predicate(columns, 'l')}""",
-                milestone_id, row["goal_id"], row["tenant_id"],
-                replacement["task_id"], failed_id,
+        if reason:
+            return _reject(milestone_id, failed_id, replacement["task_id"], reason, marker)
+        superseded_at = ", superseded_at = NOW()" if "superseded_at" in columns else ""
+        result = await conn.execute(
+            f"""UPDATE goal_task_links l SET superseded_by = $4{superseded_at}
+                WHERE l.milestone_id = $1::uuid AND l.goal_id = $2::uuid
+                  AND l.tenant_id = $3::uuid AND l.task_type = 'pipeline_job'
+                  AND l.task_id = $5 AND l.status = 'failed'
+                  AND l.superseded_by IS NULL
+                  {active_link_predicate(columns, 'l')}""",
+            milestone_id, row["goal_id"], row["tenant_id"],
+            replacement["task_id"], failed_id,
+        )
+        if result != "UPDATE 1":
+            return False
+        if candidate is not None:
+            candidate["superseded_by_task_id"] = replacement["task_id"]
+            await conn.execute(
+                "UPDATE milestones SET evidence = $2::jsonb, updated_at = NOW() "
+                "WHERE id = $1::uuid AND tenant_id = $3::uuid",
+                milestone_id, json.dumps(evidence), row["tenant_id"],
             )
-            if result == "UPDATE 1":
-                candidate["superseded_by_task_id"] = replacement["task_id"]
-                await conn.execute(
-                    "UPDATE milestones SET evidence = $2::jsonb, updated_at = NOW() "
-                    "WHERE id = $1::uuid AND tenant_id = $3::uuid",
-                    milestone_id, json.dumps(evidence), row["tenant_id"],
-                )
-                count += 1
-                logger.info("goal_retry_link_superseded milestone=%s failed=%s replacement=%s",
-                            milestone_id, failed_id, replacement["task_id"])
-    return count
+        else:
+            logger.info("goal_header_supersede_without_candidate milestone=%s failed=%s replacement=%s",
+                        milestone_id, failed_id, replacement["task_id"])
+        logger.info("goal_retry_link_superseded milestone=%s failed=%s replacement=%s marker=%s",
+                    milestone_id, failed_id, replacement["task_id"], marker)
+    return True
