@@ -308,7 +308,8 @@ def test_visible_message_filter_allows_hidden_streaming_placeholder_when_request
     assert "OR intent = 'streaming_placeholder'" in inactive_filter
     assert "intent IN ('runner_response', 'interrupted_partial', '_archived_partial')" in active_filter
     assert "quality_details->>'final_message_id'" in active_filter
-    assert "length(COALESCE(content, '')) > 200" in active_filter
+    assert "> 200" not in active_filter
+    assert "btrim(" in active_filter
     assert "AND intent IS DISTINCT FROM 'streaming_placeholder'" not in active_filter
 
 

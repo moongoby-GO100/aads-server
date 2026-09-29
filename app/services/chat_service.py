@@ -9529,7 +9529,41 @@ _AUTO_MESSAGE_EXCLUDE_FILTER = (
 # AI 리뷰가 REQUEST_CHANGES 를 두 번 내고 그때마다 고쳐 올리는 중이었다
 # (09:01 1,212자 · 09:09 1,231자). 러너 시작·완료만 열고 리뷰 결과를 닫아
 # 두면 "무엇 때문에 오래 걸리는가" 가 여전히 안 보인다.
-_RUNNER_PROGRESS_INTENTS = ("pipeline_runner", "runner_notification", "ai_review_warning")
+#
+# `pipeline_c` 도 넣는다(2026-09-29). 최근 24시간 chat_messages 2,947행을 이 필터로
+# 분해하니 pipeline_c 42건이 전부 서버에서 잘렸고 42건 모두 200자 초과(최대 785자)였다.
+# 내용물은 "[세션 자동보고] Pipeline Runner: runner-… 상태: running"(609자)과
+# "[Pipeline Runner 스톨 감지]"(391자) 같은 러너 진행 그 자체라, 세션 2648cf77 ·
+# 3d81c01a · 5090a247 에서 러너가 도는 동안 스톨 감지까지 화면에 없었다.
+# 09-17 에 pipeline_runner 를 연 것과 같은 사고가 이 intent 에 남아 있었다.
+_RUNNER_PROGRESS_INTENTS = (
+    "pipeline_runner",
+    "runner_notification",
+    "ai_review_warning",
+    "pipeline_c",
+)
+
+# 중단 통지 문구. 숨김 상태의 중단 행은 이 문구를 걷어낸 나머지가 비어 있지 않을
+# 때만 화면에 낸다 — 통지문만 있는 행을 열면 곧 빈 버블이다.
+_INTERRUPT_NOTICE_PHRASES = (
+    "⚠️ _응답 생성이 중단되어 여기까지 보존된 내용이 없습니다. 같은 질문으로 다시 요청할 수 있습니다._",
+    "_(응답이 중단되어 여기까지 보존되었습니다.)_",
+    "_(여기까지 생성한 뒤 중단되었습니다. 이어서 진행하려면 다시 요청해 주세요.)_",
+    "⚠️ _전체 LLM 장애 — 잠시 후 다시 시도해주세요._",
+    _INTERRUPT_MARKER_SUPERSEDED,
+    _INTERRUPT_MARKER_EXHAUSTED,
+    _INTERRUPT_MARKER_PROVIDER,
+    _INTERRUPT_MARKER_STOPPED,
+)
+
+
+def _has_preserved_body_sql(column: str = "content") -> str:
+    """중단 통지 문구를 제거하고 남은 본문이 있는지 판정하는 SQL 조건."""
+    stripped = f"COALESCE({column}, '')"
+    for phrase in dict.fromkeys(_INTERRUPT_NOTICE_PHRASES):
+        literal = phrase.replace("'", "''")
+        stripped = f"replace({stripped}, '{literal}', '')"
+    return f"length(btrim({stripped}, E' \\n\\r\\t')) > 0"
 
 
 def _runner_progress_intent_list_sql(alias: str = "") -> str:
@@ -9557,13 +9591,14 @@ def _visible_message_filter(is_active: bool, include_streaming: bool) -> str:
         # history, but live/recovery fetches explicitly request them. Interrupted
         # rows can also be hidden before repair; include substantial assistant
         # text so repair/promotion code can normalize it instead of dropping the
-        # bubble from the UI.
+        # bubble from the UI. "Substantial" means a preserved body remains after
+        # stripping the interruption notices, not a character-count threshold.
         hidden_filter += (
             " AND (is_hidden = FALSE"
             " OR intent = 'streaming_placeholder'"
             " OR (role = 'assistant'"
             "     AND intent IN ('runner_response', 'interrupted_partial', '_archived_partial')"
-            "     AND length(COALESCE(content, '')) > 200)"
+            f"     AND {_has_preserved_body_sql()})"
             + _runner_progress_allow_sql() +
             ")"
         )
