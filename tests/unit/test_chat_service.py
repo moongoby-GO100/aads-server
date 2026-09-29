@@ -1118,7 +1118,7 @@ def test_cross_provider_chat_fallback_chain_uses_claude_and_codex_peers():
     assert chat_service._cross_provider_chat_fallback_chain("gpt-6-astra")[:3] == [
         "gpt-6-astra",
         "claude-fable-5-1",
-        "claude-opus-5",
+        "claude-opus-5-5",
     ]
     assert not any(
         "gemini" in model or "deepseek" in model

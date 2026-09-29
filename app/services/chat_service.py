@@ -1259,6 +1259,135 @@ def _cross_provider_chat_fallback_chain(base_model: Optional[str]) -> List[str]:
     return chain
 
 
+# ── 폴백 단계 구분 (M5, 2026-09-29) ─────────────────────────────────────
+#
+# Claude 경로 폴백이 사용자에게 "전환합니다" 한 줄만 보여 주고, DB 에는 성공한
+# 경우만 남겼다. 원 호출이 왜 실패했는지, 대체가 실패했는지, 전부 실패했는지를
+# 화면과 chat_turn_executions.fallback_chain 양쪽에서 구분할 수 없었다.
+# `_stream_direct_openai_provider`(3321a8a3) 와 같은 원칙 — 원문 대신 고정
+# 분류만 내보낸다. 업스트림 오류 원문에는 토큰·접속정보가 섞일 수 있다.
+_FALLBACK_STAGE_LABELS = {
+    "primary_failed": "원 호출 실패",
+    "fallback_attempt": "대체 시도",
+    "fallback_succeeded": "대체 성공",
+    "all_failed": "전체 실패",
+}
+
+
+def _safe_fallback_reason(error: object) -> str:
+    """오류를 고정 분류로만 바꾼다. 원문은 절대 돌려주지 않는다."""
+    detail = str(error or "").lower()
+    if isinstance(error, BaseException):
+        detail = f"{type(error).__name__.lower()} {detail}"
+    status = re.search(r"\b(4\d\d|5\d\d)\b", detail)
+    if "429" in detail or "quota" in detail or re.search(r"rate[\s_-]?limit|\blimit\b", detail):
+        return "한도 초과"
+    if "overloaded" in detail or "529" in detail:
+        return "과부하"
+    if re.search(r"\b40[13]\b", detail) or "unauthorized" in detail or "authentication" in detail:
+        return "인증 오류"
+    if "timeout" in detail or "timed out" in detail:
+        return "시간 초과"
+    if any(k in detail for k in ("connect", "network", "unreachable", "reset", "disconnected", "readerror")):
+        return "연결 오류"
+    if "empty" in detail or "missing_done" in detail or "without done" in detail:
+        return "빈 응답"
+    if status:
+        return f"HTTP {status.group(1)}"
+    return "요청 오류"
+
+
+def _fallback_model_key(model: object) -> str:
+    return str(model or "").strip().lower()
+
+
+def _fallback_candidates_once(
+    original_model: Optional[str],
+    chain: List[str],
+    tried: List[str],
+) -> List[str]:
+    """원 모델·이미 시도한 후보·체인 내 중복을 뺀 후보 목록.
+
+    대체 모델 호출(call_stream) 은 안에서 자기 동급 폴백을 또 탄다. 그래서
+    바깥 체인의 다음 후보가 안쪽에서 이미 실패한 모델일 수 있다. `tried` 는
+    같은 실행이 공유하는 목록이므로 여기서 한 번 더 걸러 같은 후보를 두 번
+    부르지 않는다.
+    """
+    blocked = {_fallback_model_key(original_model)} | {_fallback_model_key(m) for m in tried}
+    out: List[str] = []
+    for candidate in chain:
+        key = _fallback_model_key(candidate)
+        if not key or key in blocked:
+            continue
+        blocked.add(key)
+        out.append(str(candidate).strip())
+    return out
+
+
+def _fallback_stage_event(
+    trace: List[Dict[str, Any]],
+    stage: str,
+    *,
+    from_model: Optional[str],
+    to_model: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    """단계를 trace 에 기록하고 사용자에게 보낼 model_fallback 이벤트를 만든다.
+
+    reason 은 `_safe_fallback_reason` 을 거친 값만 받는다.
+    """
+    label = _FALLBACK_STAGE_LABELS[stage]
+    entry: Dict[str, Any] = {
+        "stage": stage,
+        "from": from_model,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    if to_model:
+        entry["to"] = to_model
+    if reason:
+        entry["reason"] = reason
+    trace.append(entry)
+
+    if stage == "primary_failed":
+        text = f"⚠️ {from_model} {label} ({reason or '요청 오류'})"
+    elif stage == "fallback_attempt":
+        text = f"⚠️ {from_model} → {to_model}: {label}"
+    elif stage == "fallback_succeeded":
+        text = f"✅ {from_model} → {to_model}: {label}"
+    else:
+        text = f"⚠️ {label} — 대체 모델까지 모두 응답하지 못했습니다 ({reason or '요청 오류'})"
+    event: Dict[str, Any] = {
+        "type": "model_fallback",
+        "stage": stage,
+        "stage_label": label,
+        "content": text,
+        "from_model": from_model,
+    }
+    if to_model:
+        event["to_model"] = to_model
+    if reason:
+        event["reason"] = reason
+    return event
+
+
+async def _record_fallback_trace(
+    execution_id: Optional[str],
+    trace: List[Dict[str, Any]],
+) -> None:
+    """전체 실패도 DB 이력에 남긴다. 성공은 `_save_and_update_session` 이 쓴다."""
+    if not execution_id or not trace:
+        return
+    try:
+        async with get_pool().acquire() as conn:
+            await conn.execute(
+                "UPDATE chat_turn_executions SET fallback_chain = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                json.dumps({"result": trace[-1].get("stage"), "stages": trace}, ensure_ascii=False),
+                uuid.UUID(str(execution_id)),
+            )
+    except Exception as exc:
+        logger.warning("fallback_trace_record_failed execution=%s: %s", str(execution_id)[:8], type(exc).__name__)
+
+
 def _require_resume_done_event(saw_done_event: bool, content_len: int = 0) -> None:
     """Require the stream protocol's terminal event regardless of content length."""
     if saw_done_event:
@@ -3874,6 +4003,49 @@ async def cleanup_overlong_running_executions(
     }
 
 
+# 빈 assistant 행 숨김 스윕.
+#
+# 예전 조건은 "trim 후 50자 미만 + 10분 경과" 뿐이었다. 그래서 정상 완료된
+# "Pong! What can I help you with?"(31자) 같은 짧은 답과, 중단 때 보존한
+# 짧은 부분 응답이 10분 뒤 전부 숨겨졌다(2026-09-29 실측, M5).
+# 숨김 대상은 셋을 모두 만족하는 행뿐이다.
+#   ① 실행이 끝났다 — 연결된 실행이 running/retrying 이 아니다
+#   ② 본문이 실제로 비었다 — trim 후 0자 (길이 기준 단독 판정 금지)
+#   ③ 보존할 것이 없다 — 도구 결과·산출물·첨부·사고 요약이 없다
+# `< 50` 조건은 판정용이 아니라 부분 인덱스(179) 사용을 위해 남긴다 —
+# `= 0` 이 이미 그것을 함축한다.
+_STALE_EMPTY_ASSISTANT_SWEEP_SQL = """
+    WITH hidden AS (
+        UPDATE chat_messages m
+        SET is_hidden = TRUE,
+            intent = 'stale_empty_placeholder',
+            edited_at = NOW()
+        WHERE m.role = 'assistant'
+          AND m.is_hidden = FALSE
+          AND m.intent IS DISTINCT FROM 'streaming_placeholder'
+          AND length(trim(COALESCE(m.content, ''))) < 50
+          AND length(trim(COALESCE(m.content, ''))) = 0
+          AND m.created_at < NOW() - INTERVAL '10 minutes'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM chat_turn_executions te_live
+              WHERE te_live.id = m.execution_id
+                AND te_live.status IN ('running', 'retrying')
+          )
+          AND (m.tools_called IS NULL
+               OR jsonb_typeof(m.tools_called) <> 'array'
+               OR jsonb_array_length(m.tools_called) = 0)
+          AND (m.attachments IS NULL
+               OR jsonb_typeof(m.attachments) <> 'array'
+               OR jsonb_array_length(m.attachments) = 0)
+          AND m.artifact_id IS NULL
+          AND length(trim(COALESCE(m.thinking_summary, ''))) = 0
+        RETURNING 1
+    )
+    SELECT count(*) FROM hidden
+"""
+
+
 async def cleanup_stale_streaming_placeholders(
     *,
     timeout_sec: Optional[int] = None,
@@ -3897,23 +4069,7 @@ async def cleanup_stale_streaming_placeholders(
         # **DB 하트비트를 함께 본다.** 프로세스 메모리만 보면 슬롯이 바뀐
         # 직후 돌고 있던 턴이 전부 "멈춘 것" 으로 보여 90초 뒤 죽는다.
         live_sessions = await _live_session_ids_with_db(conn)
-        stale_empty_hidden = await conn.fetchval(
-            """
-            WITH hidden AS (
-                UPDATE chat_messages
-                SET is_hidden = TRUE,
-                    intent = 'stale_empty_placeholder',
-                    edited_at = NOW()
-                WHERE role = 'assistant'
-                  AND is_hidden = FALSE
-                  AND intent IS DISTINCT FROM 'streaming_placeholder'
-                  AND length(trim(COALESCE(content, ''))) < 50
-                  AND created_at < NOW() - INTERVAL '10 minutes'
-                RETURNING 1
-            )
-            SELECT count(*) FROM hidden
-            """
-        )
+        stale_empty_hidden = await conn.fetchval(_STALE_EMPTY_ASSISTANT_SWEEP_SQL)
 
         # P0: 실행이 이미 종료(completed/interrupted)인데 placeholder가 남은 고아 즉시 정리
         _orphan_terminal_rows = await conn.fetch(
@@ -6891,21 +7047,50 @@ async def with_background_completion(
                         "claude-sonnet-5": ["claude-fable-5-1", "claude-opus-5"],
                         "claude-sonnet-5-5": ["claude-sonnet-5", "gpt-5.6-sol"],
                     }
-                    for _fb_model in _FALLBACK_CHAIN_429.get(_original_model, []):
+                    # 단계 기록은 실행 하나에 한 벌이다. 재개 경로가 같은 state 를
+                    # 다시 들어와도 이미 시도한 후보(`fallback_tried_models`)를
+                    # 공유하므로 새 예산을 만들지 않는다.
+                    _fb_trace = state.setdefault("fallback_trace", [])
+                    _fb_tried = state.setdefault("fallback_tried_models", [])
+                    _primary_reason = _safe_fallback_reason(e)
+                    _fb_stage_items = [_fallback_stage_event(
+                        _fb_trace, "primary_failed",
+                        from_model=_original_model, reason=_primary_reason,
+                    )]
+                    _last_fb_reason = _primary_reason
+                    for _fb_model in _fallback_candidates_once(
+                        _original_model, _FALLBACK_CHAIN_429.get(_original_model, []), _fb_tried,
+                    ):
+                        # 안쪽 call_stream 이 이 후보를 이미 시도했을 수 있다.
+                        if _fallback_model_key(_fb_model) in {_fallback_model_key(m) for m in _fb_tried}:
+                            continue
+                        _fb_tried.append(_fb_model)
                         try:
                             logger.info(f"429_model_fallback session={session_id[:8]} {_original_model}→{_fb_model}")
-                            _fb_notify = json.dumps({
-                                "type": "model_fallback",
-                                "content": f"⚠️ {_original_model} 한도 초과 — {_fb_model}로 전환합니다.",
-                                "from_model": _original_model,
-                                "to_model": _fb_model,
-                            })
-                            await _queue_stream_item((f"data: {_fb_notify}\n\n", None))
+                            _fb_stage_items.append(_fallback_stage_event(
+                                _fb_trace, "fallback_attempt",
+                                from_model=_original_model, to_model=_fb_model, reason=_primary_reason,
+                            ))
+                            for _stage_item in _fb_stage_items:
+                                await _queue_stream_item((f"data: {json.dumps(_stage_item, ensure_ascii=False)}\n\n", None))
+                            _fb_stage_items = []
                             _fb_ok = False
                             _fb_cost = Decimal("0")
                             _fb_tokens_in = 0
                             _fb_tokens_out = 0
                             async for chunk in _regenerate_stream(session_id, state.get("content", "").strip(), model=_fb_model):
+                                _d = None
+                                if 'data: {' in chunk:
+                                    try:
+                                        _d = json.loads(chunk[chunk.index('{'):chunk.rstrip().rindex('}') + 1])
+                                    except (json.JSONDecodeError, ValueError):
+                                        _d = None
+                                if isinstance(_d, dict) and _d.get("type") == "error":
+                                    # 원문은 화면에 내보내지 않는다 — 분류만 단계 기록에 남긴다.
+                                    raise RuntimeError(_d.get("content", "fallback error"))
+                                if isinstance(_d, dict) and _d.get("type") == "model_fallback" and _d.get("to_model"):
+                                    if _fallback_model_key(_d.get("to_model")) not in {_fallback_model_key(m) for m in _fb_tried}:
+                                        _fb_tried.append(str(_d.get("to_model")))
                                 _entry_id = None
                                 if 'data: {' in chunk:
                                     try:
@@ -6924,9 +7109,8 @@ async def with_background_completion(
                                 _queued = await _queue_stream_item((chunk, _entry_id))
                                 if not _queued and not _client_gone:
                                     return
-                                if 'data: {' in chunk:
+                                if isinstance(_d, dict):
                                     try:
-                                        _d = json.loads(chunk[chunk.index('{'):chunk.rstrip().rindex('}') + 1])
                                         if _d.get("type") == "delta":
                                             state["content"] += _d.get("content", "")
                                         elif _d.get("type") == "done":
@@ -6935,16 +7119,20 @@ async def with_background_completion(
                                             _fb_cost = Decimal(str(_d.get("cost", "0")))
                                             _fb_tokens_in = _d.get("input_tokens", 0) or 0
                                             _fb_tokens_out = _d.get("output_tokens", 0) or 0
-                                        elif _d.get("type") == "error":
-                                            raise RuntimeError(_d.get("content", "fallback error"))
-                                    except (json.JSONDecodeError, ValueError):
+                                    except (ArithmeticError, ValueError):
                                         pass
                             if _fb_ok:
+                                _fb_success_item = _fallback_stage_event(
+                                    _fb_trace, "fallback_succeeded",
+                                    from_model=_original_model, to_model=_fb_model,
+                                )
+                                await _queue_stream_item((f"data: {json.dumps(_fb_success_item, ensure_ascii=False)}\n\n", None))
                                 state["fallback_info"] = {
                                     "from": _original_model,
                                     "to": _fb_model,
                                     "reason": "429_rate_limit",
                                     "retry_count": _max_retries,
+                                    "stages": list(_fb_trace),
                                 }
                                 await _save_and_update_session(
                                     uuid.UUID(session_id),
@@ -6961,8 +7149,29 @@ async def with_background_completion(
                                 _retried = True
                                 logger.info(f"429_model_fallback_success session={session_id[:8]} {_original_model}→{_fb_model}")
                                 break
+                            _last_fb_reason = "빈 응답"
+                            if _fb_trace and _fb_trace[-1].get("stage") == "fallback_attempt":
+                                _fb_trace[-1]["result"] = "failed"
+                                _fb_trace[-1]["failure"] = _last_fb_reason
                         except Exception as _fb_err:
-                            logger.warning(f"429_model_fallback_failed session={session_id[:8]} {_original_model}→{_fb_model}: {_fb_err}")
+                            _last_fb_reason = _safe_fallback_reason(_fb_err)
+                            if _fb_trace and _fb_trace[-1].get("stage") == "fallback_attempt":
+                                _fb_trace[-1]["result"] = "failed"
+                                _fb_trace[-1]["failure"] = _last_fb_reason
+                            logger.warning(
+                                "429_model_fallback_failed session=%s %s→%s: %s",
+                                session_id[:8], _original_model, _fb_model, _last_fb_reason,
+                            )
+
+                    if not _retried:
+                        for _stage_item in _fb_stage_items:
+                            await _queue_stream_item((f"data: {json.dumps(_stage_item, ensure_ascii=False)}\n\n", None))
+                        _fb_all_failed_item = _fallback_stage_event(
+                            _fb_trace, "all_failed",
+                            from_model=_original_model, reason=_last_fb_reason,
+                        )
+                        await _queue_stream_item((f"data: {json.dumps(_fb_all_failed_item, ensure_ascii=False)}\n\n", None))
+                        await _record_fallback_trace(state.get("execution_id"), _fb_trace)
 
                 if not _retried:
                     try:
