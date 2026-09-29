@@ -1068,8 +1068,22 @@ class GoalStateMachine:
                         )
                         logger.info("goal_auto_activated: %s (after %s completed)", next_goal["id"], goal_id)
             else:
+                # 마일스톤이 완료에서 되돌아오면(반려·재개) 목표의 완료도 물러야
+                # 한다. 물리지 않으면 status 는 'completed' 로 남는데,
+                # `GET /goals/for-session/{sid}` 는 draft/active/blocked 만
+                # 돌려주므로(app/routers/goals.py) 목표가 채팅 목표 패널에서
+                # 통째로 사라진다. 2026-09-21 M11 반려 때 실제로 그렇게 됐다 —
+                # goal 169e5328 이 completed_at 23:04:34 로 굳은 뒤 23:24:58 에
+                # progress 만 0.94 로 내려가고 status 는 그대로였다.
                 await conn.execute(
-                    "UPDATE goals SET progress = $2, updated_at = NOW() WHERE id = $1::uuid",
+                    """UPDATE goals
+                          SET progress = $2,
+                              status = CASE WHEN status = 'completed'
+                                            THEN 'active' ELSE status END,
+                              completed_at = CASE WHEN status = 'completed'
+                                                  THEN NULL ELSE completed_at END,
+                              updated_at = NOW()
+                        WHERE id = $1::uuid""",
                     goal_id, progress,
                 )
 
