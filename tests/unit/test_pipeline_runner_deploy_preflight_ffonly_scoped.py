@@ -117,13 +117,12 @@ def test_isolated_static_preserves_legacy_preflight_and_routes_aads_only():
     assert "worktree list --porcelain" in isolated
     assert "status --porcelain --untracked-files=all" in isolated
     assert '"$head_sha" != "$approved_sha"' in isolated
-    assert "merge-base --is-ancestor" in isolated
-    assert "deploy_isolated_stale_approval" in isolated
+    assert 'push_state=$(classify_push_state "$worktree_root" "$approved_sha")' in isolated
 
 
 def test_isolated_static_requires_reviewed_sha_at_remote_before_release():
     script = _read_script("pipeline-runner.sh")
-    assert '"$project" == "AADS" && "$push_state" != "fast_forward"' in script
+    assert '"$project" == "AADS" && "$push_state" == "fetch_fail"' in script
     assert "deploy_isolated_push_state" in script
     assert '"$pushed_remote_sha" != "$expected_sha"' in script
     assert "deploy_isolated_remote_changed" in script
@@ -289,7 +288,7 @@ def isolated_case(tmp_path):
 @pytest.fixture(scope="module")
 def isolated_fn_file(tmp_path_factory):
     script = _read_script("pipeline-runner.sh")
-    body = STUBS + _extract_function(script, "deploy_isolated_git_preflight")
+    body = STUBS + 'record_runner_event() { :; }\n' + _extract_function(script, "classify_push_state") + _extract_function(script, "deploy_isolated_git_preflight")
     path = tmp_path_factory.mktemp("isolated_preflight_fn") / "fn.sh"
     path.write_text(body, encoding="utf-8")
     return path
@@ -328,12 +327,15 @@ def test_isolated_fails_closed(isolated_case, isolated_fn_file, tmp_path, case):
         _git(main, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
     fail_out = tmp_path / "fail.txt"
     proc = _call_isolated(isolated_fn_file, main, worktree, job_id, sha, fail_out)
+    if case == "remote_changed":
+        assert proc.returncode == 0, proc.stderr
+        assert not fail_out.exists()
+        return
     assert proc.returncode == 1, proc.stderr
     assert fail_out.exists()
     assert fail_out.read_text().strip() == {
         "wrong_sha": "deploy_isolated_sha_or_dirty",
         "dirty_release": "deploy_isolated_sha_or_dirty",
-        "remote_changed": "deploy_isolated_stale_approval",
         "fetch_failure": "deploy_fetch_failed",
     }[case]
 

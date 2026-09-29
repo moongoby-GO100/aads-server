@@ -1346,7 +1346,7 @@ deploy_git_preflight() {
 deploy_isolated_git_preflight() {
     local job_id="$1" project="$2" session_id="$3" main_workdir="$4"
     local worktree_dir="$5" approved_sha="$6" main_root worktree_root
-    local main_common worktree_common registered remote_sha head_sha worktree_status
+    local main_common worktree_common registered remote_sha head_sha worktree_status push_state
 
     if [[ "$project" != "AADS" || ! "$job_id" =~ ^[a-zA-Z0-9_-]+$ \
         || ! "$approved_sha" =~ ^[0-9a-f]{40}$ ]]; then
@@ -1395,10 +1395,18 @@ deploy_isolated_git_preflight() {
         _fail_job "$job_id" "$session_id" "deploy_origin_missing" "격리 릴리스 origin/main 일치 확인 실패"
         return 1
     fi
-    if ! git -C "$worktree_root" merge-base --is-ancestor "$remote_sha" "$approved_sha" 2>/dev/null; then
-        _fail_job "$job_id" "$session_id" "deploy_isolated_stale_approval" "최신 origin/main 통합 후 새 SHA 재검수 필요"
-        return 1
-    fi
+    push_state=$(classify_push_state "$worktree_root" "$approved_sha")
+    case "$push_state" in
+        already_present)
+            log "  DEPLOY_PREFLIGHT_ALREADY_PRESENT: job=$job_id sha=$approved_sha"
+            record_runner_event "$job_id" "deploy_already_present" "info" "deploying" "" "" "" "" "{\"sha\":\"${approved_sha}\"}"
+            ;;
+        fast_forward|stale_base) ;;
+        *)
+            _fail_job "$job_id" "$session_id" "deploy_origin_missing" "격리 릴리스 origin/main 판별 실패: ${push_state}"
+            return 1
+            ;;
+    esac
     log "  DEPLOY_ISOLATED_PREFLIGHT_OK: job=$job_id sha=$approved_sha origin=$remote_sha"
 }
 
@@ -1564,11 +1572,13 @@ pre_validate() {
 # 빠른 실패 헬퍼 — 에러 상태 전환 + error_detail 기록
 _fail_job() {
     local job_id="$1" session_id="$2" error_type="$3" detail="$4"
+    local recorded_error="${5:-$error_type}"
     log "  FAIL_FAST job=$job_id type=$error_type: $detail"
-    local safe_detail
+    local safe_detail safe_error
     safe_detail=$(sql_escape "$detail")
+    safe_error=$(sql_escape "$recorded_error")
     db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-               error_detail='${error_type}',
+               error_detail=${safe_error},
                result_output=${safe_detail},
                completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
     record_runner_event "$job_id" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"${error_type}\"}"
@@ -3474,6 +3484,150 @@ _cleanup_artifacts() {
     rm -f "/tmp/pipeline-notify-count-${job_id}" 2>/dev/null || true
 }
 
+# Rebased AADS commits require a fresh durable AI review and a new approval.
+review_rebased_aads_sha() {
+    local job_id="$1" session_id="$2" repo="$3" sha="$4"
+    local remote_sha base_sha diff stored_diff instruction changed_files request_id body response http_code
+    local request_status="" verdict="" score="" flag_category="" deadline
+    remote_sha=$(git -C "$repo" rev-parse --verify origin/main 2>/dev/null) || remote_sha=""
+    base_sha=$(git -C "$repo" merge-base "$remote_sha" "$sha" 2>/dev/null) || base_sha=""
+    diff=$(git -C "$repo" diff "${base_sha}..${sha}" 2>/dev/null) || diff=""
+    if [[ ! "$remote_sha" =~ ^[0-9a-f]{40}$ || ! "$base_sha" =~ ^[0-9a-f]{40}$ || -z "$diff" ]] || ! looks_like_git_diff "$diff"; then
+        _fail_job "$job_id" "$session_id" "deploy_rebase_review_diff_invalid" "새 SHA AI 재검수 diff 확인 실패"
+        _notify_ai "$job_id"
+        return 1
+    fi
+    stored_diff="${diff:0:48000}"
+    instruction=$(get_job_instruction "$job_id")
+    changed_files=$(printf '%s' "$diff" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//' | tr '\n' ',' | sed 's/,$//')
+    request_id=$(cat /proc/sys/kernel/random/uuid)
+    db_update "UPDATE pipeline_jobs SET git_diff=$(sql_escape "$stored_diff"),
+               actual_changed_files=$(sql_escape "$(printf '%s' "$changed_files" | tr ',' '\n' | json_array_from_lines)")::jsonb,
+               review_request_id='${request_id}'::uuid, updated_at=NOW()
+               WHERE job_id='${job_id}' AND status='running' AND commit_hash='${sha}';"
+    if [[ "$(db_exec "SELECT COALESCE(review_request_id::text,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]')" != "$request_id" ]]; then
+        _fail_job "$job_id" "$session_id" "deploy_rebase_review_request_persist_failed" "새 SHA AI 재검수 요청 기록 실패"
+        _notify_ai "$job_id"
+        promote_next_queued "AADS"
+        return 1
+    fi
+    body=$(jq -n --arg rid "$request_id" --arg jid "$job_id" --arg diff "$diff" \
+        --arg inst "$instruction" --arg files "$changed_files" \
+        '{request_id:$rid, job_id:$jid, project:"AADS", diff:$diff, instruction:$inst, files_changed:($files|split(","))}')
+    response=$(curl -4 -s --http1.1 -w "\n%{http_code}" -X POST \
+        "${AADS_API_URL}/api/v1/review/code-diff/requests" -H "Content-Type: application/json" \
+        -d "$body" --connect-timeout 10 --max-time 20 2>/dev/null) || response=""
+    http_code=$(printf '%s\n' "$response" | tail -1)
+    response=$(printf '%s\n' "$response" | sed '$d')
+    if [[ "$http_code" == "200" ]]; then
+        request_status=$(printf '%s' "$response" | jq -r '.status // empty' 2>/dev/null) || request_status=""
+        if [[ -z "$request_status" && -n "$(printf '%s' "$response" | jq -r '.verdict // empty' 2>/dev/null)" ]]; then
+            request_status="completed"
+        fi
+    fi
+    if [[ "$http_code" == "202" ]]; then
+        deadline=$((SECONDS + AADS_REVIEW_ASYNC_WAIT_SEC))
+        while (( SECONDS < deadline )); do
+            if [[ "$(get_job_status "$job_id")" != "running" ]]; then
+                return 1
+            fi
+            response=$(curl -4 -s --http1.1 -w "\n%{http_code}" \
+                "${AADS_API_URL}/api/v1/review/code-diff/requests/${request_id}" \
+                --connect-timeout 5 --max-time 15 2>/dev/null) || response=""
+            http_code=$(printf '%s\n' "$response" | tail -1)
+            response=$(printf '%s\n' "$response" | sed '$d')
+            if [[ "$http_code" == "200" ]]; then
+                request_status=$(printf '%s' "$response" | jq -r '.status // empty' 2>/dev/null) || request_status=""
+                [[ "$request_status" == "completed" || "$request_status" == "failed" ]] && break
+            fi
+            sleep "$AADS_REVIEW_POLL_INTERVAL"
+        done
+    fi
+    if [[ "$http_code" != "200" || "$request_status" != "completed" ]]; then
+        db_update "UPDATE pipeline_jobs SET status='review_hold', phase='review_hold',
+                   error_detail='review_infra_failed: rebased SHA review unavailable',
+                   runner_pid=NULL, updated_at=NOW() WHERE job_id='${job_id}' AND status='running';"
+        record_runner_event "$job_id" "ai_review_result" "review_hold" "review_hold" "" "" "" "" "{\"sha\":\"${sha}\"}"
+        _notify_ai "$job_id"
+        promote_next_queued "AADS"
+        return 1
+    fi
+    verdict=$(printf '%s' "$response" | jq -r '.verdict // empty')
+    score=$(printf '%s' "$response" | jq -r '.score // 0')
+    [[ "$score" =~ ^[0-9]+([.][0-9]+)?$ ]] || score="0"
+    flag_category=$(printf '%s' "$response" | jq -r '.flag_category // empty')
+    local review_infra_failure="false"
+    case "$flag_category" in
+        REVIEW_API_UNAVAILABLE|REVIEW_MODEL_NO_RESPONSE|REVIEW_PARSER_FAILURE|REVIEW_TIMEOUT)
+            review_infra_failure="true" ;;
+    esac
+    if [[ "$review_infra_failure" == "true" ]]; then
+        db_update "UPDATE pipeline_jobs SET status='review_hold', phase='review_hold',
+                   review_verdict=$(sql_escape "$verdict"), review_score=${score:-0},
+                   review_flag_category=$(sql_escape "$flag_category"), review_needs_retry=TRUE,
+                   error_detail=$(sql_escape "review_infra_failed: category=${flag_category}"),
+                   runner_pid=NULL, updated_at=NOW()
+                   WHERE job_id='${job_id}' AND status='running' AND commit_hash='${sha}';"
+        record_runner_event "$job_id" "ai_review_result" "review_hold" "review_hold" "" "" "" "" "{\"sha\":\"${sha}\",\"flag_category\":\"${flag_category}\"}"
+        _notify_ai "$job_id"
+        promote_next_queued "AADS"
+        return 1
+    fi
+    if [[ "$verdict" != "APPROVE" ]]; then
+        local detail="review_failed: verdict=${verdict} score=${score} category=${flag_category}"
+        db_update "UPDATE pipeline_jobs SET status='error', phase='review_failed',
+                   review_verdict=$(sql_escape "$verdict"), review_score=${score:-0},
+                   error_detail=$(sql_escape "$detail"), runner_pid=NULL,
+                   completed_at=NOW(), updated_at=NOW()
+                   WHERE job_id='${job_id}' AND status='running';"
+        record_runner_event "$job_id" "job_terminal" "error" "review_failed" "" "" "" "" "{\"sha\":\"${sha}\"}"
+        _notify_ai "$job_id"
+        promote_next_queued "AADS"
+        return 1
+    fi
+    db_update "UPDATE pipeline_jobs SET status='awaiting_approval', phase='awaiting_approval',
+               review_verdict='APPROVE', review_score=${score:-0}, error_detail=NULL,
+               runner_pid=NULL, approval_requested_at=NOW(), updated_at=NOW()
+               WHERE job_id='${job_id}' AND status='running' AND commit_hash='${sha}';"
+    if [[ "$(get_job_status "$job_id")" != "awaiting_approval" ]]; then
+        _fail_job "$job_id" "$session_id" "deploy_rebase_review_persist_failed" "새 SHA 재검수 승인 대기 상태 저장 실패"
+        _notify_ai "$job_id"
+        return 1
+    fi
+    record_runner_event "$job_id" "approval_requested" "awaiting_approval" "awaiting_approval" "" "" "" "" "{\"commit_hash\":\"${sha}\",\"review_verdict\":\"APPROVE\"}"
+    post_to_chat "$session_id" "🔔 [Pipeline Runner] origin/main 위 새 SHA AI 재검수 통과. 새 SHA 승인 필요: $job_id (${sha})"
+    _notify_ai "$job_id"
+    promote_next_queued "AADS"
+    return 0
+}
+
+# A remote ancestor is complete only if the routed API is serving a certified
+# release that contains it.  A successful push alone says nothing about deploy.
+approved_sha_is_live() {
+    local repo="$1" approved_sha="$2" state_dir="$3"
+    local release_row="" release_sha="" release_digest="" release_port=""
+    local resolved_sha="" active_port="" active_container="" active_digest=""
+    release_row=$(db_exec "SELECT release_sha || '|' || image_digest || '|' || current_slot
+        FROM deploy_runs WHERE project='AADS' AND component='api'
+        AND target_env='production' AND status='success' AND phase='completed'
+        AND image_digest IS NOT NULL AND image_digest <> ''
+        AND standby_digest=image_digest
+        ORDER BY id DESC LIMIT 1;" 2>/dev/null | tail -1) || return 1
+    IFS='|' read -r release_sha release_digest release_port <<< "$release_row"
+    [[ "$release_sha" =~ ^[0-9a-f]{12,40}$ && "$release_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+    resolved_sha=$(git -C "$repo" rev-parse --verify "${release_sha}^{commit}" 2>/dev/null) || return 1
+    git -C "$repo" merge-base --is-ancestor "$approved_sha" "$resolved_sha" 2>/dev/null || return 1
+    active_port=$(tr -d '[:space:]' < "${state_dir}/.active_port" 2>/dev/null) || return 1
+    active_container=$(tr -d '[:space:]' < "${state_dir}/.active_container" 2>/dev/null) || return 1
+    [[ "$active_port" == "$release_port" ]] || return 1
+    case "$active_port:$active_container" in
+        8100:aads-server|8102:aads-server-green) ;;
+        *) return 1 ;;
+    esac
+    active_digest=$(docker inspect "$active_container" --format '{{.Image}}' 2>/dev/null) || return 1
+    [[ "$active_digest" == "$release_digest" ]] || return 1
+    curl -fsS --connect-timeout 3 --max-time 5 "${AADS_API_URL}/api/v1/health" >/dev/null 2>&1
+}
 # ── 승인된 작업 배포 ──────────────────────────────────────────────────
 deploy_job() {
     local job_id="$1" project="$2" session_id="$3"
@@ -3568,10 +3722,9 @@ deploy_job() {
     push_state=$(classify_push_state "$worktree_dir" "$current_sha")
     log "  PUSH_PRECHECK job=$job_id sha=$current_sha state=$push_state"
 
-    # AADS 릴리스는 검수 SHA 를 변경하지 않는다. 원격 조회 실패와 stale base 는
-    # 자동 rebase/push 로 넘어가지 않고 새 SHA 검수 대상으로 남긴다.
-    if [[ "$project" == "AADS" && "$push_state" != "fast_forward" && "$push_state" != "already_present" ]]; then
-        _fail_job "$job_id" "$session_id" "deploy_isolated_push_state" "승인 SHA push 사전판별 실패: ${push_state}; 최신 origin 통합 후 재검수 필요"
+    # 원격 조회 실패는 판별 불가이므로 AADS 릴리스에서 차단한다.
+    if [[ "$project" == "AADS" && "$push_state" == "fetch_fail" ]]; then
+        _fail_job "$job_id" "$session_id" "deploy_origin_missing" "승인 SHA push 사전판별 실패: fetch_fail"
         _release_deploy_lock "$project" "$job_id"
         return 1
     fi
@@ -3586,10 +3739,36 @@ deploy_job() {
         if rebased_sha=$(attempt_stale_base_rebase "$worktree_dir" "$current_sha" "$job_id"); then
             log "  PUSH_AUTO_REBASED job=$job_id ${current_sha} -> ${rebased_sha}"
             record_runner_event "$job_id" "push_stale_base_rebased" "info" "auto_rebase" "" "" "" "" "{\"from\":\"${current_sha}\",\"to\":\"${rebased_sha}\"}"
+            if [[ "$project" == "AADS" ]]; then
+                # 승인된 SHA 와 달라졌으므로 새 diff 를 AI 재검수하고 CEO 재승인을 받는다.
+                db_update "UPDATE pipeline_jobs SET status='running', phase='ai_review',
+                           commit_hash='${rebased_sha}', review_verdict=NULL,
+                           review_request_id=NULL, runner_pid=${BASHPID}, completed_at=NULL,
+                           updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
+                if [[ "$(get_job_status "$job_id")" != "running" ]]; then
+                    _fail_job "$job_id" "$session_id" "deploy_rebase_requeue_failed" "새 SHA 재검수 상태 저장 실패"
+                    _release_deploy_lock "$project" "$job_id"
+                    return 1
+                fi
+                record_runner_event "$job_id" "deploy_stale_rebased_requeued" "running" "ai_review" "" "" "" "" "{\"from\":\"${current_sha}\",\"to\":\"${rebased_sha}\"}"
+                _release_deploy_lock "$project" "$job_id"
+                # The durable request is polled in a separate process; the
+                # deploy worker can accept another job while review runs.
+                review_rebased_aads_sha "$job_id" "$session_id" "$worktree_dir" "$rebased_sha" 9>&- </dev/null >/dev/null 2>&1 &
+                local review_worker_pid=$!
+                db_update "UPDATE pipeline_jobs SET runner_pid=${review_worker_pid}, updated_at=NOW()
+                           WHERE job_id='${job_id}' AND status='running' AND commit_hash='${rebased_sha}';"
+                return 0
+            fi
             db_update "UPDATE pipeline_jobs SET commit_hash='${rebased_sha}', updated_at=NOW() WHERE job_id='${job_id}';"
             current_sha="$rebased_sha"
             push_state="fast_forward"
         else
+            if [[ "$project" == "AADS" ]]; then
+                _fail_job "$job_id" "$session_id" "deploy_isolated_push_state" "승인 SHA push 사전판별 실패: stale_base; 자동 rebase 안전 조건 미충족" "deploy_isolated_push_state: stale_base"
+                _release_deploy_lock "$project" "$job_id"
+                return 1
+            fi
             stale_detail="push_stale_base: 승인 SHA(${current_sha}) 의 base 가 origin/main 보다 낡아 non-fast-forward 입니다. force push 는 금지이므로 자동 복구하지 않습니다 — 최신 origin/main 위에서 재작업 후 재승인하십시오."
             db_update "UPDATE pipeline_jobs SET status='error', phase='push_stale_base',
                        error_detail=$(sql_escape "$stale_detail"),
@@ -3649,6 +3828,33 @@ deploy_job() {
         return 1
     fi
     log "  GIT_PUSH_OK job=$job_id sha=$current_sha worktree=$worktree_dir"
+    local already_present_remote_sha=""
+    if [[ "$project" == "AADS" && "$push_state" == "already_present" ]]; then
+        already_present_remote_sha=$(git -C "$worktree_dir" ls-remote origin refs/heads/main 2>/dev/null | awk 'NR==1 {print $1}') || already_present_remote_sha=""
+    fi
+    if [[ "$project" == "AADS" && "$push_state" == "already_present" \
+        && "$already_present_remote_sha" != "$expected_sha" \
+        && "$already_present_remote_sha" =~ ^[0-9a-f]{40}$ ]]; then
+        if ! approved_sha_is_live "$worktree_dir" "$expected_sha" "$main_workdir"; then
+            _fail_job "$job_id" "$session_id" "deploy_already_present_unverified" "원격 포함 SHA 의 활성 릴리스 검증 실패"
+            _release_deploy_lock "$project" "$job_id"
+            promote_next_queued "$project"
+            return 1
+        fi
+        db_update "UPDATE pipeline_jobs SET status='done', phase='deploy_already_present',
+                   error_detail=NULL, completed_at=NOW(), updated_at=NOW()
+                   WHERE job_id='${job_id}' AND status='deploying' AND commit_hash='${expected_sha}';"
+        if [[ "$(get_job_status "$job_id")" != "done" ]]; then
+            _fail_job "$job_id" "$session_id" "deploy_already_present_persist_failed" "이미 반영된 승인 SHA 완료 기록 실패"
+            _release_deploy_lock "$project" "$job_id"
+            return 1
+        fi
+        record_runner_event "$job_id" "job_terminal" "done" "deploy_already_present" "" "" "" "" "{\"sha\":\"${current_sha}\"}"
+        _release_deploy_lock "$project" "$job_id"
+        _notify_ai "$job_id"
+        promote_next_queued "$project"
+        return 0
+    fi
     if [[ "$project" == "AADS" ]]; then
         local pushed_remote_sha
         pushed_remote_sha=$(git -C "$worktree_dir" ls-remote origin refs/heads/main 2>/dev/null | awk 'NR==1 {print $1}') || pushed_remote_sha=""
@@ -4365,8 +4571,16 @@ _cleanup_old_artifacts() {
         local _wt_age_min
         _wt_age_min=$(find "$_wt_dir" -maxdepth 0 -mmin +$((ARTIFACT_MAX_AGE_HOURS * 60)) 2>/dev/null | head -1)
         if [[ -n "$_wt_age_min" ]]; then
-            local _wt_name
+            local _wt_name _wt_job_id _wt_status
             _wt_name=$(basename "$_wt_dir")
+            _wt_job_id="${_wt_name#aads-wt-}"
+            [[ "$_wt_job_id" =~ ^runner-[0-9a-f]+$ ]] || continue
+            _wt_status=$(db_exec "SELECT COALESCE(status,'') FROM pipeline_jobs WHERE job_id='${_wt_job_id}';" 2>/dev/null) || continue
+            # Rebased SHA approval may outlive artifact age.  Its isolated
+            # worktree is still required by the next deploy preflight.
+            case "$_wt_status" in
+                running|awaiting_approval|deploying|review_hold) continue ;;
+            esac
             log "  STALE_WORKTREE_CLEANUP: $_wt_name (${ARTIFACT_MAX_AGE_HOURS}h+ old)"
             git worktree remove "$_wt_dir" --force 2>/dev/null || rm -rf "$_wt_dir" 2>/dev/null || true
         fi

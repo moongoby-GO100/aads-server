@@ -2334,10 +2334,9 @@ async def notify_completion(job_id: str):
                     "pipeline_runner.goal_state_update_fail", job_id=orphan_job_id, error=str(exc),
                 )
 
-    # AADS-RUNNER-AUTO-REWORK: AI 리뷰 반려(REQUEST_CHANGES)는 여기서 끝내지 않고
-    # 지적을 붙인 재작업을 max_cycles-1 라운드까지 자동 제출한다. 이전에는 반려마다
-    # 사람이 R2·R3 을 손으로 다시 써야 했고, 그동안 목표 자동진행이 멈췄다.
-    if status == "error" and row["phase"] == "review_failed":
+    # 코드 리뷰 반려와 배포 게이트 실패는 같은 라운드 상한·opt-out 을 적용한다.
+    from app.services.pipeline_auto_rework import is_request_changes_failure
+    if is_request_changes_failure(status, row["phase"] or "", row["error_detail"] or ""):
         try:
             from app.services.pipeline_auto_rework import maybe_submit_auto_rework
 

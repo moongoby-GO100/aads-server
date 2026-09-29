@@ -34,6 +34,10 @@ _HEADER_KEYS = ("ALLOW_DUP_JOB", "AUTO_REWORK_OF:", "AUTO_REWORK_ROUND:")
 _MAX_ROUNDS_CAP = 3
 _MAX_ISSUES = 8
 _MAX_ISSUE_CHARS = 600
+AUTO_REWORK_FAILURE_PHASES = frozenset({
+    "review_failed", "push_stale_base", "deploy_isolated_push_state",
+    "deploy_isolated_stale_approval",
+})
 
 
 def auto_rework_enabled() -> bool:
@@ -41,12 +45,25 @@ def auto_rework_enabled() -> bool:
 
 
 def is_request_changes_failure(status: str, phase: str, error_detail: str) -> bool:
-    """사람이 내린 반려(adjudicator)나 인프라 보류가 아니라, AI 리뷰의 코드 반려인가."""
-    return (
-        status == "error"
-        and phase == "review_failed"
-        and (error_detail or "").startswith("review_failed: verdict=REQUEST_CHANGES")
-    )
+    """Bounded rework for code review rejection or a recoverable deploy gate."""
+    if status != "error":
+        return False
+    if phase not in AUTO_REWORK_FAILURE_PHASES and phase != "error":
+        return False
+    if phase == "review_failed":
+        return (error_detail or "").startswith("review_failed: verdict=REQUEST_CHANGES")
+    if phase == "push_stale_base":
+        return True
+    # The older runner stored gate reasons in phase or error_detail.  The
+    # stale_approval value only occurs in legacy rows; current preflight
+    # classifies stale_base before reaching this point.
+    if phase == "deploy_isolated_stale_approval" or phase == "error" and error_detail == "deploy_isolated_stale_approval":
+        return True
+    if phase == "deploy_isolated_push_state" or phase == "error" and error_detail.startswith("deploy_isolated_push_state"):
+        # Old generic rows contain no state and cannot distinguish a network
+        # failure from stale_base.  Only an explicit stale_base is recoverable.
+        return "stale_base" in error_detail and "fetch_fail" not in error_detail
+    return False
 
 
 def max_rounds(max_cycles: Any) -> int:
@@ -106,6 +123,7 @@ def build_rework_instruction(
     issues: list[str],
     commit_hash: str = "",
     score: Any = None,
+    failure_phase: str = "review_failed",
 ) -> str:
     base = strip_rework_scaffold(original)
     header = (
@@ -118,11 +136,12 @@ def build_rework_instruction(
         start += f" (커밋 `{commit_hash[:12]}`)"
     issue_lines = "\n".join(f"{i}. {text}" for i, text in enumerate(issues, 1))
     if not issue_lines:
-        issue_lines = "1. (리뷰 지적 본문 없음 — code_reviews 의 요약을 직접 확인하라)"
+        issue_lines = "1. (종료 사유와 최신 origin/main 기준을 확인하라)"
     score_txt = f" score={score}" if score is not None else ""
+    reason = "AI 리뷰 반려" if failure_phase == "review_failed" else f"배포 게이트 {failure_phase}"
     section = (
         f"\n{_SECTION_MARK} (라운드 {round_no}/{rounds_max})\n"
-        f"직전 작업 {parent_job_id} 이 AI 리뷰에서 REQUEST_CHANGES{score_txt} 로 반려돼 자동으로 다시 제출됐다.\n"
+        f"직전 작업 {parent_job_id} 이 {reason}로 중단돼 자동으로 다시 제출됐다{score_txt}.\n"
         f"- 출발점: 반려된 산출물 {start}. 처음부터 다시 쓰지 말고, 그 변경을 origin/main 기준 "
         "깨끗한 worktree 로 가져와 이어서 고쳐라. 산출물이 없으면 위 원 지시대로 구현하라.\n"
         "- 아래 지적을 **전부** 고치고, 각 지적을 어떻게 처리했는지 RESULT 에 번호별로 적어라. "
@@ -183,6 +202,8 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
             job_id,
         )
         issues = extract_issues(feedback)
+        if row["phase"] != "review_failed":
+            issues = [f"배포 게이트 원인: {(row['error_detail'] or row['phase'])[:_MAX_ISSUE_CHARS]}"]
         new_instruction = build_rework_instruction(
             original=instruction,
             parent_job_id=job_id,
@@ -191,6 +212,7 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
             issues=issues,
             commit_hash=row["commit_hash"] or "",
             score=row["review_score"],
+            failure_phase=row["phase"],
         )
         new_job_id = f"runner-{uuid.uuid4().hex[:8]}"
         await conn.execute(
