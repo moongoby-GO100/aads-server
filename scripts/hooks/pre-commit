@@ -264,35 +264,6 @@ if [ -n "$PY_FILES" ]; then
   fi
   echo -e "${GREEN}[pre-commit] Python 검수 통과${NC}"
 
-  # Step 3: 단위 테스트 (도구/핵심 코드 변경 시 항상 실행)
-  TEST_FILE="tests/unit/test_tools_and_pipeline.py"
-  # 도구 관련 파일 변경 감지 — 테스트 파일뿐 아니라 코드 변경에도 테스트 실행
-  TOOL_FILES_PATTERN="tool_executor\|tool_registry\|ceo_chat_tools\|chat_tools\|model_selector\|system_prompt\|test_tools"
-  TOOL_MODIFIED=$(echo "$PY_FILES" | grep -c "$TOOL_FILES_PATTERN" || true)
-  if [ -f "$TEST_FILE" ] && [ "$TOOL_MODIFIED" -gt 0 ]; then
-    echo "[pre-commit] 도구/핵심 코드 변경 감지 — 단위 테스트 실행..."
-    # 운영 이미지에는 pytest 가 없어서 `docker exec ... pytest` 는 실행 자체가 실패했고,
-    # 그 출력에 "failed" 문자열이 없다는 이유로 게이트가 통과로 오판했다.
-    # 이제 실행기가 종료코드로 말한다 — 0 통과 / 1 테스트 실패 / 2 실행 불가.
-    TEST_OUT=$(bash scripts/run_unit_tests.sh "$TEST_FILE" 2>&1)
-    TEST_RC=$?
-    if [ "$TEST_RC" -eq 2 ]; then
-      echo -e "  ${RED}❌ 단위 테스트를 실행하지 못했습니다 — 게이트가 아무것도 검증하지 못하므로 커밋을 차단합니다${NC}"
-      echo "$TEST_OUT" | tail -5
-      PY_ERRORS=$((PY_ERRORS + 1))
-    elif [ "$TEST_RC" -ne 0 ]; then
-      FAIL_COUNT=$(echo "$TEST_OUT" | grep -oP '\d+ failed' | head -1)
-      echo -e "  ${RED}❌ 테스트 실패: ${FAIL_COUNT}${NC}"
-      echo "$TEST_OUT" | grep "FAILED" | head -5
-      PY_ERRORS=$((PY_ERRORS + 1))
-    else
-      PASS_COUNT=$(echo "$TEST_OUT" | grep -oP '\d+ passed' | head -1)
-      echo -e "  ${GREEN}✅ 테스트 통과: ${PASS_COUNT}${NC}"
-    fi
-  elif [ -f "$TEST_FILE" ]; then
-    echo "[pre-commit] 도구 관련 파일 미변경 — 테스트 생략"
-  fi
-
   # Step 4: 도구 등록 정합성 검증 + 자동 수정
   if echo "$PY_FILES" | grep -qE 'tool_registry|tool_executor|ceo_chat_tools'; then
     echo "[pre-commit] 도구 정합성 검증..."
@@ -327,6 +298,27 @@ if [ -n "$PY_FILES" ]; then
     echo -e "${RED}커밋 차단: 검수 실패 ${PY_ERRORS}건${NC}"
     exit 1
   fi
+fi
+
+# ─── Step 3: 단위 테스트 — 스테이징 변경에 대응하는 묶음만 실행 ───────────
+# 예전에는 tests/unit/test_tools_and_pipeline.py 하나를, 도구 관련 .py 가 바뀔 때만
+# 돌렸다. 배포·러너 코드만 고친 커밋은 테스트를 한 건도 돌리지 않고 통과했고,
+# 그 사이 러너 락 재큐잉 테스트가 깨진 채 방치돼 runner-104b2fda 산출물이 유실됐다.
+# 셸 스크립트 변경도 잡아야 하므로 Python 검수 블록 밖에서 STAGED 전체를 본다.
+# 대응표는 scripts/pre_commit_test_map.py 의 GROUPS 한 곳에서 관리한다 — 여기는 고치지 마라.
+# 종료코드: 0 통과/대응 없음 · 1 테스트 실패 · 2 실행 불가 — 1·2 모두 차단.
+if [ -f "scripts/pre_commit_test_map.py" ]; then
+  echo "$STAGED" | python3 scripts/pre_commit_test_map.py --run
+  GATE_RC=$?
+  if [ "$GATE_RC" -eq 2 ]; then
+    echo -e "${RED}커밋 차단: 단위 테스트를 실행하지 못했습니다 (게이트 미작동)${NC}"
+    exit 1
+  elif [ "$GATE_RC" -ne 0 ]; then
+    echo -e "${RED}커밋 차단: 단위 테스트 실패${NC}"
+    exit 1
+  fi
+else
+  echo -e "  ${YELLOW}⚠️ scripts/pre_commit_test_map.py 없음 — 단위 테스트 게이트 건너뜀${NC}"
 fi
 
 
