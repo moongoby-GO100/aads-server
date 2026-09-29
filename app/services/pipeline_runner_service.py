@@ -2520,7 +2520,9 @@ RESULT 파일에 위 체크리스트 항목별 실행 결과를 반드시 포함
 
 _SPEC_DIR_PATH_PATTERN = re.compile(
     r"docs/specs/(?P<project>[a-z0-9]+(?:-[a-z0-9]+)*)/"
-    r"(?P<slice>[a-z0-9]+(?:-[a-z0-9]+)*)"
+    # 원자 그룹: 없으면 `roadmap.md` 가 `roadma` 로 백트랙되어 룩어헤드를 통과한다.
+    r"(?P<slice>(?>[a-z0-9]+(?:-[a-z0-9]+)*))"
+    r"(?!\.[A-Za-z0-9])"
 )
 _SPEC_SLICE_ID_PATTERN = re.compile(
     r"(?<![a-z0-9-])(?P<project>[a-z0-9]+-v\d+)-"

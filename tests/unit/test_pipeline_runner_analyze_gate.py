@@ -155,3 +155,78 @@ def test_owner_resolved_gate_can_be_disabled(monkeypatch):
 
     assert _unresolved_owner_slices(instruction, "AADS") == []
     _enforce_owner_resolved_gate(instruction, "AADS")
+
+
+_ROADMAP_HEADER = (
+    "| 슬라이스 | 설명 | 메뉴 | 담당 | 상태 |\n"
+    "|---|---|---|---|---|\n"
+)
+
+
+def _write_roadmap(root, project, rows):
+    roadmap_dir = root / "docs/specs" / project
+    roadmap_dir.mkdir(parents=True, exist_ok=True)
+    body = "".join(f"| `{slice_id}` | d | m | o | {status} |\n" for slice_id, status in rows)
+    (roadmap_dir / "roadmap.md").write_text(_ROADMAP_HEADER + body, encoding="utf-8")
+
+
+def test_owner_gate_ignores_roadmap_document_file_path(monkeypatch, spec_fixture_root):
+    monkeypatch.delenv("AADS_OWNER_RESOLVED_GATE_ENABLED", raising=False)
+    _write_roadmap(spec_fixture_root, "gate-fixture", [("gate-fixture-alpha", "충돌")])
+    instruction = "docs/specs/gate-fixture/roadmap.md 의 상태 열을 갱신한다."
+
+    assert pipeline_runner_service._find_referenced_spec_dirs(instruction) == []
+    assert _unresolved_owner_slices(instruction, "AADS") == []
+
+
+def test_owner_gate_keeps_blocking_existing_unconverged_slice_dir(monkeypatch, spec_fixture_root):
+    monkeypatch.delenv("AADS_OWNER_RESOLVED_GATE_ENABLED", raising=False)
+    _write_roadmap(spec_fixture_root, "gate-fixture", [("gate-fixture-alpha", "충돌")])
+    _write_slice_documents(spec_fixture_root, "gate-fixture", "alpha", {"spec.md": "# spec\n"})
+    instruction = "docs/specs/gate-fixture/alpha/spec.md 를 구현한다."
+
+    assert _unresolved_owner_slices(instruction, "AADS") == [{
+        "spec_dir": "docs/specs/gate-fixture/alpha",
+        "slice_id": "gate-fixture-alpha",
+        "status": "충돌",
+    }]
+
+
+def test_owner_gate_blocks_roadmap_row_without_directory(monkeypatch, spec_fixture_root):
+    monkeypatch.delenv("AADS_OWNER_RESOLVED_GATE_ENABLED", raising=False)
+    _write_roadmap(spec_fixture_root, "gate-fixture", [("gate-fixture-beta", "충돌")])
+    instruction = "docs/specs/gate-fixture/beta 정본에 따라 구현한다."
+
+    assert _unresolved_owner_slices(instruction, "AADS") == [{
+        "spec_dir": "docs/specs/gate-fixture/beta",
+        "slice_id": "gate-fixture-beta",
+        "status": "충돌",
+    }]
+
+
+def test_owner_gate_still_blocks_slice_without_row_and_without_directory(monkeypatch, spec_fixture_root):
+    monkeypatch.delenv("AADS_OWNER_RESOLVED_GATE_ENABLED", raising=False)
+    _write_roadmap(spec_fixture_root, "gate-fixture", [("gate-fixture-alpha", "충돌")])
+    instruction = "docs/specs/gate-fixture/no-such 정본에 따라 구현한다."
+
+    assert _unresolved_owner_slices(instruction, "AADS") == [{
+        "spec_dir": "docs/specs/gate-fixture/no-such",
+        "slice_id": "gate-fixture-no-such",
+        "status": "roadmap_row_missing",
+    }]
+
+
+def test_owner_gate_ignores_arbitrary_md_file_reference(monkeypatch, spec_fixture_root):
+    monkeypatch.delenv("AADS_OWNER_RESOLVED_GATE_ENABLED", raising=False)
+    _write_roadmap(spec_fixture_root, "gate-fixture", [("gate-fixture-alpha", "충돌")])
+    instruction = "docs/specs/gate-fixture/notes-2026.md 를 참고한다."
+
+    assert _unresolved_owner_slices(instruction, "AADS") == []
+
+
+def test_spec_dir_pattern_keeps_directory_reference_with_trailing_file():
+    refs = pipeline_runner_service._find_referenced_spec_dirs(
+        "docs/specs/obys-v4/vat-ledger/spec.md 와 docs/specs/obys-v4/roadmap.md"
+    )
+
+    assert refs == ["docs/specs/obys-v4/vat-ledger"]
