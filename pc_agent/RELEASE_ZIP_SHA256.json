@@ -14,6 +14,7 @@
     "build_shinhan_collector_exe.py",
     "commands/__init__.py",
     "commands/browser_auto.py",
+    "commands/browser_reclaim.py",
     "commands/browser_tab.py",
     "commands/file_ops.py",
     "commands/file_transfer.py",
@@ -48,5 +49,5 @@
     "tray.py",
     "updater.py"
   ],
-  "sha256": "cc17132faf983e3d57dfe7ce3303b4fdba7432893ad778aff9b4e1b340020bb4"
+  "sha256": "8951cfdf2cd6311fa939bcaac9abecc9b17fb6614f8f0658ad9fbdcf4cc70aa1"
 }

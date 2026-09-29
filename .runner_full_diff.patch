@@ -1,1106 +1,1199 @@
-diff --git a/HANDOVER.md b/HANDOVER.md
-index f0de2c32..cca7e1e4 100644
---- a/HANDOVER.md
-+++ b/HANDOVER.md
-@@ -14480,3 +14480,19 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
- - Canary: not installed. M4 was reported blocked at task start, and this environment could not requery the PC network, confirm an idle business lease and user session, or capture screen/install evidence. The four recent and four stale rows from the task brief are historical only; duplicate DANHAROO-MAIN labels are not separate rollout targets.
- - Full PC rollout and 24-hour observation: blocked. Resume after M4 DB completion evidence, refreshed PC inventory with offline causes, CEO rollout approval, a verified canary, and a recorded observation start time. No milestone status was changed.
- - Error book and DB handover: unavailable in this environment (`psql` missing). No DB record was claimed. Cost was not measured.
-+
-+## 2026-09-29 — M7 Coupang Eats split recipe retry (AADS-SB-M7-COUPANGEATS-RECIPE-LINKRETRY-R5)
-+
-+- Scope: code path and regression tests only. No live login, final recipe registration, other-session replay, milestone approval, or PC rollout was performed. Resume requires CEO approval, the designated PC lane, and real successful screen captures. Cost was not measured.
-+- Baseline: this worktree HEAD and local `origin/main` were `6248f409f386a7234a81fd64e5dc171e51801232`; `git fetch origin` failed because the shared Git `FETCH_HEAD` is read-only. The previous `runner-637963bd` fragment definitions were reused. The remote `origin/fix/sb-direct-closeout-20260929` changes concern Shinhan financial recipes and were read but not copied. No unrelated dirty files were present. Active `pipeline_jobs` could not be queried because neither `psql` nor `asyncpg` is available here.
-+- STEP 0 inventory: `browser_recipe_registry` normalization/planning/admission/DB CRUD [maintain], Coupang fragment constants, readiness, candidate and Vault comparison [new from prior candidate, corrected]; `work_recipe.registration` dry-run/request/list/get/decision and `work_recipes`/`work_recipe_registration_requests` transactions [modify validation/version handling]; `work_recipe.orchestrator` resolve/scoped inputs [maintain], run directive [modify], live verify adapter [new]; `tool_executor._smart_browser` list/run/register_e2e [modify Coupang registration branch only]; existing recorder and router tests [maintain]; Coupang unit tests [new]. No existing callable was deleted. `tool_registry` and `recorder` were inspected but left unchanged.
-+- Call path: `smart_browser(register_e2e)` → designated PC session live verify → server screenshot capture and `browser_artifacts` record → split WorkRecipe candidate with explicit verify and submit risk → `request_registration` pending row → `decide_registration` immutable approved `work_recipes` row → `smart_browser(list)` → `smart_browser(run)` → `run_directive` PC session/work-key check → `CoupangVerificationExecutor` live assertions → append-only step audit. The run entry rejects replay from the recording chat session; it requires a different authenticated chat session and the designated PC session. Registration and approval re-read the server-owned artifact (or a prior successful `recipe_runs`/`recipe_run_steps` verify). No fixture reference is operational evidence.
-+- Verify contract: the Coupang branch of `register_e2e` now accepts recorded `verify` assertions, either in `verify` or as `steps` entries with `phase=verify`, and builds a WorkRecipe with verify steps, resolving the old recorder path's missing-verify conflict. Login submission is fixed at `WRITE_EXTERNAL`, so the existing approval gate applies before its click. Live verification checks form visibility, username equality against the scoped Vault value, password filled/empty as a boolean only, authenticated store equality, URL transition, and common error/challenge markers. A failed assertion returns failure and cannot create success evidence. Screenshot reference must match the server-owned PC-session artifact from the same tenant and recording chat session. Open-login approval readiness also checks URL, start/success conditions, lane, work key, approval state and the audited reference.
-+- Verification: `python3 -m compileall -q` on changed Python files exited 0; `ruff check --select F` on changed Python files exited 0; `git diff --check` exited 0. Full `ruff check` exited 1 with 348 findings across the target modules and was not treated as a pass. Host `python3 -m pytest tests/unit/test_coupangeats_recipe_drafts.py -q --tb=short -p no:cacheprovider` passed 8 tests. Host combined suite could not run existing recorder tests because this host lacks `pytest-asyncio` and `fastapi`; it reported 6 passed, 9 failed, exit 1 before the final approval-gate, live-attestation and identity tests were added. Required `bash scripts/run_unit_tests.sh tests/unit/test_coupangeats_recipe_drafts.py tests/unit/test_work_recipe_recorder.py` exited 2 with zero tests because no accessible AADS test image/container was found; it is not a pass. No build or deployment verification was run. DB `handover_write(project=AADS)` could not be reached in this workspace (`psql` and `asyncpg` absent); this file is the local handover only.
-+
-+## 2026-09-29 — Coupang split recipe review repair (R5 rework)
-+
-+- Continued the rejected `runner-a1bfebd7` candidate in the isolated workspace. The PC Agent facade exposes `evaluate()` but not Playwright locator read methods; live verification now reads DOM predicates through that facade. Password state remains a boolean and does not enter audit output. Login confirmation requires separate observed username and store selectors, and compares both live screen values with scoped Vault identity. The verifier and live attestation refresh the URL through `window.location.href` after PC Agent click.
-+- Added a regression using the real `_LocalAgentPage` adapter with a stubbed browser command response. It proves the stale cached URL is replaced, a different screen username fails without capturing success evidence, and only a different chat session on the designated local PC lane reaches replay. The replay assertion uses a stubbed player; it is not an operational login or cross-session replay claim.
-+- Code path: `smart_browser(register_e2e)` → PC live attestation → `request_registration` pending → separate approval by `decide_registration` → `smart_browser(list)` → `smart_browser(run)` in another chat session → `run_directive` lane/session guard → live verify and audit. Code path and regression coverage are complete. Actual account registration and replay are blocked pending CEO approval, designated PC lane, and a real successful screen capture. No account login, approval, or milestone state change was performed. Cost was not measured.
-+- Verification in this rework: required `bash scripts/run_unit_tests.sh tests/unit/test_coupangeats_recipe_drafts.py tests/unit/test_work_recipe_recorder.py` exited 2 before test collection because no AADS container/image is available in this workspace; it is not a pass. Local virtualenv tests for the Coupang file passed 10/10; the selected recorder subset passed 15 with 5 unrelated router tests deselected. `compileall`, Ruff F rules, and `git diff --check` exited 0. The full local router suite reached its app import and did not complete in the sandbox. Canonical DB `handover_write(project=AADS)` was unavailable here; this local entry records the split between code verification and real account evidence.
-diff --git a/app/services/browser_recipe_registry.py b/app/services/browser_recipe_registry.py
-index 740926e0..f5fab56b 100644
---- a/app/services/browser_recipe_registry.py
-+++ b/app/services/browser_recipe_registry.py
-@@ -3,6 +3,7 @@
- from __future__ import annotations
- 
- import hashlib
-+import hmac
- import json
- import uuid
- from typing import Any
-@@ -27,6 +28,429 @@ DEFAULT_RESOURCE_POLICY = {
-     "artifact_budget_mb": 256,
+diff --git a/pc_agent/RELEASE_ZIP_SHA256.json b/pc_agent/RELEASE_ZIP_SHA256.json
+index 99094c68..93521451 100644
+--- a/pc_agent/RELEASE_ZIP_SHA256.json
++++ b/pc_agent/RELEASE_ZIP_SHA256.json
+@@ -14,6 +14,7 @@
+     "build_shinhan_collector_exe.py",
+     "commands/__init__.py",
+     "commands/browser_auto.py",
++    "commands/browser_reclaim.py",
+     "commands/browser_tab.py",
+     "commands/file_ops.py",
+     "commands/file_transfer.py",
+@@ -48,5 +49,5 @@
+     "tray.py",
+     "updater.py"
+   ],
+-  "sha256": "cc17132faf983e3d57dfe7ce3303b4fdba7432893ad778aff9b4e1b340020bb4"
++  "sha256": "8951cfdf2cd6311fa939bcaac9abecc9b17fb6614f8f0658ad9fbdcf4cc70aa1"
  }
- ACTIVE_RECIPE_RUN_STATUSES = ("queued", "running", "approval_required")
-+COUPANGEATS_LOGIN_URL = "https://store.coupangeats.com/merchant/login"
-+# Draft instructions for a screen recording operator.  They are deliberately
-+# not browser_recipes rows and cannot be played or approved by this module.
-+COUPANGEATS_LOGIN_FRAGMENTS = (
-+    {
-+        "name": "coupangeats_01_open_login",
-+        "version": 2,
-+        "domain": "store.coupangeats.com",
-+        "lane": "pc_agent",
-+        "work_key": "coupangeats:owner:login",
-+        "starts_when": "authenticated_pc_session_available",
-+        "succeeds_when": "login_form_visible_without_access_denied_or_challenge",
-+        "predecessor": None,
-+        "recover_at": "open_login_start",
-+        "credential_scope": "yeoljeong-coupangeats",
-+        "step_requirements": ["navigate_exact_login_url"],
-+        "verify_requirements": ["visible_login_form", "no_access_denied_or_challenge"],
-+    },
-+    {
-+        "name": "coupangeats_02_vault_fill",
-+        "version": 2,
-+        "domain": "store.coupangeats.com",
-+        "lane": "pc_agent",
-+        "work_key": "coupangeats:owner:login",
-+        "starts_when": "open_login_v2_screen_verified_in_same_pc_session",
-+        "succeeds_when": "vault_identity_matches_and_password_field_filled",
-+        "predecessor": {"name": "coupangeats_01_open_login", "version": 2},
-+        "recover_at": "open_login_form",
-+        "credential_scope": "yeoljeong-coupangeats",
-+        "password_check": "filled_or_empty_only",
-+        "step_requirements": ["fill_username_from_vault", "fill_password_from_vault"],
-+        "verify_requirements": ["username_matches_vault", "password_field_filled_boolean_only"],
-+    },
-+    {
-+        "name": "coupangeats_03_login_confirm",
-+        "version": 1,
-+        "domain": "store.coupangeats.com",
-+        "lane": "pc_agent",
-+        "work_key": "coupangeats:owner:login",
-+        "starts_when": "approved_vault_fill_v2_screen_verified_in_same_pc_session",
-+        "succeeds_when": "authenticated_store_matches_vault_without_access_denied_captcha_or_login_error",
-+        "predecessor": {"name": "coupangeats_02_vault_fill", "version": 2},
-+        "recover_at": "open_login_form_without_resubmitting",
-+        "credential_scope": "yeoljeong-coupangeats",
-+        "step_requirements": ["click_observed_submit_control"],
-+        "verify_requirements": ["authenticated_username_matches_vault", "authenticated_store_matches_vault", "no_error_or_challenge"],
-+    },
-+)
+diff --git a/pc_agent/commands/__init__.py b/pc_agent/commands/__init__.py
+index 3c266fbc..244aee86 100644
+--- a/pc_agent/commands/__init__.py
++++ b/pc_agent/commands/__init__.py
+@@ -35,6 +35,7 @@ system_extra = _safe_import("system_extra")
+ screen_stream = _safe_import("screen_stream")
+ macro = _safe_import("macro")
+ browser_auto = _safe_import("browser_auto")
++browser_reclaim = _safe_import("browser_reclaim")
+ browser_tab = _safe_import("browser_tab")
+ file_transfer = _safe_import("file_transfer")
+ scheduler = _safe_import("scheduler")
+@@ -108,6 +109,7 @@ _RAW_HANDLERS = {
+     "macro_delete": _handler(macro, "delete_macro_cmd"),
+     # P3: CDP 브라우저 자동화
+     "browser_tab": _handler(browser_tab, "execute"),
++    "browser_owned_tab": _handler(browser_reclaim, "execute"),
+     "browser_navigate": _handler(browser_auto, "browser_navigate"),
+     "browser_click": _handler(browser_auto, "browser_click"),
+     "browser_fill": _handler(browser_auto, "browser_fill"),
+diff --git a/pc_agent/commands/browser_auto.py b/pc_agent/commands/browser_auto.py
+index f1fd41be..59df7e77 100644
+--- a/pc_agent/commands/browser_auto.py
++++ b/pc_agent/commands/browser_auto.py
+@@ -41,6 +41,12 @@ DOWNLOAD_CONTENT_MAX_BYTES = max(
+     int(os.getenv("AADS_BROWSER_DOWNLOAD_CONTENT_MAX_BYTES", str(2 * 1024 * 1024)) or "0"),
+ )
+ _MSG_ID = 0
++_OWNED_TAB_LOCKS: dict[int, asyncio.Lock] = {}
 +
 +
-+def matches_coupangeats_vault_identity(
++def _owned_tab_lock(port: int) -> asyncio.Lock:
++    """Serialize ownership-sensitive operations on one CDP port only."""
++    return _OWNED_TAB_LOCKS.setdefault(port, asyncio.Lock())
+ 
+ 
+ class CDPCommandError(RuntimeError):
+@@ -56,6 +62,7 @@ class CDPSession:
+     port: int
+     profile_dir: str
+     pid: int = 0
++    generation: str = field(default_factory=lambda: uuid.uuid4().hex)
+     connected_at: float = field(default_factory=_time)
+     last_heartbeat_at: float = field(default_factory=_time)
+     last_target_id: str = ""
+@@ -886,7 +893,7 @@ async def _best_effort_target_probe(
+     return report
+ 
+ 
+-async def _send_cdp_command(
++async def _send_cdp_command_unlocked(
+     port: int,
+     method: str,
+     params: Dict[str, Any] | None = None,
+@@ -937,6 +944,11 @@ async def _send_cdp_command(
+         candidate_target_id = str(candidate.get("targetId") or candidate.get("id") or "")
+         candidate_url = str(candidate.get("url") or "")
+         candidate_title = str(candidate.get("title") or "")
++        if candidate_target_id:
++            # Selection is already inside the port lock. A command may affect
++            # the page and then time out, so record use before sending it.
++            from . import browser_reclaim
++            browser_reclaim.mark_observed(candidate_target_id)
+         try:
+             async with await _connect_cdp_ws(
+                 websockets,
+@@ -1052,6 +1064,38 @@ async def _send_cdp_command(
+     )
+ 
+ 
++async def _send_cdp_command(
++    port: int,
++    method: str,
++    params: Dict[str, Any] | None = None,
 +    *,
-+    vault_scope: str,
-+    vault_username: str,
-+    vault_store: str,
-+    screen_username: str,
-+    screen_store: str,
-+) -> bool:
-+    """Compare transient Vault identity with the screen; persist neither value."""
-+    return (
-+        vault_scope == "yeoljeong-coupangeats"
-+        and hmac.compare_digest(vault_username.encode("utf-8"), b"mimi77")
-+        and bool(vault_username and vault_store and screen_username and screen_store)
-+        and hmac.compare_digest(vault_username.encode("utf-8"), screen_username.encode("utf-8"))
-+        and hmac.compare_digest(vault_store.encode("utf-8"), screen_store.encode("utf-8"))
-+    )
-+
-+
-+def prepare_coupangeats_login_drafts(
-+    saved_open_login: dict[str, Any] | None, *, trusted_evidence: dict[str, Any] | None = None
-+) -> dict[str, Any]:
-+    """Check the saved WorkRecipe v2 before using it as a split-login reference.
-+
-+    A missing/unverified row never becomes an approved reference.  A matching
-+    row only proves the open-login definition, not login or replay success.
-+    """
-+    row = saved_open_login or {}
-+    spec = _json_dict(row.get("spec"))
-+    steps = _json_list(spec.get("steps"))
-+    verify = _json_list(spec.get("verify"))
-+    metadata = _json_dict(spec.get("metadata"))
-+    evidence = _json_dict(metadata.get("screen_e2e"))
-+    artifact = evidence.get("screenshot_url") or evidence.get("snapshot_ref")
-+    login_url = urlparse(COUPANGEATS_LOGIN_URL)
-+    def is_login_url(value: Any) -> bool:
-+        parsed = urlparse(str(value or ""))
-+        return (parsed.scheme, parsed.hostname, parsed.path.rstrip("/")) == (
-+            login_url.scheme, login_url.hostname, login_url.path.rstrip("/"))
-+
-+    valid = (
-+        row.get("name") == "coupangeats_01_open_login"
-+        and row.get("domain") == "store.coupangeats.com"
-+        and row.get("version") == 2
-+        and row.get("enabled") is True
-+        and row.get("max_risk") == "READ"
-+        and row.get("approval_status") == "approved"
-+        and spec.get("name") == row.get("name")
-+        and spec.get("version") == 2
-+        and spec.get("domain") == row.get("domain")
-+        and any(isinstance(step, dict) and step.get("action") == "navigate"
-+                and is_login_url(step.get("url")) for step in steps)
-+        and any(isinstance(step, dict) and step.get("action") == "snapshot"
-+                and step.get("assertion") == "login_form_visible"
-+                for step in verify)
-+        and evidence.get("screen_verified") is True
-+        and is_login_url(evidence.get("url"))
-+        and isinstance(artifact, str) and bool(artifact.strip())
-+        and evidence.get("outcome") == COUPANGEATS_LOGIN_FRAGMENTS[0]["succeeds_when"]
-+        and evidence.get("blocked") is False
-+        and evidence_matches_run(evidence, trusted_evidence, fragment_name=row.get("name"))
-+        and metadata.get("source_chat_session_id") == trusted_evidence.get("chat_session_id")
-+        and metadata.get("starts_when") == COUPANGEATS_LOGIN_FRAGMENTS[0]["starts_when"]
-+        and metadata.get("succeeds_when") == COUPANGEATS_LOGIN_FRAGMENTS[0]["succeeds_when"]
-+        and metadata.get("lane") == "pc_agent"
-+        and metadata.get("work_key") == COUPANGEATS_LOGIN_FRAGMENTS[0]["work_key"]
-+    )
-+    fragments = [dict(item) for item in COUPANGEATS_LOGIN_FRAGMENTS]
-+    fragments[0]["registration_state"] = "approved" if valid else "registration_pending"
-+    fragments[0]["registration_ready"] = valid
-+    for item in fragments[1:]:
-+        item["registration_state"] = "registration_pending"
-+        item["registration_ready"] = False
-+    return {
-+        "reference_verified": valid,
-+        "reference_reason": "saved_v2_definition_verified"
-+        if valid
-+        else "saved_v2_definition_unverified",
-+        "fragments": fragments,
-+        "replay_state": "not_verified",
-+        "registration_path": "work_recipe.registration.request_registration",
-+        "requires_observed_selectors": True,
-+    }
-+
-+
-+def build_coupangeats_registration_candidate(
-+    *, fragment_name: str, observed_steps: list[dict[str, Any]],
-+    observed_verify: list[dict[str, Any]], screen_evidence: dict[str, Any],
-+    trusted_evidence: dict[str, Any] | None = None,
-+) -> Any:
-+    """Build a pending WorkRecipe only from observed controls and screen evidence.
-+
-+    This does not request approval or execute a browser. The reviewer must inspect
-+    the referenced screen; a caller's screen_verified flag is not independent proof.
-+    """
-+    from app.services.work_recipe.schema import WorkRecipe
-+
-+    fragment = next((item for item in COUPANGEATS_LOGIN_FRAGMENTS
-+                     if item["name"] == fragment_name), None)
-+    if fragment is None:
-+        raise ValueError("unknown_fragment")
-+    evidence = _json_dict(screen_evidence)
-+    artifact = evidence.get("screenshot_url") or evidence.get("snapshot_ref")
-+    parsed = urlparse(str(evidence.get("url") or ""))
-+    if (evidence.get("screen_verified") is not True
-+            or not isinstance(artifact, str) or not artifact.strip()
-+            or parsed.scheme != "https" or parsed.hostname != fragment["domain"]
-+            or evidence.get("outcome") != fragment["succeeds_when"]
-+            or evidence.get("blocked") is not False
-+            or not evidence_matches_run(evidence, trusted_evidence, fragment_name=fragment_name)):
-+        raise ValueError("verified_screen_evidence_required")
-+    expected = (["navigate"] if fragment_name == "coupangeats_01_open_login" else
-+                ["fill", "fill"] if fragment_name == "coupangeats_02_vault_fill" else ["click"])
-+    required_assertions = {
-+        "coupangeats_01_open_login": ["login_form_visible"],
-+        "coupangeats_02_vault_fill": ["username_matches_vault", "password_filled"],
-+        "coupangeats_03_login_confirm": ["authenticated_username_matches_vault", "authenticated_store_matches_vault"],
-+    }
-+    if ([step.get("action") for step in observed_steps] != expected
-+            or [step.get("assertion") for step in observed_verify] != required_assertions[fragment_name]
-+            or any(step.get("action") != "snapshot" for step in observed_verify)
-+            or any(set(step) - {"action", "selector", "url", "value", "risk", "timeout"}
-+                   for step in observed_steps)
-+            or any(set(step) - {"action", "selector", "assertion", "risk", "timeout"}
-+                   for step in observed_verify)
-+            or any((not str(step.get("selector") or "").strip()
-+                    or "<" in str(step.get("selector")))
-+                   for step in [*observed_steps, *observed_verify]
-+                   if step.get("action") != "navigate")):
-+        raise ValueError("observed_steps_and_verify_required")
-+    if fragment_name == "coupangeats_02_vault_fill" and [
-+        step.get("value") for step in observed_steps
-+    ] != ["{{vault_username}}", "{{vault_password}}"]:
-+        raise ValueError("vault_placeholders_required")
-+    if fragment_name == "coupangeats_01_open_login" and observed_steps[0].get("url") != COUPANGEATS_LOGIN_URL:
-+        raise ValueError("exact_login_url_required")
-+    if fragment_name == "coupangeats_01_open_login" and observed_steps[0].get("risk", "READ") != "READ":
-+        raise ValueError("open_login_read_risk_required")
-+    if fragment_name != "coupangeats_03_login_confirm" and evidence.get("url") != COUPANGEATS_LOGIN_URL:
-+        raise ValueError("exact_login_url_required")
-+    if fragment_name == "coupangeats_03_login_confirm" and evidence.get("url") == COUPANGEATS_LOGIN_URL:
-+        raise ValueError("authenticated_screen_url_required")
-+    if any(step.get("value") is not None for step in observed_verify):
-+        raise ValueError("verify_must_not_contain_secret_value")
-+    safe_evidence = {key: evidence[key] for key in
-+                     ("screenshot_url", "snapshot_ref", "url", "captured_at", "outcome", "run_id", "artifact_id")
-+                     if key in evidence}
-+    safe_evidence["screen_verified"] = True
-+    safe_evidence["blocked"] = False
-+    recipe = {
-+        "name": fragment["name"], "domain": fragment["domain"],
-+        "version": fragment["version"],
-+        "inputs": ([{"name": "vault_username", "secret": True},
-+                    {"name": "vault_password", "secret": True}]
-+                   if fragment_name == "coupangeats_02_vault_fill" else
-+                   [{"name": "vault_username", "secret": True},
-+                    {"name": "vault_store", "secret": True}]
-+                   if fragment_name == "coupangeats_03_login_confirm" else []),
-+        "steps": [{**step, **({"risk": "WRITE_EXTERNAL"} if fragment_name == "coupangeats_03_login_confirm" else {})}
-+                  for step in observed_steps], "verify": observed_verify,
-+        "metadata": {
-+            "lane": fragment["lane"], "work_key": fragment["work_key"],
-+            "starts_when": fragment["starts_when"],
-+            "succeeds_when": fragment["succeeds_when"],
-+            "predecessor": fragment["predecessor"],
-+            "recover_at": fragment["recover_at"],
-+            "credential_scope": fragment["credential_scope"],
-+            "source_chat_session_id": trusted_evidence["chat_session_id"],
-+            "screen_e2e": safe_evidence,
-+        },
-+    }
-+    return WorkRecipe.from_dict(recipe)
-+
-+
-+async def read_coupangeats_login_drafts(*, tenant_id: str) -> dict[str, Any]:
-+    """Read the tenant's approved v2 and return a secret-free readiness plan."""
-+    async with get_pool().acquire() as conn:
-+        row = await conn.fetchrow(
-+            """
-+            SELECT r.name, r.domain, r.version, r.enabled, r.max_risk, r.spec,
-+                   a.status AS approval_status
-+              FROM work_recipes r
-+              JOIN work_recipe_registration_requests a
-+                ON a.recipe_id = r.id AND a.tenant_id = r.tenant_id
-+             WHERE r.tenant_id = $1 AND r.name = $2
-+               AND r.domain = $3 AND r.version = 2
-+             LIMIT 1
-+            """,
-+            uuid.UUID(str(tenant_id)),
-+            "coupangeats_01_open_login",
-+            "store.coupangeats.com",
++    timeout_seconds: float,
++    target_id: str = "",
++    target_idx: int = 0,
++) -> Dict[str, Any]:
++    # _send_cdp_command_unlocked calls _send_cdp/_request_cdp directly; it does
++    # not call this wrapper. Reclaim uses those same low-level calls under this
++    # lock, so its last check and close cannot race a normal command on the port.
++    async with _owned_tab_lock(port):
++        result = await _send_cdp_command_unlocked(
++            port, method, params, timeout_seconds=timeout_seconds,
++            target_id=target_id, target_idx=target_idx,
 +        )
-+    saved = dict(row) if row else None
-+    evidence = _json_dict(_json_dict(_json_dict(saved.get("spec")).get("metadata")).get("screen_e2e")) if saved else {}
-+    trusted = await lookup_coupangeats_run_evidence(
-+        tenant_id=tenant_id, chat_session_id=None, run_id=evidence.get("run_id"),
-+        artifact_id=evidence.get("artifact_id"),
-+    ) if evidence.get("run_id") or evidence.get("artifact_id") else None
-+    return prepare_coupangeats_login_drafts(saved, trusted_evidence=trusted)
-+
-+
-+def evidence_matches_run(
-+    claimed: dict[str, Any], trusted: dict[str, Any] | None, *, fragment_name: str
-+) -> bool:
-+    """Only a completed, session-bound audit artifact can support a draft."""
-+    if (not trusted or trusted.get("status") != "success"
-+            or trusted.get("route") != "pc_agent" or trusted.get("verified") is not True
-+            or trusted.get("recipe_name") != fragment_name):
-+        return False
-+    ref = claimed.get("screenshot_url") or claimed.get("snapshot_ref")
-+    return bool(ref and (
-+                    (claimed.get("run_id") and claimed.get("run_id") == trusted.get("run_id"))
-+                    or (claimed.get("artifact_id") and claimed.get("artifact_id") == trusted.get("artifact_id")))
-+                and ref == trusted.get("screenshot_url")
-+                and claimed.get("url") == trusted.get("url")
-+                and trusted.get("chat_session_id"))
-+
-+
-+async def lookup_coupangeats_run_evidence(
-+    *, tenant_id: str, chat_session_id: str | None, run_id: Any = None,
-+    artifact_id: Any = None,
-+) -> dict[str, Any] | None:
-+    """Read the server's append-only successful verify record; never trust a supplied flag."""
-+    if artifact_id:
-+        try:
-+            artifact_uuid = uuid.UUID(str(artifact_id))
-+        except (TypeError, ValueError):
-+            return None
-+        async with get_pool().acquire() as conn:
-+            row = await conn.fetchrow(
-+                """SELECT id, source_url, storage_uri, metadata FROM browser_artifacts
-+                    WHERE id=$1 AND tenant_id=$2 AND artifact_type='coupangeats_screen_e2e'""",
-+                artifact_uuid, uuid.UUID(str(tenant_id)),
-+            )
-+        if not row:
-+            return None
-+        metadata = _json_dict(row["metadata"])
-+        if chat_session_id and metadata.get("chat_session_id") != chat_session_id:
-+            return None
-+        return {
-+            "artifact_id": str(row["id"]), "status": "success",
-+            "verified": metadata.get("verified") is True,
-+            "recipe_name": metadata.get("fragment_name"),
-+            "chat_session_id": metadata.get("chat_session_id"),
-+            "route": metadata.get("route"), "url": row["source_url"],
-+            "screenshot_url": row["storage_uri"],
-+        }
-+    try:
-+        run_uuid = uuid.UUID(str(run_id))
-+    except (TypeError, ValueError):
-+        return None
-+    async with get_pool().acquire() as conn:
-+        row = await conn.fetchrow(
-+            """SELECT r.id, r.status, r.recipe_name, r.triggered_by, s.output, s.screenshot_path
-+                 FROM recipe_runs r JOIN recipe_run_steps s ON s.run_id = r.id
-+                WHERE r.id=$1 AND r.tenant_id=$2 AND r.domain=$3
-+                  AND r.status='success' AND s.phase='verify' AND s.status='success'
-+                  AND s.output->'output'->>'verified'='true'
-+                  AND ($4::text IS NULL OR r.triggered_by=$4)
-+                ORDER BY s.seq DESC LIMIT 1""",
-+            run_uuid, uuid.UUID(str(tenant_id)), "store.coupangeats.com",
-+            f"chat:{chat_session_id}" if chat_session_id else None,
-+        )
-+    if not row:
-+        return None
-+    output = _json_dict(row["output"])
-+    audit = _json_dict(output.get("evidence"))
-+    return {
-+        "run_id": str(row["id"]), "status": str(row["status"]),
-+        "recipe_name": str(row["recipe_name"]),
-+        "verified": _json_dict(output.get("output")).get("verified") is True,
-+        "chat_session_id": str(row["triggered_by"] or "").removeprefix("chat:"),
-+        "route": output.get("route"), "url": audit.get("url"),
-+        "screenshot_url": row["screenshot_path"],
-+    }
-+
-+
-+async def attest_coupangeats_live_screen(
-+    *, tenant_id: str, chat_session_id: str, fragment_name: str,
-+    browser_session_id: str, browser_work_key: str,
-+    observed_verify: list[dict[str, Any]], values: dict[str, Any],
-+) -> tuple[dict[str, Any], dict[str, Any]]:
-+    """Verify the designated PC page and persist a server-owned screen artifact.
-+
-+    This reads the already completed screen. It never submits a login or stores
-+    a password, cookie, token, or field value.
-+    """
-+    from app.browser_bridge.service import get_browser_bridge_service
-+    from app.services.work_recipe.executor import BrowserRecipeExecutor
-+    from app.services.work_recipe.orchestrator import CoupangVerificationExecutor
-+    from app.services.work_recipe.schema import WorkRecipe
-+
-+    fragment = next((item for item in COUPANGEATS_LOGIN_FRAGMENTS
-+                     if item["name"] == fragment_name), None)
-+    session = get_browser_bridge_service().sessions.get(browser_session_id)
-+    if (fragment is None or session is None or session.work_key != fragment["work_key"]
-+            or browser_work_key != fragment["work_key"]
-+            or str(session.endpoint.kind.value) != "local_agent"):
-+        raise ValueError("coupangeats_pc_session_required")
-+    recipe = WorkRecipe.from_dict({
-+        "name": fragment_name, "domain": fragment["domain"],
-+        "metadata": {"credential_scope": fragment["credential_scope"]},
-+        "steps": [{"action": "snapshot", "selector": "body"}],
-+        "verify": observed_verify,
-+    })
-+    executor = BrowserRecipeExecutor(
-+        browser_session_id=browser_session_id, browser_work_key=browser_work_key
-+    )
-+    page = await executor._get_page({
-+        "url": COUPANGEATS_LOGIN_URL,
-+        "context": {"smart_browser": {"server_access_blocked": True}},
-+    })
-+    # PC Agent click() does not refresh the facade's cached URL.
-+    current_url = str(await page.evaluate("window.location.href") or "")
-+    page.url = current_url
-+    parsed = urlparse(current_url)
-+    if (parsed.scheme != "https" or parsed.hostname != fragment["domain"]
-+            or (fragment_name != "coupangeats_03_login_confirm"
-+                and current_url != COUPANGEATS_LOGIN_URL)
-+            or (fragment_name == "coupangeats_03_login_confirm"
-+                and current_url == COUPANGEATS_LOGIN_URL)):
-+        raise ValueError("coupangeats_screen_url_mismatch")
-+    verifier = CoupangVerificationExecutor(executor, recipe, values)
-+    last: dict[str, Any] = {}
-+    for step in recipe.verify:
-+        last = await verifier({
-+            **step.to_dict(), "phase": "verify",
-+            "context": {"smart_browser": {"server_access_blocked": True}},
-+        })
-+        if last.get("ok") is not True:
-+            raise ValueError("coupangeats_live_verify_failed")
-+    screenshot = _json_dict(_json_dict(last.get("evidence")).get("screenshot"))
-+    screenshot_url = str(screenshot.get("url") or "")
-+    digest = str(screenshot.get("sha256") or "")
-+    if not screenshot_url or not digest:
-+        raise ValueError("coupangeats_screen_artifact_required")
-+    metadata = {
-+        "fragment_name": fragment_name, "chat_session_id": chat_session_id,
-+        "browser_session_id": browser_session_id, "work_key": browser_work_key,
-+        "route": "pc_agent", "verified": True,
-+    }
-+    async with get_pool().acquire() as conn:
-+        row = await conn.fetchrow(
-+            """INSERT INTO browser_artifacts
-+                (tenant_id, artifact_type, source_url, content_hash, storage_uri, metadata)
-+                VALUES ($1, 'coupangeats_screen_e2e', $2, $3, $4, $5::jsonb)
-+                ON CONFLICT (tenant_id, content_hash) DO NOTHING
-+                RETURNING id""",
-+            uuid.UUID(str(tenant_id)), current_url, digest, screenshot_url,
-+            json.dumps(metadata),
-+        )
-+        if row is None:
-+            previous = await conn.fetchrow(
-+                """SELECT id, source_url, storage_uri, metadata FROM browser_artifacts
-+                    WHERE tenant_id=$1 AND content_hash=$2
-+                      AND artifact_type='coupangeats_screen_e2e'""",
-+                uuid.UUID(str(tenant_id)), digest,
-+            )
-+            if (previous is None or _json_dict(previous["metadata"]) != metadata
-+                    or previous["source_url"] != current_url):
-+                raise ValueError("coupangeats_screen_artifact_already_recorded")
-+            row = previous
-+            screenshot_url = str(previous["storage_uri"])
-+    evidence = {
-+        "screen_verified": True, "artifact_id": str(row["id"]),
-+        "screenshot_url": screenshot_url, "url": current_url,
-+        "outcome": fragment["succeeds_when"], "blocked": False,
-+    }
-+    return evidence, {**metadata, "artifact_id": str(row["id"]),
-+                      "status": "success", "recipe_name": fragment_name,
-+                      "chat_session_id": chat_session_id, "url": current_url,
-+                      "screenshot_url": screenshot_url}
-+
-+
- RECIPE_HASH_FIELDS = (
-     "recipe_id",
-     "version",
-diff --git a/app/services/tool_executor.py b/app/services/tool_executor.py
-index a97b2941..a58b523b 100644
---- a/app/services/tool_executor.py
-+++ b/app/services/tool_executor.py
-@@ -5504,6 +5504,68 @@ class ToolExecutor:
- 
-         if action == "register_e2e":
-             evidence = inp.get("e2e_evidence")
-+            name = str(inp.get("recipe_name") or "").strip()
-+            domain = str(inp.get("domain") or "").strip()
-+            steps = inp.get("steps")
-+            if not name or not domain or not isinstance(steps, list) or not steps:
-+                return {"error": "recipe_name_domain_and_steps_required"}
-+
-+            from app.services.browser_recipe_registry import (
-+                COUPANGEATS_LOGIN_FRAGMENTS, attest_coupangeats_live_screen,
-+                build_coupangeats_registration_candidate,
-+            )
-+            if name in {part["name"] for part in COUPANGEATS_LOGIN_FRAGMENTS}:
-+                try:
-+                    if domain != "store.coupangeats.com":
-+                        raise ValueError("coupangeats_domain_mismatch")
-+                    if any(not isinstance(step, dict) for step in steps):
-+                        raise ValueError("invalid_recipe_step")
-+                    observed_steps = [
-+                        {key: value for key, value in step.items() if key != "phase"}
-+                        for step in steps if step.get("phase") != "verify"
-+                    ]
-+                    observed_verify = inp.get("verify") or [
-+                        {key: value for key, value in step.items() if key != "phase"}
-+                        for step in steps if step.get("phase") == "verify"
-+                    ]
-+                    from app.services.work_recipe.schema import WorkRecipe
-+                    from app.services.work_recipe.orchestrator import _scoped_inputs
-+
-+                    secret_names = (
-+                        ["vault_username", "vault_password"] if name == "coupangeats_02_vault_fill"
-+                        else ["vault_username", "vault_store"] if name == "coupangeats_03_login_confirm"
-+                        else []
++        target = result.get("_target") if isinstance(result, dict) else None
++        if isinstance(target, dict):
++            resolved_id = str(target.get("id") or target.get("targetId") or "")
++            if resolved_id:
++                from . import browser_reclaim
++                browser_reclaim.mark_observed(resolved_id)
++                session = CDPSessionManager.get_by_port(port)
++                if session:
++                    CDPSessionManager.mark_healthy(
++                        session.work_key, target_id=resolved_id,
++                        target_url=str(target.get("url") or ""),
 +                    )
-+                    scope_recipe = WorkRecipe.from_dict({
-+                        "name": name, "domain": domain,
-+                        "inputs": [{"name": item, "secret": True} for item in secret_names],
-+                        "steps": [{"action": "snapshot", "selector": "body"}],
-+                    })
-+                    values = await _scoped_inputs(scope_recipe, inp.get("inputs") or {})
-+                    if any(not values.get(item) for item in secret_names):
-+                        raise ValueError("coupangeats_scoped_vault_inputs_required")
-+                    evidence, trusted = await attest_coupangeats_live_screen(
-+                        tenant_id=tenant_id, chat_session_id=session_id,
-+                        fragment_name=name,
-+                        browser_session_id=str(inp.get("browser_session_id") or ""),
-+                        browser_work_key=str(inp.get("browser_work_key") or ""),
-+                        observed_verify=observed_verify, values=values,
-+                    )
-+                    recipe = build_coupangeats_registration_candidate(
-+                        fragment_name=name, observed_steps=observed_steps,
-+                        observed_verify=observed_verify,
-+                        screen_evidence=evidence, trusted_evidence=trusted,
-+                    )
-+                except ValueError as exc:
-+                    return {"error": str(exc)}
-+                from app.services.work_recipe.registration import request_registration
-+
-+                registration = await request_registration(
-+                    recipe, tenant_id=tenant_id, requested_by=f"chat:{session_id}"
-+                )
-+                return {"status": "approval_required", "session_id": session_id,
-+                        "registration": registration}
-+
-             if not isinstance(evidence, dict) or evidence.get("screen_verified") is not True:
-                 return {"error": "screen_e2e_evidence_required"}
-             artifact_ref = str(
-@@ -5511,11 +5573,6 @@ class ToolExecutor:
-             ).strip()
-             if not artifact_ref:
-                 return {"error": "screenshot_or_snapshot_reference_required"}
--            name = str(inp.get("recipe_name") or "").strip()
--            domain = str(inp.get("domain") or "").strip()
--            steps = inp.get("steps")
--            if not name or not domain or not isinstance(steps, list) or not steps:
--                return {"error": "recipe_name_domain_and_steps_required"}
- 
-             # Persist references only. Raw DOM/OCR and arbitrary fields can contain secrets.
-             safe_evidence = {
-diff --git a/app/services/work_recipe/orchestrator.py b/app/services/work_recipe/orchestrator.py
-index cce00a3f..d68932c8 100644
---- a/app/services/work_recipe/orchestrator.py
-+++ b/app/services/work_recipe/orchestrator.py
-@@ -1,6 +1,7 @@
- """자연어 지시를 저장된 Work Recipe 실행으로 연결한다."""
- from __future__ import annotations
- 
-+import hmac
- import re
- from collections.abc import Mapping
- from typing import Any
-@@ -12,6 +13,10 @@ from app.services.work_recipe.executor import BrowserRecipeExecutor
- from app.services.work_recipe.player import RunResult, play_recipe
- from app.services.work_recipe.schema import WorkRecipe, parse_recipe
- from app.services.work_recipe.store import list_recipes, normalize_domain, row_to_recipe
-+from app.services.browser_recipe_registry import (
-+    COUPANGEATS_LOGIN_FRAGMENTS, COUPANGEATS_LOGIN_URL,
-+    matches_coupangeats_vault_identity,
-+)
- 
- _URL_HOST = re.compile(r"https?://([^/\s]+)", re.IGNORECASE)
- 
-@@ -83,6 +88,18 @@ async def run_directive(
-     recipe = await resolve_recipe(directive_text, tenant_id)
-     if recipe is None:
-         return None
-+    coupang = recipe.name in {part["name"] for part in COUPANGEATS_LOGIN_FRAGMENTS}
-+    if coupang:
-+        validate_coupangeats_recipe(recipe)
-+        if (not browser_session_id or browser_work_key != recipe.metadata["work_key"]
-+                or triggered_by == f"chat:{recipe.metadata.get('source_chat_session_id')}"):
-+            raise ValueError("coupangeats_pc_session_or_replay_boundary_required")
-+        from app.browser_bridge.service import get_browser_bridge_service
-+
-+        session = get_browser_bridge_service().sessions.get(browser_session_id)
-+        if (session is None or session.work_key != browser_work_key
-+                or str(session.endpoint.kind.value) != "local_agent"):
-+            raise ValueError("coupangeats_pc_lane_required")
-     resolved_inputs = await _scoped_inputs(recipe, intent_inputs)
-     recorder = GuardedRunRecorder(
-         domain=recipe.domain,
-@@ -95,9 +112,10 @@ async def run_directive(
-         browser_session_id=browser_session_id,
-         browser_work_key=browser_work_key,
-     )
-+    step_executor = CoupangVerificationExecutor(executor, recipe, resolved_inputs) if coupang else executor
-     return await play_recipe(
-         recipe,
--        executor,
-+        step_executor,
-         resolved_inputs,
-         recorder=recorder,
-         max_risk="IRREVERSIBLE",
-@@ -111,13 +129,133 @@ async def run_directive(
-                 "requires_local_security_programs": bool(recipe.metadata.get("requires_local_security_programs")),
-                 # 봇/WAF 가 데이터센터 IP 를 막는 사이트는 처음부터 PC 레인으로 간다.
-                 # native_auth_required 를 대신 켜서 우회하지 않는다.
--                "server_access_blocked": bool(recipe.metadata.get("server_access_blocked")),
-+                "server_access_blocked": coupang or bool(recipe.metadata.get("server_access_blocked")),
-                 "requires_residential_ip": bool(recipe.metadata.get("requires_residential_ip")),
-             },
-         },
-     )
- 
- 
-+def validate_coupangeats_recipe(recipe: WorkRecipe) -> None:
-+    """Apply the same immutable contract at registration and replay."""
-+    fragment = next((part for part in COUPANGEATS_LOGIN_FRAGMENTS if part["name"] == recipe.name), None)
-+    if fragment is None:
-+        return
-+    evidence = recipe.metadata.get("screen_e2e") or {}
-+    if (recipe.domain != fragment["domain"] or recipe.metadata.get("lane") != "pc_agent"
-+            or recipe.metadata.get("work_key") != fragment["work_key"]
-+            or recipe.metadata.get("starts_when") != fragment["starts_when"]
-+            or recipe.metadata.get("succeeds_when") != fragment["succeeds_when"]
-+            or not recipe.metadata.get("source_chat_session_id")
-+            or not recipe.steps or not recipe.verify
-+            or (recipe.name != "coupangeats_03_login_confirm"
-+                and evidence.get("url") != COUPANGEATS_LOGIN_URL)
-+            or (recipe.name == "coupangeats_03_login_confirm"
-+                and evidence.get("url") == COUPANGEATS_LOGIN_URL)
-+            or not evidence.get("screenshot_url")
-+            or not (evidence.get("run_id") or evidence.get("artifact_id"))
-+            or evidence.get("outcome") != fragment["succeeds_when"]):
-+        raise ValueError("coupangeats_recipe_contract_mismatch")
-+    expected = {
-+        "coupangeats_01_open_login": ["login_form_visible"],
-+        "coupangeats_02_vault_fill": ["username_matches_vault", "password_filled"],
-+        "coupangeats_03_login_confirm": ["authenticated_username_matches_vault", "authenticated_store_matches_vault"],
-+    }[recipe.name]
-+    if [step.extra.get("assertion") for step in recipe.verify] != expected:
-+        raise ValueError("coupangeats_verify_contract_mismatch")
-+    if recipe.name == "coupangeats_01_open_login" and recipe.steps[0].url != COUPANGEATS_LOGIN_URL:
-+        raise ValueError("coupangeats_login_url_mismatch")
-+    if recipe.name == "coupangeats_03_login_confirm" and recipe.steps[0].risk != "WRITE_EXTERNAL":
-+        raise ValueError("coupangeats_submit_approval_required")
++        return result
 +
 +
-+class CoupangVerificationExecutor:
-+    """Evaluate live page state while keeping passwords out of results and audit logs."""
-+
-+    def __init__(self, executor: BrowserRecipeExecutor, recipe: WorkRecipe, values: Mapping[str, Any]):
-+        self.executor = executor
-+        self.recipe = recipe
-+        self.values = values
-+        self._screen_username = ""
-+
-+    async def __call__(self, payload: dict[str, Any]) -> dict[str, Any]:
-+        if self.executor._route(payload)["runtime"] != "pc_agent":
-+            return {"ok": False, "error": "pc_agent_lane_required", "route": "browser_agent"}
-+        if payload.get("phase") != "verify":
-+            result = await self.executor(payload)
-+            if result.get("ok") and result.get("route") != "pc_agent":
-+                return {"ok": False, "error": "pc_agent_lane_required", "route": result.get("route")}
-+            return result
-+        page = self.executor._page
-+        if page is None:
-+            return {"ok": False, "error": "missing_pc_page", "route": "pc_agent"}
-+        assertion = payload.get("assertion")
-+        selector = str(payload.get("selector") or "")
-+        try:
-+            # The PC Agent facade implements evaluate(), but its locator only
-+            # supports click/fill/aria_snapshot. Return predicates, never field
-+            # contents: password and identity cannot enter the audit payload.
-+            screen = await page.evaluate("""(args) => {
-+                const el = document.querySelector(args.selector);
-+                const visible = !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-+                const value = el ? String(el.value ?? el.textContent ?? '').trim() : '';
-+                const body = String(document.body?.innerText ?? '').toLowerCase().slice(0, 4000);
-+                return {url: window.location.href, visible,
-+                    passwordType: el?.getAttribute('type')?.toLowerCase() === 'password',
-+                    filled: value.length > 0,
-+                    usernameMatches: !!args.username && value === args.username,
-+                    storeMatches: !!args.store && value === args.store,
-+                    screenText: args.assertion === 'authenticated_username_matches_vault' ||
-+                        args.assertion === 'authenticated_store_matches_vault' ? value : '',
-+                    blocked: ['access denied', 'captcha', '로그인 실패', '비밀번호가 틀']
-+                        .some(marker => body.includes(marker))};
-+            }""", {
-+                "selector": selector,
-+                "assertion": assertion,
-+                "username": str(self.values.get("vault_username") or ""),
-+                "store": str(self.values.get("vault_store") or ""),
-+            })
-+            if not isinstance(screen, dict):
-+                raise ValueError("invalid_pc_screen_state")
-+            current_url = str(screen.get("url") or "")
-+            page.url = current_url  # click() leaves the facade's cached URL stale.
-+            designated = (self.recipe.metadata.get("credential_scope") == "yeoljeong-coupangeats"
-+                          and hmac.compare_digest(str(self.values.get("vault_username") or ""), "mimi77"))
-+            if assertion == "login_form_visible":
-+                valid = bool(screen.get("visible") and screen.get("passwordType")
-+                             and current_url == COUPANGEATS_LOGIN_URL)
-+            elif assertion == "username_matches_vault":
-+                valid = bool(designated and screen.get("visible") and screen.get("usernameMatches"))
-+            elif assertion == "password_filled":
-+                valid = bool(screen.get("visible") and screen.get("passwordType") and screen.get("filled"))
-+            elif assertion == "authenticated_username_matches_vault":
-+                valid = bool(designated and screen.get("visible") and screen.get("usernameMatches")
-+                             and "/merchant/login" not in current_url)
-+                self._screen_username = str(screen.get("screenText") or "") if valid else ""
-+            elif assertion == "authenticated_store_matches_vault":
-+                valid = bool(screen.get("visible") and matches_coupangeats_vault_identity(
-+                    vault_scope=str(self.recipe.metadata.get("credential_scope") or ""),
-+                    vault_username=str(self.values.get("vault_username") or ""),
-+                    vault_store=str(self.values.get("vault_store") or ""),
-+                    screen_username=self._screen_username,
-+                    screen_store=str(screen.get("screenText") or ""))
-+                             and "/merchant/login" not in current_url)
-+            else:
-+                valid = False
-+            valid = valid and not screen.get("blocked")
-+        except Exception:
-+            valid = False
-+        if not valid:
-+            return {"ok": False, "error": "coupangeats_verification_failed", "route": "pc_agent"}
-+        evidence = await self.executor._collect_evidence(page)
-+        screenshot = evidence.get("screenshot") or {}
-+        if screenshot.get("status") != "captured" or not screenshot.get("url"):
-+            return {"ok": False, "error": "coupangeats_screen_artifact_required", "route": "pc_agent"}
-+        return {"ok": True, "route": "pc_agent",
-+                "output": {"verified": True, "screenshot_path": screenshot["url"]},
-+                "evidence": evidence}
-+
-+
- async def _scoped_inputs(
-     recipe: WorkRecipe, inputs: Mapping[str, Any]
- ) -> dict[str, Any]:
-diff --git a/app/services/work_recipe/registration.py b/app/services/work_recipe/registration.py
-index 41b90aa6..81ff6204 100644
---- a/app/services/work_recipe/registration.py
-+++ b/app/services/work_recipe/registration.py
-@@ -78,9 +78,12 @@ async def request_registration(
-     requested_by: str = "",
- ) -> dict[str, Any]:
-     """Persist a dry-run draft. It is not visible to the recipe player yet."""
-+    await _validate_coupangeats_registration(recipe, tenant_id)
-     tenant = _tenant_uuid(tenant_id)
-     domain = store.normalize_domain(recipe.domain)
-     proposed_version = await store.next_version(name=recipe.name, domain=domain, tenant_id=tenant)
-+    if recipe.name in {"coupangeats_01_open_login", "coupangeats_02_vault_fill"}:
-+        proposed_version = max(proposed_version, 2)
-     spec = recipe.to_dict()
-     spec["version"] = proposed_version
-     canonical = json.dumps(spec, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-@@ -185,6 +188,7 @@ async def decide_registration(
- 
-         spec = _json_object(row["spec"])
-         recipe = parse_recipe(spec)
-+        await _validate_coupangeats_registration(recipe, tenant)
-         lock_key = f"{tenant}:{row['domain']}:{row['name']}"
-         await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lock_key)
-         version = int(
-@@ -198,6 +202,8 @@ async def decide_registration(
-                 str(row["name"]),
-             )
-         )
-+        if recipe.name in {"coupangeats_01_open_login", "coupangeats_02_vault_fill"}:
-+            version = max(version, 2)
-         stored_spec = recipe.to_dict()
-         stored_spec["version"] = version
-         recipe_row = await conn.fetchrow(
-@@ -255,6 +261,31 @@ async def decide_registration(
-     return result
- 
- 
-+async def _validate_coupangeats_registration(recipe: WorkRecipe, tenant_id: Any) -> None:
-+    from app.services.browser_recipe_registry import (
-+        COUPANGEATS_LOGIN_FRAGMENTS, evidence_matches_run,
-+        lookup_coupangeats_run_evidence,
-+    )
-+    if recipe.name not in {part["name"] for part in COUPANGEATS_LOGIN_FRAGMENTS}:
-+        return
-+    from app.services.work_recipe.orchestrator import validate_coupangeats_recipe
-+
-+    validate_coupangeats_recipe(recipe)
-+    evidence = recipe.metadata["screen_e2e"]
-+    source_session = str(recipe.metadata.get("source_chat_session_id") or "")
-+    if not source_session:
-+        raise RegistrationError("coupangeats_recording_session_required")
-+    trusted = await lookup_coupangeats_run_evidence(
-+        tenant_id=str(tenant_id),
-+        chat_session_id=source_session,
-+        run_id=evidence.get("run_id"),
-+        artifact_id=evidence.get("artifact_id"),
-+    )
-+    if (not evidence_matches_run(evidence, trusted, fragment_name=recipe.name)
-+            or trusted["chat_session_id"] != source_session):
-+        raise RegistrationError("coupangeats_untrusted_screen_evidence")
-+
-+
- def _row(row: Any) -> dict[str, Any]:
-     data = dict(row)
-     for key in ("id", "tenant_id", "recipe_id"):
-diff --git a/tests/unit/test_coupangeats_recipe_drafts.py b/tests/unit/test_coupangeats_recipe_drafts.py
+ async def _collect_page_diagnostics(
+     port: int,
+     *,
+diff --git a/pc_agent/commands/browser_reclaim.py b/pc_agent/commands/browser_reclaim.py
 new file mode 100644
-index 00000000..e8418754
+index 00000000..c8eb00d3
 --- /dev/null
-+++ b/tests/unit/test_coupangeats_recipe_drafts.py
-@@ -0,0 +1,294 @@
-+"""Unit contracts only: synthetic records here are never operational evidence."""
++++ b/pc_agent/commands/browser_reclaim.py
+@@ -0,0 +1,435 @@
++"""Opt-in, fail-closed reclamation of tabs created by this agent.
++
++The in-memory ledger deliberately does not survive an agent restart: a lost
++creation proof must never be reconstructed from a CDP /json listing.
++"""
++from __future__ import annotations
++
 +import asyncio
++import json
++import logging
++import os
++import threading
++import time
++import uuid
++from dataclasses import dataclass
++from typing import Any
++from urllib.parse import urlparse
++
++from . import browser_auto as cdp
++
++try:
++    import psutil
++except ImportError:  # no process/port proof means no ownership
++    psutil = None
++
++_OWNED: dict[str, OwnedTab] = {}
++_USED: set[str] = set()
++_OWNED_LOCK = threading.Lock()
++_MAX_PER_PASS = 2
++_MAX_OWNED = 64
++_SWEEP_CURSOR = 0
++_SWEEP_WINDOW = 0
++_SWEEP_COUNT = 0
++_CREATE_ATTEMPTS = 0
++_QUARANTINED: dict[tuple[int, str], str] = {}
++logger = logging.getLogger(__name__)
++_ACTIVITY_JS = """(() => ({
++  visible: document.visibilityState === 'visible',
++  focused: document.hasFocus(),
++  editing: !!document.querySelector('input:focus,textarea:focus,[contenteditable]:focus') ||
++    [...document.querySelectorAll('input,textarea,[contenteditable]')].some(e =>
++      !['hidden','submit','button','checkbox','radio'].includes(e.type) &&
++      !!(e.value || e.textContent || '').trim()),
++  downloading: !!document.querySelector('a[download]:focus'),
++  url: location.href
++}))()"""
++
++
++@dataclass(frozen=True)
++class OwnedTab:
++    token: str
++    epoch: str
++    work_key: str
++    port: int
++    pid: int
++    process_started: float
++    browser_ws: str
++    target_id: str
++    target_ws: str
++    lease_until: float
++    created_at: float
++    session_generation: str = ""
++
++
++def mark_observed(target_id: str) -> None:
++    """An interactive binding permanently excludes this target from sweeping."""
++    with _OWNED_LOCK:
++        if any(record.target_id == target_id for record in _OWNED.values()):
++            _USED.add(target_id)
++
++
++def _forget(record: OwnedTab) -> None:
++    global _CREATE_ATTEMPTS
++    with _OWNED_LOCK:
++        if _OWNED.get(record.token) is record:
++            _OWNED.pop(record.token)
++            _CREATE_ATTEMPTS = max(0, _CREATE_ATTEMPTS - 1)
++            if not any(item.target_id == record.target_id for item in _OWNED.values()):
++                _USED.discard(record.target_id)
++
++
++async def _prune_closed_or_changed(port: int) -> None:
++    """Discard only records whose loss is confirmed by this browser's CDP inventory.
++
++    The caller holds the port lock. An uncertain or malformed response preserves
++    the ledger, and the hard cap then rejects further creations.
++    """
++    global _CREATE_ATTEMPTS
++    records = [record for record in _OWNED.values() if record.port == port]
++    quarantined = [key for key in _QUARANTINED if key[0] == port]
++    if not records and not quarantined:
++        return
++    version = await cdp._probe_cdp_version(port)
++    browser_ws = str((version or {}).get("webSocketDebuggerUrl") or "")
++    if not _local_ws(browser_ws, port):
++        return
++    try:
++        response = await cdp._send_cdp(browser_ws, "Target.getTargets", {}, timeout_seconds=5)
++    except Exception:  # noqa: BLE001 - uncertain inventory must not discard proof
++        return
++    targets = response.get("targetInfos") if isinstance(response, dict) else None
++    if not isinstance(targets, list) or not all(isinstance(t, dict) and isinstance(t.get("targetId"), str) for t in targets):
++        return
++    try:
++        pages = await cdp._list_cdp_targets(port)
++    except Exception:  # noqa: BLE001 - a failed listing is not proof of change
++        return
++    if not isinstance(pages, list) or not all(isinstance(page, dict) for page in pages):
++        return
++    by_id = {target["targetId"]: target for target in targets}
++    pages_by_id = {page.get("id"): page for page in pages}
++    for key in quarantined:
++        if key[1] not in by_id and key[1] not in pages_by_id:
++            with _OWNED_LOCK:
++                if key in _QUARANTINED:
++                    _QUARANTINED.pop(key)
++                    _CREATE_ATTEMPTS = max(0, _CREATE_ATTEMPTS - 1)
++    for record in records:
++        if (_OWNED.get(record.token) is record and record.browser_ws == browser_ws
++                and _process_proof(record.pid, port) == record.process_started):
++            target = by_id.get(record.target_id)
++            page = pages_by_id.get(record.target_id)
++            if ((target is None and page is None)
++                    or (target is not None and target.get("type") != "page")
++                    or (target is not None and page is not None
++                        and page.get("webSocketDebuggerUrl") != record.target_ws)):
++                _forget(record)
++
++
++def _process_proof(pid: int, port: int) -> float | None:
++    """Verify the process behind the listening port and return its start time."""
++    if psutil is None or pid <= 0:
++        return None
++    try:
++        proc = psutil.Process(pid)
++        # psutil < 6 uses connections(); both APIs expose the same listener data.
++        connection_list = getattr(proc, "net_connections", None) or proc.connections
++        listeners = connection_list(kind="tcp")
++        if not any(
++            conn.status == psutil.CONN_LISTEN
++            and conn.laddr.port == port
++            and conn.laddr.ip in {"127.0.0.1", "::1"}
++            for conn in listeners
++        ):
++            return None
++        return proc.create_time()
++    except (psutil.Error, OSError, AttributeError):
++        return None
++
++
++def _local_ws(url: str, port: int) -> bool:
++    parsed = urlparse(url)
++    return parsed.scheme == "ws" and parsed.hostname in {"localhost", "127.0.0.1", "::1"} and parsed.port == port
++
++
++async def _target_info(browser_ws: str, target_id: str) -> dict[str, Any] | None:
++    try:
++        response = await cdp._send_cdp(browser_ws, "Target.getTargetInfo", {"targetId": target_id}, timeout_seconds=5)
++        info = response.get("targetInfo") if isinstance(response, dict) else None
++        return info if isinstance(info, dict) and info.get("targetId") == target_id else None
++    except Exception:  # noqa: BLE001 - an uncertain CDP result must block reclamation
++        return None
++
++
++async def _activity(target_ws: str) -> dict[str, Any] | None:
++    try:
++        response = await cdp._send_cdp(
++            target_ws, "Runtime.evaluate",
++            {"expression": _ACTIVITY_JS, "returnByValue": True, "awaitPromise": False},
++            timeout_seconds=5,
++        )
++        result = response.get("result") if isinstance(response, dict) else None
++        value = result.get("value") if isinstance(result, dict) else None
++        if not isinstance(result, dict) or result.get("exceptionDetails") or not isinstance(value, dict):
++            return None
++        if not all(type(value.get(key)) is bool for key in ("visible", "focused", "editing", "downloading")):
++            return None
++        return value if isinstance(value.get("url"), str) else None
++    except Exception:  # noqa: BLE001 - an uncertain activity result must block reclamation
++        return None
++
++
++def _activity_value(response: dict[str, Any]) -> dict[str, Any] | None:
++    if not isinstance(response, dict) or response.get("exceptionDetails"):
++        return None
++    result = response.get("result") if isinstance(response, dict) else None
++    value = result.get("value") if isinstance(result, dict) else None
++    if (not isinstance(value, dict) or not all(type(value.get(k)) is bool
++            for k in ("visible", "focused", "editing", "downloading"))
++            or not isinstance(value.get("url"), str)):
++        return None
++    return value
++
++
++def _ownership_current(record: OwnedTab) -> bool:
++    session = cdp.CDPSessionManager.get_session(record.work_key)
++    return bool(
++        _OWNED.get(record.token) is record and record.token and record.epoch
++        and session and record.session_generation
++        and session.generation == record.session_generation
++        and session.port == record.port and session.pid == record.pid
++        and time.monotonic() >= record.lease_until
++        and record.target_id not in _USED
++        and session.last_target_id != record.target_id
++        and session.last_heartbeat_at <= time.time() - 60
++        and cdp._is_managed_profile_dir(session.profile_dir)
++        and _process_proof(record.pid, record.port) == record.process_started
++    )
++
++
++async def _guarded_close(record: OwnedTab) -> str:
++    """Observe the target and close it over one attached browser connection.
++
++    CDP navigation/target events received before the close acknowledgement veto
++    confirmation. A separate client can still race the browser after the command
++    is sent; therefore this path is limited to a proven untouched blank tab.
++    """
++    import websockets
++
++    if not _ownership_current(record):
++        return "ownership_or_session_changed"
++    ws = await cdp._connect_cdp_ws(websockets, record.browser_ws, open_timeout=5)
++    session_id = ""
++    changed = False
++
++    async def request(method: str, params: dict[str, Any] | None = None, *, target_session: bool = False) -> dict[str, Any]:
++        nonlocal changed
++        msg_id = cdp._next_id()
++        payload: dict[str, Any] = {"id": msg_id, "method": method, "params": params or {}}
++        if target_session:
++            payload["sessionId"] = session_id
++        await ws.send(json.dumps(payload))
++        while True:
++            message = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
++            event = message.get("method", "")
++            if event in {"Page.frameStartedNavigating", "Page.frameNavigated", "Page.navigatedWithinDocument",
++                         "Runtime.executionContextsCleared", "Target.detachedFromTarget", "Target.targetDestroyed"}:
++                changed = True
++            if event == "Target.targetInfoChanged":
++                info = (message.get("params") or {}).get("targetInfo") or {}
++                if info.get("targetId") == record.target_id and info.get("url") != "about:blank":
++                    changed = True
++            if message.get("id") == msg_id:
++                if "error" in message:
++                    raise RuntimeError(str(message["error"]))
++                return message.get("result") or {}
++
++    try:
++        attached = await request("Target.attachToTarget", {"targetId": record.target_id, "flatten": True})
++        session_id = str(attached.get("sessionId") or "")
++        if not session_id:
++            return "attach_failed"
++        await request("Page.enable", target_session=True)
++        await request("Runtime.enable", target_session=True)
++        changed = False  # discard only setup events, before the final activity sample
++        response = await request("Runtime.evaluate", {"expression": _ACTIVITY_JS, "returnByValue": True,
++                                                       "awaitPromise": False}, target_session=True)
++        activity = _activity_value(response)
++        if changed or activity is None or any(activity[k] for k in ("visible", "focused", "editing", "downloading")):
++            return "user_active_or_changed"
++        if activity["url"] != "about:blank":
++            return "non_blank_protected"
++        info = await request("Target.getTargetInfo", {"targetId": record.target_id})
++        target = info.get("targetInfo") or {}
++        if changed or target.get("targetId") != record.target_id or target.get("type") != "page" or target.get("url") != "about:blank":
++            return "target_changed"
++        if not _ownership_current(record):
++            return "ownership_or_session_changed"
++        closed = await request("Target.closeTarget", {"targetId": record.target_id})
++        if changed or not _ownership_current(record):
++            return "changed_during_close"
++        return "closed" if closed.get("success") is True else "close_not_confirmed"
++    finally:
++        if session_id:
++            try:
++                await request("Target.detachFromTarget", {"sessionId": session_id})
++            except Exception as exc:  # noqa: BLE001 - tab may already have closed
++                logger.debug("target detach failed after close check: %s", exc)
++        await ws.close()
++
++
++async def create(params: dict[str, Any]) -> dict[str, Any]:
++    """Create a new target and record ownership only after independent checks."""
++    global _CREATE_ATTEMPTS
++    try:
++        lease = max(60, min(int(params.get("lease_seconds") or 300), 3600))
++    except (TypeError, ValueError, OverflowError):
++        return {"status": "error", "data": {"reason": "invalid_lease"}}
++    work_key = str(params.get("work_key") or "")
++    session = cdp.CDPSessionManager.get_session(work_key)
++    if not session or session.pid <= 0 or not cdp._is_managed_profile_dir(session.profile_dir):
++        return {"status": "error", "data": {"reason": "managed_session_required"}}
++    port = session.port
++    async with cdp._owned_tab_lock(port):
++        await _prune_closed_or_changed(port)
++        if _CREATE_ATTEMPTS >= _MAX_OWNED:
++            return {"status": "error", "data": {"reason": "creation_attempt_capacity_reached"}}
++        if len(_OWNED) >= _MAX_OWNED:
++            return {"status": "error", "data": {"reason": "ownership_capacity_reached"}}
++        started = _process_proof(session.pid, port)
++        version = await cdp._probe_cdp_version(port)
++        browser_ws = str((version or {}).get("webSocketDebuggerUrl") or "")
++        if started is None or not _local_ws(browser_ws, port):
++            return {"status": "error", "data": {"reason": "process_port_unverified"}}
++        # Create through the verified browser endpoint. Never adopt an existing tab.
++        target_id = ""
++        try:
++            # A foreground target remains visible in headful Chrome and cannot
++            # pass the activity gate. Background creation keeps it eligible.
++            _CREATE_ATTEMPTS += 1
++            created = await cdp._send_cdp(browser_ws, "Target.createTarget", {"url": "about:blank", "background": True}, timeout_seconds=5)
++            target_id = str(created.get("targetId") or "")
++            pages = await cdp._list_cdp_targets(port)
++            page = next((p for p in pages if p.get("id") == target_id and p.get("type") == "page"), None)
++            info = await _target_info(browser_ws, target_id) if page else None
++            target_ws = str((page or {}).get("webSocketDebuggerUrl") or "")
++            if (not target_id or not info or info.get("type") != "page"
++                    or info.get("attached") is not False or page.get("url") != "about:blank"
++                    or not _local_ws(target_ws, port)
++                    or _process_proof(session.pid, port) != started
++                    or cdp.CDPSessionManager.get_session(work_key) is not session):
++                raise ValueError("creation_proof_failed")
++            now = time.monotonic()
++            token = uuid.uuid4().hex
++            with _OWNED_LOCK:
++                if len(_OWNED) >= _MAX_OWNED:
++                    raise ValueError("ownership_capacity_reached")
++                _OWNED[token] = OwnedTab(token, uuid.uuid4().hex, work_key, port, session.pid,
++                                         started, browser_ws, target_id, target_ws, now + lease, now,
++                                         session.generation)
++            return {"status": "success", "data": {"owner_token": token, "target_id": target_id, "lease_seconds": lease}}
++        except Exception as exc:  # noqa: BLE001 - creation proof must fail closed
++            reason = "creation_proof_failed" if isinstance(exc, ValueError) else "creation_failed"
++            cleanup = "not_created"
++            if target_id:
++                cleanup = "quarantined"
++                _QUARANTINED[(port, target_id)] = reason
++                logger.warning("owned tab quarantined after failed creation proof: target=%s reason=%s", target_id, reason)
++            return {"status": "error", "data": {"reason": reason, "target_id": target_id, "cleanup": cleanup}}
++
++
++async def reclaim(params: dict[str, Any]) -> dict[str, Any]:
++    """One bounded pass; disabled and dry-run unless explicitly enabled locally."""
++    global _SWEEP_CURSOR, _SWEEP_WINDOW, _SWEEP_COUNT
++    enabled = os.getenv("AADS_SAFE_TAB_RECLAIM_ENABLED") == "1"
++    dry_run = params.get("dry_run") is not False
++    selected = str(params.get("owner_token") or "")
++    results: list[dict[str, Any]] = []
++    # Hold the same per-port lock used by command dispatch and tab binding from
++    # final observation through close. The pass cap applies across all ports.
++    # Selection itself is local and has no awaits. The cap applies to every caller.
++    candidates = [r for r in _OWNED.values() if not selected or r.token == selected]
++    if candidates and not selected:
++        start = _SWEEP_CURSOR % len(candidates)
++        candidates = candidates[start:] + candidates[:start]
++        _SWEEP_CURSOR += _MAX_PER_PASS
++    window = int(time.monotonic() // 60)
++    if window != _SWEEP_WINDOW:
++        _SWEEP_WINDOW, _SWEEP_COUNT = window, 0
++    entries = candidates[:max(0, _MAX_PER_PASS - _SWEEP_COUNT)]
++    _SWEEP_COUNT += len(entries)
++    for record in entries:
++        async with cdp._owned_tab_lock(record.port):
++            try:
++                reason = await _reclaim_reason(record)
++            except Exception:  # noqa: BLE001 - one uncertain record must not abort the pass
++                reason = "ownership_unknown"
++            if reason == "eligible" and enabled and not dry_run:
++                # All checks, including the last CDP lookup and close, run under this port lock.
++                try:
++                    close_reason = await _guarded_close(record)
++                    if close_reason == "closed":
++                        _forget(record)
++                        reason = "closed"
++                    else:
++                        reason = close_reason
++                except Exception:  # noqa: BLE001 - preserve the ownership record
++                    reason = "close_failed"
++            elif reason == "eligible":
++                reason = "dry_run" if enabled else "disabled"
++            elif reason == "tab_changed":
++                await _prune_closed_or_changed(record.port)
++                if _OWNED.get(record.token) is not record:
++                    reason = "ownership_lost"
++            results.append({"owner_token": record.token, "target_id": record.target_id, "result": reason})
++    return {"status": "success", "data": {"results": results, "processed": len(results), "limit": _MAX_PER_PASS}}
++
++
++async def _reclaim_reason(record: OwnedTab) -> str:
++    if _OWNED.get(record.token) is not record or time.monotonic() < record.lease_until:
++        return "lease_active_or_changed"
++    if record.target_id in _USED:
++        return "user_observed"
++    session = cdp.CDPSessionManager.get_session(record.work_key)
++    if (not session or session.port != record.port or session.pid != record.pid
++            or not record.session_generation or session.generation != record.session_generation
++            or getattr(session, "last_target_id", None) is None
++            or session.last_target_id == record.target_id
++            or getattr(session, "last_heartbeat_at", None) is None
++            or session.last_heartbeat_at > time.time() - 60
++            or not cdp._is_managed_profile_dir(session.profile_dir)):
++        return "session_or_command_active"
++    if _process_proof(record.pid, record.port) != record.process_started:
++        return "process_changed"
++    version = await cdp._probe_cdp_version(record.port)
++    if str((version or {}).get("webSocketDebuggerUrl") or "") != record.browser_ws:
++        return "browser_changed"
++    pages = await cdp._list_cdp_targets(record.port)
++    page = next((p for p in pages if p.get("id") == record.target_id and p.get("type") == "page"), None)
++    if not page or page.get("webSocketDebuggerUrl") != record.target_ws:
++        return "tab_changed"
++    info = await _target_info(record.browser_ws, record.target_id)
++    if not info or info.get("attached") is not False or info.get("type") != "page":
++        return "attached_or_unknown"
++    # Existing live-control bindings are observers even if CDP reports detached.
++    from . import browser_tab
++    if any(tab.target_id == record.target_id for tab in browser_tab._SESSIONS.values()):
++        return "observed"
++    activity = await _activity(record.target_ws)
++    if activity is None or any(activity[key] for key in ("visible", "focused", "editing", "downloading")):
++        return "user_active_or_unknown"
++    # CDP has no reliable snapshot of in-flight downloads or unsaved app state.
++    # A blank target created here is the only target whose state we can prove.
++    if activity["url"] != "about:blank" or page.get("url") != "about:blank":
++        return "non_blank_protected"
++    return "eligible"
++
++
++async def execute(params: dict[str, Any]) -> dict[str, Any]:
++    operation = params.get("op")
++    if operation == "create":
++        return await create(params)
++    if operation == "reclaim":
++        return await reclaim(params)
++    return {"status": "error", "data": {"reason": "unsupported_operation"}}
+diff --git a/pc_agent/commands/browser_tab.py b/pc_agent/commands/browser_tab.py
+index 839291f2..1d9bac1a 100644
+--- a/pc_agent/commands/browser_tab.py
++++ b/pc_agent/commands/browser_tab.py
+@@ -12,6 +12,7 @@ from urllib.parse import urlparse
+ from importlib import import_module
+ 
+ cdp = import_module(f"{__package__}.browser_auto")
++reclaim = import_module(f"{__package__}.browser_reclaim")
+ 
+ _SESSIONS: dict[str, 'Tab'] = {}
+ _OPEN_LOCK = asyncio.Lock()
+@@ -99,12 +100,11 @@ class Tab:
+ 
+ 
+ async def _open(params: dict) -> dict:
+-    import websockets
+     port, work_key = int(params['port']), str(params['work_key'])
+     session = cdp.CDPSessionManager.get_session(work_key)
+     if not work_key.startswith('chat-pc-') or not session or session.port != port:
+         raise ValueError('tab_profile_mismatch')
+-    async with _OPEN_LOCK:
++    async with _OPEN_LOCK, cdp._owned_tab_lock(port):
+         for token, tab in list(_SESSIONS.items()):
+             if time.monotonic() - tab.touched > 60:
+                 _SESSIONS.pop(token, None)
+@@ -119,9 +119,11 @@ async def _open(params: dict) -> dict:
+         if len(pages) != 1:
+             raise ValueError('explicit_tab_required')
+         page = pages[0]
++        reclaim.mark_observed(page['id'])
+         endpoint = urlparse(page['webSocketDebuggerUrl'])
+         if endpoint.scheme != 'ws' or endpoint.hostname not in {'localhost', '127.0.0.1', '::1'} or endpoint.port != port:
+             raise ValueError('invalid_tab_endpoint')
++        import websockets
+         ws = await cdp._connect_cdp_ws(websockets, page['webSocketDebuggerUrl'], open_timeout=8)
+         tab = Tab(port, work_key, page['id'], ws)
+         try:
+diff --git a/tests/unit/test_browser_safe_reclaim.py b/tests/unit/test_browser_safe_reclaim.py
+new file mode 100644
+index 00000000..960fa586
+--- /dev/null
++++ b/tests/unit/test_browser_safe_reclaim.py
+@@ -0,0 +1,590 @@
++"""Chrome shaped CDP responses and fail-closed owned-tab reclamation."""
++from __future__ import annotations
++
++import asyncio
++import json
++import os
++import sys
++import types
++from dataclasses import replace
++from functools import wraps
++
 +import pytest
 +
-+from app.services import browser_recipe_registry as registry
-+from app.services.work_recipe import orchestrator
-+from app.services.work_recipe.guard import classify_step, requires_approval
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "pc_agent"))
++from commands import browser_auto as cdp
++from commands import browser_reclaim as reclaim
++from commands import browser_tab
++
++_real_process_proof = reclaim._process_proof
 +
 +
-+RUN_ID = "11111111-1111-1111-1111-111111111111"
-+SCREEN = "https://aads.newtalk.kr/screenshots/test-fixture.png"
++def run_async(func):
++    @wraps(func)
++    def wrapped(*args, **kwargs):
++        return asyncio.run(func(*args, **kwargs))
++    return wrapped
 +
 +
-+def _evidence(name="coupangeats_01_open_login"):
-+    fragment = next(part for part in registry.COUPANGEATS_LOGIN_FRAGMENTS if part["name"] == name)
-+    return {
-+        "screen_verified": True,
-+        "screenshot_url": SCREEN,
-+        "run_id": RUN_ID,
-+        "url": registry.COUPANGEATS_LOGIN_URL,
-+        "outcome": fragment["succeeds_when"],
-+        "blocked": False,
-+    }
++@pytest.fixture(autouse=True)
++def reset(monkeypatch):
++    cdp.CDPSessionManager._sessions.clear()
++    cdp._OWNED_TAB_LOCKS.clear()
++    reclaim._OWNED.clear()
++    reclaim._USED.clear()
++    reclaim._QUARANTINED.clear()
++    reclaim._SWEEP_CURSOR = 0
++    reclaim._SWEEP_WINDOW = 0
++    reclaim._SWEEP_COUNT = 0
++    reclaim._CREATE_ATTEMPTS = 0
++    browser_tab._SESSIONS.clear()
++    monkeypatch.setattr(cdp, "_is_managed_profile_dir", lambda _path: True)
++    monkeypatch.setattr(reclaim, "_process_proof", lambda pid, port: 1234.5 if pid == 42 and port == 9222 else None)
++    monkeypatch.setenv("AADS_SAFE_TAB_RECLAIM_ENABLED", "1")
++    yield
++    cdp.CDPSessionManager._sessions.clear()
++    cdp._OWNED_TAB_LOCKS.clear()
++    reclaim._OWNED.clear()
++    reclaim._USED.clear()
++    reclaim._QUARANTINED.clear()
++    reclaim._SWEEP_CURSOR = 0
++    reclaim._SWEEP_WINDOW = 0
++    reclaim._SWEEP_COUNT = 0
++    reclaim._CREATE_ATTEMPTS = 0
++    browser_tab._SESSIONS.clear()
 +
 +
-+def _trusted(name="coupangeats_01_open_login"):
-+    return {
-+        "run_id": RUN_ID, "screenshot_url": SCREEN,
-+        "url": registry.COUPANGEATS_LOGIN_URL,
-+        "status": "success", "route": "pc_agent", "verified": True,
-+        "recipe_name": name,
-+        "chat_session_id": "recording-session",
-+    }
-+
-+
-+def _open_recipe(trusted=None):
-+    return registry.build_coupangeats_registration_candidate(
-+        fragment_name="coupangeats_01_open_login",
-+        observed_steps=[{"action": "navigate", "url": registry.COUPANGEATS_LOGIN_URL, "risk": "READ"}],
-+        observed_verify=[{"action": "snapshot", "selector": "input[type=password]", "assertion": "login_form_visible"}],
-+        screen_evidence=_evidence(), trusted_evidence=trusted,
-+    )
-+
-+
-+def test_fake_screen_reference_cannot_create_candidate():
-+    with pytest.raises(ValueError, match="verified_screen_evidence_required"):
-+        _open_recipe()
-+    with pytest.raises(ValueError, match="verified_screen_evidence_required"):
-+        _open_recipe({**_trusted(), "screenshot_url": "other"})
-+    assert _open_recipe(_trusted()).metadata["source_chat_session_id"] == "recording-session"
-+
-+
-+def test_approved_requires_url_conditions_and_audited_screen():
-+    recipe = _open_recipe(_trusted())
-+    row = {
-+        "name": recipe.name, "domain": recipe.domain, "version": 2,
-+        "enabled": True, "max_risk": "READ", "approval_status": "approved",
-+        "spec": {**recipe.to_dict(), "version": 2},
-+    }
-+    assert registry.prepare_coupangeats_login_drafts(row)["reference_verified"] is False
-+    assert registry.prepare_coupangeats_login_drafts(row, trusted_evidence=_trusted())["reference_verified"]
-+    for mutation in (
-+        {"steps": [{"action": "navigate", "url": "https://example.org"}]},
-+        {"metadata": {**recipe.metadata, "succeeds_when": "anything"}},
-+        {"metadata": {**recipe.metadata, "starts_when": "anything"}},
-+        {"metadata": {**recipe.metadata, "screen_e2e": {**_evidence(), "url": "https://example.org"}}},
-+    ):
-+        changed = {**row, "spec": {**row["spec"], **mutation}}
-+        assert not registry.prepare_coupangeats_login_drafts(changed, trusted_evidence=_trusted())["reference_verified"]
-+
-+
-+def test_login_submit_is_always_approval_gated():
-+    recipe = registry.build_coupangeats_registration_candidate(
-+        fragment_name="coupangeats_03_login_confirm",
-+        observed_steps=[{"action": "click", "selector": "#anonymous-button"}],
-+        observed_verify=[
-+            {"action": "snapshot", "selector": "#username", "assertion": "authenticated_username_matches_vault"},
-+            {"action": "snapshot", "selector": "#store", "assertion": "authenticated_store_matches_vault"},
-+        ],
-+        screen_evidence={**_evidence("coupangeats_03_login_confirm"), "url": "https://store.coupangeats.com/merchant/home"},
-+        trusted_evidence={**_trusted("coupangeats_03_login_confirm"), "url": "https://store.coupangeats.com/merchant/home"},
-+    )
-+    assert recipe.steps[0].risk == "WRITE_EXTERNAL"
-+    assert requires_approval(classify_step(recipe.steps[0], domain=recipe.domain))
-+
-+
-+def test_wrong_lane_replay_refused_without_executing():
-+    class WrongLane:
-+        _page = object()
-+        def _route(self, payload):
-+            return {"runtime": "browser_agent"}
-+        async def __call__(self, payload):
-+            raise AssertionError("browser action must not run")
-+    wrapper = orchestrator.CoupangVerificationExecutor(WrongLane(), _open_recipe(_trusted()), {})
-+    result = asyncio.run(wrapper({"action": "navigate", "phase": "step"}))
-+    assert result["ok"] is False and result["error"] == "pc_agent_lane_required"
-+
-+
-+def test_failed_verify_never_reports_success():
-+    class Element:
-+        async def is_visible(self):
-+            return False
-+        async def inner_text(self):
-+            return ""
-+    class Page:
-+        url = registry.COUPANGEATS_LOGIN_URL
-+        def locator(self, selector):
-+            return Element()
-+    class Executor:
-+        _page = Page()
-+        def _route(self, payload):
-+            return {"runtime": "pc_agent"}
-+        async def _collect_evidence(self, page):
-+            raise AssertionError("failed verify must not collect success evidence")
-+    wrapper = orchestrator.CoupangVerificationExecutor(Executor(), _open_recipe(_trusted()), {})
-+    result = asyncio.run(wrapper({"action": "snapshot", "phase": "verify", "selector": "input", "assertion": "login_form_visible"}))
-+    assert result == {"ok": False, "error": "coupangeats_verification_failed", "route": "pc_agent"}
-+
-+
-+def test_login_submit_before_step_stops_without_approval():
-+    from app.services.work_recipe.approval import ApprovalRequired
-+    from app.services.work_recipe.audit import GuardedRunRecorder
-+    from app.services.work_recipe.schema import RecipeStep
-+
-+    requested = []
-+    async def deny(*args, **kwargs):
-+        requested.append(kwargs["action"])
-+        raise ApprovalRequired("fixture-approval", summary="login approval pending")
-+    async def record(*args, **kwargs):
-+        return None
-+    async def block(*args, **kwargs):
-+        return None
-+    guard = GuardedRunRecorder(
-+        domain="store.coupangeats.com", tenant_id="fixture-tenant",
-+        approval_requester=deny, step_recorder=record, run_blocker=block,
-+    )
-+    submit = RecipeStep.from_dict(
-+        {"action": "click", "selector": "#anonymous-button", "risk": "WRITE_EXTERNAL"}, seq=1
-+    )
-+    with pytest.raises(ApprovalRequired):
-+        asyncio.run(guard.before_step(run_id=None, step=submit))
-+    assert requested == ["click"]
-+
-+
-+def test_live_attestation_rejects_missing_designated_pc_session(monkeypatch):
-+    from app.browser_bridge import service
-+
-+    class Sessions:
-+        def get(self, session_id):
-+            return None
-+    class Bridge:
-+        sessions = Sessions()
-+    monkeypatch.setattr(service, "get_browser_bridge_service", lambda: Bridge())
-+    with pytest.raises(ValueError, match="coupangeats_pc_session_required"):
-+        asyncio.run(registry.attest_coupangeats_live_screen(
-+            tenant_id="11111111-1111-1111-1111-111111111111",
-+            chat_session_id="recording-session", fragment_name="coupangeats_01_open_login",
-+            browser_session_id="fake", browser_work_key="coupangeats:owner:login",
-+            observed_verify=[{"action": "snapshot", "selector": "input[type=password]", "assertion": "login_form_visible"}],
-+            values={},
-+        ))
-+
-+
-+def test_vault_identity_requires_the_designated_account_and_store():
-+    identity = {
-+        "vault_scope": "yeoljeong-coupangeats", "vault_username": "mimi77",
-+        "vault_store": "fixture-store", "screen_username": "mimi77",
-+        "screen_store": "fixture-store",
-+    }
-+    assert registry.matches_coupangeats_vault_identity(**identity)
-+    assert not registry.matches_coupangeats_vault_identity(**{**identity, "vault_username": "other"})
-+    assert not registry.matches_coupangeats_vault_identity(**{**identity, "screen_store": "other"})
-+
-+
-+def test_pc_agent_adapter_reads_live_url_and_screen_username():
-+    """Exercise the actual PC facade, whose locator has no Playwright read methods."""
-+    from app.browser_bridge.service import _LocalAgentPage
-+
-+    recipe = registry.build_coupangeats_registration_candidate(
-+        fragment_name="coupangeats_03_login_confirm",
-+        observed_steps=[{"action": "click", "selector": "#submit"}],
-+        observed_verify=[
-+            {"action": "snapshot", "selector": "#username", "assertion": "authenticated_username_matches_vault"},
-+            {"action": "snapshot", "selector": "#store", "assertion": "authenticated_store_matches_vault"},
-+        ],
-+        screen_evidence={**_evidence("coupangeats_03_login_confirm"), "url": "https://store.coupangeats.com/merchant/home"},
-+        trusted_evidence={**_trusted("coupangeats_03_login_confirm"), "url": "https://store.coupangeats.com/merchant/home"},
-+    )
-+
-+    class Executor:
-+        def __init__(self, page):
-+            self._page = page
-+            self.captured = 0
-+        def _route(self, payload):
-+            return {"runtime": "pc_agent"}
-+        async def _collect_evidence(self, page):
-+            self.captured += 1
-+            return {"screenshot": {"status": "captured", "url": SCREEN}}
-+
-+    async def check(screen_username, screen_store="fixture-store", live_url="https://store.coupangeats.com/merchant/home"):
-+        page = object.__new__(_LocalAgentPage)
-+        page.url = registry.COUPANGEATS_LOGIN_URL  # stale after PC Agent click
-+        seen = []
-+        async def command(kind, params, **kwargs):
-+            assert kind == "browser_eval"
-+            seen.append(params["expression"])
-+            username_step = len(seen) == 1
-+            return {"value": {
-+                "url": live_url,
-+                "visible": True, "usernameMatches": username_step and screen_username == "mimi77",
-+                "screenText": screen_username if username_step else screen_store,
-+                "blocked": False,
-+            }}
-+        page._run_browser_command = command
-+        executor = Executor(page)
-+        verifier = orchestrator.CoupangVerificationExecutor(
-+            executor, recipe, {"vault_username": "mimi77", "vault_store": "fixture-store"}
-+        )
-+        results = []
-+        for step in recipe.verify:
-+            results.append(await verifier({**step.to_dict(), "phase": "verify", "context": {
-+                "smart_browser": {"server_access_blocked": True}}}))
-+            if not results[-1]["ok"]:
-+                break
-+        return results, executor.captured, page.url, seen
-+
-+    good, captured, url, commands = asyncio.run(check("mimi77"))
-+    assert all(result["ok"] for result in good)
-+    assert captured == 2
-+    assert url.endswith("/merchant/home")
-+    assert all("browser-bridge argument redacted" in command for command in commands)
-+
-+    bad, captured, _, _ = asyncio.run(check("another-user"))
-+    assert bad[0]["ok"] is False
-+    assert captured == 0
-+    bad_store, captured, _, _ = asyncio.run(check("mimi77", screen_store="other-store"))
-+    assert bad_store[-1]["ok"] is False
-+    assert captured == 1
-+    login_page, captured, _, _ = asyncio.run(check("mimi77", live_url=registry.COUPANGEATS_LOGIN_URL))
-+    assert login_page[0]["ok"] is False
-+    assert captured == 0
-+
-+
-+def test_replay_requires_another_chat_session_on_the_designated_pc_lane(monkeypatch):
-+    from types import SimpleNamespace
-+    from app.browser_bridge import service
-+
-+    recipe = _open_recipe(_trusted())
-+    intent = SimpleNamespace(tenant_id="fixture-tenant", payload={"directive": recipe.name, "inputs": {}})
-+    class Router:
-+        def validate_action_intent(self, value, **kwargs):
-+            return value
-+        def assert_no_untrusted_page_data(self, *args, **kwargs):
-+            return None
-+    class Sessions:
-+        def __init__(self):
-+            self.kind = "local_agent"
-+        def get(self, session_id):
-+            return SimpleNamespace(
-+                work_key="coupangeats:owner:login",
-+                endpoint=SimpleNamespace(kind=SimpleNamespace(value=self.kind)),
-+            )
-+    sessions = Sessions()
-+    monkeypatch.setattr(service, "get_browser_bridge_service", lambda: SimpleNamespace(sessions=sessions))
-+    monkeypatch.setattr(orchestrator, "ChannelRouter", Router)
-+    async def resolve(*args):
-+        return recipe
-+    async def scoped(*args):
-+        return {}
++@run_async
++async def test_chrome_json_without_attached_field_registers_and_reclaims(monkeypatch):
++    browser_ws = "ws://127.0.0.1:9222/devtools/browser/browser-1"
++    target_ws = "ws://127.0.0.1:9222/devtools/page/new-1"
++    # Chrome's /json page listing has no attached field.
++    pages = [{"id": "new-1", "type": "page", "url": "about:blank",
++              "webSocketDebuggerUrl": target_ws}]
 +    calls = []
-+    async def play(*args, **kwargs):
-+        calls.append(kwargs)
-+        return SimpleNamespace(to_dict=lambda: {"status": "success"})
-+    monkeypatch.setattr(orchestrator, "resolve_recipe", resolve)
-+    monkeypatch.setattr(orchestrator, "_scoped_inputs", scoped)
-+    monkeypatch.setattr(orchestrator, "GuardedRunRecorder", lambda **kwargs: object())
-+    monkeypatch.setattr(orchestrator, "BrowserRecipeExecutor", lambda **kwargs: SimpleNamespace(**kwargs))
-+    monkeypatch.setattr(orchestrator, "play_recipe", play)
 +
-+    async def replay(chat_session):
-+        return await orchestrator.run_directive(
-+            recipe.name, "fixture-tenant", browser_session_id="pc-session",
-+            browser_work_key="coupangeats:owner:login", triggered_by=f"chat:{chat_session}",
-+            action_intent=intent,
++    async def version(_port):
++        return {"webSocketDebuggerUrl": browser_ws}
++
++    async def list_pages(_port):
++        return pages
++
++    async def send(_ws, method, _params, **_kwargs):
++        calls.append(method)
++        if method == "Target.createTarget":
++            assert _params == {"url": "about:blank", "background": True}
++            return {"targetId": "new-1"}
++        if method == "Target.getTargetInfo":
++            return {"targetInfo": {"targetId": "new-1", "type": "page", "attached": False}}
++        if method == "Runtime.evaluate":
++            return {"result": {"type": "object", "value": {
++                "visible": False, "focused": False, "editing": False,
++                "downloading": False, "url": "about:blank"}}}
++        if method == "Target.closeTarget":
++            return {"success": True}
++        raise AssertionError(method)
++
++    monkeypatch.setattr(cdp, "_probe_cdp_version", version)
++    monkeypatch.setattr(cdp, "_list_cdp_targets", list_pages)
++    monkeypatch.setattr(cdp, "_send_cdp", send)
++    async def guarded(_record):
++        calls.append("Target.closeTarget")
++        return "closed"
++    monkeypatch.setattr(reclaim, "_guarded_close", guarded)
++    session = cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
++    created = await reclaim.create({"work_key": "job-1", "lease_seconds": 60})
++    assert created["status"] == "success"
++    token = created["data"]["owner_token"]
++    reclaim._OWNED[token] = replace(reclaim._OWNED[token], lease_until=0)
++    session.last_heartbeat_at = 0
++    outcome = await reclaim.reclaim({"owner_token": token, "dry_run": False})
++    assert outcome["data"]["results"][0]["result"] == "closed"
++    assert token not in reclaim._OWNED
++    assert calls.count("Target.getTargetInfo") == 2
++    assert calls.count("Target.closeTarget") == 1
++
++
++@run_async
++async def test_user_active_tab_is_never_closed(monkeypatch):
++    browser_ws = "ws://127.0.0.1:9222/devtools/browser/browser-1"
++    target_ws = "ws://127.0.0.1:9222/devtools/page/new-1"
++    calls = []
++    navigated = False
++
++    async def version(_port):
++        return {"webSocketDebuggerUrl": browser_ws}
++
++    async def list_pages(_port):
++        return [{"id": "new-1", "type": "page", "url": "https://example.org/form" if navigated else "about:blank",
++                 "webSocketDebuggerUrl": target_ws}]
++
++    async def send(_ws, method, params, **_kwargs):
++        calls.append(method)
++        if method == "Target.createTarget":
++            return {"targetId": "new-1"}
++        if method == "Target.getTargetInfo":
++            return {"targetInfo": {"targetId": "new-1", "type": "page", "attached": False}}
++        if method == "Runtime.evaluate":
++            assert "document.hasFocus()" in params["expression"]
++            assert "[contenteditable]:focus" in params["expression"]
++            return {"result": {"type": "object", "value": {
++                "visible": True, "focused": True, "editing": True,
++                "downloading": False, "url": "https://example.org/form"}}}
++        if method == "Target.closeTarget":
++            raise AssertionError("active user tab must not close")
++        raise AssertionError(method)
++
++    monkeypatch.setattr(cdp, "_probe_cdp_version", version)
++    monkeypatch.setattr(cdp, "_list_cdp_targets", list_pages)
++    monkeypatch.setattr(cdp, "_send_cdp", send)
++    session = cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
++    created = await reclaim.create({"work_key": "job-1"})
++    assert created["status"] == "success"
++    navigated = True
++    token = created["data"]["owner_token"]
++    session.last_heartbeat_at = 0
++    reclaim._OWNED[token] = replace(reclaim._OWNED[token], lease_until=0)
++    outcome = await reclaim.reclaim({"owner_token": token, "dry_run": False})
++    assert outcome["data"]["results"][0]["result"] == "user_active_or_unknown"
++    assert token in reclaim._OWNED
++    assert "Target.closeTarget" not in calls
++
++
++@run_async
++async def test_close_must_confirm_success_and_pass_is_capped(monkeypatch):
++    browser_ws = "ws://127.0.0.1:9222/devtools/browser/browser-1"
++    target_ws = "ws://127.0.0.1:9222/devtools/page/new-1"
++    for index in range(3):
++        token = f"owner-{index}"
++        reclaim._OWNED[token] = reclaim.OwnedTab(
++            token, f"epoch-{index}", "job-1", 9222, 42, 1234.5,
++            browser_ws, f"new-{index}", target_ws, 0, 0,
 +        )
-+    with pytest.raises(ValueError, match="replay_boundary"):
-+        asyncio.run(replay("recording-session"))
-+    sessions.kind = "server"
-+    with pytest.raises(ValueError, match="pc_lane_required"):
-+        asyncio.run(replay("other-session"))
-+    sessions.kind = "local_agent"
-+    assert asyncio.run(replay("other-session")).to_dict()["status"] == "success"
-+    assert len(calls) == 1
-+    assert calls[0]["context"]["smart_browser"]["server_access_blocked"] is True
++
++    async def eligible(_record):
++        return "eligible"
++
++    async def close(_ws, method, _params, **_kwargs):
++        assert method == "Target.closeTarget"
++        return {"success": False}
++
++    monkeypatch.setattr(reclaim, "_reclaim_reason", eligible)
++    async def unconfirmed(_record):
++        assert (await close(None, "Target.closeTarget", {}))["success"] is False
++        return "close_not_confirmed"
++    monkeypatch.setattr(reclaim, "_guarded_close", unconfirmed)
++    result = await reclaim.reclaim({"dry_run": False})
++    assert result["data"]["processed"] == 2
++    assert [entry["result"] for entry in result["data"]["results"]] == ["close_not_confirmed"] * 2
++    assert len(reclaim._OWNED) == 3
++    assert (await reclaim.reclaim({"work_key": "other", "dry_run": False}))["data"]["processed"] == 0
++
++
++@run_async
++async def test_default_gates_and_observed_tab(monkeypatch):
++    actual_reason = reclaim._reclaim_reason
++    token = "owner-1"
++    reclaim._OWNED[token] = reclaim.OwnedTab(
++        token, "epoch-1", "job-1", 9222, 42, 1234.5,
++        "ws://127.0.0.1:9222/devtools/browser/one", "tab-1",
++        "ws://127.0.0.1:9222/devtools/page/tab-1", 0, 0,
++    )
++    async def eligible(_record):
++        return "eligible"
++    async def should_not_close(*_args, **_kwargs):
++        raise AssertionError("close must be gated")
++    monkeypatch.setattr(reclaim, "_reclaim_reason", eligible)
++    monkeypatch.setattr(cdp, "_send_cdp", should_not_close)
++    monkeypatch.delenv("AADS_SAFE_TAB_RECLAIM_ENABLED")
++    assert (await reclaim.reclaim({"dry_run": False}))["data"]["results"][0]["result"] == "disabled"
++    monkeypatch.setenv("AADS_SAFE_TAB_RECLAIM_ENABLED", "1")
++    assert (await reclaim.reclaim({}))["data"]["results"][0]["result"] == "dry_run"
++    reclaim.mark_observed("tab-1")
++    monkeypatch.setattr(reclaim, "_reclaim_reason", actual_reason)
++    reclaim._SWEEP_WINDOW = 0  # next sweep window
++    assert (await reclaim.reclaim({"dry_run": False}))["data"]["results"][0]["result"] == "user_observed"
++
++
++@run_async
++async def test_invalid_lease_and_failed_proof_cleanup(monkeypatch):
++    browser_ws = "ws://127.0.0.1:9222/devtools/browser/one"
++    cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
++    calls = []
++    async def version(_port):
++        return {"webSocketDebuggerUrl": browser_ws}
++    async def pages(_port):
++        return []
++    async def send(_ws, method, _params, **_kwargs):
++        calls.append(method)
++        return {"targetId": "new-1"} if method == "Target.createTarget" else {"success": True}
++    monkeypatch.setattr(cdp, "_probe_cdp_version", version)
++    monkeypatch.setattr(cdp, "_list_cdp_targets", pages)
++    monkeypatch.setattr(cdp, "_send_cdp", send)
++    assert (await reclaim.create({"work_key": "job-1", "lease_seconds": "bad"}))["data"]["reason"] == "invalid_lease"
++    assert calls == []
++    result = await reclaim.create({"work_key": "job-1"})
++    assert result["data"]["reason"] == "creation_proof_failed"
++    assert result["data"]["cleanup"] == "quarantined"
++    assert reclaim._QUARANTINED[(9222, "new-1")] == "creation_proof_failed"
++    assert calls == ["Target.createTarget"]
++    assert not reclaim._OWNED
++
++
++@run_async
++async def test_command_failure_does_not_mark_session_healthy(monkeypatch):
++    session = cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
++    session.last_heartbeat_at = 1
++    session.last_error_code = "prior_error"
++    async def fail(*_args, **_kwargs):
++        raise TimeoutError("slow command")
++    monkeypatch.setattr(cdp, "_send_cdp_command_unlocked", fail)
++    with pytest.raises(TimeoutError):
++        await cdp._send_cdp_command(9222, "Page.navigate", timeout_seconds=1)
++    assert session.last_heartbeat_at == 1
++    assert session.last_error_code == "prior_error"
++
++
++@run_async
++async def test_different_ports_do_not_block_each_other(monkeypatch):
++    entered = asyncio.Event()
++    release = asyncio.Event()
++    async def send(port, *_args, **_kwargs):
++        if port == 9222:
++            entered.set()
++            await release.wait()
++        return {"port": port}
++    monkeypatch.setattr(cdp, "_send_cdp_command_unlocked", send)
++    slow = asyncio.create_task(cdp._send_cdp_command(9222, "Page.navigate", timeout_seconds=5))
++    await entered.wait()
++    try:
++        other = await asyncio.wait_for(cdp._send_cdp_command(9333, "Page.navigate", timeout_seconds=1), 1)
++        assert other["port"] == 9333
++    finally:
++        release.set()
++        await slow
++
++
++@run_async
++async def test_tab_open_waits_for_reclaim_final_check(monkeypatch):
++    monkeypatch.setitem(sys.modules, "websockets", types.ModuleType("websockets"))
++    cdp.CDPSessionManager.register("chat-pc-one", 9222, "/managed/profile", pid=42)
++    token = "owner-1"
++    reclaim._OWNED[token] = reclaim.OwnedTab(
++        token, "epoch-1", "chat-pc-one", 9222, 42, 1234.5,
++        "ws://127.0.0.1:9222/devtools/browser/one", "tab-1",
++        "ws://127.0.0.1:9222/devtools/page/tab-1", 0, 0,
++    )
++    entered = asyncio.Event()
++    release = asyncio.Event()
++    async def check(_record):
++        entered.set()
++        await release.wait()
++        return "eligible"
++    async def pages(_port):
++        return [{"id": "tab-1", "type": "page", "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/tab-1"}]
++    class Ws:
++        async def close(self):
++            pass
++    async def connect(*_args, **_kwargs):
++        return Ws()
++    monkeypatch.setattr(reclaim, "_reclaim_reason", check)
++    monkeypatch.setattr(cdp, "_list_cdp_targets", pages)
++    monkeypatch.setattr(cdp, "_connect_cdp_ws", connect)
++    sweep = asyncio.create_task(reclaim.reclaim({}))
++    await entered.wait()
++    opening = asyncio.create_task(browser_tab._open({"port": 9222, "work_key": "chat-pc-one"}))
++    await asyncio.sleep(0)
++    assert not opening.done()
++    release.set()
++    await sweep
++    result = await asyncio.wait_for(opening, 1)
++    assert result["target_id"] == "tab-1"
++    assert "tab-1" in reclaim._USED
++
++
++def test_process_proof_supports_psutil_before_v6(monkeypatch):
++    class Listener:
++        status = "LISTEN"
++        laddr = types.SimpleNamespace(port=9222, ip="127.0.0.1")
++    class Process:
++        def __init__(self, pid):
++            assert pid == 42
++        def connections(self, *, kind):
++            assert kind == "tcp"
++            return [Listener()]
++        def create_time(self):
++            return 1234.5
++    monkeypatch.setattr(reclaim, "psutil", types.SimpleNamespace(Process=Process, CONN_LISTEN="LISTEN", Error=OSError))
++    assert _real_process_proof(42, 9222) == 1234.5
++
++
++@run_async
++async def test_missing_session_activity_fields_fail_closed_per_record(monkeypatch):
++    class OldSession:
++        port = 9222
++        pid = 42
++        profile_dir = "/managed/profile"
++    token = "owner-1"
++    reclaim._OWNED[token] = reclaim.OwnedTab(
++        token, "epoch-1", "job-1", 9222, 42, 1234.5,
++        "ws://127.0.0.1:9222/devtools/browser/one", "tab-1",
++        "ws://127.0.0.1:9222/devtools/page/tab-1", 0, 0,
++    )
++    monkeypatch.setattr(cdp.CDPSessionManager, "get_session", lambda _key: OldSession())
++    result = await reclaim.reclaim({"dry_run": False})
++    assert result["data"]["results"][0]["result"] == "session_or_command_active"
++    assert token in reclaim._OWNED
++
++
++@run_async
++async def test_command_marks_owned_target_before_releasing_port_lock(monkeypatch):
++    session = cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
++    session.last_heartbeat_at = 0
++    record = reclaim.OwnedTab(
++        "owner-1", "epoch-1", "job-1", 9222, 42, 1234.5,
++        "ws://127.0.0.1:9222/devtools/browser/one", "tab-1",
++        "ws://127.0.0.1:9222/devtools/page/tab-1", 0, 0,
++    )
++    reclaim._OWNED[record.token] = record
++    entered = asyncio.Event()
++    release = asyncio.Event()
++
++    async def command(*_args, **_kwargs):
++        entered.set()
++        await release.wait()
++        return {"_target": {"id": "tab-1", "url": "about:blank"}}
++
++    async def close(*_args, **_kwargs):
++        raise AssertionError("a just used target must not close")
++
++    monkeypatch.setattr(cdp, "_send_cdp_command_unlocked", command)
++    monkeypatch.setattr(cdp, "_send_cdp", close)
++    running = asyncio.create_task(cdp._send_cdp_command(9222, "Runtime.evaluate", timeout_seconds=1))
++    await entered.wait()
++    sweeping = asyncio.create_task(reclaim.reclaim({"owner_token": record.token, "dry_run": False}))
++    await asyncio.sleep(0)
++    assert not sweeping.done()
++    release.set()
++    await running
++    result = await sweeping
++    assert result["data"]["results"][0]["result"] == "user_observed"
++    assert session.last_target_id == "tab-1"
++    assert session.last_heartbeat_at > 0
++
++
++@run_async
++async def test_prior_used_tab_stays_protected_after_last_target_changes(monkeypatch):
++    session = cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
++    record = reclaim.OwnedTab(
++        "owner-1", "epoch-1", "job-1", 9222, 42, 1234.5,
++        "ws://127.0.0.1:9222/devtools/browser/one", "tab-1",
++        "ws://127.0.0.1:9222/devtools/page/tab-1", 0, 0,
++    )
++    reclaim._OWNED[record.token] = record
++
++    async def command(_port, _method, _params, *, target_id, **_kwargs):
++        return {"_target": {"id": target_id, "url": "about:blank"}}
++
++    monkeypatch.setattr(cdp, "_send_cdp_command_unlocked", command)
++    await cdp._send_cdp_command(9222, "Page.captureScreenshot", timeout_seconds=1, target_id="tab-1")
++    await cdp._send_cdp_command(9222, "Page.captureScreenshot", timeout_seconds=1, target_id="tab-2")
++    assert session.last_target_id == "tab-2"
++    session.last_heartbeat_at = 0
++    result = await reclaim.reclaim({"owner_token": record.token, "dry_run": False})
++    assert result["data"]["results"][0]["result"] == "user_observed"
++    assert record.token in reclaim._OWNED
++
++
++@run_async
++async def test_closed_records_pruned_and_uncertain_inventory_hits_cap(monkeypatch):
++    browser_ws = "ws://127.0.0.1:9222/devtools/browser/one"
++    target_ws = "ws://127.0.0.1:9222/devtools/page/new-1"
++    cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
++    for index in range(reclaim._MAX_OWNED):
++        token = f"owner-{index}"
++        reclaim._OWNED[token] = reclaim.OwnedTab(
++            token, f"epoch-{index}", "job-1", 9222, 42, 1234.5,
++            browser_ws, f"closed-{index}", target_ws, 0, 0,
++        )
++
++    async def version(_port):
++        return {"webSocketDebuggerUrl": browser_ws}
++
++    async def pages(_port):
++        return [{"id": "new-1", "type": "page", "url": "about:blank",
++                 "webSocketDebuggerUrl": target_ws}]
++
++    async def send(_ws, method, _params, **_kwargs):
++        if method == "Target.getTargets":
++            return {"targetInfos": [{"targetId": "new-1", "type": "page"}]}
++        if method == "Target.createTarget":
++            return {"targetId": "new-1"}
++        if method == "Target.getTargetInfo":
++            return {"targetInfo": {"targetId": "new-1", "type": "page", "attached": False}}
++        raise AssertionError(method)
++
++    monkeypatch.setattr(cdp, "_probe_cdp_version", version)
++    monkeypatch.setattr(cdp, "_list_cdp_targets", pages)
++    monkeypatch.setattr(cdp, "_send_cdp", send)
++    created = await reclaim.create({"work_key": "job-1"})
++    assert created["status"] == "success"
++    assert len(reclaim._OWNED) == 1
++
++    async def uncertain(*_args, **_kwargs):
++        raise TimeoutError("inventory unavailable")
++
++    for index in range(reclaim._MAX_OWNED - 1):
++        token = f"owner-new-{index}"
++        reclaim._OWNED[token] = replace(next(iter(reclaim._OWNED.values())), token=token)
++    monkeypatch.setattr(cdp, "_send_cdp", uncertain)
++    blocked = await reclaim.create({"work_key": "job-1"})
++    assert blocked["data"]["reason"] == "ownership_capacity_reached"
++    assert len(reclaim._OWNED) == reclaim._MAX_OWNED
++
++
++class GuardedSocket:
++    def __init__(self, *, change_at="", before_close=None):
++        self.pending = []
++        self.methods = []
++        self.change_at = change_at
++        self.before_close = before_close
++
++    async def send(self, raw):
++        message = json.loads(raw)
++        method = message["method"]
++        self.methods.append(method)
++        if method == self.change_at:
++            self.pending.append(json.dumps({"method": "Page.frameStartedNavigating", "sessionId": "s1"}))
++        if method == "Target.closeTarget" and self.before_close:
++            self.before_close()
++        result = {
++            "Target.attachToTarget": {"sessionId": "s1"},
++            "Runtime.evaluate": {"result": {"type": "object", "value": {
++                "visible": False, "focused": False, "editing": False,
++                "downloading": False, "url": "about:blank"}}},
++            "Target.getTargetInfo": {"targetInfo": {
++                "targetId": "tab-1", "type": "page", "url": "about:blank"}},
++            "Target.closeTarget": {"success": True},
++        }.get(method, {})
++        self.pending.append(json.dumps({"id": message["id"], "result": result}))
++
++    async def recv(self):
++        return self.pending.pop(0)
++
++    async def close(self):
++        pass
++
++
++def guarded_record():
++    session = cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
++    session.last_heartbeat_at = 0
++    record = reclaim.OwnedTab(
++        "owner-1", "epoch-1", "job-1", 9222, 42, 1234.5,
++        "ws://127.0.0.1:9222/devtools/browser/one", "tab-1",
++        "ws://127.0.0.1:9222/devtools/page/tab-1", 0, 0, session.generation,
++    )
++    reclaim._OWNED[record.token] = record
++    return record
++
++
++@run_async
++async def test_navigation_between_final_check_and_close_aborts(monkeypatch):
++    record = guarded_record()
++    socket = GuardedSocket(change_at="Target.getTargetInfo")
++    monkeypatch.setitem(sys.modules, "websockets", types.ModuleType("websockets"))
++    async def connect(*_args, **_kwargs):
++        return socket
++    monkeypatch.setattr(cdp, "_connect_cdp_ws", connect)
++    assert await reclaim._guarded_close(record) == "target_changed"
++    assert "Target.closeTarget" not in socket.methods
++    assert record.token in reclaim._OWNED
++
++
++@run_async
++async def test_navigation_during_close_response_is_not_confirmed(monkeypatch):
++    record = guarded_record()
++    socket = GuardedSocket(change_at="Target.closeTarget")
++    monkeypatch.setitem(sys.modules, "websockets", types.ModuleType("websockets"))
++    async def connect(*_args, **_kwargs):
++        return socket
++    monkeypatch.setattr(cdp, "_connect_cdp_ws", connect)
++    assert await reclaim._guarded_close(record) == "changed_during_close"
++    assert socket.methods.count("Target.closeTarget") == 1
++    assert record.token in reclaim._OWNED
++
++
++@run_async
++async def test_creation_capacity_recovers_after_confirmed_cleanup(monkeypatch):
++    browser_ws = "ws://127.0.0.1:9222/devtools/browser/one"
++    target_ws = "ws://127.0.0.1:9222/devtools/page/new-1"
++    cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
++    current = {"id": ""}
++    async def version(_port):
++        return {"webSocketDebuggerUrl": browser_ws}
++    async def pages(_port):
++        return ([{"id": current["id"], "type": "page", "url": "about:blank",
++                  "webSocketDebuggerUrl": target_ws}] if current["id"] else [])
++    async def send(_ws, method, _params, **_kwargs):
++        if method == "Target.getTargets":
++            return {"targetInfos": ([{"targetId": current["id"], "type": "page"}]
++                                    if current["id"] else [])}
++        if method == "Target.createTarget":
++            current["id"] = "new-1"
++            return {"targetId": current["id"]}
++        if method == "Target.getTargetInfo":
++            return {"targetInfo": {"targetId": current["id"], "type": "page", "attached": False}}
++        raise AssertionError(method)
++    monkeypatch.setattr(cdp, "_probe_cdp_version", version)
++    monkeypatch.setattr(cdp, "_list_cdp_targets", pages)
++    monkeypatch.setattr(cdp, "_send_cdp", send)
++    for _ in range(reclaim._MAX_OWNED + 1):
++        created = await reclaim.create({"work_key": "job-1"})
++        assert created["status"] == "success"
++        current["id"] = ""
++    assert reclaim._CREATE_ATTEMPTS == 1
++    assert len(reclaim._OWNED) == 1
++
++
++@run_async
++async def test_quarantine_capacity_recovers_only_after_target_disappears(monkeypatch):
++    browser_ws = "ws://127.0.0.1:9222/devtools/browser/one"
++    cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
++    reclaim._QUARANTINED[(9222, "lost-tab")] = "creation_proof_failed"
++    reclaim._CREATE_ATTEMPTS = reclaim._MAX_OWNED
++    async def version(_port):
++        return {"webSocketDebuggerUrl": browser_ws}
++    async def pages(_port):
++        return []
++    async def send(_ws, method, _params, **_kwargs):
++        if method == "Target.getTargets":
++            return {"targetInfos": []}
++        if method == "Target.createTarget":
++            return {"targetId": "new-1"}
++        raise AssertionError(method)
++    monkeypatch.setattr(cdp, "_probe_cdp_version", version)
++    monkeypatch.setattr(cdp, "_list_cdp_targets", pages)
++    monkeypatch.setattr(cdp, "_send_cdp", send)
++    result = await reclaim.create({"work_key": "job-1"})
++    assert result["data"]["reason"] == "creation_proof_failed"
++    assert (9222, "lost-tab") not in reclaim._QUARANTINED
++    assert reclaim._CREATE_ATTEMPTS == reclaim._MAX_OWNED
++
++
++@run_async
++async def test_session_generation_changes_before_close_aborts(monkeypatch):
++    record = guarded_record()
++    socket = GuardedSocket()
++    monkeypatch.setitem(sys.modules, "websockets", types.ModuleType("websockets"))
++    async def connect(*_args, **_kwargs):
++        return socket
++    original_send = socket.send
++    async def send(raw):
++        message = json.loads(raw)
++        await original_send(raw)
++        if message["method"] == "Target.getTargetInfo":
++            cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
++    socket.send = send
++    monkeypatch.setattr(cdp, "_connect_cdp_ws", connect)
++    assert await reclaim._guarded_close(record) == "ownership_or_session_changed"
++    assert "Target.closeTarget" not in socket.methods
++    assert record.token in reclaim._OWNED

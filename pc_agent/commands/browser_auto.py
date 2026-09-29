@@ -41,6 +41,12 @@ DOWNLOAD_CONTENT_MAX_BYTES = max(
     int(os.getenv("AADS_BROWSER_DOWNLOAD_CONTENT_MAX_BYTES", str(2 * 1024 * 1024)) or "0"),
 )
 _MSG_ID = 0
+_OWNED_TAB_LOCKS: dict[int, asyncio.Lock] = {}
+
+
+def _owned_tab_lock(port: int) -> asyncio.Lock:
+    """Serialize ownership-sensitive operations on one CDP port only."""
+    return _OWNED_TAB_LOCKS.setdefault(port, asyncio.Lock())
 
 
 class CDPCommandError(RuntimeError):
@@ -56,6 +62,7 @@ class CDPSession:
     port: int
     profile_dir: str
     pid: int = 0
+    generation: str = field(default_factory=lambda: uuid.uuid4().hex)
     connected_at: float = field(default_factory=_time)
     last_heartbeat_at: float = field(default_factory=_time)
     last_target_id: str = ""
@@ -886,7 +893,7 @@ async def _best_effort_target_probe(
     return report
 
 
-async def _send_cdp_command(
+async def _send_cdp_command_unlocked(
     port: int,
     method: str,
     params: Dict[str, Any] | None = None,
@@ -937,6 +944,11 @@ async def _send_cdp_command(
         candidate_target_id = str(candidate.get("targetId") or candidate.get("id") or "")
         candidate_url = str(candidate.get("url") or "")
         candidate_title = str(candidate.get("title") or "")
+        if candidate_target_id:
+            # Selection is already inside the port lock. A command may affect
+            # the page and then time out, so record use before sending it.
+            from . import browser_reclaim
+            browser_reclaim.mark_observed(candidate_target_id)
         try:
             async with await _connect_cdp_ws(
                 websockets,
@@ -1050,6 +1062,38 @@ async def _send_cdp_command(
         f"usable page target 없음 (port={port})",
         details={"port": port},
     )
+
+
+async def _send_cdp_command(
+    port: int,
+    method: str,
+    params: Dict[str, Any] | None = None,
+    *,
+    timeout_seconds: float,
+    target_id: str = "",
+    target_idx: int = 0,
+) -> Dict[str, Any]:
+    # _send_cdp_command_unlocked calls _send_cdp/_request_cdp directly; it does
+    # not call this wrapper. Reclaim uses those same low-level calls under this
+    # lock, so its last check and close cannot race a normal command on the port.
+    async with _owned_tab_lock(port):
+        result = await _send_cdp_command_unlocked(
+            port, method, params, timeout_seconds=timeout_seconds,
+            target_id=target_id, target_idx=target_idx,
+        )
+        target = result.get("_target") if isinstance(result, dict) else None
+        if isinstance(target, dict):
+            resolved_id = str(target.get("id") or target.get("targetId") or "")
+            if resolved_id:
+                from . import browser_reclaim
+                browser_reclaim.mark_observed(resolved_id)
+                session = CDPSessionManager.get_by_port(port)
+                if session:
+                    CDPSessionManager.mark_healthy(
+                        session.work_key, target_id=resolved_id,
+                        target_url=str(target.get("url") or ""),
+                    )
+        return result
 
 
 async def _collect_page_diagnostics(

@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from importlib import import_module
 
 cdp = import_module(f"{__package__}.browser_auto")
+reclaim = import_module(f"{__package__}.browser_reclaim")
 
 _SESSIONS: dict[str, 'Tab'] = {}
 _OPEN_LOCK = asyncio.Lock()
@@ -99,12 +100,11 @@ class Tab:
 
 
 async def _open(params: dict) -> dict:
-    import websockets
     port, work_key = int(params['port']), str(params['work_key'])
     session = cdp.CDPSessionManager.get_session(work_key)
     if not work_key.startswith('chat-pc-') or not session or session.port != port:
         raise ValueError('tab_profile_mismatch')
-    async with _OPEN_LOCK:
+    async with _OPEN_LOCK, cdp._owned_tab_lock(port):
         for token, tab in list(_SESSIONS.items()):
             if time.monotonic() - tab.touched > 60:
                 _SESSIONS.pop(token, None)
@@ -119,9 +119,11 @@ async def _open(params: dict) -> dict:
         if len(pages) != 1:
             raise ValueError('explicit_tab_required')
         page = pages[0]
+        reclaim.mark_observed(page['id'])
         endpoint = urlparse(page['webSocketDebuggerUrl'])
         if endpoint.scheme != 'ws' or endpoint.hostname not in {'localhost', '127.0.0.1', '::1'} or endpoint.port != port:
             raise ValueError('invalid_tab_endpoint')
+        import websockets
         ws = await cdp._connect_cdp_ws(websockets, page['webSocketDebuggerUrl'], open_timeout=8)
         tab = Tab(port, work_key, page['id'], ws)
         try:
