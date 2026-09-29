@@ -282,3 +282,299 @@ def test_parse_baemin_pc_copied_ad_table():
     assert ad["clicks"] == 8
     assert ad["orders"] == 2
     assert ad["sales_amount"] == 21000
+
+
+def _candidate_account(monkeypatch):
+    import hashlib
+    account = {"service": "coupangeats", "business_id": "biz-mia",
+               "username": "sample-user", "branch": "sample-store"}
+    monkeypatch.setattr(collectors, "COUPANGEATS_SALES_SCHEMA", {
+        **collectors.COUPANGEATS_SALES_SCHEMA,
+        "username_sha256": hashlib.sha256(account["username"].encode()).hexdigest(),
+        "branch_sha256": hashlib.sha256(account["branch"].encode()).hexdigest(),
+    })
+    return account
+
+def test_coupangeats_candidate_reads_screen_totals_and_deduplicates(tmp_path, monkeypatch):
+    import json
+    import os
+    from pathlib import Path
+
+    account = _candidate_account(monkeypatch)
+    row = {"주문번호": "ORDER-1", "주문일": "2026-09-01", "주문금액": "12,000원",
+           "할인": "1,000원", "배달팁": "2,000원", "주문자명": "private customer"}
+    monkeypatch.setattr(collectors, "_page_state", lambda page, service, timeout=5000: ("authenticated", ""))
+    monkeypatch.setattr(collectors, "_scrape_table", lambda page, timeout=None: [row, row])
+    import sys
+    llm_calls = []
+    def count_llm_calls(frame, event, arg):
+        if event == "call" and frame.f_code.co_name == "call_llm_with_fallback":
+            llm_calls.append(1)
+
+    class Control:
+        def __init__(self, value=""):
+            self.value = value
+        def count(self):
+            return 1
+        @property
+        def first(self):
+            return self
+        def nth(self, index):
+            return self
+        def is_visible(self, timeout):
+            return True
+        def click(self, timeout):
+            pass
+        def fill(self, value, timeout=None):
+            pass
+        def inner_text(self, timeout):
+            return self.value
+
+    class Page:
+        def get_by_role(self, role, name, exact):
+            return Control()
+        def get_by_text(self, label, exact):
+            class Empty:
+                @property
+                def first(self):
+                    return self
+                def count(self):
+                    return 0
+                def is_visible(self, timeout):
+                    return False
+            return Empty()
+        def locator(self, selector):
+            if selector == "input[type='date']":
+                class Dates(Control):
+                    def count(self):
+                        return 2
+                return Dates()
+            if selector == "[data-testid='sales-summary']":
+                return Control("주문건수 1건\n총매출 12,000원\n할인액 1,000원\n배달비 2,000원")
+            return Control()
+        def set_default_timeout(self, timeout):
+            pass
+        def set_default_navigation_timeout(self, timeout):
+            pass
+
+    root = tmp_path / "private"
+    import threading
+    results = []
+    errors = []
+    def collect_in_worker():
+        sys.setprofile(count_llm_calls)
+        try:
+            results.append(collectors.coupangeats_sales_candidate(Page(), account, "2026-09-01", "2026-09-01", root))
+            results.append(collectors.coupangeats_sales_candidate(Page(), account, "2026-09-01", "2026-09-01", root))
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            sys.setprofile(None)
+    worker = threading.Thread(target=collect_in_worker)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert not errors
+    first, second = results
+    assert first["path"] == second["path"]
+    assert first["llm_calls"] == 0 and not llm_calls
+    saved = json.loads(Path(first["path"]).read_text())
+    assert saved["aggregate"]["count"] == 1
+    assert saved["aggregate"]["totals"] == {"gross_amount": 12000, "discount_amount": 1000, "delivery_fee": 2000}
+    assert "private customer" not in json.dumps(saved)
+    assert "ORDER-1" not in json.dumps(saved)
+    assert os.stat(first["path"]).st_mode & 0o077 == 0
+
+
+def test_coupangeats_rejects_bad_amounts_and_screen_totals(tmp_path):
+    import pytest
+    row = {"주문번호": "ORDER-1", "주문일": "2026-09-01", "주문금액": "12,000원",
+           "할인": "broken", "배달팁": "2,000원"}
+    with pytest.raises(ValueError, match="SALES_AMOUNT_INVALID"):
+        collectors.coupangeats_aggregate_sales([row], "2026-09-01", "2026-09-01")
+    row["할인"] = "1,000원"
+    aggregate = collectors.coupangeats_aggregate_sales([row], "2026-09-01", "2026-09-01")
+    class Page:
+        def locator(self, selector):
+            class Widget:
+                def count(self):
+                    return 1
+                @property
+                def first(self):
+                    return self
+                def inner_text(self, timeout):
+                    return "주문건수 1건\n총매출 12,000원\n할인액 999원\n배달비 2,000원"
+            return Widget()
+    with pytest.raises(ValueError, match="SALES_SCREEN_TOTAL_MISMATCH"):
+        import time
+        collectors.coupangeats_verify_sales(Page(), aggregate, time.monotonic() + 60)
+
+
+def test_coupangeats_lock_symlink_is_rejected(tmp_path, monkeypatch):
+    import pytest
+
+    account = _candidate_account(monkeypatch)
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    (root / ".sales.lock").symlink_to(victim)
+    with pytest.raises(ValueError, match="SALES_STORAGE_LOCK_UNSAFE"):
+        collectors.coupangeats_sales_candidate(object(), account, "2026-09-01", "2026-09-01", root)
+    assert victim.read_text() == "untouched"
+
+
+def test_coupangeats_account_shape_passes_scope_without_vault_account(monkeypatch):
+    import pytest
+
+    account = {**_candidate_account(monkeypatch), "password_source": "agent_vault",
+               "agent_vault_origin": "https://store.coupangeats.com"}
+    collectors._coupangeats_scope(account, "2026-09-01", "2026-09-02")
+    with pytest.raises(ValueError, match="COUPANGEATS_ACCOUNT_SCOPE_MISMATCH"):
+        collectors._coupangeats_scope({**account, "username": "other"}, "2026-09-01", "2026-09-02")
+    with pytest.raises(ValueError, match="COUPANGEATS_ACCOUNT_SCOPE_MISMATCH"):
+        collectors._coupangeats_scope({**account, "branch": "other"}, "2026-09-01", "2026-09-02")
+
+
+def test_coupangeats_candidate_does_not_replace_existing_records(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    class Context:
+        def new_page(self):
+            return SimpleNamespace(goto=lambda *a, **k: None)
+        def close(self):
+            pass
+    class Browser:
+        def new_context(self, **kwargs):
+            return Context()
+        def close(self):
+            pass
+    class Playwright:
+        chromium = SimpleNamespace(launch=lambda **kwargs: Browser())
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", SimpleNamespace(sync_playwright=lambda: Playwright()))
+    monkeypatch.setattr(collectors, "_storage_state_path", lambda account: "session.json")
+    monkeypatch.setattr(collectors, "_page_state", lambda page, service: ("authenticated", ""))
+    monkeypatch.setattr(collectors, "_security_block_result", lambda page, response: None)
+    monkeypatch.setattr(collectors, "_dismiss_optional_prompts", lambda page, config: None)
+    monkeypatch.setattr(collectors, "_save_session_state", lambda context, service, account: None)
+    monkeypatch.setattr(collectors, "_collect_section", lambda *args: ([{"주문번호": "one", "주문일": "2026-09-01", "주문금액": "12000"}], "table"))
+    monkeypatch.setattr(collectors, "normalize_record", lambda service, kind, row, business, branch: {"kind": kind})
+    monkeypatch.setattr(collectors, "coupangeats_sales_candidate", lambda *args: (_ for _ in ()).throw(PermissionError("private root")))
+    monkeypatch.setenv("YEOLJEONG_COUPANGEATS_SALES_PRIVATE_ROOT", str(tmp_path))
+    account = _candidate_account(monkeypatch)
+    result = collectors.collect_account(account, "", "2026-09-01", "2026-09-01")
+    assert result["status"] == "succeeded"
+    assert set(result["records"]) == {"sales", "settlements", "reviews", "ads"}
+    assert all(result["records"][kind] for kind in result["records"])
+    assert result["diagnostics"]["sales_candidate_error"] == "SALES_CANDIDATE_PERMISSIONERROR"
+
+
+def test_coupangeats_timeout_in_non_main_thread(tmp_path, monkeypatch):
+    import threading
+    import time
+    monkeypatch.setattr(collectors, "COUPANGEATS_SALES_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(collectors, "coupangeats_enter_sales", lambda page, deadline: time.sleep(0.03))
+    account = _candidate_account(monkeypatch)
+    class Page:
+        def set_default_timeout(self, timeout):
+            pass
+        def set_default_navigation_timeout(self, timeout):
+            pass
+    errors = []
+    def collect_in_worker():
+        try:
+            collectors.coupangeats_sales_candidate(Page(), account, "2026-09-01", "2026-09-01", tmp_path / "private")
+        except Exception as exc:
+            errors.append(exc)
+    worker = threading.Thread(target=collect_in_worker)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], TimeoutError)
+    assert str(errors[0]) == "SALES_COLLECTION_TIMEOUT"
+
+
+def test_coupangeats_aggregate_optional_zero_and_negative_summary():
+    import time
+
+    row = {"주문번호": "sample-order", "주문일": "2026-09-01", "주문금액": "-1,200원"}
+    aggregate = collectors.coupangeats_aggregate_sales([row], "2026-09-01", "2026-09-01")
+    assert aggregate["totals"] == {"gross_amount": -1200, "discount_amount": 0, "delivery_fee": 0}
+
+    class Summary:
+        def count(self):
+            return 1
+        @property
+        def first(self):
+            return self
+        def inner_text(self, timeout):
+            return "주문건수 1건\n총매출 -1,200원\n할인액 0원\n배달비 0원"
+    class Page:
+        def locator(self, selector):
+            return Summary()
+    collectors.coupangeats_verify_sales(Page(), aggregate, time.monotonic() + 1)
+
+
+def test_coupangeats_download_uses_original_browser_artifact(tmp_path, monkeypatch):
+    import time
+
+    import pytest
+
+    monkeypatch.setattr(collectors, "_page_state", lambda *a, **k: ("authenticated", ""))
+    class Download:
+        suggested_filename = "sales.csv"
+        deleted = False
+        delay = 0
+        @property
+        def _impl_obj(self):
+            return self
+        def _sync(self, coroutine):
+            import asyncio
+            return asyncio.run(coroutine)
+        async def save_as(self, target):
+            import asyncio
+            from pathlib import Path
+            await asyncio.sleep(self.delay)
+            Path(target).write_text("주문일,주문금액\n2026-09-01,1200\n")
+        async def delete(self):
+            self.deleted = True
+    download = Download()
+    class Button:
+        def count(self):
+            return 1
+        def nth(self, index):
+            return self
+        @property
+        def first(self):
+            return self
+        def is_visible(self, timeout):
+            return True
+        def click(self, timeout):
+            pass
+    class Event:
+        value = download
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+    class Page:
+        def get_by_role(self, role, name, exact):
+            return Button()
+        def get_by_text(self, label, exact):
+            return Button()
+        def expect_download(self, timeout):
+            return Event()
+    rows, source = collectors.coupangeats_query_or_download(Page(), tmp_path, time.monotonic() + 1)
+    assert source == "download" and len(rows) == 1
+    assert download.deleted
+    assert not list(tmp_path.iterdir())
+    download.delay = 0.05
+    with pytest.raises(TimeoutError):
+        collectors.coupangeats_query_or_download(Page(), tmp_path, time.monotonic() + 0.02)
+    assert not list(tmp_path.iterdir())

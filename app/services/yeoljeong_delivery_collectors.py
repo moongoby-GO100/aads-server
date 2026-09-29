@@ -7,18 +7,21 @@ DOM changes do not leak into the finance service or API layer.
 """
 from __future__ import annotations
 
+import asyncio
 import csv
+import fcntl
 import hashlib
+import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import time
 from datetime import date, datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-
 
 PORTAL_CONFIG: dict[str, dict[str, Any]] = {
     "baemin": {
@@ -673,8 +676,8 @@ def _fill_login(page: Any, username: str, password: str, service: str = "") -> b
     return True
 
 
-def _page_state(page: Any, service: str = "") -> tuple[str, str]:
-    body = _clean(page.locator("body").inner_text(timeout=5000)).lower()
+def _page_state(page: Any, service: str = "", timeout: int = 5000) -> tuple[str, str]:
+    body = _clean(page.locator("body").inner_text(timeout=timeout)).lower()
     if any(term in body for term in SECURITY_BLOCK_TERMS):
         return "portal_action_required", "BAEMIN_SECURITY_BLOCKED"
     if service == "ddangyo" and any(term in body for term in DDANGYO_NUMERIC_CAPTCHA_TERMS):
@@ -688,7 +691,7 @@ def _page_state(page: Any, service: str = "") -> tuple[str, str]:
     password_inputs = page.locator("input[type='password']")
     for index in range(password_inputs.count()):
         try:
-            if password_inputs.nth(index).is_visible(timeout=500):
+            if password_inputs.nth(index).is_visible(timeout=min(timeout, 500)):
                 return "failed", "PORTAL_LOGIN_NOT_COMPLETED"
         except Exception:
             continue
@@ -795,7 +798,7 @@ def _dismiss_optional_prompts(page: Any, config: dict[str, Any]) -> None:
             continue
 
 
-def _scrape_table(page: Any) -> list[dict[str, Any]]:
+def _scrape_table(page: Any, timeout: int | None = None) -> list[dict[str, Any]]:
     return page.locator("table").first.evaluate(
         """
         table => {
@@ -806,7 +809,7 @@ def _scrape_table(page: Any) -> list[dict[str, Any]]:
             return Object.fromEntries(cells.map((value, i) => [headers[i] || `column_${i + 1}`, value]));
           });
         }
-        """
+        """, **({"timeout": timeout} if timeout is not None else {})
     )
 
 
@@ -958,7 +961,7 @@ def collect_account(
             _save_session_state(context, service, account)
 
             collected: dict[str, list[dict[str, Any]]] = {}
-            diagnostics: dict[str, str] = {"auth_mode": auth_mode}
+            diagnostics: dict[str, Any] = {"auth_mode": auth_mode}
             for kind, labels in config["sections"].items():
                 rows, source = _collect_section(page, labels, date_from, date_to, temp_dir, config, kind)
                 collected[kind] = [
@@ -966,6 +969,19 @@ def collect_account(
                     for row in rows
                 ]
                 diagnostics[kind] = source
+            if service == "coupangeats" and os.environ.get("YEOLJEONG_COUPANGEATS_SALES_PRIVATE_ROOT"):
+                try:
+                    candidate = coupangeats_sales_candidate(
+                        page, account, date_from, date_to,
+                        Path(os.environ["YEOLJEONG_COUPANGEATS_SALES_PRIVATE_ROOT"]),
+                    )
+                    diagnostics["sales_candidate"] = candidate
+                except Exception as exc:
+                    # This unapproved candidate must never discard the four established ledgers.
+                    diagnostics["sales_candidate_error"] = (
+                        str(exc) if isinstance(exc, (ValueError, TimeoutError))
+                        else f"SALES_CANDIDATE_{type(exc).__name__.upper()}"
+                    )
             _save_session_state(context, service, account)
             browser.close()
             browser = None
@@ -986,3 +1002,300 @@ def collect_account(
             except Exception:
                 pass
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+# Coupang Eats sales candidate. Only the login fragment has been approved;
+# these independent read steps remain candidates until PC evidence and approval.
+COUPANGEATS_SALES_SCHEMA = {
+    "service": "coupangeats",
+    "vault_account": "yeoljeong-coupangeats",
+    "business_id": "biz-mia",
+    "username_sha256": "c06182c8a8019e79e1cd415d86851f47ef6a5eb2a386480ea903823c3db784d7",
+    "branch_sha256": "81fe71ac5f4e2fd823e1c9c026b408ef2003aef58213a5306ede99a5ba72951d",
+    "period": "inclusive calendar dates, YYYY-MM-DD",
+    "amounts": ("gross_amount", "discount_amount", "delivery_fee"),
+    "recipe_state": "candidate_unverified",
+    "retention_days": 30,
+}
+COUPANGEATS_SALES_STEPS = ("enter_sales", "select_period", "query_or_download", "aggregate")
+COUPANGEATS_SALES_RETRY_LIMIT = 2
+COUPANGEATS_SALES_TIMEOUT_SECONDS = 60
+
+
+def _coupangeats_remaining_ms(deadline: float, cap: int = 5000) -> int:
+    """Bound the next Playwright wait by the remaining wall-clock budget."""
+    remaining = int((deadline - time.monotonic()) * 1000)
+    if remaining <= 0:
+        raise TimeoutError("SALES_COLLECTION_TIMEOUT")
+    return min(remaining, cap)
+
+
+def _coupangeats_step(page: Any, deadline: float) -> None:
+    timeout = _coupangeats_remaining_ms(deadline)
+    page.set_default_timeout(timeout)
+    page.set_default_navigation_timeout(timeout)
+
+
+def _coupangeats_scope(account: dict[str, Any], date_from: str, date_to: str) -> None:
+    """Reject substituted credentials, branches and unbounded periods before browser access."""
+    schema = COUPANGEATS_SALES_SCHEMA
+    if (
+        account.get("service") != schema["service"]
+        or account.get("business_id") != schema["business_id"]
+        or account.get("password_source") not in (None, "agent_vault")
+        or (account.get("agent_vault_origin") and account["agent_vault_origin"].rstrip("/") != "https://store.coupangeats.com")
+        or hashlib.sha256(str(account.get("username") or "").encode()).hexdigest() != schema["username_sha256"]
+        or hashlib.sha256(str(account.get("branch") or "").encode()).hexdigest() != schema["branch_sha256"]
+    ):
+        raise ValueError("COUPANGEATS_ACCOUNT_SCOPE_MISMATCH")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_from) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_to):
+        raise ValueError("COUPANGEATS_PERIOD_FORMAT_INVALID")
+    start, end = date.fromisoformat(date_from), date.fromisoformat(date_to)
+    if start > end or (end - start).days > 31:
+        raise ValueError("COUPANGEATS_PERIOD_OUT_OF_RANGE")
+
+
+def coupangeats_enter_sales(page: Any, deadline: float) -> None:
+    """Read-only navigation candidate; fail closed if the sales section is absent."""
+    if not _click_coupangeats_read_only(page, "매출", ("link", "button"), deadline):
+        raise ValueError("SALES_SECTION_NOT_FOUND")
+
+
+def _click_coupangeats_read_only(page: Any, label: str, roles: tuple[str, ...], deadline: float) -> bool:
+    for role in roles:
+        controls = page.get_by_role(role, name=label, exact=True)
+        for index in range(min(controls.count(), 10)):
+            control = controls.nth(index)
+            if control.is_visible(timeout=_coupangeats_remaining_ms(deadline, 400)):
+                control.click(timeout=_coupangeats_remaining_ms(deadline, 2500))
+                return True
+    return False
+
+
+def coupangeats_select_period(page: Any, date_from: str, date_to: str, deadline: float) -> None:
+    """Set both dates without using the generic helper's implicit search click."""
+    inputs = page.locator("input[type='date']")
+    if inputs.count() < 2:
+        raise ValueError("PERIOD_INPUTS_NOT_FOUND")
+    inputs.nth(0).fill(date_from, timeout=_coupangeats_remaining_ms(deadline))
+    inputs.nth(1).fill(date_to, timeout=_coupangeats_remaining_ms(deadline))
+
+
+def coupangeats_query_or_download(page: Any, download_dir: Path, deadline: float) -> tuple[list[dict[str, Any]], str]:
+    """Use only 조회 or download controls; never submit an edit or settlement form."""
+    if not _click_coupangeats_read_only(page, "조회", ("button",), deadline):
+        raise ValueError("SALES_QUERY_NOT_FOUND")
+    state, code = _page_state(page, "coupangeats", timeout=_coupangeats_remaining_ms(deadline))
+    if state != "authenticated":
+        raise ValueError(code)
+    for label in ("엑셀 다운로드", "CSV 다운로드"):
+        button = page.get_by_text(label, exact=True).first
+        if not button.is_visible(timeout=_coupangeats_remaining_ms(deadline, 400)):
+            continue
+        with page.expect_download(timeout=_coupangeats_remaining_ms(deadline)) as info:
+            button.click(timeout=_coupangeats_remaining_ms(deadline, 2500))
+        download = info.value
+        target: Path | None = None
+        try:
+            suffix = Path(download.suggested_filename or "").suffix.lower()
+            if suffix not in {".csv", ".xlsx", ".xlsm"}:
+                raise ValueError("SALES_EXPORT_FORMAT_UNSUPPORTED")
+            target = download_dir / f"sales_export{suffix}"
+            # Use the browser's original download. A second GET cannot replay POST/blob exports.
+            # Sync Download.save_as has no timeout. Bound its underlying coroutine
+            # on the same Playwright event loop; fail closed if that API is absent.
+            if not hasattr(download, "_impl_obj") or not hasattr(download, "_sync"):
+                raise ValueError("SALES_DOWNLOAD_TIMEOUT_UNAVAILABLE")
+            download_seconds = _coupangeats_remaining_ms(deadline) / 1000
+            download._sync(asyncio.wait_for(
+                download._impl_obj.save_as(str(target)),
+                timeout=download_seconds,
+            ))
+            _coupangeats_remaining_ms(deadline)
+            if target.stat().st_size > 10 * 1024 * 1024:
+                raise ValueError("SALES_DOWNLOAD_TOO_LARGE")
+            return _read_download(target), "download"
+        finally:
+            if target is not None:
+                target.unlink(missing_ok=True)
+            try:
+                cleanup_seconds = _coupangeats_remaining_ms(deadline) / 1000
+                download._sync(asyncio.wait_for(
+                    download._impl_obj.delete(),
+                    timeout=cleanup_seconds,
+                ))
+            except Exception:
+                pass
+    if page.locator("table").first.is_visible(timeout=_coupangeats_remaining_ms(deadline, 400)):
+        return _scrape_table(page, timeout=_coupangeats_remaining_ms(deadline)), "table"
+    raise ValueError("SALES_EXPORT_OR_TABLE_NOT_FOUND")
+
+
+def coupangeats_aggregate_sales(
+    rows: list[dict[str, Any]], date_from: str, date_to: str,
+) -> dict[str, Any]:
+    """Allowlist fields, hash row identity, and deduplicate before summing."""
+    records: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        occurred_on = _date(_first(row, ("주문일", "매출일", "거래일", "date", "일자")))
+        amount_text = _first(row, ("총매출", "주문금액", "결제금액", "매출액", "판매금액"))
+        if not occurred_on or not date_from <= occurred_on <= date_to or not amount_text:
+            raise ValueError("SALES_ROW_INCOMPLETE_OR_OUT_OF_PERIOD")
+        if not re.fullmatch(r"\s*-?[\d,]+\s*(?:원)?\s*", amount_text):
+            raise ValueError("SALES_AMOUNT_INVALID")
+        source_id = _source_id("coupangeats", "sales", row)
+        discount_text = _first(row, ("할인", "쿠폰"))
+        delivery_text = _first(row, ("배달팁", "배달비"))
+        for value in (discount_text, delivery_text):
+            if value and not re.fullmatch(r"\s*-?[\d,]+\s*(?:원)?\s*", value):
+                raise ValueError("SALES_AMOUNT_INVALID")
+        record = {
+            "source_id": source_id,
+            "occurred_on": occurred_on,
+            "gross_amount": _number(amount_text),
+            "discount_amount": _number(discount_text),
+            "delivery_fee": _number(delivery_text),
+        }
+        if source_id in records and records[source_id] != record:
+            raise ValueError("SALES_DUPLICATE_CONFLICT")
+        records[source_id] = record
+    ordered = [records[key] for key in sorted(records)]
+    return {
+        "records": ordered,
+        "count": len(ordered),
+        "totals": {field: sum(row[field] for row in ordered) for field in COUPANGEATS_SALES_SCHEMA["amounts"]},
+    }
+
+
+def coupangeats_read_screen_summary(page: Any, deadline: float) -> dict[str, int]:
+    """Read a separate summary widget; unknown portal markup fails closed."""
+    widgets = page.locator("[data-testid='sales-summary']")
+    if widgets.count() != 1:
+        raise ValueError("SALES_SCREEN_SUMMARY_NOT_FOUND")
+    summary = widgets.first.inner_text(timeout=_coupangeats_remaining_ms(deadline, 2500))
+    labels = {"count": "주문건수", "gross_amount": "총매출", "discount_amount": "할인액", "delivery_fee": "배달비"}
+    observed: dict[str, int] = {}
+    for field, label in labels.items():
+        matches = re.findall(rf"(?m)^\s*{label}\s*[:：]?\s*(-?[\d,]+)\s*(?:건|원)?\s*$", summary)
+        if len(matches) != 1:
+            raise ValueError("SALES_SCREEN_SUMMARY_INVALID")
+        observed[field] = int(matches[0].replace(",", ""))
+    return observed
+
+
+def coupangeats_verify_sales(page: Any, aggregate: dict[str, Any], deadline: float) -> None:
+    """Compare every stored metric with independently read screen summary."""
+    observed = coupangeats_read_screen_summary(page, deadline)
+    if aggregate["count"] != observed["count"] or any(
+        aggregate["totals"][field] != observed[field] for field in COUPANGEATS_SALES_SCHEMA["amounts"]
+    ):
+        raise ValueError("SALES_SCREEN_TOTAL_MISMATCH")
+
+
+def _coupangeats_sales_path(root: Path, date_from: str, date_to: str) -> Path:
+    scope = f"{COUPANGEATS_SALES_SCHEMA['vault_account']}|{COUPANGEATS_SALES_SCHEMA['business_id']}|{date_from}|{date_to}"
+    return root / (hashlib.sha256(scope.encode()).hexdigest() + ".json")
+
+
+def coupangeats_store_sales(
+    root: Path, date_from: str, date_to: str, aggregate: dict[str, Any],
+) -> Path:
+    """Atomically replace a period snapshot; no raw export or personal fields survive."""
+    root = Path(root)
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if root.is_symlink() or root.stat().st_mode & 0o077:
+        raise ValueError("SALES_STORAGE_NOT_PRIVATE")
+    path = _coupangeats_sales_path(root, date_from, date_to)
+    if path.is_symlink():
+        raise ValueError("SALES_STORAGE_SYMLINK")
+    safe_records = [
+        {field: record[field] for field in ("source_id", "occurred_on", *COUPANGEATS_SALES_SCHEMA["amounts"])}
+        for record in aggregate["records"]
+    ]
+    safe_aggregate = {
+        "records": safe_records,
+        "count": len(safe_records),
+        "totals": {field: sum(record[field] for record in safe_records) for field in COUPANGEATS_SALES_SCHEMA["amounts"]},
+    }
+    payload = {
+        "schema": 1,
+        "idempotency_key": path.stem,
+        "account": COUPANGEATS_SALES_SCHEMA["vault_account"],
+        "business_id": COUPANGEATS_SALES_SCHEMA["business_id"],
+        "period": [date_from, date_to],
+        "recipe_state": "candidate_unverified",
+        "retention_days": COUPANGEATS_SALES_SCHEMA["retention_days"],
+        "aggregate": safe_aggregate,
+    }
+    fd, temporary = tempfile.mkstemp(prefix=".sales-", dir=root)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, ensure_ascii=False, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        cutoff = time.time() - COUPANGEATS_SALES_SCHEMA["retention_days"] * 86400
+        for old in root.glob("[0-9a-f]" * 64 + ".json"):
+            if old != path and not old.is_symlink() and old.stat().st_mtime < cutoff:
+                old.unlink()
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return path
+
+
+def coupangeats_sales_candidate(
+    page: Any, account: dict[str, Any], date_from: str, date_to: str,
+    private_root: Path,
+) -> dict[str, Any]:
+    """Deterministic PC-session replay. No LLM or recipe promotion occurs here."""
+    _coupangeats_scope(account, date_from, date_to)
+    root = Path(private_root)
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if root.is_symlink() or root.stat().st_mode & 0o077:
+        raise ValueError("SALES_STORAGE_NOT_PRIVATE")
+    lock_path = root / ".sales.lock"
+    flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC
+    try:
+        lock_fd = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise ValueError("SALES_STORAGE_LOCK_UNSAFE") from exc
+    with os.fdopen(lock_fd, "a+b") as lock:
+        if not stat.S_ISREG(os.fstat(lock.fileno()).st_mode) or os.fstat(lock.fileno()).st_nlink != 1:
+            raise ValueError("SALES_STORAGE_LOCK_UNSAFE")
+        os.fchmod(lock.fileno(), 0o600)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError("SALES_COLLECTION_BUSY") from exc
+        deadline = time.monotonic() + COUPANGEATS_SALES_TIMEOUT_SECONDS
+        try:
+            with tempfile.TemporaryDirectory(prefix="sales-", dir=root) as directory:
+                for action in (lambda: coupangeats_enter_sales(page, deadline),
+                               lambda: coupangeats_select_period(page, date_from, date_to, deadline)):
+                    _coupangeats_step(page, deadline)
+                    action()
+                    _coupangeats_remaining_ms(deadline)
+                rows: list[dict[str, Any]] | None = None
+                source = ""
+                for attempt in range(COUPANGEATS_SALES_RETRY_LIMIT):
+                    _coupangeats_step(page, deadline)
+                    try:
+                        rows, source = coupangeats_query_or_download(page, Path(directory), deadline)
+                        _coupangeats_remaining_ms(deadline)
+                        break
+                    except ValueError as exc:
+                        if str(exc) != "SALES_EXPORT_OR_TABLE_NOT_FOUND" or attempt + 1 == COUPANGEATS_SALES_RETRY_LIMIT:
+                            raise
+                _coupangeats_step(page, deadline)
+                aggregate = coupangeats_aggregate_sales(rows or [], date_from, date_to)
+                coupangeats_verify_sales(page, aggregate, deadline)
+                _coupangeats_remaining_ms(deadline)
+                path = coupangeats_store_sales(root, date_from, date_to, aggregate)
+                _coupangeats_remaining_ms(deadline)
+                return {"status": "candidate_unverified", "path": str(path), "source": source,
+                        "count": aggregate["count"], "llm_calls": 0,
+                        "evidence": "screen_total_compared; pc_replay_and_approval_pending"}
+        except Exception as exc:
+            if type(exc).__name__ == "TimeoutError":
+                raise TimeoutError("SALES_COLLECTION_TIMEOUT") from exc
+            raise
