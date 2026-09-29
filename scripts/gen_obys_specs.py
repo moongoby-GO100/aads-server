@@ -53,8 +53,9 @@ for detail in sorted(detail_refs):
         owner = canonical_views[0]
         status = "owner_resolved"
     elif len(ref_views) == 1:
+        # PRD 6절 단일 참조 화면 단독 소유 원칙: 참조 메뉴가 하나뿐이면 소유권 다툼이 없어 확정으로 본다
         owner = ref_views[0]
-        status = "single_menu"
+        status = "owner_resolved"
     elif len(canonical_views) > 1:
         owner = "|".join(canonical_views)
         status = "conflict_multi_canonical"
@@ -74,7 +75,6 @@ os.makedirs("docs/specs/obys-v4", exist_ok=True)
 
 STATUS_KR = {
     "owner_resolved": "정본 확정(PRD 6절 소유 메뉴와 일치)",
-    "single_menu": "단일 메뉴 참조(충돌 없음)",
     "conflict_multi_canonical": "충돌 — 2개 이상 정본 메뉴가 동일 화면 참조, 소유권 재결정 필요",
     "conflict_needs_review": "미정 — 정본 소유 메뉴 없이 여러 메뉴가 참조, 점검 필요",
 }
@@ -179,8 +179,19 @@ TASKS_TMPL = """# tasks: {id}
 - [ ] 소유 메뉴({owner_desc}) 화면 구현
 - [ ] 참조 메뉴({deps})는 링크만 연결, 화면 복제 금지
 - [ ] 완료 기준 검증(spec.md 참조)
-{conflict_task}
-"""
+{conflict_task}"""
+
+def write_keeping_version_header(path, body):
+    # 정본 게이트가 첫 줄 spec-version 주석을 읽으므로 재생성 시 기존 헤더를 유지한다
+    header = ""
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            first = f.readline()
+        if first.startswith("<!-- spec-version:"):
+            header = first
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(header + body)
+
 
 for r in rows:
     slug_dir = f"docs/specs/obys-v4/{r['detail']}"
@@ -192,19 +203,19 @@ for r in rows:
     if r["status"].startswith("conflict"):
         conflict_note = f"- ⚠️ 충돌: {deps} 가 동시 참조한다. 정본 소유 메뉴를 CEO/PM이 확정해야 한다.\n"
         conflict_note_plan = f"- {deps} 가 동시 참조하는 충돌 슬라이스. 소유권 확정 전 구현 착수 금지."
-        conflict_task = "- [ ] ⚠️ 소유권 충돌 해결(CEO/PM 결정 필요) — 확정 전 구현 착수 금지"
+        conflict_task = "- [ ] ⚠️ 소유권 충돌 해결(CEO/PM 결정 필요) — 확정 전 구현 착수 금지\n"
     else:
         conflict_note = ""
         conflict_note_plan = "- 없음(단일 소유 확인됨)"
         conflict_task = ""
 
-    with open(f"{slug_dir}/spec.md", "w", encoding="utf-8") as f:
-        f.write(SPEC_TMPL.format(id=r["id"], intent=intent, deps=deps, owner_desc=owner_desc,
-                                  status_kr=status_kr, conflict_note=conflict_note))
-    with open(f"{slug_dir}/plan.md", "w", encoding="utf-8") as f:
-        f.write(PLAN_TMPL.format(id=r["id"], owner_desc=owner_desc, conflict_note_plan=conflict_note_plan))
-    with open(f"{slug_dir}/tasks.md", "w", encoding="utf-8") as f:
-        f.write(TASKS_TMPL.format(id=r["id"], owner_desc=owner_desc, deps=deps, conflict_task=conflict_task))
+    write_keeping_version_header(f"{slug_dir}/spec.md", SPEC_TMPL.format(
+        id=r["id"], intent=intent, deps=deps, owner_desc=owner_desc,
+        status_kr=status_kr, conflict_note=conflict_note))
+    write_keeping_version_header(f"{slug_dir}/plan.md", PLAN_TMPL.format(
+        id=r["id"], owner_desc=owner_desc, conflict_note_plan=conflict_note_plan))
+    write_keeping_version_header(f"{slug_dir}/tasks.md", TASKS_TMPL.format(
+        id=r["id"], owner_desc=owner_desc, deps=deps, conflict_task=conflict_task))
 
 print(f"SLICES={len(rows)}")
 print(f"CONFLICTS={len(conflicts)}")
