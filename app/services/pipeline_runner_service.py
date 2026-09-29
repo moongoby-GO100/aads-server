@@ -2000,6 +2000,7 @@ class PipelineCJob:
         output_summary: str = "",
         metadata: Optional[dict] = None,
         error: Optional[str] = None,
+        started_at: Optional[float] = None,
     ) -> None:
         """러너 자기감사 증거를 ohvis_harness_traces에 남긴다 (비치명적).
 
@@ -2008,6 +2009,11 @@ class PipelineCJob:
         """
         try:
             from app.services.ohvis_harness_trace import record_trace
+
+            try:
+                latency_ms = max(0, int((time.monotonic() - started_at) * 1000)) if started_at is not None else None
+            except Exception:  # noqa: BLE001 — 계측 실패는 러너 진행을 막지 않는다
+                latency_ms = None
 
             await record_trace(
                 graph_run_id=f"runner:{self.job_id}",
@@ -2025,12 +2031,17 @@ class PipelineCJob:
                     "cycle": self.cycle,
                 },
                 error=error,
+                latency_ms=latency_ms,
             )
         except Exception as exc:  # noqa: BLE001 — 추적은 비치명적
             logger.debug("runner_trace_skipped run_type=%s: %s", run_type, str(exc)[:200])
 
     async def _trace_task_policy(self) -> None:
         """작업 시작 시 컴파일된 기존 구현 보존 정책을 증거로 남긴다 (비치명적)."""
+        try:
+            started_at = time.monotonic()
+        except Exception:  # noqa: BLE001
+            started_at = None
         try:
             from app.services.task_policy_compiler import compile_task_policy
 
@@ -2047,6 +2058,7 @@ class PipelineCJob:
                     f"checks={len(policy.get('checklist', []))}"
                 ),
                 metadata={"policy": policy},
+                started_at=started_at,
             )
         except Exception as exc:  # noqa: BLE001 — 정책 추적도 비치명적
             logger.debug("runner_policy_trace_skipped job=%s: %s", self.job_id, str(exc)[:200])
@@ -2057,6 +2069,10 @@ class PipelineCJob:
         판정 기준은 새로 만들지 않고 `code_reviewer`의 보존 하드 게이트 헬퍼를
         그대로 재사용한다 (해당 모듈은 수정하지 않는다).
         """
+        try:
+            started_at = time.monotonic()
+        except Exception:  # noqa: BLE001
+            started_at = None
         try:
             from app.services.code_reviewer import (
                 _diff_line_counts,
@@ -2092,6 +2108,7 @@ class PipelineCJob:
                     "allowed_paths": sorted(allowed_paths)[:40],
                     "out_of_scope_files": out_of_scope[:20],
                 },
+                started_at=started_at,
             )
         except Exception as exc:  # noqa: BLE001 — 자기감사 실패가 러너를 막지 않는다
             logger.debug("runner_preservation_trace_skipped job=%s: %s", self.job_id, str(exc)[:200])

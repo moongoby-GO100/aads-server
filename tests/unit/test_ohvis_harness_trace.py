@@ -71,6 +71,8 @@ def _patch_pool(monkeypatch, conn: FakeConn | None, error: Exception | None = No
 
 
 def test_record_trace_inserts_row_when_table_exists(monkeypatch) -> None:
+    # Explicit reset keeps this INSERT test independent of suite execution order.
+    reset_table_cache()
     conn = FakeConn(table_exists=True)
     _patch_pool(monkeypatch, conn)
 
@@ -83,6 +85,7 @@ def test_record_trace_inserts_row_when_table_exists(monkeypatch) -> None:
             output_summary="advanced=True",
             metadata={"component": "goal_control_loop"},
             tool_calls=[{"name": "advance_goal"}],
+            latency_ms=37,
         )
     )
 
@@ -94,6 +97,7 @@ def test_record_trace_inserts_row_when_table_exists(monkeypatch) -> None:
     assert args[0] == "goal:abc"
     assert args[1] == "AADS"
     assert args[7] == "goal_advance"
+    assert args[11] == 37
     assert '"component": "goal_control_loop"' in args[13]
 
 
