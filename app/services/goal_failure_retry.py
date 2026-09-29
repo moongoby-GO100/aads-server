@@ -9,7 +9,8 @@ import uuid
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 
-from app.services.goal_binding import normalize_job_state_for_project
+from app.services.goal_binding import DONE_JOB_STATUSES, normalize_job_state_for_project
+from app.services.release_evidence import is_certified_deploy_row
 
 logger = logging.getLogger(__name__)
 _MAX_RETRY = min(2, max(0, int(os.getenv("GOAL_FAILED_LINK_RETRY_MAX", "2"))))
@@ -310,6 +311,45 @@ async def ensure_retry_candidate(
         return {"created": False, "why": "proposal_failed"}
 
 
+async def _has_release_evidence_column(conn) -> bool:
+    """goal_task_links.release_deploy_run_id 존재 여부 (migration 170 이전 스키마 대비).
+
+    캐시하지 않는다: 프로세스 기동 뒤 migration 이 적용돼도 재시작 없이 증거 경로가 켜져야 한다.
+    goal_manager.link_optional_columns 에 넣으면 그쪽 preserve_certified 분기가 바뀌므로 따로 본다.
+    """
+    try:
+        rows = await conn.fetch(
+            "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() "
+            "AND table_name = 'goal_task_links' AND column_name = 'release_deploy_run_id'"
+        )
+    except Exception as exc:  # noqa: BLE001 — 확인 실패 시 증거 컬럼 없는 스키마로 간주
+        logger.debug("goal_release_column_probe_failed: %s", str(exc)[:200])
+        return False
+    return bool(rows)
+
+
+def _completion_accept_reason(replacement) -> str | None:
+    """후속 job 을 완료로 인정하는 근거(job_phase | release_evidence). 인정하지 않으면 None.
+
+    release_evidence 는 링크가 완료 계열이고, 링크에 기록된 배포 run 이 인증(success/completed,
+    이미지 digest 일치)을 통과했을 때만 인정한다. run id 가 남아 있어도 실패·롤백 run 이면 거절.
+    """
+    if normalize_job_state_for_project(
+        replacement["status"], replacement["phase"], replacement["project"],
+    ) == "completed":
+        return "job_phase"
+    link_status = str(replacement.get("link_status") or "").strip().lower()
+    if link_status not in DONE_JOB_STATUSES or replacement.get("release_deploy_run_id") is None:
+        return None
+    deploy = {
+        "status": replacement.get("deploy_status"),
+        "phase": replacement.get("deploy_phase"),
+        "image_digest": replacement.get("image_digest"),
+        "standby_digest": replacement.get("standby_digest"),
+    }
+    return "release_evidence" if is_certified_deploy_row(deploy) else None
+
+
 def parse_supersede_markers(instruction: str) -> list[tuple[str, str]]:
     """지시서 헤더에서 (실패 job id, marker 종류) 목록을 뽑는다.
 
@@ -352,11 +392,17 @@ async def mark_explicit_retry_supersession(conn, milestone_id: str) -> int:
     )
     if not row:
         return 0
+    evidence_select = evidence_join = ""
+    if await _has_release_evidence_column(conn):
+        evidence_select = (", l.release_deploy_run_id, d.status AS deploy_status, "
+                           "d.phase AS deploy_phase, d.image_digest, d.standby_digest")
+        evidence_join = "LEFT JOIN deploy_runs d ON d.id = l.release_deploy_run_id"
     replacements = await conn.fetch(
-        f"""SELECT l.task_id, l.goal_id, l.milestone_id,
+        f"""SELECT l.task_id, l.goal_id, l.milestone_id, l.status AS link_status,
                    p.tenant_id::text AS tenant_id, p.created_at,
-                   p.instruction, p.status, p.phase, p.project
+                   p.instruction, p.status, p.phase, p.project{evidence_select}
             FROM goal_task_links l JOIN pipeline_jobs p ON p.job_id = l.task_id
+            {evidence_join}
             WHERE l.milestone_id = $1::uuid AND l.task_type = 'pipeline_job'
               {active_link_predicate(columns, 'l')}""",
         milestone_id,
@@ -366,18 +412,23 @@ async def mark_explicit_retry_supersession(conn, milestone_id: str) -> int:
         markers = parse_supersede_markers(replacement["instruction"])
         if not markers:
             continue
-        if normalize_job_state_for_project(
-            replacement["status"], replacement["phase"], replacement["project"],
-        ) != "completed":
-            # 진행 중인 후속은 완료 판정마다 다시 오므로 warning 대신 info 로 남긴다.
+        accept_reason = _completion_accept_reason(replacement)
+        if accept_reason is None:
+            # 진행 중인 후속은 완료 판정마다 다시 오므로 debug 로만 남긴다.
+            # 링크는 완료인데 배포 run 이 인증되지 않은 경우만 이상 징후라 info 로 올린다.
+            uncertified = (replacement.get("release_deploy_run_id") is not None
+                           and str(replacement.get("link_status") or "").strip().lower()
+                           in DONE_JOB_STATUSES)
             for failed_id, marker in markers:
-                logger.info("goal_retry_supersede_rejected milestone=%s failed=%s replacement=%s "
-                            "reason=replacement_not_completed marker=%s",
-                            milestone_id, failed_id, replacement["task_id"], marker)
+                (logger.info if uncertified else logger.debug)(
+                    "goal_retry_supersede_rejected milestone=%s failed=%s replacement=%s "
+                    "reason=%s marker=%s", milestone_id, failed_id, replacement["task_id"],
+                    "release_deploy_not_certified" if uncertified else "replacement_not_completed",
+                    marker)
             continue
         for failed_id, marker in markers:
             if await _supersede_one(conn, milestone_id, row, columns, replacement,
-                                    failed_id, marker):
+                                    failed_id, marker, accept_reason):
                 count += 1
     return count
 
@@ -389,7 +440,7 @@ def _reject(milestone_id: str, failed_id: str, replacement_id, reason: str, mark
 
 
 async def _supersede_one(conn, milestone_id: str, row, columns: set, replacement,
-                         failed_id: str, marker: str) -> bool:
+                         failed_id: str, marker: str, accept_reason: str = "job_phase") -> bool:
     """완료된 후속 job 하나가 marker 로 가리킨 실패 링크 하나를 승계한다.
 
     retry_of_link 는 살아 있는 retry_candidate 카드와 카드 이후 생성을 요구한다.
@@ -478,6 +529,7 @@ async def _supersede_one(conn, milestone_id: str, row, columns: set, replacement
             return False
         if candidate is not None:
             candidate["superseded_by_task_id"] = replacement["task_id"]
+            candidate["superseded_accept_reason"] = accept_reason
             await conn.execute(
                 "UPDATE milestones SET evidence = $2::jsonb, updated_at = NOW() "
                 "WHERE id = $1::uuid AND tenant_id = $3::uuid",
@@ -486,6 +538,7 @@ async def _supersede_one(conn, milestone_id: str, row, columns: set, replacement
         else:
             logger.info("goal_header_supersede_without_candidate milestone=%s failed=%s replacement=%s",
                         milestone_id, failed_id, replacement["task_id"])
-        logger.info("goal_retry_link_superseded milestone=%s failed=%s replacement=%s marker=%s",
-                    milestone_id, failed_id, replacement["task_id"], marker)
+        logger.info("goal_retry_link_superseded milestone=%s failed=%s replacement=%s marker=%s "
+                    "accept_reason=%s", milestone_id, failed_id, replacement["task_id"], marker,
+                    accept_reason)
     return True
