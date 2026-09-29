@@ -120,6 +120,31 @@ async def create_pool() -> Any:
     )
 
 
+def parse_mem_available_mb(meminfo_text: str) -> int | None:
+    for line in meminfo_text.splitlines():
+        if line.startswith("MemAvailable:"):
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                return int(parts[1]) // 1024
+            return None
+    return None
+
+
+def read_available_mb(meminfo_path: str = "/proc/meminfo") -> int:
+    # SC_AVPHYS_PAGES excludes reclaimable page cache and under-reports available memory.
+    try:
+        with open(meminfo_path, encoding="utf-8") as fh:
+            parsed = parse_mem_available_mb(fh.read())
+        if parsed is not None:
+            return parsed
+    except OSError:
+        pass
+    try:
+        return int(os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 1048576)
+    except (ValueError, OSError, AttributeError):
+        return 0
+
+
 def desired_concurrency(load1: float, nproc: int, available_mb: int, latency_s: float) -> int:
     if available_mb < 1024 or load1 >= nproc * 1.25 or latency_s >= 45:
         return 0
@@ -258,7 +283,7 @@ async def run(once: bool = False) -> None:
             while True:
                 await sync_queue(pool)
                 load1 = os.getloadavg()[0]
-                mem_mb = int(os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 1048576)
+                mem_mb = read_available_mb()
                 target = desired_concurrency(load1, os.cpu_count() or 1, mem_mb, latency)
                 current_concurrency = bounded_concurrency(current_concurrency, target)
                 log_event(
