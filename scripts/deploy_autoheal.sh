@@ -786,8 +786,132 @@ autoheal_escalate() {
     fi
 }
 
+# ── 릴리스 계보 스위퍼 ──────────────────────────────────────────────────────
+# deploy.sh Phase 8 은 FINAL_DEPLOY_STATUS=success 일 때만 계보를 기록한다. standby
+# 지연(success_partial)으로 끝난 배포는 나중에 sync-standby.sh 가 success 로 올리는데,
+# 어떤 경로로 올라오든 계보가 빠지지 않도록 "인증됐는데 계보가 없는 AADS/api run"을
+# 찾아 record-release-provenance.sh 를 대신 호출한다. 이 스위퍼는 DB 에 직접 INSERT 하지
+# 않는다 — 인증 가드는 항상 record-release-provenance.sh 안의 SQL 이 쥔다.
+# 2026-09-29 실측: run 5197(2026-09-28 22:39 KST) 이후 계보 0건.
+#
+# 사용:
+#   deploy.sh EXIT 트랩(deploy_autoheal_on_exit)이 매 배포 종료마다 기본값으로 호출한다.
+#   bash scripts/deploy_autoheal.sh --provenance-sweep [--since-run-id N] [--limit N]
+#        [--days N] [--dry-run]        # 소급/수동 실행. --since-run-id 는 일수 제한을 대신한다.
+AADS_PROVENANCE_SWEEP="${AADS_PROVENANCE_SWEEP:-1}"
+_AUTOHEAL_LIB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"
+
+autoheal_provenance_sweep() {
+    local since_id="" dry="false"
+    local limit="${AADS_PROVENANCE_SWEEP_LIMIT:-10}"
+    local days="${AADS_PROVENANCE_SWEEP_DAYS:-3}"
+    local budget="${AADS_PROVENANCE_SWEEP_BUDGET_SEC:-120}"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --since-run-id) since_id="${2:-}"; shift 2 ;;
+            --limit) limit="${2:-}"; shift 2 ;;
+            --days) days="${2:-}"; shift 2 ;;
+            --dry-run) dry="true"; shift ;;
+            *) echo "[provenance-sweep] unknown argument: $1" >&2; return 64 ;;
+        esac
+    done
+    [[ -z "$since_id" || "$since_id" =~ ^[0-9]+$ ]] \
+        || { echo "[provenance-sweep] --since-run-id must be numeric" >&2; return 64; }
+    [[ "$limit" =~ ^[1-9][0-9]*$ && "$days" =~ ^[1-9][0-9]*$ && "$budget" =~ ^[1-9][0-9]*$ ]] \
+        || { echo "[provenance-sweep] limit/days/budget must be positive integers" >&2; return 64; }
+    (( limit <= 200 )) || limit=200
+
+    # 운영 트리(STATE_DIR)를 먼저 본다 — 릴리스 worktree 는 배포 종료 뒤 사라질 수 있고,
+    # 계보 계산에 필요한 Git 히스토리는 운영 저장소에 있다.
+    local repo="" candidate
+    for candidate in "${STATE_DIR:-/root/aads/aads-server}" "$_AUTOHEAL_LIB_ROOT"; do
+        if [[ -n "$candidate" && -x "${candidate}/scripts/record-release-provenance.sh" && -e "${candidate}/.git" ]]; then
+            repo="$candidate"
+            break
+        fi
+    done
+    if [[ -z "$repo" ]]; then
+        echo "[provenance-sweep] SKIP: record-release-provenance.sh 를 가진 저장소를 찾지 못했다" >&2
+        return 0
+    fi
+    local recorder="${repo}/scripts/record-release-provenance.sh"
+
+    local window order
+    if [[ -n "$since_id" ]]; then
+        window="d.id >= ${since_id}"
+        order="ASC"
+    else
+        window="d.created_at > NOW() - INTERVAL '${days} days'"
+        order="DESC"
+    fi
+
+    local rows
+    if ! rows="$(timeout 20 docker exec aads-postgres psql -v ON_ERROR_STOP=1 -U aads -d aads -qAt -F '|' -c "
+        SELECT d.id, d.release_sha
+        FROM deploy_runs d
+        WHERE d.project = 'AADS' AND d.component = 'api'
+          AND d.status = 'success' AND d.phase = 'completed'
+          AND d.image_digest IS NOT NULL AND d.image_digest = d.standby_digest
+          AND ${window}
+          AND NOT EXISTS (SELECT 1 FROM deploy_release_provenance p WHERE p.deploy_run_id = d.id)
+        ORDER BY d.id ${order}
+        LIMIT ${limit};" 2>/dev/null)"; then
+        echo "[provenance-sweep] SKIP: 대상 조회 실패(DB 불가)" >&2
+        return 0
+    fi
+    if [[ -z "${rows//[[:space:]]/}" ]]; then
+        return 0
+    fi
+
+    local started=$SECONDS run_id release_sha n_ok=0 n_skipped=0 n_failed=0 skipped_ids="" rc n_rows
+    while IFS='|' read -r run_id release_sha; do
+        [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+        if (( SECONDS - started >= budget )); then
+            echo "[provenance-sweep] 시간 예산(${budget}s) 소진 — 남은 run 은 다음 주기에 처리한다" >&2
+            break
+        fi
+        # 40자 full SHA 로 해석되지 않는 릴리스는 기록하지 않는다(fail closed).
+        if [[ ! "$release_sha" =~ ^[0-9a-f]{7,40}$ ]] \
+           || [[ ! "$(git -C "$repo" rev-parse --verify --quiet "${release_sha}^{commit}" 2>/dev/null)" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "[provenance-sweep] SKIP deploy_run#${run_id}: release_sha='${release_sha}' 가 저장소에서 40자로 해석되지 않는다" >&2
+            n_skipped=$((n_skipped + 1)); skipped_ids+="${skipped_ids:+,}${run_id}"
+            continue
+        fi
+        if [[ "$dry" == "true" ]]; then
+            echo "[provenance-sweep] DRY-RUN deploy_run#${run_id} release=${release_sha} — 기록 대상" >&2
+            continue
+        fi
+        rc=0
+        timeout 60 "$recorder" \
+            --repo "$repo" --deploy-run-id "$run_id" \
+            --project AADS --component api --release-ref "$release_sha" >&2 || rc=$?
+        if (( rc != 0 )); then
+            echo "[provenance-sweep] FAIL deploy_run#${run_id} rc=${rc} (비치명적)" >&2
+            n_failed=$((n_failed + 1))
+            continue
+        fi
+        n_rows="$(timeout 10 docker exec aads-postgres psql -U aads -d aads -qAtc \
+            "SELECT count(*) FROM deploy_release_provenance WHERE deploy_run_id=${run_id};" 2>/dev/null | tr -d '[:space:]')"
+        echo "[provenance-sweep] deploy_run#${run_id} release=${release_sha} rows=${n_rows:-?}" >&2
+        n_ok=$((n_ok + 1))
+    done <<< "$rows"
+    echo "[provenance-sweep] done: processed=${n_ok} skipped=${n_skipped}${skipped_ids:+ (ids=${skipped_ids})} failed=${n_failed}" >&2
+    return 0
+}
+
 # ── 진입점: cleanup_deploy(EXIT 트랩)에서 락 해제 후 호출된다 ───────────────
+# 복구 판정이 먼저이고, 계보 스위퍼는 그 뒤에 성공/실패와 무관하게 돈다.
+# 스위퍼는 로그를 stderr 로만 내고 실패해도 종료 코드를 바꾸지 않는다.
 deploy_autoheal_on_exit() {
+    autoheal_on_exit_recover "$@"
+    if [[ "${AADS_PROVENANCE_SWEEP:-1}" == "1" ]] && declare -F deploy_db_available >/dev/null 2>&1 \
+       && deploy_db_available; then
+        autoheal_provenance_sweep || true
+    fi
+    return 0
+}
+
+autoheal_on_exit_recover() {
     local rc="${1:-0}"
     if [[ "$rc" == "0" ]]; then
         return 0
@@ -870,3 +994,19 @@ deploy_autoheal_on_exit() {
     fi
     return 0
 }
+
+# 단독 실행: 소급/수동 계보 스위프. source 될 때는 아무 것도 하지 않는다.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    case "${1:-}" in
+        --provenance-sweep)
+            shift
+            set -uo pipefail
+            autoheal_provenance_sweep "$@"
+            exit $?
+            ;;
+        *)
+            echo "usage: $0 --provenance-sweep [--since-run-id N] [--limit N] [--days N] [--dry-run]" >&2
+            exit 64
+            ;;
+    esac
+fi

@@ -29,3 +29,33 @@ def test_sync_promotes_only_matching_partial_run():
     assert "release_sha='${release_sql}'" in SYNC
     assert "image_digest='${digest_sql}'" in SYNC
     assert "standby_digest='${digest_sql}'" in SYNC
+
+
+def _certify_body() -> str:
+    return SYNC.split("certify_deferred_run() {", 1)[1].split("\n}\n", 1)[0]
+
+
+def test_certification_records_provenance_only_after_the_update_changed_a_row():
+    body = _certify_body()
+    update_at = body.index("UPDATE deploy_runs")
+    returning_at = body.index("RETURNING deploy_run_id")
+    call_at = body.index("record_provenance_after_certify")
+    assert update_at < returning_at < call_at
+    assert '== "$DEPLOY_RUN_ID"' in body
+    assert '"$DRY_RUN" == "true" ]] || record_provenance_after_certify' in body
+
+
+def test_provenance_call_is_non_fatal_and_uses_certified_release():
+    fn = SYNC.split("record_provenance_after_certify() {", 1)[1].split("\n}\n", 1)[0]
+    for needle in (
+        '--repo "$REPO_ROOT"',
+        '--deploy-run-id "$DEPLOY_RUN_ID"',
+        "--project AADS",
+        "--component api",
+        '--release-ref "$release_sha"',
+        "|| log",
+    ):
+        assert needle in fn, needle
+    assert "record-release-provenance.sh" in fn
+    assert "INSERT INTO deploy_release_provenance" not in SYNC
+

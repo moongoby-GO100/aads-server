@@ -31,6 +31,8 @@ set -Eeuo pipefail
 trap '' HUP
 trap '' SIGPIPE 2>/dev/null || true
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 STATE_DIR="${AADS_DEPLOY_STATE_DIR:-/root/aads/aads-server}"
 COMPOSE_DIR="${AADS_DEPLOY_SOURCE_DIR:-$STATE_DIR}"
 COMPOSE_FILE="${COMPOSE_DIR}/docker-compose.prod.yml"
@@ -105,12 +107,36 @@ standby_digest="$(docker inspect "$standby_container" --format '{{.Image}}' 2>/d
 release_sha="${active_tag#aads-server:}"
 [[ -n "$release_sha" && "$release_sha" != "$active_tag" ]] || die "활성 이미지 태그 형식이 예상과 다르다: ${active_tag}"
 
+# deploy.sh Phase 8 은 FINAL_DEPLOY_STATUS=success 일 때만 계보를 기록한다.
+# standby 지연(success_partial)으로 끝난 배포는 여기서 success 로 올라가므로
+# 계보 기록도 여기서 해야 한다. 안 하면 2026-09-28 22:39 KST(run 5197) 이후처럼
+# 인증된 배포가 계보 없이 쌓인다.
+record_provenance_after_certify() {
+    local provenance_script="${SCRIPT_DIR}/record-release-provenance.sh"
+    if [[ ! "$release_sha" =~ ^[0-9a-f]{7,40}$ ]]; then
+        log "WARN: release_sha 형식이 hex 가 아니라 계보 기록을 건너뛴다: ${release_sha}"
+        return 0
+    fi
+    if [[ ! -x "$provenance_script" ]]; then
+        log "WARN: ${provenance_script} 없음 — 계보 기록을 건너뛴다"
+        return 0
+    fi
+    "$provenance_script" \
+        --repo "$REPO_ROOT" \
+        --deploy-run-id "$DEPLOY_RUN_ID" \
+        --project AADS \
+        --component api \
+        --release-ref "$release_sha" \
+        || log "WARN: deploy_runs#${DEPLOY_RUN_ID} 계보 기록 실패(비치명적) — deploy_autoheal.sh 스위퍼가 재시도한다"
+    return 0
+}
+
 certify_deferred_run() {
     [[ -n "$DEPLOY_RUN_ID" ]] || return 0
-    local release_sql digest_sql
+    local release_sql digest_sql certified_id
     release_sql="${release_sha//\'/\'\'}"
     digest_sql="${active_digest//\'/\'\'}"
-    docker exec aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 -qAtc "
+    certified_id="$(docker exec aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 -qAtc "
         WITH updated AS (
             UPDATE deploy_runs
             SET status='success', phase='completed', phase_completed_at=NOW(),
@@ -131,9 +157,19 @@ certify_deferred_run() {
         SELECT id, 'standby_same_digest_sync_retry', 'success', NOW(), NOW(),
                0, '${active_port}', '${standby_port}', '${digest_sql}',
                '${digest_sql}', NULL, jsonb_build_object('source','sync-standby.sh')
-        FROM updated;
-    " >/dev/null
-    log "deploy_runs#${DEPLOY_RUN_ID} success_partial → success 인증 반영"
+        FROM updated
+        RETURNING deploy_run_id;
+    ")"
+    if [[ "$(printf '%s' "$certified_id" | tr -d '[:space:]')" == "$DEPLOY_RUN_ID" ]]; then
+        log "deploy_runs#${DEPLOY_RUN_ID} success_partial → success 인증 반영"
+        # UPDATE 가 실제로 행을 바꾼 경우에만, 그리고 UPDATE 이후에만 기록한다.
+        # record-release-provenance.sh 의 INSERT 가드가 status=success/completed 와
+        # image_digest=standby_digest 를 요구한다. 이미 success 인 run 을 다시 넘겨받은
+        # 경우에는 UPDATE 가 0행이라 여기로 오지 않는다.
+        [[ "$DRY_RUN" == "true" ]] || record_provenance_after_certify
+    else
+        log "deploy_runs#${DEPLOY_RUN_ID} 는 success_partial 이 아니거나 릴리스가 달라 인증을 바꾸지 않았다"
+    fi
 }
 
 if [[ "$active_digest" == "$standby_digest" ]]; then

@@ -19,7 +19,8 @@ DEPLOY_SH = REPO_ROOT / "deploy.sh"
 def _call(func: str, *args: str, env_prefix: str = "", library: Path = AUTOHEAL_LIB) -> str:
     """autoheal 라이브러리를 source 한 뒤 함수 하나를 호출한다."""
     quoted = " ".join(f"'{a}'" for a in args)
-    script = f'set -uo pipefail\n{env_prefix}source "{library}"\n{func} {quoted}\n'
+    # 계보 스위퍼는 실제 DB/docker 를 건드리므로 기본 테스트에서는 끈다.
+    script = f'set -uo pipefail\nexport AADS_PROVENANCE_SWEEP=0\n{env_prefix}source "{library}"\n{func} {quoted}\n'
     proc = subprocess.run(
         ["bash", "-c", script],
         capture_output=True,
@@ -990,3 +991,128 @@ def test_hard_prune_is_gateable_and_touches_only_build_cache():
     assert "docker system prune" not in src
     assert "docker container prune" not in src
     assert "docker image prune -a" not in src
+
+
+# ── 릴리스 계보 스위퍼 (2026-09-29: run 5197 이후 계보 0건) ─────────────────
+
+def _fake_sweep_env(tmp_path, rows: str, rc_map: dict[str, int] | None = None) -> tuple[str, Path]:
+    """docker/git/recorder 를 가짜로 세워 스위퍼를 격리 실행한다. 반환: (env_prefix, 호출 로그)."""
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    calls = tmp_path / "recorder.calls"
+    rc_map = rc_map or {}
+    rc_cases = "".join(f'  "{rid}") exit {rc} ;;\n' for rid, rc in rc_map.items())
+    recorder = repo / "scripts" / "record-release-provenance.sh"
+    recorder.write_text(
+        '#!/bin/bash\n'
+        f'echo "$@" >> "{calls}"\n'
+        'while [[ $# -gt 0 ]]; do [[ "$1" == "--deploy-run-id" ]] && rid="$2"; shift; done\n'
+        f'case "$rid" in\n{rc_cases}  *) exit 0 ;;\nesac\n',
+        encoding="utf-8",
+    )
+    recorder.chmod(0o755)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    # git: 40자 SHA 를 돌려주되 'unresolvable' 접두사는 해석 실패로 취급한다.
+    (bindir / "git").write_text(
+        '#!/bin/bash\n'
+        'ref="${@: -1}"\n'
+        '[[ "$ref" == deadbeef* ]] && exit 1\n'
+        'printf "%040d\\n" 1\n',
+        encoding="utf-8",
+    )
+    (bindir / "docker").write_text(
+        '#!/bin/bash\n'
+        'if [[ "$*" == *"FROM deploy_runs d"* ]]; then\n'
+        f"  printf '%s' '{rows}'\n"
+        'elif [[ "$*" == *"count(*)"* ]]; then echo 3\n'
+        'fi\n',
+        encoding="utf-8",
+    )
+    for f in bindir.iterdir():
+        f.chmod(0o755)
+    env = f'export PATH="{bindir}:$PATH"\nexport STATE_DIR="{repo}"\n'
+    return env, calls
+
+
+def test_provenance_sweep_records_each_certified_run_with_its_release_sha(tmp_path):
+    env, calls = _fake_sweep_env(tmp_path, "5199|7318076c1283\n5201|a182740e52ed\n")
+    proc = subprocess.run(
+        ["bash", "-c", f'set -uo pipefail\n{env}source "{AUTOHEAL_LIB}"\nautoheal_provenance_sweep --since-run-id 5198\n'],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == ""  # 로그는 stderr 로만 나간다
+    assert "deploy_run#5199 release=7318076c1283 rows=3" in proc.stderr
+    lines = calls.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert "--deploy-run-id 5199" in lines[0] and "--release-ref 7318076c1283" in lines[0]
+    assert "--project AADS" in lines[0] and "--component api" in lines[0]
+    assert "--deploy-run-id 5201" in lines[1] and "--release-ref a182740e52ed" in lines[1]
+
+
+def test_provenance_sweep_skips_unresolvable_release_fail_closed(tmp_path):
+    env, calls = _fake_sweep_env(tmp_path, "5300|deadbeef0001\n5301|not-a-sha\n5302|a182740e52ed\n")
+    proc = subprocess.run(
+        ["bash", "-c", f'set -uo pipefail\n{env}source "{AUTOHEAL_LIB}"\nautoheal_provenance_sweep --since-run-id 5300\n'],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "SKIP deploy_run#5300" in proc.stderr
+    assert "SKIP deploy_run#5301" in proc.stderr
+    assert "skipped=2 (ids=5300,5301)" in proc.stderr
+    lines = calls.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1 and "--deploy-run-id 5302" in lines[0]
+
+
+def test_provenance_sweep_recorder_failure_is_non_fatal_under_errexit(tmp_path):
+    """deploy.sh 트랩은 set -e 상태일 수 있다. recorder 실패가 스위퍼를 죽이면 안 된다."""
+    env, calls = _fake_sweep_env(tmp_path, "5400|aaaaaaa1\n5401|bbbbbbb2\n", rc_map={"5400": 5})
+    proc = subprocess.run(
+        ["bash", "-c", f'set -euo pipefail\n{env}source "{AUTOHEAL_LIB}"\nautoheal_provenance_sweep --since-run-id 5400\n'],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "FAIL deploy_run#5400 rc=5" in proc.stderr
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_provenance_sweep_dry_run_never_calls_recorder(tmp_path):
+    env, calls = _fake_sweep_env(tmp_path, "5500|aaaaaaa1\n")
+    proc = subprocess.run(
+        ["bash", "-c", f'set -uo pipefail\n{env}source "{AUTOHEAL_LIB}"\nautoheal_provenance_sweep --since-run-id 5500 --dry-run\n'],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert "DRY-RUN deploy_run#5500" in proc.stderr
+    assert not calls.exists()
+
+
+def test_provenance_sweep_rejects_bad_arguments():
+    proc = subprocess.run(
+        ["bash", "-c", f'source "{AUTOHEAL_LIB}"; autoheal_provenance_sweep --since-run-id "1; DROP TABLE x"'],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 64
+
+
+def test_provenance_sweep_query_matches_certification_contract():
+    src = AUTOHEAL_LIB.read_text(encoding="utf-8")
+    body = src.split("autoheal_provenance_sweep() {", 1)[1].split("\n}\n", 1)[0]
+    for needle in (
+        "d.project = 'AADS' AND d.component = 'api'",
+        "d.status = 'success' AND d.phase = 'completed'",
+        "d.image_digest = d.standby_digest",
+        "NOT EXISTS (SELECT 1 FROM deploy_release_provenance p WHERE p.deploy_run_id = d.id)",
+        "AADS_PROVENANCE_SWEEP_DAYS:-3",
+        "AADS_PROVENANCE_SWEEP_LIMIT:-10",
+    ):
+        assert needle in body, needle
+    assert "INSERT INTO deploy_release_provenance" not in src
+
+
+def test_exit_hook_runs_sweep_after_recovery_only_when_enabled():
+    src = AUTOHEAL_LIB.read_text(encoding="utf-8")
+    hook = src.split("deploy_autoheal_on_exit() {", 1)[1].split("\n}\n", 1)[0]
+    assert hook.index("autoheal_on_exit_recover") < hook.index("autoheal_provenance_sweep")
+    assert 'AADS_PROVENANCE_SWEEP:-1}" == "1"' in hook
