@@ -60,9 +60,12 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
+
+from app.services import goal_manager
 
 logger = structlog.get_logger(__name__)
 
@@ -70,6 +73,7 @@ _ENABLED = os.getenv("GOAL_DISPATCH_ENABLED", "true").lower() in ("1", "true", "
 _MAX_PER_CYCLE = int(os.getenv("GOAL_DISPATCH_MAX_PER_CYCLE", "2"))
 _MAX_DISPATCH = int(os.getenv("GOAL_DISPATCH_MAX_RETRY", "3"))
 _RETRY_AFTER_MIN = int(os.getenv("GOAL_DISPATCH_RETRY_AFTER_MIN", "30"))
+_PROGRESS_GRACE_MIN = int(os.getenv("GOAL_DISPATCH_PROGRESS_GRACE_MIN", "45"))
 # 부하 때문에 미루는 데에도 **상한**을 둔다.
 #
 # 2026-09-17 실측. contabo14 는 장중에 매매 엔진 둘과 postgres·러너가 같이
@@ -157,6 +161,8 @@ def _build_message(row: Any, *, sent_before: int | None = None) -> str:
         f"{head} {goal}",
         "",
         f"## 맡은 마일스톤\n**{title}**",
+        f"\nGOAL_ID: {row['goal_id']}\nMILESTONE_ID: {row['milestone_id']}",
+        "러너에 작업을 낼 때 이 두 줄을 지시서에 그대로 넣어라. 넣지 않으면 그 작업은 이 마일스톤에 연결되지 않는다.",
     ]
     if desc:
         body.append(f"\n{desc}")
@@ -573,7 +579,8 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 """
                 SELECT m.id::text AS milestone_id, m.title AS milestone_title,
                        m.description, m.completion_criteria,
-                       m.dispatch_count, m.dispatched_at, m.load_deferred_since,
+                       m.dispatch_count, m.dispatched_at, m.dispatched_session_id,
+                       m.load_deferred_since,
                        m.dispatch_blocked_at,
                        g.title AS goal_title, g.project, g.id::text AS goal_id,
                        COALESCE(m.owner_role_key, '') AS owner_role_key,
@@ -669,23 +676,86 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
 
                 # 보낸 뒤에 **진짜 답**이 왔는지 본다.
                 if row["dispatched_at"] is not None:
-                    answered = await conn.fetchval(
-                        """
+                    answered_at = None
+                    # 살아 있는 러너 작업이 있으면 채팅 저장 지연 여부와
+                    # 무관하게 재발송하지 않는다. 실제 job 상태도 대조한다.
+                    columns = await goal_manager.link_optional_columns(conn)
+                    has_progress = await conn.fetchval(
+                        f"""
                         SELECT EXISTS (
-                            SELECT 1 FROM chat_messages
-                            WHERE session_id = $1 AND role = 'assistant'
-                              AND created_at > $2
-                              AND length(content) > 40
-                              AND content NOT LIKE '⏳%'
-                              AND content NOT LIKE '⚠️ _응답 생성이%'
+                            SELECT 1 FROM goal_task_links
+                            WHERE milestone_id = $1::uuid
+                              AND task_type = 'pipeline_job'
+                              {goal_manager.active_link_predicate(columns)}
+                              {goal_manager.superseded_link_predicate(columns)}
+                              AND status NOT IN ('failed', 'error', 'rejected', 'rejected_done')
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM pipeline_jobs j
+                                  WHERE j.job_id = goal_task_links.task_id
+                                    AND j.status IN ('failed', 'error', 'rejected', 'rejected_done', 'cancelled')
+                              )
                         )
                         """,
-                        row["session_id"], row["dispatched_at"],
+                        row["milestone_id"],
                     )
-                    if answered:
+                    if has_progress:
                         await _clear_answered_block(conn, row["milestone_id"])
                         skipped += 1
                         continue
+                    if (row["dispatched_session_id"] and
+                            str(row["dispatched_session_id"]) != str(row["session_id"])):
+                        logger.warning(
+                            "goal_dispatch_anchor_missing",
+                            milestone=row["milestone_id"][:8],
+                            session=str(row["session_id"])[:8],
+                            why="담당 세션이 발송 당시 세션과 다름",
+                        )
+                    else:
+                        anchor_at = await conn.fetchval(
+                            """SELECT MIN(created_at) FROM chat_messages
+                            WHERE session_id = $1 AND role IN ('user', 'system')
+                              AND created_at > $2
+                              AND content LIKE ('%' || $3 || '%')""",
+                            row["session_id"], row["dispatched_at"],
+                            f"MILESTONE_ID: {row['milestone_id']}",
+                        )
+                        if anchor_at is None:
+                            logger.warning(
+                                "goal_dispatch_anchor_missing",
+                                milestone=row["milestone_id"][:8],
+                                session=str(row["session_id"])[:8],
+                                why="발송 태그 메시지를 찾지 못함",
+                            )
+                            answered_at = await conn.fetchval(
+                                """SELECT MIN(created_at) FROM chat_messages
+                                WHERE session_id = $1 AND role = 'assistant'
+                                  AND created_at > $2 AND length(content) > 40
+                                  AND content NOT LIKE '⏳%'
+                                  AND content NOT LIKE '⚠️ _응답 생성이%'""",
+                                row["session_id"], row["dispatched_at"],
+                            )
+                        else:
+                            answered_at = await conn.fetchval(
+                                """SELECT MIN(created_at) FROM chat_messages
+                                WHERE session_id = $1 AND role = 'assistant'
+                                  AND created_at > $2 AND length(content) > 40
+                                  AND content NOT LIKE '⏳%'
+                                  AND content NOT LIKE '⚠️ _응답 생성이%'""",
+                                row["session_id"], anchor_at,
+                            )
+                    if answered_at:
+                        if answered_at > datetime.now(UTC) - timedelta(
+                            minutes=_PROGRESS_GRACE_MIN
+                        ):
+                            skipped += 1
+                            continue
+                        logger.warning(
+                            "goal_dispatch_answer_without_progress",
+                            milestone=row["milestone_id"],
+                            session=str(row["session_id"]),
+                            answered_at=answered_at.isoformat(),
+                            grace_min=_PROGRESS_GRACE_MIN,
+                        )
 
                 count = int(row["dispatch_count"] or 0)
                 if count >= _MAX_DISPATCH:

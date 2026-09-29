@@ -234,10 +234,11 @@ class _FakeDB:
                             "standby_digest": run.get("standby_digest")})
             return sorted(out, key=lambda r: -r["deploy_run_id"])
 
-        if "SELECT task_type, task_id, status FROM goal_task_links" in q:
+        if "task_type, task_id, status" in q and "FROM goal_task_links" in q:
             milestone_id = args[0]
             return [
-                {"task_type": link["task_type"], "task_id": link["task_id"], "status": link.get("status")}
+                {"task_type": link["task_type"], "task_id": link["task_id"],
+                 "status": link.get("status"), "goal_id": link.get("goal_id")}
                 for link in self.links
                 if link.get("milestone_id") == milestone_id
                 and (link.get("link_state") or "active") == "active"

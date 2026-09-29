@@ -49,9 +49,9 @@ def test_answer_clears_note_and_block_signal_together() -> None:
 def test_answer_is_checked_before_retry_limit_blocks() -> None:
     source = inspect.getsource(goal_dispatch.dispatch_pending_milestones)
 
-    assert source.index("if answered:") < source.index("if count >= _MAX_DISPATCH:")
-    answered = source[source.index("if answered:"):source.index("if count >= _MAX_DISPATCH:")]
-    assert "_clear_answered_block" in answered
+    assert source.index("if has_progress:") < source.index("if count >= _MAX_DISPATCH:")
+    progress = source[source.index("if has_progress:"):source.index("if count >= _MAX_DISPATCH:")]
+    assert "_clear_answered_block" in progress
 
 
 def test_blocked_goal_with_in_progress_milestone_is_dispatched() -> None:

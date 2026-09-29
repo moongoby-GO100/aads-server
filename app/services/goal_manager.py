@@ -19,6 +19,7 @@ from app.services.goal_binding import (
     normalize_job_state_for_project,
     release_gate_withheld,
 )
+from app.services.goal_failure_retry import ensure_retry_candidate, mark_explicit_retry_supersession
 
 logger = logging.getLogger(__name__)
 
@@ -556,7 +557,14 @@ class GoalStateMachine:
                         """,
                         str(link["milestone_id"]), tenant_id,
                     )
-                    if link["goal_id"]:
+                    retry_candidate = await ensure_retry_candidate(
+                        conn, milestone_id=str(link["milestone_id"]),
+                        goal_id=str(link["goal_id"]) if link["goal_id"] else "",
+                        failed_task_id=task_id, reason="linked_task_failed",
+                    )
+                    if link["goal_id"] and not (
+                        retry_candidate.get("created") or retry_candidate.get("candidate_alive")
+                    ):
                         await conn.execute(
                             """
                             UPDATE goals
@@ -570,6 +578,7 @@ class GoalStateMachine:
                         "milestone_id": str(link["milestone_id"]),
                         "completed": False,
                         "status": "blocked",
+                        "retry_candidate": retry_candidate,
                     })
                 elif link["milestone_id"]:
                     r = await self.check_milestone_completion(str(link["milestone_id"]))
@@ -593,9 +602,16 @@ class GoalStateMachine:
             # 재시도로 대체된 과거 실패를 먼저 승계 처리한다 — 그래야 "이미 다시 돌려
             # 성공한" 실패가 마일스톤을 영구히 blocked 로 만들지 않는다.
             await self._mark_superseded_failures(conn, milestone_id)
+            try:
+                await mark_explicit_retry_supersession(conn, milestone_id)
+            except Exception as exc:  # noqa: BLE001 — 기존 완료 판정을 중단하지 않는다
+                logger.warning(
+                    "goal_explicit_retry_supersession_failed milestone=%s error=%s",
+                    milestone_id, str(exc)[:200],
+                )
             links = await conn.fetch(
                 f"""
-                SELECT task_type, task_id, status FROM goal_task_links
+                SELECT task_type, task_id, status, goal_id FROM goal_task_links
                 WHERE milestone_id = $1::uuid
                   {active_link_predicate(columns)}
                   {superseded_link_predicate(columns)}
@@ -634,11 +650,17 @@ class GoalStateMachine:
                             """,
                             milestone_id,
                         )
+                        retry_candidate = await ensure_retry_candidate(
+                            conn, milestone_id=milestone_id,
+                            goal_id=str(link["goal_id"] or ""),
+                            failed_task_id=link["task_id"], reason="linked_task_failed",
+                        )
                         return {
                             "milestone_id": milestone_id,
                             "completed": False,
                             "status": "blocked",
                             "reason": "linked_task_failed",
+                            "retry_candidate": retry_candidate,
                         }
                     if link["task_type"] == "pipeline_job":
                         row = await conn.fetchrow(
@@ -669,11 +691,17 @@ class GoalStateMachine:
                                 """,
                                 milestone_id,
                             )
+                            retry_candidate = await ensure_retry_candidate(
+                                conn, milestone_id=milestone_id,
+                                goal_id=str(link["goal_id"] or ""),
+                                failed_task_id=link["task_id"], reason="pipeline_job_failed",
+                            )
                             return {
                                 "milestone_id": milestone_id,
                                 "completed": False,
                                 "status": "blocked",
                                 "reason": "pipeline_job_failed",
+                                "retry_candidate": retry_candidate,
                             }
                         else:
                             all_done = False
