@@ -35,3 +35,6 @@ migrations/20260921_obys_journal_vouchers_r3.sql
 migrations/20260921_pc_qwen_review_advisory.sql
 migrations/20260923_milestone_completion_checklist.sql
 migrations/20260923_obys_auth_bootstrap_jinah.sql
+# Jinah-only (오비서 인증 DB). Never auto-apply to the AADS DB; run by hand per
+# docs/operations/OBYS_VAULT_SEPARATION_RUNBOOK.md.
+migrations/20260930_obys_e2e_credentials_jinah.sql

@@ -6,6 +6,7 @@ the runtime foundation, not authorization to cut over or start collectors.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,8 +14,31 @@ from typing import Mapping
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 
+logger = logging.getLogger(__name__)
+
+
 class RuntimeConfigurationError(RuntimeError):
     """Messages contain setting names only; never include a DSN or secret."""
+
+
+def _vault_key(env: Mapping[str, str]) -> bytes | None:
+    """OBYS_VAULT_KEY only. VAULT_ENCRYPTION_KEY (AADS) is never read here.
+
+    A missing or malformed key disables the vault, not the app. Only the
+    setting name is logged.
+    """
+    raw = (env.get("OBYS_VAULT_KEY") or "").strip()
+    if not raw:
+        logger.warning("OBYS_VAULT_KEY: not set; credential vault disabled")
+        return None
+    try:
+        from cryptography.fernet import Fernet
+
+        Fernet(raw.encode())
+    except Exception:
+        logger.warning("OBYS_VAULT_KEY: not a 32-byte urlsafe-base64 Fernet key; credential vault disabled")
+        return None
+    return raw.encode()
 
 
 def _local_database(name: str, value: str) -> str:
@@ -45,6 +69,7 @@ class RuntimeSettings:
     source_dsn: str = field(repr=False)
     data_dir: Path
     upload_dir: Path
+    vault_key: bytes | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "RuntimeSettings":
@@ -72,12 +97,19 @@ class RuntimeSettings:
             if not path.is_dir() or not os.access(path, os.W_OK | os.X_OK):
                 raise RuntimeConfigurationError(f"{name}: directory is missing or not writable")
             paths.append(path)
-        return cls(*dsns, *paths)
+        return cls(*dsns, *paths, vault_key=_vault_key(env))
+
+    @property
+    def vault_enabled(self) -> bool:
+        return self.vault_key is not None
 
     def apply(self) -> None:
         # Set aliases before importing any shared module with import-time config.
         os.environ["DATABASE_URL"] = self.auth_dsn
         os.environ["YEOLJEONG_FINANCE_DATABASE_URL"] = self.business_dsn
+        from app.core import credential_vault
+
+        credential_vault.configure_vault_key(self.vault_key, source="OBYS_VAULT_KEY")
 
 
 TABLES = {

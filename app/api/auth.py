@@ -455,13 +455,16 @@ async def e2e_inject(
     redirect: str = Query("/chat", description="인증 후 리다이렉트 경로"),
 ):
     """E2E 자동 인증 — vault 자격증명으로 로그인 후 토큰을 브라우저에 주입."""
+    from app.core.credential_vault import VaultUnavailableError, get_credential
     try:
-        from app.core.credential_vault import get_credential
         cred = await get_credential(credential_id, include_secrets=True, tenant_id=tenant_id)
         if not cred:
             raise HTTPException(status_code=404, detail="자격증명 없음")
     except HTTPException:
         raise
+    except VaultUnavailableError:
+        # 오비서에 OBYS_VAULT_KEY 가 없을 때. 앱은 살아 있고 vault 만 꺼진 상태다.
+        raise HTTPException(status_code=503, detail="자격증명 보관소 비활성")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"자격증명 조회 실패: {e}")
 

@@ -63,9 +63,48 @@ def _normalize_json_fields(item: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+# 오비서(obys_standalone) 전용 키 주입. AADS 본체는 이 값을 건드리지 않으므로
+# 아래 _get_fernet 의 env → 파일 → 자동 생성 경로가 그대로 유지된다.
+# standalone 은 RuntimeSettings.apply() 가 configure_vault_key() 로 OBYS_VAULT_KEY
+# 를 넣는다. 그 뒤로는 VAULT_ENCRYPTION_KEY·키 파일을 절대 읽지 않는다 —
+# 두 시스템이 같은 키를 공유하면 한쪽 유출이 다른 쪽 비밀까지 연다(2026-09-30).
+_STANDALONE_KEY_SOURCE: str | None = None
+
+
+class VaultUnavailableError(RuntimeError):
+    """standalone 에 전용 키가 없어 vault 가 꺼져 있다. 메시지에 키 값을 넣지 않는다."""
+
+
+def configure_vault_key(key: bytes | None, source: str = "OBYS_VAULT_KEY") -> None:
+    """standalone 전용 Fernet 키를 주입한다. None 이면 vault 만 비활성화한다."""
+    global _VAULT_KEY, _STANDALONE_KEY_SOURCE
+    if key is not None:
+        Fernet(key)  # 형식 오류는 여기서 ValueError — 값은 메시지에 없다.
+    _VAULT_KEY = key
+    _STANDALONE_KEY_SOURCE = source
+    logger.info("vault_key_configured source=%s enabled=%s", source, key is not None)
+
+
+def is_standalone_vault() -> bool:
+    return _STANDALONE_KEY_SOURCE is not None
+
+
+def vault_enabled() -> bool:
+    """AADS 모드는 항상 True(키 자동 로드). standalone 은 전용 키가 있을 때만."""
+    return not is_standalone_vault() or _VAULT_KEY is not None
+
+
+def require_vault_enabled() -> None:
+    if not vault_enabled():
+        raise VaultUnavailableError(f"vault_disabled:{_STANDALONE_KEY_SOURCE}_missing")
+
+
 def _get_fernet() -> Fernet:
-    """암호화 키 로드: 환경변수 → 파일 → 자동 생성."""
+    """암호화 키 로드: standalone 주입 키 → (AADS) 환경변수 → 파일 → 자동 생성."""
     global _VAULT_KEY
+    if is_standalone_vault():
+        require_vault_enabled()
+        return Fernet(_VAULT_KEY)
     if _VAULT_KEY is None:
         key_str = os.getenv("VAULT_ENCRYPTION_KEY", "")
         if not key_str:
@@ -162,6 +201,7 @@ async def get_credential(
 ) -> dict[str, Any] | None:
     """단일 자격증명 조회 (복호화 포함)."""
     tenant_uuid = _require_tenant_uuid(tenant_id, "get_credential")
+    require_vault_enabled()
     pool = get_pool()
     cred_uuid = credential_id if isinstance(credential_id, UUID) else UUID(credential_id)
     row = await pool.fetchrow(
@@ -169,6 +209,9 @@ async def get_credential(
         cred_uuid,
         tenant_uuid,
     )
+    if not row and is_standalone_vault():
+        # 오비서 인증 DB 에는 agent_vault_credentials 가 없다(e2e_credentials 만 이관).
+        return None
     if not row:
         # 못 찾으면 에이전트 볼트를 한 번 더 본다.
         #
