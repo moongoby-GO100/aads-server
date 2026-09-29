@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from datetime import datetime, timezone
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import sys
 from pathlib import Path
@@ -58,8 +59,29 @@ def _command(argv: list[str]) -> str:
     return result.stdout.strip()
 
 
+def _relay_shared_secret() -> str:
+    """릴레이 공유 시크릿. env 우선, 없으면 스크립트 옆 파일 — 앱·릴레이와 같은 순서."""
+    secret = (os.getenv("CLAUDE_RELAY_SHARED_SECRET") or "").strip()
+    if secret:
+        return secret
+    path = Path(os.getenv(
+        "CLAUDE_RELAY_SHARED_SECRET_FILE",
+        str(Path(__file__).resolve().parent / "claude_relay_secret.txt"),
+    ))
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def read_relay() -> dict:
-    with urlopen("http://127.0.0.1:8199/health", timeout=5) as response:
+    # 시크릿이 없으면 /health 는 liveness(status only)만 준다. 이 검증기는
+    # claude_model_contract 등 상세 필드가 필요하므로 헤더를 붙여 읽는다.
+    headers = {}
+    secret = _relay_shared_secret()
+    if secret:
+        headers["X-Claude-Relay-Secret"] = secret
+    with urlopen(Request("http://127.0.0.1:8199/health", headers=headers), timeout=5) as response:
         return json.load(response)
 
 
