@@ -236,9 +236,46 @@ def test_diff_drift_is_terminal_and_excluded_from_re_review():
         "# dirty 워크트리 판정"
     )]
     assert "status='error'" in terminate
-    assert "error_detail='${detail}'" in terminate
+    assert "error_detail=${error_reason}" in terminate
+    assert 'error_reason=$(sql_escape "${detail}: ${reason}")' in terminate
     assert "review_flag_category=NULL" in terminate
     assert "review_needs_retry=FALSE" in terminate
+
+
+def test_needs_retry_is_selected_by_existing_sweeper():
+    script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+    selection = script.split('select_sql="', 1)[1].split('"\n\ntotal=', 1)[0]
+    assert "status='review_hold'" in selection
+    assert "OR review_needs_retry IS TRUE" in selection
+    assert 'terminate_review_hold "$missing_diff_job" "review_hold_no_artifact"' in script
+
+
+def test_each_completed_review_consumes_exactly_one_attempt():
+    script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+    assert "local nxt=$((prev + 1))" in script
+    assert "next_retry=$((retry_count + 1))" in script
+    assert "review_retry_count=${nxt}" in script
+    assert "review_retry_count=${next_retry}" in script
+    claim = script.split("claimed=$(db_query", 1)[1].split('if [[ "$claimed"', 1)[0]
+    assert "SET review_retry_last_at=" in claim
+    assert "SET review_retry_count=" not in claim
+
+
+def test_exhausted_retry_becomes_terminal_with_reason():
+    script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+    assert 'REVIEW_RETRY_MAX:-${SWEEP_MAX_RETRY:-3}' in script
+    assert 'terminate_review_hold "$exhausted_job" "review_retry_exhausted"' in script
+    assert 'terminate_review_hold "$job_id" "review_retry_exhausted"' in script
+    assert "error_detail=${error_reason}" in script
+
+
+def test_two_sweepers_cannot_claim_the_same_snapshot():
+    script = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+    claim = script.split("claimed=$(db_query", 1)[1].split('if [[ "$claimed"', 1)[0]
+    assert "UPDATE pipeline_jobs" in claim
+    assert "review_retry_count=${retry_count}" in claim
+    assert "review_retry_last_at IS NOT DISTINCT FROM ${last_at_sql}" in claim
+    assert "RETURNING job_id" in claim
 
 
 def test_no_artifact_is_structurally_terminal():

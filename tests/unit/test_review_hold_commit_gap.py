@@ -286,7 +286,7 @@ def test_dirty_recovery_terminates_on_diff_drift(helper_file, tmp_path, worktree
 
     assert rc == 11, f"기대 11(terminal), 실제 {rc}"
     assert "status='error'" in sql
-    assert "error_detail='review_hold_diff_drift'" in sql
+    assert "error_detail=$esc$review_hold_diff_drift:" in sql
     assert "review_flag_category=NULL" in sql
     assert "error_detail='review_hold_recovery_pending'" not in sql
 

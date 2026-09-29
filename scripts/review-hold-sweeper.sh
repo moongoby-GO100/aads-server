@@ -34,7 +34,7 @@ AADS_API_URL="${AADS_API_URL:-http://127.0.0.1}"
 REVIEW_MONITOR_HEADER='X-Monitor-Key: internal-review-hold-sweeper' # gitleaks:allow
 
 SWEEP_BATCH="${SWEEP_BATCH:-5}"                      # 1회 실행당 재검수 건수
-SWEEP_MAX_RETRY="${SWEEP_MAX_RETRY:-10}"             # 잡당 자동 재검수 상한 (CEO 지시 2026-09-17: 6→10)
+SWEEP_MAX_RETRY="${REVIEW_RETRY_MAX:-${SWEEP_MAX_RETRY:-3}}" # 잡당 실제 재검수 상한
 ORIGIN_ADJUDICATION_RETRY_THRESHOLD="${REVIEW_ORIGIN_ADJUDICATION_RETRY_THRESHOLD:-3}"
 ORIGIN_ADJUDICATION_TIMEOUT_MIN="${REVIEW_ORIGIN_ADJUDICATION_TIMEOUT_MIN:-120}"
 SWEEP_BACKOFF_BASE_MIN="${SWEEP_BACKOFF_BASE_MIN:-10}"
@@ -225,11 +225,12 @@ ensure_review_hold_commit() {
 # 바뀌어도 재검수로 되돌아오지 않도록 둘 다 건다).
 terminate_review_hold() {
     local job_id="$1" detail="$2" reason="$3"
-    local note
+    local note error_reason
     note=$(sql_escape "[자동재검수] 종결(${detail}) — ${reason}")
+    error_reason=$(sql_escape "${detail}: ${reason}")
     db_exec "UPDATE pipeline_jobs
              SET status='error', phase='${detail}',
-                 error_detail='${detail}',
+                 error_detail=${error_reason},
                  review_flag_category=NULL,
                  review_needs_retry=FALSE,
                  review_request_id=NULL,
@@ -321,10 +322,10 @@ select_sql="SELECT job_id, project, COALESCE(review_retry_count,0), COALESCE(cha
        COALESCE(error_detail,''),
        CASE WHEN error_detail='review_origin_adjudication_pending'
             THEN FLOOR(EXTRACT(EPOCH FROM (NOW() - updated_at)) / 60)::bigint
-       END
+       END, COALESCE(review_retry_last_at::text,'')
 FROM pipeline_jobs
 WHERE status='review_hold'
-  AND review_flag_category IN (${INFRA_CATEGORIES})
+  AND (review_flag_category IN (${INFRA_CATEGORIES}) OR review_needs_retry IS TRUE)
   AND COALESCE(git_diff,'') <> ''
   AND COALESCE(review_retry_count,0) < ${SWEEP_MAX_RETRY}
   AND (COALESCE(error_detail,'') <> 'review_origin_adjudication_pending'
@@ -449,15 +450,50 @@ else
     done <<< "$expired_origin_rows"
 fi
 
+# 산출물이 없는 needs_retry 는 모델에 보낼 수 없으므로 명시적으로 종결한다.
+missing_diff_rows=$(db_query "
+SELECT job_id
+  FROM pipeline_jobs
+ WHERE status='review_hold'
+   AND review_needs_retry IS TRUE
+   AND COALESCE(git_diff,'') = ''
+ ORDER BY updated_at ASC
+ LIMIT ${SWEEP_BATCH};" 2>/dev/null) || missing_diff_rows=""
+if [[ "$DRY_RUN" != "1" ]]; then
+    while IFS= read -r missing_diff_job; do
+        [[ "$missing_diff_job" =~ ^runner-[0-9a-f]{6,32}$ ]] || continue
+        terminate_review_hold "$missing_diff_job" "review_hold_no_artifact" \
+            "재검수 가능한 git_diff 산출물이 없음"
+        terminated=$((terminated + 1))
+    done <<< "$missing_diff_rows"
+fi
+
+exhausted_rows=$(db_query "
+SELECT job_id, project
+  FROM pipeline_jobs
+ WHERE status='review_hold'
+   AND (review_flag_category IN (${INFRA_CATEGORIES}) OR review_needs_retry IS TRUE)
+   AND COALESCE(review_retry_count,0) >= ${SWEEP_MAX_RETRY}
+ ORDER BY updated_at ASC
+ LIMIT ${SWEEP_BATCH};" 2>/dev/null) || exhausted_rows=""
+if [[ "$DRY_RUN" != "1" ]]; then
+    while IFS=$'\x1e' read -r exhausted_job exhausted_project; do
+        [[ "$exhausted_job" =~ ^runner-[0-9a-f]{6,32}$ ]] || continue
+        terminate_review_hold "$exhausted_job" "review_retry_exhausted" \
+            "자동 재검수 상한(${SWEEP_MAX_RETRY}) 도달"
+        terminated=$((terminated + 1))
+    done <<< "$exhausted_rows"
+fi
+
 # 이전 주기에 이미 임계치를 넘긴 작업도 백오프 만료를 기다리지 않고 먼저
-# 원 세션으로 이관한다. 이렇게 해야 배포 직후 정책이 적용되면 기존 적체도 즉시
-# 줄고, select_sql 의 일반 모델 재시도와 동시에 같은 작업을 잡지 않는다.
+# 원 세션으로 이관한다. select_sql 의 일반 모델 재시도와 겹치지 않는다.
 handoff_rows=$(db_query "
 SELECT job_id, project
   FROM pipeline_jobs
  WHERE status='review_hold'
    AND review_flag_category IN (${INFRA_CATEGORIES})
    AND COALESCE(review_retry_count,0) >= ${ORIGIN_ADJUDICATION_RETRY_THRESHOLD}
+   AND COALESCE(review_retry_count,0) < ${SWEEP_MAX_RETRY}
    AND COALESCE(error_detail,'') NOT IN ('review_origin_adjudication_pending', 'review_origin_adjudication_expired')
  ORDER BY updated_at ASC
  LIMIT ${SWEEP_BATCH};" 2>/dev/null) || handoff_rows=""
@@ -481,7 +517,7 @@ if [[ -z "${rows//[[:space:]]/}" ]]; then
     exit 0
 fi
 
-while IFS=$'\x1e' read -r job_id project retry_count session_id request_id error_detail origin_pending_age_min; do
+while IFS=$'\x1e' read -r job_id project retry_count session_id request_id error_detail origin_pending_age_min retry_last_at; do
     [[ -z "$job_id" ]] && continue
     # C1: job_id 형식 검증 — DB 값이라도 그대로 SQL/URL에 넣지 않는다.
     if [[ ! "$job_id" =~ ^runner-[0-9a-f]{6,32}$ ]]; then
@@ -518,6 +554,23 @@ SELECT age_min FROM marked;" 2>/dev/null | tr -d '[:space:]') || expired_age_min
                 "원 세션 판정 제한시간(${ORIGIN_ADJUDICATION_TIMEOUT_MIN}분) 만료(age=${expired_age_min}분) — 승인 없이 fail-closed 종결"
             terminated=$((terminated + 1))
             log "ORIGIN_ADJUDICATION_TERMINATED ${job_id} project=${project} age_min=${expired_age_min}"
+            continue
+        fi
+    fi
+    if [[ "$DRY_RUN" != "1" ]]; then
+        last_at_sql="NULL"
+        [[ -z "$retry_last_at" ]] || last_at_sql="$(sql_escape "$retry_last_at")::timestamptz"
+        # SELECT 는 소유권이 아니다. 이전 timestamp/count 가 그대로인 한 명만
+        # UPDATE RETURNING 을 얻는다. 대기시간 뒤에는 죽은 스위퍼의 claim 도 만료된다.
+        claimed=$(db_query "UPDATE pipeline_jobs
+            SET review_retry_last_at=NOW() + (${REVIEW_MAX_TIME}::text || ' seconds')::interval
+            WHERE job_id='${job_id}' AND status='review_hold'
+              AND review_retry_count=${retry_count}
+              AND review_retry_last_at IS NOT DISTINCT FROM ${last_at_sql}
+              AND (review_flag_category IN (${INFRA_CATEGORIES}) OR review_needs_retry IS TRUE)
+            RETURNING job_id;" 2>/dev/null | tr -d '[:space:]') || claimed=""
+        if [[ "$claimed" != "$job_id" ]]; then
+            log "  SKIP ${job_id} — 다른 스위퍼가 소유권 확보"
             continue
         fi
     fi
@@ -696,6 +749,17 @@ SELECT age_min FROM marked;" 2>/dev/null | tr -d '[:space:]') || expired_age_min
             case "$commit_gate_rc" in
                 10) handed=$((handed + 1)) ;;
                 11) terminated=$((terminated + 1)) ;;
+                *)
+                    # 모델 검수는 이미 끝났다. 산출물 대조 보류도 시도 1회로 기록한다.
+                    db_exec "UPDATE pipeline_jobs
+                             SET review_retry_count=${next_retry}, review_retry_last_at=NOW()
+                             WHERE job_id='${job_id}' AND status='review_hold';"
+                    if [[ "$next_retry" -ge "$SWEEP_MAX_RETRY" ]]; then
+                        terminate_review_hold "$job_id" "review_retry_exhausted" \
+                            "자동 재검수 상한(${SWEEP_MAX_RETRY}) 도달 — 산출물 대조 보류"
+                        terminated=$((terminated + 1))
+                    fi
+                    ;;
             esac
             rm -f "$diff_file" "$ins_file" "$payload_file" "$resp_file"
             continue
@@ -745,7 +809,11 @@ SELECT age_min FROM marked;" 2>/dev/null | tr -d '[:space:]') || expired_age_min
                      review_feedback=COALESCE(review_feedback,'') || E'\n' || ${note}
                  WHERE job_id='${job_id}' AND status='review_hold';"
         retried=$((retried + 1))
-        if [[ "$next_retry" -ge "$ORIGIN_ADJUDICATION_RETRY_THRESHOLD" ]]; then
+        if [[ "$next_retry" -ge "$SWEEP_MAX_RETRY" ]]; then
+            terminate_review_hold "$job_id" "review_retry_exhausted" \
+                "자동 재검수 상한(${SWEEP_MAX_RETRY}) 도달 — verdict=${verdict:-none} category=${category:-none}"
+            terminated=$((terminated + 1))
+        elif [[ "$next_retry" -ge "$ORIGIN_ADJUDICATION_RETRY_THRESHOLD" ]]; then
             log "  ORIGIN_THRESHOLD $job_id — 연속 무응답 판정 상한 도달, 원 세션 판정 이관"
             enqueue_origin_adjudication "$job_id" "$project"
         fi
