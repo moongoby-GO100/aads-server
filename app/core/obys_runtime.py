@@ -76,6 +76,7 @@ class RuntimeSettings:
 
     def apply(self) -> None:
         # Set aliases before importing any shared module with import-time config.
+        os.environ["OBYS_STANDALONE"] = "1"
         os.environ["DATABASE_URL"] = self.auth_dsn
         os.environ["YEOLJEONG_FINANCE_DATABASE_URL"] = self.business_dsn
 

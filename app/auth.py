@@ -33,6 +33,8 @@ except ImportError:
 SECRET_KEY = os.getenv('JWT_SECRET_KEY', '')
 ALGORITHM = 'HS256'
 TOKEN_EXPIRE_HOURS = 24 * 7  # 7일
+OBYS_TOKEN_ISSUER = 'obys'
+OBYS_TOKEN_AUDIENCE = 'obys-web'
 
 ADMIN_EMAIL = os.getenv('AADS_ADMIN_EMAIL', 'admin@aads.dev')
 ADMIN_PASSWORD = os.getenv('AADS_ADMIN_PASSWORD', '')
@@ -91,6 +93,9 @@ def create_token(user_id: str, email: str, *, is_admin: bool = False, tenant_id:
         'iat': int(time.time()),
         'exp': int(time.time()) + TOKEN_EXPIRE_HOURS * 3600,
     }
+    if os.getenv('OBYS_STANDALONE') == '1':
+        payload['iss'] = OBYS_TOKEN_ISSUER
+        payload['aud'] = OBYS_TOKEN_AUDIENCE
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -98,7 +103,16 @@ def verify_token(token: str) -> Optional[dict]:
     if not JWT_AVAILABLE:
         return None
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if os.getenv('OBYS_STANDALONE') == '1':
+            payload = jwt.decode(
+                token, SECRET_KEY, algorithms=[ALGORITHM],
+                issuer=OBYS_TOKEN_ISSUER, audience=OBYS_TOKEN_AUDIENCE,
+                options={'require': ['iss', 'aud', 'iat', 'exp']},
+            )
+        else:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={'verify_aud': False})
+            if 'iss' in payload or 'aud' in payload:
+                return None
         return payload
     except Exception as e:
         log.debug('token_verification_failed', error=str(e))
