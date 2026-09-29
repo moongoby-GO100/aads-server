@@ -245,7 +245,8 @@ def git_release_preflight(project: str, release_sha: str) -> dict[str, Any]:
         "unpushed_commits": None,
     }
     if result["project"] == "ACCT" and not _repo_paths_for_project("ACCT"):
-        result["config_error"] = "ACCT_REPO_PATH 미설정"
+        # ACCT 저장소는 jinah244 로컬에 있어 이 컨테이너에서는 볼 수 없다 — 차단이 아니라 건너뜀.
+        result["preflight_skipped"] = "acct_preflight_skipped_remote_repo"
         return result
     for repo in _repo_paths_for_project(project):
         head = _git_output(repo, ["rev-parse", "--short=12", "HEAD"])

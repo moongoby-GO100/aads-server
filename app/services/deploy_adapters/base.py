@@ -178,6 +178,8 @@ class BaseDeployAdapter:
         warnings: list[str] = []
         if details.get("config_error"):
             blockers.append(details["config_error"])
+        if details.get("preflight_skipped"):
+            warnings.append(details["preflight_skipped"])
         if details.get("repo_path") is None:
             warnings.append("repo_path_unavailable_in_container")
         elif details.get("release_known") is False:
