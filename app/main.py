@@ -86,6 +86,7 @@ from app.api.site_knowledge import router as site_knowledge_router
 from app.routers.chat import router as chat_v2_router
 from app.routers.agent_vault import router as agent_vault_router
 from app.routers.goals import router as goals_router
+from app.routers.session_notify import router as session_notify_router
 from app.routers.work_items import router as work_items_router
 from app.config import settings
 from app.graph.builder import compile_graph
@@ -3873,6 +3874,7 @@ app.include_router(authenticated_site_collector_router, prefix="/api/v1", tags=[
 app.include_router(site_knowledge_router, prefix="/api/v1", tags=["site-knowledge"])
 app.include_router(agent_vault_router, prefix="/api/v1", tags=["agent-vault"])
 app.include_router(goals_router, prefix="/api/v1", tags=["goals"])
+app.include_router(session_notify_router, prefix="/api/v1", tags=["session-notify"])
 app.include_router(work_items_router, prefix="/api/v1", tags=["goal-workflow-approval"])
 
 # 루트 /health — 모니터링 도구 호환 (인증 면제)

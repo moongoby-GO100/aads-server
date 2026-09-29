@@ -684,3 +684,226 @@ async def dispatch_queued_relays() -> Dict[str, int]:
     if sent or expired:
         logger.info("session_relay_queue_swept sent=%d expired=%d", sent, expired)
     return {"sent": sent, "expired": expired}
+
+
+# ── 단방향 알림 ────────────────────────────────────────────────────────────
+#
+# 2026-09-29 CEO 지시: 텔레그램을 알림에서 빼고 담당 세션이 알림을 받아
+# 조치하게 한다. 그런데 들어갈 길이 `ask()` 하나뿐이었다 — 왕복(질문→답변
+# 완성) 모델이라 답이 완성되지 않으면 failed 로 남는다. 실측 530건 중
+# failed 234 / pending 232 / answered 61(11.5%). 알림은 답이 필요 없는데
+# 이 길에 태우면 영구히 failed/pending 으로 쌓인다.
+#
+# 그래서 길을 따로 낸다. `_run_relay`(답 대기·hop 증가)를 타지 않고,
+# 넣는 방식만 `_deliver_answer` 를 그대로 쓴다(대상이 응답 중이면 기다림).
+#
+# 외부 cron 에는 발신 세션이 없다. `origin_session_id` NOT NULL 은 그대로
+# 두고 워크스페이스마다 시스템 발신 세션 하나를 확보해 재사용한다.
+
+NOTIFY_SENDER_ROLE_KEY = "SystemNotifier"
+NOTIFY_SENDER_TITLE = "시스템 알림 발신"
+NOTIFY_SEVERITIES = ("info", "warn", "critical")
+NOTIFY_DEDUP_MIN = max(1, int(os.getenv("SESSION_NOTIFY_DEDUP_MIN", "30")))
+NOTIFY_BODY_LIMIT = max(200, int(os.getenv("SESSION_NOTIFY_BODY_CHARS", "4000")))
+
+# 지시서는 'delivered' 를 원했지만 DB 에 `session_relay_status_chk`
+# (queued|pending|answered|failed|blocked) 가 걸려 있어 그 값은 INSERT 가
+# 거부된다. 스키마 변경은 이번 범위에서 금지라 기존 종결 상태 'answered'
+# 로 기록하고, 알림 행은 hop=0 · 발신자 SystemNotifier · 질문 머리
+# "[알림:" 으로 구분한다. 제약을 넓히면 이 상수만 바꾸면 된다.
+NOTIFY_STATUS_DELIVERED = os.getenv("SESSION_NOTIFY_STATUS_DELIVERED", "answered")
+
+
+def _notify_question(severity: str, title: str, body: str, source: str,
+                     dedup_key: Optional[str]) -> str:
+    text = f"[알림:{severity}] {title.strip()}\n{(body or '').strip()[:NOTIFY_BODY_LIMIT]}\n(source={source.strip()})"
+    if dedup_key:
+        # 중복 판정 표식. 본문을 자른 뒤에 붙여서 잘려 나가지 않게 한다.
+        text += f"\n(dedup={dedup_key.strip()})"
+    return text
+
+
+def _notify_content(question: str) -> str:
+    return (
+        f"{question}\n\n"
+        "── 이 알림은 단방향입니다 ──\n"
+        "발신자는 답을 기다리지 않습니다. 담당 범위에서 확인하고 필요한 조치를 하세요. "
+        "조치가 필요 없다고 판단하면 그 이유를 한 줄로 남기세요."
+    )
+
+
+async def _notify_workspace(target: str, workspace_id: Optional[str],
+                            tenant_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """알림을 넣을 워크스페이스를 정한다. (workspace_id, 실패 사유) 를 돌려준다.
+
+    `_resolve_target` 은 발신 세션의 워크스페이스 안에서만 찾으므로 발신
+    세션을 고르기 전에 워크스페이스가 정해져 있어야 한다.
+    """
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    tenant = (tenant_id or "").strip() or None
+    t = (target or "").strip()
+
+    if workspace_id:
+        ws = await pool.fetchval(
+            "SELECT id::text FROM chat_workspaces WHERE id = $1::uuid "
+            "AND ($2::uuid IS NULL OR tenant_id = $2::uuid)",
+            workspace_id, tenant,
+        )
+        return (ws, None) if ws else (None, "workspace_not_found")
+
+    if _UUID_RE.match(t):
+        ws = await pool.fetchval(
+            "SELECT workspace_id::text FROM chat_sessions WHERE id = $1::uuid "
+            "AND ($2::uuid IS NULL OR tenant_id = $2::uuid)",
+            t, tenant,
+        )
+        return (ws, None) if ws else (None, "target_not_found")
+
+    # 역할 키 또는 한글 별칭을 가진 세션이 있는 워크스페이스가 하나뿐이면 그것.
+    # 여럿이면 고르지 않는다 — 다른 프로젝트 담당에게 알림이 가는 것이
+    # 안 가는 것보다 나쁘다.
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT s.workspace_id::text AS workspace_id
+        FROM chat_sessions s
+        WHERE s.role_key IS NOT NULL
+          AND s.role_key <> $3
+          AND ($2::uuid IS NULL OR s.tenant_id = $2::uuid)
+          AND (
+              s.role_key = $1
+              OR EXISTS (
+                  SELECT 1 FROM prompt_assets a
+                  WHERE a.enabled AND a.role_scope @> ARRAY[$1]::text[]
+                    AND a.role_scope @> ARRAY[s.role_key]::text[]
+              )
+          )
+        """,
+        t, tenant, NOTIFY_SENDER_ROLE_KEY,
+    )
+    ids = [r["workspace_id"] for r in rows]
+    if len(ids) == 1:
+        return ids[0], None
+    if len(ids) > 1:
+        return None, "workspace_ambiguous"
+    return None, "target_not_found"
+
+
+async def _system_sender_session(workspace_id: str) -> str:
+    """워크스페이스의 시스템 발신 세션을 확보한다. 있으면 재사용한다."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # 동시에 두 요청이 와도 한 행만 만든다.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1))",
+                f"session_notify_sender:{workspace_id}",
+            )
+            sid = await conn.fetchval(
+                "SELECT id::text FROM chat_sessions WHERE workspace_id = $1::uuid "
+                "AND role_key = $2 ORDER BY created_at ASC LIMIT 1",
+                workspace_id, NOTIFY_SENDER_ROLE_KEY,
+            )
+            if sid:
+                return sid
+            return await conn.fetchval(
+                "INSERT INTO chat_sessions (workspace_id, title, role_key) "
+                "VALUES ($1::uuid, $2, $3) RETURNING id::text",
+                workspace_id, NOTIFY_SENDER_TITLE, NOTIFY_SENDER_ROLE_KEY,
+            )
+
+
+async def _run_notify(relay_id: str, target_session_id: str, content: str) -> None:
+    """대상 인박스에 넣는다. 답은 기다리지 않는다 — 회신도, hop 증가도 없다."""
+    from app.core.db_pool import get_pool
+
+    try:
+        await _deliver_answer(target_session_id, content)
+    except Exception as exc:
+        logger.warning("session_notify_failed relay=%s error=%s", relay_id[:8], str(exc)[:200])
+        try:
+            await get_pool().execute(
+                "UPDATE session_relay SET status='failed', error=$2 WHERE id=$1::uuid",
+                relay_id, str(exc)[:500],
+            )
+        except Exception:
+            pass
+
+
+async def notify(target: str, title: str, body: str, severity: str, source: str,
+                 dedup_key: Optional[str] = None, workspace_id: Optional[str] = None,
+                 tenant_id: Optional[str] = None) -> Dict[str, Any]:
+    """담당 세션에 단방향 알림을 넣는다.
+
+    대상을 못 찾아도 예외를 던지지 않는다 — 호출자(cron)가 로그로 알 수
+    있게 `delivered=False` 와 사유를 돌려준다.
+    """
+    from app.core.db_pool import get_pool
+
+    result: Dict[str, Any] = {"delivered": False, "target_session_id": None,
+                              "relay_id": None, "reason": None}
+    if severity not in NOTIFY_SEVERITIES:
+        result["reason"] = "invalid_severity"
+        return result
+
+    ws, why = await _notify_workspace(target, workspace_id, tenant_id)
+    if not ws:
+        result["reason"] = why or "target_not_found"
+        return result
+
+    sender = await _system_sender_session(ws)
+    tgt = await _resolve_target(target, sender)
+    if not tgt or tgt.get("workspace_id") != ws:
+        result["reason"] = "target_not_found"
+        return result
+    if tgt["id"] == sender:
+        # 발신 세션 자신이 걸리면 알림이 허공에 간다.
+        result["reason"] = "target_not_found"
+        return result
+    result["target_session_id"] = tgt["id"]
+
+    question = _notify_question(severity, title, body, source, dedup_key)
+    marker = f"\n(dedup={dedup_key.strip()})" if dedup_key else None
+
+    pool = get_pool()
+    relay_id = str(uuid.uuid4())
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            if marker:
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1))",
+                    f"session_notify_dedup:{tgt['id']}:{dedup_key}",
+                )
+                dup = await conn.fetchval(
+                    "SELECT id::text FROM session_relay "
+                    "WHERE origin_session_id = $1::uuid AND target_session_id = $2::uuid "
+                    "AND hop = 0 AND status <> 'failed' "
+                    "AND created_at > now() - ($3::int * interval '1 minute') "
+                    "AND right(question, length($4)) = $4 "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    sender, tgt["id"], NOTIFY_DEDUP_MIN, marker,
+                )
+                if dup:
+                    logger.info("session_notify_deduplicated relay=%s target=%s key=%s",
+                                dup[:8], tgt["id"][:8], dedup_key[:60])
+                    result["relay_id"] = dup
+                    result["reason"] = "deduplicated"
+                    return result
+            await conn.execute(
+                "INSERT INTO session_relay "
+                "(id, origin_session_id, target_session_id, hop, question, status, answered_at) "
+                "VALUES ($1::uuid, $2::uuid, $3::uuid, 0, $4, $5, now())",
+                relay_id, sender, tgt["id"], question, NOTIFY_STATUS_DELIVERED,
+            )
+
+    task = asyncio.create_task(_run_notify(relay_id, tgt["id"], _notify_content(question)))
+    _running.add(task)
+    task.add_done_callback(_running.discard)
+
+    logger.info("session_notify_sent relay=%s target=%s severity=%s source=%s",
+                relay_id[:8], tgt["id"][:8], severity, source[:60])
+    result.update(delivered=True, relay_id=relay_id)
+    return result
