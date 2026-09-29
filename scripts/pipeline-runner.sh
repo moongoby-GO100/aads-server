@@ -736,11 +736,14 @@ is_read_only_instruction() {
 
 is_deploy_only_instruction() {
     local instruction="${1:-}"
-    printf '%s' "$instruction" | head -20 | grep -qF 'DEPLOY_ONLY: true'
+    # DEPLOY_ONLY_HEADER_SQL 과 같은 규칙이다 — 한쪽만 고치지 마라.
+    printf '%s' "$instruction" | head -20 | grep -qE '^[[:space:]]*DEPLOY_ONLY[[:space:]]*:[[:space:]]*true([^[:alnum:]_]|$)'
 }
 
-# is_deploy_only_instruction 의 SQL 판(별칭 p 고정). 앞 20줄 안에서 줄 시작이
-# `DEPLOY_ONLY: true` 인 잡만 릴리스잡이다. 본문 산문의 언급은 릴리스잡이 아니다.
+# is_deploy_only_instruction(셸)과 같은 규칙의 SQL 표현(별칭 p 고정). 앞 20줄 안에서
+# 줄 시작이 `DEPLOY_ONLY: true` 인 잡만 릴리스잡이다. 본문 산문의 언급은 릴리스잡이 아니다.
+# 경고: 두 판정은 반드시 같이 고쳐라. 한쪽만 고치면 러너는 릴리스잡으로 보는데 가드는 취소하는 괴리가 생긴다.
+# (tests/check_deploy_only_guard.sh R3 가 두 판정의 일치를 검사한다.)
 # 2026-09-30 실측: ILIKE '%DEPLOY_ONLY%' 본문 매칭이 일반 코드잡 runner-6a9a2950 을
 # 릴리스잡으로 오탐해 취소·해제 분기를 모두 우회, 큐가 2시간 40분 멈췄다.
 DEPLOY_ONLY_HEADER_SQL="array_to_string((string_to_array(p.instruction, chr(10)))[1:20], chr(10)) ~ '(^|\\n)[[:space:]]*DEPLOY_ONLY[[:space:]]*:[[:space:]]*true\\y'"

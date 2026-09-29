@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # DEPLOY_ONLY 가드 검증 (AADS-RUNNER-DEPLOYONLY-FALSE-POSITIVE-DEADLOCK-20260930)
 #   R1: 릴리스잡 판정이 헤더 선언에만 반응하는가 — SQL 정규식을 psql 로 직접 평가
+#   R3: 셸 is_deploy_only_instruction 과 SQL DEPLOY_ONLY_HEADER_SQL 이 같은 결론을 내는가 (AADS-DEPLOYONLY-SHELL-SQL-SYNC-20260930)
 #   R2: 교착 경고(warn_stuck_dependency_queue) — TEMP 테이블 위에서 실행, 실제 pipeline_jobs 는 건드리지 않는다
 # 실행: bash tests/check_deploy_only_guard.sh   (PGUSER/PGDATABASE 환경 + aads-postgres 컨테이너 또는 PGHOST 접속 필요)
 set -u
@@ -52,6 +53,28 @@ guard_ilike=$(sed -n '/^cleanup_blocked_dependencies() {/,/^}$/p' "$SCRIPT" | gr
 check "cleanup_blocked_dependencies 안 ILIKE '%DEPLOY_ONLY%' 개수" 0 "$guard_ilike"
 guard_use=$(sed -n '/^cleanup_blocked_dependencies() {/,/^}$/p' "$SCRIPT" | grep -c 'NOT (${DEPLOY_ONLY_HEADER_SQL})')
 check "가드 SQL 의 헤더 판정 사용 횟수(취소 2 = existing/missing)" 2 "$guard_use"
+
+# ── R3 ────────────────────────────────────────────────────────────────
+eval "$(extract_fn is_deploy_only_instruction)"
+is_release_shell() { is_deploy_only_instruction "$1" && echo t || echo f; }
+check_sync() { # name expected instruction — 셸·SQL 각각이 expected 이고 서로 같아야 한다
+    local sh sql
+    sh=$(is_release_shell "$3"); sql=$(is_release "$3")
+    check "$1 셸" "$2" "$sh"
+    check "$1 SQL" "$2" "$sql"
+    check "$1 셸==SQL" "$sql" "$sh"
+}
+
+echo "== R3: 셸 판정 == SQL 판정 동기화"
+check_sync "①  헤더 1행 'DEPLOY_ONLY: true'" t $'DEPLOY_ONLY: true\nTASK_ID: X'
+check_sync "②  콜론 앞뒤 공백 'DEPLOY_ONLY : true'" t $'TASK_ID: X\n  DEPLOY_ONLY : true'
+check_sync "③  'DEPLOY_ONLY: false'" f $'DEPLOY_ONLY: false\nTASK_ID: X'
+check_sync "④  본문 산문 중간의 'DEPLOY_ONLY: true'(줄머리 아님)" f $'TASK_ID: X\n\n인용: grep -qF \'DEPLOY_ONLY: true\' 로 판정한다'
+check_sync "⑤  runner-6a9a2950 원문" f "$(cat "$FX/runner-6a9a2950.txt")"
+check_sync "⑥  runner-8e41830c 원문" t "$(cat "$FX/runner-8e41830c.txt")"
+check_sync "⑦  21행 이후 선언" f "${filler}"$'DEPLOY_ONLY: true'
+check_sync "⑧  'DEPLOY_ONLY: trueish'(단어경계)" f $'DEPLOY_ONLY: trueish\nTASK_ID: X'
+check_sync "⑨  'DEPLOY_ONLY: true.'(구두점 뒤 경계)" t $'DEPLOY_ONLY: true.\nTASK_ID: X'
 
 # ── R2 ────────────────────────────────────────────────────────────────
 echo "== R2: 교착 경고"
