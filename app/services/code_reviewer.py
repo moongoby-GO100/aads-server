@@ -342,6 +342,12 @@ _SUSPICIOUS_INPUT_PATTERNS: list[tuple[re.Pattern[str], str, str, bool, str]] = 
     ),
 ]
 
+_INFRA_FAILURE_CATEGORIES = frozenset({
+    "GIT_DIFF_FAILURE",
+    "RUNNER_AUTH_FAILURE",
+    "RUNNER_EXECUTION_FAILURE",
+})
+
 
 async def _get_review_models() -> list[str]:
     """Return DB-ordered AI_REVIEW models that execute through a CLI relay.
@@ -568,11 +574,19 @@ def _precheck_review_input(diff: str) -> Optional[ReviewVerdict]:
 
     for pattern, category, stage, needs_retry, summary in _SUSPICIOUS_INPUT_PATTERNS:
         if pattern.search(stripped):
+            # 인프라 실패는 코드 품질 판정이 아니다 — 소비자(ops QA 패널)가 구분하도록 표시만 남긴다.
+            # score/verdict/flag_category 는 증거 보존을 위해 그대로 둔다.
+            infra_feedback = (
+                {"infra_failure": True}
+                if needs_retry and category in _INFRA_FAILURE_CATEGORIES
+                else None
+            )
             return _build_review_verdict(
                 verdict="FLAG",
                 score=0.0,
                 summary=summary,
                 issues=[summary, "실제 코드 diff가 없어 LLM 코드 리뷰를 수행하지 않았습니다."],
+                feedback=infra_feedback,
                 flag_category=category,
                 failure_stage=stage,
                 needs_retry=needs_retry,

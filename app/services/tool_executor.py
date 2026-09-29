@@ -26,6 +26,10 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# AI 리뷰 diff 캡쳐 재시도 — 인프라 실패만 1회 재시도(총 2회), 대기는 고정 1초.
+_REVIEW_DIFF_MAX_ATTEMPTS = 2
+_REVIEW_DIFF_RETRY_DELAY_SEC = 1.0
+
 
 class _DryRunRollback(Exception):
     def __init__(self, plan: list):
@@ -1789,6 +1793,10 @@ class ToolExecutor:
             file_path=file_path,
         )
         if diff_text.startswith("[ERROR]"):
+            logger.warning(
+                "ai_review_git_diff_infra_failure: project=%s file=%s detail=%s",
+                project, file_path, diff_text[:300],
+            )
             logger.warning(f"ai_review_git_diff_skip: {diff_text[:300]}")
             return
 
@@ -1890,6 +1898,10 @@ class ToolExecutor:
             file_path=file_path,
         )
         if diff_text.startswith("[ERROR]"):
+            logger.warning(
+                "ai_review_git_diff_infra_failure: project=%s file=%s detail=%s",
+                "GO100", file_path, diff_text[:300],
+            )
             logger.warning(f"ai_review_git_diff_skip: project=GO100 {diff_text[:300]}")
             return
 
@@ -2059,24 +2071,37 @@ class ToolExecutor:
             return "[ERROR] diff 대상 파일 경로 없음"
 
         quoted_path = shlex.quote(rel_path)
-        remote_result = ""
-        try:
-            from app.api.ceo_chat_tools import tool_run_remote_command
-            if project == "AADS":
-                repo_root = self._aads_repo_root(repo)
-                command = f"cd {shlex.quote(repo_root)} && git diff -- {quoted_path}"
-            else:
-                command = f"git diff -- {quoted_path}"
-            diff_result = await tool_run_remote_command(project, command)
-            remote_result = diff_result if isinstance(diff_result, str) else str(diff_result)
-        except Exception as exc:
-            remote_result = f"[ERROR] remote git diff 실행 실패: {exc}"
+        if project == "AADS":
+            repo_root = self._aads_repo_root(repo)
+            command = f"cd {shlex.quote(repo_root)} && git diff -- {quoted_path}"
+        else:
+            command = f"git diff -- {quoted_path}"
 
-        if remote_result and not self._remote_git_failed(remote_result):
-            return self._strip_remote_command_wrapper(remote_result)
+        # 인프라 실패(fatal/stderr/timeout/예외)만 1회 재시도한다 — 총 2회, 고정 대기.
+        # 정상적으로 빈 diff(변경 없음)는 실패가 아니므로 재시도하지 않는다.
+        remote_result = ""
+        for attempt in range(_REVIEW_DIFF_MAX_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(_REVIEW_DIFF_RETRY_DELAY_SEC)
+            try:
+                from app.api.ceo_chat_tools import tool_run_remote_command
+                diff_result = await tool_run_remote_command(project, command)
+                remote_result = diff_result if isinstance(diff_result, str) else str(diff_result)
+            except Exception as exc:
+                remote_result = f"[ERROR] remote git diff 실행 실패: {exc}"
+
+            if not remote_result:
+                break  # 출력 자체가 없음 — 기존대로 재시도 없이 아래 분기로
+            if not self._remote_git_failed(remote_result):
+                return self._strip_remote_command_wrapper(remote_result)
+            logger.warning(
+                "ai_review_git_diff_attempt_failed: project=%s attempt=%d/%d detail=%s",
+                project, attempt + 1, _REVIEW_DIFF_MAX_ATTEMPTS, remote_result[:200],
+            )
 
         if project != "AADS":
-            return remote_result or "[ERROR] remote git diff 결과 없음"
+            detail = remote_result or "remote git diff 결과 없음"
+            return f"[ERROR] AI review git diff capture failed: {detail[:1000]}"
 
         repo_root = self._aads_repo_root(repo)
         local_candidates = [repo_root]

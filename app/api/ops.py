@@ -3307,16 +3307,39 @@ def _qa_detail(feedback: Any, flag_category: Optional[str], max_len: int = 300) 
     return _truncate(text, max_len)
 
 
+# 리뷰가 아예 돌지 못한 인프라 실패 — code_reviewer._INFRA_FAILURE_CATEGORIES 와 같은 집합.
+_QA_INFRA_FLAG_CATEGORIES = frozenset({
+    "GIT_DIFF_FAILURE",
+    "RUNNER_AUTH_FAILURE",
+    "RUNNER_EXECUTION_FAILURE",
+})
+
+
+def _qa_is_infra_failure(row: Dict[str, Any]) -> bool:
+    """LLM 리뷰가 돌지 못한 행(diff 캡쳐·러너 실패)인지. 품질 판정으로 세면 안 된다."""
+    feedback = _coerce_json(row.get("feedback"))
+    if isinstance(feedback, dict) and feedback.get("infra_failure") is True:
+        return True
+    category = (row.get("flag_category") or "").strip().upper()
+    return category in _QA_INFRA_FLAG_CATEGORIES and bool(row.get("needs_retry"))
+
+
 def _qa_result_items(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     for row in rows:
         raw_verdict = (row.get("verdict") or "").strip().upper()
         cycle = int(row.get("review_cycle") or 1)
         score = row.get("score")
+        infra_failure = _qa_is_infra_failure(row)
+        if infra_failure:
+            verdict = "INFRA"
+        else:
+            verdict = "PASS" if raw_verdict in _QA_PASS_VERDICTS else "FAIL"
         items.append({
             "task_id": row.get("job_id"),
             "project": (row.get("project") or "UNKNOWN"),
-            "verdict": "PASS" if raw_verdict in _QA_PASS_VERDICTS else "FAIL",
+            "verdict": verdict,
+            "infra_failure": infra_failure,
             "raw_verdict": raw_verdict or None,
             "score": float(score) if score is not None else None,
             "retry_count": max(cycle - 1, 0),
