@@ -156,6 +156,58 @@ def parse_ratelimit_headers(headers: Any) -> Dict[str, Any]:
     }
 
 
+def parse_cli_rate_limit_info(rate_limit_info: Any) -> Dict[str, Any]:
+    """CLI `rate_limit_event.rate_limit_info` 를 unified_* 컬럼 값으로 옮긴다.
+
+    CLI 릴레이 경로에는 HTTP 헤더가 없다. 대신 CLI 가 같은 한도 정보를
+    rate_limit_event 로 준다(`unifiedWindows.five_hour/seven_day` 의
+    utilization 0~1·resetsAt epoch, status). 이것을 헤더 경로와 같은 단위로
+    옮겨야 oauth_usage_log 한 표에서 한도를 읽을 수 있다 — 2026-09-29 기준
+    cli_relay 1,010행 전부 unified_* 가 NULL 이었다.
+
+    OAuth 구독은 tokens-* 한도를 주지 않으므로 rl_tokens_* 는 만들지 않는다.
+    """
+    if not isinstance(rate_limit_info, dict) or not rate_limit_info:
+        return {}
+    windows = rate_limit_info.get("unifiedWindows") or {}
+    if not isinstance(windows, dict):
+        windows = {}
+
+    def _window(name: str) -> Dict[str, Any]:
+        value = windows.get(name)
+        return value if isinstance(value, dict) else {}
+
+    def _fraction(value: Any) -> Optional[float]:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if number < 0:
+            return None
+        # 헤더 경로와 같이 0~1 비율로 저장한다. 방어적으로 0~100 입력도 받는다.
+        return round(number / 100.0, 4) if number > 1.0 else number
+
+    def _reset(value: Any) -> Optional[datetime]:
+        if value in (None, ""):
+            return None
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            return None
+
+    five = _window("five_hour")
+    seven = _window("seven_day")
+    parsed: Dict[str, Any] = {
+        "unified_status": rate_limit_info.get("status") or None,
+        "unified_5h_utilization": _fraction(five.get("utilization")),
+        "unified_5h_reset": _reset(five.get("resetsAt")),
+        "unified_7d_utilization": _fraction(seven.get("utilization")),
+        "unified_7d_reset": _reset(seven.get("resetsAt")),
+        "unified_fallback": rate_limit_info.get("rateLimitType") or None,
+    }
+    return {key: value for key, value in parsed.items() if value is not None}
+
+
 # ── DB 기록 (fire-and-forget) ─────────────────────────────────────────
 
 def _usage_log_values(entry: Dict[str, Any]) -> Tuple[Any, ...]:
@@ -325,14 +377,21 @@ def log_usage(
     duration_ms: int = 0,
     tenant_id: Optional[str] = None,
     account_slot: Optional[str] = None,
+    rate_limit_info: Optional[Dict[str, Any]] = None,
 ) -> None:
     """사용량 기록 (buffered fire-and-forget). LLM 호출 직후 호출.
 
     account_slot 은 토큰 없이 슬롯을 아는 호출자를 위한 것이다. CLI 릴레이
     경로는 토큰을 릴레이 서버가 들고 있어 앱에는 슬롯 번호("1"/"2")만
     있으므로, _token_slot(token) 으로는 항상 "unknown" 이 된다.
+
+    rate_limit_info 는 헤더가 없는 CLI 경로가 받은 rate_limit_event 본문이다.
+    헤더 값이 있으면 헤더가 우선한다.
     """
     rl = parse_ratelimit_headers(headers)
+    for _key, _value in parse_cli_rate_limit_info(rate_limit_info).items():
+        if rl.get(_key) is None:
+            rl[_key] = _value
     slot = (account_slot or "").strip() or _token_slot(token)
     prefix = _token_prefix(token)
 

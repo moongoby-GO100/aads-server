@@ -60,28 +60,16 @@ class _Conn:
                 }
             ]
         if "FROM chat_messages" in query:
+            # 표본 단위 — 실패 판정이 없는 소스라 failed 는 NULL
             return [
-                {
-                    "model_key": "gpt-5.6-sol",
-                    "calls": 3,
-                    "failed_calls": 0,
-                    "avg_latency_ms": 1200.4,
-                    "p50_latency_ms": 1000.0,
-                    "p95_latency_ms": 2200.0,
-                    "max_latency_ms": 2400.0,
-                }
+                {"model_key": "gpt-5.6-sol", "latency_ms": 1000.0, "failed": None},
+                {"model_key": "gpt-5.6-sol", "latency_ms": 2400.0, "failed": None},
+                {"model_key": "gpt-5.6-sol", "latency_ms": 200.0, "failed": None},
             ]
         if "FROM pipeline_jobs" in query:
             return [
-                {
-                    "model_key": "codex:gpt-5.6-sol",
-                    "calls": 2,
-                    "failed_calls": 1,
-                    "avg_latency_ms": 30000.0,
-                    "p50_latency_ms": 28000.0,
-                    "p95_latency_ms": 40000.0,
-                    "max_latency_ms": 41000.0,
-                }
+                {"model_key": "codex:gpt-5.6-sol", "latency_ms": 41000.0, "failed": False},
+                {"model_key": "codex:gpt-5.6-sol", "latency_ms": 15000.0, "failed": True},
             ]
         return []
 
@@ -98,7 +86,14 @@ def test_llm_response_metrics_aggregates_sources(monkeypatch):
     assert result["model_filter"] == "gpt"
     assert result["summary"]["total_observations"] == 5
     assert result["summary"]["failed_observations"] == 1
-    assert result["summary"]["failure_rate_pct"] == 20.0
+    # 실패 판정이 없는 채팅 표본(3건)은 실패율 분모에서 빠진다.
+    assert result["summary"]["failure_denominator"] == 2
+    assert result["summary"]["failure_rate_pct"] == 50.0
+    assert result["summary"]["invariant_violations"] == []
+    assert result["metrics"]["chat_final_response"][0]["failed_calls"] is None
+    assert result["metrics"]["chat_final_response"][0]["failure_rate_pct"] is None
+    assert result["metrics"]["chat_final_response"][0]["p50_latency_ms"] == 1000
+    assert result["metrics"]["runner_cli_total"][0]["model"] == "gpt-5.6-sol"
     assert result["summary"]["slowest_top5"][0]["source"] == "runner_cli_total"
     assert result["metrics"]["chat_final_response"][0]["provider"] == "openai"
     assert result["metrics"]["runner_cli_total"][0]["provider"] == "codex"

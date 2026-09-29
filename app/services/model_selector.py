@@ -3805,6 +3805,11 @@ async def _stream_cli_relay_once(
                 yield {"type": "error", "content": f"CLI Relay unreachable: {hc_err}"}
                 return
 
+            # oauth_usage_log.duration_ms — 릴레이 요청부터 result 까지의 호출 전체
+            # 경과다. 이 경로는 duration 을 넘기지 않아 cli_relay 행이 전부 0 이었고
+            # (2026-09-29 1,010행), opus 계열 지연 P50/P95 를 낼 수 없었다.
+            _usage_t0 = _time_mod.monotonic()
+            _last_rate_limit_info: Dict[str, Any] = {}
             async with client.stream(
                 "POST",
                 f"{_CLAUDE_RELAY_URL}/stream",
@@ -3843,6 +3848,8 @@ async def _stream_cli_relay_once(
                     # rate_limit_event: 이 호출에 쓰인 계정의 쿼터 실측값이다.
                     # 외부 API 재조회 없이 슬롯별 사용량을 여기서 적재한다.
                     if event.get("type") == "rate_limit_event":
+                        if isinstance(event.get("rate_limit_info"), dict):
+                            _last_rate_limit_info = event["rate_limit_info"]
                         try:
                             from app.services.oauth_usage_tracker import record_slot_rate_limit
                             await record_slot_rate_limit(
@@ -3901,6 +3908,8 @@ async def _stream_cli_relay_once(
                                 session_id=session_id or "",
                                 account_slot=str(oauth_slot or ""),
                                 tenant_id=_tenant or None,
+                                duration_ms=int((_time_mod.monotonic() - _usage_t0) * 1000),
+                                rate_limit_info=_last_rate_limit_info or None,
                             )
                         except Exception as _usage_err:
                             logger.debug(
@@ -4414,6 +4423,8 @@ async def _stream_codex_relay_once(
             except Exception as hc_err:
                 yield {"type": "error", "content": f"Codex Relay unreachable: {hc_err}"}
                 return
+            # 호출 전체 경과를 oauth_usage_log.duration_ms 에 남긴다(이전에는 항상 0).
+            _usage_t0 = _time_mod.monotonic()
             async with client.stream(
                 "POST", f"{_CLAUDE_RELAY_URL}/codex-stream",
                 json=req_body, headers={"X-Claude-Relay-Secret": _load_relay_shared_secret()},
@@ -4529,6 +4540,7 @@ async def _stream_codex_relay_once(
                                 call_source="codex_relay",
                                 session_id=session_id or "",
                                 account_slot="codex",
+                                duration_ms=int((_time_mod.monotonic() - _usage_t0) * 1000),
                             )
                         except Exception as _usage_err:
                             logger.debug(
@@ -4853,6 +4865,7 @@ async def _run_agent_sdk_with_key(
     in_tokens = 0
     out_tokens = 0
     _captured_cli_sid = cli_session_id or ""  # resume 시 기존 ID 유지
+    _usage_t0 = _time_mod.monotonic()  # oauth_usage_log.duration_ms (이전에는 항상 0)
 
     try:
         async for msg in sdk_query(prompt=user_message, options=opts):
@@ -4963,6 +4976,7 @@ async def _run_agent_sdk_with_key(
         call_source="model_selector_sdk",
         session_id=session_id or "",
         tenant_id=_tenant_id or None,
+        duration_ms=int((_time_mod.monotonic() - _usage_t0) * 1000),
     )
     yield {
         "type": "done",

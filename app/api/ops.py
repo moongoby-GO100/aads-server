@@ -3590,6 +3590,12 @@ async def ops_cost_trend(
         "total_usd": round(sum(i["cost"] for i in items), 6),
         "generated_at": now_kst.isoformat(),
     }
+    if source == "oauth_usage_log":
+        # OAuth/Codex 구독 호출의 정가 환산값이다. 실청구로 읽으면 지출을 수십 배로
+        # 부풀린다(2026-09-29 24시간 약 $11,162). 실청구는 측정하지 않는다.
+        payload["cost_basis"] = "list_price_equivalent"
+        payload["billed_usd"] = None
+        payload["billed_status"] = "미측정"
     if project_label:
         payload["source_note"] = (
             "프로젝트별 비용은 cost_tracking 에만 축이 있는데 이 테이블은 "
