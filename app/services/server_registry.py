@@ -167,6 +167,17 @@ def get_server_host(server_id: str) -> str:
     return get_server_config(server_id).get("host", "")
 
 
+def get_server_ssh_port(server_id: str) -> int:
+    """서버 ID(구/신 모두 허용) → SSH 포트 반환.
+
+    포트를 호출부에 다시 적지 마라. 2026-09-29, ceo_chat_tools_db 가 22 를
+    직접 박아 두어 cafe24_114(7916) 로 가는 DB 터널이 전부
+    "connect to host 114.207.244.86 port 22: Connection refused" 로 죽었다.
+    포트가 두 곳에 있으면 한쪽이 반드시 낡는다 — 정본은 이 레지스트리다.
+    """
+    return int(get_server_config(server_id).get("ssh_port", 22))
+
+
 def get_servers_for_projects(projects: List[str]) -> List[str]:
     """프로젝트 목록에 해당하는 서버 ID 목록 반환 (중복 제거)."""
     servers = set()

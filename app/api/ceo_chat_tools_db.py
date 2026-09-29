@@ -30,7 +30,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.services.server_registry import get_server_host
+from app.services.server_registry import get_server_host, get_server_ssh_port
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +155,7 @@ _SSH_TUNNEL_PROJECTS: Dict[str, Dict[str, Any]] = {
     "SF": _ssh_tunnel_config(
         "SF",
         ssh_host=get_server_host("cafe24_114"),
-        ssh_port=22,
+        ssh_port=get_server_ssh_port("cafe24_114"),
         ssh_user="root",
         ssh_key="/root/.ssh/id_ed25519_newtalk",
         remote_host="127.0.0.1",
@@ -164,7 +164,7 @@ _SSH_TUNNEL_PROJECTS: Dict[str, Dict[str, Any]] = {
     "NTV2": _ssh_tunnel_config(
         "NTV2",
         ssh_host=get_server_host("cafe24_114"),
-        ssh_port=22,
+        ssh_port=get_server_ssh_port("cafe24_114"),
         ssh_user="root",
         ssh_key="/root/.ssh/id_ed25519_newtalk",
         remote_host="127.0.0.1",
@@ -176,7 +176,7 @@ _SSH_TUNNEL_PROJECTS: Dict[str, Dict[str, Any]] = {
     "ACCT": _ssh_tunnel_config(
         "ACCT",
         ssh_host=get_server_host("jinah244"),
-        ssh_port=22,
+        ssh_port=get_server_ssh_port("jinah244"),
         ssh_user="root",
         ssh_key="/root/.ssh/id_ed25519",
         remote_host="127.0.0.1",
