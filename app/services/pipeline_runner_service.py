@@ -1525,21 +1525,49 @@ class PipelineCJob:
             return {"error": f"거부 불가 상태: {self.status}"}
 
         self._log("rejected", f"거부: {reason}")
-        # 변경사항 완전 제거 (Shell Runner는 approve 후에만 커밋하므로 reset 불필요)
-        await self._ssh_command("git checkout .")
-        await self._ssh_command("git clean -fd")
+        # 공유 workdir은 수정하지 않고 이 job의 등록된 runner worktree만 제거한다.
+        worktree_path = f"/tmp/aads-wt-{self.job_id}"
+        quoted_path = shlex.quote(worktree_path)
+        cleanup_cmd = (
+            f"if [ ! -e {quoted_path} ]; then echo REJECT_NO_WORKTREE; "
+            f"elif [ ! -d {quoted_path} ]; then echo REJECT_CLEANUP_ERROR; "
+            f"else _wt_root=$(git -C {quoted_path} rev-parse --show-toplevel 2>/dev/null) "
+            f"&& [ \"$_wt_root\" = {quoted_path} ] "
+            f"&& git worktree list --porcelain | grep -Fx {shlex.quote('worktree ' + worktree_path)} >/dev/null "
+            f"|| {{ echo REJECT_CLEANUP_ERROR; exit 0; }}; "
+            f"if git worktree remove --force {quoted_path}; then "
+            f"if [ ! -e {quoted_path} ]; then echo REJECT_WORKTREE_REMOVED; "
+            f"else echo REJECT_CLEANUP_ERROR; fi; "
+            f"elif [ -d {quoted_path} ] "
+            f"&& [ \"$(git -C {quoted_path} rev-parse --show-toplevel 2>/dev/null)\" = {quoted_path} ]; then "
+            f"rm -rf -- {quoted_path} "
+            f"&& {{ if [ ! -e {quoted_path} ]; then echo REJECT_WORKTREE_REMOVED; "
+            f"else echo REJECT_CLEANUP_ERROR; fi; }} || echo REJECT_CLEANUP_ERROR; "
+            f"else echo REJECT_CLEANUP_ERROR; fi; fi"
+        )
+        cleanup_result = await self._ssh_command(cleanup_cmd)
+        markers = set(cleanup_result.split())
+        if "REJECT_NO_WORKTREE" in markers:
+            self._log("rejected", "reject_no_worktree — main workdir mutation skipped")
+            reject_message = "공유 작업트리는 건드리지 않았습니다."
+        elif "REJECT_WORKTREE_REMOVED" in markers:
+            reject_message = "변경사항이 원복되었습니다."
+        else:
+            # SSH/조회/삭제 실패는 성공으로 저장하지 않는다. 재시도할 수 있게 대기 상태를 보존한다.
+            self._log("rejected", f"reject_worktree_cleanup_failed: {cleanup_result[:300]}")
+            return {"error": "러너 워크트리 확인 또는 정리에 실패했습니다. 거부 상태를 변경하지 않았습니다."}
         self.status = "done"
         self.review_feedback = f"REJECTED: {reason}"
         await self._save_to_db()
 
-        # 채팅방에 거부+원복 기록
+        # 채팅방에 실제 정리 결과를 기록
         await self._post_to_chat(
             f"🚫 **[Pipeline Runner 거부]** `{self.job_id}`\n"
             f"사유: {reason or '(미지정)'}\n"
-            f"변경사항이 원복되었습니다."
+            f"{reject_message}"
         )
 
-        return {"status": "rejected", "message": "변경사항이 원복되었습니다."}
+        return {"status": "rejected", "message": reject_message}
 
     # ─── Claude Code 프로세스 종료 헬퍼 ─────────────────────────────────────
 
