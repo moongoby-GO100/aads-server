@@ -1041,6 +1041,90 @@ async def _cascade_cleanup_orphans_with_ids(conn, failed_job_id: str) -> list[st
     return cleaned
 
 
+_SUPERSEDES_RE = re.compile(r"^\s*(?:SUPERSEDES|AUTO_REWORK_OF)\s*:\s*(.+)$", re.M)
+_RUNNER_JOB_ID_RE = re.compile(r"runner-[0-9a-f]{8}")
+_ORPHAN_RELINK_MAX = 10
+_ORPHAN_RELINK_WINDOW_HOURS = 24
+
+
+def parse_superseded_job_ids(instruction: str) -> list[str]:
+    """지시서의 SUPERSEDES/AUTO_REWORK_OF 행에서 대체 대상 작업 id 를 뽑는다."""
+    found: list[str] = []
+    for line in _SUPERSEDES_RE.findall(instruction or ""):
+        for jid in _RUNNER_JOB_ID_RE.findall(line):
+            if jid not in found:
+                found.append(jid)
+    return found
+
+
+async def _relink_superseded_orphans(conn, *, job_id: str, project: str,
+                                     instruction: str, tenant_id: str) -> list[str]:
+    """승계 작업이 제출되면 선행 작업 실패로 취소됐던 하위작업을 다시 연결한다.
+
+    왜 필요한가. 선행 작업이 error 로 끝나면 ``_cascade_cleanup_orphans_with_ids``
+    가 그에 의존한 queued 작업을 cancelled/blocked_dependency 로 닫는다. 그
+    선행 작업을 대체하는 재작업이 뒤에 성공해도 닫힌 하위작업을 다시 여는
+    경로가 없어, 목표 진행이 그 지점에서 영구히 멈춘다 — 2026-09-29
+    runner-2ae121bc 가 배포 게이트에서 실패하자 runner-72c2a09d 가 그렇게
+    사라졌다.
+
+    되살리는 범위는 좁게 둔다. 이 작업이 대체한다고 명시한 선행 작업의
+    하위작업이고, blocked_dependency 로 닫혔고, 최근 24시간 안이고, 최대
+    10건이다. 사람이 취소한 작업(phase 가 blocked_dependency 가 아님)과 이
+    작업이 대체 대상으로 적은 작업 자신은 건드리지 않는다.
+    """
+    superseded = parse_superseded_job_ids(instruction)
+    if not superseded:
+        return []
+    skip = sorted(set(superseded) | {job_id})
+    rows = await conn.fetch(
+        """
+        UPDATE pipeline_jobs
+           SET depends_on = $1::text,
+               status = 'queued', phase = 'queued',
+               error_detail = NULL, completed_at = NULL,
+               review_feedback = COALESCE(review_feedback, '') || $2::text,
+               logs = COALESCE(logs, '[]'::jsonb) || jsonb_build_array(
+                   jsonb_build_object(
+                       'ts', NOW()::text,
+                       'event', 'superseded_dependency_relinked',
+                       'from_parent', depends_on,
+                       'to_parent', $1::text
+                   )
+               ),
+               updated_at = NOW()
+         WHERE job_id IN (
+                   SELECT job_id FROM pipeline_jobs
+                    WHERE tenant_id = $3::uuid
+                      AND project = $4
+                      AND depends_on = ANY($5::text[])
+                      AND NOT (job_id = ANY($6::text[]))
+                      AND status = 'cancelled'
+                      AND phase = 'blocked_dependency'
+                      AND updated_at > NOW() - make_interval(hours => $7::int)
+                    ORDER BY created_at
+                    LIMIT $8::int
+               )
+        RETURNING job_id
+        """,
+        job_id,
+        f"\n[Runner Guard] 선행 작업 실패로 취소됐던 작업을 승계 작업 {job_id} 에 다시 연결했습니다.",
+        tenant_id,
+        project,
+        superseded,
+        skip,
+        _ORPHAN_RELINK_WINDOW_HOURS,
+        _ORPHAN_RELINK_MAX,
+    )
+    relinked = [r["job_id"] for r in rows]
+    for child_id in relinked:
+        await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", child_id)
+    if relinked:
+        logger.info("pipeline_runner.superseded_orphans_relinked",
+                    job_id=job_id, project=project, relinked=relinked)
+    return relinked
+
+
 async def promote_next_queued(conn, project: str) -> str | None:
     """프로젝트 Lock 해제 후 다음 queued 작업 확인.
     AADS-211: depends_on이 설정된 작업은 의존 작업이 done일 때만 승격.
@@ -1278,6 +1362,7 @@ async def submit_job(
     target_files = _extract_target_files(req.instruction)
     auto_depends_on = ""
     auto_dependency_reason = ""
+    relinked_orphans: list[str] = []
 
     try:
         async with pool.acquire() as conn:
@@ -1489,6 +1574,13 @@ async def submit_job(
                 )
                 # P2-2: LISTEN/NOTIFY — 이벤트 드리븐 (asyncpg 소비자용)
                 await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
+                relinked_orphans = await _relink_superseded_orphans(
+                    conn,
+                    job_id=job_id,
+                    project=req.project,
+                    instruction=req.instruction,
+                    tenant_id=tenant_id,
+                )
     except HTTPException:
         raise
     except Exception as e:
@@ -1503,6 +1595,12 @@ async def submit_job(
         msg = "작업이 대기열에 추가되었습니다. Runner가 곧 실행합니다."
     if auto_depends_on:
         msg += f" 동일 파일 충돌을 감지해 {auto_depends_on} 완료 후 실행되도록 자동 의존성을 부여했습니다."
+    if relinked_orphans:
+        msg += (
+            f" 선행 작업 실패로 취소됐던 {len(relinked_orphans)}건을 이 작업에 다시 연결했습니다: "
+            + ", ".join(relinked_orphans)
+            + "."
+        )
     if req.worker_model and not req.worker_model_reason:
         msg += " 직접 모델 지정은 사유가 없어 저장하지 않았고, 어드민 러너 모델 설정값을 사용합니다."
 
