@@ -5504,6 +5504,68 @@ class ToolExecutor:
 
         if action == "register_e2e":
             evidence = inp.get("e2e_evidence")
+            name = str(inp.get("recipe_name") or "").strip()
+            domain = str(inp.get("domain") or "").strip()
+            steps = inp.get("steps")
+            if not name or not domain or not isinstance(steps, list) or not steps:
+                return {"error": "recipe_name_domain_and_steps_required"}
+
+            from app.services.browser_recipe_registry import (
+                COUPANGEATS_LOGIN_FRAGMENTS, attest_coupangeats_live_screen,
+                build_coupangeats_registration_candidate,
+            )
+            if name in {part["name"] for part in COUPANGEATS_LOGIN_FRAGMENTS}:
+                try:
+                    if domain != "store.coupangeats.com":
+                        raise ValueError("coupangeats_domain_mismatch")
+                    if any(not isinstance(step, dict) for step in steps):
+                        raise ValueError("invalid_recipe_step")
+                    observed_steps = [
+                        {key: value for key, value in step.items() if key != "phase"}
+                        for step in steps if step.get("phase") != "verify"
+                    ]
+                    observed_verify = inp.get("verify") or [
+                        {key: value for key, value in step.items() if key != "phase"}
+                        for step in steps if step.get("phase") == "verify"
+                    ]
+                    from app.services.work_recipe.schema import WorkRecipe
+                    from app.services.work_recipe.orchestrator import _scoped_inputs
+
+                    secret_names = (
+                        ["vault_username", "vault_password"] if name == "coupangeats_02_vault_fill"
+                        else ["vault_username", "vault_store"] if name == "coupangeats_03_login_confirm"
+                        else []
+                    )
+                    scope_recipe = WorkRecipe.from_dict({
+                        "name": name, "domain": domain,
+                        "inputs": [{"name": item, "secret": True} for item in secret_names],
+                        "steps": [{"action": "snapshot", "selector": "body"}],
+                    })
+                    values = await _scoped_inputs(scope_recipe, inp.get("inputs") or {})
+                    if any(not values.get(item) for item in secret_names):
+                        raise ValueError("coupangeats_scoped_vault_inputs_required")
+                    evidence, trusted = await attest_coupangeats_live_screen(
+                        tenant_id=tenant_id, chat_session_id=session_id,
+                        fragment_name=name,
+                        browser_session_id=str(inp.get("browser_session_id") or ""),
+                        browser_work_key=str(inp.get("browser_work_key") or ""),
+                        observed_verify=observed_verify, values=values,
+                    )
+                    recipe = build_coupangeats_registration_candidate(
+                        fragment_name=name, observed_steps=observed_steps,
+                        observed_verify=observed_verify,
+                        screen_evidence=evidence, trusted_evidence=trusted,
+                    )
+                except ValueError as exc:
+                    return {"error": str(exc)}
+                from app.services.work_recipe.registration import request_registration
+
+                registration = await request_registration(
+                    recipe, tenant_id=tenant_id, requested_by=f"chat:{session_id}"
+                )
+                return {"status": "approval_required", "session_id": session_id,
+                        "registration": registration}
+
             if not isinstance(evidence, dict) or evidence.get("screen_verified") is not True:
                 return {"error": "screen_e2e_evidence_required"}
             artifact_ref = str(
@@ -5511,11 +5573,6 @@ class ToolExecutor:
             ).strip()
             if not artifact_ref:
                 return {"error": "screenshot_or_snapshot_reference_required"}
-            name = str(inp.get("recipe_name") or "").strip()
-            domain = str(inp.get("domain") or "").strip()
-            steps = inp.get("steps")
-            if not name or not domain or not isinstance(steps, list) or not steps:
-                return {"error": "recipe_name_domain_and_steps_required"}
 
             # Persist references only. Raw DOM/OCR and arbitrary fields can contain secrets.
             safe_evidence = {

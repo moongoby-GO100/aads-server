@@ -1,1117 +1,1106 @@
-diff --git a/app/api/pipeline_runner.py b/app/api/pipeline_runner.py
-index fe9133d0..cf97d46c 100644
---- a/app/api/pipeline_runner.py
-+++ b/app/api/pipeline_runner.py
-@@ -2334,10 +2334,9 @@ async def notify_completion(job_id: str):
-                     "pipeline_runner.goal_state_update_fail", job_id=orphan_job_id, error=str(exc),
-                 )
+diff --git a/HANDOVER.md b/HANDOVER.md
+index f0de2c32..cca7e1e4 100644
+--- a/HANDOVER.md
++++ b/HANDOVER.md
+@@ -14480,3 +14480,19 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
+ - Canary: not installed. M4 was reported blocked at task start, and this environment could not requery the PC network, confirm an idle business lease and user session, or capture screen/install evidence. The four recent and four stale rows from the task brief are historical only; duplicate DANHAROO-MAIN labels are not separate rollout targets.
+ - Full PC rollout and 24-hour observation: blocked. Resume after M4 DB completion evidence, refreshed PC inventory with offline causes, CEO rollout approval, a verified canary, and a recorded observation start time. No milestone status was changed.
+ - Error book and DB handover: unavailable in this environment (`psql` missing). No DB record was claimed. Cost was not measured.
++
++## 2026-09-29 — M7 Coupang Eats split recipe retry (AADS-SB-M7-COUPANGEATS-RECIPE-LINKRETRY-R5)
++
++- Scope: code path and regression tests only. No live login, final recipe registration, other-session replay, milestone approval, or PC rollout was performed. Resume requires CEO approval, the designated PC lane, and real successful screen captures. Cost was not measured.
++- Baseline: this worktree HEAD and local `origin/main` were `6248f409f386a7234a81fd64e5dc171e51801232`; `git fetch origin` failed because the shared Git `FETCH_HEAD` is read-only. The previous `runner-637963bd` fragment definitions were reused. The remote `origin/fix/sb-direct-closeout-20260929` changes concern Shinhan financial recipes and were read but not copied. No unrelated dirty files were present. Active `pipeline_jobs` could not be queried because neither `psql` nor `asyncpg` is available here.
++- STEP 0 inventory: `browser_recipe_registry` normalization/planning/admission/DB CRUD [maintain], Coupang fragment constants, readiness, candidate and Vault comparison [new from prior candidate, corrected]; `work_recipe.registration` dry-run/request/list/get/decision and `work_recipes`/`work_recipe_registration_requests` transactions [modify validation/version handling]; `work_recipe.orchestrator` resolve/scoped inputs [maintain], run directive [modify], live verify adapter [new]; `tool_executor._smart_browser` list/run/register_e2e [modify Coupang registration branch only]; existing recorder and router tests [maintain]; Coupang unit tests [new]. No existing callable was deleted. `tool_registry` and `recorder` were inspected but left unchanged.
++- Call path: `smart_browser(register_e2e)` → designated PC session live verify → server screenshot capture and `browser_artifacts` record → split WorkRecipe candidate with explicit verify and submit risk → `request_registration` pending row → `decide_registration` immutable approved `work_recipes` row → `smart_browser(list)` → `smart_browser(run)` → `run_directive` PC session/work-key check → `CoupangVerificationExecutor` live assertions → append-only step audit. The run entry rejects replay from the recording chat session; it requires a different authenticated chat session and the designated PC session. Registration and approval re-read the server-owned artifact (or a prior successful `recipe_runs`/`recipe_run_steps` verify). No fixture reference is operational evidence.
++- Verify contract: the Coupang branch of `register_e2e` now accepts recorded `verify` assertions, either in `verify` or as `steps` entries with `phase=verify`, and builds a WorkRecipe with verify steps, resolving the old recorder path's missing-verify conflict. Login submission is fixed at `WRITE_EXTERNAL`, so the existing approval gate applies before its click. Live verification checks form visibility, username equality against the scoped Vault value, password filled/empty as a boolean only, authenticated store equality, URL transition, and common error/challenge markers. A failed assertion returns failure and cannot create success evidence. Screenshot reference must match the server-owned PC-session artifact from the same tenant and recording chat session. Open-login approval readiness also checks URL, start/success conditions, lane, work key, approval state and the audited reference.
++- Verification: `python3 -m compileall -q` on changed Python files exited 0; `ruff check --select F` on changed Python files exited 0; `git diff --check` exited 0. Full `ruff check` exited 1 with 348 findings across the target modules and was not treated as a pass. Host `python3 -m pytest tests/unit/test_coupangeats_recipe_drafts.py -q --tb=short -p no:cacheprovider` passed 8 tests. Host combined suite could not run existing recorder tests because this host lacks `pytest-asyncio` and `fastapi`; it reported 6 passed, 9 failed, exit 1 before the final approval-gate, live-attestation and identity tests were added. Required `bash scripts/run_unit_tests.sh tests/unit/test_coupangeats_recipe_drafts.py tests/unit/test_work_recipe_recorder.py` exited 2 with zero tests because no accessible AADS test image/container was found; it is not a pass. No build or deployment verification was run. DB `handover_write(project=AADS)` could not be reached in this workspace (`psql` and `asyncpg` absent); this file is the local handover only.
++
++## 2026-09-29 — Coupang split recipe review repair (R5 rework)
++
++- Continued the rejected `runner-a1bfebd7` candidate in the isolated workspace. The PC Agent facade exposes `evaluate()` but not Playwright locator read methods; live verification now reads DOM predicates through that facade. Password state remains a boolean and does not enter audit output. Login confirmation requires separate observed username and store selectors, and compares both live screen values with scoped Vault identity. The verifier and live attestation refresh the URL through `window.location.href` after PC Agent click.
++- Added a regression using the real `_LocalAgentPage` adapter with a stubbed browser command response. It proves the stale cached URL is replaced, a different screen username fails without capturing success evidence, and only a different chat session on the designated local PC lane reaches replay. The replay assertion uses a stubbed player; it is not an operational login or cross-session replay claim.
++- Code path: `smart_browser(register_e2e)` → PC live attestation → `request_registration` pending → separate approval by `decide_registration` → `smart_browser(list)` → `smart_browser(run)` in another chat session → `run_directive` lane/session guard → live verify and audit. Code path and regression coverage are complete. Actual account registration and replay are blocked pending CEO approval, designated PC lane, and a real successful screen capture. No account login, approval, or milestone state change was performed. Cost was not measured.
++- Verification in this rework: required `bash scripts/run_unit_tests.sh tests/unit/test_coupangeats_recipe_drafts.py tests/unit/test_work_recipe_recorder.py` exited 2 before test collection because no AADS container/image is available in this workspace; it is not a pass. Local virtualenv tests for the Coupang file passed 10/10; the selected recorder subset passed 15 with 5 unrelated router tests deselected. `compileall`, Ruff F rules, and `git diff --check` exited 0. The full local router suite reached its app import and did not complete in the sandbox. Canonical DB `handover_write(project=AADS)` was unavailable here; this local entry records the split between code verification and real account evidence.
+diff --git a/app/services/browser_recipe_registry.py b/app/services/browser_recipe_registry.py
+index 740926e0..f5fab56b 100644
+--- a/app/services/browser_recipe_registry.py
++++ b/app/services/browser_recipe_registry.py
+@@ -3,6 +3,7 @@
+ from __future__ import annotations
  
--    # AADS-RUNNER-AUTO-REWORK: AI 리뷰 반려(REQUEST_CHANGES)는 여기서 끝내지 않고
--    # 지적을 붙인 재작업을 max_cycles-1 라운드까지 자동 제출한다. 이전에는 반려마다
--    # 사람이 R2·R3 을 손으로 다시 써야 했고, 그동안 목표 자동진행이 멈췄다.
--    if status == "error" and row["phase"] == "review_failed":
-+    # 코드 리뷰 반려와 배포 게이트 실패는 같은 라운드 상한·opt-out 을 적용한다.
-+    from app.services.pipeline_auto_rework import is_request_changes_failure
-+    if is_request_changes_failure(status, row["phase"] or "", row["error_detail"] or ""):
-         try:
-             from app.services.pipeline_auto_rework import maybe_submit_auto_rework
- 
-diff --git a/app/services/pipeline_auto_rework.py b/app/services/pipeline_auto_rework.py
-index e0f254aa..5dbe9506 100644
---- a/app/services/pipeline_auto_rework.py
-+++ b/app/services/pipeline_auto_rework.py
-@@ -34,6 +34,10 @@ _HEADER_KEYS = ("ALLOW_DUP_JOB", "AUTO_REWORK_OF:", "AUTO_REWORK_ROUND:")
- _MAX_ROUNDS_CAP = 3
- _MAX_ISSUES = 8
- _MAX_ISSUE_CHARS = 600
-+AUTO_REWORK_FAILURE_PHASES = frozenset({
-+    "review_failed", "push_stale_base", "deploy_isolated_push_state",
-+    "deploy_isolated_stale_approval",
-+})
- 
- 
- def auto_rework_enabled() -> bool:
-@@ -41,12 +45,25 @@ def auto_rework_enabled() -> bool:
- 
- 
- def is_request_changes_failure(status: str, phase: str, error_detail: str) -> bool:
--    """사람이 내린 반려(adjudicator)나 인프라 보류가 아니라, AI 리뷰의 코드 반려인가."""
--    return (
--        status == "error"
--        and phase == "review_failed"
--        and (error_detail or "").startswith("review_failed: verdict=REQUEST_CHANGES")
--    )
-+    """Bounded rework for code review rejection or a recoverable deploy gate."""
-+    if status != "error":
-+        return False
-+    if phase not in AUTO_REWORK_FAILURE_PHASES and phase != "error":
-+        return False
-+    if phase == "review_failed":
-+        return (error_detail or "").startswith("review_failed: verdict=REQUEST_CHANGES")
-+    if phase == "push_stale_base":
-+        return True
-+    # The older runner stored gate reasons in phase or error_detail.  The
-+    # stale_approval value only occurs in legacy rows; current preflight
-+    # classifies stale_base before reaching this point.
-+    if phase == "deploy_isolated_stale_approval" or phase == "error" and error_detail == "deploy_isolated_stale_approval":
-+        return True
-+    if phase == "deploy_isolated_push_state" or phase == "error" and error_detail.startswith("deploy_isolated_push_state"):
-+        # Old generic rows contain no state and cannot distinguish a network
-+        # failure from stale_base.  Only an explicit stale_base is recoverable.
-+        return "stale_base" in error_detail and "fetch_fail" not in error_detail
-+    return False
- 
- 
- def max_rounds(max_cycles: Any) -> int:
-@@ -106,6 +123,7 @@ def build_rework_instruction(
-     issues: list[str],
-     commit_hash: str = "",
-     score: Any = None,
-+    failure_phase: str = "review_failed",
- ) -> str:
-     base = strip_rework_scaffold(original)
-     header = (
-@@ -118,11 +136,12 @@ def build_rework_instruction(
-         start += f" (커밋 `{commit_hash[:12]}`)"
-     issue_lines = "\n".join(f"{i}. {text}" for i, text in enumerate(issues, 1))
-     if not issue_lines:
--        issue_lines = "1. (리뷰 지적 본문 없음 — code_reviews 의 요약을 직접 확인하라)"
-+        issue_lines = "1. (종료 사유와 최신 origin/main 기준을 확인하라)"
-     score_txt = f" score={score}" if score is not None else ""
-+    reason = "AI 리뷰 반려" if failure_phase == "review_failed" else f"배포 게이트 {failure_phase}"
-     section = (
-         f"\n{_SECTION_MARK} (라운드 {round_no}/{rounds_max})\n"
--        f"직전 작업 {parent_job_id} 이 AI 리뷰에서 REQUEST_CHANGES{score_txt} 로 반려돼 자동으로 다시 제출됐다.\n"
-+        f"직전 작업 {parent_job_id} 이 {reason}로 중단돼 자동으로 다시 제출됐다{score_txt}.\n"
-         f"- 출발점: 반려된 산출물 {start}. 처음부터 다시 쓰지 말고, 그 변경을 origin/main 기준 "
-         "깨끗한 worktree 로 가져와 이어서 고쳐라. 산출물이 없으면 위 원 지시대로 구현하라.\n"
-         "- 아래 지적을 **전부** 고치고, 각 지적을 어떻게 처리했는지 RESULT 에 번호별로 적어라. "
-@@ -183,6 +202,8 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
-             job_id,
-         )
-         issues = extract_issues(feedback)
-+        if row["phase"] != "review_failed":
-+            issues = [f"배포 게이트 원인: {(row['error_detail'] or row['phase'])[:_MAX_ISSUE_CHARS]}"]
-         new_instruction = build_rework_instruction(
-             original=instruction,
-             parent_job_id=job_id,
-@@ -191,6 +212,7 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
-             issues=issues,
-             commit_hash=row["commit_hash"] or "",
-             score=row["review_score"],
-+            failure_phase=row["phase"],
-         )
-         new_job_id = f"runner-{uuid.uuid4().hex[:8]}"
-         await conn.execute(
-diff --git a/scripts/pipeline-runner.sh b/scripts/pipeline-runner.sh
-index dffbe62d..7559625d 100755
---- a/scripts/pipeline-runner.sh
-+++ b/scripts/pipeline-runner.sh
-@@ -1346,7 +1346,7 @@ deploy_git_preflight() {
- deploy_isolated_git_preflight() {
-     local job_id="$1" project="$2" session_id="$3" main_workdir="$4"
-     local worktree_dir="$5" approved_sha="$6" main_root worktree_root
--    local main_common worktree_common registered remote_sha head_sha worktree_status
-+    local main_common worktree_common registered remote_sha head_sha worktree_status push_state
- 
-     if [[ "$project" != "AADS" || ! "$job_id" =~ ^[a-zA-Z0-9_-]+$ \
-         || ! "$approved_sha" =~ ^[0-9a-f]{40}$ ]]; then
-@@ -1395,10 +1395,18 @@ deploy_isolated_git_preflight() {
-         _fail_job "$job_id" "$session_id" "deploy_origin_missing" "격리 릴리스 origin/main 일치 확인 실패"
-         return 1
-     fi
--    if ! git -C "$worktree_root" merge-base --is-ancestor "$remote_sha" "$approved_sha" 2>/dev/null; then
--        _fail_job "$job_id" "$session_id" "deploy_isolated_stale_approval" "최신 origin/main 통합 후 새 SHA 재검수 필요"
--        return 1
--    fi
-+    push_state=$(classify_push_state "$worktree_root" "$approved_sha")
-+    case "$push_state" in
-+        already_present)
-+            log "  DEPLOY_PREFLIGHT_ALREADY_PRESENT: job=$job_id sha=$approved_sha"
-+            record_runner_event "$job_id" "deploy_already_present" "info" "deploying" "" "" "" "" "{\"sha\":\"${approved_sha}\"}"
-+            ;;
-+        fast_forward|stale_base) ;;
-+        *)
-+            _fail_job "$job_id" "$session_id" "deploy_origin_missing" "격리 릴리스 origin/main 판별 실패: ${push_state}"
-+            return 1
-+            ;;
-+    esac
-     log "  DEPLOY_ISOLATED_PREFLIGHT_OK: job=$job_id sha=$approved_sha origin=$remote_sha"
+ import hashlib
++import hmac
+ import json
+ import uuid
+ from typing import Any
+@@ -27,6 +28,429 @@ DEFAULT_RESOURCE_POLICY = {
+     "artifact_budget_mb": 256,
  }
- 
-@@ -1564,11 +1572,13 @@ pre_validate() {
- # 빠른 실패 헬퍼 — 에러 상태 전환 + error_detail 기록
- _fail_job() {
-     local job_id="$1" session_id="$2" error_type="$3" detail="$4"
-+    local recorded_error="${5:-$error_type}"
-     log "  FAIL_FAST job=$job_id type=$error_type: $detail"
--    local safe_detail
-+    local safe_detail safe_error
-     safe_detail=$(sql_escape "$detail")
-+    safe_error=$(sql_escape "$recorded_error")
-     db_update "UPDATE pipeline_jobs SET status='error', phase='error',
--               error_detail='${error_type}',
-+               error_detail=${safe_error},
-                result_output=${safe_detail},
-                completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
-     record_runner_event "$job_id" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"${error_type}\"}"
-@@ -3474,6 +3484,150 @@ _cleanup_artifacts() {
-     rm -f "/tmp/pipeline-notify-count-${job_id}" 2>/dev/null || true
- }
- 
-+# Rebased AADS commits require a fresh durable AI review and a new approval.
-+review_rebased_aads_sha() {
-+    local job_id="$1" session_id="$2" repo="$3" sha="$4"
-+    local remote_sha base_sha diff stored_diff instruction changed_files request_id body response http_code
-+    local request_status="" verdict="" score="" flag_category="" deadline
-+    remote_sha=$(git -C "$repo" rev-parse --verify origin/main 2>/dev/null) || remote_sha=""
-+    base_sha=$(git -C "$repo" merge-base "$remote_sha" "$sha" 2>/dev/null) || base_sha=""
-+    diff=$(git -C "$repo" diff "${base_sha}..${sha}" 2>/dev/null) || diff=""
-+    if [[ ! "$remote_sha" =~ ^[0-9a-f]{40}$ || ! "$base_sha" =~ ^[0-9a-f]{40}$ || -z "$diff" ]] || ! looks_like_git_diff "$diff"; then
-+        _fail_job "$job_id" "$session_id" "deploy_rebase_review_diff_invalid" "새 SHA AI 재검수 diff 확인 실패"
-+        _notify_ai "$job_id"
-+        return 1
-+    fi
-+    stored_diff="${diff:0:48000}"
-+    instruction=$(get_job_instruction "$job_id")
-+    changed_files=$(printf '%s' "$diff" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//' | tr '\n' ',' | sed 's/,$//')
-+    request_id=$(cat /proc/sys/kernel/random/uuid)
-+    db_update "UPDATE pipeline_jobs SET git_diff=$(sql_escape "$stored_diff"),
-+               actual_changed_files=$(sql_escape "$(printf '%s' "$changed_files" | tr ',' '\n' | json_array_from_lines)")::jsonb,
-+               review_request_id='${request_id}'::uuid, updated_at=NOW()
-+               WHERE job_id='${job_id}' AND status='running' AND commit_hash='${sha}';"
-+    if [[ "$(db_exec "SELECT COALESCE(review_request_id::text,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]')" != "$request_id" ]]; then
-+        _fail_job "$job_id" "$session_id" "deploy_rebase_review_request_persist_failed" "새 SHA AI 재검수 요청 기록 실패"
-+        _notify_ai "$job_id"
-+        promote_next_queued "AADS"
-+        return 1
-+    fi
-+    body=$(jq -n --arg rid "$request_id" --arg jid "$job_id" --arg diff "$diff" \
-+        --arg inst "$instruction" --arg files "$changed_files" \
-+        '{request_id:$rid, job_id:$jid, project:"AADS", diff:$diff, instruction:$inst, files_changed:($files|split(","))}')
-+    response=$(curl -4 -s --http1.1 -w "\n%{http_code}" -X POST \
-+        "${AADS_API_URL}/api/v1/review/code-diff/requests" -H "Content-Type: application/json" \
-+        -d "$body" --connect-timeout 10 --max-time 20 2>/dev/null) || response=""
-+    http_code=$(printf '%s\n' "$response" | tail -1)
-+    response=$(printf '%s\n' "$response" | sed '$d')
-+    if [[ "$http_code" == "200" ]]; then
-+        request_status=$(printf '%s' "$response" | jq -r '.status // empty' 2>/dev/null) || request_status=""
-+        if [[ -z "$request_status" && -n "$(printf '%s' "$response" | jq -r '.verdict // empty' 2>/dev/null)" ]]; then
-+            request_status="completed"
-+        fi
-+    fi
-+    if [[ "$http_code" == "202" ]]; then
-+        deadline=$((SECONDS + AADS_REVIEW_ASYNC_WAIT_SEC))
-+        while (( SECONDS < deadline )); do
-+            if [[ "$(get_job_status "$job_id")" != "running" ]]; then
-+                return 1
-+            fi
-+            response=$(curl -4 -s --http1.1 -w "\n%{http_code}" \
-+                "${AADS_API_URL}/api/v1/review/code-diff/requests/${request_id}" \
-+                --connect-timeout 5 --max-time 15 2>/dev/null) || response=""
-+            http_code=$(printf '%s\n' "$response" | tail -1)
-+            response=$(printf '%s\n' "$response" | sed '$d')
-+            if [[ "$http_code" == "200" ]]; then
-+                request_status=$(printf '%s' "$response" | jq -r '.status // empty' 2>/dev/null) || request_status=""
-+                [[ "$request_status" == "completed" || "$request_status" == "failed" ]] && break
-+            fi
-+            sleep "$AADS_REVIEW_POLL_INTERVAL"
-+        done
-+    fi
-+    if [[ "$http_code" != "200" || "$request_status" != "completed" ]]; then
-+        db_update "UPDATE pipeline_jobs SET status='review_hold', phase='review_hold',
-+                   error_detail='review_infra_failed: rebased SHA review unavailable',
-+                   runner_pid=NULL, updated_at=NOW() WHERE job_id='${job_id}' AND status='running';"
-+        record_runner_event "$job_id" "ai_review_result" "review_hold" "review_hold" "" "" "" "" "{\"sha\":\"${sha}\"}"
-+        _notify_ai "$job_id"
-+        promote_next_queued "AADS"
-+        return 1
-+    fi
-+    verdict=$(printf '%s' "$response" | jq -r '.verdict // empty')
-+    score=$(printf '%s' "$response" | jq -r '.score // 0')
-+    [[ "$score" =~ ^[0-9]+([.][0-9]+)?$ ]] || score="0"
-+    flag_category=$(printf '%s' "$response" | jq -r '.flag_category // empty')
-+    local review_infra_failure="false"
-+    case "$flag_category" in
-+        REVIEW_API_UNAVAILABLE|REVIEW_MODEL_NO_RESPONSE|REVIEW_PARSER_FAILURE|REVIEW_TIMEOUT)
-+            review_infra_failure="true" ;;
-+    esac
-+    if [[ "$review_infra_failure" == "true" ]]; then
-+        db_update "UPDATE pipeline_jobs SET status='review_hold', phase='review_hold',
-+                   review_verdict=$(sql_escape "$verdict"), review_score=${score:-0},
-+                   review_flag_category=$(sql_escape "$flag_category"), review_needs_retry=TRUE,
-+                   error_detail=$(sql_escape "review_infra_failed: category=${flag_category}"),
-+                   runner_pid=NULL, updated_at=NOW()
-+                   WHERE job_id='${job_id}' AND status='running' AND commit_hash='${sha}';"
-+        record_runner_event "$job_id" "ai_review_result" "review_hold" "review_hold" "" "" "" "" "{\"sha\":\"${sha}\",\"flag_category\":\"${flag_category}\"}"
-+        _notify_ai "$job_id"
-+        promote_next_queued "AADS"
-+        return 1
-+    fi
-+    if [[ "$verdict" != "APPROVE" ]]; then
-+        local detail="review_failed: verdict=${verdict} score=${score} category=${flag_category}"
-+        db_update "UPDATE pipeline_jobs SET status='error', phase='review_failed',
-+                   review_verdict=$(sql_escape "$verdict"), review_score=${score:-0},
-+                   error_detail=$(sql_escape "$detail"), runner_pid=NULL,
-+                   completed_at=NOW(), updated_at=NOW()
-+                   WHERE job_id='${job_id}' AND status='running';"
-+        record_runner_event "$job_id" "job_terminal" "error" "review_failed" "" "" "" "" "{\"sha\":\"${sha}\"}"
-+        _notify_ai "$job_id"
-+        promote_next_queued "AADS"
-+        return 1
-+    fi
-+    db_update "UPDATE pipeline_jobs SET status='awaiting_approval', phase='awaiting_approval',
-+               review_verdict='APPROVE', review_score=${score:-0}, error_detail=NULL,
-+               runner_pid=NULL, approval_requested_at=NOW(), updated_at=NOW()
-+               WHERE job_id='${job_id}' AND status='running' AND commit_hash='${sha}';"
-+    if [[ "$(get_job_status "$job_id")" != "awaiting_approval" ]]; then
-+        _fail_job "$job_id" "$session_id" "deploy_rebase_review_persist_failed" "새 SHA 재검수 승인 대기 상태 저장 실패"
-+        _notify_ai "$job_id"
-+        return 1
-+    fi
-+    record_runner_event "$job_id" "approval_requested" "awaiting_approval" "awaiting_approval" "" "" "" "" "{\"commit_hash\":\"${sha}\",\"review_verdict\":\"APPROVE\"}"
-+    post_to_chat "$session_id" "🔔 [Pipeline Runner] origin/main 위 새 SHA AI 재검수 통과. 새 SHA 승인 필요: $job_id (${sha})"
-+    _notify_ai "$job_id"
-+    promote_next_queued "AADS"
-+    return 0
-+}
-+
-+# A remote ancestor is complete only if the routed API is serving a certified
-+# release that contains it.  A successful push alone says nothing about deploy.
-+approved_sha_is_live() {
-+    local repo="$1" approved_sha="$2" state_dir="$3"
-+    local release_row="" release_sha="" release_digest="" release_port=""
-+    local resolved_sha="" active_port="" active_container="" active_digest=""
-+    release_row=$(db_exec "SELECT release_sha || '|' || image_digest || '|' || current_slot
-+        FROM deploy_runs WHERE project='AADS' AND component='api'
-+        AND target_env='production' AND status='success' AND phase='completed'
-+        AND image_digest IS NOT NULL AND image_digest <> ''
-+        AND standby_digest=image_digest
-+        ORDER BY id DESC LIMIT 1;" 2>/dev/null | tail -1) || return 1
-+    IFS='|' read -r release_sha release_digest release_port <<< "$release_row"
-+    [[ "$release_sha" =~ ^[0-9a-f]{12,40}$ && "$release_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
-+    resolved_sha=$(git -C "$repo" rev-parse --verify "${release_sha}^{commit}" 2>/dev/null) || return 1
-+    git -C "$repo" merge-base --is-ancestor "$approved_sha" "$resolved_sha" 2>/dev/null || return 1
-+    active_port=$(tr -d '[:space:]' < "${state_dir}/.active_port" 2>/dev/null) || return 1
-+    active_container=$(tr -d '[:space:]' < "${state_dir}/.active_container" 2>/dev/null) || return 1
-+    [[ "$active_port" == "$release_port" ]] || return 1
-+    case "$active_port:$active_container" in
-+        8100:aads-server|8102:aads-server-green) ;;
-+        *) return 1 ;;
-+    esac
-+    active_digest=$(docker inspect "$active_container" --format '{{.Image}}' 2>/dev/null) || return 1
-+    [[ "$active_digest" == "$release_digest" ]] || return 1
-+    curl -fsS --connect-timeout 3 --max-time 5 "${AADS_API_URL}/api/v1/health" >/dev/null 2>&1
-+}
- # ── 승인된 작업 배포 ──────────────────────────────────────────────────
- deploy_job() {
-     local job_id="$1" project="$2" session_id="$3"
-@@ -3568,10 +3722,9 @@ deploy_job() {
-     push_state=$(classify_push_state "$worktree_dir" "$current_sha")
-     log "  PUSH_PRECHECK job=$job_id sha=$current_sha state=$push_state"
- 
--    # AADS 릴리스는 검수 SHA 를 변경하지 않는다. 원격 조회 실패와 stale base 는
--    # 자동 rebase/push 로 넘어가지 않고 새 SHA 검수 대상으로 남긴다.
--    if [[ "$project" == "AADS" && "$push_state" != "fast_forward" && "$push_state" != "already_present" ]]; then
--        _fail_job "$job_id" "$session_id" "deploy_isolated_push_state" "승인 SHA push 사전판별 실패: ${push_state}; 최신 origin 통합 후 재검수 필요"
-+    # 원격 조회 실패는 판별 불가이므로 AADS 릴리스에서 차단한다.
-+    if [[ "$project" == "AADS" && "$push_state" == "fetch_fail" ]]; then
-+        _fail_job "$job_id" "$session_id" "deploy_origin_missing" "승인 SHA push 사전판별 실패: fetch_fail"
-         _release_deploy_lock "$project" "$job_id"
-         return 1
-     fi
-@@ -3586,10 +3739,36 @@ deploy_job() {
-         if rebased_sha=$(attempt_stale_base_rebase "$worktree_dir" "$current_sha" "$job_id"); then
-             log "  PUSH_AUTO_REBASED job=$job_id ${current_sha} -> ${rebased_sha}"
-             record_runner_event "$job_id" "push_stale_base_rebased" "info" "auto_rebase" "" "" "" "" "{\"from\":\"${current_sha}\",\"to\":\"${rebased_sha}\"}"
-+            if [[ "$project" == "AADS" ]]; then
-+                # 승인된 SHA 와 달라졌으므로 새 diff 를 AI 재검수하고 CEO 재승인을 받는다.
-+                db_update "UPDATE pipeline_jobs SET status='running', phase='ai_review',
-+                           commit_hash='${rebased_sha}', review_verdict=NULL,
-+                           review_request_id=NULL, runner_pid=${BASHPID}, completed_at=NULL,
-+                           updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-+                if [[ "$(get_job_status "$job_id")" != "running" ]]; then
-+                    _fail_job "$job_id" "$session_id" "deploy_rebase_requeue_failed" "새 SHA 재검수 상태 저장 실패"
-+                    _release_deploy_lock "$project" "$job_id"
-+                    return 1
-+                fi
-+                record_runner_event "$job_id" "deploy_stale_rebased_requeued" "running" "ai_review" "" "" "" "" "{\"from\":\"${current_sha}\",\"to\":\"${rebased_sha}\"}"
-+                _release_deploy_lock "$project" "$job_id"
-+                # The durable request is polled in a separate process; the
-+                # deploy worker can accept another job while review runs.
-+                review_rebased_aads_sha "$job_id" "$session_id" "$worktree_dir" "$rebased_sha" 9>&- </dev/null >/dev/null 2>&1 &
-+                local review_worker_pid=$!
-+                db_update "UPDATE pipeline_jobs SET runner_pid=${review_worker_pid}, updated_at=NOW()
-+                           WHERE job_id='${job_id}' AND status='running' AND commit_hash='${rebased_sha}';"
-+                return 0
-+            fi
-             db_update "UPDATE pipeline_jobs SET commit_hash='${rebased_sha}', updated_at=NOW() WHERE job_id='${job_id}';"
-             current_sha="$rebased_sha"
-             push_state="fast_forward"
-         else
-+            if [[ "$project" == "AADS" ]]; then
-+                _fail_job "$job_id" "$session_id" "deploy_isolated_push_state" "승인 SHA push 사전판별 실패: stale_base; 자동 rebase 안전 조건 미충족" "deploy_isolated_push_state: stale_base"
-+                _release_deploy_lock "$project" "$job_id"
-+                return 1
-+            fi
-             stale_detail="push_stale_base: 승인 SHA(${current_sha}) 의 base 가 origin/main 보다 낡아 non-fast-forward 입니다. force push 는 금지이므로 자동 복구하지 않습니다 — 최신 origin/main 위에서 재작업 후 재승인하십시오."
-             db_update "UPDATE pipeline_jobs SET status='error', phase='push_stale_base',
-                        error_detail=$(sql_escape "$stale_detail"),
-@@ -3649,6 +3828,33 @@ deploy_job() {
-         return 1
-     fi
-     log "  GIT_PUSH_OK job=$job_id sha=$current_sha worktree=$worktree_dir"
-+    local already_present_remote_sha=""
-+    if [[ "$project" == "AADS" && "$push_state" == "already_present" ]]; then
-+        already_present_remote_sha=$(git -C "$worktree_dir" ls-remote origin refs/heads/main 2>/dev/null | awk 'NR==1 {print $1}') || already_present_remote_sha=""
-+    fi
-+    if [[ "$project" == "AADS" && "$push_state" == "already_present" \
-+        && "$already_present_remote_sha" != "$expected_sha" \
-+        && "$already_present_remote_sha" =~ ^[0-9a-f]{40}$ ]]; then
-+        if ! approved_sha_is_live "$worktree_dir" "$expected_sha" "$main_workdir"; then
-+            _fail_job "$job_id" "$session_id" "deploy_already_present_unverified" "원격 포함 SHA 의 활성 릴리스 검증 실패"
-+            _release_deploy_lock "$project" "$job_id"
-+            promote_next_queued "$project"
-+            return 1
-+        fi
-+        db_update "UPDATE pipeline_jobs SET status='done', phase='deploy_already_present',
-+                   error_detail=NULL, completed_at=NOW(), updated_at=NOW()
-+                   WHERE job_id='${job_id}' AND status='deploying' AND commit_hash='${expected_sha}';"
-+        if [[ "$(get_job_status "$job_id")" != "done" ]]; then
-+            _fail_job "$job_id" "$session_id" "deploy_already_present_persist_failed" "이미 반영된 승인 SHA 완료 기록 실패"
-+            _release_deploy_lock "$project" "$job_id"
-+            return 1
-+        fi
-+        record_runner_event "$job_id" "job_terminal" "done" "deploy_already_present" "" "" "" "" "{\"sha\":\"${current_sha}\"}"
-+        _release_deploy_lock "$project" "$job_id"
-+        _notify_ai "$job_id"
-+        promote_next_queued "$project"
-+        return 0
-+    fi
-     if [[ "$project" == "AADS" ]]; then
-         local pushed_remote_sha
-         pushed_remote_sha=$(git -C "$worktree_dir" ls-remote origin refs/heads/main 2>/dev/null | awk 'NR==1 {print $1}') || pushed_remote_sha=""
-@@ -4365,8 +4571,16 @@ _cleanup_old_artifacts() {
-         local _wt_age_min
-         _wt_age_min=$(find "$_wt_dir" -maxdepth 0 -mmin +$((ARTIFACT_MAX_AGE_HOURS * 60)) 2>/dev/null | head -1)
-         if [[ -n "$_wt_age_min" ]]; then
--            local _wt_name
-+            local _wt_name _wt_job_id _wt_status
-             _wt_name=$(basename "$_wt_dir")
-+            _wt_job_id="${_wt_name#aads-wt-}"
-+            [[ "$_wt_job_id" =~ ^runner-[0-9a-f]+$ ]] || continue
-+            _wt_status=$(db_exec "SELECT COALESCE(status,'') FROM pipeline_jobs WHERE job_id='${_wt_job_id}';" 2>/dev/null) || continue
-+            # Rebased SHA approval may outlive artifact age.  Its isolated
-+            # worktree is still required by the next deploy preflight.
-+            case "$_wt_status" in
-+                running|awaiting_approval|deploying|review_hold) continue ;;
-+            esac
-             log "  STALE_WORKTREE_CLEANUP: $_wt_name (${ARTIFACT_MAX_AGE_HOURS}h+ old)"
-             git worktree remove "$_wt_dir" --force 2>/dev/null || rm -rf "$_wt_dir" 2>/dev/null || true
-         fi
-diff --git a/scripts/pipeline-runner.sh.local b/scripts/pipeline-runner.sh.local
-index dffbe62d..7559625d 100755
---- a/scripts/pipeline-runner.sh.local
-+++ b/scripts/pipeline-runner.sh.local
-@@ -1346,7 +1346,7 @@ deploy_git_preflight() {
- deploy_isolated_git_preflight() {
-     local job_id="$1" project="$2" session_id="$3" main_workdir="$4"
-     local worktree_dir="$5" approved_sha="$6" main_root worktree_root
--    local main_common worktree_common registered remote_sha head_sha worktree_status
-+    local main_common worktree_common registered remote_sha head_sha worktree_status push_state
- 
-     if [[ "$project" != "AADS" || ! "$job_id" =~ ^[a-zA-Z0-9_-]+$ \
-         || ! "$approved_sha" =~ ^[0-9a-f]{40}$ ]]; then
-@@ -1395,10 +1395,18 @@ deploy_isolated_git_preflight() {
-         _fail_job "$job_id" "$session_id" "deploy_origin_missing" "격리 릴리스 origin/main 일치 확인 실패"
-         return 1
-     fi
--    if ! git -C "$worktree_root" merge-base --is-ancestor "$remote_sha" "$approved_sha" 2>/dev/null; then
--        _fail_job "$job_id" "$session_id" "deploy_isolated_stale_approval" "최신 origin/main 통합 후 새 SHA 재검수 필요"
--        return 1
--    fi
-+    push_state=$(classify_push_state "$worktree_root" "$approved_sha")
-+    case "$push_state" in
-+        already_present)
-+            log "  DEPLOY_PREFLIGHT_ALREADY_PRESENT: job=$job_id sha=$approved_sha"
-+            record_runner_event "$job_id" "deploy_already_present" "info" "deploying" "" "" "" "" "{\"sha\":\"${approved_sha}\"}"
-+            ;;
-+        fast_forward|stale_base) ;;
-+        *)
-+            _fail_job "$job_id" "$session_id" "deploy_origin_missing" "격리 릴리스 origin/main 판별 실패: ${push_state}"
-+            return 1
-+            ;;
-+    esac
-     log "  DEPLOY_ISOLATED_PREFLIGHT_OK: job=$job_id sha=$approved_sha origin=$remote_sha"
- }
- 
-@@ -1564,11 +1572,13 @@ pre_validate() {
- # 빠른 실패 헬퍼 — 에러 상태 전환 + error_detail 기록
- _fail_job() {
-     local job_id="$1" session_id="$2" error_type="$3" detail="$4"
-+    local recorded_error="${5:-$error_type}"
-     log "  FAIL_FAST job=$job_id type=$error_type: $detail"
--    local safe_detail
-+    local safe_detail safe_error
-     safe_detail=$(sql_escape "$detail")
-+    safe_error=$(sql_escape "$recorded_error")
-     db_update "UPDATE pipeline_jobs SET status='error', phase='error',
--               error_detail='${error_type}',
-+               error_detail=${safe_error},
-                result_output=${safe_detail},
-                completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
-     record_runner_event "$job_id" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"${error_type}\"}"
-@@ -3474,6 +3484,150 @@ _cleanup_artifacts() {
-     rm -f "/tmp/pipeline-notify-count-${job_id}" 2>/dev/null || true
- }
- 
-+# Rebased AADS commits require a fresh durable AI review and a new approval.
-+review_rebased_aads_sha() {
-+    local job_id="$1" session_id="$2" repo="$3" sha="$4"
-+    local remote_sha base_sha diff stored_diff instruction changed_files request_id body response http_code
-+    local request_status="" verdict="" score="" flag_category="" deadline
-+    remote_sha=$(git -C "$repo" rev-parse --verify origin/main 2>/dev/null) || remote_sha=""
-+    base_sha=$(git -C "$repo" merge-base "$remote_sha" "$sha" 2>/dev/null) || base_sha=""
-+    diff=$(git -C "$repo" diff "${base_sha}..${sha}" 2>/dev/null) || diff=""
-+    if [[ ! "$remote_sha" =~ ^[0-9a-f]{40}$ || ! "$base_sha" =~ ^[0-9a-f]{40}$ || -z "$diff" ]] || ! looks_like_git_diff "$diff"; then
-+        _fail_job "$job_id" "$session_id" "deploy_rebase_review_diff_invalid" "새 SHA AI 재검수 diff 확인 실패"
-+        _notify_ai "$job_id"
-+        return 1
-+    fi
-+    stored_diff="${diff:0:48000}"
-+    instruction=$(get_job_instruction "$job_id")
-+    changed_files=$(printf '%s' "$diff" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//' | tr '\n' ',' | sed 's/,$//')
-+    request_id=$(cat /proc/sys/kernel/random/uuid)
-+    db_update "UPDATE pipeline_jobs SET git_diff=$(sql_escape "$stored_diff"),
-+               actual_changed_files=$(sql_escape "$(printf '%s' "$changed_files" | tr ',' '\n' | json_array_from_lines)")::jsonb,
-+               review_request_id='${request_id}'::uuid, updated_at=NOW()
-+               WHERE job_id='${job_id}' AND status='running' AND commit_hash='${sha}';"
-+    if [[ "$(db_exec "SELECT COALESCE(review_request_id::text,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]')" != "$request_id" ]]; then
-+        _fail_job "$job_id" "$session_id" "deploy_rebase_review_request_persist_failed" "새 SHA AI 재검수 요청 기록 실패"
-+        _notify_ai "$job_id"
-+        promote_next_queued "AADS"
-+        return 1
-+    fi
-+    body=$(jq -n --arg rid "$request_id" --arg jid "$job_id" --arg diff "$diff" \
-+        --arg inst "$instruction" --arg files "$changed_files" \
-+        '{request_id:$rid, job_id:$jid, project:"AADS", diff:$diff, instruction:$inst, files_changed:($files|split(","))}')
-+    response=$(curl -4 -s --http1.1 -w "\n%{http_code}" -X POST \
-+        "${AADS_API_URL}/api/v1/review/code-diff/requests" -H "Content-Type: application/json" \
-+        -d "$body" --connect-timeout 10 --max-time 20 2>/dev/null) || response=""
-+    http_code=$(printf '%s\n' "$response" | tail -1)
-+    response=$(printf '%s\n' "$response" | sed '$d')
-+    if [[ "$http_code" == "200" ]]; then
-+        request_status=$(printf '%s' "$response" | jq -r '.status // empty' 2>/dev/null) || request_status=""
-+        if [[ -z "$request_status" && -n "$(printf '%s' "$response" | jq -r '.verdict // empty' 2>/dev/null)" ]]; then
-+            request_status="completed"
-+        fi
-+    fi
-+    if [[ "$http_code" == "202" ]]; then
-+        deadline=$((SECONDS + AADS_REVIEW_ASYNC_WAIT_SEC))
-+        while (( SECONDS < deadline )); do
-+            if [[ "$(get_job_status "$job_id")" != "running" ]]; then
-+                return 1
-+            fi
-+            response=$(curl -4 -s --http1.1 -w "\n%{http_code}" \
-+                "${AADS_API_URL}/api/v1/review/code-diff/requests/${request_id}" \
-+                --connect-timeout 5 --max-time 15 2>/dev/null) || response=""
-+            http_code=$(printf '%s\n' "$response" | tail -1)
-+            response=$(printf '%s\n' "$response" | sed '$d')
-+            if [[ "$http_code" == "200" ]]; then
-+                request_status=$(printf '%s' "$response" | jq -r '.status // empty' 2>/dev/null) || request_status=""
-+                [[ "$request_status" == "completed" || "$request_status" == "failed" ]] && break
-+            fi
-+            sleep "$AADS_REVIEW_POLL_INTERVAL"
-+        done
-+    fi
-+    if [[ "$http_code" != "200" || "$request_status" != "completed" ]]; then
-+        db_update "UPDATE pipeline_jobs SET status='review_hold', phase='review_hold',
-+                   error_detail='review_infra_failed: rebased SHA review unavailable',
-+                   runner_pid=NULL, updated_at=NOW() WHERE job_id='${job_id}' AND status='running';"
-+        record_runner_event "$job_id" "ai_review_result" "review_hold" "review_hold" "" "" "" "" "{\"sha\":\"${sha}\"}"
-+        _notify_ai "$job_id"
-+        promote_next_queued "AADS"
-+        return 1
-+    fi
-+    verdict=$(printf '%s' "$response" | jq -r '.verdict // empty')
-+    score=$(printf '%s' "$response" | jq -r '.score // 0')
-+    [[ "$score" =~ ^[0-9]+([.][0-9]+)?$ ]] || score="0"
-+    flag_category=$(printf '%s' "$response" | jq -r '.flag_category // empty')
-+    local review_infra_failure="false"
-+    case "$flag_category" in
-+        REVIEW_API_UNAVAILABLE|REVIEW_MODEL_NO_RESPONSE|REVIEW_PARSER_FAILURE|REVIEW_TIMEOUT)
-+            review_infra_failure="true" ;;
-+    esac
-+    if [[ "$review_infra_failure" == "true" ]]; then
-+        db_update "UPDATE pipeline_jobs SET status='review_hold', phase='review_hold',
-+                   review_verdict=$(sql_escape "$verdict"), review_score=${score:-0},
-+                   review_flag_category=$(sql_escape "$flag_category"), review_needs_retry=TRUE,
-+                   error_detail=$(sql_escape "review_infra_failed: category=${flag_category}"),
-+                   runner_pid=NULL, updated_at=NOW()
-+                   WHERE job_id='${job_id}' AND status='running' AND commit_hash='${sha}';"
-+        record_runner_event "$job_id" "ai_review_result" "review_hold" "review_hold" "" "" "" "" "{\"sha\":\"${sha}\",\"flag_category\":\"${flag_category}\"}"
-+        _notify_ai "$job_id"
-+        promote_next_queued "AADS"
-+        return 1
-+    fi
-+    if [[ "$verdict" != "APPROVE" ]]; then
-+        local detail="review_failed: verdict=${verdict} score=${score} category=${flag_category}"
-+        db_update "UPDATE pipeline_jobs SET status='error', phase='review_failed',
-+                   review_verdict=$(sql_escape "$verdict"), review_score=${score:-0},
-+                   error_detail=$(sql_escape "$detail"), runner_pid=NULL,
-+                   completed_at=NOW(), updated_at=NOW()
-+                   WHERE job_id='${job_id}' AND status='running';"
-+        record_runner_event "$job_id" "job_terminal" "error" "review_failed" "" "" "" "" "{\"sha\":\"${sha}\"}"
-+        _notify_ai "$job_id"
-+        promote_next_queued "AADS"
-+        return 1
-+    fi
-+    db_update "UPDATE pipeline_jobs SET status='awaiting_approval', phase='awaiting_approval',
-+               review_verdict='APPROVE', review_score=${score:-0}, error_detail=NULL,
-+               runner_pid=NULL, approval_requested_at=NOW(), updated_at=NOW()
-+               WHERE job_id='${job_id}' AND status='running' AND commit_hash='${sha}';"
-+    if [[ "$(get_job_status "$job_id")" != "awaiting_approval" ]]; then
-+        _fail_job "$job_id" "$session_id" "deploy_rebase_review_persist_failed" "새 SHA 재검수 승인 대기 상태 저장 실패"
-+        _notify_ai "$job_id"
-+        return 1
-+    fi
-+    record_runner_event "$job_id" "approval_requested" "awaiting_approval" "awaiting_approval" "" "" "" "" "{\"commit_hash\":\"${sha}\",\"review_verdict\":\"APPROVE\"}"
-+    post_to_chat "$session_id" "🔔 [Pipeline Runner] origin/main 위 새 SHA AI 재검수 통과. 새 SHA 승인 필요: $job_id (${sha})"
-+    _notify_ai "$job_id"
-+    promote_next_queued "AADS"
-+    return 0
-+}
-+
-+# A remote ancestor is complete only if the routed API is serving a certified
-+# release that contains it.  A successful push alone says nothing about deploy.
-+approved_sha_is_live() {
-+    local repo="$1" approved_sha="$2" state_dir="$3"
-+    local release_row="" release_sha="" release_digest="" release_port=""
-+    local resolved_sha="" active_port="" active_container="" active_digest=""
-+    release_row=$(db_exec "SELECT release_sha || '|' || image_digest || '|' || current_slot
-+        FROM deploy_runs WHERE project='AADS' AND component='api'
-+        AND target_env='production' AND status='success' AND phase='completed'
-+        AND image_digest IS NOT NULL AND image_digest <> ''
-+        AND standby_digest=image_digest
-+        ORDER BY id DESC LIMIT 1;" 2>/dev/null | tail -1) || return 1
-+    IFS='|' read -r release_sha release_digest release_port <<< "$release_row"
-+    [[ "$release_sha" =~ ^[0-9a-f]{12,40}$ && "$release_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
-+    resolved_sha=$(git -C "$repo" rev-parse --verify "${release_sha}^{commit}" 2>/dev/null) || return 1
-+    git -C "$repo" merge-base --is-ancestor "$approved_sha" "$resolved_sha" 2>/dev/null || return 1
-+    active_port=$(tr -d '[:space:]' < "${state_dir}/.active_port" 2>/dev/null) || return 1
-+    active_container=$(tr -d '[:space:]' < "${state_dir}/.active_container" 2>/dev/null) || return 1
-+    [[ "$active_port" == "$release_port" ]] || return 1
-+    case "$active_port:$active_container" in
-+        8100:aads-server|8102:aads-server-green) ;;
-+        *) return 1 ;;
-+    esac
-+    active_digest=$(docker inspect "$active_container" --format '{{.Image}}' 2>/dev/null) || return 1
-+    [[ "$active_digest" == "$release_digest" ]] || return 1
-+    curl -fsS --connect-timeout 3 --max-time 5 "${AADS_API_URL}/api/v1/health" >/dev/null 2>&1
-+}
- # ── 승인된 작업 배포 ──────────────────────────────────────────────────
- deploy_job() {
-     local job_id="$1" project="$2" session_id="$3"
-@@ -3568,10 +3722,9 @@ deploy_job() {
-     push_state=$(classify_push_state "$worktree_dir" "$current_sha")
-     log "  PUSH_PRECHECK job=$job_id sha=$current_sha state=$push_state"
- 
--    # AADS 릴리스는 검수 SHA 를 변경하지 않는다. 원격 조회 실패와 stale base 는
--    # 자동 rebase/push 로 넘어가지 않고 새 SHA 검수 대상으로 남긴다.
--    if [[ "$project" == "AADS" && "$push_state" != "fast_forward" && "$push_state" != "already_present" ]]; then
--        _fail_job "$job_id" "$session_id" "deploy_isolated_push_state" "승인 SHA push 사전판별 실패: ${push_state}; 최신 origin 통합 후 재검수 필요"
-+    # 원격 조회 실패는 판별 불가이므로 AADS 릴리스에서 차단한다.
-+    if [[ "$project" == "AADS" && "$push_state" == "fetch_fail" ]]; then
-+        _fail_job "$job_id" "$session_id" "deploy_origin_missing" "승인 SHA push 사전판별 실패: fetch_fail"
-         _release_deploy_lock "$project" "$job_id"
-         return 1
-     fi
-@@ -3586,10 +3739,36 @@ deploy_job() {
-         if rebased_sha=$(attempt_stale_base_rebase "$worktree_dir" "$current_sha" "$job_id"); then
-             log "  PUSH_AUTO_REBASED job=$job_id ${current_sha} -> ${rebased_sha}"
-             record_runner_event "$job_id" "push_stale_base_rebased" "info" "auto_rebase" "" "" "" "" "{\"from\":\"${current_sha}\",\"to\":\"${rebased_sha}\"}"
-+            if [[ "$project" == "AADS" ]]; then
-+                # 승인된 SHA 와 달라졌으므로 새 diff 를 AI 재검수하고 CEO 재승인을 받는다.
-+                db_update "UPDATE pipeline_jobs SET status='running', phase='ai_review',
-+                           commit_hash='${rebased_sha}', review_verdict=NULL,
-+                           review_request_id=NULL, runner_pid=${BASHPID}, completed_at=NULL,
-+                           updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-+                if [[ "$(get_job_status "$job_id")" != "running" ]]; then
-+                    _fail_job "$job_id" "$session_id" "deploy_rebase_requeue_failed" "새 SHA 재검수 상태 저장 실패"
-+                    _release_deploy_lock "$project" "$job_id"
-+                    return 1
-+                fi
-+                record_runner_event "$job_id" "deploy_stale_rebased_requeued" "running" "ai_review" "" "" "" "" "{\"from\":\"${current_sha}\",\"to\":\"${rebased_sha}\"}"
-+                _release_deploy_lock "$project" "$job_id"
-+                # The durable request is polled in a separate process; the
-+                # deploy worker can accept another job while review runs.
-+                review_rebased_aads_sha "$job_id" "$session_id" "$worktree_dir" "$rebased_sha" 9>&- </dev/null >/dev/null 2>&1 &
-+                local review_worker_pid=$!
-+                db_update "UPDATE pipeline_jobs SET runner_pid=${review_worker_pid}, updated_at=NOW()
-+                           WHERE job_id='${job_id}' AND status='running' AND commit_hash='${rebased_sha}';"
-+                return 0
-+            fi
-             db_update "UPDATE pipeline_jobs SET commit_hash='${rebased_sha}', updated_at=NOW() WHERE job_id='${job_id}';"
-             current_sha="$rebased_sha"
-             push_state="fast_forward"
-         else
-+            if [[ "$project" == "AADS" ]]; then
-+                _fail_job "$job_id" "$session_id" "deploy_isolated_push_state" "승인 SHA push 사전판별 실패: stale_base; 자동 rebase 안전 조건 미충족" "deploy_isolated_push_state: stale_base"
-+                _release_deploy_lock "$project" "$job_id"
-+                return 1
-+            fi
-             stale_detail="push_stale_base: 승인 SHA(${current_sha}) 의 base 가 origin/main 보다 낡아 non-fast-forward 입니다. force push 는 금지이므로 자동 복구하지 않습니다 — 최신 origin/main 위에서 재작업 후 재승인하십시오."
-             db_update "UPDATE pipeline_jobs SET status='error', phase='push_stale_base',
-                        error_detail=$(sql_escape "$stale_detail"),
-@@ -3649,6 +3828,33 @@ deploy_job() {
-         return 1
-     fi
-     log "  GIT_PUSH_OK job=$job_id sha=$current_sha worktree=$worktree_dir"
-+    local already_present_remote_sha=""
-+    if [[ "$project" == "AADS" && "$push_state" == "already_present" ]]; then
-+        already_present_remote_sha=$(git -C "$worktree_dir" ls-remote origin refs/heads/main 2>/dev/null | awk 'NR==1 {print $1}') || already_present_remote_sha=""
-+    fi
-+    if [[ "$project" == "AADS" && "$push_state" == "already_present" \
-+        && "$already_present_remote_sha" != "$expected_sha" \
-+        && "$already_present_remote_sha" =~ ^[0-9a-f]{40}$ ]]; then
-+        if ! approved_sha_is_live "$worktree_dir" "$expected_sha" "$main_workdir"; then
-+            _fail_job "$job_id" "$session_id" "deploy_already_present_unverified" "원격 포함 SHA 의 활성 릴리스 검증 실패"
-+            _release_deploy_lock "$project" "$job_id"
-+            promote_next_queued "$project"
-+            return 1
-+        fi
-+        db_update "UPDATE pipeline_jobs SET status='done', phase='deploy_already_present',
-+                   error_detail=NULL, completed_at=NOW(), updated_at=NOW()
-+                   WHERE job_id='${job_id}' AND status='deploying' AND commit_hash='${expected_sha}';"
-+        if [[ "$(get_job_status "$job_id")" != "done" ]]; then
-+            _fail_job "$job_id" "$session_id" "deploy_already_present_persist_failed" "이미 반영된 승인 SHA 완료 기록 실패"
-+            _release_deploy_lock "$project" "$job_id"
-+            return 1
-+        fi
-+        record_runner_event "$job_id" "job_terminal" "done" "deploy_already_present" "" "" "" "" "{\"sha\":\"${current_sha}\"}"
-+        _release_deploy_lock "$project" "$job_id"
-+        _notify_ai "$job_id"
-+        promote_next_queued "$project"
-+        return 0
-+    fi
-     if [[ "$project" == "AADS" ]]; then
-         local pushed_remote_sha
-         pushed_remote_sha=$(git -C "$worktree_dir" ls-remote origin refs/heads/main 2>/dev/null | awk 'NR==1 {print $1}') || pushed_remote_sha=""
-@@ -4365,8 +4571,16 @@ _cleanup_old_artifacts() {
-         local _wt_age_min
-         _wt_age_min=$(find "$_wt_dir" -maxdepth 0 -mmin +$((ARTIFACT_MAX_AGE_HOURS * 60)) 2>/dev/null | head -1)
-         if [[ -n "$_wt_age_min" ]]; then
--            local _wt_name
-+            local _wt_name _wt_job_id _wt_status
-             _wt_name=$(basename "$_wt_dir")
-+            _wt_job_id="${_wt_name#aads-wt-}"
-+            [[ "$_wt_job_id" =~ ^runner-[0-9a-f]+$ ]] || continue
-+            _wt_status=$(db_exec "SELECT COALESCE(status,'') FROM pipeline_jobs WHERE job_id='${_wt_job_id}';" 2>/dev/null) || continue
-+            # Rebased SHA approval may outlive artifact age.  Its isolated
-+            # worktree is still required by the next deploy preflight.
-+            case "$_wt_status" in
-+                running|awaiting_approval|deploying|review_hold) continue ;;
-+            esac
-             log "  STALE_WORKTREE_CLEANUP: $_wt_name (${ARTIFACT_MAX_AGE_HOURS}h+ old)"
-             git worktree remove "$_wt_dir" --force 2>/dev/null || rm -rf "$_wt_dir" 2>/dev/null || true
-         fi
-diff --git a/tests/unit/test_pipeline_runner_deploy_gate_stale_chain.py b/tests/unit/test_pipeline_runner_deploy_gate_stale_chain.py
-new file mode 100644
-index 00000000..656e5e2f
---- /dev/null
-+++ b/tests/unit/test_pipeline_runner_deploy_gate_stale_chain.py
-@@ -0,0 +1,348 @@
-+"""AADS stale approval recovery keeps the review and approval gates intact."""
-+
-+import asyncio
-+import subprocess
-+from pathlib import Path
-+
-+import pytest
-+
-+from app.services import pipeline_auto_rework as rework
-+from tests.unit.test_pipeline_auto_rework import ORIGINAL, FakeConn, _inserts, _row
-+from tests.unit.test_pipeline_runner_deploy_preflight_ffonly_scoped import (
-+    _advance_origin,
-+    _call_isolated,
-+    _git,
+ ACTIVE_RECIPE_RUN_STATUSES = ("queued", "running", "approval_required")
++COUPANGEATS_LOGIN_URL = "https://store.coupangeats.com/merchant/login"
++# Draft instructions for a screen recording operator.  They are deliberately
++# not browser_recipes rows and cannot be played or approved by this module.
++COUPANGEATS_LOGIN_FRAGMENTS = (
++    {
++        "name": "coupangeats_01_open_login",
++        "version": 2,
++        "domain": "store.coupangeats.com",
++        "lane": "pc_agent",
++        "work_key": "coupangeats:owner:login",
++        "starts_when": "authenticated_pc_session_available",
++        "succeeds_when": "login_form_visible_without_access_denied_or_challenge",
++        "predecessor": None,
++        "recover_at": "open_login_start",
++        "credential_scope": "yeoljeong-coupangeats",
++        "step_requirements": ["navigate_exact_login_url"],
++        "verify_requirements": ["visible_login_form", "no_access_denied_or_challenge"],
++    },
++    {
++        "name": "coupangeats_02_vault_fill",
++        "version": 2,
++        "domain": "store.coupangeats.com",
++        "lane": "pc_agent",
++        "work_key": "coupangeats:owner:login",
++        "starts_when": "open_login_v2_screen_verified_in_same_pc_session",
++        "succeeds_when": "vault_identity_matches_and_password_field_filled",
++        "predecessor": {"name": "coupangeats_01_open_login", "version": 2},
++        "recover_at": "open_login_form",
++        "credential_scope": "yeoljeong-coupangeats",
++        "password_check": "filled_or_empty_only",
++        "step_requirements": ["fill_username_from_vault", "fill_password_from_vault"],
++        "verify_requirements": ["username_matches_vault", "password_field_filled_boolean_only"],
++    },
++    {
++        "name": "coupangeats_03_login_confirm",
++        "version": 1,
++        "domain": "store.coupangeats.com",
++        "lane": "pc_agent",
++        "work_key": "coupangeats:owner:login",
++        "starts_when": "approved_vault_fill_v2_screen_verified_in_same_pc_session",
++        "succeeds_when": "authenticated_store_matches_vault_without_access_denied_captcha_or_login_error",
++        "predecessor": {"name": "coupangeats_02_vault_fill", "version": 2},
++        "recover_at": "open_login_form_without_resubmitting",
++        "credential_scope": "yeoljeong-coupangeats",
++        "step_requirements": ["click_observed_submit_control"],
++        "verify_requirements": ["authenticated_username_matches_vault", "authenticated_store_matches_vault", "no_error_or_challenge"],
++    },
 +)
 +
-+pytest_plugins = ["tests.unit.test_pipeline_runner_deploy_preflight_ffonly_scoped"]
 +
-+
-+ROOT = Path(__file__).resolve().parents[2]
-+SCRIPT = (ROOT / "scripts/pipeline-runner.sh").read_text(encoding="utf-8")
-+
-+
-+def _function(name):
-+    start = SCRIPT.index(f"{name}() {{")
-+    return SCRIPT[start:SCRIPT.index("\n}\n", start) + 3]
-+
-+
-+def test_preflight_classifies_already_present_stale_and_fetch_failure():
-+    body = _function("deploy_isolated_git_preflight")
-+    assert 'push_state=$(classify_push_state "$worktree_root" "$approved_sha")' in body
-+    assert 'DEPLOY_PREFLIGHT_ALREADY_PRESENT: job=$job_id sha=$approved_sha' in body
-+    assert '"deploy_already_present" "info"' in body
-+    assert 'fast_forward|stale_base) ;;' in body
-+    assert '"deploy_origin_missing"' in body
-+
-+
-+def test_preflight_already_present_ancestor_passes(isolated_case, isolated_fn_file, tmp_path):
-+    remote, main, worktree, job_id, sha = isolated_case
-+    _git(worktree, "push", "origin", "HEAD:main")
-+    _advance_origin(remote, tmp_path, "next.txt", "next\n")
-+    failure = tmp_path / "failure.txt"
-+    result = _call_isolated(isolated_fn_file, main, worktree, job_id, sha, failure)
-+    assert result.returncode == 0, result.stderr
-+    assert "DEPLOY_PREFLIGHT_ALREADY_PRESENT" in result.stderr
-+    assert not failure.exists()
-+
-+
-+def test_preflight_fetch_failure_stays_closed(isolated_case, isolated_fn_file, tmp_path):
-+    _remote, main, worktree, job_id, sha = isolated_case
-+    _git(main, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
-+    failure = tmp_path / "failure.txt"
-+    result = _call_isolated(isolated_fn_file, main, worktree, job_id, sha, failure)
-+    assert result.returncode == 1
-+    assert failure.read_text().strip() == "deploy_fetch_failed"
-+
-+
-+def test_stale_overlap_stops_and_disjoint_sha_returns_to_review():
-+    rebase = _function("attempt_stale_base_rebase")
-+    deploy = _function("deploy_job")
-+    assert 'overlap=$(comm -12' in rebase
-+    assert 'if [[ -n "$overlap" ]]; then' in rebase
-+    assert 'rebased_sha=$(attempt_stale_base_rebase "$worktree_dir" "$current_sha" "$job_id")' in deploy
-+    assert '"deploy_isolated_push_state" "승인 SHA push 사전판별 실패: stale_base' in deploy
-+    assert "status='running', phase='ai_review'" in deploy
-+    assert "commit_hash='${rebased_sha}'" in deploy
-+    assert '"deploy_stale_rebased_requeued"' in deploy
-+    assert 'review_rebased_aads_sha "$job_id" "$session_id" "$worktree_dir" "$rebased_sha"' in deploy
-+    assert deploy.index('review_rebased_aads_sha "$job_id"') < deploy.index('git -C "$worktree_dir" push origin')
-+    assert 'return 0' in deploy[deploy.index('review_rebased_aads_sha "$job_id"'):deploy.index('git -C "$worktree_dir" push origin')]
-+    review = _function("review_rebased_aads_sha")
-+    assert 'status=\'awaiting_approval\', phase=\'awaiting_approval\'' in review
-+    assert '/api/v1/review/code-diff/requests' in review
-+
-+
-+@pytest.mark.parametrize("phase,detail", [
-+    ("push_stale_base", "push_stale_base: old base"),
-+    ("deploy_isolated_push_state", "stale_base"),
-+    ("deploy_isolated_stale_approval", "stale approval"),
-+    ("error", "deploy_isolated_push_state: stale_base"),
-+])
-+def test_deploy_gate_rework_has_bounded_rounds(monkeypatch, phase, detail):
-+    monkeypatch.delenv("PIPELINE_AUTO_REWORK", raising=False)
-+    conn = FakeConn(_row(phase=phase, error_detail=detail))
-+    result = asyncio.run(rework.maybe_submit_auto_rework(conn, "runner-aaaaaaaa"))
-+    assert result["round"] == 1
-+    assert len(_inserts(conn)) == 1
-+
-+    capped = rework.build_rework_instruction(
-+        original=ORIGINAL, parent_job_id="runner-previous", round_no=2,
-+        rounds_max=2, issues=["x"],
++def matches_coupangeats_vault_identity(
++    *,
++    vault_scope: str,
++    vault_username: str,
++    vault_store: str,
++    screen_username: str,
++    screen_store: str,
++) -> bool:
++    """Compare transient Vault identity with the screen; persist neither value."""
++    return (
++        vault_scope == "yeoljeong-coupangeats"
++        and hmac.compare_digest(vault_username.encode("utf-8"), b"mimi77")
++        and bool(vault_username and vault_store and screen_username and screen_store)
++        and hmac.compare_digest(vault_username.encode("utf-8"), screen_username.encode("utf-8"))
++        and hmac.compare_digest(vault_store.encode("utf-8"), screen_store.encode("utf-8"))
 +    )
-+    conn = FakeConn(_row(phase=phase, error_detail=detail, instruction=capped))
-+    result = asyncio.run(rework.maybe_submit_auto_rework(conn, "runner-aaaaaaaa"))
-+    assert result["skipped"] == "cap_reached"
-+    assert not _inserts(conn)
 +
 +
-+@pytest.mark.parametrize("instruction,enabled", [
-+    (ORIGINAL + "NO_AUTO_REWORK\n", "1"),
-+    (ORIGINAL, "0"),
-+])
-+def test_deploy_gate_respects_opt_out(monkeypatch, instruction, enabled):
-+    monkeypatch.setenv("PIPELINE_AUTO_REWORK", enabled)
-+    conn = FakeConn(_row(phase="push_stale_base", error_detail="old base", instruction=instruction))
-+    asyncio.run(rework.maybe_submit_auto_rework(conn, "runner-aaaaaaaa"))
-+    assert not _inserts(conn)
++def prepare_coupangeats_login_drafts(
++    saved_open_login: dict[str, Any] | None, *, trusted_evidence: dict[str, Any] | None = None
++) -> dict[str, Any]:
++    """Check the saved WorkRecipe v2 before using it as a split-login reference.
 +
++    A missing/unverified row never becomes an approved reference.  A matching
++    row only proves the open-login definition, not login or replay success.
++    """
++    row = saved_open_login or {}
++    spec = _json_dict(row.get("spec"))
++    steps = _json_list(spec.get("steps"))
++    verify = _json_list(spec.get("verify"))
++    metadata = _json_dict(spec.get("metadata"))
++    evidence = _json_dict(metadata.get("screen_e2e"))
++    artifact = evidence.get("screenshot_url") or evidence.get("snapshot_ref")
++    login_url = urlparse(COUPANGEATS_LOGIN_URL)
++    def is_login_url(value: Any) -> bool:
++        parsed = urlparse(str(value or ""))
++        return (parsed.scheme, parsed.hostname, parsed.path.rstrip("/")) == (
++            login_url.scheme, login_url.hostname, login_url.path.rstrip("/"))
 +
-+def test_api_notify_routes_deploy_gate_to_bounded_service():
-+    source = (ROOT / "app/api/pipeline_runner.py").read_text(encoding="utf-8")
-+    assert 'is_request_changes_failure(status, row["phase"] or "", row["error_detail"] or "")' in source
-+    assert "maybe_submit_auto_rework(conn, job_id)" in source
-+
-+
-+@pytest.mark.parametrize("phase,detail", [
-+    ("deploy_isolated_push_state", "승인 SHA push 사전판별 실패: fetch_fail"),
-+    ("error", "deploy_isolated_push_state: fetch_fail"),
-+])
-+def test_fetch_failure_does_not_submit_rework(phase, detail):
-+    assert not rework.is_request_changes_failure("error", phase, detail)
-+
-+
-+def test_legacy_ambiguous_push_failure_does_not_submit_rework():
-+    assert not rework.is_request_changes_failure("error", "error", "deploy_isolated_push_state")
-+
-+
-+def test_review_exit_paths_and_synchronous_response():
-+    review = _function("review_rebased_aads_sha")
-+    assert 'response=$(printf \'%s\\n\' "$response" | sed \'$d\')' in review
-+    assert 'if [[ "$http_code" == "200" ]]; then' in review
-+    assert 'request_status="completed"' in review
-+    assert "error_detail='review_infra_failed: rebased SHA review unavailable'" in review
-+    assert "runner_pid=NULL," in review
-+    for marker in ("deploy_rebase_review_request_persist_failed", "status='review_hold'", "phase='review_failed'"):
-+        branch = review[review.index(marker):]
-+        assert '_notify_ai "$job_id"' in branch
-+        assert 'promote_next_queued "AADS"' in branch
-+
-+
-+def test_already_present_requires_live_certified_release():
-+    deploy = _function("deploy_job")
-+    guard = _function("approved_sha_is_live")
-+    assert 'approved_sha_is_live "$worktree_dir" "$expected_sha"' in deploy
-+    assert '"deploy_already_present_unverified"' in deploy
-+    assert "status='success' AND phase='completed'" in guard
-+    assert 'merge-base --is-ancestor "$approved_sha" "$resolved_sha"' in guard
-+    assert 'standby_digest=image_digest' in guard
-+    assert "component='api'" in guard
-+    assert "target_env='production'" in guard
-+
-+
-+def test_rebased_worktree_survives_review_and_approval_wait():
-+    deploy = _function("deploy_job")
-+    cleanup = _function("_cleanup_artifacts")
-+    old_cleanup = _function("_cleanup_old_artifacts")
-+    review_branch = deploy[deploy.index('review_rebased_aads_sha "$job_id"'):deploy.index('git -C "$worktree_dir" push origin')]
-+    assert "runner_pid=${review_worker_pid}" in review_branch
-+    assert "return 0" in review_branch
-+    assert "worktree remove" not in review_branch
-+    assert "worktree remove" not in cleanup
-+    assert "running|awaiting_approval|deploying|review_hold) continue" in old_cleanup
-+
-+
-+# 러너는 호스트에서 돌고 호스트에는 jq 가 있다(/usr/bin/jq). 그러나 이 테스트를
-+# 실행하는 운영 이미지 컨테이너에는 jq 가 없어 추출한 셸 함수가 exit 127 로 죽었다.
-+# 함수 흐름을 그대로 검증하기 위해 필요한 만큼만 흉내내는 스텁을 넣는다.
-+JQ_STUB = r"""
-+jq() {
-+    local filter="" want_null=0 skip=0 a
-+    for a in "$@"; do
-+        if (( skip > 0 )); then skip=$(( skip - 1 )); continue; fi
-+        case "$a" in
-+            -n|--null-input) want_null=1 ;;
-+            -r|--raw-output) ;;
-+            --arg) skip=2 ;;
-+            .*) [[ -z "$filter" ]] && filter="$a" ;;
-+        esac
-+    done
-+    if (( want_null )); then printf '{}\n'; return 0; fi
-+    [[ -n "$filter" ]] || { printf '\n'; return 0; }
-+    local key="${filter#.}"
-+    key="${key%%[^A-Za-z0-9_]*}"
-+    local input value
-+    input=$(command cat)
-+    value=$(printf '%s' "$input" | grep -o "\"${key}\"[[:space:]]*:[[:space:]]*[^,}]*" | head -1 | sed 's/^[^:]*:[[:space:]]*//; s/^"//; s/"$//')
-+    printf '%s\n' "$value"
-+}
-+"""
-+
-+
-+def test_synchronous_review_200_reaches_approval(isolated_case, tmp_path):
-+    _remote, _main, worktree, job_id, sha = isolated_case
-+    body = r'''
-+set -eo pipefail
-+sql_escape() { printf "'%s'" "$1"; }
-+json_array_from_lines() { echo '[]'; }
-+db_update() { printf '%s\n' "$1" >> "$DB_LOG"; }
-+db_exec() { echo "$RID"; }
-+cat() { if [[ "$1" == /proc/sys/kernel/random/uuid ]]; then echo "$RID"; else command cat "$@"; fi; }
-+curl() { printf '{"verdict":"APPROVE","score":0.9}\n200\n'; }
-+get_job_status() { echo awaiting_approval; }
-+get_job_instruction() { echo test; }
-+looks_like_git_diff() { return 0; }
-+record_runner_event() { :; }
-+post_to_chat() { :; }
-+_notify_ai() { :; }
-+promote_next_queued() { :; }
-+_fail_job() { return 1; }
-+''' + JQ_STUB + _function("review_rebased_aads_sha")
-+    path = tmp_path / "review_fn.sh"
-+    path.write_text(body, encoding="utf-8")
-+    log = tmp_path / "db.log"
-+    import os
-+    env = {**os.environ, "DB_LOG": str(log), "RID": "11111111-1111-4111-8111-111111111111", "AADS_API_URL": "http://invalid"}
-+    result = subprocess.run(["bash", "-c", f'source "{path}"; review_rebased_aads_sha "{job_id}" sess "{worktree}" "{sha}"'],
-+                            env=env, capture_output=True, text=True, check=False)
-+    assert result.returncode == 0, result.stderr
-+    assert "status='awaiting_approval'" in log.read_text()
-+
-+
-+def test_live_release_check_requires_api_certificate_matching_active_digest(isolated_case, tmp_path):
-+    remote, main, worktree, _job_id, sha = isolated_case
-+    _git(worktree, "push", "origin", "HEAD:main")
-+    _advance_origin(remote, tmp_path, "next.txt", "next\n")
-+    _git(worktree, "fetch", "origin")
-+    release = _git(worktree, "rev-parse", "origin/main")
-+    state = tmp_path / "state"
-+    state.mkdir()
-+    (state / ".active_port").write_text("8100\n")
-+    (state / ".active_container").write_text("aads-server\n")
-+    digest = "sha256:" + "a" * 64
-+    body = r'''
-+db_exec() { echo "$RELEASE_ROW"; }
-+docker() { [[ "$1" == inspect ]] && echo "$ACTIVE_DIGEST"; }
-+curl() { [[ "$HEALTH_OK" == 1 ]]; }
-+''' + _function("approved_sha_is_live")
-+    path = tmp_path / "live_check.sh"
-+    path.write_text(body, encoding="utf-8")
-+    import os
-+    env = {**os.environ, "RELEASE_ROW": f"{release[:12]}|{digest}|8100", "ACTIVE_DIGEST": digest,
-+           "HEALTH_OK": "1", "AADS_API_URL": "http://invalid"}
-+    cmd = ["bash", "-c", f'source "{path}"; approved_sha_is_live "{worktree}" "{sha}" "{state}"']
-+    assert subprocess.run(cmd, env=env, check=False).returncode == 0
-+    for key, value in [("ACTIVE_DIGEST", "sha256:" + "b" * 64), ("RELEASE_ROW", f"{release[:12]}|{digest}|8102"),
-+                       ("RELEASE_ROW", ""), ("HEALTH_OK", "0")]:
-+        bad = {**env, key: value}
-+        assert subprocess.run(cmd, env=bad, check=False).returncode != 0
-+    env["RELEASE_ROW"] = f"{_git(main, 'rev-parse', 'HEAD')[:12]}|{digest}|8100"
-+    assert subprocess.run(cmd, env=env, check=False).returncode != 0
-+
-+
-+def test_rebased_review_infrastructure_flag_stays_held(isolated_case, tmp_path):
-+    _remote, _main, worktree, job_id, sha = isolated_case
-+    body = r'''
-+set -eo pipefail
-+sql_escape() { printf "'%s'" "$1"; }
-+json_array_from_lines() { echo '[]'; }
-+db_update() { printf '%s\n' "$1" >> "$DB_LOG"; }
-+db_exec() { echo "$RID"; }
-+cat() { if [[ "$1" == /proc/sys/kernel/random/uuid ]]; then echo "$RID"; else command cat "$@"; fi; }
-+curl() { printf '{"verdict":"FLAG","score":0,"flag_category":"REVIEW_MODEL_NO_RESPONSE"}\n200\n'; }
-+get_job_status() { echo running; }
-+get_job_instruction() { echo test; }
-+looks_like_git_diff() { return 0; }
-+record_runner_event() { :; }
-+post_to_chat() { :; }
-+_notify_ai() { :; }
-+promote_next_queued() { :; }
-+_fail_job() { return 1; }
-+''' + JQ_STUB + _function("review_rebased_aads_sha")
-+    path = tmp_path / "review_flag_fn.sh"
-+    path.write_text(body, encoding="utf-8")
-+    log = tmp_path / "db.log"
-+    import os
-+    env = {**os.environ, "DB_LOG": str(log), "RID": "11111111-1111-4111-8111-111111111111", "AADS_API_URL": "http://invalid"}
-+    result = subprocess.run(["bash", "-c", f'source "{path}"; review_rebased_aads_sha "{job_id}" sess "{worktree}" "{sha}"'],
-+                            env=env, capture_output=True, text=True, check=False)
-+    assert result.returncode == 1, result.stderr
-+    updates = log.read_text()
-+    assert "status='review_hold', phase='review_hold'" in updates
-+    assert "review_needs_retry=TRUE" in updates
-+    assert "status='error', phase='review_failed'" not in updates
-+
-+
-+def test_deploy_job_already_present_skips_actual_push(isolated_case, tmp_path):
-+    remote, main, worktree, job_id, sha = isolated_case
-+    _git(worktree, "push", "origin", "HEAD:main")
-+    _advance_origin(remote, tmp_path, "next.txt", "next\n")
-+    script = "\n".join((_function("classify_push_state"), _function("deploy_job")))
-+    stub = r'''
-+set -eo pipefail
-+log() { echo "$*" >&2; }
-+git() { if [[ " $* " == *" push "* ]]; then echo push > "$PUSH_MARK"; return 1; fi; command git "$@"; }
-+curl() { echo '{"acquired":true}'; }
-+get_job_instruction() { :; }
-+resolve_project_workdir() { echo "$MAIN"; }
-+is_aads_dashboard_instruction() { return 1; }
-+db_exec() { if [[ "$1" == *"commit_hash"* ]]; then echo "$SHA"; fi; }
-+db_update() { :; }
-+post_to_chat() { :; }
-+deploy_isolated_git_preflight() { :; }
-+record_git_diagnostics() { :; }
-+approved_sha_is_live() { :; }
-+get_job_status() { echo done; }
-+record_runner_event() { :; }
-+_release_deploy_lock() { :; }
-+_notify_ai() { :; }
-+promote_next_queued() { :; }
-+'''
-+    path = tmp_path / "deploy_fn.sh"
-+    path.write_text(stub + script, encoding="utf-8")
-+    marker = tmp_path / "push_called"
-+    import os
-+    env = {**os.environ, "MAIN": str(main), "SHA": sha, "PUSH_MARK": str(marker), "AADS_API_URL": "http://invalid"}
-+    result = subprocess.run(["bash", "-c", f'source "{path}"; deploy_job "{job_id}" "AADS" "sess"'],
-+                            env=env, capture_output=True, text=True, check=False)
-+    assert result.returncode == 0, result.stderr
-+    assert "PUSH_ALREADY_PRESENT" in result.stderr
-+    assert not marker.exists()
-+
-+
-+def test_stale_rebase_overlap_is_blocked_and_disjoint_changes_get_new_sha(isolated_case, tmp_path):
-+    remote, _main, worktree, job_id, sha = isolated_case
-+    shell = "\n".join((_function("classify_push_state"), _function("attempt_stale_base_rebase")))
-+    script = tmp_path / "rebase_fn.sh"
-+    script.write_text('log() { :; }\n' + shell, encoding="utf-8")
-+
-+    _advance_origin(remote, tmp_path, "release.txt", "conflict\n")
-+    overlap = subprocess.run(
-+        ["bash", "-c", f'source "{script}"; attempt_stale_base_rebase "{worktree}" "{sha}" "{job_id}"'],
-+        capture_output=True, text=True, check=False,
++    valid = (
++        row.get("name") == "coupangeats_01_open_login"
++        and row.get("domain") == "store.coupangeats.com"
++        and row.get("version") == 2
++        and row.get("enabled") is True
++        and row.get("max_risk") == "READ"
++        and row.get("approval_status") == "approved"
++        and spec.get("name") == row.get("name")
++        and spec.get("version") == 2
++        and spec.get("domain") == row.get("domain")
++        and any(isinstance(step, dict) and step.get("action") == "navigate"
++                and is_login_url(step.get("url")) for step in steps)
++        and any(isinstance(step, dict) and step.get("action") == "snapshot"
++                and step.get("assertion") == "login_form_visible"
++                for step in verify)
++        and evidence.get("screen_verified") is True
++        and is_login_url(evidence.get("url"))
++        and isinstance(artifact, str) and bool(artifact.strip())
++        and evidence.get("outcome") == COUPANGEATS_LOGIN_FRAGMENTS[0]["succeeds_when"]
++        and evidence.get("blocked") is False
++        and evidence_matches_run(evidence, trusted_evidence, fragment_name=row.get("name"))
++        and metadata.get("source_chat_session_id") == trusted_evidence.get("chat_session_id")
++        and metadata.get("starts_when") == COUPANGEATS_LOGIN_FRAGMENTS[0]["starts_when"]
++        and metadata.get("succeeds_when") == COUPANGEATS_LOGIN_FRAGMENTS[0]["succeeds_when"]
++        and metadata.get("lane") == "pc_agent"
++        and metadata.get("work_key") == COUPANGEATS_LOGIN_FRAGMENTS[0]["work_key"]
 +    )
-+    assert overlap.returncode != 0
-+    assert _git(worktree, "rev-parse", "HEAD") == sha
++    fragments = [dict(item) for item in COUPANGEATS_LOGIN_FRAGMENTS]
++    fragments[0]["registration_state"] = "approved" if valid else "registration_pending"
++    fragments[0]["registration_ready"] = valid
++    for item in fragments[1:]:
++        item["registration_state"] = "registration_pending"
++        item["registration_ready"] = False
++    return {
++        "reference_verified": valid,
++        "reference_reason": "saved_v2_definition_verified"
++        if valid
++        else "saved_v2_definition_unverified",
++        "fragments": fragments,
++        "replay_state": "not_verified",
++        "registration_path": "work_recipe.registration.request_registration",
++        "requires_observed_selectors": True,
++    }
 +
-+    # A fresh independent origin branch has no shared changed file.
-+    _git(remote, "update-ref", "refs/heads/main", _git(worktree, "rev-parse", "HEAD^"))
-+    _advance_origin(remote, tmp_path, "independent.txt", "remote\n")
-+    disjoint = subprocess.run(
-+        ["bash", "-c", f'source "{script}"; attempt_stale_base_rebase "{worktree}" "{sha}" "{job_id}"'],
-+        capture_output=True, text=True, check=False,
++
++def build_coupangeats_registration_candidate(
++    *, fragment_name: str, observed_steps: list[dict[str, Any]],
++    observed_verify: list[dict[str, Any]], screen_evidence: dict[str, Any],
++    trusted_evidence: dict[str, Any] | None = None,
++) -> Any:
++    """Build a pending WorkRecipe only from observed controls and screen evidence.
++
++    This does not request approval or execute a browser. The reviewer must inspect
++    the referenced screen; a caller's screen_verified flag is not independent proof.
++    """
++    from app.services.work_recipe.schema import WorkRecipe
++
++    fragment = next((item for item in COUPANGEATS_LOGIN_FRAGMENTS
++                     if item["name"] == fragment_name), None)
++    if fragment is None:
++        raise ValueError("unknown_fragment")
++    evidence = _json_dict(screen_evidence)
++    artifact = evidence.get("screenshot_url") or evidence.get("snapshot_ref")
++    parsed = urlparse(str(evidence.get("url") or ""))
++    if (evidence.get("screen_verified") is not True
++            or not isinstance(artifact, str) or not artifact.strip()
++            or parsed.scheme != "https" or parsed.hostname != fragment["domain"]
++            or evidence.get("outcome") != fragment["succeeds_when"]
++            or evidence.get("blocked") is not False
++            or not evidence_matches_run(evidence, trusted_evidence, fragment_name=fragment_name)):
++        raise ValueError("verified_screen_evidence_required")
++    expected = (["navigate"] if fragment_name == "coupangeats_01_open_login" else
++                ["fill", "fill"] if fragment_name == "coupangeats_02_vault_fill" else ["click"])
++    required_assertions = {
++        "coupangeats_01_open_login": ["login_form_visible"],
++        "coupangeats_02_vault_fill": ["username_matches_vault", "password_filled"],
++        "coupangeats_03_login_confirm": ["authenticated_username_matches_vault", "authenticated_store_matches_vault"],
++    }
++    if ([step.get("action") for step in observed_steps] != expected
++            or [step.get("assertion") for step in observed_verify] != required_assertions[fragment_name]
++            or any(step.get("action") != "snapshot" for step in observed_verify)
++            or any(set(step) - {"action", "selector", "url", "value", "risk", "timeout"}
++                   for step in observed_steps)
++            or any(set(step) - {"action", "selector", "assertion", "risk", "timeout"}
++                   for step in observed_verify)
++            or any((not str(step.get("selector") or "").strip()
++                    or "<" in str(step.get("selector")))
++                   for step in [*observed_steps, *observed_verify]
++                   if step.get("action") != "navigate")):
++        raise ValueError("observed_steps_and_verify_required")
++    if fragment_name == "coupangeats_02_vault_fill" and [
++        step.get("value") for step in observed_steps
++    ] != ["{{vault_username}}", "{{vault_password}}"]:
++        raise ValueError("vault_placeholders_required")
++    if fragment_name == "coupangeats_01_open_login" and observed_steps[0].get("url") != COUPANGEATS_LOGIN_URL:
++        raise ValueError("exact_login_url_required")
++    if fragment_name == "coupangeats_01_open_login" and observed_steps[0].get("risk", "READ") != "READ":
++        raise ValueError("open_login_read_risk_required")
++    if fragment_name != "coupangeats_03_login_confirm" and evidence.get("url") != COUPANGEATS_LOGIN_URL:
++        raise ValueError("exact_login_url_required")
++    if fragment_name == "coupangeats_03_login_confirm" and evidence.get("url") == COUPANGEATS_LOGIN_URL:
++        raise ValueError("authenticated_screen_url_required")
++    if any(step.get("value") is not None for step in observed_verify):
++        raise ValueError("verify_must_not_contain_secret_value")
++    safe_evidence = {key: evidence[key] for key in
++                     ("screenshot_url", "snapshot_ref", "url", "captured_at", "outcome", "run_id", "artifact_id")
++                     if key in evidence}
++    safe_evidence["screen_verified"] = True
++    safe_evidence["blocked"] = False
++    recipe = {
++        "name": fragment["name"], "domain": fragment["domain"],
++        "version": fragment["version"],
++        "inputs": ([{"name": "vault_username", "secret": True},
++                    {"name": "vault_password", "secret": True}]
++                   if fragment_name == "coupangeats_02_vault_fill" else
++                   [{"name": "vault_username", "secret": True},
++                    {"name": "vault_store", "secret": True}]
++                   if fragment_name == "coupangeats_03_login_confirm" else []),
++        "steps": [{**step, **({"risk": "WRITE_EXTERNAL"} if fragment_name == "coupangeats_03_login_confirm" else {})}
++                  for step in observed_steps], "verify": observed_verify,
++        "metadata": {
++            "lane": fragment["lane"], "work_key": fragment["work_key"],
++            "starts_when": fragment["starts_when"],
++            "succeeds_when": fragment["succeeds_when"],
++            "predecessor": fragment["predecessor"],
++            "recover_at": fragment["recover_at"],
++            "credential_scope": fragment["credential_scope"],
++            "source_chat_session_id": trusted_evidence["chat_session_id"],
++            "screen_e2e": safe_evidence,
++        },
++    }
++    return WorkRecipe.from_dict(recipe)
++
++
++async def read_coupangeats_login_drafts(*, tenant_id: str) -> dict[str, Any]:
++    """Read the tenant's approved v2 and return a secret-free readiness plan."""
++    async with get_pool().acquire() as conn:
++        row = await conn.fetchrow(
++            """
++            SELECT r.name, r.domain, r.version, r.enabled, r.max_risk, r.spec,
++                   a.status AS approval_status
++              FROM work_recipes r
++              JOIN work_recipe_registration_requests a
++                ON a.recipe_id = r.id AND a.tenant_id = r.tenant_id
++             WHERE r.tenant_id = $1 AND r.name = $2
++               AND r.domain = $3 AND r.version = 2
++             LIMIT 1
++            """,
++            uuid.UUID(str(tenant_id)),
++            "coupangeats_01_open_login",
++            "store.coupangeats.com",
++        )
++    saved = dict(row) if row else None
++    evidence = _json_dict(_json_dict(_json_dict(saved.get("spec")).get("metadata")).get("screen_e2e")) if saved else {}
++    trusted = await lookup_coupangeats_run_evidence(
++        tenant_id=tenant_id, chat_session_id=None, run_id=evidence.get("run_id"),
++        artifact_id=evidence.get("artifact_id"),
++    ) if evidence.get("run_id") or evidence.get("artifact_id") else None
++    return prepare_coupangeats_login_drafts(saved, trusted_evidence=trusted)
++
++
++def evidence_matches_run(
++    claimed: dict[str, Any], trusted: dict[str, Any] | None, *, fragment_name: str
++) -> bool:
++    """Only a completed, session-bound audit artifact can support a draft."""
++    if (not trusted or trusted.get("status") != "success"
++            or trusted.get("route") != "pc_agent" or trusted.get("verified") is not True
++            or trusted.get("recipe_name") != fragment_name):
++        return False
++    ref = claimed.get("screenshot_url") or claimed.get("snapshot_ref")
++    return bool(ref and (
++                    (claimed.get("run_id") and claimed.get("run_id") == trusted.get("run_id"))
++                    or (claimed.get("artifact_id") and claimed.get("artifact_id") == trusted.get("artifact_id")))
++                and ref == trusted.get("screenshot_url")
++                and claimed.get("url") == trusted.get("url")
++                and trusted.get("chat_session_id"))
++
++
++async def lookup_coupangeats_run_evidence(
++    *, tenant_id: str, chat_session_id: str | None, run_id: Any = None,
++    artifact_id: Any = None,
++) -> dict[str, Any] | None:
++    """Read the server's append-only successful verify record; never trust a supplied flag."""
++    if artifact_id:
++        try:
++            artifact_uuid = uuid.UUID(str(artifact_id))
++        except (TypeError, ValueError):
++            return None
++        async with get_pool().acquire() as conn:
++            row = await conn.fetchrow(
++                """SELECT id, source_url, storage_uri, metadata FROM browser_artifacts
++                    WHERE id=$1 AND tenant_id=$2 AND artifact_type='coupangeats_screen_e2e'""",
++                artifact_uuid, uuid.UUID(str(tenant_id)),
++            )
++        if not row:
++            return None
++        metadata = _json_dict(row["metadata"])
++        if chat_session_id and metadata.get("chat_session_id") != chat_session_id:
++            return None
++        return {
++            "artifact_id": str(row["id"]), "status": "success",
++            "verified": metadata.get("verified") is True,
++            "recipe_name": metadata.get("fragment_name"),
++            "chat_session_id": metadata.get("chat_session_id"),
++            "route": metadata.get("route"), "url": row["source_url"],
++            "screenshot_url": row["storage_uri"],
++        }
++    try:
++        run_uuid = uuid.UUID(str(run_id))
++    except (TypeError, ValueError):
++        return None
++    async with get_pool().acquire() as conn:
++        row = await conn.fetchrow(
++            """SELECT r.id, r.status, r.recipe_name, r.triggered_by, s.output, s.screenshot_path
++                 FROM recipe_runs r JOIN recipe_run_steps s ON s.run_id = r.id
++                WHERE r.id=$1 AND r.tenant_id=$2 AND r.domain=$3
++                  AND r.status='success' AND s.phase='verify' AND s.status='success'
++                  AND s.output->'output'->>'verified'='true'
++                  AND ($4::text IS NULL OR r.triggered_by=$4)
++                ORDER BY s.seq DESC LIMIT 1""",
++            run_uuid, uuid.UUID(str(tenant_id)), "store.coupangeats.com",
++            f"chat:{chat_session_id}" if chat_session_id else None,
++        )
++    if not row:
++        return None
++    output = _json_dict(row["output"])
++    audit = _json_dict(output.get("evidence"))
++    return {
++        "run_id": str(row["id"]), "status": str(row["status"]),
++        "recipe_name": str(row["recipe_name"]),
++        "verified": _json_dict(output.get("output")).get("verified") is True,
++        "chat_session_id": str(row["triggered_by"] or "").removeprefix("chat:"),
++        "route": output.get("route"), "url": audit.get("url"),
++        "screenshot_url": row["screenshot_path"],
++    }
++
++
++async def attest_coupangeats_live_screen(
++    *, tenant_id: str, chat_session_id: str, fragment_name: str,
++    browser_session_id: str, browser_work_key: str,
++    observed_verify: list[dict[str, Any]], values: dict[str, Any],
++) -> tuple[dict[str, Any], dict[str, Any]]:
++    """Verify the designated PC page and persist a server-owned screen artifact.
++
++    This reads the already completed screen. It never submits a login or stores
++    a password, cookie, token, or field value.
++    """
++    from app.browser_bridge.service import get_browser_bridge_service
++    from app.services.work_recipe.executor import BrowserRecipeExecutor
++    from app.services.work_recipe.orchestrator import CoupangVerificationExecutor
++    from app.services.work_recipe.schema import WorkRecipe
++
++    fragment = next((item for item in COUPANGEATS_LOGIN_FRAGMENTS
++                     if item["name"] == fragment_name), None)
++    session = get_browser_bridge_service().sessions.get(browser_session_id)
++    if (fragment is None or session is None or session.work_key != fragment["work_key"]
++            or browser_work_key != fragment["work_key"]
++            or str(session.endpoint.kind.value) != "local_agent"):
++        raise ValueError("coupangeats_pc_session_required")
++    recipe = WorkRecipe.from_dict({
++        "name": fragment_name, "domain": fragment["domain"],
++        "metadata": {"credential_scope": fragment["credential_scope"]},
++        "steps": [{"action": "snapshot", "selector": "body"}],
++        "verify": observed_verify,
++    })
++    executor = BrowserRecipeExecutor(
++        browser_session_id=browser_session_id, browser_work_key=browser_work_key
 +    )
-+    assert disjoint.returncode == 0, disjoint.stderr
-+    new_sha = disjoint.stdout.strip()
-+    assert len(new_sha) == 40 and new_sha != sha
-+    assert _git(worktree, "rev-parse", "HEAD") == new_sha
-+    assert _git(worktree, "merge-base", "--is-ancestor", _git(worktree, "rev-parse", "origin/main"), new_sha) == ""
-diff --git a/tests/unit/test_pipeline_runner_deploy_preflight_ffonly_scoped.py b/tests/unit/test_pipeline_runner_deploy_preflight_ffonly_scoped.py
-index db4a27f0..ec66a873 100644
---- a/tests/unit/test_pipeline_runner_deploy_preflight_ffonly_scoped.py
-+++ b/tests/unit/test_pipeline_runner_deploy_preflight_ffonly_scoped.py
-@@ -117,13 +117,12 @@ def test_isolated_static_preserves_legacy_preflight_and_routes_aads_only():
-     assert "worktree list --porcelain" in isolated
-     assert "status --porcelain --untracked-files=all" in isolated
-     assert '"$head_sha" != "$approved_sha"' in isolated
--    assert "merge-base --is-ancestor" in isolated
--    assert "deploy_isolated_stale_approval" in isolated
-+    assert 'push_state=$(classify_push_state "$worktree_root" "$approved_sha")' in isolated
++    page = await executor._get_page({
++        "url": COUPANGEATS_LOGIN_URL,
++        "context": {"smart_browser": {"server_access_blocked": True}},
++    })
++    # PC Agent click() does not refresh the facade's cached URL.
++    current_url = str(await page.evaluate("window.location.href") or "")
++    page.url = current_url
++    parsed = urlparse(current_url)
++    if (parsed.scheme != "https" or parsed.hostname != fragment["domain"]
++            or (fragment_name != "coupangeats_03_login_confirm"
++                and current_url != COUPANGEATS_LOGIN_URL)
++            or (fragment_name == "coupangeats_03_login_confirm"
++                and current_url == COUPANGEATS_LOGIN_URL)):
++        raise ValueError("coupangeats_screen_url_mismatch")
++    verifier = CoupangVerificationExecutor(executor, recipe, values)
++    last: dict[str, Any] = {}
++    for step in recipe.verify:
++        last = await verifier({
++            **step.to_dict(), "phase": "verify",
++            "context": {"smart_browser": {"server_access_blocked": True}},
++        })
++        if last.get("ok") is not True:
++            raise ValueError("coupangeats_live_verify_failed")
++    screenshot = _json_dict(_json_dict(last.get("evidence")).get("screenshot"))
++    screenshot_url = str(screenshot.get("url") or "")
++    digest = str(screenshot.get("sha256") or "")
++    if not screenshot_url or not digest:
++        raise ValueError("coupangeats_screen_artifact_required")
++    metadata = {
++        "fragment_name": fragment_name, "chat_session_id": chat_session_id,
++        "browser_session_id": browser_session_id, "work_key": browser_work_key,
++        "route": "pc_agent", "verified": True,
++    }
++    async with get_pool().acquire() as conn:
++        row = await conn.fetchrow(
++            """INSERT INTO browser_artifacts
++                (tenant_id, artifact_type, source_url, content_hash, storage_uri, metadata)
++                VALUES ($1, 'coupangeats_screen_e2e', $2, $3, $4, $5::jsonb)
++                ON CONFLICT (tenant_id, content_hash) DO NOTHING
++                RETURNING id""",
++            uuid.UUID(str(tenant_id)), current_url, digest, screenshot_url,
++            json.dumps(metadata),
++        )
++        if row is None:
++            previous = await conn.fetchrow(
++                """SELECT id, source_url, storage_uri, metadata FROM browser_artifacts
++                    WHERE tenant_id=$1 AND content_hash=$2
++                      AND artifact_type='coupangeats_screen_e2e'""",
++                uuid.UUID(str(tenant_id)), digest,
++            )
++            if (previous is None or _json_dict(previous["metadata"]) != metadata
++                    or previous["source_url"] != current_url):
++                raise ValueError("coupangeats_screen_artifact_already_recorded")
++            row = previous
++            screenshot_url = str(previous["storage_uri"])
++    evidence = {
++        "screen_verified": True, "artifact_id": str(row["id"]),
++        "screenshot_url": screenshot_url, "url": current_url,
++        "outcome": fragment["succeeds_when"], "blocked": False,
++    }
++    return evidence, {**metadata, "artifact_id": str(row["id"]),
++                      "status": "success", "recipe_name": fragment_name,
++                      "chat_session_id": chat_session_id, "url": current_url,
++                      "screenshot_url": screenshot_url}
++
++
+ RECIPE_HASH_FIELDS = (
+     "recipe_id",
+     "version",
+diff --git a/app/services/tool_executor.py b/app/services/tool_executor.py
+index a97b2941..a58b523b 100644
+--- a/app/services/tool_executor.py
++++ b/app/services/tool_executor.py
+@@ -5504,6 +5504,68 @@ class ToolExecutor:
+ 
+         if action == "register_e2e":
+             evidence = inp.get("e2e_evidence")
++            name = str(inp.get("recipe_name") or "").strip()
++            domain = str(inp.get("domain") or "").strip()
++            steps = inp.get("steps")
++            if not name or not domain or not isinstance(steps, list) or not steps:
++                return {"error": "recipe_name_domain_and_steps_required"}
++
++            from app.services.browser_recipe_registry import (
++                COUPANGEATS_LOGIN_FRAGMENTS, attest_coupangeats_live_screen,
++                build_coupangeats_registration_candidate,
++            )
++            if name in {part["name"] for part in COUPANGEATS_LOGIN_FRAGMENTS}:
++                try:
++                    if domain != "store.coupangeats.com":
++                        raise ValueError("coupangeats_domain_mismatch")
++                    if any(not isinstance(step, dict) for step in steps):
++                        raise ValueError("invalid_recipe_step")
++                    observed_steps = [
++                        {key: value for key, value in step.items() if key != "phase"}
++                        for step in steps if step.get("phase") != "verify"
++                    ]
++                    observed_verify = inp.get("verify") or [
++                        {key: value for key, value in step.items() if key != "phase"}
++                        for step in steps if step.get("phase") == "verify"
++                    ]
++                    from app.services.work_recipe.schema import WorkRecipe
++                    from app.services.work_recipe.orchestrator import _scoped_inputs
++
++                    secret_names = (
++                        ["vault_username", "vault_password"] if name == "coupangeats_02_vault_fill"
++                        else ["vault_username", "vault_store"] if name == "coupangeats_03_login_confirm"
++                        else []
++                    )
++                    scope_recipe = WorkRecipe.from_dict({
++                        "name": name, "domain": domain,
++                        "inputs": [{"name": item, "secret": True} for item in secret_names],
++                        "steps": [{"action": "snapshot", "selector": "body"}],
++                    })
++                    values = await _scoped_inputs(scope_recipe, inp.get("inputs") or {})
++                    if any(not values.get(item) for item in secret_names):
++                        raise ValueError("coupangeats_scoped_vault_inputs_required")
++                    evidence, trusted = await attest_coupangeats_live_screen(
++                        tenant_id=tenant_id, chat_session_id=session_id,
++                        fragment_name=name,
++                        browser_session_id=str(inp.get("browser_session_id") or ""),
++                        browser_work_key=str(inp.get("browser_work_key") or ""),
++                        observed_verify=observed_verify, values=values,
++                    )
++                    recipe = build_coupangeats_registration_candidate(
++                        fragment_name=name, observed_steps=observed_steps,
++                        observed_verify=observed_verify,
++                        screen_evidence=evidence, trusted_evidence=trusted,
++                    )
++                except ValueError as exc:
++                    return {"error": str(exc)}
++                from app.services.work_recipe.registration import request_registration
++
++                registration = await request_registration(
++                    recipe, tenant_id=tenant_id, requested_by=f"chat:{session_id}"
++                )
++                return {"status": "approval_required", "session_id": session_id,
++                        "registration": registration}
++
+             if not isinstance(evidence, dict) or evidence.get("screen_verified") is not True:
+                 return {"error": "screen_e2e_evidence_required"}
+             artifact_ref = str(
+@@ -5511,11 +5573,6 @@ class ToolExecutor:
+             ).strip()
+             if not artifact_ref:
+                 return {"error": "screenshot_or_snapshot_reference_required"}
+-            name = str(inp.get("recipe_name") or "").strip()
+-            domain = str(inp.get("domain") or "").strip()
+-            steps = inp.get("steps")
+-            if not name or not domain or not isinstance(steps, list) or not steps:
+-                return {"error": "recipe_name_domain_and_steps_required"}
+ 
+             # Persist references only. Raw DOM/OCR and arbitrary fields can contain secrets.
+             safe_evidence = {
+diff --git a/app/services/work_recipe/orchestrator.py b/app/services/work_recipe/orchestrator.py
+index cce00a3f..d68932c8 100644
+--- a/app/services/work_recipe/orchestrator.py
++++ b/app/services/work_recipe/orchestrator.py
+@@ -1,6 +1,7 @@
+ """자연어 지시를 저장된 Work Recipe 실행으로 연결한다."""
+ from __future__ import annotations
+ 
++import hmac
+ import re
+ from collections.abc import Mapping
+ from typing import Any
+@@ -12,6 +13,10 @@ from app.services.work_recipe.executor import BrowserRecipeExecutor
+ from app.services.work_recipe.player import RunResult, play_recipe
+ from app.services.work_recipe.schema import WorkRecipe, parse_recipe
+ from app.services.work_recipe.store import list_recipes, normalize_domain, row_to_recipe
++from app.services.browser_recipe_registry import (
++    COUPANGEATS_LOGIN_FRAGMENTS, COUPANGEATS_LOGIN_URL,
++    matches_coupangeats_vault_identity,
++)
+ 
+ _URL_HOST = re.compile(r"https?://([^/\s]+)", re.IGNORECASE)
+ 
+@@ -83,6 +88,18 @@ async def run_directive(
+     recipe = await resolve_recipe(directive_text, tenant_id)
+     if recipe is None:
+         return None
++    coupang = recipe.name in {part["name"] for part in COUPANGEATS_LOGIN_FRAGMENTS}
++    if coupang:
++        validate_coupangeats_recipe(recipe)
++        if (not browser_session_id or browser_work_key != recipe.metadata["work_key"]
++                or triggered_by == f"chat:{recipe.metadata.get('source_chat_session_id')}"):
++            raise ValueError("coupangeats_pc_session_or_replay_boundary_required")
++        from app.browser_bridge.service import get_browser_bridge_service
++
++        session = get_browser_bridge_service().sessions.get(browser_session_id)
++        if (session is None or session.work_key != browser_work_key
++                or str(session.endpoint.kind.value) != "local_agent"):
++            raise ValueError("coupangeats_pc_lane_required")
+     resolved_inputs = await _scoped_inputs(recipe, intent_inputs)
+     recorder = GuardedRunRecorder(
+         domain=recipe.domain,
+@@ -95,9 +112,10 @@ async def run_directive(
+         browser_session_id=browser_session_id,
+         browser_work_key=browser_work_key,
+     )
++    step_executor = CoupangVerificationExecutor(executor, recipe, resolved_inputs) if coupang else executor
+     return await play_recipe(
+         recipe,
+-        executor,
++        step_executor,
+         resolved_inputs,
+         recorder=recorder,
+         max_risk="IRREVERSIBLE",
+@@ -111,13 +129,133 @@ async def run_directive(
+                 "requires_local_security_programs": bool(recipe.metadata.get("requires_local_security_programs")),
+                 # 봇/WAF 가 데이터센터 IP 를 막는 사이트는 처음부터 PC 레인으로 간다.
+                 # native_auth_required 를 대신 켜서 우회하지 않는다.
+-                "server_access_blocked": bool(recipe.metadata.get("server_access_blocked")),
++                "server_access_blocked": coupang or bool(recipe.metadata.get("server_access_blocked")),
+                 "requires_residential_ip": bool(recipe.metadata.get("requires_residential_ip")),
+             },
+         },
+     )
  
  
- def test_isolated_static_requires_reviewed_sha_at_remote_before_release():
-     script = _read_script("pipeline-runner.sh")
--    assert '"$project" == "AADS" && "$push_state" != "fast_forward"' in script
-+    assert '"$project" == "AADS" && "$push_state" == "fetch_fail"' in script
-     assert "deploy_isolated_push_state" in script
-     assert '"$pushed_remote_sha" != "$expected_sha"' in script
-     assert "deploy_isolated_remote_changed" in script
-@@ -289,7 +288,7 @@ def isolated_case(tmp_path):
- @pytest.fixture(scope="module")
- def isolated_fn_file(tmp_path_factory):
-     script = _read_script("pipeline-runner.sh")
--    body = STUBS + _extract_function(script, "deploy_isolated_git_preflight")
-+    body = STUBS + 'record_runner_event() { :; }\n' + _extract_function(script, "classify_push_state") + _extract_function(script, "deploy_isolated_git_preflight")
-     path = tmp_path_factory.mktemp("isolated_preflight_fn") / "fn.sh"
-     path.write_text(body, encoding="utf-8")
-     return path
-@@ -328,12 +327,15 @@ def test_isolated_fails_closed(isolated_case, isolated_fn_file, tmp_path, case):
-         _git(main, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
-     fail_out = tmp_path / "fail.txt"
-     proc = _call_isolated(isolated_fn_file, main, worktree, job_id, sha, fail_out)
-+    if case == "remote_changed":
-+        assert proc.returncode == 0, proc.stderr
-+        assert not fail_out.exists()
++def validate_coupangeats_recipe(recipe: WorkRecipe) -> None:
++    """Apply the same immutable contract at registration and replay."""
++    fragment = next((part for part in COUPANGEATS_LOGIN_FRAGMENTS if part["name"] == recipe.name), None)
++    if fragment is None:
 +        return
-     assert proc.returncode == 1, proc.stderr
-     assert fail_out.exists()
-     assert fail_out.read_text().strip() == {
-         "wrong_sha": "deploy_isolated_sha_or_dirty",
-         "dirty_release": "deploy_isolated_sha_or_dirty",
--        "remote_changed": "deploy_isolated_stale_approval",
-         "fetch_failure": "deploy_fetch_failed",
-     }[case]
++    evidence = recipe.metadata.get("screen_e2e") or {}
++    if (recipe.domain != fragment["domain"] or recipe.metadata.get("lane") != "pc_agent"
++            or recipe.metadata.get("work_key") != fragment["work_key"]
++            or recipe.metadata.get("starts_when") != fragment["starts_when"]
++            or recipe.metadata.get("succeeds_when") != fragment["succeeds_when"]
++            or not recipe.metadata.get("source_chat_session_id")
++            or not recipe.steps or not recipe.verify
++            or (recipe.name != "coupangeats_03_login_confirm"
++                and evidence.get("url") != COUPANGEATS_LOGIN_URL)
++            or (recipe.name == "coupangeats_03_login_confirm"
++                and evidence.get("url") == COUPANGEATS_LOGIN_URL)
++            or not evidence.get("screenshot_url")
++            or not (evidence.get("run_id") or evidence.get("artifact_id"))
++            or evidence.get("outcome") != fragment["succeeds_when"]):
++        raise ValueError("coupangeats_recipe_contract_mismatch")
++    expected = {
++        "coupangeats_01_open_login": ["login_form_visible"],
++        "coupangeats_02_vault_fill": ["username_matches_vault", "password_filled"],
++        "coupangeats_03_login_confirm": ["authenticated_username_matches_vault", "authenticated_store_matches_vault"],
++    }[recipe.name]
++    if [step.extra.get("assertion") for step in recipe.verify] != expected:
++        raise ValueError("coupangeats_verify_contract_mismatch")
++    if recipe.name == "coupangeats_01_open_login" and recipe.steps[0].url != COUPANGEATS_LOGIN_URL:
++        raise ValueError("coupangeats_login_url_mismatch")
++    if recipe.name == "coupangeats_03_login_confirm" and recipe.steps[0].risk != "WRITE_EXTERNAL":
++        raise ValueError("coupangeats_submit_approval_required")
++
++
++class CoupangVerificationExecutor:
++    """Evaluate live page state while keeping passwords out of results and audit logs."""
++
++    def __init__(self, executor: BrowserRecipeExecutor, recipe: WorkRecipe, values: Mapping[str, Any]):
++        self.executor = executor
++        self.recipe = recipe
++        self.values = values
++        self._screen_username = ""
++
++    async def __call__(self, payload: dict[str, Any]) -> dict[str, Any]:
++        if self.executor._route(payload)["runtime"] != "pc_agent":
++            return {"ok": False, "error": "pc_agent_lane_required", "route": "browser_agent"}
++        if payload.get("phase") != "verify":
++            result = await self.executor(payload)
++            if result.get("ok") and result.get("route") != "pc_agent":
++                return {"ok": False, "error": "pc_agent_lane_required", "route": result.get("route")}
++            return result
++        page = self.executor._page
++        if page is None:
++            return {"ok": False, "error": "missing_pc_page", "route": "pc_agent"}
++        assertion = payload.get("assertion")
++        selector = str(payload.get("selector") or "")
++        try:
++            # The PC Agent facade implements evaluate(), but its locator only
++            # supports click/fill/aria_snapshot. Return predicates, never field
++            # contents: password and identity cannot enter the audit payload.
++            screen = await page.evaluate("""(args) => {
++                const el = document.querySelector(args.selector);
++                const visible = !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
++                const value = el ? String(el.value ?? el.textContent ?? '').trim() : '';
++                const body = String(document.body?.innerText ?? '').toLowerCase().slice(0, 4000);
++                return {url: window.location.href, visible,
++                    passwordType: el?.getAttribute('type')?.toLowerCase() === 'password',
++                    filled: value.length > 0,
++                    usernameMatches: !!args.username && value === args.username,
++                    storeMatches: !!args.store && value === args.store,
++                    screenText: args.assertion === 'authenticated_username_matches_vault' ||
++                        args.assertion === 'authenticated_store_matches_vault' ? value : '',
++                    blocked: ['access denied', 'captcha', '로그인 실패', '비밀번호가 틀']
++                        .some(marker => body.includes(marker))};
++            }""", {
++                "selector": selector,
++                "assertion": assertion,
++                "username": str(self.values.get("vault_username") or ""),
++                "store": str(self.values.get("vault_store") or ""),
++            })
++            if not isinstance(screen, dict):
++                raise ValueError("invalid_pc_screen_state")
++            current_url = str(screen.get("url") or "")
++            page.url = current_url  # click() leaves the facade's cached URL stale.
++            designated = (self.recipe.metadata.get("credential_scope") == "yeoljeong-coupangeats"
++                          and hmac.compare_digest(str(self.values.get("vault_username") or ""), "mimi77"))
++            if assertion == "login_form_visible":
++                valid = bool(screen.get("visible") and screen.get("passwordType")
++                             and current_url == COUPANGEATS_LOGIN_URL)
++            elif assertion == "username_matches_vault":
++                valid = bool(designated and screen.get("visible") and screen.get("usernameMatches"))
++            elif assertion == "password_filled":
++                valid = bool(screen.get("visible") and screen.get("passwordType") and screen.get("filled"))
++            elif assertion == "authenticated_username_matches_vault":
++                valid = bool(designated and screen.get("visible") and screen.get("usernameMatches")
++                             and "/merchant/login" not in current_url)
++                self._screen_username = str(screen.get("screenText") or "") if valid else ""
++            elif assertion == "authenticated_store_matches_vault":
++                valid = bool(screen.get("visible") and matches_coupangeats_vault_identity(
++                    vault_scope=str(self.recipe.metadata.get("credential_scope") or ""),
++                    vault_username=str(self.values.get("vault_username") or ""),
++                    vault_store=str(self.values.get("vault_store") or ""),
++                    screen_username=self._screen_username,
++                    screen_store=str(screen.get("screenText") or ""))
++                             and "/merchant/login" not in current_url)
++            else:
++                valid = False
++            valid = valid and not screen.get("blocked")
++        except Exception:
++            valid = False
++        if not valid:
++            return {"ok": False, "error": "coupangeats_verification_failed", "route": "pc_agent"}
++        evidence = await self.executor._collect_evidence(page)
++        screenshot = evidence.get("screenshot") or {}
++        if screenshot.get("status") != "captured" or not screenshot.get("url"):
++            return {"ok": False, "error": "coupangeats_screen_artifact_required", "route": "pc_agent"}
++        return {"ok": True, "route": "pc_agent",
++                "output": {"verified": True, "screenshot_path": screenshot["url"]},
++                "evidence": evidence}
++
++
+ async def _scoped_inputs(
+     recipe: WorkRecipe, inputs: Mapping[str, Any]
+ ) -> dict[str, Any]:
+diff --git a/app/services/work_recipe/registration.py b/app/services/work_recipe/registration.py
+index 41b90aa6..81ff6204 100644
+--- a/app/services/work_recipe/registration.py
++++ b/app/services/work_recipe/registration.py
+@@ -78,9 +78,12 @@ async def request_registration(
+     requested_by: str = "",
+ ) -> dict[str, Any]:
+     """Persist a dry-run draft. It is not visible to the recipe player yet."""
++    await _validate_coupangeats_registration(recipe, tenant_id)
+     tenant = _tenant_uuid(tenant_id)
+     domain = store.normalize_domain(recipe.domain)
+     proposed_version = await store.next_version(name=recipe.name, domain=domain, tenant_id=tenant)
++    if recipe.name in {"coupangeats_01_open_login", "coupangeats_02_vault_fill"}:
++        proposed_version = max(proposed_version, 2)
+     spec = recipe.to_dict()
+     spec["version"] = proposed_version
+     canonical = json.dumps(spec, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+@@ -185,6 +188,7 @@ async def decide_registration(
  
+         spec = _json_object(row["spec"])
+         recipe = parse_recipe(spec)
++        await _validate_coupangeats_registration(recipe, tenant)
+         lock_key = f"{tenant}:{row['domain']}:{row['name']}"
+         await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lock_key)
+         version = int(
+@@ -198,6 +202,8 @@ async def decide_registration(
+                 str(row["name"]),
+             )
+         )
++        if recipe.name in {"coupangeats_01_open_login", "coupangeats_02_vault_fill"}:
++            version = max(version, 2)
+         stored_spec = recipe.to_dict()
+         stored_spec["version"] = version
+         recipe_row = await conn.fetchrow(
+@@ -255,6 +261,31 @@ async def decide_registration(
+     return result
+ 
+ 
++async def _validate_coupangeats_registration(recipe: WorkRecipe, tenant_id: Any) -> None:
++    from app.services.browser_recipe_registry import (
++        COUPANGEATS_LOGIN_FRAGMENTS, evidence_matches_run,
++        lookup_coupangeats_run_evidence,
++    )
++    if recipe.name not in {part["name"] for part in COUPANGEATS_LOGIN_FRAGMENTS}:
++        return
++    from app.services.work_recipe.orchestrator import validate_coupangeats_recipe
++
++    validate_coupangeats_recipe(recipe)
++    evidence = recipe.metadata["screen_e2e"]
++    source_session = str(recipe.metadata.get("source_chat_session_id") or "")
++    if not source_session:
++        raise RegistrationError("coupangeats_recording_session_required")
++    trusted = await lookup_coupangeats_run_evidence(
++        tenant_id=str(tenant_id),
++        chat_session_id=source_session,
++        run_id=evidence.get("run_id"),
++        artifact_id=evidence.get("artifact_id"),
++    )
++    if (not evidence_matches_run(evidence, trusted, fragment_name=recipe.name)
++            or trusted["chat_session_id"] != source_session):
++        raise RegistrationError("coupangeats_untrusted_screen_evidence")
++
++
+ def _row(row: Any) -> dict[str, Any]:
+     data = dict(row)
+     for key in ("id", "tenant_id", "recipe_id"):
+diff --git a/tests/unit/test_coupangeats_recipe_drafts.py b/tests/unit/test_coupangeats_recipe_drafts.py
+new file mode 100644
+index 00000000..e8418754
+--- /dev/null
++++ b/tests/unit/test_coupangeats_recipe_drafts.py
+@@ -0,0 +1,294 @@
++"""Unit contracts only: synthetic records here are never operational evidence."""
++import asyncio
++import pytest
++
++from app.services import browser_recipe_registry as registry
++from app.services.work_recipe import orchestrator
++from app.services.work_recipe.guard import classify_step, requires_approval
++
++
++RUN_ID = "11111111-1111-1111-1111-111111111111"
++SCREEN = "https://aads.newtalk.kr/screenshots/test-fixture.png"
++
++
++def _evidence(name="coupangeats_01_open_login"):
++    fragment = next(part for part in registry.COUPANGEATS_LOGIN_FRAGMENTS if part["name"] == name)
++    return {
++        "screen_verified": True,
++        "screenshot_url": SCREEN,
++        "run_id": RUN_ID,
++        "url": registry.COUPANGEATS_LOGIN_URL,
++        "outcome": fragment["succeeds_when"],
++        "blocked": False,
++    }
++
++
++def _trusted(name="coupangeats_01_open_login"):
++    return {
++        "run_id": RUN_ID, "screenshot_url": SCREEN,
++        "url": registry.COUPANGEATS_LOGIN_URL,
++        "status": "success", "route": "pc_agent", "verified": True,
++        "recipe_name": name,
++        "chat_session_id": "recording-session",
++    }
++
++
++def _open_recipe(trusted=None):
++    return registry.build_coupangeats_registration_candidate(
++        fragment_name="coupangeats_01_open_login",
++        observed_steps=[{"action": "navigate", "url": registry.COUPANGEATS_LOGIN_URL, "risk": "READ"}],
++        observed_verify=[{"action": "snapshot", "selector": "input[type=password]", "assertion": "login_form_visible"}],
++        screen_evidence=_evidence(), trusted_evidence=trusted,
++    )
++
++
++def test_fake_screen_reference_cannot_create_candidate():
++    with pytest.raises(ValueError, match="verified_screen_evidence_required"):
++        _open_recipe()
++    with pytest.raises(ValueError, match="verified_screen_evidence_required"):
++        _open_recipe({**_trusted(), "screenshot_url": "other"})
++    assert _open_recipe(_trusted()).metadata["source_chat_session_id"] == "recording-session"
++
++
++def test_approved_requires_url_conditions_and_audited_screen():
++    recipe = _open_recipe(_trusted())
++    row = {
++        "name": recipe.name, "domain": recipe.domain, "version": 2,
++        "enabled": True, "max_risk": "READ", "approval_status": "approved",
++        "spec": {**recipe.to_dict(), "version": 2},
++    }
++    assert registry.prepare_coupangeats_login_drafts(row)["reference_verified"] is False
++    assert registry.prepare_coupangeats_login_drafts(row, trusted_evidence=_trusted())["reference_verified"]
++    for mutation in (
++        {"steps": [{"action": "navigate", "url": "https://example.org"}]},
++        {"metadata": {**recipe.metadata, "succeeds_when": "anything"}},
++        {"metadata": {**recipe.metadata, "starts_when": "anything"}},
++        {"metadata": {**recipe.metadata, "screen_e2e": {**_evidence(), "url": "https://example.org"}}},
++    ):
++        changed = {**row, "spec": {**row["spec"], **mutation}}
++        assert not registry.prepare_coupangeats_login_drafts(changed, trusted_evidence=_trusted())["reference_verified"]
++
++
++def test_login_submit_is_always_approval_gated():
++    recipe = registry.build_coupangeats_registration_candidate(
++        fragment_name="coupangeats_03_login_confirm",
++        observed_steps=[{"action": "click", "selector": "#anonymous-button"}],
++        observed_verify=[
++            {"action": "snapshot", "selector": "#username", "assertion": "authenticated_username_matches_vault"},
++            {"action": "snapshot", "selector": "#store", "assertion": "authenticated_store_matches_vault"},
++        ],
++        screen_evidence={**_evidence("coupangeats_03_login_confirm"), "url": "https://store.coupangeats.com/merchant/home"},
++        trusted_evidence={**_trusted("coupangeats_03_login_confirm"), "url": "https://store.coupangeats.com/merchant/home"},
++    )
++    assert recipe.steps[0].risk == "WRITE_EXTERNAL"
++    assert requires_approval(classify_step(recipe.steps[0], domain=recipe.domain))
++
++
++def test_wrong_lane_replay_refused_without_executing():
++    class WrongLane:
++        _page = object()
++        def _route(self, payload):
++            return {"runtime": "browser_agent"}
++        async def __call__(self, payload):
++            raise AssertionError("browser action must not run")
++    wrapper = orchestrator.CoupangVerificationExecutor(WrongLane(), _open_recipe(_trusted()), {})
++    result = asyncio.run(wrapper({"action": "navigate", "phase": "step"}))
++    assert result["ok"] is False and result["error"] == "pc_agent_lane_required"
++
++
++def test_failed_verify_never_reports_success():
++    class Element:
++        async def is_visible(self):
++            return False
++        async def inner_text(self):
++            return ""
++    class Page:
++        url = registry.COUPANGEATS_LOGIN_URL
++        def locator(self, selector):
++            return Element()
++    class Executor:
++        _page = Page()
++        def _route(self, payload):
++            return {"runtime": "pc_agent"}
++        async def _collect_evidence(self, page):
++            raise AssertionError("failed verify must not collect success evidence")
++    wrapper = orchestrator.CoupangVerificationExecutor(Executor(), _open_recipe(_trusted()), {})
++    result = asyncio.run(wrapper({"action": "snapshot", "phase": "verify", "selector": "input", "assertion": "login_form_visible"}))
++    assert result == {"ok": False, "error": "coupangeats_verification_failed", "route": "pc_agent"}
++
++
++def test_login_submit_before_step_stops_without_approval():
++    from app.services.work_recipe.approval import ApprovalRequired
++    from app.services.work_recipe.audit import GuardedRunRecorder
++    from app.services.work_recipe.schema import RecipeStep
++
++    requested = []
++    async def deny(*args, **kwargs):
++        requested.append(kwargs["action"])
++        raise ApprovalRequired("fixture-approval", summary="login approval pending")
++    async def record(*args, **kwargs):
++        return None
++    async def block(*args, **kwargs):
++        return None
++    guard = GuardedRunRecorder(
++        domain="store.coupangeats.com", tenant_id="fixture-tenant",
++        approval_requester=deny, step_recorder=record, run_blocker=block,
++    )
++    submit = RecipeStep.from_dict(
++        {"action": "click", "selector": "#anonymous-button", "risk": "WRITE_EXTERNAL"}, seq=1
++    )
++    with pytest.raises(ApprovalRequired):
++        asyncio.run(guard.before_step(run_id=None, step=submit))
++    assert requested == ["click"]
++
++
++def test_live_attestation_rejects_missing_designated_pc_session(monkeypatch):
++    from app.browser_bridge import service
++
++    class Sessions:
++        def get(self, session_id):
++            return None
++    class Bridge:
++        sessions = Sessions()
++    monkeypatch.setattr(service, "get_browser_bridge_service", lambda: Bridge())
++    with pytest.raises(ValueError, match="coupangeats_pc_session_required"):
++        asyncio.run(registry.attest_coupangeats_live_screen(
++            tenant_id="11111111-1111-1111-1111-111111111111",
++            chat_session_id="recording-session", fragment_name="coupangeats_01_open_login",
++            browser_session_id="fake", browser_work_key="coupangeats:owner:login",
++            observed_verify=[{"action": "snapshot", "selector": "input[type=password]", "assertion": "login_form_visible"}],
++            values={},
++        ))
++
++
++def test_vault_identity_requires_the_designated_account_and_store():
++    identity = {
++        "vault_scope": "yeoljeong-coupangeats", "vault_username": "mimi77",
++        "vault_store": "fixture-store", "screen_username": "mimi77",
++        "screen_store": "fixture-store",
++    }
++    assert registry.matches_coupangeats_vault_identity(**identity)
++    assert not registry.matches_coupangeats_vault_identity(**{**identity, "vault_username": "other"})
++    assert not registry.matches_coupangeats_vault_identity(**{**identity, "screen_store": "other"})
++
++
++def test_pc_agent_adapter_reads_live_url_and_screen_username():
++    """Exercise the actual PC facade, whose locator has no Playwright read methods."""
++    from app.browser_bridge.service import _LocalAgentPage
++
++    recipe = registry.build_coupangeats_registration_candidate(
++        fragment_name="coupangeats_03_login_confirm",
++        observed_steps=[{"action": "click", "selector": "#submit"}],
++        observed_verify=[
++            {"action": "snapshot", "selector": "#username", "assertion": "authenticated_username_matches_vault"},
++            {"action": "snapshot", "selector": "#store", "assertion": "authenticated_store_matches_vault"},
++        ],
++        screen_evidence={**_evidence("coupangeats_03_login_confirm"), "url": "https://store.coupangeats.com/merchant/home"},
++        trusted_evidence={**_trusted("coupangeats_03_login_confirm"), "url": "https://store.coupangeats.com/merchant/home"},
++    )
++
++    class Executor:
++        def __init__(self, page):
++            self._page = page
++            self.captured = 0
++        def _route(self, payload):
++            return {"runtime": "pc_agent"}
++        async def _collect_evidence(self, page):
++            self.captured += 1
++            return {"screenshot": {"status": "captured", "url": SCREEN}}
++
++    async def check(screen_username, screen_store="fixture-store", live_url="https://store.coupangeats.com/merchant/home"):
++        page = object.__new__(_LocalAgentPage)
++        page.url = registry.COUPANGEATS_LOGIN_URL  # stale after PC Agent click
++        seen = []
++        async def command(kind, params, **kwargs):
++            assert kind == "browser_eval"
++            seen.append(params["expression"])
++            username_step = len(seen) == 1
++            return {"value": {
++                "url": live_url,
++                "visible": True, "usernameMatches": username_step and screen_username == "mimi77",
++                "screenText": screen_username if username_step else screen_store,
++                "blocked": False,
++            }}
++        page._run_browser_command = command
++        executor = Executor(page)
++        verifier = orchestrator.CoupangVerificationExecutor(
++            executor, recipe, {"vault_username": "mimi77", "vault_store": "fixture-store"}
++        )
++        results = []
++        for step in recipe.verify:
++            results.append(await verifier({**step.to_dict(), "phase": "verify", "context": {
++                "smart_browser": {"server_access_blocked": True}}}))
++            if not results[-1]["ok"]:
++                break
++        return results, executor.captured, page.url, seen
++
++    good, captured, url, commands = asyncio.run(check("mimi77"))
++    assert all(result["ok"] for result in good)
++    assert captured == 2
++    assert url.endswith("/merchant/home")
++    assert all("browser-bridge argument redacted" in command for command in commands)
++
++    bad, captured, _, _ = asyncio.run(check("another-user"))
++    assert bad[0]["ok"] is False
++    assert captured == 0
++    bad_store, captured, _, _ = asyncio.run(check("mimi77", screen_store="other-store"))
++    assert bad_store[-1]["ok"] is False
++    assert captured == 1
++    login_page, captured, _, _ = asyncio.run(check("mimi77", live_url=registry.COUPANGEATS_LOGIN_URL))
++    assert login_page[0]["ok"] is False
++    assert captured == 0
++
++
++def test_replay_requires_another_chat_session_on_the_designated_pc_lane(monkeypatch):
++    from types import SimpleNamespace
++    from app.browser_bridge import service
++
++    recipe = _open_recipe(_trusted())
++    intent = SimpleNamespace(tenant_id="fixture-tenant", payload={"directive": recipe.name, "inputs": {}})
++    class Router:
++        def validate_action_intent(self, value, **kwargs):
++            return value
++        def assert_no_untrusted_page_data(self, *args, **kwargs):
++            return None
++    class Sessions:
++        def __init__(self):
++            self.kind = "local_agent"
++        def get(self, session_id):
++            return SimpleNamespace(
++                work_key="coupangeats:owner:login",
++                endpoint=SimpleNamespace(kind=SimpleNamespace(value=self.kind)),
++            )
++    sessions = Sessions()
++    monkeypatch.setattr(service, "get_browser_bridge_service", lambda: SimpleNamespace(sessions=sessions))
++    monkeypatch.setattr(orchestrator, "ChannelRouter", Router)
++    async def resolve(*args):
++        return recipe
++    async def scoped(*args):
++        return {}
++    calls = []
++    async def play(*args, **kwargs):
++        calls.append(kwargs)
++        return SimpleNamespace(to_dict=lambda: {"status": "success"})
++    monkeypatch.setattr(orchestrator, "resolve_recipe", resolve)
++    monkeypatch.setattr(orchestrator, "_scoped_inputs", scoped)
++    monkeypatch.setattr(orchestrator, "GuardedRunRecorder", lambda **kwargs: object())
++    monkeypatch.setattr(orchestrator, "BrowserRecipeExecutor", lambda **kwargs: SimpleNamespace(**kwargs))
++    monkeypatch.setattr(orchestrator, "play_recipe", play)
++
++    async def replay(chat_session):
++        return await orchestrator.run_directive(
++            recipe.name, "fixture-tenant", browser_session_id="pc-session",
++            browser_work_key="coupangeats:owner:login", triggered_by=f"chat:{chat_session}",
++            action_intent=intent,
++        )
++    with pytest.raises(ValueError, match="replay_boundary"):
++        asyncio.run(replay("recording-session"))
++    sessions.kind = "server"
++    with pytest.raises(ValueError, match="pc_lane_required"):
++        asyncio.run(replay("other-session"))
++    sessions.kind = "local_agent"
++    assert asyncio.run(replay("other-session")).to_dict()["status"] == "success"
++    assert len(calls) == 1
++    assert calls[0]["context"]["smart_browser"]["server_access_blocked"] is True

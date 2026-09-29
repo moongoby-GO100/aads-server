@@ -78,9 +78,12 @@ async def request_registration(
     requested_by: str = "",
 ) -> dict[str, Any]:
     """Persist a dry-run draft. It is not visible to the recipe player yet."""
+    await _validate_coupangeats_registration(recipe, tenant_id)
     tenant = _tenant_uuid(tenant_id)
     domain = store.normalize_domain(recipe.domain)
     proposed_version = await store.next_version(name=recipe.name, domain=domain, tenant_id=tenant)
+    if recipe.name in {"coupangeats_01_open_login", "coupangeats_02_vault_fill"}:
+        proposed_version = max(proposed_version, 2)
     spec = recipe.to_dict()
     spec["version"] = proposed_version
     canonical = json.dumps(spec, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -185,6 +188,7 @@ async def decide_registration(
 
         spec = _json_object(row["spec"])
         recipe = parse_recipe(spec)
+        await _validate_coupangeats_registration(recipe, tenant)
         lock_key = f"{tenant}:{row['domain']}:{row['name']}"
         await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lock_key)
         version = int(
@@ -198,6 +202,8 @@ async def decide_registration(
                 str(row["name"]),
             )
         )
+        if recipe.name in {"coupangeats_01_open_login", "coupangeats_02_vault_fill"}:
+            version = max(version, 2)
         stored_spec = recipe.to_dict()
         stored_spec["version"] = version
         recipe_row = await conn.fetchrow(
@@ -253,6 +259,31 @@ async def decide_registration(
         },
     )
     return result
+
+
+async def _validate_coupangeats_registration(recipe: WorkRecipe, tenant_id: Any) -> None:
+    from app.services.browser_recipe_registry import (
+        COUPANGEATS_LOGIN_FRAGMENTS, evidence_matches_run,
+        lookup_coupangeats_run_evidence,
+    )
+    if recipe.name not in {part["name"] for part in COUPANGEATS_LOGIN_FRAGMENTS}:
+        return
+    from app.services.work_recipe.orchestrator import validate_coupangeats_recipe
+
+    validate_coupangeats_recipe(recipe)
+    evidence = recipe.metadata["screen_e2e"]
+    source_session = str(recipe.metadata.get("source_chat_session_id") or "")
+    if not source_session:
+        raise RegistrationError("coupangeats_recording_session_required")
+    trusted = await lookup_coupangeats_run_evidence(
+        tenant_id=str(tenant_id),
+        chat_session_id=source_session,
+        run_id=evidence.get("run_id"),
+        artifact_id=evidence.get("artifact_id"),
+    )
+    if (not evidence_matches_run(evidence, trusted, fragment_name=recipe.name)
+            or trusted["chat_session_id"] != source_session):
+        raise RegistrationError("coupangeats_untrusted_screen_evidence")
 
 
 def _row(row: Any) -> dict[str, Any]:

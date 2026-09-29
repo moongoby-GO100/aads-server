@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import uuid
 from typing import Any
@@ -27,6 +28,429 @@ DEFAULT_RESOURCE_POLICY = {
     "artifact_budget_mb": 256,
 }
 ACTIVE_RECIPE_RUN_STATUSES = ("queued", "running", "approval_required")
+COUPANGEATS_LOGIN_URL = "https://store.coupangeats.com/merchant/login"
+# Draft instructions for a screen recording operator.  They are deliberately
+# not browser_recipes rows and cannot be played or approved by this module.
+COUPANGEATS_LOGIN_FRAGMENTS = (
+    {
+        "name": "coupangeats_01_open_login",
+        "version": 2,
+        "domain": "store.coupangeats.com",
+        "lane": "pc_agent",
+        "work_key": "coupangeats:owner:login",
+        "starts_when": "authenticated_pc_session_available",
+        "succeeds_when": "login_form_visible_without_access_denied_or_challenge",
+        "predecessor": None,
+        "recover_at": "open_login_start",
+        "credential_scope": "yeoljeong-coupangeats",
+        "step_requirements": ["navigate_exact_login_url"],
+        "verify_requirements": ["visible_login_form", "no_access_denied_or_challenge"],
+    },
+    {
+        "name": "coupangeats_02_vault_fill",
+        "version": 2,
+        "domain": "store.coupangeats.com",
+        "lane": "pc_agent",
+        "work_key": "coupangeats:owner:login",
+        "starts_when": "open_login_v2_screen_verified_in_same_pc_session",
+        "succeeds_when": "vault_identity_matches_and_password_field_filled",
+        "predecessor": {"name": "coupangeats_01_open_login", "version": 2},
+        "recover_at": "open_login_form",
+        "credential_scope": "yeoljeong-coupangeats",
+        "password_check": "filled_or_empty_only",
+        "step_requirements": ["fill_username_from_vault", "fill_password_from_vault"],
+        "verify_requirements": ["username_matches_vault", "password_field_filled_boolean_only"],
+    },
+    {
+        "name": "coupangeats_03_login_confirm",
+        "version": 1,
+        "domain": "store.coupangeats.com",
+        "lane": "pc_agent",
+        "work_key": "coupangeats:owner:login",
+        "starts_when": "approved_vault_fill_v2_screen_verified_in_same_pc_session",
+        "succeeds_when": "authenticated_store_matches_vault_without_access_denied_captcha_or_login_error",
+        "predecessor": {"name": "coupangeats_02_vault_fill", "version": 2},
+        "recover_at": "open_login_form_without_resubmitting",
+        "credential_scope": "yeoljeong-coupangeats",
+        "step_requirements": ["click_observed_submit_control"],
+        "verify_requirements": ["authenticated_username_matches_vault", "authenticated_store_matches_vault", "no_error_or_challenge"],
+    },
+)
+
+
+def matches_coupangeats_vault_identity(
+    *,
+    vault_scope: str,
+    vault_username: str,
+    vault_store: str,
+    screen_username: str,
+    screen_store: str,
+) -> bool:
+    """Compare transient Vault identity with the screen; persist neither value."""
+    return (
+        vault_scope == "yeoljeong-coupangeats"
+        and hmac.compare_digest(vault_username.encode("utf-8"), b"mimi77")
+        and bool(vault_username and vault_store and screen_username and screen_store)
+        and hmac.compare_digest(vault_username.encode("utf-8"), screen_username.encode("utf-8"))
+        and hmac.compare_digest(vault_store.encode("utf-8"), screen_store.encode("utf-8"))
+    )
+
+
+def prepare_coupangeats_login_drafts(
+    saved_open_login: dict[str, Any] | None, *, trusted_evidence: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Check the saved WorkRecipe v2 before using it as a split-login reference.
+
+    A missing/unverified row never becomes an approved reference.  A matching
+    row only proves the open-login definition, not login or replay success.
+    """
+    row = saved_open_login or {}
+    spec = _json_dict(row.get("spec"))
+    steps = _json_list(spec.get("steps"))
+    verify = _json_list(spec.get("verify"))
+    metadata = _json_dict(spec.get("metadata"))
+    evidence = _json_dict(metadata.get("screen_e2e"))
+    artifact = evidence.get("screenshot_url") or evidence.get("snapshot_ref")
+    login_url = urlparse(COUPANGEATS_LOGIN_URL)
+    def is_login_url(value: Any) -> bool:
+        parsed = urlparse(str(value or ""))
+        return (parsed.scheme, parsed.hostname, parsed.path.rstrip("/")) == (
+            login_url.scheme, login_url.hostname, login_url.path.rstrip("/"))
+
+    valid = (
+        row.get("name") == "coupangeats_01_open_login"
+        and row.get("domain") == "store.coupangeats.com"
+        and row.get("version") == 2
+        and row.get("enabled") is True
+        and row.get("max_risk") == "READ"
+        and row.get("approval_status") == "approved"
+        and spec.get("name") == row.get("name")
+        and spec.get("version") == 2
+        and spec.get("domain") == row.get("domain")
+        and any(isinstance(step, dict) and step.get("action") == "navigate"
+                and is_login_url(step.get("url")) for step in steps)
+        and any(isinstance(step, dict) and step.get("action") == "snapshot"
+                and step.get("assertion") == "login_form_visible"
+                for step in verify)
+        and evidence.get("screen_verified") is True
+        and is_login_url(evidence.get("url"))
+        and isinstance(artifact, str) and bool(artifact.strip())
+        and evidence.get("outcome") == COUPANGEATS_LOGIN_FRAGMENTS[0]["succeeds_when"]
+        and evidence.get("blocked") is False
+        and evidence_matches_run(evidence, trusted_evidence, fragment_name=row.get("name"))
+        and metadata.get("source_chat_session_id") == trusted_evidence.get("chat_session_id")
+        and metadata.get("starts_when") == COUPANGEATS_LOGIN_FRAGMENTS[0]["starts_when"]
+        and metadata.get("succeeds_when") == COUPANGEATS_LOGIN_FRAGMENTS[0]["succeeds_when"]
+        and metadata.get("lane") == "pc_agent"
+        and metadata.get("work_key") == COUPANGEATS_LOGIN_FRAGMENTS[0]["work_key"]
+    )
+    fragments = [dict(item) for item in COUPANGEATS_LOGIN_FRAGMENTS]
+    fragments[0]["registration_state"] = "approved" if valid else "registration_pending"
+    fragments[0]["registration_ready"] = valid
+    for item in fragments[1:]:
+        item["registration_state"] = "registration_pending"
+        item["registration_ready"] = False
+    return {
+        "reference_verified": valid,
+        "reference_reason": "saved_v2_definition_verified"
+        if valid
+        else "saved_v2_definition_unverified",
+        "fragments": fragments,
+        "replay_state": "not_verified",
+        "registration_path": "work_recipe.registration.request_registration",
+        "requires_observed_selectors": True,
+    }
+
+
+def build_coupangeats_registration_candidate(
+    *, fragment_name: str, observed_steps: list[dict[str, Any]],
+    observed_verify: list[dict[str, Any]], screen_evidence: dict[str, Any],
+    trusted_evidence: dict[str, Any] | None = None,
+) -> Any:
+    """Build a pending WorkRecipe only from observed controls and screen evidence.
+
+    This does not request approval or execute a browser. The reviewer must inspect
+    the referenced screen; a caller's screen_verified flag is not independent proof.
+    """
+    from app.services.work_recipe.schema import WorkRecipe
+
+    fragment = next((item for item in COUPANGEATS_LOGIN_FRAGMENTS
+                     if item["name"] == fragment_name), None)
+    if fragment is None:
+        raise ValueError("unknown_fragment")
+    evidence = _json_dict(screen_evidence)
+    artifact = evidence.get("screenshot_url") or evidence.get("snapshot_ref")
+    parsed = urlparse(str(evidence.get("url") or ""))
+    if (evidence.get("screen_verified") is not True
+            or not isinstance(artifact, str) or not artifact.strip()
+            or parsed.scheme != "https" or parsed.hostname != fragment["domain"]
+            or evidence.get("outcome") != fragment["succeeds_when"]
+            or evidence.get("blocked") is not False
+            or not evidence_matches_run(evidence, trusted_evidence, fragment_name=fragment_name)):
+        raise ValueError("verified_screen_evidence_required")
+    expected = (["navigate"] if fragment_name == "coupangeats_01_open_login" else
+                ["fill", "fill"] if fragment_name == "coupangeats_02_vault_fill" else ["click"])
+    required_assertions = {
+        "coupangeats_01_open_login": ["login_form_visible"],
+        "coupangeats_02_vault_fill": ["username_matches_vault", "password_filled"],
+        "coupangeats_03_login_confirm": ["authenticated_username_matches_vault", "authenticated_store_matches_vault"],
+    }
+    if ([step.get("action") for step in observed_steps] != expected
+            or [step.get("assertion") for step in observed_verify] != required_assertions[fragment_name]
+            or any(step.get("action") != "snapshot" for step in observed_verify)
+            or any(set(step) - {"action", "selector", "url", "value", "risk", "timeout"}
+                   for step in observed_steps)
+            or any(set(step) - {"action", "selector", "assertion", "risk", "timeout"}
+                   for step in observed_verify)
+            or any((not str(step.get("selector") or "").strip()
+                    or "<" in str(step.get("selector")))
+                   for step in [*observed_steps, *observed_verify]
+                   if step.get("action") != "navigate")):
+        raise ValueError("observed_steps_and_verify_required")
+    if fragment_name == "coupangeats_02_vault_fill" and [
+        step.get("value") for step in observed_steps
+    ] != ["{{vault_username}}", "{{vault_password}}"]:
+        raise ValueError("vault_placeholders_required")
+    if fragment_name == "coupangeats_01_open_login" and observed_steps[0].get("url") != COUPANGEATS_LOGIN_URL:
+        raise ValueError("exact_login_url_required")
+    if fragment_name == "coupangeats_01_open_login" and observed_steps[0].get("risk", "READ") != "READ":
+        raise ValueError("open_login_read_risk_required")
+    if fragment_name != "coupangeats_03_login_confirm" and evidence.get("url") != COUPANGEATS_LOGIN_URL:
+        raise ValueError("exact_login_url_required")
+    if fragment_name == "coupangeats_03_login_confirm" and evidence.get("url") == COUPANGEATS_LOGIN_URL:
+        raise ValueError("authenticated_screen_url_required")
+    if any(step.get("value") is not None for step in observed_verify):
+        raise ValueError("verify_must_not_contain_secret_value")
+    safe_evidence = {key: evidence[key] for key in
+                     ("screenshot_url", "snapshot_ref", "url", "captured_at", "outcome", "run_id", "artifact_id")
+                     if key in evidence}
+    safe_evidence["screen_verified"] = True
+    safe_evidence["blocked"] = False
+    recipe = {
+        "name": fragment["name"], "domain": fragment["domain"],
+        "version": fragment["version"],
+        "inputs": ([{"name": "vault_username", "secret": True},
+                    {"name": "vault_password", "secret": True}]
+                   if fragment_name == "coupangeats_02_vault_fill" else
+                   [{"name": "vault_username", "secret": True},
+                    {"name": "vault_store", "secret": True}]
+                   if fragment_name == "coupangeats_03_login_confirm" else []),
+        "steps": [{**step, **({"risk": "WRITE_EXTERNAL"} if fragment_name == "coupangeats_03_login_confirm" else {})}
+                  for step in observed_steps], "verify": observed_verify,
+        "metadata": {
+            "lane": fragment["lane"], "work_key": fragment["work_key"],
+            "starts_when": fragment["starts_when"],
+            "succeeds_when": fragment["succeeds_when"],
+            "predecessor": fragment["predecessor"],
+            "recover_at": fragment["recover_at"],
+            "credential_scope": fragment["credential_scope"],
+            "source_chat_session_id": trusted_evidence["chat_session_id"],
+            "screen_e2e": safe_evidence,
+        },
+    }
+    return WorkRecipe.from_dict(recipe)
+
+
+async def read_coupangeats_login_drafts(*, tenant_id: str) -> dict[str, Any]:
+    """Read the tenant's approved v2 and return a secret-free readiness plan."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT r.name, r.domain, r.version, r.enabled, r.max_risk, r.spec,
+                   a.status AS approval_status
+              FROM work_recipes r
+              JOIN work_recipe_registration_requests a
+                ON a.recipe_id = r.id AND a.tenant_id = r.tenant_id
+             WHERE r.tenant_id = $1 AND r.name = $2
+               AND r.domain = $3 AND r.version = 2
+             LIMIT 1
+            """,
+            uuid.UUID(str(tenant_id)),
+            "coupangeats_01_open_login",
+            "store.coupangeats.com",
+        )
+    saved = dict(row) if row else None
+    evidence = _json_dict(_json_dict(_json_dict(saved.get("spec")).get("metadata")).get("screen_e2e")) if saved else {}
+    trusted = await lookup_coupangeats_run_evidence(
+        tenant_id=tenant_id, chat_session_id=None, run_id=evidence.get("run_id"),
+        artifact_id=evidence.get("artifact_id"),
+    ) if evidence.get("run_id") or evidence.get("artifact_id") else None
+    return prepare_coupangeats_login_drafts(saved, trusted_evidence=trusted)
+
+
+def evidence_matches_run(
+    claimed: dict[str, Any], trusted: dict[str, Any] | None, *, fragment_name: str
+) -> bool:
+    """Only a completed, session-bound audit artifact can support a draft."""
+    if (not trusted or trusted.get("status") != "success"
+            or trusted.get("route") != "pc_agent" or trusted.get("verified") is not True
+            or trusted.get("recipe_name") != fragment_name):
+        return False
+    ref = claimed.get("screenshot_url") or claimed.get("snapshot_ref")
+    return bool(ref and (
+                    (claimed.get("run_id") and claimed.get("run_id") == trusted.get("run_id"))
+                    or (claimed.get("artifact_id") and claimed.get("artifact_id") == trusted.get("artifact_id")))
+                and ref == trusted.get("screenshot_url")
+                and claimed.get("url") == trusted.get("url")
+                and trusted.get("chat_session_id"))
+
+
+async def lookup_coupangeats_run_evidence(
+    *, tenant_id: str, chat_session_id: str | None, run_id: Any = None,
+    artifact_id: Any = None,
+) -> dict[str, Any] | None:
+    """Read the server's append-only successful verify record; never trust a supplied flag."""
+    if artifact_id:
+        try:
+            artifact_uuid = uuid.UUID(str(artifact_id))
+        except (TypeError, ValueError):
+            return None
+        async with get_pool().acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT id, source_url, storage_uri, metadata FROM browser_artifacts
+                    WHERE id=$1 AND tenant_id=$2 AND artifact_type='coupangeats_screen_e2e'""",
+                artifact_uuid, uuid.UUID(str(tenant_id)),
+            )
+        if not row:
+            return None
+        metadata = _json_dict(row["metadata"])
+        if chat_session_id and metadata.get("chat_session_id") != chat_session_id:
+            return None
+        return {
+            "artifact_id": str(row["id"]), "status": "success",
+            "verified": metadata.get("verified") is True,
+            "recipe_name": metadata.get("fragment_name"),
+            "chat_session_id": metadata.get("chat_session_id"),
+            "route": metadata.get("route"), "url": row["source_url"],
+            "screenshot_url": row["storage_uri"],
+        }
+    try:
+        run_uuid = uuid.UUID(str(run_id))
+    except (TypeError, ValueError):
+        return None
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT r.id, r.status, r.recipe_name, r.triggered_by, s.output, s.screenshot_path
+                 FROM recipe_runs r JOIN recipe_run_steps s ON s.run_id = r.id
+                WHERE r.id=$1 AND r.tenant_id=$2 AND r.domain=$3
+                  AND r.status='success' AND s.phase='verify' AND s.status='success'
+                  AND s.output->'output'->>'verified'='true'
+                  AND ($4::text IS NULL OR r.triggered_by=$4)
+                ORDER BY s.seq DESC LIMIT 1""",
+            run_uuid, uuid.UUID(str(tenant_id)), "store.coupangeats.com",
+            f"chat:{chat_session_id}" if chat_session_id else None,
+        )
+    if not row:
+        return None
+    output = _json_dict(row["output"])
+    audit = _json_dict(output.get("evidence"))
+    return {
+        "run_id": str(row["id"]), "status": str(row["status"]),
+        "recipe_name": str(row["recipe_name"]),
+        "verified": _json_dict(output.get("output")).get("verified") is True,
+        "chat_session_id": str(row["triggered_by"] or "").removeprefix("chat:"),
+        "route": output.get("route"), "url": audit.get("url"),
+        "screenshot_url": row["screenshot_path"],
+    }
+
+
+async def attest_coupangeats_live_screen(
+    *, tenant_id: str, chat_session_id: str, fragment_name: str,
+    browser_session_id: str, browser_work_key: str,
+    observed_verify: list[dict[str, Any]], values: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Verify the designated PC page and persist a server-owned screen artifact.
+
+    This reads the already completed screen. It never submits a login or stores
+    a password, cookie, token, or field value.
+    """
+    from app.browser_bridge.service import get_browser_bridge_service
+    from app.services.work_recipe.executor import BrowserRecipeExecutor
+    from app.services.work_recipe.orchestrator import CoupangVerificationExecutor
+    from app.services.work_recipe.schema import WorkRecipe
+
+    fragment = next((item for item in COUPANGEATS_LOGIN_FRAGMENTS
+                     if item["name"] == fragment_name), None)
+    session = get_browser_bridge_service().sessions.get(browser_session_id)
+    if (fragment is None or session is None or session.work_key != fragment["work_key"]
+            or browser_work_key != fragment["work_key"]
+            or str(session.endpoint.kind.value) != "local_agent"):
+        raise ValueError("coupangeats_pc_session_required")
+    recipe = WorkRecipe.from_dict({
+        "name": fragment_name, "domain": fragment["domain"],
+        "metadata": {"credential_scope": fragment["credential_scope"]},
+        "steps": [{"action": "snapshot", "selector": "body"}],
+        "verify": observed_verify,
+    })
+    executor = BrowserRecipeExecutor(
+        browser_session_id=browser_session_id, browser_work_key=browser_work_key
+    )
+    page = await executor._get_page({
+        "url": COUPANGEATS_LOGIN_URL,
+        "context": {"smart_browser": {"server_access_blocked": True}},
+    })
+    # PC Agent click() does not refresh the facade's cached URL.
+    current_url = str(await page.evaluate("window.location.href") or "")
+    page.url = current_url
+    parsed = urlparse(current_url)
+    if (parsed.scheme != "https" or parsed.hostname != fragment["domain"]
+            or (fragment_name != "coupangeats_03_login_confirm"
+                and current_url != COUPANGEATS_LOGIN_URL)
+            or (fragment_name == "coupangeats_03_login_confirm"
+                and current_url == COUPANGEATS_LOGIN_URL)):
+        raise ValueError("coupangeats_screen_url_mismatch")
+    verifier = CoupangVerificationExecutor(executor, recipe, values)
+    last: dict[str, Any] = {}
+    for step in recipe.verify:
+        last = await verifier({
+            **step.to_dict(), "phase": "verify",
+            "context": {"smart_browser": {"server_access_blocked": True}},
+        })
+        if last.get("ok") is not True:
+            raise ValueError("coupangeats_live_verify_failed")
+    screenshot = _json_dict(_json_dict(last.get("evidence")).get("screenshot"))
+    screenshot_url = str(screenshot.get("url") or "")
+    digest = str(screenshot.get("sha256") or "")
+    if not screenshot_url or not digest:
+        raise ValueError("coupangeats_screen_artifact_required")
+    metadata = {
+        "fragment_name": fragment_name, "chat_session_id": chat_session_id,
+        "browser_session_id": browser_session_id, "work_key": browser_work_key,
+        "route": "pc_agent", "verified": True,
+    }
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO browser_artifacts
+                (tenant_id, artifact_type, source_url, content_hash, storage_uri, metadata)
+                VALUES ($1, 'coupangeats_screen_e2e', $2, $3, $4, $5::jsonb)
+                ON CONFLICT (tenant_id, content_hash) DO NOTHING
+                RETURNING id""",
+            uuid.UUID(str(tenant_id)), current_url, digest, screenshot_url,
+            json.dumps(metadata),
+        )
+        if row is None:
+            previous = await conn.fetchrow(
+                """SELECT id, source_url, storage_uri, metadata FROM browser_artifacts
+                    WHERE tenant_id=$1 AND content_hash=$2
+                      AND artifact_type='coupangeats_screen_e2e'""",
+                uuid.UUID(str(tenant_id)), digest,
+            )
+            if (previous is None or _json_dict(previous["metadata"]) != metadata
+                    or previous["source_url"] != current_url):
+                raise ValueError("coupangeats_screen_artifact_already_recorded")
+            row = previous
+            screenshot_url = str(previous["storage_uri"])
+    evidence = {
+        "screen_verified": True, "artifact_id": str(row["id"]),
+        "screenshot_url": screenshot_url, "url": current_url,
+        "outcome": fragment["succeeds_when"], "blocked": False,
+    }
+    return evidence, {**metadata, "artifact_id": str(row["id"]),
+                      "status": "success", "recipe_name": fragment_name,
+                      "chat_session_id": chat_session_id, "url": current_url,
+                      "screenshot_url": screenshot_url}
+
+
 RECIPE_HASH_FIELDS = (
     "recipe_id",
     "version",
