@@ -3342,6 +3342,24 @@ async def lifespan(app: FastAPI):
 
     _startup_asyncio.create_task(_periodic_deferred_reaction_handoff())
 
+    # 스탠바이 슬롯이 오래 쥐고 있는 실행을 deploy_standby_holds 에 남긴다.
+    # 전에는 다음 릴리스가 target_slot_drain 에서 180초를 태우고 실패해야만
+    # 알 수 있었다(2026-09-30 #5290~#5292). 기록만 한다 — 끊지 않는다.
+    async def _periodic_standby_hold_monitor():
+        from app.services.standby_slot_ownership import (
+            STANDBY_HOLD_MONITOR_INTERVAL_SECONDS,
+            run_standby_hold_monitor_once,
+        )
+        await _startup_asyncio.sleep(30)
+        while True:
+            try:
+                await run_standby_hold_monitor_once()
+            except Exception as hold_error:
+                logger.warning("standby_hold_monitor_failed", error=str(hold_error)[:200])
+            await _startup_asyncio.sleep(STANDBY_HOLD_MONITOR_INTERVAL_SECONDS)
+
+    _startup_asyncio.create_task(_periodic_standby_hold_monitor())
+
     # Terminal deploys report back to the chat session that registered them.
     # The poller checks the active-slot marker before every DB claim, so the
     # standby API never starts a duplicate reaction during blue/green overlap.

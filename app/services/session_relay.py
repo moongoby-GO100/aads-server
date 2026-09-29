@@ -265,6 +265,13 @@ async def _deliver_answer(origin_session_id: str, content: str,
     if await _relay_paused(goal_id, relay_id):
         return False
 
+    # 회신을 기다리는 사이 컷오버가 오면 이 프로세스는 스탠바이다. 여기서 턴을
+    # 열면 다음 릴리스의 drain 을 막는다 — active 슬롯이 세션이 빌 때 배달한다.
+    if await cs.handoff_internal_turn_if_standby(
+        origin_session_id, content, source="session_relay_reply",
+    ):
+        return True
+
     async for chunk in cs.send_message_stream(
         session_id=origin_session_id,
         content=content,

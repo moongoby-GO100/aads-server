@@ -326,11 +326,16 @@ async def ask_pending_reviews(project: Optional[str] = None) -> Dict[str, int]:
                 try:
                     from app.services import chat_service as cs
 
-                    async for _c in cs.send_message_stream(
-                        session_id=lead, content=_ask_text(row, to_ceo=False),
-                        intent_override="system_trigger", response_mode="quality",
+                    _ask = _ask_text(row, to_ceo=False)
+                    # 사이클이 컷오버를 넘기면 이 프로세스는 스탠바이다 — active 로 넘긴다.
+                    if not await cs.handoff_internal_turn_if_standby(
+                        lead, _ask, source="milestone_review",
                     ):
-                        pass
+                        async for _c in cs.send_message_stream(
+                            session_id=lead, content=_ask,
+                            intent_override="system_trigger", response_mode="quality",
+                        ):
+                            pass
                     asked += 1
                 except Exception as exc:
                     logger.warning(

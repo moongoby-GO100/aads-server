@@ -5377,14 +5377,25 @@ class ToolExecutor:
             get_pipeline_runner_api_url,
         )
         job_id = inp.get("job_id", "")
+        action = inp.get("action", "approve")
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 get_pipeline_runner_api_url(f"jobs/{job_id}/approve"),
                 headers=INTERNAL_PIPELINE_HEADERS,
-                json={"action": inp.get("action", "approve"), "feedback": inp.get("feedback", "")},
+                json={"action": action, "feedback": inp.get("feedback", "")},
                 timeout=10,
             )
-            return resp.json()
+            result = resp.json()
+        # 승인하는 세션이 스탠바이 슬롯을 쥐고 있으면 알린다. 막지는 않는다.
+        if action == "approve" and isinstance(result, dict):
+            from app.services.standby_slot_ownership import approval_standby_warning
+
+            warning = await approval_standby_warning(
+                str(current_chat_session_id.get("") or "").strip() or None
+            )
+            if warning:
+                result["standby_slot_warning"] = warning
+        return result
 
     async def _pipeline_review_adjudicate(self, inp: Dict[str, Any]) -> Any:
         """Submit a hash-bound verdict from the job's originating chat session."""

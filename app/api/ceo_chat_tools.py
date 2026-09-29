@@ -5947,14 +5947,30 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             get_pipeline_runner_api_url,
         )
         job_id = params.get("job_id", "")
+        action = params.get("action", "approve")
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 get_pipeline_runner_api_url(f"jobs/{quote(job_id, safe='')}/approve"),
                 headers=INTERNAL_PIPELINE_HEADERS,
-                json={"action": params.get("action", "approve"), "feedback": params.get("feedback", "")},
+                json={"action": action, "feedback": params.get("feedback", "")},
                 timeout=10,
             )
-            return resp.text
+            text = resp.text
+        # 승인하는 세션이 스탠바이 슬롯을 쥐고 있으면 알린다. 막지는 않는다.
+        if action == "approve":
+            from app.services.standby_slot_ownership import approval_standby_warning
+
+            warning = await approval_standby_warning(str(chat_session_id or "").strip() or None)
+            if warning:
+                try:
+                    body = json.loads(text)
+                except (TypeError, ValueError):
+                    body = None
+                if isinstance(body, dict):
+                    body["standby_slot_warning"] = warning
+                    return json.dumps(body, ensure_ascii=False)
+                return f"{text}\n\n{warning['message']}"
+        return text
     elif name == "pipeline_review_adjudicate":
         from app.services.tool_executor import ToolExecutor, current_chat_session_id
         session_token = current_chat_session_id.set(str(chat_session_id or "").strip())

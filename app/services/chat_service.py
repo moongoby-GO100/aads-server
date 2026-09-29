@@ -11930,6 +11930,41 @@ async def _enqueue_deferred_reaction(
     return str(deferred_id)
 
 
+async def handoff_internal_turn_if_standby(
+    session_id: str,
+    content: str,
+    *,
+    source: str,
+) -> Optional[str]:
+    """스탠바이 슬롯에서 내부 턴을 새로 시작하지 않고 active 슬롯에 넘긴다.
+
+    새 턴의 owner_instance 는 그 턴을 돌리는 프로세스가 정한다
+    (_get_or_create_turn_execution 의 INSERT, _claim_execution_lease). 사용자
+    요청은 nginx 가 active 로 보내고, 자동 반응·재개 스캐너·deferred 큐는
+    _is_local_active_api_slot 으로 이미 막혀 있다.
+
+    남은 구멍은 **프로세스 안에서 send_message_stream 을 직접 부르는 작업**이다.
+    목표 사이클은 active 에서 시작하지만 발송(_send_milestone)은 세마포어를
+    기다리는 태스크로 떨어져 나가, 그 사이 컷오버가 오면 스탠바이가 된 슬롯에서
+    새 턴을 연다. 그 턴은 다음 릴리스의 target_slot_drain 을 막는다.
+
+    active 이면 None(호출자가 그대로 진행). 스탠바이이면 원문 그대로 deferred
+    큐에 넣고 그 id 를 돌려준다 — active 슬롯의 _process_deferred_reactions_once
+    가 세션이 비는 대로 배달한다. 진행 중인 턴은 건드리지 않는다.
+    """
+    if _is_local_active_api_slot():
+        return None
+    deferred_id = await _enqueue_deferred_reaction(session_id, content)
+    logger.info(
+        "standby_internal_turn_handed_off session=%s source=%s deferred=%s owner=%s",
+        str(session_id)[:8],
+        source,
+        str(deferred_id)[:8],
+        _EXECUTION_OWNER_INSTANCE,
+    )
+    return deferred_id
+
+
 async def enqueue_next_step_reaction(
     session_id: str,
     system_message: str,

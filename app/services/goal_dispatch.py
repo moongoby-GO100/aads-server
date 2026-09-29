@@ -475,6 +475,12 @@ async def _send_milestone(
                     return False
             from app.services import chat_service as cs
 
+            # 세마포어를 기다리는 사이 컷오버가 오면 이 프로세스는 스탠바이다.
+            # 여기서 턴을 열면 다음 릴리스의 drain 을 막는다 — active 로 넘긴다.
+            if await cs.handoff_internal_turn_if_standby(
+                session_id, message, source="goal_dispatch",
+            ):
+                return True
             async for _chunk in cs.send_message_stream(
                 session_id=session_id,
                 content=message,

@@ -254,6 +254,49 @@ async def _get_stream_activity_snapshot(recent_minutes: int = 5) -> Dict[str, An
     }
 
 
+@router.get("/ops/standby-holds")
+async def get_standby_holds():
+    """스탠바이 슬롯이 쥐고 있는 실행 — 다음 릴리스의 target_slot_drain 을 막을 후보.
+
+    `live` 는 지금 리스를 쥔 전부(임계 무관), `recorded` 는 임계를 넘겨
+    deploy_standby_holds 에 남은 열린 기록이다. 읽기 전용.
+    """
+    from app.core.db_pool import get_pool as _gp
+    from app.services.standby_slot_ownership import (
+        STANDBY_HOLD_THRESHOLD_SECONDS,
+        list_open_holds,
+        list_standby_owned_executions,
+        read_active_instance,
+    )
+
+    def _short(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out = []
+        for row in rows:
+            item = dict(row)
+            item["session_id"] = _short_session_id(item.get("session_id"))
+            item["execution_id"] = str(item.get("execution_id") or "")[:8]
+            out.append(item)
+        return out
+
+    active = read_active_instance()
+    try:
+        async with _gp().acquire() as conn:
+            live = await list_standby_owned_executions(conn, active_instance=active)
+            recorded = await list_open_holds(conn)
+    except Exception as e:
+        logger.warning("standby_holds_query_failed", error=str(e)[:200])
+        return {"status": "error", "active_instance": active, "error": str(e)[:200]}
+    return {
+        "status": "ok",
+        "active_instance": active,
+        "threshold_seconds": STANDBY_HOLD_THRESHOLD_SECONDS,
+        "live_count": len(live),
+        "live": _short(live),
+        "recorded_count": len(recorded),
+        "recorded": _short(recorded),
+    }
+
+
 @router.get("/ops/streaming-metrics")
 async def get_streaming_metrics():
     """스트리밍 운영 메트릭 조회."""
