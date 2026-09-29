@@ -3903,14 +3903,15 @@ async def ops_llm_candidates(
             await conn.close()
     except Exception as e:
         logger.error("ops_llm_candidates_error", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="llm candidate registry query failed")
 
     items = [dict(r) for r in rows]
     if sort == "price":
         try:
             items = reg.sort_by_price(items)
         except reg.PriceAxisMismatch as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            # 순수 파이썬 검증(DB 미접촉)이 만든 메시지만 온다 — 원문 노출 아님
+            raise HTTPException(status_code=400, detail=f"price sort rejected: {e}")
     items = [reg.serialize_row(r) for r in items]
     return {
         "items": items,
@@ -3958,7 +3959,7 @@ async def ops_llm_comparisons(
             await conn.close()
     except Exception as e:
         logger.error("ops_llm_comparisons_error", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="llm comparison query failed")
 
     items = [reg.serialize_row(r) for r in rows]
     return {

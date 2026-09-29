@@ -317,3 +317,94 @@ def test_down_migration_drops_both_tables_and_function():
     assert down.index("DROP TABLE IF EXISTS llm_model_comparisons") < down.index("DROP TABLE IF EXISTS llm_model_candidates")
     assert "DROP FUNCTION IF EXISTS llm_model_candidates_enforce_exclusion()" in down
     assert "llm_models " not in down.replace("llm_models 는", "")
+
+
+# ── 오류 응답에 DB 원문을 싣지 않는다 ────────────────────────────────────────
+
+_DB_ERROR = "column m.provider does not exist in relation llm_model_candidates"
+
+
+class _FailingConn:
+    async def fetch(self, sql, *args):
+        raise RuntimeError(_DB_ERROR)
+
+    async def close(self):
+        return None
+
+
+def _capture_logger(monkeypatch, ops):
+    calls = []
+
+    class _Log:
+        def error(self, event, **kw):
+            calls.append((event, kw))
+
+    monkeypatch.setattr(ops, "logger", _Log())
+    return calls
+
+
+def _failing_get_conn(monkeypatch, ops):
+    async def _get_conn():
+        return _FailingConn()
+
+    monkeypatch.setattr(ops, "_get_conn", _get_conn)
+
+
+def _assert_no_db_leak(detail):
+    for leaked in ("column", "m.provider", "llm_model_candidates", "does not exist", _DB_ERROR):
+        assert leaked not in detail
+
+
+def test_candidates_db_error_hides_raw_message_but_logs_it(monkeypatch):
+    from app.api import ops
+
+    _failing_get_conn(monkeypatch, ops)
+    calls = _capture_logger(monkeypatch, ops)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(ops.ops_llm_candidates(surface=None, pricing_kind=None, status=None, sort=None))
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "llm candidate registry query failed"
+    _assert_no_db_leak(exc.value.detail)
+    assert calls == [("ops_llm_candidates_error", {"error": _DB_ERROR})]
+
+
+def test_comparisons_db_error_hides_raw_message_but_logs_it(monkeypatch):
+    from app.api import ops
+
+    _failing_get_conn(monkeypatch, ops)
+    calls = _capture_logger(monkeypatch, ops)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(ops.ops_llm_comparisons(surface=None, since=None, until=None, limit=50))
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "llm comparison query failed"
+    _assert_no_db_leak(exc.value.detail)
+    assert calls == [("ops_llm_comparisons_error", {"error": _DB_ERROR})]
+
+
+def test_candidates_400_price_axis_message_is_validator_only(monkeypatch):
+    from app.api import ops
+
+    conn = _Conn([
+        {"id": 1, "model_id": "a", "pricing_kind": "api_per_token", "price_input_per_1m": Decimal("1")},
+        {"id": 2, "model_id": "b", "pricing_kind": "subscription"},
+    ])
+
+    async def _get_conn():
+        return conn
+
+    monkeypatch.setattr(ops, "_get_conn", _get_conn)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(ops.ops_llm_candidates(surface=None, pricing_kind="api_per_token", status=None, sort="price"))
+    assert exc.value.status_code == 400
+    assert "같은 금액축으로 비교할 수 없음" in exc.value.detail
+    _assert_no_db_leak(exc.value.detail)
+
+
+def test_candidates_db_error_is_not_reported_as_400(monkeypatch):
+    from app.api import ops
+
+    _failing_get_conn(monkeypatch, ops)
+    _capture_logger(monkeypatch, ops)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(ops.ops_llm_candidates(surface=None, pricing_kind="api_per_token", status=None, sort="price"))
+    assert exc.value.status_code == 500
