@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.auth import require_internal_admin
-from app.services.server_registry import list_servers
+from app.services.server_registry import CANONICAL_SERVER_IDS, list_ledger_servers
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(require_internal_admin)])
@@ -90,8 +90,9 @@ def _deploy_server_groups() -> list[dict[str, Any]]:
             "name": server.get("display_name", server["id"]),
             "ip": server.get("host", ""),
             "projects": tuple(server.get("projects", ())),
+            "health_monitored": server["id"] in CANONICAL_SERVER_IDS,
         }
-        for server in list_servers()
+        for server in list_ledger_servers()
     ]
 _DEPLOY_STATUS_OK = {"done"}
 _DEPLOY_STATUS_ERROR = {"error", "failed", "rejected", "cancelled", "canceled"}
@@ -1269,6 +1270,7 @@ async def get_admin_deploy_status():
             "id": server["id"],
             "name": server["name"],
             "ip": server["ip"],
+            "health_monitored": server["health_monitored"],
             "projects": server_projects,
         })
 

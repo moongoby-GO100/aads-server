@@ -69,6 +69,7 @@ services:
       - .env
     environment:
       - ENVIRONMENT=production
+      - ACCT_REPO_PATH=${ACCT_REPO_PATH:-}
       - LOG_LEVEL=INFO
       # AI 검수 모델 1회 시도 한도. 기본 45초는 40KB 규모 diff 에서 경계선이라
       # 2026-09-19 runner-1b282742 가 sonnet-5·haiku·groq 3종 모두 45초에서 잘려

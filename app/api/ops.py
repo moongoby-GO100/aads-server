@@ -3419,8 +3419,13 @@ def _ops_status_servers(
             "id": meta.get("id"),
             "name": meta.get("display_name") or meta.get("id"),
             "ip": meta.get("host"),
+            "projects": meta.get("projects", []),
             "status": "unknown",
+            "health_monitored": meta.get("health_monitored", True),
         }
+        if not entry["health_monitored"]:
+            out.append(entry)
+            continue
         if meta.get("type") == "local":
             if health.get("error"):
                 entry["status"] = "error"
@@ -3473,12 +3478,11 @@ def _ops_status_payload(
 
 
 def _server_meta_list() -> List[Dict[str, Any]]:
-    """server_registry 정본에서 카드 3장을 만든다. 별칭 중복 집계를 피해
-    CANONICAL_SERVER_IDS 만 순회한다(레지스트리 직접 순회 금지)."""
-    from app.services.server_registry import CANONICAL_SERVER_IDS
+    """원장 서버를 별칭 중복 없이 표시한다. 헬스 감시는 별도 목록을 따른다."""
+    from app.services.server_registry import CANONICAL_SERVER_IDS, LEDGER_SERVER_IDS
 
     metas: List[Dict[str, Any]] = []
-    for sid in CANONICAL_SERVER_IDS:
+    for sid in LEDGER_SERVER_IDS:
         cfg = get_server_config(sid) or {}
         metas.append({
             "id": sid,
@@ -3486,6 +3490,8 @@ def _server_meta_list() -> List[Dict[str, Any]]:
             "display_name": cfg.get("display_name") or sid,
             "type": cfg.get("type", "ssh"),
             "legacy_ids": cfg.get("legacy_ids") or [],
+            "health_monitored": sid in CANONICAL_SERVER_IDS,
+            "projects": cfg.get("projects") or [],
         })
     return metas
 

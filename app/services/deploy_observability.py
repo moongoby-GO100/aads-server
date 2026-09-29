@@ -55,10 +55,7 @@ PROJECT_REPO_PATHS = {
         os.getenv("NTV2_REPO_PATH", ""),
         "/var/www/newtalk",
     ),
-    "ACCT": (
-        os.getenv("ACCT_REPO_PATH", ""),
-        "/srv/biseo/회계비서/회계비서",
-    ),
+    "ACCT": (),
 }
 
 
@@ -179,7 +176,11 @@ def _payload_release_metadata(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _repo_paths_for_project(project: str) -> tuple[str, ...]:
-    raw_paths = PROJECT_REPO_PATHS.get((project or "").upper(), ())
+    normalized = (project or "").upper()
+    if normalized == "ACCT":
+        raw_paths = (os.getenv("ACCT_REPO_PATH", ""),)
+    else:
+        raw_paths = PROJECT_REPO_PATHS.get(normalized, ())
     paths: list[str] = []
     for raw in raw_paths:
         if raw and raw not in paths:
@@ -243,6 +244,9 @@ def git_release_preflight(project: str, release_sha: str) -> dict[str, Any]:
         "dirty_files": [],
         "unpushed_commits": None,
     }
+    if result["project"] == "ACCT" and not _repo_paths_for_project("ACCT"):
+        result["config_error"] = "ACCT_REPO_PATH 미설정"
+        return result
     for repo in _repo_paths_for_project(project):
         head = _git_output(repo, ["rev-parse", "--short=12", "HEAD"])
         if head is None:

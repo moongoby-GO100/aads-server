@@ -104,6 +104,7 @@ services:
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql://aads:aads2026secure@aads-postgres:5432/aads
       - OBYS_DATABASE_URL=${OBYS_DATABASE_URL:-}
+      - ACCT_REPO_PATH=${ACCT_REPO_PATH:-}
       - TZ=Asia/Seoul
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - BRAVE_API_KEY=${BRAVE_API_KEY}

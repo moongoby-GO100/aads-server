@@ -9,7 +9,7 @@ AADS-181: 서버 레지스트리 (Single Source of Truth)
 
 하위호환: 구 서버 ID("68","211","114")는 SERVER_ID_ALIAS 및
 SERVER_REGISTRY 내 동일 객체 참조로 계속 동작한다.
-전체 서버 순회는 반드시 CANONICAL_SERVER_IDS 를 사용할 것
+헬스체크 서버 순회는 반드시 CANONICAL_SERVER_IDS 를 사용할 것
 (SERVER_REGISTRY 직접 순회 시 별칭 때문에 중복 집계됨).
 """
 from typing import Dict, List, Any
@@ -73,18 +73,21 @@ _JINAH244: Dict[str, Any] = {
     "projects": ["ACCT"],
     "directive_base": "/root/.genspark/directives",
     "http_health_urls": [],
-    "display_name": "jinah244 (ACCT 진아실장)",
+    "display_name": "진아실장 서버 / 회계비서",
     "legacy_ids": ["244"],
 }
 
-# 정규 서버 ID 목록 — 순회/집계는 항상 이 리스트 기준
+# 헬스체크 대상 서버 ID 목록 — 워치독과 헬스 집계는 이 리스트 기준
 #
 # ⚠ jinah244 는 **일부러 여기에 넣지 않았다** (2026-09-16). 이 리스트를 도는 쪽은
 #   헬스체크·워치독·대시보드 집계다. 244 는 http_health_urls 가 없고 서비스 구성이
 #   다른 셋과 달라, 넣는 순간 "죽은 서비스" 로 매시 잡히며 오탐 알림이 나간다.
 #   호스트 조회(get_server_host)만 필요해서 레지스트리에만 올린다. 헬스체크 대상에
 #   넣으려면 http_health_urls 를 먼저 채우고 별도로 결정하라.
+#   원장·화면 노출은 LEDGER_SERVER_IDS 를 별도로 순회한다. 헬스체크 순회에는
+#   이 목록을 사용하지 않아 244 의 빈 health URL 이 장애로 집계되지 않는다.
 CANONICAL_SERVER_IDS: List[str] = ["contabo116", "contabo14", "cafe24_114"]
+LEDGER_SERVER_IDS: List[str] = [*CANONICAL_SERVER_IDS, "jinah244"]
 
 # 구 ID → 신 ID 별칭
 SERVER_ID_ALIAS: Dict[str, str] = {
@@ -119,6 +122,7 @@ PROJECT_TO_SERVER: Dict[str, str] = {
     "SF": "cafe24_114",
     "NTV2": "cafe24_114",
     "NAS": "cafe24_114",
+    "ACCT": "jinah244",
 }
 
 # 프로젝트 별칭 정규화 (ShortFlow → SF, NewTalk → NTV2 등)
@@ -172,5 +176,10 @@ def get_servers_for_projects(projects: List[str]) -> List[str]:
 
 
 def list_servers() -> List[Dict[str, Any]]:
-    """정규 서버 목록 반환 (대시보드/헬스체크 공용)."""
+    """헬스체크 대상 서버 목록 반환."""
     return [SERVER_REGISTRY[sid] for sid in CANONICAL_SERVER_IDS]
+
+
+def list_ledger_servers() -> List[Dict[str, Any]]:
+    """별칭 중복 없이 원장과 화면에 노출할 서버 목록 반환."""
+    return [SERVER_REGISTRY[sid] for sid in LEDGER_SERVER_IDS]
