@@ -9543,6 +9543,14 @@ _RUNNER_PROGRESS_INTENTS = (
     "pipeline_c",
 )
 
+# 숨김 상태여도 본문이 남아 있으면 화면에 내는 assistant intent. 라이브·이력
+# 조회가 같은 목록을 본다 — 한쪽에만 있으면 라이브에서 보이던 답이 새로고침 뒤 사라진다.
+_SUBSTANTIAL_HIDDEN_ASSISTANT_INTENTS = (
+    "runner_response",
+    "interrupted_partial",
+    "_archived_partial",
+)
+
 # 중단 통지 문구. 숨김 상태의 중단 행은 이 문구를 걷어낸 나머지가 비어 있지 않을
 # 때만 화면에 낸다 — 통지문만 있는 행을 열면 곧 빈 버블이다.
 _INTERRUPT_NOTICE_PHRASES = (
@@ -9577,6 +9585,15 @@ def _runner_progress_allow_sql() -> str:
     return f" OR {_runner_progress_intent_list_sql()}"
 
 
+def _substantial_hidden_assistant_allow_sql() -> str:
+    quoted = ", ".join(f"'{i}'" for i in _SUBSTANTIAL_HIDDEN_ASSISTANT_INTENTS)
+    return (
+        " OR (role = 'assistant'"
+        f"     AND intent IN ({quoted})"
+        f"     AND {_has_preserved_body_sql()})"
+    )
+
+
 def _visible_message_filter(is_active: bool, include_streaming: bool) -> str:
     # A completed answer supersedes only partials from the same execution.
     # The archival writer records that final message ID; exclude those rows
@@ -9596,16 +9613,21 @@ def _visible_message_filter(is_active: bool, include_streaming: bool) -> str:
         hidden_filter += (
             " AND (is_hidden = FALSE"
             " OR intent = 'streaming_placeholder'"
-            " OR (role = 'assistant'"
-            "     AND intent IN ('runner_response', 'interrupted_partial', '_archived_partial')"
-            f"     AND {_has_preserved_body_sql()})"
-            + _runner_progress_allow_sql() +
-            ")"
+            + _substantial_hidden_assistant_allow_sql()
+            + _runner_progress_allow_sql()
+            + ")"
         )
     else:
         # 이력 조회에서도 같이 내려보낸다. 진행 중일 때만 보이고 나중에 다시
         # 열면 사라지면, 대표님은 "아까 있던 것이 없어졌다" 를 보시게 된다.
-        hidden_filter += " AND (is_hidden = FALSE" + _runner_progress_allow_sql() + ")"
+        # 러너 진행 메시지뿐 아니라 본문이 남은 숨김 assistant 행도 같이 내려보낸다.
+        # streaming_placeholder 허용은 라이브 전용이다(SSE 버블과 중복 렌더 방지).
+        hidden_filter += (
+            " AND (is_hidden = FALSE"
+            + _substantial_hidden_assistant_allow_sql()
+            + _runner_progress_allow_sql()
+            + ")"
+        )
     if is_active and not include_streaming:
         # 활성 스트리밍 중에는 SSE 버블과 DB placeholder 중복 렌더링을 막는다.
         hidden_filter += " AND intent IS DISTINCT FROM 'streaming_placeholder'"

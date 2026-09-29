@@ -64,7 +64,9 @@ def test_visibility_sql_preserves_meaningful_interrupted_and_runner_replies():
     history = chat_service._visible_message_filter(is_active=False, include_streaming=False)
 
     assert "intent IN ('runner_response', 'interrupted_partial', '_archived_partial')" in active
-    assert "length(COALESCE(content, '')) > 200" in active
+    assert "btrim(" in active
+    assert "intent IN ('runner_response', 'interrupted_partial', '_archived_partial')" in history
+    assert "btrim(" in history
     assert "intent IS DISTINCT FROM 'runner_response'" not in active
     assert "intent IS DISTINCT FROM 'runner_response'" not in history
     assert "is_hidden = FALSE" in active

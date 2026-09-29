@@ -102,3 +102,38 @@ def test_notice_phrases_are_stripped_in_sql():
     sql = chat_service._has_preserved_body_sql()
     assert "전체 LLM 장애" in sql
     assert "응답이 중단되어 여기까지 보존되었습니다" in sql
+
+
+def test_history_filter_allows_substantial_hidden_assistant_body():
+    sql = chat_service._visible_message_filter(False, False)
+    assert "'interrupted_partial'" in sql
+    assert chat_service._has_preserved_body_sql() in sql
+    assert "final_message_id" in sql
+
+
+def test_history_filter_has_no_streaming_placeholder_allow():
+    for is_active in (True, False):
+        sql = chat_service._visible_message_filter(is_active, False)
+        assert "OR intent = 'streaming_placeholder'" not in sql
+
+
+def test_live_filter_still_allows_streaming_placeholder():
+    sql = chat_service._visible_message_filter(True, True)
+    assert "OR intent = 'streaming_placeholder'" in sql
+    assert chat_service._substantial_hidden_assistant_allow_sql() in sql
+
+
+def test_active_history_filter_excludes_streaming_placeholder():
+    sql = chat_service._visible_message_filter(True, False)
+    assert "AND intent IS DISTINCT FROM 'streaming_placeholder'" in sql
+
+
+async def test_history_mode_shows_hidden_body_and_hides_notice_only():
+    rows = [
+        ("partial_body", "assistant", "interrupted_partial", True, BODY_96 + TAIL, None),
+        ("partial_notice", "assistant", "interrupted_partial", True, NOTICE_58, None),
+        ("runner_body", "assistant", "runner_response", True, BODY_96, None),
+        ("placeholder", "assistant", "streaming_placeholder", True, "x" * 300, None),
+        ("archived_with_final", "assistant", "_archived_partial", True, "x" * 300, {"final_message_id": str(uuid.uuid4())}),
+    ]
+    assert await _visible(rows, include_streaming=False) == {"partial_body", "runner_body"}
