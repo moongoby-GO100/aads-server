@@ -17,6 +17,10 @@
 #   따라서 인증 전에 이 스크립트가 (실수로) 돌더라도 행이 생기지 않는다 —
 #   "후보 관계를 먼저 계산하되 인증 전에는 사용 불가"라는 요구를 SQL 수준에서 보장한다.
 # * ON CONFLICT DO NOTHING — 같은 배포를 다시 인증해도 중복 행이 생기지 않는다(멱등).
+#   충돌 대상을 적지 않는다. 짧은 참조와 40자 참조가 같은 커밋으로 풀리면
+#   (deploy_run_id, task_sha) 유니크에 걸리는데, (deploy_run_id, project, source_ref)
+#   만 지정하면 그 충돌은 흡수되지 않고 INSERT 전체가 실패해 0행이 된다
+#   (2026-09-29 실측: uq_deploy_release_provenance_run_task 위반).
 # * 이 스크립트는 컨테이너를 재시작하거나 이미지를 다시 만들지 않는다. 읽기(Git) +
 #   INSERT 만 한다. nginx 락/배포 락 범위를 건드리지 않는다.
 #
@@ -159,7 +163,7 @@ WHERE EXISTS (
       AND d.standby_digest IS NOT NULL
       AND d.image_digest = d.standby_digest
 )
-ON CONFLICT (deploy_run_id, project, source_ref) DO NOTHING;"
+ON CONFLICT DO NOTHING;"
 
 if [[ "$EMIT_SQL_ONLY" == "true" ]]; then
     printf '%s\n' "$SQL"

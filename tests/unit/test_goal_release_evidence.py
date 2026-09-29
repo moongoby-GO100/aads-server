@@ -863,7 +863,9 @@ def test_hook_sql_carries_the_certified_deploy_gate_and_is_idempotent(release_re
     assert "d.phase = 'completed'" in sql
     assert "d.image_digest = d.standby_digest" in sql
     assert "d.image_digest IS NOT NULL" in sql and "d.standby_digest IS NOT NULL" in sql
-    assert "ON CONFLICT (deploy_run_id, project, source_ref) DO NOTHING" in sql
+    # 충돌 대상 없는 DO NOTHING — (deploy_run_id, task_sha) 유니크 충돌까지 흡수해야
+    # 짧은/40자 참조가 같은 커밋으로 풀려도 INSERT 전체가 실패하지 않는다.
+    assert "ON CONFLICT DO NOTHING" in sql
     # 인증 조건은 EXISTS 가드로 INSERT 안에 있다 — 인증 전 실행해도 0행이다.
     assert sql.index("WHERE EXISTS") < sql.index("ON CONFLICT")
 

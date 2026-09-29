@@ -21,6 +21,7 @@ from app.services.deploy_adapters.targets import ExecutionTarget, get_execution_
 
 PSQL = ("docker", "exec", "aads-postgres", "psql", "-U", "aads", "-d", "aads", "-qAt")
 TERMINAL = {"success", "failed", "blocked", "cancelled", "superseded"}
+PROVENANCE_RECORDER = ROOT / "scripts" / "record-release-provenance.sh"
 
 
 def sql_text(value: object, limit: int = 2000) -> str:
@@ -177,6 +178,36 @@ def verify_health(target: ExecutionTarget) -> None:
             raise RuntimeError(f"post-deploy health failed ({health.returncode}): {health_detail}")
 
 
+def record_release_provenance(run_id: int, row: dict[str, str], target: ExecutionTarget, status: str) -> None:
+    """Hand a certified run to record-release-provenance.sh; never raises.
+
+    The certification gate lives in the recorder's SQL (EXISTS on deploy_runs),
+    so this hook never INSERTs itself. Only a fully certified run is handed over:
+    success_partial (standby same-digest unmet) is held back here as well.
+    """
+    if status != "success":
+        print(f"[provenance] skip run {run_id}: status={status} is not certified", file=sys.stderr, flush=True)
+        return
+    # The recorder resolves lineage with local Git; SSH targets keep their history on the remote host.
+    if target.executor != "local" or not target.repo_path or not (Path(target.repo_path) / ".git").exists():
+        print(f"[provenance] skip run {run_id}: no local git history for {target.key}", file=sys.stderr, flush=True)
+        return
+    argv = [
+        "bash", str(PROVENANCE_RECORDER), "--repo", target.repo_path, "--deploy-run-id", str(run_id),
+        "--project", row["project"], "--component", row["component"], "--release-ref", row["release_sha"],
+    ]
+    try:
+        result = subprocess.run(argv, text=True, capture_output=True, timeout=90)
+    except Exception as exc:
+        print(f"[provenance] run {run_id} recorder error (non-fatal): {exc}", file=sys.stderr, flush=True)
+        return
+    detail = (result.stdout + "\n" + result.stderr).strip()[-1000:]
+    if result.returncode:
+        print(f"[provenance] run {run_id} recorder rc={result.returncode} (non-fatal): {detail}", file=sys.stderr, flush=True)
+    elif detail:
+        print(detail, file=sys.stderr, flush=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", required=True, type=int)
@@ -208,6 +239,7 @@ def main() -> int:
         update_run(args.run_id, "verifying", "post_deploy_health")
         verify_health(target)
         update_run(args.run_id, "success", "release_certified")
+        record_release_provenance(args.run_id, row, target, "success")
         print(json.dumps({"ok": True, "run_id": args.run_id, "target": target.key}), flush=True)
         return 0
     except subprocess.TimeoutExpired as exc:

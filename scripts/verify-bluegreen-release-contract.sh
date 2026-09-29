@@ -65,7 +65,8 @@ monitor_line="$(grep -n 'deploy_phase_end "p0p1_monitoring" "success"' "$deploy_
     || fail "release provenance must be recorded after the P0/P1 monitoring gate"
 grep -q "d.image_digest = d.standby_digest" "$provenance_hook" \
     || fail "provenance INSERT must carry the certified-deploy digest gate"
-grep -q "ON CONFLICT (deploy_run_id, project, source_ref) DO NOTHING" "$provenance_hook" \
+# 충돌 대상 없는 DO NOTHING 이어야 (deploy_run_id, task_sha) 유니크 충돌도 흡수된다.
+grep -q '^ON CONFLICT DO NOTHING;"$' "$provenance_hook" \
     || fail "provenance INSERT must be idempotent"
 grep -q '\^\[0-9a-f\]{40}\$' "$provenance_hook" \
     || fail "provenance must persist resolved commits only as full 40-char SHA"

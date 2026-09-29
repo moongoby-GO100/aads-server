@@ -1,3 +1,22 @@
+## 2026-09-29 19:50 KST — AADS-RELEASE-PROVENANCE-QUEUEWORKER-HOOK-R2: 큐 워커 계보 훅 + 멱등성 보강 + 5239~ 소급
+
+- 변경 파일
+  - `scripts/unified_component_deploy_worker.py`: `record_release_provenance()` 신규. `update_run(..., "success", "release_certified")` 직후 1회 호출. DB 직접 INSERT 없음 — `record-release-provenance.sh` 에 위임(인증 가드는 그 SQL). status≠success(예: success_partial) 면 호출 안 함, SSH 대상·로컬 .git 없음이면 로그 남기고 건너뜀, 레코더 rc≠0/예외/타임아웃(90s)은 stderr 로그만 — 배포 성공 유지.
+  - `scripts/record-release-provenance.sh`: `ON CONFLICT (deploy_run_id, project, source_ref) DO NOTHING` → `ON CONFLICT DO NOTHING`. 실측: 짧은/40자 참조가 같은 커밋으로 풀리면 `uq_deploy_release_provenance_run_task` 위반으로 INSERT 전체가 실패(0행, exit 5)했다(트랜잭션 ROLLBACK 재현). 대상 없는 DO NOTHING 은 같은 입력에서 1행 삽입.
+  - `scripts/verify-bluegreen-release-contract.sh`: 멱등성 검사 문자열을 새 절(`^ON CONFLICT DO NOTHING;"$`)로 교체.
+  - `tests/unit/test_goal_release_evidence.py`: 같은 단언 갱신(삭제 아님).
+  - `tests/unit/test_unified_worker_provenance_hook.py`: 신규 7건.
+- 검증: test_deploy_autoheal 102 passed / test_sync_standby_contract 5 / test_unified_worker_provenance_hook 7 / test_goal_release_evidence 59 / test_deploy_adapters 19 / test_deploy_terminal_state_contract 5 — 모두 PASS. `verify-bluegreen-release-contract.sh .` PASS.
+  - 참고(기존 문제, 이번 변경 무관): test_deploy_adapters.py 와 test_goal_release_evidence.py 를 한 프로세스로 같이 돌리면 20 errors(app.services 스텁 공유). 각각 단독으로는 전부 PASS.
+- 소급(기존 스위퍼 그대로): `deploy_autoheal.sh --provenance-sweep --since-run-id 5239 --limit 200` dry-run·실행 모두 대상 0건.
+  - COUNT/MAX: 작업 시작 1628/5238 → 스위프 직전 1705/5266 → 스위프 후 1705/5266. +77행은 run 5266 이 19:39:40 sync-standby 로 success 승격된 뒤 기존 지연 인증 훅이 19:40:07 에 기록한 것(내 실행 아님).
+  - 5266 레코더 2회 재실행 → rows 추가 0, 5266 은 77행/77 distinct source_ref/77 distinct task_sha 유지(멱등).
+  - 5248·5250·5255·5258·5261: status=success_partial, image_digest≠standby_digest → 인증 미충족, 기록 안 함(지시대로).
+  - **5260 은 기록되지 않았고 대상도 아니다**: project=GO100/backend(AADS/api 아님), phase=released(`sync_external_deploy_ledger.py` 257줄이 쓰는 외부 원장 동기화 값, 게이트는 phase='completed' 요구), image_digest·standby_digest 모두 NULL(게이트는 NOT NULL + 동일 요구). 게이트 세 항목 미충족. GO100 저장소 히스토리도 이 호스트에 없다(/root/kis-autotrade-v4 에 .git 없음).
+- **미결(CEO 판단)**: 통합 워커 대상(GO100/KIS/NTV2/SF/FOOD)은 phase=release_certified·digest 없음이라 현행 레코더 게이트(phase=completed + 동일 digest)로는 훅이 불려도 0행이다. 로컬 git 이 있는 대상은 FOOD/store-assistant 하나뿐. 비-AADS 컴포넌트의 인증 정의(digest 없는 인증)를 게이트에 넣을지는 설계 결정이라 이번에 바꾸지 않았다.
+- **미등록 cron(운영 변경, CEO 승인 후 등록)**:
+  `23 * * * * cd /root/aads/aads-server && flock -n /tmp/aads-provenance-sweep.lock timeout 300 bash scripts/deploy_autoheal.sh --provenance-sweep --days 3 --limit 50 >> /root/aads/aads-server/logs/provenance-sweep.log 2>&1`
+
 ## 2026-09-23 — 라일론 계좌 목록 표시 및 원천 거래 계좌 식별
 
 - CEO의 직접 API·화면 수정/배포 승인 후 별도 clean worktree에서 변경. 기본 작업공간 dirty 변경 보존.
