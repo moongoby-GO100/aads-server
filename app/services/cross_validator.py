@@ -21,6 +21,8 @@ KST = timezone(timedelta(hours=9))
 SEEN_TASKS_FILE = "/root/.genspark/directive_seen_tasks.json"
 AUTO_TRIGGER_SCRIPT = "/root/aads/scripts/auto_trigger.sh"
 RUNNING_DIR = "/root/.genspark/directives/running"
+# cost_tracking 원장은 폐기됐다(AADS-LLM-M9-COST-BASIS-20260930). 되살리면 True.
+COST_TRACKING_LEDGER_ACTIVE = False
 PENDING_DIR = "/root/.genspark/directives/pending"
 
 DATABASE_URL = os.getenv(
@@ -310,6 +312,12 @@ class CrossValidator(AutoRecovery):
     # ─── 검증 4: 비용 미기록 감지 ────────────────────────────────────────────
 
     async def check_cost_tracking(self) -> list:
+        # cost_tracking 은 폐기된 원장이다(AADS-LLM-M9-COST-BASIS-20260930).
+        # 기록하는 코드가 없으므로 이 검사는 완료된 모든 작업을 "비용 미기록" 으로
+        # 오탐한다. 비용 정본은 oauth_usage_log 이고, 러너 작업 귀속은
+        # oauth_usage_log.job_id 로 본다. 오탐 경보는 진짜 경보를 무디게 하므로 끈다.
+        if not COST_TRACKING_LEDGER_ACTIVE:
+            return []
         issues = []
         async with self.pool.acquire() as conn:
             no_cost = await conn.fetch("""

@@ -383,6 +383,78 @@ db_update() {
     return 0
 }
 
+RUNNER_CLI_USAGE_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner_cli_usage.py"
+
+# AADS-LLM-M9-COST-BASIS (2026-09-30): 러너 CLI 사용량을 oauth_usage_log 에
+# job_id 와 함께 남긴다. 그동안 러너는 CLI 를 직접 띄우고 아무것도 적지 않아
+# 러너 비용이 러너 작업에 귀속되지 않았다(pipeline_jobs 조인 0건).
+#
+# claude_cli 는 사용량을 얻으려고 --output-format json 으로 띄운다. 그러면 출력
+# 파일이 JSON 원문이 되므로 되돌리기는 러너 정확성의 일부다. 그래서 둘을 나눈다
+# (rework 1, 2026-09-30 리뷰 지적 1·2):
+#   runner_cli_usage_ready          헬퍼·python3 가 없으면 json 으로 띄우지 않는다.
+#   restore_runner_claude_output    출력 파일을 text 결과로 되돌리고 **검사한다**.
+#                                   되돌리지 못하면 1 — 호출자가 시도를 실패로 본다.
+#   record_runner_cli_usage         보존된 원문을 읽기만 한다. 실패해도 사용량 한
+#                                   건을 잃을 뿐 출력 파일은 건드리지 않는다.
+runner_cli_usage_ready() {
+    [[ -f "$RUNNER_CLI_USAGE_BIN" ]] && command -v python3 >/dev/null 2>&1
+}
+
+runner_output_is_cli_result_json() {
+    # CLI 결과 객체는 {"type":"result",...} 한 줄이다. 파일이 그것으로 **시작할 때만** 참이다 —
+    # 되돌린 text 결과가 본문에서 이 문자열을 언급해도 실패로 오판하지 않는다.
+    # grep -q 파이프는 쓰지 않는다 — 일찍 닫히면 SIGPIPE(141)가 pipefail 로 거짓이 된다.
+    local f="$1" head_text=""
+    [[ -s "$f" ]] || return 1
+    head_text=$(head -c 256 "$f" 2>/dev/null | tr -d ' \t\r\n') || true
+    [[ "$head_text" == '{"type":"result"'* ]]
+}
+
+restore_runner_claude_output() {
+    local job_id="$1" output_file="$2"
+    local restore_out="" rc=0
+    restore_out=$(timeout 30 python3 "$RUNNER_CLI_USAGE_BIN" restore --output-file "$output_file" 2>&1) || rc=$?
+    if runner_output_is_cli_result_json "$output_file" && command -v jq >/dev/null 2>&1; then
+        # 헬퍼가 실패했다(시간초과·예외). 헬퍼와 무관한 jq 로 한 번 더 되돌린다.
+        [[ -s "${output_file}.usage.json" ]] || cp -f "$output_file" "${output_file}.usage.json"
+        if jq -er 'select(.type == "result") | (.result // "")' "${output_file}.usage.json" > "${output_file}.tmp" 2>/dev/null; then
+            mv -f "${output_file}.tmp" "$output_file"
+        else
+            rm -f "${output_file}.tmp"
+        fi
+    fi
+    if runner_output_is_cli_result_json "$output_file"; then
+        log "  RUNNER_CLI_JSON_RESTORE_FAILED job=$job_id rc=$rc detail='${restore_out:0:200}' → 출력이 JSON 원문이라 이 시도를 실패로 본다"
+        return 1
+    fi
+    [[ $rc -eq 0 ]] || log "  RUNNER_CLI_JSON_RESTORE_WARN job=$job_id rc=$rc detail='${restore_out:0:200}' (출력은 text 로 확인됨)"
+    return 0
+}
+
+record_runner_cli_usage() {
+    local job_id="$1" kind="$2" output_file="$3" slot="$4" model="$5" exit_code="$6" duration_ms="$7"
+    [[ -n "$job_id" ]] || return 0
+    if ! runner_cli_usage_ready; then
+        log "  RUNNER_CLI_USAGE_SKIP job=$job_id reason=helper_or_python3_missing bin=$RUNNER_CLI_USAGE_BIN"
+        return 0
+    fi
+    local usage_sql="" usage_err rc=0
+    usage_err=$(mktemp 2>/dev/null || echo "/tmp/runner_cli_usage.$$.err")
+    usage_sql=$(timeout 30 python3 "$RUNNER_CLI_USAGE_BIN" usage \
+        --kind "$kind" --output-file "$output_file" --job-id "$job_id" \
+        --slot "$slot" --model "$model" \
+        --exit-code "${exit_code:-0}" --duration-ms "${duration_ms:-0}" 2>"$usage_err") || rc=$?
+    if [[ $rc -ne 0 || -z "$usage_sql" ]]; then
+        # 조용히 삼키지 않는다 — 사용량 누락은 비용 계측 결손이다.
+        log "  RUNNER_CLI_USAGE_FAILED job=$job_id kind=$kind rc=$rc err='$(head -c 300 "$usage_err" 2>/dev/null | tr '\n' ' ')'"
+    else
+        db_update "$usage_sql"
+    fi
+    rm -f "$usage_err"
+    return 0
+}
+
 record_runner_event() {
     local job_id="$1" event_type="$2" status="${3:-}" phase="${4:-}" model="${5:-}" actual_model="${6:-}" size="${7:-}" duration_ms="${8:-}"
     local metadata_json
@@ -2626,6 +2698,7 @@ ${safe_instruction}"
         attempt_started_ms=$(date +%s%3N 2>/dev/null || date +%s000)
         record_runner_event "$job_id" "model_attempt_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"token_slot\":\"${token_slot}\"}"
         local runner_kind="claude_cli"
+        local claude_json_output="text"
         if [[ "$current_model" == codex:* ]]; then
             # AADS-RUNNER-CODEX-ACCOUNT (2026-09-19)
             # 쿨다운 마커는 계정이 아니라 codex 전체를 막는다. 한도가 남은 계정이
@@ -2711,10 +2784,18 @@ ${safe_instruction}"
                 log "MODEL_CONTRACT_REJECTED job=$job_id requested=$current_model"
                 attempt=$((attempt + 1)); sleep 2; continue
             fi
-            # Text output does not contain provider model evidence.
+            # The runner does not use the JSON model receipt for the model contract.
             effective_model="unverified"
             log "MODEL_CONTRACT job=$job_id requested=$current_model cli_model=$claude_cli_model verification=cli_argument_only"
-            local claude_args=(--model "$claude_cli_model" -p --output-format text)
+            # AADS-LLM-M9-COST-BASIS (2026-09-30): json 으로 받아야 CLI 가 보고한
+            # 모델별 토큰·costUSD 를 얻는다. text 로는 러너 비용이 어디에도 남지 않아
+            # 러너 작업당 비용을 계산할 수 없었다. 종료 직후 restore_runner_claude_output
+            # 이 출력 파일을 text 모드와 같은 결과 텍스트로 되돌리고 검사한다.
+            # 되돌릴 헬퍼가 없으면 json 으로 띄우지 않는다 — 원문이 하류로 새지 않게.
+            local claude_output_format="text"
+            runner_cli_usage_ready && claude_output_format="json"
+            claude_json_output="$claude_output_format"
+            local claude_args=(--model "$claude_cli_model" -p --output-format "$claude_output_format")
             # ── root 에서도 파일을 쓸 수 있어야 한다 (AADS-RUNNER-ROOT-WRITE, 2026-09-16) ──
             # 실측 2026-09-16 11:5x KST, CLI 2.1.273:
             #   플래그만 주면  → "--dangerously-skip-permissions cannot be used with
@@ -2766,6 +2847,13 @@ ${safe_instruction}"
         # pipeline_jobs.runner_pid on BASHPID so watchdog tracks the whole job.
 
         wait_runner_cli_process "$job_id" "$claude_pid" "$output_file" "$err_file" "$current_model" "$effective_model" "$job_size" "$((attempt+1))" "$total_attempts" "$cycle_num" "$runner_kind" "$cli_started_ms" "0" || exit_code=$?
+        # json 원문을 하류 판정이 읽기 전에 text 로 되돌린다. 되돌리지 못하면 이 시도는
+        # 실패다 — JSON 을 결과 텍스트로 넘기면 성공 판정·결과 추출·리뷰 입력이 전부 틀린다.
+        if [[ "$runner_kind" == "claude_cli" && "$claude_json_output" == "json" ]]; then
+            if ! restore_runner_claude_output "$job_id" "$output_file"; then
+                exit_code=1
+            fi
+        fi
 
         # AADS-241: Codex 연결 재시도 (5초 x 12회 = 60초, 에러/리밋 즉시 폴백)
         if [[ $exit_code -ne 0 && "$current_model" == codex:* ]]; then
@@ -2838,6 +2926,10 @@ ${safe_instruction}"
         local attempt_finished_ms attempt_duration_ms
         attempt_finished_ms=$(date +%s%3N 2>/dev/null || date +%s000)
         attempt_duration_ms=$((attempt_finished_ms - attempt_started_ms))
+        case "$runner_kind" in
+            claude_cli) record_runner_cli_usage "$job_id" "$runner_kind" "$output_file" "$token_slot" "${claude_cli_model:-$current_model}" "$exit_code" "$attempt_duration_ms" ;;
+            codex_cli) record_runner_cli_usage "$job_id" "$runner_kind" "$output_file" "" "${current_model#codex:}" "$exit_code" "$attempt_duration_ms" ;;
+        esac
         record_runner_event "$job_id" "model_attempt_completed" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "$attempt_duration_ms" "{\"attempt\":$((attempt+1)),\"exit_code\":${exit_code},\"success\":$([[ $exit_code -eq 0 ]] && echo true || echo false)}"
 
         if [[ $exit_code -eq 0 ]]; then

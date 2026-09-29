@@ -2197,6 +2197,13 @@ async def get_costs():
                 "total_cost_usd": round(float(summary_row["total_cost_usd"]), 6),
                 "total_tokens": int(summary_row["total_tokens"]),
                 "cost_status": "active" if cost_count > 0 else "no_data",
+                # task_cost_log 는 폐기된 원장이다(AADS-LLM-M9-COST-BASIS-20260930).
+                # POST /dashboard/cost-log 를 부르는 곳이 없어 2026-03-05 이후 비어
+                # 있다. 비어 있는 것이 정상이며, 실제 비용은 oauth_usage_log 에 있다.
+                "source": "task_cost_log",
+                "source_status": "retired",
+                "canonical_source": "oauth_usage_log",
+                "canonical_endpoint": "/api/v1/ops/llm-cost/per-success",
             },
             "by_project": by_project,
             "by_project_model": by_project_model,

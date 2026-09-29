@@ -1097,6 +1097,13 @@ async def cost_summary(
             "days": days,
             "grand_total_usd": float(total["grand_total"] or 0),
             "total_records": total["total_records"],
+            # cost_tracking 은 폐기된 원장이다(AADS-LLM-M9-COST-BASIS-20260930).
+            # 쓰는 코드가 없어 2026-03-11 이후 비어 있다 — 0 은 "비용 0" 이 아니라
+            # "이 원장에 기록 없음" 이다. 정본은 oauth_usage_log.
+            "source": "cost_tracking",
+            "source_status": "retired",
+            "canonical_source": "oauth_usage_log",
+            "canonical_endpoint": "/api/v1/ops/llm-cost/per-success",
             "by_project": [dict(r) for r in by_project],
             "by_model": [dict(r) for r in by_model],
             "by_day": [dict(r) for r in by_day],
@@ -3645,6 +3652,34 @@ async def ops_cost_trend(
             "2026-03-11 이후 기록이 멈췄다. 최근 값이 0 이면 비용이 0 이 아니라 "
             "기록이 없는 것이다."
         )
+    return payload
+
+
+@router.get("/ops/llm-cost/per-success")
+async def ops_llm_cost_per_success(
+    days: int = Query(7, description="집계 일수 (1~90, 벗어나면 잘라낸다)"),
+):
+    """표면·모델·비용출처별 성공 작업당 비용 — M9 (AADS-LLM-M9-COST-BASIS-20260930).
+
+    원천은 oauth_usage_log 하나다. 표면 판정·분모·표본 규칙은
+    app.services.llm_cost_basis 에 있다. 분모가 정의되지 않은 표면은 NULL 을
+    돌려준다 — 임의의 분모를 만들지 않는다.
+    """
+    from app.services.llm_cost_basis import fetch_cost_per_success
+
+    days = _clamp_int(days, default=7, minimum=1, maximum=90)
+    try:
+        conn = await _get_conn()
+        try:
+            payload = await fetch_cost_per_success(conn, days)
+        finally:
+            await conn.close()
+    except Exception as e:
+        # DB 오류 문구(테이블·열 이름)를 응답에 싣지 않는다 — 로그에만 남긴다
+        # (rework 2, 리뷰 지적 8).
+        logger.error("ops_llm_cost_per_success_error", error=str(e))
+        raise HTTPException(status_code=500, detail="llm cost per-success query failed")
+    payload["generated_at"] = datetime.now(KST).isoformat()
     return payload
 
 

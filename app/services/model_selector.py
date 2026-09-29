@@ -3875,7 +3875,10 @@ async def _stream_cli_relay_once(
                             _out = int(_u.get("output_tokens") or 0)
                             _cc = int(_u.get("cache_creation_input_tokens") or 0)
                             _cr = int(_u.get("cache_read_input_tokens") or 0)
-                            _cost = float(event.get("total_cost_usd") or 0)
+                            # total_cost_usd 는 CLI 가 스스로 보고한 값이다. 없으면 0 이 아니라
+                            # 미측정이다 — 출처를 붙여 적는다 (AADS-LLM-M9-COST-BASIS).
+                            _cost_raw = event.get("total_cost_usd")
+                            _cost = None if _cost_raw is None else float(_cost_raw)
                             # 턴 계측에도 같은 값을 넘긴다. SDK 경로에만 훅을
                             # 걸어 뒀더니 이 릴레이 경로로 온 턴은 캐시 토큰이
                             # 0 으로 남았다(2026-09-17 배포 직후 첫 표본에서
@@ -3904,6 +3907,7 @@ async def _stream_cli_relay_once(
                                 cache_creation_tokens=_cc,
                                 cache_read_tokens=_cr,
                                 cost_usd=_cost,
+                                cost_source="relay_reported",
                                 call_source="cli_relay",
                                 session_id=session_id or "",
                                 account_slot=str(oauth_slot or ""),
@@ -4537,6 +4541,8 @@ async def _stream_codex_relay_once(
                                 input_tokens=int(in_tok or 0),
                                 output_tokens=int(out_tok or 0),
                                 cost_usd=float(cost),
+                                # _COST_MAP 단가표로 앱이 계산한 추정값이다. 릴레이 보고값이 아니다.
+                                cost_source="catalog_estimated",
                                 call_source="codex_relay",
                                 session_id=session_id or "",
                                 account_slot="codex",
@@ -4958,7 +4964,10 @@ async def _run_agent_sdk_with_key(
         logger.info(f"agent_sdk_session_map: aads={session_id[:8]} -> cli={_captured_cli_sid[:8]}")
 
     # done 이벤트 + 사용량 DB 기록
-    cost = total_cost if total_cost else float(_estimate_cost("claude-sonnet", in_tokens, out_tokens))
+    # total_cost 는 함수 머리에서 0.0 으로 초기화되고 ResultMessage 가 보고값으로 덮는다.
+    # 비용 값과 cost_source 는 같은 판정(_sdk_cost_reported) 하나로 정한다 (AADS-LLM-M9-COST-BASIS).
+    _sdk_cost_reported = bool(total_cost)
+    cost = total_cost if _sdk_cost_reported else float(_estimate_cost("claude-sonnet", in_tokens, out_tokens))
     # Agent SDK 경로: 헤더 없지만 토큰 사용량은 기록
     _sdk_tokens = _ap_get_tokens()
     _sdk_token = _sdk_tokens[0] if _sdk_tokens else ""
@@ -4973,6 +4982,7 @@ async def _run_agent_sdk_with_key(
         token=_sdk_token, model=sdk_model,
         input_tokens=in_tokens, output_tokens=out_tokens,
         cost_usd=cost,
+        cost_source="relay_reported" if _sdk_cost_reported else "catalog_estimated",
         call_source="model_selector_sdk",
         session_id=session_id or "",
         tenant_id=_tenant_id or None,

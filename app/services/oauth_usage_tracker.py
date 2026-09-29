@@ -68,7 +68,25 @@ _USAGE_LOG_COLUMNS: Tuple[str, ...] = (
     "unified_fallback",
     "unified_fallback_pct",
     "tenant_id",
+    # AADS-LLM-M9-COST-BASIS: 비용 출처와 러너 작업 귀속.
+    # migrations/20260930_oauth_usage_cost_basis.sql 이 추가한다.
+    "cost_source",
+    "job_id",
 )
+# 위 두 컬럼이 없던 스키마(마이그레이션 적용 전)용 열 목록.
+_USAGE_LOG_LEGACY_COLUMNS: Tuple[str, ...] = tuple(
+    c for c in _USAGE_LOG_COLUMNS if c not in ("cost_source", "job_id")
+)
+# 스키마에 cost-basis 컬럼이 없음을 확인하면 한동안 옛 열 목록으로 적는다.
+# 한 번의 스키마 불일치가 모든 사용량 기록을 막았던 2026-09-12 사고를 반복하지 않는다.
+# 영구히 꺼 두지 않는다(rework 1, 리뷰 지적 5): 운영 중에 마이그레이션을 적용하면
+# 재시작 없이 _COST_BASIS_RECHECK_SEC 안에 새 열로 돌아온다. 열(cost_source·job_id)과
+# 정가 함수(llm_catalog_cost_usd·cost_usd_catalog)는 따로 판정한다 — 함수만 빠진
+# 부분 적용 상태에서 cost_source·job_id 까지 잃지 않기 위함이다.
+# 값은 "이 시각(monotonic) 전까지는 없다고 본다" 이다. 0 이면 있다고 본다.
+_COST_BASIS_RECHECK_SEC = 300.0
+_COST_BASIS_COLUMNS_MISSING_UNTIL = 0.0
+_COST_BASIS_CATALOG_MISSING_UNTIL = 0.0
 
 # ── 토큰 → 슬롯 매핑 ──────────────────────────────────────────────────
 
@@ -220,7 +238,7 @@ def _usage_log_values(entry: Dict[str, Any]) -> Tuple[Any, ...]:
         entry["output_tokens"],
         entry["cache_creation_tokens"],
         entry["cache_read_tokens"],
-        float(entry["cost_usd"]),
+        None if entry["cost_usd"] is None else float(entry["cost_usd"]),
         rl.get("rl_requests_limit"),
         rl.get("rl_requests_remaining"),
         rl.get("rl_requests_reset"),
@@ -247,45 +265,165 @@ def _usage_log_values(entry: Dict[str, Any]) -> Tuple[Any, ...]:
         rl.get("unified_fallback"),
         rl.get("unified_fallback_pct"),
         entry.get("tenant_id"),
+        entry.get("cost_source") or "unknown",
+        entry.get("job_id") or None,
     )
+
+
+def _build_usage_insert(
+    entries: List[Dict[str, Any]],
+    columns: Tuple[str, ...],
+    *,
+    with_catalog: bool,
+) -> Tuple[str, List[Any]]:
+    """INSERT 문과 인자를 만든다.
+
+    with_catalog 이면 cost_usd_catalog 를 **DB 함수로** 채운다 —
+    llm_catalog_cost_usd(model, input, output). 앱이 넘긴 cost_usd 를 이 칸에
+    복사하지 않는다. 정가 추산과 실보고를 같은 칸에 섞지 않기 위함이다.
+    """
+    column_count = len(columns)
+    column_sql = ", ".join(columns) + (", cost_usd_catalog" if with_catalog else "")
+    model_idx = columns.index("model")
+    in_idx = columns.index("input_tokens")
+    out_idx = columns.index("output_tokens")
+    values_sql: List[str] = []
+    args: List[Any] = []
+    for row_index, entry in enumerate(entries):
+        base = row_index * column_count
+        # tenant_id 는 NOT NULL 이고 컬럼 기본값이 aads_internal_tenant_id()
+        # 인데, NULL 을 명시적으로 넘기면 기본값이 적용되지 않고 제약 위반으로
+        # 배치 전체가 깨진다. 실패한 배치는 버퍼로 되돌아가 무한 재시도되므로
+        # 한 건의 tenant_id 누락이 모든 사용량 기록을 영구히 막는다
+        # (2026-09-12: CLI 릴레이 적재가 이 이유로 한 건도 남지 않았다).
+        # tenant_id 자리만 COALESCE 로 감싼다.
+        placeholders = ", ".join(
+            (
+                f"COALESCE(${base + column_index + 1}, aads_internal_tenant_id())"
+                if columns[column_index] == "tenant_id"
+                else f"${base + column_index + 1}"
+            )
+            for column_index in range(column_count)
+        )
+        if with_catalog:
+            placeholders += (
+                f", llm_catalog_cost_usd(${base + model_idx + 1}::text, "
+                f"${base + in_idx + 1}::bigint, ${base + out_idx + 1}::bigint)"
+            )
+        values_sql.append(f"({placeholders})")
+        values = _usage_log_values(entry)
+        args.extend(values[: column_count])
+    sql = f"INSERT INTO oauth_usage_log ({column_sql}) VALUES {', '.join(values_sql)}"
+    return sql, args
+
+
+# 스키마 부재 판정은 오류 문구가 아니라 SQLSTATE 로 한다(rework 2, 리뷰 지적 4).
+# 문구는 lc_messages·서버 버전에 따라 바뀌지만 SQLSTATE 는 바뀌지 않는다.
+_SQLSTATE_UNDEFINED_COLUMN = "42703"
+_SQLSTATE_UNDEFINED_FUNCTION = "42883"
+_SQLSTATE_UNDEFINED_TABLE = "42P01"
+_SQLSTATE_NOT_NULL_VIOLATION = "23502"
+_CATALOG_GAP_SQLSTATES = frozenset({
+    _SQLSTATE_UNDEFINED_COLUMN,
+    _SQLSTATE_UNDEFINED_FUNCTION,
+    _SQLSTATE_UNDEFINED_TABLE,
+})
+
+
+def _cost_basis_schema_gap(exc: Exception, *, with_catalog: bool) -> Optional[str]:
+    """cost-basis 스키마 부재면 'catalog' 또는 'columns', 아니면 None.
+
+    어느 부분이 없는지는 오류 문구가 아니라 **어떤 시도에서 났는가**로 정한다.
+    - 정가 함수를 넣은 시도의 42703/42883/42P01 → 'catalog'. 함수가 없거나
+      (42883), 함수 본문이 읽는 llm_models 열·테이블이 없거나(42703/42P01 —
+      "column m.provider does not exist" 도 여기 든다), cost_usd_catalog 열이
+      없는 경우다. 다음 시도는 정가 함수만 빼고 cost_source·job_id 는 유지한다.
+      새 열 자체가 없어서 난 것이면 그다음 시도에서 'columns' 로 다시 잡힌다.
+    - 정가 함수 없이 새 열만 넣은 시도의 42703 → 'columns'.
+    그 밖의 오류(연결 끊김 등)는 None — 호출자가 올려 보내 버퍼 재시도에 맡긴다.
+    """
+    sqlstate = getattr(exc, "sqlstate", None)
+    if with_catalog:
+        return "catalog" if sqlstate in _CATALOG_GAP_SQLSTATES else None
+    return "columns" if sqlstate == _SQLSTATE_UNDEFINED_COLUMN else None
+
+
+def _is_cost_usd_not_null_violation(exc: Exception) -> bool:
+    """cost_usd 에 NOT NULL 이 걸린 스키마(마이그레이션 미적용 환경)에서 NULL 을 넣은 경우.
+
+    2026-09-30 운영 DB 실측으로는 cost_usd 는 nullable 이고, 마이그레이션도
+    DROP NOT NULL 을 보증한다. 그래도 이 오류가 나면 재시도해도 영원히 실패하므로
+    버퍼로 되돌리지 않는다 — 2026-09-12 tenant_id 사고의 무한 재시도를 반복하지 않는다.
+    판정은 SQLSTATE 23502 와 서버가 채워 주는 column_name 으로 한다(문구 비교 없음).
+    """
+    return (
+        getattr(exc, "sqlstate", None) == _SQLSTATE_NOT_NULL_VIOLATION
+        and getattr(exc, "column_name", None) == "cost_usd"
+    )
+
+
+class _UsageBatchNotRetryable(Exception):
+    """재시도해도 같은 이유로 실패할 배치. 버퍼로 되돌리지 않는다."""
+
+
+def _cost_basis_available(until: float) -> bool:
+    return _time.monotonic() >= until
 
 
 async def _insert_usage_batch(entries: List[Dict[str, Any]]) -> None:
     """배치 INSERT."""
+    global _COST_BASIS_COLUMNS_MISSING_UNTIL, _COST_BASIS_CATALOG_MISSING_UNTIL
     if not entries:
         return
 
     pool = get_pool()
     async with pool.acquire() as conn:
         chunk_size = 100
-        column_sql = ", ".join(_USAGE_LOG_COLUMNS)
-        column_count = len(_USAGE_LOG_COLUMNS)
         for chunk_start in range(0, len(entries), chunk_size):
             chunk = entries[chunk_start:chunk_start + chunk_size]
-            values_sql: List[str] = []
-            args: List[Any] = []
-            for row_index, entry in enumerate(chunk):
-                base = row_index * column_count
-                # tenant_id 는 NOT NULL 이고 컬럼 기본값이 aads_internal_tenant_id()
-                # 인데, NULL 을 명시적으로 넘기면 기본값이 적용되지 않고 제약 위반으로
-                # 배치 전체가 깨진다. 실패한 배치는 버퍼로 되돌아가 무한 재시도되므로
-                # 한 건의 tenant_id 누락이 모든 사용량 기록을 영구히 막는다
-                # (2026-09-12: CLI 릴레이 적재가 이 이유로 한 건도 남지 않았다).
-                # 마지막 자리가 tenant_id 이므로 그 자리만 COALESCE 로 감싼다.
-                placeholders = ", ".join(
-                    (
-                        f"COALESCE(${base + column_index + 1}, aads_internal_tenant_id())"
-                        if _USAGE_LOG_COLUMNS[column_index] == "tenant_id"
-                        else f"${base + column_index + 1}"
+            # 시도 순서: (새 열 + 정가 함수) → (새 열) → (옛 열). 없다고 판정된 것은 건너뛴다.
+            attempts: List[Tuple[Tuple[str, ...], bool]] = []
+            if _cost_basis_available(_COST_BASIS_COLUMNS_MISSING_UNTIL):
+                if _cost_basis_available(_COST_BASIS_CATALOG_MISSING_UNTIL):
+                    attempts.append((_USAGE_LOG_COLUMNS, True))
+                attempts.append((_USAGE_LOG_COLUMNS, False))
+            attempts.append((_USAGE_LOG_LEGACY_COLUMNS, False))
+            for columns, with_catalog in attempts:
+                if columns is _USAGE_LOG_COLUMNS and not _cost_basis_available(
+                    _COST_BASIS_COLUMNS_MISSING_UNTIL
+                ):
+                    continue
+                sql, args = _build_usage_insert(chunk, columns, with_catalog=with_catalog)
+                try:
+                    await conn.execute(sql, *args)
+                    break
+                except Exception as e:
+                    if _is_cost_usd_not_null_violation(e):
+                        logger.error(
+                            "oauth_usage_cost_usd_not_null: %s — 미측정 비용(NULL)을 받을 수 없는 "
+                            "스키마다. migrations/20260930_oauth_usage_cost_basis.sql 을 적용하라. "
+                            "이 배치 %d건은 재시도하지 않는다.",
+                            str(e)[:160], len(chunk),
+                        )
+                        raise _UsageBatchNotRetryable(str(e)) from e
+                    gap = (
+                        _cost_basis_schema_gap(e, with_catalog=with_catalog)
+                        if columns is _USAGE_LOG_COLUMNS
+                        else None
                     )
-                    for column_index in range(column_count)
-                )
-                values_sql.append(f"({placeholders})")
-                args.extend(_usage_log_values(entry))
-            await conn.execute(
-                f"INSERT INTO oauth_usage_log ({column_sql}) VALUES {', '.join(values_sql)}",
-                *args,
-            )
+                    if gap is None:
+                        raise
+                    until = _time.monotonic() + _COST_BASIS_RECHECK_SEC
+                    if gap == "catalog":
+                        _COST_BASIS_CATALOG_MISSING_UNTIL = until
+                    else:
+                        _COST_BASIS_COLUMNS_MISSING_UNTIL = until
+                    logger.warning(
+                        "oauth_usage_cost_basis_schema_missing: part=%s %s — %.0f초 동안 %s "
+                        "(migrations/20260930_oauth_usage_cost_basis.sql 미적용/부분 적용)",
+                        gap, str(e)[:120], _COST_BASIS_RECHECK_SEC,
+                        "cost_usd_catalog 없이 기록한다" if gap == "catalog" else "옛 열 목록으로 기록한다",
+                    )
 
 
 async def _drain_usage_buffer() -> List[Dict[str, Any]]:
@@ -304,6 +442,8 @@ async def _flush_usage_buffer() -> None:
 
     try:
         await _insert_usage_batch(entries)
+    except _UsageBatchNotRetryable:
+        return
     except Exception as e:
         # 실패분을 무한히 되돌리면 한 번의 스키마 불일치가 버퍼를 영원히 키운다.
         # 되돌리되 상한을 두고, 넘치면 오래된 것부터 버린다. 사용량 기록은
@@ -356,6 +496,8 @@ async def _enqueue_usage(entry: Dict[str, Any]) -> None:
     if entries_to_flush:
         try:
             await _insert_usage_batch(entries_to_flush)
+        except _UsageBatchNotRetryable:
+            pass
         except Exception as e:
             async with _USAGE_LOG_LOCK:
                 _USAGE_LOG_BUFFER[:0] = entries_to_flush
@@ -369,7 +511,7 @@ def log_usage(
     output_tokens: int = 0,
     cache_creation_tokens: int = 0,
     cache_read_tokens: int = 0,
-    cost_usd: float = 0.0,
+    cost_usd: Optional[float] = None,
     headers: Any = None,
     call_source: str = "",
     session_id: str = "",
@@ -378,6 +520,8 @@ def log_usage(
     tenant_id: Optional[str] = None,
     account_slot: Optional[str] = None,
     rate_limit_info: Optional[Dict[str, Any]] = None,
+    cost_source: Optional[str] = None,
+    job_id: Optional[str] = None,
 ) -> None:
     """사용량 기록 (buffered fire-and-forget). LLM 호출 직후 호출.
 
@@ -387,7 +531,16 @@ def log_usage(
 
     rate_limit_info 는 헤더가 없는 CLI 경로가 받은 rate_limit_event 본문이다.
     헤더 값이 있으면 헤더가 우선한다.
+
+    cost_source 는 cost_usd 의 출처다(relay_reported / catalog_estimated /
+    unknown). 밝히지 않으면 unknown 이고, 값이 없으면 NULL 로 적힌다 — 측정하지
+    않은 비용을 0 달러로 적지 않는다. 정가 재계산값(cost_usd_catalog)은 DB 가
+    기록 시점 llm_models 로 따로 채운다. job_id 는 러너 실행 컨텍스트의
+    pipeline_jobs.job_id 다 (llm_cost_basis 참조).
     """
+    from app.services.llm_cost_basis import resolve_cost_fields
+
+    cost_value, cost_source_value = resolve_cost_fields(cost_usd, cost_source)
     rl = parse_ratelimit_headers(headers)
     for _key, _value in parse_cli_rate_limit_info(rate_limit_info).items():
         if rl.get(_key) is None:
@@ -411,13 +564,15 @@ def log_usage(
         "output_tokens": output_tokens,
         "cache_creation_tokens": cache_creation_tokens,
         "cache_read_tokens": cache_read_tokens,
-        "cost_usd": cost_usd,
+        "cost_usd": cost_value,
+        "cost_source": cost_source_value,
         "rl": rl,
         "call_source": call_source,
         "session_id": session_id or "",
         "error_code": error_code,
         "duration_ms": duration_ms,
         "tenant_id": tenant_id,
+        "job_id": (str(job_id).strip()[:100] or None) if job_id else None,
     }
 
     try:

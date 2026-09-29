@@ -1,1380 +1,2624 @@
 diff --git a/app/api/ops.py b/app/api/ops.py
-index 21bb52c7..15f92509 100644
+index 60801e6f..5753152c 100644
 --- a/app/api/ops.py
 +++ b/app/api/ops.py
-@@ -3590,6 +3590,12 @@ async def ops_cost_trend(
-         "total_usd": round(sum(i["cost"] for i in items), 6),
-         "generated_at": now_kst.isoformat(),
-     }
-+    if source == "oauth_usage_log":
-+        # OAuth/Codex 구독 호출의 정가 환산값이다. 실청구로 읽으면 지출을 수십 배로
-+        # 부풀린다(2026-09-29 24시간 약 $11,162). 실청구는 측정하지 않는다.
-+        payload["cost_basis"] = "list_price_equivalent"
-+        payload["billed_usd"] = None
-+        payload["billed_status"] = "미측정"
-     if project_label:
-         payload["source_note"] = (
-             "프로젝트별 비용은 cost_tracking 에만 축이 있는데 이 테이블은 "
-diff --git a/app/services/llm_metric_normalization.py b/app/services/llm_metric_normalization.py
+@@ -1097,6 +1097,13 @@ async def cost_summary(
+             "days": days,
+             "grand_total_usd": float(total["grand_total"] or 0),
+             "total_records": total["total_records"],
++            # cost_tracking 은 폐기된 원장이다(AADS-LLM-M9-COST-BASIS-20260930).
++            # 쓰는 코드가 없어 2026-03-11 이후 비어 있다 — 0 은 "비용 0" 이 아니라
++            # "이 원장에 기록 없음" 이다. 정본은 oauth_usage_log.
++            "source": "cost_tracking",
++            "source_status": "retired",
++            "canonical_source": "oauth_usage_log",
++            "canonical_endpoint": "/api/v1/ops/llm-cost/per-success",
+             "by_project": [dict(r) for r in by_project],
+             "by_model": [dict(r) for r in by_model],
+             "by_day": [dict(r) for r in by_day],
+@@ -3648,6 +3655,34 @@ async def ops_cost_trend(
+     return payload
+ 
+ 
++@router.get("/ops/llm-cost/per-success")
++async def ops_llm_cost_per_success(
++    days: int = Query(7, description="집계 일수 (1~90, 벗어나면 잘라낸다)"),
++):
++    """표면·모델·비용출처별 성공 작업당 비용 — M9 (AADS-LLM-M9-COST-BASIS-20260930).
++
++    원천은 oauth_usage_log 하나다. 표면 판정·분모·표본 규칙은
++    app.services.llm_cost_basis 에 있다. 분모가 정의되지 않은 표면은 NULL 을
++    돌려준다 — 임의의 분모를 만들지 않는다.
++    """
++    from app.services.llm_cost_basis import fetch_cost_per_success
++
++    days = _clamp_int(days, default=7, minimum=1, maximum=90)
++    try:
++        conn = await _get_conn()
++        try:
++            payload = await fetch_cost_per_success(conn, days)
++        finally:
++            await conn.close()
++    except Exception as e:
++        # DB 오류 문구(테이블·열 이름)를 응답에 싣지 않는다 — 로그에만 남긴다
++        # (rework 2, 리뷰 지적 8).
++        logger.error("ops_llm_cost_per_success_error", error=str(e))
++        raise HTTPException(status_code=500, detail="llm cost per-success query failed")
++    payload["generated_at"] = datetime.now(KST).isoformat()
++    return payload
++
++
+ @router.get("/ops/project-stats")
+ async def ops_project_stats(
+     days: int = Query(30, description="집계 일수 (1~365, 벗어나면 잘라낸다)"),
+diff --git a/app/api/project_dashboard.py b/app/api/project_dashboard.py
+index 9ba53d82..cd07406f 100644
+--- a/app/api/project_dashboard.py
++++ b/app/api/project_dashboard.py
+@@ -2197,6 +2197,13 @@ async def get_costs():
+                 "total_cost_usd": round(float(summary_row["total_cost_usd"]), 6),
+                 "total_tokens": int(summary_row["total_tokens"]),
+                 "cost_status": "active" if cost_count > 0 else "no_data",
++                # task_cost_log 는 폐기된 원장이다(AADS-LLM-M9-COST-BASIS-20260930).
++                # POST /dashboard/cost-log 를 부르는 곳이 없어 2026-03-05 이후 비어
++                # 있다. 비어 있는 것이 정상이며, 실제 비용은 oauth_usage_log 에 있다.
++                "source": "task_cost_log",
++                "source_status": "retired",
++                "canonical_source": "oauth_usage_log",
++                "canonical_endpoint": "/api/v1/ops/llm-cost/per-success",
+             },
+             "by_project": by_project,
+             "by_project_model": by_project_model,
+diff --git a/app/services/cross_validator.py b/app/services/cross_validator.py
+index a7f5ccc1..e2ce23be 100644
+--- a/app/services/cross_validator.py
++++ b/app/services/cross_validator.py
+@@ -21,6 +21,8 @@ KST = timezone(timedelta(hours=9))
+ SEEN_TASKS_FILE = "/root/.genspark/directive_seen_tasks.json"
+ AUTO_TRIGGER_SCRIPT = "/root/aads/scripts/auto_trigger.sh"
+ RUNNING_DIR = "/root/.genspark/directives/running"
++# cost_tracking 원장은 폐기됐다(AADS-LLM-M9-COST-BASIS-20260930). 되살리면 True.
++COST_TRACKING_LEDGER_ACTIVE = False
+ PENDING_DIR = "/root/.genspark/directives/pending"
+ 
+ DATABASE_URL = os.getenv(
+@@ -310,6 +312,12 @@ class CrossValidator(AutoRecovery):
+     # ─── 검증 4: 비용 미기록 감지 ────────────────────────────────────────────
+ 
+     async def check_cost_tracking(self) -> list:
++        # cost_tracking 은 폐기된 원장이다(AADS-LLM-M9-COST-BASIS-20260930).
++        # 기록하는 코드가 없으므로 이 검사는 완료된 모든 작업을 "비용 미기록" 으로
++        # 오탐한다. 비용 정본은 oauth_usage_log 이고, 러너 작업 귀속은
++        # oauth_usage_log.job_id 로 본다. 오탐 경보는 진짜 경보를 무디게 하므로 끈다.
++        if not COST_TRACKING_LEDGER_ACTIVE:
++            return []
+         issues = []
+         async with self.pool.acquire() as conn:
+             no_cost = await conn.fetch("""
+diff --git a/app/services/llm_cost_basis.py b/app/services/llm_cost_basis.py
 new file mode 100644
-index 00000000..2fb50240
+index 00000000..78eb194e
 --- /dev/null
-+++ b/app/services/llm_metric_normalization.py
-@@ -0,0 +1,223 @@
-+"""LLM 지표 조회 시점 정규화 — 모델 차원·폴백 기록·비용 산출 근거.
++++ b/app/services/llm_cost_basis.py
+@@ -0,0 +1,382 @@
++"""M9 비용 계측 정본 — AADS-LLM-M9-COST-BASIS-20260930.
 +
-+원본 행(`oauth_usage_log`, `chat_turn_executions`, `pipeline_jobs`)은 건드리지
-+않는다. 같은 모델이 여러 이름으로 적혀 있어도(표시명 `GPT-6 Sol (Codex CLI)`,
-+공급자 접두어 `codex:gpt-6-sol`, 슬러그 `gpt-6-sol`) 읽을 때 하나로 모은다.
++정본은 `oauth_usage_log` 하나다. `task_cost_log`(2026-03-05 정지)·`cost_tracking`
++(2026-03-11 정지)은 기록하는 코드가 더 이상 없어 폐기했다. 새 기록 경로를 거기로
++되살리지 마라 — 두 원장을 합산하면 같은 호출이 두 번 잡힌다.
 +
-+2026-09-29 실측: `chat_turn_executions.actual_model` distinct 15종 중 상당수가
-+같은 모델의 다른 표기였고, `interrupted`/`stopped`/`unknown`/`unverified` 처럼
-+**모델이 아닌 상태값**이 모델 차원에 섞여 있었다(러너 경로 최대 항목이
-+`unverified` 145건). 상태값은 모델 차원에서 빼서 상태 차원으로 보낸다.
++이 모듈이 정하는 세 가지.
++
++1. **비용 출처(cost_source)** — `cost_usd` 가 누가 낸 값인가.
++   relay_reported(CLI/릴레이 자체 보고) · catalog_estimated(앱 단가표 추정) ·
++   unknown(미측정, cost_usd=NULL). 정가 재계산값은 `cost_usd_catalog` 에 **따로**
++   적고, 그 값은 DB 함수 `llm_catalog_cost_usd()` 가 기록 시점 `llm_models` 로
++   계산한다. 두 값을 한 컬럼에 섞지 않는 것이 불일치를 드러내는 유일한 방법이다.
++2. **표면(surface)** — chat / runner / terminal_cli / service / unknown.
++   `classify_surface()` 하나로만 판정한다. 추측하지 않고 식별자로 판정한다.
++3. **성공 작업당 비용** — 분모가 정의된 표면(runner)만 계산한다. 분모를 정의할 수
++   없는 표면은 NULL 과 `denominator_undefined` 로 답한다. 임의의 분모를 만들지 않는다.
 +"""
-+
 +from __future__ import annotations
 +
-+import json
-+import re
-+from typing import Any, Iterable
++from decimal import Decimal
++from typing import Any, Dict, Iterable, List, Optional, Tuple
 +
-+try:  # 클로드 별칭의 정본은 모델 계약이다. 여기서 따로 목록을 만들지 않는다.
-+    from scripts.claude_model_contract import ALIASES as _CLAUDE_ALIASES
-+except Exception:  # pragma: no cover - 계약 모듈이 없으면 별칭 해석만 건너뛴다
-+    _CLAUDE_ALIASES = {}
++COST_SOURCE_RELAY_REPORTED = "relay_reported"
++COST_SOURCE_CATALOG_ESTIMATED = "catalog_estimated"
++COST_SOURCE_UNKNOWN = "unknown"
++COST_SOURCES: Tuple[str, ...] = (
++    COST_SOURCE_RELAY_REPORTED,
++    COST_SOURCE_CATALOG_ESTIMATED,
++    COST_SOURCE_UNKNOWN,
++)
 +
-+# 모델 차원에 들어오면 안 되는 값. 실행 상태이거나 "모른다"는 표지다.
-+NON_MODEL_STATES = frozenset({
-+    "interrupted",
-+    "stopped",
-+    "unknown",
-+    "unverified",
-+    "cancelled",
-+    "canceled",
-+    "error",
-+    "failed",
-+    "none",
-+    "null",
-+    "n/a",
-+    # 자동 라우팅 표지 — CEO 가 모델을 고르지 않았다는 뜻이지 모델 이름이 아니다
-+    # (ceo_chat: req.model in {"mixture", "auto"} → 자동 라우팅).
-+    "mixture",
-+    "auto",
-+    # Claude CLI 가 모델 호출 없이 만든 합성 응답 표지(중단·오류 안내 등).
-+    # 2026-09-30 실측: chat_messages.model_used 24시간 147건.
-+    "<synthetic>",
++SURFACE_CHAT = "chat"
++SURFACE_RUNNER = "runner"
++SURFACE_TERMINAL_CLI = "terminal_cli"
++SURFACE_SERVICE = "service"
++SURFACE_UNKNOWN = "unknown"
++SURFACES: Tuple[str, ...] = (
++    SURFACE_CHAT,
++    SURFACE_RUNNER,
++    SURFACE_TERMINAL_CLI,
++    SURFACE_SERVICE,
++    SURFACE_UNKNOWN,
++)
++
++# 러너가 CLI 를 직접 띄워 남기는 call_source (scripts/runner_cli_usage.py).
++RUNNER_CALL_SOURCES = frozenset({"runner_claude_cli", "runner_codex_cli"})
++# 앱 안의 CLI 릴레이 경로 (model_selector._stream_cli_relay / _stream_codex_relay).
++CLI_RELAY_CALL_SOURCES = frozenset({"cli_relay", "codex_relay"})
++# 앱 내부 서비스 호출.
++SERVICE_CALL_SOURCES = frozenset({
++    "anthropic_client",
++    "anthropic_client_msg",
++    "model_selector_sdk",
++    "ceo_chat",
++    "ceo_chat_tools",
 +})
 +
-+_PROVIDER_PREFIXES = (
-+    "codex:",
-+    "litellm:",
-+    "claude:",
-+    "anthropic:",
-+    "anthropic/",
-+    "openai/",
++# 성공 작업당 비용을 낼 최소 성공 작업 수.
++MIN_SUCCESS_SAMPLE = 5
++
++# 러너 분모: 사람이 승인해 끝난 작업만 성공이다. rejected_done 은 제외한다.
++RUNNER_SUCCESS_STATUS = "done"
++
++PER_SUCCESS_OK = "ok"
++PER_SUCCESS_INSUFFICIENT = "insufficient_sample"
++PER_SUCCESS_DENOMINATOR_ZERO = "denominator_zero"
++PER_SUCCESS_DENOMINATOR_UNDEFINED = "denominator_undefined"
++# 분모는 충분한데 비용이 미측정이다. cost_source 의 'unknown' 과는 다른 이름공간이다 —
++# 상태값에 비용출처 상수를 빌려 쓰지 않는다(rework 2, 리뷰 지적 6).
++PER_SUCCESS_COST_UNKNOWN = "cost_unknown"
++PER_SUCCESS_STATUSES: Tuple[str, ...] = (
++    PER_SUCCESS_OK,
++    PER_SUCCESS_INSUFFICIENT,
++    PER_SUCCESS_DENOMINATOR_ZERO,
++    PER_SUCCESS_DENOMINATOR_UNDEFINED,
++    PER_SUCCESS_COST_UNKNOWN,
 +)
-+# 표시명 꼬리표: "GPT-6 Sol (Codex CLI)", "Claude Opus 5 (Claude CLI)"
-+_DISPLAY_SUFFIX_RE = re.compile(r"\s*\([^)]*\bcli\b[^)]*\)\s*$", re.IGNORECASE)
-+_WHITESPACE_RE = re.compile(r"\s+")
++
++# 분모가 정의된 표면. 채팅은 "성공한 대화" 를 식별할 수 있는 기록이 없다.
++_DENOMINATOR_DEFINED_SURFACES = frozenset({SURFACE_RUNNER})
 +
 +
-+def normalize_model_dimension(raw: Any) -> dict[str, Any]:
-+    """원시 모델 문자열을 (모델, 상태) 두 차원으로 나눈다.
++def normalize_cost_source(value: Any) -> Optional[str]:
++    text = str(value or "").strip().lower()
++    return text if text in COST_SOURCES else None
 +
-+    반환: {"model": 정규화 슬러그 | None, "state": 비모델 상태값 | None, "raw": 원문}
-+    모델이면 state 가 None, 상태값이면 model 이 None 이다.
++
++def resolve_cost_fields(
++    cost_usd: Any,
++    cost_source: Any = None,
++) -> Tuple[Optional[float], str]:
++    """(cost_usd, cost_source) 를 기록 가능한 쌍으로 정한다.
++
++    - 출처를 밝히지 않은 비용은 unknown 이다. 출처 없는 숫자는 정본이 아니다.
++    - unknown 인데 값이 0/None 이면 NULL 로 적는다 — 0 달러가 아니라 미측정이다.
++    - 보고/추정이라고 했는데 값이 없으면 unknown 으로 내린다.
++    - 이 함수는 정가 재계산값(cost_usd_catalog)을 절대 만들지 않는다. 그 값은
++      DB 함수 llm_catalog_cost_usd() 만 만든다.
 +    """
-+    text = str(raw or "").strip()
-+    if not text:
-+        return {"model": None, "state": "unknown", "raw": text}
-+
-+    lowered = text.lower()
-+    if lowered in NON_MODEL_STATES:
-+        return {"model": None, "state": lowered, "raw": text}
-+
-+    slug = _DISPLAY_SUFFIX_RE.sub("", text).strip()
-+    lowered_slug = slug.lower()
-+    for prefix in _PROVIDER_PREFIXES:
-+        if lowered_slug.startswith(prefix):
-+            slug = slug[len(prefix):]
-+            break
-+    slug = _WHITESPACE_RE.sub("-", slug.strip()).lower()
-+    if not slug or slug in NON_MODEL_STATES:
-+        return {"model": None, "state": slug or "unknown", "raw": text}
-+
-+    slug = _CLAUDE_ALIASES.get(slug, slug)
-+    return {"model": slug, "state": None, "raw": text}
-+
-+
-+# ── 폴백 기록 ────────────────────────────────────────────────────────────
-+#
-+# `chat_turn_executions.fallback_chain` 은 세 가지 모양으로 남는다.
-+#   1) `[]`                     — 컬럼 기본값. 폴백 기록이 없다.
-+#   2) {"from","to","reason","stages":[…]}  — 폴백 성공 (`_save_and_update_session`)
-+#   3) {"result": <마지막 stage>, "stages":[…]} — 전체 실패 (`_record_fallback_trace`, M5)
-+# 과거 비어 있지 않은 배열(stage 목록)이 들어온 경우도 읽는다.
-+# 기록 경로는 채팅 429 모델 폴백뿐이므로 "none_recorded" 는 "폴백 없음" 이
-+# 아니라 "폴백 기록 없음" 이다.
-+
-+FALLBACK_CLASSES = ("none_recorded", "fallback_succeeded", "fallback_all_failed", "fallback_attempted", "unparseable")
-+_UNPARSEABLE = object()
-+
-+
-+def _parse_fallback_value(value: Any) -> Any:
-+    if isinstance(value, (bytes, bytearray)):
-+        value = value.decode("utf-8", errors="replace")
-+    if isinstance(value, str):
-+        text = value.strip()
-+        if not text:
-+            return None
-+        try:
-+            return json.loads(text)
-+        except (TypeError, ValueError):
-+            return _UNPARSEABLE
-+    return value
-+
-+
-+def _stage_names(stages: Any) -> list[str]:
-+    if not isinstance(stages, list):
-+        return []
-+    return [str(item.get("stage") or "") for item in stages if isinstance(item, dict)]
-+
-+
-+def classify_fallback_chain(value: Any) -> str:
-+    """fallback_chain 한 값을 FALLBACK_CLASSES 중 하나로 판정한다."""
-+    parsed = _parse_fallback_value(value)
-+    if parsed is _UNPARSEABLE:
-+        return "unparseable"
-+    if parsed is None or parsed == [] or parsed == {}:
-+        return "none_recorded"
-+
-+    if isinstance(parsed, dict):
-+        stages = _stage_names(parsed.get("stages"))
-+        result = str(parsed.get("result") or "")
-+        if parsed.get("to") or result == "fallback_succeeded" or "fallback_succeeded" in stages:
-+            return "fallback_succeeded"
-+        if result == "all_failed" or "all_failed" in stages:
-+            return "fallback_all_failed"
-+        if stages or parsed.get("from") or result:
-+            return "fallback_attempted"
-+        return "unparseable"
-+
-+    if isinstance(parsed, list):
-+        stages = _stage_names(parsed)
-+        if "fallback_succeeded" in stages:
-+            return "fallback_succeeded"
-+        if "all_failed" in stages:
-+            return "fallback_all_failed"
-+        return "fallback_attempted"
-+
-+    return "unparseable"
-+
-+
-+def summarize_fallback_chains(rows: Iterable[tuple[Any, int]]) -> dict[str, Any]:
-+    """(fallback_chain 값, 건수) 목록을 폴백률 집계로 만든다."""
-+    counts = {name: 0 for name in FALLBACK_CLASSES}
-+    for value, count in rows:
-+        counts[classify_fallback_chain(value)] += int(count or 0)
-+    turns = sum(counts.values())
-+    fallback_turns = counts["fallback_succeeded"] + counts["fallback_all_failed"] + counts["fallback_attempted"]
-+    return {
-+        "turns": turns,
-+        "fallback_turns": fallback_turns,
-+        "fallback_rate_pct": round(fallback_turns * 100.0 / turns, 1) if turns else None,
-+        "fallback_success_rate_pct": (
-+            round(counts["fallback_succeeded"] * 100.0 / fallback_turns, 1) if fallback_turns else None
-+        ),
-+        "by_class": counts,
-+        "note": (
-+            "fallback_chain 은 채팅 429 모델 폴백 경로만 기록한다. "
-+            "none_recorded 는 '폴백 없음'이 아니라 '폴백 기록 없음'이다."
-+        ),
-+    }
-+
-+
-+# ── 비용 산출 근거 ───────────────────────────────────────────────────────
-+#
-+# AADS 의 Anthropic 인증은 OAuth 구독(sk-ant-oat01, R-AUTH)이고 Codex 도 구독
-+# 계정이다. `oauth_usage_log.cost_usd` 는 CLI 의 `total_cost_usd` 나 토큰 단가
-+# 추정으로 적힌 **정가 환산값**이지 실청구가 아니다. 2026-09-29 24시간 합계
-+# 약 $11,162 를 "지출" 로 보고하면 실제를 수십 배로 부풀린다.
-+# 실청구액은 어디에서도 측정하지 않으므로 None(미측정)으로 둔다. 추정하지 않는다.
-+
-+COST_BASIS_LIST_PRICE = "list_price_equivalent"
-+COST_BASIS_NOT_RECORDED = "not_recorded"
-+COST_BASIS_UNKNOWN = "unknown"
-+
-+# call_source → cost_usd 를 누가 어떻게 채우는가 (코드 확인분)
-+_COST_SOURCES: dict[str, tuple[str, str]] = {
-+    "cli_relay": (COST_BASIS_LIST_PRICE, "Claude CLI result.total_cost_usd (구독 호출의 정가 환산)"),
-+    "model_selector_sdk": (COST_BASIS_LIST_PRICE, "Agent SDK total_cost_usd 또는 _estimate_cost 토큰 단가"),
-+    "codex_relay": (COST_BASIS_LIST_PRICE, "_estimate_cost 토큰 단가 (Codex 구독의 정가 환산)"),
-+    # 아래 경로는 log_usage 에 cost_usd 를 넘기지 않아 항상 0 이 적힌다.
-+    "anthropic_client": (COST_BASIS_NOT_RECORDED, "cost_usd 미전달 — 0 은 비용 0 이 아니라 미기록"),
-+    "ceo_chat": (COST_BASIS_NOT_RECORDED, "cost_usd 미전달 — 0 은 비용 0 이 아니라 미기록"),
-+    "ceo_chat_tools": (COST_BASIS_NOT_RECORDED, "cost_usd 미전달 — 0 은 비용 0 이 아니라 미기록"),
-+}
-+
-+
-+def cost_basis_for_source(call_source: Any) -> dict[str, Any]:
-+    """call_source 의 비용 산출 근거. 실청구는 항상 미측정(None)이다."""
-+    key = str(call_source or "").strip()
-+    basis, detail = _COST_SOURCES.get(key, (COST_BASIS_UNKNOWN, "산출 경로 미확인 call_source"))
-+    return {
-+        "call_source": key,
-+        "cost_basis": basis,
-+        "cost_basis_detail": detail,
-+        "billed_usd": None,
-+        "billed_status": "미측정",
-+    }
-+
-+
-+def build_cost_entry(call_source: Any, cost_usd: Any, *, calls: int = 0) -> dict[str, Any]:
-+    """비용 합계를 산출 근거와 함께 표기한다. 정가 환산이 아니면 금액을 내지 않는다."""
-+    basis = cost_basis_for_source(call_source)
++    source = normalize_cost_source(cost_source) or COST_SOURCE_UNKNOWN
++    value: Optional[float]
 +    try:
-+        amount = round(float(cost_usd or 0), 6)
++        value = None if cost_usd is None else float(cost_usd)
 +    except (TypeError, ValueError):
-+        amount = None
-+    list_price = amount if basis["cost_basis"] == COST_BASIS_LIST_PRICE else None
-+    return {
-+        **basis,
-+        "calls": int(calls or 0),
-+        "list_price_equivalent_usd": list_price,
-+        "recorded_cost_usd": amount,
-+    }
-diff --git a/app/services/llm_response_metrics.py b/app/services/llm_response_metrics.py
-index 41608351..270afcae 100644
---- a/app/services/llm_response_metrics.py
-+++ b/app/services/llm_response_metrics.py
-@@ -1,10 +1,17 @@
- from __future__ import annotations
- 
-+import math
-+from collections import Counter
- from datetime import datetime, timedelta, timezone
- from typing import Any
- 
- from app.core.db_pool import get_pool
- from app.services.llm_account_usage import _classify_provider_from_model, _display_name_for_provider
-+from app.services.llm_metric_normalization import (
-+    build_cost_entry,
-+    normalize_model_dimension,
-+    summarize_fallback_chains,
-+)
- 
- KST = timezone(timedelta(hours=9))
- 
-@@ -27,19 +34,120 @@ def _round_pct(value: Any) -> float:
-         return 0.0
- 
- 
-+def _percentile_cont(sorted_values: list[float], fraction: float) -> float | None:
-+    """PostgreSQL percentile_cont 와 같은 선형 보간."""
-+    if not sorted_values:
++        value = None
++
++    if source == COST_SOURCE_UNKNOWN:
++        if value is None or value == 0:
++            return None, COST_SOURCE_UNKNOWN
++        return value, COST_SOURCE_UNKNOWN
++    if value is None:
++        return None, COST_SOURCE_UNKNOWN
++    return value, source
++
++
++def classify_surface(
++    call_source: Any,
++    job_id: Any = None,
++    session_is_chat: bool = False,
++) -> str:
++    """사용량 한 건이 어느 표면에서 났는지 판정한다 — 이 함수가 유일한 판정기다.
++
++    순서가 곧 규칙이다.
++    1. job_id 가 있거나 러너 call_source 면 runner. 러너 행은 채팅이 띄운 작업이어도
++       러너가 태운 토큰이다(러너 행의 session_id 는 CLI 세션이라 채팅 id 와 겹치지
++       않지만, 겹치더라도 실행 컨텍스트가 우선이다).
++    2. session_id 가 chat_sessions.id 에 있으면 chat.
++    3. 그 외 CLI 릴레이(cli_relay/codex_relay)는 terminal_cli.
++    4. 앱 내부 호출(anthropic_client/model_selector_sdk/ceo_chat…)은 service.
++    5. 나머지는 unknown. 짐작해서 어디에 붙이지 않는다.
++    """
++    source = str(call_source or "").strip()
++    if str(job_id or "").strip() or source in RUNNER_CALL_SOURCES:
++        return SURFACE_RUNNER
++    if session_is_chat:
++        return SURFACE_CHAT
++    if source in CLI_RELAY_CALL_SOURCES:
++        return SURFACE_TERMINAL_CLI
++    if source in SERVICE_CALL_SOURCES:
++        return SURFACE_SERVICE
++    return SURFACE_UNKNOWN
++
++
++def cost_per_success(
++    total_cost_usd: Optional[float],
++    success_jobs: Optional[int],
++    *,
++    denominator_defined: bool,
++    min_sample: int = MIN_SUCCESS_SAMPLE,
++) -> Dict[str, Any]:
++    """성공 작업당 비용. 값을 낼 수 없으면 None 과 이유를 돌려준다."""
++    if not denominator_defined:
++        return {"value": None, "status": PER_SUCCESS_DENOMINATOR_UNDEFINED}
++    n = int(success_jobs or 0)
++    if n <= 0:
++        return {"value": None, "status": PER_SUCCESS_DENOMINATOR_ZERO}
++    if n < min_sample:
++        return {"value": None, "status": PER_SUCCESS_INSUFFICIENT}
++    if total_cost_usd is None:
++        # 성공 작업은 충분하지만 비용이 미측정이다. 0 으로 나누지도, 0 을 내지도 않는다.
++        return {"value": None, "status": PER_SUCCESS_COST_UNKNOWN}
++    return {"value": round(float(total_cost_usd) / n, 6), "status": PER_SUCCESS_OK}
++
++
++def _num(value: Any) -> Optional[float]:
++    if value is None:
 +        return None
-+    position = fraction * (len(sorted_values) - 1)
-+    lower = math.floor(position)
-+    upper = math.ceil(position)
-+    if lower == upper:
-+        return sorted_values[lower]
-+    weight = position - lower
-+    return sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * weight
-+
-+
-+def _to_latency(value: Any) -> float | None:
++    if isinstance(value, Decimal):
++        return float(value)
 +    try:
-+        latency = float(value)
++        return float(value)
 +    except (TypeError, ValueError):
 +        return None
-+    return latency if latency > 0 else None
 +
 +
-+def _aggregate_samples(source: str, rows: list[Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-+    """표본 행을 (정규화 모델 | 비모델 상태) 로 묶는다.
++def summarize_usage_rows(
++    rows: Iterable[Dict[str, Any]],
++    *,
++    min_sample: int = MIN_SUCCESS_SAMPLE,
++) -> List[Dict[str, Any]]:
++    """집계 전 행(작업 단위까지 쪼갠 것)을 표면·모델·비용출처 단위로 합친다.
 +
-+    분모(calls)와 분자(failed_calls)는 **같은 행 집합**에서 센다. 예전에는 분모를
-+    "지연>0 인 행"만, 분자를 "전체 실패 행"으로 세서, 지연이 0 인 취소 작업이
-+    분자에만 들어가 실패율 150% 가 나왔다(2026-09-29 runner_cli_total
-+    claude-sonnet-4-6 calls=20 failed=30). 실패를 재지 않는 소스는 None 이다.
++    입력 행 키: call_source, model, cost_source, job_id, session_is_chat, job_status,
++    calls, cost_usd, cost_usd_catalog, catalog_calls, both_cost_usd, both_catalog_usd,
++    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens.
++
++    cost_source 는 그룹 키다 — 보고값과 추정값을 한 합계로 섞지 않는다.
 +    """
-+    groups: dict[tuple[str | None, str | None], dict[str, Any]] = {}
++    groups: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
 +    for row in rows:
-+        dimension = normalize_model_dimension(row["model_key"])
-+        key = (dimension["model"], dimension["state"])
-+        group = groups.setdefault(
-+            key,
-+            {"calls": 0, "failed": 0, "failure_measured": False, "latencies": [], "raw": Counter()},
++        surface = classify_surface(
++            row.get("call_source"), row.get("job_id"), bool(row.get("session_is_chat"))
 +        )
-+        group["calls"] += 1
-+        group["raw"][str(row["model_key"] or "")] += 1
-+        failed = row["failed"]
-+        if failed is not None:
-+            group["failure_measured"] = True
-+            if failed:
-+                group["failed"] += 1
-+        latency = _to_latency(row["latency_ms"])
-+        if latency is not None:
-+            group["latencies"].append(latency)
-+
-+    models: list[dict[str, Any]] = []
-+    states: list[dict[str, Any]] = []
-+    for (model_name, state), group in groups.items():
-+        latencies = sorted(group["latencies"])
-+        calls = group["calls"]
-+        failed = group["failed"] if group["failure_measured"] else None
-+        raw_counter: Counter = group["raw"]
-+        top_raw = raw_counter.most_common(1)[0][0]
-+        provider = _classify_provider_from_model(top_raw)
-+        item = {
-+            "source": source,
-+            "model": model_name,
-+            "model_state": state,
-+            "raw_models": sorted(raw_counter),
-+            "provider": provider,
-+            "provider_label": _display_name_for_provider(provider),
-+            "calls": calls,
-+            "latency_samples": len(latencies),
-+            "failed_calls": failed,
-+            "failure_rate_pct": _round_pct(failed * 100.0 / calls) if failed is not None and calls else None,
-+            "avg_latency_ms": _round_ms(sum(latencies) / len(latencies)) if latencies else None,
-+            "p50_latency_ms": _round_ms(_percentile_cont(latencies, 0.50)),
-+            "p95_latency_ms": _round_ms(_percentile_cont(latencies, 0.95)),
-+            "max_latency_ms": _round_ms(latencies[-1]) if latencies else None,
-+        }
-+        (models if model_name is not None else states).append(item)
-+
-+    order = lambda item: (-item["calls"], str(item["model"] or item["model_state"]))  # noqa: E731
-+    return sorted(models, key=order), sorted(states, key=order)
-+
-+
-+def _row_value(row: Any, key: str, default: Any = None) -> Any:
-+    try:
-+        return row[key]
-+    except (KeyError, IndexError):
-+        return default
-+
-+
-+# 보존 게이트가 모듈 private 헬퍼를 public 으로 오탐하므로 시그니처를 유지한다.
- def _metric_row(source: str, row: Any) -> dict[str, Any]:
--    model_key = str(row["model_key"] or "unknown")
--    provider = _classify_provider_from_model(model_key)
-+    """이미 집계된 행(model_key/calls/failed_calls/지연 통계)을 _aggregate_samples 항목 형태로 바꾼다.
-+
-+    모델 정규화·실패율 규칙은 새 경로와 같다. failed_calls 가 None 이면 실패를
-+    재지 않는 소스로 보고, failed_calls > calls 인 행은 불변식 위반이므로
-+    실패율을 만들지 않는다(예전 150% 표기 재발 방지).
-+    """
-+    raw_model = str(row["model_key"] or "")
-+    dimension = normalize_model_dimension(raw_model)
-+    provider = _classify_provider_from_model(raw_model)
-     calls = int(row["calls"] or 0)
--    failed = int(row["failed_calls"] or 0)
-+    failed_value = row["failed_calls"]
-+    failed = int(failed_value) if failed_value is not None else None
-+    raw_models = _row_value(row, "raw_models")
-     return {
-         "source": source,
--        "model": model_key,
-+        "model": dimension["model"],
-+        "model_state": dimension["state"],
-+        "raw_models": sorted(raw_models) if raw_models is not None else [raw_model],
-         "provider": provider,
-         "provider_label": _display_name_for_provider(provider),
-         "calls": calls,
-+        "latency_samples": int(_row_value(row, "latency_samples", calls) or 0),
-         "failed_calls": failed,
--        "failure_rate_pct": _round_pct((failed * 100.0 / calls) if calls else 0),
-+        "failure_rate_pct": (
-+            _round_pct(failed * 100.0 / calls) if failed is not None and calls and failed <= calls else None
-+        ),
-         "avg_latency_ms": _round_ms(row["avg_latency_ms"]),
-         "p50_latency_ms": _round_ms(row["p50_latency_ms"]),
-         "p95_latency_ms": _round_ms(row["p95_latency_ms"]),
-@@ -91,105 +199,277 @@ def _event_row(row: Any) -> dict[str, Any]:
-     }
- 
- 
-+def _usage_section(usage_rows: list[Any], latest_limit_rows: list[Any]) -> dict[str, Any]:
-+    """oauth_usage_log 사용량·비용·한도. 비용은 산출 근거와 함께만 낸다."""
-+    merged: dict[tuple[str, str], dict[str, Any]] = {}
-+    coverage: dict[str, dict[str, int]] = {}
-+    for row in usage_rows:
-+        call_source = str(row["call_source"] or "unknown")
-+        dimension = normalize_model_dimension(row["model_key"])
-+        model_name = dimension["model"] or f"state:{dimension['state']}"
-+        bucket = merged.setdefault(
-+            (call_source, model_name),
-+            {
-+                "call_source": call_source,
-+                "model": model_name,
-+                "raw_models": set(),
++        model = str(row.get("model") or "")
++        source = normalize_cost_source(row.get("cost_source")) or COST_SOURCE_UNKNOWN
++        key = (surface, model, source)
++        g = groups.get(key)
++        if g is None:
++            g = groups[key] = {
++                "surface": surface,
++                "model": model,
++                "cost_source": source,
 +                "calls": 0,
++                "total_cost_usd": None,
++                "catalog_cost_usd": None,
++                "catalog_calls": 0,
++                "_both_reported": 0.0,
++                "_both_catalog": 0.0,
 +                "input_tokens": 0,
 +                "output_tokens": 0,
-+                "cache_creation_tokens": 0,
 +                "cache_read_tokens": 0,
-+                "cost_usd": 0.0,
-+            },
-+        )
-+        bucket["raw_models"].add(str(row["model_key"] or ""))
-+        for field in ("calls", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens"):
-+            bucket[field] += int(row[field] or 0)
-+        bucket["cost_usd"] += float(row["cost_usd"] or 0)
++                "cache_creation_tokens": 0,
++                "_jobs": set(),
++                "_success_jobs": set(),
++            }
++        g["calls"] += int(row.get("calls") or 0)
++        cost = _num(row.get("cost_usd"))
++        if cost is not None:
++            g["total_cost_usd"] = (g["total_cost_usd"] or 0.0) + cost
++        catalog = _num(row.get("cost_usd_catalog"))
++        if catalog is not None:
++            g["catalog_cost_usd"] = (g["catalog_cost_usd"] or 0.0) + catalog
++        g["catalog_calls"] += int(row.get("catalog_calls") or 0)
++        g["_both_reported"] += _num(row.get("both_cost_usd")) or 0.0
++        g["_both_catalog"] += _num(row.get("both_catalog_usd")) or 0.0
++        for tok in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"):
++            g[tok] += int(row.get(tok) or 0)
++        job_id = str(row.get("job_id") or "").strip()
++        if job_id:
++            g["_jobs"].add(job_id)
++            if str(row.get("job_status") or "") == RUNNER_SUCCESS_STATUS:
++                g["_success_jobs"].add(job_id)
 +
-+        cov = coverage.setdefault(
-+            call_source,
-+            {
-+                "calls": 0,
-+                "duration_recorded": 0,
-+                "rl_tokens_recorded": 0,
-+                "unified_status_recorded": 0,
-+                "unified_utilization_recorded": 0,
-+            },
-+        )
-+        for field in cov:
-+            cov[field] += int(row[field] or 0)
++    # 분모는 표면 × 비용출처 단위에서 job_id 로 중복을 없앤 성공 작업 수다
++    # (rework 1, 리뷰 지적 8). 한 작업이 여러 모델을 쓰면 모델마다 분모에 한 번씩
++    # 들어가던 것을 막는다. 모델 행의 cost_per_success_usd 는 그 공통 분모로 나눈
++    # "작업당 비용 중 이 모델 몫" 이다 — 모델 행을 더하면 표면 행과 같다.
++    surface_jobs: Dict[Tuple[str, str], set] = {}
++    surface_success: Dict[Tuple[str, str], set] = {}
++    for g in groups.values():
++        skey = (g["surface"], g["cost_source"])
++        surface_jobs.setdefault(skey, set()).update(g["_jobs"])
++        surface_success.setdefault(skey, set()).update(g["_success_jobs"])
 +
-+    by_model: list[dict[str, Any]] = []
-+    list_price_total = 0.0
-+    not_recorded_calls = 0
-+    for bucket in merged.values():
-+        entry = build_cost_entry(bucket["call_source"], bucket["cost_usd"], calls=bucket["calls"])
-+        if entry["list_price_equivalent_usd"] is not None:
-+            list_price_total += entry["list_price_equivalent_usd"]
-+        else:
-+            not_recorded_calls += bucket["calls"]
-+        by_model.append({
-+            "model": bucket["model"],
-+            "raw_models": sorted(bucket["raw_models"]),
-+            "input_tokens": bucket["input_tokens"],
-+            "output_tokens": bucket["output_tokens"],
-+            "cache_creation_tokens": bucket["cache_creation_tokens"],
-+            "cache_read_tokens": bucket["cache_read_tokens"],
-+            "total_tokens": (
-+                bucket["input_tokens"] + bucket["output_tokens"]
-+                + bucket["cache_creation_tokens"] + bucket["cache_read_tokens"]
++    out: List[Dict[str, Any]] = []
++    for g in groups.values():
++        defined = g["surface"] in _DENOMINATOR_DEFINED_SURFACES
++        skey = (g["surface"], g["cost_source"])
++        success = len(surface_success[skey]) if defined else None
++        per = cost_per_success(
++            g["total_cost_usd"], success, denominator_defined=defined, min_sample=min_sample
++        )
++        per_catalog = cost_per_success(
++            g["catalog_cost_usd"], success, denominator_defined=defined, min_sample=min_sample
++        )
++        ratio = None
++        if g["_both_catalog"] > 0:
++            ratio = round(g["_both_reported"] / g["_both_catalog"], 4)
++        out.append({
++            "surface": g["surface"],
++            "model": g["model"],
++            "cost_source": g["cost_source"],
++            "samples": g["calls"],
++            "jobs": len(surface_jobs[skey]) if defined else None,
++            "success_jobs": success,
++            "success_jobs_using_model": len(g["_success_jobs"]) if defined else None,
++            "denominator": (
++                "pipeline_jobs.status='done' (rejected_done 제외), 표면×비용출처 단위 job_id 중복 제거"
++                if defined else "undefined"
 +            ),
-+            **entry,
++            "total_cost_usd": None if g["total_cost_usd"] is None else round(g["total_cost_usd"], 6),
++            "cost_per_success_usd": per["value"],
++            "cost_per_success_status": per["status"],
++            "cost_per_success_scope": "model_share_of_surface" if defined else None,
++            "catalog_cost_usd": None if g["catalog_cost_usd"] is None else round(g["catalog_cost_usd"], 6),
++            "catalog_calls": g["catalog_calls"],
++            "catalog_cost_per_success_usd": per_catalog["value"],
++            "reported_to_catalog_ratio": ratio,
++            "input_tokens": g["input_tokens"],
++            "output_tokens": g["output_tokens"],
++            "cache_read_tokens": g["cache_read_tokens"],
++            "cache_creation_tokens": g["cache_creation_tokens"],
 +        })
-+    by_model.sort(key=lambda item: (-(item["list_price_equivalent_usd"] or 0), -item["calls"]))
++    out.sort(key=lambda r: (SURFACES.index(r["surface"]), -(r["total_cost_usd"] or 0.0), r["model"]))
++    return out
 +
-+    coverage_items = []
-+    for call_source, cov in sorted(coverage.items()):
-+        calls = cov["calls"]
-+        coverage_items.append({
-+            "call_source": call_source,
-+            **cov,
-+            "duration_recorded_pct": _round_pct(cov["duration_recorded"] * 100.0 / calls) if calls else None,
++
++def summarize_by_surface(
++    items: List[Dict[str, Any]],
++    *,
++    min_sample: int = MIN_SUCCESS_SAMPLE,
++) -> List[Dict[str, Any]]:
++    """표면 × 비용출처 합계. 모델만 접는다 — 비용출처는 여전히 접지 않는다.
++
++    M9 의 "성공 작업당 실제 비용" 은 이 행의 cost_per_success_usd 다. 분모는
++    summarize_usage_rows 가 job_id 로 중복을 없앤 표면 단위 성공 작업 수다.
++    """
++    acc: Dict[Tuple[str, str], Dict[str, Any]] = {}
++    for it in items:
++        key = (it["surface"], it["cost_source"])
++        a = acc.setdefault(key, {
++            "surface": it["surface"],
++            "cost_source": it["cost_source"],
++            "samples": 0,
++            "total_cost_usd": None,
++            "catalog_cost_usd": None,
++            "jobs": it.get("jobs"),
++            "success_jobs": it.get("success_jobs"),
 +        })
++        a["samples"] += it["samples"]
++        if it["total_cost_usd"] is not None:
++            a["total_cost_usd"] = round((a["total_cost_usd"] or 0.0) + it["total_cost_usd"], 6)
++        if it.get("catalog_cost_usd") is not None:
++            a["catalog_cost_usd"] = round((a["catalog_cost_usd"] or 0.0) + it["catalog_cost_usd"], 6)
++    for a in acc.values():
++        defined = a["surface"] in _DENOMINATOR_DEFINED_SURFACES
++        per = cost_per_success(
++            a["total_cost_usd"], a["success_jobs"], denominator_defined=defined, min_sample=min_sample
++        )
++        per_catalog = cost_per_success(
++            a["catalog_cost_usd"], a["success_jobs"], denominator_defined=defined, min_sample=min_sample
++        )
++        a["cost_per_success_usd"] = per["value"]
++        a["cost_per_success_status"] = per["status"]
++        a["catalog_cost_per_success_usd"] = per_catalog["value"]
++    return sorted(acc.values(), key=lambda r: (SURFACES.index(r["surface"]), r["cost_source"]))
 +
-+    latest_limits = []
-+    for row in latest_limit_rows:
-+        latest_limits.append({
-+            "account_slot": row["account_slot"],
-+            "call_source": row["call_source"],
-+            "unified_status": row["unified_status"],
-+            "unified_5h_status": row["unified_5h_status"],
-+            "unified_5h_utilization": row["unified_5h_utilization"],
-+            "unified_5h_reset": row["unified_5h_reset"].isoformat() if row["unified_5h_reset"] else None,
-+            "unified_7d_status": row["unified_7d_status"],
-+            "unified_7d_utilization": row["unified_7d_utilization"],
-+            "unified_7d_reset": row["unified_7d_reset"].isoformat() if row["unified_7d_reset"] else None,
-+            "rl_tokens_limit": row["rl_tokens_limit"],
-+            "rl_tokens_remaining": row["rl_tokens_remaining"],
-+            "observed_at": row["created_at"].isoformat() if row["created_at"] else None,
-+        })
 +
++# 작업 단위까지 쪼개 가져온다. 성공 작업 수는 모델 그룹마다 중복 없이 세야 하므로
++# job_id 를 Python 쪽에서 합친다. 표면 판정은 여기서 하지 않는다(classify_surface).
++COST_PER_SUCCESS_SQL = """
++    SELECT o.call_source,
++           o.model,
++           o.cost_source,
++           o.job_id,
++           (cs.id IS NOT NULL) AS session_is_chat,
++           pj.status AS job_status,
++           COUNT(*)::bigint AS calls,
++           SUM(o.cost_usd) AS cost_usd,
++           SUM(o.cost_usd_catalog) AS cost_usd_catalog,
++           COUNT(o.cost_usd_catalog)::bigint AS catalog_calls,
++           SUM(o.cost_usd) FILTER (
++               WHERE o.cost_usd IS NOT NULL AND o.cost_usd_catalog IS NOT NULL
++           ) AS both_cost_usd,
++           SUM(o.cost_usd_catalog) FILTER (
++               WHERE o.cost_usd IS NOT NULL AND o.cost_usd_catalog IS NOT NULL
++           ) AS both_catalog_usd,
++           COALESCE(SUM(o.input_tokens), 0)::bigint AS input_tokens,
++           COALESCE(SUM(o.output_tokens), 0)::bigint AS output_tokens,
++           COALESCE(SUM(o.cache_read_tokens), 0)::bigint AS cache_read_tokens,
++           COALESCE(SUM(o.cache_creation_tokens), 0)::bigint AS cache_creation_tokens
++      FROM oauth_usage_log o
++      LEFT JOIN chat_sessions cs ON cs.id::text = o.session_id
++      LEFT JOIN pipeline_jobs pj ON pj.job_id = o.job_id
++     WHERE o.created_at >= NOW() - (INTERVAL '1 day' * $1::int)
++     GROUP BY 1, 2, 3, 4, 5, 6
++"""
++
++
++async def fetch_cost_per_success(conn: Any, days: int = 7) -> Dict[str, Any]:
++    rows = await conn.fetch(COST_PER_SUCCESS_SQL, int(days))
++    items = summarize_usage_rows([dict(r) for r in rows])
 +    return {
-+        "cost": {
-+            "list_price_equivalent_usd": round(list_price_total, 2),
-+            "billed_usd": None,
-+            "billed_status": "미측정",
-+            "not_recorded_calls": not_recorded_calls,
-+            "note": (
-+                "OAuth/Codex 구독 호출의 정가 환산값이다. 실청구액이 아니며 실청구는 측정하지 않는다. "
-+                "cost_basis=not_recorded 인 경로는 cost_usd 를 적지 않으므로 합계에서 뺐다."
-+            ),
-+        },
-+        "by_model": by_model,
-+        "recording_coverage": coverage_items,
-+        "latest_limits": latest_limits,
-+        "limit_note": (
-+            "OAuth 구독 응답은 anthropic-ratelimit-tokens-* 헤더를 주지 않고 "
-+            "anthropic-ratelimit-unified-* (5시간/7일 사용률)만 준다. rl_tokens_* 가 NULL 인 것은 "
-+            "정상이며 한도 지표는 unified_* 컬럼이다."
-+        ),
++        "days": int(days),
++        "source": "oauth_usage_log",
++        "min_success_sample": MIN_SUCCESS_SAMPLE,
++        "by_surface": summarize_by_surface(items),
++        "items": items,
++        "notes": [
++            "total_cost_usd 는 cost_source 별로 따로 합산한다. relay_reported 와 "
++            "catalog_estimated 를 더해 하나의 비용으로 읽지 마라.",
++            "catalog_cost_usd 는 기록 시점 llm_models 정가(input/output)로 다시 계산한 값이다. "
++            "카탈로그에 캐시 단가가 없어 캐시 토큰은 포함하지 않는다. 마이그레이션 이전 행은 NULL 이다.",
++            "reported_to_catalog_ratio 는 두 값이 모두 있는 행만으로 계산한다 — "
++            "릴레이 보고값과 카탈로그 단가의 불일치 배율이다.",
++            "성공 작업당 비용은 runner 표면만 정의된다(분모 pipeline_jobs.status='done'). "
++            "chat/terminal_cli/service 는 분모 미정의로 NULL 이다.",
++            "작업당 총비용은 by_surface 의 cost_per_success_usd 다(분모는 job_id 중복 제거). "
++            "items 의 cost_per_success_usd 는 같은 분모로 나눈 모델별 몫이라 더하면 by_surface 와 같다.",
++        ],
 +    }
-+
-+
-+def _chat_turn_section(model_rows: list[Any], fallback_rows: list[Any]) -> dict[str, Any]:
-+    """chat_turn_executions — 모델 차원과 상태 차원을 나누고 폴백률을 센다."""
-+    models: dict[str, dict[str, Any]] = {}
-+    states: Counter = Counter()
-+    statuses: Counter = Counter()
-+    for row in model_rows:
-+        turns = int(row["turns"] or 0)
-+        status = str(row["status"] or "unknown")
-+        statuses[status] += turns
-+        dimension = normalize_model_dimension(row["model_key"])
-+        if dimension["model"] is None:
-+            states[dimension["state"]] += turns
-+            continue
-+        bucket = models.setdefault(
-+            dimension["model"], {"model": dimension["model"], "raw_models": set(), "turns": 0, "by_status": Counter()}
-+        )
-+        bucket["raw_models"].add(str(row["model_key"] or ""))
-+        bucket["turns"] += turns
-+        bucket["by_status"][status] += turns
-+
-+    model_items = [
-+        {
-+            "model": bucket["model"],
-+            "raw_models": sorted(bucket["raw_models"]),
-+            "turns": bucket["turns"],
-+            "by_status": dict(bucket["by_status"]),
-+        }
-+        for bucket in models.values()
-+    ]
-+    model_items.sort(key=lambda item: (-item["turns"], item["model"]))
-+    return {
-+        "by_model": model_items,
-+        "unattributed_by_state": dict(states),
-+        "by_status": dict(statuses),
-+        "fallback": summarize_fallback_chains((row["fallback_chain"], row["turns"]) for row in fallback_rows),
-+    }
-+
-+
- async def get_llm_response_metrics(*, hours: int = 24, model: str = "") -> dict[str, Any]:
-     """Aggregate measured LLM latency from chat, API usage, and CLI runner tables."""
-     hours = max(1, min(int(hours or 24), 168))
-     interval_value = timedelta(hours=hours)
-     model_filter = (model or "").strip()
- 
-+    # 표본 단위로 읽는다 — 모델 별칭 정규화 뒤에 다시 묶어야 하므로 SQL 에서
-+    # 원시 모델명 기준으로 집계하면 백분위를 합칠 수 없다. failed 는 실패를
-+    # 재지 않는 소스에서 NULL 이다(채팅 최종 응답에는 실패 판정이 없다).
-     chat_sql = """
--        WITH samples AS (
--            SELECT
--                COALESCE(NULLIF(model_used, ''), 'unknown') AS model_key,
--                COALESCE(
--                    CASE WHEN (quality_details->>'response_duration_ms') ~ '^[0-9]+(\\.[0-9]+)?$'
--                         THEN (quality_details->>'response_duration_ms')::numeric END,
--                    CASE WHEN (quality_details->>'duration_ms') ~ '^[0-9]+(\\.[0-9]+)?$'
--                         THEN (quality_details->>'duration_ms')::numeric END
--                ) AS latency_ms,
--                FALSE AS failed
--            FROM chat_messages
--            WHERE role = 'assistant'
--              AND created_at >= NOW() - ($1::interval)
--              AND ($2::text = '' OR COALESCE(model_used, '') ILIKE ('%' || $2::text || '%'))
--        )
-         SELECT
--            model_key,
--            COUNT(*) FILTER (WHERE latency_ms IS NOT NULL) AS calls,
--            COUNT(*) FILTER (WHERE failed) AS failed_calls,
--            AVG(latency_ms) AS avg_latency_ms,
--            percentile_cont(0.50) WITHIN GROUP (ORDER BY latency_ms) AS p50_latency_ms,
--            percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_latency_ms,
--            MAX(latency_ms) AS max_latency_ms
--        FROM samples
--        WHERE latency_ms IS NOT NULL
--        GROUP BY model_key
--        ORDER BY calls DESC, model_key ASC
-+            COALESCE(NULLIF(model_used, ''), 'unknown') AS model_key,
-+            COALESCE(
-+                CASE WHEN (quality_details->>'response_duration_ms') ~ '^[0-9]+(\\.[0-9]+)?$'
-+                     THEN (quality_details->>'response_duration_ms')::numeric END,
-+                CASE WHEN (quality_details->>'duration_ms') ~ '^[0-9]+(\\.[0-9]+)?$'
-+                     THEN (quality_details->>'duration_ms')::numeric END
-+            ) AS latency_ms,
-+            NULL::boolean AS failed
-+        FROM chat_messages
-+        WHERE role = 'assistant'
-+          AND created_at >= NOW() - ($1::interval)
-+          AND ($2::text = '' OR COALESCE(model_used, '') ILIKE ('%' || $2::text || '%'))
-     """
- 
-     oauth_sql = """
-         SELECT
-             COALESCE(NULLIF(model, ''), 'unknown') AS model_key,
--            COUNT(*) FILTER (WHERE duration_ms IS NOT NULL AND duration_ms > 0) AS calls,
--            COUNT(*) FILTER (WHERE error_code IS NOT NULL) AS failed_calls,
--            AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL AND duration_ms > 0) AS avg_latency_ms,
--            percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms)
--                FILTER (WHERE duration_ms IS NOT NULL AND duration_ms > 0) AS p50_latency_ms,
--            percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)
--                FILTER (WHERE duration_ms IS NOT NULL AND duration_ms > 0) AS p95_latency_ms,
--            MAX(duration_ms) FILTER (WHERE duration_ms IS NOT NULL AND duration_ms > 0) AS max_latency_ms
-+            duration_ms AS latency_ms,
-+            (error_code IS NOT NULL) AS failed
-         FROM oauth_usage_log
-         WHERE created_at >= NOW() - ($1::interval)
-           AND ($2::text = '' OR COALESCE(model, '') ILIKE ('%' || $2::text || '%'))
--        GROUP BY model_key
--        HAVING COUNT(*) FILTER (WHERE duration_ms IS NOT NULL AND duration_ms > 0) > 0
--        ORDER BY calls DESC, model_key ASC
-     """
- 
-     bg_sql = """
-         SELECT
-             COALESCE(NULLIF(model, ''), 'unknown') AS model_key,
--            COUNT(*) FILTER (WHERE latency_ms IS NOT NULL AND latency_ms > 0) AS calls,
--            COUNT(*) FILTER (WHERE success = FALSE) AS failed_calls,
--            AVG(latency_ms) FILTER (WHERE latency_ms IS NOT NULL AND latency_ms > 0) AS avg_latency_ms,
--            percentile_cont(0.50) WITHIN GROUP (ORDER BY latency_ms)
--                FILTER (WHERE latency_ms IS NOT NULL AND latency_ms > 0) AS p50_latency_ms,
--            percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)
--                FILTER (WHERE latency_ms IS NOT NULL AND latency_ms > 0) AS p95_latency_ms,
--            MAX(latency_ms) FILTER (WHERE latency_ms IS NOT NULL AND latency_ms > 0) AS max_latency_ms
-+            latency_ms,
-+            (success = FALSE) AS failed
-         FROM bg_llm_usage_log
-         WHERE created_at >= NOW() - ($1::interval)
-           AND ($2::text = '' OR COALESCE(model, '') ILIKE ('%' || $2::text || '%'))
--        GROUP BY model_key
--        HAVING COUNT(*) FILTER (WHERE latency_ms IS NOT NULL AND latency_ms > 0) > 0
--        ORDER BY calls DESC, model_key ASC
-     """
- 
-     runner_sql = """
--        WITH samples AS (
--            SELECT
--                COALESCE(NULLIF(actual_model, ''), NULLIF(worker_model, ''), NULLIF(model, ''), 'unknown') AS model_key,
--                EXTRACT(EPOCH FROM (COALESCE(completed_at, updated_at) - COALESCE(started_at, created_at))) * 1000 AS latency_ms,
--                status NOT IN ('done', 'awaiting_approval') AS failed
--            FROM pipeline_jobs
--            WHERE COALESCE(started_at, created_at) >= NOW() - ($1::interval)
--              AND status IN ('done', 'awaiting_approval', 'error', 'cancelled', 'rejected_done', 'review_hold')
--              AND ($2::text = '' OR COALESCE(actual_model, worker_model, model, '') ILIKE ('%' || $2::text || '%'))
--        )
-         SELECT
--            model_key,
--            COUNT(*) FILTER (WHERE latency_ms IS NOT NULL AND latency_ms > 0) AS calls,
--            COUNT(*) FILTER (WHERE failed) AS failed_calls,
--            AVG(latency_ms) FILTER (WHERE latency_ms IS NOT NULL AND latency_ms > 0) AS avg_latency_ms,
--            percentile_cont(0.50) WITHIN GROUP (ORDER BY latency_ms)
--                FILTER (WHERE latency_ms IS NOT NULL AND latency_ms > 0) AS p50_latency_ms,
--            percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)
--                FILTER (WHERE latency_ms IS NOT NULL AND latency_ms > 0) AS p95_latency_ms,
--            MAX(latency_ms) FILTER (WHERE latency_ms IS NOT NULL AND latency_ms > 0) AS max_latency_ms
--        FROM samples
--        GROUP BY model_key
--        HAVING COUNT(*) FILTER (WHERE latency_ms IS NOT NULL AND latency_ms > 0) > 0
--        ORDER BY calls DESC, model_key ASC
-+            COALESCE(NULLIF(actual_model, ''), NULLIF(worker_model, ''), NULLIF(model, ''), 'unknown') AS model_key,
-+            EXTRACT(EPOCH FROM (COALESCE(completed_at, updated_at) - COALESCE(started_at, created_at))) * 1000 AS latency_ms,
-+            status NOT IN ('done', 'awaiting_approval') AS failed
-+        FROM pipeline_jobs
-+        WHERE COALESCE(started_at, created_at) >= NOW() - ($1::interval)
-+          AND status IN ('done', 'awaiting_approval', 'error', 'cancelled', 'rejected_done', 'review_hold')
-+          AND ($2::text = '' OR COALESCE(actual_model, worker_model, model, '') ILIKE ('%' || $2::text || '%'))
-+    """
-+
-+    # 사용량·비용·한도 적재 상태 (oauth_usage_log). 캐시 토큰을 반드시 포함한다 —
-+    # 채팅 CLI 호출은 입력 토큰이 수십 개이고 나머지 수백만이 cache_read 다.
-+    usage_sql = """
-+        SELECT
-+            COALESCE(NULLIF(call_source, ''), 'unknown') AS call_source,
-+            COALESCE(NULLIF(model, ''), 'unknown') AS model_key,
-+            COUNT(*) AS calls,
-+            COALESCE(SUM(input_tokens), 0) AS input_tokens,
-+            COALESCE(SUM(output_tokens), 0) AS output_tokens,
-+            COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
-+            COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-+            COALESCE(SUM(cost_usd), 0) AS cost_usd,
-+            COUNT(*) FILTER (WHERE duration_ms IS NOT NULL AND duration_ms > 0) AS duration_recorded,
-+            COUNT(*) FILTER (WHERE rl_tokens_remaining IS NOT NULL) AS rl_tokens_recorded,
-+            COUNT(*) FILTER (WHERE unified_status IS NOT NULL) AS unified_status_recorded,
-+            COUNT(*) FILTER (WHERE unified_5h_utilization IS NOT NULL
-+                               OR unified_7d_utilization IS NOT NULL) AS unified_utilization_recorded
-+        FROM oauth_usage_log
-+        WHERE created_at >= NOW() - ($1::interval)
-+          AND ($2::text = '' OR COALESCE(model, '') ILIKE ('%' || $2::text || '%'))
-+        GROUP BY 1, 2
-+    """
-+
-+    latest_limit_sql = """
-+        SELECT DISTINCT ON (account_slot)
-+            account_slot,
-+            call_source,
-+            unified_status,
-+            unified_5h_status,
-+            unified_5h_utilization,
-+            unified_5h_reset,
-+            unified_7d_status,
-+            unified_7d_utilization,
-+            unified_7d_reset,
-+            rl_tokens_limit,
-+            rl_tokens_remaining,
-+            created_at
-+        FROM oauth_usage_log
-+        WHERE created_at >= NOW() - ($1::interval)
-+          AND ($2::text = '' OR COALESCE(model, '') ILIKE ('%' || $2::text || '%'))
-+          AND (unified_status IS NOT NULL OR rl_tokens_remaining IS NOT NULL)
-+        ORDER BY account_slot, created_at DESC
-+    """
-+
-+    chat_turn_model_sql = """
-+        SELECT
-+            COALESCE(NULLIF(actual_model, ''), 'unknown') AS model_key,
-+            COALESCE(NULLIF(status, ''), 'unknown') AS status,
-+            COUNT(*) AS turns
-+        FROM chat_turn_executions
-+        WHERE created_at >= NOW() - ($1::interval)
-+          AND ($2::text = '' OR COALESCE(actual_model, requested_model, '') ILIKE ('%' || $2::text || '%'))
-+        GROUP BY 1, 2
-+    """
-+
-+    # 폴백 기록은 모양이 여럿이다(빈 배열 / 성공 객체 / 전체 실패 객체).
-+    # 원문 그대로 묶어 오면 빈 배열은 한 줄로 모이고, 판정은 한 함수가 한다.
-+    chat_turn_fallback_sql = """
-+        SELECT
-+            fallback_chain::text AS fallback_chain,
-+            COUNT(*) AS turns
-+        FROM chat_turn_executions
-+        WHERE created_at >= NOW() - ($1::interval)
-+          AND ($2::text = '' OR COALESCE(actual_model, requested_model, '') ILIKE ('%' || $2::text || '%'))
-+        GROUP BY 1
-     """
- 
-     runner_phase_sql = """
-@@ -257,18 +537,27 @@ async def get_llm_response_metrics(*, hours: int = 24, model: str = "") -> dict[
-         }
-         runner_phase_rows = await _fetch_optional_rows(conn, runner_phase_sql, interval_value, model_filter)
-         recent_runner_event_rows = await _fetch_optional_rows(conn, recent_runner_events_sql, interval_value, model_filter)
-+        usage_rows = await _fetch_optional_rows(conn, usage_sql, interval_value, model_filter)
-+        latest_limit_rows = await _fetch_optional_rows(conn, latest_limit_sql, interval_value, model_filter)
-+        chat_turn_model_rows = await _fetch_optional_rows(conn, chat_turn_model_sql, interval_value, model_filter)
-+        chat_turn_fallback_rows = await _fetch_optional_rows(conn, chat_turn_fallback_sql, interval_value, model_filter)
- 
-     metrics: list[dict[str, Any]] = []
-     by_source: dict[str, list[dict[str, Any]]] = {}
-+    unattributed: dict[str, list[dict[str, Any]]] = {}
-     for source, rows in source_rows.items():
--        items = [_metric_row(source, row) for row in rows]
--        by_source[source] = items
--        metrics.extend(items)
-+        model_items, state_items = _aggregate_samples(source, rows)
-+        by_source[source] = model_items
-+        unattributed[source] = state_items
-+        metrics.extend(model_items)
-+        metrics.extend(state_items)
- 
-     total_calls = sum(item["calls"] for item in metrics)
--    total_failed = sum(item["failed_calls"] for item in metrics)
-+    failure_items = [item for item in metrics if item["failed_calls"] is not None]
-+    failure_denominator = sum(item["calls"] for item in failure_items)
-+    total_failed = sum(item["failed_calls"] for item in failure_items)
-     slowest_top5 = sorted(
--        [item for item in metrics if item["p95_latency_ms"] is not None],
-+        [item for item in metrics if item["model"] is not None and item["p95_latency_ms"] is not None],
-         key=lambda item: int(item["p95_latency_ms"] or 0),
-         reverse=True,
-     )[:5]
-@@ -280,17 +569,32 @@ async def get_llm_response_metrics(*, hours: int = 24, model: str = "") -> dict[
-         "summary": {
-             "total_observations": total_calls,
-             "failed_observations": total_failed,
--            "failure_rate_pct": _round_pct((total_failed * 100.0 / total_calls) if total_calls else 0),
-+            "failure_denominator": failure_denominator,
-+            "failure_rate_pct": _round_pct((total_failed * 100.0 / failure_denominator) if failure_denominator else 0),
-+            "failure_rate_basis": (
-+                "실패를 재는 소스(oauth_llm_api·background_llm·runner_cli_total)의 같은 행 집합. "
-+                "chat_final_response 는 실패 판정이 없어 분모에서 뺀다. 소스끼리 겹칠 수 있다 "
-+                "(채팅 CLI 호출은 chat_final_response 와 oauth_llm_api 양쪽에 남는다)."
-+            ),
-+            "invariant_violations": [
-+                {"source": item["source"], "model": item["model"], "model_state": item["model_state"]}
-+                for item in failure_items
-+                if item["failed_calls"] > item["calls"]
-+            ],
-             "slowest_top5": slowest_top5,
-         },
-         "sources": {
-             "chat_final_response": "chat_messages.quality_details.response_duration_ms|duration_ms",
--            "oauth_llm_api": "oauth_usage_log.duration_ms",
-+            "oauth_llm_api": "oauth_usage_log.duration_ms (호출 전체 경과, 최초 토큰 지연 아님)",
-             "background_llm": "bg_llm_usage_log.latency_ms",
-             "runner_cli_total": "pipeline_jobs started_at/created_at -> completed_at/updated_at elapsed",
-             "runner_cli_phase_metrics": "pipeline_runner_events model_attempt/cli_process/first_output/completed events",
-+            "chat_turns": "chat_turn_executions.actual_model/status/fallback_chain",
-         },
-         "runner_cli_phase_metrics": [_phase_metric_row(row) for row in runner_phase_rows],
-         "recent_runner_cli_events": [_event_row(row) for row in recent_runner_event_rows],
-         "metrics": by_source,
-+        "unattributed_by_state": unattributed,
-+        "usage": _usage_section(usage_rows, latest_limit_rows),
-+        "chat_turns": _chat_turn_section(chat_turn_model_rows, chat_turn_fallback_rows),
-     }
 diff --git a/app/services/model_selector.py b/app/services/model_selector.py
-index 53caa407..b63a86ea 100644
+index b63a86ea..1a00169f 100644
 --- a/app/services/model_selector.py
 +++ b/app/services/model_selector.py
-@@ -3805,6 +3805,11 @@ async def _stream_cli_relay_once(
-                 yield {"type": "error", "content": f"CLI Relay unreachable: {hc_err}"}
-                 return
- 
-+            # oauth_usage_log.duration_ms — 릴레이 요청부터 result 까지의 호출 전체
-+            # 경과다. 이 경로는 duration 을 넘기지 않아 cli_relay 행이 전부 0 이었고
-+            # (2026-09-29 1,010행), opus 계열 지연 P50/P95 를 낼 수 없었다.
-+            _usage_t0 = _time_mod.monotonic()
-+            _last_rate_limit_info: Dict[str, Any] = {}
-             async with client.stream(
-                 "POST",
-                 f"{_CLAUDE_RELAY_URL}/stream",
-@@ -3843,6 +3848,8 @@ async def _stream_cli_relay_once(
-                     # rate_limit_event: 이 호출에 쓰인 계정의 쿼터 실측값이다.
-                     # 외부 API 재조회 없이 슬롯별 사용량을 여기서 적재한다.
-                     if event.get("type") == "rate_limit_event":
-+                        if isinstance(event.get("rate_limit_info"), dict):
-+                            _last_rate_limit_info = event["rate_limit_info"]
-                         try:
-                             from app.services.oauth_usage_tracker import record_slot_rate_limit
-                             await record_slot_rate_limit(
-@@ -3901,6 +3908,8 @@ async def _stream_cli_relay_once(
+@@ -3875,7 +3875,10 @@ async def _stream_cli_relay_once(
+                             _out = int(_u.get("output_tokens") or 0)
+                             _cc = int(_u.get("cache_creation_input_tokens") or 0)
+                             _cr = int(_u.get("cache_read_input_tokens") or 0)
+-                            _cost = float(event.get("total_cost_usd") or 0)
++                            # total_cost_usd 는 CLI 가 스스로 보고한 값이다. 없으면 0 이 아니라
++                            # 미측정이다 — 출처를 붙여 적는다 (AADS-LLM-M9-COST-BASIS).
++                            _cost_raw = event.get("total_cost_usd")
++                            _cost = None if _cost_raw is None else float(_cost_raw)
+                             # 턴 계측에도 같은 값을 넘긴다. SDK 경로에만 훅을
+                             # 걸어 뒀더니 이 릴레이 경로로 온 턴은 캐시 토큰이
+                             # 0 으로 남았다(2026-09-17 배포 직후 첫 표본에서
+@@ -3904,6 +3907,7 @@ async def _stream_cli_relay_once(
+                                 cache_creation_tokens=_cc,
+                                 cache_read_tokens=_cr,
+                                 cost_usd=_cost,
++                                cost_source="relay_reported",
+                                 call_source="cli_relay",
                                  session_id=session_id or "",
                                  account_slot=str(oauth_slot or ""),
-                                 tenant_id=_tenant or None,
-+                                duration_ms=int((_time_mod.monotonic() - _usage_t0) * 1000),
-+                                rate_limit_info=_last_rate_limit_info or None,
-                             )
-                         except Exception as _usage_err:
-                             logger.debug(
-@@ -4414,6 +4423,8 @@ async def _stream_codex_relay_once(
-             except Exception as hc_err:
-                 yield {"type": "error", "content": f"Codex Relay unreachable: {hc_err}"}
-                 return
-+            # 호출 전체 경과를 oauth_usage_log.duration_ms 에 남긴다(이전에는 항상 0).
-+            _usage_t0 = _time_mod.monotonic()
-             async with client.stream(
-                 "POST", f"{_CLAUDE_RELAY_URL}/codex-stream",
-                 json=req_body, headers={"X-Claude-Relay-Secret": _load_relay_shared_secret()},
-@@ -4529,6 +4540,7 @@ async def _stream_codex_relay_once(
+@@ -4537,6 +4541,8 @@ async def _stream_codex_relay_once(
+                                 input_tokens=int(in_tok or 0),
+                                 output_tokens=int(out_tok or 0),
+                                 cost_usd=float(cost),
++                                # _COST_MAP 단가표로 앱이 계산한 추정값이다. 릴레이 보고값이 아니다.
++                                cost_source="catalog_estimated",
                                  call_source="codex_relay",
                                  session_id=session_id or "",
                                  account_slot="codex",
-+                                duration_ms=int((_time_mod.monotonic() - _usage_t0) * 1000),
-                             )
-                         except Exception as _usage_err:
-                             logger.debug(
-@@ -4853,6 +4865,7 @@ async def _run_agent_sdk_with_key(
-     in_tokens = 0
-     out_tokens = 0
-     _captured_cli_sid = cli_session_id or ""  # resume 시 기존 ID 유지
-+    _usage_t0 = _time_mod.monotonic()  # oauth_usage_log.duration_ms (이전에는 항상 0)
+@@ -4958,7 +4964,10 @@ async def _run_agent_sdk_with_key(
+         logger.info(f"agent_sdk_session_map: aads={session_id[:8]} -> cli={_captured_cli_sid[:8]}")
  
-     try:
-         async for msg in sdk_query(prompt=user_message, options=opts):
-@@ -4963,6 +4976,7 @@ async def _run_agent_sdk_with_key(
+     # done 이벤트 + 사용량 DB 기록
+-    cost = total_cost if total_cost else float(_estimate_cost("claude-sonnet", in_tokens, out_tokens))
++    # total_cost 는 함수 머리에서 0.0 으로 초기화되고 ResultMessage 가 보고값으로 덮는다.
++    # 비용 값과 cost_source 는 같은 판정(_sdk_cost_reported) 하나로 정한다 (AADS-LLM-M9-COST-BASIS).
++    _sdk_cost_reported = bool(total_cost)
++    cost = total_cost if _sdk_cost_reported else float(_estimate_cost("claude-sonnet", in_tokens, out_tokens))
+     # Agent SDK 경로: 헤더 없지만 토큰 사용량은 기록
+     _sdk_tokens = _ap_get_tokens()
+     _sdk_token = _sdk_tokens[0] if _sdk_tokens else ""
+@@ -4973,6 +4982,7 @@ async def _run_agent_sdk_with_key(
+         token=_sdk_token, model=sdk_model,
+         input_tokens=in_tokens, output_tokens=out_tokens,
+         cost_usd=cost,
++        cost_source="relay_reported" if _sdk_cost_reported else "catalog_estimated",
          call_source="model_selector_sdk",
          session_id=session_id or "",
          tenant_id=_tenant_id or None,
-+        duration_ms=int((_time_mod.monotonic() - _usage_t0) * 1000),
-     )
-     yield {
-         "type": "done",
 diff --git a/app/services/oauth_usage_tracker.py b/app/services/oauth_usage_tracker.py
-index 4fd4f93c..a4f6274d 100644
+index a4f6274d..e8ef9921 100644
 --- a/app/services/oauth_usage_tracker.py
 +++ b/app/services/oauth_usage_tracker.py
-@@ -156,6 +156,58 @@ def parse_ratelimit_headers(headers: Any) -> Dict[str, Any]:
-     }
+@@ -68,7 +68,25 @@ _USAGE_LOG_COLUMNS: Tuple[str, ...] = (
+     "unified_fallback",
+     "unified_fallback_pct",
+     "tenant_id",
++    # AADS-LLM-M9-COST-BASIS: 비용 출처와 러너 작업 귀속.
++    # migrations/20260930_oauth_usage_cost_basis.sql 이 추가한다.
++    "cost_source",
++    "job_id",
+ )
++# 위 두 컬럼이 없던 스키마(마이그레이션 적용 전)용 열 목록.
++_USAGE_LOG_LEGACY_COLUMNS: Tuple[str, ...] = tuple(
++    c for c in _USAGE_LOG_COLUMNS if c not in ("cost_source", "job_id")
++)
++# 스키마에 cost-basis 컬럼이 없음을 확인하면 한동안 옛 열 목록으로 적는다.
++# 한 번의 스키마 불일치가 모든 사용량 기록을 막았던 2026-09-12 사고를 반복하지 않는다.
++# 영구히 꺼 두지 않는다(rework 1, 리뷰 지적 5): 운영 중에 마이그레이션을 적용하면
++# 재시작 없이 _COST_BASIS_RECHECK_SEC 안에 새 열로 돌아온다. 열(cost_source·job_id)과
++# 정가 함수(llm_catalog_cost_usd·cost_usd_catalog)는 따로 판정한다 — 함수만 빠진
++# 부분 적용 상태에서 cost_source·job_id 까지 잃지 않기 위함이다.
++# 값은 "이 시각(monotonic) 전까지는 없다고 본다" 이다. 0 이면 있다고 본다.
++_COST_BASIS_RECHECK_SEC = 300.0
++_COST_BASIS_COLUMNS_MISSING_UNTIL = 0.0
++_COST_BASIS_CATALOG_MISSING_UNTIL = 0.0
+ 
+ # ── 토큰 → 슬롯 매핑 ──────────────────────────────────────────────────
+ 
+@@ -220,7 +238,7 @@ def _usage_log_values(entry: Dict[str, Any]) -> Tuple[Any, ...]:
+         entry["output_tokens"],
+         entry["cache_creation_tokens"],
+         entry["cache_read_tokens"],
+-        float(entry["cost_usd"]),
++        None if entry["cost_usd"] is None else float(entry["cost_usd"]),
+         rl.get("rl_requests_limit"),
+         rl.get("rl_requests_remaining"),
+         rl.get("rl_requests_reset"),
+@@ -247,45 +265,165 @@ def _usage_log_values(entry: Dict[str, Any]) -> Tuple[Any, ...]:
+         rl.get("unified_fallback"),
+         rl.get("unified_fallback_pct"),
+         entry.get("tenant_id"),
++        entry.get("cost_source") or "unknown",
++        entry.get("job_id") or None,
+     )
  
  
-+def parse_cli_rate_limit_info(rate_limit_info: Any) -> Dict[str, Any]:
-+    """CLI `rate_limit_event.rate_limit_info` 를 unified_* 컬럼 값으로 옮긴다.
++def _build_usage_insert(
++    entries: List[Dict[str, Any]],
++    columns: Tuple[str, ...],
++    *,
++    with_catalog: bool,
++) -> Tuple[str, List[Any]]:
++    """INSERT 문과 인자를 만든다.
 +
-+    CLI 릴레이 경로에는 HTTP 헤더가 없다. 대신 CLI 가 같은 한도 정보를
-+    rate_limit_event 로 준다(`unifiedWindows.five_hour/seven_day` 의
-+    utilization 0~1·resetsAt epoch, status). 이것을 헤더 경로와 같은 단위로
-+    옮겨야 oauth_usage_log 한 표에서 한도를 읽을 수 있다 — 2026-09-29 기준
-+    cli_relay 1,010행 전부 unified_* 가 NULL 이었다.
-+
-+    OAuth 구독은 tokens-* 한도를 주지 않으므로 rl_tokens_* 는 만들지 않는다.
++    with_catalog 이면 cost_usd_catalog 를 **DB 함수로** 채운다 —
++    llm_catalog_cost_usd(model, input, output). 앱이 넘긴 cost_usd 를 이 칸에
++    복사하지 않는다. 정가 추산과 실보고를 같은 칸에 섞지 않기 위함이다.
 +    """
-+    if not isinstance(rate_limit_info, dict) or not rate_limit_info:
-+        return {}
-+    windows = rate_limit_info.get("unifiedWindows") or {}
-+    if not isinstance(windows, dict):
-+        windows = {}
-+
-+    def _window(name: str) -> Dict[str, Any]:
-+        value = windows.get(name)
-+        return value if isinstance(value, dict) else {}
-+
-+    def _fraction(value: Any) -> Optional[float]:
-+        try:
-+            number = float(value)
-+        except (TypeError, ValueError):
-+            return None
-+        if number < 0:
-+            return None
-+        # 헤더 경로와 같이 0~1 비율로 저장한다. 방어적으로 0~100 입력도 받는다.
-+        return round(number / 100.0, 4) if number > 1.0 else number
-+
-+    def _reset(value: Any) -> Optional[datetime]:
-+        if value in (None, ""):
-+            return None
-+        try:
-+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
-+        except (TypeError, ValueError, OSError):
-+            return None
-+
-+    five = _window("five_hour")
-+    seven = _window("seven_day")
-+    parsed: Dict[str, Any] = {
-+        "unified_status": rate_limit_info.get("status") or None,
-+        "unified_5h_utilization": _fraction(five.get("utilization")),
-+        "unified_5h_reset": _reset(five.get("resetsAt")),
-+        "unified_7d_utilization": _fraction(seven.get("utilization")),
-+        "unified_7d_reset": _reset(seven.get("resetsAt")),
-+        "unified_fallback": rate_limit_info.get("rateLimitType") or None,
-+    }
-+    return {key: value for key, value in parsed.items() if value is not None}
++    column_count = len(columns)
++    column_sql = ", ".join(columns) + (", cost_usd_catalog" if with_catalog else "")
++    model_idx = columns.index("model")
++    in_idx = columns.index("input_tokens")
++    out_idx = columns.index("output_tokens")
++    values_sql: List[str] = []
++    args: List[Any] = []
++    for row_index, entry in enumerate(entries):
++        base = row_index * column_count
++        # tenant_id 는 NOT NULL 이고 컬럼 기본값이 aads_internal_tenant_id()
++        # 인데, NULL 을 명시적으로 넘기면 기본값이 적용되지 않고 제약 위반으로
++        # 배치 전체가 깨진다. 실패한 배치는 버퍼로 되돌아가 무한 재시도되므로
++        # 한 건의 tenant_id 누락이 모든 사용량 기록을 영구히 막는다
++        # (2026-09-12: CLI 릴레이 적재가 이 이유로 한 건도 남지 않았다).
++        # tenant_id 자리만 COALESCE 로 감싼다.
++        placeholders = ", ".join(
++            (
++                f"COALESCE(${base + column_index + 1}, aads_internal_tenant_id())"
++                if columns[column_index] == "tenant_id"
++                else f"${base + column_index + 1}"
++            )
++            for column_index in range(column_count)
++        )
++        if with_catalog:
++            placeholders += (
++                f", llm_catalog_cost_usd(${base + model_idx + 1}::text, "
++                f"${base + in_idx + 1}::bigint, ${base + out_idx + 1}::bigint)"
++            )
++        values_sql.append(f"({placeholders})")
++        values = _usage_log_values(entry)
++        args.extend(values[: column_count])
++    sql = f"INSERT INTO oauth_usage_log ({column_sql}) VALUES {', '.join(values_sql)}"
++    return sql, args
 +
 +
- # ── DB 기록 (fire-and-forget) ─────────────────────────────────────────
++# 스키마 부재 판정은 오류 문구가 아니라 SQLSTATE 로 한다(rework 2, 리뷰 지적 4).
++# 문구는 lc_messages·서버 버전에 따라 바뀌지만 SQLSTATE 는 바뀌지 않는다.
++_SQLSTATE_UNDEFINED_COLUMN = "42703"
++_SQLSTATE_UNDEFINED_FUNCTION = "42883"
++_SQLSTATE_UNDEFINED_TABLE = "42P01"
++_SQLSTATE_NOT_NULL_VIOLATION = "23502"
++_CATALOG_GAP_SQLSTATES = frozenset({
++    _SQLSTATE_UNDEFINED_COLUMN,
++    _SQLSTATE_UNDEFINED_FUNCTION,
++    _SQLSTATE_UNDEFINED_TABLE,
++})
++
++
++def _cost_basis_schema_gap(exc: Exception, *, with_catalog: bool) -> Optional[str]:
++    """cost-basis 스키마 부재면 'catalog' 또는 'columns', 아니면 None.
++
++    어느 부분이 없는지는 오류 문구가 아니라 **어떤 시도에서 났는가**로 정한다.
++    - 정가 함수를 넣은 시도의 42703/42883/42P01 → 'catalog'. 함수가 없거나
++      (42883), 함수 본문이 읽는 llm_models 열·테이블이 없거나(42703/42P01 —
++      "column m.provider does not exist" 도 여기 든다), cost_usd_catalog 열이
++      없는 경우다. 다음 시도는 정가 함수만 빼고 cost_source·job_id 는 유지한다.
++      새 열 자체가 없어서 난 것이면 그다음 시도에서 'columns' 로 다시 잡힌다.
++    - 정가 함수 없이 새 열만 넣은 시도의 42703 → 'columns'.
++    그 밖의 오류(연결 끊김 등)는 None — 호출자가 올려 보내 버퍼 재시도에 맡긴다.
++    """
++    sqlstate = getattr(exc, "sqlstate", None)
++    if with_catalog:
++        return "catalog" if sqlstate in _CATALOG_GAP_SQLSTATES else None
++    return "columns" if sqlstate == _SQLSTATE_UNDEFINED_COLUMN else None
++
++
++def _is_cost_usd_not_null_violation(exc: Exception) -> bool:
++    """cost_usd 에 NOT NULL 이 걸린 스키마(마이그레이션 미적용 환경)에서 NULL 을 넣은 경우.
++
++    2026-09-30 운영 DB 실측으로는 cost_usd 는 nullable 이고, 마이그레이션도
++    DROP NOT NULL 을 보증한다. 그래도 이 오류가 나면 재시도해도 영원히 실패하므로
++    버퍼로 되돌리지 않는다 — 2026-09-12 tenant_id 사고의 무한 재시도를 반복하지 않는다.
++    판정은 SQLSTATE 23502 와 서버가 채워 주는 column_name 으로 한다(문구 비교 없음).
++    """
++    return (
++        getattr(exc, "sqlstate", None) == _SQLSTATE_NOT_NULL_VIOLATION
++        and getattr(exc, "column_name", None) == "cost_usd"
++    )
++
++
++class _UsageBatchNotRetryable(Exception):
++    """재시도해도 같은 이유로 실패할 배치. 버퍼로 되돌리지 않는다."""
++
++
++def _cost_basis_available(until: float) -> bool:
++    return _time.monotonic() >= until
++
++
+ async def _insert_usage_batch(entries: List[Dict[str, Any]]) -> None:
+     """배치 INSERT."""
++    global _COST_BASIS_COLUMNS_MISSING_UNTIL, _COST_BASIS_CATALOG_MISSING_UNTIL
+     if not entries:
+         return
  
- def _usage_log_values(entry: Dict[str, Any]) -> Tuple[Any, ...]:
-@@ -325,14 +377,21 @@ def log_usage(
-     duration_ms: int = 0,
+     pool = get_pool()
+     async with pool.acquire() as conn:
+         chunk_size = 100
+-        column_sql = ", ".join(_USAGE_LOG_COLUMNS)
+-        column_count = len(_USAGE_LOG_COLUMNS)
+         for chunk_start in range(0, len(entries), chunk_size):
+             chunk = entries[chunk_start:chunk_start + chunk_size]
+-            values_sql: List[str] = []
+-            args: List[Any] = []
+-            for row_index, entry in enumerate(chunk):
+-                base = row_index * column_count
+-                # tenant_id 는 NOT NULL 이고 컬럼 기본값이 aads_internal_tenant_id()
+-                # 인데, NULL 을 명시적으로 넘기면 기본값이 적용되지 않고 제약 위반으로
+-                # 배치 전체가 깨진다. 실패한 배치는 버퍼로 되돌아가 무한 재시도되므로
+-                # 한 건의 tenant_id 누락이 모든 사용량 기록을 영구히 막는다
+-                # (2026-09-12: CLI 릴레이 적재가 이 이유로 한 건도 남지 않았다).
+-                # 마지막 자리가 tenant_id 이므로 그 자리만 COALESCE 로 감싼다.
+-                placeholders = ", ".join(
+-                    (
+-                        f"COALESCE(${base + column_index + 1}, aads_internal_tenant_id())"
+-                        if _USAGE_LOG_COLUMNS[column_index] == "tenant_id"
+-                        else f"${base + column_index + 1}"
++            # 시도 순서: (새 열 + 정가 함수) → (새 열) → (옛 열). 없다고 판정된 것은 건너뛴다.
++            attempts: List[Tuple[Tuple[str, ...], bool]] = []
++            if _cost_basis_available(_COST_BASIS_COLUMNS_MISSING_UNTIL):
++                if _cost_basis_available(_COST_BASIS_CATALOG_MISSING_UNTIL):
++                    attempts.append((_USAGE_LOG_COLUMNS, True))
++                attempts.append((_USAGE_LOG_COLUMNS, False))
++            attempts.append((_USAGE_LOG_LEGACY_COLUMNS, False))
++            for columns, with_catalog in attempts:
++                if columns is _USAGE_LOG_COLUMNS and not _cost_basis_available(
++                    _COST_BASIS_COLUMNS_MISSING_UNTIL
++                ):
++                    continue
++                sql, args = _build_usage_insert(chunk, columns, with_catalog=with_catalog)
++                try:
++                    await conn.execute(sql, *args)
++                    break
++                except Exception as e:
++                    if _is_cost_usd_not_null_violation(e):
++                        logger.error(
++                            "oauth_usage_cost_usd_not_null: %s — 미측정 비용(NULL)을 받을 수 없는 "
++                            "스키마다. migrations/20260930_oauth_usage_cost_basis.sql 을 적용하라. "
++                            "이 배치 %d건은 재시도하지 않는다.",
++                            str(e)[:160], len(chunk),
++                        )
++                        raise _UsageBatchNotRetryable(str(e)) from e
++                    gap = (
++                        _cost_basis_schema_gap(e, with_catalog=with_catalog)
++                        if columns is _USAGE_LOG_COLUMNS
++                        else None
++                    )
++                    if gap is None:
++                        raise
++                    until = _time.monotonic() + _COST_BASIS_RECHECK_SEC
++                    if gap == "catalog":
++                        _COST_BASIS_CATALOG_MISSING_UNTIL = until
++                    else:
++                        _COST_BASIS_COLUMNS_MISSING_UNTIL = until
++                    logger.warning(
++                        "oauth_usage_cost_basis_schema_missing: part=%s %s — %.0f초 동안 %s "
++                        "(migrations/20260930_oauth_usage_cost_basis.sql 미적용/부분 적용)",
++                        gap, str(e)[:120], _COST_BASIS_RECHECK_SEC,
++                        "cost_usd_catalog 없이 기록한다" if gap == "catalog" else "옛 열 목록으로 기록한다",
+                     )
+-                    for column_index in range(column_count)
+-                )
+-                values_sql.append(f"({placeholders})")
+-                args.extend(_usage_log_values(entry))
+-            await conn.execute(
+-                f"INSERT INTO oauth_usage_log ({column_sql}) VALUES {', '.join(values_sql)}",
+-                *args,
+-            )
+ 
+ 
+ async def _drain_usage_buffer() -> List[Dict[str, Any]]:
+@@ -304,6 +442,8 @@ async def _flush_usage_buffer() -> None:
+ 
+     try:
+         await _insert_usage_batch(entries)
++    except _UsageBatchNotRetryable:
++        return
+     except Exception as e:
+         # 실패분을 무한히 되돌리면 한 번의 스키마 불일치가 버퍼를 영원히 키운다.
+         # 되돌리되 상한을 두고, 넘치면 오래된 것부터 버린다. 사용량 기록은
+@@ -356,6 +496,8 @@ async def _enqueue_usage(entry: Dict[str, Any]) -> None:
+     if entries_to_flush:
+         try:
+             await _insert_usage_batch(entries_to_flush)
++        except _UsageBatchNotRetryable:
++            pass
+         except Exception as e:
+             async with _USAGE_LOG_LOCK:
+                 _USAGE_LOG_BUFFER[:0] = entries_to_flush
+@@ -369,7 +511,7 @@ def log_usage(
+     output_tokens: int = 0,
+     cache_creation_tokens: int = 0,
+     cache_read_tokens: int = 0,
+-    cost_usd: float = 0.0,
++    cost_usd: Optional[float] = None,
+     headers: Any = None,
+     call_source: str = "",
+     session_id: str = "",
+@@ -378,6 +520,8 @@ def log_usage(
      tenant_id: Optional[str] = None,
      account_slot: Optional[str] = None,
-+    rate_limit_info: Optional[Dict[str, Any]] = None,
+     rate_limit_info: Optional[Dict[str, Any]] = None,
++    cost_source: Optional[str] = None,
++    job_id: Optional[str] = None,
  ) -> None:
      """사용량 기록 (buffered fire-and-forget). LLM 호출 직후 호출.
  
-     account_slot 은 토큰 없이 슬롯을 아는 호출자를 위한 것이다. CLI 릴레이
-     경로는 토큰을 릴레이 서버가 들고 있어 앱에는 슬롯 번호("1"/"2")만
-     있으므로, _token_slot(token) 으로는 항상 "unknown" 이 된다.
-+
-+    rate_limit_info 는 헤더가 없는 CLI 경로가 받은 rate_limit_event 본문이다.
-+    헤더 값이 있으면 헤더가 우선한다.
-     """
-     rl = parse_ratelimit_headers(headers)
-+    for _key, _value in parse_cli_rate_limit_info(rate_limit_info).items():
-+        if rl.get(_key) is None:
-+            rl[_key] = _value
-     slot = (account_slot or "").strip() or _token_slot(token)
-     prefix = _token_prefix(token)
+@@ -387,7 +531,16 @@ def log_usage(
  
-diff --git a/tests/unit/test_llm_metric_integrity.py b/tests/unit/test_llm_metric_integrity.py
-new file mode 100644
-index 00000000..09432db8
---- /dev/null
-+++ b/tests/unit/test_llm_metric_integrity.py
-@@ -0,0 +1,356 @@
-+"""M7 지표 신뢰성 — 실패율 분모, 모델 정규화, 폴백 집계, 비용 근거, 지연·한도 기록."""
+     rate_limit_info 는 헤더가 없는 CLI 경로가 받은 rate_limit_event 본문이다.
+     헤더 값이 있으면 헤더가 우선한다.
 +
++    cost_source 는 cost_usd 의 출처다(relay_reported / catalog_estimated /
++    unknown). 밝히지 않으면 unknown 이고, 값이 없으면 NULL 로 적힌다 — 측정하지
++    않은 비용을 0 달러로 적지 않는다. 정가 재계산값(cost_usd_catalog)은 DB 가
++    기록 시점 llm_models 로 따로 채운다. job_id 는 러너 실행 컨텍스트의
++    pipeline_jobs.job_id 다 (llm_cost_basis 참조).
+     """
++    from app.services.llm_cost_basis import resolve_cost_fields
++
++    cost_value, cost_source_value = resolve_cost_fields(cost_usd, cost_source)
+     rl = parse_ratelimit_headers(headers)
+     for _key, _value in parse_cli_rate_limit_info(rate_limit_info).items():
+         if rl.get(_key) is None:
+@@ -411,13 +564,15 @@ def log_usage(
+         "output_tokens": output_tokens,
+         "cache_creation_tokens": cache_creation_tokens,
+         "cache_read_tokens": cache_read_tokens,
+-        "cost_usd": cost_usd,
++        "cost_usd": cost_value,
++        "cost_source": cost_source_value,
+         "rl": rl,
+         "call_source": call_source,
+         "session_id": session_id or "",
+         "error_code": error_code,
+         "duration_ms": duration_ms,
+         "tenant_id": tenant_id,
++        "job_id": (str(job_id).strip()[:100] or None) if job_id else None,
+     }
+ 
+     try:
+diff --git a/migrations/20260930_oauth_usage_cost_basis.sql b/migrations/20260930_oauth_usage_cost_basis.sql
+new file mode 100644
+index 00000000..653af932
+--- /dev/null
++++ b/migrations/20260930_oauth_usage_cost_basis.sql
+@@ -0,0 +1,114 @@
++-- AADS-LLM-M9-COST-BASIS-20260930
++-- oauth_usage_log 를 토큰·호출·비용의 정본으로 확정하고, 비용의 출처를 분리한다.
++--
++--   cost_source       cost_usd 가 어디서 온 값인가
++--                       relay_reported    CLI/릴레이가 스스로 보고한 total_cost_usd
++--                       catalog_estimated 앱이 단가표로 계산해 넣은 추정값
++--                       unknown           측정하지 않음(cost_usd 는 NULL)
++--   cost_usd_catalog  기록 시점 llm_models 정가(input/output per 1M)로 다시 계산한 값.
++--                     cost_usd 와 **절대 같은 컬럼에 섞지 않는다.** 카탈로그에 캐시
++--                     단가가 없으므로 캐시 토큰은 넣지 않는다(추측 배율 금지).
++--   job_id            러너 실행 컨텍스트의 pipeline_jobs.job_id. session_id 는
++--                     그대로 두고 따로 남긴다 — 러너 비용을 러너 작업에 귀속하기 위함.
++--
++-- 기존 행 백필 원칙: 값은 추정해서 채우지 않는다. cost_usd_catalog 는 NULL 로 둔다.
++-- cost_source 는 기록 코드가 실제로 넣던 값의 출처를 call_source 별로 표시한다.
++--   cli_relay, 값 ≠ 0   → relay_reported    (model_selector: event.total_cost_usd)
++--   cli_relay, 값 = 0   → unknown, NULL     (옛 코드가 float(total_cost_usd or 0) 으로
++--                                            적었다 — CLI 가 비용을 보고하지 않은 행과
++--                                            구분되지 않는다. 0 을 보고값으로 표시하지
++--                                            않는다. rework 2, 리뷰 지적 5)
++--   codex_relay         → catalog_estimated (model_selector: _estimate_cost(_COST_MAP))
++--   그 외               → unknown           (model_selector_sdk 는 보고값/추정값이
++--                                            행 단위로 구분되지 않는다. anthropic_client·
++--                                            ceo_chat 은 비용을 넘기지 않아 0 으로 적혔다)
++-- 지시서 초안은 "기존 행 전부 relay_reported" 였으나, codex_relay 와 anthropic_client
++-- 행은 코드상 릴레이 보고값이 아니므로 그렇게 표시하면 불일치를 오히려 감춘다.
++-- 측정하지 않은 0.00 은 NULL 로 되돌린다(미측정을 미측정으로 표시).
++
++ALTER TABLE oauth_usage_log
++    ADD COLUMN IF NOT EXISTS cost_source VARCHAR(20) NOT NULL DEFAULT 'unknown';
++ALTER TABLE oauth_usage_log
++    ADD COLUMN IF NOT EXISTS cost_usd_catalog NUMERIC(12,6);
++ALTER TABLE oauth_usage_log
++    ADD COLUMN IF NOT EXISTS job_id VARCHAR(100);
++
++DO $$
++BEGIN
++    IF NOT EXISTS (
++        SELECT 1 FROM pg_constraint
++         WHERE conname = 'chk_oauth_usage_log_cost_source'
++           AND conrelid = 'public.oauth_usage_log'::regclass
++    ) THEN
++        ALTER TABLE public.oauth_usage_log
++            ADD CONSTRAINT chk_oauth_usage_log_cost_source
++            CHECK (cost_source IN ('relay_reported', 'catalog_estimated', 'unknown'));
++    END IF;
++END $$;
++
++-- 백필: 이 마이그레이션이 추가한 기본값('unknown') 인 행만 건드린다. 재실행해도 같다.
++UPDATE oauth_usage_log
++   SET cost_source = 'relay_reported'
++ WHERE call_source = 'cli_relay'
++   AND cost_usd <> 0
++   AND cost_source = 'unknown'
++   AND cost_usd_catalog IS NULL
++   AND job_id IS NULL;
++
++UPDATE oauth_usage_log
++   SET cost_source = 'catalog_estimated'
++ WHERE call_source = 'codex_relay'
++   AND cost_source = 'unknown'
++   AND cost_usd_catalog IS NULL
++   AND job_id IS NULL;
++
++-- 미측정을 NULL 로 적으려면 cost_usd 가 NULL 을 받아야 한다(리뷰 지적 4, rework 1).
++-- 042 는 `DECIMAL(10,6) DEFAULT 0` 으로 만들었고 NOT NULL 이 없다. 2026-09-30 운영 DB
++-- 실측도 is_nullable=YES, CHECK·트리거 없음. 다른 환경에서 누가 NOT NULL 을 걸었더라도
++-- 아래 UPDATE 와 앱 INSERT(cost_usd=NULL) 가 깨지지 않도록 여기서 보증한다.
++-- 이미 nullable 이면 아무것도 하지 않는다(멱등). 기본값 0 은 건드리지 않는다 —
++-- 앱은 항상 값을 명시하므로 기본값은 옛 호출자에게만 쓰인다.
++ALTER TABLE oauth_usage_log
++    ALTER COLUMN cost_usd DROP NOT NULL;
++
++UPDATE oauth_usage_log
++   SET cost_usd = NULL
++ WHERE call_source IN ('anthropic_client', 'anthropic_client_msg', 'ceo_chat', 'ceo_chat_tools')
++   AND cost_source = 'unknown'
++   AND cost_usd = 0;
++
++-- cli_relay 의 0.00 은 위 relay_reported 백필에서 빠져 unknown 으로 남았다.
++-- 보고되지 않은 비용이므로 NULL 로 적는다(2026-09-30 운영 실측 2행, 전부 토큰 0).
++UPDATE oauth_usage_log
++   SET cost_usd = NULL
++ WHERE call_source = 'cli_relay'
++   AND cost_source = 'unknown'
++   AND cost_usd = 0;
++
++CREATE INDEX IF NOT EXISTS idx_oauth_usage_job_id
++    ON oauth_usage_log (job_id, created_at DESC)
++    WHERE job_id IS NOT NULL;
++
++-- 정가 재계산 함수. 기록 시점 카탈로그를 읽는다(앱 INSERT·러너 INSERT 공용).
++-- 모델이 카탈로그에 없거나 단가가 비어 있으면 NULL — 0 이 아니다.
++CREATE OR REPLACE FUNCTION public.llm_catalog_cost_usd(
++    p_model TEXT,
++    p_input_tokens BIGINT,
++    p_output_tokens BIGINT
++) RETURNS NUMERIC
++LANGUAGE sql
++STABLE
++AS $$
++    SELECT ROUND(
++               (COALESCE(p_input_tokens, 0) * m.input_cost
++                + COALESCE(p_output_tokens, 0) * m.output_cost) / 1000000.0,
++               6)
++      FROM llm_models m
++     WHERE m.model_id = split_part(COALESCE(p_model, ''), '[', 1)
++       AND m.input_cost IS NOT NULL
++       AND m.output_cost IS NOT NULL
++     ORDER BY (m.provider = 'anthropic') DESC,
++              m.is_active DESC NULLS LAST,
++              m.id
++     LIMIT 1
++$$;
+diff --git a/migrations/rollback/20260930_oauth_usage_cost_basis.down.sql b/migrations/rollback/20260930_oauth_usage_cost_basis.down.sql
+new file mode 100644
+index 00000000..dd93670d
+--- /dev/null
++++ b/migrations/rollback/20260930_oauth_usage_cost_basis.down.sql
+@@ -0,0 +1,22 @@
++-- Rollback: AADS-LLM-M9-COST-BASIS-20260930
++-- 수동 적용 전용(apply_release_migrations.sh 는 rollback/ 를 건너뛴다).
++-- 주의: 러너가 job_id 로 남긴 귀속 정보와 cost_source 구분이 사라진다.
++
++-- up 에서 NULL 로 되돌린 미측정 0.00 을 복원한다.
++UPDATE oauth_usage_log
++   SET cost_usd = 0
++ WHERE call_source IN ('anthropic_client', 'anthropic_client_msg', 'ceo_chat', 'ceo_chat_tools')
++   AND cost_usd IS NULL;
++
++-- cli_relay 의 미보고 0.00 도 옛 표기(0)로 되돌린다. 옛 코드는 NULL 을 쓰지 않았다.
++UPDATE oauth_usage_log
++   SET cost_usd = 0
++ WHERE call_source = 'cli_relay'
++   AND cost_usd IS NULL;
++
++DROP FUNCTION IF EXISTS public.llm_catalog_cost_usd(TEXT, BIGINT, BIGINT);
++DROP INDEX IF EXISTS idx_oauth_usage_job_id;
++ALTER TABLE oauth_usage_log DROP CONSTRAINT IF EXISTS chk_oauth_usage_log_cost_source;
++ALTER TABLE oauth_usage_log DROP COLUMN IF EXISTS job_id;
++ALTER TABLE oauth_usage_log DROP COLUMN IF EXISTS cost_usd_catalog;
++ALTER TABLE oauth_usage_log DROP COLUMN IF EXISTS cost_source;
+diff --git a/reports/20260930_AADS-LLM-M9-COST-BASIS_report.md b/reports/20260930_AADS-LLM-M9-COST-BASIS_report.md
+new file mode 100644
+index 00000000..4ea6e01d
+--- /dev/null
++++ b/reports/20260930_AADS-LLM-M9-COST-BASIS_report.md
+@@ -0,0 +1,115 @@
++# AADS-LLM-M9-COST-BASIS-20260930 — M9 총비용 계측 정본화
++
++## 결론 요약
++- **정본 원장**: `oauth_usage_log` (토큰·호출·비용). `task_cost_log`·`cost_tracking` 은 **폐기**.
++- **비용 출처 분리**: `cost_source`(relay_reported / catalog_estimated / unknown) + `cost_usd_catalog`(기록 시점 `llm_models` 정가 재계산, DB 함수 `llm_catalog_cost_usd()`).
++- **표면 귀속**: `app/services/llm_cost_basis.classify_surface()` 단일 판정기.
++- **러너 귀속**: 러너가 Claude/Codex CLI 사용량을 `oauth_usage_log.job_id` 와 함께 기록 → `pipeline_jobs` 조인 가능.
++- **API**: `GET /api/v1/ops/llm-cost/per-success?days=7`.
++
++## 1. task_cost_log / cost_tracking 폐기 판단 (코드 참조 근거)
++| 원장 | 쓰는 코드 | 호출처 | 판정 |
++|---|---|---|---|
++| `task_cost_log` | `POST /dashboard/cost-log` (project_dashboard.py) | 저장소·대시보드 전체 grep 0건 | 폐기 |
++| `cost_tracking` | `POST /ops/cost` (ops.py), `record_tenant_llm_usage()` (tenant_usage_limits.py) | 둘 다 호출처 0건 | 폐기 |
++
++되살리지 않은 이유: 되살릴 기록 경로가 모두 `oauth_usage_log` 와 같은 호출을 다시 적는 구조라, 합산하면 이중계상이 된다(`tenant_usage_limits` 의 월간 합계가 이미 두 원장을 UNION 한다).
++
++읽는 쪽 조치:
++- `GET /ops/cost/summary`, `GET /dashboard/costs`: 기존 필드는 그대로 두고 `source_status: "retired"`, `canonical_source: "oauth_usage_log"`, `canonical_endpoint` 를 추가 → 0/빈 값이 "비용 0" 이 아니라 "폐기된 원장" 임을 응답에 명시.
++- `cross_validator.check_cost_tracking`: 폐기된 원장과 조인해 완료 작업 전부를 `no_cost_record` 로 오탐하던 검사를 `COST_TRACKING_LEDGER_ACTIVE=False` 로 비활성(빈 결과가 정상).
++- 대시보드 `/ops` 화면(`aads-dashboard/src/app/ops/page.tsx`)은 별도 저장소라 이 작업에서 수정하지 않았다. 참고로 그 화면은 `today_total/cumulative_total/daily` 를 읽는데 API 는 원래부터 그 필드를 주지 않는다(기존 불일치).
++
++## 2. 기존 행 백필 (지시서와 다르게 한 부분 — 사유)
++지시서는 "기존 행 전부 relay_reported" 였으나 코드 확인 결과 그렇지 않다:
++- `cli_relay` → `event.total_cost_usd` (CLI 자체 보고) → 값 ≠ 0 이면 **relay_reported**, 값 = 0 이면 **unknown, cost_usd=NULL** (옛 코드가 `float(total_cost_usd or 0)` 으로 적어 미보고와 0 보고가 구분되지 않는다 — 라운드 2, 지적 5)
++- `codex_relay` → `_estimate_cost(_COST_MAP)` 앱 추정값 → **catalog_estimated**
++- `model_selector_sdk` → 보고값/추정값이 행 단위로 구분 불가 → **unknown** (값은 유지)
++- `anthropic_client`·`ceo_chat*` → 비용을 넘기지 않아 0.00 → **unknown, cost_usd=NULL**
++
++전부 relay_reported 로 표시하면 앱 추정값이 실보고로 둔갑해 불일치를 감춘다. `cost_usd_catalog` 는 과거 행 전부 NULL(사후 추정 없음).
++
++temp 사본(최근 14일 19,636행)에서 마이그레이션을 돌린 백필 결과:
++| call_source | cost_source | 행 | cost 있음 | catalog 있음 |
++|---|---|---|---|---|
++| anthropic_client | unknown | 11,298 | 0 | 0 |
++| cli_relay | relay_reported | 6,054 | 6,054 | 0 |
++
++(위 표는 라운드 0 측정이다. 라운드 2 에서 cli_relay 의 cost_usd=0 행은 unknown/NULL 로 바뀐다 — 2026-09-30 운영 전체 기간 실측 2행, 둘 다 토큰 0.)
++| codex_relay | catalog_estimated | 2,259 | 2,259 | 0 |
++| model_selector_sdk | unknown | 25 | 25 | 0 |
++
++## 3. 불일치 재현 (claude-opus-5, cli_relay, 최근 7일)
++2026-09-30 02:28 KST 실측(지시서 측정 시점과 창이 약 30분 어긋남):
++
++| 항목 | 값 |
++|---|---|
++| 호출 | 1,108 |
++| 기록된 cost_usd 합 (relay_reported) | **$11,391.92** |
++| input / output / cache_read / cache_creation 토큰 | 27,308 / 12,073,379 / 3,198,682,355 / 85,635,627 |
++| 카탈로그(5/25 per 1M) input+output | $301.97 (배율 37.73×) |
++| 카탈로그 + cache_read $0.50/M 가정 | $1,901.31 → **5.99×** |
++
++지시서 수치(11,253.52 / 1,889.62)로 계산하면 **5.955 ≈ 5.96×** 로 같은 결론이 나온다. 어느 쪽이 맞는지는 이 작업에서 판정하지 않았다(`llm_models` 단가는 변경하지 않음). 앞으로 새로 기록되는 행은 `cost_usd`(보고)와 `cost_usd_catalog`(정가)를 둘 다 가지므로 API 의 `reported_to_catalog_ratio` 가 이 배율을 모델별로 계속 드러낸다.
++
++## 4. 러너 귀속 결함과 수정
++원인(확인됨): `pipeline-runner.sh` 가 Claude CLI 를 `-p --output-format text` 로 직접 띄웠고, 사용량을 어디에도 기록하지 않았다. `oauth_usage_log` 의 러너 행은 0건이었다(조인 0건의 원인은 session_id 형식이 아니라 행 부재).
++
++수정:
++- Claude: `--output-format json` 으로 받아 `scripts/runner_cli_usage.py` 가 modelUsage 의 모델별 토큰·costUSD 를 `call_source='runner_claude_cli'`, `job_id=<job>`, `cost_source='relay_reported'` 로 기록. 출력 파일은 CLI 종료 직후 text 모드와 같은 결과 텍스트로 되돌리고 **검사한다**(원문은 `<out>.usage.json`). 자세한 실패 처리는 6절.
++- Codex: exec 출력에 토큰 분해·비용이 없어 **추측하지 않고** `cost_source='unknown'` 행으로 작업 귀속만 기록.
++- LiteLLM 러너: OAuth 원장 범위 밖이라 이번에 다루지 않음.
++
++## 5. 검증
++- 단위시험 신규 `tests/unit/test_llm_cost_basis.py` 27건 + 관련 기존 시험: 78 passed.
++- 전체 `bash scripts/run_unit_tests.sh`(라운드 0 당시): 5032 passed / 39 failed / 11 skipped. 실패 39건은 **HEAD 원본(git archive)에서도 같은 39건이 실패** → 이번 변경과 무관(기존 실패). 최신 수치는 7절.
++- ruff F821/F811: 통과. `bash -n pipeline-runner.sh`: 통과.
++- 실DB 검증(TEMP 사본 + ROLLBACK, 운영 테이블 무변경): 마이그레이션 실행, `llm_catalog_cost_usd('claude-opus-5',1M,1M)=30.000000`, 미등록 모델 NULL, 러너 INSERT 가 실제 `done` 작업(runner-37ec9785)과 조인됨을 확인.
++- **최근 7일 러너 표면 0 아닌 값**: 현재 원장에 러너 행이 0건이므로 배포·마이그레이션 적용 후 러너 작업이 돌기 시작해야 채워진다. 지금 시점에서는 확인하지 못했다(미검증). 성공 작업이 5건 미만인 동안은 `insufficient_sample` 로 응답한다.
++
++## 6. 재작업 라운드 1 (runner-bee81ee4 리뷰 반려 교정)
++출발점 `2da6d59c` 의 변경을 origin/main(`3509fd1c`) 위로 옮겼다. `oauth_usage_tracker.log_usage` 는 그 사이 main 에 들어온 `rate_limit_info` 인자와 충돌해 둘 다 살렸다.
++
++| # | 지적 | 처리 |
++|---|---|---|
++| 1 | 헬퍼가 없으면 JSON 원문이 남는다 | `runner_cli_usage_ready`(헬퍼 파일 + python3) 가 거짓이면 **json 으로 띄우지 않고 text 로 띄운다**. 헬퍼·시험 파일은 원래 커밋 `2da6d59c` 에 있었고(리뷰가 본 diff 가 잘려 있었다) 이번 변경에도 포함된다. |
++| 2 | 되돌리기 실패가 삼켜진다 | 되돌리기(`restore_runner_claude_output`)와 기록(`record_runner_cli_usage`)을 분리. 되돌리기는 헬퍼 실패 시 jq 로 한 번 더 시도하고, 끝나고 나서 출력 파일이 여전히 CLI 결과 JSON 이면 `RUNNER_CLI_JSON_RESTORE_FAILED` 를 남기고 **그 시도를 exit_code=1(실패)로 만든다**. 기록 단계는 파일을 읽기만 해서, 실패해도 사용량 한 건을 잃을 뿐이다. `2>/dev/null` 을 없애고 `RUNNER_CLI_USAGE_FAILED`/`_SKIP` 으로 로그를 남긴다. JSON 판정은 파일이 `{"type":"result"` 로 **시작**할 때만 참이고(되돌린 본문이 그 문자열을 인용해도 오판하지 않음), `grep -q` 파이프가 SIGPIPE(141)로 pipefail 에 걸리지 않도록 변수 비교로 한다. 재시도가 같은 출력 파일을 쓰므로 지난 시도의 `.usage.json` 은 되돌리기 전에 지운다. |
++| 3 | 시험 파일이 변경 목록에 없다 | `tests/unit/test_llm_cost_basis.py` 가 포함된다. 이번 라운드에 20건을 더했다(기존 1건 이름·범위 변경 포함)(bash 함수 하네스로 헬퍼 정상/헬퍼 크래시→jq/둘 다 실패/text 출력/64KB 초과 JSON pipefail, 스키마 폴백 재확인, NOT NULL, 분모 중복 제거). |
++| 4 | cost_usd NOT NULL 여부 | 운영 DB 실측(2026-09-30 02:3x KST): `cost_usd numeric, is_nullable=YES, default 0`, CHECK·트리거 없음, 제약은 PK·tenant FK 뿐. `042_oauth_usage_log.sql` 도 NOT NULL 없음. 그래도 마이그레이션에 `ALTER COLUMN cost_usd DROP NOT NULL`(멱등)을 `SET cost_usd = NULL` 앞에 넣었고 파괴적 SQL 게이트를 통과함을 시험한다. 앱은 `cost_usd` NOT NULL 위반을 재시도 불가로 분류해 버퍼로 되돌리지 않는다(tenant_id 사고의 무한 재시도 방지). |
++| 5 | 폴백 플래그가 영구히 꺼진다 / 함수만 없을 때 cost_source 까지 잃는다 | 영구 bool 을 "이 시각까지 없다고 본다" 두 개(열 / 정가 함수)로 바꿨다. 300초 뒤 다시 새 열로 시도하므로 운영 중 마이그레이션이 재시작 없이 반영된다. 정가 함수·`cost_usd_catalog` 만 없으면 `cost_source`·`job_id` 는 유지하고 `cost_usd_catalog` 만 빼고 적는다. |
++| 6 | `total_cost` 미정의 가능성 | 지적은 사실과 다르다. `total_cost = 0.0` 이 `_run_agent_sdk_with_key` 머리(`model_selector.py` 4870행 부근)에서 초기화되고, `cost` 계산도 같은 변수를 이미 쓰고 있었다. 판정을 `_sdk_cost_reported = bool(total_cost)` 하나로 묶어 비용 값과 출처가 같은 기준을 쓰게 했고, 시험이 초기화 순서와 공통 판정을 보증한다. |
++| 7 | `pipeline-runner.sh.local` 범위 | HEAD 에서 `.sh` 와 **바이트 동일**한 사본이다(`cmp` 확인, 과거 커밋들도 둘을 같이 고쳤다). 동일 사본으로 유지하고 시험으로 고정했다. |
++| 8 | 모델별 분모 중복 / 표면 작업당 비용 없음 | 분모를 표면×비용출처 단위에서 job_id 로 중복 제거한 성공 작업 수로 바꿨다. `by_surface` 에 `jobs`·`success_jobs`·`cost_per_success_usd`·`cost_per_success_status`·`catalog_cost_per_success_usd` 를 추가 — M9 의 "성공 작업당 실제 비용" 은 이 값이다. 모델 행의 `cost_per_success_usd` 는 같은 분모로 나눈 모델 몫(`cost_per_success_scope=model_share_of_surface`)이라 더하면 표면 값과 같다. 모델을 실제로 쓴 성공 작업 수는 `success_jobs_using_model` 로 따로 준다. |
++
++라운드 1 검증:
++- `bash scripts/run_unit_tests.sh tests/unit/test_llm_cost_basis.py test_pipeline_runner_script_guards.py test_llm_metric_integrity.py test_llm_response_metrics.py test_dup_guard.py`: **133 passed**.
++- 전체 `bash scripts/run_unit_tests.sh`: 5092 passed / 36 failed / 11 skipped. 실패 36건을 HEAD(`3509fd1c`) `git archive` 사본에서 그대로 돌리면 **36건 모두 같이 실패**한다 — 이번 변경에서 새로 생긴 실패는 0건(sandbox·yeoljeong·governance 등 이번 변경과 무관한 기존 실패).
++- ruff F821/F811 통과, `bash -n` 두 러너 스크립트 통과, `scripts/dup_guard.py` 통과, 마이그레이션이 `apply_release_migrations.sh` 파괴적 SQL 게이트 통과.
++- 최근 7일 러너 표면 0 아닌 값: 여전히 **미검증**이다. 러너 행은 배포·마이그레이션 적용 후 러너 작업이 돌아야 생긴다.
++
++불일치 재측정(2026-09-30 02:41 KST, cli_relay claude-opus-5 7일, `llm_models` 5/25): 1,110호출, 보고 $11,414.11, 카탈로그 입출력 $302.97, cache_read $0.50/M 가정 $1,907.10 → **5.985×**. 지시서 수치로는 11,253.52 / 1,889.62 = **5.955 ≈ 5.96×**.
++
++## 7. 재작업 라운드 2 (runner-b73db42f 리뷰 반려 교정)
++출발점 `f87a6408` 의 변경(`.runner_full_diff.patch` 제외)을 origin/main(`9e17d697`) 위로 옮겼다. 충돌 없음.
++
++| # | 지적 | 처리 |
++|---|---|---|
++| 1 | job_id 를 쓰는 코드가 diff 에 없다 | **지적이 틀렸다(diff 가 잘려 보였다).** 러너 기록 경로는 이번 변경에 들어 있다: 신규 `scripts/runner_cli_usage.py`(`build_insert_sql` 이 `job_id`·`cost_source`·`llm_catalog_cost_usd()` 를 INSERT), `scripts/pipeline-runner.sh`(+`.local` 동일 사본)의 `record_runner_cli_usage` 가 매 시도 뒤 `--job-id "$job_id"` 로 호출해 `db_update` 로 실행한다. 앱 `log_usage(job_id=...)` 는 러너가 쓰지 않는다 — 러너는 앱 밖(호스트 셸)에서 CLI 를 띄우므로 앱 함수를 거치지 않는다. 시험: `test_runner_claude_json_restores_text_and_attributes_job`(job_id 칸·tenant 조회), `test_runner_codex_row_is_attributed_without_guessing_cost`, `test_runner_sql_escapes_quotes`, `test_runner_success_denominator_counts_done_jobs_only`, `test_runner_sql_joins_pipeline_jobs_by_job_id`, `test_runner_script_restores_and_records_usage_before_output_is_read`(스크립트 호출 순서), bash 하네스 `test_runner_restore_*`(헬퍼 정상/크래시→jq/둘 다 실패). |
++| 2 | 러너 기록기의 근거·커밋 SHA | 이 기록기는 라운드 0 `2da6d59c`, 라운드 1 `f87a6408` 에서 만들었고 **둘 다 main 에 들어가지 않았다**(`git merge-base --is-ancestor f87a6408 origin/main` → 아님, `origin/main` 에 `scripts/runner_cli_usage.py` 없음). 그래서 이번 변경 파일 목록에 신규 파일로 다시 들어간다. 근거는 4절(러너가 `-p --output-format text` 로 CLI 를 띄우고 아무것도 기록하지 않았다)이다. |
++| 3 | 정가 함수가 참조하는 `llm_models` 열 | 열은 모두 있다: `migrations/053_llm_model_registry.sql`(id SERIAL, provider, model_id, input_cost, output_cost, is_active), 운영 DB `information_schema` 실측(2026-09-30 03:0x KST) 6열 모두 존재. 함수 본문을 `SET LOCAL check_function_bodies=on` 으로 `pg_temp` 에 컴파일해 성공(트랜잭션 ROLLBACK, `oauth_usage_log` 에 잠금 없음), `('claude-opus-5', 27120, 11981731)` → **299.678875**(지시서 $299.68 재현). 런타임에 열이 사라지는 경우도 막았다: 정가 함수를 넣은 시도에서 난 42703/42883/42P01 은 문구와 무관하게 catalog 부재로 보고 정가 함수만 빼 재시도한다 — `column m.provider does not exist` 가 버퍼로 되돌아가 무한 재시도되지 않는다(`test_catalog_function_body_column_missing_falls_back_not_requeued`). |
++| 4 | 문자열 매칭으로 스키마 부재 판정 | `_cost_basis_schema_gap(exc, *, with_catalog)` 를 **SQLSTATE** 로 바꿨다(42703 undefined_column / 42883 undefined_function / 42P01 undefined_table). 어느 부분이 없는지는 문구가 아니라 어느 시도에서 났는가(정가 함수 포함 여부)로 정한다. `_is_cost_usd_not_null_violation` 도 SQLSTATE 23502 + 서버가 주는 `column_name == "cost_usd"` 로 바꿨다. 문구 비교는 남아 있지 않다. 시험: 한국어 문구+42703 → columns, 영문 "does not exist" 인데 SQLSTATE 없음 → None, 실제 `asyncpg.exceptions` 4종. |
++| 5 | cli_relay 의 0.00 을 relay_reported 로 백필 | relay_reported 백필에 `cost_usd <> 0` 을 더했다. 0.00 행은 unknown 으로 남고 `DROP NOT NULL` 뒤 `cost_usd = NULL` 로 적는다. down 은 cli_relay 의 NULL 을 0 으로 되돌린다. 운영 실측: cli_relay 0.00 행 2건(둘 다 토큰 0, 오류 없음). codex_relay 0.00 77건은 앱이 `_COST_MAP` 로 **실제 계산한** 추정값(토큰 0 → 0)이라 catalog_estimated 가 사실이므로 그대로 둔다. |
++| 6 | 상태값에 `COST_SOURCE_UNKNOWN` 을 쓴다 | `PER_SUCCESS_COST_UNKNOWN = "cost_unknown"` 을 새로 두고 `PER_SUCCESS_STATUSES` 로 묶었다. 시험이 두 이름공간이 겹치지 않음을 보증한다. |
++| 7 | `_is_missing_cost_basis_schema` 가 죽은 코드 | 삭제했다(호출처 0건, grep 확인). 시험이 다시 생기지 않음을 확인한다. |
++| 8 | `str(e)` 를 HTTP 응답에 싣는다 | 새 엔드포인트는 고정 문구 `"llm cost per-success query failed"` 만 돌려주고 원문은 로그(`ops_llm_cost_per_success_error`)에만 남긴다. 시험: 테이블·열 이름이 detail 에 없음. 기존 엔드포인트들의 같은 패턴은 범위 밖이라 건드리지 않았다. |
++
++라운드 2 검증:
++- `bash scripts/run_unit_tests.sh tests/unit/test_llm_cost_basis.py tests/unit/test_pipeline_runner_script_guards.py`: **84 passed**.
++- 전체 `bash scripts/run_unit_tests.sh`: **5139 passed / 36 failed / 11 skipped**. 실패 36건을 HEAD(`9e17d697`) `git archive` 사본에서 같은 파일로 돌리면 **36건 모두 같이 실패**한다 — 새로 생긴 실패 0건.
++- ruff `F821,F811` 통과, `python3 -m compileall` 통과, `bash -n scripts/pipeline-runner.sh` 통과, `scripts/dup_guard.py` rc=0.
++- 불일치 재측정(2026-09-30 03:11 KST, cli_relay claude-opus-5 7일): 1,115호출, 보고 **$11,496.90**, 토큰 input 27,460 / output 12,167,331 / cache_read 3,223,510,085, 카탈로그 입출력 $304.32, cache_read $0.50/M 가정 $1,916.08 → **6.000×**. 지시서 수치 11,253.52 / 1,889.62 = **5.955 ≈ 5.96×**.
++- 최근 7일 러너 표면 0 아닌 값: **여전히 미검증.** 운영 원장에 러너 행(`runner_*_cli` / job_id 있음)이 0건이다 — 기록 경로가 아직 배포되지 않았기 때문이다. 마이그레이션 적용과 러너 스크립트 반영 뒤 성공 작업이 5건 이상 쌓여야 `ok` 값이 나온다.
++- 비용 원장이 "기록 경로가 살아 있는가" 를 코드로 확인하지 않으면 테이블만 남아 0 을 정상값처럼 돌려준다. 폐기한 원장은 응답에 `retired` 로 표시해야 한다.
++- 출처가 다른 비용(자체 보고 / 앱 추정 / 미측정)을 한 컬럼에 라벨 없이 쌓으면 불일치가 합계 속에 묻힌다.
++- 출력 형식을 바꿔 부가 정보를 얻는 경우, 되돌리기는 "부가 작업" 이 아니라 본 경로의 일부다. 되돌리기와 부가 기록을 같은 함수에서 같은 오류 처리로 묶으면 부가 기록의 "실패해도 무시" 가 본 경로로 번진다.
++- 러너처럼 앱 밖에서 LLM 을 띄우는 경로는 앱의 계측 훅을 통과하지 않는다. 새 실행 경로를 만들 때 사용량 기록을 같이 만들어야 한다.
+diff --git a/scripts/pipeline-runner.sh b/scripts/pipeline-runner.sh
+index e3a325ee..5481a494 100755
+--- a/scripts/pipeline-runner.sh
++++ b/scripts/pipeline-runner.sh
+@@ -383,6 +383,78 @@ db_update() {
+     return 0
+ }
+ 
++RUNNER_CLI_USAGE_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner_cli_usage.py"
++
++# AADS-LLM-M9-COST-BASIS (2026-09-30): 러너 CLI 사용량을 oauth_usage_log 에
++# job_id 와 함께 남긴다. 그동안 러너는 CLI 를 직접 띄우고 아무것도 적지 않아
++# 러너 비용이 러너 작업에 귀속되지 않았다(pipeline_jobs 조인 0건).
++#
++# claude_cli 는 사용량을 얻으려고 --output-format json 으로 띄운다. 그러면 출력
++# 파일이 JSON 원문이 되므로 되돌리기는 러너 정확성의 일부다. 그래서 둘을 나눈다
++# (rework 1, 2026-09-30 리뷰 지적 1·2):
++#   runner_cli_usage_ready          헬퍼·python3 가 없으면 json 으로 띄우지 않는다.
++#   restore_runner_claude_output    출력 파일을 text 결과로 되돌리고 **검사한다**.
++#                                   되돌리지 못하면 1 — 호출자가 시도를 실패로 본다.
++#   record_runner_cli_usage         보존된 원문을 읽기만 한다. 실패해도 사용량 한
++#                                   건을 잃을 뿐 출력 파일은 건드리지 않는다.
++runner_cli_usage_ready() {
++    [[ -f "$RUNNER_CLI_USAGE_BIN" ]] && command -v python3 >/dev/null 2>&1
++}
++
++runner_output_is_cli_result_json() {
++    # CLI 결과 객체는 {"type":"result",...} 한 줄이다. 파일이 그것으로 **시작할 때만** 참이다 —
++    # 되돌린 text 결과가 본문에서 이 문자열을 언급해도 실패로 오판하지 않는다.
++    # grep -q 파이프는 쓰지 않는다 — 일찍 닫히면 SIGPIPE(141)가 pipefail 로 거짓이 된다.
++    local f="$1" head_text=""
++    [[ -s "$f" ]] || return 1
++    head_text=$(head -c 256 "$f" 2>/dev/null | tr -d ' \t\r\n') || true
++    [[ "$head_text" == '{"type":"result"'* ]]
++}
++
++restore_runner_claude_output() {
++    local job_id="$1" output_file="$2"
++    local restore_out="" rc=0
++    restore_out=$(timeout 30 python3 "$RUNNER_CLI_USAGE_BIN" restore --output-file "$output_file" 2>&1) || rc=$?
++    if runner_output_is_cli_result_json "$output_file" && command -v jq >/dev/null 2>&1; then
++        # 헬퍼가 실패했다(시간초과·예외). 헬퍼와 무관한 jq 로 한 번 더 되돌린다.
++        [[ -s "${output_file}.usage.json" ]] || cp -f "$output_file" "${output_file}.usage.json"
++        if jq -er 'select(.type == "result") | (.result // "")' "${output_file}.usage.json" > "${output_file}.tmp" 2>/dev/null; then
++            mv -f "${output_file}.tmp" "$output_file"
++        else
++            rm -f "${output_file}.tmp"
++        fi
++    fi
++    if runner_output_is_cli_result_json "$output_file"; then
++        log "  RUNNER_CLI_JSON_RESTORE_FAILED job=$job_id rc=$rc detail='${restore_out:0:200}' → 출력이 JSON 원문이라 이 시도를 실패로 본다"
++        return 1
++    fi
++    [[ $rc -eq 0 ]] || log "  RUNNER_CLI_JSON_RESTORE_WARN job=$job_id rc=$rc detail='${restore_out:0:200}' (출력은 text 로 확인됨)"
++    return 0
++}
++
++record_runner_cli_usage() {
++    local job_id="$1" kind="$2" output_file="$3" slot="$4" model="$5" exit_code="$6" duration_ms="$7"
++    [[ -n "$job_id" ]] || return 0
++    if ! runner_cli_usage_ready; then
++        log "  RUNNER_CLI_USAGE_SKIP job=$job_id reason=helper_or_python3_missing bin=$RUNNER_CLI_USAGE_BIN"
++        return 0
++    fi
++    local usage_sql="" usage_err rc=0
++    usage_err=$(mktemp 2>/dev/null || echo "/tmp/runner_cli_usage.$$.err")
++    usage_sql=$(timeout 30 python3 "$RUNNER_CLI_USAGE_BIN" usage \
++        --kind "$kind" --output-file "$output_file" --job-id "$job_id" \
++        --slot "$slot" --model "$model" \
++        --exit-code "${exit_code:-0}" --duration-ms "${duration_ms:-0}" 2>"$usage_err") || rc=$?
++    if [[ $rc -ne 0 || -z "$usage_sql" ]]; then
++        # 조용히 삼키지 않는다 — 사용량 누락은 비용 계측 결손이다.
++        log "  RUNNER_CLI_USAGE_FAILED job=$job_id kind=$kind rc=$rc err='$(head -c 300 "$usage_err" 2>/dev/null | tr '\n' ' ')'"
++    else
++        db_update "$usage_sql"
++    fi
++    rm -f "$usage_err"
++    return 0
++}
++
+ record_runner_event() {
+     local job_id="$1" event_type="$2" status="${3:-}" phase="${4:-}" model="${5:-}" actual_model="${6:-}" size="${7:-}" duration_ms="${8:-}"
+     local metadata_json
+@@ -2626,6 +2698,7 @@ ${safe_instruction}"
+         attempt_started_ms=$(date +%s%3N 2>/dev/null || date +%s000)
+         record_runner_event "$job_id" "model_attempt_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"token_slot\":\"${token_slot}\"}"
+         local runner_kind="claude_cli"
++        local claude_json_output="text"
+         if [[ "$current_model" == codex:* ]]; then
+             # AADS-RUNNER-CODEX-ACCOUNT (2026-09-19)
+             # 쿨다운 마커는 계정이 아니라 codex 전체를 막는다. 한도가 남은 계정이
+@@ -2711,10 +2784,18 @@ ${safe_instruction}"
+                 log "MODEL_CONTRACT_REJECTED job=$job_id requested=$current_model"
+                 attempt=$((attempt + 1)); sleep 2; continue
+             fi
+-            # Text output does not contain provider model evidence.
++            # The runner does not use the JSON model receipt for the model contract.
+             effective_model="unverified"
+             log "MODEL_CONTRACT job=$job_id requested=$current_model cli_model=$claude_cli_model verification=cli_argument_only"
+-            local claude_args=(--model "$claude_cli_model" -p --output-format text)
++            # AADS-LLM-M9-COST-BASIS (2026-09-30): json 으로 받아야 CLI 가 보고한
++            # 모델별 토큰·costUSD 를 얻는다. text 로는 러너 비용이 어디에도 남지 않아
++            # 러너 작업당 비용을 계산할 수 없었다. 종료 직후 restore_runner_claude_output
++            # 이 출력 파일을 text 모드와 같은 결과 텍스트로 되돌리고 검사한다.
++            # 되돌릴 헬퍼가 없으면 json 으로 띄우지 않는다 — 원문이 하류로 새지 않게.
++            local claude_output_format="text"
++            runner_cli_usage_ready && claude_output_format="json"
++            claude_json_output="$claude_output_format"
++            local claude_args=(--model "$claude_cli_model" -p --output-format "$claude_output_format")
+             # ── root 에서도 파일을 쓸 수 있어야 한다 (AADS-RUNNER-ROOT-WRITE, 2026-09-16) ──
+             # 실측 2026-09-16 11:5x KST, CLI 2.1.273:
+             #   플래그만 주면  → "--dangerously-skip-permissions cannot be used with
+@@ -2766,6 +2847,13 @@ ${safe_instruction}"
+         # pipeline_jobs.runner_pid on BASHPID so watchdog tracks the whole job.
+ 
+         wait_runner_cli_process "$job_id" "$claude_pid" "$output_file" "$err_file" "$current_model" "$effective_model" "$job_size" "$((attempt+1))" "$total_attempts" "$cycle_num" "$runner_kind" "$cli_started_ms" "0" || exit_code=$?
++        # json 원문을 하류 판정이 읽기 전에 text 로 되돌린다. 되돌리지 못하면 이 시도는
++        # 실패다 — JSON 을 결과 텍스트로 넘기면 성공 판정·결과 추출·리뷰 입력이 전부 틀린다.
++        if [[ "$runner_kind" == "claude_cli" && "$claude_json_output" == "json" ]]; then
++            if ! restore_runner_claude_output "$job_id" "$output_file"; then
++                exit_code=1
++            fi
++        fi
+ 
+         # AADS-241: Codex 연결 재시도 (5초 x 12회 = 60초, 에러/리밋 즉시 폴백)
+         if [[ $exit_code -ne 0 && "$current_model" == codex:* ]]; then
+@@ -2838,6 +2926,10 @@ ${safe_instruction}"
+         local attempt_finished_ms attempt_duration_ms
+         attempt_finished_ms=$(date +%s%3N 2>/dev/null || date +%s000)
+         attempt_duration_ms=$((attempt_finished_ms - attempt_started_ms))
++        case "$runner_kind" in
++            claude_cli) record_runner_cli_usage "$job_id" "$runner_kind" "$output_file" "$token_slot" "${claude_cli_model:-$current_model}" "$exit_code" "$attempt_duration_ms" ;;
++            codex_cli) record_runner_cli_usage "$job_id" "$runner_kind" "$output_file" "" "${current_model#codex:}" "$exit_code" "$attempt_duration_ms" ;;
++        esac
+         record_runner_event "$job_id" "model_attempt_completed" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "$attempt_duration_ms" "{\"attempt\":$((attempt+1)),\"exit_code\":${exit_code},\"success\":$([[ $exit_code -eq 0 ]] && echo true || echo false)}"
+ 
+         if [[ $exit_code -eq 0 ]]; then
+diff --git a/scripts/pipeline-runner.sh.local b/scripts/pipeline-runner.sh.local
+index e3a325ee..5481a494 100755
+--- a/scripts/pipeline-runner.sh.local
++++ b/scripts/pipeline-runner.sh.local
+@@ -383,6 +383,78 @@ db_update() {
+     return 0
+ }
+ 
++RUNNER_CLI_USAGE_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner_cli_usage.py"
++
++# AADS-LLM-M9-COST-BASIS (2026-09-30): 러너 CLI 사용량을 oauth_usage_log 에
++# job_id 와 함께 남긴다. 그동안 러너는 CLI 를 직접 띄우고 아무것도 적지 않아
++# 러너 비용이 러너 작업에 귀속되지 않았다(pipeline_jobs 조인 0건).
++#
++# claude_cli 는 사용량을 얻으려고 --output-format json 으로 띄운다. 그러면 출력
++# 파일이 JSON 원문이 되므로 되돌리기는 러너 정확성의 일부다. 그래서 둘을 나눈다
++# (rework 1, 2026-09-30 리뷰 지적 1·2):
++#   runner_cli_usage_ready          헬퍼·python3 가 없으면 json 으로 띄우지 않는다.
++#   restore_runner_claude_output    출력 파일을 text 결과로 되돌리고 **검사한다**.
++#                                   되돌리지 못하면 1 — 호출자가 시도를 실패로 본다.
++#   record_runner_cli_usage         보존된 원문을 읽기만 한다. 실패해도 사용량 한
++#                                   건을 잃을 뿐 출력 파일은 건드리지 않는다.
++runner_cli_usage_ready() {
++    [[ -f "$RUNNER_CLI_USAGE_BIN" ]] && command -v python3 >/dev/null 2>&1
++}
++
++runner_output_is_cli_result_json() {
++    # CLI 결과 객체는 {"type":"result",...} 한 줄이다. 파일이 그것으로 **시작할 때만** 참이다 —
++    # 되돌린 text 결과가 본문에서 이 문자열을 언급해도 실패로 오판하지 않는다.
++    # grep -q 파이프는 쓰지 않는다 — 일찍 닫히면 SIGPIPE(141)가 pipefail 로 거짓이 된다.
++    local f="$1" head_text=""
++    [[ -s "$f" ]] || return 1
++    head_text=$(head -c 256 "$f" 2>/dev/null | tr -d ' \t\r\n') || true
++    [[ "$head_text" == '{"type":"result"'* ]]
++}
++
++restore_runner_claude_output() {
++    local job_id="$1" output_file="$2"
++    local restore_out="" rc=0
++    restore_out=$(timeout 30 python3 "$RUNNER_CLI_USAGE_BIN" restore --output-file "$output_file" 2>&1) || rc=$?
++    if runner_output_is_cli_result_json "$output_file" && command -v jq >/dev/null 2>&1; then
++        # 헬퍼가 실패했다(시간초과·예외). 헬퍼와 무관한 jq 로 한 번 더 되돌린다.
++        [[ -s "${output_file}.usage.json" ]] || cp -f "$output_file" "${output_file}.usage.json"
++        if jq -er 'select(.type == "result") | (.result // "")' "${output_file}.usage.json" > "${output_file}.tmp" 2>/dev/null; then
++            mv -f "${output_file}.tmp" "$output_file"
++        else
++            rm -f "${output_file}.tmp"
++        fi
++    fi
++    if runner_output_is_cli_result_json "$output_file"; then
++        log "  RUNNER_CLI_JSON_RESTORE_FAILED job=$job_id rc=$rc detail='${restore_out:0:200}' → 출력이 JSON 원문이라 이 시도를 실패로 본다"
++        return 1
++    fi
++    [[ $rc -eq 0 ]] || log "  RUNNER_CLI_JSON_RESTORE_WARN job=$job_id rc=$rc detail='${restore_out:0:200}' (출력은 text 로 확인됨)"
++    return 0
++}
++
++record_runner_cli_usage() {
++    local job_id="$1" kind="$2" output_file="$3" slot="$4" model="$5" exit_code="$6" duration_ms="$7"
++    [[ -n "$job_id" ]] || return 0
++    if ! runner_cli_usage_ready; then
++        log "  RUNNER_CLI_USAGE_SKIP job=$job_id reason=helper_or_python3_missing bin=$RUNNER_CLI_USAGE_BIN"
++        return 0
++    fi
++    local usage_sql="" usage_err rc=0
++    usage_err=$(mktemp 2>/dev/null || echo "/tmp/runner_cli_usage.$$.err")
++    usage_sql=$(timeout 30 python3 "$RUNNER_CLI_USAGE_BIN" usage \
++        --kind "$kind" --output-file "$output_file" --job-id "$job_id" \
++        --slot "$slot" --model "$model" \
++        --exit-code "${exit_code:-0}" --duration-ms "${duration_ms:-0}" 2>"$usage_err") || rc=$?
++    if [[ $rc -ne 0 || -z "$usage_sql" ]]; then
++        # 조용히 삼키지 않는다 — 사용량 누락은 비용 계측 결손이다.
++        log "  RUNNER_CLI_USAGE_FAILED job=$job_id kind=$kind rc=$rc err='$(head -c 300 "$usage_err" 2>/dev/null | tr '\n' ' ')'"
++    else
++        db_update "$usage_sql"
++    fi
++    rm -f "$usage_err"
++    return 0
++}
++
+ record_runner_event() {
+     local job_id="$1" event_type="$2" status="${3:-}" phase="${4:-}" model="${5:-}" actual_model="${6:-}" size="${7:-}" duration_ms="${8:-}"
+     local metadata_json
+@@ -2626,6 +2698,7 @@ ${safe_instruction}"
+         attempt_started_ms=$(date +%s%3N 2>/dev/null || date +%s000)
+         record_runner_event "$job_id" "model_attempt_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"token_slot\":\"${token_slot}\"}"
+         local runner_kind="claude_cli"
++        local claude_json_output="text"
+         if [[ "$current_model" == codex:* ]]; then
+             # AADS-RUNNER-CODEX-ACCOUNT (2026-09-19)
+             # 쿨다운 마커는 계정이 아니라 codex 전체를 막는다. 한도가 남은 계정이
+@@ -2711,10 +2784,18 @@ ${safe_instruction}"
+                 log "MODEL_CONTRACT_REJECTED job=$job_id requested=$current_model"
+                 attempt=$((attempt + 1)); sleep 2; continue
+             fi
+-            # Text output does not contain provider model evidence.
++            # The runner does not use the JSON model receipt for the model contract.
+             effective_model="unverified"
+             log "MODEL_CONTRACT job=$job_id requested=$current_model cli_model=$claude_cli_model verification=cli_argument_only"
+-            local claude_args=(--model "$claude_cli_model" -p --output-format text)
++            # AADS-LLM-M9-COST-BASIS (2026-09-30): json 으로 받아야 CLI 가 보고한
++            # 모델별 토큰·costUSD 를 얻는다. text 로는 러너 비용이 어디에도 남지 않아
++            # 러너 작업당 비용을 계산할 수 없었다. 종료 직후 restore_runner_claude_output
++            # 이 출력 파일을 text 모드와 같은 결과 텍스트로 되돌리고 검사한다.
++            # 되돌릴 헬퍼가 없으면 json 으로 띄우지 않는다 — 원문이 하류로 새지 않게.
++            local claude_output_format="text"
++            runner_cli_usage_ready && claude_output_format="json"
++            claude_json_output="$claude_output_format"
++            local claude_args=(--model "$claude_cli_model" -p --output-format "$claude_output_format")
+             # ── root 에서도 파일을 쓸 수 있어야 한다 (AADS-RUNNER-ROOT-WRITE, 2026-09-16) ──
+             # 실측 2026-09-16 11:5x KST, CLI 2.1.273:
+             #   플래그만 주면  → "--dangerously-skip-permissions cannot be used with
+@@ -2766,6 +2847,13 @@ ${safe_instruction}"
+         # pipeline_jobs.runner_pid on BASHPID so watchdog tracks the whole job.
+ 
+         wait_runner_cli_process "$job_id" "$claude_pid" "$output_file" "$err_file" "$current_model" "$effective_model" "$job_size" "$((attempt+1))" "$total_attempts" "$cycle_num" "$runner_kind" "$cli_started_ms" "0" || exit_code=$?
++        # json 원문을 하류 판정이 읽기 전에 text 로 되돌린다. 되돌리지 못하면 이 시도는
++        # 실패다 — JSON 을 결과 텍스트로 넘기면 성공 판정·결과 추출·리뷰 입력이 전부 틀린다.
++        if [[ "$runner_kind" == "claude_cli" && "$claude_json_output" == "json" ]]; then
++            if ! restore_runner_claude_output "$job_id" "$output_file"; then
++                exit_code=1
++            fi
++        fi
+ 
+         # AADS-241: Codex 연결 재시도 (5초 x 12회 = 60초, 에러/리밋 즉시 폴백)
+         if [[ $exit_code -ne 0 && "$current_model" == codex:* ]]; then
+@@ -2838,6 +2926,10 @@ ${safe_instruction}"
+         local attempt_finished_ms attempt_duration_ms
+         attempt_finished_ms=$(date +%s%3N 2>/dev/null || date +%s000)
+         attempt_duration_ms=$((attempt_finished_ms - attempt_started_ms))
++        case "$runner_kind" in
++            claude_cli) record_runner_cli_usage "$job_id" "$runner_kind" "$output_file" "$token_slot" "${claude_cli_model:-$current_model}" "$exit_code" "$attempt_duration_ms" ;;
++            codex_cli) record_runner_cli_usage "$job_id" "$runner_kind" "$output_file" "" "${current_model#codex:}" "$exit_code" "$attempt_duration_ms" ;;
++        esac
+         record_runner_event "$job_id" "model_attempt_completed" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "$attempt_duration_ms" "{\"attempt\":$((attempt+1)),\"exit_code\":${exit_code},\"success\":$([[ $exit_code -eq 0 ]] && echo true || echo false)}"
+ 
+         if [[ $exit_code -eq 0 ]]; then
+diff --git a/scripts/runner_cli_usage.py b/scripts/runner_cli_usage.py
+new file mode 100644
+index 00000000..e4b79c92
+--- /dev/null
++++ b/scripts/runner_cli_usage.py
+@@ -0,0 +1,339 @@
++#!/usr/bin/env python3
++"""러너 CLI 사용량을 oauth_usage_log 에 job_id 와 함께 남긴다.
++
++AADS-LLM-M9-COST-BASIS-20260930.
++
++러너(pipeline-runner.sh)는 Claude/Codex CLI 를 호스트에서 직접 띄운다. 앱의
++릴레이 경로를 거치지 않으므로 그동안 oauth_usage_log 에 한 줄도 남지 않았고,
++러너 비용을 러너 작업(pipeline_jobs)에 귀속할 수 없었다.
++
++동작 — 두 단계는 **따로 불리고 따로 실패한다** (rework 1, 2026-09-30):
++  restore     claude_cli 를 `--output-format json` 으로 띄운 출력 파일이 결과
++              객체면 원문을 <out>.usage.json 으로 보존하고, 출력 파일을 예전
++              text 모드와 같은 결과 텍스트로 되돌린다(하류 판정 불변). 결과
++              객체가 아니면(빈 파일·오류 텍스트) 건드리지 않는다. 실패하면 0 이
++              아닌 종료코드를 낸다 — 러너가 출력 파일을 다시 검사해 판정한다.
++  usage       <out>.usage.json(없으면 출력 파일)을 **읽기만** 하고 INSERT SQL 을
++              낸다. 출력 파일을 쓰지 않으므로 이 단계가 실패해도 러너 결과는
++              오염되지 않는다. 사용량 한 건을 잃을 뿐이다.
++              claude_cli: modelUsage 의 모델별 costUSD 를 relay_reported 로 적는다.
++                          결과 객체가 없으면 비용 미측정 행 하나를 적는다.
++              codex_cli:  Codex exec 출력에는 토큰 분해·비용이 없다. 추측하지
++                          않고 비용 미측정(unknown) 행 하나로 귀속만 남긴다.
++
++usage 는 표준출력으로 INSERT SQL 을 낸다. 실행은 러너의 db_update 가 한다 — 여기서 DB 에
++붙지 않는 이유는 러너가 이미 docker/원격 두 방식의 접속을 한 곳(_psql_cmd)에서
++관리하기 때문이다. 정가 재계산(cost_usd_catalog)은 DB 함수가 한다.
++
++이 스크립트는 러너 호스트의 python3 로 돈다. app 패키지를 import 하지 않는다.
++"""
++from __future__ import annotations
++
++import argparse
++import json
++import os
++import sys
++from typing import Any, Dict, List, Optional
++
++CALL_SOURCE = {
++    "claude_cli": "runner_claude_cli",
++    "codex_cli": "runner_codex_cli",
++}
++_INT_MAX = 2_147_483_647
++
++
++def _int(value: Any) -> int:
++    try:
++        n = int(value or 0)
++    except (TypeError, ValueError):
++        return 0
++    return max(0, min(n, _INT_MAX))
++
++
++def _cost(value: Any) -> Optional[float]:
++    if value is None:
++        return None
++    try:
++        return float(value)
++    except (TypeError, ValueError):
++        return None
++
++
++def parse_claude_result(text: str) -> Optional[Dict[str, Any]]:
++    """CLI `-p --output-format json` 결과 객체. 아니면 None.
++
++    결과 객체는 한 줄이다. 앞에 경고 줄이 섞여도 찾도록 마지막 `{` 줄까지 본다.
++    """
++    stripped = (text or "").strip()
++    if not stripped:
++        return None
++    candidates = [stripped]
++    candidates.extend(
++        line.strip() for line in reversed(stripped.splitlines())
++        if line.strip().startswith("{")
++    )
++    for candidate in candidates:
++        if not candidate.startswith("{"):
++            continue
++        try:
++            payload = json.loads(candidate)
++        except (ValueError, TypeError):
++            continue
++        if isinstance(payload, dict) and payload.get("type") == "result":
++            return payload
++    return None
++
++
++def usage_rows_from_claude_result(
++    payload: Dict[str, Any],
++    fallback_model: str = "",
++) -> List[Dict[str, Any]]:
++    """모델별 사용량 행. 비용은 CLI 가 보고한 값만 쓴다(relay_reported).
++
++    modelUsage 가 있으면 모델별로, 없으면 최상위 usage/total_cost_usd 로 한 행.
++    보고된 비용이 없으면 cost_usd=None, cost_source='unknown'.
++    """
++    rows: List[Dict[str, Any]] = []
++    model_usage = payload.get("modelUsage")
++    if isinstance(model_usage, dict) and model_usage:
++        for name, mu in model_usage.items():
++            if not isinstance(mu, dict):
++                continue
++            cost = _cost(mu.get("costUSD"))
++            rows.append({
++                "model": str(name).split("[")[0][:60],
++                "input_tokens": _int(mu.get("inputTokens")),
++                "output_tokens": _int(mu.get("outputTokens")),
++                "cache_read_tokens": _int(mu.get("cacheReadInputTokens")),
++                "cache_creation_tokens": _int(mu.get("cacheCreationInputTokens")),
++                "cost_usd": cost,
++                "cost_source": "relay_reported" if cost is not None else "unknown",
++            })
++    if not rows:
++        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
++        cost = _cost(payload.get("total_cost_usd"))
++        rows.append({
++            "model": (fallback_model or "unknown")[:60],
++            "input_tokens": _int(usage.get("input_tokens")),
++            "output_tokens": _int(usage.get("output_tokens")),
++            "cache_read_tokens": _int(usage.get("cache_read_input_tokens")),
++            "cache_creation_tokens": _int(usage.get("cache_creation_input_tokens")),
++            "cost_usd": cost,
++            "cost_source": "relay_reported" if cost is not None else "unknown",
++        })
++    return rows
++
++
++def unmeasured_row(model: str) -> Dict[str, Any]:
++    return {
++        "model": (model or "unknown")[:60],
++        "input_tokens": 0,
++        "output_tokens": 0,
++        "cache_read_tokens": 0,
++        "cache_creation_tokens": 0,
++        "cost_usd": None,
++        "cost_source": "unknown",
++    }
++
++
++def _lit(value: Any) -> str:
++    if value is None:
++        return "NULL"
++    text = str(value).replace("\x00", "")
++    return "'" + text.replace("'", "''") + "'"
++
++
++def build_insert_sql(
++    rows: List[Dict[str, Any]],
++    *,
++    job_id: str,
++    call_source: str,
++    account_slot: str,
++    session_id: str = "",
++    error_code: Optional[str] = None,
++    duration_ms: int = 0,
++) -> str:
++    """oauth_usage_log INSERT. cost_usd_catalog 는 DB 함수로만 채운다."""
++    if not rows or not job_id:
++        return ""
++    job = _lit(job_id[:100])
++    values = []
++    for r in rows:
++        cost = r.get("cost_usd")
++        cost_sql = "NULL" if cost is None else repr(float(cost))
++        values.append(
++            "(" + ", ".join([
++                _lit((account_slot or "runner")[:20]),
++                "''",
++                _lit(r["model"]),
++                str(_int(r["input_tokens"])),
++                str(_int(r["output_tokens"])),
++                str(_int(r["cache_creation_tokens"])),
++                str(_int(r["cache_read_tokens"])),
++                cost_sql,
++                _lit(r["cost_source"]),
++                "llm_catalog_cost_usd(%s, %d, %d)" % (
++                    _lit(r["model"]), _int(r["input_tokens"]), _int(r["output_tokens"])
++                ),
++                _lit(call_source[:30]),
++                _lit((session_id or "")[:100]),
++                job,
++                _lit(error_code[:20]) if error_code else "NULL",
++                str(_int(duration_ms)),
++                "COALESCE((SELECT tenant_id FROM pipeline_jobs WHERE job_id = %s LIMIT 1), "
++                "aads_internal_tenant_id())" % job,
++            ]) + ")"
++        )
++    return (
++        "INSERT INTO oauth_usage_log (account_slot, token_prefix, model, input_tokens, "
++        "output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, cost_source, "
++        "cost_usd_catalog, call_source, session_id, job_id, error_code, duration_ms, tenant_id) "
++        "VALUES " + ", ".join(values) + ";"
++    )
++
++
++def usage_raw_path(output_file: str) -> str:
++    return output_file + ".usage.json"
++
++
++def restore_text_output(output_file: str, payload: Dict[str, Any]) -> None:
++    """원문 JSON 을 보존하고 출력 파일을 text 모드 결과와 같게 되돌린다."""
++    with open(output_file, "r", encoding="utf-8", errors="replace") as f:
++        raw = f.read()
++    with open(usage_raw_path(output_file), "w", encoding="utf-8") as f:
++        f.write(raw)
++    result = payload.get("result")
++    text = result if isinstance(result, str) else ""
++    tmp = output_file + ".tmp"
++    with open(tmp, "w", encoding="utf-8") as f:
++        f.write(text)
++        if text and not text.endswith("\n"):
++            f.write("\n")
++    os.replace(tmp, output_file)
++
++
++def restore_output(output_file: str) -> str:
++    """restore 단계. 'restored' 또는 'not_json'. 입출력 오류는 예외로 올린다.
++
++    같은 출력 파일을 재시도가 다시 쓰므로, 지난 시도의 <out>.usage.json 이
++    이번 시도의 사용량으로 읽히지 않게 먼저 지운다.
++    """
++    raw_path = usage_raw_path(output_file)
++    if os.path.exists(raw_path):
++        os.remove(raw_path)
++    try:
++        with open(output_file, "r", encoding="utf-8", errors="replace") as f:
++            text = f.read()
++    except FileNotFoundError:
++        return "not_json"
++    payload = parse_claude_result(text)
++    if payload is None:
++        return "not_json"
++    restore_text_output(output_file, payload)
++    return "restored"
++
++
++def _read_usage_payload(output_file: str) -> Optional[Dict[str, Any]]:
++    for path in (usage_raw_path(output_file), output_file):
++        try:
++            with open(path, "r", encoding="utf-8", errors="replace") as f:
++                payload = parse_claude_result(f.read())
++        except OSError:
++            continue
++        if payload is not None:
++            return payload
++    return None
++
++
++def usage_sql(
++    kind: str,
++    output_file: str,
++    *,
++    job_id: str,
++    account_slot: str,
++    model: str,
++    exit_code: int,
++    duration_ms: int,
++) -> str:
++    """usage 단계. 파일을 읽기만 한다."""
++    call_source = CALL_SOURCE.get(kind)
++    if not call_source or not job_id:
++        return ""
++    error_code = None if exit_code == 0 else ("exit_%d" % exit_code)[:20]
++
++    if kind == "claude_cli":
++        payload = _read_usage_payload(output_file)
++        if payload is not None:
++            if payload.get("is_error") and not error_code:
++                error_code = "cli_error"
++            rows = usage_rows_from_claude_result(payload, fallback_model=model)
++            return build_insert_sql(
++                rows,
++                job_id=job_id,
++                call_source=call_source,
++                account_slot=account_slot,
++                session_id=str(payload.get("session_id") or ""),
++                error_code=error_code,
++                duration_ms=duration_ms,
++            )
++        return build_insert_sql(
++            [unmeasured_row(model)],
++            job_id=job_id,
++            call_source=call_source,
++            account_slot=account_slot,
++            error_code=error_code or "no_usage_json",
++            duration_ms=duration_ms,
++        )
++
++    return build_insert_sql(
++        [unmeasured_row(model)],
++        job_id=job_id,
++        call_source=call_source,
++        account_slot=account_slot,
++        error_code=error_code,
++        duration_ms=duration_ms,
++    )
++
++
++def process(kind: str, output_file: str, **kwargs: Any) -> str:
++    """restore 후 usage. 단위시험·수동 점검용 — 러너는 두 단계를 따로 부른다."""
++    if kind == "claude_cli":
++        restore_output(output_file)
++    return usage_sql(kind, output_file, **kwargs)
++
++
++def main(argv: Optional[List[str]] = None) -> int:
++    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
++    ap.add_argument("mode", nargs="?", choices=("restore", "usage"), default="usage")
++    ap.add_argument("--kind", default="claude_cli")
++    ap.add_argument("--output-file", required=True)
++    ap.add_argument("--job-id", default="")
++    ap.add_argument("--slot", default="")
++    ap.add_argument("--model", default="")
++    ap.add_argument("--exit-code", type=int, default=0)
++    ap.add_argument("--duration-ms", type=int, default=0)
++    args = ap.parse_args(argv)
++    if args.mode == "restore":
++        try:
++            status = restore_output(args.output_file)
++        except OSError as e:
++            print("runner_cli_usage: restore failed: %s" % e, file=sys.stderr)
++            return 2
++        sys.stdout.write(status)
++        return 0
++    sql = usage_sql(
++        args.kind,
++        args.output_file,
++        job_id=args.job_id,
++        account_slot=args.slot or ("codex" if args.kind == "codex_cli" else "runner"),
++        model=args.model,
++        exit_code=args.exit_code,
++        duration_ms=args.duration_ms,
++    )
++    if sql:
++        sys.stdout.write(sql)
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/tests/unit/test_llm_cost_basis.py b/tests/unit/test_llm_cost_basis.py
+new file mode 100644
+index 00000000..37de43d2
+--- /dev/null
++++ b/tests/unit/test_llm_cost_basis.py
+@@ -0,0 +1,875 @@
++"""AADS-LLM-M9-COST-BASIS-20260930 회귀시험.
++
++- surface 판정 5경로
++- cost_source 분리: 실보고(relay_reported)와 정가 추산(cost_usd_catalog)이 섞이지 않음
++- 성공 작업당 비용: 분모 0 / 분모 미정의 / 표본 부족 (+ 정상)
++- job_id 귀속: 앱 기록 경로·러너 기록 경로 모두 job_id 를 남기고, 집계가 그것으로 분모를 센다
++"""
 +from __future__ import annotations
 +
 +import asyncio
-+import inspect
++import importlib.util
 +import json
-+from datetime import datetime, timezone
++import os
++import stat
++import subprocess
++from pathlib import Path
 +
 +import pytest
 +
-+from app.services import llm_response_metrics, oauth_usage_tracker
-+from app.services.llm_metric_normalization import (
-+    build_cost_entry,
-+    classify_fallback_chain,
-+    cost_basis_for_source,
-+    normalize_model_dimension,
-+    summarize_fallback_chains,
-+)
++from app.services import llm_cost_basis as cb
++from app.services import oauth_usage_tracker as tracker
 +
-+# 공개 모델 id 다(시크릿 아님). `"model_key": "<고엔트로피 문자열>"` 모양이
-+# gitleaks generic-api-key 에 걸리므로(오류 사전 git.gitleaks_flags_public_model_id)
-+# 픽스처에 리터럴로 박지 않고 여기 한 번만 둔다.
-+HAIKU_MODEL_ID = "claude-haiku-4-5-20251001"
++ROOT = Path(__file__).resolve().parents[2]
 +
 +
-+# ── 결함 1: 실패율 분모·분자 ────────────────────────────────────────────
++def _load_runner_usage():
++    path = ROOT / "scripts" / "runner_cli_usage.py"
++    spec = importlib.util.spec_from_file_location("runner_cli_usage", path)
++    mod = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(mod)
++    return mod
 +
 +
-+def test_취소된_무지연_작업도_분모에_들어가_실패율이_100을_넘지_않는다():
-+    # 2026-09-29 실측 재현: claude-sonnet-4-6 지연>0 20건, 실패 30건(취소 11 = 지연 0)
-+    rows = (
-+        [{"model_key": "claude-sonnet-4-6", "latency_ms": 0, "failed": True}] * 11
-+        + [{"model_key": "claude-sonnet-4-6", "latency_ms": 5000.0, "failed": True}] * 19
-+        + [{"model_key": "claude-sonnet-4-6", "latency_ms": 7000.0, "failed": False}]
++runner_usage = _load_runner_usage()
++
++
++# ── surface 판정 5경로 ────────────────────────────────────────────────
++
++def test_surface_chat_when_session_is_chat_session():
++    assert cb.classify_surface("cli_relay", None, session_is_chat=True) == "chat"
++    assert cb.classify_surface("model_selector_sdk", "", session_is_chat=True) == "chat"
++
++
++def test_surface_runner_from_job_id_or_runner_call_source():
++    # 실행 컨텍스트가 채팅 세션보다 우선한다.
++    assert cb.classify_surface("cli_relay", "runner-abc123", session_is_chat=True) == "runner"
++    assert cb.classify_surface("runner_claude_cli", None) == "runner"
++    assert cb.classify_surface("runner_codex_cli", "") == "runner"
++
++
++def test_surface_terminal_cli_for_non_chat_relay():
++    assert cb.classify_surface("cli_relay", None, session_is_chat=False) == "terminal_cli"
++    assert cb.classify_surface("codex_relay", "", session_is_chat=False) == "terminal_cli"
++
++
++def test_surface_service_for_in_app_clients():
++    for src in ("anthropic_client", "anthropic_client_msg", "model_selector_sdk", "ceo_chat"):
++        assert cb.classify_surface(src, None, session_is_chat=False) == "service"
++
++
++def test_surface_unknown_is_not_guessed():
++    assert cb.classify_surface("", None) == "unknown"
++    assert cb.classify_surface("something_new", None) == "unknown"
++
++
++# ── cost_source 분리 ─────────────────────────────────────────────────
++
++def test_resolve_cost_fields_keeps_reported_and_marks_unmeasured_null():
++    assert cb.resolve_cost_fields(12.5, "relay_reported") == (12.5, "relay_reported")
++    assert cb.resolve_cost_fields(0.3, "catalog_estimated") == (0.3, "catalog_estimated")
++    # 출처 없는 0 은 미측정 → NULL
++    assert cb.resolve_cost_fields(0.0, None) == (None, "unknown")
++    assert cb.resolve_cost_fields(None, None) == (None, "unknown")
++    # 보고라고 했는데 값이 없으면 unknown
++    assert cb.resolve_cost_fields(None, "relay_reported") == (None, "unknown")
++    # 모르는 출처 문자열은 받아들이지 않는다
++    assert cb.resolve_cost_fields(1.0, "guess") == (1.0, "unknown")
++
++
++def _capture_log_usage(monkeypatch, **kwargs):
++    captured = []
++
++    async def fake_enqueue(entry):
++        captured.append(entry)
++
++    monkeypatch.setattr(tracker, "_enqueue_usage", fake_enqueue)
++    monkeypatch.setattr(tracker, "_ensure_flush_task", lambda: None)
++
++    async def run():
++        tracker.log_usage(token="", account_slot="1", **kwargs)
++        await asyncio.sleep(0)
++        await asyncio.sleep(0)
++
++    asyncio.run(run())
++    assert len(captured) == 1
++    return captured[0]
++
++
++def test_log_usage_records_cost_source_and_never_fills_catalog(monkeypatch):
++    entry = _capture_log_usage(
++        monkeypatch,
++        model="claude-opus-5",
++        input_tokens=100,
++        output_tokens=200,
++        cost_usd=9.99,
++        cost_source="relay_reported",
++        call_source="cli_relay",
 +    )
-+    models, states = llm_response_metrics._aggregate_samples("runner_cli_total", rows)
-+
-+    assert states == []
-+    item = models[0]
-+    assert item["calls"] == 31
-+    assert item["latency_samples"] == 20
-+    assert item["failed_calls"] == 30
-+    assert item["failure_rate_pct"] == 96.8
-+    assert item["failed_calls"] <= item["calls"]
++    assert entry["cost_usd"] == 9.99
++    assert entry["cost_source"] == "relay_reported"
++    # 정가 재계산값은 앱이 만들지 않는다 — entry 에 칸 자체가 없다.
++    assert "cost_usd_catalog" not in entry
 +
 +
-+def test_실패를_재지_않는_소스는_실패율이_None_이다():
-+    rows = [{"model_key": "claude-opus-5", "latency_ms": 1200.0, "failed": None}]
-+    models, _ = llm_response_metrics._aggregate_samples("chat_final_response", rows)
-+    assert models[0]["failed_calls"] is None
-+    assert models[0]["failure_rate_pct"] is None
++def test_log_usage_default_is_unmeasured_not_zero(monkeypatch):
++    entry = _capture_log_usage(
++        monkeypatch, model="claude-haiku-4-5-20251001", call_source="anthropic_client"
++    )
++    assert entry["cost_usd"] is None
++    assert entry["cost_source"] == "unknown"
 +
 +
-+def test_지연이_0인_행은_백분위에서_빠진다():
++def test_insert_catalog_column_comes_from_db_function_not_reported_value():
++    entry = {
++        "account_slot": "1", "token_prefix": "", "model": "claude-opus-5",
++        "input_tokens": 10, "output_tokens": 20,
++        "cache_creation_tokens": 0, "cache_read_tokens": 0,
++        "cost_usd": 7.77, "cost_source": "relay_reported", "rl": {},
++        "call_source": "cli_relay", "session_id": "s", "error_code": None,
++        "duration_ms": 0, "tenant_id": None, "job_id": None,
++    }
++    sql, args = tracker._build_usage_insert([entry], tracker._USAGE_LOG_COLUMNS, with_catalog=True)
++    cols = [c.strip() for c in sql.split("(", 1)[1].split(")", 1)[0].split(",")]
++    assert cols[-1] == "cost_usd_catalog"
++    assert "llm_catalog_cost_usd(" in sql
++    # 인자에는 실보고 값이 cost_usd 자리에 한 번만 들어가고, catalog 자리는 인자가 아니다.
++    assert args.count(7.77) == 1
++    assert args[tracker._USAGE_LOG_COLUMNS.index("cost_usd")] == 7.77
++    assert args[tracker._USAGE_LOG_COLUMNS.index("cost_source")] == "relay_reported"
++    assert len(args) == len(tracker._USAGE_LOG_COLUMNS)
++
++
++def test_insert_legacy_schema_fallback_drops_new_columns():
++    entry = {
++        "account_slot": "1", "token_prefix": "", "model": "m",
++        "input_tokens": 1, "output_tokens": 1,
++        "cache_creation_tokens": 0, "cache_read_tokens": 0,
++        "cost_usd": None, "cost_source": "unknown", "rl": {},
++        "call_source": "x", "session_id": "", "error_code": None,
++        "duration_ms": 0, "tenant_id": None, "job_id": "runner-1",
++    }
++    sql, args = tracker._build_usage_insert(
++        [entry], tracker._USAGE_LOG_LEGACY_COLUMNS, with_catalog=False
++    )
++    assert "cost_source" not in sql and "job_id" not in sql and "cost_usd_catalog" not in sql
++    assert len(args) == len(tracker._USAGE_LOG_LEGACY_COLUMNS)
++
++
++def test_summary_never_adds_reported_and_estimated_into_one_total():
 +    rows = [
-+        {"model_key": "claude-opus-5", "latency_ms": 0, "failed": False},
-+        {"model_key": "claude-opus-5", "latency_ms": 100.0, "failed": False},
-+        {"model_key": "claude-opus-5", "latency_ms": 300.0, "failed": False},
++        {"call_source": "cli_relay", "model": "claude-opus-5", "cost_source": "relay_reported",
++         "calls": 3, "cost_usd": 30.0, "cost_usd_catalog": 5.0, "catalog_calls": 3,
++         "both_cost_usd": 30.0, "both_catalog_usd": 5.0},
++        {"call_source": "cli_relay", "model": "claude-opus-5", "cost_source": "catalog_estimated",
++         "calls": 1, "cost_usd": 2.0, "cost_usd_catalog": None, "catalog_calls": 0},
 +    ]
-+    models, _ = llm_response_metrics._aggregate_samples("oauth_llm_api", rows)
-+    assert models[0]["calls"] == 3
-+    assert models[0]["latency_samples"] == 2
-+    assert models[0]["p50_latency_ms"] == 200
++    items = cb.summarize_usage_rows(rows)
++    by_src = {i["cost_source"]: i for i in items}
++    assert set(by_src) == {"relay_reported", "catalog_estimated"}
++    assert by_src["relay_reported"]["total_cost_usd"] == 30.0
++    assert by_src["relay_reported"]["catalog_cost_usd"] == 5.0
++    assert by_src["relay_reported"]["reported_to_catalog_ratio"] == 6.0
++    assert by_src["catalog_estimated"]["total_cost_usd"] == 2.0
++    assert by_src["catalog_estimated"]["catalog_cost_usd"] is None
++    surf = cb.summarize_by_surface(items)
++    assert len(surf) == 2  # 모델은 접어도 비용출처는 접지 않는다
 +
 +
-+def _as_aggregate_row(item: dict) -> dict:
-+    """_aggregate_samples 항목을 예전 집계 행 모양(model_key/calls/…)으로 되돌린다."""
++# ── 성공 작업당 비용 ─────────────────────────────────────────────────
++
++def test_cost_per_success_denominator_zero():
++    r = cb.cost_per_success(10.0, 0, denominator_defined=True)
++    assert r == {"value": None, "status": "denominator_zero"}
++
++
++def test_cost_per_success_denominator_undefined():
++    r = cb.cost_per_success(10.0, None, denominator_defined=False)
++    assert r == {"value": None, "status": "denominator_undefined"}
++
++
++def test_cost_per_success_insufficient_sample():
++    r = cb.cost_per_success(10.0, 4, denominator_defined=True)
++    assert r == {"value": None, "status": "insufficient_sample"}
++
++
++def test_cost_per_success_ok():
++    assert cb.cost_per_success(10.0, 5, denominator_defined=True) == {"value": 2.0, "status": "ok"}
++
++
++def test_chat_surface_has_no_invented_denominator():
++    rows = [{"call_source": "cli_relay", "model": "claude-opus-5", "cost_source": "relay_reported",
++             "session_is_chat": True, "calls": 50, "cost_usd": 100.0}]
++    item = cb.summarize_usage_rows(rows)[0]
++    assert item["surface"] == "chat"
++    assert item["success_jobs"] is None
++    assert item["cost_per_success_usd"] is None
++    assert item["cost_per_success_status"] == "denominator_undefined"
++    assert item["denominator"] == "undefined"
++
++
++# ── job_id 귀속 ──────────────────────────────────────────────────────
++
++def test_log_usage_carries_job_id(monkeypatch):
++    entry = _capture_log_usage(
++        monkeypatch, model="claude-opus-5", cost_usd=1.0, cost_source="relay_reported",
++        call_source="cli_relay", session_id="chat-uuid", job_id="runner-deadbeef",
++    )
++    assert entry["job_id"] == "runner-deadbeef"
++    assert entry["session_id"] == "chat-uuid"  # 기존 session_id 는 그대로
++    values = tracker._usage_log_values(entry)
++    assert values[tracker._USAGE_LOG_COLUMNS.index("job_id")] == "runner-deadbeef"
++
++
++def test_runner_success_denominator_counts_done_jobs_only():
++    rows = []
++    for i in range(6):
++        rows.append({"call_source": "runner_claude_cli", "model": "claude-opus-5",
++                     "cost_source": "relay_reported", "job_id": f"runner-{i}",
++                     "job_status": "done", "calls": 1, "cost_usd": 3.0})
++    # 같은 작업이 두 번 시도돼도 성공 작업은 하나다.
++    rows.append({"call_source": "runner_claude_cli", "model": "claude-opus-5",
++                 "cost_source": "relay_reported", "job_id": "runner-0",
++                 "job_status": "done", "calls": 1, "cost_usd": 3.0})
++    rows.append({"call_source": "runner_claude_cli", "model": "claude-opus-5",
++                 "cost_source": "relay_reported", "job_id": "runner-rej",
++                 "job_status": "rejected_done", "calls": 1, "cost_usd": 6.0})
++    rows.append({"call_source": "runner_claude_cli", "model": "claude-opus-5",
++                 "cost_source": "relay_reported", "job_id": "runner-err",
++                 "job_status": "error", "calls": 1, "cost_usd": 6.0})
++    item = cb.summarize_usage_rows(rows)[0]
++    assert item["surface"] == "runner"
++    assert item["jobs"] == 8
++    assert item["success_jobs"] == 6
++    assert item["total_cost_usd"] == 33.0
++    # 실패·반려 작업 비용도 성공 작업이 떠안는다.
++    assert item["cost_per_success_usd"] == 5.5
++    assert item["cost_per_success_status"] == "ok"
++
++
++def test_runner_sql_joins_pipeline_jobs_by_job_id():
++    sql = cb.COST_PER_SUCCESS_SQL
++    assert "LEFT JOIN pipeline_jobs pj ON pj.job_id = o.job_id" in sql
++    assert "LEFT JOIN chat_sessions cs ON cs.id::text = o.session_id" in sql
++
++
++def _claude_payload():
 +    return {
-+        "model_key": item["raw_models"][0],
-+        "raw_models": item["raw_models"],
-+        "calls": item["calls"],
-+        "latency_samples": item["latency_samples"],
-+        "failed_calls": item["failed_calls"],
-+        "avg_latency_ms": item["avg_latency_ms"],
-+        "p50_latency_ms": item["p50_latency_ms"],
-+        "p95_latency_ms": item["p95_latency_ms"],
-+        "max_latency_ms": item["max_latency_ms"],
++        "type": "result", "subtype": "success", "is_error": False,
++        "result": "RESULT: 변경 파일 2개", "session_id": "cli-sess-1",
++        "total_cost_usd": 4.5,
++        "usage": {"input_tokens": 1, "output_tokens": 2},
++        "modelUsage": {
++            "claude-opus-5[1m]": {"inputTokens": 10, "outputTokens": 1000,
++                                  "cacheReadInputTokens": 50000,
++                                  "cacheCreationInputTokens": 700, "costUSD": 4.0},
++            "claude-haiku-4-5-20251001": {"inputTokens": 5, "outputTokens": 50, "costUSD": 0.5},
++        },
 +    }
 +
 +
-+def test_metric_row_위임은_실패를_재는_소스에서_새_경로와_같은_dict_를_낸다():
-+    rows = (
-+        [{"model_key": "claude-sonnet-4-6", "latency_ms": 0, "failed": True}] * 3
-+        + [{"model_key": "claude-sonnet-4-6", "latency_ms": 5000.0, "failed": False}] * 4
-+        + [{"model_key": "claude-sonnet-4-6", "latency_ms": 9000.0, "failed": True}]
++def test_runner_claude_json_restores_text_and_attributes_job(tmp_path):
++    out = tmp_path / "runner-abc.out"
++    out.write_text(json.dumps(_claude_payload()), encoding="utf-8")
++    sql = runner_usage.process(
++        "claude_cli", str(out), job_id="runner-abc", account_slot="2",
++        model="claude-opus-5", exit_code=0, duration_ms=1234,
 +    )
-+    models, _ = llm_response_metrics._aggregate_samples("runner_cli_total", rows)
-+    expected = models[0]
-+    assert llm_response_metrics._metric_row("runner_cli_total", _as_aggregate_row(expected)) == expected
++    # 하류 판정은 예전 text 모드와 같은 결과 텍스트를 본다.
++    assert out.read_text(encoding="utf-8") == "RESULT: 변경 파일 2개\n"
++    assert json.loads((tmp_path / "runner-abc.out.usage.json").read_text())["total_cost_usd"] == 4.5
++    assert sql.startswith("INSERT INTO oauth_usage_log")
++    assert sql.count("'runner-abc'") >= 2  # job_id 칸 + tenant 조회
++    assert "'runner_claude_cli'" in sql
++    assert "'claude-opus-5'" in sql and "[1m]" not in sql
++    assert "4.0, 'relay_reported'" in sql
++    assert "llm_catalog_cost_usd('claude-opus-5', 10, 1000)" in sql
++    assert "'cli-sess-1'" in sql
++    assert "FROM pipeline_jobs WHERE job_id = 'runner-abc'" in sql
 +
 +
-+def test_metric_row_위임은_상태값과_실패_미측정_소스에서도_새_경로와_같은_dict_를_낸다():
-+    rows = [
-+        {"model_key": "<synthetic>", "latency_ms": 100.0, "failed": None},
-+        {"model_key": "<synthetic>", "latency_ms": 300.0, "failed": None},
-+    ]
-+    _, states = llm_response_metrics._aggregate_samples("chat_final_response", rows)
-+    expected = states[0]
-+    assert expected["model"] is None
-+    assert llm_response_metrics._metric_row("chat_final_response", _as_aggregate_row(expected)) == expected
++def test_runner_non_json_output_is_untouched_and_unmeasured(tmp_path):
++    out = tmp_path / "runner-x.out"
++    out.write_text("You've hit your limit\n", encoding="utf-8")
++    sql = runner_usage.process(
++        "claude_cli", str(out), job_id="runner-x", account_slot="1",
++        model="claude-opus-5", exit_code=1, duration_ms=0,
++    )
++    assert out.read_text(encoding="utf-8") == "You've hit your limit\n"
++    assert "NULL, 'unknown'" in sql
++    assert "'exit_1'" in sql
 +
 +
-+def test_metric_row_는_분자가_분모보다_큰_행에_실패율을_만들지_않는다():
-+    row = {
-+        "model_key": "claude-sonnet-4-6", "calls": 20, "failed_calls": 30,
-+        "avg_latency_ms": None, "p50_latency_ms": None, "p95_latency_ms": None, "max_latency_ms": None,
++def test_runner_codex_row_is_attributed_without_guessing_cost(tmp_path):
++    out = tmp_path / "runner-c.out"
++    out.write_text("done", encoding="utf-8")
++    sql = runner_usage.process(
++        "codex_cli", str(out), job_id="runner-c", account_slot="codex",
++        model="gpt-6-astra", exit_code=0, duration_ms=10,
++    )
++    assert out.read_text(encoding="utf-8") == "done"
++    assert "'runner_codex_cli'" in sql and "'runner-c'" in sql
++    assert "NULL, 'unknown'" in sql
++
++
++def test_runner_sql_escapes_quotes():
++    sql = runner_usage.build_insert_sql(
++        [runner_usage.unmeasured_row("m'x")], job_id="j'1", call_source="runner_claude_cli",
++        account_slot="1",
++    )
++    assert "'m''x'" in sql and "'j''1'" in sql
++
++
++# ── 마이그레이션·배선 ────────────────────────────────────────────────
++
++def test_migration_up_down_pair_exists():
++    up = (ROOT / "migrations" / "20260930_oauth_usage_cost_basis.sql").read_text(encoding="utf-8")
++    down = (ROOT / "migrations" / "rollback" / "20260930_oauth_usage_cost_basis.down.sql").read_text(
++        encoding="utf-8"
++    )
++    for col in ("cost_source", "cost_usd_catalog", "job_id"):
++        assert f"ADD COLUMN IF NOT EXISTS {col}" in up
++        assert f"DROP COLUMN IF EXISTS {col}" in down
++    assert "'relay_reported', 'catalog_estimated', 'unknown'" in up
++    assert "FUNCTION public.llm_catalog_cost_usd" in up
++    # 과거 행에 정가 추산을 채우지 않는다.
++    assert "SET cost_usd_catalog" not in up
++    # 자동 적용 게이트(파괴적 문장 차단)에 걸리지 않아야 한다.
++    for bad in ("DROP TABLE", "DROP COLUMN", "TRUNCATE"):
++        assert bad not in up.upper()
++
++
++def test_runner_script_restores_and_records_usage_before_output_is_read():
++    script = (ROOT / "scripts" / "pipeline-runner.sh").read_text(encoding="utf-8")
++    restore = script.index('if ! restore_runner_claude_output "$job_id" "$output_file"; then')
++    call = script.index('claude_cli) record_runner_cli_usage "$job_id"')
++    first_read = script.index('output=$(head -c 50000 "$output_file")')
++    assert restore < call < first_read
++    # 되돌리기는 codex 재시도·출력 검사보다 먼저, CLI 가 끝난 직후다.
++    wait_call = script.index(
++        'wait_runner_cli_process "$job_id" "$claude_pid" "$output_file" "$err_file" '
++        '"$current_model" "$effective_model" "$job_size" "$((attempt+1))" "$total_attempts" '
++        '"$cycle_num" "$runner_kind" "$cli_started_ms" "0" || exit_code=$?'
++    )
++    assert wait_call < restore < script.index("AADS-241: Codex 연결 재시도")
++    assert 'RUNNER_CLI_USAGE_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner_cli_usage.py"' in script
++
++
++def test_runner_local_template_is_byte_identical():
++    """pipeline-runner.sh.local 은 HEAD 에서 .sh 와 바이트 동일한 사본이었다 — 같이 고친다."""
++    sh = (ROOT / "scripts" / "pipeline-runner.sh").read_bytes()
++    local = (ROOT / "scripts" / "pipeline-runner.sh.local").read_bytes()
++    assert sh == local
++
++
++@pytest.mark.parametrize("call_source,cost_source", [
++    ('call_source="cli_relay"', 'cost_source="relay_reported"'),
++    ('call_source="codex_relay"', 'cost_source="catalog_estimated"'),
++])
++def test_model_selector_labels_cost_source(call_source, cost_source):
++    src = (ROOT / "app" / "services" / "model_selector.py").read_text(encoding="utf-8")
++    idx = src.index(call_source)
++    window = src[idx - 400: idx + 50]
++    assert cost_source in window
++
++
++# ── rework 1: 러너 출력 되돌리기와 사용량 기록 분리 (리뷰 지적 1·2) ─────────
++
++RUNNER_SCRIPT = (ROOT / "scripts" / "pipeline-runner.sh").read_text(encoding="utf-8")
++
++
++def _runner_function(name: str) -> str:
++    start = RUNNER_SCRIPT.index(f"{name}() {{")
++    return RUNNER_SCRIPT[start:RUNNER_SCRIPT.index("\n}\n", start) + 3]
++
++
++def _write_exec(path: Path, body: str) -> Path:
++    path.write_text(body, encoding="utf-8")
++    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
++    return path
++
++
++def _run_runner_harness(tmp_path: Path, body: str, *, helper: str, jq: str = "") -> subprocess.CompletedProcess:
++    """러너 함수 네 개만 떼어 set -eo pipefail 스텁 환경에서 돌린다."""
++    bindir = tmp_path / "bin"
++    bindir.mkdir(exist_ok=True)
++    if jq:
++        _write_exec(bindir / "jq", jq)
++    harness = tmp_path / "harness.sh"
++    harness.write_text(
++        "set -eo pipefail\n"
++        'log() { echo "LOG $*" >&2; }\n'
++        'db_update() { echo "DB $1" >> "$DB_LOG"; }\n'
++        f'RUNNER_CLI_USAGE_BIN="{helper}"\n'
++        + ("" if jq else "jq() { return 127; }\n")
++        + _runner_function("runner_cli_usage_ready")
++        + _runner_function("runner_output_is_cli_result_json")
++        + _runner_function("restore_runner_claude_output")
++        + _runner_function("record_runner_cli_usage")
++        + body,
++        encoding="utf-8",
++    )
++    env = dict(os.environ)
++    env["PATH"] = f"{bindir}:{env.get('PATH', '')}"
++    env["DB_LOG"] = str(tmp_path / "db.log")
++    return subprocess.run(["bash", str(harness)], capture_output=True, text=True, timeout=60, env=env)
++
++
++REAL_HELPER = str(ROOT / "scripts" / "runner_cli_usage.py")
++
++
++def test_helper_restore_and_usage_are_separate_steps(tmp_path):
++    out = tmp_path / "runner-s.out"
++    out.write_text(json.dumps(_claude_payload()), encoding="utf-8")
++    assert runner_usage.restore_output(str(out)) == "restored"
++    assert out.read_text(encoding="utf-8") == "RESULT: 변경 파일 2개\n"
++    before = out.read_text(encoding="utf-8")
++    sql = runner_usage.usage_sql(
++        "claude_cli", str(out), job_id="runner-s", account_slot="1",
++        model="claude-opus-5", exit_code=0, duration_ms=1,
++    )
++    # usage 단계는 출력 파일을 쓰지 않는다 — 실패해도 러너 결과가 오염되지 않는다.
++    assert out.read_text(encoding="utf-8") == before
++    assert "4.0, 'relay_reported'" in sql and "'runner-s'" in sql
++
++
++def test_helper_restore_removes_stale_usage_from_previous_attempt(tmp_path):
++    out = tmp_path / "runner-r.out"
++    (tmp_path / "runner-r.out.usage.json").write_text(json.dumps(_claude_payload()), encoding="utf-8")
++    out.write_text("You've hit your limit\n", encoding="utf-8")
++    assert runner_usage.restore_output(str(out)) == "not_json"
++    assert not (tmp_path / "runner-r.out.usage.json").exists()
++    sql = runner_usage.usage_sql(
++        "claude_cli", str(out), job_id="runner-r", account_slot="1",
++        model="claude-opus-5", exit_code=1, duration_ms=0,
++    )
++    assert "4.0" not in sql and "'no_usage_json'" not in sql and "NULL, 'unknown'" in sql
++
++
++def test_helper_parses_result_after_leading_warning_line(tmp_path):
++    out = tmp_path / "runner-w.out"
++    out.write_text("warning: something\n" + json.dumps(_claude_payload()) + "\n", encoding="utf-8")
++    assert runner_usage.restore_output(str(out)) == "restored"
++    assert out.read_text(encoding="utf-8") == "RESULT: 변경 파일 2개\n"
++
++
++def test_runner_restore_with_real_helper(tmp_path):
++    out = tmp_path / "o.out"
++    out.write_text(json.dumps(_claude_payload()), encoding="utf-8")
++    r = _run_runner_harness(
++        tmp_path,
++        f'restore_runner_claude_output runner-h "{out}" && echo RESTORE_OK\n'
++        f'record_runner_cli_usage runner-h claude_cli "{out}" 1 claude-opus-5 0 10\n',
++        helper=REAL_HELPER,
++    )
++    assert r.returncode == 0, r.stderr
++    assert "RESTORE_OK" in r.stdout
++    assert out.read_text(encoding="utf-8") == "RESULT: 변경 파일 2개\n"
++    db = (tmp_path / "db.log").read_text(encoding="utf-8")
++    assert "INSERT INTO oauth_usage_log" in db and "'runner-h'" in db
++
++
++def test_runner_restore_falls_back_to_jq_when_helper_crashes(tmp_path):
++    helper = _write_exec(tmp_path / "broken.py", "import sys\nraise SystemExit(3)\n")
++    # jq 스텁: 헬퍼와 무관한 경로가 결과만 꺼내는지 본다.
++    jq = (
++        "#!/usr/bin/env python3\n"
++        "import json, sys\n"
++        "p = json.load(open(sys.argv[-1]))\n"
++        "sys.stdout.write(p.get('result') or '')\n"
++    )
++    out = tmp_path / "o.out"
++    out.write_text(json.dumps(_claude_payload()), encoding="utf-8")
++    r = _run_runner_harness(
++        tmp_path, f'restore_runner_claude_output runner-j "{out}" && echo RESTORE_OK\n',
++        helper=str(helper), jq=jq,
++    )
++    assert r.returncode == 0, r.stderr
++    assert "RESTORE_OK" in r.stdout
++    assert "RUNNER_CLI_JSON_RESTORE_WARN" in r.stderr
++    assert out.read_text(encoding="utf-8").startswith("RESULT: 변경 파일 2개")
++
++
++def test_runner_restore_failure_is_reported_not_swallowed(tmp_path):
++    """헬퍼도 jq 도 실패하면 1 을 돌려 시도를 실패로 만든다 — JSON 이 결과로 새지 않는다."""
++    helper = _write_exec(tmp_path / "slow.py", "raise RuntimeError('boom')\n")
++    out = tmp_path / "o.out"
++    raw = json.dumps(_claude_payload())
++    out.write_text(raw, encoding="utf-8")
++    r = _run_runner_harness(
++        tmp_path,
++        f'if restore_runner_claude_output runner-f "{out}"; then echo RESTORE_OK; else echo RESTORE_FAILED; fi\n',
++        helper=str(helper),
++    )
++    assert r.returncode == 0, r.stderr
++    assert "RESTORE_FAILED" in r.stdout
++    assert "RUNNER_CLI_JSON_RESTORE_FAILED job=runner-f" in r.stderr
++    assert "boom" in r.stderr
++
++
++def test_runner_restore_leaves_text_output_alone(tmp_path):
++    out = tmp_path / "o.out"
++    out.write_text("plain text result\n", encoding="utf-8")
++    r = _run_runner_harness(
++        tmp_path, f'restore_runner_claude_output runner-t "{out}" && echo RESTORE_OK\n',
++        helper=REAL_HELPER,
++    )
++    assert r.returncode == 0, r.stderr
++    assert "RESTORE_OK" in r.stdout
++    assert out.read_text(encoding="utf-8") == "plain text result\n"
++
++
++def test_runner_restored_text_mentioning_result_json_is_not_a_failure(tmp_path):
++    """되돌린 결과 본문이 CLI JSON 모양을 인용해도 되돌리기 실패로 보지 않는다."""
++    out = tmp_path / "o.out"
++    payload = _claude_payload()
++    payload["result"] = 'RESULT: 판정은 {"type":"result"} 로 시작하는 파일만 본다'
++    out.write_text(json.dumps(payload), encoding="utf-8")
++    r = _run_runner_harness(
++        tmp_path, f'restore_runner_claude_output runner-q "{out}" && echo RESTORE_OK\n', helper=REAL_HELPER,
++    )
++    assert r.returncode == 0, r.stderr
++    assert "RESTORE_OK" in r.stdout
++    assert out.read_text(encoding="utf-8").startswith("RESULT: 판정은")
++
++
++def test_runner_json_detection_survives_pipefail_on_large_output(tmp_path):
++    out = tmp_path / "big.out"
++    payload = _claude_payload()
++    payload["result"] = "x" * 300_000
++    out.write_text(json.dumps(payload), encoding="utf-8")
++    r = _run_runner_harness(
++        tmp_path, f'runner_output_is_cli_result_json "{out}" && echo IS_JSON\n', helper=REAL_HELPER,
++    )
++    assert r.returncode == 0, r.stderr
++    assert "IS_JSON" in r.stdout
++
++
++def test_record_usage_logs_missing_helper_and_failure(tmp_path):
++    out = tmp_path / "o.out"
++    out.write_text("text\n", encoding="utf-8")
++    missing = _run_runner_harness(
++        tmp_path, f'record_runner_cli_usage runner-m claude_cli "{out}" 1 m 0 1; echo DONE\n',
++        helper=str(tmp_path / "nope.py"),
++    )
++    assert missing.returncode == 0, missing.stderr
++    assert "RUNNER_CLI_USAGE_SKIP job=runner-m" in missing.stderr
++    helper = _write_exec(tmp_path / "bad.py", "import sys\nsys.stderr.write('parse exploded')\nraise SystemExit(1)\n")
++    failed = _run_runner_harness(
++        tmp_path, f'record_runner_cli_usage runner-b claude_cli "{out}" 1 m 0 1; echo DONE\n',
++        helper=str(helper),
++    )
++    assert failed.returncode == 0, failed.stderr
++    assert "DONE" in failed.stdout
++    assert "RUNNER_CLI_USAGE_FAILED job=runner-b" in failed.stderr and "parse exploded" in failed.stderr
++    assert not (tmp_path / "db.log").exists()
++    assert out.read_text(encoding="utf-8") == "text\n"
++
++
++# ── rework 1: 스키마 폴백 (리뷰 지적 4·5) ───────────────────────────────
++
++class _PgError(Exception):
++    """asyncpg.PostgresError 와 같은 계약(sqlstate·column_name 속성)만 흉내 낸다."""
++
++    def __init__(self, message, sqlstate, column_name=None):
++        super().__init__(message)
++        self.sqlstate = sqlstate
++        self.column_name = column_name
++
++
++class _FakeConn:
++    def __init__(self, failures):
++        self.failures = list(failures)
++        self.sqls = []
++
++    async def execute(self, sql, *args):
++        self.sqls.append(sql)
++        if self.failures:
++            exc = self.failures.pop(0)
++            if exc is not None:
++                raise exc
++
++
++class _FakeAcquire:
++    def __init__(self, conn):
++        self.conn = conn
++
++    async def __aenter__(self):
++        return self.conn
++
++    async def __aexit__(self, *a):
++        return False
++
++
++class _FakePool:
++    def __init__(self, conn):
++        self.conn = conn
++
++    def acquire(self):
++        return _FakeAcquire(self.conn)
++
++
++def _entry(**over):
++    e = {
++        "account_slot": "1", "token_prefix": "", "model": "claude-opus-5",
++        "input_tokens": 1, "output_tokens": 1,
++        "cache_creation_tokens": 0, "cache_read_tokens": 0,
++        "cost_usd": None, "cost_source": "unknown", "rl": {},
++        "call_source": "cli_relay", "session_id": "", "error_code": None,
++        "duration_ms": 0, "tenant_id": None, "job_id": "runner-1",
 +    }
-+    item = llm_response_metrics._metric_row("runner_cli_total", row)
-+    assert item["failure_rate_pct"] is None
-+    assert item["raw_models"] == ["claude-sonnet-4-6"]
++    e.update(over)
++    return e
 +
 +
-+# ── 결함 4: 모델 정규화 ───────────────────────────────────────────────
++@pytest.fixture
++def fresh_schema_state(monkeypatch):
++    monkeypatch.setattr(tracker, "_COST_BASIS_COLUMNS_MISSING_UNTIL", 0.0)
++    monkeypatch.setattr(tracker, "_COST_BASIS_CATALOG_MISSING_UNTIL", 0.0)
++    clock = {"now": 1000.0}
++    monkeypatch.setattr(tracker._time, "monotonic", lambda: clock["now"])
++    return clock
 +
 +
-+@pytest.mark.parametrize(
-+    "raw, expected",
-+    [
-+        ("gpt-6-sol", "gpt-6-sol"),
-+        ("GPT-6 Sol (Codex CLI)", "gpt-6-sol"),
-+        ("codex:gpt-6-sol", "gpt-6-sol"),
-+        ("GPT-5.6 Sol (Codex CLI)", "gpt-5.6-sol"),
-+        ("claude-opus-5", "claude-opus-5"),
-+        # 계약(scripts/claude_model_contract.ALIASES) 기준 별칭 해석
-+        ("claude-opus", "claude-opus-5-5"),
-+        ("claude-sonnet", "claude-sonnet-5-5"),
-+        ("claude-fable-5.1", "claude-fable-5-1"),
-+        # 계약상 별개 모델은 합치지 않는다
-+        ("claude-fable-5", "claude-fable-5"),
-+        ("claude-fable-5-1", "claude-fable-5-1"),
-+    ],
-+)
-+def test_같은_모델의_여러_표기를_하나로_모은다(raw, expected):
-+    result = normalize_model_dimension(raw)
-+    assert result["model"] == expected
-+    assert result["state"] is None
-+    assert result["raw"] == raw
++def test_catalog_function_missing_keeps_cost_source_and_job_id(monkeypatch, fresh_schema_state):
++    conn = _FakeConn([_PgError('function llm_catalog_cost_usd(text, bigint, bigint) does not exist', "42883"), None])
++    monkeypatch.setattr(tracker, "get_pool", lambda: _FakePool(conn))
++    asyncio.run(tracker._insert_usage_batch([_entry()]))
++    assert "llm_catalog_cost_usd(" in conn.sqls[0]
++    # 두 번째 시도는 새 열은 유지하고 정가 함수만 뺀다.
++    assert "cost_source" in conn.sqls[1] and "job_id" in conn.sqls[1]
++    assert "llm_catalog_cost_usd(" not in conn.sqls[1]
 +
 +
-+@pytest.mark.parametrize(
-+    "raw, state",
-+    [
-+        ("interrupted", "interrupted"),
-+        ("stopped", "stopped"),
-+        ("unknown", "unknown"),
-+        ("unverified", "unverified"),
-+        ("Unverified", "unverified"),
-+        ("mixture", "mixture"),
-+        ("<synthetic>", "<synthetic>"),
-+        ("", "unknown"),
-+        (None, "unknown"),
-+    ],
-+)
-+def test_비모델_상태값은_모델이_아니라_상태_차원으로_간다(raw, state):
-+    result = normalize_model_dimension(raw)
-+    assert result["model"] is None
-+    assert result["state"] == state
++def test_schema_fallback_is_rechecked_after_migration(monkeypatch, fresh_schema_state):
++    clock = fresh_schema_state
++    missing_col = _PgError('column "cost_source" of relation "oauth_usage_log" does not exist', "42703")
++    # (새 열+정가) 실패 → (새 열) 실패 → (옛 열) 성공.
++    conn = _FakeConn([missing_col, missing_col, None])
++    monkeypatch.setattr(tracker, "get_pool", lambda: _FakePool(conn))
++    asyncio.run(tracker._insert_usage_batch([_entry()]))
++    assert len(conn.sqls) == 3
++    assert "cost_source" not in conn.sqls[-1]
++    # 재확인 전에는 옛 열로 바로 간다.
++    asyncio.run(tracker._insert_usage_batch([_entry()]))
++    assert "cost_source" not in conn.sqls[-1]
++    # 마이그레이션이 운영 중에 적용되고 재확인 시간이 지나면 재시작 없이 새 열로 돌아온다.
++    clock["now"] += tracker._COST_BASIS_RECHECK_SEC + 1
++    asyncio.run(tracker._insert_usage_batch([_entry()]))
++    assert "cost_source" in conn.sqls[-1] and "llm_catalog_cost_usd(" in conn.sqls[-1]
 +
 +
-+def test_집계에서_상태값은_모델_목록이_아니라_상태_목록에_들어간다():
-+    rows = [
-+        {"model_key": "unverified", "latency_ms": 1000.0, "failed": True},
-+        {"model_key": "codex:gpt-6-sol", "latency_ms": 1000.0, "failed": False},
-+        {"model_key": "GPT-6 Sol (Codex CLI)", "latency_ms": 3000.0, "failed": True},
-+    ]
-+    models, states = llm_response_metrics._aggregate_samples("runner_cli_total", rows)
-+    assert [item["model"] for item in models] == ["gpt-6-sol"]
-+    assert models[0]["calls"] == 2
-+    assert models[0]["raw_models"] == ["GPT-6 Sol (Codex CLI)", "codex:gpt-6-sol"]
-+    assert [item["model_state"] for item in states] == ["unverified"]
++def test_cost_usd_not_null_violation_is_not_requeued(monkeypatch, fresh_schema_state):
++    err = _PgError('null value in column "cost_usd" of relation "oauth_usage_log" violates not-null constraint',
++                   "23502", column_name="cost_usd")
++    conn = _FakeConn([err])
++    monkeypatch.setattr(tracker, "get_pool", lambda: _FakePool(conn))
++    monkeypatch.setattr(tracker, "_USAGE_LOG_BUFFER", [_entry()])
++
++    async def run():
++        await tracker._flush_usage_buffer()
++
++    asyncio.run(run())
++    assert tracker._USAGE_LOG_BUFFER == []  # 무한 재시도 버퍼로 되돌리지 않는다
++    assert len(conn.sqls) == 1
 +
 +
-+# ── 결함 5: 폴백 집계 ─────────────────────────────────────────────────
++def test_other_insert_errors_are_still_requeued(monkeypatch, fresh_schema_state):
++    conn = _FakeConn([Exception("connection reset")])
++    monkeypatch.setattr(tracker, "get_pool", lambda: _FakePool(conn))
++    monkeypatch.setattr(tracker, "_USAGE_LOG_BUFFER", [_entry()])
++    asyncio.run(tracker._flush_usage_buffer())
++    assert len(tracker._USAGE_LOG_BUFFER) == 1
 +
 +
-+def test_빈_배열과_M5_전체실패_객체와_성공_객체를_함께_판정한다():
-+    all_failed = json.dumps({
-+        "result": "all_failed",
-+        "stages": [{"stage": "fallback_attempt", "result": "failed"}, {"stage": "all_failed"}],
-+    })
-+    succeeded = {
-+        "from": "claude-opus-5",
-+        "to": "gpt-6-sol",
-+        "reason": "429_rate_limit",
-+        "stages": [{"stage": "fallback_attempt"}, {"stage": "fallback_succeeded"}],
-+    }
-+    assert classify_fallback_chain("[]") == "none_recorded"
-+    assert classify_fallback_chain([]) == "none_recorded"
-+    assert classify_fallback_chain(None) == "none_recorded"
-+    assert classify_fallback_chain(all_failed) == "fallback_all_failed"
-+    assert classify_fallback_chain(succeeded) == "fallback_succeeded"
-+    assert classify_fallback_chain(json.dumps([{"stage": "fallback_attempt"}])) == "fallback_attempted"
-+    assert classify_fallback_chain("{not json") == "unparseable"
++def test_migration_guarantees_cost_usd_nullable_and_passes_destructive_gate():
++    up = (ROOT / "migrations" / "20260930_oauth_usage_cost_basis.sql").read_text(encoding="utf-8")
++    drop_nn = up.index("ALTER COLUMN cost_usd DROP NOT NULL")
++    assert drop_nn < up.index("SET cost_usd = NULL")
++    gate = (ROOT / "scripts" / "apply_release_migrations.sh").read_text(encoding="utf-8")
++    start = gate.index("destructive_reason() {")
++    fn = gate[start:gate.index("\n}\n", start) + 3]
++    r = subprocess.run(
++        ["bash", "-c", fn + 'destructive_reason "$1"', "_",
++         str(ROOT / "migrations" / "20260930_oauth_usage_cost_basis.sql")],
++        capture_output=True, text=True, timeout=30,
++    )
++    assert r.returncode == 0 and r.stdout.strip() == "", r.stdout + r.stderr
 +
 +
-+def test_폴백률은_기록된_폴백_턴_비율이다():
-+    summary = summarize_fallback_chains([
-+        ("[]", 846),
-+        (json.dumps({"result": "all_failed", "stages": [{"stage": "all_failed"}]}), 1),
-+        (json.dumps({"from": "a", "to": "b", "stages": [{"stage": "fallback_succeeded"}]}), 3),
-+    ])
-+    assert summary["turns"] == 850
-+    assert summary["fallback_turns"] == 4
-+    assert summary["fallback_rate_pct"] == 0.5
-+    assert summary["fallback_success_rate_pct"] == 75.0
-+    assert summary["by_class"]["none_recorded"] == 846
++# ── rework 1: 모델 SDK 경로 비용출처 판정 (리뷰 지적 6) ─────────────────
++
++def test_model_selector_sdk_cost_source_uses_initialized_same_criterion():
++    src = (ROOT / "app" / "services" / "model_selector.py").read_text(encoding="utf-8")
++    start = src.index("async def _run_agent_sdk_with_key(")
++    body = src[start:src.index("\nasync def ", start + 10)]
++    init = body.index("total_cost = 0.0")
++    decide = body.index("_sdk_cost_reported = bool(total_cost)")
++    assert init < decide
++    assert "cost = total_cost if _sdk_cost_reported else" in body
++    assert 'cost_source="relay_reported" if _sdk_cost_reported else "catalog_estimated"' in body
 +
 +
-+def test_폴백_기록이_없으면_성공률은_None_이다():
-+    summary = summarize_fallback_chains([("[]", 10)])
-+    assert summary["fallback_turns"] == 0
-+    assert summary["fallback_success_rate_pct"] is None
-+    assert summarize_fallback_chains([])["fallback_rate_pct"] is None
++# ── rework 1: 성공 작업당 비용 분모 중복 제거 (리뷰 지적 8) ──────────────
++
++def _runner_row(job, model, cost, status="done"):
++    return {"call_source": "runner_claude_cli", "model": model, "cost_source": "relay_reported",
++            "job_id": job, "job_status": status, "calls": 1, "cost_usd": cost}
 +
 +
-+# ── 결함 6: 비용 산출 근거 ─────────────────────────────────────────────
++def test_multi_model_job_counted_once_in_denominator():
++    rows = []
++    for i in range(5):
++        rows.append(_runner_row(f"runner-{i}", "claude-opus-5", 4.0))
++        rows.append(_runner_row(f"runner-{i}", "claude-haiku-4-5", 1.0))  # 같은 작업의 보조 모델
++    items = cb.summarize_usage_rows(rows)
++    by_model = {i["model"]: i for i in items}
++    assert by_model["claude-opus-5"]["success_jobs"] == 5
++    assert by_model["claude-haiku-4-5"]["success_jobs"] == 5
++    assert by_model["claude-opus-5"]["cost_per_success_usd"] == 4.0
++    assert by_model["claude-haiku-4-5"]["cost_per_success_usd"] == 1.0
++    surf = cb.summarize_by_surface(items)
++    assert len(surf) == 1
++    s0 = surf[0]
++    # 작업 5개, 작업당 5.0 — 모델마다 분모에 다시 들어가지 않는다.
++    assert s0["success_jobs"] == 5 and s0["jobs"] == 5
++    assert s0["total_cost_usd"] == 25.0
++    assert s0["cost_per_success_usd"] == 5.0
++    assert s0["cost_per_success_status"] == "ok"
++    # 모델 몫을 더하면 표면 작업당 비용이다.
++    assert sum(i["cost_per_success_usd"] for i in items) == s0["cost_per_success_usd"]
 +
 +
-+def test_구독_CLI_비용은_정가_환산이고_실청구는_미측정이다():
-+    entry = build_cost_entry("cli_relay", 9332.21, calls=786)
-+    assert entry["cost_basis"] == "list_price_equivalent"
-+    assert entry["list_price_equivalent_usd"] == 9332.21
-+    assert entry["billed_usd"] is None
-+    assert entry["billed_status"] == "미측정"
++def test_model_share_uses_surface_denominator_when_model_used_by_few_jobs():
++    rows = [_runner_row(f"runner-{i}", "claude-opus-5", 2.0) for i in range(6)]
++    rows.append(_runner_row("runner-0", "claude-haiku-4-5", 0.6))
++    items = {i["model"]: i for i in cb.summarize_usage_rows(rows)}
++    haiku = items["claude-haiku-4-5"]
++    assert haiku["success_jobs"] == 6
++    assert haiku["success_jobs_using_model"] == 1
++    assert haiku["cost_per_success_usd"] == 0.1
++    surf = cb.summarize_by_surface(list(items.values()))[0]
++    assert surf["cost_per_success_usd"] == 2.1
 +
 +
-+def test_cost_usd_를_넘기지_않는_경로는_0을_비용으로_내지_않는다():
-+    entry = build_cost_entry("anthropic_client", 0, calls=743)
-+    assert entry["cost_basis"] == "not_recorded"
-+    assert entry["list_price_equivalent_usd"] is None
-+    assert entry["billed_usd"] is None
++def test_by_surface_keeps_undefined_and_insufficient_status():
++    chat = [{"call_source": "cli_relay", "model": "m", "cost_source": "relay_reported",
++             "session_is_chat": True, "calls": 3, "cost_usd": 9.0}]
++    runner = [_runner_row(f"runner-{i}", "m", 1.0) for i in range(3)]
++    surf = {s["surface"]: s for s in cb.summarize_by_surface(cb.summarize_usage_rows(chat + runner))}
++    assert surf["chat"]["cost_per_success_usd"] is None
++    assert surf["chat"]["cost_per_success_status"] == "denominator_undefined"
++    assert surf["runner"]["cost_per_success_usd"] is None
++    assert surf["runner"]["cost_per_success_status"] == "insufficient_sample"
 +
 +
-+def test_모르는_call_source_는_근거_unknown_으로_금액을_내지_않는다():
-+    basis = cost_basis_for_source("new_path")
-+    assert basis["cost_basis"] == "unknown"
-+    assert build_cost_entry("new_path", 5.0)["list_price_equivalent_usd"] is None
++# ── rework 2: 스키마 부재 판정은 SQLSTATE 로 (리뷰 지적 3·4) ────────────
++
++def test_schema_gap_uses_sqlstate_not_message_text():
++    # 문구가 다른 로케일이어도 SQLSTATE 만으로 판정한다.
++    localized = _PgError("열 \"cost_source\" 없음", "42703")
++    assert tracker._cost_basis_schema_gap(localized, with_catalog=False) == "columns"
++    # 영문 "does not exist" 문구라도 SQLSTATE 가 없으면 스키마 부재로 보지 않는다.
++    plain = Exception('column "cost_source" of relation "oauth_usage_log" does not exist')
++    assert tracker._cost_basis_schema_gap(plain, with_catalog=False) is None
++    assert tracker._cost_basis_schema_gap(plain, with_catalog=True) is None
++    # 연결 오류 등 다른 SQLSTATE 는 None — 버퍼 재시도로 간다.
++    assert tracker._cost_basis_schema_gap(_PgError("x", "08006"), with_catalog=True) is None
++    # 정가 함수를 뺀 시도에서 42883 은 이 마이그레이션과 무관하다.
++    assert tracker._cost_basis_schema_gap(_PgError("x", "42883"), with_catalog=False) is None
 +
 +
-+def test_사용량_집계는_캐시_토큰을_포함하고_정가환산만_합산한다():
-+    rows = [
-+        {
-+            "call_source": "cli_relay", "model_key": "claude-opus-5", "calls": 2,
-+            "input_tokens": 40, "output_tokens": 1000,
-+            "cache_creation_tokens": 5000, "cache_read_tokens": 4_000_000, "cost_usd": 20.5,
-+            "duration_recorded": 2, "rl_tokens_recorded": 0,
-+            "unified_status_recorded": 2, "unified_utilization_recorded": 2,
-+        },
-+        {
-+            "call_source": "anthropic_client", "model_key": HAIKU_MODEL_ID, "calls": 3,
-+            "input_tokens": 300, "output_tokens": 30,
-+            "cache_creation_tokens": 0, "cache_read_tokens": 0, "cost_usd": 0,
-+            "duration_recorded": 3, "rl_tokens_recorded": 0,
-+            "unified_status_recorded": 3, "unified_utilization_recorded": 3,
-+        },
-+    ]
-+    usage = llm_response_metrics._usage_section(rows, [])
-+    assert usage["cost"]["list_price_equivalent_usd"] == 20.5
-+    assert usage["cost"]["billed_usd"] is None
-+    assert usage["cost"]["not_recorded_calls"] == 3
-+    opus = next(item for item in usage["by_model"] if item["model"] == "claude-opus-5")
-+    assert opus["total_tokens"] == 40 + 1000 + 5000 + 4_000_000
-+    coverage = {item["call_source"]: item for item in usage["recording_coverage"]}
-+    assert coverage["cli_relay"]["duration_recorded_pct"] == 100.0
++def test_catalog_function_body_column_missing_falls_back_not_requeued(monkeypatch, fresh_schema_state):
++    # 정가 함수 본문이 읽는 llm_models 열이 런타임에 없을 때(리뷰 지적 3).
++    # 문구에 llm_catalog_cost_usd/cost_usd_catalog 가 없어도 catalog 부재로 보고
++    # 정가 함수만 빼서 적는다 — 버퍼로 되돌려 무한 재시도하지 않는다.
++    err = _PgError("column m.provider does not exist", "42703")
++    conn = _FakeConn([err, None])
++    monkeypatch.setattr(tracker, "get_pool", lambda: _FakePool(conn))
++    monkeypatch.setattr(tracker, "_USAGE_LOG_BUFFER", [_entry()])
++    asyncio.run(tracker._flush_usage_buffer())
++    assert tracker._USAGE_LOG_BUFFER == []
++    assert len(conn.sqls) == 2
++    assert "llm_catalog_cost_usd(" not in conn.sqls[1]
++    assert "cost_source" in conn.sqls[1] and "job_id" in conn.sqls[1]
++    assert tracker._COST_BASIS_CATALOG_MISSING_UNTIL > 0
++    assert tracker._COST_BASIS_COLUMNS_MISSING_UNTIL == 0.0
 +
 +
-+# ── 결함 2·3: 지연·한도 기록 경로 ──────────────────────────────────────
++def test_schema_gap_matches_real_asyncpg_exceptions():
++    exc = pytest.importorskip("asyncpg.exceptions")
++    assert tracker._cost_basis_schema_gap(
++        exc.UndefinedFunctionError("function llm_catalog_cost_usd does not exist"), with_catalog=True
++    ) == "catalog"
++    assert tracker._cost_basis_schema_gap(
++        exc.UndefinedTableError('relation "llm_models" does not exist'), with_catalog=True
++    ) == "catalog"
++    assert tracker._cost_basis_schema_gap(
++        exc.UndefinedColumnError('column "job_id" does not exist'), with_catalog=False
++    ) == "columns"
++    nn = exc.NotNullViolationError("null value")
++    nn.column_name = "cost_usd"
++    assert tracker._is_cost_usd_not_null_violation(nn)
++    other = exc.NotNullViolationError("null value")
++    other.column_name = "tenant_id"
++    assert not tracker._is_cost_usd_not_null_violation(other)
 +
 +
-+def test_CLI_rate_limit_event_를_unified_컬럼_단위로_옮긴다():
-+    info = {
-+        "status": "allowed_warning",
-+        "rateLimitType": "seven_day",
-+        "unifiedWindows": {
-+            "five_hour": {"resetsAt": 1790700000, "utilization": 0.25},
-+            "seven_day": {"resetsAt": 1790704800, "utilization": 0.75},
-+        },
-+    }
-+    parsed = oauth_usage_tracker.parse_cli_rate_limit_info(info)
-+    assert parsed["unified_status"] == "allowed_warning"
-+    assert parsed["unified_5h_utilization"] == 0.25
-+    assert parsed["unified_7d_utilization"] == 0.75
-+    assert parsed["unified_7d_reset"] == datetime.fromtimestamp(1790704800, tz=timezone.utc)
-+    assert parsed["unified_fallback"] == "seven_day"
-+    # OAuth 구독은 tokens-* 한도를 주지 않는다 — 만들어 내지 않는다
-+    assert "rl_tokens_remaining" not in parsed
++def test_catalog_function_columns_exist_in_llm_models_schema():
++    # 정가 함수가 읽는 llm_models 열이 053 스키마에 모두 있다(리뷰 지적 3).
++    # 2026-09-30 운영 DB 에서도 check_function_bodies=on 으로 컴파일 확인.
++    schema = (ROOT / "migrations" / "053_llm_model_registry.sql").read_text(encoding="utf-8")
++    table = schema[schema.index("CREATE TABLE"):schema.index(");", schema.index("CREATE TABLE"))]
++    for col in ("id SERIAL", "provider ", "model_id ", "input_cost ", "output_cost ", "is_active "):
++        assert col in table, col
++    up = (ROOT / "migrations" / "20260930_oauth_usage_cost_basis.sql").read_text(encoding="utf-8")
++    fn = up[up.index("FUNCTION public.llm_catalog_cost_usd("):]
++    for ref in ("m.provider", "m.is_active", "m.id", "m.model_id", "m.input_cost", "m.output_cost"):
++        assert ref in fn, ref
 +
 +
-+def test_빈_rate_limit_info_는_아무것도_채우지_않는다():
-+    assert oauth_usage_tracker.parse_cli_rate_limit_info(None) == {}
-+    assert oauth_usage_tracker.parse_cli_rate_limit_info({}) == {}
-+    assert oauth_usage_tracker.parse_cli_rate_limit_info("x") == {}
++def test_dead_schema_helper_removed():
++    assert not hasattr(tracker, "_is_missing_cost_basis_schema")
 +
 +
-+def test_log_usage_가_duration_과_CLI_한도를_적재_항목에_싣는다(monkeypatch):
-+    captured = []
++# ── rework 2: 상태값과 비용출처 이름공간 분리 (리뷰 지적 6) ─────────────
 +
-+    async def _capture(entry):
-+        captured.append(entry)
-+
-+    monkeypatch.setattr(oauth_usage_tracker, "_enqueue_usage", _capture)
-+    monkeypatch.setattr(oauth_usage_tracker, "_ensure_flush_task", lambda: None)
-+
-+    async def _run():
-+        oauth_usage_tracker.log_usage(
-+            token="",
-+            model="claude-opus-5",
-+            call_source="cli_relay",
-+            account_slot="1",
-+            duration_ms=4321,
-+            rate_limit_info={"status": "allowed", "unifiedWindows": {"five_hour": {"utilization": 0.1}}},
-+        )
-+        await asyncio.sleep(0)
-+
-+    asyncio.run(_run())
-+    entry = captured[0]
-+    values = dict(zip(oauth_usage_tracker._USAGE_LOG_COLUMNS, oauth_usage_tracker._usage_log_values(entry)))
-+    assert values["duration_ms"] == 4321
-+    assert values["unified_status"] == "allowed"
-+    assert values["unified_5h_utilization"] == 0.1
-+    assert values["rl_tokens_remaining"] is None
++def test_cost_per_success_cost_unknown_has_own_status():
++    r = cb.cost_per_success(None, 10, denominator_defined=True)
++    assert r == {"value": None, "status": cb.PER_SUCCESS_COST_UNKNOWN}
++    assert cb.PER_SUCCESS_COST_UNKNOWN not in cb.COST_SOURCES
++    assert set(cb.PER_SUCCESS_STATUSES).isdisjoint(cb.COST_SOURCES)
 +
 +
-+def test_헤더_값이_CLI_한도보다_우선한다(monkeypatch):
-+    captured = []
++# ── rework 2: cli_relay 의 미보고 0.00 을 보고값으로 백필하지 않음 (리뷰 지적 5) ──
 +
-+    async def _capture(entry):
-+        captured.append(entry)
-+
-+    monkeypatch.setattr(oauth_usage_tracker, "_enqueue_usage", _capture)
-+    monkeypatch.setattr(oauth_usage_tracker, "_ensure_flush_task", lambda: None)
-+
-+    async def _run():
-+        oauth_usage_tracker.log_usage(
-+            token="",
-+            model=HAIKU_MODEL_ID,
-+            headers={"anthropic-ratelimit-unified-status": "rejected"},
-+            rate_limit_info={"status": "allowed"},
-+        )
-+        await asyncio.sleep(0)
-+
-+    asyncio.run(_run())
-+    assert captured[0]["rl"]["unified_status"] == "rejected"
++def test_backfill_does_not_label_cli_relay_zero_as_relay_reported():
++    up = (ROOT / "migrations" / "20260930_oauth_usage_cost_basis.sql").read_text(encoding="utf-8")
++    start = up.index("SET cost_source = 'relay_reported'")
++    stmt = up[start:up.index(";", start)]
++    assert "call_source = 'cli_relay'" in stmt
++    assert "cost_usd <> 0" in stmt
++    null_start = up.index("SET cost_usd = NULL\n WHERE call_source = 'cli_relay'")
++    assert up.index("ALTER COLUMN cost_usd DROP NOT NULL") < null_start
++    down = (ROOT / "migrations" / "rollback" / "20260930_oauth_usage_cost_basis.down.sql").read_text(
++        encoding="utf-8"
++    )
++    assert "WHERE call_source = 'cli_relay'\n   AND cost_usd IS NULL" in down
 +
 +
-+def test_duration_을_빠뜨렸던_세_경로가_이제_경과시간을_넘긴다():
-+    from app.services import model_selector
++# ── rework 2: 내부 DB 오류 문구를 응답에 싣지 않음 (리뷰 지적 8) ─────────
 +
-+    cli_src = inspect.getsource(model_selector._stream_cli_relay_once)
-+    codex_src = inspect.getsource(model_selector._stream_codex_relay_once)
-+    sdk_src = inspect.getsource(model_selector._run_agent_sdk_with_key)
-+    for src in (cli_src, codex_src, sdk_src):
-+        assert "_usage_t0 = _time_mod.monotonic()" in src
-+        assert "duration_ms=int((_time_mod.monotonic() - _usage_t0) * 1000)" in src
-+    assert "rate_limit_info=_last_rate_limit_info or None" in cli_src
-diff --git a/tests/unit/test_llm_response_metrics.py b/tests/unit/test_llm_response_metrics.py
-index cbf0530a..3668d1d8 100644
---- a/tests/unit/test_llm_response_metrics.py
-+++ b/tests/unit/test_llm_response_metrics.py
-@@ -60,28 +60,16 @@ class _Conn:
-                 }
-             ]
-         if "FROM chat_messages" in query:
-+            # 표본 단위 — 실패 판정이 없는 소스라 failed 는 NULL
-             return [
--                {
--                    "model_key": "gpt-5.6-sol",
--                    "calls": 3,
--                    "failed_calls": 0,
--                    "avg_latency_ms": 1200.4,
--                    "p50_latency_ms": 1000.0,
--                    "p95_latency_ms": 2200.0,
--                    "max_latency_ms": 2400.0,
--                }
-+                {"model_key": "gpt-5.6-sol", "latency_ms": 1000.0, "failed": None},
-+                {"model_key": "gpt-5.6-sol", "latency_ms": 2400.0, "failed": None},
-+                {"model_key": "gpt-5.6-sol", "latency_ms": 200.0, "failed": None},
-             ]
-         if "FROM pipeline_jobs" in query:
-             return [
--                {
--                    "model_key": "codex:gpt-5.6-sol",
--                    "calls": 2,
--                    "failed_calls": 1,
--                    "avg_latency_ms": 30000.0,
--                    "p50_latency_ms": 28000.0,
--                    "p95_latency_ms": 40000.0,
--                    "max_latency_ms": 41000.0,
--                }
-+                {"model_key": "codex:gpt-5.6-sol", "latency_ms": 41000.0, "failed": False},
-+                {"model_key": "codex:gpt-5.6-sol", "latency_ms": 15000.0, "failed": True},
-             ]
-         return []
++def test_per_success_endpoint_does_not_leak_db_error(monkeypatch):
++    from fastapi import HTTPException
++
++    from app.api import ops
++
++    async def boom():
++        raise RuntimeError('relation "oauth_usage_log" column "cost_source" does not exist')
++
++    monkeypatch.setattr(ops, "_get_conn", boom)
++    with pytest.raises(HTTPException) as ei:
++        asyncio.run(ops.ops_llm_cost_per_success(days=7))
++    assert ei.value.status_code == 500
++    assert "oauth_usage_log" not in str(ei.value.detail)
++    assert "cost_source" not in str(ei.value.detail)
+diff --git a/tests/unit/test_pipeline_runner_script_guards.py b/tests/unit/test_pipeline_runner_script_guards.py
+index 86ff4c85..b86975ee 100644
+--- a/tests/unit/test_pipeline_runner_script_guards.py
++++ b/tests/unit/test_pipeline_runner_script_guards.py
+@@ -175,7 +175,11 @@ def test_pipeline_runner_preserves_exact_claude_versions():
+     assert 'python3 "$CLAUDE_MODEL_CONTRACT"' in script
+     assert 'effective_model="unverified"' in script
+     assert "claude_cli_model=$(normalize_claude_cli_model \"$current_model\")" in script
+-    assert "local claude_args=(--model \"$claude_cli_model\" -p --output-format text)" in script
++    # AADS-LLM-M9-COST-BASIS: json 으로 받아 사용량을 적고, 결과는 text 로 되돌린다.
++    # 되돌릴 헬퍼가 없으면 json 으로 띄우지 않는다(rework 1, 리뷰 지적 1).
++    assert "local claude_args=(--model \"$claude_cli_model\" -p --output-format \"$claude_output_format\")" in script
++    assert 'runner_cli_usage_ready && claude_output_format="json"' in script
++    assert "record_runner_cli_usage \"$job_id\" \"$runner_kind\" \"$output_file\"" in script
  
-@@ -98,7 +86,14 @@ def test_llm_response_metrics_aggregates_sources(monkeypatch):
-     assert result["model_filter"] == "gpt"
-     assert result["summary"]["total_observations"] == 5
-     assert result["summary"]["failed_observations"] == 1
--    assert result["summary"]["failure_rate_pct"] == 20.0
-+    # 실패 판정이 없는 채팅 표본(3건)은 실패율 분모에서 빠진다.
-+    assert result["summary"]["failure_denominator"] == 2
-+    assert result["summary"]["failure_rate_pct"] == 50.0
-+    assert result["summary"]["invariant_violations"] == []
-+    assert result["metrics"]["chat_final_response"][0]["failed_calls"] is None
-+    assert result["metrics"]["chat_final_response"][0]["failure_rate_pct"] is None
-+    assert result["metrics"]["chat_final_response"][0]["p50_latency_ms"] == 1000
-+    assert result["metrics"]["runner_cli_total"][0]["model"] == "gpt-5.6-sol"
-     assert result["summary"]["slowest_top5"][0]["source"] == "runner_cli_total"
-     assert result["metrics"]["chat_final_response"][0]["provider"] == "openai"
-     assert result["metrics"]["runner_cli_total"][0]["provider"] == "codex"
+ 
+ def test_pipeline_runner_read_only_no_diff_completes_without_approval():

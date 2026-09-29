@@ -175,7 +175,11 @@ def test_pipeline_runner_preserves_exact_claude_versions():
     assert 'python3 "$CLAUDE_MODEL_CONTRACT"' in script
     assert 'effective_model="unverified"' in script
     assert "claude_cli_model=$(normalize_claude_cli_model \"$current_model\")" in script
-    assert "local claude_args=(--model \"$claude_cli_model\" -p --output-format text)" in script
+    # AADS-LLM-M9-COST-BASIS: json 으로 받아 사용량을 적고, 결과는 text 로 되돌린다.
+    # 되돌릴 헬퍼가 없으면 json 으로 띄우지 않는다(rework 1, 리뷰 지적 1).
+    assert "local claude_args=(--model \"$claude_cli_model\" -p --output-format \"$claude_output_format\")" in script
+    assert 'runner_cli_usage_ready && claude_output_format="json"' in script
+    assert "record_runner_cli_usage \"$job_id\" \"$runner_kind\" \"$output_file\"" in script
 
 
 def test_pipeline_runner_read_only_no_diff_completes_without_approval():
