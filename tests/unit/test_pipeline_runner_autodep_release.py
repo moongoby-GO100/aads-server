@@ -59,7 +59,11 @@ def test_release_query_clears_dependency_and_never_cancels():
     released = blocks["released"]
 
     assert "SET depends_on=NULL" in released
-    assert "status='cancelled'" not in released, "해제 경로가 취소를 하고 있다"
+    # SET 절에서 status 를 대입하면 취소와 같다. 비교(`dep.status='cancelled'`)는
+    # 부모가 cancelled 여도 자식을 살리는 분기(2026-09-19)라서 허용한다.
+    set_clause = released.split("FROM pipeline_jobs dep")[0]
+    assert not re.search(r"(?<![.\w])status\s*=", set_clause), "해제 경로가 status 를 바꾸고 있다"
+    assert not re.search(r"(?<![.\w])status\s*=\s*'cancelled'", released), "해제 경로가 취소를 하고 있다"
     assert "completed_at=NOW()" not in released, "해제 경로가 작업을 종결시키고 있다"
     # 부모가 terminal 일 때만 푼다 — 아직 살아 있는 부모의 줄은 유지해야 한다
     assert "dep.status IN ('error','rejected','rejected_done','cancelled')" in released
@@ -109,7 +113,8 @@ def test_api_failure_cascade_requeues_file_lock_child_instead_of_cancelling_it()
     assert "_release_auto_file_dependency" in cascade
     assert "depends_on = NULL" in api
     assert "file_conflict_dependency_requeued" in api
-    assert "logs @> '[{\"event\": \"file_conflict_dependency_requeued\"}]'::jsonb" in api
+    # 소스에는 Python 문자열 안의 이스케이프(\")로 적혀 있으므로 풀어서 비교한다.
+    assert "logs @> '[{\"event\": \"file_conflict_dependency_requeued\"}]'::jsonb" in api.replace('\\"', '"')
     # Only the explicit-dependency branch may enter the cancellation helper.
     assert cascade.index("_has_auto_file_dependency") < cascade.index("_cancel_explicit_orphan")
 

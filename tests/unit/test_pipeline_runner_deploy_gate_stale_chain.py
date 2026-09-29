@@ -159,7 +159,16 @@ def test_rebased_worktree_survives_review_and_approval_wait():
     assert "return 0" in review_branch
     assert "worktree remove" not in review_branch
     assert "worktree remove" not in cleanup
-    assert "running|awaiting_approval|deploying|review_hold) continue" in old_cleanup
+    # 진행 중 상태 보호는 349164ac 이후 공용 회수기가 맡는다: 러너는 위임만 하고,
+    # 회수기는 종료 상태만 회수하며 그 밖의 상태(승인 대기·배포 중·review_hold)는 보존한다.
+    assert "reclaim_runner_worktrees.sh" in old_cleanup
+    reclaimer = (ROOT / "scripts/reclaim_runner_worktrees.sh").read_text(encoding="utf-8")
+    terminal = "done|error|cancelled|rejected|rejected_done|failed) ;;"
+    assert terminal in reclaimer
+    for live in ("running", "awaiting_approval", "deploying", "review_hold"):
+        assert live not in terminal
+    assert '*) skipped_active=$((skipped_active + 1)); continue ;;' in reclaimer
+    assert reclaimer.index(terminal) < reclaimer.index('*) skipped_active=')
 
 
 # 러너는 호스트에서 돌고 호스트에는 jq 가 있다(/usr/bin/jq). 그러나 이 테스트를
