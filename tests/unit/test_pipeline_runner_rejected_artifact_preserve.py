@@ -51,13 +51,14 @@ def test_review_failed_retention_is_env_configurable_with_24h_default():
 def test_existing_stale_worktree_reaper_recovers_preserved_worktrees():
     script = _runner_script()
 
-    # review_failed 로 보존된 워크트리도 /tmp/aads-wt-* 패턴을 따르므로
-    # 별도 정리 로직을 새로 만들지 않고 기존 스테일 워크트리 정리기에 맡긴다.
+    # review_failed 로 보존된 워크트리는 공통 안전 검사기로만 회수한다.
     assert "_cleanup_old_artifacts()" in script
     cleanup_fn = script[script.index("_cleanup_old_artifacts()"):]
     cleanup_fn = cleanup_fn[: cleanup_fn.index("\n}\n") + 3]
-    assert "/tmp/aads-wt-runner-*" in cleanup_fn
-    assert "ARTIFACT_MAX_AGE_HOURS" in cleanup_fn
+    assert 'timeout 90 bash "$_reclaim_script" || true' in cleanup_fn
+    assert "reclaim_runner_worktrees.sh" in cleanup_fn
+    assert "git worktree remove" not in cleanup_fn
+    assert "rm -rf" not in cleanup_fn
     assert "STALE_WORKTREE_CLEANUP" in cleanup_fn
 
 

@@ -30,8 +30,12 @@ for f in "$BACKUP_DIR"/aads_*.sql; do
   fi
 done
 
-# 3. 개발 도구 캐시 삭제 (서비스 무관, 자동 재생성)
-echo -e "\n--- 3. 개발 도구 캐시 정리 ---" | tee -a "$LOG"
+# 3. 오래된 러너 worktree 회수
+echo -e "\n--- 3. 오래된 러너 worktree 회수 ---" | tee -a "$LOG"
+timeout 90 "$(dirname "$0")/reclaim_runner_worktrees.sh" | tee -a "$LOG" || true
+
+# 4. 개발 도구 캐시 삭제 (서비스 무관, 자동 재생성)
+echo -e "\n--- 4. 개발 도구 캐시 정리 ---" | tee -a "$LOG"
 for d in /root/.cursor-server /root/.codex /root/.codex-relay /root/.codex-chrome-profile /root/.codex-chrome-profile-test; do
   if [ -d "$d" ]; then
     SIZE=$(du -sh "$d" | cut -f1)
@@ -40,8 +44,8 @@ for d in /root/.cursor-server /root/.codex /root/.codex-relay /root/.codex-chrom
   fi
 done
 
-# 4. 미사용 런타임 삭제
-echo -e "\n--- 4. 미사용 런타임 정리 ---" | tee -a "$LOG"
+# 5. 미사용 런타임 삭제
+echo -e "\n--- 5. 미사용 런타임 정리 ---" | tee -a "$LOG"
 for d in /root/.rustup; do
   if [ -d "$d" ]; then
     SIZE=$(du -sh "$d" | cut -f1)
@@ -50,13 +54,13 @@ for d in /root/.rustup; do
   fi
 done
 
-# 5. npm/pip 캐시 정리
-echo -e "\n--- 5. 캐시 정리 ---" | tee -a "$LOG"
+# 6. npm/pip 캐시 정리
+echo -e "\n--- 6. 캐시 정리 ---" | tee -a "$LOG"
 npm cache clean --force 2>/dev/null && echo "npm 캐시 정리 완료" | tee -a "$LOG"
 pip cache purge 2>/dev/null && echo "pip 캐시 정리 완료" | tee -a "$LOG"
 
-# 6. 대형 로그 truncate
-echo -e "\n--- 6. 대형 로그 정리 ---" | tee -a "$LOG"
+# 7. 대형 로그 truncate
+echo -e "\n--- 7. 대형 로그 정리 ---" | tee -a "$LOG"
 if [ -f /var/log/gallery_sync.log ]; then
   SIZE=$(du -h /var/log/gallery_sync.log | cut -f1)
   echo "truncate: /var/log/gallery_sync.log ($SIZE)" | tee -a "$LOG"

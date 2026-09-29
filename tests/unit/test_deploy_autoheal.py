@@ -16,10 +16,10 @@ AUTOHEAL_LIB = REPO_ROOT / "scripts" / "deploy_autoheal.sh"
 DEPLOY_SH = REPO_ROOT / "deploy.sh"
 
 
-def _call(func: str, *args: str, env_prefix: str = "") -> str:
+def _call(func: str, *args: str, env_prefix: str = "", library: Path = AUTOHEAL_LIB) -> str:
     """autoheal 라이브러리를 source 한 뒤 함수 하나를 호출한다."""
     quoted = " ".join(f"'{a}'" for a in args)
-    script = f'set -uo pipefail\n{env_prefix}source "{AUTOHEAL_LIB}"\n{func} {quoted}\n'
+    script = f'set -uo pipefail\n{env_prefix}source "{library}"\n{func} {quoted}\n'
     proc = subprocess.run(
         ["bash", "-c", script],
         capture_output=True,
@@ -249,6 +249,44 @@ def test_disk_recheck_gives_up_after_budget(tmp_path):
     out = _call('autoheal_wait_disk_recovery || echo "GAVE_UP"', env_prefix=env_prefix)
     assert "GAVE_UP" in out
     assert counter.read_text().strip() == "3"
+
+
+def test_disk_full_reclaims_worktrees_before_docker_and_skips_prune_when_free(tmp_path):
+    helper = tmp_path / "scripts" / "reclaim_runner_worktrees.sh"
+    helper.parent.mkdir()
+    library = helper.parent / "deploy_autoheal.sh"
+    library.write_text(AUTOHEAL_LIB.read_text())
+    helper.write_text('#!/bin/bash\necho "HELPER dry=$DRY_RUN compose=$COMPOSE_DIR"\n')
+    env_prefix = (
+        f'STATE_DIR="{tmp_path / "autoheal"}"\n'
+        'COMPOSE_DIR="/tmp/current-deploy"\n'
+        'AADS_DEPLOY_AUTOHEAL_DRYRUN=0\n'
+        'require_build_disk_free() { return 0; }\n'
+        'docker() { echo "DOCKER_CALLED"; }\n'
+        'prune_old_release_images() { echo "PRUNE_CALLED"; }\n'
+    )
+    out = _call("remediate_deploy_failure", "disk_full", env_prefix=env_prefix, library=library)
+    assert "디스크 회수 0단계" in out
+    assert "HELPER dry=0 compose=/tmp/current-deploy" in out
+    assert "DOCKER_CALLED" not in out
+    assert "PRUNE_CALLED" not in out
+
+
+def test_disk_full_dry_run_forwards_dry_run_to_worktree_helper(tmp_path):
+    helper = tmp_path / "scripts" / "reclaim_runner_worktrees.sh"
+    helper.parent.mkdir()
+    library = helper.parent / "deploy_autoheal.sh"
+    library.write_text(AUTOHEAL_LIB.read_text())
+    helper.write_text('#!/bin/bash\necho "HELPER dry=$DRY_RUN compose=$COMPOSE_DIR"\n')
+    env_prefix = (
+        f'STATE_DIR="{tmp_path / "autoheal"}"\n'
+        'COMPOSE_DIR="/tmp/current-deploy"\n'
+        'AADS_DEPLOY_AUTOHEAL_DRYRUN=1\n'
+        'require_build_disk_free() { return 0; }\n'
+    )
+    out = _call("remediate_deploy_failure", "disk_full", env_prefix=env_prefix, library=library)
+    assert "HELPER dry=1 compose=/tmp/current-deploy" in out
+    assert "DRYRUN: docker prune 생략" in out
 
 
 def _missing_source_env(tmp_path, compose_dir: str) -> str:

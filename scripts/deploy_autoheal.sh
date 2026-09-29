@@ -221,6 +221,20 @@ remediate_deploy_failure() {
 
     case "$cause" in
         disk_full)
+            autoheal_log "디스크 회수 0단계: 오래된 러너 worktree 회수"
+            local reclaim_script="$(dirname "${BASH_SOURCE[0]}")/reclaim_runner_worktrees.sh"
+            if [[ -f "$reclaim_script" ]]; then
+                COMPOSE_DIR="${COMPOSE_DIR:-}" AADS_DEPLOY_WORKTREE="${AADS_DEPLOY_WORKTREE:-}" \
+                    DRY_RUN="$AADS_DEPLOY_AUTOHEAL_DRYRUN" timeout 90 bash "$reclaim_script" || \
+                    autoheal_log "worktree 회수 실패 또는 시간 초과"
+            else
+                autoheal_log "worktree 회수 헬퍼 없음: $reclaim_script"
+            fi
+            if [[ "$AADS_DEPLOY_AUTOHEAL_DRYRUN" != 1 ]] && require_build_disk_free >/dev/null 2>&1; then
+                AUTOHEAL_LAST_REMEDIATION="disk_reclaim"
+                autoheal_log "✅ 0단계 회수로 빌드 디스크 임계 복귀"
+                return 0
+            fi
             # prune_old_release_images 는 실행 중이 아닌 릴리스 이미지만 정리한다.
             # 실측(2026-09-13 07:27 KST) 기준 회수 가능량은 이미지 4.4GB 인데
             # 빌드 캐시가 22.28GB 였다. 캐시까지 회수해야 임계(기본 20GB)로 돌아온다.

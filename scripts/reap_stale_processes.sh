@@ -14,6 +14,9 @@ set -uo pipefail
 AGE_DAYS="${REAP_AGE_DAYS:-1}"
 LOG_TAG="reap-stale"
 
+# 매시 cron 경로에서 프로세스 대상이 0건이어도 worktree 회수는 실행한다.
+timeout 90 "$(dirname "$0")/reclaim_runner_worktrees.sh" || true
+
 # 대상: etime 에 '일' 단위가 있고(=하루 이상), 명령이 조회 도구인 것.
 # 서비스가 걸리지 않도록 tail/grep/cat 만 본다 — 이 셋은 장기 실행이 정상이 아니다.
 mapfile -t targets < <(

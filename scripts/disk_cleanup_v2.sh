@@ -48,7 +48,10 @@ find "$BACKUP_DST" -maxdepth 1 -type f -name "aads_*.sql.gz" -printf '%T@ %p\n' 
     | xargs -r rm -f
 echo "[BACKUP-EXT] 외장볼륨 최신 2개 보관" >> "$LOG"
 
-# 3. Docker 정리
+# 3. 오래된 러너 worktree 회수 (캐시 정리보다 먼저)
+timeout 90 "$(dirname "$0")/reclaim_runner_worktrees.sh" >> "$LOG" 2>&1 || true
+
+# 4. Docker 정리
 # 운영 원칙:
 # - 실행 중 컨테이너가 참조하는 image digest는 삭제하지 않는다.
 # - DB/Redis/generated-media 같은 운영 volume은 절대 prune하지 않는다.

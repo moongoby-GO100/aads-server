@@ -4564,27 +4564,15 @@ _recover_stuck_jobs() {
 _cleanup_old_artifacts() {
     find "$ARTIFACT_DIR" -type f -mmin +$((ARTIFACT_MAX_AGE_HOURS * 60)) -delete 2>/dev/null || true
 
-    # FIX-5: 스테일 워크트리 정리 — 24시간 이상 된 워크트리 자동 삭제
-    local _wt_dir
-    for _wt_dir in /tmp/aads-wt-runner-*; do
-        [[ ! -d "$_wt_dir" ]] && continue
-        local _wt_age_min
-        _wt_age_min=$(find "$_wt_dir" -maxdepth 0 -mmin +$((ARTIFACT_MAX_AGE_HOURS * 60)) 2>/dev/null | head -1)
-        if [[ -n "$_wt_age_min" ]]; then
-            local _wt_name _wt_job_id _wt_status
-            _wt_name=$(basename "$_wt_dir")
-            _wt_job_id="${_wt_name#aads-wt-}"
-            [[ "$_wt_job_id" =~ ^runner-[0-9a-f]+$ ]] || continue
-            _wt_status=$(db_exec "SELECT COALESCE(status,'') FROM pipeline_jobs WHERE job_id='${_wt_job_id}';" 2>/dev/null) || continue
-            # Rebased SHA approval may outlive artifact age.  Its isolated
-            # worktree is still required by the next deploy preflight.
-            case "$_wt_status" in
-                running|awaiting_approval|deploying|review_hold) continue ;;
-            esac
-            log "  STALE_WORKTREE_CLEANUP: $_wt_name (${ARTIFACT_MAX_AGE_HOURS}h+ old)"
-            git worktree remove "$_wt_dir" --force 2>/dev/null || rm -rf "$_wt_dir" 2>/dev/null || true
-        fi
-    done
+    # STALE_WORKTREE_CLEANUP: delegate runner worktrees to the shared guard.
+    # It checks job status, ignored files, unmerged commits, and active users.
+    local _reclaim_script
+    _reclaim_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/reclaim_runner_worktrees.sh"
+    if [[ -x "$_reclaim_script" ]]; then
+        timeout 90 bash "$_reclaim_script" || true
+    else
+        log "  STALE_WORKTREE_CLEANUP: reclaimer unavailable: $_reclaim_script"
+    fi
 }
 
 # BUG-5: 소요시간 이상치 알림 — running 작업 60분/120분 초과 시 텔레그램 알림 (중복 방지 플래그)
