@@ -28,6 +28,12 @@ is proof of full business/data equivalence, write grants or file migration.
 
 ## Staging and rollback
 
+On the AADS source host, run `bash deploy/obys/check-remote-ssh.sh` before
+copying data, staging a release, or changing routing. A nonzero result blocks
+the migration. The check requires the configured root identity on Jinah and
+reports when that same key still authenticates as `partner`; partner access is
+insufficient for database restore, service setup, and cutover.
+
 Build the venv once in a clean committed release, install `requirements.obys.lock`,
 run `pip check`, and stage the same release into both slots. Install this template
 with `systemd-analyze verify` then `systemctl daemon-reload`. Installation alone
