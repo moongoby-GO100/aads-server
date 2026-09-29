@@ -4641,7 +4641,49 @@ _check_runtime_alerts() {
 }
 
 # ── 메인 루프 ─────────────────────────────────────────────────────────
+# ── 스크립트 변경 시 자기 재적용 (RUNNER-SELF-RELOAD) ────────────────
+# 러너는 몇 시간에서 며칠을 도는 bash 프로세스다. bash 는 기동 시 함수 정의를
+# 전부 파싱하므로, 릴리스가 이 파일을 갈아도 **이미 돌고 있는 러너는 옛 코드로
+# 계속 돈다.** 2026-09-29 이 함정으로 하루를 잃었다 — 배포 게이트 연쇄 차단
+# 교정(ae3c1712)이 09:46 KST 에 main 에 들어갔는데, 데몬은 08:00 KST 기동본
+# 이었고 그 뒤로도 승인 4건이 전부 같은 `deploy_isolated_stale_approval` 로
+# 죽었다. 파일을 고치고 "고쳤다"고 보고하는 동안 운영은 옛 코드였다.
+#
+# 그래서 유휴 시점에 스스로 갈아끼운다. 조건 셋을 모두 만족할 때만 한다.
+#   1) 진행 중 작업이 0건 — 작업 중에 바꾸면 자식 프로세스가 고아가 된다.
+#   2) 새 파일이 `bash -n` 을 통과 — 쓰다 만 파일로 자살하지 않는다.
+#   3) 싱글턴 lock FD 9 를 먼저 닫는다 — flock 은 같은 프로세스의 다른 FD
+#      에도 걸리므로, 닫지 않고 exec 하면 새 인스턴스가 자기 락에 막힌다.
+# 끄는 법: RUNNER_SELF_RELOAD=0
+RUNNER_SELF_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+RUNNER_SELF_FINGERPRINT=""
+RUNNER_SELF_ARGV=()
+
+_runner_self_fingerprint() {
+    [[ -f "$RUNNER_SELF_PATH" ]] || return 1
+    sha256sum "$RUNNER_SELF_PATH" 2>/dev/null | awk '{print $1}'
+}
+
+maybe_reexec_on_self_change() {
+    [[ "${RUNNER_SELF_RELOAD:-1}" == "1" ]] || return 0
+    [[ -n "$RUNNER_SELF_FINGERPRINT" ]] || return 0
+    (( ${#_bg_jobs[@]} == 0 )) || return 0
+    [[ -z "${_current_job_id:-}" ]] || return 0
+    local _now=""
+    _now=$(_runner_self_fingerprint) || return 0
+    [[ -n "$_now" && "$_now" != "$RUNNER_SELF_FINGERPRINT" ]] || return 0
+    if ! bash -n "$RUNNER_SELF_PATH" 2>/dev/null; then
+        log "  SELF_RELOAD_SKIP: 새 스크립트 구문 오류 — 현재 코드 유지 (${_now:0:12})"
+        RUNNER_SELF_FINGERPRINT="$_now"
+        return 0
+    fi
+    log "  SELF_RELOAD: 스크립트 변경 감지 — exec 로 재적용 (${RUNNER_SELF_FINGERPRINT:0:12} → ${_now:0:12})"
+    exec 9>&- || true
+    exec bash "$RUNNER_SELF_PATH" "${RUNNER_SELF_ARGV[@]+"${RUNNER_SELF_ARGV[@]}"}"
+}
+
 main() {
+    RUNNER_SELF_ARGV=("$@")
     _init_db_mode
     log "═══ Pipeline Runner v2.1 시작 (mode=${RUNNER_ENGINE_MODE}, 승인→커밋→푸시→빌드→배포) poll=${POLL_INTERVAL}s, max_runtime=${MAX_RUNTIME}s, retries=${MAX_RETRIES} ═══"
     if [[ -n "${MAX_CONCURRENT_SERVER:-}" ]]; then
@@ -4654,6 +4696,8 @@ main() {
 
     runner_heartbeat
     log "RUNNER_HOST=${RUNNER_HOST_NAME}"
+    RUNNER_SELF_FINGERPRINT=$(_runner_self_fingerprint) || RUNNER_SELF_FINGERPRINT=""
+    log "RUNNER_SELF=${RUNNER_SELF_PATH} fingerprint=${RUNNER_SELF_FINGERPRINT:0:12} self_reload=${RUNNER_SELF_RELOAD:-1}"
 
     # 프로젝트 필터 구성
     local project_filter=""
@@ -4711,6 +4755,9 @@ main() {
 
         # 방안A: 완료된 백그라운드 작업 정리
         _reap_bg_jobs
+
+        # 유휴 시점에 스크립트가 바뀌었으면 새 코드로 갈아끼운다 (RUNNER-SELF-RELOAD)
+        maybe_reexec_on_self_change
 
         # 선행 작업이 실패/거부/누락된 queued 작업은 claim 전에 terminal 상태로 정리
         cleanup_blocked_dependencies
