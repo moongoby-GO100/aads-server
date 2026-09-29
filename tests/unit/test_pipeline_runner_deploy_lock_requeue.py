@@ -37,6 +37,9 @@ def _silence_side_effects(job, monkeypatch):
     monkeypatch.setattr(job, "_save_to_db", _noop_save)
     monkeypatch.setattr(job, "_post_to_chat", _noop_chat)
     monkeypatch.setattr(job, "_notify_push_status", _noop_push)
+    # approve() 는 락 로직보다 먼저 화면 증거 게이트(DB 조회)를 거친다. 이 테스트의
+    # 대상은 락 재큐잉이므로 게이트는 통과로 둔다 — 없으면 DB pool 미초기화로 죽는다.
+    monkeypatch.setattr(job, "_require_screen_evidence", _noop_save)
 
 
 def _patch_instant_sleep(monkeypatch):

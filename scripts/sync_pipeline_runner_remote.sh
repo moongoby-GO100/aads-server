@@ -30,6 +30,19 @@ ONLY_TARGET=""
 # 실행 중 스크립트 파일을 덮어쓰는 것 자체도 bash 지연 읽기 때문에 위험하다.
 IGNORE_BUSY="${AADS_RUNNER_SYNC_IGNORE_BUSY:-0}"
 DEFERRED=0
+# 호스트별 결과 분리 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD, 2026-09-29).
+# jinah244 는 root 접근이 거부된다("mkdir: '/root' 디렉터리를 만들 수 없습니다: 허가 거부").
+# 예전에는 그 한 건이 set -e 로 스크립트 전체를 exit 1 로 끝내 유닛이 상시 failed 였고,
+# 러너 수정이 각 호스트에 닿았는지 판정할 신호가 죽어 있었다.
+#   synced   — 설치/검증 완료(이미 최신 포함)
+#   deferred — 러너 작업 중이라 의도적으로 미룸
+#   skipped  — 설정으로 제외했거나 접근 거부(구조적으로 동기화 대상 아님). 종료코드 미반영
+#   failed   — 도달 가능한 호스트에서 실제 실패. 하나라도 있으면 exit 1
+SKIP_TARGETS="${AADS_RUNNER_SYNC_SKIP_TARGETS:-}"
+ACCESS_DENIED_RE='Permission denied|허가 거부|Operation not permitted|명령을 허용하지 않음'
+TARGET_STATE_FILE=""
+# EXIT trap 은 main 이 끝난 뒤 돈다 — local 이면 set -u 에서 unbound 로 exit 1 이 된다.
+TARGET_ERR_FILE=""
 # DB 접속 기본값은 runner_busy_lib.sh 가 소유한다(두 벌로 두지 않는다).
 
 usage() {
@@ -50,6 +63,7 @@ Environment:
   AADS_RUNNER_SYNC_IGNORE_BUSY  same as --ignore-busy
   AADS_RUNNER_SYNC_TARGETS      optional newline target records:
                                 name|ssh_host|remote_runner|service|service_unit
+  AADS_RUNNER_SYNC_SKIP_TARGETS target names excluded from sync (comma/space separated)
 EOF
 }
 
@@ -142,6 +156,14 @@ jinah244|jinah244|/root/scripts/pipeline-runner.sh|aads-pipeline-runner.service|
 EOF
 }
 
+is_skip_target() {
+    local name="$1" item
+    for item in ${SKIP_TARGETS//,/ }; do
+        [[ "$item" == "$name" ]] && return 0
+    done
+    return 1
+}
+
 install_remote_file() {
     local name="$1" host="$2" src="$3" dest="$4" mode="$5"
     local tmp="/tmp/$(basename "$dest").aads-sync.$$"
@@ -197,7 +219,7 @@ sync_one_target() {
     service_state=$(remote_service_active "$host" "$service")
     if should_defer_for_busy "$busy_count" "$IGNORE_BUSY" "$service_state"; then
         log "${name}: sync deferred — runner host=${runner_host_name:-unknown} active_jobs=${busy_count:-unknown} service=${service_state:-unknown}"
-        DEFERRED=$((DEFERRED + 1))
+        [[ -n "$TARGET_STATE_FILE" ]] && printf 'deferred' > "$TARGET_STATE_FILE"
         return 0
     fi
 
@@ -301,18 +323,58 @@ main() {
 
     local targets
     targets="${AADS_RUNNER_SYNC_TARGETS:-$(default_targets)}"
-    local synced=0
+    local matched=0 synced=0 skipped=0 failed=0 target name rc state summary=""
+    TARGET_ERR_FILE=$(mktemp)
+    TARGET_STATE_FILE=$(mktemp)
+    trap 'rm -f "$TARGET_ERR_FILE" "$TARGET_STATE_FILE"' EXIT
     while IFS= read -r target || [[ -n "$target" ]]; do
         [[ -n "${target//[[:space:]]/}" ]] || continue
-        sync_one_target "$target"
-        synced=$((synced + 1))
+        name="${target%%|*}"
+        if [[ -n "$ONLY_TARGET" && "$ONLY_TARGET" != "$name" ]]; then
+            continue
+        fi
+        matched=$((matched + 1))
+        if is_skip_target "$name"; then
+            log "${name}: skipped — AADS_RUNNER_SYNC_SKIP_TARGETS 로 제외"
+            skipped=$((skipped + 1))
+            summary+=" ${name}=skipped(config)"
+            continue
+        fi
+        # 호스트 하나의 실패가 다른 호스트 동기화나 전체 종료코드를 끌고 가지 않게
+        # 서브셸로 격리한다. 서브셸 안에서는 set -e 가 그대로 fail-closed 로 동작한다.
+        : > "$TARGET_STATE_FILE"
+        set +e
+        ( set -e; sync_one_target "$target" ) 2>"$TARGET_ERR_FILE"
+        rc=$?
+        set -e
+        [[ -s "$TARGET_ERR_FILE" ]] && cat "$TARGET_ERR_FILE" >&2
+        state=$(cat "$TARGET_STATE_FILE" 2>/dev/null || true)
+        if [[ "$rc" == "0" && "$state" == "deferred" ]]; then
+            DEFERRED=$((DEFERRED + 1))
+            summary+=" ${name}=deferred"
+        elif [[ "$rc" == "0" ]]; then
+            synced=$((synced + 1))
+            summary+=" ${name}=synced"
+        elif grep -Eq "$ACCESS_DENIED_RE" "$TARGET_ERR_FILE"; then
+            log "WARN ${name}: skipped — 접근 거부(rc=${rc}). 구조적으로 대상이 아니면 AADS_RUNNER_SYNC_SKIP_TARGETS 에 추가하라"
+            skipped=$((skipped + 1))
+            summary+=" ${name}=skipped(access_denied)"
+        else
+            log "ERROR ${name}: sync failed rc=${rc}"
+            failed=$((failed + 1))
+            summary+=" ${name}=failed(rc=${rc})"
+        fi
     done <<< "$targets"
 
-    if [[ "$synced" -eq 0 ]]; then
+    if [[ "$matched" -eq 0 ]]; then
         echo "ERROR: no targets matched" >&2
         exit 2
     fi
-    log "sync complete targets=${synced} deferred=${DEFERRED}"
+    log "sync summary:${summary}"
+    log "sync complete targets=${matched} synced=${synced} deferred=${DEFERRED} skipped=${skipped} failed=${failed}"
+    if [[ "$failed" -gt 0 ]]; then
+        exit 1
+    fi
 }
 
 main "$@"

@@ -287,7 +287,9 @@ def test_deploy_job_already_present_skips_actual_push(isolated_case, tmp_path):
     remote, main, worktree, job_id, sha = isolated_case
     _git(worktree, "push", "origin", "HEAD:main")
     _advance_origin(remote, tmp_path, "next.txt", "next\n")
-    script = "\n".join((_function("classify_push_state"), _function("deploy_job")))
+    # deploy_job 은 락 대기를 acquire_deploy_lock_with_requeue 에 위임한다(M6).
+    script = "\n".join((_function("classify_push_state"), _function("acquire_deploy_lock_with_requeue"),
+                         _function("deploy_job")))
     stub = r'''
 set -eo pipefail
 log() { echo "$*" >&2; }

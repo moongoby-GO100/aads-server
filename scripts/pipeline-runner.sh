@@ -3628,6 +3628,85 @@ approved_sha_is_live() {
     [[ "$active_digest" == "$release_digest" ]] || return 1
     curl -fsS --connect-timeout 3 --max-time 5 "${AADS_API_URL}/api/v1/health" >/dev/null 2>&1
 }
+# ── 배포 락 대기 + 재큐잉 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD, 2026-09-29) ──
+# 예전 셸 경로는 30+60+90=180초만 기다리고 status='error' 로 확정했다. AADS
+# bluegreen 배포 실측(deploy_runs success, 24h n=16)은 중앙값 514s·최대 631s 라
+# 다른 배포가 돌고 있으면 승인된 작업이 산술적으로 폐기됐다(24h 8건).
+# Python 경로(pipeline_runner_service.py 의 _DEPLOY_LOCK_*)와 같은 의미로 맞춘다:
+#   - 락 미획득 라운드마다 status='queued', phase='deploy_lock_wait' 로 재큐잉해
+#     승인·커밋을 보존한다. phase 가 ('queued','coding') 이 아니므로 코딩 claim 에
+#     다시 잡히지 않고, 이 프로세스가 계속 대기한다.
+#   - 누적 대기가 DEPLOY_LOCK_MAX_WAIT_SEC 에 닿았을 때만 terminal 로 확정하고
+#     error_detail 에 누적 대기와 holder 를 남긴다.
+#   - 락 API 무응답이면 기존대로 잠금 없이 진행한다(deploy.sh flock 이 최종 직렬화).
+# 기본 900s 는 실측 최대 631s 를 덮는다. 환경변수 이름은 Python 경로와 같다.
+DEPLOY_LOCK_MAX_WAIT_SEC="${DEPLOY_LOCK_MAX_WAIT_SEC:-900}"
+DEPLOY_LOCK_BACKOFF_SEC="${DEPLOY_LOCK_BACKOFF_SEC:-10 30 60}"
+DEPLOY_LOCK_WAIT_PHASE="deploy_lock_wait"
+
+acquire_deploy_lock_with_requeue() {
+    local job_id="$1" project="$2" session_id="$3"
+    local max_wait="$DEPLOY_LOCK_MAX_WAIT_SEC" result="" holder="unknown" waited=0 requeue=0 backoff
+    [[ "$max_wait" =~ ^[0-9]+$ && "$max_wait" -gt 0 ]] || max_wait=900
+    local -a backoffs=()
+    for backoff in $DEPLOY_LOCK_BACKOFF_SEC; do
+        [[ "$backoff" =~ ^[0-9]+$ && "$backoff" -gt 0 ]] && backoffs+=("$backoff")
+    done
+    (( ${#backoffs[@]} > 0 )) || backoffs=(10 30 60)
+
+    # 획득 시도는 루프 맨 위 한 곳뿐이다 — 이미 쥔 락을 다시 acquire 하면
+    # holder=자기자신 으로 "점유" 응답을 받기 때문이다.
+    local idx=0
+    while :; do
+        result=$(curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
+        if ! echo "$result" | grep -q '"acquired":false'; then
+            if echo "$result" | grep -q '"acquired":true'; then
+                (( requeue > 0 )) && log "  DEPLOY_LOCK_ACQUIRED job=$job_id waited=${waited}s requeue=${requeue}"
+            else
+                log "  DEPLOY_LOCK_API_OK job=$job_id waited=${waited}s — API 응답 없음, 잠금 없이 진행"
+            fi
+            if (( requeue > 0 )); then
+                db_update "UPDATE pipeline_jobs SET status='deploying', phase='deploying', updated_at=NOW()
+                           WHERE job_id='${job_id}' AND status='queued' AND phase='${DEPLOY_LOCK_WAIT_PHASE}';"
+            fi
+            return 0
+        fi
+        holder=$(printf '%s' "$result" | sed -n 's/.*"holder":"\([^"]*\)".*/\1/p' | tr -cd 'A-Za-z0-9._:-' | cut -c1-80)
+        [[ -n "$holder" ]] || holder="unknown"
+        (( waited >= max_wait )) && break
+        # 백오프 한 바퀴를 다 돌아도 못 잡았으면 재큐잉으로 기록한다(Python 경로와 같은 단위).
+        if (( idx >= ${#backoffs[@]} )); then
+            idx=0
+            requeue=$((requeue + 1))
+            log "  DEPLOY_LOCK_REQUEUE job=$job_id project=$project holder=$holder waited=${waited}s/${max_wait}s requeue=${requeue}"
+            db_update "UPDATE pipeline_jobs SET status='queued', phase='${DEPLOY_LOCK_WAIT_PHASE}',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포대기] deploy lock 점유로 재큐잉 ${requeue} (holder=${holder}, 누적대기 ${waited}s/${max_wait}s)',
+                       updated_at=NOW() WHERE job_id='${job_id}' AND status IN ('deploying','queued');"
+            record_runner_event "$job_id" "deploy_lock_requeued" "queued" "$DEPLOY_LOCK_WAIT_PHASE" "" "" "" "" "{\"holder\":\"${holder}\",\"waited_sec\":${waited},\"max_wait_sec\":${max_wait},\"requeue\":${requeue}}"
+            (( requeue == 1 )) && post_to_chat "$session_id" "⏳ [Pipeline Runner] 다른 배포 진행 중(holder=${holder}) — 배포 대기로 재큐잉, 최대 ${max_wait}초 대기: $job_id"
+        fi
+        backoff=${backoffs[$idx]}
+        idx=$((idx + 1))
+        (( waited + backoff > max_wait )) && backoff=$((max_wait - waited))
+        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project holder=$holder — ${backoff}초 후 재시도 (누적 ${waited}s/${max_wait}s)"
+        sleep "$backoff"
+        waited=$((waited + backoff))
+    done
+
+    local detail="deploy_lock_fail: waited=${waited}s max_wait=${max_wait}s requeue=${requeue} holder=${holder}"
+    log "  DEPLOY_LOCK_FAIL job=$job_id — ${detail}"
+    db_update "UPDATE pipeline_jobs SET status='error', phase='deploy_lock_fail',
+               error_detail='${detail}',
+               review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패] deploy lock 누적대기 ${waited}s(상한 ${max_wait}s) 소진 — holder=${holder}',
+               completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+    record_runner_event "$job_id" "job_terminal" "error" "deploy_lock_fail" "" "" "" "" "{\"error_detail\":\"deploy_lock_fail\",\"holder\":\"${holder}\",\"waited_sec\":${waited},\"max_wait_sec\":${max_wait},\"requeue\":${requeue}}"
+    post_to_chat "$session_id" "⚠️ [Pipeline Runner] 배포 락 누적대기 ${waited}초 소진(holder=${holder}): $job_id"
+    _release_deploy_lock "$project" "$job_id"
+    _notify_ai "$job_id"
+    promote_next_queued "$project"
+    return 1
+}
+
 # ── 승인된 작업 배포 ──────────────────────────────────────────────────
 deploy_job() {
     local job_id="$1" project="$2" session_id="$3"
@@ -3647,35 +3726,9 @@ deploy_job() {
     log "[deploy_job] start job_id=$job_id project=$project"
     log "▶ DEPLOY job=$job_id project=$project target=$target_repo workdir=$workdir"
 
-    # Redis deploy lock 획득 (동시 배포 방지) — 3회 재시도 + 점진적 대기
-    local deploy_lock_result=""
-    local deploy_lock_acquired=false
-    for _dl_try in 1 2 3; do
-        deploy_lock_result=$(curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
-        if echo "$deploy_lock_result" | grep -q '"acquired":true'; then
-            deploy_lock_acquired=true
-            break
-        elif echo "$deploy_lock_result" | grep -q '"acquired":false'; then
-            local _wait=$((30 * _dl_try))
-            log "  DEPLOY_LOCK_WAIT job=$job_id project=$project try=${_dl_try}/3 — 다른 배포 진행 중, ${_wait}초 후 재시도"
-            sleep $_wait
-        else
-            log "  DEPLOY_LOCK_API_OK job=$job_id try=${_dl_try} — API 응답 없음, 잠금 없이 진행"
-            deploy_lock_acquired=true
-            break
-        fi
-    done
-    if [[ "$deploy_lock_acquired" != "true" ]]; then
-        log "  DEPLOY_LOCK_FAIL job=$job_id — 3회 재시도 후 배포 스킵"
-        db_update "UPDATE pipeline_jobs SET status='error', phase='deploy_lock_fail',
-                   error_detail='deploy_lock_fail',
-                   review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패] deploy lock 3회 획득 실패 — 다른 배포가 장시간 점유',
-                   completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
-        record_runner_event "$job_id" "job_terminal" "error" "deploy_lock_fail" "" "" "" "" "{\"error_detail\":\"deploy_lock_fail\"}"
-        post_to_chat "$session_id" "⚠️ [Pipeline Runner] 배포 락 3회 획득 실패 (다른 배포 진행 중): $job_id"
-        _release_deploy_lock "$project" "$job_id"
-        _notify_ai "$job_id"
-        promote_next_queued "$project"
+    # Redis deploy lock 획득 (동시 배포 방지) — 실측 배포시간 기반 대기 + 재큐잉
+    # (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD). 상한 초과 시 terminal 처리는 함수가 끝낸다.
+    if ! acquire_deploy_lock_with_requeue "$job_id" "$project" "$session_id"; then
         return 1
     fi
 
@@ -4845,6 +4898,10 @@ SHUTDOWN_REQUEUE_MAX="${SHUTDOWN_REQUEUE_MAX:-2}"
 _shutdown_finalize_job() {
     local _jid="$1" _sid="${2:-}" _quiet="${3:-}"
     [[ -z "$_jid" ]] && return 0
+    # 배포 락 대기 중 종료된 작업은 코딩을 다시 돌리지 않고 승인 상태로 되돌린다 —
+    # approved 클레임이 배포만 다시 시도한다 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD).
+    db_update "UPDATE pipeline_jobs SET status='approved', phase='approved', updated_at=NOW()
+               WHERE job_id=$(sql_escape "$_jid") AND status='queued' AND phase='${DEPLOY_LOCK_WAIT_PHASE}';" || true
     local _marks
     _marks=$(db_exec "SELECT (length(COALESCE(review_feedback,'')) - length(replace(COALESCE(review_feedback,''), $(sql_escape "$SHUTDOWN_REQUEUE_MARK"), ''))) / ${#SHUTDOWN_REQUEUE_MARK} FROM pipeline_jobs WHERE job_id=$(sql_escape "$_jid");" 2>/dev/null | tr -d '[:space:]')
     [[ "$_marks" =~ ^[0-9]+$ ]] || _marks=0

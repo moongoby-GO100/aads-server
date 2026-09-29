@@ -232,3 +232,139 @@ def test_local_restart_wrapper_checks_before_restarting():
     gate = local.index("if should_defer_for_busy")
     restart = local.index('systemctl restart "$SERVICE"')
     assert gate < restart
+
+
+# ── 호스트별 결과 분리 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD, 2026-09-29) ──
+# jinah244 한 곳의 root 접근 거부("mkdir: '/root' ... 허가 거부")가 set -e 로 스크립트
+# 전체를 exit 1 로 끝내 aads-pipeline-runner-sync.service 가 상시 failed 였다.
+# 상시 적색 신호는 러너 수정이 호스트에 닿았는지 판정하지 못하는 죽은 신호다.
+
+_FAKE_SSH = r"""#!/usr/bin/env bash
+host="${@: -2:1}"; cmd="${@: -1}"
+case "$cmd" in
+    *"hostname -s"*) echo "$host" ;;
+    *"systemctl is-active"*) echo active ;;
+    sha256sum*)
+        if [[ " ${FAKE_FAIL_HOSTS:-} " == *" $host "* ]]; then echo stale; exit 0; fi
+        path=$(sed -n "s/^sha256sum '\([^']*\)'.*/\1/p" <<<"$cmd")
+        case "$(basename "$path")" in
+            pipeline-runner.sh) f="$CANONICAL_RUNNER" ;;
+            claude_model_contract.py) f="$FAKE_REPO/scripts/claude_model_contract.py" ;;
+            aag-brief.py) f="$FAKE_REPO/tools/aag/brief.py" ;;
+            *) exit 0 ;;
+        esac
+        sha256sum "$f" | awk '{print $1}' ;;
+    mkdir*)
+        if [[ " ${FAKE_DENY_HOSTS:-} " == *" $host "* ]]; then
+            echo "mkdir: \`/root' 디렉터리를 만들 수 없습니다: 허가 거부" >&2
+            exit 1
+        fi ;;
+esac
+exit 0
+"""
+
+_FAKE_SCP = """#!/usr/bin/env bash
+echo "scp: /tmp/upload: No space left on device" >&2
+exit 1
+"""
+
+# 미커밋 가드는 git show HEAD:<path> 와 워킹트리를 비교한다 — 테스트에서는 같게 둔다.
+_FAKE_GIT = """#!/usr/bin/env bash
+if [[ "$1" == "-C" && "$3" == "show" ]]; then cat "$2/${4#HEAD:}"; exit $?; fi
+exit 1
+"""
+
+_FAKE_DOCKER = """#!/usr/bin/env bash
+echo "${FAKE_BUSY_COUNT:-0}"
+"""
+
+
+def _target(name: str) -> str:
+    return f"{name}|{name}|/root/scripts/pipeline-runner.sh|aads-pipeline-runner.service|/nonexistent.service"
+
+
+def _run_sync(tmp_path: Path, targets: list[str], **env_extra: str) -> subprocess.CompletedProcess:
+    if shutil.which("bash") is None or shutil.which("flock") is None:
+        pytest.skip("bash/flock 미설치 환경")
+    fakebin = tmp_path / "bin"
+    fakebin.mkdir()
+    for name, body in (("ssh", _FAKE_SSH), ("scp", _FAKE_SCP), ("git", _FAKE_GIT), ("docker", _FAKE_DOCKER)):
+        (fakebin / name).write_text(body, encoding="utf-8")
+        (fakebin / name).chmod(0o755)
+    env = {
+        "PATH": f"{fakebin}:/usr/local/bin:/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "FAKE_REPO": str(ROOT),
+        "CANONICAL_RUNNER": str(ROOT / "scripts" / "pipeline-runner.sh"),
+        "AADS_RUNNER_SYNC_LOCK": str(tmp_path / "sync.lock"),
+        "AADS_RUNNER_SYNC_TARGETS": "\n".join(_target(t) for t in targets),
+        **env_extra,
+    }
+    return subprocess.run(
+        ["bash", str(SYNC_SCRIPT), "--no-restart"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+    )
+
+
+def _summary(proc: subprocess.CompletedProcess) -> str:
+    lines = [line for line in proc.stdout.splitlines() if "sync summary:" in line]
+    assert lines, proc.stdout + proc.stderr
+    return lines[-1]
+
+
+def test_access_denied_host_is_skipped_and_exit_zero(tmp_path):
+    """① 접근 거부 호스트만 실패 → 종료코드 0, 해당 호스트 skipped, 나머지 synced."""
+    proc = _run_sync(tmp_path, ["hostA", "jinah244"], FAKE_DENY_HOSTS="jinah244")
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    summary = _summary(proc)
+    assert "hostA=synced" in summary
+    assert "jinah244=skipped(access_denied)" in summary
+    assert "synced=1 deferred=0 skipped=1 failed=0" in proc.stdout
+    # 원인은 숨기지 않는다 — journal 에 원문이 남아야 한다
+    assert "허가 거부" in proc.stderr
+    assert "AADS_RUNNER_SYNC_SKIP_TARGETS" in proc.stdout
+
+
+def test_reachable_host_failure_exits_one_but_other_hosts_still_sync(tmp_path):
+    """② 도달 가능한 호스트의 실제 실패 → 종료코드 1. 다른 호스트는 계속 처리된다."""
+    proc = _run_sync(tmp_path, ["hostBad", "hostA"], FAKE_FAIL_HOSTS="hostBad")
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    summary = _summary(proc)
+    assert "hostBad=failed(rc=" in summary
+    assert "hostA=synced" in summary
+    assert "No space left on device" in proc.stderr
+
+
+def test_denied_plus_real_failure_still_exits_one(tmp_path):
+    proc = _run_sync(
+        tmp_path, ["jinah244", "hostBad"], FAKE_DENY_HOSTS="jinah244", FAKE_FAIL_HOSTS="hostBad"
+    )
+
+    assert proc.returncode == 1
+    summary = _summary(proc)
+    assert "jinah244=skipped(access_denied)" in summary
+    assert "hostBad=failed(rc=" in summary
+
+
+def test_config_skip_excludes_target_without_contacting_it(tmp_path):
+    proc = _run_sync(
+        tmp_path, ["hostA", "jinah244"],
+        FAKE_DENY_HOSTS="jinah244", AADS_RUNNER_SYNC_SKIP_TARGETS="jinah244",
+    )
+
+    assert proc.returncode == 0
+    assert "jinah244=skipped(config)" in _summary(proc)
+    assert "허가 거부" not in proc.stderr
+
+
+def test_busy_host_is_reported_deferred(tmp_path):
+    proc = _run_sync(tmp_path, ["hostA"], FAKE_BUSY_COUNT="2")
+
+    assert proc.returncode == 0
+    assert "hostA=deferred" in _summary(proc)
+    assert "deferred=1" in proc.stdout
