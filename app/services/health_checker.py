@@ -303,6 +303,40 @@ async def _check_ssh(server_key: str) -> Dict[str, Any]:
     }
 
 
+async def _check_tcp_reachable(host: str, port: int, timeout: float = 5.0) -> Dict[str, Any]:
+    """TCP 포트 연결 도달성만 확인한다 (SSH 인증은 확인하지 않음)."""
+    import time
+
+    start = time.monotonic()
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+        latency = int((time.monotonic() - start) * 1000)
+        writer.close()
+        wait_closed = getattr(writer, "wait_closed", None)
+        if wait_closed:
+            await wait_closed()
+        return {"ok": True, "method": "tcp", "port_open": True, "latency_ms": latency}
+    except ConnectionRefusedError as exc:
+        reason = "refused"
+        error = str(exc) or "connection refused"
+    except asyncio.TimeoutError as exc:
+        reason = "timeout"
+        error = str(exc) or "connection timed out"
+    except OSError as exc:
+        reason = "error"
+        error = str(exc)
+
+    return {
+        "ok": False,
+        "method": "tcp",
+        "port_open": False,
+        "reason": reason,
+        "error": error,
+        "latency_ms": int((time.monotonic() - start) * 1000),
+        "severity": "warning",
+    }
+
+
 async def _check_disk(server_key: Optional[str] = None) -> Dict[str, Any]:
     """디스크 사용량."""
     if server_key:
@@ -425,6 +459,7 @@ async def _check_cpu() -> Dict[str, Any]:
 
 async def check_infra() -> Dict[str, Any]:
     """인프라 전체 점검 (병렬)."""
+    jinah244 = get_server_config("jinah244")
     results = await asyncio.gather(
         _check_db(),
         _check_github_pat(),
@@ -435,11 +470,13 @@ async def check_infra() -> Dict[str, Any]:
         _check_disk("114"),
         _check_memory(),
         _check_cpu(),
+        _check_tcp_reachable(jinah244["host"], jinah244["ssh_port"], timeout=5),
         return_exceptions=True,
     )
 
     keys = ["db", "github_pat", "ssh_211", "ssh_114",
-            "disk_68", "disk_211", "disk_114", "memory_68", "cpu_68"]
+            "disk_68", "disk_211", "disk_114", "memory_68", "cpu_68",
+            "ssh_port_jinah244"]
     infra = {}
     issues = []
     for i, key in enumerate(keys):

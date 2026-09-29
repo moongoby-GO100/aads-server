@@ -164,6 +164,28 @@ class AlertManager:
                 message=f"GitHub PAT {pat_days}일 후 만료 예정",
             ))
 
+        # jinah244 is intentionally excluded from canonical HTTP/SSH monitoring.
+        # Its dedicated TCP probe still needs to enter this periodic alert path.
+        try:
+            from app.services.health_checker import check_infra
+
+            infra = await check_infra()
+            probe = infra.get("ssh_port_jinah244", {})
+            if not probe.get("ok", False):
+                alerts.append(Alert(
+                    severity="WARNING",
+                    category="jinah244_ssh_port_unreachable",
+                    title="jinah244 SSH 포트 도달 불가",
+                    message=(
+                        f"jinah244 TCP 22 {probe.get('reason', 'unreachable')}: "
+                        f"{probe.get('error', 'connection failed')}"
+                    ),
+                    server="jinah244",
+                    extra={"reason": probe.get("reason"), "latency_ms": probe.get("latency_ms")},
+                ))
+        except Exception as e:
+            logger.warning("jinah244_tcp_alert_probe_failed", error=str(e))
+
         return alerts
 
     async def _collect_metrics(self) -> Dict[str, Any]:
