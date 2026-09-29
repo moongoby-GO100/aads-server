@@ -739,6 +739,12 @@ is_deploy_only_instruction() {
     printf '%s' "$instruction" | head -20 | grep -qF 'DEPLOY_ONLY: true'
 }
 
+# is_deploy_only_instruction 의 SQL 판(별칭 p 고정). 앞 20줄 안에서 줄 시작이
+# `DEPLOY_ONLY: true` 인 잡만 릴리스잡이다. 본문 산문의 언급은 릴리스잡이 아니다.
+# 2026-09-30 실측: ILIKE '%DEPLOY_ONLY%' 본문 매칭이 일반 코드잡 runner-6a9a2950 을
+# 릴리스잡으로 오탐해 취소·해제 분기를 모두 우회, 큐가 2시간 40분 멈췄다.
+DEPLOY_ONLY_HEADER_SQL="array_to_string((string_to_array(p.instruction, chr(10)))[1:20], chr(10)) ~ '(^|\\n)[[:space:]]*DEPLOY_ONLY[[:space:]]*:[[:space:]]*true\\y'"
+
 # P1: DB 연결 실패 감지 및 텔레그램 알림
 _notify_db_failure() {
     local err_msg="$1"
@@ -1742,15 +1748,9 @@ cleanup_blocked_dependencies() {
                                   -- 앞 잡 하나가 실패해도 이미 push 된 커밋은 여전히 배포해야
                                   -- 한다. 릴리스 잡까지 죽으면 배포 주체가 사라져 큐가 통째로
                                   -- 방치된다 — 오늘 실제로 그렇게 됐다.
-                                  AND p.instruction NOT ILIKE '%DEPLOY_ONLY%'
-                                  -- 릴리스 잡(DEPLOY_ONLY)은 앞 잡이 실패해도 죽이지 않는다.
-                                  -- 2026-09-19 실측: runner-30757edd 가 선행 runner-e345161d
-                                  -- 의 error 에 끌려 blocked_dependency 로 취소됐다. 그 잡의
-                                  -- 일은 '앞에서 push 된 것들을 한 번에 배포하는 것' 이므로,
-                                  -- 앞 잡 하나가 실패해도 이미 push 된 커밋은 여전히 배포해야
-                                  -- 한다. 릴리스 잡까지 죽으면 배포 주체가 사라져 큐가 통째로
-                                  -- 방치된다 — 오늘 실제로 그렇게 됐다.
-                                  AND p.instruction NOT ILIKE '%DEPLOY_ONLY%'
+                                  -- 판정은 헤더 선언만 본다(DEPLOY_ONLY_HEADER_SQL). 본문 산문의
+                                  -- 언급까지 잡는 substring 매칭은 2026-09-30 큐 정지를 불렀다.
+                                  AND NOT (${DEPLOY_ONLY_HEADER_SQL})
                                 RETURNING p.job_id;" 2>/dev/null) || true
     blocked_missing=$(db_exec "UPDATE pipeline_jobs p SET status='cancelled',
                                phase='blocked_dependency',
@@ -1761,8 +1761,7 @@ cleanup_blocked_dependencies() {
                                  AND p.phase IN ('queued','coding')
                                  AND p.depends_on IS NOT NULL
                                  AND NOT (p.logs @> '[{\"event\": \"file_conflict_auto_dependency\"}]'::jsonb)
-                                 AND p.instruction NOT ILIKE '%DEPLOY_ONLY%'
-                                 AND p.instruction NOT ILIKE '%DEPLOY_ONLY%'
+                                 AND NOT (${DEPLOY_ONLY_HEADER_SQL})
                                  AND NOT EXISTS (
                                      SELECT 1 FROM pipeline_jobs dep
                                      WHERE dep.job_id = p.depends_on
@@ -1775,7 +1774,64 @@ cleanup_blocked_dependencies() {
         log "  BLOCKED_DEPENDENCY_CLEANUP existing=${blocked_existing//$'\n'/,} missing=${blocked_missing//$'\n'/,}"
     fi
 
+    warn_stuck_dependency_queue
     apply_batch_release_directive
+}
+
+# 교착 안전망 — 부모가 terminal(done 이외)인데 queued 로 남은 잡을 경고한다.
+#
+# claim SQL 은 dep.status='done' 만 허용하므로, 취소 분기(cleanup_blocked_dependencies)와
+# 해제 분기 어느 쪽에도 걸리지 않은 잡은 영구히 claim 되지 않는다. 2026-09-30 에는
+# 그런 잡 하나가 큐 선두에서 2시간 40분간 조용히 큐 전체를 세웠다.
+# 여기서는 상태를 바꾸지 않는다 — 보이게 만드는 것까지만 한다.
+#
+# 대기 경과 = 부모가 terminal 이 된 시각(없으면 잡 생성 시각) 중 늦은 쪽부터의 분.
+# 부모가 방금 끝나 가드가 곧 처리할 잡을 경고하지 않도록 임계(기본 30분)를 둔다.
+# 환경변수: DEP_STUCK_WARN_MIN(30) / DEP_STUCK_CHECK_INTERVAL_SEC(300) / DEP_STUCK_REWARN_SEC(1800)
+_dep_stuck_sql() {
+    local warn_min="$1"
+    printf '%s' "SELECT p.job_id, COALESCE(p.depends_on,''), COALESCE(dep.status,'missing'),
+        FLOOR(EXTRACT(EPOCH FROM (NOW() - GREATEST(p.created_at, COALESCE(dep.completed_at, dep.updated_at)))) / 60)::int,
+        COALESCE(p.chat_session_id,'')
+      FROM pipeline_jobs p
+      LEFT JOIN pipeline_jobs dep ON dep.job_id = p.depends_on
+      WHERE p.status='queued'
+        AND p.depends_on IS NOT NULL
+        AND (dep.job_id IS NULL OR dep.status IN ('error','rejected','rejected_done','cancelled'))
+        AND NOW() - GREATEST(p.created_at, COALESCE(dep.completed_at, dep.updated_at)) >= INTERVAL '${warn_min} minutes'
+      ORDER BY p.created_at;"
+}
+
+declare -gA _DEP_STUCK_WARNED=()
+_DEP_STUCK_LAST_CHECK=0
+
+warn_stuck_dependency_queue() {
+    local warn_min="${DEP_STUCK_WARN_MIN:-30}"
+    local check_iv="${DEP_STUCK_CHECK_INTERVAL_SEC:-300}"
+    local rewarn_iv="${DEP_STUCK_REWARN_SEC:-1800}"
+    [[ "$warn_min" =~ ^[0-9]{1,5}$ ]] || warn_min=30
+    [[ "$check_iv" =~ ^[0-9]{1,6}$ ]] || check_iv=300
+    [[ "$rewarn_iv" =~ ^[0-9]{1,6}$ ]] || rewarn_iv=1800
+
+    local now
+    now=$(date +%s)
+    (( now - _DEP_STUCK_LAST_CHECK >= check_iv )) || return 0
+    _DEP_STUCK_LAST_CHECK=$now
+
+    local rows
+    rows=$(db_exec "$(_dep_stuck_sql "$warn_min")" 2>/dev/null) || return 0
+    [[ -n "$rows" ]] || return 0
+
+    local s_job s_parent s_pstatus s_wait s_session last msg
+    while IFS=$'\x1e' read -r s_job s_parent s_pstatus s_wait s_session; do
+        [[ "$s_job" =~ ^[a-zA-Z0-9_-]+$ ]] || continue
+        last="${_DEP_STUCK_WARNED[$s_job]:-0}"
+        (( now - last >= rewarn_iv )) || continue
+        _DEP_STUCK_WARNED[$s_job]=$now
+        msg="⚠️ [Pipeline Runner] 큐 교착 의심: ${s_job} 이 선행 ${s_parent}(status=${s_pstatus}) 때문에 ${s_wait}분째 queued 로 남아 있다 — claim 조건(dep.status='done')을 영원히 만족하지 못한다. 자동 조치는 하지 않았다. 수동 확인 필요(선행 재실행 또는 depends_on 해제/취소)."
+        log "  DEP_STUCK_WARN job=$s_job parent=$s_parent parent_status=$s_pstatus wait_min=$s_wait"
+        post_to_chat "$s_session" "$msg" || true
+    done <<< "$rows"
 }
 
 # 배치 릴리스 창이 열려 있으면 새로 들어온 잡에도 같은 지시를 붙인다.

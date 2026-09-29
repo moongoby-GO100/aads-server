@@ -1,0 +1,15 @@
+DEPLOY_ONLY: true
+TASK_ID: GO100-WAVE-PUBLISH-BATCH-LOOKBACK-DEPLOY-20260922
+TITLE: 파동 producer publish 배치화+lookback 축소 실제 운영반영 — 배포 전용
+PRIORITY: P0 SIZE: S
+SERVER: contabo14(5.104.86.14) WORKDIR: /root/kis-autotrade-v4
+
+CEO 명시 승인: "배포도 즉시 진행하고 실매매에서 테스트 진행해" (반복 지시). runner-08ef5f13이 push까지 완료(코드+테스트 10 passed, AI 리뷰 score=0.877)했으나 지시서의 배포금지 제약으로 배포는 건너뛰었다.
+
+범위: 코드 변경 없이 배포만 수행한다.
+1. 현재 push된 main 최신 커밋을 확인한다.
+2. deploy.sh bluegreen으로 무중단 배포한다(단일 빌드, 표준 블루/그린 절차).
+3. 배포 후 반드시 실측 검증: (a) health-check 200 (b) release_sha가 새 커밋으로 갱신됐는지 (c) go100_wave_signals 최근 5분 발행 종목수/사이클당 처리 종목수가 배포 전 대비 개선됐는지 5분 간격으로 2회 재조회.
+4. 문제 발생 시 이전 release로 즉시 롤백하고 결과를 보고한다.
+
+legacy211/AADS 대체 금지. 실주문/전략 임계값 변경 금지 — 이 작업은 배포만 한다.

@@ -1,0 +1,20 @@
+TASK_ID: AADS-BATCH-RELEASE-20260919-R2
+TITLE: 배치 릴리스 — origin/main HEAD(285bffbf) 무중단 배포
+PRIORITY: P1
+SIZE: XS
+SERVER: contabo116 / WORKDIR: /root/aads/aads-server
+DEPLOY_ONLY: true
+
+이 잡은 코드를 수정하지 않는다. 파일 생성·수정·삭제 금지.
+
+목적: deploy_run #4718 이 queued_for_deploy 상태로 멈춰 있고, 이전 BATCH-RELEASE(runner-30757edd)는 강제종료됐다. 현재 HEAD(285bffbf, 최신 5커밋 포함 — review-hold 복구/캐시제거/sweeper 등)를 bluegreen 배포로 반영한다.
+
+수행 순서:
+1. git -C /root/aads/aads-server fetch origin && git rev-parse --short origin/main 으로 SHA 기록
+2. bash /root/aads/aads-server/deploy.sh bluegreen 1회만 실행
+3. 완료 후 실측:
+   - deploy_runs 최신 행: id / status / release_sha
+   - curl -s -o /dev/null -w '%{http_code}' https://aads.newtalk.kr/api/v1/ops/health-check
+   - docker ps 상 aads-server 컨테이너 상태
+
+완료 판정: deploy_run status=success + health 200 + release_sha = 1에서 기록한 SHA
