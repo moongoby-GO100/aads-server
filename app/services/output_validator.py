@@ -833,3 +833,80 @@ def should_retry_without_tools(violation_type: str, tools_called: bool) -> bool:
     본문을 얻는다 — 실패하면 기존 부분응답 보존 경로로 그대로 떨어진다.
     """
     return violation_type == "PROGRESS_ONLY_RESPONSE" and bool(tools_called)
+
+
+# ─── 구조 위반 재작성 시 부분응답 보존 게이트 ──────────────────────────────────
+#
+# validate_response() 는 REPORT_STRUCTURE_WEAK 를 UNVERIFIED_COUNT 보다 먼저
+# return 한다. 그래서 "구조 위반"으로 판정된 원문에도 미검증 수치·날조 테이블이
+# 숨어 있을 수 있다. 재작성이 비거나 실패했을 때 원문을 되살리려면, 구조 검사를
+# 뺀 나머지 검사를 조기 return 없이 전부 다시 돌려 깨끗한지 확인해야 한다.
+# validate_response() 의 순서·동작은 건드리지 않는다 — 이 함수들은 보존 판정 전용이다.
+
+_PRESERVABLE_VIOLATION = "REPORT_STRUCTURE_WEAK"
+
+
+def residual_violations(
+    response_text: str,
+    tools_called: bool,
+    intent: str = "",
+    tool_results_text: str = "",
+) -> list[str]:
+    """구조 검사를 제외한 모든 검사를 실행해 걸린 위반 타입 목록을 반환한다.
+
+    - 조기 return 하지 않는다 (걸린 것 전부를 로그로 남기기 위해).
+    - UNVERIFIED_COUNT 는 _EXPLAIN_INTENTS 예외를 적용하지 않고 항상 검사한다.
+    - EMPTY_PROMISE / NO_TOOL_FOR_ACTION / TOO_SHORT / FABRICATED_DATA_TABLE 은
+      validate_response() 와 같은 기준으로 도구 미호출일 때만 검사한다.
+    """
+    stripped = (response_text or "").strip()
+    tools_called = bool(tools_called)
+    violations: list[str] = []
+
+    if check_fabricated_results(stripped):
+        violations.append("FABRICATED_RESULTS")
+
+    if _looks_progress_only_response(stripped, intent, tools_called=tools_called):
+        violations.append("PROGRESS_ONLY_RESPONSE")
+
+    if tools_called and tool_results_text and check_inconsistent_data(stripped, tool_results_text):
+        violations.append("INCONSISTENT_DATA")
+
+    if not tools_called:
+        if check_fabricated_data_table(stripped):
+            violations.append("FABRICATED_DATA_TABLE")
+        if len(stripped) < 100 and any(pat in stripped for pat in _EMPTY_PROMISE_PATTERNS):
+            violations.append("EMPTY_PROMISE")
+        if len(stripped) < 200 and "겠" in stripped and any(verb in stripped for verb in _ACTION_VERBS):
+            violations.append("NO_TOOL_FOR_ACTION")
+        if len(stripped) < 30 and intent not in ("greeting", "casual"):
+            violations.append("TOO_SHORT")
+
+    if check_unverified_counts(stripped, tools_called):
+        violations.append("UNVERIFIED_COUNT")
+
+    return violations
+
+
+def can_preserve_partial_on_structure_violation(
+    violation_type: str,
+    response_text: str,
+    tools_called: bool,
+    intent: str = "",
+    tool_results_text: str = "",
+) -> bool:
+    """재작성이 비거나 실패했을 때 원문(부분응답)을 보존해도 되는지.
+
+    위반이 정확히 REPORT_STRUCTURE_WEAK 이고 잔여 검증을 전부 통과할 때만 True.
+    미검증 수치·날조 응답은 모양이 어떻든 절대 보존하지 않는다.
+    """
+    if violation_type != _PRESERVABLE_VIOLATION:
+        return False
+    if not (response_text or "").strip():
+        return False
+    return not residual_violations(
+        response_text,
+        tools_called,
+        intent=intent,
+        tool_results_text=tool_results_text,
+    )

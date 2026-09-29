@@ -14431,7 +14431,12 @@ async def send_message_stream(
                 full_response = _previous_response
 
         # 9.5 Layer ④: Output Validator — 빈 약속 응답 감지 및 재시도 (AADS-188C Phase 3)
-        from app.services.output_validator import should_retry_without_tools, validate_response
+        from app.services.output_validator import (
+            can_preserve_partial_on_structure_violation,
+            residual_violations,
+            should_retry_without_tools,
+            validate_response,
+        )
         _validation = validate_response(
             response_text=full_response,
             tools_called=bool(tools_called),
@@ -14450,7 +14455,8 @@ async def send_message_stream(
             )
             # 진행 문구만 남고 끝난 턴은 포기하지 않고 '도구 없이' 한 번 더 쓰게 한다.
             # 도구 루프를 재실행하지 않으므로 비용은 LLM 왕복 1회뿐이고,
-            # 이 재시도가 비거나 또 실패하면 아래 기존 경로가 부분응답을 보존한다.
+            # 이 재시도가 비거나 또 실패해도 원문은 _can_preserve 게이트를 통과할 때만
+            # 보존된다(구조 위반 + 잔여 검증 통과). 진행 문구뿐인 원문은 보존하지 않는다.
             _retry_without_tools = should_retry_without_tools(
                 _validation.violation_type, bool(tools_called)
             )
@@ -14465,6 +14471,28 @@ async def send_message_stream(
             # DB 저장 시 재시도 응답만 사용하도록 원본 응답 별도 보관
             _failed_response = full_response
             full_response = ""
+            # 재작성이 비거나 실패했을 때 원문을 되살려도 되는지 — 구조 위반이면서
+            # 잔여 검증(미검증 수치·날조 등)을 전부 통과한 경우만 허용한다.
+            # validate_response 는 구조 위반을 UNVERIFIED_COUNT 보다 먼저 반환하므로
+            # 위반 종류만 보고 보존하면 환각 수치가 그대로 저장된다.
+            _preserve_residual = residual_violations(
+                _failed_response,
+                bool(tools_called),
+                intent=intent,
+            )
+            _can_preserve = can_preserve_partial_on_structure_violation(
+                _validation.violation_type,
+                _failed_response,
+                bool(tools_called),
+                intent=intent,
+            )
+            logger.warning(
+                "output_validator_preserve_gate session=%s violation=%s residual=%s can_preserve=%s",
+                session_id[:8] if session_id else "unknown",
+                _validation.violation_type,
+                ",".join(_preserve_residual) or "-",
+                _can_preserve,
+            )
 
             # 재시도: output_validator가 생성한 retry_prompt 사용
             _retry_messages = list(messages)
@@ -14520,13 +14548,27 @@ async def send_message_stream(
                             content=_retry_response,
                             reason='validator_retry_error',
                         )
+                    elif _can_preserve:
+                        # 재작성이 한 글자도 못 쓰고 죽었다 — 게이트를 통과한 원문만 보존한다.
+                        await _save_interrupted_partial_message(
+                            session_id=session_id,
+                            content=_failed_response,
+                            reason='validator_retry_error',
+                        )
                     yield f"data: {json.dumps({'type': 'error', 'content': event.get('content', '오류'), 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
                     return
 
             # 재시도 응답도 검증 (날조 방지 — 재시도에서도 가짜 결과 차단)
             if not _retry_response.strip():
                 logger.error(f"retry_also_empty_response: session={session_id[:8] if session_id else 'unknown'}")
-                _partial_to_preserve = _failed_response
+                _partial_to_preserve = _failed_response if _can_preserve else ""
+                if not _can_preserve and (_failed_response or "").strip():
+                    logger.warning(
+                        "output_validator_retry_empty_partial_discarded session=%s violation=%s residual=%s",
+                        session_id[:8] if session_id else "unknown",
+                        _validation.violation_type,
+                        ",".join(_preserve_residual) or "-",
+                    )
                 if _partial_to_preserve and _partial_to_preserve.strip():
                     await _save_interrupted_partial_message(
                         session_id=session_id,
@@ -14544,7 +14586,12 @@ async def send_message_stream(
                             partial_content=_partial_to_preserve,
                             delete_empty_placeholder=False,
                         )
-                yield f"data: {json.dumps({'type': 'error', 'content': '응답 재검증 결과가 비어 있어 완료 처리하지 않았습니다. 중간 응답은 보존했습니다.', 'recoverable': True, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                _empty_retry_notice = (
+                    '응답 재검증 결과가 비어 있어 완료 처리하지 않았습니다. 중간 응답은 보존했습니다.'
+                    if _partial_to_preserve.strip()
+                    else '응답 재검증 결과가 비어 있어 완료 처리하지 않았습니다. 이전 응답은 검증을 통과하지 못해 저장하지 않았습니다.'
+                )
+                yield f"data: {json.dumps({'type': 'error', 'content': _empty_retry_notice, 'recoverable': True, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
                 return
             if _retry_response.strip():
                 _retry_validation = validate_response(
@@ -14565,9 +14612,21 @@ async def send_message_stream(
                         # 재작성까지 같은 기준에 또 걸리면 턴이 통째로 죽었다.
                         # 원문·재작성문 중 긴 쪽을 정상 답변으로 내보낸다 —
                         # 아래 `full_response = _retry_response` 가 이 값을 쓴다.
+                        # 원문은 _can_preserve 게이트를 통과했을 때만 후보가 된다 —
+                        # 미검증 수치·날조가 섞인 원문을 되살리지 않기 위해서다.
+                        _net_candidates = (
+                            (_retry_response, _failed_response) if _can_preserve else (_retry_response,)
+                        )
+                        if not _can_preserve and (_failed_response or "").strip():
+                            logger.warning(
+                                "output_validator_retry_failed_original_discarded session=%s violation=%s residual=%s",
+                                session_id[:8] if session_id else "unknown",
+                                _validation.violation_type,
+                                ",".join(_preserve_residual) or "-",
+                            )
                         _net_best = max(
                             [
-                                _t for _t in (_retry_response, _failed_response)
+                                _t for _t in _net_candidates
                                 if isinstance(_t, str) and _t.strip()
                             ] or [_retry_response],
                             key=lambda _t: len(_t or ""),
@@ -14583,6 +14642,17 @@ async def send_message_stream(
                             f"output_validator_retry_also_failed: {_retry_validation.violation_type} — "
                             f"{_retry_validation.message} (intent={intent})"
                         )
+                        # 재작성이 날조로 폐기될 때, 게이트를 통과한 원문이 있으면
+                        # 날조된 재작성문 대신 원문을 보존한다. 통과 못 하면 기존 동작 유지.
+                        if _can_preserve:
+                            _retry_response = _failed_response
+                        elif (_failed_response or "").strip():
+                            logger.warning(
+                                "output_validator_retry_failed_original_discarded session=%s violation=%s residual=%s",
+                                session_id[:8] if session_id else "unknown",
+                                _validation.violation_type,
+                                ",".join(_preserve_residual) or "-",
+                            )
                         await _save_interrupted_partial_message(
                             session_id=session_id,
                             content=_retry_response,
@@ -14611,7 +14681,7 @@ async def send_message_stream(
                             session_id,
                             _execution_id_str,
                             "output_validator_retry_empty",
-                            partial_content=_failed_response,
+                            partial_content=_failed_response if _can_preserve else "",
                             delete_empty_placeholder=False,
                         )
                 yield f"data: {json.dumps({'type': 'error', 'content': '응답 재검증 결과가 비어 있어 완료 처리하지 않았습니다.', 'recoverable': True})}\n\n"
