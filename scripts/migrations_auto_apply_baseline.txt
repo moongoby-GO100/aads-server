@@ -1,0 +1,37 @@
+# Pre-ledger migrations that scripts/apply_release_migrations.sh must NOT auto-apply.
+#
+# 2026-09-29 snapshot: files in migrations/ that were absent from schema_migrations
+# at the time deploy.sh started applying releases' migrations automatically. Most were
+# applied by hand without a ledger row (e.g. 20260923_milestone_completion_checklist:
+# the column already exists). Re-running them blindly could re-seed data or rerun
+# non-idempotent DDL, so each deploy reports them as HOLD instead.
+#
+# To clear an entry: verify its objects exist, then either record it with
+#   scripts/apply_migration.sh migrations/<file>   (if it is idempotent)
+# or insert a schema_migrations row, and delete the line here.
+#
+# Deliberately NOT listed (auto-applied by the next deploy):
+#   20260921_deploy_session_callbacks.sql, 20260922_next_step_dispatch_dedupe.sql
+#     — idempotent, applied by deploy.sh on every run until now
+#   20260929_milestone_directive_draft_lookup.sql
+#     — verified unapplied (index absent), additive
+#
+# Never add new migrations here. A new file must be safe to auto-apply.
+migrations/182_pipeline_failure_classification_v1.sql
+migrations/20260919_aria_partial_structure_signatures.sql
+migrations/20260919_authenticated_site_account_approval_scope.sql
+migrations/20260919_chat_session_attention.sql
+migrations/20260919_obys_bank_ledger_details.sql
+migrations/20260919_obys_ledger_details_r2.sql
+migrations/20260919_obys_tenant_uploads.sql
+migrations/20260919_qwen3_doc_embeddings.sql
+migrations/20260919_qwen3_doc_embeddings_contract.sql
+migrations/20260919_seed_goal_system_admin_role.sql
+migrations/20260919_smart_browser_goal_document_v21.sql
+migrations/20260919_work_recipe_registration_requests.sql
+migrations/20260919_yeoljeong_hr_tenant_isolation.sql
+migrations/20260921_ai_review_cli_only.sql
+migrations/20260921_obys_journal_vouchers_r3.sql
+migrations/20260921_pc_qwen_review_advisory.sql
+migrations/20260923_milestone_completion_checklist.sql
+migrations/20260923_obys_auth_bootstrap_jinah.sql

@@ -60,6 +60,7 @@ DEPLOY_GENERATION_FILE="${STATE_DIR}/.deploy_generation"
 CONTROL_AUDIT_LOG="${AADS_CONTROL_AUDIT_LOG:-/var/log/aads-control-audit.jsonl}"
 RELEASE_CONTEXT_DIR=""
 DEPLOY_RUN_ID=""
+DEPLOY_MIGRATION_ERROR=""
 DEPLOY_CURRENT_PHASE="initializing"
 DEPLOY_UPSTREAM_SWITCHED=false  # RC1: set true after nginx cutover; signals after this = success
 DEPLOY_PHASE_START_EPOCH="$DEPLOY_START_EPOCH"
@@ -620,26 +621,70 @@ reconcile_stale_deploy_runs() {
     done <<< "$rows"
 }
 
+# Every release migration goes through scripts/apply_release_migrations.sh and
+# the schema_migrations ledger. 2026-09-29 866df31a: this function used to pipe
+# three hard-coded files into psql and nothing else, so the release's new
+# migrations/20260929_goal_pause_all_paths.sql never ran and goal dispatch failed
+# with "column paused_at does not exist" (deploy.new_migration_not_applied).
+# The SQL comes from committed HEAD, the same tree the release image is built from.
+run_release_migrations() {
+    local migration_root rc=0 output
+    migration_root="$(mktemp -d /tmp/aads-server-migrations.XXXXXX)"
+    if ! git -C "$COMPOSE_DIR" archive --format=tar HEAD migrations scripts/apply_migration.sh \
+            scripts/apply_release_migrations.sh scripts/migrations_auto_apply_baseline.txt \
+            | tar -xf - -C "$migration_root"; then
+        rm -rf -- "$migration_root"
+        DEPLOY_MIGRATION_ERROR="cannot extract migrations from HEAD=${AADS_RELEASE_SHA}"
+        echo "[deploy.sh] ❌ ${DEPLOY_MIGRATION_ERROR}"
+        return 1
+    fi
+    output="$(bash "${migration_root}/scripts/apply_release_migrations.sh" --root "$migration_root" "$@" 2>&1)" || rc=$?
+    rm -rf -- "$migration_root"
+    printf '%s\n' "$output" | grep -v '^SKIP ' | sed 's/^/[deploy.sh]   migration: /' || true
+    DEPLOY_MIGRATION_ERROR=""
+    case "$rc" in
+        0) return 0 ;;
+        4) DEPLOY_MIGRATION_ERROR="destructive SQL blocked: $(printf '%s\n' "$output" | grep '^BLOCK-DESTRUCTIVE' | cut -c19- | paste -sd';' -)" ;;
+        5) DEPLOY_MIGRATION_ERROR="migration failed: $(printf '%s\n' "$output" | grep '^FAILED ' | cut -c8- | head -1)" ;;
+        *) DEPLOY_MIGRATION_ERROR="migration runner exit=${rc}: $(printf '%s\n' "$output" | tail -1)" ;;
+    esac
+    echo "[deploy.sh] ❌ ${DEPLOY_MIGRATION_ERROR}"
+    return 1
+}
+
 ensure_deploy_observability_schema() {
     if ! deploy_db_available; then
         echo "[deploy.sh] ❌ PostgreSQL is not running; cannot verify deployment observability schema"
         return 1
     fi
-    if ! docker exec -i aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 -q \
-        < "${COMPOSE_DIR}/migrations/150_deploy_observability_v1.sql" >/dev/null; then
+    # deploy_runs must exist before the first phase event, so these three are
+    # brought up early. They share the ledger with the full pass below, which
+    # then sees them as SKIP — no file is applied twice.
+    if ! run_release_migrations \
+            --only migrations/150_deploy_observability_v1.sql \
+            --only migrations/20260921_deploy_session_callbacks.sql \
+            --only migrations/20260922_next_step_dispatch_dedupe.sql; then
         echo "[deploy.sh] ❌ deployment observability schema migration failed"
         return 1
     fi
-    if ! docker exec -i aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 -q \
-        < "${COMPOSE_DIR}/migrations/20260921_deploy_session_callbacks.sql" >/dev/null; then
-        echo "[deploy.sh] ❌ deploy session callback schema migration failed"
-        return 1
+}
+
+# Brings the database up to the release before the candidate slot starts.
+# $1=--plan only classifies and runs the destructive-SQL gate.
+apply_release_schema_migrations() {
+    local phase="$1"
+    shift
+    deploy_phase_start "$phase" "running"
+    if run_release_migrations "$@"; then
+        deploy_phase_end "$phase" "success" ""
+        return 0
     fi
-    if ! docker exec -i aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 -q \
-        < "${COMPOSE_DIR}/migrations/20260922_next_step_dispatch_dedupe.sql" >/dev/null; then
-        echo "[deploy.sh] ❌ next-step dispatch schema migration failed"
-        return 1
-    fi
+    # Old slot keeps serving; the candidate never starts against a partial schema.
+    DEPLOY_LAST_FAIL_ERROR="${DEPLOY_MIGRATION_ERROR:-schema migration failed}"
+    notify "❌ Blue-Green 중단: ${DEPLOY_LAST_FAIL_ERROR}"
+    deploy_phase_end "$phase" "blocked" "$DEPLOY_LAST_FAIL_ERROR"
+    record_deploy "blocked" "$MODE" "$DEPLOY_LAST_FAIL_ERROR"
+    exit 1
 }
 
 deploy_observe_init() {
@@ -2627,6 +2672,9 @@ case "$MODE" in
         audit_control "target-drain-window" "${NEW_CONTAINER}:${NEW_PORT}" "started" \
             "active_before_build=${TARGET_STREAMS_BEFORE_BUILD:-unknown}; overlaps=build_candidate_image"
 
+        # 파괴적 SQL 은 빌드 전에 거른다 — 10분 빌드 뒤에 막히면 헛빌드다.
+        apply_release_schema_migrations "schema_migration_plan" --plan
+
         cd "$COMPOSE_DIR"
         deploy_phase_start "build_candidate_image" "running"
         echo "[deploy.sh] ① release image 1회 빌드 (${AADS_RELEASE_SHA})..."
@@ -2676,6 +2724,10 @@ case "$MODE" in
         fi
         set_deploy_stream_phase_metadata "$NEW_CONTAINER" "$NEW_PORT" "${TARGET_STREAMS:-unknown}" "${local_target_elapsed:-0}" "${local_target_drain_max:-0}"
         deploy_phase_end "target_slot_drain" "success" "active_streams=${TARGET_STREAMS}"
+
+        # ①-2a 릴리스의 migrations/ 를 ledger 기준으로 전량 적용 — 새 슬롯 기동 전.
+        # 실패하면 여기서 끝나고 기존 슬롯이 계속 트래픽을 받는다(additive 전제).
+        apply_release_schema_migrations "schema_migrations"
 
         # ①-2 새 컨테이너 시작 — 이미지는 drain 이전에 이미 만들어 뒀다(①-1).
         cd "$COMPOSE_DIR"
