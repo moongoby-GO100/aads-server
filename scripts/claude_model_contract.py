@@ -34,6 +34,22 @@ EXACT_MODEL_IDS = frozenset(AADS_MODEL_IDS.values()) | frozenset((
     "claude-3-5-haiku-20241022", "claude-3-haiku-20240307", "claude-2.1",
 ))
 
+# The relay accepts this ID, but the runner has no verified live entitlement.
+# Keep the execution contract intact while excluding it from automatic cycles.
+UNVERIFIED_RUNNER_MODELS = frozenset({"claude-opus-5-5"})
+
+
+def runner_model_available(model):
+    value = str(model or "").strip()
+    if value.startswith("claude:"):
+        value = value.split(":", 1)[1]
+    if value not in ALIASES and not value.startswith("claude-"):
+        return True
+    try:
+        return resolve_model(value) not in UNVERIFIED_RUNNER_MODELS
+    except ValueError:
+        return False
+
 
 def resolve_model(model):
     value = str(model or "").strip()
@@ -99,6 +115,8 @@ class ModelObservation:
 if __name__ == "__main__":
     if sys.argv[1:] == ["--describe"]:
         print(json.dumps({"version": CONTRACT_VERSION, "models": sorted(EXACT_MODEL_IDS)}))
+    elif len(sys.argv) == 3 and sys.argv[1] == "--runner-available":
+        sys.exit(0 if runner_model_available(sys.argv[2]) else 1)
     else:
         try:
             print(resolve_model(sys.argv[1] if len(sys.argv) == 2 else ""))

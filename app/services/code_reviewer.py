@@ -17,6 +17,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 from typing import Optional
+from scripts.claude_model_contract import runner_model_available
 
 logger = logging.getLogger(__name__)
 
@@ -391,6 +392,8 @@ async def _get_review_models() -> list[str]:
 def _is_cli_review_model(model: str) -> bool:
     """Whether a configured review model is backed by Codex/Claude CLI."""
     normalized = str(model or "").strip().lower()
+    if not runner_model_available(normalized):
+        return False
     # Bare `gpt-*` identifiers can resolve to an API provider in the generic
     # registry.  Reviews accept only explicit Codex or Claude CLI identifiers;
     # the DB's legacy `claude-*` names are Claude CLI aliases.

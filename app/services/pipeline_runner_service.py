@@ -32,7 +32,7 @@ from app.services.goal_binding import (
     parse_goal_binding,
     remediation_purpose,
 )
-from scripts.claude_model_contract import resolve_model
+from scripts.claude_model_contract import resolve_model, runner_model_available
 
 logger = logging.getLogger(__name__)
 
@@ -470,6 +470,8 @@ async def _get_db_model_config(size: str) -> list[str]:
                 if row["provider"]
                 else str(row["model"] or "").strip()
             )
+            if not runner_model_available(raw_model):
+                continue
             if not raw_model or raw_model in seen:
                 continue
             seen.add(raw_model)

@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.auth import TenantRole, get_current_user, tenant_role_allows
 from app.core.project_config import PROJECT_MAP
 from app.services.goal_binding import parse_goal_binding
+from scripts.claude_model_contract import runner_model_available
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -719,6 +720,8 @@ async def _get_model_cycle_for_size(conn, size: str) -> list[str]:
     deduped: list[str] = []
     for model in candidates:
         normalized = str(model or "").strip()
+        if not runner_model_available(normalized):
+            continue
         if not normalized or normalized in seen:
             continue
         seen.add(normalized)

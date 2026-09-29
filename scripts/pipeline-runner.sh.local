@@ -13,6 +13,7 @@
 # ═══════════════════════════════════════════════════════════════════════
 set -eo pipefail
 CLAUDE_MODEL_CONTRACT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude_model_contract.py"
+RUNNER_AUTH_POLICY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner_auth_policy.py"
 
 # general: normal Claude/Codex runner. litellm: claims only LiteLLM jobs.
 RUNNER_ENGINE_MODE="${RUNNER_ENGINE_MODE:-general}"
@@ -502,6 +503,8 @@ append_model_for_attempts() {
     local model
     model=$(normalize_runner_model "${1:-}")
     [[ -z "$model" || "$model" == "auto" ]] && return 0
+    # No verified entitlement for this exact model on the current CLI relay.
+    python3 "$CLAUDE_MODEL_CONTRACT" --runner-available "$model" || return 0
     # Anthropic CLI can use two OAuth slots. Codex/LiteLLM do not benefit from
     # duplicate same-model attempts, so keep them single-pass for faster fallback.
     local max_attempts=1 current_count=0 existing
@@ -524,6 +527,7 @@ dedupe_model_cycle_for_attempt_caps() {
     for model in "${original[@]}"; do
         model=$(normalize_runner_model "$model")
         [[ -z "$model" || "$model" == "auto" ]] && continue
+        python3 "$CLAUDE_MODEL_CONTRACT" --runner-available "$model" || continue
         max_attempts=1
         if [[ "$model" == claude-* ]]; then
             max_attempts=2
@@ -683,50 +687,7 @@ get_db_anthropic_slots() {
 # 계정 홈은 materialize_codex_accounts.py 가 만들어 두고, CODEX_HOME 으로
 # 계정을 고르는 방식은 codex_usage.py 가 이미 쓰고 있는 것과 같다.
 codex_pick_account_home() {
-    local state="${AADS_CODEX_ACCOUNTS_STATE:-/root/.codex-accounts/state.json}"
-    [[ -f "$state" ]] || return 1
-    python3 - "$state" <<'PY' || return 1
-import json
-import os
-import sys
-import time
-
-try:
-    with open(sys.argv[1], "r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-except Exception:
-    raise SystemExit(1)
-
-now = time.time()
-best = None
-for acct in payload.get("accounts", []):
-    if not isinstance(acct, dict):
-        continue
-    if not acct.get("is_active") or not acct.get("has_auth"):
-        continue
-    until = acct.get("rate_limited_until_epoch")
-    try:
-        if until is not None and float(until) > now:
-            continue
-    except (TypeError, ValueError):
-        continue
-    try:
-        prio = int(acct.get("priority", 9999))
-    except (TypeError, ValueError):
-        prio = 9999
-    name = acct.get("key_name") or ""
-    if not name:
-        continue
-    if best is None or prio < best[0]:
-        best = (prio, name)
-
-if best is None:
-    raise SystemExit(1)
-home = os.path.join(os.path.dirname(os.path.abspath(sys.argv[1])), best[1])
-if not os.path.isdir(home):
-    raise SystemExit(1)
-print(home)
-PY
+    python3 "$RUNNER_AUTH_POLICY" select
 }
 
 is_read_only_instruction() {
@@ -2261,6 +2222,16 @@ run_job() {
         log "  DB_MODEL_CONFIG_OVERRIDE job=$job_id size=$job_size models=${MODEL_CYCLE[*]}"
     fi
     dedupe_model_cycle_for_attempt_caps
+    # Two Claude slots are attempts at one model, not alternative model kinds.
+    local _has_codex_luna=0 _has_codex_sol=0 _cycle_model
+    for _cycle_model in "${MODEL_CYCLE[@]}"; do
+        case "$_cycle_model" in
+            codex:gpt-5.6-luna) _has_codex_luna=1 ;;
+            codex:gpt-5.6-sol) _has_codex_sol=1 ;;
+        esac
+    done
+    [[ "$_has_codex_luna" == 1 ]] || append_model_for_attempts "codex:gpt-5.6-luna"
+    [[ "$_has_codex_sol" == 1 ]] || append_model_for_attempts "codex:gpt-5.6-sol"
     log "  MODEL_CYCLE_CAPPED job=$job_id size=$job_size total=${#MODEL_CYCLE[@]} models=${MODEL_CYCLE[*]}"
     # TOKEN_CYCLE 동적 생성 (MODEL_CYCLE 길이에 맞춤)
     local TOKEN_CYCLE=()
@@ -2518,12 +2489,20 @@ ${safe_instruction}"
                 log "  CODEX_ACCOUNT job=$job_id model=$current_model home=$(basename "$_codex_home")"
             fi
             local codex_disabled_until=""
-            if [[ -z "$_codex_home" ]] && codex_disabled_until=$(codex_auth_disabled_until); then
-                log "  CODEX_AUTH_DISABLED_SKIP job=$job_id model=$current_model until_epoch=$codex_disabled_until"
-                db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} skip: auth cooldown active until ${codex_disabled_until}' WHERE job_id='${job_id}';"
-                record_runner_event "$job_id" "model_attempt_skipped" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "" "{\"reason\":\"codex_auth_cooldown\",\"until_epoch\":\"${codex_disabled_until}\"}"
-                attempt=$((attempt + 1))
-                continue
+            if [[ -z "$_codex_home" ]]; then
+                local _skip_reason=""
+                if codex_disabled_until=$(codex_auth_disabled_until); then
+                    _skip_reason="codex_auth_cooldown"
+                elif python3 "$RUNNER_AUTH_POLICY" managed; then
+                    _skip_reason="codex_no_eligible_account"
+                fi
+                if [[ -n "$_skip_reason" ]]; then
+                    log "  CODEX_AUTH_DISABLED_SKIP job=$job_id model=$current_model reason=$_skip_reason until_epoch=$codex_disabled_until"
+                    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} skip: ${_skip_reason}' WHERE job_id='${job_id}';"
+                    record_runner_event "$job_id" "model_attempt_skipped" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "" "{\"reason\":\"${_skip_reason}\",\"until_epoch\":\"${codex_disabled_until}\"}"
+                    attempt=$((attempt + 1))
+                    continue
+                fi
             fi
         fi
         # Codex CLI Runner 분기 (codex: 접두사, ChatGPT Plus OAuth)
@@ -2660,20 +2639,19 @@ ${safe_instruction}"
                     break
                 fi
                 if grep -qiE "FAILED:|ERROR:|unauthorized|forbidden|invalid.?key|auth" "$err_file" 2>/dev/null; then
-                    local _err_msg
-                    # head -3 은 stderr 맨 위, 즉 Codex 시작 배너를 집는다. 그래서
-                    # 로그에 "Reading additional input from stdin... OpenAI Codex"
-                    # 만 남고 진짜 원인이 가려졌다(2026-09-14: 실제 원인은
-                    # FileNotFoundError 였는데 세 세션이 계정 문제로 오진했다).
-                    # 패턴에 걸린 줄을 그대로 남긴다.
-                    _err_msg=$(grep -iEm3 "FAILED:|ERROR:|unauthorized|forbidden|invalid.?key|auth" "$err_file" 2>/dev/null | tr '\n' ' ' | head -c 160)
-                    [[ -n "$_err_msg" ]] || _err_msg=$(head -3 "$err_file" | tr '\n' ' ' | head -c 100)
-                    if grep -qiE "refresh_token_reused|token_expired|Please log out and sign in again" "$err_file" 2>/dev/null; then
-                        mark_codex_auth_disabled "$_err_msg"
+                    # Keep the diagnostic line from the 2026-09-14 incident, masked before logging.
+                    local _err_msg=""
+                    _err_msg=$(python3 "$RUNNER_AUTH_POLICY" redact-error "$err_file")
+                    if grep -qiE '(^|[^[:alnum:]])401([^[:alnum:]]|$)|unauthorized|refresh_token_reused|token_expired|Please log out and sign in again' "$err_file" 2>/dev/null; then
+                        if [[ -n "$_codex_home" ]]; then
+                            python3 "$RUNNER_AUTH_POLICY" quarantine "$(basename "$_codex_home")" || mark_codex_auth_disabled "codex_auth_failure"
+                        else
+                            mark_codex_auth_disabled "codex_auth_failure"
+                        fi
                     fi
-                    log "  CODEX_ERROR_SKIP job=$job_id reason='${_err_msg}' → immediate fallback"
+                    log "  CODEX_ERROR_SKIP job=$job_id reason='${_err_msg:-auth_or_cli_error}' → immediate fallback"
                     lookup_error_book "$err_file" "$job_id"
-                    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} 즉시폴백: ${_err_msg:0:60}' WHERE job_id='${job_id}';"
+                    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} 즉시폴백: auth_or_cli_error' WHERE job_id='${job_id}';"
                     break
                 fi
                 # 연결 끊김/타임아웃 → 재시도
