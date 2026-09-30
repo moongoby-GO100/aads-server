@@ -51,3 +51,38 @@ the existing public service and its DB remain authoritative.
 After cutover, reverting a symlink/DNS is insufficient: preserve and replay new
 transactions, permissions and files first, as specified in the PRD. Never start
 two collectors. Their cross-host execution fence is a separate required gate.
+
+## Database grants (2026-10-01)
+
+The Jinah business DB (`obys` on `127.0.0.1:5433`) is owned by `partner`; the app
+connects as `obys_app`. Every table in `public` is created by `partner`, so a
+migration that only runs `CREATE TABLE` leaves `obys_app` with no privileges and
+the feature fails at runtime with `permission denied`. That happened on
+2026-10-01: three tables and one sequence behind the business-document upload
+screen were unreachable from the app account while 40 of 43 tables were granted.
+
+Default privileges now close that gap, so a new migration needs no manual GRANT:
+
+```sql
+ALTER DEFAULT PRIVILEGES FOR ROLE partner IN SCHEMA public
+  GRANT SELECT,INSERT,UPDATE,DELETE ON TABLES TO obys_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE partner IN SCHEMA public
+  GRANT USAGE,SELECT,UPDATE ON SEQUENCES TO obys_app;
+```
+
+Two things this does not cover. Objects created by **another role** (for example
+`postgres`) get nothing — default privileges are per creating role, so that role
+needs the same two statements. And objects that already existed when the setting
+was applied are untouched; they keep whatever grants they had.
+
+Verify after a migration, not before — this query must return 0:
+
+```sql
+SELECT count(*) FROM pg_tables
+ WHERE schemaname = 'public'
+   AND NOT has_table_privilege('obys_app',
+        quote_ident(schemaname)||'.'||quote_ident(tablename), 'SELECT');
+```
+
+Revoke with `ALTER DEFAULT PRIVILEGES FOR ROLE partner IN SCHEMA public REVOKE
+ALL ON TABLES FROM obys_app;` (and the same for `SEQUENCES`).
