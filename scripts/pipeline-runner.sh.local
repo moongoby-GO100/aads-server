@@ -240,6 +240,12 @@ _release_deploy_lock() {
     local project="$1" job_id="$2"
     curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/release?project=${project}&session_id=${job_id}" 2>/dev/null || true
 }
+# 배포 락 TTL 갱신 — 응답 JSON 을 그대로 출력한다(무응답이면 빈 문자열). acquire 는 SET NX 라
+# 홀더가 다시 불러도 TTL 이 늘지 않으므로 전용 엔드포인트를 쓴다.
+_renew_deploy_lock() {
+    local project="$1" job_id="$2"
+    curl -sf --connect-timeout 3 --max-time 10 -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/renew?project=${project}&session_id=${job_id}" 2>/dev/null || true
+}
 
 # DB 접속 방식
 DB_MODE="${DB_MODE:-auto}"
@@ -4150,6 +4156,129 @@ approved_sha_is_live() {
     [[ "$active_digest" == "$release_digest" ]] || return 1
     curl -fsS --connect-timeout 3 --max-time 5 "${AADS_API_URL}/api/v1/health" >/dev/null 2>&1
 }
+
+# ── autoheal 인계 추적 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD-RETRY, 2026-09-30) ──
+# deploy.sh 는 target_drain_busy·dirty_worktree 로 멈추면 EXIT 트랩에서 같은
+# 릴리스의 successor run 을 띄우고 자기 행을 superseded_by_autoheal_* 로 바꾼 뒤
+# rc=1 로 나간다. 러너는 그 rc 만 보고 bluegreen_failed 로 확정했다.
+# 2026-09-30 실측: runner-a5f21866(da6b42d1) 이 01:25 에 error 로 종결됐는데,
+# 같은 SHA 의 successor #5290→#5291→#5292→#5293 이 01:46 에 success_partial 로
+# 배포를 끝냈다. 산출물은 운영에 나갔고 작업만 실패로 남았다.
+#
+# 인계가 확인된 경우에만 successor 사슬을 끝까지 따라가 결과를 판정한다.
+# 인계 흔적이 없으면 즉시 1 — 기존 실패 판정을 그대로 유지한다.
+#   0: 같은 릴리스가 success/success_partial 로 끝났거나, 다른 run 에 흡수돼
+#      approved_sha_is_live 가 확인됨
+#   1: 인계 없음 / 사슬이 실패로 끝남 / 상한 소진
+# stdout 마지막 줄은 판정 요약이다(review_feedback 에 남긴다).
+AADS_AUTOHEAL_FOLLOW_MAX_SEC="${AADS_AUTOHEAL_FOLLOW_MAX_SEC:-2700}"
+AADS_AUTOHEAL_FOLLOW_POLL_SEC="${AADS_AUTOHEAL_FOLLOW_POLL_SEC:-30}"
+# successor 가 blocked 로 멈춘 직후 autoheal 이 다음 successor 를 등록하기까지의 틈.
+# 이 시간 안의 failed/blocked 는 확정으로 보지 않는다.
+AADS_AUTOHEAL_FOLLOW_SETTLE_SEC="${AADS_AUTOHEAL_FOLLOW_SETTLE_SEC:-90}"
+# 세 시간 값의 관계 (2026-09-30 검수 확정 결함):
+#   배포 락 TTL 600s (deploy_lock.py acquire_deploy_lock, 갱신 없음) <
+#   DEPLOY_LOCK_MAX_WAIT_SEC 900s (대기하는 쪽) < AADS_AUTOHEAL_FOLLOW_MAX_SEC 2700s (추적하는 쪽)
+# 실측 autoheal 사슬(#5290→#5293)이 1,080s 라 추적은 예측 가능하게 락 TTL 을 넘는다.
+# 갱신 없이 추적하면 t=600s 에 락이 풀려 다른 잡이 병행 배포를 시작한다(배포 #414 를 죽인 조합).
+# 그래서 매 poll 마다 renew 로 TTL 을 되돌리고, 갱신이 거부되면 추적을 멈춘다(fail-closed).
+# 대기 측 상한(900s)이 추적 측(2700s)보다 짧으므로 대기 중인 잡은 holder 가 추적 중이어도
+# 먼저 deploy_lock_fail 에 닿을 수 있다 — 그래서 재큐잉 메시지에 holder 추적 표시를 남긴다.
+# 갱신 API 가 일시적으로 무응답인 경우(bluegreen 전환 중 API 재기동)는 TTL 여유(600s) 안에서만
+# 연속 AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL 회(기본 3 × poll 30s = 90s)까지 견딘다.
+AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL="${AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL:-3}"
+AUTOHEAL_FOLLOW_TAG="[배포추적]"
+
+# 이 holder 잡이 autoheal successor 를 추적 중인지 — 대기 측 재큐잉 메시지용.
+# 추적 중 heartbeat(updated_at)가 poll 마다 갱신되므로 신선도로 "지금" 을 판정한다.
+_deploy_holder_follow_tag() {
+    local holder="$1"
+    [[ "$holder" =~ ^[A-Za-z0-9._:-]+$ ]] || return 0
+    local hit
+    hit=$(db_exec "SELECT count(*) FROM pipeline_jobs WHERE job_id='${holder}' AND status='deploying'
+        AND position('${AUTOHEAL_FOLLOW_TAG}' in COALESCE(review_feedback, '')) > 0
+        AND updated_at > NOW() - INTERVAL '180 seconds';" 2>/dev/null | tail -1 | tr -cd '0-9') || hit=""
+    [[ "${hit:-0}" -gt 0 ]] && printf ' %s' "successor-추적중"
+    return 0
+}
+
+follow_autoheal_successor() {
+    local job_id="$1" sha="$2" since_epoch="$3" repo="$4" state_dir="$5" project="${6:-AADS}"
+    local max_wait="$AADS_AUTOHEAL_FOLLOW_MAX_SEC" poll="$AADS_AUTOHEAL_FOLLOW_POLL_SEC"
+    local settle="$AADS_AUTOHEAL_FOLLOW_SETTLE_SEC"
+    [[ "$max_wait" =~ ^[0-9]+$ && "$max_wait" -gt 0 ]] || max_wait=2700
+    [[ "$poll" =~ ^[0-9]+$ && "$poll" -gt 0 ]] || poll=30
+    [[ "$settle" =~ ^[0-9]+$ ]] || settle=90
+    local renew_max="$AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL"
+    [[ "$renew_max" =~ ^[0-9]+$ && "$renew_max" -gt 0 ]] || renew_max=3
+    if [[ ! "$sha" =~ ^[0-9a-f]{12,40}$ || ! "$since_epoch" =~ ^[0-9]+$ ]]; then
+        echo "autoheal_follow: skip (sha/since 형식 오류)"
+        return 1
+    fi
+    local scope="upper(trim(project))='AADS'
+        AND COALESCE(NULLIF(lower(trim(component)), ''), 'api')='api'
+        AND COALESCE(NULLIF(lower(trim(target_env)), ''), 'production')='production'
+        AND length(release_sha) >= 12 AND '${sha}' LIKE release_sha || '%'
+        AND created_at >= to_timestamp(${since_epoch})"
+    local handoff=""
+    handoff=$(db_exec "SELECT count(*) FROM deploy_runs WHERE ${scope}
+        AND status='superseded' AND phase LIKE 'superseded_by_autoheal%';" 2>/dev/null | tail -1 | tr -cd '0-9') || handoff=""
+    if [[ "${handoff:-0}" -le 0 ]]; then
+        echo "autoheal_follow: no_handoff"
+        return 1
+    fi
+    log "  AUTOHEAL_FOLLOW job=$job_id sha=${sha:0:12} — deploy.sh 가 successor 에 인계함, 최대 ${max_wait}s 추적"
+    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n${AUTOHEAL_FOLLOW_TAG} deploy.sh 가 autoheal successor 에 인계함 — 최대 ${max_wait}s 추적, 배포 락 매 poll 갱신', updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
+
+    local waited=0 row="" run_id="" status="" phase="" age="" lock_out="" lock_reason="" renew_fail=0
+    while :; do
+        row=$(db_exec "SELECT id || '|' || status || '|' || COALESCE(phase, '') || '|'
+            || GREATEST(0, EXTRACT(EPOCH FROM (NOW() - updated_at)))::bigint
+            FROM deploy_runs WHERE ${scope} ORDER BY id DESC LIMIT 1;" 2>/dev/null | tail -1) || row=""
+        IFS='|' read -r run_id status phase age <<< "$row"
+        [[ "$age" =~ ^[0-9]+$ ]] || age=0
+        case "$status" in
+            success|success_partial)
+                echo "autoheal_follow: success run=#${run_id} status=${status} phase=${phase} waited=${waited}s"
+                return 0 ;;
+            failed|blocked|cancelled)
+                if (( age >= settle )); then
+                    echo "autoheal_follow: failed run=#${run_id} status=${status} phase=${phase} waited=${waited}s"
+                    return 1
+                fi ;;
+            superseded)
+                # autoheal 사슬은 다음 행이 곧 보인다. 그 밖의 superseded(배치 흡수·
+                # 신규 릴리스)는 이 SHA 를 담은 다른 run 이 나갔는지로 판정한다.
+                if [[ "$phase" != superseded_by_autoheal* ]] \
+                    && approved_sha_is_live "$repo" "$sha" "$state_dir"; then
+                    echo "autoheal_follow: success run=#${run_id} status=superseded phase=${phase} live=contained waited=${waited}s"
+                    return 0
+                fi ;;
+        esac
+        if (( waited >= max_wait )); then
+            echo "autoheal_follow: timeout run=#${run_id:-none} status=${status:-none} phase=${phase:-none} waited=${waited}s"
+            return 1
+        fi
+        # 터미널 판정 뒤에 갱신한다 — 사슬이 이미 끝났다면 락 상태와 무관하게 결과를 따른다.
+        lock_out=$(_renew_deploy_lock "$project" "$job_id") || lock_out=""
+        if [[ "$lock_out" == *'"renewed":true'* ]]; then
+            renew_fail=0
+        elif [[ "$lock_out" == *'"renewed":false'* ]]; then
+            lock_reason=$(printf '%s' "$lock_out" | sed -n 's/.*"reason":"\([^"]*\)".*/\1/p' | tr -cd 'A-Za-z0-9._-' | cut -c1-40)
+            echo "autoheal_follow: lock_lost run=#${run_id:-none} reason=${lock_reason:-unknown} waited=${waited}s"
+            return 1
+        else
+            renew_fail=$((renew_fail + 1))
+            if (( renew_fail >= renew_max )); then
+                echo "autoheal_follow: lock_renew_unreachable run=#${run_id:-none} fails=${renew_fail} waited=${waited}s"
+                return 1
+            fi
+        fi
+        db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
+        sleep "$poll"
+        waited=$((waited + poll))
+    done
+}
 # ── 배포 락 대기 + 재큐잉 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD, 2026-09-29) ──
 # 예전 셸 경로는 30+60+90=180초만 기다리고 status='error' 로 확정했다. AADS
 # bluegreen 배포 실측(deploy_runs success, 24h n=16)은 중앙값 514s·최대 631s 라
@@ -4168,7 +4297,7 @@ DEPLOY_LOCK_WAIT_PHASE="deploy_lock_wait"
 
 acquire_deploy_lock_with_requeue() {
     local job_id="$1" project="$2" session_id="$3"
-    local max_wait="$DEPLOY_LOCK_MAX_WAIT_SEC" result="" holder="unknown" waited=0 requeue=0 backoff
+    local max_wait="$DEPLOY_LOCK_MAX_WAIT_SEC" result="" holder="unknown" holder_note="" waited=0 requeue=0 backoff
     [[ "$max_wait" =~ ^[0-9]+$ && "$max_wait" -gt 0 ]] || max_wait=900
     local -a backoffs=()
     for backoff in $DEPLOY_LOCK_BACKOFF_SEC; do
@@ -4195,22 +4324,25 @@ acquire_deploy_lock_with_requeue() {
         fi
         holder=$(printf '%s' "$result" | sed -n 's/.*"holder":"\([^"]*\)".*/\1/p' | tr -cd 'A-Za-z0-9._:-' | cut -c1-80)
         [[ -n "$holder" ]] || holder="unknown"
+        # holder 가 autoheal successor 를 추적 중이면 락이 갱신되며 최대 AADS_AUTOHEAL_FOLLOW_MAX_SEC
+        # 까지 유지된다 — 대기 상한(DEPLOY_LOCK_MAX_WAIT_SEC)이 먼저 닿을 수 있음을 표시한다.
+        holder_note=$(_deploy_holder_follow_tag "$holder" 2>/dev/null) || holder_note=""
         (( waited >= max_wait )) && break
         # 백오프 한 바퀴를 다 돌아도 못 잡았으면 재큐잉으로 기록한다(Python 경로와 같은 단위).
         if (( idx >= ${#backoffs[@]} )); then
             idx=0
             requeue=$((requeue + 1))
-            log "  DEPLOY_LOCK_REQUEUE job=$job_id project=$project holder=$holder waited=${waited}s/${max_wait}s requeue=${requeue}"
+            log "  DEPLOY_LOCK_REQUEUE job=$job_id project=$project holder=${holder}${holder_note} waited=${waited}s/${max_wait}s requeue=${requeue}"
             db_update "UPDATE pipeline_jobs SET status='queued', phase='${DEPLOY_LOCK_WAIT_PHASE}',
-                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포대기] deploy lock 점유로 재큐잉 ${requeue} (holder=${holder}, 누적대기 ${waited}s/${max_wait}s)',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포대기] deploy lock 점유로 재큐잉 ${requeue} (holder=${holder}${holder_note}, 누적대기 ${waited}s/${max_wait}s)',
                        updated_at=NOW() WHERE job_id='${job_id}' AND status IN ('deploying','queued');"
-            record_runner_event "$job_id" "deploy_lock_requeued" "queued" "$DEPLOY_LOCK_WAIT_PHASE" "" "" "" "" "{\"holder\":\"${holder}\",\"waited_sec\":${waited},\"max_wait_sec\":${max_wait},\"requeue\":${requeue}}"
+            record_runner_event "$job_id" "deploy_lock_requeued" "queued" "$DEPLOY_LOCK_WAIT_PHASE" "" "" "" "" "{\"holder\":\"${holder}\",\"holder_following_successor\":$([[ -n "$holder_note" ]] && echo true || echo false),\"waited_sec\":${waited},\"max_wait_sec\":${max_wait},\"requeue\":${requeue}}"
             (( requeue == 1 )) && post_to_chat "$session_id" "⏳ [Pipeline Runner] 다른 배포 진행 중(holder=${holder}) — 배포 대기로 재큐잉, 최대 ${max_wait}초 대기: $job_id"
         fi
         backoff=${backoffs[$idx]}
         idx=$((idx + 1))
         (( waited + backoff > max_wait )) && backoff=$((max_wait - waited))
-        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project holder=$holder — ${backoff}초 후 재시도 (누적 ${waited}s/${max_wait}s)"
+        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project holder=${holder}${holder_note} — ${backoff}초 후 재시도 (누적 ${waited}s/${max_wait}s)"
         sleep "$backoff"
         waited=$((waited + backoff))
     done
@@ -4516,6 +4648,9 @@ deploy_job() {
 
                 if [[ "$_release_relevant" == "true" ]]; then
                     local _aads_deploy_log="/tmp/pipeline-deploy-aads-${job_id}.log"
+                    local _aads_deploy_since _aads_follow_out=""
+                    # deploy_runs.created_at 과 비교한다 — 시계 오차를 감안해 5초 앞당긴다.
+                    _aads_deploy_since=$(( $(date +%s) - 5 ))
                     log "  BLUEGREEN aads-server — approved isolated worktree=$worktree_dir"
                     if AADS_DEPLOY_FOREGROUND=1 \
                        AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
@@ -4523,13 +4658,22 @@ deploy_job() {
                        bash "$worktree_dir/deploy.sh" bluegreen >"$_aads_deploy_log" 2>&1; then
                         tail -20 "$_aads_deploy_log" 2>/dev/null || true
                         log "  BLUEGREEN aads-server 완료 — deploy.sh certification gates passed"
+                    elif _aads_follow_out=$(follow_autoheal_successor "$job_id" "$current_sha" \
+                            "$_aads_deploy_since" "$worktree_dir" "$main_workdir" "$project"); then
+                        # deploy.sh 는 rc=1 이지만 같은 릴리스를 successor 가 끝까지 배포했다.
+                        _aads_follow_out=$(tail -1 <<< "$_aads_follow_out")
+                        log "  BLUEGREEN aads-server 완료 — autoheal successor 인계 성공: ${_aads_follow_out}"
+                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포인계] deploy.sh rc≠0 이었으나 autoheal successor 가 같은 릴리스를 배포함 — ' || $(sql_escape "$_aads_follow_out") WHERE job_id='${job_id}';"
+                        record_runner_event "$job_id" "deploy_autoheal_successor_succeeded" "deploying" "deploying" "" "" "" "" "{\"sha\":\"${current_sha}\"}"
                     else
+                        _aads_follow_out=$(tail -1 <<< "$_aads_follow_out")
+                        log "  AUTOHEAL_FOLLOW 결과: ${_aads_follow_out:-none}"
                         local _aads_deploy_tail
                         _aads_deploy_tail=$(tail -20 "$_aads_deploy_log" 2>/dev/null | head -c 1500)
                         log "  ERROR: isolated bluegreen 실패 — 기존 라우팅 유지/내부 롤백: ${_aads_deploy_tail//$'\n'/ }"
                         post_to_chat "$session_id" "🔴 [Runner] AADS bluegreen 배포 실패 — 기존 서비스 유지: ${_aads_deploy_tail:0:500}"
                         _build_fail="${_build_fail:+${_build_fail};}aads-server:bluegreen_failed"
-                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "$_aads_deploy_tail") WHERE job_id='${job_id}';"
+                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "[${_aads_follow_out:-autoheal_follow: none}] ${_aads_deploy_tail}") WHERE job_id='${job_id}';"
                     fi
                     rm -f "$_aads_deploy_log" 2>/dev/null || true
                 else

@@ -463,6 +463,13 @@ async def api_acquire_deploy_lock(project: str, session_id: str):
     return acquire_deploy_lock(project, session_id)
 
 
+@router.post("/ops/locks/deploy/renew")
+async def api_renew_deploy_lock(project: str, session_id: str):
+    """배포 잠금 TTL 갱신 (본인 잠금만)."""
+    from app.services.deploy_lock import renew_deploy_lock
+    return renew_deploy_lock(project, session_id)
+
+
 @router.post("/ops/locks/deploy/release")
 async def api_release_deploy_lock(project: str, session_id: str):
     """배포 잠금 해제."""

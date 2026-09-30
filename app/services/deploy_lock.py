@@ -252,6 +252,32 @@ def release_deploy_lock(project: str, session_id: str) -> bool:
         return False
 
 
+def renew_deploy_lock(project: str, session_id: str, timeout: int = 600) -> dict:
+    """배포 잠금 TTL 갱신. 본인이 쥔 잠금만 연장하고 그 외에는 renewed=False.
+
+    acquire_deploy_lock 은 SET NX 라 홀더가 다시 불러도 TTL 이 늘지 않는다.
+    반환: {"renewed": bool, "holder": str|None, "ttl": int, "reason": str}
+    """
+    r = _get_redis()
+    if r is None:
+        return {"renewed": True, "holder": None, "ttl": 0, "reason": "redis_unavailable_no_lock"}
+
+    key = f"deploy_lock:{project}"
+    try:
+        holder = r.get(key)
+        if holder is None:
+            return {"renewed": False, "holder": None, "ttl": 0, "reason": "expired_or_released"}
+        if holder != session_id:
+            logger.warning("[deploy_lock] 갱신 거부: %s — holder=%s, 요청=%s", project, holder, session_id)
+            return {"renewed": False, "holder": holder, "ttl": max(r.ttl(key), 0), "reason": "not_owner"}
+        if not r.expire(key, timeout):
+            return {"renewed": False, "holder": None, "ttl": 0, "reason": "expired_or_released"}
+        return {"renewed": True, "holder": session_id, "ttl": timeout, "reason": "ok"}
+    except Exception as e:
+        logger.warning("[deploy_lock] 갱신 실패: %s", e)
+        return {"renewed": False, "holder": None, "ttl": 0, "reason": "redis_error"}
+
+
 @contextmanager
 def deploy_lock_context(project: str, session_id: str, timeout: int = 600):
     """배포 잠금 컨텍스트 매니저. with 문으로 사용."""

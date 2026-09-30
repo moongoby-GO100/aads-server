@@ -74,9 +74,12 @@ GROUPS: tuple[Group, ...] = (
             "tests/unit/test_pipeline_runner_rejected_artifact_preserve.py",
             "tests/unit/test_pipeline_runner_approval_patchid_inherit.py",
             "tests/unit/test_pipeline_runner_rebase_requeue_guard.py",
+            "tests/unit/test_pipeline_runner_autoheal_successor_follow.py",
+            "tests/unit/test_deploy_lock_renew.py",
         ),
         globs=(
             "app/services/pipeline_runner_service.py",
+            "app/services/deploy_lock.py",
             "app/api/pipeline_runner.py",
             "scripts/pipeline-runner.sh",
         ),

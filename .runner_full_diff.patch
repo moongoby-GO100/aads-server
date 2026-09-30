@@ -1,1621 +1,1017 @@
-diff --git a/app/api/obys_finance.py b/app/api/obys_finance.py
-index bccfe6e5..989dc40a 100644
---- a/app/api/obys_finance.py
-+++ b/app/api/obys_finance.py
-@@ -620,6 +620,80 @@ async def delete_onboarding_document(document_id: str, current_user: dict = Depe
-     return {"ok": True}
+diff --git a/app/api/ops.py b/app/api/ops.py
+index 5753152c..3163cd1c 100644
+--- a/app/api/ops.py
++++ b/app/api/ops.py
+@@ -463,6 +463,13 @@ async def api_acquire_deploy_lock(project: str, session_id: str):
+     return acquire_deploy_lock(project, session_id)
  
  
-+class BusinessDocumentUpdatePayload(BaseModel):
-+    model_config = {"extra": "forbid"}
-+    # 파일 교체는 재업로드로만 한다. 여기서는 메타만 고친다.
-+    document_type: str | None = Field(default=None, max_length=64)
-+    issue_date: str | None = Field(default=None, max_length=10)
-+    expires_at: str | None = Field(default=None, max_length=10)
-+    memo: str | None = Field(default=None, max_length=1000)
++@router.post("/ops/locks/deploy/renew")
++async def api_renew_deploy_lock(project: str, session_id: str):
++    """배포 잠금 TTL 갱신 (본인 잠금만)."""
++    from app.services.deploy_lock import renew_deploy_lock
++    return renew_deploy_lock(project, session_id)
 +
 +
-+@router.get("/business-documents")
-+async def list_business_documents(
-+    business_id: str | None = None,
-+    current_user: dict = Depends(get_current_user),
-+) -> dict[str, Any]:
-+    return await run_in_threadpool(svc.list_business_documents, current_user, business_id)
-+
-+
-+@router.post("/business-documents", status_code=201)
-+async def upload_business_document(
-+    business_id: str = Form(...),
-+    document_type: str = Form(...),
-+    issue_date: str = Form(""),
-+    expires_at: str = Form(""),
-+    memo: str = Form(""),
-+    file: UploadFile = File(...),
-+    current_user: dict = Depends(get_current_user),
-+) -> dict[str, Any]:
-+    # 권한·소속을 먼저 본다 — 비관리자·타 사업자의 본문은 읽지도 않는다.
-+    await run_in_threadpool(svc._business_document_scope, business_id, current_user)
-+    data = await _read_limited_upload(file)
-+    document = await run_in_threadpool(
-+        partial(
-+            svc.save_business_document,
-+            business_id=business_id,
-+            document_type=document_type,
-+            issue_date=issue_date,
-+            expires_at=expires_at,
-+            memo=memo,
-+            filename=file.filename or "document.bin",
-+            content_type=file.content_type or "application/octet-stream",
-+            data=data,
-+            user=current_user,
-+        )
-+    )
-+    return {"document": document}
-+
-+
-+@router.get("/business-documents/{document_id}/download")
-+async def download_business_document(document_id: str, current_user: dict = Depends(get_current_user)) -> FileResponse:
-+    document, path = await run_in_threadpool(svc.get_business_document_file, document_id, current_user)
-+    return FileResponse(
-+        path,
-+        media_type=document.get("content_type") or "application/octet-stream",
-+        filename=document.get("original_filename") or path.name,
-+        headers={"Cache-Control": "no-store"},
-+    )
-+
-+
-+@router.patch("/business-documents/{document_id}")
-+async def update_business_document(
-+    document_id: str,
-+    payload: BusinessDocumentUpdatePayload,
-+    current_user: dict = Depends(get_current_user),
-+) -> dict[str, Any]:
-+    changes = payload.model_dump(exclude_unset=True)
-+    return {"document": await run_in_threadpool(svc.update_business_document, document_id, changes, current_user)}
-+
-+
-+@router.delete("/business-documents/{document_id}")
-+async def delete_business_document(document_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, bool]:
-+    await run_in_threadpool(svc.delete_business_document, document_id, current_user)
-+    return {"ok": True}
-+
-+
- @router.get("/contracts")
- async def list_contracts(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-     return {"contracts": await run_in_threadpool(svc.list_contracts, current_user)}
-diff --git a/app/services/yeoljeong_finance_service.py b/app/services/yeoljeong_finance_service.py
-index c5575595..936fb27b 100644
---- a/app/services/yeoljeong_finance_service.py
-+++ b/app/services/yeoljeong_finance_service.py
-@@ -2683,6 +2683,538 @@ def delete_onboarding_document(document_id: str, user: dict[str, Any]) -> None:
-     _delete_hr_record("onboarding_documents", document_id, user)
+ @router.post("/ops/locks/deploy/release")
+ async def api_release_deploy_lock(project: str, session_id: str):
+     """배포 잠금 해제."""
+diff --git a/app/services/deploy_lock.py b/app/services/deploy_lock.py
+index 50e46063..06dcb203 100644
+--- a/app/services/deploy_lock.py
++++ b/app/services/deploy_lock.py
+@@ -252,6 +252,32 @@ def release_deploy_lock(project: str, session_id: str) -> bool:
+         return False
  
  
-+# --- 사업자 서류 (AADS-OBYS-BUSINESS-DOCUMENTS-20260930) ----------------------
-+# 사업자(법인/개인) 단위 서류. 원본은 디스크(OBYS_UPLOAD_ROOT)에, DB 에는 경로·해시만 둔다.
-+# 같은 종류를 다시 올리면 이전 건을 지우지 않고 superseded 로 남긴다 — 세무·노무 분쟁의 근거다.
-+# 서류 종류 목록은 여기가 원본이다. 화면은 목록 응답의 document_types 를 받아 쓴다.
-+BUSINESS_DOCUMENT_TYPES: list[dict[str, str]] = [
-+    {"type": "business_registration", "label": "사업자등록증", "requirement": "필수", "notice": "세무서 발급본. 정정 발급 시 새로 올립니다."},
-+    {"type": "business_permit", "label": "영업신고증", "requirement": "선택", "notice": "구청 위생과 발급본입니다."},
-+    {"type": "bankbook", "label": "통장사본", "requirement": "선택", "notice": "사업용 계좌 확인용입니다."},
-+    {"type": "lease_contract", "label": "임대차계약서", "requirement": "선택", "notice": "계약 만료일을 만료일에 적습니다."},
-+    {"type": "hygiene_training", "label": "위생교육수료증", "requirement": "선택", "notice": "영업자 위생교육 수료증입니다."},
-+    {"type": "fire_insurance", "label": "화재보험증서", "requirement": "선택", "notice": "보험 만기일을 만료일에 적습니다."},
-+    {"type": "corporate_registry", "label": "법인등기부등본", "requirement": "법인 조건부", "notice": "법인 사업자만 해당합니다."},
-+    {"type": "seal_certificate", "label": "인감증명서", "requirement": "선택", "notice": "발급일로부터 3개월 이내본을 권장합니다."},
-+    {"type": "representative_id", "label": "대표자신분증", "requirement": "선택", "notice": "주민등록번호 뒷자리는 마스킹합니다."},
-+    {"type": "tax_agent_delegation", "label": "세무대리인위임장", "requirement": "선택", "notice": "세무대리인 수임 동의 서류입니다."},
-+    {"type": "mail_order_report", "label": "통신판매업신고증", "requirement": "선택", "notice": "온라인 판매 시 해당합니다."},
-+    {"type": "other", "label": "기타", "requirement": "선택", "notice": "서류 이름을 메모에 남깁니다."},
-+]
-+BUSINESS_DOCUMENT_TYPE_CODES = {item["type"] for item in BUSINESS_DOCUMENT_TYPES}
-+BUSINESS_DOCUMENT_REQUIRED_TYPE = "business_registration"
-+BUSINESS_DOCUMENT_EXPIRY_WARNING_DAYS = 30
-+BUSINESS_DOCUMENT_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".heic", ".tif", ".tiff", ".hwp", ".doc", ".docx"}
-+BUSINESS_DOCUMENT_MEMO_MAX = 1000
-+BUSINESS_DOCUMENT_TABLE = "yeoljeong_business_documents"
++def renew_deploy_lock(project: str, session_id: str, timeout: int = 600) -> dict:
++    """배포 잠금 TTL 갱신. 본인이 쥔 잠금만 연장하고 그 외에는 renewed=False.
 +
++    acquire_deploy_lock 은 SET NX 라 홀더가 다시 불러도 TTL 이 늘지 않는다.
++    반환: {"renewed": bool, "holder": str|None, "ttl": int, "reason": str}
++    """
++    r = _get_redis()
++    if r is None:
++        return {"renewed": True, "holder": None, "ttl": 0, "reason": "redis_unavailable_no_lock"}
 +
-+def list_business_document_types() -> list[dict[str, str]]:
-+    return BUSINESS_DOCUMENT_TYPES
-+
-+
-+def _business_document_meta(document_type: str) -> dict[str, str]:
-+    code = str(document_type or "").strip()
-+    meta = next((item for item in BUSINESS_DOCUMENT_TYPES if item["type"] == code), None)
-+    if not meta:
-+        raise HTTPException(status_code=400, detail="지원하지 않는 서류 종류입니다")
-+    return meta
-+
-+
-+def _business_document_date(value: Any, label: str) -> str:
-+    text = str(value or "").strip()
-+    if not text:
-+        return ""
++    key = f"deploy_lock:{project}"
 +    try:
-+        return date.fromisoformat(text[:10]).isoformat()
-+    except ValueError:
-+        raise HTTPException(status_code=400, detail=f"{label}은 YYYY-MM-DD 형식이어야 합니다") from None
++        holder = r.get(key)
++        if holder is None:
++            return {"renewed": False, "holder": None, "ttl": 0, "reason": "expired_or_released"}
++        if holder != session_id:
++            logger.warning("[deploy_lock] 갱신 거부: %s — holder=%s, 요청=%s", project, holder, session_id)
++            return {"renewed": False, "holder": holder, "ttl": max(r.ttl(key), 0), "reason": "not_owner"}
++        if not r.expire(key, timeout):
++            return {"renewed": False, "holder": None, "ttl": 0, "reason": "expired_or_released"}
++        return {"renewed": True, "holder": session_id, "ttl": timeout, "reason": "ok"}
++    except Exception as e:
++        logger.warning("[deploy_lock] 갱신 실패: %s", e)
++        return {"renewed": False, "holder": None, "ttl": 0, "reason": "redis_error"}
 +
 +
-+def _business_document_dates(issue_date: Any, expires_at: Any) -> tuple[str, str]:
-+    issued = _business_document_date(issue_date, "발급일")
-+    expires = _business_document_date(expires_at, "만료일")
-+    if issued and expires and expires < issued:
-+        raise HTTPException(status_code=400, detail="만료일이 발급일보다 빠릅니다")
-+    return issued, expires
+ @contextmanager
+ def deploy_lock_context(project: str, session_id: str, timeout: int = 600):
+     """배포 잠금 컨텍스트 매니저. with 문으로 사용."""
+diff --git a/scripts/pipeline-runner.sh b/scripts/pipeline-runner.sh
+index 39533d1b..e923aefd 100755
+--- a/scripts/pipeline-runner.sh
++++ b/scripts/pipeline-runner.sh
+@@ -240,6 +240,12 @@ _release_deploy_lock() {
+     local project="$1" job_id="$2"
+     curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/release?project=${project}&session_id=${job_id}" 2>/dev/null || true
+ }
++# 배포 락 TTL 갱신 — 응답 JSON 을 그대로 출력한다(무응답이면 빈 문자열). acquire 는 SET NX 라
++# 홀더가 다시 불러도 TTL 이 늘지 않으므로 전용 엔드포인트를 쓴다.
++_renew_deploy_lock() {
++    local project="$1" job_id="$2"
++    curl -sf --connect-timeout 3 --max-time 10 -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/renew?project=${project}&session_id=${job_id}" 2>/dev/null || true
++}
+ 
+ # DB 접속 방식
+ DB_MODE="${DB_MODE:-auto}"
+@@ -4150,6 +4156,129 @@ approved_sha_is_live() {
+     [[ "$active_digest" == "$release_digest" ]] || return 1
+     curl -fsS --connect-timeout 3 --max-time 5 "${AADS_API_URL}/api/v1/health" >/dev/null 2>&1
+ }
++
++# ── autoheal 인계 추적 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD-RETRY, 2026-09-30) ──
++# deploy.sh 는 target_drain_busy·dirty_worktree 로 멈추면 EXIT 트랩에서 같은
++# 릴리스의 successor run 을 띄우고 자기 행을 superseded_by_autoheal_* 로 바꾼 뒤
++# rc=1 로 나간다. 러너는 그 rc 만 보고 bluegreen_failed 로 확정했다.
++# 2026-09-30 실측: runner-a5f21866(da6b42d1) 이 01:25 에 error 로 종결됐는데,
++# 같은 SHA 의 successor #5290→#5291→#5292→#5293 이 01:46 에 success_partial 로
++# 배포를 끝냈다. 산출물은 운영에 나갔고 작업만 실패로 남았다.
++#
++# 인계가 확인된 경우에만 successor 사슬을 끝까지 따라가 결과를 판정한다.
++# 인계 흔적이 없으면 즉시 1 — 기존 실패 판정을 그대로 유지한다.
++#   0: 같은 릴리스가 success/success_partial 로 끝났거나, 다른 run 에 흡수돼
++#      approved_sha_is_live 가 확인됨
++#   1: 인계 없음 / 사슬이 실패로 끝남 / 상한 소진
++# stdout 마지막 줄은 판정 요약이다(review_feedback 에 남긴다).
++AADS_AUTOHEAL_FOLLOW_MAX_SEC="${AADS_AUTOHEAL_FOLLOW_MAX_SEC:-2700}"
++AADS_AUTOHEAL_FOLLOW_POLL_SEC="${AADS_AUTOHEAL_FOLLOW_POLL_SEC:-30}"
++# successor 가 blocked 로 멈춘 직후 autoheal 이 다음 successor 를 등록하기까지의 틈.
++# 이 시간 안의 failed/blocked 는 확정으로 보지 않는다.
++AADS_AUTOHEAL_FOLLOW_SETTLE_SEC="${AADS_AUTOHEAL_FOLLOW_SETTLE_SEC:-90}"
++# 세 시간 값의 관계 (2026-09-30 검수 확정 결함):
++#   배포 락 TTL 600s (deploy_lock.py acquire_deploy_lock, 갱신 없음) <
++#   DEPLOY_LOCK_MAX_WAIT_SEC 900s (대기하는 쪽) < AADS_AUTOHEAL_FOLLOW_MAX_SEC 2700s (추적하는 쪽)
++# 실측 autoheal 사슬(#5290→#5293)이 1,080s 라 추적은 예측 가능하게 락 TTL 을 넘는다.
++# 갱신 없이 추적하면 t=600s 에 락이 풀려 다른 잡이 병행 배포를 시작한다(배포 #414 를 죽인 조합).
++# 그래서 매 poll 마다 renew 로 TTL 을 되돌리고, 갱신이 거부되면 추적을 멈춘다(fail-closed).
++# 대기 측 상한(900s)이 추적 측(2700s)보다 짧으므로 대기 중인 잡은 holder 가 추적 중이어도
++# 먼저 deploy_lock_fail 에 닿을 수 있다 — 그래서 재큐잉 메시지에 holder 추적 표시를 남긴다.
++# 갱신 API 가 일시적으로 무응답인 경우(bluegreen 전환 중 API 재기동)는 TTL 여유(600s) 안에서만
++# 연속 AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL 회(기본 3 × poll 30s = 90s)까지 견딘다.
++AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL="${AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL:-3}"
++AUTOHEAL_FOLLOW_TAG="[배포추적]"
++
++# 이 holder 잡이 autoheal successor 를 추적 중인지 — 대기 측 재큐잉 메시지용.
++# 추적 중 heartbeat(updated_at)가 poll 마다 갱신되므로 신선도로 "지금" 을 판정한다.
++_deploy_holder_follow_tag() {
++    local holder="$1"
++    [[ "$holder" =~ ^[A-Za-z0-9._:-]+$ ]] || return 0
++    local hit
++    hit=$(db_exec "SELECT count(*) FROM pipeline_jobs WHERE job_id='${holder}' AND status='deploying'
++        AND position('${AUTOHEAL_FOLLOW_TAG}' in COALESCE(review_feedback, '')) > 0
++        AND updated_at > NOW() - INTERVAL '180 seconds';" 2>/dev/null | tail -1 | tr -cd '0-9') || hit=""
++    [[ "${hit:-0}" -gt 0 ]] && printf ' %s' "successor-추적중"
++    return 0
++}
++
++follow_autoheal_successor() {
++    local job_id="$1" sha="$2" since_epoch="$3" repo="$4" state_dir="$5" project="${6:-AADS}"
++    local max_wait="$AADS_AUTOHEAL_FOLLOW_MAX_SEC" poll="$AADS_AUTOHEAL_FOLLOW_POLL_SEC"
++    local settle="$AADS_AUTOHEAL_FOLLOW_SETTLE_SEC"
++    [[ "$max_wait" =~ ^[0-9]+$ && "$max_wait" -gt 0 ]] || max_wait=2700
++    [[ "$poll" =~ ^[0-9]+$ && "$poll" -gt 0 ]] || poll=30
++    [[ "$settle" =~ ^[0-9]+$ ]] || settle=90
++    local renew_max="$AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL"
++    [[ "$renew_max" =~ ^[0-9]+$ && "$renew_max" -gt 0 ]] || renew_max=3
++    if [[ ! "$sha" =~ ^[0-9a-f]{12,40}$ || ! "$since_epoch" =~ ^[0-9]+$ ]]; then
++        echo "autoheal_follow: skip (sha/since 형식 오류)"
++        return 1
++    fi
++    local scope="upper(trim(project))='AADS'
++        AND COALESCE(NULLIF(lower(trim(component)), ''), 'api')='api'
++        AND COALESCE(NULLIF(lower(trim(target_env)), ''), 'production')='production'
++        AND length(release_sha) >= 12 AND '${sha}' LIKE release_sha || '%'
++        AND created_at >= to_timestamp(${since_epoch})"
++    local handoff=""
++    handoff=$(db_exec "SELECT count(*) FROM deploy_runs WHERE ${scope}
++        AND status='superseded' AND phase LIKE 'superseded_by_autoheal%';" 2>/dev/null | tail -1 | tr -cd '0-9') || handoff=""
++    if [[ "${handoff:-0}" -le 0 ]]; then
++        echo "autoheal_follow: no_handoff"
++        return 1
++    fi
++    log "  AUTOHEAL_FOLLOW job=$job_id sha=${sha:0:12} — deploy.sh 가 successor 에 인계함, 최대 ${max_wait}s 추적"
++    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n${AUTOHEAL_FOLLOW_TAG} deploy.sh 가 autoheal successor 에 인계함 — 최대 ${max_wait}s 추적, 배포 락 매 poll 갱신', updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
++
++    local waited=0 row="" run_id="" status="" phase="" age="" lock_out="" lock_reason="" renew_fail=0
++    while :; do
++        row=$(db_exec "SELECT id || '|' || status || '|' || COALESCE(phase, '') || '|'
++            || GREATEST(0, EXTRACT(EPOCH FROM (NOW() - updated_at)))::bigint
++            FROM deploy_runs WHERE ${scope} ORDER BY id DESC LIMIT 1;" 2>/dev/null | tail -1) || row=""
++        IFS='|' read -r run_id status phase age <<< "$row"
++        [[ "$age" =~ ^[0-9]+$ ]] || age=0
++        case "$status" in
++            success|success_partial)
++                echo "autoheal_follow: success run=#${run_id} status=${status} phase=${phase} waited=${waited}s"
++                return 0 ;;
++            failed|blocked|cancelled)
++                if (( age >= settle )); then
++                    echo "autoheal_follow: failed run=#${run_id} status=${status} phase=${phase} waited=${waited}s"
++                    return 1
++                fi ;;
++            superseded)
++                # autoheal 사슬은 다음 행이 곧 보인다. 그 밖의 superseded(배치 흡수·
++                # 신규 릴리스)는 이 SHA 를 담은 다른 run 이 나갔는지로 판정한다.
++                if [[ "$phase" != superseded_by_autoheal* ]] \
++                    && approved_sha_is_live "$repo" "$sha" "$state_dir"; then
++                    echo "autoheal_follow: success run=#${run_id} status=superseded phase=${phase} live=contained waited=${waited}s"
++                    return 0
++                fi ;;
++        esac
++        if (( waited >= max_wait )); then
++            echo "autoheal_follow: timeout run=#${run_id:-none} status=${status:-none} phase=${phase:-none} waited=${waited}s"
++            return 1
++        fi
++        # 터미널 판정 뒤에 갱신한다 — 사슬이 이미 끝났다면 락 상태와 무관하게 결과를 따른다.
++        lock_out=$(_renew_deploy_lock "$project" "$job_id") || lock_out=""
++        if [[ "$lock_out" == *'"renewed":true'* ]]; then
++            renew_fail=0
++        elif [[ "$lock_out" == *'"renewed":false'* ]]; then
++            lock_reason=$(printf '%s' "$lock_out" | sed -n 's/.*"reason":"\([^"]*\)".*/\1/p' | tr -cd 'A-Za-z0-9._-' | cut -c1-40)
++            echo "autoheal_follow: lock_lost run=#${run_id:-none} reason=${lock_reason:-unknown} waited=${waited}s"
++            return 1
++        else
++            renew_fail=$((renew_fail + 1))
++            if (( renew_fail >= renew_max )); then
++                echo "autoheal_follow: lock_renew_unreachable run=#${run_id:-none} fails=${renew_fail} waited=${waited}s"
++                return 1
++            fi
++        fi
++        db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
++        sleep "$poll"
++        waited=$((waited + poll))
++    done
++}
+ # ── 배포 락 대기 + 재큐잉 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD, 2026-09-29) ──
+ # 예전 셸 경로는 30+60+90=180초만 기다리고 status='error' 로 확정했다. AADS
+ # bluegreen 배포 실측(deploy_runs success, 24h n=16)은 중앙값 514s·최대 631s 라
+@@ -4168,7 +4297,7 @@ DEPLOY_LOCK_WAIT_PHASE="deploy_lock_wait"
+ 
+ acquire_deploy_lock_with_requeue() {
+     local job_id="$1" project="$2" session_id="$3"
+-    local max_wait="$DEPLOY_LOCK_MAX_WAIT_SEC" result="" holder="unknown" waited=0 requeue=0 backoff
++    local max_wait="$DEPLOY_LOCK_MAX_WAIT_SEC" result="" holder="unknown" holder_note="" waited=0 requeue=0 backoff
+     [[ "$max_wait" =~ ^[0-9]+$ && "$max_wait" -gt 0 ]] || max_wait=900
+     local -a backoffs=()
+     for backoff in $DEPLOY_LOCK_BACKOFF_SEC; do
+@@ -4195,22 +4324,25 @@ acquire_deploy_lock_with_requeue() {
+         fi
+         holder=$(printf '%s' "$result" | sed -n 's/.*"holder":"\([^"]*\)".*/\1/p' | tr -cd 'A-Za-z0-9._:-' | cut -c1-80)
+         [[ -n "$holder" ]] || holder="unknown"
++        # holder 가 autoheal successor 를 추적 중이면 락이 갱신되며 최대 AADS_AUTOHEAL_FOLLOW_MAX_SEC
++        # 까지 유지된다 — 대기 상한(DEPLOY_LOCK_MAX_WAIT_SEC)이 먼저 닿을 수 있음을 표시한다.
++        holder_note=$(_deploy_holder_follow_tag "$holder" 2>/dev/null) || holder_note=""
+         (( waited >= max_wait )) && break
+         # 백오프 한 바퀴를 다 돌아도 못 잡았으면 재큐잉으로 기록한다(Python 경로와 같은 단위).
+         if (( idx >= ${#backoffs[@]} )); then
+             idx=0
+             requeue=$((requeue + 1))
+-            log "  DEPLOY_LOCK_REQUEUE job=$job_id project=$project holder=$holder waited=${waited}s/${max_wait}s requeue=${requeue}"
++            log "  DEPLOY_LOCK_REQUEUE job=$job_id project=$project holder=${holder}${holder_note} waited=${waited}s/${max_wait}s requeue=${requeue}"
+             db_update "UPDATE pipeline_jobs SET status='queued', phase='${DEPLOY_LOCK_WAIT_PHASE}',
+-                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포대기] deploy lock 점유로 재큐잉 ${requeue} (holder=${holder}, 누적대기 ${waited}s/${max_wait}s)',
++                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포대기] deploy lock 점유로 재큐잉 ${requeue} (holder=${holder}${holder_note}, 누적대기 ${waited}s/${max_wait}s)',
+                        updated_at=NOW() WHERE job_id='${job_id}' AND status IN ('deploying','queued');"
+-            record_runner_event "$job_id" "deploy_lock_requeued" "queued" "$DEPLOY_LOCK_WAIT_PHASE" "" "" "" "" "{\"holder\":\"${holder}\",\"waited_sec\":${waited},\"max_wait_sec\":${max_wait},\"requeue\":${requeue}}"
++            record_runner_event "$job_id" "deploy_lock_requeued" "queued" "$DEPLOY_LOCK_WAIT_PHASE" "" "" "" "" "{\"holder\":\"${holder}\",\"holder_following_successor\":$([[ -n "$holder_note" ]] && echo true || echo false),\"waited_sec\":${waited},\"max_wait_sec\":${max_wait},\"requeue\":${requeue}}"
+             (( requeue == 1 )) && post_to_chat "$session_id" "⏳ [Pipeline Runner] 다른 배포 진행 중(holder=${holder}) — 배포 대기로 재큐잉, 최대 ${max_wait}초 대기: $job_id"
+         fi
+         backoff=${backoffs[$idx]}
+         idx=$((idx + 1))
+         (( waited + backoff > max_wait )) && backoff=$((max_wait - waited))
+-        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project holder=$holder — ${backoff}초 후 재시도 (누적 ${waited}s/${max_wait}s)"
++        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project holder=${holder}${holder_note} — ${backoff}초 후 재시도 (누적 ${waited}s/${max_wait}s)"
+         sleep "$backoff"
+         waited=$((waited + backoff))
+     done
+@@ -4516,6 +4648,9 @@ deploy_job() {
+ 
+                 if [[ "$_release_relevant" == "true" ]]; then
+                     local _aads_deploy_log="/tmp/pipeline-deploy-aads-${job_id}.log"
++                    local _aads_deploy_since _aads_follow_out=""
++                    # deploy_runs.created_at 과 비교한다 — 시계 오차를 감안해 5초 앞당긴다.
++                    _aads_deploy_since=$(( $(date +%s) - 5 ))
+                     log "  BLUEGREEN aads-server — approved isolated worktree=$worktree_dir"
+                     if AADS_DEPLOY_FOREGROUND=1 \
+                        AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
+@@ -4523,13 +4658,22 @@ deploy_job() {
+                        bash "$worktree_dir/deploy.sh" bluegreen >"$_aads_deploy_log" 2>&1; then
+                         tail -20 "$_aads_deploy_log" 2>/dev/null || true
+                         log "  BLUEGREEN aads-server 완료 — deploy.sh certification gates passed"
++                    elif _aads_follow_out=$(follow_autoheal_successor "$job_id" "$current_sha" \
++                            "$_aads_deploy_since" "$worktree_dir" "$main_workdir" "$project"); then
++                        # deploy.sh 는 rc=1 이지만 같은 릴리스를 successor 가 끝까지 배포했다.
++                        _aads_follow_out=$(tail -1 <<< "$_aads_follow_out")
++                        log "  BLUEGREEN aads-server 완료 — autoheal successor 인계 성공: ${_aads_follow_out}"
++                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포인계] deploy.sh rc≠0 이었으나 autoheal successor 가 같은 릴리스를 배포함 — ' || $(sql_escape "$_aads_follow_out") WHERE job_id='${job_id}';"
++                        record_runner_event "$job_id" "deploy_autoheal_successor_succeeded" "deploying" "deploying" "" "" "" "" "{\"sha\":\"${current_sha}\"}"
+                     else
++                        _aads_follow_out=$(tail -1 <<< "$_aads_follow_out")
++                        log "  AUTOHEAL_FOLLOW 결과: ${_aads_follow_out:-none}"
+                         local _aads_deploy_tail
+                         _aads_deploy_tail=$(tail -20 "$_aads_deploy_log" 2>/dev/null | head -c 1500)
+                         log "  ERROR: isolated bluegreen 실패 — 기존 라우팅 유지/내부 롤백: ${_aads_deploy_tail//$'\n'/ }"
+                         post_to_chat "$session_id" "🔴 [Runner] AADS bluegreen 배포 실패 — 기존 서비스 유지: ${_aads_deploy_tail:0:500}"
+                         _build_fail="${_build_fail:+${_build_fail};}aads-server:bluegreen_failed"
+-                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "$_aads_deploy_tail") WHERE job_id='${job_id}';"
++                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "[${_aads_follow_out:-autoheal_follow: none}] ${_aads_deploy_tail}") WHERE job_id='${job_id}';"
+                     fi
+                     rm -f "$_aads_deploy_log" 2>/dev/null || true
+                 else
+diff --git a/scripts/pipeline-runner.sh.local b/scripts/pipeline-runner.sh.local
+index 39533d1b..e923aefd 100755
+--- a/scripts/pipeline-runner.sh.local
++++ b/scripts/pipeline-runner.sh.local
+@@ -240,6 +240,12 @@ _release_deploy_lock() {
+     local project="$1" job_id="$2"
+     curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/release?project=${project}&session_id=${job_id}" 2>/dev/null || true
+ }
++# 배포 락 TTL 갱신 — 응답 JSON 을 그대로 출력한다(무응답이면 빈 문자열). acquire 는 SET NX 라
++# 홀더가 다시 불러도 TTL 이 늘지 않으므로 전용 엔드포인트를 쓴다.
++_renew_deploy_lock() {
++    local project="$1" job_id="$2"
++    curl -sf --connect-timeout 3 --max-time 10 -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/renew?project=${project}&session_id=${job_id}" 2>/dev/null || true
++}
+ 
+ # DB 접속 방식
+ DB_MODE="${DB_MODE:-auto}"
+@@ -4150,6 +4156,129 @@ approved_sha_is_live() {
+     [[ "$active_digest" == "$release_digest" ]] || return 1
+     curl -fsS --connect-timeout 3 --max-time 5 "${AADS_API_URL}/api/v1/health" >/dev/null 2>&1
+ }
++
++# ── autoheal 인계 추적 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD-RETRY, 2026-09-30) ──
++# deploy.sh 는 target_drain_busy·dirty_worktree 로 멈추면 EXIT 트랩에서 같은
++# 릴리스의 successor run 을 띄우고 자기 행을 superseded_by_autoheal_* 로 바꾼 뒤
++# rc=1 로 나간다. 러너는 그 rc 만 보고 bluegreen_failed 로 확정했다.
++# 2026-09-30 실측: runner-a5f21866(da6b42d1) 이 01:25 에 error 로 종결됐는데,
++# 같은 SHA 의 successor #5290→#5291→#5292→#5293 이 01:46 에 success_partial 로
++# 배포를 끝냈다. 산출물은 운영에 나갔고 작업만 실패로 남았다.
++#
++# 인계가 확인된 경우에만 successor 사슬을 끝까지 따라가 결과를 판정한다.
++# 인계 흔적이 없으면 즉시 1 — 기존 실패 판정을 그대로 유지한다.
++#   0: 같은 릴리스가 success/success_partial 로 끝났거나, 다른 run 에 흡수돼
++#      approved_sha_is_live 가 확인됨
++#   1: 인계 없음 / 사슬이 실패로 끝남 / 상한 소진
++# stdout 마지막 줄은 판정 요약이다(review_feedback 에 남긴다).
++AADS_AUTOHEAL_FOLLOW_MAX_SEC="${AADS_AUTOHEAL_FOLLOW_MAX_SEC:-2700}"
++AADS_AUTOHEAL_FOLLOW_POLL_SEC="${AADS_AUTOHEAL_FOLLOW_POLL_SEC:-30}"
++# successor 가 blocked 로 멈춘 직후 autoheal 이 다음 successor 를 등록하기까지의 틈.
++# 이 시간 안의 failed/blocked 는 확정으로 보지 않는다.
++AADS_AUTOHEAL_FOLLOW_SETTLE_SEC="${AADS_AUTOHEAL_FOLLOW_SETTLE_SEC:-90}"
++# 세 시간 값의 관계 (2026-09-30 검수 확정 결함):
++#   배포 락 TTL 600s (deploy_lock.py acquire_deploy_lock, 갱신 없음) <
++#   DEPLOY_LOCK_MAX_WAIT_SEC 900s (대기하는 쪽) < AADS_AUTOHEAL_FOLLOW_MAX_SEC 2700s (추적하는 쪽)
++# 실측 autoheal 사슬(#5290→#5293)이 1,080s 라 추적은 예측 가능하게 락 TTL 을 넘는다.
++# 갱신 없이 추적하면 t=600s 에 락이 풀려 다른 잡이 병행 배포를 시작한다(배포 #414 를 죽인 조합).
++# 그래서 매 poll 마다 renew 로 TTL 을 되돌리고, 갱신이 거부되면 추적을 멈춘다(fail-closed).
++# 대기 측 상한(900s)이 추적 측(2700s)보다 짧으므로 대기 중인 잡은 holder 가 추적 중이어도
++# 먼저 deploy_lock_fail 에 닿을 수 있다 — 그래서 재큐잉 메시지에 holder 추적 표시를 남긴다.
++# 갱신 API 가 일시적으로 무응답인 경우(bluegreen 전환 중 API 재기동)는 TTL 여유(600s) 안에서만
++# 연속 AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL 회(기본 3 × poll 30s = 90s)까지 견딘다.
++AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL="${AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL:-3}"
++AUTOHEAL_FOLLOW_TAG="[배포추적]"
++
++# 이 holder 잡이 autoheal successor 를 추적 중인지 — 대기 측 재큐잉 메시지용.
++# 추적 중 heartbeat(updated_at)가 poll 마다 갱신되므로 신선도로 "지금" 을 판정한다.
++_deploy_holder_follow_tag() {
++    local holder="$1"
++    [[ "$holder" =~ ^[A-Za-z0-9._:-]+$ ]] || return 0
++    local hit
++    hit=$(db_exec "SELECT count(*) FROM pipeline_jobs WHERE job_id='${holder}' AND status='deploying'
++        AND position('${AUTOHEAL_FOLLOW_TAG}' in COALESCE(review_feedback, '')) > 0
++        AND updated_at > NOW() - INTERVAL '180 seconds';" 2>/dev/null | tail -1 | tr -cd '0-9') || hit=""
++    [[ "${hit:-0}" -gt 0 ]] && printf ' %s' "successor-추적중"
++    return 0
++}
++
++follow_autoheal_successor() {
++    local job_id="$1" sha="$2" since_epoch="$3" repo="$4" state_dir="$5" project="${6:-AADS}"
++    local max_wait="$AADS_AUTOHEAL_FOLLOW_MAX_SEC" poll="$AADS_AUTOHEAL_FOLLOW_POLL_SEC"
++    local settle="$AADS_AUTOHEAL_FOLLOW_SETTLE_SEC"
++    [[ "$max_wait" =~ ^[0-9]+$ && "$max_wait" -gt 0 ]] || max_wait=2700
++    [[ "$poll" =~ ^[0-9]+$ && "$poll" -gt 0 ]] || poll=30
++    [[ "$settle" =~ ^[0-9]+$ ]] || settle=90
++    local renew_max="$AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL"
++    [[ "$renew_max" =~ ^[0-9]+$ && "$renew_max" -gt 0 ]] || renew_max=3
++    if [[ ! "$sha" =~ ^[0-9a-f]{12,40}$ || ! "$since_epoch" =~ ^[0-9]+$ ]]; then
++        echo "autoheal_follow: skip (sha/since 형식 오류)"
++        return 1
++    fi
++    local scope="upper(trim(project))='AADS'
++        AND COALESCE(NULLIF(lower(trim(component)), ''), 'api')='api'
++        AND COALESCE(NULLIF(lower(trim(target_env)), ''), 'production')='production'
++        AND length(release_sha) >= 12 AND '${sha}' LIKE release_sha || '%'
++        AND created_at >= to_timestamp(${since_epoch})"
++    local handoff=""
++    handoff=$(db_exec "SELECT count(*) FROM deploy_runs WHERE ${scope}
++        AND status='superseded' AND phase LIKE 'superseded_by_autoheal%';" 2>/dev/null | tail -1 | tr -cd '0-9') || handoff=""
++    if [[ "${handoff:-0}" -le 0 ]]; then
++        echo "autoheal_follow: no_handoff"
++        return 1
++    fi
++    log "  AUTOHEAL_FOLLOW job=$job_id sha=${sha:0:12} — deploy.sh 가 successor 에 인계함, 최대 ${max_wait}s 추적"
++    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n${AUTOHEAL_FOLLOW_TAG} deploy.sh 가 autoheal successor 에 인계함 — 최대 ${max_wait}s 추적, 배포 락 매 poll 갱신', updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
++
++    local waited=0 row="" run_id="" status="" phase="" age="" lock_out="" lock_reason="" renew_fail=0
++    while :; do
++        row=$(db_exec "SELECT id || '|' || status || '|' || COALESCE(phase, '') || '|'
++            || GREATEST(0, EXTRACT(EPOCH FROM (NOW() - updated_at)))::bigint
++            FROM deploy_runs WHERE ${scope} ORDER BY id DESC LIMIT 1;" 2>/dev/null | tail -1) || row=""
++        IFS='|' read -r run_id status phase age <<< "$row"
++        [[ "$age" =~ ^[0-9]+$ ]] || age=0
++        case "$status" in
++            success|success_partial)
++                echo "autoheal_follow: success run=#${run_id} status=${status} phase=${phase} waited=${waited}s"
++                return 0 ;;
++            failed|blocked|cancelled)
++                if (( age >= settle )); then
++                    echo "autoheal_follow: failed run=#${run_id} status=${status} phase=${phase} waited=${waited}s"
++                    return 1
++                fi ;;
++            superseded)
++                # autoheal 사슬은 다음 행이 곧 보인다. 그 밖의 superseded(배치 흡수·
++                # 신규 릴리스)는 이 SHA 를 담은 다른 run 이 나갔는지로 판정한다.
++                if [[ "$phase" != superseded_by_autoheal* ]] \
++                    && approved_sha_is_live "$repo" "$sha" "$state_dir"; then
++                    echo "autoheal_follow: success run=#${run_id} status=superseded phase=${phase} live=contained waited=${waited}s"
++                    return 0
++                fi ;;
++        esac
++        if (( waited >= max_wait )); then
++            echo "autoheal_follow: timeout run=#${run_id:-none} status=${status:-none} phase=${phase:-none} waited=${waited}s"
++            return 1
++        fi
++        # 터미널 판정 뒤에 갱신한다 — 사슬이 이미 끝났다면 락 상태와 무관하게 결과를 따른다.
++        lock_out=$(_renew_deploy_lock "$project" "$job_id") || lock_out=""
++        if [[ "$lock_out" == *'"renewed":true'* ]]; then
++            renew_fail=0
++        elif [[ "$lock_out" == *'"renewed":false'* ]]; then
++            lock_reason=$(printf '%s' "$lock_out" | sed -n 's/.*"reason":"\([^"]*\)".*/\1/p' | tr -cd 'A-Za-z0-9._-' | cut -c1-40)
++            echo "autoheal_follow: lock_lost run=#${run_id:-none} reason=${lock_reason:-unknown} waited=${waited}s"
++            return 1
++        else
++            renew_fail=$((renew_fail + 1))
++            if (( renew_fail >= renew_max )); then
++                echo "autoheal_follow: lock_renew_unreachable run=#${run_id:-none} fails=${renew_fail} waited=${waited}s"
++                return 1
++            fi
++        fi
++        db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
++        sleep "$poll"
++        waited=$((waited + poll))
++    done
++}
+ # ── 배포 락 대기 + 재큐잉 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD, 2026-09-29) ──
+ # 예전 셸 경로는 30+60+90=180초만 기다리고 status='error' 로 확정했다. AADS
+ # bluegreen 배포 실측(deploy_runs success, 24h n=16)은 중앙값 514s·최대 631s 라
+@@ -4168,7 +4297,7 @@ DEPLOY_LOCK_WAIT_PHASE="deploy_lock_wait"
+ 
+ acquire_deploy_lock_with_requeue() {
+     local job_id="$1" project="$2" session_id="$3"
+-    local max_wait="$DEPLOY_LOCK_MAX_WAIT_SEC" result="" holder="unknown" waited=0 requeue=0 backoff
++    local max_wait="$DEPLOY_LOCK_MAX_WAIT_SEC" result="" holder="unknown" holder_note="" waited=0 requeue=0 backoff
+     [[ "$max_wait" =~ ^[0-9]+$ && "$max_wait" -gt 0 ]] || max_wait=900
+     local -a backoffs=()
+     for backoff in $DEPLOY_LOCK_BACKOFF_SEC; do
+@@ -4195,22 +4324,25 @@ acquire_deploy_lock_with_requeue() {
+         fi
+         holder=$(printf '%s' "$result" | sed -n 's/.*"holder":"\([^"]*\)".*/\1/p' | tr -cd 'A-Za-z0-9._:-' | cut -c1-80)
+         [[ -n "$holder" ]] || holder="unknown"
++        # holder 가 autoheal successor 를 추적 중이면 락이 갱신되며 최대 AADS_AUTOHEAL_FOLLOW_MAX_SEC
++        # 까지 유지된다 — 대기 상한(DEPLOY_LOCK_MAX_WAIT_SEC)이 먼저 닿을 수 있음을 표시한다.
++        holder_note=$(_deploy_holder_follow_tag "$holder" 2>/dev/null) || holder_note=""
+         (( waited >= max_wait )) && break
+         # 백오프 한 바퀴를 다 돌아도 못 잡았으면 재큐잉으로 기록한다(Python 경로와 같은 단위).
+         if (( idx >= ${#backoffs[@]} )); then
+             idx=0
+             requeue=$((requeue + 1))
+-            log "  DEPLOY_LOCK_REQUEUE job=$job_id project=$project holder=$holder waited=${waited}s/${max_wait}s requeue=${requeue}"
++            log "  DEPLOY_LOCK_REQUEUE job=$job_id project=$project holder=${holder}${holder_note} waited=${waited}s/${max_wait}s requeue=${requeue}"
+             db_update "UPDATE pipeline_jobs SET status='queued', phase='${DEPLOY_LOCK_WAIT_PHASE}',
+-                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포대기] deploy lock 점유로 재큐잉 ${requeue} (holder=${holder}, 누적대기 ${waited}s/${max_wait}s)',
++                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포대기] deploy lock 점유로 재큐잉 ${requeue} (holder=${holder}${holder_note}, 누적대기 ${waited}s/${max_wait}s)',
+                        updated_at=NOW() WHERE job_id='${job_id}' AND status IN ('deploying','queued');"
+-            record_runner_event "$job_id" "deploy_lock_requeued" "queued" "$DEPLOY_LOCK_WAIT_PHASE" "" "" "" "" "{\"holder\":\"${holder}\",\"waited_sec\":${waited},\"max_wait_sec\":${max_wait},\"requeue\":${requeue}}"
++            record_runner_event "$job_id" "deploy_lock_requeued" "queued" "$DEPLOY_LOCK_WAIT_PHASE" "" "" "" "" "{\"holder\":\"${holder}\",\"holder_following_successor\":$([[ -n "$holder_note" ]] && echo true || echo false),\"waited_sec\":${waited},\"max_wait_sec\":${max_wait},\"requeue\":${requeue}}"
+             (( requeue == 1 )) && post_to_chat "$session_id" "⏳ [Pipeline Runner] 다른 배포 진행 중(holder=${holder}) — 배포 대기로 재큐잉, 최대 ${max_wait}초 대기: $job_id"
+         fi
+         backoff=${backoffs[$idx]}
+         idx=$((idx + 1))
+         (( waited + backoff > max_wait )) && backoff=$((max_wait - waited))
+-        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project holder=$holder — ${backoff}초 후 재시도 (누적 ${waited}s/${max_wait}s)"
++        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project holder=${holder}${holder_note} — ${backoff}초 후 재시도 (누적 ${waited}s/${max_wait}s)"
+         sleep "$backoff"
+         waited=$((waited + backoff))
+     done
+@@ -4516,6 +4648,9 @@ deploy_job() {
+ 
+                 if [[ "$_release_relevant" == "true" ]]; then
+                     local _aads_deploy_log="/tmp/pipeline-deploy-aads-${job_id}.log"
++                    local _aads_deploy_since _aads_follow_out=""
++                    # deploy_runs.created_at 과 비교한다 — 시계 오차를 감안해 5초 앞당긴다.
++                    _aads_deploy_since=$(( $(date +%s) - 5 ))
+                     log "  BLUEGREEN aads-server — approved isolated worktree=$worktree_dir"
+                     if AADS_DEPLOY_FOREGROUND=1 \
+                        AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
+@@ -4523,13 +4658,22 @@ deploy_job() {
+                        bash "$worktree_dir/deploy.sh" bluegreen >"$_aads_deploy_log" 2>&1; then
+                         tail -20 "$_aads_deploy_log" 2>/dev/null || true
+                         log "  BLUEGREEN aads-server 완료 — deploy.sh certification gates passed"
++                    elif _aads_follow_out=$(follow_autoheal_successor "$job_id" "$current_sha" \
++                            "$_aads_deploy_since" "$worktree_dir" "$main_workdir" "$project"); then
++                        # deploy.sh 는 rc=1 이지만 같은 릴리스를 successor 가 끝까지 배포했다.
++                        _aads_follow_out=$(tail -1 <<< "$_aads_follow_out")
++                        log "  BLUEGREEN aads-server 완료 — autoheal successor 인계 성공: ${_aads_follow_out}"
++                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포인계] deploy.sh rc≠0 이었으나 autoheal successor 가 같은 릴리스를 배포함 — ' || $(sql_escape "$_aads_follow_out") WHERE job_id='${job_id}';"
++                        record_runner_event "$job_id" "deploy_autoheal_successor_succeeded" "deploying" "deploying" "" "" "" "" "{\"sha\":\"${current_sha}\"}"
+                     else
++                        _aads_follow_out=$(tail -1 <<< "$_aads_follow_out")
++                        log "  AUTOHEAL_FOLLOW 결과: ${_aads_follow_out:-none}"
+                         local _aads_deploy_tail
+                         _aads_deploy_tail=$(tail -20 "$_aads_deploy_log" 2>/dev/null | head -c 1500)
+                         log "  ERROR: isolated bluegreen 실패 — 기존 라우팅 유지/내부 롤백: ${_aads_deploy_tail//$'\n'/ }"
+                         post_to_chat "$session_id" "🔴 [Runner] AADS bluegreen 배포 실패 — 기존 서비스 유지: ${_aads_deploy_tail:0:500}"
+                         _build_fail="${_build_fail:+${_build_fail};}aads-server:bluegreen_failed"
+-                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "$_aads_deploy_tail") WHERE job_id='${job_id}';"
++                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "[${_aads_follow_out:-autoheal_follow: none}] ${_aads_deploy_tail}") WHERE job_id='${job_id}';"
+                     fi
+                     rm -f "$_aads_deploy_log" 2>/dev/null || true
+                 else
+diff --git a/scripts/pre_commit_test_map.py b/scripts/pre_commit_test_map.py
+index d015a330..0152ce36 100644
+--- a/scripts/pre_commit_test_map.py
++++ b/scripts/pre_commit_test_map.py
+@@ -74,9 +74,12 @@ GROUPS: tuple[Group, ...] = (
+             "tests/unit/test_pipeline_runner_rejected_artifact_preserve.py",
+             "tests/unit/test_pipeline_runner_approval_patchid_inherit.py",
+             "tests/unit/test_pipeline_runner_rebase_requeue_guard.py",
++            "tests/unit/test_pipeline_runner_autoheal_successor_follow.py",
++            "tests/unit/test_deploy_lock_renew.py",
+         ),
+         globs=(
+             "app/services/pipeline_runner_service.py",
++            "app/services/deploy_lock.py",
+             "app/api/pipeline_runner.py",
+             "scripts/pipeline-runner.sh",
+         ),
+diff --git a/tests/unit/test_deploy_lock_renew.py b/tests/unit/test_deploy_lock_renew.py
+new file mode 100644
+index 00000000..03591a93
+--- /dev/null
++++ b/tests/unit/test_deploy_lock_renew.py
+@@ -0,0 +1,128 @@
++"""배포 락 TTL 갱신(renew_deploy_lock) 계약.
++
++acquire_deploy_lock 은 SET NX 라 홀더가 다시 불러도 TTL 이 늘지 않는다. 락 TTL 은
++600초인데 autoheal successor 추적은 최대 2700초라, 갱신 없이는 추적 도중 락이 풀려
++다른 잡이 병행 배포를 시작한다. 갱신은 소유자일 때만 성공해야 한다.
++"""
++
++import asyncio
++from unittest.mock import patch
++
++from app.services import deploy_lock
 +
 +
-+def _business_document_memo(value: Any) -> str:
-+    memo = str(value or "").strip()
-+    if len(memo) > BUSINESS_DOCUMENT_MEMO_MAX:
-+        raise HTTPException(status_code=400, detail=f"메모는 {BUSINESS_DOCUMENT_MEMO_MAX}자 이하여야 합니다")
-+    return memo
++class FakeRedis:
++    def __init__(self, data=None, fail=False):
++        self.data = dict(data or {})
++        self.ttls = {k: 100 for k in self.data}
++        self.fail = fail
++        self.expire_calls = []
++
++    def get(self, key):
++        if self.fail:
++            raise RuntimeError("boom")
++        return self.data.get(key)
++
++    def ttl(self, key):
++        return self.ttls.get(key, -2)
++
++    def expire(self, key, seconds):
++        self.expire_calls.append((key, seconds))
++        if key not in self.data:
++            return False
++        self.ttls[key] = seconds
++        return True
++
++    def set(self, key, value, nx=False, ex=None):
++        if nx and key in self.data:
++            return None
++        self.data[key] = value
++        self.ttls[key] = ex or -1
++        return True
 +
 +
-+def _business_document_scope(business_id: Any, user: dict[str, Any]) -> tuple[str, str]:
-+    """관리자 + 테넌트 + 사업자 소속을 코드에서 강제한다. SQL WHERE 에도 같은 조건이 들어간다."""
-+    tenant_id = _tenant_id(user)
-+    if not _is_admin(user):
-+        raise HTTPException(status_code=403, detail="사업자 서류는 관리자만 다룰 수 있습니다")
-+    normalized = str(business_id or "").strip()
-+    if not normalized:
-+        raise HTTPException(status_code=400, detail="사업자를 선택하십시오")
-+    if _db_available():
-+        matched = _run_db(_db_business_tenant_matches(normalized, tenant_id))
-+        if matched is None:
-+            raise HTTPException(status_code=503, detail="사업자 소속을 확인할 수 없습니다")
-+        if not matched:
-+            raise HTTPException(status_code=403, detail="테넌트에 귀속되지 않은 사업자입니다")
-+        return tenant_id, normalized
-+    known = {str(item.get("id") or "") for item in get_settings(user)["settings"].get("businesses") or []}
-+    if normalized not in known:
-+        raise HTTPException(status_code=403, detail="테넌트에 귀속되지 않은 사업자입니다")
-+    return tenant_id, normalized
++def _with(fake):
++    return patch.object(deploy_lock, "_get_redis", return_value=fake)
 +
 +
-+def _business_document_relpath(tenant_id: str, document_id: str, suffix: str) -> Path:
-+    # 계약서 PDF 와 같은 루트(OBYS_UPLOAD_ROOT)·같은 <tenant>/<종류>/ 배치, 파일명은 입사서류처럼 <id><ext>.
-+    return Path(str(UUID(tenant_id))) / "business_documents" / f"{document_id}{suffix}"
++def test_holder_renewal_extends_ttl():
++    fake = FakeRedis({"deploy_lock:AADS": "runner-a"})
++    with _with(fake):
++        res = deploy_lock.renew_deploy_lock("AADS", "runner-a")
++    assert res["renewed"] is True
++    assert fake.expire_calls == [("deploy_lock:AADS", 600)]
++    assert fake.ttls["deploy_lock:AADS"] == 600
 +
 +
-+def _business_document_file(record: dict[str, Any]) -> Path | None:
-+    relative = str(record.get("stored_path") or "")
-+    if not relative:
-+        return None
-+    root = _contract_pdf_root().resolve()
-+    path = (root / relative).resolve()
-+    if root not in path.parents or not path.is_file():
-+        return None
++def test_reacquire_by_holder_does_not_extend_ttl_which_is_why_renew_exists():
++    fake = FakeRedis({"deploy_lock:AADS": "runner-a"})
++    with _with(fake):
++        res = deploy_lock.acquire_deploy_lock("AADS", "runner-a")
++    assert res["acquired"] is False
++    assert fake.ttls["deploy_lock:AADS"] == 100
++
++
++def test_non_owner_cannot_renew_and_ttl_is_untouched():
++    fake = FakeRedis({"deploy_lock:AADS": "runner-other"})
++    with _with(fake):
++        res = deploy_lock.renew_deploy_lock("AADS", "runner-a")
++    assert res["renewed"] is False
++    assert res["reason"] == "not_owner"
++    assert res["holder"] == "runner-other"
++    assert fake.expire_calls == []
++    assert fake.ttls["deploy_lock:AADS"] == 100
++
++
++def test_expired_lock_is_not_revived():
++    fake = FakeRedis()
++    with _with(fake):
++        res = deploy_lock.renew_deploy_lock("AADS", "runner-a")
++    assert res["renewed"] is False
++    assert res["reason"] == "expired_or_released"
++    assert "deploy_lock:AADS" not in fake.data
++
++
++def test_key_expiring_between_get_and_expire_is_a_failure():
++    class Racy(FakeRedis):
++        def expire(self, key, seconds):
++            self.data.pop(key, None)
++            return super().expire(key, seconds)
++
++    fake = Racy({"deploy_lock:AADS": "runner-a"})
++    with _with(fake):
++        res = deploy_lock.renew_deploy_lock("AADS", "runner-a")
++    assert res["renewed"] is False
++
++
++def test_redis_error_is_fail_closed():
++    with _with(FakeRedis({"deploy_lock:AADS": "runner-a"}, fail=True)):
++        res = deploy_lock.renew_deploy_lock("AADS", "runner-a")
++    assert res["renewed"] is False
++    assert res["reason"] == "redis_error"
++
++
++def test_no_redis_mirrors_acquire_graceful_degradation():
++    with _with(None):
++        assert deploy_lock.acquire_deploy_lock("AADS", "runner-a")["acquired"] is True
++        res = deploy_lock.renew_deploy_lock("AADS", "runner-a")
++    assert res["renewed"] is True
++    assert res["reason"] == "redis_unavailable_no_lock"
++
++
++def test_custom_timeout_is_applied():
++    fake = FakeRedis({"deploy_lock:AADS": "runner-a"})
++    with _with(fake):
++        deploy_lock.renew_deploy_lock("AADS", "runner-a", timeout=900)
++    assert fake.expire_calls == [("deploy_lock:AADS", 900)]
++
++
++def test_renew_endpoint_delegates_to_service():
++    from app.api import ops
++
++    fake = FakeRedis({"deploy_lock:AADS": "runner-a"})
++    with _with(fake):
++        res = asyncio.run(ops.api_renew_deploy_lock("AADS", "runner-a"))
++    assert res["renewed"] is True
++    assert any(
++        getattr(r, "path", "") == "/ops/locks/deploy/renew" for r in ops.router.routes
++    )
+diff --git a/tests/unit/test_pipeline_runner_autoheal_successor_follow.py b/tests/unit/test_pipeline_runner_autoheal_successor_follow.py
+new file mode 100644
+index 00000000..3103c956
+--- /dev/null
++++ b/tests/unit/test_pipeline_runner_autoheal_successor_follow.py
+@@ -0,0 +1,365 @@
++"""AADS-LLM-M6-DEPLOY-REGRESSION-GUARD-RETRY: 러너가 autoheal 인계를 실패로 읽지 않는다.
++
++2026-09-30 runner-a5f21866(da6b42d1) 은 deploy.sh 가 target_drain_busy 로 rc=1 을
++내자 01:25 에 bluegreen_failed 로 종결됐다. 그런데 deploy.sh 는 EXIT 트랩에서 같은
++릴리스의 successor 를 띄우고 나간 것이었고, #5290→#5291→#5292→#5293 사슬이
++01:46 에 success_partial 로 배포를 끝냈다. 산출물은 운영에 나갔는데 작업만
++실패로 남았고, 목표 마일스톤이 재작업 예산을 소진해 blocked 가 됐다.
++
++scripts/pipeline-runner.sh 의 follow_autoheal_successor() 를 격리 실행해
++  - 인계 흔적이 없으면 기존 실패 판정을 그대로 유지하고(즉시 1, 대기 없음)
++  - 인계가 있으면 사슬을 끝까지 따라가 success/success_partial 을 성공으로 본다
++는 계약을 고정한다.
++"""
++
++import shutil
++import subprocess
++from pathlib import Path
++
++import pytest
++
++ROOT = Path(__file__).resolve().parents[2]
++SCRIPT = (ROOT / "scripts" / "pipeline-runner.sh").read_text(encoding="utf-8")
++SHA = "da6b42d1d9b869edd6e611977d7fa79c8e10dd4a"
++
++
++def _function(name: str) -> str:
++    start = SCRIPT.index(f"{name}() {{")
++    return SCRIPT[start : SCRIPT.index("\n}\n", start) + 3]
++
++
++def _config_lines() -> str:
++    return "\n".join(
++        line
++        for line in SCRIPT.splitlines()
++        if line.startswith(("AADS_AUTOHEAL_FOLLOW_", "AUTOHEAL_FOLLOW_TAG="))
++    )
++
++
++# rows 파일의 각 줄이 폴링 한 번의 "최신 deploy_runs 행" 이다. 마지막 줄은 계속 반복된다.
++HARNESS = r"""
++set -eo pipefail
++log() { echo "LOG $*" >&2; }
++db_update() { printf '%s\n---\n' "$1" >> "$WORK/db.log"; }
++sleep() { echo "$1" >> "$WORK/sleep.log"; }
++approved_sha_is_live() { echo "LIVE $*" >> "$WORK/live.log"; [[ "$FAKE_LIVE" == "1" ]]; }
++_renew_deploy_lock() {
++    echo "RENEW $*" >> "$WORK/renew.log"
++    local n
++    n=$(wc -l < "$WORK/renew.log")
++    case "$FAKE_RENEW" in
++        ok) echo '{"renewed":true,"holder":"runner-x","ttl":600,"reason":"ok"}' ;;
++        lost:*) echo "{\"renewed\":false,\"holder\":null,\"ttl\":0,\"reason\":\"${FAKE_RENEW#lost:}\"}" ;;
++        down) return 0 ;;
++        down_first:*)
++            if (( n <= ${FAKE_RENEW#down_first:} )); then return 0; fi
++            echo '{"renewed":true,"holder":"runner-x","ttl":600,"reason":"ok"}' ;;
++    esac
++}
++db_exec() {
++    printf '%s\n---\n' "$1" >> "$WORK/sql.log"
++    if [[ "$1" == *"count(*)"* ]]; then
++        echo "$FAKE_HANDOFF"
++        return 0
++    fi
++    local n total
++    n=$(( $(cat "$WORK/poll" 2>/dev/null || echo 0) + 1 ))
++    echo "$n" > "$WORK/poll"
++    total=$(wc -l < "$WORK/rows")
++    (( n > total )) && n=$total
++    sed -n "${n}p" "$WORK/rows"
++}
++"""
++
++
++@pytest.fixture(scope="module")
++def fn_file(tmp_path_factory):
++    if shutil.which("bash") is None:
++        pytest.skip("bash 미설치 환경")
++    path = tmp_path_factory.mktemp("ah") / "fn.sh"
++    path.write_text(
++        HARNESS + "\n" + _config_lines() + "\n" + _function("follow_autoheal_successor"),
++        encoding="utf-8",
++    )
 +    return path
 +
 +
-+def _business_document_view(record: dict[str, Any], today: date | None = None) -> dict[str, Any]:
-+    row = dict(record)
-+    row.pop("stored_path", None)
-+    meta = next((item for item in BUSINESS_DOCUMENT_TYPES if item["type"] == row.get("document_type")), None)
-+    row["document_label"] = (meta or {}).get("label") or row.get("document_label") or "기타"
-+    row["requirement"] = (meta or {}).get("requirement") or "선택"
-+    row["status_label"] = {"current": "최신", "superseded": "이전본", "deleted": "삭제"}.get(str(row.get("status") or ""), "")
-+    expiry_status, expiry_label, days_left = "", "", None
-+    expires = str(row.get("expires_at") or "")[:10]
-+    if expires:
-+        try:
-+            days_left = (date.fromisoformat(expires) - (today or datetime.now(KST).date())).days
-+        except ValueError:
-+            days_left = None
-+        if days_left is not None and days_left < 0:
-+            expiry_status, expiry_label = "expired", "만료"
-+        elif days_left is not None and days_left <= BUSINESS_DOCUMENT_EXPIRY_WARNING_DAYS:
-+            expiry_status, expiry_label = "expiring", "만료 임박"
-+    row["expiry_status"] = expiry_status
-+    row["expiry_label"] = expiry_label
-+    row["days_until_expiry"] = days_left
-+    row["is_expired"] = expiry_status == "expired"
-+    row["is_expiring"] = expiry_status == "expiring"
-+    return row
-+
-+
-+def _business_document_restatus(rows: list[dict[str, Any]], tenant_id: str, business_id: str, document_types: set[str]) -> None:
-+    """(사업자, 종류)마다 삭제되지 않은 최신 1건만 current, 나머지는 superseded."""
-+    for document_type in document_types:
-+        group = [
-+            row for row in rows
-+            if str(row.get("tenant_id") or "") == tenant_id
-+            and str(row.get("business_id") or "") == business_id
-+            and str(row.get("document_type") or "") == document_type
-+            and not row.get("deleted_at")
-+        ]
-+        group.sort(key=lambda row: (str(row.get("uploaded_at") or ""), str(row.get("id") or "")), reverse=True)
-+        for index, row in enumerate(group):
-+            row["status"] = "current" if index == 0 else "superseded"
-+
-+
-+_BUSINESS_DOCUMENT_COLUMNS = (
-+    "id, tenant_id, business_id, document_type, document_label, original_filename, content_type, stored_path, "
-+    "sha256, byte_size, issue_date, expires_at, memo, status, uploaded_by, uploaded_at, updated_at, deleted_at"
-+)
-+
-+
-+def _db_business_document_record(row: Any) -> dict[str, Any]:
-+    item = dict(row)
-+    return {
-+        **item,
-+        "id": str(item.get("id") or ""),
-+        "tenant_id": str(item.get("tenant_id") or ""),
-+        "issue_date": item["issue_date"].isoformat() if item.get("issue_date") else "",
-+        "expires_at": item["expires_at"].isoformat() if item.get("expires_at") else "",
-+        "byte_size": int(item.get("byte_size") or 0),
-+        "uploaded_at": _iso(item.get("uploaded_at")),
-+        "updated_at": _iso(item.get("updated_at")),
-+        "deleted_at": _iso(item.get("deleted_at")) if item.get("deleted_at") else "",
++def _run(fn_file: Path, work: Path, rows: list[str], handoff: int = 1, live: bool = False,
++         max_wait: str = "300", poll: str = "30", renew: str = "ok"):
++    work.mkdir(parents=True, exist_ok=True)
++    (work / "rows").write_text("\n".join(rows) + "\n", encoding="utf-8")
++    env = {
++        "PATH": "/usr/bin:/bin",
++        "WORK": str(work),
++        "FAKE_HANDOFF": str(handoff),
++        "FAKE_LIVE": "1" if live else "0",
++        "FAKE_RENEW": renew,
++        "AADS_AUTOHEAL_FOLLOW_MAX_SEC": max_wait,
++        "AADS_AUTOHEAL_FOLLOW_POLL_SEC": poll,
 +    }
-+
-+
-+async def _db_business_documents_restatus(conn: Any, tenant_id: UUID, business_id: str, document_type: str) -> None:
-+    # 두 단계로 나눈다. 한 문장으로 current 를 옮기면 부분 유일 인덱스가 행 단위로 검사돼 중간에 충돌한다.
-+    await conn.execute(
-+        f"UPDATE {BUSINESS_DOCUMENT_TABLE} SET status = 'superseded' "
-+        "WHERE tenant_id = $1 AND business_id = $2 AND document_type = $3 AND deleted_at IS NULL AND status <> 'superseded'",
-+        tenant_id, business_id, document_type,
++    # set -e 아래에서 호출부와 같은 형태(if out=$(f); then)로 부른다.
++    cmd = (
++        f'source "{fn_file}"; '
++        f'if out=$(follow_autoheal_successor runner-x {SHA} 1790698700 /repo /state AADS); '
++        'then rc=0; else rc=$?; fi; echo "$out" | tail -1; echo "RC=$rc"'
 +    )
-+    await conn.execute(
-+        f"UPDATE {BUSINESS_DOCUMENT_TABLE} SET status = 'current' WHERE id = ("
-+        f"SELECT l.id FROM {BUSINESS_DOCUMENT_TABLE} l "
-+        "WHERE l.tenant_id = $1 AND l.business_id = $2 AND l.document_type = $3 AND l.deleted_at IS NULL "
-+        "ORDER BY l.uploaded_at DESC, l.id DESC LIMIT 1)",
-+        tenant_id, business_id, document_type,
-+    )
++    proc = subprocess.run(["bash", "-c", cmd], env=env, capture_output=True, text=True, timeout=30)
++    assert proc.returncode == 0, proc.stderr
++    lines = proc.stdout.strip().splitlines()
++    rc = int(lines[-1].removeprefix("RC="))
++    summary = lines[-2] if len(lines) > 1 else ""
++    slept = sum(int(x) for x in (work / "sleep.log").read_text().split()) if (work / "sleep.log").exists() else 0
++    return rc, summary, slept
 +
 +
-+async def _db_business_documents_fetch(tenant_id: str, business_id: str | None) -> list[dict[str, Any]] | None:
-+    import asyncpg
-+
-+    conn = await asyncpg.connect(_db_url(), timeout=5)
-+    try:
-+        if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{BUSINESS_DOCUMENT_TABLE}"):
-+            return None
-+        rows = await conn.fetch(
-+            f"SELECT {_BUSINESS_DOCUMENT_COLUMNS} FROM {BUSINESS_DOCUMENT_TABLE} d "
-+            "WHERE d.tenant_id = $1 AND d.deleted_at IS NULL AND ($2::text IS NULL OR d.business_id = $2) "
-+            "AND EXISTS (SELECT 1 FROM yeoljeong_business_tenant_mapping m "
-+            "WHERE m.business_id = d.business_id AND m.tenant_id = d.tenant_id) "
-+            "ORDER BY d.uploaded_at DESC, d.id DESC",
-+            UUID(tenant_id), business_id,
-+        )
-+        return [_db_business_document_record(row) for row in rows]
-+    finally:
-+        await conn.close()
++def test_no_handoff_keeps_failure_without_waiting(fn_file, tmp_path):
++    rc, summary, slept = _run(fn_file, tmp_path, ["5300|blocked|target_slot_drain|500"], handoff=0)
++    assert rc == 1
++    assert "no_handoff" in summary
++    assert slept == 0
++    assert not (tmp_path / "poll").exists(), "인계가 없으면 run 폴링도 하지 않는다"
 +
 +
-+async def _db_business_document_get(tenant_id: str, document_id: str) -> dict[str, Any] | None | bool:
-+    """테넌트 안의 행을 돌려준다. 없으면 None, 다른 테넌트 행이면 False."""
-+    import asyncpg
-+
-+    conn = await asyncpg.connect(_db_url(), timeout=5)
-+    try:
-+        row = await conn.fetchrow(
-+            f"SELECT {_BUSINESS_DOCUMENT_COLUMNS} FROM {BUSINESS_DOCUMENT_TABLE} WHERE id = $1 AND deleted_at IS NULL",
-+            UUID(document_id),
-+        )
-+        if not row:
-+            return None
-+        if str(row["tenant_id"]) != tenant_id:
-+            return False
-+        return _db_business_document_record(row)
-+    finally:
-+        await conn.close()
-+
-+
-+async def _db_business_document_insert(record: dict[str, Any]) -> bool:
-+    import asyncpg
-+
-+    tenant_id = UUID(record["tenant_id"])
-+    conn = await asyncpg.connect(_db_url(), timeout=5)
-+    try:
-+        async with conn.transaction():
-+            # 같은 사업자에 대한 동시 업로드가 current 를 둘 만들지 않게 직렬화한다.
-+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"{tenant_id}|{record['business_id']}")
-+            await conn.execute(
-+                f"INSERT INTO {BUSINESS_DOCUMENT_TABLE} ({_BUSINESS_DOCUMENT_COLUMNS}) VALUES "
-+                "($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::date, $12::date, $13, $14, $15, "
-+                "$16::timestamptz, $17::timestamptz, NULL)",
-+                UUID(record["id"]), tenant_id, record["business_id"], record["document_type"], record["document_label"],
-+                record["original_filename"], record["content_type"], record["stored_path"], record["sha256"],
-+                int(record["byte_size"]), _pg_date(record.get("issue_date")), _pg_date(record.get("expires_at")),
-+                record["memo"], "superseded", record["uploaded_by"],
-+                _pg_ts(record["uploaded_at"]), _pg_ts(record["updated_at"]),
-+            )
-+            await _db_business_documents_restatus(conn, tenant_id, record["business_id"], record["document_type"])
-+        return True
-+    finally:
-+        await conn.close()
-+
-+
-+async def _db_business_document_update(record: dict[str, Any], previous_type: str) -> bool:
-+    import asyncpg
-+
-+    tenant_id = UUID(record["tenant_id"])
-+    conn = await asyncpg.connect(_db_url(), timeout=5)
-+    try:
-+        async with conn.transaction():
-+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"{tenant_id}|{record['business_id']}")
-+            # 파일 관련 열(stored_path·sha256·byte_size·original_filename)은 여기서 바꾸지 않는다.
-+            result = await conn.execute(
-+                f"UPDATE {BUSINESS_DOCUMENT_TABLE} SET document_type = $4, document_label = $5, issue_date = $6::date, "
-+                "expires_at = $7::date, memo = $8, updated_at = $9::timestamptz, status = 'superseded' "
-+                "WHERE id = $1 AND tenant_id = $2 AND business_id = $3 AND deleted_at IS NULL",
-+                UUID(record["id"]), tenant_id, record["business_id"], record["document_type"], record["document_label"],
-+                _pg_date(record.get("issue_date")), _pg_date(record.get("expires_at")), record["memo"],
-+                _pg_ts(record["updated_at"]),
-+            )
-+            if not result.endswith(" 1"):
-+                return False
-+            # 위에서 잠시 superseded 로 내렸다. 두 종류 모두 최신 1건을 다시 current 로 세운다.
-+            for document_type in {previous_type, record["document_type"]}:
-+                await _db_business_documents_restatus(conn, tenant_id, record["business_id"], document_type)
-+        return True
-+    finally:
-+        await conn.close()
-+
-+
-+async def _db_business_document_soft_delete(record: dict[str, Any], deleted_at: str) -> bool:
-+    import asyncpg
-+
-+    tenant_id = UUID(record["tenant_id"])
-+    conn = await asyncpg.connect(_db_url(), timeout=5)
-+    try:
-+        async with conn.transaction():
-+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"{tenant_id}|{record['business_id']}")
-+            result = await conn.execute(
-+                f"UPDATE {BUSINESS_DOCUMENT_TABLE} SET deleted_at = $4::timestamptz, updated_at = $4::timestamptz, "
-+                "status = 'deleted' WHERE id = $1 AND tenant_id = $2 AND business_id = $3 AND deleted_at IS NULL",
-+                UUID(record["id"]), tenant_id, record["business_id"], _pg_ts(deleted_at),
-+            )
-+            if not result.endswith(" 1"):
-+                return False
-+            # 현행본을 지우면 바로 앞 리비전이 다시 현행이 된다.
-+            await _db_business_documents_restatus(conn, tenant_id, record["business_id"], record["document_type"])
-+        return True
-+    finally:
-+        await conn.close()
-+
-+
-+def _pg_date(value: Any) -> date | None:
-+    text = str(value or "").strip()
-+    return date.fromisoformat(text[:10]) if text else None
-+
-+
-+def _business_document_rows(tenant_id: str, business_id: str | None) -> list[dict[str, Any]]:
-+    if _db_available():
-+        rows = _run_db(_db_business_documents_fetch(tenant_id, business_id))
-+        if rows is None:
-+            raise HTTPException(status_code=503, detail="사업자 서류 저장소를 읽을 수 없습니다")
-+        return rows
-+    return [
-+        row for row in _read_file_rows("business_documents")
-+        if str(row.get("tenant_id") or "") == tenant_id
-+        and not row.get("deleted_at")
-+        and (business_id is None or str(row.get("business_id") or "") == business_id)
++def test_real_incident_chain_ends_success_partial(fn_file, tmp_path):
++    # runner-a5f21866 실측 사슬: 5290 superseded → 5291·5292 running/superseded → 5293 success_partial
++    rows = [
++        "5291|running|target_slot_drain|3",
++        "5291|superseded|superseded_by_autoheal_drain_retry|1",
++        "5292|running|target_slot_drain|5",
++        "5293|running|build_candidate_image|2",
++        "5293|success_partial|completed|0",
 +    ]
-+
-+
-+def _business_document_record(document_id: str, user: dict[str, Any]) -> dict[str, Any]:
-+    """문서 1건을 찾아 테넌트·관리자·사업자 소속을 다시 확인한다."""
-+    tenant_id = _tenant_id(user)
-+    if not _is_admin(user):
-+        raise HTTPException(status_code=403, detail="사업자 서류는 관리자만 다룰 수 있습니다")
-+    try:
-+        normalized_id = str(UUID(str(document_id)))
-+    except (TypeError, ValueError, AttributeError):
-+        raise HTTPException(status_code=404, detail="사업자 서류를 찾을 수 없습니다") from None
-+    if _db_available():
-+        found = _run_db(_db_business_document_get(tenant_id, normalized_id))
-+    else:
-+        row = next(
-+            (item for item in _read_file_rows("business_documents")
-+             if str(item.get("id") or "") == normalized_id and not item.get("deleted_at")),
-+            None,
-+        )
-+        found = None if row is None else (row if str(row.get("tenant_id") or "") == tenant_id else False)
-+    if found is False:
-+        raise HTTPException(status_code=403, detail="다른 테넌트의 사업자 서류입니다")
-+    if not found:
-+        raise HTTPException(status_code=404, detail="사업자 서류를 찾을 수 없습니다")
-+    _business_document_scope(found.get("business_id"), user)
-+    return found
-+
-+
-+def _business_document_summary(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-+    summary: dict[str, dict[str, Any]] = {}
-+    for row in rows:
-+        item = summary.setdefault(str(row.get("business_id") or ""), {"count": 0, "has_required": False, "expiring": 0, "expired": 0})
-+        item["count"] += 1
-+        if row.get("status") != "current":
-+            continue
-+        if row.get("document_type") == BUSINESS_DOCUMENT_REQUIRED_TYPE:
-+            item["has_required"] = True
-+        if row.get("expiry_status") == "expiring":
-+            item["expiring"] += 1
-+        elif row.get("expiry_status") == "expired":
-+            item["expired"] += 1
-+    for item in summary.values():
-+        item["needs_documents"] = not item["has_required"]
-+    return summary
-+
-+
-+def list_business_documents(user: dict[str, Any], business_id: str | None = None) -> dict[str, Any]:
-+    tenant_id = _tenant_id(user)
-+    if not _is_admin(user):
-+        raise HTTPException(status_code=403, detail="사업자 서류는 관리자만 조회할 수 있습니다")
-+    scoped = _business_document_scope(business_id, user)[1] if str(business_id or "").strip() else None
-+    rows = _business_document_rows(tenant_id, scoped)
-+    if scoped is None and not _db_available():
-+        # 파일 모드는 테넌트-사업자 매핑 표가 없으므로 설정에 등록된 사업자만 보여준다.
-+        known = {str(item.get("id") or "") for item in get_settings(user)["settings"].get("businesses") or []}
-+        rows = [row for row in rows if str(row.get("business_id") or "") in known]
-+    today = datetime.now(KST).date()
-+    documents = sorted(
-+        (_business_document_view(row, today) for row in rows),
-+        key=lambda row: (str(row.get("uploaded_at") or ""), str(row.get("id") or "")),
-+        reverse=True,
-+    )
-+    return {
-+        "documents": documents,
-+        "document_types": BUSINESS_DOCUMENT_TYPES,
-+        "required_document_type": BUSINESS_DOCUMENT_REQUIRED_TYPE,
-+        "summary": _business_document_summary(documents),
-+    }
-+
-+
-+def save_business_document(
-+    *,
-+    business_id: str,
-+    document_type: str,
-+    issue_date: str,
-+    expires_at: str,
-+    memo: str,
-+    filename: str,
-+    content_type: str,
-+    data: bytes,
-+    user: dict[str, Any],
-+) -> dict[str, Any]:
-+    tenant_id, normalized_business = _business_document_scope(business_id, user)
-+    meta = _business_document_meta(document_type)
-+    issued, expires = _business_document_dates(issue_date, expires_at)
-+    clean_memo = _business_document_memo(memo)
-+    if not data:
-+        raise HTTPException(status_code=400, detail="빈 파일은 등록할 수 없습니다")
-+    if len(data) > _business_document_upload_limit():
-+        raise HTTPException(status_code=413, detail="파일은 10MB 이하여야 합니다")
-+    original = _safe_filename(filename or "document.bin")
-+    suffix = Path(original).suffix.lower()
-+    if suffix not in BUSINESS_DOCUMENT_EXTENSIONS:
-+        raise HTTPException(status_code=400, detail="PDF·이미지·한글/워드 문서만 등록할 수 있습니다")
-+    guessed = mimetypes.guess_type(original)[0] or "application/octet-stream"
-+    declared = str(content_type or "").strip().lower()
-+    mime = declared if re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", declared) and declared != "application/octet-stream" else guessed
-+    document_id = str(uuid4())
-+    relative = _business_document_relpath(tenant_id, document_id, suffix)
-+    path = _contract_pdf_root() / relative
-+    path.parent.mkdir(parents=True, exist_ok=True)
-+    tmp = path.with_name(f"{path.name}.{secrets.token_hex(4)}.tmp")
-+    tmp.write_bytes(data)
-+    os.chmod(tmp, 0o600)
-+    tmp.replace(path)
-+    now = _now()
-+    record = {
-+        "id": document_id,
-+        "tenant_id": tenant_id,
-+        "business_id": normalized_business,
-+        "document_type": meta["type"],
-+        "document_label": meta["label"],
-+        "original_filename": original,
-+        "content_type": mime,
-+        "stored_path": str(relative),
-+        "sha256": hashlib.sha256(data).hexdigest(),
-+        "byte_size": len(data),
-+        "issue_date": issued,
-+        "expires_at": expires,
-+        "memo": clean_memo,
-+        "status": "current",
-+        "uploaded_by": _email(user),
-+        "uploaded_at": now,
-+        "updated_at": now,
-+        "deleted_at": "",
-+    }
-+    if _db_available():
-+        if not _run_db(_db_business_document_insert(record)):
-+            # 메타를 못 남긴 원본은 고아가 된다 — 지우고 실패를 그대로 올린다(거짓 성공 금지).
-+            path.unlink(missing_ok=True)
-+            raise HTTPException(status_code=503, detail="사업자 서류를 저장하지 못했습니다")
-+    else:
-+        rows = _read_file_rows("business_documents")
-+        rows.insert(0, record)
-+        _business_document_restatus(rows, tenant_id, normalized_business, {meta["type"]})
-+        _write_file_rows("business_documents", rows)
-+    stored = next(
-+        (row for row in _business_document_rows(tenant_id, normalized_business) if str(row.get("id")) == document_id),
-+        record,
-+    )
-+    return _business_document_view(stored)
-+
-+
-+def _business_document_upload_limit() -> int:
-+    # 업로드 상한의 원본은 obys_upload_service.MAX_BYTES(10MB) — API 의 _read_limited_upload 와 같은 값.
-+    from app.services.obys_upload_service import MAX_BYTES
-+
-+    return MAX_BYTES
-+
-+
-+def update_business_document(document_id: str, payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
-+    record = _business_document_record(document_id, user)
-+    tenant_id = str(record["tenant_id"])
-+    previous_type = str(record.get("document_type") or "")
-+    updated = dict(record)
-+    if "document_type" in payload and payload["document_type"] is not None:
-+        meta = _business_document_meta(payload["document_type"])
-+        updated["document_type"], updated["document_label"] = meta["type"], meta["label"]
-+    issued, expires = _business_document_dates(
-+        payload["issue_date"] if payload.get("issue_date") is not None else record.get("issue_date"),
-+        payload["expires_at"] if payload.get("expires_at") is not None else record.get("expires_at"),
-+    )
-+    updated["issue_date"], updated["expires_at"] = issued, expires
-+    if payload.get("memo") is not None:
-+        updated["memo"] = _business_document_memo(payload["memo"])
-+    updated["updated_at"] = _now()
-+    if _db_available():
-+        if not _run_db(_db_business_document_update(updated, previous_type)):
-+            raise HTTPException(status_code=503, detail="사업자 서류를 수정하지 못했습니다")
-+    else:
-+        rows = _read_file_rows("business_documents")
-+        target = next(
-+            (row for row in rows if str(row.get("id")) == str(record["id"])
-+             and str(row.get("tenant_id") or "") == tenant_id
-+             and str(row.get("business_id") or "") == str(record["business_id"])
-+             and not row.get("deleted_at")),
-+            None,
-+        )
-+        if target is None:
-+            raise HTTPException(status_code=404, detail="사업자 서류를 찾을 수 없습니다")
-+        for key in ("document_type", "document_label", "issue_date", "expires_at", "memo", "updated_at"):
-+            target[key] = updated[key]
-+        _business_document_restatus(rows, tenant_id, str(record["business_id"]), {previous_type, updated["document_type"]})
-+        _write_file_rows("business_documents", rows)
-+    return _business_document_view(_business_document_record(str(record["id"]), user))
-+
-+
-+def delete_business_document(document_id: str, user: dict[str, Any]) -> None:
-+    """soft delete 만 한다. 행과 원본 파일은 남는다."""
-+    record = _business_document_record(document_id, user)
-+    tenant_id = str(record["tenant_id"])
-+    now = _now()
-+    if _db_available():
-+        if not _run_db(_db_business_document_soft_delete(record, now)):
-+            raise HTTPException(status_code=503, detail="사업자 서류를 삭제하지 못했습니다")
-+        return
-+    rows = _read_file_rows("business_documents")
-+    target = next(
-+        (row for row in rows if str(row.get("id")) == str(record["id"])
-+         and str(row.get("tenant_id") or "") == tenant_id
-+         and str(row.get("business_id") or "") == str(record["business_id"])
-+         and not row.get("deleted_at")),
-+        None,
-+    )
-+    if target is None:
-+        raise HTTPException(status_code=404, detail="사업자 서류를 찾을 수 없습니다")
-+    target["deleted_at"] = now
-+    target["updated_at"] = now
-+    target["status"] = "deleted"
-+    _business_document_restatus(rows, tenant_id, str(record["business_id"]), {str(record.get("document_type") or "")})
-+    _write_file_rows("business_documents", rows)
-+
-+
-+def get_business_document_file(document_id: str, user: dict[str, Any]) -> tuple[dict[str, Any], Path]:
-+    record = _business_document_record(document_id, user)
-+    path = _business_document_file(record)
-+    if path is None:
-+        raise HTTPException(status_code=404, detail="사업자 서류 원본 파일이 없습니다")
-+    if hashlib.sha256(path.read_bytes()).hexdigest() != str(record.get("sha256") or ""):
-+        logger.error("business document hash mismatch: document=%s", record.get("id"))
-+        raise HTTPException(status_code=409, detail="사업자 서류 원본이 등록 당시와 다릅니다")
-+    return record, path
-+
-+
- def _contract_business(payload: dict[str, Any], employee: dict[str, Any] | None) -> tuple[str, str]:
-     employee = employee or {}
-     employee_branch = BRANCH_ALIASES.get(str(employee.get("branch") or "").strip(), str(employee.get("branch") or "").strip())
-diff --git a/app/static/apps/obys/index.html b/app/static/apps/obys/index.html
-index 7d1107c1..07960403 100644
---- a/app/static/apps/obys/index.html
-+++ b/app/static/apps/obys/index.html
-@@ -4266,7 +4266,7 @@
-                   </label>
-                   <label class="span-2">사업자등록증 파일
-                     <input name="registrationDocument" type="file" accept=".pdf,.jpg,.jpeg,.png">
--                    <span class="field-note">파일을 고르면 원본을 서버에 보관(버전 이력·sha256)하고 OCR 제안을 보여줍니다. [적용]을 누른 항목만 폼에 채워지며, 저장은 [사업자 저장]으로 합니다. 업로드·OCR 이 실패해도 손입력으로 계속할 수 있습니다.</span>
-+                    <span class="field-note">파일을 고르면 원본을 서버에 보관(버전 이력·sha256)하고 OCR 제안을 보여줍니다. [적용]을 누른 항목만 폼에 채워지며, 저장은 [사업자 저장]으로 합니다. 업로드·OCR 이 실패해도 손입력으로 계속할 수 있습니다. 발급일·만료일을 관리하거나 영업신고증·통장사본 등 다른 서류를 보관하려면 아래 <a href="#businessDocumentsPanel">[사업자 서류]</a>에서 등록하십시오.</span>
-                   </label>
-                   <div class="span-2" id="businessRegistrationOcrPanel" data-registration-ocr-panel hidden></div>
-                   <label class="span-2">메모
-@@ -4351,6 +4351,40 @@
-             </section>
-           </div>
- 
-+          <section class="panel" id="businessDocumentsPanel">
-+            <div class="panel-head">
-+              <h2 class="panel-title">사업자 서류</h2>
-+              <span id="businessDocumentsBadge" class="badge info">선택 사업자</span>
-+            </div>
-+            <div class="panel-body">
-+              <div id="businessDocumentsNotice" class="settings-note">사업자를 선택하면 등록된 서류가 표시됩니다.</div>
-+              <form id="businessDocumentForm" class="form-grid" hidden>
-+                <label>서류 종류
-+                  <select name="documentType" required></select>
-+                </label>
-+                <label>파일
-+                  <input name="file" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,.tif,.tiff,.hwp,.doc,.docx" required>
-+                </label>
-+                <label>발급일
-+                  <input name="issueDate" type="date">
-+                </label>
-+                <label>만료일
-+                  <input name="expiresAt" type="date">
-+                </label>
-+                <label class="span-2">메모
-+                  <input name="memo" maxlength="1000" placeholder="발급처, 정정 사유, 보완 요청 사항">
-+                </label>
-+                <div class="span-2 business-page-actions">
-+                  <span class="field-note">사업자 저장과 따로 동작합니다. 같은 종류를 다시 올리면 이전 파일은 이전본으로 남습니다. 파일은 10MB 이하입니다.</span>
-+                  <button type="submit" class="primary">서류 등록</button>
-+                </div>
-+              </form>
-+              <div class="table-wrap">
-+                <table><thead><tr><th>종류</th><th>파일명</th><th>발급일</th><th>만료</th><th>상태</th><th>메모</th><th>관리</th></tr></thead><tbody id="businessDocumentRows"></tbody></table>
-+              </div>
-+            </div>
-+          </section>
-+
-           <section class="panel">
-             <div class="panel-head">
-               <h2 class="panel-title">사업자 목록</h2>
-@@ -8708,6 +8742,7 @@
-       loadBusinessRegistrationCurrent(els.businessPageForm, item.id).catch(() => {});
-       setSelectedSettingsBusinessId(item.id);
-       businessPageSyncBadges();
-+      renderBusinessPage(); // 사업자 서류 패널을 이 사업자 것으로 바꾼다.
-       els.businessPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
-     }
- 
-@@ -8961,6 +8996,7 @@
-           ${selectedBusiness.registrationDocument?.id ? `등록증 원본 v${escapeHtml(selectedBusiness.registrationDocument.version)} · ${escapeHtml(selectedBusiness.registrationDocument.originalFilename || "")} · sha256 ${escapeHtml(String(selectedBusiness.registrationDocument.sha256 || "").slice(0, 12))}…<br>` : ""}
-           주소 ${escapeHtml(selectedBusiness.address || "미등록")}<br>
-           연결 지점 ${selectedBranches.length}개 · 정산계좌 ${selectedAccounts.length}개 · 연동 ${selectedIntegrations.length}개
-+          ${businessDocumentBadgesHtml(selectedBusiness) ? `<br>서류 ${businessDocumentBadgesHtml(selectedBusiness)}` : ""}
-         ` : "사업자를 신규 등록하십시오.";
-       }
-       if (els.businessPageListBadge) els.businessPageListBadge.textContent = `${cfg.businesses.length}개`;
-@@ -8978,7 +9014,7 @@
-               <td>${escapeHtml(item.representative || "미등록")}<br><span class="muted">${escapeHtml(item.taxType || "미등록")}</span></td>
-               <td>${branches.length ? branches.map(branch => escapeHtml(branch.name)).join("<br>") : "미등록"}</td>
-               <td>${integrations.length}개</td>
--              <td>${badgeHtml(complete === 100 ? "완료" : `보완 ${complete}%`, statusClass)}</td>
-+              <td>${badgeHtml(complete === 100 ? "완료" : `보완 ${complete}%`, statusClass)}${businessDocumentBadgesHtml(item) ? `<br>${businessDocumentBadgesHtml(item)}` : ""}</td>
-               <td><div style="display:flex; gap:6px; flex-wrap:wrap"><button type="button" data-edit-business-page="${escapeHtml(item.id)}">수정</button><button type="button" data-new-branch-for-business="${escapeHtml(item.id)}">지점추가</button><button type="button" class="danger" data-delete-business="${escapeHtml(item.id)}">삭제</button></div></td>
-             </tr>`;
-         }).join("") : tableEmpty(7, "사업자를 신규 등록하십시오.");
-@@ -8996,6 +9032,312 @@
-         `).join("") : tableEmpty(6, "지점을 신규 등록하십시오.");
-       }
-       businessPageSyncBadges();
-+      syncBusinessDocumentsScope(selectedBusiness?.id || "");
-+      renderBusinessDocuments();
-+    }
-+
-+    // 사업자 서류 — 종류 목록·라벨은 서버(BUSINESS_DOCUMENT_TYPES)가 원본이다. 여기서 다시 적지 않는다.
-+    const businessDocuments = {
-+      businessId: "",
-+      requestedFor: "",
-+      documents: [],
-+      types: [],
-+      requiredType: "",
-+      summary: {},
-+      summaryLoaded: false,
-+      summaryRequested: false,
-+      requestedWithAccess: false,
-+      editingId: "",
-+      loading: false,
-+      error: ""
-+    };
-+
-+    function businessDocumentTypeLabel(code) {
-+      return businessDocuments.types.find(item => item.type === code)?.label || "기타";
-+    }
-+
-+    function businessDocumentsApplyPayload(payload) {
-+      if (Array.isArray(payload?.document_types) && payload.document_types.length) businessDocuments.types = payload.document_types;
-+      if (payload?.required_document_type) businessDocuments.requiredType = payload.required_document_type;
-+    }
-+
-+    function businessNeedsDocuments(item) {
-+      // 목록 요약을 못 받았으면 판단하지 않는다(모르는 것을 "필요"로 단정하지 않는다).
-+      if (!item || !businessDocuments.summaryLoaded) return false;
-+      if (item.registrationDocument?.id) return false; // OCR 경로로 보관한 등록증 원본도 인정한다.
-+      return !businessDocuments.summary[item.id]?.has_required;
-+    }
-+
-+    function businessDocumentBadgesHtml(item) {
-+      if (!item || !businessDocuments.summaryLoaded) return "";
-+      const info = businessDocuments.summary[item.id] || {};
-+      const badges = [];
-+      if (businessNeedsDocuments(item)) badges.push(badgeHtml("서류 필요", "warn"));
-+      if (info.expired) badges.push(badgeHtml(`만료 ${info.expired}건`, "bad"));
-+      if (info.expiring) badges.push(badgeHtml(`만료 임박 ${info.expiring}건`, "warn"));
-+      return badges.join(" ");
-+    }
-+
-+    async function loadBusinessDocumentSummary() {
-+      if (!canManageSettings()) return;
-+      businessDocuments.summaryRequested = true;
-+      try {
-+        const payload = await financeApi("/business-documents");
-+        businessDocumentsApplyPayload(payload);
-+        businessDocuments.summary = payload.summary || {};
-+        businessDocuments.summaryLoaded = true;
-+      } catch (err) {
-+        businessDocuments.summaryLoaded = false;
-+      }
-+      renderBusinessPage();
-+    }
-+
-+    async function loadBusinessDocuments(businessId) {
-+      businessDocuments.requestedFor = businessId || "";
-+      businessDocuments.editingId = "";
-+      if (!businessId || !canManageSettings()) {
-+        businessDocuments.businessId = businessId || "";
-+        businessDocuments.documents = [];
-+        renderBusinessDocuments();
-+        return;
-+      }
-+      businessDocuments.loading = true;
-+      businessDocuments.error = "";
-+      renderBusinessDocuments();
-+      try {
-+        const payload = await financeApi(`/business-documents?business_id=${encodeURIComponent(businessId)}`);
-+        if (businessDocuments.requestedFor !== businessId) return;
-+        businessDocumentsApplyPayload(payload);
-+        businessDocuments.businessId = businessId;
-+        businessDocuments.documents = payload.documents || [];
-+        businessDocuments.summary = { ...businessDocuments.summary, [businessId]: (payload.summary || {})[businessId] || { has_required: false, count: 0 } };
-+      } catch (err) {
-+        if (businessDocuments.requestedFor !== businessId) return;
-+        businessDocuments.businessId = businessId;
-+        businessDocuments.documents = [];
-+        businessDocuments.error = err.message || "서류 목록을 불러오지 못했습니다.";
-+      } finally {
-+        if (businessDocuments.requestedFor === businessId) businessDocuments.loading = false;
-+      }
-+      renderBusinessPage();
-+    }
-+
-+    function syncBusinessDocumentsScope(businessId) {
-+      const access = canManageSettings();
-+      if (access && !businessDocuments.summaryRequested) loadBusinessDocumentSummary();
-+      // 로그인 정보가 늦게 들어오면 권한이 바뀐 시점에 다시 불러온다.
-+      if ((businessId || "") !== businessDocuments.requestedFor || access !== businessDocuments.requestedWithAccess) {
-+        businessDocuments.requestedWithAccess = access;
-+        loadBusinessDocuments(businessId || "");
-+      }
-+    }
-+
-+    function renderBusinessDocumentTypeOptions(select, selected = "") {
-+      if (!select) return;
-+      const current = selected || select.value;
-+      select.innerHTML = businessDocuments.types.map(item =>
-+        `<option value="${escapeHtml(item.type)}">${escapeHtml(item.label)}${item.requirement === "필수" ? " (필수)" : ""}</option>`
-+      ).join("");
-+      if (current && businessDocuments.types.some(item => item.type === current)) select.value = current;
-+    }
-+
-+    function businessDocumentExpiryHtml(doc) {
-+      if (!doc.expires_at) return '<span class="muted">없음</span>';
-+      const badge = doc.expiry_status === "expired" ? ` ${badgeHtml("만료", "bad")}`
-+        : doc.expiry_status === "expiring" ? ` ${badgeHtml(`만료 임박 D-${doc.days_until_expiry}`, "warn")}` : "";
-+      return `${escapeHtml(doc.expires_at)}${badge}`;
-+    }
-+
-+    function businessDocumentRowHtml(doc) {
-+      const id = escapeHtml(doc.id);
-+      if (businessDocuments.editingId === doc.id) {
-+        const options = businessDocuments.types.map(item =>
-+          `<option value="${escapeHtml(item.type)}"${item.type === doc.document_type ? " selected" : ""}>${escapeHtml(item.label)}</option>`
-+        ).join("");
-+        return `
-+          <tr data-business-document-row="${id}">
-+            <td><select data-business-document-field="document_type">${options}</select></td>
-+            <td>${escapeHtml(doc.original_filename || "")}<br><span class="muted">파일 교체는 재등록으로 합니다</span></td>
-+            <td><input type="date" data-business-document-field="issue_date" value="${escapeHtml(doc.issue_date || "")}"></td>
-+            <td><input type="date" data-business-document-field="expires_at" value="${escapeHtml(doc.expires_at || "")}"></td>
-+            <td>${badgeHtml(doc.status_label || "", doc.status === "current" ? "good" : "info")}</td>
-+            <td><input data-business-document-field="memo" maxlength="1000" value="${escapeHtml(doc.memo || "")}"></td>
-+            <td><div style="display:flex; gap:6px; flex-wrap:wrap"><button type="button" class="primary" data-save-business-document="${id}">저장</button><button type="button" data-cancel-business-document="${id}">취소</button></div></td>
-+          </tr>`;
-+      }
-+      const required = doc.requirement === "필수" ? ` ${badgeHtml("필수", "info")}` : "";
-+      return `
-+        <tr>
-+          <td><strong>${escapeHtml(doc.document_label || businessDocumentTypeLabel(doc.document_type))}</strong>${required}</td>
-+          <td>${escapeHtml(doc.original_filename || "")}<br><span class="muted">${Math.max(1, Math.round(Number(doc.byte_size || 0) / 1024)).toLocaleString("ko-KR")}KB · ${escapeHtml(formatDateTime(doc.uploaded_at))}</span></td>
-+          <td>${escapeHtml(doc.issue_date || "-")}</td>
-+          <td>${businessDocumentExpiryHtml(doc)}</td>
-+          <td>${badgeHtml(doc.status_label || "", doc.status === "current" ? "good" : "info")}</td>
-+          <td>${escapeHtml(doc.memo || "")}</td>
-+          <td><div style="display:flex; gap:6px; flex-wrap:wrap"><button type="button" data-download-business-document="${id}">다운로드</button><button type="button" data-edit-business-document="${id}">수정</button><button type="button" class="danger" data-delete-business-document="${id}">삭제</button></div></td>
-+        </tr>`;
-+    }
-+
-+    function renderBusinessDocuments() {
-+      const form = els.businessDocumentForm;
-+      const rows = els.businessDocumentRows;
-+      const notice = els.businessDocumentsNotice;
-+      if (!rows) return;
-+      const businessId = businessDocuments.requestedFor;
-+      const business = settings().businesses.find(item => item.id === businessId) || null;
-+      if (els.businessDocumentsBadge) {
-+        els.businessDocumentsBadge.textContent = business ? business.name : "사업자 없음";
-+        els.businessDocumentsBadge.className = `badge ${business ? "good" : "warn"}`;
-+      }
-+      if (!canManageSettings()) {
-+        if (form) form.hidden = true;
-+        if (notice) notice.textContent = "사업자 서류는 관리자(대표·운영 관리자)만 조회·등록할 수 있습니다.";
-+        rows.innerHTML = tableEmpty(7, "조회 권한이 없습니다.");
-+        return;
-+      }
-+      if (!business) {
-+        if (form) form.hidden = true;
-+        if (notice) notice.textContent = "사업자를 선택하면 등록된 서류가 표시됩니다.";
-+        rows.innerHTML = tableEmpty(7, "사업자를 먼저 선택하십시오.");
-+        return;
-+      }
-+      if (form) {
-+        form.hidden = !businessDocuments.types.length;
-+        renderBusinessDocumentTypeOptions(form.documentType);
-+      }
-+      const docs = businessDocuments.businessId === businessId ? businessDocuments.documents : [];
-+      const hasRequired = docs.some(doc => doc.status === "current" && doc.document_type === businessDocuments.requiredType);
-+      const ocrRef = business.registrationDocument?.id
-+        ? ` 사업자등록증 원본은 등록증 OCR 칸에서 v${escapeHtml(business.registrationDocument.version)}(${escapeHtml(business.registrationDocument.originalFilename || "")})로도 보관돼 있습니다.`
-+        : "";
-+      if (notice) {
-+        notice.innerHTML = businessDocuments.loading ? "서류 목록을 불러오는 중입니다."
-+          : businessDocuments.error ? `${badgeHtml("조회 실패", "bad")} ${escapeHtml(businessDocuments.error)}`
-+          : `${escapeHtml(business.name)} · 등록 서류 ${docs.filter(doc => doc.status === "current").length}종(이전본 포함 ${docs.length}건)`
-+            + (hasRequired || business.registrationDocument?.id ? "" : ` ${badgeHtml("서류 필요", "warn")} 사업자등록증을 등록하십시오.`)
-+            + ocrRef;
-+      }
-+      if (businessDocuments.loading || businessDocuments.error) {
-+        rows.innerHTML = tableEmpty(7, businessDocuments.loading ? "불러오는 중입니다." : "서류 목록을 불러오지 못했습니다.");
-+        return;
-+      }
-+      rows.innerHTML = docs.length
-+        ? docs.map(businessDocumentRowHtml).join("")
-+        : `<tr><td colspan="7"><div class="empty">등록된 서류가 없습니다. <button type="button" class="primary" data-focus-business-document-form>서류 등록</button></div></td></tr>`;
-+    }
-+
-+    async function submitBusinessDocument(form) {
-+      const businessId = businessDocuments.requestedFor;
-+      const file = form.file?.files?.[0];
-+      if (!businessId) return showToast("사업자를 먼저 선택하십시오.");
-+      if (!file) return showToast("등록할 파일을 고르십시오.");
-+      if (file.size > 10 * 1024 * 1024) return showToast("서류 등록 실패: 파일은 10MB 이하여야 합니다.");
-+      const data = new FormData();
-+      data.append("business_id", businessId);
-+      data.append("document_type", form.documentType.value);
-+      data.append("issue_date", form.issueDate.value || "");
-+      data.append("expires_at", form.expiresAt.value || "");
-+      data.append("memo", form.memo.value || "");
-+      data.append("file", file);
-+      const button = form.querySelector('button[type="submit"]');
-+      if (button) button.disabled = true;
-+      try {
-+        const response = await fetch("/api/v1/yeoljeong-finance/business-documents", {
-+          method: "POST",
-+          headers: apiAuthOnlyHeaders(),
-+          body: data
-+        });
-+        const payload = await response.json().catch(() => ({}));
-+        // 서버가 원본을 보관했다고 답하기 전에는 성공으로 보이지 않는다.
-+        if (!response.ok || !payload.document?.id) throw new Error(payload.detail || payload.message || `등록 ${response.status}`);
-+        form.reset();
-+        businessDocuments.requestedFor = "";
-+        await loadBusinessDocuments(businessId);
-+        showToast(`${payload.document.document_label || "서류"}를 등록했습니다.`);
-+      } catch (err) {
-+        showToast(`서류 등록 실패: ${err.message}`);
-+      } finally {
-+        if (button) button.disabled = false;
-+      }
-+    }
-+
-+    async function saveBusinessDocumentEdit(documentId, row) {
-+      const field = name => row.querySelector(`[data-business-document-field="${name}"]`)?.value ?? "";
-+      try {
-+        await financeApi(`/business-documents/${encodeURIComponent(documentId)}`, {
-+          method: "PATCH",
-+          body: JSON.stringify({
-+            document_type: field("document_type"),
-+            issue_date: field("issue_date"),
-+            expires_at: field("expires_at"),
-+            memo: field("memo")
-+          })
-+        });
-+        const businessId = businessDocuments.requestedFor;
-+        businessDocuments.requestedFor = "";
-+        await loadBusinessDocuments(businessId);
-+        showToast("서류 정보를 수정했습니다.");
-+      } catch (err) {
-+        showToast(`서류 수정 실패: ${err.message}`);
-+      }
-+    }
-+
-+    async function deleteBusinessDocument(documentId) {
-+      const doc = businessDocuments.documents.find(item => item.id === documentId);
-+      if (!confirm(`${doc?.document_label || "선택한 서류"}(${doc?.original_filename || ""})를 삭제 처리하시겠습니까? 기록은 보관되고 목록에서만 빠집니다.`)) return;
-+      try {
-+        await financeApi(`/business-documents/${encodeURIComponent(documentId)}`, { method: "DELETE" });
-+        const businessId = businessDocuments.requestedFor;
-+        businessDocuments.requestedFor = "";
-+        await loadBusinessDocuments(businessId);
-+        showToast("서류를 삭제했습니다.");
-+      } catch (err) {
-+        showToast(`서류 삭제 실패: ${err.message}`);
-+      }
-+    }
-+
-+    async function downloadBusinessDocument(documentId) {
-+      const doc = businessDocuments.documents.find(item => item.id === documentId) || {};
-+      try {
-+        const response = await fetch(`/api/v1/yeoljeong-finance/business-documents/${encodeURIComponent(documentId)}/download`, {
-+          headers: apiAuthOnlyHeaders()
-+        });
-+        if (!response.ok) {
-+          const payload = await response.json().catch(() => ({}));
-+          throw new Error(payload.detail || payload.message || `다운로드 ${response.status}`);
-+        }
-+        const url = URL.createObjectURL(await response.blob());
-+        const link = document.createElement("a");
-+        link.href = url;
-+        link.download = doc.original_filename || "사업자서류";
-+        document.body.appendChild(link);
-+        link.click();
-+        link.remove();
-+        setTimeout(() => URL.revokeObjectURL(url), 30000);
-+      } catch (err) {
-+        showToast(`서류 다운로드 실패: ${err.message}`);
-+      }
-+    }
-+
-+    function handleBusinessDocumentsClick(event) {
-+      const target = event.target.closest("button");
-+      if (!target) return;
-+      const data = target.dataset;
-+      if (data.focusBusinessDocumentForm !== undefined) {
-+        els.businessDocumentForm?.file?.focus();
-+        return;
-+      }
-+      if (data.downloadBusinessDocument) return downloadBusinessDocument(data.downloadBusinessDocument);
-+      if (data.deleteBusinessDocument) return deleteBusinessDocument(data.deleteBusinessDocument);
-+      if (data.editBusinessDocument) {
-+        businessDocuments.editingId = data.editBusinessDocument;
-+        return renderBusinessDocuments();
-+      }
-+      if (data.cancelBusinessDocument) {
-+        businessDocuments.editingId = "";
-+        return renderBusinessDocuments();
-+      }
-+      if (data.saveBusinessDocument) return saveBusinessDocumentEdit(data.saveBusinessDocument, target.closest("tr"));
-     }
- 
-     function renderSettings() {
-@@ -13430,6 +13772,13 @@
-         saveBusinessFromPage(els.businessPageForm);
-       });
- 
-+      els.businessDocumentForm?.addEventListener("submit", event => {
-+        event.preventDefault();
-+        submitBusinessDocument(els.businessDocumentForm);
-+      });
-+
-+      els.businessDocumentsPanel?.addEventListener("click", handleBusinessDocumentsClick);
-+
-       els.businessPageForm?.registrationDocument?.addEventListener("change", () => {
-         handleBusinessRegistrationDocument(els.businessPageForm).catch(err => showToast(`사업자등록증 처리 실패: ${err.message}`));
-       });
-diff --git a/docs/operations/OBYS_BUSINESS_DOCUMENTS.md b/docs/operations/OBYS_BUSINESS_DOCUMENTS.md
-new file mode 100644
-index 00000000..ccc0cd2c
---- /dev/null
-+++ b/docs/operations/OBYS_BUSINESS_DOCUMENTS.md
-@@ -0,0 +1,110 @@
-+# 오비서 사업자 서류 보관 (AADS-OBYS-BUSINESS-DOCUMENTS-20260930)
-+
-+설정 > 사업자 화면의 **[사업자 서류]** 패널에서 사업자(법인/개인) 단위 서류를 실제 파일로
-+보관하고 조회·수정·삭제·다운로드한다. OCR·홈택스 진위확인은 이 기능의 범위가 아니다.
-+
-+## 1. 적용 (오비서 업무 DB 전용, 수동)
-+
-+`yeoljeong_business_documents` 표는 **오비서 업무 DB(OBYS_DATABASE_URL, 진아서버)** 에만 만든다.
-+AADS DB 에 돌리지 않는다. `scripts/migrations_auto_apply_baseline.txt` 에 올려 자동 적용에서
-+HOLD 되어 있다.
-+
-+```bash
-+psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_business_documents.sql
-+psql "$OBYS_DATABASE_URL" -c "\d yeoljeong_business_documents"
-+```
-+
-+- 마이그레이션은 `yeoljeong_businesses`·`yeoljeong_business_tenant_mapping` 이 없으면 멈춘다(오적용 방지).
-+- 멱등하다(`IF NOT EXISTS`). 기존 행을 쓰지 않는다.
-+- 표가 없는 상태에서 DB 모드로 돌면 목록·등록이 **503** 을 낸다. 성공으로 보이지 않는다.
-+- 롤백: `migrations/rollback/20260930_obys_business_documents.down.sql`
-+  (메타데이터가 사라진다 — 먼저 `pg_dump -t yeoljeong_business_documents` 로 덤프한다. 원본 파일은 남는다.)
-+
-+## 2. 보관 경로
-+
-+| 항목 | 위치 |
-+|---|---|
-+| 원본 파일 | `$OBYS_UPLOAD_ROOT/<tenant_id>/business_documents/<문서 uuid><확장자>` (권한 0600) |
-+| 메타데이터 | `yeoljeong_business_documents` — 경로(상대)·sha256·크기·발급일·만료일·상태 |
-+| 파일 모드(개발) | `YEOLJEONG_FINANCE_DATA_DIR/business_documents.json` |
-+
-+- 저장 루트는 서명 계약서 PDF 와 같은 `OBYS_UPLOAD_ROOT`(`_contract_pdf_root()`)다. 새 루트를 만들지 않았다.
-+- 원본 파일명은 경로에 쓰지 않는다. 다운로드할 때 `original_filename` 으로 돌려준다.
-+- 다운로드 때 sha256 을 다시 계산해 등록 당시와 다르면 **409** 로 거절한다(변조·손상 탐지).
-+- 파일은 DB BLOB 으로 넣지 않는다.
-+
-+## 3. 서류 종류 (서버 `BUSINESS_DOCUMENT_TYPES` 가 원본)
-+
-+| 코드 | 화면 라벨 | 구분 |
-+|---|---|---|
-+| `business_registration` | 사업자등록증 | **필수** |
-+| `business_permit` | 영업신고증 | 선택 |
-+| `bankbook` | 통장사본 | 선택 |
-+| `lease_contract` | 임대차계약서 | 선택 |
-+| `hygiene_training` | 위생교육수료증 | 선택 |
-+| `fire_insurance` | 화재보험증서 | 선택 |
-+| `corporate_registry` | 법인등기부등본 | 법인 조건부 |
-+| `seal_certificate` | 인감증명서 | 선택 |
-+| `representative_id` | 대표자신분증 | 선택 |
-+| `tax_agent_delegation` | 세무대리인위임장 | 선택 |
-+| `mail_order_report` | 통신판매업신고증 | 선택 |
-+| `other` | 기타 | 선택 |
-+
-+화면은 목록 응답의 `document_types` 를 받아 선택지와 라벨을 그린다. 종류를 추가할 때는 서버 목록만 고친다.
-+
-+## 4. 등록·교체 절차
-+
-+1. 설정 > 사업자에서 사업자를 고른다(목록의 [수정] 또는 상세현황의 선택 사업자).
-+2. [사업자 서류] 패널에서 서류 종류·파일·발급일·만료일·메모를 넣고 **[서류 등록]**.
-+   - 사업자 저장과 **별개 동작**이다. 사업자만 먼저 저장하고 서류는 나중에 올려도 된다.
-+   - 업로드가 실패하면 성공 토스트를 띄우지 않고 서버가 준 실패 사유를 그대로 보여준다.
-+3. **교체**: 같은 종류를 다시 올린다. 이전 파일은 지우지 않고 `이전본(superseded)` 으로 남고,
-+   새 파일이 `최신(current)` 이 된다. 이력은 세무·노무 분쟁의 근거다.
-+4. **수정**: 목록의 [수정] → 종류·발급일·만료일·메모만 바꾼다. 파일(경로·sha256·크기)은 바뀌지 않는다.
-+   파일을 바꾸려면 재등록한다.
-+
-+상한: 파일 10MB(초과 시 413). 허용 확장자: pdf, jpg, jpeg, png, webp, heic, tif, tiff, hwp, doc, docx.
-+
-+## 5. 만료 관리
-+
-+- `expires_at` 이 오늘부터 **30일 이내**면 `만료 임박`, 지났으면 `만료` 배지가 붙는다(KST 기준).
-+- 사업자 목록·상세현황에 `만료 N건`·`만료 임박 N건` 배지가, 현행 사업자등록증이 없으면 `서류 필요` 배지가 뜬다.
-+- 갱신본을 받으면 같은 종류로 재등록한다(4-3). 이전본은 이력으로 남는다.
-+- 사업자등록증을 설정 폼의 **등록증 OCR 칸**(`/businesses/{id}/registration-document`, 별도 표
-+  `yeoljeong_business_registration_documents`)으로 보관한 경우에도 `서류 필요` 배지는 뜨지 않는다.
-+  다만 그 파일은 [사업자 서류] 목록에는 나오지 않는다 — 발급일·만료일 관리가 필요하면 이 패널에도 등록한다.
-+
-+## 6. 권한
-+
-+- 조회·등록·수정·삭제·다운로드 모두 **관리자(owner/admin, 대표·운영 관리자)** 만. 그 외 403.
-+- 테넌트: 활성 멤버십의 테넌트만. 다른 테넌트 문서는 403.
-+- 사업자: 요청한 `business_id` 가 테넌트 소속인지 코드에서 확인하고(`yeoljeong_business_tenant_mapping`),
-+  모든 SQL 의 WHERE 에도 `tenant_id`·`business_id` 를 넣는다(이중 차단). 소속이 아니면 403.
-+- 업로드는 권한·소속을 먼저 확인하고 나서야 파일 본문을 읽는다.
-+
-+## 7. 삭제 정책
-+
-+- **soft delete 만** 한다: `deleted_at`·`status='deleted'` 를 기록하고 목록에서 뺀다. 행과 원본 파일은 남는다.
-+- 현행본을 삭제하면 같은 종류의 바로 앞 리비전이 다시 현행이 된다.
-+- 물리 삭제 API 는 없다. 보존기한이 지난 파일의 파기가 필요하면 별도 승인 후 DBA 가 수동으로 한다.
-+
-+## 8. API
-+
-+| 메서드 | 경로 (`/api/v1/yeoljeong-finance`) | 설명 |
-+|---|---|---|
-+| GET | `/business-documents?business_id=` | 목록(최신순, 상태·만료 플래그, `document_types`, 사업자별 `summary`). `business_id` 생략 시 테넌트 전체 |
-+| POST | `/business-documents` | multipart: `business_id`·`document_type`·`file` 필수, `issue_date`·`expires_at`·`memo` |
-+| GET | `/business-documents/{id}/download` | 원본 파일명·content_type 그대로 |
-+| PATCH | `/business-documents/{id}` | `document_type`·`issue_date`·`expires_at`·`memo` |
-+| DELETE | `/business-documents/{id}` | soft delete |
-+
-+## 9. 점검
-+
-+```bash
-+# 표와 인덱스
-+psql "$OBYS_DATABASE_URL" -c "\d yeoljeong_business_documents"
-+# 사업자·종류마다 현행본이 1건인지 (부분 유일 인덱스가 보장한다)
-+psql "$OBYS_DATABASE_URL" -c "SELECT business_id, document_type, count(*) FROM yeoljeong_business_documents WHERE status='current' AND deleted_at IS NULL GROUP BY 1,2 HAVING count(*) > 1"
-+# 단위 테스트
-+bash scripts/run_unit_tests.sh tests/unit/test_obys_business_documents.py
-+```
-diff --git a/migrations/20260930_obys_business_documents.sql b/migrations/20260930_obys_business_documents.sql
-new file mode 100644
-index 00000000..108e4081
---- /dev/null
-+++ b/migrations/20260930_obys_business_documents.sql
-@@ -0,0 +1,53 @@
-+-- AADS-OBYS-BUSINESS-DOCUMENTS-20260930
-+-- 사업자(법인/개인) 단위 서류 보관. 원본 파일은 OBYS_UPLOAD_ROOT 아래
-+--   <tenant_id>/business_documents/<uuid><ext>
-+-- 에 있고, 이 표는 그 메타데이터(경로·sha256·크기·발급일·만료일·상태)다. 파일 BLOB 은 넣지 않는다.
-+--
-+-- 적용 대상: 오비서 업무 DB(OBYS_DATABASE_URL, 진아서버)만. AADS DB 에 돌리지 않는다.
-+--   scripts/migrations_auto_apply_baseline.txt 에 올려 자동 적용에서 HOLD 한다.
-+--   적용: psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_business_documents.sql
-+-- 스키마 추가만 한다. 기존 행을 쓰지 않는다. 멱등하다(IF NOT EXISTS).
-+-- 같은 종류 재업로드는 새 행(리비전)으로 쌓고 이전 행은 status='superseded' 로 남긴다.
-+-- 삭제는 soft delete(deleted_at)만 한다.
-+-- 롤백: migrations/rollback/20260930_obys_business_documents.down.sql
-+
-+BEGIN;
-+
-+DO $$
-+BEGIN
-+    IF to_regclass('public.yeoljeong_businesses') IS NULL
-+       OR to_regclass('public.yeoljeong_business_tenant_mapping') IS NULL THEN
-+        RAISE EXCEPTION '오비서 업무 DB 전용이다 (yeoljeong_businesses / yeoljeong_business_tenant_mapping 없음)';
-+    END IF;
-+END
-+$$;
-+
-+CREATE TABLE IF NOT EXISTS yeoljeong_business_documents (
-+    id UUID PRIMARY KEY,
-+    tenant_id UUID NOT NULL,
-+    business_id TEXT NOT NULL REFERENCES yeoljeong_businesses(id) ON UPDATE CASCADE,
-+    document_type TEXT NOT NULL,
-+    document_label TEXT NOT NULL,
-+    original_filename TEXT NOT NULL,
-+    content_type TEXT NOT NULL,
-+    stored_path TEXT NOT NULL,
-+    sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
-+    byte_size BIGINT NOT NULL CHECK (byte_size BETWEEN 1 AND 10485760),
-+    issue_date DATE,
-+    expires_at DATE,
-+    memo TEXT NOT NULL DEFAULT '',
-+    status TEXT NOT NULL DEFAULT 'current' CHECK (status IN ('current', 'superseded', 'deleted')),
-+    uploaded_by TEXT NOT NULL,
-+    uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-+    deleted_at TIMESTAMPTZ
-+);
-+
-+CREATE INDEX IF NOT EXISTS idx_yeoljeong_business_documents_tenant_business
-+    ON yeoljeong_business_documents (tenant_id, business_id);
-+-- (사업자, 종류)마다 살아 있는 현행본은 1건뿐이다.
-+CREATE UNIQUE INDEX IF NOT EXISTS uq_yeoljeong_business_documents_current
-+    ON yeoljeong_business_documents (tenant_id, business_id, document_type)
-+    WHERE status = 'current' AND deleted_at IS NULL;
-+
-+COMMIT;
-diff --git a/migrations/rollback/20260930_obys_business_documents.down.sql b/migrations/rollback/20260930_obys_business_documents.down.sql
-new file mode 100644
-index 00000000..869e55b1
---- /dev/null
-+++ b/migrations/rollback/20260930_obys_business_documents.down.sql
-@@ -0,0 +1,20 @@
-+-- Rollback: AADS-OBYS-BUSINESS-DOCUMENTS-20260930
-+-- 오비서 업무 DB 전용, 수동 적용. AADS DB 에 돌리지 않는다.
-+-- 주의: 사업자 서류 메타데이터(경로·sha256·발급일·만료일·이력)가 사라진다. 원본 파일은
-+-- OBYS_UPLOAD_ROOT/<tenant>/business_documents/ 에 그대로 남는다.
-+-- 되돌리기 전에 표를 덤프해 두어라:
-+--   pg_dump "$OBYS_DATABASE_URL" -t yeoljeong_business_documents > business_documents.sql
-+
-+BEGIN;
-+
-+DO $$
-+BEGIN
-+    IF to_regclass('public.yeoljeong_businesses') IS NULL THEN
-+        RAISE EXCEPTION '오비서 업무 DB 전용이다';
-+    END IF;
-+END
-+$$;
-+
-+DROP TABLE IF EXISTS yeoljeong_business_documents;
-+
-+COMMIT;
-diff --git a/scripts/migrations_auto_apply_baseline.txt b/scripts/migrations_auto_apply_baseline.txt
-index f05df929..2cee0a2d 100644
---- a/scripts/migrations_auto_apply_baseline.txt
-+++ b/scripts/migrations_auto_apply_baseline.txt
-@@ -50,3 +50,6 @@ migrations/20260930_obys_business_registration_documents.sql
- # OBYS 업무 DB 전용(yeoljeong_audit_logs 인덱스). AADS DB 자동 적용 대상이 아니다 —
- # docs/operations/OBYS_CONTRACT_EMPLOYMENT_PAYROLL.md 절차로 수동 적용.
- migrations/20260930_obys_employment_audit_lookup.sql
-+# OBYS 업무 DB 전용(yeoljeong_business_documents). AADS DB 자동 적용 대상이 아니다 —
-+# docs/operations/OBYS_BUSINESS_DOCUMENTS.md 절차로 수동 적용.
-+migrations/20260930_obys_business_documents.sql
-diff --git a/tests/unit/test_obys_business_documents.py b/tests/unit/test_obys_business_documents.py
-new file mode 100644
-index 00000000..766b04d9
---- /dev/null
-+++ b/tests/unit/test_obys_business_documents.py
-@@ -0,0 +1,369 @@
-+"""AADS-OBYS-BUSINESS-DOCUMENTS-20260930 — 사업자 서류 실제 보관·목록·수정·삭제·다운로드."""
-+import hashlib
-+import os
-+import sys
-+import types
-+from datetime import datetime, timedelta
-+from urllib.parse import quote
-+
-+import pytest
-+from fastapi import FastAPI
-+from fastapi.testclient import TestClient
-+
-+os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-that-is-at-least-32-bytes-long")
-+
-+from app.api import obys_finance as api
-+
-+svc = api.svc
-+TENANT = "15055cac-71b0-45ec-b714-7093dde189ff"
-+OTHER_TENANT = "2a1b3c4d-0000-4000-8000-000000000001"
-+MEMBERSHIP = {"tenant_id": TENANT, "status": "active"}
-+ADMIN = {"email": "owner@example.com", "is_admin": True, "tenant_id": TENANT, "current_membership": MEMBERSHIP}
-+EMPLOYEE = {"email": "member@example.com", "is_admin": False, "tenant_id": TENANT, "current_membership": MEMBERSHIP}
-+OTHER_TENANT_ADMIN = {
-+    "email": "boss@other.example.com",
-+    "is_admin": True,
-+    "tenant_id": OTHER_TENANT,
-+    "current_membership": {"tenant_id": OTHER_TENANT, "status": "active"},
-+}
-+PDF = b"%PDF-1.4\n% business registration\n" + b"0" * 2048
-+
-+
-+def _disable_db(coroutine):
-+    close = getattr(coroutine, "close", None)
-+    if close:
-+        close()
-+    return None
-+
-+
-+@pytest.fixture(autouse=True)
-+def isolated(tmp_path, monkeypatch):
-+    """파일 모드로만 돈다 — 운영 DB·업로드 경로를 건드리지 않는다."""
-+    for name in ("OBYS_DATABASE_URL", "YEOLJEONG_FINANCE_DATABASE_URL"):
-+        monkeypatch.delenv(name, raising=False)
-+    monkeypatch.setenv("OBYS_UPLOAD_ROOT", str(tmp_path / "upload-root"))
-+    monkeypatch.setattr(svc, "DATA_DIR", tmp_path / "data")
-+    monkeypatch.setattr(svc, "UPLOAD_DIR", tmp_path / "data" / "uploads" / "onboarding")
-+    monkeypatch.setattr(svc, "_run_db", _disable_db)
-+    clock = {"now": datetime(2026, 9, 30, 9, 0, tzinfo=svc.KST)}
-+
-+    def fake_now():
-+        clock["now"] += timedelta(minutes=1)
-+        return clock["now"].isoformat(timespec="seconds")
-+
-+    monkeypatch.setattr(svc, "_now", fake_now)
-+    return tmp_path
-+
-+
-+def _client(user=ADMIN):
-+    app = FastAPI()
-+    app.include_router(api.router)
-+    app.dependency_overrides[api.get_current_user] = lambda: user
-+    return TestClient(app)
-+
-+
-+def _upload(user=ADMIN, *, business_id="biz-mia", document_type="business_registration", data=PDF,
-+            filename="사업자등록증.pdf", content_type="application/pdf", **fields):
-+    return _client(user).post(
-+        "/yeoljeong-finance/business-documents",
-+        data={"business_id": business_id, "document_type": document_type, **fields},
-+        files={"file": (filename, data, content_type)},
-+    )
-+
-+
-+def _rows():
-+    return svc._read_file_rows("business_documents")
-+
-+
-+def _list(business_id="biz-mia", user=ADMIN):
-+    return _client(user).get("/yeoljeong-finance/business-documents", params={"business_id": business_id})
-+
-+
-+# --- 저장 ------------------------------------------------------------------
-+
-+
-+def test_upload_stores_file_on_disk_with_matching_sha256_and_size(isolated):
-+    response = _upload(issue_date="2026-01-02", memo="세무서 발급본")
-+    assert response.status_code == 201
-+    document = response.json()["document"]
-+    assert document["sha256"] == hashlib.sha256(PDF).hexdigest()
-+    assert document["byte_size"] == len(PDF)
-+    assert document["status"] == "current"
-+    assert document["document_label"] == "사업자등록증"
-+    assert "stored_path" not in document  # 서버 경로는 화면으로 내보내지 않는다
-+
-+    row = _rows()[0]
-+    stored = isolated / "upload-root" / row["stored_path"]
-+    assert stored.is_file()
-+    assert stored.read_bytes() == PDF
-+    assert row["stored_path"].startswith(f"{TENANT}/business_documents/")
-+    assert oct(stored.stat().st_mode & 0o777) == "0o600"
-+    assert "사업자등록증" not in row["stored_path"]  # 원본 파일명은 경로에 쓰지 않는다
-+
-+
-+def test_reupload_same_type_keeps_previous_as_superseded(isolated):
-+    first = _upload(data=PDF).json()["document"]
-+    second = _upload(data=PDF + b"v2", memo="정정 발급").json()["document"]
-+
-+    rows = {row["id"]: row for row in _rows()}
-+    assert len(rows) == 2  # 이전 행이 지워지지 않는다
-+    assert rows[first["id"]]["status"] == "superseded"
-+    assert rows[second["id"]]["status"] == "current"
-+    assert (isolated / "upload-root" / rows[first["id"]]["stored_path"]).is_file()
-+
-+    listed = _list().json()
-+    assert [doc["id"] for doc in listed["documents"]] == [second["id"], first["id"]]
-+    assert listed["summary"]["biz-mia"]["has_required"] is True
-+
-+    # 다른 종류는 서로의 current 를 건드리지 않는다.
-+    lease = _upload(document_type="lease_contract").json()["document"]
-+    assert lease["status"] == "current"
-+    assert {row["id"]: row for row in _rows()}[second["id"]]["status"] == "current"
-+
-+
-+def test_patch_changes_only_metadata_not_file(isolated):
-+    document = _upload(expires_at="2027-01-01").json()["document"]
-+    before = _rows()[0]
-+    response = _client().patch(
-+        f"/yeoljeong-finance/business-documents/{document['id']}",
-+        json={"expires_at": "2028-12-31", "memo": "갱신 확인"},
-+    )
-+    assert response.status_code == 200
-+    updated = response.json()["document"]
-+    assert updated["expires_at"] == "2028-12-31"
-+    assert updated["memo"] == "갱신 확인"
-+    after = _rows()[0]
-+    for field in ("stored_path", "sha256", "byte_size", "original_filename", "content_type", "document_type", "issue_date"):
-+        assert after[field] == before[field], field
-+
-+    # 파일 필드는 PATCH 스키마에 없다 — 보내면 거절한다.
-+    rejected = _client().patch(
-+        f"/yeoljeong-finance/business-documents/{document['id']}",
-+        json={"sha256": "0" * 64},
-+    )
-+    assert rejected.status_code == 422
-+
-+
-+def test_patch_rejects_unknown_type_and_bad_dates():
-+    document = _upload().json()["document"]
-+    url = f"/yeoljeong-finance/business-documents/{document['id']}"
-+    assert _client().patch(url, json={"document_type": "not-a-type"}).status_code == 400
-+    assert _client().patch(url, json={"expires_at": "2026/13/40"}).status_code == 400
-+    assert _client().patch(url, json={"issue_date": "2027-01-02", "expires_at": "2027-01-01"}).status_code == 400
-+
-+
-+def test_delete_is_soft_and_previous_revision_becomes_current(isolated):
-+    first = _upload(data=PDF).json()["document"]
-+    second = _upload(data=PDF + b"v2").json()["document"]
-+    response = _client().delete(f"/yeoljeong-finance/business-documents/{second['id']}")
-+    assert response.status_code == 200
-+
-+    rows = {row["id"]: row for row in _rows()}
-+    assert set(rows) == {first["id"], second["id"]}  # 행은 남는다
-+    assert rows[second["id"]]["deleted_at"]
-+    assert rows[second["id"]]["status"] == "deleted"
-+    assert (isolated / "upload-root" / rows[second["id"]]["stored_path"]).is_file()  # 원본도 남는다
-+    assert rows[first["id"]]["status"] == "current"
-+
-+    listed = _list().json()["documents"]
-+    assert [doc["id"] for doc in listed] == [first["id"]]
-+    assert _client().get(f"/yeoljeong-finance/business-documents/{second['id']}/download").status_code == 404
-+    assert _client().delete(f"/yeoljeong-finance/business-documents/{second['id']}").status_code == 404
-+
-+
-+def test_download_returns_original_filename_and_content_type():
-+    image = b"\x89PNG\r\n\x1a\n" + b"1" * 512
-+    document = _upload(document_type="bankbook", data=image, filename="통장 사본.png", content_type="image/png").json()["document"]
-+    response = _client().get(f"/yeoljeong-finance/business-documents/{document['id']}/download")
-+    assert response.status_code == 200
-+    assert response.content == image
-+    assert response.headers["content-type"] == "image/png"
-+    assert quote("통장 사본.png") in response.headers["content-disposition"]
-+    assert response.headers["cache-control"] == "no-store"
-+
-+
-+def test_download_refuses_tampered_file(isolated):
-+    document = _upload().json()["document"]
-+    (isolated / "upload-root" / _rows()[0]["stored_path"]).write_bytes(b"tampered")
-+    assert _client().get(f"/yeoljeong-finance/business-documents/{document['id']}/download").status_code == 409
-+
-+
-+def test_upload_over_10mb_is_413_and_leaves_nothing(isolated):
-+    response = _upload(data=b"0" * (10 * 1024 * 1024 + 1))
-+    assert response.status_code == 413
-+    assert _rows() == []
-+    assert not (isolated / "upload-root" / TENANT / "business_documents").exists()
-+
-+
-+def test_upload_rejects_empty_file_unknown_type_and_extension():
-+    assert _upload(data=b"").status_code == 400
-+    assert _upload(document_type="unknown").status_code == 400
-+    assert _upload(filename="run.exe", content_type="application/octet-stream").status_code == 400
-+    assert _rows() == []
-+
-+
-+# --- 만료 ------------------------------------------------------------------
-+
-+
-+def test_expiry_flags_for_expiring_and_expired_documents():
-+    today = datetime.now(svc.KST).date()
-+    soon = _upload(document_type="fire_insurance", expires_at=(today + timedelta(days=10)).isoformat()).json()["document"]
-+    past = _upload(document_type="lease_contract", expires_at=(today - timedelta(days=1)).isoformat()).json()["document"]
-+    later = _upload(document_type="hygiene_training", expires_at=(today + timedelta(days=90)).isoformat()).json()["document"]
-+    edge = _upload(document_type="seal_certificate", expires_at=(today + timedelta(days=30)).isoformat()).json()["document"]
-+
-+    docs = {doc["id"]: doc for doc in _list().json()["documents"]}
-+    assert docs[soon["id"]]["expiry_status"] == "expiring" and docs[soon["id"]]["is_expiring"]
-+    assert docs[soon["id"]]["expiry_label"] == "만료 임박"
-+    assert docs[past["id"]]["expiry_status"] == "expired" and docs[past["id"]]["is_expired"]
-+    assert docs[past["id"]]["expiry_label"] == "만료"
-+    assert docs[later["id"]]["expiry_status"] == ""
-+    assert docs[edge["id"]]["expiry_status"] == "expiring"
-+
-+    summary = _list().json()["summary"]["biz-mia"]
-+    assert summary["expiring"] == 2 and summary["expired"] == 1
-+    assert summary["needs_documents"] is True  # 사업자등록증이 없다
-+
-+
-+def test_list_returns_server_owned_type_catalog_and_required_flag():
-+    payload = _list().json()
-+    labels = [item["label"] for item in payload["document_types"]]
-+    assert labels == [
-+        "사업자등록증", "영업신고증", "통장사본", "임대차계약서", "위생교육수료증", "화재보험증서",
-+        "법인등기부등본", "인감증명서", "대표자신분증", "세무대리인위임장", "통신판매업신고증", "기타",
++    rc, summary, slept = _run(fn_file, tmp_path, rows, max_wait="2700")
++    assert rc == 0
++    assert "success run=#5293 status=success_partial" in summary
++    assert slept == 4 * 30
++    heartbeats = (tmp_path / "db.log").read_text()
++    assert "status='deploying'" in heartbeats, "대기 중 작업 heartbeat 를 갱신해야 한다"
++
++
++def test_blocked_inside_settle_window_is_not_final(fn_file, tmp_path):
++    # successor 가 blocked 로 바뀐 직후엔 다음 successor 가 아직 안 보일 수 있다.
++    rows = [
++        "5292|blocked|target_slot_drain|10",
++        "5293|queued|queued_for_deploy|2",
++        "5293|success|completed|0",
 +    ]
-+    assert payload["required_document_type"] == "business_registration"
-+    assert payload["documents"] == []
-+
-+    _upload()
-+    everything = _client().get("/yeoljeong-finance/business-documents").json()
-+    assert everything["summary"]["biz-mia"]["needs_documents"] is False
++    rc, summary, _ = _run(fn_file, tmp_path, rows)
++    assert rc == 0
++    assert "run=#5293" in summary
 +
 +
-+# --- 권한 ------------------------------------------------------------------
++def test_settled_failure_ends_chain_as_failure(fn_file, tmp_path):
++    rows = ["5293|running|candidate_health|5", "5293|failed|candidate_health|120"]
++    rc, summary, _ = _run(fn_file, tmp_path, rows)
++    assert rc == 1
++    assert "failed run=#5293 status=failed" in summary
 +
 +
-+def test_non_admin_is_forbidden_for_every_operation():
-+    document = _upload().json()["document"]
-+    client = _client(EMPLOYEE)
-+    assert client.get("/yeoljeong-finance/business-documents").status_code == 403
-+    assert _list(user=EMPLOYEE).status_code == 403
-+    assert _upload(EMPLOYEE).status_code == 403
-+    assert client.get(f"/yeoljeong-finance/business-documents/{document['id']}/download").status_code == 403
-+    assert client.patch(f"/yeoljeong-finance/business-documents/{document['id']}", json={"memo": "x"}).status_code == 403
-+    assert client.delete(f"/yeoljeong-finance/business-documents/{document['id']}").status_code == 403
-+    assert _rows()[0]["memo"] == "" and not _rows()[0]["deleted_at"]
++def test_timeout_is_failure_and_bounded(fn_file, tmp_path):
++    rc, summary, slept = _run(fn_file, tmp_path, ["5293|running|target_slot_drain|1"], max_wait="120")
++    assert rc == 1
++    assert "timeout" in summary
++    assert slept == 120
 +
 +
-+def test_non_admin_upload_is_rejected_before_body_is_read(monkeypatch):
-+    async def must_not_read(file):
-+        raise AssertionError("본문을 읽기 전에 권한에서 막혀야 한다")
-+
-+    monkeypatch.setattr(api, "_read_limited_upload", must_not_read)
-+    assert _upload(EMPLOYEE).status_code == 403
-+    assert _upload(ADMIN, business_id="biz-not-ours").status_code == 403
-+
-+
-+def test_other_tenant_is_forbidden_at_router_and_service():
-+    document = _upload().json()["document"]
-+    client = _client(OTHER_TENANT_ADMIN)
-+    assert client.get("/yeoljeong-finance/business-documents", params={"business_id": "biz-mia"}).status_code == 403
-+    assert _upload(OTHER_TENANT_ADMIN).status_code == 403
-+    assert client.get(f"/yeoljeong-finance/business-documents/{document['id']}/download").status_code == 403
-+    assert client.patch(f"/yeoljeong-finance/business-documents/{document['id']}", json={"memo": "x"}).status_code == 403
-+    assert client.delete(f"/yeoljeong-finance/business-documents/{document['id']}").status_code == 403
-+
-+    # 라우터 게이트와 별개로 서비스 자체도 다른 테넌트 행을 막는다.
-+    for call in (
-+        lambda: svc.get_business_document_file(document["id"], OTHER_TENANT_ADMIN),
-+        lambda: svc.update_business_document(document["id"], {"memo": "x"}, OTHER_TENANT_ADMIN),
-+        lambda: svc.delete_business_document(document["id"], OTHER_TENANT_ADMIN),
-+    ):
-+        with pytest.raises(svc.HTTPException) as exc:
-+            call()
-+        assert exc.value.status_code == 403
-+    # 다른 테넌트의 목록에는 이 테넌트의 행이 섞이지 않는다.
-+    assert svc._business_document_rows(OTHER_TENANT, None) == []
-+    assert _rows()[0]["memo"] == "" and not _rows()[0]["deleted_at"]
++def test_absorbed_into_other_release_uses_live_check(fn_file, tmp_path):
++    rows = ["5294|superseded|included_in_release_batch|40"]
++    rc, summary, _ = _run(fn_file, tmp_path, rows, live=True)
++    assert rc == 0
++    assert "live=contained" in summary
++    assert f"LIVE /repo {SHA} /state" in (tmp_path / "live.log").read_text()
 +
 +
-+def test_foreign_business_is_forbidden_for_every_operation():
-+    assert _list(business_id="biz-not-ours").status_code == 403
-+    assert _upload(business_id="biz-not-ours").status_code == 403
-+
-+    # 테넌트는 같지만 이 테넌트 사업자가 아닌 행(매핑이 끊긴 사업자 등).
-+    document = _upload().json()["document"]
-+    rows = _rows()
-+    rows[0]["business_id"] = "biz-not-ours"
-+    svc._write_file_rows("business_documents", rows)
-+    client = _client()
-+    assert client.get(f"/yeoljeong-finance/business-documents/{document['id']}/download").status_code == 403
-+    assert client.patch(f"/yeoljeong-finance/business-documents/{document['id']}", json={"memo": "x"}).status_code == 403
-+    assert client.delete(f"/yeoljeong-finance/business-documents/{document['id']}").status_code == 403
-+    assert all(doc["business_id"] != "biz-not-ours" for doc in client.get("/yeoljeong-finance/business-documents").json()["documents"])
++def test_absorbed_but_not_live_waits_then_fails(fn_file, tmp_path):
++    rows = ["5294|superseded|included_in_release_batch|40"]
++    rc, summary, slept = _run(fn_file, tmp_path, rows, live=False, max_wait="60")
++    assert rc == 1
++    assert "timeout" in summary
++    assert slept == 60
 +
 +
-+# --- DB 모드: WHERE 절 이중 차단 --------------------------------------------
++def test_autoheal_superseded_row_never_uses_live_shortcut(fn_file, tmp_path):
++    rows = ["5290|superseded|superseded_by_autoheal_drain_retry|0"]
++    rc, _, _ = _run(fn_file, tmp_path, rows, live=True, max_wait="30")
++    assert rc == 1
++    assert not (tmp_path / "live.log").exists()
 +
 +
-+class _FakeConn:
-+    def __init__(self, log):
-+        self.log = log
-+
-+    async def execute(self, query, *args):
-+        self.log.append((query, args))
-+        return "UPDATE 1"
-+
-+    async def fetchval(self, query, *args):
-+        self.log.append((query, args))
-+        return True
-+
-+    async def fetch(self, query, *args):
-+        self.log.append((query, args))
-+        return []
-+
-+    def transaction(self):
-+        conn = self
-+
-+        class _Tx:
-+            async def __aenter__(self):
-+                return conn
-+
-+            async def __aexit__(self, *exc):
-+                return False
-+
-+        return _Tx()
-+
-+    async def close(self):
-+        return None
++def test_query_scope_is_same_release_api_production_since_deploy_start(fn_file, tmp_path):
++    _run(fn_file, tmp_path, ["5293|success|completed|0"])
++    sql = (tmp_path / "sql.log").read_text()
++    assert f"'{SHA}' LIKE release_sha || '%'" in sql
++    assert "length(release_sha) >= 12" in sql
++    assert "created_at >= to_timestamp(1790698700)" in sql
++    assert "'api')='api'" in sql and "'production')='production'" in sql
++    assert "phase LIKE 'superseded_by_autoheal%'" in sql
 +
 +
-+def test_db_queries_bind_tenant_and_business(monkeypatch):
-+    import asyncio
++def test_invalid_sha_is_rejected_without_db(fn_file, tmp_path):
++    tmp_path.mkdir(parents=True, exist_ok=True)
++    (tmp_path / "rows").write_text("x\n", encoding="utf-8")
++    cmd = (
++        f'source "{fn_file}"; if out=$(follow_autoheal_successor j "abc;drop" 1 /r /s); '
++        'then echo RC=0; else echo RC=$?; fi'
++    )
++    proc = subprocess.run(
++        ["bash", "-c", cmd],
++        env={"PATH": "/usr/bin:/bin", "WORK": str(tmp_path), "FAKE_HANDOFF": "1", "FAKE_LIVE": "0",
++             "FAKE_RENEW": "ok"},
++        capture_output=True, text=True, timeout=30,
++    )
++    assert proc.stdout.strip().endswith("RC=1")
++    assert not (tmp_path / "sql.log").exists()
 +
-+    log: list = []
 +
-+    async def connect(*args, **kwargs):
-+        return _FakeConn(log)
++def test_deploy_job_consults_successor_before_declaring_bluegreen_failed():
++    body = _function("deploy_job")
++    deploy_call = body.index('bash "$worktree_dir/deploy.sh" bluegreen')
++    since = body.index("_aads_deploy_since=$(( $(date +%s) - 5 ))")
++    follow = body.index("follow_autoheal_successor \"$job_id\" \"$current_sha\"")
++    failed = body.index("aads-server:bluegreen_failed")
++    assert since < deploy_call < follow < failed
++    # set -e 환경에서 rc=1 이 스크립트를 죽이지 않도록 조건문 안에서 호출해야 한다.
++    assert "elif _aads_follow_out=$(follow_autoheal_successor" in body
 +
-+    monkeypatch.setitem(sys.modules, "asyncpg", types.SimpleNamespace(connect=connect))
-+    monkeypatch.setenv("OBYS_DATABASE_URL", "postgresql://fake/obys")
-+    record = {
-+        "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7", "tenant_id": TENANT, "business_id": "biz-mia",
-+        "document_type": "business_registration", "document_label": "사업자등록증", "issue_date": "",
-+        "expires_at": "2027-01-01", "memo": "m", "updated_at": "2026-09-30T09:00:00+09:00",
-+    }
-+    assert asyncio.run(svc._db_business_document_update(record, "business_registration")) is True
-+    assert asyncio.run(svc._db_business_document_soft_delete(record, "2026-09-30T09:00:00+09:00")) is True
-+    asyncio.run(svc._db_business_documents_fetch(TENANT, "biz-mia"))
 +
-+    writes = [(q, a) for q, a in log if q.lstrip().upper().startswith("UPDATE")]
-+    guarded = [(q, a) for q, a in writes if "WHERE id = $1" in q]
-+    assert len(guarded) == 2
-+    for query, args in guarded:
-+        assert "tenant_id = $2" in query and "business_id = $3" in query
-+        assert str(args[1]) == TENANT and args[2] == "biz-mia"
-+    for query, args in writes:
-+        assert str(args[0]) == TENANT or str(args[1]) == TENANT
-+    reads = [(q, a) for q, a in log if "yeoljeong_business_tenant_mapping" in q]
-+    assert reads and str(reads[0][1][0]) == TENANT and reads[0][1][1] == "biz-mia"
++# ── 배포 락 갱신 (검수 확정 결함: 락 TTL 600s < 추적 상한 2700s) ──────────────────
++
++
++def _renew_calls(work: Path) -> list[str]:
++    path = work / "renew.log"
++    return path.read_text().splitlines() if path.exists() else []
++
++
++def test_lock_is_renewed_on_every_poll_with_job_id_as_owner(fn_file, tmp_path):
++    rows = [
++        "5291|running|target_slot_drain|3",
++        "5292|running|target_slot_drain|3",
++        "5293|running|build_candidate_image|2",
++        "5293|success_partial|completed|0",
++    ]
++    rc, _, slept = _run(fn_file, tmp_path, rows, max_wait="2700")
++    assert rc == 0
++    calls = _renew_calls(tmp_path)
++    # 터미널 행을 본 마지막 poll 에서는 갱신하지 않는다 — 대기한 poll 수와 같다.
++    assert len(calls) == slept // 30 == 3
++    assert all(c == "RENEW AADS runner-x" for c in calls)
++
++
++def test_renewal_outlasts_lock_ttl(fn_file, tmp_path):
++    # 락 TTL 600s 를 넘겨 추적해도(1,080s 사슬) 갱신이 끊기지 않는다.
++    rows = ["5291|running|target_slot_drain|3"] * 40 + ["5293|success|completed|0"]
++    rc, _, slept = _run(fn_file, tmp_path, rows, max_wait="2700")
++    assert rc == 0
++    assert slept == 40 * 30 > 600
++    assert len(_renew_calls(tmp_path)) == 40
++
++
++@pytest.mark.parametrize("reason", ["not_owner", "expired_or_released", "redis_error"])
++def test_renewal_refused_stops_following_fail_closed(fn_file, tmp_path, reason):
++    rows = ["5291|running|target_slot_drain|3"]
++    rc, summary, slept = _run(fn_file, tmp_path, rows, max_wait="2700", renew=f"lost:{reason}")
++    assert rc == 1
++    assert f"lock_lost run=#5291 reason={reason}" in summary
++    assert slept == 0, "락을 잃으면 더 기다리지 않는다"
++    assert len(_renew_calls(tmp_path)) == 1
++
++
++def test_chain_already_succeeded_wins_over_lock_state(fn_file, tmp_path):
++    # 사슬이 끝났다면 갱신 거부와 무관하게 결과를 따른다(갱신은 터미널 판정 뒤에 있다).
++    rc, summary, _ = _run(fn_file, tmp_path, ["5293|success|completed|0"], renew="lost:not_owner")
++    assert rc == 0
++    assert "success run=#5293" in summary
++    assert _renew_calls(tmp_path) == []
++
++
++def test_renew_api_unreachable_tolerates_short_blip_then_recovers(fn_file, tmp_path):
++    rows = ["5291|running|target_slot_drain|3"] * 4 + ["5293|success|completed|0"]
++    rc, summary, _ = _run(fn_file, tmp_path, rows, renew="down_first:2")
++    assert rc == 0
++    assert "success run=#5293" in summary
++
++
++def test_renew_api_unreachable_beyond_limit_is_fail_closed(fn_file, tmp_path):
++    rows = ["5291|running|target_slot_drain|3"]
++    rc, summary, slept = _run(fn_file, tmp_path, rows, max_wait="2700", renew="down")
++    assert rc == 1
++    assert "lock_renew_unreachable" in summary and "fails=3" in summary
++    assert slept == 2 * 30
++    assert len(_renew_calls(tmp_path)) == 3
++
++
++def test_follow_start_marks_holder_for_waiters(fn_file, tmp_path):
++    _run(fn_file, tmp_path, ["5293|success|completed|0"])
++    db = (tmp_path / "db.log").read_text()
++    assert "[배포추적]" in db and "review_feedback" in db
++
++
++def test_time_values_relation_is_documented_and_ordered():
++    def default(name: str) -> int:
++        line = next(ln for ln in SCRIPT.splitlines() if ln.startswith(f"{name}="))
++        return int(line.split(":-")[1].split("}")[0])
++
++    follow = default("AADS_AUTOHEAL_FOLLOW_MAX_SEC")
++    wait = default("DEPLOY_LOCK_MAX_WAIT_SEC")
++    assert wait < follow
++    body = _function("follow_autoheal_successor")
++    assert "_renew_deploy_lock" in body
++    assert "deploy_lock:" not in body
++    assert "락 TTL 600s" in SCRIPT and "DEPLOY_LOCK_MAX_WAIT_SEC 900s" in SCRIPT
++    assert "AADS_AUTOHEAL_FOLLOW_MAX_SEC 2700s" in SCRIPT
++    assert "/ops/locks/deploy/renew?" in _function("_renew_deploy_lock")
++
++
++def test_deploy_job_passes_project_to_follow_for_lock_renewal():
++    body = _function("deploy_job")
++    call = body.index('follow_autoheal_successor "$job_id" "$current_sha"')
++    assert '"$main_workdir" "$project")' in body[call : call + 200]
++
++
++def _waiter_file(tmp_path_factory_dir: Path) -> Path:
++    cfg = "\n".join(
++        line for line in SCRIPT.splitlines()
++        if line.startswith(("DEPLOY_LOCK_", "AUTOHEAL_FOLLOW_TAG="))
++    )
++    harness = r"""
++set -eo pipefail
++AADS_API_URL="http://fake-api"
++log() { echo "LOG $*" >> "$WORK/log.txt"; }
++db_update() { printf '%s\n---\n' "$1" >> "$WORK/db.log"; }
++record_runner_event() { echo "EVENT $*" >> "$WORK/events.log"; }
++post_to_chat() { :; }
++_release_deploy_lock() { :; }
++_notify_ai() { :; }
++promote_next_queued() { :; }
++sleep() { :; }
++db_exec() { echo "$FAKE_FOLLOWING"; }
++curl() { echo '{"acquired":false,"holder":"runner-holder","wait_seconds":300}'; }
++"""
++    path = tmp_path_factory_dir / "waiter.sh"
++    path.write_text(
++        harness + cfg + "\n" + _function("_deploy_holder_follow_tag") + "\n"
++        + _function("acquire_deploy_lock_with_requeue"),
++        encoding="utf-8",
++    )
++    return path
++
++
++@pytest.mark.parametrize("following,expect", [("1", True), ("0", False)])
++def test_waiter_requeue_message_shows_holder_following_successor(tmp_path, following, expect):
++    if shutil.which("bash") is None:
++        pytest.skip("bash 미설치 환경")
++    fn = _waiter_file(tmp_path)
++    work = tmp_path / "w"
++    work.mkdir()
++    subprocess.run(
++        ["bash", "-c", f'source "{fn}"; acquire_deploy_lock_with_requeue job-w AADS sess || true'],
++        env={"PATH": "/usr/bin:/bin", "WORK": str(work), "FAKE_FOLLOWING": following,
++             "DEPLOY_LOCK_MAX_WAIT_SEC": "200"},
++        capture_output=True, text=True, timeout=30,
++    )
++    db = (work / "db.log").read_text()
++    events = (work / "events.log").read_text()
++    assert ("holder=runner-holder successor-추적중" in db) is expect
++    assert ('"holder_following_successor":true' in events) is expect
