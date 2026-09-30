@@ -560,6 +560,17 @@ async def update_approved_employee_role(
     }
 
 
+@router.post("/employees/approved/{request_id}/resync-employment")
+async def resync_employee_employment(request_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    # 서명 완료 계약서에서 고용조건 스냅샷을 다시 만든다. 관리자만.
+    return await run_in_threadpool(svc.resync_employee_employment, request_id, current_user)
+
+
+@router.get("/employees/approved/{request_id}/employment-history")
+async def employee_employment_history(request_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(svc.employee_employment_history, request_id, current_user)
+
+
 @router.get("/onboarding/documents")
 async def list_onboarding_documents(
     business_id: str | None = None,
@@ -671,6 +682,16 @@ async def delete_contract(contract_id: str, current_user: dict = Depends(get_cur
 @router.get("/payroll")
 async def list_payroll(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"statements": await run_in_threadpool(svc.list_payroll, current_user)}
+
+
+@router.get("/payroll/defaults")
+async def payroll_defaults(
+    employee_email: str,
+    payroll_month: str = "",
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    # 계약 기본값과 근거만 돌려준다. 저장·확정은 하지 않는다.
+    return await run_in_threadpool(svc.payroll_defaults, employee_email, payroll_month, current_user)
 
 
 @router.post("/payroll")

@@ -2356,6 +2356,12 @@ def list_approved_employees(user: dict[str, Any], business_id: str | None = None
         employee["needs_onboarding_documents"] = employee["onboarding_document_count"] == 0
         employee["needs_contract"] = employee["contract_count"] == 0
         employee["needs_payroll"] = employee["payroll_statement_count"] == 0
+        derived = _derive_current_employment(
+            contracts, employee_email=email, employee_request_id=str(employee.get("id") or "")
+        )
+        employee["current_employment"] = employee.get("current_employment") or None
+        employee["current_employment_contract_id"] = employee.get("current_employment_contract_id") or ""
+        employee["needs_employment_sync"] = not _employment_snapshot_is_current(employee, derived)
         result.append(employee)
     return sorted(result, key=lambda row: row.get("reviewed_at") or row.get("updated_at") or row.get("requested_at") or "", reverse=True)
 
@@ -3456,7 +3462,13 @@ def _store_signed_contract_pdf(contract: dict[str, Any], user: dict[str, Any] | 
 def sign_contract_and_deliver(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
     contract = sign_contract(payload, user)
     signed_pdf = _store_signed_contract_pdf(contract, user)
-    return {"contract": contract, "signed_pdf": signed_pdf, "notify": _notify_contract_event(contract, "signed")}
+    employment = _sync_employment_after_signature(contract, user)
+    return {
+        "contract": contract,
+        "signed_pdf": signed_pdf,
+        "employment": employment,
+        "notify": _notify_contract_event(contract, "signed"),
+    }
 
 
 def regenerate_signed_contract_pdf(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:
@@ -3514,6 +3526,531 @@ def signed_contract_pdf_for_download(contract_id: str, user: dict[str, Any]) -> 
     return path, _safe_filename(filename)
 
 
+# ---------------------------------------------------------------------------
+# 서명 완료 계약 → 직원 고용조건 스냅샷 → 급여 기준값
+#
+# 원본은 서명 완료 계약서 하나뿐이다. 직원 레코드의 current_employment 는
+# 최신 서명 근로·용역 계약을 가리키는 파생 스냅샷이고, 계약서에서 언제든 다시
+# 만들 수 있다(resync). 서명 완료 계약서는 불변이므로 계약서 체인이 이력이고,
+# 스냅샷 교체는 yeoljeong_audit_logs 에 남긴다. 급여는 기본값만 채운다 —
+# 관리자가 보낸 값이 항상 우선이고, 시급·일급제 월 총액은 추정하지 않는다.
+# ---------------------------------------------------------------------------
+EMPLOYMENT_SOURCE_CONTRACT_TYPES = EMPLOYMENT_CONTRACT_TYPES | {"freelancer"}
+EMPLOYMENT_SNAPSHOT_FIELDS = (
+    ("contract_type", "contractType"),
+    ("employment_tax_type", "employmentTaxType"),
+    ("wage", "wage"),
+    ("wage_type", "wageType"),
+    ("base_salary", "baseSalary"),
+    ("non_tax_meal_allowance", "nonTaxMealAllowance"),
+    ("taxable_allowance", "taxableAllowance"),
+    ("meal_provision", "mealProvision"),
+    ("start_date", "startDate"),
+    ("end_date", "endDate"),
+    ("work_days", "workDays"),
+    ("work_time", "workTime"),
+    ("rest_time", "restTime"),
+    ("weekly_hours", "weeklyHours"),
+    ("pay_date", "payDate"),
+    ("pay_method", "payMethod"),
+    ("workplace", "workplace"),
+    ("business_id", "businessId"),
+    ("branch", "branch"),
+)
+EMPLOYMENT_AMOUNT_FIELDS = {"wage", "base_salary", "non_tax_meal_allowance", "taxable_allowance"}
+EMPLOYMENT_AUDIT_RESOURCE = "employee_employment"
+PAYROLL_AUDIT_RESOURCE = "payroll_statement"
+EMPLOYMENT_AUDIT_LOG = "employment_audit_logs"
+PAYROLL_DEFAULT_FIELDS = ("gross_pay", "taxable_pay", "non_tax_meal_allowance", "meal_provision", "employment_tax_type")
+PAYROLL_AMOUNT_DEFAULT_FIELDS = {"gross_pay", "taxable_pay", "non_tax_meal_allowance"}
+
+
+def _employment_amount(value: Any) -> int | None:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return int(round(float(str(value).replace(",", "").strip())))
+    except (TypeError, ValueError):
+        return None
+
+
+def _contract_is_live_signed(contract: dict[str, Any]) -> bool:
+    return str(contract.get("status") or "") == "signed" and not contract.get("deleted_at")
+
+
+def _contract_belongs_to(contract: dict[str, Any], *, employee_email: str, employee_request_id: str) -> bool:
+    request_id = str(_contract_payload_value(contract, "employee_request_id", "employeeRequestId") or "").strip()
+    email = str(contract.get("employee_email") or "").strip().lower()
+    if employee_request_id and request_id:
+        return request_id == employee_request_id
+    return bool(employee_email) and email == employee_email
+
+
+def _signed_contract_sort_key(contract: dict[str, Any]) -> tuple[datetime, str]:
+    stamp = _pg_ts(contract.get("signed_at")) or datetime.min.replace(tzinfo=KST)
+    return stamp, str(contract.get("id") or "")
+
+
+def _employee_signed_contracts(
+    contracts: list[dict[str, Any]], *, employee_email: str, employee_request_id: str
+) -> list[dict[str, Any]]:
+    """직원의 서명 완료 계약서(삭제 제외)를 서명 시각 오름차순으로."""
+    email = str(employee_email or "").strip().lower()
+    request_id = str(employee_request_id or "").strip()
+    rows = [
+        row
+        for row in contracts
+        if _contract_is_live_signed(row)
+        and _contract_belongs_to(row, employee_email=email, employee_request_id=request_id)
+    ]
+    return sorted(rows, key=_signed_contract_sort_key)
+
+
+def _employment_terms_from_contract(contract: dict[str, Any]) -> dict[str, Any]:
+    # 봉인 스냅샷이 있으면 그것을 읽는다 — 서명 이후 붙은 메타가 섞이지 않는다.
+    source = contract.get("signed_snapshot") if isinstance(contract.get("signed_snapshot"), dict) else contract
+    terms: dict[str, Any] = {}
+    for snake, camel in EMPLOYMENT_SNAPSHOT_FIELDS:
+        value = _contract_payload_value(source, snake, camel)
+        if snake in EMPLOYMENT_AMOUNT_FIELDS:
+            terms[snake] = _employment_amount(value)
+        else:
+            terms[snake] = str(value).strip() if value is not None else ""
+    return terms
+
+
+def _derive_current_employment(
+    contracts: list[dict[str, Any]], *, employee_email: str, employee_request_id: str
+) -> dict[str, Any] | None:
+    """최신 서명 근로·용역 계약 1건에서 고용조건을 만든다. 비밀유지 서약은 원본이 아니다."""
+    sources = [
+        row
+        for row in _employee_signed_contracts(
+            contracts, employee_email=employee_email, employee_request_id=employee_request_id
+        )
+        if str(row.get("contract_type") or "") in EMPLOYMENT_SOURCE_CONTRACT_TYPES
+    ]
+    if not sources:
+        return None
+    latest = sources[-1]
+    employment = _employment_terms_from_contract(latest)
+    return {
+        "contract_id": str(latest.get("id") or ""),
+        "signed_at": str(latest.get("signed_at") or ""),
+        "effective_from": employment.get("start_date") or str(latest.get("signed_at") or ""),
+        "employment": employment,
+    }
+
+
+def _employment_snapshot_is_current(employee: dict[str, Any], derived: dict[str, Any] | None) -> bool:
+    if derived is None:
+        return True
+    return (
+        str(employee.get("current_employment_contract_id") or "") == derived["contract_id"]
+        and employee.get("current_employment") == derived["employment"]
+        and not employee.get("current_employment_error")
+    )
+
+
+def _append_employment_audit(
+    *,
+    tenant_id: str,
+    business_id: str,
+    actor: str,
+    action: str,
+    resource_type: str,
+    resource_id: str,
+    details: dict[str, Any],
+) -> bool:
+    """감사로그 한 줄. DB 는 ops 서비스의 _insert_audit_log_conn 을 재사용한다. 예외를 올리지 않는다."""
+    entry_details = {**details, "tenant_id": tenant_id}
+    try:
+        if _db_available():
+            return bool(_run_db(_db_insert_employment_audit(
+                business_id=business_id, actor=actor, action=action,
+                resource_type=resource_type, resource_id=resource_id, details=entry_details,
+            )))
+        row = {
+            "id": f"aud-{uuid4().hex[:12]}",
+            "business_id": business_id,
+            "actor": actor,
+            "action": action,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "details": entry_details,
+            "created_at": _now(),
+        }
+        _write_file_rows(EMPLOYMENT_AUDIT_LOG, [row] + _read_file_rows(EMPLOYMENT_AUDIT_LOG))
+        return True
+    except Exception as exc:  # noqa: BLE001 — 감사로그 실패가 서명·급여 저장을 되돌리면 안 된다
+        logger.error("employment audit not recorded: action=%s resource=%s err=%s", action, resource_id, exc)
+        return False
+
+
+async def _db_insert_employment_audit(**kwargs: Any) -> dict[str, Any]:
+    import asyncpg
+
+    from app.services.yeoljeong_ops_service import _insert_audit_log_conn
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        return await _insert_audit_log_conn(conn, **kwargs)
+    finally:
+        await conn.close()
+
+
+def _employment_audit_rows(tenant_id: str, business_id: str, request_id: str) -> list[dict[str, Any]]:
+    if _db_available():
+        from app.services import yeoljeong_ops_service as ops
+
+        fetched = _run_db(ops.list_audit_logs(business_id, resource_type=EMPLOYMENT_AUDIT_RESOURCE, limit=1000))
+        rows = fetched if isinstance(fetched, list) else []
+    else:
+        rows = [row for row in _read_file_rows(EMPLOYMENT_AUDIT_LOG) if row.get("business_id") == business_id]
+    result = []
+    for row in rows:
+        details = _payload_dict(row.get("details"))
+        if (
+            row.get("resource_type") == EMPLOYMENT_AUDIT_RESOURCE
+            and str(row.get("resource_id") or "") == request_id
+            and str(details.get("tenant_id") or "") == tenant_id
+        ):
+            result.append({**row, "details": details, "created_at": _iso(row.get("created_at"))})
+    return result
+
+
+def _find_employee_record(
+    user: dict[str, Any] | None, *, employee_email: str = "", employee_request_id: str = ""
+) -> dict[str, Any] | None:
+    email = str(employee_email or "").strip().lower()
+    request_id = str(employee_request_id or "").strip()
+    rows = [row for row in _read_hr("employee_join_requests", user) if str(row.get("status") or "").lower() == "approved"]
+    if request_id:
+        found = _find(rows, request_id)
+        if found:
+            return found
+    if email:
+        return next((row for row in rows if str(row.get("email") or "").strip().lower() == email), None)
+    return None
+
+
+def _employment_changes(before: dict[str, Any], after: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    keys = sorted(set(before) | set(after))
+    return {key: {"before": before.get(key), "after": after.get(key)} for key in keys if before.get(key) != after.get(key)}
+
+
+def _sync_employee_employment(
+    employee: dict[str, Any], user: dict[str, Any] | None, *, actor: str, trigger: str
+) -> dict[str, Any]:
+    """계약서에서 스냅샷을 다시 만든다. 바뀐 게 없으면 쓰지 않는다."""
+    tenant_id = _tenant_id(user)
+    request_id = str(employee.get("id") or "")
+    derived = _derive_current_employment(
+        _read_hr("contracts", user),
+        employee_email=str(employee.get("email") or ""),
+        employee_request_id=request_id,
+    )
+    if derived is None:
+        # 원본이 없으면 기존 스냅샷도 지우지 않는다(이력 보존).
+        return {"status": "no_source", "employee_request_id": request_id}
+    if _employment_snapshot_is_current(employee, derived):
+        return {"status": "unchanged", "employee_request_id": request_id, "contract_id": derived["contract_id"]}
+
+    previous_contract_id = str(employee.get("current_employment_contract_id") or "")
+    previous = employee.get("current_employment") if isinstance(employee.get("current_employment"), dict) else {}
+    now = _now()
+    record = dict(employee)
+    record.update(
+        {
+            "current_employment": derived["employment"],
+            "current_employment_contract_id": derived["contract_id"],
+            "current_employment_signed_at": derived["signed_at"],
+            "current_employment_effective_from": derived["effective_from"],
+            "current_employment_synced_at": now,
+            "current_employment_error": "",
+            "updated_at": now,
+        }
+    )
+    if previous_contract_id and previous_contract_id != derived["contract_id"]:
+        record["previous_employment_contract_id"] = previous_contract_id
+    _write_hr_record("employee_join_requests", record, user)
+    employee.clear()
+    employee.update(record)
+
+    if trigger == "resync":
+        action = "employment.snapshot_resynced"
+    elif previous_contract_id and previous_contract_id != derived["contract_id"]:
+        action = "employment.snapshot_replaced"
+    else:
+        action = "employment.snapshot_created"
+    audited = _append_employment_audit(
+        tenant_id=tenant_id,
+        business_id=_record_business_id(record) or str(record.get("business_id") or ""),
+        actor=actor,
+        action=action,
+        resource_type=EMPLOYMENT_AUDIT_RESOURCE,
+        resource_id=request_id,
+        details={
+            "trigger": trigger,
+            "employee_email_masked": _mask_email(str(record.get("email") or "")),
+            "previous_contract_id": previous_contract_id,
+            "contract_id": derived["contract_id"],
+            "contract_signed_at": derived["signed_at"],
+            "effective_from": derived["effective_from"],
+            "changes": _employment_changes(previous, derived["employment"]),
+        },
+    )
+    return {
+        "status": "updated",
+        "action": action,
+        "employee_request_id": request_id,
+        "contract_id": derived["contract_id"],
+        "previous_contract_id": previous_contract_id,
+        "audit_logged": audited,
+    }
+
+
+def _record_employment_sync_error(employee_ref: dict[str, str], user: dict[str, Any] | None, error: str) -> bool:
+    try:
+        employee = _find_employee_record(user, **employee_ref)
+        if not employee:
+            return False
+        employee = dict(employee)
+        employee["current_employment_error"] = error
+        employee["current_employment_error_at"] = _now()
+        _write_hr_record("employee_join_requests", employee, user)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.error("employment sync error not recorded: employee=%s err=%s", employee_ref, exc)
+        return False
+
+
+def _sync_employment_after_signature(contract: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
+    """서명 직후 훅. 서명은 이미 성립했다 — 실패는 current_employment_error 로만 남긴다."""
+    employee_ref = {
+        "employee_email": str(contract.get("employee_email") or ""),
+        "employee_request_id": str(_contract_payload_value(contract, "employee_request_id", "employeeRequestId") or ""),
+    }
+    if str(contract.get("contract_type") or "") not in EMPLOYMENT_SOURCE_CONTRACT_TYPES:
+        return {"status": "skipped", "reason": "고용조건 원본이 아닌 계약 유형", "contract_type": contract.get("contract_type")}
+    try:
+        employee = _find_employee_record(user, **employee_ref)
+        if not employee:
+            raise LookupError("승인 직원 레코드를 찾을 수 없습니다")
+        return _sync_employee_employment(
+            employee, user, actor=str(contract.get("signer_email") or _email(user or {})), trigger="contract_signed"
+        )
+    except Exception as exc:  # noqa: BLE001
+        error = f"{_now()} {type(exc).__name__}: {exc}"[:500]
+        logger.error("employment snapshot failed: contract=%s err=%s", contract.get("id"), exc)
+        return {"status": "failed", "error": error, "error_recorded": _record_employment_sync_error(employee_ref, user, error)}
+
+
+def _employee_for_admin_or_403(request_id: str, user: dict[str, Any], *, detail: str) -> dict[str, Any]:
+    _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail=detail)
+    employee = _find_employee_record(user, employee_request_id=request_id)
+    if not employee or str(employee.get("id") or "") != str(request_id):
+        # 다른 테넌트의 식별자 존재 여부를 드러내지 않는다.
+        raise HTTPException(status_code=403, detail=detail)
+    return employee
+
+
+def resync_employee_employment(request_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    employee = _employee_for_admin_or_403(request_id, user, detail="고용조건 재동기화 권한이 없습니다")
+    result = _sync_employee_employment(employee, user, actor=_email(user), trigger="resync")
+    return {
+        "result": result,
+        "current_employment": employee.get("current_employment"),
+        "current_employment_contract_id": employee.get("current_employment_contract_id") or "",
+        "current_employment_effective_from": employee.get("current_employment_effective_from") or "",
+        "current_employment_synced_at": employee.get("current_employment_synced_at") or "",
+        "current_employment_error": employee.get("current_employment_error") or "",
+    }
+
+
+def employee_employment_history(request_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    """관리자와 본인만. 서명 계약서 체인 + 스냅샷 감사로그를 시간순으로."""
+    denied = HTTPException(status_code=403, detail="이 직원의 고용 이력에 접근할 권한이 없습니다")
+    tenant_id = _tenant_id(user)
+    employee = _find_employee_record(user, employee_request_id=request_id)
+    if not employee or str(employee.get("id") or "") != str(request_id):
+        raise denied
+    email = str(employee.get("email") or "").strip().lower()
+    if not _is_admin(user) and (not _email(user) or _email(user) != email):
+        raise denied
+    contracts = []
+    for row in _employee_signed_contracts(_read_hr("contracts", user), employee_email=email, employee_request_id=request_id):
+        terms = _employment_terms_from_contract(row)
+        contracts.append(
+            {
+                "contract_id": str(row.get("id") or ""),
+                "contract_type": str(row.get("contract_type") or ""),
+                "print_title": str(row.get("print_title") or ""),
+                "signed_at": str(row.get("signed_at") or ""),
+                "employment_source": str(row.get("contract_type") or "") in EMPLOYMENT_SOURCE_CONTRACT_TYPES,
+                "signed_snapshot_sha256": str(row.get("signed_snapshot_sha256") or ""),
+                "terms": terms,
+            }
+        )
+    business_id = _record_business_id(employee) or str(employee.get("business_id") or "")
+    audit_logs = _employment_audit_rows(tenant_id, business_id, str(employee.get("id") or ""))
+    timeline = [
+        {"at": item["signed_at"], "kind": "contract_signed", "contract_id": item["contract_id"],
+         "contract_type": item["contract_type"], "employment_source": item["employment_source"]}
+        for item in contracts
+    ] + [
+        {"at": row["created_at"], "kind": "audit", "action": row.get("action"), "actor": row.get("actor"),
+         "contract_id": row["details"].get("contract_id"), "previous_contract_id": row["details"].get("previous_contract_id")}
+        for row in audit_logs
+    ]
+    timeline.sort(key=lambda item: _pg_ts(item["at"]) or datetime.min.replace(tzinfo=KST))
+    return {
+        "employee_request_id": str(employee.get("id") or ""),
+        "current_employment": employee.get("current_employment"),
+        "current_employment_contract_id": employee.get("current_employment_contract_id") or "",
+        "current_employment_effective_from": employee.get("current_employment_effective_from") or "",
+        "contracts": contracts,
+        "audit_logs": sorted(audit_logs, key=lambda row: _pg_ts(row["created_at"]) or datetime.min.replace(tzinfo=KST)),
+        "timeline": timeline,
+    }
+
+
+def _payroll_defaults_from_employment(derived: dict[str, Any] | None) -> dict[str, Any]:
+    """급여 기본값과 근거. 시급·일급제는 월 총액을 추정하지 않는다."""
+    if derived is None:
+        return {
+            "source_contract_id": "",
+            "wage_type": "",
+            "contract_type": "",
+            "estimated": False,
+            "defaults": {},
+            "contract_terms": {},
+            "basis": "",
+            "reason": "서명 완료된 근로·용역 계약서가 없어 기본값이 없습니다",
+        }
+    terms = derived["employment"]
+    contract_type = terms.get("contract_type") or ""
+    wage_type = terms.get("wage_type") or ""
+    wage = terms.get("wage")
+    result: dict[str, Any] = {
+        "source_contract_id": derived["contract_id"],
+        "wage_type": wage_type,
+        "contract_type": contract_type,
+        "estimated": False,
+        "defaults": {},
+        "contract_terms": {
+            "wage": wage,
+            "weekly_hours": terms.get("weekly_hours") or "",
+            "work_days": terms.get("work_days") or "",
+            "work_time": terms.get("work_time") or "",
+            "start_date": terms.get("start_date") or "",
+            "end_date": terms.get("end_date") or "",
+            "pay_date": terms.get("pay_date") or "",
+        },
+        "basis": "",
+        "reason": "",
+    }
+    defaults: dict[str, Any] = result["defaults"]
+    if contract_type == "freelancer" or wage_type == "case_fee":
+        defaults["employment_tax_type"] = "freelancer_33"
+        result["basis"] = f"프리랜서 용역계약({derived['contract_id']}) — 3.3% 원천징수 구분만 채움"
+        result["reason"] = "용역비는 건별로 확정되므로 총지급액 기본값이 없습니다"
+        return result
+    if terms.get("employment_tax_type"):
+        defaults["employment_tax_type"] = terms["employment_tax_type"]
+    if terms.get("meal_provision"):
+        defaults["meal_provision"] = terms["meal_provision"]
+    if wage_type == "monthly" and wage:
+        non_tax = terms.get("non_tax_meal_allowance") or 0
+        defaults["gross_pay"] = wage
+        defaults["taxable_pay"] = wage - non_tax
+        defaults["non_tax_meal_allowance"] = non_tax
+        result["basis"] = (
+            f"월급제 계약({derived['contract_id']}) 임금 {wage:,}원 = 과세 {wage - non_tax:,}원 + 비과세 식대 {non_tax:,}원"
+        )
+        return result
+    if wage_type == "hourly":
+        result["hourly_wage"] = wage
+        result["contract_terms"]["hourly_wage"] = wage
+    elif wage_type == "daily":
+        result["daily_wage"] = wage
+        result["contract_terms"]["daily_wage"] = wage
+    result["weekly_hours"] = terms.get("weekly_hours") or ""
+    result["reason"] = "시급제는 근태 확정 후 산정" if wage_type == "hourly" else "일급제는 근태 확정 후 산정"
+    result["basis"] = f"{wage_type} 계약({derived['contract_id']}) 단가 {wage or 0:,}원 — 월 총액은 근태 확정 후 관리자가 입력"
+    return result
+
+
+def payroll_defaults(employee_email: str, payroll_month: str, user: dict[str, Any]) -> dict[str, Any]:
+    denied = HTTPException(status_code=403, detail="급여 기준값 조회 권한이 없습니다")
+    _tenant_id(user)
+    if not _is_admin(user):
+        raise denied
+    month = str(payroll_month or "").strip()
+    if month and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
+        raise HTTPException(status_code=400, detail="payroll_month 는 YYYY-MM 형식이어야 합니다")
+    employee = _find_employee_record(user, employee_email=employee_email)
+    if not employee:
+        raise denied
+    derived = _derive_current_employment(
+        _read_hr("contracts", user),
+        employee_email=str(employee.get("email") or ""),
+        employee_request_id=str(employee.get("id") or ""),
+    )
+    result = _payroll_defaults_from_employment(derived)
+    result["employee_email"] = str(employee.get("email") or "")
+    result["employee_request_id"] = str(employee.get("id") or "")
+    result["payroll_month"] = month
+    result["employment_snapshot_in_sync"] = _employment_snapshot_is_current(employee, derived)
+    if derived and month:
+        start = str(derived["employment"].get("start_date") or "")[:7]
+        end = str(derived["employment"].get("end_date") or "")[:7]
+        if (start and month < start) or (end and month > end):
+            result["period_note"] = "급여 월이 계약 기간 밖입니다"
+    return result
+
+
+def _payroll_value_missing(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and value.strip() == "")
+
+
+def _apply_payroll_contract_defaults(
+    payload: dict[str, Any], plan: dict[str, Any]
+) -> tuple[dict[str, Any], list[str], dict[str, dict[str, Any]]]:
+    """비어 있는 칸만 채운다. 관리자가 보낸 값은 그대로 두고, 계약과 다르면 이탈로 기록한다."""
+    result = dict(payload)
+    defaults = plan.get("defaults") or {}
+    applied: list[str] = []
+    deviation: dict[str, dict[str, Any]] = {}
+    for field in ("meal_provision", "employment_tax_type"):
+        if field not in defaults:
+            continue
+        if _payroll_value_missing(result.get(field)):
+            result[field] = defaults[field]
+            applied.append(field)
+        elif str(result.get(field)).strip() != str(defaults[field]):
+            deviation[field] = {"contract": defaults[field], "input": result.get(field)}
+    if "gross_pay" in defaults:
+        if _payroll_value_missing(result.get("gross_pay")):
+            result["gross_pay"] = defaults["gross_pay"]
+            applied.append("gross_pay")
+        # 과세/비과세 분할은 둘 다 비었고 총지급액이 계약 임금일 때만 채운다 —
+        # 관리자가 총액을 바꿨는데 계약 분할을 끼우면 합계 검증이 깨진다.
+        gross_matches = _employment_amount(result.get("gross_pay")) == defaults["gross_pay"]
+        if gross_matches and all(_payroll_value_missing(result.get(key)) for key in ("taxable_pay", "non_tax_meal_allowance")):
+            result["taxable_pay"] = defaults["taxable_pay"]
+            result["non_tax_meal_allowance"] = defaults["non_tax_meal_allowance"]
+            applied.extend(["taxable_pay", "non_tax_meal_allowance"])
+        for field in ("gross_pay", "taxable_pay", "non_tax_meal_allowance"):
+            if field in applied or _payroll_value_missing(result.get(field)):
+                continue
+            if _employment_amount(result.get(field)) != defaults[field]:
+                deviation[field] = {"contract": defaults[field], "input": result.get(field)}
+    return result, applied, deviation
+
+
 def list_payroll(user: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(_filter_user(_read_hr("payroll_statements", user), user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
 
@@ -3523,6 +4060,22 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="급여내역서 작성 권한이 없습니다")
     rows = _read_hr("payroll_statements", user)
+    employee = _find_employee_record(
+        user,
+        employee_email=str(payload.get("employee_email") or ""),
+        employee_request_id=str(payload.get("employee_request_id") or ""),
+    )
+    derived = (
+        _derive_current_employment(
+            _read_hr("contracts", user),
+            employee_email=str(employee.get("email") or ""),
+            employee_request_id=str(employee.get("id") or ""),
+        )
+        if employee
+        else None
+    )
+    plan = _payroll_defaults_from_employment(derived)
+    payload, defaults_applied, deviation = _apply_payroll_contract_defaults(payload, plan)
     gross = _payroll_integer_for_api(payload.get("gross_pay"), field="gross_pay")
     taxable_pay = _payroll_integer_for_api(payload.get("taxable_pay"), field="taxable_pay")
     non_tax_meal = _payroll_integer_for_api(payload.get("non_tax_meal_allowance"), field="non_tax_meal_allowance")
@@ -3552,6 +4105,9 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
         "insurance_deduction": insurance_deduction,
         "other_deduction": other_deduction,
         "net_pay": max(0, gross - deductions),
+        "source_contract_id": plan["source_contract_id"],
+        "contract_defaults_applied": defaults_applied,
+        "contract_deviation": deviation,
         "created_at": payload.get("created_at") or now,
         "updated_at": now,
     }
@@ -3564,6 +4120,25 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
         rows.insert(0, statement)
         saved = statement
     _write_hr_record("payroll_statements", saved, user)
+    for action, key, value in (
+        ("payroll.contract_defaults_applied", "fields", defaults_applied),
+        ("payroll.contract_deviation", "deviation", deviation),
+    ):
+        if value:
+            _append_employment_audit(
+                tenant_id=str(saved.get("tenant_id") or ""),
+                business_id=str(saved.get("business_id") or ""),
+                actor=_email(user),
+                action=action,
+                resource_type=PAYROLL_AUDIT_RESOURCE,
+                resource_id=statement_id,
+                details={
+                    key: value,
+                    "source_contract_id": plan["source_contract_id"],
+                    "employee_request_id": str((employee or {}).get("id") or ""),
+                    "payroll_month": str(saved.get("payroll_month") or ""),
+                },
+            )
     return saved
 
 

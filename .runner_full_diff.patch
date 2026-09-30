@@ -1,1720 +1,1516 @@
 diff --git a/app/api/obys_finance.py b/app/api/obys_finance.py
-index 0340573c..28ad047d 100644
+index 28ad047d..bccfe6e5 100644
 --- a/app/api/obys_finance.py
 +++ b/app/api/obys_finance.py
-@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
- 
- from app.auth import get_current_user
- from app.core.obys_tenant import is_legacy_obys_tenant, require_legacy_obys_access
-+from app.services import obys_registration_ocr as registration_ocr
- from app.services import obys_upload_service as upload_svc
- from app.services import yeoljeong_finance_service as svc
- from app.services.yeoljeong_bank_collector_harness import (
-@@ -933,6 +934,71 @@ async def delete_card_upload(upload_id: UUID, current_user: dict = Depends(get_c
-     return {"ok": True}
+@@ -560,6 +560,17 @@ async def update_approved_employee_role(
+     }
  
  
-+async def _read_registration_upload(file: UploadFile) -> bytes:
-+    try:
-+        return await _read_limited_upload(file)
-+    except HTTPException as exc:
-+        raise HTTPException(status_code=400, detail=exc.detail) from exc
++@router.post("/employees/approved/{request_id}/resync-employment")
++async def resync_employee_employment(request_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
++    # 서명 완료 계약서에서 고용조건 스냅샷을 다시 만든다. 관리자만.
++    return await run_in_threadpool(svc.resync_employee_employment, request_id, current_user)
 +
 +
-+@router.post("/businesses/{business_id}/registration-document", status_code=201)
-+async def upload_business_registration_document(
-+    business_id: str,
-+    file: UploadFile = File(...),
++@router.get("/employees/approved/{request_id}/employment-history")
++async def employee_employment_history(request_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
++    return await run_in_threadpool(svc.employee_employment_history, request_id, current_user)
++
++
+ @router.get("/onboarding/documents")
+ async def list_onboarding_documents(
+     business_id: str | None = None,
+@@ -673,6 +684,16 @@ async def list_payroll(current_user: dict = Depends(get_current_user)) -> dict[s
+     return {"statements": await run_in_threadpool(svc.list_payroll, current_user)}
+ 
+ 
++@router.get("/payroll/defaults")
++async def payroll_defaults(
++    employee_email: str,
++    payroll_month: str = "",
 +    current_user: dict = Depends(get_current_user),
 +) -> dict[str, Any]:
-+    upload_svc._require_admin(current_user)
-+    data = await _read_registration_upload(file)
-+    document = await upload_svc.create_registration_document(
-+        user=current_user, business_id=business_id,
-+        filename=file.filename or "registration.bin",
-+        content_type=file.content_type or "application/octet-stream", data=data,
-+    )
-+    return {"document": document}
++    # 계약 기본값과 근거만 돌려준다. 저장·확정은 하지 않는다.
++    return await run_in_threadpool(svc.payroll_defaults, employee_email, payroll_month, current_user)
 +
 +
-+@router.get("/businesses/{business_id}/registration-document")
-+async def list_business_registration_documents(
-+    business_id: str,
-+    current_user: dict = Depends(get_current_user),
-+) -> dict[str, Any]:
-+    return await upload_svc.list_registration_documents(user=current_user, business_id=business_id)
-+
-+
-+@router.get("/businesses/{business_id}/registration-document/{document_id}/download")
-+async def download_business_registration_document(
-+    business_id: str,
-+    document_id: UUID,
-+    current_user: dict = Depends(get_current_user),
-+) -> FileResponse:
-+    path, filename, content_type = await upload_svc.registration_document_download(
-+        user=current_user, business_id=business_id, document_id=document_id,
-+    )
-+    return FileResponse(path, media_type=content_type, filename=filename, headers={"Cache-Control": "no-store"})
-+
-+
-+@router.post("/businesses/{business_id}/registration-document/{document_id}/ocr")
-+async def suggest_business_registration_from_ocr(
-+    business_id: str,
-+    document_id: UUID,
-+    current_user: dict = Depends(get_current_user),
-+) -> dict[str, Any]:
-+    # 제안 전용. 사업자 레코드는 바꾸지 않는다 — 저장은 관리자가 확인 후 기존 경로로 한다.
-+    return await registration_ocr.suggest_from_document(
-+        user=current_user, business_id=business_id, document_id=document_id,
-+    )
-+
-+
-+@router.delete("/businesses/{business_id}/registration-document/{document_id}")
-+async def delete_business_registration_document(
-+    business_id: str,
-+    document_id: UUID,
-+    current_user: dict = Depends(get_current_user),
-+) -> dict[str, bool]:
-+    await upload_svc.delete_registration_document(user=current_user, business_id=business_id, document_id=document_id)
-+    return {"ok": True}
-+
-+
- @router.get("/uploaded-ledger")
- async def list_uploaded_ledger(
-     business_id: str,
-diff --git a/app/services/obys_registration_ocr.py b/app/services/obys_registration_ocr.py
-new file mode 100644
-index 00000000..25d3c35c
---- /dev/null
-+++ b/app/services/obys_registration_ocr.py
-@@ -0,0 +1,270 @@
-+"""사업자등록증 OCR 제안 (AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930).
-+
-+OCR 결과는 **제안만** 한다. 사업자 레코드에 쓰지 않는다 — 저장은 관리자가
-+확인한 뒤 기존 update_business / 기초설정 저장 경로로 이루어진다.
-+
-+- OCR 호출은 app.core.local_ocr_bridge.ocr_extract 를 그대로 쓴다.
-+- 읽지 못한 항목은 값을 만들지 않고 value=None + reason 으로 돌려준다.
-+- 감사로그에는 항목별 성공/실패와 길이만 남긴다. OCR 원문·추출값은 남기지 않는다.
-+"""
-+from __future__ import annotations
-+
-+import base64
-+import logging
-+import re
-+import time
-+from datetime import date, datetime, timedelta, timezone
-+from typing import Any
-+from uuid import UUID
-+
-+from app.core import local_ocr_bridge
-+from app.services import obys_upload_service as upload_svc
-+
-+logger = logging.getLogger(__name__)
-+KST = timezone(timedelta(hours=9))
-+
-+AUTOFILL_FIELDS = ("name", "registration_no", "representative", "opened_at", "address")
-+EXTRA_FIELDS = ("corporate_registration_no", "tax_type")
-+FIELD_LABELS: dict[str, tuple[str, ...]] = {
-+    "corporate_registration_no": ("법인등록번호",),
-+    "registration_no": ("사업자등록번호", "등록번호"),
-+    "name": ("법인명(단체명)", "법인명", "단체명", "상호"),
-+    "representative": ("대표자", "성명"),
-+    "opened_at": ("개업연월일", "개업년월일", "개업일자", "개업일"),
-+    "address": ("사업장소재지", "본점소재지", "사업장주소", "소재지"),
-+}
-+# 값 뒤에 같은 줄로 붙어 나오는 다른 항목. 여기서 값을 끊는다.
-+STOP_LABELS = (
-+    "생년월일", "주민등록번호", "법인등록번호", "전화번호", "사업의종류", "업태", "종목",
-+    "발급사유", "공동사업자", "개업연월일", "사업장소재지", "본점소재지", "대표자", "성명", "상호",
-+)
-+EXCLUDED_PREFIXES = {"registration_no": ("법인", "주민")}
-+TAX_TYPES = (("간이과세자", "간이과세"), ("일반과세자", "일반과세"), ("면세사업자", "면세"))
-+
-+
-+def _spaced(label: str) -> str:
-+    return r"\s*".join(re.escape(char) for char in label.replace(" ", ""))
-+
-+
-+def _clean(value: Any) -> str:
-+    return re.sub(r"\s+", " ", str(value or "")).strip()
-+
-+
-+def _snippet(line: str) -> str:
-+    return _clean(line)[:80]
-+
-+
-+def _field(field: str, value: Any = None, *, confidence: float = 0.0, source: str | None = None,
-+           valid: bool = False, reason: str | None = None) -> dict[str, Any]:
+ @router.post("/payroll")
+ async def save_payroll(payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+     return {"statement": await run_in_threadpool(svc.save_payroll, payload.model_dump(), current_user)}
+diff --git a/app/services/yeoljeong_finance_service.py b/app/services/yeoljeong_finance_service.py
+index 352e71d4..c5575595 100644
+--- a/app/services/yeoljeong_finance_service.py
++++ b/app/services/yeoljeong_finance_service.py
+@@ -2356,6 +2356,12 @@ def list_approved_employees(user: dict[str, Any], business_id: str | None = None
+         employee["needs_onboarding_documents"] = employee["onboarding_document_count"] == 0
+         employee["needs_contract"] = employee["contract_count"] == 0
+         employee["needs_payroll"] = employee["payroll_statement_count"] == 0
++        derived = _derive_current_employment(
++            contracts, employee_email=email, employee_request_id=str(employee.get("id") or "")
++        )
++        employee["current_employment"] = employee.get("current_employment") or None
++        employee["current_employment_contract_id"] = employee.get("current_employment_contract_id") or ""
++        employee["needs_employment_sync"] = not _employment_snapshot_is_current(employee, derived)
+         result.append(employee)
+     return sorted(result, key=lambda row: row.get("reviewed_at") or row.get("updated_at") or row.get("requested_at") or "", reverse=True)
+ 
+@@ -3456,7 +3462,13 @@ def _store_signed_contract_pdf(contract: dict[str, Any], user: dict[str, Any] |
+ def sign_contract_and_deliver(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
+     contract = sign_contract(payload, user)
+     signed_pdf = _store_signed_contract_pdf(contract, user)
+-    return {"contract": contract, "signed_pdf": signed_pdf, "notify": _notify_contract_event(contract, "signed")}
++    employment = _sync_employment_after_signature(contract, user)
 +    return {
-+        "field": field,
-+        "value": value,
-+        "valid": bool(valid and value is not None),
-+        "confidence": round(confidence, 3) if value is not None else 0.0,
-+        "source": source,
-+        "reason": reason,
-+        "autofill_candidate": bool(valid and value is not None and field in AUTOFILL_FIELDS),
++        "contract": contract,
++        "signed_pdf": signed_pdf,
++        "employment": employment,
++        "notify": _notify_contract_event(contract, "signed"),
++    }
+ 
+ 
+ def regenerate_signed_contract_pdf(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:
+@@ -3514,6 +3526,531 @@ def signed_contract_pdf_for_download(contract_id: str, user: dict[str, Any]) ->
+     return path, _safe_filename(filename)
+ 
+ 
++# ---------------------------------------------------------------------------
++# 서명 완료 계약 → 직원 고용조건 스냅샷 → 급여 기준값
++#
++# 원본은 서명 완료 계약서 하나뿐이다. 직원 레코드의 current_employment 는
++# 최신 서명 근로·용역 계약을 가리키는 파생 스냅샷이고, 계약서에서 언제든 다시
++# 만들 수 있다(resync). 서명 완료 계약서는 불변이므로 계약서 체인이 이력이고,
++# 스냅샷 교체는 yeoljeong_audit_logs 에 남긴다. 급여는 기본값만 채운다 —
++# 관리자가 보낸 값이 항상 우선이고, 시급·일급제 월 총액은 추정하지 않는다.
++# ---------------------------------------------------------------------------
++EMPLOYMENT_SOURCE_CONTRACT_TYPES = EMPLOYMENT_CONTRACT_TYPES | {"freelancer"}
++EMPLOYMENT_SNAPSHOT_FIELDS = (
++    ("contract_type", "contractType"),
++    ("employment_tax_type", "employmentTaxType"),
++    ("wage", "wage"),
++    ("wage_type", "wageType"),
++    ("base_salary", "baseSalary"),
++    ("non_tax_meal_allowance", "nonTaxMealAllowance"),
++    ("taxable_allowance", "taxableAllowance"),
++    ("meal_provision", "mealProvision"),
++    ("start_date", "startDate"),
++    ("end_date", "endDate"),
++    ("work_days", "workDays"),
++    ("work_time", "workTime"),
++    ("rest_time", "restTime"),
++    ("weekly_hours", "weeklyHours"),
++    ("pay_date", "payDate"),
++    ("pay_method", "payMethod"),
++    ("workplace", "workplace"),
++    ("business_id", "businessId"),
++    ("branch", "branch"),
++)
++EMPLOYMENT_AMOUNT_FIELDS = {"wage", "base_salary", "non_tax_meal_allowance", "taxable_allowance"}
++EMPLOYMENT_AUDIT_RESOURCE = "employee_employment"
++PAYROLL_AUDIT_RESOURCE = "payroll_statement"
++EMPLOYMENT_AUDIT_LOG = "employment_audit_logs"
++PAYROLL_DEFAULT_FIELDS = ("gross_pay", "taxable_pay", "non_tax_meal_allowance", "meal_provision", "employment_tax_type")
++PAYROLL_AMOUNT_DEFAULT_FIELDS = {"gross_pay", "taxable_pay", "non_tax_meal_allowance"}
++
++
++def _employment_amount(value: Any) -> int | None:
++    if value is None or str(value).strip() == "":
++        return None
++    try:
++        return int(round(float(str(value).replace(",", "").strip())))
++    except (TypeError, ValueError):
++        return None
++
++
++def _contract_is_live_signed(contract: dict[str, Any]) -> bool:
++    return str(contract.get("status") or "") == "signed" and not contract.get("deleted_at")
++
++
++def _contract_belongs_to(contract: dict[str, Any], *, employee_email: str, employee_request_id: str) -> bool:
++    request_id = str(_contract_payload_value(contract, "employee_request_id", "employeeRequestId") or "").strip()
++    email = str(contract.get("employee_email") or "").strip().lower()
++    if employee_request_id and request_id:
++        return request_id == employee_request_id
++    return bool(employee_email) and email == employee_email
++
++
++def _signed_contract_sort_key(contract: dict[str, Any]) -> tuple[datetime, str]:
++    stamp = _pg_ts(contract.get("signed_at")) or datetime.min.replace(tzinfo=KST)
++    return stamp, str(contract.get("id") or "")
++
++
++def _employee_signed_contracts(
++    contracts: list[dict[str, Any]], *, employee_email: str, employee_request_id: str
++) -> list[dict[str, Any]]:
++    """직원의 서명 완료 계약서(삭제 제외)를 서명 시각 오름차순으로."""
++    email = str(employee_email or "").strip().lower()
++    request_id = str(employee_request_id or "").strip()
++    rows = [
++        row
++        for row in contracts
++        if _contract_is_live_signed(row)
++        and _contract_belongs_to(row, employee_email=email, employee_request_id=request_id)
++    ]
++    return sorted(rows, key=_signed_contract_sort_key)
++
++
++def _employment_terms_from_contract(contract: dict[str, Any]) -> dict[str, Any]:
++    # 봉인 스냅샷이 있으면 그것을 읽는다 — 서명 이후 붙은 메타가 섞이지 않는다.
++    source = contract.get("signed_snapshot") if isinstance(contract.get("signed_snapshot"), dict) else contract
++    terms: dict[str, Any] = {}
++    for snake, camel in EMPLOYMENT_SNAPSHOT_FIELDS:
++        value = _contract_payload_value(source, snake, camel)
++        if snake in EMPLOYMENT_AMOUNT_FIELDS:
++            terms[snake] = _employment_amount(value)
++        else:
++            terms[snake] = str(value).strip() if value is not None else ""
++    return terms
++
++
++def _derive_current_employment(
++    contracts: list[dict[str, Any]], *, employee_email: str, employee_request_id: str
++) -> dict[str, Any] | None:
++    """최신 서명 근로·용역 계약 1건에서 고용조건을 만든다. 비밀유지 서약은 원본이 아니다."""
++    sources = [
++        row
++        for row in _employee_signed_contracts(
++            contracts, employee_email=employee_email, employee_request_id=employee_request_id
++        )
++        if str(row.get("contract_type") or "") in EMPLOYMENT_SOURCE_CONTRACT_TYPES
++    ]
++    if not sources:
++        return None
++    latest = sources[-1]
++    employment = _employment_terms_from_contract(latest)
++    return {
++        "contract_id": str(latest.get("id") or ""),
++        "signed_at": str(latest.get("signed_at") or ""),
++        "effective_from": employment.get("start_date") or str(latest.get("signed_at") or ""),
++        "employment": employment,
 +    }
 +
 +
-+def _cut_at_stop_label(value: str, own_labels: tuple[str, ...]) -> str:
-+    own = {label.replace(" ", "") for label in own_labels}
-+    end = len(value)
-+    for label in STOP_LABELS:
-+        if label in own:
-+            continue
-+        match = re.search(_spaced(label), value)
-+        if match and match.start() > 0:
-+            end = min(end, match.start())
-+    return value[:end]
++def _employment_snapshot_is_current(employee: dict[str, Any], derived: dict[str, Any] | None) -> bool:
++    if derived is None:
++        return True
++    return (
++        str(employee.get("current_employment_contract_id") or "") == derived["contract_id"]
++        and employee.get("current_employment") == derived["employment"]
++        and not employee.get("current_employment_error")
++    )
 +
 +
-+def _labelled_value(lines: list[str], field: str) -> tuple[str, str, float] | None:
-+    """(value, source line, factor) for the first line carrying the field label."""
-+    labels = FIELD_LABELS[field]
-+    for index, line in enumerate(lines):
-+        for label in labels:
-+            for match in re.finditer(_spaced(label), line):
-+                before = re.sub(r"\s+", "", line[:match.start()])
-+                if any(before.endswith(prefix) for prefix in EXCLUDED_PREFIXES.get(field, ())):
-+                    continue
-+                rest = re.sub(r"^\s*(?:\([^)]*\))?\s*[:：]?\s*", "", line[match.end():])
-+                value = _clean(_cut_at_stop_label(rest, labels))
-+                if value:
-+                    return value, _snippet(line), 1.0
-+                # 표 형식이라 값이 다음 줄에 있는 경우. 다음 줄이 또 다른 항목이면 포기한다.
-+                following = next((item for item in lines[index + 1:] if item.strip()), "")
-+                compact = re.sub(r"\s+", "", following)
-+                if following and not any(compact.startswith(stop) for stop in (*STOP_LABELS, "등록번호", "사업장")):
-+                    return _clean(_cut_at_stop_label(following, labels)), _snippet(following), 0.8
-+                return "", _snippet(line), 1.0
-+    return None
-+
-+
-+# --- 검증 규칙 ---------------------------------------------------------------
-+def business_registration_checksum_ok(digits: str) -> bool:
-+    """국세청 사업자등록번호 검증번호(10번째 자리)."""
-+    if not re.fullmatch(r"\d{10}", digits):
++def _append_employment_audit(
++    *,
++    tenant_id: str,
++    business_id: str,
++    actor: str,
++    action: str,
++    resource_type: str,
++    resource_id: str,
++    details: dict[str, Any],
++) -> bool:
++    """감사로그 한 줄. DB 는 ops 서비스의 _insert_audit_log_conn 을 재사용한다. 예외를 올리지 않는다."""
++    entry_details = {**details, "tenant_id": tenant_id}
++    try:
++        if _db_available():
++            return bool(_run_db(_db_insert_employment_audit(
++                business_id=business_id, actor=actor, action=action,
++                resource_type=resource_type, resource_id=resource_id, details=entry_details,
++            )))
++        row = {
++            "id": f"aud-{uuid4().hex[:12]}",
++            "business_id": business_id,
++            "actor": actor,
++            "action": action,
++            "resource_type": resource_type,
++            "resource_id": resource_id,
++            "details": entry_details,
++            "created_at": _now(),
++        }
++        _write_file_rows(EMPLOYMENT_AUDIT_LOG, [row] + _read_file_rows(EMPLOYMENT_AUDIT_LOG))
++        return True
++    except Exception as exc:  # noqa: BLE001 — 감사로그 실패가 서명·급여 저장을 되돌리면 안 된다
++        logger.error("employment audit not recorded: action=%s resource=%s err=%s", action, resource_id, exc)
 +        return False
-+    weights = (1, 3, 7, 1, 3, 7, 1, 3, 5)
-+    numbers = [int(char) for char in digits]
-+    total = sum(number * weight for number, weight in zip(numbers, weights))
-+    total += (numbers[8] * 5) // 10
-+    return (10 - total % 10) % 10 == numbers[9]
 +
 +
-+def normalize_registration_no(raw: str) -> tuple[str | None, bool, str | None]:
-+    """Return (formatted value, valid, reason)."""
-+    match = re.search(r"(?<!\d)(\d{3})\s*-?\s*(\d{2})\s*-?\s*(\d{5})(?!\d)", str(raw or ""))
-+    if not match:
-+        return None, False, "사업자등록번호 10자리를 읽지 못했습니다"
-+    digits = "".join(match.groups())
-+    formatted = f"{digits[:3]}-{digits[3:5]}-{digits[5:]}"
-+    if not business_registration_checksum_ok(digits):
-+        return formatted, False, "사업자등록번호 검증번호(체크섬)가 맞지 않습니다"
-+    return formatted, True, None
++async def _db_insert_employment_audit(**kwargs: Any) -> dict[str, Any]:
++    import asyncpg
 +
++    from app.services.yeoljeong_ops_service import _insert_audit_log_conn
 +
-+def normalize_opened_at(raw: str, *, today: date | None = None) -> tuple[str | None, bool, str | None]:
-+    match = re.search(r"(\d{4})\s*(?:년|[.\-/])\s*(\d{1,2})\s*(?:월|[.\-/])\s*(\d{1,2})", str(raw or ""))
-+    if not match:
-+        return None, False, "개업일 날짜 형식을 읽지 못했습니다"
++    conn = await asyncpg.connect(_db_url(), timeout=5)
 +    try:
-+        opened = date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
-+    except ValueError:
-+        return None, False, "존재하지 않는 날짜입니다"
-+    if opened > (today or datetime.now(KST).date()):
-+        return opened.isoformat(), False, "개업일이 미래 날짜입니다"
-+    return opened.isoformat(), True, None
++        return await _insert_audit_log_conn(conn, **kwargs)
++    finally:
++        await conn.close()
 +
 +
-+def _confidence(raw: Any) -> float:
-+    try:
-+        value = float(raw or 0.0)
-+    except (TypeError, ValueError):
-+        return 0.0
-+    if value > 1:
-+        value /= 100
-+    return max(0.0, min(value, 1.0))
++def _employment_audit_rows(tenant_id: str, business_id: str, request_id: str) -> list[dict[str, Any]]:
++    if _db_available():
++        from app.services import yeoljeong_ops_service as ops
 +
-+
-+def parse_registration_text(text: str, ocr_confidence: Any = 0.0, *, today: date | None = None) -> dict[str, dict[str, Any]]:
-+    """Extract suggestion fields from OCR text. Never invents a value."""
-+    base = _confidence(ocr_confidence)
-+    lines = [line for line in str(text or "").splitlines() if line.strip()]
-+    result: dict[str, dict[str, Any]] = {}
-+    if not lines:
-+        for field in (*AUTOFILL_FIELDS, *EXTRA_FIELDS):
-+            result[field] = _field(field, reason="OCR 결과에 글자가 없습니다")
-+        return result
-+
-+    for field in ("name", "representative", "address"):
-+        found = _labelled_value(lines, field)
-+        if not found:
-+            result[field] = _field(field, reason="등록증에서 해당 항목 표시를 찾지 못했습니다")
-+        elif not found[0]:
-+            result[field] = _field(field, source=found[1], reason="항목 표시는 있으나 값을 읽지 못했습니다")
-+        else:
-+            result[field] = _field(field, found[0], confidence=base * found[2], source=found[1], valid=True)
-+
-+    found = _labelled_value(lines, "registration_no")
-+    factor, source, raw = (found[2], found[1], found[0]) if found else (0.6, None, "")
-+    if not found or not raw:
-+        # 표시를 못 찾았으면 원문 전체에서 000-00-00000 모양이 정확히 한 종류일 때만 쓴다.
-+        candidates = {m.group(0) for m in re.finditer(r"(?<![\d-])\d{3}-\d{2}-\d{5}(?![\d-])", "\n".join(lines))}
-+        if len(candidates) == 1:
-+            raw = candidates.pop()
-+            source = _snippet(next(line for line in lines if raw in line))
-+            factor = 0.6
-+    value, valid, reason = normalize_registration_no(raw) if raw else (None, False, "사업자등록번호를 찾지 못했습니다")
-+    result["registration_no"] = _field("registration_no", value, confidence=base * factor, source=source, valid=valid, reason=reason)
-+
-+    found = _labelled_value(lines, "opened_at")
-+    if not found or not found[0]:
-+        result["opened_at"] = _field("opened_at", source=found[1] if found else None, reason="개업연월일을 찾지 못했습니다")
++        fetched = _run_db(ops.list_audit_logs(business_id, resource_type=EMPLOYMENT_AUDIT_RESOURCE, limit=1000))
++        rows = fetched if isinstance(fetched, list) else []
 +    else:
-+        value, valid, reason = normalize_opened_at(found[0], today=today)
-+        result["opened_at"] = _field("opened_at", value, confidence=base * found[2], source=found[1], valid=valid, reason=reason)
-+
-+    found = _labelled_value(lines, "corporate_registration_no")
-+    corp = re.search(r"(?<!\d)(\d{6})\s*-\s*(\d{7})(?!\d)", found[0]) if found and found[0] else None
-+    result["corporate_registration_no"] = (
-+        _field("corporate_registration_no", f"{corp.group(1)}-{corp.group(2)}", confidence=base * found[2], source=found[1], valid=True)
-+        if corp else _field("corporate_registration_no", reason="법인등록번호가 없거나 읽지 못했습니다")
-+    )
-+
-+    compact = re.sub(r"\s+", "", "\n".join(lines))
-+    tax = next(((marker, label) for marker, label in TAX_TYPES if marker in compact), None)
-+    result["tax_type"] = (
-+        _field("tax_type", tax[1], confidence=base, source=tax[0], valid=True)
-+        if tax else _field("tax_type", reason="과세유형 표시를 찾지 못했습니다")
-+    )
++        rows = [row for row in _read_file_rows(EMPLOYMENT_AUDIT_LOG) if row.get("business_id") == business_id]
++    result = []
++    for row in rows:
++        details = _payload_dict(row.get("details"))
++        if (
++            row.get("resource_type") == EMPLOYMENT_AUDIT_RESOURCE
++            and str(row.get("resource_id") or "") == request_id
++            and str(details.get("tenant_id") or "") == tenant_id
++        ):
++            result.append({**row, "details": details, "created_at": _iso(row.get("created_at"))})
 +    return result
 +
 +
-+def _audit_summary(suggested: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-+    return {
-+        field: {
-+            "found": item["value"] is not None,
-+            "valid": item["valid"],
-+            "value_length": len(str(item["value"])) if item["value"] is not None else 0,
-+        }
-+        for field, item in suggested.items()
-+    }
++def _find_employee_record(
++    user: dict[str, Any] | None, *, employee_email: str = "", employee_request_id: str = ""
++) -> dict[str, Any] | None:
++    email = str(employee_email or "").strip().lower()
++    request_id = str(employee_request_id or "").strip()
++    rows = [row for row in _read_hr("employee_join_requests", user) if str(row.get("status") or "").lower() == "approved"]
++    if request_id:
++        found = _find(rows, request_id)
++        if found:
++            return found
++    if email:
++        return next((row for row in rows if str(row.get("email") or "").strip().lower() == email), None)
++    return None
 +
 +
-+async def suggest_from_document(*, user: dict[str, Any], business_id: str, document_id: UUID) -> dict[str, Any]:
-+    document, business, data = await upload_svc.read_registration_document(
-+        user=user, business_id=business_id, document_id=document_id,
-+    )
-+    started = time.monotonic()
-+    error: str | None = None
-+    text, confidence = "", 0.0
-+    try:
-+        ocr = await local_ocr_bridge.ocr_extract(image_base64=base64.b64encode(data).decode("ascii"))
-+        text, confidence = str(ocr.get("text") or ""), ocr.get("confidence") or 0.0
-+        if ocr.get("error") and not text.strip():
-+            error = str(ocr["error"])[:200]
-+    except Exception as exc:  # noqa: BLE001 — OCR 실패는 손입력으로 계속한다
-+        error = f"OCR 실행 실패: {str(exc)[:200]}"
-+    elapsed_ms = int((time.monotonic() - started) * 1000)
-+    if error:
-+        suggested = {field: _field(field, reason=error) for field in (*AUTOFILL_FIELDS, *EXTRA_FIELDS)}
-+    else:
-+        suggested = parse_registration_text(text, confidence)
-+
-+    current = {field: business.get(field) or "" for field in (*AUTOFILL_FIELDS, "tax_type")}
-+    for field, item in suggested.items():
-+        item["current"] = current.get(field)
-+        item["matches_current"] = item["value"] is not None and item["value"] == (current.get(field) or None)
-+
-+    audit_logged = True
-+    try:
-+        await upload_svc.record_registration_audit(
-+            user=user, business_id=business_id, document_id=document["id"],
-+            action="business_registration.ocr_suggest",
-+            details={
-+                "document_id": document["id"],
-+                "version": document.get("version"),
-+                "ocr_ok": error is None,
-+                "elapsed_ms": elapsed_ms,
-+                "text_length": len(text),
-+                "fields": _audit_summary(suggested),
-+                "error": error,
-+            },
-+        )
-+    except Exception:  # noqa: BLE001
-+        audit_logged = False
-+        logger.warning("business registration OCR audit insert failed business=%s document=%s", business_id, document["id"])
-+
-+    return {
-+        "document": document,
-+        "business_id": business_id,
-+        "ocr": {"ok": error is None, "error": error, "confidence": _confidence(confidence), "elapsed_ms": elapsed_ms, "text_length": len(text)},
-+        "suggested": suggested,
-+        "current": current,
-+        "needs_registration_info": business.get("needs_registration_info", False),
-+        "missing_registration_fields": business.get("missing_registration_fields", []),
-+        "applied": False,
-+        "audit_logged": audit_logged,
-+    }
-diff --git a/app/services/obys_upload_service.py b/app/services/obys_upload_service.py
-index b9d7c2be..f06cc756 100644
---- a/app/services/obys_upload_service.py
-+++ b/app/services/obys_upload_service.py
-@@ -27,8 +27,14 @@ CATEGORY_EXTENSIONS = {
-     "purchase": {".csv", ".xlsx", ".pdf", ".jpg", ".jpeg", ".png"},
-     "transaction": {".csv", ".xlsx"},
-     "card": {".csv", ".xlsx", ".pdf"},
-+    # 사업자등록증 원본. 원장이 아니므로 LEDGER_CATEGORIES 에 넣지 않는다 —
-+    # create_upload/_canonical/_raw_rows 경로를 타지 않는다.
-+    "business_registration": {".pdf", ".jpg", ".jpeg", ".png"},
- }
- LEDGER_CATEGORIES = frozenset({"sales", "purchase", "transaction", "card"})
-+REGISTRATION_CATEGORY = "business_registration"
-+# seed/마이그레이션 113 이 채워 둔 자리표시자. 값이 아니라 "미비" 상태다.
-+REGISTRATION_PLACEHOLDERS = frozenset({"-", "미등록", "기초등록 필요"})
- GENERIC_LEDGER_CATEGORIES = frozenset({"sales", "purchase", "transaction"})
- MIME_BY_EXTENSION = {
-     ".csv": {"text/csv", "application/csv", "text/plain", "application/vnd.ms-excel"},
-@@ -260,12 +266,38 @@ async def _require_business(conn: Any, tenant_id: UUID, business_id: str) -> Non
-         raise HTTPException(status_code=404, detail="현재 테넌트의 사업자를 찾을 수 없습니다")
- 
- 
-+def is_registration_placeholder(value: Any) -> bool:
-+    text = str(value or "").strip()
-+    return not text or text in REGISTRATION_PLACEHOLDERS
++def _employment_changes(before: dict[str, Any], after: dict[str, Any]) -> dict[str, dict[str, Any]]:
++    keys = sorted(set(before) | set(after))
++    return {key: {"before": before.get(key), "after": after.get(key)} for key in keys if before.get(key) != after.get(key)}
 +
 +
-+def registration_info_gaps(item: dict[str, Any], fields: tuple[str, ...]) -> list[str]:
-+    """Blank placeholder values in place and return the fields still missing."""
-+    missing: list[str] = []
-+    for field in fields:
-+        if is_registration_placeholder(item.get(field)):
-+            item[field] = ""
-+            missing.append(field)
-+    return missing
-+
-+
-+REGISTRY_REQUIRED_FIELDS = ("registration_no", "representative", "opened_at", "address")
-+
-+
-+def _registry_business(row: Any) -> dict[str, Any]:
-+    item = dict(row)
-+    missing = registration_info_gaps(item, REGISTRY_REQUIRED_FIELDS)
-+    item["needs_registration_info"] = bool(missing)
-+    item["missing_registration_fields"] = missing
-+    return item
-+
-+
- async def list_businesses(*, user: dict[str, Any]) -> list[dict[str, Any]]:
-     tenant_id = _tenant(user)
-     conn = await _connect()
-     try:
-         rows = await conn.fetch("SELECT id,entity_type,name,registration_no,representative,tax_type,opened_at,address,memo,created_at,updated_at FROM yeoljeong_businesses WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY sort_order,id", tenant_id)
--        return [dict(row) for row in rows]
-+        return [_registry_business(row) for row in rows]
-     finally:
-         await conn.close()
- 
-@@ -1040,3 +1072,226 @@ async def reverse_journal(*, user: dict[str, Any], voucher_id: UUID) -> dict[str
-         return dict(reversal)
-     finally:
-         await conn.close()
-+
-+
-+# ---------------------------------------------------------------------------
-+# 사업자등록증 원본 (AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930)
-+#
-+# 원본은 UPLOAD_ROOT/<tenant>/<business 해시>/business_registration/<uuid><ext>
-+# 에 두고 yeoljeong_business_registration_documents 에 버전으로 쌓는다.
-+# 이전 버전은 지우지 않는다(재발급·정정 이력). 최신 활성 1건이 현행이다.
-+# ---------------------------------------------------------------------------
-+REGISTRATION_DOCUMENT_COLUMNS = (
-+    "id,business_id,version,original_filename,content_type,extension,"
-+    "byte_size,sha256,created_by,created_at"
-+)
-+
-+
-+def _require_admin(user: dict[str, Any]) -> None:
-+    membership = user.get("current_membership") or {}
-+    same_tenant = str(membership.get("tenant_id") or "") == str(user.get("tenant_id") or "")
-+    role = str(membership.get("role") or "").strip().lower()
-+    status = str(membership.get("status") or "").strip().lower()
-+    if not same_tenant or status != "active" or role not in {"owner", "admin"}:
-+        raise HTTPException(status_code=403, detail="사업자등록증은 관리자만 다룰 수 있습니다")
-+
-+
-+def _registration_directory(tenant_id: UUID, business_id: str) -> Path:
-+    return UPLOAD_ROOT / str(tenant_id) / hashlib.sha256(business_id.encode()).hexdigest()[:32] / REGISTRATION_CATEGORY
-+
-+
-+def _registration_document(row: Any, *, current_id: Any = None) -> dict[str, Any]:
-+    item = dict(row)
-+    item["id"] = str(item["id"])
-+    item["uploaded_by"] = item.get("created_by")
-+    item["uploaded_at"] = item.get("created_at")
-+    item["is_current"] = current_id is not None and str(current_id) == item["id"]
-+    return item
-+
-+
-+def validate_registration_file(filename: str, content_type: str, data: bytes) -> tuple[str, str]:
-+    """Reuse the ledger validator; any rejection of the file itself is a 400."""
-+    try:
-+        return _validate_file(REGISTRATION_CATEGORY, filename, content_type, data)
-+    except HTTPException as exc:
-+        raise HTTPException(status_code=400, detail=exc.detail) from exc
-+
-+
-+async def _audit(conn: Any, *, business_id: str, user: dict[str, Any], action: str, resource_id: str, details: dict[str, Any]) -> None:
-+    from app.services.yeoljeong_ops_service import _insert_audit_log_conn
-+
-+    await _insert_audit_log_conn(
-+        conn, business_id=business_id, actor=_actor(user), action=action,
-+        resource_type="business_registration_document", resource_id=resource_id, details=details,
-+    )
-+
-+
-+async def create_registration_document(
-+    *, user: dict[str, Any], business_id: str, filename: str, content_type: str, data: bytes,
++def _sync_employee_employment(
++    employee: dict[str, Any], user: dict[str, Any] | None, *, actor: str, trigger: str
 +) -> dict[str, Any]:
-+    _require_admin(user)
-+    tenant_id = _tenant(user)
-+    original, ext = validate_registration_file(filename, content_type, data)
-+    digest, document_id = hashlib.sha256(data).hexdigest(), uuid4()
-+    target = _registration_directory(tenant_id, business_id) / f"{document_id.hex}{ext}"
-+    written = False
-+    conn = await _connect()
-+    try:
-+        await _require_business(conn, tenant_id, business_id)
-+        async with conn.transaction():
-+            # 같은 사업자의 버전 번호를 직렬화한다.
-+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"registration:{tenant_id}:{business_id}")
-+            latest = await conn.fetchrow(
-+                f"""SELECT {REGISTRATION_DOCUMENT_COLUMNS} FROM yeoljeong_business_registration_documents
-+                     WHERE tenant_id=$1 AND business_id=$2 AND deleted_at IS NULL
-+                     ORDER BY version DESC LIMIT 1""",
-+                tenant_id, business_id,
-+            )
-+            if latest and latest["sha256"] == digest:
-+                result = _registration_document(latest, current_id=latest["id"])
-+                result["status"] = "duplicate"
-+                return result
-+            # 삭제된 버전 번호도 재사용하지 않는다.
-+            version = await conn.fetchval(
-+                "SELECT COALESCE(MAX(version),0)+1 FROM yeoljeong_business_registration_documents WHERE tenant_id=$1 AND business_id=$2",
-+                tenant_id, business_id,
-+            )
-+            target.parent.mkdir(parents=True, exist_ok=True)
-+            target.write_bytes(data)
-+            written = True
-+            row = await conn.fetchrow(
-+                f"""INSERT INTO yeoljeong_business_registration_documents
-+                        (id,tenant_id,business_id,version,original_filename,stored_filename,content_type,
-+                         extension,byte_size,sha256,created_by)
-+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-+                     RETURNING {REGISTRATION_DOCUMENT_COLUMNS}""",
-+                document_id, tenant_id, business_id, version, original, target.name,
-+                (content_type or "").split(";", 1)[0].strip().lower(), ext, len(data), digest, _actor(user),
-+            )
-+            await _audit(
-+                conn, business_id=business_id, user=user, action="business_registration.upload",
-+                resource_id=str(document_id),
-+                details={"version": version, "sha256": digest, "byte_size": len(data), "extension": ext},
-+            )
-+        result = _registration_document(row, current_id=document_id)
-+        result["status"] = "stored"
-+        return result
-+    except Exception:
-+        if written and target.exists():
-+            target.unlink()
-+        raise
-+    finally:
-+        await conn.close()
-+
-+
-+async def list_registration_documents(*, user: dict[str, Any], business_id: str) -> dict[str, Any]:
-+    _require_admin(user)
-+    tenant_id = _tenant(user)
-+    conn = await _connect()
-+    try:
-+        await _require_business(conn, tenant_id, business_id)
-+        rows = await conn.fetch(
-+            f"""SELECT {REGISTRATION_DOCUMENT_COLUMNS} FROM yeoljeong_business_registration_documents
-+                 WHERE tenant_id=$1 AND business_id=$2 AND deleted_at IS NULL
-+                 ORDER BY version DESC LIMIT 100""",
-+            tenant_id, business_id,
-+        )
-+    finally:
-+        await conn.close()
-+    current_id = rows[0]["id"] if rows else None
-+    documents = [_registration_document(row, current_id=current_id) for row in rows]
-+    return {"documents": documents, "current": documents[0] if documents else None, "count": len(documents)}
-+
-+
-+async def _registration_document_row(conn: Any, tenant_id: UUID, business_id: str, document_id: UUID) -> Any:
-+    await _require_business(conn, tenant_id, business_id)
-+    row = await conn.fetchrow(
-+        f"""SELECT {REGISTRATION_DOCUMENT_COLUMNS},stored_filename FROM yeoljeong_business_registration_documents
-+             WHERE id=$1 AND tenant_id=$2 AND business_id=$3 AND deleted_at IS NULL""",
-+        document_id, tenant_id, business_id,
++    """계약서에서 스냅샷을 다시 만든다. 바뀐 게 없으면 쓰지 않는다."""
++    tenant_id = _tenant_id(user)
++    request_id = str(employee.get("id") or "")
++    derived = _derive_current_employment(
++        _read_hr("contracts", user),
++        employee_email=str(employee.get("email") or ""),
++        employee_request_id=request_id,
 +    )
-+    if not row:
-+        raise HTTPException(status_code=404, detail="사업자등록증을 찾을 수 없습니다")
-+    return row
++    if derived is None:
++        # 원본이 없으면 기존 스냅샷도 지우지 않는다(이력 보존).
++        return {"status": "no_source", "employee_request_id": request_id}
++    if _employment_snapshot_is_current(employee, derived):
++        return {"status": "unchanged", "employee_request_id": request_id, "contract_id": derived["contract_id"]}
 +
-+
-+def _registration_file(tenant_id: UUID, business_id: str, stored_filename: str) -> Path:
-+    path = _registration_directory(tenant_id, business_id) / stored_filename
-+    if not path.is_file() or UPLOAD_ROOT.resolve() not in path.resolve().parents:
-+        raise HTTPException(status_code=404, detail="사업자등록증 원본 파일을 찾을 수 없습니다")
-+    return path
-+
-+
-+def registration_download_name(original_filename: str, version: int, extension: str) -> str:
-+    stem = Path(str(original_filename or "")).stem
-+    stem = re.sub(r"[^0-9A-Za-z._가-힣-]+", "_", stem).strip("._")[:80] or "document"
-+    ext = extension if extension in CATEGORY_EXTENSIONS[REGISTRATION_CATEGORY] else ".bin"
-+    return f"사업자등록증_v{int(version)}_{stem}{ext}"
-+
-+
-+async def registration_document_download(
-+    *, user: dict[str, Any], business_id: str, document_id: UUID,
-+) -> tuple[Path, str, str]:
-+    _require_admin(user)
-+    tenant_id = _tenant(user)
-+    conn = await _connect()
-+    try:
-+        row = await _registration_document_row(conn, tenant_id, business_id, document_id)
-+    finally:
-+        await conn.close()
-+    path = _registration_file(tenant_id, business_id, row["stored_filename"])
-+    return path, registration_download_name(row["original_filename"], row["version"], row["extension"]), row["content_type"]
-+
-+
-+async def read_registration_document(
-+    *, user: dict[str, Any], business_id: str, document_id: UUID,
-+) -> tuple[dict[str, Any], dict[str, Any], bytes]:
-+    """Return (document, current business registry values, original bytes) for OCR."""
-+    _require_admin(user)
-+    tenant_id = _tenant(user)
-+    conn = await _connect()
-+    try:
-+        row = await _registration_document_row(conn, tenant_id, business_id, document_id)
-+        business = await conn.fetchrow(
-+            "SELECT id,name,registration_no,representative,tax_type,opened_at,address FROM yeoljeong_businesses WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL",
-+            business_id, tenant_id,
-+        )
-+    finally:
-+        await conn.close()
-+    if not business:
-+        raise HTTPException(status_code=404, detail="현재 테넌트의 사업자를 찾을 수 없습니다")
-+    data = _registration_file(tenant_id, business_id, row["stored_filename"]).read_bytes()
-+    document = _registration_document(row)
-+    document.pop("stored_filename", None)
-+    return document, _registry_business(business), data
-+
-+
-+async def record_registration_audit(
-+    *, user: dict[str, Any], business_id: str, document_id: str, action: str, details: dict[str, Any],
-+) -> None:
-+    conn = await _connect()
-+    try:
-+        await _audit(conn, business_id=business_id, user=user, action=action, resource_id=document_id, details=details)
-+    finally:
-+        await conn.close()
-+
-+
-+async def delete_registration_document(*, user: dict[str, Any], business_id: str, document_id: UUID) -> bool:
-+    """Soft delete only — the original file stays on disk as the evidence copy."""
-+    _require_admin(user)
-+    tenant_id = _tenant(user)
-+    conn = await _connect()
-+    try:
-+        await _require_business(conn, tenant_id, business_id)
-+        async with conn.transaction():
-+            command = await conn.execute(
-+                """UPDATE yeoljeong_business_registration_documents SET deleted_at=NOW(),deleted_by=$4
-+                     WHERE id=$1 AND tenant_id=$2 AND business_id=$3 AND deleted_at IS NULL""",
-+                document_id, tenant_id, business_id, _actor(user),
-+            )
-+            if command.endswith(" 0"):
-+                raise HTTPException(status_code=404, detail="사업자등록증을 찾을 수 없습니다")
-+            await _audit(conn, business_id=business_id, user=user, action="business_registration.delete", resource_id=str(document_id), details={})
-+        return True
-+    finally:
-+        await conn.close()
-diff --git a/app/services/yeoljeong_finance_service.py b/app/services/yeoljeong_finance_service.py
-index 02c1773d..352e71d4 100644
---- a/app/services/yeoljeong_finance_service.py
-+++ b/app/services/yeoljeong_finance_service.py
-@@ -377,8 +377,8 @@ CANONICAL_BUSINESSES: list[dict[str, Any]] = [
-         "id": "biz-sungshin",
-         "entityType": "individual",
-         "name": "열정국밥 성신여대점",
--        "registrationNo": "기초등록 필요",
--        "representative": "미등록",
-+        "registrationNo": "",
-+        "representative": "",
-         "taxType": "일반과세",
-         "openedAt": "",
-         "address": "",
-@@ -388,8 +388,8 @@ CANONICAL_BUSINESSES: list[dict[str, Any]] = [
-         "id": "biz-eonni-naengmyeon",
-         "entityType": "individual",
-         "name": "언니냉면",
--        "registrationNo": "기초등록 필요",
--        "representative": "미등록",
-+        "registrationNo": "",
-+        "representative": "",
-         "taxType": "일반과세",
-         "openedAt": "",
-         "address": "",
-@@ -414,6 +414,9 @@ CANONICAL_BRANCHES: list[dict[str, Any]] = [
-     {"id": "branch-gangbuk-mia", "name": "열정국밥_미아점", "businessId": "biz-mia", "status": "active", "phone": "", "address": "서울특별시 강북구 도봉로76길 42, 1층 점포일부(좌측)"},
- ]
- 
-+# 사업자등록증 기준 미비 여부를 판정하는 항목(설정 JSON 키). 자리표시자는 값이 아니라
-+# 상태이므로 needs_registration_info / missing_registration_fields 로만 내보낸다.
-+BUSINESS_REGISTRATION_FIELDS = ("registrationNo", "representative", "openedAt", "address")
- CANONICAL_BUSINESS_IDS = {item["id"] for item in CANONICAL_BUSINESSES}
- CANONICAL_BRANCH_NAMES = {item["name"] for item in CANONICAL_BRANCHES}
- MIA_BUSINESS_ID = "biz-mia"
-@@ -1301,15 +1304,18 @@ def _merge_by_id(current_items: Any, default_items: list[dict[str, Any]]) -> lis
- 
- 
- def _canonicalize_ui_settings(settings: dict[str, Any]) -> dict[str, Any]:
-+    from app.services.obys_upload_service import registration_info_gaps
-+
-     businesses = _merge_by_id(settings.get("businesses"), CANONICAL_BUSINESSES)
-     canonical_names = {item["id"]: item["name"] for item in CANONICAL_BUSINESSES}
-     for item in businesses:
-         item["entityType"] = item.get("entityType") or "individual"
--        if item["id"] in canonical_names:
--            item["name"] = canonical_names[item["id"]]
--        else:
--            item["name"] = str(item.get("name") or "").strip()
-+        # 저장된 상호가 이긴다. canonical 상호는 저장값이 비었을 때만 쓴다(id 는 그대로).
-+        item["name"] = str(item.get("name") or "").strip() or canonical_names.get(item["id"], "")
-         item["status"] = item.get("status") or "active"
-+        missing = registration_info_gaps(item, BUSINESS_REGISTRATION_FIELDS)
-+        item["needs_registration_info"] = bool(missing)
-+        item["missing_registration_fields"] = missing
- 
-     branches = _merge_by_id(settings.get("branches"), CANONICAL_BRANCHES)
-     canonical_branch_names = {item["id"]: item["name"] for item in CANONICAL_BRANCHES}
-@@ -1318,7 +1324,7 @@ def _canonicalize_ui_settings(settings: dict[str, Any]) -> dict[str, Any]:
-     normalized_branches: list[dict[str, Any]] = []
-     for item in branches:
-         if item["id"] in canonical_branch_names:
--            item["name"] = canonical_branch_names[item["id"]]
-+            item["name"] = str(item.get("name") or "").strip() or canonical_branch_names[item["id"]]
-             item["businessId"] = canonical_branch_businesses[item["id"]]
-         else:
-             item["name"] = str(item.get("name") or "").strip()
-diff --git a/app/static/apps/obys/index.html b/app/static/apps/obys/index.html
-index 98cc066b..7d1107c1 100644
---- a/app/static/apps/obys/index.html
-+++ b/app/static/apps/obys/index.html
-@@ -4265,9 +4265,10 @@
-                     <input name="address" placeholder="사업자등록증 기준 주소">
-                   </label>
-                   <label class="span-2">사업자등록증 파일
--                    <input name="registrationDocument" type="file" accept=".pdf,image/*">
--                    <span class="field-note">업로드 파일은 OCR/원본대조 대상입니다. 현재 화면에서는 파일명과 보완 메모를 등록 기록에 남깁니다.</span>
-+                    <input name="registrationDocument" type="file" accept=".pdf,.jpg,.jpeg,.png">
-+                    <span class="field-note">파일을 고르면 원본을 서버에 보관(버전 이력·sha256)하고 OCR 제안을 보여줍니다. [적용]을 누른 항목만 폼에 채워지며, 저장은 [사업자 저장]으로 합니다. 업로드·OCR 이 실패해도 손입력으로 계속할 수 있습니다.</span>
-                   </label>
-+                  <div class="span-2" id="businessRegistrationOcrPanel" data-registration-ocr-panel hidden></div>
-                   <label class="span-2">메모
-                     <textarea name="memo" placeholder="세무대리인, 신고 특이사항, 법인/개인 구분, 서류 보완사항"></textarea>
-                   </label>
-@@ -5389,8 +5390,8 @@
-           id: "biz-sungshin",
-           entityType: "individual",
-           name: "열정국밥 성신여대점",
--          registrationNo: "기초등록 필요",
--          representative: "미등록",
-+          registrationNo: "",
-+          representative: "",
-           taxType: "일반과세",
-           openedAt: "",
-           address: "",
-@@ -6482,7 +6483,7 @@
-       if (foodRate > 0.38) alerts.push(["식재료율이 38%를 초과했습니다.", "bad"]);
-       if (laborRate > 0.28) alerts.push(["인건비율이 28%를 초과했습니다.", "bad"]);
-       if (!scopedEntries().length) alerts.push(["이번 달 거래 데이터가 없습니다.", "warn"]);
--      if (settings().businesses.some(item => !item.registrationNo || item.registrationNo === "기초등록 필요")) alerts.push(["사업자등록번호 미등록 사업자가 있습니다.", "warn"]);
-+      if (settings().businesses.some(item => businessNeedsRegistrationInfo(item))) alerts.push(["사업자등록번호 미등록 사업자가 있습니다.", "warn"]);
-       if (!settings().accounts.length) alerts.push(["은행 계좌 기초등록이 필요합니다.", "warn"]);
-       if ((settings().integrations || []).some(item => item.status === "blocked")) alerts.push(["외부계정 자동화 연결 확인이 필요합니다.", "warn"]);
-       if (!alerts.length) alerts.push(["현재 월마감 위험 신호가 없습니다.", "good"]);
-@@ -8639,10 +8640,28 @@
- 
-     function businessCompleteness(item) {
-       const required = [item.name, item.registrationNo, item.representative, item.taxType, item.address];
--      const complete = required.filter(value => String(value || "").trim()).length;
-+      const complete = required.filter(value => !isBlankOrPlaceholder(value)).length;
-       return Math.round((complete / required.length) * 100);
-     }
- 
-+    const BUSINESS_REGISTRATION_FIELDS = ["registrationNo", "representative", "openedAt", "address"];
-+
-+    function businessMissingRegistrationFields(item) {
-+      return BUSINESS_REGISTRATION_FIELDS.filter(field => isBlankOrPlaceholder(item?.[field]));
-+    }
-+
-+    function businessNeedsRegistrationInfo(item) {
-+      // 서버가 내려준 플래그가 기준이다. 로컬 수정 직후에는 같은 규칙으로 다시 계산한다.
-+      return typeof item?.needs_registration_info === "boolean"
-+        ? item.needs_registration_info
-+        : businessMissingRegistrationFields(item).length > 0;
-+    }
-+
-+    function businessRegistrationNoHtml(item) {
-+      if (isBlankOrPlaceholder(item?.registrationNo)) return badgeHtml("기초등록 필요", "warn");
-+      return escapeHtml(item.registrationNo);
-+    }
-+
-     function businessPageSyncBadges() {
-       if (els.businessPageEditBadge) {
-         const editing = els.businessPageForm?.dataset.editId;
-@@ -8660,6 +8679,7 @@
-       if (!els.businessPageForm) return;
-       delete els.businessPageForm.dataset.editId;
-       els.businessPageForm.reset();
-+      resetBusinessRegistrationOcr(els.businessPageForm);
-       businessPageSyncBadges();
-       els.businessPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
-     }
-@@ -8684,6 +8704,8 @@
-       els.businessPageForm.openedAt.value = item.openedAt || "";
-       els.businessPageForm.address.value = item.address || "";
-       els.businessPageForm.memo.value = item.memo || "";
-+      resetBusinessRegistrationOcr(els.businessPageForm);
-+      loadBusinessRegistrationCurrent(els.businessPageForm, item.id).catch(() => {});
-       setSelectedSettingsBusinessId(item.id);
-       businessPageSyncBadges();
-       els.businessPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
-@@ -8702,13 +8724,146 @@
-       els.branchPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
-     }
- 
-+    const BUSINESS_OCR_FIELDS = [
-+      ["name", "name", "상호"],
-+      ["registration_no", "registrationNo", "사업자등록번호"],
-+      ["representative", "representative", "대표자"],
-+      ["opened_at", "openedAt", "개업일"],
-+      ["address", "address", "사업장 주소"],
-+      ["corporate_registration_no", "", "법인등록번호(참고)"],
-+      ["tax_type", "", "과세유형(참고)"]
-+    ];
-+
-+    function businessRegistrationOcrPanel(form) {
-+      return form?.querySelector("[data-registration-ocr-panel]") || null;
-+    }
-+
-+    function resetBusinessRegistrationOcr(form) {
-+      if (!form) return;
-+      ["registrationDocumentId", "registrationDocumentVersion", "registrationDocumentSha256", "registrationDocumentName", "registrationDocumentUploadedAt"].forEach(key => delete form.dataset[key]);
-+      form._registrationOcr = null;
-+      const panel = businessRegistrationOcrPanel(form);
-+      if (panel) {
-+        panel.hidden = true;
-+        panel.innerHTML = "";
-+      }
-+    }
-+
-+    function businessRegistrationDocumentRef(form) {
-+      if (!form?.dataset.registrationDocumentId) return null;
-+      return {
-+        id: form.dataset.registrationDocumentId,
-+        version: Number(form.dataset.registrationDocumentVersion || 0),
-+        sha256: form.dataset.registrationDocumentSha256 || "",
-+        originalFilename: form.dataset.registrationDocumentName || "",
-+        uploadedAt: form.dataset.registrationDocumentUploadedAt || ""
-+      };
-+    }
-+
-+    function renderBusinessRegistrationOcr(form, state) {
-+      const panel = businessRegistrationOcrPanel(form);
-+      if (!panel) return;
-+      panel.hidden = false;
-+      const doc = state.document;
-+      const docLine = doc
-+        ? `<div class="settings-note">원본 보관 v${escapeHtml(doc.version)} · ${escapeHtml(doc.original_filename || "")} · ${Number(doc.byte_size || 0).toLocaleString("ko-KR")} bytes · sha256 ${escapeHtml(String(doc.sha256 || "").slice(0, 16))}…${doc.status === "duplicate" ? " · 최신본과 동일 파일" : ""}</div>`
-+        : "";
-+      const message = state.message ? `<div class="settings-note">${badgeHtml(state.messageLabel || "안내", state.messageClass || "info")} ${escapeHtml(state.message)}</div>` : "";
-+      const suggestion = state.suggestion;
-+      let table = "";
-+      if (suggestion?.suggested) {
-+        const rows = BUSINESS_OCR_FIELDS.map(([key, formField, label]) => {
-+          const item = suggestion.suggested[key] || {};
-+          const current = formField ? String(form[formField]?.value || "") : String(item.current || "");
-+          const ocrValue = item.value == null
-+            ? `<span class="muted">읽지 못함${item.reason ? ` · ${escapeHtml(item.reason)}` : ""}</span>`
-+            : `${escapeHtml(item.value)}${item.valid ? "" : ` ${badgeHtml(item.reason || "검증 실패", "bad")}`}<br><span class="muted">신뢰도 ${Math.round(Number(item.confidence || 0) * 100)}%</span>`;
-+          const canApply = Boolean(formField && item.autofill_candidate);
-+          const action = canApply
-+            ? `<button type="button" data-apply-registration-ocr="${escapeHtml(key)}">적용</button>`
-+            : `<span class="muted">${formField ? "적용 불가" : "참고"}</span>`;
-+          return `<tr><td>${escapeHtml(label)}</td><td>${ocrValue}</td><td>${escapeHtml(current || "-")}</td><td>${action}</td></tr>`;
-+        }).join("");
-+        table = `<table><thead><tr><th>항목</th><th>OCR 값</th><th>현재 값</th><th>적용</th></tr></thead><tbody>${rows}</tbody></table>`;
-+      }
-+      panel.innerHTML = `${docLine}${message}${table}`;
-+    }
-+
-+    function applyBusinessRegistrationOcr(form, key) {
-+      const suggestion = form?._registrationOcr;
-+      const entry = BUSINESS_OCR_FIELDS.find(([field]) => field === key);
-+      const item = suggestion?.suggested?.[key];
-+      if (!entry || !entry[1] || !item?.autofill_candidate || item.value == null) return;
-+      form[entry[1]].value = item.value;
-+      renderBusinessRegistrationOcr(form, { document: suggestion.document, suggestion, message: `${entry[2]} 에 OCR 값을 채웠습니다. [사업자 저장]을 눌러야 저장됩니다.`, messageLabel: "적용", messageClass: "good" });
-+    }
-+
-+    async function loadBusinessRegistrationCurrent(form, businessId) {
-+      // 문서 참조의 원본은 서버 표(business_id 기준)다. settings JSON 의 registrationDocument 는
-+      // DB 모드에서 다시 읽을 때 남지 않으므로, 수정 화면을 열 때 현행본을 서버에서 읽는다.
-+      if (!form || !businessId || !canManageSettings()) return;
-+      const payload = await financeApi(`/businesses/${encodeURIComponent(businessId)}/registration-document`);
-+      if (form.dataset.editId !== businessId || form.dataset.registrationDocumentId) return;
-+      const current = payload.current;
-+      renderBusinessRegistrationOcr(form, current
-+        ? { message: `보관된 현행 등록증 v${current.version} · ${current.original_filename || ""} · 전체 ${payload.count}개 버전`, messageLabel: "원본", messageClass: "good" }
-+        : { message: "보관된 사업자등록증이 없습니다. 파일을 고르면 원본을 보관하고 OCR 제안을 보여줍니다.", messageLabel: "원본", messageClass: "warn" });
-+    }
-+
-+    async function handleBusinessRegistrationDocument(form) {
-+      const file = form?.registrationDocument?.files?.[0];
-+      resetBusinessRegistrationOcr(form);
-+      if (!file) return;
-+      const businessId = form.dataset.editId || "";
-+      const fail = (message, doc = null) => renderBusinessRegistrationOcr(form, { document: doc, message, messageLabel: "실패", messageClass: "warn" });
-+      if (!canManageSettings()) return fail("사업자등록증 원본 보관·OCR 은 관리자만 할 수 있습니다. 손입력으로 계속하십시오.");
-+      if (!businessId) return fail("등록된 사업자를 목록에서 [수정]으로 연 뒤 등록증을 올리십시오. 신규 사업자는 먼저 저장하십시오.");
-+      if (file.size > 10 * 1024 * 1024) return fail("사업자등록증 파일은 10MB 이하여야 합니다.");
-+      renderBusinessRegistrationOcr(form, { message: "원본을 서버에 보관하는 중입니다…" });
-+      let doc = null;
-+      try {
-+        const formData = new FormData();
-+        formData.append("file", file);
-+        const response = await fetch(`/api/v1/yeoljeong-finance/businesses/${encodeURIComponent(businessId)}/registration-document`, {
-+          method: "POST",
-+          headers: apiAuthOnlyHeaders(),
-+          body: formData
-+        });
-+        const payload = await response.json().catch(() => ({}));
-+        if (!response.ok) throw new Error(payload.detail || payload.message || `UPLOAD ${response.status}`);
-+        doc = payload.document;
-+      } catch (err) {
-+        return fail(`원본 업로드 실패: ${err.message}. 손입력으로 계속할 수 있습니다.`);
-+      }
-+      if (form.dataset.editId !== businessId) return;
-+      form.dataset.registrationDocumentId = doc.id;
-+      form.dataset.registrationDocumentVersion = String(doc.version || "");
-+      form.dataset.registrationDocumentSha256 = doc.sha256 || "";
-+      form.dataset.registrationDocumentName = doc.original_filename || "";
-+      form.dataset.registrationDocumentUploadedAt = String(doc.created_at || "");
-+      renderBusinessRegistrationOcr(form, { document: doc, message: "OCR 제안을 받는 중입니다…" });
-+      try {
-+        const suggestion = await financeApi(
-+          `/businesses/${encodeURIComponent(businessId)}/registration-document/${encodeURIComponent(doc.id)}/ocr`,
-+          { method: "POST", timeoutMs: 130000 }
-+        );
-+        if (form.dataset.registrationDocumentId !== doc.id) return;
-+        suggestion.document = doc;
-+        form._registrationOcr = suggestion;
-+        if (!suggestion.ocr?.ok) {
-+          return renderBusinessRegistrationOcr(form, { document: doc, suggestion, message: `OCR 실패: ${suggestion.ocr?.error || "알 수 없는 오류"}. 원본은 보관되었습니다. 손입력으로 계속하십시오.`, messageLabel: "실패", messageClass: "warn" });
++    previous_contract_id = str(employee.get("current_employment_contract_id") or "")
++    previous = employee.get("current_employment") if isinstance(employee.get("current_employment"), dict) else {}
++    now = _now()
++    record = dict(employee)
++    record.update(
++        {
++            "current_employment": derived["employment"],
++            "current_employment_contract_id": derived["contract_id"],
++            "current_employment_signed_at": derived["signed_at"],
++            "current_employment_effective_from": derived["effective_from"],
++            "current_employment_synced_at": now,
++            "current_employment_error": "",
++            "updated_at": now,
 +        }
-+        renderBusinessRegistrationOcr(form, { document: doc, suggestion, message: "OCR 값은 제안입니다. 확인한 항목만 [적용]하고 [사업자 저장]으로 저장하십시오." });
-+      } catch (err) {
-+        fail(`OCR 제안 실패: ${err.message}. 원본은 보관되었습니다. 손입력으로 계속하십시오.`, doc);
-+      }
++    )
++    if previous_contract_id and previous_contract_id != derived["contract_id"]:
++        record["previous_employment_contract_id"] = previous_contract_id
++    _write_hr_record("employee_join_requests", record, user)
++    employee.clear()
++    employee.update(record)
++
++    if trigger == "resync":
++        action = "employment.snapshot_resynced"
++    elif previous_contract_id and previous_contract_id != derived["contract_id"]:
++        action = "employment.snapshot_replaced"
++    else:
++        action = "employment.snapshot_created"
++    audited = _append_employment_audit(
++        tenant_id=tenant_id,
++        business_id=_record_business_id(record) or str(record.get("business_id") or ""),
++        actor=actor,
++        action=action,
++        resource_type=EMPLOYMENT_AUDIT_RESOURCE,
++        resource_id=request_id,
++        details={
++            "trigger": trigger,
++            "employee_email_masked": _mask_email(str(record.get("email") or "")),
++            "previous_contract_id": previous_contract_id,
++            "contract_id": derived["contract_id"],
++            "contract_signed_at": derived["signed_at"],
++            "effective_from": derived["effective_from"],
++            "changes": _employment_changes(previous, derived["employment"]),
++        },
++    )
++    return {
++        "status": "updated",
++        "action": action,
++        "employee_request_id": request_id,
++        "contract_id": derived["contract_id"],
++        "previous_contract_id": previous_contract_id,
++        "audit_logged": audited,
 +    }
 +
-     function saveBusinessFromPage(form) {
-       const data = Object.fromEntries(new FormData(form).entries());
-       const editId = form.dataset.editId || "";
-       const target = editId ? settings().businesses.find(item => item.id === editId) : null;
--      const uploadedFile = form.registrationDocument?.files?.[0];
--      const uploadMemo = uploadedFile ? `사업자등록증 파일: ${uploadedFile.name}` : "";
--      const memo = [String(data.memo || "").trim(), uploadMemo].filter(Boolean).join("\n");
-+      const memo = String(data.memo || "").trim();
-       const next = {
-         id: editId || uid(),
-         entityType: data.entityType,
-@@ -8720,10 +8875,16 @@
-         address: String(data.address || "").trim(),
-         memo
-       };
-+      // 등록증은 서버 문서 레코드로 참조한다. 새로 올린 문서가 없으면 기존 참조를 유지한다.
-+      const registrationDocument = businessRegistrationDocumentRef(form);
-+      if (registrationDocument) next.registrationDocument = registrationDocument;
-+      next.missing_registration_fields = businessMissingRegistrationFields(next);
-+      next.needs_registration_info = next.missing_registration_fields.length > 0;
-       if (target) Object.assign(target, next);
-       else settings().businesses.push(next);
-       setSelectedSettingsBusinessId(next.id);
-       delete form.dataset.editId;
-+      resetBusinessRegistrationOcr(form);
-       saveState();
-       syncSettingsToServer();
-       form.reset();
-@@ -8796,7 +8957,8 @@
-       if (els.businessPageSelectedDetail) {
-         els.businessPageSelectedDetail.innerHTML = selectedBusiness ? `
-           <b>${escapeHtml(selectedBusiness.name)}</b><br>
--          등록번호 ${escapeHtml(selectedBusiness.registrationNo || "미등록")} · 대표 ${escapeHtml(selectedBusiness.representative || "미등록")} · 과세 ${escapeHtml(selectedBusiness.taxType || "미등록")}<br>
-+          등록번호 ${businessRegistrationNoHtml(selectedBusiness)} · 대표 ${escapeHtml(selectedBusiness.representative || "미등록")} · 과세 ${escapeHtml(selectedBusiness.taxType || "미등록")}<br>
-+          ${selectedBusiness.registrationDocument?.id ? `등록증 원본 v${escapeHtml(selectedBusiness.registrationDocument.version)} · ${escapeHtml(selectedBusiness.registrationDocument.originalFilename || "")} · sha256 ${escapeHtml(String(selectedBusiness.registrationDocument.sha256 || "").slice(0, 12))}…<br>` : ""}
-           주소 ${escapeHtml(selectedBusiness.address || "미등록")}<br>
-           연결 지점 ${selectedBranches.length}개 · 정산계좌 ${selectedAccounts.length}개 · 연동 ${selectedIntegrations.length}개
-         ` : "사업자를 신규 등록하십시오.";
-@@ -8812,7 +8974,7 @@
-           return `
-             <tr>
-               <td><strong>${escapeHtml(item.name || "상호 미입력")}</strong><br><span class="muted">${escapeHtml(entityTypeLabels[item.entityType] || item.entityType || "사업자")}</span></td>
--              <td>${escapeHtml(item.registrationNo || "미등록")}</td>
-+              <td>${businessRegistrationNoHtml(item)}${businessNeedsRegistrationInfo(item) && !isBlankOrPlaceholder(item.registrationNo) ? `<br>${badgeHtml("기초등록 필요", "warn")}` : ""}</td>
-               <td>${escapeHtml(item.representative || "미등록")}<br><span class="muted">${escapeHtml(item.taxType || "미등록")}</span></td>
-               <td>${branches.length ? branches.map(branch => escapeHtml(branch.name)).join("<br>") : "미등록"}</td>
-               <td>${integrations.length}개</td>
-@@ -13268,6 +13430,17 @@
-         saveBusinessFromPage(els.businessPageForm);
-       });
++
++def _record_employment_sync_error(employee_ref: dict[str, str], user: dict[str, Any] | None, error: str) -> bool:
++    try:
++        employee = _find_employee_record(user, **employee_ref)
++        if not employee:
++            return False
++        employee = dict(employee)
++        employee["current_employment_error"] = error
++        employee["current_employment_error_at"] = _now()
++        _write_hr_record("employee_join_requests", employee, user)
++        return True
++    except Exception as exc:  # noqa: BLE001
++        logger.error("employment sync error not recorded: employee=%s err=%s", employee_ref, exc)
++        return False
++
++
++def _sync_employment_after_signature(contract: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
++    """서명 직후 훅. 서명은 이미 성립했다 — 실패는 current_employment_error 로만 남긴다."""
++    employee_ref = {
++        "employee_email": str(contract.get("employee_email") or ""),
++        "employee_request_id": str(_contract_payload_value(contract, "employee_request_id", "employeeRequestId") or ""),
++    }
++    if str(contract.get("contract_type") or "") not in EMPLOYMENT_SOURCE_CONTRACT_TYPES:
++        return {"status": "skipped", "reason": "고용조건 원본이 아닌 계약 유형", "contract_type": contract.get("contract_type")}
++    try:
++        employee = _find_employee_record(user, **employee_ref)
++        if not employee:
++            raise LookupError("승인 직원 레코드를 찾을 수 없습니다")
++        return _sync_employee_employment(
++            employee, user, actor=str(contract.get("signer_email") or _email(user or {})), trigger="contract_signed"
++        )
++    except Exception as exc:  # noqa: BLE001
++        error = f"{_now()} {type(exc).__name__}: {exc}"[:500]
++        logger.error("employment snapshot failed: contract=%s err=%s", contract.get("id"), exc)
++        return {"status": "failed", "error": error, "error_recorded": _record_employment_sync_error(employee_ref, user, error)}
++
++
++def _employee_for_admin_or_403(request_id: str, user: dict[str, Any], *, detail: str) -> dict[str, Any]:
++    _tenant_id(user)
++    if not _is_admin(user):
++        raise HTTPException(status_code=403, detail=detail)
++    employee = _find_employee_record(user, employee_request_id=request_id)
++    if not employee or str(employee.get("id") or "") != str(request_id):
++        # 다른 테넌트의 식별자 존재 여부를 드러내지 않는다.
++        raise HTTPException(status_code=403, detail=detail)
++    return employee
++
++
++def resync_employee_employment(request_id: str, user: dict[str, Any]) -> dict[str, Any]:
++    employee = _employee_for_admin_or_403(request_id, user, detail="고용조건 재동기화 권한이 없습니다")
++    result = _sync_employee_employment(employee, user, actor=_email(user), trigger="resync")
++    return {
++        "result": result,
++        "current_employment": employee.get("current_employment"),
++        "current_employment_contract_id": employee.get("current_employment_contract_id") or "",
++        "current_employment_effective_from": employee.get("current_employment_effective_from") or "",
++        "current_employment_synced_at": employee.get("current_employment_synced_at") or "",
++        "current_employment_error": employee.get("current_employment_error") or "",
++    }
++
++
++def employee_employment_history(request_id: str, user: dict[str, Any]) -> dict[str, Any]:
++    """관리자와 본인만. 서명 계약서 체인 + 스냅샷 감사로그를 시간순으로."""
++    denied = HTTPException(status_code=403, detail="이 직원의 고용 이력에 접근할 권한이 없습니다")
++    tenant_id = _tenant_id(user)
++    employee = _find_employee_record(user, employee_request_id=request_id)
++    if not employee or str(employee.get("id") or "") != str(request_id):
++        raise denied
++    email = str(employee.get("email") or "").strip().lower()
++    if not _is_admin(user) and (not _email(user) or _email(user) != email):
++        raise denied
++    contracts = []
++    for row in _employee_signed_contracts(_read_hr("contracts", user), employee_email=email, employee_request_id=request_id):
++        terms = _employment_terms_from_contract(row)
++        contracts.append(
++            {
++                "contract_id": str(row.get("id") or ""),
++                "contract_type": str(row.get("contract_type") or ""),
++                "print_title": str(row.get("print_title") or ""),
++                "signed_at": str(row.get("signed_at") or ""),
++                "employment_source": str(row.get("contract_type") or "") in EMPLOYMENT_SOURCE_CONTRACT_TYPES,
++                "signed_snapshot_sha256": str(row.get("signed_snapshot_sha256") or ""),
++                "terms": terms,
++            }
++        )
++    business_id = _record_business_id(employee) or str(employee.get("business_id") or "")
++    audit_logs = _employment_audit_rows(tenant_id, business_id, str(employee.get("id") or ""))
++    timeline = [
++        {"at": item["signed_at"], "kind": "contract_signed", "contract_id": item["contract_id"],
++         "contract_type": item["contract_type"], "employment_source": item["employment_source"]}
++        for item in contracts
++    ] + [
++        {"at": row["created_at"], "kind": "audit", "action": row.get("action"), "actor": row.get("actor"),
++         "contract_id": row["details"].get("contract_id"), "previous_contract_id": row["details"].get("previous_contract_id")}
++        for row in audit_logs
++    ]
++    timeline.sort(key=lambda item: _pg_ts(item["at"]) or datetime.min.replace(tzinfo=KST))
++    return {
++        "employee_request_id": str(employee.get("id") or ""),
++        "current_employment": employee.get("current_employment"),
++        "current_employment_contract_id": employee.get("current_employment_contract_id") or "",
++        "current_employment_effective_from": employee.get("current_employment_effective_from") or "",
++        "contracts": contracts,
++        "audit_logs": sorted(audit_logs, key=lambda row: _pg_ts(row["created_at"]) or datetime.min.replace(tzinfo=KST)),
++        "timeline": timeline,
++    }
++
++
++def _payroll_defaults_from_employment(derived: dict[str, Any] | None) -> dict[str, Any]:
++    """급여 기본값과 근거. 시급·일급제는 월 총액을 추정하지 않는다."""
++    if derived is None:
++        return {
++            "source_contract_id": "",
++            "wage_type": "",
++            "contract_type": "",
++            "estimated": False,
++            "defaults": {},
++            "contract_terms": {},
++            "basis": "",
++            "reason": "서명 완료된 근로·용역 계약서가 없어 기본값이 없습니다",
++        }
++    terms = derived["employment"]
++    contract_type = terms.get("contract_type") or ""
++    wage_type = terms.get("wage_type") or ""
++    wage = terms.get("wage")
++    result: dict[str, Any] = {
++        "source_contract_id": derived["contract_id"],
++        "wage_type": wage_type,
++        "contract_type": contract_type,
++        "estimated": False,
++        "defaults": {},
++        "contract_terms": {
++            "wage": wage,
++            "weekly_hours": terms.get("weekly_hours") or "",
++            "work_days": terms.get("work_days") or "",
++            "work_time": terms.get("work_time") or "",
++            "start_date": terms.get("start_date") or "",
++            "end_date": terms.get("end_date") or "",
++            "pay_date": terms.get("pay_date") or "",
++        },
++        "basis": "",
++        "reason": "",
++    }
++    defaults: dict[str, Any] = result["defaults"]
++    if contract_type == "freelancer" or wage_type == "case_fee":
++        defaults["employment_tax_type"] = "freelancer_33"
++        result["basis"] = f"프리랜서 용역계약({derived['contract_id']}) — 3.3% 원천징수 구분만 채움"
++        result["reason"] = "용역비는 건별로 확정되므로 총지급액 기본값이 없습니다"
++        return result
++    if terms.get("employment_tax_type"):
++        defaults["employment_tax_type"] = terms["employment_tax_type"]
++    if terms.get("meal_provision"):
++        defaults["meal_provision"] = terms["meal_provision"]
++    if wage_type == "monthly" and wage:
++        non_tax = terms.get("non_tax_meal_allowance") or 0
++        defaults["gross_pay"] = wage
++        defaults["taxable_pay"] = wage - non_tax
++        defaults["non_tax_meal_allowance"] = non_tax
++        result["basis"] = (
++            f"월급제 계약({derived['contract_id']}) 임금 {wage:,}원 = 과세 {wage - non_tax:,}원 + 비과세 식대 {non_tax:,}원"
++        )
++        return result
++    if wage_type == "hourly":
++        result["hourly_wage"] = wage
++        result["contract_terms"]["hourly_wage"] = wage
++    elif wage_type == "daily":
++        result["daily_wage"] = wage
++        result["contract_terms"]["daily_wage"] = wage
++    result["weekly_hours"] = terms.get("weekly_hours") or ""
++    result["reason"] = "시급제는 근태 확정 후 산정" if wage_type == "hourly" else "일급제는 근태 확정 후 산정"
++    result["basis"] = f"{wage_type} 계약({derived['contract_id']}) 단가 {wage or 0:,}원 — 월 총액은 근태 확정 후 관리자가 입력"
++    return result
++
++
++def payroll_defaults(employee_email: str, payroll_month: str, user: dict[str, Any]) -> dict[str, Any]:
++    denied = HTTPException(status_code=403, detail="급여 기준값 조회 권한이 없습니다")
++    _tenant_id(user)
++    if not _is_admin(user):
++        raise denied
++    month = str(payroll_month or "").strip()
++    if month and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
++        raise HTTPException(status_code=400, detail="payroll_month 는 YYYY-MM 형식이어야 합니다")
++    employee = _find_employee_record(user, employee_email=employee_email)
++    if not employee:
++        raise denied
++    derived = _derive_current_employment(
++        _read_hr("contracts", user),
++        employee_email=str(employee.get("email") or ""),
++        employee_request_id=str(employee.get("id") or ""),
++    )
++    result = _payroll_defaults_from_employment(derived)
++    result["employee_email"] = str(employee.get("email") or "")
++    result["employee_request_id"] = str(employee.get("id") or "")
++    result["payroll_month"] = month
++    result["employment_snapshot_in_sync"] = _employment_snapshot_is_current(employee, derived)
++    if derived and month:
++        start = str(derived["employment"].get("start_date") or "")[:7]
++        end = str(derived["employment"].get("end_date") or "")[:7]
++        if (start and month < start) or (end and month > end):
++            result["period_note"] = "급여 월이 계약 기간 밖입니다"
++    return result
++
++
++def _payroll_value_missing(value: Any) -> bool:
++    return value is None or (isinstance(value, str) and value.strip() == "")
++
++
++def _apply_payroll_contract_defaults(
++    payload: dict[str, Any], plan: dict[str, Any]
++) -> tuple[dict[str, Any], list[str], dict[str, dict[str, Any]]]:
++    """비어 있는 칸만 채운다. 관리자가 보낸 값은 그대로 두고, 계약과 다르면 이탈로 기록한다."""
++    result = dict(payload)
++    defaults = plan.get("defaults") or {}
++    applied: list[str] = []
++    deviation: dict[str, dict[str, Any]] = {}
++    for field in ("meal_provision", "employment_tax_type"):
++        if field not in defaults:
++            continue
++        if _payroll_value_missing(result.get(field)):
++            result[field] = defaults[field]
++            applied.append(field)
++        elif str(result.get(field)).strip() != str(defaults[field]):
++            deviation[field] = {"contract": defaults[field], "input": result.get(field)}
++    if "gross_pay" in defaults:
++        if _payroll_value_missing(result.get("gross_pay")):
++            result["gross_pay"] = defaults["gross_pay"]
++            applied.append("gross_pay")
++        # 과세/비과세 분할은 둘 다 비었고 총지급액이 계약 임금일 때만 채운다 —
++        # 관리자가 총액을 바꿨는데 계약 분할을 끼우면 합계 검증이 깨진다.
++        gross_matches = _employment_amount(result.get("gross_pay")) == defaults["gross_pay"]
++        if gross_matches and all(_payroll_value_missing(result.get(key)) for key in ("taxable_pay", "non_tax_meal_allowance")):
++            result["taxable_pay"] = defaults["taxable_pay"]
++            result["non_tax_meal_allowance"] = defaults["non_tax_meal_allowance"]
++            applied.extend(["taxable_pay", "non_tax_meal_allowance"])
++        for field in ("gross_pay", "taxable_pay", "non_tax_meal_allowance"):
++            if field in applied or _payroll_value_missing(result.get(field)):
++                continue
++            if _employment_amount(result.get(field)) != defaults[field]:
++                deviation[field] = {"contract": defaults[field], "input": result.get(field)}
++    return result, applied, deviation
++
++
+ def list_payroll(user: dict[str, Any]) -> list[dict[str, Any]]:
+     return sorted(_filter_user(_read_hr("payroll_statements", user), user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
  
-+      els.businessPageForm?.registrationDocument?.addEventListener("change", () => {
-+        handleBusinessRegistrationDocument(els.businessPageForm).catch(err => showToast(`사업자등록증 처리 실패: ${err.message}`));
-+      });
-+
-+      els.businessPageForm?.addEventListener("click", event => {
-+        const button = event.target.closest("[data-apply-registration-ocr]");
-+        if (!button) return;
-+        event.preventDefault();
-+        applyBusinessRegistrationOcr(els.businessPageForm, button.dataset.applyRegistrationOcr);
-+      });
-+
-       els.branchPageForm?.addEventListener("submit", event => {
-         event.preventDefault();
-         saveBranchFromPage(els.branchPageForm);
-diff --git a/docs/operations/OBYS_BUSINESS_REGISTRATION_OCR.md b/docs/operations/OBYS_BUSINESS_REGISTRATION_OCR.md
+@@ -3523,6 +4060,22 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
+     if not _is_admin(user):
+         raise HTTPException(status_code=403, detail="급여내역서 작성 권한이 없습니다")
+     rows = _read_hr("payroll_statements", user)
++    employee = _find_employee_record(
++        user,
++        employee_email=str(payload.get("employee_email") or ""),
++        employee_request_id=str(payload.get("employee_request_id") or ""),
++    )
++    derived = (
++        _derive_current_employment(
++            _read_hr("contracts", user),
++            employee_email=str(employee.get("email") or ""),
++            employee_request_id=str(employee.get("id") or ""),
++        )
++        if employee
++        else None
++    )
++    plan = _payroll_defaults_from_employment(derived)
++    payload, defaults_applied, deviation = _apply_payroll_contract_defaults(payload, plan)
+     gross = _payroll_integer_for_api(payload.get("gross_pay"), field="gross_pay")
+     taxable_pay = _payroll_integer_for_api(payload.get("taxable_pay"), field="taxable_pay")
+     non_tax_meal = _payroll_integer_for_api(payload.get("non_tax_meal_allowance"), field="non_tax_meal_allowance")
+@@ -3552,6 +4105,9 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
+         "insurance_deduction": insurance_deduction,
+         "other_deduction": other_deduction,
+         "net_pay": max(0, gross - deductions),
++        "source_contract_id": plan["source_contract_id"],
++        "contract_defaults_applied": defaults_applied,
++        "contract_deviation": deviation,
+         "created_at": payload.get("created_at") or now,
+         "updated_at": now,
+     }
+@@ -3564,6 +4120,25 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
+         rows.insert(0, statement)
+         saved = statement
+     _write_hr_record("payroll_statements", saved, user)
++    for action, key, value in (
++        ("payroll.contract_defaults_applied", "fields", defaults_applied),
++        ("payroll.contract_deviation", "deviation", deviation),
++    ):
++        if value:
++            _append_employment_audit(
++                tenant_id=str(saved.get("tenant_id") or ""),
++                business_id=str(saved.get("business_id") or ""),
++                actor=_email(user),
++                action=action,
++                resource_type=PAYROLL_AUDIT_RESOURCE,
++                resource_id=statement_id,
++                details={
++                    key: value,
++                    "source_contract_id": plan["source_contract_id"],
++                    "employee_request_id": str((employee or {}).get("id") or ""),
++                    "payroll_month": str(saved.get("payroll_month") or ""),
++                },
++            )
+     return saved
+ 
+ 
+diff --git a/docs/operations/OBYS_CONTRACT_EMPLOYMENT_PAYROLL.md b/docs/operations/OBYS_CONTRACT_EMPLOYMENT_PAYROLL.md
 new file mode 100644
-index 00000000..b1541a4c
+index 00000000..deb8fb64
 --- /dev/null
-+++ b/docs/operations/OBYS_BUSINESS_REGISTRATION_OCR.md
-@@ -0,0 +1,139 @@
-+# 오비서 사업자등록증 원본 보관 · OCR 제안 · 관리자 확인 저장
++++ b/docs/operations/OBYS_CONTRACT_EMPLOYMENT_PAYROLL.md
+@@ -0,0 +1,131 @@
++# 오비서 서명 계약 → 직원 고용조건 → 급여 기준값 운영 문서
 +
-+TASK: AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930 (2026-09-30)
++TASK: AADS-OBYS-CONTRACT-TO-EMPLOYMENT-PAYROLL-20260930 · 대상: 오비서(열정국밥) 진아서버 인스턴스
 +
-+## 1. 흐름
++## 1. 원칙
 +
-+```
-+[사업자 페이지] 목록에서 [수정] → 사업자등록증 파일 선택
-+   │ ① POST /api/v1/yeoljeong-finance/businesses/{id}/registration-document   (원본 보관, 버전 +1)
-+   │ ② POST .../registration-document/{document_id}/ocr                       (제안만, 저장 안 함)
-+   ▼
-+폼 아래 비교표: 항목 | OCR 값(검증·신뢰도) | 현재 값 | [적용]
-+   │ 관리자가 [적용] 누른 항목만 폼 칸에 채워짐
-+   ▼
-+[사업자 저장] (기존 경로 그대로: settings().businesses → PUT /settings)
-+```
++- **원본은 서명 완료 계약서 하나뿐이다.** 고용조건을 따로 편집하는 화면·테이블은 없다.
++  조건을 바꾸려면 정정 계약서를 새로 작성해 서명받는다.
++- 직원 레코드(`yeoljeong_employee_join_requests.request_payload`)의 `current_employment*` 는
++  최신 서명 근로·용역 계약을 가리키는 **파생 스냅샷**이다. 계약서에서 언제든 다시 만든다(재동기화).
++- 이력은 지우지 않는다. 서명 계약서 체인이 이력이고, 스냅샷 생성·교체·재동기화는 `yeoljeong_audit_logs` 에 남는다.
++- 급여는 **기본값만** 채운다. 관리자가 보낸 값이 항상 우선이다. 시급·일급제 월 총액은 추정하지 않는다.
++- 적용 범위: **이 배포 이후 서명분부터**. 기존 데이터는 건드리지 않는다(백필은 5절, 수동).
 +
-+- OCR 은 **제안만** 한다. OCR 엔드포인트는 사업자 레코드를 바꾸지 않는다.
-+- 업로드·OCR 이 실패해도 폼 입력은 그대로 남는다. 화면에 실패 사유가 나오고, 손으로 입력해 계속 저장하면 된다.
-+- 등록증은 **기존 사업자**에만 올릴 수 있다(`yeoljeong_businesses` 에 현재 테넌트 행이 있어야 한다). 신규 사업자는 먼저 저장한 뒤 [수정]으로 다시 열어서 올린다.
-+- 모두 **관리자(멤버십 role owner/admin)만** 할 수 있다. 다른 역할은 403, 다른 테넌트의 사업자는 404 다.
++## 2. 흐름
 +
-+## 2. 엔드포인트
-+
-+| 메서드 | 경로 (`/api/v1/yeoljeong-finance` 아래) | 설명 |
++| 단계 | 동작 | 실패 시 |
 +|---|---|---|
-+| POST | `/businesses/{business_id}/registration-document` | multipart `file`. `.pdf/.jpg/.jpeg/.png`, 10MB 이하. 형식·크기·서명 위반은 400 |
-+| GET | `/businesses/{business_id}/registration-document` | `documents`(최신순), `current`(최신 활성 1건), `count` |
-+| GET | `/businesses/{business_id}/registration-document/{document_id}/download` | 원본. 파일명 `사업자등록증_v{n}_{정리된 원본명}{ext}`, `Cache-Control: no-store` |
-+| POST | `/businesses/{business_id}/registration-document/{document_id}/ocr` | 제안 전용: `suggested`, `current`, `ocr`, `applied=false` |
-+| DELETE | `/businesses/{business_id}/registration-document/{document_id}` | soft delete(`deleted_at`, `deleted_by`)만. 파일은 남는다 |
++| `POST /api/v1/yeoljeong-finance/contracts/signing` | 서명 봉인 → 서명본 PDF → **고용조건 스냅샷 갱신** → 알림 (`sign_contract_and_deliver`) | 서명은 유지. 직원 레코드 `current_employment_error` 에 사유, 응답 `employment.status=failed` |
++| `GET /api/v1/yeoljeong-finance/employees/approved` | 기존 필드 + `current_employment`, `current_employment_contract_id`, `needs_employment_sync` | — |
++| `POST /api/v1/yeoljeong-finance/employees/approved/{request_id}/resync-employment` (신규) | 관리자만. 계약서에서 스냅샷을 다시 만든다. 바뀐 게 없으면 쓰지 않는다 | 비관리자·타 테넌트 403 |
++| `GET /api/v1/yeoljeong-finance/employees/approved/{request_id}/employment-history` (신규) | 관리자·본인. 서명 계약서 체인 + 스냅샷 감사로그를 시간순(`timeline`) | 제3자·타 테넌트 403 |
++| `GET /api/v1/yeoljeong-finance/payroll/defaults?employee_email=&payroll_month=` (신규) | 관리자만. 기본값 + 근거(`source_contract_id`, `wage_type`, `basis`) | 비관리자·타 테넌트 403, 월 형식 오류 400 |
++| `POST /api/v1/yeoljeong-finance/payroll` | 빈 칸만 계약 기본값으로 채움. `source_contract_id`, `contract_defaults_applied`, `contract_deviation` 기록 | 기존 검증 3종 그대로 |
 +
-+응답의 문서 항목: `id, business_id, version, original_filename, content_type, extension, byte_size, sha256, uploaded_by(created_by), uploaded_at(created_at), is_current`.
-+업로드 응답의 `status` 는 `stored`(새 버전) 또는 `duplicate`(최신본과 sha256 이 같음 — 새 버전을 만들지 않는다)다.
++응답 호환: 서명 응답의 기존 `contract`·`signed_pdf`·`notify` 키는 그대로이고 `employment` 키가 추가됐다.
++`contract_count`·`needs_contract` 등 기존 직원 목록 필드도 그대로다.
 +
-+## 3. 저장 위치
++- 고용조건 원본이 되는 계약 유형: `regular`, `part_time`, `manager`, `freelancer`.
++  **`confidentiality`(비밀유지 서약)는 원본이 아니다** — 서명해도 스냅샷이 바뀌지 않는다.
++- 여러 건이면 `status='signed'`, 삭제되지 않은 것 중 `signed_at` 최신 1건. 값은 계약서의 봉인 스냅샷(`signed_snapshot`)에서 읽는다.
++- 직원 매칭: 계약서 `employee_request_id` 가 있으면 그것, 없으면 `employee_email`.
 +
-+| 무엇 | 어디 | 비고 |
++## 3. 파생 규칙표
++
++| 계약서 payload | 고용조건 `current_employment` | 급여 기본값 (`payroll/defaults`) |
 +|---|---|---|
-+| 화면 사업자 정보(상호·등록번호·대표자·개업일·주소·메모) | 화면 `settings().businesses` → `PUT /settings`. 서버는 파일 `settings.json` 의 `ui_settings.businesses` 에 쓰고, DB 풀이 있으면 `yeoljeong_businesses` 열로 upsert 한다(`save_settings_persisted`, 기존 동작). DB 모드의 `GET /settings` 는 `yeoljeong_businesses` 에서 다시 읽는다 | `yeoljeong_settings(scope='ui')` 에는 계좌·직원·연동만 있다 |
-+| 사업자 레지스트리 | `yeoljeong_businesses` 표 (`tenant-registry` API 의 `update_business` 도 같은 표) | 이번 작업에서 두 경로를 통합하지 않았다 |
-+| 등록증 버전 메타데이터(원본명·크기·확장자·sha256·업로더·시각) | `yeoljeong_business_registration_documents` 표 (신규) | 사업자별 `version` 1,2,3… 삭제된 번호도 재사용하지 않는다 |
-+| 등록증 원본 파일 | `$OBYS_UPLOAD_ROOT/<tenant_id>/<sha256(business_id) 앞 32자>/business_registration/<uuid>.<ext>` | 기본 `OBYS_UPLOAD_ROOT=app/data/yeoljeong_finance/uploads/ledgers`. 원장과 같은 루트, 다른 하위 폴더 |
-+| 화면 → 문서 참조 | 원본은 `yeoljeong_business_registration_documents` (business_id 기준 최신 활성 1건). 수정 화면을 열 때 `GET …/registration-document` 로 현행본을 읽는다. 저장 시 `ui_settings.businesses[].registrationDocument = {id, version, sha256, originalFilename, uploadedAt}` 도 함께 붙지만, 표에 열이 없어 **파일 모드에서만** 남는 편의 사본이다 | 예전의 메모 문자열 `사업자등록증 파일: <파일명>` 은 더 이상 만들지 않는다(기존 메모는 그대로 둠) |
-+| OCR 실행 기록 | `yeoljeong_audit_logs` (`action=business_registration.ocr_suggest`) | 문서 id·버전·성공 여부·소요 ms·원문 길이·항목별 `found/valid/value_length`. **OCR 원문과 추출값은 남기지 않는다** |
-+| 업로드·삭제 기록 | `yeoljeong_audit_logs` (`business_registration.upload` / `.delete`) | 버전·sha256·크기·확장자 |
++| `contract_type` | `contract_type` | `freelancer` → `employment_tax_type=freelancer_33` 만, `gross_pay` 없음 |
++| `employment_tax_type` | `employment_tax_type` | `employment_tax_type` (프리랜서 외) |
++| `wage` | `wage` (정수) | 월급제: `gross_pay = wage` / 시급·일급제: `hourly_wage`·`daily_wage` 로만 돌려줌 |
++| `wage_type` | `wage_type` | 근거 `wage_type`. `hourly`/`daily` → `estimated=false`, `reason="시급제는 근태 확정 후 산정"`(일급은 "일급제는 …") |
++| `non_tax_meal_allowance` | `non_tax_meal_allowance` (정수) | 월급제: `non_tax_meal_allowance`, `taxable_pay = wage − 비과세 식대` |
++| `meal_provision` | `meal_provision` | `meal_provision` (식사제공이면 현금식대 비과세 불가 검증이 그대로 적용) |
++| `base_salary`, `taxable_allowance` | 같은 이름 (정수) | — (근거 표시용) |
++| `start_date`, `end_date` | 같은 이름 | 급여 월이 기간 밖이면 `period_note` |
++| `work_days`, `work_time`, `rest_time`, `weekly_hours` | 같은 이름 | `contract_terms` 로 표시만 |
++| `pay_date`, `pay_method`, `workplace`, `business_id`, `branch` | 같은 이름 | `pay_date` 는 `contract_terms` 로 표시 |
++| (계약서 id) | `current_employment_contract_id` | `source_contract_id` |
++| `start_date` 또는 `signed_at` | `current_employment_effective_from` | — |
++| (동기화 시각) | `current_employment_synced_at` | — |
 +
-+## 4. OCR 항목 → 사업자 필드
++### save_payroll 채움 규칙
 +
-+| OCR 항목 | 화면 필드 / 표 열 | 정규화 | 검증 | 자동채움 후보 |
-+|---|---|---|---|---|
-+| 상호(`name`) | `name` / `name` | 공백만 정리 | 없음(교정 금지) | 예 |
-+| 사업자등록번호(`registration_no`) | `registrationNo` / `registration_no` | `000-00-00000` (하이픈 없는 10자리도 붙임) | 국세청 검증번호(체크섬). 불일치면 `valid=false` + 사유 | 체크섬 통과 시만 |
-+| 대표자(`representative`) | `representative` / `representative` | 공백만 정리 | 없음 | 예 |
-+| 개업일(`opened_at`) | `openedAt` / `opened_at` | `YYYY-MM-DD` ("2025년 4월 1일", `2025.04.01` 도 처리) | 존재하는 날짜, 미래 날짜면 `valid=false` | 유효할 때만 |
-+| 사업장 주소(`address`) | `address` / `address` | 공백만 정리 | 없음 | 예 |
-+| 법인등록번호(`corporate_registration_no`) | — | `000000-0000000` | 형식 | 아니오(참고) |
-+| 과세유형(`tax_type`) | — | 일반과세/간이과세/면세 | 표시 문구 | 아니오(참고) |
++- payload 에 값이 **없거나 빈 문자열**일 때만 채운다. 보낸 값은 덮어쓰지 않는다.
++- 과세/비과세 분할(`taxable_pay`·`non_tax_meal_allowance`)은 **둘 다 비었고 총지급액이 계약 임금과 같을 때만** 채운다.
++  관리자가 총액을 바꿨는데 계약 분할을 끼우면 "과세+비과세=총지급" 검증이 깨지기 때문이다.
++- 계약과 다른 값이 들어오면 `contract_deviation = {필드: {"contract": 계약값, "input": 입력값}}`.
++- 감사로그: `payroll.contract_defaults_applied`, `payroll.contract_deviation` (resource_type=`payroll_statement`).
 +
-+읽지 못한 항목은 `value=null` + `reason` 이다. 값을 추측해 만들지 않는다. 등록번호는 "등록번호" 표시를 못 찾았을 때만, 원문 전체에서 `000-00-00000` 모양이 **정확히 한 종류**일 때 그것을 쓰고 신뢰도를 낮춘다(0.6배).
++## 4. 재동기화 절차
 +
-+OCR 호출은 기존 브리지 `app/core/local_ocr_bridge.py:ocr_extract` (CEO PC Agent 경유)다. PC Agent 가 없으면 `ocr.ok=false` 와 사유를 돌려주고, 원본은 이미 보관된 상태로 남는다. PDF 를 PC Agent OCR 이 읽는지는 에이전트 쪽 구현에 달려 있다 — 읽지 못하면 이미지(jpg/png)로 다시 올린다.
++`needs_employment_sync=true` 인 직원(서명 계약은 있는데 스냅샷이 없거나, 다른 계약을 가리키거나, `current_employment_error` 가 있음):
 +
-+## 5. 코드 기본값이 등록값을 덮지 않는다
++1. 직원 목록에서 `current_employment_error` 사유를 확인한다(DB 연결 실패, 직원 레코드 없음 등).
++2. 원인을 해소한 뒤 관리자 계정으로
++   `POST /api/v1/yeoljeong-finance/employees/approved/{request_id}/resync-employment`.
++3. 응답 `result.status` — `updated`(감사로그 `employment.snapshot_resynced`), `unchanged`(이미 최신), `no_source`(서명 근로·용역 계약 없음, 기존 스냅샷은 지우지 않음).
++4. `employment-history` 로 스냅샷이 최신 서명 계약을 가리키는지 확인한다.
 +
-+- `_canonicalize_ui_settings` 는 이제 **저장된 상호를 그대로** 쓴다. canonical 상호(`CANONICAL_BUSINESSES`)는 저장값이 비어 있을 때만 쓴다. 지점명(`CANONICAL_BRANCHES`)도 같다. id 와 별칭 맵, 지점→사업자 매핑은 바꾸지 않았다.
-+- `"기초등록 필요"` / `"미등록"` / `"-"` 는 값이 아니라 상태다. API 로 나갈 때 빈 문자열로 바꾸고, 대신 다음을 붙인다.
-+  - settings: `needs_registration_info`, `missing_registration_fields` (`registrationNo/representative/openedAt/address`)
-+  - `GET /tenant-registry/businesses`: 같은 두 필드 (`registration_no/representative/opened_at/address`)
-+- 화면은 이 플래그로 "기초등록 필요" 배지를 보여준다. 등록번호 칸에 자리표시자를 넣지 않는다.
-+- seed 의 성신여대점·언니냉면 자리표시자는 빈 값으로 바꿨다. 이 값을 읽는 곳을 확인했다: 계약서 기본값(`employer_registration_no`)은 빈 값이면 채우지 않고 `_missing_contract_value` 가 전과 같이 누락으로 판정한다. 은행 범위(`entityType`)는 해당 없음.
-+- **영향:** 다음에 관리자가 [사업자 저장]을 누르면 `save_settings_persisted` 가 `yeoljeong_businesses.registration_no` 에 자리표시자 대신 빈 값을, `name` 에 canonical 상호 대신 저장된 상호를 쓴다. 이 작업은 운영 DB 를 직접 고치지 않는다.
++## 5. 마이그레이션 · 백필 (수동, 오비서 업무 DB 전용)
 +
-+## 6. 마이그레이션 (오비서 업무 DB 전용, 수동)
++- `migrations/20260930_obys_employment_audit_lookup.sql` — 감사로그 조회 인덱스 1개만. 컬럼 추가 없음
++  (스냅샷·급여 근거는 기존 jsonb 에 들어간다). AADS DB 자동 적용 제외(`scripts/migrations_auto_apply_baseline.txt`).
++  ```
++  psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_employment_audit_lookup.sql
++  ```
++  롤백: `migrations/rollback/20260930_obys_employment_audit_lookup.down.sql` (인덱스만 제거).
++- 백필: 훅 이전에 서명된 계약이 있는 직원만. **기본 `--dry-run`**, 한 번에 한 테넌트.
++  ```
++  OBYS_DATABASE_URL=... python3 scripts/backfill_employment_snapshots.py --tenant <uuid>          # 계획만
++  OBYS_DATABASE_URL=... python3 scripts/backfill_employment_snapshots.py --tenant <uuid> --apply  # 실제 쓰기
++  ```
++  쓰기는 서비스의 `_sync_employee_employment` 를 그대로 거치므로 감사로그에 `trigger=backfill` 로 남는다.
++  2026-09-30 실측으로 운영 tenant 15055cac… 는 서명 완료 계약 0건이라 현재 대상이 없다.
 +
-+`migrations/20260930_obys_business_registration_documents.sql` — 표 1개와 인덱스 2개 추가만 한다. 멱등하다.
-+`scripts/migrations_auto_apply_baseline.txt` 에 HOLD 로 올라 있어 AADS 배포가 자동 적용하지 않는다.
-+
-+```bash
-+psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_business_registration_documents.sql
-+psql "$OBYS_DATABASE_URL" -c "\d yeoljeong_business_registration_documents"
-+```
-+
-+롤백: `migrations/rollback/20260930_obys_business_registration_documents.down.sql` (표를 먼저 덤프한다. 원본 파일은 디스크에 남는다).
-+마이그레이션 전에 이 코드가 배포되면 등록증 엔드포인트만 500 이 나고, 기존 사업자·원장 화면은 영향이 없다.
-+
-+## 7. 보존
-+
-+- 원본과 모든 이전 버전을 보관한다. 자동 삭제는 없다. DELETE 는 soft delete 라 파일과 행이 남는다.
-+- 보존 기간 기준: 국세기본법의 장부·증빙서류 보존기간(법정신고기한부터 5년)을 따른다. 폐업한 사업자도 마지막 신고기한부터 5년이 지나기 전에는 파기하지 않는다. 파기는 별도 승인을 받아 수동으로 하고, 파기한 `sha256` 목록을 남긴다.
-+- 원본대조: 파일 `sha256sum` 과 표의 `sha256` 이 같아야 한다.
-+
-+```bash
-+sha256sum "$OBYS_UPLOAD_ROOT/<tenant>/<hash>/business_registration/<uuid>.pdf"
-+```
-+
-+## 8. 사업자번호 미비 사업자 조회
-+
-+레지스트리 표:
++## 6. 조회 쿼리
 +
 +```sql
-+SELECT tenant_id, id, name, registration_no, representative, opened_at, address
-+  FROM yeoljeong_businesses
++-- (a) 급여-계약 이탈: 관리자가 계약과 다른 값을 넣은 급여명세
++SELECT id, employee_email_masked, payroll_month, gross_pay,
++       statement_payload->>'source_contract_id' AS source_contract_id,
++       statement_payload->'contract_deviation'  AS deviation
++  FROM yeoljeong_payroll_statements
 + WHERE deleted_at IS NULL
-+   AND (COALESCE(btrim(registration_no), '') IN ('', '-', '미등록', '기초등록 필요')
-+        OR COALESCE(btrim(representative), '') IN ('', '-', '미등록', '기초등록 필요')
-+        OR COALESCE(btrim(opened_at), '') IN ('', '-')
-+        OR COALESCE(btrim(address), '') IN ('', '-'))
-+ ORDER BY tenant_id, sort_order, id;
++   AND tenant_id = $1::uuid
++   AND statement_payload->'contract_deviation' IS NOT NULL
++   AND statement_payload->'contract_deviation' <> '{}'::jsonb
++ ORDER BY payroll_month DESC;
++
++-- (b) 계약 근거 없이 작성된 급여명세(서명 계약 없는 직원 또는 이 기능 이전 작성분)
++SELECT id, employee_email_masked, payroll_month, gross_pay
++  FROM yeoljeong_payroll_statements
++ WHERE deleted_at IS NULL
++   AND tenant_id = $1::uuid
++   AND COALESCE(statement_payload->>'source_contract_id', '') = ''
++ ORDER BY payroll_month DESC;
++
++-- (c) 스냅샷 동기화 실패가 남아 있는 직원
++SELECT id, employee_email_masked,
++       request_payload->>'current_employment_error'    AS error,
++       request_payload->>'current_employment_error_at' AS error_at
++  FROM yeoljeong_employee_join_requests
++ WHERE deleted_at IS NULL
++   AND tenant_id = $1::uuid
++   AND COALESCE(request_payload->>'current_employment_error', '') <> '';
++
++-- (d) 직원 한 명의 스냅샷 교체 이력
++SELECT created_at, actor, action,
++       details->>'previous_contract_id' AS previous_contract_id,
++       details->>'contract_id'          AS contract_id,
++       details->'changes'               AS changes
++  FROM yeoljeong_audit_logs
++ WHERE business_id = $1
++   AND resource_type = 'employee_employment'
++   AND resource_id = $2
++   AND details->>'tenant_id' = $3
++ ORDER BY created_at;
 +```
 +
-+화면 settings 파일 모드(`$YEOLJEONG_FINANCE_DATA_DIR/settings.json`):
-+
-+```bash
-+jq -r '.ui_settings.businesses[] | select((.registrationNo // "" | gsub("^\\s+|\\s+$";"")) as $n | ($n == "" or $n == "-" or $n == "미등록" or $n == "기초등록 필요")) | [.id, .name] | @tsv' settings.json
-+```
-+
-+API 로는 `GET /api/v1/yeoljeong-finance/settings` 의 `businesses[].needs_registration_info=true`, 또는 `GET /api/v1/yeoljeong-finance/tenant-registry/businesses` 의 `needs_registration_info=true` 행이다.
-+
-+등록증이 한 번도 안 올라온 사업자:
-+
-+```sql
-+SELECT b.tenant_id, b.id, b.name
-+  FROM yeoljeong_businesses b
-+ WHERE b.deleted_at IS NULL
-+   AND NOT EXISTS (SELECT 1 FROM yeoljeong_business_registration_documents d
-+                    WHERE d.tenant_id = b.tenant_id AND d.business_id = b.id AND d.deleted_at IS NULL);
-+```
-+
-+## 9. 화면 검증
-+
-+1. 관리자로 로그인 → 오비서 `/apps/obys/` → 사업자 페이지(사업자 신규등록/수정).
-+2. 목록에서 "언니냉면" 행 → 등록번호 칸이 "기초등록 필요" **배지**로 나오는지 본다(글자값이 아님). 보완 % 가 자리표시자를 채운 값으로 세지 않는지 본다.
-+3. [수정] → 사업자등록증 파일에 jpg/png/pdf 를 고른다 → "원본 보관 v1 · 파일명 · bytes · sha256…" 줄이 나오는지 본다.
-+4. PC Agent 가 붙어 있으면 비교표가 나온다. 체크섬이 틀린 번호는 빨간 사유 배지와 "적용 불가"로 나온다. [적용]을 누른 칸만 바뀌는지, 누르기 전에는 폼이 그대로인지 본다.
-+5. PC Agent 가 없으면 "OCR 실패 … 손입력으로 계속" 이 나오고 폼 입력이 그대로인지 본다.
-+6. [사업자 저장] → 상세현황에 "등록증 원본 v1 …" 이 나오고 메모에 파일명 문자열이 붙지 않는지 본다.
-+7. 같은 파일을 다시 고르면 "최신본과 동일 파일"이 나오고, 다른 파일이면 v2 가 된다.
-+8. 비관리자 계정에서는 파일 선택 시 "관리자만" 안내가 나오고 업로드하지 않는지 본다.
-diff --git a/migrations/20260930_obys_business_registration_documents.sql b/migrations/20260930_obys_business_registration_documents.sql
++감사로그 action 목록: `employment.snapshot_created`, `employment.snapshot_replaced`, `employment.snapshot_resynced`,
++`payroll.contract_defaults_applied`, `payroll.contract_deviation`.
+diff --git a/migrations/20260930_obys_employment_audit_lookup.sql b/migrations/20260930_obys_employment_audit_lookup.sql
 new file mode 100644
-index 00000000..24f4aa2e
+index 00000000..9bf0b64f
 --- /dev/null
-+++ b/migrations/20260930_obys_business_registration_documents.sql
-@@ -0,0 +1,48 @@
-+-- AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930
-+-- 사업자등록증 원본 보관(버전 이력). 원본 파일은 OBYS_UPLOAD_ROOT 아래
-+--   <tenant_id>/<sha256(business_id)[:32]>/business_registration/<uuid><ext>
-+-- 에 있고, 이 표는 그 메타데이터(원본 파일명·크기·확장자·sha256·업로더·시각)다.
++++ b/migrations/20260930_obys_employment_audit_lookup.sql
+@@ -0,0 +1,30 @@
++-- AADS-OBYS-CONTRACT-TO-EMPLOYMENT-PAYROLL-20260930
++-- 고용조건 스냅샷 교체·급여 계약 이탈 감사로그 조회용 인덱스.
 +--
 +-- 적용 대상: 오비서 업무 DB(OBYS_DATABASE_URL, 진아서버)만. AADS DB 에 돌리지 않는다.
 +--   scripts/migrations_auto_apply_baseline.txt 에 올려 자동 적용에서 HOLD 한다.
-+--   적용: psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_business_registration_documents.sql
-+-- 스키마 추가만 한다. 기존 행을 쓰지 않는다. 멱등하다(IF NOT EXISTS).
-+-- 삭제는 soft delete(deleted_at)만 한다. 이전 버전은 지우지 않는다.
-+-- 롤백: migrations/rollback/20260930_obys_business_registration_documents.down.sql
++--   적용: psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_employment_audit_lookup.sql
++-- 스키마 추가만 한다. 스냅샷(current_employment*)은 yeoljeong_employee_join_requests.request_payload,
++--   급여 근거(source_contract_id·contract_defaults_applied·contract_deviation)는
++--   yeoljeong_payroll_statements.statement_payload jsonb 에 들어가므로 컬럼 추가가 필요 없다.
++-- 기존 행을 읽거나 바꾸지 않는다. 백필은 scripts/backfill_employment_snapshots.py(--dry-run 기본)로 따로 한다.
++-- 멱등하다(IF NOT EXISTS).
++-- 롤백: migrations/rollback/20260930_obys_employment_audit_lookup.down.sql
 +
 +BEGIN;
 +
 +DO $$
 +BEGIN
-+    IF to_regclass('public.yeoljeong_businesses') IS NULL
++    IF to_regclass('public.yeoljeong_audit_logs') IS NULL
 +       OR to_regclass('public.yeoljeong_business_tenant_mapping') IS NULL THEN
-+        RAISE EXCEPTION '오비서 업무 DB 전용이다 (yeoljeong_businesses / yeoljeong_business_tenant_mapping 없음)';
++        RAISE EXCEPTION '오비서 업무 DB 전용이다 (yeoljeong_audit_logs / yeoljeong_business_tenant_mapping 없음)';
 +    END IF;
 +END
 +$$;
 +
-+CREATE TABLE IF NOT EXISTS yeoljeong_business_registration_documents (
-+    id UUID PRIMARY KEY,
-+    tenant_id UUID NOT NULL,
-+    business_id TEXT NOT NULL REFERENCES yeoljeong_businesses(id) ON UPDATE CASCADE,
-+    version INTEGER NOT NULL CHECK (version >= 1),
-+    original_filename TEXT NOT NULL,
-+    stored_filename TEXT NOT NULL,
-+    content_type TEXT NOT NULL,
-+    extension TEXT NOT NULL CHECK (extension IN ('.pdf','.jpg','.jpeg','.png')),
-+    byte_size BIGINT NOT NULL CHECK (byte_size BETWEEN 1 AND 10485760),
-+    sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
-+    created_by TEXT NOT NULL,
-+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-+    deleted_at TIMESTAMPTZ,
-+    deleted_by TEXT
-+);
-+
-+-- 버전 번호는 삭제된 것까지 포함해 사업자별로 유일하다(재사용하지 않는다).
-+CREATE UNIQUE INDEX IF NOT EXISTS uq_yeoljeong_business_registration_documents_version
-+    ON yeoljeong_business_registration_documents (tenant_id, business_id, version);
-+CREATE INDEX IF NOT EXISTS idx_yeoljeong_business_registration_documents_current
-+    ON yeoljeong_business_registration_documents (tenant_id, business_id, version DESC)
-+    WHERE deleted_at IS NULL;
++-- 직원별 고용 이력(resource_type=employee_employment, resource_id=request_id)과
++-- 급여명세별 계약 이탈(resource_type=payroll_statement) 조회.
++CREATE INDEX IF NOT EXISTS idx_yeoljeong_audit_logs_resource
++    ON yeoljeong_audit_logs (business_id, resource_type, resource_id, created_at DESC);
 +
 +COMMIT;
-diff --git a/migrations/rollback/20260930_obys_business_registration_documents.down.sql b/migrations/rollback/20260930_obys_business_registration_documents.down.sql
+diff --git a/migrations/rollback/20260930_obys_employment_audit_lookup.down.sql b/migrations/rollback/20260930_obys_employment_audit_lookup.down.sql
 new file mode 100644
-index 00000000..ba77b14f
+index 00000000..640a60b7
 --- /dev/null
-+++ b/migrations/rollback/20260930_obys_business_registration_documents.down.sql
-@@ -0,0 +1,20 @@
-+-- Rollback: AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930
-+-- 오비서 업무 DB 전용, 수동 적용. AADS DB 에 돌리지 않는다.
-+-- 주의: 등록증 버전 메타데이터(sha256·업로더·시각)가 사라진다. 원본 파일은
-+-- OBYS_UPLOAD_ROOT/<tenant>/<business 해시>/business_registration/ 에 그대로 남는다.
-+-- 되돌리기 전에 표를 덤프해 두어라:
-+--   pg_dump "$OBYS_DATABASE_URL" -t yeoljeong_business_registration_documents > registration_documents.sql
-+
-+BEGIN;
-+
-+DO $$
-+BEGIN
-+    IF to_regclass('public.yeoljeong_businesses') IS NULL THEN
-+        RAISE EXCEPTION '오비서 업무 DB 전용이다';
-+    END IF;
-+END
-+$$;
-+
-+DROP TABLE IF EXISTS yeoljeong_business_registration_documents;
-+
-+COMMIT;
-diff --git a/scripts/migrations_auto_apply_baseline.txt b/scripts/migrations_auto_apply_baseline.txt
-index 8d97effb..435cd315 100644
---- a/scripts/migrations_auto_apply_baseline.txt
-+++ b/scripts/migrations_auto_apply_baseline.txt
-@@ -44,3 +44,6 @@ migrations/20260930_obys_contract_notify_signed_pdf.sql
- # OBYS 업무 DB 전용(yeoljeong_branches·yeoljeong_attendance_records). AADS DB 자동 적용
- # 대상이 아니다 — docs/operations/OBYS_ATTENDANCE_PWA_GPS.md 절차로 수동 적용.
- migrations/20260930_obys_attendance_pwa_gps.sql
-+# OBYS 업무 DB 전용(yeoljeong_business_registration_documents). AADS DB 자동 적용
-+# 대상이 아니다 — docs/operations/OBYS_BUSINESS_REGISTRATION_OCR.md 절차로 수동 적용.
-+migrations/20260930_obys_business_registration_documents.sql
-diff --git a/tests/unit/test_obys_business_registration_ocr.py b/tests/unit/test_obys_business_registration_ocr.py
-new file mode 100644
-index 00000000..5d86e499
++++ b/migrations/rollback/20260930_obys_employment_audit_lookup.down.sql
+@@ -0,0 +1,3 @@
++-- 롤백: migrations/20260930_obys_employment_audit_lookup.sql
++-- 인덱스만 걷는다. 감사로그 행은 건드리지 않는다.
++DROP INDEX IF EXISTS idx_yeoljeong_audit_logs_resource;
+diff --git a/scripts/backfill_employment_snapshots.py b/scripts/backfill_employment_snapshots.py
+new file mode 100755
+index 00000000..7efcb173
 --- /dev/null
-+++ b/tests/unit/test_obys_business_registration_ocr.py
-@@ -0,0 +1,461 @@
-+"""AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930
++++ b/scripts/backfill_employment_snapshots.py
+@@ -0,0 +1,100 @@
++#!/usr/bin/env python3
++"""서명 완료 계약서 → 직원 고용조건 스냅샷 백필 (AADS-OBYS-CONTRACT-TO-EMPLOYMENT-PAYROLL-20260930).
 +
-+사업자등록증 원본 보관 · OCR 제안(자동 저장 금지) · canonical 상호 덮어쓰기 차단.
++신규 서명분은 sign_contract_and_deliver 훅이 스냅샷을 만든다. 이 스크립트는 그
++훅 이전에 서명된 계약서가 있는 직원만을 위한 것이다. 마이그레이션에서 자동으로
++돌리지 않는다.
 +
-+SQL 은 가짜 연결에서 토큰 단위로만 판별한다(dup_guard 가 완전한 SQL 리터럴을
-+실제 SQL 로 오인한 사례가 있다).
++기본은 --dry-run 이다. 무엇을 바꿀지 출력만 하고 아무것도 쓰지 않는다.
++실제로 쓰려면 --apply 를 명시한다. 쓰기는 서비스의 _sync_employee_employment 를
++그대로 거치므로 스냅샷 생성마다 yeoljeong_audit_logs 에 trigger=backfill 로 남는다.
++
++    OBYS_DATABASE_URL=... python3 scripts/backfill_employment_snapshots.py --tenant <uuid>
++    OBYS_DATABASE_URL=... python3 scripts/backfill_employment_snapshots.py --tenant <uuid> --apply
++
++서명 계약서·기존 스냅샷을 지우거나 고치지 않는다. 원본(서명 계약)이 없는 직원은 건너뛴다.
 +"""
 +from __future__ import annotations
 +
-+import asyncio
-+import copy
-+import hashlib
-+import io
-+import json
-+from contextlib import asynccontextmanager
-+from datetime import date, datetime, timezone
++import argparse
++import sys
 +from pathlib import Path
 +from uuid import UUID
 +
-+import pytest
-+from fastapi import HTTPException, UploadFile
++ROOT = Path(__file__).resolve().parents[1]
++if str(ROOT) not in sys.path:
++    sys.path.insert(0, str(ROOT))
 +
-+from app.api import obys_finance as api
-+from app.services import obys_registration_ocr as ocr
-+from app.services import obys_upload_service as service
-+from app.services import yeoljeong_finance_service as finance
++from app.services import yeoljeong_finance_service as svc  # noqa: E402
 +
-+TENANT_A = UUID("15055cac-71b0-45ec-b714-7093dde189ff")
-+TENANT_B = UUID("2d701a8c-9596-4757-8588-faa4f7837112")
-+BUSINESS = "biz-eonni-naengmyeon"
-+PNG = b"\x89PNG\r\n\x1a\n" + b"registration-image" * 8
-+PDF = b"%PDF-1.4\nregistration-pdf\n"
-+VALID_NO = "123-45-67891"  # 국세청 검증번호 일치
-+BAD_NO = "123-45-67890"  # 검증번호 불일치
-+OCR_TEXT = "\n".join([
-+    "사 업 자 등 록 증",
-+    "( 일반과세자 )",
-+    f"등록번호 : {VALID_NO}",
-+    "상 호 : 언니냉면 테스트",
-+    "성 명 : 김테스트        생 년 월 일 : 1980 년 01 월 01 일",
-+    "개 업 연 월 일 : 2025 년 4 월 1 일",
-+    "사업장 소재지 : 서울특별시  성북구   테스트로 1",
-+    "사업의 종류 : 업태 음식점업 종목 한식",
-+])
++ACTOR = "system:employment-backfill"
 +
 +
-+def _user(tenant: UUID, role: str = "owner") -> dict:
++def _system_user(tenant_id: str) -> dict:
 +    return {
-+        "email": f"{role}@example.com",
-+        "user_id": f"user-{role}",
-+        "tenant_id": str(tenant),
-+        "current_membership": {"tenant_id": str(tenant), "status": "active", "role": role},
++        "email": ACTOR,
++        "user_role": "system",
++        "tenant_id": tenant_id,
++        "current_membership": {"tenant_id": tenant_id, "status": "active", "role": "owner"},
 +    }
 +
 +
-+class FakeDB:
-+    def __init__(self) -> None:
-+        self.businesses = {
-+            BUSINESS: {
-+                "id": BUSINESS, "tenant_id": TENANT_A, "name": "언니냉면",
-+                "registration_no": "기초등록 필요", "representative": "미등록",
-+                "tax_type": "일반과세", "opened_at": "", "address": "",
-+            },
-+        }
-+        self.documents: list[dict] = []
-+        self.audits: list[dict] = []
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
++    parser.add_argument("--tenant", required=True, help="대상 테넌트 UUID (한 번에 한 테넌트)")
++    parser.add_argument("--employee", default="", help="특정 직원 request_id 만")
++    mode = parser.add_mutually_exclusive_group()
++    mode.add_argument("--dry-run", action="store_true", default=True, help="변경 계획만 출력 (기본)")
++    mode.add_argument("--apply", action="store_true", help="실제로 스냅샷을 쓴다")
++    args = parser.parse_args(argv)
++
++    try:
++        tenant_id = str(UUID(args.tenant))
++    except ValueError:
++        print(f"[backfill] 잘못된 테넌트 UUID: {args.tenant}", file=sys.stderr)
++        return 2
++    user = _system_user(tenant_id)
++    label = "APPLY" if args.apply else "DRY-RUN"
++    store = "DB" if svc._db_available() else f"FILE({svc.DATA_DIR})"
++    print(f"[backfill] mode={label} tenant={tenant_id} store={store}")
++
++    contracts = svc._read_hr("contracts", user)
++    employees = [
++        row
++        for row in svc._read_hr("employee_join_requests", user)
++        if str(row.get("status") or "").lower() == "approved"
++        and (not args.employee or str(row.get("id") or "") == args.employee)
++    ]
++    counts = {"planned": 0, "applied": 0, "in_sync": 0, "no_source": 0, "failed": 0}
++    for employee in employees:
++        request_id = str(employee.get("id") or "")
++        derived = svc._derive_current_employment(
++            contracts, employee_email=str(employee.get("email") or ""), employee_request_id=request_id
++        )
++        if derived is None:
++            counts["no_source"] += 1
++            continue
++        if svc._employment_snapshot_is_current(employee, derived):
++            counts["in_sync"] += 1
++            continue
++        counts["planned"] += 1
++        terms = derived["employment"]
++        print(
++            f"[backfill] {label} employee={request_id} email={svc._mask_email(str(employee.get('email') or ''))} "
++            f"current={employee.get('current_employment_contract_id') or '-'} -> contract={derived['contract_id']} "
++            f"type={terms.get('contract_type')} wage_type={terms.get('wage_type')} wage={terms.get('wage')} "
++            f"start={terms.get('start_date')}"
++        )
++        if args.apply:
++            try:
++                result = svc._sync_employee_employment(employee, user, actor=ACTOR, trigger="backfill")
++                counts["applied"] += 1 if result.get("status") == "updated" else 0
++            except Exception as exc:  # noqa: BLE001 — 한 직원 실패가 나머지를 막지 않게
++                counts["failed"] += 1
++                print(f"[backfill] FAILED employee={request_id} {type(exc).__name__}: {exc}", file=sys.stderr)
++    print("[backfill] summary " + " ".join(f"{key}={value}" for key, value in counts.items()))
++    return 1 if counts["failed"] else 0
 +
 +
-+class FakeConn:
-+    def __init__(self, db: FakeDB) -> None:
-+        self.db = db
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/scripts/migrations_auto_apply_baseline.txt b/scripts/migrations_auto_apply_baseline.txt
+index 435cd315..f05df929 100644
+--- a/scripts/migrations_auto_apply_baseline.txt
++++ b/scripts/migrations_auto_apply_baseline.txt
+@@ -47,3 +47,6 @@ migrations/20260930_obys_attendance_pwa_gps.sql
+ # OBYS 업무 DB 전용(yeoljeong_business_registration_documents). AADS DB 자동 적용
+ # 대상이 아니다 — docs/operations/OBYS_BUSINESS_REGISTRATION_OCR.md 절차로 수동 적용.
+ migrations/20260930_obys_business_registration_documents.sql
++# OBYS 업무 DB 전용(yeoljeong_audit_logs 인덱스). AADS DB 자동 적용 대상이 아니다 —
++# docs/operations/OBYS_CONTRACT_EMPLOYMENT_PAYROLL.md 절차로 수동 적용.
++migrations/20260930_obys_employment_audit_lookup.sql
+diff --git a/tests/unit/test_obys_contract_employment_payroll.py b/tests/unit/test_obys_contract_employment_payroll.py
+new file mode 100644
+index 00000000..ecd37b98
+--- /dev/null
++++ b/tests/unit/test_obys_contract_employment_payroll.py
+@@ -0,0 +1,549 @@
++"""AADS-OBYS-CONTRACT-TO-EMPLOYMENT-PAYROLL-20260930 — 서명 계약 → 고용조건 스냅샷 → 급여 기본값."""
++import asyncio
++import base64
++import os
++from datetime import datetime, timedelta
++from io import BytesIO
 +
-+    @asynccontextmanager
-+    async def transaction(self):
-+        yield
++import pytest
++from fastapi import FastAPI
++from fastapi.testclient import TestClient
 +
-+    async def close(self) -> None:
-+        return None
++os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-that-is-at-least-32-bytes-long")
 +
-+    def _business(self, business_id, tenant_id):
-+        row = self.db.businesses.get(business_id)
-+        return row if row and row["tenant_id"] == tenant_id else None
++from app.api import obys_finance as api
++from app.services import aligo_client, yeoljeong_ops_service
 +
-+    @staticmethod
-+    def _project(doc, sql):
-+        # RETURNING/SELECT 가 고른 열만 돌려준다(asyncpg Record 와 같게).
-+        columns = service.REGISTRATION_DOCUMENT_COLUMNS.split(",")
-+        if ",stored_filename FROM" in sql:
-+            columns.append("stored_filename")
-+        return {column: doc[column] for column in columns}
-+
-+    def _active(self, tenant_id, business_id):
-+        rows = [d for d in self.db.documents if d["tenant_id"] == tenant_id and d["business_id"] == business_id and d["deleted_at"] is None]
-+        return sorted(rows, key=lambda d: d["version"], reverse=True)
-+
-+    async def fetchval(self, sql, *args):
-+        if "EXISTS" in sql:
-+            return self._business(args[0], args[1]) is not None
-+        if "MAX(version)" in sql:
-+            versions = [d["version"] for d in self.db.documents if d["tenant_id"] == args[0] and d["business_id"] == args[1]]
-+            return max(versions, default=0) + 1
-+        raise AssertionError(sql)
-+
-+    async def execute(self, sql, *args):
-+        if "pg_advisory_xact_lock" in sql:
-+            return "SELECT 1"
-+        if "deleted_at=NOW()" in sql:
-+            hits = [d for d in self._active(args[1], args[2]) if d["id"] == args[0]]
-+            for doc in hits:
-+                doc["deleted_at"], doc["deleted_by"] = datetime.now(timezone.utc), args[3]
-+            return f"UPDATE {len(hits)}"
-+        raise AssertionError(sql)
-+
-+    async def fetch(self, sql, *args):
-+        assert "yeoljeong_business_registration_documents" in sql
-+        return [self._project(d, sql) for d in self._active(args[0], args[1])]
-+
-+    async def fetchrow(self, sql, *args):
-+        if "yeoljeong_audit_logs" in sql:
-+            entry = dict(zip(("business_id", "actor", "action", "resource_type", "resource_id", "details", "ip_address"), args))
-+            self.db.audits.append(entry)
-+            return entry
-+        if "INSERT" in sql and "yeoljeong_business_registration_documents" in sql:
-+            keys = ("id", "tenant_id", "business_id", "version", "original_filename", "stored_filename",
-+                    "content_type", "extension", "byte_size", "sha256", "created_by")
-+            doc = dict(zip(keys, args))
-+            doc.update(created_at=datetime.now(timezone.utc), deleted_at=None, deleted_by=None)
-+            self.db.documents.append(doc)
-+            return self._project(doc, sql)
-+        if "yeoljeong_business_registration_documents" in sql and "LIMIT 1" in sql:
-+            active = self._active(args[0], args[1])
-+            return self._project(active[0], sql) if active else None
-+        if "yeoljeong_business_registration_documents" in sql:
-+            hits = [d for d in self._active(args[1], args[2]) if d["id"] == args[0]]
-+            return self._project(hits[0], sql) if hits else None
-+        if "yeoljeong_businesses" in sql:
-+            row = self._business(args[0], args[1])
-+            return dict(row) if row else None
-+        raise AssertionError(sql)
++svc = api.svc
++TENANT = "15055cac-71b0-45ec-b714-7093dde189ff"
++OTHER_TENANT = "2a1b3c4d-0000-4000-8000-000000000001"
++MEMBERSHIP = {"tenant_id": TENANT, "status": "active"}
++ADMIN = {"email": "owner@example.com", "is_admin": True, "tenant_id": TENANT, "current_membership": MEMBERSHIP}
++EMPLOYEE = {"email": "member@example.com", "is_admin": False, "tenant_id": TENANT, "current_membership": MEMBERSHIP}
++THIRD_PARTY = {"email": "other@example.com", "is_admin": False, "tenant_id": TENANT, "current_membership": MEMBERSHIP}
++OTHER_TENANT_ADMIN = {
++    "email": "boss@other.example.com",
++    "is_admin": True,
++    "tenant_id": OTHER_TENANT,
++    "current_membership": {"tenant_id": OTHER_TENANT, "status": "active"},
++}
 +
 +
-+@pytest.fixture
-+def db(tmp_path, monkeypatch):
-+    fake = FakeDB()
-+
-+    async def connect():
-+        return FakeConn(fake)
-+
-+    monkeypatch.setattr(service, "UPLOAD_ROOT", tmp_path / "uploads")
-+    monkeypatch.setattr(service, "_connect", connect)
-+    return fake
++def _disable_db(coroutine):
++    close = getattr(coroutine, "close", None)
++    if close:
++        close()
++    return None
 +
 +
-+def _upload(user, data=PNG, filename="등록증.png", content_type="image/png", business_id=BUSINESS):
-+    return asyncio.run(service.create_registration_document(
-+        user=user, business_id=business_id, filename=filename, content_type=content_type, data=data,
-+    ))
++@pytest.fixture(autouse=True)
++def isolated(tmp_path, monkeypatch):
++    """파일 모드로만 돈다 — 운영 DB·업로드 경로·실제 알림 발송을 건드리지 않는다."""
++    for name in ("OBYS_DATABASE_URL", "YEOLJEONG_FINANCE_DATABASE_URL", "OBYS_CONTRACT_NOTIFY_CHANNELS",
++                 "OBYS_CONTRACT_PDF_FONT_PATH", "OBYS_CONTRACT_SIGN_BASE_URL"):
++        monkeypatch.delenv(name, raising=False)
++    monkeypatch.setenv("OBYS_UPLOAD_ROOT", str(tmp_path / "upload-root"))
++    monkeypatch.setattr(svc, "DATA_DIR", tmp_path / "data")
++    monkeypatch.setattr(svc, "UPLOAD_DIR", tmp_path / "data" / "uploads" / "onboarding")
++    monkeypatch.setattr(svc, "_run_db", _disable_db)
++
++    # 서명 시각이 같은 초에 겹치지 않도록 1분씩 흐르는 시계.
++    clock = {"now": datetime(2026, 9, 30, 9, 0, tzinfo=svc.KST)}
++
++    def fake_now():
++        clock["now"] += timedelta(minutes=1)
++        return clock["now"].isoformat(timespec="seconds")
++
++    monkeypatch.setattr(svc, "_now", fake_now)
++
++    async def fake_create_notification(**kwargs):
++        return {"id": "ntf-test", **kwargs}
++
++    monkeypatch.setattr(yeoljeong_ops_service, "create_notification", fake_create_notification)
++    monkeypatch.setattr(aligo_client, "is_available", lambda: False)
++
++    svc._write("employee_join_requests", [{
++        "id": "join-mia", "name": "가입 직원", "email": EMPLOYEE["email"],
++        "address": "서울시 직원 주소", "phone": "010-1234-5678", "birth_date": "1990-01-01",
++        "tenant_id": TENANT, "business_id": "biz-mia", "branch": "열정국밥_미아점", "status": "approved",
++    }])
++    return tmp_path
 +
 +
-+# --- A. 원본 보관 --------------------------------------------------------------
-+def test_upload_stores_original_under_tenant_business_hash_with_sha256(db, tmp_path):
-+    document = _upload(_user(TENANT_A))
-+
-+    business_hash = hashlib.sha256(BUSINESS.encode()).hexdigest()[:32]
-+    directory = tmp_path / "uploads" / str(TENANT_A) / business_hash / "business_registration"
-+    stored = list(directory.iterdir())
-+    assert len(stored) == 1 and stored[0].read_bytes() == PNG
-+    assert stored[0].name == f"{UUID(document['id']).hex}.png"
-+    assert document["sha256"] == hashlib.sha256(PNG).hexdigest()
-+    assert document["original_filename"] == "등록증.png"
-+    assert document["byte_size"] == len(PNG) and document["extension"] == ".png"
-+    assert document["uploaded_by"] == "owner@example.com" and document["uploaded_at"]
-+    assert document["version"] == 1 and document["is_current"] is True and document["status"] == "stored"
-+    assert "stored_filename" not in document
-+    assert db.audits[-1]["action"] == "business_registration.upload"
++BASE = {
++    "employee_request_id": "join-mia", "business_id": "biz-mia", "branch": "열정국밥_미아점",
++    "contract_date": "2026-09-30", "start_date": "2026-10-01", "workplace": "열정국밥 미아점",
++}
++EMPLOYMENT_TERMS = {
++    "employment_tax_type": "four_insurance", "job_description": "매장 운영",
++    "work_time": "09:00-18:00", "rest_time": "12:00-13:00", "weekly_hours": "주 40시간",
++    "work_days": "월~금 주 5일", "holidays": "매주 일요일", "pay_date": "매월 10일",
++    "pay_method": "계좌이체", "wage_composition": "기본급 및 법정수당",
++    "overtime_terms": "사전 승인 및 법정 가산수당", "leave_terms": "법정 연차유급휴가",
++    "insurance_terms": "4대보험 법정 기준 적용",
++}
 +
 +
-+def test_registration_category_stays_out_of_ledger_paths():
-+    assert service.REGISTRATION_CATEGORY not in service.LEDGER_CATEGORIES
-+    with pytest.raises(HTTPException) as exc:
-+        asyncio.run(service.create_upload(
-+            user=_user(TENANT_A), business_id=BUSINESS, category="business_registration",
-+            filename="a.pdf", content_type="application/pdf", data=PDF,
-+        ))
-+    assert exc.value.status_code == 400
++def monthly_contract(**overrides):
++    payload = {
++        **BASE, **EMPLOYMENT_TERMS, "contract_type": "regular", "wage_type": "monthly", "wage": 2800000,
++        "base_salary": 2600000, "non_tax_meal_allowance": 200000, "taxable_allowance": 0,
++        "meal_provision": "cash_no_meal",
++    }
++    payload.update(overrides)
++    return payload
 +
 +
-+def test_second_upload_keeps_previous_version_and_latest_is_current(db):
-+    admin = _user(TENANT_A)
-+    first = _upload(admin)
-+    second = _upload(admin, data=PDF, filename="재발급.pdf", content_type="application/pdf")
-+    again = _upload(admin, data=PDF, filename="재발급.pdf", content_type="application/pdf")
-+
-+    listed = asyncio.run(service.list_registration_documents(user=admin, business_id=BUSINESS))
-+    assert [d["version"] for d in listed["documents"]] == [2, 1]
-+    assert listed["current"]["id"] == second["id"] and listed["current"]["is_current"] is True
-+    assert listed["documents"][1]["id"] == first["id"] and listed["documents"][1]["is_current"] is False
-+    assert again["status"] == "duplicate" and again["id"] == second["id"]
-+    assert len(db.documents) == 2
++def hourly_contract(**overrides):
++    payload = {
++        **BASE, **EMPLOYMENT_TERMS, "contract_type": "part_time", "wage_type": "hourly", "wage": 11000,
++        "weekly_hours": "주 20시간", "work_days": "월·수·금", "daily_work_schedule": "월수금 각 6시간 40분",
++        "meal_provision": "employer_meal",
++    }
++    payload.update(overrides)
++    return payload
 +
 +
-+def test_soft_delete_keeps_file_and_row(db, tmp_path):
-+    admin = _user(TENANT_A)
-+    first = _upload(admin)
-+    second = _upload(admin, data=PDF, filename="b.pdf", content_type="application/pdf")
-+    assert asyncio.run(service.delete_registration_document(user=admin, business_id=BUSINESS, document_id=UUID(second["id"])))
++def freelancer_contract(**overrides):
++    payload = {
++        **BASE, "contract_type": "freelancer", "employment_tax_type": "freelancer_33", "wage_type": "case_fee",
++        "wage": 500000, "freelancer_scope": "메뉴 사진 촬영", "freelancer_settlement_terms": "건별 정산",
++    }
++    payload.update(overrides)
++    return payload
 +
-+    assert len(db.documents) == 2 and db.documents[1]["deleted_at"] is not None
-+    assert len(list((tmp_path / "uploads").rglob("*.pdf"))) == 1
-+    listed = asyncio.run(service.list_registration_documents(user=admin, business_id=BUSINESS))
-+    assert listed["current"]["id"] == first["id"]
-+    third = _upload(admin, data=PDF + b"v3", filename="c.pdf", content_type="application/pdf")
-+    assert third["version"] == 3  # 삭제된 버전 번호는 재사용하지 않는다
++
++def confidentiality_contract(**overrides):
++    payload = {**BASE, "contract_type": "confidentiality", "employment_tax_type": "four_insurance"}
++    payload.update(overrides)
++    return payload
++
++
++def _signature_png() -> bytes:
++    from PIL import Image, ImageDraw
++
++    image = Image.new("RGB", (320, 120), "white")
++    ImageDraw.Draw(image).line((12, 96, 300, 24), fill="black", width=5)
++    buffer = BytesIO()
++    image.save(buffer, "PNG")
++    return buffer.getvalue()
++
++
++def sign(payload):
++    saved = svc.save_contract(payload, ADMIN)
++    requested = svc.request_contract_signature(saved["id"], ADMIN)
++    return svc.sign_contract_and_deliver(
++        {
++            "token": requested["sign_token"],
++            "signer_name": "가입 직원",
++            "consent": True,
++            "consent_version": "yeoljeong-contract-sign-v1",
++            "signature_data_uri": "data:image/png;base64," + base64.b64encode(_signature_png()).decode("ascii"),
++        },
++        EMPLOYEE,
++    )
++
++
++def employee():
++    return next(row for row in svc._read_hr("employee_join_requests", ADMIN) if row["id"] == "join-mia")
++
++
++def audit_rows():
++    return svc._read_file_rows(svc.EMPLOYMENT_AUDIT_LOG)
++
++
++def _client(user):
++    app = FastAPI()
++    app.include_router(api.router)
++    app.dependency_overrides[api.get_current_user] = lambda: user
++    return TestClient(app)
++
++
++# --- A. 고용조건 스냅샷 ------------------------------------------------------
++
++
++def test_signed_employment_contract_is_reflected_in_employee_snapshot():
++    result = sign(monthly_contract())
++    contract = result["contract"]
++
++    assert contract["status"] == "signed"
++    assert result["employment"]["status"] == "updated"
++    assert result["employment"]["action"] == "employment.snapshot_created"
++    row = employee()
++    snapshot = row["current_employment"]
++    assert row["current_employment_contract_id"] == contract["id"]
++    assert snapshot["wage"] == 2800000
++    assert snapshot["wage_type"] == "monthly"
++    assert snapshot["start_date"] == "2026-10-01"
++    assert snapshot["work_days"] == "월~금 주 5일"
++    assert snapshot["weekly_hours"] == "주 40시간"
++    assert snapshot["non_tax_meal_allowance"] == 200000
++    assert snapshot["meal_provision"] == "cash_no_meal"
++    assert snapshot["business_id"] == "biz-mia"
++    assert row["current_employment_effective_from"] == "2026-10-01"
++    assert row["current_employment_synced_at"]
++    assert row["current_employment_error"] == ""
++
++    listed = svc.list_approved_employees(ADMIN)[0]
++    assert listed["current_employment"] == snapshot
++    assert listed["current_employment_contract_id"] == contract["id"]
++    assert listed["needs_employment_sync"] is False
++    # 화면이 쓰는 기존 필드는 그대로 남는다.
++    assert listed["contract_count"] == 1
++    assert listed["needs_contract"] is False
++
++    (entry,) = audit_rows()
++    assert entry["action"] == "employment.snapshot_created"
++    assert entry["resource_type"] == "employee_employment"
++    assert entry["resource_id"] == "join-mia"
++    assert entry["details"]["contract_id"] == contract["id"]
++    assert entry["details"]["tenant_id"] == TENANT
++
++
++def test_confidentiality_signature_does_not_create_employment_snapshot():
++    result = sign(confidentiality_contract())
++
++    assert result["contract"]["status"] == "signed"
++    assert result["employment"]["status"] == "skipped"
++    row = employee()
++    assert not row.get("current_employment")
++    assert not row.get("current_employment_contract_id")
++    assert audit_rows() == []
++    assert svc.list_approved_employees(ADMIN)[0]["needs_employment_sync"] is False
++
++
++def test_confidentiality_after_employment_keeps_employment_snapshot():
++    first = sign(monthly_contract())["contract"]
++    sign(confidentiality_contract())
++    assert employee()["current_employment_contract_id"] == first["id"]
++    assert len(audit_rows()) == 1
++
++
++def test_correction_contract_replaces_snapshot_and_keeps_history():
++    first = sign(monthly_contract())["contract"]
++    second_result = sign(monthly_contract(wage=3000000, base_salary=2800000, work_days="화~토 주 5일"))
++    second = second_result["contract"]
++
++    assert second_result["employment"]["action"] == "employment.snapshot_replaced"
++    row = employee()
++    assert row["current_employment_contract_id"] == second["id"]
++    assert row["current_employment"]["wage"] == 3000000
++    assert row["current_employment"]["work_days"] == "화~토 주 5일"
++    assert row["previous_employment_contract_id"] == first["id"]
++
++    # 이전 서명 계약서는 그대로 남고 불변이다.
++    contracts = {item["id"]: item for item in svc.list_contracts(ADMIN)}
++    assert contracts[first["id"]]["status"] == "signed"
++    assert contracts[first["id"]]["wage"] == 2800000
++    with pytest.raises(svc.HTTPException) as edit:
++        svc.save_contract({**contracts[first["id"]], "wage": 1}, ADMIN)
++    assert edit.value.status_code == 409
++
++    actions = [entry["action"] for entry in audit_rows()]
++    assert sorted(actions) == ["employment.snapshot_created", "employment.snapshot_replaced"]
++    replaced = next(entry for entry in audit_rows() if entry["action"] == "employment.snapshot_replaced")
++    assert replaced["details"]["previous_contract_id"] == first["id"]
++    assert replaced["details"]["changes"]["wage"] == {"before": 2800000, "after": 3000000}
++
++    history = svc.employee_employment_history("join-mia", ADMIN)
++    assert [item["contract_id"] for item in history["contracts"]] == [first["id"], second["id"]]
++    kinds = [item["kind"] for item in history["timeline"]]
++    assert kinds.count("contract_signed") == 2 and kinds.count("audit") == 2
++    stamps = [svc._pg_ts(item["at"]) for item in history["timeline"]]
++    assert stamps == sorted(stamps)
++
++
++def test_snapshot_failure_keeps_signature_and_records_error(monkeypatch):
++    original = svc._derive_current_employment
++
++    def broken(*args, **kwargs):
++        raise RuntimeError("snapshot store down")
++
++    monkeypatch.setattr(svc, "_derive_current_employment", broken)
++    result = sign(monthly_contract())
++
++    assert result["contract"]["status"] == "signed"
++    assert result["employment"]["status"] == "failed"
++    assert result["employment"]["error_recorded"] is True
++    stored = next(item for item in svc.list_contracts(ADMIN) if item["id"] == result["contract"]["id"])
++    assert stored["status"] == "signed"
++    row = employee()
++    assert "snapshot store down" in row["current_employment_error"]
++    assert not row.get("current_employment")
++
++    monkeypatch.setattr(svc, "_derive_current_employment", original)
++    assert svc.list_approved_employees(ADMIN)[0]["needs_employment_sync"] is True
++
++    resynced = _client(ADMIN).post("/yeoljeong-finance/employees/approved/join-mia/resync-employment")
++    assert resynced.status_code == 200
++    body = resynced.json()
++    assert body["result"]["action"] == "employment.snapshot_resynced"
++    assert body["current_employment_contract_id"] == result["contract"]["id"]
++    assert body["current_employment_error"] == ""
++    assert svc.list_approved_employees(ADMIN)[0]["needs_employment_sync"] is False
++    # 두 번째 재동기화는 바뀐 게 없으므로 쓰지 않는다.
++    again = svc.resync_employee_employment("join-mia", ADMIN)
++    assert again["result"]["status"] == "unchanged"
++    assert [entry["action"] for entry in audit_rows()] == ["employment.snapshot_resynced"]
++
++
++def test_audit_db_path_reuses_ops_insert(monkeypatch):
++    calls = []
++
++    class FakeConn:
++        async def close(self):
++            calls.append("closed")
++
++    async def fake_connect(*args, **kwargs):
++        return FakeConn()
++
++    async def fake_insert(conn, **kwargs):
++        calls.append(kwargs)
++        return {"id": "aud-1", **kwargs}
++
++    import asyncpg
++
++    monkeypatch.setattr(svc, "_db_available", lambda: True)
++    monkeypatch.setattr(svc, "_db_url", lambda: "postgres://fake")
++    monkeypatch.setattr(svc, "_run_db", asyncio.run)
++    monkeypatch.setattr(asyncpg, "connect", fake_connect)
++    monkeypatch.setattr(yeoljeong_ops_service, "_insert_audit_log_conn", fake_insert)
++
++    assert svc._append_employment_audit(
++        tenant_id=TENANT, business_id="biz-mia", actor="owner@example.com",
++        action="employment.snapshot_resynced", resource_type="employee_employment",
++        resource_id="join-mia", details={"contract_id": "c-1"},
++    ) is True
++    assert calls[0]["action"] == "employment.snapshot_resynced"
++    assert calls[0]["details"] == {"contract_id": "c-1", "tenant_id": TENANT}
++    assert calls[-1] == "closed"
++
++
++# --- B. 급여 기본값 ---------------------------------------------------------
++
++
++def _defaults(user=ADMIN, month="2026-10"):
++    return _client(user).get(
++        "/yeoljeong-finance/payroll/defaults",
++        params={"employee_email": EMPLOYEE["email"], "payroll_month": month},
++    )
++
++
++def test_monthly_payroll_defaults_fill_contract_wage_and_meal_split():
++    contract = sign(monthly_contract())["contract"]
++    response = _defaults()
++    assert response.status_code == 200
++    body = response.json()
++    assert body["source_contract_id"] == contract["id"]
++    assert body["wage_type"] == "monthly"
++    assert body["defaults"] == {
++        "employment_tax_type": "four_insurance",
++        "meal_provision": "cash_no_meal",
++        "gross_pay": 2800000,
++        "taxable_pay": 2600000,
++        "non_tax_meal_allowance": 200000,
++    }
++    assert "2,800,000" in body["basis"]
++    assert body["employment_snapshot_in_sync"] is True
++
++
++def test_monthly_defaults_distinguish_employer_provided_meal():
++    sign(monthly_contract(base_salary=2800000, non_tax_meal_allowance=0, meal_provision="employer_meal"))
++    defaults = _defaults().json()["defaults"]
++    assert defaults["meal_provision"] == "employer_meal"
++    assert defaults["non_tax_meal_allowance"] == 0
++    assert defaults["taxable_pay"] == 2800000
++
++
++def test_hourly_payroll_defaults_do_not_estimate_gross_pay():
++    sign(hourly_contract())
++    body = _defaults().json()
++    assert "gross_pay" not in body["defaults"]
++    assert "taxable_pay" not in body["defaults"]
++    assert body["estimated"] is False
++    assert body["reason"] == "시급제는 근태 확정 후 산정"
++    assert body["hourly_wage"] == 11000
++    assert body["weekly_hours"] == "주 20시간"
++
++    saved = svc.save_payroll(
++        {"employee_email": EMPLOYEE["email"], "employee_name": "가입 직원", "business_id": "biz-mia", "payroll_month": "2026-10"},
++        ADMIN,
++    )
++    assert saved["gross_pay"] == 0
++    assert "gross_pay" not in saved["contract_defaults_applied"]
++
++
++def test_freelancer_payroll_defaults_only_tax_type():
++    sign(freelancer_contract())
++    body = _defaults().json()
++    assert body["defaults"] == {"employment_tax_type": "freelancer_33"}
++    assert body["wage_type"] == "case_fee"
++
++    saved = svc.save_payroll(
++        {"employee_email": EMPLOYEE["email"], "employee_name": "가입 직원", "business_id": "biz-mia", "payroll_month": "2026-10"},
++        ADMIN,
++    )
++    assert saved["employment_tax_type"] == "freelancer_33"
++    assert saved["contract_defaults_applied"] == ["employment_tax_type"]
++    assert saved["gross_pay"] == 0
++
++
++def test_save_payroll_fills_only_missing_values_from_contract():
++    contract = sign(monthly_contract())["contract"]
++    saved = svc.save_payroll(
++        {"employee_email": EMPLOYEE["email"], "employee_name": "가입 직원", "business_id": "biz-mia",
++         "payroll_month": "2026-10", "tax_withholding": 50000},
++        ADMIN,
++    )
++    assert saved["gross_pay"] == 2800000
++    assert saved["taxable_pay"] == 2600000
++    assert saved["non_tax_meal_allowance"] == 200000
++    assert saved["net_pay"] == 2750000
++    assert "status" not in saved  # 자동 확정하지 않는다 — 상태는 관리자가 정한다
++    assert saved["source_contract_id"] == contract["id"]
++    assert set(saved["contract_defaults_applied"]) == {
++        "gross_pay", "taxable_pay", "non_tax_meal_allowance", "meal_provision", "employment_tax_type",
++    }
++    assert saved["contract_deviation"] == {}
++    actions = [entry["action"] for entry in audit_rows() if entry["resource_type"] == "payroll_statement"]
++    assert actions == ["payroll.contract_defaults_applied"]
++
++
++def test_save_payroll_never_overwrites_admin_values_and_records_deviation():
++    sign(monthly_contract())
++    saved = svc.save_payroll(
++        {"employee_email": EMPLOYEE["email"], "employee_name": "가입 직원", "business_id": "biz-mia",
++         "payroll_month": "2026-10", "gross_pay": 2500000, "taxable_pay": 2500000, "non_tax_meal_allowance": 0},
++        ADMIN,
++    )
++    assert saved["gross_pay"] == 2500000
++    assert saved["taxable_pay"] == 2500000
++    assert saved["non_tax_meal_allowance"] == 0
++    assert "gross_pay" not in saved["contract_defaults_applied"]
++    assert saved["contract_deviation"]["gross_pay"] == {"contract": 2800000, "input": 2500000}
++    assert saved["contract_deviation"]["non_tax_meal_allowance"] == {"contract": 200000, "input": 0}
++    deviation_logs = [entry for entry in audit_rows() if entry["action"] == "payroll.contract_deviation"]
++    assert len(deviation_logs) == 1
++    assert deviation_logs[0]["resource_id"] == saved["id"]
++    assert deviation_logs[0]["details"]["deviation"]["gross_pay"]["input"] == 2500000
++
++
++def test_admin_gross_without_split_is_not_forced_into_contract_split():
++    sign(monthly_contract())
++    saved = svc.save_payroll(
++        {"employee_email": EMPLOYEE["email"], "employee_name": "가입 직원", "business_id": "biz-mia", "gross_pay": 3100000},
++        ADMIN,
++    )
++    assert saved["gross_pay"] == 3100000
++    assert saved["taxable_pay"] == 0 and saved["non_tax_meal_allowance"] == 0
++    assert saved["contract_deviation"] == {"gross_pay": {"contract": 2800000, "input": 3100000}}
 +
 +
 +@pytest.mark.parametrize(
-+    ("filename", "content_type", "data"),
++    ("overrides", "message"),
 +    [
-+        ("virus.exe", "application/octet-stream", b"MZ" + b"0" * 10),
-+        ("ledger.csv", "text/csv", b"date,amount\n2026-09-30,1"),
-+        ("fake.png", "image/png", b"not-a-png"),
-+        ("big.pdf", "application/pdf", b"%PDF-" + b"0" * service.MAX_BYTES),
++        ({"gross_pay": 2800000, "taxable_pay": 2500000, "non_tax_meal_allowance": 200000}, "합계"),
++        ({"gross_pay": 2800000, "taxable_pay": 2550000, "non_tax_meal_allowance": 250000}, "200,000"),
++        ({"gross_pay": 2800000, "taxable_pay": 2600000, "non_tax_meal_allowance": 200000, "meal_provision": "employer_meal"}, "식사를 제공"),
 +    ],
 +)
-+def test_disallowed_file_or_oversize_is_400(db, filename, content_type, data):
-+    with pytest.raises(HTTPException) as exc:
-+        _upload(_user(TENANT_A), data=data, filename=filename, content_type=content_type)
++def test_existing_payroll_validations_still_apply_with_contract_defaults(overrides, message):
++    sign(monthly_contract())
++    with pytest.raises(svc.HTTPException) as exc:
++        svc.save_payroll(
++            {"employee_email": EMPLOYEE["email"], "employee_name": "가입 직원", "business_id": "biz-mia", **overrides},
++            ADMIN,
++        )
 +    assert exc.value.status_code == 400
-+    assert db.documents == []
++    assert message in exc.value.detail
 +
 +
-+def test_router_oversize_stream_is_400():
-+    upload = UploadFile(file=io.BytesIO(b"0" * (service.MAX_BYTES + 1)), filename="big.pdf")
-+    with pytest.raises(HTTPException) as exc:
-+        asyncio.run(api._read_registration_upload(upload))
++def test_employer_meal_contract_default_blocks_cash_non_tax_meal():
++    sign(monthly_contract(base_salary=2800000, non_tax_meal_allowance=0, meal_provision="employer_meal"))
++    with pytest.raises(svc.HTTPException) as exc:
++        svc.save_payroll(
++            {"employee_email": EMPLOYEE["email"], "employee_name": "가입 직원", "business_id": "biz-mia",
++             "gross_pay": 2800000, "taxable_pay": 2600000, "non_tax_meal_allowance": 200000},
++            ADMIN,
++        )
 +    assert exc.value.status_code == 400
++    assert "식사를 제공" in exc.value.detail
 +
 +
-+def test_non_admin_is_403_for_every_registration_operation(db):
-+    document = _upload(_user(TENANT_A))
-+    member = _user(TENANT_A, role="member")
-+    document_id = UUID(document["id"])
-+    calls = [
-+        lambda: service.create_registration_document(user=member, business_id=BUSINESS, filename="a.png", content_type="image/png", data=PNG),
-+        lambda: service.list_registration_documents(user=member, business_id=BUSINESS),
-+        lambda: service.registration_document_download(user=member, business_id=BUSINESS, document_id=document_id),
-+        lambda: ocr.suggest_from_document(user=member, business_id=BUSINESS, document_id=document_id),
-+        lambda: service.delete_registration_document(user=member, business_id=BUSINESS, document_id=document_id),
-+    ]
-+    for call in calls:
-+        with pytest.raises(HTTPException) as exc:
-+            asyncio.run(call())
++# --- 권한 ------------------------------------------------------------------
++
++
++def test_non_admin_and_other_tenant_are_forbidden():
++    sign(monthly_contract())
++    resync = "/yeoljeong-finance/employees/approved/join-mia/resync-employment"
++    history = "/yeoljeong-finance/employees/approved/join-mia/employment-history"
++
++    for user in (EMPLOYEE, THIRD_PARTY, OTHER_TENANT_ADMIN):
++        assert _defaults(user).status_code == 403
++        assert _client(user).post(resync).status_code == 403
++    for user in (THIRD_PARTY, OTHER_TENANT_ADMIN):
++        assert _client(user).get(history).status_code == 403
++
++    # 라우터 게이트와 별개로 서비스 자체도 다른 테넌트를 막는다.
++    for call in (
++        lambda: svc.payroll_defaults(EMPLOYEE["email"], "2026-10", OTHER_TENANT_ADMIN),
++        lambda: svc.resync_employee_employment("join-mia", OTHER_TENANT_ADMIN),
++        lambda: svc.employee_employment_history("join-mia", OTHER_TENANT_ADMIN),
++        lambda: svc.employee_employment_history("join-mia", THIRD_PARTY),
++    ):
++        with pytest.raises(svc.HTTPException) as exc:
++            call()
 +        assert exc.value.status_code == 403
-+    with pytest.raises(HTTPException) as router_exc:
-+        asyncio.run(api.upload_business_registration_document(BUSINESS, UploadFile(file=io.BytesIO(PNG), filename="a.png"), member))
-+    assert router_exc.value.status_code == 403
++
++    own = _client(EMPLOYEE).get(history)
++    assert own.status_code == 200
++    assert own.json()["current_employment"]["wage"] == 2800000
++    assert _client(ADMIN).get(history).status_code == 200
 +
 +
-+def test_other_tenant_admin_gets_404(db):
-+    document = _upload(_user(TENANT_A))
-+    other = _user(TENANT_B)
-+    document_id = UUID(document["id"])
-+    calls = [
-+        lambda: service.create_registration_document(user=other, business_id=BUSINESS, filename="a.png", content_type="image/png", data=PNG),
-+        lambda: service.list_registration_documents(user=other, business_id=BUSINESS),
-+        lambda: service.registration_document_download(user=other, business_id=BUSINESS, document_id=document_id),
-+        lambda: ocr.suggest_from_document(user=other, business_id=BUSINESS, document_id=document_id),
-+        lambda: service.delete_registration_document(user=other, business_id=BUSINESS, document_id=document_id),
-+    ]
-+    for call in calls:
-+        with pytest.raises(HTTPException) as exc:
-+            asyncio.run(call())
-+        assert exc.value.status_code == 404
-+    assert len(db.documents) == 1
++def test_payroll_month_format_is_validated():
++    sign(monthly_contract())
++    assert _defaults(month="2026-13").status_code == 400
++    assert _defaults(month="2026-09").json()["period_note"] == "급여 월이 계약 기간 밖입니다"
 +
 +
-+def test_download_returns_sanitized_name_and_original_bytes(db):
-+    admin = _user(TENANT_A)
-+    document = _upload(admin, filename="등록증 (원본);x.png")
-+    path, filename, content_type = asyncio.run(service.registration_document_download(
-+        user=admin, business_id=BUSINESS, document_id=UUID(document["id"]),
-+    ))
-+    assert path.read_bytes() == PNG and content_type == "image/png"
-+    assert filename.startswith("사업자등록증_v1_") and filename.endswith(".png")
-+    assert not set(filename) & set('/\\";\r\n')
++# --- D. 마이그레이션·백필 ----------------------------------------------------
 +
 +
-+# --- B. OCR 제안 ---------------------------------------------------------------
-+def test_checksum_rule():
-+    assert ocr.business_registration_checksum_ok("1234567891")
-+    assert not ocr.business_registration_checksum_ok("1234567890")
-+    assert ocr.normalize_registration_no("1234567891") == (VALID_NO, True, None)
-+    value, valid, reason = ocr.normalize_registration_no(BAD_NO)
-+    assert value == BAD_NO and valid is False and "체크섬" in reason
++def test_migration_is_schema_only_and_held_from_aads_auto_apply():
++    from pathlib import Path
++
++    root = Path(__file__).resolve().parents[2]
++    name = "20260930_obys_employment_audit_lookup.sql"
++    sql = (root / "migrations" / name).read_text(encoding="utf-8")
++    upper = sql.upper()
++    assert "CREATE INDEX IF NOT EXISTS" in upper
++    for forbidden in ("UPDATE ", "DELETE ", "DROP ", "TRUNCATE", "INSERT "):
++        assert forbidden not in upper
++    baseline = (root / "scripts" / "migrations_auto_apply_baseline.txt").read_text(encoding="utf-8").splitlines()
++    assert f"migrations/{name}" in baseline
++    assert (root / "migrations" / "rollback" / name.replace(".sql", ".down.sql")).is_file()
 +
 +
-+def test_parse_extracts_five_fields_and_extras():
-+    result = ocr.parse_registration_text(OCR_TEXT, 92, today=date(2026, 9, 30))
-+    assert result["name"]["value"] == "언니냉면 테스트"
-+    assert result["registration_no"]["value"] == VALID_NO and result["registration_no"]["valid"] is True
-+    assert result["representative"]["value"] == "김테스트"
-+    assert result["opened_at"]["value"] == "2025-04-01"
-+    assert result["address"]["value"] == "서울특별시 성북구 테스트로 1"
-+    for field in ocr.AUTOFILL_FIELDS:
-+        assert result[field]["autofill_candidate"] is True
-+        assert 0 < result[field]["confidence"] <= 1 and result[field]["source"]
-+    assert result["tax_type"]["value"] == "일반과세" and result["tax_type"]["autofill_candidate"] is False
++def test_backfill_script_defaults_to_dry_run(monkeypatch, capsys):
++    import importlib.util
++    from pathlib import Path
 +
++    # 신규 서명분은 훅이 처리하므로, 백필 대상은 훅 이전 서명분을 흉내 낸다.
++    monkeypatch.setattr(svc, "_sync_employment_after_signature", lambda contract, user: {"status": "skipped"})
++    contract = sign(monthly_contract())["contract"]
++    assert not employee().get("current_employment")
 +
-+def test_bad_checksum_is_invalid_and_not_autofill():
-+    result = ocr.parse_registration_text(OCR_TEXT.replace(VALID_NO, "1234567890"), 0.9)
-+    item = result["registration_no"]
-+    assert item["value"] == BAD_NO
-+    assert item["valid"] is False and item["autofill_candidate"] is False and item["reason"]
++    path = Path(__file__).resolve().parents[2] / "scripts" / "backfill_employment_snapshots.py"
++    spec = importlib.util.spec_from_file_location("backfill_employment_snapshots", path)
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
 +
++    assert module.main(["--tenant", TENANT]) == 0
++    out = capsys.readouterr().out
++    assert "DRY-RUN" in out and contract["id"] in out
++    assert not employee().get("current_employment")
 +
-+def test_opened_at_korean_date_and_future_date():
-+    assert ocr.normalize_opened_at("2025년 4월 1일", today=date(2026, 9, 30)) == ("2025-04-01", True, None)
-+    assert ocr.normalize_opened_at("2025. 04. 01", today=date(2026, 9, 30))[0] == "2025-04-01"
-+    value, valid, reason = ocr.normalize_opened_at("2099 년 01 월 01 일", today=date(2026, 9, 30))
-+    assert value == "2099-01-01" and valid is False and "미래" in reason
-+    assert ocr.normalize_opened_at("2025년 2월 30일", today=date(2026, 9, 30))[0] is None
-+    future = ocr.parse_registration_text(OCR_TEXT.replace("2025 년 4 월 1 일", "2099 년 1 월 1 일"), 0.9, today=date(2026, 9, 30))
-+    assert future["opened_at"]["valid"] is False and future["opened_at"]["autofill_candidate"] is False
-+
-+
-+def test_missing_fields_are_null_with_reason_not_guessed():
-+    result = ocr.parse_registration_text("사 업 자 등 록 증\n상 호 : 언니냉면", 0.9)
-+    assert result["name"]["value"] == "언니냉면"
-+    for field in ("registration_no", "representative", "opened_at", "address", "corporate_registration_no", "tax_type"):
-+        assert result[field]["value"] is None, field
-+        assert result[field]["reason"], field
-+        assert result[field]["autofill_candidate"] is False
-+    empty = ocr.parse_registration_text("", 0.9)
-+    assert all(item["value"] is None and item["reason"] for item in empty.values())
-+
-+
-+def test_ocr_suggestion_never_changes_business_record(db, monkeypatch):
-+    admin = _user(TENANT_A)
-+    document = _upload(admin)
-+    before = copy.deepcopy(db.businesses)
-+    seen = {}
-+
-+    async def fake_ocr(image_url=None, image_base64=None, language="kor+eng"):
-+        seen["base64"] = image_base64
-+        return {"text": OCR_TEXT, "confidence": 0.93, "language": language, "error": None}
-+
-+    monkeypatch.setattr(ocr.local_ocr_bridge, "ocr_extract", fake_ocr)
-+    result = asyncio.run(ocr.suggest_from_document(user=admin, business_id=BUSINESS, document_id=UUID(document["id"])))
-+
-+    assert db.businesses == before
-+    assert seen["base64"]  # 기존 브리지로 원본을 넘겼다
-+    assert result["applied"] is False and result["ocr"]["ok"] is True
-+    assert result["suggested"]["registration_no"]["value"] == VALID_NO
-+    assert result["current"]["registration_no"] == ""  # 자리표시자는 현재값으로 내보내지 않는다
-+    assert result["needs_registration_info"] is True
-+
-+
-+def test_audit_log_has_field_results_without_ocr_text(db, monkeypatch):
-+    admin = _user(TENANT_A)
-+    document = _upload(admin)
-+
-+    async def fake_ocr(image_url=None, image_base64=None, language="kor+eng"):
-+        return {"text": OCR_TEXT, "confidence": 0.93, "language": language, "error": None}
-+
-+    monkeypatch.setattr(ocr.local_ocr_bridge, "ocr_extract", fake_ocr)
-+    asyncio.run(ocr.suggest_from_document(user=admin, business_id=BUSINESS, document_id=UUID(document["id"])))
-+
-+    entry = db.audits[-1]
-+    assert entry["action"] == "business_registration.ocr_suggest"
-+    raw = entry["details"]
-+    details = json.loads(raw)
-+    assert details["document_id"] == document["id"] and details["ocr_ok"] is True
-+    assert details["text_length"] == len(OCR_TEXT) and details["elapsed_ms"] >= 0
-+    assert details["fields"]["registration_no"] == {"found": True, "valid": True, "value_length": len(VALID_NO)}
-+    for fragment in ("김테스트", "언니냉면 테스트", VALID_NO, "성북구", "사업의 종류"):
-+        assert fragment not in raw
-+
-+
-+def test_ocr_failure_returns_nulls_and_is_audited(db, monkeypatch):
-+    admin = _user(TENANT_A)
-+    document = _upload(admin)
-+
-+    async def broken(*_args, **_kwargs):
-+        raise RuntimeError("PC Agent 연결 없음 — OCR 불가")
-+
-+    monkeypatch.setattr(ocr.local_ocr_bridge, "ocr_extract", broken)
-+    result = asyncio.run(ocr.suggest_from_document(user=admin, business_id=BUSINESS, document_id=UUID(document["id"])))
-+    assert result["ocr"]["ok"] is False and "PC Agent" in result["ocr"]["error"]
-+    assert all(item["value"] is None and item["reason"] for item in result["suggested"].values())
-+    assert json.loads(db.audits[-1]["details"])["ocr_ok"] is False
-+
-+
-+def test_router_exposes_registration_document_routes():
-+    paths = {(route.path, method) for route in api.router.routes for method in getattr(route, "methods", ())}
-+    base = "/yeoljeong-finance/businesses/{business_id}/registration-document"
-+    assert (base, "POST") in paths
-+    assert (base, "GET") in paths
-+    assert (base + "/{document_id}/download", "GET") in paths
-+    assert (base + "/{document_id}/ocr", "POST") in paths
-+    assert (base + "/{document_id}", "DELETE") in paths
-+
-+
-+# --- C. 코드 기본값이 등록값을 덮지 않는다 -----------------------------------------
-+def test_saved_business_and_branch_names_survive_canonicalize():
-+    settings = finance._canonicalize_ui_settings({
-+        "businesses": [{"id": BUSINESS, "name": "언니냉면 성신여대역점", "registrationNo": VALID_NO}],
-+        "branches": [{"id": "branch-junghwa", "name": "열정국밥 중화본점", "businessId": "biz-other"}],
-+    })
-+    business = next(item for item in settings["businesses"] if item["id"] == BUSINESS)
-+    branch = next(item for item in settings["branches"] if item["id"] == "branch-junghwa")
-+    assert business["name"] == "언니냉면 성신여대역점"
-+    assert business["registrationNo"] == VALID_NO
-+    assert branch["name"] == "열정국밥 중화본점"
-+    assert branch["businessId"] == "biz-junghwa"  # id 매핑은 그대로 canonical
-+    # 저장값이 비었을 때만 canonical 상호를 쓴다
-+    blank = finance._canonicalize_ui_settings({"businesses": [{"id": "biz-mia", "name": "  "}]})
-+    assert next(item for item in blank["businesses"] if item["id"] == "biz-mia")["name"] == "열정국밥_미아점"
-+    assert finance.CANONICAL_BUSINESS_IDS == {"biz-junghwa", "biz-sungshin", "biz-eonni-naengmyeon", "biz-mia"}
-+
-+
-+def test_placeholder_only_business_is_flagged_not_valued():
-+    settings = finance._canonicalize_ui_settings({
-+        "businesses": [{"id": "biz-sungshin", "registrationNo": "기초등록 필요", "representative": "미등록"}],
-+    })
-+    by_id = {item["id"]: item for item in settings["businesses"]}
-+    for business_id in ("biz-sungshin", BUSINESS):
-+        item = by_id[business_id]
-+        assert item["needs_registration_info"] is True
-+        assert "registrationNo" in item["missing_registration_fields"]
-+        assert item["registrationNo"] == "" and item["representative"] == ""
-+    assert by_id["biz-junghwa"]["needs_registration_info"] is False
-+    assert by_id["biz-junghwa"]["missing_registration_fields"] == []
-+    dumped = json.dumps(settings, ensure_ascii=False)
-+    assert "기초등록 필요" not in dumped
-+    for seed in finance.CANONICAL_BUSINESSES:
-+        assert seed["registrationNo"] not in service.REGISTRATION_PLACEHOLDERS
-+
-+
-+def test_registry_list_flags_placeholder_business(db, monkeypatch):
-+    class ListConn(FakeConn):
-+        async def fetch(self, sql, *args):
-+            return [dict(self.db.businesses[BUSINESS], memo="", entity_type="individual", created_at=None, updated_at=None)]
-+
-+    async def connect():
-+        return ListConn(db)
-+
-+    monkeypatch.setattr(service, "_connect", connect)
-+    rows = asyncio.run(service.list_businesses(user=_user(TENANT_A)))
-+    assert rows[0]["registration_no"] == "" and rows[0]["representative"] == ""
-+    assert rows[0]["needs_registration_info"] is True
-+    assert rows[0]["missing_registration_fields"] == ["registration_no", "representative", "opened_at", "address"]
-+
-+
-+def test_ui_uploads_original_and_drops_filename_memo():
-+    html = Path("app/static/apps/obys/index.html").read_text(encoding="utf-8")
-+    assert "사업자등록증 파일: ${uploadedFile.name}" not in html
-+    assert "/registration-document`" in html and "/ocr`" in html
-+    assert "data-apply-registration-ocr" in html
-+    assert "businessNeedsRegistrationInfo" in html
-+    assert 'registrationNo: "기초등록 필요"' not in html
-diff --git a/tests/unit/test_yeoljeong_finance_service.py b/tests/unit/test_yeoljeong_finance_service.py
-index 70e1b596..d014cdc7 100644
---- a/tests/unit/test_yeoljeong_finance_service.py
-+++ b/tests/unit/test_yeoljeong_finance_service.py
-@@ -626,8 +626,9 @@ def test_save_settings_preserves_custom_businesses_and_branches(tmp_path, monkey
-     saved = service.save_settings(payload, user)
-     settings = saved["settings"]
- 
-+    # 저장된 상호가 canonical 상호로 되돌아가지 않는다(AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930).
-     assert [item["name"] for item in settings["businesses"][:4]] == [
--        "열정국밥 중화점",
-+        "오입력",
-         "열정국밥 성신여대점",
-         "언니냉면",
-         "열정국밥_미아점",
++    assert module.main(["--tenant", TENANT, "--apply"]) == 0
++    assert employee()["current_employment_contract_id"] == contract["id"]
++    assert audit_rows()[0]["details"]["trigger"] == "backfill"
