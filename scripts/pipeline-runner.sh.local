@@ -558,11 +558,24 @@ get_db_model_cycle() {
                  ELSE provider || ':' || model_id
                END AS value,
                row_number() OVER (PARTITION BY route_key ORDER BY is_default DESC, display_order ASC, provider ASC, model_id ASC) AS ord
-        FROM model_routing_preferences
+        FROM model_routing_preferences mrp
         -- 일반 chat llm 라우트에는 PC/Vision 등 코드 러너와 호환되지 않는
         -- 모델도 포함된다. 러너는 검증된 runner_llm 라우트만 폴백한다.
-        WHERE route_key = 'runner_llm'
-          AND is_enabled = TRUE
+        WHERE mrp.route_key = 'runner_llm'
+          AND mrp.is_enabled = TRUE
+          -- codex 실행 가드: codex 로 해석되는 행은 llm_models is_executable=TRUE 만 통과.
+          -- Python 대응: app/services/pipeline_runner_service.py 의 codex_executable 가드
+          -- (Python 은 provider=openai 만, 여기선 codex 로 해석되는 codex/openai 전체 — 실행 경로가 같은 codex CLI 이므로).
+          -- group_order 0/1 (CEO 지정 runner_model_config) 에는 걸지 않는다.
+          AND (
+            NOT (mrp.provider IN ('codex','openai') AND mrp.model_id LIKE 'gpt-%')
+            OR EXISTS (
+              SELECT 1 FROM llm_models lm
+              WHERE lm.provider = 'codex'
+                AND lm.model_id = mrp.model_id
+                AND lm.is_executable = TRUE
+            )
+          )
     ), ranked AS (
         SELECT value, MIN(group_order * 1000 + ord) AS rank
         FROM candidates

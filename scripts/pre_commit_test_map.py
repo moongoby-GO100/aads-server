@@ -64,6 +64,7 @@ GROUPS: tuple[Group, ...] = (
             "tests/unit/test_pipeline_runner_deploy_lock_requeue.py",
             "tests/unit/test_pipeline_runner_shell_deploy_lock_requeue.py",
             "tests/unit/test_pipeline_runner_script_guards.py",
+            "tests/unit/test_pipeline_runner_model_cycle_executable_guard.py",
             "tests/unit/test_pipeline_runner_worktree_policy.py",
             "tests/unit/test_pipeline_runner_autodep_release.py",
             "tests/unit/test_pipeline_runner_deploy_gate_stale_chain.py",
@@ -82,6 +83,7 @@ GROUPS: tuple[Group, ...] = (
             "app/services/deploy_lock.py",
             "app/api/pipeline_runner.py",
             "scripts/pipeline-runner.sh",
+            "scripts/pipeline-runner.sh.local",
         ),
     ),
     Group(
