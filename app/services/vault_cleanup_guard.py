@@ -14,6 +14,10 @@
   기존 credential_vault.decrypt_value 로 메모리에서만 풀고, 평문을 SQL 파라미터로
   보내지 않는다(계정 매칭은 파이썬에서). 결과·예외 메시지에 평문·암호문을 넣지 않는다.
 - 복호화·조회 실패는 fail closed — VaultGuardUnavailable 로 쓰기 전체를 롤백시킨다.
+- 간접 경로(2026-09-30): 보호 테이블 이름이 SQL 에 없어도 저장 함수·뷰·트리거가 바꿀 수 있다.
+  ① 함수 호출은 db_write_sql_guard 가 허용 목록으로 거부한다. ② 대상 테이블을 확정하지
+  못한 쓰기는 이름 검사를 통과시키지 않고 보호 검사(전후 스냅샷 비교)를 강제한다
+  (target_unresolved). ③ 대상이 뷰이면 거부한다(assert_target_not_view).
 - 보호 범위: saas_users 삭제·soft delete·status/is_active 비활성·이메일 변경,
   tenant_memberships 삭제·해제, 로그인 조직(default_tenant_id·활성 멤버십 조직)의
   tenants 삭제·비활성.
@@ -43,6 +47,10 @@ class VaultLoginProtected(Exception):
 
 class VaultGuardUnavailable(VaultLoginProtected):
     """보호 대상을 확정하지 못했다 — fail closed."""
+
+
+class VaultViewTargetBlocked(VaultLoginProtected):
+    """쓰기 대상이 뷰다 — 업데이트 가능 뷰·INSTEAD OF 트리거로 보호 테이블을 우회할 수 있다."""
 
 
 def internal_hosts() -> frozenset[str]:
@@ -79,6 +87,45 @@ def normalize_email(value: str | None) -> str:
 def references_login_tables(sql_texts: list[str]) -> bool:
     """보호 테이블 이름이 식별자·리터럴 어디에든 보이면 True (보수적 부분일치)."""
     return any(_PROTECTED_NAME_RE.search(text.lower()) for text in sql_texts)
+
+
+def target_unresolved(target: object | None) -> bool:
+    """쓰기 대상 테이블을 확정하지 못했으면 True — 이름 검사가 빗나가도 보호 검사를 강제한다."""
+    return target is None
+
+
+# 캐시하지 않는다: 뷰는 마이그레이션(CREATE VIEW)으로 언제든 생기고, 캐시는 그 사이 창을 우회로로
+# 만든다. 쿼리는 이름·스키마 한정이라 쓰기 1건당 1회 왕복이면 충분하다.
+# information_schema.views 는 현재 role 이 권한을 가진 뷰만 보여주므로 pg_class 를 함께 본다.
+# 스키마 없는 이름은 검색 경로를 추측하지 않고 모든 스키마의 같은 이름 뷰를 대상으로 본다(보수적).
+_VIEW_LOOKUP_SQL = """
+    SELECT 1 AS hit FROM information_schema.views v
+     WHERE lower(v.table_name) = $1 AND ($2::text = '' OR lower(v.table_schema) = $2)
+    UNION ALL
+    SELECT 1 FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE c.relkind = 'v' AND lower(c.relname) = $1
+       AND ($2::text = '' OR lower(n.nspname) = $2)
+    LIMIT 1
+"""
+
+
+async def assert_target_not_view(conn, target: Any) -> None:
+    """target(schema, name)이 뷰이면 VaultViewTargetBlocked, 조회 실패는 VaultGuardUnavailable."""
+    if target is None:
+        return
+    name = str(target.name).lower()
+    schema = str(target.schema or "").lower()
+    try:
+        rows = await conn.fetch(_VIEW_LOOKUP_SQL, name, schema)
+    except Exception as exc:
+        raise VaultGuardUnavailable(
+            f"쓰기 대상 뷰 여부 조회 실패({type(exc).__name__}) — 쓰기 차단"
+        ) from None
+    if rows:
+        raise VaultViewTargetBlocked(
+            f"뷰 대상 쓰기 차단: {schema + '.' if schema else ''}{name} — 기반 테이블을 직접 지정하라"
+        )
 
 
 @dataclass

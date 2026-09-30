@@ -33,6 +33,10 @@ class _FakeConn:
     async def fetchrow(self, query, *args):
         return _FakeRow({"cnt": self._pre_count})
 
+    async def fetch(self, query, *args):
+        # 쓰기 대상 뷰 여부 조회 — 뷰 없음.
+        return []
+
     def transaction(self):
         return _FakeTransaction()
 

@@ -299,6 +299,10 @@ class _GuardConn:
     async def execute(self, sql, *args):
         self.log.append("set")
 
+    async def fetch(self, sql, *args):
+        # 쓰기 대상 뷰 여부 조회 — 뷰 없음(트랜잭션 로그에 남기지 않는다).
+        return []
+
     async def prepare(self, sql):
         return _Stmt(self.log)
 

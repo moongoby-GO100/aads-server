@@ -4243,8 +4243,13 @@ class ToolExecutor:
           Vault 참조 로그인 경로 보호 판정을 받는다(P1-A, vault_cleanup_guard).
           위반이면 전체 롤백 — 부분 성공 없음. dry_run 은 같은 판정 후 롤백한다.
         """
-        from app.services.db_write_sql_guard import SqlGuardError, validate_single_write
-        from app.services.vault_cleanup_guard import references_login_tables
+        from app.services.db_write_sql_guard import (
+            IndirectWriteBlocked, SqlGuardError, validate_single_write,
+        )
+        from app.services.vault_cleanup_guard import (
+            VaultLoginProtected, assert_target_not_view, references_login_tables,
+            target_unresolved,
+        )
 
         sql = str(inp.get("sql", "") or "").strip()
         params_raw = inp.get("params") or []
@@ -4256,6 +4261,12 @@ class ToolExecutor:
             if kw in sql_upper:
                 return {"error": f"차단된 명령: {kw.strip()}"}
         if not any(sql_upper.startswith(k) for k in ("INSERT", "UPDATE", "DELETE")):
+            try:
+                validate_single_write(sql)
+            except IndirectWriteBlocked as exc:
+                return {"error": f"SQL 차단: {exc}", "blocked": True, "dry_run": dry_run}
+            except SqlGuardError:
+                pass
             return {"error": "INSERT/UPDATE/DELETE만 허용"}
         try:
             statement = validate_single_write(sql)
@@ -4280,7 +4291,12 @@ class ToolExecutor:
             from app.core.db_pool import get_pool
             pool = get_pool()
             async with pool.acquire() as conn:
-                if references_login_tables(statement.words + statement.literals):
+                try:
+                    await assert_target_not_view(conn, statement.target)
+                except VaultLoginProtected as exc:
+                    return {"error": str(exc), "blocked": True, "dry_run": dry_run, "vault_guard": True}
+                # 대상 테이블을 확정 못 한 쓰기는 이름 검사가 빗나갈 수 있으니 보호 검사를 강제한다.
+                if references_login_tables(statement.words + statement.literals) or target_unresolved(statement.target):
                     return await self._db_safe_write_vault_guarded(
                         conn, sql, params_raw, dry_run, table_name,
                     )

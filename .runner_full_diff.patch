@@ -1,3341 +1,1042 @@
-diff --git a/HANDOVER.md b/HANDOVER.md
-index 48d34cd3..9b169b15 100644
---- a/HANDOVER.md
-+++ b/HANDOVER.md
-@@ -14570,3 +14570,7 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
- - 오류사전: `db.safe_write_multi_statement_commits_before_guard` 신규 등록(fix-commit 은 Runner 커밋 후 채울 것). DB handover key: `aads-vault-cleanup-guard-20260923` (AADS/verification).
- - stale_base 교정(R3 재작업 1/2): 반려 커밋 d633c329 의 base 가 0ad92b6a 로 origin/main 보다 3커밋 뒤졌다. `.runner_full_diff.patch` 를 제외한 변경을 origin/main(c85b26bb) 위에 `git apply --3way` 로 그대로 얹었고(충돌 0), 코드 변경은 없다.
- - 승인 후 Runner 커밋 대상. 배포 전.
+diff --git a/app/services/db_write_sql_guard.py b/app/services/db_write_sql_guard.py
+index 96709e11..9e641437 100644
+--- a/app/services/db_write_sql_guard.py
++++ b/app/services/db_write_sql_guard.py
+@@ -9,6 +9,10 @@ simple query 프로토콜로 보내므로 한 번에 여러 문장이 실행된
+ 세미콜론은 구분자가 아니고, 반대로 그렇게 보이는 곳에 숨긴 세미콜론은 구분자다.
+ PostgreSQL 렉서 규칙(standard_conforming_strings=on, 중첩 블록 주석)을 따라
+ 한 글자씩 훑는다. 모호하면(닫히지 않은 인용, U& 이스케이프) 거부한다.
 +
-+## 2026-09-30 — 직원 승인 멤버십 R3 실결함 3건 (AADS-OBYS-EMPLOYEE-TENANT-MEMBERSHIP-R3-20260930)
-+- b3c3f444 산출물 위에 ①이메일 조회 테넌트 컨텍스트 코드 강제+SQL 테넌트 조건 ②flock → `pg_advisory_xact_lock`(tenant,email) ③서명 게이트 GET 명시적 화이트리스트. 상세 `docs/operations/OBYS_EMPLOYEE_TENANT_MEMBERSHIP.md` "R3". 테스트 128 passed(test_obys_employee_tenant_membership), 배포 전 — 마이그레이션은 여전히 HOLD(수동 적용).
-+- R4(AADS-OBYS-EMPLOYEE-TENANT-MEMBERSHIP-R4-20260930): stale_base 교정 — f6c59fe1(base a9ddd6b0) 변경을 `.runner_full_diff.patch` 제외 후 origin/main(4eb4a182) 위에 `git apply --3way` 로 이관. 기능 변경 없음. 충돌은 HANDOVER.md·migrations_auto_apply_baseline.txt 뿐이며 양쪽 줄을 모두 보존했다.
-diff --git a/app/api/obys_finance.py b/app/api/obys_finance.py
-index 989dc40a..39679795 100644
---- a/app/api/obys_finance.py
-+++ b/app/api/obys_finance.py
-@@ -532,7 +532,8 @@ async def create_employee_join_request(payload: JoinRequestCreate, current_user:
++2026-09-30 간접 쓰기 경로 차단. 보호 테이블 이름이 SQL 에 나타나지 않아도 저장 함수·
++프로시저가 내부에서 바꿀 수 있다. 정적으로 전부 알아낼 수 없으므로 **모르는 함수는 막는다**
++(fail closed): 문장 안의 모든 함수 호출 식별자를 ``ALLOWED_BUILTIN_FUNCTIONS`` 와 대조한다.
+ """
  
- @router.patch("/employees/join-requests/{request_id}")
- async def review_employee_join_request(request_id: str, payload: ReviewPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
--    return {"request": await run_in_threadpool(svc.review_join_request, request_id, payload.action, payload.memo, current_user)}
-+    # 승인 → 고용주 테넌트 member 연결, 반려 → 회수. 결과는 membership 에 담는다.
-+    return await svc.review_join_request_with_membership(request_id, payload.action, payload.memo, current_user)
+ from __future__ import annotations
+@@ -22,13 +26,70 @@ TRANSACTION_CONTROL_KEYWORDS = frozenset({
+     "begin", "start", "commit", "end", "rollback", "abort",
+     "savepoint", "release", "prepare", "set",
+ })
+-PROCEDURAL_KEYWORDS = frozenset({"do", "call"})
++# DO/CALL 은 저장 프로시저·익명 블록으로 보호 테이블을 간접 변경한다. EXECUTE(준비된 문장 실행)와
++# PERFORM 도 같은 이유로 첫 단어에서 막는다.
++PROCEDURAL_KEYWORDS = frozenset({"do", "call", "execute", "perform"})
++
++# 값·조건 자리에 쓰는 함수 허용 목록. 근거: 전부 pg_catalog 내장이며 테이블을 읽거나 쓰는
++# SQL 을 실행하지 않는 순수 계산(또는 시퀀스 외 부작용이 없는 gen_random_uuid/random)이다.
++# 여기 없는 식별자가 "(" 앞에 오면 저장 함수일 수 있으므로 거부한다. 실무에서 막히면
++# 화이트리스트에 넣지 말고 docs/operations/DB_SAFE_WRITE_INDIRECT_PATH.md 의 오탐 신고 경로를 따른다.
++# 의도적으로 뺀 것: set_config, pg_sleep, query_to_xml/xpath 류(SQL 문자열 실행), lo_*, dblink,
++# nextval/setval(시퀀스 변경), 사용자 정의 함수 전부.
++ALLOWED_BUILTIN_FUNCTIONS = frozenset({
++    # 시각
++    "now", "clock_timestamp", "statement_timestamp", "transaction_timestamp", "timeofday",
++    "date_trunc", "date_part", "extract", "age", "make_interval", "make_date", "make_timestamp",
++    "make_timestamptz", "to_timestamp", "to_date", "to_char", "to_number", "timezone",
++    # NULL·비교
++    "coalesce", "nullif", "greatest", "least",
++    # 문자열
++    "lower", "upper", "initcap", "trim", "btrim", "ltrim", "rtrim", "length", "char_length",
++    "character_length", "octet_length", "substring", "substr", "left", "right", "replace",
++    "regexp_replace", "split_part", "concat", "concat_ws", "format", "lpad", "rpad", "repeat",
++    "reverse", "position", "overlay", "md5", "encode", "decode", "translate", "starts_with",
++    # 숫자
++    "abs", "round", "ceil", "ceiling", "floor", "trunc", "mod", "power", "sqrt", "sign",
++    "random", "gen_random_uuid",
++    # JSON
++    "jsonb_set", "jsonb_insert", "jsonb_build_object", "jsonb_build_array", "json_build_object",
++    "json_build_array", "jsonb_strip_nulls", "to_jsonb", "to_json", "jsonb_typeof",
++    "jsonb_array_length", "jsonb_extract_path", "jsonb_extract_path_text",
++    # 배열
++    "array_append", "array_prepend", "array_remove", "array_cat", "array_length", "cardinality",
++    "array_position", "array_to_string", "string_to_array", "unnest", "array",
++    # 집계(하위 조회용)
++    "count", "sum", "min", "max", "avg", "array_agg", "string_agg", "jsonb_agg", "bool_and", "bool_or",
++    # 형 변환·타입 한정자(CAST(x AS numeric(10,2)), x::varchar(20))
++    "cast", "varchar", "char", "character", "numeric", "decimal", "timestamp", "timestamptz",
++    "time", "timetz", "interval", "bit", "varbit",
++})
++
++# "(" 앞에 와도 함수 호출이 아닌 SQL 문법 키워드.
++_SYNTAX_BEFORE_PAREN = frozenset({
++    "values", "in", "any", "all", "some", "exists", "on", "using", "set", "from", "where", "and",
++    "or", "not", "select", "returning", "when", "then", "else", "case", "join", "between", "is",
++    "like", "ilike", "conflict", "filter", "lateral", "union", "intersect", "except", "distinct",
++    "by", "limit", "offset", "row", "default", "into", "as", "to", "overlaps", "having",
++})
  
  
- @router.get("/employees/approved")
-diff --git a/app/auth.py b/app/auth.py
-index c179f3a0..7c96be6a 100644
---- a/app/auth.py
-+++ b/app/auth.py
-@@ -5,6 +5,7 @@ import logging
- import hashlib
- import re
- import secrets
-+from contextlib import asynccontextmanager
- from http.cookies import SimpleCookie
- from enum import Enum
- from datetime import datetime, timezone
-@@ -522,6 +523,420 @@ async def list_user_tenants(user_id: str) -> list[dict]:
-     return tenants
+ class SqlGuardError(ValueError):
+     """단일 INSERT/UPDATE/DELETE 로 확정할 수 없는 SQL."""
  
  
-+_ELEVATED_MEMBERSHIP_ROLES = frozenset({TenantRole.OWNER.value, TenantRole.ADMIN.value})
++class IndirectWriteBlocked(SqlGuardError):
++    """저장 함수·프로시저 등 보호 테이블을 간접 변경할 수 있는 형태."""
 +
 +
-+async def upsert_tenant_membership(
-+    conn,
-+    *,
-+    tenant_id: str,
-+    user_id: str,
-+    role: str,
-+    invited_by: Optional[str] = None,
-+    preserve_elevated_role: bool = False,
-+) -> Optional[dict]:
-+    """tenant_memberships 를 활성 상태로 만든다 — 초대 수락과 오비서 직원 승인이 같이 쓴다.
++@dataclass(frozen=True)
++class WriteTarget:
++    """쓰기 대상 테이블. 소문자로 정규화한다(인용 식별자 포함 — 보수적 매칭)."""
 +
-+    ``preserve_elevated_role`` 이 참이면 이미 **활성** owner/admin 인 행은 역할을
-+    낮추지 않는다(관리자 본인이 직원으로도 등록된 경우).  회수(removed)된 행은
-+    요청한 역할로 되살린다 — 회수된 관리자 권한을 직원 승인이 되살리면 안 된다.
-+    ``invited_by`` 가 saas_users 에 없는 값이면 NULL 로 둔다(FK).
++    schema: str | None
++    name: str
++
++
+ @dataclass
+ class SqlStatementInfo:
+     keyword: str
+@@ -36,6 +97,8 @@ class SqlStatementInfo:
+     words: list[str] = field(default_factory=list)
+     # 문자열 리터럴·달러 인용 본문(소문자). 동적 SQL 로 테이블 이름을 넘기는 경우 탐지용.
+     literals: list[str] = field(default_factory=list)
++    # 대상 테이블을 확정하지 못하면 None — 호출자는 통과시키지 말고 보호 검사를 강제해야 한다.
++    target: WriteTarget | None = None
+ 
+ 
+ def _is_ident_start(ch: str) -> bool:
+@@ -61,8 +124,17 @@ def _dollar_tag_at(sql: str, i: int) -> str | None:
+     return None
+ 
+ 
+-def _split_statements(sql: str) -> list[tuple[list[str], list[str]]]:
+-    """최상위 세미콜론으로 나눈 문장별 (words, literals)."""
++_Token = tuple[str, str]  # (kind, text) — w 단어 / q 인용 식별자 / s 문자열 / n 숫자 / p . ( ) , / o 그 밖의 기호 / ; 구분자
++
++
++def _split_statements(
++    sql: str, tokens: list[_Token] | None = None,
++) -> list[tuple[list[str], list[str]]]:
++    """최상위 세미콜론으로 나눈 문장별 (words, literals).
++
++    tokens 를 주면 문장 구분 없이 전체 토큰 열을 채운다(공백·주석 제외, 순서 보존).
++    함수 호출("식별자 (")과 대상 테이블 판정은 words 로는 못 하므로 — "." 와 "(" 가 없다 — 이쪽을 쓴다.
 +    """
-+    row = await conn.fetchrow(
-+        """
-+        INSERT INTO tenant_memberships (tenant_id, user_id, role, status, invited_by)
-+        VALUES ($1::uuid, $2::text, $3::text, 'active',
-+                (SELECT id FROM saas_users WHERE id = $4::text))
-+        ON CONFLICT (tenant_id, user_id) DO UPDATE
-+           SET role = CASE
-+                   WHEN $5::boolean
-+                        AND tenant_memberships.status = 'active'
-+                        AND tenant_memberships.deleted_at IS NULL
-+                        AND tenant_memberships.role IN ('owner', 'admin')
-+                   THEN tenant_memberships.role
-+                   ELSE EXCLUDED.role
-+               END,
-+               status = 'active',
-+               deleted_at = NULL,
-+               updated_at = now()
-+        RETURNING id::text AS membership_id, tenant_id::text, user_id, role, status
-+        """,
-+        tenant_id,
-+        user_id,
-+        role,
-+        invited_by,
-+        bool(preserve_elevated_role),
-+    )
-+    return dict(row) if row else None
+     statements: list[tuple[list[str], list[str]]] = []
+     words: list[str] = []
+     literals: list[str] = []
+@@ -75,6 +147,8 @@ def _split_statements(sql: str) -> list[tuple[list[str], list[str]]]:
+         elif ch == ";":
+             statements.append((words, literals))
+             words, literals = [], []
++            if tokens is not None:
++                tokens.append((";", ";"))
+             i += 1
+         elif sql.startswith("--", i):
+             end = sql.find("\n", i)
+@@ -95,11 +169,17 @@ def _split_statements(sql: str) -> list[tuple[list[str], list[str]]]:
+                 raise SqlGuardError("닫히지 않은 블록 주석")
+         elif ch == "'":
+             i = _scan_quoted(sql, i, "'", backslash=False, out=literals)
++            if tokens is not None:
++                tokens.append(("s", literals[-1]))
+         elif ch == '"':
+             i = _scan_quoted(sql, i, '"', backslash=False, out=words)
++            if tokens is not None:
++                tokens.append(("q", words[-1]))
+         elif ch == "$":
+             tag = _dollar_tag_at(sql, i)
+             if tag is None:
++                if tokens is not None:
++                    tokens.append(("o", "$"))
+                 i += 1  # $1 같은 바인드 파라미터 또는 연산자
+                 continue
+             body_start = i + len(tag)
+@@ -107,6 +187,8 @@ def _split_statements(sql: str) -> list[tuple[list[str], list[str]]]:
+             if end < 0:
+                 raise SqlGuardError("닫히지 않은 달러 인용")
+             literals.append(sql[body_start:end].lower())
++            if tokens is not None:
++                tokens.append(("s", literals[-1]))
+             i = end + len(tag)
+         elif _is_ident_start(ch):
+             j = i + 1
+@@ -119,13 +201,30 @@ def _split_statements(sql: str) -> list[tuple[list[str], list[str]]]:
+                 raise SqlGuardError("U& 유니코드 이스케이프는 허용하지 않음")
+             if word == "e" and nxt == "'":
+                 i = _scan_quoted(sql, j, "'", backslash=True, out=literals)
++                if tokens is not None:
++                    tokens.append(("s", literals[-1]))
+                 continue
+             if word in ("b", "x", "n") and nxt == "'":
+                 i = _scan_quoted(sql, j, "'", backslash=False, out=literals)
++                if tokens is not None:
++                    tokens.append(("s", literals[-1]))
+                 continue
+             words.append(word)
++            if tokens is not None:
++                tokens.append(("w", word))
++            i = j
++        elif ch.isdigit():
++            # 숫자 리터럴(1.5 의 "." 가 이름 구분자로 보이지 않게). 뒤따르는 글자는 기존처럼 단어로 남긴다.
++            j = i + 1
++            while j < n and (sql[j].isdigit() or (sql[j] == "." and j + 1 < n and sql[j + 1].isdigit())):
++                j += 1
++            if tokens is not None:
++                tokens.append(("n", sql[i:j]))
+             i = j
+         else:
++            if tokens is not None:
++                # 연산자도 남긴다 — 없으면 "= (subquery)" 가 "이름 (" 으로 보인다.
++                tokens.append(("p" if ch in ".()," else "o", ch))
+             i += 1
+     statements.append((words, literals))
+     return statements
+@@ -154,12 +253,94 @@ def _scan_quoted(sql: str, start: int, quote: str, *, backslash: bool, out: list
+     raise SqlGuardError("닫히지 않은 따옴표")
+ 
+ 
++def _is_ident(token: _Token) -> bool:
++    return token[0] in ("w", "q")
 +
 +
-+async def _membership_state_for_update(conn, tenant_id: str, user_id: str) -> Optional[dict]:
-+    row = await conn.fetchrow(
-+        """
-+        SELECT id::text AS membership_id, tenant_id::text, user_id, role, status,
-+               deleted_at IS NOT NULL AS deleted
-+          FROM tenant_memberships
-+         WHERE tenant_id = $1::uuid
-+           AND user_id = $2::text
-+         FOR UPDATE
-+        """,
-+        tenant_id,
-+        user_id,
-+    )
-+    return dict(row) if row else None
++def _parse_name(tokens: list[_Token], i: int) -> tuple[WriteTarget, int] | None:
++    """tokens[i:] 의 ``[schema.]name`` 을 읽는다. 3 단 이상(db.schema.name)이나 식별자가 아니면 None."""
++    if i >= len(tokens) or not _is_ident(tokens[i]):
++        return None
++    first = tokens[i][1]
++    j = i + 1
++    if j + 1 < len(tokens) and tokens[j] == ("p", ".") and _is_ident(tokens[j + 1]):
++        name, j = tokens[j + 1][1], j + 2
++        if j < len(tokens) and tokens[j] == ("p", "."):
++            return None
++        return WriteTarget(first, name), j
++    if j < len(tokens) and tokens[j] == ("p", "."):
++        return None
++    return WriteTarget(None, first), j
 +
 +
-+class EmployeeTenantContextError(PermissionError):
-+    """이메일로 직원 계정을 찾을 레거시 테넌트 컨텍스트가 없거나 대상 테넌트와 다르다."""
-+
-+
-+def _require_email_lookup_context(context_tenant_id: Optional[str], tenant_id: str) -> str:
-+    """이메일 → 계정 조회의 전제(요청의 JWT 테넌트 == 대상 고용주 테넌트)를 코드로 강제한다.
-+
-+    예전에는 "호출자가 레거시 테넌트 JWT 컨텍스트에서 부른다" 를 주석으로만 전제했다.
-+    호출 순서가 바뀌거나 다른 테넌트 컨텍스트에서 부르면 다른 테넌트의 같은 이메일
-+    계정에 멤버십이 붙을 수 있으므로, 부재·불일치는 조용히 넘기지 않고 예외다.
-+    """
-+    context = str(context_tenant_id or "").strip()
-+    target = str(tenant_id or "").strip()
-+    if not context:
-+        raise EmployeeTenantContextError("employee email lookup requires the request tenant context")
-+    if not target or context != target:
-+        raise EmployeeTenantContextError(
-+            f"employee email lookup tenant context mismatch: context={context!r} target={target!r}"
-+        )
++def extract_write_target(tokens: list[_Token]) -> WriteTarget | None:
++    """UPDATE [ONLY] t / DELETE FROM [ONLY] t / INSERT INTO t 의 대상. 확정 못 하면 None."""
++    if not tokens or tokens[0][0] != "w":
++        return None
++    keyword = tokens[0][1]
++    i = 1
++    if keyword == "delete":
++        if tokens[1:2] != [("w", "from")]:
++            return None
++        i = 2
++    elif keyword == "insert":
++        if tokens[1:2] != [("w", "into")]:
++            return None
++        i = 2
++    elif keyword != "update":
++        return None
++    if keyword != "insert" and tokens[i:i + 1] == [("w", "only")]:
++        i += 1
++    parsed = _parse_name(tokens, i)
++    if parsed is None:
++        return None
++    target, end = parsed
++    # UPDATE/DELETE 의 대상 뒤에 "(" 가 오면 우리가 모르는 형태다.
++    if keyword != "insert" and tokens[end:end + 1] == [("p", "(")]:
++        return None
 +    return target
 +
 +
-+async def _active_user_id_by_email(
-+    conn,
-+    email: str,
-+    *,
-+    tenant_id: str,
-+    context_tenant_id: Optional[str],
-+) -> Optional[str]:
-+    """고용주 테넌트(tenant_id) 에서 요청 이메일의 활성 계정을 찾는다.
++def find_disallowed_function_calls(tokens: list[_Token]) -> list[str]:
++    """허용 목록에 없는 함수 호출 식별자(``이름 (``)를 등장 순서대로 돌려준다.
 +
-+    1차 방어: 컨텍스트 검사(_require_email_lookup_context) — 부재·불일치면 예외.
-+    2차 방어: WHERE 에 테넌트 조건 — 이 테넌트에 이미 묶였거나(default·멤버십·초대)
-+    아직 어느 고객 테넌트에도 묶이지 않은(default 없음·본인이 만든 워크스페이스)
-+    계정만 후보다.  다른 고객 테넌트 소속 계정은 컨텍스트 검사를 통과해도 뽑히지 않는다.
-+    이 테넌트에 묶인 계정이 우선이고, 같은 우선순위 후보가 둘이면 고르지 않는다(None).
++    - 인용 식별자(``"fn"(..)``)는 렉서가 대소문자를 잃으므로 항상 불허 — ``"LOWER"`` 가 내장 lower 로 읽힌다.
++    - schema-qualified 는 ``pg_catalog.`` 만 허용 목록과 대조한다.
++    - ``INSERT INTO t (cols)``·``AS a (cols)``·``) a (cols)`` 는 이름 뒤 열 목록이라 호출이 아니다.
 +    """
-+    tenant_id = _require_email_lookup_context(context_tenant_id, tenant_id)
-+    normalized = _normalize_email(email)
-+    if not normalized:
-+        return None
-+    rows = await conn.fetch(
-+        """
-+        SELECT u.id,
-+               (u.default_tenant_id = $2::uuid
-+                OR EXISTS (
-+                    SELECT 1
-+                      FROM tenant_memberships tm
-+                     WHERE tm.tenant_id = $2::uuid
-+                       AND tm.user_id = u.id
-+                       AND tm.deleted_at IS NULL
-+                )) AS bound_to_tenant
-+          FROM saas_users u
-+         WHERE lower(u.email) = $1
-+           AND u.deleted_at IS NULL
-+           AND COALESCE(u.status, 'active') = 'active'
-+           AND (
-+                u.default_tenant_id = $2::uuid
-+             OR EXISTS (
-+                    SELECT 1
-+                      FROM tenant_memberships tm
-+                     WHERE tm.tenant_id = $2::uuid
-+                       AND tm.user_id = u.id
-+                       AND tm.deleted_at IS NULL
-+                )
-+             OR EXISTS (
-+                    SELECT 1
-+                      FROM tenant_invites ti
-+                     WHERE ti.tenant_id = $2::uuid
-+                       AND lower(ti.email) = $1
-+                )
-+             OR u.default_tenant_id IS NULL
-+             OR EXISTS (
-+                    SELECT 1
-+                      FROM tenants pt
-+                     WHERE pt.id = u.default_tenant_id
-+                       AND pt.kind = 'customer'
-+                       AND pt.created_by = u.id
-+                )
-+           )
-+         ORDER BY bound_to_tenant DESC, u.created_at ASC NULLS LAST
-+         LIMIT 2
-+        """,
-+        normalized,
-+        tenant_id,
-+    )
-+    if not rows:
-+        return None
-+    if len(rows) > 1 and bool(rows[0]["bound_to_tenant"]) == bool(rows[1]["bound_to_tenant"]):
-+        log.warning("employee_email_lookup_ambiguous", tenant_id=tenant_id, email=normalized)
-+        return None
-+    return str(rows[0]["id"])
++    bad: list[str] = []
++    for i in range(len(tokens) - 1):
++        if not _is_ident(tokens[i]) or tokens[i + 1] != ("p", "("):
++            continue
++        start = i
++        while start >= 2 and tokens[start - 1] == ("p", ".") and _is_ident(tokens[start - 2]):
++            start -= 2
++        prev = tokens[start - 1] if start > 0 else None
++        if prev in (("w", "into"), ("w", "as"), ("p", ")")):
++            continue
++        kind, name = tokens[i]
++        qualified = start != i
++        if not qualified and kind == "w" and name in _SYNTAX_BEFORE_PAREN:
++            continue
++        if kind == "w" and name in ALLOWED_BUILTIN_FUNCTIONS:
++            if not qualified:
++                continue
++            if start == i - 2 and tokens[start] == ("w", "pg_catalog"):
++                continue
++        label = ".".join(t[1] for t in tokens[start:i + 1] if t[0] != "p")
++        if label not in bad:
++            bad.append(label)
++    return bad
 +
 +
-+async def _active_user_email_by_id(conn, user_id: str) -> Optional[str]:
-+    email = await conn.fetchval(
-+        """
-+        SELECT lower(email)
-+          FROM saas_users
-+         WHERE id = $1::text
-+           AND deleted_at IS NULL
-+           AND COALESCE(status, 'active') = 'active'
-+        """,
-+        user_id,
-+    )
-+    return _normalize_email(email) if email else None
-+
-+
-+async def _move_default_off_personal_workspace(conn, user_id: str, tenant_id: str) -> Optional[dict]:
-+    """default 가 비어 있거나 본인 혼자인 개인 워크스페이스면 고용주 테넌트로 옮긴다.
-+
-+    직원 승인이 멤버십을 새로 만들거나 되살린 그 한 번만 부른다 — 로그인마다
-+    판정하지 않으므로 일반 초대 member·다른 고객 테넌트 member 의 시작 테넌트는
-+    바뀌지 않고, 이후 사용자가 /auth/tenants/{id}/switch 로 고른 값이 그대로 남는다.
-+    개인 워크스페이스 = 본인이 만든 customer 테넌트에서 본인이 **활성** owner 이고
-+    본인 외 활성 멤버가 없음(owner 멤버십이 회수된 곳은 개인 워크스페이스가 아니다).
-+    """
-+    current = await conn.fetchval(
-+        "SELECT default_tenant_id::text FROM saas_users WHERE id = $1::text FOR UPDATE",
-+        user_id,
-+    )
-+    if current == tenant_id:
-+        return None
-+    if current:
-+        personal = await conn.fetchval(
-+            """
-+            SELECT EXISTS (
-+                SELECT 1
-+                  FROM tenants t
-+                  JOIN tenant_memberships tm
-+                    ON tm.tenant_id = t.id
-+                   AND tm.user_id = $2::text
-+                   AND tm.role = 'owner'
-+                   AND tm.status = 'active'
-+                   AND tm.deleted_at IS NULL
-+                 WHERE t.id = $1::uuid
-+                   AND t.kind = 'customer'
-+                   AND t.created_by = $2::text
-+                   AND NOT EXISTS (
-+                       SELECT 1
-+                         FROM tenant_memberships o
-+                        WHERE o.tenant_id = t.id
-+                          AND o.user_id <> $2::text
-+                          AND o.status = 'active'
-+                          AND o.deleted_at IS NULL
-+                   )
+ def validate_single_write(sql: str) -> SqlStatementInfo:
+     """단일 INSERT/UPDATE/DELETE 문이면 정보를, 아니면 SqlGuardError 를 낸다.
+ 
+-    끝의 세미콜론 하나(뒤에 공백·주석뿐)는 허용한다.
++    끝의 세미콜론 하나(뒤에 공백·주석뿐)는 허용한다. 허용 목록 밖의 함수 호출은
++    IndirectWriteBlocked(SqlGuardError 하위)로 거부한다.
+     """
+-    statements = [s for s in _split_statements(sql) if s[0] or s[1]]
++    tokens: list[_Token] = []
++    statements = [s for s in _split_statements(sql, tokens) if s[0] or s[1]]
+     if not statements:
+         raise SqlGuardError("빈 SQL")
+     for words, _ in statements:
+@@ -167,11 +348,24 @@ def validate_single_write(sql: str) -> SqlStatementInfo:
+         if first in TRANSACTION_CONTROL_KEYWORDS:
+             raise SqlGuardError(f"트랜잭션 제어문 차단: {first.upper()}")
+         if first in PROCEDURAL_KEYWORDS:
+-            raise SqlGuardError(f"{first.upper()} 차단")
++            raise IndirectWriteBlocked(
++                f"{first.upper()} 차단 — 저장 프로시저·익명 블록은 보호 테이블을 간접 변경할 수 있음"
 +            )
-+            """,
-+            current,
-+            user_id,
+     if len(statements) != 1:
+         raise SqlGuardError(f"단일 문장만 허용 (감지된 문장 {len(statements)}개)")
+     words, literals = statements[0]
+     keyword = words[0] if words else ""
++    calls = find_disallowed_function_calls(tokens)
+     if keyword not in ALLOWED_WRITE_KEYWORDS:
++        if keyword == "select" and calls:
++            raise IndirectWriteBlocked(
++                "SELECT 로 함수 호출 차단(" + ", ".join(calls[:5]) + ") — 저장 함수는 보호 테이블을 간접 변경할 수 있음"
++            )
+         raise SqlGuardError("INSERT/UPDATE/DELETE만 허용")
+-    return SqlStatementInfo(keyword=keyword, words=words, literals=literals)
++    if calls:
++        raise IndirectWriteBlocked(
++            "허용 목록에 없는 함수 호출 차단(" + ", ".join(calls[:5]) + ") — 저장 함수는 보호 테이블을 간접 변경할 수 있음"
 +        )
-+        if not personal:
-+            return None
-+    await conn.execute(
-+        "UPDATE saas_users SET default_tenant_id = $1::uuid, updated_at = now() WHERE id = $2::text",
-+        tenant_id,
-+        user_id,
++    return SqlStatementInfo(
++        keyword=keyword, words=words, literals=literals, target=extract_write_target(tokens),
 +    )
-+    return {"before": current, "after": tenant_id}
+diff --git a/app/services/tool_executor.py b/app/services/tool_executor.py
+index 7cea41bf..d89a4c99 100644
+--- a/app/services/tool_executor.py
++++ b/app/services/tool_executor.py
+@@ -4243,8 +4243,13 @@ class ToolExecutor:
+           Vault 참조 로그인 경로 보호 판정을 받는다(P1-A, vault_cleanup_guard).
+           위반이면 전체 롤백 — 부분 성공 없음. dry_run 은 같은 판정 후 롤백한다.
+         """
+-        from app.services.db_write_sql_guard import SqlGuardError, validate_single_write
+-        from app.services.vault_cleanup_guard import references_login_tables
++        from app.services.db_write_sql_guard import (
++            IndirectWriteBlocked, SqlGuardError, validate_single_write,
++        )
++        from app.services.vault_cleanup_guard import (
++            VaultLoginProtected, assert_target_not_view, references_login_tables,
++            target_unresolved,
++        )
+ 
+         sql = str(inp.get("sql", "") or "").strip()
+         params_raw = inp.get("params") or []
+@@ -4256,6 +4261,12 @@ class ToolExecutor:
+             if kw in sql_upper:
+                 return {"error": f"차단된 명령: {kw.strip()}"}
+         if not any(sql_upper.startswith(k) for k in ("INSERT", "UPDATE", "DELETE")):
++            try:
++                validate_single_write(sql)
++            except IndirectWriteBlocked as exc:
++                return {"error": f"SQL 차단: {exc}", "blocked": True, "dry_run": dry_run}
++            except SqlGuardError:
++                pass
+             return {"error": "INSERT/UPDATE/DELETE만 허용"}
+         try:
+             statement = validate_single_write(sql)
+@@ -4280,7 +4291,12 @@ class ToolExecutor:
+             from app.core.db_pool import get_pool
+             pool = get_pool()
+             async with pool.acquire() as conn:
+-                if references_login_tables(statement.words + statement.literals):
++                try:
++                    await assert_target_not_view(conn, statement.target)
++                except VaultLoginProtected as exc:
++                    return {"error": str(exc), "blocked": True, "dry_run": dry_run, "vault_guard": True}
++                # 대상 테이블을 확정 못 한 쓰기는 이름 검사가 빗나갈 수 있으니 보호 검사를 강제한다.
++                if references_login_tables(statement.words + statement.literals) or target_unresolved(statement.target):
+                     return await self._db_safe_write_vault_guarded(
+                         conn, sql, params_raw, dry_run, table_name,
+                     )
+diff --git a/app/services/vault_cleanup_guard.py b/app/services/vault_cleanup_guard.py
+index cba50559..a576ecb5 100644
+--- a/app/services/vault_cleanup_guard.py
++++ b/app/services/vault_cleanup_guard.py
+@@ -14,6 +14,10 @@
+   기존 credential_vault.decrypt_value 로 메모리에서만 풀고, 평문을 SQL 파라미터로
+   보내지 않는다(계정 매칭은 파이썬에서). 결과·예외 메시지에 평문·암호문을 넣지 않는다.
+ - 복호화·조회 실패는 fail closed — VaultGuardUnavailable 로 쓰기 전체를 롤백시킨다.
++- 간접 경로(2026-09-30): 보호 테이블 이름이 SQL 에 없어도 저장 함수·뷰·트리거가 바꿀 수 있다.
++  ① 함수 호출은 db_write_sql_guard 가 허용 목록으로 거부한다. ② 대상 테이블을 확정하지
++  못한 쓰기는 이름 검사를 통과시키지 않고 보호 검사(전후 스냅샷 비교)를 강제한다
++  (target_unresolved). ③ 대상이 뷰이면 거부한다(assert_target_not_view).
+ - 보호 범위: saas_users 삭제·soft delete·status/is_active 비활성·이메일 변경,
+   tenant_memberships 삭제·해제, 로그인 조직(default_tenant_id·활성 멤버십 조직)의
+   tenants 삭제·비활성.
+@@ -45,6 +49,10 @@ class VaultGuardUnavailable(VaultLoginProtected):
+     """보호 대상을 확정하지 못했다 — fail closed."""
+ 
+ 
++class VaultViewTargetBlocked(VaultLoginProtected):
++    """쓰기 대상이 뷰다 — 업데이트 가능 뷰·INSTEAD OF 트리거로 보호 테이블을 우회할 수 있다."""
 +
 +
-+def employee_membership_lock_key(tenant_id: str, employee_email: str) -> int:
-+    """(tenant_id, employee_email) → pg_advisory_xact_lock 용 signed bigint.
-+
-+    파이썬 hash() 는 프로세스마다 달라 blue/green 컨테이너 사이에서 같은 키가 안 나온다 —
-+    sha256 앞 8바이트로 고정한다.  이메일은 대소문자·공백을 정규화한다.
-+    """
-+    raw = f"obys-employee-membership:{str(tenant_id or '').strip().lower()}:{_normalize_email(employee_email)}"
-+    return int.from_bytes(hashlib.sha256(raw.encode("utf-8")).digest()[:8], "big", signed=True)
-+
-+
-+async def _lock_employee_membership(conn, tenant_id: str, employee_email: str) -> int:
-+    """같은 (고용주 테넌트, 직원 이메일) 의 멤버십 연결·회수를 DB 에서 직렬화한다.
-+
-+    blue/green 두 컨테이너는 파일시스템이 분리돼 flock 이 서로를 못 본다 — 락은 두
-+    컨테이너가 공유하는 AADS 인증 DB 에 건다.  xact 계열이라 트랜잭션이 끝나면 풀리고,
-+    같은 세션에서 다시 걸어도(재진입) 막히지 않는다.  최종 보장은 여전히
-+    tenant_memberships UNIQUE(tenant_id, user_id) 다 — 락은 경합 완화다.
-+    """
-+    key = employee_membership_lock_key(tenant_id, employee_email)
-+    await conn.execute("SELECT pg_advisory_xact_lock($1::bigint)", key)
-+    return key
+ def internal_hosts() -> frozenset[str]:
+     hosts = set(DEFAULT_INTERNAL_HOSTS)
+     public = urlparse(os.getenv("AADS_PUBLIC_BASE_URL", "")).hostname
+@@ -81,6 +89,45 @@ def references_login_tables(sql_texts: list[str]) -> bool:
+     return any(_PROTECTED_NAME_RE.search(text.lower()) for text in sql_texts)
+ 
+ 
++def target_unresolved(target: object | None) -> bool:
++    """쓰기 대상 테이블을 확정하지 못했으면 True — 이름 검사가 빗나가도 보호 검사를 강제한다."""
++    return target is None
 +
 +
-+@asynccontextmanager
-+async def employee_membership_lock(tenant_id: str, employee_email: str):
-+    """가입요청 검토 전체(직전 상태 읽기 → 저장 → 멤버십 연결·회수)를 감싸는 DB 락.
++# 캐시하지 않는다: 뷰는 마이그레이션(CREATE VIEW)으로 언제든 생기고, 캐시는 그 사이 창을 우회로로
++# 만든다. 쿼리는 이름·스키마 한정이라 쓰기 1건당 1회 왕복이면 충분하다.
++# information_schema.views 는 현재 role 이 권한을 가진 뷰만 보여주므로 pg_class 를 함께 본다.
++# 스키마 없는 이름은 검색 경로를 추측하지 않고 모든 스키마의 같은 이름 뷰를 대상으로 본다(보수적).
++_VIEW_LOOKUP_SQL = """
++    SELECT 1 AS hit FROM information_schema.views v
++     WHERE lower(v.table_name) = $1 AND ($2::text = '' OR lower(v.table_schema) = $2)
++    UNION ALL
++    SELECT 1 FROM pg_catalog.pg_class c
++      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
++     WHERE c.relkind = 'v' AND lower(c.relname) = $1
++       AND ($2::text = '' OR lower(n.nspname) = $2)
++    LIMIT 1
++"""
 +
-+    연결·트랜잭션을 열고 advisory xact lock 을 건 채 그 연결을 내준다.  안에서
-+    link/revoke 에 ``conn=`` 으로 넘기면 멤버십 변경도 같은 트랜잭션(세이브포인트)에서
-+    일어나고, 블록을 나가 커밋될 때 락이 풀린다.
-+    """
-+    await require_saas_schema_ready()
-+    pool = await _ensure_pool()
-+    async with pool.acquire() as conn:
-+        async with conn.transaction():
-+            await _lock_employee_membership(conn, tenant_id, employee_email)
-+            yield conn
 +
-+
-+@asynccontextmanager
-+async def _membership_transaction(conn=None):
-+    """conn 이 오면 그 연결의 (중첩)트랜잭션, 없으면 풀에서 새로 연다."""
-+    if conn is not None:
-+        async with conn.transaction():
-+            yield conn
++async def assert_target_not_view(conn, target: Any) -> None:
++    """target(schema, name)이 뷰이면 VaultViewTargetBlocked, 조회 실패는 VaultGuardUnavailable."""
++    if target is None:
 +        return
-+    pool = await _ensure_pool()
-+    async with pool.acquire() as own:
-+        async with own.transaction():
-+            yield own
-+
-+
-+async def link_employee_tenant_membership(
-+    *,
-+    tenant_id: str,
-+    employee_user_id: Optional[str],
-+    employee_email: str,
-+    invited_by: Optional[str] = None,
-+    allow_email_lookup: bool = False,
-+    context_tenant_id: Optional[str] = None,
-+    conn=None,
-+) -> dict:
-+    """승인된 오비서 직원을 고용주 테넌트의 ``member`` 로 연결한다.
-+
-+    신원 우선순위:
-+    1. 가입요청을 **본인이 로그인해 제출한** 계정(employee_user_id). 그 계정의
-+       현재 이메일이 요청 이메일과 다르면 identity_mismatch.
-+    2. 본인 제출 고정이 없고 ``allow_email_lookup`` 이 참이면 요청 이메일로
-+       saas_users 를 찾는다(basis=email).  직원은 개인 워크스페이스 JWT 로는
-+       고용주 테넌트에 가입요청을 낼 수 없다(obys_tenant 게이트 403) — 실제
-+       요청 대부분은 관리자 대리 등록·초대 흐름이라 1번만으로는 거의 모든
-+       승인이 pending 에 머문다.  이때 신원은 승인하는 owner/admin 이 보증한다.
-+       이 경로는 ``context_tenant_id``(요청 JWT 테넌트)가 있고 ``tenant_id`` 와
-+       같아야 한다 — 아니면 EmployeeTenantContextError.  조회 SQL 도 테넌트 조건을 건다.
-+    같은 (테넌트, 이메일) 은 pg_advisory_xact_lock 으로 직렬화한다.  ``conn`` 을 넘기면
-+    그 연결의 트랜잭션 안(세이브포인트)에서 돈다(employee_membership_lock).
-+    멤버십을 새로 만들거나 되살렸을 때만 ``owned_by_request`` 가 참이다 —
-+    반려 때 회수할 수 있는 것은 그것뿐이다.
-+    """
-+    await require_saas_schema_ready()
-+    email = _normalize_email(employee_email)
-+    user_id = str(employee_user_id or "").strip()
-+    result: dict = {
-+        "tenant_id": tenant_id,
-+        "employee_email": email,
-+        "user_id": user_id or None,
-+        "before": None,
-+        "after": None,
-+        "owned_by_request": False,
-+        "default_tenant": None,
-+        "identity_basis": "requester" if user_id else ("email" if allow_email_lookup else None),
-+    }
-+    if not user_id and not (allow_email_lookup and email):
-+        return {**result, "status": "pending_identity", "reason": "join_request_not_bound_to_account"}
-+    if not user_id:
-+        # 연결 전에 먼저 막는다 — 컨텍스트 없는 호출은 DB 에 닿지 않는다.
-+        _require_email_lookup_context(context_tenant_id, tenant_id)
-+    async with _membership_transaction(conn) as conn:
-+        await _lock_employee_membership(conn, tenant_id, email)
-+        tenant_kind = await conn.fetchval(
-+            "SELECT kind FROM tenants WHERE id = $1::uuid AND status = 'active' AND deleted_at IS NULL",
-+            tenant_id,
-+        )
-+        if str(tenant_kind or "").lower() != "customer":
-+            return {**result, "status": "skipped", "reason": "employer_tenant_not_active_customer"}
-+        if user_id:
-+            account_email = await _active_user_email_by_id(conn, user_id)
-+            if not account_email:
-+                return {**result, "status": "pending_account", "reason": "saas_user_not_found"}
-+            if not email or account_email != email:
-+                return {**result, "status": "identity_mismatch", "reason": "account_email_differs_from_request"}
-+        else:
-+            user_id = await _active_user_id_by_email(
-+                conn, email, tenant_id=tenant_id, context_tenant_id=context_tenant_id
-+            )
-+            if not user_id:
-+                return {**result, "status": "pending_account", "reason": "saas_user_not_found"}
-+            result["user_id"] = user_id
-+        before = await _membership_state_for_update(conn, tenant_id, user_id)
-+        after = await upsert_tenant_membership(
-+            conn,
-+            tenant_id=tenant_id,
-+            user_id=user_id,
-+            role=TenantRole.MEMBER.value,
-+            invited_by=invited_by,
-+            preserve_elevated_role=True,
-+        )
-+        active_before = bool(before and not before.get("deleted") and before.get("status") == "active")
-+        default_tenant = None
-+        if not active_before:
-+            default_tenant = await _move_default_off_personal_workspace(conn, user_id, tenant_id)
-+    unchanged = bool(active_before and after and before.get("role") == after.get("role"))
-+    return {
-+        **result,
-+        "status": "unchanged" if unchanged else "linked",
-+        "before": before,
-+        "after": after,
-+        "owned_by_request": not active_before,
-+        "default_tenant": default_tenant,
-+    }
-+
-+
-+async def revoke_employee_tenant_membership(
-+    *,
-+    tenant_id: str,
-+    user_id: str,
-+    membership_id: str,
-+    employee_email: str = "",
-+    conn=None,
-+) -> dict:
-+    """반려·퇴사 직원의 고용주 테넌트 멤버십을 ``removed`` 로 회수한다(행은 남긴다).
-+
-+    호출자는 그 가입요청의 승인이 만든 멤버십(membership_id)만 넘긴다.  행이
-+    바뀌었거나(membership_id 불일치) member 가 아니면 건드리지 않는다 — 초대로
-+    들어온 정상 멤버나 관리자 권한을 가입요청 반려가 빼앗으면 안 된다.
-+    ``employee_email`` 이 있으면 연결과 같은 advisory lock 키로 직렬화한다.
-+    """
-+    await require_saas_schema_ready()
-+    result: dict = {"tenant_id": tenant_id, "user_id": user_id, "before": None, "after": None}
-+    async with _membership_transaction(conn) as conn:
-+        if _normalize_email(employee_email):
-+            await _lock_employee_membership(conn, tenant_id, employee_email)
-+        before = await _membership_state_for_update(conn, tenant_id, user_id)
-+        result["before"] = before
-+        if not before or before.get("deleted") or before.get("status") == "removed":
-+            return {**result, "status": "not_member"}
-+        if str(before.get("membership_id") or "") != str(membership_id or ""):
-+            return {**result, "status": "skipped", "reason": "membership_not_linked_by_request"}
-+        role = str(before.get("role") or "").lower()
-+        if role in _ELEVATED_MEMBERSHIP_ROLES:
-+            return {**result, "status": "kept_elevated"}
-+        if role != TenantRole.MEMBER.value:
-+            return {**result, "status": "skipped", "reason": f"role_changed_to_{role}"}
-+        row = await conn.fetchrow(
-+            """
-+            UPDATE tenant_memberships
-+               SET status = 'removed',
-+                   updated_at = now()
-+             WHERE id = $1::uuid
-+               AND tenant_id = $2::uuid
-+               AND user_id = $3::text
-+            RETURNING id::text AS membership_id, tenant_id::text, user_id, role, status
-+            """,
-+            membership_id,
-+            tenant_id,
-+            user_id,
-+        )
-+    return {**result, "status": "removed", "after": dict(row) if row else None}
-+
-+
- async def create_tenant_for_user(
-     *,
-     user_id: str,
-@@ -996,7 +1411,8 @@ async def accept_tenant_invite(
-                    email,
-                    role,
-                    status,
--                   expires_at
-+                   expires_at,
-+                   invited_by
-               FROM tenant_invites
-              WHERE token_hash = $1
-                AND status = 'pending'
-@@ -1032,23 +1448,15 @@ async def accept_tenant_invite(
- 
-     async with pool.acquire() as conn:
-         async with conn.transaction():
--            membership = await conn.fetchrow(
--                """
--                INSERT INTO tenant_memberships (tenant_id, user_id, role, status, invited_by)
--                SELECT id.tenant_id::uuid, $2, id.role, 'active', ti.invited_by
--                  FROM (SELECT $1::uuid AS tenant_id, $3::text AS role) id
--                  JOIN tenant_invites ti ON ti.id = $4::uuid
--                ON CONFLICT (tenant_id, user_id) DO UPDATE
--                   SET role = EXCLUDED.role,
--                       status = 'active',
--                       deleted_at = NULL,
--                       updated_at = now()
--                RETURNING id::text AS membership_id, tenant_id::text, role, status
--                """,
--                invite["tenant_id"],
--                user_id,
--                invite["role"],
--                invite["invite_id"],
-+            # tenant_invites.invited_by 는 saas_users FK(ON DELETE SET NULL)라 공용 함수의
-+            # saas_users 확인을 거쳐도 예전 ti.invited_by 와 같은 값이 들어간다.
-+            # preserve_elevated_role 기본 False — 초대 역할이 그대로 덮어쓴다(예전 동작).
-+            membership = await upsert_tenant_membership(
-+                conn,
-+                tenant_id=invite["tenant_id"],
-+                user_id=user_id,
-+                role=invite["role"],
-+                invited_by=invite["invited_by"],
-             )
-             await conn.execute(
-                 """
-@@ -1078,7 +1486,8 @@ async def accept_tenant_invite(
-     return {
-         "user": dict(user_row) if user_row else {"id": user_id, "email": email, "name": name},
-         "tenant_id": invite["tenant_id"],
--        "membership": dict(membership) if membership else None,
-+        # 응답 모양은 공용 upsert 도입 전 그대로(membership_id, tenant_id, role, status).
-+        "membership": {k: v for k, v in membership.items() if k != "user_id"} if membership else None,
-         "workspace": workspace,
-     }
- 
-diff --git a/app/core/obys_tenant.py b/app/core/obys_tenant.py
-index ba227b14..01da3ab6 100644
---- a/app/core/obys_tenant.py
-+++ b/app/core/obys_tenant.py
-@@ -11,6 +11,7 @@ from __future__ import annotations
- 
- import logging
- import os
-+import re
- 
- from fastapi import Depends, HTTPException, Request
- 
-@@ -38,6 +39,42 @@ _TENANT_SCOPED_PREFIXES = (
-     "/api/v1/yeoljeong-finance/journals",
- )
- 
-+# 계약서 서명 두 라우트만 연다 — 조회 GET /contracts/signing/{token}, 서명 POST
-+# /contracts/signing.  get_contract_by_token·sign_contract 는 _read_hr(JWT 테넌트
-+# SQL 스코프)로만 토큰을 찾고 _contract_signer_email → _require_hr_record 로
-+# 레코드 테넌트를 다시 대조한다.  /contracts 전체는 열지 않는다(2026-09-30 직원
-+# 서명 403).
-+#
-+# 위 prefix 목록과 달리 prefix 로 열지 않는다 — (메서드, 경로 전체) 명시적 화이트리스트다.
-+# 경로는 fullmatch 정규식이고, GET 토큰은 서비스가 만드는 모양 그대로
-+# (request_contract_signature: secrets.token_urlsafe(24) → URL-safe base64 32자)만 받는다.
-+# 그래서 /contracts/signing-extra, /contracts/signing/{token}/sub,
-+# /contracts/signing/{token}-extra, /contracts/signing/signed-pdf(GET /contracts/{id}/signed-pdf
-+# 에 id="signing") 같은 유사 경로는 이 게이트로 열리지 않고 아래 기존 판정(레거시 테넌트
-+# 허용목록)을 그대로 탄다 — 게이트가 새로 403 을 만들지도, 새로 열지도 않는다.
-+# 기존 prefix 들의 startswith 판정은 그대로 둔다(동작 변경 없음).
-+_SIGNING_PATH = "/api/v1/yeoljeong-finance/contracts/signing"
-+_SIGN_TOKEN_PATTERN = r"[A-Za-z0-9_-]{32}"
-+_CONTRACT_SIGNING_WHITELIST: tuple[tuple[str, re.Pattern[str]], ...] = (
-+    ("GET", re.compile(re.escape(_SIGNING_PATH) + "/" + _SIGN_TOKEN_PATTERN)),
-+    ("POST", re.compile(re.escape(_SIGNING_PATH))),
-+)
-+
-+
-+def _is_contract_signing_route(method: str, path: str) -> bool:
-+    method = str(method or "").upper()
-+    path = str(path or "")
-+    return any(
-+        method == allowed_method and pattern.fullmatch(path) is not None
-+        for allowed_method, pattern in _CONTRACT_SIGNING_WHITELIST
-+    )
-+
-+
-+def _is_tenant_scoped_path(path: str, method: str = "GET") -> bool:
-+    if any(path.startswith(prefix) for prefix in _TENANT_SCOPED_PREFIXES):
-+        return True
-+    return _is_contract_signing_route(method, path)
-+
- 
- def _allowed_tenant_ids() -> frozenset[str]:
-     raw = os.getenv("OBYS_LEGACY_TENANT_IDS", "")
-@@ -65,7 +102,7 @@ async def require_legacy_obys_access(
- 
-     # These routes bind every query to the JWT tenant.  Role flags deliberately
-     # do not affect this decision, so owner/admin cannot cross the boundary.
--    if tenant_id and any(request.url.path.startswith(prefix) for prefix in _TENANT_SCOPED_PREFIXES):
-+    if tenant_id and _is_tenant_scoped_path(request.url.path, getattr(request, "method", "")):
-         return user
- 
-     logger.warning(
-diff --git a/app/services/yeoljeong_finance_service.py b/app/services/yeoljeong_finance_service.py
-index c3915a64..bcb030d1 100644
---- a/app/services/yeoljeong_finance_service.py
-+++ b/app/services/yeoljeong_finance_service.py
-@@ -25,6 +25,7 @@ import time
- import urllib.error
- import urllib.request
- import zipfile
-+from contextlib import AsyncExitStack
- from datetime import date, datetime, timedelta, timezone
- from pathlib import Path
- from typing import Any
-@@ -2249,6 +2250,17 @@ def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
-             "updated_at": now,
-         }
-     )
-+    # 신원 고정: 본인 로그인 이메일로 낸 요청만 요청자 계정(JWT user_id)을 남긴다.
-+    # 승인 시 고용주 테넌트 멤버십은 이 값으로만 연결된다 — 본문 email 만으로는
-+    # 남의 계정을 연결하거나(승인) 회수하지(반려) 못한다.
-+    requester_email = _email(user)
-+    requester_user_id = str(user.get("user_id") or user.get("id") or "").strip()
-+    if requester_email and requester_email == email and requester_user_id:
-+        record["requester_user_id"] = requester_user_id
-+        record["requester_email"] = requester_email
-+        record["requested_by"] = requester_email
-+    elif not existing:
-+        record["registered_by"] = requester_email
-     record = _owned_hr_record(record, user)
-     _write_hr_record("employee_join_requests", record, user)
-     return record
-@@ -2270,6 +2282,362 @@ def review_join_request(request_id: str, action: str, memo: str, user: dict[str,
-     return record
- 
- 
-+# ---------------------------------------------------------------------------
-+# 직원 승인 ↔ 고용주 테넌트 멤버십 (AADS-OBYS-EMPLOYEE-TENANT-MEMBERSHIP-20260930)
-+#
-+# 2026-09-30 진아서버 실측: 승인 직원 7명 중 고용주 테넌트(tenant_memberships)
-+# 소속은 0명이었다. 직원은 가입 때 자동 생성된 개인 워크스페이스로만 로그인해
-+# _read_hr 가 계약서를 못 찾았고, 그 워크스페이스에서는 owner 라 _is_admin 이
-+# 참이 되어 서명이 막혔다. 승인이 멤버십(role=member)을 만들고, 반려·퇴사가
-+# 그 승인이 만든 멤버십만 회수(status=removed)한다. 멤버십은 AADS 인증 DB,
-+# 가입요청·감사는 오비서 DB 라 한 트랜잭션이 아니다 — 승인 자체는 멤버십
-+# 실패와 무관하게 성공으로 남기고 결과를 응답과 감사에 담는다.
-+#
-+# 신원: 본인 로그인으로 제출한 요청은 upsert_join_request 가 남긴
-+# requester_user_id 로 연결한다(이메일이 바뀌었으면 identity_mismatch).
-+# 그 고정이 없는 요청 — 관리자 대리 등록·초대 흐름·예전 요청 — 은 요청
-+# 이메일로 saas_users 를 찾는다. 직원은 개인 워크스페이스 JWT 로 고용주
-+# 테넌트에 요청을 낼 수 없어(obys_tenant 게이트) 실제 요청 대부분이 이쪽이고,
-+# 이메일은 승인하는 owner/admin 이 보증한다. requester_* 가 남았는데 요청
-+# 이메일과 어긋나면(남의 이메일로 낸 흔적) 이메일로 찾지 않고 pending_identity.
-+# ---------------------------------------------------------------------------
-+MEMBERSHIP_AUDIT_LOG = "tenant_membership_audit"
-+MEMBERSHIP_AUDIT_LEDGER = "tenant_memberships"
-+_MEMBERSHIP_AUDIT_CLASSIFICATION = {
-+    "linked": "membership_linked",
-+    "unchanged": "membership_unchanged",
-+    "pending_account": "membership_pending",
-+    "pending_identity": "membership_pending",
-+    "identity_mismatch": "membership_skipped",
-+    "removed": "membership_removed",
-+    "kept_elevated": "membership_skipped",
-+    "not_member": "membership_skipped",
-+    "skipped": "membership_skipped",
-+    "error": "membership_failed",
-+}
-+
-+
-+def _join_request_account_id(record: dict[str, Any]) -> str:
-+    """본인이 제출한 가입요청이면 그 계정 id. 아니면 빈 문자열."""
-+    requester_id = str(record.get("requester_user_id") or "").strip()
-+    requester_email = str(record.get("requester_email") or "").strip().lower()
-+    email = str(record.get("email") or "").strip().lower()
-+    return requester_id if requester_id and requester_email and requester_email == email else ""
-+
-+
-+def _join_request_allows_email_lookup(record: dict[str, Any]) -> bool:
-+    """본인 제출 고정이 없는 요청(관리자 대리 등록·초대 흐름·예전 요청)은 승인자가 이메일을 보증한다.
-+
-+    requester_* 가 남아 있는데 요청 이메일과 어긋나면 누군가 남의 이메일로 낸 흔적이다 —
-+    그때는 이메일로 계정을 찾지 않는다.
-+    """
-+    if _join_request_account_id(record):
-+        return False
-+    return not str(record.get("requester_user_id") or "").strip() and not str(record.get("requester_email") or "").strip()
-+
-+
-+def _membership_audit_row(
-+    link: dict[str, Any],
-+    *,
-+    action: str,
-+    source: str,
-+    record: dict[str, Any],
-+    actor_user_id: str,
-+    actor_email: str,
-+) -> dict[str, Any]:
-+    status = str(link.get("status") or "error")
-+    return {
-+        "id": str(uuid4()),
-+        "ledger_table": MEMBERSHIP_AUDIT_LEDGER,
-+        "classification": _MEMBERSHIP_AUDIT_CLASSIFICATION.get(status, "membership_failed"),
-+        "reason": f"{action}:{status}" + (f":{link['reason']}" if link.get("reason") else ""),
-+        "source": source,
-+        "business_id": str(record.get("business_id") or ""),
-+        "tenant_id": str(link.get("tenant_id") or record.get("tenant_id") or ""),
-+        "action": action,
-+        "actor_user_id": actor_user_id,
-+        "actor_email": actor_email,
-+        "employee_email": str(link.get("employee_email") or record.get("email") or "").strip().lower(),
-+        "employee_user_id": str(link.get("user_id") or ""),
-+        "join_request_id": str(record.get("id") or ""),
-+        "before_state": link.get("before"),
-+        "after_state": link.get("after"),
-+        "classified_at": _now(),
-+    }
-+
-+
-+async def _db_insert_membership_audit(row: dict[str, Any]) -> bool:
-+    import asyncpg
-+
-+    conn = await asyncpg.connect(_db_url(), timeout=5)
++    name = str(target.name).lower()
++    schema = str(target.schema or "").lower()
 +    try:
-+        await conn.execute(
-+            """
-+            INSERT INTO yeoljeong_hr_tenant_attribution_audit
-+                (ledger_table, row_id, classification, reason, source, business_id, tenant_id,
-+                 action, actor_user_id, actor_email, employee_email, employee_user_id, join_request_id,
-+                 before_state, after_state, classified_at)
-+            VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, '')::uuid,
-+                    $8, NULLIF($9, ''), NULLIF($10, ''), $11, NULLIF($12, ''), NULLIF($13, ''),
-+                    $14::jsonb, $15::jsonb, $16::timestamptz)
-+            """,
-+            row["ledger_table"],
-+            row["id"],
-+            row["classification"],
-+            row["reason"],
-+            row["source"],
-+            row["business_id"],
-+            row["tenant_id"],
-+            row["action"],
-+            row["actor_user_id"],
-+            row["actor_email"],
-+            row["employee_email"],
-+            row["employee_user_id"],
-+            row["join_request_id"],
-+            json.dumps(row["before_state"], ensure_ascii=False, default=str) if row["before_state"] is not None else None,
-+            json.dumps(row["after_state"], ensure_ascii=False, default=str) if row["after_state"] is not None else None,
-+            _pg_ts(row["classified_at"]),
++        rows = await conn.fetch(_VIEW_LOOKUP_SQL, name, schema)
++    except Exception as exc:
++        raise VaultGuardUnavailable(
++            f"쓰기 대상 뷰 여부 조회 실패({type(exc).__name__}) — 쓰기 차단"
++        ) from None
++    if rows:
++        raise VaultViewTargetBlocked(
++            f"뷰 대상 쓰기 차단: {schema + '.' if schema else ''}{name} — 기반 테이블을 직접 지정하라"
 +        )
-+        return True
-+    finally:
-+        await conn.close()
 +
 +
-+def _append_membership_audit_file(row: dict[str, Any]) -> None:
-+    """파일 원장 추가. 읽고-다시-쓰기 사이를 flock 으로 묶어 동시 승인에서 행이 사라지지 않게 한다."""
-+    safe_row = json.loads(json.dumps(row, ensure_ascii=False, default=str))
-+    lock_path = _path(MEMBERSHIP_AUDIT_LOG).with_suffix(".lock")
-+    with open(lock_path, "a+") as lock:
-+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-+        try:
-+            _write_file_rows(MEMBERSHIP_AUDIT_LOG, [safe_row] + _read_file_rows(MEMBERSHIP_AUDIT_LOG))
-+        finally:
-+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-+
-+
-+def _record_membership_audit_sync(row: dict[str, Any]) -> bool:
-+    """스레드에서 부른다. DB 가 있으면 감사 테이블, 없으면 파일 원장."""
-+    if _db_available():
-+        # _run_db 는 워커 스레드(이벤트 루프 없음)에서 asyncio.run 으로 돌리고 실패는 None 이다.
-+        if _run_db(_db_insert_membership_audit(row)):
-+            return True
-+        # 20260930 감사 마이그레이션은 자동 적용 HOLD 다. 코드가 먼저 나가 컬럼·CHECK 가
-+        # 없으면 INSERT 가 실패한다 — 그 사이 이벤트를 잃지 않도록 파일 원장에 남긴다.
-+        logger.error("membership audit DB insert failed, falling back to file: request=%s", row.get("join_request_id"))
-+        try:
-+            _append_membership_audit_file({**row, "db_insert_failed": True})
-+        except Exception as exc:  # noqa: BLE001
-+            logger.error("membership audit not recorded: request=%s err=%s", row.get("join_request_id"), exc)
-+            return False
-+        return True
-+    _append_membership_audit_file(row)
-+    return True
-+
-+
-+async def record_membership_audit(row: dict[str, Any]) -> bool:
-+    """감사 1행. 파일·DB I/O 는 이벤트 루프 밖(스레드)에서 한다 — 감사 실패가 승인을 되돌리지 않는다."""
-+    try:
-+        return await asyncio.to_thread(_record_membership_audit_sync, row)
-+    except Exception as exc:  # noqa: BLE001
-+        logger.error("membership audit not recorded: request=%s err=%s", row.get("join_request_id"), exc)
-+        return False
-+
-+
-+def _save_membership_link(request_id: str, link: dict[str, Any], user: dict[str, Any]) -> dict[str, Any] | None:
-+    """가입요청에 '이 승인이 만든 멤버십' 표시를 남긴다 — 반려가 회수할 수 있는 유일한 근거."""
-+    record = _find(_read_hr("employee_join_requests", user), request_id)
-+    if not record:
-+        return None
-+    status = link.get("status")
-+    marker = dict(record.get("membership_link") or {})
-+    if status == "linked" and link.get("owned_by_request"):
-+        marker = {
-+            "tenant_id": str(link.get("tenant_id") or ""),
-+            "user_id": str(link.get("user_id") or ""),
-+            "membership_id": str((link.get("after") or {}).get("membership_id") or ""),
-+            "linked_by": str(user.get("user_id") or user.get("id") or ""),
-+            "linked_at": _now(),
-+        }
-+    elif status == "removed":
-+        marker["revoked_at"] = _now()
-+    else:
-+        return record
-+    record["membership_link"] = marker
-+    _write_hr_record("employee_join_requests", record, user)
-+    return record
-+
-+
-+def _membership_revoke_target(record: dict[str, Any], previous_status: str, tenant_id: str) -> tuple[dict[str, Any], str]:
-+    """반려가 회수해도 되는 멤버십인가 — (표시, 거절 사유). 사유가 비어야 회수한다."""
-+    if str(previous_status or "").strip().lower() != "approved":
-+        return {}, "request_was_not_approved"
-+    marker = record.get("membership_link") or {}
-+    if not isinstance(marker, dict) or not marker.get("membership_id") or not marker.get("user_id"):
-+        return {}, "membership_not_linked_by_request"
-+    if marker.get("revoked_at"):
-+        return {}, "membership_already_revoked"
-+    if str(marker.get("tenant_id") or "") != tenant_id:
-+        return {}, "membership_linked_in_other_tenant"
-+    account_id = _join_request_account_id(record)
-+    if account_id and account_id != str(marker.get("user_id")):
-+        return {}, "membership_user_differs_from_requester"
-+    return marker, ""
-+
-+
-+async def sync_employee_tenant_membership(
-+    record: dict[str, Any],
-+    action: str,
-+    user: dict[str, Any],
-+    *,
-+    previous_status: str = "",
-+    source: str = "review_join_request",
-+    conn: Any = None,
-+) -> dict[str, Any]:
-+    """승인이면 고용주 테넌트 member 연결, 반려·퇴사면 이 요청이 만든 멤버십만 회수.
-+
-+    실패해도 예외를 올리지 않는다(결과·감사에 error 로 남긴다).  ``conn`` 은
-+    employee_membership_lock 이 내준 연결 — 멤버십 변경을 그 락 트랜잭션 안에서 한다.
-+    """
-+    from app import auth as auth_module
-+
-+    tenant_id = _tenant_id(user)
-+    employee_email = str(record.get("email") or record.get("employee_email") or "").strip().lower()
-+    actor_user_id = str(user.get("user_id") or user.get("id") or "")
-+    base = {"tenant_id": tenant_id, "employee_email": employee_email, "user_id": None, "before": None, "after": None}
-+    try:
-+        if action == "approved":
-+            allow_email_lookup = _join_request_allows_email_lookup(record)
-+            if allow_email_lookup:
-+                # 이메일 조회의 전제(요청 테넌트 == 가입요청 테넌트·사업자)를 여기서도 다시 확인한다.
-+                await asyncio.to_thread(_require_employee_membership_context, record, user)
-+            link = await auth_module.link_employee_tenant_membership(
-+                tenant_id=tenant_id,
-+                employee_user_id=_join_request_account_id(record) or None,
-+                employee_email=employee_email,
-+                invited_by=actor_user_id or None,
-+                allow_email_lookup=allow_email_lookup,
-+                context_tenant_id=tenant_id,
-+                conn=conn,
-+            )
-+        else:
-+            marker, reason = _membership_revoke_target(record, previous_status, tenant_id)
-+            if reason:
-+                link = {**base, "status": "skipped", "reason": reason}
-+            else:
-+                link = await auth_module.revoke_employee_tenant_membership(
-+                    tenant_id=tenant_id,
-+                    user_id=str(marker["user_id"]),
-+                    membership_id=str(marker["membership_id"]),
-+                    employee_email=employee_email,
-+                    conn=conn,
-+                )
-+                link.setdefault("employee_email", employee_email)
-+    except Exception as exc:  # noqa: BLE001
-+        logger.error("employee membership sync failed: request=%s action=%s err=%s", record.get("id"), action, exc)
-+        reason = "tenant_context_mismatch" if isinstance(exc, (auth_module.EmployeeTenantContextError, HTTPException)) else type(exc).__name__
-+        link = {**base, "status": "error", "reason": reason}
-+    audit = _membership_audit_row(
-+        link,
-+        action=action,
-+        source=source,
-+        record=record,
-+        actor_user_id=actor_user_id,
-+        actor_email=_email(user),
-+    )
-+    recorded = await record_membership_audit(audit)
-+    try:
-+        saved = await asyncio.to_thread(_save_membership_link, str(record.get("id") or ""), link, user)
-+    except Exception as exc:  # noqa: BLE001
-+        logger.error("membership link marker not saved: request=%s err=%s", record.get("id"), exc)
-+        saved = None
-+    if saved:
-+        record.update(saved)
-+    return {
-+        "status": link.get("status"),
-+        "reason": link.get("reason") or "",
-+        "tenant_id": tenant_id,
-+        "user_id": link.get("user_id"),
-+        "role": (link.get("after") or {}).get("role"),
-+        "membership_status": (link.get("after") or link.get("before") or {}).get("status"),
-+        "default_tenant": link.get("default_tenant"),
-+        "audit_recorded": recorded,
-+    }
-+
-+
-+def _require_employee_membership_context(record: dict[str, Any], user: dict[str, Any]) -> str:
-+    """이메일로 직원 계정을 찾기 전의 전제를 코드로 강제한다 — 부재·불일치는 예외.
-+
-+    ① 요청에 검증된 테넌트 컨텍스트(JWT tenant + 활성 멤버십)가 있어야 하고(_tenant_id),
-+    ② 가입요청 레코드가 그 테넌트 것이어야 하며(_require_hr_record),
-+    ③ 가입요청의 사업자가 그 테넌트에 귀속돼 있어야 한다(_require_business_for_tenant).
-+    예전엔 "레거시 테넌트 JWT 컨텍스트가 이미 잡혀 있다" 를 주석으로만 전제했다.
-+    """
-+    tenant_id = _tenant_id(user)
-+    _require_hr_record(record, user, detail="가입요청을 찾을 수 없습니다")
-+    _require_business_for_tenant(record.get("business_id"), user)
-+    return tenant_id
-+
-+
-+def _precheck_join_review(request_id: str, action: str, user: dict[str, Any]) -> str:
-+    """검토 전에 락 키(직원 이메일)를 정하고, 승인이면 이메일 조회 전제를 먼저 확인한다.
-+
-+    승인 저장 뒤에 컨텍스트 오류가 나면 '승인됐는데 멤버십 없음' 이 남는다 — 그래서
-+    저장 전에 막는다(403/404, 아무것도 저장되지 않음).
-+    """
-+    _tenant_id(user)
-+    record = _find(_read_hr("employee_join_requests", user), request_id)
-+    if record and action == "approved" and _join_request_allows_email_lookup(record):
-+        _require_employee_membership_context(record, user)
-+    return str((record or {}).get("email") or (record or {}).get("employee_email") or "").strip().lower()
-+
-+
-+def _review_join_request_with_previous(
-+    request_id: str, action: str, memo: str, user: dict[str, Any]
-+) -> tuple[dict[str, Any], str]:
-+    previous = _find(_read_hr("employee_join_requests", user), request_id) or {}
-+    previous_status = str(previous.get("status") or "")
-+    return review_join_request(request_id, action, memo, user), previous_status
-+
-+
-+async def review_join_request_with_membership(
-+    request_id: str,
-+    action: str,
-+    memo: str,
-+    user: dict[str, Any],
-+) -> dict[str, Any]:
-+    """가입요청 승인·반려 + 고용주 테넌트 멤버십 연결·회수.
-+
-+    승인 판정(review_join_request)은 그대로 두고, 저장이 끝난 뒤에만 멤버십을
-+    바꾼다 — 권한·검증 실패로 승인이 안 됐는데 멤버십만 생기는 일이 없다.
-+    반려는 직전 상태가 approved 이고 그 승인이 남긴 membership_link 가 있을 때만 회수한다.
-+
-+    직전 상태 읽기 → 저장 → 멤버십 연결·회수는 (고용주 테넌트, 직원 이메일) 단위
-+    pg_advisory_xact_lock 으로 한 줄로 세운다.  예) 승인 A 와 반려 B 가 동시에 돌면 B 가
-+    직전 상태를 pending 으로 읽어 회수를 건너뛰고, 그 사이 A 가 멤버십을 만들어
-+    '반려됐는데 멤버' 가 남는다.  락은 blue/green 두 컨테이너가 같이 보는 AADS 인증 DB 에
-+    건다(파일 flock 은 컨테이너마다 파일시스템이 달라 서로를 못 본다).
-+    인증 DB 에 닿지 못하면 락 없이 진행한다 — 그때 멤버십 변경도 같은 DB 라 실패하고
-+    error 로 감사에 남으며, 승인 자체는 되돌리지 않는다.
-+    """
-+    from app import auth as auth_module
-+
-+    tenant_id = _tenant_id(user)
-+    employee_email = await asyncio.to_thread(_precheck_join_review, request_id, action, user)
-+    async with AsyncExitStack() as stack:
-+        conn = None
-+        try:
-+            conn = await stack.enter_async_context(auth_module.employee_membership_lock(tenant_id, employee_email))
-+        except Exception as exc:  # noqa: BLE001
-+            logger.error("employee membership lock unavailable: request=%s err=%s", request_id, exc)
-+        record, previous_status = await asyncio.to_thread(
-+            _review_join_request_with_previous, request_id, action, memo, user
-+        )
-+        membership = await sync_employee_tenant_membership(
-+            record, action, user, previous_status=previous_status, conn=conn
-+        )
-+    return {"request": record, "membership": membership}
-+
-+
- def update_approved_employee_role(request_id: str, role: str, memo: str, user: dict[str, Any]) -> dict[str, Any]:
-     _tenant_id(user)
-     if not _is_admin(user):
-@@ -3696,10 +4064,19 @@ def _validated_signature_image(data_uri: Any) -> tuple[str, str]:
-     return value, hashlib.sha256(raw).hexdigest()
- 
- 
--def get_contract_by_token(token: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
--    contract = next((row for row in _read_hr("contracts", user) if row.get("sign_token") == token), None)
-+def _signing_contract_for_token(rows: list[dict[str, Any]], token: str) -> dict[str, Any]:
-+    """rows 는 _read_hr 결과(JWT 테넌트 SQL 스코프)다. 다른 테넌트 토큰은 여기서 안 보인다.
-+
-+    토큰이 없거나 다른 테넌트 것이면 존재 여부를 드러내지 않고 똑같이 403.
-+    """
-+    contract = next((row for row in rows if token and row.get("sign_token") == token), None)
-     if not contract:
--        raise HTTPException(status_code=404, detail="서명 요청 계약서를 찾을 수 없습니다")
-+        raise HTTPException(status_code=403, detail="서명 요청 계약서를 찾을 수 없거나 접근 권한이 없습니다")
-+    return contract
-+
-+
-+def get_contract_by_token(token: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
-+    contract = _signing_contract_for_token(_read_hr("contracts", user), token)
-     _contract_signer_email(contract, user)
-     if str(contract.get("status") or "") != "requested":
-         raise HTTPException(status_code=409, detail="서명 요청된 계약서가 아닙니다")
-@@ -3708,10 +4085,7 @@ def get_contract_by_token(token: str, user: dict[str, Any] | None = None) -> dic
- 
- def sign_contract(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
-     token = str(payload.get("token") or "")
--    rows = _read_hr("contracts", user)
--    contract = next((row for row in rows if row.get("sign_token") == token), None)
--    if not contract:
--        raise HTTPException(status_code=404, detail="서명 요청 계약서를 찾을 수 없습니다")
-+    contract = _signing_contract_for_token(_read_hr("contracts", user), token)
-     signer_email = _contract_signer_email(contract, user)
-     if str(contract.get("status") or "") == "signed":
-         raise HTTPException(status_code=409, detail="이미 서명 완료된 계약서입니다")
-diff --git a/docs/operations/OBYS_EMPLOYEE_TENANT_MEMBERSHIP.md b/docs/operations/OBYS_EMPLOYEE_TENANT_MEMBERSHIP.md
+ @dataclass
+ class LoginSnapshot:
+     users: dict[str, dict[str, Any]] = field(default_factory=dict)
+diff --git a/docs/operations/DB_SAFE_WRITE_INDIRECT_PATH.md b/docs/operations/DB_SAFE_WRITE_INDIRECT_PATH.md
 new file mode 100644
-index 00000000..3cb49824
+index 00000000..f010e381
 --- /dev/null
-+++ b/docs/operations/OBYS_EMPLOYEE_TENANT_MEMBERSHIP.md
-@@ -0,0 +1,263 @@
-+# 오비서 직원 승인 → 고용주 테넌트 멤버십 → 계약서 서명
++++ b/docs/operations/DB_SAFE_WRITE_INDIRECT_PATH.md
+@@ -0,0 +1,161 @@
++# db_safe_write 간접 쓰기 경로 차단과 점검 (2026-09-30)
 +
-+TASK: AADS-OBYS-EMPLOYEE-TENANT-MEMBERSHIP-20260930
++대상 코드: `app/services/db_write_sql_guard.py`, `app/services/vault_cleanup_guard.py`,
++`app/services/tool_executor.py` 의 `_db_safe_write`.
++배경: 2026-09-22 계정 일괄삭제 사고(오류사전 `auth.test_account_sweep_deletes_real_tenants`)와
++`db.safe_write_multi_statement_commits_before_guard` 의 잔여 위험.
 +
-+## 왜 필요한가 (2026-09-30 진아서버 실측)
++## 1. 무엇이 문제였나
 +
-+직원 서명이 403 으로 막혀 **어떤 직원도 서명을 끝낼 수 없었다.** 세 겹으로 막혀 있었다.
++Vault 보호 가드는 SQL 문자열에 `saas_users`·`tenant_memberships`·`tenants` 가 **보이는** 쓰기만
++보호 판정을 탄다. 이름이 보이지 않는 경로는 가드를 지나쳤다.
 +
-+1. 직원 로그인 테넌트가 고용주 테넌트(tenant-32 `15055cac-…`)가 아니라, 가입할 때 자동으로 만들어진
-+   본인 워크스페이스(tenant-28/29/30)였다. `tenant_memberships` 에 고용주 테넌트 소속 직원은 0명이었다.
-+2. `require_legacy_obys_access` 가 서명 경로를 막았다(허용목록 밖, `_TENANT_SCOPED_PREFIXES` 에도 없음).
-+3. 게이트를 통과해도 `_read_hr` 이 본인 워크스페이스로 범위를 좁혀 계약서가 보이지 않았다. 그 워크스페이스에서
-+   직원은 owner 라서 `_is_admin`=True 가 되고, "관리자는 직원 대신 서명할 수 없습니다" 로 한 번 더 막혔다.
++| 우회 경로 | 예 |
++|---|---|
++| 저장 함수·프로시저 | `SELECT fn(..)`, `CALL proc()`, `DO $$ .. $$`, `SET col = fn(..)` |
++| 뷰·INSTEAD OF 트리거 | 업데이트 가능 뷰 `v_accounts` 를 UPDATE |
++| 대상 확정 실패 | `db.schema.table` 3단 이름, 예상 밖 문법 → 이름 검사가 빗나가도 조용히 통과 |
++| 일반 테이블의 트리거 | 다른 테이블 UPDATE 가 트리거로 보호 테이블을 변경 (정적 차단 불가 — 5절) |
 +
-+## 순서
++원칙은 **fail closed**: 정적으로 전부 알아낼 수 없으므로 모르는 것은 막거나, 막지 못하면 보호 검사를 강제한다.
 +
-+| 단계 | 무엇이 일어나나 | 코드 |
-+|---|---|---|
-+| 0. 가입요청 | 직원이 **본인 로그인으로** 자기 이메일 요청을 내면 `requester_user_id`·`requester_email`(JWT 값)이 요청에 고정된다. 남의 이메일을 넣은 요청·관리자 대리 등록은 고정되지 않는다(`registered_by` 만 남음) | `upsert_join_request` |
-+| 1. 가입요청 승인 | `PATCH /api/v1/yeoljeong-finance/employees/join-requests/{id}` `{"action":"approved"}` | `review_join_request_with_membership` |
-+| 2. 멤버십 연결 | 계정을 정한다 — ① 고정된 `requester_user_id`(현재 이메일 == 요청 이메일일 때만, 다르면 `identity_mismatch`), ② 고정이 없으면 요청 이메일로 `saas_users` 조회(승인자 보증, `identity_basis=email`). 그 계정을 승인자 테넌트에 `role=member, status=active, invited_by=승인자` upsert. 기존 활성 owner/admin 은 강등하지 않는다. 계정이 없으면 `pending_account`, `requester_*` 가 요청 이메일과 어긋난 요청은 `pending_identity` (모두 승인은 성공) | `app/auth.py` `link_employee_tenant_membership` → `upsert_tenant_membership` (초대 수락과 공용) |
-+| 3. 시작 테넌트 | 이 승인이 멤버십을 **새로 만들거나 되살린 그 한 번**, 직원의 `default_tenant_id` 가 비었거나 본인 혼자인 개인 워크스페이스면 고용주 테넌트로 옮긴다 | `_move_default_off_personal_workspace` |
-+| 4. 연결 표시·감사 | 가입요청에 `membership_link{tenant_id,user_id,membership_id,linked_by,linked_at}` 을 남기고, `yeoljeong_hr_tenant_attribution_audit` 에 `ledger_table='tenant_memberships'` 행 1개 (actor, tenant, 직원, before/after). 파일·DB I/O 는 워커 스레드에서 한다 | `_save_membership_link`, `record_membership_audit` |
-+| 5. 직원 로그인 | 로그인 규칙은 **바꾸지 않았다** — `default_tenant_id` 존중 그대로. 3단계에서 옮긴 값으로 고용주 테넌트에 들어간다 | `resolve_login_tenant_for_user`(무변경) |
-+| 6. 서명 조회·서명 | `GET /contracts/signing/{token}`, `POST /contracts/signing` — 게이트는 이 두 라우트(메서드·경로 모양까지)만 테넌트 스코프로 통과시킨다 | `app/core/obys_tenant.py` `_is_contract_signing_route` |
++## 2. 차단 규칙
 +
-+응답 예 (승인):
++| 입력 형태 | 판정 | 사유 | 위치 |
++|---|---|---|---|
++| 첫 단어 `CALL` / `DO` / `EXECUTE` / `PERFORM` | 거부 (DB 연결 전) | 저장 프로시저·익명 블록·준비된 문장 | `db_write_sql_guard.PROCEDURAL_KEYWORDS` |
++| `SELECT ... fn(...)` | 거부 (DB 연결 전) | 저장 함수 호출. 함수 없는 `SELECT` 는 기존 메시지 `INSERT/UPDATE/DELETE만 허용` | `validate_single_write` |
++| INSERT/UPDATE/DELETE 안에서 허용 목록 밖 함수 호출(서브쿼리·RETURNING 포함) | 거부 (DB 연결 전) | 저장 함수일 수 있음 | `find_disallowed_function_calls` |
++| 인용 식별자 함수 `"fn"(..)` | 거부 | 렉서가 대소문자를 잃어 `"LOWER"` 가 내장으로 오인됨 | 〃 |
++| `schema.fn(..)` | `pg_catalog.` 만 허용 목록과 대조, 나머지 거부 | 사용자 스키마 함수 | 〃 |
++| `OPERATOR(..)` | 거부 | 사용자 연산자는 함수를 부른다 | 〃 |
++| 내장 순수 함수(`now()`, `coalesce`, `lower`, `jsonb_set` …) | 허용 | 실무 오탐 방지 | `ALLOWED_BUILTIN_FUNCTIONS` |
++| 대상 테이블이 **뷰**(`information_schema.views` 또는 `pg_class.relkind='v'`) | 거부 (연결 후, 쓰기 전) | 업데이트 가능 뷰·INSTEAD OF 트리거 | `vault_cleanup_guard.assert_target_not_view` |
++| 뷰 여부 조회 실패 | 거부 | 확정 못 하면 막는다 | 〃 (`VaultGuardUnavailable`) |
++| 대상 테이블 확정 불가(`db.schema.table` 등) | **보호 검사 강제**(전후 스냅샷 비교, 위반 시 전체 롤백) | 이름 검사가 빗나가도 결과는 검증한다 | `target_unresolved` → `_db_safe_write_vault_guarded` |
++| 보호 테이블 이름이 식별자·리터럴에 보임 | 보호 검사(기존 동작, 불변) | P1-A | `references_login_tables` |
++| 다중 문장·트랜잭션 제어문 | 거부 (기존 동작, 불변) | P1-B | `validate_single_write` |
 +
-+```json
-+{"request": {...,"status":"approved"},
-+ "membership": {"status":"linked","tenant_id":"15055cac-…","user_id":"…","role":"member",
-+                "membership_status":"active","audit_recorded":true,
-+                "default_tenant":{"before":"<개인 워크스페이스>","after":"15055cac-…"}}}
-+```
++뷰 조회는 **캐시하지 않는다.** 뷰는 마이그레이션으로 언제든 생기고, 캐시는 그 사이 창을 우회로로 만든다.
++쓰기 1건당 쿼리 1회. 스키마 없는 이름은 검색 경로를 추측하지 않고 모든 스키마의 같은 이름 뷰를 대상으로 본다
++(같은 이름의 뷰가 다른 스키마에 있으면 오탐 — 스키마를 붙여 쓰면 그 스키마만 본다).
 +
-+`membership.status` 값: `linked`(생성·재활성) / `unchanged`(이미 같은 상태) / `pending_account`(계정 없음) /
-+`pending_identity`(`requester_*` 가 요청 이메일과 어긋남 — 남의 이메일로 낸 흔적) / `identity_mismatch`(계정 이메일 ≠ 요청 이메일) /
-+`skipped`(고용주 테넌트가 active customer 아님, 또는 반려 시 회수 대상 아님 — `reason` 참고) / `removed`(회수) /
-+`kept_elevated` / `not_member` / `error`(인증 DB 오류 — 승인은 성공, 감사에 `membership_failed`).
++## 3. 점검 쿼리 (읽기 전용 — 운영 DB 를 바꾸지 않는다)
 +
-+### 신원 (R2 라운드 2 에서 조정)
-+
-+라운드 1 은 본인 제출 고정(`requester_user_id`)만 인정했다. 그런데 가입요청·초대 수락 경로
-+(`/employees/join-requests`, `/employees/invites/accept`)는 `_TENANT_SCOPED_PREFIXES` 밖이라
-+**레거시 허용 테넌트 JWT 만** 통과한다. 개인 워크스페이스로 로그인한 직원은 고용주 테넌트에 요청을 낼 수 없으므로
-+(게이트 403 — `test_employee_cannot_file_join_request_from_personal_workspace`), 실제 요청은 거의 전부
-+관리자 대리 등록·예전 요청이고, 고정만 인정하면 승인 거의 전부가 `pending_identity` 에 머물렀다.
-+
-+그래서 지금 순서는:
-+
-+1. 본인 제출 고정이 있으면 그 계정. 계정 이메일이 바뀌었으면 `identity_mismatch`.
-+2. 고정이 없으면 요청 이메일로 `saas_users` 조회(`identity_basis=email`). 이메일은 **승인하는 owner/admin 이 보증**한다
-+   — 지시서 B-1 의 원래 규칙이고 백필 스크립트와 같다.
-+3. `requester_*` 가 남아 있는데 요청 이메일과 어긋나면(남의 이메일로 낸 흔적) 이메일로 찾지 않고 `pending_identity`.
-+
-+라운드 1 이 걱정한 "개인 워크스페이스에서 남의 이메일로 요청을 내고 스스로 승인" 은 위 게이트 때문에 불가능하다.
-+가입요청 경로를 나중에 테넌트 스코프로 열면 이 전제가 깨지므로 2번을 다시 검토해야 한다(위 테스트가 그 신호다).
-+반려 회수는 여전히 이 승인이 남긴 `membership_link`(membership_id 일치, role=member)만 대상이다.
-+
-+### 로그인 시작 테넌트 (적용 범위)
-+
-+- 로그인 때 판정하지 않는다. 승인이 멤버십을 새로 만들거나 되살린 순간 한 번만 `default_tenant_id` 를 옮긴다.
-+  그래서 일반 초대 member·다른 고객 테넌트 member 는 영향이 없고, 재승인(`unchanged`)은 default 를 다시 건드리지 않는다.
-+- 옮기는 조건: default 가 비었거나, 본인이 만든 customer 테넌트에서 본인이 **활성**(`status='active'`, `deleted_at IS NULL`)
-+  owner 이고 본인 외 활성 멤버가 없는 개인 워크스페이스.
-+  본인 사업장(다른 멤버가 있음)이 default 인 사람은 그대로다.
-+- 이후 `/auth/tenants/{id}/switch` 로 고른 값이 그대로 남는다. 내부 운영자·CEO `default_tenant_id` 존중(2026-09-22)은
-+  로그인 코드를 건드리지 않았으므로 그대로다.
-+
-+## 서명 경로의 테넌트 스코프 확인 결과
-+
-+`/api/v1/yeoljeong-finance/contracts/signing` 을 `_TENANT_SCOPED_PREFIXES` 에 넣은 전제는 "모든 조회가 JWT 테넌트에 묶인다"는
-+것이다. 코드로 확인한 내용:
-+
-+- `get_contract_by_token(token, user)` → `_read_hr("contracts", user)` 가 `_tenant_id(user)`(활성 멤버십 테넌트 == JWT 테넌트가
-+  아니면 403)로 **SQL 에서** `tenant_id` 로 거른 행만 읽는다. 토큰은 그 안에서만 찾는다 → `_contract_signer_email` →
-+  `_is_admin` 이면 403 → `_require_hr_record(contract, user)` 로 레코드 `tenant_id` 를 다시 대조 → `employee_email` 일치를 확인.
-+- `sign_contract(payload, user)` → 같은 `_read_hr` + `_contract_signer_email` 경로, 저장은 `_write_hr_record`(레코드 테넌트 ≠
-+  JWT 테넌트면 403, DB upsert 도 `WHERE tenant_id = EXCLUDED.tenant_id`).
-+- 토큰이 없거나 다른 테넌트 것이면 존재 여부를 드러내지 않고 **403** 을 준다(이전 404 → 403, `_signing_contract_for_token`).
-+  소비처 확인: 서명 화면(`app/static/apps/obys/index.html` `handleContractLinkFromUrl`·서명 제출)은 `error.message` 만
-+  토스트로 보이고 상태코드로 분기하지 않는다. 같은 파일에서 상태코드 분기는 401(세션 만료)과 매출 화면 403 뿐이다.
-+  `aads-dashboard/src` 에는 `/contracts/signing` 호출이 없다.
-+- 게이트는 `POST /contracts/signing` 과 `GET /contracts/signing/{token}` 만 연다. R3 부터 prefix 가 아니라
-+  (메서드, 경로 fullmatch) 명시적 화이트리스트이고, GET 토큰은 서비스 생성 모양(`secrets.token_urlsafe(24)` → URL-safe 32자)만
-+  받는다. `/contracts/signing/{token}-extra`·`/{token}/sub`·`/signing-extra` 는 게이트로 열리지 않고 기존 판정(레거시 허용목록)을 탄다.
-+  `DELETE /contracts/signing`(= `/contracts/{id}` 에 id="signing"), `GET /contracts/signing/signed-pdf`, `/contracts`,
-+  `/contracts/signing-x` 는 계속 403. `_allowed_tenant_ids()` 는 바꾸지 않았다.
-+- 기존 prefix 9개(session·tenant-registry·uploads·uploaded-ledger·ledger-entries·card-transactions·card-uploads·
-+  ledger-bank-transactions·journals)의 `startswith` 판정은 **그대로** 두었다(부분 일치 포함). obys_finance 라우트 전수 대조에서
-+  기존 판정과 달라지는 경로는 0개다.
-+
-+그대로 유지되는 통제: 관리자 대리 서명 403, 서명자 이메일 == `employee_email`, 이름 일치, 동의 문구 버전, PNG 검증,
-+봉인 후 수정·삭제 409.
-+
-+## 배포 전 적용 (오비서 업무 DB 전용)
-+
-+감사 테이블에 컬럼과 classification 값을 추가한다. AADS DB 자동 적용 대상이 아니다(baseline HOLD).
-+
-+```bash
-+psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_employee_membership_audit.sql
-+# 롤백: migrations/rollback/20260930_obys_employee_membership_audit.down.sql
-+```
-+
-+마이그레이션 전에 코드가 먼저 나가도 승인은 성공한다. 감사 INSERT 만 실패하고 응답의 `audit_recorded=false` 와 에러 로그로 남는다.
-+
-+## 기존 승인 직원 소급 (백필)
-+
-+마이그레이션·자동 백필은 쓰지 않는다. 명시 실행 스크립트만 쓴다. 기본은 dry-run 이다.
-+
-+```bash
-+# 운영 컨테이너 안. DSN 기본값: --obys-dsn=$OBYS_DATABASE_URL, --auth-dsn=$DATABASE_URL
-+python3 scripts/obys_employee_membership_backfill.py --tenant 15055cac-71b0-45ec-b714-7093dde189ff        # dry-run
-+python3 scripts/obys_employee_membership_backfill.py --tenant 15055cac-71b0-45ec-b714-7093dde189ff --apply
-+```
-+
-+dry-run 출력 예시(단위 테스트의 가짜 DB 로 뽑았다. 실제 운영 값이 아니다):
-+
-+```
-+[DRY-RUN] 승인 가입요청 3건 → 대상 (tenant,email) 3건
-+tenant_id                             email                             user          before              action           after
-+15055cac-71b0-45ec-b714-7093dde189ff  dudgns3738@naver.com              yes/email     -                   link             member/active (예정)
-+15055cac-71b0-45ec-b714-7093dde189ff  beullingma3@gmail.com             yes/email     owner/active        kept_elevated    owner/active
-+15055cac-71b0-45ec-b714-7093dde189ff  not-signed-up@example.com         no            -                   pending_account  -
-+요약: {"kept_elevated": 1, "link": 1, "pending_account": 1}
-+dry-run 이다. 반영하려면 --apply 를 붙여 다시 실행한다.
-+```
-+
-+- `user` 열의 `yes/user_id` 는 요청에 고정된 계정, `yes/email` 은 이메일로 찾은 계정이다. 이메일 기준은 이 스크립트에서만
-+  쓴다 — **`--apply` 전에 `yes/email` 행이 실제 그 직원인지 확인한다.**
-+- `link` 만 `--apply` 에서 쓴다. `kept_elevated`·`unchanged`·`skipped` 는 건드리지 않는다. `link` 한 행은
-+  가입요청 `request_payload.membership_link` 에 표시를 남기고(이후 반려·퇴사가 회수 가능), 개인 워크스페이스가 default 면
-+  서비스 경로와 같은 함수로 고용주 테넌트로 옮긴다.
-+- `pending_account` 인 직원이 나중에 가입하면 **이 스크립트를 다시 돌려 연결한다**(멱등).
-+  가입 순간에 자동으로 연결하는 경로는 없다. 인증 DB 와 오비서 DB 가 분리돼 있어서 가입 코드가 승인 여부를 모른다.
-+- `--apply` 는 `link`/`pending_account` 행마다 감사(`source=backfill_script`)를 남긴다.
-+
-+## 회수 (반려·퇴사)
-+
-+같은 엔드포인트에 `{"action":"rejected"}`. 승인됐던 직원을 반려로 바꾸는 것이 현재의 퇴사 처리 경로다
-+(직원 삭제 API 는 따로 없다).
-+
-+회수는 **그 가입요청의 승인이 만든 멤버십**에만 적용한다. 세 조건을 모두 만족해야 한다.
-+
-+1. 직전 상태가 `approved` 였다 (한 번도 승인 안 된 요청의 반려는 멤버십을 건드리지 않는다 — `request_was_not_approved`).
-+2. 가입요청에 `membership_link` 가 있고 테넌트가 같다 — 승인 때 멤버십을 새로 만들었거나 되살렸을 때만 남는다.
-+   승인 전부터 초대로 활성 member 였다면(`unchanged`) 표시가 없어 회수하지 않는다(`membership_not_linked_by_request`).
-+3. 현재 멤버십 행의 `id` 가 표시의 `membership_id` 와 같고 역할이 `member` 다.
-+
-+`invited_by` 대신 `membership_id` 를 쓰는 이유: 공용 upsert 는 초대 수락의 기존 동작대로 충돌 시 `invited_by` 를 갱신하지
-+않는다. 회수됐다 되살아난 행은 `invited_by` 가 예전 초대자로 남으므로 이 요청과의 연결 근거가 못 된다.
-+
-+- 조건을 만족하면 `status='removed'` 로 바꾼다. 행은 지우지 않는다.
-+- 그 사이 `owner`/`admin` 으로 승격됐으면 회수하지 않는다(`kept_elevated`), `viewer` 등 다른 역할이면 `skipped`.
-+- 회수 뒤 로그인하면 default 멤버십이 죽어 있으므로 본인 워크스페이스로 들어간다. 그 컨텍스트에서는 계약서가 보이지 않는다(403).
-+
-+## 확인 쿼리
++읽기 전용 세션에서만 실행한다. 이 문서는 쿼리만 싣는다. DDL/DML 은 이 작업 범위가 아니다.
 +
 +```sql
-+-- [AADS 인증 DB] 고용주 테넌트 소속 현황
-+SELECT u.email, tm.role, tm.status, tm.invited_by, tm.updated_at
-+  FROM tenant_memberships tm JOIN saas_users u ON u.id = tm.user_id
-+ WHERE tm.tenant_id = '15055cac-71b0-45ec-b714-7093dde189ff'
-+ ORDER BY tm.role, u.email;
-+
-+-- [AADS 인증 DB] 직원 로그인 시작 테넌트 판정 재료
-+SELECT u.email, u.default_tenant_id, tm.tenant_id, tm.role, tm.status, tm.updated_at,
-+       t.created_by = tm.user_id AS created_by_self, t.kind
-+  FROM saas_users u JOIN tenant_memberships tm ON tm.user_id = u.id JOIN tenants t ON t.id = tm.tenant_id
-+ WHERE lower(u.email) IN ('dudgns3738@naver.com', 'zotma1@naver.com');
-+
-+-- [오비서 DB] 승인 직원 목록 (백필 대상 원본)
-+SELECT id, lower(employee_email) email, status, tenant_id
-+  FROM yeoljeong_employee_join_requests
-+ WHERE deleted_at IS NULL AND tenant_id = '15055cac-71b0-45ec-b714-7093dde189ff'
-+   AND lower(COALESCE(NULLIF(request_payload->>'status', ''), status)) = 'approved';
-+
-+-- [오비서 DB] 멤버십 연결·회수 감사
-+SELECT classified_at, classification, reason, source, actor_email, employee_email,
-+       before_state, after_state
-+  FROM yeoljeong_hr_tenant_attribution_audit
-+ WHERE ledger_table = 'tenant_memberships'
-+ ORDER BY classified_at DESC LIMIT 50;
-+
-+-- [오비서 DB] 서명 결과
-+SELECT id, employee_email, contract_payload->>'status' status, contract_payload->>'signed_at' signed_at,
-+       contract_payload->>'signature_sha256' sig, contract_payload->>'signed_snapshot_sha256' snap
-+  FROM yeoljeong_contracts
-+ WHERE tenant_id = '15055cac-71b0-45ec-b714-7093dde189ff' AND deleted_at IS NULL
-+ ORDER BY updated_at DESC;
++SET default_transaction_read_only = on;
 +```
 +
-+## R2 — 1차 커밋이 dup_guard 거짓 양성에 막힌 건
++### 3-1. 보호 테이블 3종에 붙은 트리거
 +
-+1차(runner-3ef7add7)는 pre-commit 의 `scripts/dup_guard.py` `sql-dup-col` 에서 막혔다.
-+`tests/unit/test_obys_employee_tenant_membership.py` 의 단정문
-+`assert "UPDATE tenant_memberships SET updated_at = now()" in switch` 를 SQL 로 보고
-+뒤쪽 2000자를 SET 본문으로 삼아, 뒤에 나오는 `monkeypatch.setattr(..., raising=False)` 3회를
-+"SET raising 3회" 로 셌다. 우회(`ALLOW_DUP_COMMIT=1`, 예외목록) 없이 검사기를 고쳤다.
++```sql
++SELECT n.nspname        AS table_schema,
++       c.relname        AS table_name,
++       t.tgname         AS trigger_name,
++       t.tgenabled      AS enabled,           -- O=활성 D=비활성 R=replica A=always
++       pn.nspname       AS function_schema,
++       p.proname        AS function_name,
++       pg_get_triggerdef(t.oid) AS definition
++  FROM pg_trigger t
++  JOIN pg_class c      ON c.oid = t.tgrelid
++  JOIN pg_namespace n  ON n.oid = c.relnamespace
++  JOIN pg_proc p       ON p.oid = t.tgfoid
++  JOIN pg_namespace pn ON pn.oid = p.pronamespace
++ WHERE NOT t.tgisinternal
++   AND c.relname IN ('saas_users', 'tenant_memberships', 'tenants')
++ ORDER BY n.nspname, c.relname, t.tgname;
++```
 +
-+- 매치가 한 줄 문자열 리터럴(또는 `#` 주석) 안에서 시작하면 그 리터럴 끝에서 SET 본문을 닫는다.
-+  파이썬 암묵적 이어붙이기 줄(`"...SET a = 1, "` 다음 줄 `"b = 2 WHERE ..."`)은 따라간다.
-+- SET 대상은 괄호 깊이 0 의 쉼표 조각에서만 센다. 짝 없는 `)` 에서 본문을 끝낸다 —
-+  호출 인자(`raising=`, `match=`)는 괄호 안이라 세지 않는다.
-+- 저장소 전체 비교(2026-09-30 재측정, 1,704 파일, 같은 트리에 옛/새 검사기): 탐지 12건 → 8건. 빠진 4건은 전부
-+  문자열 단정문 거짓 양성(`test_goal_dispatch_load_defer.py:53` 기존 기준선 항목 + 회귀 테스트 문자열), 새로 생긴 탐지 0건.
-+- 회귀 테스트: `tests/unit/test_dup_guard.py` — 문자열+raising= 거짓 양성 0건, 실제 UPDATE SET·INSERT 컬럼
-+  중복 1건씩, 이어붙인 리터럴·삼중따옴표 SQL 중복 유지.
++### 3-2. 보호 테이블을 쓰는(참조하는) 저장 함수·프로시저
 +
-+## R2 라운드 1 — AI 리뷰 반려(runner-0e9ce12d) 지적 처리
++`prosrc` 본문에서 이름을 찾는 방식이라 **동적 SQL 로 이름을 조립하는 함수는 잡히지 않는다** — 0건이 "없음"의 증명이 아니다.
 +
-+| # | 지적 | 처리 |
-+|---|---|---|
-+| 1 | 반려가 같은 이메일의 정상 멤버십까지 회수 | 직전 approved + `membership_link` + `membership_id` 일치 + role=member 일 때만 회수 (위 "회수") |
-+| 2 | 이메일만으로 신원 판단 | `requester_user_id` 고정, 온라인 승인은 그 값으로만 연결 (위 "신원") |
-+| 3 | `PY_EXT + SH_EXT` 가 튜플인가 | 튜플이다(`scripts/dup_guard.py:58-59`). `test_literal_window_applies_to_code_files` 가 .py/.sh 에서 분기가 실제로 타는 것을 고정 |
-+| 4 | diff 잘림·파일 누락 | 테스트·백필·baseline HOLD 모두 커밋 대상에 포함(아래 "변경 파일") |
-+| 5 | 기존 prefix 판정 변경 | 기존 prefix 는 `startswith` 그대로, 서명 두 라우트만 별도 매칭 |
-+| 6 | 로그인 동작 적용 범위 | 로그인 휴리스틱 제거. 승인 시점 1회 default 이동으로 대체 |
-+| 7 | 404 → 403 | 403 유지. 프런트 소비처가 상태코드로 분기하지 않음을 확인(위 "서명 경로") |
-+| 8 | 비동기 경로 블로킹 I/O | 감사·연결 표시는 `asyncio.to_thread`, 파일 원장은 `flock` 으로 읽고-쓰기 직렬화, DB 는 워커의 `_run_db` |
++```sql
++SELECT n.nspname AS function_schema,
++       p.proname AS function_name,
++       CASE p.prokind WHEN 'f' THEN 'function' WHEN 'p' THEN 'procedure' END AS kind,
++       l.lanname AS language,
++       p.prosecdef AS security_definer,
++       pg_get_function_identity_arguments(p.oid) AS arguments,
++       (p.prosrc ~* '(insert[[:space:]]+into|update|delete[[:space:]]+from|merge[[:space:]]+into)[[:space:]]+(only[[:space:]]+)?([a-z_"]+\.)?"?(saas_users|tenant_memberships|tenants)"?') AS looks_like_write
++  FROM pg_proc p
++  JOIN pg_namespace n ON n.oid = p.pronamespace
++  JOIN pg_language  l ON l.oid = p.prolang
++ WHERE p.prokind IN ('f', 'p')
++   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
++   AND l.lanname NOT IN ('internal', 'c')
++   AND p.prosrc ~* '(saas_users|tenant_memberships|tenants)'
++ ORDER BY looks_like_write DESC, n.nspname, p.proname;
++```
 +
-+## R2 라운드 2 — AI 리뷰 반려(runner-0f81541a) 지적 처리
++### 3-3. 보호 테이블에 의존하는 뷰
 +
-+| # | 지적 | 처리 |
-+|---|---|---|
-+| 1 | 변경 목록에 dup_guard·테스트·백필·마이그레이션 누락 | 리뷰 입력(`.runner_full_diff.patch`)이 잘린 것 — 커밋 `c98d65e0` 자체에는 13개 파일이 모두 있었다. 이번 작업트리에도 전부 포함(아래 "변경 파일") |
-+| 2 | 감사 INSERT 새 컬럼·CHECK | `migrations/20260930_obys_employee_membership_audit.sql` 이 컬럼 8개 추가 + classification CHECK 재생성(membership_* 6값). 마이그레이션이 HOLD 라 코드가 먼저 나가면 DB INSERT 가 실패하므로, 실패 시 파일 원장(`tenant_membership_audit.json`, `db_insert_failed=true`)에 남긴다 |
-+| 3 | import 누락 / 승인 전 단계 보호 | `asyncio`·`fcntl`·`json`·`uuid4`·`logger` 는 모듈 상단(9·13·16·32행, logger 모듈 전역)에 이미 있다. `_review_join_request_with_previous` 는 승인 판정 자체라 실패하면 API 가 실패해야 한다(권한 403·검증 400) — 보장은 "멤버십 실패가 승인을 되돌리지 않는다" 이다 |
-+| 4 | 초대 수락 동작 변화 | `tenant_invites.invited_by` 는 saas_users FK(ON DELETE SET NULL, migrations/100) 라 값 동일. 응답 membership 키는 예전 4개로 되돌림. 동작 테스트 `test_invite_acceptance_behaviour_is_unchanged` 추가 |
-+| 5 | 직전 상태 읽기·검토 경합 | 검토+멤버십 동기화 전체를 직렬화. (R3 에서 `flock` → DB `pg_advisory_xact_lock` 으로 교체 — 아래 R3) `test_concurrent_reviews_are_serialized` |
-+| 6 | 서명 경로 매칭이 다른 GET 라우트로 샐 가능성 | 실제 라우트 표 전수 비교 테스트 `test_gate_open_paths_resolve_only_to_signing_handlers` — 게이트가 여는 요청은 FastAPI 매칭상 서명 핸들러 둘로만 간다 |
-+| 7 | 개인 워크스페이스 판정에 owner 활성 여부 없음 | `tm.status='active' AND tm.deleted_at IS NULL` 추가 |
-+| 8 | 직원 요청이 개인 워크스페이스로 가 거의 전부 pending_identity | 지적이 맞다(게이트가 개인 워크스페이스 JWT 의 가입요청을 403). 고정 없는 요청은 승인자 보증 이메일로 연결(위 "신원") |
++```sql
++SELECT DISTINCT v.oid::regclass AS view_name,
++                d.refobjid::regclass AS base_table,
++                v.relkind
++  FROM pg_depend d
++  JOIN pg_rewrite r ON r.oid = d.objid
++  JOIN pg_class  v ON v.oid = r.ev_class
++ WHERE d.classid    = 'pg_rewrite'::regclass
++   AND d.refclassid = 'pg_class'::regclass
++   AND d.refobjid IN (to_regclass('public.saas_users'),
++                      to_regclass('public.tenant_memberships'),
++                      to_regclass('public.tenants'))
++   AND v.oid <> d.refobjid
++   AND v.relkind IN ('v', 'm')
++ ORDER BY 1;
++```
 +
-+## R3 — 실결함 3건 (AADS-OBYS-EMPLOYEE-TENANT-MEMBERSHIP-R3-20260930)
++뷰 위 INSTEAD OF 트리거는 3-1 의 `table_name` 자리에 뷰 이름으로 나오지 않는다(대상이 보호 테이블이 아니므로). 3-3 에서 나온 뷰마다 아래를 돌린다.
 +
-+| # | 결함 | 처리 | 테스트 |
-+|---|---|---|---|
-+| 1 | 이메일 → 계정 조회가 "레거시 테넌트 JWT 컨텍스트가 잡혀 있다" 를 주석으로만 전제 | ① 서비스: 승인 저장 **전** `_precheck_join_review` → `_require_employee_membership_context`(JWT 테넌트+활성 멤버십 · 가입요청 테넌트 일치 · 사업자 귀속), 실패 시 403/404/400 이고 아무것도 저장 안 함. ② 인증: `link_employee_tenant_membership(context_tenant_id=)` 와 `_active_user_id_by_email` 진입부 `_require_email_lookup_context` — 부재·불일치면 `EmployeeTenantContextError`. ③ 조회 SQL 에 테넌트 조건(이 테넌트 default·멤버십·초대, 또는 아직 어느 고객 테넌트에도 안 묶인 계정만). 같은 우선순위 후보 둘이면 고르지 않음(`pending_account`) | `test_email_lookup_without_tenant_context_raises`, `test_email_lookup_with_other_tenant_context_raises`, `test_same_email_in_two_tenants_matches_only_the_right_one` 외 5 |
-+| 2 | 멤버십 직렬화가 파일 `flock` — blue/green 두 컨테이너는 서로를 못 본다 | `pg_advisory_xact_lock(key)`, key = sha256("obys-employee-membership:{tenant}:{email}") 앞 8바이트 signed bigint(`employee_membership_lock_key`). 검토 전체를 `employee_membership_lock` 트랜잭션 안에서 돌리고 link/revoke 는 같은 연결(세이브포인트)에서 재진입 락. `_acquire_join_review_lock`·`_release_join_review_lock`·`JOIN_REVIEW_LOCK` 삭제. UNIQUE(tenant_id,user_id) + ON CONFLICT 유지. 백필 `--apply` 도 같은 락 | `test_same_tenant_email_concurrent_links_create_one_membership` 외 4 |
-+| 3 | 서명 게이트 GET 을 prefix 로 판정 | `_CONTRACT_SIGNING_WHITELIST` (메서드, fullmatch 정규식) | `test_gate_whitelist_does_not_open_lookalike_paths` 외 4 |
++```sql
++SELECT c.oid::regclass AS view_name, t.tgname, pg_get_triggerdef(t.oid) AS definition
++  FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
++ WHERE NOT t.tgisinternal AND c.relkind = 'v'
++ ORDER BY 1, 2;
++```
 +
-+감사 파일 원장(`tenant_membership_audit.json`) 의 `flock` 은 **멤버십 직렬화가 아니라** DB 없는 파일 모드의 읽고-쓰기
-+보호라 그대로 둔다(DB 모드에서는 감사가 DB INSERT 이고, 파일은 INSERT 실패 폴백일 때만 쓴다).
++### 3-4. 허용 목록 이름을 가로채는 사용자 정의 함수
 +
-+## 변경 파일
++허용 목록은 이름만 본다. `public` 등에 같은 이름·다른 시그니처의 사용자 함수가 있으면 인자 타입에 따라
++그쪽이 선택될 수 있다. 결과가 0건이어야 한다.
 +
-+- `app/api/obys_finance.py` — 승인 라우트가 `review_join_request_with_membership` 를 부른다.
-+- `app/auth.py` — `upsert_tenant_membership`(초대 수락과 공용), `link_employee_tenant_membership`,
-+  `revoke_employee_tenant_membership`, `_move_default_off_personal_workspace`. 로그인·switch 는 무변경.
-+- `app/core/obys_tenant.py` — 서명 두 라우트 매칭(`_is_contract_signing_route`). 기존 prefix 무변경.
-+- `app/services/yeoljeong_finance_service.py` — 요청자 신원 고정, 승인·회수·감사·연결 표시, 서명 토큰 미존재 403.
-+- `migrations/20260930_obys_employee_membership_audit.sql`(+`rollback/…down.sql`), `scripts/migrations_auto_apply_baseline.txt`(HOLD).
-+- `scripts/obys_employee_membership_backfill.py`, `scripts/dup_guard.py`.
-+- `tests/unit/test_obys_employee_tenant_membership.py`, `tests/unit/test_dup_guard.py`.
++```bash
++python3 -c "from app.services.db_write_sql_guard import ALLOWED_BUILTIN_FUNCTIONS as F; print('{' + ','.join(sorted(F)) + '}')"
++```
 +
-+## 범위 밖 (별건)
++출력(`{a,b,...}`)을 아래 `:names` 자리에 `'...'::text[]` 로 넣는다.
 +
-+- `_is_admin` 판정 규칙 자체(owner + 본인 pending 가입요청 조합)는 바꾸지 않았다.
-+- 멤버십(인증 DB)과 가입요청·감사(오비서 DB)는 한 트랜잭션이 아니다. 승인이 저장된 뒤 멤버십을 바꾸므로
-+  "승인 안 됐는데 멤버십만 생기는" 일은 없다. 반대로 멤버십 실패는 `membership.status=error` 로 남으므로
-+  백필 스크립트로 다시 맞춘다.
-diff --git a/migrations/20260930_obys_employee_membership_audit.sql b/migrations/20260930_obys_employee_membership_audit.sql
-new file mode 100644
-index 00000000..f8b5433d
---- /dev/null
-+++ b/migrations/20260930_obys_employee_membership_audit.sql
-@@ -0,0 +1,63 @@
-+-- AADS-OBYS-EMPLOYEE-TENANT-MEMBERSHIP-20260930
-+-- 직원 가입요청 승인·반려 시 고용주 테넌트 멤버십 연결·회수 감사.
-+--
-+-- 적용 대상: 오비서 업무 DB(OBYS_DATABASE_URL, 진아서버)만. AADS DB 에 돌리지 않는다.
-+--   scripts/migrations_auto_apply_baseline.txt 에 올려 자동 적용에서 HOLD 한다.
-+--   적용: psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_employee_membership_audit.sql
-+-- 기존 감사 테이블(yeoljeong_hr_tenant_attribution_audit, 20260919 O2)에 컬럼만 더하고
-+--   classification CHECK 에 membership_* 값을 추가한다. 기존 행은 다시 쓰지 않는다.
-+--   멤버십 이벤트는 ledger_table='tenant_memberships', row_id=<이벤트 uuid> 로 쌓인다
-+--   (PK (ledger_table,row_id) 를 그대로 쓰므로 O2 분류 행과 섞이지 않는다).
-+-- 멱등하다(IF NOT EXISTS, 제약 재생성).
-+-- 롤백: migrations/rollback/20260930_obys_employee_membership_audit.down.sql
++```sql
++SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) AS arguments
++  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
++ WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
++   AND p.proname = ANY (:names)
++ ORDER BY 1, 2;
++```
 +
-+BEGIN;
++## 4. 오탐 신고 경로
 +
-+DO $$
-+BEGIN
-+    IF to_regclass('public.yeoljeong_hr_tenant_attribution_audit') IS NULL
-+       OR to_regclass('public.yeoljeong_employee_join_requests') IS NULL THEN
-+        RAISE EXCEPTION '오비서 업무 DB 전용이다 (yeoljeong_hr_tenant_attribution_audit / yeoljeong_employee_join_requests 없음)';
-+    END IF;
-+END
-+$$;
++정상 쓰기가 막히면 (`허용 목록에 없는 함수 호출 차단(<이름>)` 또는 `뷰 대상 쓰기 차단`):
 +
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit ADD COLUMN IF NOT EXISTS action TEXT;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit ADD COLUMN IF NOT EXISTS actor_user_id TEXT;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit ADD COLUMN IF NOT EXISTS actor_email TEXT;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit ADD COLUMN IF NOT EXISTS employee_email TEXT;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit ADD COLUMN IF NOT EXISTS employee_user_id TEXT;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit ADD COLUMN IF NOT EXISTS join_request_id TEXT;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit ADD COLUMN IF NOT EXISTS before_state JSONB;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit ADD COLUMN IF NOT EXISTS after_state JSONB;
++1. **우회하지 않는다.** 함수를 인용 식별자·별칭으로 감싸거나 문장을 쪼개는 방법은 모두 막혀 있고,
++   시도하면 진짜 위반과 구분되지 않는다. 가드를 끄는 환경변수는 없다.
++2. 메시지의 이름이 **순수 내장 함수**인지 확인한다: `SELECT proname, pronamespace::regnamespace, provolatile, prokind FROM pg_proc WHERE proname = '<이름>';`
++   `pg_catalog` 소속이고 테이블을 읽거나 SQL 을 실행하지 않는 계산이면 허용 목록 후보다.
++3. 뷰 오탐(같은 이름의 뷰가 **다른 스키마**에 있음)은 대상에 스키마를 붙여 다시 시도한다(`public.<이름>`).
++   진짜 뷰 대상이면 기반 테이블을 직접 지정한다.
++4. 후보로 남긴다: `python3 scripts/error_book.py match -` 로 알려진 것인지 보고, 아니면 `status=candidate` 로 기록한다(R-ERRBOOK).
++5. 허용 목록 추가는 **코드 변경**이다. `ALLOWED_BUILTIN_FUNCTIONS` 에 근거 주석과 테스트를 붙여 Runner 작업으로 요청하고
++   CEO 승인 후 배포한다. 사용자 정의 함수는 추가하지 않는다 — 그 함수가 하는 일을 SQL 로 풀어 쓴다.
 +
-+-- 20260919 에서 인라인으로 만든 CHECK 는 이름이 자동 부여됐다. 이름에 기대지 않고 찾아 지운다.
-+DO $$
-+DECLARE
-+    c record;
-+BEGIN
-+    FOR c IN
-+        SELECT conname
-+          FROM pg_constraint
-+         WHERE conrelid = 'public.yeoljeong_hr_tenant_attribution_audit'::regclass
-+           AND contype = 'c'
-+           AND pg_get_constraintdef(oid) LIKE '%classification%'
-+    LOOP
-+        EXECUTE format('ALTER TABLE yeoljeong_hr_tenant_attribution_audit DROP CONSTRAINT %I', c.conname);
-+    END LOOP;
-+END
-+$$;
++## 5. 남는 위험 (정적으로 못 막는 것)
 +
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit
-+    ADD CONSTRAINT yeoljeong_hr_tenant_attribution_audit_classification_check
-+    CHECK (classification IN (
-+        'attributed', 'unresolved', 'conflict',
-+        'membership_linked', 'membership_unchanged', 'membership_pending',
-+        'membership_removed', 'membership_skipped', 'membership_failed'
-+    ));
-+
-+CREATE INDEX IF NOT EXISTS idx_yf_hr_attr_audit_membership
-+    ON yeoljeong_hr_tenant_attribution_audit (tenant_id, employee_email, classified_at DESC)
-+    WHERE ledger_table = 'tenant_memberships';
-+
-+COMMIT;
-diff --git a/migrations/rollback/20260930_obys_employee_membership_audit.down.sql b/migrations/rollback/20260930_obys_employee_membership_audit.down.sql
-new file mode 100644
-index 00000000..69c24beb
---- /dev/null
-+++ b/migrations/rollback/20260930_obys_employee_membership_audit.down.sql
-@@ -0,0 +1,34 @@
-+-- Rollback: AADS-OBYS-EMPLOYEE-TENANT-MEMBERSHIP-20260930
-+-- 오비서 업무 DB 전용, 수동 적용. AADS DB 에 돌리지 않는다.
-+-- 주의: 멤버십 연결·회수 감사 행(ledger_table='tenant_memberships')이 사라진다.
-+--   필요하면 먼저 내보낸다:
-+--   \copy (SELECT * FROM yeoljeong_hr_tenant_attribution_audit WHERE ledger_table='tenant_memberships') TO 'membership_audit.csv' CSV HEADER
-+-- tenant_memberships(AADS 인증 DB) 자체는 건드리지 않는다.
-+
-+BEGIN;
-+
-+DO $$
-+BEGIN
-+    IF to_regclass('public.yeoljeong_hr_tenant_attribution_audit') IS NULL THEN
-+        RAISE EXCEPTION '오비서 업무 DB 전용이다';
-+    END IF;
-+END
-+$$;
-+
-+DELETE FROM yeoljeong_hr_tenant_attribution_audit WHERE ledger_table = 'tenant_memberships';
-+DROP INDEX IF EXISTS idx_yf_hr_attr_audit_membership;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit
-+    DROP CONSTRAINT IF EXISTS yeoljeong_hr_tenant_attribution_audit_classification_check;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit
-+    ADD CONSTRAINT yeoljeong_hr_tenant_attribution_audit_classification_check
-+    CHECK (classification IN ('attributed', 'unresolved', 'conflict'));
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit DROP COLUMN IF EXISTS action;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit DROP COLUMN IF EXISTS actor_user_id;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit DROP COLUMN IF EXISTS actor_email;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit DROP COLUMN IF EXISTS employee_email;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit DROP COLUMN IF EXISTS employee_user_id;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit DROP COLUMN IF EXISTS join_request_id;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit DROP COLUMN IF EXISTS before_state;
-+ALTER TABLE yeoljeong_hr_tenant_attribution_audit DROP COLUMN IF EXISTS after_state;
-+
-+COMMIT;
-diff --git a/scripts/dup_guard.py b/scripts/dup_guard.py
-index 64768c16..0ef26993 100755
---- a/scripts/dup_guard.py
-+++ b/scripts/dup_guard.py
-@@ -210,6 +210,136 @@ def _line_of(text: str, pos: int) -> int:
-     return text.count("\n", 0, pos) + 1
++- **일반 테이블의 트리거**가 보호 테이블을 바꾸는 경우: 이름도 함수 호출도 SQL 에 없다. 3-1·3-3 으로 존재 여부를 점검하고,
++  나오면 개별 대응한다(트리거 제거는 별도 CEO 승인 DDL).
++- 컬럼 DEFAULT·GENERATED·도메인 CHECK 가 부르는 사용자 함수, 암묵적 형 변환 함수 — 마찬가지로 SQL 에 보이지 않는다.
++- 이 경우에도 **대상이 확정되지 않거나 보호 테이블이 보이는** 쓰기는 전후 스냅샷 비교를 타므로 계정 삭제·비활성 결과는 잡힌다.
++  가장 강한 대안은 모든 쓰기에 스냅샷 비교를 거는 것이지만 `agent_vault_credentials`·`e2e_credentials` 에
++  `SHARE` 락을 쓰기마다 잡는 비용이 있어 이번 범위에 넣지 않았다.
+diff --git a/tests/unit/test_db_safe_write.py b/tests/unit/test_db_safe_write.py
+index d060213b..25e47f48 100644
+--- a/tests/unit/test_db_safe_write.py
++++ b/tests/unit/test_db_safe_write.py
+@@ -33,6 +33,10 @@ class _FakeConn:
+     async def fetchrow(self, query, *args):
+         return _FakeRow({"cnt": self._pre_count})
  
++    async def fetch(self, query, *args):
++        # 쓰기 대상 뷰 여부 조회 — 뷰 없음.
++        return []
++
+     def transaction(self):
+         return _FakeTransaction()
  
-+# SET 절 본문을 어디서 끊을 것인가.
-+#
-+# 2026-09-30 거짓 양성: 테스트의 단정문
-+#   assert "UPDATE tenant_memberships SET updated_at = now()" in switch
-+# 를 SQL 로 보고 뒤쪽 2000자를 SET 본문으로 삼았다. 한 줄 문자열 안이라
-+# 종결자가 없으니 창이 무관한 파이썬 코드를 삼켰고, 뒤에 나오는
-+# monkeypatch.setattr(..., raising=False) 세 번을 "SET raising 3회" 로 셌다.
-+# 그래서 (1) 매치가 한 줄 문자열 리터럴 안에서 시작하면 그 리터럴 끝에서
-+# 닫고(암묵적 이어붙이기 줄만 따라간다), (2) 괄호 깊이 0 의 쉼표로만 나누며
-+# 짝 없는 ')' 에서 멈춘다 — 호출 인자(raising=, match=)는 괄호 안이다.
-+_CONT_LITERAL_RE = re.compile(r"""^\s*[rRbBuUfF]{0,2}(["'])""")
-+
-+
-+def _open_quote(prefix: str):
-+    """매치 직전(같은 줄)까지를 훑어 열려 있는 문자열/주석을 돌려준다.
-+
-+    반환: None(코드 또는 이 줄 밖에서 시작한 문자열), '#'(주석),
-+    '"'/"'"(한 줄 문자열), '\"\"\"'/"'''"(삼중 문자열).
-+    """
-+    state = None
-+    i = 0
-+    n = len(prefix)
-+    while i < n:
-+        ch = prefix[i]
-+        if state is None:
-+            if ch == "#":
-+                return "#"
-+            triple = prefix[i:i + 3]
-+            if triple in ('"""', "'''"):
-+                state = triple
-+                i += 3
-+                continue
-+            if ch in "\"'":
-+                state = ch
-+        elif len(state) == 3:
-+            if prefix.startswith(state, i):
-+                state = None
-+                i += 3
-+                continue
-+        elif ch == "\\":
-+            i += 2
-+            continue
-+        elif ch == state:
-+            state = None
-+        i += 1
-+    return state
-+
-+
-+def _close_quote(line: str, start: int, quote: str) -> int:
-+    """line[start:] 에서 이스케이프되지 않은 quote 위치. 없으면 -1."""
-+    i = start
-+    while i < len(line):
-+        if line[i] == "\\":
-+            i += 2
-+            continue
-+        if line[i] == quote:
-+            return i
-+        i += 1
-+    return -1
-+
-+
-+def _literal_set_body(text: str, start: int, end: int):
-+    """매치가 한 줄 문자열 안이면 그 리터럴(+이어붙인 리터럴 줄)까지만 본문으로.
-+
-+    한 줄 문자열이 아니면(코드·삼중 문자열·그 줄에서 안 닫힘) None — 기존 창을 쓴다.
-+    """
-+    line_start = text.rfind("\n", 0, start) + 1
-+    line_end = text.find("\n", start)
-+    if line_end < 0:
-+        line_end = len(text)
-+    quote = _open_quote(text[line_start:start])
-+    if quote is None or len(quote) == 3:
-+        return None
-+    line = text[line_start:line_end]
-+    if quote == "#":
-+        return line[end - line_start:]
-+    close = _close_quote(line, end - line_start, quote)
-+    if close < 0:
-+        return None
-+    parts = [line[end - line_start:close]]
-+    rest = line[close + 1:].strip()
-+    pos = line_end
-+    # 파이썬 암묵적 이어붙이기: "UPDATE t SET a = 1, " \n "b = 2 WHERE ..."
-+    while rest in ("", "+", "\\") and pos < len(text):
-+        nxt_end = text.find("\n", pos + 1)
-+        if nxt_end < 0:
-+            nxt_end = len(text)
-+        nxt = text[pos + 1:nxt_end]
-+        cm = _CONT_LITERAL_RE.match(nxt)
-+        if not cm:
-+            break
-+        q = cm.group(1)
-+        close = _close_quote(nxt, cm.end(), q)
-+        if close < 0:
-+            break
-+        parts.append(nxt[cm.end():close])
-+        rest = nxt[close + 1:].strip()
-+        pos = nxt_end
-+    return "".join(parts)
-+
-+
-+def _top_level_pieces(body: str) -> list:
-+    """괄호 깊이 0 의 쉼표로 나눈다. 짝 없는 ')' 가 나오면 거기서 SET 절은 끝났다."""
-+    pieces = []
-+    buf = []
-+    depth = 0
-+    quote = False
-+    for ch in body:
-+        if quote:
-+            buf.append(ch)
-+            if ch == "'":
-+                quote = False
-+            continue
-+        if ch == "'":
-+            quote = True
-+        elif ch in "([":
-+            depth += 1
-+        elif ch in ")]":
-+            depth -= 1
-+            if depth < 0:
-+                break
-+        elif ch == "," and depth == 0:
-+            pieces.append("".join(buf))
-+            buf = []
-+            continue
-+        buf.append(ch)
-+    pieces.append("".join(buf))
-+    return pieces
-+
-+
- def check_sql(path: str, text: str) -> list:
-     """INSERT 컬럼 목록과 SET 대상의 중복. 여기가 실제로 운영을 깨뜨린 지점이다."""
-     findings = []
-@@ -229,12 +359,16 @@ def check_sql(path: str, text: str) -> list:
-                 "'specified more than once' 로 거절한다" % (table, name, seen[name]),
-                 _line_of(text, m.start())))
- 
-+    in_code = path.endswith(PY_EXT + SH_EXT)
-     for m in SQL_SET_RE.finditer(text):
--        tail = text[m.end():m.end() + 2000]
--        end = SQL_SET_END_RE.search(tail)
--        body = tail[:end.start()] if end else tail
-+        body = _literal_set_body(text, m.start(), m.end()) if in_code else None
-+        if body is None:
-+            body = text[m.end():m.end() + 2000]
-+        end = SQL_SET_END_RE.search(body)
-+        if end:
-+            body = body[:end.start()]
-         seen = defaultdict(int)
--        for piece in body.split(","):
-+        for piece in _top_level_pieces(body):
-             t = SET_TARGET_RE.match(piece)
-             if t:
-                 seen[t.group(1).lower()] += 1
-diff --git a/scripts/migrations_auto_apply_baseline.txt b/scripts/migrations_auto_apply_baseline.txt
-index 2cee0a2d..13483bbe 100644
---- a/scripts/migrations_auto_apply_baseline.txt
-+++ b/scripts/migrations_auto_apply_baseline.txt
-@@ -53,3 +53,6 @@ migrations/20260930_obys_employment_audit_lookup.sql
- # OBYS 업무 DB 전용(yeoljeong_business_documents). AADS DB 자동 적용 대상이 아니다 —
- # docs/operations/OBYS_BUSINESS_DOCUMENTS.md 절차로 수동 적용.
- migrations/20260930_obys_business_documents.sql
-+# OBYS 업무 DB 전용(yeoljeong_hr_tenant_attribution_audit). AADS DB 자동 적용 대상이 아니다 —
-+# docs/operations/OBYS_EMPLOYEE_TENANT_MEMBERSHIP.md 절차로 수동 적용.
-+migrations/20260930_obys_employee_membership_audit.sql
-diff --git a/scripts/obys_employee_membership_backfill.py b/scripts/obys_employee_membership_backfill.py
+diff --git a/tests/unit/test_db_safe_write_indirect_path.py b/tests/unit/test_db_safe_write_indirect_path.py
 new file mode 100644
-index 00000000..a5698240
+index 00000000..3cbd354a
 --- /dev/null
-+++ b/scripts/obys_employee_membership_backfill.py
-@@ -0,0 +1,255 @@
-+#!/usr/bin/env python3
-+"""승인된 오비서 직원을 고용주 테넌트 멤버십(role=member)으로 소급 연결한다 (기본은 dry-run).
++++ b/tests/unit/test_db_safe_write_indirect_path.py
+@@ -0,0 +1,413 @@
++"""db_safe_write 간접 쓰기 경로 차단 단위 테스트 (2026-09-30).
 +
-+2026-09-30 진아서버 실측: 승인 직원 7명 중 고용주 테넌트(tenant_memberships)
-+소속은 0명이라 어떤 직원도 계약서 서명을 끝낼 수 없었다. 이후 승인분은
-+review_join_request_with_membership 가 연결하지만, 그 이전 승인분은 이
-+스크립트로만 연결한다 — 마이그레이션·자동 백필로 임의 삽입하지 않는다.
-+계정 없이 승인된 직원(pending_account)이 나중에 가입했을 때도 이것을 다시 돌린다.
-+
-+규칙 (서비스 경로와 같다 — app.auth.upsert_tenant_membership 을 그대로 쓴다):
-+  - 대상: 오비서 DB yeoljeong_employee_join_requests 중 status=approved, tenant_id 있음, 삭제 안 됨.
-+  - 고용주 테넌트가 active customer 가 아니면 건너뛴다.
-+  - saas_users 에 활성 계정이 없으면 pending_account 로 출력만 한다.
-+  - 계정은 가입요청의 requester_user_id(본인 제출분)가 있으면 그것, 없으면 이메일로 찾는다
-+    (이메일 조회는 그 가입요청의 tenant_id 를 컨텍스트로, SQL 에 테넌트 조건을 건다).
-+    온라인 승인 경로(link_employee_tenant_membership)와 같은 순서다 — 본인 제출 고정이
-+    없는 요청은 승인자가 보증한 이메일로 찾는다(basis=email). 운영자는 dry-run 출력의
-+    basis 열로 어느 쪽으로 찾았는지 확인한다.
-+  - 이미 활성 owner/admin 이면 역할을 그대로 둔다(강등 금지). 이미 활성 member 면 unchanged.
-+  - 그 밖에는 role=member, status=active 로 upsert 한다(invited_by = 승인자 계정, 없으면 NULL).
-+    default 가 비었거나 본인 혼자인 개인 워크스페이스면 고용주 테넌트로 옮긴다(서비스 경로와 같은 함수).
-+  - --apply 로 연결한 행은 가입요청 request_payload.membership_link 에 표시를 남긴다 —
-+    이후 반려·퇴사가 회수할 수 있는 것은 이 표시가 있는 멤버십뿐이다.
-+  - --apply 로 바꾼 행은 yeoljeong_hr_tenant_attribution_audit 에 source=backfill_script 로 남긴다.
-+
-+DSN:
-+  --obys-dsn  기본 $YEOLJEONG_FINANCE_DATABASE_URL 또는 $OBYS_DATABASE_URL (가입요청·감사)
-+  --auth-dsn  기본 $DATABASE_URL (saas_users·tenants·tenant_memberships)
-+
-+사용 (운영 컨테이너 안):
-+    python3 scripts/obys_employee_membership_backfill.py                       # dry-run
-+    python3 scripts/obys_employee_membership_backfill.py --tenant <uuid>       # 테넌트 한정 dry-run
-+    python3 scripts/obys_employee_membership_backfill.py --apply               # 실제 반영
++보호 테이블 이름이 SQL 에 나타나지 않는 경로 — 저장 함수·프로시저·뷰·확정 못 한 대상 —
++를 fail closed 로 막는다. DB 없이 판정 로직과 실행 순서만 본다.
++SQL 은 조각으로 조립한다(완전한 문장 리터럴을 한 줄로 두지 않는다 — scripts/dup_guard.py 오탐 경로).
 +"""
 +from __future__ import annotations
 +
-+import argparse
-+import asyncio
-+import json
-+import os
-+import sys
-+from datetime import datetime, timezone
 +from pathlib import Path
-+from typing import Any
-+
-+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-+
-+APPROVED_JOIN_REQUESTS_SQL = """
-+SELECT id::text AS id,
-+       tenant_id::text AS tenant_id,
-+       business_id,
-+       lower(trim(COALESCE(NULLIF(request_payload->>'email', ''), employee_email))) AS email,
-+       COALESCE(NULLIF(request_payload->>'name', ''), employee_name) AS name,
-+       CASE WHEN lower(trim(COALESCE(request_payload->>'requester_email', '')))
-+                 = lower(trim(COALESCE(NULLIF(request_payload->>'email', ''), employee_email)))
-+            THEN NULLIF(request_payload->>'requester_user_id', '')
-+       END AS requester_user_id,
-+       lower(trim(COALESCE(NULLIF(request_payload->>'reviewed_by', ''), reviewed_by, ''))) AS reviewed_by
-+  FROM yeoljeong_employee_join_requests
-+ WHERE deleted_at IS NULL
-+   AND tenant_id IS NOT NULL
-+   AND lower(COALESCE(NULLIF(request_payload->>'status', ''), status)) = 'approved'
-+   AND ($1::uuid IS NULL OR tenant_id = $1::uuid)
-+ ORDER BY tenant_id, email, id
-+"""
-+
-+MARK_LINK_SQL = """
-+UPDATE yeoljeong_employee_join_requests
-+   SET request_payload = COALESCE(request_payload, '{}'::jsonb)
-+                         || jsonb_build_object('membership_link', $2::jsonb)
-+ WHERE id::text = $1
-+"""
-+
-+ELEVATED_ROLES = {"owner", "admin"}
-+
-+
-+def dedupe_targets(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-+    """(tenant, email) 당 1건. 같은 직원의 가입요청이 여럿이면 첫 행만 쓴다."""
-+    seen: set[tuple[str, str]] = set()
-+    out: list[dict[str, Any]] = []
-+    for row in rows:
-+        key = (str(row.get("tenant_id") or ""), str(row.get("email") or ""))
-+        if not all(key) or key in seen:
-+            continue
-+        seen.add(key)
-+        out.append(row)
-+    return out
-+
-+
-+def plan_action(*, tenant_kind: str | None, user_id: str | None, before: dict[str, Any] | None) -> str:
-+    """dry-run·apply 가 같은 판정을 쓴다. 반환값은 서비스 경로의 status 와 같은 어휘다."""
-+    if str(tenant_kind or "").lower() != "customer":
-+        return "skipped"
-+    if not user_id:
-+        return "pending_account"
-+    active = bool(before) and before.get("status") == "active" and not before.get("deleted")
-+    if active and str(before.get("role") or "").lower() in ELEVATED_ROLES:
-+        return "kept_elevated"
-+    if active and str(before.get("role") or "").lower() == "member":
-+        return "unchanged"
-+    return "link"
-+
-+
-+def _state(value: dict[str, Any] | None) -> str:
-+    if not value:
-+        return "-"
-+    deleted = " deleted" if value.get("deleted") else ""
-+    return f"{value.get('role')}/{value.get('status')}{deleted}"
-+
-+
-+async def run(args: argparse.Namespace) -> int:
-+    import asyncpg
-+
-+    from app import auth as auth_module
-+
-+    obys_dsn = args.obys_dsn or os.getenv("YEOLJEONG_FINANCE_DATABASE_URL") or os.getenv("OBYS_DATABASE_URL") or ""
-+    auth_dsn = args.auth_dsn or os.getenv("DATABASE_URL") or ""
-+    if not obys_dsn or not auth_dsn:
-+        print("오류: --obys-dsn / --auth-dsn (또는 OBYS_DATABASE_URL / DATABASE_URL) 가 필요하다", file=sys.stderr)
-+        return 2
-+
-+    obys = await asyncpg.connect(obys_dsn, timeout=10)
-+    auth = await asyncpg.connect(auth_dsn, timeout=10)
-+    try:
-+        rows = [dict(r) for r in await obys.fetch(APPROVED_JOIN_REQUESTS_SQL, args.tenant)]
-+        targets = dedupe_targets(rows)
-+        mode = "APPLY" if args.apply else "DRY-RUN"
-+        print(f"[{mode}] 승인 가입요청 {len(rows)}건 → 대상 (tenant,email) {len(targets)}건")
-+        print(f"{'tenant_id':36}  {'email':32}  {'user':12}  {'before':18}  {'action':15}  after")
-+        counts: dict[str, int] = {}
-+        for target in targets:
-+            tenant_id = str(target["tenant_id"])
-+            email = str(target["email"])
-+            tenant_kind = await auth.fetchval(
-+                "SELECT kind FROM tenants WHERE id = $1::uuid AND status = 'active' AND deleted_at IS NULL",
-+                tenant_id,
-+            )
-+            requester_id = str(target.get("requester_user_id") or "")
-+            if requester_id:
-+                basis = "user_id"
-+                bound_email = await auth_module._active_user_email_by_id(auth, requester_id)
-+                user_id = requester_id if bound_email == email else None
-+            else:
-+                basis = "email"
-+                # 스크립트의 테넌트 컨텍스트는 가입요청 행 자신의 tenant_id 다. 조회 SQL 이
-+                # 테넌트 조건을 걸어 다른 고객 테넌트 소속 계정은 뽑지 않는다(온라인 경로와 같다).
-+                user_id = await auth_module._active_user_id_by_email(
-+                    auth, email, tenant_id=tenant_id, context_tenant_id=tenant_id
-+                )
-+            approver_id = (
-+                await auth_module._active_user_id_by_email(
-+                    auth, target["reviewed_by"], tenant_id=tenant_id, context_tenant_id=tenant_id
-+                )
-+                if target.get("reviewed_by")
-+                else None
-+            )
-+            after: dict[str, Any] | None = None
-+            async with auth.transaction():
-+                if args.apply:
-+                    # 온라인 승인과 같은 (테넌트, 이메일) advisory xact lock — 동시에 도는 승인·반려와 겹치지 않는다.
-+                    await auth_module._lock_employee_membership(auth, tenant_id, email)
-+                before = (
-+                    await auth_module._membership_state_for_update(auth, tenant_id, str(user_id)) if user_id else None
-+                )
-+                action = plan_action(tenant_kind=tenant_kind, user_id=user_id, before=before)
-+                if args.apply and action == "link":
-+                    after = await auth_module.upsert_tenant_membership(
-+                        auth,
-+                        tenant_id=tenant_id,
-+                        user_id=str(user_id),
-+                        role="member",
-+                        invited_by=approver_id,
-+                        preserve_elevated_role=True,
-+                    )
-+                    await auth_module._move_default_off_personal_workspace(auth, str(user_id), tenant_id)
-+            planned_after = _state(after) if after else ("member/active" if action == "link" else _state(before))
-+            counts[action] = counts.get(action, 0) + 1
-+            print(
-+                f"{tenant_id:36}  {email:32}  {('yes/' + basis) if user_id else 'no':12}  {_state(before):18}  "
-+                f"{action:15}  {planned_after}{'' if args.apply or action != 'link' else ' (예정)'}"
-+            )
-+            if args.apply and action == "link" and after:
-+                await obys.execute(
-+                    MARK_LINK_SQL,
-+                    str(target["id"]),
-+                    json.dumps(
-+                        {
-+                            "tenant_id": tenant_id,
-+                            "user_id": str(user_id),
-+                            "membership_id": str(after.get("membership_id") or ""),
-+                            "linked_by": "script:obys_employee_membership_backfill",
-+                            "linked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-+                        },
-+                        ensure_ascii=False,
-+                    ),
-+                )
-+            if args.apply and action in {"link", "pending_account"}:
-+                await _record_audit(obys_dsn, target, action, tenant_id, email, user_id, before, after)
-+        print("요약:", json.dumps(counts, ensure_ascii=False, sort_keys=True))
-+        if not args.apply:
-+            print("dry-run 이다. 반영하려면 --apply 를 붙여 다시 실행한다.")
-+        return 0
-+    finally:
-+        await obys.close()
-+        await auth.close()
-+
-+
-+async def _record_audit(
-+    obys_dsn: str,
-+    target: dict[str, Any],
-+    action: str,
-+    tenant_id: str,
-+    email: str,
-+    user_id: str | None,
-+    before: dict[str, Any] | None,
-+    after: dict[str, Any] | None,
-+) -> None:
-+    os.environ.setdefault("OBYS_DATABASE_URL", obys_dsn)
-+    from app.services import yeoljeong_finance_service as svc
-+
-+    link = {
-+        "status": "linked" if action == "link" else action,
-+        "tenant_id": tenant_id,
-+        "employee_email": email,
-+        "user_id": user_id,
-+        "before": before,
-+        "after": after,
-+    }
-+    row = svc._membership_audit_row(
-+        link,
-+        action="approved",
-+        source="backfill_script",
-+        record={"id": target["id"], "business_id": target.get("business_id"), "email": email},
-+        actor_user_id="",
-+        actor_email="script:obys_employee_membership_backfill",
-+    )
-+    if not await svc.record_membership_audit(row):
-+        print(f"  경고: 감사 기록 실패 tenant={tenant_id} email={email}", file=sys.stderr)
-+
-+
-+def main(argv: list[str] | None = None) -> int:
-+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-+    parser.add_argument("--apply", action="store_true", help="실제로 반영한다 (기본은 dry-run)")
-+    parser.add_argument("--dry-run", action="store_true", help="명시적 dry-run (기본값과 같다)")
-+    parser.add_argument("--tenant", default=None, help="고용주 테넌트 UUID 로 한정")
-+    parser.add_argument("--obys-dsn", default="", help="오비서 업무 DB DSN")
-+    parser.add_argument("--auth-dsn", default="", help="AADS 인증 DB DSN")
-+    args = parser.parse_args(argv)
-+    if args.apply and args.dry_run:
-+        parser.error("--apply 와 --dry-run 은 함께 쓸 수 없다")
-+    return asyncio.run(run(args))
-+
-+
-+if __name__ == "__main__":
-+    raise SystemExit(main())
-diff --git a/tests/unit/test_dup_guard.py b/tests/unit/test_dup_guard.py
-index 8ad0a284..25248bd6 100644
---- a/tests/unit/test_dup_guard.py
-+++ b/tests/unit/test_dup_guard.py
-@@ -52,6 +52,70 @@ def test_duplicate_update_set_target_is_detected():
-     assert {f.ident for f in found} == {"SET.current_slot"}
- 
- 
-+def test_update_inside_one_line_string_does_not_swallow_later_kwargs():
-+    """2026-09-30 거짓 양성. 단정문 문자열 뒤의 raising= 세 번을 SET 대상으로 셌다."""
-+    src = '''
-+def test_switch(monkeypatch):
-+    assert "UPDATE tenant_memberships SET updated_at = now()" in switch
-+    monkeypatch.setattr(mod, "a", 1, raising=False)
-+    monkeypatch.setattr(mod, "b", 2, raising=False)
-+    with pytest.raises(HTTPException, match="x"):
-+        monkeypatch.setattr(mod, "c", 3, raising=False)
-+'''
-+    assert dup.check_sql("tests/unit/test_x.py", src) == []
-+    assert "sql-dup-col" not in _kinds("tests/unit/test_x.py", src)
-+
-+
-+def test_literal_window_applies_to_code_files():
-+    """리뷰 지적 3: in_code = path.endswith(PY_EXT + SH_EXT) 는 튜플 결합이라 .py/.sh 에서 참이다.
-+
-+    같은 입력이 코드 파일에서는 리터럴 끝에서 닫히고(0건), 코드가 아닌 경로에서는
-+    예전 2000자 창을 써서 뒤쪽 'a = 2' 를 SET 대상으로 센다(1건) — 분기가 실제로 탄다.
-+    """
-+    assert isinstance(dup.PY_EXT + dup.SH_EXT, tuple)
-+    for path in ("tests/unit/test_x.py", "scripts/x.sh", "scripts/x.bash"):
-+        assert path.endswith(dup.PY_EXT + dup.SH_EXT)
-+    src = 'assert "UPDATE t SET a = 1" in s\nfoo(), a = 2, 3\n'
-+    assert dup.check_sql("tests/unit/test_x.py", src) == []
-+    assert [f.ident for f in dup.check_sql("notes.txt", src)] == ["SET.a"]
-+
-+
-+def test_keyword_args_after_real_update_are_not_set_targets():
-+    """문자열 밖에서 창이 흘러도 호출 인자(괄호 안)는 컬럼으로 세지 않는다."""
-+    src = "UPDATE t SET a = 1\nf(x, raising=1)\ng(y, raising=2)\nh(z, raising=3)\n"
-+    assert dup.check_sql("x.sql", src) == []
-+
-+
-+def test_real_duplicate_update_set_is_still_detected():
-+    found = dup.check_sql("x.py", 'conn.execute("UPDATE t SET a = 1, b = 2, a = 3 WHERE id = $1")')
-+    assert [f.ident for f in found] == ["SET.a"]
-+    found = dup.check_sql("x.sql", "UPDATE t SET a = 1, b = 2, a = 3;")
-+    assert [f.ident for f in found] == ["SET.a"]
-+
-+
-+def test_real_duplicate_insert_column_is_still_detected():
-+    found = dup.check_sql("x.py", 'conn.execute("INSERT INTO t (a, b, a) VALUES ($1, $2, $3)")')
-+    assert [f.ident for f in found] == ["t.a"]
-+
-+
-+def test_duplicate_set_across_concatenated_literals_is_detected():
-+    """한 줄 리터럴에서 끊더라도 암묵적 이어붙이기 줄은 따라간다."""
-+    src = (
-+        "await conn.execute(\n"
-+        '    "UPDATE pipeline_jobs SET status = $1, "\n'
-+        '    "phase = $2, status = $3 "\n'
-+        '    "WHERE id = $4",\n'
-+        ")\n"
-+    )
-+    found = dup.check_sql("x.py", src)
-+    assert [f.ident for f in found] == ["SET.status"]
-+
-+
-+def test_duplicate_set_in_triple_quoted_sql_is_detected():
-+    src = 'await conn.execute("""\n    UPDATE t\n       SET a = 1,\n           a = now()\n     WHERE id = $1\n""")\n'
-+    assert [f.ident for f in dup.check_sql("x.py", src)] == ["SET.a"]
-+
-+
- def test_clean_insert_is_not_flagged():
-     sql = "INSERT INTO deploy_runs (project, sha, status, current_slot) VALUES ($1,$2,$3,$4)"
-     assert dup.check_sql("x.py", sql) == []
-diff --git a/tests/unit/test_obys_employee_tenant_membership.py b/tests/unit/test_obys_employee_tenant_membership.py
-new file mode 100644
-index 00000000..f3d7e95a
---- /dev/null
-+++ b/tests/unit/test_obys_employee_tenant_membership.py
-@@ -0,0 +1,1444 @@
-+"""AADS-OBYS-EMPLOYEE-TENANT-MEMBERSHIP-20260930 — 직원 승인 → 고용주 테넌트 멤버십 → 서명.
-+
-+2026-09-30 진아서버 실측: 승인 직원의 로그인 테넌트가 본인 자동생성 워크스페이스라
-+계약서 서명이 게이트(403) → _read_hr 스코프 → _is_admin(owner) 순으로 막혔다.
-+여기서는 그 흐름을 끝까지(조회·서명 → status=signed) 고정한다.
-+
-+AADS 인증 DB 는 FakeAuthDB 로 흉내 낸다 — tenant_memberships 의 UNIQUE(tenant_id,
-+user_id)·ON CONFLICT 규칙을 그대로 옮겼고, SQL 문 자체의 핵심 절도 따로 검사한다.
-+오비서 DB 는 파일 모드로만 돈다(운영 DB·알리고 미접촉).
-+"""
-+from __future__ import annotations
-+
-+import asyncio
-+import base64
-+import inspect
-+import os
-+import threading
-+from contextlib import asynccontextmanager
-+from io import BytesIO
-+from types import SimpleNamespace
++from unittest.mock import patch
 +
 +import pytest
-+from fastapi import FastAPI, HTTPException
-+from fastapi.testclient import TestClient
 +
-+os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-that-is-at-least-32-bytes-long")
-+
-+from app import auth as auth_module  # noqa: E402
-+from app.api import obys_finance as api  # noqa: E402
-+from app.core import obys_tenant  # noqa: E402
-+from app.services import aligo_client, yeoljeong_ops_service  # noqa: E402
-+
-+svc = api.svc
-+
-+# 고용주 테넌트는 레거시 허용목록 밖으로 잡는다 — 서명 경로 prefix 가 실제로 여는지 본다.
-+EMPLOYER = "7f0c2d1e-3b4a-4c5d-8e6f-000000000032"
-+PERSONAL = "d184a18c-78c8-45c7-aee7-bfe79fadf95f"
-+OTHER = "2a1b3c4d-0000-4000-8000-000000000001"
-+INTERNAL = "2d701a8c-9596-4757-8588-faa4f7837112"
-+YEOLJEONG = "15055cac-71b0-45ec-b714-7093dde189ff"
-+
-+ADMIN_ID = "user-owner"
-+EMP_ID = "user-hayh"
-+EMP_EMAIL = "dudgns3738@naver.com"
-+EMP_NAME = "하영훈"
-+ADMIN = {
-+    "user_id": ADMIN_ID,
-+    "email": "owner@example.com",
-+    "is_admin": False,
-+    "tenant_id": EMPLOYER,
-+    "tenant_role": "owner",
-+    "user_role": "user",
-+    "current_membership": {"tenant_id": EMPLOYER, "status": "active", "role": "owner"},
-+}
++from app.services import db_write_sql_guard as guard
++from app.services.db_write_sql_guard import (
++    ALLOWED_BUILTIN_FUNCTIONS,
++    PROCEDURAL_KEYWORDS,
++    TRANSACTION_CONTROL_KEYWORDS,
++    IndirectWriteBlocked,
++    SqlGuardError,
++    WriteTarget,
++    validate_single_write,
++)
++from app.services.tool_executor import ToolExecutor
++from app.services.vault_cleanup_guard import (
++    LoginSnapshot,
++    VaultGuardUnavailable,
++    VaultViewTargetBlocked,
++    assert_target_not_view,
++    target_unresolved,
++)
 +
 +
-+def _user(tenant_id: str, role: str, *, user_id: str = EMP_ID, email: str = EMP_EMAIL) -> dict:
-+    """get_current_user 가 만드는 모양 그대로."""
-+    return {
-+        "user_id": user_id,
-+        "email": email,
-+        "is_admin": False,
-+        "tenant_id": tenant_id,
-+        "tenant_role": role,
-+        "user_role": "user",
-+        "current_membership": {"tenant_id": tenant_id, "status": "active", "role": role},
-+    }
++def _sql(*parts: str) -> str:
++    return " ".join(parts)
 +
 +
-+# ---------------------------------------------------------------------------
-+# AADS 인증 DB 흉내
-+# ---------------------------------------------------------------------------
-+class FakeAuthDB:
-+    def __init__(self):
-+        self.users = {"owner@example.com": ADMIN_ID, EMP_EMAIL: EMP_ID}
-+        self.tenants = {EMPLOYER: "customer", PERSONAL: "customer", OTHER: "customer", INTERNAL: "internal"}
-+        self.memberships: dict[tuple[str, str], dict] = {
-+            (EMPLOYER, ADMIN_ID): {"role": "owner", "status": "active", "deleted": False, "invited_by": None},
-+        }
-+        # 직원은 가입 때 자동 생성된 개인 워크스페이스가 default 다(2026-09-30 실측 상태).
-+        self.defaults: dict[str, str | None] = {EMP_ID: PERSONAL, ADMIN_ID: EMPLOYER}
-+        self.personal: set[tuple[str, str]] = {(PERSONAL, EMP_ID)}
-+        # (tenant_id, lower(email)) 로 남은 초대 — 이메일 조회 테넌트 조건의 한 갈래.
-+        self.invites: set[tuple[str, str]] = set()
-+        self.sql: list[str] = []
-+        # pg_advisory_xact_lock 흉내: 키별 RLock(같은 세션 재진입 허용), 트랜잭션 끝에 해제.
-+        self.advisory_locks: dict[int, threading.RLock] = {}
-+        self.advisory_guard = threading.Lock()
-+        self.lock_log: list[int] = []
-+
-+    def advisory_lock(self, key: int) -> threading.RLock:
-+        with self.advisory_guard:
-+            return self.advisory_locks.setdefault(key, threading.RLock())
-+
-+    def row(self, tenant_id, user_id):
-+        m = self.memberships.get((tenant_id, user_id))
-+        if not m:
-+            return None
-+        return {"membership_id": f"m-{tenant_id[:4]}-{user_id}", "tenant_id": tenant_id, "user_id": user_id,
-+                "role": m["role"], "status": m["status"]}
++# ── 판정 로직 ────────────────────────────────────────────────────────────────
 +
 +
-+class FakeConn:
-+    def __init__(self, db: FakeAuthDB):
-+        self.db = db
-+        self.depth = 0
-+        self.held: list[threading.RLock] = []
++@pytest.mark.parametrize("sql", [
++    _sql("SELECT", "some_fn(1)"),
++    _sql("SELECT", "public.some_fn(1)"),
++    _sql("CALL", "proc()"),
++    "DO $$ BEGIN PERFORM some_fn(1); END $$",
++    _sql("EXECUTE", "stmt_name"),
++    _sql("UPDATE", "t", "SET", "a", "=", "my_fn(1)"),
++    _sql("UPDATE", "t", "SET", "a", "=", "public.lower(x)"),
++    _sql("UPDATE", "t", "SET", "a", "=", '"lower"(x)'),
++    _sql("UPDATE", "t", "SET", "a", "=", '"MY_FN"(x)'),
++    _sql("UPDATE", "t", "SET", "a", "=", "my_fn /* c */ (1)"),
++    _sql("UPDATE", "t", "SET", "a", "=", "(SELECT my_fn(1))"),
++    _sql("INSERT INTO", "t", "(a)", "VALUES", "(my_fn(1))"),
++    _sql("DELETE FROM", "t", "WHERE", "a", "=", "query_to_xml('x', true, true, '')"),
++    _sql("UPDATE", "t", "SET", "a", "=", "set_config('k', 'v', false)"),
++    _sql("UPDATE", "t", "SET", "a", "=", "nextval('s')"),
++    _sql("UPDATE", "t", "SET", "a", "=", "1", "WHERE", "b", "OPERATOR(pg_catalog.=)", "2"),
++])
++def test_indirect_call_rejected(sql):
++    with pytest.raises(IndirectWriteBlocked):
++        validate_single_write(sql)
 +
-+    @asynccontextmanager
-+    async def transaction(self):
-+        self.depth += 1
-+        try:
-+            yield
-+        finally:
-+            self.depth -= 1
-+            if self.depth == 0:
-+                # xact lock 은 바깥 트랜잭션이 끝날 때 풀린다(세이브포인트에선 안 풀린다).
-+                while self.held:
-+                    self.held.pop().release()
 +
-+    async def fetch(self, sql, *args):
-+        self.db.sql.append(sql)
-+        if "FROM saas_users u" in sql and "lower(u.email) = $1" in sql:
-+            email, tenant_id = args
-+            rows = []
-+            for order, (address, uid) in enumerate(self.db.users.items()):
-+                if address.lower() != email:
-+                    continue
-+                default = self.db.defaults.get(uid)
-+                membership = self.db.memberships.get((tenant_id, uid))
-+                bound = default == tenant_id or bool(membership and not membership["deleted"])
-+                unattached = default is None or (default, uid) in self.db.personal
-+                if bound or unattached or (tenant_id, email) in self.db.invites:
-+                    rows.append((not bound, order, {"id": uid, "bound_to_tenant": bound}))
-+            return [row for _, _, row in sorted(rows, key=lambda item: item[:2])][:2]
-+        raise AssertionError(f"unexpected fetch: {sql}")
++def test_indirect_block_is_a_sql_guard_error():
++    assert issubclass(IndirectWriteBlocked, SqlGuardError)
 +
-+    async def fetchval(self, sql, *args):
-+        self.db.sql.append(sql)
-+        if "SELECT EXISTS" in sql and "t.created_by" in sql:
-+            return (args[0], args[1]) in self.db.personal
-+        if "SELECT default_tenant_id" in sql:
-+            return self.db.defaults.get(args[0])
-+        if "FROM tenants" in sql:
-+            return self.db.tenants.get(args[0])
-+        if "FROM saas_users" in sql and "WHERE id = $1" in sql:
-+            return next((email for email, uid in self.db.users.items() if uid == args[0]), None)
-+        raise AssertionError(f"unexpected fetchval: {sql}")
++
++@pytest.mark.parametrize("sql", [
++    _sql("UPDATE", "t", "SET", "updated_at", "=", "now()", "WHERE", "id", "=", "$1"),
++    _sql("UPDATE", "t", "SET", "n", "=", "coalesce(n, 0) + 1", "WHERE", "id", "=", "$1"),
++    _sql("UPDATE", "t", "SET", "name", "=", "lower(trim($1))", "WHERE", "id", "=", "$2"),
++    _sql("UPDATE", "t", "SET", "data", "=", "jsonb_set(data, '{a}', to_jsonb($1::int))"),
++    _sql("UPDATE", "t", "SET", "a", "=", "pg_catalog.lower(x)"),
++    _sql("UPDATE", "t", "SET", "a", "=", "now ( )"),
++    _sql("UPDATE", "t", "SET", "a", "=", "x::varchar(20)", ",", "b", "=", "CAST(y AS numeric(10,2))"),
++    _sql("UPDATE", "t", "SET", "a", "=", "1.5", "WHERE", "b", "IN", "(SELECT id FROM x WHERE n > 2)"),
++    _sql("UPDATE", "t", "SET", "a", "=", "1", "WHERE", "id", "=", "ANY($1::int[])"),
++    _sql("UPDATE", "t", "SET", "n", "=", "(SELECT count(*) FROM x)"),
++    _sql("UPDATE", "t", "SET", "n", "=", "n + (2 * 3)", "WHERE", "a", "=", "(SELECT max(a) FROM x)"),
++    _sql("UPDATE", "t", "SET", "a", "=", "$1", "WHERE", "(a, b)", "OVERLAPS", "(c, d)"),
++    _sql("INSERT INTO", "public.t", "(a, b)", "VALUES", "($1, now())",
++         "ON CONFLICT", "(a)", "DO UPDATE SET", "b", "=", "EXCLUDED.b"),
++    _sql("INSERT INTO", "t", "AS x", "(a)", "SELECT", "*", "FROM", "(VALUES (1))", "v (a)"),
++    _sql("INSERT INTO", "t", "(id)", "VALUES", "(gen_random_uuid())"),
++    _sql("DELETE FROM", "t", "WHERE", "created_at", "<", "now() - interval '1 day'"),
++    _sql("DELETE FROM", "t", "WHERE", "NOT EXISTS", "(SELECT 1 FROM x WHERE x.id = t.id)"),
++    _sql("UPDATE", "goals", "SET", "note", "=", "format('%I', 'x')"),
++])
++def test_builtin_function_not_false_positive(sql):
++    info = validate_single_write(sql)
++    assert info.keyword in {"insert", "update", "delete"}
++
++
++def test_string_or_comment_named_like_a_call_is_not_a_call():
++    info = validate_single_write(_sql("UPDATE", "t", "SET", "a", "=", "'my_fn(1)'", "-- other_fn(2)"))
++    assert info.target == WriteTarget(None, "t")
++    validate_single_write("UPDATE t SET a = $$ x_fn(1) $$ /* y_fn(2) */")
++
++
++@pytest.mark.parametrize("sql,expected", [
++    (_sql("UPDATE", "t", "SET", "a", "=", "1"), WriteTarget(None, "t")),
++    (_sql("UPDATE", "ONLY", "public.t", "*", "SET", "a", "=", "1"), WriteTarget("public", "t")),
++    (_sql("UPDATE", '"Public"."My T"', "AS", "u", "SET", "a", "=", "1"), WriteTarget("public", "my t")),
++    (_sql("DELETE FROM", "reports.v_users", "WHERE", "a", "=", "1"), WriteTarget("reports", "v_users")),
++    (_sql("INSERT INTO", "t", "(a)", "VALUES", "(1)"), WriteTarget(None, "t")),
++    (_sql("INSERT INTO", "s.t", "DEFAULT VALUES"), WriteTarget("s", "t")),
++])
++def test_target_resolved(sql, expected):
++    assert validate_single_write(sql).target == expected
++
++
++@pytest.mark.parametrize("sql", [
++    _sql("UPDATE", "db.public.t", "SET", "a", "=", "1"),
++    _sql("DELETE FROM", "db.public.t", "WHERE", "a", "=", "1"),
++    _sql("INSERT INTO", "db.public.t", "(a)", "VALUES", "(1)"),
++    _sql("UPDATE", '"db"."public"."t"', "SET", "a", "=", "1"),
++])
++def test_unresolvable_target_is_none(sql):
++    info = validate_single_write(sql)
++    assert info.target is None
++    assert target_unresolved(info.target)
++
++
++def test_number_dot_is_not_a_name_separator():
++    tokens: list = []
++    guard._split_statements("UPDATE t SET a = 1.5, b = 2 WHERE c = x.y", tokens)
++    assert ("n", "1.5") in tokens
++    assert tokens.count(("p", ".")) == 1
++
++
++def test_whitelist_excludes_side_effect_functions():
++    for fn in ("set_config", "pg_sleep", "query_to_xml", "nextval", "setval", "dblink", "lo_import",
++               "pg_terminate_backend", "pg_advisory_lock", "xpath"):
++        assert fn not in ALLOWED_BUILTIN_FUNCTIONS
++    for fn in ("now", "coalesce", "lower", "jsonb_set"):
++        assert fn in ALLOWED_BUILTIN_FUNCTIONS
++
++
++def test_guard_keyword_constants_only_grew():
++    assert {"do", "call"} <= PROCEDURAL_KEYWORDS
++    assert {"begin", "commit", "rollback", "savepoint", "release", "prepare", "set"} <= TRANSACTION_CONTROL_KEYWORDS
++
++
++# ── db_safe_write 실행 순서 ──────────────────────────────────────────────────
++
++
++class _Txn:
++    def __init__(self, log):
++        self.log = log
++
++    async def __aenter__(self):
++        self.log.append("begin")
++
++    async def __aexit__(self, exc_type, *args):
++        self.log.append("rollback" if exc_type else "commit")
++        return False
++
++
++class _Stmt:
++    def __init__(self, log):
++        self.log = log
++
++    async def fetch(self, *args):
++        self.log.append("write")
++        return []
++
++    def get_statusmsg(self):
++        return "UPDATE 1"
++
++
++class _Row:
++    def __init__(self, cnt):
++        self.cnt = cnt
++
++    def __getitem__(self, key):
++        return self.cnt
++
++
++class _Conn:
++    def __init__(self, views=(), fetch_error=None):
++        self.log: list[str] = []
++        self.views = list(views)
++        self.fetch_error = fetch_error
++        self.view_lookups: list[tuple] = []
++
++    def transaction(self):
++        return _Txn(self.log)
 +
 +    async def execute(self, sql, *args):
-+        self.db.sql.append(sql)
-+        if "pg_advisory_xact_lock" in sql:
-+            assert self.depth > 0, "xact lock 은 트랜잭션 안에서만 건다"
-+            lock = self.db.advisory_lock(args[0])
-+            assert lock.acquire(timeout=10), "advisory lock 대기 시간 초과"
-+            self.held.append(lock)
-+            self.db.lock_log.append(args[0])
-+            return "SELECT 1"
-+        if "UPDATE saas_users SET default_tenant_id" in sql:
-+            self.db.defaults[args[1]] = args[0]
-+            return "UPDATE 1"
-+        raise AssertionError(f"unexpected execute: {sql}")
++        self.log.append("set")
 +
 +    async def fetchrow(self, sql, *args):
-+        self.db.sql.append(sql)
-+        if "FOR UPDATE" in sql:
-+            row = self.db.row(args[0], args[1])
-+            if row:
-+                row["deleted"] = self.db.memberships[(args[0], args[1])]["deleted"]
-+            return row
-+        if "INSERT INTO tenant_memberships" in sql:
-+            tenant_id, user_id, role, invited_by, preserve = args
-+            key = (tenant_id, user_id)
-+            invited = invited_by if invited_by in self.db.users.values() else None
-+            existing = self.db.memberships.get(key)
-+            if existing is None:
-+                self.db.memberships[key] = {"role": role, "status": "active", "deleted": False, "invited_by": invited}
-+            else:
-+                keep = (preserve and existing["status"] == "active" and not existing["deleted"]
-+                        and existing["role"] in {"owner", "admin"})
-+                existing.update({"role": existing["role"] if keep else role, "status": "active", "deleted": False})
-+            return self.db.row(tenant_id, user_id)
-+        if "UPDATE tenant_memberships" in sql and "'removed'" in sql:
-+            membership_id, tenant_id, user_id = args
-+            assert self.db.row(tenant_id, user_id)["membership_id"] == membership_id
-+            self.db.memberships[(tenant_id, user_id)]["status"] = "removed"
-+            return self.db.row(tenant_id, user_id)
-+        raise AssertionError(f"unexpected fetchrow: {sql}")
-+
-+
-+class FakePool:
-+    def __init__(self, db):
-+        self.db = db
-+
-+    @asynccontextmanager
-+    async def acquire(self):
-+        yield FakeConn(self.db)
-+
-+
-+def _disable_db(coroutine):
-+    close = getattr(coroutine, "close", None)
-+    if close:
-+        close()
-+    return None
-+
-+
-+@pytest.fixture
-+def env(tmp_path, monkeypatch):
-+    for name in ("OBYS_DATABASE_URL", "YEOLJEONG_FINANCE_DATABASE_URL", "OBYS_CONTRACT_NOTIFY_CHANNELS",
-+                 "OBYS_CONTRACT_PDF_FONT_PATH", "OBYS_CONTRACT_SIGN_BASE_URL", "OBYS_LEGACY_TENANT_IDS"):
-+        monkeypatch.delenv(name, raising=False)
-+    monkeypatch.setenv("OBYS_UPLOAD_ROOT", str(tmp_path / "upload-root"))
-+    monkeypatch.setattr(svc, "DATA_DIR", tmp_path / "data")
-+    monkeypatch.setattr(svc, "UPLOAD_DIR", tmp_path / "data" / "uploads" / "onboarding")
-+    monkeypatch.setattr(svc, "_run_db", _disable_db)
-+
-+    async def fake_create_notification(**kwargs):
-+        return {"id": "ntf", **kwargs}
-+
-+    async def fake_send(*args, **kwargs):
-+        return {"result_code": 1, "code": 0, "message": "success"}
-+
-+    monkeypatch.setattr(yeoljeong_ops_service, "create_notification", fake_create_notification)
-+    monkeypatch.setattr(aligo_client, "is_available", lambda: False)
-+    monkeypatch.setattr(aligo_client, "send_sms", fake_send)
-+    monkeypatch.setattr(aligo_client, "send_alimtalk", fake_send)
-+
-+    db = FakeAuthDB()
-+
-+    async def ensure_pool():
-+        return FakePool(db)
-+
-+    async def schema_ready():
-+        return None
-+
-+    monkeypatch.setattr(auth_module, "_ensure_pool", ensure_pool)
-+    monkeypatch.setattr(auth_module, "require_saas_schema_ready", schema_ready)
-+
-+    svc._write("employee_join_requests", [{
-+        "id": "join-hayh", "name": EMP_NAME, "email": EMP_EMAIL, "phone": "010-1234-5678",
-+        "address": "서울시 직원 주소", "birth_date": "1990-01-01",
-+        "tenant_id": EMPLOYER, "business_id": "biz-mia", "branch": "열정국밥_미아점", "status": "pending",
-+        # 직원 본인이 로그인해 제출한 요청 — upsert_join_request 가 남기는 신원 고정 값.
-+        "requester_user_id": EMP_ID, "requester_email": EMP_EMAIL,
-+    }])
-+    return db
-+
-+
-+def _set_join_request(**changes):
-+    rows = svc._read_file_rows("employee_join_requests")
-+    rows[0].update(changes)
-+    for key, value in list(changes.items()):
-+        if value is None:
-+            rows[0].pop(key, None)
-+    svc._write_file_rows("employee_join_requests", rows)
-+
-+
-+def _review(action: str, user: dict = ADMIN) -> dict:
-+    return asyncio.run(svc.review_join_request_with_membership("join-hayh", action, "", user))
-+
-+
-+def _audit() -> list[dict]:
-+    return svc._read_file_rows(svc.MEMBERSHIP_AUDIT_LOG)
-+
-+
-+# ---------------------------------------------------------------------------
-+# 1. 승인 → 멤버십
-+# ---------------------------------------------------------------------------
-+def test_approval_creates_member_membership_in_employer_tenant(env):
-+    result = _review("approved")
-+
-+    assert result["request"]["status"] == "approved"
-+    assert result["membership"]["status"] == "linked"
-+    assert result["membership"]["role"] == "member"
-+    assert result["membership"]["tenant_id"] == EMPLOYER
-+    row = env.memberships[(EMPLOYER, EMP_ID)]
-+    assert row["role"] == "member" and row["status"] == "active"
-+    assert row["invited_by"] == ADMIN_ID
-+    audit = _audit()
-+    assert len(audit) == 1
-+    assert audit[0]["classification"] == "membership_linked"
-+    assert audit[0]["tenant_id"] == EMPLOYER
-+    assert audit[0]["employee_email"] == EMP_EMAIL
-+    assert audit[0]["actor_user_id"] == ADMIN_ID
-+    assert audit[0]["before_state"] is None
-+    assert audit[0]["after_state"]["role"] == "member"
-+    # 반려가 회수할 근거 — 이 승인이 만든 멤버십 표시.
-+    marker = result["request"]["membership_link"]
-+    assert marker["user_id"] == EMP_ID and marker["tenant_id"] == EMPLOYER
-+    assert marker["membership_id"] == env.row(EMPLOYER, EMP_ID)["membership_id"]
-+
-+
-+def test_approval_is_idempotent(env):
-+    _review("approved")
-+    second = _review("approved")
-+
-+    assert second["membership"]["status"] == "unchanged"
-+    assert [key for key in env.memberships if key[1] == EMP_ID] == [(EMPLOYER, EMP_ID)]
-+    assert env.memberships[(EMPLOYER, EMP_ID)]["role"] == "member"
-+
-+
-+@pytest.mark.parametrize("role", ["owner", "admin"])
-+def test_approval_never_demotes_existing_owner_or_admin(env, role):
-+    env.memberships[(EMPLOYER, EMP_ID)] = {"role": role, "status": "active", "deleted": False, "invited_by": None}
-+
-+    result = _review("approved")
-+
-+    assert env.memberships[(EMPLOYER, EMP_ID)]["role"] == role
-+    assert result["membership"]["role"] == role
-+    assert result["membership"]["status"] == "unchanged"
-+
-+
-+def test_approval_does_not_revive_removed_admin_as_admin(env):
-+    env.memberships[(EMPLOYER, EMP_ID)] = {"role": "admin", "status": "removed", "deleted": False, "invited_by": None}
-+
-+    _review("approved")
-+
-+    assert env.memberships[(EMPLOYER, EMP_ID)] == {
-+        "role": "member", "status": "active", "deleted": False, "invited_by": None,
-+    }
-+
-+
-+def test_rejection_revokes_membership_without_deleting_row(env):
-+    _review("approved")
-+    result = _review("rejected")
-+
-+    assert result["request"]["status"] == "rejected"
-+    assert result["membership"]["status"] == "removed"
-+    assert env.memberships[(EMPLOYER, EMP_ID)]["status"] == "removed"
-+    assert (EMPLOYER, EMP_ID) in env.memberships
-+    assert [row["classification"] for row in _audit()] == ["membership_removed", "membership_linked"]
-+
-+
-+def test_rejection_keeps_owner_membership(env):
-+    env.memberships[(EMPLOYER, EMP_ID)] = {"role": "owner", "status": "active", "deleted": False, "invited_by": None}
-+
-+    _review("approved")  # 이미 활성 owner — 이 승인이 만든 멤버십이 아니다
-+    result = _review("rejected")
-+
-+    assert result["membership"]["status"] == "skipped"
-+    assert result["membership"]["reason"] == "membership_not_linked_by_request"
-+    assert env.memberships[(EMPLOYER, EMP_ID)] == {
-+        "role": "owner", "status": "active", "deleted": False, "invited_by": None,
-+    }
-+
-+
-+def test_rejection_keeps_role_promoted_after_link(env):
-+    _review("approved")
-+    env.memberships[(EMPLOYER, EMP_ID)]["role"] = "admin"  # 승인 뒤 관리자로 승격
-+
-+    result = _review("rejected")
-+
-+    assert result["membership"]["status"] == "kept_elevated"
-+    assert env.memberships[(EMPLOYER, EMP_ID)]["status"] == "active"
-+
-+
-+# --- 리뷰 지적 1: 반려는 '이 요청으로 연결된 멤버십'에만 ---------------------
-+@pytest.mark.parametrize("role", ["member", "viewer"])
-+def test_rejecting_never_approved_request_keeps_existing_invite_membership(env, role):
-+    """초대 수락으로 이미 member/viewer 인 사람의 요청을 (승인 없이) 반려해도 멤버십은 그대로."""
-+    env.memberships[(EMPLOYER, EMP_ID)] = {"role": role, "status": "active", "deleted": False, "invited_by": ADMIN_ID}
-+
-+    result = _review("rejected")
-+
-+    assert result["request"]["status"] == "rejected"
-+    assert result["membership"]["status"] == "skipped"
-+    assert result["membership"]["reason"] == "request_was_not_approved"
-+    assert env.memberships[(EMPLOYER, EMP_ID)]["status"] == "active"
-+    assert not any("'removed'" in sql for sql in env.sql)
-+    assert _audit()[0]["classification"] == "membership_skipped"
-+
-+
-+def test_rejecting_approval_that_found_existing_member_does_not_revoke(env):
-+    """승인 전부터 활성 member(초대)였다면 승인은 unchanged — 반려·퇴사도 그 멤버십을 빼앗지 않는다."""
-+    env.memberships[(EMPLOYER, EMP_ID)] = {"role": "member", "status": "active", "deleted": False, "invited_by": ADMIN_ID}
-+
-+    assert _review("approved")["membership"]["status"] == "unchanged"
-+    result = _review("rejected")
-+
-+    assert result["membership"]["reason"] == "membership_not_linked_by_request"
-+    assert env.memberships[(EMPLOYER, EMP_ID)]["status"] == "active"
-+
-+
-+def test_rejection_skips_when_membership_row_was_replaced(env):
-+    _review("approved")
-+    _set_join_request(membership_link={
-+        **svc._read_file_rows("employee_join_requests")[0]["membership_link"], "membership_id": "m-other",
-+    })
-+
-+    result = _review("rejected")
-+
-+    assert result["membership"]["status"] == "skipped"
-+    assert result["membership"]["reason"] == "membership_not_linked_by_request"
-+    assert env.memberships[(EMPLOYER, EMP_ID)]["status"] == "active"
-+
-+
-+def test_reapproval_after_revocation_relinks_and_can_be_revoked_again(env):
-+    _review("approved")
-+    _review("rejected")
-+    relinked = _review("approved")
-+    assert relinked["membership"]["status"] == "linked"
-+    assert env.memberships[(EMPLOYER, EMP_ID)]["status"] == "active"
-+    assert _review("rejected")["membership"]["status"] == "removed"
-+    assert env.memberships[(EMPLOYER, EMP_ID)]["status"] == "removed"
-+
-+
-+# --- 리뷰 지적 2: 이메일만으로 신원을 정하지 않는다 --------------------------
-+def test_request_not_bound_to_requester_account_links_by_approver_vouched_email(env):
-+    """R2 리뷰 지적 8: 관리자 대리 등록·초대 흐름·예전 요청(requester_* 없음)은 요청 이메일로 계정을 찾는다.
-+
-+    직원은 개인 워크스페이스 JWT 로 고용주 테넌트에 가입요청을 낼 수 없다(게이트 403) —
-+    본인 제출 고정만 인정하면 실제 승인 거의 전부가 pending 에 머문다.
-+    """
-+    _set_join_request(requester_user_id=None, requester_email=None)
-+
-+    result = _review("approved")
-+
-+    assert result["request"]["status"] == "approved"
-+    assert result["membership"]["status"] == "linked"
-+    assert result["membership"]["user_id"] == EMP_ID
-+    assert env.memberships[(EMPLOYER, EMP_ID)]["role"] == "member"
-+    assert env.defaults[EMP_ID] == EMPLOYER
-+    assert _audit()[0]["classification"] == "membership_linked"
-+    assert _audit()[0]["employee_user_id"] == EMP_ID
-+
-+
-+def test_employee_cannot_file_join_request_from_personal_workspace():
-+    """지적 8 의 전제: 가입요청 경로는 레거시 테넌트 전용이라 개인 워크스페이스 JWT 는 403."""
-+    assert not obys_tenant._is_tenant_scoped_path("/api/v1/yeoljeong-finance/employees/join-requests", "POST")
-+    assert not obys_tenant._is_tenant_scoped_path("/api/v1/yeoljeong-finance/employees/invites/accept", "POST")
-+
-+
-+def test_unbound_request_without_account_stays_pending(env):
-+    _set_join_request(requester_user_id=None, requester_email=None, email="nobody@example.com")
-+
-+    result = _review("approved")
-+
-+    assert result["request"]["status"] == "approved"
-+    assert result["membership"]["status"] == "pending_account"
-+    assert not any(uid == EMP_ID for (tid, uid) in env.memberships if tid == EMPLOYER)
-+
-+
-+def test_request_with_someone_elses_email_is_not_linked(env):
-+    """공격자가 본인 계정으로 남의 이메일을 넣은 요청 — requester_email 과 email 이 달라 고정되지 않는다."""
-+    env.users["attacker@example.com"] = "user-attacker"
-+    _set_join_request(requester_user_id="user-attacker", requester_email="attacker@example.com")
-+
-+    result = _review("approved")
-+
-+    assert result["membership"]["status"] == "pending_identity"
-+    assert (EMPLOYER, EMP_ID) not in env.memberships
-+    assert (EMPLOYER, "user-attacker") not in env.memberships
-+
-+
-+# --- R3 실결함 1: 이메일 조회 전제(테넌트 컨텍스트)를 코드로 강제 ------------------
-+def _link_by_email(db: FakeAuthDB, *, tenant_id: str, context_tenant_id, email: str = EMP_EMAIL) -> dict:
-+    return asyncio.run(auth_module.link_employee_tenant_membership(
-+        tenant_id=tenant_id,
-+        employee_user_id=None,
-+        employee_email=email,
-+        invited_by=ADMIN_ID,
-+        allow_email_lookup=True,
-+        context_tenant_id=context_tenant_id,
-+    ))
-+
-+
-+@pytest.mark.parametrize("context", [None, "", "   "])
-+def test_email_lookup_without_tenant_context_raises(env, context):
-+    """① 컨텍스트 없음 → 예외. DB 에 닿기 전에 막고 멤버십도 만들지 않는다."""
-+    with pytest.raises(auth_module.EmployeeTenantContextError):
-+        _link_by_email(env, tenant_id=EMPLOYER, context_tenant_id=context)
-+    assert env.sql == []
-+    assert (EMPLOYER, EMP_ID) not in env.memberships
-+    with pytest.raises(auth_module.EmployeeTenantContextError):
-+        asyncio.run(auth_module._active_user_id_by_email(
-+            FakeConn(env), EMP_EMAIL, tenant_id=EMPLOYER, context_tenant_id=context
-+        ))
-+
-+
-+def test_email_lookup_with_other_tenant_context_raises(env):
-+    """② 컨텍스트는 있으나 대상 테넌트와 다름 → 예외(조용히 넘기지 않는다)."""
-+    with pytest.raises(auth_module.EmployeeTenantContextError):
-+        _link_by_email(env, tenant_id=EMPLOYER, context_tenant_id=OTHER)
-+    with pytest.raises(auth_module.EmployeeTenantContextError):
-+        asyncio.run(auth_module._active_user_id_by_email(
-+            FakeConn(env), EMP_EMAIL, tenant_id=EMPLOYER, context_tenant_id=OTHER
-+        ))
-+    assert not any(key[1] == EMP_ID for key in env.memberships)
-+
-+
-+def test_same_email_in_two_tenants_matches_only_the_right_one(env):
-+    """③ 대소문자만 다른 같은 이메일 계정이 두 테넌트에 있을 때 대상 테넌트 쪽만 매칭한다."""
-+    env.users = {"owner@example.com": ADMIN_ID, "Dup@Example.com": "user-other", "dup@example.com": "user-new"}
-+    # user-other: OTHER 고객 테넌트의 활성 member(default=OTHER, 개인 워크스페이스 아님)
-+    env.defaults["user-other"] = OTHER
-+    env.memberships[(OTHER, "user-other")] = {"role": "member", "status": "active", "deleted": False, "invited_by": None}
-+    # user-new: 아직 어느 고객 테넌트에도 묶이지 않은 계정(default 없음)
-+    env.defaults["user-new"] = None
-+
-+    conn = FakeConn(env)
-+    assert asyncio.run(auth_module._active_user_id_by_email(
-+        conn, "dup@example.com", tenant_id=EMPLOYER, context_tenant_id=EMPLOYER
-+    )) == "user-new"
-+    assert asyncio.run(auth_module._active_user_id_by_email(
-+        conn, "DUP@example.com", tenant_id=OTHER, context_tenant_id=OTHER
-+    )) == "user-other"
-+
-+    result = _link_by_email(env, tenant_id=EMPLOYER, context_tenant_id=EMPLOYER, email="dup@example.com")
-+    assert result["status"] == "linked" and result["user_id"] == "user-new"
-+    assert (EMPLOYER, "user-other") not in env.memberships
-+    assert env.memberships[(OTHER, "user-other")]["role"] == "member"
-+
-+
-+def test_email_lookup_sql_carries_tenant_condition(env):
-+    """컨텍스트 검사를 통과해도 크로스 테넌트 행이 뽑히지 않게 조회 SQL 자체가 테넌트 조건을 건다."""
-+    asyncio.run(auth_module._active_user_id_by_email(
-+        FakeConn(env), EMP_EMAIL, tenant_id=EMPLOYER, context_tenant_id=EMPLOYER
-+    ))
-+    sql = next(q for q in env.sql if "FROM saas_users u" in q)
-+    assert "u.default_tenant_id = $2::uuid" in sql
-+    assert "tm.tenant_id = $2::uuid" in sql
-+    assert "ti.tenant_id = $2::uuid" in sql
-+    assert "pt.created_by = u.id" in sql
-+
-+
-+def test_email_lookup_ambiguous_candidates_pick_nobody(env):
-+    """같은 우선순위 후보가 둘이면 고르지 않는다 — pending_account 로 남긴다."""
-+    env.users = {"owner@example.com": ADMIN_ID, "Twin@example.com": "user-t1", "twin@example.com": "user-t2"}
-+    env.defaults.update({"user-t1": None, "user-t2": None})
-+
-+    result = _link_by_email(env, tenant_id=EMPLOYER, context_tenant_id=EMPLOYER, email="twin@example.com")
-+
-+    assert result["status"] == "pending_account"
-+    assert not any(key[0] == EMPLOYER and key[1].startswith("user-t") for key in env.memberships)
-+
-+
-+def test_review_passes_jwt_tenant_as_lookup_context(env, monkeypatch):
-+    _set_join_request(requester_user_id=None, requester_email=None)
-+    seen: dict = {}
-+    original = auth_module.link_employee_tenant_membership
-+
-+    async def spy(**kwargs):
-+        seen.update(kwargs)
-+        return await original(**kwargs)
-+
-+    monkeypatch.setattr(auth_module, "link_employee_tenant_membership", spy)
-+    assert _review("approved")["membership"]["status"] == "linked"
-+    assert seen["allow_email_lookup"] is True
-+    assert seen["context_tenant_id"] == EMPLOYER == seen["tenant_id"]
-+
-+
-+def test_email_lookup_approval_requires_business_of_jwt_tenant(env):
-+    """사업자 없는(귀속 확인 불가) 가입요청은 이메일 조회 승인 전에 막는다 — 아무것도 저장하지 않는다."""
-+    _set_join_request(requester_user_id=None, requester_email=None, business_id="")
-+
-+    with pytest.raises(HTTPException) as exc:
-+        _review("approved")
-+
-+    assert exc.value.status_code == 400
-+    assert svc._find(svc._read_file_rows("employee_join_requests"), "join-hayh")["status"] == "pending"
-+    assert (EMPLOYER, EMP_ID) not in env.memberships
-+
-+
-+def test_employee_membership_context_rejects_other_tenant_record_and_missing_context(env):
-+    record = dict(svc._read_file_rows("employee_join_requests")[0])
-+    assert svc._require_employee_membership_context(record, ADMIN) == EMPLOYER
-+    with pytest.raises(HTTPException) as other:
-+        svc._require_employee_membership_context({**record, "tenant_id": OTHER}, ADMIN)
-+    assert other.value.status_code == 404
-+    with pytest.raises(HTTPException) as missing:
-+        svc._require_employee_membership_context(record, {**ADMIN, "current_membership": None})
-+    assert missing.value.status_code == 403
-+
-+
-+def test_account_email_changed_since_request_is_identity_mismatch(env):
-+    env.users = {"owner@example.com": ADMIN_ID, "renamed@example.com": EMP_ID}
-+
-+    result = _review("approved")
-+
-+    assert result["membership"]["status"] == "identity_mismatch"
-+    assert (EMPLOYER, EMP_ID) not in env.memberships
-+
-+
-+def test_upsert_join_request_binds_requester_only_for_own_email(env):
-+    employee = _user(EMPLOYER, "member")
-+    own = svc.upsert_join_request({"name": EMP_NAME, "email": EMP_EMAIL, "branch": "열정국밥_미아점"}, employee)
-+    assert own["requester_user_id"] == EMP_ID and own["requester_email"] == EMP_EMAIL
-+    assert svc._join_request_account_id(own) == EMP_ID
-+
-+    forged = svc.upsert_join_request(
-+        {"name": "피해자", "email": "victim@example.com", "branch": "열정국밥_미아점"}, employee
-+    )
-+    assert "requester_user_id" not in forged
-+    assert forged["registered_by"] == EMP_EMAIL
-+    assert svc._join_request_account_id(forged) == ""
-+
-+    # 관리자가 같은 직원 요청을 고쳐도 본인이 남긴 신원 고정은 유지된다.
-+    edited = svc.upsert_join_request({"name": EMP_NAME, "email": EMP_EMAIL, "memo": "메모"}, ADMIN)
-+    assert edited["requester_user_id"] == EMP_ID
-+
-+
-+def test_approval_without_account_stays_pending_and_does_not_fail(env):
-+    del env.users[EMP_EMAIL]
-+
-+    result = _review("approved")
-+
-+    assert result["request"]["status"] == "approved"
-+    assert result["membership"]["status"] == "pending_account"
-+    assert (EMPLOYER, EMP_ID) not in env.memberships
-+    assert _audit()[0]["classification"] == "membership_pending"
-+
-+
-+def test_membership_failure_does_not_fail_approval(env, monkeypatch):
-+    async def boom(**kwargs):
-+        raise RuntimeError("auth db down")
-+
-+    monkeypatch.setattr(auth_module, "link_employee_tenant_membership", boom)
-+
-+    result = _review("approved")
-+
-+    assert result["request"]["status"] == "approved"
-+    assert result["membership"]["status"] == "error"
-+    assert _audit()[0]["classification"] == "membership_failed"
-+
-+
-+def test_non_admin_cannot_approve_and_no_membership_is_created(env):
-+    with pytest.raises(HTTPException) as exc:
-+        _review("approved", _user(EMPLOYER, "member", user_id="user-x", email="x@example.com"))
-+    assert exc.value.status_code == 403
-+    assert (EMPLOYER, EMP_ID) not in env.memberships
-+
-+
-+def test_membership_sql_is_idempotent_and_does_not_demote():
-+    source = inspect.getsource(auth_module.upsert_tenant_membership)
-+    assert "ON CONFLICT (tenant_id, user_id) DO UPDATE" in source
-+    assert "tenant_memberships.role IN ('owner', 'admin')" in source
-+    assert "tenant_memberships.status = 'active'" in source
-+    revoke = inspect.getsource(auth_module.revoke_employee_tenant_membership)
-+    assert "SET status = 'removed'" in revoke
-+    assert "DELETE" not in revoke
-+
-+
-+def test_invite_acceptance_reuses_shared_membership_upsert():
-+    source = inspect.getsource(auth_module.accept_tenant_invite)
-+    assert "upsert_tenant_membership(" in source
-+    assert "INSERT INTO tenant_memberships" not in source
-+
-+
-+@pytest.mark.parametrize("existing_role", [None, "owner", "viewer"])
-+def test_invite_acceptance_behaviour_is_unchanged(monkeypatch, existing_role):
-+    """리뷰 지적 4: 공용 upsert 로 바꾼 뒤에도 초대 수락의 동작·응답이 예전과 같다.
-+
-+    - invited_by 는 초대 행의 값 그대로(saas_users FK 라 서브쿼리를 거쳐도 같은 값)
-+    - 초대 역할이 기존 역할을 덮어쓴다(preserve_elevated_role=False — 예전 SET role = EXCLUDED.role)
-+    - 응답 membership 키는 예전 RETURNING 그대로(membership_id, tenant_id, role, status)
-+    """
-+    from datetime import datetime, timedelta, timezone
-+
-+    db = FakeAuthDB()
-+    db.users["invitee@example.com"] = "user-invitee"
-+    if existing_role:
-+        db.memberships[(EMPLOYER, "user-invitee")] = {
-+            "role": existing_role, "status": "removed", "deleted": False, "invited_by": None,
-+        }
-+    invite = {
-+        "invite_id": "inv-1", "tenant_id": EMPLOYER, "email": "invitee@example.com", "role": "admin",
-+        "status": "pending", "expires_at": datetime.now(timezone.utc) + timedelta(days=1), "invited_by": ADMIN_ID,
-+    }
-+    executed: list[str] = []
-+
-+    class InviteConn(FakeConn):
-+        async def fetchrow(self, sql, *args):
-+            if "FROM tenant_invites" in sql:
-+                return invite
-+            if "SELECT id, email, name FROM saas_users" in sql:
-+                return {"id": args[0], "email": "invitee@example.com", "name": "초대"}
-+            return await super().fetchrow(sql, *args)
-+
-+        async def execute(self, sql, *args):
-+            executed.append(sql)
-+            return "UPDATE 1"
-+
-+    class InvitePool(FakePool):
-+        @asynccontextmanager
-+        async def acquire(self):
-+            yield InviteConn(self.db)
-+
-+    async def ensure_pool():
-+        return InvitePool(db)
-+
-+    async def noop(*args, **kwargs):
-+        return None
-+
-+    async def existing_user(email):
-+        return {"id": "user-invitee", "email": email}
-+
-+    async def authed(email, password):
-+        return {"id": "user-invitee", "email": email}
-+
-+    async def workspace(**kwargs):
-+        return {"id": "ws"}
-+
-+    monkeypatch.setattr(auth_module, "_ensure_pool", ensure_pool)
-+    monkeypatch.setattr(auth_module, "require_saas_schema_ready", noop)
-+    monkeypatch.setattr(auth_module, "get_saas_user_by_email", existing_user)
-+    monkeypatch.setattr(auth_module, "authenticate_saas_user", authed)
-+    monkeypatch.setattr(auth_module, "ensure_default_customer_workspace", workspace)
-+
-+    result = asyncio.run(auth_module.accept_tenant_invite(token="tok", password="pw"))
-+
-+    assert set(result["membership"]) == {"membership_id", "tenant_id", "role", "status"}
-+    assert result["membership"]["role"] == "admin" and result["membership"]["status"] == "active"
-+    stored = db.memberships[(EMPLOYER, "user-invitee")]
-+    assert stored["role"] == "admin" and stored["status"] == "active"
-+    if existing_role is None:
-+        assert stored["invited_by"] == ADMIN_ID
-+    assert any("SET status = 'accepted'" in sql for sql in executed)
-+    assert any("UPDATE saas_users SET default_tenant_id" in sql for sql in executed)
-+
-+
-+def test_review_route_uses_membership_wrapper():
-+    source = inspect.getsource(api.review_employee_join_request)
-+    assert "review_join_request_with_membership" in source
-+
-+
-+# --- 리뷰 지적 8: 감사 I/O 는 이벤트 루프 밖, 동시 기록에서 행 유실 없음 -------
-+def test_membership_audit_io_runs_off_the_event_loop(env, monkeypatch):
-+    import threading
-+
-+    seen = []
-+    original = svc._record_membership_audit_sync
-+
-+    def spy(row):
-+        seen.append(threading.get_ident())
-+        return original(row)
-+
-+    monkeypatch.setattr(svc, "_record_membership_audit_sync", spy)
-+    loop_thread = []
-+
-+    async def run():
-+        loop_thread.append(threading.get_ident())
-+        return await svc.review_join_request_with_membership("join-hayh", "approved", "", ADMIN)
-+
-+    asyncio.run(run())
-+    assert seen and seen[0] != loop_thread[0]
-+
-+
-+def test_concurrent_file_audit_appends_are_not_lost(env):
-+    from concurrent.futures import ThreadPoolExecutor
-+
-+    rows = [{"id": f"a-{i}", "join_request_id": f"j-{i}"} for i in range(40)]
-+    with ThreadPoolExecutor(max_workers=8) as pool:
-+        assert all(pool.map(svc._record_membership_audit_sync, rows))
-+    assert sorted(row["id"] for row in _audit()) == sorted(row["id"] for row in rows)
-+
-+
-+def test_db_audit_failure_falls_back_to_file_ledger(env, monkeypatch):
-+    """리뷰 지적 2: 감사 마이그레이션(HOLD) 적용 전 DB INSERT 가 실패해도 이벤트를 잃지 않는다."""
-+    monkeypatch.setattr(svc, "_db_available", lambda: True)
-+    monkeypatch.setattr(svc, "_run_db", _disable_db)  # 실패 = None
-+
-+    assert svc._record_membership_audit_sync({"id": "a-1", "join_request_id": "j-1"}) is True
-+    rows = _audit()
-+    assert rows[0]["id"] == "a-1" and rows[0]["db_insert_failed"] is True
-+
-+
-+def test_concurrent_reviews_are_serialized(env, monkeypatch):
-+    """리뷰 지적 5: 직전 상태 읽기 → 저장 → 멤버십 동기화가 다른 검토와 끼어들지 않는다."""
-+    import threading
-+    import time as _time
-+
-+    spans: list[tuple[float, float]] = []
-+    original = svc.sync_employee_tenant_membership
-+
-+    async def slow_sync(*args, **kwargs):
-+        start = _time.monotonic()
-+        await asyncio.sleep(0.15)
-+        result = await original(*args, **kwargs)
-+        spans.append((start, _time.monotonic()))
-+        return result
-+
-+    monkeypatch.setattr(svc, "sync_employee_tenant_membership", slow_sync)
-+    results: dict[str, dict] = {}
-+
-+    def run(action):
-+        results[action] = _review(action)
-+
-+    threads = [threading.Thread(target=run, args=(a,)) for a in ("approved", "rejected")]
-+    for t in threads:
-+        t.start()
-+    for t in threads:
-+        t.join(10)
-+
-+    assert len(spans) == 2
-+    (a0, a1), (b0, b1) = sorted(spans)
-+    assert a1 <= b0, "두 검토의 멤버십 동기화가 겹쳤다"
-+    final = svc._find(svc._read_file_rows("employee_join_requests"), "join-hayh")["status"]
-+    member = env.memberships.get((EMPLOYER, EMP_ID))
-+    # 어느 순서로 끝나든 '반려됐는데 활성 멤버' 는 남지 않는다.
-+    if final == "rejected":
-+        assert member is None or member["status"] == "removed"
-+    else:
-+        assert member and member["status"] == "active"
-+
-+
-+# --- R3 실결함 2: flock → DB advisory xact lock --------------------------------
-+def test_membership_serialization_uses_db_advisory_lock_not_flock():
-+    """blue/green 두 컨테이너는 파일시스템이 달라 flock 이 서로를 못 본다 — 락은 인증 DB 에."""
-+    assert not hasattr(svc, "_acquire_join_review_lock")
-+    assert not hasattr(svc, "_release_join_review_lock")
-+    assert not hasattr(svc, "JOIN_REVIEW_LOCK")
-+    review = inspect.getsource(svc.review_join_request_with_membership)
-+    assert "fcntl" not in review and "_join_review_lock" not in review
-+    assert "employee_membership_lock(" in review
-+    assert "pg_advisory_xact_lock($1::bigint)" in inspect.getsource(auth_module._lock_employee_membership)
-+    for fn in (auth_module.link_employee_tenant_membership, auth_module.revoke_employee_tenant_membership):
-+        assert "_lock_employee_membership(conn, tenant_id" in inspect.getsource(fn)
-+    # 최종 보장(UNIQUE(tenant_id, user_id))은 락과 함께 유지한다.
-+    assert "ON CONFLICT (tenant_id, user_id)" in inspect.getsource(auth_module.upsert_tenant_membership)
-+
-+
-+def test_membership_lock_key_is_stable_bigint_per_tenant_and_email():
-+    key = auth_module.employee_membership_lock_key(EMPLOYER, EMP_EMAIL)
-+    assert -(2 ** 63) <= key < 2 ** 63
-+    assert key == auth_module.employee_membership_lock_key(EMPLOYER.upper(), "  DUDGNS3738@Naver.com ")
-+    assert key != auth_module.employee_membership_lock_key(OTHER, EMP_EMAIL)
-+    assert key != auth_module.employee_membership_lock_key(EMPLOYER, "other@example.com")
-+    # 프로세스마다 바뀌는 내장 hash() 가 아니다 — 고정 해시(sha256 앞 8바이트).
-+    assert "hashlib.sha256(" in inspect.getsource(auth_module.employee_membership_lock_key)
-+
-+
-+def test_same_tenant_email_concurrent_links_create_one_membership(env):
-+    """동일 (tenant, email) 두 번 — 동시에 불러도 멤버십은 1건, 둘 다 같은 advisory 키를 잡는다."""
-+    _set_join_request(requester_user_id=None, requester_email=None)
-+    results: list[dict] = []
-+
-+    def run():
-+        results.append(_link_by_email(env, tenant_id=EMPLOYER, context_tenant_id=EMPLOYER))
-+
-+    threads = [threading.Thread(target=run) for _ in range(2)]
-+    for t in threads:
-+        t.start()
-+    for t in threads:
-+        t.join(10)
-+
-+    assert sorted(r["status"] for r in results) == ["linked", "unchanged"]
-+    assert [key for key in env.memberships if key[1] == EMP_ID] == [(EMPLOYER, EMP_ID)]
-+    assert env.memberships[(EMPLOYER, EMP_ID)] == {
-+        "role": "member", "status": "active", "deleted": False, "invited_by": ADMIN_ID,
-+    }
-+    expected = auth_module.employee_membership_lock_key(EMPLOYER, EMP_EMAIL)
-+    assert env.lock_log == [expected, expected]
-+
-+
-+def test_review_holds_advisory_lock_around_state_read_and_membership(env):
-+    """검토 전체가 같은 키의 xact lock 안에서 돈다 — 락 SQL 이 멤버십 SQL 보다 먼저, 끝나면 풀린다."""
-+    _review("approved")
-+    key = auth_module.employee_membership_lock_key(EMPLOYER, EMP_EMAIL)
-+    assert env.lock_log and set(env.lock_log) == {key}
-+    first_lock = next(i for i, q in enumerate(env.sql) if "pg_advisory_xact_lock" in q)
-+    first_membership = next(i for i, q in enumerate(env.sql) if "INSERT INTO tenant_memberships" in q)
-+    assert first_lock < first_membership
-+    lock = env.advisory_lock(key)
-+    assert lock.acquire(blocking=False)  # 트랜잭션이 끝나 풀렸다
-+    lock.release()
-+    _review("rejected")
-+    assert set(env.lock_log) == {key}
-+    assert env.memberships[(EMPLOYER, EMP_ID)]["status"] == "removed"
-+
-+
-+def test_review_proceeds_without_lock_when_auth_db_unreachable(env, monkeypatch):
-+    """인증 DB 에 닿지 못해도 승인 자체는 되돌리지 않는다 — 멤버십은 error 로 감사에 남는다."""
-+    async def down():
-+        raise RuntimeError("auth db down")
-+
-+    monkeypatch.setattr(auth_module, "_ensure_pool", down)
-+    result = _review("approved")
-+    assert result["request"]["status"] == "approved"
-+    assert result["membership"]["status"] == "error"
-+    assert _audit()[0]["classification"] == "membership_failed"
-+
-+
-+def test_db_audit_goes_through_run_db_in_worker(monkeypatch):
-+    """DB 모드에서도 async 경로가 직접 connect 하지 않는다 — 워커 스레드의 _run_db 로만."""
-+    source = inspect.getsource(svc.record_membership_audit)
-+    assert "asyncio.to_thread(_record_membership_audit_sync" in source
-+    assert "_run_db(_db_insert_membership_audit(row))" in inspect.getsource(svc._record_membership_audit_sync)
-+
-+
-+# ---------------------------------------------------------------------------
-+# 2. 로그인 시작 테넌트
-+#
-+# 로그인 때마다 판정하지 않는다(리뷰 지적 6). 승인이 멤버십을 새로 만든 그 한 번,
-+# default 가 본인 혼자인 개인 워크스페이스일 때만 default_tenant_id 를 고용주로
-+# 옮기고, 로그인은 기존 규칙(default 존중)을 그대로 쓴다.
-+# ---------------------------------------------------------------------------
-+@pytest.fixture
-+def no_new_tenant(monkeypatch):
-+    async def ensure_customer(**kwargs):  # pragma: no cover - 호출되면 실패
-+        raise AssertionError("소속 조직이 있는 사용자에게 새 조직을 만들면 안 된다")
-+
-+    monkeypatch.setattr(auth_module, "ensure_customer_tenant_for_user", ensure_customer)
-+
-+
-+def _listing_from(db: FakeAuthDB):
-+    async def list_tenants(user_id):
-+        rows = []
-+        for (tenant_id, uid), m in db.memberships.items():
-+            if uid == user_id and m["status"] == "active" and not m["deleted"]:
-+                rows.append({"tenant_id": tenant_id, "kind": db.tenants[tenant_id], "role": m["role"]})
-+        return rows
-+
-+    return list_tenants
-+
-+
-+def _login_tenant(db: FakeAuthDB, user_id: str = EMP_ID, email: str = EMP_EMAIL, role: str = "user"):
-+    return asyncio.run(auth_module.resolve_login_tenant_for_user(
-+        {"id": user_id, "email": email, "role": role, "default_tenant_id": db.defaults.get(user_id)}
-+    ))
-+
-+
-+@pytest.fixture
-+def login_env(env, monkeypatch, no_new_tenant):
-+    env.memberships[(PERSONAL, EMP_ID)] = {"role": "owner", "status": "active", "deleted": False, "invited_by": None}
-+    monkeypatch.setattr(auth_module, "list_user_tenants", _listing_from(env))
-+    return env
-+
-+
-+def test_employee_with_personal_default_starts_in_employer_tenant(login_env):
-+    assert _login_tenant(login_env) == PERSONAL  # 승인 전 — 사고 당시 상태
-+    result = _review("approved")
-+
-+    assert result["membership"]["default_tenant"] == {"before": PERSONAL, "after": EMPLOYER}
-+    assert login_env.defaults[EMP_ID] == EMPLOYER
-+    assert _login_tenant(login_env) == EMPLOYER
-+
-+
-+def test_explicit_switch_back_to_personal_survives_reapproval(login_env):
-+    """재승인(unchanged)은 default 를 다시 건드리지 않는다 — 사용자가 고른 개인 워크스페이스가 이긴다."""
-+    _review("approved")
-+    login_env.defaults[EMP_ID] = PERSONAL  # /auth/tenants/{id}/switch 가 하는 일
-+
-+    assert _review("approved")["membership"]["status"] == "unchanged"
-+    assert login_env.defaults[EMP_ID] == PERSONAL
-+    assert _login_tenant(login_env) == PERSONAL
-+
-+
-+def test_non_personal_default_is_not_moved(login_env):
-+    """default 가 개인 워크스페이스가 아니면(본인 사업장 등) 승인이 시작 테넌트를 바꾸지 않는다."""
-+    login_env.personal.clear()
-+
-+    result = _review("approved")
-+
-+    assert result["membership"]["status"] == "linked"
-+    assert result["membership"]["default_tenant"] is None
-+    assert login_env.defaults[EMP_ID] == PERSONAL
-+    assert _login_tenant(login_env) == PERSONAL
-+
-+
-+def test_invited_member_elsewhere_keeps_personal_default(login_env):
-+    """일반 초대 member(직원 승인 경로 밖)는 로그인 테넌트가 바뀌지 않는다."""
-+    login_env.memberships[(OTHER, EMP_ID)] = {"role": "member", "status": "active", "deleted": False, "invited_by": None}
-+    assert _login_tenant(login_env) == PERSONAL
-+
-+
-+def test_revoked_employee_falls_back_from_employer_default(login_env, monkeypatch):
-+    """회수 후 default(고용주)가 소속이 아니면 기존 폴백 — 기존 활성 customer 소속(개인 워크스페이스)."""
-+    async def ensure_customer(**kwargs):
-+        rows = await _listing_from(login_env)(kwargs["user_id"])
-+        return next(row for row in rows if row["kind"] == "customer")
-+
-+    monkeypatch.setattr(auth_module, "ensure_customer_tenant_for_user", ensure_customer)
-+    _review("approved")
-+    _review("rejected")
-+    assert _login_tenant(login_env) == PERSONAL
-+
-+
-+def test_login_resolution_has_no_employee_heuristic():
-+    source = inspect.getsource(auth_module.resolve_login_tenant_for_user)
-+    assert "is_personal_workspace" not in source
-+    assert not hasattr(auth_module, "_employer_tenant_over_personal_default")
-+    switch = inspect.getsource(auth_module.switch_user_tenant)
-+    assert "UPDATE tenant_memberships" not in switch
-+
-+
-+def _tenants(*rows):
-+    async def list_tenants(user_id):
-+        return list(rows)
-+
-+    return list_tenants
-+
-+
-+async def test_ceo_default_tenant_is_still_respected(monkeypatch, no_new_tenant):
-+    """2026-09-22 회귀: CEO 가 고른 열정국밥 조직이 internal 로 되돌아가면 안 된다."""
-+    monkeypatch.setattr(auth_module, "_is_internal_tenant_principal", lambda email, role: True)
-+    monkeypatch.setattr(
-+        auth_module,
-+        "list_user_tenants",
-+        _tenants({"tenant_id": INTERNAL, "kind": "internal", "role": "owner"},
-+                 {"tenant_id": YEOLJEONG, "kind": "customer", "role": "owner"}),
-+    )
-+    tenant_id = await auth_module.resolve_login_tenant_for_user(
-+        {"id": "u-ceo", "email": "moongoby@naver.com", "role": "ceo", "default_tenant_id": YEOLJEONG}
-+    )
-+    assert tenant_id == YEOLJEONG
-+
-+
-+async def test_internal_principal_without_default_still_starts_internal(monkeypatch, no_new_tenant):
-+    monkeypatch.setattr(auth_module, "_is_internal_tenant_principal", lambda email, role: True)
-+    monkeypatch.setattr(
-+        auth_module, "list_user_tenants",
-+        _tenants({"tenant_id": INTERNAL, "kind": "internal", "role": "owner"},
-+                 {"tenant_id": EMPLOYER, "kind": "customer", "role": "member"}),
-+    )
-+    tenant_id = await auth_module.resolve_login_tenant_for_user(
-+        {"id": "u-ceo", "email": "moongoby@naver.com", "role": "ceo"}
-+    )
-+    assert tenant_id == INTERNAL
-+
-+
-+def test_default_move_sql_only_targets_sole_owner_personal_workspace():
-+    source = inspect.getsource(auth_module._move_default_off_personal_workspace)
-+    assert "t.created_by = $2::text" in source
-+    assert "tm.role = 'owner'" in source
-+    # 리뷰 지적 7: 본인 owner 멤버십이 회수·삭제된 곳은 개인 워크스페이스가 아니다.
-+    assert "tm.status = 'active'" in source
-+    assert "tm.deleted_at IS NULL" in source
-+    assert "o.user_id <> $2::text" in source
-+    link = inspect.getsource(auth_module.link_employee_tenant_membership)
-+    assert "if not active_before:" in link
-+
-+
-+# ---------------------------------------------------------------------------
-+# 3. 게이트
-+# ---------------------------------------------------------------------------
-+# 서비스가 만드는 서명 토큰 모양(secrets.token_urlsafe(24) → URL-safe 32자).
-+TOK = "AbCdEfGhIjKlMnOpQrStUvWxYz012-_9"
-+assert len(TOK) == 32
-+
-+
-+def _request(path, method="GET"):
-+    return SimpleNamespace(url=SimpleNamespace(path=path), method=method)
-+
-+
-+@pytest.mark.parametrize(
-+    "method,path",
-+    [("POST", "/api/v1/yeoljeong-finance/contracts/signing"),
-+     ("GET", f"/api/v1/yeoljeong-finance/contracts/signing/{TOK}")],
-+)
-+async def test_gate_opens_only_signing_routes_for_non_legacy_tenant(monkeypatch, method, path):
-+    monkeypatch.delenv("OBYS_LEGACY_TENANT_IDS", raising=False)
-+    user = {"tenant_id": EMPLOYER}
-+    assert await obys_tenant.require_legacy_obys_access(_request(path, method), user) is user
-+
-+
-+@pytest.mark.parametrize(
-+    "method,path",
-+    [
-+        ("GET", "/api/v1/yeoljeong-finance/contracts"),
-+        ("POST", "/api/v1/yeoljeong-finance/contracts"),
-+        ("POST", "/api/v1/yeoljeong-finance/contracts/abc/request-signature"),
-+        ("GET", "/api/v1/yeoljeong-finance/contracts/signing-export"),
-+        ("POST", f"/api/v1/yeoljeong-finance/contracts/signing/{TOK}"),
-+        ("GET", "/api/v1/yeoljeong-finance/contracts/signing"),
-+        # DELETE /contracts/{id}, GET /contracts/{id}/signed-pdf 에 id="signing" 을 넣는 우회
-+        ("DELETE", "/api/v1/yeoljeong-finance/contracts/signing"),
-+        ("GET", "/api/v1/yeoljeong-finance/contracts/signing/signed-pdf"),
-+        ("POST", "/api/v1/yeoljeong-finance/contracts/signing/signed-pdf/regenerate"),
-+        ("GET", "/api/v1/yeoljeong-finance/employees/join-requests"),
-+    ],
-+)
-+async def test_gate_keeps_other_contract_routes_closed(monkeypatch, method, path):
-+    monkeypatch.delenv("OBYS_LEGACY_TENANT_IDS", raising=False)
-+    with pytest.raises(HTTPException) as exc:
-+        await obys_tenant.require_legacy_obys_access(_request(path, method), {"tenant_id": EMPLOYER})
-+    assert exc.value.status_code == 403
-+
-+
-+@pytest.mark.parametrize(
-+    "path",
-+    [
-+        # 리뷰 지적 5: 기존 prefix 는 예전처럼 startswith 로 판정한다(부분 일치 포함, 동작 변경 없음).
-+        "/api/v1/yeoljeong-finance/journals",
-+        "/api/v1/yeoljeong-finance/journals/v-1/reverse",
-+        "/api/v1/yeoljeong-finance/journals-export",
-+        "/api/v1/yeoljeong-finance/sessionX",
-+        "/api/v1/yeoljeong-finance/uploads/commit",
-+    ],
-+)
-+@pytest.mark.parametrize("method", ["GET", "POST", "DELETE"])
-+async def test_gate_existing_prefixes_keep_startswith_semantics(monkeypatch, path, method):
-+    monkeypatch.delenv("OBYS_LEGACY_TENANT_IDS", raising=False)
-+    user = {"tenant_id": EMPLOYER}
-+    assert await obys_tenant.require_legacy_obys_access(_request(path, method), user) is user
-+
-+
-+def _first_route(path: str, method: str):
-+    """FastAPI 가 실제로 고르는 첫 라우트(등록 순서 그대로). 없으면 None."""
-+    from starlette.routing import Match
-+
-+    for route in api.router.routes:
-+        match, _ = route.matches({"type": "http", "path": path, "method": method, "root_path": ""})
-+        if match == Match.FULL:
-+            return route
-+    return None
-+
-+
-+def test_gate_open_paths_resolve_only_to_signing_handlers():
-+    """리뷰 지적 6: 게이트가 여는 (메서드, 경로) 는 실제 라우트 표에서 서명 핸들러 둘로만 풀린다.
-+
-+    obys_finance 의 모든 라우트를 훑어 경로 변수에 'signing'·토큰 모양 값을 넣고, 그중
-+    게이트가 비레거시 테넌트에 여는 요청이 서명 조회·서명 외 다른 핸들러로 가지 않는지
-+    FastAPI 매칭으로 확인한다. /contracts/{id}/<sub> 가 새로 생겨도 이 테스트가 잡는다.
-+    """
-+    import re as _re
-+
-+    signing_handlers = {
-+        route.endpoint
-+        for route in api.router.routes
-+        if getattr(route, "path", "") in (
-+            "/yeoljeong-finance/contracts/signing/{token}",
-+            "/yeoljeong-finance/contracts/signing",
-+        )
-+    }
-+    assert signing_handlers == {api.get_contract_signing, api.sign_contract}
-+
-+    probes = set()
-+    for route in api.router.routes:
-+        path = "/api/v1" + getattr(route, "path", "")
-+        for value in ("signing", TOK, "signed-pdf"):
-+            probes.add(_re.sub(r"\{[^}]+\}", value, path))
-+    probes.update({
-+        "/api/v1/yeoljeong-finance/contracts/signing/signed-pdf",
-+        f"/api/v1/yeoljeong-finance/contracts/signing/{TOK}/signed-pdf",
-+        f"/api/v1/yeoljeong-finance/contracts/signing/{TOK}/signed-pdf/regenerate",
-+    })
-+    opened = 0
-+    for probe in sorted(probes):
-+        if not probe.startswith("/api/v1/yeoljeong-finance/contracts"):
-+            continue
-+        for method in ("GET", "POST", "PUT", "PATCH", "DELETE"):
-+            if not obys_tenant._is_contract_signing_route(method, probe):
-+                continue
-+            route = _first_route(probe[len("/api/v1"):], method)
-+            assert route is None or route.endpoint in signing_handlers, (method, probe, route.path)
-+            opened += 1
-+    assert opened >= 2
-+
-+
-+def test_gate_did_not_widen_legacy_allow_list(monkeypatch):
-+    monkeypatch.delenv("OBYS_LEGACY_TENANT_IDS", raising=False)
-+    assert obys_tenant._allowed_tenant_ids() == frozenset({YEOLJEONG})
-+
-+
-+# --- R3 실결함 3: 서명 게이트 GET 하위경로는 명시적 화이트리스트 ----------------------
-+_SIGNING = "/api/v1/yeoljeong-finance/contracts/signing"
-+_LOOKALIKES = [
-+    ("GET", f"{_SIGNING}-extra"),
-+    ("GET", f"{_SIGNING}-extra/{TOK}"),
-+    ("GET", f"{_SIGNING}/{TOK}-extra"),
-+    ("GET", f"{_SIGNING}/{TOK}/sub"),
-+    ("GET", f"{_SIGNING}/{TOK}/"),
-+    ("GET", f"{_SIGNING}/{TOK[:-1]}"),
-+    ("GET", f"{_SIGNING}/{TOK}%2Fsub"),
-+    ("GET", f"{_SIGNING}/"),
-+    ("GET", f"{_SIGNING}/sub/{TOK}"),
-+    ("GET", f"{_SIGNING}/{TOK}\n"),
-+    ("POST", f"{_SIGNING}-extra"),
-+    ("POST", f"{_SIGNING}/"),
-+    ("POST", f"{_SIGNING}/sub"),
-+    ("PUT", f"{_SIGNING}/{TOK}"),
-+    ("PATCH", _SIGNING),
-+]
-+
-+
-+@pytest.mark.parametrize("method,path", _LOOKALIKES)
-+async def test_gate_whitelist_does_not_open_lookalike_paths(monkeypatch, method, path):
-+    monkeypatch.delenv("OBYS_LEGACY_TENANT_IDS", raising=False)
-+    assert not obys_tenant._is_contract_signing_route(method, path)
-+    with pytest.raises(HTTPException) as exc:
-+        await obys_tenant.require_legacy_obys_access(_request(path, method), {"tenant_id": EMPLOYER})
-+    assert exc.value.status_code == 403
-+
-+
-+@pytest.mark.parametrize("method,path", _LOOKALIKES)
-+async def test_gate_whitelist_miss_keeps_legacy_tenant_access(monkeypatch, method, path):
-+    """화이트리스트 밖 경로는 기존 판정(레거시 테넌트 허용목록)을 그대로 탄다 — 새 403 없음."""
-+    monkeypatch.delenv("OBYS_LEGACY_TENANT_IDS", raising=False)
-+    user = {"tenant_id": YEOLJEONG}
-+    assert await obys_tenant.require_legacy_obys_access(_request(path, method), user) is user
-+
-+
-+def test_gate_whitelist_accepts_every_service_generated_token():
-+    import secrets as _secrets
-+
-+    for _ in range(200):
-+        token = _secrets.token_urlsafe(24)
-+        assert obys_tenant._is_contract_signing_route("GET", f"{_SIGNING}/{token}"), token
-+    assert "secrets.token_urlsafe(24)" in inspect.getsource(svc.request_contract_signature)
-+    assert obys_tenant._is_contract_signing_route("POST", _SIGNING)
-+    assert obys_tenant._is_contract_signing_route("post", _SIGNING)
-+
-+
-+def test_gate_whitelist_is_exact_not_prefix():
-+    source = inspect.getsource(obys_tenant._is_contract_signing_route)
-+    assert "fullmatch" in source and "startswith" not in source
-+
-+
-+def test_signing_lookups_are_bound_to_jwt_tenant():
-+    """prefix 추가의 전제: 토큰 조회는 _read_hr(테넌트 SQL 스코프) 로만, 레코드는 다시 대조."""
-+    for fn in (svc.get_contract_by_token, svc.sign_contract):
-+        source = inspect.getsource(fn)
-+        assert '_read_hr("contracts", user)' in source
-+        assert "_contract_signer_email(contract, user)" in source
-+    assert "_require_hr_record(contract, user" in inspect.getsource(svc._contract_signer_email)
-+    assert "_is_admin(user)" in inspect.getsource(svc._contract_signer_email)
-+
-+
-+# ---------------------------------------------------------------------------
-+# 4. 끝까지: 승인 직원이 requested 계약서를 조회·서명
-+# ---------------------------------------------------------------------------
-+def _png() -> bytes:
-+    from PIL import Image, ImageDraw
-+
-+    image = Image.new("RGB", (320, 120), "white")
-+    ImageDraw.Draw(image).line((12, 96, 300, 24), fill="black", width=5)
-+    buffer = BytesIO()
-+    image.save(buffer, "PNG")
-+    return buffer.getvalue()
-+
-+
-+def _contract_payload():
-+    return {
-+        "employee_request_id": "join-hayh", "business_id": "biz-mia", "branch": "열정국밥_미아점",
-+        "contract_type": "regular", "employment_tax_type": "four_insurance",
-+        "start_date": "2026-07-22", "contract_date": "2026-07-22", "wage_type": "monthly",
-+        "wage": 2800000, "workplace": "열정국밥 미아점", "job_description": "매장 운영",
-+        "work_time": "09:00-18:00", "rest_time": "12:00-13:00", "weekly_hours": "주 40시간",
-+        "work_days": "주 5일", "holidays": "매주 일요일", "pay_date": "매월 10일",
-+        "pay_method": "계좌이체", "wage_composition": "기본급 및 법정수당",
-+        "overtime_terms": "사전 승인 및 법정 가산수당", "leave_terms": "법정 연차유급휴가",
-+        "insurance_terms": "4대보험 법정 기준 적용",
-+    }
-+
-+
-+def _sign_body(token):
-+    return {
-+        "token": token,
-+        "signer_name": EMP_NAME,
-+        "consent": True,
-+        "consent_version": svc.CONTRACT_SIGNATURE_CONSENT_VERSION,
-+        "signature_data_uri": "data:image/png;base64," + base64.b64encode(_png()).decode("ascii"),
-+    }
-+
-+
-+def _client(user):
-+    app = FastAPI()
-+    app.include_router(api.router, prefix="/api/v1")
-+    app.dependency_overrides[api.get_current_user] = lambda: user
-+    return TestClient(app)
-+
-+
-+def _employee_context_after_login(db: FakeAuthDB) -> dict:
-+    """승인으로 생긴 멤버십 행으로 get_current_user 가 만들 컨텍스트."""
-+    membership = db.memberships[(EMPLOYER, EMP_ID)]
-+    assert membership["status"] == "active"
-+    return _user(EMPLOYER, membership["role"])
-+
-+
-+def _requested_token():
-+    saved = svc.save_contract(_contract_payload(), ADMIN)
-+    return svc.request_contract_signature(saved["id"], ADMIN)["sign_token"]
-+
-+
-+def test_approved_employee_views_and_signs_requested_contract(env):
-+    _review("approved")
-+    employee = _employee_context_after_login(env)
-+    token = _requested_token()
-+    client = _client(employee)
-+
-+    viewed = client.get(f"/api/v1/yeoljeong-finance/contracts/signing/{token}")
-+    assert viewed.status_code == 200, viewed.text
-+    assert viewed.json()["contract"]["status"] == "requested"
-+
-+    signed = client.post("/api/v1/yeoljeong-finance/contracts/signing", json=_sign_body(token))
-+    assert signed.status_code == 200, signed.text
-+    contract = signed.json()["contract"]
-+    assert contract["status"] == "signed"
-+    assert contract["signed_at"]
-+    assert len(contract["signature_sha256"]) == 64
-+    assert len(contract["signed_snapshot_sha256"]) == 64
-+    assert contract["signer_email"] == EMP_EMAIL
-+    stored = next(row for row in svc._read_file_rows("contracts") if row["id"] == contract["id"])
-+    assert stored["status"] == "signed"
-+    assert stored["tenant_id"] == EMPLOYER
-+
-+
-+def test_employee_lookalike_signing_path_is_not_opened_by_gate(env):
-+    """화이트리스트 경로는 직원으로 200(위 테스트), 같은 라우트에 걸리는 유사 경로는 게이트가 403."""
-+    _review("approved")
-+    employee = _employee_context_after_login(env)
-+    token = _requested_token()
-+    client = _client(employee)
-+
-+    assert client.get(f"/api/v1/yeoljeong-finance/contracts/signing/{token}").status_code == 200
-+    blocked = client.get(f"/api/v1/yeoljeong-finance/contracts/signing/{token}-extra")
-+    assert blocked.status_code == 403
-+    assert "레거시 데이터 접근 권한" in blocked.json()["detail"]
-+    assert svc._read_file_rows("contracts")[0]["status"] == "requested"
-+
-+
-+def test_employee_in_personal_workspace_still_cannot_reach_contract(env):
-+    """개인 워크스페이스(owner) 컨텍스트로 오면 — 이번 사고의 원래 상태 — 403."""
-+    _review("approved")
-+    token = _requested_token()
-+    client = _client(_user(PERSONAL, "owner"))
-+
-+    assert client.get(f"/api/v1/yeoljeong-finance/contracts/signing/{token}").status_code == 403
-+    assert client.post("/api/v1/yeoljeong-finance/contracts/signing", json=_sign_body(token)).status_code == 403
-+    stored = svc._read_file_rows("contracts")[0]
-+    assert stored["status"] == "requested"
-+
-+
-+def test_admin_still_cannot_sign_on_behalf_of_employee(env):
-+    _review("approved")
-+    token = _requested_token()
-+    client = _client(ADMIN)
-+
-+    assert client.get(f"/api/v1/yeoljeong-finance/contracts/signing/{token}").status_code == 403
-+    response = client.post("/api/v1/yeoljeong-finance/contracts/signing", json=_sign_body(token))
-+    assert response.status_code == 403
-+    assert "관리자는 직원 대신" in response.json()["detail"]
-+
-+
-+def test_other_tenant_account_gets_403_for_view_and_sign(env):
-+    _review("approved")
-+    token = _requested_token()
-+    # 같은 이메일이라도 다른 테넌트 컨텍스트면 계약서가 보이지 않는다.
-+    for user in (_user(OTHER, "member"), _user(OTHER, "member", user_id="user-z", email="z@example.com")):
-+        client = _client(user)
-+        assert client.get(f"/api/v1/yeoljeong-finance/contracts/signing/{token}").status_code == 403
-+        assert client.post("/api/v1/yeoljeong-finance/contracts/signing", json=_sign_body(token)).status_code == 403
-+    assert svc._read_file_rows("contracts")[0]["status"] == "requested"
-+
-+
-+def test_revoked_employee_cannot_sign(env):
-+    _review("approved")
-+    token = _requested_token()
-+    _review("rejected")
-+    assert env.memberships[(EMPLOYER, EMP_ID)]["status"] == "removed"
-+    # 회수 후에는 get_current_user 가 고용주 테넌트 컨텍스트를 만들지 못한다(멤버십 없음).
-+    # 남은 경로는 개인 워크스페이스뿐이고, 거기서는 계약서가 보이지 않는다.
-+    client = _client(_user(PERSONAL, "owner"))
-+    assert client.get(f"/api/v1/yeoljeong-finance/contracts/signing/{token}").status_code == 403
-+
-+
-+# ---------------------------------------------------------------------------
-+# 5. 백필 스크립트 판정
-+# ---------------------------------------------------------------------------
-+def test_backfill_plan_matches_service_rules():
-+    from scripts import obys_employee_membership_backfill as backfill
-+
-+    active = lambda role: {"role": role, "status": "active", "deleted": False}  # noqa: E731
-+    assert backfill.plan_action(tenant_kind="internal", user_id="u", before=None) == "skipped"
-+    assert backfill.plan_action(tenant_kind="customer", user_id=None, before=None) == "pending_account"
-+    assert backfill.plan_action(tenant_kind="customer", user_id="u", before=None) == "link"
-+    assert backfill.plan_action(tenant_kind="customer", user_id="u", before=active("member")) == "unchanged"
-+    assert backfill.plan_action(tenant_kind="customer", user_id="u", before=active("owner")) == "kept_elevated"
-+    assert backfill.plan_action(tenant_kind="customer", user_id="u", before=active("admin")) == "kept_elevated"
-+    assert backfill.plan_action(
-+        tenant_kind="customer", user_id="u", before={"role": "admin", "status": "removed", "deleted": False}
-+    ) == "link"
-+    rows = [{"tenant_id": EMPLOYER, "email": "a@x"}, {"tenant_id": EMPLOYER, "email": "a@x"},
-+            {"tenant_id": EMPLOYER, "email": ""}, {"tenant_id": OTHER, "email": "a@x"}]
-+    assert backfill.dedupe_targets(rows) == [rows[0], rows[3]]
-+
-+
-+def test_backfill_defaults_to_dry_run():
-+    from scripts import obys_employee_membership_backfill as backfill
-+
-+    source = inspect.getsource(backfill.run)
-+    assert "if args.apply and action == \"link\"" in source
-+    assert "MARK_LINK_SQL" in source and "_move_default_off_personal_workspace" in source
-+    assert "request_payload->>'requester_user_id'" in backfill.APPROVED_JOIN_REQUESTS_SQL
-+    assert 'parser.add_argument("--apply", action="store_true"' in inspect.getsource(backfill.main)
-+
-+
-+def test_backfill_dry_run_prints_targets_and_writes_nothing(monkeypatch, capsys):
-+    """dry-run 은 대상·변경 전후를 출력하고 upsert/감사를 부르지 않는다."""
-+    import sys
-+    import types
-+
-+    from scripts import obys_employee_membership_backfill as backfill
-+
-+    rows = [
-+        {"id": "j1", "tenant_id": YEOLJEONG, "business_id": "biz-mia", "email": EMP_EMAIL, "reviewed_by": "owner@example.com"},
-+        {"id": "j2", "tenant_id": YEOLJEONG, "business_id": "biz-mia", "email": "beullingma3@gmail.com", "reviewed_by": ""},
-+        {"id": "j3", "tenant_id": YEOLJEONG, "business_id": "biz-mia", "email": "not-signed-up@example.com", "reviewed_by": ""},
-+    ]
-+    users = {EMP_EMAIL: EMP_ID, "beullingma3@gmail.com": "user-admin", "owner@example.com": ADMIN_ID}
-+
-+    class Conn:
-+        @asynccontextmanager
-+        async def transaction(self):
-+            yield
-+
-+        async def fetch(self, sql, *args):
-+            if "FROM saas_users u" in sql:
-+                # 테넌트 조건 조회 — 컨텍스트는 가입요청 행의 tenant_id 다.
-+                assert args[1] == YEOLJEONG
-+                uid = users.get(args[0])
-+                return [{"id": uid, "bound_to_tenant": False}] if uid else []
-+            return rows
-+
-+        async def execute(self, sql, *args):
-+            raise AssertionError("dry-run 이 advisory lock·쓰기를 했다")
-+
-+        async def fetchval(self, sql, *args):
-+            return "customer" if "FROM tenants" in sql else users.get(args[0])
-+
-+        async def fetchrow(self, sql, *args):
-+            assert "INSERT INTO" not in sql and "SET status" not in sql
-+            return {"role": "owner", "status": "active", "deleted": False} if args[1] == "user-admin" else None
-+
-+        async def close(self):
-+            return None
-+
-+    async def connect(*args, **kwargs):
-+        return Conn()
-+
-+    async def forbidden(*args, **kwargs):  # pragma: no cover - 호출되면 실패
-+        raise AssertionError("dry-run 이 쓰기를 했다")
-+
-+    monkeypatch.setitem(sys.modules, "asyncpg", types.SimpleNamespace(connect=connect))
-+    monkeypatch.setattr(auth_module, "upsert_tenant_membership", forbidden)
-+    monkeypatch.setattr(backfill, "_record_audit", forbidden)
-+
-+    assert backfill.main(["--obys-dsn", "obys", "--auth-dsn", "auth"]) == 0
-+    out = capsys.readouterr().out
-+    assert "[DRY-RUN]" in out
-+    assert f"{EMP_EMAIL}" in out and "link" in out and "member/active (예정)" in out
-+    assert "kept_elevated" in out and "pending_account" in out
-+    assert '"link": 1' in out
-+    print(out)  # -rP 로 실행하면 dry-run 출력 예시를 그대로 볼 수 있다
++        return _Row(7)
++
++    async def fetch(self, sql, *args):
++        self.view_lookups.append(args)
++        if self.fetch_error:
++            raise self.fetch_error
++        return [{"hit": 1}] if self.views else []
++
++    async def prepare(self, sql):
++        return _Stmt(self.log)
++
++
++class _Pool:
++    def __init__(self, conn):
++        self.conn = conn
++
++    def acquire(self):
++        conn = self.conn
++
++        class _A:
++            async def __aenter__(self):
++                return conn
++
++            async def __aexit__(self, *args):
++                return False
++        return _A()
++
++
++def _no_pool():
++    raise AssertionError("pool must not be acquired")
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("dry_run", [False, True])
++@pytest.mark.parametrize("sql", [
++    _sql("SELECT", "some_fn(1)"),
++    _sql("CALL", "proc()"),
++    "DO $$ BEGIN PERFORM some_fn(1); END $$",
++    _sql("UPDATE", "t", "SET", "a", "=", "my_fn(1)"),
++    _sql("UPDATE", "t", "SET", "a", "=", "public.my_fn(1)", "WHERE", "id", "=", "$1"),
++])
++async def test_indirect_call_rejected_before_pool(sql, dry_run):
++    with patch("app.core.db_pool.get_pool", side_effect=_no_pool):
++        result = await ToolExecutor()._db_safe_write({"sql": sql, "dry_run": dry_run})
++    assert result["blocked"] is True
++    assert result["dry_run"] is dry_run
++    assert "차단" in result["error"]
++
++
++@pytest.mark.asyncio
++async def test_indirect_call_rejected_via_dispatch_before_pool():
++    with patch("app.core.db_pool.get_pool", side_effect=_no_pool):
++        result = await ToolExecutor()._dispatch("db_safe_write", {"sql": _sql("CALL", "proc()")})
++    assert result["blocked"] is True
++
++
++@pytest.mark.asyncio
++async def test_builtin_function_write_is_executed():
++    conn = _Conn()
++    sql = _sql("UPDATE", "t", "SET", "updated_at", "=", "now()", "WHERE", "id", "=", "$1")
++    with patch("app.core.db_pool.get_pool", return_value=_Pool(conn)):
++        result = await ToolExecutor()._db_safe_write({"sql": sql, "params": [1], "dry_run": False})
++    assert result["success"] is True
++    assert "write" in conn.log
++    assert "set" not in conn.log  # 보호 경로(SET LOCAL)를 타지 않는다
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("dry_run", [False, True])
++async def test_view_target_rejected(dry_run):
++    conn = _Conn(views=["v_accounts"])
++    sql = _sql("UPDATE", "Reports.V_Accounts", "SET", "a", "=", "1")
++    with patch("app.core.db_pool.get_pool", return_value=_Pool(conn)):
++        result = await ToolExecutor()._db_safe_write({"sql": sql, "dry_run": dry_run})
++    assert result["blocked"] is True and result["dry_run"] is dry_run
++    assert "뷰" in result["error"]
++    assert conn.view_lookups == [("v_accounts", "reports")]
++    assert conn.log == []  # 트랜잭션·쓰기 모두 시작 전
++
++
++@pytest.mark.asyncio
++async def test_view_lookup_failure_fails_closed():
++    conn = _Conn(fetch_error=RuntimeError("boom"))
++    sql = _sql("UPDATE", "t", "SET", "a", "=", "1")
++    with patch("app.core.db_pool.get_pool", return_value=_Pool(conn)):
++        result = await ToolExecutor()._db_safe_write({"sql": sql})
++    assert result["blocked"] is True
++    assert "write" not in conn.log
++
++
++@pytest.mark.asyncio
++async def test_assert_target_not_view_lookup_contract():
++    conn = _Conn()
++    await assert_target_not_view(conn, None)
++    assert conn.view_lookups == []
++    await assert_target_not_view(conn, WriteTarget(None, "t"))
++    assert conn.view_lookups == [("t", "")]
++    with pytest.raises(VaultViewTargetBlocked):
++        await assert_target_not_view(_Conn(views=["x"]), WriteTarget("public", "x"))
++    with pytest.raises(VaultGuardUnavailable):
++        await assert_target_not_view(_Conn(fetch_error=OSError("x")), WriteTarget(None, "t"))
++
++
++def _snapshot_stubs(seen: list[str], after_deleted: bool = False):
++    def _user(deleted):
++        return {"email": "a@x", "status": "active", "is_active": True,
++                "deleted_at": "now" if deleted else None, "default_tenant_id": None}
++
++    async def _before(conn):
++        seen.append("snapshot")
++        return LoginSnapshot(users={"u1": _user(False)})
++
++    async def _after(conn, before):
++        seen.append("reload")
++        return LoginSnapshot(users={"u1": _user(after_deleted)})
++
++    return _before, _after
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("sql", [
++    _sql("UPDATE", "db.public.accounts", "SET", "a", "=", "1"),
++    _sql("DELETE FROM", "db.public.accounts", "WHERE", "a", "=", "1"),
++])
++async def test_unresolved_target_forces_protection_check(sql):
++    conn, seen = _Conn(), []
++    before, after = _snapshot_stubs(seen)
++    with patch("app.core.db_pool.get_pool", return_value=_Pool(conn)), \
++            patch("app.services.vault_cleanup_guard.protected_login_snapshot", before), \
++            patch("app.services.vault_cleanup_guard.reload_snapshot", after):
++        result = await ToolExecutor()._db_safe_write({"sql": sql})
++    assert result["vault_guard"] is True and result["success"] is True
++    assert seen == ["snapshot", "reload"]
++    assert conn.log == ["begin", "set", "write", "commit"]
++
++
++@pytest.mark.asyncio
++async def test_unresolved_target_that_kills_login_is_rolled_back():
++    conn, seen = _Conn(), []
++    before, after = _snapshot_stubs(seen, after_deleted=True)
++    sql = _sql("UPDATE", "db.public.accounts", "SET", "a", "=", "1")
++    with patch("app.core.db_pool.get_pool", return_value=_Pool(conn)), \
++            patch("app.services.vault_cleanup_guard.protected_login_snapshot", before), \
++            patch("app.services.vault_cleanup_guard.reload_snapshot", after):
++        result = await ToolExecutor()._db_safe_write({"sql": sql})
++    assert result["blocked"] is True and result["success"] is False
++    assert conn.log[-1] == "rollback"
++
++
++@pytest.mark.asyncio
++async def test_unresolved_target_guard_unavailable_blocks():
++    conn = _Conn()
++
++    async def _fail(c):
++        raise VaultGuardUnavailable("조회 실패")
++
++    sql = _sql("UPDATE", "db.public.accounts", "SET", "a", "=", "1")
++    with patch("app.core.db_pool.get_pool", return_value=_Pool(conn)), \
++            patch("app.services.vault_cleanup_guard.protected_login_snapshot", _fail):
++        result = await ToolExecutor()._db_safe_write({"sql": sql})
++    assert result["blocked"] is True
++    assert "write" not in conn.log
++
++
++# ── 회귀: 보호 테이블 직접 쓰기 기존 동작 불변 ───────────────────────────────
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("sql", [
++    _sql("UPDATE", "public.saas_users", "SET", "deleted_at", "=", "now()", "WHERE", "id", "=", "$1"),
++    _sql("DELETE FROM", "tenant_memberships", "WHERE", "user_id", "=", "$1"),
++    _sql("UPDATE", "tenants", "SET", "status", "=", "'archived'"),
++])
++async def test_direct_protected_write_still_guarded(sql):
++    conn, seen = _Conn(), []
++    before, after = _snapshot_stubs(seen, after_deleted=True)
++    with patch("app.core.db_pool.get_pool", return_value=_Pool(conn)), \
++            patch("app.services.vault_cleanup_guard.protected_login_snapshot", before), \
++            patch("app.services.vault_cleanup_guard.reload_snapshot", after):
++        result = await ToolExecutor()._db_safe_write({"sql": sql, "params": []})
++    assert result["blocked"] is True and result["vault_guard"] is True
++    assert seen == ["snapshot", "reload"]
++    assert conn.log == ["begin", "set", "write", "rollback"]
++
++
++@pytest.mark.asyncio
++async def test_direct_protected_write_allowed_when_login_preserved():
++    conn, seen = _Conn(), []
++    before, after = _snapshot_stubs(seen, after_deleted=False)
++    sql = _sql("UPDATE", "saas_users", "SET", "name", "=", "$1", "WHERE", "id", "=", "$2")
++    with patch("app.core.db_pool.get_pool", return_value=_Pool(conn)), \
++            patch("app.services.vault_cleanup_guard.protected_login_snapshot", before), \
++            patch("app.services.vault_cleanup_guard.reload_snapshot", after):
++        result = await ToolExecutor()._db_safe_write({"sql": sql, "params": ["n", "u1"]})
++    assert result["success"] is True and result["vault_guard"] is True
++    assert conn.log == ["begin", "set", "write", "commit"]
++
++
++@pytest.mark.asyncio
++async def test_multi_statement_still_rejected_before_pool():
++    sql = "UPDATE saas_users SET a = 1; COMMIT"
++    with patch("app.core.db_pool.get_pool", side_effect=_no_pool):
++        result = await ToolExecutor()._db_safe_write({"sql": sql})
++    assert result["blocked"] is True
++
++
++@pytest.mark.asyncio
++async def test_select_without_call_keeps_legacy_message():
++    with patch("app.core.db_pool.get_pool", side_effect=_no_pool):
++        result = await ToolExecutor()._db_safe_write({"sql": "SELECT * FROM chat_messages"})
++    assert result == {"error": "INSERT/UPDATE/DELETE만 허용"}
++
++
++# ── 운영 문서 ────────────────────────────────────────────────────────────────
++
++
++def test_operations_doc_has_inspection_queries():
++    root = Path(__file__).resolve().parents[2]
++    doc = (root / "docs" / "operations" / "DB_SAFE_WRITE_INDIRECT_PATH.md").read_text(encoding="utf-8")
++    for needle in ("pg_trigger", "pg_proc", "saas_users", "tenant_memberships", "tenants", "오탐"):
++        assert needle in doc
+diff --git a/tests/unit/test_vault_cleanup_guard.py b/tests/unit/test_vault_cleanup_guard.py
+index f4f24b6f..15f1be7a 100644
+--- a/tests/unit/test_vault_cleanup_guard.py
++++ b/tests/unit/test_vault_cleanup_guard.py
+@@ -299,6 +299,10 @@ class _GuardConn:
+     async def execute(self, sql, *args):
+         self.log.append("set")
+ 
++    async def fetch(self, sql, *args):
++        # 쓰기 대상 뷰 여부 조회 — 뷰 없음(트랜잭션 로그에 남기지 않는다).
++        return []
++
+     async def prepare(self, sql):
+         return _Stmt(self.log)
+ 
