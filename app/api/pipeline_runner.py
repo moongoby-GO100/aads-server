@@ -2468,7 +2468,9 @@ async def notify_completion(job_id: str):
     # approval/review notification path.  Keep the terminal-side effects above
     # (queue promotion and goal reconciliation), but stop before any chat task
     # or notification claim can be created.
-    if status in ("done", "error"):
+    from app.services.pipeline_runner_service import TERMINAL_JOB_STATUSES
+
+    if status in TERMINAL_JOB_STATUSES:
         logger.info("pipeline_runner.notify_terminal_suppressed", job_id=job_id, status=status)
         return {
             "status": "skipped",
@@ -2528,6 +2530,7 @@ async def notify_completion(job_id: str):
             "이상이 없으면 승인 도구를 호출하십시오. 문제가 있으면 구체적인 근거로 반려하고 "
             "안전한 후속 조치를 이어서 수행하십시오. 진행 중인 CEO 응답이나 추가 지시는 중단하지 마십시오."
         )
+    # 아래 done/error/else 분기는 종결 가드(TERMINAL_JOB_STATUSES) 때문에 현재는 도달하지 않지만 보존한다.
     elif status == "done":
         msg = (f"[시스템] Pipeline Runner 작업 배포 완료\n\n"
                f"**Job**: {job_id}\n**프로젝트**: {project}\n"
@@ -2563,7 +2566,7 @@ async def notify_completion(job_id: str):
                 current_status = await conn.fetchval(
                     "SELECT status FROM pipeline_jobs WHERE job_id = $1", job_id
                 )
-                if current_status in ("done", "error"):
+                if current_status in TERMINAL_JOB_STATUSES:
                     await conn.execute(
                         """
                         UPDATE pipeline_jobs

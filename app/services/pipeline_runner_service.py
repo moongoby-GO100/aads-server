@@ -89,6 +89,10 @@ _TERMINAL_JOB_STATUSES = {
     "review_hold",
 }
 
+# 검수·승인 알림을 더 이상 보내면 안 되는 종결 상태의 단일 정의.
+# (_TERMINAL_JOB_STATUSES 는 finished_at 기록용이라 집합이 다르다.)
+TERMINAL_JOB_STATUSES = frozenset({"done", "error", "rejected_done", "cancelled", "completed"})
+
 def _is_codex_model_allowed(model: str) -> bool:
     """Allow DB-configured current Codex GPT model ids without silently downgrading."""
     value = (model or "").strip()

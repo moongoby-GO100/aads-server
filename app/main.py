@@ -2516,6 +2516,7 @@ async def lifespan(app: FastAPI):
                         session_id UUID NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
                         system_message TEXT NOT NULL,
                         ohvis_task_id TEXT,
+                        runner_job_id TEXT,
                         status VARCHAR(20) NOT NULL DEFAULT 'pending',
                         attempts INT NOT NULL DEFAULT 0,
                         claimed_by TEXT,
@@ -2526,6 +2527,10 @@ async def lifespan(app: FastAPI):
                         completed_at TIMESTAMPTZ
                     )
                     """
+                )
+                await conn.execute(
+                    "ALTER TABLE chat_deferred_reactions "
+                    "ADD COLUMN IF NOT EXISTS runner_job_id TEXT"
                 )
                 await conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_chat_deferred_reactions_pending "

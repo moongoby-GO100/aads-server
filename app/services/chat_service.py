@@ -11884,6 +11884,44 @@ async def _session_has_live_execution(session_id: str) -> bool:
         return False
 
 
+_RUNNER_JOB_ID_IN_MESSAGE_RE = re.compile(r"runner-[0-9a-zA-Z_-]+")
+_STALE_GUARD_APPROVAL_MARKER = "AI 검수 대기"
+
+
+def _extract_runner_job_id(message: str) -> Optional[str]:
+    match = _RUNNER_JOB_ID_IN_MESSAGE_RE.search(message or "")
+    return match.group(0) if match else None
+
+
+async def _find_stale_approval_job_status(
+    conn, runner_job_id: Optional[str], system_message: str
+) -> Optional[str]:
+    """검수 대기 트리거의 대상 잡이 이미 종결이면 그 상태를, 아니면 None 을 돌려준다.
+
+    배포 완료·작업 실패 보고는 종결 상태에서 오는 것이 정상이므로 검사하지 않는다.
+    조회 실패는 None(=배달)으로 처리한다 — 가드 오류가 정상 알림을 삼키면 안 된다.
+    """
+    if _STALE_GUARD_APPROVAL_MARKER not in (system_message or ""):
+        return None
+    job_id = runner_job_id or _extract_runner_job_id(system_message)
+    if not job_id:
+        return None
+    from app.services.pipeline_runner_service import TERMINAL_JOB_STATUSES
+
+    try:
+        job_status = await conn.fetchval(
+            "SELECT status FROM pipeline_jobs WHERE job_id = $1", job_id
+        )
+    except Exception as guard_error:
+        logger.warning(
+            "deferred_reaction_stale_guard_failed job=%s error=%s",
+            job_id,
+            str(guard_error)[:160],
+        )
+        return None
+    return job_status if job_status in TERMINAL_JOB_STATUSES else None
+
+
 async def _enqueue_deferred_reaction(
     session_id: str,
     safe_message: str,
@@ -11913,13 +11951,15 @@ async def _enqueue_deferred_reaction(
             return str(existing_id)
         deferred_id = await conn.fetchval(
             """
-            INSERT INTO chat_deferred_reactions (session_id, system_message, ohvis_task_id)
-            VALUES ($1, $2, $3)
+            INSERT INTO chat_deferred_reactions
+                (session_id, system_message, ohvis_task_id, runner_job_id)
+            VALUES ($1, $2, $3, $4)
             RETURNING id::text
             """,
             uuid.UUID(str(session_id)),
             safe_message,
             ohvis_task_id,
+            _extract_runner_job_id(safe_message),
         )
     logger.info(
         "deferred_reaction_enqueued session=%s deferred=%s owner=%s",
@@ -12075,7 +12115,7 @@ async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
                 WHERE q.id = c.id
                   AND q.attempts < 8
                 RETURNING q.id::text, q.session_id::text, q.system_message,
-                          q.ohvis_task_id, q.attempts
+                          q.ohvis_task_id, q.attempts, q.runner_job_id
                 """,
                 max_rows,
                 _EXECUTION_OWNER_INSTANCE,
@@ -12084,6 +12124,34 @@ async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
     started = 0
     for row in rows:
         sid = row["session_id"]
+        async with get_pool().acquire() as guard_conn:
+            stale_status = await _find_stale_approval_job_status(
+                guard_conn, row["runner_job_id"], row["system_message"]
+            )
+            if stale_status is not None:
+                await guard_conn.execute(
+                    """
+                    UPDATE chat_deferred_reactions
+                    SET status = 'skipped_stale',
+                        error_message = $3,
+                        claimed_by = NULL,
+                        lease_expires_at = NULL,
+                        completed_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = $1 AND claimed_by = $2
+                    """,
+                    uuid.UUID(row["id"]),
+                    _EXECUTION_OWNER_INSTANCE,
+                    f"stale approval trigger: job status={stale_status}",
+                )
+        if stale_status is not None:
+            logger.info(
+                "deferred_reaction_skipped_stale job_id=%s job_status=%s deferred_id=%s",
+                row["runner_job_id"] or _extract_runner_job_id(row["system_message"]),
+                stale_status,
+                row["id"],
+            )
+            continue
         if (
             (sid in _active_bg_tasks and not _active_bg_tasks[sid].done())
             or sid in _ai_reaction_active
