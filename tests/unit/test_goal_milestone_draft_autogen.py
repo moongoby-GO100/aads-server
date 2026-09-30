@@ -23,6 +23,8 @@ class MemoryConnection:
         }
         self.session = {"id": uuid.uuid4(), "workspace_id": uuid.uuid4()} if session else None
         self.session_query = None
+        self.messages = []
+        self.message_queries = []
         self.latest_source = "fallback"
         self.milestone_status = "pending"
         self.drafts = []
@@ -57,6 +59,13 @@ class MemoryConnection:
     async def fetch(self, query, *args):
         if "information_schema.columns" in query:
             return [{"column_name": "link_state"}]
+        if "FROM chat_messages" in query:
+            self.message_queries.append(args)
+            session_id, tenant_id, limit = args[:3]
+            rows = [m for m in self.messages
+                    if m["session_id"] == session_id and m["tenant_id"] == tenant_id]
+            return [{k: m[k] for k in ("id", "role", "content", "created_at")}
+                    for m in rows[-limit:]]
         raise AssertionError(query)
 
     async def fetchval(self, query, *args):
@@ -69,8 +78,9 @@ class MemoryConnection:
             return self.latest_source
         if "INSERT INTO directive_drafts" in query:
             self.drafts.append({
-                "id": uuid.uuid4(), "artifact_id": None, "content": args[4],
-                "status": "draft", "current_revision": 1,
+                "id": uuid.uuid4(), "session_id": args[1], "artifact_id": None,
+                "content": args[4], "status": "draft", "current_revision": 1,
+                "source_message_ids": list(args[6]),
             })
             return self.drafts[-1]["id"]
         if "INSERT INTO chat_artifacts" in query:

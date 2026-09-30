@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 SUPPORTED_PROJECTS = {"AADS", "KIS", "GO100", "SF", "NTV2", "NAS"}
 ALLOWED_EVENTS = {"inserted", "approved", "rejected", "sent", "archived"}
 GENERATION_TIMEOUT_SECONDS = 45
+# Same default as DraftCreateRequest.context_window (app/api/directive_drafts.py).
+DEFAULT_CONTEXT_WINDOW = 8
 
 _directive_model_cache: dict = {}
 _directive_model_cache_ts: float = 0.0
@@ -493,6 +495,53 @@ async def _collect_relay_text(stream: Any, configured_model: str) -> str:
     return content
 
 
+async def _fetch_recent_context_messages(
+    conn,
+    *,
+    session_id: Any,
+    tenant_id: Any,
+    context_window: int = DEFAULT_CONTEXT_WINDOW,
+    as_of: Any = None,
+) -> list[Any]:
+    """Recent user/assistant turns that a draft is built from, oldest first.
+
+    Both the chat path and the milestone path use this so the two record the
+    same kind of source. ``as_of`` pins the window to a past moment (backfill).
+    """
+    as_of_filter = "AND created_at <= $4" if as_of is not None else ""
+    args: list[Any] = [session_id, tenant_id, max(2, min(context_window, 16))]
+    if as_of is not None:
+        args.append(as_of)
+    return await conn.fetch(
+        f"""
+        SELECT id, role, content, created_at FROM (
+            SELECT id, role, content, created_at
+              FROM chat_messages
+             WHERE session_id = $1 AND tenant_id = $2
+               AND role IN ('user', 'assistant')
+               AND COALESCE(content, '') <> ''
+               {as_of_filter}
+             ORDER BY created_at DESC
+             LIMIT $3
+        ) recent
+        ORDER BY created_at ASC
+        """,
+        *args,
+    )
+
+
+def _source_ids_with_user_request(rows: Iterable[Any]) -> list[Any]:
+    """Message ids that can be cited as a draft source, or [] when none can.
+
+    Mirrors the chat path, which refuses to draft without a user request:
+    a window of assistant-only turns is not a traceable origin.
+    """
+    messages = [dict(row) for row in rows]
+    if not _user_request_text(messages):
+        return []
+    return [message["id"] for message in messages]
+
+
 async def _load_source(
     *,
     tenant_id: str,
@@ -532,22 +581,11 @@ async def _load_source(
             if len(rows) != len(parsed_ids):
                 raise ValueError("선택한 메시지 중 현재 세션에서 확인할 수 없는 항목이 있습니다.")
         else:
-            rows = await conn.fetch(
-                """
-                SELECT id, role, content, created_at FROM (
-                    SELECT id, role, content, created_at
-                      FROM chat_messages
-                     WHERE session_id = $1 AND tenant_id = $2
-                       AND role IN ('user', 'assistant')
-                       AND COALESCE(content, '') <> ''
-                     ORDER BY created_at DESC
-                     LIMIT $3
-                ) recent
-                ORDER BY created_at ASC
-                """,
-                session_uuid,
-                tenant_uuid,
-                max(2, min(context_window, 16)),
+            rows = await _fetch_recent_context_messages(
+                conn,
+                session_id=session_uuid,
+                tenant_id=tenant_uuid,
+                context_window=context_window,
             )
     messages = [dict(row) for row in rows]
     normalized_composer_draft = (composer_draft or "").strip() or None
@@ -602,7 +640,7 @@ async def create_draft(
     tenant_id: str,
     user_id: str | None,
     session_id: str,
-    context_window: int = 8,
+    context_window: int = DEFAULT_CONTEXT_WINDOW,
     message_ids: list[str] | None = None,
     composer_draft: str | None = None,
 ) -> dict[str, Any]:
@@ -735,6 +773,25 @@ def _safe_milestone_text(value: Any) -> str:
     )
 
 
+async def _milestone_source_ids(
+    conn, *, session_id: Any, tenant_id: Any, goal_id: Any, milestone_id: str
+) -> list[Any]:
+    """Recent turns of the linked session at transition time, as draft sources.
+
+    Leaves the list empty (and says so) rather than citing unrelated messages.
+    """
+    rows = await _fetch_recent_context_messages(
+        conn, session_id=session_id, tenant_id=tenant_id,
+    )
+    source_ids = _source_ids_with_user_request(rows)
+    if not source_ids:
+        logger.warning(
+            "milestone_draft_source_messages_unresolved goal=%s milestone=%s session=%s rows=%d",
+            goal_id, milestone_id, session_id, len(rows),
+        )
+    return source_ids
+
+
 async def save_milestone_draft(conn, *, goal: Any, milestone: Any) -> None:
     """Save a review-only milestone directive in the existing draft store.
 
@@ -774,7 +831,7 @@ async def save_milestone_draft(conn, *, goal: Any, milestone: Any) -> None:
     }, ensure_ascii=False)
     await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", milestone_id)
     current = await conn.fetchrow(
-        """SELECT id, artifact_id, content, status, current_revision
+        """SELECT id, session_id, artifact_id, content, status, current_revision
            FROM directive_drafts
            WHERE tenant_id = $1 AND classification->>'source_mode' = 'milestone_auto_advance'
              AND classification->>'milestone_id' = $2
@@ -793,6 +850,10 @@ async def save_milestone_draft(conn, *, goal: Any, milestone: Any) -> None:
             return
         draft_id = current["id"]
         revision = current["current_revision"] + 1
+        source_ids = await _milestone_source_ids(
+            conn, session_id=current["session_id"], tenant_id=tenant_id,
+            goal_id=goal["id"], milestone_id=milestone_id,
+        )
         await conn.execute(
             """UPDATE directive_drafts SET title=$2, content=$3,
                current_revision=$4, updated_at=NOW() WHERE id=$1""",
@@ -824,14 +885,18 @@ async def save_milestone_draft(conn, *, goal: Any, milestone: Any) -> None:
             logger.warning("milestone_draft_skipped_no_active_session goal=%s milestone=%s",
                            goal["id"], milestone_id)
             return
+        source_ids = await _milestone_source_ids(
+            conn, session_id=session["id"], tenant_id=tenant_id,
+            goal_id=goal["id"], milestone_id=milestone_id,
+        )
         draft_id = await conn.fetchval(
             """INSERT INTO directive_drafts
                (tenant_id, session_id, project_key, title, content, risk_level,
-                confidence, classification)
-               VALUES ($1,$2,$3,$4,$5,$6,1.0,$7::jsonb)
+                confidence, source_message_ids, classification)
+               VALUES ($1,$2,$3,$4,$5,$6,1.0,$7::uuid[],$8::jsonb)
                RETURNING id""",
             tenant_id, session["id"], project_key, title, content,
-            classify_risk(content), classification,
+            classify_risk(content), source_ids, classification,
         )
         artifact_id = await conn.fetchval(
             """INSERT INTO chat_artifacts
@@ -853,7 +918,10 @@ async def save_milestone_draft(conn, *, goal: Any, milestone: Any) -> None:
            (tenant_id, draft_id, revision, title, content, change_source, metadata)
            VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)""",
         tenant_id, draft_id, revision, title, content, change_source,
-        json.dumps({"milestone_id": milestone_id}),
+        json.dumps({
+            "milestone_id": milestone_id,
+            "source_message_ids": [str(value) for value in source_ids],
+        }),
     )
     await conn.execute(
         """INSERT INTO directive_draft_events
@@ -878,6 +946,129 @@ async def list_drafts(*, tenant_id: str, session_id: str, limit: int = 20) -> li
             max(1, min(limit, 100)),
         )
     return [_serialize_row(row) for row in rows]
+
+
+async def load_draft_trace(conn, *, tenant_id: Any, draft_id: Any) -> dict[str, Any]:
+    """Source messages → revisions → events for one draft, with link checks.
+
+    Scoped to the tenant: a draft of another tenant is reported as not found.
+    ``integrity`` counts cross-session, cross-tenant and cross-goal links so a
+    caller can assert that all of them are zero.
+    """
+    tenant_uuid = uuid.UUID(str(tenant_id))
+    draft = await conn.fetchrow(
+        """SELECT id, tenant_id, session_id, status, current_revision,
+                  source_message_ids, classification, created_at
+             FROM directive_drafts WHERE id = $1 AND tenant_id = $2""",
+        uuid.UUID(str(draft_id)), tenant_uuid,
+    )
+    if not draft:
+        raise DraftNotFoundError("draft not found")
+    draft_data = _serialize_row(draft)
+    classification = draft_data.get("classification") or {}
+    source_ids = list(draft["source_message_ids"] or [])
+    # Unscoped lookup on purpose: it is how a foreign link would be detected.
+    # Only ids and scope columns are read for messages outside this draft.
+    message_rows = await conn.fetch(
+        """SELECT id, session_id, tenant_id, role, created_at, LEFT(content, 120) AS preview
+             FROM chat_messages WHERE id = ANY($1::uuid[])""",
+        source_ids,
+    ) if source_ids else []
+    by_id = {row["id"]: row for row in message_rows}
+    messages: list[dict[str, Any]] = []
+    foreign_session = foreign_tenant = 0
+    for message_id in source_ids:
+        row = by_id.get(message_id)
+        if row is None:
+            continue
+        same_tenant = row["tenant_id"] == draft["tenant_id"]
+        same_session = row["session_id"] == draft["session_id"]
+        foreign_tenant += not same_tenant
+        foreign_session += same_tenant and not same_session
+        entry = {"id": str(row["id"]), "role": row["role"],
+                 "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                 "in_draft_session": same_tenant and same_session}
+        if same_tenant and same_session:
+            entry["preview"] = row["preview"]
+        messages.append(entry)
+    revisions = await conn.fetch(
+        """SELECT revision, change_source, metadata, created_at
+             FROM directive_draft_revisions
+            WHERE draft_id = $1 AND tenant_id = $2 ORDER BY revision""",
+        draft["id"], tenant_uuid,
+    )
+    events = await conn.fetch(
+        """SELECT revision, action, created_at
+             FROM directive_draft_events
+            WHERE draft_id = $1 AND tenant_id = $2 ORDER BY created_at, id""",
+        draft["id"], tenant_uuid,
+    )
+    revision_numbers = {row["revision"] for row in revisions}
+    goal_mismatch = None
+    goal_id = classification.get("goal_id")
+    if goal_id:
+        # The draft's goal must belong to the same tenant, own the milestone,
+        # and still be linked to the draft's session.
+        goal_ok = await conn.fetchval(
+            """SELECT EXISTS (
+                   SELECT 1 FROM goals g
+                    WHERE g.id = $1::uuid AND g.tenant_id = $2
+                      AND ($3::text IS NULL OR EXISTS (
+                          SELECT 1 FROM milestones m
+                           WHERE m.id = $3::uuid AND m.goal_id = g.id))
+                      AND EXISTS (
+                          SELECT 1 FROM goal_task_links l
+                           WHERE l.goal_id = g.id AND l.task_type = 'chat_session'
+                             AND l.task_id = $4::text))""",
+            goal_id, tenant_uuid, classification.get("milestone_id"), str(draft["session_id"]),
+        )
+        goal_mismatch = 0 if goal_ok else 1
+    revision_data = []
+    for row in revisions:
+        metadata = row["metadata"]
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata or "{}")
+        revision_data.append({
+            "revision": row["revision"], "change_source": row["change_source"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "source_message_ids": list((metadata or {}).get("source_message_ids") or []),
+        })
+    integrity = {
+        "source_message_count": len(source_ids),
+        "resolved_message_count": len(messages),
+        "missing_message_ids": [str(v) for v in source_ids if v not in by_id],
+        "foreign_session_messages": foreign_session,
+        "foreign_tenant_messages": foreign_tenant,
+        "goal_mismatch": goal_mismatch,
+        "events_without_revision": sum(
+            1 for row in events if row["revision"] not in revision_numbers
+        ),
+    }
+    return {
+        "draft": {
+            "id": draft_data["id"], "tenant_id": draft_data["tenant_id"],
+            "session_id": draft_data["session_id"], "status": draft_data["status"],
+            "current_revision": draft["current_revision"],
+            "source_mode": classification.get("source_mode"),
+            "goal_id": goal_id, "milestone_id": classification.get("milestone_id"),
+        },
+        "source_messages": messages,
+        "revisions": revision_data,
+        "events": [
+            {"revision": row["revision"], "action": row["action"],
+             "created_at": row["created_at"].isoformat() if row["created_at"] else None}
+            for row in events
+        ],
+        "integrity": integrity,
+        "linked": bool(messages) and bool(revision_data) and bool(events)
+        and not foreign_session and not foreign_tenant and not goal_mismatch
+        and not integrity["missing_message_ids"] and not integrity["events_without_revision"],
+    }
+
+
+async def trace_draft_sources(*, tenant_id: str, draft_id: str) -> dict[str, Any]:
+    async with get_pool().acquire() as conn:
+        return await load_draft_trace(conn, tenant_id=tenant_id, draft_id=draft_id)
 
 
 async def update_draft(
