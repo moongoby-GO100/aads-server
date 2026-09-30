@@ -139,3 +139,133 @@ def test_relay_tool_is_registered():
 
     names = [t["name"] for t in ToolRegistry().get_tools("all")]
     assert "ask_session" in names, "도구가 모델에게 노출되지 않는다"
+
+
+# ── 같은 역할 세션이 둘 이상이면 자동 선택하지 않는다 (2026-09-30) ────────────
+#
+# 17:17 백억이 세션이 "#119 전략카드 담당에게 목표등록 지시" 를 보냈는데
+# 같은 워크스페이스에 role_key='CTO' 세션이 둘 있었고, `LIMIT 1` 이 최근에
+# 쓰인 모멘텀 전략가(a0fe4743)를 골라 #119 전략관리자(d19a0e9e)는 받지 못했다.
+import asyncio
+import datetime as _dt
+
+WS = "11111111-1111-1111-1111-111111111111"
+ORIGIN = "00000000-0000-0000-0000-00000000000a"
+S1 = "a0fe4743-0000-0000-0000-000000000001"
+S2 = "d19a0e9e-0000-0000-0000-000000000002"
+
+
+def _s(sid, title, role, ts=1):
+    return {"id": sid, "title": title, "role_key": role, "workspace_id": WS,
+            "updated_at": _dt.datetime(2026, 9, 30, 8, ts, tzinfo=_dt.timezone.utc)}
+
+
+class _AmbigPool:
+    """단계별로 미리 정한 행을 돌려준다. 쿼리 문구로 단계를 구분한다."""
+
+    def __init__(self, sessions, alias_ids=(), title_match=None):
+        self.sessions = sessions
+        self.alias_ids = set(alias_ids)
+        self.title_match = title_match
+        self.inserts = []
+
+    async def fetch(self, sql, *args):
+        target, origin = args[0], args[1]
+        rows = [s for s in self.sessions if s["id"] != origin and s["workspace_id"] == WS]
+        if "s.role_key = $1" in sql:
+            rows = [s for s in rows if s["role_key"] == target]
+        elif "role_scope" in sql:
+            rows = [s for s in rows if s["id"] in self.alias_ids]
+        elif "s.title ILIKE" in sql:
+            rows = [s for s in rows if s["role_key"] and target in s["title"]]
+        else:
+            raise AssertionError(sql)
+        return sorted(rows, key=lambda s: s["updated_at"], reverse=True)[: args[2]]
+
+    async def fetchrow(self, sql, *args):
+        return next((s for s in self.sessions if s["id"] == args[0]), None)
+
+    async def execute(self, sql, *args):
+        self.inserts.append(sql)
+        return "INSERT 0 1"
+
+
+def _patch_pool(monkeypatch, pool):
+    from app.core import db_pool
+
+    monkeypatch.setattr(db_pool, "get_pool", lambda: pool)
+
+
+def test_single_role_session_is_returned(monkeypatch):
+    """① 회귀 잠금 — 후보 1건이면 지금처럼 그 세션."""
+    pool = _AmbigPool([_s(ORIGIN, "백억이", "GO100Owner"), _s(S1, "전략가", "CTO")])
+    _patch_pool(monkeypatch, pool)
+    tgt = asyncio.run(session_relay._resolve_target("CTO", ORIGIN))
+    assert tgt["id"] == S1 and not tgt.get("ambiguous")
+
+
+def test_two_same_role_sessions_are_ambiguous_and_no_relay_row(monkeypatch):
+    """② 같은 역할 2건 → 모호 결과 + 릴레이 row 미생성."""
+    pool = _AmbigPool([_s(ORIGIN, "백억이", "GO100Owner"),
+                       _s(S1, "모멘텀 전략가", "CTO", 9), _s(S2, "#119 전략관리자", "CTO", 1)])
+    _patch_pool(monkeypatch, pool)
+    tgt = asyncio.run(session_relay._resolve_target("CTO", ORIGIN))
+    assert tgt["ambiguous"] is True and tgt["stage"] == "role_key"
+    assert {c["id"] for c in tgt["candidates"]} == {S1, S2}
+
+    async def _no_hop(_o):
+        return 0
+
+    monkeypatch.setattr(session_relay, "_current_hop", _no_hop)
+    out = asyncio.run(session_relay.ask(ORIGIN, "CTO", "목표등록 지시"))
+    assert out["sent"] is False
+    assert out["status"] == "ambiguous_target" and out["error"] == "ambiguous_target"
+    assert "같은 역할(CTO) 세션이 2개" in out["message"]
+    assert S1 in out["message"] and S2 in out["message"] and "KST" in out["message"]
+    assert len(out["candidates"]) == 2
+    assert not any("session_relay" in q for q in pool.inserts), "모호한데 릴레이를 만들었다"
+
+
+def test_alias_and_title_stages_are_ambiguous_and_do_not_fall_through(monkeypatch):
+    """③ 별칭·제목 단계에서도 2건이면 모호. 한 단계에서 모호하면 하위 단계로 안 간다."""
+    sessions = [_s(ORIGIN, "백억이", "GO100Owner"),
+                _s(S1, "전략관리자 A", "CTO", 9), _s(S2, "전략관리자 B", "CFO", 1)]
+    pool = _AmbigPool(sessions, alias_ids={S1, S2})
+    _patch_pool(monkeypatch, pool)
+    tgt = asyncio.run(session_relay._resolve_target("전략담당", ORIGIN))
+    assert tgt["ambiguous"] and tgt["stage"] == "alias"
+
+    pool = _AmbigPool(sessions)
+    _patch_pool(monkeypatch, pool)
+    tgt = asyncio.run(session_relay._resolve_target("전략관리자", ORIGIN))
+    assert tgt["ambiguous"] and tgt["stage"] == "title"
+
+    # 별칭 1건 + 제목 2건이면 별칭 1건이 이긴다(단계 순서 유지).
+    pool = _AmbigPool(sessions, alias_ids={S1})
+    _patch_pool(monkeypatch, pool)
+    tgt = asyncio.run(session_relay._resolve_target("전략관리자", ORIGIN))
+    assert tgt["id"] == S1 and not tgt.get("ambiguous")
+
+
+def test_uuid_target_ignores_candidate_count(monkeypatch):
+    """④ UUID 직접 지정은 같은 역할이 몇이든 그 세션."""
+    pool = _AmbigPool([_s(ORIGIN, "백억이", "GO100Owner"),
+                       _s(S1, "전략가", "CTO", 9), _s(S2, "#119", "CTO", 1)])
+    _patch_pool(monkeypatch, pool)
+    tgt = asyncio.run(session_relay._resolve_target(S2, ORIGIN))
+    assert tgt["id"] == S2 and not tgt.get("ambiguous")
+
+
+def test_origin_session_is_excluded_from_candidates(monkeypatch):
+    """⑤ 발신 세션 자신은 후보가 아니다 — 자기 + 다른 1개면 그 1개가 확정."""
+    pool = _AmbigPool([_s(ORIGIN, "발신 CTO", "CTO", 9), _s(S1, "다른 CTO", "CTO", 1)])
+    _patch_pool(monkeypatch, pool)
+    tgt = asyncio.run(session_relay._resolve_target("CTO", ORIGIN))
+    assert tgt["id"] == S1 and not tgt.get("ambiguous")
+    for sql_part in ("s.id <> $2::uuid",):
+        assert inspect.getsource(session_relay._resolve_target).count(sql_part) == 3
+
+
+def test_notify_does_not_deliver_when_ambiguous():
+    src = inspect.getsource(session_relay.notify)
+    assert "ambiguous_target" in src

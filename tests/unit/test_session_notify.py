@@ -82,20 +82,19 @@ class FakePool:
                   if s["role_key"] == target and s["role_key"] != sender_role
                   and (tenant is None or s["tenant_id"] == tenant)}
             return [{"workspace_id": w} for w in ws]
+        # _resolve_target — 후보 목록(1단계 역할 키). 별칭·제목 단계는 매칭 없음.
+        if "FROM chat_sessions s" in sql and "s.role_key = $1" in sql:
+            target, origin, _limit = args
+            ows = next(s["workspace_id"] for s in self.sessions if s["id"] == origin)
+            return [{"id": s["id"], "title": s["title"], "role_key": s["role_key"],
+                     "workspace_id": s["workspace_id"], "updated_at": None}
+                    for s in self.sessions
+                    if s["role_key"] == target and s["workspace_id"] == ows and s["id"] != origin]
+        if "FROM chat_sessions s" in sql:
+            return []
         raise AssertionError(f"unexpected fetch: {sql}")
 
     async def fetchrow(self, sql, *args):
-        # _resolve_target
-        if "FROM chat_sessions s" in sql and "s.role_key = $1" in sql:
-            target, origin = args
-            ows = next(s["workspace_id"] for s in self.sessions if s["id"] == origin)
-            for s in self.sessions:
-                if s["role_key"] == target and s["workspace_id"] == ows:
-                    return {"id": s["id"], "title": s["title"], "role_key": s["role_key"],
-                            "workspace_id": s["workspace_id"]}
-            return None
-        if "FROM chat_sessions s" in sql:
-            return None  # 별칭·제목 단계는 이 가짜에서 매칭 없음
         raise AssertionError(f"unexpected fetchrow: {sql}")
 
     async def fetchval(self, sql, *args):

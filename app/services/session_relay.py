@@ -84,11 +84,41 @@ async def _relay_paused(goal_id: Optional[str], relay_id: str) -> bool:
     return paused
 
 
+_CANDIDATE_LIMIT = 10
+
+
+def _pick(stage: str, target: str, rows: list) -> Optional[Dict[str, Any]]:
+    """후보 0건 → None(다음 단계), 1건 → 그 세션, 2건 이상 → 모호 결과.
+
+    2건 이상이면 **고르지 않는다.** 2026-09-30 17:17 같은 워크스페이스에
+    role_key='CTO' 세션이 둘(모멘텀 전략가·#119 전략관리자) 있었는데
+    `ORDER BY updated_at DESC LIMIT 1` 이 최근에 쓰인 쪽을 골라 지시가
+    엉뚱한 세션에 도착했다. 가장 최근 세션이 맞는 담당이라는 보장은 없다.
+    """
+    if not rows:
+        return None
+    if len(rows) == 1:
+        return dict(rows[0])
+    return {
+        "ambiguous": True,
+        "stage": stage,
+        "target": target,
+        "candidates": [dict(r) for r in rows],
+    }
+
+
 async def _resolve_target(target: str, origin_session_id: str) -> Optional[Dict[str, Any]]:
     """담당 이름 또는 세션 id 로 대상 세션을 찾는다.
 
     세션 id 를 외우게 하면 아무도 안 쓴다. 역할 키로 부를 수 있어야 한다.
     같은 워크스페이스 안에서만 찾는다 — 프로젝트를 넘어 부르면 맥락이 섞인다.
+
+    반환:
+      - None                     못 찾음
+      - 세션 dict(id 있음)        정확히 1건
+      - {"ambiguous": True, ...} 한 단계에서 2건 이상 — 호출자가 발신 쪽에 되묻는다.
+        하위 단계로 내려가지 않는다(다른 세션을 골라 버리는 우회 방지).
+    발신 세션 자신은 후보에서 제외한다. UUID 직접 지정은 그대로 그 세션이다.
     """
     from app.core.db_pool import get_pool
 
@@ -105,18 +135,20 @@ async def _resolve_target(target: str, origin_session_id: str) -> Optional[Dict[
         return dict(row) if row else None
 
     # 1) 역할 키 정확히 일치
-    row = await pool.fetchrow(
+    rows = await pool.fetch(
         """
-        SELECT s.id::text, s.title, s.role_key, s.workspace_id::text
+        SELECT s.id::text, s.title, s.role_key, s.workspace_id::text, s.updated_at
         FROM chat_sessions s
         WHERE s.role_key = $1
+          AND s.id <> $2::uuid
           AND s.workspace_id = (SELECT workspace_id FROM chat_sessions WHERE id = $2::uuid)
-        ORDER BY s.updated_at DESC LIMIT 1
+        ORDER BY s.updated_at DESC LIMIT $3
         """,
-        t, origin_session_id,
+        t, origin_session_id, _CANDIDATE_LIMIT,
     )
-    if row:
-        return dict(row)
+    hit = _pick("role_key", t, rows)
+    if hit:
+        return hit
 
     # 2) 한글 별칭 — `prompt_assets.role_scope` 에 같이 등록돼 있다.
     #
@@ -125,37 +157,76 @@ async def _resolve_target(target: str, origin_session_id: str) -> Optional[Dict[
     # 프롬프트는 담당을 한글로 부르는데("데이터엔진담당") 세션의 role_key 는
     # 영문이다. 2026-09-14 실측에서 `ask_session(target="데이터엔진담당")` 이
     # 그대로 실패했다 — 주도가 프롬프트에 적힌 이름으로 불렀는데 못 찾는다.
-    row = await pool.fetchrow(
+    rows = await pool.fetch(
         """
-        SELECT s.id::text, s.title, s.role_key, s.workspace_id::text
+        SELECT s.id::text, s.title, s.role_key, s.workspace_id::text, s.updated_at
         FROM chat_sessions s
         WHERE s.workspace_id = (SELECT workspace_id FROM chat_sessions WHERE id = $2::uuid)
+          AND s.id <> $2::uuid
           AND s.role_key IS NOT NULL
           AND EXISTS (
               SELECT 1 FROM prompt_assets a
               WHERE a.enabled AND a.role_scope @> ARRAY[$1]::text[]
                 AND a.role_scope @> ARRAY[s.role_key]::text[]
           )
-        ORDER BY s.updated_at DESC LIMIT 1
+        ORDER BY s.updated_at DESC LIMIT $3
         """,
-        t, origin_session_id,
+        t, origin_session_id, _CANDIDATE_LIMIT,
     )
-    if row:
-        return dict(row)
+    hit = _pick("alias", t, rows)
+    if hit:
+        return hit
 
     # 3) 세션 제목 — 사람은 "데이터관리자" 처럼 화면에 보이는 이름으로 부른다.
-    row = await pool.fetchrow(
+    rows = await pool.fetch(
         """
-        SELECT s.id::text, s.title, s.role_key, s.workspace_id::text
+        SELECT s.id::text, s.title, s.role_key, s.workspace_id::text, s.updated_at
         FROM chat_sessions s
         WHERE s.workspace_id = (SELECT workspace_id FROM chat_sessions WHERE id = $2::uuid)
+          AND s.id <> $2::uuid
           AND s.role_key IS NOT NULL
           AND s.title ILIKE '%' || $1 || '%'
-        ORDER BY s.updated_at DESC LIMIT 1
+        ORDER BY s.updated_at DESC LIMIT $3
         """,
-        t, origin_session_id,
+        t, origin_session_id, _CANDIDATE_LIMIT,
     )
-    return dict(row) if row else None
+    return _pick("title", t, rows)
+
+
+def _kst(ts: Any) -> str:
+    """후보 목록에 보이는 최근 사용 시각 — KST 문자열."""
+    from datetime import datetime, timedelta, timezone
+
+    if not isinstance(ts, datetime):
+        return "-"
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M KST")
+
+
+def _ambiguous_response(amb: Dict[str, Any]) -> Dict[str, Any]:
+    """모호한 대상 → 릴레이를 만들지 않고 발신 세션에 되묻는 응답."""
+    cands = amb.get("candidates") or []
+    roles = sorted({c.get("role_key") for c in cands if c.get("role_key")})
+    label = roles[0] if len(roles) == 1 else str(amb.get("target") or "")
+    lines = [
+        f"- {c.get('title') or '(제목 없음)'} · id={c['id']} · 최근 사용 {_kst(c.get('updated_at'))}"
+        for c in cands
+    ]
+    return {
+        "sent": False,
+        "error": "ambiguous_target",
+        "status": "ambiguous_target",
+        "target": amb.get("target"),
+        "candidates": [
+            {"id": c["id"], "title": c.get("title"), "role_key": c.get("role_key"),
+             "updated_at": _kst(c.get("updated_at"))}
+            for c in cands
+        ],
+        "message": f"같은 역할({label}) 세션이 {len(cands)}개 있습니다. "
+                   "세션 id 로 다시 지정해 주세요. 지시는 아직 아무에게도 전달되지 않았습니다.\n"
+                   + "\n".join(lines),
+    }
 
 
 async def _target_is_busy(target_session_id: str) -> bool:
@@ -427,6 +498,11 @@ async def ask(origin_session_id: str, target: str, question: str,
         }
 
     tgt = await _resolve_target(target, origin_session_id)
+    if tgt and tgt.get("ambiguous"):
+        logger.info("session_relay_ambiguous_target origin=%s target=%s stage=%s n=%d",
+                    origin_session_id[:8], str(target)[:40], tgt.get("stage"),
+                    len(tgt.get("candidates") or []))
+        return _ambiguous_response(tgt)
     if not tgt:
         return {"sent": False, "error": "target_not_found",
                 "message": f"'{target}' 담당을 찾지 못했습니다. 역할 키나 세션 id 를 확인하세요."}
@@ -863,6 +939,12 @@ async def notify(target: str, title: str, body: str, severity: str, source: str,
 
     sender = await _system_sender_session(ws)
     tgt = await _resolve_target(target, sender)
+    if tgt and tgt.get("ambiguous"):
+        # 알림을 아무 쪽에나 보내지 않는다 — 호출자(cron)가 로그로 알 수 있게 사유만 남긴다.
+        logger.warning("session_notify_ambiguous_target target=%s stage=%s n=%d",
+                       str(target)[:40], tgt.get("stage"), len(tgt.get("candidates") or []))
+        result["reason"] = "ambiguous_target"
+        return result
     if not tgt or tgt.get("workspace_id") != ws:
         result["reason"] = "target_not_found"
         return result
