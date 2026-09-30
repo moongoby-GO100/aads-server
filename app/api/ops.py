@@ -3690,6 +3690,32 @@ async def ops_llm_cost_per_success(
     return payload
 
 
+@router.get("/ops/llm-quality")
+async def ops_llm_quality(
+    days: int = Query(7, description="집계 일수 (1~90, 벗어나면 잘라낸다)"),
+    project: str = Query("", max_length=10, description="러너 프로젝트 필터(선택)"),
+):
+    """모델·공급자·실행경로별 성공률(실패 3분류 분리)·지연·폴백률·비용 — M7 기준선.
+
+    집계·귀속 규칙은 app.services.llm_model_quality 에 있다. 표본 부족은
+    insufficient_sample, 원천이 비면 NULL + '미측정' 이다.
+    """
+    from app.services.llm_model_quality import fetch_model_quality
+
+    days = _clamp_int(days, default=7, minimum=1, maximum=90)
+    try:
+        conn = await _get_conn()
+        try:
+            payload = await fetch_model_quality(conn, days, project)
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.error("ops_llm_quality_error", error=str(e))
+        raise HTTPException(status_code=500, detail="llm quality query failed")
+    payload["generated_at"] = datetime.now(KST).isoformat()
+    return payload
+
+
 @router.get("/ops/project-stats")
 async def ops_project_stats(
     days: int = Query(30, description="집계 일수 (1~365, 벗어나면 잘라낸다)"),
