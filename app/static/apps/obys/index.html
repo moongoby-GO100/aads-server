@@ -3234,7 +3234,10 @@
           <section class="panel">
             <div class="panel-head">
               <h2 class="panel-title">근태 목록</h2>
-              <button id="downloadShiftCsvBtn">CSV 저장</button>
+              <div style="display:flex; gap:8px; flex-wrap:wrap">
+                <button id="uploadLocalShiftsBtn" class="hidden">미저장 근태 서버로 올리기</button>
+                <button id="downloadShiftCsvBtn">CSV 저장</button>
+              </div>
             </div>
             <div class="panel-body">
               <div class="table-wrap">
@@ -5630,11 +5633,8 @@
         { id: uid(), date: "2026-07-04", branch: "중화점", type: "expense", vendor: "가스비", channel: "계좌", amount: 186000, status: "confirmed", memo: "" },
         { id: uid(), date: "2026-07-05", branch: "성신여대점", type: "sales", vendor: "포스 카드매출", channel: "카드", amount: 1260000, status: "confirmed", memo: "" }
       ],
-      shifts: [
-        { id: uid(), date: "2026-07-01", branch: "중화점", staff: "김민수", start: "10:00", end: "18:00", breakMin: 60, hourly: 12000, status: "confirmed", memo: "" },
-        { id: uid(), date: "2026-07-01", branch: "중화점", staff: "박서연", start: "18:00", end: "23:30", breakMin: 30, hourly: 12500, status: "confirmed", memo: "" },
-        { id: uid(), date: "2026-07-02", branch: "중화점", staff: "김민수", start: "10:00", end: "18:00", breakMin: 60, hourly: 12000, status: "pending", memo: "출근기록 확인" }
-      ],
+      // 근태 정본은 서버다. 샘플 근태는 "미저장" 으로 떠서 실데이터로 올라갈 수 있어 두지 않는다.
+      shifts: [],
       contracts: [],
       payrollStatements: [],
       deliverySales: [],
@@ -5657,6 +5657,9 @@
     let employeeJoinRequests = [];
     let approvedEmployees = [];
     let payrollStatements = Array.isArray(state.payrollStatements) ? state.payrollStatements : [];
+    // 서버(yeoljeong_attendance_records) 근태. state.shifts 는 서버에 올리지 못한 로컬 전용 근태만 담는다.
+    let serverShifts = [];
+    let serverShiftsError = "";
     let deliverySettlements = Array.isArray(state.deliverySettlements) ? state.deliverySettlements : [];
     let dbDeliverySales = [];
     let dbDeliveryReviews = [];
@@ -6345,10 +6348,12 @@
     }
 
     function scopedShifts() {
-      return state.shifts.filter(item => inScopeDate(item.date) && inScopeBranch(item.branch));
+      const localOnly = state.shifts.map(item => ({ ...item, localOnly: true }));
+      return [...serverShifts, ...localOnly].filter(item => inScopeDate(item.date) && inScopeBranch(item.branch));
     }
 
     function shiftHours(shift) {
+      if (Number.isFinite(shift.workedMinutes)) return shift.workedMinutes / 60;
       const [sh, sm] = String(shift.start || "00:00").split(":").map(Number);
       const [eh, em] = String(shift.end || "00:00").split(":").map(Number);
       let mins = (eh * 60 + em) - (sh * 60 + sm);
@@ -7246,6 +7251,12 @@
       const rows = visibleShifts().slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
       els.shiftRows.innerHTML = rows.length ? rows.map(row => {
         const [label, klass] = statusLabels[row.status] || statusLabels.pending;
+        const statusCell = row.localOnly
+          ? `<span class="badge warn" title="이 브라우저에만 있고 서버에는 없습니다">미저장(로컬 전용)</span>`
+          : `<span class="badge ${klass}">${label}</span>`;
+        const actions = row.localOnly
+          ? `<button data-upload-shift="${escapeHtml(row.id)}" title="서버에 저장">서버 저장</button>${employeeMode ? "" : ` <button class="icon danger" data-delete-shift="${escapeHtml(row.id)}" title="로컬 삭제">-</button>`}`
+          : (employeeMode ? "" : `<button class="icon danger" data-delete-server-shift="${escapeHtml(row.serverId)}" data-shift-business="${escapeHtml(row.businessId)}" title="삭제">-</button>`);
         return `
           <tr>
             <td>${escapeHtml(row.date)}</td>
@@ -7253,10 +7264,18 @@
             <td>${escapeHtml(row.start)}-${escapeHtml(row.end)}</td>
             <td class="num">${formatHour(shiftHours(row))}</td>
             <td class="num">${employeeMode ? "-" : formatMoney(shiftCost(row))}</td>
-            <td><span class="badge ${klass}">${label}</span></td>
-            <td class="num">${employeeMode ? "" : `<button class="icon danger" data-delete-shift="${row.id}" title="삭제">-</button>`}</td>
+            <td>${statusCell}</td>
+            <td class="num">${actions}</td>
           </tr>`;
       }).join("") : `<tr><td colspan="7"><div class="empty">${employeeMode ? "본인 근태 기록이 아직 없습니다." : "근태를 입력하거나 CSV를 추가하십시오."}</div></td></tr>`;
+      if (serverShiftsError) {
+        els.shiftRows.insertAdjacentHTML("afterbegin", `<tr><td colspan="7"><div class="empty">서버 근태를 불러오지 못했습니다: ${escapeHtml(serverShiftsError)}</div></td></tr>`);
+      }
+      const localCount = state.shifts.length;
+      if (els.uploadLocalShiftsBtn) {
+        els.uploadLocalShiftsBtn.classList.toggle("hidden", !localCount || !hasServerAuth());
+        els.uploadLocalShiftsBtn.textContent = `미저장 근태 ${localCount}건 서버로 올리기`;
+      }
     }
 
     function renderEmployees() {
@@ -10120,6 +10139,7 @@
       if (currentView === "contracts" && hasServerAuth()) loadEmployeeContracts().catch(err => showToast(`계약서 조회 실패: ${err.message}`));
       if ((currentView === "contracts" || currentView === "payroll") && canManageOnboarding()) loadApprovedEmployees().catch(err => showToast(`승인 직원 조회 실패: ${err.message}`));
       if (currentView === "payroll" && hasServerAuth()) loadPayrollStatements().catch(err => showToast(`급여내역서 조회 실패: ${err.message}`));
+      if (currentView === "attendance" && hasServerAuth()) loadAttendanceRecords().catch(err => showToast(`근태 조회 실패: ${err.message}`));
       if (currentView === "integrations") ensureServerAccountsForIntegrations();
       if (currentView === "sales") loadSalesLedger({ silent: true });
       if (currentView === "inventory") loadInventoryData({ silent: true });
@@ -10486,6 +10506,117 @@
         throw error;
       }
       return payload;
+    }
+
+    async function workspaceApi(path, options = {}) {
+      const controller = new AbortController();
+      const timeoutMs = Number(options.timeoutMs || 15000);
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const response = await fetch(`/api/v1/workspaces${path}`, {
+        ...options,
+        headers: { ...apiHeaders(), ...(options.headers || {}) },
+        signal: options.signal || controller.signal
+      }).catch(error => {
+        if (error?.name === "AbortError") throw new Error(`API 응답 지연: ${Math.round(timeoutMs / 1000)}초 안에 응답하지 않았습니다.`);
+        throw error;
+      }).finally(() => clearTimeout(timeoutId));
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const error = new Error(payload.detail || payload.message || `API ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
+      return payload;
+    }
+
+    // 화면 상태(confirmed/pending/excluded) ↔ 서버 근태 상태(approved/pending/rejected)
+    const shiftStatusToServer = { confirmed: "approved", pending: "pending", excluded: "rejected" };
+    const shiftStatusFromServer = { approved: "confirmed", pending: "pending", rejected: "excluded" };
+
+    function shiftFromServerRecord(record, businessId) {
+      const raw = record.raw || {};
+      return {
+        id: `srv:${record.id}`,
+        serverId: String(record.id),
+        businessId,
+        date: String(raw.work_date || "").slice(0, 10),
+        branch: raw.branch || "",
+        staff: raw.employee_name || "",
+        start: String(raw.start_at || "").slice(0, 5),
+        end: String(raw.end_at || "").slice(0, 5),
+        breakMin: Number(raw.break_minutes || 0),
+        workedMinutes: Number(raw.worked_minutes || 0),
+        hourly: Number(raw.hourly_wage || 0),
+        status: shiftStatusFromServer[raw.status] || "pending",
+        memo: raw.memo || ""
+      };
+    }
+
+    async function loadAttendanceRecords() {
+      if (!hasServerAuth()) {
+        serverShifts = [];
+        serverShiftsError = "";
+        renderShiftRows();
+        return;
+      }
+      try {
+        const { businesses = [] } = await workspaceApi("/businesses");
+        const next = [];
+        for (const business of businesses) {
+          const payload = await workspaceApi(`/${encodeURIComponent(business.id)}/attendance/records?limit=500`);
+          (payload.records || []).forEach(record => next.push(shiftFromServerRecord(record, business.id)));
+        }
+        serverShifts = next;
+        serverShiftsError = "";
+      } catch (error) {
+        serverShiftsError = error?.message || "서버 오류";
+        throw error;
+      } finally {
+        renderAll();
+      }
+    }
+
+    async function saveShiftToServer(shift) {
+      const businessId = businessIdForBranchName(shift.branch) || selectedSettingsBusinessId();
+      if (!businessId) throw new Error("지점의 사업자를 찾을 수 없습니다.");
+      const staffEmail = isEmployeeExperience()
+        ? currentEmployeeEmail()
+        : String(settings().staff.find(item => item.name === shift.staff && item.branch === shift.branch)?.email || "");
+      return workspaceApi(`/${encodeURIComponent(businessId)}/attendance/records`, {
+        method: "POST",
+        body: JSON.stringify({
+          work_date: shift.date,
+          employee_name: shift.staff,
+          employee_email: staffEmail,
+          branch: shift.branch,
+          start_at: shift.start,
+          end_at: shift.end,
+          break_minutes: Number(shift.breakMin || 0),
+          hourly_wage: Math.round(Number(shift.hourly || 0)),
+          status: shiftStatusToServer[shift.status] || "pending",
+          memo: shift.memo || ""
+        })
+      });
+    }
+
+    async function uploadLocalShifts(ids) {
+      const targets = state.shifts.filter(item => ids.includes(item.id));
+      const failed = [];
+      for (const shift of targets) {
+        try {
+          await saveShiftToServer(shift);
+          state.shifts = state.shifts.filter(item => item.id !== shift.id);
+        } catch (error) {
+          failed.push(`${shift.date} ${shift.staff}: ${error?.message || "서버 오류"}`);
+        }
+      }
+      saveState();
+      await loadAttendanceRecords().catch(() => {});
+      if (failed.length) {
+        showToast(`근태 서버 저장 실패 ${failed.length}건 — 로컬에 남겨 두었습니다. ${failed[0]}`);
+      } else {
+        showToast(`근태 ${targets.length}건을 서버에 저장했습니다.`);
+      }
     }
 
     async function inventoryApi(path, options = {}) {
@@ -11296,6 +11427,7 @@
       loadEmployeeContracts().catch(() => {});
       loadApprovedEmployees().catch(() => {});
       loadPayrollStatements().catch(() => {});
+      loadAttendanceRecords().catch(() => {});
       loadDeliveryLedgers({ silent: true }).catch(() => {});
       if (new URLSearchParams(window.location.search).has("yf_contract_token")) {
         handleContractLinkFromUrl().catch(err => showToast(`계약서 링크 확인 실패: ${err.message}`));
@@ -11367,6 +11499,7 @@
       loadEmployeeContracts().catch(() => {});
       loadApprovedEmployees().catch(() => {});
       loadPayrollStatements().catch(() => {});
+      loadAttendanceRecords().catch(() => {});
       loadDeliveryLedgers({ silent: true }).catch(() => {});
     }
 
@@ -12816,11 +12949,10 @@
         showToast("거래를 저장했습니다.");
       });
 
-      els.shiftForm.addEventListener("submit", event => {
+      els.shiftForm.addEventListener("submit", async event => {
         event.preventDefault();
         const data = Object.fromEntries(new FormData(els.shiftForm).entries());
-        state.shifts.push({
-          id: uid(),
+        const shift = {
           date: data.date,
           branch: data.branch,
           staff: isEmployeeExperience() ? currentEmployeeName() : data.staff,
@@ -12830,12 +12962,34 @@
           hourly: isEmployeeExperience() ? 0 : Number(data.hourly || 0),
           status: isEmployeeExperience() ? "pending" : data.status,
           memo: data.memo || ""
-        });
-        saveState();
+        };
+        if (!hasServerAuth()) {
+          showToast("근태 저장 실패: 로그인해야 서버에 저장됩니다. 입력값은 그대로 두었습니다.");
+          return;
+        }
+        const submitButton = els.shiftForm.querySelector('button[type="submit"]');
+        if (submitButton) submitButton.disabled = true;
+        try {
+          await saveShiftToServer(shift);
+        } catch (error) {
+          // 입력값은 폼에 남긴다 — 실패를 성공처럼 보이지 않게 하는 것이 이 핸들러의 목적이다.
+          showToast(`근태 저장 실패: ${error?.message || "서버 오류"} — 입력값은 그대로 두었습니다.`);
+          return;
+        } finally {
+          if (submitButton) submitButton.disabled = false;
+        }
         els.shiftForm.reset();
         setDefaults();
-        renderAll();
-        showToast("근태를 저장했습니다.");
+        try {
+          await loadAttendanceRecords();
+          showToast("근태를 서버에 저장했습니다.");
+        } catch (error) {
+          showToast(`근태는 저장했지만 목록을 다시 읽지 못했습니다: ${error?.message || "서버 오류"}`);
+        }
+      });
+
+      els.uploadLocalShiftsBtn?.addEventListener("click", () => {
+        uploadLocalShifts(state.shifts.map(item => item.id)).catch(err => showToast(`근태 서버 저장 실패: ${err.message}`));
       });
 
       els.contractForm.addEventListener("submit", async event => {
@@ -13312,6 +13466,8 @@
         }
         const entryId = event.target.dataset.deleteEntry;
         const shiftId = event.target.dataset.deleteShift;
+        const uploadShiftId = event.target.dataset.uploadShift;
+        const serverShiftId = event.target.dataset.deleteServerShift;
         const businessId = event.target.dataset.deleteBusiness;
         const branchId = event.target.dataset.deleteBranch;
         const editBusinessPageId = event.target.dataset.editBusinessPage;
@@ -13505,7 +13661,17 @@
           state.shifts = state.shifts.filter(item => item.id !== shiftId);
           saveState();
           renderAll();
-          showToast("근태를 삭제했습니다.");
+          showToast("로컬 근태를 삭제했습니다.");
+        }
+        if (uploadShiftId) {
+          uploadLocalShifts([uploadShiftId]).catch(err => showToast(`근태 서버 저장 실패: ${err.message}`));
+        }
+        if (serverShiftId) {
+          const shiftBusinessId = event.target.dataset.shiftBusiness || "";
+          workspaceApi(`/${encodeURIComponent(shiftBusinessId)}/attendance/records/${encodeURIComponent(serverShiftId)}`, { method: "DELETE" })
+            .then(() => loadAttendanceRecords())
+            .then(() => showToast("근태를 삭제했습니다."))
+            .catch(err => showToast(`근태 삭제 실패: ${err.message}`));
         }
         if (businessId) {
           if (!confirm("사업자를 삭제하면 연결된 지점과 계좌도 함께 삭제됩니다. 계속하시겠습니까?")) return;
@@ -13611,7 +13777,7 @@
         state.shifts.push(...parsed);
         saveState();
         renderAll();
-        showToast(`근태 ${parsed.length}건을 반영했습니다.`);
+        showToast(`근태 ${parsed.length}건을 미저장(로컬 전용)으로 추가했습니다. 서버로 올리기를 눌러 저장하십시오.`);
       });
 
       els.loadFileBtn.addEventListener("click", async () => {

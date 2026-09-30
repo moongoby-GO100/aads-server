@@ -14,6 +14,7 @@ import re
 from typing import Any, Annotated, Literal
 from uuid import UUID
 
+import asyncpg
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
@@ -80,7 +81,7 @@ GENERIC_ROUTE_SQL: dict[str, tuple[str, str]] = {
     "inventory": ("SELECT id,branch_id,name,category,unit,current_stock,min_stock,unit_cost,supplier,updated_at FROM yeoljeong_inventory_items WHERE business_id=$1 ORDER BY name LIMIT 500", "yeoljeong_inventory_items"),
     "purchase-orders": ("SELECT id,branch_id,order_date,supplier,status,total_amount,items,received_at,invoice_number,created_at FROM yeoljeong_purchase_orders WHERE business_id=$1 ORDER BY order_date DESC LIMIT 500", "yeoljeong_purchase_orders"),
     "employees": ("SELECT id,employee_name,employee_email_masked,business_id,branch,role,status,requested_at,reviewed_at FROM yeoljeong_employee_join_requests WHERE business_id=$1 AND deleted_at IS NULL ORDER BY requested_at DESC LIMIT 500", "yeoljeong_employee_join_requests"),
-    "attendance": ("SELECT id,employee_name,branch,work_date,start_at,end_at,break_minutes,worked_minutes,status,created_at FROM yeoljeong_attendance_records WHERE business_id=$1 AND deleted_at IS NULL ORDER BY work_date DESC LIMIT 500", "yeoljeong_attendance_records"),
+    "attendance": ("SELECT id,employee_name,branch,work_date,start_at,end_at,break_minutes,worked_minutes,hourly_wage,status,memo,created_at,updated_at FROM yeoljeong_attendance_records WHERE business_id=$1 AND deleted_at IS NULL ORDER BY work_date DESC LIMIT 500", "yeoljeong_attendance_records"),
     "payroll": ("SELECT id,employee_name,branch,payroll_month,gross_pay,tax_withholding,insurance_deduction,other_deduction,net_pay,status,created_at FROM yeoljeong_payroll_statements WHERE business_id=$1 AND deleted_at IS NULL ORDER BY payroll_month DESC LIMIT 500", "yeoljeong_payroll_statements"),
     "hr-docs": ("SELECT id,employee_name,branch,document_type,document_label,status,original_filename,issue_date,uploaded_at FROM yeoljeong_onboarding_documents WHERE business_id=$1 AND deleted_at IS NULL ORDER BY uploaded_at DESC LIMIT 500", "yeoljeong_onboarding_documents"),
     "tax-returns": ("SELECT id,report_type,period_start,period_end,status,total_sales,total_purchases,vat_payable,tax_amount,submitted_at,created_at FROM yeoljeong_tax_reports WHERE business_id=$1 ORDER BY period_end DESC LIMIT 500", "yeoljeong_tax_reports"),
@@ -174,7 +175,7 @@ def _amount(row: dict[str, Any]) -> Decimal:
 
 
 def _date_text(row: dict[str, Any]) -> str:
-    for key in ("occurred_at", "occurred_on", "transaction_date", "created_at"):
+    for key in ("occurred_at", "occurred_on", "transaction_date", "work_date", "created_at"):
         if row.get(key):
             value = row[key]
             if key == "occurred_at":
@@ -732,6 +733,237 @@ async def workspace_source_snapshot(
 ):
     await _business(current_user, business_id)
     return await acct_source_documents.source_snapshot(current_user, business_id, file_id, after_record, limit)
+
+
+# ── 근태 쓰기 ─────────────────────────────────────────────────────────────
+# 읽기(목록)는 GENERIC_ROUTE_SQL["attendance"] 를 그대로 쓴다. 아래 라우트는
+# 제네릭 `/{business_id}/{route}/records` 보다 먼저 등록되어야 먼저 매칭된다.
+#
+# 운영 스키마(2026-09-30 조회): employee_email NOT NULL 이고
+# UNIQUE (employee_email, work_date, start_at) 가 사업자 구분 없이 걸려 있다.
+# 이메일 없는 직원은 사업자·이름으로 키를 만들어 다른 사업자와 겹치지 않게 한다.
+ATTENDANCE_STATUSES = frozenset({"pending", "approved", "rejected"})
+ATTENDANCE_COLUMNS = (
+    "id,employee_name,branch,work_date,start_at,end_at,break_minutes,"
+    "worked_minutes,hourly_wage,status,memo,created_at,updated_at"
+)
+_ATTENDANCE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ATTENDANCE_TIME = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+
+class AttendanceRecordIn(BaseModel):
+    # worked_minutes 등 클라이언트 계산값은 받지 않고 버린다 — 서버가 계산한다.
+    model_config = {"extra": "ignore"}
+    work_date: str
+    employee_name: str = Field(min_length=1, max_length=100)
+    employee_email: str = Field(default="", max_length=320)
+    branch: str = Field(default="", max_length=100)
+    start_at: str
+    end_at: str
+    break_minutes: int = 0
+    hourly_wage: int = 0
+    status: str = "pending"
+    memo: str = Field(default="", max_length=500)
+
+
+def attendance_worked_minutes(start_at: time, end_at: time, break_minutes: int) -> int:
+    start = start_at.hour * 60 + start_at.minute
+    end = end_at.hour * 60 + end_at.minute
+    if end == start:
+        raise HTTPException(status_code=400, detail="시작과 종료 시각이 같습니다")
+    span = end - start
+    if span < 0:
+        span += 24 * 60  # 자정 넘김
+    worked = span - break_minutes
+    if worked < 0:
+        raise HTTPException(status_code=400, detail="휴게시간이 근무시간보다 깁니다")
+    if worked > 24 * 60:
+        raise HTTPException(status_code=400, detail="근무시간은 24시간을 넘을 수 없습니다")
+    return worked
+
+
+def _attendance_values(business_id: str, payload: AttendanceRecordIn) -> dict[str, Any]:
+    if not _ATTENDANCE_DATE.match(payload.work_date):
+        raise HTTPException(status_code=400, detail="근무일은 YYYY-MM-DD 형식이어야 합니다")
+    try:
+        work_date = date.fromisoformat(payload.work_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="근무일이 올바른 날짜가 아닙니다") from exc
+    for value in (payload.start_at, payload.end_at):
+        if not _ATTENDANCE_TIME.match(value):
+            raise HTTPException(status_code=400, detail="시각은 HH:MM 형식이어야 합니다")
+    start_at = time.fromisoformat(payload.start_at)
+    end_at = time.fromisoformat(payload.end_at)
+    if payload.break_minutes < 0:
+        raise HTTPException(status_code=400, detail="휴게시간은 0분 이상이어야 합니다")
+    if payload.hourly_wage < 0:
+        raise HTTPException(status_code=400, detail="시급은 0원 이상이어야 합니다")
+    if payload.status not in ATTENDANCE_STATUSES:
+        raise HTTPException(status_code=400, detail="근태 상태는 pending·approved·rejected 중 하나여야 합니다")
+    employee_name = payload.employee_name.strip()
+    if not employee_name:
+        raise HTTPException(status_code=400, detail="직원명을 입력하십시오")
+    email = payload.employee_email.strip().lower()
+    if email and "@" not in email:
+        raise HTTPException(status_code=400, detail="직원 이메일 형식이 올바르지 않습니다")
+    local, _, domain = email.partition("@")
+    return {
+        "employee_email": email or f"name:{business_id}:{employee_name}",
+        "employee_email_masked": f"{local[:1]}***@{domain}" if email else "",
+        "employee_name": employee_name,
+        "branch": payload.branch.strip(),
+        "work_date": work_date,
+        "start_at": start_at,
+        "end_at": end_at,
+        "break_minutes": payload.break_minutes,
+        "worked_minutes": attendance_worked_minutes(start_at, end_at, payload.break_minutes),
+        "hourly_wage": payload.hourly_wage,
+        "status": payload.status,
+        "memo": payload.memo.strip(),
+    }
+
+
+async def _attendance_audit(connection, business_id: str, user: dict[str, Any],
+                            action: str, record_id: str, details: dict[str, Any]) -> None:
+    await connection.execute(
+        """INSERT INTO yeoljeong_audit_logs (business_id,actor,action,resource_type,resource_id,details)
+           VALUES ($1,$2,$3,'attendance',$4,$5::jsonb)""",
+        business_id, upload_svc._actor(user), action, record_id,
+        json.dumps(_json_value(details), ensure_ascii=False),
+    )
+
+
+def _attendance_response(business: dict[str, Any], row: Any) -> dict[str, Any]:
+    return {"record": _record("generic", dict(row), business["name"]),
+            "source": "yeoljeong_attendance_records"}
+
+
+@router.post("/{business_id}/attendance/records", status_code=201)
+async def create_attendance_record(
+    business_id: str,
+    payload: AttendanceRecordIn,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    business = await _business(current_user, business_id)
+    values = _attendance_values(business_id, payload)
+    connection = await upload_svc._connect()
+    try:
+        async with connection.transaction():
+            # 같은 키의 soft delete 행이 있으면 되살린다. 살아 있는 행과 겹치면 409.
+            row = await connection.fetchrow(
+                f"""INSERT INTO yeoljeong_attendance_records
+                      (business_id,employee_email,employee_email_masked,employee_name,branch,
+                       work_date,start_at,end_at,break_minutes,worked_minutes,hourly_wage,
+                       source,status,memo,created_by)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'manual',$12,$13,$14)
+                    ON CONFLICT (employee_email,work_date,start_at) DO UPDATE SET
+                      employee_email_masked=EXCLUDED.employee_email_masked,
+                      employee_name=EXCLUDED.employee_name, branch=EXCLUDED.branch,
+                      end_at=EXCLUDED.end_at, break_minutes=EXCLUDED.break_minutes,
+                      worked_minutes=EXCLUDED.worked_minutes, hourly_wage=EXCLUDED.hourly_wage,
+                      source='manual', status=EXCLUDED.status, memo=EXCLUDED.memo,
+                      created_by=EXCLUDED.created_by, confirmed_by='', confirmed_at=NULL,
+                      created_at=now(), updated_at=now(), deleted_at=NULL
+                    WHERE yeoljeong_attendance_records.deleted_at IS NOT NULL
+                      AND yeoljeong_attendance_records.business_id=EXCLUDED.business_id
+                    RETURNING {ATTENDANCE_COLUMNS}""",
+                business_id, values["employee_email"], values["employee_email_masked"],
+                values["employee_name"], values["branch"], values["work_date"],
+                values["start_at"], values["end_at"], values["break_minutes"],
+                values["worked_minutes"], values["hourly_wage"], values["status"],
+                values["memo"], upload_svc._actor(current_user),
+            )
+            if row is None:
+                raise HTTPException(status_code=409, detail="같은 직원·근무일·시작시각 근태가 이미 있습니다")
+            await _attendance_audit(connection, business_id, current_user, "attendance.create",
+                                    str(row["id"]), dict(row))
+    except asyncpg.UniqueViolationError as exc:
+        raise HTTPException(status_code=409, detail="같은 직원·근무일·시작시각 근태가 이미 있습니다") from exc
+    finally:
+        await connection.close()
+    return _attendance_response(business, row)
+
+
+@router.get("/{business_id}/attendance/records/{record_id}")
+async def get_attendance_record(
+    business_id: str,
+    record_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    business = await _business(current_user, business_id)
+    connection = await upload_svc._connect()
+    try:
+        row = await connection.fetchrow(
+            f"""SELECT {ATTENDANCE_COLUMNS} FROM yeoljeong_attendance_records
+                 WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL""",
+            record_id, business_id,
+        )
+    finally:
+        await connection.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="현재 사업자의 근태를 찾을 수 없습니다")
+    return {**_attendance_response(business, row), "route": "attendance"}
+
+
+@router.put("/{business_id}/attendance/records/{record_id}")
+async def update_attendance_record(
+    business_id: str,
+    record_id: str,
+    payload: AttendanceRecordIn,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    business = await _business(current_user, business_id)
+    values = _attendance_values(business_id, payload)
+    connection = await upload_svc._connect()
+    try:
+        async with connection.transaction():
+            row = await connection.fetchrow(
+                f"""UPDATE yeoljeong_attendance_records SET
+                      employee_email=$3, employee_email_masked=$4, employee_name=$5, branch=$6,
+                      work_date=$7, start_at=$8, end_at=$9, break_minutes=$10,
+                      worked_minutes=$11, hourly_wage=$12, status=$13, memo=$14,
+                      updated_at=now()
+                    WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL
+                    RETURNING {ATTENDANCE_COLUMNS}""",
+                record_id, business_id, values["employee_email"], values["employee_email_masked"],
+                values["employee_name"], values["branch"], values["work_date"],
+                values["start_at"], values["end_at"], values["break_minutes"],
+                values["worked_minutes"], values["hourly_wage"], values["status"], values["memo"],
+            )
+            if row is None:
+                raise HTTPException(status_code=404, detail="현재 사업자의 근태를 찾을 수 없습니다")
+            await _attendance_audit(connection, business_id, current_user, "attendance.update",
+                                    record_id, dict(row))
+    except asyncpg.UniqueViolationError as exc:
+        raise HTTPException(status_code=409, detail="같은 직원·근무일·시작시각 근태가 이미 있습니다") from exc
+    finally:
+        await connection.close()
+    return _attendance_response(business, row)
+
+
+@router.delete("/{business_id}/attendance/records/{record_id}")
+async def delete_attendance_record(
+    business_id: str,
+    record_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    await _business(current_user, business_id)
+    connection = await upload_svc._connect()
+    try:
+        async with connection.transaction():
+            # 물리 삭제하지 않는다 — 급여 산정 근거가 되므로 이력을 남긴다.
+            deleted = await connection.fetchval(
+                """UPDATE yeoljeong_attendance_records SET deleted_at=now(), updated_at=now()
+                    WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL RETURNING id""",
+                record_id, business_id,
+            )
+            if deleted is None:
+                raise HTTPException(status_code=404, detail="현재 사업자의 근태를 찾을 수 없습니다")
+            await _attendance_audit(connection, business_id, current_user, "attendance.delete",
+                                    record_id, {"id": record_id})
+    finally:
+        await connection.close()
+    return {"deleted": True, "id": record_id}
 
 
 @router.get("/{business_id}/{route}/records")
