@@ -1960,6 +1960,21 @@ async def lifespan(app: FastAPI):
                     )
                     return
 
+                # 락 획득 전에 확인한다 — 멈춤 상태에서 .bank_auto_collect.lock 을 건드리지 않는다.
+                try:
+                    from app.services.collection_pause import (
+                        is_collection_paused as _is_paused,
+                        pause_reason as _pause_reason,
+                    )
+                    if await _is_paused("bank"):
+                        logger.info(
+                            "bank_auto_collect_skip: paused reason=%s pause_reason=%s",
+                            reason, (await _pause_reason("bank"))[:80],
+                        )
+                        return
+                except Exception as _pause_err:
+                    logger.debug("collection_pause_check_failed: %s", str(_pause_err)[:80])
+
                 root_dir = Path(__file__).resolve().parents[1]
                 delivery_lock_path = os.getenv(
                     "YEOLJEONG_DELIVERY_SYNC_LOCK_PATH",
@@ -2124,6 +2139,18 @@ async def lifespan(app: FastAPI):
                         os.getenv("AADS_PUBLIC_PORT", ""),
                     )
                     return
+
+                # 큐는 은행(financial_exclusive)·배달 항목을 함께 꺼내므로 둘 다 멈춤일 때만 드레인을 건너뛴다.
+                try:
+                    from app.services.collection_pause import is_collection_paused as _is_paused
+                    if await _is_paused("bank") and await _is_paused("delivery"):
+                        logger.info(
+                            "pc_agent_global_collection_queue_skip: paused reason=%s",
+                            reason,
+                        )
+                        return
+                except Exception as _pause_err:
+                    logger.debug("collection_pause_check_failed: %s", str(_pause_err)[:80])
 
                 due_financial_agent_id = ""
                 try:
