@@ -35,6 +35,11 @@ _LINK_OPTIONAL_COLUMNS = (
 )
 _link_columns_cache: Optional[set] = None
 
+# goals.status 에 쓸 수 있는 값. 읽는 쪽(for-session 패널·goal_dispatch 후보 등)이 전부 처리하는 6개만 둔다.
+# paused 를 빼는 이유: 2026-09-30 NTV2 목표가 status='paused'(paused_at NULL)로 직접 바뀌어 패널·착수가 통째로 멈췄다.
+# 일시중지는 status 가 아니라 POST /api/v1/goals/{goal_id}/pause (paused_at) 경로다.
+_ALLOWED_GOAL_STATUS = frozenset({"draft", "active", "blocked", "completed", "cancelled", "archived"})
+
 
 async def link_optional_columns(conn) -> set:
     """goal_task_links 에 실제로 존재하는 선택 컬럼 집합 (프로세스 수명 동안 캐시)."""
@@ -130,6 +135,53 @@ def _trace_started_at() -> Optional[float]:
         return time.monotonic()
     except Exception:  # noqa: BLE001 — 계측은 업무 흐름을 방해하지 않는다
         return None
+
+
+def _invalid_status_message(goal_id: str, status: Any) -> str:
+    allowed = ", ".join(sorted(_ALLOWED_GOAL_STATUS))
+    message = f"허용되지 않는 goals.status 값: {status!r}. 허용 값: {allowed}."
+    if status == "paused":
+        message += (
+            " 일시중지는 status 가 아니라 POST /api/v1/goals/"
+            f"{goal_id}/pause (paused_at) 경로를 쓰라. 해제는 DELETE 같은 경로."
+        )
+    return message
+
+
+def _audit_actor(actor: Optional[str]) -> Optional[str]:
+    """채팅 세션 컨텍스트가 있으면 그것을, 없으면 호출자가 넘긴 값을 쓴다. 모르면 None."""
+    try:
+        from app.services.tool_executor import current_chat_session_id
+
+        session_id = str(current_chat_session_id.get("") or "").strip()
+    except Exception:  # noqa: BLE001 — 감사 주체 조회 실패가 상태 변경을 막으면 안 된다
+        session_id = ""
+    if session_id:
+        return f"chat_session:{session_id}"
+    return actor or None
+
+
+async def _record_goal_status_audit(
+    conn, goal_id: str, old_status: Optional[str], new_status: str, *,
+    actor: Optional[str], tenant_id: Optional[str], source: str, note: Optional[str] = None,
+) -> None:
+    """goal_status_audit 1행. 실패해도(마이그레이션 미적용 서버 등) 상태 변경은 유지한다.
+
+    savepoint 로 감싸서 INSERT 실패가 바깥 트랜잭션(UPDATE)을 abort 시키지 않게 한다.
+    """
+    try:
+        async with conn.transaction():
+            await conn.execute(
+                "INSERT INTO goal_status_audit "
+                "(goal_id, old_status, new_status, actor, source, tenant_id, note) "
+                "VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid, $7)",
+                goal_id, old_status, new_status, _audit_actor(actor), source, tenant_id, note,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "goal_status_audit_failed goal_id=%s %s->%s: %s",
+            goal_id, old_status, new_status, str(exc)[:200],
+        )
 
 
 class GoalStateMachine:
@@ -1285,24 +1337,42 @@ class GoalStateMachine:
         ]
 
     async def update_goal(
-        self, goal_id: str, *, tenant_id: Optional[str] = None, **kwargs,
+        self, goal_id: str, *, tenant_id: Optional[str] = None,
+        actor: Optional[str] = None, **kwargs,
     ) -> dict[str, Any]:
-        pool = await self._pool()
         allowed = {"title", "priority", "description", "success_criteria", "status", "deadline"}
         updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
         if not updates:
             return {"error": "no_valid_fields"}
+        new_status = updates.get("status")
+        if new_status is not None and new_status not in _ALLOWED_GOAL_STATUS:
+            return {"error": "invalid_status", "message": _invalid_status_message(goal_id, new_status)}
+        pool = await self._pool()
         set_parts = [f"{k} = ${i+2}" for i, k in enumerate(updates)]
         set_parts.append("updated_at = NOW()")
         tenant_param = len(updates) + 2
         sql = (
             f"UPDATE goals SET {', '.join(set_parts)} WHERE id = $1::uuid "
             f"AND (${tenant_param}::uuid IS NULL OR tenant_id = ${tenant_param}::uuid) "
-            "RETURNING id::text"
+            "RETURNING id::text, tenant_id::text"
         )
         async with pool.acquire() as conn:
-            updated = await conn.fetchval(sql, goal_id, *updates.values(), tenant_id)
-        if not updated:
+            async with conn.transaction():
+                old_status = None
+                if new_status is not None:
+                    # 같은 트랜잭션에서 행을 잠그고 읽어야 감사기록의 old_status 가 실제 직전 값이 된다.
+                    old_status = await conn.fetchval(
+                        "SELECT status FROM goals WHERE id = $1::uuid "
+                        "AND ($2::uuid IS NULL OR tenant_id = $2::uuid) FOR UPDATE",
+                        goal_id, tenant_id,
+                    )
+                row = await conn.fetchrow(sql, goal_id, *updates.values(), tenant_id)
+                if row and new_status is not None and old_status != new_status:
+                    await _record_goal_status_audit(
+                        conn, goal_id, old_status, new_status,
+                        actor=actor, tenant_id=row["tenant_id"], source="update_goal",
+                    )
+        if not row:
             return {"error": "goal_not_found"}
         return {"goal_id": goal_id, "updated": list(updates.keys())}
 

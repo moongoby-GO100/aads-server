@@ -1664,9 +1664,16 @@ async def update_goal(
 ):
     from app.services.goal_manager import goal_state_machine
     tenant_id = await _validated_tenant_goal(goal_id, context, member=True)
+    # goals.status 감사기록의 주체. 채팅 세션 컨텍스트가 없을 때만 쓰이며, 모르면 None 으로 둔다.
+    user_id = _tenant_identity(context)[1]
     result = await goal_state_machine.update_goal(
-        goal_id, tenant_id=tenant_id, **req.model_dump(exclude_none=True),
+        goal_id, tenant_id=tenant_id, actor=f"user:{user_id}" if user_id else None,
+        **req.model_dump(exclude_none=True),
     )
     if "error" in result:
-        raise HTTPException(status_code=400, detail=result["error"])
+        detail = (
+            {"error": result["error"], "message": result["message"]}
+            if result.get("message") else result["error"]
+        )
+        raise HTTPException(status_code=400, detail=detail)
     return result
