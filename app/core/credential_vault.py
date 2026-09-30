@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, MultiFernet
 
 from app.core.db_pool import get_pool
 
@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 # ── 암호화 키 ──────────────────────────────────────────
 _VAULT_KEY: bytes | None = None
+# AADS 모드 키 교체용 이전 키(VAULT_ENCRYPTION_KEY_PREVIOUS, 쉼표 구분). 주키와 같이
+# 로드된다. 복호화만 허용하고 암호화는 항상 주키다. standalone 은 쓰지 않는다.
+_VAULT_PREVIOUS_KEYS: tuple[bytes, ...] = ()
 
 
 _VAULT_KEY_FILE = "/app/app/.vault.key"
@@ -77,10 +80,11 @@ class VaultUnavailableError(RuntimeError):
 
 def configure_vault_key(key: bytes | None, source: str = "OBYS_VAULT_KEY") -> None:
     """standalone 전용 Fernet 키를 주입한다. None 이면 vault 만 비활성화한다."""
-    global _VAULT_KEY, _STANDALONE_KEY_SOURCE
+    global _VAULT_KEY, _STANDALONE_KEY_SOURCE, _VAULT_PREVIOUS_KEYS
     if key is not None:
         Fernet(key)  # 형식 오류는 여기서 ValueError — 값은 메시지에 없다.
     _VAULT_KEY = key
+    _VAULT_PREVIOUS_KEYS = ()  # standalone 은 단일 키. AADS 이전 키를 들고 있지 않는다.
     _STANDALONE_KEY_SOURCE = source
     logger.info("vault_key_configured source=%s enabled=%s", source, key is not None)
 
@@ -99,9 +103,32 @@ def require_vault_enabled() -> None:
         raise VaultUnavailableError(f"vault_disabled:{_STANDALONE_KEY_SOURCE}_missing")
 
 
-def _get_fernet() -> Fernet:
-    """암호화 키 로드: standalone 주입 키 → (AADS) 환경변수 → 파일 → 자동 생성."""
-    global _VAULT_KEY
+def _parse_previous_keys(raw: str, primary: bytes | None) -> tuple[bytes, ...]:
+    """VAULT_ENCRYPTION_KEY_PREVIOUS 파싱. 형식 오류 키는 건너뛰고 순번만 경고한다(값은 남기지 않는다)."""
+    keys: list[bytes] = []
+    for index, part in enumerate(raw.split(",")):
+        part = part.strip()
+        if not part:
+            continue
+        key = part.encode()
+        try:
+            Fernet(key)
+        except (ValueError, TypeError):
+            logger.warning("vault_previous_key_invalid index=%d skipped", index)
+            continue
+        if key == primary or key in keys:
+            continue
+        keys.append(key)
+    return tuple(keys)
+
+
+def _get_fernet() -> Fernet | MultiFernet:
+    """암호화 키 로드: standalone 주입 키 → (AADS) 환경변수 → 파일 → 자동 생성.
+
+    AADS 모드에서 VAULT_ENCRYPTION_KEY_PREVIOUS 가 있으면 MultiFernet([주키, 이전키...]).
+    암호화는 주키, 복호화는 모든 키로 시도하므로 재암호화 중에도 옛 암호문이 읽힌다.
+    """
+    global _VAULT_KEY, _VAULT_PREVIOUS_KEYS
     if is_standalone_vault():
         require_vault_enabled()
         return Fernet(_VAULT_KEY)
@@ -117,7 +144,14 @@ def _get_fernet() -> Fernet:
                     f.write(key_str)
                 logger.info("vault_encryption_key_auto_generated path=%s", _VAULT_KEY_FILE)
         _VAULT_KEY = key_str.encode()
-    return Fernet(_VAULT_KEY)
+        _VAULT_PREVIOUS_KEYS = _parse_previous_keys(
+            os.getenv("VAULT_ENCRYPTION_KEY_PREVIOUS", ""), _VAULT_KEY
+        )
+        if _VAULT_PREVIOUS_KEYS:
+            logger.info("vault_multifernet_enabled previous_keys=%d", len(_VAULT_PREVIOUS_KEYS))
+    if not _VAULT_PREVIOUS_KEYS:
+        return Fernet(_VAULT_KEY)
+    return MultiFernet([Fernet(_VAULT_KEY), *(Fernet(k) for k in _VAULT_PREVIOUS_KEYS)])
 
 
 def encrypt_value(plaintext: str) -> str:
