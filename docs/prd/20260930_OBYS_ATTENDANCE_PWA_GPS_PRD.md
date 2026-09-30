@@ -6,8 +6,9 @@
 | 대상 서비스 | 오비서(obys_standalone, 열정국밥 운영관리) — 운영: 진아서버 jinah244, 코드: aads-server |
 | 작성 | 2026-09-30 15:55 KST, CTO(AI) |
 | 요청 | CEO 2026-09-30 "웹앱을 직원 핸드폰에 설치하고 GPS로 출퇴근 관리" → "기획 설계 PRD 상세 작성" |
-| 상태 | 초안(Draft) r2 — 아래 §13 미결 결정 3건 확정 후 v1.0 |
+| 상태 | 초안(Draft) r3 — §13 D1 확정(반경 50m), D2·D3 확정 후 v1.0 |
 | 개정 | r2 2026-09-30 16:05 KST — API 경로·설치 시작주소·서비스워커 범위를 실제 라우팅(`/api/v1/workspaces`, `/static/apps/obys/`)에 맞춤, 법정 보존 항목 추가 |
+| 개정 | r3 2026-09-30 16:01 KST — CEO 결정 D1 "매장 반경 50m 안" 반영: 기본·상한 50m, 정확도 여유 제거, 정확도 판정 기준 50m |
 | 선행 작업 | 직원 테넌트 멤버십 R2(직원 계정 403 해소), 근태 서버 저장 `runner-9186c664`(push, 운영 미배포) |
 | 연관 작업 | 계약정보→고용정보·급여 기준값 반영(AADS-OBYS-CONTRACT-TO-EMPLOYMENT-PAYROLL-20260930) |
 
@@ -86,7 +87,7 @@
 | 상황 | 화면 동작 | 결과 |
 |---|---|---|
 | 위치 권한 거부 | "위치 없이 기록" + 설정 방법 안내 | 타각 저장, `geo_verdict=no_permission` → 확인필요 |
-| 측정 시간 초과/오차 과대(정확도 > 150m) | 1회 재시도 버튼 → 그래도 실패면 "위치 없이 기록" | `geo_verdict=low_accuracy` → 확인필요 |
+| 측정 시간 초과/오차 과대(정확도 > 50m, 즉 반경보다 오차가 큼) | 1회 재시도 버튼 → 그래도 실패면 "위치 없이 기록" | `geo_verdict=low_accuracy` → 확인필요 |
 | 오프라인 | 기기에 임시 저장, 연결되면 자동 전송. 화면에 "전송 대기 1건" | 서버 수신 시각과 기기 시각 모두 저장, 차이 > 10분이면 확인필요 |
 | 퇴근 미기록 | 다음 날 첫 진입 시 "어제 퇴근이 없습니다 → 퇴근 시각 입력" | 정정 요청 → 관리자 승인 |
 | 중복 탭 | 60초 내 같은 종류 타각은 무시하고 기존 결과 표시 | 중복 행 없음 |
@@ -129,7 +130,7 @@
 ALTER TABLE yeoljeong_branches
   ADD COLUMN IF NOT EXISTS latitude          DOUBLE PRECISION,
   ADD COLUMN IF NOT EXISTS longitude         DOUBLE PRECISION,
-  ADD COLUMN IF NOT EXISTS geofence_radius_m INTEGER NOT NULL DEFAULT 100,
+  ADD COLUMN IF NOT EXISTS geofence_radius_m INTEGER NOT NULL DEFAULT 50 CHECK (geofence_radius_m BETWEEN 30 AND 50),
   ADD COLUMN IF NOT EXISTS geo_check_enabled BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- 2) 원시 타각 (출근·퇴근·휴게)
@@ -187,12 +188,13 @@ if not consent:                 verdict = no_consent      → pending
 elif branch.lat is null:        verdict = branch_unset    → pending
 elif not branch.geo_check:      verdict = disabled        → approved (위치 미사용 매장)
 elif coords is null:            verdict = no_permission   → pending
-elif accuracy_m > 150:          verdict = low_accuracy    → pending
+elif accuracy_m > radius:       verdict = low_accuracy    → pending   # 오차가 반경(50m)보다 크면 안/밖 판정 불가
 else:
     d = haversine(coords, branch)
-    verdict = inside if d <= radius + min(accuracy_m, 50) else outside
+    verdict = inside if d <= radius else outside              # radius 기본·상한 50m, 여유 없음
 ```
-- 정확도 여유(최대 50m)를 반경에 더해 실내 오차로 인한 거짓 "밖" 판정을 줄인다.
+- CEO 결정(2026-09-30): **매장 반경 50m 안**만 자동 확정한다. 정확도 여유를 더하지 않는다 — 여유를 더하면 실제 허용 거리가 최대 100m로 늘어 결정과 어긋난다.
+- 대가: 실내에서 GPS 오차가 50m를 넘으면 `low_accuracy`로 "확인필요"가 된다. 기록은 남고 관리자가 승인하면 된다. 도입 첫 주 확인필요 비율을 측정해(§14 운영) 20%를 넘으면 매장 QR(FR-15) 앞당김을 CEO에게 올린다. 반경을 넓히는 것은 이 문서 범위에서 하지 않는다.
 - 근태 행 상태: 출근·퇴근 **둘 다** `inside`(또는 `disabled`)이고 의심 신호가 없으면 `approved`, 아니면 `pending`.
 
 ### 8.2 시각
@@ -237,7 +239,7 @@ else:
 | 내 근태 | 직원 | 이번 달 근무일·시간·예상 금액, 확인필요 사유, [정정 요청] |
 | 오늘 근태 카드 | 관리자 | 출근/미출근/확인필요 수 → 목록 이동 |
 | 확인필요 | 관리자 | 거리·정확도·사유 표시, 일괄 승인 |
-| 지점 위치 설정 | owner | 주소→좌표, "지금 위치로 설정", 반경 슬라이더(50~300m), 지도 미리보기(선택) |
+| 지점 위치 설정 | owner | 주소→좌표, "지금 위치로 설정", 반경 슬라이더(30~50m, 기본 50m — CEO 결정 상한, 더 넓힐 수 없음), 지도 미리보기(선택) |
 
 모바일 기준: 버튼 높이 ≥ 56px, 한 손 엄지 영역, 글자 줄바꿈, 앱 재실행 후 근무중 상태 복원.
 화면 라벨은 업무명(출근·퇴근·확인필요)만 쓰고 `geo_verdict` 같은 내부값은 노출하지 않는다.
@@ -277,7 +279,7 @@ else:
 
 | # | 결정할 것 | 권장 | 이유 |
 |---|---|---|---|
-| D1 | 허용 반경 | 100m(정확도 여유 최대 50m 추가) | 도심 실내 GPS 오차 고려. 너무 넓으면 인근 카페에서 출근 가능 |
+| D1 | 허용 반경 | ✅ **확정: 50m 안** (CEO 2026-09-30 16:01 KST). 정확도 여유 없음, 서버 상한 50m | 초안 권장 100m 대신 CEO 결정 반영 |
 | D2 | 좌표 원값 보존기간 | 90일 | 월마감·이의제기 기간을 넘기고 최소 보관 |
 | D3 | 성신여대점 주소·좌표 | 사장님이 매장에서 "지금 위치로 설정" 1회 | 현재 주소 공란 [코드 확인] |
 
@@ -285,7 +287,7 @@ else:
 
 | 구분 | 항목 |
 |---|---|
-| 단위 | 하버사인 거리(경계 99/100/101m), 정확도 여유, verdict 7종 → 상태 매핑, 60초 중복 차단, idempotency 재전송, 자정 넘김, 동의 없음 시 좌표 미저장 |
+| 단위 | 하버사인 거리(경계 49/50/51m), 정확도 50m 경계(`low_accuracy`), 반경 설정 51m 이상 거부(400), verdict 7종 → 상태 매핑, 60초 중복 차단, idempotency 재전송, 자정 넘김, 동의 없음 시 좌표 미저장 |
 | 권한 | 직원이 타인 이메일로 타각 불가, 관리자 대리 타각 403, admin에게 좌표 원값 미노출 |
 | 회귀 | 기존 수기·CSV 근태 CRUD, 기존 `test_obys_attendance_api.py` 전부 PASS |
 | E2E | 실기기 2종에서 설치→동의→출근→퇴근→관리자 확인필요 처리까지 캡처. 브라우저 E2E 불가 시 API 폴백(clock/state·punch 200) 명시 |
@@ -296,7 +298,7 @@ else:
 | 리스크 | 영향 | 대응 |
 |---|---|---|
 | 위치 조작 앱 | 부정 출근 | 의심 신호 기록 + QR 보조(3단계) |
-| 실내 GPS 오차 | 확인필요 과다 | 정확도 여유, 반경 조정, 지점별 설정 |
+| 실내 GPS 오차(반경 50m라 영향 큼) | 확인필요 과다 | 첫 주 비율 측정, 20% 초과 시 매장 QR(FR-15) 앞당김 제안. 반경 확대는 CEO 결정 사항 |
 | iOS 설치 난이도 | 설치율 저조 | 그림 안내, 설치 없이 브라우저에서도 동작 |
 | 직원 계정 403 미해결 | 기능 자체 사용 불가 | 0단계를 하드 선행으로 둠 |
 | 법적 요건 미확인 | 과태료·분쟁 | §11 확인 전 운영 배포 금지 |
