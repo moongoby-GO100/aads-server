@@ -14570,3 +14570,7 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 오류사전: `db.safe_write_multi_statement_commits_before_guard` 신규 등록(fix-commit 은 Runner 커밋 후 채울 것). DB handover key: `aads-vault-cleanup-guard-20260923` (AADS/verification).
 - stale_base 교정(R3 재작업 1/2): 반려 커밋 d633c329 의 base 가 0ad92b6a 로 origin/main 보다 3커밋 뒤졌다. `.runner_full_diff.patch` 를 제외한 변경을 origin/main(c85b26bb) 위에 `git apply --3way` 로 그대로 얹었고(충돌 0), 코드 변경은 없다.
 - 승인 후 Runner 커밋 대상. 배포 전.
+
+## 2026-09-30 — 직원 승인 멤버십 R3 실결함 3건 (AADS-OBYS-EMPLOYEE-TENANT-MEMBERSHIP-R3-20260930)
+- b3c3f444 산출물 위에 ①이메일 조회 테넌트 컨텍스트 코드 강제+SQL 테넌트 조건 ②flock → `pg_advisory_xact_lock`(tenant,email) ③서명 게이트 GET 명시적 화이트리스트. 상세 `docs/operations/OBYS_EMPLOYEE_TENANT_MEMBERSHIP.md` "R3". 테스트 128 passed(test_obys_employee_tenant_membership), 배포 전 — 마이그레이션은 여전히 HOLD(수동 적용).
+- R4(AADS-OBYS-EMPLOYEE-TENANT-MEMBERSHIP-R4-20260930): stale_base 교정 — f6c59fe1(base a9ddd6b0) 변경을 `.runner_full_diff.patch` 제외 후 origin/main(4eb4a182) 위에 `git apply --3way` 로 이관. 기능 변경 없음. 충돌은 HANDOVER.md·migrations_auto_apply_baseline.txt 뿐이며 양쪽 줄을 모두 보존했다.

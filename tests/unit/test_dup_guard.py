@@ -52,6 +52,70 @@ def test_duplicate_update_set_target_is_detected():
     assert {f.ident for f in found} == {"SET.current_slot"}
 
 
+def test_update_inside_one_line_string_does_not_swallow_later_kwargs():
+    """2026-09-30 거짓 양성. 단정문 문자열 뒤의 raising= 세 번을 SET 대상으로 셌다."""
+    src = '''
+def test_switch(monkeypatch):
+    assert "UPDATE tenant_memberships SET updated_at = now()" in switch
+    monkeypatch.setattr(mod, "a", 1, raising=False)
+    monkeypatch.setattr(mod, "b", 2, raising=False)
+    with pytest.raises(HTTPException, match="x"):
+        monkeypatch.setattr(mod, "c", 3, raising=False)
+'''
+    assert dup.check_sql("tests/unit/test_x.py", src) == []
+    assert "sql-dup-col" not in _kinds("tests/unit/test_x.py", src)
+
+
+def test_literal_window_applies_to_code_files():
+    """리뷰 지적 3: in_code = path.endswith(PY_EXT + SH_EXT) 는 튜플 결합이라 .py/.sh 에서 참이다.
+
+    같은 입력이 코드 파일에서는 리터럴 끝에서 닫히고(0건), 코드가 아닌 경로에서는
+    예전 2000자 창을 써서 뒤쪽 'a = 2' 를 SET 대상으로 센다(1건) — 분기가 실제로 탄다.
+    """
+    assert isinstance(dup.PY_EXT + dup.SH_EXT, tuple)
+    for path in ("tests/unit/test_x.py", "scripts/x.sh", "scripts/x.bash"):
+        assert path.endswith(dup.PY_EXT + dup.SH_EXT)
+    src = 'assert "UPDATE t SET a = 1" in s\nfoo(), a = 2, 3\n'
+    assert dup.check_sql("tests/unit/test_x.py", src) == []
+    assert [f.ident for f in dup.check_sql("notes.txt", src)] == ["SET.a"]
+
+
+def test_keyword_args_after_real_update_are_not_set_targets():
+    """문자열 밖에서 창이 흘러도 호출 인자(괄호 안)는 컬럼으로 세지 않는다."""
+    src = "UPDATE t SET a = 1\nf(x, raising=1)\ng(y, raising=2)\nh(z, raising=3)\n"
+    assert dup.check_sql("x.sql", src) == []
+
+
+def test_real_duplicate_update_set_is_still_detected():
+    found = dup.check_sql("x.py", 'conn.execute("UPDATE t SET a = 1, b = 2, a = 3 WHERE id = $1")')
+    assert [f.ident for f in found] == ["SET.a"]
+    found = dup.check_sql("x.sql", "UPDATE t SET a = 1, b = 2, a = 3;")
+    assert [f.ident for f in found] == ["SET.a"]
+
+
+def test_real_duplicate_insert_column_is_still_detected():
+    found = dup.check_sql("x.py", 'conn.execute("INSERT INTO t (a, b, a) VALUES ($1, $2, $3)")')
+    assert [f.ident for f in found] == ["t.a"]
+
+
+def test_duplicate_set_across_concatenated_literals_is_detected():
+    """한 줄 리터럴에서 끊더라도 암묵적 이어붙이기 줄은 따라간다."""
+    src = (
+        "await conn.execute(\n"
+        '    "UPDATE pipeline_jobs SET status = $1, "\n'
+        '    "phase = $2, status = $3 "\n'
+        '    "WHERE id = $4",\n'
+        ")\n"
+    )
+    found = dup.check_sql("x.py", src)
+    assert [f.ident for f in found] == ["SET.status"]
+
+
+def test_duplicate_set_in_triple_quoted_sql_is_detected():
+    src = 'await conn.execute("""\n    UPDATE t\n       SET a = 1,\n           a = now()\n     WHERE id = $1\n""")\n'
+    assert [f.ident for f in dup.check_sql("x.py", src)] == ["SET.a"]
+
+
 def test_clean_insert_is_not_flagged():
     sql = "INSERT INTO deploy_runs (project, sha, status, current_slot) VALUES ($1,$2,$3,$4)"
     assert dup.check_sql("x.py", sql) == []

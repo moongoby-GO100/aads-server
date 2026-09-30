@@ -25,6 +25,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from contextlib import AsyncExitStack
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -2249,6 +2250,17 @@ def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
             "updated_at": now,
         }
     )
+    # 신원 고정: 본인 로그인 이메일로 낸 요청만 요청자 계정(JWT user_id)을 남긴다.
+    # 승인 시 고용주 테넌트 멤버십은 이 값으로만 연결된다 — 본문 email 만으로는
+    # 남의 계정을 연결하거나(승인) 회수하지(반려) 못한다.
+    requester_email = _email(user)
+    requester_user_id = str(user.get("user_id") or user.get("id") or "").strip()
+    if requester_email and requester_email == email and requester_user_id:
+        record["requester_user_id"] = requester_user_id
+        record["requester_email"] = requester_email
+        record["requested_by"] = requester_email
+    elif not existing:
+        record["registered_by"] = requester_email
     record = _owned_hr_record(record, user)
     _write_hr_record("employee_join_requests", record, user)
     return record
@@ -2268,6 +2280,362 @@ def review_join_request(request_id: str, action: str, memo: str, user: dict[str,
     record["updated_at"] = record["reviewed_at"]
     _write_hr_record("employee_join_requests", record, user)
     return record
+
+
+# ---------------------------------------------------------------------------
+# 직원 승인 ↔ 고용주 테넌트 멤버십 (AADS-OBYS-EMPLOYEE-TENANT-MEMBERSHIP-20260930)
+#
+# 2026-09-30 진아서버 실측: 승인 직원 7명 중 고용주 테넌트(tenant_memberships)
+# 소속은 0명이었다. 직원은 가입 때 자동 생성된 개인 워크스페이스로만 로그인해
+# _read_hr 가 계약서를 못 찾았고, 그 워크스페이스에서는 owner 라 _is_admin 이
+# 참이 되어 서명이 막혔다. 승인이 멤버십(role=member)을 만들고, 반려·퇴사가
+# 그 승인이 만든 멤버십만 회수(status=removed)한다. 멤버십은 AADS 인증 DB,
+# 가입요청·감사는 오비서 DB 라 한 트랜잭션이 아니다 — 승인 자체는 멤버십
+# 실패와 무관하게 성공으로 남기고 결과를 응답과 감사에 담는다.
+#
+# 신원: 본인 로그인으로 제출한 요청은 upsert_join_request 가 남긴
+# requester_user_id 로 연결한다(이메일이 바뀌었으면 identity_mismatch).
+# 그 고정이 없는 요청 — 관리자 대리 등록·초대 흐름·예전 요청 — 은 요청
+# 이메일로 saas_users 를 찾는다. 직원은 개인 워크스페이스 JWT 로 고용주
+# 테넌트에 요청을 낼 수 없어(obys_tenant 게이트) 실제 요청 대부분이 이쪽이고,
+# 이메일은 승인하는 owner/admin 이 보증한다. requester_* 가 남았는데 요청
+# 이메일과 어긋나면(남의 이메일로 낸 흔적) 이메일로 찾지 않고 pending_identity.
+# ---------------------------------------------------------------------------
+MEMBERSHIP_AUDIT_LOG = "tenant_membership_audit"
+MEMBERSHIP_AUDIT_LEDGER = "tenant_memberships"
+_MEMBERSHIP_AUDIT_CLASSIFICATION = {
+    "linked": "membership_linked",
+    "unchanged": "membership_unchanged",
+    "pending_account": "membership_pending",
+    "pending_identity": "membership_pending",
+    "identity_mismatch": "membership_skipped",
+    "removed": "membership_removed",
+    "kept_elevated": "membership_skipped",
+    "not_member": "membership_skipped",
+    "skipped": "membership_skipped",
+    "error": "membership_failed",
+}
+
+
+def _join_request_account_id(record: dict[str, Any]) -> str:
+    """본인이 제출한 가입요청이면 그 계정 id. 아니면 빈 문자열."""
+    requester_id = str(record.get("requester_user_id") or "").strip()
+    requester_email = str(record.get("requester_email") or "").strip().lower()
+    email = str(record.get("email") or "").strip().lower()
+    return requester_id if requester_id and requester_email and requester_email == email else ""
+
+
+def _join_request_allows_email_lookup(record: dict[str, Any]) -> bool:
+    """본인 제출 고정이 없는 요청(관리자 대리 등록·초대 흐름·예전 요청)은 승인자가 이메일을 보증한다.
+
+    requester_* 가 남아 있는데 요청 이메일과 어긋나면 누군가 남의 이메일로 낸 흔적이다 —
+    그때는 이메일로 계정을 찾지 않는다.
+    """
+    if _join_request_account_id(record):
+        return False
+    return not str(record.get("requester_user_id") or "").strip() and not str(record.get("requester_email") or "").strip()
+
+
+def _membership_audit_row(
+    link: dict[str, Any],
+    *,
+    action: str,
+    source: str,
+    record: dict[str, Any],
+    actor_user_id: str,
+    actor_email: str,
+) -> dict[str, Any]:
+    status = str(link.get("status") or "error")
+    return {
+        "id": str(uuid4()),
+        "ledger_table": MEMBERSHIP_AUDIT_LEDGER,
+        "classification": _MEMBERSHIP_AUDIT_CLASSIFICATION.get(status, "membership_failed"),
+        "reason": f"{action}:{status}" + (f":{link['reason']}" if link.get("reason") else ""),
+        "source": source,
+        "business_id": str(record.get("business_id") or ""),
+        "tenant_id": str(link.get("tenant_id") or record.get("tenant_id") or ""),
+        "action": action,
+        "actor_user_id": actor_user_id,
+        "actor_email": actor_email,
+        "employee_email": str(link.get("employee_email") or record.get("email") or "").strip().lower(),
+        "employee_user_id": str(link.get("user_id") or ""),
+        "join_request_id": str(record.get("id") or ""),
+        "before_state": link.get("before"),
+        "after_state": link.get("after"),
+        "classified_at": _now(),
+    }
+
+
+async def _db_insert_membership_audit(row: dict[str, Any]) -> bool:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        await conn.execute(
+            """
+            INSERT INTO yeoljeong_hr_tenant_attribution_audit
+                (ledger_table, row_id, classification, reason, source, business_id, tenant_id,
+                 action, actor_user_id, actor_email, employee_email, employee_user_id, join_request_id,
+                 before_state, after_state, classified_at)
+            VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, '')::uuid,
+                    $8, NULLIF($9, ''), NULLIF($10, ''), $11, NULLIF($12, ''), NULLIF($13, ''),
+                    $14::jsonb, $15::jsonb, $16::timestamptz)
+            """,
+            row["ledger_table"],
+            row["id"],
+            row["classification"],
+            row["reason"],
+            row["source"],
+            row["business_id"],
+            row["tenant_id"],
+            row["action"],
+            row["actor_user_id"],
+            row["actor_email"],
+            row["employee_email"],
+            row["employee_user_id"],
+            row["join_request_id"],
+            json.dumps(row["before_state"], ensure_ascii=False, default=str) if row["before_state"] is not None else None,
+            json.dumps(row["after_state"], ensure_ascii=False, default=str) if row["after_state"] is not None else None,
+            _pg_ts(row["classified_at"]),
+        )
+        return True
+    finally:
+        await conn.close()
+
+
+def _append_membership_audit_file(row: dict[str, Any]) -> None:
+    """파일 원장 추가. 읽고-다시-쓰기 사이를 flock 으로 묶어 동시 승인에서 행이 사라지지 않게 한다."""
+    safe_row = json.loads(json.dumps(row, ensure_ascii=False, default=str))
+    lock_path = _path(MEMBERSHIP_AUDIT_LOG).with_suffix(".lock")
+    with open(lock_path, "a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            _write_file_rows(MEMBERSHIP_AUDIT_LOG, [safe_row] + _read_file_rows(MEMBERSHIP_AUDIT_LOG))
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _record_membership_audit_sync(row: dict[str, Any]) -> bool:
+    """스레드에서 부른다. DB 가 있으면 감사 테이블, 없으면 파일 원장."""
+    if _db_available():
+        # _run_db 는 워커 스레드(이벤트 루프 없음)에서 asyncio.run 으로 돌리고 실패는 None 이다.
+        if _run_db(_db_insert_membership_audit(row)):
+            return True
+        # 20260930 감사 마이그레이션은 자동 적용 HOLD 다. 코드가 먼저 나가 컬럼·CHECK 가
+        # 없으면 INSERT 가 실패한다 — 그 사이 이벤트를 잃지 않도록 파일 원장에 남긴다.
+        logger.error("membership audit DB insert failed, falling back to file: request=%s", row.get("join_request_id"))
+        try:
+            _append_membership_audit_file({**row, "db_insert_failed": True})
+        except Exception as exc:  # noqa: BLE001
+            logger.error("membership audit not recorded: request=%s err=%s", row.get("join_request_id"), exc)
+            return False
+        return True
+    _append_membership_audit_file(row)
+    return True
+
+
+async def record_membership_audit(row: dict[str, Any]) -> bool:
+    """감사 1행. 파일·DB I/O 는 이벤트 루프 밖(스레드)에서 한다 — 감사 실패가 승인을 되돌리지 않는다."""
+    try:
+        return await asyncio.to_thread(_record_membership_audit_sync, row)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("membership audit not recorded: request=%s err=%s", row.get("join_request_id"), exc)
+        return False
+
+
+def _save_membership_link(request_id: str, link: dict[str, Any], user: dict[str, Any]) -> dict[str, Any] | None:
+    """가입요청에 '이 승인이 만든 멤버십' 표시를 남긴다 — 반려가 회수할 수 있는 유일한 근거."""
+    record = _find(_read_hr("employee_join_requests", user), request_id)
+    if not record:
+        return None
+    status = link.get("status")
+    marker = dict(record.get("membership_link") or {})
+    if status == "linked" and link.get("owned_by_request"):
+        marker = {
+            "tenant_id": str(link.get("tenant_id") or ""),
+            "user_id": str(link.get("user_id") or ""),
+            "membership_id": str((link.get("after") or {}).get("membership_id") or ""),
+            "linked_by": str(user.get("user_id") or user.get("id") or ""),
+            "linked_at": _now(),
+        }
+    elif status == "removed":
+        marker["revoked_at"] = _now()
+    else:
+        return record
+    record["membership_link"] = marker
+    _write_hr_record("employee_join_requests", record, user)
+    return record
+
+
+def _membership_revoke_target(record: dict[str, Any], previous_status: str, tenant_id: str) -> tuple[dict[str, Any], str]:
+    """반려가 회수해도 되는 멤버십인가 — (표시, 거절 사유). 사유가 비어야 회수한다."""
+    if str(previous_status or "").strip().lower() != "approved":
+        return {}, "request_was_not_approved"
+    marker = record.get("membership_link") or {}
+    if not isinstance(marker, dict) or not marker.get("membership_id") or not marker.get("user_id"):
+        return {}, "membership_not_linked_by_request"
+    if marker.get("revoked_at"):
+        return {}, "membership_already_revoked"
+    if str(marker.get("tenant_id") or "") != tenant_id:
+        return {}, "membership_linked_in_other_tenant"
+    account_id = _join_request_account_id(record)
+    if account_id and account_id != str(marker.get("user_id")):
+        return {}, "membership_user_differs_from_requester"
+    return marker, ""
+
+
+async def sync_employee_tenant_membership(
+    record: dict[str, Any],
+    action: str,
+    user: dict[str, Any],
+    *,
+    previous_status: str = "",
+    source: str = "review_join_request",
+    conn: Any = None,
+) -> dict[str, Any]:
+    """승인이면 고용주 테넌트 member 연결, 반려·퇴사면 이 요청이 만든 멤버십만 회수.
+
+    실패해도 예외를 올리지 않는다(결과·감사에 error 로 남긴다).  ``conn`` 은
+    employee_membership_lock 이 내준 연결 — 멤버십 변경을 그 락 트랜잭션 안에서 한다.
+    """
+    from app import auth as auth_module
+
+    tenant_id = _tenant_id(user)
+    employee_email = str(record.get("email") or record.get("employee_email") or "").strip().lower()
+    actor_user_id = str(user.get("user_id") or user.get("id") or "")
+    base = {"tenant_id": tenant_id, "employee_email": employee_email, "user_id": None, "before": None, "after": None}
+    try:
+        if action == "approved":
+            allow_email_lookup = _join_request_allows_email_lookup(record)
+            if allow_email_lookup:
+                # 이메일 조회의 전제(요청 테넌트 == 가입요청 테넌트·사업자)를 여기서도 다시 확인한다.
+                await asyncio.to_thread(_require_employee_membership_context, record, user)
+            link = await auth_module.link_employee_tenant_membership(
+                tenant_id=tenant_id,
+                employee_user_id=_join_request_account_id(record) or None,
+                employee_email=employee_email,
+                invited_by=actor_user_id or None,
+                allow_email_lookup=allow_email_lookup,
+                context_tenant_id=tenant_id,
+                conn=conn,
+            )
+        else:
+            marker, reason = _membership_revoke_target(record, previous_status, tenant_id)
+            if reason:
+                link = {**base, "status": "skipped", "reason": reason}
+            else:
+                link = await auth_module.revoke_employee_tenant_membership(
+                    tenant_id=tenant_id,
+                    user_id=str(marker["user_id"]),
+                    membership_id=str(marker["membership_id"]),
+                    employee_email=employee_email,
+                    conn=conn,
+                )
+                link.setdefault("employee_email", employee_email)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("employee membership sync failed: request=%s action=%s err=%s", record.get("id"), action, exc)
+        reason = "tenant_context_mismatch" if isinstance(exc, (auth_module.EmployeeTenantContextError, HTTPException)) else type(exc).__name__
+        link = {**base, "status": "error", "reason": reason}
+    audit = _membership_audit_row(
+        link,
+        action=action,
+        source=source,
+        record=record,
+        actor_user_id=actor_user_id,
+        actor_email=_email(user),
+    )
+    recorded = await record_membership_audit(audit)
+    try:
+        saved = await asyncio.to_thread(_save_membership_link, str(record.get("id") or ""), link, user)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("membership link marker not saved: request=%s err=%s", record.get("id"), exc)
+        saved = None
+    if saved:
+        record.update(saved)
+    return {
+        "status": link.get("status"),
+        "reason": link.get("reason") or "",
+        "tenant_id": tenant_id,
+        "user_id": link.get("user_id"),
+        "role": (link.get("after") or {}).get("role"),
+        "membership_status": (link.get("after") or link.get("before") or {}).get("status"),
+        "default_tenant": link.get("default_tenant"),
+        "audit_recorded": recorded,
+    }
+
+
+def _require_employee_membership_context(record: dict[str, Any], user: dict[str, Any]) -> str:
+    """이메일로 직원 계정을 찾기 전의 전제를 코드로 강제한다 — 부재·불일치는 예외.
+
+    ① 요청에 검증된 테넌트 컨텍스트(JWT tenant + 활성 멤버십)가 있어야 하고(_tenant_id),
+    ② 가입요청 레코드가 그 테넌트 것이어야 하며(_require_hr_record),
+    ③ 가입요청의 사업자가 그 테넌트에 귀속돼 있어야 한다(_require_business_for_tenant).
+    예전엔 "레거시 테넌트 JWT 컨텍스트가 이미 잡혀 있다" 를 주석으로만 전제했다.
+    """
+    tenant_id = _tenant_id(user)
+    _require_hr_record(record, user, detail="가입요청을 찾을 수 없습니다")
+    _require_business_for_tenant(record.get("business_id"), user)
+    return tenant_id
+
+
+def _precheck_join_review(request_id: str, action: str, user: dict[str, Any]) -> str:
+    """검토 전에 락 키(직원 이메일)를 정하고, 승인이면 이메일 조회 전제를 먼저 확인한다.
+
+    승인 저장 뒤에 컨텍스트 오류가 나면 '승인됐는데 멤버십 없음' 이 남는다 — 그래서
+    저장 전에 막는다(403/404, 아무것도 저장되지 않음).
+    """
+    _tenant_id(user)
+    record = _find(_read_hr("employee_join_requests", user), request_id)
+    if record and action == "approved" and _join_request_allows_email_lookup(record):
+        _require_employee_membership_context(record, user)
+    return str((record or {}).get("email") or (record or {}).get("employee_email") or "").strip().lower()
+
+
+def _review_join_request_with_previous(
+    request_id: str, action: str, memo: str, user: dict[str, Any]
+) -> tuple[dict[str, Any], str]:
+    previous = _find(_read_hr("employee_join_requests", user), request_id) or {}
+    previous_status = str(previous.get("status") or "")
+    return review_join_request(request_id, action, memo, user), previous_status
+
+
+async def review_join_request_with_membership(
+    request_id: str,
+    action: str,
+    memo: str,
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    """가입요청 승인·반려 + 고용주 테넌트 멤버십 연결·회수.
+
+    승인 판정(review_join_request)은 그대로 두고, 저장이 끝난 뒤에만 멤버십을
+    바꾼다 — 권한·검증 실패로 승인이 안 됐는데 멤버십만 생기는 일이 없다.
+    반려는 직전 상태가 approved 이고 그 승인이 남긴 membership_link 가 있을 때만 회수한다.
+
+    직전 상태 읽기 → 저장 → 멤버십 연결·회수는 (고용주 테넌트, 직원 이메일) 단위
+    pg_advisory_xact_lock 으로 한 줄로 세운다.  예) 승인 A 와 반려 B 가 동시에 돌면 B 가
+    직전 상태를 pending 으로 읽어 회수를 건너뛰고, 그 사이 A 가 멤버십을 만들어
+    '반려됐는데 멤버' 가 남는다.  락은 blue/green 두 컨테이너가 같이 보는 AADS 인증 DB 에
+    건다(파일 flock 은 컨테이너마다 파일시스템이 달라 서로를 못 본다).
+    인증 DB 에 닿지 못하면 락 없이 진행한다 — 그때 멤버십 변경도 같은 DB 라 실패하고
+    error 로 감사에 남으며, 승인 자체는 되돌리지 않는다.
+    """
+    from app import auth as auth_module
+
+    tenant_id = _tenant_id(user)
+    employee_email = await asyncio.to_thread(_precheck_join_review, request_id, action, user)
+    async with AsyncExitStack() as stack:
+        conn = None
+        try:
+            conn = await stack.enter_async_context(auth_module.employee_membership_lock(tenant_id, employee_email))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("employee membership lock unavailable: request=%s err=%s", request_id, exc)
+        record, previous_status = await asyncio.to_thread(
+            _review_join_request_with_previous, request_id, action, memo, user
+        )
+        membership = await sync_employee_tenant_membership(
+            record, action, user, previous_status=previous_status, conn=conn
+        )
+    return {"request": record, "membership": membership}
 
 
 def update_approved_employee_role(request_id: str, role: str, memo: str, user: dict[str, Any]) -> dict[str, Any]:
@@ -3696,10 +4064,19 @@ def _validated_signature_image(data_uri: Any) -> tuple[str, str]:
     return value, hashlib.sha256(raw).hexdigest()
 
 
-def get_contract_by_token(token: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
-    contract = next((row for row in _read_hr("contracts", user) if row.get("sign_token") == token), None)
+def _signing_contract_for_token(rows: list[dict[str, Any]], token: str) -> dict[str, Any]:
+    """rows 는 _read_hr 결과(JWT 테넌트 SQL 스코프)다. 다른 테넌트 토큰은 여기서 안 보인다.
+
+    토큰이 없거나 다른 테넌트 것이면 존재 여부를 드러내지 않고 똑같이 403.
+    """
+    contract = next((row for row in rows if token and row.get("sign_token") == token), None)
     if not contract:
-        raise HTTPException(status_code=404, detail="서명 요청 계약서를 찾을 수 없습니다")
+        raise HTTPException(status_code=403, detail="서명 요청 계약서를 찾을 수 없거나 접근 권한이 없습니다")
+    return contract
+
+
+def get_contract_by_token(token: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
+    contract = _signing_contract_for_token(_read_hr("contracts", user), token)
     _contract_signer_email(contract, user)
     if str(contract.get("status") or "") != "requested":
         raise HTTPException(status_code=409, detail="서명 요청된 계약서가 아닙니다")
@@ -3708,10 +4085,7 @@ def get_contract_by_token(token: str, user: dict[str, Any] | None = None) -> dic
 
 def sign_contract(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
     token = str(payload.get("token") or "")
-    rows = _read_hr("contracts", user)
-    contract = next((row for row in rows if row.get("sign_token") == token), None)
-    if not contract:
-        raise HTTPException(status_code=404, detail="서명 요청 계약서를 찾을 수 없습니다")
+    contract = _signing_contract_for_token(_read_hr("contracts", user), token)
     signer_email = _contract_signer_email(contract, user)
     if str(contract.get("status") or "") == "signed":
         raise HTTPException(status_code=409, detail="이미 서명 완료된 계약서입니다")

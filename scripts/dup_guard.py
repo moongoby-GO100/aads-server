@@ -210,6 +210,136 @@ def _line_of(text: str, pos: int) -> int:
     return text.count("\n", 0, pos) + 1
 
 
+# SET 절 본문을 어디서 끊을 것인가.
+#
+# 2026-09-30 거짓 양성: 테스트의 단정문
+#   assert "UPDATE tenant_memberships SET updated_at = now()" in switch
+# 를 SQL 로 보고 뒤쪽 2000자를 SET 본문으로 삼았다. 한 줄 문자열 안이라
+# 종결자가 없으니 창이 무관한 파이썬 코드를 삼켰고, 뒤에 나오는
+# monkeypatch.setattr(..., raising=False) 세 번을 "SET raising 3회" 로 셌다.
+# 그래서 (1) 매치가 한 줄 문자열 리터럴 안에서 시작하면 그 리터럴 끝에서
+# 닫고(암묵적 이어붙이기 줄만 따라간다), (2) 괄호 깊이 0 의 쉼표로만 나누며
+# 짝 없는 ')' 에서 멈춘다 — 호출 인자(raising=, match=)는 괄호 안이다.
+_CONT_LITERAL_RE = re.compile(r"""^\s*[rRbBuUfF]{0,2}(["'])""")
+
+
+def _open_quote(prefix: str):
+    """매치 직전(같은 줄)까지를 훑어 열려 있는 문자열/주석을 돌려준다.
+
+    반환: None(코드 또는 이 줄 밖에서 시작한 문자열), '#'(주석),
+    '"'/"'"(한 줄 문자열), '\"\"\"'/"'''"(삼중 문자열).
+    """
+    state = None
+    i = 0
+    n = len(prefix)
+    while i < n:
+        ch = prefix[i]
+        if state is None:
+            if ch == "#":
+                return "#"
+            triple = prefix[i:i + 3]
+            if triple in ('"""', "'''"):
+                state = triple
+                i += 3
+                continue
+            if ch in "\"'":
+                state = ch
+        elif len(state) == 3:
+            if prefix.startswith(state, i):
+                state = None
+                i += 3
+                continue
+        elif ch == "\\":
+            i += 2
+            continue
+        elif ch == state:
+            state = None
+        i += 1
+    return state
+
+
+def _close_quote(line: str, start: int, quote: str) -> int:
+    """line[start:] 에서 이스케이프되지 않은 quote 위치. 없으면 -1."""
+    i = start
+    while i < len(line):
+        if line[i] == "\\":
+            i += 2
+            continue
+        if line[i] == quote:
+            return i
+        i += 1
+    return -1
+
+
+def _literal_set_body(text: str, start: int, end: int):
+    """매치가 한 줄 문자열 안이면 그 리터럴(+이어붙인 리터럴 줄)까지만 본문으로.
+
+    한 줄 문자열이 아니면(코드·삼중 문자열·그 줄에서 안 닫힘) None — 기존 창을 쓴다.
+    """
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", start)
+    if line_end < 0:
+        line_end = len(text)
+    quote = _open_quote(text[line_start:start])
+    if quote is None or len(quote) == 3:
+        return None
+    line = text[line_start:line_end]
+    if quote == "#":
+        return line[end - line_start:]
+    close = _close_quote(line, end - line_start, quote)
+    if close < 0:
+        return None
+    parts = [line[end - line_start:close]]
+    rest = line[close + 1:].strip()
+    pos = line_end
+    # 파이썬 암묵적 이어붙이기: "UPDATE t SET a = 1, " \n "b = 2 WHERE ..."
+    while rest in ("", "+", "\\") and pos < len(text):
+        nxt_end = text.find("\n", pos + 1)
+        if nxt_end < 0:
+            nxt_end = len(text)
+        nxt = text[pos + 1:nxt_end]
+        cm = _CONT_LITERAL_RE.match(nxt)
+        if not cm:
+            break
+        q = cm.group(1)
+        close = _close_quote(nxt, cm.end(), q)
+        if close < 0:
+            break
+        parts.append(nxt[cm.end():close])
+        rest = nxt[close + 1:].strip()
+        pos = nxt_end
+    return "".join(parts)
+
+
+def _top_level_pieces(body: str) -> list:
+    """괄호 깊이 0 의 쉼표로 나눈다. 짝 없는 ')' 가 나오면 거기서 SET 절은 끝났다."""
+    pieces = []
+    buf = []
+    depth = 0
+    quote = False
+    for ch in body:
+        if quote:
+            buf.append(ch)
+            if ch == "'":
+                quote = False
+            continue
+        if ch == "'":
+            quote = True
+        elif ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+            if depth < 0:
+                break
+        elif ch == "," and depth == 0:
+            pieces.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    pieces.append("".join(buf))
+    return pieces
+
+
 def check_sql(path: str, text: str) -> list:
     """INSERT 컬럼 목록과 SET 대상의 중복. 여기가 실제로 운영을 깨뜨린 지점이다."""
     findings = []
@@ -229,12 +359,16 @@ def check_sql(path: str, text: str) -> list:
                 "'specified more than once' 로 거절한다" % (table, name, seen[name]),
                 _line_of(text, m.start())))
 
+    in_code = path.endswith(PY_EXT + SH_EXT)
     for m in SQL_SET_RE.finditer(text):
-        tail = text[m.end():m.end() + 2000]
-        end = SQL_SET_END_RE.search(tail)
-        body = tail[:end.start()] if end else tail
+        body = _literal_set_body(text, m.start(), m.end()) if in_code else None
+        if body is None:
+            body = text[m.end():m.end() + 2000]
+        end = SQL_SET_END_RE.search(body)
+        if end:
+            body = body[:end.start()]
         seen = defaultdict(int)
-        for piece in body.split(","):
+        for piece in _top_level_pieces(body):
             t = SET_TARGET_RE.match(piece)
             if t:
                 seen[t.group(1).lower()] += 1

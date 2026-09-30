@@ -532,7 +532,8 @@ async def create_employee_join_request(payload: JoinRequestCreate, current_user:
 
 @router.patch("/employees/join-requests/{request_id}")
 async def review_employee_join_request(request_id: str, payload: ReviewPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return {"request": await run_in_threadpool(svc.review_join_request, request_id, payload.action, payload.memo, current_user)}
+    # 승인 → 고용주 테넌트 member 연결, 반려 → 회수. 결과는 membership 에 담는다.
+    return await svc.review_join_request_with_membership(request_id, payload.action, payload.memo, current_user)
 
 
 @router.get("/employees/approved")

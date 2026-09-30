@@ -5,6 +5,7 @@ import logging
 import hashlib
 import re
 import secrets
+from contextlib import asynccontextmanager
 from http.cookies import SimpleCookie
 from enum import Enum
 from datetime import datetime, timezone
@@ -522,6 +523,420 @@ async def list_user_tenants(user_id: str) -> list[dict]:
     return tenants
 
 
+_ELEVATED_MEMBERSHIP_ROLES = frozenset({TenantRole.OWNER.value, TenantRole.ADMIN.value})
+
+
+async def upsert_tenant_membership(
+    conn,
+    *,
+    tenant_id: str,
+    user_id: str,
+    role: str,
+    invited_by: Optional[str] = None,
+    preserve_elevated_role: bool = False,
+) -> Optional[dict]:
+    """tenant_memberships 를 활성 상태로 만든다 — 초대 수락과 오비서 직원 승인이 같이 쓴다.
+
+    ``preserve_elevated_role`` 이 참이면 이미 **활성** owner/admin 인 행은 역할을
+    낮추지 않는다(관리자 본인이 직원으로도 등록된 경우).  회수(removed)된 행은
+    요청한 역할로 되살린다 — 회수된 관리자 권한을 직원 승인이 되살리면 안 된다.
+    ``invited_by`` 가 saas_users 에 없는 값이면 NULL 로 둔다(FK).
+    """
+    row = await conn.fetchrow(
+        """
+        INSERT INTO tenant_memberships (tenant_id, user_id, role, status, invited_by)
+        VALUES ($1::uuid, $2::text, $3::text, 'active',
+                (SELECT id FROM saas_users WHERE id = $4::text))
+        ON CONFLICT (tenant_id, user_id) DO UPDATE
+           SET role = CASE
+                   WHEN $5::boolean
+                        AND tenant_memberships.status = 'active'
+                        AND tenant_memberships.deleted_at IS NULL
+                        AND tenant_memberships.role IN ('owner', 'admin')
+                   THEN tenant_memberships.role
+                   ELSE EXCLUDED.role
+               END,
+               status = 'active',
+               deleted_at = NULL,
+               updated_at = now()
+        RETURNING id::text AS membership_id, tenant_id::text, user_id, role, status
+        """,
+        tenant_id,
+        user_id,
+        role,
+        invited_by,
+        bool(preserve_elevated_role),
+    )
+    return dict(row) if row else None
+
+
+async def _membership_state_for_update(conn, tenant_id: str, user_id: str) -> Optional[dict]:
+    row = await conn.fetchrow(
+        """
+        SELECT id::text AS membership_id, tenant_id::text, user_id, role, status,
+               deleted_at IS NOT NULL AS deleted
+          FROM tenant_memberships
+         WHERE tenant_id = $1::uuid
+           AND user_id = $2::text
+         FOR UPDATE
+        """,
+        tenant_id,
+        user_id,
+    )
+    return dict(row) if row else None
+
+
+class EmployeeTenantContextError(PermissionError):
+    """이메일로 직원 계정을 찾을 레거시 테넌트 컨텍스트가 없거나 대상 테넌트와 다르다."""
+
+
+def _require_email_lookup_context(context_tenant_id: Optional[str], tenant_id: str) -> str:
+    """이메일 → 계정 조회의 전제(요청의 JWT 테넌트 == 대상 고용주 테넌트)를 코드로 강제한다.
+
+    예전에는 "호출자가 레거시 테넌트 JWT 컨텍스트에서 부른다" 를 주석으로만 전제했다.
+    호출 순서가 바뀌거나 다른 테넌트 컨텍스트에서 부르면 다른 테넌트의 같은 이메일
+    계정에 멤버십이 붙을 수 있으므로, 부재·불일치는 조용히 넘기지 않고 예외다.
+    """
+    context = str(context_tenant_id or "").strip()
+    target = str(tenant_id or "").strip()
+    if not context:
+        raise EmployeeTenantContextError("employee email lookup requires the request tenant context")
+    if not target or context != target:
+        raise EmployeeTenantContextError(
+            f"employee email lookup tenant context mismatch: context={context!r} target={target!r}"
+        )
+    return target
+
+
+async def _active_user_id_by_email(
+    conn,
+    email: str,
+    *,
+    tenant_id: str,
+    context_tenant_id: Optional[str],
+) -> Optional[str]:
+    """고용주 테넌트(tenant_id) 에서 요청 이메일의 활성 계정을 찾는다.
+
+    1차 방어: 컨텍스트 검사(_require_email_lookup_context) — 부재·불일치면 예외.
+    2차 방어: WHERE 에 테넌트 조건 — 이 테넌트에 이미 묶였거나(default·멤버십·초대)
+    아직 어느 고객 테넌트에도 묶이지 않은(default 없음·본인이 만든 워크스페이스)
+    계정만 후보다.  다른 고객 테넌트 소속 계정은 컨텍스트 검사를 통과해도 뽑히지 않는다.
+    이 테넌트에 묶인 계정이 우선이고, 같은 우선순위 후보가 둘이면 고르지 않는다(None).
+    """
+    tenant_id = _require_email_lookup_context(context_tenant_id, tenant_id)
+    normalized = _normalize_email(email)
+    if not normalized:
+        return None
+    rows = await conn.fetch(
+        """
+        SELECT u.id,
+               (u.default_tenant_id = $2::uuid
+                OR EXISTS (
+                    SELECT 1
+                      FROM tenant_memberships tm
+                     WHERE tm.tenant_id = $2::uuid
+                       AND tm.user_id = u.id
+                       AND tm.deleted_at IS NULL
+                )) AS bound_to_tenant
+          FROM saas_users u
+         WHERE lower(u.email) = $1
+           AND u.deleted_at IS NULL
+           AND COALESCE(u.status, 'active') = 'active'
+           AND (
+                u.default_tenant_id = $2::uuid
+             OR EXISTS (
+                    SELECT 1
+                      FROM tenant_memberships tm
+                     WHERE tm.tenant_id = $2::uuid
+                       AND tm.user_id = u.id
+                       AND tm.deleted_at IS NULL
+                )
+             OR EXISTS (
+                    SELECT 1
+                      FROM tenant_invites ti
+                     WHERE ti.tenant_id = $2::uuid
+                       AND lower(ti.email) = $1
+                )
+             OR u.default_tenant_id IS NULL
+             OR EXISTS (
+                    SELECT 1
+                      FROM tenants pt
+                     WHERE pt.id = u.default_tenant_id
+                       AND pt.kind = 'customer'
+                       AND pt.created_by = u.id
+                )
+           )
+         ORDER BY bound_to_tenant DESC, u.created_at ASC NULLS LAST
+         LIMIT 2
+        """,
+        normalized,
+        tenant_id,
+    )
+    if not rows:
+        return None
+    if len(rows) > 1 and bool(rows[0]["bound_to_tenant"]) == bool(rows[1]["bound_to_tenant"]):
+        log.warning("employee_email_lookup_ambiguous", tenant_id=tenant_id, email=normalized)
+        return None
+    return str(rows[0]["id"])
+
+
+async def _active_user_email_by_id(conn, user_id: str) -> Optional[str]:
+    email = await conn.fetchval(
+        """
+        SELECT lower(email)
+          FROM saas_users
+         WHERE id = $1::text
+           AND deleted_at IS NULL
+           AND COALESCE(status, 'active') = 'active'
+        """,
+        user_id,
+    )
+    return _normalize_email(email) if email else None
+
+
+async def _move_default_off_personal_workspace(conn, user_id: str, tenant_id: str) -> Optional[dict]:
+    """default 가 비어 있거나 본인 혼자인 개인 워크스페이스면 고용주 테넌트로 옮긴다.
+
+    직원 승인이 멤버십을 새로 만들거나 되살린 그 한 번만 부른다 — 로그인마다
+    판정하지 않으므로 일반 초대 member·다른 고객 테넌트 member 의 시작 테넌트는
+    바뀌지 않고, 이후 사용자가 /auth/tenants/{id}/switch 로 고른 값이 그대로 남는다.
+    개인 워크스페이스 = 본인이 만든 customer 테넌트에서 본인이 **활성** owner 이고
+    본인 외 활성 멤버가 없음(owner 멤버십이 회수된 곳은 개인 워크스페이스가 아니다).
+    """
+    current = await conn.fetchval(
+        "SELECT default_tenant_id::text FROM saas_users WHERE id = $1::text FOR UPDATE",
+        user_id,
+    )
+    if current == tenant_id:
+        return None
+    if current:
+        personal = await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                  FROM tenants t
+                  JOIN tenant_memberships tm
+                    ON tm.tenant_id = t.id
+                   AND tm.user_id = $2::text
+                   AND tm.role = 'owner'
+                   AND tm.status = 'active'
+                   AND tm.deleted_at IS NULL
+                 WHERE t.id = $1::uuid
+                   AND t.kind = 'customer'
+                   AND t.created_by = $2::text
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM tenant_memberships o
+                        WHERE o.tenant_id = t.id
+                          AND o.user_id <> $2::text
+                          AND o.status = 'active'
+                          AND o.deleted_at IS NULL
+                   )
+            )
+            """,
+            current,
+            user_id,
+        )
+        if not personal:
+            return None
+    await conn.execute(
+        "UPDATE saas_users SET default_tenant_id = $1::uuid, updated_at = now() WHERE id = $2::text",
+        tenant_id,
+        user_id,
+    )
+    return {"before": current, "after": tenant_id}
+
+
+def employee_membership_lock_key(tenant_id: str, employee_email: str) -> int:
+    """(tenant_id, employee_email) → pg_advisory_xact_lock 용 signed bigint.
+
+    파이썬 hash() 는 프로세스마다 달라 blue/green 컨테이너 사이에서 같은 키가 안 나온다 —
+    sha256 앞 8바이트로 고정한다.  이메일은 대소문자·공백을 정규화한다.
+    """
+    raw = f"obys-employee-membership:{str(tenant_id or '').strip().lower()}:{_normalize_email(employee_email)}"
+    return int.from_bytes(hashlib.sha256(raw.encode("utf-8")).digest()[:8], "big", signed=True)
+
+
+async def _lock_employee_membership(conn, tenant_id: str, employee_email: str) -> int:
+    """같은 (고용주 테넌트, 직원 이메일) 의 멤버십 연결·회수를 DB 에서 직렬화한다.
+
+    blue/green 두 컨테이너는 파일시스템이 분리돼 flock 이 서로를 못 본다 — 락은 두
+    컨테이너가 공유하는 AADS 인증 DB 에 건다.  xact 계열이라 트랜잭션이 끝나면 풀리고,
+    같은 세션에서 다시 걸어도(재진입) 막히지 않는다.  최종 보장은 여전히
+    tenant_memberships UNIQUE(tenant_id, user_id) 다 — 락은 경합 완화다.
+    """
+    key = employee_membership_lock_key(tenant_id, employee_email)
+    await conn.execute("SELECT pg_advisory_xact_lock($1::bigint)", key)
+    return key
+
+
+@asynccontextmanager
+async def employee_membership_lock(tenant_id: str, employee_email: str):
+    """가입요청 검토 전체(직전 상태 읽기 → 저장 → 멤버십 연결·회수)를 감싸는 DB 락.
+
+    연결·트랜잭션을 열고 advisory xact lock 을 건 채 그 연결을 내준다.  안에서
+    link/revoke 에 ``conn=`` 으로 넘기면 멤버십 변경도 같은 트랜잭션(세이브포인트)에서
+    일어나고, 블록을 나가 커밋될 때 락이 풀린다.
+    """
+    await require_saas_schema_ready()
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await _lock_employee_membership(conn, tenant_id, employee_email)
+            yield conn
+
+
+@asynccontextmanager
+async def _membership_transaction(conn=None):
+    """conn 이 오면 그 연결의 (중첩)트랜잭션, 없으면 풀에서 새로 연다."""
+    if conn is not None:
+        async with conn.transaction():
+            yield conn
+        return
+    pool = await _ensure_pool()
+    async with pool.acquire() as own:
+        async with own.transaction():
+            yield own
+
+
+async def link_employee_tenant_membership(
+    *,
+    tenant_id: str,
+    employee_user_id: Optional[str],
+    employee_email: str,
+    invited_by: Optional[str] = None,
+    allow_email_lookup: bool = False,
+    context_tenant_id: Optional[str] = None,
+    conn=None,
+) -> dict:
+    """승인된 오비서 직원을 고용주 테넌트의 ``member`` 로 연결한다.
+
+    신원 우선순위:
+    1. 가입요청을 **본인이 로그인해 제출한** 계정(employee_user_id). 그 계정의
+       현재 이메일이 요청 이메일과 다르면 identity_mismatch.
+    2. 본인 제출 고정이 없고 ``allow_email_lookup`` 이 참이면 요청 이메일로
+       saas_users 를 찾는다(basis=email).  직원은 개인 워크스페이스 JWT 로는
+       고용주 테넌트에 가입요청을 낼 수 없다(obys_tenant 게이트 403) — 실제
+       요청 대부분은 관리자 대리 등록·초대 흐름이라 1번만으로는 거의 모든
+       승인이 pending 에 머문다.  이때 신원은 승인하는 owner/admin 이 보증한다.
+       이 경로는 ``context_tenant_id``(요청 JWT 테넌트)가 있고 ``tenant_id`` 와
+       같아야 한다 — 아니면 EmployeeTenantContextError.  조회 SQL 도 테넌트 조건을 건다.
+    같은 (테넌트, 이메일) 은 pg_advisory_xact_lock 으로 직렬화한다.  ``conn`` 을 넘기면
+    그 연결의 트랜잭션 안(세이브포인트)에서 돈다(employee_membership_lock).
+    멤버십을 새로 만들거나 되살렸을 때만 ``owned_by_request`` 가 참이다 —
+    반려 때 회수할 수 있는 것은 그것뿐이다.
+    """
+    await require_saas_schema_ready()
+    email = _normalize_email(employee_email)
+    user_id = str(employee_user_id or "").strip()
+    result: dict = {
+        "tenant_id": tenant_id,
+        "employee_email": email,
+        "user_id": user_id or None,
+        "before": None,
+        "after": None,
+        "owned_by_request": False,
+        "default_tenant": None,
+        "identity_basis": "requester" if user_id else ("email" if allow_email_lookup else None),
+    }
+    if not user_id and not (allow_email_lookup and email):
+        return {**result, "status": "pending_identity", "reason": "join_request_not_bound_to_account"}
+    if not user_id:
+        # 연결 전에 먼저 막는다 — 컨텍스트 없는 호출은 DB 에 닿지 않는다.
+        _require_email_lookup_context(context_tenant_id, tenant_id)
+    async with _membership_transaction(conn) as conn:
+        await _lock_employee_membership(conn, tenant_id, email)
+        tenant_kind = await conn.fetchval(
+            "SELECT kind FROM tenants WHERE id = $1::uuid AND status = 'active' AND deleted_at IS NULL",
+            tenant_id,
+        )
+        if str(tenant_kind or "").lower() != "customer":
+            return {**result, "status": "skipped", "reason": "employer_tenant_not_active_customer"}
+        if user_id:
+            account_email = await _active_user_email_by_id(conn, user_id)
+            if not account_email:
+                return {**result, "status": "pending_account", "reason": "saas_user_not_found"}
+            if not email or account_email != email:
+                return {**result, "status": "identity_mismatch", "reason": "account_email_differs_from_request"}
+        else:
+            user_id = await _active_user_id_by_email(
+                conn, email, tenant_id=tenant_id, context_tenant_id=context_tenant_id
+            )
+            if not user_id:
+                return {**result, "status": "pending_account", "reason": "saas_user_not_found"}
+            result["user_id"] = user_id
+        before = await _membership_state_for_update(conn, tenant_id, user_id)
+        after = await upsert_tenant_membership(
+            conn,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            role=TenantRole.MEMBER.value,
+            invited_by=invited_by,
+            preserve_elevated_role=True,
+        )
+        active_before = bool(before and not before.get("deleted") and before.get("status") == "active")
+        default_tenant = None
+        if not active_before:
+            default_tenant = await _move_default_off_personal_workspace(conn, user_id, tenant_id)
+    unchanged = bool(active_before and after and before.get("role") == after.get("role"))
+    return {
+        **result,
+        "status": "unchanged" if unchanged else "linked",
+        "before": before,
+        "after": after,
+        "owned_by_request": not active_before,
+        "default_tenant": default_tenant,
+    }
+
+
+async def revoke_employee_tenant_membership(
+    *,
+    tenant_id: str,
+    user_id: str,
+    membership_id: str,
+    employee_email: str = "",
+    conn=None,
+) -> dict:
+    """반려·퇴사 직원의 고용주 테넌트 멤버십을 ``removed`` 로 회수한다(행은 남긴다).
+
+    호출자는 그 가입요청의 승인이 만든 멤버십(membership_id)만 넘긴다.  행이
+    바뀌었거나(membership_id 불일치) member 가 아니면 건드리지 않는다 — 초대로
+    들어온 정상 멤버나 관리자 권한을 가입요청 반려가 빼앗으면 안 된다.
+    ``employee_email`` 이 있으면 연결과 같은 advisory lock 키로 직렬화한다.
+    """
+    await require_saas_schema_ready()
+    result: dict = {"tenant_id": tenant_id, "user_id": user_id, "before": None, "after": None}
+    async with _membership_transaction(conn) as conn:
+        if _normalize_email(employee_email):
+            await _lock_employee_membership(conn, tenant_id, employee_email)
+        before = await _membership_state_for_update(conn, tenant_id, user_id)
+        result["before"] = before
+        if not before or before.get("deleted") or before.get("status") == "removed":
+            return {**result, "status": "not_member"}
+        if str(before.get("membership_id") or "") != str(membership_id or ""):
+            return {**result, "status": "skipped", "reason": "membership_not_linked_by_request"}
+        role = str(before.get("role") or "").lower()
+        if role in _ELEVATED_MEMBERSHIP_ROLES:
+            return {**result, "status": "kept_elevated"}
+        if role != TenantRole.MEMBER.value:
+            return {**result, "status": "skipped", "reason": f"role_changed_to_{role}"}
+        row = await conn.fetchrow(
+            """
+            UPDATE tenant_memberships
+               SET status = 'removed',
+                   updated_at = now()
+             WHERE id = $1::uuid
+               AND tenant_id = $2::uuid
+               AND user_id = $3::text
+            RETURNING id::text AS membership_id, tenant_id::text, user_id, role, status
+            """,
+            membership_id,
+            tenant_id,
+            user_id,
+        )
+    return {**result, "status": "removed", "after": dict(row) if row else None}
+
+
 async def create_tenant_for_user(
     *,
     user_id: str,
@@ -996,7 +1411,8 @@ async def accept_tenant_invite(
                    email,
                    role,
                    status,
-                   expires_at
+                   expires_at,
+                   invited_by
               FROM tenant_invites
              WHERE token_hash = $1
                AND status = 'pending'
@@ -1032,23 +1448,15 @@ async def accept_tenant_invite(
 
     async with pool.acquire() as conn:
         async with conn.transaction():
-            membership = await conn.fetchrow(
-                """
-                INSERT INTO tenant_memberships (tenant_id, user_id, role, status, invited_by)
-                SELECT id.tenant_id::uuid, $2, id.role, 'active', ti.invited_by
-                  FROM (SELECT $1::uuid AS tenant_id, $3::text AS role) id
-                  JOIN tenant_invites ti ON ti.id = $4::uuid
-                ON CONFLICT (tenant_id, user_id) DO UPDATE
-                   SET role = EXCLUDED.role,
-                       status = 'active',
-                       deleted_at = NULL,
-                       updated_at = now()
-                RETURNING id::text AS membership_id, tenant_id::text, role, status
-                """,
-                invite["tenant_id"],
-                user_id,
-                invite["role"],
-                invite["invite_id"],
+            # tenant_invites.invited_by 는 saas_users FK(ON DELETE SET NULL)라 공용 함수의
+            # saas_users 확인을 거쳐도 예전 ti.invited_by 와 같은 값이 들어간다.
+            # preserve_elevated_role 기본 False — 초대 역할이 그대로 덮어쓴다(예전 동작).
+            membership = await upsert_tenant_membership(
+                conn,
+                tenant_id=invite["tenant_id"],
+                user_id=user_id,
+                role=invite["role"],
+                invited_by=invite["invited_by"],
             )
             await conn.execute(
                 """
@@ -1078,7 +1486,8 @@ async def accept_tenant_invite(
     return {
         "user": dict(user_row) if user_row else {"id": user_id, "email": email, "name": name},
         "tenant_id": invite["tenant_id"],
-        "membership": dict(membership) if membership else None,
+        # 응답 모양은 공용 upsert 도입 전 그대로(membership_id, tenant_id, role, status).
+        "membership": {k: v for k, v in membership.items() if k != "user_id"} if membership else None,
         "workspace": workspace,
     }
 
