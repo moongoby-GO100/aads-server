@@ -6,10 +6,11 @@ copying data into a second set of tables or falling back to demo rows.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from decimal import Decimal
 import json
+import math
 import re
 from typing import Any, Annotated, Literal
 from uuid import UUID
@@ -964,6 +965,512 @@ async def delete_attendance_record(
     finally:
         await connection.close()
     return {"deleted": True, "id": record_id}
+
+
+# ── PWA 출퇴근 (직원 본인) ──────────────────────────────────────────────────
+# 버튼을 누른 순간의 위치 1점만 받는다. 연속 추적·오프라인 큐잉은 하지 않는다.
+# 신원은 로그인 세션에서만 가져온다 — 본문의 employee_email 은 모델이 버린다.
+# 관리자 대리 타각은 이 경로로 허용하지 않는다(관리자는 수기 입력 경로를 쓴다).
+#
+# 반경: CEO 결정 D1(2026-09-30, docs/prd/20260930_OBYS_ATTENDANCE_PWA_GPS_PRD.md §8.1)
+# "매장 반경 50m 안", 정확도 여유 없음. 지점별 geofence_radius_m 이 있으면 그 값을
+# 쓰되 상한을 넘지 않는다. 정확도(오차)가 반경보다 크면 안/밖을 판정하지 않는다.
+#
+# 퇴근 전 행: 운영 스키마의 end_at 이 NOT NULL 일 수 있어(확인 불가) 출근 시
+# end_at=start_at, worked_minutes=0 으로 두고 check_out_at IS NULL 을 "근무 중" 표지로 쓴다.
+GEOFENCE_DEFAULT_RADIUS_M = 50
+GEOFENCE_MIN_RADIUS_M = 30
+GEOFENCE_MAX_RADIUS_M = 50
+GEOFENCE_RESULTS = frozenset({"inside", "outside", "unknown"})
+ATTENDANCE_SOURCES = frozenset({"manual", "pwa"})
+CLOCK_OPEN_WINDOW = timedelta(hours=24)  # 퇴근은 24시간 안의 열린 출근에만 붙는다
+CLOCK_CONSENT_ACTIONS = ("attendance.consent", "attendance.consent_withdraw")
+_KST = ZoneInfo("Asia/Seoul")
+_EARTH_RADIUS_M = 6_371_008.8
+
+# 직원 본인에게 돌려주는 열 — 좌표 원본·기기 정보는 넣지 않는다.
+ATTENDANCE_CLOCK_COLUMNS = (
+    ATTENDANCE_COLUMNS + ",source,check_in_at,check_out_at,check_in_accuracy_m,"
+    "check_out_accuracy_m,check_in_distance_m,check_out_distance_m,geofence_result,"
+    "location_consent_at"
+)
+# 관리자 위치 조회 전용 — 좌표 원본 포함.
+ATTENDANCE_LOCATION_COLUMNS = (
+    ATTENDANCE_CLOCK_COLUMNS + ",employee_email_masked,check_in_lat,check_in_lng,"
+    "check_out_lat,check_out_lng,device_info"
+)
+_CLOCK_PRIVATE_KEYS = frozenset(
+    {"employee_email", "check_in_lat", "check_in_lng", "check_out_lat", "check_out_lng", "device_info"}
+)
+_BRANCH_GEOFENCE_SQL = (
+    "SELECT id,name,latitude,longitude,geofence_radius_m FROM yeoljeong_branches"
+    " WHERE business_id=$1 AND deleted_at IS NULL ORDER BY sort_order,id"
+)
+
+
+class AttendanceClockIn(BaseModel):
+    # employee_email·status 등 본문의 신원·판정 값은 받지 않고 버린다.
+    model_config = {"extra": "ignore"}
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    accuracy_m: float | None = Field(default=None, ge=0, le=1_000_000)
+    device_info: str = Field(default="", max_length=300)
+    location_consent: bool = False
+    branch_id: str = Field(default="", max_length=64)
+
+
+class AttendanceConsentIn(BaseModel):
+    model_config = {"extra": "forbid"}
+    agree: bool
+
+
+class BranchGeofenceIn(BaseModel):
+    model_config = {"extra": "forbid"}
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    radius_m: int | None = None
+
+
+def haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    a = (math.sin((p2 - p1) / 2) ** 2
+         + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lng2 - lng1) / 2) ** 2)
+    return 2 * _EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(a)))
+
+
+def geofence_radius_m(branch: dict[str, Any] | None) -> int:
+    value = (branch or {}).get("geofence_radius_m")
+    if value is None or int(value) <= 0:
+        return GEOFENCE_DEFAULT_RADIUS_M
+    return min(int(value), GEOFENCE_MAX_RADIUS_M)
+
+
+def judge_geofence(*, consent: bool, latitude: float | None, longitude: float | None,
+                   accuracy_m: float | None, branch: dict[str, Any] | None) -> dict[str, Any]:
+    """반경 판정. 확실히 안일 때만 inside/approved — 나머지는 전부 확인필요(pending)."""
+    radius = geofence_radius_m(branch)
+    verdict: dict[str, Any] = {
+        "result": "unknown", "status": "pending", "radius_m": radius,
+        "distance_m": None, "accuracy_m": None, "latitude": None, "longitude": None,
+    }
+    if not consent:
+        return {**verdict, "reason": "위치정보 미동의 — 위치 미수집"}
+    has_coords = latitude is not None and longitude is not None
+    accuracy = None if accuracy_m is None else math.ceil(accuracy_m)
+    if has_coords:
+        verdict.update(latitude=latitude, longitude=longitude, accuracy_m=accuracy)
+    if not branch or branch.get("latitude") is None or branch.get("longitude") is None:
+        return {**verdict, "reason": "지점 좌표 미등록 — 관리자 확인 필요"}
+    if not has_coords:
+        return {**verdict, "reason": "위치 측정 실패(권한 거부·시간 초과)"}
+    # 올림: 반경 경계에서 "안" 쪽으로 반올림하지 않는다.
+    distance = math.ceil(haversine_m(latitude, longitude,
+                                     float(branch["latitude"]), float(branch["longitude"])))
+    verdict["distance_m"] = distance
+    if accuracy is None:
+        return {**verdict, "reason": f"GPS 정확도 정보 없음 — 매장에서 {distance}m"}
+    if accuracy > radius:
+        return {**verdict, "reason": f"GPS 오차 {accuracy}m 가 반경 {radius}m 보다 큼 — 판정 불가"}
+    if distance <= radius:
+        return {**verdict, "result": "inside", "status": "approved",
+                "reason": f"매장에서 {distance}m (반경 {radius}m 안)"}
+    return {**verdict, "result": "outside", "reason": f"매장에서 {distance}m (반경 {radius}m 밖)"}
+
+
+def combined_geofence(check_in: str | None, check_out: str | None) -> str:
+    if check_in == "inside" and check_out == "inside":
+        return "inside"
+    if "outside" in (check_in, check_out):
+        return "outside"
+    return "unknown"
+
+
+def _clock_now() -> datetime:
+    return datetime.now(_KST)
+
+
+def _clock_identity(user: dict[str, Any]) -> dict[str, str]:
+    # 테넌트 활성 멤버십(owner/admin/member) 판정은 기존 함수를 그대로 쓴다.
+    upload_svc._require_write(user)
+    email = str(user.get("email") or "").strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=403, detail="로그인 계정의 이메일이 있어야 출퇴근을 기록할 수 있습니다")
+    local, _, domain = email.partition("@")
+    return {"email": email, "masked": f"{local[:1]}***@{domain}",
+            "name": str(user.get("name") or "").strip()[:100] or local}
+
+
+async def _clock_business(user: dict[str, Any], business_id: str) -> dict[str, Any]:
+    try:
+        return await _business(user, business_id)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=403, detail="현재 테넌트의 사업자가 아니므로 출퇴근을 기록·조회할 수 없습니다") from exc
+        raise
+
+
+def _require_attendance_admin(user: dict[str, Any]) -> None:
+    if not upload_svc.tenant_session_for_user(user)["permissions"]["can_manage_settings"]:
+        raise HTTPException(status_code=403, detail="소유자·관리자만 출퇴근 위치를 조회·설정할 수 있습니다")
+
+
+def _clock_view(row: Any) -> dict[str, Any]:
+    value = {key: _json_value(item) for key, item in dict(row).items() if key not in _CLOCK_PRIVATE_KEYS}
+    value["open"] = bool(value.get("check_in_at")) and not value.get("check_out_at")
+    return value
+
+
+def _pick_branch(branches: list[dict[str, Any]], branch_id: str,
+                 branch_name: str | None) -> dict[str, Any] | None:
+    if branch_id:
+        match = next((item for item in branches if str(item["id"]) == branch_id), None)
+        if match is None:
+            raise HTTPException(status_code=404, detail="현재 사업자의 지점을 찾을 수 없습니다")
+        return match
+    if branch_name is not None:  # 퇴근: 출근 행에 적힌 지점만 본다(없으면 좌표 미등록과 같다)
+        return next((item for item in branches if branch_name and item["name"] == branch_name), None)
+    if len(branches) > 1:
+        raise HTTPException(status_code=400, detail="출근할 지점을 선택하십시오")
+    return branches[0] if branches else None
+
+
+async def _clock_consent(connection, business_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    row = await connection.fetchrow(
+        """SELECT action,created_at FROM yeoljeong_audit_logs
+            WHERE business_id=$1 AND actor=$2 AND resource_type='attendance'
+              AND action = ANY($3::text[])
+            ORDER BY created_at DESC LIMIT 1""",
+        business_id, upload_svc._actor(user), list(CLOCK_CONSENT_ACTIONS),
+    )
+    agreed = row is not None and row["action"] == "attendance.consent"
+    return {"agreed": agreed, "at": row["created_at"] if agreed else None}
+
+
+async def _clock_judge(connection, business_id: str, user: dict[str, Any],
+                       payload: AttendanceClockIn, *, branch_id: str, branch_name: str | None):
+    branches = [dict(item) for item in await connection.fetch(_BRANCH_GEOFENCE_SQL, business_id)]
+    branch = _pick_branch(branches, branch_id, branch_name)
+    consent = await _clock_consent(connection, business_id, user)
+    # 서버에 남은 동의와 이번 요청의 동의가 둘 다 있어야 위치를 저장한다(철회 우선).
+    agreed = bool(payload.location_consent and consent["agreed"])
+    verdict = judge_geofence(consent=agreed, latitude=payload.latitude, longitude=payload.longitude,
+                             accuracy_m=payload.accuracy_m, branch=branch)
+    return branch, (consent["at"] if agreed else None), verdict
+
+
+async def _clock_lock(connection, business_id: str, email: str) -> None:
+    # 두 번 누름·두 기기 동시 요청이 같은 직원의 열린 출근을 두 개 만들지 않게 한다.
+    await connection.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"obys-clock:{business_id}:{email}")
+
+
+def _clock_memo(previous: str | None, label: str, reason: str) -> str:
+    text = f"{label}: {reason}"
+    return (f"{previous} / {text}" if previous else text)[:500]
+
+
+def _clock_audit(verdict: dict[str, Any], branch: dict[str, Any] | None) -> dict[str, Any]:
+    # 감사로그에는 직원 좌표 원문을 남기지 않는다 — 판정·거리·정확도만.
+    return {key: verdict[key] for key in ("result", "status", "distance_m", "accuracy_m", "radius_m", "reason")} | {
+        "branch": (branch or {}).get("name") or ""}
+
+
+def _clock_response(business: dict[str, Any], row: Any, verdict: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "business": {"id": business["id"], "name": business["name"]},
+        "record": _clock_view(row),
+        "judgement": {key: verdict[key] for key in ("result", "status", "distance_m", "accuracy_m", "radius_m", "reason")},
+        "source": "yeoljeong_attendance_records",
+    }
+
+
+@router.get("/{business_id}/attendance/clock/state")
+async def attendance_clock_state(
+    business_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    identity = _clock_identity(current_user)
+    business = await _clock_business(current_user, business_id)
+    now = _clock_now()
+    connection = await upload_svc._connect()
+    try:
+        branches = [dict(item) for item in await connection.fetch(_BRANCH_GEOFENCE_SQL, business_id)]
+        consent = await _clock_consent(connection, business_id, current_user)
+        rows = await connection.fetch(
+            f"""SELECT {ATTENDANCE_CLOCK_COLUMNS} FROM yeoljeong_attendance_records
+                 WHERE business_id=$1 AND employee_email=$2 AND deleted_at IS NULL
+                 ORDER BY work_date DESC, start_at DESC LIMIT 31""",
+            business_id, identity["email"],
+        )
+    finally:
+        await connection.close()
+    open_row = next((row for row in rows if row["source"] == "pwa" and row["check_out_at"] is None
+                     and row["check_in_at"] is not None and row["check_in_at"] >= now - CLOCK_OPEN_WINDOW), None)
+    recent = [_clock_view(row) for row in rows]
+    return {
+        "business": {"id": business["id"], "name": business["name"]},
+        "employee": {"name": identity["name"], "email_masked": identity["masked"]},
+        "consent": _json_value(consent),
+        "open_record": _clock_view(open_row) if open_row is not None else None,
+        "today": [item for item in recent if item["work_date"] == now.date().isoformat()],
+        "recent": recent,
+        "branches": [
+            {"id": str(item["id"]), "name": item["name"],
+             "has_geofence": item.get("latitude") is not None and item.get("longitude") is not None,
+             "radius_m": geofence_radius_m(item)}
+            for item in branches
+        ],
+        "policy": {"default_radius_m": GEOFENCE_DEFAULT_RADIUS_M, "max_radius_m": GEOFENCE_MAX_RADIUS_M},
+        "server_time": now.isoformat(),
+    }
+
+
+@router.post("/{business_id}/attendance/consent")
+async def attendance_location_consent(
+    business_id: str,
+    payload: AttendanceConsentIn,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    identity = _clock_identity(current_user)
+    await _clock_business(current_user, business_id)
+    action = CLOCK_CONSENT_ACTIONS[0] if payload.agree else CLOCK_CONSENT_ACTIONS[1]
+    connection = await upload_svc._connect()
+    try:
+        async with connection.transaction():
+            await _attendance_audit(connection, business_id, current_user, action,
+                                    f"consent:{identity['masked']}",
+                                    {"agree": payload.agree, "scope": "출퇴근 버튼을 누른 순간 위치 1점",
+                                     "purpose": "근태 확인"})
+    finally:
+        await connection.close()
+    return {"consent": {"agreed": payload.agree, "at": _clock_now().isoformat() if payload.agree else None}}
+
+
+@router.post("/{business_id}/attendance/check-in", status_code=201)
+async def attendance_check_in(
+    business_id: str,
+    payload: AttendanceClockIn,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    identity = _clock_identity(current_user)
+    business = await _clock_business(current_user, business_id)
+    now = _clock_now()
+    start_at = time(now.hour, now.minute)
+    connection = await upload_svc._connect()
+    try:
+        async with connection.transaction():
+            await _clock_lock(connection, business_id, identity["email"])
+            branch, consent_at, verdict = await _clock_judge(
+                connection, business_id, current_user, payload,
+                branch_id=payload.branch_id.strip(), branch_name=None)
+            already_open = await connection.fetchval(
+                """SELECT id FROM yeoljeong_attendance_records
+                    WHERE business_id=$1 AND employee_email=$2 AND work_date=$3 AND source='pwa'
+                      AND check_in_at IS NOT NULL AND check_out_at IS NULL AND deleted_at IS NULL
+                    LIMIT 1""",
+                business_id, identity["email"], now.date(),
+            )
+            if already_open is not None:
+                raise HTTPException(status_code=409, detail="오늘 이미 출근이 기록되어 있습니다. 퇴근을 먼저 기록하십시오")
+            row = await connection.fetchrow(
+                f"""INSERT INTO yeoljeong_attendance_records
+                      (business_id,employee_email,employee_email_masked,employee_name,branch,
+                       work_date,start_at,end_at,break_minutes,worked_minutes,hourly_wage,
+                       source,status,memo,created_by,check_in_at,check_in_lat,check_in_lng,
+                       check_in_accuracy_m,check_in_distance_m,geofence_result,device_info,
+                       location_consent_at)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$7,0,0,0,'pwa',$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+                    RETURNING {ATTENDANCE_CLOCK_COLUMNS}""",
+                business_id, identity["email"], identity["masked"], identity["name"],
+                (branch or {}).get("name") or "", now.date(), start_at, verdict["status"],
+                _clock_memo("", "출근", verdict["reason"]), upload_svc._actor(current_user), now,
+                verdict["latitude"], verdict["longitude"], verdict["accuracy_m"], verdict["distance_m"],
+                verdict["result"], payload.device_info.strip(), consent_at,
+            )
+            await _attendance_audit(connection, business_id, current_user, "attendance.check_in",
+                                    str(row["id"]), _clock_audit(verdict, branch))
+    except asyncpg.UniqueViolationError as exc:
+        raise HTTPException(status_code=409, detail="같은 시각의 출근이 이미 기록되어 있습니다") from exc
+    finally:
+        await connection.close()
+    return _clock_response(business, row, verdict)
+
+
+@router.post("/{business_id}/attendance/check-out")
+async def attendance_check_out(
+    business_id: str,
+    payload: AttendanceClockIn,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    identity = _clock_identity(current_user)
+    business = await _clock_business(current_user, business_id)
+    now = _clock_now()
+    end_at = time(now.hour, now.minute)
+    connection = await upload_svc._connect()
+    try:
+        async with connection.transaction():
+            await _clock_lock(connection, business_id, identity["email"])
+            record = await connection.fetchrow(
+                f"""SELECT {ATTENDANCE_CLOCK_COLUMNS} FROM yeoljeong_attendance_records
+                     WHERE business_id=$1 AND employee_email=$2 AND source='pwa'
+                       AND check_in_at IS NOT NULL AND check_in_at >= $3
+                       AND check_out_at IS NULL AND deleted_at IS NULL
+                     ORDER BY check_in_at DESC LIMIT 1 FOR UPDATE""",
+                business_id, identity["email"], now - CLOCK_OPEN_WINDOW,
+            )
+            if record is None:
+                raise HTTPException(status_code=409, detail="출근 기록이 없어 퇴근을 기록할 수 없습니다")
+            # 퇴근은 출근한 지점 기준으로 판정한다.
+            branch, consent_at, verdict = await _clock_judge(
+                connection, business_id, current_user, payload,
+                branch_id="", branch_name=record["branch"] or "")
+            # 근무분은 수기 입력과 같은 함수로 계산한다(자정 넘김·24시간 상한 동일).
+            worked = attendance_worked_minutes(record["start_at"], end_at, int(record["break_minutes"] or 0))
+            combined = combined_geofence(record["geofence_result"], verdict["result"])
+            status = ("rejected" if record["status"] == "rejected"
+                      else "approved" if combined == "inside" else "pending")
+            row = await connection.fetchrow(
+                f"""UPDATE yeoljeong_attendance_records SET
+                      check_out_at=$3, end_at=$4, worked_minutes=$5, check_out_lat=$6,
+                      check_out_lng=$7, check_out_accuracy_m=$8, check_out_distance_m=$9,
+                      geofence_result=$10, status=$11, memo=$12,
+                      device_info=COALESCE(NULLIF(device_info,''),$13),
+                      location_consent_at=COALESCE(location_consent_at,$14), updated_at=now()
+                    WHERE id=$1 AND business_id=$2 AND check_out_at IS NULL AND deleted_at IS NULL
+                    RETURNING {ATTENDANCE_CLOCK_COLUMNS}""",
+                record["id"], business_id, now, end_at, worked, verdict["latitude"],
+                verdict["longitude"], verdict["accuracy_m"], verdict["distance_m"], combined, status,
+                _clock_memo(record["memo"], "퇴근", verdict["reason"]), payload.device_info.strip(),
+                consent_at,
+            )
+            if row is None:
+                raise HTTPException(status_code=409, detail="이미 퇴근이 기록되었습니다")
+            await _attendance_audit(connection, business_id, current_user, "attendance.check_out",
+                                    str(row["id"]), _clock_audit(verdict, branch) | {"worked_minutes": worked})
+    finally:
+        await connection.close()
+    return _clock_response(business, row, verdict)
+
+
+@router.get("/{business_id}/attendance/me/{record_id}")
+async def get_my_attendance_record(
+    business_id: str,
+    record_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    identity = _clock_identity(current_user)
+    business = await _clock_business(current_user, business_id)
+    connection = await upload_svc._connect()
+    try:
+        row = await connection.fetchrow(
+            f"""SELECT employee_email,{ATTENDANCE_CLOCK_COLUMNS} FROM yeoljeong_attendance_records
+                 WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL""",
+            record_id, business_id,
+        )
+    finally:
+        await connection.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="현재 사업자의 근태를 찾을 수 없습니다")
+    if str(row["employee_email"] or "").lower() != identity["email"]:
+        raise HTTPException(status_code=403, detail="본인 근태만 조회할 수 있습니다")
+    return {"business": {"id": business["id"], "name": business["name"]}, "record": _clock_view(row)}
+
+
+@router.get("/{business_id}/attendance/locations")
+async def attendance_locations(
+    business_id: str,
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    result: str = Query("", max_length=10),
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """관리자 확인용 위치 요약. 좌표 원본은 이 경로에서만 나간다."""
+    _require_attendance_admin(current_user)
+    business = await _business(current_user, business_id)
+    _filter_source_dates([], date_from, date_to)  # 날짜 형식·순서 검증
+    if result and result not in GEOFENCE_RESULTS:
+        raise HTTPException(status_code=400, detail="판정은 inside·outside·unknown 중 하나여야 합니다")
+    conditions = ["business_id=$1", "source='pwa'", "deleted_at IS NULL"]
+    params: list[Any] = [business_id]
+    for column, op, value in (("work_date", ">=", date_from), ("work_date", "<=", date_to),
+                              ("geofence_result", "=", result)):
+        if value:
+            params.append(date.fromisoformat(value) if column == "work_date" else value)
+            conditions.append(f"{column} {op} ${len(params)}")
+    connection = await upload_svc._connect()
+    try:
+        rows = await connection.fetch(
+            f"SELECT {ATTENDANCE_LOCATION_COLUMNS} FROM yeoljeong_attendance_records"
+            f" WHERE {' AND '.join(conditions)} ORDER BY work_date DESC, start_at DESC LIMIT 500",
+            *params,
+        )
+    finally:
+        await connection.close()
+    records = [{key: _json_value(item) for key, item in dict(row).items()} for row in rows]
+    return {
+        "business": {"id": business["id"], "name": business["name"]},
+        "records": records,
+        "count": len(records),
+        "summary": {name: sum(1 for item in records if item.get("geofence_result") == name)
+                    for name in sorted(GEOFENCE_RESULTS)}
+                   | {"pending": sum(1 for item in records if item.get("status") == "pending")},
+    }
+
+
+@router.get("/{business_id}/branches/geofence")
+async def list_branch_geofences(
+    business_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    _require_attendance_admin(current_user)
+    business = await _business(current_user, business_id)
+    connection = await upload_svc._connect()
+    try:
+        rows = await connection.fetch(_BRANCH_GEOFENCE_SQL, business_id)
+    finally:
+        await connection.close()
+    return {
+        "business": {"id": business["id"], "name": business["name"]},
+        "branches": [{**{key: _json_value(item) for key, item in dict(row).items()},
+                      "effective_radius_m": geofence_radius_m(dict(row))} for row in rows],
+        "policy": {"default_radius_m": GEOFENCE_DEFAULT_RADIUS_M, "min_radius_m": GEOFENCE_MIN_RADIUS_M,
+                   "max_radius_m": GEOFENCE_MAX_RADIUS_M},
+    }
+
+
+@router.patch("/{business_id}/branches/{branch_id}/geofence")
+async def update_branch_geofence(
+    business_id: str,
+    branch_id: str,
+    payload: BranchGeofenceIn,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    _require_attendance_admin(current_user)
+    business = await _business(current_user, business_id)
+    radius = GEOFENCE_DEFAULT_RADIUS_M if payload.radius_m is None else payload.radius_m
+    if not GEOFENCE_MIN_RADIUS_M <= radius <= GEOFENCE_MAX_RADIUS_M:
+        raise HTTPException(
+            status_code=400,
+            detail=f"반경은 {GEOFENCE_MIN_RADIUS_M}~{GEOFENCE_MAX_RADIUS_M}m 사이여야 합니다(CEO 결정 상한 {GEOFENCE_MAX_RADIUS_M}m)",
+        )
+    connection = await upload_svc._connect()
+    try:
+        async with connection.transaction():
+            row = await connection.fetchrow(
+                """UPDATE yeoljeong_branches SET latitude=$3, longitude=$4, geofence_radius_m=$5,
+                          updated_by=$6, updated_at=now()
+                    WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL
+                    RETURNING id,name,latitude,longitude,geofence_radius_m""",
+                branch_id, business_id, payload.latitude, payload.longitude, radius,
+                upload_svc._actor(current_user),
+            )
+            if row is None:
+                raise HTTPException(status_code=404, detail="현재 사업자의 지점을 찾을 수 없습니다")
+            await _attendance_audit(connection, business_id, current_user, "attendance.geofence_config",
+                                    branch_id, dict(row))
+    finally:
+        await connection.close()
+    return {"business": {"id": business["id"], "name": business["name"]},
+            "branch": {key: _json_value(item) for key, item in dict(row).items()}}
 
 
 @router.get("/{business_id}/{route}/records")

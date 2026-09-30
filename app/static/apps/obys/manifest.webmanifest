@@ -1,0 +1,27 @@
+{
+  "id": "/static/apps/obys/clock.html",
+  "name": "오비서 출퇴근",
+  "short_name": "출퇴근",
+  "description": "오비서 직원 출퇴근 기록 — 버튼을 누른 순간의 위치로 매장 반경을 확인합니다.",
+  "lang": "ko",
+  "start_url": "/static/apps/obys/clock.html",
+  "scope": "/static/apps/obys/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f5f7",
+  "theme_color": "#2f6fed",
+  "icons": [
+    {
+      "src": "/static/apps/obys/icons/obys-clock-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/apps/obys/icons/obys-clock-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

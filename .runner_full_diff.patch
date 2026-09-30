@@ -1,1409 +1,2274 @@
-diff --git a/.gitignore b/.gitignore
-index aa79d522..61a8ce5f 100644
---- a/.gitignore
-+++ b/.gitignore
-@@ -84,6 +84,8 @@ app/data/yeoljeong_finance/onboarding_documents.json
- app/data/yeoljeong_finance/pc_agent_collection_queue.json
- app/data/yeoljeong_finance/settings.json
- app/data/yeoljeong_finance/uploads/
-+# codex CLI 카탈로그 사본 — scripts/codex_model_probe.py 가 매시 갱신(런타임 산출물)
-+app/data/codex_cli/
- card310_entry_pause_mode
- card310_entry_paused_exit_only,
- nginx-aads-upstream.conf
-diff --git a/app/services/cli_model_autoreg.py b/app/services/cli_model_autoreg.py
-new file mode 100644
-index 00000000..3d5359a1
---- /dev/null
-+++ b/app/services/cli_model_autoreg.py
-@@ -0,0 +1,295 @@
-+"""CLI 모델(codex CLI) 신규 모델 자동등록 (AADS-CLI-MODEL-AUTOREG-20260930).
+diff --git a/HANDOVER.md b/HANDOVER.md
+index c4987603..7f40953c 100644
+--- a/HANDOVER.md
++++ b/HANDOVER.md
+@@ -1,3 +1,14 @@
++## 2026-09-30 — 오비서 PWA 출퇴근 1차: manifest·서비스워커·출근/퇴근·GPS 반경 판정·위치 동의 (AADS-OBYS-PWA-GPS-ATTENDANCE-20260930)
 +
-+발견과 실행가능 판정을 분리한다. codex CLI 카탈로그(models_cache.json)에 있다고
-+실행 가능한 것이 아니다 — 2026-09-30 gpt-6.1-sol 은 목록(visibility=list)에 있었지만
-+`codex exec -m gpt-6.1-sol` 은 "not supported when using Codex with a ChatGPT account"
-+400 으로 실패했다.
++- 직원 본인 API 신설(`/api/v1/workspaces/{business_id}/…`): `attendance/clock/state`, `attendance/consent`, `attendance/check-in`, `attendance/check-out`, `attendance/me/{record_id}`. 관리자: `attendance/locations`(좌표 원본 포함), `branches/geofence`(GET), `branches/{branch_id}/geofence`(PATCH, 감사로그). 경로는 지시서의 `/api/v1/obys/…` 가 아니라 실제 마운트(`/api/v1/workspaces`, PRD r2 §9)에 두었다 — `/api/v1/obys` 프리픽스는 존재하지 않는다.
++- 반경: 지시서의 기본 100m 대신 **PRD r3 의 CEO 결정 D1(50m, 여유 없음, 상한 50m, 설정 30~50m)** 을 따랐다. 상수 `GEOFENCE_DEFAULT/MIN/MAX_RADIUS_M` 한 곳만 바꾸면 된다. 정확도 > 반경 → unknown/pending.
++- 신원은 로그인 세션에서만(본문 employee_email 무시), 멤버십은 기존 `_require_write`, 테넌트는 기존 `_business`(404→403 변환). 테넌트 게이트·`_is_admin` 무수정. 감사로그는 `_attendance_audit` 재사용. 근무분은 `attendance_worked_minutes` 재사용.
++- 퇴근 전 행은 `end_at=start_at, worked_minutes=0`, `check_out_at IS NULL` 로 표시(운영 end_at NOT NULL 여부 미확인이라 스키마를 완화하지 않음).
++- PWA: `app/static/apps/obys/{manifest.webmanifest, sw.js, clock.html, attendance-admin.html, icons/obys-clock-{192,512}.png}`. SW scope `/static/apps/obys/`, 셸만 캐시(API·토큰 불가), 오프라인 큐잉 없음, `getCurrentPosition` 1회. index.html 은 지점 목록에 관리 화면 링크 1줄.
++- 마이그레이션 `migrations/20260930_obys_attendance_pwa_gps.sql`(+`rollback/…down.sql`) — 오비서 업무 DB 전용·추가만, baseline HOLD. 운영 문서 `docs/operations/OBYS_ATTENDANCE_PWA_GPS.md`.
++- 테스트 `tests/unit/test_obys_attendance_pwa_gps.py` 33건 + 기존 `test_obys_attendance_api.py` 27건 → 60 passed, exit 0. AAG `--check-baseline` 증가 없음.
++- 남은 위험: 기존 제네릭 근태 목록(`/attendance/records`)은 역할 필터가 없어 멤버십 R2 반영 후 member 가 전 직원 근태를 볼 수 있다(좌표는 노출 안 됨) — 별도 작업 필요. 좌표 90일 파기는 수동 쿼리(문서 §7).
 +
-+    발견(여기, 컨테이너 sync)       → llm_models codex 행 inactive/non-executable
-+                                     + llm_model_candidates status='discovered'
-+    실호출 검증(scripts/codex_model_probe.py, 호스트) → verified | blocked_account | probe_failed
-+    라우팅 후보(여기)               → model_routing_preferences(runner_llm) is_enabled=false 로만 추가
-+
-+활성화는 CEO 설정 UI 토글로만 한다. 이 모듈은 기존 행을 바꾸지 않는다(INSERT … DO NOTHING).
-+asyncpg 에 의존하지 않는다 — conn 은 호출자가 넘긴다.
-+"""
-+from __future__ import annotations
-+
-+import json
-+import logging
-+import os
-+from typing import Any, Iterable, Mapping, Sequence
-+
-+logger = logging.getLogger(__name__)
-+
-+CODEX_CACHE_ENV = "AADS_CODEX_MODELS_CACHE"
-+CODEX_CACHE_DEFAULT = "/root/.codex/models_cache.json"
-+# 컨테이너에는 /root/.codex 가 마운트돼 있지 않다(2026-09-30 docker inspect 실측).
-+# 호스트 probe 가 민감정보(identity/etag)를 뺀 사본을 app/data 아래(컨테이너 /app/app/data 로 마운트)에 둔다.
-+CODEX_CACHE_MIRROR_ENV = "AADS_CODEX_MODELS_CACHE_MIRROR"
-+CODEX_CACHE_MIRROR_DEFAULT = "/app/app/data/codex_cli/models_cache.json"
-+
-+DISCOVERY_SOURCE = "codex_cli_cache"
-+RUNNER_ROUTE_KEY = "runner_llm"
-+AUTO_DISCOVERY_ACTOR = "auto_discovery"
-+# 러너가 실제로 태울 수 있는 CLI 계열만 라우팅 후보로 올린다(Claude CLI / codex CLI).
-+RUNNER_CANDIDATE_PROVIDERS = frozenset({"anthropic", "openai", "codex"})
-+RUNNER_CANDIDATE_DISPLAY_ORDER = 900
-+# 템플릿/수동 행은 "새로 발견" 이 아니다.
-+_NON_DISCOVERY_SOURCES = frozenset({"", "template", "accepted_alias", "manual_seed"})
-+_RAW_KEYS = ("slug", "display_name", "visibility", "supported_in_api", "context_window", "priority")
-+VERIFIED_ALERT_TITLE = "신규 CLI 모델 실행 확인 — 설정에서 활성화 가능"
-+
-+
-+def codex_cache_paths() -> list[str]:
-+    paths = [
-+        (os.getenv(CODEX_CACHE_ENV) or CODEX_CACHE_DEFAULT).strip(),
-+        (os.getenv(CODEX_CACHE_MIRROR_ENV) or CODEX_CACHE_MIRROR_DEFAULT).strip(),
-+    ]
-+    out: list[str] = []
-+    for path in paths:
-+        if path and path not in out:
-+            out.append(path)
-+    return out
-+
-+
-+def parse_codex_models_cache(payload: Any) -> tuple[list[dict[str, Any]], int]:
-+    """models[] 중 visibility=='list' 만 돌려준다. (rows, hidden_count)."""
-+    models = payload.get("models") if isinstance(payload, Mapping) else None
-+    rows: list[dict[str, Any]] = []
-+    hidden = 0
-+    seen: set[str] = set()
-+    for item in models or []:
-+        if not isinstance(item, Mapping):
-+            continue
-+        slug = str(item.get("slug") or "").strip()
-+        if not slug:
-+            continue
-+        if str(item.get("visibility") or "").strip().lower() != "list":
-+            hidden += 1
-+            continue
-+        if slug in seen:
-+            continue
-+        seen.add(slug)
-+        raw = {key: item.get(key) for key in _RAW_KEYS if key in item}
-+        rows.append({
-+            "model_id": slug,
-+            "display_name": str(item.get("display_name") or slug),
-+            "raw": raw,
-+        })
-+    return rows, hidden
-+
-+
-+def read_codex_models_cache(paths: Sequence[str] | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-+    """캐시를 읽는다. 읽을 수 없으면 조용히 넘기지 않고 status=unavailable + 사유를 돌려준다."""
-+    reasons: list[str] = []
-+    for path in list(paths or codex_cache_paths()):
-+        try:
-+            with open(path, "r", encoding="utf-8") as fh:
-+                payload = json.load(fh)
-+        except FileNotFoundError:
-+            reasons.append(f"not_found:{path}")
-+            continue
-+        except PermissionError:
-+            reasons.append(f"permission_denied:{path}")
-+            continue
-+        except (OSError, ValueError) as exc:
-+            reasons.append(f"unreadable:{path}:{type(exc).__name__}")
-+            continue
-+        if not isinstance(payload, Mapping) or not isinstance(payload.get("models"), list):
-+            reasons.append(f"invalid_format:{path}")
-+            continue
-+        rows, hidden = parse_codex_models_cache(payload)
-+        return rows, {
-+            "status": "ok",
-+            "count": len(rows),
-+            "hidden_count": hidden,
-+            "source_path": path,
-+            "fetched_at": payload.get("fetched_at"),
-+            "client_version": payload.get("client_version"),
-+            "discovery_source": DISCOVERY_SOURCE,
-+            "runtime_executable": False,
-+            "auto_discovery_supported": True,
-+            "discovery_requirement": "codex CLI models_cache.json (host) 또는 probe 가 둔 사본",
-+            "model_source": "discovery",
-+        }
-+    return [], {
-+        "status": "unavailable",
-+        "count": 0,
-+        "error": "; ".join(reasons) or "no_path",
-+        "discovery_source": DISCOVERY_SOURCE,
-+        "runtime_executable": False,
-+        "auto_discovery_supported": False,
-+        "discovery_requirement": f"{CODEX_CACHE_ENV} 또는 {CODEX_CACHE_MIRROR_ENV} 경로의 파일",
-+        "model_source": "template",
-+    }
-+
-+
-+def is_codex_cli_row(row: Mapping[str, Any]) -> bool:
-+    return row.get("provider") == "codex" and row.get("discovery_source") == DISCOVERY_SOURCE
-+
-+
-+def apply_verified_codex(model_rows: Iterable[dict[str, Any]], verified_ids: set[str]) -> int:
-+    """probe 가 verified 로 판정한 codex 행은 sync 가 다시 non-executable 로 덮지 않게 한다."""
-+    changed = 0
-+    for row in model_rows:
-+        if not is_codex_cli_row(row) or row.get("model_id") not in verified_ids:
-+            continue
-+        row["is_executable"] = True
-+        row["is_selectable"] = True
-+        row["verification_status"] = "verified"
-+        changed += 1
-+    return changed
-+
-+
-+def select_new_codex_rows(
-+    model_rows: Iterable[Mapping[str, Any]],
-+    *,
-+    template_ids: Iterable[str],
-+    existing_keys: set[tuple[str, str]],
-+) -> list[Mapping[str, Any]]:
-+    """템플릿에도, sync 이전 llm_models codex 행에도 없는 codex_cli_cache 발견분."""
-+    templates = set(template_ids)
-+    return [
-+        row for row in model_rows
-+        if is_codex_cli_row(row)
-+        and row["model_id"] not in templates
-+        and ("codex", row["model_id"]) not in existing_keys
-+    ]
-+
-+
-+def select_runner_candidates(
-+    model_rows: Iterable[Mapping[str, Any]],
-+    *,
-+    existing_keys: set[tuple[str, str]],
-+    verified_codex_ids: Iterable[str] = (),
-+) -> list[tuple[str, str]]:
-+    """runner_llm 에 비활성 후보로 올릴 (provider, model_id).
-+
-+    - API discovery(openai_api/anthropic_api)로 이번 sync 에 처음 llm_models 에 들어온 실행가능 모델
-+    - probe 로 verified 된 codex CLI 모델
-+    """
-+    picked: list[tuple[str, str]] = []
-+    for row in model_rows:
-+        provider = str(row.get("provider") or "")
-+        model_id = str(row.get("model_id") or "")
-+        key = (provider, model_id)
-+        if provider not in RUNNER_CANDIDATE_PROVIDERS or provider == "codex" or not model_id:
-+            continue
-+        if str(row.get("discovery_source") or "") in _NON_DISCOVERY_SOURCES:
-+            continue
-+        if key in existing_keys or not row.get("is_executable"):
-+            continue
-+        if key not in picked:
-+            picked.append(key)
-+    for model_id in sorted(set(verified_codex_ids)):
-+        key = ("codex", model_id)
-+        if key not in picked:
-+            picked.append(key)
-+    return picked
-+
-+
-+async def fetch_verified_codex_ids(conn: Any) -> set[str]:
-+    try:
-+        rows = await conn.fetch(
-+            "SELECT model_id FROM llm_model_candidates WHERE provider = 'codex' AND status = 'verified'"
-+        )
-+    except Exception as exc:  # 테이블/컬럼 미적용 환경에서도 sync 는 계속한다.
-+        logger.warning("cli_model_autoreg.verified_lookup_failed: %s", str(exc)[:160])
-+        return set()
-+    return {str(row["model_id"]) for row in rows or []}
-+
-+
-+async def register_codex_candidates(conn: Any, rows: Sequence[Mapping[str, Any]]) -> list[str]:
-+    """llm_model_candidates 에 status='discovered' 로 넣는다. 이미 있으면 건드리지 않는다."""
-+    inserted: list[str] = []
-+    for row in rows:
-+        raw = (row.get("metadata") or {}).get("raw") if isinstance(row.get("metadata"), Mapping) else {}
-+        result = await conn.fetch(
-+            """
-+            INSERT INTO llm_model_candidates (
-+                provider, model_id, product_name, surface_scope, pricing_kind,
-+                price_status, training_use, status, discovery_source, notes
-+            )
-+            VALUES ('codex', $1, $2, ARRAY['terminal_cli','runner']::TEXT[], 'subscription',
-+                    'estimated', 'unknown', 'discovered', $3, $4)
-+            ON CONFLICT (provider, model_id) DO NOTHING
-+            RETURNING model_id
-+            """,
-+            row["model_id"],
-+            f"{row.get('display_name') or row['model_id']} (codex CLI)",
-+            DISCOVERY_SOURCE,
-+            "codex CLI models_cache 자동 발견. 실호출 검증 전 — scripts/codex_model_probe.py 가 판정한다. "
-+            f"supported_in_api={(raw or {}).get('supported_in_api')}",
-+        )
-+        inserted.extend(str(r["model_id"]) for r in result or [])
-+    return inserted
-+
-+
-+async def register_runner_llm_candidates(conn: Any, candidates: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
-+    """model_routing_preferences(runner_llm) 에 is_enabled=false 로만 추가한다. 기존 행 불변."""
-+    inserted: list[tuple[str, str]] = []
-+    for provider, model_id in candidates:
-+        result = await conn.fetch(
-+            """
-+            INSERT INTO model_routing_preferences (
-+                route_key, provider, model_id, display_order, is_enabled, is_default, notes, updated_by
-+            )
-+            VALUES ($1, $2, $3, $4, FALSE, FALSE, $5, $6)
-+            ON CONFLICT (route_key, provider, model_id) DO NOTHING
-+            RETURNING provider, model_id
-+            """,
-+            RUNNER_ROUTE_KEY,
-+            provider,
-+            model_id,
-+            RUNNER_CANDIDATE_DISPLAY_ORDER,
-+            "자동 발견 후보 — 설정 UI 에서 활성화해야 러너가 사용",
-+            AUTO_DISCOVERY_ACTOR,
-+        )
-+        inserted.extend((str(r["provider"]), str(r["model_id"])) for r in result or [])
-+    return inserted
-+
-+
-+async def _notify_verified(models: Sequence[str]) -> None:
-+    if not models:
-+        return
-+    try:
-+        from app.services.ohvis_alert import INFO, notify
-+
-+        await notify(
-+            VERIFIED_ALERT_TITLE,
-+            "codex CLI 실호출 검증 통과: " + ", ".join(models)
-+            + " — runner_llm 에 비활성 후보로 등록됨. 설정 > 모델 라우팅에서 켜면 러너가 사용한다.",
-+            severity=INFO,
-+            category="llm_model",
-+            project="AADS",
-+        )
-+    except Exception as exc:
-+        logger.warning("cli_model_autoreg.notify_failed: %s", str(exc)[:160])
-+
-+
-+async def autoregister_after_sync(
-+    conn: Any,
-+    *,
-+    model_rows: Sequence[Mapping[str, Any]],
-+    existing_keys: set[tuple[str, str]],
-+    template_codex_ids: Iterable[str],
-+    verified_codex_ids: set[str],
-+) -> dict[str, Any]:
-+    new_codex_rows = select_new_codex_rows(model_rows, template_ids=template_codex_ids, existing_keys=existing_keys)
-+    codex_inserted = await register_codex_candidates(conn, new_codex_rows)
-+    runner_candidates = select_runner_candidates(
-+        model_rows, existing_keys=existing_keys, verified_codex_ids=verified_codex_ids
-+    )
-+    runner_inserted = await register_runner_llm_candidates(conn, runner_candidates)
-+    newly_verified = [model_id for provider, model_id in runner_inserted if provider == "codex"]
-+    await _notify_verified(newly_verified)
-+    summary = {
-+        "codex_new": [row["model_id"] for row in new_codex_rows],
-+        "codex_candidates_inserted": codex_inserted,
-+        "runner_candidates_inserted": [f"{p}:{m}" for p, m in runner_inserted],
-+        "verified_notified": newly_verified,
-+    }
-+    if codex_inserted or runner_inserted:
-+        logger.info("cli_model_autoreg.registered %s", summary)
-+    return summary
-diff --git a/app/services/llm_candidate_registry.py b/app/services/llm_candidate_registry.py
-index e8f41dc6..95bf5014 100644
---- a/app/services/llm_candidate_registry.py
-+++ b/app/services/llm_candidate_registry.py
-@@ -17,6 +17,9 @@ PRICE_STATUSES = ("official_verified", "unverified_official", "estimated")
- PRICING_KINDS = ("api_per_token", "subscription", "per_image", "per_minute")
- TRAINING_USES = ("not_used", "used_for_training", "unknown")
- CANDIDATE_STATUSES = ("candidate", "testing", "approved", "rejected", "retired")
-+# CLI 발견·실호출 검증 상태 (migrations/20260930_cli_model_autoreg.sql)
-+CLI_PROBE_STATUSES = ("discovered", "verified", "blocked_account", "probe_failed")
-+CANDIDATE_STATUSES = CANDIDATE_STATUSES + CLI_PROBE_STATUSES
- VERDICTS = ("equivalent", "candidate_better", "candidate_worse", "insufficient_sample", "not_run")
- # 표본이 선언된 최소값 미달일 때 허용되는 판정. 결론(동등/우세/열위)은 미검증이다.
- UNDERSAMPLED_VERDICTS = ("insufficient_sample", "not_run")
-diff --git a/app/services/model_registry.py b/app/services/model_registry.py
-index 0a987572..d3eef33a 100644
---- a/app/services/model_registry.py
-+++ b/app/services/model_registry.py
-@@ -1,5 +1,6 @@
+ ## 2026-09-30 — 오비서 계약서 서명요청 알림 + 서명본 PDF 보관·교부 (AADS-OBYS-CONTRACT-NOTIFY-PDF-20260930)
+ 
+ - 서명요청(`request-signature`) 뒤 알림 발송·채널별 이력(`yeoljeong_contract_notifications`), 서명(`contracts/signing`) 뒤 `signed_snapshot` 기반 PDF 보관(`OBYS_UPLOAD_ROOT/<tenant>/contracts/`)·`contract_signed` 알림. 둘 다 실패해도 서명요청/서명은 성공으로 남는다.
+diff --git a/app/api/obys_workspaces.py b/app/api/obys_workspaces.py
+index 6b9b3d0a..6641cfe3 100644
+--- a/app/api/obys_workspaces.py
++++ b/app/api/obys_workspaces.py
+@@ -6,10 +6,11 @@ copying data into a second set of tables or falling back to demo rows.
+ """
  from __future__ import annotations
  
-+import asyncio
+-from datetime import date, datetime, time
++from datetime import date, datetime, time, timedelta
+ from zoneinfo import ZoneInfo
+ from decimal import Decimal
  import json
- import logging
- import os
-@@ -14,6 +15,7 @@ import asyncpg
- import httpx
- 
- from app.core.db_pool import get_pool
-+from app.services import cli_model_autoreg
- 
- logger = logging.getLogger(__name__)
- 
-@@ -1223,6 +1225,13 @@ async def _fetch_kimi_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
-     return rows, {"status": "ok", "count": len(rows), "model_source": "discovery"}
++import math
+ import re
+ from typing import Any, Annotated, Literal
+ from uuid import UUID
+@@ -966,6 +967,512 @@ async def delete_attendance_record(
+     return {"deleted": True, "id": record_id}
  
  
-+async def _fetch_codex_cli_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
-+    """codex CLI 가 ChatGPT 백엔드에서 받아 둔 카탈로그. 발견만 한다 — 실행가능 판정은 probe 몫."""
-+    from app.services.cli_model_autoreg import read_codex_models_cache
++# ── PWA 출퇴근 (직원 본인) ──────────────────────────────────────────────────
++# 버튼을 누른 순간의 위치 1점만 받는다. 연속 추적·오프라인 큐잉은 하지 않는다.
++# 신원은 로그인 세션에서만 가져온다 — 본문의 employee_email 은 모델이 버린다.
++# 관리자 대리 타각은 이 경로로 허용하지 않는다(관리자는 수기 입력 경로를 쓴다).
++#
++# 반경: CEO 결정 D1(2026-09-30, docs/prd/20260930_OBYS_ATTENDANCE_PWA_GPS_PRD.md §8.1)
++# "매장 반경 50m 안", 정확도 여유 없음. 지점별 geofence_radius_m 이 있으면 그 값을
++# 쓰되 상한을 넘지 않는다. 정확도(오차)가 반경보다 크면 안/밖을 판정하지 않는다.
++#
++# 퇴근 전 행: 운영 스키마의 end_at 이 NOT NULL 일 수 있어(확인 불가) 출근 시
++# end_at=start_at, worked_minutes=0 으로 두고 check_out_at IS NULL 을 "근무 중" 표지로 쓴다.
++GEOFENCE_DEFAULT_RADIUS_M = 50
++GEOFENCE_MIN_RADIUS_M = 30
++GEOFENCE_MAX_RADIUS_M = 50
++GEOFENCE_RESULTS = frozenset({"inside", "outside", "unknown"})
++ATTENDANCE_SOURCES = frozenset({"manual", "pwa"})
++CLOCK_OPEN_WINDOW = timedelta(hours=24)  # 퇴근은 24시간 안의 열린 출근에만 붙는다
++CLOCK_CONSENT_ACTIONS = ("attendance.consent", "attendance.consent_withdraw")
++_KST = ZoneInfo("Asia/Seoul")
++_EARTH_RADIUS_M = 6_371_008.8
 +
-+    return await asyncio.to_thread(read_codex_models_cache)
-+
-+
- async def discover_provider_model_rows(
-     key_rows: Iterable[dict[str, Any]],
-     *,
-@@ -1240,6 +1249,7 @@ async def discover_provider_model_rows(
-         "gemini": _fetch_gemini_models,
-         "litellm": _fetch_litellm_models,
-         "kimi": _fetch_kimi_models,
-+        "codex": _fetch_codex_cli_models,
-     }
-     all_rows: list[dict[str, Any]] = []
-     run_results: list[dict[str, Any]] = []
-@@ -1266,7 +1276,7 @@ async def discover_provider_model_rows(
-                     display_name=item.get("display_name") or item["model_id"],
-                     key_state=key_state,
-                     raw=item.get("raw") or {},
--                    source=f"{provider}_api",
-+                    source=result.get("discovery_source") or f"{provider}_api",
-                 )
-                 for item in raw_rows
-             ]
-@@ -1283,6 +1293,11 @@ async def discover_provider_model_rows(
-                 "template_model_count": len(_PROVIDER_TEMPLATES.get(provider, ())),
-                 "discovered_model_count": len(discovered),
-                 "model_source": result.get("model_source") or ("discovery" if discovered else "template"),
-+                **{
-+                    key: result[key]
-+                    for key in ("discovery_source", "source_path", "fetched_at", "hidden_count")
-+                    if key in result
-+                },
-             })
-         except Exception as exc:
-             logger.warning("model_registry.discovery_failed: %s: %s", provider, str(exc)[:200])
-@@ -1880,6 +1895,12 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
-         manual_rows = await conn.fetch(
-             "SELECT provider, model_id FROM llm_models WHERE activation_source = 'manual' AND is_active = TRUE"
-         )
-+        # sync 이전에 이미 있던 행 — 이번 sync 에서 "새로 발견" 된 모델을 가려내는 기준.
-+        existing_keys = {
-+            (r["provider"], r["model_id"])
-+            for r in await conn.fetch("SELECT provider, model_id FROM llm_models")
-+        }
-+        verified_codex_ids = await cli_model_autoreg.fetch_verified_codex_ids(conn)
-     manual_active_keys = {(r["provider"], r["model_id"]) for r in manual_rows}
-     template_rows, provider_rows = build_registry_snapshots(key_rows)
-     key_state = _build_key_state(key_rows)
-@@ -1892,6 +1913,11 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
-             row["is_selectable"] = True
-             row["is_executable"] = True
-             row["activation_source"] = "manual"
-+    cli_model_autoreg.apply_verified_codex(model_rows, verified_codex_ids)
-+    # 캐시를 못 읽은 회차에는 codex_cli_cache 행을 은퇴시키지 않는다 — probe 가 세운 is_executable 을 지킨다.
-+    preserve_codex_cli_rows = not any(
-+        run.get("provider") == "codex" and run.get("status") == "ok" for run in discovery_runs
-+    )
-     review_required_providers = sorted(
-         {
-             row["provider"]
-@@ -2005,8 +2031,10 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
-                         updated_at = NOW()
-                     WHERE activation_source <> 'manual'
-                       AND COALESCE(metadata->>'sync_token', '') <> $1
-+                      AND NOT ($2::boolean AND COALESCE(discovery_source, '') = 'codex_cli_cache')
-                     """,
-                     sync_token,
-+                    preserve_codex_cli_rows,
-                 )
- 
-                 await append_key_audit_log(
-@@ -2053,12 +2081,28 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
-                 "review_required_providers": review_required_providers,
-             }
- 
-+    # 후보 자동등록은 본 sync 트랜잭션 밖에서 한다 — 후보 테이블 문제로 레지스트리 sync 가 롤백되면 안 된다.
-+    cli_autoreg: dict[str, Any] = {}
-+    try:
-+        async with pool.acquire() as conn:
-+            cli_autoreg = await cli_model_autoreg.autoregister_after_sync(
-+                conn,
-+                model_rows=model_rows,
-+                existing_keys=existing_keys,
-+                template_codex_ids=_PROVIDER_MODELS.get("codex", ()),
-+                verified_codex_ids=verified_codex_ids,
-+            )
-+    except Exception as exc:
-+        logger.warning("model_registry.cli_autoreg_failed: %s", str(exc)[:200])
-+        cli_autoreg = {"error": str(exc)[:200]}
-+
-     invalidate_registry_cache()
-     return {
-         "ok": True,
-         "models_synced": len(model_rows),
-         "providers": provider_rows,
-         "discovery": discovery_runs,
-+        "cli_autoreg": cli_autoreg,
-         "normalized_providers": normalized_providers,
-         "review_required_providers": review_required_providers,
-     }
-diff --git a/app/services/pipeline_runner_service.py b/app/services/pipeline_runner_service.py
-index 310185ab..850d7649 100644
---- a/app/services/pipeline_runner_service.py
-+++ b/app/services/pipeline_runner_service.py
-@@ -471,6 +471,20 @@ async def _get_db_model_config(size: str) -> list[str]:
-                 """,
-                 requested_size,
-             )
-+            # openai 행은 _routing_model 이 codex:<id> 로 바꿔 codex CLI 로 실행한다.
-+            # openai API 에만 있는 모델(2026-09-30 gpt-6.1-sol: ChatGPT 계정 codex 400)이
-+            # 체인에 들어가지 않도록 codex 쪽 llm_models 행이 실행가능할 때만 남긴다.
-+            codex_executable: set[str] | None = None
-+            if any((row["provider"] or "").strip().lower() == "openai" for row in rows):
-+                try:
-+                    codex_rows = await conn.fetch(
-+                        "SELECT model_id FROM llm_models WHERE provider = 'codex' AND is_executable = TRUE"
-+                    )
-+                    codex_executable = {str(r["model_id"]) for r in codex_rows}
-+                except Exception as exc:
-+                    # 조회 실패 시 판정 불가 — 안전 쪽(제외)으로 둔다.
-+                    logger.warning("pipeline_c_codex_executable_lookup_failed error=%s", str(exc)[:120])
-+                    codex_executable = set()
-         models: list[str] = []
-         seen: set[str] = set()
-         for row in rows:
-@@ -481,6 +495,17 @@ async def _get_db_model_config(size: str) -> list[str]:
-             )
-             if not raw_model or raw_model in seen:
-                 continue
-+            if (
-+                (row["provider"] or "").strip().lower() == "openai"
-+                and raw_model.startswith("codex:")
-+                and raw_model[len("codex:"):] not in (codex_executable or set())
-+            ):
-+                logger.info(
-+                    "pipeline_c_model_chain_excluded model=%s provider=openai reason=codex_not_executable "
-+                    "(llm_models codex 행 없음 또는 is_executable=false — codex CLI 실호출 검증 전)",
-+                    raw_model,
-+                )
-+                continue
-             seen.add(raw_model)
-             models.append(raw_model)
-         return await filter_executable_models(models)
-diff --git a/migrations/20260930_cli_model_autoreg.sql b/migrations/20260930_cli_model_autoreg.sql
-new file mode 100644
-index 00000000..4df99952
---- /dev/null
-+++ b/migrations/20260930_cli_model_autoreg.sql
-@@ -0,0 +1,22 @@
-+-- CLI 모델(codex CLI) 신규 모델 자동등록 (AADS-CLI-MODEL-AUTOREG-20260930).
-+-- llm_model_candidates 에 CLI 발견·실호출 검증 상태를 싣는다. 추가 전용, 여러 번 실행해도 결과가 같다.
-+--   discovered      : codex models_cache 에서 발견, 아직 실호출 검증 전
-+--   verified        : codex exec 실호출 성공 (llm_models codex 행 is_executable=true)
-+--   blocked_account : "not supported when using Codex with a ChatGPT account" — 24시간 후 재시도
-+--   probe_failed    : 그 밖의 실패 — 24시간 후 재시도
-+-- 목록에 있다고 실행 가능한 것이 아니다(2026-09-30 gpt-6.1-sol 실측) — 발견과 실행가능 판정을 분리한다.
-+-- status CHECK 는 값 목록만 넓힌다(기존 행·값 불변). 제약 교체 외 데이터 삭제 없음.
-+BEGIN;
-+
-+ALTER TABLE llm_model_candidates ADD COLUMN IF NOT EXISTS discovery_source TEXT;
-+ALTER TABLE llm_model_candidates ADD COLUMN IF NOT EXISTS last_probe_at TIMESTAMPTZ;
-+
-+ALTER TABLE llm_model_candidates DROP CONSTRAINT IF EXISTS ck_llm_model_candidates_status;
-+ALTER TABLE llm_model_candidates ADD CONSTRAINT ck_llm_model_candidates_status
-+    CHECK (status IN ('candidate','testing','approved','rejected','retired',
-+                      'discovered','verified','blocked_account','probe_failed'));
-+
-+CREATE INDEX IF NOT EXISTS idx_llm_model_candidates_probe
-+    ON llm_model_candidates(provider, status, last_probe_at);
-+
-+COMMIT;
-diff --git a/migrations/rollback/20260930_cli_model_autoreg.down.sql b/migrations/rollback/20260930_cli_model_autoreg.down.sql
-new file mode 100644
-index 00000000..20b51903
---- /dev/null
-+++ b/migrations/rollback/20260930_cli_model_autoreg.down.sql
-@@ -0,0 +1,18 @@
-+-- Rollback of migrations/20260930_cli_model_autoreg.sql.
-+-- 확장 상태 행은 지우지 않고 'candidate' 로 되돌린다(원래 상태는 notes 앞에 남김) — 그래야 원 CHECK 를 다시 걸 수 있다.
-+BEGIN;
-+
-+UPDATE llm_model_candidates
-+SET notes = '[rollback cli_autoreg status=' || status || '] ' || COALESCE(notes, ''),
-+    status = 'candidate'
-+WHERE status IN ('discovered','verified','blocked_account','probe_failed');
-+
-+ALTER TABLE llm_model_candidates DROP CONSTRAINT IF EXISTS ck_llm_model_candidates_status;
-+ALTER TABLE llm_model_candidates ADD CONSTRAINT ck_llm_model_candidates_status
-+    CHECK (status IN ('candidate','testing','approved','rejected','retired'));
-+
-+DROP INDEX IF EXISTS idx_llm_model_candidates_probe;
-+ALTER TABLE llm_model_candidates DROP COLUMN IF EXISTS last_probe_at;
-+ALTER TABLE llm_model_candidates DROP COLUMN IF EXISTS discovery_source;
-+
-+COMMIT;
-diff --git a/scripts/aads-crontab.txt b/scripts/aads-crontab.txt
-index dc0e9b84..dd9673f0 100644
---- a/scripts/aads-crontab.txt
-+++ b/scripts/aads-crontab.txt
-@@ -38,3 +38,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin
- # GO100 #119 상따 실매매 감시 — 2026-08-03 KST only; wrapper handles KST window.
- */5 * 3 8 * /root/aads/aads-server/scripts/run_go100_card119_watch.sh 5m-check >> /var/log/go100-card119-watch-20260803.log 2>&1 # GO100_CARD119_CHAT_WATCH_5M
- 5-59/10 * 3 8 * /root/aads/aads-server/scripts/run_go100_card119_watch.sh 10m-report --chat >> /var/log/go100-card119-watch-20260803.log 2>&1 # GO100_CARD119_CHAT_WATCH_10M
-+
-+# codex CLI 신규 모델 실호출 검증 — 매시 35분 (AADS-CLI-MODEL-AUTOREG-20260930)
-+#   카탈로그 사본(app/data/codex_cli/) 갱신 + discovered/blocked_account/probe_failed 후보 1회 codex exec.
-+#   모델당 24시간 1회 상한, 전체 timeout 1200s(스크립트 내부 900s), 단일 실행 락.
-+35 * * * * cd /root/aads/aads-server && timeout 1200 /usr/bin/python3 scripts/codex_model_probe.py >> /var/log/aads-codex-model-probe.log 2>&1 # AADS_CODEX_MODEL_PROBE
-diff --git a/scripts/codex_model_probe.py b/scripts/codex_model_probe.py
-new file mode 100755
-index 00000000..6c809aff
---- /dev/null
-+++ b/scripts/codex_model_probe.py
-@@ -0,0 +1,360 @@
-+#!/usr/bin/env python3
-+"""codex CLI 신규 모델 실호출 검증 (AADS-CLI-MODEL-AUTOREG-20260930). 호스트 전용.
-+
-+발견은 컨테이너 model_registry sync 가 한다(llm_model_candidates status='discovered').
-+여기서는 두 가지만 한다.
-+
-+1. **카탈로그 사본.** 컨테이너에는 /root/.codex 가 마운트돼 있지 않다(2026-09-30 docker
-+   inspect 실측). codex CLI 캐시에서 identity/etag 를 뺀 사본을 app/data/codex_cli/ 에
-+   둔다 — 컨테이너에서는 /app/app/data/codex_cli/models_cache.json 으로 보인다.
-+2. **실호출 검증.** status in (discovered, blocked_account, probe_failed) 인 codex 후보마다
-+   `timeout 120 codex exec --skip-git-repo-check -m <id> "Reply with exactly: OK"` 1회.
-+       성공                                   → verified (+ llm_models codex 행 is_executable=true,
-+                                                runner_llm 비활성 후보 + 알림 1건)
-+       "not supported when using Codex with a ChatGPT account" → blocked_account (notes 에 원문 1줄)
-+       그 밖                                  → probe_failed
-+   모델당 24시간에 1회(last_probe_at). verified 는 다시 치지 않는다.
-+
-+목록에 있다고 실행 가능한 것이 아니다 — 2026-09-30 gpt-6.1-sol 은 visibility=list 였지만
-+ChatGPT 계정 codex 로는 400 이었다. 그래서 발견과 판정을 분리했다.
-+
-+R-BG: 전체 상한(--total-timeout), 모델별 timeout 120, 프로세스 그룹 회수, 단일 실행 락.
-+
-+    python3 scripts/codex_model_probe.py              # 사본 갱신 + 대상 검증
-+    python3 scripts/codex_model_probe.py --dry-run    # DB 변경 없이 대상만 출력
-+    python3 scripts/codex_model_probe.py --mirror-only
-+"""
-+from __future__ import annotations
-+
-+import argparse
-+import fcntl
-+import json
-+import os
-+import signal
-+import subprocess
-+import sys
-+import tempfile
-+import time
-+from datetime import datetime, timedelta, timezone
-+from pathlib import Path
-+from typing import Any, Iterable, Mapping, Optional
-+
-+ENV_FILE = "/root/aads/aads-server/.env"
-+CODEX_CACHE = os.getenv("AADS_CODEX_MODELS_CACHE", "/root/.codex/models_cache.json")
-+MIRROR_PATH = os.getenv(
-+    "AADS_CODEX_MODELS_CACHE_MIRROR_HOST",
-+    "/root/aads/aads-server/app/data/codex_cli/models_cache.json",
++# 직원 본인에게 돌려주는 열 — 좌표 원본·기기 정보는 넣지 않는다.
++ATTENDANCE_CLOCK_COLUMNS = (
++    ATTENDANCE_COLUMNS + ",source,check_in_at,check_out_at,check_in_accuracy_m,"
++    "check_out_accuracy_m,check_in_distance_m,check_out_distance_m,geofence_result,"
++    "location_consent_at"
 +)
-+LOCK_PATH = os.getenv("CODEX_MODEL_PROBE_LOCK", "/tmp/aads-codex-model-probe.lock")
-+CODEX_BIN = os.getenv("CODEX_BIN", "codex")
-+# 카탈로그(models_cache.json)를 받은 계정과 같은 계정으로 친다. blocked_account 는 계정별 판정이다.
-+# 러너 셸은 CODEX_HOME 이 다른 계정 홈을 가리킬 수 있다(2026-09-30 실측: 무효 토큰 계정 → 401).
-+PROBE_CODEX_HOME = os.getenv("CODEX_PROBE_HOME", str(Path(CODEX_CACHE).parent))
-+
-+PROBE_PROMPT = "Reply with exactly: OK"
-+PER_MODEL_TIMEOUT_SECONDS = 120
-+RETRY_INTERVAL = timedelta(hours=24)
-+PROBE_STATUSES = ("discovered", "blocked_account", "probe_failed")
-+BLOCKED_ACCOUNT_MARKER = "not supported when using codex with a chatgpt account"
-+# 인증 실패는 모델 판정이 아니다 — 기록하지 않고(24h 상한 소모 안 함) 이번 회차를 멈춘다.
-+AUTH_ERROR_MARKERS = ("401 unauthorized", "invalidated oauth token", "refresh token", "not logged in")
-+RUNNER_DISPLAY_ORDER = 900
-+VERIFIED_ALERT_TITLE = "신규 CLI 모델 실행 확인 — 설정에서 활성화 가능"
-+_MIRROR_MODEL_KEYS = ("slug", "display_name", "visibility", "supported_in_api", "context_window", "priority")
++# 관리자 위치 조회 전용 — 좌표 원본 포함.
++ATTENDANCE_LOCATION_COLUMNS = (
++    ATTENDANCE_CLOCK_COLUMNS + ",employee_email_masked,check_in_lat,check_in_lng,"
++    "check_out_lat,check_out_lng,device_info"
++)
++_CLOCK_PRIVATE_KEYS = frozenset(
++    {"employee_email", "check_in_lat", "check_in_lng", "check_out_lat", "check_out_lng", "device_info"}
++)
++_BRANCH_GEOFENCE_SQL = (
++    "SELECT id,name,latitude,longitude,geofence_radius_m FROM yeoljeong_branches"
++    " WHERE business_id=$1 AND deleted_at IS NULL ORDER BY sort_order,id"
++)
 +
 +
-+def log(msg: str) -> None:
-+    print(f"[{datetime.now(timezone.utc).isoformat(timespec='seconds')}] {msg}", flush=True)
++class AttendanceClockIn(BaseModel):
++    # employee_email·status 등 본문의 신원·판정 값은 받지 않고 버린다.
++    model_config = {"extra": "ignore"}
++    latitude: float | None = Field(default=None, ge=-90, le=90)
++    longitude: float | None = Field(default=None, ge=-180, le=180)
++    accuracy_m: float | None = Field(default=None, ge=0, le=1_000_000)
++    device_info: str = Field(default="", max_length=300)
++    location_consent: bool = False
++    branch_id: str = Field(default="", max_length=64)
 +
 +
-+# ---------------------------------------------------------------------------
-+# 판정 (순수 함수 — tests/unit/test_cli_model_autoreg.py)
-+# ---------------------------------------------------------------------------
-+
-+def _first_line(text: str, needle: str = "") -> str:
-+    for line in (text or "").splitlines():
-+        stripped = line.strip()
-+        if not stripped:
-+            continue
-+        if not needle or needle in stripped.lower():
-+            return stripped[:300]
-+    return ""
++class AttendanceConsentIn(BaseModel):
++    model_config = {"extra": "forbid"}
++    agree: bool
 +
 +
-+def classify_probe(returncode: Optional[int], stdout: str, stderr: str, *, timed_out: bool = False) -> tuple[str, str]:
-+    """(status, note). note 는 한 줄."""
-+    combined = f"{stdout or ''}\n{stderr or ''}"
-+    if BLOCKED_ACCOUNT_MARKER in combined.lower():
-+        return "blocked_account", _first_line(combined, BLOCKED_ACCOUNT_MARKER)
-+    if timed_out or returncode == 124:
-+        return "probe_failed", f"timeout {PER_MODEL_TIMEOUT_SECONDS}s"
-+    if returncode == 0 and any(line.strip().strip(".").upper() == "OK" for line in (stdout or "").splitlines()):
-+        return "verified", "codex exec 응답 OK"
-+    lowered = combined.lower()
-+    for marker in AUTH_ERROR_MARKERS:
-+        if marker in lowered:
-+            return "auth_error", _first_line(combined, marker)
-+    detail = _first_line(stderr, "error") or _first_line(stdout, "error") or _first_line(stderr) or _first_line(stdout)
-+    return "probe_failed", f"rc={returncode} {detail}".strip()[:300]
++class BranchGeofenceIn(BaseModel):
++    model_config = {"extra": "forbid"}
++    latitude: float = Field(ge=-90, le=90)
++    longitude: float = Field(ge=-180, le=180)
++    radius_m: int | None = None
 +
 +
-+def is_due(row: Mapping[str, Any], now: datetime) -> bool:
-+    if row.get("status") not in PROBE_STATUSES:
-+        return False
-+    last = row.get("last_probe_at")
-+    if last is None:
-+        return True
-+    if last.tzinfo is None:
-+        last = last.replace(tzinfo=timezone.utc)
-+    return now - last >= RETRY_INTERVAL
++def haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
++    p1, p2 = math.radians(lat1), math.radians(lat2)
++    a = (math.sin((p2 - p1) / 2) ** 2
++         + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lng2 - lng1) / 2) ** 2)
++    return 2 * _EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(a)))
 +
 +
-+def build_mirror(payload: Mapping[str, Any], source_path: str) -> dict[str, Any]:
-+    """identity/etag 등 계정 정보는 빼고 모델 목록만 옮긴다."""
-+    models = []
-+    for item in payload.get("models") or []:
-+        if isinstance(item, Mapping) and item.get("slug"):
-+            models.append({key: item.get(key) for key in _MIRROR_MODEL_KEYS if key in item})
++def geofence_radius_m(branch: dict[str, Any] | None) -> int:
++    value = (branch or {}).get("geofence_radius_m")
++    if value is None or int(value) <= 0:
++        return GEOFENCE_DEFAULT_RADIUS_M
++    return min(int(value), GEOFENCE_MAX_RADIUS_M)
++
++
++def judge_geofence(*, consent: bool, latitude: float | None, longitude: float | None,
++                   accuracy_m: float | None, branch: dict[str, Any] | None) -> dict[str, Any]:
++    """반경 판정. 확실히 안일 때만 inside/approved — 나머지는 전부 확인필요(pending)."""
++    radius = geofence_radius_m(branch)
++    verdict: dict[str, Any] = {
++        "result": "unknown", "status": "pending", "radius_m": radius,
++        "distance_m": None, "accuracy_m": None, "latitude": None, "longitude": None,
++    }
++    if not consent:
++        return {**verdict, "reason": "위치정보 미동의 — 위치 미수집"}
++    has_coords = latitude is not None and longitude is not None
++    accuracy = None if accuracy_m is None else math.ceil(accuracy_m)
++    if has_coords:
++        verdict.update(latitude=latitude, longitude=longitude, accuracy_m=accuracy)
++    if not branch or branch.get("latitude") is None or branch.get("longitude") is None:
++        return {**verdict, "reason": "지점 좌표 미등록 — 관리자 확인 필요"}
++    if not has_coords:
++        return {**verdict, "reason": "위치 측정 실패(권한 거부·시간 초과)"}
++    # 올림: 반경 경계에서 "안" 쪽으로 반올림하지 않는다.
++    distance = math.ceil(haversine_m(latitude, longitude,
++                                     float(branch["latitude"]), float(branch["longitude"])))
++    verdict["distance_m"] = distance
++    if accuracy is None:
++        return {**verdict, "reason": f"GPS 정확도 정보 없음 — 매장에서 {distance}m"}
++    if accuracy > radius:
++        return {**verdict, "reason": f"GPS 오차 {accuracy}m 가 반경 {radius}m 보다 큼 — 판정 불가"}
++    if distance <= radius:
++        return {**verdict, "result": "inside", "status": "approved",
++                "reason": f"매장에서 {distance}m (반경 {radius}m 안)"}
++    return {**verdict, "result": "outside", "reason": f"매장에서 {distance}m (반경 {radius}m 밖)"}
++
++
++def combined_geofence(check_in: str | None, check_out: str | None) -> str:
++    if check_in == "inside" and check_out == "inside":
++        return "inside"
++    if "outside" in (check_in, check_out):
++        return "outside"
++    return "unknown"
++
++
++def _clock_now() -> datetime:
++    return datetime.now(_KST)
++
++
++def _clock_identity(user: dict[str, Any]) -> dict[str, str]:
++    # 테넌트 활성 멤버십(owner/admin/member) 판정은 기존 함수를 그대로 쓴다.
++    upload_svc._require_write(user)
++    email = str(user.get("email") or "").strip().lower()
++    if "@" not in email:
++        raise HTTPException(status_code=403, detail="로그인 계정의 이메일이 있어야 출퇴근을 기록할 수 있습니다")
++    local, _, domain = email.partition("@")
++    return {"email": email, "masked": f"{local[:1]}***@{domain}",
++            "name": str(user.get("name") or "").strip()[:100] or local}
++
++
++async def _clock_business(user: dict[str, Any], business_id: str) -> dict[str, Any]:
++    try:
++        return await _business(user, business_id)
++    except HTTPException as exc:
++        if exc.status_code == 404:
++            raise HTTPException(status_code=403, detail="현재 테넌트의 사업자가 아니므로 출퇴근을 기록·조회할 수 없습니다") from exc
++        raise
++
++
++def _require_attendance_admin(user: dict[str, Any]) -> None:
++    if not upload_svc.tenant_session_for_user(user)["permissions"]["can_manage_settings"]:
++        raise HTTPException(status_code=403, detail="소유자·관리자만 출퇴근 위치를 조회·설정할 수 있습니다")
++
++
++def _clock_view(row: Any) -> dict[str, Any]:
++    value = {key: _json_value(item) for key, item in dict(row).items() if key not in _CLOCK_PRIVATE_KEYS}
++    value["open"] = bool(value.get("check_in_at")) and not value.get("check_out_at")
++    return value
++
++
++def _pick_branch(branches: list[dict[str, Any]], branch_id: str,
++                 branch_name: str | None) -> dict[str, Any] | None:
++    if branch_id:
++        match = next((item for item in branches if str(item["id"]) == branch_id), None)
++        if match is None:
++            raise HTTPException(status_code=404, detail="현재 사업자의 지점을 찾을 수 없습니다")
++        return match
++    if branch_name is not None:  # 퇴근: 출근 행에 적힌 지점만 본다(없으면 좌표 미등록과 같다)
++        return next((item for item in branches if branch_name and item["name"] == branch_name), None)
++    if len(branches) > 1:
++        raise HTTPException(status_code=400, detail="출근할 지점을 선택하십시오")
++    return branches[0] if branches else None
++
++
++async def _clock_consent(connection, business_id: str, user: dict[str, Any]) -> dict[str, Any]:
++    row = await connection.fetchrow(
++        """SELECT action,created_at FROM yeoljeong_audit_logs
++            WHERE business_id=$1 AND actor=$2 AND resource_type='attendance'
++              AND action = ANY($3::text[])
++            ORDER BY created_at DESC LIMIT 1""",
++        business_id, upload_svc._actor(user), list(CLOCK_CONSENT_ACTIONS),
++    )
++    agreed = row is not None and row["action"] == "attendance.consent"
++    return {"agreed": agreed, "at": row["created_at"] if agreed else None}
++
++
++async def _clock_judge(connection, business_id: str, user: dict[str, Any],
++                       payload: AttendanceClockIn, *, branch_id: str, branch_name: str | None):
++    branches = [dict(item) for item in await connection.fetch(_BRANCH_GEOFENCE_SQL, business_id)]
++    branch = _pick_branch(branches, branch_id, branch_name)
++    consent = await _clock_consent(connection, business_id, user)
++    # 서버에 남은 동의와 이번 요청의 동의가 둘 다 있어야 위치를 저장한다(철회 우선).
++    agreed = bool(payload.location_consent and consent["agreed"])
++    verdict = judge_geofence(consent=agreed, latitude=payload.latitude, longitude=payload.longitude,
++                             accuracy_m=payload.accuracy_m, branch=branch)
++    return branch, (consent["at"] if agreed else None), verdict
++
++
++async def _clock_lock(connection, business_id: str, email: str) -> None:
++    # 두 번 누름·두 기기 동시 요청이 같은 직원의 열린 출근을 두 개 만들지 않게 한다.
++    await connection.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"obys-clock:{business_id}:{email}")
++
++
++def _clock_memo(previous: str | None, label: str, reason: str) -> str:
++    text = f"{label}: {reason}"
++    return (f"{previous} / {text}" if previous else text)[:500]
++
++
++def _clock_audit(verdict: dict[str, Any], branch: dict[str, Any] | None) -> dict[str, Any]:
++    # 감사로그에는 직원 좌표 원문을 남기지 않는다 — 판정·거리·정확도만.
++    return {key: verdict[key] for key in ("result", "status", "distance_m", "accuracy_m", "radius_m", "reason")} | {
++        "branch": (branch or {}).get("name") or ""}
++
++
++def _clock_response(business: dict[str, Any], row: Any, verdict: dict[str, Any]) -> dict[str, Any]:
 +    return {
-+        "fetched_at": payload.get("fetched_at"),
-+        "client_version": payload.get("client_version"),
-+        "mirrored_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-+        "mirrored_from": source_path,
-+        "models": models,
++        "business": {"id": business["id"], "name": business["name"]},
++        "record": _clock_view(row),
++        "judgement": {key: verdict[key] for key in ("result", "status", "distance_m", "accuracy_m", "radius_m", "reason")},
++        "source": "yeoljeong_attendance_records",
 +    }
 +
 +
-+# ---------------------------------------------------------------------------
-+# 카탈로그 사본
-+# ---------------------------------------------------------------------------
-+
-+def write_mirror(source: str = CODEX_CACHE, target: str = MIRROR_PATH) -> dict[str, Any]:
++@router.get("/{business_id}/attendance/clock/state")
++async def attendance_clock_state(
++    business_id: str,
++    current_user: dict[str, Any] = Depends(get_current_user),
++) -> dict[str, Any]:
++    identity = _clock_identity(current_user)
++    business = await _clock_business(current_user, business_id)
++    now = _clock_now()
++    connection = await upload_svc._connect()
 +    try:
-+        with open(source, "r", encoding="utf-8") as fh:
-+            payload = json.load(fh)
-+    except (OSError, ValueError) as exc:
-+        return {"status": "unavailable", "error": f"{type(exc).__name__}:{source}"}
-+    if not isinstance(payload, Mapping) or not isinstance(payload.get("models"), list):
-+        return {"status": "unavailable", "error": f"invalid_format:{source}"}
-+    mirror = build_mirror(payload, source)
-+    target_path = Path(target)
-+    target_path.parent.mkdir(parents=True, exist_ok=True)
-+    fd, tmp = tempfile.mkstemp(prefix=".models_cache.", dir=str(target_path.parent))
-+    try:
-+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-+            json.dump(mirror, fh, ensure_ascii=False, indent=1)
-+        os.chmod(tmp, 0o644)
-+        os.replace(tmp, target_path)
-+    finally:
-+        if os.path.exists(tmp):
-+            os.unlink(tmp)
-+    listed = sum(1 for m in mirror["models"] if str(m.get("visibility") or "").lower() == "list")
-+    return {"status": "ok", "models": len(mirror["models"]), "listed": listed, "fetched_at": mirror["fetched_at"]}
-+
-+
-+# ---------------------------------------------------------------------------
-+# 실호출
-+# ---------------------------------------------------------------------------
-+
-+def run_codex_probe(model_id: str, *, deadline: float) -> tuple[str, str]:
-+    remaining = deadline - time.monotonic()
-+    if remaining < 10:
-+        return "skipped", "total timeout reached"
-+    wait = min(PER_MODEL_TIMEOUT_SECONDS + 10, remaining)
-+    cmd = ["timeout", str(PER_MODEL_TIMEOUT_SECONDS), CODEX_BIN, "exec", "--skip-git-repo-check", "-m", model_id, PROBE_PROMPT]
-+    env = dict(os.environ, CODEX_HOME=PROBE_CODEX_HOME)
-+    with tempfile.TemporaryDirectory(prefix="codex-probe-") as workdir:
-+        proc = subprocess.Popen(
-+            cmd,
-+            cwd=workdir,
-+            env=env,
-+            stdin=subprocess.DEVNULL,
-+            stdout=subprocess.PIPE,
-+            stderr=subprocess.PIPE,
-+            text=True,
-+            start_new_session=True,  # 자식(codex 하위 프로세스)까지 그룹으로 회수
-+        )
-+        timed_out = False
-+        try:
-+            stdout, stderr = proc.communicate(timeout=wait)
-+        except subprocess.TimeoutExpired:
-+            timed_out = True
-+            _reap_group(proc)
-+            stdout, stderr = proc.communicate()
-+        finally:
-+            if proc.poll() is None:
-+                _reap_group(proc)
-+    return classify_probe(proc.returncode, stdout, stderr, timed_out=timed_out)
-+
-+
-+def _reap_group(proc: subprocess.Popen) -> None:
-+    try:
-+        os.killpg(proc.pid, signal.SIGKILL)
-+    except (ProcessLookupError, PermissionError):
-+        pass
-+    try:
-+        proc.wait(timeout=5)
-+    except subprocess.TimeoutExpired:
-+        pass
-+
-+
-+# ---------------------------------------------------------------------------
-+# DB
-+# ---------------------------------------------------------------------------
-+
-+def _load_db_env() -> dict[str, str]:
-+    env: dict[str, str] = {}
-+    with open(ENV_FILE, "r", encoding="utf-8", errors="replace") as fh:
-+        for line in fh:
-+            line = line.strip()
-+            if not line or line.startswith("#") or "=" not in line:
-+                continue
-+            key, value = line.split("=", 1)
-+            if key.startswith("AADS_DB_"):
-+                env[key] = value.strip().strip('"').strip("'")
-+    return env
-+
-+
-+def connect_db():
-+    import psycopg2  # 호스트 실행 전제
-+
-+    env = _load_db_env()
-+    return psycopg2.connect(
-+        host=os.getenv("PROBE_DB_HOST", "127.0.0.1"),
-+        port=int(os.getenv("PROBE_DB_PORT", "5433")),
-+        dbname=env.get("AADS_DB_NAME", "aads"),
-+        user=env.get("AADS_DB_USER", "aads"),
-+        password=env.get("AADS_DB_PASSWORD", ""),
-+        connect_timeout=10,
-+    )
-+
-+
-+class ProbeStore:
-+    """llm_model_candidates / llm_models / model_routing_preferences / alert_history 접점."""
-+
-+    def __init__(self, conn):
-+        self.conn = conn
-+
-+    def candidates(self) -> list[dict[str, Any]]:
-+        with self.conn.cursor() as cur:
-+            cur.execute(
-+                "SELECT model_id, status, last_probe_at FROM llm_model_candidates "
-+                "WHERE provider = 'codex' AND status = ANY(%s) ORDER BY id",
-+                (list(PROBE_STATUSES),),
-+            )
-+            return [{"model_id": r[0], "status": r[1], "last_probe_at": r[2]} for r in cur.fetchall()]
-+
-+    def record(self, model_id: str, status: str, note: str) -> dict[str, Any]:
-+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
-+        out: dict[str, Any] = {"runner_candidate_inserted": False}
-+        with self.conn, self.conn.cursor() as cur:
-+            cur.execute(
-+                "UPDATE llm_model_candidates SET status = %s, notes = %s, last_probe_at = NOW() "
-+                "WHERE provider = 'codex' AND model_id = %s",
-+                (status, f"[probe {stamp}] {status}: {note}"[:1000], model_id),
-+            )
-+            if status != "verified":
-+                return out
-+            cur.execute(
-+                "UPDATE llm_models SET is_executable = TRUE, is_selectable = TRUE, "
-+                "       verification_status = 'verified', last_verified_at = NOW(), updated_at = NOW() "
-+                "WHERE provider = 'codex' AND model_id = %s",
-+                (model_id,),
-+            )
-+            cur.execute(
-+                "INSERT INTO model_routing_preferences "
-+                "  (route_key, provider, model_id, display_order, is_enabled, is_default, notes, updated_by) "
-+                "VALUES ('runner_llm', 'codex', %s, %s, FALSE, FALSE, %s, 'auto_discovery') "
-+                "ON CONFLICT (route_key, provider, model_id) DO NOTHING RETURNING model_id",
-+                (model_id, RUNNER_DISPLAY_ORDER, "자동 발견 후보 — 설정 UI 에서 활성화해야 러너가 사용"),
-+            )
-+            inserted = cur.fetchone() is not None
-+            out["runner_candidate_inserted"] = inserted
-+            if inserted:
-+                cur.execute(
-+                    "INSERT INTO alert_history (severity, category, title, message, project, server, acknowledged) "
-+                    "VALUES ('info', 'llm_model', %s, %s, 'AADS', NULL, false)",
-+                    (
-+                        VERIFIED_ALERT_TITLE,
-+                        f"codex CLI 실호출 검증 통과: {model_id} — runner_llm 에 비활성 후보로 등록됨. "
-+                        "설정 > 모델 라우팅에서 켜면 러너가 사용한다.",
-+                    ),
-+                )
-+        return out
-+
-+
-+def probe_candidates(
-+    store,
-+    *,
-+    probe=run_codex_probe,
-+    now: Optional[datetime] = None,
-+    deadline: Optional[float] = None,
-+    max_models: int = 5,
-+    dry_run: bool = False,
-+    only: Iterable[str] = (),
-+) -> list[dict[str, Any]]:
-+    now = now or datetime.now(timezone.utc)
-+    deadline = deadline if deadline is not None else time.monotonic() + 900
-+    only_set = set(only)
-+    due = [
-+        row for row in store.candidates()
-+        if (not only_set or row["model_id"] in only_set) and (only_set or is_due(row, now))
-+    ]
-+    results: list[dict[str, Any]] = []
-+    for row in due[:max(0, max_models)]:
-+        model_id = row["model_id"]
-+        if dry_run:
-+            results.append({"model_id": model_id, "status": "due", "previous": row["status"]})
-+            continue
-+        status, note = probe(model_id, deadline=deadline)
-+        if status in {"skipped", "auth_error"}:
-+            # 시간 초과·인증 실패는 모델 판정이 아니다. 기록하지 않고 다음 회차에 다시 본다.
-+            results.append({"model_id": model_id, "status": status, "note": note})
-+            break
-+        extra = store.record(model_id, status, note)
-+        results.append({"model_id": model_id, "status": status, "previous": row["status"], "note": note, **extra})
-+    return results
-+
-+
-+def main(argv: Optional[list[str]] = None) -> int:
-+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-+    parser.add_argument("--dry-run", action="store_true")
-+    parser.add_argument("--mirror-only", action="store_true")
-+    parser.add_argument("--model", action="append", default=[], help="지정 모델만(24h 상한 무시)")
-+    parser.add_argument("--max-models", type=int, default=int(os.getenv("CODEX_PROBE_MAX_MODELS", "5")))
-+    parser.add_argument("--total-timeout", type=int, default=int(os.getenv("CODEX_PROBE_TOTAL_TIMEOUT", "900")))
-+    args = parser.parse_args(argv)
-+    deadline = time.monotonic() + max(30, args.total_timeout)
-+
-+    lock_fh = open(LOCK_PATH, "w")
-+    try:
-+        fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-+    except BlockingIOError:
-+        log("다른 probe 가 실행 중 — 건너뜀")
-+        return 0
-+
-+    mirror = write_mirror() if not args.dry_run else {"status": "skipped_dry_run"}
-+    log(f"mirror {json.dumps(mirror, ensure_ascii=False)}")
-+    if args.mirror_only:
-+        return 0 if mirror.get("status") in {"ok", "skipped_dry_run"} else 1
-+
-+    conn = connect_db()
-+    try:
-+        results = probe_candidates(
-+            ProbeStore(conn),
-+            deadline=deadline,
-+            max_models=args.max_models,
-+            dry_run=args.dry_run,
-+            only=args.model,
++        branches = [dict(item) for item in await connection.fetch(_BRANCH_GEOFENCE_SQL, business_id)]
++        consent = await _clock_consent(connection, business_id, current_user)
++        rows = await connection.fetch(
++            f"""SELECT {ATTENDANCE_CLOCK_COLUMNS} FROM yeoljeong_attendance_records
++                 WHERE business_id=$1 AND employee_email=$2 AND deleted_at IS NULL
++                 ORDER BY work_date DESC, start_at DESC LIMIT 31""",
++            business_id, identity["email"],
 +        )
 +    finally:
-+        conn.close()
-+    for item in results:
-+        log(f"probe {json.dumps(item, ensure_ascii=False, default=str)}")
-+    if not results:
-+        log("probe 대상 없음")
-+    return 0
++        await connection.close()
++    open_row = next((row for row in rows if row["source"] == "pwa" and row["check_out_at"] is None
++                     and row["check_in_at"] is not None and row["check_in_at"] >= now - CLOCK_OPEN_WINDOW), None)
++    recent = [_clock_view(row) for row in rows]
++    return {
++        "business": {"id": business["id"], "name": business["name"]},
++        "employee": {"name": identity["name"], "email_masked": identity["masked"]},
++        "consent": _json_value(consent),
++        "open_record": _clock_view(open_row) if open_row is not None else None,
++        "today": [item for item in recent if item["work_date"] == now.date().isoformat()],
++        "recent": recent,
++        "branches": [
++            {"id": str(item["id"]), "name": item["name"],
++             "has_geofence": item.get("latitude") is not None and item.get("longitude") is not None,
++             "radius_m": geofence_radius_m(item)}
++            for item in branches
++        ],
++        "policy": {"default_radius_m": GEOFENCE_DEFAULT_RADIUS_M, "max_radius_m": GEOFENCE_MAX_RADIUS_M},
++        "server_time": now.isoformat(),
++    }
 +
 +
-+if __name__ == "__main__":
-+    sys.exit(main())
-diff --git a/tests/unit/test_cli_model_autoreg.py b/tests/unit/test_cli_model_autoreg.py
++@router.post("/{business_id}/attendance/consent")
++async def attendance_location_consent(
++    business_id: str,
++    payload: AttendanceConsentIn,
++    current_user: dict[str, Any] = Depends(get_current_user),
++) -> dict[str, Any]:
++    identity = _clock_identity(current_user)
++    await _clock_business(current_user, business_id)
++    action = CLOCK_CONSENT_ACTIONS[0] if payload.agree else CLOCK_CONSENT_ACTIONS[1]
++    connection = await upload_svc._connect()
++    try:
++        async with connection.transaction():
++            await _attendance_audit(connection, business_id, current_user, action,
++                                    f"consent:{identity['masked']}",
++                                    {"agree": payload.agree, "scope": "출퇴근 버튼을 누른 순간 위치 1점",
++                                     "purpose": "근태 확인"})
++    finally:
++        await connection.close()
++    return {"consent": {"agreed": payload.agree, "at": _clock_now().isoformat() if payload.agree else None}}
++
++
++@router.post("/{business_id}/attendance/check-in", status_code=201)
++async def attendance_check_in(
++    business_id: str,
++    payload: AttendanceClockIn,
++    current_user: dict[str, Any] = Depends(get_current_user),
++) -> dict[str, Any]:
++    identity = _clock_identity(current_user)
++    business = await _clock_business(current_user, business_id)
++    now = _clock_now()
++    start_at = time(now.hour, now.minute)
++    connection = await upload_svc._connect()
++    try:
++        async with connection.transaction():
++            await _clock_lock(connection, business_id, identity["email"])
++            branch, consent_at, verdict = await _clock_judge(
++                connection, business_id, current_user, payload,
++                branch_id=payload.branch_id.strip(), branch_name=None)
++            already_open = await connection.fetchval(
++                """SELECT id FROM yeoljeong_attendance_records
++                    WHERE business_id=$1 AND employee_email=$2 AND work_date=$3 AND source='pwa'
++                      AND check_in_at IS NOT NULL AND check_out_at IS NULL AND deleted_at IS NULL
++                    LIMIT 1""",
++                business_id, identity["email"], now.date(),
++            )
++            if already_open is not None:
++                raise HTTPException(status_code=409, detail="오늘 이미 출근이 기록되어 있습니다. 퇴근을 먼저 기록하십시오")
++            row = await connection.fetchrow(
++                f"""INSERT INTO yeoljeong_attendance_records
++                      (business_id,employee_email,employee_email_masked,employee_name,branch,
++                       work_date,start_at,end_at,break_minutes,worked_minutes,hourly_wage,
++                       source,status,memo,created_by,check_in_at,check_in_lat,check_in_lng,
++                       check_in_accuracy_m,check_in_distance_m,geofence_result,device_info,
++                       location_consent_at)
++                    VALUES ($1,$2,$3,$4,$5,$6,$7,$7,0,0,0,'pwa',$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
++                    RETURNING {ATTENDANCE_CLOCK_COLUMNS}""",
++                business_id, identity["email"], identity["masked"], identity["name"],
++                (branch or {}).get("name") or "", now.date(), start_at, verdict["status"],
++                _clock_memo("", "출근", verdict["reason"]), upload_svc._actor(current_user), now,
++                verdict["latitude"], verdict["longitude"], verdict["accuracy_m"], verdict["distance_m"],
++                verdict["result"], payload.device_info.strip(), consent_at,
++            )
++            await _attendance_audit(connection, business_id, current_user, "attendance.check_in",
++                                    str(row["id"]), _clock_audit(verdict, branch))
++    except asyncpg.UniqueViolationError as exc:
++        raise HTTPException(status_code=409, detail="같은 시각의 출근이 이미 기록되어 있습니다") from exc
++    finally:
++        await connection.close()
++    return _clock_response(business, row, verdict)
++
++
++@router.post("/{business_id}/attendance/check-out")
++async def attendance_check_out(
++    business_id: str,
++    payload: AttendanceClockIn,
++    current_user: dict[str, Any] = Depends(get_current_user),
++) -> dict[str, Any]:
++    identity = _clock_identity(current_user)
++    business = await _clock_business(current_user, business_id)
++    now = _clock_now()
++    end_at = time(now.hour, now.minute)
++    connection = await upload_svc._connect()
++    try:
++        async with connection.transaction():
++            await _clock_lock(connection, business_id, identity["email"])
++            record = await connection.fetchrow(
++                f"""SELECT {ATTENDANCE_CLOCK_COLUMNS} FROM yeoljeong_attendance_records
++                     WHERE business_id=$1 AND employee_email=$2 AND source='pwa'
++                       AND check_in_at IS NOT NULL AND check_in_at >= $3
++                       AND check_out_at IS NULL AND deleted_at IS NULL
++                     ORDER BY check_in_at DESC LIMIT 1 FOR UPDATE""",
++                business_id, identity["email"], now - CLOCK_OPEN_WINDOW,
++            )
++            if record is None:
++                raise HTTPException(status_code=409, detail="출근 기록이 없어 퇴근을 기록할 수 없습니다")
++            # 퇴근은 출근한 지점 기준으로 판정한다.
++            branch, consent_at, verdict = await _clock_judge(
++                connection, business_id, current_user, payload,
++                branch_id="", branch_name=record["branch"] or "")
++            # 근무분은 수기 입력과 같은 함수로 계산한다(자정 넘김·24시간 상한 동일).
++            worked = attendance_worked_minutes(record["start_at"], end_at, int(record["break_minutes"] or 0))
++            combined = combined_geofence(record["geofence_result"], verdict["result"])
++            status = ("rejected" if record["status"] == "rejected"
++                      else "approved" if combined == "inside" else "pending")
++            row = await connection.fetchrow(
++                f"""UPDATE yeoljeong_attendance_records SET
++                      check_out_at=$3, end_at=$4, worked_minutes=$5, check_out_lat=$6,
++                      check_out_lng=$7, check_out_accuracy_m=$8, check_out_distance_m=$9,
++                      geofence_result=$10, status=$11, memo=$12,
++                      device_info=COALESCE(NULLIF(device_info,''),$13),
++                      location_consent_at=COALESCE(location_consent_at,$14), updated_at=now()
++                    WHERE id=$1 AND business_id=$2 AND check_out_at IS NULL AND deleted_at IS NULL
++                    RETURNING {ATTENDANCE_CLOCK_COLUMNS}""",
++                record["id"], business_id, now, end_at, worked, verdict["latitude"],
++                verdict["longitude"], verdict["accuracy_m"], verdict["distance_m"], combined, status,
++                _clock_memo(record["memo"], "퇴근", verdict["reason"]), payload.device_info.strip(),
++                consent_at,
++            )
++            if row is None:
++                raise HTTPException(status_code=409, detail="이미 퇴근이 기록되었습니다")
++            await _attendance_audit(connection, business_id, current_user, "attendance.check_out",
++                                    str(row["id"]), _clock_audit(verdict, branch) | {"worked_minutes": worked})
++    finally:
++        await connection.close()
++    return _clock_response(business, row, verdict)
++
++
++@router.get("/{business_id}/attendance/me/{record_id}")
++async def get_my_attendance_record(
++    business_id: str,
++    record_id: str,
++    current_user: dict[str, Any] = Depends(get_current_user),
++) -> dict[str, Any]:
++    identity = _clock_identity(current_user)
++    business = await _clock_business(current_user, business_id)
++    connection = await upload_svc._connect()
++    try:
++        row = await connection.fetchrow(
++            f"""SELECT employee_email,{ATTENDANCE_CLOCK_COLUMNS} FROM yeoljeong_attendance_records
++                 WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL""",
++            record_id, business_id,
++        )
++    finally:
++        await connection.close()
++    if row is None:
++        raise HTTPException(status_code=404, detail="현재 사업자의 근태를 찾을 수 없습니다")
++    if str(row["employee_email"] or "").lower() != identity["email"]:
++        raise HTTPException(status_code=403, detail="본인 근태만 조회할 수 있습니다")
++    return {"business": {"id": business["id"], "name": business["name"]}, "record": _clock_view(row)}
++
++
++@router.get("/{business_id}/attendance/locations")
++async def attendance_locations(
++    business_id: str,
++    date_from: str | None = Query(None),
++    date_to: str | None = Query(None),
++    result: str = Query("", max_length=10),
++    current_user: dict[str, Any] = Depends(get_current_user),
++) -> dict[str, Any]:
++    """관리자 확인용 위치 요약. 좌표 원본은 이 경로에서만 나간다."""
++    _require_attendance_admin(current_user)
++    business = await _business(current_user, business_id)
++    _filter_source_dates([], date_from, date_to)  # 날짜 형식·순서 검증
++    if result and result not in GEOFENCE_RESULTS:
++        raise HTTPException(status_code=400, detail="판정은 inside·outside·unknown 중 하나여야 합니다")
++    conditions = ["business_id=$1", "source='pwa'", "deleted_at IS NULL"]
++    params: list[Any] = [business_id]
++    for column, op, value in (("work_date", ">=", date_from), ("work_date", "<=", date_to),
++                              ("geofence_result", "=", result)):
++        if value:
++            params.append(date.fromisoformat(value) if column == "work_date" else value)
++            conditions.append(f"{column} {op} ${len(params)}")
++    connection = await upload_svc._connect()
++    try:
++        rows = await connection.fetch(
++            f"SELECT {ATTENDANCE_LOCATION_COLUMNS} FROM yeoljeong_attendance_records"
++            f" WHERE {' AND '.join(conditions)} ORDER BY work_date DESC, start_at DESC LIMIT 500",
++            *params,
++        )
++    finally:
++        await connection.close()
++    records = [{key: _json_value(item) for key, item in dict(row).items()} for row in rows]
++    return {
++        "business": {"id": business["id"], "name": business["name"]},
++        "records": records,
++        "count": len(records),
++        "summary": {name: sum(1 for item in records if item.get("geofence_result") == name)
++                    for name in sorted(GEOFENCE_RESULTS)}
++                   | {"pending": sum(1 for item in records if item.get("status") == "pending")},
++    }
++
++
++@router.get("/{business_id}/branches/geofence")
++async def list_branch_geofences(
++    business_id: str,
++    current_user: dict[str, Any] = Depends(get_current_user),
++) -> dict[str, Any]:
++    _require_attendance_admin(current_user)
++    business = await _business(current_user, business_id)
++    connection = await upload_svc._connect()
++    try:
++        rows = await connection.fetch(_BRANCH_GEOFENCE_SQL, business_id)
++    finally:
++        await connection.close()
++    return {
++        "business": {"id": business["id"], "name": business["name"]},
++        "branches": [{**{key: _json_value(item) for key, item in dict(row).items()},
++                      "effective_radius_m": geofence_radius_m(dict(row))} for row in rows],
++        "policy": {"default_radius_m": GEOFENCE_DEFAULT_RADIUS_M, "min_radius_m": GEOFENCE_MIN_RADIUS_M,
++                   "max_radius_m": GEOFENCE_MAX_RADIUS_M},
++    }
++
++
++@router.patch("/{business_id}/branches/{branch_id}/geofence")
++async def update_branch_geofence(
++    business_id: str,
++    branch_id: str,
++    payload: BranchGeofenceIn,
++    current_user: dict[str, Any] = Depends(get_current_user),
++) -> dict[str, Any]:
++    _require_attendance_admin(current_user)
++    business = await _business(current_user, business_id)
++    radius = GEOFENCE_DEFAULT_RADIUS_M if payload.radius_m is None else payload.radius_m
++    if not GEOFENCE_MIN_RADIUS_M <= radius <= GEOFENCE_MAX_RADIUS_M:
++        raise HTTPException(
++            status_code=400,
++            detail=f"반경은 {GEOFENCE_MIN_RADIUS_M}~{GEOFENCE_MAX_RADIUS_M}m 사이여야 합니다(CEO 결정 상한 {GEOFENCE_MAX_RADIUS_M}m)",
++        )
++    connection = await upload_svc._connect()
++    try:
++        async with connection.transaction():
++            row = await connection.fetchrow(
++                """UPDATE yeoljeong_branches SET latitude=$3, longitude=$4, geofence_radius_m=$5,
++                          updated_by=$6, updated_at=now()
++                    WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL
++                    RETURNING id,name,latitude,longitude,geofence_radius_m""",
++                branch_id, business_id, payload.latitude, payload.longitude, radius,
++                upload_svc._actor(current_user),
++            )
++            if row is None:
++                raise HTTPException(status_code=404, detail="현재 사업자의 지점을 찾을 수 없습니다")
++            await _attendance_audit(connection, business_id, current_user, "attendance.geofence_config",
++                                    branch_id, dict(row))
++    finally:
++        await connection.close()
++    return {"business": {"id": business["id"], "name": business["name"]},
++            "branch": {key: _json_value(item) for key, item in dict(row).items()}}
++
++
+ @router.get("/{business_id}/{route}/records")
+ async def workspace_records(
+     business_id: str,
+diff --git a/app/static/apps/obys/attendance-admin.html b/app/static/apps/obys/attendance-admin.html
 new file mode 100644
-index 00000000..98049589
+index 00000000..4305e669
 --- /dev/null
-+++ b/tests/unit/test_cli_model_autoreg.py
-@@ -0,0 +1,474 @@
-+"""AADS-CLI-MODEL-AUTOREG-20260930 — codex CLI 신규 모델 자동등록.
++++ b/app/static/apps/obys/attendance-admin.html
+@@ -0,0 +1,205 @@
++<!doctype html>
++<html lang="ko">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1">
++  <title>오비서 · 출퇴근 위치 설정</title>
++  <style>
++    :root { color-scheme: light; --bg: #f4f5f7; --panel: #fff; --text: #1d2330; --muted: #5b6475; --line: #dde1e8; --primary: #2f6fed; --err: #b42318; --warn: #8a5a00; --ok: #0f7b52; }
++    * { box-sizing: border-box; }
++    body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif; font-size: 15px; line-height: 1.5; word-break: keep-all; }
++    main { max-width: 1080px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
++    h1 { font-size: 20px; margin: 0; }
++    h2 { font-size: 16px; margin: 0 0 10px; }
++    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
++    .muted { color: var(--muted); }
++    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
++    label { display: grid; gap: 4px; font-size: 14px; color: var(--muted); }
++    input, select, button { min-height: 44px; font-size: 15px; border-radius: 8px; border: 1px solid var(--line); padding: 0 10px; background: #fff; }
++    button { cursor: pointer; font-weight: 700; color: var(--primary); }
++    button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
++    table { width: 100%; border-collapse: collapse; }
++    th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
++    th { font-size: 13px; color: var(--muted); font-weight: 600; }
++    .table-wrap { overflow-x: auto; }
++    .err { color: var(--err); }
++    .warn { color: var(--warn); font-weight: 700; }
++    .ok { color: var(--ok); font-weight: 700; }
++    .coords { font-family: ui-monospace, monospace; font-size: 13px; }
++    [hidden] { display: none !important; }
++  </style>
++</head>
++<body>
++<main>
++  <div class="toolbar" style="justify-content:space-between">
++    <h1>출퇴근 위치 설정 · 확인필요</h1>
++    <a href="/static/apps/obys/index.html">오비서로 돌아가기</a>
++  </div>
++  <p class="muted">소유자·관리자 전용 화면입니다. 직원 출퇴근 화면은 <a href="/static/apps/obys/clock.html">/static/apps/obys/clock.html</a> 입니다.</p>
++  <div id="error" class="panel err" role="alert" hidden></div>
 +
-+발견(models_cache) → 후보(discovered) → 실호출 검증(probe) → runner_llm 비활성 후보.
-+발견과 실행가능 판정을 분리하는지, 기존 라우팅 행을 건드리지 않는지 본다.
++  <section class="panel">
++    <div class="toolbar">
++      <label>사업자 <select id="businessSelect"></select></label>
++    </div>
++  </section>
++
++  <section class="panel">
++    <h2>지점 좌표·반경</h2>
++    <p class="muted" id="policyText"></p>
++    <div class="table-wrap">
++      <table>
++        <thead><tr><th>지점</th><th>위도</th><th>경도</th><th>반경(m)</th><th></th></tr></thead>
++        <tbody id="branchRows"></tbody>
++      </table>
++    </div>
++    <p class="muted">"지금 위치로" 는 이 기기로 매장 안에서 한 번 측정한 값을 넣습니다. 저장해야 반영됩니다.</p>
++  </section>
++
++  <section class="panel">
++    <h2>출퇴근 위치 판정</h2>
++    <div class="toolbar">
++      <label>시작일 <input type="date" id="dateFrom"></label>
++      <label>종료일 <input type="date" id="dateTo"></label>
++      <label>판정
++        <select id="resultFilter">
++          <option value="">전체</option>
++          <option value="outside">반경 밖</option>
++          <option value="unknown">판정 불가</option>
++          <option value="inside">반경 안</option>
++        </select>
++      </label>
++      <button id="loadLocationsBtn" type="button">조회</button>
++      <label><span><input type="checkbox" id="showCoords" style="min-height:auto"> 좌표 원본 보기</span></label>
++    </div>
++    <p class="muted" id="locationSummary"></p>
++    <div class="table-wrap">
++      <table>
++        <thead><tr><th>근무일</th><th>직원</th><th>지점</th><th>출근</th><th>퇴근</th><th>근무</th><th>판정</th><th>상태</th><th>사유</th></tr></thead>
++        <tbody id="locationRows"></tbody>
++      </table>
++    </div>
++    <p class="muted">확인필요 건의 승인·반려는 오비서 근태 화면에서 기존 방식(수정 → 상태 변경)으로 처리합니다.</p>
++  </section>
++</main>
++<script>
++(() => {
++  "use strict";
++  const $ = id => document.getElementById(id);
++  const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
++  const state = { businessId: "", locations: [] };
++
++  function cookieValue(name) {
++    const target = `${encodeURIComponent(name)}=`;
++    return document.cookie.split(";").map(item => item.trim()).find(item => item.startsWith(target))?.slice(target.length) || "";
++  }
++  function token() {
++    return localStorage.getItem("aads_token") || localStorage.getItem("fb_access_token")
++      || cookieValue("aads_token") || cookieValue("fb_access_token");
++  }
++  async function api(path, options = {}) {
++    const response = await fetch(`/api/v1/workspaces${path}`, {
++      ...options, cache: "no-store",
++      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` }
++    });
++    const payload = await response.json().catch(() => ({}));
++    if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : `오류 ${response.status}`);
++    return payload;
++  }
++  function showError(error) { $("error").textContent = error ? error.message : ""; $("error").hidden = !error; }
++  const biz = () => encodeURIComponent(state.businessId);
++
++  async function loadBranches() {
++    const data = await api(`/${biz()}/branches/geofence`);
++    const policy = data.policy;
++    $("policyText").textContent = `반경은 ${policy.min_radius_m}~${policy.max_radius_m}m(기본 ${policy.default_radius_m}m). 정확도(오차)가 반경보다 크면 자동 확정하지 않습니다.`;
++    $("branchRows").innerHTML = data.branches.map(item => `
++      <tr data-branch="${esc(item.id)}">
++        <td>${esc(item.name)}${item.latitude == null ? ' <span class="warn">좌표 미등록</span>' : ""}</td>
++        <td><input name="latitude" inputmode="decimal" value="${esc(item.latitude ?? "")}" size="11"></td>
++        <td><input name="longitude" inputmode="decimal" value="${esc(item.longitude ?? "")}" size="11"></td>
++        <td><input name="radius" type="number" min="${policy.min_radius_m}" max="${policy.max_radius_m}" value="${esc(item.geofence_radius_m ?? policy.default_radius_m)}" style="width:6em"></td>
++        <td><button type="button" data-action="here">지금 위치로</button> <button type="button" class="primary" data-action="save">저장</button></td>
++      </tr>`).join("") || '<tr><td colspan="5" class="muted">등록된 지점이 없습니다.</td></tr>';
++  }
++
++  $("branchRows").addEventListener("click", event => {
++    const button = event.target.closest("button[data-action]");
++    if (!button) return;
++    const row = button.closest("tr");
++    showError(null);
++    if (button.dataset.action === "here") {
++      // 1회 측정. 연속 추적하지 않는다.
++      navigator.geolocation.getCurrentPosition(position => {
++        row.querySelector('[name="latitude"]').value = position.coords.latitude.toFixed(6);
++        row.querySelector('[name="longitude"]').value = position.coords.longitude.toFixed(6);
++        if (position.coords.accuracy > 30) showError(new Error(`측정 오차가 ${Math.round(position.coords.accuracy)}m 입니다. 매장 입구 근처에서 다시 측정하는 것이 좋습니다.`));
++      }, error => showError(new Error(`위치를 읽지 못했습니다: ${error.message}`)), { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
++      return;
++    }
++    const raw = ["latitude", "longitude"].map(name => row.querySelector(`[name="${name}"]`).value.trim());
++    if (raw.some(value => value === "" || !Number.isFinite(Number(value)))) {
++      showError(new Error("위도·경도를 숫자로 입력하거나 '지금 위치로'를 누르십시오."));
++      return;
++    }
++    const body = {
++      latitude: Number(row.querySelector('[name="latitude"]').value),
++      longitude: Number(row.querySelector('[name="longitude"]').value),
++      radius_m: Number(row.querySelector('[name="radius"]').value)
++    };
++    api(`/${biz()}/branches/${encodeURIComponent(row.dataset.branch)}/geofence`, { method: "PATCH", body: JSON.stringify(body) })
++      .then(loadBranches).catch(showError);
++  });
++
++  const resultLabel = { inside: '<span class="ok">반경 안</span>', outside: '<span class="warn">반경 밖</span>', unknown: '<span class="warn">판정 불가</span>' };
++  const statusLabel = { approved: "자동 확정", pending: "확인필요", rejected: "반려" };
++  const time = iso => iso ? new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
++  function point(item, prefix) {
++    const distance = item[`${prefix}_distance_m`] == null ? "거리 없음" : `${item[`${prefix}_distance_m`]}m`;
++    const accuracy = item[`${prefix}_accuracy_m`] == null ? "" : ` · 오차 ${item[`${prefix}_accuracy_m`]}m`;
++    const coords = $("showCoords").checked && item[`${prefix}_lat`] != null
++      ? `<div class="coords">${esc(item[`${prefix}_lat`])}, ${esc(item[`${prefix}_lng`])}</div>` : "";
++    return `${time(item[`${prefix}_at`])}<div class="muted">${esc(distance + accuracy)}</div>${coords}`;
++  }
++  function renderLocations() {
++    $("locationRows").innerHTML = state.locations.map(item => `
++      <tr>
++        <td>${esc(item.work_date)}</td><td>${esc(item.employee_name)}<div class="muted">${esc(item.employee_email_masked)}</div></td>
++        <td>${esc(item.branch)}</td><td>${point(item, "check_in")}</td><td>${item.check_out_at ? point(item, "check_out") : "근무 중"}</td>
++        <td>${item.check_out_at ? `${Math.floor(item.worked_minutes / 60)}시간 ${item.worked_minutes % 60}분` : "—"}</td>
++        <td>${resultLabel[item.geofence_result] || "—"}</td><td>${esc(statusLabel[item.status] || item.status)}</td><td>${esc(item.memo)}</td>
++      </tr>`).join("") || '<tr><td colspan="9" class="muted">PWA 출퇴근 기록이 없습니다.</td></tr>';
++  }
++  async function loadLocations() {
++    const params = new URLSearchParams();
++    if ($("dateFrom").value) params.set("date_from", $("dateFrom").value);
++    if ($("dateTo").value) params.set("date_to", $("dateTo").value);
++    if ($("resultFilter").value) params.set("result", $("resultFilter").value);
++    const data = await api(`/${biz()}/attendance/locations?${params}`);
++    state.locations = data.records;
++    const s = data.summary;
++    $("locationSummary").textContent = `${data.count}건 · 반경 안 ${s.inside} · 반경 밖 ${s.outside} · 판정 불가 ${s.unknown} · 확인필요 ${s.pending}`;
++    renderLocations();
++  }
++  $("loadLocationsBtn").addEventListener("click", () => loadLocations().catch(showError));
++  $("showCoords").addEventListener("change", renderLocations);
++  $("businessSelect").addEventListener("change", event => {
++    state.businessId = event.target.value;
++    Promise.all([loadBranches(), loadLocations()]).catch(showError);
++  });
++
++  (async () => {
++    try {
++      const { businesses } = await api("/businesses");
++      $("businessSelect").innerHTML = businesses.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("");
++      state.businessId = businesses[0]?.id || "";
++      if (!state.businessId) throw new Error("현재 테넌트에 사업자가 없습니다.");
++      await Promise.all([loadBranches(), loadLocations()]);
++    } catch (error) {
++      showError(error);
++    }
++  })();
++})();
++</script>
++</body>
++</html>
+diff --git a/app/static/apps/obys/clock.html b/app/static/apps/obys/clock.html
+new file mode 100644
+index 00000000..006a8e34
+--- /dev/null
++++ b/app/static/apps/obys/clock.html
+@@ -0,0 +1,441 @@
++<!doctype html>
++<html lang="ko">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
++  <meta name="theme-color" content="#2f6fed">
++  <meta name="apple-mobile-web-app-capable" content="yes">
++  <meta name="apple-mobile-web-app-title" content="출퇴근">
++  <link rel="manifest" href="/static/apps/obys/manifest.webmanifest">
++  <link rel="icon" href="/static/apps/obys/icons/obys-clock-192.png">
++  <link rel="apple-touch-icon" href="/static/apps/obys/icons/obys-clock-192.png">
++  <title>오비서 출퇴근</title>
++  <style>
++    :root {
++      color-scheme: light;
++      --bg: #f4f5f7;
++      --panel: #ffffff;
++      --text: #1d2330;
++      --muted: #5b6475;
++      --line: #dde1e8;
++      --primary: #2f6fed;
++      --primary-dark: #1b4ec2;
++      --out: #0f7b52;
++      --warn-bg: #fff6e5;
++      --warn-text: #8a5a00;
++      --err-bg: #fdecec;
++      --err-text: #b42318;
++      --ok-bg: #e8f6ef;
++      --ok-text: #0f7b52;
++    }
++    * { box-sizing: border-box; }
++    html, body { margin: 0; background: var(--bg); color: var(--text); }
++    body {
++      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
++      font-size: 17px; line-height: 1.5; min-height: 100vh;
++      padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
++      word-break: keep-all; overflow-wrap: anywhere;
++    }
++    main { max-width: 480px; margin: 0 auto; padding: 16px 16px 32px; display: flex; flex-direction: column; gap: 14px; min-height: 100vh; }
++    header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
++    header h1 { font-size: 20px; margin: 0; }
++    header .who { color: var(--muted); font-size: 14px; text-align: right; }
++    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
++    .panel h2 { font-size: 17px; margin: 0 0 8px; }
++    .muted { color: var(--muted); font-size: 15px; }
++    .status-line { font-size: 22px; font-weight: 700; margin: 4px 0; }
++    .elapsed { font-size: 32px; font-weight: 800; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
++    .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 14px; font-weight: 700; }
++    .badge.ok { background: var(--ok-bg); color: var(--ok-text); }
++    .badge.warn { background: var(--warn-bg); color: var(--warn-text); }
++    .spacer { flex: 1; }
++    .big-btn {
++      display: block; width: 100%; min-height: 96px; border: 0; border-radius: 18px;
++      font-size: 28px; font-weight: 800; color: #fff; background: var(--primary);
++      box-shadow: 0 4px 12px rgba(47, 111, 237, .25); touch-action: manipulation;
++    }
++    .big-btn.out { background: var(--out); box-shadow: 0 4px 12px rgba(15, 123, 82, .25); }
++    .big-btn:disabled { opacity: .55; }
++    .btn {
++      display: inline-flex; align-items: center; justify-content: center; width: 100%;
++      min-height: 56px; border-radius: 12px; border: 1px solid var(--line); background: #fff;
++      color: var(--primary-dark); font-size: 17px; font-weight: 700; text-decoration: none; touch-action: manipulation;
++    }
++    .btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
++    .row { display: flex; gap: 10px; }
++    .row > * { flex: 1; }
++    select { width: 100%; min-height: 56px; font-size: 17px; border-radius: 12px; border: 1px solid var(--line); padding: 0 12px; background: #fff; }
++    .alert { border-radius: 12px; padding: 14px; font-size: 16px; }
++    .alert.err { background: var(--err-bg); color: var(--err-text); }
++    .alert.warn { background: var(--warn-bg); color: var(--warn-text); }
++    .alert .btn { margin-top: 10px; }
++    ul.consent { margin: 8px 0; padding-left: 20px; }
++    ul.consent li { margin-bottom: 6px; }
++    .link-btn { background: none; border: 0; color: var(--muted); text-decoration: underline; font-size: 15px; min-height: 44px; padding: 0 4px; }
++    footer { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 12px; }
++    [hidden] { display: none !important; }
++  </style>
++</head>
++<body>
++<main>
++  <header>
++    <h1>출퇴근</h1>
++    <div class="who"><div id="whoName"></div><div id="whoBusiness"></div></div>
++  </header>
++
++  <!-- 로그인 필요 -->
++  <section id="loginView" class="panel" hidden>
++    <h2>로그인이 필요합니다</h2>
++    <p class="muted">오비서에 직원 계정으로 로그인한 뒤 이 화면으로 돌아오십시오.</p>
++    <a class="btn primary" href="/static/apps/obys/index.html">오비서 로그인</a>
++  </section>
++
++  <!-- 사업자 선택(여러 곳에 소속된 경우) -->
++  <section id="businessView" class="panel" hidden>
++    <h2>근무하는 사업장</h2>
++    <select id="businessSelect" aria-label="사업장 선택"></select>
++  </section>
++
++  <!-- 위치정보 수집·이용 동의 (최초 1회) -->
++  <section id="consentView" class="panel" hidden>
++    <h2>위치정보 수집·이용 동의</h2>
++    <ul class="consent">
++      <li><b>수집 항목</b>: 출근·퇴근 버튼을 누른 순간의 위치 1점(위도·경도·오차 범위). 근무 중 위치를 계속 추적하지 않습니다.</li>
++      <li><b>목적</b>: 근태 확인 — 매장 반경 안에서 기록했는지 판정합니다.</li>
++      <li><b>보관 기간</b>: 위치 좌표는 90일 보관 후 파기합니다. 출퇴근 시각 기록은 근로기준법에 따라 3년 보관합니다.</li>
++      <li><b>거부할 수 있습니다</b>: 동의하지 않아도 출퇴근은 기록됩니다. 다만 위치를 확인할 수 없어 모든 기록이 <b>확인필요</b>로 남고 사장님·관리자가 확인한 뒤 확정됩니다.</li>
++      <li>동의는 이 화면 아래 <b>위치 동의 철회</b>로 언제든 철회할 수 있습니다.</li>
++    </ul>
++    <div class="row">
++      <button id="consentDeclineBtn" class="btn" type="button">동의하지 않음</button>
++      <button id="consentAgreeBtn" class="btn primary" type="button">동의합니다</button>
++    </div>
++  </section>
++
++  <!-- 오늘 상태 -->
++  <section id="todayView" class="panel" hidden>
++    <div class="muted" id="todayDate"></div>
++    <div class="status-line" id="todayStatus">불러오는 중…</div>
++    <div class="elapsed" id="todayElapsed" hidden></div>
++    <div id="todayVerdict"></div>
++    <p class="muted" id="todayReason"></p>
++  </section>
++
++  <section id="branchView" class="panel" hidden>
++    <h2>근무 지점</h2>
++    <select id="branchSelect" aria-label="근무 지점 선택"></select>
++  </section>
++
++  <!-- 위치 권한 거부 안내 -->
++  <section id="permissionView" class="alert warn" hidden>
++    <b>위치 권한이 꺼져 있습니다.</b>
++    <p>휴대폰 설정 &gt; 브라우저(또는 오비서 출퇴근 앱) &gt; 위치 권한을 <b>허용</b>으로 바꾼 뒤 다시 누르십시오.
++      위치 없이 기록하면 <b>확인필요</b>로 남습니다.</p>
++    <div class="row">
++      <button id="retryLocationBtn" class="btn" type="button">다시 시도</button>
++      <button id="withoutLocationBtn" class="btn" type="button">위치 없이 기록</button>
++    </div>
++  </section>
++
++  <!-- 마지막 오류 + 재시도 -->
++  <section id="errorView" class="alert err" role="alert" hidden>
++    <b id="errorTitle">지금 기록할 수 없음</b>
++    <p id="errorText"></p>
++    <button id="retryBtn" class="btn" type="button">다시 시도</button>
++  </section>
++
++  <div class="spacer"></div>
++
++  <button id="clockBtn" class="big-btn" type="button" hidden>출근</button>
++
++  <section id="installView" class="panel" hidden>
++    <h2>홈 화면에 설치</h2>
++    <p class="muted" id="installHint">설치하면 앱처럼 바로 열 수 있습니다.</p>
++    <button id="installBtn" class="btn" type="button" hidden>홈 화면에 추가</button>
++  </section>
++
++  <footer>
++    <button id="refreshBtn" class="link-btn" type="button">새로고침</button>
++    <button id="consentToggleBtn" class="link-btn" type="button" hidden>위치 동의 철회</button>
++    <a class="link-btn" href="/static/apps/obys/index.html">오비서 전체 화면</a>
++  </footer>
++</main>
++
++<script>
++(() => {
++  "use strict";
++  // 인증 토큰은 오비서 본 화면(index.html)과 같은 키를 읽기만 한다. 서비스워커는 토큰을 보지 않는다.
++  const SERVER_AUTH_TOKEN_KEY = "aads_token";
++  const FB_ACCESS_TOKEN_KEY = "fb_access_token";
++  const BUSINESS_KEY = "obys_clock_business_id";
++  const BRANCH_KEY = "obys_clock_branch_id";
++  const DECLINED_KEY = "obys_clock_location_declined";  // "동의하지 않음" 을 고른 기기
++  const $ = id => document.getElementById(id);
++  const state = { businessId: "", clock: null, pending: null, timer: null, installPrompt: null };
++
++  function cookieValue(name) {
++    const target = `${encodeURIComponent(name)}=`;
++    return document.cookie.split(";").map(item => item.trim())
++      .find(item => item.startsWith(target))?.slice(target.length) || "";
++  }
++  function token() {
++    return localStorage.getItem(SERVER_AUTH_TOKEN_KEY) || localStorage.getItem(FB_ACCESS_TOKEN_KEY)
++      || cookieValue(SERVER_AUTH_TOKEN_KEY) || cookieValue(FB_ACCESS_TOKEN_KEY);
++  }
++
++  async function api(path, options = {}) {
++    if (!navigator.onLine) throw Object.assign(new Error("인터넷에 연결되어 있지 않습니다."), { offline: true });
++    const controller = new AbortController();
++    const timeoutId = setTimeout(() => controller.abort(), 15000);
++    let response;
++    try {
++      response = await fetch(`/api/v1/workspaces${path}`, {
++        ...options,
++        cache: "no-store",
++        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
++        signal: controller.signal
++      });
++    } catch (error) {
++      throw Object.assign(new Error(error?.name === "AbortError"
++        ? "서버 응답이 15초 안에 오지 않았습니다." : "서버에 연결할 수 없습니다."), { offline: true });
++    } finally {
++      clearTimeout(timeoutId);
++    }
++    const payload = await response.json().catch(() => ({}));
++    if (!response.ok) {
++      const detail = typeof payload.detail === "string" ? payload.detail : (payload.detail?.message || `오류 ${response.status}`);
++      throw Object.assign(new Error(detail), { status: response.status });
++    }
++    return payload;
++  }
++
++  function show(id, visible) { $(id).hidden = !visible; }
++
++  function showError(error, retry) {
++    state.pending = retry || null;
++    $("errorTitle").textContent = error.offline ? "지금 기록할 수 없음" : "기록하지 못했습니다";
++    $("errorText").textContent = error.offline
++      ? `${error.message} 연결을 확인한 뒤 다시 시도하십시오. 오프라인 기록은 저장하지 않습니다.`
++      : error.message;
++    show("retryBtn", Boolean(retry));
++    show("errorView", true);
++  }
++  function clearError() { show("errorView", false); state.pending = null; }
++
++  function hhmm(iso) {
++    if (!iso) return "";
++    return new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
++  }
++  function verdictBadge(record) {
++    if (!record) return "";
++    if (record.status === "approved") return '<span class="badge ok">자동 확정</span>';
++    if (record.status === "rejected") return '<span class="badge warn">반려</span>';
++    if (record.geofence_result === "outside") return '<span class="badge warn">확인필요 · 매장 반경 밖</span>';
++    return '<span class="badge warn">확인필요</span>';
++  }
++  function tickElapsed(since) {
++    clearInterval(state.timer);
++    const el = $("todayElapsed");
++    if (!since) { el.hidden = true; return; }
++    const render = () => {
++      const minutes = Math.max(0, Math.floor((Date.now() - new Date(since).getTime()) / 60000));
++      el.textContent = `${Math.floor(minutes / 60)}시간 ${String(minutes % 60).padStart(2, "0")}분 근무 중`;
++    };
++    render();
++    el.hidden = false;
++    state.timer = setInterval(render, 30000);
++  }
++
++  function consentAgreed() { return Boolean(state.clock?.consent?.agreed); }
++
++  function render() {
++    const clock = state.clock;
++    $("whoName").textContent = clock.employee.name;
++    $("whoBusiness").textContent = clock.business.name;
++    const needsConsent = !consentAgreed() && localStorage.getItem(DECLINED_KEY) !== "1";
++    show("consentView", needsConsent);
++    show("todayView", !needsConsent);
++    show("clockBtn", !needsConsent);
++    $("consentToggleBtn").textContent = consentAgreed() ? "위치 동의 철회" : "위치 동의하기";
++    show("consentToggleBtn", !needsConsent);
++
++    const open = clock.open_record;
++    const last = open || clock.today[0] || null;
++    $("todayDate").textContent = new Date(clock.server_time).toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" });
++    if (open) {
++      $("todayStatus").textContent = `근무 중 · ${hhmm(open.check_in_at)} 출근`;
++      tickElapsed(open.check_in_at);
++    } else if (last && last.check_out_at) {
++      $("todayStatus").textContent = `퇴근 완료 · ${hhmm(last.check_in_at)}~${hhmm(last.check_out_at)} (${Math.floor(last.worked_minutes / 60)}시간 ${last.worked_minutes % 60}분)`;
++      tickElapsed(null);
++    } else {
++      $("todayStatus").textContent = "아직 출근 전입니다";
++      tickElapsed(null);
++    }
++    $("todayVerdict").innerHTML = verdictBadge(last);
++    $("todayReason").textContent = last?.memo || (consentAgreed() ? "" : "위치 미동의 — 기록은 확인필요로 남습니다.");
++
++    const btn = $("clockBtn");
++    btn.textContent = open ? "퇴근" : "출근";
++    btn.classList.toggle("out", Boolean(open));
++    btn.disabled = false;
++
++    const branches = clock.branches || [];
++    show("branchView", !open && branches.length > 1);
++    if (branches.length > 1) {
++      const saved = localStorage.getItem(BRANCH_KEY) || "";
++      $("branchSelect").innerHTML = branches.map(item =>
++        `<option value="${encodeURIComponent(item.id)}">${item.name.replace(/[<>&"]/g, "")}${item.has_geofence ? "" : " (위치 미등록)"}</option>`).join("");
++      if (branches.some(item => item.id === saved)) $("branchSelect").value = encodeURIComponent(saved);
++    }
++  }
++
++  async function loadState() {
++    clearError();
++    try {
++      state.clock = await api(`/${encodeURIComponent(state.businessId)}/attendance/clock/state`);
++      render();
++    } catch (error) {
++      if (error.status === 401) { show("loginView", true); return; }
++      showError(error, loadState);
++    }
++  }
++
++  async function loadBusinesses() {
++    if (!token()) { show("loginView", true); return; }
++    try {
++      const { businesses } = await api("/businesses");
++      if (!businesses.length) throw new Error("연결된 사업장이 없습니다. 사장님께 직원 등록을 요청하십시오.");
++      const saved = localStorage.getItem(BUSINESS_KEY);
++      state.businessId = businesses.some(item => item.id === saved) ? saved : businesses[0].id;
++      if (businesses.length > 1) {
++        $("businessSelect").innerHTML = businesses.map(item =>
++          `<option value="${encodeURIComponent(item.id)}">${item.name.replace(/[<>&"]/g, "")}</option>`).join("");
++        $("businessSelect").value = encodeURIComponent(state.businessId);
++        show("businessView", true);
++      }
++      await loadState();
++    } catch (error) {
++      if (error.status === 401) { show("loginView", true); return; }
++      showError(error, loadBusinesses);
++    }
++  }
++
++  // 위치는 버튼을 누른 순간 1회만 읽는다. 연속 추적·백그라운드·주기 수집은 쓰지 않는다.
++  function readPositionOnce() {
++    return new Promise((resolve, reject) => {
++      if (!("geolocation" in navigator)) { reject(Object.assign(new Error("이 기기는 위치를 지원하지 않습니다."), { code: 2 })); return; }
++      navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
++    });
++  }
++
++  async function submitClock(withLocation) {
++    const open = state.clock.open_record;
++    const action = open ? "check-out" : "check-in";
++    const body = {
++      location_consent: consentAgreed() && withLocation,
++      device_info: navigator.userAgent.slice(0, 300)
++    };
++    if (!open && (state.clock.branches || []).length > 1) {
++      body.branch_id = decodeURIComponent($("branchSelect").value);
++      localStorage.setItem(BRANCH_KEY, body.branch_id);
++    }
++    if (body.location_consent) {
++      try {
++        const position = await readPositionOnce();
++        body.latitude = position.coords.latitude;
++        body.longitude = position.coords.longitude;
++        body.accuracy_m = position.coords.accuracy;
++      } catch (error) {
++        if (error.code === 1) {  // PERMISSION_DENIED
++          show("permissionView", true);
++          return;
++        }
++        showError(new Error(`위치를 읽지 못했습니다(${error.code === 3 ? "시간 초과" : "측정 실패"}). 다시 시도하거나 '위치 없이 기록'을 누르십시오.`),
++                  () => runClock(true));
++        show("permissionView", true);
++        return;
++      }
++    }
++    await api(`/${encodeURIComponent(state.businessId)}/attendance/${action}`, { method: "POST", body: JSON.stringify(body) });
++    show("permissionView", false);
++    await loadState();
++  }
++
++  async function runClock(withLocation) {
++    clearError();
++    const btn = $("clockBtn");
++    btn.disabled = true;
++    btn.textContent = "기록 중…";
++    try {
++      await submitClock(withLocation);
++    } catch (error) {
++      // 409(이미 출근·출근 없음)는 화면 상태가 낡은 것이다 — 새 상태를 받은 뒤 오류를 보인다.
++      if (error.status === 409) await loadState();
++      showError(error, () => runClock(withLocation));
++    } finally {
++      if (state.clock) render();
++    }
++  }
++
++  async function saveConsent(agree) {
++    clearError();
++    try {
++      await api(`/${encodeURIComponent(state.businessId)}/attendance/consent`, { method: "POST", body: JSON.stringify({ agree }) });
++      if (agree) localStorage.removeItem(DECLINED_KEY); else localStorage.setItem(DECLINED_KEY, "1");
++      await loadState();
++    } catch (error) {
++      showError(error, () => saveConsent(agree));
++    }
++  }
++
++  $("consentAgreeBtn").addEventListener("click", () => saveConsent(true));
++  $("consentDeclineBtn").addEventListener("click", () => { localStorage.setItem(DECLINED_KEY, "1"); render(); });
++  $("consentToggleBtn").addEventListener("click", () => {
++    if (consentAgreed()) {
++      if (confirm("위치 동의를 철회하면 이후 출퇴근은 위치 없이 기록되고 모두 확인필요로 남습니다. 철회할까요?")) saveConsent(false);
++    } else {
++      saveConsent(true);
++    }
++  });
++  $("clockBtn").addEventListener("click", () => runClock(true));
++  $("retryLocationBtn").addEventListener("click", () => { show("permissionView", false); runClock(true); });
++  $("withoutLocationBtn").addEventListener("click", () => { show("permissionView", false); runClock(false); });
++  $("retryBtn").addEventListener("click", () => state.pending?.());
++  $("refreshBtn").addEventListener("click", () => (state.businessId ? loadState() : loadBusinesses()));
++  $("businessSelect").addEventListener("change", event => {
++    state.businessId = decodeURIComponent(event.target.value);
++    localStorage.setItem(BUSINESS_KEY, state.businessId);
++    loadState();
++  });
++  window.addEventListener("online", () => { if (!$("errorView").hidden && state.pending) state.pending(); });
++
++  // 설치 안내 — Android 는 설치 버튼, iOS 는 공유 메뉴 안내.
++  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
++  if (!standalone) {
++    show("installView", true);
++    if (/iphone|ipad|ipod/i.test(navigator.userAgent)) {
++      $("installHint").textContent = "Safari 아래쪽 공유 버튼 → '홈 화면에 추가'를 누르면 앱처럼 설치됩니다.";
++    }
++  }
++  window.addEventListener("beforeinstallprompt", event => {
++    event.preventDefault();
++    state.installPrompt = event;
++    show("installBtn", true);
++  });
++  $("installBtn").addEventListener("click", async () => {
++    if (!state.installPrompt) return;
++    state.installPrompt.prompt();
++    await state.installPrompt.userChoice.catch(() => null);
++    state.installPrompt = null;
++    show("installBtn", false);
++  });
++
++  if ("serviceWorker" in navigator) {
++    navigator.serviceWorker.register("/static/apps/obys/sw.js", { scope: "/static/apps/obys/" }).catch(() => {});
++  }
++  loadBusinesses();
++})();
++</script>
++</body>
++</html>
+diff --git a/app/static/apps/obys/icons/obys-clock-192.png b/app/static/apps/obys/icons/obys-clock-192.png
+new file mode 100644
+index 00000000..33ea99f8
+Binary files /dev/null and b/app/static/apps/obys/icons/obys-clock-192.png differ
+diff --git a/app/static/apps/obys/icons/obys-clock-512.png b/app/static/apps/obys/icons/obys-clock-512.png
+new file mode 100644
+index 00000000..e280e4a9
+Binary files /dev/null and b/app/static/apps/obys/icons/obys-clock-512.png differ
+diff --git a/app/static/apps/obys/index.html b/app/static/apps/obys/index.html
+index 81e256bf..98cc066b 100644
+--- a/app/static/apps/obys/index.html
++++ b/app/static/apps/obys/index.html
+@@ -4365,6 +4365,7 @@
+           <section class="panel">
+             <div class="panel-head">
+               <h2 class="panel-title">지점 목록</h2>
++              <a href="/static/apps/obys/attendance-admin.html" class="badge info">출퇴근 위치(좌표·반경) 설정</a>
+               <span id="branchPageListBadge" class="badge info">0개</span>
+             </div>
+             <div class="panel-body">
+diff --git a/app/static/apps/obys/manifest.webmanifest b/app/static/apps/obys/manifest.webmanifest
+new file mode 100644
+index 00000000..653885b4
+--- /dev/null
++++ b/app/static/apps/obys/manifest.webmanifest
+@@ -0,0 +1,27 @@
++{
++  "id": "/static/apps/obys/clock.html",
++  "name": "오비서 출퇴근",
++  "short_name": "출퇴근",
++  "description": "오비서 직원 출퇴근 기록 — 버튼을 누른 순간의 위치로 매장 반경을 확인합니다.",
++  "lang": "ko",
++  "start_url": "/static/apps/obys/clock.html",
++  "scope": "/static/apps/obys/",
++  "display": "standalone",
++  "orientation": "portrait",
++  "background_color": "#f4f5f7",
++  "theme_color": "#2f6fed",
++  "icons": [
++    {
++      "src": "/static/apps/obys/icons/obys-clock-192.png",
++      "sizes": "192x192",
++      "type": "image/png",
++      "purpose": "any maskable"
++    },
++    {
++      "src": "/static/apps/obys/icons/obys-clock-512.png",
++      "sizes": "512x512",
++      "type": "image/png",
++      "purpose": "any maskable"
++    }
++  ]
++}
+diff --git a/app/static/apps/obys/sw.js b/app/static/apps/obys/sw.js
+new file mode 100644
+index 00000000..147e5211
+--- /dev/null
++++ b/app/static/apps/obys/sw.js
+@@ -0,0 +1,58 @@
++/* 오비서 출퇴근 PWA 서비스워커 — scope: /static/apps/obys/
++ *
++ * 캐시하는 것은 앱 셸(HTML·아이콘·manifest)뿐이다. 근태 데이터·API 응답·인증 토큰은
++ * 캐시에 넣지 않는다 — 아래 fetch 핸들러는 APP_SHELL 경로가 아니면 손대지 않고
++ * 브라우저 기본 네트워크 요청으로 흘려보낸다(respondWith 도 호출하지 않는다).
++ *
++ * 오프라인 출퇴근을 기기에 쌓아 나중에 올리는 기능은 없다(시각 위조 위험).
++ * 오프라인이면 화면이 "지금 기록할 수 없음 + 재시도" 를 보여준다.
++ *
++ * 배포 시 셸을 바꾸면 CACHE_VERSION 을 올린다. 셸은 네트워크 우선이라 버전을
++ * 깜빡해도 온라인 상태에서는 새 파일을 받는다. 캐시는 오프라인 안내용 사본이다.
++ */
++const CACHE_VERSION = "obys-clock-shell-20260930-r1";
++const CACHE_PREFIX = "obys-clock-shell-";
++const APP_SHELL = [
++  "/static/apps/obys/clock.html",
++  "/static/apps/obys/manifest.webmanifest",
++  "/static/apps/obys/icons/obys-clock-192.png",
++  "/static/apps/obys/icons/obys-clock-512.png"
++];
++const APP_SHELL_PATHS = new Set(APP_SHELL);
++
++self.addEventListener("install", event => {
++  event.waitUntil(
++    caches.open(CACHE_VERSION)
++      .then(cache => cache.addAll(APP_SHELL.map(path => new Request(path, { cache: "reload", credentials: "omit" }))))
++      .then(() => self.skipWaiting())
++  );
++});
++
++self.addEventListener("activate", event => {
++  event.waitUntil(
++    caches.keys()
++      .then(keys => Promise.all(keys
++        .filter(key => key.startsWith(CACHE_PREFIX) && key !== CACHE_VERSION)
++        .map(key => caches.delete(key))))
++      .then(() => self.clients.claim())
++  );
++});
++
++self.addEventListener("fetch", event => {
++  const request = event.request;
++  if (request.method !== "GET") return;
++  const url = new URL(request.url);
++  if (url.origin !== self.location.origin) return;
++  if (!APP_SHELL_PATHS.has(url.pathname)) return;  // API·근태·기타 화면은 캐시하지 않는다
++  event.respondWith(
++    fetch(request, { cache: "no-store" })
++      .then(response => {
++        if (response.ok) {
++          const copy = response.clone();
++          caches.open(CACHE_VERSION).then(cache => cache.put(url.pathname, copy));
++        }
++        return response;
++      })
++      .catch(() => caches.match(url.pathname).then(cached => cached || Response.error()))
++  );
++});
+diff --git a/docs/operations/OBYS_ATTENDANCE_PWA_GPS.md b/docs/operations/OBYS_ATTENDANCE_PWA_GPS.md
+new file mode 100644
+index 00000000..44a9565b
+--- /dev/null
++++ b/docs/operations/OBYS_ATTENDANCE_PWA_GPS.md
+@@ -0,0 +1,156 @@
++# 오비서 PWA 출퇴근(GPS 반경) 운영 절차
++
++TASK: AADS-OBYS-PWA-GPS-ATTENDANCE-20260930 · 작성 2026-09-30 KST
++관련: `docs/prd/20260930_OBYS_ATTENDANCE_PWA_GPS_PRD.md`(r3), `app/api/obys_workspaces.py`
++
++## 0. 선행 조건
++
++- **직원 테넌트 멤버십(runner-0f81541a, R2)** 이 운영에 반영되어야 한다. 직원 계정이 고용주
++  테넌트의 활성 멤버십(owner/admin/member)을 가져야 출퇴근 API가 열린다. 없으면 403 이 정상이다.
++  이 기능은 테넌트 게이트를 우회하지 않는다.
++- 아래 §1 마이그레이션이 오비서 업무 DB 에 적용되어야 한다. 적용 전에는 출퇴근 API 가 500
++  (없는 컬럼)을 낸다. 기존 근태 목록·수기 입력 API 는 새 컬럼을 읽지 않으므로 영향이 없다.
++
++## 1. 마이그레이션 (수동, 오비서 업무 DB 전용)
++
++AADS DB 에 돌리지 않는다. `scripts/migrations_auto_apply_baseline.txt` 에 HOLD 로 올라가 있다.
++
++```bash
++psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_attendance_pwa_gps.sql
++```
++
++- 추가만 한다: `yeoljeong_branches` 3열, `yeoljeong_attendance_records` 13열, 모두 NULL 허용·기본값 없음.
++- `source` 에 CHECK 가 있으면 기존 조건에 `OR source = 'pwa'` 만 더한다. 원래 조건은 새 제약
++  `yeoljeong_attendance_records_source_pwa_check` 의 COMMENT 에 남는다(NOTICE 로도 출력).
++- 기존 근태 행의 status 를 재판정하지 않는다.
++
++롤백: `migrations/rollback/20260930_obys_attendance_pwa_gps.down.sql` — `source='pwa'` 행이 있으면 멈춘다(§8).
++
++## 2. 반경 판정 규칙
++
++반경은 CEO 결정 D1(2026-09-30) "매장 반경 50m 안" 을 따른다. 코드 상수:
++`GEOFENCE_DEFAULT_RADIUS_M=50`, `GEOFENCE_MIN_RADIUS_M=30`, `GEOFENCE_MAX_RADIUS_M=50`.
++지점별 `geofence_radius_m` 이 있으면 그 값(상한 50m), 없으면 기본 50m. 정확도 여유를 더하지 않는다.
++
++| 입력 조건 (위에서부터 먼저 걸리는 것) | geofence_result | status |
++|---|---|---|
++| 위치 미동의(서버 동의 없음 또는 요청 `location_consent=false`) — 좌표 저장 안 함 | `unknown` | `pending` |
++| 지점 좌표 미등록(또는 지점 없음) — 사유 "지점 좌표 미등록" | `unknown` | `pending` |
++| 좌표 없음(권한 거부·측정 실패) | `unknown` | `pending` |
++| `accuracy_m` 없음 | `unknown` | `pending` |
++| `accuracy_m` > 반경 (오차가 반경보다 큼 — 안으로 판정하지 않음) | `unknown` | `pending` |
++| 거리(하버사인, 올림) ≤ 반경 | `inside` | `approved` |
++| 거리 > 반경 — memo 에 거리(m) 기록 | `outside` | `pending` |
++
++퇴근 시 행 전체 판정: 출근·퇴근 **둘 다** `inside` 면 `inside`/`approved`, 한쪽이라도 `outside` 면
++`outside`/`pending`, 그 밖은 `unknown`/`pending`. 관리자가 이미 `rejected` 로 둔 행은 `rejected` 유지.
++
++## 3. 지점 좌표·반경 등록
++
++관리 화면: 오비서 → 사업자/지점 화면 "지점 목록" 옆 **출퇴근 위치(좌표·반경) 설정**
++(`/static/apps/obys/attendance-admin.html`, 소유자·관리자만).
++
++1. 사장님이 매장 안(입구 근처)에서 관리 화면을 연다.
++2. 해당 지점의 **지금 위치로** → 측정 오차가 30m 를 넘으면 경고가 뜬다. 다시 측정한다.
++3. 반경(30~50m, 기본 50m)을 확인하고 **저장**. `PATCH /api/v1/workspaces/{business_id}/branches/{branch_id}/geofence`
++   가 호출되고 감사로그 `attendance.geofence_config` 가 남는다.
++4. 좌표를 모르면 지도 서비스에서 매장 좌표(위도, 경도)를 복사해 입력해도 된다.
++
++성신여대점처럼 주소가 비어 있는 지점은 좌표가 등록될 때까지 모든 출퇴근이 "지점 좌표 미등록" 확인필요로 남는다.
++
++## 4. 직원 설치 안내
++
++주소: `https://<오비서 도메인>/static/apps/obys/clock.html`
++
++- 먼저 오비서(`/static/apps/obys/index.html`)에 직원 계정으로 로그인한다(같은 브라우저).
++- **Android(Chrome)**: 출퇴근 화면 아래 **홈 화면에 추가** 버튼, 또는 메뉴 ⋮ → 앱 설치.
++- **iPhone(Safari)**: 공유 버튼 → **홈 화면에 추가**. iOS 는 설치 앱과 Safari 의 저장소가 분리될 수
++  있어, 설치 후 첫 실행에서 로그인 안내가 나오면 설치 앱 안에서 로그인한다.
++- 서비스워커 범위는 `/static/apps/obys/` 다. 캐시는 앱 셸(clock.html·manifest·아이콘)만 담고
++  API 응답·근태·토큰은 담지 않는다. 셸을 바꿔 배포하면 `sw.js` 의 `CACHE_VERSION` 을 올린다.
++- 오프라인이면 "지금 기록할 수 없음 + 재시도" 만 보인다. 기기에 쌓았다가 나중에 올리는 기능은 없다.
++
++## 5. 위치정보 동의·철회
++
++- 최초 실행 시 동의 화면: 수집 항목(버튼 누른 순간의 위치 1점), 목적(근태 확인), 보관 기간,
++  거부 시 결과(출퇴근은 되지만 확인필요)를 보여준다.
++- **동의합니다** → `POST .../attendance/consent {"agree": true}` → 감사로그 `attendance.consent`.
++  이후 기록 행의 `location_consent_at` 에 동의 시각이 들어간다.
++- **동의하지 않음** → 서버에는 동의가 없으므로 위치를 보내더라도 저장하지 않는다. 모두 pending.
++- 철회: 화면 아래 **위치 동의 철회** → `{"agree": false}` → 감사로그 `attendance.consent_withdraw`.
++  서버는 가장 최근 동의/철회 기록을 기준으로 판단한다(기기를 바꿔도 같다).
++- 위치는 `getCurrentPosition` 1회만 읽는다. 연속 추적·백그라운드 수집은 없다.
++- 보관: 화면 안내는 "좌표 90일, 출퇴근 시각 3년" 이다(PRD D2 권장안). **자동 파기 작업은 1차 범위에 없다** —
++  §7 의 파기 쿼리를 월 1회 운영자가 실행한다. D2 가 확정되면 기간을 바꾸고 자동화한다.
++
++## 6. 확인필요(pending) 처리 흐름
++
++1. 관리 화면 "출퇴근 위치 판정" 에서 판정=반경 밖/판정 불가 로 조회한다
++   (`GET .../attendance/locations?result=outside`). 거리·정확도·사유가 보인다. 좌표 원본은 체크박스로만 표시.
++2. 사유별 조치
++   - 반경 밖: 배달·외근 등 정당한 사유가 확인되면 오비서 근태 화면에서 해당 행을 **수정 → 상태 확정**.
++   - GPS 오차 과대: 실내 오차가 원인인 경우가 많다. 직원 확인 후 확정.
++   - 지점 좌표 미등록: §3 으로 좌표를 먼저 등록한다(과거 행은 자동 재판정하지 않는다). 개별 확정.
++   - 위치 미동의: 출근부·CCTV 등 다른 근거로 확정.
++3. 상태 변경은 기존 `PUT .../attendance/records/{id}` 로 하며 감사로그 `attendance.update` 가 남는다.
++4. 첫 주 확인필요 비율이 20% 를 넘으면 매장 QR(FR-15) 앞당김을 CEO 에게 올린다(반경 확대는 CEO 결정 사항).
++
++## 7. 확인 쿼리 (오비서 업무 DB, 읽기 전용)
++
++```sql
++-- 컬럼 적용 확인
++SELECT column_name, is_nullable FROM information_schema.columns
++ WHERE table_name IN ('yeoljeong_branches','yeoljeong_attendance_records')
++   AND column_name IN ('latitude','longitude','geofence_radius_m','check_in_at','check_out_at',
++                       'geofence_result','location_consent_at') ORDER BY table_name, column_name;
++
++-- 지점 좌표 등록 현황
++SELECT business_id, id, name, latitude IS NOT NULL AS has_coords, geofence_radius_m
++  FROM yeoljeong_branches WHERE deleted_at IS NULL ORDER BY business_id, sort_order;
++
++-- 오늘 PWA 출퇴근 판정 분포
++SELECT business_id, geofence_result, status, count(*)
++  FROM yeoljeong_attendance_records
++ WHERE source = 'pwa' AND deleted_at IS NULL AND work_date = (now() AT TIME ZONE 'Asia/Seoul')::date
++ GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
++
++-- 퇴근 누락(24시간 넘게 열린 출근)
++SELECT id, business_id, employee_email_masked, work_date, check_in_at
++  FROM yeoljeong_attendance_records
++ WHERE source = 'pwa' AND check_out_at IS NULL AND deleted_at IS NULL
++   AND check_in_at < now() - interval '24 hours';
++
++-- 동의 없이 좌표가 저장된 행(항상 0 이어야 한다)
++SELECT count(*) FROM yeoljeong_attendance_records
++ WHERE source = 'pwa' AND location_consent_at IS NULL
++   AND (check_in_lat IS NOT NULL OR check_out_lat IS NOT NULL);
++```
++
++좌표 파기(보관기간 경과분, 운영자 승인 후 실행 — 거리·판정·시각은 남기고 좌표만 지운다):
++
++```sql
++UPDATE yeoljeong_attendance_records
++   SET check_in_lat = NULL, check_in_lng = NULL, check_out_lat = NULL, check_out_lng = NULL, updated_at = now()
++ WHERE source = 'pwa' AND work_date < (now() AT TIME ZONE 'Asia/Seoul')::date - 90
++   AND (check_in_lat IS NOT NULL OR check_out_lat IS NOT NULL);
++```
++
++## 8. 되돌리기
++
++1. 코드 되돌림(출퇴근 라우트 제거)을 먼저 배포한다 — 신규 PWA 기록이 멈춘다.
++2. `source='pwa'` 행을 내보내 보관한다(`\copy (SELECT ... WHERE source='pwa') TO ...`).
++3. 남길 행은 관리자 판단으로 수기 행으로 옮기거나 soft delete 한다(데이터 변경은 CEO 승인 사항).
++4. 그 뒤에만 롤백 SQL 을 실행한다 — `pwa` 행이 남아 있으면 롤백 SQL 이 스스로 멈춘다.
++
++## 9. API 목록
++
++| 메서드 | 경로 (`/api/v1/workspaces` 아래) | 권한 |
++|---|---|---|
++| GET | `/{business_id}/attendance/clock/state` | 직원 본인 (좌표 원본 없음) |
++| POST | `/{business_id}/attendance/consent` | 직원 본인 |
++| POST | `/{business_id}/attendance/check-in` | 직원 본인 (본문 이메일 무시, 대리 불가) |
++| POST | `/{business_id}/attendance/check-out` | 직원 본인 |
++| GET | `/{business_id}/attendance/me/{record_id}` | 직원 본인 (타인 기록 403) |
++| GET | `/{business_id}/attendance/locations` | 소유자·관리자 (좌표 원본 포함) |
++| GET | `/{business_id}/branches/geofence` | 소유자·관리자 |
++| PATCH | `/{business_id}/branches/{branch_id}/geofence` | 소유자·관리자 (감사로그) |
+diff --git a/migrations/20260930_obys_attendance_pwa_gps.sql b/migrations/20260930_obys_attendance_pwa_gps.sql
+new file mode 100644
+index 00000000..a3d4ae6b
+--- /dev/null
++++ b/migrations/20260930_obys_attendance_pwa_gps.sql
+@@ -0,0 +1,98 @@
++-- AADS-OBYS-PWA-GPS-ATTENDANCE-20260930
++-- 오비서 PWA 출퇴근 1차 — 지점 좌표·반경, 근태 행의 출퇴근 시각·위치 1점·판정·동의 시각.
++--
++-- 적용 대상: 오비서 업무 DB(OBYS_DATABASE_URL, 진아서버)만. AADS DB 에 돌리지 않는다.
++--   scripts/migrations_auto_apply_baseline.txt 에 올려 자동 적용에서 HOLD 한다.
++--   적용: psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_attendance_pwa_gps.sql
++--   절차: docs/operations/OBYS_ATTENDANCE_PWA_GPS.md
++-- 스키마 추가만 한다. ADD COLUMN 은 전부 NULL 허용·기본값 없음이라 기존 근태·지점 행을
++--   다시 쓰지 않고, 기존 근태의 status 를 재판정하지 않는다(신규 PWA 기록부터 적용).
++-- source 에 CHECK 가 있으면 기존 조건에 `OR source = 'pwa'` 만 더한다(허용 범위 확장).
++--   원래 조건은 새 제약의 COMMENT 에 남겨 롤백이 그대로 되돌린다.
++-- 멱등하다(IF NOT EXISTS, 이미 확장된 제약은 건너뜀).
++-- 롤백: migrations/rollback/20260930_obys_attendance_pwa_gps.down.sql
++
++BEGIN;
++
++DO $$
++BEGIN
++    IF to_regclass('public.yeoljeong_attendance_records') IS NULL
++       OR to_regclass('public.yeoljeong_branches') IS NULL THEN
++        RAISE EXCEPTION '오비서 업무 DB 전용이다 (yeoljeong_attendance_records / yeoljeong_branches 없음)';
++    END IF;
++END
++$$;
++
++-- 1) 지점 좌표·반경. 반경이 NULL 이면 코드 기본값(GEOFENCE_DEFAULT_RADIUS_M)을 쓴다.
++ALTER TABLE yeoljeong_branches ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
++ALTER TABLE yeoljeong_branches ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
++ALTER TABLE yeoljeong_branches ADD COLUMN IF NOT EXISTS geofence_radius_m INTEGER;
++
++-- 2) 근태 행: 버튼을 누른 순간의 시각·위치 1점·판정.
++ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_in_at TIMESTAMPTZ;
++ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_out_at TIMESTAMPTZ;
++ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_in_lat DOUBLE PRECISION;
++ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_in_lng DOUBLE PRECISION;
++ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_in_accuracy_m INTEGER;
++ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_out_lat DOUBLE PRECISION;
++ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_out_lng DOUBLE PRECISION;
++ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_out_accuracy_m INTEGER;
++ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_in_distance_m INTEGER;
++ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_out_distance_m INTEGER;
++ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS geofence_result TEXT;
++ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS device_info TEXT;
++ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS location_consent_at TIMESTAMPTZ;
++
++DO $$
++BEGIN
++    IF NOT EXISTS (
++        SELECT 1 FROM pg_constraint
++         WHERE conrelid = 'public.yeoljeong_attendance_records'::regclass
++           AND conname = 'yeoljeong_attendance_records_geofence_result_check'
++    ) THEN
++        ALTER TABLE yeoljeong_attendance_records
++            ADD CONSTRAINT yeoljeong_attendance_records_geofence_result_check
++            CHECK (geofence_result IS NULL OR geofence_result IN ('inside', 'outside', 'unknown'));
++    END IF;
++END
++$$;
++
++-- 3) source = 'pwa' 허용. CHECK 가 없으면 할 일이 없다(코드 상수 ATTENDANCE_SOURCES 가 정본).
++DO $$
++DECLARE
++    con RECORD;
++BEGIN
++    FOR con IN
++        SELECT DISTINCT c.oid, c.conname, pg_get_constraintdef(c.oid) AS def
++          FROM pg_constraint c
++          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
++         WHERE c.conrelid = 'public.yeoljeong_attendance_records'::regclass
++           AND c.contype = 'c'
++           AND a.attname = 'source'
++           AND c.conname <> 'yeoljeong_attendance_records_source_pwa_check'
++    LOOP
++        IF position('''pwa''' IN con.def) > 0 THEN
++            CONTINUE;  -- 이미 pwa 를 허용한다
++        END IF;
++        -- def 는 'CHECK (...)' 형태다. 조건부만 떼어 OR 로 넓힌다.
++        EXECUTE format(
++            'ALTER TABLE yeoljeong_attendance_records ADD CONSTRAINT yeoljeong_attendance_records_source_pwa_check CHECK ((%s) OR source = %L)',
++            substring(con.def FROM 7), 'pwa'
++        );
++        EXECUTE format(
++            'COMMENT ON CONSTRAINT yeoljeong_attendance_records_source_pwa_check ON yeoljeong_attendance_records IS %L',
++            json_build_object('original_name', con.conname, 'original_def', con.def)::text
++        );
++        EXECUTE format('ALTER TABLE yeoljeong_attendance_records DROP CONSTRAINT %I', con.conname);
++        RAISE NOTICE 'source CHECK % 를 pwa 허용으로 확장했다: %', con.conname, con.def;
++        EXIT;  -- source 제약은 하나만 확장한다
++    END LOOP;
++END
++$$;
++
++-- 4) 열린 출근(퇴근 전) 조회용.
++CREATE INDEX IF NOT EXISTS idx_yeoljeong_attendance_pwa_open
++    ON yeoljeong_attendance_records (business_id, employee_email, work_date)
++    WHERE source = 'pwa' AND check_out_at IS NULL AND deleted_at IS NULL;
++
++COMMIT;
+diff --git a/migrations/rollback/20260930_obys_attendance_pwa_gps.down.sql b/migrations/rollback/20260930_obys_attendance_pwa_gps.down.sql
+new file mode 100644
+index 00000000..c3a38253
+--- /dev/null
++++ b/migrations/rollback/20260930_obys_attendance_pwa_gps.down.sql
+@@ -0,0 +1,64 @@
++-- Rollback: AADS-OBYS-PWA-GPS-ATTENDANCE-20260930
++-- 오비서 업무 DB 전용, 수동 적용. AADS DB 에 돌리지 않는다.
++--   psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/rollback/20260930_obys_attendance_pwa_gps.down.sql
++--
++-- 주의: PWA 로 기록된 근태(source='pwa')가 하나라도 있으면 멈춘다. 그 행의 출퇴근
++-- 위치·판정·동의 시각은 이 컬럼에만 있어서, 컬럼을 지우면 근거가 사라진다.
++-- 먼저 코드를 되돌려 신규 PWA 기록을 막고, 남길 행을 내보낸 뒤(운영 문서 §7 쿼리)
++-- 관리자 판단으로 처리한 다음 실행한다. 기존 수기·CSV 근태는 영향 없다.
++
++BEGIN;
++
++DO $$
++BEGIN
++    IF to_regclass('public.yeoljeong_attendance_records') IS NULL
++       OR to_regclass('public.yeoljeong_branches') IS NULL THEN
++        RAISE EXCEPTION '오비서 업무 DB 전용이다';
++    END IF;
++    IF EXISTS (SELECT 1 FROM yeoljeong_attendance_records WHERE source = 'pwa') THEN
++        RAISE EXCEPTION 'source=pwa 근태가 남아 있어 롤백하지 않는다 — docs/operations/OBYS_ATTENDANCE_PWA_GPS.md §8';
++    END IF;
++END
++$$;
++
++-- source CHECK 를 원래 조건으로 되돌린다(확장하지 않았으면 할 일 없음).
++DO $$
++DECLARE
++    saved JSONB;
++BEGIN
++    SELECT obj_description(c.oid, 'pg_constraint')::jsonb INTO saved
++      FROM pg_constraint c
++     WHERE c.conrelid = 'public.yeoljeong_attendance_records'::regclass
++       AND c.conname = 'yeoljeong_attendance_records_source_pwa_check';
++    IF saved IS NULL THEN
++        RETURN;
++    END IF;
++    EXECUTE format('ALTER TABLE yeoljeong_attendance_records ADD CONSTRAINT %I %s',
++                   saved->>'original_name', saved->>'original_def');
++    ALTER TABLE yeoljeong_attendance_records DROP CONSTRAINT yeoljeong_attendance_records_source_pwa_check;
++END
++$$;
++
++DROP INDEX IF EXISTS idx_yeoljeong_attendance_pwa_open;
++ALTER TABLE yeoljeong_attendance_records DROP CONSTRAINT IF EXISTS yeoljeong_attendance_records_geofence_result_check;
++
++ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_in_at;
++ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_out_at;
++ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_in_lat;
++ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_in_lng;
++ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_in_accuracy_m;
++ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_out_lat;
++ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_out_lng;
++ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_out_accuracy_m;
++ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_in_distance_m;
++ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_out_distance_m;
++ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS geofence_result;
++ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS device_info;
++ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS location_consent_at;
++
++-- 지점 좌표는 매장 위치(개인정보 아님)지만 이 기능 전용이므로 함께 걷는다.
++ALTER TABLE yeoljeong_branches DROP COLUMN IF EXISTS latitude;
++ALTER TABLE yeoljeong_branches DROP COLUMN IF EXISTS longitude;
++ALTER TABLE yeoljeong_branches DROP COLUMN IF EXISTS geofence_radius_m;
++
++COMMIT;
+diff --git a/scripts/migrations_auto_apply_baseline.txt b/scripts/migrations_auto_apply_baseline.txt
+index 963fe533..8d97effb 100644
+--- a/scripts/migrations_auto_apply_baseline.txt
++++ b/scripts/migrations_auto_apply_baseline.txt
+@@ -41,3 +41,6 @@ migrations/20260930_obys_e2e_credentials_jinah.sql
+ # OBYS 업무 DB 전용(yeoljeong_contracts). AADS DB 자동 적용 대상이 아니다 —
+ # docs/operations/OBYS_CONTRACT_NOTIFY_SIGNED_PDF.md 절차로 수동 적용.
+ migrations/20260930_obys_contract_notify_signed_pdf.sql
++# OBYS 업무 DB 전용(yeoljeong_branches·yeoljeong_attendance_records). AADS DB 자동 적용
++# 대상이 아니다 — docs/operations/OBYS_ATTENDANCE_PWA_GPS.md 절차로 수동 적용.
++migrations/20260930_obys_attendance_pwa_gps.sql
+diff --git a/tests/unit/test_obys_attendance_pwa_gps.py b/tests/unit/test_obys_attendance_pwa_gps.py
+new file mode 100644
+index 00000000..4813d82d
+--- /dev/null
++++ b/tests/unit/test_obys_attendance_pwa_gps.py
+@@ -0,0 +1,597 @@
++"""PWA 출퇴근 — 반경 판정·본인 한정·동의·멱등·PWA 자산 정적 검사.
++
++메모리 DB 로 라우터를 HTTP 로 부른다. 운영 스키마의 UNIQUE(employee_email, work_date, start_at)
++와 soft delete 를 흉내 낸다. SQL 은 키워드로만 분기한다 — 테스트에 SQL 전문을 적지 않는다
++(scripts/dup_guard.py 가 테스트 안의 SQL 리터럴을 실제 SQL 로 본다).
 +"""
 +from __future__ import annotations
 +
-+import importlib.util
++import itertools
 +import json
-+from datetime import datetime, timedelta, timezone
++import math
++import re
++from contextlib import asynccontextmanager
++from datetime import date, datetime, time, timedelta
 +from pathlib import Path
-+from unittest.mock import AsyncMock
++from zoneinfo import ZoneInfo
 +
++import asyncpg
 +import pytest
++from fastapi import FastAPI
++from fastapi.testclient import TestClient
 +
-+from app.services import cli_model_autoreg, model_registry
-+
-+REPO_ROOT = Path(__file__).resolve().parents[2]
-+
-+
-+def _load_probe():
-+    spec = importlib.util.spec_from_file_location("codex_model_probe", REPO_ROOT / "scripts" / "codex_model_probe.py")
-+    module = importlib.util.module_from_spec(spec)
-+    spec.loader.exec_module(module)
-+    return module
++from app.api import obys_workspaces as api
++from app.auth import get_current_user
 +
 +
-+probe = _load_probe()
++ROOT = Path(__file__).resolve().parents[2]
++KST = ZoneInfo("Asia/Seoul")
++TENANT = "d1695f15-6b68-4929-bc8d-646827363ff9"
++OTHER_TENANT = "0b0b0b0b-1111-4222-8333-444444444444"
++BUSINESS = {"id": "biz-lylon-e2e", "name": "주식회사 라일론"}
++STORE = (37.5665, 126.9780)
++M_PER_DEG_LAT = api._EARTH_RADIUS_M * math.pi / 180
 +
 +
-+# ---------------------------------------------------------------------------
-+# fixtures / fakes
-+# ---------------------------------------------------------------------------
-+
-+CACHE_PAYLOAD = {
-+    "fetched_at": "2026-09-30T04:14:00Z",
-+    "etag": "secret-etag",
-+    "client_version": "0.159.2",
-+    "identity": {"account": "someone@example.com"},
-+    "models": [
-+        {"slug": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "visibility": "list", "supported_in_api": True},
-+        {"slug": "gpt-6-sol", "display_name": "GPT-6 Sol", "visibility": "list", "supported_in_api": True},
-+        {"slug": "gpt-reserve", "display_name": "reserve", "visibility": "hide", "supported_in_api": True},
-+    ],
-+}
++def _member(email, role="member", tenant=TENANT, name="김직원"):
++    return {"tenant_id": tenant, "email": email, "name": name,
++            "current_membership": {"tenant_id": tenant, "status": "active", "role": role}}
 +
 +
-+@pytest.fixture
-+def cache_file(tmp_path, monkeypatch):
-+    path = tmp_path / "models_cache.json"
-+    path.write_text(json.dumps(CACHE_PAYLOAD), encoding="utf-8")
-+    monkeypatch.setenv(cli_model_autoreg.CODEX_CACHE_ENV, str(path))
-+    monkeypatch.setenv(cli_model_autoreg.CODEX_CACHE_MIRROR_ENV, str(tmp_path / "no-mirror.json"))
-+    return path
++EMPLOYEE = _member("Staff@Example.com")
++COWORKER = _member("coworker@example.com", name="이동료")
++OWNER = _member("owner@example.com", role="owner", name="대표")
++VIEWER = _member("viewer@example.com", role="viewer")
++FOREIGN = _member("intruder@example.com", tenant=OTHER_TENANT)
++
++BASE = f"/api/v1/workspaces/{BUSINESS['id']}"
 +
 +
-+@pytest.fixture
-+def no_cache(tmp_path, monkeypatch):
-+    monkeypatch.setenv(cli_model_autoreg.CODEX_CACHE_ENV, str(tmp_path / "missing.json"))
-+    monkeypatch.setenv(cli_model_autoreg.CODEX_CACHE_MIRROR_ENV, str(tmp_path / "missing-mirror.json"))
++def _north(meters: float) -> tuple[float, float]:
++    # 서버는 거리를 올림한다. 0.5m 덜 가서 올림 결과가 정확히 meters 가 되게 한다.
++    return STORE[0] + (meters - 0.5) / M_PER_DEG_LAT, STORE[1]
 +
 +
-+def _skip_fetch(**extra):
-+    return AsyncMock(return_value=([], {"status": "skipped", "error": "test", **extra}))
++def _columns(sql: str) -> list[str]:
++    for const in (api.ATTENDANCE_LOCATION_COLUMNS, api.ATTENDANCE_CLOCK_COLUMNS):
++        if const in sql:
++            cols = const.split(",")
++            return (["employee_email"] + cols) if "SELECT employee_email," in sql else cols
++    raise AssertionError("unknown projection")
 +
 +
-+@pytest.fixture
-+def api_fetchers_off(monkeypatch):
-+    for name in ("_fetch_openai_models", "_fetch_anthropic_models", "_fetch_gemini_models",
-+                 "_fetch_litellm_models", "_fetch_kimi_models"):
-+        monkeypatch.setattr(model_registry, name, _skip_fetch())
++class FakeDB:
++    def __init__(self):
++        self.rows: dict[str, dict] = {}
++        self.branches: dict[str, dict] = {}
++        self.audit: list[dict] = []
++        self.locks: list[str] = []
++        self._ids = itertools.count(1)
++
++    def add_branch(self, branch_id, name, lat=None, lng=None, radius=None, business_id=BUSINESS["id"]):
++        self.branches[branch_id] = {"id": branch_id, "business_id": business_id, "name": name,
++                                    "latitude": lat, "longitude": lng, "geofence_radius_m": radius,
++                                    "deleted_at": None, "updated_by": ""}
 +
 +
-+class _Tx:
-+    async def __aenter__(self):
-+        return self
++class FakeConnection:
++    def __init__(self, db: FakeDB):
++        self.db = db
 +
-+    async def __aexit__(self, *exc):
-+        return False
++    @asynccontextmanager
++    async def transaction(self):
++        yield
 +
++    async def close(self):
++        pass
 +
-+class _Acquire:
-+    def __init__(self, conn):
-+        self.conn = conn
++    async def execute(self, sql, *args):
++        if "pg_advisory_xact_lock" in sql:
++            self.db.locks.append(args[0])
++            return "SELECT 1"
++        assert "INSERT INTO yeoljeong_audit_logs" in sql
++        business_id, actor, action, record_id, details = args
++        self.db.audit.append({"business_id": business_id, "actor": actor, "action": action,
++                              "resource_id": record_id, "details": details,
++                              "created_at": datetime.now(KST) + timedelta(microseconds=len(self.db.audit))})
++        return "INSERT 0 1"
 +
-+    async def __aenter__(self):
-+        return self.conn
++    def _branches(self, business_id):
++        return [dict(b) for b in self.db.branches.values()
++                if b["business_id"] == business_id and b["deleted_at"] is None]
 +
-+    async def __aexit__(self, *exc):
-+        return False
++    async def fetch(self, sql, *args):
++        if "FROM yeoljeong_branches" in sql:
++            return self._branches(args[0])
++        assert "FROM yeoljeong_attendance_records" in sql
++        cols = _columns(sql)
++        rows = [r for r in self.db.rows.values() if r["business_id"] == args[0] and r["deleted_at"] is None]
++        if "employee_email=$2" in sql:
++            rows = [r for r in rows if r["employee_email"] == args[1]]
++        if "source='pwa'" in sql:
++            rows = [r for r in rows if r["source"] == "pwa"]
++        return [{c: r.get(c) for c in cols} for r in sorted(rows, key=lambda r: r["work_date"], reverse=True)]
 +
++    async def fetchval(self, sql, business_id, email, work_date):
++        assert "check_out_at IS NULL" in sql
++        return next((r["id"] for r in self.db.rows.values()
++                     if r["business_id"] == business_id and r["employee_email"] == email
++                     and r["work_date"] == work_date and r["source"] == "pwa"
++                     and r["check_in_at"] is not None and r["check_out_at"] is None
++                     and r["deleted_at"] is None), None)
 +
-+class _Pool:
-+    def __init__(self, conn):
-+        self.conn = conn
-+
-+    def acquire(self):
-+        return _Acquire(self.conn)
-+
-+
-+class DbConn:
-+    """sync 가 쓰는 SQL 만 흉내 낸다. 후보·라우팅 테이블은 PK 충돌 시 DO NOTHING."""
-+
-+    def __init__(self, *, existing=(), verified=(), candidates=None, routing=None):
-+        self.existing = set(existing)
-+        self.verified = set(verified)
-+        self.candidates = dict(candidates or {})
-+        self.routing = dict(routing or {})
-+        self.llm_models: dict[tuple[str, str], dict] = {}
-+        self.execute_calls: list[tuple[str, tuple]] = []
-+        self.discovery_runs: list[tuple] = []
-+
-+    def transaction(self):
-+        return _Tx()
-+
-+    async def fetch(self, query, *args):
-+        if "activation_source = 'manual'" in query:
-+            return []
-+        if query.strip() == "SELECT provider, model_id FROM llm_models":
-+            return [{"provider": p, "model_id": m} for p, m in self.existing]
-+        if "FROM llm_model_candidates" in query and "status = 'verified'" in query:
-+            return [{"model_id": m} for m in self.verified]
-+        if "INSERT INTO llm_model_candidates" in query:
-+            assert "DO NOTHING" in query and "'discovered'" in query
-+            key = ("codex", args[0])
-+            if key in self.candidates:
-+                return []
-+            self.candidates[key] = {"status": "discovered", "product_name": args[1], "source": args[2]}
-+            return [{"model_id": args[0]}]
-+        if "INSERT INTO model_routing_preferences" in query:
-+            assert "DO NOTHING" in query and "VALUES ($1, $2, $3, $4, FALSE, FALSE" in query
-+            key = (args[0], args[1], args[2])
-+            if key in self.routing:
-+                return []
-+            self.routing[key] = {"is_enabled": False, "updated_by": args[5]}
-+            return [{"provider": args[1], "model_id": args[2]}]
-+        raise AssertionError(f"unexpected fetch: {query[:80]}")
-+
-+    async def execute(self, query, *args):
-+        self.execute_calls.append((query, args))
-+        if "INSERT INTO llm_models" in query:
-+            self.llm_models[(args[0], args[1])] = {
-+                "is_active": args[11], "discovery_source": args[16],
-+                "verification_status": args[17], "is_executable": args[22],
++    async def fetchrow(self, sql, *args):
++        db = self.db
++        head = sql.lstrip()
++        if "FROM yeoljeong_audit_logs" in sql:
++            business_id, actor, actions = args
++            hits = [a for a in db.audit if a["business_id"] == business_id and a["actor"] == actor
++                    and a["action"] in actions]
++            return {"action": hits[-1]["action"], "created_at": hits[-1]["created_at"]} if hits else None
++        if head.startswith("INSERT INTO yeoljeong_attendance_records"):
++            (business_id, email, masked, name, branch, work_date, start_at, status, memo, actor,
++             check_in_at, lat, lng, accuracy, distance, result, device, consent_at) = args
++            if any(r["employee_email"] == email and r["work_date"] == work_date and r["start_at"] == start_at
++                   for r in db.rows.values()):
++                raise asyncpg.UniqueViolationError("duplicate key")
++            row_id = f"att-{next(db._ids):06d}"
++            now = datetime.now(KST)
++            db.rows[row_id] = {
++                "id": row_id, "business_id": business_id, "employee_email": email,
++                "employee_email_masked": masked, "employee_name": name, "branch": branch,
++                "work_date": work_date, "start_at": start_at, "end_at": start_at, "break_minutes": 0,
++                "worked_minutes": 0, "hourly_wage": 0, "source": "pwa", "status": status, "memo": memo,
++                "created_by": actor, "created_at": now, "updated_at": now, "deleted_at": None,
++                "check_in_at": check_in_at, "check_out_at": None, "check_in_lat": lat, "check_in_lng": lng,
++                "check_in_accuracy_m": accuracy, "check_in_distance_m": distance, "check_out_lat": None,
++                "check_out_lng": None, "check_out_accuracy_m": None, "check_out_distance_m": None,
++                "geofence_result": result, "device_info": device, "location_consent_at": consent_at,
 +            }
-+        if "INSERT INTO llm_model_discovery_runs" in query:
-+            self.discovery_runs.append(args)
-+        return "OK"
-+
-+
-+async def _sync(monkeypatch, conn, key_rows=()):
-+    monkeypatch.setattr(model_registry, "get_pool", lambda: _Pool(conn))
-+    monkeypatch.setattr(model_registry, "_fetch_key_rows", AsyncMock(return_value=list(key_rows)))
-+    monkeypatch.setattr(model_registry, "append_key_audit_log", AsyncMock())
-+    notify = AsyncMock(return_value=True)
-+    monkeypatch.setattr("app.services.ohvis_alert.notify", notify)
-+    result = await model_registry.sync_model_registry(triggered_by="test", reason="unit")
-+    return result, notify
-+
-+
-+# ---------------------------------------------------------------------------
-+# A/B — 발견
-+# ---------------------------------------------------------------------------
-+
-+def test_parse_cache_keeps_only_list_visibility():
-+    rows, hidden = cli_model_autoreg.parse_codex_models_cache(CACHE_PAYLOAD)
-+    assert [r["model_id"] for r in rows] == ["gpt-6.1-sol", "gpt-6-sol"]
-+    assert hidden == 1
-+    # 계정 정보는 raw 로 옮기지 않는다.
-+    assert all("identity" not in r["raw"] and "etag" not in r["raw"] for r in rows)
-+
-+
-+@pytest.mark.asyncio
-+async def test_discovery_adds_codex_cli_source_hide_excluded(cache_file, api_fetchers_off):
-+    rows, runs = await model_registry.discover_provider_model_rows([], enabled=True)
-+    codex_rows = [r for r in rows if r["provider"] == "codex"]
-+    assert {r["model_id"] for r in codex_rows} == {"gpt-6.1-sol", "gpt-6-sol"}
-+    assert all(r["discovery_source"] == "codex_cli_cache" for r in codex_rows)
-+    # 목록에 있다고 실행 가능한 것이 아니다.
-+    assert all(r["is_active"] is False and r["is_executable"] is False for r in codex_rows)
-+    codex_run = next(run for run in runs if run["provider"] == "codex")
-+    assert codex_run["status"] == "ok" and codex_run["count"] == 2 and codex_run["hidden_count"] == 1
-+
-+
-+@pytest.mark.asyncio
-+async def test_sync_registers_new_codex_slug_inactive_and_candidate(monkeypatch, cache_file, api_fetchers_off):
-+    conn = DbConn(existing={("codex", "gpt-6-sol")})
-+    result, notify = await _sync(monkeypatch, conn)
-+
-+    assert result["ok"] is True
-+    new_row = conn.llm_models[("codex", "gpt-6.1-sol")]
-+    assert new_row["is_active"] is False and new_row["is_executable"] is False
-+    assert new_row["discovery_source"] == "codex_cli_cache"
-+    # 신규 1건만 후보로. 템플릿 slug(gpt-6-sol)·hide(gpt-reserve)는 후보를 만들지 않는다.
-+    assert set(conn.candidates) == {("codex", "gpt-6.1-sol")}
-+    assert conn.candidates[("codex", "gpt-6.1-sol")]["source"] == "codex_cli_cache"
-+    assert ("codex", "gpt-reserve") not in conn.llm_models
-+    # 발견만으로는 runner_llm 에 넣지 않는다(검증 전).
-+    assert not any(k[1] == "codex" for k in conn.routing)
-+    notify.assert_not_awaited()
-+    # 템플릿 하드코딩은 늘리지 않는다.
-+    assert "gpt-6.1-sol" not in model_registry._PROVIDER_MODELS["codex"]
-+
-+
-+@pytest.mark.asyncio
-+async def test_template_slug_and_existing_row_not_duplicated(monkeypatch, cache_file, api_fetchers_off):
-+    conn = DbConn(existing={("codex", "gpt-6-sol"), ("codex", "gpt-6.1-sol")})
-+    await _sync(monkeypatch, conn)
-+    assert conn.candidates == {}
-+    # 템플릿 행은 템플릿 출처로 남는다.
-+    assert conn.llm_models[("codex", "gpt-6-sol")]["discovery_source"] == "template"
-+
-+
-+@pytest.mark.asyncio
-+async def test_missing_cache_records_unavailable_run(monkeypatch, no_cache, api_fetchers_off):
-+    rows, runs = await model_registry.discover_provider_model_rows([], enabled=True)
-+    codex_run = next(run for run in runs if run["provider"] == "codex")
-+    assert codex_run["status"] == "unavailable"
-+    assert "not_found:" in codex_run["error"] and "missing-mirror.json" in codex_run["error"]
-+    assert not [r for r in rows if r["provider"] == "codex"]
-+
-+    conn = DbConn()
-+    await _sync(monkeypatch, conn)
-+    recorded = [args for args in conn.discovery_runs if args[0] == "codex"]
-+    assert recorded and recorded[0][1] == "unavailable"
-+    # 캐시를 못 읽은 회차에는 codex_cli_cache 행을 은퇴시키지 않는다.
-+    retire = next(args for q, args in conn.execute_calls if "retired_at = COALESCE" in q)
-+    assert retire[1] is True
-+
-+
-+@pytest.mark.asyncio
-+async def test_sync_keeps_probe_verified_codex_row_executable(monkeypatch, cache_file, api_fetchers_off):
-+    conn = DbConn(existing={("codex", "gpt-6-sol"), ("codex", "gpt-6.1-sol")}, verified={"gpt-6.1-sol"})
-+    _, notify = await _sync(monkeypatch, conn)
-+    row = conn.llm_models[("codex", "gpt-6.1-sol")]
-+    assert row["is_executable"] is True and row["verification_status"] == "verified"
-+    # verified → runner_llm 비활성 후보 + 알림 1건
-+    assert conn.routing[("runner_llm", "codex", "gpt-6.1-sol")] == {"is_enabled": False, "updated_by": "auto_discovery"}
-+    notify.assert_awaited_once()
-+    assert notify.await_args.args[0] == cli_model_autoreg.VERIFIED_ALERT_TITLE
-+
-+    # 두 번째 sync: 행이 이미 있으니 알림도 다시 안 간다.
-+    _, notify2 = await _sync(monkeypatch, conn)
-+    notify2.assert_not_awaited()
-+
-+
-+# ---------------------------------------------------------------------------
-+# C — probe 상태 전이
-+# ---------------------------------------------------------------------------
-+
-+def test_classify_probe_three_outcomes():
-+    assert probe.classify_probe(0, "OK\n", "") == ("verified", "codex exec 응답 OK")
-+    status, note = probe.classify_probe(
-+        1, "",
-+        "ERROR: unexpected status 400 Bad Request: {\"detail\":\"The 'gpt-6.1-sol' model is not supported "
-+        "when using Codex with a ChatGPT account.\"}\nmore noise",
-+    )
-+    assert status == "blocked_account"
-+    assert "not supported when using Codex with a ChatGPT account" in note and "\n" not in note
-+    assert probe.classify_probe(1, "", "error: stream disconnected")[0] == "probe_failed"
-+    assert probe.classify_probe(124, "", "", timed_out=True)[0] == "probe_failed"
-+
-+
-+class FakeStore:
-+    def __init__(self, rows):
-+        self.rows = rows
-+        self.recorded: list[tuple[str, str, str]] = []
-+
-+    def candidates(self):
-+        return [dict(r) for r in self.rows]
-+
-+    def record(self, model_id, status, note):
-+        self.recorded.append((model_id, status, note))
-+        for r in self.rows:
-+            if r["model_id"] == model_id:
-+                r["status"] = status
-+        return {"runner_candidate_inserted": status == "verified"}
-+
-+
-+def test_probe_transitions_and_daily_cap():
-+    now = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
-+    store = FakeStore([
-+        {"model_id": "m-ok", "status": "discovered", "last_probe_at": None},
-+        {"model_id": "m-blocked", "status": "discovered", "last_probe_at": None},
-+        {"model_id": "m-fail", "status": "discovered", "last_probe_at": None},
-+        # 24시간이 안 지난 blocked_account 는 건너뛴다.
-+        {"model_id": "m-recent", "status": "blocked_account", "last_probe_at": now - timedelta(hours=3)},
-+        # 24시간 지난 blocked_account 는 재시도.
-+        {"model_id": "m-retry", "status": "blocked_account", "last_probe_at": now - timedelta(hours=25)},
-+    ])
-+    outcomes = {
-+        "m-ok": ("verified", "ok"),
-+        "m-blocked": ("blocked_account", "not supported when using Codex with a ChatGPT account"),
-+        "m-fail": ("probe_failed", "rc=1"),
-+        "m-retry": ("blocked_account", "still"),
-+    }
-+    calls = []
-+
-+    def fake_probe(model_id, *, deadline):
-+        calls.append(model_id)
-+        return outcomes[model_id]
-+
-+    results = probe.probe_candidates(store, probe=fake_probe, now=now, deadline=1e12, max_models=10)
-+    assert calls == ["m-ok", "m-blocked", "m-fail", "m-retry"]
-+    assert [(r["model_id"], r["status"]) for r in results] == [
-+        ("m-ok", "verified"), ("m-blocked", "blocked_account"),
-+        ("m-fail", "probe_failed"), ("m-retry", "blocked_account"),
-+    ]
-+    # verified 는 다시 치지 않는다.
-+    assert probe.is_due({"status": "verified", "last_probe_at": None}, now) is False
-+
-+
-+class _Cursor:
-+    def __init__(self, conn):
-+        self.conn = conn
-+
-+    def __enter__(self):
-+        return self
-+
-+    def __exit__(self, *exc):
-+        return False
-+
-+    def execute(self, sql, params=()):
-+        self.conn.sql.append((sql, params))
-+
-+    def fetchone(self):
-+        return ("x",) if self.conn.insert_result else None
-+
-+
-+class _PgConn:
-+    def __init__(self, insert_result=True):
-+        self.sql = []
-+        self.insert_result = insert_result
-+
-+    def __enter__(self):
-+        return self
-+
-+    def __exit__(self, *exc):
-+        return False
-+
-+    def cursor(self):
-+        return _Cursor(self)
-+
-+
-+def test_probe_store_record_sql():
-+    blocked = _PgConn()
-+    probe.ProbeStore(blocked).record("gpt-6.1-sol", "blocked_account", "400 not supported ...")
-+    assert len(blocked.sql) == 1 and "UPDATE llm_model_candidates" in blocked.sql[0][0]
-+    assert blocked.sql[0][1][0] == "blocked_account"
-+
-+    ok = _PgConn(insert_result=True)
-+    out = probe.ProbeStore(ok).record("gpt-7", "verified", "ok")
-+    joined = "\n".join(s for s, _ in ok.sql)
-+    assert "SET is_executable = TRUE" in joined and "provider = 'codex'" in joined
-+    assert "is_enabled" not in joined.split("INSERT INTO model_routing_preferences")[0]
-+    assert "FALSE, FALSE" in joined and "DO NOTHING" in joined
-+    assert "INSERT INTO alert_history" in joined and out["runner_candidate_inserted"] is True
-+
-+    again = _PgConn(insert_result=False)
-+    probe.ProbeStore(again).record("gpt-7", "verified", "ok")
-+    assert not any("alert_history" in s for s, _ in again.sql)
-+
-+
-+def test_build_mirror_strips_account_fields():
-+    mirror = probe.build_mirror(CACHE_PAYLOAD, "/root/.codex/models_cache.json")
-+    assert "identity" not in mirror and "etag" not in mirror
-+    assert [m["slug"] for m in mirror["models"]] == ["gpt-6.1-sol", "gpt-6-sol", "gpt-reserve"]
-+    rows, hidden = cli_model_autoreg.parse_codex_models_cache(mirror)
-+    assert len(rows) == 2 and hidden == 1
-+
-+
-+# ---------------------------------------------------------------------------
-+# D — runner_llm 후보 자동등록
-+# ---------------------------------------------------------------------------
-+
-+@pytest.mark.asyncio
-+async def test_runner_candidates_idempotent_and_existing_rows_untouched():
-+    existing = {
-+        ("runner_llm", "openai", "gpt-6.1-sol"): {"is_enabled": False, "updated_by": "CEO-chat:gpt61sol-candidate"},
-+        ("runner_llm", "codex", "gpt-6-sol"): {"is_enabled": True, "updated_by": "CEO:9102c970-runner-tail"},
-+    }
-+    conn = DbConn(routing={k: dict(v) for k, v in existing.items()})
-+    wanted = [("openai", "gpt-6.1-sol"), ("codex", "gpt-6-sol"), ("codex", "gpt-7")]
-+
-+    first = await cli_model_autoreg.register_runner_llm_candidates(conn, wanted)
-+    second = await cli_model_autoreg.register_runner_llm_candidates(conn, wanted)
-+
-+    assert first == [("codex", "gpt-7")]
-+    assert second == []
-+    for key, value in existing.items():
-+        assert conn.routing[key] == value
-+    assert conn.routing[("runner_llm", "codex", "gpt-7")] == {"is_enabled": False, "updated_by": "auto_discovery"}
-+    assert not any("UPDATE model_routing_preferences" in q for q, _ in conn.execute_calls)
-+
-+
-+@pytest.mark.asyncio
-+async def test_claude_api_discovery_gets_runner_candidate(monkeypatch, no_cache, api_fetchers_off):
-+    """F: Claude 는 별도 CLI 카탈로그가 없다 — anthropic_api discovery 가 D 경로를 그대로 탄다."""
-+    monkeypatch.setattr(model_registry, "_fetch_anthropic_models", AsyncMock(return_value=(
-+        [{"model_id": "claude-nova-6", "display_name": "Claude Nova 6", "raw": {}}], {"status": "ok"},
-+    )))
-+    now = datetime.now(timezone.utc)
-+    key_rows = [{
-+        "id": 1, "provider": "anthropic", "key_name": "ANTHROPIC_AUTH_TOKEN", "priority": 1,
-+        "is_active": True, "rate_limited_until": None, "last_used_at": now, "last_verified_at": now,
-+    }]
-+    conn = DbConn(routing={("runner_llm", "anthropic", "claude-sonnet-5-5"): {"is_enabled": True, "updated_by": "x"}})
-+    await _sync(monkeypatch, conn, key_rows=key_rows)
-+    assert conn.routing[("runner_llm", "anthropic", "claude-nova-6")] == {"is_enabled": False, "updated_by": "auto_discovery"}
-+    assert conn.routing[("runner_llm", "anthropic", "claude-sonnet-5-5")] == {"is_enabled": True, "updated_by": "x"}
-+    # 템플릿 모델은 "새로 발견" 이 아니다.
-+    assert ("runner_llm", "anthropic", "claude-opus-5-5") not in conn.routing
-+
-+    # 이미 llm_models 에 있던 모델은 다시 후보로 올리지 않는다.
-+    conn2 = DbConn(existing={("anthropic", "claude-nova-6")})
-+    await _sync(monkeypatch, conn2, key_rows=key_rows)
-+    assert conn2.routing == {}
-+
-+
-+# ---------------------------------------------------------------------------
-+# E — 러너 안전장치
-+# ---------------------------------------------------------------------------
-+
-+class _RunnerConn:
-+    def __init__(self, rows, codex_exec):
-+        self.rows = rows
-+        self.codex_exec = codex_exec
-+
-+    async def fetch(self, query, *args):
-+        if "FROM llm_models WHERE provider = 'codex' AND is_executable = TRUE" in query:
-+            return [{"model_id": m} for m in self.codex_exec]
-+        return self.rows
-+
-+
-+@pytest.mark.asyncio
-+async def test_routing_guard_drops_openai_models_not_executable_on_codex(monkeypatch):
-+    from app.services import pipeline_runner_service as prs
-+
-+    rows = [
-+        {"group_order": 2, "model": "claude-sonnet-5-5", "priority": 1, "provider": "anthropic"},
-+        {"group_order": 2, "model": "gpt-6.1-sol", "priority": 2, "provider": "openai"},
-+        {"group_order": 2, "model": "gpt-5.5", "priority": 3, "provider": "openai"},
-+        {"group_order": 2, "model": "gpt-6-sol", "priority": 4, "provider": "codex"},
-+    ]
-+    conn = _RunnerConn(rows, codex_exec={"gpt-5.5", "gpt-6-sol"})
-+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _Pool(conn))
-+    monkeypatch.setattr(model_registry, "filter_executable_models", AsyncMock(side_effect=lambda m: list(m)))
-+
-+    models = await prs._get_db_model_config("M")
-+    assert models == ["claude-sonnet-5-5", "codex:gpt-5.5", "codex:gpt-6-sol"]
-+    assert "codex:gpt-6.1-sol" not in models
-+
-+
-+def test_auth_error_is_not_a_model_verdict():
-+    """인증 실패(무효 토큰 401)는 기록하지 않고 회차를 멈춘다 — 모델의 24h 상한을 소모하지 않는다."""
-+    status, note = probe.classify_probe(
-+        1, "", "ERROR codex: unexpected status 401 Unauthorized: Encountered invalidated oauth token for user"
-+    )
-+    assert status == "auth_error" and "401" in note
-+
-+    store = FakeStore([
-+        {"model_id": "m1", "status": "discovered", "last_probe_at": None},
-+        {"model_id": "m2", "status": "discovered", "last_probe_at": None},
-+    ])
-+    results = probe.probe_candidates(
-+        store, probe=lambda model_id, *, deadline: ("auth_error", "401"), deadline=1e12, max_models=10
-+    )
-+    assert store.recorded == []
-+    assert [r["status"] for r in results] == ["auth_error"]
-+
-+
-+def test_probe_uses_catalog_account_home():
-+    # 카탈로그를 받은 계정(/root/.codex)으로 친다 — 러너 셸의 CODEX_HOME 을 따라가지 않는다.
-+    assert probe.PROBE_CODEX_HOME == str(Path(probe.CODEX_CACHE).parent)
++            return {c: db.rows[row_id][c] for c in _columns(sql)}
++        if "FOR UPDATE" in sql:
++            business_id, email, since = args
++            open_rows = [r for r in db.rows.values()
++                         if r["business_id"] == business_id and r["employee_email"] == email
++                         and r["source"] == "pwa" and r["check_in_at"] is not None
++                         and r["check_in_at"] >= since and r["check_out_at"] is None and r["deleted_at"] is None]
++            if not open_rows:
++                return None
++            row = max(open_rows, key=lambda r: r["check_in_at"])
++            return {c: row[c] for c in _columns(sql)}
++        if head.startswith("UPDATE yeoljeong_attendance_records"):
++            (record_id, business_id, check_out_at, end_at, worked, lat, lng, accuracy, distance,
++             result, status, memo, device, consent_at) = args
++            row = db.rows.get(record_id)
++            if not row or row["business_id"] != business_id or row["check_out_at"] is not None:
++                return None
++            row.update({"check_out_at": check_out_at, "end_at": end_at, "worked_minutes": worked,
++                        "check_out_lat": lat, "check_out_lng": lng, "check_out_accuracy_m": accuracy,
++                        "check_out_distance_m": distance, "geofence_result": result, "status": status,
++                        "memo": memo, "device_info": row["device_info"] or device,
++                        "location_consent_at": row["location_consent_at"] or consent_at})
++            return {c: row[c] for c in _columns(sql)}
++        if head.startswith("SELECT employee_email,"):
++            row = db.rows.get(args[0])
++            if row and row["business_id"] == args[1] and row["deleted_at"] is None:
++                return {c: row[c] for c in _columns(sql)}
++            return None
++        if head.startswith("UPDATE yeoljeong_branches"):
++            branch_id, business_id, lat, lng, radius, actor = args
++            branch = db.branches.get(branch_id)
++            if not branch or branch["business_id"] != business_id or branch["deleted_at"] is not None:
++                return None
++            branch.update({"latitude": lat, "longitude": lng, "geofence_radius_m": radius, "updated_by": actor})
++            return {k: branch[k] for k in ("id", "name", "latitude", "longitude", "geofence_radius_m")}
++        raise AssertionError(f"unexpected SQL: {sql[:80]}")
++
++
++@pytest.fixture
++def db():
++    fake = FakeDB()
++    fake.add_branch("br-junghwa", "중화점", *STORE)
++    return fake
++
++
++@pytest.fixture
++def clock(monkeypatch):
++    now = {"value": datetime(2026, 9, 30, 10, 0, tzinfo=KST)}
++    monkeypatch.setattr(api, "_clock_now", lambda: now["value"])
++    return now
++
++
++@pytest.fixture
++def as_user():
++    return {"user": EMPLOYEE}
++
++
++@pytest.fixture
++def client(monkeypatch, db, clock, as_user):
++    async def businesses(*, user):
++        return [BUSINESS] if user["tenant_id"] == TENANT else []
++
++    async def connect():
++        return FakeConnection(db)
++
++    monkeypatch.setattr(api.upload_svc, "list_businesses", businesses)
++    monkeypatch.setattr(api.upload_svc, "_connect", connect)
++    app = FastAPI()
++    app.include_router(api.router, prefix="/api/v1")
++    app.dependency_overrides[get_current_user] = lambda: as_user["user"]
++    return TestClient(app)
++
++
++def _consent(client, agree=True):
++    response = client.post(f"{BASE}/attendance/consent", json={"agree": agree})
++    assert response.status_code == 200, response.text
++
++
++def _punch(client, action, meters=None, accuracy=10, consent=True, **extra):
++    body = {"location_consent": consent, "device_info": "test-agent", **extra}
++    if meters is not None:
++        body["latitude"], body["longitude"] = _north(meters)
++        body["accuracy_m"] = accuracy
++    return client.post(f"{BASE}/attendance/{action}", json=body)
++
++
++def _stored(db, response):
++    return db.rows[response.json()["record"]["id"]]
++
++
++# ── 반경 판정 ────────────────────────────────────────────────────────────────
++
++def test_inside_radius_is_auto_approved_as_pwa(client, db):
++    _consent(client)
++    response = _punch(client, "check-in", meters=20)
++    assert response.status_code == 201, response.text
++    body = response.json()
++    assert body["record"]["status"] == "approved"
++    assert body["record"]["geofence_result"] == "inside"
++    assert body["record"]["source"] == "pwa"
++    assert body["judgement"]["distance_m"] == 20
++    row = _stored(db, response)
++    assert row["check_in_lat"] == pytest.approx(_north(20)[0]) and row["check_in_distance_m"] == 20
++    assert row["location_consent_at"] is not None and row["check_in_at"] == datetime(2026, 9, 30, 10, 0, tzinfo=KST)
++    # 직원 응답에는 좌표 원본·기기 정보·이메일 원문이 없다.
++    assert not {"check_in_lat", "check_in_lng", "device_info", "employee_email"} & set(body["record"])
++    # 감사로그는 기존 _attendance_audit 경로 — 좌표 원문을 남기지 않는다.
++    entry = db.audit[-1]
++    assert entry["action"] == "attendance.check_in" and entry["resource_id"] == row["id"]
++    assert str(row["check_in_lat"])[:7] not in entry["details"] and "latitude" not in entry["details"]
++
++
++def test_outside_radius_is_pending_with_distance(client, db):
++    _consent(client)
++    response = _punch(client, "check-in", meters=80)
++    assert response.status_code == 201
++    record = response.json()["record"]
++    assert (record["status"], record["geofence_result"]) == ("pending", "outside")
++    assert record["check_in_distance_m"] == 80
++    assert "80m" in record["memo"] and "밖" in record["memo"]
++
++
++def test_accuracy_worse_than_radius_is_unknown_not_inside(client, db):
++    _consent(client)
++    # 매장에서 5m 로 찍혔더라도 오차가 반경(50m)보다 크면 안으로 판정하지 않는다.
++    response = _punch(client, "check-in", meters=5, accuracy=120)
++    record = response.json()["record"]
++    assert (record["status"], record["geofence_result"]) == ("pending", "unknown")
++    assert "오차 120m" in record["memo"]
++
++
++def test_branch_without_coordinates_is_unknown_with_reason(client, db):
++    db.branches["br-junghwa"].update(latitude=None, longitude=None)
++    _consent(client)
++    response = _punch(client, "check-in", meters=0)
++    record = response.json()["record"]
++    assert (record["status"], record["geofence_result"]) == ("pending", "unknown")
++    assert "지점 좌표 미등록" in record["memo"]
++    assert db.audit[-1]["action"] == "attendance.check_in" and "지점 좌표 미등록" in db.audit[-1]["details"]
++
++
++def test_without_consent_location_is_not_stored_and_pending(client, db):
++    # 서버 동의 없음 + 요청은 동의했다고 보내도 위치를 저장하지 않는다.
++    response = _punch(client, "check-in", meters=10, consent=True)
++    row = _stored(db, response)
++    assert row["check_in_lat"] is None and row["check_in_lng"] is None
++    assert row["check_in_accuracy_m"] is None and row["check_in_distance_m"] is None
++    assert row["location_consent_at"] is None
++    assert (row["status"], row["geofence_result"]) == ("pending", "unknown")
++    assert "미동의" in row["memo"]
++
++
++def test_withdrawn_consent_stops_location_collection(client, db, clock):
++    _consent(client)
++    assert _punch(client, "check-in", meters=10).json()["record"]["status"] == "approved"
++    _consent(client, agree=False)
++    clock["value"] = datetime(2026, 9, 30, 18, 0, tzinfo=KST)
++    out = _punch(client, "check-out", meters=10)
++    assert out.status_code == 200, out.text
++    row = _stored(db, out)
++    assert row["check_out_lat"] is None and row["check_out_distance_m"] is None
++    assert row["status"] == "pending" and row["geofence_result"] == "unknown"
++    assert [a["action"] for a in db.audit if "consent" in a["action"]] == [
++        "attendance.consent", "attendance.consent_withdraw"]
++
++
++def test_request_consent_false_overrides_server_consent(client, db):
++    _consent(client)
++    row = _stored(db, _punch(client, "check-in", meters=10, consent=False))
++    assert row["check_in_lat"] is None and row["status"] == "pending"
++
++
++@pytest.mark.parametrize(("meters", "expected"), [(49, "inside"), (50, "inside"), (51, "outside")])
++def test_radius_boundary(meters, expected):
++    branch = {"latitude": STORE[0], "longitude": STORE[1], "geofence_radius_m": None}
++    lat, lng = _north(meters)
++    verdict = api.judge_geofence(consent=True, latitude=lat, longitude=lng, accuracy_m=10, branch=branch)
++    assert verdict["distance_m"] == meters and verdict["result"] == expected
++
++
++@pytest.mark.parametrize(("accuracy", "expected"), [(50, "inside"), (50.2, "unknown"), (None, "unknown")])
++def test_accuracy_boundary(accuracy, expected):
++    branch = {"latitude": STORE[0], "longitude": STORE[1], "geofence_radius_m": 50}
++    lat, lng = _north(10)
++    verdict = api.judge_geofence(consent=True, latitude=lat, longitude=lng, accuracy_m=accuracy, branch=branch)
++    assert verdict["result"] == expected
++    assert verdict["status"] == ("approved" if expected == "inside" else "pending")
++
++
++def test_branch_radius_is_used_but_capped():
++    assert api.geofence_radius_m({"geofence_radius_m": None}) == api.GEOFENCE_DEFAULT_RADIUS_M
++    assert api.geofence_radius_m({"geofence_radius_m": 35}) == 35
++    assert api.geofence_radius_m({"geofence_radius_m": 300}) == api.GEOFENCE_MAX_RADIUS_M
++    assert "pwa" in api.ATTENDANCE_SOURCES and "manual" in api.ATTENDANCE_SOURCES
++
++
++# ── 멱등·상태 ─────────────────────────────────────────────────────────────────
++
++def test_second_check_in_same_day_is_409(client, db, clock):
++    _consent(client)
++    assert _punch(client, "check-in", meters=10).status_code == 201
++    clock["value"] = datetime(2026, 9, 30, 10, 5, tzinfo=KST)
++    again = _punch(client, "check-in", meters=10)
++    assert again.status_code == 409
++    assert len(db.rows) == 1
++    assert db.locks and all(key == f"obys-clock:{BUSINESS['id']}:staff@example.com" for key in db.locks)
++
++
++def test_check_out_without_check_in_is_409(client, db):
++    response = _punch(client, "check-out", meters=10)
++    assert response.status_code == 409
++    assert db.rows == {}
++
++
++def test_check_out_uses_existing_worked_minutes_function(client, db, clock):
++    _consent(client)
++    _punch(client, "check-in", meters=10)
++    clock["value"] = datetime(2026, 9, 30, 18, 30, tzinfo=KST)
++    out = _punch(client, "check-out", meters=15)
++    assert out.status_code == 200, out.text
++    record = out.json()["record"]
++    assert record["worked_minutes"] == api.attendance_worked_minutes(time(10, 0), time(18, 30), 0) == 510
++    assert (record["start_at"], record["end_at"]) == ("10:00:00", "18:30:00")
++    assert record["status"] == "approved" and record["geofence_result"] == "inside"
++    assert record["open"] is False
++    # 두 번째 퇴근은 열린 출근이 없으므로 409.
++    assert _punch(client, "check-out", meters=15).status_code == 409
++
++
++def test_overnight_shift_and_outside_check_out_is_pending(client, db, clock):
++    _consent(client)
++    clock["value"] = datetime(2026, 9, 30, 22, 0, tzinfo=KST)
++    _punch(client, "check-in", meters=10)
++    clock["value"] = datetime(2026, 10, 1, 6, 0, tzinfo=KST)
++    out = _punch(client, "check-out", meters=300)
++    record = out.json()["record"]
++    assert record["work_date"] == "2026-09-30"
++    assert record["worked_minutes"] == api.attendance_worked_minutes(time(22, 0), time(6, 0), 0) == 480
++    assert (record["status"], record["geofence_result"]) == ("pending", "outside")
++    assert "출근:" in record["memo"] and "퇴근:" in record["memo"] and "300m" in record["memo"]
++
++
++def test_multiple_branches_require_selection(client, db):
++    db.add_branch("br-mia", "미아점", 37.62, 127.03)
++    _consent(client)
++    assert _punch(client, "check-in", meters=10).status_code == 400
++    assert _punch(client, "check-in", meters=10, branch_id="br-none").status_code == 404
++    ok = _punch(client, "check-in", meters=10, branch_id="br-junghwa")
++    assert ok.status_code == 201 and ok.json()["record"]["branch"] == "중화점"
++
++
++# ── 본인 한정·테넌트 ────────────────────────────────────────────────────────────
++
++def test_body_employee_email_is_ignored(client, db):
++    _consent(client)
++    response = _punch(client, "check-in", meters=10, employee_email="boss@example.com",
++                      employee_name="대표", status="approved")
++    row = _stored(db, response)
++    assert row["employee_email"] == "staff@example.com"
++    assert row["employee_name"] == "김직원"
++    assert row["created_by"] == "Staff@Example.com"
++
++
++def test_other_employee_record_is_403(client, db, as_user):
++    _consent(client)
++    mine = _punch(client, "check-in", meters=10).json()["record"]["id"]
++    assert client.get(f"{BASE}/attendance/me/{mine}").status_code == 200
++    as_user["user"] = COWORKER
++    assert client.get(f"{BASE}/attendance/me/{mine}").status_code == 403
++    # 동료의 퇴근 버튼은 내 열린 출근을 닫지 못한다.
++    assert _punch(client, "check-out", meters=10).status_code == 409
++    assert db.rows[mine]["check_out_at"] is None
++    state = client.get(f"{BASE}/attendance/clock/state").json()
++    assert state["recent"] == [] and state["open_record"] is None
++
++
++def test_other_tenant_account_is_403(client, db, as_user):
++    as_user["user"] = FOREIGN
++    assert _punch(client, "check-in", meters=10).status_code == 403
++    assert client.get(f"{BASE}/attendance/clock/state").status_code == 403
++    assert client.post(f"{BASE}/attendance/consent", json={"agree": True}).status_code == 403
++    assert db.rows == {} and db.audit == []
++
++
++def test_membership_mismatch_and_viewer_are_403(client, db, as_user):
++    as_user["user"] = {**EMPLOYEE, "current_membership": {"tenant_id": OTHER_TENANT, "status": "active", "role": "member"}}
++    assert _punch(client, "check-in", meters=10).status_code == 403
++    as_user["user"] = VIEWER
++    assert _punch(client, "check-in", meters=10).status_code == 403
++    assert db.rows == {}
++
++
++def test_state_shows_own_open_record_without_coordinates(client, db):
++    _consent(client)
++    _punch(client, "check-in", meters=10)
++    state = client.get(f"{BASE}/attendance/clock/state")
++    assert state.status_code == 200
++    body = state.json()
++    assert body["consent"]["agreed"] is True
++    assert body["open_record"]["geofence_result"] == "inside"
++    assert body["employee"] == {"name": "김직원", "email_masked": "s***@example.com"}
++    assert body["branches"] == [{"id": "br-junghwa", "name": "중화점", "has_geofence": True, "radius_m": 50}]
++    assert "check_in_lat" not in json.dumps(body) and "latitude" not in json.dumps(body["branches"])
++
++
++# ── 관리자 ────────────────────────────────────────────────────────────────────
++
++def test_admin_location_summary_has_coordinates_member_forbidden(client, db, as_user):
++    _consent(client)
++    _punch(client, "check-in", meters=80)
++    assert client.get(f"{BASE}/attendance/locations").status_code == 403
++    as_user["user"] = OWNER
++    response = client.get(f"{BASE}/attendance/locations", params={"result": "outside"})
++    assert response.status_code == 200, response.text
++    body = response.json()
++    assert body["count"] == 1 and body["summary"]["outside"] == 1 and body["summary"]["pending"] == 1
++    record = body["records"][0]
++    assert record["check_in_distance_m"] == 80 and record["check_in_accuracy_m"] == 10
++    assert record["check_in_lat"] == pytest.approx(_north(80)[0])
++    assert "employee_email" not in record and record["employee_email_masked"] == "s***@example.com"
++    assert client.get(f"{BASE}/attendance/locations", params={"result": "bogus"}).status_code == 400
++
++
++def test_admin_cannot_clock_for_someone_else(client, db, as_user):
++    # 관리자가 이 경로를 쓰면 관리자 본인 기록이 된다 — 대리 체크인은 불가.
++    as_user["user"] = OWNER
++    response = _punch(client, "check-in", consent=False, employee_email="staff@example.com")
++    assert _stored(db, response)["employee_email"] == "owner@example.com"
++
++
++def test_branch_geofence_patch_is_admin_only_and_audited(client, db, as_user):
++    body = {"latitude": 37.5, "longitude": 127.0, "radius_m": 40}
++    assert client.patch(f"{BASE}/branches/br-junghwa/geofence", json=body).status_code == 403
++    as_user["user"] = OWNER
++    response = client.patch(f"{BASE}/branches/br-junghwa/geofence", json=body)
++    assert response.status_code == 200, response.text
++    assert db.branches["br-junghwa"]["geofence_radius_m"] == 40
++    assert db.audit[-1]["action"] == "attendance.geofence_config" and db.audit[-1]["resource_id"] == "br-junghwa"
++    assert client.patch(f"{BASE}/branches/br-junghwa/geofence", json={**body, "radius_m": 51}).status_code == 400
++    assert client.patch(f"{BASE}/branches/br-junghwa/geofence", json={**body, "radius_m": 29}).status_code == 400
++    assert client.patch(f"{BASE}/branches/br-other/geofence", json=body).status_code == 404
++    default = client.patch(f"{BASE}/branches/br-junghwa/geofence", json={"latitude": 37.5, "longitude": 127.0})
++    assert default.json()["branch"]["geofence_radius_m"] == api.GEOFENCE_DEFAULT_RADIUS_M
++    listed = client.get(f"{BASE}/branches/geofence").json()
++    assert listed["branches"][0]["latitude"] == 37.5 and listed["policy"]["max_radius_m"] == 50
++
++
++def test_clock_routes_are_registered_before_generic_routes():
++    paths = [(route.path, sorted(route.methods)) for route in api.router.routes]
++    generic_post = paths.index(("/workspaces/{business_id}/{route}/records", ["POST"]))
++    generic_get = paths.index(("/workspaces/{business_id}/{route}/records/{record_id}", ["GET"]))
++    generic_summary = paths.index(("/workspaces/{business_id}/{route}/summary", ["GET"]))
++    for path, method in [("/workspaces/{business_id}/attendance/check-in", "POST"),
++                         ("/workspaces/{business_id}/attendance/check-out", "POST"),
++                         ("/workspaces/{business_id}/attendance/consent", "POST"),
++                         ("/workspaces/{business_id}/attendance/me/{record_id}", "GET"),
++                         ("/workspaces/{business_id}/attendance/locations", "GET"),
++                         ("/workspaces/{business_id}/branches/geofence", "GET"),
++                         ("/workspaces/{business_id}/branches/{branch_id}/geofence", "PATCH")]:
++        index = paths.index((path, [method]))
++        assert index < generic_post and index < generic_get
++    # clock/state 는 세그먼트 수가 달라 제네릭 summary 와 겹치지 않지만 그래도 먼저 둔다.
++    assert paths.index(("/workspaces/{business_id}/attendance/clock/state", ["GET"])) < generic_get
++    assert generic_summary < generic_get
++
++
++# ── PWA 자산 정적 검사 ────────────────────────────────────────────────────────
++OBYS = ROOT / "app" / "static" / "apps" / "obys"
++
++
++def test_manifest_required_fields():
++    manifest = json.loads((OBYS / "manifest.webmanifest").read_text(encoding="utf-8"))
++    for key in ("name", "short_name", "start_url", "scope", "display", "icons"):
++        assert manifest.get(key), key
++    assert manifest["scope"] == "/static/apps/obys/"
++    assert manifest["start_url"].startswith(manifest["scope"])
++    assert manifest["display"] in {"standalone", "fullscreen", "minimal-ui"}
++    sizes = {icon["sizes"] for icon in manifest["icons"]}
++    assert {"192x192", "512x512"} <= sizes
++    for icon in manifest["icons"]:
++        assert (ROOT / "app" / icon["src"].lstrip("/")).is_file(), icon["src"]
++
++
++def _app_shell(sw: str) -> list[str]:
++    block = re.search(r"const APP_SHELL = \[(.*?)\];", sw, re.S).group(1)
++    return re.findall(r'"([^"]+)"', block)
++
++
++def test_service_worker_caches_only_app_shell():
++    sw = (OBYS / "sw.js").read_text(encoding="utf-8")
++    shell = _app_shell(sw)
++    assert shell and all(path.startswith("/static/apps/obys/") for path in shell)
++    for path in shell:
++        assert "/api/" not in path and "token" not in path.lower() and "?" not in path
++        assert (ROOT / "app" / path.lstrip("/")).is_file(), path
++    # 셸이 아닌 요청(API·근태)은 손대지 않는다 — respondWith 이전에 반환.
++    fetch_handler = sw[sw.index('addEventListener("fetch"'):]
++    assert fetch_handler.index("if (!APP_SHELL_PATHS.has(url.pathname)) return;") < fetch_handler.index("respondWith")
++    assert 'request.method !== "GET"' in fetch_handler
++    for forbidden in ("Authorization", "localStorage", "aads_token", "/api/v1", "indexedDB", "sync"):
++        assert forbidden not in sw.replace("// API·근태·기타 화면은 캐시하지 않는다", ""), forbidden
++    assert re.search(r'const CACHE_VERSION = "obys-clock-shell-\d{8}-r\d+";', sw)
++
++
++def test_clock_screen_reads_location_once_and_never_queues_offline():
++    html = (OBYS / "clock.html").read_text(encoding="utf-8")
++    assert "getCurrentPosition" in html
++    for forbidden in ("watchPosition", "indexedDB", "SyncManager", "periodicSync", "setInterval(readPosition"):
++        assert forbidden not in html, forbidden
++    assert 'navigator.serviceWorker.register("/static/apps/obys/sw.js", { scope: "/static/apps/obys/" })' in html
++    assert '<link rel="manifest" href="/static/apps/obys/manifest.webmanifest">' in html
++    # 동의 화면: 항목·목적·보관기간·거부 결과·철회 경로
++    for text in ("수집 항목", "목적", "보관 기간", "확인필요", "위치 동의 철회"):
++        assert text in html, text
++    assert "attendance/${action}" in html  # check-in / check-out
++    assert "attendance/consent" in html
++    # 오프라인이면 기록하지 않고 재시도 안내만 한다.
++    assert "지금 기록할 수 없음" in html and "오프라인 기록은 저장하지 않습니다" in html
++    # 직원 화면에 관리자 설정(지점 좌표·반경 저장)이 없다.
++    assert "/geofence" not in html and "attendance/locations" not in html
++
++
++def test_admin_geofence_screen_is_separate_and_linked():
++    admin = (OBYS / "attendance-admin.html").read_text(encoding="utf-8")
++    assert "/branches/${encodeURIComponent(row.dataset.branch)}/geofence" in admin and 'method: "PATCH"' in admin
++    assert "watchPosition" not in admin
++    index = (OBYS / "index.html").read_text(encoding="utf-8")
++    assert 'href="/static/apps/obys/attendance-admin.html"' in index
++
++
++# ── 마이그레이션 ─────────────────────────────────────────────────────────────
++
++def test_migration_is_additive_manual_and_has_rollback():
++    name = "20260930_obys_attendance_pwa_gps"
++    sql = (ROOT / "migrations" / f"{name}.sql").read_text(encoding="utf-8")
++    adds = [line for line in sql.splitlines() if line.startswith("ALTER TABLE") and "ADD COLUMN" in line]
++    assert len(adds) == 16
++    assert all("NOT NULL" not in line and "DEFAULT" not in line for line in adds)
++    for column in ("latitude", "longitude", "geofence_radius_m", "check_in_at", "check_out_at",
++                   "check_in_lat", "check_in_lng", "check_in_accuracy_m", "check_out_lat", "check_out_lng",
++                   "check_out_accuracy_m", "check_in_distance_m", "check_out_distance_m",
++                   "geofence_result", "device_info", "location_consent_at"):
++        assert re.search(rf"ADD COLUMN IF NOT EXISTS {column} ", sql), column
++    assert not re.search(r"\b(UPDATE|DELETE|TRUNCATE)\s+(FROM\s+)?yeoljeong_", sql)
++    baseline = (ROOT / "scripts" / "migrations_auto_apply_baseline.txt").read_text(encoding="utf-8").splitlines()
++    assert f"migrations/{name}.sql" in baseline
++    assert (ROOT / "migrations" / "rollback" / f"{name}.down.sql").is_file()
++    assert date(2026, 9, 30)  # 적용일 기준 스냅샷

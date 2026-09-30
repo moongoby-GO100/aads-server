@@ -41,3 +41,6 @@ migrations/20260930_obys_e2e_credentials_jinah.sql
 # OBYS 업무 DB 전용(yeoljeong_contracts). AADS DB 자동 적용 대상이 아니다 —
 # docs/operations/OBYS_CONTRACT_NOTIFY_SIGNED_PDF.md 절차로 수동 적용.
 migrations/20260930_obys_contract_notify_signed_pdf.sql
+# OBYS 업무 DB 전용(yeoljeong_branches·yeoljeong_attendance_records). AADS DB 자동 적용
+# 대상이 아니다 — docs/operations/OBYS_ATTENDANCE_PWA_GPS.md 절차로 수동 적용.
+migrations/20260930_obys_attendance_pwa_gps.sql

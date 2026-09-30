@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2f6fed">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="출퇴근">
+  <link rel="manifest" href="/static/apps/obys/manifest.webmanifest">
+  <link rel="icon" href="/static/apps/obys/icons/obys-clock-192.png">
+  <link rel="apple-touch-icon" href="/static/apps/obys/icons/obys-clock-192.png">
+  <title>오비서 출퇴근</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f5f7;
+      --panel: #ffffff;
+      --text: #1d2330;
+      --muted: #5b6475;
+      --line: #dde1e8;
+      --primary: #2f6fed;
+      --primary-dark: #1b4ec2;
+      --out: #0f7b52;
+      --warn-bg: #fff6e5;
+      --warn-text: #8a5a00;
+      --err-bg: #fdecec;
+      --err-text: #b42318;
+      --ok-bg: #e8f6ef;
+      --ok-text: #0f7b52;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--text); }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+      font-size: 17px; line-height: 1.5; min-height: 100vh;
+      padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+      word-break: keep-all; overflow-wrap: anywhere;
+    }
+    main { max-width: 480px; margin: 0 auto; padding: 16px 16px 32px; display: flex; flex-direction: column; gap: 14px; min-height: 100vh; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    header h1 { font-size: 20px; margin: 0; }
+    header .who { color: var(--muted); font-size: 14px; text-align: right; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+    .panel h2 { font-size: 17px; margin: 0 0 8px; }
+    .muted { color: var(--muted); font-size: 15px; }
+    .status-line { font-size: 22px; font-weight: 700; margin: 4px 0; }
+    .elapsed { font-size: 32px; font-weight: 800; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 14px; font-weight: 700; }
+    .badge.ok { background: var(--ok-bg); color: var(--ok-text); }
+    .badge.warn { background: var(--warn-bg); color: var(--warn-text); }
+    .spacer { flex: 1; }
+    .big-btn {
+      display: block; width: 100%; min-height: 96px; border: 0; border-radius: 18px;
+      font-size: 28px; font-weight: 800; color: #fff; background: var(--primary);
+      box-shadow: 0 4px 12px rgba(47, 111, 237, .25); touch-action: manipulation;
+    }
+    .big-btn.out { background: var(--out); box-shadow: 0 4px 12px rgba(15, 123, 82, .25); }
+    .big-btn:disabled { opacity: .55; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; width: 100%;
+      min-height: 56px; border-radius: 12px; border: 1px solid var(--line); background: #fff;
+      color: var(--primary-dark); font-size: 17px; font-weight: 700; text-decoration: none; touch-action: manipulation;
+    }
+    .btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .row { display: flex; gap: 10px; }
+    .row > * { flex: 1; }
+    select { width: 100%; min-height: 56px; font-size: 17px; border-radius: 12px; border: 1px solid var(--line); padding: 0 12px; background: #fff; }
+    .alert { border-radius: 12px; padding: 14px; font-size: 16px; }
+    .alert.err { background: var(--err-bg); color: var(--err-text); }
+    .alert.warn { background: var(--warn-bg); color: var(--warn-text); }
+    .alert .btn { margin-top: 10px; }
+    ul.consent { margin: 8px 0; padding-left: 20px; }
+    ul.consent li { margin-bottom: 6px; }
+    .link-btn { background: none; border: 0; color: var(--muted); text-decoration: underline; font-size: 15px; min-height: 44px; padding: 0 4px; }
+    footer { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 12px; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>출퇴근</h1>
+    <div class="who"><div id="whoName"></div><div id="whoBusiness"></div></div>
+  </header>
+
+  <!-- 로그인 필요 -->
+  <section id="loginView" class="panel" hidden>
+    <h2>로그인이 필요합니다</h2>
+    <p class="muted">오비서에 직원 계정으로 로그인한 뒤 이 화면으로 돌아오십시오.</p>
+    <a class="btn primary" href="/static/apps/obys/index.html">오비서 로그인</a>
+  </section>
+
+  <!-- 사업자 선택(여러 곳에 소속된 경우) -->
+  <section id="businessView" class="panel" hidden>
+    <h2>근무하는 사업장</h2>
+    <select id="businessSelect" aria-label="사업장 선택"></select>
+  </section>
+
+  <!-- 위치정보 수집·이용 동의 (최초 1회) -->
+  <section id="consentView" class="panel" hidden>
+    <h2>위치정보 수집·이용 동의</h2>
+    <ul class="consent">
+      <li><b>수집 항목</b>: 출근·퇴근 버튼을 누른 순간의 위치 1점(위도·경도·오차 범위). 근무 중 위치를 계속 추적하지 않습니다.</li>
+      <li><b>목적</b>: 근태 확인 — 매장 반경 안에서 기록했는지 판정합니다.</li>
+      <li><b>보관 기간</b>: 위치 좌표는 90일 보관 후 파기합니다. 출퇴근 시각 기록은 근로기준법에 따라 3년 보관합니다.</li>
+      <li><b>거부할 수 있습니다</b>: 동의하지 않아도 출퇴근은 기록됩니다. 다만 위치를 확인할 수 없어 모든 기록이 <b>확인필요</b>로 남고 사장님·관리자가 확인한 뒤 확정됩니다.</li>
+      <li>동의는 이 화면 아래 <b>위치 동의 철회</b>로 언제든 철회할 수 있습니다.</li>
+    </ul>
+    <div class="row">
+      <button id="consentDeclineBtn" class="btn" type="button">동의하지 않음</button>
+      <button id="consentAgreeBtn" class="btn primary" type="button">동의합니다</button>
+    </div>
+  </section>
+
+  <!-- 오늘 상태 -->
+  <section id="todayView" class="panel" hidden>
+    <div class="muted" id="todayDate"></div>
+    <div class="status-line" id="todayStatus">불러오는 중…</div>
+    <div class="elapsed" id="todayElapsed" hidden></div>
+    <div id="todayVerdict"></div>
+    <p class="muted" id="todayReason"></p>
+  </section>
+
+  <section id="branchView" class="panel" hidden>
+    <h2>근무 지점</h2>
+    <select id="branchSelect" aria-label="근무 지점 선택"></select>
+  </section>
+
+  <!-- 위치 권한 거부 안내 -->
+  <section id="permissionView" class="alert warn" hidden>
+    <b>위치 권한이 꺼져 있습니다.</b>
+    <p>휴대폰 설정 &gt; 브라우저(또는 오비서 출퇴근 앱) &gt; 위치 권한을 <b>허용</b>으로 바꾼 뒤 다시 누르십시오.
+      위치 없이 기록하면 <b>확인필요</b>로 남습니다.</p>
+    <div class="row">
+      <button id="retryLocationBtn" class="btn" type="button">다시 시도</button>
+      <button id="withoutLocationBtn" class="btn" type="button">위치 없이 기록</button>
+    </div>
+  </section>
+
+  <!-- 마지막 오류 + 재시도 -->
+  <section id="errorView" class="alert err" role="alert" hidden>
+    <b id="errorTitle">지금 기록할 수 없음</b>
+    <p id="errorText"></p>
+    <button id="retryBtn" class="btn" type="button">다시 시도</button>
+  </section>
+
+  <div class="spacer"></div>
+
+  <button id="clockBtn" class="big-btn" type="button" hidden>출근</button>
+
+  <section id="installView" class="panel" hidden>
+    <h2>홈 화면에 설치</h2>
+    <p class="muted" id="installHint">설치하면 앱처럼 바로 열 수 있습니다.</p>
+    <button id="installBtn" class="btn" type="button" hidden>홈 화면에 추가</button>
+  </section>
+
+  <footer>
+    <button id="refreshBtn" class="link-btn" type="button">새로고침</button>
+    <button id="consentToggleBtn" class="link-btn" type="button" hidden>위치 동의 철회</button>
+    <a class="link-btn" href="/static/apps/obys/index.html">오비서 전체 화면</a>
+  </footer>
+</main>
+
+<script>
+(() => {
+  "use strict";
+  // 인증 토큰은 오비서 본 화면(index.html)과 같은 키를 읽기만 한다. 서비스워커는 토큰을 보지 않는다.
+  const SERVER_AUTH_TOKEN_KEY = "aads_token";
+  const FB_ACCESS_TOKEN_KEY = "fb_access_token";
+  const BUSINESS_KEY = "obys_clock_business_id";
+  const BRANCH_KEY = "obys_clock_branch_id";
+  const DECLINED_KEY = "obys_clock_location_declined";  // "동의하지 않음" 을 고른 기기
+  const $ = id => document.getElementById(id);
+  const state = { businessId: "", clock: null, pending: null, timer: null, installPrompt: null };
+
+  function cookieValue(name) {
+    const target = `${encodeURIComponent(name)}=`;
+    return document.cookie.split(";").map(item => item.trim())
+      .find(item => item.startsWith(target))?.slice(target.length) || "";
+  }
+  function token() {
+    return localStorage.getItem(SERVER_AUTH_TOKEN_KEY) || localStorage.getItem(FB_ACCESS_TOKEN_KEY)
+      || cookieValue(SERVER_AUTH_TOKEN_KEY) || cookieValue(FB_ACCESS_TOKEN_KEY);
+  }
+
+  async function api(path, options = {}) {
+    if (!navigator.onLine) throw Object.assign(new Error("인터넷에 연결되어 있지 않습니다."), { offline: true });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    let response;
+    try {
+      response = await fetch(`/api/v1/workspaces${path}`, {
+        ...options,
+        cache: "no-store",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+        signal: controller.signal
+      });
+    } catch (error) {
+      throw Object.assign(new Error(error?.name === "AbortError"
+        ? "서버 응답이 15초 안에 오지 않았습니다." : "서버에 연결할 수 없습니다."), { offline: true });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = typeof payload.detail === "string" ? payload.detail : (payload.detail?.message || `오류 ${response.status}`);
+      throw Object.assign(new Error(detail), { status: response.status });
+    }
+    return payload;
+  }
+
+  function show(id, visible) { $(id).hidden = !visible; }
+
+  function showError(error, retry) {
+    state.pending = retry || null;
+    $("errorTitle").textContent = error.offline ? "지금 기록할 수 없음" : "기록하지 못했습니다";
+    $("errorText").textContent = error.offline
+      ? `${error.message} 연결을 확인한 뒤 다시 시도하십시오. 오프라인 기록은 저장하지 않습니다.`
+      : error.message;
+    show("retryBtn", Boolean(retry));
+    show("errorView", true);
+  }
+  function clearError() { show("errorView", false); state.pending = null; }
+
+  function hhmm(iso) {
+    if (!iso) return "";
+    return new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
+  }
+  function verdictBadge(record) {
+    if (!record) return "";
+    if (record.status === "approved") return '<span class="badge ok">자동 확정</span>';
+    if (record.status === "rejected") return '<span class="badge warn">반려</span>';
+    if (record.geofence_result === "outside") return '<span class="badge warn">확인필요 · 매장 반경 밖</span>';
+    return '<span class="badge warn">확인필요</span>';
+  }
+  function tickElapsed(since) {
+    clearInterval(state.timer);
+    const el = $("todayElapsed");
+    if (!since) { el.hidden = true; return; }
+    const render = () => {
+      const minutes = Math.max(0, Math.floor((Date.now() - new Date(since).getTime()) / 60000));
+      el.textContent = `${Math.floor(minutes / 60)}시간 ${String(minutes % 60).padStart(2, "0")}분 근무 중`;
+    };
+    render();
+    el.hidden = false;
+    state.timer = setInterval(render, 30000);
+  }
+
+  function consentAgreed() { return Boolean(state.clock?.consent?.agreed); }
+
+  function render() {
+    const clock = state.clock;
+    $("whoName").textContent = clock.employee.name;
+    $("whoBusiness").textContent = clock.business.name;
+    const needsConsent = !consentAgreed() && localStorage.getItem(DECLINED_KEY) !== "1";
+    show("consentView", needsConsent);
+    show("todayView", !needsConsent);
+    show("clockBtn", !needsConsent);
+    $("consentToggleBtn").textContent = consentAgreed() ? "위치 동의 철회" : "위치 동의하기";
+    show("consentToggleBtn", !needsConsent);
+
+    const open = clock.open_record;
+    const last = open || clock.today[0] || null;
+    $("todayDate").textContent = new Date(clock.server_time).toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" });
+    if (open) {
+      $("todayStatus").textContent = `근무 중 · ${hhmm(open.check_in_at)} 출근`;
+      tickElapsed(open.check_in_at);
+    } else if (last && last.check_out_at) {
+      $("todayStatus").textContent = `퇴근 완료 · ${hhmm(last.check_in_at)}~${hhmm(last.check_out_at)} (${Math.floor(last.worked_minutes / 60)}시간 ${last.worked_minutes % 60}분)`;
+      tickElapsed(null);
+    } else {
+      $("todayStatus").textContent = "아직 출근 전입니다";
+      tickElapsed(null);
+    }
+    $("todayVerdict").innerHTML = verdictBadge(last);
+    $("todayReason").textContent = last?.memo || (consentAgreed() ? "" : "위치 미동의 — 기록은 확인필요로 남습니다.");
+
+    const btn = $("clockBtn");
+    btn.textContent = open ? "퇴근" : "출근";
+    btn.classList.toggle("out", Boolean(open));
+    btn.disabled = false;
+
+    const branches = clock.branches || [];
+    show("branchView", !open && branches.length > 1);
+    if (branches.length > 1) {
+      const saved = localStorage.getItem(BRANCH_KEY) || "";
+      $("branchSelect").innerHTML = branches.map(item =>
+        `<option value="${encodeURIComponent(item.id)}">${item.name.replace(/[<>&"]/g, "")}${item.has_geofence ? "" : " (위치 미등록)"}</option>`).join("");
+      if (branches.some(item => item.id === saved)) $("branchSelect").value = encodeURIComponent(saved);
+    }
+  }
+
+  async function loadState() {
+    clearError();
+    try {
+      state.clock = await api(`/${encodeURIComponent(state.businessId)}/attendance/clock/state`);
+      render();
+    } catch (error) {
+      if (error.status === 401) { show("loginView", true); return; }
+      showError(error, loadState);
+    }
+  }
+
+  async function loadBusinesses() {
+    if (!token()) { show("loginView", true); return; }
+    try {
+      const { businesses } = await api("/businesses");
+      if (!businesses.length) throw new Error("연결된 사업장이 없습니다. 사장님께 직원 등록을 요청하십시오.");
+      const saved = localStorage.getItem(BUSINESS_KEY);
+      state.businessId = businesses.some(item => item.id === saved) ? saved : businesses[0].id;
+      if (businesses.length > 1) {
+        $("businessSelect").innerHTML = businesses.map(item =>
+          `<option value="${encodeURIComponent(item.id)}">${item.name.replace(/[<>&"]/g, "")}</option>`).join("");
+        $("businessSelect").value = encodeURIComponent(state.businessId);
+        show("businessView", true);
+      }
+      await loadState();
+    } catch (error) {
+      if (error.status === 401) { show("loginView", true); return; }
+      showError(error, loadBusinesses);
+    }
+  }
+
+  // 위치는 버튼을 누른 순간 1회만 읽는다. 연속 추적·백그라운드·주기 수집은 쓰지 않는다.
+  function readPositionOnce() {
+    return new Promise((resolve, reject) => {
+      if (!("geolocation" in navigator)) { reject(Object.assign(new Error("이 기기는 위치를 지원하지 않습니다."), { code: 2 })); return; }
+      navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+    });
+  }
+
+  async function submitClock(withLocation) {
+    const open = state.clock.open_record;
+    const action = open ? "check-out" : "check-in";
+    const body = {
+      location_consent: consentAgreed() && withLocation,
+      device_info: navigator.userAgent.slice(0, 300)
+    };
+    if (!open && (state.clock.branches || []).length > 1) {
+      body.branch_id = decodeURIComponent($("branchSelect").value);
+      localStorage.setItem(BRANCH_KEY, body.branch_id);
+    }
+    if (body.location_consent) {
+      try {
+        const position = await readPositionOnce();
+        body.latitude = position.coords.latitude;
+        body.longitude = position.coords.longitude;
+        body.accuracy_m = position.coords.accuracy;
+      } catch (error) {
+        if (error.code === 1) {  // PERMISSION_DENIED
+          show("permissionView", true);
+          return;
+        }
+        showError(new Error(`위치를 읽지 못했습니다(${error.code === 3 ? "시간 초과" : "측정 실패"}). 다시 시도하거나 '위치 없이 기록'을 누르십시오.`),
+                  () => runClock(true));
+        show("permissionView", true);
+        return;
+      }
+    }
+    await api(`/${encodeURIComponent(state.businessId)}/attendance/${action}`, { method: "POST", body: JSON.stringify(body) });
+    show("permissionView", false);
+    await loadState();
+  }
+
+  async function runClock(withLocation) {
+    clearError();
+    const btn = $("clockBtn");
+    btn.disabled = true;
+    btn.textContent = "기록 중…";
+    try {
+      await submitClock(withLocation);
+    } catch (error) {
+      // 409(이미 출근·출근 없음)는 화면 상태가 낡은 것이다 — 새 상태를 받은 뒤 오류를 보인다.
+      if (error.status === 409) await loadState();
+      showError(error, () => runClock(withLocation));
+    } finally {
+      if (state.clock) render();
+    }
+  }
+
+  async function saveConsent(agree) {
+    clearError();
+    try {
+      await api(`/${encodeURIComponent(state.businessId)}/attendance/consent`, { method: "POST", body: JSON.stringify({ agree }) });
+      if (agree) localStorage.removeItem(DECLINED_KEY); else localStorage.setItem(DECLINED_KEY, "1");
+      await loadState();
+    } catch (error) {
+      showError(error, () => saveConsent(agree));
+    }
+  }
+
+  $("consentAgreeBtn").addEventListener("click", () => saveConsent(true));
+  $("consentDeclineBtn").addEventListener("click", () => { localStorage.setItem(DECLINED_KEY, "1"); render(); });
+  $("consentToggleBtn").addEventListener("click", () => {
+    if (consentAgreed()) {
+      if (confirm("위치 동의를 철회하면 이후 출퇴근은 위치 없이 기록되고 모두 확인필요로 남습니다. 철회할까요?")) saveConsent(false);
+    } else {
+      saveConsent(true);
+    }
+  });
+  $("clockBtn").addEventListener("click", () => runClock(true));
+  $("retryLocationBtn").addEventListener("click", () => { show("permissionView", false); runClock(true); });
+  $("withoutLocationBtn").addEventListener("click", () => { show("permissionView", false); runClock(false); });
+  $("retryBtn").addEventListener("click", () => state.pending?.());
+  $("refreshBtn").addEventListener("click", () => (state.businessId ? loadState() : loadBusinesses()));
+  $("businessSelect").addEventListener("change", event => {
+    state.businessId = decodeURIComponent(event.target.value);
+    localStorage.setItem(BUSINESS_KEY, state.businessId);
+    loadState();
+  });
+  window.addEventListener("online", () => { if (!$("errorView").hidden && state.pending) state.pending(); });
+
+  // 설치 안내 — Android 는 설치 버튼, iOS 는 공유 메뉴 안내.
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  if (!standalone) {
+    show("installView", true);
+    if (/iphone|ipad|ipod/i.test(navigator.userAgent)) {
+      $("installHint").textContent = "Safari 아래쪽 공유 버튼 → '홈 화면에 추가'를 누르면 앱처럼 설치됩니다.";
+    }
+  }
+  window.addEventListener("beforeinstallprompt", event => {
+    event.preventDefault();
+    state.installPrompt = event;
+    show("installBtn", true);
+  });
+  $("installBtn").addEventListener("click", async () => {
+    if (!state.installPrompt) return;
+    state.installPrompt.prompt();
+    await state.installPrompt.userChoice.catch(() => null);
+    state.installPrompt = null;
+    show("installBtn", false);
+  });
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/static/apps/obys/sw.js", { scope: "/static/apps/obys/" }).catch(() => {});
+  }
+  loadBusinesses();
+})();
+</script>
+</body>
+</html>

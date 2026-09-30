@@ -1,3 +1,14 @@
+## 2026-09-30 — 오비서 PWA 출퇴근 1차: manifest·서비스워커·출근/퇴근·GPS 반경 판정·위치 동의 (AADS-OBYS-PWA-GPS-ATTENDANCE-20260930)
+
+- 직원 본인 API 신설(`/api/v1/workspaces/{business_id}/…`): `attendance/clock/state`, `attendance/consent`, `attendance/check-in`, `attendance/check-out`, `attendance/me/{record_id}`. 관리자: `attendance/locations`(좌표 원본 포함), `branches/geofence`(GET), `branches/{branch_id}/geofence`(PATCH, 감사로그). 경로는 지시서의 `/api/v1/obys/…` 가 아니라 실제 마운트(`/api/v1/workspaces`, PRD r2 §9)에 두었다 — `/api/v1/obys` 프리픽스는 존재하지 않는다.
+- 반경: 지시서의 기본 100m 대신 **PRD r3 의 CEO 결정 D1(50m, 여유 없음, 상한 50m, 설정 30~50m)** 을 따랐다. 상수 `GEOFENCE_DEFAULT/MIN/MAX_RADIUS_M` 한 곳만 바꾸면 된다. 정확도 > 반경 → unknown/pending.
+- 신원은 로그인 세션에서만(본문 employee_email 무시), 멤버십은 기존 `_require_write`, 테넌트는 기존 `_business`(404→403 변환). 테넌트 게이트·`_is_admin` 무수정. 감사로그는 `_attendance_audit` 재사용. 근무분은 `attendance_worked_minutes` 재사용.
+- 퇴근 전 행은 `end_at=start_at, worked_minutes=0`, `check_out_at IS NULL` 로 표시(운영 end_at NOT NULL 여부 미확인이라 스키마를 완화하지 않음).
+- PWA: `app/static/apps/obys/{manifest.webmanifest, sw.js, clock.html, attendance-admin.html, icons/obys-clock-{192,512}.png}`. SW scope `/static/apps/obys/`, 셸만 캐시(API·토큰 불가), 오프라인 큐잉 없음, `getCurrentPosition` 1회. index.html 은 지점 목록에 관리 화면 링크 1줄.
+- 마이그레이션 `migrations/20260930_obys_attendance_pwa_gps.sql`(+`rollback/…down.sql`) — 오비서 업무 DB 전용·추가만, baseline HOLD. 운영 문서 `docs/operations/OBYS_ATTENDANCE_PWA_GPS.md`.
+- 테스트 `tests/unit/test_obys_attendance_pwa_gps.py` 33건 + 기존 `test_obys_attendance_api.py` 27건 → 60 passed, exit 0. AAG `--check-baseline` 증가 없음.
+- 남은 위험: 기존 제네릭 근태 목록(`/attendance/records`)은 역할 필터가 없어 멤버십 R2 반영 후 member 가 전 직원 근태를 볼 수 있다(좌표는 노출 안 됨) — 별도 작업 필요. 좌표 90일 파기는 수동 쿼리(문서 §7).
+
 ## 2026-09-30 — 오비서 계약서 서명요청 알림 + 서명본 PDF 보관·교부 (AADS-OBYS-CONTRACT-NOTIFY-PDF-20260930)
 
 - 서명요청(`request-signature`) 뒤 알림 발송·채널별 이력(`yeoljeong_contract_notifications`), 서명(`contracts/signing`) 뒤 `signed_snapshot` 기반 PDF 보관(`OBYS_UPLOAD_ROOT/<tenant>/contracts/`)·`contract_signed` 알림. 둘 다 실패해도 서명요청/서명은 성공으로 남는다.

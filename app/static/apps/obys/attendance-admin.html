@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>오비서 · 출퇴근 위치 설정</title>
+  <style>
+    :root { color-scheme: light; --bg: #f4f5f7; --panel: #fff; --text: #1d2330; --muted: #5b6475; --line: #dde1e8; --primary: #2f6fed; --err: #b42318; --warn: #8a5a00; --ok: #0f7b52; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif; font-size: 15px; line-height: 1.5; word-break: keep-all; }
+    main { max-width: 1080px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
+    h1 { font-size: 20px; margin: 0; }
+    h2 { font-size: 16px; margin: 0 0 10px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+    .muted { color: var(--muted); }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+    label { display: grid; gap: 4px; font-size: 14px; color: var(--muted); }
+    input, select, button { min-height: 44px; font-size: 15px; border-radius: 8px; border: 1px solid var(--line); padding: 0 10px; background: #fff; }
+    button { cursor: pointer; font-weight: 700; color: var(--primary); }
+    button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { font-size: 13px; color: var(--muted); font-weight: 600; }
+    .table-wrap { overflow-x: auto; }
+    .err { color: var(--err); }
+    .warn { color: var(--warn); font-weight: 700; }
+    .ok { color: var(--ok); font-weight: 700; }
+    .coords { font-family: ui-monospace, monospace; font-size: 13px; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="toolbar" style="justify-content:space-between">
+    <h1>출퇴근 위치 설정 · 확인필요</h1>
+    <a href="/static/apps/obys/index.html">오비서로 돌아가기</a>
+  </div>
+  <p class="muted">소유자·관리자 전용 화면입니다. 직원 출퇴근 화면은 <a href="/static/apps/obys/clock.html">/static/apps/obys/clock.html</a> 입니다.</p>
+  <div id="error" class="panel err" role="alert" hidden></div>
+
+  <section class="panel">
+    <div class="toolbar">
+      <label>사업자 <select id="businessSelect"></select></label>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>지점 좌표·반경</h2>
+    <p class="muted" id="policyText"></p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>지점</th><th>위도</th><th>경도</th><th>반경(m)</th><th></th></tr></thead>
+        <tbody id="branchRows"></tbody>
+      </table>
+    </div>
+    <p class="muted">"지금 위치로" 는 이 기기로 매장 안에서 한 번 측정한 값을 넣습니다. 저장해야 반영됩니다.</p>
+  </section>
+
+  <section class="panel">
+    <h2>출퇴근 위치 판정</h2>
+    <div class="toolbar">
+      <label>시작일 <input type="date" id="dateFrom"></label>
+      <label>종료일 <input type="date" id="dateTo"></label>
+      <label>판정
+        <select id="resultFilter">
+          <option value="">전체</option>
+          <option value="outside">반경 밖</option>
+          <option value="unknown">판정 불가</option>
+          <option value="inside">반경 안</option>
+        </select>
+      </label>
+      <button id="loadLocationsBtn" type="button">조회</button>
+      <label><span><input type="checkbox" id="showCoords" style="min-height:auto"> 좌표 원본 보기</span></label>
+    </div>
+    <p class="muted" id="locationSummary"></p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>근무일</th><th>직원</th><th>지점</th><th>출근</th><th>퇴근</th><th>근무</th><th>판정</th><th>상태</th><th>사유</th></tr></thead>
+        <tbody id="locationRows"></tbody>
+      </table>
+    </div>
+    <p class="muted">확인필요 건의 승인·반려는 오비서 근태 화면에서 기존 방식(수정 → 상태 변경)으로 처리합니다.</p>
+  </section>
+</main>
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+  const state = { businessId: "", locations: [] };
+
+  function cookieValue(name) {
+    const target = `${encodeURIComponent(name)}=`;
+    return document.cookie.split(";").map(item => item.trim()).find(item => item.startsWith(target))?.slice(target.length) || "";
+  }
+  function token() {
+    return localStorage.getItem("aads_token") || localStorage.getItem("fb_access_token")
+      || cookieValue("aads_token") || cookieValue("fb_access_token");
+  }
+  async function api(path, options = {}) {
+    const response = await fetch(`/api/v1/workspaces${path}`, {
+      ...options, cache: "no-store",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` }
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : `오류 ${response.status}`);
+    return payload;
+  }
+  function showError(error) { $("error").textContent = error ? error.message : ""; $("error").hidden = !error; }
+  const biz = () => encodeURIComponent(state.businessId);
+
+  async function loadBranches() {
+    const data = await api(`/${biz()}/branches/geofence`);
+    const policy = data.policy;
+    $("policyText").textContent = `반경은 ${policy.min_radius_m}~${policy.max_radius_m}m(기본 ${policy.default_radius_m}m). 정확도(오차)가 반경보다 크면 자동 확정하지 않습니다.`;
+    $("branchRows").innerHTML = data.branches.map(item => `
+      <tr data-branch="${esc(item.id)}">
+        <td>${esc(item.name)}${item.latitude == null ? ' <span class="warn">좌표 미등록</span>' : ""}</td>
+        <td><input name="latitude" inputmode="decimal" value="${esc(item.latitude ?? "")}" size="11"></td>
+        <td><input name="longitude" inputmode="decimal" value="${esc(item.longitude ?? "")}" size="11"></td>
+        <td><input name="radius" type="number" min="${policy.min_radius_m}" max="${policy.max_radius_m}" value="${esc(item.geofence_radius_m ?? policy.default_radius_m)}" style="width:6em"></td>
+        <td><button type="button" data-action="here">지금 위치로</button> <button type="button" class="primary" data-action="save">저장</button></td>
+      </tr>`).join("") || '<tr><td colspan="5" class="muted">등록된 지점이 없습니다.</td></tr>';
+  }
+
+  $("branchRows").addEventListener("click", event => {
+    const button = event.target.closest("button[data-action]");
+    if (!button) return;
+    const row = button.closest("tr");
+    showError(null);
+    if (button.dataset.action === "here") {
+      // 1회 측정. 연속 추적하지 않는다.
+      navigator.geolocation.getCurrentPosition(position => {
+        row.querySelector('[name="latitude"]').value = position.coords.latitude.toFixed(6);
+        row.querySelector('[name="longitude"]').value = position.coords.longitude.toFixed(6);
+        if (position.coords.accuracy > 30) showError(new Error(`측정 오차가 ${Math.round(position.coords.accuracy)}m 입니다. 매장 입구 근처에서 다시 측정하는 것이 좋습니다.`));
+      }, error => showError(new Error(`위치를 읽지 못했습니다: ${error.message}`)), { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+      return;
+    }
+    const raw = ["latitude", "longitude"].map(name => row.querySelector(`[name="${name}"]`).value.trim());
+    if (raw.some(value => value === "" || !Number.isFinite(Number(value)))) {
+      showError(new Error("위도·경도를 숫자로 입력하거나 '지금 위치로'를 누르십시오."));
+      return;
+    }
+    const body = {
+      latitude: Number(row.querySelector('[name="latitude"]').value),
+      longitude: Number(row.querySelector('[name="longitude"]').value),
+      radius_m: Number(row.querySelector('[name="radius"]').value)
+    };
+    api(`/${biz()}/branches/${encodeURIComponent(row.dataset.branch)}/geofence`, { method: "PATCH", body: JSON.stringify(body) })
+      .then(loadBranches).catch(showError);
+  });
+
+  const resultLabel = { inside: '<span class="ok">반경 안</span>', outside: '<span class="warn">반경 밖</span>', unknown: '<span class="warn">판정 불가</span>' };
+  const statusLabel = { approved: "자동 확정", pending: "확인필요", rejected: "반려" };
+  const time = iso => iso ? new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
+  function point(item, prefix) {
+    const distance = item[`${prefix}_distance_m`] == null ? "거리 없음" : `${item[`${prefix}_distance_m`]}m`;
+    const accuracy = item[`${prefix}_accuracy_m`] == null ? "" : ` · 오차 ${item[`${prefix}_accuracy_m`]}m`;
+    const coords = $("showCoords").checked && item[`${prefix}_lat`] != null
+      ? `<div class="coords">${esc(item[`${prefix}_lat`])}, ${esc(item[`${prefix}_lng`])}</div>` : "";
+    return `${time(item[`${prefix}_at`])}<div class="muted">${esc(distance + accuracy)}</div>${coords}`;
+  }
+  function renderLocations() {
+    $("locationRows").innerHTML = state.locations.map(item => `
+      <tr>
+        <td>${esc(item.work_date)}</td><td>${esc(item.employee_name)}<div class="muted">${esc(item.employee_email_masked)}</div></td>
+        <td>${esc(item.branch)}</td><td>${point(item, "check_in")}</td><td>${item.check_out_at ? point(item, "check_out") : "근무 중"}</td>
+        <td>${item.check_out_at ? `${Math.floor(item.worked_minutes / 60)}시간 ${item.worked_minutes % 60}분` : "—"}</td>
+        <td>${resultLabel[item.geofence_result] || "—"}</td><td>${esc(statusLabel[item.status] || item.status)}</td><td>${esc(item.memo)}</td>
+      </tr>`).join("") || '<tr><td colspan="9" class="muted">PWA 출퇴근 기록이 없습니다.</td></tr>';
+  }
+  async function loadLocations() {
+    const params = new URLSearchParams();
+    if ($("dateFrom").value) params.set("date_from", $("dateFrom").value);
+    if ($("dateTo").value) params.set("date_to", $("dateTo").value);
+    if ($("resultFilter").value) params.set("result", $("resultFilter").value);
+    const data = await api(`/${biz()}/attendance/locations?${params}`);
+    state.locations = data.records;
+    const s = data.summary;
+    $("locationSummary").textContent = `${data.count}건 · 반경 안 ${s.inside} · 반경 밖 ${s.outside} · 판정 불가 ${s.unknown} · 확인필요 ${s.pending}`;
+    renderLocations();
+  }
+  $("loadLocationsBtn").addEventListener("click", () => loadLocations().catch(showError));
+  $("showCoords").addEventListener("change", renderLocations);
+  $("businessSelect").addEventListener("change", event => {
+    state.businessId = event.target.value;
+    Promise.all([loadBranches(), loadLocations()]).catch(showError);
+  });
+
+  (async () => {
+    try {
+      const { businesses } = await api("/businesses");
+      $("businessSelect").innerHTML = businesses.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("");
+      state.businessId = businesses[0]?.id || "";
+      if (!state.businessId) throw new Error("현재 테넌트에 사업자가 없습니다.");
+      await Promise.all([loadBranches(), loadLocations()]);
+    } catch (error) {
+      showError(error);
+    }
+  })();
+})();
+</script>
+</body>
+</html>
