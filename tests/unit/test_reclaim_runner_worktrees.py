@@ -205,7 +205,7 @@ def test_nested_file_edit_extends_retention(worktrees):
 def test_summary_is_last_line_and_parseable(worktrees):
     result = _run(worktrees)
     assert re.fullmatch(
-        r"\[reclaim-wt\] reclaimed=\d+ freed=\d+MB archived=\d+ skipped_active=\d+ skipped_recent=\d+ skipped_unknown=\d+ skipped_unknown_repo=\d+ skipped_archive_failed=\d+",
+        r"\[reclaim-wt\] reclaimed=\d+ freed=\d+MB archived=\d+ skipped_active=\d+ skipped_recent=\d+ skipped_unknown=\d+ skipped_unknown_repo=\d+ skipped_archive_failed=\d+ reclaimed_over_cap=\d+",
         result.stdout.splitlines()[-1],
     )
 
