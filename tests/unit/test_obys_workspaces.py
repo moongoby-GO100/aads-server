@@ -362,3 +362,15 @@ def test_date_filter_applies_to_uploaded_rows_and_rejects_reverse_range():
     with pytest.raises(HTTPException) as exc:
         api._filter_source_dates(rows, "2026-09-30", "2026-09-01")
     assert exc.value.status_code == 422
+
+
+def test_v41_business_detail_registers_registration_and_business_documents():
+    # 로그인하면 V4.1 로 넘어가므로 사업자등록증·서류 등록이 V4.1 사업자 상세에 있어야 한다 (2026-10-01).
+    v41 = Path("app/static/apps/obys/mockup-v4-1.html").read_text(encoding="utf-8")
+
+    assert 'if(state.route==="businesses"&&row.__live?.id&&state.detailRow===row)renderBusinessDocsV41(row.__live.id)' in v41
+    assert "/businesses/${id}/registration-document" in v41
+    assert "/business-documents?business_id=${id}" in v41
+    assert 'financeApiV41("/business-documents",{method:"POST",body:form})' in v41
+    assert '/tenant-registry/businesses/${encodeURIComponent(businessId)}`,{method:"PATCH"' in v41
+    assert '{action:"사업자 상세·서류 등록"' in v41
