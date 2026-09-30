@@ -113,6 +113,46 @@ def test_registry_sync_template_keeps_codex_sol_registered():
     assert sol["is_executable"] is True
 
 
+def test_codex_template_does_not_register_gpt_61_sol():
+    # codex(ChatGPT 계정)는 gpt-6.1-sol 미지원 — `codex exec -m gpt-6.1-sol` 이
+    # HTTP 400 invalid_request_error "not supported when using Codex with a ChatGPT account"
+    # 를 반환한다(2026-09-30 실측). 지원이 열리면 이 테스트를 먼저 고쳐라.
+    assert "gpt-6.1-sol" not in model_registry._PROVIDER_MODELS["codex"]
+    now = datetime.now(timezone.utc)
+    rows, _ = model_registry.build_registry_snapshots([
+        {
+            "id": 4, "provider": "codex", "key_name": "CODEX_CHATGPT_OAUTH",
+            "priority": 1, "is_active": True, "rate_limited_until": None,
+            "last_used_at": now, "last_verified_at": now,
+        }
+    ])
+    assert not [r for r in rows if r["provider"] == "codex" and r["model_id"] == "gpt-6.1-sol"]
+
+
+def test_gpt_61_sol_pricing_display_name_and_capabilities():
+    assert model_registry._pricing_for("gpt-6.1-sol") == {
+        "input_cost": "2.0", "output_cost": "10.0", "unit": "usd_per_1m_tokens",
+    }
+    assert model_registry._display_name_for("gpt-6.1-sol") == "GPT-6.1 Sol"
+    assert "gpt-6.1-sol" in model_registry._THINKING_MODELS
+    assert "gpt-6.1-sol" in model_registry._VISION_MODELS
+    assert "gpt-6.1-sol" in model_registry._CODING_MODELS
+
+
+def test_provider_models_literal_has_no_duplicate_keys():
+    import ast
+
+    tree = ast.parse(Path(model_registry.__file__).read_text(encoding="utf-8"))
+    dict_node = next(
+        node.value for node in ast.walk(tree)
+        if isinstance(node, ast.AnnAssign)
+        and getattr(node.target, "id", "") == "_PROVIDER_MODELS"
+    )
+    keys = [k.value for k in dict_node.keys if isinstance(k, ast.Constant)]
+    assert len(keys) == len(set(keys)), f"duplicate provider keys: {keys}"
+    assert keys.count("codex") == 1
+
+
 def test_codex_astra_migration_adds_runner_model_config_cycle():
     sql = Path("migrations/155_runner_model_config_gpt6_astra.sql").read_text()
 
