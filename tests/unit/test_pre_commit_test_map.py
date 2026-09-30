@@ -25,6 +25,8 @@ DEPLOY_TESTS = [
     "tests/unit/test_deploy_dependency_image_contract.py",
     "tests/unit/test_deploy_autoheal.py",
     "tests/unit/test_deploy_stream_reconcile.py",
+    "tests/unit/test_deploy_terminal_state_contract.py",
+    "tests/unit/test_deploy_ancestor_release_guard.py",
 ]
 
 
@@ -43,7 +45,7 @@ def test_runner_shell_change_selects_runner_bundle():
     assert "tests/unit/test_pipeline_runner_shell_deploy_lock_requeue.py" in chosen["runner"]
 
 
-def test_deploy_script_change_selects_four_deploy_tests():
+def test_deploy_script_change_selects_deploy_bundle():
     for path in ("deploy.sh", "scripts/deploy_autoheal.sh"):
         chosen = _selected([path])
         assert list(chosen) == ["deploy"], path

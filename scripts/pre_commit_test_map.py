@@ -67,6 +67,11 @@ GROUPS: tuple[Group, ...] = (
             "tests/unit/test_pipeline_runner_worktree_policy.py",
             "tests/unit/test_pipeline_runner_autodep_release.py",
             "tests/unit/test_pipeline_runner_deploy_gate_stale_chain.py",
+            "tests/unit/test_pipeline_runner_push_stale_base.py",
+            "tests/unit/test_pipeline_runner_deploy_only_approval_commit.py",
+            "tests/unit/test_pipeline_runner_deploy_only_job_path.py",
+            "tests/unit/test_pipeline_runner_approval_sha_stdout_contract.py",
+            "tests/unit/test_pipeline_runner_rejected_artifact_preserve.py",
         ),
         globs=(
             "app/services/pipeline_runner_service.py",
@@ -81,6 +86,8 @@ GROUPS: tuple[Group, ...] = (
             "tests/unit/test_deploy_dependency_image_contract.py",
             "tests/unit/test_deploy_autoheal.py",
             "tests/unit/test_deploy_stream_reconcile.py",
+            "tests/unit/test_deploy_terminal_state_contract.py",
+            "tests/unit/test_deploy_ancestor_release_guard.py",
         ),
         globs=(
             "deploy.sh",
