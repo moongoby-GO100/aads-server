@@ -49,6 +49,7 @@ OBSERVED_CASES = [
     ("review_failed: verdict=FLAG score=0.0 category=REVIEW_MODEL_CONFIG_INVALID needs_retry=true", None,
      CLASS_INFRA, "review_config_invalid"),
     ("server_restart_orphan", None, CLASS_INFRA, "server_restart_orphan"),
+    ("server_restart_orphan_requeue_exhausted", None, CLASS_INFRA, "server_restart_orphan"),
     ("watchdog_stall_30min", None, CLASS_INFRA, "watchdog_stall"),
     ("timeout_max_runtime", None, CLASS_INFRA, "runtime_timeout"),
     ("llm_quota_exhausted: You've hit your weekly limit", None, CLASS_INFRA, "llm_quota"),

@@ -3073,6 +3073,30 @@ async def retry_pipeline(job_id: str) -> dict:
 
 # ─── AADS 자기수정 복구: 재시작으로 중단된 작업 검출 + 완료 처리 ──────────────
 
+# 고아 재큐잉(AADS-RUNNER-ORPHAN-REQUEUE): 배포로 끊긴 초기 phase 작업을 error 대신 queued 로 되돌린다.
+#   AADS_ORPHAN_REQUEUE_ENABLED  기본 1 (0/false/off/no 면 예전처럼 곧장 error)
+#   AADS_ORPHAN_REQUEUE_MAX      기본 2 (작업 하나당 재큐잉 상한, 소진 시 error)
+_ORPHAN_REQUEUE_MARK = "[SERVER_RESTART_REQUEUE]"
+_ORPHAN_REQUEUE_ELIGIBLE_SQL = (
+    "status = 'running' AND phase = 'claude_code_work' "
+    "AND commit_hash IS NULL AND runner_host IS NOT NULL"
+)
+_ORPHAN_REQUEUE_COUNT_SQL = (
+    "((length(COALESCE(review_feedback, '')) "
+    f"- length(replace(COALESCE(review_feedback, ''), '{_ORPHAN_REQUEUE_MARK}', ''))) "
+    f"/ {len(_ORPHAN_REQUEUE_MARK)})"
+)
+
+
+def _orphan_requeue_max() -> int:
+    """재큐잉 상한. 0 이면 기능 꺼짐."""
+    if os.getenv("AADS_ORPHAN_REQUEUE_ENABLED", "1").strip().lower() in ("0", "false", "off", "no"):
+        return 0
+    try:
+        return max(0, int(os.getenv("AADS_ORPHAN_REQUEUE_MAX", "2")))
+    except ValueError:
+        return 2
+
 async def recover_interrupted_jobs():
     """
     서버 시작 시 호출:
@@ -3087,9 +3111,63 @@ async def recover_interrupted_jobs():
         async with pool.acquire() as conn:
             # ── Phase 0: 고아 pipeline_jobs 정리 (running/queued → error) + 채팅방 알림 ──
             # claude_code_detached는 원격 프로세스가 완료됐을 수 있으므로 Phase 0.5에서 별도 처리
+            # 재큐잉 판별: 커밋(commit_hash)에 도달하지 않은 claude_code_work 단계는 워크트리에만
+            # 흔적이 있고 러너가 재기동 시 워크트리를 지우고 다시 만든다 → 되살려도 이중 커밋이 없다.
+            # ai_review·승인 대기·배포 단계는 commit_hash 가 이미 찍혀 있어 여기서 제외된다.
+            # runner_host IS NULL 은 서버 프로세스 안에서 도는 파이프라인이라 큐를 소비할 러너가
+            # 없으므로 예전 경로(error → Phase 0a 자동 재실행)를 유지한다.
+            _requeue_max = _orphan_requeue_max()
+            requeued_rows = []
+            if _requeue_max > 0:
+                requeued_rows = await conn.fetch(
+                    f"""
+                    UPDATE pipeline_jobs
+                    SET status = 'queued', phase = 'queued',
+                        started_at = NULL, completed_at = NULL, error_detail = NULL, runner_pid = NULL,
+                        review_feedback = COALESCE(review_feedback, '')
+                            || E'\\n{_ORPHAN_REQUEUE_MARK} 배포로 실행이 끊겨 자동 재큐잉 '
+                            || ({_ORPHAN_REQUEUE_COUNT_SQL} + 1)::text || '/' || $1::int::text,
+                        updated_at = now()
+                    WHERE {_ORPHAN_REQUEUE_ELIGIBLE_SQL}
+                      AND {_ORPHAN_REQUEUE_COUNT_SQL} < $1::int
+                      AND NOT EXISTS (
+                          SELECT 1 FROM pipeline_runner_hosts h
+                          WHERE h.host = pipeline_jobs.runner_host
+                            AND h.last_seen_at > now() - interval '15 minutes'
+                      )
+                    RETURNING job_id, chat_session_id, project, runner_host,
+                              substring(instruction from 1 for 100) as instr,
+                              {_ORPHAN_REQUEUE_COUNT_SQL} as requeue_no
+                    """,
+                    _requeue_max,
+                )
+                for qrow in requeued_rows:
+                    try:
+                        await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", qrow["job_id"])
+                        await conn.execute(
+                            """
+                            INSERT INTO pipeline_runner_events
+                                (job_id, tenant_id, project, event_type, status, phase, metadata)
+                            SELECT job_id, tenant_id, project, 'job_requeued', 'queued', 'queued', $2::jsonb
+                            FROM pipeline_jobs WHERE job_id = $1
+                            """,
+                            qrow["job_id"],
+                            json.dumps({
+                                "error_detail": "server_restart_orphan_requeued",
+                                "requeue_no": qrow["requeue_no"],
+                                "requeue_max": _requeue_max,
+                            }),
+                        )
+                    except Exception as ev_err:
+                        logger.warning(f"pipeline_c_recovery: requeue notify/event failed for {qrow['job_id']}: {ev_err}")
+                if requeued_rows:
+                    logger.info(f"pipeline_c_recovery: orphan pipeline_jobs requeued: {len(requeued_rows)}")
+
             orphan_rows = await conn.fetch(
-                """
-                SELECT job_id, chat_session_id, project, substring(instruction from 1 for 100) as instr
+                f"""
+                SELECT job_id, chat_session_id, project, substring(instruction from 1 for 100) as instr,
+                       ($1::int > 0 AND {_ORPHAN_REQUEUE_ELIGIBLE_SQL}
+                        AND {_ORPHAN_REQUEUE_COUNT_SQL} >= $1::int) as requeue_exhausted
                 FROM pipeline_jobs
                 WHERE status = 'running' AND phase NOT IN ('restarting', 'done', 'error', 'claude_code_detached')
                   -- 살아 있는 원격 러너의 작업은 건드리지 않는다.
@@ -3103,16 +3181,22 @@ async def recover_interrupted_jobs():
                       WHERE h.host = pipeline_jobs.runner_host
                         AND h.last_seen_at > now() - interval '15 minutes'
                   )
-                """
+                """,
+                _requeue_max,
             )
             orphan_count = await conn.execute(
-                """
+                f"""
                 UPDATE pipeline_jobs
                 SET status = 'error', phase = 'error',
                     -- 24시간 실패 38건 중 최다 사유가 이것인데 error_detail 이 비어 있어
                     -- 집계에서 "사유 없음"으로 보였다. 배포마다 컨테이너가 교체되며
                     -- 진행 중인 작업이 끊기는 것이 원인이라, 사유가 남아야 추적된다.
-                    error_detail = COALESCE(NULLIF(error_detail, ''), 'server_restart_orphan'),
+                    -- 재큐잉 상한을 다 쓴 작업은 별도 사유로 구분한다(위 SELECT 와 같은 식).
+                    error_detail = COALESCE(NULLIF(error_detail, ''),
+                        CASE WHEN $1::int > 0 AND {_ORPHAN_REQUEUE_ELIGIBLE_SQL}
+                                  AND {_ORPHAN_REQUEUE_COUNT_SQL} >= $1::int
+                             THEN 'server_restart_orphan_requeue_exhausted'
+                             ELSE 'server_restart_orphan' END),
                     review_feedback = COALESCE(review_feedback, '') || ' | 서버 재시작으로 중단됨',
                     updated_at = now()
                 WHERE status = 'running' AND phase NOT IN ('restarting', 'done', 'error', 'claude_code_detached')
@@ -3123,8 +3207,35 @@ async def recover_interrupted_jobs():
                       WHERE h.host = pipeline_jobs.runner_host
                         AND h.last_seen_at > now() - interval '15 minutes'
                   )
-                """
+                """,
+                _requeue_max,
             )
+            # 재큐잉된 작업 알림 — "실패"가 아니라 자동 복구 진행으로 보이게 한다(⚠️/중단 문구 금지).
+            for qrow in requeued_rows:
+                qsid = qrow.get("chat_session_id")
+                if not qsid:
+                    continue
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO chat_messages
+                            (session_id, role, content, intent, cost,
+                             tokens_in, tokens_out, attachments, sources, tools_called)
+                        VALUES ($1::uuid, 'assistant', $2, 'runner_notification', 0,
+                                0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
+                        """,
+                        qsid,
+                        f"🔄 **[Pipeline Runner]** 서버 배포로 실행이 끊겨 자동 재큐잉했습니다 "
+                        f"({qrow['requeue_no']}/{_requeue_max}): `{qrow['job_id']}`\n"
+                        f"작업: {qrow.get('instr', '')[:200]}",
+                    )
+                    await conn.execute(
+                        "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1::uuid",
+                        qsid,
+                    )
+                except Exception as post_err:
+                    logger.warning(f"pipeline_c_recovery: requeue chat post failed for {qrow['job_id']}: {post_err}")
+
             if orphan_count and orphan_count != "UPDATE 0":
                 logger.info(f"pipeline_c_recovery: orphan pipeline_jobs cleaned: {orphan_count}")
                 # 고아 정리도 durable 종료 write 다 — 목표 링크를 같이 재조정한다.
@@ -3161,7 +3272,7 @@ async def recover_interrupted_jobs():
                             sid,
                             f"⚠️ **[Pipeline Runner 중단]** `{orow['job_id']}`\n"
                             f"프로젝트: **{orow.get('project', '?')}**\n"
-                            f"사유: 서버 재시작으로 중단됨\n"
+                            f"사유: {'서버 재시작으로 반복 중단됨 (자동 재큐잉 ' + str(_requeue_max) + '회 소진)' if orow.get('requeue_exhausted') else '서버 재시작으로 중단됨'}\n"
                             f"작업: {orow.get('instr', '')[:200]}\n\n"
                             f"재실행이 필요하면 다시 지시해주세요.",
                         )
@@ -3358,6 +3469,8 @@ async def recover_interrupted_jobs():
                     WHERE pj.status = 'error'
                       AND pj.review_feedback LIKE '%서버 재시작으로 중단%'
                       AND pj.review_feedback NOT LIKE '%자동 재실행됨%'
+                      -- 재큐잉 상한을 다 쓴 작업을 새 job 으로 되살리면 상한이 무의미해진다.
+                      AND pj.error_detail IS DISTINCT FROM 'server_restart_orphan_requeue_exhausted'
                       AND pj.created_at > NOW() - INTERVAL '30 minutes'
                       AND pj.cycle < pj.max_cycles
                 ) sub
