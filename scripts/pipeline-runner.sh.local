@@ -1637,6 +1637,133 @@ verify_go100_bundle_fresh() {
     return 0
 }
 
+# ── GO100 프론트 clean 릴리스 워크트리 (AADS-RUNNER-GO100-FE-CLEAN-WORKTREE-20260930) ──
+# 2026-09-30 14:18 go100-frontend:build_failed 는 빌드 오류가 아니었다. BG 스크립트를
+# 여러 세션이 공유하는 런타임 워크트리(상시 dirty)에서 돌려 Deploy Gate 가 dirty 로 막았고,
+# 런타임 HEAD 가 origin/main 과 갈라져 있어 방금 push 한 SHA 가 아닌 무관한 SHA 를
+# 배포 대상으로 봤다. 같은 SHA 를 clean 워크트리에서 돌린 14:34 수동 배포는 성공했다.
+# 그래서 push 한 SHA 로 워크트리를 만들어 GO100_RELEASE_WORKDIR 로 주입한다.
+#
+# node_modules 는 런타임 트리로 symlink 한다(package-lock.json 이 같을 때만).
+#   - 14:34 성공 배포와 09-21/09-04 릴리스 워크트리가 모두 이 방식이었다(검증된 경로).
+#   - 복사 비용 0. symlink 의 realpath 가 배포마다 같아 webpack 영속 캐시
+#     (.next-build-cache)의 node_modules 항목이 워크트리 경로가 바뀌어도 재사용된다.
+#     cp -al 은 경로가 배포마다 달라져 그 항목들이 캐시 미스가 된다.
+#   - frontend/.gitignore 의 `/node_modules`(슬래시 없음)가 symlink 도 무시하므로 게이트는 clean.
+#   - 리스크: 빌드 중 런타임에서 npm install 이 돌면 같은 트리를 본다. 의존성이 바뀐
+#     SHA 는 lock 비교로 걸러 그 경우에만 워크트리에서 npm ci 를 돈다(매 배포 아님).
+# 실패 시 런타임 워크트리로 폴백하지 않는다 — 폴백하면 이번 버그로 조용히 되돌아간다.
+GO100_RELEASE_WORKTREE_ROOT="${GO100_RELEASE_WORKTREE_ROOT:-/opt/go100}"
+GO100_RELEASE_WORKTREE_KEEP="${GO100_RELEASE_WORKTREE_KEEP:-2}"
+GO100_RELEASE_WORKTREE_MIN_FREE_MB="${GO100_RELEASE_WORKTREE_MIN_FREE_MB:-3072}"
+GO100_RELEASE_WORKTREE_MIN_AGE_MIN="${GO100_RELEASE_WORKTREE_MIN_AGE_MIN:-30}"
+GO100_RELEASE_NPM_CI_TIMEOUT="${GO100_RELEASE_NPM_CI_TIMEOUT:-1800}"
+
+# 0 = 어떤 프로세스의 cwd 나 cmdline 이 경로 아래에 있다(큐 워커가 나중에 쓰는 워크트리 포함).
+_go100_path_in_use() {
+    local _dir="$1"
+    [ -n "$(find /proc -mindepth 2 -maxdepth 2 -name cwd \( -lname "$_dir" -o -lname "$_dir/*" \) -print -quit 2>/dev/null)" ] && return 0
+    grep -qsaF -- "$_dir" /proc/[0-9]*/cmdline 2>/dev/null && return 0
+    return 1
+}
+
+# 워크트리 하나를 지운다. symlink 는 먼저 끊어 런타임 node_modules 에 닿지 않게 한다.
+_go100_remove_release_worktree() {
+    local _repo="$1" _dir="$2"
+    case "$_dir" in
+        "$GO100_RELEASE_WORKTREE_ROOT"/frontend-release-*) ;;
+        *) return 1 ;;
+    esac
+    [ -L "$_dir/frontend/node_modules" ] && rm -f "$_dir/frontend/node_modules"
+    git -C "$_repo" worktree remove --force "$_dir" >/dev/null 2>&1 || true
+    [ -e "$_dir" ] && rm -rf --one-file-system -- "$_dir"
+    [ ! -e "$_dir" ]
+}
+
+# frontend-release-* 중 최신(mtime) keep 개만 남기고 git worktree prune 으로 유령을 치운다.
+# 사용 중이거나 MIN_AGE 분 안에 바뀐 것(다른 세션이 만드는 중일 수 있음)은 건너뛴다. 항상 0.
+go100_prune_release_worktrees() {
+    local _repo="${1:-$GO100_REPO_DIR}" _keep="${2:-$GO100_RELEASE_WORKTREE_KEEP}"
+    local _i=0 _d
+    [[ "$_keep" =~ ^[0-9]+$ ]] || _keep=2
+    while IFS= read -r _d; do
+        [ -d "$_d" ] || continue
+        _i=$((_i + 1))
+        (( _i <= _keep )) && continue
+        if _go100_path_in_use "$_d"; then
+            log "  GO100_RELEASE_WT keep(in_use) $_d"
+            continue
+        fi
+        if [ -n "$(find "$_d" -maxdepth 0 -mmin "-${GO100_RELEASE_WORKTREE_MIN_AGE_MIN}" 2>/dev/null)" ]; then
+            log "  GO100_RELEASE_WT keep(recent<${GO100_RELEASE_WORKTREE_MIN_AGE_MIN}m) $_d"
+            continue
+        fi
+        if _go100_remove_release_worktree "$_repo" "$_d"; then
+            log "  GO100_RELEASE_WT removed $_d"
+        else
+            log "  WARN: GO100_RELEASE_WT remove failed $_d"
+        fi
+    done < <(ls -1dt "$GO100_RELEASE_WORKTREE_ROOT"/frontend-release-* 2>/dev/null)
+    git -C "$_repo" worktree prune 2>/dev/null || true
+    return 0
+}
+
+# stdout: 만든 워크트리 경로. 실패 시 1 + stderr 사유, 만들던 워크트리는 지운다.
+go100_create_frontend_release_worktree() {
+    local _repo="$1" _sha="$2" _dir="" _free_mb="" _fe=""
+    _go100_rwt_fail() {
+        echo "release_worktree: $*" >&2
+        [ -n "$_dir" ] && _go100_remove_release_worktree "$_repo" "$_dir" >/dev/null 2>&1
+        git -C "$_repo" worktree prune 2>/dev/null || true
+        return 1
+    }
+    [[ "$_sha" =~ ^[0-9a-f]{7,40}$ ]] || { _go100_rwt_fail "push SHA 형식 오류: '${_sha}'"; return 1; }
+    if ! git -C "$_repo" cat-file -e "${_sha}^{commit}" 2>/dev/null; then
+        timeout 120 git -C "$_repo" fetch --quiet origin main >&2 2>&1 || true
+    fi
+    _sha=$(git -C "$_repo" rev-parse --verify --quiet "${_sha}^{commit}" 2>/dev/null) \
+        || { _go100_rwt_fail "커밋 없음: $2 (repo=$_repo)"; return 1; }
+    mkdir -p "$GO100_RELEASE_WORKTREE_ROOT" || { _go100_rwt_fail "루트 생성 실패: $GO100_RELEASE_WORKTREE_ROOT"; return 1; }
+    _free_mb=$(df -Pm "$GO100_RELEASE_WORKTREE_ROOT" 2>/dev/null | awk 'NR==2 {print $4}')
+    if ! [[ "$_free_mb" =~ ^[0-9]+$ ]] || (( _free_mb < GO100_RELEASE_WORKTREE_MIN_FREE_MB )); then
+        _go100_rwt_fail "디스크 부족: free=${_free_mb:-?}MB < ${GO100_RELEASE_WORKTREE_MIN_FREE_MB}MB ($GO100_RELEASE_WORKTREE_ROOT)" || return 1
+    fi
+    _dir="$GO100_RELEASE_WORKTREE_ROOT/frontend-release-${_sha:0:9}-$(date +%Y%m%d-%H%M%S)"
+    local _base="$_dir" _n=1
+    while [ -e "$_dir" ]; do
+        _n=$((_n + 1))
+        _dir="${_base}-${_n}"
+        if (( _n > 20 )); then
+            _dir=""
+            _go100_rwt_fail "경로 충돌: ${_base}-*" || return 1
+        fi
+    done
+    git -C "$_repo" worktree add --detach "$_dir" "$_sha" >&2 2>&1 \
+        || { _go100_rwt_fail "git worktree add 실패: $_dir @ $_sha"; return 1; }
+    _fe="$_dir/frontend"
+    [ -f "$_fe/package.json" ] || { _go100_rwt_fail "frontend/package.json 없음 @ $_sha"; return 1; }
+    [ -f "$_dir/scripts/deploy_frontend_blue_green.sh" ] \
+        || { _go100_rwt_fail "scripts/deploy_frontend_blue_green.sh 없음 @ $_sha"; return 1; }
+    if cmp -s "$_repo/frontend/package-lock.json" "$_fe/package-lock.json" \
+        && [ -x "$_repo/frontend/node_modules/.bin/next" ]; then
+        ln -s "$_repo/frontend/node_modules" "$_fe/node_modules" \
+            || { _go100_rwt_fail "node_modules symlink 실패"; return 1; }
+        echo "release_worktree: node_modules=symlink -> $_repo/frontend/node_modules" >&2
+    else
+        echo "release_worktree: package-lock.json 이 런타임과 다름(또는 런타임 node_modules 없음) — 이 SHA 만 npm ci" >&2
+        ( cd "$_fe" && timeout "$GO100_RELEASE_NPM_CI_TIMEOUT" npm ci --no-audit --no-fund ) >&2 2>&1 \
+            || { _go100_rwt_fail "npm ci 실패 (timeout=${GO100_RELEASE_NPM_CI_TIMEOUT}s)"; return 1; }
+    fi
+    [[ "$(git -C "$_dir" rev-parse HEAD 2>/dev/null)" == "$_sha" ]] \
+        || { _go100_rwt_fail "HEAD 불일치 (expected=$_sha)"; return 1; }
+    if [ -n "$(git -C "$_dir" status --porcelain 2>/dev/null)" ]; then
+        git -C "$_dir" status --porcelain 2>/dev/null | head -10 >&2
+        _go100_rwt_fail "생성 직후 dirty — 게이트 통과 불가" || return 1
+    fi
+    echo "$_dir"
+    return 0
+}
+
 # ── 에러 분류 ─────────────────────────────────────────────────────────
 persist_auth_recovery() {
     local job_id="$1" state="$2" reason="$3" retry_count="$4"
@@ -4491,23 +4618,44 @@ deploy_job() {
                         post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 blue-green 스크립트 없음 — 배포 안 됨"
                         _build_fail="${_build_fail:+${_build_fail};}go100-frontend:bluegreen_script_missing"
                     else
-                        # HEARTBEAT: GO100 프론트엔드 BG 배포 시작 직전 갱신
-                        db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-                        log "  ZERO-DOWNTIME go100-frontend blue-green start (changed: $(echo "$_fe_changed" | wc -l) files)"
-                        local _fe_bg_rc=0
-                        # pipefail: tail/tee 가 성공해도 스크립트 실패 rc 가 그대로 올라온다.
-                        if bash "$_fe_bg_script" --apply 2>&1 | tail -30 | tee -a "$LOG_DIR/runner.log"; then
-                            _fe_bg_rc=0
+                        # 공유 런타임 워크트리(상시 dirty, HEAD 가 origin/main 과 다를 수 있음)가 아니라
+                        # 방금 push 한 SHA(current_sha)의 clean 워크트리에서 돌린다 (AADS-RUNNER-GO100-FE-CLEAN-WORKTREE).
+                        # 생성 실패 시 런타임 워크트리로 폴백하지 않는다.
+                        local _fe_release_dir="" _fe_release_errf=""
+                        _fe_release_errf=$(mktemp "/tmp/go100-release-wt-${job_id}.XXXXXX")
+                        go100_prune_release_worktrees "$GO100_REPO_DIR" "$(( GO100_RELEASE_WORKTREE_KEEP > 0 ? GO100_RELEASE_WORKTREE_KEEP - 1 : 0 ))"
+                        if ! _fe_release_dir=$(go100_create_frontend_release_worktree "$GO100_REPO_DIR" "$current_sha" 2>"$_fe_release_errf") \
+                            || [ -z "$_fe_release_dir" ]; then
+                            tail -20 "$_fe_release_errf" | tee -a "$LOG_DIR/runner.log" || true
+                            log "  ERROR: go100-frontend release worktree 생성 실패 (sha=${current_sha}) — 런타임 워크트리 폴백 안 함"
+                            post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 clean 릴리스 워크트리 생성 실패 (sha=${current_sha:0:9}) — 배포 안 됨: $(tail -1 "$_fe_release_errf" 2>/dev/null | head -c 300)"
+                            _build_fail="${_build_fail:+${_build_fail};}go100-frontend:release_worktree_failed"
                         else
-                            _fe_bg_rc=$?
+                            sed 's/^/  /' "$_fe_release_errf" | tee -a "$LOG_DIR/runner.log" || true
+                            _fe_bg_script="${_fe_release_dir}/scripts/deploy_frontend_blue_green.sh"
+                            # HEARTBEAT: GO100 프론트엔드 BG 배포 시작 직전 갱신
+                            db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
+                            log "  ZERO-DOWNTIME go100-frontend blue-green start (changed: $(echo "$_fe_changed" | wc -l) files, sha=${current_sha}, release=${_fe_release_dir})"
+                            local _fe_bg_rc=0
+                            # pipefail: tail/tee 가 성공해도 스크립트 실패 rc 가 그대로 올라온다.
+                            # .next-build-cache 시드·회수와 슬롯 교체는 GO100_RUNTIME_WORKDIR(런타임) 기준으로 그대로 돈다.
+                            if GO100_RELEASE_WORKDIR="$_fe_release_dir" GO100_RUNTIME_WORKDIR="$GO100_REPO_DIR" \
+                                bash "$_fe_bg_script" --apply 2>&1 | tail -30 | tee -a "$LOG_DIR/runner.log"; then
+                                _fe_bg_rc=0
+                            else
+                                _fe_bg_rc=$?
+                            fi
+                            # HEARTBEAT: GO100 프론트엔드 BG 배포 종료 직후 갱신
+                            db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
+                            if [ "$_fe_bg_rc" -ne 0 ]; then
+                                log "  ERROR: go100-frontend blue-green 배포 실패 (rc=$_fe_bg_rc)"
+                                post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 blue-green 배포 실패 (rc=$_fe_bg_rc)"
+                                _build_fail="${_build_fail:+${_build_fail};}go100-frontend:build_failed"
+                            fi
                         fi
-                        # HEARTBEAT: GO100 프론트엔드 BG 배포 종료 직후 갱신
-                        db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-                        if [ "$_fe_bg_rc" -ne 0 ]; then
-                            log "  ERROR: go100-frontend blue-green 배포 실패 (rc=$_fe_bg_rc)"
-                            post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 blue-green 배포 실패 (rc=$_fe_bg_rc)"
-                            _build_fail="${_build_fail:+${_build_fail};}go100-frontend:build_failed"
-                        fi
+                        rm -f "$_fe_release_errf"
+                        # 성공·실패와 무관하게 최근 N 개만 남긴다(큐 워커가 쓰는 워크트리는 in_use 로 보존).
+                        go100_prune_release_worktrees "$GO100_REPO_DIR" "$GO100_RELEASE_WORKTREE_KEEP"
                     fi
 
                     # 번들 신선도 게이트: URL 200 이 아니라 활성 슬롯 BUILD_ID 가 병합 커밋보다 새것인지 본다.
