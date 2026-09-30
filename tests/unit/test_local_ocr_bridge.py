@@ -234,3 +234,77 @@ def test_tesseract_failure_surfaces_stderr(monkeypatch):
     monkeypatch.setattr(bridge.subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="rc=1"):
         bridge.tesseract_extract(b"not-an-image")
+
+
+def _captured_tesseract(monkeypatch) -> dict:
+    """tesseract 에 실제로 넘어간 파일 바이트를 잡아 둔다."""
+    seen: dict[str, bytes] = {}
+
+    class Langs:
+        returncode = 0
+        stdout = "List:\nkor\neng\n"
+        stderr = ""
+
+    class Done:
+        returncode = 0
+        stdout = TSV_HEADER + "\n" + _row(1, 1, 1, 1, 90, "상호")
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        if "--list-langs" in command:
+            return Langs()
+        seen["payload"] = __import__("pathlib").Path(command[1]).read_bytes()
+        return Done()
+
+    monkeypatch.setattr(bridge, "_tesseract_bin", lambda: "/usr/bin/tesseract")
+    monkeypatch.setattr(bridge.subprocess, "run", fake_run)
+    return seen
+
+
+def test_preprocess_converts_to_grayscale_png(monkeypatch):
+    """JPEG 원본을 그대로 넘기면 진아 실측에서 한글 라벨을 놓쳤다."""
+    Image = pytest.importorskip("PIL.Image")
+    import io as _io
+
+    source = _io.BytesIO()
+    Image.new("RGB", (40, 20), (200, 30, 30)).save(source, format="JPEG")
+    jpeg = source.getvalue()
+    assert jpeg[:2] == b"\xff\xd8"
+
+    seen = _captured_tesseract(monkeypatch)
+    monkeypatch.delenv("OCR_PREPROCESS", raising=False)
+    bridge.tesseract_extract(jpeg)
+
+    payload = seen["payload"]
+    assert payload[:8] == b"\x89PNG\r\n\x1a\n"
+    with Image.open(_io.BytesIO(payload)) as converted:
+        assert converted.mode == "L"
+        assert converted.size == (40, 20)
+
+
+def test_preprocess_can_be_switched_off(monkeypatch):
+    seen = _captured_tesseract(monkeypatch)
+    monkeypatch.setenv("OCR_PREPROCESS", "0")
+    bridge.tesseract_extract(b"raw-bytes-not-an-image")
+    assert seen["payload"] == b"raw-bytes-not-an-image"
+
+
+def test_preprocess_failure_falls_back_to_original(monkeypatch):
+    """이미지로 열리지 않으면 원본을 그대로 넘기고 계속한다."""
+    seen = _captured_tesseract(monkeypatch)
+    monkeypatch.delenv("OCR_PREPROCESS", raising=False)
+    bridge.tesseract_extract(b"not-an-image-at-all")
+    assert seen["payload"] == b"not-an-image-at-all"
+
+
+def test_preprocess_returns_none_without_pillow(monkeypatch):
+    monkeypatch.delenv("OCR_PREPROCESS", raising=False)
+    real_import = __import__
+
+    def no_pillow(name, *args, **kwargs):
+        if name.startswith("PIL"):
+            raise ImportError("no Pillow here")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", no_pillow)
+    assert bridge._to_grayscale_png(b"\x89PNG\r\n\x1a\n") is None

@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import io
 import logging
 import os
 import shutil
@@ -129,6 +130,33 @@ def parse_tsv(tsv: str) -> tuple[str, float]:
     return text, confidence
 
 
+def _to_grayscale_png(data: bytes) -> bytes | None:
+    """원본을 그대로 넘기면 한글 라벨을 놓친다.
+
+    2026-10-01 진아 실측(열정국밥 성신여대점 등록증 JPEG, 2008x2844, psm 4 동일):
+    원본 그대로는 6항목 중 2항목(사업자등록번호·주소)만 읽었고, 흑백 PNG 로
+    변환하면 6항목 전부(대표자·개업연월일 포함)를 읽었다. 확대(2~3배)는
+    오히려 신뢰도가 0.82 에서 0.58 로 떨어졌으므로 배율은 건드리지 않는다.
+
+    Pillow 가 없거나 이미지를 열지 못하면 None 을 돌려주고 원본으로 진행한다.
+    """
+    if _env("OCR_PREPROCESS", "1") == "0":
+        return None
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.info("OCR 전처리 건너뜀 — Pillow 없음")
+        return None
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            buffer = io.BytesIO()
+            image.convert("L").save(buffer, format="PNG")
+            return buffer.getvalue()
+    except Exception as exc:  # noqa: BLE001 — 전처리 실패는 원본으로 계속한다
+        logger.info("OCR 전처리 건너뜀 — 이미지를 열지 못했습니다: %s", exc)
+        return None
+
+
 def _pdf_to_png(data: bytes, workdir: Path) -> bytes | None:
     """PDF 첫 장만 PNG 로. tesseract 는 PDF 를 직접 읽지 못한다."""
     binary = shutil.which(_env("OCR_PDFTOPPM_BIN", "pdftoppm"))
@@ -165,6 +193,9 @@ def tesseract_extract(data: bytes, language: str = DEFAULT_LANGUAGE) -> dict:
             if not converted:
                 raise RuntimeError("PDF 를 이미지로 변환하지 못했습니다 — 이미지 파일로 올려 주십시오")
             payload = converted
+        prepared = _to_grayscale_png(payload)
+        if prepared:
+            payload = prepared
         source = workdir / "input.bin"
         source.write_bytes(payload)
         done = subprocess.run(
