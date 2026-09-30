@@ -155,6 +155,7 @@ class _FakeDB:
         self.executed: list[str] = []
         self.queries: list[tuple[str, tuple]] = []
         self.generated_drafts: list[str] = []
+        self.goal_audit: list[tuple] = []
 
     # -- 커넥션/풀 프로토콜 -------------------------------------------------
     def acquire(self):
@@ -274,6 +275,10 @@ class _FakeDB:
 
         if "SELECT id, tenant_id, project, priority, status FROM goals" in q:
             return self._goal(args[0])
+
+        if "SELECT status, tenant_id::text AS tenant_id FROM goals" in q:
+            goal = self._goal(str(args[0]))
+            return {"status": goal["status"], "tenant_id": goal.get("tenant_id")} if goal else None
 
         if "LEFT JOIN goals p ON p.id = g.parent_goal_id" in q:
             goal = self._goal(args[0])
@@ -418,6 +423,10 @@ class _FakeDB:
                 if ms:
                     ms["status"] = "in_progress"
             return f"UPDATE {len(ids)}"
+
+        if q.startswith("INSERT INTO goal_status_audit"):
+            self.goal_audit.append(args)
+            return "INSERT 0 1"
 
         if "UPDATE goals SET status = 'completed'" in q:
             goal = self._goal(args[0])
@@ -759,6 +768,10 @@ def test_child_goal_starts_once_parent_completes(db):
     assert result["advanced"] is True
     assert db._milestone(MS2)["status"] == "in_progress"
     assert db._goal(CHILD_GOAL_ID)["status"] == "active"
+    # draft→active 자동 승격은 감사행을 남긴다(2026-09-30 e1689c52 무흔적 승격).
+    assert [(a[0], a[1], a[2], a[4]) for a in db.goal_audit] == [
+        (CHILD_GOAL_ID, "draft", "active", "milestone_advance_promote"),
+    ]
 
 
 def test_advance_sweep_reports_gated_goals_in_one_summary_trace(db, traces):

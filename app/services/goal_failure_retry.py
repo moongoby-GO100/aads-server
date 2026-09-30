@@ -235,12 +235,14 @@ async def ensure_retry_candidate(
             if card_id:
                 from app.services.goal_manager import (
                     _FAILED_TASK_STATUSES,
+                    _audited_goal_status_update,
                     active_link_predicate,
                     link_optional_columns,
                     superseded_link_predicate,
                 )
                 columns = await link_optional_columns(conn)
-                unblocked = await conn.execute(
+                unblocked = await _audited_goal_status_update(
+                    conn, goal_id, "active",
                     f"""UPDATE goals g SET status = 'active', updated_at = NOW()
                        WHERE g.id = $1::uuid AND g.tenant_id = $2::uuid
                          AND g.status = 'blocked'
@@ -277,6 +279,7 @@ async def ensure_retry_candidate(
                              )
                          )""",
                     goal_id, tenant_id, list(_FAILED_TASK_STATUSES),
+                    source="failure_retry_unblock", actor="system:goal_failure_retry",
                 )
                 if unblocked == "UPDATE 1":
                     logger.info("goal_retry_goal_unblocked goal=%s milestone=%s",

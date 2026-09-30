@@ -527,7 +527,12 @@ def test_stale_block_recovery_persists_milestone_and_goal_state():
         def __init__(self):
             self.executed = []
 
+        def transaction(self):
+            return _FakeConn().transaction()
+
         async def fetchrow(self, query, *args):
+            if "FOR UPDATE" in query:  # 감사용 old_status 조회
+                return {"status": "blocked", "tenant_id": None}
             return {
                 "goal_id": GOAL_A,
                 "milestone_status": "blocked",

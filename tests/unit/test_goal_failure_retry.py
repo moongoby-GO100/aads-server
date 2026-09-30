@@ -35,17 +35,29 @@ class FakeConn:
         self.queues = {}
         self.outer_transaction = False
         self.fail_finalize_once = False
+        self.lock_owner = None
+        self.lock_depth = 0
+        self.audit = []
 
     def is_in_transaction(self):
         return self.outer_transaction
 
     def transaction(self):
+        # asyncpg 는 중첩 transaction() 을 savepoint 로 처리한다. 같은 태스크의 중첩은 재진입시킨다.
         conn = self
         class Transaction:
             async def __aenter__(self):
+                task = asyncio.current_task()
+                if conn.lock_owner is task:
+                    conn.lock_depth += 1
+                    return
                 await conn.lock.acquire()
+                conn.lock_owner, conn.lock_depth = task, 1
             async def __aexit__(self, *_):
-                conn.lock.release()
+                conn.lock_depth -= 1
+                if conn.lock_depth == 0:
+                    conn.lock_owner = None
+                    conn.lock.release()
         return Transaction()
 
     async def fetch(self, query, *args):
@@ -88,6 +100,8 @@ class FakeConn:
             return {"status": "failed", "phase": "failed", "project": "GO100"}
         if "SELECT goal_id FROM milestones" in query:
             return {"goal_id": GOAL_ID}
+        if "SELECT status, tenant_id::text AS tenant_id FROM goals" in query:
+            return {"status": self.goal_status, "tenant_id": GOAL_ID}
         raise AssertionError(query)
 
     async def fetchval(self, query, *args):
@@ -101,6 +115,9 @@ class FakeConn:
 
     async def execute(self, query, *args):
         self.calls.append((query, args))
+        if query.startswith("INSERT INTO goal_status_audit"):
+            self.audit.append(args)
+            return "INSERT 0 1"
         if "UPDATE goal_task_links l SET superseded_by" in query:
             self.link_superseded_by = args[3]
         elif "UPDATE milestones" in query and "status = 'blocked'" in query:

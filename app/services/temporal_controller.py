@@ -118,9 +118,13 @@ class TemporalController:
                 m["status"] == "completed" for m in milestones if m["id"] != current["id"]
             ) and not next_pending
             if all_milestones_done:
-                await conn.execute(
+                from app.services.goal_manager import _audited_goal_status_update
+
+                await _audited_goal_status_update(
+                    conn, goal_id, "completed",
                     "UPDATE goals SET status = 'completed', updated_at = NOW() WHERE id = $1",
                     goal_id,
+                    source="temporal_complete", actor="system:temporal_controller",
                 )
                 logger.info("goal_completed id=%s project=%s", goal_id, project)
 

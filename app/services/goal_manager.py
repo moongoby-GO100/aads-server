@@ -184,6 +184,39 @@ async def _record_goal_status_audit(
         )
 
 
+def _rows_affected(result: Any) -> int:
+    """asyncpg execute() 상태 문자열("UPDATE 1")에서 갱신 행수를 읽는다. 모르면 0."""
+    try:
+        return int(str(result or "").rsplit(" ", 1)[-1])
+    except ValueError:
+        return 0
+
+
+async def _audited_goal_status_update(
+    conn, goal_id: Any, new_status: str, sql: str, *args: Any,
+    source: str, actor: str,
+) -> Any:
+    """goals.status 를 쓰는 UPDATE 를 그대로 실행하고, 실제 전이가 있었을 때만 감사 1행을 남긴다.
+
+    UPDATE 의 조건·결과는 호출부 SQL 그대로다. 같은 트랜잭션(바깥에 있으면 savepoint)에서
+    행을 잠그고 old_status 를 읽으므로 기록된 직전 값이 실제 직전 값이 된다. 조건에 걸려
+    0행이면, 또는 old == new 면 기록하지 않는다. 반환값은 conn.execute() 결과 그대로.
+    """
+    goal_id = str(goal_id)
+    async with conn.transaction():
+        old = await conn.fetchrow(
+            "SELECT status, tenant_id::text AS tenant_id FROM goals WHERE id = $1::uuid FOR UPDATE",
+            goal_id,
+        )
+        result = await conn.execute(sql, *args)
+        if old and _rows_affected(result) > 0 and old["status"] != new_status:
+            await _record_goal_status_audit(
+                conn, goal_id, old["status"], new_status,
+                actor=actor, tenant_id=old["tenant_id"], source=source,
+            )
+    return result
+
+
 class GoalStateMachine:
 
     async def _pool(self):
@@ -359,9 +392,11 @@ class GoalStateMachine:
                     conn=conn,
                 )
                 return {"error": rejection}
-            await conn.execute(
+            await _audited_goal_status_update(
+                conn, goal_id, "active",
                 "UPDATE goals SET status = 'active', updated_at = NOW() WHERE id = $1::uuid",
                 goal_id,
+                source="activate_goal", actor="system:goal_manager",
             )
             first_ms = await conn.fetchrow(
                 """SELECT id FROM milestones
@@ -645,7 +680,8 @@ class GoalStateMachine:
                     if link["goal_id"] and not (
                         retry_candidate.get("created") or retry_candidate.get("candidate_alive")
                     ):
-                        await conn.execute(
+                        await _audited_goal_status_update(
+                            conn, link["goal_id"], "blocked",
                             """
                             UPDATE goals
                             SET status = 'blocked', updated_at = NOW()
@@ -653,6 +689,7 @@ class GoalStateMachine:
                               AND ($2::uuid IS NULL OR tenant_id = $2::uuid)
                             """,
                             str(link["goal_id"]), tenant_id,
+                            source="task_failure_cascade", actor="system:goal_manager",
                         )
                     results.append({
                         "milestone_id": str(link["milestone_id"]),
@@ -873,7 +910,8 @@ class GoalStateMachine:
             milestone_id,
             target_status,
         )
-        await conn.execute(
+        await _audited_goal_status_update(
+            conn, row["goal_id"], "active",
             """
             UPDATE goals g
             SET status = 'active', updated_at = NOW()
@@ -885,6 +923,7 @@ class GoalStateMachine:
               )
             """,
             row["goal_id"],
+            source="milestone_unblock", actor="system:goal_manager",
         )
         logger.info(
             "goal_stale_block_recovered milestone=%s goal=%s status=%s",
@@ -1005,9 +1044,11 @@ class GoalStateMachine:
             pending = pending_rows[0] if pending_rows else None
             if pending:
                 if goal["status"] == "draft":
-                    await conn.execute(
+                    await _audited_goal_status_update(
+                        conn, goal_id, "active",
                         "UPDATE goals SET status = 'active', updated_at = NOW() WHERE id = $1::uuid",
                         goal_id,
+                        source="milestone_advance_promote", actor="system:goal_manager",
                     )
                 await conn.execute(
                     """
@@ -1160,10 +1201,12 @@ class GoalStateMachine:
             progress = round(completed / total, 2) if total > 0 else 0.0
 
             if total > 0 and total == completed:
-                await conn.execute(
+                await _audited_goal_status_update(
+                    conn, goal_id, "completed",
                     """UPDATE goals SET status = 'completed', progress = 1.0,
                        completed_at = NOW(), updated_at = NOW() WHERE id = $1::uuid AND status != 'completed'""",
                     goal_id,
+                    source="all_milestones_complete", actor="system:goal_manager",
                 )
                 goal = await conn.fetchrow(
                     "SELECT project FROM goals WHERE id = $1::uuid", goal_id,
@@ -1179,9 +1222,11 @@ class GoalStateMachine:
                         goal["project"],
                     )
                     if next_goal:
-                        await conn.execute(
-                        "UPDATE goals SET status = 'active', updated_at = NOW() WHERE id = $1",
+                        await _audited_goal_status_update(
+                            conn, next_goal["id"], "active",
+                            "UPDATE goals SET status = 'active', updated_at = NOW() WHERE id = $1",
                             next_goal["id"],
+                            source="auto_activate_next", actor="system:goal_manager",
                         )
                         logger.info("goal_auto_activated: %s (after %s completed)", next_goal["id"], goal_id)
             else:
