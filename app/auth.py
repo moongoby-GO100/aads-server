@@ -165,6 +165,7 @@ async def _get_pool():
 _pool = None
 _saas_schema_ready = False
 _TENANT_SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
+_TENANT_SLUG_FALLBACK = "tenant"
 
 async def _ensure_pool():
     global _pool
@@ -473,7 +474,7 @@ def _normalize_email(email: str) -> str:
 def _normalize_tenant_slug(value: str) -> str:
     slug = _TENANT_SLUG_PATTERN.sub("-", str(value or "").strip().lower())
     slug = re.sub(r"-{2,}", "-", slug).strip("-")
-    return slug[:64] or "tenant"
+    return slug[:64] or _TENANT_SLUG_FALLBACK
 
 
 def _hash_invite_token(token: str) -> str:
@@ -966,12 +967,17 @@ async def create_tenant_for_user(
             if not user_exists:
                 raise HTTPException(status_code=404, detail="User not found")
 
+            # tenants.slug UNIQUE 제약은 삭제된 조직까지 포함하므로 검사도 같은 범위로 본다.
+            # 한글 매장명처럼 영문이 없어 기본값 "tenant" 가 되면 삭제된 tenant-N 과 부딪히니
+            # 처음부터 임의 접미사를 붙인다 (obys.register_tenant_slug_collision).
+            if base_slug == _TENANT_SLUG_FALLBACK:
+                base_slug = f"{_TENANT_SLUG_FALLBACK}-{secrets.token_hex(4)}"
             slug_candidate = base_slug
             for suffix in range(0, 100):
                 if suffix:
                     slug_candidate = f"{base_slug}-{suffix + 1}"
                 exists = await conn.fetchval(
-                    "SELECT EXISTS(SELECT 1 FROM tenants WHERE slug = $1 AND deleted_at IS NULL)",
+                    "SELECT EXISTS(SELECT 1 FROM tenants WHERE slug = $1)",
                     slug_candidate,
                 )
                 if not exists:
@@ -1043,6 +1049,11 @@ async def ensure_default_customer_workspace(*, tenant_id: str, tenant_name: str 
             tenant_uuid,
         )
         if not tenant or str(tenant["kind"]).lower() != "customer":
+            return None
+        # chat_workspaces 는 AADS 채팅 전용 표다. 오비서 단독 DB(진아서버)에는 없으므로
+        # 없으면 작업공간 없이 진행한다 — 로그인·가입을 500 으로 막지 않는다
+        # (obys.login_chat_workspaces_missing).
+        if not await conn.fetchval("SELECT to_regclass('public.chat_workspaces') IS NOT NULL"):
             return None
         existing = await conn.fetchrow(
             """
